@@ -45,7 +45,7 @@ Two things in this diagram are worth pausing on:
 
 ---
 
-**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper) · [The same holds in any language](#the-same-holds-in-any-language)<br>
+**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper) · [Code review has three layers](#code-review-here-has-three-layers)<br>
 **Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
 **Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
 **Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
@@ -151,60 +151,65 @@ Same reviewers, same time budget. **The only thing that changed is the quality o
 
 ---
 
-## The same holds in any language
+## Code review here has three layers
 
-The review loop above is language-agnostic. But "is this Kotlin coroutine on the wrong dispatcher?" or "will this SQL end up scanning the whole table?" — **those questions are bound to a language, and a generic review won't ask them.**
-
-**The tool has been asking all along.** Before an edit and before a push, it surfaces "the performance questions this stack should ask itself".
-
-**But putting a question in front of someone isn't the same as getting it answered.** Going through the governance ledger: **of 178 recorded reviews, barely a dozen carry any response to those questions at all** — and **13 of those answered for Python, a language that isn't even on the list**.
-
-So: **seen, then skipped past** — and the few who did answer answered about the wrong thing. This section is about closing that second half.
+Before code goes up, three different things look at it. **They catch three different classes of problem — drop one and nobody catches that class.**
 
 <p align="center">
-  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack and pulls its questions; before editing only the triggered ones surface; before pushing each needs an answer; push and CI block on any missing one; reviewers treat the answers as refutable claims" width="900">
+  <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
 </p>
 
-### It only asks what you actually touched
+### 1. The linter layer
 
-Six stacks (Kotlin, C#, Vue, SQL, Swift, Node), **32 questions in total**, each carrying its own set of trigger words. The tool matches them against the lines this change added or removed — **only the questions you genuinely touched get surfaced**; the rest are logged as not-triggered.
+**The project declares which linters to run; Lumos only reads their output.** It ships no rules of its own for any language, and doesn't install or manage anything — **the rule library belongs to the community, and rebuilding one would be pointless.**
 
-That part matters: **it does not hand you all 32.** Handing over everything is the same as handing over nothing — people skim past it.
+What it does add is two things nobody else does:
 
-### Before you push, every question needs an answer
+- **Filters down to the lines this change actually touched**, rather than handing over a full report.
+- **Folds the result into the reviewer's brief**, so a reviewer sees what the linter said from the first line, without running anything.
 
-Three ways to answer. Pick one:
+**What it can't catch**: design-level problems. No linter rule expresses "this coroutine is on the wrong dispatcher".
 
-| Your answer | What you attach |
-|---|---|
-| **Done** | Evidence — which file and line, or which test guards it |
-| **Not applicable** | One reason |
-| **Not yet** | A link to an open issue |
+### 2. The questions layer
 
-**One missing answer blocks the push, and it doesn't care about the risk tier.** This is a separate gate from the earlier "high-risk changes need a review" one — **if your change touched a question, you answer it, however small the change is.**
+This is the layer that fills that hole: **each stack carries a list of questions it should ask itself** — six stacks (Kotlin, C#, Vue, SQL, Swift, Node), 32 questions, each with its own trigger words.
 
-### What the tool checks, and what it doesn't
+**It only asks what you actually touched.** The triggers are matched against the lines this change added or removed; the rest are logged as not-triggered — **handing over all 32 is the same as handing over none; people skim past it.**
 
-This line has to be spelled out, or it reads as "the machine guarantees quality":
+<p align="center">
+  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
+</p>
+
+Before the push, every one needs an answer — one of three: **done** (with evidence: which file and line, or which test guards it), **not applicable** (with a reason), **not yet** (linked to an open issue). **One missing answer blocks the push, regardless of risk tier.**
+
+**The tool's limits have to be spelled out, or this reads as "the machine guarantees quality":**
 
 | You said | The tool checks | The tool **doesn't** check |
 |---|---|---|
 | Done, see this line | The file exists, the line is in range | **Whether that line actually solves it** |
-| Done, there's a test | The test is findable, and in the pushed tree | **Whether that test has any teeth** |
-| Not applicable | A reason was written, and is long enough | **Whether the reason holds** |
-| Not yet | The issue exists and is still open | **Whether it will ever get done** |
+| Done, there's a test | The test is findable | **Whether that test has any teeth** |
+| Not applicable | A reason was written | **Whether the reason holds** |
+| Not yet | The issue exists and is open | **Whether it will ever get done** |
 
 **Whether an answer is right, the tool does not judge at all.** Those answers get attached to the reviewers' briefs — **what the review seats argue with is exactly these answers.**
 
+### 3. The tests layer
+
+**The affected contract tests actually run before the push.** Red is red — **another review record will not fix a failing test.**
+
+**This is the backstop**: said right but built wrong is caught here and nowhere else.
+
+**What it can't catch**: anything no test guards. There, you're back to the first two layers and your own judgement.
+
 ### Switching language changes one box, not the path
 
-The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` look at the project config to tell frontend from backend.
+The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` check the project config to tell frontend from backend.
 
-**A language that isn't on the list simply doesn't trigger this gate** — Python itself isn't on it. In that case you're back to the "high-risk needs review" path alone. A project easing into this can also set the gate to high-risk-only, or turn it off entirely.
+**A language that isn't on the list simply doesn't trigger the second layer** — Python itself isn't on it. There you're left with the linter layer and the tests. A project easing into this can also set that layer to high-risk-only, or turn it off.
 
-> **Honestly: this gate stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
-> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't actually cover the point and it can't tell either.
-> **It catches the laziest kind of lie. The rest is on the review seats and on you.**
+> **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
+> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't cover the point and it can't tell either.
+> **It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.**
 
 ---
 
