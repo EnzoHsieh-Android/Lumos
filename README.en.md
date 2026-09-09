@@ -20,7 +20,9 @@ Each change moves through four stations: **Notes → Dispatch → Review → Wri
 [Who it's for](#who-this-is-for) · [Install](#getting-it-installed) · [First use](#your-first-time-through) · [How it works](#how-it-works) · [Limits and scope](#scope) · [Documentation](#going-deeper)
 
 <p align="center">
-  <img src="assets/map-en.svg" alt="The Lumos loop: retrieve context from notes, dispatch, review, and write back; evals use each round's records to calibrate the process" width="900">
+  <a href="assets/map-en.svg">
+    <img src="assets/map-en.svg" alt="The Lumos loop: retrieve context from notes, dispatch, review, and write back; evals use each round's records to calibrate the process" width="760">
+  </a>
 </p>
 
 ## Who this is for
@@ -77,7 +79,9 @@ Start with a small change that is easy to verify. For example, tell the AI:
 This illustrates the workflow; it is not a complete refund specification. If eligibility, amounts, or permissions are unclear, the AI should ask you.
 
 <p align="center">
-  <img src="assets/first-change-en.svg" alt="Illustrative workflow: request refunds; the AI reads payment rules, implements and tests; decisions and verification results remain available for future work" width="760">
+  <a href="assets/first-change-en.svg">
+    <img src="assets/first-change-en.svg" alt="Illustrative workflow: request refunds; the AI reads payment rules, implements and tests; decisions and verification results remain available for future work" width="760">
+  </a>
   <br>
   <sub>Workflow illustration, not a recorded test result. Actual steps depend on project rules and change risk.</sub>
 </p>
@@ -97,7 +101,9 @@ At the end, look for three things: **what changed, what was actually verified, a
 retrieve the context the change needs.
 
 <p align="center">
-  <img src="assets/graph-demo-en.svg" alt="An illustrative shop knowledge graph: plans connect to features and verification records; incident lessons feed later plans" width="760">
+  <a href="assets/graph-demo-en.svg">
+    <img src="assets/graph-demo-en.svg" alt="An illustrative shop knowledge graph: plans connect to features and verification records; incident lessons feed later plans" width="760">
+  </a>
 </p>
 
 The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records design reasoning, module boundaries, important rules, incident lessons, and the conditions under which something was verified.
@@ -117,7 +123,9 @@ Important rules can be marked as contracts and bound to tests. That makes a “m
 equip reviewers without removing independent judgement.
 
 <p align="center">
-  <img src="assets/dispatch-overview-en.svg" alt="One brief branches into independent reviewers, whose findings are collected and addressed" width="760">
+  <a href="assets/dispatch-overview-en.svg">
+    <img src="assets/dispatch-overview-en.svg" alt="One brief branches into independent reviewers, whose findings are collected and addressed" width="760">
+  </a>
 </p>
 
 Dispatch packages the change, related notes, and important rules for reviewers with different perspectives. Seats cannot see one another's reports, reducing the opportunity to copy conclusions. Agreement still does not guarantee correctness.
@@ -133,7 +141,9 @@ At intake, citations are checked and findings are recorded as adopted, rejected,
 check architecture, known problems, and actual behaviour separately.
 
 <p align="center">
-  <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and reviewers, and tests" width="760">
+  <a href="assets/review-overview-en.svg">
+    <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and reviewers, and tests" width="760">
+  </a>
 </p>
 
 Review covers more than bugs. An architecture seat compares the change with existing code at the same layer, looking for a second competing approach or calls that bypass established boundaries—not merely differences in personal style.
@@ -151,7 +161,9 @@ Pre-push code review is risk-tiered; small changes do not all trigger the same r
 turn this change's results into the next change's input.
 
 <p align="center">
-  <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="760">
+  <a href="assets/writeback-overview-en.svg">
+    <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="760">
+  </a>
 </p>
 
 After a change, the AI writes design trade-offs, review dispositions, verification results, and unresolved work into the relevant notes. The next session can retrieve the reasoning and constraints instead of reconstructing everything from code.
@@ -178,7 +190,9 @@ More notes are not automatically better. Decisions can expire and tests have ass
 **The outer loop: evaluate the process itself, so changes can be compared.**
 
 <p align="center">
-  <img src="assets/evals-overview-en.svg" alt="Record each round, replay and compare results, then calibrate subsequent rounds" width="760">
+  <a href="assets/evals-overview-en.svg">
+    <img src="assets/evals-overview-en.svg" alt="Record each round, replay and compare results, then calibrate subsequent rounds" width="760">
+  </a>
 </p>
 
 Evals are evaluations. Lumos records review seats, findings, and dispositions, freezes accepted gate verdicts as replay references, and uses weekly replay to check whether rule changes alter earlier outcomes. Retrieval has a separate set of human-labelled questions for comparing algorithm changes.

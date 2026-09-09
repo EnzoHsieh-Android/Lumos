@@ -20,7 +20,9 @@ Lumos 把規則與檢查接進這個流程：未滿足條件時，AI 能收到�
 [適合誰](#適合誰--不適合誰) · [安裝](#裝起來) · [第一次使用](#你的第一次) · [如何運作](#如何運作) · [限制與範圍](#邊界) · [詳細文件](#想更深入)
 
 <p align="center">
-  <img src="assets/map-zh.svg" alt="Lumos 工作循環：從圖譜取得脈絡、派工、審查，再將結果寫回；evals 利用每輪紀錄校準流程" width="900">
+  <a href="assets/map-zh.svg">
+    <img src="assets/map-zh.svg" alt="Lumos 工作循環：從圖譜取得脈絡、派工、審查，再將結果寫回；evals 利用每輪紀錄校準流程" width="760">
+  </a>
 </p>
 
 ## 適合誰 / 不適合誰
@@ -77,7 +79,9 @@ Windows、接手已導入的專案、離線安裝與移除方式，見 [上手�
 這是用來說明流程的例子，不是退款功能的完整規格。遇到退款資格、金額或權限不明確，AI 應先向你確認。
 
 <p align="center">
-  <img src="assets/first-change-zh.svg" alt="示意流程：提出退款需求；AI 查付款規則、實作與測試；將決策與驗證結果留給下一次開發" width="760">
+  <a href="assets/first-change-zh.svg">
+    <img src="assets/first-change-zh.svg" alt="示意流程：提出退款需求；AI 查付款規則、實作與測試；將決策與驗證結果留給下一次開發" width="760">
+  </a>
   <br>
   <sub>流程示意，不是實機測試結果；實際步驟依專案規則與改動風險而定。</sub>
 </p>
@@ -97,7 +101,9 @@ Windows、接手已導入的專案、離線安裝與移除方式，見 [上手�
 把需要的脈絡找回來。
 
 <p align="center">
-  <img src="assets/graph-demo-zh.svg" alt="線上商店的示意圖譜：計劃連到功能與驗證紀錄，事故教訓回到後續計劃" width="760">
+  <a href="assets/graph-demo-zh.svg">
+    <img src="assets/graph-demo-zh.svg" alt="線上商店的示意圖譜：計劃連到功能與驗證紀錄，事故教訓回到後續計劃" width="760">
+  </a>
 </p>
 
 知識圖譜是一組互相連結、可隨專案版本管理的 Markdown 筆記。它記錄的不只是功能說明，還包括設計理由、模組邊界、重要規則、事故教訓與驗證前提。
@@ -117,7 +123,9 @@ AI 可以從問題查詢筆記，也能從修改的檔案反查相關筆記，�
 讓審查員拿到材料，也保留獨立判斷。
 
 <p align="center">
-  <img src="assets/dispatch-overview-zh.svg" alt="共用材料分給不同角度的獨立審查席，再收回並處置意見" width="760">
+  <a href="assets/dispatch-overview-zh.svg">
+    <img src="assets/dispatch-overview-zh.svg" alt="共用材料分給不同角度的獨立審查席，再收回並處置意見" width="760">
+  </a>
 </p>
 
 派工會整理本次改動、相關筆記與重要規則，交給不同角度的審查席。各席彼此看不到對方的報告，降低互相沿用結論的機會；但多席一致不等於一定正確。
@@ -133,7 +141,9 @@ AI 可以從問題查詢筆記，也能從修改的檔案反查相關筆記，�
 分開檢查架構、已知問題與實際行為。
 
 <p align="center">
-  <img src="assets/review-overview-zh.svg" alt="架構一致性審查，以及互補的 Linter、檢核題與審查席、測試" width="760">
+  <a href="assets/review-overview-zh.svg">
+    <img src="assets/review-overview-zh.svg" alt="架構一致性審查，以及互補的 Linter、檢核題與審查席、測試" width="760">
+  </a>
 </p>
 
 除了找 bug，審查也關注改動是否符合專案既有架構。架構席以同層既有程式碼作為參照，檢查是否引入並存的第二套做法、或跨越原有分層，而不是只按個人偏好評風格。
@@ -151,7 +161,9 @@ Linter 處理已編碼規則；技術棧檢核題與審查席挑戰脈絡相關�
 讓這次工作的結果成為下次的輸入。
 
 <p align="center">
-  <img src="assets/writeback-overview-zh.svg" alt="將決策、審查與驗證結果寫入相關筆記，供下一次改動查詢，再寫回新的結果" width="760">
+  <a href="assets/writeback-overview-zh.svg">
+    <img src="assets/writeback-overview-zh.svg" alt="將決策、審查與驗證結果寫入相關筆記，供下一次改動查詢，再寫回新的結果" width="760">
+  </a>
 </p>
 
 完成改動後，AI 將設計取捨、審查處置、驗證結果與未解事項寫回相關筆記。下一個 session 不必只從程式碼反推，也能查到當時的理由與限制。
@@ -178,7 +190,9 @@ Linter 處理已編碼規則；技術棧檢核題與審查席挑戰脈絡相關�
 **外圈：檢查流程本身，讓改進有可比較的依據。**
 
 <p align="center">
-  <img src="assets/evals-overview-zh.svg" alt="留下每輪紀錄，回放比較結果，再校準後續流程" width="760">
+  <a href="assets/evals-overview-zh.svg">
+    <img src="assets/evals-overview-zh.svg" alt="留下每輪紀錄，回放比較結果，再校準後續流程" width="760">
+  </a>
 </p>
 
 evals 指評測。Lumos 留下審查席、發現與處置的紀錄，將過閘判定凍結成回放參照，並以每週回放檢查規則變動是否改變舊案結果。查詢機制另有人工標註的題目，供演算法調整時比較。
