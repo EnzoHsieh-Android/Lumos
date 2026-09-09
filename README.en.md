@@ -45,7 +45,7 @@ Two things in this diagram are worth pausing on:
 
 ---
 
-**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
+**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper) · [The same holds in any language](#the-same-holds-in-any-language)<br>
 **Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
 **Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
 **Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
@@ -148,6 +148,61 @@ Same reviewers, same time budget. **The only thing that changed is the quality o
 
 > **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
 > Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
+
+---
+
+## The same holds in any language
+
+The review loop above is language-agnostic. But "is this Kotlin coroutine on the wrong dispatcher?" or "will this SQL end up scanning the whole table?" — **those questions are bound to a language, and a generic review won't ask them.**
+
+**The tool has been asking all along.** Before an edit and before a push, it surfaces "the performance questions this stack should ask itself".
+
+**But putting a question in front of someone isn't the same as getting it answered.** In practice the overwhelming majority of recorded reviews carry no response to those questions at all — **seen, then skipped past**. This section is about closing that second half.
+
+<p align="center">
+  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack and pulls its questions; before editing only the triggered ones surface; before pushing each needs an answer; push and CI block on any missing one; reviewers treat the answers as refutable claims" width="900">
+</p>
+
+### It only asks what you actually touched
+
+Six stacks (Kotlin, C#, Vue, SQL, Swift, Node), **32 questions in total**, each carrying its own set of trigger words. The tool matches them against the lines this change added or removed — **only the questions you genuinely touched get surfaced**; the rest are logged as not-triggered.
+
+That part matters: **it does not hand you all 32.** Handing over everything is the same as handing over nothing — people skim past it.
+
+### Before you push, every question needs an answer
+
+Three ways to answer. Pick one:
+
+| Your answer | What you attach |
+|---|---|
+| **Done** | Evidence — which file and line, or which test guards it |
+| **Not applicable** | One reason |
+| **Not yet** | A link to an open issue |
+
+**One missing answer blocks the push, and it doesn't care about the risk tier.** This is a separate gate from the earlier "high-risk changes need a review" one — **if your change touched a question, you answer it, however small the change is.**
+
+### What the tool checks, and what it doesn't
+
+This line has to be spelled out, or it reads as "the machine guarantees quality":
+
+| You said | The tool checks | The tool **doesn't** check |
+|---|---|---|
+| Done, see this line | The file exists, the line is in range | **Whether that line actually solves it** |
+| Done, there's a test | The test is findable, and in the pushed tree | **Whether that test has any teeth** |
+| Not applicable | A reason was written, and is long enough | **Whether the reason holds** |
+| Not yet | The issue exists and is still open | **Whether it will ever get done** |
+
+**Whether an answer is right, the tool does not judge at all.** Those answers get attached to the reviewers' briefs — **what the review seats argue with is exactly these answers.**
+
+### Switching language changes one box, not the path
+
+The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` look at the project config to tell frontend from backend.
+
+**A language that isn't on the list simply doesn't trigger this gate** — Python itself isn't on it. In that case you're back to the "high-risk needs review" path alone. A project easing into this can also set the gate to high-risk-only, or turn it off entirely.
+
+> **Honestly: this gate stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
+> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't actually cover the point and it can't tell either.
+> **It catches the laziest kind of lie. The rest is on the review seats and on you.**
 
 ---
 
