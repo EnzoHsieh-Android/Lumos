@@ -1,0 +1,2191 @@
+Reading prompt from stdin...
+OpenAI Codex v0.153.2
+--------
+[1mworkdir:[0m /Users/enzo/harness/lumos-toolchain
+[1mmodel:[0m gpt-5.6-terra
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m xhigh
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a08545-94db-7730-8bbc-c5ad9672b2cb
+--------
+[36muser[0m
+你是外部第三方 code reviewer。這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀完整份 diff、主動找洞。
+
+Diff 檔(git diff -U10,完整讀):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch
+變更主題:推送前的「棧別提問表態閘」多一種表態值 tension(張力):架構對齊席要「跟既有一樣」、棧別檢核題要「用更好的做法」,兩者相反時作者用 tension 說「我看見兩邊,這次選沿用既有/改用建議」,附既有寫法 path:line 清單(existing)、隱患(hazard)、建議(suggestion)、選了哪邊(chosen);寫側驗形狀(_dispositions_validate/_dispositions_tension_shape)、讀側對被推送的 git 樹驗 existing 存在(_dispositions_verdict 的 _one)、合法的不擋但 code-loop check 印 ⚠ 段;`pitfalls --diff` 多算「可能撞」候選(_tension_candidates_into:改動檔增行命中某題觸發字、同層對照檔全沒有 → arch_alignment.tension_candidates,樣板該題帶 hint);hint 隨表態存進治理帳、事件加 candidates 欄、--carry 剝 hint;派工鏡頭印四欄;gov --stats 加張力與候選數;六支新測試;九處文件口徑。動的層:scripts/lumos(表態閘寫側/讀側/樣板/鏡頭/統計/pitfalls diff 掃描)、scripts/test_lumos.py、skills 文件、圖譜筆記。
+repo 在 /Users/enzo/harness/lumos-toolchain(可 Read/Grep 真代碼查證 diff 上下文;python3 零依賴單檔 CLI scripts/lumos;測試 `python3 scripts/test_lumos.py -k <關鍵字>`)。
+設計 spec(已過設計審,實作要跟它一致):docs/lumos-toolchain-knowledge/Projects/兩席相反時端出張力_計劃.md 的〈設計〉與〈驗收條款〉。
+
+審查鏡頭:
+1. 正確性——逐 hunk,每個可疑處挑一個具體輸入、把執行路徑走一遍(別看變數名字用猜的):
+   · 邊界:existing 剛好 20 項/21 項、單項剛好 300 字、hazard 剛好 2000 字、chosen 是 None/數字/大寫、existing 是 dict 或字串、treated 治理帳重建缺欄;候選:對照檔剛好 3 個/0 個、第 20 與第 21 個改動檔、對照檔 2 MB 邊界、非 UTF-8、空檔、增行全是註解、`when_raw` 題;樣板 --carry 時 prev 缺 status;這段扛得住嗎?
+   · 資源:讀對照檔的路徑(Path(repo_root)/s)在 s 是絕對路徑或含 .. 時會讀到 repo 外嗎?單次 git 子程序數量上限守住了嗎(existing ≤20 → 每項 cat-file+show)?
+   · 例外與 None:哪個呼叫會丟例外或回 None,這段接了嗎?_one 對 tension 分支的例外會不會逃出 try 外?
+   · 冪等與併發:同 sha 重表態、marker 與治理帳不一致時讀側行為?
+   每條 finding 講清「哪個輸入、走到哪一行」會出錯,不是只點名詞。(風格好壞與架構一致性歸架構對齊席,不在這鏡頭。)
+2. pitfalls manifest(claims 0 條、tier standard):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-兩席相反時端出張力/r1-manifest.json——沒有命中不等於沒事,散文外的 hunk 也要自己看。
+3. 圖譜鏡頭:你拿不到 hook 附的節點,改讀 docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md 與 Systems/arch-alignment-lens.md 的合約行,判這份 diff 會不會破壞它們宣稱的行為。
+4. 本案特定鏡頭:(a) spec 說「合法的 tension 不擋、rc 不變」——找一個合法輸入會被擋的路徑;(b) spec 說「候選的題必在 stack_questions_applicable」——找反例(added_lines 與 changed_lines 的檔案集合真的相同嗎?超門檻全問時呢?);(c) 既有三值(satisfied/na/todo)的行為有沒有被改到(回歸);(d) 六支新測試有沒有「假綠」:斷言是不是真的會在拔掉實作時翻紅(挑兩支想像拔掉哪一行)。
+
+錨定紀律(硬性):每條 finding 必附一段從 diff 逐字複製的原文引句(≥10 字),寫成 `引句:「…」` 單獨一行、引句內不要再包「」——編不出引句的疑慮不要交(收貨端跑 quote-check,錨不到=不採信)。審材外查證所得走佐證通道,格式固定 file: `路徑:行號`(反引號必加)。
+抑噪紀律:低嚴重度疑慮給不出具體失敗場景就不要標(未定義的詞/壞引用/內部不一致例外,一律要報);不能從 diff 指出具體受影響的 file:line 就不准臆測「可能會壞別處」。
+blocker/major 必須附能當場翻紅的最小重現(測試或指令+輸出),附不出請如實標「未能重現」並降權。
+
+輸出格式(硬性;機械收貨照這個讀):檔首第一個非空行 `severity: <blocker|major|minor|clean>`(整份最高);每條 finding `### F<編號> <標題>` + 獨立一行 `severity: <值>` + 一行 `blocking: 是|否`+一句判準(否↔minor、是↔major/blocker);severity 字樣只准出現在那些獨立行;manifest 命中逐條判定(可分組摘要);最後一行總結 max severity 與 blocking 條數。
+你是外家席(不是 Claude 那一家),看的是同門審查員的盲點:被視為理所當然的既有慣例、只驗存在不驗語意的宣稱、測試假綠。可以直接開檔案與跑指令查證(唯讀);每條 blocker/major 必須附能當場翻紅的最小重現。只輸出報告本文,不要寫檔。
+
+[35m[3mcodex[0m[0m
+我會以唯讀外家席逐 hunk 驗證，並依本案規範先查圖譜與審查迴圈指引；只回報可定位、可重現且附 diff 原句的問題。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 scripts/lumos search "棧別 提問 表態 張力"'[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 613ms:[0m
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 棧別:15  提問:25  表態:20  張力:16)
+(已隱藏 2 筆作廢結果;要看的話加 --include-superseded)
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 14.959  Issues/架構對齊席與棧別檢核題可能相反.md  [棧別,提問,表態,張力]
+    14 [KEY]: KEY:★問題★ 兩席可能對同一段程式給出相反意見:架構對齊席要「跟這個專案既有的一樣」,棧別檢核題的緣起原話是「讓 Claude 自己感知該用★最佳實踐★」(見 [[System…
+    17 [KEY]: KEY:★真問題=沒有明文裁定★ arch-alignment-lens / 效能檢核目錄 / 棧別提問表態閘 三篇之間 0 條連結,圖譜沒有任何一篇記過這個張力或「撞到時誰讓誰」…
+    19 [KEY]: KEY:DEP=[[Systems/arch-alignment-lens]]｜[[Systems/效能檢核目錄]]｜[[Systems/棧別提問表態閘]]
+    21 [fm]: - content: Enzo 2026-09-09 裁:★架構對齊優先於棧別檢核題,除非那條檢核題指的是會出事的東西★(洩漏、連線池耗盡、N+1 打爆 DB、阻塞主執行緒這類)。…
+    27 [fm]: - content: Enzo 2026-09-09 裁(這是他真正講的):★兩席意見相反時不要挑一邊,要提出警告★——講清楚「原架構的寫法有什麼隱患」,並給出建議的改法,讓人自己…
+    31 [fm]: - content: Enzo 2026-09-09 裁:三塊都做——第四種表態 tension、pitfalls --diff 端出可能撞候選、派工詞口徑;d2 的「目前只寫口徑…
+    34 [fm:why_chosen]: why_chosen: 口徑靠人記得正是裁定最不喜歡的;沒有記錄的地方 11 月回頭條件沒數字可看;候選是唯一不靠人記得的提醒。設計與審查在 Projects/兩席相反時端出張力_…
+    38 [fm]: - "[[Projects/兩席相反時端出張力_計劃]]"
+    … 還有 11 處
+ 14.545  Projects/兩席相反時端出張力_計劃.md  [棧別,提問,表態,張力]
+    7 [fm]: - 張力表態
+    13 [fm]: - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    15 [fm]: - "[[Systems/棧別提問表態閘]]"
+    16 [fm]: - "[[Projects/棧別提問表態閘_計劃]]"
+    26 [KEY]: KEY:★立案(2026-09-09 Enzo:「遵循既有架構的鏡頭、和棧別技術提問的衝突,我想開始解」)★——[[Issues/架構對齊席與棧別檢核題可能相反]] d2 裁「兩席…
+    27 [KEY]: KEY:★裁定(Enzo 2026-09-09,d1)三塊都做★——(一)第四種表態 `tension`:必填 chosen(existing|suggested,小寫)/exis…
+    30 [KEY]: KEY:帳上現況(2026-09-09 機械數,標記在正文):表態事件 0 筆(本 repo 是 Python 不在題表,閘 9/9 才上)、代碼審留痕提到架構對齊 19 筆、同時…
+    31 [fm:PRIOR-ART]: PRIOR-ART:①最小解在既有機制層——表態閘已有「每題一個機器可讀交代」的形狀,本案只加第四種值與幾個必填欄;候選借 _arch_alignment_hints 的對照組與 …
+    … 還有 25 處
+ 13.747  Systems/棧別提問表態閘.md  [棧別,提問,表態,張力]
+    7 [fm]: - 表態閘
+    10 [fm]: - 效能檢核題表態
+    17 [fm]: - "[[Projects/棧別提問表態閘_計劃]]"
+    23 [fm]: - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    29 [FLOW]: FLOW:pitfalls --diff(增刪行剝字串跳註解→每題 when regex→stack_questions_applicable/meta)→ --dispositi…
+    30 [KEY]: KEY:[合約候選,未蓋章] 有適用題(stack_questions_applicable 非空)且 gate=all 時,code-loop check 對該分支最後一筆表態逐…
+    31 [KEY]: KEY:[合約候選,未蓋章] 表態寫側先寫治理帳事件(kind=dispositions,帶 branch/head_sha/ts)再原子寫 marker;治理帳寫不進去 rc2 …
+    32 [KEY]: KEY:讀側 marker 優先、沒有就退治理帳「該分支最後一筆 kind=dispositions」(檔案行序),跟 pass/skip 分開重建互不擠掉;新 kind 登記 L…
+    … 還有 12 處
+ 13.655  Verification/2026-09-09_兩席相反時端出張力實作測試.md  [棧別,提問,表態,張力]
+    6 [fm:revalidate_when]: revalidate_when: 題表 when 觸發字或 _stack_norm_line 正規化改變;_arch_alignment_hints 對照組選法改變;第一個消費專案…
+    11 [fm]: - "[[Projects/兩席相反時端出張力_計劃]]"
+    13 [body]: # 2026-09-09_兩席相反時端出張力實作測試
+    15 [body]: > 白話：這篇證明「照設計寫的三塊——第四種表態 tension、pitfalls 端出可能撞候選、口徑文件——在自己造的 git 小樣本上會擋該擋的、放該放的、印該印的」。
+    48 [body]: - [S2] `t_codeloop_check_tension_warns`：existing 指不存在的檔 → BLOCKED 帶 id 與欄名；marker 被改成空清單 →…
+    51 [body]: - [S5] `t_tension_lens_and_gov`：派工鏡頭對 tension 印「選／既有／隱患／建議」四欄；`gov --stats` 印「張力 N」與「候選題 N…
+    52 [body]: - [S6] `t_tension_doc_sync`：九處文字（code-loop SKILL／reference、design-loop templates §7.6、comm…
+    53 [body]: - [S7] 手驗：`lumos context` 三個節點——計劃筆記連出 7 篇；棧別提問表態閘與 arch-alignment-lens 的 `verified_by` 都掛…
+    … 還有 2 處
+ 12.154  Systems/效能檢核目錄.md  [棧別,提問,表態,張力]
+    16 [fm]: - "[[Projects/pitfalls棧別效能追問_計劃]]"
+    17 [fm]: - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    19 [KEY]: KEY:各平台 code review 階段該查的效能問題參考目錄(2026-07-19 社群搜證)——與[[Systems/linter精選目錄]]同款「權威菜單」定位:code…
+    26 [KEY]: KEY:時機點設計(Vercel 實證:靠模型自己想起要查規範,56% 會跳過→機制推送不靠自覺,同 impact hook 哲學)——①動手前:impact hook 按棧注入效…
+    27 [KEY]: KEY:[2026-07-19]三時機已落地(見[[Projects/pitfalls棧別效能追問_計劃]])——①pitfalls --diff 命中棧附檢核問(manifest…
+    30 [fm]: - "[[Verification/2026-07-20_棧別效能追問]]"
+    37 [body]: > **定位**:與 [[Systems/linter精選目錄]] 同款「權威菜單」——code-loop 審查員鏡頭、impact 注入、pitfalls 追問的**內容源**,…
+    47 [body]: | 昂貴計算有沒有 `remember` | 人判提問 | 熱 composable 內的計算/排序/過濾 |
+    … 還有 52 處
+ 10.751  Projects/棧別提問表態閘_計劃.md  [棧別,提問,表態]
+    7 [fm]: - 提問表態閘
+    14 [fm]: - "[[Projects/pitfalls棧別效能追問_計劃]]"
+    33 [KEY]: KEY:★立案(2026-09-08 Enzo:「這些提問,實務上 Agent 進入實作時有在證明已滿足或不需要?」)★——查證答案是沒有:三時機(改檔前 hook/推送前 adv…
+    35 [KEY]: KEY:★裁定=借設計審處置閘+已知坑內容觸發,零新機制類型★——diff 有適用題時,推送前每一問要有機器可讀表態:satisfied(附證據 path:line 或 test:…
+    36 [KEY]: KEY:★r1/r2 折入的核心形狀★——表態是獨立原語 `code-loop dispositions <檔>`(派席前寫;先寫治理帳事件、失敗 rc2 不寫 marker,再原…
+    38 [KEY]: KEY:★r3 折入(2026-09-09)★——hook 另送一欄原始 `delta_text`(保留換行、上限 2 MB)給 lumos 算適用性,舊的 `query`(800…
+    39 [KEY]: KEY:副產品=每題(以 id 為鍵)歷來 satisfied/na/todo/auto-na 比例進 gov --stats(mapper 白名單放行新欄);死題候選(≥10 次…
+    40 [KEY]: KEY:天花板(向人複述):表態可以敷衍,錨點與審查席只降機率不是證明——同設計審處置閘承認的 GIGO(垃圾進垃圾出:表態寫什麼工具就記什麼);閘內部錯誤或超預算走既有 `_ga…
+    … 還有 37 處
+ 10.601  Verification/2026-09-09_棧別提問表態閘實作測試.md  [棧別,提問,表態]
+    5 [fm:valid_under]: valid_under: 只證明「照三輪設計審折入後的 spec 寫的碼,在合成 git repo 樣本上照條款動」;沒有任何真 kt/cs/vue/swift/node 消費專案…
+    6 [fm:revalidate_when]: revalidate_when: 第一個消費專案(kt 或 cs)推送真的被表態閘擋或放行之後回填;或 _STACK_QUESTION_SPECS 任一題 when 改動;或 20…
+    12 [fm]: - "[[Projects/棧別提問表態閘_計劃]]"
+    14 [fm]: - "[[Systems/棧別提問表態閘]]"
+    20 [VERIFY]: VERIFY:代碼審 code-表態閘 r1(正確性/邊界/併發資源/合約測試/架構對齊五席 sonnet+Gemini 備援;Codex 兩席撞用量上限 03:48 重置後補跑)…
+    22 [VERIFY]: VERIFY:Codex 兩席補跑後再抓 5 條 major(五席 sonnet 都沒抓到):整檔刪除的 diff 刪行全漏(解析器只認 +++ b/)、治理帳寫的 evidenc…
+    25 [body]: # 2026-09-09 棧別提問表態閘：實作測試
+    36 [body]: | t_codeloop_check_dispositions_gate | 13 | S5：tier standard 照擋、auto na／壞證據／壞 Issue 各自 BLO…
+    … 還有 2 處
+ 10.376  Systems/arch-alignment-lens.md  [棧別,表態,張力]
+    23 [fm]: - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    24 [fm]: - "[[Projects/兩席相反時端出張力_計劃]]"
+    25 [fm]: - "[[Systems/棧別提問表態閘]]"
+    27 [fm]: - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+    40 [body]: ## 跟棧別檢核題撞到時(2026-09-09 起)
+    42 [body]: 這一席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能對同一段程式給相反意見([[Issues/架構對齊席與棧別檢核題可能相反]])。
+    43 [body]: Enzo 裁:不挑邊、把兩邊端上來。落成三塊(設計與審查在 [[Projects/兩席相反時端出張力_計劃]]):
+    45 [body]: 1. **表態多一種值 `tension`**:作者答檢核題時可以說「我看見兩邊了,這次選沿用既有/改用建議」,附既有寫法在哪(path:line)、隱患、建議。合法的不擋,`co…
+    … 還有 2 處
+  9.453  Systems/pitfalls-code-loop.md  [棧別,提問,表態]
+    30 [FLOW]: FLOW:pitfalls spec 模式(剝除對齊 assess_spec+防呆→掃 PITFALL_CLASSES 四類→印通用 4 問(3 固定+1 風險類反問,2026-0…
+    82 [body]: - `scripts/lumos` `cmd_pitfalls`:三模式(spec 提問 / --check 缺節擋 / --diff 代碼風險 manifest+tier),va…
+  7.501  Verification/2026-07-20_棧別效能追問.md  [棧別,提問]
+    11 [fm]: - "[[Projects/pitfalls棧別效能追問_計劃]]"
+    22 [fm]: - "效能檢核目錄「人判提問」欄改動(雙向同步義務)"
+    24 [TEST]: TEST:全套 1248 passed 0 failed——t_pitfalls_stack_questions(6:kt附問/md不附/測試檔排除/json欄)+t_impact…
+    25 [VERIFY]: VERIFY:T1 pitfalls 棧附問/T2 impact 單源注入(lumos 出題 hook 格式化,冷卻快速路不帶)/T3 蓋章紀律(SKILL);終審=standar…
+    27 [KEY]: KEY:誠實邊界——提問保證被看見不保證答對;冷卻窗內(incidents-only)不帶問=降噪取捨;消費專案首戰(真實 .kt/.cs diff 走完三時機)未發生,發生後補此…
+    29 [fm]: - "Projects/pitfalls棧別效能追問_計劃.md#d1"
+    31 [body]: # 2026-07-20 棧別效能追問驗證
+    33 [body]: 驗證對象:[[Projects/pitfalls棧別效能追問_計劃]] T1-T3 全落地。詳見 summary;同批捡到 [[Issues/E2時區跨日誤報]](時區跨日 bug…
+  7.441  Projects/pitfalls棧別效能追問_計劃.md  [棧別,提問]
+    14 [KEY]: KEY:把[[Systems/效能檢核目錄]]的棧別效能提問接進三個時機點——①pitfalls --diff 按棧附追問(diff 副檔名認棧既有機制,命中 kt/cs/vue/…
+    15 [KEY]: KEY:Vercel 實證錨——靠模型自己想起查規範 56% 跳過→機制推送不靠自覺;提問式>陳述式(pitfalls 逼答哲學)
+    20 [fm]: - "[[Verification/2026-07-20_棧別效能追問]]"
+    22 [fm]: - content: standard 不擋:棧別檢核答案只落 pass --note 建議、工具不驗
+    28 [fm:superseded_by]: superseded_by: "[[Projects/棧別提問表態閘_計劃]]"
+    31 [body]: # pitfalls棧別效能追問_計劃
+    33 [body]: > 把 [[Systems/效能檢核目錄]] 的棧別效能提問接進工作流三時機(動手前/終審/蓋章前),讓最佳實踐「被推到眼前」而非靠 Claude 自己想起(Vercel 實證:自…
+    35 [body]: PRIOR-ART: ① 最小解——pitfalls 已按副檔名認棧、已有 _PITFALL_QUESTIONS 提問表,本計劃=該表按棧分組+三問內容;impact hook 已…
+    … 還有 4 處
+  5.822  Projects/主動影響幅度偵測_實作計畫.md  [棧別,提問]
+    17 [KEY]: KEY:[2026-07-19 擴充]hook 注入尾附棧別效能三問——lumos impact --ranked --json 輸出帶 stack_questions(目標檔命中…
+  4.653  Projects/席位人格化_計劃.md  [表態,張力]
+    58 [body]: - **與應試化防護的張力(★真隱患,原提案沒看到★)**:2026-07-28 已裁「rubric 公開固定會被『剛好滿足字面』鑽,派工措辭要**改述、不逐字貼**」。而 C(固…
+    86 [body]: - 已裁不碰的相鄰題:[[Projects/收斂機制優化調研2026-08-14]](辯方三分類先不做、多樣性崩塌不適用)、[[Systems/finding-refute]](辯…
+  4.051  Projects/對外說明親和化改寫.md  [棧別,提問,表態]
+    43 [fm:why_chosen]: why_chosen: 具體情境能保留入口張力，同時讓後面的圖譜、派工、審查與寫回都有前文問題可回答。
+    598 [body]: Enzo 透過另一個 session 交代:替剛落地的「棧別提問表態閘」在 README 開一節、配一張圖,
+    606 [body]: 只推這次踩到的題 → 三種答法 → 推送與 CI 缺一題就擋 → 審查席拿表態當可反駁的宣稱 →
+    678 [body]: 「抓不到什麼」。原本那張 `stack-gate` 留在第二層當細部圖(它畫的是表態流程,仍然對)。
+  3.803  Verification/2026-06-20_judge-severity-gate.md  [張力]
+    24 [body]: - **人工解核心張力後重跑**:刪「純模糊性保守取高」、改靠評定者獨立 + judge 據實評 + 客觀二值保守。重跑 design-loop:
+    25 [body]: - **R1**(canary a=壞§ref,opus,caught):張力解被審出真漏洞 worst=major(F-NEW3 二值化、F-NEW2 地面錨變弱),折入。
+    26 [body]: - **R2**(canary b=未定義旗標,opus,caught):核心張力解判 clean;二值修法審出新洞 worst=major(F-R2-2 統一 finding 層…
+  3.786  Systems/judge-severity-gate.md  [張力]
+    23 [TEST]: TEST:功能改動在 prompt(非 Python),以 design-loop 自跑收斂為驗證(人解張力後重跑 R1 major→R2 major→R3 clean→R4 cl…
+    34 [fm:context]: context: 核心張力(autonomous-loop 自動產 spec 撞 6 輪 cap 未收斂後人撈出):原 spec 給 judge 加「拿不準往高評(保守取高)」堵自…
+    63 [body]: ## 關鍵決策(核心張力的解)
+    75 [body]: - 設計稿:`docs/design/2026-06-20-judge-severity-gate.md`(autonomous-loop 自動產出,人解核心張力後重跑 desig…
+  3.646  Verification/2026-08-27_辯方表態記帳.md  [表態]
+    5 [fm:valid_under]: valid_under: "辯方表態欄(agree/evidence/concern)為純觀測、不掛任何判閘;降級規則未動——只 evidence 態且附 file:line 才降…
+    14 [body]: # 2026-08-27_辯方表態記帳
+    16 [body]: PRIOR-ART: 最小解=既有 `canary record` 處置帳加一個平行選配欄(照 `--finding-kind` 樣板),不自建新機制、不加依賴;世界解過(arXi…
+    18 [body]: ## 做了什麼(Enzo 2026-08-27 裁「只補辯方明確表態的帳,不改降級規則」)
+    23 [body]: - **降級規則零改動**:三態只有 evidence 會降且照舊須 file:line;agree/concern 皆維持,對應舊制「真(維持)」;表態欄不掛任何判閘,折入/放行…
+    29 [body]: - **單元測** `t_refute_verdict_ledger_and_stats`(`scripts/test_lumos.py`,綁基準線需 anchor approve…
+    42 [body]: 表態有記帳 **≠** 已偵測到重啟條件。still 要人事後標「這條 evidence 降級後來證明是真的」,這步手動、目前一筆未做。evidence 那批只是候選池。重驗時機見…
+  3.574  Projects/閘觸發帳統計_計劃.md  [表態,張力]
+    179 [body]: - **新增 `_KNOWN_GATES` 常數算不算「造新機制」**:★2026-08-20 砍範圍後這問題**仍然活著**,沒有隨分類桶一起消失★(r3 s2 席)——未出現清…
+    241 [body]: - **r1 fold 迷你核對(2026-08-19)**:①輸出欄位數自相矛盾(本文列到八欄、測試寫七欄)已對齊 ②不收斂桶的強制措辭無測試鏡像(只釘了零觸發桶)已補 ③`ha…
+    246 [body]: `gov --stats` 多印一段(在辯方表態之後、設計迴圈結案方式之前):只算有 `reported` 欄的輪(2026-09-09 起才有),Σ席位報→Σ存活/Σ編排者重現不…
+  3.573  Systems/finding-refute.md  [表態]
+    14 [fm]: - "[[Verification/2026-08-27_辯方表態記帳]]"
+    18 [KEY]: KEY:辯方派工本體=純 prompt 紀律;★2026-08-27 起表態記帳(--refute-verdict)已有 CLI 代碼與單元測(t_refute_verdict_l…
+    23 [TEST]: TEST:派工本體無單元測(prompt 紀律);表態記帳有(t_refute_verdict_ledger_and_stats,含 blocker 輪讓步翻紅釘);spec 品質…
+    50 [fm]: - content: 辯方表態的記帳一致性檢查在 blocker 輪讓步(2026-08-29 修回歸):同輪 severity=blocker 時,舊規則強制放行清單為空、而反證…
+    52 [fm:context]: context: 自主迴圈 2026-08-29 那輪四次撞上,只能把辯方判決留空、反證寫進 note,結構帳因此少了四輪的辯方資料(它自己的 notes 點名這條)。追查發現死結…
+    84 [body]: - **派工本體無單元測**(prompt 紀律);表態記帳層 2026-08-27 起有代碼有測試;驗證靠 design-loop 實戰觀察「假 major 有沒有被辯方當輪降級…
+    86 [body]: ## 辯方明確表態進帳(2026-08-27)
+    87 [body]: 辯方裁決從二元(真/假)升成**明確三選一**,並把表態記進帳:
+    … 還有 4 處
+  3.485  Projects/結清式收斂_計劃.md  [張力]
+    19 [KEY]: KEY:★首個真實 loop dogfood(2026-07-31,對象=[[Projects/公開精簡版_計劃]];該 spec 兩輪 panel 未收斂、capture-rec…
+    57 [body]: - [x] design-loop 出場（2026-07-28 實質收斂人裁，signoff 留痕；非機械 rc0——裁量出場，golden 已凍）；tier 註記：spec 命中…
+    65 [body]: - [x] r3 minor 清掃（2026-07-28 盤整收口）：README×2 settle 行已入（含 --spec 必填）；loop next 例外紀律已落 desig…
+    84 [body]: - r3 delta panel（2026-07-27，3 席全 caught：型別 d 未定義產物／a 幽靈引用／b 未定義旗標；s1 重植1次、s2 重植2次頂格）：**blo…
+    120 [body]: ### ④ ★重蓋疲勞張力的完整實例（2026-08-01 補，該 loop 已終結）★
+    136 [body]: - **重蓋疲勞張力（既有已知限制）實測命中**：本輪折入後 spec sha 一變，35 條全部過期須逐條重蓋——本案由編排者留痕重蓋（非人逐條確認），**正是該條警告的橡皮圖章…
+    146 [body]: - **重蓋疲勞張力（r3 折入）**：條目級 spec_sha × 每輪 fold 必改 spec → 每個有 findings 的輪後全清單過期、須人逐條確認重蓋——活躍 lo…
+  3.230  Systems/bound-tests-gate.md  [表態]
+    19 [KEY]: KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、…
+    42 [body]: - **低風險推送**:pre-push 同一次 `code-loop check` 帶 `--bound-tests-advisory`(2026-09-09 表態閘起;之前是另…
+  3.150  Projects/已知坑機械前置_計劃.md  [提問]
+    36 [body]: ### S0 反問風險類(v1 主打;skill 文本為主+提問路徑小改)
+    37 [body]: - **廣度靠在場 LLM 自我分類**:pitfalls spec 模式的通用提問,除現有固定 3 問(併發/效能/資源),加一問:「★列出此功能碰到的風險類(不限既有 4 類:…
+    44 [body]: > ★pre-flight 勘誤:非「一根線」★——cmd_pitfalls 刻意 vault-free(scripts/lumos:13223 help+t_pitfalls_s…
+    45 [body]: - `cmd_pitfalls` 的 spec 模式(--check 與提問路徑):除既有 PITFALL_CLASSES 4 類,**加掃圖譜中 `pitfall_when` 帶…
+    47 [body]: - 坑節點的提問文字:節點 summary 的隱患提問欄(欄名待 pre-flight 對齊既有事故節點慣例)。
+    51 [body]: - 世界已知坑=Systems/Issues 節點,帶 `pitfall_when: [content:<寬 regex>]` + **必附 `source:` 世界來源 URL*…
+    59 [body]: - 建一個真坑節點:`auth/refresh-token → single-flight`(source=OWASP/公開文),content trigger 寬抓 refres…
+    62 [body]: - **pre-flight**:S1「一根線」低估——cmd_pitfalls 刻意 vault-free,接坑節點要破邊界+新「提問」欄位(全庫無此欄)+比對須吃 corpus…
+  3.136  Systems/cross-family-audit.md  [張力]
+    89 [body]: - **prompt 層自律張力**:cross_summary 單行、先判 status、verdict 判定都靠 orchestrator LLM 自律,與本專案『別信 LLM…
+  3.046  Projects/已知坑策展庫_計劃.md  [提問]
+    11 [KEY]: KEY:v2 深度層(v1 反問給廣度/本案給類別內世界已知具體坑,跨 session 記憶)——pitfalls 接 known-pitfall 節點(有 pitfall_ask…
+    18 [body]: > 緣起:[[Projects/已知坑機械前置_計劃]] v1(S0 反問風險類)已落地=給「風險**類別**」廣度;本案=v2 深度層,注入「類別內的**世界已知具體坑**」(r…
+    20 [body]: PRIOR-ART: ① 最小解——複用既有 `pitfall_when` 觸發機制(content trigger)+ pitfalls spec 模式既有的 `_pitfall…
+    85 [body]: - 種子驗:含「refresh token」的 spec 跑 pitfalls → single-flight 提問+OWASP 來源彈出。
+  2.931  Systems/codex-harness.md  [表態]
+    21 [KEY]: KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)…
+  2.850  Verification/2026-08-09_已知坑策展庫v2落地.md  [提問]
+    17 [body]: - pitfalls **print/json 路徑**接 vault(_vault_in),掃「有 pitfall_ask 的 known-pitfall 節點」+pitfall…
+    23 [body]: refresh-token spec 跑 pitfalls → single-flight 提問+OWASP 來源自動彈出——不靠在場 LLM 熟、不靠先爆、不靠記得查。
+  2.754  Projects/pitfalls-lint-integration_計劃.md  [提問]
+    14 [KEY]: KEY:核心認知重定位——pitfalls 不是規則庫,是「提問層 + lint 整合器 + loop 接線」。通則(requests timeout/open-with)ruff…
+  2.589  Verification/2026-09-05_Codex行為精修f02後測.md  [表態]
+    30 [body]: - 模型回「不用寫」是它的判斷,hook 不驗這句對不對——這一層的天花板是「逼它表態一次」,不是「逼它寫對」。要量「說明合不合理」得人抽看逐字稿;REVISIT:2026-09-…
+  2.369  Projects/kotlin慣例skill_計劃.md  [提問]
+    13 [body]: 使用者提問「如何規範 AI 寫得好（如兩支 API 該 combine 不該串聯）」→ 裁定三層解（linter 管形狀/慣例文件管選型/審查鏡頭補漏)→ 首份技術棧慣例文件選 K…
+  2.123  Projects/工具鏈補強十件_計劃.md  [提問]
+    46 [body]: | 11 | 圖譜同步覆蓋更全面 | ✅ 不加提問(hook 非互動,沒人答);把既有 `impact --sync-check` 接到三個時機點名「直接相關卻沒動」的篇(Stop…
+  1.978  Projects/iOS與Node後端補棧_計劃.md  [提問]
+    19 [fm]: - "[[Projects/pitfalls棧別效能追問_計劃]]"
+    51 [body]: | 效能檢核目錄 | iOS 八項、Node 七項，各標「機械可查 vs 人判提問」 | 與 `_STACK_PERF_QUESTIONS` 雙向同步義務（既有家規） |
+  1.876  Projects/prepush主幹範圍修法_計劃.md  [棧別]
+    34 [body]: `scripts/hooks/pre-push` 的代碼風險段以 `git merge-base HEAD main` 起算 diff：main-direct 時 mb==HEAD…
+  1.845  Projects/收斂機制優化調研2026-08-14.md  [表態]
+    122 [body]: > **★2026-08-27 補:重啟條件的偵測儀器已建,裁定本身不動★**——當日治理日報又把同篇論文(0.457→0.533)當新發現端上、未對決策帳;Enzo 裁走中間路。…
+  1.788  Verification/2026-08-21_工具鏈體檢修復批.md  [提問]
+    70 [body]: Enzo 裁「所有提示都白話過濾一次」並把口味存進記憶(tool-output-plain-style)。三面對照表 369 條歸檔 `governance/audits/2026…
+  1.736  Projects/一句話層供糧_計劃.md  [提問]
+    18 [body]: PRIOR-ART: **借用三源,不建第二種**——①外部:OpenViking(34.8k★)三層記憶(L0 一句/L1 概覽/L2 全文,實測省 34-91% 輸入 toke…
+  1.735  Projects/loop三輪壓縮_計劃.md  [張力]
+    99 [body]: ## 散文收斂:signal-preserving 停機(2026-07-09 交叉查文獻;解「framing 對抗收斂」根本張力)
+  1.546  Projects/bootstrap一鍵對稱_計劃.md  [提問]
+    90 [body]: 4. `t_bootstrap_existing_project`：有 vault＋vendored 的 repo → 不重建 vault、hooks 接上、無提問；**中間態**…
+  1.506  Projects/審查有沒有用記帳_計劃.md  [表態]
+    65 [body]: - **兩個現成欄位一次都沒人填**:`--refute-verdict`(辯方表態)1216 筆裡 0 筆——今天查明原因是七個輪次一輪辯方都沒派(路由規則下多半不觸發),所以它…
+  1.492  Projects/enforcement可觀測性_計劃.md  [張力]
+    194 [body]: **★[S4] 要正面回答的一個張力(通才席 F5,不能繞過)★**:
+  1.403  Projects/主session鏡頭利用率_計劃.md  [提問]
+    49 [body]: PRIOR-ART: ① 最小解層級——推送方 `impact-hook.py`(PreToolUse Edit|Write)、逐字稿(Claude Code 每行帶 UTC 時戳…
+  0.650  Projects/公開精簡版_計劃.md  [張力]
+    554 [body]: ### 重蓋疲勞張力（settle 機制自身的已知限制，本案實測命中）
+  0.000  Verification/2026-08-08_風險類反問v1落地.md  []
+    6 [fm:revalidate_when]: revalidate_when: 動 _PITFALL_GENERAL/pitfalls 提問路徑、v2 策展庫上線
+
+(共 42 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+[35m[3mcodex[0m[0m
+我正在使用 `lumos-project-notes` 取得圖譜合約與 `lumos-code-loop` 的外部審查紀律；前者決定驗證邊界，後者要求我對 diff 風險與引用逐條留證。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "sed -n '1,240p' /Users/enzo/.agents/skills/lumos-project-notes/SKILL.md && sed -n '1,240p' /Users/enzo/.agents/skills/lumos-code-loop/SKILL.md"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+---
+name: lumos-project-notes
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+---
+# lumos 專案知識圖譜——一頁手冊
+
+圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+
+## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+
+| 你在想… | 敲 |
+|---|---|
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+| 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+| 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+
+看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+**查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+**分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+
+## 2. 動手前
+
+- `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+- `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+- 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+- 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+- 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+
+## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+
+| 要做 | 敲 |
+|---|---|
+| 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+| 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+| 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+| 正文段落 | Edit;寫完 `lumos lint <節點>` |
+
+**四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+
+**合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+```
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★DEBT★ <偶然行為,可改>
+KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+```
+- 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+
+**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(一篇一個主類;值域專案在 `.lumos/config.json` 宣告了 lint 才唸;feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+
+**決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+
+**承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+
+## 4. 收工
+
+1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+2. code 有「拿掉 / 反轉」的改動:把那些名字逐個 `lumos search <名> --code`,逐句判筆記還成不成立,不成立當場改或標作廢。動到畫面 → 補可重放的 UI flow 並 `[test:<平台>:<flow>]` 綁回(沒裝置要明寫「未驗+原因」)。
+3. 圖譜實質更新後:派乾淨 agent 只讀圖譜還原脈絡,對不上就補到一致,留痕 `lumos self-audit <節點>`。
+4. push 後(專案有宣告 ci 區塊才有):`lumos ci-wait`,紅就當輪修,修不完要在收尾明講。
+5. 跨 session 傳訊只傳「指標+觸發」(我動了哪篇、你去讀哪篇),不傳內容本身;規則權威在圖譜不在誰的記憶。
+
+## 再深一層(按需開,別一次全讀)
+
+| 要做 | 開 |
+|---|---|
+| 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
+| 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
+| 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
+| maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
+| 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |
+---
+name: lumos-code-loop
+description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --diff 算風險分級,出 tier: high 就派乾淨的審查員找洞、辯方殺假陽性、證據閘過了才 lumos code-loop pass --note 留痕,沒留痕 pre-push 和 CI 都會擋。觸發:分支終審、準備 push、pitfalls 出 tier high、有人要 code review、指名 code loop。指令速查在 lumos-project-notes 的 commands/06-代碼審與推送.md。
+---
+# 代碼審查迴圈——一頁手冊
+
+白話:分支要推之前,先算這批改動風險多高;高風險的就讓幾個不知道脈絡的審查員看 diff 找 bug、辯方殺假陽性、真問題修掉、記帳、問閘,過了留痕才推得上去。**你派人和判讀,lumos 出記帳與判閘的指令。**
+
+指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`。
+
+## 什麼時候用
+- `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。★同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋(2026-09-09 表態閘,[[Projects/棧別提問表態閘_計劃]])。★
+- pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、high 沒有 `lumos code-loop pass|skip --note` 留痕,三個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。
+- loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+- 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+
+## 一輪怎麼跑
+1. **凍結材料**:`git diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`;超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+   **先表態**(2026-09-09 起,派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的那幾題填成 `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)/`na`(附 `reason`,≥10 個中文字)/`todo`(附 `issue: Issues/<名>` 與 `reason`)/`tension`(★張力,2026-09-09 起★:這題的做法跟鄰居不同——你刻意沿用既有寫法、或刻意改用建議做法——不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 會印成 ⚠ 讓人裁;單源 [[Projects/兩席相反時端出張力_計劃]]),再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。
+2. **派審查員**:Agent、sonnet(★Codex 編排時的完整做法(點誰、唯讀怎麼開、版本差異)★:**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走:版本行為一變就要改三處,而那正是散文載規則會漂的老問題。外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起,hook 45 秒超時就附不到節點;2026-09-05 起超時會在派工詞尾端附一行說明,不再靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線→靜默放行(超時則附一行說明,見上);★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。★席報告格式★以 lumos-design-loop `templates.md` 的卷證規則為★唯一來源★,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(★反引號必加★,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。
+   ★2026-09-06 教訓(收貨線指令化案停案後的根因修法)★:我自己的派工詞長期自創 `quote: <逐字一行>` / `file: <路徑>:<行>` 這套,跟上面規定的不一樣——**於是每個迴圈都要臨場寫一支正規化腳本把它轉回來,而那支腳本會在讀不到嚴重度時默默補成 clean、還會把引句裡的「」換成『』弄壞錨定**。查證指出席位吐錯格式不是模型天生行為,是派工詞要求的。**派工詞照範本寫,收貨正規化這件事就不存在。**
+   派工單落 `rN-dispatch.json`。
+3. **收貨**:★**所有席收齊之前不要動工作目錄**★(2026-09-06 實際踩到):某席先回來就開始折它的發現,後到的席會讀到已經改過的碼、甚至讀到先到那席的報告——**三席就不獨立了**。實際發生的樣子:架構席在報告裡直接引用外家席的結論;通才席回報「審到一半發現工作目錄被改動」。先折不會讓判定變錯(重疊的發現各自附了獨立證據),但它讓「多席獨立一致」這個判準失效,而那正是「可以直接折不用派辯方」的依據。收齊再動,先到的席報告就先存檔放著。
+   席報告原樣存檔,★不要再臨場寫腳本轉格式★(2026-09-06:那支腳本已刪、並加測試禁止卷證目錄再出現任何腳本)。格式要求在派工當下就講清楚(見步驟 2 的單一來源),席位交來就該是對的;**真的交來格式不對,退回該席重寫,不要自己動手改它的報告**——編排者改席報告等於改證據(2026-09-09 起唯一例外=`lumos report-normalize --write` 的純格式搬移,界線見下一段;其他一律退回)。記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行會 rc2 擋下,那時就是退回重寫的時機。★2026-09-09 起「沒正規化」也擋(審查有沒有用記帳 S1/S4,規則三條同 design-loop 步驟 4:檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算):`lumos report-normalize <席報告>` 不帶 --write 先看差在哪、決定要不要退回;`--write` 只准做純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句)——跟「不改證據」的界線就在這:動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。★可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+4. **判讀與辯方**:★**席位給的「觀察」和「判準」要分開驗**★(2026-09-07 實際踩到):席位常常「量到的數字對、但該怎麼算才算過這件事講錯」。實例:某席指出「同一支 hook 連打兩次預算會累加超標,7+7=14 vs 天花板 10」——**數字對**,但它給的判準「兩次相加要小於天花板」**錯**,因為那個函式回傳的是「還剩多少」不是「每段配額」(第一段拿 7 只用 3,第二段拿 4,最壞總耗 7,從不超標)。**照錯的判準硬改,會做出更複雜而且沒解決真問題的東西**——我第一版就是照它改,改完再測數字沒動。所以:先自己重現它量到的現象(那通常是對的),再自己想一遍「什麼條件才算過」,不要把它的判準當結論。
+   severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`,2026-07-18 S5;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票——2026-08-23 裁)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:**那些綁定測試會被自動真跑**(2026-08-22 起機械化,不靠自律)。★2026-09-07 起分兩條路(人裁)★:高風險走 `code-loop check`,紅/懸空/方法名不合法就**擋**推送;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了**印出來、記帳,但不擋**——不選「低風險也擋」是因為擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`(零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。★紅了是要修測試,不是補審查留痕★:補一筆 `code-loop pass` 修不好一支紅掉的測試。
+5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。★2026-09-09 起載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳★。
+7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。架構對齊席與棧別檢核題對同一段給相反意見時,**兩邊的發現都留、不挑邊**:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折(2026-09-09,[[Projects/兩席相反時端出張力_計劃]])。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾★不印★「審查有沒有用」那行(它只在設計審印;code 迴圈的數字照樣進 `lumos gov --stats` 那一段)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳),再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。推完、卷證入版控後 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用)。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+
+推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句>`(逃逸帳=審查系統的漏網紀錄,append-only 不進閘;`lumos gov --stats`「審查有沒有用」段印累計筆數與最重等級)。
+
+## 停手與護欄
+- 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。
+- 每輪初讀派全新 agent;續談只准問該席自己講過的話(headless 才可用)。
+- 收斂判準:處置閘是「一輪裡每個發現都折掉或附理由放行」即過(2026-08-04 重設計刻意裁的:閘便宜、審不淺);舊制 panel 自 2026-08-06 起的迴圈是連兩輪乾淨(K=2)——含 high;2026-08-25 甲裁後多席亦處置閘,panel 僅回放,抽查(probe)義務同日退場(判定印行降觀測)。要改這些語意得走設計迴圈,不偷偷改。
+- gate / 守衛類 code 建議開 feature branch 再推。
+
+## 再深一層(按需開)
+| 要做 | 開 |
+|---|---|
+| 席位紀律、抑噪、辯方順產 fix | `reference.md`〈步驟 3 — 派乾淨 reviewer〉〈步驟 4 — 判讀 + 辯方〉 |
+| mutation 算子理由、capture-recapture、完整範例、全部歷史修正 | `reference.md`〈舊頭版全文〉 |
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "python3 scripts/lumos context \"Projects/兩席相反時端出張力_計劃\" --brief && python3 scripts/lumos contracts \"Systems/棧別提問表態閘\" && python3 scripts/lumos contracts \"Systems/arch-alignment-lens\" && python3 scripts/lumos show \"Projects/兩席相反時端出張力_計劃\" && python3 scripts/lumos show \"Systems/棧別提問表態閘\" && python3 scripts/lumos show \"Systems/arch-alignment-lens\" && sed -n '1,260p' CLAUDE.md && sed -n '1,260p' governance/review-reports/code-兩席相反時端出張力/r1-manifest.json"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 1923ms:[0m
+# Projects/兩席相反時端出張力_計劃.md
+type:project | status:doing | created:2026-09-09 | updated:2026-09-09 | scope:guards-gates
+summary:
+  FLAG:DECISION
+  KEY:★立案(2026-09-09 Enzo:「遵循既有架構的鏡頭、和棧別技術提問的衝突,我想開始解」)★——[[Issues/架構對齊席與棧別檢核題可能相反]] d2 裁「兩席相反時不挑一邊,端出…
+→ 連出 (8):
+  • Issues/架構對齊席與棧別檢核題可能相反.md [open]
+  • Projects/棧別提問表態閘_計劃.md [doing]
+  • Systems/arch-alignment-lens.md [doing]
+  • Systems/finding-refute.md [done]
+  • Systems/pitfalls-code-loop.md [done]
+  • Systems/效能檢核目錄.md [done]
+  • Systems/棧別提問表態閘.md [doing]
+  • Verification/2026-09-09_兩席相反時端出張力實作測試.md [pass]
+← 連入 (5):
+  • Issues/架構對齊席與棧別檢核題可能相反.md [open]
+  • Systems/arch-alignment-lens.md [doing]
+  • Systems/效能檢核目錄.md [done]
+  • Systems/棧別提問表態閘.md [doing]
+  • Verification/2026-09-09_兩席相反時端出張力實作測試.md [pass]
+(這篇沒有登記任何「動了會壞」的合約)
+(這篇沒有登記任何「動了會壞」的合約)
+---
+type: project
+status: doing
+created: 2026-09-09
+updated: 2026-09-09
+aliases:
+  - 張力表態
+  - tension disposition
+  - 架構對齊席與檢核題衝突的解法
+  - 兩席相反
+  - 可能撞候選
+related:
+  - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+  - "[[Systems/arch-alignment-lens]]"
+  - "[[Systems/棧別提問表態閘]]"
+  - "[[Projects/棧別提問表態閘_計劃]]"
+  - "[[Systems/效能檢核目錄]]"
+  - "[[Systems/finding-refute]]"
+  - "[[Systems/pitfalls-code-loop]]"
+tags:
+  - type/project
+  - status/doing
+  - scope/guards-gates
+summary: |-
+  FLAG:DECISION
+  KEY:★立案(2026-09-09 Enzo:「遵循既有架構的鏡頭、和棧別技術提問的衝突,我想開始解」)★——[[Issues/架構對齊席與棧別檢核題可能相反]] d2 裁「兩席相反時不挑一邊,端出警告:既有寫法 X/隱患 Y/建議 Z/跟既有 N 檔不一致,人裁」;本案把那條口徑落成機制。查證:衝突今天從兩個洞漏掉——①答題只有 satisfied/na/todo 三種,「看到題目但刻意沿用既有寫法」只能塞進 na(正是裁定禁止的壓掉)②沒有任何東西告訴人「這個檔用了鄰居都沒用的做法」,架構對齊席拿到的只是三個對照檔路徑
+  KEY:★裁定(Enzo 2026-09-09,d1)三塊都做★——(一)第四種表態 `tension`:必填 chosen(existing|suggested,小寫)/existing(對照檔 path:line 清單,1–20 項,對被推送的樹驗存在)/hazard/suggestion(同 na 理由門檻、各 ≤2000 字);選 suggested 要附 evidence(規則同 satisfied:path:line 或 test:);合法的 tension 不擋,check 印成 ⚠ 警告(stderr、rc 不變),進治理帳可數 (二)pitfalls --diff 端出候選:改動檔的增行命中某題觸發字、同層對照檔一個都沒有那個字 → 印「可能撞」並在表態樣板該題帶 hint;只端候選不判;hint 隨表態存進治理帳,候選才數得出來 (三)口徑:架構對齊席派工詞(templates §7.6)遇 tension 只查四欄真假不重裁;code-loop skill 步驟 1 講何時用 tension;兩席發現都留、處置理由指向那則表態
+  KEY:★r1 折入(2026-09-09,5 席 27 條/併 21 件/blocker 0/major 11 全折)★——existing 與文字加上限(單題內無中途檢查點,無上限會拖垮推送前 20 秒預算;三席一致);讀側重驗 existing 非空;chosen 只認小寫;tension 的 evidence 同 satisfied 認 test:;對外鍵 `files` 不帶 n_;候選檔集合加 `_stack_changed_ok` 過濾守住「候選必適用」不變量;對照檔讀法明寫嚴格 UTF-8(刻意偏離既有 replace 慣例);讀檔預算改以改動檔為單位(≤20 檔整組讀或整組不算,不切在對照組中間);區塊註解內裸行是既有正規化天花板、承認不修;候選印法比照 `[:6]`;carry 剝 hint 但存帳時留 hint;gov 死題分母含 tension;守衛釘九處不是三處;S7 指令補 `Systems/` 前綴;隱患改寫「消費專案 vendored 工具要 `lumos update`」與「marker 不版控」
+  KEY:天花板(向人複述):tension 跟 na 一樣可以敷衍——工具只驗對照檔存在與文字長度,隱患真不真、建議對不對留給審查席反駁;候選只抓「新檔引入鄰居沒有的做法」這個方向,反方向「照舊寫法沒採建議」機械抓不到,只能靠 tension 這個誠實選項;觸發字寬(如 \bContext\b)會有假候選,REVISIT 數;區塊註解內不以 * 開頭的行會被當程式碼(適用性與候選共用這條天花板);沒有對照組的新檔沒有候選也沒有訊號
+  KEY:帳上現況(2026-09-09 機械數,標記在正文):表態事件 0 筆(本 repo 是 Python 不在題表,閘 9/9 才上)、代碼審留痕提到架構對齊 19 筆、同時提到檢核題 0 筆——零真實案例,本案是先把接住的地方做好
+  PRIOR-ART:①最小解在既有機制層——表態閘已有「每題一個機器可讀交代」的形狀,本案只加第四種值與幾個必填欄;候選借 _arch_alignment_hints 的對照組與 _STACK_TRIGGERS 的觸發字,零新機制類型 ②世界解(2026-09-09 派乾淨席網搜):Google eng-practices 把「跟現有一致」列為最後一階、且以「不惡化 code health」封頂(=被作廢的 d1 那條,人裁不採);CodeRabbit learnings 是設定覆寫、不偵測衝突;arXiv 2608.18167 Adversarial Review 把席間分歧分成 evidence-backed/concern-based 逼出證據(同 [[Systems/finding-refute]] 的方向);「分歧就交人、不自裁」在 ML 叫 reject option/selective prediction(Chow's rule),沒人搬進 code review 工具;linter 側「明知故留要附理由」只有 eslint-comments require-description(機械要求自由文字)與 GitHub code scanning dismissal(下拉類別必選)真的擋——本案 tension=類別(chosen)+三欄結構化理由(existing/hazard/suggestion),合起來就是審查席要查的四欄,比兩者都嚴一點 ③裁定=借用既有設計,不加依賴
+  DEP:scripts/lumos(_DISP_STATUSES、_dispositions_validate、_cmd_codeloop_dispositions 規則提示行、_codeloop_dispositions_gov_log 事件欄、_dispositions_verdict、_dispositions_template、_lens_dispositions_lines、_pitfall_diff_collect、_arch_alignment_hints、_stack_changed_ok、_STACK_TRIGGERS、_stack_norm_line、cmd_code_loop check 印法、_render_gov_stats 表態段)｜skills/lumos-design-loop/templates.md §7.6｜skills/lumos-code-loop SKILL.md 步驟 1/6/7 + reference.md 棧別段｜skills/lumos-project-notes/commands/06｜Systems/棧別提問表態閘 表格｜Systems/效能檢核目錄 第 145 行｜Systems/arch-alignment-lens｜Issues/架構對齊席與棧別檢核題可能相反 REVISIT
+decisions:
+  - content: 三塊都做:第四種表態 tension、pitfalls 端出候選、派工詞口徑
+    id: d1
+    context: 事故筆記 d2 只寫口徑不加機制、並寫「沒有實例不據此加機制」;Enzo 2026-09-09 說要開始解,AI 攤三個範圍(全做/不做候選/只口徑),Enzo 選全做
+    why_chosen: 口徑靠人記得,正是裁定說最不喜歡的;沒有記錄的地方,11 月的回頭條件就沒數字可看;候選是唯一不靠人記得的提醒。代價=一個閘多一種值、pitfalls 多讀最多三個對照檔
+    decided: 2026-09-09
+    valid: true
+---
+# 兩席相反時端出張力（2026-09-09 立案；同日 r1 折入稿——折入 5 席 27 條）
+
+> 白話：兩個審查角度天生會吵——一個說「照這個專案原本的寫法寫」，另一個說「這裡該用比較好的做法」。
+> 人已經裁了：撞到時不挑邊，把兩邊都端到人面前（既有怎麼寫、隱患是什麼、建議怎麼改、改了會跟幾個檔不一致）。
+> 這篇做的是讓「端上來」不靠人記得：答題時多一個誠實的選項、改動前就有人提醒可能撞、審查席知道撞到時查什麼。
+
+## 現況查證（2026-09-09，全部機械數）
+
+- 兩席還沒撞過：治理帳的表態事件 0 筆 <!--lumos:count=0 re="kind": "dispositions" in=docs/.governance-log.jsonl-->（表態閘 9 月 9 日才上；本 repo 是 Python，不在題表，這裡永遠不會觸發）。
+- 代碼審留痕（pass／skip）182 筆 <!--lumos:count=182 re="gate": "code-loop", "kind": "(?:passed|skipped)" in=docs/.governance-log.jsonl-->，提到架構對齊席的 19 筆 <!--lumos:count=19 re="gate": "code-loop", "kind": "(?:passed|skipped)"[^\n]*架構對齊 in=docs/.governance-log.jsonl-->，同時提到檢核題或棧別的 0 筆 <!--lumos:count=0 re="gate": "code-loop", "kind": "(?:passed|skipped)"[^\n]*架構對齊[^\n]*(?:檢核|棧別) in=docs/.governance-log.jsonl-->。
+- 所以這不是修事故，是先把接住的地方做好。事故筆記原本寫「沒有實例不據此加機制」，Enzo 2026-09-09 裁三塊都做（d1），那句作廢。
+
+### 衝突今天從哪兩個洞漏掉
+
+1. **答題那一側沒有誠實的選項。** 表態只認 `satisfied`／`na`／`todo`（`_DISP_STATUSES`）。「我看到這題，但刻意沿用專案既有寫法、沒採建議」哪一種都不是，最後被塞進 `na`——工具只驗理由長度，正是裁定禁止的「默默壓掉」。
+2. **沒有任何東西會說「這個檔用了鄰居都沒用的做法」。** `_arch_alignment_hints` 只把同層最像的三個既有檔路徑端給架構對齊席；有沒有看出差異全靠那一席，編排者要不要把兩邊併起來講全靠當下記得。
+
+## 設計
+
+### 一、第四種表態 `tension`（張力）
+
+- **形狀**：`{"status":"tension","question":原文,"chosen":"existing"|"suggested","existing":["path:line",…],"hazard":"…","suggestion":"…","evidence":"path:line 或 test:<名>"}`。`chosen` 講這次改動選了哪邊：`existing`＝沿用既有寫法（隱患留著）、`suggested`＝改用建議做法（跟既有不一致）；只認小寫，跟 `status` 同一條規矩（r1 邊界席 B2）。`existing` 是既有寫法的位置，一項一個 `path:line`，**1 到 20 項、每項 ≤300 字**；去重後的路徑數就是「跟既有 N 個檔不一致」的 N。`hazard`／`suggestion` 各自 **≤2000 字**（上限是 r1 外家 F2／通才 G3／邊界席 B4 三席一致：單題核對沒有中途檢查點，無上限的清單會拖垮推送前 20 秒預算）。`evidence` 只在 `chosen=suggested` 時必附，指到這份改動裡採新做法的那一行；**規則同 `satisfied`：`path:line` 或 `test:<名>`／`test:<平台>:<名>`，走同一條驗法**（r1 架構對齊席 A1：同鍵名不得語意窄化）。
+- **寫側**（`_dispositions_validate`）：`status` 四值只認小寫，錯誤訊息改成「只認小寫 satisfied/na/todo/tension」；**`_cmd_codeloop_dispositions` 整份形狀壞時印的那行「規則:status 只認小寫…」同步改四值並列出 tension 的必填欄**（r1 通才 G2：那是第二處硬編字串）。`tension` 缺 `chosen` 或值不在小寫兩者 → 錯；`existing` 要是清單、1–20 項、每項 ≤300 字且用既有 `_dispositions_split_path_line` 切得開（絕對路徑、`..`、缺行號照舊拒收）；`hazard`／`suggestion` 各自過既有 `_dispositions_reason_ok`（去空白標點後 CJK ≥10 或總長 ≥25）且 ≤2000 字；`chosen=suggested` 時 `evidence` 必附且過 `satisfied` 同一套切分（`test:` 走 `_dispositions_split_test`）。壞 → rc2 不寫並講原因，跟其他三值同一條路。未知鍵（含樣板帶的 `hint`）照既有不擋、原樣存。
+- **讀側**（`_dispositions_verdict` 的 `_one`）：`tension` → **先重驗 `existing` 是非空清單且 ≤20 項**（r1 邊界席 B3：治理帳重建或手改壞的紀錄可能給空清單，零次迴圈不得判過），每項走既有 `_dispositions_check_path_line`（對被推送 sha 的樹驗存在與行號範圍，不驗內容）；`chosen=suggested` 的 `evidence` 走 `satisfied` 同一個分支（`test:` 用 `_dispositions_check_test`）；文字門檻、上限與 `chosen` 值再驗一次（治理帳重建來的紀錄不信形狀：缺欄一律 `str(… or "")` 接住，同 `_lens_dispositions_lines` 的防禦寫法、表態閘 r1 正確性席 f3；`_one` 自己既有的另一道是「任一例外接成該題無法驗證、不整份 fail-open」，r1 正確性席 f1／邊界席 f1，本案沿用）。全過 → `checked+1`，並 append 到新欄 `out["tensions"]`：`{id, chosen, existing, files, hazard, suggestion}`（`files`＝去重路徑數；對外鍵不帶 `n_` 前綴，同 `_cochange_mine` 把 `n_files` 印成 `"files"` 的既有慣例，r1 架構對齊席 A2）。任一不過 → 進 `problems`（擋），訊息帶題目 id 與哪一欄。
+- **印法**（`cmd_code_loop check` 人可讀模式）：判定印完（OK 或 BLOCKED 都一樣）之後，`tensions` 非空就在 stderr 多印一段三段式——「⚠ 張力 N 則（兩個審查角度相反，工具只端上來、不裁）」；每則三行：「`<id>` 選了{沿用既有｜改用建議}：既有寫法在 {existing 裡**前 3 個不同路徑**}（共 N 檔）」（r1 邊界席 B5：切原清單會印出 1 個檔名卻寫共 2 檔）、「隱患：{hazard}」、「建議：{suggestion}」；末行「在意的原因：兩邊都留下來才看得見矛盾；誰讓誰由人定，這裡不擋」。`--json` 時放 `verdict.dispositions.tensions`。**rc 不因 tension 改變**：合法 tension＝該題已交代。
+- **`--carry`**：`tension` 跟其他人答的值一樣帶過（`_DISP_STATUSES` 判定，不另寫）；帶過來時**明寫 `ent.pop("hint", None)`**（r1 通才 G6：既有是 `dict(prev)` 整包淺拷貝，不剝就會把上一輪的候選提示帶到新一輪）。
+- **派工鏡頭**（`_lens_dispositions_lines`）：`tension` 的尾巴印「選 {chosen}｜既有 {existing 逗號串}｜隱患 {hazard}｜建議 {suggestion}」，同既有 200 字截斷。審查席反駁的就是這四欄。（r1 架構對齊席 ⚠：同函式其他三值是簡單串接；編排者裁保留 `｜`——四欄需要分隔，`｜` 在本檔錯誤訊息與筆記 DEP 行皆有既有用法。）
+- **治理帳**：事件形狀不變（`dispositions` 物件整包存，新欄自然在裡面；樣板帶的 `hint` 若人沒刪也一起存——這正是候選唯一的持久落點，見〈二〉），事件另加一欄 `candidates`＝這次表態裡帶 `hint` 的題數（r1 接手席 H3）。mapper 白名單放行 `candidates`。`gov --stats` 表態段的桶加 `tension`，印「張力 N」，另印「候選題 N、其中答 tension M」；**死題候選的分母 `_human` 併入 tension**（r1 接手席 H4：8 次 na＋5 次 tension 不能被標成「全是不適用」），判準文字不變（人答 ≥10 且全是 na）。
+
+### 二、`pitfalls --diff` 端出候選（可能撞）
+
+- **母體**：`_pitfall_diff_collect` 走 diff 時另收 `added_lines = {檔: [增行內容…]}`——只收 `+` 行、**且只收 `_stack_changed_ok(檔)` 為真的檔**（r1 通才 G5：`arch["files"]` 的過濾比 `changed_lines` 鬆，少排 `governance/review-reports/` 與簿記檔；不加這道，簿記檔上的候選題會掉出 `stack_questions_applicable`，打破下面的不變量）。既有 `changed_lines`（增刪行，給適用性用）不動：候選看的是「新引入」，刪行不算。
+- **算法**：對 `arch["files"]` 裡、且有 `added_lines` 的每個改動檔 F：`sk = _stack_key_for_file(F, repo_root)`（既有簽名兩個必填參數，`.ts`／`.js` 要看 package.json），`sk` 不在 `_STACK_TRIGGERS` → 跳過。F 的增行逐行 `_stack_norm_line`（剝字串、剝行尾註解、跳過以 `#`／`//`／`--`／`/*`／`*` 開頭的行）得 `norm`。對該棧每題 `(qid, pats, _)`、每個 `pat`：`pat` 在 `norm` 命中 → 讀 F 的對照檔（`arch["files"][F]`，≤3 個），逐行同一支 `_stack_norm_line` 後搜 `pat`；**至少一個可讀對照檔、且全部沒命中** → 記候選 `(F, qid, pat.pattern)`。`when_raw`（看字串內容的那幾條）不看：鄰居的字串字面比對沒有意義。
+- **正規化的天花板（承認不修）**：`_stack_norm_line` 逐行、沒有跨行狀態，區塊註解內**不以 `*` 開頭的裸行**會被當程式碼（r1 外家 F1／通才 G4 實測 `'   async { // still comment'` 回 `'   async {'`）。這是既有適用性判定同一條天花板；增行來自 hunk 片段本來就無從得知是否在註解內，對照檔雖是整檔也用同一支、兩邊對稱——偏差方向是「對照檔註解裡的字被算成存在 → 少一個候選」，安全側。
+- **對照檔怎麼讀**（r1 邊界席 B6）：讀 bytes，`decode("utf-8")` **嚴格**（不用 `errors="replace"`），`UnicodeDecodeError`／`OSError`／檔案 >2 MB 一律記 `unreadable` 並跳過。這是刻意偏離本檔既有「解碼永不失敗」的讀檔慣例：候選要分得出「讀到了沒命中」跟「根本沒讀到」，替換成亂碼再比對會把後者偽裝成前者。
+- **輸出**：`arch_alignment["tension_candidates"] = [{"file":F,"question":qid,"patterns":[…],"siblings":[可讀對照檔],"unreadable":[…]}]`，按 (F, qid) 聚合、patterns 去重保序；沒有候選 → 鍵不出現。人可讀：在 `[架構對齊]` 對照檔清單之後印「可能撞：{F} 新增的 {patterns 用／連} 在對照的 {n} 個檔裡都沒出現（這是 {qid} 那題的做法）——沿用既有或改用新做法都用 tension 表態，審查席會查兩邊」，**最多印 6 行**，其餘一句「另有 N 條，`--json` 看全量」（r1 通才 G7：比照既有對照檔清單 `[:6]`）。
+- **沒有對照組的檔**（r1 邊界席 B7）：新目錄裡第一個同副檔名的檔，`_arch_alignment_hints` 本來就不收（`sibs` 空），所以沒有候選、也沒有 `unreadable`——這是對照組機制的既有邊界，本案不加訊號；S3 明寫。
+- **不變量**：候選的 `qid` 必在 `stack_questions_applicable`——候選來自同一組觸發字命中 F 的增行，F 過了 `_stack_changed_ok`，增行是增刪行的子集，所以該棧那題必適用（超過門檻全問時更是）。測試釘，並用簿記路徑當反例（放在 `governance/` 簿記檔裡的增行不得產生候選）。
+- **樣板**（`_dispositions_template`）：有候選的 qid，其適用題 entry 加 `"hint": "候選張力:{F} 新增 {patterns},對照檔 {siblings} 都沒有——刻意沿用既有寫法或刻意改用新做法,status 填 tension"`。`hint` 是資訊欄，validate／check 不讀；寫側原樣存進治理帳（候選的持久分母），`--carry` 剝掉。
+- **預算**（r1 邊界席 B8：上限不得切在同一個改動檔的對照組中間，否則「第三個沒讀的對照檔其實有那個字」會變成假候選）：**以改動檔為單位**——最多處理 20 個改動檔（每檔 ≤3 個對照檔＝最多 60 次讀檔），一個檔的對照組要嘛整組讀完、要嘛整組不算；超過 20 個的改動檔不判候選，JSON 帶 `arch_alignment.candidates_truncated: true`，人可讀印一句「改動檔太多，候選只算了前 20 個檔」。單檔 >2 MB 記 `unreadable`。pre-push 熱路徑跑的 `pitfalls --diff --no-lint --json` 也算候選；測試釘檔數與大小上限，不宣稱秒數（r1 邊界席 B9：秒數宣稱沒有測試會翻紅，刪掉）。
+
+### 三、口徑（派工詞與工作指引）
+
+- **架構對齊席派工詞**（`templates.md` §7.6 加一段）：「表態記錄裡若有 `status=tension` 的題：那是作者已經看見兩邊（既有寫法 X、隱患 Y、建議 Z、選了哪邊）。你的工作是查四欄真假——`existing` 指的檔真的那樣寫嗎（開檔對照）、`hazard` 在這份 diff 裡真的成立嗎、`suggestion` 在這專案可行嗎、`chosen` 跟 diff 實際做的一致嗎——查到假的才報 finding；不重裁誰贏，不因『跟既有不一致』單獨再開一條。若你自己發現『跟既有不一樣』、而該處對應的檢核題答了 `satisfied`，把發現寫成張力形狀：既有 X／隱患 Y／這次 Z／不一致 N 檔，severity 照本席錨（最多 minor，除非引入第二種做法或跨層直呼）。」（r1 通才 G1／邊界席 B1：摘要與正文一律「四欄」。）
+- **代碼審指引**（code-loop `SKILL.md`）：步驟 1「先表態」列四值，講何時用 `tension`——pitfalls 印了「可能撞」、或你自己知道這題的做法跟鄰居不同；步驟 6／7：兩席的發現都留，處置理由可寫「張力已在表態 `<id>` 記錄，人裁」——這是 accepted 的合法理由之一、不算壓掉；blocker／major 照舊只能折。
+- **其餘文字同步**：`reference.md` 棧別段、`commands/06` 那一列、[[Systems/棧別提問表態閘]]（怎麼用＋「工具驗什麼」表格加 tension 列）、[[Systems/效能檢核目錄]] 推送前那一格、[[Systems/arch-alignment-lens]]（新節「跟檢核題撞到時」＋DEP 連本案）、[[Issues/架構對齊席與棧別檢核題可能相反]]（REVISIT 改成數 tension 與候選；d2 的「目前只寫口徑不新增閘」一句由本案 d1 接手）。
+- **漂移守衛**（r1 外家 F3／接手席 H2：九處同步只釘三處，其餘六處漏改測試照樣綠）：新測試 `t_tension_doc_sync` 釘**本 repo 裡全部九處**都含「tension」——`skills/lumos-code-loop/SKILL.md`、`skills/lumos-code-loop/reference.md`、`skills/lumos-design-loop/templates.md`、`skills/lumos-project-notes/commands/06-代碼審與推送.md`、`docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md`、`Systems/效能檢核目錄.md`、`Systems/arch-alignment-lens.md`、`Issues/架構對齊席與棧別檢核題可能相反.md`、本案計劃筆記（同 `t_marker_doc_sync` 形狀；消費端沒有 skills／vault 時 `_SrcOnly`）。字串存在檢查抓的是「整段被刪或沒寫」，不驗語意——語意留給人讀。
+
+## 驗收條款
+
+- [S1] 寫側：`code-loop dispositions <檔>` 對 `status=tension` 的題——缺 `chosen`／值不在小寫 existing|suggested（`Existing` 也拒）、`existing` 缺／不是清單／空／超過 20 項／某項超過 300 字／某項切不開（絕對路徑、`..`、缺行號）、`hazard` 或 `suggestion` 不到門檻或超過 2000 字、`chosen=suggested` 卻缺 `evidence` 或切不開（`test:` 走 satisfied 同一套切分） → rc2 不寫並逐題講哪一欄；整份形狀壞時的「規則:」提示行列出四值與 tension 必填欄；全合法 → 治理帳事件與 marker 都寫入、`dispositions[id].status=="tension"`、事件帶 `candidates`＝帶 hint 的題數、hint 原樣存；`--carry` 把舊的 tension 答案帶到新樣板且不帶舊 `hint`；status 錯誤訊息列出四值 [test:t_dispositions_tension_validate]
+- [S2] 讀側與印法：`code-loop check`（有適用題）對 tension——`existing` 為空清單／非清單／>20 項、某項在被推送 sha 的樹不存在或行號超出、`chosen` 不合法、文字超上限 → BLOCKED 且訊息帶題目 id 與欄名；`chosen=suggested` 的 `evidence` 走 satisfied 同一分支（`test:` 名在樹裡整字找得到才過）；全過 → 不擋、rc 同沒有 tension 時、`--json` 的 `dispositions.tensions` 列出 `{id, chosen, existing, files, hazard, suggestion}` 且 `files` 等於去重路徑數；人可讀模式 stderr 印「⚠ 張力」段（每則三行＋在意的原因），「既有寫法在」印前 3 個不同路徑，判定 OK 與 BLOCKED（因別題）兩種情況都印；治理帳重建來的 tension 紀錄缺欄不炸、判「無法驗證」進 problems [test:t_codeloop_check_tension_warns]
+- [S3] 候選：合成 Kotlin repo（同資料夾三個既有 .kt 只有循序 `.await()`／`launch`、沒有 `async`），改動檔增行加 `async {` → `pitfalls --diff --json` 的 `arch_alignment.tension_candidates` 恰一條 `{file, question:"kt-coroutines", patterns 含 "\\basync\\b"}`；把 `async` 加進任一對照檔 → 無候選鍵；只有刪行含 `async` → 無候選；行註解、以 `*` 開頭的行、字串裡的 `async` 不算命中（區塊註解內裸行算命中，測試釘住這條天花板的現況、不釘成保證）；對照檔非 UTF-8（塞 `\xff` bytes）或 >2 MB → 記 `unreadable`、只剩不可讀時不出候選；沒有對照檔的新目錄首檔 → 無候選無 unreadable；候選的 qid 必在 `stack_questions_applicable`，且放在 `governance/` 簿記檔裡的同樣增行不產生候選；人可讀輸出印「可能撞」行、超過 6 條只印 6 行加一句；第 21 個改動檔起不判候選、`candidates_truncated: true` 且人可讀印一句，前 20 個檔的對照組都完整讀 [test:t_pitfalls_tension_candidates]
+- [S4] 樣板：`--dispositions-template` 對有候選的題在適用 entry 帶 `hint`（含改動檔、patterns、對照檔名），沒候選的題沒有 `hint`；帶 `hint` 的樣板原樣送進 `dispositions` 不因 `hint` 被拒且 hint 進治理帳；`--carry` 帶過來的舊答案不帶舊 `hint` [test:t_dispositions_template_tension_hint]
+- [S5] 鏡頭與統計：派工鏡頭表態段對 tension 印四欄（選／既有／隱患／建議）並仍套 200 字截斷；`gov --stats` 表態段每題多印「張力 N」與「候選題 N、其中答 tension M」，死題候選分母含 tension（8 na＋5 tension 不標死題；10 na＋0 其他才標）；mapper 放行 `candidates` [test:t_tension_lens_and_gov]
+- [S6] 文件與漂移守衛：code-loop `SKILL.md` 步驟 1 與 6／7、`reference.md` 棧別段、`commands/06`、`templates.md` §7.6、Systems/棧別提問表態閘、Systems/效能檢核目錄、Systems/arch-alignment-lens、Issues 筆記 REVISIT 九處改到；`t_tension_doc_sync` 釘九處都含「tension」（消費端無 skills／vault → `_SrcOnly`） [test:t_tension_doc_sync]
+- [S7] 圖譜寫回：本案計劃筆記記審計修正紀錄；Verification 節點用 `lumos new verification <名> --plan Projects/兩席相反時端出張力_計劃 --systems Systems/棧別提問表態閘,Systems/arch-alignment-lens` 建（`--systems` 要帶資料夾前綴，r1 接手席 H1）記實測；Issues 筆記 REVISIT 行改寫並保留日期 [manual:改後 lumos context 三個節點看 DEP 與 verified_by 對得上]
+
+## 實務隱患
+
+- **守衛面**：本案動 `code-loop check`，但只**加寬**合法答案（第四種值），不新增任何擋的條件——唯一新的 BLOCKED 是「tension 欄位對不上」（含空清單、超上限），跟 `satisfied` 證據對不上同級，而且寫側已經先擋過一次。合法 tension 永遠不擋（合約候選①）。閘內部錯誤仍走既有 `_gate_failopen`。已排除：pre-push 與 CI 讀治理帳重建的路徑不變（新欄在同一個物件裡）；沒有 tension 的表態檔行為逐位元相同。
+- **效能**：兩條路都有上限——表態核對：`existing` ≤20 項、每項 ≤300 字、文字 ≤2000 字，單題最多 20 次 `git cat-file`＋`git show`（r1 三席一致抓到「單題內無中途檢查點」）；候選：≤20 個改動檔、每檔 ≤3 對照檔、單檔 ≤2 MB。跑在 pre-push 熱路徑（`pitfalls --diff --no-lint --json`）上；測試釘上限，不宣稱秒數。
+- **併發**：無新寫入路徑；tension 走既有「先寫治理帳再原子寫 marker」，同 sha 重表態後者覆蓋（既有限制原樣）。
+- **不可逆**：無。治理帳（`docs/.governance-log.jsonl`）有版控可 git 還原；marker（`governance/code-loop/*.dispositions.json`）**不版控**（`governance/.gitignore` 排除），遺失走既有「marker 優先、沒有退治理帳」fallback（r1 邊界席 B10）。沒有刪任何既有值。
+- **對外送出／金流**：無——只寫本機治理帳與 marker、跑唯讀 git 查詢與本機 regex，沒有網路呼叫（五席皆驗過）。
+- **假候選**：觸發字有寬的（`\bContext\b`、`\bView\b`），對照檔碰巧沒有那個字就會亮；候選只印一行、不進閘、不進 tier，代價是多讀一行。REVISIT 數「候選題幾題、其中真用了 tension 幾題」。
+- **敷衍**：tension 可以填四段廢話——工具只驗對照檔存在與文字長度，同 na 的天花板；派工鏡頭把四欄端給審查席反駁是唯一的第二道。
+- **反方向抓不到**：「沿用既有寫法沒採建議」在 diff 裡沒有新字，機械無候選；靠人選 tension。這是承認的天花板，不是待辦。
+- **本 repo 自己**：Python 不在題表，這三塊在本 repo 只靠合成樣本測試驗證；第一個消費專案（Landmark／KDS 類）碰到候選時要回填實例到 Verification。
+- **消費專案的工具落後**（r1 接手席 H5 訂正：skills 是 symlink 回來源 repo，合進主線即時生效，不用重裝）：真正落後的是每個消費專案 vendored 的 `scripts/lumos`——舊副本的 `_DISP_STATUSES` 沒有 tension，會把 tension 表態當形狀壞拒收（rc2），要跑 `lumos update` 才認得；`bootstrap`／重裝不會補這個落後。
+
+## 刻意不做
+
+- 不裁誰讓誰、不擋推送——裁定說工具只把兩邊端上來。
+- 不用 AST 或相似度判「像不像」（[[Systems/arch-alignment-lens]] 明文不做），只看觸發字有沒有出現在對照檔。
+- 不在改檔前的 hook 算候選——hook 手上只有編輯內容、沒有 diff 的檔案集合與對照組；推送前的候選足以逼出表態。等表態帳出現 tension 實例再看要不要提前。
+- 不修 `_stack_norm_line` 的跨行註解狀態——hunk 片段無從判斷，改了對照檔那側也會失去對稱。
+- 不用 LLM 判 hazard 真不真。
+- 不加新的治理帳 kind——tension 住在既有 `dispositions` 事件裡，候選次數也靠同一事件的 `candidates` 欄。
+
+## 合約候選（設計審過閘後列，候選≠已標；蓋章走 `guard scaffold → bind → audit`，不確定就不標）
+
+- 合法的 tension 表態不改變 `code-loop check` 的 rc；tension 欄位對不上（對照檔不在被推送的樹、清單空或超上限、文字不到門檻或超上限、chosen 不合法）跟 satisfied 證據對不上同級擋。[test:t_codeloop_check_tension_warns]
+- 候選的題目 id 必在 `stack_questions_applicable`，簿記檔不產生候選。[test:t_pitfalls_tension_candidates]
+
+## 審計修正紀錄
+
+- r1（2026-09-09，5 席：通才／邊界與輸入／接手／架構對齊／外家 Codex terra-medium）：27 條（外家 3／架構對齊 2＋⚠1／通才 7／接手 5／邊界 10；併重複後 21 件；blocker 0、blocking 11）；全折。三席獨立一致的一條（existing 無上限拖垮 20 秒預算）直接折；其餘逐條機械重現皆 HIT，未折的只有架構對齊席的 ⚠（`｜` 分隔，編排者裁保留並記理由）。卷證 `governance/review-reports/兩席相反時端出張力/r1-*`（intake 含前掃兩處訂正與 27 條重現表）。
+
+- 實作（2026-09-09，同日）：測試先寫（六支，先紅 37 條）再實作到全綠 59 條；相關子集（表態閘／pitfalls／gov／鏡頭／棧別觸發／code-loop）547 條全綠；實測見 [[Verification/2026-09-09_兩席相反時端出張力實作測試]]。實作時抓到兩處設計沒寫到的細節：讀側驗 suggested 的 evidence 要交給跟 satisfied 同一條驗法（形狀驗證沒有平台設定）；候選上限測試的新檔不能放同一目錄（互為對照檔）。
+
+REVISIT:2026-11-09 跟事故筆記同一天，從治理帳數兩個數：表態事件裡 status=tension 幾則、`candidates` 加總幾題（帶 hint 的題），以及兩者的交集（候選題裡真答 tension 的）；假候選多（候選多、tension 少且人說是假的）就收窄觸發字或把候選降成 `--json` 專屬；一則都沒有就維持不動、不再加機制。「pitfalls 印過幾次」數不出來（它不留帳），不列。
+---
+type: system
+status: doing
+created: 2026-09-09
+updated: 2026-09-09
+aliases:
+  - 表態閘
+  - stack question disposition gate
+  - dispositions
+  - 效能檢核題表態
+  - recall-miss
+about_code:
+  - scripts/lumos
+  - scripts/hooks/pre-push
+  - scripts/hooks/claude/impact-hook.py
+related:
+  - "[[Projects/棧別提問表態閘_計劃]]"
+  - "[[Systems/效能檢核目錄]]"
+  - "[[Systems/pitfalls-code-loop]]"
+  - "[[Systems/bound-tests-gate]]"
+  - "[[Systems/convergence-evidence-gate]]"
+  - "[[Issues/寫下風險當成處理風險]]"
+  - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+tags:
+  - type/system
+  - status/doing
+  - scope/guards-gates
+summary: |-
+  FLOW:pitfalls --diff(增刪行剝字串跳註解→每題 when regex→stack_questions_applicable/meta)→ --dispositions-template [--carry] [--branch] 印樣板→人填→code-loop dispositions <檔> [--branch](驗形狀→先寫治理帳事件→原子寫 marker governance/code-loop/<branch>.dispositions.json)→pre-push/CI 對每個分支 ref 叫 code-loop check(合約測試→表態→審查留痕,序列早退)→表態核對:適用範圍 merge-base(主線,at_sha)..at_sha、記錄 sha 同或祖先且中間只動簿記、錨點對 at_sha 樹驗→缺一題 rc1
+  KEY:[合約候選,未蓋章] 有適用題(stack_questions_applicable 非空)且 gate=all 時,code-loop check 對該分支最後一筆表態逐題核對:缺 id/適用題卻 auto:true/satisfied 的 path:line 在 at_sha 樹不存在/test: 名在平台索引掃不到或 at_sha 樹 git grep -w 不到/todo 的 Issue 不存在或非 open-doing/na 理由不到門檻 → blocked=True rc1,不看 tier [test:t_codeloop_check_dispositions_gate]
+  KEY:[合約候選,未蓋章] 表態寫側先寫治理帳事件(kind=dispositions,帶 branch/head_sha/ts)再原子寫 marker;治理帳寫不進去 rc2 不寫 marker;形狀壞 rc2 一個都不寫 [test:t_codeloop_dispositions_write]
+  KEY:讀側 marker 優先、沒有就退治理帳「該分支最後一筆 kind=dispositions」(檔案行序),跟 pass/skip 分開重建互不擠掉;新 kind 登記 LOOP_NOT_CLOSE_EVENTS;改碼後過期 → 訊息指向 --carry 重表態 [test:t_codeloop_dispositions_ledger_fallback]
+  KEY:適用性=對改動內容逐行跑 when(推送前=diff 增刪行;改檔前=hook 另送的原始 delta_text,≤2 MB,query 那欄照舊只給詞彙融合);某棧行數 > ask_all_over_lines(預設 300)全表適用;未觸發題樣板自動 na(auto:true);適用範圍算在 merge-base(主線,at_sha)..at_sha、推主線本身才用推送範圍;沒帶 --at-sha 用 HEAD 對樹驗 [test:t_stack_question_triggers] [test:t_codeloop_dispositions_range_and_branch] [test:t_impact_hook_stack_questions_filtered]
+  KEY:錨點只抓最懶的謊——驗存在不驗內容;答案對不對留給審查席(派工鏡頭附表態記錄、快取 key 含其 sha256;席位抓到未觸發題的問題 → code-loop recall-miss <id> --note);表態可以敷衍=GIGO 天花板,回頭條件在計劃節點的 REVISIT 行 [test:t_dispatch_lens_includes_dispositions]
+  KEY:副產品 gov --stats 按 id 彙總 satisfied/na/todo/auto-na;人答 ≥10 且全 na=死題候選;recall-miss ≥3=觸發太窄候選;治理帳去重鍵對這兩種 kind 拿 ts 當鑑別子 [test:t_gov_stats_dispositions]
+  KEY:觸發字=範式詞+反面詞(2026-09-09 Enzo 裁,計劃節點 d1):32 題各補一組舊法/土法會出現的字(Thread(/findViewById/SqlDataReader/拼字串 SQL/$http/CURSOR/DispatchQueue.global…),用爛的方法寫同一個功能亮的是同一題;要看字串的 pattern 逐條放 when_raw(code-反面詞 r1 單席:整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中;SQL 字串要有 FROM/INTO/SET/WHERE 才算);反面詞要具體到不誤傷,每棧舊法樣本測試釘「亮同一題」與「乾淨舊法零觸發」;helper 藏起來的仍靠審查席+recall-miss [test:t_stack_question_triggers]
+  KEY:代碼審 r1 外家 Codex 兩席(finder gpt-6-astra/否決 gpt-5.6-terra,03:48 用量重置後補跑)折入:整檔刪除的 diff(+++ /dev/null)刪行歸回 --- a/ 的檔名;test: 證據的 git grep 只掃該 profile 測試副檔名並排除 docs/ governance/(治理帳裡的 evidence 字串曾能冒充已提交測試);--bound-tests-advisory 只准低風險——check 自己算出 high 就硬跑一次合約測試照擋、pre-push 對 pitfalls 空輸出不帶旗標;dispositions 加 --at-sha(checkout 在別的分支時綁被推的版本,BLOCKED 訊息會帶);三題(vue-bundle/sql-sargable/node-external)標 raw 看字串內容;鏡頭措辭改「寫入時只驗形狀,推送前才驗證據存在」
+  KEY:代碼審 r1(2026-09-09,五席+外家備援)折入:核對每題包例外→「無法驗證」擋下不 fail-open(壞 platforms 設定/10-5 行號曾整份放行);單次 git 帶 LUMOS_DISP_GIT_TIMEOUT(預設 8 秒)超時同上;治理帳事件加 written_at 當去重鑑別子(ts 是 commit 時間,同 sha 重表態會折成一筆);marker 暫存名帶 pid;marker 壞掉退治理帳;鏡頭只讀 marker 不掃帳、暖機行程沿用同一把 key;函式命名兩族=_dispositions_*(校驗/核對/樣板)與 _codeloop_*dispositions(讀寫,同 _codeloop_write/_read);表態寫治理帳失敗硬擋而 pass/skip 靜默——刻意:standard 沒有 pass 事件,治理帳是 CI 讀表態的唯一路徑 [test:t_codeloop_dispositions_r1_folds]
+  KEY:pre-push 對分支 ref 無條件叫 check,低風險帶 --bound-tests-advisory(受波及合約測試紅只提醒,保 2026-09-07 全 repo 審視 #17 人裁),高風險不帶照擋;tag 只 advisory;.lumos/config.json 的 stack_questions.gate(all|high-only|off)與 ask_all_over_lines;整份 JSON 壞掉=gate all/300 印一行、test: 證據 BLOCKED [test:t_prepush_computes_impact_once]
+  DEP:scripts/lumos(_STACK_QUESTION_SPECS/_STACK_TRIGGERS/_stack_applicability/_stack_questions_config/_dispositions_template/_cmd_codeloop_dispositions/_cmd_codeloop_recall_miss/_dispositions_verdict/_codeloop_guard_verdict 3.5 步/_lens_dispositions_lines/_render_gov_stats 表態段/cmd_impact 的 delta_text)｜scripts/hooks/pre-push(分支 ref 無條件 check)｜scripts/hooks/claude/impact-hook.py(extract_delta_text、_stack_section)｜.github/workflows/ci.yml(錯誤訊息)
+  TEST:t_stack_question_triggers｜t_dispositions_template｜t_codeloop_dispositions_write｜t_codeloop_check_dispositions_gate｜t_codeloop_dispositions_ledger_fallback｜t_codeloop_dispositions_range_and_branch｜t_impact_hook_stack_questions_filtered｜t_dispatch_lens_includes_dispositions｜t_gov_stats_dispositions｜t_prepush_computes_impact_once
+verified_by:
+  - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+---
+# 棧別提問表態閘
+
+> 白話：工具早就會在改檔前、推送前把「這個技術棧該問自己的效能問題」推到眼前，但推到眼前不等於有人回答——治理帳的審查留痕（pass／skip 事件）181 筆 <!--lumos:count=181 re="gate": "code-loop", "kind": "(?:passed|skipped)" in=docs/.governance-log.jsonl-->，留痕文字提到棧別檢核答案的 19 筆 <!--lumos:count=19 re="gate": "code-loop", "kind": "(?:passed|skipped)"[^\n]*(?:棧別.{0,4}檢核|棧檢核) in=docs/.governance-log.jsonl-->，其中答到題表內那幾棧（不是 Python）的只有 6 筆 <!--lumos:count=6 re=(?m)^(?!.*[Pp]ython)(?=.*"gate": "code-loop", "kind": "(?:passed|skipped)")(?=.*(?:棧別.{0,4}檢核|棧檢核)).*$ in=docs/.governance-log.jsonl-->、去掉同輪重記是 5 個迴圈（2026-09-09 機械重數；數字讓 doctor 自己重算，怎麼數在標記裡）。這道閘做兩件事：**（一）只問碰到的題**——每題掛一組觸發字（`when`），對這次改動的增刪行比對，沒碰到的題工具自動記「未觸發」，零 token；**（二）碰到的題推送前要有機器讀得懂的交代**——做到了（附證據）、不適用（附理由）、還沒做（連到待辦）——缺一題 `code-loop check` 就擋，跟風險分級（tier）無關。設計與三輪審查在 [[Projects/棧別提問表態閘_計劃]]。
+
+## 怎麼用（agent 在代碼審步驟 1 之後做）
+
+```
+lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json
+# 填 status 留空的題:satisfied(evidence: path:line 或 test:<名>)/ na(reason ≥10 中文字)/ todo(issue: Issues/<名> + reason)
+#   / tension(chosen: existing|suggested + existing: [path:line…] + hazard + suggestion;選 suggested 再附 evidence)——帶 hint 的題是「可能撞」候選
+lumos code-loop dispositions /tmp/disp.json            # 推 HEAD:別名 時加 --branch 別名
+lumos code-loop check --diff <merge-base>..HEAD        # 自查;pre-push/CI 會再跑一次
+```
+
+- 改了程式碼表態就過期（跟 pass 留痕同一套規則：目標版本等於表態版本，或表態版本是祖先且中間只動簿記檔）；重跑樣板加 `--carry` 只答新題。
+- 審查席若抓到「對得上某未觸發題」的問題：`lumos code-loop recall-miss <題目id> --note "<一句>"`，同題累積 3 次 `gov --stats` 列「觸發太窄候選」。
+- 消費專案過渡：`.lumos/config.json` 的 `stack_questions.gate` 設 `high-only` 或 `off`；`ask_all_over_lines` 調「一個棧改幾行就全問」的門檻（預設 300）。
+
+## 工具驗什麼、不驗什麼
+
+| 表態 | 工具驗 | 不驗 |
+|---|---|---|
+| `satisfied` + `path:line` | 檔案在被推送的 commit 樹裡、行號在範圍內 | 那一行是不是真的解了那題 |
+| `satisfied` + `test:<名>` | 工作樹 discovery（profile 語意、多平台）掃得到、且在被推送的樹裡整字 `git grep -w` 得到（未提交的測試不算） | 測試有沒有殺傷力 |
+| `na` | 理由去空白標點後 ≥10 個中文字或 ≥25 字 | 理由成不成立 |
+| `todo` | `Issues/<名>` 在被推送的樹裡存在且 status open/doing | 待辦會不會被做 |
+| `tension`（張力，2026-09-09 起） | `existing` 每項 `path:line` 在被推送的樹裡、1–20 項；`hazard`／`suggestion` 過理由門檻且 ≤2000 字；`chosen` 小寫二值；選 suggested 的 `evidence` 同 satisfied 驗法 | 隱患真不真、建議對不對、選哪邊該不該——合法的 tension **不擋**，`check` 印成 ⚠ 讓人裁；設計見 [[Projects/兩席相反時端出張力_計劃]] |
+
+答案對不對留給審查席：派工鏡頭把表態記錄附進派工單，席位反駁的就是這些答案。這是刻意的天花板——同設計審處置閘承認的「垃圾進垃圾出」，工具只抓最懶的謊。
+
+## 邊界與刻意不做
+
+- 適用範圍算在 `merge-base(主線, 被推送 sha)..被推送 sha`，所以把主線合進分支再推分支，不用替主線帶進來的碼表態；推主線本身才用推送範圍。合進主線後推主線是在主線名下重新判（marker 按分支），`--carry --branch <原分支>` 把答案帶過來。
+- 平台 root 在 repo 外（跨 repo 多平台）：被推送的 sha 不屬於那個 repo，`test:` 只做工作樹那一道並在訊息註記。
+- 本 repo 自己（Python）不在題表，這道閘對 scripts/lumos 的改動不會觸發。
+- 不用 LLM 判答案、不用 LLM 前置分類決定適用性；等 auto-na 比例與 recall-miss 帳說 regex 不夠再開。
+- 低風險推送的受波及合約測試維持「只提醒不擋」（2026-09-07 人裁）：pre-push 對低風險帶 `--bound-tests-advisory`，這是實作時為了保住既有裁定加的旗標，不在設計審的條款裡。
+---
+type: system
+status: doing
+created: 2026-08-22
+updated: 2026-08-22
+self_audit: sonnet/2026-08-30
+aliases:
+  - 架構對齊席
+  - 架構鏡頭
+  - 寫法一致性審查
+tags:
+  - type/system
+  - status/doing
+  - scope/agent-dag
+summary: |-
+  FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
+  KEY:只判「跟專案既有的一不一樣」,不評風格好壞;major 只給「引入第二種做法」或「跨層直呼」
+  KEY:對照組=同資料夾同副檔名、檔名最相似的 3 個既有檔(排除測試檔);慣例 skill 依副檔名(kotlin/csharp/vue-idioms)
+  DEP:[[Systems/pitfalls-code-loop]]
+  DEP:[[Systems/design-loop]]
+  TEST:t_pitfalls_diff_arch_alignment_hints(對照組選法/排除測試檔/慣例 skill/人讀三問);roster 測試含此席
+related:
+  - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+  - "[[Projects/兩席相反時端出張力_計劃]]"
+  - "[[Systems/棧別提問表態閘]]"
+verified_by:
+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+---
+# arch-alignment-lens
+
+# arch-alignment-lens
+
+> 白話:Enzo 2026-08-22 提的需求——自動開發的流程不能產出「跟原本不一樣」或「不入流」的寫法,破壞共同開發的體驗。以前審查席看的是正確性、併發、邊界、合約,沒有一席管「這樣寫跟專案既有的一不一樣」。
+
+## 三個零件
+1. **席位**:四個席位表各加一席「架構對齊」(required,不佔人數)。`lumos loop next` 會吐它。
+2. **派工**:`skills/lumos-design-loop/templates.md` §7.6——三問(分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法),每問附對照 file:line;嚴重度錨只給兩種情況 major。判不準(鄰居本身就不一致)標 ⚠ 交編排者,不硬判。
+3. **對照組自動化**:`lumos pitfalls --diff` 對每支改動 code 檔列同層最像的 3 個既有檔 + 慣例 skill,人讀與 --json 都有(`arch_alignment`)。審查員拿這三個檔當「專案現在的寫法」。
+
+## 跟棧別檢核題撞到時(2026-09-09 起)
+
+這一席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能對同一段程式給相反意見([[Issues/架構對齊席與棧別檢核題可能相反]])。
+Enzo 裁:不挑邊、把兩邊端上來。落成三塊(設計與審查在 [[Projects/兩席相反時端出張力_計劃]]):
+
+1. **表態多一種值 `tension`**:作者答檢核題時可以說「我看見兩邊了,這次選沿用既有/改用建議」,附既有寫法在哪(path:line)、隱患、建議。合法的不擋,`code-loop check` 印成 ⚠ 交人裁。
+2. **`pitfalls --diff` 端出「可能撞」候選**:改動檔的增行命中某題觸發字、對照的三個既有檔一個都沒有 → 印一行、表態樣板那題帶 `hint`。只端候選、不判——跟上面「不做機械判像不像」一致,看的是觸發字有沒有出現。
+3. **派工詞口徑**(templates.md §7.6):遇到 tension 的題,本席查四欄真假(既有真的那樣寫嗎、隱患真的成立嗎、建議可行嗎、chosen 跟 diff 一致嗎),不重裁誰贏;自己發現「跟既有不一樣」而該題答了 satisfied,就把發現寫成張力形狀。
+
+天花板:tension 跟 na 一樣可以敷衍(工具只驗存在與長度);候選只抓「新檔引入鄰居沒有的做法」,反方向「照舊寫法沒採建議」抓不到。
+
+## 刻意不做的
+- 不做機械判「像不像」(AST 相似度之類)——「不入流」是語意判斷,交給席位;機械層只負責把對照組端到審查員面前。
+- 不把風格偏好算 finding。
+# CLAUDE.md
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+## 知識圖譜先行（必讀，優先級最高）
+
+**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+
+### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+
+| 你心裡想的是… | 先敲這個 |
+|---|---|
+| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（某導入專案實測 8 句有 3 句 0 筆） |
+| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+| 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+| 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+| 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>`（唯讀：點名檔各自的 git 狀態＋逐字稿尾端「上一輪在動什麼、人最後說了什麼」；不判進度、逐字稿缺就明說） |
+| 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+
+查得到才算先行（2026-08-11 在一個導入專案上實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+
+★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+
+兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+
+Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+
+**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+
+### 鐵則
+
+1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘——全套要好幾分鐘，跑在對話裡會超時、也讓人等；子集怎麼跑看專案自己的說明。
+4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件＝沒人會回頭（2026-08-31 全圖盤點 52 件實證）。
+
+### 給人看的回報用白話
+先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。設計動筆前先問世界（最小解在哪一層、世界解過沒、裁定＝借用既有設計為預設 / 真沒輪子才自建 / 採用新依賴在零依賴家規下幾乎不選），一行 `PRIOR-ART:` 記進計劃筆記。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+
+### 遇到這些情境就調用對應 skill
+
+| 你正在做的事 | 調用 |
+|---|---|
+| 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+| 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+| 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+
+> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。這個專案如果有自己的技術棧 skill，慣例是在本檔末尾開一節〈架構參考 Skills〉列出來；沒有那一節就是還沒有。
+<!-- LUMOS:GRAPH-DISCIPLINE:END -->
+
+## 本 repo 的測試子集怎麼跑(紀律區塊鐵則三說的「看專案自己的說明」就是這裡)
+
+改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘:
+
+```
+python3 scripts/test_lumos.py -k <關鍵字>
+```
+
+關鍵字比對測試函式名(例:`-k stop_block`、`-k codex`);對照組 Codex 曾因在對話裡跑全套而超時([[Projects/Codex行為精修_計劃]] 基線)。
+{"claims": [], "tier": "standard", "stack_questions": {}, "stack_questions_applicable": {}, "stack_questions_meta": {}, "arch_alignment": {}}
+
+[35m[3mcodex[0m[0m
+圖譜的關鍵約束已確認：合法 `tension` 必須不改變 `check` 的回傳碼；候選題必為適用題。接下來我會按 patch 行號走讀實作與六支測試，再以最小命令重走可疑路徑。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "wc -l governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch && nl -ba governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch | sed -n '1,520p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+    1295 governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch
+     1	diff --git "a/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md" "b/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     2	index 2eb8d37..36b7af4 100644
+     3	--- "a/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     4	+++ "b/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     5	@@ -21,20 +21,28 @@ decisions:
+     6	   - content: Enzo 2026-09-09 裁:★架構對齊優先於棧別檢核題,除非那條檢核題指的是會出事的東西★(洩漏、連線池耗盡、N+1 打爆 DB、阻塞主執行緒這類)。理由=前者的代價是維護性、後者的代價是線上事故,兩者不同量級。撞到時的寫法:檢核題答 na 並在理由裡寫明「與既有 N 個檔一致優先」,架構對齊席那條照留 minor 不升級。★本條只寫口徑、不新增任何閘★——帳上還沒有真實相反案例(兩者都很新,檢核題 2026-09-09 才落地),沒有實例前不據此加機制。
+     7	     id: d1
+     8	     decided: 2026-09-09
+     9	     valid: false
+    10	     superseded_by: d2
+    11	     ended: 2026-09-09
+    12	   - content: Enzo 2026-09-09 裁(這是他真正講的):★兩席意見相反時不要挑一邊,要提出警告★——講清楚「原架構的寫法有什麼隱患」,並給出建議的改法,讓人自己決定。也就是:①棧別檢核題那條照留、不因為「跟既有不一致」就答 na 壓掉 ②架構對齊那條也照留 ③把兩者併成一則警告:既有寫法是 X、隱患是 Y、建議改成 Z,連同「改了會跟既有 N 個檔不一致」一起講。★核心=衝突要被看見,不是被裁掉★;誰讓誰由人當下決定,工具只負責把兩邊都端上來。目前只寫口徑、不新增閘;帳上還沒有真實相反案例。
+    13	     id: d2
+    14	     decided: 2026-09-09
+    15	     valid: true
+    16	+  - content: Enzo 2026-09-09 裁:三塊都做——第四種表態 tension、pitfalls --diff 端出可能撞候選、派工詞口徑;d2 的「目前只寫口徑不新增閘」一句作廢,「兩邊都留不挑邊」核心不變
+    17	+    id: d3
+    18	+    context: 同日 Enzo 說「我想開始解」;AI 攤三個範圍(全做/不做候選/只口徑),Enzo 選全做
+    19	+    why_chosen: 口徑靠人記得正是裁定最不喜歡的;沒有記錄的地方 11 月回頭條件沒數字可看;候選是唯一不靠人記得的提醒。設計與審查在 Projects/兩席相反時端出張力_計劃
+    20	+    decided: 2026-09-09
+    21	+    valid: true
+    22	+related:
+    23	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+    24	 ---
+    25	 # 架構對齊席與棧別檢核題可能相反
+    26	 
+    27	 > 白話:兩個審查角度的立場天生相反。一個說「照這個專案原本的寫法寫」,另一個說「這裡該用比較好的做法」。
+    28	 > 大部分時候不會撞,但撞的時候目前沒有任何地方寫著該聽誰的。
+    29	 
+    30	 ## 怎麼發現的
+    31	 
+    32	 2026-09-09 Enzo 讀 README 時問:「這個機制和後面的棧別提問和 linter 會不會衝突?因為他們的鏡頭
+    33	 感覺是最佳寫法?」——**是讀文件讀出來的,不是跑出來的**。查證後成立。
+    34	@@ -85,15 +93,19 @@ decisions:
+    35	 - 棧別檢核題那條**照留**,不因為「跟既有不一致」就答 `na` 壓掉。
+    36	 - 架構對齊那條也**照留**。
+    37	 - 把兩者**併成一則警告**:既有寫法是 X、**隱患是 Y**、建議改成 Z,連同「改了會跟既有 N 個檔不一致」一起講。
+    38	 
+    39	 ★核心是「衝突要被看見,不是被裁掉」。★ 誰讓誰由人當下決定,工具只負責把兩邊都端上來。
+    40	 
+    41	 **為什麼不採原本 AI 提的那條**(d1,已作廢):原提議是「架構對齊優先,除非那條檢核題指的是會出事的東西」
+    42	 ——★那會默默壓掉效能那條意見★,而且「算不算會出事」本身就要判斷,等於把一個判斷藏進另一個判斷裡。
+    43	 **留下兩條、把矛盾攤開,資訊量嚴格大於挑一邊。**
+    44	 
+    45	+## 後續(2026-09-09 同日)
+    46	+
+    47	+Enzo 裁「開始解」:裁定落成機制,三塊都做——第四種表態 `tension`(張力)、`pitfalls --diff` 端出「可能撞」候選、派工詞口徑。
+    48	+設計、審查與實作在 [[Projects/兩席相反時端出張力_計劃]];本篇 d2 的「目前只寫口徑不新增閘」一句由該案 d1 接手作廢,
+    49	+「兩邊都留、不挑邊」的核心不變。
+    50	+
+    51	 ## 回頭條件
+    52	 
+    53	-REVISIT:2026-11-09 看兩件事:①帳上有沒有出現過真的相反案例(兩席對同一段給相反意見)
+    54	-②如果有,裁定的方向對不對。**沒有實例就不要據此再加機制**——這條目前只是把口徑寫下來,
+    55	-不新增任何閘。
+    56	+REVISIT:2026-11-09 從治理帳數:表態事件裡 status=tension 幾則、帶 hint 的候選題幾題、候選題裡真答 tension 的幾題(`lumos gov --stats` 表態段有印);再看裁定方向對不對——一則都沒有就維持不動、不再加機制。
+    57	diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    58	index 4076e5d..fb3e035 100644
+    59	--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    60	+++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    61	@@ -120,11 +120,13 @@ decisions:
+    62	 
+    63	 ## 合約候選（設計審過閘後列，候選≠已標；蓋章走 `guard scaffold → bind → audit`，不確定就不標）
+    64	 
+    65	 - 合法的 tension 表態不改變 `code-loop check` 的 rc；tension 欄位對不上（對照檔不在被推送的樹、清單空或超上限、文字不到門檻或超上限、chosen 不合法）跟 satisfied 證據對不上同級擋。[test:t_codeloop_check_tension_warns]
+    66	 - 候選的題目 id 必在 `stack_questions_applicable`，簿記檔不產生候選。[test:t_pitfalls_tension_candidates]
+    67	 
+    68	 ## 審計修正紀錄
+    69	 
+    70	 - r1（2026-09-09，5 席：通才／邊界與輸入／接手／架構對齊／外家 Codex terra-medium）：27 條（外家 3／架構對齊 2＋⚠1／通才 7／接手 5／邊界 10；併重複後 21 件；blocker 0、blocking 11）；全折。三席獨立一致的一條（existing 無上限拖垮 20 秒預算）直接折；其餘逐條機械重現皆 HIT，未折的只有架構對齊席的 ⚠（`｜` 分隔，編排者裁保留並記理由）。卷證 `governance/review-reports/兩席相反時端出張力/r1-*`（intake 含前掃兩處訂正與 27 條重現表）。
+    71	 
+    72	+- 實作（2026-09-09，同日）：測試先寫（六支，先紅 37 條）再實作到全綠 59 條；相關子集（表態閘／pitfalls／gov／鏡頭／棧別觸發／code-loop）547 條全綠；實測見 [[Verification/2026-09-09_兩席相反時端出張力實作測試]]。實作時抓到兩處設計沒寫到的細節：讀側驗 suggested 的 evidence 要交給跟 satisfied 同一條驗法（形狀驗證沒有平台設定）；候選上限測試的新檔不能放同一目錄（互為對照檔）。
+    73	+
+    74	 REVISIT:2026-11-09 跟事故筆記同一天，從治理帳數兩個數：表態事件裡 status=tension 幾則、`candidates` 加總幾題（帶 hint 的題），以及兩者的交集（候選題裡真答 tension 的）；假候選多（候選多、tension 少且人說是假的）就收窄觸發字或把候選降成 `--json` 專屬；一則都沒有就維持不動、不再加機制。「pitfalls 印過幾次」數不出來（它不留帳），不列。
+    75	diff --git a/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md b/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    76	index bdfa133..bc49f72 100644
+    77	--- a/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    78	+++ b/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    79	@@ -14,25 +14,40 @@ tags:
+    80	   - scope/agent-dag
+    81	 summary: |-
+    82	   FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
+    83	   KEY:只判「跟專案既有的一不一樣」,不評風格好壞;major 只給「引入第二種做法」或「跨層直呼」
+    84	   KEY:對照組=同資料夾同副檔名、檔名最相似的 3 個既有檔(排除測試檔);慣例 skill 依副檔名(kotlin/csharp/vue-idioms)
+    85	   DEP:[[Systems/pitfalls-code-loop]]
+    86	   DEP:[[Systems/design-loop]]
+    87	   TEST:t_pitfalls_diff_arch_alignment_hints(對照組選法/排除測試檔/慣例 skill/人讀三問);roster 測試含此席
+    88	 related:
+    89	   - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    90	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+    91	+  - "[[Systems/棧別提問表態閘]]"
+    92	+verified_by:
+    93	+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+    94	 ---
+    95	 # arch-alignment-lens
+    96	 
+    97	 # arch-alignment-lens
+    98	 
+    99	 > 白話:Enzo 2026-08-22 提的需求——自動開發的流程不能產出「跟原本不一樣」或「不入流」的寫法,破壞共同開發的體驗。以前審查席看的是正確性、併發、邊界、合約,沒有一席管「這樣寫跟專案既有的一不一樣」。
+   100	 
+   101	 ## 三個零件
+   102	 1. **席位**:四個席位表各加一席「架構對齊」(required,不佔人數)。`lumos loop next` 會吐它。
+   103	 2. **派工**:`skills/lumos-design-loop/templates.md` §7.6——三問(分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法),每問附對照 file:line;嚴重度錨只給兩種情況 major。判不準(鄰居本身就不一致)標 ⚠ 交編排者,不硬判。
+   104	 3. **對照組自動化**:`lumos pitfalls --diff` 對每支改動 code 檔列同層最像的 3 個既有檔 + 慣例 skill,人讀與 --json 都有(`arch_alignment`)。審查員拿這三個檔當「專案現在的寫法」。
+   105	 
+   106	+## 跟棧別檢核題撞到時(2026-09-09 起)
+   107	+
+   108	+這一席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能對同一段程式給相反意見([[Issues/架構對齊席與棧別檢核題可能相反]])。
+   109	+Enzo 裁:不挑邊、把兩邊端上來。落成三塊(設計與審查在 [[Projects/兩席相反時端出張力_計劃]]):
+   110	+
+   111	+1. **表態多一種值 `tension`**:作者答檢核題時可以說「我看見兩邊了,這次選沿用既有/改用建議」,附既有寫法在哪(path:line)、隱患、建議。合法的不擋,`code-loop check` 印成 ⚠ 交人裁。
+   112	+2. **`pitfalls --diff` 端出「可能撞」候選**:改動檔的增行命中某題觸發字、對照的三個既有檔一個都沒有 → 印一行、表態樣板那題帶 `hint`。只端候選、不判——跟上面「不做機械判像不像」一致,看的是觸發字有沒有出現。
+   113	+3. **派工詞口徑**(templates.md §7.6):遇到 tension 的題,本席查四欄真假(既有真的那樣寫嗎、隱患真的成立嗎、建議可行嗎、chosen 跟 diff 一致嗎),不重裁誰贏;自己發現「跟既有不一樣」而該題答了 satisfied,就把發現寫成張力形狀。
+   114	+
+   115	+天花板:tension 跟 na 一樣可以敷衍(工具只驗存在與長度);候選只抓「新檔引入鄰居沒有的做法」,反方向「照舊寫法沒採建議」抓不到。
+   116	+
+   117	 ## 刻意不做的
+   118	 - 不做機械判「像不像」(AST 相似度之類)——「不入流」是語意判斷,交給席位;機械層只負責把對照組端到審查員面前。
+   119	 - 不把風格偏好算 finding。
+   120	diff --git "a/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md" "b/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   121	index 10aa82c..f6635f2 100644
+   122	--- "a/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   123	+++ "b/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   124	@@ -135,21 +135,21 @@ PRIOR-ART: 內容全數借官方/社群共識(Android 官方 Compose perf 文件
+   125	 | 入口速率限制 | 人判提問(2026-09-08 世界對照補;歸 node-idioms R15,不進追問表——反證席判它是 ops/安全防線非效能題,人裁) | 沒有限流=一個客戶就能把事件迴圈與連線池吃光;OWASP Node cheat sheet 列為必備;無 ESLint 規則;body 大小上限已在 R4 |
+   126	 
+   127	 ## 時機點設計(讓 Claude「自己感知」的機制,非靠自覺)
+   128	 
+   129	 **實證錨**:Vercel 量測——靠模型自己「想起要查規範」,**56% 情況會跳過**;hook 保證注入與模型意願無關。同 lumos「機械把關>靠自覺」與 impact hook 既有哲學。**提問式>陳述式**(pitfalls 逼答哲學):在對的時機丟「問題」比丟「規則全文」更能觸發判斷。
+   130	 
+   131	 | 時機 | 機制 | 內容 |
+   132	 |---|---|---|
+   133	 | ①動手改代碼前 | impact hook(既有)按棧擴充 | 2026-09-09 起 hook 把這次編輯的原始內容(delta_text,≤2 MB)送給 lumos,只注入**觸發到的題**(全表 kt=7/cs=5/vue=5/sql=4/swift=6/node=5,單源 _STACK_QUESTION_SPECS 的 when) |
+   134	 | ②終審 code-loop | 檢核表當審查員鏡頭(仿 test-layers 鏡頭模式) | 本目錄該棧段落餵 reviewer;機械可查項走確定性驗證器三通道 |
+   135	-| ③推送前 | **表態閘**(2026-09-09 機械化,[[Systems/棧別提問表態閘]]) | diff 增刪行觸發到的題(適用題),每題 `lumos code-loop dispositions` 表態:satisfied(證據 path:line/test:名,對被推送的樹驗存在)/na(理由 ≥10 中文字)/todo(Issue open/doing);`code-loop check` 缺一題就擋、**不看 tier**;未觸發的題工具自動記 na。舊制(2026-07-19～09-08)是 pass --note 紀律、code 端零檢查,治理帳 177 筆只 5 筆做到 |
+   136	+| ③推送前 | **表態閘**(2026-09-09 機械化,[[Systems/棧別提問表態閘]]) | diff 增刪行觸發到的題(適用題),每題 `lumos code-loop dispositions` 表態:satisfied(證據 path:line/test:名,對被推送的樹驗存在)/na(理由 ≥10 中文字)/todo(Issue open/doing)/tension(2026-09-09 起:既有寫法 path:line 清單+隱患+建議+選了哪邊——架構對齊與這題相反時用,不擋、check 印 ⚠;[[Projects/兩席相反時端出張力_計劃]]);`code-loop check` 缺一題就擋、**不看 tier**;未觸發的題工具自動記 na。舊制(2026-07-19～09-08)是 pass --note 紀律、code 端零檢查,治理帳 177 筆只 5 筆做到 |
+   137	 
+   138	 落地計劃:[[Projects/pitfalls棧別效能追問_計劃]];表態閘:[[Projects/棧別提問表態閘_計劃]]。
+   139	 
+   140	 ## 題目 id 對照(表態閘的鍵;2026-09-09)
+   141	 
+   142	 規則:**改措辭不改 id、改語意才換 id**——表態與 gov --stats 都以 id 為鍵;換了 id 在途分支要重表態(刻意)。全表集合被 `t_stack_question_triggers` 釘住,多一題少一題改一個 id 都翻紅,逼人有意識地動。when 是觸發 regex(對這次改動的增刪行,剝註解與字串字面、不分大小寫);when_raw 是同題裡「要看字串內容」的那幾條(只剝註解;代碼審 r1 抓到整題看字串會讓 log 訊息裡的 SELECT 變假命中,所以逐條分),SQL 在字串裡要長得像 SQL(有 FROM/INTO/SET/WHERE)才算;某棧增刪行加總 >300(`.lumos/config.json` 的 `stack_questions.ask_all_over_lines`)則該棧全表適用。
+   143	 
+   144	 **觸發字＝範式詞＋反面詞(2026-09-09 Enzo 裁,[[Projects/棧別提問表態閘_計劃]] d1)**:範式詞是那塊地的詞彙(`viewModelScope`、`@Composable`、`Promise.all`),反面詞是同一個顧慮用舊法／土法寫出來會出現的字(`Thread(`、`findViewById`、`SqlDataReader`、拼字串 SQL、`$http`、`CURSOR`、`DispatchQueue.global`)。為什麼:觸發字只看字面,只收範式詞的話「用爛的方法寫同一個功能」會亮不同題甚至不亮,而維護舊碼正是最需要被問的時候。反面詞要具體到不誤傷(`Thread\(` 不是 `Thread`);每棧各有舊法樣本測試釘「亮的是同一題」與「乾淨舊法零觸發」。helper 名字把危險呼叫藏起來的(`runQuery(...)`)字面層看不到,靠審查席與 `recall-miss` 帳事後補進觸發字。
+   145	 
+   146	 | id | 棧 | 題(縮) | 觸發 when(範式詞＋反面詞;剝註解與字串) | 看字串的 when_raw(只剝註解) |
+   147	diff --git "a/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md" "b/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   148	index 3c5d80c..c9dec9e 100644
+   149	--- "a/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   150	+++ "b/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   151	@@ -34,46 +34,49 @@ summary: |-
+   152	   KEY:錨點只抓最懶的謊——驗存在不驗內容;答案對不對留給審查席(派工鏡頭附表態記錄、快取 key 含其 sha256;席位抓到未觸發題的問題 → code-loop recall-miss <id> --note);表態可以敷衍=GIGO 天花板,回頭條件在計劃節點的 REVISIT 行 [test:t_dispatch_lens_includes_dispositions]
+   153	   KEY:副產品 gov --stats 按 id 彙總 satisfied/na/todo/auto-na;人答 ≥10 且全 na=死題候選;recall-miss ≥3=觸發太窄候選;治理帳去重鍵對這兩種 kind 拿 ts 當鑑別子 [test:t_gov_stats_dispositions]
+   154	   KEY:觸發字=範式詞+反面詞(2026-09-09 Enzo 裁,計劃節點 d1):32 題各補一組舊法/土法會出現的字(Thread(/findViewById/SqlDataReader/拼字串 SQL/$http/CURSOR/DispatchQueue.global…),用爛的方法寫同一個功能亮的是同一題;要看字串的 pattern 逐條放 when_raw(code-反面詞 r1 單席:整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中;SQL 字串要有 FROM/INTO/SET/WHERE 才算);反面詞要具體到不誤傷,每棧舊法樣本測試釘「亮同一題」與「乾淨舊法零觸發」;helper 藏起來的仍靠審查席+recall-miss [test:t_stack_question_triggers]
+   155	   KEY:代碼審 r1 外家 Codex 兩席(finder gpt-6-astra/否決 gpt-5.6-terra,03:48 用量重置後補跑)折入:整檔刪除的 diff(+++ /dev/null)刪行歸回 --- a/ 的檔名;test: 證據的 git grep 只掃該 profile 測試副檔名並排除 docs/ governance/(治理帳裡的 evidence 字串曾能冒充已提交測試);--bound-tests-advisory 只准低風險——check 自己算出 high 就硬跑一次合約測試照擋、pre-push 對 pitfalls 空輸出不帶旗標;dispositions 加 --at-sha(checkout 在別的分支時綁被推的版本,BLOCKED 訊息會帶);三題(vue-bundle/sql-sargable/node-external)標 raw 看字串內容;鏡頭措辭改「寫入時只驗形狀,推送前才驗證據存在」
+   156	   KEY:代碼審 r1(2026-09-09,五席+外家備援)折入:核對每題包例外→「無法驗證」擋下不 fail-open(壞 platforms 設定/10-5 行號曾整份放行);單次 git 帶 LUMOS_DISP_GIT_TIMEOUT(預設 8 秒)超時同上;治理帳事件加 written_at 當去重鑑別子(ts 是 commit 時間,同 sha 重表態會折成一筆);marker 暫存名帶 pid;marker 壞掉退治理帳;鏡頭只讀 marker 不掃帳、暖機行程沿用同一把 key;函式命名兩族=_dispositions_*(校驗/核對/樣板)與 _codeloop_*dispositions(讀寫,同 _codeloop_write/_read);表態寫治理帳失敗硬擋而 pass/skip 靜默——刻意:standard 沒有 pass 事件,治理帳是 CI 讀表態的唯一路徑 [test:t_codeloop_dispositions_r1_folds]
+   157	   KEY:pre-push 對分支 ref 無條件叫 check,低風險帶 --bound-tests-advisory(受波及合約測試紅只提醒,保 2026-09-07 全 repo 審視 #17 人裁),高風險不帶照擋;tag 只 advisory;.lumos/config.json 的 stack_questions.gate(all|high-only|off)與 ask_all_over_lines;整份 JSON 壞掉=gate all/300 印一行、test: 證據 BLOCKED [test:t_prepush_computes_impact_once]
+   158	   DEP:scripts/lumos(_STACK_QUESTION_SPECS/_STACK_TRIGGERS/_stack_applicability/_stack_questions_config/_dispositions_template/_cmd_codeloop_dispositions/_cmd_codeloop_recall_miss/_dispositions_verdict/_codeloop_guard_verdict 3.5 步/_lens_dispositions_lines/_render_gov_stats 表態段/cmd_impact 的 delta_text)｜scripts/hooks/pre-push(分支 ref 無條件 check)｜scripts/hooks/claude/impact-hook.py(extract_delta_text、_stack_section)｜.github/workflows/ci.yml(錯誤訊息)
+   159	   TEST:t_stack_question_triggers｜t_dispositions_template｜t_codeloop_dispositions_write｜t_codeloop_check_dispositions_gate｜t_codeloop_dispositions_ledger_fallback｜t_codeloop_dispositions_range_and_branch｜t_impact_hook_stack_questions_filtered｜t_dispatch_lens_includes_dispositions｜t_gov_stats_dispositions｜t_prepush_computes_impact_once
+   160	 verified_by:
+   161	   - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+   162	+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+   163	 ---
+   164	 # 棧別提問表態閘
+   165	 
+   166	 > 白話：工具早就會在改檔前、推送前把「這個技術棧該問自己的效能問題」推到眼前，但推到眼前不等於有人回答——治理帳的審查留痕（pass／skip 事件）181 筆 <!--lumos:count=181 re="gate": "code-loop", "kind": "(?:passed|skipped)" in=docs/.governance-log.jsonl-->，留痕文字提到棧別檢核答案的 19 筆 <!--lumos:count=19 re="gate": "code-loop", "kind": "(?:passed|skipped)"[^\n]*(?:棧別.{0,4}檢核|棧檢核) in=docs/.governance-log.jsonl-->，其中答到題表內那幾棧（不是 Python）的只有 6 筆 <!--lumos:count=6 re=(?m)^(?!.*[Pp]ython)(?=.*"gate": "code-loop", "kind": "(?:passed|skipped)")(?=.*(?:棧別.{0,4}檢核|棧檢核)).*$ in=docs/.governance-log.jsonl-->、去掉同輪重記是 5 個迴圈（2026-09-09 機械重數；數字讓 doctor 自己重算，怎麼數在標記裡）。這道閘做兩件事：**（一）只問碰到的題**——每題掛一組觸發字（`when`），對這次改動的增刪行比對，沒碰到的題工具自動記「未觸發」，零 token；**（二）碰到的題推送前要有機器讀得懂的交代**——做到了（附證據）、不適用（附理由）、還沒做（連到待辦）——缺一題 `code-loop check` 就擋，跟風險分級（tier）無關。設計與三輪審查在 [[Projects/棧別提問表態閘_計劃]]。
+   167	 
+   168	 ## 怎麼用（agent 在代碼審步驟 1 之後做）
+   169	 
+   170	 ```
+   171	 lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json
+   172	 # 填 status 留空的題:satisfied(evidence: path:line 或 test:<名>)/ na(reason ≥10 中文字)/ todo(issue: Issues/<名> + reason)
+   173	+#   / tension(chosen: existing|suggested + existing: [path:line…] + hazard + suggestion;選 suggested 再附 evidence)——帶 hint 的題是「可能撞」候選
+   174	 lumos code-loop dispositions /tmp/disp.json            # 推 HEAD:別名 時加 --branch 別名
+   175	 lumos code-loop check --diff <merge-base>..HEAD        # 自查;pre-push/CI 會再跑一次
+   176	 ```
+   177	 
+   178	 - 改了程式碼表態就過期（跟 pass 留痕同一套規則：目標版本等於表態版本，或表態版本是祖先且中間只動簿記檔）；重跑樣板加 `--carry` 只答新題。
+   179	 - 審查席若抓到「對得上某未觸發題」的問題：`lumos code-loop recall-miss <題目id> --note "<一句>"`，同題累積 3 次 `gov --stats` 列「觸發太窄候選」。
+   180	 - 消費專案過渡：`.lumos/config.json` 的 `stack_questions.gate` 設 `high-only` 或 `off`；`ask_all_over_lines` 調「一個棧改幾行就全問」的門檻（預設 300）。
+   181	 
+   182	 ## 工具驗什麼、不驗什麼
+   183	 
+   184	 | 表態 | 工具驗 | 不驗 |
+   185	 |---|---|---|
+   186	 | `satisfied` + `path:line` | 檔案在被推送的 commit 樹裡、行號在範圍內 | 那一行是不是真的解了那題 |
+   187	 | `satisfied` + `test:<名>` | 工作樹 discovery（profile 語意、多平台）掃得到、且在被推送的樹裡整字 `git grep -w` 得到（未提交的測試不算） | 測試有沒有殺傷力 |
+   188	 | `na` | 理由去空白標點後 ≥10 個中文字或 ≥25 字 | 理由成不成立 |
+   189	 | `todo` | `Issues/<名>` 在被推送的樹裡存在且 status open/doing | 待辦會不會被做 |
+   190	+| `tension`（張力，2026-09-09 起） | `existing` 每項 `path:line` 在被推送的樹裡、1–20 項；`hazard`／`suggestion` 過理由門檻且 ≤2000 字；`chosen` 小寫二值；選 suggested 的 `evidence` 同 satisfied 驗法 | 隱患真不真、建議對不對、選哪邊該不該——合法的 tension **不擋**，`check` 印成 ⚠ 讓人裁；設計見 [[Projects/兩席相反時端出張力_計劃]] |
+   191	 
+   192	 答案對不對留給審查席：派工鏡頭把表態記錄附進派工單，席位反駁的就是這些答案。這是刻意的天花板——同設計審處置閘承認的「垃圾進垃圾出」，工具只抓最懶的謊。
+   193	 
+   194	 ## 邊界與刻意不做
+   195	 
+   196	 - 適用範圍算在 `merge-base(主線, 被推送 sha)..被推送 sha`，所以把主線合進分支再推分支，不用替主線帶進來的碼表態；推主線本身才用推送範圍。合進主線後推主線是在主線名下重新判（marker 按分支），`--carry --branch <原分支>` 把答案帶過來。
+   197	 - 平台 root 在 repo 外（跨 repo 多平台）：被推送的 sha 不屬於那個 repo，`test:` 只做工作樹那一道並在訊息註記。
+   198	 - 本 repo 自己（Python）不在題表，這道閘對 scripts/lumos 的改動不會觸發。
+   199	 - 不用 LLM 判答案、不用 LLM 前置分類決定適用性；等 auto-na 比例與 recall-miss 帳說 regex 不夠再開。
+   200	 - 低風險推送的受波及合約測試維持「只提醒不擋」（2026-09-07 人裁）：pre-push 對低風險帶 `--bound-tests-advisory`，這是實作時為了保住既有裁定加的旗標，不在設計審的條款裡。
+   201	diff --git "a/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md" "b/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md"
+   202	new file mode 100644
+   203	index 0000000..3b1d1ea
+   204	--- /dev/null
+   205	+++ "b/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md"
+   206	@@ -0,0 +1,65 @@
+   207	+---
+   208	+type: verification
+   209	+status: pass
+   210	+date: 2026-09-09
+   211	+valid_under: 合成 git 樣本(Kotlin 對照檔+新檔)、本機 python3 單元測試;本 repo 是 Python 不在題表,零真實消費專案案例
+   212	+revalidate_when: 題表 when 觸發字或 _stack_norm_line 正規化改變;_arch_alignment_hints 對照組選法改變;第一個消費專案出現真的 tension 表態或候選
+   213	+tags:
+   214	+  - type/verification
+   215	+  - status/pass
+   216	+plan_refs:
+   217	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+   218	+---
+   219	+# 2026-09-09_兩席相反時端出張力實作測試
+   220	+
+   221	+> 白話：這篇證明「照設計寫的三塊——第四種表態 tension、pitfalls 端出可能撞候選、口徑文件——在自己造的 git 小樣本上會擋該擋的、放該放的、印該印的」。
+   222	+> 沒有真實消費專案的案例（本 repo 是 Python，不在題表），全部是合成樣本。
+   223	+
+   224	+## 怎麼驗
+   225	+
+   226	+設計審 r1 過閘後，測試先寫（六支全紅：12 過／37 紅），再實作到全綠，再跑相關子集看有沒有弄壞既有行為。
+   227	+
+   228	+```
+   229	+python3 scripts/test_lumos.py -k tension          # 六支新測試
+   230	+python3 scripts/test_lumos.py -k disposition      # 既有表態閘
+   231	+python3 scripts/test_lumos.py -k pitfalls
+   232	+python3 scripts/test_lumos.py -k gov_stats
+   233	+python3 scripts/test_lumos.py -k dispatch_lens
+   234	+python3 scripts/test_lumos.py -k stack_question
+   235	+python3 scripts/test_lumos.py -k codeloop
+   236	+```
+   237	+
+   238	+## 結果（2026-09-09，本機 python3，全部機械數）
+   239	+
+   240	+| 子集 | 斷言 | 紅 |
+   241	+|---|---|---|
+   242	+| `-k tension`（六支新測試） | 59 | 0 |
+   243	+| `-k disposition` | 100 | 0 |
+   244	+| `-k pitfalls` | 99 | 0 |
+   245	+| `-k gov_stats` | 57 | 0 |
+   246	+| `-k dispatch_lens` | 61 | 0 |
+   247	+| `-k stack_question` | 66 | 0 |
+   248	+| `-k codeloop` | 146 | 0 |
+   249	+| `-k marker_doc`／`-k arch_alignment` | 14／4 | 0 |
+   250	+
+   251	+## 每條驗收條款對到哪支測試、驗了什麼
+   252	+
+   253	+- [S1] `t_dispositions_tension_validate`：12 種壞形狀（缺 chosen、chosen 大寫、existing 缺／空／非清單／21 項／單項 309 字／帶 `..`、hazard 太短、suggestion 2001 字、suggested 缺 evidence、legacy 平台前綴）各自 rc2 且訊息帶欄名；status 錯誤訊息列四值；規則提示行列 tension 必填欄；合法 tension 寫入後 marker 與治理帳都有、hint 原樣存、事件 `candidates=1`；`--carry` 帶回 tension 答案且不帶舊 hint；suggested 附 `test:` 證據 rc0。
+   254	+- [S2] `t_codeloop_check_tension_warns`：existing 指不存在的檔 → BLOCKED 帶 id 與欄名；marker 被改成空清單 → 讀側重驗 BLOCKED；缺 hazard／suggestion 的紀錄不炸、進 problems；合法（existing 三項、兩個不同路徑）→ rc0、JSON `tensions[0].files==2`、stderr 印 ⚠ 張力／兩個路徑／共 2 檔／隱患／建議／不擋；suggested 附樹裡找得到的測試 → 放行、附未追蹤測試 → BLOCKED（grep 不到）；因別題缺表態 BLOCKED 時仍印 ⚠ 張力。
+   255	+- [S3] `t_pitfalls_tension_candidates`：三個循序對照檔＋新檔 `async` → 恰一條候選（檔／題／pattern／對照 3 檔）且題在適用表；對照檔已有 async → 無候選鍵；只刪行 → 無；行註解與字串不算、區塊註解裸行算（釘既有天花板）；非 UTF-8 對照檔記 `unreadable` 其餘照判、只剩不可讀不出候選；沒對照組的新檔無候選無 unreadable；審計證物目錄裡的同樣增行無候選且題不適用；21 個目錄各有三個對照檔＋各一個新檔 → 只判前 20 個（每個對照組整組讀完）、`candidates_truncated=true`、人可讀印 6 行＋「另有 14 條」＋截斷一句。
+   256	+- [S4] `t_dispositions_template_tension_hint`：有候選的題帶 `hint`（改動檔、pattern、對照檔、指到 tension），沒候選的題沒有；帶 hint 的樣板寫入 rc0、hint 進治理帳、`candidates=1`；`--carry` 不帶舊 hint。
+   257	+- [S5] `t_tension_lens_and_gov`：派工鏡頭對 tension 印「選／既有／隱患／建議」四欄；`gov --stats` 印「張力 N」與「候選題 N（其中答 tension M）」；8 na＋5 tension 不標死題、10 na 仍標。
+   258	+- [S6] `t_tension_doc_sync`：九處文字（code-loop SKILL／reference、design-loop templates §7.6、commands/06、Systems/棧別提問表態閘、Systems/效能檢核目錄、Systems/arch-alignment-lens、Issues 筆記、本案計劃）都含「tension」。
+   259	+- [S7] 手驗：`lumos context` 三個節點——計劃筆記連出 7 篇；棧別提問表態閘與 arch-alignment-lens 的 `verified_by` 都掛到本篇；Issues 筆記 d3 記了「三塊都做」、REVISIT 改成數治理帳三個數字。
+   260	+
+   261	+## 實作時抓到的兩處、與測試自己的一處
+   262	+
+   263	+- 讀側驗 suggested 的 evidence 時，第一版把 evidence 交給形狀驗證去切（沒有平台設定）→ `test:` 證據被判形狀不對。改成讀側只驗「有沒有附」，切分與存在性交給跟 satisfied 同一條驗法。
+   264	+- 候選上限那條測試第一版把 21 個新檔放同一個目錄，它們互為對照檔、彼此都有 `async`，永遠測不到候選——改成 21 個目錄各自帶三個循序對照檔。
+   265	+- 兩處都是「測試先紅才看見」的，不是讀碼看出來的。
+   266	+
+   267	+## 沒驗到的
+   268	+
+   269	+- 真實消費專案（Kotlin／C#／Vue）上的候選與 tension 表態：本 repo 是 Python，零真實案例；第一個碰到候選的專案要回填實例到這篇或另立一篇。
+   270	+- pre-push 與 CI 上「⚠ 張力」的實際印出：只驗了 `code-loop check` 直接呼叫，沒實推。
+   271	+- 效能：只釘檔數與大小上限（20 檔／每檔 3 對照／2 MB），沒量秒數。
+   272	diff --git a/scripts/lumos b/scripts/lumos
+   273	index 1a83e40..6f784d2 100755
+   274	--- a/scripts/lumos
+   275	+++ b/scripts/lumos
+   276	@@ -4517,33 +4517,39 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
+   277	         print()
+   278	     # ── 表態閘副產品(Projects/棧別提問表態閘_計劃 S9,2026-09-09):按題目 id 彙總歷來四值;死題候選/觸發太窄候選 ──
+   279	     _dq, _rm = {}, {}
+   280	     for r in rows:
+   281	         if r.get("gate") != "code-loop":
+   282	             continue
+   283	         if r.get("kind") == "dispositions" and isinstance(r.get("dispositions"), dict):
+   284	             for _qid, _ent in r["dispositions"].items():
+   285	                 if not isinstance(_ent, dict):
+   286	                     continue
+   287	-                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "auto-na": 0})
+   288	+                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "tension": 0, "auto-na": 0, "cand": 0, "cand-tension": 0})
+   289	                 if _ent.get("auto"):
+   290	                     _b["auto-na"] += 1
+   291	-                elif _ent.get("status") in _b:
+   292	+                elif _ent.get("status") in ("satisfied", "na", "todo", "tension"):
+   293	                     _b[_ent["status"]] += 1
+   294	+                # 候選張力(2026-09-09 兩席相反時端出張力):樣板帶的 hint 隨表態存進帳,這裡就是 REVISIT 的分母
+   295	+                if _ent.get("hint") and not _ent.get("auto"):
+   296	+                    _b["cand"] += 1
+   297	+                    if _ent.get("status") == "tension":
+   298	+                        _b["cand-tension"] += 1
+   299	         elif r.get("kind") == "recall-miss" and r.get("recall_miss"):
+   300	             _rm[r["recall_miss"]] = _rm.get(r["recall_miss"], 0) + 1
+   301	     if _dq or _rm:
+   302	         print("  棧別提問表態(表態閘,2026-09-09 起;每筆表態事件每題算一次,同 sha 重表態各算各的):")
+   303	         for _qid in sorted(_dq):
+   304	-            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"]
+   305	+            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"] + _b["tension"]   # 分母含張力(r1 接手席 H4:8 na + 5 tension 不是死題)
+   306	             _tag = " ← 死題候選(人答 ≥10 次且全是不適用:題目不對或被敷衍,回頭裁刪題或加嚴)" if (_human >= 10 and _b["na"] == _human) else ""
+   307	-            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}{_tag}")
+   308	+            _cand = f"、候選題 {_b['cand']}(其中答 tension {_b['cand-tension']})" if _b["cand"] else ""
+   309	+            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}、張力 {_b['tension']}{_cand}{_tag}")
+   310	         for _qid, _n in sorted(_rm.items()):
+   311	             print(f"    {_qid}:審查席抓到未觸發題的問題 {_n} 次" + (" ← 觸發太窄候選(修它的 when)" if _n >= 3 else "(累積 3 次列候選)"))
+   312	         print()
+   313	     # ── 審查有沒有用(審查有沒有用記帳 S3,2026-09-08):只算有 reported 欄的輪(2026-09-09 起才有) ──
+   314	     _by_round = {}
+   315	     for r in rows:
+   316	         if r.get("gate") == "canary" and r.get("loop") and r.get("round"):
+   317	             _by_round.setdefault((r["loop"], r["round"]), []).append(r)
+   318	     _ys = {k: _review_yield_round(v) for k, v in _by_round.items()}
+   319	     _ys = {k: y for k, y in _ys.items() if y["N"] is not None}
+   320	@@ -4727,20 +4733,21 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+   321	     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   322	          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
+   323	          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", ""),
+   324	          # 審查有沒有用記帳(2026-09-09):記帳被寫側擋下(canary/blocked)每次各算一筆——同一個 commit 連撞三次
+   325	          # 本來會被 (commit,nodes,gate,kind) 折成一次,「擋下 N 次」就永遠是 1;拿 ts+note(note 含事件隨機碼)當第 5 鑑別子(同秒也分得開,r1 f5)
+   326	          # 表態閘(2026-09-09,r3 接手席 H1):同 sha 兩筆 dispositions / recall-miss 各算各的——鑑別子拿 written_at(事件時間,微秒),
+   327	          # 不拿 ts:ts 是 HEAD commit 時間,同一顆 sha 重表態兩筆一模一樣(r1 併發席 f3/合約測試席 f1 實測折成一筆)
+   328	          "token": ((d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked")
+   329	                    else (d.get("written_at") or d.get("ts", "")) if (d.get("gate") == "code-loop" and d.get("kind") in ("dispositions", "recall-miss")) else ""),
+   330	          "dispositions": d.get("dispositions") if d.get("kind") == "dispositions" else None,
+   331	+         "candidates": d.get("candidates") if d.get("kind") == "dispositions" else None,   # 候選張力題數(2026-09-09)
+   332	          "recall_miss": d.get("recall_miss") if d.get("kind") == "recall-miss" else None})
+   333	     # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
+   334	     load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   335	          "gate": "signoff", "kind": "signed", "hard": False,
+   336	          "token": d.get("ts", ""), "nodes": [stem(d.get("node", ""))],
+   337	          "detail": (d.get("by", "") + " " + d.get("note", "")).strip()})
+   338	     # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
+   339	     load(".kill-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   340	          "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
+   341	          "token": d.get("invariant", "") + d.get("ts", ""),   # 同節點多合約/多次不互吞(dedup 第5鑑別子)
+   342	@@ -16875,20 +16882,85 @@ def _arch_alignment_hints(added, repo_root, per_file=3):
+   343	         except OSError:
+   344	             continue
+   345	         if not sibs:
+   346	             continue
+   347	         sibs.sort(key=lambda p: -difflib.SequenceMatcher(None, p.stem.lower(), pf.stem.lower()).ratio())
+   348	         out_files[f] = [str(p.relative_to(repo_root)).replace(os.sep, "/") for p in sibs[:per_file]]
+   349	     if not out_files:
+   350	         return {}
+   351	     return {"files": out_files, "idiom_skills": sorted(skills), "questions": list(_ARCH_QUESTIONS)}
+   352	 
+   353	+
+   354	+# ── 可能撞(2026-09-09,Projects/兩席相反時端出張力_計劃 §二)──
+   355	+# 架構對齊席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能相反。這裡不裁誰對,只端候選:
+   356	+# 改動檔的增行命中某題的觸發字、而它的對照檔(同層最像的 3 個既有檔)一個都沒有那個字 → 「這個檔用了鄰居都沒用的做法」。
+   357	+_TENSION_MAX_FILES = 20              # 最多處理幾個改動檔(每檔 ≤3 對照檔=最多 60 次讀檔);以改動檔為單位,對照組整組讀完或整組不算(r1 邊界席 B8)
+   358	+_TENSION_MAX_BYTES = 2 * 1024 * 1024  # 單個對照檔上限,超過記 unreadable
+   359	+
+   360	+
+   361	+def _tension_read_norm(path):
+   362	+    """讀對照檔 → 正規化後的行(同 _stack_norm_line,兩邊對稱);讀不到/非 UTF-8/超過 2 MB → None(記 unreadable)。
+   363	+    ★刻意不用本檔慣用的 errors="replace"★(r1 邊界席 B6):候選要分得出「讀到了沒命中」跟「根本沒讀到」,
+   364	+    替換成亂碼再比對會把後者偽裝成前者。"""
+   365	+    try:
+   366	+        if path.stat().st_size > _TENSION_MAX_BYTES:
+   367	+            return None
+   368	+        raw = path.read_bytes().decode("utf-8")
+   369	+    except (OSError, UnicodeDecodeError):
+   370	+        return None
+   371	+    return [n for n in (_stack_norm_line(l) for l in raw.splitlines()) if n is not None]
+   372	+
+   373	+
+   374	+def _tension_candidates_into(arch, added_lines, repo_root):
+   375	+    """把候選寫進 arch:arch["tension_candidates"]=[{file, question, patterns, siblings, unreadable}];超過檔數上限加 arch["candidates_truncated"]=True。
+   376	+    只看 when(不看 when_raw:鄰居的字串字面比對沒意義);正規化同 _stack_norm_line——區塊註解內不以 * 開頭的裸行會被當程式碼,
+   377	+    這是既有適用性判定同一條天花板,兩邊對稱、偏差方向是少一個候選(r1 外家 F1/通才 G4,承認不修)。
+   378	+    候選的題必在 stack_questions_applicable:added_lines 跟 changed_lines 過同一道 _stack_changed_ok,增行 ⊂ 增刪行。"""
+   379	+    out = []
+   380	+    n_files = 0
+   381	+    truncated = False
+   382	+    for f, sibs in (arch.get("files") or {}).items():
+   383	+        lines = added_lines.get(f)
+   384	+        if not lines:
+   385	+            continue
+   386	+        sk = _stack_key_for_file(f, repo_root)
+   387	+        if not sk or sk not in _STACK_TRIGGERS:
+   388	+            continue
+   389	+        norm = [n for n in (_stack_norm_line(l) for l in lines) if n is not None]
+   390	+        if not norm:
+   391	+            continue
+   392	+        if n_files >= _TENSION_MAX_FILES:
+   393	+            truncated = True
+   394	+            break
+   395	+        n_files += 1
+   396	+        sib_norm = {s: _tension_read_norm(Path(repo_root) / s) for s in sibs}
+   397	+        readable = [s for s in sibs if sib_norm[s] is not None]
+   398	+        unreadable = [s for s in sibs if sib_norm[s] is None]
+   399	+        if not readable:
+   400	+            continue   # 只剩不可讀的對照檔:沒有東西可比,不出候選
+   401	+        for qid, pats, _raw in _STACK_TRIGGERS[sk]:
+   402	+            novel = []
+   403	+            for pat in pats:
+   404	+                if not any(pat.search(n) for n in norm):
+   405	+                    continue
+   406	+                if any(pat.search(n) for s in readable for n in sib_norm[s]):
+   407	+                    continue
+   408	+                if pat.pattern not in novel:
+   409	+                    novel.append(pat.pattern)
+   410	+            if novel:
+   411	+                out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+   412	+    if out:
+   413	+        arch["tension_candidates"] = out
+   414	+    if truncated:
+   415	+        arch["candidates_truncated"] = True
+   416	+
+   417	+
+   418	 def _stack_changed_ok(cur_file):
+   419	     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
+   420	     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
+   421	     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
+   422	     「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。"""
+   423	     ext = Path(cur_file).suffix
+   424	     return (ext not in _PITFALL_DIFF_SKIP_EXT
+   425	             and not cur_file.startswith("governance/review-reports/")
+   426	             and cur_file not in _BOOKKEEPING_FILES
+   427	             and not cur_file.startswith(_BOOKKEEPING_DIR)
+   428	@@ -16907,20 +16979,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   429	                            capture_output=True, text=True, cwd=str(repo_root))
+   430	     except FileNotFoundError:
+   431	         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
+   432	         return None
+   433	     if r.returncode != 0:
+   434	         print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
+   435	         return None
+   436	     added = {}
+   437	     claims = []
+   438	     changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
+   439	+    added_lines = {}     # {檔: [增行內容…]}——只給「可能撞」候選用(2026-09-09 兩席相反時端出張力:候選看的是新引入,刪行不算)
+   440	     cur_file, new_ln, _old_file = "", 0, ""
+   441	     for line in r.stdout.splitlines():
+   442	         if line.startswith("--- a/"):
+   443	             _old_file = line[6:]
+   444	             continue
+   445	         if line.startswith("+++ /dev/null"):
+   446	             # 整檔刪除(r1 外家 finder f2/否決 f1):沒有 b/ 名,原本 cur_file 留著前一檔的名字、刪行全歸錯檔或被跳過
+   447	             cur_file = _old_file
+   448	             continue
+   449	         if line.startswith("+++ b/"):
+   450	@@ -16938,20 +17011,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   451	             if cur_file and _stack_changed_ok(cur_file):
+   452	                 changed_lines.setdefault(cur_file, []).append(line[1:])
+   453	             continue
+   454	         if not line.startswith("+"):
+   455	             new_ln += 1                       # context 行推進
+   456	             continue
+   457	         # 這是新增行(+ 開頭)
+   458	         added.setdefault(cur_file, set()).add(new_ln)
+   459	         if cur_file and _stack_changed_ok(cur_file):
+   460	             changed_lines.setdefault(cur_file, []).append(line[1:])
+   461	+            added_lines.setdefault(cur_file, []).append(line[1:])   # 同一道 _stack_changed_ok 過濾:簿記檔/審計證物不產生候選(r1 通才 G5)
+   462	         code = line[1:]
+   463	         # 哪些檔要掃:跟棧別觸發同一支 _stack_changed_ok(r1 架構對齊席 f2:原本這裡內聯一份、那邊再抄一份)
+   464	         if (cur_file and _stack_changed_ok(cur_file)
+   465	                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
+   466	             code_nostr = _strip_string_literals(code)
+   467	             for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
+   468	                 if pat.search(code if in_strings else code_nostr):
+   469	                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
+   470	                                    "pattern": pat.pattern, "question": q})
+   471	                     break
+   472	@@ -16976,20 +17050,22 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   473	         if sk:
+   474	             _by_stack.setdefault(sk, []).extend(lines_)
+   475	     stack_app, stack_meta = _stack_applicability(_by_stack, _sq_cfg["ask_all_over_lines"])
+   476	     for w in _sq_cfg["warnings"]:
+   477	         print(f"提醒:{w}", file=sys.stderr)
+   478	 
+   479	     # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
+   480	     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
+   481	     # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
+   482	     arch = _arch_alignment_hints(added, repo_root)
+   483	+    if arch:
+   484	+        _tension_candidates_into(arch, added_lines, repo_root)   # 可能撞:改動檔新增了對照檔都沒有的做法(只端候選,不判)
+   485	 
+   486	     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+   487	     config = None if no_lint else _lint_load_config(repo_root)
+   488	     if config is None:
+   489	         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+   490	         return {"claims": claims, "tier": "high" if claims else "standard",
+   491	                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
+   492	                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
+   493	 
+   494	     # 有 config: 補 source 到 regex claims
+   495	@@ -17053,20 +17129,28 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+   496	                 print(f"    - {q}")
+   497	         arch = data.get("arch_alignment") or {}
+   498	         if arch:
+   499	             print("  [架構對齊] 新寫法跟專案既有的一不一樣?拿同層最像的既有檔當對照,逐問:")
+   500	             for q in arch["questions"]:
+   501	                 print(f"    - {q}")
+   502	             for f, sibs in list(arch["files"].items())[:6]:
+   503	                 print(f"    {f} ← 對照 {', '.join(sibs)}")
+   504	             if arch.get("idiom_skills"):
+   505	                 print(f"    慣例 skill:{', '.join(arch['idiom_skills'])}(審查員派工時一併附上)")
+   506	+            _cands = arch.get("tension_candidates") or []
+   507	+            for c in _cands[:6]:   # 比照上面對照檔清單的 [:6](r1 通才 G7)
+   508	+                print(f"    可能撞:{c['file']} 新增的 {'/'.join(c['patterns'])} 在對照的 {len(c['siblings'])} 個檔裡都沒出現(這是 {c['question']} 那題的做法)"
+   509	+                      "——沿用既有或改用新做法都用 tension 表態,審查席會查兩邊")
+   510	+            if len(_cands) > 6:
+   511	+                print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
+   512	+            if arch.get("candidates_truncated"):
+   513	+                print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
+   514	         print(f"tier: {data['tier']}")
+   515	         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
+   516	         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
+   517	         # 當第二鏡頭」,但那是★純紀律層、沒有任何機械提醒★——2026-08-02 實測編排者自己
+   518	         # 就忘了跑,而事後補跑第一行就是後來被證實違反合約的那個節點。
+   519	         # ★為什麼只印字不真的跑 impact★:實測 pitfalls 0.18s / impact 4.7s,而本函式
+   520	         # ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98)——掛上去等於每次
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch | sed -n '1,300p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+     1	diff --git "a/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md" "b/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     2	index 2eb8d37..36b7af4 100644
+     3	--- "a/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     4	+++ "b/docs/lumos-toolchain-knowledge/Issues/\346\236\266\346\247\213\345\260\215\351\275\212\345\270\255\350\210\207\346\243\247\345\210\245\346\252\242\346\240\270\351\241\214\345\217\257\350\203\275\347\233\270\345\217\215.md"
+     5	@@ -21,20 +21,28 @@ decisions:
+     6	   - content: Enzo 2026-09-09 裁:★架構對齊優先於棧別檢核題,除非那條檢核題指的是會出事的東西★(洩漏、連線池耗盡、N+1 打爆 DB、阻塞主執行緒這類)。理由=前者的代價是維護性、後者的代價是線上事故,兩者不同量級。撞到時的寫法:檢核題答 na 並在理由裡寫明「與既有 N 個檔一致優先」,架構對齊席那條照留 minor 不升級。★本條只寫口徑、不新增任何閘★——帳上還沒有真實相反案例(兩者都很新,檢核題 2026-09-09 才落地),沒有實例前不據此加機制。
+     7	     id: d1
+     8	     decided: 2026-09-09
+     9	     valid: false
+    10	     superseded_by: d2
+    11	     ended: 2026-09-09
+    12	   - content: Enzo 2026-09-09 裁(這是他真正講的):★兩席意見相反時不要挑一邊,要提出警告★——講清楚「原架構的寫法有什麼隱患」,並給出建議的改法,讓人自己決定。也就是:①棧別檢核題那條照留、不因為「跟既有不一致」就答 na 壓掉 ②架構對齊那條也照留 ③把兩者併成一則警告:既有寫法是 X、隱患是 Y、建議改成 Z,連同「改了會跟既有 N 個檔不一致」一起講。★核心=衝突要被看見,不是被裁掉★;誰讓誰由人當下決定,工具只負責把兩邊都端上來。目前只寫口徑、不新增閘;帳上還沒有真實相反案例。
+    13	     id: d2
+    14	     decided: 2026-09-09
+    15	     valid: true
+    16	+  - content: Enzo 2026-09-09 裁:三塊都做——第四種表態 tension、pitfalls --diff 端出可能撞候選、派工詞口徑;d2 的「目前只寫口徑不新增閘」一句作廢,「兩邊都留不挑邊」核心不變
+    17	+    id: d3
+    18	+    context: 同日 Enzo 說「我想開始解」;AI 攤三個範圍(全做/不做候選/只口徑),Enzo 選全做
+    19	+    why_chosen: 口徑靠人記得正是裁定最不喜歡的;沒有記錄的地方 11 月回頭條件沒數字可看;候選是唯一不靠人記得的提醒。設計與審查在 Projects/兩席相反時端出張力_計劃
+    20	+    decided: 2026-09-09
+    21	+    valid: true
+    22	+related:
+    23	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+    24	 ---
+    25	 # 架構對齊席與棧別檢核題可能相反
+    26	 
+    27	 > 白話:兩個審查角度的立場天生相反。一個說「照這個專案原本的寫法寫」,另一個說「這裡該用比較好的做法」。
+    28	 > 大部分時候不會撞,但撞的時候目前沒有任何地方寫著該聽誰的。
+    29	 
+    30	 ## 怎麼發現的
+    31	 
+    32	 2026-09-09 Enzo 讀 README 時問:「這個機制和後面的棧別提問和 linter 會不會衝突?因為他們的鏡頭
+    33	 感覺是最佳寫法?」——**是讀文件讀出來的,不是跑出來的**。查證後成立。
+    34	@@ -85,15 +93,19 @@ decisions:
+    35	 - 棧別檢核題那條**照留**,不因為「跟既有不一致」就答 `na` 壓掉。
+    36	 - 架構對齊那條也**照留**。
+    37	 - 把兩者**併成一則警告**:既有寫法是 X、**隱患是 Y**、建議改成 Z,連同「改了會跟既有 N 個檔不一致」一起講。
+    38	 
+    39	 ★核心是「衝突要被看見,不是被裁掉」。★ 誰讓誰由人當下決定,工具只負責把兩邊都端上來。
+    40	 
+    41	 **為什麼不採原本 AI 提的那條**(d1,已作廢):原提議是「架構對齊優先,除非那條檢核題指的是會出事的東西」
+    42	 ——★那會默默壓掉效能那條意見★,而且「算不算會出事」本身就要判斷,等於把一個判斷藏進另一個判斷裡。
+    43	 **留下兩條、把矛盾攤開,資訊量嚴格大於挑一邊。**
+    44	 
+    45	+## 後續(2026-09-09 同日)
+    46	+
+    47	+Enzo 裁「開始解」:裁定落成機制,三塊都做——第四種表態 `tension`(張力)、`pitfalls --diff` 端出「可能撞」候選、派工詞口徑。
+    48	+設計、審查與實作在 [[Projects/兩席相反時端出張力_計劃]];本篇 d2 的「目前只寫口徑不新增閘」一句由該案 d1 接手作廢,
+    49	+「兩邊都留、不挑邊」的核心不變。
+    50	+
+    51	 ## 回頭條件
+    52	 
+    53	-REVISIT:2026-11-09 看兩件事:①帳上有沒有出現過真的相反案例(兩席對同一段給相反意見)
+    54	-②如果有,裁定的方向對不對。**沒有實例就不要據此再加機制**——這條目前只是把口徑寫下來,
+    55	-不新增任何閘。
+    56	+REVISIT:2026-11-09 從治理帳數:表態事件裡 status=tension 幾則、帶 hint 的候選題幾題、候選題裡真答 tension 的幾題(`lumos gov --stats` 表態段有印);再看裁定方向對不對——一則都沒有就維持不動、不再加機制。
+    57	diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    58	index 4076e5d..fb3e035 100644
+    59	--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    60	+++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233_\350\250\210\345\212\203.md"
+    61	@@ -120,11 +120,13 @@ decisions:
+    62	 
+    63	 ## 合約候選（設計審過閘後列，候選≠已標；蓋章走 `guard scaffold → bind → audit`，不確定就不標）
+    64	 
+    65	 - 合法的 tension 表態不改變 `code-loop check` 的 rc；tension 欄位對不上（對照檔不在被推送的樹、清單空或超上限、文字不到門檻或超上限、chosen 不合法）跟 satisfied 證據對不上同級擋。[test:t_codeloop_check_tension_warns]
+    66	 - 候選的題目 id 必在 `stack_questions_applicable`，簿記檔不產生候選。[test:t_pitfalls_tension_candidates]
+    67	 
+    68	 ## 審計修正紀錄
+    69	 
+    70	 - r1（2026-09-09，5 席：通才／邊界與輸入／接手／架構對齊／外家 Codex terra-medium）：27 條（外家 3／架構對齊 2＋⚠1／通才 7／接手 5／邊界 10；併重複後 21 件；blocker 0、blocking 11）；全折。三席獨立一致的一條（existing 無上限拖垮 20 秒預算）直接折；其餘逐條機械重現皆 HIT，未折的只有架構對齊席的 ⚠（`｜` 分隔，編排者裁保留並記理由）。卷證 `governance/review-reports/兩席相反時端出張力/r1-*`（intake 含前掃兩處訂正與 27 條重現表）。
+    71	 
+    72	+- 實作（2026-09-09，同日）：測試先寫（六支，先紅 37 條）再實作到全綠 59 條；相關子集（表態閘／pitfalls／gov／鏡頭／棧別觸發／code-loop）547 條全綠；實測見 [[Verification/2026-09-09_兩席相反時端出張力實作測試]]。實作時抓到兩處設計沒寫到的細節：讀側驗 suggested 的 evidence 要交給跟 satisfied 同一條驗法（形狀驗證沒有平台設定）；候選上限測試的新檔不能放同一目錄（互為對照檔）。
+    73	+
+    74	 REVISIT:2026-11-09 跟事故筆記同一天，從治理帳數兩個數：表態事件裡 status=tension 幾則、`candidates` 加總幾題（帶 hint 的題），以及兩者的交集（候選題裡真答 tension 的）；假候選多（候選多、tension 少且人說是假的）就收窄觸發字或把候選降成 `--json` 專屬；一則都沒有就維持不動、不再加機制。「pitfalls 印過幾次」數不出來（它不留帳），不列。
+    75	diff --git a/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md b/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    76	index bdfa133..bc49f72 100644
+    77	--- a/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    78	+++ b/docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md
+    79	@@ -14,25 +14,40 @@ tags:
+    80	   - scope/agent-dag
+    81	 summary: |-
+    82	   FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
+    83	   KEY:只判「跟專案既有的一不一樣」,不評風格好壞;major 只給「引入第二種做法」或「跨層直呼」
+    84	   KEY:對照組=同資料夾同副檔名、檔名最相似的 3 個既有檔(排除測試檔);慣例 skill 依副檔名(kotlin/csharp/vue-idioms)
+    85	   DEP:[[Systems/pitfalls-code-loop]]
+    86	   DEP:[[Systems/design-loop]]
+    87	   TEST:t_pitfalls_diff_arch_alignment_hints(對照組選法/排除測試檔/慣例 skill/人讀三問);roster 測試含此席
+    88	 related:
+    89	   - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
+    90	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+    91	+  - "[[Systems/棧別提問表態閘]]"
+    92	+verified_by:
+    93	+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+    94	 ---
+    95	 # arch-alignment-lens
+    96	 
+    97	 # arch-alignment-lens
+    98	 
+    99	 > 白話:Enzo 2026-08-22 提的需求——自動開發的流程不能產出「跟原本不一樣」或「不入流」的寫法,破壞共同開發的體驗。以前審查席看的是正確性、併發、邊界、合約,沒有一席管「這樣寫跟專案既有的一不一樣」。
+   100	 
+   101	 ## 三個零件
+   102	 1. **席位**:四個席位表各加一席「架構對齊」(required,不佔人數)。`lumos loop next` 會吐它。
+   103	 2. **派工**:`skills/lumos-design-loop/templates.md` §7.6——三問(分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法),每問附對照 file:line;嚴重度錨只給兩種情況 major。判不準(鄰居本身就不一致)標 ⚠ 交編排者,不硬判。
+   104	 3. **對照組自動化**:`lumos pitfalls --diff` 對每支改動 code 檔列同層最像的 3 個既有檔 + 慣例 skill,人讀與 --json 都有(`arch_alignment`)。審查員拿這三個檔當「專案現在的寫法」。
+   105	 
+   106	+## 跟棧別檢核題撞到時(2026-09-09 起)
+   107	+
+   108	+這一席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能對同一段程式給相反意見([[Issues/架構對齊席與棧別檢核題可能相反]])。
+   109	+Enzo 裁:不挑邊、把兩邊端上來。落成三塊(設計與審查在 [[Projects/兩席相反時端出張力_計劃]]):
+   110	+
+   111	+1. **表態多一種值 `tension`**:作者答檢核題時可以說「我看見兩邊了,這次選沿用既有/改用建議」,附既有寫法在哪(path:line)、隱患、建議。合法的不擋,`code-loop check` 印成 ⚠ 交人裁。
+   112	+2. **`pitfalls --diff` 端出「可能撞」候選**:改動檔的增行命中某題觸發字、對照的三個既有檔一個都沒有 → 印一行、表態樣板那題帶 `hint`。只端候選、不判——跟上面「不做機械判像不像」一致,看的是觸發字有沒有出現。
+   113	+3. **派工詞口徑**(templates.md §7.6):遇到 tension 的題,本席查四欄真假(既有真的那樣寫嗎、隱患真的成立嗎、建議可行嗎、chosen 跟 diff 一致嗎),不重裁誰贏;自己發現「跟既有不一樣」而該題答了 satisfied,就把發現寫成張力形狀。
+   114	+
+   115	+天花板:tension 跟 na 一樣可以敷衍(工具只驗存在與長度);候選只抓「新檔引入鄰居沒有的做法」,反方向「照舊寫法沒採建議」抓不到。
+   116	+
+   117	 ## 刻意不做的
+   118	 - 不做機械判「像不像」(AST 相似度之類)——「不入流」是語意判斷,交給席位;機械層只負責把對照組端到審查員面前。
+   119	 - 不把風格偏好算 finding。
+   120	diff --git "a/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md" "b/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   121	index 10aa82c..f6635f2 100644
+   122	--- "a/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   123	+++ "b/docs/lumos-toolchain-knowledge/Systems/\346\225\210\350\203\275\346\252\242\346\240\270\347\233\256\351\214\204.md"
+   124	@@ -135,21 +135,21 @@ PRIOR-ART: 內容全數借官方/社群共識(Android 官方 Compose perf 文件
+   125	 | 入口速率限制 | 人判提問(2026-09-08 世界對照補;歸 node-idioms R15,不進追問表——反證席判它是 ops/安全防線非效能題,人裁) | 沒有限流=一個客戶就能把事件迴圈與連線池吃光;OWASP Node cheat sheet 列為必備;無 ESLint 規則;body 大小上限已在 R4 |
+   126	 
+   127	 ## 時機點設計(讓 Claude「自己感知」的機制,非靠自覺)
+   128	 
+   129	 **實證錨**:Vercel 量測——靠模型自己「想起要查規範」,**56% 情況會跳過**;hook 保證注入與模型意願無關。同 lumos「機械把關>靠自覺」與 impact hook 既有哲學。**提問式>陳述式**(pitfalls 逼答哲學):在對的時機丟「問題」比丟「規則全文」更能觸發判斷。
+   130	 
+   131	 | 時機 | 機制 | 內容 |
+   132	 |---|---|---|
+   133	 | ①動手改代碼前 | impact hook(既有)按棧擴充 | 2026-09-09 起 hook 把這次編輯的原始內容(delta_text,≤2 MB)送給 lumos,只注入**觸發到的題**(全表 kt=7/cs=5/vue=5/sql=4/swift=6/node=5,單源 _STACK_QUESTION_SPECS 的 when) |
+   134	 | ②終審 code-loop | 檢核表當審查員鏡頭(仿 test-layers 鏡頭模式) | 本目錄該棧段落餵 reviewer;機械可查項走確定性驗證器三通道 |
+   135	-| ③推送前 | **表態閘**(2026-09-09 機械化,[[Systems/棧別提問表態閘]]) | diff 增刪行觸發到的題(適用題),每題 `lumos code-loop dispositions` 表態:satisfied(證據 path:line/test:名,對被推送的樹驗存在)/na(理由 ≥10 中文字)/todo(Issue open/doing);`code-loop check` 缺一題就擋、**不看 tier**;未觸發的題工具自動記 na。舊制(2026-07-19～09-08)是 pass --note 紀律、code 端零檢查,治理帳 177 筆只 5 筆做到 |
+   136	+| ③推送前 | **表態閘**(2026-09-09 機械化,[[Systems/棧別提問表態閘]]) | diff 增刪行觸發到的題(適用題),每題 `lumos code-loop dispositions` 表態:satisfied(證據 path:line/test:名,對被推送的樹驗存在)/na(理由 ≥10 中文字)/todo(Issue open/doing)/tension(2026-09-09 起:既有寫法 path:line 清單+隱患+建議+選了哪邊——架構對齊與這題相反時用,不擋、check 印 ⚠;[[Projects/兩席相反時端出張力_計劃]]);`code-loop check` 缺一題就擋、**不看 tier**;未觸發的題工具自動記 na。舊制(2026-07-19～09-08)是 pass --note 紀律、code 端零檢查,治理帳 177 筆只 5 筆做到 |
+   137	 
+   138	 落地計劃:[[Projects/pitfalls棧別效能追問_計劃]];表態閘:[[Projects/棧別提問表態閘_計劃]]。
+   139	 
+   140	 ## 題目 id 對照(表態閘的鍵;2026-09-09)
+   141	 
+   142	 規則:**改措辭不改 id、改語意才換 id**——表態與 gov --stats 都以 id 為鍵;換了 id 在途分支要重表態(刻意)。全表集合被 `t_stack_question_triggers` 釘住,多一題少一題改一個 id 都翻紅,逼人有意識地動。when 是觸發 regex(對這次改動的增刪行,剝註解與字串字面、不分大小寫);when_raw 是同題裡「要看字串內容」的那幾條(只剝註解;代碼審 r1 抓到整題看字串會讓 log 訊息裡的 SELECT 變假命中,所以逐條分),SQL 在字串裡要長得像 SQL(有 FROM/INTO/SET/WHERE)才算;某棧增刪行加總 >300(`.lumos/config.json` 的 `stack_questions.ask_all_over_lines`)則該棧全表適用。
+   143	 
+   144	 **觸發字＝範式詞＋反面詞(2026-09-09 Enzo 裁,[[Projects/棧別提問表態閘_計劃]] d1)**:範式詞是那塊地的詞彙(`viewModelScope`、`@Composable`、`Promise.all`),反面詞是同一個顧慮用舊法／土法寫出來會出現的字(`Thread(`、`findViewById`、`SqlDataReader`、拼字串 SQL、`$http`、`CURSOR`、`DispatchQueue.global`)。為什麼:觸發字只看字面,只收範式詞的話「用爛的方法寫同一個功能」會亮不同題甚至不亮,而維護舊碼正是最需要被問的時候。反面詞要具體到不誤傷(`Thread\(` 不是 `Thread`);每棧各有舊法樣本測試釘「亮的是同一題」與「乾淨舊法零觸發」。helper 名字把危險呼叫藏起來的(`runQuery(...)`)字面層看不到,靠審查席與 `recall-miss` 帳事後補進觸發字。
+   145	 
+   146	 | id | 棧 | 題(縮) | 觸發 when(範式詞＋反面詞;剝註解與字串) | 看字串的 when_raw(只剝註解) |
+   147	diff --git "a/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md" "b/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   148	index 3c5d80c..c9dec9e 100644
+   149	--- "a/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   150	+++ "b/docs/lumos-toolchain-knowledge/Systems/\346\243\247\345\210\245\346\217\220\345\225\217\350\241\250\346\205\213\351\226\230.md"
+   151	@@ -34,46 +34,49 @@ summary: |-
+   152	   KEY:錨點只抓最懶的謊——驗存在不驗內容;答案對不對留給審查席(派工鏡頭附表態記錄、快取 key 含其 sha256;席位抓到未觸發題的問題 → code-loop recall-miss <id> --note);表態可以敷衍=GIGO 天花板,回頭條件在計劃節點的 REVISIT 行 [test:t_dispatch_lens_includes_dispositions]
+   153	   KEY:副產品 gov --stats 按 id 彙總 satisfied/na/todo/auto-na;人答 ≥10 且全 na=死題候選;recall-miss ≥3=觸發太窄候選;治理帳去重鍵對這兩種 kind 拿 ts 當鑑別子 [test:t_gov_stats_dispositions]
+   154	   KEY:觸發字=範式詞+反面詞(2026-09-09 Enzo 裁,計劃節點 d1):32 題各補一組舊法/土法會出現的字(Thread(/findViewById/SqlDataReader/拼字串 SQL/$http/CURSOR/DispatchQueue.global…),用爛的方法寫同一個功能亮的是同一題;要看字串的 pattern 逐條放 when_raw(code-反面詞 r1 單席:整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中;SQL 字串要有 FROM/INTO/SET/WHERE 才算);反面詞要具體到不誤傷,每棧舊法樣本測試釘「亮同一題」與「乾淨舊法零觸發」;helper 藏起來的仍靠審查席+recall-miss [test:t_stack_question_triggers]
+   155	   KEY:代碼審 r1 外家 Codex 兩席(finder gpt-6-astra/否決 gpt-5.6-terra,03:48 用量重置後補跑)折入:整檔刪除的 diff(+++ /dev/null)刪行歸回 --- a/ 的檔名;test: 證據的 git grep 只掃該 profile 測試副檔名並排除 docs/ governance/(治理帳裡的 evidence 字串曾能冒充已提交測試);--bound-tests-advisory 只准低風險——check 自己算出 high 就硬跑一次合約測試照擋、pre-push 對 pitfalls 空輸出不帶旗標;dispositions 加 --at-sha(checkout 在別的分支時綁被推的版本,BLOCKED 訊息會帶);三題(vue-bundle/sql-sargable/node-external)標 raw 看字串內容;鏡頭措辭改「寫入時只驗形狀,推送前才驗證據存在」
+   156	   KEY:代碼審 r1(2026-09-09,五席+外家備援)折入:核對每題包例外→「無法驗證」擋下不 fail-open(壞 platforms 設定/10-5 行號曾整份放行);單次 git 帶 LUMOS_DISP_GIT_TIMEOUT(預設 8 秒)超時同上;治理帳事件加 written_at 當去重鑑別子(ts 是 commit 時間,同 sha 重表態會折成一筆);marker 暫存名帶 pid;marker 壞掉退治理帳;鏡頭只讀 marker 不掃帳、暖機行程沿用同一把 key;函式命名兩族=_dispositions_*(校驗/核對/樣板)與 _codeloop_*dispositions(讀寫,同 _codeloop_write/_read);表態寫治理帳失敗硬擋而 pass/skip 靜默——刻意:standard 沒有 pass 事件,治理帳是 CI 讀表態的唯一路徑 [test:t_codeloop_dispositions_r1_folds]
+   157	   KEY:pre-push 對分支 ref 無條件叫 check,低風險帶 --bound-tests-advisory(受波及合約測試紅只提醒,保 2026-09-07 全 repo 審視 #17 人裁),高風險不帶照擋;tag 只 advisory;.lumos/config.json 的 stack_questions.gate(all|high-only|off)與 ask_all_over_lines;整份 JSON 壞掉=gate all/300 印一行、test: 證據 BLOCKED [test:t_prepush_computes_impact_once]
+   158	   DEP:scripts/lumos(_STACK_QUESTION_SPECS/_STACK_TRIGGERS/_stack_applicability/_stack_questions_config/_dispositions_template/_cmd_codeloop_dispositions/_cmd_codeloop_recall_miss/_dispositions_verdict/_codeloop_guard_verdict 3.5 步/_lens_dispositions_lines/_render_gov_stats 表態段/cmd_impact 的 delta_text)｜scripts/hooks/pre-push(分支 ref 無條件 check)｜scripts/hooks/claude/impact-hook.py(extract_delta_text、_stack_section)｜.github/workflows/ci.yml(錯誤訊息)
+   159	   TEST:t_stack_question_triggers｜t_dispositions_template｜t_codeloop_dispositions_write｜t_codeloop_check_dispositions_gate｜t_codeloop_dispositions_ledger_fallback｜t_codeloop_dispositions_range_and_branch｜t_impact_hook_stack_questions_filtered｜t_dispatch_lens_includes_dispositions｜t_gov_stats_dispositions｜t_prepush_computes_impact_once
+   160	 verified_by:
+   161	   - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+   162	+  - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+   163	 ---
+   164	 # 棧別提問表態閘
+   165	 
+   166	 > 白話：工具早就會在改檔前、推送前把「這個技術棧該問自己的效能問題」推到眼前，但推到眼前不等於有人回答——治理帳的審查留痕（pass／skip 事件）181 筆 <!--lumos:count=181 re="gate": "code-loop", "kind": "(?:passed|skipped)" in=docs/.governance-log.jsonl-->，留痕文字提到棧別檢核答案的 19 筆 <!--lumos:count=19 re="gate": "code-loop", "kind": "(?:passed|skipped)"[^\n]*(?:棧別.{0,4}檢核|棧檢核) in=docs/.governance-log.jsonl-->，其中答到題表內那幾棧（不是 Python）的只有 6 筆 <!--lumos:count=6 re=(?m)^(?!.*[Pp]ython)(?=.*"gate": "code-loop", "kind": "(?:passed|skipped)")(?=.*(?:棧別.{0,4}檢核|棧檢核)).*$ in=docs/.governance-log.jsonl-->、去掉同輪重記是 5 個迴圈（2026-09-09 機械重數；數字讓 doctor 自己重算，怎麼數在標記裡）。這道閘做兩件事：**（一）只問碰到的題**——每題掛一組觸發字（`when`），對這次改動的增刪行比對，沒碰到的題工具自動記「未觸發」，零 token；**（二）碰到的題推送前要有機器讀得懂的交代**——做到了（附證據）、不適用（附理由）、還沒做（連到待辦）——缺一題 `code-loop check` 就擋，跟風險分級（tier）無關。設計與三輪審查在 [[Projects/棧別提問表態閘_計劃]]。
+   167	 
+   168	 ## 怎麼用（agent 在代碼審步驟 1 之後做）
+   169	 
+   170	 ```
+   171	 lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json
+   172	 # 填 status 留空的題:satisfied(evidence: path:line 或 test:<名>)/ na(reason ≥10 中文字)/ todo(issue: Issues/<名> + reason)
+   173	+#   / tension(chosen: existing|suggested + existing: [path:line…] + hazard + suggestion;選 suggested 再附 evidence)——帶 hint 的題是「可能撞」候選
+   174	 lumos code-loop dispositions /tmp/disp.json            # 推 HEAD:別名 時加 --branch 別名
+   175	 lumos code-loop check --diff <merge-base>..HEAD        # 自查;pre-push/CI 會再跑一次
+   176	 ```
+   177	 
+   178	 - 改了程式碼表態就過期（跟 pass 留痕同一套規則：目標版本等於表態版本，或表態版本是祖先且中間只動簿記檔）；重跑樣板加 `--carry` 只答新題。
+   179	 - 審查席若抓到「對得上某未觸發題」的問題：`lumos code-loop recall-miss <題目id> --note "<一句>"`，同題累積 3 次 `gov --stats` 列「觸發太窄候選」。
+   180	 - 消費專案過渡：`.lumos/config.json` 的 `stack_questions.gate` 設 `high-only` 或 `off`；`ask_all_over_lines` 調「一個棧改幾行就全問」的門檻（預設 300）。
+   181	 
+   182	 ## 工具驗什麼、不驗什麼
+   183	 
+   184	 | 表態 | 工具驗 | 不驗 |
+   185	 |---|---|---|
+   186	 | `satisfied` + `path:line` | 檔案在被推送的 commit 樹裡、行號在範圍內 | 那一行是不是真的解了那題 |
+   187	 | `satisfied` + `test:<名>` | 工作樹 discovery（profile 語意、多平台）掃得到、且在被推送的樹裡整字 `git grep -w` 得到（未提交的測試不算） | 測試有沒有殺傷力 |
+   188	 | `na` | 理由去空白標點後 ≥10 個中文字或 ≥25 字 | 理由成不成立 |
+   189	 | `todo` | `Issues/<名>` 在被推送的樹裡存在且 status open/doing | 待辦會不會被做 |
+   190	+| `tension`（張力，2026-09-09 起） | `existing` 每項 `path:line` 在被推送的樹裡、1–20 項；`hazard`／`suggestion` 過理由門檻且 ≤2000 字；`chosen` 小寫二值；選 suggested 的 `evidence` 同 satisfied 驗法 | 隱患真不真、建議對不對、選哪邊該不該——合法的 tension **不擋**，`check` 印成 ⚠ 讓人裁；設計見 [[Projects/兩席相反時端出張力_計劃]] |
+   191	 
+   192	 答案對不對留給審查席：派工鏡頭把表態記錄附進派工單，席位反駁的就是這些答案。這是刻意的天花板——同設計審處置閘承認的「垃圾進垃圾出」，工具只抓最懶的謊。
+   193	 
+   194	 ## 邊界與刻意不做
+   195	 
+   196	 - 適用範圍算在 `merge-base(主線, 被推送 sha)..被推送 sha`，所以把主線合進分支再推分支，不用替主線帶進來的碼表態；推主線本身才用推送範圍。合進主線後推主線是在主線名下重新判（marker 按分支），`--carry --branch <原分支>` 把答案帶過來。
+   197	 - 平台 root 在 repo 外（跨 repo 多平台）：被推送的 sha 不屬於那個 repo，`test:` 只做工作樹那一道並在訊息註記。
+   198	 - 本 repo 自己（Python）不在題表，這道閘對 scripts/lumos 的改動不會觸發。
+   199	 - 不用 LLM 判答案、不用 LLM 前置分類決定適用性；等 auto-na 比例與 recall-miss 帳說 regex 不夠再開。
+   200	 - 低風險推送的受波及合約測試維持「只提醒不擋」（2026-09-07 人裁）：pre-push 對低風險帶 `--bound-tests-advisory`，這是實作時為了保住既有裁定加的旗標，不在設計審的條款裡。
+   201	diff --git "a/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md" "b/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md"
+   202	new file mode 100644
+   203	index 0000000..3b1d1ea
+   204	--- /dev/null
+   205	+++ "b/docs/lumos-toolchain-knowledge/Verification/2026-09-09_\345\205\251\345\270\255\347\233\270\345\217\215\346\231\202\347\253\257\345\207\272\345\274\265\345\212\233\345\257\246\344\275\234\346\270\254\350\251\246.md"
+   206	@@ -0,0 +1,65 @@
+   207	+---
+   208	+type: verification
+   209	+status: pass
+   210	+date: 2026-09-09
+   211	+valid_under: 合成 git 樣本(Kotlin 對照檔+新檔)、本機 python3 單元測試;本 repo 是 Python 不在題表,零真實消費專案案例
+   212	+revalidate_when: 題表 when 觸發字或 _stack_norm_line 正規化改變;_arch_alignment_hints 對照組選法改變;第一個消費專案出現真的 tension 表態或候選
+   213	+tags:
+   214	+  - type/verification
+   215	+  - status/pass
+   216	+plan_refs:
+   217	+  - "[[Projects/兩席相反時端出張力_計劃]]"
+   218	+---
+   219	+# 2026-09-09_兩席相反時端出張力實作測試
+   220	+
+   221	+> 白話：這篇證明「照設計寫的三塊——第四種表態 tension、pitfalls 端出可能撞候選、口徑文件——在自己造的 git 小樣本上會擋該擋的、放該放的、印該印的」。
+   222	+> 沒有真實消費專案的案例（本 repo 是 Python，不在題表），全部是合成樣本。
+   223	+
+   224	+## 怎麼驗
+   225	+
+   226	+設計審 r1 過閘後，測試先寫（六支全紅：12 過／37 紅），再實作到全綠，再跑相關子集看有沒有弄壞既有行為。
+   227	+
+   228	+```
+   229	+python3 scripts/test_lumos.py -k tension          # 六支新測試
+   230	+python3 scripts/test_lumos.py -k disposition      # 既有表態閘
+   231	+python3 scripts/test_lumos.py -k pitfalls
+   232	+python3 scripts/test_lumos.py -k gov_stats
+   233	+python3 scripts/test_lumos.py -k dispatch_lens
+   234	+python3 scripts/test_lumos.py -k stack_question
+   235	+python3 scripts/test_lumos.py -k codeloop
+   236	+```
+   237	+
+   238	+## 結果（2026-09-09，本機 python3，全部機械數）
+   239	+
+   240	+| 子集 | 斷言 | 紅 |
+   241	+|---|---|---|
+   242	+| `-k tension`（六支新測試） | 59 | 0 |
+   243	+| `-k disposition` | 100 | 0 |
+   244	+| `-k pitfalls` | 99 | 0 |
+   245	+| `-k gov_stats` | 57 | 0 |
+   246	+| `-k dispatch_lens` | 61 | 0 |
+   247	+| `-k stack_question` | 66 | 0 |
+   248	+| `-k codeloop` | 146 | 0 |
+   249	+| `-k marker_doc`／`-k arch_alignment` | 14／4 | 0 |
+   250	+
+   251	+## 每條驗收條款對到哪支測試、驗了什麼
+   252	+
+   253	+- [S1] `t_dispositions_tension_validate`：12 種壞形狀（缺 chosen、chosen 大寫、existing 缺／空／非清單／21 項／單項 309 字／帶 `..`、hazard 太短、suggestion 2001 字、suggested 缺 evidence、legacy 平台前綴）各自 rc2 且訊息帶欄名；status 錯誤訊息列四值；規則提示行列 tension 必填欄；合法 tension 寫入後 marker 與治理帳都有、hint 原樣存、事件 `candidates=1`；`--carry` 帶回 tension 答案且不帶舊 hint；suggested 附 `test:` 證據 rc0。
+   254	+- [S2] `t_codeloop_check_tension_warns`：existing 指不存在的檔 → BLOCKED 帶 id 與欄名；marker 被改成空清單 → 讀側重驗 BLOCKED；缺 hazard／suggestion 的紀錄不炸、進 problems；合法（existing 三項、兩個不同路徑）→ rc0、JSON `tensions[0].files==2`、stderr 印 ⚠ 張力／兩個路徑／共 2 檔／隱患／建議／不擋；suggested 附樹裡找得到的測試 → 放行、附未追蹤測試 → BLOCKED（grep 不到）；因別題缺表態 BLOCKED 時仍印 ⚠ 張力。
+   255	+- [S3] `t_pitfalls_tension_candidates`：三個循序對照檔＋新檔 `async` → 恰一條候選（檔／題／pattern／對照 3 檔）且題在適用表；對照檔已有 async → 無候選鍵；只刪行 → 無；行註解與字串不算、區塊註解裸行算（釘既有天花板）；非 UTF-8 對照檔記 `unreadable` 其餘照判、只剩不可讀不出候選；沒對照組的新檔無候選無 unreadable；審計證物目錄裡的同樣增行無候選且題不適用；21 個目錄各有三個對照檔＋各一個新檔 → 只判前 20 個（每個對照組整組讀完）、`candidates_truncated=true`、人可讀印 6 行＋「另有 14 條」＋截斷一句。
+   256	+- [S4] `t_dispositions_template_tension_hint`：有候選的題帶 `hint`（改動檔、pattern、對照檔、指到 tension），沒候選的題沒有；帶 hint 的樣板寫入 rc0、hint 進治理帳、`candidates=1`；`--carry` 不帶舊 hint。
+   257	+- [S5] `t_tension_lens_and_gov`：派工鏡頭對 tension 印「選／既有／隱患／建議」四欄；`gov --stats` 印「張力 N」與「候選題 N（其中答 tension M）」；8 na＋5 tension 不標死題、10 na 仍標。
+   258	+- [S6] `t_tension_doc_sync`：九處文字（code-loop SKILL／reference、design-loop templates §7.6、commands/06、Systems/棧別提問表態閘、Systems/效能檢核目錄、Systems/arch-alignment-lens、Issues 筆記、本案計劃）都含「tension」。
+   259	+- [S7] 手驗：`lumos context` 三個節點——計劃筆記連出 7 篇；棧別提問表態閘與 arch-alignment-lens 的 `verified_by` 都掛到本篇；Issues 筆記 d3 記了「三塊都做」、REVISIT 改成數治理帳三個數字。
+   260	+
+   261	+## 實作時抓到的兩處、與測試自己的一處
+   262	+
+   263	+- 讀側驗 suggested 的 evidence 時，第一版把 evidence 交給形狀驗證去切（沒有平台設定）→ `test:` 證據被判形狀不對。改成讀側只驗「有沒有附」，切分與存在性交給跟 satisfied 同一條驗法。
+   264	+- 候選上限那條測試第一版把 21 個新檔放同一個目錄，它們互為對照檔、彼此都有 `async`，永遠測不到候選——改成 21 個目錄各自帶三個循序對照檔。
+   265	+- 兩處都是「測試先紅才看見」的，不是讀碼看出來的。
+   266	+
+   267	+## 沒驗到的
+   268	+
+   269	+- 真實消費專案（Kotlin／C#／Vue）上的候選與 tension 表態：本 repo 是 Python，零真實案例；第一個碰到候選的專案要回填實例到這篇或另立一篇。
+   270	+- pre-push 與 CI 上「⚠ 張力」的實際印出：只驗了 `code-loop check` 直接呼叫，沒實推。
+   271	+- 效能：只釘檔數與大小上限（20 檔／每檔 3 對照／2 MB），沒量秒數。
+   272	diff --git a/scripts/lumos b/scripts/lumos
+   273	index 1a83e40..6f784d2 100755
+   274	--- a/scripts/lumos
+   275	+++ b/scripts/lumos
+   276	@@ -4517,33 +4517,39 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
+   277	         print()
+   278	     # ── 表態閘副產品(Projects/棧別提問表態閘_計劃 S9,2026-09-09):按題目 id 彙總歷來四值;死題候選/觸發太窄候選 ──
+   279	     _dq, _rm = {}, {}
+   280	     for r in rows:
+   281	         if r.get("gate") != "code-loop":
+   282	             continue
+   283	         if r.get("kind") == "dispositions" and isinstance(r.get("dispositions"), dict):
+   284	             for _qid, _ent in r["dispositions"].items():
+   285	                 if not isinstance(_ent, dict):
+   286	                     continue
+   287	-                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "auto-na": 0})
+   288	+                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "tension": 0, "auto-na": 0, "cand": 0, "cand-tension": 0})
+   289	                 if _ent.get("auto"):
+   290	                     _b["auto-na"] += 1
+   291	-                elif _ent.get("status") in _b:
+   292	+                elif _ent.get("status") in ("satisfied", "na", "todo", "tension"):
+   293	                     _b[_ent["status"]] += 1
+   294	+                # 候選張力(2026-09-09 兩席相反時端出張力):樣板帶的 hint 隨表態存進帳,這裡就是 REVISIT 的分母
+   295	+                if _ent.get("hint") and not _ent.get("auto"):
+   296	+                    _b["cand"] += 1
+   297	+                    if _ent.get("status") == "tension":
+   298	+                        _b["cand-tension"] += 1
+   299	         elif r.get("kind") == "recall-miss" and r.get("recall_miss"):
+   300	             _rm[r["recall_miss"]] = _rm.get(r["recall_miss"], 0) + 1
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch | sed -n '301,600p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+   301	     if _dq or _rm:
+   302	         print("  棧別提問表態(表態閘,2026-09-09 起;每筆表態事件每題算一次,同 sha 重表態各算各的):")
+   303	         for _qid in sorted(_dq):
+   304	-            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"]
+   305	+            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"] + _b["tension"]   # 分母含張力(r1 接手席 H4:8 na + 5 tension 不是死題)
+   306	             _tag = " ← 死題候選(人答 ≥10 次且全是不適用:題目不對或被敷衍,回頭裁刪題或加嚴)" if (_human >= 10 and _b["na"] == _human) else ""
+   307	-            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}{_tag}")
+   308	+            _cand = f"、候選題 {_b['cand']}(其中答 tension {_b['cand-tension']})" if _b["cand"] else ""
+   309	+            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}、張力 {_b['tension']}{_cand}{_tag}")
+   310	         for _qid, _n in sorted(_rm.items()):
+   311	             print(f"    {_qid}:審查席抓到未觸發題的問題 {_n} 次" + (" ← 觸發太窄候選(修它的 when)" if _n >= 3 else "(累積 3 次列候選)"))
+   312	         print()
+   313	     # ── 審查有沒有用(審查有沒有用記帳 S3,2026-09-08):只算有 reported 欄的輪(2026-09-09 起才有) ──
+   314	     _by_round = {}
+   315	     for r in rows:
+   316	         if r.get("gate") == "canary" and r.get("loop") and r.get("round"):
+   317	             _by_round.setdefault((r["loop"], r["round"]), []).append(r)
+   318	     _ys = {k: _review_yield_round(v) for k, v in _by_round.items()}
+   319	     _ys = {k: y for k, y in _ys.items() if y["N"] is not None}
+   320	@@ -4727,20 +4733,21 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+   321	     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   322	          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
+   323	          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", ""),
+   324	          # 審查有沒有用記帳(2026-09-09):記帳被寫側擋下(canary/blocked)每次各算一筆——同一個 commit 連撞三次
+   325	          # 本來會被 (commit,nodes,gate,kind) 折成一次,「擋下 N 次」就永遠是 1;拿 ts+note(note 含事件隨機碼)當第 5 鑑別子(同秒也分得開,r1 f5)
+   326	          # 表態閘(2026-09-09,r3 接手席 H1):同 sha 兩筆 dispositions / recall-miss 各算各的——鑑別子拿 written_at(事件時間,微秒),
+   327	          # 不拿 ts:ts 是 HEAD commit 時間,同一顆 sha 重表態兩筆一模一樣(r1 併發席 f3/合約測試席 f1 實測折成一筆)
+   328	          "token": ((d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked")
+   329	                    else (d.get("written_at") or d.get("ts", "")) if (d.get("gate") == "code-loop" and d.get("kind") in ("dispositions", "recall-miss")) else ""),
+   330	          "dispositions": d.get("dispositions") if d.get("kind") == "dispositions" else None,
+   331	+         "candidates": d.get("candidates") if d.get("kind") == "dispositions" else None,   # 候選張力題數(2026-09-09)
+   332	          "recall_miss": d.get("recall_miss") if d.get("kind") == "recall-miss" else None})
+   333	     # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
+   334	     load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   335	          "gate": "signoff", "kind": "signed", "hard": False,
+   336	          "token": d.get("ts", ""), "nodes": [stem(d.get("node", ""))],
+   337	          "detail": (d.get("by", "") + " " + d.get("note", "")).strip()})
+   338	     # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
+   339	     load(".kill-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+   340	          "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
+   341	          "token": d.get("invariant", "") + d.get("ts", ""),   # 同節點多合約/多次不互吞(dedup 第5鑑別子)
+   342	@@ -16875,20 +16882,85 @@ def _arch_alignment_hints(added, repo_root, per_file=3):
+   343	         except OSError:
+   344	             continue
+   345	         if not sibs:
+   346	             continue
+   347	         sibs.sort(key=lambda p: -difflib.SequenceMatcher(None, p.stem.lower(), pf.stem.lower()).ratio())
+   348	         out_files[f] = [str(p.relative_to(repo_root)).replace(os.sep, "/") for p in sibs[:per_file]]
+   349	     if not out_files:
+   350	         return {}
+   351	     return {"files": out_files, "idiom_skills": sorted(skills), "questions": list(_ARCH_QUESTIONS)}
+   352	 
+   353	+
+   354	+# ── 可能撞(2026-09-09,Projects/兩席相反時端出張力_計劃 §二)──
+   355	+# 架構對齊席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能相反。這裡不裁誰對,只端候選:
+   356	+# 改動檔的增行命中某題的觸發字、而它的對照檔(同層最像的 3 個既有檔)一個都沒有那個字 → 「這個檔用了鄰居都沒用的做法」。
+   357	+_TENSION_MAX_FILES = 20              # 最多處理幾個改動檔(每檔 ≤3 對照檔=最多 60 次讀檔);以改動檔為單位,對照組整組讀完或整組不算(r1 邊界席 B8)
+   358	+_TENSION_MAX_BYTES = 2 * 1024 * 1024  # 單個對照檔上限,超過記 unreadable
+   359	+
+   360	+
+   361	+def _tension_read_norm(path):
+   362	+    """讀對照檔 → 正規化後的行(同 _stack_norm_line,兩邊對稱);讀不到/非 UTF-8/超過 2 MB → None(記 unreadable)。
+   363	+    ★刻意不用本檔慣用的 errors="replace"★(r1 邊界席 B6):候選要分得出「讀到了沒命中」跟「根本沒讀到」,
+   364	+    替換成亂碼再比對會把後者偽裝成前者。"""
+   365	+    try:
+   366	+        if path.stat().st_size > _TENSION_MAX_BYTES:
+   367	+            return None
+   368	+        raw = path.read_bytes().decode("utf-8")
+   369	+    except (OSError, UnicodeDecodeError):
+   370	+        return None
+   371	+    return [n for n in (_stack_norm_line(l) for l in raw.splitlines()) if n is not None]
+   372	+
+   373	+
+   374	+def _tension_candidates_into(arch, added_lines, repo_root):
+   375	+    """把候選寫進 arch:arch["tension_candidates"]=[{file, question, patterns, siblings, unreadable}];超過檔數上限加 arch["candidates_truncated"]=True。
+   376	+    只看 when(不看 when_raw:鄰居的字串字面比對沒意義);正規化同 _stack_norm_line——區塊註解內不以 * 開頭的裸行會被當程式碼,
+   377	+    這是既有適用性判定同一條天花板,兩邊對稱、偏差方向是少一個候選(r1 外家 F1/通才 G4,承認不修)。
+   378	+    候選的題必在 stack_questions_applicable:added_lines 跟 changed_lines 過同一道 _stack_changed_ok,增行 ⊂ 增刪行。"""
+   379	+    out = []
+   380	+    n_files = 0
+   381	+    truncated = False
+   382	+    for f, sibs in (arch.get("files") or {}).items():
+   383	+        lines = added_lines.get(f)
+   384	+        if not lines:
+   385	+            continue
+   386	+        sk = _stack_key_for_file(f, repo_root)
+   387	+        if not sk or sk not in _STACK_TRIGGERS:
+   388	+            continue
+   389	+        norm = [n for n in (_stack_norm_line(l) for l in lines) if n is not None]
+   390	+        if not norm:
+   391	+            continue
+   392	+        if n_files >= _TENSION_MAX_FILES:
+   393	+            truncated = True
+   394	+            break
+   395	+        n_files += 1
+   396	+        sib_norm = {s: _tension_read_norm(Path(repo_root) / s) for s in sibs}
+   397	+        readable = [s for s in sibs if sib_norm[s] is not None]
+   398	+        unreadable = [s for s in sibs if sib_norm[s] is None]
+   399	+        if not readable:
+   400	+            continue   # 只剩不可讀的對照檔:沒有東西可比,不出候選
+   401	+        for qid, pats, _raw in _STACK_TRIGGERS[sk]:
+   402	+            novel = []
+   403	+            for pat in pats:
+   404	+                if not any(pat.search(n) for n in norm):
+   405	+                    continue
+   406	+                if any(pat.search(n) for s in readable for n in sib_norm[s]):
+   407	+                    continue
+   408	+                if pat.pattern not in novel:
+   409	+                    novel.append(pat.pattern)
+   410	+            if novel:
+   411	+                out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+   412	+    if out:
+   413	+        arch["tension_candidates"] = out
+   414	+    if truncated:
+   415	+        arch["candidates_truncated"] = True
+   416	+
+   417	+
+   418	 def _stack_changed_ok(cur_file):
+   419	     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
+   420	     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
+   421	     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
+   422	     「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。"""
+   423	     ext = Path(cur_file).suffix
+   424	     return (ext not in _PITFALL_DIFF_SKIP_EXT
+   425	             and not cur_file.startswith("governance/review-reports/")
+   426	             and cur_file not in _BOOKKEEPING_FILES
+   427	             and not cur_file.startswith(_BOOKKEEPING_DIR)
+   428	@@ -16907,20 +16979,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   429	                            capture_output=True, text=True, cwd=str(repo_root))
+   430	     except FileNotFoundError:
+   431	         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
+   432	         return None
+   433	     if r.returncode != 0:
+   434	         print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
+   435	         return None
+   436	     added = {}
+   437	     claims = []
+   438	     changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
+   439	+    added_lines = {}     # {檔: [增行內容…]}——只給「可能撞」候選用(2026-09-09 兩席相反時端出張力:候選看的是新引入,刪行不算)
+   440	     cur_file, new_ln, _old_file = "", 0, ""
+   441	     for line in r.stdout.splitlines():
+   442	         if line.startswith("--- a/"):
+   443	             _old_file = line[6:]
+   444	             continue
+   445	         if line.startswith("+++ /dev/null"):
+   446	             # 整檔刪除(r1 外家 finder f2/否決 f1):沒有 b/ 名,原本 cur_file 留著前一檔的名字、刪行全歸錯檔或被跳過
+   447	             cur_file = _old_file
+   448	             continue
+   449	         if line.startswith("+++ b/"):
+   450	@@ -16938,20 +17011,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   451	             if cur_file and _stack_changed_ok(cur_file):
+   452	                 changed_lines.setdefault(cur_file, []).append(line[1:])
+   453	             continue
+   454	         if not line.startswith("+"):
+   455	             new_ln += 1                       # context 行推進
+   456	             continue
+   457	         # 這是新增行(+ 開頭)
+   458	         added.setdefault(cur_file, set()).add(new_ln)
+   459	         if cur_file and _stack_changed_ok(cur_file):
+   460	             changed_lines.setdefault(cur_file, []).append(line[1:])
+   461	+            added_lines.setdefault(cur_file, []).append(line[1:])   # 同一道 _stack_changed_ok 過濾:簿記檔/審計證物不產生候選(r1 通才 G5)
+   462	         code = line[1:]
+   463	         # 哪些檔要掃:跟棧別觸發同一支 _stack_changed_ok(r1 架構對齊席 f2:原本這裡內聯一份、那邊再抄一份)
+   464	         if (cur_file and _stack_changed_ok(cur_file)
+   465	                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
+   466	             code_nostr = _strip_string_literals(code)
+   467	             for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
+   468	                 if pat.search(code if in_strings else code_nostr):
+   469	                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
+   470	                                    "pattern": pat.pattern, "question": q})
+   471	                     break
+   472	@@ -16976,20 +17050,22 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+   473	         if sk:
+   474	             _by_stack.setdefault(sk, []).extend(lines_)
+   475	     stack_app, stack_meta = _stack_applicability(_by_stack, _sq_cfg["ask_all_over_lines"])
+   476	     for w in _sq_cfg["warnings"]:
+   477	         print(f"提醒:{w}", file=sys.stderr)
+   478	 
+   479	     # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
+   480	     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
+   481	     # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
+   482	     arch = _arch_alignment_hints(added, repo_root)
+   483	+    if arch:
+   484	+        _tension_candidates_into(arch, added_lines, repo_root)   # 可能撞:改動檔新增了對照檔都沒有的做法(只端候選,不判)
+   485	 
+   486	     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+   487	     config = None if no_lint else _lint_load_config(repo_root)
+   488	     if config is None:
+   489	         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+   490	         return {"claims": claims, "tier": "high" if claims else "standard",
+   491	                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
+   492	                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
+   493	 
+   494	     # 有 config: 補 source 到 regex claims
+   495	@@ -17053,20 +17129,28 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+   496	                 print(f"    - {q}")
+   497	         arch = data.get("arch_alignment") or {}
+   498	         if arch:
+   499	             print("  [架構對齊] 新寫法跟專案既有的一不一樣?拿同層最像的既有檔當對照,逐問:")
+   500	             for q in arch["questions"]:
+   501	                 print(f"    - {q}")
+   502	             for f, sibs in list(arch["files"].items())[:6]:
+   503	                 print(f"    {f} ← 對照 {', '.join(sibs)}")
+   504	             if arch.get("idiom_skills"):
+   505	                 print(f"    慣例 skill:{', '.join(arch['idiom_skills'])}(審查員派工時一併附上)")
+   506	+            _cands = arch.get("tension_candidates") or []
+   507	+            for c in _cands[:6]:   # 比照上面對照檔清單的 [:6](r1 通才 G7)
+   508	+                print(f"    可能撞:{c['file']} 新增的 {'/'.join(c['patterns'])} 在對照的 {len(c['siblings'])} 個檔裡都沒出現(這是 {c['question']} 那題的做法)"
+   509	+                      "——沿用既有或改用新做法都用 tension 表態,審查席會查兩邊")
+   510	+            if len(_cands) > 6:
+   511	+                print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
+   512	+            if arch.get("candidates_truncated"):
+   513	+                print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
+   514	         print(f"tier: {data['tier']}")
+   515	         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
+   516	         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
+   517	         # 當第二鏡頭」,但那是★純紀律層、沒有任何機械提醒★——2026-08-02 實測編排者自己
+   518	         # 就忘了跑,而事後補跑第一行就是後來被證實違反合約的那個節點。
+   519	         # ★為什麼只印字不真的跑 impact★:實測 pitfalls 0.18s / impact 4.7s,而本函式
+   520	         # ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98)——掛上去等於每次
+   521	         # push 慢 26 倍。提示零成本,真跑由人決定。
+   522	         # ★只在人可讀輸出印★:as_json 分支不動(pre-push 的 verdict 走 --json,不受影響;
+   523	         # 混進 JSON 會讓解析端壞掉)。
+   524	@@ -19632,20 +19716,22 @@ def _mainline_ref(repo_root):
+   525	 def _lens_dispositions_lines(lines, rec):
+   526	     """派工鏡頭附表態記錄(表態閘 S8):只列人答的題(未觸發自動 na 只給個數);工具驗過錨點存在、沒驗答案對不對——審查席反駁的就是這些答案。回人答題數。"""
+   527	     disp = rec.get("dispositions") or {}
+   528	     human = [(q, e) for q, e in disp.items() if isinstance(e, dict) and not e.get("auto")]
+   529	     n_auto = sum(1 for e in disp.values() if isinstance(e, dict) and e.get("auto"))
+   530	     lines.append(f"[表態記錄(棧別效能檢核;分支 {rec.get('branch')},版本 {str(rec.get('head_sha') or '')[:8]})——寫入時工具只驗了形狀,證據存不存在要到推送前 code-loop check 才驗,答案對不對沒人驗;審查時把這些答案當可反駁的宣稱]")
+   531	     for q, e in human:
+   532	         st = e.get("status")
+   533	         tail = (str(e.get("evidence") or "") if st == "satisfied"
+   534	                 else (str(e.get("issue") or "") + " " + str(e.get("reason") or "")) if st == "todo"
+   535	+                # tension 四欄都給審查席看——反駁的就是這四欄(2026-09-09 兩席相反時端出張力;「｜」分隔是編排者裁的,四欄需要分隔)
+   536	+                else (f"選 {e.get('chosen') or ''}｜既有 {', '.join(str(x) for x in (e.get('existing') or []))}｜隱患 {e.get('hazard') or ''}｜建議 {e.get('suggestion') or ''}") if st == "tension"
+   537	                 else str(e.get("reason") or ""))   # 全部 str(… or ""):治理帳重建來的紀錄不重驗形狀,缺欄不能炸(r1 正確性席 f3)
+   538	         lines.append(f"  {q} {st} — {str(tail)[:200]}")
+   539	     if n_auto:
+   540	         lines.append(f"  (另有 {n_auto} 題未觸發、工具自動記不適用)")
+   541	     return len(human)
+   542	 
+   543	 
+   544	 def _lens_cache_path(repo_root, base_sha, head_sha, extra=""):
+   545	     import hashlib
+   546	     # repo 部分用 realpath(跟 armed 檔的 _lens_repo_key 同一種算法;code-codex-s1 r1 架構席:兩套 key 並存)
+   547	@@ -21142,21 +21228,28 @@ def _gate_failopen(repo_root, gate, why):
+   548	     ★但代價正是「看不出哪一層沒生效」★——那正是這一批要修的病。
+   549	 
+   550	     hard=False:這是放行不是硬擋,但它必須看得見。
+   551	     """
+   552	     _gate_event_or_warn(repo_root, gate, "fail-open", why, hard=False)
+   553	 
+   554	 
+   555	 # ── 棧別提問表態閘:表態記錄的寫/讀/驗(Projects/棧別提問表態閘_計劃,2026-09-09)──────────────
+   556	 # 白話:diff 命中某棧的「適用題」,推送前每一題要有機器讀得懂的交代——satisfied(附證據)/na(理由)/todo(連 Issue+理由)。
+   557	 # 表態是獨立原語(派審查員之前就寫),跟 pass/skip 分開;check 用同一套留痕座標規則解析,錨點一律對被推送 commit 的 git 樹驗。
+   558	-_DISP_STATUSES = ("satisfied", "na", "todo")
+   559	+_DISP_STATUSES = ("satisfied", "na", "todo", "tension")
+   560	+# 第四種表態 tension(張力,2026-09-09 Projects/兩席相反時端出張力_計劃):架構對齊席與棧別檢核題立場相反時,
+   561	+# 不挑邊、把兩邊都端上來——既有寫法在哪(existing)、隱患(hazard)、建議(suggestion)、這次選了哪邊(chosen)。
+   562	+# 上限是 r1 三席一致抓到的:單題核對沒有中途檢查點,無上限的清單會拖垮推送前 20 秒預算。
+   563	+_DISP_CHOSEN = ("existing", "suggested")
+   564	+_DISP_EXISTING_MAX = 20     # existing 最多幾項(每項推送前要開 git 樹驗一次)
+   565	+_DISP_ITEM_MAX = 300        # existing 單項字數上限
+   566	+_DISP_TEXT_MAX = 2000       # hazard / suggestion 字數上限
+   567	 _DISP_STRIP_RE = re.compile(r"[\s\W_]")   # 空白+標點(Unicode \w 含 CJK 字,所以 CJK 會留下)
+   568	 # CJK 判定沿用檢索那套 _RANK_CJK_RE(單一真相;r3 架構對齊席 A4:檔案裡各寫各的 CJK range 是被抓過的錯)——
+   569	 # 只含漢字,假名/諺文走「總長 ≥25」那條。
+   570	 _DISP_BUDGET = 20.0   # 秒:表態核對的時間預算(同派工鏡頭 _LENS_SPEC_BUDGET 慣例),超過走 fail-open 進治理帳
+   571	 
+   572	 
+   573	 def _dispositions_reason_ok(text):
+   574	     """理由門檻(r2 邊界席 B10):去掉空白與標點後,CJK 字元 ≥10 個,或總字元 ≥25 個;標點不算 CJK,加句號繞不過。"""
+   575	     if not isinstance(text, str):
+   576	         return False
+   577	@@ -21203,21 +21296,21 @@ def _dispositions_validate(d, platforms=None, default_platform=None):
+   578	     if not isinstance(d, dict):
+   579	         return ["表態檔最外層要是物件 {題目id: {...}}"]
+   580	     for qid, ent in d.items():
+   581	         _stk, spec = _stack_spec_by_id(qid)
+   582	         if spec is None:
+   583	             errs.append(f"{qid}:不是題目表裡的 id"); continue
+   584	         if not isinstance(ent, dict):
+   585	             errs.append(f"{qid}:值要是物件"); continue
+   586	         st = ent.get("status")
+   587	         if st not in _DISP_STATUSES:
+   588	-            errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo)"); continue
+   589	+            errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo/tension)"); continue
+   590	         if not str(ent.get("question") or "").strip():
+   591	             errs.append(f"{qid}:question 空(樣板會帶原文,別刪)")
+   592	         if st == "satisfied":
+   593	             ev = str(ent.get("evidence") or "")
+   594	             if not ev:
+   595	                 errs.append(f"{qid}:satisfied 要附 evidence(path:line 或 test:<名>)")
+   596	             elif ev.startswith("test:"):
+   597	                 ok, why = _dispositions_split_test(ev, platforms or {}, default_platform)
+   598	                 if ok is None:
+   599	                     errs.append(f"{qid}:{why}")
+   600	@@ -21225,32 +21318,81 @@ def _dispositions_validate(d, platforms=None, default_platform=None):
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch | sed -n '601,900p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+   601	                 p, why = _dispositions_split_path_line(ev)
+   602	                 if p is None:
+   603	                     errs.append(f"{qid}:evidence {ev!r} 切不開——{why}")
+   604	         if st == "na" and not ent.get("auto") and not _dispositions_reason_ok(ent.get("reason")):
+   605	             errs.append(f"{qid}:na 的 reason 太短(去空白標點後 CJK ≥10 字或總長 ≥25 字)")
+   606	         if st == "todo":
+   607	             if not str(ent.get("issue") or "").startswith("Issues/"):
+   608	                 errs.append(f"{qid}:todo 要附 issue(Issues/<名>)")
+   609	             if not _dispositions_reason_ok(ent.get("reason")):
+   610	                 errs.append(f"{qid}:todo 的 reason 太短(同 na 門檻)")
+   611	+        if st == "tension":
+   612	+            errs.extend(f"{qid}:{e}" for e in _dispositions_tension_shape(ent, platforms, default_platform))
+   613	+    return errs
+   614	+
+   615	+
+   616	+def _dispositions_tension_shape(ent, platforms=None, default_platform=None, check_evidence=True):
+   617	+    """tension 表態的形狀(寫側與讀側共用同一份規則;讀側對治理帳重建來的紀錄不信形狀,所以再驗一次):
+   618	+    chosen 小寫二值;existing 1–20 項 path:line、每項 ≤300 字;hazard/suggestion 過 na 門檻且 ≤2000 字;
+   619	+    chosen=suggested 要附 evidence(規則同 satisfied:path:line 或 test:)。回 [錯誤句…],空=合法;只驗形狀,存在性由讀側對 git 樹驗。"""
+   620	+    errs = []
+   621	+    ch = ent.get("chosen")
+   622	+    if ch not in _DISP_CHOSEN:
+   623	+        errs.append(f"tension 的 chosen={ch!r} 不合法(只認小寫 existing/suggested:這次改動沿用既有寫法還是改用建議)")
+   624	+    ex = ent.get("existing")
+   625	+    if not isinstance(ex, list) or not ex:
+   626	+        errs.append(f"tension 要附 existing(既有寫法的 path:line 清單,1–{_DISP_EXISTING_MAX} 項;空的等於沒指出既有寫法在哪)")
+   627	+    else:
+   628	+        if len(ex) > _DISP_EXISTING_MAX:
+   629	+            errs.append(f"existing 有 {len(ex)} 項,上限 {_DISP_EXISTING_MAX}(推送前每項都要開 git 樹驗)")
+   630	+        for i, item in enumerate(ex[:_DISP_EXISTING_MAX], 1):
+   631	+            s = str(item)
+   632	+            if len(s) > _DISP_ITEM_MAX:
+   633	+                errs.append(f"existing 第 {i} 項超過 {_DISP_ITEM_MAX} 字")
+   634	+                continue
+   635	+            p, why = _dispositions_split_path_line(s)
+   636	+            if p is None:
+   637	+                errs.append(f"existing 第 {i} 項 {s!r} 切不開——{why}")
+   638	+    for fld in ("hazard", "suggestion"):
+   639	+        txt = ent.get(fld)
+   640	+        if not _dispositions_reason_ok(txt):
+   641	+            errs.append(f"tension 的 {fld} 缺或太短(去空白標點後 CJK ≥10 字或總長 ≥25 字)")
+   642	+        elif len(str(txt)) > _DISP_TEXT_MAX:
+   643	+            errs.append(f"tension 的 {fld} 超過 {_DISP_TEXT_MAX} 字")
+   644	+    if ch == "suggested":
+   645	+        ev = str(ent.get("evidence") or "")
+   646	+        if not ev:
+   647	+            errs.append("chosen=suggested 要附 evidence(這次改動裡採新做法的那一行 path:line,或 test:<名>)")
+   648	+        elif not check_evidence:
+   649	+            pass   # 讀側:evidence 的切分與存在性交給跟 satisfied 同一條 _ev(有平台索引),這裡只驗有沒有附
+   650	+        elif ev.startswith("test:"):
+   651	+            ok, why = _dispositions_split_test(ev, platforms or {}, default_platform)
+   652	+            if ok is None:
+   653	+                errs.append(why)
+   654	+        else:
+   655	+            p, why = _dispositions_split_path_line(ev)
+   656	+            if p is None:
+   657	+                errs.append(f"evidence {ev!r} 切不開——{why}")
+   658	     return errs
+   659	 
+   660	 
+   661	 def _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, dispositions):
+   662	     """★先寫治理帳★(CI 唯一路徑;r2 外家 F2:寫不進去要讓呼叫端知道)。回 (ok, 原因)。"""
+   663	     import json
+   664	     docs = Path(repo_root) / "docs"
+   665	     if not docs.is_dir():
+   666	         return False, "這個專案沒有 docs/,表態進不了治理帳、CI 端讀不到(跟 pass 留痕同一個限制)"
+   667	     import datetime as _dt
+   668	     ev = {"ts": ts, "commit": head_sha[:7], "gate": "code-loop", "kind": "dispositions", "hard": False, "nodes": [],
+   669	           "detail": f"表態 {len(dispositions)} 題", "branch": branch, "head_sha": head_sha, "dispositions": dispositions,
+   670	+          # 候選張力的持久分母(2026-09-09 r1 接手席 H3):pitfalls 不留帳,樣板帶的 hint 隨表態存進來,這裡數一次帶 hint 的題
+   671	+          "candidates": sum(1 for v in dispositions.values() if isinstance(v, dict) and v.get("hint") and not v.get("auto")),
+   672	           # ts 是 HEAD 的 commit 時間(同 pass 留痕慣例),同一顆 sha 重表態兩筆 ts 一樣;written_at 才是事件時間,gov 去重拿它當鑑別子
+   673	           "written_at": _dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
+   674	     try:
+   675	         with open(docs / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+   676	             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+   677	     except OSError as e:
+   678	         return False, f"治理帳寫不進去({e})"
+   679	     return True, ""
+   680	 
+   681	 
+   682	@@ -21430,21 +21572,21 @@ def _dispositions_check_issue(repo_root, at_sha, issue):
+   683	 
+   684	 
+   685	 def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None):
+   686	     """表態閘判定(S5):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。回 dict{blocked, gate, applicable, checked, problems[]}。
+   687	     超過 deadline 時停下來、回 blocked=False 並標 over_budget(呼叫端走 fail-open 進治理帳)。"""
+   688	     import time as _time
+   689	     cfg = _stack_questions_config(repo_root)
+   690	     app = pf_data.get("stack_questions_applicable") or {}
+   691	     meta = pf_data.get("stack_questions_meta") or {}
+   692	     out = {"blocked": False, "gate_mode": cfg["mode"], "applicable": sum(len(v) for v in app.values()),
+   693	-           "checked": 0, "problems": [], "warnings": list(cfg["warnings"])}
+   694	+           "checked": 0, "problems": [], "warnings": list(cfg["warnings"]), "tensions": []}
+   695	     if not app or cfg["mode"] == "off" or (cfg["mode"] == "high-only" and tier != "high"):
+   696	         return out
+   697	     rec = _codeloop_read_dispositions(repo_root, marker_branch)
+   698	     if rec is None:
+   699	         out["problems"].append(f"分支 {marker_branch!r} 還沒有表態記錄(推 HEAD:別名 時表態要帶 --branch {marker_branch},查的是遠端目的分支;checkout 不在被推的版本時再帶 --at-sha {marker_sha[:12]})")
+   700	         out["blocked"] = True
+   701	         return out
+   702	     ok, why = _codeloop_record_valid(repo_root, str(rec.get("head_sha") or ""), marker_sha)
+   703	     if not ok:
+   704	         out["problems"].append(f"表態記錄過期:{why}——改了碼要重表態(樣板加 --carry 帶舊答案)")
+   705	@@ -21463,34 +21605,57 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+   706	 
+   707	     def _one(qid, ent):
+   708	         """核對一題,回 None(過)或一句問題。★任何例外都由呼叫端接成「無法驗證」而不是整份 fail-open★
+   709	         (r1 正確性席 f1/邊界席 f1:壞 platforms 設定或 10-5 這種行號曾讓整份表態核對被吞成放行)。"""
+   710	         nonlocal pidx
+   711	         if ent is None:
+   712	             return f"{qid} 缺表態"
+   713	         if ent.get("auto"):
+   714	             return f"{qid} 工具判它適用,但表態是自動填的 na——要人答"
+   715	         st = ent.get("status")
+   716	-        if st == "satisfied":
+   717	-            ev = str(ent.get("evidence") or "")
+   718	+
+   719	+        def _ev(ev):
+   720	+            """satisfied 與 tension(chosen=suggested)的 evidence 同一條驗法:test: 走測試索引+樹 grep,其餘 path:line 對樹驗存在。"""
+   721	+            nonlocal pidx
+   722	             if ev.startswith("test:"):
+   723	                 if cfg_broken:
+   724	-                    return f"{qid} 無法驗證 test: 證據:.lumos/config.json 解析失敗(先修設定檔)"
+   725	+                    return False, "無法驗證 test: 證據:.lumos/config.json 解析失敗(先修設定檔)"
+   726	                 if pidx is None:
+   727	                     try:
+   728	                         pidx = _platform_test_index(Path(repo_root))
+   729	                     except Exception as e:
+   730	-                        return f"{qid} 無法驗證 test: 證據:.lumos/config.json 的 platforms 不合法({str(e)[:80]})——先修設定檔"
+   731	-                ok2, why2 = _dispositions_check_test(repo_root, at_sha, ev, pidx)
+   732	-            else:
+   733	-                ok2, why2 = _dispositions_check_path_line(repo_root, at_sha, ev)
+   734	+                        return False, f"無法驗證 test: 證據:.lumos/config.json 的 platforms 不合法({str(e)[:80]})——先修設定檔"
+   735	+                return _dispositions_check_test(repo_root, at_sha, ev, pidx)
+   736	+            return _dispositions_check_path_line(repo_root, at_sha, ev)
+   737	+
+   738	+        if st == "satisfied":
+   739	+            ok2, why2 = _ev(str(ent.get("evidence") or ""))
+   740	             return None if ok2 else f"{qid} 證據對不上:{why2}"
+   741	+        if st == "tension":
+   742	+            # 形狀再驗一次(治理帳重建來的紀錄不信形狀;缺欄 → 該題無法驗證,不炸整份),再對樹驗每個 existing
+   743	+            shape = _dispositions_tension_shape(ent, check_evidence=False)
+   744	+            if shape:
+   745	+                return f"{qid} tension 形狀不對:{shape[0]}"
+   746	+            paths = []
+   747	+            for item in ent["existing"]:
+   748	+                s = str(item)
+   749	+                ok2, why2 = _dispositions_check_path_line(repo_root, at_sha, s)
+   750	+                if not ok2:
+   751	+                    return f"{qid} tension 的 existing 對不上:{why2}"
+   752	+                paths.append(s.replace("\\", "/").rsplit(":", 1)[0])
+   753	+            if ent.get("chosen") == "suggested":
+   754	+                ok2, why2 = _ev(str(ent.get("evidence") or ""))
+   755	+                if not ok2:
+   756	+                    return f"{qid} tension 的 evidence 對不上:{why2}"
+   757	+            out["tensions"].append({"id": qid, "chosen": ent.get("chosen"), "existing": [str(x) for x in ent["existing"]],
+   758	+                                    "files": len(set(paths)), "hazard": str(ent.get("hazard") or ""), "suggestion": str(ent.get("suggestion") or "")})
+   759	+            return None
+   760	         if st == "todo":
+   761	             ok2, why2 = _dispositions_check_issue(repo_root, at_sha, str(ent.get("issue") or ""))
+   762	             return None if ok2 else f"{qid} 待辦對不上:{why2}"
+   763	         if st == "na":
+   764	             return None if _dispositions_reason_ok(ent.get("reason")) else f"{qid} na 的理由太短"
+   765	         return f"{qid} status {st!r} 不合法"
+   766	 
+   767	     for _stk, rows in meta.items():
+   768	         for row in rows:
+   769	             if not row.get("applicable"):
+   770	@@ -21518,29 +21683,39 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+   771	 
+   772	 
+   773	 def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
+   774	     """S1:適用題 status 留空、未觸發題自動 na(auto:true+觸發清單);--carry 從該分支最後一筆表態帶「id 相同且仍適用」的舊答案。"""
+   775	     meta = pf_data.get("stack_questions_meta") or {}
+   776	     tpl = {}
+   777	     old = {}
+   778	     if carry and branch:
+   779	         rec = _codeloop_read_dispositions(repo_root, branch)
+   780	         old = (rec or {}).get("dispositions") or {}
+   781	+    # 可能撞的候選(pitfalls 算的,按題目 id 收):有候選的適用題帶一句 hint,提醒人這題可以用 tension 表態
+   782	+    cands = {}
+   783	+    for c in ((pf_data.get("arch_alignment") or {}).get("tension_candidates") or []):
+   784	+        cands.setdefault(c.get("question"), []).append(c)
+   785	     for _stk, rows in meta.items():
+   786	         for row in rows:
+   787	             qid = row["id"]
+   788	             if row.get("applicable"):
+   789	                 prev = old.get(qid)
+   790	                 if carry and isinstance(prev, dict) and not prev.get("auto") and prev.get("status") in _DISP_STATUSES:
+   791	                     ent = dict(prev); ent["question"] = row["question"]; ent["carried"] = True
+   792	+                    ent.pop("hint", None)   # 舊 hint 是上一輪的候選,不跟著答案走(r1 通才 G6:dict(prev) 整包淺拷貝會帶過來)
+   793	                 else:
+   794	                     ent = {"status": "", "question": row["question"], "evidence": "", "reason": "", "issue": ""}
+   795	+                    if qid in cands:
+   796	+                        c = cands[qid][0]
+   797	+                        more = f"(另有 {len(cands[qid]) - 1} 個改動檔也命中這題)" if len(cands[qid]) > 1 else ""
+   798	+                        ent["hint"] = (f"候選張力:{c.get('file')} 新增 {'/'.join(c.get('patterns') or [])},對照檔 {', '.join(c.get('siblings') or [])} 都沒有"
+   799	+                                       f"——刻意沿用既有寫法或刻意改用新做法,status 填 tension{more}")
+   800	             else:
+   801	                 ent = {"status": "na", "question": row["question"], "auto": True,
+   802	                        "reason": "未觸發:" + ", ".join(spec_w for spec_w in (s["when"] for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
+   803	             tpl[qid] = ent
+   804	     return tpl
+   805	 
+   806	 
+   807	 def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False):
+   808	     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
+   809	     AND 無有效 pass/skip 留痕 → blocked=True。
+   810	@@ -21769,21 +21944,22 @@ def _cmd_codeloop_dispositions(repo_root, branch, head_sha, ts, disp_file):
+   811	     except Exception as e:   # r1 正確性席 f2:合法 JSON 但 platforms 語意壞(如兩個平台沒 default_platform)以前直接 traceback
+   812	         print(f"擋下:.lumos/config.json 的 platforms 區塊不合法({str(e)[:120]})——先修設定檔,表態沒寫", file=sys.stderr)
+   813	         return 2
+   814	     errs = _dispositions_validate(data, pdata["platforms"] if pdata["multiplatform"] else {}, pdata["default_platform"])
+   815	     if errs:
+   816	         print(f"擋下:表態檔有 {len(errs)} 處形狀不對,一個都沒寫:", file=sys.stderr)
+   817	         for e in errs[:10]:
+   818	             print(f"  - {e}", file=sys.stderr)
+   819	         if len(errs) > 10:
+   820	             print(f"  …另有 {len(errs) - 10} 處", file=sys.stderr)
+   821	-        print("  規則:status 只認小寫 satisfied/na/todo;satisfied 附 evidence(path:line 或 test:<名>);na/todo 附理由(去空白標點後 CJK ≥10 字或總長 ≥25 字);todo 附 issue(Issues/<名>)", file=sys.stderr)
+   822	+        print("  規則:status 只認小寫 satisfied/na/todo/tension;satisfied 附 evidence(path:line 或 test:<名>);na/todo 附理由(去空白標點後 CJK ≥10 字或總長 ≥25 字);todo 附 issue(Issues/<名>);"
+   823	+              f"tension 附 chosen(existing|suggested)、existing(既有寫法 path:line 清單,1–{_DISP_EXISTING_MAX} 項)、hazard、suggestion(同理由門檻,各 ≤{_DISP_TEXT_MAX} 字),選 suggested 再附 evidence", file=sys.stderr)
+   824	         return 2
+   825	     ok, why = _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, data)
+   826	     if not ok:
+   827	         print(f"擋下:{why}——表態沒寫(治理帳是 CI 唯一讀得到的地方,寫不進去等於沒表態)", file=sys.stderr)
+   828	         return 2
+   829	     n_auto = sum(1 for v in data.values() if isinstance(v, dict) and v.get("auto"))
+   830	     print(f"✅ code-loop dispositions:{len(data)} 題表態記下來了(人答 {len(data) - n_auto}、未觸發自動 na {n_auto};分支 {branch},版本 {head_sha[:8]})")
+   831	     try:
+   832	         mp = _codeloop_write_dispositions(repo_root, branch, head_sha, ts, data)
+   833	     except OSError as e:   # r1 併發席 f5:治理帳已寫成(那才是 CI 讀的真相),本機 marker 只是快取——寫不成講一句,不當失敗
+   834	@@ -21915,20 +22091,35 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+   835	                 print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
+   836	             elif blocked:
+   837	                 print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
+   838	                       file=sys.stderr)
+   839	             else:
+   840	                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
+   841	                 if dv and dv.get("applicable"):
+   842	                     print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
+   843	             for _w in ((dv or {}).get("warnings") or []):
+   844	                 print(f"  提醒:{_w}")
+   845	+            # 張力(2026-09-09 Projects/兩席相反時端出張力_計劃):合法的 tension 不擋,但要讓人看見——OK 與 BLOCKED 都印,走 stderr(提醒慣例)
+   846	+            _tens = (dv or {}).get("tensions") or []
+   847	+            if _tens:
+   848	+                print(f"⚠ 張力 {len(_tens)} 則(兩個審查角度相反——沿用既有寫法還是改用建議做法——工具只端上來、不裁):", file=sys.stderr)
+   849	+                for _t in _tens:
+   850	+                    _seen, _first = set(), []
+   851	+                    for _x in _t.get("existing") or []:
+   852	+                        _p = str(_x).replace("\\", "/").rsplit(":", 1)[0]
+   853	+                        if _p not in _seen:
+   854	+                            _seen.add(_p); _first.append(str(_x))
+   855	+                    _side = "沿用既有" if _t.get("chosen") == "existing" else "改用建議"
+   856	+                    print(f"  {_t['id']} 選了{_side}:既有寫法在 {', '.join(_first[:3])}(共 {_t.get('files', 0)} 檔)", file=sys.stderr)
+   857	+                    print(f"    隱患:{_t.get('hazard', '')}", file=sys.stderr)
+   858	+                    print(f"    建議:{_t.get('suggestion', '')}", file=sys.stderr)
+   859	+                print("  在意的原因:兩邊都留下來才看得見矛盾;誰讓誰由人定,這裡不擋。", file=sys.stderr)
+   860	             if bt is not None:
+   861	                 _st = bt.get("status")
+   862	                 if _st in ("green", "red"):
+   863	                     print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
+   864	                     if _st == "red" and not blocked:
+   865	                         print("  (低風險推送的合約測試只提醒不擋——2026-09-07 人裁;紅的還是去修)", file=sys.stderr)
+   866	                     elif _st == "red" and verdict.get("reason_kind") == "dispositions":
+   867	                         print("  (合約測試也紅了——低風險只提醒不擋;這次擋的是表態,先補表態,紅的測試還是去修)", file=sys.stderr)
+   868	                     elif _st == "red":
+   869	                         print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
+   870	diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+   871	index d16cc87..0c57439 100644
+   872	--- a/scripts/test_lumos.py
+   873	+++ b/scripts/test_lumos.py
+   874	@@ -33536,12 +33536,302 @@ def t_usage_scan_smoke():
+   875	         out = m.report(r, 14, 350, 5)
+   876	         check("報告帶白話段標與門檻數字", "≥350 行大檔" in out and "2,000 字元 / 1 次" in out, out[-600:])
+   877	         rc = _sp.run([sys.executable, str(repo / "scripts" / "usage_scan.py"), "--project-dir", str(root / "nope")],
+   878	                      capture_output=True, text=True)
+   879	         check("④目錄不存在 rc2、訊息給 --project-dir 指引、無 traceback",
+   880	               rc.returncode == 2 and "--project-dir" in rc.stderr and "Traceback" not in rc.stderr, rc.stderr[-300:])
+   881	     finally:
+   882	         shutil.rmtree(root, ignore_errors=True)
+   883	 
+   884	 
+   885	+# ═══ 兩席相反時端出張力(2026-09-09,Projects/兩席相反時端出張力_計劃):第四種表態 tension + pitfalls 候選 + 文件守衛 ═══
+   886	+
+   887	+
+   888	+def _tension_good(q="x", chosen="existing", **over):
+   889	+    ent = {"status": "tension", "question": q, "chosen": chosen, "existing": ["app/Screen.kt:3"],
+   890	+           "hazard": "循序等待會把兩個互不依賴的網路請求串成兩倍延遲", "suggestion": "改用 coroutineScope 加 async 讓兩個請求並行"}
+   891	+    ent.update(over)
+   892	+    return {k: v for k, v in ent.items() if v is not None}
+   893	+
+   894	+
+   895	+def t_dispositions_tension_validate():
+   896	+    """[張力 S1]寫側:tension 缺欄/大小寫/上限/切不開 → rc2 講哪一欄;合法 → 事件與 marker 都寫、hint 原樣存、candidates 計數;
+   897	+    --carry 帶答案不帶 hint;suggested 的 evidence 同 satisfied 認 test:。翻紅釘:把 _dispositions_validate 的 tension 分支拔掉 → ①翻紅。"""
+   898	+    import json as _j
+   899	+    with tempfile.TemporaryDirectory() as d:
+   900	+        _disp_repo(d)
+
+[1m[31mERROR:[0m[0m You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 8:02 PM.
+[1m[31mERROR:[0m[0m You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 8:02 PM.
+[2mtokens used[0m
+91,314
