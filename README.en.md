@@ -102,6 +102,10 @@ Important rules can be marked as contracts and bound to tests. That makes a “m
 
 **Station ②: equip reviewers without removing independent judgement.**
 
+<p align="center">
+  <img src="assets/dispatch-overview-en.svg" alt="One brief branches into independent reviewers, whose findings are collected and addressed" width="900">
+</p>
+
 Dispatch packages the change, related notes, and important rules for reviewers with different perspectives. Seats cannot see one another's reports, reducing the opportunity to copy conclusions. Agreement still does not guarantee correctness.
 
 At intake, citations are checked and findings are recorded as adopted, rejected, or awaiting action. The point is not simply to ask more AIs: each finding needs a basis and a disposition.
@@ -111,6 +115,10 @@ At intake, citations are checked and findings are recorded as adopted, rejected,
 ## Review
 
 **Station ③: check architecture, known problems, and actual behaviour separately.**
+
+<p align="center">
+  <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and reviewers, and tests" width="900">
+</p>
 
 Review covers more than bugs. An architecture seat compares the change with existing code at the same layer, looking for a second competing approach or calls that bypass established boundaries—not merely differences in personal style.
 
