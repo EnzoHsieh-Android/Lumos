@@ -28,7 +28,11 @@ That isn't anyone's memory failing. **Code, as a medium, simply cannot hold thos
 
 Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them.
 
-**What Lumos does is simple: it writes those five things into a set of interlinked Markdown notes that live in the same project as the code, then uses git checks — small programs that run when you commit or push — to close off the "changed the code, didn't touch the notes" path.** Not writing has to be more annoying than writing; otherwise nobody writes.
+**Lumos is an engineering-governance toolkit for AI-driven development.**
+
+It writes those five things into a set of Markdown notes living alongside the code, **but the notes are only one piece**. The whole rulebook hangs on them: **before an edit**, the relevant context is pushed in front of the AI; **at commit and push**, "changed the code, didn't touch the notes" is stopped; **before a push**, reviewers are dispatched to argue every finding; **load-bearing rules** are bound to tests that actually run.
+
+In one line: **every change the AI makes is "read first, write, write back when done, get reviewed before pushing".** You don't write anything extra — **the "blocks" are switches that trigger the AI to follow the rules.**
 
 > **The easiest thing to misread: the one being blocked isn't you — it's the AI.**
 > It writes the code and the notes. It hits this check when it commits, reads the message, goes back and writes the note, and commits again — **those messages are written for it to read.**
