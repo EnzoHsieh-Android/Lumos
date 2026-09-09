@@ -19,6 +19,8 @@ summary: |-
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/design-loop]]
   TEST:t_pitfalls_diff_arch_alignment_hints(對照組選法/排除測試檔/慣例 skill/人讀三問);roster 測試含此席
+related:
+  - "[[Issues/架構對齊席與棧別檢核題可能相反]]"
 ---
 # arch-alignment-lens
 
