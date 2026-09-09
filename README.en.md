@@ -217,6 +217,16 @@ The one worth reading: **the useful part of the brief isn't "which notes are rel
 
 ## Code review here has three layers
 
+**First, the worry everyone actually has: will the AI write junk, or wreck the architecture I already have?**
+
+Every review round carries one seat that looks at nothing else. **It doesn't hunt bugs and it doesn't judge taste — it decides one thing: is this written the way this project already writes things?** And its yardstick **isn't industry best practice — it's the three most similar existing files in the same folder**, pulled automatically. Those files *are* "how this project does it".
+
+**Only two things count as severe: introducing a second way of doing something, or calling across a layer.** The reason is blunt: **everyone who touches it later has to guess between two conventions.** Inconsistent naming is minor; pure taste isn't reported at all.
+
+> Put the other way round: **"the better way" is not automatically the right way here.** A prettier approach that matches nothing else in the project is a maintenance debt.
+
+The three layers below look at the code itself:
+
 Before code goes up, three different things look at it. **They catch three different classes of problem — drop one and nobody catches that class.**
 
 <p align="center">
