@@ -12,41 +12,11 @@
 > That module you had an AI write three months ago? You need to change it today.
 > You don't remember why it was built that way. The AI can't reach it either — open a new session and everything you said last time is gone.
 
-<p align="center">
-  <img src="assets/hook-en.svg" alt="Left: three months ago the conversation compared three approaches, rejected two with reasons, agreed one unbreakable rule, and ran the tests. Right: three months later only the code remains and the trade-offs have evaporated" width="900">
-</p>
-
-In that conversation, everything was there: the approaches you compared, why you rejected the others, the one rule you agreed must never break. **When it shipped, only the code survived.**
-
-That isn't anyone's memory failing. **Code, as a medium, simply cannot hold those things.** Open a file and it tells you exactly one thing — what it looks like right now. On these five, it has nothing to say:
-
-- **Why** this approach — what was compared, what was rejected.
-- **Where this part ends**, and who gets hit if you change it.
-- Which behaviours are **promises nobody may break**, and which just happen to be that way and are safe to refactor.
-- Whether this was **ever verified**, and under what assumptions.
-- Whether you can **take it back** if you get it wrong.
-
-Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them.
-
 **Lumos is an engineering-governance toolkit for AI-driven development.**
 
-It writes those five things into a set of Markdown notes living alongside the code, **but the notes are only one piece**. The whole rulebook hangs on them: **before an edit**, the relevant context is pushed in front of the AI; **at commit and push**, "changed the code, didn't touch the notes" is stopped; **before a push**, reviewers are dispatched to argue every finding; **load-bearing rules** are bound to tests that actually run.
+It writes the context that code can't hold into a set of Markdown notes living alongside the code, **but the notes are only one piece**. The whole rulebook hangs on them: **before an edit**, the relevant context is pushed in front of the AI; **at commit and push**, "changed the code, didn't touch the notes" is stopped; **before a push**, reviewers are dispatched to argue every finding; **load-bearing rules** are bound to tests that actually run.
 
 In one line: **every change the AI makes is "read first, write, write back when done, get reviewed before pushing".** You don't write anything extra — **the "blocks" are switches that trigger the AI to follow the rules.**
-
-> **The easiest thing to misread: the one being blocked isn't you — it's the AI.**
-> It writes the code and the notes. It hits this check when it commits, reads the message, goes back and writes the note, and commits again — **those messages are written for it to read.**
-> So "blocking" isn't friction; it's a **control signal**: **the rule is there for the AI to hit.** Hitting it makes it comply, with nobody in the loop. What you do is the requirements and the judgement calls.
-
-**What it grows into** — an online store, where a plan comes first, then the module, then a record of what was done:
-
-<p align="center">
-  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
-</p>
-
-Two details: **the gold ring (a rule that must not change) only grows once a verification record links to it** — claiming isn't enough; and **the orange line runs backwards** — an incident gets pulled into the next plan as required reading.
-
-**You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files.
 
 **How it turns** — one change goes round four stations, and the outer ring of evals takes what each round leaves behind and calibrates. **Each section below is one station on this map.**
 
@@ -155,6 +125,10 @@ Pick one:
 
 **That block is the whole product.** Everything else exists to make it not annoying.
 
+> **The easiest thing to misread: the one being blocked isn't you — it's the AI.**
+> It writes the code and the notes. It hits this check when it commits, reads the message, goes back and writes the note, and commits again — **those messages are written for it to read.**
+> So "blocking" isn't friction; it's a **control signal**: **the rule is there for the AI to hit.** Hitting it makes it comply, with nobody in the loop. What you do is the requirements and the judgement calls.
+
 **Two questions this always gets, in one line each:** (1) "So I write the code *and* the notes?" — **the AI writes both, and the AI is what gets blocked**; that message is printed for it. (2) "It blocks me for one button?" — the commit gate **always stops you once** (the AI decides: write the note, or add the flag, no justification), but **the pre-push code review is risk-tiered and a small change doesn't trigger it at all**.
 The detail, and the actual skip rate, are in [the mental model](docs/mental-model.md).
 
@@ -162,7 +136,35 @@ The detail, and the actual skip rate, are in [the mental model](docs/mental-mode
 
 ## Notes
 
-**Station ① on the map: what's in a note.**
+**Station ① on the map. First, why these notes exist at all.**
+
+<p align="center">
+  <img src="assets/hook-en.svg" alt="Left: three months ago the conversation compared three approaches, rejected two with reasons, agreed one unbreakable rule, and ran the tests. Right: three months later only the code remains and the trade-offs have evaporated" width="900">
+</p>
+
+In that conversation, everything was there: the approaches you compared, why you rejected the others, the one rule you agreed must never break. **When it shipped, only the code survived.**
+
+That isn't anyone's memory failing. **Code, as a medium, simply cannot hold those things.** Open a file and it tells you exactly one thing — what it looks like right now. On these five, it has nothing to say:
+
+- **Why** this approach — what was compared, what was rejected.
+- **Where this part ends**, and who gets hit if you change it.
+- Which behaviours are **promises nobody may break**, and which just happen to be that way and are safe to refactor.
+- Whether this was **ever verified**, and under what assumptions.
+- Whether you can **take it back** if you get it wrong.
+
+Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them.
+
+**What it grows into** — an online store, where a plan comes first, then the module, then a record of what was done:
+
+<p align="center">
+  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
+</p>
+
+Two details: **the gold ring (a rule that must not change) only grows once a verification record links to it** — claiming isn't enough; and **the orange line runs backwards** — an incident gets pulled into the next plan as required reading.
+
+**You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files.
+
+**What's in a note.**
 
 <p align="center">
   <img src="assets/note-anatomy-en.svg" alt="The anatomy of a note: machine-read fields, summary lines, contracts with their evidence, and below the divider the part for people" width="900">
