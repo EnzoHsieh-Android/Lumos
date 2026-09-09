@@ -24,6 +24,10 @@
   <img src="assets/map-zh.svg" alt="整張地圖:圖譜→派工→審查→寫回四站一圈,最外圈 evals 每輪留帳、校準回下一輪" width="900">
 </p>
 
+<p align="center">
+  <img src="assets/first-change-zh.svg" alt="一次改動：你只說加入退款功能；AI 讀取付款規則、實作並測試；決策與驗證寫回筆記，下一個 session 也讀得到" width="900">
+</p>
+
 ---
 
 **先了解** &nbsp;&nbsp;[適合誰 / 不適合誰](#適合誰--不適合誰) · [為什麼是自然語言開發](#為什麼是自然語言開發)<br>
@@ -99,7 +103,7 @@ lumos enforcement
 
 ## 你的第一次
 
-裝完之後，開一個 Claude Code 或 Codex 的對話，像平常一樣講話就好：
+裝完之後，開一個 Claude Code 或 Codex 的對話，像平常一樣講話就好。開頭那張三段圖是它最短的全貌；下面則是 AI 在背後實際查什麼、做什麼：
 
 <p align="center">
   <img src="assets/usage-zh.svg" alt="左邊是你用人話講的三句,右邊是它自己敲的指令與讀到的東西" width="900">

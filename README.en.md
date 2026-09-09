@@ -24,6 +24,10 @@ In one line: **every change the AI makes is "read first, write, write back when 
   <img src="assets/map-en.svg" alt="The whole map: notes → dispatch → review → write-back in a loop, with an outer evals ring that records every round and calibrates the next" width="900">
 </p>
 
+<p align="center">
+  <img src="assets/first-change-en.svg" alt="One change: you ask for refunds; the AI reads payment rules, implements and tests the change; the decision and verification are written back for the next session" width="900">
+</p>
+
 ---
 
 **Understand it** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
@@ -99,7 +103,7 @@ It lists each layer of protection and whether it's **wired up** — note that it
 
 ## Your first time through
 
-**You won't have to memorise a single command.** Open a Claude Code or Codex conversation and talk the way you normally would:
+**You won't have to memorise a single command.** Open a Claude Code or Codex conversation and talk the way you normally would. The three-panel diagram at the top is the short version; below is what the AI actually looks up and does behind the scenes:
 
 <p align="center">
   <img src="assets/usage-en.svg" alt="Left: three things you say in plain language. Right: what it runs on its own." width="900">
