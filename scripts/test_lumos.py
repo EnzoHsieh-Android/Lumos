@@ -32968,6 +32968,23 @@ def t_stack_question_triggers():
         _got1 = {r["id"] for r in _m1[_stk] if r["applicable"]}
         _got2 = {r["id"] for r in _m2[_stk] if r["applicable"]}
         check(f"③{_stk}:命中樣本觸發 {_qid}、不命中樣本零觸發", _qid in _got1 and not _got2, f"hit={_got1} miss={_got2}")
+    # 反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能要亮同一題,不能不亮):各棧舊法樣本亮的是「同一題」,乾淨舊法樣本零觸發
+    _legacy = {
+        "kt": [("kt-coroutines", "Thread { Thread.sleep(500) }.start()"), ("kt-compose", "val v = findViewById<TextView>(R.id.t)"), (None, "val n = list.size")],
+        "cs": [("cs-async", "Thread.Sleep(1000);"), ("cs-data", 'using var cmd = new SqlCommand("SELECT * FROM t", conn);'), ("cs-connection", "conn.Open();"), (None, "var x = 1;")],
+        "vue": [("vue-parallel", "this.$http.get('/api/list')"), ("vue-reactive", "data() { return { list: [] } }"), (None, "const a = 1")],
+        "sql": [("sql-nplus1", "DECLARE c CURSOR FOR SELECT id FROM t"), ("sql-sargable", "WHERE YEAR(created_at) = 2026"), (None, "INSERT INTO t VALUES (1)")],
+        "swift": [("swift-main", "DispatchQueue.global().async { load() }"), ("swift-swiftui", "func tableView(_ t: UITableView, cellForRowAt i: IndexPath) -> UITableViewCell {"), (None, "let n = 3")],
+        "node": [("node-eventloop", "const cp = require('child_process')"), ("node-data", 'db.query("SELECT * FROM t", cb)'), (None, "const r = items.map(f)")],
+    }
+    for _stk, rows_ in _legacy.items():
+        for _qid, _line in rows_:
+            _a, _m = m._stack_applicability({_stk: [_line]}, 300)
+            _got = {r["id"] for r in _m[_stk] if r["applicable"]}
+            if _qid is None:
+                check(f"③{_stk} 乾淨舊法樣本零觸發:{_line[:30]}", not _got, str(_got))
+            else:
+                check(f"③{_stk} 舊法樣本亮同一題 {_qid}:{_line[:30]}", _qid in _got, str(_got))
     app3, meta3 = m._stack_applicability({"kt": ["x"] * 301}, 300)
     check("④超過門檻全表適用且 triggered_by 註明", len(app3["kt"]) == 7 and meta3["kt"][0]["triggered_by"] == ["行數>300"], str(meta3["kt"][0]))
     with tempfile.TemporaryDirectory() as d:
