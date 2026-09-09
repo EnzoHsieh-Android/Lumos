@@ -38,7 +38,7 @@ In one line: **every change the AI makes is "read first, write, write back when 
 > It writes the code and the notes. It hits this check when it commits, reads the message, goes back and writes the note, and commits again — **those messages are written for it to read.**
 > So "blocking" isn't friction; it's a **control signal**: **the rule is there for the AI to hit.** Hitting it makes it comply, with nobody in the loop. What you do is the requirements and the judgement calls.
 
-Here's roughly what that grows into — an online store, where a plan comes first, then the module, then a record of what was done:
+**What it grows into** — an online store, where a plan comes first, then the module, then a record of what was done:
 
 <p align="center">
   <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
@@ -48,30 +48,18 @@ Two details: **the gold ring (a rule that must not change) only grows once a ver
 
 **You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files.
 
+**How it turns** — one change goes round four stations, and the outer ring of evals takes what each round leaves behind and calibrates. **Each section below is one station on this map.**
+
+<p align="center">
+  <img src="assets/map-en.svg" alt="The whole map: notes → dispatch → review → write-back in a loop, with an outer evals ring that records every round and calibrates the next" width="900">
+</p>
+
 ---
 
-**Understand it** &nbsp;[What's in a note](#whats-in-a-note)<br>
-**Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
+**Understand it** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
 **Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
-**Beyond that** &nbsp;[The loop that gets sharper](#the-loop-that-gets-sharper) · [Code review has three layers](#code-review-here-has-three-layers) · [Why this exists](#why-this-exists) · [Scope](#scope) · [Going deeper](#going-deeper) · [Licence](#licence)
-
----
-
-## What's in a note
-
-<p align="center">
-  <img src="assets/note-anatomy-en.svg" alt="The anatomy of a note: machine-read fields, summary lines, contracts with their evidence, and below the divider the part for people" width="900">
-</p>
-
-Those two starred markers are the heart of the whole thing — **a heavy claim can't just be asserted; evidence has to hang off it**, and if it doesn't resolve, the health check goes red.
-
-So "what rules can't be touched in this project" isn't a question you ask a person — **one command answers it**, usually one the AI runs (see the [command reference](docs/command-reference.md)).
-
-**The primary reader of these notes isn't a human — it's the next session's AI — so they're built to be queried.** When an AI wants a module's backstory, one query returns a ranked, compressed answer; nothing gets poured in wholesale. It works the other way too: hand it a source file and it lists **which notes mention that file and which declare they cover it** — flagging the ones that carry rules that must not break.
-
-<p align="center">
-  <img src="assets/impact-en.svg" alt="Give it a source file and it lists which notes mention or cover it, and which carry contracts" width="900">
-</p>
+**Station by station** &nbsp;[Notes](#notes) · [Dispatch](#dispatch) · [Review](#review) · [Write-back](#write-back) · [evals](#evals)<br>
+**Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Scope](#scope) · [Going deeper](#going-deeper) · [Licence](#licence)
 
 ---
 
@@ -172,29 +160,29 @@ The detail, and the actual skip rate, are in [the mental model](docs/mental-mode
 
 ---
 
-## The loop that gets sharper
+## Notes
 
-**This is where Lumos parts ways with "a really well-written document".** A document is at its most accurate the day it is finished, and only decays from there. This runs the other way: every round, the material gets a little sharper.
-
-<p align="center">
-  <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
-</p>
-
-The four stages run in order, and the last one is the point: **what gets accounted for is written back into the graph, and becomes the next round's material.**
-
-**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight earned their place in earlier rounds; nobody threw them in from memory.
-
-Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
+**Station ① on the map: what's in a note.**
 
 <p align="center">
-  <img src="assets/graph-growth.gif" alt="Lumos's own notes growing from a handful to four hundred over three months" width="820">
-  <br>
-  <sub>Lumos's own notes over three months (440 notes and 1,572 links when recorded; 457 today). Recorded from the actual tool, not drawn.</sub>
+  <img src="assets/note-anatomy-en.svg" alt="The anatomy of a note: machine-read fields, summary lines, contracts with their evidence, and below the divider the part for people" width="900">
 </p>
 
-### The dispatch step is a DAG
+Those two starred markers are the heart of the whole thing — **a heavy claim can't just be asserted; evidence has to hang off it**, and if it doesn't resolve, the health check goes red.
 
-Dispatch means: **the same brief goes to several reviewers, each looking from one angle, and their findings get merged.**
+So "what rules can't be touched in this project" isn't a question you ask a person — **one command answers it**, usually one the AI runs (see the [command reference](docs/command-reference.md)).
+
+**The primary reader of these notes isn't a human — it's the next session's AI — so they're built to be queried.** When an AI wants a module's backstory, one query returns a ranked, compressed answer; nothing gets poured in wholesale. It works the other way too: hand it a source file and it lists **which notes mention that file and which declare they cover it** — flagging the ones that carry rules that must not break.
+
+<p align="center">
+  <img src="assets/impact-en.svg" alt="Give it a source file and it lists which notes mention or cover it, and which carry contracts" width="900">
+</p>
+
+---
+
+## Dispatch
+
+**Station ② on the map.** Dispatch means: **the same brief goes to several reviewers, each looking from one angle, and their findings get merged.**
 
 <p align="center">
   <img src="assets/dispatch-en.svg" alt="Dispatch is a DAG: the notes and the diff produce one brief, which fans out to several seats each looking from one angle, then converges through machine intake, a rebuttal seat and a disposal gate, and is written back into the notes" width="900">
@@ -205,11 +193,11 @@ Two things worth knowing:
 - **The most useful line in the brief** is "this rule — say, never charge twice — is the test guarding it still there?" The tool marks it outright: present, pointing at a test that no longer exists, or never bound at all. **The unbound kind, only a person is reading.**
 - **Several people looking separately and agreeing afterwards is evidence; agreeing after copying each other isn't.** That's why no seat sees another's report.
 
-> **Honestly:** what a machine holds is *form*. Whether a rule still matches the business — only a person can answer that. Don't read "has evidence attached" as "safe".
-
 ---
 
-## Code review here has three layers
+## Review
+
+**Station ③ on the map.**
 
 **First, the worry everyone actually has: will the AI write junk, or wreck the architecture I already have?**
 
@@ -240,6 +228,34 @@ Before code goes up, three different things look at it. **They catch three diffe
 **A language that isn't on the list doesn't trigger the second layer.** The full "what the tool checks and doesn't" table, and how each language plugs in, are in [the mental model](docs/mental-model.md).
 
 > **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".** It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.
+
+---
+
+## Write-back
+
+**Station ④ on the map. This is where Lumos parts ways with "a really well-written document"** — a document is at its most accurate the day it is finished, and only decays from there. This runs the other way: every round, the material gets a little sharper.
+
+The four stages run in order, and the last one is the point: **what gets accounted for is written back into the graph, and becomes the next round's material.**
+
+**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight earned their place in earlier rounds; nobody threw them in from memory.
+
+Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
+
+<p align="center">
+  <img src="assets/graph-growth.gif" alt="Lumos's own notes growing from a handful to four hundred over three months" width="820">
+  <br>
+  <sub>Lumos's own notes over three months (440 notes and 1,572 links when recorded; 457 today). Recorded from the actual tool, not drawn.</sub>
+</p>
+
+> **Honestly:** what a machine holds is *form*. Whether a rule still matches the business — only a person can answer that. Don't read "has evidence attached" as "safe".
+
+---
+
+## evals
+
+**The outer ring of the map.** Every review round leaves a record behind: which seat, what severity, how many findings, how each was disposed of. A verdict that passes the gate is **frozen as a reference answer and replayed by machine every week** — change a rule, and you see whether old cases flip. The query side has its own hand-labelled answer key; change the algorithm and it re-sits the exam.
+
+**Whatever can be measured gets calibrated back into the next round.** This ring isn't extra work — it's the nourishment the loop grows on its own.
 
 ---
 
