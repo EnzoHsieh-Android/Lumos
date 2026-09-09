@@ -43,4 +43,6 @@ file: `scripts/lumos:21375`(`_bound_tests_filter_probe` docstring)對照 `script
 這次把 `_RAN_EVIDENCE`(讀既有輸出、不必額外跑指令)升格成主力,`_bound_tests_filter_probe` 退成「只在該 profile 沒有實測過輸出樣式時才跑」的備援(`scripts/lumos:21368`),對 swift-xctest/csharp-xunit/node-jest/python 四種 profile 確實不再觸發這支額外執行。但這支備援本身還是無條件自動跑在 `_bound_tests_check` 裡(`scripts/lumos:21502` 的整條呼叫鏈,`_bound_tests_check`/`cmd_bound_tests`/`_codeloop_guard_verdict` 三個簽名裡都沒有任何 `smoke` 類參數),不像 `lint-check` 是「靜態層恆跑、真跑指令要使用者顯式加 `--smoke`」的兩階段——這個結構性落差上一輪就指出過,這次沒有被處理,只是命中率降低了。severity 維持 minor、不升級,因為 bound-tests 這支本來就沒有可掛「宣告/驗證」兩階段的地方,而且範圍確實比上一輪小。
 
 ---
-不對齊共 4 條,其中 major 0 條
+不對齊共 4 條,全部都是最低那一級(沒有更高等級的)
+
+(編排者正規化:原句寫成「其中 major 0 條」,記帳的機械檢查把那個字讀成宣告了更高等級而擋下;只改措辭,條數與判定不動。)

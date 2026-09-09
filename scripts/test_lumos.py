@@ -34136,6 +34136,15 @@ def t_bound_filter_cache_uses_trusted_dir():
     m = _load_lumos_inproc()
     import os as _os
     check("①快取 key 帶判定規則版本(規則改版舊快取自然 miss)", bool(m._FILTER_PROBE_SCHEMA), "沒有 schema 欄位")
+    # ★真的要跑的時候要出聲★(r2 架構席 f4):既有 linter 把「真的跑一次」拆成要顯式旗標才觸發;
+    # 這支不拆(跑使用者的測試指令本來就是這道閘的本職),但不得偷偷跑。
+    import io as _io2, contextlib as _ctx2
+    with tempfile.TemporaryDirectory() as _w:
+        _e = _io2.StringIO()
+        with _ctx2.redirect_stderr(_e):
+            m._bound_tests_filter_probe(Path(_w), "true {method}")
+        check("①真的多跑一次時要講出來,不能是看不到的隱形執行",
+              "多跑它一次" in _e.getvalue(), _e.getvalue()[:200])
     check("①快取有保鮮期(測試工具升級會讓判定翻面,而指令文字不變)",
           isinstance(m._FILTER_PROBE_TTL, int) and m._FILTER_PROBE_TTL > 0, str(getattr(m, "_FILTER_PROBE_TTL", None)))
     old_home = _os.environ.get("HOME")
