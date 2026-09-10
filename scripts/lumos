@@ -1456,6 +1456,122 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                    "在正文裡用反引號寫出那個路徑(例:實作在 `app/pay.py`)——about_code 欄位只做排序不建連結,波及計算認的是正文裡的路徑;連不到的話這篇合約綁的測試在推送時會被靜默跳過")
     print()
 
+    section("S5", "計劃條款寫的測試名,程式碼裡找不找得到(提醒,不擋)")
+    # ★這道的來源是真事故★(節點範圍與索引守衛_計劃,2026-09-10):一份計劃在條款裡寫了
+    # 七個測試名,其中五支從來沒被寫出來。`lumos spec-trace` 一直在報「懸空 7」,但那是
+    # 要人自己想到去敲的指令——lint 綠、doctor 綠、pre-push 放行,掛了一整天沒人知道,
+    # 最後是人問「驗證節點怎麼這麼少」才翻出來。
+    #
+    # ★偵測能力本來就有,缺的是把它接到一個會自己跑的時機上★。Check T 驗的是 Systems
+    # 節點的 ★INVARIANT★,完全不看 Projects 計劃的條款——這道補的正是那一半。
+    #
+    # 重用 spec-trace 的抽取(_clause_bindings_for/_clause_summary),不自己再寫一套:
+    # 同一件事兩套算法一定會分岔,而分岔時沒有任何東西會翻紅。
+    _dangling = []
+    for rel, n in sorted(notes.items()):
+        if n.fields.get("type") != "project":
+            continue
+        if str(n.fields.get("status", "")).strip() in ("superseded", "stale"):
+            continue
+        try:
+            _txt = (env.vault / rel).read_text(encoding="utf-8", errors="replace")
+            _rows, _err = _clause_bindings_for(env, _txt)
+        except Exception:
+            continue
+        if _err or not _rows:
+            continue
+        _bad = [r for r in _rows
+                if r.get("state") in ("dangling", "dangling-typo", "dangling-notfound")]
+        if _bad:
+            _ids = ", ".join(str(r.get("clause") or r.get("id") or "?") for r in _bad[:4])
+            _dangling.append(f"{rel} ({len(_bad)} 條:{_ids})")
+            gov_events.append({"gate": "check-s5", "kind": "warned", "hard": False, "nodes": [n.stem]})
+    if not _dangling:
+        ok("計劃條款寫的測試名,程式碼裡都找得到")
+    else:
+        _soft_list(_dangling,
+                   f"有 {len(_dangling)} 份計劃的條款寫了測試名,但程式碼裡找不到那支測試:",
+                   "逐份跑 `lumos spec-trace <計劃節點>` 看是哪幾條;測試名寫錯就改名字,測試根本沒寫就補寫——★計劃寫了測試名不等於測試存在★")
+    print()
+
+    section("S6", "圖譜總索引有沒有把節點列全(提醒,不擋)")
+    # 事故背景同上:那兩個消費專案的總索引是空殼(只有一個標題),於是「這條合約該放哪」
+    # 只有一個答案——放我已經有的那一篇,然後那一篇越長越大。
+    # 有地圖才有第二個答案。
+    _moc_notes = [rel for rel, n in notes.items() if n.fields.get("type") == "moc"]
+    if not _moc_notes:
+        # ★沒有索引要出聲,不是靜默跳過★:靜默跳過會讓人以為「檢查過了沒問題」,
+        # 而空索引正是事故的成因之一。
+        warn_soft(["這個圖譜沒有 type: moc 的總索引節點"],
+                  "沒有總索引,跳過覆蓋率檢查:",
+                  "建一篇 `MOC/index.md`(type: moc)當路標——新增合約前先在上面找它的家,找不到就代表該建新節點")
+    else:
+        _linked = set()
+        # ★索引自己宣告的範圍要算數★(r1 邊界席/接手席的誤報警告,實跑當場證實):
+        # 本工具鏈的索引第一段就寫「下面只列 Systems(機制)節點」——照字面把 Issues
+        # 也算進分母的話,第一次跑就唸 51 篇,全部是專案刻意不收的。那是噪音不是訊號,
+        # 而提醒型檢查一旦噪音大,人就學會整段略過。
+        _scope = {"system", "issue"}
+        for _m in _moc_notes:
+            _mtxt = (env.vault / _m).read_text(encoding="utf-8", errors="replace")
+            if re.search(r"只列\s*Systems|僅列\s*Systems|only\s+Systems", _mtxt, re.I):
+                _scope = {"system"}
+            for _t in notes[_m].targets:
+                _d = env.resolve(_t)
+                if _d:
+                    _linked.add(_d)
+        _unlisted = []
+        for rel, n in sorted(notes.items()):
+            if n.fields.get("type") not in _scope:
+                continue
+            if str(n.fields.get("status", "")).strip() in ("superseded", "stale"):
+                continue
+            if rel not in _linked:
+                _unlisted.append(rel)
+        if not _unlisted:
+            ok(f"總索引把 {len([1 for r, n in notes.items() if n.fields.get('type') in _scope])} 篇節點都列到了(範圍:{'/'.join(sorted(_scope))})")
+        else:
+            _soft_list(_unlisted,
+                       f"有 {len(_unlisted)} 篇節點沒被總索引連到(找不到入口的節點,下一個人只會往舊的那篇塞):",
+                       "在總索引補一行連過去;索引是「這條合約該放哪」的唯一地圖,漏列等於那篇不存在")
+    print()
+
+    section("S7", "有沒有哪一篇的合約多到讀不完(提醒,不擋)")
+    # ★判準只看「一篇有幾條合約」★——這是拿六個真圖譜資料點校準出來的,而且改過一次:
+    # 原本用「佔全圖比重 + 提到幾個檔」,抓不到第二種長歪形狀(一篇管一個模組裡的三個
+    # 主題,只提一個檔)。改成數合約條數之後六個資料點全對而且更簡單。
+    #
+    # 校準(節點範圍與索引守衛_計劃 [S5] 的表):本工具鏈自己最多 7 條;兩次長歪都在
+    # 15 條以上;兩次拆完都在 8 條以下。中間有明顯空隙。
+    _cfg = _lumos_config_near_vault(env) or {}
+    _ns = _cfg.get("node_scope") if isinstance(_cfg.get("node_scope"), dict) else {}
+    _cap = _ns.get("max_contracts", 10)
+    if not isinstance(_cap, int) or _cap < 1:
+        warn_soft([f"node_scope.max_contracts 的值看不懂({_cap!r}),退回預設 10"],
+                  "專案設定裡的門檻不合法:", "改成 1 以上的整數")
+        _cap = 10
+    _overloaded = []
+    for rel, n in sorted(notes.items()):
+        if n.fields.get("type") not in ("system", "issue"):
+            continue
+        if str(n.fields.get("status", "")).strip() in ("superseded", "stale"):
+            continue
+        try:
+            _inv, _debt = extract_contracts(n)
+        except Exception:
+            continue
+        _cnt = len(_inv) + len(_debt)
+        if _cnt >= _cap:
+            _overloaded.append(f"{rel} ({_cnt} 條合約)")
+            gov_events.append({"gate": "check-s7", "kind": "warned", "hard": False, "nodes": [n.stem]})
+    if not _overloaded:
+        ok(f"沒有哪一篇的合約超過 {_cap} 條(門檻:node_scope.max_contracts)")
+    else:
+        _soft_list(_overloaded,
+                   f"有 {len(_overloaded)} 篇的合約多到一次讀不完(門檻 {_cap} 條):",
+                   "跑 `lumos contracts <節點>` 把那些合約列出來,看它們是不是其實在講好幾件事——是的話一件一篇拆開;真的是同一件事就把門檻調高(專案設定 node_scope.max_contracts)。★這道量的是「還讀得完嗎」,不是「設計對不對」★")
+    print()
+
     section("I", "審查迴圈的首輪前掃有沒有留痕(滾動窗觀測;提醒,不擋)")
     # intake守衛 T4(2026-08-30 d1):升級迴路的機械閉環——外家 r2 裁「計數靠散文=到第六案
     # 也不會發生」(repo 有提醒被無視 546 次的帳)。數數和喊人的是機器,決定升不升的是人。

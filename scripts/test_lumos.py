@@ -1574,6 +1574,116 @@ def t_doctor_clean():
 
 # ── Check E1: 失效背書(關係層) — verified_by 指向 stale/fail 驗證該抓、pass 不誤報 ──
 #   關係層傳播守衛 phase-1 MVP([S6])。含「弄壞驗證」:種真死背書 → E1 必抓;pass 背書不報。
+# ── Check S5/S6/S7: 節點範圍與索引守衛(2026-09-10) ──
+#   三道都是「提醒不擋」。★用合成筆記當 fixture,不拿活圖譜★(r1 接手席):
+#   拿會持續變動的活圖譜當樣本的話,之後隨便新增節點就可能讓數字跑掉、測試為
+#   無關理由翻紅。
+
+def _section_of(out, tag):
+    """只取 doctor 某一段的輸出——★不切段的話,斷言會被別段的文字誤中★
+    (2026-09-10 實踩:四個 fixture 的輸出互相干擾,兩條斷言假紅)。"""
+    i = out.find(f"[{tag}]")
+    if i < 0:
+        return ""
+    j = out.find("\n[", i + 1)
+    return out[i:j if j > 0 else len(out)]
+
+
+def t_doctor_s5_dangling_clause_tests():
+    """計劃條款寫了測試名但測試不存在 → S5 要唸;寫對的不誤報。"""
+    v = mkvault()
+    # ★反例要有真的測試可綁★:fixture 是空專案,不放一支測試的話兩份都會被判懸空,
+    # 那就證明不了「不誤報」(2026-09-10 實踩:第一版就是這樣假紅的)。
+    _proj = v.parent
+    (_proj / "tests").mkdir(exist_ok=True)
+    (_proj / "tests" / "test_demo.py").write_text(
+        "def t_really_exists():\n    assert True\n", encoding="utf-8")
+    # 正例:條款綁一支不存在的測試
+    write(v, "Projects/壞的_計劃.md", "type: project\nstatus: doing",
+          body="# 壞的_計劃\n\n- [S1] 這條規則 [test:t_this_test_never_existed]\n")
+    # 反例:條款綁那支真的存在的
+    write(v, "Projects/好的_計劃.md", "type: project\nstatus: doing",
+          body="# 好的_計劃\n\n- [S1] 這條規則 [test:t_really_exists]\n")
+    r = run(v, "doctor")
+    _s5 = _section_of(r.stdout, "S5")
+    check("S5 唸了懸空的那份", "壞的_計劃" in _s5, r.stdout)
+    check("S5 不誤報綁對的那份", "好的_計劃" not in _s5, r.stdout)
+    check("S5 是提醒不擋(rc 0)", r.returncode == 0, r.stdout)
+
+
+def t_doctor_s6_moc_coverage():
+    """節點沒被總索引連到 → S6 要唸;沒有索引要出聲;索引自己宣告的範圍要算數。"""
+    # (1) 有索引但漏列
+    v = mkvault()
+    # ★mkvault 會自己建一篇空的 MOC/idx.md★——不刪掉的話它也算一份索引,
+    # 而它沒連到任何東西,會讓「有列到」那篇也被判成漏列。
+    (v / "MOC" / "idx.md").unlink()
+    write(v, "MOC/index.md", "type: moc\nstatus: doing", body="# 索引\n\n- [[Systems/有列到]]\n")
+    write(v, "Systems/有列到.md", "type: system\nstatus: done", body="# 有列到\n")
+    write(v, "Systems/沒列到.md", "type: system\nstatus: done", body="# 沒列到\n")
+    _s6 = _section_of(run(v, "doctor").stdout, "S6")
+    check("S6 唸漏列的那篇", "沒列到" in _s6, _s6)
+    check("S6 不誤報有列到的", "有列到" not in _s6, _s6)
+
+    # (2) 作廢的節點不算(跟既有「現況宣稱」檢查同一條界線)
+    v2 = mkvault()
+    (v2 / "MOC" / "idx.md").unlink()
+    write(v2, "MOC/index.md", "type: moc\nstatus: doing", body="# 索引\n")
+    write(v2, "Systems/作廢了.md", "type: system\nstatus: superseded", body="# 作廢了\n")
+    _s6b = _section_of(run(v2, "doctor").stdout, "S6")
+    check("S6 不唸作廢節點", "作廢了" not in _s6b, _s6b)
+
+    # (3) 索引自己宣告「只列 Systems」時,Issues 不算分母
+    v3 = mkvault()
+    (v3 / "MOC" / "idx.md").unlink()
+    write(v3, "MOC/index.md", "type: moc\nstatus: doing",
+          body="# 索引\n\n下面只列 Systems(機制)節點。\n\n- [[Systems/機制]]\n")
+    write(v3, "Systems/機制.md", "type: system\nstatus: done", body="# 機制\n")
+    write(v3, "Issues/事故.md", "type: issue\nstatus: resolved", body="# 事故\n")
+    _s6c = _section_of(run(v3, "doctor").stdout, "S6")
+    check("S6 尊重索引宣告的範圍(不唸 Issues)", "事故" not in _s6c, _s6c)
+
+    # (4) 完全沒有索引 → 要出聲,不是靜默跳過
+    v4 = mkvault()
+    (v4 / "MOC" / "idx.md").unlink()   # mkvault 預設會建一篇,要拿掉才是「沒有索引」
+    write(v4, "Systems/孤兒.md", "type: system\nstatus: done", body="# 孤兒\n")
+    _s6d = _section_of(run(v4, "doctor").stdout, "S6")
+    check("S6 沒索引時出聲", "沒有總索引" in _s6d, _s6d)
+
+
+def t_doctor_s7_overloaded_note():
+    """一篇的合約多到讀不完 → S7 要唸;門檻可調;作廢的不算。"""
+    def _keys(n):
+        return "\n".join(
+            f"  KEY:★INVARIANT★ 規則{i} [test:t_x{i}]" for i in range(n))
+    v = mkvault()
+    # 正例:12 條合約(超過預設門檻 10)
+    write(v, "Systems/太多.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(12), body="# 太多\n")
+    # 反例:3 條(不該唸)
+    write(v, "Systems/剛好.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(3), body="# 剛好\n")
+    r = run(v, "doctor")
+    _s7 = _section_of(r.stdout, "S7")
+    check("S7 唸合約太多的那篇", "太多" in _s7 and "12 條合約" in _s7, _s7)
+    check("S7 不誤報條數正常的", "剛好" not in _s7, _s7)
+    check("S7 是提醒不擋(rc 0)", r.returncode == 0, r.stdout)
+
+    # 門檻可調:設成 20 之後 12 條就不該唸
+    import json as _json, pathlib as _pl
+    # _lumos_config_near_vault 找的是 vault 的上一層(專案根)底下的 .lumos/
+    _cfgdir = _pl.Path(v).parent / ".lumos"
+    _cfgdir.mkdir(exist_ok=True)
+    (_cfgdir / "config.json").write_text(
+        _json.dumps({"node_scope": {"max_contracts": 20}}), encoding="utf-8")
+    _s7b = _section_of(run(v, "doctor").stdout, "S7")
+    check("S7 門檻可在專案設定調高", "太多" not in _s7b, _s7b)
+
+    # 壞值退回預設並出聲
+    (_cfgdir / "config.json").write_text(
+        _json.dumps({"node_scope": {"max_contracts": "十"}}), encoding="utf-8")
+    _s7c = _section_of(run(v, "doctor").stdout, "S7")
+    check("S7 壞門檻退回預設並出聲", "看不懂" in _s7c and "太多" in _s7c, _s7c)
+
+
 def t_check_e1_dead_endorsement():
     v = mkvault()
     # 正例1:背書指向 stale 驗證 → E1 必抓
