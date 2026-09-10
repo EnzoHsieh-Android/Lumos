@@ -5218,7 +5218,10 @@ def _report_severities(text):
 
 _SEV_RESIDUE_RE = re.compile(r"(?i)(?:\bsev(?:erity)?(?:\*\*|__)?\s*[:：]|嚴重度(?:\*\*|__)?\s*[:：]|\[(?:clean|minor|major|blocker)\]|[—–-]\s*(?:BLOCKER|MAJOR|MINOR)\b(?=\s*(?:$|[:：,，;；/|(（—–-])))")   # (?:\*\*|__)? = 粗體只包字不包冒號(**severity**: major);破折號型只在等級字後面接結尾或分隔符才算——「- minor 問題:…」「non-major 的調整」是散文(code-review-yield r1 f1),「- major / blocking: 是」「- MAJOR」才是殘留
 _SEV_HEADING_LEVEL_RE = re.compile(r"(?i)^\s*#{1,6}\s.*[—–:：-]\s*(?:blocker|major|minor)\b")   # 標題裡嵌等級(## F1 — BLOCKER / ## f1: major):r3 通才席拿 code-batch20 真報告證明會被放過;標題散文裡提到 major 這個字不算
-_SEV_SUMMARY_LINE_RE = re.compile(r"(最嚴重|最高|整份|總結|不對齊共|blocking 條數)")   # 總結句照 SOP 本來就要寫 severity 字樣,不算殘留
+_SEV_SUMMARY_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s*|[-*+>]\s*|\d+[.)]\s*)?(?:\*\*|__)?\s*(最嚴重|最高|整份|總結|不對齊共|blocking 條數)")
+# ↑ 總結句照 SOP 本來就要寫 severity 字樣,不算殘留。★只認行首★(可帶標題/清單/引用/編號/粗體記號;2026-09-10 code 迴圈 r3):
+#   原本整行任何位置出現「最高/總結/整份」就當總結句,內文講到「總結句」這條規則、或用到「最高並發」這種詞,
+#   又碰巧提到比檔級高的等級,就被誤擋。不在行首的行照一般規則檢查(帶 severity: 的照樣算殘留)。
 
 
 def _report_normalize_issues(text):
@@ -5247,7 +5250,11 @@ def _report_normalize_issues(text):
         if _SEV_SUMMARY_LINE_RE.search(ln):
             # 總結句豁免有條件(code-review-yield r1 外家席 f1):提到的等級不得高於檔級宣告——「severity: clean / 總結: severity: blocker」
             # 就是拿白名單夾帶 blocker 又數成 0 條;檔級行缺(_top None)一律不豁免
-            _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _strip_inline_markup(ln)[0])]
+            # 「其中 major 0 條」是在數零條,不是宣告等級(架構對齊席範本必寫這句;2026-09-10 code-工具自裝檔不算消費專案 r2
+            # 檔級 minor 的架構席報告因此被擋)。只剝「等級字後面緊接 0 條」這種計數;非零、或 0 後面不是「條」
+            # (「blocker 0 台」數的是台數,r3 正確性席)照樣算夾帶
+            _vis_lv = re.sub(r"(?i)\b(?:clean|minor|major|blocker)\b\s*[:：]?\s*0\s*條", "", _strip_inline_markup(ln)[0])
+            _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _vis_lv)]
             if _top is not None and all(_SEV_ORDER[w] <= _SEV_ORDER[_top] for w in _lv):
                 continue
             if _lv:
@@ -23938,7 +23945,7 @@ def main():
                 if _req:
                     print(f"擋下:少了必須要給的 {_req.group(1)}。", file=sys.stderr)
                 elif _int:
-                    print(f"擋下:{_int.group(1)} 要給數字,收到的是「{_int.group(2)}」。",
+                    print(f"擋下:{_int.group(1)} 要給整數,收到的是「{_int.group(2)}」。",
                           file=sys.stderr)
                 elif _unk:
                     print(f"擋下:不認得這幾個參數:{_unk.group(1)}。", file=sys.stderr)

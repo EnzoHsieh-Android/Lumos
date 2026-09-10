@@ -13852,7 +13852,9 @@ def t_bad_command_gives_near_name_not_wall_of_text():
     # 外家席驗過「缺必填/型別錯/不認得的參數」沒被吃掉(原句還在),但那些也是第一眼
     # 會看到的畫面,原句是英文模板。改成白話,同時保留 argparse 準確指出的參數名。
     for args2, want in ((["context"], "少了必須要給的 note"),
-                        (["map", "foo", "--depth", "nope"], "--depth 要給數字"),
+                        (["map", "foo", "--depth", "nope"], "--depth 要給整數"),
+                        # 小數也是「數字」,舊訊息說「要給數字」會讓人以為 9.7 可以(2026-09-10 記帳 --wallclock-min 撞到)
+                        (["map", "foo", "--depth", "1.5"], "--depth 要給整數"),
                         (["stats", "--zzz"], "不認得這幾個參數")):
         rr2 = run(*args2)
         oo = rr2.stderr or rr2.stdout
@@ -28252,6 +28254,16 @@ def t_report_normalize_cmd():
         "清單項等級字接分隔符": "severity: major\n## F1\n- major / blocking: 是\n",
         "總結句夾帶高於檔級的等級(codex f1)": "severity: clean\n總結: severity: blocker\n",
         "總結句夾帶但檔級行缺": "## F1\n最嚴重 severity: minor\n",
+        "架構席範本句夾帶非零 major": "severity: minor\n## F1\nseverity: minor\n不對齊共 1 條,其中 major 1 條\n",
+        "架構席範本句夾帶 major 10 條": "severity: minor\n不對齊共 10 條,其中 major 10 條\n",
+        # 零條豁免只認「N 條」這種計數:「blocker 0 台」數的是台數,不是 blocker 有 0 條(r3 正確性席)
+        "零條豁免只認計數(blocker 0 台)": "severity: clean\n總結:有 blocker 0 台原型機測試通過\n",
+        "零條豁免不吃 0/1(外家找洞席)": "severity: clean\n總結:最高 severity major 0/1 條已修復,blocking 共 1 條\n",
+        "零條豁免不吃 0day(外家否決席)": "severity: minor\n## F1\nseverity: minor\n總結: blocker 0day exploit\n",
+        # 總結句只認行首(可帶標題/清單/引用/粗體記號):這三種寫法照舊擋
+        "標題式總結夾帶": "severity: clean\n## 總結:最高 severity blocker\n",
+        "清單項總結夾帶": "severity: clean\n- 總結:最高 blocker\n",
+        "粗體總結夾帶": "severity: clean\n**總結**:最高 blocker\n",
     }
     for k, t in bad.items():
         check(f"normalize:殘留寫法「{k}」被拒", bool(iss(t)), t)
@@ -28267,6 +28279,13 @@ def t_report_normalize_cmd():
         "複合詞 non-major(r1 f1)": "severity: clean\n這是個 non-major 的調整\n",
         "總結句等級不高於檔級": "severity: major\n## F1\nseverity: major\n最嚴重 severity: major,blocking 條數 1\n",
         "帶 BOM 的正規化報告(codex f4)": "\ufeffseverity: clean\n",
+        # 架構對齊席照範本必寫「不對齊共 N 條,其中 major M 條」;M=0 是在數零條,不是宣告等級
+        # (2026-09-10 code-工具自裝檔不算消費專案 r2:檔級 minor 的架構席報告被這行擋下)
+        "架構席範本句「其中 major 0 條」": "severity: minor\n## F1\nseverity: minor\n不對齊共 1 條,其中 major 0 條\n",
+        # 總結句只認行首:內文、標題裡「講到」總結句這條規則,不是總結句(r3 正確性席的報告就被這樣誤擋)
+        "內文講到總結句": "severity: minor\n## F1\nseverity: minor\n預期應被判「總結句提到的等級(blocker)高於檔級」而擋下\n",
+        "標題講到總結句": "severity: minor\n### F2 讓 blocker 溜過總結句\nseverity: minor\n",
+        "內文用到「最高」這個詞": "severity: minor\n## F1\nseverity: minor\nblocking: 否 — 最高並發下也不構成 major\n",
     }
     for k, t in ok.items():
         check(f"normalize:「{k}」不算殘留", iss(t) == [], str(iss(t)))
