@@ -1607,8 +1607,47 @@ def t_doctor_s5_dangling_clause_tests():
     r = run(v, "doctor")
     _s5 = _section_of(r.stdout, "S5")
     check("S5 唸了懸空的那份", "壞的_計劃" in _s5, r.stdout)
-    check("S5 不誤報綁對的那份", "好的_計劃" not in _s5, r.stdout)
+    # ★不在這裡驗「不誤報」★:這個 fixture 沒有 .lumos 測試設定,
+    # 任何測試名都會是「設定認不到」那種懸空(也算懸空,新定義抓得到)。
+    # 「不誤報」由 t_doctor_s7_overloaded_note 與 S6 那幾條的反例撐著。
     check("S5 是提醒不擋(rc 0)", r.returncode == 0, r.stdout)
+
+    # ★作廢的計劃不算★(代碼審 r1 測試席):跟 S6 與既有那幾道「現況宣稱」檢查
+    # 同一條界線。原本沒有這個 fixture——實測把排除規則整段刪掉,斷言照樣全過。
+    # ★用 --verbose★:軟段預設只印 3 條,作廢那份排在後面會被截掉,
+    # 「不唸作廢的」就永遠成立,那是空斷言。
+    write(v, "Projects/作廢的_計劃.md", "type: project\nstatus: superseded",
+          body="# 作廢的_計劃\n\n- [S1] 舊規則 [test:t_gone_with_the_old_design]\n")
+    _s5b = _section_of(run(v, "doctor", "--verbose").stdout, "S5")
+    check("S5 不唸作廢的計劃", "作廢的_計劃" not in _s5b, _s5b)
+    check("S5 仍然唸沒作廢的那份", "壞的_計劃" in _s5b, _s5b)
+
+
+def t_doctor_s5_hang_states_match_spec_trace():
+    """★懸空的定義要跟 spec-trace 一致★(代碼審 r1 正確性席 major)。
+
+    第一版手抄成三個字串,其中兩個根本不存在;而 unrecognized(設定認不到)與
+    mentioned(只被提到)這兩種真的懸空反而漏掉。最隱蔽的一型:測試名以純文字
+    出現在別處(註解、別的檔案提到)時,state 是 mentioned 而不是 dangling,
+    舊版會印「乾淨」——正是這批要防的事故本身。"""
+    v = mkvault()
+    _proj = v.parent
+    (_proj / "tests").mkdir(exist_ok=True)
+    # ★這支測試不存在(沒有 def),但名字以純文字出現在註解裡★
+    (_proj / "tests" / "test_demo.py").write_text(
+        "# see t_only_mentioned_never_defined for details\n"
+        "def t_really_exists():\n    assert True\n", encoding="utf-8")
+    write(v, "Projects/只被提到_計劃.md", "type: project\nstatus: doing",
+          body="# 只被提到_計劃\n\n- [S1] 這條規則 [test:t_only_mentioned_never_defined]\n")
+    r = run(v, "doctor")
+    _s5 = _section_of(r.stdout, "S5")
+    check("S5 抓得到「只被提到」那種懸空", "只被提到_計劃" in _s5, _s5)
+
+    # 常數是唯一來源:三處都引用同一組,不各自手抄
+    src = (Path(GRAPHCTL)).read_text(encoding="utf-8")
+    check("懸空定義是單一常數", src.count("_CLAUSE_HANG_STATES") >= 4, "")
+    check("沒有憑空造的 state 字串",
+          "dangling-typo" not in src and "dangling-notfound" not in src, "")
 
 
 def t_doctor_s6_moc_coverage():
@@ -1650,6 +1689,16 @@ def t_doctor_s6_moc_coverage():
     _s6d = _section_of(run(v4, "doctor").stdout, "S6")
     check("S6 沒索引時出聲", "沒有總索引" in _s6d, _s6d)
 
+    # ★三道都要落治理帳★(代碼審 r1 噪音席 f1):S6 原本整段沒有掛 gov_events,
+    # 而 S5/S7 與既有五道軟提醒都有——不掛的話這道的提醒永遠進不了治理統計。
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    # 取 _KNOWN_GATES 那個 tuple 的完整字面(從 = ( 到第一個 ))
+    _i = src.index("_KNOWN_GATES = (")
+    _gates_literal = src[_i:src.index(")", _i) + 1]
+    for _g in ("check-s5", "check-s6", "check-s7"):
+        check(f"{_g} 有落治理帳", f'"gate": "{_g}"' in src, "")
+        check(f"{_g} 在已知閘名單裡", f'"{_g}"' in _gates_literal, _gates_literal[:200])
+
 
 def t_doctor_s7_overloaded_note():
     """一篇的合約多到讀不完 → S7 要唸;門檻可調;作廢的不算。"""
@@ -1682,6 +1731,31 @@ def t_doctor_s7_overloaded_note():
         _json.dumps({"node_scope": {"max_contracts": "十"}}), encoding="utf-8")
     _s7c = _section_of(run(v, "doctor").stdout, "S7")
     check("S7 壞門檻退回預設並出聲", "看不懂" in _s7c and "太多" in _s7c, _s7c)
+
+    # ★bool 要被擋★(代碼審 r1 正確性席 major):Python 裡 bool 是 int 的子類,
+    # isinstance(True, int) 為真、True < 1 為假——兩段防呆都放行,門檻悄悄變成 1,
+    # 每篇有合約的節點都會被誤判。true/false 還會行為不對稱(false 擋得住)。
+    # ★門檻是「達到就唸」不是「超過才唸」★(代碼審 r1 測試席 f4):
+    # 原本兩個 fixture 是 12 條與 3 條,都離門檻很遠——實測把 >= 改成 >,
+    # 五條斷言照樣全過。這裡造一篇★剛好等於門檻★的來釘住邊界。
+    (_cfgdir / "config.json").write_text(
+        _json.dumps({"node_scope": {"max_contracts": 5}}), encoding="utf-8")
+    write(v, "Systems/剛好卡在門檻.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(5),
+          body="# 剛好卡在門檻\n")
+    _s7e = _section_of(run(v, "doctor").stdout, "S7")
+    check("S7 剛好等於門檻就要唸(>= 不是 >)", "剛好卡在門檻" in _s7e, _s7e)
+    # 門檻減一的那篇仍不唸
+    write(v, "Systems/差一條.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(4),
+          body="# 差一條\n")
+    _s7f = _section_of(run(v, "doctor").stdout, "S7")
+    check("S7 差一條不唸", "差一條" not in _s7f, _s7f)
+
+    for _bad in (True, False):
+        (_cfgdir / "config.json").write_text(
+            _json.dumps({"node_scope": {"max_contracts": _bad}}), encoding="utf-8")
+        _s7d = _section_of(run(v, "doctor").stdout, "S7")
+        check(f"S7 擋住 bool 門檻({_bad})", "看不懂" in _s7d, _s7d)
+        check(f"S7 bool 時不誤報條數正常的({_bad})", "剛好" not in _s7d, _s7d)
 
 
 def t_check_e1_dead_endorsement():

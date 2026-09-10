@@ -1973,8 +1973,13 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             continue
         if _err or not _rows:
             continue
-        _bad = [r for r in _rows
-                if r.get("state") in ("dangling", "dangling-typo", "dangling-notfound")]
+        # ★懸空的定義要跟 spec-trace 自己算的一致★(代碼審 r1 正確性席 major):
+        # 第一版我手抄成三個字串,其中兩個根本不存在於 _CLAUSE_STATE_ZH,
+        # 是憑空造的死分支;而真正也算懸空的
+        # unrecognized(設定認不到)與 mentioned(只被提到)反而漏掉。
+        # ★同一件事兩套算法必定分岔★——這正是這批自己 [S11] 要防的事,
+        # 我卻在實作時犯了同一個錯。改成引用同一組常數,不再手抄。
+        _bad = [r for r in _rows if r.get("state") in _CLAUSE_HANG_STATES]
         if _bad:
             _ids = ", ".join(str(r.get("clause") or r.get("id") or "?") for r in _bad[:4])
             _dangling.append(f"{rel} ({len(_bad)} 條:{_ids})")
@@ -1995,6 +2000,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     if not _moc_notes:
         # ★沒有索引要出聲,不是靜默跳過★:靜默跳過會讓人以為「檢查過了沒問題」,
         # 而空索引正是事故的成因之一。
+        gov_events.append({"gate": "check-s6", "kind": "warned", "hard": False, "nodes": []})
         warn_soft(["這個圖譜沒有 type: moc 的總索引節點"],
                   "沒有總索引,跳過覆蓋率檢查:",
                   "建一篇 `MOC/index.md`(type: moc)當路標——新增合約前先在上面找它的家,找不到就代表該建新節點")
@@ -2021,6 +2027,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 continue
             if rel not in _linked:
                 _unlisted.append(rel)
+                # ★每個軟提醒分支都要落一筆帳★(代碼審 r1 噪音席):
+                # 不掛的話這道的提醒永遠進不了治理統計與 14 天升級鏈,
+                # 跟其餘五道軟提醒變成兩種形狀。
+                gov_events.append({"gate": "check-s6", "kind": "warned",
+                                   "hard": False, "nodes": [n.stem]})
         if not _unlisted:
             ok(f"總索引把 {len([1 for r, n in notes.items() if n.fields.get('type') in _scope])} 篇節點都列到了(範圍:{'/'.join(sorted(_scope))})")
         else:
@@ -2039,7 +2050,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     _cfg = _lumos_config_near_vault(env) or {}
     _ns = _cfg.get("node_scope") if isinstance(_cfg.get("node_scope"), dict) else {}
     _cap = _ns.get("max_contracts", 10)
-    if not isinstance(_cap, int) or _cap < 1:
+    # ★bool 要單獨擋★(代碼審 r1 正確性席 major):Python 裡 bool 是 int 的子類,
+    # isinstance(True, int) 為真、True < 1 為假,兩段防呆都會放行,
+    # 門檻就悄悄變成 1——每篇有合約的節點都會被誤判「讀不完」。
+    if isinstance(_cap, bool) or not isinstance(_cap, int) or _cap < 1:
         warn_soft([f"node_scope.max_contracts 的值看不懂({_cap!r}),退回預設 10"],
                   "專案設定裡的門檻不合法:", "改成 1 以上的整數")
         _cap = 10
@@ -4347,6 +4361,10 @@ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了",
                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
                     "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])",
                     "shadowed": "定義過,又出現在認不得的清單行(第二次寫法看不懂)"}
+# ★「懸空」的唯一定義★:spec-trace 的 hang 與 doctor 的 S5 都引用這一組,
+# 不各自手抄(2026-09-10 代碼審抓到手抄版編了兩個不存在的字串、又漏掉兩種真的)。
+_CLAUSE_HANG_STATES = ("dangling", "unrecognized", "mentioned")
+
 _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
 # 設隔日不設當日(同 _SEV_WRITESIDE_CUTOFF 的理由:合入當天白天用舊碼寫的帳,日粒度切不開先後);比對走 _loop_ts_key 換算 UTC(r1 單reviewer:字串比日期會依記帳機器時區判不同)。
 
@@ -4535,7 +4553,7 @@ def cmd_spec_trace(env, node, as_json=False):
                 mark = "·"
             who = ", ".join(Path(x).stem for x in claims[i]) or "無"
             print(f"{mark} [S{i}] {st}{tail}(舊制回指:{who})")
-        hang = summ["dangling"] + summ["unrecognized"] + summ["mentioned"]
+        hang = sum(summ[_st] for _st in _CLAUSE_HANG_STATES)
         n_cl = len(ids) - summ["undefined"]
         print(f"\n{n_cl} 條款 / 未標 {len(untagged)} / 靠人 {summ['manual']} / 綁了 {summ['bound']} / 懸空 {hang}"
               f"(寫錯 {summ['dangling']}·設定認不到 {summ['unrecognized']}·只被提到 {summ['mentioned']})/ 壞名 {summ['bad-name']}"
@@ -4591,7 +4609,7 @@ def cmd_signoff(env, node, note, by=None):
 _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "check-s2", "check-s3", "check-s4",
                 # 2026-09-10 節點範圍與索引守衛:條款測試名懸空 / 索引漏列 / 合約多到讀不完
-                "check-s5", "check-s7", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
+                "check-s5", "check-s6", "check-s7", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
                 "daily-wrapper", "ledger-growth",
                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
                 "anchor", "pitfalls")
@@ -14461,7 +14479,7 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
         return "fail"
     unt = [b for b in clauses if b["state"] == "untagged"]
     summ = _clause_summary(clauses)
-    hang = summ["dangling"] + summ["unrecognized"] + summ["mentioned"] + summ["bad-name"]
+    hang = sum(summ[_st] for _st in _CLAUSE_HANG_STATES) + summ["bad-name"]
     tail_u = f";另有 {len(undef)} 個 id 只在範例/引用裡出現,不算條款" if undef else ""
     if unt:
         print(f"[disposal] 條款綁定: ✗ — {len(unt)}/{len(clauses)} 條驗收條款沒標:" + "、".join(f"{b['id']}(第 {b['line']} 行)" for b in unt) + tail_u)
