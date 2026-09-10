@@ -714,6 +714,10 @@ def t_about_code_revert_batch():
     check("沒有該批次 → rc2 講清楚,不是靜默成功", r3.returncode == 2, f"rc={r3.returncode} {r3.stderr[-150:]}")
 
     # 工具清單 #2:範本加 about_code 空欄——只在 system/issue(固定席會碰的兩類,同 aliases 範圍)
+    # 2026-09-10 起 append about_code 會檢查路徑要真的存在於 repo(代碼審 r1),先把那支檔放好
+    _repo = Path(v).resolve().parent
+    (_repo / "scripts").mkdir(exist_ok=True)
+    (_repo / "scripts" / "lumos").write_text("# lumos\n", encoding="utf-8")
     for kind, sub in (("system", "Systems"), ("issue", "Issues")):
         run(v, "new", kind, f"範本{kind}")
         txt = (v / sub / f"範本{kind}.md").read_text(encoding="utf-8")
@@ -944,6 +948,11 @@ def t_impact_about_hit():
     sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
     _, d14 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
     check("⑭about_code 值帶 ./ 前綴 → 仍命中", next(x for x in d14["results"] if "A-about" in x["node"]).get("about_hit") is True, "")
+    # ⑮ 值寫成 src/../src/svc.py 也要對得上:排序這一側跟寫入側用同一個路徑正規化(2026-09-10 代碼審 r3 整合席)
+    pa.write_text(pa.read_text(encoding="utf-8").replace("about_code: ./src/svc.py", "about_code: src/../src/svc.py"), encoding="utf-8")
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
+    _, d15 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("⑮about_code 值帶 ../ 繞一圈 → 仍命中", next(x for x in d15["results"] if "A-about" in x["node"]).get("about_hit") is True, "")
 
 
 def t_impact_about_giant_file():
@@ -1188,6 +1197,10 @@ def t_remove_scalar_field():
 
     # 工具清單 #1:about_code / about_code_stamp 進白名單——append/set/remove 三條路都要通
     write(v, "Systems/A.md", "type: system\nstatus: done")
+    # 2026-09-10 起 append about_code 會檢查路徑要真的存在於 repo(代碼審 r1),先把那支檔放好
+    _repo = Path(v).resolve().parent
+    (_repo / "scripts").mkdir(exist_ok=True)
+    (_repo / "scripts" / "lumos").write_text("# lumos\n", encoding="utf-8")
     ra = run(v, "append", "Systems/A", "about_code", "scripts/lumos")
     check("about_code 進 LIST_KEYS:append rc0", ra.returncode == 0, ra.stderr[-150:])
     rs = run(v, "set", "Systems/A", "about_code_stamp", "codex/2026-08-23")
@@ -1370,6 +1383,421 @@ def t_set_boolean_guard():
     run(v, "set", "S", "status", "true", expect_rc=0)
     check("BUG-7 set status true → 引號保護(status: \"true\")",
           'status: "true"' in read(p), read(p))
+
+
+def t_append_about_code_is_one_list_rule():
+    """about_code ★是清單★(0〜3 支程式檔),只有一套規則:用 append/remove 改,不另開 set。
+
+    2026-09-10 代碼審 r1:上一版誤以為它「實務上都是單一路徑」,加了一條 set 專用路,
+    結果 ①會把既有的多筆清單靜默壓成一筆(四席抓到) ②絕對路徑、../ 可以跳出 repo
+    ③含「: 」的路徑沒加引號寫出壞的欄位區 ④寫進去之後 remove 又清不掉 ⑤同一欄位 set 當純量、
+    append 當清單,兩套規則。正確修法:拿掉 set 那條,讓 append/remove 認得「單一值寫法」
+    (把它當成一項的清單),再在 append 加路徑檢查。
+    翻紅釘:append 遇到單一值照舊拒絕 → ②翻紅;拿掉路徑檢查 → ⑤翻紅;set 放行 about_code → ⑧翻紅。"""
+    import os as _os
+    v = mkvault()
+    root = Path(v).resolve().parent          # 跟 lumos 用同一個判斷算 repo 根
+    (root / "src").mkdir(exist_ok=True)
+    for n in ("a.ts", "b.ts", "c.ts", "a: b.ts"):
+        (root / "src" / n).write_text("x\n", encoding="utf-8")
+    outside = root.parent / "outside-of-repo.ts"
+    outside.write_text("x\n", encoding="utf-8")
+    m = _load_lumos_inproc()
+
+    def _ac(path):
+        """讀回那篇筆記的 about_code(用 lumos 自己的欄位解析器,不另寫一套)。"""
+        lines = Path(path).read_text(encoding="utf-8").split("\n")
+        end = lines.index("---", 1)
+        return m.as_list(m.parse_frontmatter(lines[1:end])[0].get("about_code"))
+
+    # ① 範本的空清單 → append 兩次,兩筆都在
+    p = write(v, "Systems/S.md", "type: system\nstatus: doing\nabout_code: []")
+    run(v, "append", "S", "about_code", "src/a.ts", expect_rc=0)
+    run(v, "append", "S", "about_code", "src/b.ts", expect_rc=0)
+    got = _ac(p)
+    check("①多筆清單照順序都在", got == ["src/a.ts", "src/b.ts"], str(got))
+
+    # ② 單一值寫法(about_code: src/a.ts)→ append 要能把它當一項的清單接著加,不再是死路
+    p2 = write(v, "Systems/T.md", "type: system\nstatus: doing\nabout_code: src/a.ts")
+    run(v, "append", "T", "about_code", "src/c.ts", expect_rc=0)
+    got2 = _ac(p2)
+    check("②單一值 + append → 兩筆,原本那筆沒被丟", got2 == ["src/a.ts", "src/c.ts"], str(got2))
+
+    # ③ remove 對單一值寫法也要清得掉
+    p3 = write(v, "Systems/U.md", "type: system\nstatus: doing\nabout_code: src/a.ts")
+    run(v, "remove", "U", "about_code", "src/a.ts", expect_rc=0)
+    check("③單一值寫法 remove 得掉", not _ac(p3), read(p3))
+    run(v, "remove", "T", "about_code", "src/a.ts", expect_rc=0)
+    check("③清單裡拿掉一筆,另一筆留著", _ac(p2) == ["src/c.ts"], read(p2))
+
+    # ④ 含「: 」的檔名要加引號,讀回來還是同一條路徑
+    run(v, "append", "S", "about_code", "src/a: b.ts", expect_rc=0)
+    check("④含冒號空白的路徑讀回來一字不差", "src/a: b.ts" in _ac(p), read(p))
+
+    # ⑤ 路徑檢查:絕對路徑、跳出 repo、不存在、目錄 → 都擋,檔案不動
+    before = read(p)
+    for bad in ("/etc/hosts", "../outside-of-repo.ts", "src/沒這個檔.ts", "src"):
+        run(v, "append", "S", "about_code", bad, expect_rc=2)
+    check("⑤四種壞路徑都擋下,筆記一個字都沒變", read(p) == before, read(p))
+
+    # ⑥ 繞一圈的相對路徑存成正規化的樣子(排序加分用的鍵才對得上)
+    run(v, "append", "S", "about_code", "src/../src/c.ts", expect_rc=0)
+    check("⑥ src/../src/c.ts 存成 src/c.ts", "src/c.ts" in _ac(p)
+          and "src/../src/c.ts" not in read(p), read(p))
+
+    # ⑦ 其他清單欄位不受路徑檢查影響(tags 不是路徑)
+    run(v, "append", "S", "tags", "scope/platform", expect_rc=0)
+
+    # ⑨ 同一行的清單寫法(about_code: [src/a.ts, src/b.ts])→ append/remove 要擋下、筆記一個字都不動。
+    #    工具不解析同一行裡的逗號(讀的一側也把整串當成一個值),轉成清單只會把整串變成一項寫壞。
+    #    (2026-09-10 編排者自己在第二輪派人之前抓到:第一版的轉換寫出一項 "[src/a.ts, src/b.ts]")
+    p9 = write(v, "Systems/X.md", "type: system\nstatus: doing\nabout_code: [src/a.ts, src/b.ts]")
+    before9 = read(p9)
+    r9 = run(v, "append", "X", "about_code", "src/c.ts", expect_rc=2)
+    check("⑨同一行清單 + append → 擋下,筆記沒被寫壞", read(p9) == before9, read(p9))
+    check("⑨擋下的訊息講清楚要改成一行一項", "一行一項" in r9.stderr, r9.stderr)
+    p9s = write(v, "Systems/X1.md", "type: system\nstatus: doing\ntags: [a]")
+    r9s = run(v, "append", "X1", "tags", "b", expect_rc=2)
+    check("⑨[a] 沒有逗號,訊息不講「看不懂逗號」(r3 正確性席)", "逗號" not in r9s.stderr and "同一行" in r9s.stderr, r9s.stderr)
+    run(v, "remove", "X", "about_code", "src/a.ts", expect_rc=2)
+    check("⑨同一行清單 remove 也擋下、不動", read(p9) == before9, read(p9))
+    p9t = write(v, "Systems/Z.md", "type: system\nstatus: doing\ntags: [a, b]")
+    before9t = read(p9t)
+    run(v, "append", "Z", "tags", "c", expect_rc=2)
+    check("⑨其他清單欄位(tags)的同一行寫法同樣擋下", read(p9t) == before9t, read(p9t))
+    # 單一個連結寫成 related: [[Systems/S]] 不是同一行清單,照舊當一項接著加(這條分辨不能誤傷它)
+    p9r = write(v, "Systems/R.md", "type: system\nstatus: doing\nrelated: [[Systems/S]]")
+    run(v, "append", "R", "related", "[[Systems/T]]", expect_rc=0)
+    got9r = m.as_list(m.parse_frontmatter(read(p9r).split("\n")[1:read(p9r).split("\n").index("---", 1)])[0].get("related"))
+    check("⑨單一連結寫法照舊可接著加(兩項)", got9r == ["[[Systems/S]]", "[[Systems/T]]"], read(p9r))
+    # ⑨b 第二輪審查抓到兩種繞法:整串加引號、逗號前後多打空白。★判準是「值本身看起來像同一行清單」,不列舉寫法★:
+    #    去掉引號後以 [ 或 { 開頭(單一連結 [[X]] 除外),或一個值裡有兩個以上連結開頭 → 擋
+    for nm, k, line, newv in (("QA", "about_code", 'about_code: "[src/a.ts, src/b.ts]"', "src/c.ts"),
+                              ("QB", "related", "related: [[Systems/A]],  [[Systems/B]]", "[[Systems/C]]"),
+                              ("QC", "related", "related: [[Systems/A]] , [[Systems/B]]", "[[Systems/C]]"),
+                              ("QD", "tags", 'tags: "[a, b]"', "c"),
+                              # 第三輪外家兩席:開頭長得像連結的巢狀清單、引號裡面前面多一個空白
+                              ("QG", "related", "related: [[Systems/A], Systems/B]", "[[Systems/C]]"),
+                              ("QH", "about_code", 'about_code: " [src/a.ts, src/b.ts]"', "src/c.ts")):
+        pq = write(v, f"Systems/{nm}.md", f"type: system\nstatus: doing\n{line}")
+        bq = read(pq)
+        run(v, "append", nm, k, newv, expect_rc=2)
+        check(f"⑨b「{line}」擋下、筆記沒動", read(pq) == bq, read(pq))
+    pqe = write(v, "Systems/QE.md", 'type: system\nstatus: doing\nrelated: "[[Systems/S]]"')
+    run(v, "append", "QE", "related", "[[Systems/T]]", expect_rc=0)
+    got_qe = m.as_list(m.parse_frontmatter(read(pqe).split("\n")[1:read(pqe).split("\n").index("---", 1)])[0].get("related"))
+    check("⑨b加了引號的單一連結不是清單,照舊可加", got_qe == ["[[Systems/S]]", "[[Systems/T]]"], read(pqe))
+    pqs = write(v, "Systems/QS.md", 'type: system\nstatus: doing\ntags: "  "')
+    run(v, "append", "QS", "tags", "c", expect_rc=0)
+    got_qs = m.as_list(m.parse_frontmatter(read(pqs).split("\n")[1:read(pqs).split("\n").index("---", 1)])[0].get("tags"))
+    check("⑨b 引號裡只有空白 → 當成空的,不留一筆空白垃圾項(第四輪正確性席)", got_qs == ["c"], read(pqs))
+    pqf = write(v, "Systems/QF.md", 'type: system\nstatus: doing\ntags: "[]"')
+    run(v, "append", "QF", "tags", "c", expect_rc=0)
+    got_qf = m.as_list(m.parse_frontmatter(read(pqf).split("\n")[1:read(pqf).split("\n").index("---", 1)])[0].get("tags"))
+    check("⑨b加了引號的空清單 \"[]\" 跟讀的一側一樣當成空的", got_qf == ["c"], read(pqf))
+
+    # ⑨c 單一值轉清單時,原本那一項要原封不動(第三輪外家找洞席:含雙引號的連結被重新加引號、加了反斜線,
+    #     讀回來就不是原本那篇了;寫完的自我檢查又只驗新加的那項,沒發現舊的被改壞)
+    old_link = '[[Systems/API "v2"]]'
+    fm9c = m.edit_fm_append(["related: '" + old_link + "'"], "related", "[[Systems/New]]")
+    got9c = m.as_list(m.parse_frontmatter(fm9c)[0].get("related"))
+    check("⑨c 含雙引號的舊連結轉成清單後讀回來一字不差", got9c and m.link_target(got9c[0]) == m.link_target(old_link), str(got9c))
+    p9c = write(v, "Systems/QI.md", "type: system\nstatus: doing\ntags:\n  - keep\n  - also")
+    b9c = read(p9c)
+    _orig_append = m.edit_fm_append
+    m.edit_fm_append = lambda fm, key, value: [ln for ln in _orig_append(fm, key, value) if "keep" not in ln]
+    try:
+        try:
+            m.cmd_append(m.Env(v), "Systems/QI.md", "tags", "new")
+            kept = False
+        except RuntimeError:
+            kept = True
+    finally:
+        m.edit_fm_append = _orig_append
+    check("⑨c 寫完的自我檢查會發現「原本的項目不見了」並擋下、檔案不動", kept and read(p9c) == b9c, read(p9c))
+    _orig_remove = m.edit_fm_remove
+    def _drop_more(fm, key, value):
+        out, n = _orig_remove(fm, key, value)
+        return [ln for ln in out if "keep" not in ln], n
+    m.edit_fm_remove = _drop_more
+    try:
+        try:
+            m.cmd_remove(m.Env(v), "Systems/QI.md", "tags", "also")
+            kept_r = False
+        except RuntimeError:
+            kept_r = True
+    finally:
+        m.edit_fm_remove = _orig_remove
+    check("⑨c remove 寫完也驗「其他項目都還在」,多拿掉了就擋下、檔案不動", kept_r and read(p9c) == b9c, read(p9c))
+
+    # ⑩ 值已經在了 → 真的什麼都不做:不改寫成清單格式、訊息講「已經有」(第二輪:原本會改寫還印「多了一項」)
+    p10 = write(v, "Systems/AA.md", "type: system\nstatus: doing\ntags: x")
+    b10 = read(p10)
+    r10 = run(v, "append", "AA", "tags", "x", expect_rc=0)
+    check("⑩單一值寫法重複加 → 筆記一個字都沒變", read(p10) == b10, read(p10))
+    check("⑩訊息講已經有、不說多了一項", "已經有" in r10.stdout and "多了一項" not in r10.stdout, r10.stdout)
+    p10b = write(v, "Systems/AB.md", "type: system\nstatus: doing\ntags:\n  - x")
+    b10b = read(p10b)
+    r10b = run(v, "append", "AB", "tags", "x", expect_rc=0)
+    check("⑩清單寫法重複加 → 沒動、訊息講已經有", read(p10b) == b10b and "已經有" in r10b.stdout, r10b.stdout)
+
+    # ⑪ 既有值寫成 src/../src/a.ts(手改或舊資料),再加 src/a.ts → 是同一支檔,不疊第二筆
+    p11 = write(v, "Systems/AC.md", "type: system\nstatus: doing\nabout_code: src/../src/a.ts")
+    b11 = read(p11)
+    run(v, "append", "AC", "about_code", "src/a.ts", expect_rc=0)
+    check("⑪既有 src/../src/a.ts 再加 src/a.ts → 當成同一支、沒動", read(p11) == b11, read(p11))
+
+    # ⑫ remove 也要認同一套正規化:自己加進去的值要能用同一個寫法刪掉;檔案已刪的舊項也要清得掉
+    p12 = write(v, "Systems/AD.md", "type: system\nstatus: doing\nabout_code: []")
+    run(v, "append", "AD", "about_code", "src/../src/c.ts", expect_rc=0)
+    run(v, "remove", "AD", "about_code", "src/../src/c.ts", expect_rc=0)
+    check("⑫用同一個寫法 remove 得掉(存的是 src/c.ts)", not _ac(p12), read(p12))
+    p12b = write(v, "Systems/AE.md", "type: system\nstatus: doing\nabout_code:\n  - src/gone.ts")
+    run(v, "remove", "AE", "about_code", "./src/gone.ts", expect_rc=0)
+    check("⑫已刪掉的檔的舊項,用 ./ 寫法也清得掉", not _ac(p12b), read(p12b))
+    p12c = write(v, "Systems/AL.md", "type: system\nstatus: doing\nabout_code:\n  - src/../src/a.ts\n  - src/a.ts")
+    r12c = run(v, "remove", "AL", "about_code", "src/a.ts", expect_rc=0)
+    check("⑫同一支檔寫了兩種寫法,remove 一次兩筆都拿掉(第三輪外家找洞席)", not _ac(p12c), read(p12c) + r12c.stdout)
+
+    # ⑬ 大小寫要跟磁碟上的真實檔名一致:排序加分拿這個值去比對 git 的改動路徑(大小寫敏感),寫錯就永遠對不上
+    p13 = write(v, "Systems/AF.md", "type: system\nstatus: doing\nabout_code: []")
+    b13 = read(p13)
+    r13 = run(v, "append", "AF", "about_code", "SRC/A.TS", expect_rc=2)
+    check("⑬大小寫跟磁碟不同 → 擋下、沒動", read(p13) == b13, read(p13))
+    if (root / "SRC" / "a.ts").exists():   # 大小寫不敏感的檔案系統(macOS/Windows 預設)才驗訊息;Linux 上它就是「找不到」
+        check("⑬訊息指出磁碟上的真實寫法", "src/a.ts" in r13.stderr, r13.stderr)
+    # ⑬b 只差 Unicode 正規化寫法(é 一個字 vs e 加重音符號)是同一個檔,不能當成大小寫寫錯擋下。
+    #     Mac 的磁碟兩種寫法都認得同一個檔,但目錄清單裡只列存進去的那一種(2026-09-10 派第三輪之前自己抓到)
+    import unicodedata as _ud
+    nfd_name, nfc_name = _ud.normalize("NFD", "café.ts"), _ud.normalize("NFC", "café.ts")
+    (root / "src" / nfd_name).write_text("x\n", encoding="utf-8")
+    if (root / "src" / nfc_name).is_file() and nfc_name not in _os.listdir(root / "src"):   # 只在「兩種寫法都認」的檔案系統驗
+        write(v, "Systems/AG.md", "type: system\nstatus: doing\nabout_code: []")
+        r13b = run(v, "append", "AG", "about_code", "src/" + nfc_name)
+        check("⑬b只差 Unicode 寫法的同一個檔照收", r13b.returncode == 0, r13b.stderr)
+
+    # ⑭ Windows 反斜線寫法也收,存成斜線(r3 邊界席:原本直接拿反斜線去找檔,永遠「找不到」)
+    p14 = write(v, "Systems/AH.md", "type: system\nstatus: doing\nabout_code: []")
+    run(v, "append", "AH", "about_code", "src\\a.ts", expect_rc=0)
+    check("⑭反斜線寫法收下、存成 src/a.ts", _ac(p14) == ["src/a.ts"], read(p14))
+
+    # ⑮ 同一支檔的另一種寫法已經在(舊的大小寫錯字、symlink 別名)→ 當成同一支:不疊第二筆、remove 找得到。
+    #    (r3 邊界席+正確性席:比對鍵只做字面正規化時,這兩種都會被當成另一支檔,疊出重複又刪不掉)
+    (root / "real").mkdir(exist_ok=True)
+    (root / "real" / "x.ts").write_text("x\n", encoding="utf-8")
+    try:
+        (root / "link").symlink_to(root / "real", target_is_directory=True)
+        has_link = True
+    except OSError:   # Windows 沒有權限建 symlink 時跳過這一段
+        has_link = False
+    if has_link:
+        p15 = write(v, "Systems/AI.md", "type: system\nstatus: doing\nabout_code:\n  - link/x.ts")
+        b15 = read(p15)
+        r15 = run(v, "append", "AI", "about_code", "real/x.ts", expect_rc=0)
+        check("⑮symlink 別名已在 → 加真實路徑不疊第二筆", read(p15) == b15 and "已經有" in r15.stdout, r15.stdout + read(p15))
+        run(v, "remove", "AI", "about_code", "real/x.ts", expect_rc=0)
+        check("⑮用真實路徑 remove 得掉別名那筆", not _ac(p15), read(p15))
+        p15b = write(v, "Systems/AM.md", "type: system\nstatus: doing\nabout_code: []")
+        run(v, "append", "AM", "about_code", "link/x.ts", expect_rc=0)
+        run(v, "remove", "AM", "about_code", "link/x.ts", expect_rc=0)
+        check("⑮用別名加進去(存成真實路徑),用同一個別名刪得掉(第三輪外家找洞席)", not _ac(p15b), read(p15b))
+    if (root / "SRC" / "a.ts").exists():   # 大小寫不敏感的檔案系統才有「同一支檔兩種大小寫」這回事
+        p15c = write(v, "Systems/AJ.md", "type: system\nstatus: doing\nabout_code: SRC/A.TS")
+        b15c = read(p15c)
+        r15c = run(v, "append", "AJ", "about_code", "src/a.ts", expect_rc=0)
+        check("⑮舊的大小寫錯字項已在 → 不疊第二筆,訊息點出現有寫法", read(p15c) == b15c and "SRC/A.TS" in r15c.stdout, r15c.stdout)
+        run(v, "remove", "AJ", "about_code", "src/a.ts", expect_rc=0)
+        check("⑮用正確大小寫 remove 得掉舊的錯字項", not _ac(p15c), read(p15c))
+
+    # ⑯ 目錄讀不到檔名清單時,大小寫沒辦法確認 → 擋下(r3 併發資源席:原本當成「寫對了」放行)
+    (root / "src" / "sub").mkdir(exist_ok=True)
+    (root / "src" / "sub" / "b.ts").write_text("x\n", encoding="utf-8")
+    p16 = write(v, "Systems/AK.md", "type: system\nstatus: doing\nabout_code: []")
+    b16 = read(p16)
+    _os.chmod(root / "src" / "sub", 0o111)
+    try:
+        readable = True
+        try:
+            _os.listdir(root / "src" / "sub")
+        except OSError:
+            readable = False
+        if not readable:   # 以 root 身分跑時權限擋不住 listdir,這段驗不了
+            r16 = run(v, "append", "AK", "about_code", "src/sub/b.ts", expect_rc=2)
+            check("⑯目錄讀不到 → 擋下、筆記沒動、訊息講讀不到", read(p16) == b16 and "讀不到" in r16.stderr, r16.stderr)
+        # ⑯b remove 時目錄讀不到:大小寫與別名沒辦法比對,找不到時訊息要講明(第四輪整合席:原本默默退回字面比對)
+        if not readable and (root / "SRC" / "a.ts").exists():
+            p16b = write(v, "Systems/AN.md", "type: system\nstatus: doing\nabout_code:\n  - SRC/sub/b.ts")
+            r16b = run(v, "remove", "AN", "about_code", "src/sub/b.ts", expect_rc=2)
+            check("⑯b 目錄讀不到、比對不到時,訊息講明讀不到", "讀不到" in r16b.stderr, r16b.stderr)
+    finally:
+        _os.chmod(root / "src" / "sub", 0o755)
+
+    # ⑧ ★只有一套規則★:set 不收 about_code。
+    # ★要用單一值寫法的筆記來驗★:清單寫法的筆記,底層的純量寫入本來就會拒絕,
+    # 放行 set 的破壞會被遮住(紅釘第一次就是這樣沒咬到)
+    p8 = write(v, "Systems/W.md", "type: system\nstatus: doing\nabout_code: src/a.ts")
+    before8 = read(p8)
+    run(v, "set", "W", "about_code", "src/b.ts", expect_rc=2)
+    check("⑧set about_code 被擋,單一值寫法的那篇也沒被改掉", read(p8) == before8, read(p8))
+    outside.unlink()
+
+
+def t_new_verification_backlink_blocked_still_says_note_created():
+    """lumos new verification --systems 幫系統筆記回掛 verified_by 時,如果那篇的 verified_by 寫成同一行清單被擋,
+    要照舊印「筆記建好了,但回掛沒寫成功」——不能讓擋下訊息蓋掉「新筆記其實已經寫到磁碟」這件事
+    (2026-09-10 代碼審 r3 整合席:回掛那段只接 OSError,擋下的 ValueError 穿出去,看起來像整個指令都失敗)。"""
+    v = mkvault()
+    write(v, "Systems/Tg.md", 'type: system\nstatus: doing\nverified_by: "[[Verification/A]], [[Verification/B]]"')
+    r = run(v, "new", "verification", "X", "--systems", "Systems/Tg.md")
+    check("rc2(回掛有一部分沒成功)", r.returncode == 2, r.stderr[-300:])
+    check("印出「筆記建好了」", "筆記建好了" in r.stderr, r.stderr[-300:])
+    check("新驗證筆記確實在磁碟上", any(p.name == "X.md" for p in (v / "Verification").glob("*.md")), "")
+
+
+def t_concurrent_append_same_note():
+    """同一篇筆記同時被好幾個程序 append:不能噴錯誤,回報成功的每一項都要真的在檔案裡。
+    2026-09-10 代碼審 r3 併發資源席:暫存檔名是固定的(同一篇筆記大家搶同一個暫存檔),
+    實測六個同時跑六個都噴 FileNotFoundError、一項都沒寫進去;就算不撞名,讀—改—寫之間沒有鎖,
+    回報成功的也會被後寫的蓋掉。翻紅釘:暫存檔名改回固定 → 噴錯;拿掉鎖 → 項目少於回報成功的數量。"""
+    import subprocess as sp
+    v = mkvault()
+    p = write(v, "Systems/C.md", "type: system\nstatus: doing\ntags: []")
+    procs = [sp.Popen([sys.executable, GRAPHCTL, "--vault", str(v), "append", "C", "tags", f"t{i}"],
+                      stdout=sp.PIPE, stderr=sp.PIPE, text=True) for i in range(8)]
+    res = []
+    for pr in procs:
+        out, err = pr.communicate()
+        res.append((pr.returncode, err))
+    check("八個同時跑,沒有一個噴 Python 錯誤", not any("Traceback" in e for _, e in res), str([e[-200:] for _, e in res if e])[:600])
+    check("八個都回報成功", all(rc == 0 for rc, _ in res), str([rc for rc, _ in res]))
+    txt = read(p)
+    check("回報成功的八項都真的在檔案裡", all(f"- t{i}" in txt for i in range(8)), txt)
+    leftovers = [q.name for q in (v / "Systems").iterdir() if "tmp" in q.name]
+    check("沒有留下暫存檔", not leftovers, str(leftovers))
+    # ↑ 上面這段靠時序,撞不撞得到看運氣;下面兩段是必定驗得到的:
+    # ① 暫存檔名每次都不一樣:在舊的固定暫存檔名那裡先放一個同名資料夾,固定檔名的寫法一定失敗
+    p1 = write(v, "Systems/E.md", "type: system\nstatus: doing\ntags: []")
+    (v / "Systems" / "E.md.tmp-wlf").mkdir()
+    (v / "Systems" / "E.md.lumos-tmp").mkdir()
+    r1 = run(v, "append", "E", "tags", "x")
+    check("①暫存檔名不固定:舊檔名的位置被佔住也寫得進去", r1.returncode == 0 and "- x" in read(p1), r1.stderr[-300:])
+    # ② 讀—改—寫要排隊:鎖在別人手上時 append 會等,鎖一放就寫進去
+    import time as _time
+    m = _load_lumos_inproc()
+    p2 = write(v, "Systems/F.md", "type: system\nstatus: doing\ntags: []")
+    b2 = read(p2)
+    with m._vault_write_lock(v):
+        pr = sp.Popen([sys.executable, GRAPHCTL, "--vault", str(v), "append", "F", "tags", "y"],
+                      stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+        _time.sleep(1.5)
+        check("②鎖在別人手上時,append 會等(還沒寫)", pr.poll() is None and read(p2) == b2, read(p2))
+    out, err = pr.communicate(timeout=60)
+    check("②鎖放掉之後照常寫進去", pr.returncode == 0 and "- y" in read(p2), err[-300:])
+    # ③ 同一個程序裡巢狀拿同一把鎖:直接過,不自己卡自己(第四輪併發資源席:原本卡滿 60 秒還說「別的程序在寫」)
+    t0 = _time.monotonic()
+    with m._vault_write_lock(v):
+        with m._vault_write_lock(v):
+            pass
+    check("③巢狀拿同一把鎖不卡住", _time.monotonic() - t0 < 5, f"{_time.monotonic() - t0:.1f}s")
+    # ④ 鎖的資料夾建不起來:照寫,但要講一聲(第四輪併發資源席:原本默默不上鎖)
+    fake_home = v.parent / "home-is-a-file"
+    fake_home.write_text("x", encoding="utf-8")
+    import os as _os2
+    r4 = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "append", "F", "tags", "z"],
+                capture_output=True, text=True, env={**_os2.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)})
+    check("④鎖的資料夾建不起來也照寫、而且講一聲", r4.returncode == 0 and "- z" in read(p2) and "鎖" in r4.stderr, r4.stderr[-300:])
+    # ⑤ 鎖是跟專案既有的同一套(建鎖檔+過期接手),不是另一套機制(第四輪架構席)
+    import inspect as _insp
+    src_lock = _insp.getsource(m._vault_write_lock)
+    check("⑤寫入鎖用專案既有的鎖檔做法(_excl_lock_try),沒有另開 flock/msvcrt", "_excl_lock_try" in src_lock
+          and "fcntl" not in src_lock and "msvcrt" not in src_lock, "")
+
+
+def t_write_lf_keeps_normal_permissions():
+    """_write_lf 寫出來的檔權限要跟一般建檔一樣(受 umask 管),原本就有的檔保留原權限(例如 +x)。
+    2026-09-10 代碼審 r4 併發資源席:第三輪為了把暫存檔權限調回來,讀 umask 的寫法會短暫改掉整個程序的 umask,
+    多執行緒時別的執行緒建的檔會拿到錯的權限。現在不碰 umask。"""
+    import os as _os, stat as _st, inspect as _insp
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        ref = Path(d) / "ref.txt"
+        with open(ref, "w") as fh:
+            fh.write("x")
+        new = Path(d) / "new.md"
+        m._write_lf(new, "hello\n")
+        check("新檔權限跟一般建檔一樣", _st.S_IMODE(new.stat().st_mode) == _st.S_IMODE(ref.stat().st_mode),
+              f"{oct(new.stat().st_mode)} vs {oct(ref.stat().st_mode)}")
+        exe = Path(d) / "run.sh"
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        _os.chmod(exe, 0o755)
+        m._write_lf(exe, "#!/bin/sh\necho hi\n")
+        check("原本就有的檔保留原權限(+x 還在)", _st.S_IMODE(exe.stat().st_mode) == 0o755, oct(exe.stat().st_mode))
+    check("_write_lf 不碰整個程序的 umask", "umask" not in _insp.getsource(m._write_lf).split('"""', 2)[-1], "")
+
+
+def t_about_code_revert_waits_for_write_lock():
+    """about-code revert 清掉 about_code_stamp 那一步也要排隊(第四輪併發資源席:原本直接呼叫底層函式,
+    繞過寫入鎖,別的程序正在寫同一個筆記庫時照樣動手)。這篇沒有 about_code 值,只剩清 stamp 那一步。"""
+    import subprocess as sp, time as _time
+    m = _load_lumos_inproc()
+    v = mkvault()
+    p = write(v, "Systems/B9.md", "type: system\nstatus: done\nabout_code_stamp: batch-2026-08-23/2026-08-23")
+    b = read(p)
+    with m._vault_write_lock(v):
+        pr = sp.Popen([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "revert", "--batch", "2026-08-23"],
+                      stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+        _time.sleep(1.5)
+        check("鎖在別人手上時,清 stamp 那一步會等(還沒動檔)", pr.poll() is None and read(p) == b, read(p))
+    out, err = pr.communicate(timeout=60)
+    check("鎖放掉之後照常清掉 stamp", "about_code_stamp" not in read(p), out[-200:] + err[-200:])
+
+
+def t_new_verification_plan_backlink_blocked_still_says_note_created():
+    """--plan 那條回掛(往新筆記自己的 plan_refs 寫)被擋或逾時,也要照舊印「筆記建好了」
+    (第四輪架構席:第三輪只修了 --systems 那條,--plan 這條還只接 OSError)。"""
+    import io, contextlib
+    m = _load_lumos_inproc()
+    v = mkvault()
+    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing")
+    real = m.cmd_append
+    def boom(env, rel, key, value):
+        if key == "plan_refs":
+            raise RuntimeError("等了 60 秒還輪不到寫入")
+        return real(env, rel, key, value)
+    m.cmd_append = boom
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                rc = m.cmd_new(m.Env(v), "verification", "Y", "2026-09-10", plan="Projects/P_計劃.md")
+            except RuntimeError:
+                rc = "穿出去了"
+    finally:
+        m.cmd_append = real
+    check("回掛逾時不穿出去、rc2", rc == 2, str(rc))
+    check("印出「筆記建好了」", "筆記建好了" in err.getvalue(), err.getvalue()[-300:])
+
+def t_multi_link_list_value_one_rule():
+    """清單欄位的一個值裡有兩個以上連結 = 寫壞:讀的一側(lint)唸、寫的一側(append/remove)擋,兩邊用同一個判斷。
+    2026-09-10 代碼審 r3 架構席:寫側只看「兩個以上 [[」,讀側只認 `]], [[` 與 `]],[[` 兩種寫法,
+    `[[A]],  [[B]]` 讀側不吭聲、寫側卻擋——兩套「什麼算一串連結」。
+    非清單欄位(例如 valid_under 這種散文)講到兩個連結是正常的,讀側不唸。"""
+    m = _load_lumos_inproc()
+    for val in ("[[Systems/A]], [[Systems/B]]", "[[Systems/A]],  [[Systems/B]]",
+                "[[Systems/A]] , [[Systems/B]]", "[[Systems/A]] [[Systems/B]]"):
+        fm = ["type: system", f"related: {val}"]
+        check(f"讀側唸(單一值):related: {val}", any("多個連結" in x for x in m.parse_frontmatter(fm)[2]), "")
+        try:
+            m._list_scalar_value(fm, "related", 1); blocked = False
+        except ValueError:
+            blocked = True
+        check(f"寫側擋(單一值):related: {val}", blocked, "")
+        fm2 = ["type: system", "related:", f"  - {val}"]
+        check(f"讀側唸(清單項):{val}", any("多個連結" in x for x in m.parse_frontmatter(fm2)[2]), "")
+    fm3 = ["type: system", "valid_under: 只證明 [[Systems/A]] 與 [[Systems/B]] 的交界"]
+    check("非清單欄位的散文提到兩個連結不唸", not any("多個連結" in x for x in m.parse_frontmatter(fm3)[2]), "")
+    fm4 = ["type: system", "related: [[Systems/A]]"]
+    check("單一連結不唸", not any("多個連結" in x for x in m.parse_frontmatter(fm4)[2]), "")
 
 
 # ── set 日期 bare 不加引號(污染指紋防護的反向:正常日期不該被引號) ──
@@ -9169,6 +9597,233 @@ def t_pitfalls_diff():
           any(c["file"] == "訂單頁.py" for c in data["claims"]), r.stdout)
 
 
+def t_pitfalls_diff_ignores_vendored_toolchain():
+    """★消費專案的第一次提交,風險分級不得被「工具鏈自己的檔」撐成 high★。
+
+    2026-09-10 在一個小 Vue 專案上實撞:init 會把 CLI、五支 hook 一起複製進 scripts/,
+    第一次提交自然把它們一起帶進去;pitfalls 掃 diff 時逐檔命中那些檔裡的 open( 之類,
+    ★整份報告 30 條沒有一條在專案自己的程式碼裡★,tier 卻被撐成 high,推送被擋,
+    要求對一份不是自己寫的程式做代碼審。愈是剛接入的專案愈會撞到。
+
+    ★但工具鏈自己的 repo 不能跳過★——在那裡 scripts/lumos 就是產品本體,
+    跳過等於把這個閘整個關掉。判別鍵沿用既有慣例(skills/lumos-project-notes/SKILL.md
+    只存在於來源 repo,永不複製進消費專案)。
+    翻紅釘:拿掉跳過 → ②翻紅;跳過時不看是不是工具鏈本體 → ④翻紅。"""
+    import json as _json, subprocess as sp
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-pfvendor-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    def commit(m): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
+    git("init")
+    (root / "app.js").write_text("export const x = 1\n", encoding="utf-8")
+    commit("init")
+
+    # ① 基準線:專案自己的檔命中,照樣要報
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "mine.py").write_text("def f():\n    fh = open('x.txt')\n", encoding="utf-8")
+    commit("mine")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("①專案自己的檔照樣要報", any(c["file"] == "src/mine.py" for c in d["claims"]), r.stdout)
+
+    # ② 工具鏈自己安裝進來的檔:同樣的寫法,不得算在這個專案頭上
+    (root / "scripts" / "hooks" / "claude").mkdir(parents=True, exist_ok=True)
+    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/hooks/claude/impact-hook.py"):
+        (root / rel).write_text("def f():\n    fh = open('x.txt')\n", encoding="utf-8")
+    m._vendored_manifest_write(root)   # 安裝時會記下內容指紋(r3:只比檔名會被「改了工具檔」繞過)
+    commit("vendored")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("②工具鏈自己安裝的檔不算這個專案的風險",
+          not d["claims"] and d["tier"] == "standard",
+          str(d.get("tier")) + " / " + str(d["claims"])[:400])
+
+    # ③ 同一次提交裡混著兩種:只留專案自己的那條
+    (root / "src" / "two.py").write_text("def g():\n    fh = open('y.txt')\n", encoding="utf-8")
+    (root / "scripts" / "lumos").write_text("def f():\n    fh = open('z.txt')\n    q = open('w.txt')\n", encoding="utf-8")
+    m._vendored_manifest_write(root)   # 工具更新:工具檔跟指紋清單一起換
+    commit("mixed")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    files = {c["file"] for c in d["claims"]}
+    check("③混著提交時只留專案自己的", files == {"src/two.py"}, str(files))
+
+    # ③b ★專案自己改了工具裝進來的檔(指紋清單沒跟著換)→ 照樣要掃★(2026-09-10 代碼審 r3 併發資源席:
+    #    只比檔名的話,把風險程式碼放進那 15 個路徑就能讓風險掃描完全看不到)
+    (root / "scripts" / "hooks" / "claude" / "impact-hook.py").write_text("def f():\n    fh = open('edited.txt')\n", encoding="utf-8")
+    commit("edit-vendored")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("③b 改過的工具檔(內容跟安裝時不同)照樣要掃",
+          any(c["file"] == "scripts/hooks/claude/impact-hook.py" for c in d["claims"]), str(d["claims"])[:400])
+
+    # ③c 沒有指紋清單(舊版安裝)→ 一支都不跳,寧可多掃
+    rootn = Path(tempfile.mkdtemp(prefix="gctl-pfvendorn-"))
+    def gitn(*a): sp.run(["git", *a], cwd=rootn, capture_output=True)
+    def commitn(msg): gitn("add", "-A"); gitn("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg)
+    gitn("init"); (rootn / "app.js").write_text("x\n", encoding="utf-8"); commitn("init")
+    (rootn / "scripts").mkdir()
+    (rootn / "scripts" / "lumos").write_text("def f():\n    fh = open('x.txt')\n", encoding="utf-8")
+    commitn("vendored-no-manifest")
+    r = run(rootn, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(rootn), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("③c 沒有指紋清單 → 工具檔照樣掃(寧可多掃)",
+          any(c["file"] == "scripts/lumos" for c in d["claims"]), str(d["claims"])[:400])
+
+    # ④ 工具鏈本體的 repo 不得跳過(那裡 scripts/lumos 就是產品)
+    (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
+    (root / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (root / "scripts" / "lumos").write_text("def f():\n    fh = open('again.txt')\n", encoding="utf-8")
+    commit("selfrepo")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("④在工具鏈自己的 repo 裡,scripts/lumos 照樣要掃",
+          any(c["file"] == "scripts/lumos" for c in d["claims"]), str(d["claims"])[:400])
+
+    # ⑤ ★消費專案自己放在 scripts/hooks 底下的程式照樣要掃★(r1 四席獨立抓到的 blocker):
+    # 原本照目錄前綴跳過,專案自己的 hook/樣板程式會被當成工具的檔,推送閘的風險分級被降、逃過代碼審。
+    # 改成只跳過「工具確實會安裝的那幾支檔」(精確檔名清單)。
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-pfvendor2-"))
+    def git2(*a): sp.run(["git", *a], cwd=root2, capture_output=True)
+    def commit2(m): git2("add", "-A"); git2("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
+    git2("init"); (root2 / "app.js").write_text("x\n", encoding="utf-8"); commit2("init")
+    (root2 / "scripts" / "hooks" / "claude").mkdir(parents=True)
+    (root2 / "scripts" / "hooks" / "my_own_deploy.py").write_text("def f():\n    fh = open('k')\n", encoding="utf-8")
+    (root2 / "scripts" / "templates").mkdir(parents=True)
+    (root2 / "scripts" / "templates" / "render.py").write_text("def g():\n    fh = open('t')\n", encoding="utf-8")
+    (root2 / "scripts" / "hooks" / "claude" / "impact-hook.py").write_text("def h():\n    fh = open('v')\n", encoding="utf-8")
+    m._vendored_manifest_write(root2)
+    commit2("own-hooks")
+    r = run(root2, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root2), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    files = {c["file"] for c in d["claims"]}
+    check("⑤專案自己放在 scripts/hooks、scripts/templates 的程式照樣要掃,分級照樣會變 high",
+          {"scripts/hooks/my_own_deploy.py", "scripts/templates/render.py"} <= files and d["tier"] == "high",
+          str(files) + " / " + str(d["tier"]))
+    check("⑤工具確實安裝的那支檔(同名同路徑)才跳過",
+          "scripts/hooks/claude/impact-hook.py" not in files, str(files))
+
+    # ⑥ ★刪除行那一條路也要跳過★(r1 整合席 F2 / 正確性席 F3):工具自己的檔只有刪行時,
+    # 不得觸發棧別效能題(借一支 .vue 讓題表認得;路徑用工具確實安裝的檔名才算數)
+    m = _load_lumos_inproc()
+    # 工具真正安裝的檔都是 .py/shell/.md,沒有一支會觸發棧別題——那樣這條就驗不到東西。
+    # 所以臨時把一支 .vue 登記成「工具的檔」當替身,只為了讓刪除行那條路有東西可咬。
+    # 每次動它都跟著換指紋清單(=工具自己的更新)。
+    vend = "scripts/hooks/claude/h1.vue"
+    saved_all = m._VENDORED_ALL
+    m._VENDORED_ALL = frozenset(saved_all | {vend})
+    root3 = Path(tempfile.mkdtemp(prefix="gctl-pfvendor3-"))
+    def git3(*a): sp.run(["git", *a], cwd=root3, capture_output=True)
+    def commit3(msg): git3("add", "-A"); git3("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg)
+    git3("init"); (root3 / "a.txt").write_text("x\n", encoding="utf-8"); commit3("init")
+    (root3 / "scripts" / "hooks" / "claude").mkdir(parents=True)
+    (root3 / vend).write_text("const s = reactive({a: 1})\nconst t = 1\n", encoding="utf-8"); m._vendored_manifest_write(root3); commit3("v1")
+    (root3 / vend).write_text("const t = 1\n", encoding="utf-8"); m._vendored_manifest_write(root3); commit3("v2-delete-only")
+    dd = m._pitfall_diff_collect("HEAD~1..HEAD", root3, no_lint=True)
+    check("⑥工具自己的檔只有刪行時,不觸發任何棧別效能題", not dd.get("stack_questions_applicable"),
+          str(dd.get("stack_questions_applicable")))
+
+    # ⑦ ★lint 那一層也要跳過★(r1 整合席 F1 / 外家找洞席 F2):宣告了 lint 的消費專案,
+    # 工具自己那幾支檔的 lint 命中照樣會把分級撐成 high。對齊與不對齊兩條路都要濾。
+    (root3 / "src").mkdir()
+    (root3 / "src" / "mine.py").write_text("x = 1\n", encoding="utf-8")
+    (root3 / vend).write_text("const t = 1\nconst z = 2\n", encoding="utf-8"); m._vendored_manifest_write(root3); commit3("v3")
+    saved = {k: getattr(m, k) for k in ("_lint_load_config", "_lint_stacks_for_diff", "_lint_aligned", "_lint_run_and_parse")}
+    try:
+        m._lint_load_config = lambda root: {"py": ["fakelint"]}
+        m._lint_stacks_for_diff = lambda added, cfg: ["fakelint"]
+        m._lint_run_and_parse = lambda cmd, root: ([
+            {"file": vend, "line": 2, "source": "lint:fake", "class": "lint", "question": "q"},
+            {"file": "src/mine.py", "line": 1, "source": "lint:fake", "class": "lint", "question": "q"}], True)
+        for aligned in (True, False):
+            m._lint_aligned = lambda *a, _al=aligned: _al
+            dl = m._pitfall_diff_collect("HEAD~1..HEAD", root3)
+            lf = {c["file"] for c in dl["claims"] if str(c.get("source", "")).startswith("lint:")}
+            check(f"⑦lint 命中:工具自己的檔要濾掉、專案自己的留著(對齊={aligned})",
+                  vend not in lf and "src/mine.py" in lf, str(lf))
+        # ⑧ 整支拆掉(deinit):終點上檔不在了,但起點時是原封不動的工具檔 → 刪掉的行也不觸發棧別題
+        (root3 / vend).write_text("const s = reactive({a: 1})\n", encoding="utf-8"); m._vendored_manifest_write(root3); commit3("v4")
+        (root3 / vend).unlink(); m._vendored_manifest_write(root3); commit3("v5-removed")
+        d8 = m._pitfall_diff_collect("HEAD~1..HEAD", root3, no_lint=True)
+        check("⑧拆掉原封不動的工具檔,刪掉的行不觸發棧別題", not d8.get("stack_questions_applicable"),
+              str(d8.get("stack_questions_applicable")))
+        # ⑨ 工具檔內容不是 UTF-8(或二進位)也要讀得動、算得出指紋(第四輪:改用既有的 git show 讀法後,
+        #    文字模式解碼不了就會噴錯;現在用位元組讀)
+        #    (直接驗指紋判斷那一步:整份差異裡有非 UTF-8 內容時,風險掃描讀差異那段本身就會中斷——那是另一個既有問題,
+        #     見 Issues/風險掃描遇到非UTF-8內容整支中斷)
+        (root3 / vend).write_bytes(b"\xff\xfe const t = 1\n"); m._vendored_manifest_write(root3); commit3("v6-bytes")
+        try:
+            in9, pr9 = m._vendored_state(root3, "HEAD")
+            ok9 = True
+        except (ValueError, OSError):
+            in9, pr9, ok9 = frozenset(), frozenset(), False
+        check("⑨版本裡的工具檔不是 UTF-8 也不崩潰、照樣認得是原封不動", ok9 and vend in in9, str(in9))
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+        m._VENDORED_ALL = saved_all
+
+
+def t_vendored_state_survives_unreadable_file():
+    """工具檔讀不到(權限、被鎖)時,健檢與風險掃描不能直接噴錯中斷——那支檔當成「不是原封不動」照樣掃。
+    2026-09-10 代碼審 r4 邊界席(blocker):逐檔讀內容沒包例外,權限錯直接變成 Python 錯誤、推送前的檢查整支停掉。"""
+    import os as _os
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "scripts").mkdir()
+        f = root / "scripts" / "lumos"
+        f.write_text("x\n", encoding="utf-8")
+        m._vendored_manifest_write(root)
+        check("基準線:讀得到時認得是原封不動", "scripts/lumos" in m._vendored_state(root)[0], "")
+        _os.chmod(f, 0)
+        try:
+            try:
+                open(f, "rb").close()
+                readable = True
+            except OSError:
+                readable = False
+            if readable:   # 以 root 身分跑時權限擋不住,後面驗不了(基準線那條照樣算數)
+                return
+            try:
+                intact, present = m._vendored_state(root)
+                ok = True
+            except OSError:
+                ok = False
+            check("讀不到的工具檔不讓整支中斷", ok, "")
+            check("讀不到的工具檔不算原封不動(照樣掃),但算存在", ok and "scripts/lumos" not in intact and "scripts/lumos" in present, "")
+            r = run(root, "doctor")
+            check("健檢照樣跑得完(沒有 Python 錯誤)", "Traceback" not in r.stderr, r.stderr[-300:])
+        finally:
+            _os.chmod(f, 0o644)
+
+
+def t_vendored_file_list_matches_what_install_ships():
+    """跳過清單★必須跟工具確實安裝的檔一模一樣★(r1 整合席 F5:原本另寫了一份目錄清單)。
+    清單少一支 → 那支檔又會被當成專案程式掃、撐高分級;多一支 → 專案同名的檔會被靜默跳過。
+    翻紅釘:在 scripts/hooks 底下多加一支受版控的檔卻不登記 → 翻紅。"""
+    import subprocess as sp
+    # 比的是工具鏈 repo 自己受版控的檔——在消費專案裡跑沒有意義,而且專案自己在 scripts/hooks 放檔就會假紅
+    # (第三輪外家找洞席;同類事故 [[Issues/vendored自測3紅_來源repo專用測試漏標skip]])
+    _need_src("skills/lumos-project-notes/SKILL.md")
+    m = _load_lumos_inproc()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    tracked = sp.run(["git", "ls-files", *m._VENDORED_TREE_DIRS], cwd=repo,
+                     capture_output=True, text=True).stdout.split()
+    tracked = {t for t in tracked if "__pycache__" not in t}
+    check("跳過清單 = 工具鏈 repo 裡那兩個目錄底下受版控的每一支檔",
+          set(m._VENDORED_TREE_FILES) == tracked,
+          f"少登記:{sorted(tracked - set(m._VENDORED_TREE_FILES))} 多登記:{sorted(set(m._VENDORED_TREE_FILES) - tracked)}")
+    check("工具鏈根目錄那幾支也在清單裡", set(m._VENDORED_TOOLKIT) <= m._VENDORED_ALL, "")
+    # 路徑正規化:./ 開頭、反斜線都要認得;★只比對整條路徑★,不是字首
+    iv = lambda x: m._posix_norm(x) in m._VENDORED_ALL
+    check("./ 開頭、反斜線寫法都認得", iv("./scripts/hooks/pre-push") and iv("scripts\\hooks\\pre-push"), "")
+    check("目錄本身、同目錄的其他檔都不算", not iv("scripts/hooks") and not iv("scripts/hooks/my_own.py")
+          and not iv(".scripts/hooks/pre-push"), "")
+    # 指紋:換行統一後再算(Windows 換行轉換不該讓指紋對不上)
+    check("指紋不受 CRLF/LF 影響", m._vendored_digest(b"a\r\nb\n") == m._vendored_digest(b"a\nb\n"), "")
+
+
 def t_pitfalls_diff_ignores_data_files_and_string_literals():
     """工具鏈補強十件 #7:資料檔(.json/.jsonl…)與字串字面裡的 open(/UPDATE 不算代碼風險——
     2026-08-22 三批推送被探針結果 JSON 和 print 文字連判 high,閘被訓練成「先想怎麼 skip」。"""
@@ -15029,6 +15684,8 @@ def t_update_resyncs_claude():
         (tpl_dir / "graph-discipline.md").write_text(NEW_TPL, encoding="utf-8")
         # hooks dir 需存在避免 rglob 報錯
         (scripts_dir / "hooks").mkdir()
+        # 來源裡一支不在工具清單上的檔(例如沒進版控的草稿):不該被裝進消費專案(第三輪外家否決席)
+        (scripts_dir / "hooks" / "extra_untracked.py").write_text("x = 1\n", encoding="utf-8")
 
         # ── 建消費專案:既有 vault + 舊 block ────────────────────────────
         subprocess.run(["git", "init", str(root)], capture_output=True)
@@ -15064,6 +15721,17 @@ def t_update_resyncs_claude():
         check("update_resyncs: 舊 body 已被替換",
               OLD_BODY not in cm_text,
               f"舊 body 仍存在: {cm_text!r}")
+        # 安裝/更新時要記下工具檔的內容指紋(2026-09-10 代碼審 r3:風險掃描只跳過內容對得上的工具檔)
+        import json as _json
+        man = root / ".lumos" / "vendored.json"
+        files = _json.loads(man.read_text(encoding="utf-8")).get("files", {}) if man.is_file() else {}
+        tpl_rel = "scripts/templates/graph-discipline.md"
+        check("update_resyncs: 不在工具清單上的來源檔不會被裝進消費專案",
+              not (root / "scripts" / "hooks" / "extra_untracked.py").exists(), "")
+        check("update_resyncs: 指紋清單寫出來了,而且對得上裝進去的那支範本",
+              files.get(tpl_rel) == mod._vendored_digest((root / tpl_rel).read_bytes()), str(files)[:200])
+        check("update_resyncs: 指紋清單帶 version 欄位(跟錨點基準線同一種格式,第四輪架構席)",
+              _json.loads(man.read_text(encoding="utf-8")).get("version") == 1, man.read_text(encoding="utf-8")[:200])
         check("update_resyncs: 使用者規則保留",
               "使用者規則" in cm_text,
               f"使用者規則消失: {cm_text!r}")
@@ -25982,7 +26650,8 @@ def t_vendored_consumer_srconly_skip_regression():
     (root / "governance" / "autonomous_loop").mkdir(parents=True)
     # docs/ 整個不存在(消費端 vault 是自己專案的,不叫 lumos-toolchain-knowledge)
     for kw, tname in (("precommit_whitelist_drift_guard", "t_precommit_whitelist_drift_guard"),
-                      ("difficulty_panel_width", "t_difficulty_panel_width")):
+                      ("difficulty_panel_width", "t_difficulty_panel_width"),
+                      ("vendored_file_list_matches_what_install_ships", "t_vendored_file_list_matches_what_install_ships")):
         r = subprocess.run([sys.executable, str(root / "scripts" / "test_lumos.py"), "-k", kw],
                            capture_output=True, text=True)
         check(f"★消費端模擬:{tname} rc0(不紅)★", r.returncode == 0,
@@ -30121,12 +30790,8 @@ def t_license_headers_travel_with_vendored_files():
           bool(body) and not missing_lines, f"缺 {len(missing_lines)} 行: {missing_lines[:2]}")
 
     # [KEY 2 之二] 會被複製出去的檔案集合★跟生產邏輯同一套算法★,不是手寫清單
-    targets = list(getattr(m, "_VENDORED_TOOLKIT", []))
-    for d in ("scripts/hooks", "scripts/templates"):
-        base = root / d
-        if base.is_dir():
-            targets += [str(q.relative_to(root)) for q in base.rglob("*")
-                        if q.is_file() and "__pycache__" not in q.parts]
+    # 安裝端 2026-09-10 起只複製這份精確清單(第三輪外家否決席:原本整個目錄 rglob,連沒進版控的檔也裝)
+    targets = list(getattr(m, "_VENDORED_ALL", []))
     # 紀律模板刻意不加標頭:它會被合併進消費端自己的 CLAUDE.md/AGENTS.md,標頭會落進使用者的檔案
     exempt = {"scripts/templates/graph-discipline.md"}
     targets = sorted(set(targets) - exempt)
@@ -34170,6 +34835,30 @@ def t_doctor_profile_mismatch_hint():
         (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "swift-xctest", "symbol_profile": "swift"}), encoding="utf-8")
         check("③設對了 → 不出聲", m._profile_stack_mismatch(root) == [], str(m._profile_stack_mismatch(root)))
     check("④沒有 repo(vault 不在 git 底下)→ 靜默不炸", m._profile_stack_mismatch(None) == [], "應該回空 list")
+    # ⑤多平台格式(2026-09-10 pos-guest 首個多平台消費專案實撞):平台表裡的 profile 欄位
+    # 存的是「攤開後的 profile 物件」不是名字,這裡照名字去查表就會拿 dict 當 key 直接炸,
+    # 整支 doctor 中斷在 [S3] 那一段。翻紅釘:把 pe.get("profile") 改回丟進 TEST_PROFILES.get()。
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for n in range(4):
+            (root / f"F{n}.swift").write_text("x\n", encoding="utf-8")
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(_j.dumps({
+            "default_platform": "ios",
+            "platforms": {"ios": {"profile": "swift-xctest", "root": "."}},
+            "symbol_profile": "swift"}), encoding="utf-8")
+        try:
+            msgs5 = m._profile_stack_mismatch(root)
+            ok5, why5 = True, str(msgs5)
+        except Exception as e:
+            ok5, why5 = False, f"炸了:{type(e).__name__}: {e}"
+        check("⑤多平台設定不得炸,而且設對了要安靜", ok5 and msgs5 == [], why5)
+        (root / ".lumos" / "config.json").write_text(_j.dumps({
+            "default_platform": "node",
+            "platforms": {"node": {"profile": "node-jest", "root": "."}},
+            "symbol_profile": "swift"}), encoding="utf-8")
+        check("⑥多平台設定挑錯測試工具照樣要出聲",
+              any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
 
 
 
@@ -34411,6 +35100,61 @@ def t_init_additive_setup_reaches_existing_projects():
         m._init_additive_setup(root)
         check("③再跑一次不覆寫已經有的東西",
               (root / ".lumos" / "config.json").read_text(encoding="utf-8") == before, "被覆寫了")
+
+
+def t_doctor_s3_ignores_vendored_toolchain():
+    """[消費專案接入靜默失效 S3]算「這個專案是什麼技術棧」時,★不能把 lumos 自己安裝進來的檔算進去★。
+
+    2026-09-10 在一個小的 Vue 專案上實撞:lumos init 會把自己的 CLI、自己的測試檔、
+    五支 hook 一起複製到消費專案的 scripts/ 底下,那是八個 .py。專案自己只有六個 .js,
+    於是健檢反過來唸「你有 8 個 .py 但測試設定認的是 .js」——證據全是 lumos 自己的檔,
+    而且愈小的專案愈容易被唸。翻紅釘:把跳過清單拿掉 → ②翻紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "src").mkdir()
+        for n in range(6):
+            (root / "src" / f"m{n}.js").write_text("export const x = 1\n", encoding="utf-8")
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(
+            _j.dumps({"test_profile": "node-jest", "symbol_profile": "typescript"}), encoding="utf-8")
+        check("①還沒安裝工具鏈時本來就安靜(基準線)",
+              not any(".py" in x for x in m._profile_stack_mismatch(root)),
+              str(m._profile_stack_mismatch(root)))
+        # 照 _VENDORED_TOOLKIT + 兩個目錄鋪出 lumos init 真的會放進去的東西
+        for rel in m._VENDORED_TOOLKIT:
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("# lumos\n", encoding="utf-8")
+        # 用工具★確實安裝★的那幾支 hook 檔名(跳過清單只認精確檔名,2026-09-10 r1 改)
+        for rel in m._VENDORED_TREE_FILES:
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("# hook\n", encoding="utf-8")
+        mani = root / ".lumos" / "vendored.json"
+        check("②a 沒有指紋清單(舊版安裝)→ 工具檔照樣算進去(寧可多唸)",
+              any(".py" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+        m._vendored_manifest_write(root)
+        check("②a 指紋清單寫在 .lumos/vendored.json", mani.is_file(), "")
+        msgs = m._profile_stack_mismatch(root)
+        check("②裝了工具鏈之後不得因為 lumos 自己的檔而改口",
+              not any(".py" in x for x in msgs), str(msgs))
+        # ★專案自己放在 scripts/hooks 底下的 python 照樣算★(r1 四席抓到:原本整個目錄都被跳過)
+        own = root / "scripts" / "hooks" / "mine"
+        own.mkdir(parents=True, exist_ok=True)
+        for n in range(9):
+            (own / f"own{n}.py").write_text("x = 1\n", encoding="utf-8")
+        check("②b 專案自己放在 scripts/hooks 的 python 要算進去",
+              any(".py" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+        import shutil as _sh
+        _sh.rmtree(own)
+        # 專案真的自己有一堆 python 時還是要唸(別把整條規則關掉)
+        for n in range(9):
+            (root / "src" / f"real{n}.py").write_text("x = 1\n", encoding="utf-8")
+        check("③專案自己的 python 照樣要唸",
+              any(".py" in x for x in m._profile_stack_mismatch(root)),
+              str(m._profile_stack_mismatch(root)))
 
 
 def t_doctor_s3_keeps_symbol_profile_group():

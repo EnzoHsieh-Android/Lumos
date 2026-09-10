@@ -1,0 +1,57 @@
+你是外部第三方 code reviewer,這一席只判「這寫法跟專案既有的一不一樣」。
+
+這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀完整份 diff、主動找洞。
+
+這是第三輪。前兩輪審查員共抓了 18 條(第一輪 F1–F12 見 /Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r1-intake.md,第二輪 F13–F18 見 /Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r2-intake.md),作者聲稱全部改掉了。你要做兩件事:
+① 驗前兩輪那 18 條的修法是不是真的修到(不是換個地方壞、不是測試綠但咬不到);
+② 對這一輪新改的部分主動找新洞——修法本身常常就是新洞的來源。
+
+材料(都要完整讀):
+- 這批要推上去的完整 diff(git diff -U10 主線..HEAD,1191 行,含測試):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r3-snapshot.patch
+- 這一輪新改了什麼(git diff -U10 第二輪被審版本..HEAD,418 行):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r3-delta.patch ——★只當導航★,它的刪除行(- 開頭)是上一版的程式,在上面那份完整 diff 裡不存在
+- 風險掃描清單(1 條):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r3-manifest.json
+repo 在 /Users/enzo/harness/lumos-toolchain(可 Read/Grep 真代碼查證 diff 上下文;★只讀,不要改任何檔、不要跑會寫檔的指令★;要跑重現請在 /tmp 底下自己建暫存目錄)。
+
+變更主題:lumos 工具鏈(python 零依賴 CLI,單檔 scripts/lumos)——兩個功能:
+【功能一】「消費專案接入」修正,目前的樣子(對主線):
+(1) 健檢 [S3] 技術棧比對 _profile_stack_mismatch:多平台設定下 platforms[x]["profile"] 是攤開後的 dict,原本拿它當名字查表 → TypeError,整支 doctor 中斷。改成 dict 直接用、不是 dict 才查表。
+(2) 「工具自己裝進消費專案的檔」用★精確檔名清單★判別:_VENDORED_TREE_FILES(scripts/hooks、scripts/templates 底下安裝端實際複製的 10 支)加 _VENDORED_TOOLKIT(5 支)合成 _VENDORED_ALL;_is_vendored_path(rel) 正規化後整名比對。安裝端 _vendor_toolchain / _deinit_remove_vendored 逐目錄複製與移除(共用 _VENDORED_TREE_DIRS);漂移測試比對清單與 git ls-files。_is_toolchain_repo(root)(判別鍵 skills/lumos-project-notes/SKILL.md)在工具鏈本體永不跳過。
+(3) _stack_ext_counts(健檢 S3 與 init 猜技術棧共用)在非工具鏈 repo 只跳過那些精確檔名。
+(4) 風險掃描 pitfalls --diff:_stack_changed_ok 的三個呼叫點都傳 skip_vendored;lint 那一層的命中在「對齊」判斷之前先濾掉工具自裝檔。★直接影響 pre-push 與 CI 的風險分級(tier:high 才要求代碼審)★。
+(5) 清單欄位與 about_code(0〜3 支程式檔的清單;只做排序加分,不建波及連結):
+  - append/remove 對所有清單欄位(LIST_KEYS)認得「單一值寫法」(key: 值 → 先改寫成一項的清單再加或刪;_list_scalar_value 讀值、_list_key_scalar_to_list 轉換);
+  - 同一行清單擋下不轉,判準看「去掉引號後的值本身」:以 [ 或 { 開頭(單一連結 [[X]] 除外)、或值裡有兩個以上 [[;加了引號的空清單 "[]" 當成空的;
+  - 值已經在了=真的不動(不改寫格式、不寫檔),訊息「已經有了,檔案沒動」;
+  - append about_code 走 _about_code_path:空值、絕對路徑、跳出 repo 根、不存在、目錄、★大小寫跟磁碟上的真實檔名不一致★都擋(只差 Unicode 正規化寫法的算同一個檔);存成正規化相對路徑;
+  - about_code 的比對鍵 _about_code_norm(純字面:斜線統一、去 ./ 與 ..,不查檔案):append 去重與 remove 找項共用;remove 不要求檔案還在。
+另含 export 3D 圖節點標籤顏色(純 HTML 字串)。
+【功能二】記帳時撞到的兩個誤擋與誤導訊息:
+(6) 席報告格式檢查 _report_normalize_issues 的「總結句豁免」:原本規則是「總結句提到的等級不得高於檔級宣告」,架構對齊席依範本必寫「不對齊共 N 條,其中 major M 條」,M=0 時也被擋。改成比對前先剝掉「等級字後面緊接 0」的片段,非零照樣擋。★這是守衛放寬:canary record 寫側靠它拒收沒正規化的席報告★。
+(7) 整數參數收到非整數時,白話訊息從「要給數字」改成「要給整數」。
+測試:t_doctor_profile_mismatch_hint、t_doctor_s3_ignores_vendored_toolchain、t_pitfalls_diff_ignores_vendored_toolchain、t_vendored_file_list_matches_what_install_ships、t_append_about_code_is_one_list_rule(①–⑬b)、t_report_normalize_cmd、t_bad_command_gives_near_name_not_wall_of_text、t_license_headers_travel_with_vendored_files;兩支舊測試夾具改成先建出被引用的程式檔。
+
+錨定紀律(硬性):每條 finding 必附一段★從 r3-snapshot.patch★逐字複製的引句(≥10 字);編不出引句的疑慮不要交(收貨端機器逐條比對,錨不到=不採信)。
+
+抑噪紀律:
+- 低嚴重度疑慮,給不出具體失敗場景就不要標。但未定義的詞/壞引用/內部不一致例外,一律要報。
+- 不能指出具體受影響的 file:line,就不准臆測「可能會壞別處」。
+- 你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令+你預期的輸出);附不出請如實標「未能重現」並降一級。
+
+輸出格式(硬性,收貨端用機器讀,照抄結構):
+- 報告第一行獨立寫:severity: <整份最高,clean/minor/major/blocker 擇一>
+- 每條 finding:標題行「### F<編號> <一句話>」;下一行獨立一行「severity: <值>」;再下一行「blocking: 是/否 — <一句判準>」(否↔minor、是↔major/blocker,兩欄不得矛盾)。
+- 每條必附一行「引句:「<從 r3-snapshot.patch 逐字複製,≥10 字>」」;引句內不要再包「」。
+- diff 以外查證到的程式碼,走佐證行,格式固定:file: `路徑:行號` 加一句敘述(★反引號必加★)。不得用引句格式主張 diff 以外的內容。
+- 每條敘述 ≤3 句,編號條列,不准散文段落,不准用「可能/或許/建議考慮」收尾;判不準就標 ⚠ 交編排者。
+- 前兩輪 18 條的驗收:另開一節「## 前兩輪修法驗收」,每條一行「F<n>:修到/沒修到/修出新洞 — 一句理由」(沒修到或修出新洞的,另外照上面格式開一條 finding;★這一節裡不要出現 severity 字樣★)。
+- 風險掃描清單那 1 條:判「真隱患/誤報」一句。
+- 最後一行:總結:最高 severity <值>,blocking 共 <n> 條
+
+你的鏡頭:
+這個專案是單檔 python CLI,同層對照就是 scripts/lumos 自己的鄰近函式。三問,逐問答、每問附對照的 file:line:
+1. 分層與依賴方向:about_code 現在有兩種正規化(_about_code_norm 字面、_about_code_path 解析+查檔),append 用後者存值、去重與 remove 用前者比對——這是一件事兩種做法,還是各司其職?專案裡處理路徑比對鍵有沒有既有的共用函式(例如 _is_vendored_path 的正規化、link_target、nfc)該沿用?
+2. 命名與錯誤處理:「已經有了,檔案沒動」的早退回 rc0、同一行清單丟 ValueError 由上層印「擋下」、大小寫錯回 (None, 理由),跟既有寫法一致嗎?
+3. 第二種做法:格式檢查器剝「等級緊接 0」是在既有的總結句豁免裡加一條例外,還是另開一套規則?同一行清單的判準跟 parse_frontmatter 的 lint(只認 ]], [[ 與 ]],[[)並存,算不算第二套「什麼算一串連結」?
+嚴重度錨:major 只給「引入第二種做法或跨層直呼」;命名/錯誤處理不一致但結構對=minor;純風格不列。最後寫「不對齊共 N 條,其中 major M 條」。
+
+LUMOS-IMPACT: 3cc12430..HEAD

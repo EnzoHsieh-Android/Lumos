@@ -1,0 +1,61 @@
+你是外部第三方 code reviewer,這一席專找邊界與怪輸入。
+
+這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀完整份 diff、主動找洞。
+
+這是第四輪(高風險分級原本上限三輪,第三輪的修正量大、沒被獨立審過,由負責人裁定加開)。前三輪審查員共抓了 35 條
+(第一輪 F1–F12 見 /Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r1-intake.md,第二輪 F13–F18 見 /Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r2-intake.md,第三輪 F19–F35 見 /Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r3-intake.md),作者聲稱全部改掉了。
+★這一輪的重點是第三輪那 17 條的修法本身★:
+① 驗第三輪 F19–F35 的修法是不是真的修到(不是換個地方壞、不是測試綠但咬不到);前兩輪 18 條只要確認沒被第三輪的修法弄壞;
+② 對第三輪新寫的程式主動找新洞——前兩輪都證明修法本身常常就是新洞的來源。
+
+材料:
+- 這批要推上去的完整 diff(git diff -U10 主線..工作目錄,2033 行):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r4-snapshot.patch
+  ——程式部分(scripts/lumos,約 1100 行)一定要完整讀;測試部分(scripts/test_lumos.py,約 930 行)依你的鏡頭需要讀,但你宣稱「測試咬不咬得到」時一定要讀那支測試
+- 第三輪之後新改了什麼(git diff -U10 第三輪被審版本..工作目錄,1652 行):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r4-delta.patch ——★只當導航★,它的刪除行(- 開頭)是上一版的程式,在上面那份完整 diff 裡不存在
+- 風險掃描清單(2 條):/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-工具自裝檔不算消費專案/r4-manifest.json
+repo 在 /Users/enzo/harness/lumos-toolchain(可 Read/Grep 真代碼查證 diff 上下文;★只讀,不要改任何檔、不要跑會寫檔的指令★;要跑重現請在 /tmp 底下自己建暫存目錄)。
+注意:工作目錄裡 scripts/lumos 有一處說明文字的修正還沒提交(_stack_changed_ok 的 docstring),已包含在上面兩份 diff 裡。
+
+變更主題:lumos 工具鏈(python 零依賴 CLI,單檔 scripts/lumos)——兩個功能,目前的樣子(對主線):
+【功能一】消費專案接入:
+(1) 健檢 [S3] 多平台設定下 profile 是 dict 就直接用,不再拿 dict 查表中斷。
+(2) 工具自裝檔判別:精確清單 _VENDORED_ALL(_VENDORED_TOOLKIT 5 支 + _VENDORED_TREE_FILES 10 支);★只跳過「檔名在清單上、內容也跟安裝時指紋一樣」的★:
+    - 安裝/更新(_vendor_toolchain)時只複製清單上的檔,並寫 .lumos/vendored.json(_vendored_manifest_write;指紋=換行統一成 LF 後的 sha256,_vendored_digest);
+    - _vendored_state(root, ref) 回 (原封不動, 存在) 兩個集合:ref=None 讀工作目錄,否則用 git cat-file --batch 讀那個版本(_git_show_many);沒有指紋清單或讀不懂 → 原封不動=空集合(一支都不跳);
+    - 風險掃描 _pitfall_diff_collect:_diff_range_ends 把範圍拆成(起點,終點);跳過集合 = 終點原封不動 ∪(起點原封不動 − 終點存在);_stack_changed_ok(cur_file, skip) 三個呼叫點與 lint 過濾都用這個集合;
+    - 健檢/init 猜技術棧 _stack_ext_counts 看工作目錄的原封不動集合;工具鏈本體(_is_toolchain_repo)一支都不跳;
+    - 拆除(_deinit_remove_vendored)時指紋清單一起拿掉;「清單=來源受版控的檔」的漂移測試只在工具鏈本體跑(_need_src)。
+(3) 清單欄位與 about_code(0〜3 支程式檔的清單,只做排序加分):
+    - append/remove 認得單一值寫法(_list_scalar_value 讀值、_list_key_scalar_to_list 轉換;有引號的原值照原樣搬,不重新加引號);
+    - 同一行清單擋下:去空白、去引號後以 [ 或 { 開頭且不是「整個值恰好一個連結」(_SINGLE_WIKILINK_RE,讀側索引連結也用它),或值裡兩個以上 [[(_multi_link_value,清單欄位讀側 lint 也用它);引號空清單 "[]" 當空;
+    - 已經有的值=真的不動、訊息「已經有」;append/remove 寫完的自我檢查:新項在/要拿的不在,★而且原本其他每一項都還在★;
+    - about_code 寫入 _about_code_path:反斜線轉斜線、空值/絕對路徑/跳出 repo/不存在/目錄都擋,大小寫要跟磁碟一致(_disk_spelling 逐層比對,只差 Unicode 寫法的算同一個;讀不到目錄就擋);
+    - about_code 比對鍵 _about_code_key(檔案還在就看磁碟上的真實位置——解 symlink、大小寫與 Unicode 照磁碟;不在了看字面 _posix_norm):append 去重、remove 找項(同一支檔的每一種寫法都拿掉)共用;排序加分讀側也改用 _posix_norm。
+(4) 寫入:_write_lf 暫存檔名每次不同(mkstemp,換名前權限調回一般建檔的樣子);atomic_write_verify 不再外包一層固定檔名暫存;
+    set/append/remove 在同一個筆記庫上排隊(_vault_write_lock:系統暫存目錄的鎖檔 + fcntl.flock/msvcrt.locking 非阻塞重試,60 秒放棄;鎖檔開不起來就不上鎖照做)。
+(5) lumos new verification --systems 回掛被擋(ValueError/RuntimeError)時照舊印「筆記建好了」。
+【功能二】記帳時撞到的誤擋:
+(6) 席報告格式檢查 _report_normalize_issues:總結句(_SEV_SUMMARY_LINE_RE)只認行首(可帶標題/清單/引用/編號/粗體記號);總結句的等級比對前只剝「等級字後面緊接 0 條」。★這是守衛放寬:canary record 寫側靠它拒收沒正規化的席報告★。
+(7) 整數參數收到非整數時訊息「要給整數」。
+
+錨定紀律(硬性):每條 finding 必附一段★從 r4-snapshot.patch★逐字複製的引句(≥10 字);編不出引句的疑慮不要交(收貨端機器逐條比對,錨不到=不採信)。
+
+抑噪紀律:
+- 低嚴重度疑慮,給不出具體失敗場景就不要標。但未定義的詞/壞引用/內部不一致例外,一律要報。
+- 不能指出具體受影響的 file:line,就不准臆測「可能會壞別處」。
+- 你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令+你預期的輸出);附不出請如實標「未能重現」並降一級。
+
+輸出格式(硬性,收貨端用機器讀,照抄結構):
+- 報告第一行獨立寫:severity: <整份最高,clean/minor/major/blocker 擇一>(★第一行前面不要放任何標題★)
+- 每條 finding:標題行「### F<編號> <一句話>」;下一行獨立一行「severity: <值>」;再下一行「blocking: 是/否 — <一句判準>」(否↔minor、是↔major/blocker,兩欄不得矛盾)。
+- 每條必附一行「引句:「<從 r4-snapshot.patch 逐字複製,≥10 字>」」;引句內不要再包「」。
+- diff 以外查證到的程式碼,走佐證行,格式固定:file: `路徑:行號` 加一句敘述(★反引號必加★)。不得用引句格式主張 diff 以外的內容。
+- 每條敘述 ≤3 句,編號條列,不准散文段落,不准用「可能/或許/建議考慮」收尾;判不準就標 ⚠ 交編排者。
+- 第三輪 17 條的驗收:另開一節「## 第三輪修法驗收」,每條一行「F<n>:修到/沒修到/修出新洞 — 一句理由」(F19–F35;沒修到或修出新洞的,另外照上面格式開一條 finding;★這一節裡不要出現 severity 字樣★)。
+- 風險掃描清單那 2 條:各判「真隱患/誤報」一句。
+- 最後一行:總結:最高 severity <值>,blocking 共 <n> 條
+
+你的鏡頭:
+重點:消費專案沒有 .lumos/、指紋清單被刪、清單多列了不存在的路徑、清單是空的;工具檔是 symlink、CRLF 換行、權限不同;風險掃描範圍跨合併提交、工具檔被改名或搬家;Windows(沒有 fcntl、反斜線、大小寫不敏感)、系統暫存目錄不能寫或被別的使用者先建了同名鎖檔;筆記庫路徑含中文與空白、筆記庫是 symlink;about_code 值是 symlink、指向已刪的檔、Unicode 兩種寫法、全形字元;清單欄位的各種同一行變形。每條講清輸入與走到哪一行。
+
+LUMOS-IMPACT: 3cc12430..HEAD

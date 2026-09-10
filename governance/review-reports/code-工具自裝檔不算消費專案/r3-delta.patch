@@ -1,0 +1,418 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 4852db0e..3192e10f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5220,21 +5220,24 @@ def _report_normalize_issues(text):
+         issues.append((i + 1 if i < len(lines) else 1, "檔首第一個非空行要是檔級 severity: <clean|minor|major|blocker>(來源註記之類放它後面)", lines[i] if i < len(lines) else ""))
+     for no, ln in _visible_lines(lines, keep_fenced=False):
+         s = ln.lstrip()
+         if s.startswith(("引句:", "引句：", ">")):
+             continue
+         if _SEV_DECL_LINE_RE.fullmatch(ln):
+             continue
+         if _SEV_SUMMARY_LINE_RE.search(ln):
+             # 總結句豁免有條件(code-review-yield r1 外家席 f1):提到的等級不得高於檔級宣告——「severity: clean / 總結: severity: blocker」
+             # 就是拿白名單夾帶 blocker 又數成 0 條;檔級行缺(_top None)一律不豁免
+-            _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _strip_inline_markup(ln)[0])]
++            # 「其中 major 0 條」是在數零條,不是宣告等級(架構對齊席範本必寫這句;2026-09-10 code-工具自裝檔不算消費專案 r2
++            # 檔級 minor 的架構席報告因此被擋)。只剝「等級字後面緊接 0」的,非零照樣算夾帶
++            _vis_lv = re.sub(r"(?i)\b(?:clean|minor|major|blocker)\b\s*[:：]?\s*0(?![\d.])", "", _strip_inline_markup(ln)[0])
++            _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _vis_lv)]
+             if _top is not None and all(_SEV_ORDER[w] <= _SEV_ORDER[_top] for w in _lv):
+                 continue
+             if _lv:
+                 issues.append((no, f"總結句提到的等級({'/'.join(_lv)})高於檔級宣告({_top or '缺'})——總結句只能重述,不能藏更高的等級", ln))
+                 continue
+         vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
+         if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
+             issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
+     return issues
+ 
+@@ -10628,48 +10631,64 @@ def edit_fm_sync_status_tag(fm_lines, status):
+     s, e, _kind = struct["tags"]
+     found = False
+     for i in range(s + 1, e + 1):
+         m = re.match(r"^(\s*-\s*)status/\S+\s*$", fm[i])
+         if m:
+             fm[i] = f"{m.group(1)}status/{status}"
+             found = True
+     return fm, found
+ 
+ 
+-def _list_key_scalar_to_list(fm, key, line_idx):
+-    """清單欄位被寫成單一值(`about_code: src/x.py`)時,改寫成一項的清單再給 append/remove 用。
++def _list_scalar_value(fm, key, line_idx):
++    """清單欄位的單一值寫法(`key: 值`)讀出那一個值(去引號,空的回 "")。
+ 
+-    ★讀的一側本來就把單一值當成一項的清單★(as_list),只有寫的一側不認得——
+-    於是一篇筆記一旦是單一值寫法,append 說它不是清單、set 又不收清單欄位,
+-    沒有任何指令改得動(2026-09-10 代碼審 r1)。空值(`key:`)當成空清單。"""
++    ★看起來是同一行清單就丟 ValueError★:工具不解析同一行裡的逗號(fm_structure 與
++    parse_frontmatter 都把它當成一個值),照單一值轉會把整串 "[a, b]" 寫成一項。
++    判準看「去引號後的值本身」,不列舉寫法(2026-09-10 代碼審 r2:只比對原始字串時,
++    整串加引號、逗號前後多打空白都繞得過):以 [ 或 { 開頭(單一連結 [[X]] 除外),
++    或一個值裡有兩個以上連結開頭。加了引號的空清單 "[]" 跟讀的一側一樣當成空的。"""
+     m = TOP_KEY_RE.match(fm[line_idx])
+     val = m.group(2).strip() if m else ""
+-    # ★同一行的清單寫法(`key: [a, b]`)不能轉★:工具不解析同一行裡的逗號(fm_structure 與
+-    # parse_frontmatter 都把它當成一個值),照單一值轉會把整串 "[a, b]" 寫成一項。
+-    # 單一個連結 `[[X]]` 不算(那是本 vault 的單一值慣例);一串連結 `[[A]], [[B]]` 同樣擋。
+-    if (val.startswith(("[", "{")) and not val.startswith("[[")) or "]], [[" in val or "]],[[" in val:
++    sval = strip_quotes(val)
++    if sval == "[]":
++        return ""
++    if (sval.startswith(("[", "{")) and not sval.startswith("[[")) or sval.count("[[") > 1:
+         raise ValueError(f"{key} 寫成同一行的清單({val}),工具看不懂同一行裡的逗號,"
+                          f"硬加會把整串當成一項寫壞,檔案沒動。這種寫法目前只能手動改成一行一項"
+                          f"({key}: 換行後每項一行「  - 值」),改完再重跑")
++    return sval
++
++
++def _list_key_scalar_to_list(fm, key, line_idx):
++    """清單欄位被寫成單一值(`about_code: src/x.py`)時,改寫成一項的清單再給 append/remove 用。
++
++    ★讀的一側本來就把單一值當成一項的清單★(as_list),只有寫的一側不認得——
++    於是一篇筆記一旦是單一值寫法,append 說它不是清單、set 又不收清單欄位,
++    沒有任何指令改得動(2026-09-10 代碼審 r1)。空值(`key:`)當成空清單;
++    同一行的清單寫法擋下不轉(見 _list_scalar_value)。"""
++    sval = _list_scalar_value(fm, key, line_idx)
+     fm = list(fm)
+     fm[line_idx] = f"{key}:"
+-    if val and val != "[]":
+-        fm.insert(line_idx + 1, f"  - {fmt_list_item(strip_quotes(val))}")
++    if sval:
++        fm.insert(line_idx + 1, f"  - {fmt_list_item(sval)}")
+     return fm
+ 
+ 
+ def edit_fm_append(fm_lines, key, value):
+     fm = list(fm_lines)
+     item = fmt_list_item(value)
+     tgt = link_target(value)
+     struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+     if key in struct and struct[key][2] == "scalar" and key in LIST_KEYS:
++        cur = _list_scalar_value(fm, key, struct[key][0])
++        if cur and link_target(cur) == tgt:
++            return fm  # 已經有了:原樣回傳,不改寫成清單格式(r2)
+         fm = _list_key_scalar_to_list(fm, key, struct[key][0])
+         struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+     if key in struct:
+         s, e, kind = struct[key]
+         if kind != "list":
+             raise ValueError(f"{key} 是{kind}型欄位,append 只能加進清單型欄位")
+         # `key: []` 空清單 → 改寫成多行格式的開頭 `key:`,後面照常插第一項
+         if s == e and TOP_KEY_RE.match(fm[s]) and TOP_KEY_RE.match(fm[s]).group(2).strip() == "[]":
+             fm[s] = f"{key}:"
+         # dedup: 精確 full-target 比對(保留路徑;非子字串、非 basename-only)
+@@ -10868,54 +10887,88 @@ def cmd_self_audit(env, rel, model="sonnet", date=None):
+         date = datetime.date.today().isoformat()
+     else:
+         try:
+             datetime.date.fromisoformat(date)
+         except ValueError:
+             print(f"擋下:--date 要寫成 年-月-日(例如 2026-08-22),你給的是 {date!r}", file=sys.stderr)
+             return 2
+     return cmd_set(env, rel, "self_audit", f"{model}/{date}")
+ 
+ 
++def _about_code_norm(value):
++    """about_code 一項的比對鍵:斜線統一、去 ./ 與 ..(純字面,不查檔案——remove 要能清掉檔已刪的舊項)。"""
++    import posixpath
++    v = strip_quotes(str(value).strip()).replace("\\", "/")
++    return posixpath.normpath(v) if v else ""
++
++
+ def _about_code_path(env, value):
+     """about_code 的一項要是「這個 repo 裡真的存在的程式檔」(2026-09-10 代碼審 r1)。
+ 
+     回 (正規化後的 repo 相對路徑, None) 或 (None, 擋下的理由)。
+     ★先解析再比對 repo 根★:只看「存不存在」的話,絕對路徑與 ../ 都會繞出 repo 而且通過;
+     存成正規化的樣子,排序加分用的鍵才對得上(src/../src/a.py 跟 src/a.py 要是同一個)。"""
+     v = str(value).strip()
+     if not v:
+         return None, "about_code 不能是空的"
+     if Path(v).is_absolute():
+         return None, f"about_code 要寫 repo 相對路徑,「{v}」是絕對路徑"
+     root = _vault_repo_root(env).resolve()
+     target = (root / v).resolve()
+     try:
+         relp = target.relative_to(root).as_posix()
+     except ValueError:
+         return None, f"「{v}」跑出這個 repo 了(repo 根是 {root})"
+     if not target.is_file():
+         return None, (f"「{v}」不是這個 repo 裡的檔案" + ("(它是目錄;about_code 要寫到檔案)" if target.is_dir() else "(找不到)"))
++    # ★大小寫要跟磁碟上的真實檔名一致★(r2):排序加分拿這個值去比對 git 的改動路徑(大小寫敏感);
++    # 大小寫不敏感的檔案系統上 SRC/A.TS 也通過 is_file,存進去就永遠對不上
++    # 只差 Unicode 正規化寫法(é 一個字 vs e 加重音符號)的是同一個檔,不算寫錯:Mac 的磁碟兩種都認,
++    # 目錄清單卻只列存進去的那一種(派第三輪之前自己抓到的誤擋)——兩邊都轉成 NFC 再比
++    cur, real, off = root, [], False
++    for part in relp.split("/"):
++        try:
++            names = os.listdir(cur)
++        except OSError:
++            names = [part]
++        hit = part if part in names else next((n for n in names if nfc(n) == nfc(part)), None)
++        if hit is None:
++            off = True
++            hit = next((n for n in names if nfc(n).casefold() == nfc(part).casefold()), part)
++            real.append(hit)
++        else:
++            real.append(part)
++        cur = cur / hit
++    if off:
++        return None, f"「{v}」的大小寫跟磁碟上的檔名不一致(磁碟上是 {'/'.join(real)})"
+     return relp, None
+ 
+ 
+ def cmd_append(env, rel, key, value):
+     if key not in LIST_KEYS:
+         print(f"擋下:{key} 不能用 append 加,檔案沒動。append 只能加這些清單欄位:{sorted(LIST_KEYS)}(純量欄位用 lumos set)", file=sys.stderr)
+         return 2
+     if key == "about_code":
+         value, why = _about_code_path(env, value)
+         if why:
+             print(f"擋下:{why},檔案沒動。about_code 要填這個 repo 裡真的存在的程式檔(repo 相對路徑)", file=sys.stderr)
+             return 2
+     path = env.vault / rel
+     lines, s, e = load_raw_for_edit(path)
++    if key == "about_code" and any(_about_code_norm(x) == value
++                                   for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))):
++        print(f"✓ {rel} 的 {key} 已經有 {value}(寫法可能不同,指的是同一支檔),檔案沒動")
++        return 0
+     new_fm = edit_fm_append(lines[1:e], key, value)
++    if new_fm == lines[1:e]:
++        print(f"✓ {rel} 的 {key} 已經有 {value},檔案沒動")
++        return 0
+     new_lines = lines[:1] + new_fm + lines[e:]
+     tgt = link_target(value)
+     atomic_write_verify(path, new_lines, key,
+                         lambda f: any(link_target(x) == tgt for x in as_list(f.get(key))))
+     print(f"✓ append {rel}: {key} 多了一項 {value}")
+     return 0
+ 
+ 
+ def cmd_remove(env, rel, key, value):
+     """T1 list 項移除(append 逆操作)。補的是 2026-08-11 實戰撞到的缺口:
+@@ -10931,20 +10984,24 @@ def cmd_remove(env, rel, key, value):
+     不加新子命令,remove 一個指令學一次。守衛:type/status/created 是筆記骨架,刪了 lint/doctor
+     全炸,硬擋;清單欄位不准省略 value(避免一句話誤刪整個 verified_by)。"""
+     if value is None:
+         return _cmd_remove_scalar(env, rel, key)
+     if key not in LIST_KEYS:
+         print(f"擋下:{key} 不能用 remove 刪,檔案沒動。remove 只能動這些清單欄位:{sorted(LIST_KEYS)}"
+               f"(純量欄位要整個拿掉:不帶 value)", file=sys.stderr)
+         return 2
+     path = env.vault / rel
+     lines, s, e = load_raw_for_edit(path)
++    if key == "about_code":
++        want = _about_code_norm(value)
++        value = next((x for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))
++                      if _about_code_norm(x) == want), value)
+     new_fm, n = edit_fm_remove(lines[1:e], key, value)
+     if n == 0:
+         cur = [str(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))]
+         print(f"擋下:{rel} 的 {key} 裡沒有 {value}(比對用的目標是 {link_target(value)}),可能打錯字或早就不在了,檔案沒動;"
+               f"目前有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}", file=sys.stderr)
+         return 2
+     new_lines = lines[:1] + new_fm + lines[e:]
+     tgt = link_target(value)
+     atomic_write_verify(path, new_lines, key,
+                         lambda f: not any(link_target(x) == tgt for x in as_list(f.get(key))))
+@@ -23634,21 +23691,21 @@ def main():
+             else:
+                 # 其他參數錯:argparse 的原句準確指出是哪個參數,那部分照用;
+                 # 但英文的模板句換成白話——這些也是「第一眼」會看到的畫面。
+                 _msg = message or ""
+                 _req = re.search(r"the following arguments are required: (.+)", _msg)
+                 _int = re.search(r"argument ([^:]+): invalid int value: '([^']*)'", _msg)
+                 _unk = re.search(r"unrecognized arguments: (.+)", _msg)
+                 if _req:
+                     print(f"擋下:少了必須要給的 {_req.group(1)}。", file=sys.stderr)
+                 elif _int:
+-                    print(f"擋下:{_int.group(1)} 要給數字,收到的是「{_int.group(2)}」。",
++                    print(f"擋下:{_int.group(1)} 要給整數,收到的是「{_int.group(2)}」。",
+                           file=sys.stderr)
+                 elif _unk:
+                     print(f"擋下:不認得這幾個參數:{_unk.group(1)}。", file=sys.stderr)
+                 else:
+                     # 認不得的錯法就原樣轉述——原句總比我瞎猜準確
+                     print(f"擋下:{_msg}", file=sys.stderr)
+             if bad and names:
+                 near = [n3 for n3 in names if _el_near_name(bad, n3)][:3]
+                 if near and arg_val:
+                     print("  是不是想寫這個:", file=sys.stderr)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 986473b6..122ada49 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -1455,20 +1455,81 @@ def t_append_about_code_is_one_list_rule():
+     check("⑨同一行清單 remove 也擋下、不動", read(p9) == before9, read(p9))
+     p9t = write(v, "Systems/Z.md", "type: system\nstatus: doing\ntags: [a, b]")
+     before9t = read(p9t)
+     run(v, "append", "Z", "tags", "c", expect_rc=2)
+     check("⑨其他清單欄位(tags)的同一行寫法同樣擋下", read(p9t) == before9t, read(p9t))
+     # 單一個連結寫成 related: [[Systems/S]] 不是同一行清單,照舊當一項接著加(這條分辨不能誤傷它)
+     p9r = write(v, "Systems/R.md", "type: system\nstatus: doing\nrelated: [[Systems/S]]")
+     run(v, "append", "R", "related", "[[Systems/T]]", expect_rc=0)
+     got9r = m.as_list(m.parse_frontmatter(read(p9r).split("\n")[1:read(p9r).split("\n").index("---", 1)])[0].get("related"))
+     check("⑨單一連結寫法照舊可接著加(兩項)", got9r == ["[[Systems/S]]", "[[Systems/T]]"], read(p9r))
++    # ⑨b 第二輪審查抓到兩種繞法:整串加引號、逗號前後多打空白。★判準是「值本身看起來像同一行清單」,不列舉寫法★:
++    #    去掉引號後以 [ 或 { 開頭(單一連結 [[X]] 除外),或一個值裡有兩個以上連結開頭 → 擋
++    for nm, k, line, newv in (("QA", "about_code", 'about_code: "[src/a.ts, src/b.ts]"', "src/c.ts"),
++                              ("QB", "related", "related: [[Systems/A]],  [[Systems/B]]", "[[Systems/C]]"),
++                              ("QC", "related", "related: [[Systems/A]] , [[Systems/B]]", "[[Systems/C]]"),
++                              ("QD", "tags", 'tags: "[a, b]"', "c")):
++        pq = write(v, f"Systems/{nm}.md", f"type: system\nstatus: doing\n{line}")
++        bq = read(pq)
++        run(v, "append", nm, k, newv, expect_rc=2)
++        check(f"⑨b「{line}」擋下、筆記沒動", read(pq) == bq, read(pq))
++    pqe = write(v, "Systems/QE.md", 'type: system\nstatus: doing\nrelated: "[[Systems/S]]"')
++    run(v, "append", "QE", "related", "[[Systems/T]]", expect_rc=0)
++    got_qe = m.as_list(m.parse_frontmatter(read(pqe).split("\n")[1:read(pqe).split("\n").index("---", 1)])[0].get("related"))
++    check("⑨b加了引號的單一連結不是清單,照舊可加", got_qe == ["[[Systems/S]]", "[[Systems/T]]"], read(pqe))
++    pqf = write(v, "Systems/QF.md", 'type: system\nstatus: doing\ntags: "[]"')
++    run(v, "append", "QF", "tags", "c", expect_rc=0)
++    got_qf = m.as_list(m.parse_frontmatter(read(pqf).split("\n")[1:read(pqf).split("\n").index("---", 1)])[0].get("tags"))
++    check("⑨b加了引號的空清單 \"[]\" 跟讀的一側一樣當成空的", got_qf == ["c"], read(pqf))
++
++    # ⑩ 值已經在了 → 真的什麼都不做:不改寫成清單格式、訊息講「已經有」(第二輪:原本會改寫還印「多了一項」)
++    p10 = write(v, "Systems/AA.md", "type: system\nstatus: doing\ntags: x")
++    b10 = read(p10)
++    r10 = run(v, "append", "AA", "tags", "x", expect_rc=0)
++    check("⑩單一值寫法重複加 → 筆記一個字都沒變", read(p10) == b10, read(p10))
++    check("⑩訊息講已經有、不說多了一項", "已經有" in r10.stdout and "多了一項" not in r10.stdout, r10.stdout)
++    p10b = write(v, "Systems/AB.md", "type: system\nstatus: doing\ntags:\n  - x")
++    b10b = read(p10b)
++    r10b = run(v, "append", "AB", "tags", "x", expect_rc=0)
++    check("⑩清單寫法重複加 → 沒動、訊息講已經有", read(p10b) == b10b and "已經有" in r10b.stdout, r10b.stdout)
++
++    # ⑪ 既有值寫成 src/../src/a.ts(手改或舊資料),再加 src/a.ts → 是同一支檔,不疊第二筆
++    p11 = write(v, "Systems/AC.md", "type: system\nstatus: doing\nabout_code: src/../src/a.ts")
++    b11 = read(p11)
++    run(v, "append", "AC", "about_code", "src/a.ts", expect_rc=0)
++    check("⑪既有 src/../src/a.ts 再加 src/a.ts → 當成同一支、沒動", read(p11) == b11, read(p11))
++
++    # ⑫ remove 也要認同一套正規化:自己加進去的值要能用同一個寫法刪掉;檔案已刪的舊項也要清得掉
++    p12 = write(v, "Systems/AD.md", "type: system\nstatus: doing\nabout_code: []")
++    run(v, "append", "AD", "about_code", "src/../src/c.ts", expect_rc=0)
++    run(v, "remove", "AD", "about_code", "src/../src/c.ts", expect_rc=0)
++    check("⑫用同一個寫法 remove 得掉(存的是 src/c.ts)", not _ac(p12), read(p12))
++    p12b = write(v, "Systems/AE.md", "type: system\nstatus: doing\nabout_code:\n  - src/gone.ts")
++    run(v, "remove", "AE", "about_code", "./src/gone.ts", expect_rc=0)
++    check("⑫已刪掉的檔的舊項,用 ./ 寫法也清得掉", not _ac(p12b), read(p12b))
++
++    # ⑬ 大小寫要跟磁碟上的真實檔名一致:排序加分拿這個值去比對 git 的改動路徑(大小寫敏感),寫錯就永遠對不上
++    p13 = write(v, "Systems/AF.md", "type: system\nstatus: doing\nabout_code: []")
++    b13 = read(p13)
++    r13 = run(v, "append", "AF", "about_code", "SRC/A.TS", expect_rc=2)
++    check("⑬大小寫跟磁碟不同 → 擋下、沒動", read(p13) == b13, read(p13))
++    if (root / "SRC" / "a.ts").exists():   # 大小寫不敏感的檔案系統(macOS/Windows 預設)才驗訊息;Linux 上它就是「找不到」
++        check("⑬訊息指出磁碟上的真實寫法", "src/a.ts" in r13.stderr, r13.stderr)
++    # ⑬b 只差 Unicode 正規化寫法(é 一個字 vs e 加重音符號)是同一個檔,不能當成大小寫寫錯擋下。
++    #     Mac 的磁碟兩種寫法都認得同一個檔,但目錄清單裡只列存進去的那一種(2026-09-10 派第三輪之前自己抓到)
++    import unicodedata as _ud
++    nfd_name, nfc_name = _ud.normalize("NFD", "café.ts"), _ud.normalize("NFC", "café.ts")
++    (root / "src" / nfd_name).write_text("x\n", encoding="utf-8")
++    if (root / "src" / nfc_name).is_file() and nfc_name not in _os.listdir(root / "src"):   # 只在「兩種寫法都認」的檔案系統驗
++        write(v, "Systems/AG.md", "type: system\nstatus: doing\nabout_code: []")
++        r13b = run(v, "append", "AG", "about_code", "src/" + nfc_name)
++        check("⑬b只差 Unicode 寫法的同一個檔照收", r13b.returncode == 0, r13b.stderr)
+ 
+     # ⑧ ★只有一套規則★:set 不收 about_code。
+     # ★要用單一值寫法的筆記來驗★:清單寫法的筆記,底層的純量寫入本來就會拒絕,
+     # 放行 set 的破壞會被遮住(紅釘第一次就是這樣沒咬到)
+     p8 = write(v, "Systems/W.md", "type: system\nstatus: doing\nabout_code: src/a.ts")
+     before8 = read(p8)
+     run(v, "set", "W", "about_code", "src/b.ts", expect_rc=2)
+     check("⑧set about_code 被擋,單一值寫法的那篇也沒被改掉", read(p8) == before8, read(p8))
+     outside.unlink()
+ 
+@@ -13436,21 +13497,23 @@ def t_bad_command_gives_near_name_not_wall_of_text():
+     # 完全不像時,把那個參數收的選項列出來(而不是叫人去看指令清單)
+     r6 = run("canary", "record", "zzz")
+     o6 = r6.stderr or r6.stdout
+     check("參數值/反面: 完全不像時列出那個參數收哪幾個",
+           "只收這幾個" in o6 and "caught" in o6, o6[:200])
+ 
+     # ★r1 折入:其餘錯法也要白話,而且指到對的那層說明★
+     # 外家席驗過「缺必填/型別錯/不認得的參數」沒被吃掉(原句還在),但那些也是第一眼
+     # 會看到的畫面,原句是英文模板。改成白話,同時保留 argparse 準確指出的參數名。
+     for args2, want in ((["context"], "少了必須要給的 note"),
+-                        (["map", "foo", "--depth", "nope"], "--depth 要給數字"),
++                        (["map", "foo", "--depth", "nope"], "--depth 要給整數"),
++                        # 小數也是「數字」,舊訊息說「要給數字」會讓人以為 9.7 可以(2026-09-10 記帳 --wallclock-min 撞到)
++                        (["map", "foo", "--depth", "1.5"], "--depth 要給整數"),
+                         (["stats", "--zzz"], "不認得這幾個參數")):
+         rr2 = run(*args2)
+         oo = rr2.stderr or rr2.stdout
+         check(f"參數錯: {' '.join(args2)} 講白話而且點名是哪個參數", want in oo, oo[:180])
+         check(f"參數錯: {' '.join(args2)} 給得出可以直接貼的用法指令",
+               "--help" in oo and "Traceback" not in oo, oo[:180])
+ 
+     # 反面:正常指令不受影響
+     r4 = run("stats")
+     check("近名/反面: 正常指令照跑(不能為了改訊息把功能弄壞)", r4.returncode == 0, r4.stdout[:100])
+@@ -27822,35 +27885,40 @@ def t_report_normalize_cmd():
+         "方括號": "severity: major\n- [major] F1 說明\n",
+         "大寫拼法": "severity: major\n## F1\nSeverity: major\n",
+         "縮寫 sev": "severity: major\n## F1\nsev: major\n",
+         "中文嚴重度": "severity: major\n## F1\n嚴重度:major\n",
+         "跨行黏合": "severity: major\nseverity:\nmajor\n",
+         "行內帶尾巴": "severity: major\n## F1\nseverity: major / blocking: 是\n",
+         "清單項只有等級字": "severity: major\n## F1\n- MAJOR\n",
+         "清單項等級字接分隔符": "severity: major\n## F1\n- major / blocking: 是\n",
+         "總結句夾帶高於檔級的等級(codex f1)": "severity: clean\n總結: severity: blocker\n",
+         "總結句夾帶但檔級行缺": "## F1\n最嚴重 severity: minor\n",
++        "架構席範本句夾帶非零 major": "severity: minor\n## F1\nseverity: minor\n不對齊共 1 條,其中 major 1 條\n",
++        "架構席範本句夾帶 major 10 條": "severity: minor\n不對齊共 10 條,其中 major 10 條\n",
+     }
+     for k, t in bad.items():
+         check(f"normalize:殘留寫法「{k}」被拒", bool(iss(t)), t)
+     # ③ 不算殘留
+     ok = {
+         "引句行": "severity: clean\n引句:「severity: blocker 是規格原文」\n",
+         "blockquote": "severity: clean\n> severity: blocker\n",
+         "圍欄": "severity: clean\n```\n- severity: blocker\n```\n",
+         "總結句": "severity: clean\n最嚴重 severity: clean,blocking 條數 0\n",
+         "反引號講格式": "severity: clean\n規則:每條寫 `- severity: X`\n",
+         "標題散文提到 major": "severity: clean\n## 這段講 major 這個字的用法\n",
+         "清單項散文用到 minor(r1 f1)": "severity: clean\n- minor 問題:文件裡有錯字,不影響邏輯\n",
+         "複合詞 non-major(r1 f1)": "severity: clean\n這是個 non-major 的調整\n",
+         "總結句等級不高於檔級": "severity: major\n## F1\nseverity: major\n最嚴重 severity: major,blocking 條數 1\n",
+         "帶 BOM 的正規化報告(codex f4)": "\ufeffseverity: clean\n",
++        # 架構對齊席照範本必寫「不對齊共 N 條,其中 major M 條」;M=0 是在數零條,不是宣告等級
++        # (2026-09-10 code-工具自裝檔不算消費專案 r2:檔級 minor 的架構席報告被這行擋下)
++        "架構席範本句「其中 major 0 條」": "severity: minor\n## F1\nseverity: minor\n不對齊共 1 條,其中 major 0 條\n",
+     }
+     for k, t in ok.items():
+         check(f"normalize:「{k}」不算殘留", iss(t) == [], str(iss(t)))
+     # ④ 正規化器:三型全轉 + 補檔級行
+     nz = m.normalize_report_text
+     src = "## F1 —— severity: blocker,blocking: 是\n說明\n## F2\n- severity: minor / blocking: 否\n## F3\n**severity**: major\n"
+     new, changed, rest = nz(src)
+     check("normalize:三型全轉+補檔級行=4 處", changed == 4, f"{changed}\n{new}")
+     check("normalize:轉完無殘留", rest == [], str(rest))
+     check("normalize:檔級行=最高 blocker 且在檔首", new.startswith("severity: blocker\n"), new[:40])
+@@ -30361,21 +30429,21 @@ def t_license_headers_travel_with_vendored_files():
+     check("授權: 根目錄有 LICENSE 且是 MIT", lic_path.is_file() and "MIT License" in lic_path.read_text(encoding="utf-8"), str(lic_path))
+     lic = lic_path.read_text(encoding="utf-8") if lic_path.is_file() else ""
+     body = [ln.strip() for ln in lic.split("Permission is hereby granted", 1)[-1].split("---")[0].splitlines() if ln.strip()]
+     hdr_txt = "\n".join(ln.lstrip("#").strip() for ln in main.splitlines()[:60])
+     missing_lines = [ln for ln in body if ln not in hdr_txt]
+     check("授權/KEY2: 主程式檔頭的 MIT 正文與根目錄 LICENSE 逐行相符(不是只比兩句片語)",
+           bool(body) and not missing_lines, f"缺 {len(missing_lines)} 行: {missing_lines[:2]}")
+ 
+     # [KEY 2 之二] 會被複製出去的檔案集合★跟生產邏輯同一套算法★,不是手寫清單
+     targets = list(getattr(m, "_VENDORED_TOOLKIT", []))
+-    for d in ("scripts/hooks", "scripts/templates"):
++    for d in getattr(m, "_VENDORED_TREE_DIRS", ()):   # 跟安裝端同一個常數,不另寫一份(r2 整合席)
+         base = root / d
+         if base.is_dir():
+             targets += [str(q.relative_to(root)) for q in base.rglob("*")
+                         if q.is_file() and "__pycache__" not in q.parts]
+     # 紀律模板刻意不加標頭:它會被合併進消費端自己的 CLAUDE.md/AGENTS.md,標頭會落進使用者的檔案
+     exempt = {"scripts/templates/graph-discipline.md"}
+     targets = sorted(set(targets) - exempt)
+     check("授權/KEY2: 會被複製出去的檔案集合算得出來且非空", len(targets) >= 12, f"{len(targets)} 支")
+     missing = [f for f in targets if (root / f).is_file() and not _spdx.search(head((root / f).read_text(encoding="utf-8", errors="replace")))]
+     check("授權/KEY2: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))

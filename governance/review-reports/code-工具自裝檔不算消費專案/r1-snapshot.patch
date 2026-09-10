@@ -1,0 +1,701 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Issues/\345\201\245\346\252\242\346\212\200\350\241\223\346\243\247\351\202\243\346\256\265\346\222\236\345\210\260\345\244\232\345\271\263\345\217\260\350\250\255\345\256\232\345\260\261\346\225\264\346\224\257\344\270\255\346\226\267.md" "b/docs/lumos-toolchain-knowledge/Issues/\345\201\245\346\252\242\346\212\200\350\241\223\346\243\247\351\202\243\346\256\265\346\222\236\345\210\260\345\244\232\345\271\263\345\217\260\350\250\255\345\256\232\345\260\261\346\225\264\346\224\257\344\270\255\346\226\267.md"
+new file mode 100644
+index 00000000..db0d62a3
+--- /dev/null
++++ "b/docs/lumos-toolchain-knowledge/Issues/\345\201\245\346\252\242\346\212\200\350\241\223\346\243\247\351\202\243\346\256\265\346\222\236\345\210\260\345\244\232\345\271\263\345\217\260\350\250\255\345\256\232\345\260\261\346\225\264\346\224\257\344\270\255\346\226\267.md"
+@@ -0,0 +1,112 @@
++---
++type: issue
++status: open
++created: 2026-09-10
++updated: 2026-09-10
++aliases: []
++about_code: scripts/lumos
++plan_refs:
++  - "[[Projects/消費專案接入靜默失效_計劃]]"
++tags:
++  - type/issue
++  - status/open
++  - scope/stack-knowledge
++summary: |-
++  KEY:★兩個都是「第一個真的小型消費專案」才撞出來的★(2026-09-10,一個 Vue 專案):自家 repo 與既有的大型消費專案都不長那個樣子,所以七項落地當時全綠
++  KEY:①多平台設定會讓健檢整支中斷:平台表裡的 profile 欄位存的是★攤開後的設定物件★,那一段卻拿它當名字去查表 → 用 dict 當 key → TypeError,健檢死在那一段,後面幾段全部不跑 [test:t_doctor_profile_mismatch_hint]
++  KEY:③★同一個病最嚴重的一次:風險分級★——pitfalls 掃 diff 時逐檔命中工具自己那些檔裡的 open( 之類,消費專案第一次提交整份報告 30 條★沒有一條在專案自己的程式碼裡★,分級卻被撐成 high,推送被擋、要求對一份不是自己寫的程式做代碼審 [test:t_pitfalls_diff_ignores_vendored_toolchain]
++  KEY:③的跳過★必須排除工具鏈本體的 repo★:那裡 scripts/lumos 就是產品,一起跳等於把這個閘整個關掉;判別鍵沿用既有慣例(user-scope skill 的唯一源永不複製進消費專案)
++  KEY:④(同一天順手)about_code ★沒有任何指令寫得進去★:範本是 `about_code: []`(被判成清單),set 不收、append 會變清單、變成純量之後又沒有指令改得動——只能手改,手改一手滑就成了 `src/x.ts []`,那不是路徑,波及計算靜默失聯。git 歷史逐筆數:兩個消費專案加工具鏈自己共 13 篇(8+4+1),已全修。現在 `lumos set <節點> about_code <路徑>` 是唯一寫入口,★路徑不存在就擋★ [test:t_set_about_code_is_writable_and_checked]
++  KEY:②健檢拿工具自己安裝的檔當證據唸人:init 會把 CLI、自己的測試檔與五支 hook 複製到消費專案的 scripts/,那是八個 .py;★專案愈小愈容易被唸★,而剛接入的專案通常最小 [test:t_doctor_s3_ignores_vendored_toolchain]
++  KEY:②的跳過清單★直接吃安裝端的 _VENDORED_TOOLKIT★,不另記一份——兩邊各記一份必定漂移
++  KEY:同一支計數函式 init 也在用,所以②連帶修好 init 的猜測:原本會因為那八個 .py 而猜成「多種語言」,再套上①就變成「猜錯 → 順手產生一份會讓健檢當掉的設定」
++  DEP:`scripts/lumos`
++  FLAG:
++  DECISION:
++  KEY:
++---
++
++# 工具把自己安裝進去的檔，當成消費專案的程式碼在算
++
++> 白話：一個小專案接進來，健檢當場掛掉；勉強跑起來之後，它又拿工具自己的檔當證據說你設定錯了。
++
++## 怎麼撞到的
++
++2026-09-10 接入第一個小型的前端專案（Vue，六個 JavaScript 檔）。
++接入流程本身沒改，但這是**第一個同時滿足「很小」與「用多平台設定」的消費專案**——
++自家 repo 和先前那幾個消費專案都不長那樣，所以接入靜默失效那七項落地當時是全綠的。
++
++## 三個毛病，同一個病根
++
++★病根一句話★：**工具會把自己複製到每個消費專案的 `scripts/` 底下，
++而好幾處掃描把那些檔當成「這個專案的程式碼」。**
++專案愈小，工具自己的體積佔比愈高——而剛接入的專案通常最小。
++
++### ① 健檢整支中斷
++
++多平台設定裡，每個平台那筆資料的「設定」欄位存的是**攤開後的設定物件**，
++但技術棧那段檢查拿它當「設定的名字」去查表——用一個物件當查表的鍵，直接丟例外。
++
++後果不是「那一段沒結果」，是**整支健檢死在那裡**，後面所有檢查都不跑。
++而且任何用多平台格式的專案都會撞到，不分大小。
++
++修法：那個欄位本來就是攤開的設定，直接用，不要再查一次表。
++補了兩個案例：設定對的時候要安靜、設定錯的時候照樣要出聲。
++
++### ② 拿自己的檔當證據唸人
++
++工具會把自己的程式、自己的測試檔和五支 hook 複製到每個消費專案的 `scripts/` 底下，
++那是**八個 Python 檔**。那個 Vue 專案自己只有六個 JavaScript 檔。
++
++於是健檢數一數副檔名，說「你有 8 個 .py 但測試設定只認 .js，掃不到這些檔裡的測試」——
++**舉的證據全是工具自己放進去的檔**。
++
++★這個病的形狀值得記住★：**專案愈小，工具自己的體積佔比愈高，愈容易被自己唸**。
++而剛接入的專案通常最小——也就是說，它專挑第一次用這套工具的人唸。
++
++修法：算技術棧時跳過工具自己安裝的那些檔。跳過清單**直接讀安裝端的同一份名單**，
++不另外抄一份——兩邊各記一份，遲早會漂移。
++
++### ③ 風險分級被撐成 high，推送被擋
++
++這是同一個病最嚴重的一次。
++
++那個 Vue 專案第一次提交，風險掃描報了 30 條，**沒有一條在專案自己寫的程式碼裡**——
++全部在工具的 CLI 和五支 hook 裡。分級因此判成高風險，推送被擋下，
++要求先對「一份不是自己寫的程式」做代碼審。
++
++修法跟②同一套跳過判斷。★但這裡多一道★：**工具鏈自己的 repo 不能跳過**——
++在那裡 `scripts/lumos` 就是產品本體，一起跳等於把這個閘整個關掉。
++判別鍵沿用既有慣例：user-scope skill 的唯一源永遠不會被複製進消費專案。
++
++### ④ about_code 沒有任何指令寫得進去（同一天順手修的）
++
++跟前三個不是同一個病根，但同一天、同一批專案撞到，一併記在這裡。
++
++這個欄位告訴工具「這篇筆記在講哪個檔」，改那個檔的時候才找得到這篇。
++它實務上都填一條路徑，但**沒有任何指令寫得進去**：
++
++- 範本寫的是空清單，`set` 不收清單型的欄位；
++- `append` 收了，但寫出來會變成清單；
++- 一旦變成單一路徑，`append` 又說它不是清單、拒絕——**從此沒有指令改得動**。
++
++所以只能手改。手改一手滑，就成了「路徑後面多一個空清單記號」這種值：它不是路徑，
++那篇筆記從此找不到它在講的檔，而健檢只「提醒不擋」。
++從 git 歷史逐筆數：兩個消費專案加工具鏈自己，一共 13 篇（8 + 4 + 1），已全部修好。
++
++修法：`set` 現在收這個欄位，而且**路徑不存在就當場擋下**——那正是手滑會產生的東西。
++
++★順帶一記★：我一開始數成 31 篇，因為找壞值的條件把「正常的空範本值」也算進去了。
++是新加的這道擋在修的時候拒絕把空清單記號當路徑寫進去，才讓我發現數錯。
++
++## 連帶修好的
++
++數副檔名那支函式，初始化時猜技術棧也在用。所以②修好之後，初始化的猜測跟著變準：
++原本那個 Vue 專案會因為那八個 Python 檔被猜成「看到多種語言」，
++產出多平台格式的設定骨架——**再套上①，就是「猜錯之後，順手產生一份會讓健檢當掉的設定」**。
++
++## 還沒解決的
++
++那個 Vue 專案的符號設定只能將就用 TypeScript 的，因為工具目前沒有以 `.js` 為本命的符號設定，
++`.vue` 也沒有任何設定認領。健檢會為此唸一句，**那句是對的**。
++REVISIT:2026-10-10 若之後還有第二個 JavaScript/Vue 專案接進來，就補一個以 `.js` 為本命、認得 `.vue` 的符號設定，而不是繼續將就
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\346\266\210\350\262\273\345\260\210\346\241\210\346\216\245\345\205\245\351\235\234\351\273\230\345\244\261\346\225\210_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\346\266\210\350\262\273\345\260\210\346\241\210\346\216\245\345\205\245\351\235\234\351\273\230\345\244\261\346\225\210_\350\250\210\345\212\203.md"
+index 0e82a688..5f0c0b19 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\346\266\210\350\262\273\345\260\210\346\241\210\346\216\245\345\205\245\351\235\234\351\273\230\345\244\261\346\225\210_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\346\266\210\350\262\273\345\260\210\346\241\210\346\216\245\345\205\245\351\235\234\351\273\230\345\244\261\346\225\210_\350\250\210\345\212\203.md"
+@@ -130,10 +130,26 @@ summary: |-
+ - r1 的外家正選席（不同家族）因用量上限缺席，由備援席頂替；依 2026-08-23 裁定備援席的意見不算否決票，所以本輪收斂結論降級為「**單家族視角下未發現**」。
+ 
+ ## 審計修正紀錄
+ 
+ - **代碼審 r2**（2026-09-09，2 席：單reviewer／架構對齊；審材＝r1 折入本身那 1020 行 diff，commit 55c0384）：12 條（blocker 1／major 5／minor 6），**全折、零放行**。為什麼要有 r2：r1 的折入把整條判準換掉、424 行沒被任何人審過，而且我在記帳之後改了計劃節點、雜湊鏈自己要求再過一輪——兩個理由都成立。最重的一條是★「擋」跟「講」是兩個地方★（見 [F] 那條 KEY）。另有兩條是我自己重現後**降級**的：審查席說 jest 的摘要行會落在被截斷的中段，實測 jest 29 把覆蓋率表印在摘要之前、摘要仍是最後一行，所以那個實例不成立——但「截斷可能砍掉證據」這個機制是真的，照折成防禦性修法，嚴重度從 blocker 降 major。★12 條全折、零放行★：架構席 f4（冒煙測試沒拆成「顯式同意才真跑」兩階段）本來要附理由放行，記帳當場被擋——規則是「同輪有 blocker 就不准有任何放行」。回頭重想判準之後發現它可以折，而且該折的不是席位開的藥：既有 linter 要拆，是因為它的靜態驗證本來一個外部指令都不跑；合約測試閘的本職就是跑使用者的測試指令，多跑一次帶假名字的不是新開副作用（照席位的藥改，那四種技術棧預設會完全不驗，比現況糟）。**但席位點到的真問題是「偷偷跑」**——折成「真的要跑時印一行說它在做什麼」。卷證 governance/review-reports/code-接入靜默/r2-*。**帳記在 code-接入靜默-v2 這個編號下，原編號的 r2 帳是壞的**——原因見下一條。
+ - **記帳過程自己出的錯（2026-09-09，值得記）**：我在記完兩席那兩筆、還沒記彙總那筆之間，又回頭改了這份計劃節點（把一條「附理由放行」改成「折」）。結果同一輪的三筆帳指向兩個不同版本的被審文件，雜湊鏈判「同輪分裂」直接擋下。**帳不能撤，只能換編號重記**，所以這一輪的帳記在 `code-接入靜默-v2` 下。教訓一句話：**開始記帳之後就不要再動被審文件**——要改就先改完、再從第一筆記起。同一天稍早也踩過一次同型的（記完帳才改計劃，雜湊鏈要求再過一輪），那次的代價是多跑一輪審查，這次是換編號。
+ 
+ - **代碼審 r1**（2026-09-09，2 席：單reviewer／架構對齊；被審 commit 69d5fdd，凍結快照 r1-snapshot.patch）：14 條（blocker 3／major 9／minor 2），**全折、零放行**。最重的一條是★「假綠改成擋」當時是假的★——狀態換成「證不出跑過」之後，真正決定推送擋不擋的那支只認紅，所以實際上只換了一行字。折入時連判準一起翻掉（見 [F]）；另外兩條 blocker 是「猜技術棧另開第三份手寫表、已經漂出正典沒有的值」與「新快取繞過共用的私有目錄信任檢查」。卷證 governance/review-reports/code-接入靜默/r1-*。
+ 
+ - r1（2026-09-09，5 席：通才／接手／邊界／架構對齊／外家備援；外家正選撞用量上限缺席並留痕）：21 條（去重後 14 個獨立問題；blocker 4／major 12／minor 5），全折、零放行。**三席獨立一致的兩條**：④方向相反、REVISIT 接不了電。折入：②從「提醒」升級成機械擋（實測零支假綠）、④整條翻掉改成「讓初始化符合既有設計」、[C] 出聲條件縮小（40→2）、[B] 判準改成與值來源無關、[E] 補第三種來源與過濾器關鍵字、[G] 補成功路徑訊息、[A] 補多平台格式與推測標示、四條 REVISIT 全部拆成獨立行、DEP 補齊三個真正要動的位置。卷證 `governance/review-reports/消費專案接入靜默失效/r1-*`。
++
++## 事後補記：第一個小型消費專案又撞出三個（2026-09-10）
++
++七項落地當時全綠，但那是拿工具鏈自己和幾個較大的消費專案驗的。
++2026-09-10 接入第一個**小型**專案（一個 Vue 專案，自己只有六個 JavaScript 檔）之後，
++同一個病根一次冒出三個，其中一個直接擋住推送。
++
++**病根**：工具會把自己的 CLI、自己的測試檔和五支 hook 複製到每個消費專案的 `scripts/` 底下，
++而好幾處掃描把那些檔當成「這個專案的程式碼」。
++★專案愈小，工具自己的體積佔比愈高——而剛接入的專案通常最小★。
++
++明細與修法在 [[Issues/健檢技術棧那段撞到多平台設定就整支中斷]]。
++
++★這件事對這份計劃的意思★：當初列的五道靜默失效，判準都是「設定對不對」。
++這三個不是設定錯，是**掃描的取材範圍錯**——同一類問題還可能藏在其他吃 diff 或吃檔案清單的地方。
++REVISIT:2026-10-10 盤一次還有哪些地方在數消費專案的檔，逐一確認有沒有把工具自己安裝進去的那批排除掉
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/\347\257\200\351\273\236\347\257\204\345\234\215\350\210\207\347\264\242\345\274\225\345\256\210\350\241\233.md" "b/docs/lumos-toolchain-knowledge/Systems/\347\257\200\351\273\236\347\257\204\345\234\215\350\210\207\347\264\242\345\274\225\345\256\210\350\241\233.md"
+index 6bc762a6..29f6f42e 100644
+--- "a/docs/lumos-toolchain-knowledge/Systems/\347\257\200\351\273\236\347\257\204\345\234\215\350\210\207\347\264\242\345\274\225\345\256\210\350\241\233.md"
++++ "b/docs/lumos-toolchain-knowledge/Systems/\347\257\200\351\273\236\347\257\204\345\234\215\350\210\207\347\264\242\345\274\225\345\256\210\350\241\233.md"
+@@ -1,17 +1,17 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-10
+ updated: 2026-09-10
+ aliases: []
+-about_code: scripts/lumos []
++about_code: scripts/lumos
+ plan_refs:
+   - "[[Projects/節點範圍與索引守衛_計劃]]"
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   FLOW:doctor 每次跑都掃三件事——計劃條款的測試名找不找得到(S5)、總索引有沒有把節點列全(S6)、有沒有哪一篇的合約多到讀不完(S7);三道都只提醒不擋
+   KEY:★INVARIANT★ 三道都★重用既有的抽取與解析★,不自己再寫一套:條款走 spec-trace 那兩支、合約走合約抽取那支、連結走既有的解析。同一件事兩套算法一定分岔,而分岔時沒有任何東西會翻紅——這份設計自己就栽過一次(把「關鍵概念行」的數字寫成「合約」) [test:t_doctor_s5_dangling_clause_tests] [audit:opus/2026-09-10]
+   KEY:★INVARIANT★ 索引覆蓋要★尊重索引自己宣告的範圍★:本工具鏈的索引第一段寫「下面只列 Systems 節點」,不讀這句的話第一次跑就唸 51 篇全是刻意不收的——實跑當場證實,改成讀宣告之後降到 1 篇真命中 [test:t_doctor_s6_moc_coverage] [audit:opus/2026-09-10]
+diff --git a/scripts/lumos b/scripts/lumos
+index d2a3c99d..7d9d19a9 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10209,21 +10209,24 @@ Graph
+   .graphData(gdata)
+   .warmupTicks(70)        // 首次繪製前先跑 70 tick(用上面強斥力)→ 一開圖就是攤開的星座,不靠時機
+   .cooldownTicks(160)
+   .backgroundColor('rgba(0,0,0,0)')
+   .showNavInfo(false)
+   .nodeRelSize(4)
+   .nodeVal(n=>0.8+Math.pow(Math.min(n.indeg,18),1.15)*0.4)
+   .nodeColor(ncolor)
+   .nodeOpacity(0.9)
+   .nodeResolution(18)
+-  .nodeLabel(n=>'<div style="font:600 12px Space Grotesk,sans-serif;color:#edeff6;background:rgba(15,18,25,.92);padding:5px 10px;border:1px solid #2a3145;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.7)">'+n.label+'<span style="color:#7c8398;font-weight:400"> · '+n.type+(n.status==='stale'?' · stale':'')+(n.inv&&n.inv.length?' · ★'+n.inv.length:'')+'</span></div>')
++  // ★節點名用純白★(2026-09-10 Enzo:原本 #edeff6 在深色底上太淡)。
++  // 後面那段型別標註同時提亮一階(#7c8398 → #a8b0c4):它原本淡到幾乎看不見,
++  // 而那裡寫的是「這是什麼型別、有沒有過期、幾條合約」——是要看的資訊不是裝飾。
++  .nodeLabel(n=>'<div style="font:600 12px Space Grotesk,sans-serif;color:#ffffff;background:rgba(15,18,25,.92);padding:5px 10px;border:1px solid #2a3145;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.7)">'+n.label+'<span style="color:#a8b0c4;font-weight:400"> · '+n.type+(n.status==='stale'?' · stale':'')+(n.inv&&n.inv.length?' · ★'+n.inv.length:'')+'</span></div>')
+   .linkColor(lcolor)
+   .linkOpacity(0.2)
+   .linkWidth(lwidth)
+   .linkDirectionalArrowLength(larrow)
+   .linkDirectionalArrowRelPos(1)
+   .linkDirectionalParticles(lparticles)
+   .linkDirectionalParticleWidth(1.2)
+   .linkDirectionalParticleSpeed(0.005)
+   .nodeVisibility(nvisible)
+   .linkVisibility(l=>nvisible(nodeOf(l.source))&&nvisible(nodeOf(l.target)))
+@@ -10790,23 +10793,56 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
+     import os
+     tmp = path.with_suffix(path.suffix + ".lumos-tmp")
+     try:
+         _write_lf(tmp, text)
+         os.replace(tmp, path)
+     finally:
+         if tmp.exists():
+             tmp.unlink()
+ 
+ 
++def _set_about_code(env, rel, value):
++    """about_code 的唯一寫入口(2026-09-10)。
++
++    ★為什麼要單獨一條★:這個欄位在實務上都是一條純量路徑,但範本寫的是 `about_code: []`
++    (被判成清單)——於是 `set` 不收它、`append` 收了會變成清單、而一旦是純量又沒有任何指令
++    改得動。只能手改,手改一手滑就變成 `about_code: src/x.ts []`:那不是路徑,波及計算
++    靜默失聯,健檢只會提醒不擋。當時兩個消費專案加上工具鏈自己一共 13 篇是壞的(8+4+1,從 git 歷史逐筆數出來)。
++
++    ★路徑不存在就擋★:那正是手改一手滑會產生的東西,當場擋比事後被健檢唸有用。"""
++    root = _vault_repo_root(env)
++    v = str(value).strip()
++    if not v or not (root / v).exists():
++        print(f"擋下:about_code 要填這個 repo 裡真的存在的路徑,「{v}」找不到(從 {root} 算起)。"
++              "檔案沒動。", file=sys.stderr)
++        return 2
++    path = env.vault / rel
++    lines, s, e = load_raw_for_edit(path)
++    fm = list(lines[1:e])
++    struct = {k: (a, b, kind) for k, a, b, kind in fm_structure(fm)}
++    if "about_code" in struct:
++        a, b, _kind = struct["about_code"]
++        fm[a:b + 1] = [f"about_code: {v}"]     # 清單形(含範本的空 [])或壞掉的純量,一律換成一行乾淨路徑
++    else:
++        fm = edit_fm_scalar(fm, "about_code", v)
++    new_lines = lines[:1] + fm + lines[e:]
++    atomic_write_verify(path, new_lines, "about_code",
++                        lambda f: [str(x) for x in as_list(f.get("about_code"))] == [v])
++    print(f"✓ set {rel}: about_code 已改成 {v}")
++    return 0
++
++
+ def cmd_set(env, rel, key, value):
++    if key == "about_code":
++        return _set_about_code(env, rel, value)
+     if key not in SCALAR_KEYS:
+-        print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS)}"
++        print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS | {'about_code'})}"
+               f"(清單欄位用 lumos append;決策新增/翻案用 lumos decision-add / decision-supersede)", file=sys.stderr)
+         return 2
+     path = env.vault / rel
+     lines, s, e = load_raw_for_edit(path)
+     new_fm = edit_fm_scalar(lines[1:e], key, value)
+     exp = fmt_scalar(key, value)
+     exp_val = strip_quotes(exp)
+     tag_synced = False
+     if key == "status":
+         new_fm, tag_synced = edit_fm_sync_status_tag(new_fm, exp_val)
+@@ -13084,20 +13120,41 @@ def _version_nudge(root: Path) -> "str | None":
+         f"本專案紀律區塊版本 {claude_ver} 落後來源 {src_ver},"
+         f" 可跑 lumos update 刷新"
+     )
+ 
+ 
+ # vendored 工具組白名單(固定 5 檔,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
+ # _vendor_toolchain 安裝端與 cmd_deinit 移除端共用,避免漂移。
+ _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
+                      "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                      "scripts/fetch-notesmd.sh")
++_VENDORED_DIRS = ("scripts/hooks", "scripts/templates")
++
++
++def _is_vendored_path(rel):
++    """這條路徑是不是「工具鏈自己安裝進消費專案的檔」。
++
++    清單直接吃安裝端的 _VENDORED_TOOLKIT 與同一組目錄,★不另記一份★——
++    兩邊各記一份遲早漂移(2026-09-10)。"""
++    r = str(rel).replace("\\", "/").lstrip("./")
++    return r in _VENDORED_TOOLKIT or any(r == d or r.startswith(d + "/") for d in _VENDORED_DIRS)
++
++
++def _is_toolchain_repo(root):
++    """這個 repo 是不是工具鏈本體(那裡 scripts/lumos 就是產品,不能當成外來的跳過)。
++
++    ★判別鍵沿用既有慣例★(見 `_self_repo_origin`):skills/lumos-project-notes/SKILL.md
++    是 user-scope skill 的唯一源,永遠不會被複製進消費專案。"""
++    try:
++        return (Path(root) / "skills" / "lumos-project-notes" / "SKILL.md").is_file()
++    except Exception:
++        return False
+ 
+ 
+ def _pull_source_or_abort(src, allow_stale=False):
+     """更新來源 clone;拉不到就中止。回傳 0=可繼續、None=中止(呼叫端不得再寫任何檔)。
+ 
+     ★為什麼 fail-closed★:原本 pull 失敗只印一行警告就繼續 vendor,來源落後或有本機
+     分歧時會靜默拿舊版蓋掉專案裡較新的檔——消費端實戰咬過兩次,那行警告混在一堆輸出裡
+     根本看不到。「拿不到最新」與「確定這是最新」是兩種狀態,不該用同一條路走完。
+ 
+     ★但無 remote 不算失敗★:手動複製 / slim 安裝出來的來源本就沒有 remote,那是合法的
+@@ -13572,25 +13629,36 @@ def _stack_scan_skip(name):
+ 
+ def _stack_ext_counts(root):
+     """數 repo 裡各種程式碼副檔名各有幾個檔。回 {ext: n}。
+ 
+     ★用 os.walk 就地剪枝,不是 rglob 之後再過濾★(r1 單reviewer f5,實測):
+     rglob 會先把 node_modules 底下 2000 個檔全部走過一遍才被丟掉——略過名單對它想排除的
+     正是最大的那幾個目錄完全沒省到。健檢每次都跑這段,大型專案會隨依賴目錄大小線性變慢。"""
+     import os as _os
+     counts = {}
+     known = _stack_guess()
+-    for dirpath, dirnames, filenames in _os.walk(str(root)):
+-        dirnames[:] = [d for d in dirnames if not _stack_scan_skip(d)]
++    # ★lumos 自己安裝進來的檔不算這個專案的技術棧★(2026-09-10,一個小 Vue 專案上實撞):
++    # init 會把 CLI、自己的測試檔和五支 hook 複製到消費專案的 scripts/ 底下,那是八個 .py。
++    # 那個專案自己只有六個 .js,於是健檢反過來唸「你有 8 個 .py,測試設定卻只認 .js」——
++    # 舉的證據全是 lumos 自己的檔,而且專案愈小愈容易被唸,正好唸在剛接入的人臉上。
++    # 清單直接吃安裝端的 _VENDORED_TOOLKIT,避免兩邊各記一份而漂移。
++    _base = _os.path.abspath(str(root))
++    _skip_vendored = not _is_toolchain_repo(root)   # 工具鏈本體那裡 scripts/lumos 就是產品
++    def _rel(dirpath, name):
++        rd = _os.path.relpath(dirpath, _base)
++        return name if rd == "." else _os.path.join(rd, name)
++    for dirpath, dirnames, filenames in _os.walk(_base):
++        dirnames[:] = [d for d in dirnames if not _stack_scan_skip(d)
++                       and not (_skip_vendored and _is_vendored_path(_rel(dirpath, d)))]
+         for fn in filenames:
+             ext = _os.path.splitext(fn)[1].lower()
+-            if ext in known:
++            if ext in known and not (_skip_vendored and _is_vendored_path(_rel(dirpath, fn))):
+                 counts[ext] = counts.get(ext, 0) + 1
+     return counts
+ 
+ 
+ def _profile_stack_mismatch(root):
+     """設定的技術棧跟 repo 裡實際的程式碼對不對得上(消費專案接入靜默失效 [B]/S2)。
+ 
+     ★只看實際副檔名,不看值是預設還是設定檔寫的★——寫成「跟預設不符」的話,
+     init 產出的骨架一寫進去值就不是預設了,猜錯也永遠不會出聲(r1 外家備援席 f2)。
+     回一串人話;對得上回空 list。"""
+@@ -13601,21 +13669,27 @@ def _profile_stack_mismatch(root):
+     if not counts:
+         return []
+     test_msgs, sym_msgs = [], []
+     try:
+         pdata = load_platforms(root)
+     except Exception:
+         pdata = {"multiplatform": False, "platforms": {}}
+     if pdata.get("multiplatform"):
+         covered = set()
+         for pe in pdata["platforms"].values():
+-            covered |= set(TEST_PROFILES.get(pe.get("profile"), {}).get("exts") or [])
++            # ★"profile" 存的是攤開後的 profile 物件,不是名字★(2026-09-10 修):
++            # 拿它去 TEST_PROFILES 查表 = 用 dict 當 key,直接丟 TypeError 把整支 doctor
++            # 中斷在這一段。名字要用的話在隔壁的 "profile_name"。
++            _pe_prof = pe.get("profile")
++            if not isinstance(_pe_prof, dict):
++                _pe_prof = TEST_PROFILES.get(_pe_prof) or {}
++            covered |= set(_pe_prof.get("exts") or [])
+     else:
+         covered = set(load_test_profile(root).get("exts") or [])
+     # 只唸「數量夠多、卻沒有任何平台的測試 profile 認得」的副檔名(散落幾個檔不算)。
+     # ★門檻不只看絕對數量,也看它佔不佔份量★:本 repo 實測——它是 Python 專案,
+     # 但安裝腳本有 4 個 .ps1,只用「≥3 個」的話會唸一句「你的測試設定掃不到這些 .ps1」,
+     # 而那裡面根本沒有測試。改成「還要不少於最大宗的四分之一」就只剩真的那幾條。
+     _top = max(counts.values())
+     _floor = max(3, _top / 4)
+     for ext, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+         if n >= _floor and ext not in covered:
+@@ -17474,51 +17548,60 @@ def _tension_candidates_into(arch, added_lines, repo_root):
+                 if pat.pattern not in novel:
+                     novel.append(pat.pattern)
+             if novel:
+                 out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+     if out:
+         arch["tension_candidates"] = out
+     if truncated:
+         arch["candidates_truncated"] = True
+ 
+ 
+-def _stack_changed_ok(cur_file):
++def _stack_changed_ok(cur_file, skip_vendored=False):
+     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
+     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
+     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
+-    「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。"""
++    「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。
++
++    ★skip_vendored★(2026-09-10):在消費專案裡,工具鏈自己安裝進去的檔不看——
++    init 會把 CLI 與五支 hook 複製進 scripts/,消費專案第一次提交自然把它們一起帶進去,
++    於是整份風險報告裡★沒有一條在專案自己的程式碼裡★,分級卻被撐成 high、推送被擋,
++    要求對一份不是自己寫的程式做代碼審。呼叫端負責判斷這個 repo 是不是工具鏈本體
++    (那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。"""
+     ext = Path(cur_file).suffix
+     return (ext not in _PITFALL_DIFF_SKIP_EXT
+             and not cur_file.startswith("governance/review-reports/")
+             and cur_file not in _BOOKKEEPING_FILES
+             and not cur_file.startswith(_BOOKKEEPING_DIR)
+-            and not _PITFALL_DIFF_TEST_PAT.search(cur_file))
++            and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
++            and not (skip_vendored and _is_vendored_path(cur_file)))
+ 
+ 
+ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
+     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
+     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
+     import subprocess
+     try:
+         # core.quotePath=false:CJK 檔名不轉義加引號(否則 "+++ b/" 前綴比對全失效,
+         # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
+         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
+                            capture_output=True, text=True, cwd=str(repo_root))
+     except FileNotFoundError:
+         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
+         return None
+     if r.returncode != 0:
+         print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
+         return None
+     added = {}
+     claims = []
++    # 工具鏈本體的 repo 不跳過(那裡 scripts/lumos 就是產品),消費專案才跳
++    _skip_vendored = not _is_toolchain_repo(repo_root)
+     changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
+     added_lines = {}     # {檔: [增行內容…]}——只給「可能撞」候選用(2026-09-09 兩席相反時端出張力:候選看的是新引入,刪行不算)
+     cur_file, new_ln, _old_file = "", 0, ""
+     for line in r.stdout.splitlines():
+         if line.startswith("--- a/"):
+             _old_file = line[6:]
+             continue
+         if line.startswith("+++ /dev/null"):
+             # 整檔刪除(r1 外家 finder f2/否決 f1):沒有 b/ 名,原本 cur_file 留著前一檔的名字、刪行全歸錯檔或被跳過
+             cur_file = _old_file
+@@ -17536,26 +17619,26 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+             # 刪除行不推進新檔行號;但它是「改動內容」——棧別觸發要看(拿掉 CancellationToken/timeout/key 也該問;
+             # 表態閘 r2 外家 F5/正確性 C9)。added 集合本身仍只收新增行(其他消費者語意不變)。
+             if cur_file and _stack_changed_ok(cur_file):
+                 changed_lines.setdefault(cur_file, []).append(line[1:])
+             continue
+         if not line.startswith("+"):
+             new_ln += 1                       # context 行推進
+             continue
+         # 這是新增行(+ 開頭)
+         added.setdefault(cur_file, set()).add(new_ln)
+-        if cur_file and _stack_changed_ok(cur_file):
++        if cur_file and _stack_changed_ok(cur_file, _skip_vendored):
+             changed_lines.setdefault(cur_file, []).append(line[1:])
+             added_lines.setdefault(cur_file, []).append(line[1:])   # 同一道 _stack_changed_ok 過濾:簿記檔/審計證物不產生候選(r1 通才 G5)
+         code = line[1:]
+         # 哪些檔要掃:跟棧別觸發同一支 _stack_changed_ok(r1 架構對齊席 f2:原本這裡內聯一份、那邊再抄一份)
+-        if (cur_file and _stack_changed_ok(cur_file)
++        if (cur_file and _stack_changed_ok(cur_file, _skip_vendored)
+                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
+             code_nostr = _strip_string_literals(code)
+             for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
+                 if pat.search(code if in_strings else code_nostr):
+                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
+                                    "pattern": pat.pattern, "question": q})
+                     break
+         new_ln += 1                           # 新增行推進新檔行號
+ 
+     # 棧別效能追問(T1):非測試檔的副檔名命中問題表 → 附該棧三問(去重,首見即收)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index df68d6c8..68168ae5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -1365,20 +1365,46 @@ def t_new_teaches_tags():
+ 
+ # ── BUG-7: fmt_scalar YAML 型別劫持 ──
+ def t_set_boolean_guard():
+     v = mkvault()
+     p = write(v, "Systems/S.md", "type: system\nstatus: doing")
+     run(v, "set", "S", "status", "true", expect_rc=0)
+     check("BUG-7 set status true → 引號保護(status: \"true\")",
+           'status: "true"' in read(p), read(p))
+ 
+ 
++def t_set_about_code_is_writable_and_checked():
++    """about_code ★要有一條指令寫得進去,而且會擋住寫不存在的路徑★。
++
++    2026-09-10 在三個消費專案上實撞:這個欄位在實務上都是純量路徑,但 `set` 不收它、
++    `append` 看到純量又拒絕——★沒有任何指令改得動它★,只能手改;手改一手滑就變成
++    `about_code: src/x.ts []` 這種值,而健檢只會「提醒不擋」,於是那些節點的波及計算
++    靜默失聯。當時兩個消費專案加上工具鏈自己,一共 13 篇是壞的(8+4+1,從 git 歷史逐筆數出來)。
++    翻紅釘:把 about_code 從可寫清單拿掉 → ①翻紅;拿掉路徑存在檢查 → ③翻紅。"""
++    import os as _os
++    v = mkvault()
++    p = write(v, "Systems/S.md", "type: system\nstatus: doing\nabout_code:")
++    # 跟 lumos 用同一個判斷算 repo 根(找 .git,找不到退 vault 上一層)——測試不另算一套
++    repo = str(Path(v).resolve().parent)
++    _os.makedirs(_os.path.join(repo, "src"), exist_ok=True)
++    open(_os.path.join(repo, "src", "real.ts"), "w").write("export const x = 1\n")
++
++    run(v, "set", "S", "about_code", "src/real.ts", expect_rc=0)
++    check("①about_code 寫得進去", "about_code: src/real.ts" in read(p), read(p))
++    check("②寫進去的是乾淨的純量,不帶多餘的空清單記號",
++          "about_code: src/real.ts []" not in read(p), read(p))
++
++    out = run(v, "set", "S", "about_code", "src/沒這個檔.ts", expect_rc=2)
++    check("③寫不存在的路徑要當場擋下(這正是手改一手滑會產生的東西)",
++          "about_code: src/real.ts" in read(p), read(p) + str(out))
++
++
+ # ── set 日期 bare 不加引號(污染指紋防護的反向:正常日期不該被引號) ──
+ def t_set_date_bare():
+     v = mkvault()
+     p = write(v, "Systems/S.md", "type: system\nstatus: done\nupdated: 2026-01-01")
+     run(v, "set", "S", "updated", "2026-06-13", expect_rc=0)
+     check("set 日期 bare(updated: 2026-06-13 無引號)",
+           "updated: 2026-06-13" in read(p) and '"2026-06-13"' not in read(p), read(p))
+ 
+ 
+ # ── set 最小 diff:只動目標行 ──
+@@ -9162,20 +9188,79 @@ def t_pitfalls_diff():
+     (root / "訂單頁.py").write_text(
+         "def f():\n"
+         "    fh = open('x.txt')\n", encoding="utf-8")
+     git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "cjk")
+     r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+     data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+     check("pitfalls --diff: CJK 檔名命中且檔名不轉義",
+           any(c["file"] == "訂單頁.py" for c in data["claims"]), r.stdout)
+ 
+ 
++def t_pitfalls_diff_ignores_vendored_toolchain():
++    """★消費專案的第一次提交,風險分級不得被「工具鏈自己的檔」撐成 high★。
++
++    2026-09-10 在一個小 Vue 專案上實撞:init 會把 CLI、五支 hook 一起複製進 scripts/,
++    第一次提交自然把它們一起帶進去;pitfalls 掃 diff 時逐檔命中那些檔裡的 open( 之類,
++    ★整份報告 30 條沒有一條在專案自己的程式碼裡★,tier 卻被撐成 high,推送被擋,
++    要求對一份不是自己寫的程式做代碼審。愈是剛接入的專案愈會撞到。
++
++    ★但工具鏈自己的 repo 不能跳過★——在那裡 scripts/lumos 就是產品本體,
++    跳過等於把這個閘整個關掉。判別鍵沿用既有慣例(skills/lumos-project-notes/SKILL.md
++    只存在於來源 repo,永不複製進消費專案)。
++    翻紅釘:拿掉跳過 → ②翻紅;跳過時不看是不是工具鏈本體 → ④翻紅。"""
++    import json as _json, subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-pfvendor-"))
++    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
++    def commit(m): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
++    git("init")
++    (root / "app.js").write_text("export const x = 1\n", encoding="utf-8")
++    commit("init")
++
++    # ① 基準線:專案自己的檔命中,照樣要報
++    (root / "src").mkdir(exist_ok=True)
++    (root / "src" / "mine.py").write_text("def f():\n    fh = open('x.txt')\n", encoding="utf-8")
++    commit("mine")
++    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
++    check("①專案自己的檔照樣要報", any(c["file"] == "src/mine.py" for c in d["claims"]), r.stdout)
++
++    # ② 工具鏈自己安裝進來的檔:同樣的寫法,不得算在這個專案頭上
++    (root / "scripts" / "hooks" / "claude").mkdir(parents=True, exist_ok=True)
++    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/hooks/claude/h1.py"):
++        (root / rel).write_text("def f():\n    fh = open('x.txt')\n", encoding="utf-8")
++    commit("vendored")
++    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
++    check("②工具鏈自己安裝的檔不算這個專案的風險",
++          not d["claims"] and d["tier"] == "standard",
++          str(d.get("tier")) + " / " + str(d["claims"])[:400])
++
++    # ③ 同一次提交裡混著兩種:只留專案自己的那條
++    (root / "src" / "two.py").write_text("def g():\n    fh = open('y.txt')\n", encoding="utf-8")
++    (root / "scripts" / "lumos").write_text("def f():\n    fh = open('z.txt')\n    q = open('w.txt')\n", encoding="utf-8")
++    commit("mixed")
++    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
++    files = {c["file"] for c in d["claims"]}
++    check("③混著提交時只留專案自己的", files == {"src/two.py"}, str(files))
++
++    # ④ 工具鏈本體的 repo 不得跳過(那裡 scripts/lumos 就是產品)
++    (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
++    (root / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
++    (root / "scripts" / "lumos").write_text("def f():\n    fh = open('again.txt')\n", encoding="utf-8")
++    commit("selfrepo")
++    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
++    check("④在工具鏈自己的 repo 裡,scripts/lumos 照樣要掃",
++          any(c["file"] == "scripts/lumos" for c in d["claims"]), str(d["claims"])[:400])
++
++
+ def t_pitfalls_diff_ignores_data_files_and_string_literals():
+     """工具鏈補強十件 #7:資料檔(.json/.jsonl…)與字串字面裡的 open(/UPDATE 不算代碼風險——
+     2026-08-22 三批推送被探針結果 JSON 和 print 文字連判 high,閘被訓練成「先想怎麼 skip」。"""
+     import json as _json, subprocess as sp
+     root = Path(tempfile.mkdtemp(prefix="gctl-pfd7-"))
+     def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+     def commit(m): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
+     git("init"); (root / "app.py").write_text("x = 1\n", encoding="utf-8"); commit("init")
+     # ① 資料檔帶 open( / UPDATE → 不算
+     (root / "run.json").write_text('{"calls": ["open(path)", "UPDATE t SET a=1"]}\n', encoding="utf-8")
+@@ -34163,20 +34248,44 @@ def t_doctor_profile_mismatch_hint():
+             (root / f"F{n}.swift").write_text("x\n", encoding="utf-8")
+         check("①完全沒設定(吃 C# 預設)+ 一堆 swift → 出聲",
+               any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+         (root / ".lumos").mkdir()
+         (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "csharp-xunit", "symbol_profile": "csharp"}), encoding="utf-8")
+         check("②設定檔寫死錯的值也要出聲(不是只看預設)",
+               any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+         (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "swift-xctest", "symbol_profile": "swift"}), encoding="utf-8")
+         check("③設對了 → 不出聲", m._profile_stack_mismatch(root) == [], str(m._profile_stack_mismatch(root)))
+     check("④沒有 repo(vault 不在 git 底下)→ 靜默不炸", m._profile_stack_mismatch(None) == [], "應該回空 list")
++    # ⑤多平台格式(2026-09-10 pos-guest 首個多平台消費專案實撞):平台表裡的 profile 欄位
++    # 存的是「攤開後的 profile 物件」不是名字,這裡照名字去查表就會拿 dict 當 key 直接炸,
++    # 整支 doctor 中斷在 [S3] 那一段。翻紅釘:把 pe.get("profile") 改回丟進 TEST_PROFILES.get()。
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        for n in range(4):
++            (root / f"F{n}.swift").write_text("x\n", encoding="utf-8")
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "config.json").write_text(_j.dumps({
++            "default_platform": "ios",
++            "platforms": {"ios": {"profile": "swift-xctest", "root": "."}},
++            "symbol_profile": "swift"}), encoding="utf-8")
++        try:
++            msgs5 = m._profile_stack_mismatch(root)
++            ok5, why5 = True, str(msgs5)
++        except Exception as e:
++            ok5, why5 = False, f"炸了:{type(e).__name__}: {e}"
++        check("⑤多平台設定不得炸,而且設對了要安靜", ok5 and msgs5 == [], why5)
++        (root / ".lumos" / "config.json").write_text(_j.dumps({
++            "default_platform": "node",
++            "platforms": {"node": {"profile": "node-jest", "root": "."}},
++            "symbol_profile": "swift"}), encoding="utf-8")
++        check("⑥多平台設定挑錯測試工具照樣要出聲",
++              any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+ 
+ 
+ 
+ def t_bound_tests_unproven_blocks_push():
+     """[消費專案接入靜默失效 S7 · 2026-09-09 r1 折入]★「指令回成功但證不出跑過」要跟紅一樣擋★。
+ 
+     為什麼要有這支:第一版只把狀態從 green 換成 unfilterable、印一行到 stderr,
+     而真正決定推送擋不擋的那支只認 red——所以「假綠改成擋」當時是假的,實際上只換了一行字。
+     這支同時釘住新的主力證據:不靠退出碼,改看測試工具自己的輸出有沒有說「執行了 N 支」。
+ 
+@@ -34406,20 +34515,60 @@ def t_init_additive_setup_reaches_existing_projects():
+         m._init_additive_setup(root)
+         check("②既有專案拿得到設定骨架", (root / ".lumos" / "config.json").exists(), "沒有 config.json")
+         check("②既有專案拿得到本機留痕的忽略設定",
+               (root / "governance" / ".gitignore").exists(), "沒有 governance/.gitignore")
+         before = (root / ".lumos" / "config.json").read_text(encoding="utf-8")
+         m._init_additive_setup(root)
+         check("③再跑一次不覆寫已經有的東西",
+               (root / ".lumos" / "config.json").read_text(encoding="utf-8") == before, "被覆寫了")
+ 
+ 
++def t_doctor_s3_ignores_vendored_toolchain():
++    """[消費專案接入靜默失效 S3]算「這個專案是什麼技術棧」時,★不能把 lumos 自己安裝進來的檔算進去★。
++
++    2026-09-10 在一個小的 Vue 專案上實撞:lumos init 會把自己的 CLI、自己的測試檔、
++    五支 hook 一起複製到消費專案的 scripts/ 底下,那是八個 .py。專案自己只有六個 .js,
++    於是健檢反過來唸「你有 8 個 .py 但測試設定認的是 .js」——證據全是 lumos 自己的檔,
++    而且愈小的專案愈容易被唸。翻紅釘:把跳過清單拿掉 → ②翻紅。"""
++    import json as _j
++    m = _load_lumos_inproc()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        (root / "src").mkdir()
++        for n in range(6):
++            (root / "src" / f"m{n}.js").write_text("export const x = 1\n", encoding="utf-8")
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "config.json").write_text(
++            _j.dumps({"test_profile": "node-jest", "symbol_profile": "typescript"}), encoding="utf-8")
++        check("①還沒安裝工具鏈時本來就安靜(基準線)",
++              not any(".py" in x for x in m._profile_stack_mismatch(root)),
++              str(m._profile_stack_mismatch(root)))
++        # 照 _VENDORED_TOOLKIT + 兩個目錄鋪出 lumos init 真的會放進去的東西
++        for rel in m._VENDORED_TOOLKIT:
++            f = root / rel
++            f.parent.mkdir(parents=True, exist_ok=True)
++            f.write_text("# lumos\n", encoding="utf-8")
++        hooks = root / "scripts" / "hooks" / "claude"
++        hooks.mkdir(parents=True, exist_ok=True)
++        for n in range(5):
++            (hooks / f"h{n}.py").write_text("# hook\n", encoding="utf-8")
++        msgs = m._profile_stack_mismatch(root)
++        check("②裝了工具鏈之後不得因為 lumos 自己的檔而改口",
++              not any(".py" in x for x in msgs), str(msgs))
++        # 專案真的自己有一堆 python 時還是要唸(別把整條規則關掉)
++        for n in range(9):
++            (root / "src" / f"real{n}.py").write_text("x = 1\n", encoding="utf-8")
++        check("③專案自己的 python 照樣要唸",
++              any(".py" in x for x in m._profile_stack_mismatch(root)),
++              str(m._profile_stack_mismatch(root)))
++
++
+ def t_doctor_s3_keeps_symbol_profile_group():
+     """[2026-09-09 r1 單reviewer f3/f9]健檢 S3 的兩組提醒各自留額度,截斷要說實話;骨架留空也要抓得到。
+ 
+     出身:舊寫法把兩組接成一串再截前 8 條,而測試那組永遠排在前面——
+     symbol_profile 那整類在副檔名一多的專案會被整批吃掉,標頭照印「有 8 項」,
+     看不出還有沒講的。另外「猜不到的語言」(Rust/Go…)骨架會留空字串,
+     而讀設定那支對空字串靜默退回 C# 預設,靠副檔名比對的 S3 也抓不到。
+     翻紅釘:改回「兩組接起來再 out[:8]」→ ②翻紅;拿掉 _config_left_blank → ③翻紅。"""
+     m = _load_lumos_inproc()
+     import json as _j

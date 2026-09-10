@@ -193,6 +193,26 @@ def strip_quotes(s):
     return s
 
 
+def _posix_norm(s):
+    """路徑比對鍵的共用正規化:反斜線轉斜線、去 ./ 與 a/../b(純字面,不查檔案);空的回空字串。
+    工具自裝檔判別、about_code 的比對、排序加分讀 about_code 共用這一個(2026-09-10 代碼審 r3 架構席/整合席:
+    原本三處各寫一份,排序那側只剝開頭的 ./,不解 ..)。"""
+    import posixpath
+    v = str(s).strip().replace("\\", "/")
+    return posixpath.normpath(v) if v else ""
+
+
+_SINGLE_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")   # 整個值恰好是一個連結(fullmatch 用;讀側索引與寫側判斷共用)
+
+
+def _multi_link_value(s):
+    """清單欄位的一個值裡有兩個以上連結開頭——一項只能是一個連結或一個值。
+    讀的一側(parse_frontmatter 的 lint)與寫的一側(_list_scalar_value)共用這一個判斷(2026-09-10 代碼審 r3 架構席:
+    原本讀側只認 `]], [[` 與 `]],[[`,寫側看兩個以上 [[,`[[A]],  [[B]]` 讀側不吭聲、寫側卻擋)。
+    只用在清單欄位:散文欄位(例如 valid_under)講到兩個連結是正常的。"""
+    return str(s).count("[[") > 1
+
+
 def link_target(s):
     """從 wikilink 字串/list 項抽**完整 target**(去 [[]]、alias、heading、引號;**保留路徑**)。
     `[[Verification/X|y]]` → `Verification/X`。寫側 dedup 用它做精確比對:
@@ -261,7 +281,7 @@ def parse_frontmatter(fm_lines):
                 if ms:
                     item = strip_quotes(ms.group(1).strip())
                     items.append(item)
-                    if "]], [[" in item or "]],[[" in item:
+                    if "]], [[" in item or "]],[[" in item or (key in LIST_KEYS and _multi_link_value(item)):
                         lint.append(f"一個欄位塞了多個連結卻寫成一串字,會被當成一個不存在的 ghost 筆記,要拆成一行一項: {key} 項")
                 if RULE3_RE.match(l2):
                     lint.append(f"欄位值裡有「冒號+空白」又沒加引號,讀出來會被切斷,整個值請用引號包起來: {l2.strip()[:60]}")
@@ -274,7 +294,7 @@ def parse_frontmatter(fm_lines):
             i += 1
             continue
         fields[key] = sval
-        if "]], [[" in sval or "]],[[" in sval:
+        if "]], [[" in sval or "]],[[" in sval or (key in LIST_KEYS and _multi_link_value(sval)):
             lint.append(f"一個欄位塞了多個連結卻寫成一串字,會被當成一個不存在的 ghost 筆記,要拆成一行一項: {key}")
         i += 1
     for line in fm_lines:
@@ -326,7 +346,7 @@ def load_vault(vault: Path):
                 continue
             for item in (v if isinstance(v, list) else [v]):
                 s = str(item).strip()
-                fm = re.fullmatch(r"\[\[([^\[\]]+?)\]\]", s)
+                fm = _SINGLE_WIKILINK_RE.fullmatch(s)
                 if fm:
                     t = fm.group(1).split("|")[0].split("#")[0].strip()
                     if t:
@@ -10216,7 +10236,10 @@ Graph
   .nodeColor(ncolor)
   .nodeOpacity(0.9)
   .nodeResolution(18)
-  .nodeLabel(n=>'<div style="font:600 12px Space Grotesk,sans-serif;color:#edeff6;background:rgba(15,18,25,.92);padding:5px 10px;border:1px solid #2a3145;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.7)">'+n.label+'<span style="color:#7c8398;font-weight:400"> · '+n.type+(n.status==='stale'?' · stale':'')+(n.inv&&n.inv.length?' · ★'+n.inv.length:'')+'</span></div>')
+  // ★節點名用純白★(2026-09-10 Enzo:原本 #edeff6 在深色底上太淡)。
+  // 後面那段型別標註同時提亮一階(#7c8398 → #a8b0c4):它原本淡到幾乎看不見,
+  // 而那裡寫的是「這是什麼型別、有沒有過期、幾條合約」——是要看的資訊不是裝飾。
+  .nodeLabel(n=>'<div style="font:600 12px Space Grotesk,sans-serif;color:#ffffff;background:rgba(15,18,25,.92);padding:5px 10px;border:1px solid #2a3145;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.7)">'+n.label+'<span style="color:#a8b0c4;font-weight:400"> · '+n.type+(n.status==='stale'?' · stale':'')+(n.inv&&n.inv.length?' · ★'+n.inv.length:'')+'</span></div>')
   .linkColor(lcolor)
   .linkOpacity(0.2)
   .linkWidth(lwidth)
@@ -10632,11 +10655,59 @@ def edit_fm_sync_status_tag(fm_lines, status):
     return fm, found
 
 
+def _list_scalar_value(fm, key, line_idx):
+    """清單欄位的單一值寫法(`key: 值`)讀出那一個值(去引號,空的回 "")。
+
+    ★看起來是同一行清單就丟 ValueError★:工具不解析同一行裡的逗號(fm_structure 與
+    parse_frontmatter 都把它當成一個值),照單一值轉會把整串 "[a, b]" 寫成一項。
+    判準看「去引號後的值本身」,不列舉寫法(2026-09-10 代碼審 r2:只比對原始字串時,
+    整串加引號、逗號前後多打空白都繞得過):以 [ 或 { 開頭(單一連結 [[X]] 除外),
+    或一個值裡有兩個以上連結開頭。加了引號的空清單 "[]" 跟讀的一側一樣當成空的。"""
+    m = TOP_KEY_RE.match(fm[line_idx])
+    val = m.group(2).strip() if m else ""
+    sval = strip_quotes(val)
+    t = sval.strip()   # 引號裡面前面多一個空白也要認得(第三輪外家否決席:" [a, b]" 繞過)
+    if t == "[]":
+        return ""
+    # 單一連結要「整個值恰好是一個連結」才豁免(第三輪外家找洞席:[[Systems/A], Systems/B] 開頭像連結就被放行)
+    if (t.startswith(("[", "{")) and not _SINGLE_WIKILINK_RE.fullmatch(t)) or _multi_link_value(t):
+        raise ValueError(f"{key} 寫成同一行的清單({val}),工具不解析這種寫法,"
+                         f"硬加會把整串當成一項寫壞,檔案沒動。這種寫法目前只能手動改成一行一項"
+                         f"({key}: 換行後每項一行「  - 值」),改完再重跑")
+    return t   # 去掉前後空白:引號裡只有空白就是空的(第四輪正確性席:原本會留下一筆空白垃圾項)
+
+
+def _list_key_scalar_to_list(fm, key, line_idx):
+    """清單欄位被寫成單一值(`about_code: src/x.py`)時,改寫成一項的清單再給 append/remove 用。
+
+    ★讀的一側本來就把單一值當成一項的清單★(as_list),只有寫的一側不認得——
+    於是一篇筆記一旦是單一值寫法,append 說它不是清單、set 又不收清單欄位,
+    沒有任何指令改得動(2026-09-10 代碼審 r1)。空值(`key:`)當成空清單;
+    同一行的清單寫法擋下不轉(見 _list_scalar_value)。"""
+    sval = _list_scalar_value(fm, key, line_idx)
+    m = TOP_KEY_RE.match(fm[line_idx])
+    raw = m.group(2).strip() if m else ""
+    fm = list(fm)
+    fm[line_idx] = f"{key}:"
+    if sval:
+        # ★原本那一項原封不動★:有引號就照原樣搬,不去掉再重新加(第三輪外家找洞席:'[[Systems/API "v2"]]'
+        # 被重新加成帶反斜線的雙引號,讀的一側不解反斜線,讀回來就不是原本那篇了)
+        quoted = len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'"
+        fm.insert(line_idx + 1, f"  - {raw if quoted else fmt_list_item(sval)}")
+    return fm
+
+
 def edit_fm_append(fm_lines, key, value):
     fm = list(fm_lines)
     item = fmt_list_item(value)
     tgt = link_target(value)
     struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    if key in struct and struct[key][2] == "scalar" and key in LIST_KEYS:
+        cur = _list_scalar_value(fm, key, struct[key][0])
+        if cur and link_target(cur) == tgt:
+            return fm  # 已經有了:原樣回傳,不改寫成清單格式(r2)
+        fm = _list_key_scalar_to_list(fm, key, struct[key][0])
+        struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
     if key in struct:
         s, e, kind = struct[key]
         if kind != "list":
@@ -10681,6 +10752,9 @@ def edit_fm_remove(fm_lines, key, value):
     struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
     if key not in struct:
         raise ValueError(f"這篇筆記沒有 {key} 這個欄位")
+    if struct[key][2] == "scalar" and key in LIST_KEYS:
+        fm = _list_key_scalar_to_list(fm, key, struct[key][0])
+        struct = {k: (a, b, c) for k, a, b, c in fm_structure(fm)}
     s, e, kind = struct[key]
     if kind != "list":
         raise ValueError(f"{key} 是{kind}型欄位,remove 只能從清單型欄位拿掉項目")
@@ -10764,11 +10838,28 @@ def _write_lf(path: Path, text: str):
     """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
     用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.9。
     [2026-08-05 單席快審 F2] tmp→os.replace 原子替換:防半寫毀檔(CLAUDE.md reinject 等
-    整檔覆寫消費者)。read-modify-write 的併發 last-write-wins 窗仍在(單機 CLI,不上鎖,accepted)。"""
-    import os as _os
-    tmp = path.with_name(path.name + ".tmp-wlf")
-    tmp.write_bytes(text.encode("utf-8"))
-    _os.replace(tmp, path)
+    整檔覆寫消費者)。read-modify-write 的併發:set/append/remove 由呼叫端上鎖(_vault_write_lock),
+    其他寫入指令仍是 last-write-wins(單機 CLI,accepted)。
+    ★暫存檔名每次都不一樣★(2026-09-10 代碼審 r3 併發資源席:原本同一篇筆記大家用同一個固定暫存檔名,
+    兩個程序同時寫就互搶,實測六個同時跑六個都噴 FileNotFoundError)——跟 mkstemp 同一種做法(獨佔建一個唯一名),
+    但權限給 0o666、讓它跟一般建檔一樣受 umask 管;原檔在就照原檔的權限(例如 +x)。
+    ★不用 mkstemp 再改權限★(第四輪併發資源席):mkstemp 建成 0600,要調回一般樣子只能先讀整個程序的 umask
+    (設成 0 再設回來),那一瞬間別的執行緒建的檔會拿到錯的權限。"""
+    import os as _os, shutil as _sh, uuid as _uuid
+    tmp = str(path.with_name(f"{path.name}.{_os.getpid()}-{_uuid.uuid4().hex[:8]}.tmp-wlf"))
+    fd = _os.open(tmp, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o666)   # 權限照一般建檔
+    try:
+        with _os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+        if path.exists():
+            _sh.copymode(path, tmp)
+        _os.replace(tmp, path)
+    except BaseException:
+        try:
+            _os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def atomic_write_verify(path: Path, new_lines, key, expected_check):
@@ -10787,17 +10878,67 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
     introduced = set(new_lint) - orig_lint
     if introduced:
         raise RuntimeError("寫完讀回來檢查,發現欄位區塊多了會讀錯的寫法,這次寫入不算成功:" + "; ".join(sorted(introduced)))
-    import os
-    tmp = path.with_suffix(path.suffix + ".lumos-tmp")
-    try:
-        _write_lf(tmp, text)
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    _write_lf(path, text)   # 本身就是「寫暫存檔→原子換名」;原本外面再包一層固定檔名的暫存檔,兩層固定名互搶(r3)
+
+
+_VAULT_LOCK_STALE_SEC = 30   # 一次筆記寫入不到一秒;鎖檔 30 秒還沒放掉,當成拿鎖的程序死了、原子接手
+_VAULT_LOCK_HELD = {}         # 這個程序已經拿著的寫入鎖 → 巢狀呼叫直接過(可重入),不自己卡自己
+
+
+def _vault_write_lock(vault):
+    """同一個筆記庫的 set/append/remove 一次只讓一個程序做「讀—改—寫」(2026-09-10 代碼審 r3 併發資源席:
+    沒有鎖時,回報成功的項目會被同時跑的另一個程序蓋掉)。
+
+    ★用專案既有的鎖檔做法★(_excl_lock_try:獨佔建鎖檔、寫程序編號、過期用換名原子接手;第四輪架構席:
+    第三輪另開了一套 flock,是專案裡第二種鎖),搶不到就每 0.05 秒再試、最多 60 秒(RuntimeError)。
+    鎖檔放 ~/.cache/lumos/vault-lock/(照 dispatch-lens 快取的先例:不放共用暫存目錄——路徑可預測、會被別的使用者先佔)。
+    同一個程序巢狀拿同一把鎖直接過(第四輪:原本自己卡自己 60 秒,訊息還說「別的程序在寫」);
+    鎖的資料夾建不起來就照寫,但會講一聲(第四輪:原本默默不上鎖)。"""
+    import contextlib, hashlib, time as _t
+
+    @contextlib.contextmanager
+    def _cm():
+        key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
+        lock = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
+        k = str(lock)
+        if _VAULT_LOCK_HELD.get(k):
+            _VAULT_LOCK_HELD[k] += 1
+            try:
+                yield
+            finally:
+                _VAULT_LOCK_HELD[k] -= 1
+            return
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"提醒:寫入鎖的資料夾建不起來({e}),這次不排隊直接寫——"
+                  "同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的", file=sys.stderr)
+            yield
+            return
+        deadline = _t.monotonic() + 60
+        while not _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC):
+            if _t.monotonic() > deadline:
+                raise RuntimeError("等了 60 秒還輪不到寫入(同一個筆記庫有別的程序正在寫,或上一個寫入的程序卡住了),檔案沒動")
+            _t.sleep(0.05)
+        _VAULT_LOCK_HELD[k] = 1
+        try:
+            yield
+        finally:
+            _VAULT_LOCK_HELD.pop(k, None)
+            try:   # 只刪自己的鎖(過期被接手時,鎖檔已經是別人的)
+                if lock.read_text(encoding="utf-8").split("\n", 1)[0] == str(os.getpid()):
+                    lock.unlink()
+            except OSError:
+                pass
+    return _cm()
 
 
 def cmd_set(env, rel, key, value):
+    with _vault_write_lock(env.vault):
+        return _cmd_set_locked(env, rel, key, value)
+
+
+def _cmd_set_locked(env, rel, key, value):
     if key not in SCALAR_KEYS:
         print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS)}"
               f"(清單欄位用 lumos append;決策新增/翻案用 lumos decision-add / decision-supersede)", file=sys.stderr)
@@ -10844,22 +10985,119 @@ def cmd_self_audit(env, rel, model="sonnet", date=None):
     return cmd_set(env, rel, "self_audit", f"{model}/{date}")
 
 
+def _disk_spelling(root, relp):
+    """relp 每一層照磁碟上的真實檔名拼回來(大小寫、Unicode 寫法以磁碟為準;只差 Unicode 寫法的算同一個)。
+    回 (真實拼法, None);某一層目錄讀不到檔名清單回 (None, 那一層目錄)——擋不擋由呼叫端決定。"""
+    cur, real = root, []
+    for part in relp.split("/"):
+        try:
+            names = os.listdir(cur)
+        except OSError:
+            return None, ("/".join(real) or ".")
+        hit = part if part in names else next((n for n in names if nfc(n) == nfc(part)), None)
+        if hit is None:
+            hit = next((n for n in names if nfc(n).casefold() == nfc(part).casefold()), part)
+        real.append(hit)
+        cur = cur / hit
+    return "/".join(real), None
+
+
+def _about_code_key(root, value):
+    """about_code 一項「指的是哪一支檔」的比對鍵(append 去重、remove 找項共用)。
+    檔案還在:用磁碟上的真實位置——解 symlink、大小寫與 Unicode 寫法照磁碟(2026-09-10 代碼審 r3:
+    只做字面正規化時,symlink 別名、舊的大小寫錯字項都會被當成另一支檔,疊出重複又刪不掉);
+    檔案不在了:退回字面正規化(remove 要清得掉檔已刪的舊項)。比較一律用 NFC。"""
+    lex = _posix_norm(strip_quotes(str(value).strip()))
+    if not lex:
+        return ""
+    try:
+        target = (root / lex).resolve()
+        rel = target.relative_to(root).as_posix()
+    except (ValueError, OSError):
+        return nfc(lex)
+    if not target.is_file():
+        return nfc(lex)
+    real, _ = _disk_spelling(root, rel)
+    return nfc(real or rel)
+
+
+def _about_code_path(env, value):
+    """about_code 的一項要是「這個 repo 裡真的存在的程式檔」(2026-09-10 代碼審 r1)。
+
+    回 (正規化後的 repo 相對路徑, None) 或 (None, 擋下的理由)。
+    ★先解析再比對 repo 根★:只看「存不存在」的話,絕對路徑與 ../ 都會繞出 repo 而且通過;
+    存成正規化的樣子,排序加分用的鍵才對得上(src/../src/a.py 跟 src/a.py 要是同一個)。"""
+    v = str(value).strip().replace("\\", "/")   # Windows 反斜線寫法也收(r3 邊界席:原本永遠「找不到」)
+    if not v:
+        return None, "about_code 不能是空的"
+    if Path(v).is_absolute():
+        return None, f"about_code 要寫 repo 相對路徑,「{v}」是絕對路徑"
+    root = _vault_repo_root(env).resolve()
+    target = (root / v).resolve()
+    try:
+        relp = target.relative_to(root).as_posix()
+    except ValueError:
+        return None, f"「{v}」跑出這個 repo 了(repo 根是 {root})"
+    if not target.is_file():
+        return None, (f"「{v}」不是這個 repo 裡的檔案" + ("(它是目錄;about_code 要寫到檔案)" if target.is_dir() else "(找不到)"))
+    # ★大小寫要跟磁碟上的真實檔名一致★(r2):排序加分拿這個值去比對 git 的改動路徑(大小寫敏感);
+    # 大小寫不敏感的檔案系統上 SRC/A.TS 也通過 is_file,存進去就永遠對不上
+    # 只差 Unicode 正規化寫法(é 一個字 vs e 加重音符號)的是同一個檔,不算寫錯:Mac 的磁碟兩種都認,
+    # 目錄清單卻只列存進去的那一種(派第三輪之前自己抓到的誤擋)——兩邊都轉成 NFC 再比。
+    # ★讀不到目錄的檔名清單就擋★(r3 併發資源席:原本當成「寫對了」放行,錯字大小寫照樣存進去)
+    real, unreadable = _disk_spelling(root, relp)
+    if unreadable:
+        return None, f"讀不到目錄 {unreadable} 的檔名清單,沒辦法確認「{v}」的大小寫有沒有寫對"
+    if nfc(real) != nfc(relp):
+        return None, f"「{v}」的大小寫跟磁碟上的檔名不一致(磁碟上是 {real})"
+    return relp, None
+
+
 def cmd_append(env, rel, key, value):
+    with _vault_write_lock(env.vault):
+        return _cmd_append_locked(env, rel, key, value)
+
+
+def _cmd_append_locked(env, rel, key, value):
     if key not in LIST_KEYS:
         print(f"擋下:{key} 不能用 append 加,檔案沒動。append 只能加這些清單欄位:{sorted(LIST_KEYS)}(純量欄位用 lumos set)", file=sys.stderr)
         return 2
+    if key == "about_code":
+        value, why = _about_code_path(env, value)
+        if why:
+            print(f"擋下:{why},檔案沒動。about_code 要填這個 repo 裡真的存在的程式檔(repo 相對路徑)", file=sys.stderr)
+            return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
+    if key == "about_code":
+        root = _vault_repo_root(env).resolve()
+        want = _about_code_key(root, value)
+        same = [x for x in as_list(parse_frontmatter(lines[1:e])[0].get(key)) if _about_code_key(root, x) == want]
+        if same:
+            hint = "" if value in same else f"(現有寫法是 {same[0]},指的是同一支檔;要換成 {value}:先 remove 再 append)"
+            print(f"✓ {rel} 的 {key} 已經有 {value}{hint},檔案沒動")
+            return 0
     new_fm = edit_fm_append(lines[1:e], key, value)
+    if new_fm == lines[1:e]:
+        print(f"✓ {rel} 的 {key} 已經有 {value},檔案沒動")
+        return 0
     new_lines = lines[:1] + new_fm + lines[e:]
     tgt = link_target(value)
+    before = {t for t in (link_target(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))) if t}   # 空值不算一項
+    # 寫完讀回來:新的那項在,★原本的每一項也都還在★(第三輪外家找洞席:只驗新項,舊項被改壞也過)
     atomic_write_verify(path, new_lines, key,
-                        lambda f: any(link_target(x) == tgt for x in as_list(f.get(key))))
+                        lambda f: tgt in {link_target(x) for x in as_list(f.get(key))}
+                        and before <= {link_target(x) for x in as_list(f.get(key))})
     print(f"✓ append {rel}: {key} 多了一項 {value}")
     return 0
 
 
 def cmd_remove(env, rel, key, value):
+    with _vault_write_lock(env.vault):
+        return _cmd_remove_locked(env, rel, key, value)
+
+
+def _cmd_remove_locked(env, rel, key, value):
     """T1 list 項移除(append 逆操作)。補的是 2026-08-11 實戰撞到的缺口:
     死背書(verified_by 指向已 superseded 的驗證)、降格後殘留的 core_refs 指針,
     都只能靠移除 list 項來收,但 set 只收純量、append 只能加,唯一合法退路
@@ -10880,16 +11118,39 @@ def cmd_remove(env, rel, key, value):
         return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
-    new_fm, n = edit_fm_remove(lines[1:e], key, value)
+    if key == "about_code":
+        # 同一支檔的每一種寫法都拿掉(舊資料可能同一支檔寫了兩種);比對鍵見 _about_code_key
+        root = _vault_repo_root(env).resolve()
+        want = _about_code_key(root, value)
+        spellings = list(dict.fromkeys(x for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))
+                                       if _about_code_key(root, x) == want))
+        new_fm, n = lines[1:e], 0
+        for sp_ in spellings:
+            new_fm, k = edit_fm_remove(new_fm, key, sp_)
+            n += k
+        gone = lambda f: not any(_about_code_key(root, x) == want for x in as_list(f.get(key)))
+    else:
+        new_fm, n = edit_fm_remove(lines[1:e], key, value)
+        _t = link_target(value)
+        gone = lambda f: not any(link_target(x) == _t for x in as_list(f.get(key)))
     if n == 0:
         cur = [str(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))]
+        hint = ""
+        if key == "about_code":   # 目錄讀不到時比對鍵只能退回字面,大小寫與別名對不上——講明(第四輪整合席)
+            _lex = _posix_norm(strip_quotes(str(value).strip()))
+            if _lex and not _lex.startswith("/"):
+                _unr = _disk_spelling(_vault_repo_root(env).resolve(), _lex)[1]
+                if _unr:
+                    hint = f";讀不到目錄 {_unr} 的檔名清單,大小寫與別名沒辦法比對,請用筆記裡原本的寫法"
         print(f"擋下:{rel} 的 {key} 裡沒有 {value}(比對用的目標是 {link_target(value)}),可能打錯字或早就不在了,檔案沒動;"
-              f"目前有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}", file=sys.stderr)
+              f"目前有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}{hint}", file=sys.stderr)
         return 2
     new_lines = lines[:1] + new_fm + lines[e:]
-    tgt = link_target(value)
+    # 寫完讀回來:要拿掉的都不在了,★其他每一項都還在★(第三輪外家找洞席:原本只驗「拿掉了」)
+    _keep = {link_target(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))
+             if gone({key: [x]}) and link_target(x)}   # 空值不算一項
     atomic_write_verify(path, new_lines, key,
-                        lambda f: not any(link_target(x) == tgt for x in as_list(f.get(key))))
+                        lambda f: gone(f) and _keep <= {link_target(x) for x in as_list(f.get(key))})
     print(f"✓ remove {rel}: {key} 拿掉了 {value}" + (f"(共拿掉 {n} 項)" if n > 1 else ""))
     return 0
 
@@ -11116,7 +11377,7 @@ def cmd_about_code_revert(env, batch_date, dry_run=False):
             print(f"  ⚠ {rel} 拿 {bad} 失敗:這篇 stamp 保留、不算撤成功,其餘繼續", file=sys.stderr)
             failed += 1
             continue
-        if _cmd_remove_scalar(env, rel, "about_code_stamp") == 0:
+        if cmd_remove(env, rel, "about_code_stamp", None) == 0:   # 走有上鎖的入口(第四輪併發資源席:原本直接呼叫底層函式、繞過寫入鎖)
             done += 1
         else:
             failed += 1
@@ -12115,13 +12376,13 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
     for rel in plan_rels:
         try:
             rc_side |= cmd_append(env, self_rel, "plan_refs", f"[[{rel.removesuffix('.md')}]]")
-        except OSError as e:
+        except (OSError, ValueError, RuntimeError) as e:   # 擋下與寫入鎖逾時也要講「筆記建好了」(第四輪架構席)
             print(f"提醒:筆記建好了,但幫你回掛到計劃 {rel} 的 plan_refs 沒寫成功: {e}", file=sys.stderr)
             rc_side = 2
     for rel in sys_rels:
         try:
             rc_side |= cmd_append(env, rel, "verified_by", f"[[{folder}/{name}]]")
-        except OSError as e:
+        except (OSError, ValueError, RuntimeError) as e:   # 擋下(ValueError)也要講「筆記建好了」(r3 整合席)
             print(f"提醒:筆記建好了,但幫你回掛到 {rel} 的 verified_by 沒寫成功: {e}", file=sys.stderr)
             rc_side = 2
     if rc_side:
@@ -12958,7 +13219,13 @@ def _deinit_remove_vendored(root: Path, src=None) -> list:
                 p.unlink(); removed.append(rel)
             except OSError as e:
                 print(f"  ⚠ 移除 {p} 失敗,跳過(其餘步驟照跑): {e}", file=sys.stderr)
-    for d in ("scripts/hooks", "scripts/templates"):
+    mp = root / _VENDORED_MANIFEST   # 工具檔的內容指紋清單是工具自己的東西,跟著拆
+    if mp.is_file():
+        try:
+            mp.unlink(); removed.append(_VENDORED_MANIFEST)
+        except OSError as e:
+            print(f"  ⚠ 移除 {mp} 失敗,跳過(其餘步驟照跑): {e}", file=sys.stderr)
+    for d in _VENDORED_TREE_DIRS:
         tgt = root / d
         if not tgt.is_dir():
             continue
@@ -13091,6 +13358,118 @@ def _version_nudge(root: Path) -> "str | None":
 _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
                      "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
                      "scripts/fetch-notesmd.sh")
+_VENDORED_TREE_DIRS = ("scripts/hooks", "scripts/templates")   # 安裝時整個目錄照來源複製過去的那兩個
+# ★工具確實會安裝進消費專案的每一支檔(精確檔名)★——跳過判斷只認這張表,不認目錄前綴。
+# 2026-09-10 代碼審 r1 四席獨立抓到:原本照目錄前綴跳過,消費專案自己放在 scripts/hooks、
+# scripts/templates 的程式會被當成工具的檔,推送閘的風險分級被降、逃過代碼審。
+# 表要跟工具鏈 repo 裡那兩個目錄底下受版控的檔一模一樣:有一支測試逐檔比對,少登記或多登記都會翻紅。
+_VENDORED_TREE_FILES = (
+    "scripts/hooks/claude/_hookevent.py",
+    "scripts/hooks/claude/check-graph-sync.py",
+    "scripts/hooks/claude/ci-status-hook.py",
+    "scripts/hooks/claude/dispatch-lens-hook.py",
+    "scripts/hooks/claude/impact-hook.py",
+    "scripts/hooks/claude/lumos-entry-hook.py",
+    "scripts/hooks/post-commit",
+    "scripts/hooks/pre-commit",
+    "scripts/hooks/pre-push",
+    "scripts/templates/graph-discipline.md",
+)
+_VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
+
+
+_VENDORED_MANIFEST = ".lumos/vendored.json"   # 安裝/更新時記下每支工具檔的內容指紋
+
+
+def _vendored_digest(data):
+    """工具檔的內容指紋:換行統一成 LF 再算 sha256(Windows 的換行轉換不該讓指紋對不上)。"""
+    import hashlib
+    return hashlib.sha256(bytes(data).replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _vendored_manifest_write(root):
+    """把工作目錄裡「工具自裝檔」的內容指紋寫進 .lumos/vendored.json(安裝與更新時呼叫;回寫進去的 {路徑: 指紋})。"""
+    files = {}
+    for rel in sorted(_VENDORED_ALL):
+        p = Path(root) / rel
+        if p.is_file():
+            files[rel] = _vendored_digest(p.read_bytes())
+    mp = Path(root) / _VENDORED_MANIFEST
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    # 格式跟錨點基準線同一種({"version": 1, <路徑: sha256>…};第四輪架構席)。不走錨點那種「人核可才改」的流程:
+    # 這份是安裝時的事實紀錄,錯了的方向是「多掃」不是「少擋」。ensure_ascii:從某版本讀回來走的是文字模式的 git show
+    _write_lf(mp, json.dumps({"version": 1,
+                              "note": "lumos 安裝時記下的工具檔內容指紋;內容對得上的才不算專案自己的程式",
+                              "files": files}, ensure_ascii=True, indent=1) + "\n")
+    return files
+
+
+def _vendored_state(root, ref=None):
+    """回 (原封不動的工具檔, 存在的工具檔) 兩個集合;ref=None 看工作目錄,否則看那個版本。
+
+    ★原封不動=檔名在精確清單上,而且內容跟安裝時記下的指紋一模一樣★(2026-09-10 代碼審 r3 併發資源席:
+    只比檔名的話,專案自己改了工具裝進來的檔、或把自己的程式放成工具的檔名,風險掃描就完全看不到)。
+    指紋清單不在或讀不懂 → 原封不動的=空集合:一支都不跳,寧可多掃(舊版安裝的專案更新後就有清單)。"""
+    present, data = set(), {}
+    if ref is None:
+        for p in sorted(_VENDORED_ALL):
+            fp = Path(root) / p
+            if fp.is_file():
+                present.add(p)
+                try:
+                    data[p] = fp.read_bytes()
+                except OSError:   # 讀不到(權限、被鎖)=不算原封不動、照樣掃(第四輪邊界席:原本直接噴錯中斷)
+                    data[p] = None
+        try:
+            man = json.loads((Path(root) / _VENDORED_MANIFEST).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            man = None
+    else:
+        # 讀那個版本的檔用專案既有的 git show 包裝(第四輪架構席:第三輪另寫了一套 cat-file --batch 解析)
+        for p in sorted(_VENDORED_ALL):
+            r = _lens_git(root, "show", f"{ref}:{p}", binary=True)
+            if r is None:                 # git 跑不起來 → 不知道 → 當成在、而且沒對上(照樣掃)
+                present.add(p)
+                data[p] = None
+            elif r.returncode == 0:
+                present.add(p)
+                data[p] = r.stdout
+        man = _json_at_ref(root, ref, _VENDORED_MANIFEST)
+    files = man.get("files") if isinstance(man, dict) else None
+    if not isinstance(files, dict):
+        return frozenset(), frozenset(present)
+    return (frozenset(p for p in present if data.get(p) is not None and files.get(p) == _vendored_digest(data[p])),
+            frozenset(present))
+
+
+def _diff_range_ends(root, diff_range):
+    """git diff 的範圍拆成 (起點, 終點);終點 None=工作目錄。A..B、A..、A...B(起點取共同祖先)、單一版本。"""
+    import subprocess
+    r = str(diff_range).strip()
+    if "..." in r:
+        a, b = r.split("...", 1)
+        a, b = a or "HEAD", b or "HEAD"
+        try:
+            mb = subprocess.run(["git", "merge-base", a, b], capture_output=True, text=True,
+                                cwd=str(root), timeout=_disp_git_timeout())
+            return (mb.stdout.strip() or a), b
+        except (OSError, subprocess.TimeoutExpired):
+            return a, b
+    if ".." in r:
+        a, b = r.split("..", 1)
+        return (a or "HEAD"), (b or "HEAD")
+    return r, None
+
+
+def _is_toolchain_repo(root):
+    """這個 repo 是不是工具鏈本體(那裡 scripts/lumos 就是產品,不能當成外來的跳過)。
+
+    ★判別鍵沿用既有慣例★(見 `_self_repo_origin`):skills/lumos-project-notes/SKILL.md
+    是 user-scope skill 的唯一源,永遠不會被複製進消費專案。"""
+    try:
+        return (Path(root) / "skills" / "lumos-project-notes" / "SKILL.md").is_file()
+    except Exception:
+        return False
 
 
 def _pull_source_or_abort(src, allow_stale=False):
@@ -13242,11 +13621,10 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
     _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
     rc = 0
     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
-    toolkit = list(_VENDORED_TOOLKIT)
-    for sub in ("scripts/hooks", "scripts/templates"):
-        base = src / sub
-        if base.is_dir():
-            toolkit += [str(p.relative_to(src)) for p in base.rglob("*") if p.is_file()]
+    # ★只複製精確清單上的檔★(第三輪外家否決席:原本整個目錄照來源 rglob,來源裡沒進版控的檔也被裝進去,
+    # 可是跳過清單只列受版控的檔——裝進去的檔不在清單上,消費專案又把它當成自己的程式掃)。清單跟來源受版控的檔
+    # 是否一致,由 t_vendored_file_list_matches_what_install_ships 守
+    toolkit = list(_VENDORED_TOOLKIT) + list(_VENDORED_TREE_FILES)
     healed = []
     for rel in toolkit:
         s, t = src / rel, root / rel
@@ -13262,6 +13640,8 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
     else:
         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
+    # 記下工具檔的內容指紋:風險掃描與健檢只跳過「內容跟這裡一模一樣」的工具檔(r3 併發資源席)
+    _vendored_manifest_write(root)
     # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
     _reinject_all(root, slug)
     # ★全域同步放在這裡★(2026-09-06 全 repo 審視 #5):要等上面的 copy2 自癒把 vendored hook
@@ -13579,12 +13959,25 @@ def _stack_ext_counts(root):
     import os as _os
     counts = {}
     known = _stack_guess()
-    for dirpath, dirnames, filenames in _os.walk(str(root)):
+    # ★lumos 自己安裝進來的檔不算這個專案的技術棧★(2026-09-10,一個小 Vue 專案上實撞):
+    # init 會把 CLI、自己的測試檔和五支 hook 複製到消費專案的 scripts/ 底下,那是八個 .py。
+    # 那個專案自己只有六個 .js,於是健檢反過來唸「你有 8 個 .py,測試設定卻只認 .js」——
+    # 舉的證據全是 lumos 自己的檔,而且專案愈小愈容易被唸,正好唸在剛接入的人臉上。
+    # ★只跳過工具確實安裝的那幾支檔(精確檔名,見 _VENDORED_ALL)★,同目錄底下專案自己的檔照樣算
+    # ——第一版照目錄前綴跳過,代碼審 r1 抓到專案自己的 hook 程式也被一起跳過。
+    _base = _os.path.abspath(str(root))
+    # 工具鏈本體那裡 scripts/lumos 就是產品,一支都不跳;消費專案只跳「內容跟安裝時一模一樣」的工具檔
+    _skip = frozenset() if _is_toolchain_repo(root) else _vendored_state(root)[0]
+    for dirpath, dirnames, filenames in _os.walk(_base):
         dirnames[:] = [d for d in dirnames if not _stack_scan_skip(d)]
+        rd = _os.path.relpath(dirpath, _base)
         for fn in filenames:
             ext = _os.path.splitext(fn)[1].lower()
-            if ext in known:
-                counts[ext] = counts.get(ext, 0) + 1
+            if ext not in known:
+                continue
+            if _skip and _posix_norm(fn if rd == "." else _os.path.join(rd, fn)) in _skip:
+                continue
+            counts[ext] = counts.get(ext, 0) + 1
     return counts
 
 
@@ -13608,7 +14001,13 @@ def _profile_stack_mismatch(root):
     if pdata.get("multiplatform"):
         covered = set()
         for pe in pdata["platforms"].values():
-            covered |= set(TEST_PROFILES.get(pe.get("profile"), {}).get("exts") or [])
+            # ★"profile" 存的是攤開後的 profile 物件,不是名字★(2026-09-10 修):
+            # 拿它去 TEST_PROFILES 查表 = 用 dict 當 key,直接丟 TypeError 把整支 doctor
+            # 中斷在這一段。名字要用的話在隔壁的 "profile_name"。
+            _pe_prof = pe.get("profile")
+            if not isinstance(_pe_prof, dict):
+                _pe_prof = TEST_PROFILES.get(_pe_prof) or {}
+            covered |= set(_pe_prof.get("exts") or [])
     else:
         covered = set(load_test_profile(root).get("exts") or [])
     # 只唸「數量夠多、卻沒有任何平台的測試 profile 認得」的副檔名(散落幾個檔不算)。
@@ -17481,17 +17880,24 @@ def _tension_candidates_into(arch, added_lines, repo_root):
         arch["candidates_truncated"] = True
 
 
-def _stack_changed_ok(cur_file):
+def _stack_changed_ok(cur_file, skip=frozenset()):
     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
-    「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。"""
+    「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。
+
+    ★skip★(2026-09-10):在消費專案裡,工具鏈自己安裝進去、而且內容沒被改過的檔不看——
+    init 會把 CLI 與五支 hook 複製進 scripts/,消費專案第一次提交自然把它們一起帶進去,
+    於是整份風險報告裡★沒有一條在專案自己的程式碼裡★,分級卻被撐成 high、推送被擋,
+    要求對一份不是自己寫的程式做代碼審。呼叫端給「要跳過的路徑」集合:只含內容跟安裝時指紋對得上的
+    工具檔(見 _vendored_state);工具鏈本體給空集合(那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。"""
     ext = Path(cur_file).suffix
     return (ext not in _PITFALL_DIFF_SKIP_EXT
             and not cur_file.startswith("governance/review-reports/")
             and cur_file not in _BOOKKEEPING_FILES
             and not cur_file.startswith(_BOOKKEEPING_DIR)
-            and not _PITFALL_DIFF_TEST_PAT.search(cur_file))
+            and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
+            and not (skip and _posix_norm(cur_file) in skip))
 
 
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
@@ -17512,6 +17918,14 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         return None
     added = {}
     claims = []
+    # 工具鏈本體的 repo 不跳過(那裡 scripts/lumos 就是產品),消費專案才跳——而且只跳內容跟安裝時一模一樣的:
+    # 終點上原封不動的工具檔;終點上已經刪掉、但起點時原封不動的(拆除工具鏈)也跳。見 _vendored_state
+    vend_skip = frozenset()
+    if not _is_toolchain_repo(repo_root):
+        _start, _end = _diff_range_ends(repo_root, diff_range)
+        _intact_end, _present_end = _vendored_state(repo_root, _end)
+        _intact_start = _vendored_state(repo_root, _start)[0] if _start else frozenset()
+        vend_skip = _intact_end | (_intact_start - _present_end)
     changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
     added_lines = {}     # {檔: [增行內容…]}——只給「可能撞」候選用(2026-09-09 兩席相反時端出張力:候選看的是新引入,刪行不算)
     cur_file, new_ln, _old_file = "", 0, ""
@@ -17535,20 +17949,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         if line.startswith("-"):
             # 刪除行不推進新檔行號;但它是「改動內容」——棧別觸發要看(拿掉 CancellationToken/timeout/key 也該問;
             # 表態閘 r2 外家 F5/正確性 C9)。added 集合本身仍只收新增行(其他消費者語意不變)。
-            if cur_file and _stack_changed_ok(cur_file):
+            if cur_file and _stack_changed_ok(cur_file, vend_skip):
                 changed_lines.setdefault(cur_file, []).append(line[1:])
             continue
         if not line.startswith("+"):
             new_ln += 1                       # context 行推進
             continue
         # 這是新增行(+ 開頭)
-        added.setdefault(cur_file, set()).add(new_ln)
-        if cur_file and _stack_changed_ok(cur_file):
+        if _posix_norm(cur_file) not in vend_skip:
+            added.setdefault(cur_file, set()).add(new_ln)
+        if cur_file and _stack_changed_ok(cur_file, vend_skip):
             changed_lines.setdefault(cur_file, []).append(line[1:])
             added_lines.setdefault(cur_file, []).append(line[1:])   # 同一道 _stack_changed_ok 過濾:簿記檔/審計證物不產生候選(r1 通才 G5)
         code = line[1:]
         # 哪些檔要掃:跟棧別觸發同一支 _stack_changed_ok(r1 架構對齊席 f2:原本這裡內聯一份、那邊再抄一份)
-        if (cur_file and _stack_changed_ok(cur_file)
+        if (cur_file and _stack_changed_ok(cur_file, vend_skip)
                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
             code_nostr = _strip_string_literals(code)
             for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
@@ -17612,6 +18027,11 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
             lint_claims.extend(lc)
         else:
             lint_skipped.append(cmd)
+
+    # ★工具自己安裝的檔,lint 命中一律不算★(r1 整合席 F1):不濾的話,宣告了 lint 的消費專案
+    # 照樣會被工具自己的檔撐成 high。放在「對齊」判斷之前——不對齊那條路原本是全收的。
+    if vend_skip:
+        lint_claims = [c for c in lint_claims if _posix_norm(c.get("file", "")) not in vend_skip]
 
     # 過濾 lint claims
     filtered_marker = None
@@ -19426,7 +19846,7 @@ def _impact_about_counts(env):
     counts = {}
     for n in env.notes.values():
         for f in as_list(n.fields.get("about_code")):
-            f = str(f).replace("\\", "/").strip().removeprefix("./")
+            f = _posix_norm(f)
             if f:
                 counts[f] = counts.get(f, 0) + 1
     _ABOUT_COUNTS_CACHE[key] = counts
@@ -19441,7 +19861,7 @@ def _impact_mark_about(env, results, rel_file):
     懶觸發:先查欄位,命中才讀該篇正文算雜湊(無 git、無子行程)。計劃:Projects/固定席扇出降權_計劃。"""
     if int(_impact_knob("LUMOS_IMPACT_ABOUT", 1)) == 0:
         return
-    _norm = lambda s: str(s).replace("\\", "/").strip().removeprefix("./")
+    _norm = _posix_norm   # 跟寫入側同一個路徑正規化(r3 整合席:原本只剝開頭的 ./,不解 ..)
     target = _norm(rel_file)
     counts = _impact_about_counts(env)
     if counts.get(target, 0) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)):
@@ -20211,13 +20631,14 @@ def _lens_range_ok(diff_range):
     return parts[0], parts[1]
 
 
-def _lens_git(repo_root, *args, quote=False):
+def _lens_git(repo_root, *args, quote=False, binary=False):
+    """binary=True:輸出照位元組回(不解碼)——讀檔案內容算指紋用,非 UTF-8 的內容也不會在解碼時噴錯。"""
     import subprocess as _sp
     cmd = ["git", "-C", str(repo_root)]
     if quote:
         cmd += ["-c", "core.quotePath=false"]
     try:
-        return _sp.run(cmd + list(args), capture_output=True, text=True, timeout=20)
+        return _sp.run(cmd + list(args), capture_output=True, text=not binary, timeout=20)
     except (OSError, _sp.TimeoutExpired):
         return None
 
@@ -20881,6 +21302,45 @@ _LENS_WARM_ENV = "LUMOS_LENS_WARMING"
 _LENS_LOCK_STALE_SEC = 900
 
 
+def _excl_lock_try(lock, stale_sec):
+    """獨佔建鎖檔(內容=程序編號+時間),搶到回 True、沒搶到回 False;專案裡唯一的一套鎖檔做法
+    (dispatch-lens 的「同範圍只讓一個在算」與筆記庫寫入鎖 _vault_write_lock 共用;2026-09-10 從 dispatch-lens 抽出來)。
+
+    ★接手也要原子★(2026-09-07 代碼審 r2 外家席):第一版的過期判斷是
+    「建不成 → 看鎖檔多舊 → 太舊就當它死了」,**但只是把 already 設成 False 就繼續往下派工,
+    沒有真的把鎖換成自己的**。於是鎖一旦過期,同時進來的每一個呼叫者都會各自派一支去算
+    (實測兩個呼叫者都判定要派工)。更糟的是先算完的那支會無條件刪掉鎖檔,
+    可能刪掉另一支正在用的。
+    現在:過期(比 stale_sec 舊)時用「換名字」的方式原子接手——只有真的把舊鎖搬走的那個人才算搶到。"""
+    import time as _t
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, f"{os.getpid()}\n{_t.time():.0f}".encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        pass
+    except OSError:
+        return False
+    # 鎖已存在:只有「明顯過期」才嘗試接手,而且接手本身必須是原子的
+    try:
+        if _t.time() - lock.stat().st_mtime < stale_sec:
+            return False                      # 還新,別人在用
+    except OSError:
+        return False
+    stale = lock.with_name(lock.name + f".stale-{os.getpid()}")
+    try:
+        os.rename(str(lock), str(stale))      # ★原子★:同時兩個人只有一個 rename 得到
+    except OSError:
+        return False                          # 別人先接手了
+    try:
+        stale.unlink()
+    except OSError:
+        pass
+    return _excl_lock_try(lock, stale_sec)     # 舊鎖清掉了,再正常搶一次
+
+
 def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
 
@@ -20901,41 +21361,8 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     lock = cpath.with_name(cpath.name + ".warming")
 
     def _take_lock():
-        """搶到鎖回 True(該由我派工),沒搶到回 False(已經有人在算)。
-
-        ★接手也要原子★(2026-09-07 代碼審 r2 外家席):第一版的過期判斷是
-        「建不成 → 看鎖檔多舊 → 太舊就當它死了」,**但只是把 already 設成 False 就繼續往下派工,
-        沒有真的把鎖換成自己的**。於是鎖一旦過期,同時進來的每一個呼叫者都會各自派一支去算
-        (實測兩個呼叫者都判定要派工)。更糟的是先算完的那支會無條件刪掉鎖檔,
-        可能刪掉另一支正在用的。
-        現在:過期時用「換名字」的方式原子接手——只有真的把舊鎖搬走的那個人才算搶到。
-        """
-        try:
-            lock.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(fd, f"{os.getpid()}\n{_t.time():.0f}".encode())
-            os.close(fd)
-            return True
-        except FileExistsError:
-            pass
-        except OSError:
-            return False
-        # 鎖已存在:只有「明顯過期」才嘗試接手,而且接手本身必須是原子的
-        try:
-            if _t.time() - lock.stat().st_mtime < _LENS_LOCK_STALE_SEC:
-                return False                      # 還新,別人在算
-        except OSError:
-            return False
-        stale = lock.with_name(lock.name + f".stale-{os.getpid()}")
-        try:
-            os.rename(str(lock), str(stale))      # ★原子★:同時兩個人只有一個 rename 得到
-        except OSError:
-            return False                          # 別人先接手了
-        try:
-            stale.unlink()
-        except OSError:
-            pass
-        return _take_lock()                        # 舊鎖清掉了,再正常搶一次
+        """搶到鎖回 True(該由我派工),沒搶到回 False(已經有人在算)。做法見 _excl_lock_try。"""
+        return _excl_lock_try(lock, _LENS_LOCK_STALE_SEC)
 
     already = not _take_lock()
 

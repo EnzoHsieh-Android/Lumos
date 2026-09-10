@@ -19,6 +19,7 @@ summary: |-
   KEY:影響面=只在使用者往 scripts/hooks|scripts/templates 塞自有檔時咬人;標準 lumos 專案這兩夾純 lumos → 無感。deinit 與 teardown 皆中(teardown 呼叫 cmd_deinit);屬「destructive-but-recoverable」的例外——reinstall 復原不了使用者自有檔
   KEY:★已修(2026-07-24)★=_deinit_remove_vendored 改成★對稱安裝端逐檔刪★——安裝端 _vendor_toolchain 對兩夾走 src.rglob 逐檔 copy,故移除端也從 src 列舉 lumos 檔清單、只刪這些、保留使用者放這兩夾的自有檔;夾空了才移、有留檔則保留+warn。fallback(a):src 缺(None/來源夾不存在)→ 保守留夾+warn 不刪(never delete unknown)。cmd_deinit 傳 src 進去(原簽名沒傳)。[test:t_deinit_remove_vendored_preserves_user_files,t_deinit_remove_vendored_no_src_conservative]
   KEY:★2026-08-02 同一支函式的後續補強(code-teardown-windows loop)★——頂層白名單迴圈的裸 `p.unlink()` 包成 `try/except OSError`:刪不掉印警告並繼續走完,★沒刪掉的檔不進 removed 清單★(回報維持誠實)。理由與 F9 同源但方向相反:F9 修的是「刪太多」,這條修的是「刪不掉就炸穿」——走 teardown 時①全域 hook 已清②CLAUDE.md 已剝才炸,③uninstall 沒機會跑=拆一半+traceback,比少刪一個檔糟得多。同批新增 `_selfdelete_risk()` pre-flight 擋 Windows 自刪(見 [[Systems/lumos-cli-lifecycle]])。[test:t_deinit_vendored_unlink_failure_does_not_abort](翻紅釘:改回裸 unlink → 4 條斷言翻紅。★該測試第一版是壞的★:兩支檔都放在同一個唯讀夾故都刪不掉,宣稱要驗的『其餘檔仍被移除』無斷言也不成立——見 [[Systems/測試假綠形態]] 第④型)
+  KEY:★2026-09-10 安裝端改了,兩邊不再完全對稱★:_vendor_toolchain 改成只複製精確清單(_VENDORED_TOOLKIT+_VENDORED_TREE_FILES)並寫 .lumos/vendored.json(內容指紋);移除端仍從來源列舉——來源裡沒進版控的檔不會被裝,但拆除時仍會被當成 lumos 檔刪(消費專案剛好有同名檔才會踩到)。現在有指紋清單了,移除端可以改成照清單刪 [[Issues/健檢技術棧那段撞到多平台設定就整支中斷]]
   DECISION:[2026-07-24 修]走「對稱安裝端逐檔白名單」正解(非最小版),使用者要求解 F9 即修;fallback 選(a)保守留夾(使用者裁定,never delete unknown)。同批繼承殘留 F4(剝 CLAUDE.md 正規化 sentinel 外)、F12(uninstall 移全部 skills)仍記於 [[Systems/lumos-cli-lifecycle]]、未修(影響更小、未開票)
 aliases:
   - F9
@@ -50,3 +51,5 @@ aliases:
 測試：`t_deinit_remove_vendored_preserves_user_files`（使用者 hook/範本保留、lumos 檔刪）、`t_deinit_remove_vendored_no_src_conservative`（src 缺保守留）、既有 `t_deinit_remove_vendored` 更新傳 src ＋端到端 `t_deinit_cmd_basic`/`t_deinit_graph`（`_deinit_run` 注入真 repo 當 src）——全套 1372 綠。
 
 來源＝Codex 跨家族審 teardown 設計時揪出（見 [[Projects/teardown一鍵拆機_計劃]] 審計修正紀錄 F9）。**同批 F4/F12 仍未修**（影響更小，留 [[Systems/lumos-cli-lifecycle]] 殘留紀錄）。
+
+REVISIT:2026-12-10 把拆除端改成照 .lumos/vendored.json 或精確清單刪,讓安裝與拆除再次對稱(現在拆除仍從來源列舉)
