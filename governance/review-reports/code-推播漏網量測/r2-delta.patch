@@ -1,0 +1,1082 @@
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 1a20ef21..8253ff04 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -440,30 +440,32 @@ run_replay(){
+   if [ -n "$msg" ]; then
+     MSG="$msg" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('regime-replay', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   fi
+ }
+ 
+ run_lens_weekly(){
+-  # 推播漏網週跑(Projects/推播miss量測_計劃 S4):存上一個完整 ISO 週的推導列;完全照 run_replay 的慣例——
+-  # 獨立週戳、本週跑過就跳過、python 端第一行印 JSON + LOG: 行、模組炸掉(沒印 JSON)不蓋戳明天重試、fail-open 不擋後面。
++  # 推播漏網週跑(Projects/推播miss量測_計劃 S4):存上一個完整 ISO 週的推導列;照 run_replay 的慣例——
++  # 獨立週戳、本週跑過就跳過、python 端第一行印 JSON(原樣記一行)+ LOG: 行、模組炸掉(沒印 JSON)不蓋戳明天重試、fail-open 不擋後面。
++  # 跟 run_replay 不同的一處:不發 LINE——這條量測只出清單與分佈、不設門檻,沒有要叫人的事(代碼審 r1 架構席 B5)。
+   local stamp="$REPO/governance/eval/lens-utilization/.weekly-stamp"; local week; week="$(date +%G-W%V)"
+   [ "$(cat "$stamp" 2>/dev/null)" = "$week" ] && { log "推播漏網週跑:本週已跑"; return 0; }
+   local out; out="$(cd "$REPO" && python3 governance/autonomous_loop/lens_weekly.py "$REPO" 2>>"$LOGDIR/lens-weekly-$TODAY.err" || true)"
+   if ! echo "$out" | grep -q "^{"; then
+     log "推播漏網週跑:模組失敗無輸出,本週不蓋章明天重試(錯誤在 lens-weekly-$TODAY.err)"
+     return 0
+   fi
+   echo "$week" > "$stamp"
++  log "推播漏網週跑原始:$(echo "$out" | head -1)"
+   echo "$out" | sed -n 's/^LOG://p' | while IFS= read -r _l; do log "推播漏網週跑:$_l"; done
+ }
+ 
+ run_exam "$REPO" toolchain
+ [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
+ run_probe
+ run_nags "$REPO" toolchain
+ run_replay
+ run_lens_weekly
+ [ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
+diff --git a/governance/autonomous_loop/lens_weekly.py b/governance/autonomous_loop/lens_weekly.py
+index f38220ce..434023d5 100755
+--- a/governance/autonomous_loop/lens_weekly.py
++++ b/governance/autonomous_loop/lens_weekly.py
+@@ -41,18 +41,21 @@ def main() -> int:
+     week = a.week or last_complete_week()
+     arc = Path(a.archive_dir) if a.archive_dir else repo / "governance" / "eval" / "lens-utilization"
+     m = _load_recount()
+     rep = m.run_misses(repo, a.projects, a.codex_sessions, week=week, budget=a.budget, impact_timeout=a.impact_timeout)
+     weekly, local = m.write_archive(rep, week, arc)
+     s = rep["summary"]
+     print(json.dumps({"week": week, "rows": s["rows"], "miss_by_class": s["miss_by_class"], "zero_push_rows": s["zero_push_rows"],
+                       "search_zero": s["search_zero"], "budget_hit": s["budget_hit"]}, ensure_ascii=False))
+     print(f"LOG:{week} 編輯 {s['rows']} 列(零推播 {s['zero_push_rows']}、冷卻窗內沿用前一次推播 {s['cooldown_rows']}、推播清單不完整 {s['incomplete_rows']});"
+           f"漏網 {s['miss_by_class']}(另有事後才有 {s['after_the_fact']});搜尋 {s['searches']} 次、零命中 {s['search_zero']}、判不出 {s['search_undetermined']}")
++    print(f"LOG:逐字稿壞行 {s['bad_lines']} 行(只跳那一行)、Codex 版本不認得跳過 {s['codex_version_skipped']} 份、"
++          f"缺時間的編輯 {s['edits_without_time']} 筆(不收)、整份讀不了 {s['broken_files']} 份")
+     if s["budget_hit"] or s["impact_timeouts"]:
+-        print(f"LOG:總預算用完={s['budget_hit']}、impact 逾時 {s['impact_timeouts']} 次——那些檔的漏網分類記判不出")
++        print(f"LOG:總預算用完={s['budget_hit']}(沒掃到的逐字稿 {s['files_unscanned']} 份、沒問 git 的筆記 {s['git_skipped']} 篇)、"
++              f"impact 逾時 {s['impact_timeouts']} 次——資料不完整,那些檔的漏網分類記判不出")
+     print(f"LOG:寫到 {weekly.relative_to(arc)}(版控)與 {local.relative_to(arc)}(本機,不進版控)")
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/governance/eval/lens-utilization/README.md b/governance/eval/lens-utilization/README.md
+index 3aff242f..f009e3dc 100644
+--- a/governance/eval/lens-utilization/README.md
++++ b/governance/eval/lens-utilization/README.md
+@@ -24,16 +24,16 @@ python3 governance/eval/lens-utilization/recount.py --repo . [--json] [--out 報
+ ## 推播漏網(2026-09-11,Projects/推播miss量測_計劃)
+ 
+ 上面那段看「推了的有沒有被讀」;這段看反面——**沒推卻被 agent 自己讀了的筆記(miss)**。程式在同一支 `recount.py`(`run_misses` 那一段),週跑由 `governance/autonomous_loop/lens_weekly.py` 叫。
+ 
+ 重跑(手動、或補漏跑的週):
+ ```
+ python3 governance/autonomous_loop/lens_weekly.py . [--week 2026-W37] [--archive-dir 別的目錄] [--budget 300]
+ ```
+ 
+ - **推播四段都認**:「必看」「可能相關的 N 篇」「另外 N 篇分數不高但直接提到這個檔」「守衛面參考」;舊版三段(直接提到/間接牽到/過去的事故)也認。分數行切成分數、種類詞、路徑;截斷行(「+N 條低分截斷」「另有 N 條守衛面參考未列出」)不算推了;效能檢核題、多檔 patch 的「只算了前 N 檔」說明、收尾指示、框線認得、跳過。某段行數少於標頭 N、或有認不得的段 → 那筆 `pushed_complete=false`,它的 miss 不進三類統計。
+-- **錨點是每次編輯本身**:Edit/Write/MultiEdit(Codex 是 apply_patch)各一列,只收 impact hook 自己判斷會處理的檔(`_decide_one`);配不到推播附件=零推播,照樣算。Claude 用 toolUseID 配;Codex 沒有呼叫編號,配同一輪最近的 apply_patch,同一輪兩次以上就記配不準。一次改多檔時各檔共用那次推播的聯集。
+-- **讀取**:Read 工具(結果是錯誤的不算)、單純讀動詞、`lumos context|show|contracts`(裸名在節點清單唯一才認)。每筆讀取只算一次:先往前找最近一次「跟這篇有關」的編輯,都沒有才給最近一次。推了的、那次編輯之前就讀過的不算。
+-- **三類**(依序、先中先算):規則內=`lumos impact --file F --json` 的 direct 或 incidents 有這篇;關於欄=這篇的 about_code 含 F;判不出=都不中。兩者都中記 `about_also`。impact 逾時(60 秒)或總預算(300 秒)用完的 F 一律判不出、計數。**事後才有**:git 最早加入時間(`--follow`)與檔案建立時間都晚於編輯 → 不算 miss,另計。
+-- **搜尋零命中**:配 Bash 呼叫與它的輸出;用 `;` `&&` `||` 切段,恰好一段含 `lumos search` 才判(後面接 `| head` 之類照判)。認三種現行輸出(看整段輸出裡有沒有那一行):排序模式一行以「(共 N 篇候選」開頭、`--json` 的 `candidates`、舊模式一行以「N 處 / M 篇」開頭。其他、串了兩個、背景執行 → 判不出。
+-- **週跑**:自主迴圈週期觀測段的 `run_lens_weekly`(照 `run_replay`:週戳 `.weekly-stamp`、`date +%G-W%V`、模組失敗不蓋戳)。只收編輯時間(換成本機時區)落在**上一個完整 ISO 週**的列,寫 `weekly/<週>.json`(版控;工作階段代號雜湊、repo 相對檔名、節點名、分類、計數——不存逐字稿原文、不存查詢字串);零命中查詢字串寫 `local/<週>-queries.json`(gitignore)。同週重跑覆寫同一份;漏跑的週不自動補。
++- **錨點是每次編輯本身**:Edit/Write/MultiEdit(Codex 是 apply_patch)各一列,只收 impact hook 自己判斷會處理的檔(`_decide_one`);配不到推播附件=零推播,照樣算。Claude 用 toolUseID 配;Codex 沒有呼叫編號,配同一輪最近的 apply_patch,同一輪兩次以上就記配不準。一次改多檔時各檔共用那次推播的聯集。hook 對同一支檔推過(開窗)之後,冷卻窗內(`ttl_min`,預設 20 分)再改只跑事故快速路:那支檔看得到的=開窗那次 ∪ 窗內快速路推的(`cooldown_inherited`),窗逐檔記、不因快速路延長。每列帶 `pushed`(看得到的推播節點)與 `used`(推了、之後讀了)。
++- **讀取**:事件先後看(行序, 同一則訊息裡第幾個工具呼叫),同一則訊息先改後讀照樣排在編輯之後。Read 工具(結果是錯誤的不算)、單純讀動詞、`lumos context|show|contracts`(裸名在節點清單唯一才認)。每筆讀取只算一次:先往前找最近一次「跟這篇有關」的編輯,都沒有才給最近一次。推了的、那次編輯之前就讀過的不算。
++- **三類**(依序、先中先算):規則內=`lumos impact --file F --json` 的 direct 或 incidents 有這篇;關於欄=這篇的 about_code 含 F(借 lumos 本體的開頭欄位解析,清單與單值都認,單行 `[a, b]` 多拆一步);判不出=都不中。兩者都中記 `about_also`。impact 逾時(60 秒)或總預算(300 秒)用完的 F 一律判不出、計數。**事後才有**:git 最早加入時間(`--follow`)與檔案建立時間都晚於編輯 → 不算 miss,另計;總預算用完、git 沒問到的筆記一律當存在(`git_skipped` 計數)。
++- **搜尋零命中**:配 Bash 呼叫與它的輸出;先逐行、再用 hook 的切段函式切(`;` `&&` `||` `|`,引號內不切),恰好一段含 `lumos search` 才判(後面接 `| head` 之類是另一段,照判)。認三種現行輸出(看整段輸出裡有沒有那一行):排序模式一行以「(共 N 篇候選」開頭、`--json` 的 `candidates`、舊模式一行以「N 處 / M 篇」開頭。其他、串了兩個、背景執行 → 判不出。
++- **週跑**:自主迴圈週期觀測段的 `run_lens_weekly`(照 `run_replay`:週戳 `.weekly-stamp`、`date +%G-W%V`、模組失敗不蓋戳)。只收編輯時間(換成本機時區)落在**上一個完整 ISO 週**的列,寫 `weekly/<週>.json`(版控;工作階段代號雜湊、repo 相對檔名、節點名、分類、計數——不存逐字稿原文、不存查詢字串);零命中查詢字串寫 `local/<週>-queries.json`(gitignore)。同週重跑覆寫同一份;漏跑的週不自動補。總預算一把管整次:掃逐字稿用完就不再開新檔(`files_unscanned`)、分類用完就不再叫 impact / git,兩種都標 `budget_hit`。逐字稿壞行只跳那一行(`bad_lines`)、Codex 版本不在認得的表整份跳過(`codex_version_skipped`)、缺時間的行沿用前一行時間(前面都沒有的編輯計 `edits_without_time`、不收)。
+ - **天花板**:只證「沒推卻被讀」,不證那篇真的該推(位置偏差之外的相關性要人標);用現在的圖譜判當時的推播(編輯後才補上 F 路徑的筆記會被算成該推沒推);子代理的讀取不算給主 session 的編輯(少算);Bash 改檔沒有推播、量不到;零命中判法靠輸出字樣,措辭一改就會數錯(有測試釘住現行三種)。回頭條件都在計劃筆記。
+diff --git a/governance/eval/lens-utilization/recount.py b/governance/eval/lens-utilization/recount.py
+index 02f2c038..9f36836d 100644
+--- a/governance/eval/lens-utilization/recount.py
++++ b/governance/eval/lens-utilization/recount.py
+@@ -215,42 +215,68 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
+                 if sub in LUMOS_CMDS:
+                     lumos_terms.update(terms); lumos_terms.add("".join(terms))
+                     for t2 in terms:   # 帶路徑的節點名(Systems/a.md、Systems/a)→ 完整相對路徑精確比對釘住清單,★不降成裸 stem★
+                         if "/" in t2:  # (裸 stem 會把 Other/a.md 撞成 Systems/a.md;code-codex-s3 r1 單reviewer F2)
+                             lumos_terms.add(t2 if t2.endswith(".md") else t2 + ".md")
+                 elif sub == "search":
+                     search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
+     return strict, loose, wrote, lumos_terms, search_terms
+ 
+ 
+-def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
+-    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → stderr 一行、回 ([], bad)(同 check-graph-sync 的處置)。
+-    壞行計數同 scan_file(空行也算壞行,兩邊一致)。"""
+-    rows = []
++def _read_jsonl(path) -> tuple[list, int]:
++    """逐字稿逐行 json → (物件, 壞行數)。壞行(含空行、寫到一半的尾行)只跳過那一行、其餘照讀——scan_file / scan_codex_file /
++    run_misses 共用這一份(代碼審 r1 架構席 B2;外家 C4:一行壞 JSON 不能丟掉整份逐字稿)。讀不到檔 → ([], 0)。"""
+     try:
+-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
++        lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+     except OSError:
+-        return rows, 0
++        return [], 0
+     objs, bad = [], 0
+     for ln in lines:
+         try:
+             objs.append(json.loads(ln))
+         except Exception:
+             bad += 1
+-    if not objs or objs[0].get("type") != "session_meta":
+-        return rows, bad
++    return objs, bad
++
++
++def _under_repo(cwd: str, repo_set) -> bool:
++    return any(cwd == r or cwd.startswith(r + "/") for r in repo_set)
++
++
++def _claude_in_repo(objs, repo_set) -> bool:
++    """Claude 逐字稿:任一行 cwd 在 repo/worktree 之下才算本專案。"""
++    cwds = {str(Path(o.get("cwd")).resolve()) for o in objs if isinstance(o, dict) and o.get("cwd")}
++    return any(_under_repo(c, repo_set) for c in cwds)
++
++
++def _codex_meta(objs, path, repo_set) -> tuple[dict | None, str]:
++    """Codex rollout 的 session_meta → (payload, "ok");不是 Codex 稿 / 版本不在認得的表(stderr 一行、不猜格式,同 check-graph-sync
++    的處置)/ cwd 不在本 repo → (None, 原因)。scan_codex_file 與 run_misses 共用這一份(代碼審 r1 架構席 B2、外家 C3)。"""
++    if not objs or not isinstance(objs[0], dict) or objs[0].get("type") != "session_meta":
++        return None, "not_codex"
+     meta = objs[0].get("payload") or {}
+     if str(meta.get("cli_version") or "") not in CODEX_TRANSCRIPT_VERSIONS:
+-        print(f"跳過 {path.name}: Codex 逐字稿版本 {meta.get('cli_version') or '?'} 不在認得的表 {sorted(CODEX_TRANSCRIPT_VERSIONS)}(不猜格式)", file=sys.stderr)
+-        return rows, bad
++        print(f"跳過 {Path(path).name}: Codex 逐字稿版本 {meta.get('cli_version') or '?'} 不在認得的表 {sorted(CODEX_TRANSCRIPT_VERSIONS)}(不猜格式)", file=sys.stderr)
++        return None, "version"
+     cwd = str(Path(str(meta.get("cwd") or "")).resolve()) if meta.get("cwd") else ""
+-    if not cwd or not any(cwd == r or cwd.startswith(r + "/") for r in repo_set):
++    if not cwd or not _under_repo(cwd, repo_set):
++        return None, "other_repo"
++    return meta, "ok"
++
++
++def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
++    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → stderr 一行、回 ([], bad)(同 check-graph-sync 的處置)。
++    壞行計數同 scan_file(空行也算壞行,兩邊一致)。"""
++    rows = []
++    objs, bad = _read_jsonl(path)
++    meta, _why = _codex_meta(objs, path, repo_set)
++    if meta is None:
+         return rows, bad
+     is_sub = meta.get("thread_source") == "subagent" or isinstance(meta.get("source"), dict)
+     sid = meta.get("session_id") or meta.get("id")
+     used_anchors = set()   # 一個 apply_patch 只能當一次錨(同輪兩次注入共用會張冠李戴;code-codex-s3 r1 單reviewer F1)
+     for idx, o in enumerate(objs):
+         p = o.get("payload") or {}
+         if o.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "developer":
+             continue
+         txt = _codex_text(p)
+         first = txt.split("\n", 1)[0].strip()
+@@ -340,33 +366,22 @@ def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
+                                 for pth in plist:
+                                     if t and t in st and pth not in row["search_touched"]:
+                                         row["search_touched"].append(pth)
+         row["any"] = bool(row["touched"]); row["any_loose"] = bool(row["touched"] or row["touched_loose"])
+         rows.append(row)
+     return rows, bad
+ 
+ 
+ def scan_file(path: Path, slug: str, repo_set: set[str]):
+     rows = []
+-    try:
+-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+-    except OSError:
+-        return rows, 0
+-    objs, bad = [], 0
+-    for ln in lines:
+-        try:
+-            objs.append(json.loads(ln))
+-        except Exception:
+-            bad += 1
+-    # cwd 篩:任一行 cwd 在 repo/worktree 之下才算本專案
+-    cwds = {str(Path(o.get("cwd")).resolve()) for o in objs if isinstance(o, dict) and o.get("cwd")}
+-    if not any(any(c == r or c.startswith(r + "/") for r in repo_set) for c in cwds):
++    objs, bad = _read_jsonl(path)
++    if not _claude_in_repo(objs, repo_set):   # cwd 篩:任一行 cwd 在 repo/worktree 之下才算本專案
+         return rows, bad
+     is_sub = "/subagents/" in str(path)
+     # 索引 tool_use by id → 行序
+     tu_index = {}
+     for idx, o in enumerate(objs):
+         if o.get("type") != "assistant":
+             continue
+         for it in (o.get("message", {}).get("content") or []):
+             if isinstance(it, dict) and it.get("type") == "tool_use":
+                 tu_index[it.get("id")] = (idx, it.get("name"), it.get("input") or {})
+@@ -544,25 +559,36 @@ def _ts_epoch(ts) -> float | None:
+ 
+ def _iso_week_local(ts) -> str | None:
+     """逐字稿時間是 UTC;換成本機時區再算 ISO 週(跟 shell 端 date +%G-W%V 同一個時區)。"""
+     t = _ts_epoch(ts)
+     if t is None:
+         return None
+     y, w, _ = _dt.datetime.fromtimestamp(t).isocalendar()   # 不帶 tz 的 fromtimestamp=本機時區
+     return f"{y}-W{w:02d}"
+ 
+ 
++def _effective_ts(objs) -> list:
++    """每一行的時間:缺時間的行沿用同一份逐字稿前一行的時間(計劃 S4;代碼審 r1 外家 C7);前面都沒有 → None(不收、計數)。"""
++    out, last = [], None
++    for o in objs:
++        t = o.get("timestamp") if isinstance(o, dict) else None
++        if t:
++            last = t
++        out.append(last)
++    return out
++
++
+ def _tool_results(objs) -> dict:
+     """tool_use_id → (是否錯誤, 輸出文字)。"""
+     out = {}
+     for o in objs:
+-        if o.get("type") != "user":
++        if not isinstance(o, dict) or o.get("type") != "user":
+             continue
+         content = (o.get("message") or {}).get("content")
+         if not isinstance(content, list):
+             continue
+         for it in content:
+             if isinstance(it, dict) and it.get("type") == "tool_result":
+                 c = it.get("content")
+                 txt = c if isinstance(c, str) else "\n".join(str(x.get("text", "")) if isinstance(x, dict) else str(x) for x in (c or []))
+                 err = bool(it.get("is_error")) or txt.lstrip().startswith("<tool_use_error>")
+                 out[it.get("tool_use_id")] = (err, txt)
+@@ -582,92 +608,104 @@ def _resolve_terms(terms, node_index) -> tuple[set, set]:
+             continue
+         c = node_index["stems"].get(t[:-3] if t.endswith(".md") else t, [])
+         if len(c) == 1:
+             hit.add(c[0])
+         elif len(c) > 1:
+             amb.update(c)
+     return hit, amb
+ 
+ 
+ def analyze_claude(objs, slug, repo_set, hook_ok, node_index=None) -> dict:
+-    """一份 Claude 逐字稿 → 事件:edits(只取 hook 會處理的檔)、pushes(toolUseID → parse_push)、reads(讀成功的節點)。"""
++    """一份 Claude 逐字稿 → 事件:edits(只取 hook 會處理的檔)、pushes(toolUseID → parse_push)、reads(讀成功的節點)。
++    事件先後=(行序, 同一則訊息裡第幾個工具呼叫):同一則訊息先改檔再讀筆記,讀取排在那次編輯之後(代碼審 r1 單reviewer A1);
++    時間用 _effective_ts(缺時間的行沿用前一行)。"""
+     results = _tool_results(objs)
++    ts_of = _effective_ts(objs)
+     edits, pushes, reads = [], {}, []
+     for idx, o in enumerate(objs):
++        if not isinstance(o, dict):
++            continue
+         att = o.get("attachment") if isinstance(o.get("attachment"), dict) else None
+         if att and att.get("type") == "hook_additional_context" and att.get("hookName") in HOOKS and att.get("toolUseID"):
+             pushes[att["toolUseID"]] = parse_push(att.get("content"))
+             continue
+         if o.get("type") != "assistant":
+             continue
+-        for it in ((o.get("message") or {}).get("content") or []):
++        for pos, it in enumerate((o.get("message") or {}).get("content") or []):
+             if not (isinstance(it, dict) and it.get("type") == "tool_use"):
+                 continue
+-            name, inp, tid = it.get("name"), (it.get("input") or {}), it.get("id")
++            name, inp, tid, at, ts = it.get("name"), (it.get("input") or {}), it.get("id"), (idx, pos), ts_of[idx]
+             if name in ("Edit", "Write", "MultiEdit"):
+                 rel = _rel_to_repo(inp.get("file_path"), repo_set)
+                 if rel and hook_ok(rel):
+-                    edits.append({"idx": idx, "ts": o.get("timestamp"), "id": tid, "files": [rel]})
++                    edits.append({"idx": at, "ts": ts, "id": tid, "files": [rel]})
+             elif name == "Read":
+                 n = norm_note(str(inp.get("file_path", "")), slug)
+                 err = results.get(tid, (True, ""))[0]
+                 if n and not err:
+-                    reads.append({"idx": idx, "ts": o.get("timestamp"), "node": n})
++                    reads.append({"idx": at, "ts": ts, "node": n})
+             elif name == "Bash":
+                 strict, _lo, _w, terms, _s = classify_bash(str(inp.get("command", "")), slug)
+                 hit, _amb = _resolve_terms(terms, node_index)
+                 for n in sorted(strict | hit):
+-                    reads.append({"idx": idx, "ts": o.get("timestamp"), "node": n})
++                    reads.append({"idx": at, "ts": ts, "node": n})
+     return {"edits": edits, "pushes": pushes, "reads": reads}
+ 
+ 
+ def build_miss_rows(ev, relate, existed, session, harness, ttl_sec: float = 1200.0) -> list[dict]:
+     """事件 → 每支被改的檔一列。每筆讀取只算一次:往前找最近一次「跟這篇有關」的編輯,都沒有才給最近一次;
+-    推了的、那次編輯之前(同一份逐字稿)就讀過的不算;編輯當下還不存在的另計 after_the_fact。
+-    ★冷卻窗★(實作時真資料發現:W36 零推播 81%):hook 對同一支檔推過之後,冷卻窗內(ttl_sec,預設 20 分)再改不重推——
+-    那次編輯沿用前一次的推播清單(cooldown_inherited),窗外才算零推播;不然會把「看過推播」的編輯算成零推播、灌出假漏網。"""
++    讀的是那支檔看得到的推播 → 記進 used(推了、之後讀了);那次編輯之前(同一份逐字稿)就讀過的不算;編輯當下還不存在的另計 after_the_fact。
++    列上存 pushed(看得到的推播節點)與 used,週檔答得出「推了哪些、之後讀了哪些」(計劃 S4;代碼審 r1 外家 C1)。
++    ★冷卻窗逐檔算★(實作時真資料發現:W36 零推播 81%):hook 對一支檔真的推過(開窗)之後,冷卻窗內(ttl_sec,預設 20 分)再改
++    只跑事故快速路、不重推整份,也不延長窗——那支檔這次看得到的=開窗那次的推播 ∪ 窗內快速路推的(cooldown_inherited),
++    窗外沒推才算零推播。hook 的冷卻記號本來就逐檔,所以多檔 patch 裡只有真的在窗內的檔沿用(代碼審 r1 外家 C2);
++    窗內這次自己也有推播(事故快速路)照樣併上開窗那次(代碼審 r1 編排者重現時自找)。"""
+     edits = sorted(ev["edits"], key=lambda e: e["idx"])
+     sh = _hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:12]
+-    rows, seen = {}, {}   # seen:這次編輯看到的推播(真推的或沿用的)
+-    for k, e in enumerate(edits):
+-        push, inherited = ev["pushes"].get(e["id"]), False
+-        t = _ts_epoch(e["ts"])
+-        if push is None and t is not None:
+-            for e0 in reversed(edits[:k]):   # 只有真的推過的那次會開冷卻窗(沿用的不往後延)
+-                p0, t0 = ev["pushes"].get(e0["id"]), _ts_epoch(e0["ts"])
+-                if p0 is not None and t0 is not None and set(e0["files"]) & set(e["files"]) and 0 <= t - t0 < ttl_sec:
+-                    push, inherited = p0, True
+-                    break
+-        seen[e["id"]] = push
++    rows, seen, win = {}, {}, {}   # seen:(編輯, 檔) 看得到的節點;win:檔 → 冷卻窗(開窗時間、窗內累計看過的節點、清單完整否)
++    for e in edits:
++        real, t = ev["pushes"].get(e["id"]), _ts_epoch(e["ts"])
+         for f in e["files"]:
++            w = win.get(f)
++            in_cd = w is not None and t is not None and 0 <= t - w["t0"] < ttl_sec
++            nodes = set(real["nodes"]) if real else set()
++            complete = bool(real["complete"]) if real else True
++            if in_cd:
++                nodes |= w["nodes"]; complete = complete and w["complete"]
++                w["nodes"], w["complete"] = set(nodes), complete
++            elif real is not None and t is not None:
++                win[f] = {"t0": t, "nodes": set(nodes), "complete": complete}
++            seen[(e["idx"], f)] = nodes
+             rows[(e["idx"], f)] = {"session": sh, "harness": harness, "ts": e["ts"], "file": f,
+-                                   "zero_push": push is None, "cooldown_inherited": inherited, "pushed_n": len(push["nodes"]) if push else 0,
+-                                   "pushed_complete": bool((push["complete"] if push else True) and e.get("pair_ok", True)),
+-                                   "impact_skipped": bool(push and f in push["impact_skipped"]),
++                                   "zero_push": real is None and not in_cd, "cooldown_inherited": in_cd,
++                                   "pushed_n": len(nodes), "pushed": sorted(nodes), "used": [],
++                                   "pushed_complete": bool(complete and e.get("pair_ok", True)),
++                                   "impact_skipped": bool(real and f in real["impact_skipped"]),
+                                    "misses": [], "after_the_fact": []}
+     for rd in sorted(ev["reads"], key=lambda r: r["idx"]):
+         prior = [e for e in edits if e["idx"] < rd["idx"]]
+         if not prior:
+             continue
+         target = None
+         for e in reversed(prior):
+             for f in e["files"]:
+                 if relate(rd["node"], f)[0]:
+                     target = (e, f); break
+             if target:
+                 break
+         if target is None:
+             target = (prior[-1], prior[-1]["files"][0])
+         e, f = target
+         row = rows[(e["idx"], f)]
+-        push = seen.get(e["id"])
+-        if push and rd["node"] in push["nodes"]:
++        if rd["node"] in seen[(e["idx"], f)]:
++            if rd["node"] not in row["used"]:
++                row["used"].append(rd["node"])
+             continue
+         if any(r["node"] == rd["node"] and r["idx"] < e["idx"] for r in ev["reads"]):
+             continue
+         if any(m["node"] == rd["node"] for m in row["misses"]) or rd["node"] in row["after_the_fact"]:
+             continue
+         if not existed(rd["node"], e["ts"]):
+             row["after_the_fact"].append(rd["node"]); continue
+         cls, about_also = relate(rd["node"], f)
+         row["misses"].append({"node": rd["node"], "class": cls or "unknown", "about_also": bool(about_also)})
+     return [rows[k] for k in sorted(rows)]
+@@ -678,145 +716,183 @@ def relate_from(impact, about, node, f) -> tuple:
+     incidents,兩個都看);否則 about_code 含 F → 關於欄。impact 算不到(逾時/超預算=None)→ 一律判不出。"""
+     if impact is None:
+         return (None, False)
+     ab = f in about.get(node, set())
+     direct = {x.get("node") for x in (impact.get("direct") or [])} | {x.get("node") for x in (impact.get("incidents") or [])}
+     if node in direct:
+         return ("rule", ab)
+     return ("about", False) if ab else (None, False)
+ 
+ 
++_LUMOS_MOD = None
++
++
++def _lumos_mod():
++    """借 lumos 本體的開頭欄位解析(split_frontmatter / parse_frontmatter / as_list / _posix_norm),about_code 跟 impact
++    讀到的同一份(代碼審 r1 單reviewer A3、外家 C8:自己寫的正規式漏了單值寫法,真圖譜有兩篇這樣寫);載法同
++    governance/eval/k1_stop_replay.py。懶載入:要讀 about_code 才載。"""
++    global _LUMOS_MOD
++    if _LUMOS_MOD is None:
++        import importlib.util
++        from importlib.machinery import SourceFileLoader
++        p = Path(__file__).resolve().parents[3] / "scripts" / "lumos"
++        loader = SourceFileLoader("lens_lumos_main", str(p)); spec = importlib.util.spec_from_loader("lens_lumos_main", loader)
++        m = importlib.util.module_from_spec(spec); sys.modules["lens_lumos_main"] = m; loader.exec_module(m)
++        _LUMOS_MOD = m
++    return _LUMOS_MOD
++
++
+ def _about_map(vault: Path) -> dict:
+-    """節點 → about_code 路徑集合(只讀開頭欄位的 about_code 清單)。"""
++    """節點 → about_code 路徑集合。清單與單值(`about_code: scripts/lumos`)照本體 parse_frontmatter + as_list 讀;
++    本體把單行 `[a, b]` 整串當一個值,這裡多拆一步——量的是作者寫了哪些檔(真圖譜目前沒有非空的單行寫法)。"""
++    lm = _lumos_mod()
++    norm = getattr(lm, "_posix_norm", lambda x: str(x).strip())
+     out = {}
+     for p in vault.rglob("*.md"):
+         try:
+             t = p.read_text(encoding="utf-8", errors="replace")
+         except OSError:
+             continue
+-        if not t.startswith("---"):
++        fm, _body = lm.split_frontmatter(t)
++        if fm is None:
+             continue
+-        fm = t[3:t.find("\n---", 3)] if "\n---" in t[3:] else ""
+-        m = re.search(r"(?m)^about_code:\s*\n((?:[ \t]+-[^\n]*\n?)+)", fm)
+-        if m:
+-            vals = {x.strip().lstrip("-").strip().strip("'\"") for x in m.group(1).splitlines() if x.strip().startswith("-")}
+-            out[str(p.relative_to(vault))] = {v for v in vals if v}
++        vals = []
++        for v in lm.as_list(lm.parse_frontmatter(fm)[0].get("about_code")):
++            v = v.strip()
++            if v.startswith("[") and v.endswith("]"):
++                vals += [lm.strip_quotes(x.strip()) for x in v[1:-1].split(",")]
++            else:
++                vals.append(v)
++        vals = {norm(v) for v in vals if v.strip()}
++        if vals:
++            out[str(p.relative_to(vault))] = vals
+     return out
+ 
+ 
+ def _node_index(vault: Path) -> dict:
+     paths = {str(p.relative_to(vault)) for p in vault.rglob("*.md")}
+     stems = {}
+     for n in paths:
+         stems.setdefault(n.rsplit("/", 1)[-1][:-3], []).append(n)
+     return {"paths": paths, "stems": stems}
+ 
+ 
+-class Relater:
+-    """relate(node, F) 的實作:每支 F 跑一次 `lumos impact --file F --json`(同一次執行內快取);每個子行程逾時 60 秒,
+-    整次執行總預算(預設 300 秒,同 replay_weekly 的 BUDGET_SECONDS)用完就不再叫——那些 F 記判不出並計數。"""
+-    def __init__(self, repo: Path, vault: Path, budget: float = 300.0, timeout: float = 60.0):
+-        self.repo, self.vault, self.budget, self.timeout = repo, vault, float(budget), float(timeout)
+-        self.t0, self.cache, self.budget_hit, self.timeouts = _time.monotonic(), {}, False, 0
+-        self.about = _about_map(vault)
+-        self.lumos = Path(__file__).resolve().parents[3] / "scripts" / "lumos"
++def _budget(seconds: float) -> dict:
++    """整次執行共用一把總時間預算(計劃 S4:同 replay_weekly 的 BUDGET_SECONDS;代碼審 r1 外家 C5:原本只管 impact,
++    git 子行程與掃逐字稿都沒上限):掃逐字稿、叫 impact、叫 git 都從同一個期限扣。"""
++    return {"deadline": _time.monotonic() + float(seconds), "hit": False, "impact_timeouts": 0, "git_skipped": 0}
++
++
++def _left(budget) -> float:
++    return float("inf") if budget is None else budget["deadline"] - _time.monotonic()
++
++
++def _make_relater(repo: Path, vault: Path, budget: dict | None = None, timeout: float = 60.0):
++    """relate(node, F):每支 F 跑一次 `lumos impact --file F --json`(同一次執行內快取);每個子行程逾時 timeout 秒、
++    也不超過預算剩下的時間;預算用完就不再叫——那些 F 記判不出(budget["hit"])。
++    閉包記狀態,同 scripts/lumos 的記憶化寫法(代碼審 r1 架構席 B3)。"""
++    about = _about_map(vault)
++    lumos = Path(__file__).resolve().parents[3] / "scripts" / "lumos"
++    cache = {}
+ 
+-    def impact(self, f):
+-        if f in self.cache:
+-            return self.cache[f]
+-        left = self.budget - (_time.monotonic() - self.t0)
++    def impact(f):
++        if f in cache:
++            return cache[f]
++        left = _left(budget)
+         if left <= 0:
+-            self.budget_hit = True; self.cache[f] = None; return None
++            budget["hit"] = True; cache[f] = None; return None
+         data = None
+         try:
+-            r = subprocess.run([sys.executable, str(self.lumos), "--vault", str(self.vault), "impact", "--file", f, "--json"],
+-                               cwd=str(self.repo), capture_output=True, text=True, timeout=min(self.timeout, max(1.0, left)))
++            r = subprocess.run([sys.executable, str(lumos), "--vault", str(vault), "impact", "--file", f, "--json"],
++                               cwd=str(repo), capture_output=True, text=True, timeout=min(timeout, max(1.0, left)))
+             if r.returncode == 0:
+                 data = json.loads(r.stdout)
+         except subprocess.TimeoutExpired:
+-            self.timeouts += 1
++            if budget is not None:
++                budget["impact_timeouts"] += 1
+         except Exception:
+             data = None
+-        self.cache[f] = data
++        cache[f] = data
+         return data
+ 
+-    def __call__(self, node, f):
+-        return relate_from(self.impact(f), self.about, node, f)
++    return lambda node, f: relate_from(impact(f), about, node, f)
+ 
+ 
+-class Existence:
+-    """那篇筆記在編輯當下存不存在:git 最早加入時間(--follow,改名不洗掉)或檔案系統建立時間,任一早於編輯就算存在。
+-    只看 git 會錯排「早就寫好、還沒提交」的;只看建立時間會被重新 clone 洗成新的。兩個都查不到(檔已刪)當作存在。"""
+-    def __init__(self, repo: Path, vault: Path):
+-        self.repo, self.vault, self.cache = repo, vault, {}
++def _make_existence(repo: Path, vault: Path, budget: dict | None = None):
++    """existed(node, ts):那篇筆記在編輯當下存不存在——git 最早加入時間(--follow,改名不洗掉)或檔案系統建立時間,任一早於編輯就算存在。
++    只看 git 會錯排「早就寫好、還沒提交」的;只看建立時間會被重新 clone 洗成新的。兩個都查不到(檔已刪)當作存在。
++    git 也吃總預算:用完就不叫 git(git_skipped 計數)、一律當存在——只剩建立時間不足以判「事後才有」(新 clone 會把它洗成新的,
++    漏網會整批掉進事後才有而消失);那篇的分類多半也記判不出(impact 吃同一把預算),照計劃「剩下的記判不出」。"""
++    cache = {}
+ 
+-    def __call__(self, node, ts):
++    def existed(node, ts):
+         t = _ts_epoch(ts)
+         if t is None:
+             return True
+-        if node not in self.cache:
+-            git_t = birth = None
+-            try:
+-                rel = str((self.vault / node).relative_to(self.repo))
+-                out = subprocess.run(["git", "-C", str(self.repo), "log", "--follow", "--diff-filter=A", "--format=%ct", "--", rel],
+-                                     capture_output=True, text=True, timeout=20).stdout.split()
+-                git_t = min(int(x) for x in out) if out else None
+-            except Exception:
+-                pass
+-            try:
+-                birth = getattr(os.stat(self.vault / node), "st_birthtime", None)
+-            except OSError:
+-                pass
+-            self.cache[node] = (git_t, birth)
+-        git_t, birth = self.cache[node]
++        if node not in cache:
++            left = _left(budget)
++            if left <= 0:
++                budget["hit"] = True; budget["git_skipped"] += 1
++                cache[node] = None
++            else:
++                git_t = birth = None
++                try:
++                    rel = str((vault / node).relative_to(repo))
++                    out = subprocess.run(["git", "-C", str(repo), "log", "--follow", "--diff-filter=A", "--format=%ct", "--", rel],
++                                         capture_output=True, text=True, timeout=min(20.0, max(1.0, left))).stdout.split()
++                    git_t = min(int(x) for x in out) if out else None
++                except Exception:
++                    pass
++                try:
++                    birth = getattr(os.stat(vault / node), "st_birthtime", None)
++                except OSError:
++                    pass
++                cache[node] = (git_t, birth)
++        if cache[node] is None:
++            return True
++        git_t, birth = cache[node]
+         if git_t is None and birth is None:
+             return True
+         return (git_t is not None and git_t <= t) or (birth is not None and birth <= t)
+ 
++    return existed
++
+ 
+ SEARCH_RANKED = re.compile(r"(?m)^\((?:共 (\d+) 篇候選|候選 (\d+);)")        # 現行「(共 N 篇候選」與舊版「(候選 N;」
+ SEARCH_RESULT_LINE = re.compile(r"(?m)^\s+\d+(?:\.\d+)?\s+(?:[^\s/]+/)+\S*?\.md\b")    # 排名結果行「  11.902  Projects/x.md」
+ SEARCH_LEGACY = re.compile(r"(?m)^(\d+) 處 / (\d+) 篇")
+-_CHAIN_RE = re.compile(r";|&&|\|\|")
++_Q_HIDE = str.maketrans({";": "\x00", "&": "\x01", "|": "\x02", "\n": "\x03"})
++_Q_SHOW = str.maketrans({"\x00": ";", "\x01": "&", "\x02": "|", "\x03": "\n"})
++_REDIRECT_TOKS = ("2>", "1>", "&>", ">", "<")
+ 
+ 
+ def _search_segments(cmd: str) -> list[list[str]]:
+-    """一次呼叫用 ; && || 切段(管線 | 不切,那是同一段的過濾);回每段裡 lumos search 的查詢詞。"""
+-    import shlex
++    """一次呼叫裡每段 lumos search 的查詢詞。切段沿用 hook 的 _segment_command(; && || | 都切,管線後段本來就不含 search)、
++    切詞沿用 _safe_tokens,不另寫第二套(代碼審 r1 架構席 B1);換行也是殼層的指令分隔,先逐行(代碼審 r1 外家 C6)。
++    _segment_command 不看引號,所以引號內的 ; & | 換行先換成佔位字元,切完換回。"""
+     out = []
+-    for seg in _CHAIN_RE.split(_strip_quoted_keep(cmd)):
+-        seg_raw = seg
+-        try:
+-            toks = shlex.split(seg_raw)
+-        except ValueError:
+-            toks = seg_raw.split()
+-        for i, tk in enumerate(toks):
+-            if os.path.basename(tk).endswith("lumos") and i + 1 < len(toks) and toks[i + 1] == "search":
+-                terms = []
+-                for w in toks[i + 2:]:
+-                    if w == "|" or w.startswith(("2>", ">", "|")):
+-                        break
+-                    if not w.startswith("-"):
+-                        terms.append(w)
+-                out.append(terms)
+-                break
++    for line in QUOTED_RE.sub(lambda m: m.group(0).translate(_Q_HIDE), cmd).split("\n"):
++        for seg in _segment_command(line):
++            toks = [w.translate(_Q_SHOW) for w in _safe_tokens(seg)]
++            for i, tk in enumerate(toks):
++                if os.path.basename(tk).endswith("lumos") and i + 1 < len(toks) and toks[i + 1] == "search":
++                    terms = []
++                    for w in toks[i + 2:]:
++                        if w.startswith(_REDIRECT_TOKS):
++                            break
++                        if not w.startswith("-"):
++                            terms.append(w)
++                    out.append(terms)
++                    break
+     return out
+ 
+ 
+-def _strip_quoted_keep(cmd: str) -> str:
+-    """只為切段:把引號內的 ; && || 換成佔位字元(不動引號本身),切完 shlex 再照原樣解析。"""
+-    def repl(m):
+-        return m.group(0).replace(";", "\x00").replace("&&", "\x01\x01").replace("||", "\x02\x02")
+-    s = QUOTED_RE.sub(repl, cmd)
+-    return s
+-
+-
+ def _search_verdict(text: str) -> str:
+     t = str(text or "")
+     for ln in t.splitlines():
+         ln = ln.strip()
+         if ln.startswith("{") and '"candidates"' in ln:
+             try:
+                 d = json.loads(ln)
+                 return "zero" if int(d.get("candidates", -1)) == 0 else "hit"
+             except Exception:
+                 pass
+@@ -835,188 +911,203 @@ def _search_verdict(text: str) -> str:
+     # 計數行常被 `| head -N` 切掉(它在最後一行);看得到排名結果行就是有命中。零命中只認明寫 0 的那一行,絕不從「沒有計數行」推論
+     if SEARCH_RESULT_LINE.search(t):
+         return "hit"
+     return "undetermined"
+ 
+ 
+ def _search_event(cmd: str, output, bg: bool, ts) -> dict | None:
+     segs = _search_segments(cmd)
+     if not segs:
+         return None
+-    q = " ".join(segs[0]).replace("\x00", ";").replace("\x01", "&").replace("\x02", "|")
++    q = " ".join(segs[0])
+     if bg or len(segs) != 1 or output is None:
+         return {"ts": ts, "query": q, "verdict": "undetermined"}
+     return {"ts": ts, "query": q, "verdict": _search_verdict(output)}
+ 
+ 
+ def search_events_claude(objs) -> list[dict]:
+     """Bash 呼叫裡的 lumos search 配它的輸出(tool_use id → tool_result);恰好一段含 search 才判,背景執行判不出。"""
+     results = _tool_results(objs)
++    ts_of = _effective_ts(objs)
+     out = []
+-    for o in objs:
+-        if o.get("type") != "assistant":
++    for idx, o in enumerate(objs):
++        if not isinstance(o, dict) or o.get("type") != "assistant":
+             continue
+         for it in ((o.get("message") or {}).get("content") or []):
+             if isinstance(it, dict) and it.get("type") == "tool_use" and it.get("name") == "Bash":
+                 inp = it.get("input") or {}
+                 res = results.get(it.get("id"))
+-                ev = _search_event(str(inp.get("command", "")), res[1] if res else None, bool(inp.get("run_in_background")), o.get("timestamp"))
++                ev = _search_event(str(inp.get("command", "")), res[1] if res else None, bool(inp.get("run_in_background")), ts_of[idx])
+                 if ev:
+                     out.append(ev)
+     return out
+ 
+ 
+ def analyze_codex(objs, slug, repo_set, hook_ok, node_index=None) -> tuple[dict, list]:
+     """Codex rollout → (事件, 零命中事件)。編輯=apply_patch(一個 patch 可改多檔,推播是多塊合成一份→每支檔共用聯集);
+-    推播附件沒有呼叫編號,沿用既有做法配同一輪最近的 apply_patch;同一輪有兩個以上 apply_patch → 那幾列配不準、不猜。"""
++    推播附件沒有呼叫編號,沿用既有做法配同一輪最近的 apply_patch;同一輪有兩個以上 apply_patch → 那幾列配不準、不猜。
++    事件先後=(行序, 在那次呼叫程式碼裡的位置):同一次呼叫先 apply_patch 再 exec 讀筆記,讀取排在編輯之後(代碼審 r1 單reviewer A1)。"""
+     edits, pushes, reads, searches = [], {}, [], []
++    ts_of = _effective_ts(objs)
+     outputs = {}
+     for o in objs:
++        if not isinstance(o, dict):
++            continue
+         p = o.get("payload") or {}
+         if o.get("type") == "response_item" and p.get("type") == "custom_tool_call_output":
+             outv = p.get("output")
+             outputs[p.get("call_id")] = outv if isinstance(outv, str) else "\n".join(
+                 str(x.get("text", "")) if isinstance(x, dict) else str(x) for x in (outv or []))
+     turn, turn_of, patches_in_turn = 0, {}, collections.Counter()
+     for idx, o in enumerate(objs):
++        if not isinstance(o, dict):
++            continue
+         p = o.get("payload") or {}
+         if (o.get("type") == "event_msg" and p.get("type") == "user_message") or \
+            (o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user"):
+             turn += 1
+         turn_of[idx] = turn
+         if o.get("type") != "response_item" or p.get("type") != "custom_tool_call":
+             continue
+         inp = p.get("input") if isinstance(p.get("input"), str) else ""
+-        files = []
++        ts = ts_of[idx]
++        files, first = [], None
+         for m in _CODEX_APPLY_PATCH_RE.finditer(inp):
+             for ln2 in _js_unescape(m.group(1)).split("\n"):
+                 h = _CODEX_PATCH_HDR_RE.match(ln2.strip())
+                 if h:
+                     rel = _rel_to_repo(h.group(1).strip(), repo_set)
+                     if rel and hook_ok(rel) and rel not in files:
+                         files.append(rel)
++                        first = m.start() if first is None else first
+         if files:
+-            edits.append({"idx": idx, "ts": o.get("timestamp"), "id": f"cx{idx}", "files": files, "turn": turn})
++            edits.append({"idx": (idx, first), "ts": ts, "id": f"cx{idx}", "files": files, "turn": turn})
+             patches_in_turn[turn] += 1
+-        cmds = [_js_unescape(m.group(1)) for m in _CODEX_EXEC_CMD_RE.finditer(inp)]
+-        for cmd in cmds:
++        cmds = [(m.start(), _js_unescape(m.group(1))) for m in _CODEX_EXEC_CMD_RE.finditer(inp)]
++        for at, cmd in cmds:
+             strict, _lo, _w, terms, _s = classify_bash(cmd, slug)
+             hit, _amb = _resolve_terms(terms, node_index)
+             for n in sorted(strict | hit):
+-                reads.append({"idx": idx, "ts": o.get("timestamp"), "node": n})
+-        segs_total = sum(len(_search_segments(c)) for c in cmds)
+-        for cmd in cmds:
++                reads.append({"idx": (idx, at), "ts": ts, "node": n})
++        segs_total = sum(len(_search_segments(c)) for _at, c in cmds)
++        for _at, cmd in cmds:
+             if _search_segments(cmd):
+-                ev = _search_event(cmd, outputs.get(p.get("call_id")) if (len(cmds) == 1 and segs_total == 1) else None, False, o.get("timestamp"))
++                ev = _search_event(cmd, outputs.get(p.get("call_id")) if (len(cmds) == 1 and segs_total == 1) else None, False, ts)
+                 if ev:
+                     searches.append(ev)
+     for e in edits:
+         e["pair_ok"] = patches_in_turn[e["turn"]] <= 1
+     for idx, o in enumerate(objs):
++        if not isinstance(o, dict):
++            continue
+         p = o.get("payload") or {}
+         if o.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "developer":
+             txt = _codex_text(p)
+             if not _is_push_text(txt):
+                 continue
+             same = [e for e in edits if e["turn"] == turn_of[idx]]
+             if not same:
+                 continue
+-            e = min(same, key=lambda e: abs(e["idx"] - idx))
++            e = min(same, key=lambda e: abs(e["idx"][0] - idx))
+             pushes[e["id"]] = parse_push(txt)
+     return {"edits": edits, "pushes": pushes, "reads": reads}, searches
+ 
+ 
+ def _hook_filter(repo: Path):
+     """用 impact hook 自己的判斷函式決定哪些檔會被推播(文件、排除路徑 hook 本來就不管,不建列)。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     hook = Path(__file__).resolve().parents[3] / "scripts" / "hooks" / "claude" / "impact-hook.py"
+     loader = SourceFileLoader("lens_impact_hook", str(hook)); spec = importlib.util.spec_from_loader("lens_impact_hook", loader)
+     mod = importlib.util.module_from_spec(spec); loader.exec_module(mod)
+     return lambda rel: bool(mod._decide_one(rel, str(repo)))
+ 
+ 
+ def run_misses(repo: Path, projects: str, codex_sessions: str, week: str | None = None,
+                budget: float = 300.0, impact_timeout: float = 60.0) -> dict:
+-    """掃逐字稿 → {rows, searches, summary, budget_hit}。給 week 就只收編輯時間(本機時區)落在那個 ISO 週的列與搜尋。"""
++    """掃逐字稿 → {rows, searches, summary, budget_hit}。給 week 就只收編輯時間(本機時區)落在那個 ISO 週的列與搜尋。
++    兩段走、共用一把總預算(代碼審 r1 外家 C5):先掃完逐字稿收事件(純讀檔)——預算用完就不再開新檔、沒掃的計數
++    files_unscanned;再逐份叫 impact / git 分類——預算用完就不再叫,剩下的記判不出。兩種都標 budget_hit,資料不完整但有標記。"""
+     repo = repo.resolve(); slug = vault_slug(repo)
+     if not slug:
+         raise SystemExit("擋下:repo 下找不到 docs/*-knowledge")
+     vault = repo / "docs" / slug
+     repo_set = repo_paths(repo)
+     idx_nodes = _node_index(vault)
+     hook_ok = _hook_filter(repo)
+-    relate, existed = Relater(repo, vault, budget, impact_timeout), Existence(repo, vault)
++    bud = _budget(budget)
++    relate, existed = _make_relater(repo, vault, bud, impact_timeout), _make_existence(repo, vault, bud)
+     ttl_min = 20   # hook 的冷卻窗:同 impact-hook 讀 .lumos/impact.json 的 ttl_min(預設 20 分)
+     try:
+         ttl_min = max(1, int(json.loads((repo / ".lumos" / "impact.json").read_text(encoding="utf-8")).get("ttl_min", 20)))
+     except Exception:
+         pass
+-    rows, searches, broken = [], [], 0
+     in_week = (lambda ts: _iso_week_local(ts) == week) if week else (lambda ts: True)
+-    files = glob.glob(os.path.join(projects, "*", "*.jsonl")) + glob.glob(os.path.join(projects, "*", "*", "subagents", "agent-*.jsonl"))
+-    for f in files:
++    files = [("claude", f) for f in glob.glob(os.path.join(projects, "*", "*.jsonl")) + glob.glob(os.path.join(projects, "*", "*", "subagents", "agent-*.jsonl"))]
++    if os.path.isdir(codex_sessions):
++        files += [("codex", f) for f in glob.glob(os.path.join(codex_sessions, "**", "rollout-*.jsonl"), recursive=True)]
++    C = collections.Counter
++    sessions, searches, cnt = [], [], C()
++    for harness, f in files:
++        if _left(bud) <= 0:
++            bud["hit"] = True; cnt["files_unscanned"] += 1; continue
+         try:
+-            objs = []
+-            for ln in Path(f).read_text(encoding="utf-8", errors="ignore").splitlines():
+-                try:
+-                    objs.append(json.loads(ln))
+-                except Exception:
+-                    pass
+-            cwds = {str(Path(o.get("cwd")).resolve()) for o in objs if isinstance(o, dict) and o.get("cwd")}
+-            if not any(any(c == r or c.startswith(r + "/") for r in repo_set) for c in cwds):
+-                continue
+-            ev = analyze_claude(objs, slug, repo_set, hook_ok, idx_nodes)
++            objs, bad = _read_jsonl(f)
++            cnt["bad_lines"] += bad
++            if harness == "claude":
++                if not _claude_in_repo(objs, repo_set):
++                    continue
++                ev, sx = analyze_claude(objs, slug, repo_set, hook_ok, idx_nodes), search_events_claude(objs)
++                sid = next((o.get("sessionId") for o in objs if isinstance(o, dict) and o.get("sessionId")), Path(f).stem)
++            else:
++                meta, why = _codex_meta(objs, f, repo_set)
++                if meta is None:
++                    cnt["codex_version_skipped"] += why == "version"
++                    continue
++                ev, sx = analyze_codex(objs, slug, repo_set, hook_ok, idx_nodes)
++                sid = meta.get("session_id") or Path(f).stem
++            cnt["edits_without_time"] += sum(1 for e in ev["edits"] if e["ts"] is None)
+             if any(in_week(e["ts"]) for e in ev["edits"]):
+-                sid = next((o.get("sessionId") for o in objs if o.get("sessionId")), Path(f).stem)
+-                rows += [r for r in build_miss_rows(ev, relate, existed, sid, "claude", ttl_min * 60) if in_week(r["ts"])]
+-            searches += [s for s in search_events_claude(objs) if in_week(s["ts"])]
++                sessions.append((ev, sid, harness))
++            searches += [s for s in sx if in_week(s["ts"])]
+         except SystemExit:
+             raise
+         except Exception as e:
+-            broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
+-    cx = glob.glob(os.path.join(codex_sessions, "**", "rollout-*.jsonl"), recursive=True) if os.path.isdir(codex_sessions) else []
+-    for f in cx:
++            cnt["broken_files"] += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
++    rows = []
++    for ev, sid, harness in sessions:
+         try:
+-            objs = [json.loads(ln) for ln in Path(f).read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip().startswith("{")]
+-            if not objs or objs[0].get("type") != "session_meta":
+-                continue
+-            meta = objs[0].get("payload") or {}
+-            cwd = str(Path(str(meta.get("cwd") or "")).resolve()) if meta.get("cwd") else ""
+-            if not cwd or not any(cwd == r or cwd.startswith(r + "/") for r in repo_set):
+-                continue
+-            ev, sx = analyze_codex(objs, slug, repo_set, hook_ok, idx_nodes)
+-            if any(in_week(e["ts"]) for e in ev["edits"]):
+-                rows += [r for r in build_miss_rows(ev, relate, existed, meta.get("session_id") or Path(f).stem, "codex", ttl_min * 60) if in_week(r["ts"])]
+-            searches += [s for s in sx if in_week(s["ts"])]
++            rows += [r for r in build_miss_rows(ev, relate, existed, sid, harness, ttl_min * 60) if in_week(r["ts"])]
+         except Exception as e:
+-            broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
+-    C = collections.Counter
++            cnt["broken_files"] += 1; print(f"跳過一個 {harness} 工作階段的分類: {type(e).__name__}", file=sys.stderr)
+     ok_rows = [r for r in rows if r["pushed_complete"]]
+     summary = {
+-        "week": week, "files_scanned": len(files) + len(cx), "broken_files": broken, "rows": len(rows),
++        "week": week, "files_scanned": len(files) - cnt["files_unscanned"], "files_unscanned": cnt["files_unscanned"],
++        "broken_files": cnt["broken_files"], "bad_lines": cnt["bad_lines"], "codex_version_skipped": cnt["codex_version_skipped"],
++        "edits_without_time": cnt["edits_without_time"], "rows": len(rows),
+         "zero_push_rows": sum(1 for r in rows if r["zero_push"]), "cooldown_rows": sum(1 for r in rows if r.get("cooldown_inherited")),
+         "incomplete_rows": len(rows) - len(ok_rows),
+         "miss_by_class": dict(C(m["class"] for r in ok_rows for m in r["misses"])),
+         "about_also": sum(1 for r in ok_rows for m in r["misses"] if m["about_also"]),
+         "after_the_fact": sum(len(r["after_the_fact"]) for r in rows),
+         "searches": len(searches), "search_zero": sum(1 for s in searches if s["verdict"] == "zero"),
+         "search_undetermined": sum(1 for s in searches if s["verdict"] == "undetermined"),
+-        "impact_timeouts": relate.timeouts, "budget_hit": relate.budget_hit,
++        "impact_timeouts": bud["impact_timeouts"], "git_skipped": bud["git_skipped"], "budget_hit": bud["hit"],
+     }
+-    return {"rows": rows, "searches": searches, "summary": summary, "budget_hit": relate.budget_hit}
++    return {"rows": rows, "searches": searches, "summary": summary, "budget_hit": bud["hit"]}
+ 
+ 
+ def _atomic_json(path: Path, data) -> None:
+-    """寫暫存 → 自驗讀得回 → 整個換名(本 repo 改共用檔的原子寫入慣例)。"""
++    """寫暫存(pid 尾碼,同 refresh_labels._atomic_write_json)→ 讀回自驗 → os.replace。比鄰居多一步讀回:週檔是版控產物,
++    寫壞的檔換上去就會被提交出去(本 repo 改共用檔的原子寫入慣例:寫暫存→自驗→換名)。"""
+     path.parent.mkdir(parents=True, exist_ok=True)
+-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
++    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+     text = json.dumps(data, ensure_ascii=False, indent=1)
+     tmp.write_text(text, encoding="utf-8")
+     json.loads(tmp.read_text(encoding="utf-8"))
+     os.replace(tmp, path)
+ 
+ 
+ def write_archive(rep: dict, week: str, archive_dir: Path) -> tuple[Path, Path]:
+     """版控那份 weekly/<週>.json 只放推導列(工作階段雜湊、repo 相對檔名、節點名、分類、計數);
+     查詢字串另寫 local/<週>-queries.json(那個目錄 gitignore——agent 打的自由文字不進公開 repo)。同週重跑覆寫同一份。"""
+     arc = Path(archive_dir)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e8efb9af..d474d07b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -36366,22 +36366,36 @@ def t_lens_recount_weekly_archive():
+     cls = {x["node"]: x["class"] for x in (rows[0].get("misses") if rows else [])}
+     check("週跑③:真的叫了 impact 分類(rule.md 規則內、unrel.md 判不出)", cls == {"Systems/rule.md": "rule", "Systems/unrel.md": "unknown"}, str(cls))
+     raw = wf.read_text(encoding="utf-8") if wf.exists() else ""
+     check("週跑④:版控那份不含原文、不含查詢字串、不含絕對路徑", secret not in raw and "zqsecret" not in raw and str(root) not in raw, raw[:400])
+     qf = arc / "local" / "2026-W37-queries.json"
+     check("週跑⑤:查詢字串進本機那份", qf.exists() and "zqsecret" in qf.read_text(encoding="utf-8"), "")
+     r2 = run_weekly()
+     check("週跑⑥:同週重跑覆寫同一份、不多出檔", sorted(p.name for p in (arc / "weekly").iterdir()) == ["2026-W37.json"], "")
+     r3 = run_weekly("--budget", "0")
+     d3 = _j.loads(wf.read_text(encoding="utf-8"))
+-    cls3 = {x["node"]: x["class"] for x in d3["rows"][0]["misses"]}
+-    check("週跑⑦:預算用完 → budget_hit、不再叫 impact(全部判不出)", d3.get("budget_hit") is True and set(cls3.values()) == {"unknown"}, str(d3)[:400])
++    check("週跑⑦:掃描階段就用完總預算 → budget_hit、沒掃的逐字稿計數、照常寫週檔(資料不完整但有標記;代碼審 r1 外家 C5)",
++          d3.get("budget_hit") is True and (d3.get("summary") or {}).get("files_unscanned", 0) >= 1 and d3.get("rows") == [], str(d3)[:400])
++    m = _lens_mod()
++    orig_build, orig_left, phase = m.build_miss_rows, m._left, {"p2": False}
++    def build2(*a, **k):
++        phase["p2"] = True
++        return orig_build(*a, **k)
++    m.build_miss_rows, m._left = build2, (lambda b: -1.0 if phase["p2"] else float("inf"))
++    try:
++        rep8 = m.run_misses(repo, str(root / "projects"), str(root / "none"), week=None, budget=300)
++    finally:
++        m.build_miss_rows, m._left = orig_build, orig_left
++    cls8 = {x["node"]: x["class"] for r8 in rep8["rows"] for x in r8["misses"]}
++    check("週跑⑧:分類階段用完總預算 → 不再叫 impact / git,剩下的被改檔分類記判不出、budget_hit",
++          rep8["budget_hit"] is True and cls8 == {"Systems/rule.md": "unknown", "Systems/unrel.md": "unknown"}
++          and rep8["summary"]["git_skipped"] == 2, str(rep8["summary"]) + str(cls8))
+ 
+ 
+ def t_lens_recount_tests_guarded():
+     """[推播miss量測 S5] 載入 lens-utilization/recount.py 的測試都要先 _need_src(消費專案沒有 governance/eval/,
+     test_lumos.py 卻會被裝進去)。翻紅釘:拿掉任一支的 _need_src → 翻紅。"""
+     import re as _re
+     src = Path(__file__).read_text(encoding="utf-8")
+     bad = []
+     for mm in _re.finditer(r"\ndef (t_\w+)\(\):\n(.*?)(?=\ndef |\nif __name__)", src, _re.S):
+         name, body = mm.group(1), mm.group(2)
+@@ -36409,12 +36423,143 @@ def t_lens_recount_cooldown_and_search_forms():
+     r2, r3 = by["2026-09-07T01:05:00Z"], by["2026-09-07T01:40:00Z"]
+     check("冷卻窗①:窗內再改 → 沿用前一次推播、不算零推播", not r2["zero_push"] and r2.get("cooldown_inherited") is True, str(r2))
+     check("冷卻窗①:沿用的推播裡有的筆記,之後讀了不算 miss", not r2["misses"], str(r2))
+     check("冷卻窗①:窗外再改 → 零推播", r3["zero_push"] and not r3.get("cooldown_inherited"), str(r3))
+     v = m._search_verdict
+     check("搜尋形態②:舊版計數字樣也認", v("...\n(候選 6;相關性排序,--legacy 走舊字母序)") == "hit" and v("(候選 0;相關性排序)") == "zero", "")
+     check("搜尋形態②:計數行被切掉但有排名結果行 → 有命中",
+           v("  11.902  Projects/已知坑策展庫_計劃.md  [標籤,欄位]\n    11 [KEY]: KEY:…") == "hit", "")
+     check("搜尋形態②:沒有計數行、也沒有結果行 → 判不出(不推論成零命中)", v("提醒:0 筆,而且你查的是黏成一串…") == "undetermined", "")
+ 
++def t_lens_recount_code_review_r1():
++    """代碼審 code-推播漏網量測 r1 折入(之一):①同一則訊息裡先改檔再讀筆記(共用行序)——讀取仍算給那次編輯(單reviewer A1)
++    ②「當時是否存在」用真 git 驗:改名前就存在 → 存在(--follow);編輯之後才建且之後才提交 → 不存在;早就寫好、還沒提交 → 存在(單reviewer A2)
++    ③about_code 清單、單值(`about_code: scripts/lumos`,真圖譜有兩篇)、單行 [a, b] 都認(單reviewer A3、外家 C8)
++    ④Codex 逐字稿版本不在認得的表 → 跳過、不建列,stderr 講明(架構 B2、外家 C3)⑤Codex 稿尾端一行寫到一半 → 只跳那行、其餘照讀(外家 C4)。
++    翻紅釘:事件先後改回只比行號 → ①翻紅;git log 拿掉 --follow → ②翻紅;about_code 改回只認清單 → ③翻紅;拿掉版本擋 → ④翻紅;
++    讀檔改回整份 json.loads → ⑤翻紅。"""
++    _need_src("governance/eval/lens-utilization/recount.py")
++    import subprocess as _sp, os as _os, json as _j, time as _time, io as _io, contextlib as _cl
++    m = _lens_mod()
++    repo = Path(tempfile.mkdtemp(prefix="lensr1-")).resolve()
++    V = "docs/t-knowledge"
++    objs = [{"type": "assistant", "cwd": str(repo), "sessionId": "S", "timestamp": "2026-09-07T01:00:00Z",
++             "message": {"content": [{"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": str(repo / "src/a.py")}},
++                                     {"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": str(repo / V / "Systems/x.md")}}]}},
++            {"type": "user", "cwd": str(repo), "sessionId": "S", "timestamp": "2026-09-07T01:00:01Z",
++             "message": {"content": [{"type": "tool_result", "tool_use_id": "r1", "content": "ok"}]}}]
++    ev = m.analyze_claude(objs, "t-knowledge", {str(repo)}, hook_ok=lambda f: True)
++    rows = m.build_miss_rows(ev, relate=lambda n, f: ("rule", False) if (n, f) == ("Systems/x.md", "src/a.py") else (None, False),
++                             existed=lambda n, t: True, session="S", harness="claude")
++    check("代碼審r1①:同一則訊息先改檔再讀筆記 → 讀取算給那次編輯", rows and [x["node"] for x in rows[0]["misses"]] == ["Systems/x.md"], str(rows))
++    v = repo / V; (v / "Systems").mkdir(parents=True, exist_ok=True)
++    _sp.run(["git", "init", "-q", str(repo)])
++    def commit(msg, date):
++        env = dict(_os.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
++        _sp.run(["git", "-C", str(repo), "add", "-A"]); _sp.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg], env=env)
++    (v / "Systems" / "old.md").write_text("# old\n", encoding="utf-8"); commit("add old", "2026-01-01T00:00:00Z")
++    _sp.run(["git", "-C", str(repo), "mv", f"{V}/Systems/old.md", f"{V}/Systems/renamed.md"]); commit("rename", "2026-06-01T00:00:00Z")
++    (v / "Systems" / "late.md").write_text("# late\n", encoding="utf-8"); commit("add late", "2026-06-01T00:00:00Z")
++    (v / "Systems" / "draft.md").write_text("# draft\n", encoding="utf-8")   # 沒提交
++    ex = m._make_existence(repo, v)
++    # 建立時間(st_birthtime)是今天,早於任何過去的編輯時間都不成立 → 改名那篇只能靠 git --follow 判存在
++    check("代碼審r1②:改名前就存在的筆記 → 編輯當下存在(git --follow)", ex("Systems/renamed.md", "2026-03-01T00:00:00Z") is True, "")
++    check("代碼審r1②:編輯之後才建、之後才提交 → 不存在", ex("Systems/late.md", "2026-03-01T00:00:00Z") is False, "")
++    later = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(_time.time() + 3600))
++    check("代碼審r1②:早就寫好、還沒提交 → 存在(看檔案建立時間)", ex("Systems/draft.md", later) is True, "")
++    (v / "Systems" / "flow.md").write_text("---\ntype: system\nabout_code: [src/a.py, 'src/b.py']\n---\n# flow\n", encoding="utf-8")
++    (v / "Systems" / "dash.md").write_text("---\ntype: system\nabout_code:\n  - src/c.py\n  - ./src/d.py\n---\n# dash\n", encoding="utf-8")
++    (v / "Systems" / "scalar.md").write_text("---\ntype: system\nabout_code: scripts/lumos\n---\n# scalar\n", encoding="utf-8")
++    ab = m._about_map(v)
++    check("代碼審r1③:about_code 清單、單值、單行 [a, b] 都認(./ 正規化同本體)",
++          ab.get("Systems/flow.md") == {"src/a.py", "src/b.py"} and ab.get("Systems/dash.md") == {"src/c.py", "src/d.py"}
++          and ab.get("Systems/scalar.md") == {"scripts/lumos"}, str(ab))
++    cxroot = repo.parent / (repo.name + "-cx"); cx = cxroot / "2026" / "09" / "07"; cx.mkdir(parents=True)
++    patch = {"type": "response_item", "timestamp": "2026-09-07T01:00:00Z", "payload": {"type": "custom_tool_call", "call_id": "c1", "name": "exec",
++             "input": "const r = await tools.apply_patch({\"patch\":\"*** Begin Patch\\n*** Update File: src/a.py\\n@@\\n-x\\n+y\\n*** End Patch\"})"}}
++    def meta(ver):
++        return {"type": "session_meta", "payload": {"session_id": "C1", "cwd": str(repo), "cli_version": ver}}
++    (repo / "src").mkdir(exist_ok=True); (repo / "src" / "a.py").write_text("y\n", encoding="utf-8")
++    rf = cx / "rollout-2026-09-07T01-00-00-x.jsonl"
++    rf.write_text("\n".join(_j.dumps(o) for o in [meta("9.9.9"), patch]) + "\n", encoding="utf-8")
++    err = _io.StringIO()
++    with _cl.redirect_stderr(err):
++        rep = m.run_misses(repo, str(repo.parent / "no-projects"), str(cxroot), week=None, budget=30)
++    check("代碼審r1④:Codex 逐字稿版本不在白名單 → 跳過、不建列,stderr 講明", rep["summary"]["rows"] == 0 and rep["summary"].get("codex_version_skipped") == 1
++          and "不在認得的表" in err.getvalue(), str(rep["summary"]) + err.getvalue()[-300:])
++    ok_ver = sorted(m.CODEX_TRANSCRIPT_VERSIONS)[0]
++    rf.write_text("\n".join(_j.dumps(o) for o in [meta(ok_ver), patch]) + "\n{\"type\": \"response_item\", \"payl\n", encoding="utf-8")
++    with _cl.redirect_stderr(_io.StringIO()):
++        rep = m.run_misses(repo, str(repo.parent / "no-projects"), str(cxroot), week=None, budget=30)
++    check("代碼審r1⑤:Codex 稿尾端一行寫到一半 → 只跳那行、其餘照讀", rep["summary"]["rows"] == 1 and rep["summary"].get("bad_lines") == 1
++          and rep["summary"]["broken_files"] == 0, str(rep["summary"]))
++
++
++def t_lens_recount_code_review_r1_rows():
++    """代碼審 code-推播漏網量測 r1 折入(之二):①列上存 pushed/used,週檔答得出「推了哪些、之後讀了哪些」(外家 C1)
++    ②多檔 patch 只有真的在冷卻窗內的檔沿用推播,新檔照算零推播(外家 C2)③窗內 hook 仍推事故快速版 → 併上開窗那次,不把看過的算漏網(編排者自找)
++    ④總預算用完 → 不再叫 impact 也不再叫 git(外家 C5)⑤換行分隔的兩個 search 是兩段、判不出;引號裡的 ; | 不切(外家 C6、架構 B1)
++    ⑥缺時間的行沿用前一行時間、前面都沒有 → None(外家 C7)⑦週跑把第一行 JSON 原樣記進 log(架構 B5)。
++    翻紅釘:冷卻窗改回整次編輯共用 → ②翻紅;窗內有推播就不沿用 → ③翻紅;git 不看預算 → ④翻紅;切段不先逐行 → ⑤翻紅;拿掉沿用 → ⑥翻紅。"""
++    _need_src("governance/eval/lens-utilization/recount.py", "governance/autonomous-loop.sh")
++    import tempfile as _tf
++    m = _lens_mod()
++    P = lambda nodes: {"nodes": nodes, "complete": True, "impact_skipped": []}
++    ev = {"edits": [{"idx": (1, 0), "ts": "2026-09-07T01:00:00Z", "id": "e1", "files": ["src/a.py"]}],
++          "pushes": {"e1": P(["Systems/p.md", "Systems/q.md"])},
++          "reads": [{"idx": (2, 0), "ts": "2026-09-07T01:00:05Z", "node": "Systems/p.md"}, {"idx": (3, 0), "ts": "2026-09-07T01:00:06Z", "node": "Systems/z.md"}]}
++    rows = m.build_miss_rows(ev, relate=lambda n, f: ("rule", False), existed=lambda n, t: True, session="S", harness="claude")
++    arc = Path(_tf.mkdtemp(prefix="lensr1arc-"))
++    wf, _lf = m.write_archive({"summary": {}, "budget_hit": False, "rows": rows, "searches": []}, "2026-W37", arc)
++    import json as _j
++    wr = _j.loads(wf.read_text(encoding="utf-8"))["rows"][0]
++    check("代碼審r1①:列與週檔存推了哪些、之後讀了哪些", wr.get("pushed") == ["Systems/p.md", "Systems/q.md"] and wr.get("used") == ["Systems/p.md"]
++          and [x["node"] for x in wr["misses"]] == ["Systems/z.md"], str(wr))
++    ev = {"edits": [{"idx": (1, 0), "ts": "2026-09-07T01:00:00Z", "id": "e1", "files": ["a.py"]},
++                    {"idx": (2, 0), "ts": "2026-09-07T01:05:00Z", "id": "e2", "files": ["a.py", "new.py"]}],
++          "pushes": {"e1": P(["Systems/A.md"])}, "reads": []}
++    rows = {r["file"]: r for r in m.build_miss_rows(ev, relate=lambda n, f: (None, False), existed=lambda n, t: True, session="S", harness="codex") if r["ts"].endswith("05:00Z")}
++    check("代碼審r1②:多檔 patch 只有在窗內的檔沿用,新檔照算零推播",
++          rows["a.py"]["cooldown_inherited"] and not rows["a.py"]["zero_push"] and rows["new.py"]["zero_push"] and not rows["new.py"]["cooldown_inherited"]
++          and rows["new.py"]["pushed_n"] == 0, str(rows))
++    ev = {"edits": [{"idx": (1, 0), "ts": "2026-09-07T01:00:00Z", "id": "e1", "files": ["a.py"]},
++                    {"idx": (2, 0), "ts": "2026-09-07T01:05:00Z", "id": "e2", "files": ["a.py"]},
++                    {"idx": (4, 0), "ts": "2026-09-07T01:25:00Z", "id": "e3", "files": ["a.py"]}],
++          "pushes": {"e1": P(["Systems/A.md"]), "e2": P(["Issues/I.md"])},
++          "reads": [{"idx": (3, 0), "ts": "2026-09-07T01:06:00Z", "node": "Systems/A.md"}]}
++    rows = m.build_miss_rows(ev, relate=lambda n, f: ("rule", False), existed=lambda n, t: True, session="S", harness="claude")
++    check("代碼審r1③:窗內事故快速版推播 → 併上開窗那次;窗不因它延長(開窗後 25 分鐘那次算零推播)",
++          not any(r["misses"] for r in rows) and rows[1]["pushed"] == ["Issues/I.md", "Systems/A.md"] and rows[1]["used"] == ["Systems/A.md"]
++          and rows[2]["zero_push"], str(rows))
++    repo = Path(_tf.mkdtemp(prefix="lensr1b-")).resolve(); v = repo / "docs" / "t-knowledge" / "Systems"; v.mkdir(parents=True)
++    (v / "n.md").write_text("# n\n", encoding="utf-8")
++    calls = []
++    real_run = m.subprocess.run
++    def spy(cmd, *a, **k):
++        calls.append(cmd[0] if cmd[:1] == ["git"] else "impact")
++        return real_run(cmd, *a, **k)
++    bud = {"deadline": 0.0, "hit": False, "impact_timeouts": 0, "git_skipped": 0}
++    m.subprocess.run = spy
++    try:
++        rel = m._make_relater(repo, repo / "docs" / "t-knowledge", bud)
++        exi = m._make_existence(repo, repo / "docs" / "t-knowledge", bud)
++        got = (rel("Systems/n.md", "src/a.py"), exi("Systems/n.md", "2026-09-07T01:00:00Z"))
++    finally:
++        m.subprocess.run = real_run
++    check("代碼審r1④:總預算用完 → 不叫 impact 也不叫 git;分類判不出、筆記當存在(不掉進事後才有)、git_skipped 計數",
++          calls == [] and got == ((None, False), True) and bud["hit"] and bud["git_skipped"] == 1, f"calls={calls} got={got} bud={bud}")
++    segs = m._search_segments('lumos search "zero"\nlumos search "hit"')
++    ev2 = m._search_event('lumos search "zero"\nlumos search "hit"', "(共 0 篇候選)", False, None)
++    one = m._search_segments('lumos search "a;b|c" 2>/dev/null | head -5')
++    check("代碼審r1⑤:換行分隔兩個 search → 兩段、判不出;引號裡的 ; | 不切、重導向不算查詢詞",
++          len(segs) == 2 and ev2["verdict"] == "undetermined" and one == [["a;b|c"]], f"{segs} {ev2} {one}")
++    objs = [{"type": "user", "timestamp": "2026-09-08T01:00:00Z", "message": {"content": "hi"}},
++            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": "/r/src/a.py"}}]}}]
++    e_ok = m.analyze_claude(objs, "t-knowledge", {"/r"}, hook_ok=lambda f: True)["edits"]
++    e_none = m.analyze_claude(objs[1:], "t-knowledge", {"/r"}, hook_ok=lambda f: True)["edits"]
++    check("代碼審r1⑥:缺時間的行沿用前一行時間;前面都沒有 → None", e_ok[0]["ts"] == "2026-09-08T01:00:00Z" and e_none[0]["ts"] is None, f"{e_ok} {e_none}")
++    sh = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
++    blk = sh[sh.index("run_lens_weekly(){"):sh.index("\n}\n", sh.index("run_lens_weekly(){"))]
++    check("代碼審r1⑦:週跑把第一行 JSON 原樣記進 log(同 run_replay)", 'log "推播漏網週跑原始:$(echo "$out" | head -1)"' in blk, blk[-400:])
++
+ if __name__ == "__main__":
+     sys.exit(main())

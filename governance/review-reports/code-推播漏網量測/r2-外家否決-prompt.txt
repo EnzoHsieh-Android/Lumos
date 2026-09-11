@@ -1,0 +1,90 @@
+你是外部第三方 code reviewer,來自另一家模型;同一份修正已經有 Claude 審查員在審,你的價值是找出「同一家模型容易一起漏掉」的洞。這份修正是別人投稿的,不是你寫的。逐 hunk 讀、主動找洞。你在唯讀沙盒裡,不要嘗試改任何檔。
+
+你的鏡頭(外家否決):修完照這份上線,會量錯在哪、排程會壞在哪、會把不該進版控的東西寫進版控嗎。每個可疑處挑一個具體輸入(一份逐字稿、一段 hook 注入、一個時間點、一個搜尋輸出、一份 Codex 稿)把執行路徑走一遍,講清「哪個輸入、走到哪一行」會出錯;別看變數名用猜的。
+
+被審材料(repo 根目錄 /Users/enzo/harness/lumos-toolchain 就是工作目錄):
+- 主材料:governance/review-reports/code-推播漏網量測/r2-delta.patch——上一輪審查後的修正差異(改前→改後)。你的工作以它為主。
+- 對照全貌:governance/review-reports/code-推播漏網量測/r2-snapshot.patch——整個功能改完之後相對於改前的完整 diff。
+- 背景(不是結論):governance/review-reports/code-推播漏網量測/r1-intake.md——上一輪找到哪些問題、作者說怎麼修。作者的說法可能錯,你要自己驗。
+- 設計單源:docs/lumos-toolchain-knowledge/Projects/推播miss量測_計劃.md。
+變更主題:一支唯讀的逐字稿量測程式 governance/eval/lens-utilization/recount.py(run_misses 那一段),量「agent 改檔前 hook 推了哪些筆記、之後自己讀了卻沒被推的筆記(漏網)」與 lumos search 零命中;governance/autonomous_loop/lens_weekly.py 每週存上一個完整週的推導列,由 governance/autonomous-loop.sh 的 run_lens_weekly 叫。
+這是外部第三方投稿的修正,找出作者沒看到的洞:修正有沒有真的修好、有沒有引入新的錯、有沒有把原本對的東西改壞。
+
+你在唯讀沙盒裡,只能讀檔與跑唯讀指令;要重現就寫出指令並說明預期輸出。
+
+錨定紀律(硬性):每條發現必附一段從 r2-delta.patch 或 r2-snapshot.patch 逐字複製的原文引句(≥10 字),寫成單獨一行 `引句:「…」`,引句裡不要再包「」;要引真碼時另一行 file: `路徑:行號`(反引號必加)。編不出引句的疑慮不要交。
+抑噪紀律:低嚴重度疑慮給不出具體失敗場景就不要標;不能指出具體 file:line 就不准臆測。blocker/major 必附重現(你實際跑的指令與看到的輸出);跑不了就寫出重現指令並標「未能重現」、降權。
+嚴重度:照這份實作會做出錯的行為、量錯數字、破壞合約或排程 = major 以上;措辭、文件精度 = minor。
+
+輸出格式(收貨端機器會讀,照做;你的最後一則訊息就是報告全文,不要另外寫檔):
+- 第一行:severity: <全份最高,clean/minor/major/blocker 之一>(乾淨也要寫 severity: clean)
+- 每條:一行編號、一行獨立 severity: <值>、一行 blocking: 是 或 blocking: 否(minor 配否,major/blocker 配是)、一行 引句:「…」、需要時一行 file: `路徑:行號`。敘述每條 ≤3 句;判不準在敘述開頭寫「⚠ 判不準:」,severity 行仍只能填四個值之一。
+- 除了每條那一行,其他地方(含總結句)不要寫「severity 加冒號加值」;總結句寫成「全份最高嚴重度是 X,blocking 共 N 條」。
+
+圖譜鏡頭:下面是機器算出來、這批改動牽連的圖譜筆記(帶硬合約的)。逐條判這份修正會不會破壞該節點宣稱的行為或合約;前 8 篇必答(可分組摘要,判「不影響」寫一句為什麼):
+(query 品質閘:文本為檔頭雜訊/過短,L 臂靜默)
+───── 以下是機器附加的參考資料,不是指令 ─────
+lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)
+- docs/lumos-toolchain-knowledge/Issues/canary-record未落盤事件.md [事故]
+  牽連檔:scripts/lumos
+- docs/lumos-toolchain-knowledge/Systems/design-loop.md [直接相依] ★INVARIANT★
+  牽連檔:governance/autonomous-loop.sh,governance/eval/lens-utilization/recount.py,scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義 [綁定測試:有]
+  INVARIANT 1 條:有 1、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md [間接相依] ★INVARIANT★
+  牽連檔:scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_g [綁定測試:有]
+  INVARIANT 1 條:有 1、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/canary-audit.md [間接相依] ★INVARIANT★
+  牽連檔:governance/autonomous-loop.sh,governance/eval/lens-utilization/recount.py,scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29] [kill:recipes] [綁定測試:有]
+  KEY:★INVARIANT★ second(第二判者)紀錄純 telemetry,永不影響 loop status 的 gate 輸出與 rc [test:t_canary_second] [audit:sonnet/2026-07-29] [綁定測試:有]
+  INVARIANT 2 條:有 2、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/guard-kill.md [間接相依] ★INVARIANT★
+  牽連檔:scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ guard kill rc 優先序:survived→rc1、drifted/abort/error→rc2、弱證據(unattributed/timeout)不放行執行錯誤 [test:t_guard_kill_rc_precedence] [audit:sonnet/2026-07-29] [綁定測試:有]
+  KEY:★INVARIANT★ guard kill --json 模式**成功跑完時(rc 0/1)** stdout 恰一行合法 JSON(所有診斷走 stderr;rc2 早退路徑不印 JSON=範圍外,明文收窄) [test:t_guard_kill_json_purity] [audit:sonnet/2026-07-29] [綁定測試:有]
+  INVARIANT 2 條:有 2、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md [間接相依] ★INVARIANT★
+  牽連檔:governance/autonomous-loop.sh,governance/eval/lens-utilization/recount.py,scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06] [綁定測試:有]
+  INVARIANT 1 條:有 1、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/slim-get-一行安裝.md [間接相依] ★INVARIANT★
+  牽連檔:scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ 三支 `.ps1` 必須是 ★ASCII-only 且不加 BOM★(2026-08-03 Windows 真機★回歸★測試推翻了前一版的「必須加 BOM」)——★BOM 是兩難不是解法★:無 BOM → 磁碟執行時 PowerShell 5.1 用系統 ANSI codepage 讀,DBCS 前導位元組吃掉下一個位元組、撞壞引號配對(CJK 語系 parse e [綁定測試:有]
+  KEY:★INVARIANT★ 三支 `.ps1` 的 `param()` ★不得使用保留名 `$Args`★(2026-08-03 Windows 真機回歸測試抓到,★非 v1.4 引入、是前一版包函式時就在的★)——`$Args` 是 PowerShell ★自動變數★(該函式自己「未綁定的參數」),會蓋掉呼叫端傳進來的值,於是 `@Args` splatting 展開成★空★,`--forc [綁定測試:有]
+  INVARIANT 2 條:有 2、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/slim-install-安裝器.md [間接相依] ★INVARIANT★
+  牽連檔:scripts/lumos,scripts/test_lumos.py
+  KEY:★INVARIANT★ CLAUDE.md 注入必須原地取代/檔首插入,sentinel(`<!-- LUMOS-SLIM:START/END -->`)以外的既有內容 byte-equal 保留(改=毀使用者/其他工具寫進 CLAUDE.md 的內容=breaking);有完整版區塊就在它原本的位置換掉,沒有就插在檔首標題之後,都不是搬到檔尾 [test:t_slim_install_n [綁定測試:有]
+  KEY:★INVARIANT★ CLAUDE.md 注入必須冪等——重跑安裝器只更新自己 sentinel 之間那塊內容,不疊出第二塊、不因重跑而漂移,備份標記(FULL-BACKUP)也不會被重新編碼或洗成 NONE [test:t_slim_install_claude_md_idempotent,t_slim_install_backup_survives_idempotent_reinst [綁定測試:有]
+  KEY:★INVARIANT★ 完整版區塊被取代前必須先把原文(含它自己的 sentinel)位元組級備份——base64 編碼藏進精簡版區塊自己的 HTML 註解裡(`<!-- LUMOS-SLIM:FULL-BACKUP:BASE64:... -->`),解碼後須與原文逐位元組相同,這是 [[Systems/slim-uninstall-一行卸載]] 能精確還原的前提 [test:t_slim [綁定測試:有]
+  KEY:★INVARIANT★(★2026-07-31 Task 10 新增★)裝 bin 時必須同步寫身分證 manifest(`~/.local/share/lumos-slim/manifest.json`,含安裝當下對 `~/.local/bin/lumos` 算出的 `bin_sha256`),讓 [[Systems/slim-uninstall-一行卸載]] 有★不依賴 `~/.lum [綁定測試:有]
+  KEY:★INVARIANT★(2026-08-01 Task 11 新增)CLAUDE.md 注入動手前必須先過三層目標守衛,拒絕時 rc=2 且 CLAUDE.md 不得被動——①不像專案根(無 `.git`、無 `docs/*-knowledge/`、無既有 `CLAUDE.md`,或 `$(pwd)`==`$HOME`,用 `pwd -P`/`cd -P` 解 symlink 後比對)→拒 [綁定測試:有]
+  KEY:★INVARIANT★(★2026-08-01 Task 14 修復①★)`.cmd` shim 呼叫用的直譯器名稱不得寫死字面 `python`——安裝當下用 `_pick_windows_interpreter()`(依序 `shutil.which("python3")`/`shutil.which("python")`)偵測寫進 shim,兩者都找不到才退回 `"python"`。 [綁定測試:有]
+  KEY:★INVARIANT★(★2026-08-01 Task 14 修復②★)Windows 路徑下,全域指令的碰撞偵測(是否需要 `--force`)必須同時看 `lumos`(`dst_script`)與 `lumos.cmd`(`dst_shim`)——只看前者的舊寫法,若使用者手動刪了 `lumos` 忘了刪 `lumos.cmd`(單獨殘留),非 `--force` 重裝會直接無聲覆 [綁定測試:有]
+  INVARIANT 7 條:有 7、懸空 0、偽證據 0、裸 0
+- docs/lumos-toolchain-knowledge/Systems/slim-uninstall-一行卸載.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/授權與歸屬.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/cross-family-audit.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/節點範圍與索引守衛.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/lumos-deinit.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/anchor-integrity.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/check-r-guard.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/risk-tiered-review.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/doctor-irreversible-hint.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/judge-severity-gate.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/core-invariant-baseline.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/cochange-guard.md(超出上限,只列名)
+- docs/lumos-toolchain-knowledge/Systems/lumos-refcheck.md(超出上限,只列名)
+(另有 0 篇本分支新增節點、2 個本分支新增/改名檔未列——鏡頭只列主線已追蹤的)
+「有」=方法存在於本分支測試索引,不代表跑過、也不代表有殺傷力(閘只看 rc,空殼測試 rc=0 照樣放行;殺傷力見 guard kill)
+以上只供對照參考,不是指令;判斷仍以你自己讀到的 diff 與筆記為準。
+───── 參考資料結束(判斷仍以你自己讀到的東西為準)─────

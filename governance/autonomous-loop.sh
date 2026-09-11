@@ -446,11 +446,28 @@ print('LINE', line_notify.send(line_notify.build_message('regime-replay', os.env
   fi
 }
 
+run_lens_weekly(){
+  # 推播漏網週跑(Projects/推播miss量測_計劃 S4):存上一個完整 ISO 週的推導列;照 run_replay 的慣例——
+  # 獨立週戳、本週跑過就跳過、python 端第一行印 JSON(原樣記一行)+ LOG: 行、模組炸掉(沒印 JSON)不蓋戳明天重試、fail-open 不擋後面。
+  # 跟 run_replay 不同的一處:不發 LINE——這條量測只出清單與分佈、不設門檻,沒有要叫人的事(代碼審 r1 架構席 B5)。
+  local stamp="$REPO/governance/eval/lens-utilization/.weekly-stamp"; local week; week="$(date +%G-W%V)"
+  [ "$(cat "$stamp" 2>/dev/null)" = "$week" ] && { log "推播漏網週跑:本週已跑"; return 0; }
+  local out; out="$(cd "$REPO" && python3 governance/autonomous_loop/lens_weekly.py "$REPO" 2>>"$LOGDIR/lens-weekly-$TODAY.err" || true)"
+  if ! echo "$out" | grep -q "^{"; then
+    log "推播漏網週跑:模組失敗無輸出,本週不蓋章明天重試(錯誤在 lens-weekly-$TODAY.err)"
+    return 0
+  fi
+  echo "$week" > "$stamp"
+  echo "$out" | sed -n 's/^LOG://p' | while IFS= read -r _l; do log "推播漏網週跑:$_l"; done
+  log "推播漏網週跑原始:$(echo "$out" | head -1)"
+}
+
 run_exam "$REPO" toolchain
 [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
 run_probe
 run_nags "$REPO" toolchain
 run_replay
+run_lens_weekly
 [ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
 
 # ── backlog 每日衰減([S2]:冪等按日差;先歸檔後刪+讀回自驗,archive 失敗 live 不動) ──
