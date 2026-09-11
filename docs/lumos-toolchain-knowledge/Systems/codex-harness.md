@@ -19,7 +19,7 @@ summary: |-
   FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/hooks+hooks.json(--target codex,matcher 對照:Edit|Write→apply_patch、Agent→SubagentStart)+~/.agents/skills+AGENTS.md 同塊區塊+CODEX_HOME/agents/lumos_reviewer.toml → 使用者開一次互動 codex 按 Trust all → 之後 exec/互動兩模式 hook 都跑
   KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)
   KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)★:改了程式碼、筆記沒動 → 兩家都回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對
-  KEY:★審查席三席,點哪一席看你在審什麼(2026-09-08 Enzo 裁)★ — 散文審(設計審/文件)`lumos_reviewer`=terra+medium(預設)/ 程式碼審(一般)`lumos_reviewer_code`=terra+xhigh / 程式碼審(tier=high)`lumos_reviewer_max`=astra+xhigh。三席 developer_instructions 完全相同(框架單源),差別只在模型與推理強度。★散文審只給 medium 的理由=實測 xhigh 審 8k 字元 README 語感慢到使用者喊停;推理強度要配題目,它的成本是牆鐘時間,審查慢到讓人不想派就等於沒有這道防線★。★推翻舊宣稱「Codex 不能逐席指定模型」★——TOML 的 model / model_reasoning_effort 實測有效(反證法:指定帳號會 400 的模型→席位啟動失敗)。astra 只給高風險的理由=Plus 額度緊,全用會一輪吃光→退回沒有外家席。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]
+  KEY:★審查席三席,點哪一席看你在審什麼(2026-09-08 Enzo 裁;★2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,推理強度照舊——額度常撞上限,決策見 decisions★))★ — 散文審(設計審/文件)`lumos_reviewer`=sol+medium(預設)/ 程式碼審(一般)`lumos_reviewer_code`=sol+xhigh / 程式碼審(tier=high)`lumos_reviewer_max`=sol+xhigh。三席 developer_instructions 完全相同(框架單源),差別只在模型與推理強度。★散文審只給 medium 的理由=實測 xhigh 審 8k 字元 README 語感慢到使用者喊停;推理強度要配題目,它的成本是牆鐘時間,審查慢到讓人不想派就等於沒有這道防線★。★推翻舊宣稱「Codex 不能逐席指定模型」★——TOML 的 model / model_reasoning_effort 實測有效(反證法:指定帳號會 400 的模型→席位啟動失敗)。astra 只給高風險的理由=Plus 額度緊,全用會一輪吃光→退回沒有外家席。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]
   KEY:★三席之外還有一刀,而且可能比推理強度更重要(2026-09-08,另一 session 實測回饋)★ — 外家席跑在唯讀沙盒裡,★建不了暫存檔=造不出現場=跑不了實驗★,所以它的報告會全部標「讀碼推論,未實跑」。實例:某輪六條裡兩條 blocker 實測全中,但一條 major 它高估了——它說無上限掃描會把看門狗耗死,實際把檔案養到 68MB 跑起來只要 0.9 秒,而那個檔每天只長 1KB。★處置:席位跑不動實驗時,它的 severity 要當成「待查證」不是「已成立」,查證成本落在編排者身上★。推論:給 code 席一個可寫的沙箱,效益可能比再調高一階推理強度更大(未做,列為候選)
   KEY:★Codex 當編排者★:loop next 首輪必帶 --orchestrator codex(家族相對化:外家=非編排者那家);派工訊息對 hook 是密文(multi-agent v2 設計,改不了),鏡頭改走 dispatch-lens --arm <range> --seats N → 子代理 SubagentStart 原子領席(TTL 10 分,首行「LUMOS-LENS range=… 第 k/N 席」)→ --disarm;審查席點名 lumos_reviewer(0.153.2 選得中、0.144.1 忽略;唯讀靠父代理 --sandbox read-only,TOML sandbox_mode 不擋)
   KEY:★天生限制(工具補不了,誠實界線)★:①hook 要人按一次信任(綁 hooks.json 命令列,換檔內容不用重按;enforcement 對 Codex hook 只能報「已註冊」)②派工訊息密文③stderr 對 Codex 模型零訊號(只有 additionalContext/decision 兩通道)④codex exec 沒有 --max-turns,擋一次就是上限⑤同 repo 同窗口的無關子代理會搶 armed 席
@@ -28,6 +28,13 @@ summary: |-
   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+decisions:
+  - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+    id: d1
+    context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+    why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
+    decided: 2026-09-11
+    valid: true
 ---
 # codex-harness
 
@@ -41,7 +48,7 @@ verified_by:
 | skills | `~/.claude/skills/` symlink | `~/.agents/skills/`(開放共用目錄,只動帶 `.lumos-managed` 標記的) |
 | hook 註冊 | `~/.claude/settings.json` | `~/.codex/hooks.json`(合併器 `--target codex`) |
 | hook 腳本 | `~/.claude/hooks/*.py` | `~/.codex/hooks/*.py`(同一批檔 copy,命令列多 `--harness codex`) |
-| 審查席身分 | 派工詞自帶框架 | ★三席★ `CODEX_HOME/agents/` 下 `lumos_reviewer`(terra+medium,散文審,預設)、`lumos_reviewer_code`(terra+xhigh,程式碼審)、`lumos_reviewer_max`(astra+xhigh,tier=high);三席 `developer_instructions` 相同=框架單源,差別只在模型與推理強度。2026-09-08 實測 TOML 的 `model` / `model_reasoning_effort` 欄位有效 |
+| 審查席身分 | 派工詞自帶框架 | ★三席★ `CODEX_HOME/agents/` 下 `lumos_reviewer`(sol+medium,散文審,預設)、`lumos_reviewer_code`(sol+xhigh,程式碼審)、`lumos_reviewer_max`(sol+xhigh,tier=high);三席 `developer_instructions` 相同=框架單源,差別只在模型與推理強度。2026-09-08 實測 TOML 的 `model` / `model_reasoning_effort` 欄位有效 |
 | 逐字稿 | `~/.claude/projects/**/*.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(首行 session_meta 帶 cli_version) |
 
 ## 收工擋一次為什麼兩家一致

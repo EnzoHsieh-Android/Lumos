@@ -1005,7 +1005,7 @@ python3 scripts/lumos doctor
 
 **時機**：每次對圖譜的**實質內容更新**完成後（新增/修改 Systems、Issues、Verification、decisions、summary）。純格式修正（typo、缺欄位補登、連結修復）可豁免，但修完建議至少跑一次健康巡檢。
 
-**做法**：用 Agent tool 派出 subagent，`model: sonnet`(Codex 下用 spawn_agent 點名席位;★席位 TOML 的 model 欄位 2026-09-08 實測有效,舊的「不能逐席指定模型」已作廢★——散文審 `lumos_reviewer`(medium)、程式碼審 `lumos_reviewer_code`(xhigh)、高風險 `lumos_reviewer_max`(astra))，prompt 模板：
+**做法**：用 Agent tool 派出 subagent，`model: sonnet`(Codex 下用 spawn_agent 點名席位;★席位 TOML 的 model 欄位 2026-09-08 實測有效,舊的「不能逐席指定模型」已作廢★——散文審 `lumos_reviewer`(medium)、程式碼審 `lumos_reviewer_code`(xhigh)、高風險 `lumos_reviewer_max`(xhigh;2026-09-11 起三席模型都是 gpt-5.6-sol))，prompt 模板：
 
 ```
 你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；優先用 obsidian CLI，

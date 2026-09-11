@@ -30745,12 +30745,13 @@ def t_codex_d6_agent_toml():
     pc = _toml.loads(code.read_text(encoding="utf-8"))
     pm = _toml.loads(mx.read_text(encoding="utf-8"))
     # ★推理強度要配題目★:散文審給 medium(xhigh 慢到不想派=等於沒這道防線),程式碼審才給 xhigh
-    check("d6-三席: 散文審席 = gpt-5.6-terra + medium",
-          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "medium", str(pb))
-    check("d6-三席: 程式碼審席 = gpt-5.6-terra + xhigh",
-          pc.get("model") == "gpt-5.6-terra" and pc.get("model_reasoning_effort") == "xhigh", str(pc))
-    check("d6-三席: 高風險席 = gpt-6-astra + xhigh",
-          pm.get("model") == "gpt-6-astra" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
+    # 2026-09-11 Enzo 裁:外家席額度常撞上限,三席一律降到 Sol;推理強度照舊
+    check("d6-三席: 散文審席 = gpt-5.6-sol + medium",
+          pb.get("model") == "gpt-5.6-sol" and pb.get("model_reasoning_effort") == "medium", str(pb))
+    check("d6-三席: 程式碼審席 = gpt-5.6-sol + xhigh",
+          pc.get("model") == "gpt-5.6-sol" and pc.get("model_reasoning_effort") == "xhigh", str(pc))
+    check("d6-三席: 高風險席 = gpt-5.6-sol + xhigh",
+          pm.get("model") == "gpt-5.6-sol" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
     check("d6-三席: 三席名字互不相同、都唯讀、指示完全相同(框架單源)",
           len({pb["name"], pc["name"], pm["name"]}) == 3
           and pb.get("sandbox_mode") == pc.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"

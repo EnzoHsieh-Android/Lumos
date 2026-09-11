@@ -124,12 +124,12 @@ LUMOS-IMPACT: {base}..HEAD
    ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
       標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
       子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
-      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁)★——**點哪一席看你在審什麼**:
-> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-terra + medium)。也是預設。
-> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-terra + xhigh)。
-> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-6-astra + xhigh)。
+      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁;2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,額度常撞上限)★——**點哪一席看你在審什麼**:
+> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-sol + medium)。也是預設。
+> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-sol + xhigh)。
+> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-5.6-sol + xhigh;09-11 前是 astra)。
 > ★散文審為什麼只給 medium★:2026-09-08 實測拿 xhigh 審一份 8k 字元的 README 語感,慢到使用者當場喊停。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,而審查慢到讓人不想派,就等於沒有這道防線。**
-> ★astra 為什麼只給高風險★:Plus 方案額度很緊(查到每 5 小時 5–45 則,未實測),全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
+> ★為什麼 09-11 全部降到 Sol★:外家席額度常撞上限——當天代碼審一輪跑到一半就被擋到額度重置,換 Sol 也一樣被擋(額度整個帳號共用);降一級模型讓同一段額度撐更多席,推理強度照舊分 medium / xhigh。舊版高風險席用 astra,理由是它額度更緊、全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★Claude 編排直接叫 `codex exec` 時也要帶 `-m gpt-5.6-sol`,不然會用 Codex 預設模型★;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
 
 錨定紀律（硬性；2026-08-04 重設計）：
