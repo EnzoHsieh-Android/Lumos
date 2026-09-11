@@ -29,9 +29,11 @@ summary: |-
   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/guard-kill]]
+  KEY:[2026-09-11 多平台缺指令,Issues/多平台設定下測試指令被默默略過]沒設 run_cmd 改成★逐平台★——有指令的平台照跑,沒指令的平台那幾支列成 not_run(平台點名);全部沒指令才 no-config;原本碰到第一支沒指令就整批 no-config,連前面已判的懸空紅都被吞掉(違反上一行合約「任一懸空 → 擋」的原意)。訊息改由 _no_run_cmd_reason 給:多平台點名平台,最上層還留著 test.run_cmd 就照 2026-07-10 並存優先序講明它不生效、要搬;code-loop check 與 bound-tests 兩條路共用 [test:t_bound_tests_multiplatform_missing_cmd]
   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
+  - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
 about_code:
   - .github/workflows/ci.yml
   - scripts/hooks/pre-push

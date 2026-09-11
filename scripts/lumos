@@ -9015,13 +9015,9 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     default_plat = pdata["default_platform"]
     if pdata.get("multiplatform") and (Path(repo_root) / ".lumos" / "config.json").exists():
         # platforms 在則 test.run_cmd 不生效(load_platforms 二分慣例)→ 有宣告時告警
-        try:
-            _cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
-            if isinstance(_cfg.get("test"), dict) and _cfg["test"].get("run_cmd"):
-                print("⚠ config 同時有 platforms 與 test.run_cmd——多平台模式下 test.run_cmd 不生效",
-                      file=(sys.stderr if as_json else sys.stdout))   # [S3] --json 純度
-        except Exception:
-            pass
+        if _config_has_top_run_cmd(repo_root):   # 與合約測試閘共用同一個判斷(Issues/多平台設定下測試指令被默默略過)
+            print("⚠ config 同時有 platforms 與 test.run_cmd——多平台模式下 test.run_cmd 不生效",
+                  file=(sys.stderr if as_json else sys.stdout))   # [S3] --json 純度
     floor = 20.0
     try:
         floor = float(os.environ.get("LUMOS_KILL_TIMEOUT_FLOOR", "20"))
@@ -22376,7 +22372,10 @@ def _run_bound_tests(repo_root, items):
         pentry = plats.get(plat) or {}
         run_cmd = pentry.get("run_cmd")
         if not run_cmd:
-            return None, "no-config"
+            # ★記成「沒跑」、繼續跑別的平台★(Issues/多平台設定下測試指令被默默略過,2026-09-11):
+            # 原本碰到第一支沒指令的就整批 return no-config——其他平台有指令的也不跑,連前面已判的懸空紅也被吞掉。
+            results.append((node, plat, method, "no-cmd", f"平台 {plat} 沒設測試指令", 0.0))
+            continue
         whole = "{method}" not in run_cmd
         cmd = run_cmd if whole else run_cmd.replace("{method}", _shlex.quote(method))
         root = str(pentry.get("root") or repo_root)
@@ -22404,7 +22403,31 @@ def _run_bound_tests(repo_root, items):
                 results.append((node, plat, method, "unproven", fix, secs))
             else:
                 results.append((node, plat, method, "green", "whole-suite" if whole else "", secs))
+    if results and all(r[3] == "no-cmd" for r in results):
+        return None, _no_run_cmd_reason(repo_root, pdata.get("multiplatform"), {r[1] for r in results})
     return results, None
+
+
+def _config_has_top_run_cmd(repo_root):
+    """設定檔最上層有沒有 test.run_cmd(多平台模式下它不生效,要講給人聽)。讀不到當沒有。"""
+    try:
+        cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance(cfg, dict) and isinstance(cfg.get("test"), dict) and bool(cfg["test"].get("run_cmd"))
+
+
+def _no_run_cmd_reason(repo_root, multiplatform, plats_missing):
+    """沒設測試指令時給人看的一句話(合約測試閘兩條路共用)。
+    ★多平台時點名平台★;最上層還留著 test.run_cmd 就照 2026-07-10 guard殺傷力驗證_計劃 r3 的並存優先序講明它不生效
+    ——那條規則原本只做進 guard kill,合約測試閘沒跟上,訊息反而寫「沒設」讓人以為根本沒寫(2026-09-11 pos-ios 實撞)。"""
+    if not multiplatform:
+        return "這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd),受波及合約的測試沒有跑——合約測試閘等於沒開"
+    msg = (f"平台 {'、'.join(sorted(plats_missing))} 沒設測試指令(多平台要寫在 platforms.<平台>.run_cmd),"
+           "這些平台受波及的合約測試沒有跑")
+    if _config_has_top_run_cmd(repo_root):
+        msg += ";設定裡最上層還有 test.run_cmd,但宣告了 platforms 之後它不生效——把它搬進 platforms.<平台>.run_cmd"
+    return msg
 
 
 _EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -22512,6 +22535,18 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
                 "reason": err, "advisory": advisory}
     red = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "red"]
     unproven = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "unproven"]
+    _nocmd = [(n, p, m) for n, p, m, v, d, _ in results if v == "no-cmd"]
+    _not_run = [f"{n} [{p}:{m}]" for n, p, m in _nocmd]
+    _nc_note = _nr_reason = ""
+    if _nocmd:
+        try:
+            _mp = load_platforms(repo_root).get("multiplatform")
+        except Exception:
+            _mp = True
+        # ★原因另存一欄★(代碼審 r3 通才 F1):人讀輸出原本從 reason 用「——」切出這段,
+        # 但紅燈時 reason 前段是失敗測試輸出的尾巴,那裡也可能有「——」,就切錯段
+        _nr_reason = _no_run_cmd_reason(repo_root, _mp, {p for _n, p, _m in _nocmd})
+        _nc_note = f";另有 {len(_nocmd)} 支沒跑——" + _nr_reason
     secs = round(sum(r[5] for r in results), 1)
     ran = sum(1 for r in results if r[3] == "green")
     if red:
@@ -22521,8 +22556,8 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
         _bound_tests_log(repo_root, kind, sorted({r[0] for r in red}),
                          f"{len(red)} 紅/{len(results)}", secs=secs, calc_secs=_calc)
         return {"status": "red", "ran": ran, "red": red, "secs": secs, "calc_secs": _calc,
-                "advisory": advisory,
-                "reason": "受波及合約的測試沒過:" + ";".join(f"{n} [{m}] {d}" for n, p, m, d in red[:6])}
+                "advisory": advisory, "not_run": _not_run, "not_run_reason": _nr_reason,
+                "reason": "受波及合約的測試沒過:" + ";".join(f"{n} [{m}] {d}" for n, p, m, d in red[:6]) + _nc_note}
     # ★報綠之前先確認那個綠是真的★(消費專案接入靜默失效 [F]/[S7])。
     # 兩層證據,先強後弱:
     #   ① 逐支看「跑過的證據」——_run_bound_tests 已經對有實測輸出樣式的 profile 驗過,
@@ -22553,14 +22588,15 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
         _bound_tests_log(repo_root, "unfilterable", sorted({r[0] for r in results}),
                          "證不出測試真的跑過,綠不可信", secs=secs, calc_secs=_calc)
         return {"status": "unfilterable", "ran": 0, "red": [], "secs": secs, "calc_secs": _calc,
-                "advisory": advisory,
-                "reason": "無法確認測試真的跑過:" + _bad[0]}
+                "advisory": advisory, "not_run": _not_run, "not_run_reason": _nr_reason,
+                "reason": "無法確認測試真的跑過:" + _bad[0] + _nc_note}
     # ★耗時存成獨立欄位★(設計 [S6]):以前塞在自由文字的備註裡(「46 綠 41.8s」),
     # 回頭條件量不到;而且那個秒數只算跑測試那段,不含前面算波及的時間。分開存。
     _bound_tests_log(repo_root, "green", sorted({r[0] for r in results}),
                      f"{ran} 綠", secs=secs, calc_secs=_calc)
     return {"status": "green", "ran": ran, "red": [], "secs": secs, "calc_secs": _calc,
-            "advisory": advisory, "reason": f"受波及合約測試 {ran} 支全綠(跑 {secs}s、算 {_calc}s)"}
+            "advisory": advisory, "not_run": _not_run, "not_run_reason": _nr_reason,
+            "reason": f"受波及合約測試 {ran} 支全綠(跑 {secs}s、算 {_calc}s)" + _nc_note}
 
 
 def _bound_tests_split_by_filterable(repo_root, items):
@@ -22642,6 +22678,9 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
         for n, plat, m, d in v["red"][:6]:
             print(f"    {n}  [{m}]  {d}", file=sys.stderr)
         print("", file=sys.stderr)
+        if v.get("not_run"):
+            # 代碼審 r2 通才 F2:紅燈時也要講另一個平台沒跑(原本只有 JSON 帶 not_run,人讀輸出漏講)
+            print(f"  另外 {len(v['not_run'])} 支沒跑——{v.get('not_run_reason', '')}", file=sys.stderr)
         print("  ★這是測試紅了,不是「還沒審查」★——補一筆代碼審留痕修不好它。", file=sys.stderr)
         print("  要嘛把測試修綠,要嘛那條合約已經不成立了、去改合約:", file=sys.stderr)
         print(f"      lumos contracts <節點>", file=sys.stderr)
@@ -22655,6 +22694,11 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
     # 在終端機上看起來一樣,但那是一條說不出理由的偏離。
     if st in ("green",):
         print(f"合約測試 {v['ran']} 支全綠(跑 {v['secs']}s、算 {v.get('calc_secs', 0)}s)")
+        if v.get("not_run"):
+            print(f"提醒:受波及合約測試另有 {len(v['not_run'])} 支沒跑——{v.get('not_run_reason', '')}")
+    elif st == "no-config":
+        # 原本這個狀態一個字都不印(只有 code-loop check 那條路印一句寫死的話,多平台時還講錯)
+        print(f"提醒:{v['reason']}")   # 原因字串本身就講了「沒有跑」,前面再加一次就講兩遍(代碼審 r3 編排者自找)
     elif st == "whole-suite-deferred":
         print(f"提醒:{v['reason']}")
     elif st in _BOUND_ZERO_REASONS:
@@ -23606,7 +23650,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                     elif _st == "red":
                         print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
                 elif _st == "no-config":
-                    print("  提醒:這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd),受波及合約的測試沒有跑——合約測試閘等於沒開。")
+                    # 說明由合約測試閘給(多平台時點名平台、講最上層 test.run_cmd 不生效);原本這裡寫死一句,多平台時會講錯
+                    print(f"  提醒:{bt.get('reason')}")
         if blocked:
             # #19 S1:擋人的那一刻落一筆 hard 帳,由做判定的這一方寫,不是 hook 寫。
             # #19 S6:逐 ref 的事件要帶那一行真正的 sha(at_sha),不是盲取 HEAD

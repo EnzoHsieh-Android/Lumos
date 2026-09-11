@@ -35991,5 +35991,109 @@ def t_skill_code_loop_mentions_security_seat():
     check("SKILL 步驟 2:講明問閘會擋", "問閘" in step2 and "資安" in step2, "")
 
 
+def t_bound_tests_multiplatform_missing_cmd():
+    """[Issues/多平台設定下測試指令被默默略過]①有指令的平台照跑、沒指令的平台那幾支列成「沒跑」,不整批放棄
+    ②全部沒指令 → no-config,訊息點名缺指令的平台;最上層還留著 test.run_cmd 就講它在多平台模式不生效、要搬
+    ③懸空的綁定照樣紅,不被「沒指令」吞掉 ④code-loop check 與 bound-tests 兩條路都印得出這個說明 ⑤單平台照舊。
+    翻紅釘:把 _run_bound_tests 裡「沒指令 → 記成沒跑、繼續」改回「return None, 'no-config'」→ ①③翻紅。"""
+    import subprocess as _sp, json as _j, os as _os, shutil as _sh
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def run_l(d, *args):
+        e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None)
+        return _sp.run([sys.executable, lumos_real, *args, "--repo", str(d)], capture_output=True, text=True, env=e)
+
+    def setup(plats, top=None):
+        d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmp-"))
+        c = {"default_platform": "py", "platforms": plats}
+        if top:
+            c["test"] = {"run_cmd": top}
+        (Path(d) / ".lumos" / "config.json").write_text(_j.dumps(c), encoding="utf-8")
+        (Path(d) / "other").mkdir()
+        (Path(d) / "other" / "test_other.py").write_text("def t_x():\n    assert True\n", encoding="utf-8")
+        p = Path(d) / "docs" / "x-knowledge" / "Systems" / "Pay.md"
+        p.write_text(p.read_text(encoding="utf-8").replace("[test:t_pay_ok]", "[test:t_pay_ok] [test:other:t_x]"),
+                     encoding="utf-8")
+        return d
+
+    def btv(r):
+        try:
+            return _j.loads(r.stdout).get("bound_tests") or {}
+        except ValueError:
+            return {}
+
+    PY = {"profile": "python", "root": ".", "run_cmd": "python3 tests/run.py {method}"}
+    OTHER = {"profile": "python", "root": "other"}
+    # ① 一個平台有指令、一個沒有
+    d = setup({"py": PY, "other": OTHER})
+    r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+    check("多平台缺指令①:有指令的平台照跑(ran=1),不再整批放棄", bt.get("status") == "green" and bt.get("ran") == 1,
+          r.stdout[:700] + r.stderr[-300:])
+    rs = bt.get("reason") or ""
+    check("多平台缺指令①:沒指令的平台那支列成沒跑、點名平台",
+          "other" in rs and "沒設測試指令" in rs and any("t_x" in str(x) for x in (bt.get("not_run") or [])), r.stdout[:700])
+    _sh.rmtree(d, ignore_errors=True)
+    # ② 全部沒指令、最上層還留著 test.run_cmd
+    d = setup({"py": {"profile": "python", "root": "."}, "other": OTHER}, top="python3 tests/run.py {method}")
+    r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+    rs = bt.get("reason") or ""
+    check("多平台缺指令②:全部沒指令 → no-config", bt.get("status") == "no-config", r.stdout[:700])
+    check("多平台缺指令②:點名缺指令的平台", "py" in rs and "other" in rs, rs)
+    check("多平台缺指令②:講明最上層 test.run_cmd 在多平台模式不生效、要搬進 platforms.<平台>.run_cmd",
+          "test.run_cmd" in rs and "不生效" in rs and "platforms." in rs, rs)
+    r2 = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD")
+    out = r2.stdout + r2.stderr
+    check("多平台缺指令④:code-loop check 印的是這個說明,不是舊的「這個專案沒設測試指令」",
+          "不生效" in out and "這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd)" not in out, out[-800:])
+    r3 = run_l(d, "bound-tests", "--diff", "HEAD~1..HEAD", "--advisory")
+    check("多平台缺指令④:bound-tests 低風險那條路也講得出來(原本一個字都不印)", "不生效" in (r3.stdout + r3.stderr),
+          (r3.stdout + r3.stderr)[-500:])
+    _sh.rmtree(d, ignore_errors=True)
+    # ③ 懸空的綁定照樣紅
+    d = setup({"py": {"profile": "python", "root": "."}, "other": OTHER})
+    p = Path(d) / "docs" / "x-knowledge" / "Systems" / "Pay.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("[test:t_pay_ok]", "[test:t_ghost]"), encoding="utf-8")
+    r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+    check("多平台缺指令③:懸空綁定照樣紅,不被「沒指令」吞掉", bt.get("status") == "red" and "t_ghost" in (bt.get("reason") or ""),
+          r.stdout[:700])
+    # 代碼審 r2 通才 F2:紅燈時人讀輸出也要講另一個平台沒跑(原本只有 JSON 有,純文字與低風險那條路都漏講)
+    for extra in ([], ["--advisory"]):
+        rr = run_l(d, "bound-tests", "--diff", "HEAD~1..HEAD", *extra)
+        o = rr.stdout + rr.stderr
+        check(f"多平台缺指令③:bound-tests {' '.join(extra) or '(一般)'} 紅燈時也點名沒跑的平台",
+              "other" in o and "沒設測試指令" in o, o[-500:])
+    _sh.rmtree(d, ignore_errors=True)
+    # ⑥ 代碼審 r3 通才 F1:失敗測試自己的輸出帶「——」時,「另外幾支沒跑」那行不能切到測試輸出那段去
+    #   (原本從 reason 用「——」切,reason 前段就是失敗輸出的尾巴)
+    d = setup({"py": PY, "other": OTHER})
+    (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")
+    rp = Path(d) / "tests" / "run.py"
+    rp.write_text(rp.read_text(encoding="utf-8").replace("print('ran', m)\n", "print('ran', m)\nprint('期望是 true——實際是 false')\n"),
+                  encoding="utf-8")
+    rr = run_l(d, "bound-tests", "--diff", "HEAD~1..HEAD")
+    o = rr.stdout + rr.stderr
+    ln = next((x for x in o.splitlines() if "支沒跑" in x), "")
+    check("多平台缺指令⑥:紅燈且失敗輸出帶「——」→ 沒跑那行仍點名平台 other,不混進失敗輸出",
+          rr.returncode == 1 and "other" in ln and "沒設測試指令" in ln and "實際是 false" not in ln, o[-600:])
+    _sh.rmtree(d, ignore_errors=True)
+    # ⑤ 單平台沒指令 → 照舊 no-config,訊息仍指 test.run_cmd
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmp-"), run_cmd=None)
+    r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+    check("多平台缺指令⑤:單平台沒指令 → 照舊 no-config、訊息指 test.run_cmd",
+          bt.get("status") == "no-config" and "test.run_cmd" in (bt.get("reason") or ""), r.stdout[:700])
+    _sh.rmtree(d, ignore_errors=True)
+
+
+def t_bound_tests_no_config_message_not_doubled():
+    """代碼審 r3(編排者自找):沒設測試指令時,提醒原本是「受波及合約測試沒有跑——這個專案沒設測試指令…,
+    受波及合約的測試沒有跑…」同一件事講兩遍。改成「提醒:」直接接原因。翻紅釘:把固定前綴加回去 → 翻紅。"""
+    import subprocess as _sp, os as _os
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btnc-"), run_cmd=None)
+    e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None)
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    r = _sp.run([sys.executable, lumos_real, "bound-tests", "--diff", "HEAD~1..HEAD", "--repo", str(d)], capture_output=True, text=True, env=e)
+    o = r.stdout + r.stderr
+    check("沒設指令的提醒:「沒有跑」只講一次", o.count("沒有跑") == 1 and "沒設測試指令" in o, o[-500:])
+
 if __name__ == "__main__":
     sys.exit(main())
