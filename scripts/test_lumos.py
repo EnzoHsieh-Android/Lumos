@@ -33186,9 +33186,24 @@ def t_doctor_wrapper_sections_behave():
         gov.mkdir()
         led = root / "docs" / ".governance-log.jsonl"
 
+        # ★醒來時間要隔開★(2026-09-11):健檢有「電腦剛從睡眠醒來兩小時內不喊看門狗」的豁免,
+        # 讀的是 sysctl kern.waketime;測試沒隔開的話,這台 Mac 剛醒的兩小時內下面那條必紅(主線版一樣)。
+        # 做法:在子程序的 PATH 最前面放一支假 sysctl,平常回報「很久以前就醒了」。
+        import os as _os
+        import time as _time
+        fakebin = root / "fakebin"
+        fakebin.mkdir()
+
+        def _fake_waketime(sec):
+            f = fakebin / "sysctl"
+            f.write_text("#!/bin/sh\necho '{ sec = %d, usec = 0 } Thu Jan  1 00:00:00 1970'\n" % sec, encoding="utf-8")
+            f.chmod(0o755)
+        _fake_waketime(0)
+        env = dict(_os.environ, PATH=str(fakebin) + _os.pathsep + _os.environ.get("PATH", ""))
+
         def _doctor():
             return _sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], cwd=str(root),
-                           capture_output=True, text=True, timeout=180).stdout
+                           capture_output=True, text=True, timeout=180, env=env).stdout
 
         def _ago(h):
             return (_dt.datetime.now(_dt.timezone.utc)
@@ -33225,6 +33240,11 @@ def t_doctor_wrapper_sections_behave():
         out = _doctor()
         check("★有治理腳本但看門狗沒在跑,要喊★(不然看門狗自己死掉也沒人知道)",
               "看門狗沒在跑" in out, out[-600:])
+        # 豁免本身也釘住:一分鐘前才醒 → 排程還沒輪到,不喊
+        _fake_waketime(int(_time.time()) - 60)
+        out = _doctor()
+        check("剛從睡眠醒來兩小時內不喊看門狗(排程還沒輪到)", "看門狗沒在跑" not in out, out[-600:])
+        _fake_waketime(0)
         (gov / ".wrapper-watchdog-state").write_text("ok|x", encoding="utf-8")
         out = _doctor()
         check("看門狗剛跑過就不喊", "看門狗沒在跑" not in out, out[-600:])
