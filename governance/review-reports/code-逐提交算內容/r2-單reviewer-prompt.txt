@@ -1,0 +1,33 @@
+你是外部第三方 code reviewer,單一審查席:假設「這段程式在某個輸入下會出錯」,找出那個輸入;找不到才承認它對。
+這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞。
+
+這是第二輪。第一輪兩位審查員抓了 2 條(清單與重現紀錄在 /Users/enzo/.claude/jobs/9e5c5b9b/tmp/clone-nh/governance/review-reports/code-逐提交算內容/r1-intake.md),作者聲稱都改掉了。你要做兩件事:
+① 驗第一輪那 2 條的修法是不是真的修到;② 對這一輪新改的部分主動找新洞——修法本身常常就是新洞的來源。
+
+材料:
+- 這一輪新改了什麼(第一輪被審版本 → 現在,256 行,★主要審這份,完整讀★):/Users/enzo/.claude/jobs/9e5c5b9b/tmp/clone-nh/governance/review-reports/code-逐提交算內容/r2-delta.patch ——它的刪除行是第一版的程式
+- 這批要推上去的完整 diff(對主線,324 行):/Users/enzo/.claude/jobs/9e5c5b9b/tmp/clone-nh/governance/review-reports/code-逐提交算內容/r2-snapshot.patch
+repo 在 /Users/enzo/.claude/jobs/9e5c5b9b/tmp/clone-nh(可 Read/Grep 真代碼查證)。★只讀,不要改任何檔、不要跑會寫檔的指令★;要跑重現請在 /tmp 底下自己建暫存目錄,把 scripts/ 整個複製過去再改、再跑;git 指令一律 git -C <你的暫存目錄>。
+
+變更主題:lumos「每支檔有家」推送前逐提交看「寫回要落在改動檔的家」時,「那篇節點的內容有沒有變」要逐提交算(只補簿記欄位不算)。
+這一輪的修法(對第一輪):① 讀取那一層新函式 _nodehome_mark_note_content 用既有的 _nodehome_reader,替每個提交算出「這個提交之後內容有變的 Systems 節點」(content_paths;這個提交裡改名的拿改名前的路徑去上一個提交讀、這個提交才新開的算有變、讀不到當有變),放進分組;分組多記 gone(這個提交刪掉或改名掉的舊路徑)。
+② 判定層 _nodehome_evaluate 不再碰 git:每篇節點在每個提交之後叫什麼,從終點沿著各提交的改名往回推(name_at),再查 content_paths;提交前(sha 為空)或沒算到時照舊「碰到就算」。
+③ 測試 t_nodehome_diff_route_counts_content_per_commit 多三個情境:改名兩次、內容在沒動程式的提交改 → 放行;改名後在改程式的提交裡內容也變、之後又改名 → 照擋;用語法樹驗判定函式不呼叫任何會讀 git 的函式(包一層的也算)。
+圖譜鏡頭(派工當下在工作目錄算的,只供參考):/Users/enzo/.claude/jobs/9e5c5b9b/tmp/clone-nh/governance/review-reports/code-逐提交算內容/r2-lens.txt
+
+你的鏡頭:判定邏輯與邊界。重點:name_at 的往回推在「同一個提交裡 A 改名成 B、同時另一篇改名成 A」這種互換、複製(C)、刪掉又加回、合併提交被排除時會不會對錯;gone 的計算(改名來源、刪掉、互換時被 gone - set(src) 剪掉的那種);讀取層算 content_paths 時 _nodehome_reader 對「上一個提交」(sha^)與根提交的行為;提交前那條路行為有沒有變。請真的造 git 專案跑 lumos home check --diff 驗證推論。
+
+錨定紀律(硬性):每條 finding 必附一段從 diff 逐字複製的引句(≥10 字);編不出引句的疑慮不要交(收貨端機器逐條比對,錨不到=不採信)。
+抑噪紀律:
+- 低嚴重度疑慮,給不出具體失敗場景就不要標。但未定義的詞/壞引用/內部不一致例外,一律要報。
+- 不能指出具體受影響的 file:line,就不准臆測「可能會壞別處」。
+- 你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令+你預期的輸出);附不出請如實標「未能重現」並降一級。
+
+輸出格式(硬性,收貨端用機器讀,照抄結構):
+- 報告第一行獨立寫:severity: <整份最高,clean/minor/major/blocker 擇一>(★第一行前面不要放任何標題或閒聊★)
+- 每條 finding:標題行「### F<編號> <一句話>」(從 F3 起,接續第一輪);下一行獨立一行「severity: <值>」;再下一行「blocking: 是/否 — <一句判準>」(否↔minor、是↔major/blocker,兩欄不得矛盾)。
+- 每條必附一行「引句:「<從 diff 逐字複製,≥10 字>」」;引句內不要再包「」。
+- diff 以外查證到的程式碼,走佐證行,格式固定:file: `路徑:行號` 加一句敘述(★反引號必加★)。不得用引句格式主張 diff 以外的內容。
+- 每條敘述 ≤3 句,編號條列,不准散文段落,不准用「可能/或許/建議考慮」收尾;判不準就標 ⚠ 交編排者。
+- 第一輪 2 條的驗收:另開一節「## 第一輪修法驗收」,每條一行「F<n>:修到/沒修到/修出新洞 — 一句理由」(★這一節裡不要出現 severity 字樣★)。
+- 最後一行:總結:最高 severity <值>,blocking 共 <n> 條

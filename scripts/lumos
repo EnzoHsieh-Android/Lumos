@@ -18054,29 +18054,90 @@ def _nodehome_changes(repo_root, base, tip):
     return out
 
 
+def _nodehome_name_status(raw):
+    """git diff-tree --name-status -z 的輸出 → (改到的路徑, 改名新路徑→舊路徑, 刪掉或改名掉的舊路徑)。"""
+    toks, paths, src, gone, i = _nodehome_split_z(raw), set(), {}, set(), 0
+    while i < len(toks):
+        code = toks[i][:1]
+        if code in ("R", "C") and i + 2 < len(toks):
+            paths.update((nfc(toks[i + 1]), nfc(toks[i + 2])))
+            src[nfc(toks[i + 2])] = nfc(toks[i + 1])
+            if code == "R":
+                gone.add(nfc(toks[i + 1]))
+            i += 3
+        elif i + 1 < len(toks):
+            paths.add(nfc(toks[i + 1]))
+            if code == "D":
+                gone.add(nfc(toks[i + 1]))
+            i += 2
+        else:
+            break
+    return paths, src, gone - set(src)
+
+
 def _nodehome_commit_groups(repo_root, base, tip):
-    """推送前:範圍裡每個非合併提交各自改了哪些路徑(改名兩邊都算)。git 失敗回 None(退回整批一個提交)。"""
-    raw = _nodehome_git(repo_root, "rev-list", "--reverse", "--no-merges", f"{base}..{tip}" if base else tip)
+    """推送前:範圍裡每個提交各自改了哪些路徑(改名兩邊都算)。git 失敗回 None(退回整批一個提交)。
+    每個提交回 {sha, parents, paths, src, gone}:src=這個提交裡改名的新路徑→舊路徑、gone=刪掉或改名掉的舊路徑。
+    ★合併提交也要查★(代碼審 r3 單reviewer:原本整個排除,解衝突時在合併提交裡順手寫的說明、改的程式都沒人看):
+    只算它自己多改的——跟每一個上一版都不一樣的路徑;照搬某一邊進來的,那一邊的提交已經各自查過。"""
+    raw = _nodehome_git(repo_root, "rev-list", "--reverse", "--parents", f"{base}..{tip}" if base else tip)
     if raw is None:
         return None
     out = []
-    for sha in raw.decode("ascii", errors="replace").split():
-        r = _nodehome_git(repo_root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-z", "-M", "-r", sha)
-        if r is None:
-            return None
-        toks, paths, i = _nodehome_split_z(r), set(), 0
-        while i < len(toks):
-            code = toks[i][:1]
-            if code in ("R", "C") and i + 2 < len(toks):
-                paths.update((nfc(toks[i + 1]), nfc(toks[i + 2])))
-                i += 3
-            elif i + 1 < len(toks):
-                paths.add(nfc(toks[i + 1]))
-                i += 2
-            else:
-                break
-        out.append(paths)
+    for line in raw.decode("ascii", errors="replace").splitlines():
+        shas = line.split()
+        if not shas:
+            continue
+        sha, parents = shas[0], shas[1:]
+        if len(parents) <= 1:
+            r = _nodehome_git(repo_root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-z", "-M", "-r", sha)
+            if r is None:
+                return None
+            paths, src, gone = _nodehome_name_status(r)
+        else:
+            per = []
+            for p in parents:
+                r = _nodehome_git(repo_root, "diff-tree", "--no-commit-id", "--name-status", "-z", "-M", "-r", p, sha)
+                if r is None:
+                    return None
+                per.append(_nodehome_name_status(r))
+            paths = set.intersection(*(x[0] for x in per))
+            src = {k: v for k, v in per[0][1].items() if k in paths}
+            gone = set.intersection(*(x[2] for x in per))
+        out.append({"sha": sha, "parents": parents, "paths": paths, "src": src, "gone": gone})
     return out
+
+
+def _nodehome_mark_note_content(repo_root, groups, vault_rel):
+    """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
+    計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
+    {這個提交之後的路徑: {type, status, own}},判定那層只在同一個提交裡比「管的檔」跟「改的程式」,不必跨提交追名字
+    (合併進來的平行分支、一次推送改名好幾次都不影響——代碼審 r2 單reviewer)。這個提交裡改名的,拿改名前的路徑去
+    上一個提交讀;這個提交才新開的算有變;讀不到一律當有變,照原本那樣查。"""
+    pre = vault_rel + "/Systems/"
+    for g in groups or ():
+        after = _nodehome_reader(repo_root, g["sha"])
+        # 上一版用「這個提交的第幾個上一版」讀(sha^1、sha^2):跟起點那一側的讀取分開算,不跟它搶共用
+        befores = [_nodehome_reader(repo_root, f"{g['sha']}^{i + 1}") for i in range(len(g["parents"]))]
+        notes = {}
+        for p in g["paths"]:
+            if not (p.startswith(pre) and p.endswith(".md")) or p in g["gone"]:
+                continue
+            new = after(p)
+            n = _nodehome_parse_note(new) if new is not None else None
+            olds = [b(g["src"].get(p, p)) for b in befores]
+            olds = [_nodehome_parse_note(o) for o in olds if o is not None]
+            if n is not None and any(o["sig"] == n["sig"] for o in olds):
+                continue                                    # 跟上一版一樣(只補簿記;合併時照搬某一邊也算):不算這個提交寫回
+            own, statuses = set(), set()
+            for x in [n] + olds:
+                if x is not None:
+                    own |= {k for k in (_nodehome_key(v) for v in x["about"]) if k}
+                    statuses.add(x["status"])
+            # 狀態看這個提交前後兩版(代碼審 r3 單reviewer:只看之後的,「這個提交降成 planned 順便寫、下一個再升回來」就繞過了)
+            notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
+        g["content_notes"] = notes
+    return groups
 
 
 def _nodehome_golive(repo_root, tip):
@@ -18194,15 +18255,32 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
             blocks.append(("home-removed", (f, homesB[f])))
     if code_touched:
         cc = set(content_changed)
-        if groups is None:
-            groups = [{p for _c, o, n in changes for p in (o, n) if p}]
+        if groups is None:                                  # 提交前:整批就是一個提交(內容有沒有變已經是這個提交的)
+            groups = [{"sha": None, "paths": {p for _c, o, n in changes for p in (o, n) if p}, "src": {}}]
         routed, wb_files, wb_notes = {}, set(), set()
+        per_commit = {}                                     # 推送前:{那個提交裡的節點名: 寫回卻不是家的那幾支改動檔}
         for g in groups:
-            g_code = {p for p in g if p in reqN or p in reqB}
+            g_paths = g["paths"]
+            g_code = {p for p in g_paths if p in reqN or p in reqB}
             if not g_code:
                 continue                                    # 純整理節點的提交:規則三不管 [S11]
+            if g["sha"] and "content_notes" in g:
+                # ★推送前:判定在那個提交自己裡面做★——那篇的內容是不是在這個提交改的(只補簿記不算)、它在這個提交前後管的檔
+                # 跟這個提交改的程式對不對得上;不跨提交追名字(2026-09-11 平板 POS 第一次真推送踩到的誤擋、代碼審兩輪抓到的改名與合併)
+                for p, info in g["content_notes"].items():
+                    rel = p[len(vpre):]
+                    # 能當家:這個提交前後任一版是,或推送終點那一版是(擋「先降格、在規劃中時寫、再升回來」三步走)
+                    tip_home = rel in N.notes and N.notes[rel]["status"] in _NODEHOME_HOME_STATUSES
+                    if info["type"] != "system" or not (info["statuses"] & set(_NODEHOME_HOME_STATUSES) or tip_home):
+                        continue
+                    wb_files |= g_code
+                    wb_notes.add(rel)
+                    if not (info["own"] & g_code):
+                        per_commit.setdefault(rel, set()).update(g_code)
+                continue
+            # 提交前(整批就是一個提交)或讀取層沒算到:碰到就算,家看起點與終點兩版
             g_notes = {rel for rel in content_changed
-                       if (vpre + rel) in g or (vpre + route_src.get(rel, rel)) in g}
+                       if (vpre + rel) in g_paths or (vpre + route_src.get(rel, rel)) in g_paths}
             for rel in g_notes:
                 routed.setdefault(rel, set()).update(g_code)
             if g_notes:
@@ -18216,6 +18294,9 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
             if not (mine & routed[rel]):
                 blocks.append(("route", (rel, sorted(routed[rel]))))
                 pairs.extend((f, rel) for f in sorted(routed[rel]))
+        for rel, files in sorted(per_commit.items()):
+            blocks.append(("route", (rel, sorted(files))))
+            pairs.extend((f, rel) for f in sorted(files))
         legacy = sorted(f for f in code_changed - code_added if not homesN.get(f))
         for f in legacy:
             if f in wb_files:
@@ -18302,7 +18383,8 @@ def _nodehome_render(res, homes, side, cfg, mode_word):
         L.append("")
         L.append(f"■ 這次寫了說明的節點,不是任何一支改動檔的家({len(routes)} 篇):")
         for rel, files in routes[:cap]:
-            L.append(f"  {stem(rel)}(這次改的檔:{'、'.join(files[:5])}{' …' if len(files) > 5 else ''})")
+            L.append(f"  {stem(rel)}" + ("(這是那個提交裡的名字,之後改名或刪掉了)" if rel not in side.notes else "")
+                     + f"(這次改的檔:{'、'.join(files[:5])}{' …' if len(files) > 5 else ''})")
         L.append("  兩條路:把說明寫進那些檔的家;或這篇真的在講那支檔,就把檔加進它管的範圍(明文、審得到,超過上限要寫負責範圍):")
         L.append("    lumos append <節點> about_code <檔>")
     foreign = [(r, f, h, False) for r, f, h in by.get("foreign", [])] + [(r, f, h, True) for r, f, h in by.get("foreign-awakened", [])]
@@ -18477,7 +18559,7 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
         print("每支檔有家:git 讀不到檔案清單,跳過(fail-open)", file=sys.stderr)
         return 0
     skip = frozenset() if _is_toolchain_repo(root) else _vendored_state(root, "" if staged else tip_where)[0]
-    groups = None if staged else _nodehome_commit_groups(root, base_where, tip_where)
+    groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel)
     res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups)
     homesN, _own = _nodehome_homes(root, N)
     lines = _nodehome_render(res, homesN, N, cfg, mode_word)
