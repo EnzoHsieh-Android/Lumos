@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-07-27
+updated: 2026-09-11
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -21,6 +21,7 @@ summary: |-
   KEY:SQL(pypi)——sqlfluff(支援 T-SQL 等多方言,免連DB靜態解析+auto-fix;LandmarkMember/KDS 的 .sql 適用)
   KEY:[2026-09-08 iOS/Node 補棧,★兩棧都尚無消費端實跑★,[[Projects/iOS與Node後端補棧_計劃]]]Swift/iOS(github)——SwiftLint(github:realm/SwiftLint,風格+實踐;★內建 `--reporter sarif` 可直接進 lint.json★)｜SwiftFormat(github:nicklockwood/SwiftFormat,格式)或 swift-format(Apple 官方,Swift 6 起隨 toolchain)二選一｜Periphery(github:peripheryapp/periphery,死碼)｜Harmonize(架構 lint,已列);SwiftPM 依賴無中央 registry→lint-watch 用 github 座標盯 release
   KEY:[2026-09-08]Node.js/TS 後端(npm)——eslint+typescript-eslint(基石;SARIF 走 @microsoft/eslint-formatter-sarif,`-f @microsoft/sarif`)｜eslint-plugin-n(Node 專用:未處理 rejection/廢棄 API/同步 fs)｜eslint-plugin-security(注入/regex 回溯/child_process)｜@biomejs/biome(★2.4 起原生 `--reporter=sarif`★,2026 首個 minor)｜knip(專案級死 export/死依賴,ESLint 看不到跨檔)｜dependency-cruiser(分層,已列);跟 Vue 段共用 eslint 家族但插件不同,別把 eslint-plugin-vue 裝進純後端
+  KEY:[2026-09-11 Python 補棧,★首個消費端建置中未實跑★,[[Projects/Python補棧_計劃]]]Python(pypi)——ruff(pypi:ruff,lint+format 基石;★內建 --output-format sarif 直接進 lint.json★;ASYNC/RUF006/S113/RUF032/DTZ 族要在 select 明開,預設只開 E/F)｜mypy(strict,無 SARIF 只 --output json,當 CI 閘)｜bandit(資安,bandit[sarif] 才有 -f sarif,與 ruff S 族重疊)｜pip-audit(依賴漏洞,無 SARIF)｜ty(Astral 新型別檢查器,0.0.x beta 無 SARIF,雷達);格式支援 2026-09-11 本機實跑 --help 核對
   KEY:[2026-07-26 補]架構 lint 品類(抽象軸,AI 世代新主流)——架構規則寫成單元測試,AI 違反→測試翻紅→agent 拿確定性回饋自修:Konsist(Kotlin,github:LemonAppDev/konsist)｜ArchUnitNET(C#,nuget:ArchUnitNET)｜Harmonize(Swift,2026 明打 AI 護欄定位)。★lumos 天作之合:架構規則=可執行測試=可被 [test:] 綁→分層邊界這類散文合約可升正式 invariant 走完整合約鏈★
   KEY:[2026-07-26 補]ast-grep(跨語言 AST 結構比對引擎,github:ast-grep/ast-grep)——「事故→固化機械規則」的升級引擎:pitfalls 手刻 regex 升 AST 級(誤報少表達力強);CodeRabbit 拿它當底層,官方有 llms.txt 供 LLM 寫規則(誠實:官方自認 AI 生成規則錯誤率仍高,需自修迴圈)。走既有 .lumos/lint.json SARIF 橋接=外部 linter 不碰零依賴家規
   KEY:2026 現況三鐵則——①前端:oxlint/Biome 崛起但 eslint-plugin-vue 自帶compiler產改造AST,oxlint 官方明說不完整相容→Vue專案 ESLint 仍主力,oxlint 當前置加速器(eslint-plugin-oxlint 讓ESLint跳過已覆蓋規則) ②.NET:.NET10 起 Roslyn analyzer 是 SDK 核心,NetAnalyzers 內建,第三方疊加 ③Kotlin:detekt(bug/實踐)+ktlint或ktfmt(格式)分工,別重複
@@ -30,6 +31,7 @@ about_code:
   - configs/detekt/android.yml
 verified_by:
   - "[[Verification/2026-09-08_iOS與Node補棧合成樣本測試]]"
+  - "[[Verification/2026-09-11_Python補棧合成樣本測試]]"
 ---
 # linter 精選目錄——各語言該掌握的 linter（2026-07 社群現況）
 
@@ -120,6 +122,20 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 | dependency-cruiser | 架構 lint（見架構 lint 品類） | 已列 |
 
 **跟 Vue 段的關係**：同一個 eslint 家族、不同插件——純後端**不要**裝 eslint-plugin-vue；monorepo 前後端各自一份 flat config。`lumos pitfalls --diff` 分前後端靠 `package.json` 的依賴（有前端框架＝前端），不靠副檔名。
+
+## Python（registry: `pypi:<pkg>`；2026-09-11 補，★首個消費端＝自動交易專案建置中，尚未實跑★）
+
+輸出格式全部在本機實跑 `--help` 核對（ruff 0.16.7、bandit 1.x、mypy 2.3.1、ty 0.0.80、pip-audit 2.10.1）。
+
+| linter | 用途 | 備註 |
+|---|---|---|
+| **ruff** | 基石：lint＋format 一支包辦（取代 flake8／isort／pyupgrade／black 大半）；async 紀律（`ASYNC` 族）、懸空 task（`RUF006`）、requests 無逾時（`S113`）、Decimal 用 float 建（`RUF032`）、naive datetime（`DTZ`）都靠它 | `pypi:ruff`；★內建 `--output-format sarif`★，直接進 `.lumos/lint.json`：`{"py": ["ruff check --output-format sarif -o {LINT_SARIF_OUT} src"]}`；⚠ 預設只開 `E`／`F`，其他族要在 `select` 明確開（清單見 python-idioms 接線表） |
+| **mypy** | 型別檢查（`strict = true`）；外部輸入邊界、`Any` 擴散、None 沒處理 | `pypi:mypy`；★無 SARIF★（`--output json`），當 CI 閘，不進 lint.json |
+| ty | Astral 出的新型別檢查器（Rust，快） | `pypi:ty`；0.0.x 仍在 beta，輸出只有 full／concise／gitlab／github，★無 SARIF★；生態雷達，先不當主力 |
+| **bandit** | 資安：pickle、shell=True、寫死密碼、弱雜湊 | `pypi:bandit`；裝 `bandit[sarif]` 才有 `-f sarif`；與 ruff 的 `S` 族大量重疊，二擇一或 bandit 只跑 CI |
+| pip-audit | 依賴已知漏洞（PyPI 漏洞資料庫） | `pypi:pip-audit`；★無 SARIF★（json／cyclonedx／markdown），CI 報表 |
+
+**跟 SQL 段的關係**：registry 同是 `pypi:`（sqlfluff 也住 PyPI），lint-watch 盯版本走同一種座標。
 
 ## 架構 lint（抽象軸；2026-07-26 補——AI 世代新品類）
 
