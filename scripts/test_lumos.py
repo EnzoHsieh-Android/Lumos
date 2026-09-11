@@ -36344,10 +36344,10 @@ def t_lens_recount_search_zero_hits():
             + pair("g", 'lumos search "被濾" | grep Systems', "  1. Systems/a.md"))
     s = m.search_events_claude(objs)
     zero = sorted(x["query"] for x in s if x["verdict"] == "zero")
-    check("零命中①:排序文字(接尾字、接 | head)、--json、舊模式三種都認", zero == ["zq 一", "zq 三", "zq 二"], str(s))
+    check("零命中①:排序文字(接尾字、接 | head)、--json、舊模式三種都認;串兩個且計數行對得上 → 依序配對", zero == ["x", "zq 一", "zq 三", "zq 二"], str(s))
     check("零命中②:有命中的判 hit", any(x["query"] == "有 命中" and x["verdict"] == "hit" for x in s), str(s))
     und = sum(1 for x in s if x["verdict"] == "undetermined")
-    check("零命中③:串兩個、背景執行、計數行被濾掉 → 判不出", und == 3 and len(s) == 7, str(s))
+    check("零命中③:背景執行、計數行被濾掉 → 判不出;串兩個的算兩筆", und == 2 and len(s) == 8, str(s))
 
 
 def t_lens_recount_weekly_archive():
@@ -36577,10 +36577,10 @@ def t_lens_recount_code_review_r1_rows():
     check("代碼審r1④:總預算用完 → 不叫 impact 也不叫 git;分類判不出、筆記當存在(不掉進事後才有)、git_skipped 計數",
           calls == [] and got == ((None, False), True) and bud["hit"] and bud["git_skipped"] == 1, f"calls={calls} got={got} bud={bud}")
     segs = m._search_segments('lumos search "zero"\nlumos search "hit"')
-    ev2 = m._search_event('lumos search "zero"\nlumos search "hit"', "(共 0 篇候選)", False, None)
+    ev2 = m._search_events('lumos search "zero"\nlumos search "hit"', "(共 0 篇候選)", False, None)
     one = m._search_segments('lumos search "a;b|c" 2>/dev/null | head -5')
     check("代碼審r1⑤:換行分隔兩個 search → 兩段、判不出;引號裡的 ; | 不切、重導向不算查詢詞",
-          len(segs) == 2 and ev2["verdict"] == "undetermined" and one == [["a;b|c"]], f"{segs} {ev2} {one}")
+          len(segs) == 2 and [e["verdict"] for e in ev2] == ["undetermined", "undetermined"] and one == [["a;b|c"]], f"{segs} {ev2} {one}")
     objs = [{"type": "user", "timestamp": "2026-09-08T01:00:00Z", "message": {"content": "hi"}},
             {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": "/r/src/a.py"}}]}}]
     e_ok = m.analyze_claude(objs, "t-knowledge", {"/r"}, hook_ok=lambda f: True)["edits"]
@@ -36598,10 +36598,10 @@ def t_lens_recount_code_review_r2():
     m = _lens_mod()
     cmd = 'lumos search \\\n  "作廢 收回"'
     segs = m._search_segments(cmd)
-    ev = m._search_event(cmd, "(共 0 篇候選,照相關性排序)", False, None)
+    ev = m._search_events(cmd, "(共 0 篇候選,照相關性排序)", False, None)
     two = m._search_segments('lumos search a \\\n  && lumos search b')
     check("代碼審r2①:反斜線續行接回同一條指令,查詢詞完整、零命中記的是真的查詢字串",
-          segs == [["作廢", "收回"]] and ev == {"ts": None, "query": "作廢 收回", "verdict": "zero"} and two == [["a"], ["b"]], f"{segs} {ev} {two}")
+          segs == [["作廢 收回"]] and ev == [{"ts": None, "query": "作廢 收回", "verdict": "zero"}] and two == [["a"], ["b"]], f"{segs} {ev} {two}")
     sh = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
     blk = sh[sh.index("run_lens_weekly(){"):sh.index("\n}\n", sh.index("run_lens_weekly(){"))]
     check("代碼審r2②:週跑先逐行記 LOG: 再記原始 JSON(同 run_replay)",
@@ -38070,6 +38070,194 @@ def t_nodehome_diff_route_counts_content_per_commit():
     hit = sorted(_calls(fn) & io)
     check("④判定函式不呼叫任何會讀 git 的函式(包一層的也算)", not hit, repr(hit))
 
+def t_lens_recount_search_multi():
+    """[推播miss量測 S3,推送後修的逃逸] 一次指令串多個 lumos search:每個搜尋各算一筆;輸出裡計數行數跟搜尋數一樣就依序配對;
+    不一樣就各記判不出,但看得到的零命中計數行(不多於搜尋數時)記在第一筆的 zero_unattributed;查詢詞是變數(迴圈)
+    不記假查詢詞、照樣數看得到的零命中;計數行多於搜尋數又沒有變數 → 不信、不數。週檔摘要與本機查詢檔都帶這個數。
+    翻紅釘:改回「整個呼叫只記第一個查詢」→ ①翻紅;拿掉配不到查詢的零命中計數 → ②翻紅;變數查詢照字面記 → ③翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    Z, H = "(共 0 篇候選,照相關性排序)", "(共 3 篇候選,照相關性排序)"
+    sep = 'scripts/lumos search "maestro" 2>&1 | head -40; echo "-----"; scripts/lumos search "截圖 比對" | head -30; echo "-----"; scripts/lumos search "基準圖" | head -20'
+    ev = m._search_events(sep, "  1.0 Projects/a.md\n" + H + "\n-----\n" + H + "\n-----\n提醒:0 筆\n" + Z, False, "T")
+    check("多搜尋①:三個搜尋三筆、計數行數對得上就依序配對", [(e["query"], e["verdict"]) for e in ev] == [("maestro", "hit"), ("截圖 比對", "hit"), ("基準圖", "zero")], str(ev))
+    ev = m._search_events(sep, "  1.0 Projects/a.md\n-----\n  2.0 Projects/b.md\n-----\n提醒:0 筆\n" + Z, False, "T")
+    check("多搜尋②:有命中那兩段計數行被 head 切掉 → 三筆都判不出,看得到的 1 個零命中記在第一筆", [e["verdict"] for e in ev] == ["undetermined"] * 3
+          and ev[0].get("zero_unattributed") == 1 and "zero_unattributed" not in ev[1], str(ev))
+    ev = m._search_events('for q in 甲乙 "丙 丁"; do lumos search "$q"; done', Z + "\n" + H, False, "T")
+    check("多搜尋③:查詢詞是變數 → 不記假查詢詞、判不出,看得到的零命中照數", len(ev) == 1 and ev[0]["query"] == "" and ev[0]["verdict"] == "undetermined"
+          and ev[0].get("zero_unattributed") == 1, str(ev))
+    ev = m._search_events('lumos search a; lumos search b; cat old.log', Z + "\n" + Z + "\n" + Z, False, "T")
+    check("多搜尋④:計數行多於搜尋數又沒有變數 → 不信、不數零命中", [e["verdict"] for e in ev] == ["undetermined"] * 2 and not any(e.get("zero_unattributed") for e in ev), str(ev))
+    ev = m._search_events('lumos search "只 一個"', Z, False, "T")
+    check("多搜尋⑤:只有一個搜尋照舊判", ev == [{"ts": "T", "query": "只 一個", "verdict": "zero"}], str(ev))
+    arc = Path(tempfile.mkdtemp(prefix="lensmulti-"))
+    import json as _j
+    _w, lf = m.write_archive({"summary": {}, "budget_hit": False, "rows": [],
+                              "searches": [{"ts": "T", "query": "", "verdict": "undetermined", "zero_unattributed": 2}, {"ts": "T", "query": "q1", "verdict": "zero"}]}, "2026-W37", arc)
+    lq = _j.loads(lf.read_text(encoding="utf-8"))
+    check("多搜尋⑥:本機查詢檔記配不到查詢的零命中數、查詢清單不收空字串", lq.get("zero_unattributed") == 2 and lq.get("zero_hit_queries") == ["q1"], str(lq))
+
+def t_lens_recount_search_multi_r1():
+    """代碼審 code-零命中量測修正 r1 折入:①計數只認工具自己輸出的行(排序/舊模式行首字樣、整行 JSON),同一次呼叫 grep 到的檔案內容
+    (例如測試檔裡的 "candidates": 0 治具)不算——迴圈多算一倍的那個重現(通才 A1;架構 B1 一套判法)②xargs 逐行跑搜尋 → 查詢詞不確定、
+    看得到的零命中照數(通才 A2)③單一 & 串兩個搜尋 → 兩筆、查詢詞各自乾淨;背景同時跑、輸出會交錯,不依序配對(通才 A3)
+    ④單一搜尋的判定跟多搜尋的計數出自同一支(整段 JSON 美化輸出也認)。
+    翻紅釘:JSON 改回不錨定行首的正規式 → ①翻紅;拿掉 xargs 判斷 → ②翻紅;拿掉單一 & 拆分 → ③翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    Z, H = "(共 0 篇候選,照相關性排序)", "(共 3 篇候選,照相關性排序)"
+    grep_out = Z + '\n36330:            + pair("b", \'scripts/lumos search "zq 二" --json\', \'{"results": [], "candidates": 0, "hidden_superseded": 0}\')'
+    ev = m._search_events('for q in "$terms"; do lumos search "$q"; done; grep -n "\\"candidates\\": 0" scripts/test_lumos.py', grep_out, False, "T")
+    check("r1①:迴圈加 grep 到檔案裡的 candidates:0 → 只算真的那 1 次零命中", len(ev) == 1 and ev[0].get("zero_unattributed") == 1, str(ev))
+    ev = m._search_events('printf "foo\\nbar\\n" | xargs -I{} lumos search {}', Z + "\n" + H, False, "T")
+    check("r1②:xargs 逐行跑 → 查詢詞不確定、判不出、看得到的零命中照數", len(ev) == 1 and ev[0]["query"] == "" and ev[0]["verdict"] == "undetermined"
+          and ev[0].get("zero_unattributed") == 1, str(ev))
+    ev = m._search_events('lumos search "x" & lumos search "y"', H + "\n" + Z, False, "T")
+    check("r1③:單一 & 串兩個 → 兩筆、查詢詞乾淨、不依序配對、零命中照數", [e["query"] for e in ev] == ["x", "y"] and [e["verdict"] for e in ev] == ["undetermined"] * 2
+          and ev[0].get("zero_unattributed") == 1, str(ev))
+    pretty = '{\n  "results": [],\n  "candidates": 0\n}'
+    check("r1④:單一搜尋的判定跟計數同源(整段美化 JSON、行首字樣、只有結果行)", m._search_verdict(pretty) == "zero" and m._search_counts(pretty) == [0]
+          and m._search_verdict(H) == "hit" and m._search_verdict("  11.902  Projects/x.md") == "hit" and m._search_counts("  11.902  Projects/x.md") == [], "")
+
+def t_lens_recount_search_multi_r1_codex():
+    """代碼審 code-零命中量測修正 r1 外家席折入:①位置參數 `$1`、指令替換 `$(…)` 也是變數查詢(C1)②單引號裡的 `$FOO` 是字面、不是變數(C2)
+    ③帶值旗標(--path、--top)的值不併進查詢詞;哪些旗標帶值跟 `lumos search -h` 對得上(C3,防漂移)④單一搜尋但輸出裡有不只一行計數
+    (同一次呼叫另外印了舊輸出)→ 判不出,不拿第一行判(C4)⑤查詢字串檔要寫進 git 工作樹裡沒被 gitignore 的位置 → 不寫、講明(C5)。
+    翻紅釘:變數判斷改回只認字母開頭 → ①翻紅;拿掉單引號剝除 → ②翻紅;拿掉旗標值略過 → ③翻紅;單一搜尋改回拿第一行計數 → ④翻紅;拿掉可提交位置檢查 → ⑤翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    import subprocess as _sp, json as _j
+    m = _lens_mod()
+    Z = '{"results": [], "candidates": 0, "hidden_superseded": 0}'
+    e1 = m._search_events('f(){ python3 scripts/lumos search "$1" --json; }; f __NO_HIT__', Z, False, "T")
+    e1b = m._search_events('lumos search "$(cat q.txt)"', Z, False, "T")
+    check("外家①:位置參數、指令替換也是變數查詢 → 不記假查詢詞", e1[0]["query"] == "" and e1b[0]["query"] == "", f"{e1} {e1b}")
+    e2 = m._search_events("python3 scripts/lumos search '$ZZZQXJ_NO_HIT' --json", Z, False, "T")
+    check("外家②:單引號裡的 $FOO 是字面查詢(判零命中、照字面記)", e2 == [{"ts": "T", "query": "$ZZZQXJ_NO_HIT", "verdict": "zero"}], str(e2))
+    e3 = m._search_events("python3 scripts/lumos search __NO_HIT_FLAG__ --path Systems --top 2 --json", Z, False, "T")
+    import os as _os, re as _re
+    helptxt = _sp.run([sys.executable, GRAPHCTL, "search", "-h"], capture_output=True, text=True, env=dict(_os.environ, NO_COLOR="1")).stdout
+    helptxt = _re.sub(r"\x1b\[[0-9;]*m", "", helptxt)
+    with_val = set(_re.findall(r"(?m)^\s+(--[a-z][a-z-]*) [A-Z_]+\s", helptxt))
+    check("外家③:--path、--top 的值不併進查詢詞;帶值旗標清單跟 lumos search -h 一致", e3[0]["query"] == "__NO_HIT_FLAG__" and with_val and with_val == set(m._SEARCH_VALUE_FLAGS),
+          f"{e3} help={sorted(with_val)} code={sorted(m._SEARCH_VALUE_FLAGS)}")
+    e4 = m._search_events('sed -n 5572p old-raw.txt; python3 scripts/lumos search "推播 miss" --json', Z + '\n{"results": [1], "candidates": 141}', False, "T")
+    check("外家④:單一搜尋但輸出有兩行計數 → 判不出,不拿第一行", e4[0]["verdict"] == "undetermined" and not e4[0].get("zero_unattributed"), str(e4))
+    repo = Path(tempfile.mkdtemp(prefix="lensc5-")).resolve()
+    _sp.run(["git", "init", "-q", str(repo)])
+    rep = {"summary": {}, "budget_hit": False, "rows": [], "searches": [{"ts": "T", "query": "秘密查詢", "verdict": "zero"}]}
+    import io as _io, contextlib as _cl
+    err = _io.StringIO()
+    with _cl.redirect_stderr(err):
+        _w, lf = m.write_archive(rep, "2026-W37", repo / "arc")
+    check("外家⑤:查詢字串檔的位置會進版控 → 不寫、stderr 講明", lf is None and not (repo / "arc" / "local" / "2026-W37-queries.json").exists()
+          and "gitignore" in err.getvalue(), err.getvalue()[-200:])
+    (repo / ".gitignore").write_text("arc/local/\n", encoding="utf-8")
+    _w, lf2 = m.write_archive(rep, "2026-W37", repo / "arc")
+    check("外家⑤:那個位置有 gitignore → 照寫", lf2 is not None and "秘密查詢" in lf2.read_text(encoding="utf-8"), str(lf2))
+
+def t_lens_recount_search_heredoc_body():
+    """代碼審 code-零命中量測修正 r1 編排者自找:heredoc 的內容是餵給別的程式的文字(例如 python 腳本裡組出來交給 subprocess 的搜尋指令),
+    不是殼層指令——不算搜尋、不記查詢詞;heredoc 結束之後的指令照常算(真資料裡整段 python 程式碼被當成查詢詞)。
+    翻紅釘:拿掉 heredoc 內容略過 → 翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    cmd = ("cd /r; python3 - <<'PY'\ncmd='python3 scripts/lumos search \"推播 miss\" & wait'\nr=subprocess.run(cmd)\nPY\n"
+           "python3 scripts/lumos search \"真的 查詢\" 2>&1 | head -5\ncat > x.md <<-EOF\n\tlumos search 文件裡的例子\n\tEOF\nlumos search 最後一個")
+    ev = m._search_events(cmd, None, False, "T")
+    check("heredoc 內容不算搜尋、結束後的照算", [e["query"] for e in ev] == ["真的 查詢", "最後一個"], str(ev))
+
+def t_lens_recount_search_quoted_mentions():
+    """代碼審 code-零命中量測修正 r1 編排者自找:引號裡提到 lumos search(python -c 腳本、echo、提交訊息)不是真的跑了搜尋——
+    判斷用殼層真正的切詞(引號內整段一個詞),不再用把引號內容拆成單字的那份(真資料裡外家席的 python -c 實驗被當成搜尋、整段程式碼記成查詢詞)。
+    同時多詞查詢記成原樣一個字串,單引號裡的 $FOO 照字面記。翻紅釘:改回拆成單字的切詞 → 翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    for c in ['git commit -m "fix: lumos search 零命中不再少算"', "python3 -c 'cmd=\"python3 scripts/lumos search x & lumos search y\"; print(cmd)'",
+              'echo "記得跑 lumos search 看看"']:
+        ev = m._search_events(c, "(共 0 篇候選,照相關性排序)", False, "T")
+        check(f"引號裡提到不算搜尋: {c[:30]}", ev == [], str(ev))
+    ev = m._search_events("lumos search '$LITERAL' \"多 詞 查詢\"", "(共 0 篇候選,照相關性排序)", False, "T")
+    check("真的搜尋照算、查詢詞照原樣(單引號 $ 是字面)", ev == [{"ts": "T", "query": "$LITERAL 多 詞 查詢", "verdict": "zero"}], str(ev))
+
+def t_lens_recount_search_r2():
+    """代碼審 code-零命中量測修正 r2 折入(外家六條、架構兩條):①引號裡的 `<<EOF` 不是 heredoc 起點,後面的真搜尋照算
+    ②零命中計數跟可見的命中結果行矛盾 → 判不出(別的指令印的假 JSON 冒充)③`&` 前面緊貼數字也拆開 ④`--pa`、`--to` 這種 argparse 接受的旗標縮寫
+    的值也略過 ⑤反斜線跳脫的 `\\$X` 是字面、不是變數 ⑥行尾殼層註解不進查詢詞(引號裡的 # 照留)⑦判「會不會進版控」時 git 叫不起來不當掉(架構 E1)。
+    翻紅釘:heredoc 判斷不看引號 → ①翻紅;拿掉矛盾檢查 → ②翻紅;& 前的數字排除加回 → ③翻紅;只認完整旗標 → ④翻紅;拿掉反斜線剝除 → ⑤翻紅;拿掉註解剝除 → ⑥翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    Z = '{"results": [], "candidates": 0}'
+    ev = m._search_events("printf '%s\\n' '<<EOF'\npython3 scripts/lumos search __NO_HIT_7F2A__ --json", "<<EOF\n" + Z, False, "T")
+    check("r2①:引號裡的 <<EOF 不吞後面的真搜尋", ev == [{"ts": "T", "query": "__NO_HIT_7F2A__", "verdict": "zero"}], str(ev))
+    ev = m._search_events("printf '%s\\n' '{\"results\": [], \"candidates\": 0}'; python3 scripts/lumos search README | head -1", Z + "\n  2.243  Systems/slim-readme.md", False, "T")
+    check("r2②:零命中計數跟可見的命中行矛盾 → 判不出", len(ev) == 1 and ev[0]["verdict"] == "undetermined", str(ev))
+    ev = m._search_events("python3 scripts/lumos search __NO_HIT_1&python3 scripts/lumos search __NO_HIT_2; wait", "(共 0 篇候選,照相關性排序)\n(共 0 篇候選,照相關性排序)", False, "T")
+    check("r2③:& 前緊貼數字也拆開", [e["query"] for e in ev] == ["__NO_HIT_1", "__NO_HIT_2"] and ev[0].get("zero_unattributed") == 2, str(ev))
+    ev = m._search_events("python3 scripts/lumos search __NO_HIT__ --pa Systems --to 3 --json", Z, False, "T")
+    check("r2④:旗標縮寫的值也略過", ev[0]["query"] == "__NO_HIT__", str(ev))
+    ev = m._search_events("python3 scripts/lumos search \\$LITERAL_X --json", Z, False, "T")
+    check("r2⑤:反斜線跳脫的 $ 是字面", ev == [{"ts": "T", "query": "$LITERAL_X", "verdict": "zero"}], str(ev))
+    ev = m._search_events('python3 scripts/lumos search __NO_HIT__ --json # verify lumos search no hit', Z, False, "T")
+    ev2 = m._search_events('lumos search "#標籤" 2>&1', Z, False, "T")
+    check("r2⑥:行尾註解不進查詢詞、引號裡的 # 照留", ev[0]["query"] == "__NO_HIT__" and ev2[0]["query"] == "#標籤", f"{ev} {ev2}")
+    import subprocess as _sp
+    real_run = m.subprocess.run
+    def boom(*a, **k):
+        raise FileNotFoundError("git")
+    m.subprocess.run = boom
+    try:
+        ok = m._committable(Path(tempfile.mkdtemp()) / "local" / "x.json")
+    except Exception as e:
+        ok = f"炸了 {type(e).__name__}"
+    finally:
+        m.subprocess.run = real_run
+    check("r2⑦:git 叫不起來 → 不當掉(不在工作樹就照寫)", ok is False, str(ok))
+
+def t_lens_recount_search_nested_shell():
+    """代碼審 code-零命中量測修正 r2 通才 D1:`bash -c "…"`、`zsh -lc '…'` 的字串會被另一個 shell 真的執行——裡面的 lumos search 照算
+    (r1 改成引號內不拆之後漏掉,比修前退步);`echo "…lumos search…"` 這種只是字串的照舊不算。另補 r2 通才 D2 的原重現(查詢字串裡的 <<EOF)。
+    翻紅釘:拿掉巢狀 shell 的遞迴 → 翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    check("巢狀 shell 的搜尋照算", m._search_segments('bash -c "lumos search x"') == [["x"]] and m._search_segments("zsh -lc 'lumos search \"a b\" --json'") == [["a b"]]
+          and m._search_segments('echo "lumos search 不算"') == [], "")
+    ev = m._search_events('lumos search "heredoc <<EOF pattern test"\nlumos search "second real query"', None, False, "T")
+    check("查詢字串裡的 <<EOF 不吞下一行", [e["query"] for e in ev] == ["heredoc <<EOF pattern test", "second real query"], str(ev))
+
+def t_lens_recount_search_r3():
+    """代碼審 code-零命中量測修正 r3 折入(最後一輪;外家六條、架構一條):①巢狀 shell 裡用 & 串的搜尋不依序配對 ②shell 名稱跟 -c 中間有選項
+    (`bash -o pipefail -c`)照樣遞迴 ③shell 名稱只是別的指令的參數(`printf … bash -c '…'`)不當巢狀 shell ④`;#` 這種緊貼控制運算子的註解也剝
+    ⑤反斜線奇數個才是跳脫:`\\\\$HOME` 會展開(變數查詢)、`\\$X` 是字面 ⑥判不出 git 時,查詢字串檔的位置在某個 .git 底下就不寫(隱私不放行)。
+    翻紅釘:巢狀 shell 照樣依序配對 → ①翻紅;只認緊接的 -c → ②翻紅;不看指令位置 → ③翻紅;只認空白後的 # → ④翻紅;不數反斜線 → ⑤翻紅;git 失敗就當不在工作樹 → ⑥翻紅。"""
+    _need_src("governance/eval/lens-utilization/recount.py")
+    m = _lens_mod()
+    Z, H = "(共 0 篇候選,照相關性排序)", "(共 85 篇候選,照相關性排序)"
+    ev = m._search_events("bash -c 'python3 scripts/lumos search README & python3 scripts/lumos search __R3_NO_HIT__; wait'", Z + "\n" + H, False, "T")
+    check("r3①:巢狀 shell 裡用 & 串的不依序配對", [e["query"] for e in ev] == ["README", "__R3_NO_HIT__"] and [e["verdict"] for e in ev] == ["undetermined"] * 2
+          and ev[0].get("zero_unattributed") == 1, str(ev))
+    check("r3②:shell 跟 -c 中間有選項照樣遞迴", m._search_segments("bash -o pipefail -c 'python3 scripts/lumos search __OPT__'") == [["__OPT__"]]
+          and m._search_segments("bash -e -x -c 'lumos search y'") == [["y"]] and m._search_segments('bash --noprofile -l -c "lumos search z"') == [["z"]]
+          and m._search_events('bash -x -c "lumos search __NO_HIT_ABC__ --json"', '{"results": [], "candidates": 0}', False, "T")
+          == [{"ts": "T", "query": "__NO_HIT_ABC__", "verdict": "zero"}], "")
+    ev = m._search_events("printf '%s\\n' bash -c 'lumos search fake'; python3 scripts/lumos search __R3_NO_HIT__", "bash\n-c\nlumos search fake\n" + Z, False, "T")
+    check("r3③:shell 名稱只是參數 → 不當巢狀 shell", ev == [{"ts": "T", "query": "__R3_NO_HIT__", "verdict": "zero"}], str(ev))
+    ev = m._search_events("python3 scripts/lumos search __R3_COMMENT__;# lumos search fake", Z, False, "T")
+    check("r3④:;# 緊貼的註解也剝", ev == [{"ts": "T", "query": "__R3_COMMENT__", "verdict": "zero"}], str(ev))
+    e_even = m._search_events("python3 scripts/lumos search \\\\$HOME", Z, False, "T")   # 殼層看到 \\$HOME:兩個反斜線=偶數,$HOME 會展開
+    e_odd = m._search_events("python3 scripts/lumos search \\$LIT", Z, False, "T")        # 殼層看到 \$LIT:一個反斜線=奇數,字面 $LIT
+    check("r3⑤:偶數個反斜線後的 $ 會展開、奇數個才是字面", e_even[0]["query"] == "" and e_odd == [{"ts": "T", "query": "$LIT", "verdict": "zero"}], f"{e_even} {e_odd}")
+    repo = Path(tempfile.mkdtemp(prefix="lensr3-")).resolve()
+    (repo / ".git").mkdir()
+    real_run = m.subprocess.run
+    def boom(*a, **k):
+        raise FileNotFoundError("git")
+    m.subprocess.run = boom
+    try:
+        inside, outside = m._committable(repo / "arc" / "local" / "x.json"), m._committable(Path(tempfile.mkdtemp()) / "local" / "x.json")
+    finally:
+        m.subprocess.run = real_run
+    check("r3⑥:判不出 git 時,位置在 .git 底下 → 當會進版控(不寫);不在任何 .git 底下 → 照寫", inside is True and outside is False, f"{inside} {outside}")
 
 if __name__ == "__main__":
     sys.exit(main())

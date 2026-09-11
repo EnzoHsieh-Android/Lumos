@@ -47,13 +47,14 @@ def main() -> int:
     print(json.dumps({"week": week, "rows": s["rows"], "miss_by_class": s["miss_by_class"], "zero_push_rows": s["zero_push_rows"],
                       "search_zero": s["search_zero"], "budget_hit": s["budget_hit"]}, ensure_ascii=False))
     print(f"LOG:{week} 編輯 {s['rows']} 列(零推播 {s['zero_push_rows']}、冷卻窗內沿用前一次推播 {s['cooldown_rows']}、推播清單不完整 {s['incomplete_rows']});"
-          f"漏網 {s['miss_by_class']}(另有事後才有 {s['after_the_fact']});搜尋 {s['searches']} 次、零命中 {s['search_zero']}、判不出 {s['search_undetermined']}")
+          f"漏網 {s['miss_by_class']}(另有事後才有 {s['after_the_fact']});搜尋 {s['searches']} 次、零命中 {s['search_zero']}"
+          f"(另有 {s['search_zero_unattributed']} 次看得到零命中但配不到是哪個查詢)、判不出 {s['search_undetermined']}")
     print(f"LOG:逐字稿壞行 {s['bad_lines']} 行(只跳那一行)、Codex 版本不認得跳過 {s['codex_version_skipped']} 份、"
           f"缺時間的編輯 {s['edits_without_time']} 筆(不收)、整份讀不了 {s['broken_files']} 份")
     if s["budget_hit"] or s["impact_timeouts"]:
         print(f"LOG:總預算用完={s['budget_hit']}(沒掃到的逐字稿 {s['files_unscanned']} 份、沒問 git 的筆記 {s['git_skipped']} 篇)、"
               f"impact 逾時 {s['impact_timeouts']} 次——資料不完整,那些檔的漏網分類記判不出")
-    print(f"LOG:寫到 {weekly.relative_to(arc)}(版控)與 {local.relative_to(arc)}(本機,不進版控)")
+    print(f"LOG:寫到 {weekly.relative_to(arc)}(版控)" + (f"與 {local.relative_to(arc)}(本機,不進版控)" if local else ";查詢字串沒寫——那個位置會進版控(stderr 有說明)"))
     return 0
 
 
