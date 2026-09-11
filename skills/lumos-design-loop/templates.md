@@ -1,13 +1,21 @@
 # Loop 派工 Prompt 模板（2026-07-07 Landmark 實戰抽取）
 
-> ⛔ **canary 協議已於 2026-08-14 停用**(單源=Systems/canary-audit d5)。本檔模板內 canary 植入/判定/missed 相關句**照跳過**;審計員/reviewer/辯方模板其餘部分照用。
+> ⛔ **canary 協議已於 2026-08-14 停用**(單源=Systems/canary-audit d5)。本檔的 canary 植入/判定/missed 指令句已清掉或劃線(2026-09-11,[[Projects/skills提示工程優化_計劃]] S3),劃線段落是歷史;審計員/reviewer/辯方模板其餘部分照用。
 
 適用：lumos-design-loop / lumos-code-loop skill 的 agent 派工段落 + SDD 派工。佔位符用 `{}`。
+## 目錄
+
+- §1 Design-loop 審計員 · §2 Design-loop 辯方
+- §3 Code-loop reviewer · §4 Code-loop 辯方
+- §5 SDD implementer 派工 · §6 SDD task reviewer
+- 編排者判讀規則 · 本次實戰的調參建議(歷史)
+- §7.5 spec-conformance slot · §7.6 架構對齊席 · §7.7 席位立場與輸出格式 · §7.8 資安席 · §7 平行 panel 派工
+
 **分工**:§1-2 供 `lumos-design-loop`、§3-4 供 `lumos-code-loop`(該 skill 以 `../lumos-design-loop/templates.md` 引用本檔)、§5-6 供 design-loop 收斂後的 subagent-driven TDD 派工。派工以本檔為準;SKILL.md 內嵌 framing 是摘要,漂移時以本檔為權威。
 
 ---
 
-## 1. Design-loop 審計員（sonnet；連 2 missed 升 opus）
+## 1. Design-loop 審計員（sonnet;空泛或引句大面積錨不到才升 opus）
 
 ```
 你是外部審稿人。以下是一份「外部第三方投稿」的設計 spec（不是本系統/本團隊寫的），
@@ -43,8 +51,8 @@ blocking:否 ↔ minor、blocking:是 ↔ major/blocker，兩欄不得矛盾（�
 審材外查證所得走佐證通道,格式固定「file: `路徑:行號`」＋敘述——**反引號必加**（refcheck 只抽反引號
 inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材外內容。★
 逐字引句寫成「引句:「…」」單獨一行、≥10 字、避免在引句內再包「」（巢狀會被機械收貨截斷）。
-若某節沒問題也要說「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致；
-{missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼、blocking 共幾條。
+若某節沒問題也要說「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致。
+最後給一行總結：最嚴重 severity 是什麼、blocking 共幾條。
 ```
 
 > **light 檔用法(單席通才,M0 2026-07-21;M1包 機械化)**:light 路徑用本 §1 模板派**單一**審計員——{輪次語境}省略、審查鏡頭改「**無鏡頭通才**:全份逐節挑洞」。收斂=`loop status <id> --light --gate --spec ..`(**K=1 機械謂詞,不再人裁**;FAIL 分因 retryable/ratchet)見 SKILL〈light 檔〉。
@@ -80,7 +88,7 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}�
 > 開始記,日後才能抽驗「標 evidence 降級的、後來證明是真的」有沒有——那就是那條裁定的重啟條件。
 > 出處 [[Systems/finding-refute]]。
 
-## 3. Code-loop reviewer（sonnet；連 2 missed 升 opus;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
+## 3. Code-loop reviewer（sonnet;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
 
 ```
 你是外部第三方 code reviewer。這份 diff 是別人投稿的變更，不是你或本系統寫的。
@@ -219,7 +227,7 @@ binding constraints，3-6 條}
 
 1. **實質收斂 early-exit**（design-loop）：G2 靠 findings 數字枯竭，但審計 framing
    「你一定找得到」保證每輪必交 minor，數字壓不到 ≤1。建議加條款：
-   「連 K 輪 caught 且無 blocker/major、且新 findings 全為文件精度級 minor 時，
+   「連 K 輪乾淨(舊寫 caught,canary 停用後改口徑)且無 blocker/major、且新 findings 全為文件精度級 minor 時，
    編排者可提前向人攤牌請裁『實質收斂』，不必跑滿 cap。」（本次 r4-r5 就該問，
    多燒了 3 輪 ≈ 半小時。）
 2. **機械任務免獨立審**（SDD 配套）：migration 腳本、純文件類 task 由編排者

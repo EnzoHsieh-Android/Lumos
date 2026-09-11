@@ -30,6 +30,7 @@ verified_by:
   - "[[Verification/2026-09-03_席間覆蓋率離線量測]]"
   - "[[Verification/2026-09-03_派工攔截點實測]]"
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+  - "[[Verification/2026-09-11_skills健檢]]"
 summary: |-
   KEY:[2026-09-09 審查有沒有用記帳]收貨線多一道機械閘:席報告沒正規化(檔首檔級 severity 行、每條 finding 恰一行獨立宣告)記帳 rc2 並在治理帳留 canary/blocked;`lumos report-normalize` 只搬格式(vault-free);載體必帶 --refuted-set(intake 整字驗、圍欄不算);問閘尾一行「席位報 N(機器數)→存活/重現不到→折/放行」觀測不進合取;單源 [[Projects/審查有沒有用記帳_計劃]]
   KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 [test:]/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]

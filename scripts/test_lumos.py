@@ -36096,5 +36096,88 @@ def t_bound_tests_no_config_message_not_doubled():
     o = r.stdout + r.stderr
     check("沒設指令的提醒:「沒有跑」只講一次", o.count("沒有跑") == 1 and "沒設測試指令" in o, o[-500:])
 
+def t_skill_entry_pages_no_dated_history():
+    """[skills提示工程優化 S2] 兩支迴圈 skill 的入口頁不放日期敘事(官方 skill 指南:不放會過時的資訊);
+    原文搬進各自參考檔〈入口頁舊版全文(去時效前)〉。守衛:入口頁本體的日期 ≤3 個(留給生效日這類規則本身要的日期),
+    且參考檔真的有那一段、入口頁真的指到它。翻紅釘:把任一支入口頁換回改寫前的版本 → 日期超標翻紅。"""
+    import re as _re
+    _need_src("skills/lumos-code-loop/SKILL.md", "skills/lumos-design-loop/SKILL.md")
+    root = Path(__file__).resolve().parent.parent
+    for sk in ("lumos-code-loop", "lumos-design-loop"):
+        s = (root / "skills" / sk / "SKILL.md").read_text(encoding="utf-8")
+        body = s[s.index("\n---\n", 4) + 5:]
+        dates = _re.findall(r"20\d\d-\d\d-\d\d", body)
+        check(f"{sk} 入口頁日期 ≤3(防日期與事故敘事又長回來)", len(dates) <= 3, f"{len(dates)} 個:{dates[:8]}")
+        check(f"{sk} 入口頁指到舊版全文那一段", "〈入口頁舊版全文(去時效前)〉" in body, "")
+        ref = (root / "skills" / sk / "reference.md").read_text(encoding="utf-8")
+        check(f"{sk} 參考檔有〈入口頁舊版全文(去時效前)〉那一段", "\n# 入口頁舊版全文(去時效前)\n" in ref, "")
+
+
+def t_templates_no_stopped_canary_phrases():
+    """[skills提示工程優化 S3] canary 協議 2026-08-14 停用後,派工範本與參考檔的現行段落不得再寫停用前的指示
+    (「第一次 missed 起加碼」「連 2 missed 升 opus」「missed 後加碼」「連 K 輪 caught」);劃線(~~)或帶 ⛔ 的歷史句不算。
+    另:362 行的派工範本開頭要有目錄;查圖譜參考檔開頭不寫會漂的入口頁行數。
+    翻紅釘:把範本 §1 那句「{missed 後加碼:沒找到就是你沒讀仔細}」加回去 → 翻紅(已實測)。"""
+    import re as _re
+    _need_src("skills/lumos-design-loop/templates.md", "skills/lumos-code-loop/reference.md")
+    root = Path(__file__).resolve().parent.parent
+    bad = _re.compile(r"第一次 missed 起加碼|連 ?2 ?次? ?missed|missed 後加碼|連 K 輪 caught|連 2 次漏抓")
+
+    def live_lines(text):
+        # 劃線、帶 ⛔、或同一行寫明「作廢/停用」的是歷史註記,不是指示
+        return [ln for ln in text.splitlines()
+                if bad.search(ln) and not any(k in ln for k in ("~~", "⛔", "作廢", "停用"))]
+
+    def section(text, head):
+        i = text.find("\n" + head)
+        if i < 0:
+            return ""
+        j = text.find("\n## ", i + 1)
+        return text[i:j if j > 0 else len(text)]
+
+    tpl = (root / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
+    check("派工範本沒有停用前的 canary 指示", not live_lines(tpl), "\n".join(live_lines(tpl))[:400])
+    check("派工範本開頭有目錄", "## 目錄" in "\n".join(tpl.splitlines()[:25]), "")
+    clr = (root / "skills" / "lumos-code-loop" / "reference.md").read_text(encoding="utf-8")
+    for head in ("## 每一輪的現行步驟", "## 席位紀律與抑噪"):
+        sec = section(clr, head)
+        check(f"代碼審參考檔「{head[3:]}」段找得到", bool(sec), "")
+        check(f"代碼審參考檔「{head[3:]}」段沒有停用前的 canary 指示", not live_lines(sec), "\n".join(live_lines(sec))[:400])
+    dlr = (root / "skills" / "lumos-design-loop" / "reference.md").read_text(encoding="utf-8")
+    sec = section(dlr, "## 護欄")
+    check("設計審參考檔「護欄」段沒有停用前的 canary 口徑", bool(sec) and not live_lines(sec), "\n".join(live_lines(sec))[:400])
+    pnr = (root / "skills" / "lumos-project-notes" / "reference.md").read_text(encoding="utf-8")
+    check("查圖譜參考檔開頭不寫入口頁行數(會漂)", not _re.search(r"SKILL\.md(（|\()\d+ 行", "\n".join(pnr.splitlines()[:5])), "")
+
+
+def t_doctor_discipline_size_reminder():
+    """[skills提示工程優化 S4] doctor 紀律區塊那段印「紀律範本現在幾 bytes、是上次瘦身基線的幾 %」;
+    超過 150% 印成提醒(warn_soft:不擋、不進 issues);範本不在(消費專案)就不印。
+    翻紅釘:把門檻判斷改成恆 False → ①翻紅;把整段拿掉 → ①②翻紅。"""
+    import subprocess as _sp
+    def mk(tpl_bytes):
+        root = Path(tempfile.mkdtemp(prefix="gctl-dsz-"))
+        v = root / "docs" / "t-knowledge"
+        for sub in ("Systems", "MOC"):
+            (v / sub).mkdir(parents=True)
+        (v / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+        if tpl_bytes:
+            (root / "scripts" / "templates").mkdir(parents=True)
+            (root / "scripts" / "templates" / "graph-discipline.md").write_text("x" * tpl_bytes, encoding="utf-8")
+        return v
+    def doc(v):
+        r = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True)
+        return r, r.stdout + r.stderr
+    r_big, o_big = doc(mk(9000))
+    check("①範本長回五成以上 → 印提醒,講出現在大小與基線", "長回五成以上" in o_big and "9000 bytes" in o_big and "5256 bytes" in o_big, o_big[-1200:])
+    r_ok, o_ok = doc(mk(5000))
+    check("②沒超過 → 只印一行大小,不提醒", "紀律範本 5000 bytes" in o_ok and "長回五成以上" not in o_ok, o_ok[-1200:])
+    check("③提醒不算 issues:兩種情況的收尾 issues 數相同",
+          [l for l in o_big.splitlines() if "issues" in l and "圖譜" in l][-1:] == [l for l in o_ok.splitlines() if "issues" in l and "圖譜" in l][-1:],
+          o_big[-300:] + "\n----\n" + o_ok[-300:])
+    r_no, o_no = doc(mk(0))
+    check("④沒有範本(消費專案)→ 不印這段", "紀律範本" not in o_no, o_no[-600:])
+
+
 if __name__ == "__main__":
     sys.exit(main())
