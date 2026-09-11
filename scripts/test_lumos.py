@@ -10020,11 +10020,14 @@ def t_every_text_mode_git_call_tolerates_undecodable_output():
           str(_text_git_calls_missing_errors(sample_var_exe)))
     # ★找專案根目錄的那一行必須嚴格解碼★:那個路徑會拿去寫檔、刪檔,換成替代字元等於猜路徑
     # (第三輪外家席:換字元後可能剛好指到旁邊名字只差一個字的專案,deinit 就刪錯人的圖譜)
+    # ★只看語法樹裡的字串常數,不要對每個呼叫切原始碼★:ast.get_source_segment 每次都把整份檔切一次行,
+    # 對兩萬多行的工具逐個呼叫做,本機 130 秒、CI 直接超時(2026-09-11 推上去當場 CI 紅)
     import ast as _ast
     src = Path(GRAPHCTL).read_text(encoding="utf-8")
     loose = []
     for n in _ast.walk(_ast.parse(src)):
-        if isinstance(n, _ast.Call) and n.args and "--show-toplevel" in (_ast.get_source_segment(src, n.args[0]) or ""):
+        if isinstance(n, _ast.Call) and n.args and any(
+                isinstance(c, _ast.Constant) and c.value == "--show-toplevel" for c in _ast.walk(n.args[0])):
             kw = {k.arg: k.value for k in n.keywords if k.arg}
             if "text" in kw and not (isinstance(kw.get("errors"), _ast.Constant) and kw["errors"].value == "strict"):
                 loose.append(n.lineno)
