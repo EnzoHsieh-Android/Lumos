@@ -1,0 +1,1380 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Issues/\351\242\250\351\232\252\346\216\203\346\217\217\351\201\207\345\210\260\351\235\236UTF-8\345\205\247\345\256\271\346\225\264\346\224\257\344\270\255\346\226\267.md" "b/docs/lumos-toolchain-knowledge/Issues/\351\242\250\351\232\252\346\216\203\346\217\217\351\201\207\345\210\260\351\235\236UTF-8\345\205\247\345\256\271\346\225\264\346\224\257\344\270\255\346\226\267.md"
+index b2dabe4a..ce7e10a8 100644
+--- "a/docs/lumos-toolchain-knowledge/Issues/\351\242\250\351\232\252\346\216\203\346\217\217\351\201\207\345\210\260\351\235\236UTF-8\345\205\247\345\256\271\346\225\264\346\224\257\344\270\255\346\226\267.md"
++++ "b/docs/lumos-toolchain-knowledge/Issues/\351\242\250\351\232\252\346\216\203\346\217\217\351\201\207\345\210\260\351\235\236UTF-8\345\205\247\345\256\271\346\225\264\346\224\257\344\270\255\346\226\267.md"
+@@ -1,37 +1,53 @@
+ ---
+ type: issue
+-status: open
++status: resolved
+ created: 2026-09-10
+-updated: 2026-09-10
++updated: 2026-09-11
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/issue
+-  - status/open
++  - status/resolved
+   - scope/guards-gates
+ summary: |-
+   FLAG:TECHNICAL
+-  DECISION:這批(工具自裝檔)不修:那批已審四輪,修這個又是一段沒審過的改動;而且「解不了的位元組怎麼辦」會影響風險掃描看到的內容,值得單獨想
++  DECISION:[2026-09-10] 那批(工具自裝檔)先不修,另開這篇追蹤。[2026-09-11] 修:工具裡★每一個用文字模式讀 git 輸出的呼叫★都把解不了的字元換成替代字元(照刪除守衛的既有先例 errors="replace");UTF-8 正常的輸出加了結果一模一樣,所以不設例外清單;另加一支掃原始碼的守衛測試,之後新增的呼叫漏帶就翻紅
+   KEY:推送前檢查與 CI 都會跑的 pitfalls --diff 用文字模式讀整份 git diff;提交裡有一支內容不是 UTF-8、git 又沒當成二進位的檔,解碼就丟錯、整支中斷
+   KEY:2026-09-10 代碼審第四輪寫「工具檔內容不是 UTF-8 也要認得」的測試時撞到,跟那批改動無關,是既有問題
++  KEY:★2026-09-11 查清範圍比原本以為的大★:不只風險掃描,波及計算、派工鏡頭也會中斷;★推送檢查那邊更糟——風險掃描壞掉時是放行(fail-open),分級變成 unknown,「高風險要先審查」整個消失★,等於一個非 UTF-8 字元就能繞過代碼審要求 [test:t_diff_readers_survive_non_utf8_content]
++  KEY:★2026-09-11 代碼審第一輪:原本只修九處,測試只釘到三處(拿掉另外六處的修法測試照樣綠),還漏了刪除守衛的全域搜尋——漏掉那處=那個守衛悄悄放棄、該出的警告不見★;非 UTF-8 不只出現在檔案內容,也出現在沒轉義的檔名(工具為了中文檔名刻意叫 git 不轉義)跟使用者自己關掉轉義的設定——逐處找一定漏,所以改成全部加＋守衛 [test:t_every_text_mode_git_call_tolerates_undecodable_output] [test:t_git_readers_survive_non_utf8_filenames]
+ ---
+ # 風險掃描遇到非UTF-8內容整支中斷
+ 
+ 
+ ## 現象
+ 
+ `lumos pitfalls --diff <範圍>`(推送前的檢查與 CI 都會跑)在 `scripts/lumos` 的 `_pitfall_diff_collect` 裡用文字模式讀整份 `git diff` 的輸出。
+ 提交裡只要有一支檔的內容不是 UTF-8、而 git 沒把它當成二進位(例如開頭是 `\xff\xfe` 的文字檔),
+ 解碼就丟 `UnicodeDecodeError`,整支中斷——推送前的檢查跟著停。
+ 
+ ## 怎麼發現的
+ 
+ 2026-09-10 代碼審第四輪(`code-工具自裝檔不算消費專案`)寫「工具檔內容不是 UTF-8 也要認得是原封不動」的測試時,
+ 測試還沒走到要驗的地方,就先在風險掃描讀差異那段中斷。
+ 
+-## 下一步
++## 怎麼修的(2026-09-11)
+ 
+-修法候選:讀差異時指定 UTF-8、解不了的位元組換成替代字元(只影響那幾個字元的比對,其他行照掃)。
+-先寫一條「提交裡有非 UTF-8 內容 → 風險掃描照樣跑完」的測試,確認會翻紅再改。
+-REVISIT:2026-10-10 還沒修的話排進下一批;期間若有消費專案的推送被這個擋下,當天修
++★工具裡每一個用文字模式讀 git 輸出的呼叫★(守衛認得的共 61 處:原本就有 3 處帶著,這次補了 58 處)都加上 `errors="replace"`——跟刪除守衛讀差異的既有寫法一樣。
++解不了的位元組變成替代字元,只影響那幾個字元的比對,其他行照掃;推送檢查因此拿得到真的分級,不會再因為掃描壞掉而放行。
++UTF-8 正常的輸出加了這個設定結果一模一樣,所以不設「哪些呼叫可以不加」的例外清單。
++
++為什麼是全部、不是只修讀差異的那幾處:第一版只修了九處,代碼審第一輪指出——
++- 九處裡只有三處有測試真的釘住(逐一拿掉修法跑測試,另外六處拿掉照樣綠);
++- 刪除守衛自己的全域搜尋(`git grep` 會印出命中那行的內容)沒修到,碰到非 UTF-8 內容時守衛整個放棄、該出的警告不見;
++- 非 UTF-8 不只在檔案內容裡:工具為了讓中文檔名能比對,好幾處刻意叫 git 不要轉義檔名,這時 Big5 之類的檔名位元組原樣吐出來,
++  共改檢查挖歷史那一步會直接中斷;使用者自己把 `core.quotePath` 關掉(中文檔名的常見設定)時,連沒特別指定的呼叫也一樣。
++
++所以改成機器保證:守衛測試讀工具的原始碼,找出每一個「文字模式、跑的是 git、沒帶 errors=」的呼叫,有一個就翻紅
++(守衛自己也餵一段壞的、一段好的,證明它真的會翻紅)。行為面另有兩支測試:內容不是 UTF-8(風險掃描、推送檢查、波及計算、
++派工鏡頭、不可逆提示掃描、刪除守衛)與檔名不是 UTF-8(測試分層、波及計算、共改檢查、測試地圖、代碼審留痕的有效性判斷)。
++
++守衛只管 git。其他外部指令(抓網址、GitHub 查詢、查版本、呼叫自己)的輸出本來就是 ASCII 或 UTF-8,不在範圍內。
++
++★放行本身沒改★:風險掃描真的壞掉時(例如 git 不在),推送檢查仍是放行、不擋人——那是刻意的設計,這次只拿掉「一個字元就能讓它壞掉」這條路。
+diff --git a/scripts/lumos b/scripts/lumos
+index f4eda85a..0a4c7665 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -89,27 +89,27 @@ def _version_text():
+     here = Path(__file__).resolve().parent.parent
+     # 這一支是「工具鏈來源」還是「被複製進某個專案的那一份」?判準用檔案系統實況:
+     # 來源 repo 才有 skills/ 那批方法論手冊。分清楚很重要——複製進專案的那一份,
+     # 底下的 git 指紋是**那個專案的** commit,不是工具鏈的版本。
+     is_source = (here / "skills" / "lumos-project-notes").is_dir()
+     lines = ["lumos %s" % LUMOS_VERSION, "  這支的位置: %s" % (Path(__file__).resolve(),)]
+     lines.append("  這一支是: %s" % ("工具鏈來源本身" if is_source
+                                      else "被複製進某個專案的那一份(指紋是那個專案的,不是工具鏈的)"))
+     try:
+         sha = _sp.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
+-                      capture_output=True, text=True, timeout=5)
++                      capture_output=True, text=True, errors="replace", timeout=5)
+         if sha.returncode == 0 and sha.stdout.strip():
+             dirty = _sp.run(["git", "-C", str(here), "status", "--porcelain"],
+-                            capture_output=True, text=True, timeout=5)
++                            capture_output=True, text=True, errors="replace", timeout=5)
+             mark = "(有未提交的改動)" if dirty.stdout.strip() else ""
+             branch = _sp.run(["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
+-                             capture_output=True, text=True, timeout=5)
++                             capture_output=True, text=True, errors="replace", timeout=5)
+             bname = branch.stdout.strip() or "?"
+             # ★複製進別的專案時,這個編號是「那個專案的」,不是工具鏈的★
+             # (2026-09-07 代碼審 r1 外家席:不講清楚的話,讀的人會拿它當工具鏈版本用)
+             if is_source:
+                 lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+             else:
+                 lines.append("  所在專案的 commit: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+                 lines.append("  (這是**那個專案的**編號,不是工具鏈的版本;工具鏈版本只有上面那個標籤)")
+         elif is_source:
+             lines.append("  這一份沒有 git 脈絡(來源目錄不是 git 倉庫,例如從壓縮檔解出來的),只有版本標籤可講")
+@@ -557,25 +557,25 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
+                                             "nodes": [loop_id], "note": note}])
+     except Exception:
+         pass
+ 
+ 
+ def _replay_git_blob(root, relpath):
+     """--freeze 前置:檔案已 commit 且與 HEAD 一致才記 blob id(r3 delta d-f2:hash-object 不落
+     物件、-w 落懸空 blob 兩週可被 GC——取 HEAD 的 blob 保證被 tree 引用)。回 (blob_id, err)。"""
+     import subprocess as _sp
+     head = _sp.run(["git", "-C", str(root), "rev-parse", f"HEAD:{relpath}"],
+-                   capture_output=True, text=True)
++                   capture_output=True, text=True, errors="replace")
+     if head.returncode != 0:
+         return None, f"{relpath} 還沒 commit 進版控"
+     work = _sp.run(["git", "-C", str(root), "hash-object", str(Path(root) / relpath)],
+-                   capture_output=True, text=True)
++                   capture_output=True, text=True, errors="replace")
+     if work.returncode != 0:
+         return None, f"{relpath} 讀不到({work.stderr.strip()[:80]})"
+     if head.stdout.strip() != work.stdout.strip():
+         return None, f"{relpath} 工作樹內容與 HEAD 不一致(先 commit 卷證再凍)"
+     return head.stdout.strip(), None
+ 
+ 
+ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=None, repo=None):
+     """改制回測 [S1/S2](2026-08-26):gate 判定回放。
+     凍結模式(--freeze --spec):對 loop 現帳跑唯讀判定,產 governance/replay/<id>/verdict.json
+@@ -945,21 +945,21 @@ def _sp_run_text(cmd):
+ def _append_governance_log(vault, events):
+     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
+     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
+     if not events:
+         return
+     import json
+     import datetime
+     import subprocess
+     try:
+         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+-                                capture_output=True, text=True, cwd=str(vault)).stdout.strip()
++                                capture_output=True, text=True, errors="replace", cwd=str(vault)).stdout.strip()
+     except Exception:
+         commit = ""
+     if not commit:
+         return
+     ts = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+     path = vault.parent / ".governance-log.jsonl"
+     try:
+         with open(path, "a", encoding="utf-8") as f:
+             for e in events:
+                 f.write(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n")
+@@ -1481,21 +1481,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     # 也不會發生」(repo 有提醒被無視 546 次的帳)。數數和喊人的是機器,決定升不升的是人。
+     # 滾動窗(r3-F4:累積制觸發後恆真、每天印同句=546 形態;窗內達標自然靜默)。
+     try:
+         import subprocess as _sp
+         _repo_root = _vault_repo_root(env)
+         # 窗的 cutoff=宣告行慣例誕生日(2026-08-30),非 intake 慣例誕生日(08-25)——
+         # 數誕生前的迴圈=首日必觸發且永不能合規(r3-F5「同向偏誤」的實現,落地冒煙當場撞到)
+         _r = _sp.run(["git", "-c", "core.quotepath=false", "log", "--diff-filter=A",
+                       "--since=2026-08-30T00:00:00", "--name-only", "--pretty=format:",
+                       "--", "governance/review-reports/"],
+-                     capture_output=True, text=True, cwd=str(_repo_root), timeout=15)
++                     capture_output=True, text=True, errors="replace", cwd=str(_repo_root), timeout=15)
+         if _r.returncode != 0:
+             raise RuntimeError("git log 失敗")
+         _seen = []
+         for _ln in reversed(_r.stdout.splitlines()):   # 反轉=舊到新,首見序=迴圈開場序
+             _ln = _ln.strip().strip('"')
+             _parts = _ln.split("/")
+             if len(_parts) < 3 or _parts[0] != "governance" or _parts[1] != "review-reports":
+                 continue
+             _d = _parts[2]
+             if _d.startswith("code"):
+@@ -3709,21 +3709,21 @@ IRREVERSIBLE_HINT_PATTERNS = [
+ def _scan_diff_for_irreversible_hints(cwd):
+     """掃 git diff --staged(優先)或 HEAD~1..HEAD,回傳疑似不可逆 +行摘要列表。
+     非 git repo 或無 diff → 回傳 []。跳過測試檔與純注解行。
+     cwd=str(env.vault) 即可:git diff 無 pathspec 時範圍為全 repo,cwd 子目錄不縮小範圍。"""
+     import subprocess  # lazy import,與 L339/L2298 等先例一致
+     _SKIP_EXT = {".md", ".txt", ".rst"}
+     _TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+ 
+     for cmd in (["git", "diff", "--staged"], ["git", "diff", "HEAD~1..HEAD"]):
+         try:
+-            r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
++            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", cwd=cwd)
+         except FileNotFoundError:
+             return []
+         if r.returncode != 0 or not r.stdout.strip():
+             continue
+         diff_text = r.stdout
+         break
+     else:
+         return []
+ 
+     cur_file = ""
+@@ -3874,21 +3874,21 @@ def _git_commit_exists(repo_root, sha):
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+         return r.returncode == 0
+     except OSError:
+         return False
+ 
+ 
+ def _git_is_shallow(repo_root):
+     import subprocess
+     try:
+         r = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=str(repo_root),
+-                           capture_output=True, text=True)
++                           capture_output=True, text=True, errors="replace")
+         return r.returncode == 0 and r.stdout.strip() == "true"
+     except OSError:
+         return False
+ 
+ 
+ def check_regen_provenance(note, repo_root):
+     """Check J(regen 重生來源守衛)共用檢查器——cmd_lint 與 run_doctor 同呼叫同一函式(防兩入口
+     規則漂移)。只對 frontmatter 帶 regen 的節點生效;非 regen 節點回三空。只掃 summary 行。
+     回 (errs, warns, gov_events),兩入口映射(spec 映射表,照抄不猜):
+       errs → lint errs 計 rc1 / doctor warn(hard) 計 issues
+@@ -4595,21 +4595,21 @@ def cmd_signoff(env, node, note, by=None):
+         print("擋下:簽核一定要帶 --note 寫你確認了什麼,給以後的人看", file=sys.stderr)
+         return 2
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
+     today = datetime.date.today().isoformat()
+     commit = ""
+     try:
+         commit = subprocess.run(["git", "-C", str(env.vault.parent), "rev-parse", "--short", "HEAD"],
+-                                capture_output=True, text=True).stdout.strip()
++                                capture_output=True, text=True, errors="replace").stdout.strip()
+     except OSError:
+         pass
+     log = env.vault.parent / ".signoff-log.jsonl"
+     try:
+         with open(log, "a", encoding="utf-8") as fh:
+             fh.write(json.dumps({"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                                  "node": rel, "by": by or "", "note": note,
+                                  "commit": commit}, ensure_ascii=False) + "\n")
+     except OSError as ex:
+         print(f"擋下:簽核記錄寫不進去: {ex}", file=sys.stderr)
+@@ -9028,39 +9028,39 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+             continue
+         run_cmd = pentry.get("run_cmd")
+         if not run_cmd:
+             print(f"擋下:平台 '{plat}' 沒設定「怎麼跑測試」的指令,殺手測試跑不起來"
+                   f"(多平台設在 platforms.{plat}.run_cmd;單平台設在 test.run_cmd)", file=sys.stderr)
+             return 2
+         proot = Path(pentry["root"])
+         commit = ""
+         try:
+             commit = subprocess.run(["git", "-C", str(proot), "rev-parse", "--short", "HEAD"],
+-                                    capture_output=True, text=True).stdout.strip()
++                                    capture_output=True, text=True, errors="replace").stdout.strip()
+         except Exception:
+             pass
+         try:
+             dirty = subprocess.run(["git", "-C", str(proot), "status", "--porcelain"],
+-                                   capture_output=True, text=True).stdout.strip()
++                                   capture_output=True, text=True, errors="replace").stdout.strip()
+         except OSError:
+             dirty = ""
+         if dirty:
+             print(f"⚠ {plat} repo 有未提交變更——不會進沙盒(kill 以 HEAD 為基準),配方/測試需先 commit",
+                   file=(sys.stderr if as_json else sys.stdout))   # [S3] --json 純度:診斷一律 stderr
+         flaky = pentry["profile"].get("scaffold_ext") in (".yaml", ".yml") or plat in ("maestro", "playwright")
+         # per (test) baseline 快取:同測試多配方只跑一次 baseline
+         tmp_parent = tempfile.mkdtemp(prefix="lumos-kill-")
+         wt = os.path.join(tmp_parent, "wt")
+         wt_ok = False
+         try:
+             r_add = subprocess.run(["git", "-C", str(proot), "worktree", "add", "--detach", wt],
+-                                   capture_output=True, text=True)
++                                   capture_output=True, text=True, errors="replace")
+             if r_add.returncode != 0:
+                 for r in plist:
+                     results.append({**r, "platform": plat, "verdict": "error",
+                                     "detail": f"worktree add 失敗: {r_add.stderr.strip()[:120]}"})
+                 continue
+             wt_ok = True
+             wt_real = os.path.realpath(wt)
+             baselines = {}
+             for r in plist:
+                 method_full = r.get("test", "")
+@@ -12708,21 +12708,21 @@ def _selfdelete_risk(root: Path) -> bool:
+ 
+ def cmd_teardown(yes=False, source=None):
+     """一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),★永遠保留圖譜文件★。
+     範圍(std F11)=當前 repo + 機器全域,非全機所有 repo(別 repo 的注入/hooks、來源 clone 都留)。
+     三步順序(std F5,全域先——趁 deinit 還沒刪掉 vendored merge):
+       ①_teardown_global_claude ②cmd_deinit(keep_graph=True) ③cmd_uninstall。
+     設計/審計:Projects/teardown一鍵拆機_計劃。"""
+     import subprocess
+     try:                                       # repo root(對稱 deinit,非 git 中止)
+         root = Path(subprocess.check_output(
+-            ["git", "rev-parse", "--show-toplevel"], text=True,
++            ["git", "rev-parse", "--show-toplevel"], text=True, errors="replace",
+             stderr=subprocess.DEVNULL).strip())
+     except Exception:
+         print("擋下:這裡不是 git 專案,拆除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
+         return 2
+     src = _lumos_src(source)
+     if root.resolve() == src.resolve():
+         print("擋下:你現在就在 Lumos 工具鏈的來源 repo 裡,不能在這裡拆它自己", file=sys.stderr)
+         return 2
+     if _selfdelete_risk(root):   # Windows 自刪(見 _selfdelete_risk)——在任何 mutation 之前擋
+         print("擋下:Windows 上不能用專案自帶的那份 lumos 拆它自己"
+@@ -12769,21 +12769,21 @@ def cmd_teardown(yes=False, source=None):
+     return 0
+ 
+ 
+ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+     """專案層反安裝(對稱 cmd_init):拆本 repo 的 pre-commit 閘 / vendored 工具組 /
+     CLAUDE.md 注入區塊 /(預設)圖譜 vault。不碰機器共用項(~/.claude)。不自動 commit。"""
+     import subprocess
+     # root 走 git toplevel;非 git 目錄中止(不 fallback cwd——deinit 會刪檔)
+     try:
+         root = Path(subprocess.check_output(
+-            ["git", "rev-parse", "--show-toplevel"], text=True,
++            ["git", "rev-parse", "--show-toplevel"], text=True, errors="replace",
+             stderr=subprocess.DEVNULL).strip())
+     except Exception:
+         print("擋下:這裡不是 git 專案,移除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
+         return 2
+     # pre-flight 守衛①:來源 repo 自我保護(對齊 cmd_update 的 root==src → return 2)
+     src = _lumos_src(source)
+     if root.resolve() == src.resolve():
+         print("擋下:你現在就在 Lumos 工具鏈的來源 repo 裡,不能在這裡移除它自己", file=sys.stderr)
+         return 2
+     # ★dry-run 例外(2026-08-02 代碼審 r2)★:純預覽、零 mutation,不會走到刪自己那一步,
+@@ -12822,21 +12822,21 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+             print(f"  保留圖譜 vault: {vault}")
+         print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
+         return 0
+     if will_delete_vault and not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不刪圖譜。確定要刪就加 --yes",
+                   file=sys.stderr)
+             return 2
+         files = [f for f in vault.rglob("*") if f.is_file()]
+         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
+-                               capture_output=True, text=True).stdout
++                               capture_output=True, text=True, errors="replace").stdout
+         n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+         print(f"將刪除圖譜 vault: {vault}({len(files)} 檔)")
+         if n_dirty:
+             print(f"  ⚠ 其中 {n_dirty} 個未 commit — 刪了 git 救不回!")
+         try:
+             ans = input("確定刪除?輸入 y 繼續、其他取消: ").strip().lower()
+         except EOFError:
+             # isatty() 在某些終端/Windows 回 True 但 stdin 其實 EOF → 讀不到確認。
+             # 破壞性操作安全預設:拒刪(對齊上面非互動 rc2)。
+             print("擋下:等不到你的確認輸入,不刪圖譜。確定要刪再加 --yes", file=sys.stderr)
+@@ -12944,29 +12944,29 @@ def _hooks_path_is_ours(root: Path, val: str) -> bool:
+ 
+ 
+ def _deinit_unbar_gate(root: Path) -> int:
+     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
+     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
+     (真正保險是 step 4 會刪掉 scripts/hooks/ 的 lumos hook 檔,缺 hook 檔 git 自會放行)。
+     守衛(std F8,teardown一鍵拆機_計劃):只在 core.hooksPath 指向本 repo scripts/hooks 時才 unset;
+     指向使用者自設(如 .githooks)則保留不動——別誤殺使用者的 git hooks(deinit/teardown 共用此安全)。"""
+     import subprocess
+     cur = subprocess.run(["git", "-C", str(root), "config", "--get", "core.hooksPath"],
+-                         capture_output=True, text=True)
++                         capture_output=True, text=True, errors="replace")
+     val = cur.stdout.strip()
+     if val:
+         if not _hooks_path_is_ours(root, val):   # #19 S5:抽成共用,別留第二份實作
+             print(f"  ⚠ core.hooksPath={val} 非指向 lumos(scripts/hooks),保留不動(可能是你自設的)",
+                   file=sys.stderr)
+             return 0
+     r = subprocess.run(["git", "-C", str(root), "config", "--unset", "core.hooksPath"],
+-                       capture_output=True, text=True)
++                       capture_output=True, text=True, errors="replace")
+     if r.returncode not in (0, 5):
+         print(f"  ⚠ git config --unset core.hooksPath rc={r.returncode}(續行)", file=sys.stderr)
+     return r.returncode
+ 
+ 
+ def _extract_claude_block_span(text: str):
+     """定位 CLAUDE.md 中的 LUMOS:GRAPH-DISCIPLINE sentinel 區塊,回傳三態。
+ 
+     回傳 (state, span):
+       "found"  → span 是 BlockSpan(body, body_start, body_end);
+@@ -13260,21 +13260,21 @@ def _deinit_remove_vendored(root: Path, src=None) -> list:
+     if sc.is_dir() and not any(sc.iterdir()):
+         sc.rmdir(); removed.append("scripts/")
+     return removed
+ 
+ 
+ def _deinit_detect_installed(root: Path) -> bool:
+     """target repo root 是否有專案層安裝痕跡:core.hooksPath 有值 或 scripts/hooks/ 存在。
+     不靠 scripts/lumos 自身存在(執行檔與'此 repo 是否裝過'無關)。"""
+     import subprocess
+     hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+-                        capture_output=True, text=True)
++                        capture_output=True, text=True, errors="replace")
+     if hp.returncode == 0 and hp.stdout.strip():
+         return True
+     return (root / "scripts" / "hooks").is_dir()
+ 
+ 
+ def _claude_block_present(root: Path) -> bool:
+     cm = root / "CLAUDE.md"
+     return cm.exists() and "LUMOS:GRAPH-DISCIPLINE:START" in cm.read_text(encoding="utf-8")
+ 
+ 
+@@ -13450,21 +13450,21 @@ def _vendored_state(root, ref=None):
+ 
+ 
+ def _diff_range_ends(root, diff_range):
+     """git diff 的範圍拆成 (起點, 終點);終點 None=工作目錄。A..B、A..、A...B(起點取共同祖先)、單一版本。"""
+     import subprocess
+     r = str(diff_range).strip()
+     if "..." in r:
+         a, b = r.split("...", 1)
+         a, b = a or "HEAD", b or "HEAD"
+         try:
+-            mb = subprocess.run(["git", "merge-base", a, b], capture_output=True, text=True,
++            mb = subprocess.run(["git", "merge-base", a, b], capture_output=True, text=True, errors="replace",
+                                 cwd=str(root), timeout=_disp_git_timeout())
+             return (mb.stdout.strip() or a), b
+         except (OSError, subprocess.TimeoutExpired):
+             return a, b
+     if ".." in r:
+         a, b = r.split("..", 1)
+         return (a or "HEAD"), (b or "HEAD")
+     return r, None
+ 
+ 
+@@ -13488,39 +13488,39 @@ def _pull_source_or_abort(src, allow_stale=False):
+ 
+     ★但無 remote 不算失敗★:手動複製 / slim 安裝出來的來源本就沒有 remote,那是合法的
+     離線情境,擋它等於把離線使用者鎖在門外。只有「有 remote 卻拉不到」才中止。
+     _vendor_toolchain(專案層) 與 cmd_bootstrap(機器層) 共用本函式,避免兩處政策漂移。
+     """
+     import subprocess
+     if not (src / ".git").is_dir():
+         print("  (來源非 git repo,跳過 pull)")
+         return 0
+     has_remote = subprocess.run(["git", "-C", str(src), "remote"],
+-                                capture_output=True, text=True).stdout.strip()
++                                capture_output=True, text=True, errors="replace").stdout.strip()
+     if not has_remote:
+         print("  (來源無 remote:離線 clone,跳過 pull)")
+         return 0
+     print("  git pull 來源(取最新工具組)…")
+     if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode == 0:
+         return 0
+     # ★來源「只髒了工具自己寫的帳」不該擋人★(2026-09-06 全 repo 審視 #5)
+     # 症狀:唯讀的 `lumos show`/`context` 就會 append docs/.usage-log.jsonl,而那本帳是版控的。
+     # 只要有人在來源 clone 裡查過一次圖譜,之後這台機器所有專案的 update / bootstrap --pull
+     # 全部被 fail-closed 擋住;逃生門寫在錯誤訊息最後一行,沒人會讀到那裡。
+     #
+     # ★做法是「聯集合併」,不是 stash/pop★:這幾本是 append-only 的 JSONL,兩邊各自加了行,
+     # stash pop 會判成衝突並★在帳本裡留下衝突標記★——那比原本擋住更糟,帳本直接壞掉、
+     # 之後每次讀都炸(第一版真的踩到,實測留下 <<<<<<< 標記)。正確解是把兩邊的行取聯集:
+     # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
+     # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
+     dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain=v1", "-z"],
+-                           capture_output=True, text=True).stdout
++                           capture_output=True, text=True, errors="replace").stdout
+     # ★用 -z 逐筆解析,不要對人看的格式做字串切片★(2026-09-06 代碼審 r1 外家席):
+     # porcelain 的 rename 是 `R  old\0new`、含特殊字元的路徑在非 -z 模式會被 C-style 跳脫並加引號,
+     # 光 strip('"') 解不開。-z 模式路徑原樣不跳脫;rename/copy 會多吃一個 NUL 欄位,我們直接
+     # ★保守拒絕★(狀態碼含 R/C 就不自動併),寧可照原路擋下也不要判錯。
+     paths, bad_shape = [], False
+     if dirty:
+         parts = dirty.split("\0")
+         i = 0
+         while i < len(parts):
+             ent = parts[i]
+@@ -13551,21 +13551,21 @@ def _pull_source_or_abort(src, allow_stale=False):
+             for rel in paths:
+                 f = src / rel
+                 saved[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+                 _sh.copy2(f, bak / rel.replace("/", "__")) if f.exists() else None
+         except OSError as e:
+             print(f"  ⚠ 備份簿記帳失敗,照原路擋下(沒有動任何檔):{e}", file=sys.stderr)
+             saved = None
+         if saved is not None:
+             print(f"    (動手前已備份到 {bak};全部併回成功才會刪)")
+             subprocess.run(["git", "-C", str(src), "checkout", "--"] + paths,
+-                           capture_output=True, text=True)
++                           capture_output=True, text=True, errors="replace")
+             # ★比較對象是「拉之前的已提交版」,不是拉下來的內容★(2026-09-06 代碼審 r1 折入後
+             # 自己的測試抓到):checkout 完檔案就等於 base。要補回的是「本機在 base 之上加了什麼」
+             # ——拿拉下來的內容比,會在遠端剛好也加了同一行時把本機那筆當成重複吃掉。
+             base = {}
+             for rel in paths:
+                 f = src / rel
+                 base[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+             rc2 = subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode
+             all_ok = True
+             for rel, old_lines in saved.items():
+@@ -14501,21 +14501,21 @@ def _self_repo_origin(script=None):
+     symlink 從此指錯、無聲。判別鍵=skills/lumos-project-notes/SKILL.md(user-scope skill 唯一
+     源,永不 vendor 進消費專案;同 install.py 來源 repo 判定慣例)。"""
+     import subprocess
+     repo = Path(script or __file__).resolve().parent.parent
+     if not (repo / ".git").exists():
+         return None
+     if not (repo / "skills" / "lumos-project-notes" / "SKILL.md").is_file():
+         return None   # vendored 消費副本/無關 repo:不信其 origin
+     try:
+         r = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"],
+-                           capture_output=True, text=True)
++                           capture_output=True, text=True, errors="replace")
+     except OSError:
+         return None
+     u = r.stdout.strip()
+     return u if (r.returncode == 0 and u) else None
+ 
+ 
+ def _bootstrap_url(lumos_url=None, script=None):
+     """bootstrap 預設 clone URL 解析鏈:旗標 > $LUMOS_URL > 本 clone origin(鏡像自足,含身分探針)
+     > 硬編碼上游。抽成函式=解析順序可被行為測試釘住(單審抓到原字串包含斷言=假綠)。"""
+     import os
+@@ -14548,40 +14548,40 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
+         else:
+             print(f"[1/3] Lumos 來源已在: {home}（--pull 可拉最新 skills）")
+     else:
+         branch = os.environ.get("LUMOS_BRANCH", LUMOS_RELEASE_BRANCH)
+         print(f"[1/3] clone Lumos({branch} 對外線)→ {home} …")
+         home.parent.mkdir(parents=True, exist_ok=True)
+         # 先抓對外線;抓不到就退回預設分支並講清楚(release 分支可能還沒開,
+         # 冷啟動不該因此炸掉)。用分支不用 tag——tag 會進 detached HEAD,
+         # 之後 git pull / lumos update 全部靜默停在裝機那版(2026-07-30 裁定)。
+         ok = subprocess.run(["git", "clone", "--branch", branch, url, str(home)],
+-                            capture_output=True, text=True).returncode == 0
++                            capture_output=True, text=True, errors="replace").returncode == 0
+         if not ok:
+             print(f"  提醒:抓不到 {branch} 這條對外線(分支還沒開、或名字改了),改用預設分支。",
+                   file=sys.stderr)
+             print("  這代表你拿到的是開發線的內容,可能還沒發布過。", file=sys.stderr)
+             if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
+                 print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
+                 return 2
+     # 2) 全域 lumos → 指向 Lumos 來源(非 vendored copy);install --force 已連帶裝 user-scope skills
+     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
+     failures = []
+     rc2 = subprocess.run([sys.executable, str(home / "scripts" / "lumos"),
+                           "install", "--force"]).returncode
+     if rc2 != 0:                                  # std F8:不吞錯
+         print(f"  提醒:重新安裝(install --force)失敗,回傳碼 {rc2}", file=sys.stderr)
+         failures.append("install")
+     # 3) 專案層自動接線(四分流;git toplevel 才算專案)
+     try:
+         root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"],
+-                                            text=True, stderr=subprocess.DEVNULL).strip())
++                                            text=True, errors="replace", stderr=subprocess.DEVNULL).strip())
+     except Exception:
+         root = None
+     if root is None:
+         print("[3/3] 非 git repo,跳過專案層(機器層已裝;到專案內再跑 bootstrap 或 lumos init)")
+     else:
+         os.environ["LUMOS_HOME"] = str(home)      # std F6:cmd_init 內 _lumos_src 讀此傳導自訂 home
+         vault = _vault_in(root)
+         vendored = (root / "scripts" / "merge-claude-settings.py").exists()
+         if vault is not None and vendored:        # ① 已是專案 → 接 hooks(git config 每機器要重接)
+             print(f"[3/3] 裝 repo hooks（{root}）…")
+@@ -14637,21 +14637,21 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale
+     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
+     像 `openspec init`:一行開好就能 `lumos new`。
+     分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。
+     序列(既有 vault 非 force):_reinject_claude_block(讀本機已 vendor 範本,不 pull、不重裝 hooks)
+       → _init_additive_setup(只加不覆寫:設定骨架 + 本機留痕的忽略設定)→ early-return。
+     序列(新 vault 或 --force):_vendor_toolchain(pull + copy2 + hooks + reinject) → scaffold → 完成。
+     no_hooks 路徑(不分新/既有):只 _reinject_claude_block(讀本機已 vendor 範本,無則靜默)。"""
+     import subprocess
+     try:
+         root = Path(subprocess.check_output(
+-            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL).strip())
++            ["git", "rev-parse", "--show-toplevel"], text=True, errors="replace", stderr=subprocess.DEVNULL).strip())
+     except Exception:
+         root = Path.cwd()
+     existing = _vault_in(root)
+     # slug 決定順序:① --name 顯式 ② 既有 vault 的 slug ③ repo basename。
+     # ②必須先於③:否則既有 vault 上跑 --force 會用 repo basename 當 slug,
+     # 建錯一個空 vault + 把 CLAUDE.md {{KG}} 路徑寫錯(現場事故:basename landmarkmember
+     # vs 既有 vault landmark-knowledge)。既有 vault 的資料夾名即權威 slug,不重新 slugify。
+     if name:
+         slug = _slugify_vault(name)
+     elif existing is not None and existing.name.endswith("-knowledge"):
+@@ -15664,21 +15664,21 @@ def enforcement_status(root=None, home=None):
+             elif cv is not None and av != cv:
+                 add("agents-md", "degraded", f"{aname} 版本戳 {av} ≠ CLAUDE.md {cv}(lumos update 刷新)")
+             else:
+                 add("agents-md", "active", f"{aname} 版本戳 {av}" + ("(override 檔:同層 AGENTS.md 會被 Codex 忽略)" if aname.endswith("override.md") else ""))
+     except Exception as e:
+         add("agents-md", "unknown", str(e))
+ 
+     # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
+     try:
+         hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+-                            capture_output=True, text=True, timeout=10).stdout.strip()
++                            capture_output=True, text=True, errors="replace", timeout=10).stdout.strip()
+     except Exception:
+         hp = ""
+     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
+         try:
+             f = root / "scripts" / "hooks" / fn
+             ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
+             add(layer, "active" if ok else "inactive",
+                 f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+         except Exception as e:
+             add(layer, "unknown", str(e))
+@@ -16368,27 +16368,27 @@ def _lint_aligned(diff_range, repo_root):
+     elif ".." in diff_range:
+         right = diff_range.rsplit("..", 1)[1]
+     else:
+         # 無 .. → 工作區比較,恆對齊
+         return True
+     if not right:
+         right = "HEAD"
+     try:
+         r_right = subprocess.run(
+             ["git", "rev-parse", right],
+-            capture_output=True, text=True, cwd=str(repo_root))
++            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+         r_head = subprocess.run(
+             ["git", "rev-parse", "HEAD"],
+-            capture_output=True, text=True, cwd=str(repo_root))
++            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+         r_status = subprocess.run(
+             ["git", "status", "--porcelain"],
+-            capture_output=True, text=True, cwd=str(repo_root))
++            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     except FileNotFoundError:
+         return False
+     if r_right.returncode != 0 or r_head.returncode != 0 or r_status.returncode != 0:
+         return False
+     return (r_right.stdout.strip() == r_head.stdout.strip()
+             and r_status.stdout.strip() == "")
+ 
+ 
+ def _lint_load_config(repo_root):
+     """讀取 repo_root/.lumos/lint.json → dict;不存在或解析失敗 → None。"""
+@@ -17260,30 +17260,30 @@ def _cochange_excluded(path, patterns):
+     return False
+ 
+ 
+ def _cochange_transactions(repo_root, cfg, upto="HEAD", timeout=None):
+     """git 歷史 → transactions(list of set,repo-relative)。挖掘母體挖到 upto 為止
+     (--diff A..B 時 upto=A:規則來自變更之前的歷史,被查 commit 不自我豁免)。
+     回 (txns, err):zero-commit 回 ([], None);git 失敗回 (None, msg)。
+     排除:merge、raw 檔數 > max_changeset(tangled,以排除前的原始檔數計)、exclude pattern。"""
+     import subprocess as sp
+     head = sp.run(["git", "-C", str(repo_root), "rev-parse", upto],
+-                  capture_output=True, text=True, timeout=timeout)
++                  capture_output=True, text=True, errors="replace", timeout=timeout)
+     if head.returncode != 0:
+         gitdir = sp.run(["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
+-                        capture_output=True, text=True, timeout=timeout)
++                        capture_output=True, text=True, errors="replace", timeout=timeout)
+         if gitdir.returncode == 0 and upto == "HEAD":
+             return [], None  # unborn branch:空歷史是正常空結果
+         return None, f"git rev-parse {upto} 失敗(非 git repo 或 rev 不存在)"
+     r = sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=off", "log",
+                 "--no-merges", "--pretty=format:\x01%H", "--name-only", upto],
+-               capture_output=True, text=True, timeout=timeout)
++               capture_output=True, text=True, errors="replace", timeout=timeout)
+     if r.returncode != 0:
+         return None, (r.stderr or "git log 失敗").strip()
+     txns, cur = [], None
+     for line in r.stdout.splitlines():
+         if line.startswith("\x01"):
+             if cur is not None:
+                 txns.append(cur)
+             cur = []
+         elif line.strip() and cur is not None:
+             cur.append(line.strip())
+@@ -17380,21 +17380,21 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
+     rules, _t, _f, err = _cochange_mine(root, cfg, upto=upto)
+     if rules is None:
+         print(f"擋下:{err}", file=sys.stderr)
+         return 2
+     if diff_range:
+         cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
+                "diff", "--name-only", diff_range]
+     else:
+         cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
+                "diff", "--cached", "--name-only"]
+-    d = sp.run(cmd, capture_output=True, text=True)
++    d = sp.run(cmd, capture_output=True, text=True, errors="replace")
+     if d.returncode != 0:
+         print(f"擋下:git 算不出差異: {(d.stderr or '').strip() or '原因不明'}", file=sys.stderr)
+         return 2
+     changed = {ln.strip() for ln in d.stdout.splitlines() if ln.strip()}
+     changed = {f for f in changed if not _cochange_excluded(f, cfg["exclude"])}
+     by_lhs = {}
+     for (a, b), v in rules.items():
+         by_lhs.setdefault(a, []).append((b, v))
+     warnings = []
+     for a in sorted(changed):
+@@ -17534,21 +17534,21 @@ def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
+     落進呼叫端 cmd_delguard_check 既有 except Exception → 降級 rc0(行為契約自動成立)。"""
+     import re, subprocess
+     if not tokens:
+         return {}
+     cmd = ["git", "-c", "core.quotePath=off", "grep", "--cached", "-n", "-I", "-w", "-F"]
+     for t in tokens:
+         cmd += ["-e", t]
+     cmd += ["--", ".", f":(exclude){graph_root}"]
+     for d in _DELGUARD_ALL_EXCLUDE_DIRS:
+         cmd += [f":(exclude){d.rstrip('/')}"]
+-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, timeout=timeout)
++    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", cwd=repo_root, timeout=timeout)
+     if r.returncode > 1:
+         raise RuntimeError(f"git grep rc={r.returncode}: {r.stderr.strip()[:200]}")
+     alive = set()
+     pats = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
+     for line in r.stdout.splitlines():
+         # ★只對內容域配 token★:git grep 輸出是 `path:lineno:content`,連路徑一起配
+         # 會被檔名撞名誤降級(刪掉 Login() → app/Login.kt 這個路徑本身讓 Login 判 low,
+         # 2026-08-11 code-loop r1 B)。len<3 的行(如 `Binary file … matches`)直接丟。
+         parts = line.split(":", 2)
+         if len(parts) < 3:
+@@ -17908,22 +17908,24 @@ def _stack_changed_ok(cur_file, skip=frozenset()):
+ 
+ 
+ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
+     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
+     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
+     import subprocess
+     try:
+         # core.quotePath=false:CJK 檔名不轉義加引號(否則 "+++ b/" 前綴比對全失效,
+         # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
++        # errors="replace":提交裡有非 UTF-8 內容時照樣讀得完(2026-09-11,Issues/風險掃描遇到非UTF-8內容整支中斷:
++        # 原本解碼丟錯整支停,推送檢查那邊則是放行——「高風險要先審查」整個消失);照刪除守衛讀差異的先例
+         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
+-                           capture_output=True, text=True, cwd=str(repo_root))
++                           capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     except FileNotFoundError:
+         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
+         return None
+     if r.returncode != 0:
+         print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
+         return None
+     added = {}
+     claims = []
+     # 工具鏈本體的 repo 不跳過(那裡 scripts/lumos 就是產品),消費專案才跳——而且只跳內容跟安裝時一模一樣的:
+     # 終點上原封不動的工具檔;終點上已經刪掉、但起點時原封不動的(拆除工具鏈)也跳。見 _vendored_state
+@@ -18348,21 +18350,21 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
+             print(json.dumps({"hits": []}, ensure_ascii=False))
+         return 0
+     cfg = _testlayers_load_config(repo_root)
+     if cfg is None:
+         if as_json:
+             print(json.dumps({"hits": []}, ensure_ascii=False))
+         return 0
+     try:
+         # core.quotePath=false:CJK 檔名不轉義加引號(否則 suffix 判斷全失效,r1 panel major)
+         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--name-only", diff],
+-                           cwd=str(repo_root), capture_output=True, text=True, timeout=30)
++                           cwd=str(repo_root), capture_output=True, text=True, errors="replace", timeout=30)
+         if r.returncode != 0:
+             print(f"test-layers: git diff rc={r.returncode},跳過提醒", file=sys.stderr)
+             if as_json:
+                 print(json.dumps({"hits": []}, ensure_ascii=False))
+             return 0
+         files = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+     except Exception as e:
+         print(f"test-layers: git diff 失敗({e}),跳過提醒", file=sys.stderr)
+         if as_json:
+             print(json.dumps({"hits": []}, ensure_ascii=False))
+@@ -18480,21 +18482,21 @@ def _testmap_strip(path):
+         if not stripped and stem.startswith("test_"):
+             stem = stem[len("test_"):]
+             stripped = True
+     if stripped:
+         stem = stem.rstrip("._")   # 去尾分隔符僅在剝離後(無條件 rstrip 會把 __init__ 裁成 __init,dunder 護欄變死碼)
+     return stem, stripped
+ 
+ 
+ def _testmap_git(root, args, timeout=30):
+     return subprocess.run(["git", "-C", str(root), "-c", "core.quotePath=false"] + args,
+-                          capture_output=True, text=True, timeout=timeout)
++                          capture_output=True, text=True, errors="replace", timeout=timeout)
+ 
+ 
+ def _testmap_classify(files):
+     tests, srcs = [], []
+     for f in files:
+         if _testmap_ext(f) not in _TESTMAP_EXTS:
+             continue
+         (tests if _testmap_is_test(f) else srcs).append(f)
+     return tests, srcs
+ 
+@@ -18759,21 +18761,21 @@ def _testmap_affected_inner(diff, repo, as_json):
+         for f in changed:
+             if f in cs and not any(src == f and test_exists(test)
+                                    for (src, test, _c, _s) in edges):
+                 uncovered.append(f)
+         uncovered.sort()
+ 
+     # 陳舊三訊號(獨立判定,任一真;各訊號自身 git 失敗=略過)
+     stale = False
+     try:
+         r = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+-                            bac, "HEAD"], capture_output=True, text=True, timeout=30)
++                            bac, "HEAD"], capture_output=True, text=True, errors="replace", timeout=30)
+         if r.returncode == 1:     # rc1=非祖先;其他錯誤(sha 不存在等)略過①
+             stale = True
+     except (subprocess.TimeoutExpired, OSError) as e:
+         print(f"testmap affected: 陳舊訊號① 檢查失敗略過({e})", file=sys.stderr)
+     if not stale:
+         r = _testmap_git(root, ["diff", "--name-only", f"{bac}..HEAD"])
+         if r.returncode == 0 and any(f in universe for f in r.stdout.splitlines() if f):
+             stale = True
+     if not stale:
+         r = _testmap_git(root, ["status", "--porcelain", "--untracked-files=all"])
+@@ -18964,21 +18966,21 @@ def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
+ 
+     root = repo_dir or _anchor_repo_root(None)
+     if root is None or not Path(root).is_dir():
+         print(f"擋下:--repo-dir 指的目錄不存在: {repo_dir!r}", file=sys.stderr)
+         return 2
+     enabled, cfg = _ci_config(root)
+     if not enabled:
+         return emit("disabled", note="(未宣告 .lumos/config.json 的 ci 區塊,CI 回流功能關閉)")
+     def _git_out(*a):
+         try:
+-            r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True,
++            r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, errors="replace",
+                                timeout=30)
+         except (OSError, subprocess.TimeoutExpired):
+             return ""        # git 缺席/逾時也 fail-open(絕不 traceback)
+         return r.stdout.strip() if r.returncode == 0 else ""
+     if not sha:
+         sha = _git_out("rev-parse", "HEAD") or None
+     if not branch:
+         branch = _git_out("rev-parse", "--abbrev-ref", "HEAD")
+     if not sha:
+         print("ci-wait: 取不到 HEAD sha(空 repo?),跳過", file=sys.stderr)
+@@ -19521,21 +19523,21 @@ def git_last_change_dates(repo_root, vault):
+     """
+     import subprocess
+     key = (str(repo_root), str(vault))
+     if key in _GIT_DATES_CACHE:
+         return _GIT_DATES_CACHE[key]
+     out = {}
+     try:
+         rel_vault = os.path.relpath(str(vault), str(repo_root))
+         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotepath=false",
+                             "log", "--name-only", "--format=@%cs", "--", rel_vault],
+-                           capture_output=True, text=True, timeout=30)
++                           capture_output=True, text=True, errors="replace", timeout=30)
+         if r.returncode == 0:
+             cur = None
+             prefix = rel_vault.rstrip("/") + "/"
+             for line in r.stdout.splitlines():
+                 if line.startswith("@"):
+                     cur = line[1:11]
+                 elif line.strip() and cur and line.startswith(prefix):
+                     rel = line[len(prefix):]
+                     if rel not in out:          # log 是新→舊,第一次看到就是最新
+                         out[rel] = cur
+@@ -19582,21 +19584,21 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
+     # R2:裸檔名比對的前置——目標檔 basename 在 tracked 母體唯一才啟用
+     base_ok = False
+     base = Path(rp).name
+     if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):   # 2026-08-07 考卷轉正預設 1(knob=0 留逃生)
+         key = str(repo_root)
+         counts = _BASENAME_COUNTS_CACHE.get(key)
+         if counts is None:
+             counts = {}
+             try:
+                 r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
+-                                   capture_output=True, text=True, timeout=10)
++                                   capture_output=True, text=True, errors="replace", timeout=10)
+                 if r.returncode == 0:
+                     for ln in r.stdout.splitlines():
+                         if ln.strip():
+                             b = Path(ln).name
+                             counts[b] = counts.get(b, 0) + 1
+             except (OSError, subprocess.SubprocessError):
+                 counts = {}   # git 缺席=degrade(空表=永不唯一)
+             _BASENAME_COUNTS_CACHE[key] = counts
+         base_ok = counts.get(base, 0) == 1
+ 
+@@ -20469,21 +20471,21 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+     if repo_root is None:
+         for cand in (Path.cwd(), *Path.cwd().parents):
+             if (cand / ".git").exists():
+                 repo_root = cand
+                 break
+     if repo_root is None or not (repo_root / ".git").exists():
+         print("擋下:找不到 git 專案,用 --repo 指定", file=sys.stderr)
+         return 2
+     # core.quotePath=false:CJK 檔名不轉義加引號(否則 startswith/endswith 過濾全失效,r2 panel major)
+     r = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+-                 "diff", "--name-only", diff_range], capture_output=True, text=True)
++                 "diff", "--name-only", diff_range], capture_output=True, text=True, errors="replace")
+     if r.returncode != 0:
+         print(f"擋下:git 算不出差異: {r.stderr.strip()[:200]}", file=sys.stderr)
+         return 2
+     files = []
+     for f in r.stdout.splitlines():
+         f = f.strip()
+         if not _impact_diff_seed_ok(f):
+             continue
+         # 已刪檔不跳過:反查靠「節點 body 引用該路徑」而非檔案存在——
+         # 刪除/改名正是合約節點最該被推到審計員眼前的時刻(r1 codex major)
+@@ -20497,21 +20499,21 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+     # 出身:這條路原本只在**逐檔迴圈裡**才發現沒圖譜——而「這個範圍 0 個檔」時迴圈根本不跑,
+     # 於是一路走到最後印出「固定席 0 + top 0」並回成功。
+     # ★對新手最危險的就是這個★:同一件事(找不到圖譜),另外兩種問法一個回 rc3、一個回 rc2
+     # 並印白話擋下,只有這條印「0 篇」**看起來像查過了**——而它根本沒有圖譜可查。
+     # 文件本來就寫著這條路會回「圖譜缺」,只是零檔時走不到。
+     if _vault is None:
+         return _no_vault_msg()
+     _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
+     for f in files:
+         d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+-                     "diff", diff_range, "--", f], capture_output=True, text=True)
++                     "diff", diff_range, "--", f], capture_output=True, text=True, errors="replace")
+         hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
+                         if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
+         buf = io.StringIO()
+         with contextlib.redirect_stdout(buf):
+             rc = cmd_impact(f, repo=str(repo_root), depth=depth, as_json=True,
+                             ranked=True, top=top, min_score=min_score,
+                             payload={"query": hunk, "prospective": {}},
+                             preloaded=(_vault, _env_shared) if _env_shared is not None else None)
+         if rc == 3:
+             print("IMPACT-DEBUG: vault 找不到(rc3)", file=sys.stderr)
+@@ -20602,21 +20604,21 @@ def _print_sync_nudge(sync, diff_range, cap=8):
+         print(f"  … 還有 {len(miss) - cap} 篇(lumos impact --diff {diff_range} --sync-check --json 看全部)")
+     print("  確定不受影響就略過;受影響的現在補。這裡只提醒不擋。")
+ 
+ 
+ # ── code-loop 留痕(Task 1) ────────────────────────────────────────────────────
+ 
+ def _codeloop_git_branch(repo_root):
+     """取 HEAD branch 名(detached HEAD 回 HEAD)。"""
+     import subprocess
+     r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+-                       capture_output=True, text=True, cwd=str(repo_root))
++                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     return r.stdout.strip() or "HEAD"
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # dispatch-lens(Projects/派工鏡頭注入_計劃,2026-09-03):代碼審派工詞的固定席鏡頭
+ # hook 是薄殼(scripts/hooks/claude/dispatch-lens-hook.py),所有 git/合約/圖譜判斷都在這裡,
+ # 沿用既有 helper(_git_commit_exists / INVARIANT_RE 家族 / _vault_in 的排序規則)。
+ # 消毒原則(r2/r3 載荷席):來自圖譜或 diff 的自由文字零輸出——只印固定字彙、base 已追蹤路徑、
+ # base 版合約行(KEY: 行)。清單本身仍用工作樹圖譜算(d3:能藏不能說)。
+ # rc:0=成功(含 0 篇,text 空)/2=輸入或 git 壞/3=vault 缺/4=base 不在主線
+@@ -20638,21 +20640,23 @@ def _lens_range_ok(diff_range):
+     return parts[0], parts[1]
+ 
+ 
+ def _lens_git(repo_root, *args, quote=False, binary=False):
+     """binary=True:輸出照位元組回(不解碼)——讀檔案內容算指紋用,非 UTF-8 的內容也不會在解碼時噴錯。"""
+     import subprocess as _sp
+     cmd = ["git", "-C", str(repo_root)]
+     if quote:
+         cmd += ["-c", "core.quotePath=false"]
+     try:
+-        return _sp.run(cmd + list(args), capture_output=True, text=not binary, timeout=20)
++        if binary:
++            return _sp.run(cmd + list(args), capture_output=True, timeout=20)
++        return _sp.run(cmd + list(args), capture_output=True, text=True, errors="replace", timeout=20)
+     except (OSError, _sp.TimeoutExpired):
+         return None
+ 
+ 
+ def _lens_full_sha(repo_root, rev):
+     r = _lens_git(repo_root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+     if r is None or r.returncode != 0:
+         return None
+     sha = r.stdout.strip()
+     return sha if _LENS_SHA_RE.match(sha) else None
+@@ -21722,29 +21726,29 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
+         print(_json.dumps(out, ensure_ascii=False))
+     else:
+         print(out["text"])
+     return 0
+ 
+ 
+ def _codeloop_git_head(repo_root):
+     """取 HEAD full sha。"""
+     import subprocess
+     r = subprocess.run(["git", "rev-parse", "HEAD"],
+-                       capture_output=True, text=True, cwd=str(repo_root))
++                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     return r.stdout.strip()
+ 
+ 
+ def _codeloop_git_ts(repo_root, rev="HEAD"):
+     """取某版本的 committer date(ISO 8601;預設 HEAD);失敗回空字串。"""
+     import subprocess
+     r = subprocess.run(["git", "show", "-s", "--format=%cI", rev],
+-                       capture_output=True, text=True, cwd=str(repo_root))
++                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     return r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+ 
+ 
+ def _codeloop_branch_filename(branch):
+     """把 branch 名扁平化(/ → __)避免建子目錄。"""
+     return branch.replace("/", "__")
+ 
+ 
+ def _codeloop_read(repo_root, branch):
+     """讀 governance/code-loop/<branch>.json;不存在回 None。"""
+@@ -22142,21 +22146,21 @@ def _bound_tests_range(repo_root, diff_range):
+     head = r.split("..", 1)[1] if ".." in r else ""
+     ml = _mainline_ref(repo_root)
+     if not ml or not head:
+         return None, "新分支首推,而且問不到主線 tip(全新的 repo?)——受波及範圍算不出來"
+     # ★要用 merge-base,不是主線 tip 本身★(2026-09-07 代碼審 r1 外家否決席判 blocker,實測屬實):
+     # `主線..HEAD` 是兩棵樹的端點比對——★主線獨有的改動會被反向算進這次推送★。
+     # 實測:主線有 m.txt、feature 有 f.txt,`主線..feature` 動到 f.txt 與 m.txt 兩個;
+     # `merge-base..feature` 只動到 f.txt。誤點到的那些合約如果有紅的測試,
+     # 高風險那條路會擋掉一次本來該過的推送——★方向錯得最難看的那種★。
+     import subprocess as _sp
+-    mb = _sp.run(["git", "merge-base", ml[1], head], capture_output=True, text=True,
++    mb = _sp.run(["git", "merge-base", ml[1], head], capture_output=True, text=True, errors="replace",
+                  cwd=str(repo_root))
+     if mb.returncode != 0 or not mb.stdout.strip():
+         # 沒有共同祖先(孤兒分支 / 剛 init 的 repo)→ 誠實說算不出來,不要拿一個錯的範圍硬算
+         return None, f"新分支首推,而且跟主線 {ml[0]} 沒有共同祖先——受波及範圍算不出來"
+     return f"{mb.stdout.strip()}..{head}", f"新分支首推:起點改用跟主線 {ml[0]} 的共同祖先"
+ 
+ 
+ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=None, advisory=False):
+     """回 dict{status, ran, red:[…], secs, calc_secs, reason, advisory}。
+ 
+@@ -22630,45 +22634,45 @@ def _codeloop_read_dispositions(repo_root, branch, marker_only=False):
+ def _codeloop_record_valid(repo_root, rec_sha, marker_sha):
+     """留痕座標有效性(pass/skip 與表態共用同一套):同 sha;或 rec_sha 是 marker_sha 的祖先且中間只動簿記檔
+     ([[Issues/code-loop-pass自失效追尾]] 的豁免)。回 (ok, 一句為什麼)。"""
+     import subprocess as _sp
+     if not rec_sha:
+         return False, "記錄沒有 sha"
+     if rec_sha == marker_sha:
+         return True, f"同版本 {marker_sha[:8]}"
+     try:
+         anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
+-                      capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
++                      capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
+         if anc.returncode != 0:
+             return False, f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先"
+         df = _sp.run(["git", "diff", "--name-only", rec_sha, marker_sha],
+-                     capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
++                     capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
+     except _sp.TimeoutExpired:
+         return False, f"git 超過 {_disp_git_timeout():.0f} 秒沒回(merge-base/diff),判不了有效性"
+     files = [f.strip() for f in df.stdout.splitlines() if f.strip()]
+     if df.returncode == 0 and all(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIR) for f in files):
+         return True, f"祖先 {rec_sha[:8]}+簿記豁免(其後 {len(files)} 檔皆簿記)"
+     return False, f"記錄 sha {rec_sha[:8]} 之後動了代碼(非純簿記增量)"
+ 
+ 
+ def _disp_git_timeout():
+     """單次 git 子程序上限(秒;r1 併發席 f2:20 秒預算只在每題迴圈頂端查,單次 git 卡住預算攔不住)。
+     超時往上拋 subprocess.TimeoutExpired,由每題的例外接手判「無法驗證」(擋,不放行)。"""
+     try:
+         return max(0.1, float(os.environ.get("LUMOS_DISP_GIT_TIMEOUT", "8")))
+     except ValueError:
+         return 8.0
+ 
+ 
+ def _git_tree_has(repo_root, at_sha, path):
+     import subprocess as _sp
+-    r = _sp.run(["git", "cat-file", "-e", f"{at_sha}:{path}"], capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
++    r = _sp.run(["git", "cat-file", "-e", f"{at_sha}:{path}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
+     return r.returncode == 0
+ 
+ 
+ def _git_tree_text(repo_root, at_sha, path):
+     import subprocess as _sp
+     r = _sp.run(["git", "show", f"{at_sha}:{path}"], capture_output=True, text=True, cwd=str(repo_root), errors="ignore", timeout=_disp_git_timeout())
+     return r.stdout if r.returncode == 0 else None
+ 
+ 
+ def _dispositions_check_path_line(repo_root, at_sha, ev):
+@@ -22705,36 +22709,36 @@ def _dispositions_check_test(repo_root, at_sha, ev, pidx):
+         return True, ""   # 跨 repo 的平台 root:at_sha 不屬於那個 repo,只做工作樹那一道
+     # -w 整字比對(r3 邊界席 B2:-F 子字串會讓 testFoo 撞到 testFooBar);rc 128(pathspec 在 repo 外等)當「驗不了」明講
+     # 只掃該 profile 的測試副檔名、排除 docs/ 與 governance/(r1 外家 finder f3:治理帳本身寫著 evidence 的 "test:<名>",
+     # 表態後把帳 commit 進去,樹裡就找得到那個名字——未提交的測試靠這條就能冒充已提交)
+     _prof = (pdata["platforms"].get(plat) or {}).get("profile")   # load_platforms 給的可能是 profile 名或已展開的 dict
+     _exts = sorted((_prof.get("exts") if isinstance(_prof, dict) else TEST_PROFILES.get(_prof, {}).get("exts")) or [])
+     _base = "" if str(rel) == "." else str(rel).rstrip("/") + "/"
+     _spec = [f":(glob){_base}**/*{e}" for e in _exts] if _exts else [str(rel) if str(rel) != "." else "."]
+     _spec += [":(exclude)docs/**", ":(exclude)governance/**"]
+     r = _sp.run(["git", "grep", "-w", "-F", "-q", "-e", name, at_sha, "--", *_spec],
+-                capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
++                capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
+     if r.returncode == 1:
+         return False, f"測試 {name!r} 在推送版本 {at_sha[:8]} 的樹裡整字 grep 不到(未追蹤/未提交的測試不算證據)"
+     if r.returncode != 0:
+         return False, f"測試 {name!r} 無法對推送版本的樹驗證(git grep rc={r.returncode}:{r.stderr.strip()[:80]})"
+     return True, ""
+ 
+ 
+ def _dispositions_check_issue(repo_root, at_sha, issue):
+     """todo 的 Issue:先解析 docs/*-knowledge 的實際 slug(git cat-file 不展開 glob,r2 正確性席 C4),再驗存在且 status open/doing。"""
+     import subprocess as _sp
+     name = str(issue)[len("Issues/"):]
+     if name.endswith(".md"):
+         name = name[:-3]
+     if at_sha:
+-        ls = _sp.run(["git", "ls-tree", "--name-only", at_sha, "docs/"], capture_output=True, text=True, cwd=str(repo_root))
++        ls = _sp.run(["git", "ls-tree", "--name-only", at_sha, "docs/"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+         slugs = [x.strip() for x in ls.stdout.splitlines() if x.strip().endswith("-knowledge")]
+         for s in slugs:
+             p = f"{s}/Issues/{name}.md"
+             if _git_tree_has(repo_root, at_sha, p):
+                 txt = _git_tree_text(repo_root, at_sha, p) or ""
+                 m = re.search(r"(?m)^status:\s*(\S+)", txt)
+                 st = m.group(1) if m else ""
+                 return (st in ("open", "doing")), ("" if st in ("open", "doing") else f"{p} 的 status 是 {st or '空'},todo 只准連 open/doing")
+         return False, f"推送版本 {at_sha[:8]} 的樹裡找不到 docs/*-knowledge/Issues/{name}.md"
+     hits = list(Path(repo_root).glob(f"docs/*-knowledge/Issues/{name}.md"))
+@@ -22914,21 +22918,21 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     if not marker_sha:
+         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
+         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
+ 
+     if diff_range is None:
+         # 現行為:merge-base..HEAD 推導(向後相容)
+         head_sha = _codeloop_git_head(repo_root)
+         mb = None
+         for base_branch in ("main", "master"):
+             r = _sp.run(["git", "merge-base", "HEAD", base_branch],
+-                        capture_output=True, text=True, cwd=str(repo_root))
++                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+             if r.returncode == 0 and r.stdout.strip():
+                 mb = r.stdout.strip()
+                 if mb == head_sha:
+                     return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+                 break
+         if not mb:
+             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
+             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+         diff_range = f"{mb}..HEAD"
+ 
+@@ -22983,21 +22987,21 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
+     # 判定順序=合約測試(2.5)→表態(3.5)→審查留痕(4/5):序列早退,先中的先報、修完再跑(r3 架構對齊席 A1 要求講明)。
+     dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": []}
+     # 適用範圍(r3 邊界席 B1):算「哪些題適用」用 merge-base(主線, at_sha)..at_sha——把主線合進分支再推分支,
+     # 推送範圍(remote..local)會把主線帶進來的碼算成本次要表態;推主線本身、或算不出主線/merge-base 才用推送範圍。tier 照舊用推送範圍。
+     disp_data, disp_range = data, diff_range
+     try:
+         _ml = _mainline_ref(repo_root)
+         _mlname = _ml[0].split("@")[0] if _ml else None
+         if _ml and marker_branch and marker_branch != _mlname:
+-            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, cwd=str(repo_root))
++            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+             _mb = _mbr.stdout.strip() if _mbr.returncode == 0 else ""
+             if _mb and _mb == marker_sha:
+                 # 分支 tip 已在主線上:沒有本分支自己的改動,沒有題要答
+                 disp_data, disp_range = {"stack_questions_applicable": {}, "stack_questions_meta": {}}, None
+             elif _mb and f"{_mb}..{marker_sha}" != diff_range:
+                 _nr = f"{_mb}..{marker_sha}"
+                 _r2 = _sp.run([_sys.executable, str(graphctl), "pitfalls", "--diff", _nr, "--no-lint", "--json", "--repo", str(repo_root)],
+                               capture_output=True, text=True, cwd=str(repo_root))
+                 _l2 = [l for l in _r2.stdout.splitlines() if l.strip().startswith("{")]
+                 if _r2.returncode == 0 and _l2:
+@@ -23206,21 +23210,21 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+     ts = _codeloop_git_ts(repo_root)
+ 
+     if subcmd == "dispositions":
+         # --branch(r3 外家 F11):推 HEAD:別名 時 pre-push 按遠端目的分支查記錄,表態要寫在那個名字下
+         if marker_branch is not None and not marker_branch.strip():
+             print("擋下:--branch 給了空字串——要寫在哪個分支名下講清楚,不然會悄悄退回 checkout 分支(r1 邊界席 f3)", file=sys.stderr)
+             return 2
+         # --at-sha(r1 外家 finder f5/否決 f2):checkout 在 main、推的是別的分支時,check 按被推的 sha 查,表態得綁那個 sha 不是 HEAD
+         if at_sha:
+             import subprocess as _sp
+-            _rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha}^{{commit}}"], capture_output=True, text=True, cwd=str(repo_root))
++            _rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha}^{{commit}}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+             if _rp.returncode != 0:
+                 print(f"擋下:--at-sha {at_sha} 不是這個 repo 裡的 commit", file=sys.stderr)
+                 return 2
+             head_sha = _rp.stdout.strip()
+             ts = _codeloop_git_ts(repo_root, head_sha) or ts
+         return _cmd_codeloop_dispositions(repo_root, marker_branch or branch, head_sha, ts, disp_file)
+     if subcmd == "recall-miss":
+         return _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note or "")
+ 
+     if subcmd in ("pass", "skip"):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ef9c561d..125cf11a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -9757,20 +9757,183 @@ def t_pitfalls_diff_ignores_vendored_toolchain():
+             ok9 = True
+         except (ValueError, OSError):
+             in9, pr9, ok9 = frozenset(), frozenset(), False
+         check("⑨版本裡的工具檔不是 UTF-8 也不崩潰、照樣認得是原封不動", ok9 and vend in in9, str(in9))
+     finally:
+         for k, v in saved.items():
+             setattr(m, k, v)
+         m._VENDORED_ALL = saved_all
+ 
+ 
++def t_diff_readers_survive_non_utf8_content():
++    """提交裡有一支內容不是 UTF-8 的檔(git 沒把它當二進位),讀 git 差異的指令都不能中斷。
++    2026-09-10 代碼審第四輪撞到、2026-09-11 查清範圍:風險掃描、波及計算、派工鏡頭都用文字模式讀差異,
++    解碼一丟錯就整支停——★推送檢查那邊更糟:風險掃描壞掉時是放行(fail-open),分級變成 unknown,
++    「高風險要先審查」這道要求整個消失★。照刪除守衛讀差異的先例,解不了的字元換成替代字元。
++    見 Issues/風險掃描遇到非UTF-8內容整支中斷。"""
++    import subprocess as sp, json as _json
++    root = Path(tempfile.mkdtemp(prefix="gctl-nonutf8-"))
++    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
++    def commit(msg): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg)
++    git("init")
++    (root / "src").mkdir()
++    (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
++    kb = root / "docs" / "t-knowledge" / "Systems"
++    kb.mkdir(parents=True)
++    (kb / "A.md").write_text("---\ntype: system\nstatus: doing\n---\n# A\n講 `src/a.py`\n", encoding="utf-8")
++    commit("init")
++    (root / "src" / "a.py").write_bytes(b'x = "\xff\xfe caf\xe9"\nfh = open("f")\n'
++                                        b'requests.post("u")  # \xe9\n'
++                                        b'deleteMe()  # caf\xe9\n')
++    commit("bytes")
++    def lum(*a):
++        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root)
++    r = lum("pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    ok = r.returncode == 0 and "UnicodeDecodeError" not in r.stderr
++    check("風險掃描不中斷", ok, r.stderr[-300:])
++    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0]) if ok else {}
++    check("風險掃描照樣看得到那支檔的風險寫法(開檔沒關)", any(c.get("file") == "src/a.py" for c in d.get("claims", [])), str(d)[:300])
++    r = lum("code-loop", "check", "--diff", "HEAD~1..HEAD", "--repo", str(root))
++    out = r.stdout + r.stderr
++    check("★推送檢查不再因為風險掃描壞掉而放行(fail-open)★", "fail-open" not in out and "tier=unknown" not in out, out[-300:])
++    # 共用的 git 包裝(派工鏡頭讀 base 版內容、逐檔 diff 都走它)也要讀得動非 UTF-8 內容
++    m = _load_lumos_inproc()
++    try:
++        rg = m._lens_git(root, "show", "HEAD:src/a.py")
++        ok_g = rg is not None and rg.returncode == 0 and "\ufffd" in rg.stdout
++    except UnicodeDecodeError:
++        ok_g = False
++    check("共用 git 包裝讀非 UTF-8 內容不丟錯(解不了的字元換成替代字元)", ok_g, "")
++    for args in (("impact", "--diff", "HEAD~1..HEAD", "--repo", str(root)),
++                 ("dispatch-lens", "HEAD~1..HEAD", "--repo", str(root), "--no-cache"),
++                 ("test-layers", "--diff", "HEAD~1..HEAD", "--repo", str(root))):
++        r = lum(*args)
++        check(f"{args[0]} 不中斷", "UnicodeDecodeError" not in r.stderr and "Traceback" not in r.stderr, r.stderr[-300:])
++    # 2026-09-11 代碼審 r1:下面兩條原本漏掉——拿掉修法測試照樣綠,等於沒有證據
++    try:
++        hits = m._scan_diff_for_irreversible_hints(str(root))
++        ok_h = any("requests.post" in str(h) for h in hits)
++    except UnicodeDecodeError:
++        hits, ok_h = [], False
++    check("不可逆寫法掃描讀得動非 UTF-8 內容,照樣抓到那行對外呼叫", ok_h, str(hits)[:200])
++    try:
++        conf = m._delguard_confidence(["deleteMe"], str(root), "docs/t-knowledge")
++    except UnicodeDecodeError:
++        conf = None
++    check("刪除守衛的全域搜尋讀得動非 UTF-8 內容(那個名字還在用,判 low)", conf == {"deleteMe": "low"}, str(conf))
++
++
++def t_git_readers_survive_non_utf8_filenames():
++    """提交裡有一支檔名不是 UTF-8 的檔(例如 Big5 檔名),要 git 印原始檔名的指令都不能中斷、也不能悄悄跳過。
++    2026-09-11 代碼審 r1 F1 追出來的:有好幾處刻意叫 git 不要轉義檔名(為了中文檔名),
++    這時非 UTF-8 的檔名位元組會原樣吐出來,文字模式解碼一丟錯——有的整支停、有的被外層接住變成「跳過提醒」。
++    這台 Mac 的檔案系統不收非 UTF-8 檔名,所以用 git 底層指令直接把檔名寫進提交,不經過磁碟。"""
++    import subprocess as sp, json as _json
++    root = Path(tempfile.mkdtemp(prefix="gctl-nonutf8-name-"))
++    def git(*a, **kw): return sp.run(["git", *a], cwd=root, capture_output=True, **kw)
++    ident = ("-c", "user.email=t@t", "-c", "user.name=t")
++    git("init")
++    (root / "src").mkdir()
++    (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
++    kb = root / "docs" / "t-knowledge" / "Systems"
++    kb.mkdir(parents=True)
++    (kb / "A.md").write_text("---\ntype: system\nstatus: doing\n---\n# A\n講 `src/a.py`\n", encoding="utf-8")
++    git("add", "-A"); git(*ident, "commit", "-m", "init")
++    name = b"src/\xa4\xa4\xa4\xe5.py"   # Big5 的「中文」
++    def put(content):
++        blob = git("hash-object", "-w", "--stdin", input=content).stdout.strip()
++        sp.run([b"git", b"update-index", b"--add", b"--cacheinfo", b"100644," + blob + b"," + name],
++               cwd=root, capture_output=True)
++    put(b"y = 1\n"); git(*ident, "commit", "-m", "big5 name")
++    (root / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
++    git("add", "src/a.py")
++    put(b"y = 2\n"); git(*ident, "commit", "-m", "touch both")
++    raw = git("-c", "core.quotePath=false", "diff", "--name-only", "HEAD~1..HEAD").stdout
++    check("基準線:差異裡真的有一支非 UTF-8 檔名", name in raw, repr(raw))
++    def lum(*a):
++        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root)
++    (root / ".lumos").mkdir()
++    (root / ".lumos" / "test-layers.json").write_text('{"py": {"layer": "unit"}}', encoding="utf-8")
++    r = lum("test-layers", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
++    js = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
++    hits = _json.loads(js[0]).get("hits", []) if js else []
++    check("test-layers 照樣給提醒(不是讀差異失敗就跳過)", bool(hits) and "失敗" not in r.stderr, r.stderr[-300:])
++    r = lum("impact", "--diff", "HEAD~1..HEAD", "--repo", str(root))
++    check("impact 不中斷", r.returncode == 0 and "Traceback" not in r.stderr, r.stderr[-300:])
++    r = lum("cochange", "check", "--diff", "HEAD~1..HEAD", "--repo", str(root))
++    check("共改檢查(挖歷史＋讀差異)跑得完(rc0,不是 git 失敗的 rc2、也不是中斷)",
++          r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    m = _load_lumos_inproc()
++    rt = m._testmap_git(root, ["diff", "--name-only", "HEAD~1..HEAD"])
++    check("測試對照表的 git 包裝讀得動(解不了的換成替代字元)", "\ufffd" in rt.stdout, repr(rt.stdout))
++    # 使用者自己把 core.quotePath 關掉(中文檔名的常見設定)時,沒特別指定的呼叫也會吐原始位元組
++    git("config", "core.quotePath", "false")
++    a = git("rev-parse", "HEAD~1", text=True).stdout.strip()
++    b = git("rev-parse", "HEAD", text=True).stdout.strip()
++    try:
++        ok_v, why = m._codeloop_record_valid(root, a, b)
++        ok = ok_v is False and "動了代碼" in why
++    except UnicodeDecodeError:
++        ok, why = False, "UnicodeDecodeError"
++    check("推送檢查判審查留痕還算不算數時不中斷(那段改了代碼 → 不算數)", ok, why)
++
++
++def _text_git_calls_missing_errors(src):
++    """回傳原始碼裡「文字模式、跑的是 git、沒帶 errors=」的子程序呼叫行號。
++    判 git:第一個參數字面上有 "git";或第一個參數是變數/串接、而所在函式裡出現 "git"(保守:寧可多抓)。"""
++    import ast
++    tree = ast.parse(src)
++    parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
++    def func_of(n):
++        while n in parents:
++            n = parents[n]
++            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
++                return n
++        return tree
++    bad = []
++    for n in ast.walk(tree):
++        if not isinstance(n, ast.Call):
++            continue
++        f = n.func
++        fname = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
++        if fname not in ("run", "check_output", "Popen", "call", "check_call") or not n.args:
++            continue
++        kw = {k.arg: k.value for k in n.keywords if k.arg}
++        text = kw.get("text") or kw.get("universal_newlines")
++        textish = "encoding" in kw or (text is not None and not (isinstance(text, ast.Constant) and text.value is False))
++        if not textish or "errors" in kw:
++            continue
++        a0 = ast.get_source_segment(src, n.args[0]) or ""
++        if '"git"' in a0 or "'git'" in a0:
++            bad.append(n.lineno)
++        elif isinstance(n.args[0], (ast.Name, ast.BinOp)):
++            fs = ast.get_source_segment(src, func_of(n)) or ""
++            if '"git"' in fs or "'git'" in fs:
++                bad.append(n.lineno)
++    return sorted(bad)
++
++
++def t_every_text_mode_git_call_tolerates_undecodable_output():
++    """★守衛★:工具裡每一個用文字模式讀 git 輸出的呼叫都要帶 errors=(解不了的字元換成替代字元)。
++    git 的輸出會帶非 UTF-8 位元組的地方很多:檔案內容、沒轉義的檔名、舊專案的 Big5 提交訊息;
++    嚴格解碼一丟錯,輕則整支停,重則被外層接住變成悄悄放行(2026-09-11 風險掃描就是這樣讓推送檢查失效)。
++    逐處補、逐處找,代碼審第一輪就證明會漏(九處只釘到三處、另外漏了刪除守衛那一處),所以改成機器掃全部。
++    UTF-8 正常的輸出加了 errors= 結果一模一樣,所以不設例外清單。見 Issues/風險掃描遇到非UTF-8內容整支中斷。"""
++    bad = _text_git_calls_missing_errors(Path(GRAPHCTL).read_text(encoding="utf-8"))
++    check("每個文字模式的 git 呼叫都帶 errors=", bad == [], f"缺的行號:{bad[:20]}")
++    # 守衛自己要會翻紅:餵一段壞的、一段好的
++    sample_bad = 'import subprocess\ndef f():\n    cmd = ["git", "log"]\n    return subprocess.run(cmd, capture_output=True, text=True)\n'
++    sample_good = sample_bad.replace("text=True)", 'text=True, errors="replace")')
++    check("守衛抓得到變數形式的 git 呼叫", _text_git_calls_missing_errors(sample_bad) == [4], "")
++    check("帶了 errors= 就放過", _text_git_calls_missing_errors(sample_good) == [], "")
++
++
+ def t_vendored_state_survives_unreadable_file():
+     """工具檔讀不到(權限、被鎖)時,健檢與風險掃描不能直接噴錯中斷——那支檔當成「不是原封不動」照樣掃。
+     2026-09-10 代碼審 r4 邊界席(blocker):逐檔讀內容沒包例外,權限錯直接變成 Python 錯誤、推送前的檢查整支停掉。"""
+     import os as _os
+     m = _load_lumos_inproc()
+     with tempfile.TemporaryDirectory() as d:
+         root = Path(d)
+         (root / "scripts").mkdir()
+         f = root / "scripts" / "lumos"
+         f.write_text("x\n", encoding="utf-8")

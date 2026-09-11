@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-09-11
 self_audit: sonnet/2026-06-26
 about_code_stamp: batch-2026-08-23/2026-08-23/215807ff5f0c
 tags:
@@ -13,7 +13,7 @@ tags:
 verified_by:
   - "[[Verification/2026-06-26_lumos-deinit_跨平台]]"
 summary: |-
-  FLOW:pre-flight守衛(非git→rc2｜root==_lumos_src→rc2｜vault==root→強制keep-graph)→[--dry-run僅印即返]→[刪圖譜安全網:非tty無--yes→rc2｜印清單+未commit數→互動y確認]→拆閘→剝CLAUDE區塊→刪vault→移vendored(最後,可能含自己)
+  FLOW:pre-flight守衛(非git→rc2｜專案路徑不是UTF-8→rc2(嚴格解碼不猜路徑,2026-09-11 見 [[Issues/風險掃描遇到非UTF-8內容整支中斷]])｜root==_lumos_src→rc2｜vault==root→強制keep-graph)→[--dry-run僅印即返]→[刪圖譜安全網:非tty無--yes→rc2｜印清單+未commit數→互動y確認]→拆閘→剝CLAUDE區塊→刪vault→移vendored(最後,可能含自己)
   KEY:對稱 lumos init 的「專案層」反安裝(對比 uninstall=機器層);只動本 repo,不碰 ~/.claude
   KEY:不可逆的 rmtree(vault) 被四重閘擋——dry-run/keep-graph/vault==root/非互動無--yes 任一即不刪(防誤刪整個 repo)[test:t_deinit_graph]
   KEY:vault==root 鐵閘獨立於 root==_lumos_src 守衛——保護任何 standalone-vault repo(非只 Lumos 源)免被 rmtree 整個 repo

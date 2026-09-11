@@ -96,13 +96,13 @@ def _version_text():
                                      else "被複製進某個專案的那一份(指紋是那個專案的,不是工具鏈的)"))
     try:
         sha = _sp.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
-                      capture_output=True, text=True, timeout=5)
+                      capture_output=True, text=True, errors="replace", timeout=5)
         if sha.returncode == 0 and sha.stdout.strip():
             dirty = _sp.run(["git", "-C", str(here), "status", "--porcelain"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, errors="replace", timeout=5)
             mark = "(有未提交的改動)" if dirty.stdout.strip() else ""
             branch = _sp.run(["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, errors="replace", timeout=5)
             bname = branch.stdout.strip() or "?"
             # ★複製進別的專案時,這個編號是「那個專案的」,不是工具鏈的★
             # (2026-09-07 代碼審 r1 外家席:不講清楚的話,讀的人會拿它當工具鏈版本用)
@@ -564,11 +564,11 @@ def _replay_git_blob(root, relpath):
     物件、-w 落懸空 blob 兩週可被 GC——取 HEAD 的 blob 保證被 tree 引用)。回 (blob_id, err)。"""
     import subprocess as _sp
     head = _sp.run(["git", "-C", str(root), "rev-parse", f"HEAD:{relpath}"],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, errors="replace")
     if head.returncode != 0:
         return None, f"{relpath} 還沒 commit 進版控"
     work = _sp.run(["git", "-C", str(root), "hash-object", str(Path(root) / relpath)],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, errors="replace")
     if work.returncode != 0:
         return None, f"{relpath} 讀不到({work.stderr.strip()[:80]})"
     if head.stdout.strip() != work.stdout.strip():
@@ -939,7 +939,7 @@ def _gate_event_or_warn(repo_root, gate, kind, note, **kw):
 
 def _sp_run_text(cmd):
     import subprocess as _sp
-    return _sp.run(cmd, capture_output=True, text=True).stdout.strip()
+    return _sp.run(cmd, capture_output=True, text=True, errors="replace").stdout.strip()
 
 
 def _append_governance_log(vault, events):
@@ -952,7 +952,7 @@ def _append_governance_log(vault, events):
     import subprocess
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                                capture_output=True, text=True, cwd=str(vault)).stdout.strip()
+                                capture_output=True, text=True, errors="replace", cwd=str(vault)).stdout.strip()
     except Exception:
         commit = ""
     if not commit:
@@ -1488,7 +1488,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         _r = _sp.run(["git", "-c", "core.quotepath=false", "log", "--diff-filter=A",
                       "--since=2026-08-30T00:00:00", "--name-only", "--pretty=format:",
                       "--", "governance/review-reports/"],
-                     capture_output=True, text=True, cwd=str(_repo_root), timeout=15)
+                     capture_output=True, text=True, errors="replace", cwd=str(_repo_root), timeout=15)
         if _r.returncode != 0:
             raise RuntimeError("git log 失敗")
         _seen = []
@@ -3716,7 +3716,7 @@ def _scan_diff_for_irreversible_hints(cwd):
 
     for cmd in (["git", "diff", "--staged"], ["git", "diff", "HEAD~1..HEAD"]):
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", cwd=cwd)
         except FileNotFoundError:
             return []
         if r.returncode != 0 or not r.stdout.strip():
@@ -3881,7 +3881,7 @@ def _git_is_shallow(repo_root):
     import subprocess
     try:
         r = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=str(repo_root),
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
         return r.returncode == 0 and r.stdout.strip() == "true"
     except OSError:
         return False
@@ -4602,7 +4602,7 @@ def cmd_signoff(env, node, note, by=None):
     commit = ""
     try:
         commit = subprocess.run(["git", "-C", str(env.vault.parent), "rev-parse", "--short", "HEAD"],
-                                capture_output=True, text=True).stdout.strip()
+                                capture_output=True, text=True, errors="replace").stdout.strip()
     except OSError:
         pass
     log = env.vault.parent / ".signoff-log.jsonl"
@@ -9035,12 +9035,12 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         commit = ""
         try:
             commit = subprocess.run(["git", "-C", str(proot), "rev-parse", "--short", "HEAD"],
-                                    capture_output=True, text=True).stdout.strip()
+                                    capture_output=True, text=True, errors="replace").stdout.strip()
         except Exception:
             pass
         try:
             dirty = subprocess.run(["git", "-C", str(proot), "status", "--porcelain"],
-                                   capture_output=True, text=True).stdout.strip()
+                                   capture_output=True, text=True, errors="replace").stdout.strip()
         except OSError:
             dirty = ""
         if dirty:
@@ -9053,7 +9053,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         wt_ok = False
         try:
             r_add = subprocess.run(["git", "-C", str(proot), "worktree", "add", "--detach", wt],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, errors="replace")
             if r_add.returncode != 0:
                 for r in plist:
                     results.append({**r, "platform": plat, "verdict": "error",
@@ -12714,9 +12714,13 @@ def cmd_teardown(yes=False, source=None):
     設計/審計:Projects/teardown一鍵拆機_計劃。"""
     import subprocess
     try:                                       # repo root(對稱 deinit,非 git 中止)
+        # ★嚴格解碼★:這個路徑要拿去拆東西,換成替代字元等於猜路徑(見 cmd_deinit 同一段的說明)
         root = Path(subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"], text=True,
+            ["git", "rev-parse", "--show-toplevel"], text=True, errors="strict",
             stderr=subprocess.DEVNULL).strip())
+    except UnicodeDecodeError:
+        print("擋下:專案路徑裡有不是 UTF-8 的字元,為了不拆錯地方,不動手", file=sys.stderr)
+        return 2
     except Exception:
         print("擋下:這裡不是 git 專案,拆除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
         return 2
@@ -12774,10 +12778,15 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
     CLAUDE.md 注入區塊 /(預設)圖譜 vault。不碰機器共用項(~/.claude)。不自動 commit。"""
     import subprocess
     # root 走 git toplevel;非 git 目錄中止(不 fallback cwd——deinit 會刪檔)
+    # ★嚴格解碼,不換字元★(2026-09-11 代碼審第三輪外家席):路徑的位元組不是 UTF-8 時,
+    # 換成替代字元的路徑可能剛好是旁邊另一個已安裝的專案,後面就會刪掉★它的★圖譜。解不了就擋。
     try:
         root = Path(subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"], text=True,
+            ["git", "rev-parse", "--show-toplevel"], text=True, errors="strict",
             stderr=subprocess.DEVNULL).strip())
+    except UnicodeDecodeError:
+        print("擋下:專案路徑裡有不是 UTF-8 的字元,為了不刪錯地方,不動手", file=sys.stderr)
+        return 2
     except Exception:
         print("擋下:這裡不是 git 專案,移除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
         return 2
@@ -12829,7 +12838,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
             return 2
         files = [f for f in vault.rglob("*") if f.is_file()]
         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
-                               capture_output=True, text=True).stdout
+                               capture_output=True, text=True, errors="replace").stdout
         n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
         print(f"將刪除圖譜 vault: {vault}({len(files)} 檔)")
         if n_dirty:
@@ -12951,7 +12960,7 @@ def _deinit_unbar_gate(root: Path) -> int:
     指向使用者自設(如 .githooks)則保留不動——別誤殺使用者的 git hooks(deinit/teardown 共用此安全)。"""
     import subprocess
     cur = subprocess.run(["git", "-C", str(root), "config", "--get", "core.hooksPath"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, errors="replace")
     val = cur.stdout.strip()
     if val:
         if not _hooks_path_is_ours(root, val):   # #19 S5:抽成共用,別留第二份實作
@@ -12959,7 +12968,7 @@ def _deinit_unbar_gate(root: Path) -> int:
                   file=sys.stderr)
             return 0
     r = subprocess.run(["git", "-C", str(root), "config", "--unset", "core.hooksPath"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, errors="replace")
     if r.returncode not in (0, 5):
         print(f"  ⚠ git config --unset core.hooksPath rc={r.returncode}(續行)", file=sys.stderr)
     return r.returncode
@@ -13267,7 +13276,7 @@ def _deinit_detect_installed(root: Path) -> bool:
     不靠 scripts/lumos 自身存在(執行檔與'此 repo 是否裝過'無關)。"""
     import subprocess
     hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
-                        capture_output=True, text=True)
+                        capture_output=True, text=True, errors="replace")
     if hp.returncode == 0 and hp.stdout.strip():
         return True
     return (root / "scripts" / "hooks").is_dir()
@@ -13457,7 +13466,7 @@ def _diff_range_ends(root, diff_range):
         a, b = r.split("...", 1)
         a, b = a or "HEAD", b or "HEAD"
         try:
-            mb = subprocess.run(["git", "merge-base", a, b], capture_output=True, text=True,
+            mb = subprocess.run(["git", "merge-base", a, b], capture_output=True, text=True, errors="replace",
                                 cwd=str(root), timeout=_disp_git_timeout())
             return (mb.stdout.strip() or a), b
         except (OSError, subprocess.TimeoutExpired):
@@ -13495,7 +13504,7 @@ def _pull_source_or_abort(src, allow_stale=False):
         print("  (來源非 git repo,跳過 pull)")
         return 0
     has_remote = subprocess.run(["git", "-C", str(src), "remote"],
-                                capture_output=True, text=True).stdout.strip()
+                                capture_output=True, text=True, errors="replace").stdout.strip()
     if not has_remote:
         print("  (來源無 remote:離線 clone,跳過 pull)")
         return 0
@@ -13513,7 +13522,7 @@ def _pull_source_or_abort(src, allow_stale=False):
     # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
     # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
     dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain=v1", "-z"],
-                           capture_output=True, text=True).stdout
+                           capture_output=True, text=True, errors="replace").stdout
     # ★用 -z 逐筆解析,不要對人看的格式做字串切片★(2026-09-06 代碼審 r1 外家席):
     # porcelain 的 rename 是 `R  old\0new`、含特殊字元的路徑在非 -z 模式會被 C-style 跳脫並加引號,
     # 光 strip('"') 解不開。-z 模式路徑原樣不跳脫;rename/copy 會多吃一個 NUL 欄位,我們直接
@@ -13558,7 +13567,7 @@ def _pull_source_or_abort(src, allow_stale=False):
         if saved is not None:
             print(f"    (動手前已備份到 {bak};全部併回成功才會刪)")
             subprocess.run(["git", "-C", str(src), "checkout", "--"] + paths,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
             # ★比較對象是「拉之前的已提交版」,不是拉下來的內容★(2026-09-06 代碼審 r1 折入後
             # 自己的測試抓到):checkout 完檔案就等於 base。要補回的是「本機在 base 之上加了什麼」
             # ——拿拉下來的內容比,會在遠端剛好也加了同一行時把本機那筆當成重複吃掉。
@@ -14508,7 +14517,7 @@ def _self_repo_origin(script=None):
         return None   # vendored 消費副本/無關 repo:不信其 origin
     try:
         r = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
     except OSError:
         return None
     u = r.stdout.strip()
@@ -14555,7 +14564,7 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
         # 冷啟動不該因此炸掉)。用分支不用 tag——tag 會進 detached HEAD,
         # 之後 git pull / lumos update 全部靜默停在裝機那版(2026-07-30 裁定)。
         ok = subprocess.run(["git", "clone", "--branch", branch, url, str(home)],
-                            capture_output=True, text=True).returncode == 0
+                            capture_output=True, text=True, errors="replace").returncode == 0
         if not ok:
             print(f"  提醒:抓不到 {branch} 這條對外線(分支還沒開、或名字改了),改用預設分支。",
                   file=sys.stderr)
@@ -14573,8 +14582,9 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
         failures.append("install")
     # 3) 專案層自動接線(四分流;git toplevel 才算專案)
     try:
+        # 嚴格解碼:這個路徑要拿去裝東西,解不了就當成不在專案裡(跳過專案層),不猜路徑
         root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"],
-                                            text=True, stderr=subprocess.DEVNULL).strip())
+                                            text=True, errors="strict", stderr=subprocess.DEVNULL).strip())
     except Exception:
         root = None
     if root is None:
@@ -14643,8 +14653,9 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale
     no_hooks 路徑(不分新/既有):只 _reinject_claude_block(讀本機已 vendor 範本,無則靜默)。"""
     import subprocess
     try:
+        # 嚴格解碼:這個路徑要拿去寫檔,換成替代字元會在不存在的路徑上建出一整棵資料夾;解不了就照原本的退路用目前目錄
         root = Path(subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL).strip())
+            ["git", "rev-parse", "--show-toplevel"], text=True, errors="strict", stderr=subprocess.DEVNULL).strip())
     except Exception:
         root = Path.cwd()
     existing = _vault_in(root)
@@ -15671,7 +15682,7 @@ def enforcement_status(root=None, home=None):
     # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
     try:
         hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
-                            capture_output=True, text=True, timeout=10).stdout.strip()
+                            capture_output=True, text=True, errors="replace", timeout=10).stdout.strip()
     except Exception:
         hp = ""
     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
@@ -16375,13 +16386,13 @@ def _lint_aligned(diff_range, repo_root):
     try:
         r_right = subprocess.run(
             ["git", "rev-parse", right],
-            capture_output=True, text=True, cwd=str(repo_root))
+            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
         r_head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd=str(repo_root))
+            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
         r_status = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=str(repo_root))
+            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     except FileNotFoundError:
         return False
     if r_right.returncode != 0 or r_head.returncode != 0 or r_status.returncode != 0:
@@ -17267,16 +17278,16 @@ def _cochange_transactions(repo_root, cfg, upto="HEAD", timeout=None):
     排除:merge、raw 檔數 > max_changeset(tangled,以排除前的原始檔數計)、exclude pattern。"""
     import subprocess as sp
     head = sp.run(["git", "-C", str(repo_root), "rev-parse", upto],
-                  capture_output=True, text=True, timeout=timeout)
+                  capture_output=True, text=True, errors="replace", timeout=timeout)
     if head.returncode != 0:
         gitdir = sp.run(["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
-                        capture_output=True, text=True, timeout=timeout)
+                        capture_output=True, text=True, errors="replace", timeout=timeout)
         if gitdir.returncode == 0 and upto == "HEAD":
             return [], None  # unborn branch:空歷史是正常空結果
         return None, f"git rev-parse {upto} 失敗(非 git repo 或 rev 不存在)"
     r = sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=off", "log",
                 "--no-merges", "--pretty=format:\x01%H", "--name-only", upto],
-               capture_output=True, text=True, timeout=timeout)
+               capture_output=True, text=True, errors="replace", timeout=timeout)
     if r.returncode != 0:
         return None, (r.stderr or "git log 失敗").strip()
     txns, cur = [], None
@@ -17387,7 +17398,7 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
     else:
         cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
                "diff", "--cached", "--name-only"]
-    d = sp.run(cmd, capture_output=True, text=True)
+    d = sp.run(cmd, capture_output=True, text=True, errors="replace")
     if d.returncode != 0:
         print(f"擋下:git 算不出差異: {(d.stderr or '').strip() or '原因不明'}", file=sys.stderr)
         return 2
@@ -17541,7 +17552,7 @@ def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
     cmd += ["--", ".", f":(exclude){graph_root}"]
     for d in _DELGUARD_ALL_EXCLUDE_DIRS:
         cmd += [f":(exclude){d.rstrip('/')}"]
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, timeout=timeout)
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", cwd=repo_root, timeout=timeout)
     if r.returncode > 1:
         raise RuntimeError(f"git grep rc={r.returncode}: {r.stderr.strip()[:200]}")
     alive = set()
@@ -17915,8 +17926,10 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     try:
         # core.quotePath=false:CJK 檔名不轉義加引號(否則 "+++ b/" 前綴比對全失效,
         # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
+        # errors="replace":提交裡有非 UTF-8 內容時照樣讀得完(2026-09-11,Issues/風險掃描遇到非UTF-8內容整支中斷:
+        # 原本解碼丟錯整支停,推送檢查那邊則是放行——「高風險要先審查」整個消失);照刪除守衛讀差異的先例
         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
-                           capture_output=True, text=True, cwd=str(repo_root))
+                           capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     except FileNotFoundError:
         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
         return None
@@ -18355,7 +18368,7 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
     try:
         # core.quotePath=false:CJK 檔名不轉義加引號(否則 suffix 判斷全失效,r1 panel major)
         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--name-only", diff],
-                           cwd=str(repo_root), capture_output=True, text=True, timeout=30)
+                           cwd=str(repo_root), capture_output=True, text=True, errors="replace", timeout=30)
         if r.returncode != 0:
             print(f"test-layers: git diff rc={r.returncode},跳過提醒", file=sys.stderr)
             if as_json:
@@ -18487,7 +18500,7 @@ def _testmap_strip(path):
 
 def _testmap_git(root, args, timeout=30):
     return subprocess.run(["git", "-C", str(root), "-c", "core.quotePath=false"] + args,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, errors="replace", timeout=timeout)
 
 
 def _testmap_classify(files):
@@ -18766,7 +18779,7 @@ def _testmap_affected_inner(diff, repo, as_json):
     stale = False
     try:
         r = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
-                            bac, "HEAD"], capture_output=True, text=True, timeout=30)
+                            bac, "HEAD"], capture_output=True, text=True, errors="replace", timeout=30)
         if r.returncode == 1:     # rc1=非祖先;其他錯誤(sha 不存在等)略過①
             stale = True
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -18971,7 +18984,7 @@ def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
         return emit("disabled", note="(未宣告 .lumos/config.json 的 ci 區塊,CI 回流功能關閉)")
     def _git_out(*a):
         try:
-            r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True,
+            r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, errors="replace",
                                timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return ""        # git 缺席/逾時也 fail-open(絕不 traceback)
@@ -19528,7 +19541,7 @@ def git_last_change_dates(repo_root, vault):
         rel_vault = os.path.relpath(str(vault), str(repo_root))
         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotepath=false",
                             "log", "--name-only", "--format=@%cs", "--", rel_vault],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, errors="replace", timeout=30)
         if r.returncode == 0:
             cur = None
             prefix = rel_vault.rstrip("/") + "/"
@@ -19589,7 +19602,7 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
             counts = {}
             try:
                 r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
-                                   capture_output=True, text=True, timeout=10)
+                                   capture_output=True, text=True, errors="replace", timeout=10)
                 if r.returncode == 0:
                     for ln in r.stdout.splitlines():
                         if ln.strip():
@@ -20476,7 +20489,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         return 2
     # core.quotePath=false:CJK 檔名不轉義加引號(否則 startswith/endswith 過濾全失效,r2 panel major)
     r = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
-                 "diff", "--name-only", diff_range], capture_output=True, text=True)
+                 "diff", "--name-only", diff_range], capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
         print(f"擋下:git 算不出差異: {r.stderr.strip()[:200]}", file=sys.stderr)
         return 2
@@ -20504,7 +20517,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
     for f in files:
         d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
-                     "diff", diff_range, "--", f], capture_output=True, text=True)
+                     "diff", diff_range, "--", f], capture_output=True, text=True, errors="replace")
         hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
                         if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
         buf = io.StringIO()
@@ -20609,7 +20622,7 @@ def _codeloop_git_branch(repo_root):
     """取 HEAD branch 名(detached HEAD 回 HEAD)。"""
     import subprocess
     r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                       capture_output=True, text=True, cwd=str(repo_root))
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     return r.stdout.strip() or "HEAD"
 
 
@@ -20645,7 +20658,9 @@ def _lens_git(repo_root, *args, quote=False, binary=False):
     if quote:
         cmd += ["-c", "core.quotePath=false"]
     try:
-        return _sp.run(cmd + list(args), capture_output=True, text=not binary, timeout=20)
+        if binary:
+            return _sp.run(cmd + list(args), capture_output=True, timeout=20)
+        return _sp.run(cmd + list(args), capture_output=True, text=True, errors="replace", timeout=20)
     except (OSError, _sp.TimeoutExpired):
         return None
 
@@ -21729,7 +21744,7 @@ def _codeloop_git_head(repo_root):
     """取 HEAD full sha。"""
     import subprocess
     r = subprocess.run(["git", "rev-parse", "HEAD"],
-                       capture_output=True, text=True, cwd=str(repo_root))
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     return r.stdout.strip()
 
 
@@ -21737,7 +21752,7 @@ def _codeloop_git_ts(repo_root, rev="HEAD"):
     """取某版本的 committer date(ISO 8601;預設 HEAD);失敗回空字串。"""
     import subprocess
     r = subprocess.run(["git", "show", "-s", "--format=%cI", rev],
-                       capture_output=True, text=True, cwd=str(repo_root))
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     return r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
 
 
@@ -22149,7 +22164,7 @@ def _bound_tests_range(repo_root, diff_range):
     # `merge-base..feature` 只動到 f.txt。誤點到的那些合約如果有紅的測試,
     # 高風險那條路會擋掉一次本來該過的推送——★方向錯得最難看的那種★。
     import subprocess as _sp
-    mb = _sp.run(["git", "merge-base", ml[1], head], capture_output=True, text=True,
+    mb = _sp.run(["git", "merge-base", ml[1], head], capture_output=True, text=True, errors="replace",
                  cwd=str(repo_root))
     if mb.returncode != 0 or not mb.stdout.strip():
         # 沒有共同祖先(孤兒分支 / 剛 init 的 repo)→ 誠實說算不出來,不要拿一個錯的範圍硬算
@@ -22637,11 +22652,11 @@ def _codeloop_record_valid(repo_root, rec_sha, marker_sha):
         return True, f"同版本 {marker_sha[:8]}"
     try:
         anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
-                      capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
+                      capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
         if anc.returncode != 0:
             return False, f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先"
         df = _sp.run(["git", "diff", "--name-only", rec_sha, marker_sha],
-                     capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
+                     capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
     except _sp.TimeoutExpired:
         return False, f"git 超過 {_disp_git_timeout():.0f} 秒沒回(merge-base/diff),判不了有效性"
     files = [f.strip() for f in df.stdout.splitlines() if f.strip()]
@@ -22661,7 +22676,7 @@ def _disp_git_timeout():
 
 def _git_tree_has(repo_root, at_sha, path):
     import subprocess as _sp
-    r = _sp.run(["git", "cat-file", "-e", f"{at_sha}:{path}"], capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
+    r = _sp.run(["git", "cat-file", "-e", f"{at_sha}:{path}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
     return r.returncode == 0
 
 
@@ -22712,7 +22727,7 @@ def _dispositions_check_test(repo_root, at_sha, ev, pidx):
     _spec = [f":(glob){_base}**/*{e}" for e in _exts] if _exts else [str(rel) if str(rel) != "." else "."]
     _spec += [":(exclude)docs/**", ":(exclude)governance/**"]
     r = _sp.run(["git", "grep", "-w", "-F", "-q", "-e", name, at_sha, "--", *_spec],
-                capture_output=True, text=True, cwd=str(repo_root), timeout=_disp_git_timeout())
+                capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
     if r.returncode == 1:
         return False, f"測試 {name!r} 在推送版本 {at_sha[:8]} 的樹裡整字 grep 不到(未追蹤/未提交的測試不算證據)"
     if r.returncode != 0:
@@ -22727,7 +22742,7 @@ def _dispositions_check_issue(repo_root, at_sha, issue):
     if name.endswith(".md"):
         name = name[:-3]
     if at_sha:
-        ls = _sp.run(["git", "ls-tree", "--name-only", at_sha, "docs/"], capture_output=True, text=True, cwd=str(repo_root))
+        ls = _sp.run(["git", "ls-tree", "--name-only", at_sha, "docs/"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
         slugs = [x.strip() for x in ls.stdout.splitlines() if x.strip().endswith("-knowledge")]
         for s in slugs:
             p = f"{s}/Issues/{name}.md"
@@ -22921,7 +22936,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         mb = None
         for base_branch in ("main", "master"):
             r = _sp.run(["git", "merge-base", "HEAD", base_branch],
-                        capture_output=True, text=True, cwd=str(repo_root))
+                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
             if r.returncode == 0 and r.stdout.strip():
                 mb = r.stdout.strip()
                 if mb == head_sha:
@@ -22990,7 +23005,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         _ml = _mainline_ref(repo_root)
         _mlname = _ml[0].split("@")[0] if _ml else None
         if _ml and marker_branch and marker_branch != _mlname:
-            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, cwd=str(repo_root))
+            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
             _mb = _mbr.stdout.strip() if _mbr.returncode == 0 else ""
             if _mb and _mb == marker_sha:
                 # 分支 tip 已在主線上:沒有本分支自己的改動,沒有題要答
@@ -23213,7 +23228,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
         # --at-sha(r1 外家 finder f5/否決 f2):checkout 在 main、推的是別的分支時,check 按被推的 sha 查,表態得綁那個 sha 不是 HEAD
         if at_sha:
             import subprocess as _sp
-            _rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha}^{{commit}}"], capture_output=True, text=True, cwd=str(repo_root))
+            _rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha}^{{commit}}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
             if _rp.returncode != 0:
                 print(f"擋下:--at-sha {at_sha} 不是這個 repo 裡的 commit", file=sys.stderr)
                 return 2

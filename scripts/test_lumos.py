@@ -9764,6 +9764,273 @@ def t_pitfalls_diff_ignores_vendored_toolchain():
         m._VENDORED_ALL = saved_all
 
 
+def t_diff_readers_survive_non_utf8_content():
+    """提交裡有一支內容不是 UTF-8 的檔(git 沒把它當二進位),讀 git 差異的指令都不能中斷。
+    2026-09-10 代碼審第四輪撞到、2026-09-11 查清範圍:風險掃描、波及計算、派工鏡頭都用文字模式讀差異,
+    解碼一丟錯就整支停——★推送檢查那邊更糟:風險掃描壞掉時是放行(fail-open),分級變成 unknown,
+    「高風險要先審查」這道要求整個消失★。照刪除守衛讀差異的先例,解不了的字元換成替代字元。
+    見 Issues/風險掃描遇到非UTF-8內容整支中斷。"""
+    import subprocess as sp, json as _json
+    root = Path(tempfile.mkdtemp(prefix="gctl-nonutf8-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    def commit(msg): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg)
+    git("init")
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    kb = root / "docs" / "t-knowledge" / "Systems"
+    kb.mkdir(parents=True)
+    (kb / "A.md").write_text("---\ntype: system\nstatus: doing\n---\n# A\n講 `src/a.py`\n", encoding="utf-8")
+    commit("init")
+    (root / "src" / "a.py").write_bytes(b'x = "\xff\xfe caf\xe9"\nfh = open("f")\n'
+                                        b'requests.post("u")  # \xe9\n'
+                                        b'deleteMe()  # caf\xe9\n')
+    commit("bytes")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root)
+    r = lum("pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    ok = r.returncode == 0 and "UnicodeDecodeError" not in r.stderr
+    check("風險掃描不中斷", ok, r.stderr[-300:])
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0]) if ok else {}
+    check("風險掃描照樣看得到那支檔的風險寫法(開檔沒關)", any(c.get("file") == "src/a.py" for c in d.get("claims", [])), str(d)[:300])
+    r = lum("code-loop", "check", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+    out = r.stdout + r.stderr
+    check("★推送檢查不再因為風險掃描壞掉而放行(fail-open)★", "fail-open" not in out and "tier=unknown" not in out, out[-300:])
+    # 共用的 git 包裝(派工鏡頭讀 base 版內容、逐檔 diff 都走它)也要讀得動非 UTF-8 內容
+    m = _load_lumos_inproc()
+    try:
+        rg = m._lens_git(root, "show", "HEAD:src/a.py")
+        ok_g = rg is not None and rg.returncode == 0 and "\ufffd" in rg.stdout
+    except UnicodeDecodeError:
+        ok_g = False
+    check("共用 git 包裝讀非 UTF-8 內容不丟錯(解不了的字元換成替代字元)", ok_g, "")
+    for args in (("impact", "--diff", "HEAD~1..HEAD", "--repo", str(root)),
+                 ("dispatch-lens", "HEAD~1..HEAD", "--repo", str(root), "--no-cache"),
+                 ("test-layers", "--diff", "HEAD~1..HEAD", "--repo", str(root))):
+        r = lum(*args)
+        check(f"{args[0]} 不中斷", "UnicodeDecodeError" not in r.stderr and "Traceback" not in r.stderr, r.stderr[-300:])
+    # 2026-09-11 代碼審 r1:下面兩條原本漏掉——拿掉修法測試照樣綠,等於沒有證據
+    try:
+        hits = m._scan_diff_for_irreversible_hints(str(root))
+        ok_h = any("requests.post" in str(h) for h in hits)
+    except UnicodeDecodeError:
+        hits, ok_h = [], False
+    check("不可逆寫法掃描讀得動非 UTF-8 內容,照樣抓到那行對外呼叫", ok_h, str(hits)[:200])
+    try:
+        conf = m._delguard_confidence(["deleteMe"], str(root), "docs/t-knowledge")
+    except UnicodeDecodeError:
+        conf = None
+    check("刪除守衛的全域搜尋讀得動非 UTF-8 內容(那個名字還在用,判 low)", conf == {"deleteMe": "low"}, str(conf))
+    try:
+        txt = m._sp_run_text(["git", "-C", str(root), "show", "HEAD:src/a.py"])
+        ok_t = "\ufffd" in txt and "deleteMe" in txt
+    except UnicodeDecodeError:
+        ok_t = False
+    check("泛用的讀文字包裝讀得動非 UTF-8 內容(第二輪兩席抓到的漏網)", ok_t, "")
+
+
+def t_git_readers_survive_non_utf8_filenames():
+    """提交裡有一支檔名不是 UTF-8 的檔(例如 Big5 檔名),要 git 印原始檔名的指令都不能中斷、也不能悄悄跳過。
+    2026-09-11 代碼審 r1 F1 追出來的:有好幾處刻意叫 git 不要轉義檔名(為了中文檔名),
+    這時非 UTF-8 的檔名位元組會原樣吐出來,文字模式解碼一丟錯——有的整支停、有的被外層接住變成「跳過提醒」。
+    這台 Mac 的檔案系統不收非 UTF-8 檔名,所以用 git 底層指令直接把檔名寫進提交,不經過磁碟。"""
+    import subprocess as sp, json as _json
+    root = Path(tempfile.mkdtemp(prefix="gctl-nonutf8-name-"))
+    def git(*a, **kw): return sp.run(["git", *a], cwd=root, capture_output=True, **kw)
+    ident = ("-c", "user.email=t@t", "-c", "user.name=t")
+    git("init")
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    kb = root / "docs" / "t-knowledge" / "Systems"
+    kb.mkdir(parents=True)
+    (kb / "A.md").write_text("---\ntype: system\nstatus: doing\n---\n# A\n講 `src/a.py`\n", encoding="utf-8")
+    git("add", "-A"); git(*ident, "commit", "-m", "init")
+    name = b"src/\xa4\xa4\xa4\xe5.py"   # Big5 的「中文」
+    def put(content):
+        blob = git("hash-object", "-w", "--stdin", input=content).stdout.strip()
+        sp.run([b"git", b"update-index", b"--add", b"--cacheinfo", b"100644," + blob + b"," + name],
+               cwd=root, capture_output=True)
+    put(b"y = 1\n"); git(*ident, "commit", "-m", "big5 name")
+    (root / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    git("add", "src/a.py")
+    put(b"y = 2\n"); git(*ident, "commit", "-m", "touch both")
+    raw = git("-c", "core.quotePath=false", "diff", "--name-only", "HEAD~1..HEAD").stdout
+    check("基準線:差異裡真的有一支非 UTF-8 檔名", name in raw, repr(raw))
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root)
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "test-layers.json").write_text('{"py": {"layer": "unit"}}', encoding="utf-8")
+    r = lum("test-layers", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    js = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
+    hits = _json.loads(js[0]).get("hits", []) if js else []
+    check("test-layers 照樣給提醒(不是讀差異失敗就跳過)", bool(hits) and "失敗" not in r.stderr, r.stderr[-300:])
+    r = lum("impact", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+    check("impact 不中斷", r.returncode == 0 and "Traceback" not in r.stderr, r.stderr[-300:])
+    r = lum("cochange", "check", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+    check("共改檢查(挖歷史＋讀差異)跑得完(rc0,不是 git 失敗的 rc2、也不是中斷)",
+          r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+    m = _load_lumos_inproc()
+    rt = m._testmap_git(root, ["diff", "--name-only", "HEAD~1..HEAD"])
+    check("測試對照表的 git 包裝讀得動(解不了的換成替代字元)", "\ufffd" in rt.stdout, repr(rt.stdout))
+    # 使用者自己把 core.quotePath 關掉(中文檔名的常見設定)時,沒特別指定的呼叫也會吐原始位元組
+    git("config", "core.quotePath", "false")
+    a = git("rev-parse", "HEAD~1", text=True).stdout.strip()
+    b = git("rev-parse", "HEAD", text=True).stdout.strip()
+    try:
+        ok_v, why = m._codeloop_record_valid(root, a, b)
+        ok = ok_v is False and "動了代碼" in why
+    except UnicodeDecodeError:
+        ok, why = False, "UnicodeDecodeError"
+    check("推送檢查判審查留痕還算不算數時不中斷(那段改了代碼 → 不算數)", ok, why)
+
+
+def t_deinit_refuses_non_utf8_root_instead_of_guessing():
+    """專案路徑不是 UTF-8 時,deinit 必須擋下,不能把路徑換成替代字元再去刪。
+    2026-09-11 代碼審第三輪外家席(Codex)抓到:全面加 errors="replace" 之後,找專案根目錄那一行也被換字元,
+    旁邊剛好有一個名字只差那一個字、已經裝好 Lumos 的專案,deinit --yes 就會刪掉★它的★圖譜。
+    改之前這裡是解碼失敗 → 擋下,不刪任何東西;修法是恢復成嚴格解碼、並講清楚為什麼擋。
+    這台 Mac 的檔案系統不收非 UTF-8 檔名,所以用假的 git 輸出模擬「專案路徑的位元組不是 UTF-8」。"""
+    import subprocess as _subp, shutil as _sh, os, io, contextlib
+    from unittest import mock
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        decoy = base / "p-\ufffd"          # 名字只差那一個字、已經裝好的另一個專案
+        vault = decoy / "docs" / "decoy-knowledge"
+        vault.mkdir(parents=True)
+        (vault / "keep.md").write_text("別人的圖譜\n", encoding="utf-8")
+        raw = os.fsencode(str(base)) + b"/p-\xff\n"
+        def fake_check_output(*a, **k):
+            return raw.decode("utf-8", k.get("errors") or "strict") if k.get("text") else raw
+        removed = []
+        with mock.patch.object(_subp, "check_output", side_effect=fake_check_output), \
+             mock.patch.object(_sh, "rmtree", side_effect=lambda p, *a, **k: removed.append(str(p))), \
+             mock.patch.object(m, "_deinit_unbar_gate", lambda *a, **k: None), \
+             mock.patch.object(m, "_deinit_strip_claude", lambda *a, **k: None), \
+             mock.patch.object(m, "_deinit_remove_vendored", lambda *a, **k: None):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+                rc = m.cmd_deinit(yes=True)
+        check("非 UTF-8 的專案路徑:deinit 擋下(rc2)", rc == 2, f"rc={rc} {buf.getvalue()[-200:]}")
+        check("★旁邊那個名字只差一個字的專案,圖譜一個檔都沒被刪★", removed == [] and (vault / "keep.md").exists(), str(removed))
+        check("擋下的原因講的是路徑編碼,不是「這裡不是 git 專案」", "UTF-8" in buf.getvalue(), buf.getvalue()[-200:])
+
+
+def _text_git_calls_missing_errors(src):
+    """回傳原始碼裡「文字模式、沒帶 errors=、而且跑的是 git 或看不出跑什麼」的子程序呼叫行號。
+    看得出跑什麼=命令是字面清單(或以字面清單開頭的串接),或是同一個函式裡由這種清單指定的變數:
+    第一個元素是 "git" → 要帶;是別的程式(抓網址、查 GitHub、呼叫自己)→ 不管。
+    ★看不出來(命令從參數傳進來、或由函式算出來)→ 當成可能是 git,一樣要帶★——
+    2026-09-11 代碼審第二輪兩席都指出:泛用包裝 _sp_run_text(cmd) 的 git 字樣只在呼叫端,
+    原本「所在函式裡有沒有 git 字樣」的判法看不到它。寧可多抓,加了 errors= 對 UTF-8 正常的輸出沒有影響。"""
+    import ast
+    tree = ast.parse(src)
+    parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+    def func_of(n):
+        while n in parents:
+            n = parents[n]
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                return n
+        return tree
+    def name_of(first, fn, depth):
+        """命令清單第一個元素是哪支程式:字串照字面;變數往回找同一函式裡的字串指定;
+        sys.executable 是 python / 工具自己;其他看不出來(第三輪外家席:exe = "git" 原本被當成別的程式)。"""
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return "git" if first.value == "git" else "other"
+        if isinstance(first, ast.Attribute) and first.attr == "executable":
+            return "other"
+        if isinstance(first, ast.Name) and depth <= 5:
+            vals = [n.value for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == first.id for t in n.targets)]
+            kinds = [name_of(v, fn, depth + 1) for v in vals]
+            if kinds and all(k == "other" for k in kinds):
+                return "other"
+            return "git" if "git" in kinds else None
+        return None
+    def program(expr, fn, depth=0):
+        """回 "git" / "other" / None(看不出來)。"""
+        if depth > 5:
+            return None
+        if isinstance(expr, (ast.List, ast.Tuple)):
+            if not expr.elts or isinstance(expr.elts[0], ast.Starred):
+                return None
+            return name_of(expr.elts[0], fn, depth + 1)
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            return program(expr.left, fn, depth + 1)
+        if isinstance(expr, ast.Name):
+            found = []
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == expr.id for t in n.targets):
+                    found.append(program(n.value, fn, depth + 1))
+                elif isinstance(n, (ast.For, ast.comprehension)) and isinstance(n.target, ast.Name) \
+                        and n.target.id == expr.id:
+                    it = n.iter
+                    found.extend([program(e, fn, depth + 1) for e in it.elts]
+                                 if isinstance(it, (ast.List, ast.Tuple)) else [None])
+            if "git" in found:
+                return "git"
+            if not found or None in found:
+                return None   # 參數、外層變數、算出來的:看不出來
+            return "other"
+        return None
+    bad = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        fname = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        if fname not in ("run", "check_output", "Popen", "call", "check_call") or not n.args:
+            continue
+        kw = {k.arg: k.value for k in n.keywords if k.arg}
+        text = kw.get("text") or kw.get("universal_newlines")
+        textish = "encoding" in kw or (text is not None and not (isinstance(text, ast.Constant) and text.value is False))
+        if not textish or "errors" in kw:
+            continue
+        if program(n.args[0], func_of(n)) != "other":
+            bad.append(n.lineno)
+    return sorted(bad)
+
+
+def t_every_text_mode_git_call_tolerates_undecodable_output():
+    """★守衛★:工具裡每一個用文字模式讀 git 輸出的呼叫都要帶 errors=(解不了的字元換成替代字元)。
+    git 的輸出會帶非 UTF-8 位元組的地方很多:檔案內容、沒轉義的檔名、舊專案的 Big5 提交訊息;
+    嚴格解碼一丟錯,輕則整支停,重則被外層接住變成悄悄放行(2026-09-11 風險掃描就是這樣讓推送檢查失效)。
+    逐處補、逐處找,代碼審第一輪就證明會漏(九處只釘到三處、另外漏了刪除守衛那一處),所以改成機器掃全部。
+    UTF-8 正常的輸出加了 errors= 結果一模一樣,所以不設例外清單。見 Issues/風險掃描遇到非UTF-8內容整支中斷。"""
+    bad = _text_git_calls_missing_errors(Path(GRAPHCTL).read_text(encoding="utf-8"))
+    check("每個文字模式、跑 git 或看不出跑什麼的呼叫都帶 errors=", bad == [], f"缺的行號:{bad[:20]}")
+    # 守衛自己要會翻紅:餵壞的、好的、看不出跑什麼的包裝、明確是別的程式的
+    sample_bad = 'import subprocess\ndef f():\n    cmd = ["git", "log"]\n    return subprocess.run(cmd, capture_output=True, text=True)\n'
+    sample_good = sample_bad.replace("text=True)", 'text=True, errors="replace")')
+    check("守衛抓得到變數形式的 git 呼叫", _text_git_calls_missing_errors(sample_bad) == [4], "")
+    check("帶了 errors= 就放過", _text_git_calls_missing_errors(sample_good) == [], "")
+    sample_wrapper = ('import subprocess as _sp\ndef run_text(cmd):\n'
+                      '    return _sp.run(cmd, capture_output=True, text=True).stdout\n'
+                      'def g():\n    return run_text(["git", "show", "HEAD:x"])\n')
+    check("★命令從參數傳進來的泛用包裝也抓得到★(第二輪兩席抓到的漏洞型)",
+          _text_git_calls_missing_errors(sample_wrapper) == [3], str(_text_git_calls_missing_errors(sample_wrapper)))
+    sample_other = ('import subprocess, sys\ndef h(args):\n'
+                    '    subprocess.run(["curl", "-s", "u"], capture_output=True, text=True)\n'
+                    '    subprocess.run(["gh"] + args, capture_output=True, text=True)\n'
+                    '    subprocess.run([sys.executable, "x"], capture_output=True, text=True)\n')
+    check("明確跑別的程式的不算", _text_git_calls_missing_errors(sample_other) == [], str(_text_git_calls_missing_errors(sample_other)))
+    # 第三輪外家席:程式名稱放在變數裡(exe = "git")也要認得,不能因為開頭不是字串就當成別的程式
+    sample_var_exe = ('import subprocess\ndef f():\n    exe = "git"\n    cmd = [exe, "show", "HEAD:x"]\n'
+                      '    return subprocess.run(cmd, capture_output=True, text=True)\n')
+    check("程式名稱放在變數裡的 git 呼叫也抓得到", _text_git_calls_missing_errors(sample_var_exe) == [5],
+          str(_text_git_calls_missing_errors(sample_var_exe)))
+    # ★找專案根目錄的那一行必須嚴格解碼★:那個路徑會拿去寫檔、刪檔,換成替代字元等於猜路徑
+    # (第三輪外家席:換字元後可能剛好指到旁邊名字只差一個字的專案,deinit 就刪錯人的圖譜)
+    import ast as _ast
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    loose = []
+    for n in _ast.walk(_ast.parse(src)):
+        if isinstance(n, _ast.Call) and n.args and "--show-toplevel" in (_ast.get_source_segment(src, n.args[0]) or ""):
+            kw = {k.arg: k.value for k in n.keywords if k.arg}
+            if "text" in kw and not (isinstance(kw.get("errors"), _ast.Constant) and kw["errors"].value == "strict"):
+                loose.append(n.lineno)
+    check("★找專案根目錄的每一行都是嚴格解碼(解不了就擋,不換字元)★", loose == [], f"不是 strict 的行號:{loose}")
+
+
 def t_vendored_state_survives_unreadable_file():
     """工具檔讀不到(權限、被鎖)時,健檢與風險掃描不能直接噴錯中斷——那支檔當成「不是原封不動」照樣掃。
     2026-09-10 代碼審 r4 邊界席(blocker):逐檔讀內容沒包例外,權限錯直接變成 Python 錯誤、推送前的檢查整支停掉。"""
