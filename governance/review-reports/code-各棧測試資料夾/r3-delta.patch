@@ -1,0 +1,249 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 004f0c12..c6e4ef2b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17792,50 +17792,82 @@ def _nodehome_stack_test_dirs():
+             names = {d for inc, _exc in prof.get("dirs", {}).values() for d in inc if d}
+             if prof.get("dir_mode") == "suffix":
+                 for d in names:
+                     sufs.setdefault(d, set()).update(prof.get("exts", ()))
+             elif prof.get("rglob_under") == "src":
+                 under_src |= names
+         _NODEHOME_STACK_TEST_DIRS = ({k: frozenset(v) for k, v in sufs.items()}, frozenset(under_src))
+     return _NODEHOME_STACK_TEST_DIRS
+ 
+ 
+-def _nodehome_in_stack_test_dir(path, top_dirs):
+-    """在各棧的測試資料夾裡。兩種:
++def _nodehome_top_dirs(all_paths):
++    """repo 頂層的資料夾名;點開頭的不算(.git、.github 這類不是程式資料夾)。
++    別人的檔的裸路徑判定([S8])與測試資料夾的同名資料夾錨共用這一支。"""
++    return {p.split("/", 1)[0] for p in all_paths if "/" in p and not p.startswith(".")}
++
++
++def _nodehome_layout(all_paths):
++    """測試資料夾錨定要看的版面:(頂層資料夾 → 裡面有哪些副檔名, 模組的 src → src/main 底下有哪些副檔名)。
++    副檔名照測試地圖那一支取(小寫),這裡補上點號跟對照表的寫法對齊。"""
++    tops = _nodehome_top_dirs(all_paths)
++    top_exts, main_exts = {}, {}
++    for p in all_paths:
++        e = _testmap_ext(p)
++        if not e:
++            continue
++        parts = p.split("/")
++        if len(parts) > 1 and parts[0] in tops:
++            top_exts.setdefault(parts[0], set()).add("." + e)
++        for k in range(len(parts) - 2):
++            if parts[k] == "src" and parts[k + 1] == "main":
++                main_exts.setdefault("/".join(parts[:k + 1]), set()).add("." + e)
++                break
++    return top_exts, main_exts
++
++
++def _nodehome_in_stack_test_dir(path, layout):
++    """在各棧的測試資料夾裡——兩種都要「旁邊的程式目標有同一種檔」,只看資料夾名會把業務資料夾放掉
++    (2026-09-12 代碼審兩輪各席造出的反例:A/B 測試功能模組 ABTests/、Python 專案的 LoadTests/、
++    scriptsTests/ 裡的 .cs、src/androidTest 裡的 .py):
+     ① 頂層資料夾 = <X> 加對照表的結尾樣式(PosTerminalTests/、PosTerminalUITests/、Foo.IntegrationTests/),
+-       而且 repo 頂層真的有 <X> 這個資料夾(Xcode 的 App 配 AppTests、.NET 的 Foo 配 Foo.Tests),
+-       而且這支檔的副檔名屬於貢獻那個結尾的棧——只看名稱結尾的話,A/B 測試功能模組 ABTests/、
+-       Python 專案的 LoadTests/ 裡的業務檔都會被放掉(2026-09-12 代碼審三席各自造出反例);
+-    ② src/ 底下某層是對照表的測試資料夾名(app/src/androidTest/…;Gradle 保留的名字,不分 JVM 語言)。
+-    top_dirs=這個版本裡 repo 頂層的資料夾名。錨定比對照表的偵測(只看頂層、只看名稱結尾)嚴,
+-    對不上的照舊要家(過嚴、不漏)。"""
++       副檔名屬於貢獻那個結尾的棧,而且頂層的 <X> 資料夾裡有同一種副檔名的檔(Xcode 的 App 配 AppTests、
++       .NET 的 Foo 配 Foo.Tests);資料夾就叫結尾樣式本身(UITests/、IntegrationTests/)的直接認;
++    ② 緊接在 src 下一層的對照表測試資料夾名(app/src/androidTest/…),而且同一個模組的 src/main 有同一種副檔名的檔
++       (Kotlin、Java 都照認)。
++    layout=_nodehome_layout 的結果。對不上的照舊要家(過嚴、不漏)。"""
+     sufs, under_src = _nodehome_stack_test_dirs()
++    top_exts, main_exts = layout
+     parts = path.split("/")
+-    if len(parts) < 2:
++    e = _testmap_ext(path)
++    if len(parts) < 2 or not e:
+         return False
+-    top, name = parts[0], parts[-1]
+-    ext = "." + name.rsplit(".", 1)[1] if "." in name.lstrip(".") else ""
++    ext, top = "." + e, parts[0]
+     for suf, exts in sufs.items():
+-        base = top[:-len(suf)].rstrip(".") if top.endswith(suf) else ""
+-        if base and ext in exts and base in top_dirs:
++        if ext not in exts or not top.endswith(suf):
++            continue
++        base = top[:-len(suf)].rstrip(".")
++        if not base or ext in top_exts.get(base, ()):
++            return True
++    for i in range(1, len(parts) - 1):
++        if parts[i] in under_src and parts[i - 1] == "src" and ext in main_exts.get("/".join(parts[:i]), ()):
+             return True
+-    return any(seg in under_src and "src" in parts[:i] for i, seg in enumerate(parts[:-1]))
++    return False
+ 
+ 
+-def _nodehome_is_test(path, top_dirs=frozenset()):
++def _nodehome_is_test(path, layout=({}, {})):
+     """測試檔判定:先問測試地圖那一支;再認各棧的測試資料夾(2026-09-12:平板 POS 測試資料夾裡的輔助檔、
+     Android 儀器測試的 Kotlin 檔都被要求有家——測試地圖的規格刻意只認 test/tests 資料夾與檔名,不動它);
+-    副檔名不在測試地圖清單裡的(shell、Go、Rust、C…),套它同一組目錄與檔名規則。top_dirs 見 _nodehome_in_stack_test_dir。"""
++    副檔名不在測試地圖清單裡的(shell、Go、Rust、C…),套它同一組目錄與檔名規則。layout 見 _nodehome_in_stack_test_dir。"""
+     global _TESTMAP_DIR_RE
+     if _testmap_is_test(path):
+         return True
+-    if _nodehome_in_stack_test_dir(path, top_dirs):
++    if _nodehome_in_stack_test_dir(path, layout):
+         return True
+     if _testmap_ext(path) in _TESTMAP_EXTS:
+         return False                      # 測試地圖認得這種副檔名,它說不是就不是
+     if _TESTMAP_DIR_RE is None:
+         _TESTMAP_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|specs?)/", re.IGNORECASE)
+     if _TESTMAP_DIR_RE.search(path):
+         return True
+     name = path.rsplit("/", 1)[-1]
+     stem = _testmap_stem(path)
+     return (".spec." in name or ".test." in name or stem.startswith("test_")
+@@ -17999,28 +18031,28 @@ def _nodehome_side(repo_root, where, vault_rel, share=None, changed=None):
+             raw = s._reader(p)
+             if raw is not None:
+                 s.notes[rel] = _nodehome_parse_note(raw)
+     return s
+ 
+ 
+ def _nodehome_required(repo_root, side, cfg, vendored_skip):
+     """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。"""
+     import fnmatch
+     req, bad_names = set(), set()
+-    top_dirs = frozenset(p.split("/", 1)[0] for p in side.all_paths if "/" in p)   # 頂層資料夾(測試資料夾要有同名的程式資料夾)
++    layout = _nodehome_layout(side.all_paths)   # 測試資料夾要旁邊的程式目標有同一種檔
+     for p in side.files:
+         kind = _nodehome_code_kind(p)
+         if kind is None:
+             continue
+         if any(fnmatch.fnmatch(p, g) for g in _NODEHOME_EXCLUDE_GLOBS):
+             continue
+-        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or _nodehome_is_test(p, top_dirs):
++        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or _nodehome_is_test(p, layout):
+             continue
+         if kind == "shebang?":
+             if p in side.shebang:
+                 ok = side.shebang[p]
+             elif side.share is not None and p not in side.changed and p in side.share.shebang:
+                 ok = side.shebang[p] = side.share.shebang[p]
+             else:
+                 head = side._reader(p)
+                 ok = side.shebang[p] = bool(head) and head[:200].split(b"\n", 1)[0].startswith(b"#!")
+             if not ok:
+@@ -18051,21 +18083,21 @@ def _nodehome_homes(repo_root, side):
+         if n["type"] != "system" or n["status"] not in _NODEHOME_HOME_STATUSES:
+             continue
+         for k in keys:
+             homes.setdefault(k, []).append(rel)
+     return homes, own
+ 
+ 
+ def _nodehome_refs(text, side, req):
+     """[S7][S8] 這篇用反引號寫到哪幾支需要家的檔:抽取跟改檔前推筆記同一支(完整路徑+在受版控檔裡唯一的裸檔名)。
+     裸檔名不唯一時推筆記那支不認它,這裡也不認——不構成「別人檔的入口」,就不算認領。"""
+-    top_dirs = {p.split("/", 1)[0] for p in side.all_paths if "/" in p and not p.startswith(".")}
++    top_dirs = _nodehome_top_dirs(side.all_paths)
+     full, bare = _node_code_ref_tokens(text, top_dirs)
+     refs = {nfc(t) for t, _l in full if nfc(t) in req}
+     if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):
+         counts, where = {}, {}
+         for p in side.all_paths:
+             b = p.rsplit("/", 1)[-1]
+             counts[b] = counts.get(b, 0) + 1
+             where[b] = p
+         for b in bare:
+             if counts.get(b) == 1 and where[b] in req:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index cefea531..091fa4ef 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -36723,60 +36723,78 @@ def t_nodehome_stack_test_dirs_not_required():
+     Android 儀器測試的 Kotlin 檔(檔名尾 Test 只對 Java 認)被當成要家——都是誤擋。"""
+     print("t_nodehome_stack_test_dirs_not_required")
+     m = _load_lumos_inproc()
+     root = _nh_repo()
+     not_req = ("app/src/androidTest/java/com/x/HiltTestRunner.kt", "app/src/androidTest/java/com/x/CartScreenTest.kt",
+                "feature/cart/src/androidTest/kotlin/FakeRepo.java", "PosTerminalTests/ScreenshotMaker.swift",
+                "PosTerminalUITests/LaunchHelper.swift", "Foo.IntegrationTests/Fixture.cs", "Tests/AppTests/Helper.swift")
+     req_ok = ("app/src/main/java/com/x/di/NetworkModule.kt", "PosTerminal/App.swift", "tools/androidTest/gen.kt",
+               "ios/PosTerminalTests/Nested.swift", "src/features/abTests/Flag.kt", "svc/src/scripts/build.py",
+               "Foo/Program.cs", "ABTests/ExperimentManager.swift", "PaymentGateway/app.py",
+-              "PaymentGatewayTests/reconciliation.py", "LoadTests/db_schema.py", "CheckoutIntegrationTests/pricing_engine.go")
+-    for rel in not_req + req_ok:
++              "PaymentGatewayTests/reconciliation.py", "LoadTests/db_schema.py", "CheckoutIntegrationTests/pricing_engine.go",
++              "feature/cart/src/main/java/Cart.java", "tools/src/androidTest/backdoor.py",
++              "backend/src/internal/androidTest/handler.go", "scripts/tool.py", "scriptsTests/inject.cs",
++              "svc/src/main/app.py")
++    bare = ("UITests/LaunchHelper.swift", "IntegrationTests/Fixture.cs")
++    for rel in not_req + req_ok + bare:
+         _nh_file(root, rel, "x\n")
+     _nh_git(root, "add", "-A")
+     cfg = m._nodehome_config(root)
+     side = m._nodehome_side(root, "index", "docs/kg-knowledge")
+     req, _bad = m._nodehome_required(root, side, cfg, frozenset())
+     check("①Gradle src/ 底下 androidTest 的檔不要家(Kotlin、Java 都算,不看檔名)",
+           not ({not_req[0], not_req[1], not_req[2]} & req), str(sorted(req)))
+     check("②頂層名稱以 Tests 結尾的資料夾(Xcode 單元與 UI 測試、.NET 整合測試、SwiftPM)的檔不要家",
+           not ({not_req[3], not_req[4], not_req[5], not_req[6]} & req), str(sorted(req)))
+     check("③一般程式檔照舊要家", {"app/src/main/java/com/x/di/NetworkModule.kt", "PosTerminal/App.swift"} <= req, str(sorted(req)))
+     check("④錨定跟對照表同義:androidTest 要在 src/ 底下、Tests 結尾要是頂層資料夾,其餘照舊要家",
+           {"tools/androidTest/gen.kt", "ios/PosTerminalTests/Nested.swift", "src/features/abTests/Flag.kt"} <= req,
+           str(sorted(req)))
+-    check("④b 只從「限 src/ 底下」的棧推資料夾名:Python 那份把 scripts 當測試資料夾,src/ 底下的 scripts 照舊要家",
++    check("④b 只從「限 src/ 底下」的棧推資料夾名:Python 那份把 scripts 當測試資料夾,src/ 底下的 scripts 照舊要家(同模組 src/main 也有 .py 時也一樣)",
+           "svc/src/scripts/build.py" in req, str(sorted(req)))
+     check("④c 頂層 Tests 結尾的資料夾要旁邊有去掉結尾的同名資料夾(Xcode 的 App 配 AppTests、.NET 的 Foo 配 Foo.Tests):"
+           "ABTests 旁邊沒有 AB,是 A/B 測試功能模組,照舊要家(代碼審正確性席的反例)",
+           "ABTests/ExperimentManager.swift" in req, str(sorted(req)))
+     check("④d 只對貢獻那個結尾的棧的副檔名算(Swift、C#):Python、Go 的業務檔放在 Tests 結尾的資料夾照舊要家——"
+           "旁邊有同名資料夾也一樣(代碼審牽連席與接手的人席的反例)",
+           {"PaymentGatewayTests/reconciliation.py", "LoadTests/db_schema.py",
+            "CheckoutIntegrationTests/pricing_engine.go"} <= req, str(sorted(req)))
++    check("④e 旁邊那個同名資料夾裡要真的有同一種副檔名的檔:scripts/ 只有 .py,scriptsTests/ 裡的 .cs 照舊要家(代碼審第二輪資安席的反例)",
++          "scriptsTests/inject.cs" in req, str(sorted(req)))
++    check("④f Gradle 那條:測試資料夾要緊接在 src 下一層,而且同一個模組的 src/main 要有同一種副檔名的檔——"
++          "src/androidTest 裡的 .py、src/internal/androidTest 裡的 .go 照舊要家(代碼審第二輪邊界席、牽連席的反例);Java 的 androidTest 照認",
++          {"tools/src/androidTest/backdoor.py", "backend/src/internal/androidTest/handler.go"} <= req
++          and "feature/cart/src/androidTest/kotlin/FakeRepo.java" not in req, str(sorted(req)))
++    check("④g 頂層資料夾就叫結尾樣式本身(UITests/、IntegrationTests/,前面沒有 App 名)、副檔名對得上的,照認(代碼審第二輪接手的人席)",
++          not (set(bare) & req), str(sorted(req)))
++    lay = m._nodehome_layout(["PosTerminal/App.swift", "PosTerminalTests/Fixture.SWIFT"])
++    check("④h 副檔名比對不分大小寫(照測試地圖取副檔名那一支)", m._nodehome_is_test("PosTerminalTests/Fixture.SWIFT", lay), str(lay))
++    check("④i 頂層資料夾清單共用一支、點開頭的不算(.git、.github 不是程式資料夾)",
++          m._nodehome_top_dirs([".github/w/ci.yml", "a/b.py", "c.py"]) == {"a"}, str(m._nodehome_top_dirs([".github/w/ci.yml", "a/b.py", "c.py"])))
+     # 漂移守衛:對照表之後多一個測試資料夾,這裡要跟著認
+     miss, loose = [], []
+     for name, prof in m.TEST_PROFILES.items():
+         names = {d for inc, _exc in prof["dirs"].values() for d in inc}
++        exts = sorted(prof["exts"])
+         if prof["dir_mode"] == "suffix":
+             for suf in names:
+-                for ext in sorted(prof["exts"]):
++                lay = ({"Demo": set(exts) | {".py"}}, {})
++                for ext in exts:
+                     path = f"Demo{suf}/x{ext}"
+-                    if not m._nodehome_is_test(path, frozenset({"Demo", f"Demo{suf}"})):
++                    if not m._nodehome_is_test(path, lay):
+                         miss.append(path)
+-                if m._nodehome_is_test(f"Demo{suf}/x.py", frozenset({"Demo", f"Demo{suf}"})) and ".py" not in prof["exts"]:
++                if ".py" not in prof["exts"] and m._nodehome_is_test(f"Demo{suf}/x.py", lay):
+                     loose.append(f"Demo{suf}/x.py")
+         elif prof.get("rglob_under") == "src":
+             for d in names:
+-                path = f"mod/src/{d}/x{sorted(prof['exts'])[0]}"
+-                if not m._nodehome_is_test(path, frozenset({"mod"})):
++                path = f"mod/src/{d}/x{exts[0]}"
++                if not m._nodehome_is_test(path, ({}, {"mod/src": set(exts)})):
+                     miss.append(path)
+     check("⑤漂移守衛:對照表裡每個 src 底下的測試資料夾、每個頂層結尾樣式配它那一棧的每種副檔名都被認成測試", not miss, str(miss))
+     check("⑤b 頂層結尾樣式不外溢到別棧的副檔名", not loose, str(loose))
+ 
+ 
+ def t_nodehome_home_definition():
+     """[S2] 家:狀態 doing/done/stale 的 Systems 節點 about_code 列了它;planned/deferred/rejected/superseded 不算;
+     只看欄位值、不看預標指紋;Issues 不算。"""
+     print("t_nodehome_home_definition")
+     m = _load_lumos_inproc()

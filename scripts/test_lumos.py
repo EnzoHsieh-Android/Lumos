@@ -36717,6 +36717,92 @@ def t_nodehome_required_files_definition():
     check("⑩清單裡不是字串的項略過並出聲,其餘照用", c3["ignore"] == ["ok/**"] and len(c3["warnings"]) == 2, str(c3))
 
 
+def t_nodehome_stack_test_dirs_not_required():
+    """測試檔另認各棧的測試資料夾(從測試棧對照表推,不另寫清單):Gradle 的 src/ 底下 androidTest、
+    Xcode/.NET 頂層名稱以 Tests 結尾的資料夾。2026-09-12 平板 POS 測試資料夾裡的截圖輔助檔被要求有家、
+    Android 儀器測試的 Kotlin 檔(檔名尾 Test 只對 Java 認)被當成要家——都是誤擋。"""
+    print("t_nodehome_stack_test_dirs_not_required")
+    m = _load_lumos_inproc()
+    root = _nh_repo()
+    not_req = ("app/src/androidTest/java/com/x/HiltTestRunner.kt", "app/src/androidTest/java/com/x/CartScreenTest.kt",
+               "PosTerminalTests/ScreenshotMaker.swift",
+               "PosTerminalUITests/LaunchHelper.swift", "Foo.IntegrationTests/Fixture.cs", "Tests/AppTests/Helper.swift")
+    req_ok = ("app/src/main/java/com/x/di/NetworkModule.kt", "PosTerminal/App.swift", "tools/androidTest/gen.kt",
+              "ios/PosTerminalTests/Nested.swift", "src/features/abTests/Flag.kt", "svc/src/scripts/build.py",
+              "Foo/Program.cs", "ABTests/ExperimentManager.swift", "PaymentGateway/app.py",
+              "PaymentGatewayTests/reconciliation.py", "LoadTests/db_schema.py", "CheckoutIntegrationTests/pricing_engine.go",
+              "feature/cart/src/main/java/Cart.java", "tools/src/androidTest/backdoor.py",
+              "backend/src/internal/androidTest/handler.go", "scripts/tool.py", "scriptsTests/inject.cs",
+              "svc/src/main/app.py", "feature/cart/src/androidTest/kotlin/FakeRepo.java",
+              "app/src/main/scripts/gen.py", "app/src/androidTest/scripts/evil.py", "mod/src/main/Build.kt",
+              "mod/src/main/build.sh", "mod/src/androidTest/setup.sh", "PosTerminalTests/BridgingHeader.h",
+              "lonely/src/androidTest/Orphan.kt", "lonely/src/main/res/values.xml")
+    bare = ("UITests/LaunchHelper.swift", "IntegrationTests/Fixture.cs")
+    for rel in not_req + req_ok + bare:
+        _nh_file(root, rel, "x\n")
+    _nh_git(root, "add", "-A")
+    cfg = m._nodehome_config(root)
+    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
+    req, _bad = m._nodehome_required(root, side, cfg, frozenset())
+    check("①Gradle src/ 底下 androidTest 的 Kotlin 檔不要家(不看檔名)",
+          not ({not_req[0], not_req[1]} & req), str(sorted(req)))
+    check("②頂層名稱以 Tests 結尾的資料夾(Xcode 單元與 UI 測試、.NET 整合測試、SwiftPM)的檔不要家",
+          not ({not_req[2], not_req[3], not_req[4], not_req[5]} & req), str(sorted(req)))
+    check("③一般程式檔照舊要家", {"app/src/main/java/com/x/di/NetworkModule.kt", "PosTerminal/App.swift"} <= req, str(sorted(req)))
+    check("④錨定跟對照表同義:androidTest 要在 src/ 底下、Tests 結尾要是頂層資料夾,其餘照舊要家",
+          {"tools/androidTest/gen.kt", "ios/PosTerminalTests/Nested.swift", "src/features/abTests/Flag.kt"} <= req,
+          str(sorted(req)))
+    check("④b 只從「限 src/ 底下」的棧推資料夾名:Python 那份把 scripts 當測試資料夾,src/ 底下的 scripts 照舊要家(同模組 src/main 也有 .py 時也一樣)",
+          "svc/src/scripts/build.py" in req, str(sorted(req)))
+    check("④c 頂層 Tests 結尾的資料夾要旁邊有去掉結尾的同名資料夾(Xcode 的 App 配 AppTests、.NET 的 Foo 配 Foo.Tests):"
+          "ABTests 旁邊沒有 AB,是 A/B 測試功能模組,照舊要家(代碼審正確性席的反例)",
+          "ABTests/ExperimentManager.swift" in req, str(sorted(req)))
+    check("④d 只對貢獻那個結尾的棧的副檔名算(Swift、C#):Python、Go 的業務檔放在 Tests 結尾的資料夾照舊要家——"
+          "旁邊有同名資料夾也一樣(代碼審牽連席與接手的人席的反例)",
+          {"PaymentGatewayTests/reconciliation.py", "LoadTests/db_schema.py",
+           "CheckoutIntegrationTests/pricing_engine.go"} <= req, str(sorted(req)))
+    check("④e 旁邊那個同名資料夾裡要真的有同一種副檔名的檔:scripts/ 只有 .py,scriptsTests/ 裡的 .cs 照舊要家(代碼審第二輪資安席的反例)",
+          "scriptsTests/inject.cs" in req, str(sorted(req)))
+    check("④f Gradle 那條:測試資料夾要緊接在 src 下一層,而且同一個模組的 src/main 要有同一種副檔名的檔——"
+          "src/androidTest 裡的 .py、src/internal/androidTest 裡的 .go 照舊要家(代碼審第二輪邊界席、牽連席的反例);Java 的 androidTest 照認",
+          {"tools/src/androidTest/backdoor.py", "backend/src/internal/androidTest/handler.go"} <= req, str(sorted(req)))
+    check("④f2 Gradle 那條只認對照表那一棧的副檔名(Kotlin):同模組 src/main 混了 .py、.sh 時,androidTest 裡同副檔名的檔照舊要家"
+          "(代碼審第三輪正確性、邊界、接手的人、資安四席的反例)",
+          {"app/src/androidTest/scripts/evil.py", "mod/src/androidTest/setup.sh"} <= req, str(sorted(req)))
+    check("④f4 同一個模組的 src/main 沒有 Kotlin 檔(只有資源)時,androidTest 裡的 Kotlin 檔照舊要家——旁邊要有同一種檔的程式目標",
+          "lonely/src/androidTest/Orphan.kt" in req, str(sorted(req)))
+    check("④f3 取捨釘住:別種語言的測試輔助檔照舊要家——Java 寫的 androidTest 輔助檔(對照表沒有 Java 棧)、"
+          "Xcode 測試資料夾裡的橋接標頭 .h(代碼審第三輪牽連席;寧可過嚴,逃生口是 node_home.ignore)",
+          {"feature/cart/src/androidTest/kotlin/FakeRepo.java", "PosTerminalTests/BridgingHeader.h"} <= req, str(sorted(req)))
+    check("④g 頂層資料夾就叫結尾樣式本身(UITests/、IntegrationTests/,前面沒有 App 名)、副檔名對得上的,照認(代碼審第二輪接手的人席)",
+          not (set(bare) & req), str(sorted(req)))
+    lay = m._nodehome_layout(["PosTerminal/App.swift", "PosTerminalTests/Fixture.SWIFT"])
+    check("④h 副檔名比對不分大小寫(照測試地圖取副檔名那一支)", m._nodehome_is_test("PosTerminalTests/Fixture.SWIFT", lay), str(lay))
+    check("④i 頂層資料夾清單共用一支、點開頭的不算(.git、.github 不是程式資料夾)",
+          m._nodehome_top_dirs([".github/w/ci.yml", "a/b.py", "c.py"]) == {"a"}, str(m._nodehome_top_dirs([".github/w/ci.yml", "a/b.py", "c.py"])))
+    # 漂移守衛:對照表之後多一個測試資料夾,這裡要跟著認
+    miss, loose = [], []
+    for name, prof in m.TEST_PROFILES.items():
+        names = {d for inc, _exc in prof["dirs"].values() for d in inc if d}   # 同程式那一支:空字串資料夾名濾掉
+        exts = sorted(prof["exts"])
+        if prof["dir_mode"] == "suffix":
+            for suf in names:
+                lay = ({"Demo": set(exts) | {".py"}}, {})
+                for ext in exts:
+                    path = f"Demo{suf}/x{ext}"
+                    if not m._nodehome_is_test(path, lay):
+                        miss.append(path)
+                if ".py" not in prof["exts"] and m._nodehome_is_test(f"Demo{suf}/x.py", lay):
+                    loose.append(f"Demo{suf}/x.py")
+        elif prof.get("rglob_under") == "src":
+            for d in names:
+                path = f"mod/src/{d}/x{exts[0]}"
+                if not m._nodehome_is_test(path, ({}, {"mod/src": set(exts)})):
+                    miss.append(path)
+    check("⑤漂移守衛:對照表裡每個 src 底下的測試資料夾、每個頂層結尾樣式配它那一棧的每種副檔名都被認成測試", not miss, str(miss))
+    check("⑤b 頂層結尾樣式不外溢到別棧的副檔名", not loose, str(loose))
+
+
 def t_nodehome_home_definition():
     """[S2] 家:狀態 doing/done/stale 的 Systems 節點 about_code 列了它;planned/deferred/rejected/superseded 不算;
     只看欄位值、不看預標指紋;Issues 不算。"""
