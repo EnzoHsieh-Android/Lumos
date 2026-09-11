@@ -20326,6 +20326,55 @@ def t_pitfalls_stack_questions():
     print("  ✓ t_pitfalls_stack_questions")
 
 
+def t_python_stack_wiring():
+    """[Python 補棧 2026-09-11]py 棧接進既有三時機:.py 改動 → 附 py 五題、慣例 skill 派 python-idioms;
+    測試檔(test_*.py / *_test.py)不附;慣例對映表指到的每個 skill 在來源 repo 真的有 SKILL.md。
+    翻紅釘:把 _ARCH_IDIOM_SKILL 的 "py" 拿掉 → ②翻紅;把 _STACK_QUESTION_SPECS 的 "py" 拿掉 → ①③翻紅;
+    把 python-idioms 目錄改名 → ④翻紅。"""
+    import json as _json
+    import subprocess as _sp
+    m = _load_lumos_inproc()
+    check("①py 題組五題", len(m._STACK_QUESTION_SPECS.get("py", [])) == 5, str(list(m._STACK_QUESTION_SPECS)))
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        (root / "bot").mkdir(); (root / "tests").mkdir()
+        (root / "bot" / "strategy.py").write_text("def signal(x):\n    return x\n", encoding="utf-8")
+        (root / "bot" / "exchange.py").write_text("def place(o):\n    return o\n", encoding="utf-8")
+        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert True\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        check("②.py → python-idioms", m._idiom_skill_for("py", "bot/strategy.py", td) == "python-idioms",
+              str(m._idiom_skill_for("py", "bot/strategy.py", td)))
+        check("②.py 的效能題鍵是 py", m._stack_key_for_file("bot/strategy.py", td) == "py",
+              str(m._stack_key_for_file("bot/strategy.py", td)))
+        (root / "bot" / "strategy.py").write_text(
+            "import asyncio\n\nasync def signals(xs):\n    return await asyncio.gather(*[one(x) for x in xs])\n", encoding="utf-8")
+        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert 1 == 1\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "gather")
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        data = _json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+        sq = data.get("stack_questions", {})
+        check("③py 棧附五題、測試檔不另生鍵", set(sq) == {"py"} and len(sq["py"]) == 5, str(sq)[:300])
+        app = data.get("stack_questions_applicable", {}).get("py", [])
+        par_q = next(s["q"] for s in m._STACK_QUESTION_SPECS["py"] if s["id"] == "py-parallel")
+        check("③asyncio.gather 讓 py-parallel 適用", par_q in app, str(app)[:300])
+        arch = data.get("arch_alignment") or {}
+        check("②架構對齊附 python-idioms(strategy.py 有同層鄰居 exchange.py)",
+              "python-idioms" in arch.get("idiom_skills", []), str(arch)[:300])
+        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert 2 == 2\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "test only")
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        sq2 = _json.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0]).get("stack_questions", {})
+        check("③純測試檔 diff 不附 py 題", sq2 == {}, str(sq2))
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    if not skills_dir.is_dir():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),慣例 skill 存在性這段沒驗到")
+    names = set(m._ARCH_IDIOM_SKILL.values()) | {"node-idioms"}
+    missing = sorted(n for n in names if not (skills_dir / n / "SKILL.md").is_file())
+    check("④慣例對映表指到的每個 skill 都真的存在(打錯字=審查員拿到一份不存在的慣例)", not missing, str(missing))
+
+
 def t_impact_hook_stack_questions():
     """棧別效能追問 T2:hook 格式化 lumos 輸出的 stack_questions(單源在 lumos,hook 不持有表);
     僅 stack_questions 無 results 也注入;兩者皆空不注入。"""
@@ -34212,7 +34261,8 @@ def t_stack_question_triggers():
                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
                        "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
-                       "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory"}, str(sorted(ids)))
+                       "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
+                       "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath"}, str(sorted(ids)))
     import re as _re
     check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
     app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
@@ -34227,7 +34277,8 @@ def t_stack_question_triggers():
                 "sql": ("sql-index", "SELECT id FROM t WHERE a = 1", "INSERT INTO t VALUES (1)"),
                 "swift": ("swift-swiftui", "struct V: View { var body: some View { Text(\"x\") } }", "let n = 3"),
                 "node": ("node-parallel", "const r = await Promise.all(items.map(fetchOne))", "const r = items.map(f)"),
-                "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>")}
+                "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>"),
+                "py": ("py-parallel", "results = await asyncio.gather(*tasks)", "total = price * qty")}
     for _stk, (_qid, _hit, _miss) in _samples.items():
         _a1, _m1 = m._stack_applicability({_stk: [_hit]}, 300)
         _a2, _m2 = m._stack_applicability({_stk: [_miss]}, 300)
@@ -34242,6 +34293,9 @@ def t_stack_question_triggers():
         "sql": [("sql-nplus1", "DECLARE c CURSOR FOR SELECT id FROM t"), ("sql-sargable", "WHERE YEAR(created_at) = 2026"), (None, "INSERT INTO t VALUES (1)")],
         "swift": [("swift-main", "DispatchQueue.global().async { load() }"), ("swift-swiftui", "func tableView(_ t: UITableView, cellForRowAt i: IndexPath) -> UITableViewCell {"), (None, "let n = 3")],
         "node": [("node-eventloop", "const cp = require('child_process')"), ("node-data", 'db.query("SELECT * FROM t", cb)'), (None, "const r = items.map(f)")],
+        "py": [("py-eventloop", "time.sleep(1)"), ("py-external", "resp = urllib.request.urlopen(url)"),
+               ("py-memory", "rows = cur.fetchall()"), ("py-hotpath", "for i in range(len(rows)):"),
+               ("py-parallel", "t = threading.Thread(target=worker)"), (None, "total = price * qty")],
     }
     # 看字串只限 when_raw 那幾條(code-反面詞 r1 單席 f1):log/錯誤訊息裡的關鍵字不能變假命中;SQL 字串要長得像 SQL
     for _stk, _line, _bad in [("cs", 'logger.LogError("SELECT query failed, retrying");', "cs-data"),
@@ -34249,7 +34303,9 @@ def t_stack_question_triggers():
                               ("node", 'throw new Error("db.query failed, check createPool settings")', "node-data"),
                               ("swift", "override func viewDidLoad() { super.viewDidLoad() }", "swift-swiftui"),
                               ("cs", "response.Body.Open();", "cs-connection"),
-                              ("sql", "SELECT dbo.fn_TotalTrim(name) FROM Users", "sql-sargable")]:
+                              ("sql", "SELECT dbo.fn_TotalTrim(name) FROM Users", "sql-sargable"),
+                              ("py", 'log.error("time.sleep failed, requests.get timed out")', "py-eventloop"),
+                              ("py", "raise ValueError('call fetchall() first')", "py-memory")]:
         _a, _m = m._stack_applicability({_stk: [_line]}, 300)
         _got = {r["id"] for r in _m[_stk] if r["applicable"]}
         check(f"③假命中不回來:{_line[:34]} 不亮 {_bad}", _bad not in _got, str(_got))
