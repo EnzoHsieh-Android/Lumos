@@ -34,15 +34,11 @@ done
 GRAPHCTL="$REPO_ROOT/scripts/lumos"
 PY="$(command -v python3 || command -v python || true)"
 
-# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。呈現在 lumos 內(impact --sync-only),
-# 這裡跟 cochange / delguard 一樣只呼叫、不碰內容。
-# ★一次推送只算一次波及★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):
-# 同步點名與合約測試閘要的是同一份東西。以前各自呼叫,等於一次推送算兩次
-# ——而「不要算兩次」正是這一案 r1 拿來否決原設計的那個成本
-# (那條裁定後來被查出已作廢,但成本本身是真的:這不是便宜的計算)。
-# 現在:算一次寫進暫存檔,兩個消費者各讀一次。
-# ★失敗隔離★:算不出來 → 暫存檔不存在或是空的 → 同步點名維持靜默、
-# 合約測試閘記一筆帳放行。一個失敗不准拖垮另一個。
+# ── 波及計算(給合約測試閘用):這裡只呼叫、不碰內容。
+# ★一次推送只算一次波及★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):以前同步點名與合約測試閘各自呼叫,
+# 等於一次推送算兩次——這不是便宜的計算。算一次寫進暫存檔給消費者讀。
+# (2026-09-11 起同步點名改由每支檔有家照家算,不再讀這一份;見下面 sync_nudge 原位置的說明。)
+# ★失敗隔離★:算不出來 → 暫存檔不存在或是空的 → 合約測試閘記一筆帳放行,不拖垮別的檢查。
 _IMPACT_JSON=""
 impact_once() {   # $1=diff range;算一次,結果放進 $_IMPACT_JSON
   _IMPACT_JSON=""
@@ -64,10 +60,8 @@ impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""
 # 上面那支只在 ref 迴圈正常跑到尾端時執行。高風險那條路 rc1 會直接 exit 1,
 # 收到訊號也一樣——每被硬擋一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
 trap 'impact_done' EXIT INT TERM
-sync_nudge() {   # 讀 impact_once 算好的那份
-  [ -n "$PY" ] && [ -f "$GRAPHCTL" ] && [ -n "$_IMPACT_JSON" ] || return 0
-  "$PY" "$GRAPHCTL" impact --sync-only --from-json "$_IMPACT_JSON" --repo "$REPO_ROOT" 1>&2 2>/dev/null || true
-}
+# (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
+#  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
 # ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
 # 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
 # ——而這支腳本自己在別的地方就把那條當第三選項在教,那條零留痕。
@@ -180,9 +174,39 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   fi
   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
 
-  # 圖譜同步覆蓋點名(2026-08-22,提醒不擋):分開幾個 commit 各自過關、整批卻漏掉的篇在這裡浮出
+  # 每支檔有家(2026-09-11,Projects/每支檔有家_計劃 [S26]):把這次要推的範圍整段查一次,接住跳過提交前檢查的。
+  # ★新分支不沿用上面的空樹兜底★(那會把整段歷史當新改動,本工具鏈有 1900 多個提交):起點改用
+  # 「不在任何遠端分支上的提交」裡最早那一個的上一個提交;全部已在遠端就不查;最早那個沒有上一個提交(真的全新)才從空樹比。
+  # 起點早於這道檢查上線的那個提交時,lumos 會自己改從上線點算(上線前進來的是舊帳)。rc1=擋;其他非零=放行。
+  # ★跟上面 _range 是刻意不同的兩套★(代碼審 r1 架構席問過):_range 給波及計算與風險掃描用,只提醒、寧可掃多;
+  # 這道會擋,把整段歷史當新改動就是誤擋。別把兩套合併成一套。
+  _hrange=""
+  if [[ "$_rsha" != "$_ZERO" ]] && git cat-file -e "$_rsha" 2>/dev/null; then
+    _hrange="$_rsha..$_lsha"
+  else
+    _hold="$(git rev-list --topo-order --reverse "$_lsha" --not --remotes 2>/dev/null | head -1)"
+    if [[ -n "$_hold" ]]; then
+      if git rev-parse -q --verify "$_hold^" >/dev/null 2>&1; then
+        _hrange="$(git rev-parse "$_hold^")..$_lsha"
+      else
+        _hrange="$_EMPTY_TREE..$_lsha"
+      fi
+    fi
+  fi
+  if [[ -n "$_hrange" ]]; then
+    nh_rc=0
+    "$PY" "$GRAPHCTL" home check --diff "$_hrange" --repo "$REPO_ROOT" || nh_rc=$?
+    if [[ "$nh_rc" -eq 1 ]]; then
+      {
+        echo ""
+        echo "逃生:照上面的指令替檔安家、或把說明改寫進對的那篇,再推;整個專案先改成只提醒 → .lumos/config.json 的 node_home.gate 設成 warn;緊急硬推 git push --no-verify(本機不留痕)。"
+        echo ""
+      } >&2
+      exit 1
+    fi
+  fi
+
   impact_once "$_range"
-  sync_nudge
   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   _tier_high=0
   printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1

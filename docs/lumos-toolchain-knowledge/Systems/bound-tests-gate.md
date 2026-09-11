@@ -53,10 +53,9 @@ about_code:
   不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`
   ——而 pre-push 自己在別的地方就把那條當第三選項在教,那條零留痕。
 
-★而且波及計算一次推送只算一次★:pre-push 算一份寫進暫存檔,
-同步點名(`impact --sync-only --from-json`)與這道閘(`bound-tests --from-json`)各讀一次。
-以前兩邊各自呼叫等於算兩次,而那不是便宜的計算。
-一邊失敗不拖垮另一邊:同步點名維持靜默,這道閘記 `range-unavailable` 放行。
+★而且波及計算一次推送只算一次★:pre-push 算一份寫進暫存檔給這道閘(`bound-tests --from-json`)讀。
+以前同步點名(`impact --sync-only --from-json`)也讀這一份;2026-09-11 起推送前的點名改由 [[Systems/每支檔有家]] 照家算,不再讀它。
+算不出來時這道閘記 `range-unavailable` 放行,不拖垮別的檢查。
 
 1. `impact --diff <range>` 取固定席(合約/事故/直接相依)裡帶合約的節點。
    ★新分支首推★:起點是空樹時改用主線 tip(`_mainline_ref`),不是放棄計算、也不是跑滿全部;

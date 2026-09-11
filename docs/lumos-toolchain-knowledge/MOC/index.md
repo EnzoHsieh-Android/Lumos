@@ -21,6 +21,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 
 - [[Systems/棧別提問表態閘]] — 推送前每一題效能檢核都要有機器讀得懂的交代
 - [[Systems/節點範圍與索引守衛]] — doctor 的三道提醒:計劃條款的測試名找不找得到、索引有沒有列全、有沒有哪篇合約多到讀不完
+- [[Systems/每支檔有家]] — 每支程式檔要有一篇管它的節點、節點只寫自己家的檔、寫回落對篇;提交前與推送前擋新違規,健檢 S8–S10 列舊帳
 - [[Systems/check-j-regen-guard]] — Check J:from-scratch 重建節點 provenance 分級(regen 蓋章+[src:]/[git:]/推測:/佚失: 標身分;拒發明無證據合約、假指針機械擋)。
 - [[Systems/check-n-recomputable]]
 - [[Systems/check-u-overgeneralization]]

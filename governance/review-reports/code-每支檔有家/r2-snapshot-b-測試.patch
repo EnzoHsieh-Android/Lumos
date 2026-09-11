@@ -1,0 +1,1450 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ec9b4cd9..d2291ab0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -6033,20 +6033,22 @@ def t_merge_settings_dedupe():
+ 
+ def t_precommit_lints_staged_graph_nodes():
+     """體檢 #6(2026-08-21):`lumos lint` 從未被任何 hook/CI 呼叫——它的每條規則全靠人記得跑。
+     pre-commit 對 staged 的圖譜 .md 跑 lint,rc≠0 擋;乾淨節點放行。"""
+     import subprocess, os, shutil
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+     def run_case(body):
+         root = Path(tempfile.mkdtemp(prefix="gctl-pclint-"))
+         subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+         (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
++        # 這支只驗格式檢查那道;每支檔有家(2026-09-11)另有自己的測試,這裡關掉免得兩道混在一起判
++        (root / ".lumos").mkdir(); (root / ".lumos" / "config.json").write_text('{"node_home": {"gate": "off"}}', encoding="utf-8")
+         kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True)
+         (kg / "Systems" / "S.md").write_text(body, encoding="utf-8")
+         subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+         r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True,
+                            env=dict(os.environ, GIT_DIR=str(root / ".git")))
+         shutil.rmtree(root, ignore_errors=True); return r
+     # 壞節點:多 wikilink 寫成單字串(鐵則 2,lint 硬擋)
+     bad = "---\ntype: system\nstatus: doing\nverified_by: \"[[Verification/a]] [[Verification/b]]\"\n---\n# S\n"
+     r = run_case(bad)
+     check("pre-commit lint: 壞節點擋下(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+@@ -6064,31 +6066,33 @@ def t_precommit_lints_staged_graph_nodes():
+     subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], capture_output=True)
+     (kg / "Systems" / "dup.md").write_text(bad, encoding="utf-8")
+     subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+     r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+     shutil.rmtree(root, ignore_errors=True)
+     check("pre-commit lint: 同檔名不同夾仍 lint 到 staged 的壞節點(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
+ 
+ 
+ def t_precommit_sync_nudge_names_missing_pinned_nodes():
+     """圖譜同步覆蓋(2026-08-22,Enzo:「偶有沒能同步完全」):Gate 3 只看「有沒有任何一篇圖譜檔 staged」,
+-    動錯篇也過。現在過關前跑 impact --sync-check,點名「跟改到的 code 直接相關(合約)卻沒動」的篇;只提醒不擋。"""
++    動錯篇也過。過關前點名「改到的 code 的家卻沒動」的篇;只提醒不擋。
++    2026-09-11 起點名改由每支檔有家照家算(原本以反引號為種子,會把人推回大雜燴節點;Projects/每支檔有家_計劃 [S15]),
++    所以 fixture 的 Pay 要在 about_code 宣告它管 app/pay.py——宣告過的家才會被點名。"""
+     import subprocess, os, shutil
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+     root = Path(tempfile.mkdtemp(prefix="gctl-sync-"))
+     subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+     (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
+     (root / "app").mkdir(); (root / "app" / "pay.py").write_text("def charge():\n    return 1\n", encoding="utf-8")
+     kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True); (kg / "Issues").mkdir()
+     # 跟 app/pay.py 直接相關、帶合約的功能筆記
+     (kg / "Systems" / "Pay.md").write_text(
+-        "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:charge\n  KEY:★INVARIANT★ 金額不得為負 [test:t_charge] [audit:x/2026-08-22]\n  DEP:`app/pay.py`\n---\n# Pay\n主邏輯在 `app/pay.py`。\n", encoding="utf-8")
++        "---\ntype: system\nstatus: doing\nabout_code:\n  - app/pay.py\nsummary: |-\n  FLOW:charge\n  KEY:★INVARIANT★ 金額不得為負 [test:t_charge] [audit:x/2026-08-22]\n  DEP:`app/pay.py`\n---\n# Pay\n主邏輯在 `app/pay.py`。\n", encoding="utf-8")
+     (kg / "Issues" / "Other.md").write_text("---\ntype: issue\nstatus: open\naliases: []\nsummary: |-\n  KEY:無關\n---\n# Other\n", encoding="utf-8")
+     subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+     subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], capture_output=True)
+     # 改 code + 只動一篇無關的筆記 → Gate 3 放行,但要點名 Systems/Pay
+     (root / "app" / "pay.py").write_text("def charge(x):\n    return x\n", encoding="utf-8")
+     (kg / "Issues" / "Other.md").write_text("---\ntype: issue\nstatus: open\naliases: []\nsummary: |-\n  KEY:無關改一下\n---\n# Other\n", encoding="utf-8")
+     subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+     r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+     out = r.stdout + r.stderr
+     check("sync nudge: 動錯篇仍放行(rc0,只提醒)", r.returncode == 0, f"rc={r.returncode}\n{out[-400:]}")
+@@ -7581,39 +7585,44 @@ def t_bound_tests_gate():
+     check("★前置★ 現場成立:真的沒有 main/master 了",
+           _sp.run(["git", "-C", str(d), "rev-parse", "--verify", "-q", "main"],
+                   capture_output=True).returncode != 0, "main 還在,這條測不到目標")
+     check("★連主線都問不到 → range-unavailable、不擋★(誠實記,不假裝守住了)",
+           not v["blocked"] and v.get("bound_tests", {}).get("status") == "range-unavailable", r.stdout)
+     check("而且帳上要記得到那個類別", "range-unavailable" in gov_kinds(d), str(gov_kinds(d)))
+     _sh.rmtree(d, ignore_errors=True)
+     print("  ✓ t_bound_tests_gate")
+ 
+ 
+-def t_code_exts_four_lists_agree():
+-    """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
++def t_code_exts_lists_agree():
++    """(2026-09-11 起五份:加上 lumos 主程式每支檔有家用的那份;名稱不帶份數——份數會變,原名 four_lists 在第五份加進來時就跟內容對不上了。)
++    體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
+     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
+     scripts/external-seat.sh 溜過同步閘。本測試釘四份一致,並要求含 shell 腳本副檔名。"""
+     import re as _re
+     root = Path(GRAPHCTL).resolve().parent
+     def bash_set(path):
+         m = _re.search(r"CODE_EXTS_RE='\\\.\(([^)]*)\)\$'", path.read_text(encoding="utf-8"))
+         return set("." + x for x in m.group(1).split("|")) if m else set()
+     def py_set(path):
+         src = path.read_text(encoding="utf-8")
+         m = _re.search(r"^CODE_EXTS\s*=\s*\{(.*?)^\}", src, _re.S | _re.M)
+         return set(_re.findall(r'"(\.[a-z0-9]+)"', m.group(1))) if m else set()
+     lists = {
+         "pre-commit": bash_set(root / "hooks" / "pre-commit"),
+         "post-commit": bash_set(root / "hooks" / "post-commit"),
+         "check-graph-sync.py": py_set(root / "hooks" / "claude" / "check-graph-sync.py"),
+         "impact-hook.py": py_set(root / "hooks" / "claude" / "impact-hook.py"),
+     }
++    # 2026-09-11 第五份:lumos 主程式裡每支檔有家用的(Projects/每支檔有家_計劃 [S1])——「需要家的檔」跟
++    # 「改程式要動圖譜」必須是同一份清單,不借用主程式裡另一份內容不同的符號查核表
++    _m5 = _re.search(r"^_NODEHOME_CODE_EXTS\s*=\s*\{(.*?)\}", Path(GRAPHCTL).read_text(encoding="utf-8"), _re.S | _re.M)
++    lists["lumos(_NODEHOME_CODE_EXTS)"] = set(_re.findall(r'"(\.[a-z0-9]+)"', _m5.group(1))) if _m5 else set()
+     ref = lists["pre-commit"]
+     check("code-exts: 四份清單都抓得到", all(lists.values()), str({k: len(v) for k, v in lists.items()}))
+     for k, v in lists.items():
+         check(f"code-exts: {k} 與 pre-commit 一致", v == ref, f"{k}: +{sorted(v - ref)} -{sorted(ref - v)}")
+     for ext in (".sh", ".ps1"):
+         check(f"code-exts: 含 {ext}(外家席腳本溜過同步閘的教訓)", ext in ref, str(sorted(ref)))
+     # 2026-09-05 README 審視 d1 + code-readme-five r1:沒副檔名的檔「首行 #! 即算程式碼」,四處同一條語意——
+     # 不列直譯器清單(外家 #!/bin/dash 漏判;架構席:三份清單彼此不同)。這裡真的餵檔案驗語意,不只查函式名。
+     import tempfile as _tf2
+     d = Path(_tf2.mkdtemp(prefix="gctl-sheb-"))
+@@ -14359,23 +14368,23 @@ def t_prepush_computes_impact_once():
+         env = dict(_os.environ); env["GIT_DIR"] = str(Path(d) / ".git")
+         zero = "0" * 40
+         _sp.run(["bash", pre_push_path], cwd=d,
+                 input=f"refs/heads/main {head} refs/heads/main {zero}\n",
+                 capture_output=True, text=True, env=env, timeout=180)
+         lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+         check("★前置★ 現場成立:假 lumos 真的被 hook 呼叫到了", bool(lines), "一行都沒有")
+         n_calc = sum(1 for l in lines if l.startswith("impact --diff") and "--sync-check" in l)
+         check("★算波及只准算一次★(這批存在的理由就是這個成本)",
+               n_calc == 1, f"算了 {n_calc} 次:\n" + "\n".join(lines))
+-        check("★同步點名要吃那份算好的,不准自己再算★",
+-              any(l.startswith("impact --sync-only") and "--from-json" in l for l in lines),
+-              "\n".join(lines))
++        # 2026-09-11 起推送前不再跑反引號為種子的同步點名(改由 home check --diff 照家算,Projects/每支檔有家_計劃 [S15])
++        check("★推送前不再呼叫 impact --sync-only(點名改照家算)★",
++              not any(l.startswith("impact --sync-only") for l in lines), "\n".join(lines))
+         # 表態閘(2026-09-09)起:分支 ref 一律叫 code-loop check(它內部跑受波及合約測試),低風險那條帶 --bound-tests-advisory
+         check("★合約測試閘也要吃那份★(低風險這條路:走 code-loop check --from-json)",
+               any(l.startswith("code-loop check") and "--from-json" in l for l in lines),
+               "\n".join(lines))
+         check("★而且低風險那條要帶 --bound-tests-advisory★(人裁:只提醒不擋)",
+               any(l.startswith("code-loop check") and "--bound-tests-advisory" in l for l in lines),
+               "\n".join(lines))
+         check("★低風險不再另外跑 bound-tests(check 裡已跑一次)★",
+               not any(l.startswith("bound-tests") for l in lines),
+               "\n".join(lines))
+@@ -36591,12 +36600,1312 @@ def t_lens_recount_code_review_r2():
+     segs = m._search_segments(cmd)
+     ev = m._search_event(cmd, "(共 0 篇候選,照相關性排序)", False, None)
+     two = m._search_segments('lumos search a \\\n  && lumos search b')
+     check("代碼審r2①:反斜線續行接回同一條指令,查詢詞完整、零命中記的是真的查詢字串",
+           segs == [["作廢", "收回"]] and ev == {"ts": None, "query": "作廢 收回", "verdict": "zero"} and two == [["a"], ["b"]], f"{segs} {ev} {two}")
+     sh = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+     blk = sh[sh.index("run_lens_weekly(){"):sh.index("\n}\n", sh.index("run_lens_weekly(){"))]
+     check("代碼審r2②:週跑先逐行記 LOG: 再記原始 JSON(同 run_replay)",
+           "推播漏網週跑原始" in blk and blk.index("sed -n 's/^LOG://p'") < blk.index("推播漏網週跑原始"), blk[-400:])
+ 
++
++# ── 每支檔有家(Projects/每支檔有家_計劃,2026-09-11)──────────────────────────────────────────
++def _nh_repo(cfg=None):
++    """每支檔有家的測試專案:空的 git 專案+圖譜骨架(docs/kg-knowledge),可選 .lumos/config.json。"""
++    import subprocess as sp, json as _j
++    root = Path(tempfile.mkdtemp(prefix="gctl-nodehome-"))
++    sp.run(["git", "init", "-q", str(root)], capture_output=True)
++    for k, v in (("user.email", "t@t.t"), ("user.name", "t"), ("commit.gpgsign", "false")):
++        sp.run(["git", "-C", str(root), "config", k, v], capture_output=True)
++    kb = root / "docs" / "kg-knowledge"
++    for sub in ("Systems", "Projects", "Verification", "MOC", "Issues"):
++        (kb / sub).mkdir(parents=True)
++    (kb / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# 索引\n", encoding="utf-8")
++    if cfg is not None:
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
++    return root
++
++
++def _nh_node(root, name, about=(), status="doing", resp="負責這一塊的程式規則,不管畫面長怎樣", body="",
++             summary="FLOW:x", typ="system", folder="Systems", extra=""):
++    lines = [f"type: {typ}", f"status: {status}", "created: 2026-09-11", "updated: 2026-09-11", "aliases: []",
++             "tags:", f"  - type/{typ}", f"  - status/{status}"]
++    if about:
++        lines.append("about_code:")
++        lines += [f"  - {a}" for a in about]
++    else:
++        lines.append("about_code: []")
++    if resp is not None:
++        lines.append(f"responsibility: {resp}")
++    if extra:
++        lines.append(extra)
++    lines.append("summary: |-")
++    lines += ["  " + l for l in summary.splitlines()]
++    p = root / "docs" / "kg-knowledge" / folder / f"{name}.md"
++    p.write_text("---\n" + "\n".join(lines) + "\n---\n# " + name + "\n" + body + "\n", encoding="utf-8")
++    return p
++
++
++def _nh_file(root, rel, content="x = 1\n"):
++    p = root / rel
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(content, encoding="utf-8")
++    return p
++
++
++def _nh_git(root, *a):
++    import subprocess as sp
++    return sp.run(["git", "-C", str(root), *a], capture_output=True, text=True, errors="replace")
++
++
++def _nh_commit(root, msg="c"):
++    _nh_git(root, "add", "-A")
++    _nh_git(root, "commit", "-qm", msg, "--no-verify")
++
++
++def _nh_check(root, *args):
++    import subprocess as sp
++    r = sp.run([sys.executable, GRAPHCTL, "home", "check", *(args or ("--staged",)), "--repo", str(root)],
++               capture_output=True, text=True)
++    return r.returncode, r.stdout + r.stderr
++
++
++def _nh_base(root):
++    """共用起點:src/a.py 的家是 A、src/b.py 的家是 B,已提交。"""
++    _nh_file(root, "src/a.py")
++    _nh_file(root, "src/b.py")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。")
++    _nh_node(root, "B", about=["src/b.py"], body="實作在 `src/b.py`。")
++    _nh_commit(root, "init")
++
++
++def t_nodehome_required_files_definition():
++    """[S1] 需要家的檔:程式副檔名或首行 #!;排除 docs/ 與建置輸出夾、測試檔(含測試地圖不認得的副檔名)、
++    ignore 樣式;排除表跟提交前掛鉤逐字一致。"""
++    print("t_nodehome_required_files_definition")
++    import re as _re
++    m = _load_lumos_inproc()
++    root = _nh_repo({"node_home": {"ignore": ["gen/**", "**/*.generated.ts"]}})
++    for rel, c in (("src/a.py", "x=1\n"), ("run", "#!/bin/sh\necho\n"), ("NOTES", "plain\n"), ("README.md", "# r\n"),
++                   ("tests/test_a.py", "x=1\n"), ("tests/check.sh", "#!/bin/sh\n"), ("src/foo_test.go", "package x\n"),
++                   ("app/node_modules/x.js", "x\n"), ("docs/tool.py", "x\n"), ("gen/a/b.py", "x\n"),
++                   ("src/api.generated.ts", "x\n"), ("api.generated.ts", "x\n"), ("src/b.PY", "x\n")):
++        _nh_file(root, rel, c)
++    _nh_git(root, "add", "-A")
++    cfg = m._nodehome_config(root)
++    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
++    req, bad = m._nodehome_required(root, side, cfg, frozenset())
++    check("①程式副檔名算", "src/a.py" in req, str(sorted(req)))
++    check("②沒副檔名但首行 #! 算;沒 #! 不算", "run" in req and "NOTES" not in req, str(sorted(req)))
++    check("③非程式檔不算", "README.md" not in req, str(sorted(req)))
++    check("④測試地圖認得的測試檔不算(tests/test_a.py)", "tests/test_a.py" not in req, str(sorted(req)))
++    check("④b 測試地圖不認得的副檔名套同一組規則:tests/ 底下的 .sh、Go 的 foo_test.go 都不算",
++          "tests/check.sh" not in req and "src/foo_test.go" not in req, str(sorted(req)))
++    check("⑤建置輸出夾與 docs/ 不算", "app/node_modules/x.js" not in req and "docs/tool.py" not in req, str(sorted(req)))
++    check("⑥ignore 樣式:比對 repo 相對路徑,**/ 開頭的也吃得到根目錄",
++          not ({"gen/a/b.py", "src/api.generated.ts", "api.generated.ts"} & req), str(sorted(req)))
++    check("⑦副檔名大小寫敏感(照提交前掛鉤那條正則)", "src/b.PY" not in req, str(sorted(req)))
++    pc = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit").read_text(encoding="utf-8")
++    mm = _re.search(r"^\s*(docs/\*\|[^)]*)\) return 0;;", pc, _re.M)
++    hook_globs = tuple(mm.group(1).split("|")) if mm else ()
++    check("⑧排除表跟提交前掛鉤 should_exclude 的目錄那行逐字一致", hook_globs == m._NODEHOME_EXCLUDE_GLOBS,
++          f"{hook_globs} vs {m._NODEHOME_EXCLUDE_GLOBS}")
++    bad_cfg = _nh_repo({"node_home": {"ignore": "gen/**"}})
++    c2 = m._nodehome_config(bad_cfg)
++    check("⑨ignore 不是清單 → 整段略過並出聲", c2["ignore"] == [] and any("ignore" in w for w in c2["warnings"]), str(c2))
++    c3 = m._nodehome_config(_nh_repo({"node_home": {"ignore": ["ok/**", 3, ""]}}))
++    check("⑩清單裡不是字串的項略過並出聲,其餘照用", c3["ignore"] == ["ok/**"] and len(c3["warnings"]) == 2, str(c3))
++
++
++def t_nodehome_home_definition():
++    """[S2] 家:狀態 doing/done/stale 的 Systems 節點 about_code 列了它;planned/deferred/rejected/superseded 不算;
++    只看欄位值、不看預標指紋;Issues 不算。"""
++    print("t_nodehome_home_definition")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    for i, st in enumerate(("doing", "done", "stale", "planned", "deferred", "rejected", "superseded")):
++        _nh_file(root, f"src/f{i}.py")
++        _nh_node(root, f"N{i}", about=[f"src/f{i}.py"], status=st)
++    _nh_file(root, "src/x.py")
++    _nh_node(root, "Stamped", about=["src/x.py"], extra="about_code_stamp: claude/2026-09-01/deadbeef")
++    _nh_file(root, "src/i.py")
++    _nh_node(root, "Inc", about=["src/i.py"], typ="issue", status="open", folder="Issues")
++    _nh_git(root, "add", "-A")
++    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
++    homes, _own = m._nodehome_homes(root, side)
++    got = {f"src/f{i}.py": bool(homes.get(f"src/f{i}.py")) for i in range(7)}
++    check("①doing/done/stale 算家", got["src/f0.py"] and got["src/f1.py"] and got["src/f2.py"], str(got))
++    check("②planned/deferred/rejected/superseded 不算", not any(got[f"src/f{i}.py"] for i in (3, 4, 5, 6)), str(got))
++    check("③預標指紋對不上照樣算家(只看欄位值)", bool(homes.get("src/x.py")), str(homes.get("src/x.py")))
++    check("④Issues 的 about_code 不算家", not homes.get("src/i.py"), str(homes.get("src/i.py")))
++
++
++def t_nodehome_check_blocks_new_homeless_file():
++    """[S3] 新增的程式檔提交後沒家 → 擋;同一個提交順手建家 → 過;改名成新路徑、about_code 沒跟上 → 擋。"""
++    print("t_nodehome_check_blocks_new_homeless_file")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/c.py")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①新增 src/c.py 沒家 → rc1,訊息講出是哪一支", rc == 1 and "c.py" in out, out[-600:])
++    _nh_node(root, "C", about=["src/c.py"])
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②同一個提交順手建家 → rc0", rc == 0, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    _nh_git(root, "clean", "-qfd")
++    _nh_git(root, "mv", "src/a.py", "src/a2.py")
++    rc, out = _nh_check(root)
++    check("③改名成新路徑、about_code 沒跟上 → rc1(新路徑算新增)", rc == 1 and "a2.py" in out, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    _nh_git(root, "config", "diff.renames", "copies")      # 使用者設了「偵測複製」也一樣:檢查自己帶 -M,複製照樣標成 A
++    _nh_file(root, "src/a3.py", (root / "src" / "a.py").read_text(encoding="utf-8"))
++    _nh_file(root, "src/a.py", "x = 1\ny = 2\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("④複製一支既有的檔(同時改原檔)→ 複製出來的那支算新增、沒家 rc1", rc == 1 and "a3.py" in out, out[-600:])
++
++
++def t_nodehome_check_blocks_home_removal():
++    """[S4] 原本有家的檔這次變沒家 → 擋;改成 stale 不算(例行 REVISIT 標過期不會誤擋)。"""
++    print("t_nodehome_check_blocks_home_removal")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "A", about=[], body="不再講它")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①從 about_code 拿掉 → rc1", rc == 1 and "src/a.py" in out and "原本有家" in out, out[-600:])
++    _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
++    _nh_node(root, "A", about=["src/a.py"], status="superseded", body="實作在 `src/a.py`。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②家那篇改成 superseded → rc1", rc == 1 and "src/a.py" in out, out[-600:])
++    _nh_node(root, "A", about=["src/a.py"], status="stale", body="實作在 `src/a.py`。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③改成 stale → rc0(stale 照樣是家)", rc == 0, out[-600:])
++    _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
++    _nh_git(root, "rm", "-q", "docs/kg-knowledge/Systems/A.md")
++    rc, out = _nh_check(root)
++    check("④家那篇被刪 → rc1", rc == 1 and "src/a.py" in out, out[-600:])
++
++
++def t_nodehome_touched_legacy_homeless_warns_without_write_back():
++    """[S5][S13b] 改到之前就沒家的舊檔:沒寫說明只提醒;有節點內容有變就擋。"""
++    print("t_nodehome_touched_legacy_homeless_warns_without_write_back")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/legacy.py")
++    _nh_commit(root, "legacy 沒家就進來了(模擬上線前)")
++    _nh_file(root, "src/legacy.py", "x = 2\n")
++    (root / "docs" / "kg-knowledge" / "Verification" / "v.md").write_text("---\ntype: verification\n---\n# v\n", encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①只改舊檔+簿記性質的圖譜 → rc0、有提醒", rc == 0 and "還沒有家的舊檔" in out and "legacy.py" in out, out[-600:])
++    _nh_file(root, "src/a.py", "x = 3\n")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。也順便講 legacy 的行為")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②同時寫了說明 → rc1,要求 legacy.py 先安家", rc == 1 and "legacy.py" in out, out[-600:])
++
++
++def t_nodehome_check_message_groups_and_truncates():
++    """[S6] 擋下訊息依資料夾分組、附候選家與指令樣板、最多列 10 支。"""
++    print("t_nodehome_check_message_groups_and_truncates")
++    root = _nh_repo()
++    _nh_base(root)
++    for i in range(7):
++        _nh_file(root, f"src/n{i}.py")
++    for i in range(6):
++        _nh_file(root, f"ui/v{i}.vue", "<template/>\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①擋", rc == 1, out[-300:])
++    check("②依資料夾分組", "src/:" in out and "ui/:" in out, out[:1500])
++    check("③列滿 10 支就截,印還有幾支", "還有 3 支沒列" in out, out[:1500])
++    check("④附新開一篇的指令樣板(--code 與 --responsibility)", "lumos new system <名>" in out and "--responsibility" in out, out[:1500])
++    check("⑤附候選家(同資料夾其他檔的家)", "候選家:" in out and ("A" in out.split("候選家:", 1)[1][:40]), out[:1500])
++
++
++def t_nodehome_birth_commit_requires_homes():
++    """[S34] 新專案第一個提交:每支檔都是新增,全部要有家。"""
++    print("t_nodehome_birth_commit_requires_homes")
++    root = _nh_repo()
++    _nh_file(root, "src/main.js", "x\n")
++    _nh_file(root, "src/App.vue", "<template/>\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①第一個提交沒有任何家 → rc1", rc == 1 and "main.js" in out and "App.vue" in out, out[-600:])
++    _nh_node(root, "殼", about=["src/main.js"], body="`src/main.js`")
++    _nh_node(root, "畫面", about=["src/App.vue"], body="`src/App.vue`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②出生時就切好家 → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_foreign_ref_uses_impact_extraction():
++    """[S7] 「這篇寫到哪支檔」跟改檔前推筆記、refcheck 共用同一支抽取——兩邊認得的一定一樣。"""
++    print("t_nodehome_foreign_ref_uses_impact_extraction")
++    import ast as _ast
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    tree = _ast.parse(src)
++    calls = {}
++    for fn in tree.body:
++        if isinstance(fn, _ast.FunctionDef):
++            names = {c.func.id for c in _ast.walk(fn) if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
++            calls[fn.name] = names
++    for who in ("_refcheck_scan", "_impact_reverse_lookup", "_nodehome_refs"):
++        check(f"①{who} 呼叫共用抽取 _node_code_ref_tokens", "_node_code_ref_tokens" in calls.get(who, set()), str(sorted(calls.get(who, set())))[:300])
++    for who in ("_refcheck_scan", "_impact_reverse_lookup", "_nodehome_refs"):
++        body = _ast.get_source_segment(src, next(f for f in tree.body if isinstance(f, _ast.FunctionDef) and f.name == who))
++        check(f"②{who} 不再自己跑 INLINE_CODE_RE(不另寫一套)", "INLINE_CODE_RE" not in body, who)
++    # 行為面:推筆記與每支檔有家對同一段文字認得的檔一樣
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`,也寫了 `src/b.py:12` 與裸檔名 `b.py`、`src/*.py`、`http://x/src/b.py`。")
++    _nh_git(root, "add", "-A")
++    m = _load_lumos_inproc()
++    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
++    req, _bad = m._nodehome_required(root, side, m._nodehome_config(root), frozenset())
++    refs = m._nodehome_refs(side.notes["Systems/A.md"]["text"], side, req)
++    env = m.Env(root / "docs" / "kg-knowledge")
++    hit_b = [n for n, _h in m._impact_reverse_lookup("src/b.py", env, root) if n == "Systems/A.md"]
++    check("③推筆記會把 A 推給 src/b.py,每支檔有家也認得 A 寫到 src/b.py", bool(hit_b) and "src/b.py" in refs, f"{hit_b} {refs}")
++
++
++def t_nodehome_foreign_ref_definition():
++    """[S8] 只有需要家的檔算別人的檔;測試檔、非程式檔不算;裸檔名不唯一不算認領。"""
++    print("t_nodehome_foreign_ref_definition")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "tests/test_b.py")
++    _nh_file(root, "lib/util.py")
++    _nh_file(root, "app/util.py")
++    _nh_node(root, "U1", about=["lib/util.py"])
++    _nh_node(root, "U2", about=["app/util.py"])
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` `tests/test_b.py` `README.md` `util.py` `b.py`")
++    _nh_file(root, "README.md", "# r\n")
++    _nh_git(root, "add", "-A")
++    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
++    req, _bad = m._nodehome_required(root, side, m._nodehome_config(root), frozenset())
++    refs = m._nodehome_refs(side.notes["Systems/A.md"]["text"], side, req)
++    check("①測試檔、非程式檔不算", "tests/test_b.py" not in refs and "README.md" not in refs, str(refs))
++    check("②裸檔名在受版控檔裡唯一(b.py)→ 認得", "src/b.py" in refs, str(refs))
++    check("③裸檔名不唯一(util.py 有兩支)→ 不算認領", not ({"lib/util.py", "app/util.py"} & refs), str(refs))
++
++
++def t_nodehome_check_blocks_new_foreign_ref():
++    """[S9] 這篇新寫進別人的檔名 → 擋;原本就在的舊檔名只提醒、不擋;新開的節點全部算新。"""
++    print("t_nodehome_check_blocks_new_foreign_ref")
++    root = _nh_repo()
++    _nh_file(root, "src/a.py")
++    _nh_file(root, "src/b.py")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`,舊帳:也寫了 `src/b.py`。")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py`")
++    _nh_commit(root, "init(A 裡的 src/b.py 是舊帳)")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`,舊帳:也寫了 `src/b.py`。改了一句別的。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①舊帳留著、沒新增 → rc0", rc == 0, out[-600:])
++    _nh_file(root, "src/c.py")
++    _nh_node(root, "C", about=["src/c.py"], body="`src/c.py`")
++    _nh_commit(root, "c 有家")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`,舊帳:也寫了 `src/b.py`。新寫進 `src/c.py`。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②新寫進別人的檔名 → rc1", rc == 1 and "src/c.py" in out and "別人的檔名" in out, out[-600:])
++    _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
++    _nh_node(root, "D", about=["src/a.py"], body="`src/a.py` `src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③新開的節點:別人的檔名全部算新 → rc1", rc == 1 and "src/b.py" in out, out[-600:])
++
++
++def t_nodehome_foreign_message_points_to_home():
++    """[S10] 訊息指出那支檔的家,建議改寫成節點連結;那支檔沒家就指回規則一。"""
++    print("t_nodehome_foreign_message_points_to_home")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/orphan.py")
++    _nh_commit(root, "舊的沒家檔")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 呼叫 `src/b.py` 與 `src/orphan.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①指出家、建議 [[連結]]", "它的家是 Systems/B" in out and "[[Systems/B]]" in out, out[-800:])
++    check("②沒家的指回安家", "還沒有家" in out and "orphan.py" in out, out[-800:])
++
++
++def t_nodehome_route_skips_docs_only_commit():
++    """[S11] 純圖譜提交(沒改需要家的檔)規則三不管。"""
++    print("t_nodehome_route_skips_docs_only_commit")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 補一段說明。", summary="FLOW:y")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①只改節點內容 → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_route_content_change_definition():
++    """[S12] 內容有變=摘要、決策、正文逐欄比對;只動簿記欄位不算。"""
++    print("t_nodehome_route_content_change_definition")
++    m = _load_lumos_inproc()
++    base = m._nodehome_parse_note("---\ntype: system\nstatus: doing\nverified_by:\n  - \"[[Verification/x]]\"\nsummary: |-\n  FLOW:x\ndecisions:\n  - content: a\n    id: d1\n---\n# t\n正文\n")
++    def sig(**kw):
++        fm = {"vb": '  - "[[Verification/x]]"', "summary": "  FLOW:x", "dec": "  - content: a\n    id: d1", "body": "正文", "status": "doing"}
++        fm.update(kw)
++        t = f"---\ntype: system\nstatus: {fm['status']}\nverified_by:\n{fm['vb']}\nsummary: |-\n{fm['summary']}\ndecisions:\n{fm['dec']}\n---\n# t\n{fm['body']}\n"
++        return m._nodehome_parse_note(t)["sig"]
++    check("①只加驗證連結、改狀態 → 不算內容有變", sig(vb='  - "[[Verification/x]]"\n  - "[[Verification/y]]"', status="done") == base["sig"])
++    check("②摘要變 → 算", sig(summary="  FLOW:y") != base["sig"])
++    check("③決策變 → 算", sig(dec="  - content: b\n    id: d1") != base["sig"])
++    check("④正文變 → 算", sig(body="正文改了") != base["sig"])
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    body = src.split("def _nodehome_parse_note", 1)[1].split("\ndef ", 1)[0]
++    check("⑤不沿用只算正文的那支雜湊", "note_body_hash" not in body and "_body_hash_of_text" not in body)
++
++
++def t_nodehome_check_blocks_write_back_to_non_home():
++    """[S13] 改了程式時,內容有變的節點要是某支改動檔的家。"""
++    print("t_nodehome_check_blocks_write_back_to_non_home")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 其實在講 a 的新行為。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①改 a.py、說明寫進 B(不是 a 的家)→ rc1", rc == 1 and "Systems/B" in out and "不是任何一支改動檔的家" in out, out[-800:])
++    _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 新行為。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②寫進 A(a 的家)→ rc0", rc == 0, out[-800:])
++    _nh_node(root, "新篇", about=["src/b.py"], body="`src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③同一個提交新開一篇、它不管任何改動檔 → rc1", rc == 1 and "新篇" in out, out[-800:])
++
++
++def t_nodehome_write_back_requires_every_changed_file_homed():
++    """[S13b] 有寫回時每支改動檔都要有家——堵「順帶改一支有家的檔,就把沒家檔的說明塞進同一篇」。"""
++    print("t_nodehome_write_back_requires_every_changed_file_homed")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "ui/Screen.vue", "<template/>\n")
++    _nh_commit(root, "舊的沒家畫面")
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_file(root, "ui/Screen.vue", "<template>2</template>\n")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 新行為;畫面那邊也順便講一下(散文,沒反引號)。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①散文把沒家檔的說明塞進 A → rc1、點名 Screen.vue", rc == 1 and "Screen.vue" in out, out[-800:])
++    _nh_node(root, "畫面", about=["ui/Screen.vue"], body="`ui/Screen.vue`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②替它安家(新開一篇管它)→ rc0", rc == 0, out[-800:])
++
++
++def t_nodehome_route_message_offers_two_ways():
++    """[S14] 訊息列出兩條路:寫進那些家、或把檔加進這篇管的範圍;不另開逃生口。"""
++    print("t_nodehome_route_message_offers_two_ways")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 講 a。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①兩條路都在", "寫進那些檔的家" in out and "lumos append <節點> about_code <檔>" in out, out[-800:])
++    check("②逃生只講整道閘的開關與 --no-verify,沒有單條放行旗標", "node_home.gate" in out and "--allow" not in out, out[-800:])
++
++
++def t_nodehome_sync_nudge_by_home():
++    """[S15] 「該動哪篇」照家算;家超過 8 篇時只印一句。"""
++    print("t_nodehome_sync_nudge_by_home")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    (root / "docs" / "kg-knowledge" / "Verification" / "v.md").write_text("---\ntype: verification\n---\n# v\n", encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①改 a.py、它的家 A 沒動 → 提醒點名 A", rc == 0 and "src/a.py 改了,它的家 Systems/A 這次沒動" in out, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    for i in range(9):
++        _nh_node(root, f"H{i}", about=["src/b.py"], body="`src/b.py`")
++    _nh_commit(root, "b 有九個家")
++    _nh_file(root, "src/b.py", "y = 2\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②家超過 8 篇 → 只印一句「有 N 個家」", "src/b.py 改了,它有 10 個家" in out and "H0" not in out, out[-600:])
++    check("③這句不叫人去查計劃的 lands_in(代碼審 r1 邊界席:那是計劃的欄位,這裡沒有對應的計劃)", "lands_in" not in out, out[-600:])
++
++
++def t_nodehome_route_does_not_require_content_change():
++    """[S35] 規則三管寫到哪、不管有沒有寫:改了程式、沒動任何節點內容 → 不擋(有沒有寫歸既有那道閘)。"""
++    print("t_nodehome_route_does_not_require_content_change")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①只改程式 → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_responsibility_field_validation():
++    """[S16] responsibility:≥10 字、要有實字;收進純量白名單、lumos set 寫得進去。"""
++    print("t_nodehome_responsibility_field_validation")
++    m = _load_lumos_inproc()
++    check("①十個字以上有實字 → 合格", m._nodehome_resp_ok("負責訂單金額的計算規則,不管畫面"))
++    check("②太短 → 不合格", not m._nodehome_resp_ok("負責金額"))
++    check("③全標點 → 不合格", not m._nodehome_resp_ok("。。。。。。。。。。。。"))
++    check("④不是字串 → 不合格", not m._nodehome_resp_ok(None) and not m._nodehome_resp_ok(["x" * 20]))
++    check("⑤純量白名單有 responsibility", "responsibility" in m.SCALAR_KEYS, str(m.SCALAR_KEYS))
++    v = mkvault()
++    write(v, "Systems/X.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:x", body="# X\n")
++    r = run(v, "set", "X", "responsibility", "負責訂單金額的計算規則,不管畫面")
++    txt = (v / "Systems" / "X.md").read_text(encoding="utf-8")
++    check("⑥lumos set 寫得進去", r.returncode == 0 and "responsibility: 負責訂單金額的計算規則" in txt, r.stderr[-300:])
++
++
++def t_nodehome_check_blocks_new_node_without_responsibility():
++    """[S17] 新開的 Systems 節點沒寫負責範圍 → 擋。"""
++    print("t_nodehome_check_blocks_new_node_without_responsibility")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "N", about=["src/b.py"], resp=None, body="`src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①沒寫 → rc1", rc == 1 and "負責範圍" in out and "Systems/N" in out, out[-600:])
++    _nh_node(root, "N", about=["src/b.py"], resp="太短", body="`src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②太短 → rc1", rc == 1, out[-600:])
++    _nh_node(root, "N", about=["src/b.py"], body="`src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③寫了 → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_check_blocks_growth_past_limit_without_responsibility():
++    """[S18] 舊篇 about_code 變多、超過上限、沒寫負責範圍 → 擋;只數還存在的檔;上限可設、壞值退回 3。"""
++    print("t_nodehome_check_blocks_growth_past_limit_without_responsibility")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    for f in ("a", "b", "c", "d", "e"):
++        _nh_file(root, f"src/{f}.py")
++    _nh_node(root, "Big", about=["src/a.py", "src/b.py", "src/c.py"], resp=None, body="`src/a.py` `src/b.py` `src/c.py`")
++    _nh_node(root, "Rest", about=["src/d.py", "src/e.py"])
++    _nh_commit(root, "init(Big 是舊篇、沒寫負責範圍)")
++    _nh_node(root, "Big", about=["src/a.py", "src/b.py", "src/c.py", "src/d.py"], resp=None, body="`src/a.py` `src/b.py` `src/c.py` `src/d.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①3→4、沒寫 → rc1", rc == 1 and "Systems/Big" in out and "管 4 支檔" in out, out[-600:])
++    _nh_node(root, "Big", about=["src/a.py", "src/b.py", "src/c.py", "src/d.py"], body="`src/a.py` `src/b.py` `src/c.py` `src/d.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②寫了負責範圍 → rc0", rc == 0, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    _nh_node(root, "Big", about=["src/a.py", "src/b.py", "src/c.py", "src/gone.py"], resp=None, body="`src/a.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③多的那項是不存在的檔 → 不算變多 → rc0", rc == 0, out[-600:])
++    for bad, want in ((True, 3), (0, 3), ("5", 3), (5, 5)):
++        r2 = _nh_repo({"node_home": {"max_files": bad}})
++        c = m._nodehome_config(r2)
++        check(f"④max_files={bad!r} → 用 {want}" + (",並出聲" if want == 3 else ""), c["max_files"] == want and (bool(c["warnings"]) == (want == 3 and bad != 3)), str(c))
++
++
++def t_nodehome_check_cli_modes():
++    """[S24] --staged / --diff 兩種;沒圖譜跳過 rc0;沒帶模式 rc2;範圍在本機找不到 fail-open rc0。"""
++    print("t_nodehome_check_cli_modes")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/c.py")
++    _nh_commit(root, "c 沒家(繞過提交前檢查)")
++    rc, out = _nh_check(root, "--diff", "HEAD~1..HEAD")
++    check("①--diff 把範圍兩端當一次改動比 → 抓到 c.py 沒家 rc1", rc == 1 and "c.py" in out and "這次推送" in out, out[-600:])
++    r = sp.run([sys.executable, GRAPHCTL, "home", "check", "--repo", str(root)], capture_output=True, text=True)
++    check("②沒帶 --staged / --diff → rc2", r.returncode == 2, r.stderr[-300:])
++    rc, out = _nh_check(root, "--diff", "deadbeef..HEAD")
++    check("③範圍在本機找不到 → fail-open rc0 並說明", rc == 0 and "找不到" in out, out[-300:])
++    # 代碼審 r1 邊界席:三個點原本被切成「HEAD~1 到 .HEAD」、找不到就放行——同一條違規完全沒擋
++    for bad in ("HEAD~1...HEAD", "HEAD~1..HEAD..HEAD", "..HEAD", "HEAD~1.."):
++        rc, out = _nh_check(root, "--diff", bad)
++        check(f"③b 範圍寫法不對({bad})→ rc2、講明要兩個點兩端都有,不當成找不到放行", rc == 2 and "兩個點" in out, out[-300:])
++    bare = Path(tempfile.mkdtemp(prefix="gctl-nh-novault-"))
++    sp.run(["git", "init", "-q", str(bare)], capture_output=True)
++    rc, out = _nh_check(bare)
++    check("④沒有圖譜 → 說一句跳過 rc0", rc == 0 and "沒有圖譜" in out, out[-300:])
++
++
++def t_nodehome_gate_switch():
++    """[S37] node_home.gate:warn 全部改提醒、off 不跑、壞值退回 on 並出聲。"""
++    print("t_nodehome_gate_switch")
++    for mode, want_rc, want in (("warn", 0, "提醒(node_home.gate=warn,不擋)"), ("off", 0, "關掉了"), ("bogus", 1, "看不懂")):
++        root = _nh_repo({"node_home": {"gate": mode}})
++        _nh_base(root)
++        _nh_file(root, "src/c.py")
++        _nh_git(root, "add", "-A")
++        rc, out = _nh_check(root)
++        check(f"①gate={mode} → rc{want_rc}、訊息有「{want}」", rc == want_rc and want in out, out[-400:])
++        if mode in ("warn", "off"):
++            _rc, dout = _nh_doctor(root)
++            check(f"②gate={mode} 時健檢開頭就講", f"設成 {mode}" in dout.split("[", 1)[0], dout[:300])
++
++
++def t_nodehome_reads_index_not_worktree():
++    """[S38] 提交前只讀提交索引:工作目錄裡另一個會談改到一半、還沒加進索引的東西不影響判定。"""
++    print("t_nodehome_reads_index_not_worktree")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/c.py")
++    _nh_node(root, "C", about=["src/c.py"], body="`src/c.py`")
++    _nh_git(root, "add", "-A")
++    _nh_node(root, "C", about=[], body="另一個會談正在搬家,還沒加進索引")
++    rc, out = _nh_check(root)
++    check("①索引裡 C 有管 c.py、工作目錄的過渡狀態不算 → rc0", rc == 0, out[-600:])
++    _nh_node(root, "C", about=["src/c.py"], body="`src/c.py`")
++    _nh_git(root, "rm", "-q", "--cached", "docs/kg-knowledge/Systems/C.md")
++    rc, out = _nh_check(root)
++    check("②反過來:工作目錄有、索引沒有 → 照索引判 rc1", rc == 1 and "c.py" in out, out[-600:])
++
++
++def t_nodehome_check_edge_paths():
++    """[S31] 非 UTF-8 檔名不炸、不算需要家的檔、給提醒;改名算新路徑新增。"""
++    print("t_nodehome_check_edge_paths")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_base(root)
++    name = b"src/\xa4\xa4\xa4\xe5.py"
++    blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=b"y = 1\n", capture_output=True).stdout.strip()
++    sp.run([b"git", b"-C", str(root).encode(), b"update-index", b"--add", b"--cacheinfo", b"100644," + blob + b"," + name], capture_output=True)
++    rc, out = _nh_check(root)
++    check("①非 UTF-8 檔名:不炸、不擋、提醒改名", rc == 0 and "Traceback" not in out and "不是 UTF-8" in out, out[-600:])
++
++
++def t_nodehome_skips_symlinks_and_submodules():
++    """[S40] 連結檔與子模組照檔案模式排除,不看副檔名。"""
++    print("t_nodehome_skips_symlinks_and_submodules")
++    import subprocess as sp, os as _os
++    root = _nh_repo()
++    _nh_base(root)
++    _os.symlink("a.py", root / "src" / "link.py")
++    blob = "a" * 40
++    sp.run(["git", "-C", str(root), "update-index", "--add", "--cacheinfo", f"160000,{_nh_git(root, 'rev-parse', 'HEAD').stdout.strip()},vendor/sub.py"], capture_output=True)
++    _nh_git(root, "add", "src/link.py")
++    rc, out = _nh_check(root)
++    check("①連結檔與子模組不算需要家的檔 → rc0", rc == 0 and "link.py" not in out and "sub.py" not in out, out[-600:])
++
++
++def _nh_hook_repo():
++    """掛鉤測試用:真的 lumos 放進 scripts/lumos(提交前、推送前掛鉤從那裡叫)。"""
++    import os as _os
++    root = _nh_repo()
++    (root / "scripts").mkdir(exist_ok=True)
++    (root / "scripts" / "lumos").symlink_to(Path(GRAPHCTL).resolve())
++    return root
++
++
++def _nh_run_hook(root, hook, stdin=None):
++    import subprocess as sp, os as _os
++    env = dict(_os.environ, GIT_DIR=str(root / ".git"))
++    r = sp.run(["bash", str(Path(GRAPHCTL).resolve().parent / "hooks" / hook)], cwd=str(root),
++               input=stdin, capture_output=True, text=True, env=env, timeout=180)
++    return r.returncode, r.stdout + r.stderr
++
++
++def t_precommit_runs_home_check():
++    """[S25] 提交前掛鉤在逐篇格式檢查之後、「改程式沒動圖譜」之前呼叫 home check --staged;擋下就不提交;合併提交跳過。"""
++    print("t_precommit_runs_home_check")
++    hook_txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit").read_text(encoding="utf-8")
++    i_l, i_h, i_3 = hook_txt.find("# Gate L:"), hook_txt.find("home check --staged"), hook_txt.find("# Gate 3:")
++    check("①位置:逐篇格式檢查之後、改程式沒動圖譜那道之前", 0 <= i_l < i_h < i_3, f"{i_l} {i_h} {i_3}")
++    calls = [l for l in hook_txt.splitlines() if "--sync-only" in l and not l.lstrip().startswith("#")]
++    check("②舊的反引號點名(impact --sync-only)不再被呼叫,改由 home check 照家算", not calls, str(calls))
++    root = _nh_hook_repo()
++    _nh_base(root)
++    _nh_file(root, "src/c.py")
++    (root / "docs" / "kg-knowledge" / "Verification" / "v.md").write_text(
++        "---\ntype: verification\nstatus: pass\ndate: 2026-09-11\nvalid_under: x\nrevalidate_when: x\ntags:\n  - type/verification\n  - status/pass\n---\n# v\n", encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_run_hook(root, "pre-commit")
++    check("③新增沒家的檔、同時有圖譜筆記加進索引 → 仍然擋(不會被改程式沒動圖譜那道提早放行)", rc == 1 and "c.py" in out, out[-600:])
++    _nh_node(root, "C", about=["src/c.py"], body="`src/c.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_run_hook(root, "pre-commit")
++    check("④補了家 → 放行", rc == 0, out[-600:])
++    _nh_git(root, "commit", "-qm", "c 有家", "--no-verify")
++    _nh_git(root, "checkout", "-qb", "side")
++    _nh_file(root, "src/d.py")
++    (root / "docs" / "kg-knowledge" / "Verification" / "v2.md").write_text(
++        "---\ntype: verification\nstatus: pass\ndate: 2026-09-11\nvalid_under: x\nrevalidate_when: x\ntags:\n  - type/verification\n  - status/pass\n---\n# v2\n", encoding="utf-8")
++    _nh_commit(root, "side 加了沒家的檔(繞過)")
++    _nh_git(root, "checkout", "-q", "-")
++    _nh_file(root, "src/e.py", "e\n")
++    _nh_node(root, "E", about=["src/e.py"], body="`src/e.py`")
++    _nh_commit(root, "main 前進")
++    _nh_git(root, "merge", "--no-ff", "--no-commit", "side")
++    rc, out = _nh_run_hook(root, "pre-commit")
++    check("⑤合併提交跳過(推送前整段比會接住)", rc == 0 and "合併提交跳過" in out, out[-600:])
++
++
++def t_prepush_runs_home_check():
++    """[S26] 推送前把這次要推的範圍整段查一次;新分支起點=不在任何遠端分支上的最早提交的上一個,不從頭掃。"""
++    print("t_prepush_runs_home_check")
++    import subprocess as sp, os as _os
++    d = Path(tempfile.mkdtemp(prefix="gctl-nh-pp-"))
++    sp.run(["git", "init", "-q", str(d)], capture_output=True)
++    for k, v in (("user.email", "t@t"), ("user.name", "t")):
++        sp.run(["git", "-C", str(d), "config", k, v], capture_output=True)
++    log = d / "argv.log"
++    sd = d / "scripts"
++    sd.mkdir()
++    (sd / "lumos").write_text(
++        "#!/usr/bin/env python3\nimport sys, json, pathlib, os\n"
++        f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
++        "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
++        "if c == 'impact' and '--json' in sys.argv:\n"
++        "    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
++        "elif c == 'pitfalls' and '--json' in sys.argv:\n"
++        "    print(json.dumps({'tier': 'standard'}))\n"
++        "if c == 'home' and os.environ.get('FAKE_HOME_RC'):\n"
++        "    sys.exit(int(os.environ['FAKE_HOME_RC']))\n"
++        "sys.exit(0)\n", encoding="utf-8")
++    _os.chmod(sd / "lumos", 0o755)
++    def commit(msg):
++        (d / f"{msg}.txt").write_text(msg, encoding="utf-8")
++        sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++        sp.run(["git", "-C", str(d), "commit", "-qm", msg, "--no-verify"], capture_output=True)
++        return sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
++    def pp(stdin, **env):
++        log.unlink(missing_ok=True)
++        e = dict(_os.environ, GIT_DIR=str(d / ".git"), **env)
++        r = sp.run(["bash", str(Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push")], cwd=str(d),
++                   input=stdin, capture_output=True, text=True, env=e, timeout=180)
++        lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
++        return r.returncode, [l for l in lines if l.startswith("home check")], r.stdout + r.stderr
++    z = "0" * 40
++    c1 = commit("c1")
++    rc, hl, out = pp(f"refs/heads/main {c1} refs/heads/main {z}\n")
++    empty = sp.run(["git", "-C", str(d), "hash-object", "-t", "tree", "/dev/null"], capture_output=True, text=True).stdout.strip()
++    check("①真的全新(最早的提交沒有上一個)→ 從空樹比", any(f"--diff {empty}..{c1}" in l for l in hl), "\n".join(hl) + out[-300:])
++    sp.run(["git", "-C", str(d), "update-ref", "refs/remotes/origin/main", c1], capture_output=True)
++    c2 = commit("c2")
++    c3 = commit("c3")
++    rc, hl, out = pp(f"refs/heads/main {c3} refs/heads/main {c1}\n")
++    check("②一般更新 → 遠端舊值..本地新值", any(f"--diff {c1}..{c3}" in l for l in hl), "\n".join(hl))
++    sp.run(["git", "-C", str(d), "checkout", "-qb", "feature"], capture_output=True)
++    c4 = commit("c4")
++    rc, hl, out = pp(f"refs/heads/feature {c4} refs/heads/feature {z}\n")
++    check("③新分支 → 起點是不在遠端分支上的最早提交(c2)的上一個(c1),不從頭掃", any(f"--diff {c1}..{c4}" in l for l in hl), "\n".join(hl))
++    rc, hl, out = pp(f"refs/heads/old {c1} refs/heads/old {z}\n")
++    check("④要推的提交全都已在遠端 → 不查", not hl, "\n".join(hl))
++    rc, hl, out = pp(f"refs/heads/main {c3} refs/heads/main {c1}\n", FAKE_HOME_RC="1")
++    check("⑤home check 回 rc1 → 推送擋下,並講逃生路", rc == 1 and "node_home.gate" in out, out[-400:])
++    rc, hl, out = pp(f"refs/heads/main {c3} refs/heads/main {c1}\n", FAKE_HOME_RC="3")
++    check("⑥lumos 自己出錯(非 0/1)→ 放行", rc == 0, out[-400:])
++
++
++def t_nodehome_check_gov_events_registered():
++    """[S27] 擋下與放行都記進治理帳;閘名登記在已知閘名單與統計語意表;擋下事件帶(檔,節點)配對。"""
++    print("t_nodehome_check_gov_events_registered")
++    import json as _j
++    m = _load_lumos_inproc()
++    for g in ("nodehome-check", "check-s8", "check-s9", "check-s10"):
++        check(f"①{g} 在已知閘名單", g in m._KNOWN_GATES)
++    check("②統計語意表標明這個來源記的是檔案路徑", "nodehome-check" in m._STATS_NODE_SEMANTICS)
++    root = _nh_repo()
++    (root / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 寫 a 的事")
++    _nh_git(root, "add", "-A")
++    rc, _out = _nh_check(root)
++    evs = [_j.loads(l) for l in (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
++    ev = next((e for e in evs if e.get("gate") == "nodehome-check"), {})
++    check("③擋下事件:gate=nodehome-check、kind=blocked", rc == 1 and ev.get("kind") == "blocked", str(ev)[:300])
++    check("④擋下事件帶(檔,節點)配對", ["src/a.py", "Systems/B.md"] in (ev.get("pairs") or []), str(ev)[:300])
++    _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
++    _nh_file(root, "src/a.py", "x = 3\n")
++    _nh_git(root, "add", "-A")
++    rc, _out = _nh_check(root)
++    evs = [_j.loads(l) for l in (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
++    check("⑤放行也記一筆(kind=passed)", rc == 0 and any(e.get("gate") == "nodehome-check" and e.get("kind") == "passed" for e in evs), str(evs[-1:])[:300])
++
++
++def t_nodehome_diff_clamps_to_golive():
++    """[S26] --diff 的起點早於「提交前掛鉤第一次有這道檢查」的那個提交時,改從那裡算(上線前進來的是舊帳)。"""
++    print("t_nodehome_diff_clamps_to_golive")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/old.py")
++    _nh_commit(root, "上線前沒家就進來了")
++    (root / "scripts" / "hooks").mkdir(parents=True)
++    (root / "scripts" / "hooks" / "pre-commit").write_text('#!/bin/bash\nlumos home check --staged\n', encoding="utf-8")
++    _nh_commit(root, "裝上這道檢查")
++    _nh_file(root, "src/new.py")
++    _nh_commit(root, "上線後沒家(繞過)")
++    rc, out = _nh_check(root, "--diff", "4b825dc642cb6eb9a060e54bf8d69288fbee4904..HEAD")
++    check("①從空樹比也只擋上線後新增的 new.py,不擋上線前的 old.py", rc == 1 and "new.py" in out and "old.py" not in out, out[-600:])
++
++
++def _nh_doctor(root):
++    import subprocess as sp
++    r = sp.run([sys.executable, GRAPHCTL, "--vault", str(root / "docs" / "kg-knowledge"), "doctor", "--verbose"],
++               capture_output=True, text=True)
++    return r.returncode, r.stdout + r.stderr
++
++
++def t_doctor_nodehome_sections():
++    """[S28] 健檢多三段(沒家的檔、寫了別人檔名的節點、管太多沒寫負責範圍):不擋、排在合約條數那段之後、[H] 之前。"""
++    print("t_doctor_nodehome_sections")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/legacy.py")
++    for f in ("c", "d", "e", "f"):
++        _nh_file(root, f"lib/{f}.py")
++    _nh_node(root, "Big", about=[f"lib/{f}.py" for f in "cdef"], resp=None, body="`lib/c.py`")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 也寫了 `src/b.py`")
++    _nh_commit(root, "舊帳三種都有")
++    rc, out = _nh_doctor(root)
++    i7, i8, i9, i10, ih = (out.find(x) for x in ("[S7]", "[S8]", "[S9]", "[S10]", "[H]"))
++    check("①三段都在,順序 S7 < S8 < S9 < S10 < H", 0 <= i7 < i8 < i9 < i10 < ih, f"{i7} {i8} {i9} {i10} {ih}")
++    s8, s9, s10 = out[i8:i9], out[i9:i10], out[i10:ih]
++    import re as _re2
++    _lines = out.splitlines()
++    _prev = {k: next((_lines[j - 1] for j, l in enumerate(_lines) if k in l and j > 0), None) for k in ("[S9]", "[S10]")}
++    check("①b S9、S10 前面各空一行(代碼審 r1 邊界席:原本三段黏在一起)",
++          all(v is not None and not _re2.sub(r"\x1b\[[0-9;]*m", "", v).strip() for v in _prev.values()), repr(_prev))
++    check("②S8 列出沒家的舊檔", "src/legacy.py" in s8, s8[:400])
++    check("③S9 列出寫了別人檔名的節點", "Systems/A" in s9 and "src/b.py" in s9, s9[:400])
++    check("④S10 列出管超過上限沒寫負責範圍的節點", "Systems/Big" in s10 and "管 4 支" in s10, s10[:400])
++    rc2, out2 = _nh_doctor(_nh_repo())
++    check("⑤只有軟提醒時 rc 不因這三段改變(空圖譜也不炸)", "Traceback" not in out2, out2[-300:])
++
++
++def t_doctor_nodehome_sections_share_check_logic():
++    """[S29] 健檢三段跟 home check 共用同一套函式(需要家的檔、家、別人的檔、讀快照)。"""
++    print("t_doctor_nodehome_sections_share_check_logic")
++    import ast as _ast
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    tree = _ast.parse(src)
++    def called(name):
++        fn = next(f for f in tree.body if isinstance(f, _ast.FunctionDef) and f.name == name)
++        return {c.func.id for c in _ast.walk(fn) if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
++    led, ev = called("_nodehome_ledger"), called("_nodehome_evaluate") | called("cmd_home_check")
++    for f in ("_nodehome_side", "_nodehome_required", "_nodehome_homes", "_nodehome_refs", "_nodehome_config"):
++        check(f"①健檢與提交前檢查都用 {f}", f in led and f in ev, f"led={f in led} ev={f in ev}")
++
++
++def t_doctor_nodehome_splits_bypassed_from_legacy():
++    """[S39] 沒家的檔分兩群:守衛上線後才新增的(有人繞過)排最前、講明;上線前就在的是舊帳。"""
++    print("t_doctor_nodehome_splits_bypassed_from_legacy")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/old.py")
++    _nh_commit(root, "上線前")
++    (root / "scripts" / "hooks").mkdir(parents=True)
++    (root / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\nlumos home check --staged\n", encoding="utf-8")
++    _nh_commit(root, "裝上檢查")
++    _nh_file(root, "src/sneak.py")
++    _nh_commit(root, "繞過")
++    rc, out = _nh_doctor(root)
++    s8 = out[out.find("[S8]"):out.find("[S9]")]
++    ib, il = s8.find("上線之後才新增"), s8.find("上線前就在")
++    check("①兩群都在,繞過的那群排前面", 0 <= ib < il, s8[:600])
++    check("②sneak.py 在繞過那群、old.py 在舊帳那群", "sneak.py" in s8[ib:il] and "old.py" in s8[il:], s8[:600])
++
++
++def t_new_system_with_code_and_responsibility():
++    """[S19] lumos new system 可以帶 --code(可多支)與 --responsibility,一次建好;全部先驗完才建檔。"""
++    print("t_new_system_with_code_and_responsibility")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_file(root, "src/a.py")
++    _nh_file(root, "src/b.py")
++    _nh_commit(root, "init")
++    kb = root / "docs" / "kg-knowledge"
++    def new(*a):
++        return sp.run([sys.executable, GRAPHCTL, "--vault", str(kb), "new", *a], capture_output=True, text=True)
++    r = new("system", "兩支", "--code", "src/a.py", "--code", "src/b.py", "--responsibility", "負責 a 與 b 的計算規則,不管畫面")
++    txt = (kb / "Systems" / "兩支.md").read_text(encoding="utf-8") if (kb / "Systems" / "兩支.md").exists() else ""
++    check("①建好了,about_code 兩支、負責範圍都寫進去", r.returncode == 0 and "  - src/a.py" in txt and "  - src/b.py" in txt
++          and "responsibility: 負責 a 與 b 的計算規則" in txt, r.stdout[-300:] + r.stderr[-300:] + txt[:400])
++    r = new("system", "壞路徑", "--code", "src/nope.py", "--responsibility", "負責 a 與 b 的計算規則,不管畫面")
++    check("②路徑不存在 → rc2、不建檔", r.returncode == 2 and not (kb / "Systems" / "壞路徑.md").exists(), r.stderr[-300:])
++    r = new("system", "太短", "--code", "src/a.py", "--responsibility", "管 a")
++    check("③負責範圍太短 → rc2、不建檔", r.returncode == 2 and not (kb / "Systems" / "太短.md").exists(), r.stderr[-300:])
++    r = new("project", "計劃", "--code", "src/a.py")
++    check("④--code 用在計劃 → rc2", r.returncode == 2, r.stderr[-300:])
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("⑤用這個指令建出來的節點直接過每支檔有家的檢查", rc == 0, out[-400:])
++    # 代碼審 r1 對答案席:條文說事故筆記也能用 --code,原本只驗了 system
++    r = new("issue", "某事故", "--code", "src/b.py")
++    txt = (kb / "Issues" / "某事故.md").read_text(encoding="utf-8") if (kb / "Issues" / "某事故.md").exists() else ""
++    check("⑥事故筆記也能帶 --code,寫進 about_code", r.returncode == 0 and "  - src/b.py" in txt, r.stderr[-300:] + txt[:300])
++    # 代碼審 r1 架構席:寫回被擋或逾時(丟例外)也要講「筆記建好了」、其餘項目照做完,跟下面回掛那兩段同一套
++    import io, contextlib
++    m = _load_lumos_inproc()
++    real = m.cmd_append
++    def boom(env, rel, key, value):
++        if key == "about_code":
++            raise RuntimeError("等了 60 秒還輪不到寫入")
++        return real(env, rel, key, value)
++    m.cmd_append = boom
++    err = io.StringIO()
++    try:
++        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
++            try:
++                rc = m.cmd_new(m.Env(kb), "system", "逾時", "2026-09-11", code=["src/a.py"], responsibility="負責 a 的計算規則,不管畫面")
++            except RuntimeError:
++                rc = "穿出去了"
++    finally:
++        m.cmd_append = real
++    txt = (kb / "Systems" / "逾時.md").read_text(encoding="utf-8") if (kb / "Systems" / "逾時.md").exists() else ""
++    check("⑦--code 寫回逾時不穿出去、rc2、印「筆記建好了」", rc == 2 and "筆記建好了" in err.getvalue(), str(rc) + err.getvalue()[-300:])
++    check("⑧其餘項目照做完(負責範圍照樣寫進去)", "responsibility: 負責 a 的計算規則" in txt, txt[:400])
++
++
++def t_lands_in_field_format():
++    """[S20] lands_in:清單欄位(lumos append 寫),每項 Systems/<名>——純字串、不帶 .md、不寫 [[連結]]、只收圖譜節點。"""
++    print("t_lands_in_field_format")
++    m = _load_lumos_inproc()
++    check("①清單欄位白名單有 lands_in", "lands_in" in m.LIST_KEYS)
++    check("②Systems/<名> 合格", m._lands_in_bad(["Systems/每支檔有家", "Systems/客人端 畫面"]) == [])
++    bad = m._lands_in_bad(["[[Systems/A]]", "Systems/A.md", "Projects/B", "Systems/a/b", "", "A"])
++    check("③連結寫法、帶 .md、非 Systems、多層、空的、沒前綴都算寫錯", len(bad) == 6, str(bad))
++    v = mkvault()
++    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
++    r = run(v, "append", "P", "lands_in", "Systems/新篇")
++    check("④lumos append 寫得進去", r.returncode == 0 and "Systems/新篇" in (v / "Projects" / "P.md").read_text(encoding="utf-8"), r.stderr[-300:])
++
++
++def t_disposal_gate_requires_landing():
++    """[S21] 處置閘多一步:設計審的計劃(Projects 底下、type: project)要有 lands_in、格式對;首筆帳在生效日之後才看、不回溯。"""
++    print("t_disposal_gate_requires_landing")
++    NEW = "2026-09-15T10:00:00+08:00"
++    def _loop(v, lid, rel, fm, ts_override=NEW):
++        spec = v / rel
++        spec.parent.mkdir(parents=True, exist_ok=True)
++        body = f"---\n{fm}\n---\n# spec\n規則甲：只在 0 命中時回退。\n"
++        spec.write_text(body, encoding="utf-8")
++        h = _sha256_of(spec)
++        snap = v / f"{lid}-snap.md"; snap.write_text(body, encoding="utf-8")
++        rpt = v / f"{lid}-rpt.md"; rpt.write_text("severity: minor\n甲\n引句：「規則甲：只在 0 命中時回退。」\n", encoding="utf-8")
++        run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1-sonnet",
++            "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
++            "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h, expect_rc=0)
++        if ts_override:
++            _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts=ts_override)
++        return run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    v = mkvault()
++    write(v, "Systems/A.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:x", body="# A\n")
++    r = _loop(v, f"ld-a-{_M1U}", "Projects/a.md", "type: project\nstatus: doing")
++    check("①沒寫 lands_in → FAIL 且理由含 落點", r.returncode == 1 and "落點: ✗" in r.stdout and "落點" in r.stdout.splitlines()[-1], r.stdout[-500:])
++    r = _loop(v, f"ld-b-{_M1U}", "Projects/b.md", "type: project\nstatus: doing\nlands_in:\n  - Systems/A\n  - Systems/新篇")
++    check("②寫了、格式對 → 那一步 ✓、整閘 PASS,新開的標出來", r.returncode == 0 and "落點: ✓" in r.stdout and "Systems/新篇(新開)" in r.stdout, r.stdout[-500:])
++    r = _loop(v, f"ld-c-{_M1U}", "Projects/c.md", "type: project\nstatus: doing\nlands_in:\n  - \"[[Systems/A]]\"")
++    check("③寫成連結 → FAIL 並點名那一項", r.returncode == 1 and "[[Systems/A]]" in r.stdout, r.stdout[-500:])
++    r = _loop(v, f"ld-d-{_M1U}", "Projects/d.md", "type: project\nstatus: doing", ts_override="2026-09-11T10:00:00+08:00")
++    check("④首筆帳早於生效日 → 不回溯", r.returncode == 0 and "落點: —" in r.stdout and "不回溯" in r.stdout, r.stdout[-500:])
++    r = _loop(v, f"ld-e-{_M1U}", "Systems/e.md", "type: system\nstatus: doing")
++    check("⑤審材不是 Projects 底下的計劃 → 不看", r.returncode == 0 and "不是這個圖譜 Projects 底下的計劃" in r.stdout, r.stdout[-500:])
++
++
++def t_design_dispatch_shows_landing_sizes():
++    """[S22] 設計審派工鏡頭附上落點每一篇的現況:存不存在、掛幾份計劃、幾行 KEY、幾條合約、管幾支檔、有沒有寫負責範圍。"""
++    print("t_design_dispatch_shows_landing_sizes")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_file(root, "src/a.py")
++    _nh_node(root, "A", about=["src/a.py"],
++             summary="FLOW:x\nKEY:★INVARIANT★ 金額不得為負 [test:t_x]\nKEY:第二行\nKEY:(2026-09-11 補)★CHECKPOINT★ 付款前先鎖單",
++             extra='plan_refs:\n  - "[[Projects/舊一]]"\n  - "[[Projects/舊二]]"')
++    import os as _os
++    outside = Path(tempfile.mkdtemp(prefix="gctl-nh-outside-")) / "secret.md"
++    outside.write_text('---\ntype: system\nplan_refs:\n  - "[[Projects/外一]]"\n  - "[[Projects/外二]]"\n  - "[[Projects/外三]]"\n---\n# 外面\n', encoding="utf-8")
++    kb = root / "docs" / "kg-knowledge"
++    _os.symlink(outside, kb / "Systems" / "捷徑.md")
++    esc = _os.path.relpath(outside.with_suffix(""), kb)
++    plan = kb / "Projects" / "新功能_計劃.md"
++    plan.write_text("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/A\n  - Systems/新篇\n"
++                    f"  - {esc}\n  - Systems/捷徑\n---\n# 新功能\n", encoding="utf-8")
++    _nh_commit(root, "init")
++    r = sp.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", str(plan), "--repo", str(root)], capture_output=True, text=True)
++    out = r.stdout + r.stderr
++    check("①有落點現況段", "落點現況" in out, out[-600:])
++    # 合約數用派工鏡頭既有的合約行判法(代碼審 r1 架構席:原本另寫一條正規式,KEY 後面帶括號說明的會漏算)
++    check("②既有那篇:掛 2 份計劃、3 行 KEY、2 條合約(帶括號說明的也算)、管 1 支檔、有寫負責範圍",
++          "Systems/A:已存在;掛 2 份計劃、3 行 KEY、2 條合約、管 1 支檔、有寫負責範圍" in out, out[-600:])
++    check("③還不存在的標要新開", "Systems/新篇:還不存在(要新開)" in out, out[-600:])
++    # 代碼審 r1 資安席:lands_in 沒驗寫法就拼路徑讀檔,能讀到圖譜外面的檔(印出它的統計)
++    check("④寫法不對的(../ 跳出圖譜)不去讀、講明寫法看不懂", "寫法看不懂" in out and "掛 3 份計劃" not in out, out[-600:])
++    check("⑤捷徑檔指到圖譜外面的不去讀", "Systems/捷徑:指到圖譜外面" in out, out[-600:])
++
++
++def t_nodehome_rules_in_hint_skill_and_discipline():
++    """[S30] 每支檔有家的一句話版寫進:開新節點的提示、教寫節點的說明、節點還原 SOP(快查表與完整版)、
++    注入每個專案的紀律區塊、設計審架構對齊派工範本——根因之一是規則只在私人記憶裡。"""
++    print("t_nodehome_rules_in_hint_skill_and_discipline")
++    import subprocess as sp
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    places = {
++        "教寫節點的說明": repo / "skills" / "lumos-project-notes" / "SKILL.md",
++        "節點還原 SOP 快查表": repo / "skills" / "lumos-project-notes" / "commands" / "09-節點還原.md",
++        "節點還原 SOP 完整版": repo / "skills" / "lumos-project-notes" / "reference.md",
++        "紀律區塊範本": repo / "scripts" / "templates" / "graph-discipline.md",
++        "架構對齊派工範本": repo / "skills" / "lumos-design-loop" / "templates.md",
++    }
++    if not all(p.exists() for p in places.values()):
++        raise _SrcOnly("消費端沒有 skill 與範本(非來源 repo),這段沒驗到")
++    for name, p in places.items():
++        t = p.read_text(encoding="utf-8")
++        check(f"①{name}提到每支檔有家", "每支檔有家" in t, str(p))
++    for name in ("教寫節點的說明", "紀律區塊範本", "節點還原 SOP 快查表", "節點還原 SOP 完整版"):
++        t = places[name].read_text(encoding="utf-8")
++        check(f"②{name}給出建檔就帶 --code 與 --responsibility 的寫法", "--code" in t and "--responsibility" in t, name)
++    tpl = places["架構對齊派工範本"].read_text(encoding="utf-8")
++    sec = tpl.split("## 7.6", 1)[-1].split("\n## ", 1)[0]
++    check("③架構對齊那一節有落點那一問", "落點合不合理" in sec, sec[:200])
++    check("③b 那一節的計數字跟著改了(不再只寫三問)", "三問(設計審多第四問)" in sec and "三問(設計審四問)各一段" in sec, sec[:300])
++    v = mkvault()
++    r = run(v, "new", "system", "提示")
++    check("④開新節點時印的提示講每支檔有家", "每支檔有家" in r.stdout and "responsibility" in r.stdout, r.stdout[-600:])
++
++
++def t_nodehome_diff_shares_unchanged_notes():
++    """[S38] 推送前:起點那一側只讀這段範圍裡有變動的節點,沒變的跟終點共用——不然每篇各 git show 一次,65 篇就超過 2 秒。"""
++    print("t_nodehome_diff_shares_unchanged_notes")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    for i in range(20):
++        _nh_file(root, f"src/f{i}.py")
++        _nh_node(root, f"N{i}", about=[f"src/f{i}.py"], body=f"`src/f{i}.py`")
++    _nh_commit(root, "base")
++    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_file(root, "src/f3.py", "x = 9\n")
++    _nh_node(root, "N3", about=["src/f3.py"], body="`src/f3.py` 改了")
++    _nh_commit(root, "tip")
++    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "checkout", "-qb", "other", base)
++    _nh_file(root, "src/other.py")
++    _nh_node(root, "Other", about=["src/other.py"], body="`src/other.py`")
++    _nh_commit(root, "第三個提交")                 # 起點、終點都不是目前 checkout:兩側都得從 git 讀,才量得出有沒有共用
++    calls = []
++    real = m._lens_git
++    def spy(repo_root, *args, **kw):
++        if args and args[0] == "show":
++            calls.append(args[1])
++        return real(repo_root, *args, **kw)
++    m._lens_git = spy
++    try:
++        import io, contextlib
++        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
++            rc = m.cmd_home_check(repo=str(root), diff_range=f"{base}..{tip}")
++    finally:
++        m._lens_git = real
++    base_reads = [c for c in calls if c.startswith(base + ":docs/")]
++    check("①起點那一側只讀有變動的節點(N3 一篇),其餘 19 篇跟終點共用", len(base_reads) <= 1, f"{len(base_reads)} {base_reads[:5]}")
++    check("②判定照樣正確(沒有新違規)", rc == 0, str(rc))
++
++
++def t_nodehome_config_and_vendored_from_snapshot():
++    """[S38] 設定從被檢查的那個版本讀:工作目錄裡沒暫存的 gate=off 關不掉提交索引的檢查;推送前讀終點那個提交的設定。"""
++    print("t_nodehome_config_and_vendored_from_snapshot")
++    import json as _j
++    root = _nh_repo({"node_home": {"gate": "on"}})
++    _nh_base(root)
++    _nh_file(root, "src/c.py")
++    _nh_git(root, "add", "-A")
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"node_home": {"gate": "off"}}), encoding="utf-8")
++    rc, out = _nh_check(root)
++    check("①只在工作目錄把開關改成 off、沒暫存 → 照樣擋", rc == 1 and "c.py" in out, out[-400:])
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②把 off 一起加進索引 → 才照設定跳過", rc == 0 and "關掉了" in out, out[-400:])
++    _nh_git(root, "commit", "-qm", "c 沒家、開關關掉(被檢查的那個版本)", "--no-verify")
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"node_home": {"gate": "on"}}), encoding="utf-8")
++    rc, out = _nh_check(root, "--diff", "HEAD~1..HEAD")
++    check("③推送前讀終點那個提交的設定(off),不讀工作目錄(on)", rc == 0 and "關掉了" in out, out[-400:])
++
++
++def t_nodehome_other_branch_rename_uses_commit_spelling():
++    """[S2] 比對「家」用字面比對鍵、不讀磁碟:推送一個不是目前 checkout 的分支、裡面有大小寫改名時,不會因為磁碟拼法誤擋。"""
++    print("t_nodehome_other_branch_rename_uses_commit_spelling")
++    root = _nh_repo()
++    _nh_file(root, "src/foo.py")
++    _nh_node(root, "Foo", about=["src/foo.py"], body="`src/foo.py`")
++    _nh_commit(root, "A")
++    a = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "checkout", "-qb", "feat")
++    _nh_git(root, "mv", "src/foo.py", "src/tmp.py")
++    _nh_git(root, "mv", "src/tmp.py", "src/Foo.py")
++    _nh_node(root, "Foo", about=["src/Foo.py"], body="`src/Foo.py`")
++    _nh_commit(root, "B:大小寫改名,同一個提交順手改 about_code")
++    b = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "checkout", "-q", a)
++    rc, out = _nh_check(root, "--diff", f"{a}..{b}")
++    check("①目前 checkout 在 A(磁碟是小寫 foo.py)推 B → 不誤擋", rc == 0, out[-500:])
++
++
++def t_nodehome_new_file_awakens_foreign_ref():
++    """[S9] 新增的檔喚醒沒改的節點裡原本就寫著的檔名:那篇從這次起就是別人檔的入口 → 擋。"""
++    print("t_nodehome_new_file_awakens_foreign_ref")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py`,以後會有 `src/later.py`")
++    _nh_commit(root, "A 先寫了一個還不存在的檔名")
++    _nh_file(root, "src/later.py")
++    _nh_node(root, "L", about=["src/later.py"], body="`src/later.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①新增 later.py(家是 L),A 沒改但從此是它的入口 → rc1、講明是被喚醒的", rc == 1 and "Systems/A" in out and "這篇沒改" in out, out[-600:])
++    # 代碼審 r1 正確性席:那篇的反引號可能只是舉例、剛好同名;而且同一個提交裡改它會被寫回落點擋——訊息要指出能走的路
++    check("②訊息指出要另開一個提交先改那篇,並分「原本就在講它」與「只是剛好同名」兩種改法",
++          "另開一個提交" in out and "剛好同名" in out and "[[Systems/L]]" in out, out[-900:])
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py`,以後會有 later 那支檔")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③同一個提交裡順手改 A → 還是擋(A 不是這次改動檔的家),所以才要另開提交", rc == 1 and "不是任何一支改動檔的家" in out, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    _nh_git(root, "clean", "-qfd")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py`,以後會有 later 那支檔")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("④照訊息先提交一個只改 A 的提交 → rc0(沒動程式的提交不查寫回落點)", rc == 0, out[-600:])
++    _nh_commit(root, "先改 A")
++    _nh_file(root, "src/later.py")
++    _nh_node(root, "L", about=["src/later.py"], body="`src/later.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("⑤再提交新檔與它的家 → rc0", rc == 0, out[-600:])
++    _nh_commit(root, "later")
++    rc, out = _nh_check(root, "--diff", "HEAD~2..HEAD")
++    check("⑥推送前把兩個提交一起查 → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_route_counts_deleted_files():
++    """[S11][S13] 刪掉的需要家的檔也算改動:說明要寫進它刪之前的家,不能寫進不相干的節點。"""
++    print("t_nodehome_route_counts_deleted_files")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_git(root, "rm", "-q", "src/a.py")
++    _nh_node(root, "A", about=[], body="a 已拿掉")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py`;也寫一句 a 為什麼刪")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①刪 a.py、說明寫進 B → rc1(B 不是 a 的家)", rc == 1 and "Systems/B" in out and "不是任何一支改動檔的家" in out, out[-600:])
++    _nh_git(root, "checkout", "HEAD", "--", "docs/kg-knowledge/Systems/B.md")
++    rc, out = _nh_check(root)
++    check("②說明只寫進 a 刪之前的家 A → rc0", rc == 0, out[-600:])
++
++
++def t_nodehome_decisions_compared_by_value():
++    """[S12] 決策比解析後的值:只把 content: a 改成 content: \\"a\\" 這種等價寫法,不算內容有變。"""
++    print("t_nodehome_decisions_compared_by_value")
++    m = _load_lumos_inproc()
++    a = m._nodehome_parse_note("---\ntype: system\nstatus: doing\ndecisions:\n  - content: a\n    id: d1\n---\n# t\n")
++    b = m._nodehome_parse_note('---\ntype: system\nstatus: doing\ndecisions:\n  - content: "a"\n    id: d1\n---\n# t\n')
++    c = m._nodehome_parse_note("---\ntype: system\nstatus: doing\ndecisions:\n  - content: b\n    id: d1\n---\n# t\n")
++    check("①等價寫法 → 內容沒變", a["sig"] == b["sig"], f"{a['sig'][1]} vs {b['sig'][1]}")
++    check("②值真的變了 → 內容有變", a["sig"] != c["sig"])
++
++
++def t_nodehome_gov_event_shape():
++    """[S27] 治理帳 nodes 只放程式檔路徑;別人的檔名那種違規,程式檔進 nodes、節點進 notes,配對也記。"""
++    print("t_nodehome_gov_event_shape")
++    import json as _j
++    root = _nh_repo()
++    (root / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
++    _nh_base(root)
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 也寫 `src/b.py`")
++    _nh_git(root, "add", "-A")
++    rc, _out = _nh_check(root)
++    ev = [_j.loads(l) for l in (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
++    check("①nodes 只有程式檔", rc == 1 and ev.get("nodes") == ["src/b.py"], str(ev)[:300])
++    check("②節點另放 notes", ev.get("notes") == ["Systems/A.md"], str(ev)[:300])
++    check("③配對有(檔,節點)", ["src/b.py", "Systems/A.md"] in (ev.get("pairs") or []), str(ev)[:300])
++
++
++def t_nodehome_gov_shows_pairs():
++    """[S27] lumos gov --full 看得到擋下事件的(檔,節點)配對——回頭條件要用它列出被逼出來的 about_code。"""
++    print("t_nodehome_gov_shows_pairs")
++    import subprocess as sp
++    root = _nh_repo()
++    (root / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
++    _nh_base(root)
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 寫 a 的事")
++    _nh_git(root, "add", "-A")
++    _nh_check(root)
++    r = sp.run([sys.executable, GRAPHCTL, "--vault", str(root / "docs" / "kg-knowledge"), "gov", "--full"], capture_output=True, text=True)
++    check("①gov --full 印出配對", "配對:src/a.py → Systems/B.md" in r.stdout, r.stdout[-600:])
++
++
++def t_doctor_nodehome_bypass_split_all_sections():
++    """[S39] 三段都分「守衛上線後才出現」與「上線前就在」;改名繞過的檔也算上線後。"""
++    print("t_doctor_nodehome_bypass_split_all_sections")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "Old", about=["src/a.py"], body="`src/a.py` 舊帳寫了 `src/b.py`")
++    for f in "cdef":
++        _nh_file(root, f"lib/{f}.py")
++    _nh_node(root, "BigOld", about=[f"lib/{f}.py" for f in "cdef"], resp=None, body="`lib/c.py`")
++    _nh_file(root, "src/r.py", "r = '這支檔的內容獨一無二,改名偵測才不會配到別支同內容的新檔'\n")
++    _nh_commit(root, "上線前的舊帳")
++    (root / "scripts" / "hooks").mkdir(parents=True)
++    (root / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\nlumos home check --staged\n", encoding="utf-8")
++    _nh_commit(root, "裝上檢查")
++    _nh_node(root, "New", about=["src/b.py"], body="`src/b.py` 繞過時寫進 `src/a.py`")
++    for f in "ghij":
++        _nh_file(root, f"lib2/{f}.py")
++    _nh_node(root, "BigNew", about=[f"lib2/{f}.py" for f in "ghij"], resp=None, body="`lib2/g.py`")
++    _nh_git(root, "mv", "src/r.py", "src/r2.py")
++    _nh_commit(root, "繞過")
++    rc, out = _nh_doctor(root)
++    s8, s9, s10 = (out[out.find(a):out.find(b)] for a, b in (("[S8]", "[S9]"), ("[S9]", "[S10]"), ("[S10]", "[H]")))
++    check("①S8:改名繞過的 r2.py 算上線後", "上線之後才新增" in s8 and "src/r2.py" in s8.split("上線前就在")[0], s8[:600])
++    check("②S9:上線後才寫進的別人檔名單獨一群", "上線之後才寫進" in s9 and "Systems/New" in s9.split("舊帳")[0] and "Systems/Old" in s9.split("舊帳")[-1], s9[:600])
++    check("③S10:上線後才變成管太多的單獨一群", "上線之後才變成" in s10 and "Systems/BigNew" in s10.split("(舊帳)")[0], s10[:600])
++
++
++def t_doctor_nodehome_lists_non_utf8_names():
++    """[S28] 檔名不是 UTF-8 的程式檔在健檢 S8 列出來(永遠當不了誰的家,建議改名或排除)。"""
++    print("t_doctor_nodehome_lists_non_utf8_names")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_base(root)
++    name = b"src/\xa4\xa4\xa4\xe5.py"
++    blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=b"y = 1\n", capture_output=True).stdout.strip()
++    sp.run([b"git", b"-C", str(root).encode(), b"update-index", b"--add", b"--cacheinfo", b"100644," + blob + b"," + name], capture_output=True)
++    rc, out = _nh_doctor(root)
++    s8 = out[out.find("[S8]"):out.find("[S9]")]
++    check("①S8 講有檔名不是 UTF-8 的程式檔", "不是 UTF-8" in s8 and "Traceback" not in out, s8[:500])
++
++
++def t_nodehome_newly_required_file_counts_as_new():
++    """[S3] 這次才變成需要家的檔也算新增:捷徑檔換成真的程式檔(git 標 T)、沒副檔名的檔補上 #!——
++    不能只因為路徑以前就在,就從「擋」降成「提醒」(代碼審 r1 正確性席)。"""
++    print("t_nodehome_newly_required_file_counts_as_new")
++    import os as _os
++    root = _nh_repo()
++    _nh_base(root)
++    _os.symlink("a.py", root / "src" / "tool.py")
++    _nh_file(root, "bin/run", "echo hi\n")
++    _nh_commit(root, "捷徑檔與沒副檔名的檔,都還不需要家")
++    (root / "src" / "tool.py").unlink()
++    _nh_file(root, "src/tool.py", "import os\n")
++    _nh_git(root, "add", "-A")
++    st = _nh_git(root, "diff", "--cached", "--name-status").stdout
++    rc, out = _nh_check(root)
++    check("①捷徑檔換成真程式檔(git 標 T)、沒家 → rc1,當成新增", st.startswith("T") and rc == 1
++          and "■ 這幾支程式檔沒有家" in out and "tool.py" in out, st + out[-600:])
++    _nh_node(root, "Tool", about=["src/tool.py"])
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②同一個提交順手建家 → rc0", rc == 0, out[-600:])
++    _nh_git(root, "reset", "-q", "--hard")
++    _nh_git(root, "clean", "-qfd")
++    _nh_file(root, "bin/run", "#!/bin/sh\necho hi\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("③沒副檔名的舊檔補上 #! 變成程式、沒家 → rc1", rc == 1 and "■ 這幾支程式檔沒有家" in out and "run" in out, out[-600:])
++    _nh_commit(root, "繞過提交前檢查")
++    rc, out = _nh_check(root, "--diff", "HEAD~1..HEAD")
++    check("④推送前也一樣擋", rc == 1 and "■ 這幾支程式檔沒有家" in out, out[-600:])
++
++
++def t_nodehome_config_disk_read_skips_symlink():
++    """[S37] 健檢開頭那一行直讀工作目錄的設定檔:是捷徑檔就不跟過去讀,用預設並留一句——
++    跟提交前、推送前讀快照那條路一樣不認捷徑檔(代碼審 r1 資安席:設定檔被做成捷徑檔時會讀到本機任意檔)。"""
++    print("t_nodehome_config_disk_read_skips_symlink")
++    import os as _os
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    outside = Path(tempfile.mkdtemp(prefix="gctl-nh-cfg-")) / "c.json"
++    outside.write_text('{"node_home": {"gate": "off"}}', encoding="utf-8")
++    (root / ".lumos").mkdir()
++    _os.symlink(outside, root / ".lumos" / "config.json")
++    cfg = m._nodehome_config(root)
++    check("①設定檔是捷徑檔 → 不跟過去讀,用預設 on、留一句講明", cfg["mode"] == "on" and any("捷徑檔" in w for w in cfg["warnings"]), repr(cfg))
++    (root / ".lumos" / "config.json").unlink()
++    (root / ".lumos" / "config.json").write_text('{"node_home": {"gate": "off"}}', encoding="utf-8")
++    check("②一般檔照讀", m._nodehome_config(root)["mode"] == "off", "")
++
++
++def t_nodehome_cli_rejects_both_modes():
++    """[S24] --staged 與 --diff 同給 → 用法錯誤 rc2,不靜默選邊。"""
++    print("t_nodehome_cli_rejects_both_modes")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_base(root)
++    r = sp.run([sys.executable, GRAPHCTL, "home", "check", "--staged", "--diff", "HEAD..HEAD", "--repo", str(root)], capture_output=True, text=True)
++    check("①同給 → rc2", r.returncode == 2, r.stderr[-300:])
++    check("②訊息是白話中文、講明擇一(不是 argparse 的英文)", "不能一起用" in r.stderr and "not allowed" not in r.stderr, r.stderr[-300:])
++
++
++def t_nodehome_planned_to_doing_requires_responsibility():
++    """[S17] 這次才成為現況(planned/deferred 升成 doing/done/stale)也算出生,沒寫負責範圍 → 擋。"""
++    print("t_nodehome_planned_to_doing_requires_responsibility")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "P", status="planned", resp=None, body="還沒做")
++    _nh_commit(root, "規劃中")
++    _nh_file(root, "src/x.py")
++    _nh_node(root, "P", about=["src/x.py"], status="doing", resp=None, body="`src/x.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①planned → doing、管 1 支、沒寫負責範圍 → rc1", rc == 1 and "Systems/P" in out and "負責範圍" in out, out[-500:])
++    _nh_node(root, "P", about=["src/x.py"], status="doing", body="`src/x.py`")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("②寫了 → rc0", rc == 0, out[-500:])
++
++
++def t_disposal_landing_requires_spec_in_vault():
++    """[S21] 落點那一步只認這個圖譜 Projects 底下的計劃:外面一個叫 Projects 的資料夾冒充不了。"""
++    print("t_disposal_landing_requires_spec_in_vault")
++    v = mkvault()
++    outside = Path(tempfile.mkdtemp(prefix="gctl-fakeproj-")) / "Projects"
++    outside.mkdir()
++    spec = outside / "fake.md"
++    body = "---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/A\n---\n# spec\n規則甲：只在 0 命中時回退。\n"
++    spec.write_text(body, encoding="utf-8")
++    h = _sha256_of(spec)
++    snap = v / "fk-snap.md"; snap.write_text(body, encoding="utf-8")
++    rpt = v / "fk-rpt.md"; rpt.write_text("severity: minor\n甲\n引句：「規則甲：只在 0 命中時回退。」\n", encoding="utf-8")
++    lid = f"fk-{_M1U}"
++    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1-sonnet", "--severity", "minor",
++        "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1", "--report", str(rpt), "--snapshot", str(snap),
++        "--spec", str(spec), "--reviewed", h, expect_rc=0)
++    _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts="2026-09-15T10:00:00+08:00")
++    r = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    check("①圖譜外的 Projects/fake.md 不當成計劃(不看落點,也不給 ✓)", "落點: —" in r.stdout and "不是這個圖譜" in r.stdout and "落點: ✓" not in r.stdout, r.stdout[-500:])
++
++
++def t_nodehome_diff_route_per_commit():
++    """[S11][S26] 推送前整段比時,規則三只看同一個提交裡也改了程式的節點:純整理節點的提交跟改程式的提交一起推,不會被混在一起誤擋。"""
++    print("t_nodehome_diff_route_per_commit")
++    root = _nh_repo()
++    _nh_base(root)
++    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_file(root, "src/a.py", "x = 2\n")
++    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 新行為")
++    _nh_commit(root, "改程式,說明寫進它的家")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 補一段整理")
++    _nh_commit(root, "純整理節點")
++    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
++    check("①改程式的提交+純整理的提交一起推 → rc0(整理那篇不算落錯篇)", rc == 0, out[-600:])
++    _nh_file(root, "src/a.py", "x = 3\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 寫 a 的事")
++    _nh_commit(root, "同一個提交改 a、說明寫進 B")
++    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
++    check("②同一個提交裡改程式又寫進不是家的節點 → 照擋", rc == 1 and "Systems/B" in out, out[-600:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

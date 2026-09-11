@@ -13,8 +13,9 @@ tags:
   - status/doing
   - scope/guards-gates
 summary: |-
-  FLOW:改 code→(Stop hook 當輪點名)→git commit(pre-commit Gate 3 過關前點名)→git push(pre-push 整批點名)
-  KEY:「動過圖譜」不等於「動對篇」——三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
+  FLOW:改 code→(Stop hook 當輪點名)→git commit/git push 的點名 2026-09-11 起改由 [[Systems/每支檔有家]] 照家算(不再用本篇的反引號為種子那一套)→代碼審留痕前 `lumos impact --diff --sync-check` 仍照本篇算
+  KEY:★2026-09-11 起提交前與推送前的點名移出本篇★:原本兩個掛鉤都呼叫 impact --sync-only,以反引號命中的節點為種子,會把人推回寫了一堆別人檔名的大雜燴節點;改由每支檔有家照 about_code 宣告的家點名(家超過 8 篇只印一句)。本篇剩 Stop hook 當輪點名與代碼審留痕前的 --sync-check [test:t_nodehome_sync_nudge_by_home]
+  KEY:「動過圖譜」不等於「動對篇」——(2026-09-11 前)三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
   DEP:[[Systems/lumos-cli-read]]
   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
@@ -26,6 +27,9 @@ decisions:
     id: d1
     decided: 2026-09-05
     valid: true
+about_code:
+  - scripts/hooks/claude/check-graph-sync.py
+  - scripts/lumos
 ---
 # graph-sync-coverage
 

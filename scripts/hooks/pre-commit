@@ -112,16 +112,21 @@ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
 fi
 
 
-# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。呈現在 lumos 內(impact --sync-only),
-# 這裡跟 cochange / delguard 一樣只呼叫、不碰內容。
-sync_nudge() {   # $1=diff range(或 staged)
-  local _py; _py="$(command -v python3 || command -v python || true)"
-  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
-  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-only --repo "$REPO_ROOT" 1>&2 2>/dev/null || true
-}
+# Gate H: 每支檔有家(2026-09-11,Projects/每支檔有家_計劃 [S25]):每支程式檔要有一篇管它的節點、
+# 節點只准寫自己家的檔、寫回要落在改動檔的家——新違規擋,舊帳交給健檢提醒。判定全在 lumos 裡,這裡只呼叫。
+# ★要放在「改程式沒動圖譜」那道之前★:那道只要有圖譜筆記加進索引就提早放行離開,放後面等於只在最不需要的時候才跑。
+# 合併提交由 lumos 自己判斷跳過(推送前會把合併的結果整段查一次)。
+# 「該動哪篇」的點名(原本在這裡呼叫 impact --sync-only,以反引號為種子)也改由它照家算——
+# 反引號那一套會把人推回寫了一堆別人檔名的大雜燴節點(計劃「為什麼」第 3 條)。
+# rc1=新違規擋;其他非零(lumos 自己出錯)=放行,這道不因為環境壞了擋人。
+if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+  nh_rc=0
+  "$CC_PY" "$REPO_ROOT/scripts/lumos" home check --staged --repo "$REPO_ROOT" || nh_rc=$?
+  [[ "$nh_rc" -eq 1 ]] && exit 1
+fi
 
 # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
 
 # 排除路徑
 is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
@@ -132,7 +137,7 @@ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2
   fi
   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
   local first; first="$(git show ":$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
-  [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;四處同一條規則,由 t_code_exts_four_lists_agree 釘)
+  [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;各處同一條規則,由 t_code_exts_lists_agree 釘)
 }
 should_exclude() {
   local path="$1"
@@ -162,9 +167,8 @@ done <<< "$STAGED"
 # Gate 2: 沒 code → 放行
 [[ ${#src_files[@]} -eq 0 ]] && exit 0
 
-# Gate 3: 有圖譜 .md staged → 放行(但先點名「該動卻沒動」的篇,2026-08-22)
+# Gate 3: 有圖譜 .md staged → 放行(「該動卻沒動」的點名已由上面的 Gate H 照家算好印出,2026-09-11)
 if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
-  sync_nudge staged
   exit 0
 fi
 

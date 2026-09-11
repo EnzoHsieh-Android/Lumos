@@ -55,6 +55,7 @@ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPO
 - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
 
 **摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**每支檔有家**(2026-09-11,提交前與推送前擋新違規,舊帳看 `lumos doctor` 的 S8–S10;單源 [[Projects/每支檔有家_計劃]]):① 每支程式檔要有一篇管它的 Systems 節點(about_code 列了它);新開用 `lumos new system <名> --code <檔> … --responsibility "<負責什麼、不負責什麼>"`,一個模組一篇 ② 節點只准用反引號寫自己家的檔,別人的檔寫成那支檔的家的 `[[連結]]`(寫了別人的檔名,改那支檔時就推出這篇,這就是節點長成一篇包全部的成因) ③ 改了程式要寫說明,寫進改到那支檔的家;要往圖譜寫說明,改到的每支檔都得先有家 ④ 新開的節點一律寫負責範圍,舊篇管超過 3 支檔也要 ⑤ 計劃寫 `lands_in`(現況落在哪幾篇,或新開哪一篇),設計審出口會看。
 **標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(一篇一個主類;值域專案在 `.lumos/config.json` 宣告了 lint 才唸;feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
 
 **決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
