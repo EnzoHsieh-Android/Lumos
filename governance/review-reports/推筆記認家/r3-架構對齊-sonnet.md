@@ -1,0 +1,33 @@
+severity: clean
+
+## 四問逐答
+
+**1. 分層與依賴方向**
+r1 F1 指出的「S1 要嘛把 git 子行程拉進 impact 熱路徑、要嘛另寫一套」在 r2/r3 都已解掉,這輪開檔重新核對過:`_nodehome_homes(repo_root, side)`(scripts/lumos:17995)函式本體只用到 `side.notes.items()` 裡每篇的 `n["type"]`/`n["status"]`/`n["about"]`(scripts/lumos:17999-18007),完全不碰 `side.files`/`side.share`/`_nodehome_reader` 這些綁 git 快照的欄位——`repo_root` 參數甚至沒在函式體內被用到。這代表 r3-snapshot.md:57 講的「把每支檔有家現在的算法抽成一支純函式,輸入是每篇的類型、狀態、about_code」確實可以無痛做到:兩邊(每支檔有家的 `_NodehomeSide.notes`、推筆記的 `env.notes`)都已經是「rel → {type,status,about_code,...}」形狀(`Note.__slots__`,scripts/lumos:314-315;`_nodehome_parse_note` 回傳形狀,scripts/lumos:17919-17927),抽出來的純函式對兩邊是同一層的共用工具,不是推筆記跨層直呼 nodehome 的快照機制,也不是 nodehome 反過來依賴 impact——是兩邊各自依賴一個新的、更下層的共用函式,方向正確。
+
+順帶查到一個既有事實可佐證「兩層共用 helper」本來就是這個檔案的既有做法而非本案新開先例:`_nodehome_evaluate` 內建構 S15 用的 `nudge-many` 判準時,早就在呼叫 `_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)`(scripts/lumos:18309)——也就是「每支檔有家」這個家族現在就已經在用「impact」家族的旋鈕 helper,兩層互相借工具函式是這支單檔 CLI 的既有分工,不是本案第一次跨。
+
+r1 F3 指出的「S11 最可能被塞進 `check_regen_provenance`,混進欄位存在性檢查」也仍然解著:開檔核對 `check_regen_provenance`(scripts/lumos:3970)全函式只逐行掃 `summary` 文字找 `[src:]`/`[git:]`/`DECISION:`/`KEY:` 這類證據標記(scripts/lumos:3982 起),跟 S11 要驗的「regen 節點 about_code 是否非空」是完全不同維度的檢查(行級證據標記 vs frontmatter 欄位存在性)——r3-snapshot.md:73 明文「不動 Check J(它只掃摘要行,驗的是另一種東西)」,並把接法交代成「節點解析多讀 regen 欄」。查證:`regen` 本來就是既有的 frontmatter scalar key(`SCALAR_KEYS`,scripts/lumos:10653),已經在三處被 `fields.get("regen")` 直接讀取(scripts/lumos:2495、3980、4368),`_nodehome_parse_note`(scripts/lumos:17905)現在的回傳字典只差沒收這個欄位——多讀一欄是同款既有讀法的延伸,不是新解析機制。而 S11 判定「新蓋章」的寫法「這篇在變動前不存在或沒有 regen 欄、變動後有」也是原樣抄 `_nodehome_evaluate` 裡既有的 `becomes_home` 判法(status 從非 home 轉 home,scripts/lumos:18227-18229)套用在 regen 欄上,同一個模子。掛進 `_nodehome_evaluate` 的 `blocks`/`reminders` 家族(這個函式現有的類別已有 `foreign`/`new-node-resp`/`over-limit-resp`/`new-homeless`/`home-removed`/`route`/`write-back-homeless`/`legacy-homeless`/`nudge`/`nudge-many`/`bad-name` 十來種並存,scripts/lumos:18168-18316)也是加一種類別進既有清單,不是另開引擎。
+
+**2. 命名與錯誤處理**
+旋鈕 `LUMOS_IMPACT_HOME`(S7)仍走 `_impact_knob`(scripts/lumos:21295),跟 `LUMOS_IMPACT_ABOUT`/`LUMOS_IMPACT_ABOUT_MAX` 同款。r2 F1 抓到的「★家★ 星號被拿掉」在這輪已經改回來:r3-snapshot.md:64 明寫「家那一行標『★家★』(同既有 ★關於★、★COMBO★ 這種掛在必推項上的額外標記寫法)」,跟既有 `impact-hook.py:647` 的 `ab = "★關於★" if x.get("about_hit") else ""` 一致。派工鏡頭種類表加「家」(scripts/lumos:23140 附近 `_LENS_KIND` 字典)延用既有 `{"direct":..., "indirect":..., "incident":...}` 這種 kind→label 小字典寫法,沒有另立一套。新測試命名比對過既有慣例:`t_impact_home_*` 對齊 `t_impact_about_hit`(scripts/test_lumos.py:889)的字首;`t_nodehome_new_regen_node_*` 對齊 `t_nodehome_new_file_awakens_foreign_ref`(scripts/test_lumos.py:37657)這類 `t_nodehome_*` 家族命名。S14 新腳本 `governance/eval/home_audit.py` 的 `sample`/`tally` 兩個子命令、`argparse` + `add_subparsers` + dispatch dict 這套殼,直接比對過同目錄 `refresh_labels.py`(governance/eval/refresh_labels.py:332-368,`delta`/`repin`/`merge`/`apply`/`signal` 五個子命令、同一種 `{"cmd":func}[args.cmd](args)` 收斂寫法)——`tally` 讀兩家族逐對判定、算不一致比例交人裁,概念上正是 `refresh_labels.py merge` 的「A/B 評審一致→agreed、不一致→disputed」同一種雙評審合併手法,沒有引入新的腳本骨架風格。
+
+**3. 第二種做法**
+沒找到。S16 這輪整條改寫,反而是把 r2 曾經打算加的「hook 端字串預篩、改 `_decide_one`」整段拿掉:r3-snapshot.md:69 現在寫「改檔當下那支 hook 的觸發範圍照舊只看程式副檔名,不在本案」。開檔核對確實吻合:`_decide_one`(scripts/hooks/claude/impact-hook.py:143-155)現在的判斷只看 `CODE_EXTS`/shebang/排除清單,完全不讀圖譜、也沒有任何 vault 存取路徑——S16 選擇不讓 hook 長出第一次讀圖譜的能力,把「非程式檔也要觸發」挪到另案,這樣 hook 仍然維持「純本機檔案過濾、命中才叫 lumos」的既有分工,不是引入新機制,反而是比 r2 更保守、更貼齊既有分層的收斂。
+
+S6 講「計劃模式呼叫的是不帶排序的 `impact --file --json`,那個輸出多一個頂層鍵列出家(比照既有『參考道』用獨立頂層鍵的做法)」。查證:「lane」這個先例確實存在,但是在 ranked 分支的 JSON 輸出裡(`if lane_items: out_obj["lane"] = lane_items`,scripts/lumos:21716-21720);非 ranked 分支目前固定回 `{"file","direct","indirect","incidents"}` 四鍵(scripts/lumos:21761-21765),還沒有「條件式多一個頂層鍵」的先例。但這不算第二種做法——這是把 ranked 分支已經確立的「有值才加頂層鍵、沒學過的讀者不受影響」這個風格,套用到目前固定四鍵的非 ranked 分支上,是延伸既有慣例到一個新分支,不是另開一套 schema 系統;而且 `cmd_dispatch_lens_spec`(scripts/lumos:23053)本來就已經在解析這個非 ranked 形狀的 `data.get("direct")`/`data.get("incidents")`/`data.get("indirect")`(scripts/lumos:23120-23122),多讀一個 `data.get("homes")` 是延伸既有整合點,比改成呼叫 ranked 模式、重寫整段解析邏輯風險更小、也更貼近現狀。
+
+S6 同時要求 `impact --diff` 的必推排序改成「事故、家、其餘照分數」,而目前 `cmd_impact_diff` 的 `pins.sort(key=lambda v: (-v["score"], v["node"]))`(scripts/lumos:21937)是純分數排序,沒有 kind 分層。但這正是把 `cmd_impact` ranked 分支裡已經存在的 `pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))`(S3 對應的既有寫法,scripts/lumos:21661)那種「布林值 tuple 分層排序」手法原樣搬到 `cmd_impact_diff`,是同一個排序慣用語的延伸,不是新排序機制。
+
+**4. 落點合不合理**
+`r3-snapshot.md` frontmatter 的 `lands_in`(r3-snapshot.md:11-14)是 `Systems/retrieval-ranking`、`Systems/節點還原`、`Systems/每支檔有家`,跟落點段落(r3-snapshot.md:92-97)與圖譜參考檔尾端「落點現況」(r3-lens.txt:31-34)列的三篇完全對上,三篇都已存在,不需要另開新節點——r1 F2(漏列每支檔有家)已在 r2 補上並延續到這輪,r1 F3 連帶的 `check-j-regen-guard` 落點也已經確認拿掉、不再出現在任何段落。查證落點合理性的具體點:`retrieval-ranking.md` 目前 frontmatter 沒有 `about_code` 欄位(對照圖譜參考檔「管 0 支檔、沒寫負責範圍」),計劃要把 `scripts/hooks/claude/impact-hook.py` 明文加進它的 about_code——這支檔現在確實已經掛在 `棧別提問表態閘.md`(about_code 含 `scripts/hooks/claude/impact-hook.py`,docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md:15)與 `codex-harness.md`(同上,docs/lumos-toolchain-knowledge/Systems/codex-harness.md:10)兩篇底下,跟 r3-snapshot.md:94 的敘述一字不差對得上;`hook信任邊界.md` 雖然正文提到這支檔,但 about_code 是空的(`about_code: []`,docs/lumos-toolchain-knowledge/Systems/hook信任邊界.md:7),沒有被誤算成第三個家。再加一個第三個家不算「越界」或「另一套家的定義」——這個工具鏈本來就有檔案掛多個家的既有案例(計劃自己講主程式 `scripts/lumos` 有 31 個家),about_code 本來就是可以列多篇的 list 欄位,不是本案發明新用法。
+
+## 正式發現
+
+本輪沒有找到夠格列成 F 的架構不一致:r1 兩條 blocking(F1「家」的查找矛盾、F3 塞進 Check J)在 r2/r3 都已用「抽純函式」與「不動 Check J、改掛每支檔有家家族」解掉,且經這輪重新開檔逐行核對,兩處收斂手法跟程式現況完全吻合;r2 唯一的非 blocking 發現(★家★ 星號被拿掉)已在 r3 的 S8 改回星號寫法。第二輪新增的四個對照點——[S1] 純函式抽取、[S6] 非排序 JSON 多頂層鍵、[S11][S15] 掛進每支檔有家檢查家族、[S16] 對 impact-hook.py 的處置——這輪逐一開檔核對程式,結論都是延伸既有慣用手法(共用 helper、條件式頂層鍵、blocks/reminders 類別清單、hook 端零圖譜存取的既有分工),沒有發現引入第二種做法或跨層直呼。
+
+引句:「不動 Check J(它只掃摘要行,驗的是另一種東西)」(r3-snapshot.md:73)
+
+---
+
+總結:最高 severity clean,blocking 共 0 條

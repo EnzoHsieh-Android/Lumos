@@ -1,0 +1,35 @@
+severity: minor
+
+## 四問逐答
+
+**1. 分層與依賴方向**
+r1 F1 指出的矛盾(S1 要求「同一個函式」卻暗示要嘛把 git 子行程拉進 impact 熱路徑、要嘛另寫一套)在 r2 已經解掉。r2 S1 改寫成「把每支檔有家現在的算法抽成一支純函式,輸入是每篇的類型/狀態/about_code,輸出檔→家;每支檔有家從提交快照餵、推筆記從已載入的工作目錄圖譜餵,推筆記那邊不讀 git、不開子行程」(`governance/review-reports/推筆記認家/r2-snapshot.md:57`)。開檔核對:`_nodehome_homes(repo_root, side)`(`scripts/lumos:17995`)的函式本體只用到 `side.notes.items()` 逐篇的 `n["type"]`/`n["status"]`/`n["about"]`(`scripts/lumos:17996-18007`),完全沒碰 `side.files`/`side.share`/`side.shebang` 這些跟 git 快照綁死的欄位——確實可以無痛抽出一支只吃 `{rel: {type,status,about}}` 的純函式,兩邊各自餵料。`Env`/`Note.fields`(`scripts/lumos:315-323`、`398-407`)本來就已經有 `type`/`status`/`about_code` 這些原始欄位,推筆記端可以直接從 `env.notes` 組出同樣形狀的輸入,不必經過 `_NodehomeSide`/`_nodehome_reader`(git show 子行程,`scripts/lumos:17874-17903`)。「行程內快取,同既有 about 計數的快取方式」這句也有實在對照:`_ABOUT_COUNTS_CACHE`(`scripts/lumos:21253`)正是同一種「以 `str(env.vault)` 為鍵、全掃 `env.notes` 一次、行程內快取」寫法。F1 兩個出口(拉 git 進熱路徑 / 另寫第二套)都被這個「一支純函式、兩種餵料」的接法避開了。
+
+r1 F3 指出的「S11 最可能被塞進 `check_regen_provenance`(只掃 summary 行),混進欄位存在性檢查」在 r2 也解掉。r2 S11 明文改寫成「不動 Check J(它只掃摘要行,驗的是另一種東西)」,改掛「每支檔有家的新違規」(`governance/review-reports/推筆記認家/r2-snapshot.md:73`)。開檔核對:`check_regen_provenance`(`scripts/lumos:3970`)確實只逐行掃 `summary` 文字(`scripts/lumos:3982` 起的 `for raw in summ.split("\n")`),沒被 S11 動到;而「每支檔有家」自己已經有一支獨立的裁決引擎 `_nodehome_evaluate`(`scripts/lumos:18168`),裡面本來就混著好幾種違規類別——包括跟 S11 同種「檢查 frontmatter 欄位是否有實質內容」的既有做法 `_nodehome_resp_ok`(`scripts/lumos:17772`,檢查 `responsibility` 欄位長度與是否有實字,被 `_nodehome_evaluate` 在 `new-node-resp`/`over-limit-resp` 兩種違規類別使用,`scripts/lumos:18232-18236`)。S11 要驗的「regen 節點 `about_code` 空、也沒寫負責範圍」跟 `_nodehome_resp_ok` 是同一種驗法(欄位存在性/品質檢查),掛進這個家族不是「引入第二種做法」,是這個家族原本就有的做法多加一種類別。落點清單也同步拿掉了 r1 版的 `Systems/check-j-regen-guard`、改成 `Systems/每支檔有家`(`governance/review-reports/推筆記認家/r2-snapshot.md:95`),跟這個改寫一致。
+
+**2. 命名與錯誤處理**
+旋鈕 `LUMOS_IMPACT_HOME`(S7)仍走 `_impact_knob`(`scripts/lumos:21295`),跟 `LUMOS_IMPACT_ABOUT`/`LUMOS_IMPACT_ABOUT_MAX` 同款,沒問題。測試命名重新核對過:`t_nodehome_*` 前綴（`scripts/test_lumos.py:36682` 起一整批既有案例)、`t_impact_*` 前綴(`scripts/test_lumos.py:889` `t_impact_about_hit`)、`t_dispatch_lens_*` 前綴(`scripts/test_lumos.py:29625` 起),跟 r2 計劃列的 `t_impact_home_*`/`t_nodehome_new_regen_node_*`/`t_dispatch_lens_diff_includes_homes` 等新測試名完全同款式,沒有第二套命名。
+
+但顯示標記這裡有一個從 r1 版退步的地方:r1 版 S8 寫的是「家標「★家★」」(`r1-snapshot.md:56`,r1 席報告已確認這符合 `★關於★`/`★COMBO★`/`★INVARIANT★` 星號慣例)。r2 版 S8 卻改寫成「家那一行標「家」」(不帶星號,`governance/review-reports/推筆記認家/r2-snapshot.md:64`)。開檔核對現況:被取代的 `about_hit` 標記就是星號包住的 `★關於★`(`scripts/hooks/claude/impact-hook.py:647`,同段 `★COMBO★` 在 `scripts/hooks/claude/impact-hook.py:578/598/618`)——這是「掛在 pinned 項上的額外標記(不是 kind 本身)」這一類專用的星號寫法,跟不帶星號的 `kind` 標籤(如 `"⚠事故"`/`"直接"`/`"hop2"`)是兩種不同欄位的兩種不同寫法。S2 自己也講「種類與分數照舊」(`r2-snapshot.md:58`)——也就是說「家」標記扮演的角色正是原本 `about_hit`/`★關於★` 那個「額外標記」角色,照既有分工該延用星號寫法,r2 卻悄悄拿掉了星號、也沒交代原因。見下方 F1。
+
+**3. 第二種做法**
+沒有找到。S1 是「一支純函式、兩邊各自餵料」而不是兩套演算法(見 Q1)。S6「計劃模式的 `impact --file --json` 多一個頂層鍵列出家,比照既有「lane」頂層鍵」有實在對照:`out_obj["lane"] = lane_items` 是條件鍵寫法(有值才出現,`scripts/lumos:21715-21720`,註解自己講「JSON 用獨立頂層鍵…沒學過 lane 的讀者結構性不受影響」),這正是 S6 想沿用的那套既有慣例,不是新發明。S11 掛進 `_nodehome_evaluate` 既有的 `blocks`/`reminders` 家族(`scripts/lumos:18168-18316` 裡已經有 `foreign`/`new-node-resp`/`over-limit-resp`/`new-homeless`/`route`/`legacy-homeless`/`nudge` 等十來種類別並存),不是另立一套 lint 引擎。S16 的非程式檔字串預篩也只是在既有的 hook 端 `_decide_one`(`scripts/hooks/claude/impact-hook.py:147`)過濾邏輯上多一個分支,跟現有 shebang 判定(同函式內,讀本機檔案、無 git、無子行程)是同一種「hook 端便宜過濾 → 命中才叫 lumos」的既有分工,沒引入新機制。
+
+**4. 落點合不合理**
+r2 frontmatter 的 `lands_in` 已經是 `Systems/retrieval-ranking`、`Systems/節點還原`、`Systems/每支檔有家`(`governance/review-reports/推筆記認家/r2-snapshot.md:11-14`),跟圖譜參考檔尾端「落點現況」列的三篇完全對上,三篇都已存在(`governance/review-reports/推筆記認家/r2-lens.txt:32-34`),不需要另開新節點。r1 F2 指出「lands_in 漏列 `Systems/每支檔有家`」在 r2 已經補上,且落點段落也新增了一條「家對照表、[S11] 新違規、[S15] 提醒:[[Systems/每支檔有家]]」(`governance/review-reports/推筆記認家/r2-snapshot.md:95`)。同時 r1 版的 `Systems/check-j-regen-guard` 落點被拿掉,跟 S11 改成「不動 Check J」一致,沒有留下矛盾的落點指向。
+
+## 正式發現
+
+### F1 「家」標記悄悄拿掉星號,跟同角色的既有標記(★關於★/★COMBO★)寫法不一致
+severity: minor
+blocking: 否 — 判準:純顯示文字跟鄰居慣例不一致、不到「引入第二種做法或跨層直呼」的 major 門檻,不影響設計結構本身,收斂前照抄既有星號寫法即可修正。
+
+`about_hit` 這種「掛在 pinned 項上的額外標記」現況一律用星號包住(`★關於★`、`★COMBO★`),r1 版 S8 也採了「★家★」延用這個慣例(已被 r1 席確認一致)。r2 版 S2/S8 把這個角色的寫法都改成不帶星號的「家」,沒交代為什麼跟既有慣例分岔。
+
+引句:「家那一行標「家」;必推名單的標頭改寫成三種理由」(`governance/review-reports/推筆記認家/r2-snapshot.md:64`)
+
+佐證 file: `scripts/hooks/claude/impact-hook.py:647`(`ab = "★關於★" if x.get("about_hit") else ""`)、`scripts/hooks/claude/impact-hook.py:578`（`★COMBO★`)、`governance/review-reports/推筆記認家/r2-snapshot.md:58`(S2「種類與分數照舊」,確認「家」是額外標記而非 kind)
+
+---
+
+總結:最高 severity minor,blocking 共 0 條(r1 F1、F3 兩條 blocking major 經開檔核對已在 r2 改寫中解決:F1 靠 S1「一支純函式、兩邊各自餵料、推筆記端不讀 git」化解跨層直呼/第二套算法的兩難;F3 靠 S11 明文「不動 Check J」、改掛既有的「每支檔有家」檢查家族——`_nodehome_evaluate` 本就混有欄位存在性檢查`_nodehome_resp_ok`同款做法,不是新做法)。
