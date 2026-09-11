@@ -3689,6 +3689,59 @@ def t_export_html():
     check("export html: 節點模型含 date(時間軸)", '"date"' in html, "date field")
 
 
+def t_export_html_labels_readable():
+    """[2026-09-11 使用者要求]節點名字與左下角圖例要醒目:純白、不透明,不再是半透明霧白。
+    舊版 .nlab 用 rgba(214,220,234,.52) 再乘 0.62 的透明度,在亮節點旁幾乎讀不到。
+    翻紅釘:把 .nlab 的 color 改回 rgba(...,.52) → ①翻紅;把圖例 color 改回 var(--muted) → ②翻紅;
+    把一般標籤透明度改回 0.62 → ③翻紅。"""
+    import re as _re, tempfile
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
+    out = str(Path(tempfile.mkdtemp()) / "g.html")
+    run(v, "export", "--format", "html", "--output", out, expect_rc=0)
+    html = Path(out).read_text(encoding="utf-8")
+    nlab = _re.search(r"\.nlab\{[^}]*\}", html)
+    check("①節點名字是不透明純白", bool(nlab) and "color:#ffffff" in nlab.group(0), nlab.group(0) if nlab else "no .nlab rule")
+    legend = _re.search(r"#legend\{[^}]*\}", html)
+    check("②圖例文字是純白", bool(legend) and "color:#ffffff" in legend.group(0), legend.group(0) if legend else "no #legend rule")
+    title = _re.search(r"#legend \.lt\{[^}]*\}", html)
+    check("②圖例標題不再用最暗的 --faint", bool(title) and "var(--faint)" not in title.group(0), title.group(0) if title else "no .lt rule")
+    op = _re.search(r"d\.style\.opacity = \(dim\?([0-9.]+):([0-9.]+)\)", html)
+    check("③一般(未淡化)標籤的透明度係數是 1", bool(op) and float(op.group(2)) == 1.0, op.group(0) if op else "no opacity line")
+    # 同日第二、三個要求:「線和流動不太明顯」→ 全部調亮後「又太明顯、有點亂」。
+    # 所以守的是中間帶:多數的一般連結保持安靜,少數的計劃/驗證線明顯;不是越亮越好。
+    lo = _re.search(r"\.linkOpacity\(([0-9.]+)\)", html)
+    check("④連線整體透明度在中間帶 0.3~0.45(0.2 太淡、0.5 太亂)", bool(lo) and 0.3 <= float(lo.group(1)) <= 0.45, lo.group(0) if lo else "no linkOpacity")
+    lw = _re.search(r"return l\.kind==='link'\?([0-9.]+):([0-9.]+);", html)
+    check("④一般連結維持細(≤0.45)、計劃/驗證線較粗(≥0.6)",
+          bool(lw) and float(lw.group(1)) <= 0.45 and float(lw.group(2)) >= 0.6, lw.group(0) if lw else "no per-kind lwidth")
+    lb = _re.search(r"const LINKBASE=\{[^}]*link:'(rgba\([^)]*\))'", html)
+    check("④一般連結的顏色帶透明度(讓大多數線安靜)", bool(lb), lb.group(0) if lb else "link color not rgba")
+    pw = _re.search(r"\.linkDirectionalParticleWidth\(([0-9.]+)\)", html)
+    check("⑤流動粒子寬度在中間帶 1.5~2.2", bool(pw) and 1.5 <= float(pw.group(1)) <= 2.2, pw.group(0) if pw else "no particle width")
+    check("⑤流動粒子有獨立的亮色(不跟線同色)", ".linkDirectionalParticleColor(" in html, "no particle color")
+
+
+def t_export_html_click_clears_search():
+    """[2026-09-11 使用者要求]點選節點時自動清空搜尋框——畫面已切到「本身+鄰居」,
+    搜尋字卻還留在框裡,看起來像還在篩選(使用者因此以為鄰居被搜尋字篩掉)。
+    連帶:中文輸入法選字時按的 Enter 不能當成「搜尋並跳過去」,否則選字途中就跳節點、清框,
+    確認後字又回來觸發搜尋,把剛選的鄰域蓋掉。
+    翻紅釘:拿掉 focusNode 裡清空搜尋框那行 → ①翻紅;拿掉 Enter 的 isComposing 判斷 → ②翻紅。"""
+    import re as _re, tempfile
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
+    out = str(Path(tempfile.mkdtemp()) / "g.html")
+    run(v, "export", "--format", "html", "--output", out, expect_rc=0)
+    html = Path(out).read_text(encoding="utf-8")
+    fn = _re.search(r"function focusNode\(n, fromBack\)\{(.*?)\n\}", html, _re.S)
+    check("①focusNode 會清空搜尋框", bool(fn) and "getElementById('search').value=''" in fn.group(1),
+          fn.group(1)[:300] if fn else "no focusNode")
+    kd = _re.search(r"searchEl\.onkeydown=e=>\{(.*?)\n\};", html, _re.S)
+    check("②輸入法選字中的 Enter 不觸發跳轉", bool(kd) and "e.isComposing" in kd.group(1),
+          kd.group(1)[:200] if kd else "no onkeydown")
+
+
 def t_invariant_test_binding():
     # Check T 牙齒:裸 ★INVARIANT★(無 [test:])→ doctor 擋(載重宣稱沒綁可執行證據)
     v = mkvault()
