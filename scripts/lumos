@@ -653,9 +653,11 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         except OSError:
             pass
         files = {}
-        for r in parsed:
-            if r.get("round") != rid:
-                continue
+        # 判定輪全席+資安席那幾筆(代碼審資安席 [S2]/r1 外家否決 E2):資安席一步在凍結/回放照樣重讀它的報告與凍結 patch,
+        # 所以那些檔也要進閉包、要求進版控,回放的完整性檢查才蓋得到;生效日前的迴圈 _gated_seat_rows 回空,閉包不變。
+        _closure = [r for r in parsed if r.get("round") == rid]
+        _closure += [r for r in _gated_seat_rows(parsed, loop_id) if r not in _closure]
+        for r in _closure:
             for k in ("report", "snapshot"):
                 rp = r.get(k + "_path")
                 if not rp or rp in files:
@@ -774,9 +776,11 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     if file_bad:
         red.append("凍結檔被動/佚失:" + ";".join(file_bad))
     if _engine_stale:
+        import shlex as _shlex   # 代碼審 r3 資安 G1:印給人照抄的指令,編號與帳上的路徑都加引號
+        _gsp = g.get("spec_path")
         print(f"  golden 過期(制度已演進:{g.get('engine_rev')} → {_REPLAY_ENGINE_REV})——"
               f"重算跳過;完整性檢查照上;確認新制合理後重凍:"
-              f"lumos loop replay {loop_id} --freeze --spec {g.get('spec_path','<計劃>')} --note <理由>")
+              f"lumos loop replay {_shlex.quote(loop_id)} --freeze --spec {_shlex.quote(str(_gsp)) if _gsp else '<計劃>'} --note <理由>")
     # ③ 對凍結閉包重算(卷證檔壞了就不硬算;制度過期不硬算)
     if not file_bad and not _engine_stale:
         rows = []
@@ -4386,6 +4390,7 @@ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了",
 _CLAUSE_HANG_STATES = ("dangling", "unrecognized", "mentioned")
 
 _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
+_SECURITY_SEAT_SINCE = "2026-09-12T00:00:00+08:00"   # 處置閘「資安席」一步只看首筆帳在這之後的迴圈——不回溯,理由同上一行(Projects/代碼審資安席_計劃 [S3])。
 # 設隔日不設當日(同 _SEV_WRITESIDE_CUTOFF 的理由:合入當天白天用舊碼寫的帳,日粒度切不開先後);比對走 _loop_ts_key 換算 UTC(r1 單reviewer:字串比日期會依記帳機器時區判不同)。
 
 
@@ -7629,7 +7634,12 @@ _TIER_ROSTER = {
         _rseat("外家finder", "external", True, "required-fail-closed"),
         _rseat("外家否決", "external", False, "required-fail-closed"),
         _rseat("spec-conformance", "claude", False, "conditional", "有收斂 spec 才應派"),
-        _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W")]},
+        _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W"),
+        # ★required-gated=必派、而且處置閘會擋★(2026-09-11 Enzo 裁 d6,單源 Projects/代碼審資安席_計劃)。
+        # 表上其他 required / required-fail-closed 席一律只提醒不擋(席位對帳只轉述);用不同的值把「會擋」寫在表上,
+        # 不讓同一個 required 有兩種意思。只有人裁能把一席標成這個值。席位對帳的人數不數它(舊迴圈不被追溯貼席數不夠)。
+        _rseat("資安", "claude", False, "required-gated",
+               "2026-09-11 d6:站攻擊者那邊只看能被利用的洞;派工 templates.md §7.8;席名 資安-<模型>;不佔 W")]},
 }
 
 
@@ -8119,7 +8129,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 seen.add(rid)
                 cur_rid = rid
     # ── tier 解析:定錨優先(v8);僅無定錨舊帳按格式推導;零記錄 rc2 ──
-    anchor = next((r["tier"] for r in rounds if r.get("tier")), None)
+    anchor = _loop_anchor_tier(rounds)
     if tier and anchor and tier != anchor:
         print(f"擋下:你這次指定的分級是 {tier},但這個審查編號第一筆記錄就定成 {anchor} 了。分級第一筆定下就不能中途換——要換請開新的審查編號", file=sys.stderr)
         return 2
@@ -8204,9 +8214,13 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             # ★這個 bug 自己維持自己★:2026-08 三個走循序的 loop(code-slim-python /
             # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
             # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+            # ★編號加 shell 引號★(代碼審 r3 資安 G1):loop_id 是自由字串,`code-x; touch … #` 原樣塞進
+            # 這幾條每輪都印、照慣例原樣照抄的指令,`;` 之後就被當成指令跑;一般編號 shlex.quote 不加引號
+            import shlex as _shlex
+            _qid = _shlex.quote(loop_id)
             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
             _orch_flag = f" --orchestrator {eff_orch}"
-            out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+            out["record_cmd"] = (f"lumos canary record caught|missed --loop {_qid}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
                                  f" --report <席報告.md>"
                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
@@ -8214,13 +8228,13 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
             if not light and eff_tier != "legacy":
                 out["disposal_cmd"] = (
-                    f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+                    f"lumos canary record caught|missed --loop {_qid}{rmode}"
                     f" --auditor <席> --severity <s>"
                     f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
                     f" --accept-reason <id=理由> --refuted-set none"
                     f" --report <席報告.md> --snapshot <凍結快照.md>"
                     f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}")
-                out["disposal_gate"] = f"lumos loop status {loop_id} --disposal --spec <計劃節點.md> --repo <root>"
+                out["disposal_gate"] = f"lumos loop status {_qid} --disposal --spec <計劃節點.md> --repo <root>"
             if eff_tier == "legacy":
                 if _roster_kind(loop_id) == "code":
                     # 循序codeloop-tier錨定案:standard 對 code 循序已格式相容,但補標=cap 陷阱——警告式,不邀請
@@ -8317,7 +8331,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 for s in out["roster"]["seats"]:
                     _fam = ("同門[" + out.get("orchestrator", "claude") + "]") if s['family'] == "claude" else ("外家(不是 " + out.get("orchestrator", "claude") + " 那一家)" if s['family'] == "external" else s['family'])
                     print(f"  應派: {s['slot']}(家族 {_fam},"
-                          f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{s['requirement']})"
+                          f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{_REQUIREMENT_LABEL.get(s['requirement'], s['requirement'])})"
                           + (f" 備註:{s['note']}" if s.get("note") else ""))
             elif out.get("roster_note"):
                 print(f"  應派: 目前算不出該派誰——{out['roster_note']}")
@@ -8396,8 +8410,9 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 _rr = str(Path(repo).resolve() if repo else _vault_repo_root(env))
             except Exception:
                 _rr = "."
+            import shlex as _shlex   # 代碼審 r3 資安 G1:補完的指令要能照抄,編號與路徑都加引號
             return emit("gate-pending", {"note": f"少了 --spec,沒辦法判斷過不過關。帳上記的材料是 {_hint},"
-                                                 f"直接用:lumos loop status {loop_id} {_mode} --spec {_hint} --repo {_rr}"
+                                                 f"直接用:lumos loop status {_shlex.quote(loop_id)} {_mode} --spec {_shlex.quote(_hint)} --repo {_shlex.quote(_rr)}"
                                                  f"(2026-08-25 以前定錨的舊 panel 帳要改用 --gate --panel)"})
         _older = next((r["spec_path"] for r in reversed(rounds)
                        if isinstance(r.get("spec_path"), str) and r["spec_path"].strip()), None)
@@ -14837,6 +14852,261 @@ def _quote_rows(rtext, stext):
     return rows
 
 
+# ═══ 處置閘「資安席」一步(Projects/代碼審資安席_計劃,2026-09-11 Enzo 裁 d6)═══
+# 高風險代碼審一律必派一席資安;編制表上 requirement=required-gated 的席,出席與否由這一步硬擋。
+_REQUIREMENT_LABEL = {"required-gated": "必派(問閘會擋)"}   # loop next 人讀輸出用;--json 仍給原值
+# 席名怎麼認:用連字號切段,任一段完全等於席位名或別名即算(英文不分大小寫)。只有人裁能加一個 required-gated 席。
+_GATED_SEAT_ALIASES = {"資安": ("資安", "security")}
+
+
+def _loop_anchor_tier(rounds):
+    """迴圈的定錨分級:帳上第一筆帶 tier 的值。loop next 與處置閘資安席一步呼叫同一支——
+    寫帳那側不擋中途改 tier,改用「任一筆 high」會對一個從沒被派過 high 編制的迴圈要求資安席(r1 邊界 B3)。"""
+    return next((r["tier"] for r in rounds if r.get("tier")), None)
+
+
+def _auditor_matches_slot(auditor, slot):
+    """這個席名坐的是不是這個席位:連字號切段,任一段(去頭尾空白)完全等於席位名或別名即算,英文不分大小寫。
+    ★整段相等,不是子字串★:「資安審-sonnet」「非資安-sonnet」不算;模型名自己帶連字號(資安-gpt-5.6-terra)、
+    前面帶席號(s4-資安-sonnet)都算。原本「取最後一個連字號前那段」會把多連字號的真實命名判錯
+    (帳上 308 個席名有 109 個帶兩個以上連字號;r1 邊界 B1、整合 C1)。"""
+    if not isinstance(auditor, str) or not auditor.strip():
+        return False
+    names = {a.casefold() for a in _GATED_SEAT_ALIASES.get(slot, (slot,))}
+    return any(seg.strip().casefold() in names for seg in auditor.split("-"))
+
+
+def _git_unquote_path(s):
+    """還原 git 在 diff 檔頭替路徑加的 C 式引號。core.quotePath 預設開:中文等非 ASCII 會寫成
+    `"a/docs/\\344\\270\\255.md"` 這種八進位跳脫。沒加引號的原樣回。
+    ★為什麼 lumos 自己呼叫 git 時用 -c core.quotePath=false、這裡卻要還原★(代碼審 r1 架構對齊 B1):
+    專案慣例是從源頭關掉跳脫(本檔各處 git 呼叫都這樣做,代碼審 SKILL 的凍結指令也已補上同一個旗標);
+    但凍結 patch 是編排者自己下指令產的輸入檔,舊迴圈、別家編排者、忘了帶旗標的都會帶引號——
+    判不準就會把同一支檔當兩支、或把兩支當同一支,所以讀這種輸入時要容錯,不是另一套產生方式。
+    ★只去掉行尾換行,不削空白★(r1 外家否決 E1):檔名尾端的空白是檔名的一部分,
+    削掉會把「app/login.py」與「app/login.py 」併成一支,資安席只看過前者也能讓後者過關。"""
+    s = s.rstrip("\r\n")
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        import codecs
+        try:
+            return codecs.escape_decode(s[1:-1].encode("latin-1", "backslashreplace"))[0].decode("utf-8", "surrogateescape")
+        except Exception:
+            return s[1:-1]
+    return s
+
+
+def _patch_files_from_text(text):
+    """凍結 patch 改到哪些檔(集合)。檔名判法見 _patch_file_changes。"""
+    return set(_patch_file_changes(text))
+
+
+def _patch_file_changes(text):
+    """凍結 patch 裡每支檔的「改動指紋」:{檔名: sha256}。
+    檔名:每段 `diff --git` 在第一個 `@@` 之前依序取 `+++ b/…`(不是 /dev/null)→ `rename to …` → `--- a/…`(刪檔)
+    → `diff --git` 行本身 b/ 那側;hunk 內容裡剛好長得像檔頭的行不算。既有的 _delguard_parse_diff 只用
+    「 b/(.+)$」抓、不處理引號,所以不能直接拿來用。
+    ★指紋算 hunk 的內容,不算位置★(代碼審 r1 通才 A1/資安 C1;r3 外家否決改):hunk 裡的增刪行與上下文行、
+    `@@` 後面的段落標頭(函式名),加上 mode/新增刪除/改名/二進位這幾種檔頭;不算 `@@` 的行號與 `index` 那行——
+    只差行號(rebase 常見)還算同一版。原本只比檔名,同一支檔換成含後門的內容照樣算「資安席看過」;
+    r1 改成只算增刪行之後,同一段 `-check(user)/+allow(user)` 從公開端點搬到管理員端點指紋完全相同(r3 外家 Codex 實測),
+    所以上下文與段落標頭也要算。代價:rebase 之後這段附近的程式也變了,資安席要對最新版再看一次(誤擋方向)。
+    ★二進位檔例外★(代碼審 r2 通才 F1):二進位檔沒有增刪行,內容變化只在 `index 舊..新` 的「新」那一半
+    (改動後的版本雜湊)與 `GIT binary patch` 資料行——這兩樣要算進去,否則換掉整個二進位檔指紋也不變。
+    文字檔不算 index,因為 rebase 會讓它變、改動本身卻沒變。"""
+    import hashlib
+    files, cur, in_hunk = {}, None, False
+    _HDR_KEEP = ("old mode ", "new mode ", "new file mode ", "deleted file mode ", "rename from ", "rename to ",
+                 "Binary files ", "copy from ", "copy to ")
+
+    def _strip(p, pre):
+        p = _git_unquote_path(p.split("\t", 1)[0])
+        return p[len(pre):] if p.startswith(pre) else p
+
+    def _flush():
+        if cur:
+            name = cur.get("plus") or cur.get("rename") or cur.get("minus") or cur.get("hdr")
+            if name:
+                chg = cur["chg"] + ([f"post-blob {cur['post']}"] if cur.get("bin") and cur.get("post") else [])
+                h = hashlib.sha256("\n".join(chg).encode("utf-8", "surrogateescape")).hexdigest()
+                files[name] = h
+
+    for ln in text.splitlines():
+        if ln.startswith("diff --git "):
+            _flush()
+            rest, hdr = ln[len("diff --git "):], None
+            if rest.endswith('"'):
+                k = rest.rfind(' "b/')
+                if k >= 0:
+                    hdr = _strip(rest[k + 1:], "b/")
+            else:
+                k = rest.rfind(" b/")
+                if k >= 0:
+                    hdr = rest[k + 3:]
+            cur, in_hunk = {"hdr": hdr, "chg": [], "bin": False, "post": None, "binpatch": False}, False
+            continue
+        if cur is None:
+            continue
+        if cur["binpatch"]:
+            cur["chg"].append(ln)   # GIT binary patch 的資料行就是內容
+            continue
+        if in_hunk:
+            if ln[:1] in ("+", "-", " ", "\\"):
+                cur["chg"].append(ln)   # 增刪行、上下文行、「\ No newline」都是內容
+            elif ln.startswith("@@"):
+                cur["chg"].append("@@" + ln.split("@@", 2)[-1])   # 行號不算、段落標頭(函式名)算
+            continue
+        if ln.startswith("@@"):
+            in_hunk = True
+            cur["chg"].append("@@" + ln.split("@@", 2)[-1])   # 第一段的段落標頭也算
+        elif ln.startswith("index ") and ".." in ln:
+            cur["post"] = ln[len("index "):].split("..", 1)[1].split(" ", 1)[0]
+        elif ln == "GIT binary patch":
+            cur["bin"] = cur["binpatch"] = True
+        elif ln.startswith(_HDR_KEEP):
+            if ln.startswith("Binary files "):
+                cur["bin"] = True
+            cur["chg"].append(ln)
+            if ln.startswith("rename to "):
+                cur["rename"] = _git_unquote_path(ln[len("rename to "):])
+        elif ln.startswith("+++ ") and ln[4:].strip() != "/dev/null":
+            cur["plus"] = _strip(ln[4:], "b/")
+        elif ln.startswith("--- ") and ln[4:].strip() != "/dev/null":
+            cur["minus"] = _strip(ln[4:], "a/")
+    _flush()
+    return files
+
+
+def _prov_check(r, key, prov_path):
+    """單一帳列的一份留痕(key=report_path/snapshot_path/intake_path)還對不對得上。
+    回 (狀態, 路徑):ok / missing(帳上沒帶)/ unreadable(讀不到)/ mismatch(sha 與帳面不符=事後被改)。
+    處置閘的留痕重驗與資安席一步共用這一支,不各抄一份(r1 前掃 ④b)。"""
+    pth = r.get(key)
+    if not pth:
+        return "missing", None
+    try:
+        got = _sha256_file(prov_path(pth))
+    except OSError:
+        return "unreadable", pth
+    return ("ok" if got == r.get(key.replace("_path", "_sha256")) else "mismatch"), pth
+
+
+def _gated_seats_for(rounds, loop_id):
+    """資安席這一步對這個迴圈適不適用。回 (狀態, 說明, 席位清單):
+    skip(不是代碼審 / 定錨分級的編制表沒有 required-gated 席 / 首筆帳早於生效日)、
+    fail(帳上 ts 讀不動——判不了新舊迴圈,壞資料不放行,同 _disposal_clause_step)、apply(要檢查)。"""
+    kind = _roster_kind(loop_id or "")
+    if kind == "design":
+        return "skip", "設計審不要求資安席——設計審編制不加", []
+    # kind is None:編號 code 開頭卻不是 code-,看不出種類 → 照最嚴的當代碼審(代碼審 r1 通才 A2:
+    # 原本整步跳過,換個名字就繞過;條款綁定那一步對同一種編號也是照它自己最嚴的方向判)
+    tier = _loop_anchor_tier(rounds)
+    entry = _TIER_ROSTER.get(("code", tier))
+    slots = [s["slot"] for s in (entry or {}).get("seats", []) if s.get("requirement") == "required-gated"]
+    if not slots:
+        return "skip", f"定錨分級 {tier or '沒指定'},編制表沒有必派而且會擋的席", []
+    keys = [(_loop_ts_key(str(r.get("ts", ""))), str(r.get("ts", ""))) for r in rounds if r.get("ts")]
+    if any(k is None for k, _ in keys):
+        bad = next(x for k, x in keys if k is None)
+        return "fail", f"帳上有一筆 ts 讀不動或沒帶時區({bad!r}),判不了是不是生效日後開的迴圈;壞資料不放行", []
+    if keys and min(k for k, _ in keys) < _loop_ts_key(_SECURITY_SEAT_SINCE):
+        return "skip", f"迴圈首筆帳 {min(keys)[1][:19]} 早於生效日 {_SECURITY_SEAT_SINCE[:10]},不回溯", []
+    return "apply", "", slots
+
+
+def _gated_seat_rows(rounds, loop_id):
+    """適用時,帳上坐 required-gated 席的那些帳列(凍結閉包要把它們的報告與凍結 patch 一起收)。"""
+    st, _why, slots = _gated_seats_for(rounds, loop_id)
+    if st != "apply":
+        return []
+    return [r for r in rounds if any(_auditor_matches_slot(r.get("auditor"), s) for s in slots)]
+
+
+def _disposal_security_step(rounds, rid, loop_id, prov_path):
+    """處置閘第六步「資安席」(第五步是條款綁定):回 "fail" / "ok" / "skip",自己印 [disposal] 資安席 那幾行。
+    定錨 high、生效日後的代碼審,編制表上每個 required-gated 席:①整個迴圈有它的帳(席名判法見 _auditor_matches_slot)
+    ②那筆的報告與凍結 patch 還在、sha 對 ③它看過的檔(凍結 patch 檔案清單聯集)涵蓋判定輪全部檔。
+    看整個迴圈不是每一輪(判定輪常是只派一席的 delta 輪)。凍結/回放模式照樣重讀檔——凍結閉包也收了這些檔,
+    所以即時判不過的,凍結重算也判不過(r1 外家否決 E2)。"""
+    st, why, slots = _gated_seats_for(rounds, loop_id)
+    if st == "skip":
+        print(f"[disposal] 資安席: —({why})")
+        return "skip"
+    if st == "fail":
+        print(f"[disposal] 資安席: ✗ — {why}")
+        return "fail"
+    judge = [r for r in rounds if r.get("round") == rid]
+    if not judge and isinstance(rid, str) and rid.startswith("__seq"):
+        # 不帶 --round 的迴圈:判定輪是讀側合成的 __seqN(逐筆自成一輪),帳上 round 欄是 None,拿 rid 比永遠比不中
+        # → 原本判定輪抓不到檔名、恆判不過、訊息還講成材料放錯(代碼審 r3 編排者自找)。混帶/不帶輪次在上游就擋,這裡全是不帶的
+        judge = [r for r in rounds if r.get("round") is None][-1:]
+    jchg, junread = {}, []
+    for sp in sorted({r.get("snapshot_path") for r in judge if r.get("snapshot_path")}):
+        try:
+            jchg.update(_patch_file_changes(prov_path(sp).read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            junread.append(sp)
+    jfiles = set(jchg)
+    _odd_id = _roster_kind(loop_id or "") is None
+    verdict = "ok"
+    for slot in slots:
+        rows = [r for r in rounds if _auditor_matches_slot(r.get("auditor"), slot)]
+        if not rows:
+            seen = sorted({r.get("auditor") for r in rounds if r.get("auditor")})
+            print(f"[disposal] 資安席: ✗ — 這個迴圈沒有「{slot}」席的帳(高風險代碼審必派,而且問閘會擋)"
+                  + ("——編號 code 開頭卻不是 code-,看不出是哪一種審查,照最嚴的當代碼審" if _odd_id else ""))
+            print(f"  帳上出現過的席名:{'、'.join(seen) if seen else '(無)'}——席名要有一段是「{slot}」,例如 {slot}-sonnet")
+            print("  在意的原因:高風險代碼審一律要有一席站在攻擊者那邊看過這份改動(2026-09-11 人裁);沒有它,能被利用的洞沒人負責找。")
+            print("  接下來:派一席資安(派工用 lumos-design-loop templates.md §7.8);已經審過、只是席名寫錯的,用正確席名把同一份報告補記一筆:")
+            import shlex as _shlex   # 代碼審 r2 資安 G3:編號原樣塞進建議指令,照抄執行會被當成 shell 語法
+            print(f"    lumos canary record none --loop {_shlex.quote(loop_id)} --round <那一輪> --auditor {slot}-<模型> --severity <最高> "
+                  "--findings <條數> --report <報告> --snapshot <那一輪凍結 patch> --spec <那一輪凍結 patch> --reviewed <sha256>")
+            verdict = "fail"
+            continue
+        good, bad = [], []
+        for r in rows:
+            probs = []
+            for label, key in (("報告", "report_path"), ("凍結 patch", "snapshot_path")):
+                pst, pth = _prov_check(r, key, prov_path)
+                if pst != "ok":
+                    probs.append({"missing": f"{label}沒記", "unreadable": f"{label}讀不到({pth})",
+                                  "mismatch": f"{label} sha256 與帳面不符(事後被改)"}[pst])
+            (bad if probs else good).append((r, probs))
+        if not good:
+            print(f"[disposal] 資安席: ✗ — 「{slot}」席的帳在,但留痕對不上:"
+                  + ";".join(f"{r.get('round')} {r.get('auditor')} {'、'.join(p)}" for r, p in bad))
+            print("  在意的原因:報告不在或事後被改,就證明不了那一席真的看過、看的是哪一版。")
+            print("  接下來:找回原檔;找不回就重派一席資安再記帳。")
+            verdict = "fail"
+            continue
+        if junread or not jfiles:
+            print("[disposal] 資安席: ✗ — 判定輪的凍結 patch 讀不到或抓不到任何檔名"
+                  + (f"({'、'.join(junread)})" if junread else "") + ",沒辦法確認資安席看過的檔有沒有涵蓋最後一版;看不懂就不放行")
+            print("  在意的原因:代碼審的凍結材料應該是整條分支的 diff(git diff <merge-base>..HEAD);抓不到檔名多半是材料放錯了。")
+            verdict = "fail"
+            continue
+        seen = {}
+        for r, _p in good:
+            for f, h in _patch_file_changes(prov_path(r["snapshot_path"]).read_text(encoding="utf-8", errors="replace")).items():
+                seen.setdefault(f, set()).add(h)
+        unseen = sorted(f for f in jfiles if f not in seen)
+        changed = sorted(f for f in jfiles if f in seen and jchg[f] not in seen[f])
+        if unseen or changed:
+            parts = []
+            if changed:
+                parts.append(f"{len(changed)} 支的內容跟資安席看的不一樣(之後又改過):" + "、".join(changed[:10])
+                             + ("…" if len(changed) > 10 else ""))
+            if unseen:
+                parts.append(f"{len(unseen)} 支資安席沒看過:" + "、".join(unseen[:10]) + ("…" if len(unseen) > 10 else ""))
+            print("[disposal] 資安席: ✗ — 最後一版改到的檔," + ";".join(parts))
+            print("  在意的原因:資安席看的是早一輪的材料;之後新碰到或又改過的檔,沒有人從攻擊者角度看過最後的樣子。")
+            print(f"  接下來:對最新的凍結 patch 再派一席資安,記帳席名用 {slot}-<模型>。")
+            verdict = "fail"
+            continue
+        r0 = good[0][0]
+        print(f"[disposal] 資安席: ✓ — {r0.get('round')} {r0.get('auditor')}(看過的檔涵蓋最後一版 {len(jfiles)} 個)")
+    return verdict
+
+
 def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=None):
     """處置閘第五步(條款綁測試算進度 [S3]):回 "fail" / "ok" / "skip",自己印一行 [disposal] 條款綁定。
     skip 四種:①凍結/回放模式(spec_sha_override 有值,對凍結 sha 判、不重讀活檔)②迴圈類型是 code(loop id 前綴 code-,同 _roster_kind;
@@ -14908,10 +15178,12 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
 
 
 def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None):
-    """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
+    """[T4] 處置閘(design-loop重設計 三):六步合取,全部讀側可重算(原本寫「四條合取」,2026-09-08 加⑤、2026-09-11 加⑥後過期)——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
-    ④quote-check 對 carrier 的帳面 snapshot 全 ok。
+    ④quote-check 對 carrier 的帳面 snapshot 全 ok
+    ⑤條款綁定(設計審計劃每條 [SN] 要標 [test:]/[manual:];代碼審 skip,見 _disposal_clause_step)
+    ⑥資安席(定錨 high 的代碼審,required-gated 席出席+留痕+涵蓋最後一版;見 _disposal_security_step)。
     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
     round-id 非連續重現 rc2(reuse panel 守衛;原 OrderedDict 首現序拿錯輪)。
@@ -15051,8 +15323,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             # 只驗 carrier 等於把 missed 席留痕降回「寫側形式要求」(r1 否決席 finding)。
             for i, r in enumerate(latest, 1):
                 for label, key in (("report", "report_path"), ("snapshot", "snapshot_path")):
-                    pth = r.get(key)
-                    if not pth:
+                    pst, pth = _prov_check(r, key, _prov_path)   # 與資安席一步共用(代碼審資安席 [S2])
+                    if pst == "missing":
                         # r2 回歸修(否決席):缺欄席不得靜默跳過——「全席重驗」對缺欄席
                         # 也要成立,否則定錨前搶跑的席=讀側盲區
                         print(f"[disposal] 留痕: ✗ — {rid}.{i} 未帶 {label}(disposal 判定輪全席都要留痕)")
@@ -15060,15 +15332,11 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                         ok = False
                         continue
                     n_files += 1
-                    want = r.get(key.replace("_path", "_sha256"))
-                    try:
-                        got = _sha256_file(_prov_path(pth))
-                    except OSError:
+                    if pst == "unreadable":
                         print(f"[disposal] 留痕: ✗ — {rid}.{i} {label} 讀不到({pth})——record 完刪檔照樣擋")
                         fails.append("留痕")
                         ok = False
-                        continue
-                    if got != want:
+                    elif pst == "mismatch":
                         print(f"[disposal] 留痕: ✗ — {rid}.{i} {label} sha256 與帳面不符(事後被改)")
                         fails.append("留痕")
                         ok = False
@@ -15078,19 +15346,15 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             _ik_n = 0
             for _rid_g, _rows_g in groups.items():
                 for _r_g in _rows_g:
-                    _ip = _r_g.get("intake_path")
-                    if not _ip:
+                    _pst, _ip = _prov_check(_r_g, "intake_path", _prov_path)
+                    if _pst == "missing":
                         continue
                     _ik_n += 1
-                    _want = _r_g.get("intake_sha256")
-                    try:
-                        _got = _sha256_file(_prov_path(_ip))
-                    except OSError:
+                    if _pst == "unreadable":
                         print(f"[disposal] 留痕: ✗ — {_rid_g} intake 讀不到({_ip})——record 完刪檔照樣擋")
                         fails.append("留痕")
                         ok = False
-                        continue
-                    if _got != _want:
+                    elif _pst == "mismatch":
                         print(f"[disposal] 留痕: ✗ — {_rid_g} intake sha256 與帳面不符(事後被改)")
                         fails.append("留痕")
                         ok = False
@@ -15207,16 +15471,23 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         return 2          # 同 G3:審材讀不到是用法錯誤,整支停,不是「這一項沒過」(r1/r2 架構席)
     if _cl == "fail":
         fails.append("條款綁定")
+    # ── ⑥ 資安席(代碼審資安席 [S2],2026-09-11 d6):定錨 high 的代碼審,編制表上 required-gated 席要出席、留痕對、
+    #    看過的檔涵蓋判定輪。只看生效日後開的迴圈(不回溯)。凍結/回放照樣重讀檔(凍結閉包也收了這些檔)。
+    _sec = _disposal_security_step(rounds, rid, loop_id, _prov_path)
+    if _sec == "fail":
+        fails.append("資安席")
     if result_out is not None:
         result_out["rid"] = rid
         result_out["fails"] = list(fails)
     if fails:
         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
+    # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
+    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec)) if st == "ok")
     if vacuous and carrier is None:
-        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算;引句無可驗不宣稱)")
+        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算{_extra};引句無可驗不宣稱)")
     else:
-        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
+        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定{_extra})")
     if not readonly:
         _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
     return 0

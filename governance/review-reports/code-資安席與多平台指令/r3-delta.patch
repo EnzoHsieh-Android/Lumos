@@ -1,0 +1,515 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 630960cf..5aab4c72 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -14266,66 +14266,71 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
+     if merge.exists():
+         args = [sys.executable, str(merge)] + (["--target", "codex"] if harness == "codex" else [])
+         r = subprocess.run(args)
+         if r.returncode != 0:              # 合併器只在設定檔 JSON 壞時回 1:別當成功
+             return "merge-failed"
+     if harness == "codex":                 # ④ 自訂審查席 TOML(d6)——刻意放在合併器之後:設定檔壞掉(merge-failed)就整個 Codex 側不算裝好,
+                                            #    TOML 不寫、下次 install --force 再補;hook 檔 copy 在前面已做(自癒無害)(code-codex-d6 r1 單reviewer F3)
+         st = _install_codex_agent()
+         if st == "created":
+             print(f"  ✓ Codex 自訂審查席已寫三份:")
+-            print(f"      {_CODEX_AGENT_NAME:<22} 散文審(設計審),terra + medium —— 也是預設")
+-            print(f"      {_CODEX_AGENT_CODE_NAME:<22} 程式碼審(一般風險),terra + xhigh")
+-            print(f"      {_CODEX_AGENT_MAX_NAME:<22} 程式碼審(高風險),astra + xhigh —— Plus 額度緊,別當預設")
++            print(f"      {_CODEX_AGENT_NAME:<22} 散文審(設計審),{_CODEX_SEAT_MODEL} + medium —— 也是預設")
++            print(f"      {_CODEX_AGENT_CODE_NAME:<22} 程式碼審(一般風險),{_CODEX_SEAT_MODEL} + xhigh")
++            print(f"      {_CODEX_AGENT_MAX_NAME:<22} 程式碼審(高風險),{_CODEX_SEAT_MODEL} + xhigh")
+             print(f"    派工詞點名哪一個就用哪一個;0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理 --sandbox read-only")
+     return "ok"
+ 
+ 
+ _CODEX_AGENT_NAME = "lumos_reviewer"   # 底線:模型 spawn 時會把連字號正規化成底線(2026-09-04 實看)
+ # 第三種「我方」標記(sentinel HTML 註解給 markdown、.lumos-managed 檔給目錄):TOML 檔只能用行註解當標記,不是另立做法
+ _CODEX_AGENT_MARK = "# lumos-managed: 由 lumos install 寫入,teardown 收走;改範本請改 scripts/lumos"
+ _CODEX_AGENT_CODE_NAME = "lumos_reviewer_code"  # 程式碼審(一般風險)
+-_CODEX_AGENT_MAX_NAME = "lumos_reviewer_max"   # 程式碼審(高風險);額度貴,見下方註解
++_CODEX_AGENT_MAX_NAME = "lumos_reviewer_max"   # 程式碼審(高風險);09-11 起與一般程式碼審同設定,見下方註解
+ _CODEX_AGENT_INSTRUCTIONS = """你是 lumos 的外部審查席(乾淨脈絡,不帶編排者的結論)。只讀不寫、不改任何檔。
+ 每條 finding 一行獨立 severity: clean|minor|major|blocker、一行 blocking: 是|否、一行 引句:「逐字出自審材」、引程式碼寫 file: `路徑:行號`。
+ blocker/major 要附能翻紅的最小重現,附不出標「未能重現」。沒問題的節寫「已讀,無 finding」。最後一行總結最嚴重 severity 與 blocking 條數。"""
+ 
+-# ★三席分流(2026-09-07 立兩席,09-08 Enzo 再裁拆成三席)★
++# ★三席分流(2026-09-07 立兩席,09-08 Enzo 再裁拆成三席;2026-09-11 Enzo 裁三席一律降到 Sol)★
+ #
+-#   散文審(設計審)  lumos_reviewer       terra + medium   ← 也是預設
+-#   程式碼審(一般)  lumos_reviewer_code  terra + xhigh
+-#   程式碼審(高風險) lumos_reviewer_max   astra + xhigh
++#   散文審(設計審)  lumos_reviewer       sol + medium   ← 也是預設
++#   程式碼審(一般)  lumos_reviewer_code  sol + xhigh
++#   程式碼審(高風險) lumos_reviewer_max   sol + xhigh
+ #
++# ★2026-09-11 為什麼全部降到 Sol★:外家席額度常撞上限——當天代碼審第二輪,Codex 席跑到一半
++#   「You've hit your usage limit」,換 Sol 也一樣被擋到額度重置(額度是整個帳號共用)。
++#   降一級模型是為了讓同一段額度撐更多席;推理強度照舊分 medium / xhigh。三個席名保留,
++#   派工詞與範本不用改;高風險席與一般程式碼審席現在設定相同,之後要再拉開只改這裡的常數。
+ # ★為什麼散文審只給 medium★:2026-09-08 實測,拿 xhigh 去審一份 8k 字元的 README 語感,
+ #   慢到使用者當場喊停。挑中文語感這種題目不需要深推理;xhigh 該留給「爆炸半徑判不出來」
+ #   那種要真的想很久的題目。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,
+ #   而審查慢到讓人不想派,就等於沒有這道防線。**
+-# ★為什麼高風險才用 astra★:Astra 在 Plus 方案的額度很緊(查到每 5 小時 5–45 則,未實測),
++# ★舊版(09-08~09-11)高風險席用 astra 的理由★:Astra 在 Plus 方案的額度很緊(查到每 5 小時 5–45 則,未實測),
+ #   全用它會一輪吃光、之後退回「沒有外家席」——[[Issues/外家席長期缺席仍照跑loop]]
+-#   記過這個前科(九個審查席全同一家族)。額度花在刀口上。
++#   記過這個前科(九個審查席全同一家族)。09-11 起連 terra 都常撞上限,所以一律降到 Sol。
+ # ★model / model_reasoning_effort 兩個欄位都是實測有效的★(2026-09-07,codex-cli 0.153.2):
+ #   給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值。
+ #   ⚠ 別用「叫席位自報模型代號」來驗——實測它會答錯(TOML 指定 5.4-mini,它自報 GPT-6)。
+ def _codex_agent_toml(name: str, model: str, effort: str, why: str) -> str:
+     return _CODEX_AGENT_MARK + f'''
+ name = "{name}"
+ description = "lumos 的乾淨審查席({why}):設計審/代碼審派工詞點名 {name} 時使用。只讀不寫,逐條 finding 附 severity 與逐字引句。"
+ developer_instructions = """{_CODEX_AGENT_INSTRUCTIONS}"""
+ model = "{model}"
+ model_reasoning_effort = "{effort}"
+ sandbox_mode = "read-only"
+ '''
+ 
+ 
+-_CODEX_AGENT_TOML = _codex_agent_toml(_CODEX_AGENT_NAME, "gpt-5.6-terra", "medium", "散文審,也是預設")
+-_CODEX_AGENT_CODE_TOML = _codex_agent_toml(_CODEX_AGENT_CODE_NAME, "gpt-5.6-terra", "xhigh", "程式碼審")
+-_CODEX_AGENT_MAX_TOML = _codex_agent_toml(_CODEX_AGENT_MAX_NAME, "gpt-6-astra", "xhigh", "程式碼審,高風險")
++_CODEX_SEAT_MODEL = "gpt-5.6-sol"   # 三席共用(2026-09-11 Enzo 裁:額度常撞上限,降到 Sol);要拉開再各自給
++_CODEX_AGENT_TOML = _codex_agent_toml(_CODEX_AGENT_NAME, _CODEX_SEAT_MODEL, "medium", "散文審,也是預設")
++_CODEX_AGENT_CODE_TOML = _codex_agent_toml(_CODEX_AGENT_CODE_NAME, _CODEX_SEAT_MODEL, "xhigh", "程式碼審")
++_CODEX_AGENT_MAX_TOML = _codex_agent_toml(_CODEX_AGENT_MAX_NAME, _CODEX_SEAT_MODEL, "xhigh", "程式碼審,高風險")
+ _CODEX_SEATS = ((_CODEX_AGENT_NAME, _CODEX_AGENT_TOML),
+                 (_CODEX_AGENT_CODE_NAME, _CODEX_AGENT_CODE_TOML),
+                 (_CODEX_AGENT_MAX_NAME, _CODEX_AGENT_MAX_TOML))
+ 
+ 
+ def _install_codex_agent(home=None) -> str:
+     """Codex 自訂審查席(d6,2026-09-05):寫 CODEX_HOME/agents/lumos_reviewer.toml。0.153.2 實測派工詞點名選得中;0.144.1 忽略(無害)。
+     ★sandbox_mode 只當提示,實測不擋寫檔——唯讀靠父代理 --sandbox read-only★。回 created|unchanged|skipped-foreign|skipped-not-dir(對齊 _reinject_claude_block 的 created/unchanged 詞彙)。"""
+     d = _codex_home(home) / "agents"
+     if d.exists() and not d.is_dir():      # agents 是檔案不是目錄 → 講清楚、不炸穿整次同步(code-codex-d6 r1 外家 #1)
+@@ -14889,62 +14894,75 @@ def _patch_files_from_text(text):
+     return set(_patch_file_changes(text))
+ 
+ 
+ def _patch_file_changes(text):
+     """凍結 patch 裡每支檔的「改動指紋」:{檔名: sha256}。
+     檔名:每段 `diff --git` 在第一個 `@@` 之前依序取 `+++ b/…`(不是 /dev/null)→ `rename to …` → `--- a/…`(刪檔)
+     → `diff --git` 行本身 b/ 那側;hunk 內容裡剛好長得像檔頭的行不算。既有的 _delguard_parse_diff 只用
+     「 b/(.+)$」抓、不處理引號,所以不能直接拿來用。
+     ★指紋只算實際改動★(代碼審 r1 通才 A1/資安 C1):hunk 裡的增刪行,加上 mode/新增刪除/改名/二進位這幾種檔頭;
+     不算 `@@` 行號、上下文行、`index` 那行——rebase 只會改到那些,改動本身沒變就還算同一版。
+-    原本只比檔名,同一支檔換成含後門的內容照樣算「資安席看過」。"""
++    原本只比檔名,同一支檔換成含後門的內容照樣算「資安席看過」。
++    ★二進位檔例外★(代碼審 r2 通才 F1):二進位檔沒有增刪行,內容變化只在 `index 舊..新` 的「新」那一半
++    (改動後的版本雜湊)與 `GIT binary patch` 資料行——這兩樣要算進去,否則換掉整個二進位檔指紋也不變。
++    文字檔不算 index,因為 rebase 會讓它變、改動本身卻沒變。"""
+     import hashlib
+     files, cur, in_hunk = {}, None, False
+     _HDR_KEEP = ("old mode ", "new mode ", "new file mode ", "deleted file mode ", "rename from ", "rename to ",
+                  "Binary files ", "copy from ", "copy to ")
+ 
+     def _strip(p, pre):
+         p = _git_unquote_path(p.split("\t", 1)[0])
+         return p[len(pre):] if p.startswith(pre) else p
+ 
+     def _flush():
+         if cur:
+             name = cur.get("plus") or cur.get("rename") or cur.get("minus") or cur.get("hdr")
+             if name:
+-                h = hashlib.sha256("\n".join(cur["chg"]).encode("utf-8", "surrogateescape")).hexdigest()
++                chg = cur["chg"] + ([f"post-blob {cur['post']}"] if cur.get("bin") and cur.get("post") else [])
++                h = hashlib.sha256("\n".join(chg).encode("utf-8", "surrogateescape")).hexdigest()
+                 files[name] = h
+ 
+     for ln in text.splitlines():
+         if ln.startswith("diff --git "):
+             _flush()
+             rest, hdr = ln[len("diff --git "):], None
+             if rest.endswith('"'):
+                 k = rest.rfind(' "b/')
+                 if k >= 0:
+                     hdr = _strip(rest[k + 1:], "b/")
+             else:
+                 k = rest.rfind(" b/")
+                 if k >= 0:
+                     hdr = rest[k + 3:]
+-            cur, in_hunk = {"hdr": hdr, "chg": []}, False
++            cur, in_hunk = {"hdr": hdr, "chg": [], "bin": False, "post": None, "binpatch": False}, False
+             continue
+         if cur is None:
+             continue
++        if cur["binpatch"]:
++            cur["chg"].append(ln)   # GIT binary patch 的資料行就是內容
++            continue
+         if in_hunk:
+             if ln[:1] in ("+", "-"):
+                 cur["chg"].append(ln)
+             elif ln.startswith("@@"):
+                 pass   # 行號不算指紋
+             continue
+         if ln.startswith("@@"):
+             in_hunk = True
++        elif ln.startswith("index ") and ".." in ln:
++            cur["post"] = ln[len("index "):].split("..", 1)[1].split(" ", 1)[0]
++        elif ln == "GIT binary patch":
++            cur["bin"] = cur["binpatch"] = True
+         elif ln.startswith(_HDR_KEEP):
++            if ln.startswith("Binary files "):
++                cur["bin"] = True
+             cur["chg"].append(ln)
+             if ln.startswith("rename to "):
+                 cur["rename"] = _git_unquote_path(ln[len("rename to "):])
+         elif ln.startswith("+++ ") and ln[4:].strip() != "/dev/null":
+             cur["plus"] = _strip(ln[4:], "b/")
+         elif ln.startswith("--- ") and ln[4:].strip() != "/dev/null":
+             cur["minus"] = _strip(ln[4:], "a/")
+     _flush()
+     return files
+ 
+@@ -15019,21 +15037,22 @@ def _disposal_security_step(rounds, rid, loop_id, prov_path):
+     verdict = "ok"
+     for slot in slots:
+         rows = [r for r in rounds if _auditor_matches_slot(r.get("auditor"), slot)]
+         if not rows:
+             seen = sorted({r.get("auditor") for r in rounds if r.get("auditor")})
+             print(f"[disposal] 資安席: ✗ — 這個迴圈沒有「{slot}」席的帳(高風險代碼審必派,而且問閘會擋)"
+                   + ("——編號 code 開頭卻不是 code-,看不出是哪一種審查,照最嚴的當代碼審" if _odd_id else ""))
+             print(f"  帳上出現過的席名:{'、'.join(seen) if seen else '(無)'}——席名要有一段是「{slot}」,例如 {slot}-sonnet")
+             print("  在意的原因:高風險代碼審一律要有一席站在攻擊者那邊看過這份改動(2026-09-11 人裁);沒有它,能被利用的洞沒人負責找。")
+             print("  接下來:派一席資安(派工用 lumos-design-loop templates.md §7.8);已經審過、只是席名寫錯的,用正確席名把同一份報告補記一筆:")
+-            print(f"    lumos canary record none --loop {loop_id} --round <那一輪> --auditor {slot}-<模型> --severity <最高> "
++            import shlex as _shlex   # 代碼審 r2 資安 G3:編號原樣塞進建議指令,照抄執行會被當成 shell 語法
++            print(f"    lumos canary record none --loop {_shlex.quote(loop_id)} --round <那一輪> --auditor {slot}-<模型> --severity <最高> "
+                   "--findings <條數> --report <報告> --snapshot <那一輪凍結 patch> --spec <那一輪凍結 patch> --reviewed <sha256>")
+             verdict = "fail"
+             continue
+         good, bad = [], []
+         for r in rows:
+             probs = []
+             for label, key in (("報告", "report_path"), ("凍結 patch", "snapshot_path")):
+                 pst, pth = _prov_check(r, key, prov_path)
+                 if pst != "ok":
+                     probs.append({"missing": f"{label}沒記", "unreadable": f"{label}讀不到({pth})",
+@@ -15869,21 +15888,21 @@ def enforcement_status(root=None, home=None):
+                     miss.append(nm)
+                 elif _CODEX_AGENT_MARK in af.read_text(encoding="utf-8", errors="replace"):
+                     ok.append(nm)
+                 else:
+                     foreign.append(nm)
+             if foreign:
+                 add("codex-agent", "degraded", f"agents/{'、'.join(foreign)}.toml 是別人的檔(無 lumos 標記),lumos 不覆蓋")
+             elif miss:
+                 add("codex-agent", "inactive", f"少了審查席 {'、'.join(miss)}(lumos install --force 會寫)")
+             else:
+-                add("codex-agent", "active", f"三席都在:{_CODEX_AGENT_NAME}(散文審 terra+medium)、{_CODEX_AGENT_CODE_NAME}(程式碼審 terra+xhigh)、{_CODEX_AGENT_MAX_NAME}(高風險 astra+xhigh);0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理沙盒")
++                add("codex-agent", "active", f"三席都在:{_CODEX_AGENT_NAME}(散文審 {_CODEX_SEAT_MODEL}+medium)、{_CODEX_AGENT_CODE_NAME}(程式碼審 {_CODEX_SEAT_MODEL}+xhigh)、{_CODEX_AGENT_MAX_NAME}(高風險 {_CODEX_SEAT_MODEL}+xhigh);0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理沙盒")
+     except Exception as e:
+         add("codex-agent", "unknown", str(e))
+ 
+     # ③c skills 兩層(對稱;r1 整合 F6):使用者層目錄裡有沒有 lumos-* 連結/目錄
+     for layer, sk in (("claude-skills", home / ".claude" / "skills"), ("codex-skills", home / ".agents" / "skills")):
+         try:
+             if layer == "codex-skills" and not codex_ok:
+                 add(layer, "unknown", "本機無 codex,不適用")
+                 continue
+             have = [p.name for p in sk.iterdir() if p.name.startswith("lumos-")] if sk.is_dir() else []
+@@ -22637,20 +22656,23 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
+         return 0 if (v["status"] not in ("red", "unfilterable") or advisory) else 1
+     st = v["status"]
+     if st == "red":
+         # ★訊息要講「這要修測試,不是補審查留痕」★(設計 [S2] 的整個理由)
+         print("", file=sys.stderr)
+         head = "提醒(不擋)" if advisory else "擋下"
+         print(f"{head}:這次改動碰到的硬合約,它們綁的測試沒過。", file=sys.stderr)
+         for n, plat, m, d in v["red"][:6]:
+             print(f"    {n}  [{m}]  {d}", file=sys.stderr)
+         print("", file=sys.stderr)
++        if v.get("not_run"):
++            # 代碼審 r2 通才 F2:紅燈時也要講另一個平台沒跑(原本只有 JSON 帶 not_run,人讀輸出漏講)
++            print(f"  另外 {len(v['not_run'])} 支沒跑——{v['reason'].split('——', 1)[-1]}", file=sys.stderr)
+         print("  ★這是測試紅了,不是「還沒審查」★——補一筆代碼審留痕修不好它。", file=sys.stderr)
+         print("  要嘛把測試修綠,要嘛那條合約已經不成立了、去改合約:", file=sys.stderr)
+         print(f"      lumos contracts <節點>", file=sys.stderr)
+         if advisory:
+             print("  這次是低風險推送,只提醒不擋——但帳上記著,而且高風險推送會擋。", file=sys.stderr)
+         print("", file=sys.stderr)
+         return 0 if advisory else 1
+     # ★綠走 stdout、紅走 stderr,比照兄弟函式★(代碼審 r1 架構對齊席):
+     # code-loop check 對同一份 bound-tests 狀態的分法就是
+     # `file=sys.stderr if _st == "red" else sys.stdout`。第一版全部塞 stderr,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 11150d95..5bff95f6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -30738,26 +30738,27 @@ def t_codex_d6_agent_toml():
+     (home3 / ".codex").mkdir(parents=True, exist_ok=True)
+     _codex_run(home3, "print(m._install_codex_agent())")
+     ag = home3 / ".codex" / "agents"
+     base = ag / "lumos_reviewer.toml"; code = ag / "lumos_reviewer_code.toml"; mx = ag / "lumos_reviewer_max.toml"
+     check("d6-三席: 三份 TOML 都寫出來了", base.exists() and code.exists() and mx.exists(),
+           str(sorted(x.name for x in ag.glob('*.toml'))))
+     pb = _toml.loads(base.read_text(encoding="utf-8"))
+     pc = _toml.loads(code.read_text(encoding="utf-8"))
+     pm = _toml.loads(mx.read_text(encoding="utf-8"))
+     # ★推理強度要配題目★:散文審給 medium(xhigh 慢到不想派=等於沒這道防線),程式碼審才給 xhigh
+-    check("d6-三席: 散文審席 = gpt-5.6-terra + medium",
+-          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "medium", str(pb))
+-    check("d6-三席: 程式碼審席 = gpt-5.6-terra + xhigh",
+-          pc.get("model") == "gpt-5.6-terra" and pc.get("model_reasoning_effort") == "xhigh", str(pc))
+-    check("d6-三席: 高風險席 = gpt-6-astra + xhigh",
+-          pm.get("model") == "gpt-6-astra" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
++    # 2026-09-11 Enzo 裁:外家席額度常撞上限,三席一律降到 Sol;推理強度照舊
++    check("d6-三席: 散文審席 = gpt-5.6-sol + medium",
++          pb.get("model") == "gpt-5.6-sol" and pb.get("model_reasoning_effort") == "medium", str(pb))
++    check("d6-三席: 程式碼審席 = gpt-5.6-sol + xhigh",
++          pc.get("model") == "gpt-5.6-sol" and pc.get("model_reasoning_effort") == "xhigh", str(pc))
++    check("d6-三席: 高風險席 = gpt-5.6-sol + xhigh",
++          pm.get("model") == "gpt-5.6-sol" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
+     check("d6-三席: 三席名字互不相同、都唯讀、指示完全相同(框架單源)",
+           len({pb["name"], pc["name"], pm["name"]}) == 3
+           and pb.get("sandbox_mode") == pc.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"
+           and pb["developer_instructions"] == pc["developer_instructions"] == pm["developer_instructions"],
+           f"{pb['name']}/{pc['name']}/{pm['name']}")
+     gone = _codex_run(home3, "print(sorted(m._remove_codex_agent()))")
+     check("d6-三席: teardown 三席都收、清單照實列三個",
+           all(n in gone.stdout for n in ("lumos_reviewer.toml", "lumos_reviewer_code.toml", "lumos_reviewer_max.toml"))
+           and not base.exists() and not code.exists() and not mx.exists(), gone.stdout[-160:])
+ 
+@@ -35693,20 +35694,43 @@ def t_disposal_security_seat_content_and_id():
+ def t_patch_parse_keeps_trailing_space():
+     """[代碼審 r1 外家否決 E1]檔名尾端的空白是檔名的一部分:「app/login.py」與「app/login.py 」是兩支檔,
+     原本 strip() 把它們併成一支,資安席只看過前者也能讓後者過關。"""
+     m = _load_lumos_inproc()
+     txt = ("diff --git a/app/login.py b/app/login.py\n--- a/app/login.py\n+++ b/app/login.py\n@@ -1 +1 @@\n-a\n+b\n"
+            "diff --git a/app/login.py  b/app/login.py \n--- a/app/login.py \t\n+++ b/app/login.py \t\n@@ -1 +1 @@\n-a\n+c\n")
+     got = m._patch_files_from_text(txt)
+     check("尾端空白:兩支檔各自成立,不被併成一支", got == {"app/login.py", "app/login.py "}, repr(got))
+ 
+ 
++def t_patch_fingerprint_binary_and_quoting():
++    """[代碼審 r2 通才 F1]二進位檔在 diff 裡沒有增刪行,內容變化只在 index 那行的「改動後版本」:
++    兩份只有這個不同的二進位 diff 指紋要不同(原本相同,資安席看過舊版就能把二進位檔整個換掉);
++    文字檔只有 index 不同、增刪行一樣 → 指紋仍相同(rebase 不誤判)。
++    [代碼審 r2 資安 G3]擋下時印的補救指令,迴圈編號要照 shell 規則加引號,不能原樣塞進去。"""
++    import io, contextlib
++    m = _load_lumos_inproc()
++    b1 = "diff --git a/asset.bin b/asset.bin\nindex aaaaaaa..bbbbbbb 100644\nBinary files a/asset.bin and b/asset.bin differ\n"
++    b2 = "diff --git a/asset.bin b/asset.bin\nindex ccccccc..ddddddd 100644\nBinary files a/asset.bin and b/asset.bin differ\n"
++    f1, f2 = m._patch_file_changes(b1), m._patch_file_changes(b2)
++    check("二進位:內容不同(改動後版本不同)→ 指紋不同", f1.get("asset.bin") and f1 != f2, f"{f1} {f2}")
++    t1 = "diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-x\n+y\n"
++    t2 = "diff --git a/a.py b/a.py\nindex 3333333..4444444 100644\n--- a/a.py\n+++ b/a.py\n@@ -9 +9 @@\n-x\n+y\n"
++    check("文字檔:只有 index 與行號不同、增刪行一樣 → 指紋相同", m._patch_file_changes(t1) == m._patch_file_changes(t2),
++          f"{m._patch_file_changes(t1)} {m._patch_file_changes(t2)}")
++    rows = [{"round": "r1", "auditor": "正確性-sonnet", "tier": "high", "ts": "2026-09-13T10:00:00+08:00"}]
++    buf = io.StringIO()
++    with contextlib.redirect_stdout(buf):
++        m._disposal_security_step(rows, "r1", "code-x; rm -rf ~", lambda p: Path(p))
++    out = buf.getvalue()
++    check("補救指令:迴圈編號照 shell 規則加引號", "--loop 'code-x; rm -rf ~'" in out, out[-400:])
++
++
+ def t_disposal_security_seat_cutoff():
+     """[代碼審資安席 S3]生效日前開的迴圈不回溯(skip 並印一行);ts 換算 UTC 比,字串比會誤判。"""
+     v = mkvault()
+     lid = f"code-sec-old-{_M1U}"
+     sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")], ts="2026-09-01T10:00:00+08:00")
+     r = _sec_gate(v, lid, sp)
+     tail = _sec_after(r.stdout)
+     check("生效日前:沒資安席也照舊 PASS(不回溯)", r.returncode == 0, r.stdout[-600:])
+     check("生效日前:印一行講明是生效日前開的", tail.startswith(": —") and "生效日" in tail.split("\n")[0], tail[:300])
+     # 2026-09-11T20:00-05:00 = 2026-09-12T01:00Z,晚於生效日(2026-09-11T16:00Z);字串比會把它當成舊迴圈
+@@ -35917,20 +35941,26 @@ def t_bound_tests_multiplatform_missing_cmd():
+     check("多平台缺指令④:bound-tests 低風險那條路也講得出來(原本一個字都不印)", "不生效" in (r3.stdout + r3.stderr),
+           (r3.stdout + r3.stderr)[-500:])
+     _sh.rmtree(d, ignore_errors=True)
+     # ③ 懸空的綁定照樣紅
+     d = setup({"py": {"profile": "python", "root": "."}, "other": OTHER})
+     p = Path(d) / "docs" / "x-knowledge" / "Systems" / "Pay.md"
+     p.write_text(p.read_text(encoding="utf-8").replace("[test:t_pay_ok]", "[test:t_ghost]"), encoding="utf-8")
+     r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+     check("多平台缺指令③:懸空綁定照樣紅,不被「沒指令」吞掉", bt.get("status") == "red" and "t_ghost" in (bt.get("reason") or ""),
+           r.stdout[:700])
++    # 代碼審 r2 通才 F2:紅燈時人讀輸出也要講另一個平台沒跑(原本只有 JSON 有,純文字與低風險那條路都漏講)
++    for extra in ([], ["--advisory"]):
++        rr = run_l(d, "bound-tests", "--diff", "HEAD~1..HEAD", *extra)
++        o = rr.stdout + rr.stderr
++        check(f"多平台缺指令③:bound-tests {' '.join(extra) or '(一般)'} 紅燈時也點名沒跑的平台",
++              "other" in o and "沒設測試指令" in o, o[-500:])
+     _sh.rmtree(d, ignore_errors=True)
+     # ⑤ 單平台沒指令 → 照舊 no-config,訊息仍指 test.run_cmd
+     d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmp-"), run_cmd=None)
+     r = run_l(d, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json"); bt = btv(r)
+     check("多平台缺指令⑤:單平台沒指令 → 照舊 no-config、訊息指 test.run_cmd",
+           bt.get("status") == "no-config" and "test.run_cmd" in (bt.get("reason") or ""), r.stdout[:700])
+     _sh.rmtree(d, ignore_errors=True)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index c139a3c2..1db33ced 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -10,21 +10,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。★同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋(2026-09-09 表態閘,[[Projects/棧別提問表態閘_計劃]])。★
+ - pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、high 沒有 `lumos code-loop pass|skip --note` 留痕,三個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(★旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動★);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+    **先表態**(2026-09-09 起,派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的那幾題填成 `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)/`na`(附 `reason`,≥10 個中文字)/`todo`(附 `issue: Issues/<名>` 與 `reason`)/`tension`(★張力,2026-09-09 起★:這題的做法跟鄰居不同——你刻意沿用既有寫法、或刻意改用建議做法——不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 會印成 ⚠ 讓人裁;單源 [[Projects/兩席相反時端出張力_計劃]]),再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。
+-2. **派審查員**:Agent、sonnet(★Codex 編排時的完整做法(點誰、唯讀怎麼開、版本差異)★:**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走:版本行為一變就要改三處,而那正是散文載規則會漂的老問題。外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。**high 另必派一席「資安」**(不佔人數,2026-09-11 d6):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起,hook 45 秒超時就附不到節點;2026-09-05 起超時會在派工詞尾端附一行說明,不再靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線→靜默放行(超時則附一行說明,見上);★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。★席報告格式★以 lumos-design-loop `templates.md` 的卷證規則為★唯一來源★,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(★反引號必加★,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。
++2. **派審查員**:Agent、sonnet(★Codex 編排時的完整做法(點誰、唯讀怎麼開、版本差異)★:**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走:版本行為一變就要改三處,而那正是散文載規則會漂的老問題。外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。**high 另必派一席「資安」**(不佔人數,2026-09-11 d6):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。★擋在問閘、不在 `code-loop pass`★:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起,hook 45 秒超時就附不到節點;2026-09-05 起超時會在派工詞尾端附一行說明,不再靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線→靜默放行(超時則附一行說明,見上);★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。★席報告格式★以 lumos-design-loop `templates.md` 的卷證規則為★唯一來源★,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(★反引號必加★,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。
+    ★2026-09-06 教訓(收貨線指令化案停案後的根因修法)★:我自己的派工詞長期自創 `quote: <逐字一行>` / `file: <路徑>:<行>` 這套,跟上面規定的不一樣——**於是每個迴圈都要臨場寫一支正規化腳本把它轉回來,而那支腳本會在讀不到嚴重度時默默補成 clean、還會把引句裡的「」換成『』弄壞錨定**。查證指出席位吐錯格式不是模型天生行為,是派工詞要求的。**派工詞照範本寫,收貨正規化這件事就不存在。**
+    派工單落 `rN-dispatch.json`。
+ 3. **收貨**:★**所有席收齊之前不要動工作目錄**★(2026-09-06 實際踩到):某席先回來就開始折它的發現,後到的席會讀到已經改過的碼、甚至讀到先到那席的報告——**三席就不獨立了**。實際發生的樣子:架構席在報告裡直接引用外家席的結論;通才席回報「審到一半發現工作目錄被改動」。先折不會讓判定變錯(重疊的發現各自附了獨立證據),但它讓「多席獨立一致」這個判準失效,而那正是「可以直接折不用派辯方」的依據。收齊再動,先到的席報告就先存檔放著。
+    席報告原樣存檔,★不要再臨場寫腳本轉格式★(2026-09-06:那支腳本已刪、並加測試禁止卷證目錄再出現任何腳本)。格式要求在派工當下就講清楚(見步驟 2 的單一來源),席位交來就該是對的;**真的交來格式不對,退回該席重寫,不要自己動手改它的報告**——編排者改席報告等於改證據(2026-09-09 起唯一例外=`lumos report-normalize --write` 的純格式搬移,界線見下一段;其他一律退回)。記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行會 rc2 擋下,那時就是退回重寫的時機。★2026-09-09 起「沒正規化」也擋(審查有沒有用記帳 S1/S4,規則三條同 design-loop 步驟 4:檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算):`lumos report-normalize <席報告>` 不帶 --write 先看差在哪、決定要不要退回;`--write` 只准做純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句)——跟「不改證據」的界線就在這:動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。★可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:★**席位給的「觀察」和「判準」要分開驗**★(2026-09-07 實際踩到):席位常常「量到的數字對、但該怎麼算才算過這件事講錯」。實例:某席指出「同一支 hook 連打兩次預算會累加超標,7+7=14 vs 天花板 10」——**數字對**,但它給的判準「兩次相加要小於天花板」**錯**,因為那個函式回傳的是「還剩多少」不是「每段配額」(第一段拿 7 只用 3,第二段拿 4,最壞總耗 7,從不超標)。**照錯的判準硬改,會做出更複雜而且沒解決真問題的東西**——我第一版就是照它改,改完再測數字沒動。所以:先自己重現它量到的現象(那通常是對的),再自己想一遍「什麼條件才算過」,不要把它的判準當結論。
+    severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`,2026-07-18 S5;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票——2026-08-23 裁)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:**那些綁定測試會被自動真跑**(2026-08-22 起機械化,不靠自律)。★2026-09-07 起分兩條路(人裁)★:高風險走 `code-loop check`,紅/懸空/方法名不合法就**擋**推送;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了**印出來、記帳,但不擋**——不選「低風險也擋」是因為擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`(零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。★紅了是要修測試,不是補審查留痕★:補一筆 `code-loop pass` 修不好一支紅掉的測試。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+ 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。★2026-09-09 起載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳★。
+ 7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。架構對齊席與棧別檢核題對同一段給相反意見時,**兩邊的發現都留、不挑邊**:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折(2026-09-09,[[Projects/兩席相反時端出張力_計劃]])。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾★不印★「審查有沒有用」那行(它只在設計審印;code 迴圈的數字照樣進 `lumos gov --stats` 那一段)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。★凍結判定在留痕之前做★(2026-09-10 [[Projects/提交推送規範_計劃]]):程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用),產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放;原本「推完才凍」會在推送後多出一個提交。再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
+index b163ff70..ced1e107 100644
+--- a/skills/lumos-code-loop/reference.md
++++ b/skills/lumos-code-loop/reference.md
+@@ -72,21 +72,21 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
+ ### 步驟 2 — 植 bug canary hunk
+ 
+ → 見〈歷史與停用〉。
+ 
+ ### 2 · ~~植 bug canary~~ ⛔ 已停用(2026-08-14,見頁頂)
+ 本步驟與三道防污染自檢不再執行,直接進步驟 3。舊型別輪替表/生成硬化見 git 史與 design-loop reference §A(歷史帳判讀用)。reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**。
+ 
+ ### 步驟 3 — 派乾淨 reviewer
+ 
+ 
+-Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;★Codex 可以逐席指定模型——2026-09-07 實測推翻舊說法★:席位 TOML 的 `model` / `model_reasoning_effort` 兩個欄位都有效(給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值)。lumos 已寫三席:`lumos_reviewer`=terra+medium 散文審(預設)、`lumos_reviewer_code`=terra+xhigh 程式碼審(一般)、`lumos_reviewer_max`=astra+xhigh 只給 tier=high。⚠ 別用「叫席位自報模型代號」驗——實測它會答錯)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
++Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;★Codex 可以逐席指定模型——2026-09-07 實測推翻舊說法★:席位 TOML 的 `model` / `model_reasoning_effort` 兩個欄位都有效(給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值)。lumos 已寫三席:`lumos_reviewer`=sol+medium 散文審(預設)、`lumos_reviewer_code`=sol+xhigh 程式碼審(一般)、`lumos_reviewer_max`=sol+xhigh(2026-09-11 起三席都用 gpt-5.6-sol) 只給 tier=high。⚠ 別用「叫席位自報模型代號」驗——實測它會答錯)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
+ > ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
+ 
+ **framing(refute framing)**:
+ 「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞——正確性(★2026-08-28 升級:每個可疑處挑一個具體輸入把執行走一遍、別用名字猜;邊界 空/單一/溢位、資源 錯誤路徑釋放了嗎、例外/None 接了嗎、冪等併發 重跑或同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準)
+ 
+ **抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
+ - 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
+ - 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
+ - ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
+ 
+@@ -94,21 +94,21 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;★Codex 可以逐席
+ `lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。★2026-08-29 改:固定席**逐條貼進每一席的派工詞**(不是給 manifest 路徑讓它自己讀——給路徑那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]])★,要它「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
+ 
+ > manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
+ 
+ 第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」
+ 
+ ---
+ 
+ 
+ ### 3 · 派乾淨 reviewer
+-Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:程式碼審點 `lumos_reviewer_code`(terra+xhigh),tier=high 點 `lumos_reviewer_max`(astra+xhigh);散文審才用預設的 `lumos_reviewer`(terra+medium)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
++Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:程式碼審點 `lumos_reviewer_code`(sol+xhigh),tier=high 點 `lumos_reviewer_max`(sol+xhigh);散文審才用預設的 `lumos_reviewer`(sol+medium)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
+ 
+ **refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」
+ 
+ **抑噪紀律(逐字進 prompt)**:
+ - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」
+ - 「不能指出具體受影響 file:line,就不准臆測『可能會壞別處』。」
+ - （不設 findings 硬上限——會藏真 finding、污染 G2 收斂信號。）
+ 
+ **席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述每條 ≤3 句、不准模稜兩可(結構欄位不計);★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
+ 
+diff --git a/skills/lumos-design-loop/reference.md b/skills/lumos-design-loop/reference.md
+index b6a4cc69..d91dc396 100644
+--- a/skills/lumos-design-loop/reference.md
++++ b/skills/lumos-design-loop/reference.md
+@@ -116,21 +116,21 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏
+ 
+ 2. ~~植 canary~~ **⛔ 已停用(2026-08-14,見頁頂告示)**——本步驟不執行,直接進 2.5。舊型別清單/生成硬化(reference §A)僅供回放歷史帳時判讀。
+ 
+ 2.5. **機械核對(refcheck,對工作副本)**:`lumos refcheck /tmp/<id>-rN.md --repo <repo根> --json`。missing／line_out_of_range ＝機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱＋excerpts)留存、步驟 3 餵審計員。refcheck **只驗 spec→repo 指涉、不驗 spec 內部一致性**——內部一致性是審計員責任田。
+ 
+ 2.6. **pitfalls 核對**:`lumos pitfalls <計劃節點.md> --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補該節再繼續。不帶 `--check` 跑一次,提問清單附給步驟 3 的審計員當鏡頭之一。
+ 
+ 2.7. **pre-flight 排乾(首輪前跑一次,r2+ 不重跑)**:派 1 個便宜 agent 拿固定 checklist 掃**真檔 spec**——未定義旗標／欄位／檔名、章節交叉引用、**範圍刀自違**(「明確不做」被其他段偷偷違反)、CLI touchpoint(白名單／Check 字母撞名／函式簽名)、測試策略與本文條目一一對應。命中直接修真檔(記入審計修正紀錄標「pre-flight」,**不算 loop findings**)。
+    理由:實測 r1 大宗是清單型缺陷(某案 r1 九條裡五條此型),先機械排乾讓 panel 從高起點審,一輪收斂(K=1)才從理論變可能(cascade:便宜先掃、貴的審剩下)。
+ 
+-3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本(Codex 編排:spawn_agent 點名席位——★2026-09-08 實測:席位 TOML 的 `model` / `model_reasoning_effort` 有效,舊的「不能逐席指定模型」已作廢★;設計審(散文)點 `lumos_reviewer`(terra + medium);程式碼審點 `lumos_reviewer_code`(terra + xhigh);tier=high 才點 `lumos_reviewer_max`(astra + xhigh);父代理唯讀沙盒,框架寫進派工詞。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]])。
++3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本(Codex 編排:spawn_agent 點名席位——★2026-09-08 實測:席位 TOML 的 `model` / `model_reasoning_effort` 有效,舊的「不能逐席指定模型」已作廢★;設計審(散文)點 `lumos_reviewer`(sol + medium);程式碼審點 `lumos_reviewer_code`(sol + xhigh);tier=high 才點 `lumos_reviewer_max`(sol + xhigh;2026-09-11 起三席都用 gpt-5.6-sol);父代理唯讀沙盒,框架寫進派工詞。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]])。
+    - **refute framing**:把工作副本當**外部第三方的投稿**審,不是你／本系統寫的——挑出投稿者沒看到的洞。逐節讀、主動找洞(未定義詞／壞引用／不一致／矛盾／可執行性 gap),逐條標 severity。
+    - **附步驟 2.5 的 refcheck manifest**:manifest 內宣稱的存在性／行號已機械驗訖,查證力氣聚焦語意;**manifest 非宣稱全集**,散文裡的現況假設仍要自己查。
+    - **加碼 framing**(席報告疑似通用回應/引句錨定大面積失敗的下一輪用):「逐節讀,你一定找得到至少一個未定義的詞／壞引用／不一致;沒找到就是你沒讀仔細」。
+ 
+ 4. **判讀**:
+    - ① ~~canary 判定~~ **⛔ 已停用(見頁頂)**——「審計員有沒有真的讀」改由收貨三道的 quote-check 引句錨定機械把關。
+    - ② **最嚴重真 finding** ＝ 審計員標的 max(`clean`＝無真 finding／`minor`／`major`／`blocker`)。
+      - **剝「審計員誤判」要克制**:只有能**指出該 finding 客觀錯在哪**(被實際 spec/code 反證)才剝;**判不準就保留**(寧可高估),剝除理由記進 note。
+      - **severity 錨(防 refute framing 通膨;派工模板同句)**:major ＝ 照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度／測試枚舉完整性／措辭 ＝ minor,除非漏的是合約級。
+      - **難判搖擺場換問法重問一次**(「這條 finding 若實作照做,具體錯在哪個行為?」),兩問等級不一致 ＝ **取高並記 unstable**。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index 838e607f..29484963 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -117,26 +117,26 @@ LUMOS-IMPACT: {base}..HEAD
+    ★編排者要知道的三件事★(單源=[[Projects/派工鏡頭注入_計劃]]):
+    ① 標記不在、格式差一個字、base 不在主線歷史上——hook 一律靜默放行;★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
+       派工詞不會多任何東西;★固定席 0 篇不再靜默(v1.2)★:改附「圖譜沒有釘到節點」備援段——受影響測試/
+       共改夥伴/呼叫者三格(全部只用主線樹算),那段不是合約、不必逐條答;派完看子代理回覆有沒有
+       「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
+    ② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
+    ③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
+    ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
+       標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
+       子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
+-      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁)★——**點哪一席看你在審什麼**:
+-> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-terra + medium)。也是預設。
+-> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-terra + xhigh)。
+-> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-6-astra + xhigh)。
++      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁;2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,額度常撞上限)★——**點哪一席看你在審什麼**:
++> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-sol + medium)。也是預設。
++> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-sol + xhigh)。
++> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-5.6-sol + xhigh;09-11 前是 astra)。
+ > ★散文審為什麼只給 medium★:2026-09-08 實測拿 xhigh 審一份 8k 字元的 README 語感,慢到使用者當場喊停。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,而審查慢到讓人不想派,就等於沒有這道防線。**
+-> ★astra 為什麼只給高風險★:Plus 方案額度很緊(查到每 5 小時 5–45 則,未實測),全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
++> ★為什麼 09-11 全部降到 Sol★:外家席額度常撞上限——當天代碼審一輪跑到一半就被擋到額度重置,換 Sol 也一樣被擋(額度整個帳號共用);降一級模型讓同一段額度撐更多席,推理強度照舊分 medium / xhigh。舊版高風險席用 astra,理由是它額度更緊、全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★Claude 編排直接叫 `codex exec` 時也要帶 `-m gpt-5.6-sol`,不然會用 Codex 預設模型★;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
+ 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
+ 
+ 錨定紀律（硬性；2026-08-04 重設計）：
+ - 每條 finding 必附一段**從文件逐字複製的原文引句（≥10 字）**——編不出引句的疑慮不要交。
+   （收貨端跑 `lumos quote-check` 逐條驗；錨不到＝該條不採信。）
+ 
+ 抑噪紀律（嚴格遵守）：
+ - 低嚴重度疑慮，給不出具體失敗場景就不要標。
+   ★但未定義的詞／壞引用／內部不一致例外——一律要報，不受失敗場景要求限制★
+   （2026-08-04：canary 配對實驗顯示此紀律與文件級瑕疵偵測有張力，n=20 未定論、先開例外口。）
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index c6070669..bfc6d03b 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -998,21 +998,21 @@ python3 scripts/lumos doctor
+ ---
+ 
+ ## 自足性審計
+ 
+ ### 圖譜更新後：Sonnet agent 自足性審計（必做）
+ 
+ **原理**：圖譜的存在目的是讓「沒有主對話脈絡的下一個 session」能單靠圖譜還原現況。所以驗收方式就是模擬這件事——派一個**乾淨的 Sonnet agent**（沒有主對話上下文）只讀圖譜還原脈絡，主對話比對它的還原結果與自己腦中的現存脈絡：**有出入 = 圖譜當下不健全，需補足缺漏後重審**。
+ 
+ **時機**：每次對圖譜的**實質內容更新**完成後（新增/修改 Systems、Issues、Verification、decisions、summary）。純格式修正（typo、缺欄位補登、連結修復）可豁免，但修完建議至少跑一次健康巡檢。
+ 
+-**做法**：用 Agent tool 派出 subagent，`model: sonnet`(Codex 下用 spawn_agent 點名席位;★席位 TOML 的 model 欄位 2026-09-08 實測有效,舊的「不能逐席指定模型」已作廢★——散文審 `lumos_reviewer`(medium)、程式碼審 `lumos_reviewer_code`(xhigh)、高風險 `lumos_reviewer_max`(astra))，prompt 模板：
++**做法**：用 Agent tool 派出 subagent，`model: sonnet`(Codex 下用 spawn_agent 點名席位;★席位 TOML 的 model 欄位 2026-09-08 實測有效,舊的「不能逐席指定模型」已作廢★——散文審 `lumos_reviewer`(medium)、程式碼審 `lumos_reviewer_code`(xhigh)、高風險 `lumos_reviewer_max`(xhigh;2026-09-11 起三席模型都是 gpt-5.6-sol))，prompt 模板：
+ 
+ ```
+ 你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；優先用 obsidian CLI，
+ 帶 leading vault="{vault-name}"，查詢指令見 search/backlinks/property:read/eval），
+ 禁止讀程式碼、git log、其他文件——模擬「只有圖譜」的新 session。
+ 
+ 請基於圖譜還原以下脈絡，據實回答，圖譜裡找不到的就明說「圖譜未記載」不要腦補：
+ 1. {本次更新涉及的模組} 的現況：核心流程、關鍵欄位、現行有效的決策
+ 2. 最近一次對 {模組} 的變更做了什麼、為什麼做、驗證狀態如何
+ 3. 有哪些進行中(doing)/被阻擋(blocked)的工作與未決問題

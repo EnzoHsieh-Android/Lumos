@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-08-14
+updated: 2026-09-11
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -17,6 +17,7 @@ verified_by:
   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-09-11_代碼審資安席落地]]"
 summary: |-
   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/三道防污染/判定/missed 懲罰全停;輪記帳改 `canary record none`;panel 輪有效=記帳席≥2(Landmark r5「單席 caught<2 白跑」型不再發生);repro triage 觸發改「可疑席(引句錨不到/通用回應)」;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
   KEY:[2026-08-05]UI 層驗收慣例(MCP 接驗證層,Enzo 靈感;立慣例不綁案)——test-layers 宣告 layer 含「UI 驗收」的棧被 diff 命中時,終審驗收=agent 以 Playwright MCP(乾淨瀏覽器)/claude-in-chrome(真登入態)真開頁執行驗收條款,截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/ 由 Verification 引用(哲學同 quote-check:證據可重放非口頭);起不了環境=明記未驗+原因不得靜默跳;Landmark .lumos/test-layers.json 已宣告 vue/html/js→UI 驗收、cs→dotnet test;首用=下一個天然帶 UI 面的工作(RSNO 暫緩,人裁);★Android 通道(2026-08-11,[[Projects/Android側UI測試綁圖譜工作流_計劃]])★=maestro MCP list_devices→inspect_screen→run,與 Playwright/chrome 並列;★前置:只准對「已標可自動且測試門店已確認」的 flow 自動跑★(否則會在真裝置真後端開真單),未達條件的 flow 一律僅手動、終審走 lumos code-loop skip --note 留痕
@@ -32,7 +33,7 @@ summary: |-
   KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
   KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLIST——漂移守衛落 test_autonomous_loop.py(toolchain-only、非 vendored);詞表/pattern 表自帶 scripts/lumos(difficulty.py 不 vendored)
   KEY:diff class 用代碼形態類軸(併發/效能/資源)非四業務類;pattern 去重疊(SELECT→效能 N+1、INSERT/UPDATE/DELETE→併發交易);過濾繼承 Check H 全套(skip .md/.txt/.rst+測試檔+註解行)
-  KEY:[2026-08-27 D2 裁]安全缺陷型鏡頭★刻意排除、非疏漏★——類軸只代碼形態(併發/效能/資源),不加對抗安全席。理由=單人私有 repo 非對抗威脅(IssueTrojanBench 66.5% 不適用);威脅=幻覺 agent 寫錯,歸正確性鏡頭+測試+signoff。★邊界=工具鏈吃不可信外部輸入(日報吸收管線 future 面)上線時重拉安全鏡頭★(decisions 有記)
+  KEY:★[2026-09-11 d6 取代 d5]高風險代碼審一律必派一席「資安」★(Enzo 裁;所有專案,工具鏈自己也算;只在 tier high,不改風險掃描觸發)——處置閘加「資安席」一步(第六步,第五步是條款綁定):整個迴圈要有資安席帳列、報告 sha 對、看過的檔涵蓋最後一版;編制表新值 required-gated;生效日 2026-09-12(2026-09-11 落地,驗證 [[Verification/2026-09-11_代碼審資安席落地]];代碼審待跑) [test:t_disposal_security_seat_required] [test:t_roster_code_high_has_security_seat];單源 [[Projects/代碼審資安席_計劃]]。舊 d5(2026-08-27 刻意排除,理由單人私有 repo)前提已不成立:repo 公開、一行安裝、09-06 hook 信任邊界事件
   KEY:誠實天花板——pattern 提示器非偵測器(單行掃描,跨行語境小行窗啟發為限)｜canary 校準+溯源排除靠自律｜--check 只驗節存在不驗內容｜mutation 冒煙抽樣非覆蓋｜code-loop 少一道 G1(--spec 可選、G1 skip)｜事故語料進圖譜留 v2
   DEP:[[risk-tiered-review]](分級哲學延伸到 diff 層)｜[[convergence-evidence-gate]](gate --spec 改可選)｜[[lumos-refcheck]]｜doctor Check H(diff 掃描骨架)
   TEST:t_pitfalls_spec(9)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;當時 374 passed(★全量數字已漂,以 CI 為準★)
@@ -65,6 +66,14 @@ decisions:
     context: 調研 D2:兩家 skill 全文零 security、regex 類軸註解明寫排除安全、效能 2026-08-21 降建議級=無席能因安全缺陷判 major
     why_chosen: 明文宣告排除比空白留著好——空白讓人以為漏了,明文+邊界讓下一個 session 知道是刻意的、何時該重新評估
     decided: 2026-08-27
+    valid: false
+    superseded_by: d6
+    ended: 2026-09-11
+  - content: 高風險代碼審一律必派一席「資安」(Enzo 2026-09-11 裁;所有專案,工具鏈自己也算):只在代碼審本來就跑的 tier high 加席、不改風險掃描觸發;機械擋=處置閘加「資安席」一步(整個迴圈要有資安席帳列、報告 sha 對、看過的檔涵蓋最後一版;細節以計劃為準),生效日 2026-09-12;看什麼/不報什麼/每條必附攻擊路徑見 templates.md §7.8;單源 Projects/代碼審資安席_計劃
+    id: d6
+    context: 2026-09-11 治理日報(agent 設定倉庫 16% 帶安全缺陷、判定該擋在動手那一刻)觸發重查:d5 排除的前提「單人私有 repo」已不成立——repo 在 GitHub 公開、README 教一行 curl|bash 安裝、2026-09-06 hook 信任邊界事件=吃不可信輸入(d5 自己的回頭條件),且消費專案(會員/金流後端、App)照樣繼承了排除;兩個獨立來源查到代碼審全無資安席、9 個消費專案派工單零資安鏡頭
+    why_chosen: 消費專案與公開分發的工具鏈都有真實攻擊面;資安席照 Anthropic claude-code-security-review+OWASP 借清單,不自己發明;只在 high 加是人裁的成本取捨(限制與 REVISIT 記在計劃)
+    decided: 2026-09-11
     valid: true
 related:
   - "[[Projects/impact-diff橋接_計劃]]"

@@ -27905,7 +27905,8 @@ def t_tier_roster_table():
           str(sorted(tbl.keys())))
     check("roster: code/standard 補列(循序 tier 錨定案 supersede v1 範圍釘)",
           tbl.get(("code", "standard"), {}).get("mode") == "sequential", str(tbl.get(("code", "standard"))))
-    allowed_req = {"required", "required-fail-closed", "note-if-absent", "conditional"}
+    # required-gated=必派而且處置閘會擋(2026-09-11 代碼審資安席 d6,只有人裁能用);值域刻意加一個,不讓 required 有兩種意思
+    allowed_req = {"required", "required-fail-closed", "note-if-absent", "conditional", "required-gated"}
     for (kind, tier), entry in tbl.items():
         seats = entry["seats"]
         w = sum(1 for s in seats if s["occupies_w"])
@@ -27954,8 +27955,9 @@ def t_loop_next_roster():
     r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--orchestrator", "claude", "--json")
     d2 = _j.loads(r2.stdout.strip())
     s2 = d2["roster"]["seats"]
-    check("next-roster: code/high 席組成(5佔W 含外家 finder+3不佔W 含架構對齊)",
-          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 3,
+    # 2026-09-11 代碼審資安席 d6:code/high 多一席不佔人數的「資安」(required-gated),不佔 W 由 3 變 4
+    check("next-roster: code/high 席組成(5佔W 含外家 finder+4不佔W 含架構對齊與資安)",
+          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 4,
           str(s2)[:300])
     # 查表 miss:code+light
     r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--orchestrator", "claude", "--json")
@@ -35518,6 +35520,475 @@ def t_doctor_about_code_not_linked():
     check("②有合約、正文有路徑 → 不唸", "有合約有連上" not in _sec, _sec[:400])
     check("③純文件節點 → 不唸(這是把噪音從 40 條壓到 2 條的那一刀)", "純文件沒合約" not in _sec, _sec[:400])
     check("④建議行講得出後果與做法", "反引號" in _sec and "靜默跳過" in _sec, _sec[:400])
+
+
+# ══ 代碼審資安席(Projects/代碼審資安席_計劃,2026-09-11 Enzo 裁 d6)══
+# 生效日 2026-09-12T00:00+08:00。★每筆帳的 ts 一律手動指定★:記帳當下的 ts 會隨執行日期漂,
+# 不指定的話,同一支測試在生效日前後跑出相反結果。
+_SEC_NEW = "2026-09-13T10:00:00+08:00"
+
+
+def _sec_patch(files, tag="", ctx="", shift=0):
+    """造一份代碼審凍結 patch(標準 unified diff,每支檔一段)。tag 改的是增刪的行(=內容不同);
+    ctx 改上下文行(連帶行號);shift 只挪行號(=rebase 後常見的樣子,內容完全不變)。"""
+    out = []
+    for f in files:
+        start = 1 + len(ctx) + shift
+        out += [f"diff --git a/{f} b/{f}", f"--- a/{f}", f"+++ b/{f}", f"@@ -{start},1 +{start},2 @@",
+                f" def login(u, p):{ctx}",
+                f"+    return db.query(\"select * from users where name='\" + u + \"'\")  # {f}{tag}"]
+    return "\n".join(out) + "\n"
+
+
+def _sec_loop(v, lid, rounds, ts=_SEC_NEW, tier="high"):
+    """rounds=[(rid, 檔案清單, [席名...], 載體席名)]。每輪一份凍結 patch;載體席帶處置帳與錨得到的引句,
+    其他席報告 clean。tier 可給清單(逐輪)。每記一筆就把該筆 ts 推到指定值。回判定輪的 patch 路徑。"""
+    d = v / "Projects"; d.mkdir(exist_ok=True)
+    ledger = v.parent / ".canary-log.jsonl"
+    last = None
+    for i, rnd in enumerate(rounds):
+        rid, files, seats, carrier = rnd[:4]
+        tag, ctx = (rnd[4] if len(rnd) > 4 else ""), (rnd[5] if len(rnd) > 5 else "")
+        shift = rnd[6] if len(rnd) > 6 else 0
+        spec = d / f"{lid}-{rid}.patch"
+        spec.write_text(_sec_patch(files, tag, ctx, shift), encoding="utf-8")
+        h = _sha256_of(spec)
+        snap = d / f"{lid}-{rid}-snap.patch"
+        snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
+        quote = f"return db.query(\"select * from users where name='\" + u + \"'\")  # {files[0]}{tag}"
+        t = tier if isinstance(tier, str) else tier[i]
+        for s in seats:
+            rpt = d / f"{lid}-{rid}-{s}.md"
+            if s == carrier:
+                rpt.write_text(f"severity: minor\nF1 甲\nseverity: minor\nblocking: 否\n引句:「{quote}」\n", encoding="utf-8")
+                extra = ["--severity", "minor", "--findings", "1", "--findings-set", "F1",
+                         "--folded-set", "F1", "--refuted-set", "none"]
+            else:
+                rpt.write_text("severity: clean\n已讀,無 finding\n", encoding="utf-8")
+                extra = ["--severity", "clean", "--findings", "0"]
+            run(v, "canary", "record", "none", "--loop", lid, "--round", rid, "--auditor", s, *extra,
+                "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h,
+                "--tier", t, "--orchestrator", "claude", expect_rc=0)
+            if ts:
+                _ledger_patch_last(ledger, lid, ts=ts)
+        last = spec
+    return last
+
+
+def _sec_gate(v, lid, spec):
+    return run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+
+
+def _sec_after(stdout):
+    """只看「資安席」那一步之後的輸出(免得別步的字樣讓斷言假綠)。"""
+    return stdout.split("[disposal] 資安席", 1)[-1] if "[disposal] 資安席" in stdout else ""
+
+
+def t_disposal_security_seat_required():
+    """[代碼審資安席 S2]定錨 high、生效日後的 code 迴圈:整個迴圈要有資安席出席、報告 sha 對、
+    它看過的檔(凍結 patch 檔案清單聯集)涵蓋判定輪全部檔,否則問閘不過。
+    翻紅釘:把 _loop_status_disposal 裡呼叫 _disposal_security_step 那段拿掉 → ①翻紅(沒資安席照樣 PASS)。"""
+    v = mkvault()
+    # ① 沒資安席 → 未過;列出帳上席名;附下一步記帳指令
+    lid = f"code-sec-a-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")])
+    r = _sec_gate(v, lid, sp)
+    tail = _sec_after(r.stdout)
+    check("資安席①:沒派資安席 → 問閘未過(rc1)", r.returncode == 1 and tail.startswith(": ✗"), r.stdout[-700:])
+    check("資安席①:訊息列出帳上出現過的席名(命名寫錯一眼看得出)", "正確性-sonnet" in tail, tail[:500])
+    check("資安席①:附下一步記帳指令", "canary record" in tail and "資安-" in tail, tail[:500])
+    # ② 同一輪有資安席、報告 sha 對、涵蓋 → 過
+    lid = f"code-sec-b-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet")])
+    r = _sec_gate(v, lid, sp)
+    check("資安席②:有資安席、報告 sha 對、涵蓋判定輪 → PASS", r.returncode == 0 and _sec_after(r.stdout).startswith(": ✓"),
+          r.stdout[-700:])
+    # ③ 判定輪多一支資安席沒看過的檔 → 未過,點名那支檔
+    lid = f"code-sec-c-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet"),
+                            ("r2", ["app/login.py", "app/extra.py"], ["邊界-sonnet"], "邊界-sonnet")])
+    r = _sec_gate(v, lid, sp)
+    tail = _sec_after(r.stdout)
+    check("資安席③:判定輪多一支資安席沒看過的檔 → 未過", r.returncode == 1 and tail.startswith(": ✗"), r.stdout[-700:])
+    check("資安席③:訊息點名沒被看過的那支檔", "app/extra.py" in tail and "app/login.py" not in tail.split("\n")[0],
+          tail[:500])
+    # ④ 判定輪檔案是資安席看過的子集 → 過(看整個迴圈,不是每一輪)
+    lid = f"code-sec-d-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py", "app/extra.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet"),
+                            ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet")])
+    r = _sec_gate(v, lid, sp)
+    check("資安席④:判定輪只派一席、檔案是資安席看過的子集 → PASS", r.returncode == 0 and _sec_after(r.stdout).startswith(": ✓"),
+          r.stdout[-700:])
+    # ⑤ 非判定輪的資安席報告事後被改 → 資安席這一步不過(判定輪那道留痕看不到 r1)
+    rp = v / "Projects" / f"{lid}-r1-資安-sonnet.md"
+    check("資安席⑤前置:r1 的資安席報告檔在、剛才 PASS", rp.exists() and r.returncode == 0, "")
+    rp.write_text(rp.read_text(encoding="utf-8") + "事後改\n", encoding="utf-8")
+    r = _sec_gate(v, lid, sp)
+    check("資安席⑤:非判定輪的資安席報告被改 → 未過(而且是資安席這一步擋的)",
+          r.returncode == 1 and _sec_after(r.stdout).startswith(": ✗") and "留痕: ✓" in r.stdout, r.stdout[-700:])
+    # ⑥ 定錨分級 standard(後面有一筆記成 high)→ 不要求
+    lid = f"code-sec-e-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["單reviewer-sonnet"], "單reviewer-sonnet"),
+                            ("r2", ["app/login.py"], ["單reviewer-sonnet"], "單reviewer-sonnet")],
+                   tier=["standard", "high"])
+    r = _sec_gate(v, lid, sp)
+    check("資安席⑥:定錨分級 standard(後面有一筆 high)→ 不要求資安席", r.returncode == 0 and _sec_after(r.stdout).startswith(": —"),
+          r.stdout[-700:])
+    # ⑦ 帳上 ts 讀不動 → 不放行
+    lid = f"code-sec-g-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet")],
+                   ts="0000-00-00T00:00:00+08:00")
+    r = _sec_gate(v, lid, sp)
+    check("資安席⑦:帳上 ts 讀不動 → 不放行(壞資料不放行)", r.returncode == 1 and _sec_after(r.stdout).startswith(": ✗"),
+          r.stdout[-700:])
+
+
+def t_disposal_security_seat_names_and_patch_parse():
+    """[代碼審資安席 S2]席名任一段完全等於 資安/security 才算;凍結 patch 檔名解析處理 git 對中文檔名的引號跳脫。"""
+    m = _load_lumos_inproc()
+    for name, want in [("資安", True), ("資安-sonnet", True), ("資安-gpt-5.6-terra", True),
+                       ("s4-資安-sonnet", True), ("Security-codex", True), ("SECURITY", True),
+                       ("資安審-sonnet", False), ("非資安-sonnet", False), ("sonnet", False), ("", False)]:
+        check(f"席名判法:{name!r} → {'算' if want else '不算'}", m._auditor_matches_slot(name, "資安") is want, name)
+    quoted = ('diff --git "a/docs/\\344\\270\\255.md" "b/docs/\\344\\270\\255.md"\n'
+              '--- "a/docs/\\344\\270\\255.md"\n+++ "b/docs/\\344\\270\\255.md"\n@@ -1 +1 @@\n-甲\n+乙\n')
+    plain = 'diff --git a/docs/中.md b/docs/中.md\n--- a/docs/中.md\n+++ b/docs/中.md\n@@ -1 +1 @@\n-甲\n+乙\n'
+    check("patch 解析:git 預設(加引號八進位跳脫)與不跳脫的同一支中文檔 → 同一個檔名",
+          m._patch_files_from_text(quoted) == m._patch_files_from_text(plain) == {"docs/中.md"},
+          f"{m._patch_files_from_text(quoted)} vs {m._patch_files_from_text(plain)}")
+    renamed = "diff --git a/old.py b/new.py\nsimilarity index 100%\nrename from old.py\nrename to new.py\n"
+    check("patch 解析:純改名取新名", m._patch_files_from_text(renamed) == {"new.py"}, str(m._patch_files_from_text(renamed)))
+    deleted = "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
+    check("patch 解析:刪檔取原名", m._patch_files_from_text(deleted) == {"gone.py"}, str(m._patch_files_from_text(deleted)))
+
+
+def t_disposal_security_seat_content_and_id():
+    """[代碼審資安席 S2,代碼審 r1 折入]①資安席看過的檔,之後內容又改了 → 不算涵蓋(A1/C1:原本只比檔名,
+    同一支檔換成含後門的內容照樣 PASS);只是上下文或行號變了、增刪的行一樣 → 仍算涵蓋(rebase 不誤擋)
+    ②編號 code 開頭卻不是 code- → 看不出種類,照最嚴的當代碼審(A2:原本整步跳過,換個名字就繞過)。
+    翻紅釘:涵蓋比對改回只比檔名 → ①翻紅;_gated_seats_for 對 None 種類改回 skip → ②翻紅。"""
+    v = mkvault()
+    lid = f"code-sec-cc-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet", ""),
+                            ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet", " 後門")])
+    r = _sec_gate(v, lid, sp)
+    tail = _sec_after(r.stdout)
+    check("資安席內容①:資安席看過的檔之後內容又改了 → 未過", r.returncode == 1 and tail.startswith(": ✗"), r.stdout[-700:])
+    check("資安席內容①:訊息點名那支檔、講明是內容跟資安席看的不一樣", "app/login.py" in tail and "內容" in tail.split("\n")[0],
+          tail[:400])
+    lid = f"code-sec-cx-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet", ""),
+                            ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet", "", "  # 上下文變了")])
+    r = _sec_gate(v, lid, sp)
+    # r3 外家否決改:上下文也算指紋(只算增刪行時,同一段改動搬到別的函式指紋不變)——上下文變了要重看
+    check("資安席內容①:增刪的行一樣、但上下文變了 → 不算涵蓋(r3 外家否決改)",
+          r.returncode == 1 and _sec_after(r.stdout).startswith(": ✗"), r.stdout[-700:])
+    lid = f"code-sec-cy-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet", ""),
+                            ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet", "", "", 40)])
+    r = _sec_gate(v, lid, sp)
+    check("資安席內容①:只挪了行號、內容完全一樣 → 仍算涵蓋(PASS,rebase 容忍)",
+          r.returncode == 0 and _sec_after(r.stdout).startswith(": ✓"), r.stdout[-700:])
+    lid = f"codesec{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")])
+    r = _sec_gate(v, lid, sp)
+    tail = _sec_after(r.stdout)
+    check("資安席編號②:code 開頭卻不是 code- 的高風險迴圈沒派資安席 → 資安席這一步不過(不跳過)",
+          tail.startswith(": ✗"), r.stdout[-700:])
+    check("資安席編號②:訊息講明看不出種類、照最嚴的判", "code-" in tail, tail[:400])
+
+
+def t_loop_printed_cmds_quote_loop_id():
+    """代碼審 r3 資安 G1:印給人照抄的建議指令,迴圈編號與帳上記的材料路徑要加 shell 引號。
+    loop_id 是自由字串(沒有字元白名單),`code-x; touch … #` 原樣塞進 record_cmd,照抄執行 `;` 之後就被當指令跑;
+    上一輪只修了處置閘那一條,loop next 每輪都印的三條與「少了 --spec」那句沒修。
+    ①loop next 的 record_cmd / disposal_cmd / disposal_gate 用 shlex 切開後,編號是完整一段
+    ②「少了 --spec」那句補完的判閘指令,編號與帶空白的材料路徑都是完整一段
+    ③一般編號(code-foo)印出來跟以前一樣,不多引號 ④源碼不再有 f 字串把 {loop_id} 直接接在 lumos 指令裡。
+    翻紅釘:把 cmd_loop_next 裡的 _shlex.quote(loop_id) 改回 {loop_id} → ①④翻紅。"""
+    import json as _j, subprocess as _sp, shlex as _sh, re as _re
+    v = mkvault()
+    _sp.run(["git", "init", "-q", str(v.parent)]); _sp.run(["git", "-C", str(v.parent), "add", "-A"])
+    _sp.run(["git", "-C", str(v.parent), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
+    bad = "code-x; touch /tmp/lumos-g1-marker #"
+
+    def after(cmd, flag):
+        toks = _sh.split(cmd)
+        return toks[toks.index(flag) + 1] if flag in toks else None
+
+    r = run(v, "loop", "next", bad, "--tier", "standard", "--orchestrator", "claude", "--json")
+    d = _j.loads(r.stdout)
+    check("編號加引號①:record_cmd 切開後 --loop 後面是完整編號", after(d.get("record_cmd", ""), "--loop") == bad, d.get("record_cmd"))
+    check("編號加引號①:disposal_cmd 同上", after(d.get("disposal_cmd", ""), "--loop") == bad, d.get("disposal_cmd"))
+    check("編號加引號①:disposal_gate 切開後 status 後面是完整編號", after(d.get("disposal_gate", ""), "status") == bad, d.get("disposal_gate"))
+    # ② 帳上有材料、問閘沒帶 --spec → 補完的指令
+    spec = v / "Projects" / "有 空白.md"
+    spec.write_text("spec\n", encoding="utf-8")
+    run(v, "canary", "record", "none", "--loop", bad, "--round", "r1", "--auditor", "單reviewer-sonnet", "--severity", "clean",
+        "--findings", "0", "--report", _sevrep(v.parent), "--spec", str(spec), "--reviewed", _sha256_of(spec),
+        "--tier", "standard", "--orchestrator", "claude", expect_rc=0)
+    r = run(v, "loop", "next", bad, "--json")
+    note = (_j.loads(r.stdout).get("note") or "")
+    m = _re.search(r"直接用:(lumos loop status .*?)\(2026", note)
+    cmd = m.group(1) if m else ""
+    check("編號加引號②:「少了 --spec」補完的指令,編號是完整一段", bool(cmd) and after(cmd, "status") == bad, note)
+    check("編號加引號②:帶空白的材料路徑也是完整一段", bool(cmd) and (after(cmd, "--spec") or "").endswith("Projects/有 空白.md"), note)
+    # ③ 一般編號不多引號
+    r = run(v, "loop", "next", "code-foo", "--tier", "standard", "--orchestrator", "claude", "--json")
+    d = _j.loads(r.stdout)
+    check("編號加引號③:一般編號印出來跟以前一樣(--loop code-foo,不多引號)", "--loop code-foo " in d.get("record_cmd", ""), d.get("record_cmd"))
+    # ④ 源碼守衛:印給人的 lumos 指令裡,{loop_id} 不得直接內插
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    raw = [ln.strip()[:120] for ln in src.splitlines() if _re.search(r'f".*lumos [a-z][^"]*\{loop_id\}', ln)]
+    check("編號加引號④:源碼沒有 f 字串把 {loop_id} 直接接在 lumos 指令裡", not raw, "\n".join(raw))
+
+
+def t_patch_fingerprint_counts_context():
+    """代碼審 r3 外家否決(Codex,報告被 OpenAI 資安過濾中斷,編排者照它的過程紀錄重現):改動指紋原本只算增刪行,
+    同一段 `-check(user)/+allow(user)` 從公開端點搬到管理員端點,指紋完全相同 → 資安席審過 A 的版本、最後一版改在 B,問閘照判涵蓋。
+    ①同樣增刪行、上下文不同(不同函式)→ 指紋不同 ②只差 `@@` 行號 → 指紋相同(rebase 容忍照舊) ③段落標頭(@@ 後的函式名)不同 → 指紋不同。
+    翻紅釘:把上下文行與段落標頭拿出指紋 → ①③翻紅。"""
+    _need_src("scripts/lumos")
+    m = _load_lumos_module()
+    def p(n, fn, ctx):
+        return (f"diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n"
+                f"@@ -{n},3 +{n},3 @@ def {fn}():\n {ctx}\n-    check(user)\n+    allow(user)\n")
+    a = m._patch_file_changes(p(10, "public_endpoint", "    # public"))
+    b = m._patch_file_changes(p(200, "admin_endpoint", "    # admin only"))
+    check("指紋算上下文①:同樣增刪行搬到另一個函式 → 指紋不同", a["app.py"] != b["app.py"], str((a, b)))
+    c = m._patch_file_changes(p(10, "public_endpoint", "    # public"))
+    d = m._patch_file_changes(p(57, "public_endpoint", "    # public"))
+    check("指紋算上下文②:只差 @@ 行號 → 指紋相同(rebase 容忍)", c["app.py"] == d["app.py"], str((c, d)))
+    e = m._patch_file_changes(p(10, "admin_endpoint", "    # public"))
+    check("指紋算上下文③:段落標頭的函式名不同 → 指紋不同", c["app.py"] != e["app.py"], str((c, e)))
+
+
+def t_disposal_security_seat_roundless_and_banner():
+    """代碼審 r3(編排者自找,來源=Sonnet 5 全報 vs 抑噪試點的評分):①不帶 --round 的高風險迴圈,判定輪是內部合成的
+    __seqN,資安席那一步原本拿它去比帳上的 round 欄(None)永遠比不中 → 判定輪抓不到檔名、恆判不過、訊息還講成材料放錯;
+    ②問閘 PASS 橫幅要把這次真的過了的條款綁定/資安席列進去,沒跑到(skip)的不列。
+    翻紅釘:把判定輪改回只用 round 欄比 → ①翻紅;橫幅改回寫死四項 → ②翻紅。"""
+    _need_src("scripts/lumos")
+    v = mkvault()
+    d = v / "Projects"; d.mkdir(exist_ok=True)
+    lid = f"code-sec-rl-{_M1U}"
+    spec = d / f"{lid}.patch"; spec.write_text(_sec_patch(["app/login.py"]), encoding="utf-8")
+    h = _sha256_of(spec)
+    ledger = v.parent / ".canary-log.jsonl"
+    r_sec = d / f"{lid}-sec.md"; r_sec.write_text("severity: clean\n已讀,無 finding\n", encoding="utf-8")
+    run(v, "canary", "record", "none", "--loop", lid, "--auditor", "資安-sonnet", "--severity", "clean", "--findings", "0",
+        "--report", str(r_sec), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
+        "--tier", "high", "--orchestrator", "claude", expect_rc=0)
+    _ledger_patch_last(ledger, lid, ts=_SEC_NEW)
+    # 不分輪的處置帳寫側就擋(沒有輪次的處置清單不收);走得到問閘的是「零發現、不帶處置清單」的不分輪迴圈
+    r_car = d / f"{lid}-car.md"; r_car.write_text("severity: clean\n已讀,無 finding\n", encoding="utf-8")
+    run(v, "canary", "record", "none", "--loop", lid, "--auditor", "正確性-sonnet", "--severity", "clean", "--findings", "0",
+        "--report", str(r_car), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
+        "--tier", "high", "--orchestrator", "claude", expect_rc=0)
+    _ledger_patch_last(ledger, lid, ts=_SEC_NEW)
+    r = _sec_gate(v, lid, spec)
+    tail = _sec_after(r.stdout)
+    check("不分輪①:高風險、零發現、不帶 --round,資安席看過同一份材料 → 資安席那一步過", tail.startswith(": ✓"), r.stdout[-900:])
+    check("不分輪①:不會講成「材料放錯了」", "材料放錯" not in r.stdout, r.stdout[-600:])
+    check("橫幅②:資安席這步過了 → PASS 橫幅列出資安席", "PASS" in r.stdout and "資安席" in r.stdout.split("DISPOSAL GATE PASS", 1)[-1],
+          r.stdout[-300:])
+    lid2 = f"code-sec-bn-{_M1U}"
+    sp2 = _sec_loop(v, lid2, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")], tier="standard")
+    r2 = _sec_gate(v, lid2, sp2)
+    check("橫幅②:資安席這步沒跑(standard 不要求)→ 橫幅不列資安席", r2.returncode == 0
+          and "資安席" not in r2.stdout.split("DISPOSAL GATE PASS", 1)[-1], r2.stdout[-300:])
+
+
+def t_patch_parse_keeps_trailing_space():
+    """[代碼審 r1 外家否決 E1]檔名尾端的空白是檔名的一部分:「app/login.py」與「app/login.py 」是兩支檔,
+    原本 strip() 把它們併成一支,資安席只看過前者也能讓後者過關。"""
+    m = _load_lumos_inproc()
+    txt = ("diff --git a/app/login.py b/app/login.py\n--- a/app/login.py\n+++ b/app/login.py\n@@ -1 +1 @@\n-a\n+b\n"
+           "diff --git a/app/login.py  b/app/login.py \n--- a/app/login.py \t\n+++ b/app/login.py \t\n@@ -1 +1 @@\n-a\n+c\n")
+    got = m._patch_files_from_text(txt)
+    check("尾端空白:兩支檔各自成立,不被併成一支", got == {"app/login.py", "app/login.py "}, repr(got))
+
+
+def t_patch_fingerprint_binary_and_quoting():
+    """[代碼審 r2 通才 F1]二進位檔在 diff 裡沒有增刪行,內容變化只在 index 那行的「改動後版本」:
+    兩份只有這個不同的二進位 diff 指紋要不同(原本相同,資安席看過舊版就能把二進位檔整個換掉);
+    文字檔只有 index 不同、增刪行一樣 → 指紋仍相同(rebase 不誤判)。
+    [代碼審 r2 資安 G3]擋下時印的補救指令,迴圈編號要照 shell 規則加引號,不能原樣塞進去。"""
+    import io, contextlib
+    m = _load_lumos_inproc()
+    b1 = "diff --git a/asset.bin b/asset.bin\nindex aaaaaaa..bbbbbbb 100644\nBinary files a/asset.bin and b/asset.bin differ\n"
+    b2 = "diff --git a/asset.bin b/asset.bin\nindex ccccccc..ddddddd 100644\nBinary files a/asset.bin and b/asset.bin differ\n"
+    f1, f2 = m._patch_file_changes(b1), m._patch_file_changes(b2)
+    check("二進位:內容不同(改動後版本不同)→ 指紋不同", f1.get("asset.bin") and f1 != f2, f"{f1} {f2}")
+    t1 = "diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-x\n+y\n"
+    t2 = "diff --git a/a.py b/a.py\nindex 3333333..4444444 100644\n--- a/a.py\n+++ b/a.py\n@@ -9 +9 @@\n-x\n+y\n"
+    check("文字檔:只有 index 與行號不同、增刪行一樣 → 指紋相同", m._patch_file_changes(t1) == m._patch_file_changes(t2),
+          f"{m._patch_file_changes(t1)} {m._patch_file_changes(t2)}")
+    rows = [{"round": "r1", "auditor": "正確性-sonnet", "tier": "high", "ts": "2026-09-13T10:00:00+08:00"}]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m._disposal_security_step(rows, "r1", "code-x; rm -rf ~", lambda p: Path(p))
+    out = buf.getvalue()
+    check("補救指令:迴圈編號照 shell 規則加引號", "--loop 'code-x; rm -rf ~'" in out, out[-400:])
+
+
+def t_disposal_security_seat_cutoff():
+    """[代碼審資安席 S3]生效日前開的迴圈不回溯(skip 並印一行);ts 換算 UTC 比,字串比會誤判。"""
+    v = mkvault()
+    lid = f"code-sec-old-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")], ts="2026-09-01T10:00:00+08:00")
+    r = _sec_gate(v, lid, sp)
+    tail = _sec_after(r.stdout)
+    check("生效日前:沒資安席也照舊 PASS(不回溯)", r.returncode == 0, r.stdout[-600:])
+    check("生效日前:印一行講明是生效日前開的", tail.startswith(": —") and "生效日" in tail.split("\n")[0], tail[:300])
+    # 2026-09-11T20:00-05:00 = 2026-09-12T01:00Z,晚於生效日(2026-09-11T16:00Z);字串比會把它當成舊迴圈
+    lid = f"code-sec-tz-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")], ts="2026-09-11T20:00:00-05:00")
+    r = _sec_gate(v, lid, sp)
+    check("生效日:ts 換算 UTC 比(字串比會誤判成舊迴圈而放行)", r.returncode == 1 and _sec_after(r.stdout).startswith(": ✗"),
+          r.stdout[-600:])
+    # 設計迴圈不要求(拿 .md 計劃當審材)
+    d = v / "Projects"
+    plan = d / "secplan.md"
+    plan.write_text("# p\n- [S1] 甲 [manual:人看一次]\n", encoding="utf-8")
+    h = _sha256_of(plan)
+    rpt = d / "secplan-rpt.md"
+    rpt.write_text("severity: minor\nF1 甲\nseverity: minor\nblocking: 否\n引句:「- [S1] 甲 [manual:人看一次]」\n", encoding="utf-8")
+    lid = f"secdesign-{_M1U}"
+    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "通才-sonnet",
+        "--severity", "minor", "--findings", "1", "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none",
+        "--report", str(rpt), "--snapshot", str(plan), "--spec", str(plan), "--reviewed", h,
+        "--tier", "high", "--orchestrator", "claude", expect_rc=0)
+    _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts=_SEC_NEW)
+    r = _sec_gate(v, lid, plan)
+    check("設計迴圈:資安席這一步 skip(設計審編制不加資安席)", _sec_after(r.stdout).startswith(": —"), r.stdout[-600:])
+
+
+def t_disposal_security_seat_freeze():
+    """[代碼審資安席 S2 凍結]凍結閉包收資安席的報告與凍結 patch;凍結前資安席報告已被改 → 凍結重算同樣判不過,
+    不會被「只看帳列」洗成通過。"""
+    import json as _j, subprocess as _sp
+    v = mkvault()
+    root = v.parent
+    _sp.run(["git", "init", "-q"], cwd=root)
+    lid = f"code-sec-fz-{_M1U}"
+    sp = _sec_loop(v, lid, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet"),
+                            ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet")])
+    _sp.run(["git", "add", "-A"], cwd=root)
+    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "卷證"], cwd=root)
+    r = run(v, "loop", "replay", lid, "--freeze", "--spec", str(sp), "--repo", str(root))
+    check("凍結:可凍(rc0)", r.returncode == 0, (r.stdout + r.stderr)[-600:])
+    vj = root / "governance" / "replay" / lid / "verdict.json"
+    data = _j.loads(vj.read_text(encoding="utf-8")) if vj.exists() else {}
+    fk = " ".join((data.get("files") or {}).keys())
+    check("凍結:閉包收了 r1 資安席的報告與凍結 patch(不只判定輪)",
+          f"{lid}-r1-資安-sonnet.md" in fk and f"{lid}-r1-snap.patch" in fk, fk[:500])
+    check("凍結:判定 rc0、fails 沒有資安席", (data.get("verdict") or {}).get("rc") == 0, str(data.get("verdict")))
+    # 凍結前 r1 資安席報告已被改 → 即時問閘判不過,凍結重算也要判不過
+    lid2 = f"code-sec-fz2-{_M1U}"
+    sp2 = _sec_loop(v, lid2, [("r1", ["app/login.py"], ["資安-sonnet", "正確性-sonnet"], "正確性-sonnet"),
+                              ("r2", ["app/login.py"], ["邊界-sonnet"], "邊界-sonnet")])
+    bad = v / "Projects" / f"{lid2}-r1-資安-sonnet.md"
+    bad.write_text(bad.read_text(encoding="utf-8") + "凍結前被改\n", encoding="utf-8")
+    _sp.run(["git", "add", "-A"], cwd=root)
+    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "卷證2"], cwd=root)
+    r = run(v, "loop", "replay", lid2, "--freeze", "--spec", str(sp2), "--repo", str(root))
+    vj2 = root / "governance" / "replay" / lid2 / "verdict.json"
+    d2 = _j.loads(vj2.read_text(encoding="utf-8")) if vj2.exists() else {}
+    ver = d2.get("verdict") or {}
+    check("凍結:凍結前資安席報告已被改 → 凍結判定同樣不過(fails 含資安席),不被洗成通過",
+          (not vj2.exists()) or (ver.get("rc") == 1 and "資安席" in (ver.get("fails") or [])), str(ver) + r.stdout[-300:])
+
+
+def t_roster_code_high_has_security_seat():
+    """[代碼審資安席 S1]code/high 編制表有一席資安(required-gated、同門、不佔 W);設計審與 code/standard 沒有;
+    loop next 兩種編排者都印得出、派工要求印成人話;席位對帳的人數不數它(舊 high 迴圈不被追溯貼「席數不夠」)。"""
+    m = _load_lumos_inproc()
+    hi = [s for s in m._TIER_ROSTER[("code", "high")]["seats"] if s["slot"] == "資安"]
+    check("roster:code/high 恰有一席資安", len(hi) == 1, str(hi))
+    check("roster:資安席 = required-gated、同門、不佔 W",
+          bool(hi) and hi[0]["requirement"] == "required-gated" and hi[0]["family"] == "claude" and not hi[0]["occupies_w"],
+          str(hi))
+    others = [k for k, e in m._TIER_ROSTER.items() if k != ("code", "high") and any(s["slot"] == "資安" for s in e["seats"])]
+    check("roster:設計審各級與 code/standard 沒有資安席", others == [], str(others))
+    vault, repo, spec, rec, disp = _mk_roster_fixture()
+    for orch in ("claude", "codex"):
+        r = run(vault, "loop", "next", f"code-secn-{orch}-{_M1U}", "--tier", "high", "--orchestrator", orch)
+        check(f"roster:loop next({orch} 編排)印出資安席、派工要求是「必派(問閘會擋)」",
+              "應派: 資安" in r.stdout and "必派(問閘會擋)" in r.stdout, r.stdout[:800])
+    # 席位對帳:同門 5 席+外家 2 席的 high 迴圈(生效日前合規的形狀),不因加了資安席冒出席數不夠
+    lid = f"code-secroster-{_M1U}"
+    names = ["鏡頭1-sonnet", "鏡頭2-sonnet", "鏡頭3-sonnet", "鏡頭4-sonnet", "架構對齊-sonnet", "外家finder-codex", "外家否決-codex"]
+    for a in names:
+        rec(lid, "r1", a, tier="high")
+    disp(lid, "r1-dispatch.json", {"round": "r1", "seats": [{"auditor": a} for a in names]})
+    r = run(vault, "loop", "status", lid, "--roster", "--repo", str(repo))
+    check("roster:舊形狀 high 迴圈(同門 5)不冒 seat_shortfall(資安席不進人數對帳)", "seat_shortfall" not in r.stdout,
+          r.stdout[-600:])
+
+
+_SEC_SEAT_DOC_FILES = (
+    "skills/lumos-code-loop/SKILL.md",
+    "skills/lumos-code-loop/reference.md",
+    "skills/lumos-project-notes/commands/06-代碼審與推送.md",
+    "skills/lumos-project-notes/reference.md",
+    "docs/methodology/圖譜即合約.md",
+    "skills/lumos-design-loop/templates.md",
+)
+_SEC_SEAT_STALE_GATE_FILES = (
+    "skills/lumos-project-notes/reference.md",
+    "skills/lumos-design-loop/reference.md",
+)
+
+
+def t_security_seat_doc_sync():
+    """[代碼審資安席 S5]文件同步守衛(照 t_marker_doc_sync):清單上每個檔都提到資安席;清單上的檔不再寫「四條合取」;
+    設計審派席說明沒有資安席(設計審編制不加)。消費專案沒有這些文件 → 標來源專屬。"""
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    if not (repo / "skills" / "lumos-code-loop" / "SKILL.md").exists():
+        raise _SrcOnly("消費端沒有 skills/ 與 docs/methodology(非來源 repo),這段沒驗到")
+    for rel in _SEC_SEAT_DOC_FILES:
+        t = (repo / rel).read_text(encoding="utf-8")
+        check(f"資安席文件同步:{rel} 提到資安席", "資安席" in t, rel)
+    for rel in _SEC_SEAT_STALE_GATE_FILES:
+        t = (repo / rel).read_text(encoding="utf-8")
+        check(f"資安席文件同步:{rel} 不再寫過期的「四條合取」", "四條合取" not in t, rel)
+    dl = (repo / "skills" / "lumos-design-loop" / "SKILL.md").read_text(encoding="utf-8")
+    check("資安席文件同步:設計審派席說明沒有資安席(設計審編制不加)", "資安席" not in dl, "")
+    # 代碼審 r1 架構對齊 B1:凍結材料照專案慣例從源頭關掉 git 的中文檔名跳脫(同 scripts/lumos 各處 -c core.quotePath=false)
+    cl = (repo / "skills" / "lumos-code-loop" / "SKILL.md").read_text(encoding="utf-8")
+    step1 = cl.split("1. **凍結材料**", 1)[-1].split("\n", 1)[0]
+    check("資安席文件同步:代碼審凍結材料指令帶 -c core.quotePath=false", "core.quotePath=false" in step1, step1[:200])
+
+
+def t_templates_security_seat_section():
+    """[代碼審資安席 S4]templates.md §7.8 資安席派工:看什麼、不報什麼(測試檔真憑證例外)、每條必附攻擊路徑、席名寫法;
+    §7.7 立場表有資安一列。"""
+    import pathlib, re as _re
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    p = repo / "skills" / "lumos-design-loop" / "templates.md"
+    if not p.exists():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
+    t = p.read_text(encoding="utf-8")
+    sec = t.split("## 7.8", 1)[-1].split("\n## ", 1)[0] if "## 7.8" in t else ""
+    check("§7.8:有「資安席派工」一節", "資安席派工" in sec[:80], sec[:120])
+    for kw in ("攻擊路徑", "不報", "真能用的憑證", "資安-<模型>", "推論"):
+        check(f"§7.8:含「{kw}」", kw in sec, kw)
+    s77 = t.split("## 7.7", 1)[-1].split("\n## ", 1)[0]
+    check("§7.7:立場表有資安一列", _re.search(r"^\|\s*資安\s*\|", s77, _re.M) is not None, "")
+
+
+def t_skill_code_loop_mentions_security_seat():
+    """[代碼審資安席 S5]lumos-code-loop SKILL.md 步驟 2 講明 high 必派資安席、指向 §7.8、問閘會擋。"""
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    p = repo / "skills" / "lumos-code-loop" / "SKILL.md"
+    if not p.exists():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
+    step2 = p.read_text(encoding="utf-8").split("2. **派審查員**", 1)[-1].split("\n3. ", 1)[0]
+    check("SKILL 步驟 2:high 必派資安席", "資安" in step2 and "§7.8" in step2, step2[:200])
+    check("SKILL 步驟 2:講明問閘會擋", "問閘" in step2 and "資安" in step2, "")
 
 
 if __name__ == "__main__":
