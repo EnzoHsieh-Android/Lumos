@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45   # 2026-09-12:全套單行程跑到 30 分被砍(前幾次 25–27 分,一路逼近上限);切片後約 10 分,上限留餘裕
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,8 +21,22 @@ jobs:
         run: python -m compileall -q scripts/lumos scripts/test_lumos.py
       - name: SyntaxWarning 歸零閘
         run: python -W error::SyntaxWarning -c "compile(open('scripts/lumos').read(),'lumos','exec'); compile(open('scripts/test_lumos.py').read(),'t','exec')"
-      - name: Full test suite
-        run: python scripts/test_lumos.py
+      # 2026-09-12:全套在 CI 單行程跑要 25–30 分鐘,已經撞到 job 上限被砍(8a45751b)。
+      # 推送前掛鉤早就把它切成幾片同時跑,CI 照同一支旗標切——不改測試內容、只改跑法;
+      # 任何一片紅就整步紅,而且把每一片的尾端印出來(不然只看得到「有片紅了」)。
+      - name: Full test suite (切 4 片同時跑)
+        run: |
+          set -u
+          rc=0
+          for i in 1 2 3 4; do
+            python scripts/test_lumos.py --shard "$i/4" > "/tmp/shard-$i.log" 2>&1 &
+          done
+          for job in $(jobs -p); do wait "$job" || rc=1; done
+          for i in 1 2 3 4; do
+            echo "===== 第 $i 片 ====="
+            tail -25 "/tmp/shard-$i.log"
+          done
+          exit $rc
       # 2026-08-29 接線:這支的 106 個測試先前沒有任何自動路徑在跑(CI 與 pre-push 都只跑
       # test_lumos.py),而它是 autonomous_loop 十個模組中九個的唯一覆蓋,且早已在 anchor
       # 基準線裡被防竄改守著——綠紅沒人看,卻有人守。
