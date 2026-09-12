@@ -13213,8 +13213,13 @@ def _make_high_tier_repo(d):
     g("init", "-q", "-b", "main")
     g("config", "user.email", "t@t.t")
     g("config", "user.name", "t")
+    # ★要有 docs/ 這個圖譜落腳處★(2026-09-12):表態跟留痕一樣要寫進治理帳,而治理帳在 docs/ 底下;
+    # 沒有它,表態指令會整個拒寫,於是這個假 repo 永遠答不完題、閘永遠擋——測試就驗不到它真正
+    # 要驗的那一關(留痕符不符)。原本沒事是因為 .py 檔本來不觸發任何棧別題,Python 棧支援上線
+    # 之後才連帶暴露出來。
+    (Path(d) / "docs" / "demo-knowledge" / "Systems").mkdir(parents=True, exist_ok=True)
     (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
-    g("add", "README.md")
+    g("add", "-A")
     g("commit", "-qm", "init")
     # 切 feat branch 並加 high-tier 程式
     g("checkout", "-b", "feat/codeloop-guard-test")
@@ -13225,6 +13230,31 @@ def _make_high_tier_repo(d):
         encoding="utf-8")
     g("add", "app.py")
     g("commit", "-qm", "add high tier code")
+
+
+def _answer_stack_questions(d, diff="main..HEAD"):
+    """把假 repo 觸發到的棧別檢核題全部答成「不適用」,讓測試能單獨驗留痕那一關。
+
+    ★為什麼需要這支★(2026-09-12):`_make_high_tier_repo` 用一行 `requests.post` 把風險拉到
+    high,而 Python 棧支援上線之後,同一行也觸發了兩題 Python 效能檢核。表態閘與留痕閘是
+    兩個獨立判定,於是「有 pass 留痕就該放行」那幾個情境全部改由表態閘擋下——**測試想驗的那一關
+    根本沒被驗到**。真實的高風險 Python 分支本來就要兩關都過,所以這裡照真實做法補上表態,
+    而不是把表態閘關掉。
+    """
+    import json as _j, subprocess as _sp
+    r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", diff,
+                 "--dispositions-template", "--repo", d], capture_output=True, text=True)
+    tpl = _j.loads(r.stdout)
+    if not tpl:
+        return
+    for q in tpl.values():
+        if q.get("status") == "":
+            q["status"] = "na"
+            q["reason"] = "這是測試用的假程式,只是為了把風險等級拉高,沒有真的執行路徑要顧"
+    f = Path(d) / "_disp.json"
+    f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
+    _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", str(f), "--repo", d],
+            capture_output=True, text=True)
 
 
 def _make_standard_tier_repo(d):
@@ -13261,6 +13291,7 @@ def t_codeloop_guard_verdict():
     # ── 情境 1: tier=high ∧ 無留痕 → blocked ──────────────────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
+        _answer_stack_questions(d)   # 先排除表態閘,擋下來就只可能是缺留痕
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
             capture_output=True, text=True)
@@ -13273,12 +13304,17 @@ def t_codeloop_guard_verdict():
                   f"data={data!r}")
             check("codeloop_guard: --json tier=high", data.get("tier") == "high",
                   f"data={data!r}")
+            # ★理由也要對★:表態上面已經補齊,這裡只要看到 dispositions 當理由,
+            # 就代表這支測試其實沒驗到「缺留痕會擋」那一關(2026-09-12 真的發生過)
+            check("codeloop_guard: 擋下來的理由是缺審查留痕,不是缺表態",
+                  data.get("reason_kind") == "review", f"data={data!r}")
         except Exception as ex:
             check("codeloop_guard: --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
 
     # ── 情境 2: tier=high ∧ pass(HEAD 符) → 不 blocked ───────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
+        _answer_stack_questions(d)
         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
@@ -13296,6 +13332,7 @@ def t_codeloop_guard_verdict():
     # ── 情境 3: tier=high ∧ skip(HEAD 符) → 不 blocked ───────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
+        _answer_stack_questions(d)
         run_lumos(["code-loop", "skip", "--note", "intentional", "--repo", d])
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
@@ -13316,6 +13353,7 @@ def t_codeloop_guard_verdict():
         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
         # 再加一個 commit → HEAD sha 改變 → 留痕 sha 過時
         _add_commit(d, "extra.txt", "bump\n")
+        _answer_stack_questions(d)   # 表態補在移動之後 → 它是新的,擋下來只可能是留痕過期
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
             capture_output=True, text=True)
@@ -13326,6 +13364,8 @@ def t_codeloop_guard_verdict():
             data = _j.loads(r.stdout)
             check("codeloop_guard: HEAD移動後 blocked=true", data.get("blocked") is True,
                   f"data={data!r}")
+            check("codeloop_guard: HEAD移動後擋的理由是留痕過期,不是缺表態",
+                  data.get("reason_kind") == "review", f"data={data!r}")
         except Exception as ex:
             check("codeloop_guard: HEAD移動後 --json 可解析", False,
                   f"ex={ex}\nstdout={r.stdout!r}")
@@ -14349,6 +14389,7 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
+        _answer_stack_questions(d)   # 先排除表態閘,擋下來就只可能是缺留痕
         r = _run_pre_push(d)
         check("codeloop_guard_prepush: tier=high∧無留痕 → rc1 擋住",
               r.returncode == 1,
@@ -14368,6 +14409,7 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
+        _answer_stack_questions(d)
         _sp.run([sys.executable, lumos_real, "code-loop", "pass",
                  "--note", "done", "--repo", d],
                 capture_output=True, text=True)
@@ -14380,6 +14422,7 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
+        _answer_stack_questions(d)
         _sp.run([sys.executable, lumos_real, "code-loop", "skip",
                  "--note", "intentional", "--repo", d],
                 capture_output=True, text=True)
