@@ -3384,16 +3384,27 @@ CODE_SKIP_DIRS = {".git", "node_modules", "bin", "obj", "dist", "build",
 
 # Kotlin/JUnit 測試方法:@Test/@ParameterizedTest 等註解 → (中間不跨 `{`,即不越過方法體)
 # → fun 方法名(允許反引號帶空白的 Kotlin 測試名)。去註解後比對(同 C#)。
+# ★中段有長度上限★(2026-09-12 代碼審 r1 邊界席實測):整支檔一個 `{` 都沒有時,每個配不到的
+# 註解都會掃到檔尾,兩萬個註解要 11 秒,而這支掃描每次健檢與推送前都跑。註解到方法簽章之間
+# 正常不會超過 600 字元(註解＋修飾詞),超過就是這支檔本來就不長那樣。
 KOTLIN_TEST_RE = re.compile(
-    r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]*?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
+    r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]{0,600}?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
     re.S)
 
-# Java/JUnit 測試方法:註解 → void 方法名。★中間用非貪婪 `.*?` 而不是 Kotlin 那條的 `[^{]*?`★——
-# Java 的參數化註解會帶大括號(`@ValueSource(ints = {1, 2, 3})`),`[^{]*?` 會在那裡斷掉整支漏掉;
-# 而 JUnit 規定測試方法必須回傳 void,所以「註解之後最近的一個 void 方法名」就是它本人。
-# 代價:萬一有人把 @Test 標在非 void 方法上(JUnit 會拒跑),這條會抓到下一個 void 方法的名字。
+# Java/JUnit 測試方法:註解 → void 方法名。中段不能照抄 Kotlin 那條的 `[^{]*?`——Java 的參數化
+# 註解自己帶大括號(`@ValueSource(ints = {1, 2, 3})`),那樣寫會在那裡斷掉整支漏掉。
+# ★2026-09-12 代碼審 r1 五席同報,中段從無界 `.*?` 改成下面這個有界、括號感知的寫法★:
+#   - 允許:不是 `;{}()` 的任何字元(修飾詞、其他註解的名字、換行)
+#   - 允許:一整組小括號(可含一層巢狀),用來吃 `@ValueSource(ints = {1,2,3})` 與 `@DisplayName("…")`
+#   - 不允許:跨過 `;` 或方法體的 `{`/`}` ——所以 @Test 標在非 void 方法上、或 @Test 被當成
+#     另一個註解型別的組成部分時,不會再抓到後面某個無關方法的名字當成「真測試」
+#   - 上限 600:註解配不到方法時不會一路掃到檔尾(席位實測無界版本 1MB 的檔要 43 秒)
+# 方法名允許非 ASCII 開頭(Java 識別字本來就允許中文;`[^\W\d]` = 是字母或底線、不是數字)。
+# 已知邊界:跨行的文字區塊(text block)內容不會被當字串剝掉,裡面若剛好有 `void 某某(` 仍可能誤配。
 JAVA_TEST_RE = re.compile(
-    r"@(?:Test|ParameterizedTest|RepeatedTest)\b.*?\bvoid\s+([A-Za-z_]\w*)\s*\(",
+    r"@(?:Test|ParameterizedTest|RepeatedTest)\b"
+    r"(?:[^;{}()]|\((?:[^()]|\([^()]*\))*\)){0,600}?"
+    r"\bvoid\s+([^\W\d]\w*)\s*\(",
     re.S)
 
 # Maestro(Android E2E)flow 綁 name: 欄位。行尾 \s*$ 錨:多字 name(含空白)NO MATCH
@@ -3535,6 +3546,10 @@ TEST_PROFILES = {
     # Android 的 Java 舊碼一樣住 androidTest/),差別只在副檔名與方法形狀。
     "java-junit": {
         "exts": {".java"}, "method_re": JAVA_TEST_RE, "scaffold_ext": ".java",
+        # ★連字串字面一起剝★(2026-09-12 r1 資安席與正確性席 blocker):只剝註解的話,
+        # `@DisplayName("should call void run() properly")` 裡的字會被當成方法名抓走,
+        # 而真正那支測試整支消失——合約於是綁到一個不存在的名字、或綁不上被判懸空。
+        "comment_strip": "c-style+strings",
         "dir_mode": "rglob", "rglob_under": "src",
         "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
         "dirs": {"pure": (["test"], []),
@@ -3947,9 +3962,15 @@ def discover_test_methods(repo_root, profile=None):
                 # 「註解串→方法簽章」連續比對,真測試被誤判偽證據)。★python 走 "none" 不剝★——
                 # Python 無 C 式註解,剝了反被中文註解/字串字面裡的 /*..*/ 配對誤吃大段內容
                 # (實測 test_lumos.py 260→94);被註解的 # def 不在行首,PYTHON_TEST_RE 行首錨排除。
-                if strip == "c-style":
+                if strip in ("c-style", "c-style+strings"):
                     txt = re.sub(r"//[^\n]*", "", txt)
                     txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+                # ★"c-style+strings" 多剝字串字面★(2026-09-12 Java 補棧代碼審 r1):字串內容清空但保留
+                # 引號本身,所以「字串裡剛好寫著方法簽章」不會被當成真的測試方法。單行內比對(不跨換行),
+                # 跨行的 Java text block 不在此列——那是已知邊界,寫在 JAVA_TEST_RE 的註解裡。
+                if strip == "c-style+strings":
+                    txt = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', txt)
+                    txt = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", txt)
                 for m in mre.finditer(txt):
                     methods.add(m.group(1).strip("`"))  # Kotlin 反引號測試名去引號
     return methods
@@ -16723,7 +16744,10 @@ _STACK_QUESTION_SPECS = {
         {"id": "java-collections", "q": '集合與熱路徑:迴圈裡有沒有字串相接(每圈生一個新字串,該 StringBuilder)?熱路徑用 List.contains / indexOf 做成員查找(逐個比,該換 Set/Map)?大迴圈裡有沒有自動裝箱(Integer 當 int 用)?同一條 Stream 有沒有被重複遍歷,或在 stream 裡做 IO?',
          "when": ['StringBuilder', '\\bString\\.format\\(', '\\.concat\\(', '\\.contains\\(', '\\.indexOf\\(', '\\.stream\\(\\)', 'Collectors\\.', '\\bArrayList\\b', '\\bLinkedList\\b', '\\bIterator\\b', '\\.remove\\(0\\)', '\\bInteger\\b', '\\bBoxed\\b', 'Collections\\.sort']},
         {"id": "java-android", "q": 'Android:Context/Activity 有沒有被單例、static 欄位或長活物件握著(畫面關了記憶體收不回)?主執行緒上有沒有磁碟、網路或大 JSON 解析(ANR 面)?AsyncTask/Handler/回呼有沒有跟畫面生命週期綁(畫面沒了還回來寫 UI)?findViewById 有沒有在 getView / onBindViewHolder 裡反覆呼叫?',
-         "when": ['\\bActivity\\b', '\\bContext\\b', 'findViewById', 'RecyclerView', 'notifyDataSetChanged', 'AsyncTask', '\\bHandler\\s*\\(', 'runOnUiThread', 'getApplicationContext', 'onCreate\\(', 'SharedPreferences', 'LayoutInflater', 'startActivity\\(', 'BroadcastReceiver', 'ContentResolver', 'getSystemService\\(']},
+         # ★不收裸的 Context / Activity★(2026-09-12 r1 正確性席 major):觸發字一律不分大小寫比對,
+         # 後端一個 `ApplicationContext context` 欄位就會命中,整組 Android 生命週期題被誤問到
+         # Spring 專案頭上,直接打破「改後端的檔不會被問 Android」這句承諾。改成只收 Android 專有的字。
+         "when": ['AppCompatActivity', '\\bandroid\\.', 'findViewById', 'setContentView\\(', 'RecyclerView', 'notifyDataSetChanged', 'AsyncTask', '\\bHandler\\s*\\(', 'runOnUiThread', 'getApplicationContext', 'requireContext\\(', 'startActivity\\(', 'startActivityForResult', 'SharedPreferences', 'LayoutInflater', 'BroadcastReceiver', 'ContentResolver', 'getSystemService\\(']},
     ],
 }
 _STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
