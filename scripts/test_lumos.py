@@ -36875,6 +36875,20 @@ def t_impact_about_max_has_floor():
     check("②使用者明講門檻 1 時照他的意思做(證明沒有把旋鈕整個廢掉)", not ok1, str(d1)[:220])
 
 
+def t_home_audit_lumos_path_must_be_inside():
+    """代碼審 r1 資安席(縱深防禦):抽查腳本會把 --lumos 指到的檔當程式執行,
+    所以那個參數只收專案裡的路徑,不收外面的。"""
+    print("t_home_audit_lumos_path_must_be_inside")
+    import subprocess as _sp, tempfile as _tf
+    outside = Path(_tf.mkdtemp()) / "evil.py"
+    outside.write_text("print('x')\n", encoding="utf-8")
+    root = _nh_repo()
+    r = _sp.run([sys.executable, _HOME_AUDIT, "sample", "--vault", str(root / "docs" / "kg-knowledge"),
+                 "--seed", "1", "--repo", str(root), "--lumos", str(outside)], capture_output=True, text=True)
+    check("①指到專案外面的檔 → 擋下", r.returncode == 2 and "只能指專案裡的檔" in r.stderr,
+          f"rc={r.returncode}\n{r.stderr[:300]}")
+
+
 def t_impact_repo_files_reads_bytes():
     """[S1] 代碼審 r1 邊界席:受版控檔清單用文字模式讀會把非 UTF-8 檔名換成替代字元,
     那個檔從此永遠比對不到自己。要用位元組讀、自己解碼(同檔案的 _nodehome_git 早就這樣做)。"""
@@ -36883,7 +36897,7 @@ def t_impact_repo_files_reads_bytes():
     i = src.find("def _impact_repo_files(")
     seg = src[i:i + 1200]
     check("①不用文字模式讀 git 輸出", 'text=True' not in seg, seg[:400])
-    check("②用位元組讀再自己解碼", "os.fsdecode" in seg and '"-z"' in seg, seg[:500])
+    check("②走既有那支位元組讀的 git 包裝,不自己再開一種", "_nodehome_git(" in seg and '"-z"' in seg, seg[:500])
     # 行為對照:一般檔名照樣列得出來(證明改法沒把功能弄壞)
     root = _nh_repo()
     _nh_file(root, "src/pay.py")

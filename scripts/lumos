@@ -21165,20 +21165,12 @@ def _impact_repo_files(repo_root):
     """這個 repo 的受版控檔清單(tracked-only:untracked/ignored 混進來會把裸檔名唯一性誤判)。
     ★一個行程只問一次 git★——反引號入口的裸檔名唯一性與「確認過的家」的頂層資料夾/唯一性共用這一份。
     git 缺席就回空清單(degrade:裸檔名那條靜默停用,完整路徑那條不受影響)。"""
-    import subprocess
     key = str(repo_root)
     if key not in _REPO_FILES_CACHE:
-        out = []
-        try:
-            # ★用位元組讀、自己解碼★:文字模式配 errors="replace" 會把非 UTF-8 檔名換成替代字元,
-            # 那個檔從此永遠比對不到自己(同檔案的 _nodehome_git 早就為了這件事特別避開文字模式)。
-            r = subprocess.run(["git", "-C", str(repo_root), "ls-files", "-z"],
-                               capture_output=True, timeout=10)
-            if r.returncode == 0:
-                out = [os.fsdecode(b) for b in r.stdout.split(b"\0") if b.strip()]
-        except (OSError, subprocess.SubprocessError):
-            out = []
-        _REPO_FILES_CACHE[key] = out
+        # ★走既有那支 git 包裝,別自己再開一種★:它已經是位元組讀(文字模式配 errors="replace"
+        # 會把非 UTF-8 檔名換成替代字元,那個檔從此永遠比對不到自己),逾時與錯誤處理也是同一套。
+        raw = _nodehome_git(repo_root, "ls-files", "-z")
+        _REPO_FILES_CACHE[key] = [] if raw is None else _nodehome_split_z(raw)
     return _REPO_FILES_CACHE[key]
 
 
@@ -21538,6 +21530,10 @@ def _home_scan_text(text):
 
 
 def _home_confirmed(text, path, top_dirs, all_paths):
+    # ★路徑比對區分大小寫,這是刻意的★(代碼審 r1 邊界席提出,編排者裁):git 記錄的路徑是權威,
+    # 而 `Foo.py` 與 `foo.py` 在一般系統上就是兩支不同的檔——做大小寫不敏感比對,會讓兩支真的
+    # 同名不同大小寫的檔互相認到對方的家。代價是使用者大小寫打錯時只會「少推」不會「多推」,
+    # 方向安全,而且健檢的「管了卻沒提到」那段會把它唸出來。
     """[S2] 這篇算不算這支檔「確認過的家」:摘要或正文寫出完整路徑,或反引號裡寫出在受版控檔裡唯一的裸檔名。
     沒確認的家不保送、不加分——about_code 的品質沒有機械保證,分兩級讓填錯的家大多落在不保送那一級。"""
     full, bare = _node_code_ref_tokens_all(_home_scan_text(text), top_dirs)

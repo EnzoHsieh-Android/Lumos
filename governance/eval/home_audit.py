@@ -34,6 +34,14 @@ ORDER = {"否": 0, "判不準": 1, "是": 2}
 
 
 def load_lumos(path=None):
+    """載入主程式。★--lumos 只收專案內的路徑★——這支腳本會把它當程式執行,
+    收任意路徑等於多開一條「執行外面的檔」的口子(代碼審 r1 資安席);這裡收窄成縱深防禦。"""
+    if path is not None:
+        inside = safe_under(ROOT, Path(path))
+        if inside is None or not inside.is_file():
+            print(f"--lumos 只能指專案裡的檔,而且要存在:{path}", file=sys.stderr)
+            raise SystemExit(2)
+        path = inside
     p = str(path or LUMOS)
     spec = importlib.util.spec_from_file_location("lm_home_audit", p, loader=SourceFileLoader("lm_home_audit", p))
     m = importlib.util.module_from_spec(spec)
