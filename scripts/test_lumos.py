@@ -12984,7 +12984,7 @@ def t_codeloop_pass_survives_bookkeeping_commits():
     import subprocess as _sp
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
-        (Path(d) / "docs").mkdir()
+        (Path(d) / "docs").mkdir(exist_ok=True)   # 假 repo 為了答表態題已經先建過
         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
         branch = _git_branch(d)
         pass_sha = (_codeloop_read(d, branch) or {}).get("head_sha", "")
@@ -13255,10 +13255,16 @@ def _answer_stack_questions(d, diff="main..HEAD"):
         if q.get("status") == "":
             q["status"] = "na"
             q["reason"] = "這是測試用的假程式,只是為了把風險等級拉高,沒有真的執行路徑要顧"
-    f = Path(d) / "_disp.json"
-    f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
-    _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", str(f), "--repo", d],
-            capture_output=True, text=True)
+    # ★答案檔要寫在 repo 外面★:寫在裡面會被「這個 commit 只動了簿記檔嗎」那支測試算成
+    # 一個不該出現的檔,害它誤判(2026-09-12 實際踩到)。
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as fh:
+        _j.dump(tpl, fh, ensure_ascii=False)
+        f = fh.name
+    try:
+        _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", f, "--repo", d],
+                capture_output=True, text=True)
+    finally:
+        Path(f).unlink(missing_ok=True)
 
 
 def _make_standard_tier_repo(d):
@@ -14565,6 +14571,9 @@ def t_prepush_range_scan():
         r = run_pp(d, f"refs/heads/main {head} refs/heads/main {base}\n")
         check("prepush main-direct high → rc1 擋(盲區已修)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
         # pass 後放行(remote_ref=main 座標)
+        # 表態也要答完:這支 app.py 的 requests.post 同時觸發兩題 Python 效能檢核,
+        # 不答的話擋人的是表態閘,這條斷言就驗不到留痕那一關(2026-09-12)
+        _answer_stack_questions(d, diff=f"{base}..{head}")
         _sp.run([sys.executable, lumos_real, "code-loop", "pass", "--note", "ok", "--repo", d], capture_output=True, text=True)
         r = run_pp(d, f"refs/heads/main {head} refs/heads/main {base}\n")
         check("prepush main pass 後放行", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-200:]}")
@@ -20447,7 +20456,13 @@ def t_java_profile_discovery():
     JUnit4 的 `@Test public void`、帶大括號的參數化註解(@ValueSource(ints = {1,2}))都要收得到;
     沒標註的 void 方法不收;註解裡的假測試剝掉。★帶大括號那條是 Kotlin 版正則抓不到的★——
     Kotlin 那條用 [^{]*? 會在 {1,2} 斷掉,Java 版改用非貪婪 .*? 才收得到。
-    翻紅釘:把 JAVA_TEST_RE 的 .*? 換回 [^{]*? → ②翻紅;把 exts 從 .java 改掉 → ⑤翻紅。"""
+    ★r1 折入★:⑨字串字面裡的假方法名不收、真測試不會被跳過(資安席與正確性席 blocker:
+    @DisplayName 裡出現 void x( 會讓真測試整支消失,而沒掛註解的空方法被當成真證據放行);
+    ⑩@Test 當 meta-annotation 用在註解型別上不收;⑪@Test 標在非 void 方法上不會抓到下一個方法;
+    ⑫中文方法名收得到(邊界席 minor)。
+    翻紅釘:把 JAVA_TEST_RE 的括號感知中段換回無界 .*? → ⑨⑩⑪翻紅;
+    把 exts 從 .java 改掉 → ①②③⑥⑦翻紅(★不是⑤★——⑤斷言的是「某些名字不在集合裡」,
+    掃不到檔時集合為空,那句話照樣成立,r1 測試品質席抓到原本寫錯的編號)。"""
     m = _load_lumos()
     root = Path(tempfile.mkdtemp(prefix="gctl-javaprof-"))
     (root / "src" / "test" / "java" / "shop").mkdir(parents=True)
@@ -20476,6 +20491,49 @@ def t_java_profile_discovery():
           g["test"] == "java-junit" and g["symbol"] == "kotlin" and g["symbol_weak"] is False, str(g))
     check("java ⑧骨架有一條只跑單支測試的指令", "{method}" in m._SKELETON_RUN_CMD.get("java-junit", ""),
           str(m._SKELETON_RUN_CMD.get("java-junit")))
+    # ★r1 資安席/正確性席 blocker 的翻紅釘★:字串字面沒剝 + 中段無界,兩件事合起來的後果是
+    # 「真測試整支消失」與「沒掛註解的空方法被當成可執行證據」。造一支同時踩到兩種的檔。
+    (root / "src" / "test" / "java" / "shop").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "test" / "java" / "shop" / "WeirdTest.java").write_text(
+        "package shop;\n"
+        "class WeirdTest {\n"
+        "    @Test\n    @DisplayName(\"should call void run() properly\")\n"
+        "    void realTargetMethod() { assertTrue(true); }\n\n"
+        "    @Test\n    boolean returnsNonVoidByMistake() { return true; }\n\n"
+        "    void unrelatedHelperFarBelow() { doStuff(); }\n"
+        "}\n", encoding="utf-8")
+    got2 = m.discover_test_methods(root, prof)
+    check("java ⑨帶字串的註解不會讓真測試消失,也不會把字串裡的字當成方法名",
+          "realTargetMethod" in got2 and "run" not in got2, f"{sorted(got2)}")
+    check("java ⑪@Test 標在非 void 方法上,不會改抓到後面無關的方法",
+          "unrelatedHelperFarBelow" not in got2, f"{sorted(got2)}")
+    (root / "src" / "test" / "java" / "shop" / "MetaTest.java").write_text(
+        "package shop;\n"
+        "import java.lang.annotation.*;\n"
+        "@Test\n@Retention(RetentionPolicy.RUNTIME)\n@interface FastTest {}\n"
+        "class Helper { void setUp() { } }\n", encoding="utf-8")
+    got3 = m.discover_test_methods(root, prof)
+    check("java ⑩@Test 當成別的註解的組成部分時,不會把後面的方法當測試",
+          "setUp" not in got3, f"{sorted(got3)}")
+    (root / "src" / "test" / "java" / "shop" / "CjkTest.java").write_text(
+        "package shop;\nclass CjkTest {\n    @Test\n    void 測試付款成功() { }\n}\n", encoding="utf-8")
+    got4 = m.discover_test_methods(root, prof)
+    check("java ⑫中文方法名也收得到(Java 識別字允許非 ASCII)", "測試付款成功" in got4, f"{sorted(got4)}")
+
+
+def t_test_regex_scan_bounded():
+    """[r1 折入 2026-09-12]測試方法正則不准在「找不到目標」的檔上掃到天邊。
+    三席各自量到同一件事:JAVA_TEST_RE 的無界 .*? 讓每個配不到的 @Test 都掃到檔尾,
+    1MB 的檔要 43 秒;而這支掃描每次健檢、每次推送前都會跑,卡住就等於閘不存在。
+    Kotlin 那條 [^{]*? 在「整檔沒有大括號」時同病(席位實測 47 秒),一起釘。
+    翻紅釘:把任一條的中段換回無界寫法 → 對應那條超時翻紅。"""
+    import time as _t
+    m = _load_lumos()
+    for name, re_obj, marker in (("java", m.JAVA_TEST_RE, "@Test\n"), ("kotlin", m.KOTLIN_TEST_RE, "@Test\n")):
+        src = marker * 20000 + ("class X { }\n" if name == "java" else "class X\n")
+        t0 = _t.time(); re_obj.findall(src); spent = _t.time() - t0
+        check(f"{name} 兩萬個註解都配不到目標時,掃描要在 2 秒內結束(量到 {spent:.2f}s)",
+              spent < 2.0, f"{spent:.3f}s")
 
 
 def t_java_stack_wiring():
@@ -20528,6 +20586,16 @@ def t_java_stack_wiring():
         # 上一版的 findAll 會讓 java-data 跟著亮,那樣就驗不到「平台特有題各自獨立」這件事。
         check("④Android 改動(findViewById)只讓 java-android 適用,不問 JPA 交易",
               qof("java-android") in app2 and qof("java-data") not in app2, str(len(app2)))
+        # ★r1 正確性席 major★:觸發字比對不分大小寫,原本 java-android 收了裸的 Context/Activity,
+        # 一支只有 ApplicationContext context 欄位的 Spring 後端檔就會被誤問一整組 Android 生命週期題,
+        # 直接打破「改後端的檔不會被問 Android」這句承諾。
+        _spring = ["@Service", "    private ApplicationContext context;",
+                   "    SecurityContext ctx = SecurityContextHolder.getContext();",
+                   "    List<Order> all() { return repo.findAll(); }"]
+        _a, _meta = m._stack_applicability({"java": _spring}, 300)
+        _got = {r["id"] for r in _meta["java"] if r["applicable"]}
+        check("④Spring 後端(ApplicationContext/SecurityContext)不會被誤問 Android 題",
+              "java-data" in _got and "java-android" not in _got, str(sorted(_got)))
         (root / "src" / "test" / "java" / "shop" / "OrderServiceTest.java").write_text(
             "package shop;\nclass OrderServiceTest { @Test void totals() { int x = 2; } }\n", encoding="utf-8")
         g("add", "-A"); g("commit", "-qm", "test only")
