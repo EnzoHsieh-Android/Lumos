@@ -11,7 +11,7 @@ description: 寫或審 Java（JVM 後端服務、Android 舊碼、批次與排�
 
 **機檢欄說明**：`EP:名稱`＝Error Prone（Google 的編譯期檢查外掛，跟 javac 一起跑）；`SB:代碼`＝SpotBugs（讀 bytecode）；`PMD:規則`＝PMD（讀原始碼）；`NullAway`＝空值分析（Error Prone 外掛）；`自訂`＝可寫 ast-grep 規則；`不可機檢`＝只有本文件與審查鏡頭能守——排最前面。
 
-> **誠實邊界（2026-09-12）**：本文件是官方文件整理。工具名與規則名有查過官方頁面，但**本機沒有裝 Maven／Gradle／Error Prone／SpotBugs／PMD，一條都沒有實跑核對過**（對照組：python-idioms 的 28 條 ruff 代號是用本機 `ruff rule` 逐條查過的）。**也尚未在任何真 Java 專案上用過**。第一個接入的專案要回填：哪些規則預設沒開、哪些誤報多到要關、哪些坑這份沒收。
+> **誠實邊界（2026-09-12）**：本文件是官方文件整理。工具名與規則名有查過官方頁面——**但這道自查本身出過一次錯**：2026-09-12 代碼審抓到 R13 曾引用一個 Error Prone 官方清單裡查不到的規則名（已刪除），所以「查過」這句話請當成「查過但不是零失誤」。另外，**本機沒有裝 Maven／Gradle／Error Prone／SpotBugs／PMD，一條都沒有實跑核對過**（對照組：python-idioms 的 28 條 ruff 代號是用本機 `ruff rule` 逐條查過的）。**也尚未在任何真 Java 專案上用過**。第一個接入的專案要回填：哪些規則預設沒開、哪些誤報多到要關、哪些坑這份沒收。
 > REVISIT:2026-10-12 若仍無 Java 消費端，把「未實跑」這件事再標一次，別讓它靜靜變成看起來可信的文件。
 
 ---
@@ -156,7 +156,7 @@ try { doIt(); } catch (IOException e) {
 - 只改一個 = 放進 `HashMap` 就找不回來。用 record 或 IDE 產，不要手寫一半。
 - 物件當 key 之後又改了它的欄位，那筆資料就永遠撈不出來，也不會有任何錯誤訊息。
 
-### R13. 邊界驗證與秘密 `SB:SQL_INJECTION_JDBC` `EP:UnsafeSqlInjection`
+### R13. 邊界驗證與秘密 `SB:SQL_INJECTION_JDBC`
 - SQL 一律 `PreparedStatement` 帶參數，不要字串相接——這是唯一真正擋得住注入的做法。
 - 秘密不寫死在程式碼、不進日誌。設定從環境變數或密鑰管理服務讀。
 - 外部進來的資料在邊界就驗（長度、範圍、格式），不要讓它帶著進到核心邏輯再炸。

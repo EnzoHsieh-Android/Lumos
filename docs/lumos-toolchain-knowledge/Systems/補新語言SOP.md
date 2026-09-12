@@ -27,7 +27,7 @@ summary: |-
   KEY:★先問方向再動手★——題目 id 被 t_stack_question_triggers 釘住,換 id 會讓在途分支重新表態;方向選錯之後很難調(Python d1、Java d1 都是為這件事開的決策)
   KEY:★一定要分兩個提交★——「每支檔有家」的閘會擋「這次寫了說明的節點不是任何一支改動檔的家」;效能檢核目錄與 linter 精選目錄不是 scripts/lumos 的家,跟程式放同一個提交必被擋(Python、Java 兩次都實際撞到)
   KEY:★方法正則不能照抄隔壁語言★——Java 照抄 Kotlin 的 [^{]*? 會被參數化註解的大括號斷掉;每種語言的測試方法長相都要自己找一個「收斂得住」的錨(Kotlin 靠 fun、Java 靠 JUnit 規定 void、Swift 靠 test 前綴與 @Test 巨集)
-  KEY:★散落清單每次都會漏★——三次補棧裡,效能檢核目錄那串「全表各棧題數」漏了兩次、test-profile-multiplatform 那串「profile 共幾個」漏了三次;本篇第 9 步列出全部四處,照著逐項核
+  KEY:★散落清單每次都會漏★——效能檢核目錄那串「全表各棧題數」漏過一次(2026-09-11)、test-profile-multiplatform 那串「profile 共幾個」漏過兩次(2026-09-08、09-11),都是 09-12 才補回;數字以 git 歷史為準(2026-09-12 代碼審 r1 文件席查出原本寫成兩次/三次是誇大);本篇第 9 步列出全部四處,照著逐項核
   DEP:[[Systems/效能檢核目錄]]｜[[Systems/linter精選目錄]]｜[[Systems/棧別提問表態閘]]｜[[Systems/test-profile-multiplatform]]
   TEST:t_stack_question_triggers(全表 id 集合)｜各棧自己的 t_<語言>_stack_wiring 與 t_<語言>_profile_discovery
 ---

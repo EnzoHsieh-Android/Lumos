@@ -137,7 +137,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 **跟 SQL 段的關係**：registry 同是 `pypi:`（sqlfluff 也住 PyPI），lint-watch 盯版本走同一種座標。
 
-## Java／JVM（registry: `maven:<group>:<artifact>`；2026-09-12 補，★本機沒裝 Maven／Gradle，一條都沒實跑過★）
+## Java／JVM（registry: `maven:<group>:<artifact>`；2026-09-12 補，★尚無 Java 消費端，而且本機沒裝 Maven／Gradle，一條都沒實跑過★）
 
 跟其他段最大的差別：**這一段的工具全部要靠建置系統才跑得起來**（Maven 或 Gradle 的 plugin，或編譯器外掛），沒有像 `ruff`／`eslint` 那種裝了就能單獨敲的 CLI。所以下表的接法是照官方文件寫的，等第一個 Java 消費端出現時要實際裝一次再回填。
 
