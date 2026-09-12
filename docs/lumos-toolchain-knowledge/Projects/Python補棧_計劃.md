@@ -19,6 +19,7 @@ related:
   - "[[Systems/arch-alignment-lens]]"
   - "[[Projects/CheckT-Python-profile_計劃]]"
   - "[[Projects/idioms自維護迴路_計劃]]"
+  - "[[Systems/補新語言SOP]]"
 summary: |-
   FLAG:DECISION
   KEY:★立案(2026-09-11 Enzo 要開一個幣安自動交易專案:「挑一個你覺得自動交易合適的語言,lumos 沒適配就幫她做好」)★——選 Python;對照 iOS/Node 補棧那七格盤點,Python 早就有測試 profile(2026-07-25)、符號 profile、CODE_EXTS_T 也收了 .py,缺四格:①_STACK_QUESTION_SPECS 沒有 py 題組 ②_ARCH_IDIOM_SKILL 沒有 .py→慣例 skill ③沒有 python-idioms skill ④linter精選目錄與效能檢核目錄沒有 Python 段

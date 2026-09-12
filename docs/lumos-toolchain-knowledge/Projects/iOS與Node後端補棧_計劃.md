@@ -20,6 +20,7 @@ related:
   - "[[Projects/kotlin慣例skill_計劃]]"
   - "[[Projects/idioms自維護迴路_計劃]]"
   - "[[Issues/linter-gap實務隱患]]"
+  - "[[Systems/補新語言SOP]]"
 tags:
   - type/project
   - status/doing

@@ -18,6 +18,7 @@ related:
   - "[[Systems/linter精選目錄]]"
   - "[[Systems/棧別提問表態閘]]"
   - "[[Systems/arch-alignment-lens]]"
+  - "[[Systems/補新語言SOP]]"
 summary: |-
   FLAG:DECISION
   KEY:★立案(2026-09-12 Enzo:「再順便把 Java 接進來」)★——先派乾淨 agent 用原始問題盤點一次:Java 在八格版型裡「檔案層面認得、技術棧層面全空」,只有程式碼副檔名清單那格是滿的;★比 Python 當時多缺一格:測試綁定 profile 也沒有★(TEST_PROFILES 無 java 鍵,最接近的 kotlin-junit 只吃 .kt、正則錨 `fun`)
