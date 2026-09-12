@@ -12,6 +12,7 @@ verified_by:
   - "[[Verification/2026-07-25_CheckT-Python-profile]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-09-08_iOS與Node補棧合成樣本測試]]"
+  - "[[Verification/2026-09-12_Java補棧合成樣本測試]]"
 plan_refs:
   - "[[Projects/多平台合約測試綁定_計劃]]"
 tags:
