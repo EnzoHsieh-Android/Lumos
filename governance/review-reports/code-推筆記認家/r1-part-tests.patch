@@ -1,0 +1,774 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6384e50a..116decc5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -882,25 +882,27 @@ def _about_impact_fixture(prefix="gctl-about-"):
+     for rel in ("Systems/A-about.md", "Issues/SQL注入.md", "Systems/Free.md"):
+         pth = v / rel; txt = pth.read_text(encoding="utf-8")
+         pth.write_text(txt.replace("PLACEHOLDER", m.note_body_hash(v, rel)), encoding="utf-8")
+     g("add", "-A"); g("commit", "-qm", "init")
+     return root, v
+ 
+ 
+ def t_impact_about_hit():
+     """★#4:impact 讀 about_code——只加分不降級、排前排、事故永遠最前、過期不信、總開關、巨檔門檻★
+     (about-code-impl-std 三輪折入版;計劃 Projects/固定席扇出降權_計劃)。
+-    翻紅釘:拿掉 stable sort → ①「排在非事故 pins 首位」翻紅。"""
++    翻紅釘:拿掉 stable sort → ①「排在非事故 pins 首位」翻紅。
++    ★2026-09-12 起這一段只驗「家那條旋鈕關掉」時的舊行為★(推筆記認家 [S2][S7][S9]):
++    旋鈕開著時舊的「關於命中」整段不跑,改由「確認過的家」保送——旋鈕開著的行為在本函式尾段另外驗。"""
+     import subprocess as sp, json, os as _os
+     root, v = _about_impact_fixture()
+     def lum(*a, env_extra=None, stdin=None):
+-        e = {**_os.environ, **(env_extra or {})}
++        e = {**_os.environ, "LUMOS_IMPACT_HOME": "0", **(env_extra or {})}
+         r = sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root, input=stdin, env=e)
+         return r, (json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 and r.stdout.strip() else None)
+     payload = json.dumps({"query": "def save(x): q='SELECT id FROM t'", "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
+     r, d = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+     check("rc0", r.returncode == 0, r.stderr[-300:])
+     pins = [x for x in d["results"] if x.get("pinned")]
+     names = [x["node"] for x in pins]
+     a = next((x for x in pins if "A-about" in x["node"]), None)
+     check("①A(合約 direct,about 命中)仍 pinned 且 about_hit", a is not None and a.get("about_hit") is True, str(pins)[:300])
+     inc_idx = [i for i, x in enumerate(pins) if x["kind"] == "incident"]
+@@ -922,20 +924,33 @@ def t_impact_about_hit():
+     # ④過期:正文改一字(不 commit)→ 視同無欄
+     pa = v / "Systems" / "A-about.md"; pa.write_text(pa.read_text(encoding="utf-8") + "改了\n", encoding="utf-8")
+     r4, d4 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+     a4 = next(x for x in d4["results"] if "A-about" in x["node"])
+     check("★④正文改一字(未 commit)→ 過期,無 about_hit、仍 pinned★", "about_hit" not in a4 and a4.get("pinned"), str(a4))
+     # ⑬ 只改 frontmatter → 不過期(先把正文還原)
+     pa.write_text(pa.read_text(encoding="utf-8").replace("改了\n", ""), encoding="utf-8")
+     sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "set", "Systems/A-about", "updated", "2026-08-24"], capture_output=True)
+     r13, d13 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+     check("⑬只改 frontmatter → 仍 about_hit", next(x for x in d13["results"] if "A-about" in x["node"]).get("about_hit") is True, "")
++    # ★旋鈕開著(預設)★:換成家那條——兩篇的正文都用反引號寫了 src/svc.py,都是確認過的家
++    rh, dh = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload,
++                 env_extra={"LUMOS_IMPACT_HOME": "1"})
++    byh = {x["node"]: x for x in dh["results"]}
++    free_h = next(x for k, x in byh.items() if "Free" in k)
++    check("★旋鈕開著:確認過的家升成必推(這正是舊制刻意不做、本案翻案的那條)★",
++          free_h.get("pinned") and free_h.get("home"), str(free_h))
++    check("旋鈕開著:舊的 about 命中鍵整段不出現", all("about_hit" not in x for x in dh["results"]), str(dh["results"])[:200])
++    pins_h = [x for x in dh["results"] if x["pinned"]]
++    inc_h = [i for i, x in enumerate(pins_h) if x["kind"] == "incident"]
++    check("旋鈕開著:事故仍永遠最前", inc_h == list(range(len(inc_h))), str([x["node"] for x in pins_h]))
++    non_inc_h = [x for x in pins_h if x["kind"] != "incident"]
++    check("旋鈕開著:家排在非事故必推項的最前面", non_inc_h and non_inc_h[0].get("home"), str([x["node"] for x in non_inc_h]))
+     # ④b 舊格式(兩段)→ 視同無欄
+     sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "set", "Systems/A-about", "about_code_stamp", "batch-2026-08-23/2026-08-23"], capture_output=True)
+     _, d4b = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+     check("④b stamp 無第三段 → 無 about_hit", "about_hit" not in next(x for x in d4b["results"] if "A-about" in x["node"]), "")
+     sp.run([sys.executable, GRAPHCTL, "about-code", "restamp", "Systems/A-about", "--repo", str(root)], capture_output=True, cwd=root)
+     sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
+     # ⑫ --incidents-only → 無 about_hit 鍵
+     _, d12 = lum("impact", "--file", "src/svc.py", "--ranked", "--incidents-only", "--stdin-payload", "--json", stdin=payload)
+     check("⑫--incidents-only → 任一項無 about_hit 鍵", d12 is not None and all("about_hit" not in x for x in d12["results"]), str(d12)[:200])
+     # ⑪ about_code 存成純量字串 → 仍命中
+@@ -958,26 +973,32 @@ def t_impact_about_hit():
+ def t_impact_about_giant_file():
+     """★⑤巨檔門檻:目標檔被 ≥ LUMOS_IMPACT_ABOUT_MAX(預設 8)篇 about 命中 → 本次關閉 about 加分★(獨立 vault,s2 要求)。"""
+     import subprocess as sp, json, os as _os
+     root, v = _about_impact_fixture(prefix="gctl-giant-")
+     m = _load_lumos_module()
+     for i in range(8):
+         rel = f"Systems/G{i}.md"
+         (v / rel).write_text(f"---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ G{i} [test:G]\nabout_code:\n  - src/svc.py\nabout_code_stamp: claude/2026-08-24/x\n---\n# G{i}\n`src/svc.py`。\n", encoding="utf-8")
+         txt = (v / rel).read_text(encoding="utf-8"); (v / rel).write_text(txt.replace("/x\n", "/" + m.note_body_hash(v, rel) + "\n"), encoding="utf-8")
+     def lum(env=None):
+-        r = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, **(env or {})})
++        # 舊制的「about 只加分不當入口」由旋鈕關掉家之後才看得到(推筆記認家 [S9]:旋鈕開著時舊那條整段不跑)
++        e = {"LUMOS_IMPACT_HOME": "0", **(env or {})}
++        r = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, **e})
+         return json.loads(r.stdout.strip().splitlines()[-1])
+     d = lum()
+     check("★⑤≥8 篇命中 → 全部無 about_hit(門檻關閉)★", all("about_hit" not in x for x in d["results"]), str([x["node"] for x in d["results"] if x.get("about_hit")]))
+     d2 = lum({"LUMOS_IMPACT_ABOUT_MAX": "100"})
+     check("門檻調高 → 有 about_hit", any(x.get("about_hit") for x in d2["results"]), "")
++    d3 = lum({"LUMOS_IMPACT_HOME": "1"})
++    check("★旋鈕開著時同一道大檔門檻照樣擋:8 篇家一篇都不當入口★",
++          all(x.get("kind") != "home" for x in d3["results"]),
++          str([x["node"] for x in d3["results"] if x.get("kind") == "home"]))
+ 
+ 
+ def t_doctor_about_code_expiry():
+     """★#6:doctor 另開迴圈(Check S2)列「about_code 標了之後正文又改過」的節點★——全 type、跳過作廢、
+     舊格式另列、受總開關;warn_soft 不擋、不計 issues;訊息先叫人看標籤對不對,不把 restamp 當萬靈丹。
+     翻紅釘:把雜湊比對改成恆 False → ①翻紅。"""
+     import os as _os
+     m = _load_lumos_module(); v = mkvault()
+     def mk(rel, extra_fm, body, stamp_hash=True):
+         write(v, rel, "type: " + ("issue" if rel.startswith("Issues") else "system") + "\nstatus: done\nabout_code:\n  - scripts/lumos\n" + extra_fm, body=body)
+@@ -30907,21 +30928,21 @@ def t_dispatch_lens_spec_mode():
+     with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+         rc3 = m.cmd_dispatch_lens_spec(str(tmp / "nope.md"), repo=str(tmp), as_json=True)
+     check("lens-spec: 計劃不存在 rc2", rc3 == 2, str(rc3))
+     # 有檔但 0 席:在臨時 repo 放一個沒人引用的程式檔,計劃提到它 → 應有一行「沒牽到」說明而不是空字串
+     (tmp / "scripts").mkdir(); (tmp / "scripts" / "lonely.py").write_text("x = 1\n", encoding="utf-8")
+     spec2 = tmp / "p2.md"; spec2.write_text("# 計劃\n會改 scripts/lonely.py 這支。\n", encoding="utf-8")
+     buf = _io.StringIO()
+     with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+         rc5 = m.cmd_dispatch_lens_spec(str(spec2), repo=str(tmp), as_json=True)
+     d5 = _j.loads(buf.getvalue().strip().splitlines()[-1])
+-    check("lens-spec: 有檔但沒牽到節點 → text 一行說明(編排者知道鏡頭有跑、不是壞掉)", rc5 == 0 and d5["listed"] == 0 and "沒牽到任何帶合約/事故的節點" in d5["text"], str(d5)[:160])
++    check("lens-spec: 有檔但沒牽到節點 → text 一行說明(編排者知道鏡頭有跑、不是壞掉)", rc5 == 0 and d5["listed"] == 0 and "沒牽到任何家、合約或事故的節點" in d5["text"], str(d5)[:160])
+     buf = _io.StringIO()
+     with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+         rc4 = m.cmd_dispatch_lens_spec("/etc/hosts", repo=str(repo), as_json=True)
+     check("lens-spec: repo 外的計劃路徑 rc2(外家 r1 M3)", rc4 == 2, str(rc4))
+     import subprocess as _sp2
+     r5 = _sp2.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", "x.md", "--status", "--repo", str(repo)], capture_output=True, text=True)
+     check("lens-spec: --spec 與其他模式旗標同時給 → rc2 互斥(架構 r1 B)", r5.returncode == 2 and "一次只能給一個" in r5.stderr, r5.stderr[:120])
+     check("lens: 兩種模式共用同一個渲染 helper(架構 r1 D)", "_lens_render_listed(lines, listed, _read_base" in Path(GRAPHCTL).read_text(encoding="utf-8") and "_lens_render_listed(lines, listed, _read_wt" in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
+ 
+ 
+@@ -36796,20 +36817,648 @@ def t_nodehome_stack_test_dirs_not_required():
+                     loose.append(f"Demo{suf}/x.py")
+         elif prof.get("rglob_under") == "src":
+             for d in names:
+                 path = f"mod/src/{d}/x{exts[0]}"
+                 if not m._nodehome_is_test(path, ({}, {"mod/src": set(exts)})):
+                     miss.append(path)
+     check("⑤漂移守衛:對照表裡每個 src 底下的測試資料夾、每個頂層結尾樣式配它那一棧的每種副檔名都被認成測試", not miss, str(miss))
+     check("⑤b 頂層結尾樣式不外溢到別棧的副檔名", not loose, str(loose))
+ 
+ 
++def t_impact_home_confirmed_is_entry_and_pinned():
++    """[S2][S3][S4][S5][S7] 確認過的家一定進必推名單(大檔除外),沒確認的家什麼都不做;
++    每篇只出現一次;必推順序 事故 → 家 → 其餘;旋鈕關掉完全照原本。"""
++    print("t_impact_home_confirmed_is_entry_and_pinned")
++    import json as _j, subprocess as _sp, os as _os
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "金流規則", about=["src/pay.py"], body="計價寫在 `src/pay.py`,這篇講為什麼。")
++    _nh_node(root, "沒提到的家", about=["src/pay.py"], body="這篇沒寫出那支檔。")
++    _nh_node(root, "反引號提到", about=[], body="改的時候看一下 `src/pay.py`。")
++    _nh_git(root, "add", "-A")
++    def run(env_extra=None):
++        e = dict(_os.environ); e.update(env_extra or {})
++        r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/pay.py", "--repo", str(root),
++                     "--ranked", "--json"], capture_output=True, text=True, env=e)
++        return _j.loads(r.stdout.strip().splitlines()[-1])
++    d = run()
++    by = {x["node"]: x for x in d["results"]}
++    check("①確認過的家進必推名單,而且標了家", by.get("Systems/金流規則.md", {}).get("pinned") and by["Systems/金流規則.md"].get("home"), str(by.get("Systems/金流規則.md")))
++    check("②沒確認的家不進必推、也不標家",
++          not by.get("Systems/沒提到的家", {}).get("pinned") and not by.get("Systems/沒提到的家.md", {}).get("home"), str(by.get("Systems/沒提到的家.md")))
++    check("③每篇只出現一次", len({x["node"] for x in d["results"]}) == len(d["results"]), str([x["node"] for x in d["results"]]))
++    check("④只加不降:靠反引號進來的節點照舊在候選裡", "Systems/反引號提到.md" in by, str(list(by)))
++    pins = [x["node"] for x in d["results"] if x["pinned"]]
++    check("⑤必推名單裡家排在非事故的其他必推項之前", pins and pins[0] == "Systems/金流規則.md", str(pins))
++    d0 = run({"LUMOS_IMPACT_HOME": "0"})
++    by0 = {x["node"]: x for x in d0["results"]}
++    check("⑥旋鈕關掉:家不保送、不標家,回到原本行為",
++          not by0.get("Systems/金流規則.md", {}).get("pinned") and not by0.get("Systems/金流規則.md", {}).get("home"), str(by0.get("Systems/金流規則.md")))
++
++
++def t_impact_home_cap_for_big_files():
++    """[S4] 大檔(家 ≥ LUMOS_IMPACT_ABOUT_MAX)的家不當入口:不新增、不升級;已經是候選的確認家只標記。"""
++    print("t_impact_home_cap_for_big_files")
++    import json as _j, subprocess as _sp
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_file(root, "src/big.py")
++    for i in range(9):
++        _nh_node(root, f"大檔的家{i}", about=["src/big.py"], body="這篇講 `src/big.py` 的一部分。")
++    _nh_git(root, "add", "-A")
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/big.py", "--repo", str(root), "--ranked", "--json"],
++                capture_output=True, text=True)
++    d = _j.loads(r.stdout.strip().splitlines()[-1])
++    pins = [x for x in d["results"] if x["pinned"]]
++    check("①家 9 篇(≥8)時一篇都不保送", not pins, str([x["node"] for x in pins]))
++    check("②但已經是候選的確認家仍標了家(給人看)", all(x.get("home") for x in d["results"]), str(d["results"][:2]))
++
++
++def t_impact_hook_shows_home_label():
++    """[S8] 認出來了要看得到:Edit 前推的那份清單、波及計算的人讀輸出(單檔與多檔)都要標出「這篇是這支檔的家」,
++    而且必看那段的開場白不能只講合約和事故——不然人看到一篇不帶合約的節點會以為工具亂推。"""
++    print("t_impact_hook_shows_home_label")
++    from importlib.machinery import SourceFileLoader
++    import subprocess as _sp
++    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
++    m = SourceFileLoader("impact_hook_home", hook_path).load_module()
++    ctx = m.build_ranked_context({"results": [
++        {"node": "Systems/管這支的.md", "kind": "home", "pinned": True, "score": 0.0, "home": True},
++        {"node": "Systems/只是提到.md", "kind": "direct", "pinned": True, "score": 0.3, "contract": "INVARIANT"},
++        {"node": "Systems/大檔的家.md", "kind": "direct", "pinned": False, "score": 0.5, "home": True},
++    ], "meta": {}})
++    l_home = next((l for l in ctx.splitlines() if "管這支的" in l), "")
++    l_other = next((l for l in ctx.splitlines() if "只是提到" in l), "")
++    l_free = next((l for l in ctx.splitlines() if "大檔的家" in l), "")
++    check("①必看那段:是家的那行標出來", "★家★" in l_home, l_home)
++    check("②不是家的那行不要亂標", "★家★" not in l_other, l_other)
++    check("③沒升上必看的家(大檔)在下面那段也標得出來", "★家★" in l_free, l_free)
++    check("④必看那段的開場白有提到家", "家" in next((l for l in ctx.splitlines() if "必看" in l), ""),
++          next((l for l in ctx.splitlines() if "必看" in l), ""))
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py"); _nh_file(root, "src/other.py")
++    _nh_node(root, "計價規則", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/pay.py", "--ranked", "--repo", str(root)],
++                capture_output=True, text=True)
++    check("⑤單檔的人讀輸出標出家", "★家★" in next((l for l in r.stdout.splitlines() if "計價規則" in l), ""),
++          r.stdout[:300])
++    _nh_file(root, "src/pay.py", "x = 2\n")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
++    r2 = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD", "--repo", str(root)],
++                 capture_output=True, text=True)
++    check("⑥多檔的人讀輸出也標出家", "★家★" in next((l for l in r2.stdout.splitlines() if "計價規則" in l), ""),
++          r2.stdout[:300])
++
++
++def t_pinned_wording_mentions_home():
++    """[S8] 講到「必推名單」的地方措辭要一起改:家不一定帶合約、也不一定出過事故,
++    只說「帶合約或事故」會讓人以為多出來的那幾篇是工具亂推(同步漏掉散落的列舉句是本 repo 的老帳)。"""
++    print("t_pinned_wording_mentions_home")
++    root = Path(__file__).resolve().parent
++    lumos_src = (root / "lumos").read_text(encoding="utf-8")
++    sync_src = (root / "hooks" / "claude" / "check-graph-sync.py").read_text(encoding="utf-8")
++    for name, src, old in (
++        ("風險掃描送審前的提示", lumos_src, "帶硬合約或出過事故的一定要看"),
++        ("風險掃描叫人貼進派工詞那句", lumos_src, "帶合約/事故的那幾篇"),
++        ("派工鏡頭計劃模式的空結果", lumos_src, "沒牽到任何帶合約/事故的節點"),
++        ("寫回圖譜時的點名提示", lumos_src, "(合約 / 事故 / 直接相依)"),
++        ("提交前提醒動錯篇那句", sync_src, "(合約 / 事故 / 直接相依)"),
++    ):
++        check(f"{name}:舊措辭已改掉", old not in src, old)
++    check("風險掃描的提示改成有講到家", "的家" in lumos_src[lumos_src.index("派審查員之前"):][:400],
++          lumos_src[lumos_src.index("派審查員之前"):][:400])
++    check("提交前提醒改成有講到家", "的家" in sync_src[sync_src.index("這一輪動了筆記") - 40:][:300],
++          sync_src[sync_src.index("這一輪動了筆記") - 40:][:300])
++
++
++def t_impact_home_non_code_file():
++    """[S16] 家對照表不挑副檔名:版面檔、導覽圖這種非程式檔只要寫進某篇的 about_code,
++    推送前的波及計算與派工鏡頭就會把那篇推出來(改檔當下那支 hook 的觸發範圍不在本案)。"""
++    print("t_impact_home_non_code_file")
++    import json as _j, subprocess as _sp
++    root = _nh_repo()
++    _nh_file(root, "app/res/layout/pay.xml", "<x/>\n")
++    _nh_node(root, "結帳版面", about=["app/res/layout/pay.xml"], body="版面在 `app/res/layout/pay.xml`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "app/res/layout/pay.xml", "--ranked",
++                 "--repo", str(root), "--json"], capture_output=True, text=True)
++    d = _j.loads(r.stdout.strip().splitlines()[-1])
++    node = next((x for x in d.get("results", []) if "結帳版面" in x["node"]), None)
++    check("①非程式檔也推得出它的家", node is not None and node.get("home") and node.get("pinned"), str(d)[:200])
++    _nh_file(root, "app/res/layout/pay.xml", "<y/>\n")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
++    r2 = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json"],
++                 capture_output=True, text=True)
++    d2 = _j.loads(r2.stdout.strip().splitlines()[-1])
++    check("②推送前的波及計算也推得出來",
++          any(x.get("home") for x in d2.get("results", []) if "結帳版面" in x["node"]), str(d2)[:240])
++
++
++def t_nodehome_new_home_unmentioned_reminds():
++    """[S15] 這次新掛進某篇 about_code 的檔,那篇的摘要與正文卻連檔名都沒提到 → 提醒(不擋)。
++    家從此一定推,隨手塞一支檔進去就等於把無關的篇推到別人眼前;寫入當下講一句最便宜。"""
++    print("t_nodehome_new_home_unmentioned_reminds")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_file(root, "src/c.py"); _nh_file(root, "src/d.py")
++    # A 多管一支 c.py,正文有寫出來;B 多管一支 d.py,正文完全沒提
++    _nh_node(root, "A", about=["src/a.py", "src/c.py"], body="實作在 `src/a.py`,另一半在 `src/c.py`。")
++    _nh_node(root, "B", about=["src/b.py", "src/d.py"], body="實作在 `src/b.py`。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①正文沒提到的那支 → 提醒", "src/d.py" in out and "沒提到" in out, out[-700:])
++    check("②正文有寫出來的那支 → 不唸", "src/c.py" not in out, out[-700:])
++    check("③只提醒不擋", rc == 0, f"rc={rc}\n" + out[-400:])
++    check("④指路兩條:寫一句它負責什麼,或改掛真的在講它的那篇",
++          "負責" in out and "改掛" in out, out[-700:])
++
++
++def _nh_regen(root, name, about=(), resp=None, regen="from-scratch/2026-09-12", body="從程式重建。"):
++    """蓋了「從程式重建」章的 Systems 節點(regen 欄)。"""
++    return _nh_node(root, name, about=about, resp=resp, body=body,
++                    extra=f"regen: {regen}")
++
++
++def t_nodehome_new_regen_node_requires_about_code():
++    """[S11] 這次新蓋「從程式重建」章的節點,about_code 空的、又沒寫負責範圍 → 擋。
++    還原節點是圖譜重生的起點,一開始就沒說自己管哪些檔,之後每一次寫回都不知道該落哪。"""
++    print("t_nodehome_new_regen_node_requires_about_code")
++    root = _nh_repo()
++    _nh_base(root)
++    # 既有節點,這次才第一次蓋章:about_code 空、負責範圍沿用舊文字(沒交代為什麼不管檔)
++    _nh_node(root, "老篇", about=["src/b.py"], body="講 `src/b.py`。")
++    _nh_commit(root, "先有一篇老的")
++    _nh_regen(root, "老篇", about=(), resp="負責這一塊的程式規則,不管畫面長怎樣", body="從程式重建。")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①既有節點這次才蓋章、沒列檔又沒交代 → 擋", rc != 0 and "老篇" in out, f"rc={rc}\n" + out[-900:])
++    check("②擋下訊息指路兩條(補檔 / 寫負責範圍)",
++          "about_code" in out and "responsibility" in out, out[-900:])
++
++
++def t_nodehome_regen_theme_node_with_responsibility_passes():
++    """[S11] 真的不管檔的主題型還原節點:負責範圍寫明「為什麼不管檔」就放行——
++    明文、審得到,跟每支檔有家「越界唯一合法寫法是寫明文」同一個精神。
++    另外釘住去重:新開的還原節點同時命中既有那條「新開沒寫負責範圍」時只報一條。"""
++    print("t_nodehome_regen_theme_node_with_responsibility_passes")
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_node(root, "老篇二", about=["src/b.py"], body="講 `src/b.py`。")
++    _nh_commit(root, "先有一篇老的")
++    _nh_regen(root, "老篇二", about=(), resp="只整理跨模組的流程脈絡,不管任何一支檔,實作細節看各模組自己那篇")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①寫明為什麼不管檔 → 放行", rc == 0, f"rc={rc}\n" + out[-900:])
++    root2 = _nh_repo()
++    _nh_base(root2)
++    _nh_regen(root2, "全新還原篇", about=(), resp=None)
++    _nh_git(root2, "add", "-A")
++    rc2, out2 = _nh_check(root2)
++    check("②新開的還原節點照樣擋", rc2 != 0 and "全新還原篇" in out2, f"rc={rc2}\n" + out2[-900:])
++    check("③同一篇不報兩條(既有「新開沒寫負責範圍」那條優先)",
++          out2.count("全新還原篇") == 1, out2[-900:])
++
++
++def t_nodehome_legacy_regen_node_only_listed():
++    """[S11] 上線前就蓋了章沒填的舊節點:健檢列出、不擋(同每支檔有家的舊帳處理)。"""
++    print("t_nodehome_legacy_regen_node_only_listed")
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_base(root)
++    _nh_regen(root, "舊還原篇", about=(), resp=None)
++    _nh_commit(root, "上線前就在的舊帳")
++    _nh_file(root, "src/a.py", "x = 9\n")
++    _nh_git(root, "add", "-A")
++    rc, out = _nh_check(root)
++    check("①沒動它的時候不擋", rc == 0 and "舊還原篇" not in out, f"rc={rc}\n" + out[-600:])
++    r = sp.run([sys.executable, GRAPHCTL, "doctor"], capture_output=True, text=True, cwd=str(root))
++    check("②健檢把這種舊帳列出來", "舊還原篇" in r.stdout and "重建" in r.stdout,
++          r.stdout[-1200:] + r.stderr[-300:])
++
++
++_HOME_AUDIT = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "home_audit.py")
++
++
++def t_home_audit_sample_is_reproducible():
++    """[S14] 抽查腳本:同一個種子抽出同一批(換種子會不一樣),每對附那篇的 KEY 行與那支檔開頭幾行。
++    抽樣不可重現的話,「這次抽到的錯誤率」就沒辦法被別人覆核。"""
++    print("t_home_audit_sample_is_reproducible")
++    import json as _j, subprocess as _sp
++    root = _nh_repo()
++    for i in range(6):
++        _nh_file(root, f"src/m{i}.py", f"# 模組 {i}\nx = {i}\n")
++        _nh_node(root, f"模組{i}", about=[f"src/m{i}.py"], summary=f"KEY:模組 {i} 的規則",
++                 body=f"實作在 `src/m{i}.py`。")
++    def sample(seed, n=3):
++        r = _sp.run([sys.executable, _HOME_AUDIT, "sample", "--vault", str(root / "docs" / "kg-knowledge"),
++                     "--seed", str(seed), "--n", str(n), "--repo", str(root), "--lumos", GRAPHCTL],
++                    capture_output=True, text=True)
++        return _j.loads(r.stdout) if r.returncode == 0 else {"err": r.stderr}
++    a, b, c = sample(7), sample(7), sample(99)
++    check("①同一個種子抽出同一批", [x["file"] for x in a.get("pairs", [])] == [x["file"] for x in b.get("pairs", [])],
++          str(a)[:200])
++    check("②抽到的對數是 --n 給的", len(a.get("pairs", [])) == 3, str(len(a.get("pairs", []))))
++    check("③總共幾對也說出來", a.get("total_pairs") == 6, str(a.get("total_pairs")))
++    check("④換種子抽到不一樣的批(6 對抽 3 對,同批的機率 1/20)",
++          [x["file"] for x in c.get("pairs", [])] != [x["file"] for x in a.get("pairs", [])], str(c)[:200])
++    one = a.get("pairs", [{}])[0]
++    check("⑤每對附那篇的 KEY 行", one.get("key", "").startswith("KEY:"), str(one)[:200])
++    check("⑥每對附那支檔開頭", "模組" in one.get("head", ""), str(one.get("head"))[:120])
++    check("⑦verdict 留白給審查員填", one.get("verdict") == "", str(one.get("verdict")))
++    full = sample(7, n=0)
++    check("⑧不給數量就是全部配對", len(full.get("pairs", [])) == 6, str(len(full.get("pairs", []))))
++
++
++def t_home_audit_tally_counts():
++    """[S14] 判定收回來要照「否、判不準、是」排(人從上往下看),給了人裁檔就算錯誤率——
++    「超過一成先修家再上線」就是對這個數字。"""
++    print("t_home_audit_tally_counts")
++    import json as _j, subprocess as _sp
++    d = Path(tempfile.mkdtemp(prefix="gctl-homeaudit-"))
++    rows = [{"id": "p001", "file": "src/a.py", "node": "Systems/A.md", "key": "KEY:甲", "head": "", "verdict": "是"},
++            {"id": "p002", "file": "src/b.py", "node": "Systems/B.md", "key": "KEY:乙", "head": "", "verdict": "否"},
++            {"id": "p003", "file": "src/c.py", "node": "Systems/C.md", "key": "KEY:丙", "head": "", "verdict": "判不準"},
++            {"id": "p004", "file": "src/d.py", "node": "Systems/D.md", "key": "KEY:丁", "head": "", "verdict": ""}]
++    f = d / "verdicts.json"
++    f.write_text(_j.dumps({"seed": 7, "pairs": rows}, ensure_ascii=False), encoding="utf-8")
++    r = _sp.run([sys.executable, _HOME_AUDIT, "tally", str(f)], capture_output=True, text=True)
++    lines = [l for l in r.stdout.splitlines() if l.startswith("  [")]
++    check("①照 否 → 判不準 → 是 排",
++          [l.split()[1] for l in lines][:3] == ["p002", "p003", "p001"], r.stdout)
++    check("②沒填判定的排最後、而且點名", lines[-1].split()[1] == "p004" and "還有 1 對沒填判定" in r.stdout, r.stdout)
++    check("③數出各判定幾對", "判「否」1 對" in r.stdout and "判「是」1 對" in r.stdout, r.stdout)
++    check("④沒給人裁檔就不算錯誤率", "錯誤率" not in r.stdout, r.stdout)
++    rul = d / "ruling.json"
++    rul.write_text(_j.dumps({"wrong": ["p002"]}), encoding="utf-8")
++    r2 = _sp.run([sys.executable, _HOME_AUDIT, "tally", str(f), "--ruling", str(rul)], capture_output=True, text=True)
++    check("⑤錯誤率 = 人裁判錯的 ÷ 總對數", "1 對 ÷ 總共 4 對 = 25.0%" in r2.stdout, r2.stdout)
++    check("⑥超過一成要講出來", "超過一成" in r2.stdout, r2.stdout)
++    rul.write_text(_j.dumps({"wrong": []}), encoding="utf-8")
++    r3 = _sp.run([sys.executable, _HOME_AUDIT, "tally", str(f), "--ruling", str(rul)], capture_output=True, text=True)
++    check("⑦沒超過一成也講出來", "沒超過一成" in r3.stdout, r3.stdout)
++
++
++def t_new_system_without_code_reminds():
++    """[S13] 開新的 Systems 節點卻沒說它管哪幾支檔 → 印一句提醒(不擋)。
++    不管任何程式檔的節點通常是「主題」不是「模組」;真要這樣,理由要寫在負責範圍裡。"""
++    print("t_new_system_without_code_reminds")
++    v = mkvault()
++    r = run(v, "new", "system", "沒帶檔的")
++    check("①沒帶 --code → 提醒", "about_code" in r.stdout + r.stderr and "主題" in r.stdout + r.stderr,
++          (r.stdout + r.stderr)[-600:])
++    check("②只提醒不擋", r.returncode == 0, f"rc={r.returncode}")
++    (v / "code.py").write_text("x = 1\n", encoding="utf-8")
++    r2 = run(v, "new", "system", "有帶檔的", "--code", "code.py")
++    check("③帶了 --code 就不唸", "主題" not in r2.stdout + r2.stderr, (r2.stdout + r2.stderr)[-400:])
++    r3 = run(v, "new", "issue", "事故篇")
++    check("④只對 Systems 唸(事故篇不唸)", "主題" not in r3.stdout + r3.stderr, (r3.stdout + r3.stderr)[-400:])
++
++
++_SOP_FILES = ("skills/lumos-project-notes/commands/09-節點還原.md",
++              "skills/lumos-project-notes/reference.md")
++
++
++def _sop_texts():
++    root = Path(__file__).resolve().parent.parent
++    return {f: (root / f).read_text(encoding="utf-8") for f in _SOP_FILES}
++
++
++def t_restore_sop_requires_about_code():
++    """[S12] 節點還原 SOP:第 4 步寫明 about_code 是必要條件、第 6 步出口要看健檢不再列為沒家。
++    還原是圖譜重生的起點——那一刻沒說自己管哪些檔,之後每次寫回都不知道該落哪篇。
++    快查表與完整版兩處都要有(散落的列舉表漏改是本 repo 的老帳)。"""
++    print("t_restore_sop_requires_about_code")
++    for f, t in _sop_texts().items():
++        short = f.rsplit("/", 1)[-1]
++        check(f"①{short}:第 4 步寫明帶檔是必要條件", "必要條件" in t and "--code" in t, t[:0] or short)
++        check(f"②{short}:真的不管檔要寫理由", "不管檔" in t, short)
++        check(f"③{short}:出口要看健檢不再列為沒家", "node_home.ignore" in t, short)
++
++
++def t_restore_sop_wiring_and_resource_homes():
++    """[S17] SOP 同一步加「跟著誰住」的慣例:組裝檔(依賴注入那種)跟著它接起來的東西住、
++    版面檔這類非程式檔列進用它的那篇。不寫清楚的話,一支組裝檔會被掛進每個功能節點——家太多等於沒家。"""
++    print("t_restore_sop_wiring_and_resource_homes")
++    for f, t in _sop_texts().items():
++        short = f.rsplit("/", 1)[-1]
++        check(f"①{short}:講了組裝檔跟著誰住", "組裝" in t and "注入" in t, short)
++        check(f"②{short}:講了非程式檔(版面、導覽圖)可以列進用它的那篇", "版面" in t, short)
++        check(f"③{short}:警告一支組裝檔別掛進每個功能節點", "家太多" in t, short)
++
++
++def _home_impact(root, rel, env_extra=None, ranked=True):
++    import json as _j, subprocess as _sp, os as _os
++    e = dict(_os.environ); e.update(env_extra or {})
++    args = [sys.executable, GRAPHCTL, "impact", "--file", rel, "--repo", str(root), "--json"]
++    if ranked:
++        args.append("--ranked")
++    r = _sp.run(args, capture_output=True, text=True, env=e)
++    out = r.stdout.strip().splitlines()
++    if not out:
++        raise AssertionError(f"impact 沒有輸出(rc={r.returncode}):{r.stderr[-400:]}")
++    return _j.loads(out[-1])
++
++
++def t_impact_home_unconfirmed_not_pinned():
++    """[S2] 分兩級:只有「確認過的家」保送。確認=那篇的摘要或正文寫出完整路徑,
++    或反引號裡寫出在受版控檔裡唯一的裸檔名。光是把檔填進 about_code 不算——
++    填錯的家大多就落在這一級,保送它等於把無關的筆記推到人眼前。"""
++    print("t_impact_home_unconfirmed_not_pinned")
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_file(root, "legacy/pay.py")         # 同名檔:裸檔名不唯一,反引號寫 `pay.py` 不算確認
++    _nh_node(root, "只填欄位", about=["src/pay.py"], body="這篇沒寫出那支檔。")
++    _nh_node(root, "正文寫全路徑", about=["src/pay.py"], body="計價寫在 src/pay.py,這篇講為什麼。")
++    _nh_node(root, "反引號寫裸檔名", about=["src/pay.py"], body="細節在 `pay.py`。")
++    _nh_node(root, "欄位裡有但正文只有欄位", about=["src/pay.py"],
++             summary="FLOW:x\nKEY:這篇管 src/pay.py [test:t_x]")
++    _nh_git(root, "add", "-A")
++    by = {x["node"]: x for x in _home_impact(root, "src/pay.py")["results"]}
++    check("①只填欄位、正文沒提 → 不保送也不標家",
++          not by.get("Systems/只填欄位.md", {}).get("home"), str(by.get("Systems/只填欄位.md")))
++    check("②正文寫出完整路徑(沒反引號也算) → 確認,保送",
++          by.get("Systems/正文寫全路徑.md", {}).get("home") and by["Systems/正文寫全路徑.md"]["pinned"],
++          str(by.get("Systems/正文寫全路徑.md")))
++    check("③反引號裡的裸檔名不唯一(兩支同名) → 不算確認",
++          not by.get("Systems/反引號寫裸檔名.md", {}).get("home"), str(by.get("Systems/反引號寫裸檔名.md")))
++    check("④摘要裡寫出完整路徑也算確認",
++          by.get("Systems/欄位裡有但正文只有欄位.md", {}).get("home"), str(by.get("Systems/欄位裡有但正文只有欄位.md")))
++    root2 = _nh_repo()
++    _nh_file(root2, "src/only.py")
++    _nh_node(root2, "唯一裸檔名", about=["src/only.py"], body="細節在 `only.py`。")
++    _nh_git(root2, "add", "-A")
++    by2 = {x["node"]: x for x in _home_impact(root2, "src/only.py")["results"]}
++    check("⑤反引號裡的裸檔名在整個專案唯一 → 算確認",
++          by2.get("Systems/唯一裸檔名.md", {}).get("home"), str(by2.get("Systems/唯一裸檔名.md")))
++
++
++def t_impact_home_no_duplicate_node():
++    """[S2] 同一篇既是家、又本來就因為反引號進了候選 → 只出現一次(原項加標記升級,不另外新增一項)。
++    列兩次的話,派工鏡頭會把同一篇的內容貼兩遍,把別篇的位置吃掉。"""
++    print("t_impact_home_no_duplicate_node")
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "又是家又被提到", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_git(root, "add", "-A")
++    res = _home_impact(root, "src/pay.py")["results"]
++    hits = [x for x in res if "又是家又被提到" in x["node"]]
++    check("①只出現一次", len(hits) == 1, str([x["node"] for x in res]))
++    check("②保留原本的種類與命中來源(不是憑空新增一項)",
++          hits and hits[0]["kind"] == "direct" and hits[0].get("hit"), str(hits))
++    check("③同時標了家、也升成必推", hits and hits[0].get("home") and hits[0]["pinned"], str(hits))
++
++
++def t_impact_home_moves_out_of_lane():
++    """[S2] 被分到「守衛面參考」那條道的節點,如果是這支檔確認過的家 → 搬進必推名單,
++    而且從參考道拿掉(同一篇只出現在一個地方)。"""
++    print("t_impact_home_moves_out_of_lane")
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py"); _nh_file(root, "src/hub.py")
++    # 樞紐:被 src/hub.py 直接命中,它連到的 risk 節點會落在參考道(hop1)
++    _nh_node(root, "樞紐", about=["src/hub.py"], body="接線在 `src/hub.py`,細節看 [[Systems/守衛面的家]]。")
++    _nh_node(root, "守衛面的家", about=["src/pay.py"], body="計價在 `src/pay.py`。",
++             summary="FLOW:x\nKEY:守衛面的規則")
++    n = root / "docs" / "kg-knowledge" / "Systems" / "守衛面的家.md"
++    n.write_text(n.read_text(encoding="utf-8").replace("  - status/doing", "  - status/doing\n  - risk/守衛面"),
++                 encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    d0 = _home_impact(root, "src/hub.py")
++    check("①前提:這篇本來確實落在參考道(不然②等於沒驗)",
++          any("守衛面的家" in x.get("node", "") for x in d0.get("lane", [])), str(d0.get("lane")))
++    d = _home_impact(root, "src/pay.py")
++    check("②是這支檔的家 → 進必推",
++          any("守衛面的家" in x["node"] and x["pinned"] and x.get("home") for x in d["results"]),
++          str(d["results"])[:300])
++    check("③不會同時留在參考道",
++          all("守衛面的家" not in x.get("node", "") for x in d.get("lane", [])), str(d.get("lane")))
++
++
++def t_impact_pins_order_incident_home_rest():
++    """[S3] 必推名單的順序:事故最前、其次家、其餘照原本;事故同時是家的算事故;
++    家之間照分數高到低、同分照篇名。排錯的後果是實在的——派工鏡頭只把前幾篇貼內容,其餘只列名。"""
++    print("t_impact_pins_order_incident_home_rest")
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "B家", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_node(root, "A家", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_node(root, "事故又是家", typ="issue", folder="Issues", about=["src/pay.py"], resp=None,
++             summary="FLAG:TECHNICAL\nKEY:出過事", body="出事的是 `src/pay.py`。")
++    _nh_node(root, "帶合約的", about=[], resp=None,
++             summary="FLOW:x\nKEY:\u2605INVARIANT\u2605 計價規則不准改 [test:t_x]",
++             body="規則實作在 `src/pay.py`。")
++    n = root / "docs" / "kg-knowledge" / "Issues" / "事故又是家.md"
++    n.write_text(n.read_text(encoding="utf-8").replace("about_code:", "pitfall_when:\n  - glob:src/pay.py\nabout_code:"),
++                 encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    pins = [x for x in _home_impact(root, "src/pay.py")["results"] if x["pinned"]]
++    names = [x["node"] for x in pins]
++    check("①事故排最前(它同時是家,算事故)", names and names[0] == "Issues/事故又是家.md", str(names))
++    check("②家排在其餘必推之前",
++          names.index("Systems/A家.md") < names.index("Systems/帶合約的.md")
++          and names.index("Systems/B家.md") < names.index("Systems/帶合約的.md"), str(names))
++    check("③家之間同分照篇名排(A 在 B 前)",
++          names.index("Systems/A家.md") < names.index("Systems/B家.md"), str(names))
++
++
++def t_impact_home_is_additive_only():
++    """[S5] 只加不降:事故、帶合約的直接節點、一跳硬合約間接節點照原本規則進必推,
++    不因為「不是家」而被降;不是家、只被反引號提到的節點照原本規則留在可選名單。"""
++    print("t_impact_home_is_additive_only")
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "家", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_node(root, "帶合約不是家", about=[], resp=None,
++             summary="FLOW:x\nKEY:\u2605INVARIANT\u2605 計價規則不准改 [test:t_x]",
++             body="規則實作在 `src/pay.py`。")
++    _nh_node(root, "只被提到", about=[], body="改的時候順便看一下 `src/pay.py`。")
++    _nh_git(root, "add", "-A")
++    d = _home_impact(root, "src/pay.py")
++    by = {x["node"]: x for x in d["results"]}
++    check("①帶合約的直接節點照樣必推(不是家也不降)",
++          by.get("Systems/帶合約不是家.md", {}).get("pinned"), str(by.get("Systems/帶合約不是家.md")))
++    check("②只被反引號提到的照樣在候選裡",
++          "Systems/只被提到.md" in by, str(list(by)))
++    check("③它沒有被標成家", not by.get("Systems/只被提到.md", {}).get("home"), str(by.get("Systems/只被提到.md")))
++    d0 = _home_impact(root, "src/pay.py", {"LUMOS_IMPACT_HOME": "0"})
++    old = {x["node"] for x in d0["results"] if x["pinned"]}
++    new = {x["node"] for x in d["results"] if x["pinned"]}
++    check("④旋鈕開著之後,必推名單只多不少", old <= new, f"舊 {sorted(old)} / 新 {sorted(new)}")
++
++
++def t_dispatch_lens_diff_includes_homes():
++    """[S6] 派工鏡頭的推送前模式(--diff):家那一行要標成家,而且排在事故之後、其餘之前。"""
++    print("t_dispatch_lens_diff_includes_homes")
++    import subprocess as _sp
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "計價規則", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
++    _nh_file(root, "src/pay.py", "x = 2\n")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
++    r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", "HEAD~1..HEAD", "--repo", str(root)],
++                capture_output=True, text=True)
++    line = next((l for l in r.stdout.splitlines() if "計價規則" in l), "")
++    check("①推送前模式也把家標出來", "家" in line, r.stdout[:500] + r.stderr[:200])
++
++
++def t_impact_home_knob_off_is_old_behavior():
++    """[S7] 旋鈕 LUMOS_IMPACT_HOME=0:完全回到原本——不認家,舊的「關於命中」照舊要預標指紋沒過期,
++    舊旋鈕 LUMOS_IMPACT_ABOUT 照舊管它。這是回滾與離線對照用的,不是給使用者的旗標。"""
++    print("t_impact_home_knob_off_is_old_behavior")
++    m = _load_lumos_module()
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "有指紋的家", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    v = root / "docs" / "kg-knowledge"
++    rel = "Systems/有指紋的家.md"
++    txt = (v / rel).read_text(encoding="utf-8")
++    (v / rel).write_text(txt.replace("about_code:", f"about_code_stamp: claude/2026-09-12/{m.note_body_hash(v, rel)}\nabout_code:"),
++                         encoding="utf-8")
++    # 雜湊要對「寫完之後」的正文算,所以重算一次
++    txt2 = (v / rel).read_text(encoding="utf-8")
++    import re as _re
++    (v / rel).write_text(_re.sub(r"about_code_stamp: claude/2026-09-12/\w+",
++                                 f"about_code_stamp: claude/2026-09-12/{m.note_body_hash(v, rel)}", txt2),
++                         encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    d0 = _home_impact(root, "src/pay.py", {"LUMOS_IMPACT_HOME": "0"})
++    by0 = {x["node"]: x for x in d0["results"]}
++    check("①旋鈕關掉:不標家、不保送",
++          not by0.get(rel, {}).get("home") and not by0.get(rel, {}).get("pinned"), str(by0.get(rel)))
++    check("②舊的「關於命中」照舊出現", by0.get(rel, {}).get("about_hit"), str(by0.get(rel)))
++    d_off = _home_impact(root, "src/pay.py", {"LUMOS_IMPACT_HOME": "0", "LUMOS_IMPACT_ABOUT": "0"})
++    by_off = {x["node"]: x for x in d_off["results"]}
++    check("③舊旋鈕照舊管得動它", "about_hit" not in by_off.get(rel, {}), str(by_off.get(rel)))
++    d1 = _home_impact(root, "src/pay.py")
++    by1 = {x["node"]: x for x in d1["results"]}
++    check("④預設(旋鈕開著)走的是家那條路", by1.get(rel, {}).get("home") and by1[rel]["pinned"], str(by1.get(rel)))
++
++
++def t_about_stamp_no_longer_affects_ranking():
++    """[S9] 旋鈕開著時,舊的「關於命中」整段不跑:預標指紋過不過期都不影響推筆記
++    (確認過的家照樣保送、沒確認的家照樣什麼都不做);指紋相關的指令與健檢提醒保留,給舊資料和回滾用。"""
++    print("t_about_stamp_no_longer_affects_ranking")
++    import subprocess as _sp
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    # 指紋是壞的(過期):舊制會因此不給關於命中
++    _nh_node(root, "指紋過期的家", about=["src/pay.py"], body="計價在 `src/pay.py`。",
++             extra="about_code_stamp: claude/2026-09-12/deadbeef")
++    _nh_node(root, "指紋過期沒確認", about=["src/pay.py"], body="這篇沒寫出那支檔。",
++             extra="about_code_stamp: claude/2026-09-12/deadbeef")
++    _nh_git(root, "add", "-A")
++    by = {x["node"]: x for x in _home_impact(root, "src/pay.py")["results"]}
++    check("①指紋過期也照樣保送(指紋不再影響推筆記)",
++          by.get("Systems/指紋過期的家.md", {}).get("pinned") and by["Systems/指紋過期的家.md"].get("home"),
++          str(by.get("Systems/指紋過期的家.md")))
++    check("②旋鈕開著時不再出現舊的關於命中標記",
++          all("about_hit" not in x for x in by.values()), str(by)[:300])
++    check("③沒確認的家照樣什麼都不做(指紋壞不壞都一樣)",
++          not by.get("Systems/指紋過期沒確認.md", {}).get("home"), str(by.get("Systems/指紋過期沒確認.md")))
++    r = _sp.run([sys.executable, GRAPHCTL, "about-code", "--help"], capture_output=True, text=True, cwd=str(root))
++    check("④指紋相關的指令保留(舊資料與回滾用)",
++          "restamp" in r.stdout and "revert" in r.stdout, r.stdout[:300] + r.stderr[:200])
++
++
++def t_impact_diff_keeps_homes():
++    """[S6] 推送前的波及計算多檔聚合:家的標記取或、記下是哪幾支檔的家(分數高的那筆整項取代也不能沖掉);
++    必推名單照 事故 → 家 → 其餘照分數 排。"""
++    print("t_impact_diff_keeps_homes")
++    import json as _j, subprocess as _sp
++    root = _nh_repo()
++    _nh_file(root, "src/a.py"); _nh_file(root, "src/b.py")
++    _nh_node(root, "甲的窩", about=["src/a.py"], body="這篇講 `src/a.py`。")
++    _nh_node(root, "合約那篇", typ="issue", folder="Issues", resp=None,
++             summary="KEY:\u2605INVARIANT\u2605 兩支檔的計價規則不准改 [test:t_x]",
++             body="規則落在 `src/a.py` 與 `src/b.py`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
++    _nh_file(root, "src/a.py", "x = 2\n"); _nh_file(root, "src/b.py", "y = 2\n")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json"],
++                capture_output=True, text=True)
++    d = _j.loads(r.stdout.strip().splitlines()[-1])
++    res = d.get("results", [])
++    home = next((x for x in res if "甲的窩" in x["node"]), None)
++    other = next((x for x in res if "合約那篇" in x["node"]), None)
++    check("①多檔聚合後仍帶著家的標記", home is not None and home.get("home"), str(home))
++    check("②記下它是哪幾支檔的家", home is not None and home.get("home_of") == ["src/a.py"], str(home))
++    check("③家進必推名單", home is not None and home.get("pinned"), str(home))
++    pins = [x for x in res if x.get("pinned")]
++    check("④前提:另一篇必推的分數不低於家(不然⑤等於沒驗)",
++          other is not None and other.get("pinned") and other["score"] >= home["score"],
++          f"家 {home and home.get('score')} / 另一篇 {other and other.get('score')}")
++    check("⑤家排在其餘必推之前(不照分數)",
++          [x["node"] for x in pins][:2] == [home["node"], other["node"]] if (home and other) else False,
++          str([x["node"] for x in pins]))
++
++
++def t_dispatch_lens_spec_includes_homes():
++    """[S6] 派工鏡頭的計劃模式走不帶排序的輸出:那個輸出要多一個頂層鍵列出家,鏡頭把家收進固定席、
++    照 事故 → 家 → 其餘 排(不然家會排最後、被每檔上限截成只列名)。"""
++    print("t_dispatch_lens_spec_includes_homes")
++    import json as _j, subprocess as _sp
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "計價規則", about=["src/pay.py"], body="計價在 `src/pay.py`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/pay.py", "--repo", str(root), "--json"],
++                capture_output=True, text=True)
++    d = _j.loads(r.stdout.strip().splitlines()[-1])
++    check("①不帶排序的輸出多一個 homes 鍵",
++          [x.get("node") for x in d.get("homes", [])] == ["Systems/計價規則.md"], str(d)[:240])
++    check("②家不會同時又留在直接相依那袋(重複列兩次)",
++          all("計價規則" not in x.get("node", "") for x in d.get("direct", [])), str(d.get("direct"))[:200])
++    _nh_node(root, "某案_計劃", typ="project", folder="Projects", resp=None,
++             summary="KEY:試", body="要改 `src/pay.py`。")
++    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "plan")
++    r2 = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", "docs/kg-knowledge/Projects/某案_計劃.md",
++                  "--repo", str(root)], capture_output=True, text=True)
++    line = next((l for l in r2.stdout.splitlines() if "計價規則" in l), "")
++    check("③計劃模式的鏡頭把家列出來,而且那行標成家", "家" in line, r2.stdout[:400] + r2.stderr[:200])
++
++
++def t_impact_home_uses_nodehome_definition():
++    """[S1] 家對照表只有一支算法:每支檔有家從提交快照餵、推筆記從已載入的圖譜餵,兩邊拿到同一張表。
++    [S2] 確認過的家:全文寫出完整路徑,或反引號裡寫出在受版控檔裡唯一的裸檔名;裸檔名不在反引號裡不算
++    (沒有副檔名的程式檔,檔名是普通詞——全庫 65 篇 Systems 有 62 篇正文出現裸字 lumos)。"""
++    print("t_impact_home_uses_nodehome_definition")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py"); _nh_file(root, "src/cart.py"); _nh_file(root, "tools/runner")
++    _nh_node(root, "金流", about=["src/pay.py"], body="這篇講 `src/pay.py` 的計價。")
++    _nh_node(root, "購物車", about=["src/cart.py"], body="購物車的狀態機;檔在 src/cart.py。")
++    _nh_node(root, "跑測試", about=["tools/runner"], body="用 `runner` 跑一次就好(裸檔名在反引號裡)。")
++    _nh_node(root, "隨手塞", about=["src/cart.py"], body="這篇完全沒提到那支檔。", summary="FLOW:無關")
++    _nh_node(root, "計劃型", about=["src/pay.py"], typ="project", folder="Projects", status="doing")
++    _nh_git(root, "add", "-A")
++    side = m._nodehome_side(root, "index", "docs/kg-knowledge")
++    homes_snap, _own = m._nodehome_homes(root, side)
++    env = m.Env(root / "docs" / "kg-knowledge")
++    homes_env, _o2 = m._impact_home_map(env)
++    check("①兩邊餵同一支純函式,拿到同一張家對照表", homes_snap == homes_env, f"{homes_snap} vs {homes_env}")
++    check("②只算 Systems 與 doing/done/stale(計劃型不算家)", homes_env.get("src/pay.py") == ["Systems/金流.md"], str(homes_env))
++    top = m._nodehome_top_dirs([p for p in side.all_paths if "/" in p])
++    def conf(node, path):
++        text = (root / "docs" / "kg-knowledge" / "Systems" / f"{node}.md").read_text(encoding="utf-8")
++        return m._home_confirmed(text, path, top, side.all_paths)
++    check("③反引號裡寫完整路徑 → 確認", conf("金流", "src/pay.py"), "")
++    check("④正文(沒有反引號)寫出完整路徑 → 確認", conf("購物車", "src/cart.py"), "")
++    check("⑤反引號裡寫唯一的裸檔名 → 確認(沒有副檔名的檔也一樣)", conf("跑測試", "tools/runner"), "")
++    check("⑥完全沒提到 → 不算確認", not conf("隨手塞", "src/cart.py"), "")
++    plain = root / "docs" / "kg-knowledge" / "Systems" / "裸字.md"
++    _nh_node(root, "裸字", about=["tools/runner"], body="這篇散文裡只寫了 runner 這個字,沒有反引號。")
++    check("⑦裸檔名不在反引號裡不算確認(普通詞會誤判)",
++          not m._home_confirmed(plain.read_text(encoding="utf-8"), "tools/runner", top, side.all_paths), "")
++
++
+ def t_nodehome_home_definition():
+     """[S2] 家:狀態 doing/done/stale 的 Systems 節點 about_code 列了它;planned/deferred/rejected/superseded 不算;
+     只看欄位值、不看預標指紋;Issues 不算。"""
+     print("t_nodehome_home_definition")
+     m = _load_lumos_inproc()
+     root = _nh_repo()
+     for i, st in enumerate(("doing", "done", "stale", "planned", "deferred", "rejected", "superseded")):
+         _nh_file(root, f"src/f{i}.py")
+         _nh_node(root, f"N{i}", about=[f"src/f{i}.py"], status=st)
+     _nh_file(root, "src/x.py")

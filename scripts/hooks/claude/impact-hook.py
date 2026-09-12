@@ -648,14 +648,16 @@ def build_ranked_context(data: dict) -> str:
             mb = f"  ({_match_label(x['matched_by'])})" if x.get("matched_by") else ""
             # 語意欄位命中:家(推筆記認家)優先;about_hit 是舊制標記,只在旋鈕關掉家時才會出現
             ab = "★家★" if x.get("home") else ("★關於★" if x.get("about_hit") else "")
-            lines.append(f"  {ab}{mk}{ct} {_plain_label(x.get('node'))}{mb}".replace("  ★家★", " ★家★"))
+            tag = " ".join(t for t in (ab, mk) if t)      # 標記與種類詞之間要有空白,不然印成「★家★直接」黏一串
+            lines.append(f"  {tag}{ct} {_plain_label(x.get('node'))}{mb}")
     if free:
         lines.append(f"可能相關的 {len(free)} 篇(依關聯度排序):")
         for x in free:
             mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}", "home": ""}.get(x.get("kind"), "")
             # 大檔的家只加標記不升級(家太多就沒有鑑別力),它會留在這一段——標記照樣要看得到
             ab = "★家★" if x.get("home") else ""
-            lines.append(f"  {x.get('score',0):.2f} {ab}{mk} {_plain_label(x.get('node'))}")
+            tag = " ".join(t for t in (ab, mk) if t)
+            lines.append(f"  {x.get('score',0):.2f} {tag} {_plain_label(x.get('node'))}")
     if rescued:
         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
         lines.append(f"另外 {len(rescued)} 篇分數不高但直接提到這個檔,一併列出:")

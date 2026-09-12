@@ -40,7 +40,7 @@ about_code:
 ## 三個時機
 | 時機 | 在哪 | 印什麼 |
 |---|---|---|
-| Claude / Codex 改完 code、這輪結束 | `scripts/hooks/claude/check-graph-sync.py`(Stop hook;Codex 註冊時帶 `--harness codex`,同條件擋一次) | 即使這輪動過圖譜,仍點名「直接相關且帶合約/事故、這輪沒動」的篇(★2026-08-30 自足審計訂正:現況=單次 `impact --diff HEAD --sync-check --json`(工作樹 vs HEAD)取固定席前 8 篇——原「每檔 impact --file、最多 4 檔」是重構前舊貌,src_files 參數已是殘跡★) |
+| Claude / Codex 改完 code、這輪結束 | `scripts/hooks/claude/check-graph-sync.py`(Stop hook;Codex 註冊時帶 `--harness codex`,同條件擋一次) | 即使這輪動過圖譜,仍點名「直接相關、這輪沒動」的篇(★2026-09-12 起理由變三種:是那支檔的家、帶合約、出過事故——推筆記認家上線後,固定席多了 kind=home 那一類,這支 hook 直接吃 `impact --sync-check` 的固定席,所以跟著變;見 [[Projects/推筆記認家_計劃]]★)(★2026-08-30 自足審計訂正:現況=單次 `impact --diff HEAD --sync-check --json`(工作樹 vs HEAD)取固定席前 8 篇——原「每檔 impact --file、最多 4 檔」是重構前舊貌,src_files 參數已是殘跡★) |
 | `git commit` | `scripts/hooks/pre-commit` Gate 3 | `impact --diff staged --sync-check`,固定席優先、自由席補滿到 8 篇(pre-commit/pre-push 實際帶的旗標是 `--sync-only`,蘊含 sync-check 且只印點名) |
 | `git push` | `scripts/hooks/pre-push` | 同上對整批 range——分開幾個 commit 各自過關、整批漏掉的在這裡浮出 |
 

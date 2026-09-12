@@ -63,10 +63,14 @@ def head_of(path, n=HEAD_LINES):
 
 
 def collect_pairs(vault, lumos_path=None):
-    """圖譜裡所有「檔 → 家」配對,照檔名、節點名排序(抽樣前的順序固定,種子才有意義)。"""
+    """圖譜裡所有「檔 → 家」配對,照檔名、節點名排序(抽樣前的順序固定,種子才有意義)。
+
+    ★用主程式那支唯一的家對照表函式★:第一版自己包了一層轉接器繞去另一個入口,
+    等於同一件事開了第二條路——代碼審 r1 架構席判 major。
+    """
     m = load_lumos(lumos_path)
     env = m.Env(Path(vault))
-    homes, _own = m._nodehome_homes(None, _SideFromEnv(env))
+    homes, _own = m._impact_home_map(env)
     out = []
     for f in sorted(homes):
         for node in sorted(homes[f]):
@@ -74,19 +78,20 @@ def collect_pairs(vault, lumos_path=None):
     return out, env
 
 
-class _SideFromEnv:
-    """把 Env 包成 _nodehome_homes 要的形狀(它只讀 .notes 的 type/status/about)。"""
+def safe_under(repo, rel):
+    """rel 解出來還在 repo 裡才回絕對路徑,否則回 None。
 
-    def __init__(self, env):
-        self.notes = {rel: {"type": n.fields.get("type", ""), "status": n.fields.get("status", ""),
-                            "about": [str(x) for x in _as_list(n.fields.get("about_code"))]}
-                      for rel, n in env.notes.items()}
-
-
-def _as_list(v):
-    if v is None:
-        return []
-    return v if isinstance(v, list) else [v]
+    ★圖譜筆記的 about_code 不是可信輸入★:那是 .md 檔裡的一行字,手改就能寫成 `../../..` 或絕對路徑。
+    寫入端(lumos 的指令)有擋,讀取端只做字面正規化——這支腳本會把讀到的內容原樣寫進會被提交的 JSON,
+    所以讀之前要自己再驗一次(代碼審 r1 資安席實測:能讀到 repo 外的檔並外洩進版控)。
+    """
+    try:
+        base = Path(repo).resolve()
+        p = (base / rel).resolve()
+        p.relative_to(base)
+        return p
+    except (ValueError, OSError):
+        return None
 
 
 def cmd_sample(args):
@@ -94,24 +99,43 @@ def cmd_sample(args):
     if not pairs:
         print("這個圖譜裡沒有任何「檔 → 家」配對——about_code 都是空的?", file=sys.stderr)
         return 2
+    if args.n is not None and args.n < 0:
+        print(f"--n 要是 0 以上的整數(0 或不給=全部),你給的是 {args.n}", file=sys.stderr)
+        return 2
     picked = list(pairs)
     if args.n and args.n < len(picked):
         picked = random.Random(args.seed).sample(picked, args.n)
         picked.sort(key=lambda p: (p["file"], p["node"]))
     repo = Path(args.repo) if args.repo else Path(args.vault).resolve().parents[1]
-    rows = []
+    rows, outside = [], []
     for i, p in enumerate(picked, 1):
         note = env.notes.get(p["node"])
+        target = safe_under(repo, p["file"])
+        if target is None:
+            outside.append(f"{p['node']} ← {p['file']}")
+            head = "(這一項的路徑跑出專案外面,沒有讀它——請去那篇把 about_code 改對)"
+        else:
+            head = head_of(target)
         rows.append({"id": f"p{i:03d}", "file": p["file"], "node": p["node"],
                      "key": key_line(note.fields.get("summary") if note else ""),
-                     "head": head_of(repo / p["file"]),
+                     "head": head,
                      "verdict": ""})
-    out = {"seed": args.seed, "vault": str(args.vault), "total_pairs": len(pairs), "pairs": rows}
+    out = {"seed": args.seed, "vault": str(args.vault), "total_pairs": len(pairs),
+           "注意": "每一對的 head 是那支檔開頭幾行的原文。這份檔會被人讀、也常被提交進版控——"
+                   "存檔前自己看一眼有沒有把不該外流的東西抄進來。",
+           "pairs": rows}
     text = json.dumps(out, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")
         print(f"抽了 {len(rows)} 對(全部 {len(pairs)} 對,種子 {args.seed}),寫到 {args.out}")
         print("審查員逐對填 verdict:是 / 否 / 判不準,填完跑 tally。")
+        print("這份檔帶著各支檔開頭幾行的原文,提交前自己看一眼有沒有抄到不該外流的東西。")
+    if outside:
+        print(f"⚠ 有 {len(outside)} 對的路徑跑出專案外面,沒有讀它們的內容:", file=sys.stderr)
+        for x in outside[:10]:
+            print(f"    {x}", file=sys.stderr)
+        print("  那幾篇的 about_code 寫錯了(或被人動過手腳),去那篇改對:", file=sys.stderr)
+        print("    lumos remove <節點> about_code <那個路徑>", file=sys.stderr)
     else:
         print(text)
     return 0
@@ -144,6 +168,15 @@ def cmd_tally(args):
         print(f"還有 {len(missing)} 對沒填判定:{'、'.join(missing[:10])}{' …' if len(missing) > 10 else ''}")
     print("下面照「否、判不準、是」排,人從上往下看(一對一行):")
     wrong = _ruling_wrong(args.ruling) if args.ruling else None
+    if wrong is not None:
+        ids = {r["id"] for r in rows}
+        stray = sorted(wrong - ids)
+        if stray:
+            print(f"擋下:人裁檔裡有 {len(stray)} 個編號不在這批配對裡:{'、'.join(stray[:10])}"
+                  f"{' …' if len(stray) > 10 else ''}", file=sys.stderr)
+            print("  最常見的原因是人裁檔跟判定檔不是同一輪抽的——那樣算出來的錯誤率會超過 100%,"
+                  "看起來卻像個正常數字。確認兩份是同一批再跑一次。", file=sys.stderr)
+            return 2
     for r in rows:
         mark = "" if wrong is None else ("  ← 人裁:判錯" if r["id"] in wrong else "")
         print(f"  [{str(r.get('verdict', '')).strip() or '未填'}] {r['id']}  {r['file']}  ←  "

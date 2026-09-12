@@ -36845,7 +36845,7 @@ def t_impact_home_confirmed_is_entry_and_pinned():
     by = {x["node"]: x for x in d["results"]}
     check("①確認過的家進必推名單,而且標了家", by.get("Systems/金流規則.md", {}).get("pinned") and by["Systems/金流規則.md"].get("home"), str(by.get("Systems/金流規則.md")))
     check("②沒確認的家不進必推、也不標家",
-          not by.get("Systems/沒提到的家", {}).get("pinned") and not by.get("Systems/沒提到的家.md", {}).get("home"), str(by.get("Systems/沒提到的家.md")))
+          not by.get("Systems/沒提到的家.md", {}).get("pinned") and not by.get("Systems/沒提到的家.md", {}).get("home"), str(by.get("Systems/沒提到的家.md")))
     check("③每篇只出現一次", len({x["node"] for x in d["results"]}) == len(d["results"]), str([x["node"] for x in d["results"]]))
     check("④只加不降:靠反引號進來的節點照舊在候選裡", "Systems/反引號提到.md" in by, str(list(by)))
     pins = [x["node"] for x in d["results"] if x["pinned"]]
@@ -36854,6 +36854,43 @@ def t_impact_home_confirmed_is_entry_and_pinned():
     by0 = {x["node"]: x for x in d0["results"]}
     check("⑥旋鈕關掉:家不保送、不標家,回到原本行為",
           not by0.get("Systems/金流規則.md", {}).get("pinned") and not by0.get("Systems/金流規則.md", {}).get("home"), str(by0.get("Systems/金流規則.md")))
+
+
+def t_impact_about_max_has_floor():
+    """[S4] 代碼審 r1 邊界席:大檔門檻設成 0 或負數時,「任何家數都算大檔」,
+    等於把家這條入口對全 repo 靜默關掉,而使用者看不出來。門檻要有下限 1。"""
+    print("t_impact_about_max_has_floor")
+    root = _nh_repo()
+    _nh_file(root, "src/pay.py")
+    # 正文寫完整路徑但不加反引號:它只會從「家」這條路進來,不會被直接命中那條蓋過去,鑑別力才夠
+    _nh_node(root, "唯一的家", about=["src/pay.py"], body="計價寫在 src/pay.py。")
+    _nh_git(root, "add", "-A")
+    def home_in(v):
+        d = _home_impact(root, "src/pay.py", {"LUMOS_IMPACT_ABOUT_MAX": v})
+        return any("唯一的家" in x["node"] and x.get("home") for x in d["results"]), d
+    for v in ("0", "-1"):
+        ok, d = home_in(v)
+        check(f"①門檻給 {v}(無效值)要退回預設,不能把家這條入口對整個專案靜默關掉", ok, str(d)[:220])
+    ok1, d1 = home_in("1")
+    check("②使用者明講門檻 1 時照他的意思做(證明沒有把旋鈕整個廢掉)", not ok1, str(d1)[:220])
+
+
+def t_impact_repo_files_reads_bytes():
+    """[S1] 代碼審 r1 邊界席:受版控檔清單用文字模式讀會把非 UTF-8 檔名換成替代字元,
+    那個檔從此永遠比對不到自己。要用位元組讀、自己解碼(同檔案的 _nodehome_git 早就這樣做)。"""
+    print("t_impact_repo_files_reads_bytes")
+    src = (Path(GRAPHCTL).resolve()).read_text(encoding="utf-8")
+    i = src.find("def _impact_repo_files(")
+    seg = src[i:i + 1200]
+    check("①不用文字模式讀 git 輸出", 'text=True' not in seg, seg[:400])
+    check("②用位元組讀再自己解碼", "os.fsdecode" in seg and '"-z"' in seg, seg[:500])
+    # 行為對照:一般檔名照樣列得出來(證明改法沒把功能弄壞)
+    root = _nh_repo()
+    _nh_file(root, "src/pay.py")
+    _nh_git(root, "add", "-A")
+    m = _load_lumos_module()
+    check("③一般檔名照樣讀得到", "src/pay.py" in m._impact_repo_files(str(root)),
+          str(m._impact_repo_files(str(root)))[:200])
 
 
 def t_impact_home_cap_for_big_files():
@@ -36953,6 +36990,73 @@ def t_impact_home_non_code_file():
     d2 = _j.loads(r2.stdout.strip().splitlines()[-1])
     check("②推送前的波及計算也推得出來",
           any(x.get("home") for x in d2.get("results", []) if "結帳版面" in x["node"]), str(d2)[:240])
+
+
+def t_nodehome_regen_gate_only_for_home_status():
+    """[S11] 代碼審 r1 blocker:新蓋「從程式重建」章那條擋,只該管「能當家」的節點。
+    還在規劃中(planned)、或已作廢的節點本來就不是任何一支檔的家,拿這條擋它等於擋錯人。"""
+    print("t_nodehome_regen_gate_only_for_home_status")
+    root = _nh_repo()
+    _nh_base(root)
+    _nh_node(root, "還在規劃的", about=(), status="planned", body="之後再說。")
+    _nh_commit(root, "先有一篇規劃中的")
+    _nh_node(root, "還在規劃的", about=(), status="planned", body="之後再說。", extra="regen: from-scratch/2026-09-12")
+    _nh_file(root, "src/a.py", "x = 3\n")
+    _nh_git(root, "add", "-A")
+    rc, out = _nh_check(root)
+    check("①規劃中的節點蓋了章也不擋", rc == 0 and "還在規劃的" not in out, f"rc={rc}\n" + out[-700:])
+    # 對照:同一篇升成現況(doing)就照擋——證明上面不是因為這條規則整個沒作用
+    _nh_node(root, "還在規劃的", about=(), status="doing", body="之後再說。", extra="regen: from-scratch/2026-09-12")
+    _nh_git(root, "add", "-A")
+    rc2, out2 = _nh_check(root)
+    check("②對照:升成現況就擋得到(證明這條規則還活著)", rc2 != 0 and "還在規劃的" in out2, f"rc={rc2}\n" + out2[-700:])
+
+
+def t_nodehome_unmentioned_only_for_home_nodes():
+    """[S15] 代碼審 r1:「管了卻沒提到檔名」的提醒只該對能當家的節點發。
+    計劃筆記從機制上就推不出來,對它講「會被推到看的人眼前」是假話。"""
+    print("t_nodehome_unmentioned_only_for_home_nodes")
+    root = _nh_repo()
+    _nh_base(root)
+    _nh_node(root, "某案_計劃", typ="project", folder="Projects", resp=None, about=["src/b.py"],
+             summary="KEY:試", body="這篇沒寫出那支檔。")
+    _nh_git(root, "add", "-A")
+    rc, out = _nh_check(root)
+    check("①計劃筆記不唸", "某案_計劃" not in out, out[-700:])
+
+
+def t_nodehome_unmentioned_matches_whole_name():
+    """[S15] 代碼審 r1:判「有沒有提到這支檔」要整詞比對。
+    新掛 a.py、正文只寫了 xa.py,子字串比對會判成「有提到」,提醒就被吃掉。"""
+    print("t_nodehome_unmentioned_matches_whole_name")
+    root = _nh_repo()
+    _nh_base(root)
+    _nh_file(root, "src/a2.py"); _nh_file(root, "src/xa2.py")
+    _nh_node(root, "只提到長的那支", about=["src/b.py", "src/a2.py"],
+             body="實作在 `src/b.py`,另外還有 `src/xa2.py`。")
+    _nh_git(root, "add", "-A")
+    rc, out = _nh_check(root)
+    check("①只提到 xa2.py 不算提到 a2.py", "src/a2.py" in out and "沒提到" in out, out[-800:])
+
+
+def t_doctor_lists_unmentioned_home_pairs():
+    """[S15] 代碼審 r1:健檢那半(掃全部已提交節點的舊帳)原本零測試覆蓋——整段拿掉照樣全綠。
+    它跟提交前那半是兩份獨立實作,各自要有測試釘住。"""
+    print("t_doctor_lists_unmentioned_home_pairs")
+    import subprocess as sp
+    root = _nh_repo()
+    _nh_base(root)
+    _nh_file(root, "src/silent.py")
+    _nh_node(root, "沒提到它管的檔", about=["src/silent.py"], body="這篇講一些別的事。")
+    _nh_node(root, "有提到它管的檔", about=["src/a.py"], body="實作在 `src/a.py`。")
+    _nh_commit(root, "上線前就在的舊帳")
+    r = sp.run([sys.executable, GRAPHCTL, "doctor", "--verbose"], capture_output=True, text=True, cwd=str(root))
+    seg = r.stdout[r.stdout.find("[S11]"):]
+    seg = seg[:seg.find("\n[", 1)] if "\n[" in seg[1:] else seg
+    check("①健檢列出「管了卻沒提到檔名」的舊帳",
+          "沒提到它管的檔" in seg and "src/silent.py" in seg, seg[-800:])
+    check("②有提到的那篇不列", "有提到它管的檔" not in seg, seg[-800:])
+    check("③是提醒不是擋(健檢不因為這段就判不健康)", r.returncode == 0, f"rc={r.returncode}")
 
 
 def t_nodehome_new_home_unmentioned_reminds():
@@ -37215,16 +37319,20 @@ def t_impact_home_moves_out_of_lane():
     print("t_impact_home_moves_out_of_lane")
     root = _nh_repo()
     _nh_file(root, "src/pay.py"); _nh_file(root, "src/hub.py")
-    # 樞紐:被 src/hub.py 直接命中,它連到的 risk 節點會落在參考道(hop1)
-    _nh_node(root, "樞紐", about=["src/hub.py"], body="接線在 `src/hub.py`,細節看 [[Systems/守衛面的家]]。")
-    _nh_node(root, "守衛面的家", about=["src/pay.py"], body="計價在 `src/pay.py`。",
+    # 樞紐直接命中 src/pay.py(反引號),它連到的 risk 節點就會落在查 src/pay.py 那次的參考道(hop1)
+    _nh_node(root, "樞紐", about=["src/hub.py"],
+             body="接線在 `src/hub.py`,也會碰到 `src/pay.py`;細節看 [[Systems/守衛面的家]]。")
+    # ★正文不可以用反引號寫 src/pay.py★:那樣它查 src/pay.py 時會直接從「反引號命中」進候選,
+    # 根本不會落在參考道,搬移那段程式碼就沒被執行到(代碼審 r1 測試席實測:把搬移那行拿掉照樣全綠)。
+    # 要驗搬移,就得讓它「是 src/pay.py 的家、確認過(正文寫完整路徑但不用反引號)、而且在參考道裡」。
+    _nh_node(root, "守衛面的家", about=["src/pay.py"], body="計價寫在 src/pay.py,這篇講守衛面。",
              summary="FLOW:x\nKEY:守衛面的規則")
     n = root / "docs" / "kg-knowledge" / "Systems" / "守衛面的家.md"
     n.write_text(n.read_text(encoding="utf-8").replace("  - status/doing", "  - status/doing\n  - risk/守衛面"),
                  encoding="utf-8")
     _nh_git(root, "add", "-A")
-    d0 = _home_impact(root, "src/hub.py")
-    check("①前提:這篇本來確實落在參考道(不然②等於沒驗)",
+    d0 = _home_impact(root, "src/pay.py", {"LUMOS_IMPACT_HOME": "0"})
+    check("①前提:旋鈕關掉時這篇確實落在參考道(不然②③等於沒驗)",
           any("守衛面的家" in x.get("node", "") for x in d0.get("lane", [])), str(d0.get("lane")))
     d = _home_impact(root, "src/pay.py")
     check("②是這支檔的家 → 進必推",

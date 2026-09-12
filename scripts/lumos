@@ -17799,6 +17799,32 @@ def _nodehome_config(repo_root, text=None, from_snapshot=False):
     return cfg
 
 
+_HOME_MENTION_BOUNDARY = re.compile(r"[A-Za-z0-9_.@+\-]")
+
+
+def _home_mentions(scan_text, rel_path):
+    """這段文字有沒有提到這支檔(完整路徑或裸檔名,整詞比對)。
+
+    ★不要用 `base in scan` 這種子字串比對★:新掛 `a.py`、正文只寫了 `xa.py`,子字串會判成「有提到」,
+    提醒就被吃掉——代碼審 r1 邊界席實測。所以命中位置的前後要是非檔名字元(或字串邊界)才算。
+    """
+    base = rel_path.rsplit("/", 1)[-1]
+    for token in (rel_path, base):
+        if not token:
+            continue
+        start = 0
+        while True:
+            i = scan_text.find(token, start)
+            if i < 0:
+                break
+            before = scan_text[i - 1] if i > 0 else ""
+            after = scan_text[i + len(token)] if i + len(token) < len(scan_text) else ""
+            if not _HOME_MENTION_BOUNDARY.match(before or " ") and not _HOME_MENTION_BOUNDARY.match(after or " "):
+                return True
+            start = i + 1
+    return False
+
+
 def _nodehome_resp_ok(value):
     """[S16] 負責範圍:至少 10 個字、要有實字(全標點、空白視同沒寫)。實字判準同 [manual:] 那條。"""
     if not isinstance(value, str):
@@ -18366,7 +18392,8 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
         # [S11] 這次新蓋「從程式重建」章、卻一支檔都不管的節點:還原節點是圖譜重生的起點,
         # 一開始就沒說自己管哪些檔,之後每一次寫回都不知道該落哪篇。
         # 放行的唯一寫法是「這次一起寫一句負責範圍,講明它為什麼不管檔」——沿用舊文字不算交代。
-        if n["regen"] and not (b and b.get("regen")) and cnt_now == 0 and not resp_missing:
+        if (n["status"] in _NODEHOME_HOME_STATUSES          # 不是家就不歸這條管(planned/deferred/已作廢的不擋)
+                and n["regen"] and not (b and b.get("regen")) and cnt_now == 0 and not resp_missing):
             _resp_rewritten = b is None or (n["resp"] or "") != (b["resp"] or "")
             if not (_nodehome_resp_ok(n["resp"]) and _resp_rewritten):
                 blocks.append(("regen-no-home", rel))
@@ -18439,7 +18466,7 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
             else:
                 reminders.append(("legacy-homeless", f))    # [S5] 沒寫回:只提醒
         # [S15] 「該動哪篇」照家算
-        many = int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
+        many = _impact_about_max()
         for f in sorted(code_changed):
             hs = homesN.get(f) or []
             if not hs or any(h in cc for h in hs):
@@ -18451,16 +18478,16 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
     for rel in sorted(ownN):
         if (vpre + rel) not in changed_new:
             continue
+        note = N.notes.get(rel)
+        # 只對「能當家」的節點唸:計劃筆記、還在規劃中的節點本來就不會被推出來,對它講「會被推到眼前」是假的
+        if note is None or note["type"] != "system" or note["status"] not in _NODEHOME_HOME_STATUSES:
+            continue
         gained = ownN[rel] - ownB.get(route_src.get(rel, rel), set())
         if not gained:
             continue
-        note = N.notes.get(rel)
-        if note is None:
-            continue
         scan = _home_scan_text(note["text"])      # 摘要+正文;about_code 欄位不能當自己的證據
         for f in sorted(gained):
-            base = f.rsplit("/", 1)[-1]
-            if base and base not in scan:
+            if not _home_mentions(scan, f):
                 reminders.append(("home-unmentioned", (rel, f)))
     for f in sorted(bad_names & changed_new):
         reminders.append(("bad-name", f))
@@ -18642,8 +18669,7 @@ def _nodehome_ledger(repo_root, vault):
                 regen_no_home.append(rel)
             _scan = _home_scan_text(n["text"])
             for _f in _mine:
-                _b = _f.rsplit("/", 1)[-1]
-                if _b and _b not in _scan:
+                if not _home_mentions(_scan, _f):
                     unmentioned.append((rel, _f))
         f = sorted(_nodehome_refs(n["text"], side, req) - own.get(rel, set()))
         if f:
@@ -21144,10 +21170,12 @@ def _impact_repo_files(repo_root):
     if key not in _REPO_FILES_CACHE:
         out = []
         try:
-            r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
-                               capture_output=True, text=True, errors="replace", timeout=10)
+            # ★用位元組讀、自己解碼★:文字模式配 errors="replace" 會把非 UTF-8 檔名換成替代字元,
+            # 那個檔從此永遠比對不到自己(同檔案的 _nodehome_git 早就為了這件事特別避開文字模式)。
+            r = subprocess.run(["git", "-C", str(repo_root), "ls-files", "-z"],
+                               capture_output=True, timeout=10)
             if r.returncode == 0:
-                out = [ln for ln in r.stdout.splitlines() if ln.strip()]
+                out = [os.fsdecode(b) for b in r.stdout.split(b"\0") if b.strip()]
         except (OSError, subprocess.SubprocessError):
             out = []
         _REPO_FILES_CACHE[key] = out
@@ -21473,7 +21501,11 @@ def _impact_home_map(env):
     return _HOME_MAP_CACHE[key]
 
 
-_PATH_IN_TEXT_RE = re.compile(r"[A-Za-z0-9_.@+\-]+(?:/[A-Za-z0-9_.@+\-]+)+")
+# ★不要把字元類寫死成 ASCII★:中文資料夾與檔名在這套工具鏈服務的專案裡很常見,
+# 寫死 [A-Za-z0-9…] 會讓「正文寫出完整路徑就算確認過的家」對它們永遠不成立(代碼審 r1 正確性席+邊界席)。
+# 改成「排除法」:路徑不會出現的字元(空白、引號、括號、中文標點)之外都收。
+_PATH_SEG_CHARS = r"^\s`'\"()\[\]{}<>,;:!?、。,;:!?「」『』()《》【】…"
+_PATH_IN_TEXT_RE = re.compile(r"[" + _PATH_SEG_CHARS + r"]+(?:/[" + _PATH_SEG_CHARS + r"]+)+")
 
 
 def _node_code_ref_tokens_all(text, top_dirs):
@@ -21527,7 +21559,7 @@ def _impact_confirmed_homes(env, rel_file, repo_root):
     mine = homes.get(_nodehome_key(rel_file), [])
     if not mine:
         return [], False
-    big = len(mine) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
+    big = len(mine) >= _impact_about_max()
     all_paths = _impact_repo_files(repo_root)
     tops = _nodehome_top_dirs(all_paths)
     target = _nodehome_key(rel_file)
@@ -21596,7 +21628,7 @@ def _impact_mark_about(env, results, rel_file):
     _norm = _posix_norm   # 跟寫入側同一個路徑正規化(r3 整合席:原本只剝開頭的 ./,不解 ..)
     target = _norm(rel_file)
     counts = _impact_about_counts(env)
-    if counts.get(target, 0) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)):
+    if counts.get(target, 0) >= _impact_about_max():
         return
     for r in results:
         n = env.notes.get(r["node"])
@@ -21609,6 +21641,17 @@ def _impact_mark_about(env, results, rel_file):
         if expired:
             continue
         r["about_hit"] = True
+
+
+def _impact_about_max():
+    """大檔門檻:家 ≥ 這個數就整批不當入口。
+
+    ★0 與負數是無效值,退回預設★——不夾不擋的話,「任何家數都算大檔」,等於把家這條入口
+    對整個專案靜默關掉,而使用者看不出來(代碼審 r1 邊界席)。這跟旁邊「非數字退回預設」
+    同一套處理:無效就當沒設。真要整個關掉有專用旋鈕 LUMOS_IMPACT_HOME=0。
+    """
+    v = int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
+    return v if v >= 1 else 8
 
 
 def _impact_knob(name, default):
@@ -22073,7 +22116,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 hm = "★家★" if r.get("home") else ""    # 推筆記認家 [S8]:這篇管這支檔
                 ct = f" ★{r['contract']}★" if r.get("contract") else ""
                 pin = " [固定]" if r["pinned"] else ""
-                print(f"  {r['score']:5.2f} {hm}{mk} {r['node']}{ct}{pin}")
+                print(f"  {r['score']:5.2f} {' '.join(x for x in (hm, mk) if x)} {r['node']}{ct}{pin}")
             if meta["truncated"]:
                 print(f"  (+{meta['truncated']} 條低分截斷;--json 全量)")
             if not lane_items and meta.get("lane_truncated"):
@@ -22354,7 +22397,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         hm = "★家★" if v.get("home") else ""            # 推筆記認家 [S8]:這篇管其中某幾支檔
         ct = f" ★{v['contract']}★" if v.get("contract") else ""
         pin = " [固定]" if v["pinned"] else ""
-        print(f"  {v['score']:5.2f} {hm}{mk} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
+        print(f"  {v['score']:5.2f} {' '.join(x for x in (hm, mk) if x)} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
     if not merged:
         print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
     if sync is not None:
@@ -22410,9 +22453,12 @@ def _lens_kind_of(v):
     「家」是標記不是種類:一篇本來就因為直接相依進來、又剛好是這支檔的家,它的 kind 還是 direct。
     對讀派工單的人來說「這篇管這支檔」比「這篇有提到這支檔」重要,所以家優先顯示。
     """
-    if v.get("home"):
-        return _LENS_KIND["home"]
-    return _LENS_KIND.get(v.get("kind"), None)
+    # ★事故不能被蓋掉★:一篇既是家、又出過事故,讀派工單的人最需要知道的是「這裡出過事」
+    # ——所以兩個都印(代碼審 r1 正確性席)。
+    base = _LENS_KIND.get(v.get("kind"), None)
+    if not v.get("home"):
+        return base
+    return f"{base}·{_LENS_KIND['home']}" if base and v.get("kind") == "incident" else _LENS_KIND["home"]
 
 
 def _lens_range_ok(diff_range):

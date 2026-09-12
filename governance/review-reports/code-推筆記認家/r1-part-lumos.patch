@@ -1,0 +1,941 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index dca76b2a..ae7613a6 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2159,20 +2159,40 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         if _nhl["over"]:
+             warn_soft([f"{r[:-3]}(管 {c} 支)" for r, c in _nhl["over"]],
+                       f"有 {len(_nhl['over'])} 篇管超過 {_nhl['cfg']['max_files']} 支檔卻沒寫負責範圍(舊帳):",
+                       "寫一句負責什麼、不負責什麼:lumos set <節點> responsibility \"…\";寫不出一句話的,通常代表它其實在管好幾件事,該拆")
+         for _r, _c in _nhl["over_new"] + _nhl["over"]:
+             gov_events.append({"gate": "check-s10", "kind": "warned", "hard": False, "nodes": [Path(_r).stem]})
+         for _w in _nhl["cfg"]["warnings"]:
+             warn_soft([_w], "每支檔有家的設定有問題:", "照上面那句改 .lumos/config.json")
+     print()
+ 
++    section("S11", "從程式重建出來的節點有沒有說自己管哪些檔,還有管了卻連檔名都沒提到的(提醒,不擋)")
++    if _nhl is not None:
++        if not _nhl["regen_no_home"]:
++            ok("沒有蓋了「從程式重建」章、卻一支檔都不管又沒寫負責範圍的節點")
++        else:
++            warn_soft([r[:-3] for r in _nhl["regen_no_home"]],
++                      f"有 {len(_nhl['regen_no_home'])} 篇是從程式重建出來的,卻一支檔都沒管、也沒寫負責範圍(舊帳;新蓋章的由提交前檢查擋):",
++                      "把它管的檔寫上去:lumos append <節點> about_code <檔>;真的不管檔就寫明為什麼:lumos set <節點> responsibility \"…\"")
++        if not _nhl["unmentioned"]:
++            ok("沒有節點管了某支檔、摘要和正文卻連檔名都沒提到")
++        else:
++            warn_soft([f"{r[:-3]} ← {f}" for r, f in _nhl["unmentioned"]],
++                      f"有 {len(_nhl['unmentioned'])} 對「管了這支檔、卻連檔名都沒提到」——改那支檔時會把這篇推到看的人眼前,推錯篇比沒推更花時間:",
++                      "在那篇寫一句它負責這支檔的什麼;或改掛到真的在講它的那篇:lumos remove <節點> about_code <檔>")
++        for _r in _nhl["regen_no_home"]:
++            gov_events.append({"gate": "check-s11", "kind": "warned", "hard": False, "nodes": [Path(_r).stem]})
++        for _r, _f in _nhl["unmentioned"]:
++            gov_events.append({"gate": "check-s11", "kind": "warned", "hard": False, "nodes": [Path(_r).stem]})
++    print()
++
+     section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
+     if not ci:
+         print("  (僅 --ci 模式掃 diff;互動模式略過)")
+     else:
+         hint_hits = _scan_diff_for_irreversible_hints(str(env.vault))
+         if not hint_hits:
+             ok("這次改動沒碰到疑似做了就回不去的操作")
+         else:
+             warn_soft(
+                 hint_hits,
+@@ -4709,21 +4729,23 @@ def cmd_signoff(env, node, note, by=None):
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "check-s2", "check-s3", "check-s4",
+                 # 2026-09-10 節點範圍與索引守衛:條款測試名懸空 / 索引漏列 / 合約多到讀不完
+                 "check-s5", "check-s6", "check-s7", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
+                 "daily-wrapper", "ledger-growth",
+                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
+                 "anchor", "pitfalls",
+                 # 2026-09-11 每支檔有家:提交前/推送前的檢查、健檢三段(沒家的檔/寫了別人的檔名/管太多沒寫負責範圍)
+-                "nodehome-check", "check-s8", "check-s9", "check-s10")
++                "nodehome-check", "check-s8", "check-s9", "check-s10",
++                # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
++                "check-s11")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+ 
+@@ -12532,20 +12554,28 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None, code=None, respons
+     if rc_own:
+         return 2
+     print(f"✓ new {ntype}: 骨架建好了 {path.relative_to(env.vault)}")
+     # 圖譜入口栓 B 告知段(建檔完成後印——事故裡貴的不是建檔,是之後燒掉的審查輪;spec EL-7/EL-12)
+     try:
+         for _r, _stem, _rel in sorted(_el_near_sibs, reverse=True)[:3]:
+             print(f"  ★近名節點已存在:{_stem}({_el_node_meta(env, _rel)[0] or '?'}/決策 {_el_node_meta(env, _rel)[1]} 條)"
+                   "——若同主題,先讀它再繼續;重複開案的成本在後頭★")
+     except Exception:
+         pass
++    # [S13] 開了 Systems 節點卻沒說它管哪幾支檔:家從此是推筆記的入口,不管檔的節點永遠推不出來。
++    # 不擋——真的有「主題篇」這種東西;但它該在負責範圍裡講明為什麼。
++    if ntype == "system" and not code_rels:
++        print("  提醒:這篇沒說它管哪幾支檔(about_code 是空的)。不管任何程式檔的節點通常是「主題」不是「模組」"
++              "——改那些檔的時候,工具推不出這篇。")
++        print("    lumos append <節點> about_code <檔>")
++        print("  真的是主題篇,就在負責範圍裡講明它為什麼不管檔:")
++        print("    lumos set <節點> responsibility \"<為什麼不管檔、它負責什麼>\"")
+     for line in NEW_HINT.get(ntype, []):
+         print(f"  {line}")
+     print(f"  內容填完先檢查這一篇,再跑全圖健檢:\n    lumos lint {name}\n    lumos doctor\n  (寫法規範在 lumos-project-notes skill)")
+     return 0
+ 
+ 
+ # ═══════════════════════ 階段三: archive(lumos 自做,單遍) ═══════════════════════
+ 
+ ARCHIVABLE = {"pass", "done", "superseded"}
+ 
+@@ -17999,20 +18029,22 @@ def _nodehome_parse_note(raw):
+         try:
+             dec = json.dumps(parse_decisions(fm_lines), ensure_ascii=False, sort_keys=True)
+         except Exception:
+             dec = "\n".join(l.rstrip() for l in fm_lines if l.startswith(("decisions:", "  ")))
+     summ = fields.get("summary")
+     summ = summ if isinstance(summ, str) else ""
+     return {"type": str(fields.get("type", "")).strip(),
+             "status": str(fields.get("status", "")).strip(),
+             "about": [str(x) for x in as_list(fields.get("about_code")) if str(x).strip()],
+             "resp": fields.get("responsibility") if isinstance(fields.get("responsibility"), str) else None,
++            # [S11] 從程式重建的章:蓋了章就代表這篇是還原出來的,那它更要說清楚自己管哪些檔
++            "regen": fields.get("regen").strip() if isinstance(fields.get("regen"), str) else "",
+             "sig": ("\n".join(l.rstrip() for l in summ.splitlines()).strip(), dec,
+                     "\n".join(l.rstrip() for l in body.splitlines()).strip()),
+             "text": text}
+ 
+ 
+ def _nodehome_side(repo_root, where, vault_rel, share=None, changed=None):
+     """[S38] 建一邊的快照。share=另一邊已建好的快照、changed=兩邊之間有變動的路徑:沒變動的節點直接用 share 的解析結果
+     (推送前的起點那一側只讀這段範圍裡有變動的節點——不然每一篇都要 git show 一次,65 篇就要 2 秒以上)。"""
+     lst = _nodehome_list(repo_root, where)
+     if lst is None:
+@@ -18070,34 +18102,41 @@ def _nodehome_required(repo_root, side, cfg, vendored_skip):
+     return req, bad_names
+ 
+ 
+ def _nodehome_key(value):
+     """about_code 一項的比對鍵(字面):路徑正規化+NFC。★不讀磁碟★——比對的是被檢查那個版本裡的樣子,
+     推送一個不是目前 checkout 的分支時,磁碟上的拼法跟那個提交對不上(第二輪邊界席實跑重現的誤擋)。
+     about_code 寫入時已經照磁碟校正過(解連結、大小寫、Unicode 寫法;_about_code_path),所以字面比就夠。"""
+     return nfc(_posix_norm(strip_quotes(str(value).strip())))
+ 
+ 
+-def _nodehome_homes(repo_root, side):
+-    """[S2] {檔: [家那幾篇]}。只看 about_code 欄位值、不看預標指紋有沒有過期(指紋在每次寫回都會過期)。
+-    回 (homes, 每篇自己的檔集合)。"""
++def _home_map_from_notes(items):
++    """★家對照表的唯一算法★(推筆記認家 [S1]):輸入 (節點名, type, status, about_code 清單) 的序列,
++    回 ({檔: [家那幾篇]}, {節點名: 自己管的檔集合})。只看 about_code 欄位值、不看預標指紋有沒有過期
++    (指紋在每次寫回都會過期)。每支檔有家從提交快照餵、改檔前推筆記從已載入的圖譜餵,★兩邊共用這一支★——
++    兩套算法一定分岔,而分岔時沒有東西會翻紅。"""
+     homes, own = {}, {}
+-    for rel, n in side.notes.items():
+-        keys = {k for k in (_nodehome_key(v) for v in n["about"]) if k}
++    for rel, typ, status, about in items:
++        keys = {k for k in (_nodehome_key(v) for v in about) if k}
+         own[rel] = keys
+-        if n["type"] != "system" or n["status"] not in _NODEHOME_HOME_STATUSES:
++        if typ != "system" or status not in _NODEHOME_HOME_STATUSES:
+             continue
+         for k in keys:
+             homes.setdefault(k, []).append(rel)
+     return homes, own
+ 
+ 
++def _nodehome_homes(repo_root, side):
++    """[S2] {檔: [家那幾篇]}——每支檔有家這邊:拿提交快照的解析結果餵 _home_map_from_notes。"""
++    return _home_map_from_notes((rel, n["type"], n["status"], n["about"]) for rel, n in side.notes.items())
++
++
+ def _nodehome_refs(text, side, req):
+     """[S7][S8] 這篇用反引號寫到哪幾支需要家的檔:抽取跟改檔前推筆記同一支(完整路徑+在受版控檔裡唯一的裸檔名)。
+     裸檔名不唯一時推筆記那支不認它,這裡也不認——不構成「別人檔的入口」,就不算認領。"""
+     top_dirs = _nodehome_top_dirs(side.all_paths)
+     full, bare = _node_code_ref_tokens(text, top_dirs)
+     refs = {nfc(t) for t, _l in full if nfc(t) in req}
+     if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):
+         counts, where = {}, {}
+         for p in side.all_paths:
+             b = p.rsplit("/", 1)[-1]
+@@ -18308,27 +18347,36 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel,
+         # [S9] 規則二:這篇之後比之前多出來的別人的檔(新節點=全部都算新)
+         foreign_now = refs_now(rel) - ownN.get(rel, set())
+         foreign_before = (_nodehome_refs(b["text"], B, reqB) - ownB.get(src_rel, set())) if b else set()
+         for f in sorted(foreign_now - foreign_before):
+             blocks.append(("foreign", (rel, f, homesN.get(f, []))))
+             pairs.append((f, rel))
+         # [S17] 新開的、或這次才成為現況(planned/deferred 之類升成 doing/done/stale)的沒寫負責範圍;
+         # [S18] 舊篇管的檔變多、超過上限、沒寫(只數還存在的檔)
+         cnt_now = len({k for k in ownN.get(rel, set()) if k in N.files})
+         becomes_home = n["status"] in _NODEHOME_HOME_STATUSES and (b is None or b["status"] not in _NODEHOME_HOME_STATUSES)
++        resp_missing = False
+         if b is None or becomes_home:
+             if not _nodehome_resp_ok(n["resp"]):
+                 blocks.append(("new-node-resp", (rel, cnt_now)))
++                resp_missing = True
+         else:
+             cnt_before = len({k for k in ownB.get(src_rel, set()) if k in B.files})
+             if cnt_now > cnt_before and cnt_now > cfg["max_files"] and not _nodehome_resp_ok(n["resp"]):
+                 blocks.append(("over-limit-resp", (rel, cnt_now)))
++        # [S11] 這次新蓋「從程式重建」章、卻一支檔都不管的節點:還原節點是圖譜重生的起點,
++        # 一開始就沒說自己管哪些檔,之後每一次寫回都不知道該落哪篇。
++        # 放行的唯一寫法是「這次一起寫一句負責範圍,講明它為什麼不管檔」——沿用舊文字不算交代。
++        if n["regen"] and not (b and b.get("regen")) and cnt_now == 0 and not resp_missing:
++            _resp_rewritten = b is None or (n["resp"] or "") != (b["resp"] or "")
++            if not (_nodehome_resp_ok(n["resp"]) and _resp_rewritten):
++                blocks.append(("regen-no-home", rel))
+     # [S9] 新增的檔喚醒了沒改的節點裡原本就寫著的檔名:那篇沒改,但它從這次起就是別人檔的入口(第二輪外家席)
+     if code_added:
+         for rel in sorted(N.notes):
+             if rel in edited or N.notes[rel]["type"] != "system":
+                 continue
+             for f in sorted((refs_now(rel) & code_added) - ownN.get(rel, set())):
+                 blocks.append(("foreign-awakened", (rel, f, homesN.get(f, []))))
+                 pairs.append((f, rel))
+     # [S3][S34] 新增的程式檔之後沒有家
+     for f in sorted(code_added):
+@@ -18390,20 +18438,37 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel,
+                 pairs.extend((f, rel) for rel in sorted(wb_notes))
+             else:
+                 reminders.append(("legacy-homeless", f))    # [S5] 沒寫回:只提醒
+         # [S15] 「該動哪篇」照家算
+         many = int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
+         for f in sorted(code_changed):
+             hs = homesN.get(f) or []
+             if not hs or any(h in cc for h in hs):
+                 continue
+             reminders.append(("nudge-many" if len(hs) > many else "nudge", (f, hs)))
++    # [S15] 這次新掛進某篇 about_code 的檔,那篇的摘要與正文卻連檔名都沒提到 → 提醒(不擋)。
++    # 家從此一定推(推筆記認家),隨手塞一支檔進去就等於把無關的篇推到別人眼前;寫入當下講一句最便宜。
++    # 只看得出「連檔名都沒寫」這一型;「順帶提到、其實不是在講它」要靠抽查([S14])。
++    for rel in sorted(ownN):
++        if (vpre + rel) not in changed_new:
++            continue
++        gained = ownN[rel] - ownB.get(route_src.get(rel, rel), set())
++        if not gained:
++            continue
++        note = N.notes.get(rel)
++        if note is None:
++            continue
++        scan = _home_scan_text(note["text"])      # 摘要+正文;about_code 欄位不能當自己的證據
++        for f in sorted(gained):
++            base = f.rsplit("/", 1)[-1]
++            if base and base not in scan:
++                reminders.append(("home-unmentioned", (rel, f)))
+     for f in sorted(bad_names & changed_new):
+         reminders.append(("bad-name", f))
+     return {"blocks": blocks, "reminders": reminders, "pairs": pairs}
+ 
+ 
+ def _nodehome_candidates(f, homes, side):
+     """[S6] 候選家:同資料夾其他檔的家、正文用反引號提到它的節點。"""
+     d = f.rsplit("/", 1)[0] if "/" in f else ""
+     cand = []
+     for g, hs in sorted(homes.items()):
+@@ -18482,20 +18547,33 @@ def _nodehome_render(res, homes, side, cfg, mode_word):
+                          + (f",它的家是 {'、'.join(stem(h) for h in hs)}——改寫成節點連結 [[{stem(hs[0])}]]" if hs else ",這支檔還沒有家——先照上面替它安家,再用連結指過去"))
+                 continue
+             # 被喚醒的:那篇這次沒改,同一個提交裡改它又會因為「不是這次改動檔的家」被寫回落點擋——只能另開提交(代碼審 r1 正確性席)
+             L.append(f"  {stem(rel)} 寫了 `{f}`(這篇沒改,是這次新增的檔讓它原本寫的檔名變成別人的檔)"
+                      + (f",它的家是 {'、'.join(stem(h) for h in hs)}" if hs else ""))
+             L.append("    這篇要另開一個提交先改(同一個提交裡改它,會因為它不是這次改動檔的家而被擋;只改筆記、沒動程式的提交不查這條):")
+             L.append("      那篇原本就在講這支檔 → " + (f"改寫成節點連結 [[{stem(hs[0])}]]" if hs else "先替這支檔安家,再用連結指過去"))
+             L.append("      只是剛好同名(那篇講的不是這支檔)→ 把那個檔名改寫掉:寫出它原本指的完整路徑,或拿掉反引號")
+         if len(foreign) > cap:
+             L.append(f"  還有 {len(foreign) - cap} 處沒列")
++    regen_nh = by.get("regen-no-home", [])
++    if regen_nh:
++        L.append("")
++        L.append(f"■ 這幾篇這次蓋了「從程式重建」的章,卻一支檔都沒管({len(regen_nh)} 篇)——"
++                 "還原出來的節點是圖譜重生的起點,它沒說自己管哪些檔,之後每次寫回都不知道該落哪篇:")
++        for rel in regen_nh[:cap]:
++            L.append(f"  {stem(rel)}")
++        if len(regen_nh) > cap:
++            L.append(f"  還有 {len(regen_nh) - cap} 篇沒列")
++        L.append("  兩條路——把它管的檔寫上去(每支一行):")
++        L.append("    lumos append <節點> about_code <檔>")
++        L.append("  或它真的不管檔(整理跨模組脈絡的主題篇),這次一起寫一句話講明為什麼:")
++        L.append("    lumos set <節點> responsibility \"<為什麼不管檔、它負責什麼>\"")
+     resp = by.get("new-node-resp", []) + by.get("over-limit-resp", [])
+     if resp:
+         L.append("")
+         L.append(f"■ 這幾篇要先寫一句負責範圍({len(resp)} 篇)——新開的一律要;舊篇管的檔超過 {cfg['max_files']} 支也要:")
+         for rel, cnt in resp[:cap]:
+             L.append(f"  {stem(rel)}(管 {cnt} 支檔)")
+         L.append("  一句話講這篇負責什麼、不負責什麼(至少 10 個字):")
+         L.append("    lumos set <節點> responsibility \"<負責什麼、不負責什麼>\"")
+     if B:
+         L.append("")
+@@ -18504,20 +18582,25 @@ def _nodehome_render(res, homes, side, cfg, mode_word):
+     rk = {}
+     for kind, item in R:
+         rk.setdefault(kind, []).append(item)
+     if rk.get("legacy-homeless"):
+         fs = rk["legacy-homeless"]
+         L.append(f"提醒:這次改到 {len(fs)} 支還沒有家的舊檔(這次沒寫說明,所以只提醒):{'、'.join(fs[:cap])}{' …' if len(fs) > cap else ''}——下次要往圖譜寫它的說明時,要先替它安家。")
+     for f, hs in rk.get("nudge", [])[:cap]:
+         L.append(f"提醒:{f} 改了,它的家 {'、'.join(stem(h) for h in hs)} 這次沒動——行為有變的話說明要寫進去。")
+     for f, hs in rk.get("nudge-many", [])[:cap]:
+         L.append(f"提醒:{f} 改了,它有 {len(hs)} 個家、這次一篇都沒動——行為有變的話,說明寫進真的在講這次改動的那一篇(一支檔掛這麼多家,通常代表歸屬該整理)。")
++    for rel, f in rk.get("home-unmentioned", [])[:cap]:
++        L.append(f"提醒:{stem(rel)} 這次多管了 {f},可是它的摘要和正文連這個檔名都沒提到——"
++                 f"改這支檔的時候會把這篇推到看的人眼前,推錯篇比沒推更花時間。")
++        L.append(f"  在那篇寫一句它負責 {f} 的什麼;或改掛到真的在講它的那篇:")
++        L.append(f"    lumos remove {stem(rel)} about_code {f}")
+     for f in rk.get("bad-name", [])[:cap]:
+         L.append(f"提醒:{_nodehome_show(f)} 的檔名不是 UTF-8,圖譜寫不進它的路徑——建議改名,或加進 .lumos/config.json 的 node_home.ignore。")
+     return L
+ 
+ 
+ def _nodehome_ledger(repo_root, vault):
+     """[S28][S29][S39] 健檢三段的母體與判定——跟 home check 共用同一套函式(需要家的檔、家、別人的檔)。
+     讀提交索引那一份(跟磁碟一樣的直接讀磁碟)。三段都分「守衛上線後才出現的」(該被擋卻進來了)與「上線前就在的」舊帳。
+     回 dict,或 None(不是 git 專案/讀不到)。"""
+     root = Path(repo_root)
+@@ -18542,42 +18625,53 @@ def _nodehome_ledger(repo_root, vault):
+             raw = _nodehome_git(root, *args)
+             if raw:
+                 after |= {nfc(x) for x in _nodehome_split_z(raw)}
+         # 上線點那一刻的圖譜(沒變動的節點跟現在共用,只讀有變的)——拿來分「別人的檔」「管太多」兩段的舊帳與繞過
+         ch = _nodehome_git(root, "diff", "--cached", "--name-only", "-z", "--no-renames", gl)
+         G = _nodehome_side(root, gl, vault_rel, share=side,
+                            changed={nfc(x) for x in _nodehome_split_z(ch)} if ch is not None else None)
+     reqG = _nodehome_required(root, G, cfg, skip)[0] if G is not None else set()
+     ownG = _nodehome_homes(root, G)[1] if G is not None else {}
+     foreign, foreign_new, over, over_new = {}, {}, [], []
++    regen_no_home, unmentioned = [], []      # [S11] 蓋了重建章卻不管檔的舊帳;[S15] 管了某支檔卻連檔名都沒提
+     for rel, n in sorted(side.notes.items()):
+         if n["type"] != "system":
+             continue
++        if n["status"] in _NODEHOME_HOME_STATUSES:
++            _mine = sorted(k for k in own.get(rel, set()) if k in side.files)
++            if n["regen"] and not _mine and not _nodehome_resp_ok(n["resp"]):
++                regen_no_home.append(rel)
++            _scan = _home_scan_text(n["text"])
++            for _f in _mine:
++                _b = _f.rsplit("/", 1)[-1]
++                if _b and _b not in _scan:
++                    unmentioned.append((rel, _f))
+         f = sorted(_nodehome_refs(n["text"], side, req) - own.get(rel, set()))
+         if f:
+             then = set()
+             if G is not None and rel in G.notes:
+                 then = _nodehome_refs(G.notes[rel]["text"], G, reqG) - ownG.get(rel, set())
+             newer = [x for x in f if G is not None and x not in then]
+             if newer:
+                 foreign_new[rel] = newer
+             older = [x for x in f if x not in newer]
+             if older:
+                 foreign[rel] = older
+         cnt = len({k for k in own.get(rel, set()) if k in side.files})
+         if n["status"] in _NODEHOME_HOME_STATUSES and cnt > cfg["max_files"] and not _nodehome_resp_ok(n["resp"]):
+             g = G.notes.get(rel) if G is not None else None
+             was_over = g is not None and g["status"] in _NODEHOME_HOME_STATUSES and not _nodehome_resp_ok(g["resp"]) \
+                 and len({k for k in ownG.get(rel, set()) if k in G.files}) > cfg["max_files"]
+             (over if (G is None or was_over) else over_new).append((rel, cnt))
+     return {"cfg": cfg, "bypassed": [f for f in homeless if f in after], "legacy": [f for f in homeless if f not in after],
+             "foreign": foreign, "foreign_new": foreign_new, "over": over, "over_new": over_new,
++            "regen_no_home": regen_no_home, "unmentioned": unmentioned,
+             "bad_names": sorted(_nodehome_show(x) for x in bad), "golive": gl}
+ 
+ 
+ def cmd_home_check(repo=None, staged=False, diff_range=None):
+     """lumos home check --staged | --diff A..B [S24]:有新違規 rc1,沒有 rc0;沒有圖譜/合併中/開關 off 說一句跳過、rc0。
+     git 跑不起來=fail-open(說一句、rc0):這道閘只擋「確定是新違規」的,不因為環境壞了擋人。
+     ★設定、工具自裝檔、圖譜位置都從被檢查的那個版本讀★(提交前=提交索引、推送前=終點那個提交),不讀工作目錄。"""
+     root = Path(repo).resolve() if repo else None
+     if root is None:
+         r = _lens_git(".", "rev-parse", "--show-toplevel")
+@@ -19598,23 +19692,23 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+         # ★為什麼只印字不真的跑 impact★:實測 pitfalls 0.18s / impact 4.7s,而本函式
+         # ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98)——掛上去等於每次
+         # push 慢 26 倍。提示零成本,真跑由人決定。
+         # ★只在人可讀輸出印★:as_json 分支不動(pre-push 的 verdict 走 --json,不受影響;
+         # 混進 JSON 會讓解析端壞掉)。
+         # ★誠實天花板★:這只是提醒,擋不住任何東西——忘了照樣跑得完全程。真正的閘
+         # (收據+判定式)屬守衛面、須先過完整 design-loop,本次刻意不做(人裁 A 案)。
+         # 2026-08-30 措辭升級(Projects/code席爆炸半徑供糧_計劃 裁定存活的唯一交付):
+         # 舊句只指到「跑指令」,沒接上 d8 的下一步「貼進派工詞」——28 份 code 派工單 0 份帶
+         # 爆炸半徑節點、內容級盤點 code 席 0 真使用,指路牌斷在最後一里。改文字不改工具。
+-        print("派審查員之前,先看這次改動牽連到哪些筆記(帶硬合約或出過事故的一定要看):")
++        print("派審查員之前,先看這次改動牽連到哪些筆記(出過事故、帶硬合約,或是改到的檔的家,一定要看):")
+         print(f"    lumos impact --diff {diff_range}")
+-        print("  跑完不是看過就好:把固定席(帶合約/事故的那幾篇)的內容逐條貼進每一席的派工詞"
++        print("  跑完不是看過就好:把固定席(出過事故、帶合約,或是改到的檔的家,那幾篇)的內容逐條貼進每一席的派工詞"
+               "(貼內容不貼路徑;code-loop skill 步驟 2)——2026-08-30 盤點時 28 份 code 派工單 0 份做過這步,審查席因此判不了爆炸半徑")
+     return 0
+ 
+ 
+ def _pitfall_strip_spec(md_text):
+     """spec 模式剝除:## 切分→黑名單剝樣板節(前提節保留)→防呆回退→剝 inline-code/檔名。
+     對齊 difficulty.assess_spec 慣例、獨立實作(同 refcheck 對 Check P 不共用)。"""
+     parts = re.split(r"(?m)^(## .*)$", md_text)
+     kept = [parts[0]] if parts and parts[0].strip() else []
+     n_sections = 0
+@@ -21031,20 +21125,40 @@ def git_last_change_dates(repo_root, vault):
+                     rel = line[len(prefix):]
+                     if rel not in out:          # log 是新→舊,第一次看到就是最新
+                         out[rel] = cur
+     except (OSError, subprocess.SubprocessError):
+         out = {}
+     _GIT_DATES_CACHE[key] = out
+     return out
+ 
+ 
+ _BASENAME_COUNTS_CACHE = {}   # repo_root → {basename: count}(行程內;--diff 多檔免重跑 ls-files)
++_REPO_FILES_CACHE = {}        # repo_root → [受版控路徑](行程內;反引號那條路與家的確認共用同一份,不各跑一次 ls-files)
++
++
++def _impact_repo_files(repo_root):
++    """這個 repo 的受版控檔清單(tracked-only:untracked/ignored 混進來會把裸檔名唯一性誤判)。
++    ★一個行程只問一次 git★——反引號入口的裸檔名唯一性與「確認過的家」的頂層資料夾/唯一性共用這一份。
++    git 缺席就回空清單(degrade:裸檔名那條靜默停用,完整路徑那條不受影響)。"""
++    import subprocess
++    key = str(repo_root)
++    if key not in _REPO_FILES_CACHE:
++        out = []
++        try:
++            r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
++                               capture_output=True, text=True, errors="replace", timeout=10)
++            if r.returncode == 0:
++                out = [ln for ln in r.stdout.splitlines() if ln.strip()]
++        except (OSError, subprocess.SubprocessError):
++            out = []
++        _REPO_FILES_CACHE[key] = out
++    return _REPO_FILES_CACHE[key]
+ 
+ 
+ def _impact_reverse_lookup(rel_code_path, env, repo_root):
+     """給一支 code 路徑,反查「哪些圖譜節點的 body inline-code 引用了它」。
+ 
+     設計要點(Task 2):
+     - 只掃 body inline-code,絕不掃 core_refs(r7-F2)。
+     - 複用 _refcheck_scan(text, repo_root) 抽取 body inline-code 路徑;
+       Note 不存 body → 重讀盤每個 .md 餵它(r1-F1)。
+     - 路徑規範化(r3-F5):輸入若為絕對路徑先轉 repo-relative 再比對。
+@@ -21072,30 +21186,23 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
+         rp = os.path.relpath(rp, str(repo_root))
+ 
+     # R2:裸檔名比對的前置——目標檔 basename 在 tracked 母體唯一才啟用
+     base_ok = False
+     base = Path(rp).name
+     if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):   # 2026-08-07 考卷轉正預設 1(knob=0 留逃生)
+         key = str(repo_root)
+         counts = _BASENAME_COUNTS_CACHE.get(key)
+         if counts is None:
+             counts = {}
+-            try:
+-                r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
+-                                   capture_output=True, text=True, errors="replace", timeout=10)
+-                if r.returncode == 0:
+-                    for ln in r.stdout.splitlines():
+-                        if ln.strip():
+-                            b = Path(ln).name
+-                            counts[b] = counts.get(b, 0) + 1
+-            except (OSError, subprocess.SubprocessError):
+-                counts = {}   # git 缺席=degrade(空表=永不唯一)
++            for ln in _impact_repo_files(repo_root):   # git 缺席=degrade(空表=永不唯一)
++                b = Path(ln).name
++                counts[b] = counts.get(b, 0) + 1
+             _BASENAME_COUNTS_CACHE[key] = counts
+         base_ok = counts.get(base, 0) == 1
+ 
+     hits = []
+     for node_rel, note in env.notes.items():
+         # 重讀盤:Note 不存 body,直接讀原始 .md 文字
+         md_path = env.vault / node_rel
+         try:
+             text = md_path.read_text(encoding="utf-8-sig", errors="replace")
+         except OSError:
+@@ -21344,23 +21451,150 @@ def _impact_about_counts(env):
+     counts = {}
+     for n in env.notes.values():
+         for f in as_list(n.fields.get("about_code")):
+             f = _posix_norm(f)
+             if f:
+                 counts[f] = counts.get(f, 0) + 1
+     _ABOUT_COUNTS_CACHE[key] = counts
+     return counts
+ 
+ 
++_HOME_MAP_CACHE = {}   # str(vault) → (家對照表, 每篇自己的檔);行程內,同 _ABOUT_COUNTS_CACHE 的鍵
++
++
++def _impact_home_map(env):
++    """[S1] 改檔前推筆記這邊的家對照表:從已經載入的圖譜餵同一支純函式(★不讀 git、不開子行程★——
++    這支 hook 是 30 秒外層逾時的熱路徑),同一個圖譜一個行程只算一次。"""
++    key = str(env.vault)
++    if key not in _HOME_MAP_CACHE:
++        _HOME_MAP_CACHE[key] = _home_map_from_notes(
++            (rel, str(n.fields.get("type", "")).strip(), str(n.fields.get("status", "")).strip(),
++             as_list(n.fields.get("about_code")))
++            for rel, n in env.notes.items())
++    return _HOME_MAP_CACHE[key]
++
++
++_PATH_IN_TEXT_RE = re.compile(r"[A-Za-z0-9_.@+\-]+(?:/[A-Za-z0-9_.@+\-]+)+")
++
++
++def _node_code_ref_tokens_all(text, top_dirs):
++    """[S2] 同一支抽取的「掃全文」模式:反引號那組照 _node_code_ref_tokens 抽(共用同一套 token 規則與
++    頂層目錄判定),另外在全文找「頂層資料夾開頭的完整路徑」。★裸 token 只從反引號那組來★——沒有副檔名的
++    程式檔,檔名就是普通詞(本工具鏈 65 篇 Systems 有 62 篇正文出現裸字 lumos),全文放寬會讓分兩級失效。
++    回傳形狀同 _node_code_ref_tokens(full 是兩者聯集)。"""
++    full, bare = _node_code_ref_tokens(text, top_dirs)
++    seen = {t for t, _l in full}
++    for mt in _PATH_IN_TEXT_RE.finditer(_strip_fences_text(text)):
++        tok = mt.group(0).rstrip(".,;:)]}」』、。")
++        if "/" in tok and tok.split("/")[0] in top_dirs and tok not in seen:
++            seen.add(tok)
++            full.append((tok, ""))
++    return full, bare
++
++
++def _home_scan_text(text):
++    """[S2] 判「確認」只看摘要與正文——about_code 欄位宣告的就是這支檔,拿它當證據等於自己證明自己。"""
++    fm, body = split_frontmatter(text)
++    summ = ""
++    if fm is not None:
++        try:
++            fields, _bk, _lint = parse_frontmatter(fm)
++            v = fields.get("summary")
++            summ = v if isinstance(v, str) else ""
++        except Exception:
++            summ = ""
++    return summ + "\n" + body
++
++
++def _home_confirmed(text, path, top_dirs, all_paths):
++    """[S2] 這篇算不算這支檔「確認過的家」:摘要或正文寫出完整路徑,或反引號裡寫出在受版控檔裡唯一的裸檔名。
++    沒確認的家不保送、不加分——about_code 的品質沒有機械保證,分兩級讓填錯的家大多落在不保送那一級。"""
++    full, bare = _node_code_ref_tokens_all(_home_scan_text(text), top_dirs)
++    if nfc(_posix_norm(path)) in {nfc(t) for t, _l in full}:
++        return True
++    base = path.rsplit("/", 1)[-1]
++    if base not in bare:
++        return False
++    return sum(1 for p in all_paths if p.rsplit("/", 1)[-1] == base) == 1
++
++
++def _impact_confirmed_homes(env, rel_file, repo_root):
++    """★這支檔「確認過的家」有哪幾篇★(推筆記認家 [S1][S2][S4];有排序、沒排序兩條路共用同一個答案)。
++
++    回 (節點清單, 是不是大檔)。大檔=家 ≥ LUMOS_IMPACT_ABOUT_MAX:那時「家」沒有鑑別力,
++    呼叫端只加標記、不當入口。沒確認的家不列(摘要或正文要寫出完整路徑,或反引號裡寫唯一的裸檔名)。
++    """
++    homes, _own = _impact_home_map(env)
++    mine = homes.get(_nodehome_key(rel_file), [])
++    if not mine:
++        return [], False
++    big = len(mine) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
++    all_paths = _impact_repo_files(repo_root)
++    tops = _nodehome_top_dirs(all_paths)
++    target = _nodehome_key(rel_file)
++    out = []
++    for node in mine:
++        if env.notes.get(node) is None:
++            continue
++        try:
++            text = (env.vault / node).read_text(encoding="utf-8-sig")
++        except OSError:
++            continue
++        if _home_confirmed(text, target, tops, all_paths):
++            out.append(node)
++    return out, big
++
++
++def _impact_mark_home(env, results, lane_raw, rel_file, repo_root):
++    """★推筆記認家 [S2]–[S5]★:目標檔的「確認過的家」一定進必推名單,沒確認的家什麼都不做。
++
++    - 確認過的家(_home_confirmed):那篇的摘要或正文寫出完整路徑,或反引號裡寫出唯一的裸檔名。
++    - 已經是候選的 → 原項加 home 標記、改成必推(種類與分數照舊);被分到參考道的 → 搬進必推名單、
++      從參考道拿掉(同一篇只出現一次);還不是候選的 → 新增一項,種類 home、分數 0(必推不看分數決定去留)。
++    - 大檔(家 ≥ LUMOS_IMPACT_ABOUT_MAX)整批不當入口:只在已經是候選的確認家上加標記,不新增也不升級
++      ——巨檔上「家」沒有鑑別力(本工具鏈主程式 31 個家),舊案 held 那題 22 誤放全出自改主程式。
++    - ★只加不降★:既有必推項不因為不是家而被降,自由席的節點也不會因此被踢掉。
++    """
++    mine, big = _impact_confirmed_homes(env, rel_file, repo_root)
++    if not mine:
++        return
++    by_node = {r["node"]: r for r in results}
++    lane_by = {r["node"]: r for r in lane_raw}
++    for node in mine:
++        cur = by_node.get(node)
++        if cur is not None:
++            cur["home"] = True
++            cur.setdefault("home_of", []).append(rel_file)
++            if not big:
++                cur["pinned"] = True
++            continue
++        lane = lane_by.get(node)
++        if lane is not None and not big:
++            lane_raw.remove(lane)                      # 參考道裡的家搬進必推,同一篇只出現一次
++            lane.pop("lane", None)
++            lane["pinned"], lane["home"] = True, True
++            lane["home_of"] = [rel_file]
++            results.append(lane)
++            by_node[node] = lane
++            continue
++        if not big:
++            r = {"node": node, "kind": "home", "pinned": True, "home": True,
++                 "home_of": [rel_file], "score": 0.0}
++            results.append(r)
++            by_node[node] = r
++
++
+ def _impact_mark_about(env, results, rel_file):
+     """★about_code 只加分不降級★:對已進候選集的 results 項,about_code 含目標檔且 stamp 未過期 → 加 `about_hit: True`
+     (只在 True 時出鍵;★不覆寫既有 hit 欄★;不改任何 pinned 判定——about 不是第四條入口)。
++    ★這是舊制,只在 LUMOS_IMPACT_HOME=0 時才走★:旋鈕預設開著,走的是 _impact_mark_home
++    ——確認過的家會直接進必推名單(推筆記認家 [S2][S9] 翻了這條「不是第四條入口」的舊裁定)。
+     總開關 LUMOS_IMPACT_ABOUT(預設 1;0=整段不跑、不讀正文);巨檔門檻 LUMOS_IMPACT_ABOUT_MAX(預設 8):
+     目標檔被 ≥N 篇 about 命中時關閉加分(巨檔上「關於」無鑑別力,held 實證 22 誤放)。
+     懶觸發:先查欄位,命中才讀該篇正文算雜湊(無 git、無子行程)。計劃:Projects/固定席扇出降權_計劃。"""
+     if int(_impact_knob("LUMOS_IMPACT_ABOUT", 1)) == 0:
+         return
+     _norm = _posix_norm   # 跟寫入側同一個路徑正規化(r3 整合席:原本只剝開頭的 ./,不解 ..)
+     target = _norm(rel_file)
+     counts = _impact_about_counts(env)
+     if counts.get(target, 0) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)):
+         return
+@@ -21730,27 +21964,37 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                                     "score": round(0.40 + 0.30, 4), "L": round(L, 4),
+                                     "hop": hop, "contract": contract})
+                     continue
+                 # hop≥2 需 L>底線(遠端節點要足夠詞彙證據背書)
+                 if hop >= 2 and L <= _impact_knob("LUMOS_IMPACT_LMIN_HOP2", 0.0):
+                     continue
+                 G = 0.60 * min(1.0, 2.0 / (2 ** hop))
+                 R = round(0.60 * L + 0.40 * G, 4)
+                 results.append({"node": x["node"], "kind": "indirect", "pinned": False,
+                                 "score": R, "L": round(L, 4), "hop": hop, "contract": contract})
+-        # about_code 語意欄位(工具清單 #4):只標記、不動 pinned;--incidents-only 快速路徑整段跳過
++        # ★家★(推筆記認家 [S2]–[S5]):旋鈕開著時走「家」這條入口,旋鈕關掉照舊走 about 標記那一套。
++        # --incidents-only 快速路徑整段跳過。
++        _home_on = int(_impact_knob("LUMOS_IMPACT_HOME", 1))
+         if not incidents_only:
+-            _impact_mark_about(env, results, rel_file)
++            if _home_on:
++                _impact_mark_home(env, results, lane_raw, rel_file, repo_root)
++            else:
++                _impact_mark_about(env, results, rel_file)   # about_code 語意欄位(工具清單 #4):只標記、不動 pinned
+         # 分固定/非固定;非固定過閾+排序+補到 top_k
+         pins = [r for r in results if r["pinned"]]
+-        # 固定席內 stable sort:事故永遠最前(std-r1 s1f10),其次 about 命中者,其餘保持三軸原序
+-        pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))
++        # 固定席內 stable sort:事故永遠最前(std-r1 s1f10),其次家(旋鈕關掉時是 about 命中者),其餘保持三軸原序;
++        # 家之間照分數高到低、同分照篇名([S3])
++        if _home_on:
++            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("home", False),
++                                     -r["score"] if r.get("home") else 0, r["node"] if r.get("home") else ""))
++        else:
++            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))
+         free = [r for r in results if not r["pinned"]]
+         max_free = max((r["score"] for r in free), default=0.0)
+         thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.65) * max_free)
+         free = [r for r in free if r["score"] >= thresh]
+         free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
+         # 名額制(v1.1):單體檔洪水按排名剪尾——閾值管品質、名額管上限(gate 對齊 top_k+2=10);
+         # 剪的是 11 名以後,不動前 8 的視野(精度/必看召回不受影響)
+         # PPR 分量(檢索PPR邊權_計劃)已試已殺(2026-07-28 edit 卷 train 網格全負:
+         # baseline nDCG@8 0.9831 vs ppr w0.2/0.4/0.6=0.9817/0.9668/0.9598,b1 純 PPR 與
+         # b2 cochange 邊權同分=邊權零貢獻;free 池中位 3 席使 P@8 對重排零鑑別,裁決依 nDCG)。
+@@ -21818,48 +22062,75 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                         _cfgq = _stack_questions_config(repo_root_for_lookup)
+                         _app, _meta = _stack_applicability({_sk: _dt.splitlines()}, _cfgq["ask_all_over_lines"])
+                         out_obj["stack_questions_applicable"] = _app
+                         out_obj["stack_questions_meta"] = _meta
+                         if _payload.get("delta_truncated"):
+                             out_obj["delta_truncated"] = True
+             print(json.dumps(out_obj, ensure_ascii=False))
+         else:
+             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
+             for r in final:
+-                mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}"}.get(r["kind"], "")
++                mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}", "home": ""}.get(r["kind"], "")
++                hm = "★家★" if r.get("home") else ""    # 推筆記認家 [S8]:這篇管這支檔
+                 ct = f" ★{r['contract']}★" if r.get("contract") else ""
+                 pin = " [固定]" if r["pinned"] else ""
+-                print(f"  {r['score']:5.2f} {mk} {r['node']}{ct}{pin}")
++                print(f"  {r['score']:5.2f} {hm}{mk} {r['node']}{ct}{pin}")
+             if meta["truncated"]:
+                 print(f"  (+{meta['truncated']} 條低分截斷;--json 全量)")
+             if not lane_items and meta.get("lane_truncated"):
+                 print(f"  (守衛面參考 {meta['lane_truncated']} 條被 LANE_N cap 全部隱藏——網格消融才會發生)")
+             if lane_items:
+                 print(f"守衛面參考(軟標記樞紐,未被本次改動直接證實相關,{len(lane_items)} 條):")
+                 for r in lane_items:
+                     print(f"  {r.get('score', 0):5.2f} hop{r.get('hop', '?')} {r.get('node', '?')}  ({r.get('contract', '')})")
+                 if meta.get("lane_truncated"):
+                     print(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
+             if meta["safety_overflow"]:
+                 print(f"  safety overflow: {meta['safety_overflow']}")
+         return 0
+ 
++    # 8.9 家(推筆記認家 [S6]):這條路沒有分數可排,家只能自己成一袋。
++    # 同一篇既是家又在直接/間接袋裡就只留在家那袋——兩邊都列,下游(派工鏡頭)會把同一篇貼兩次。
++    # 大檔照樣不當入口(家太多就沒有鑑別力),整袋留空。
++    all_homes = []
++    if int(_impact_knob("LUMOS_IMPACT_HOME", 1)):
++        _home_nodes, _home_big = _impact_confirmed_homes(env, rel_file, repo_root)
++        if not _home_big:
++            _inc = {x["node"] for x in all_incidents}
++            for _hn in _home_nodes:
++                if _hn in _inc:
++                    continue          # 事故優先,不重複列
++                _hnote = env.notes.get(_hn)
++                _hc, _hcombo = _impact_contract(_hnote) if _hnote else (None, False)
++                all_homes.append({"node": _hn, "contract": _hc, "combo": _hcombo})
++            _hset = {x["node"] for x in all_homes}
++            if _hset:
++                all_direct = [x for x in all_direct if x["node"] not in _hset]
++                all_indirect = [x for x in all_indirect if x["node"] not in _hset]
++
+     # 9. 輸出
+     if as_json:
+         print(json.dumps(
+-            {"file": rel_file, "direct": all_direct, "indirect": all_indirect,
++            {"file": rel_file,
++             **({"homes": all_homes} if all_homes else {}),
++             "direct": all_direct, "indirect": all_indirect,
+              "incidents": all_incidents},
+             ensure_ascii=False,
+         ))
+     else:
+         # 人讀輸出
+         print(f"改動 {rel_file} (由讀盤 refcheck 抽取)")
++        if all_homes:
++            print(f"── 這支檔的家 ({len(all_homes)}) ──")
++            for x in all_homes:
++                contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
++                print(f"  {x['node']}{contract_tag}")
+         print(f"── 直接關聯 ({len(all_direct)}) ──")
+         for x in all_direct:
+             contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+             combo_tag = "★COMBO★" if x.get("combo") else ""
+             tags = (contract_tag + (" " + combo_tag if combo_tag else "")).rstrip()
+             print(f"  {'⚠合約 ' if x.get('contract') else ''}{x['node']}{tags}  ({x['hit']})")
+         print(f"── 間接關聯 ({len(all_indirect)}) ──")
+         for x in all_indirect:
+             cross = " [跨repo葉,不展開]" if x.get("cross_repo") else ""
+             print(f"  hop{x['hop']}  {x['node']}  {x['direction']} ← via {x['via']} ← {x['from']}{cross}")
+@@ -22018,27 +22289,42 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+             _pm["query_gated"] = True   # 觀測欄聚合轉發(r1 f5:code-loop 鏡頭可見)
+         per_file_meta.append(_pm)
+         for x in data.get("results", []):
+             cur = merged.get(x["node"])
+             if cur is None:
+                 merged[x["node"]] = {**x, "files": [f]}
+             else:
+                 if f not in cur["files"]:
+                     cur["files"].append(f)
+                 pinned = cur["pinned"] or x.get("pinned", False)
++                # ★家是「哪支檔的家」,不是「這一輪分數高不高」★(推筆記認家 [S6]):
++                # 同一篇在 A 檔是家、在 B 檔只是被提到,B 檔那筆分數較高就會整項重建——
++                # 不把這兩個欄位接住,家的標記會被自己的高分沖掉,必推名單就少一篇。
++                home = cur.get("home", False) or x.get("home", False)
++                home_of = list(cur.get("home_of", []))
++                for _hf in x.get("home_of", []):
++                    if _hf not in home_of:
++                        home_of.append(_hf)
+                 if x["score"] > cur["score"]:
+                     # 整項以勝出結果重建(避免 hop/L 舊值殘留成幽靈欄位,r1 s4 minor)
+                     merged[x["node"]] = {**x, "files": cur["files"], "pinned": pinned}
+-                else:
+-                    cur["pinned"] = pinned
++                    cur = merged[x["node"]]
++                cur["pinned"] = pinned
++                if home:
++                    cur["home"], cur["home_of"] = True, home_of
++    # 必推名單的順序=事故 → 家 → 其餘照分數(推筆記認家 [S6],跟逐檔那側同一套口徑)。
++    # 家的分數是它原本的相依分數(新增項為 0),照分數排會把「這批改動的管家」排到最後,
++    # 而派工鏡頭只把前幾篇貼內容、其餘只列名——排錯等於白認。
++    _home_on = int(_impact_knob("LUMOS_IMPACT_HOME", 1))
+     pins = sorted([v for v in merged.values() if v["pinned"]],
+-                  key=lambda v: (-v["score"], v["node"]))
++                  key=(lambda v: (v["kind"] != "incident", not v.get("home", False), -v["score"], v["node"]))
++                  if _home_on else (lambda v: (-v["score"], v["node"])))
+     free = sorted([v for v in merged.values() if not v["pinned"]],
+                   key=lambda v: (-v["score"], v["node"]))[:int(top)]
+     # 落成位置閉環(sync-check):預期受影響節點 ∩ 分支實際動過的圖譜節點——
+     # 「這功能被改了,它的節點卻沒動」= 受影響未同步清單(advisory,人判;固定席可信度高、自由席≈P@8 .70)
+     sync = None
+     if sync_check:
+         _vault_name = _vault.name if _vault is not None else None
+         touched = set()
+         if _vault_name:
+             _prefix = f"docs/{_vault_name}/"
+@@ -22057,41 +22343,42 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+                            "meta": {"files": len(files), "pinned": len(pins),
+                                     "free_kept": len(free),
+                                     "free_total": sum(1 for v in merged.values() if not v["pinned"]),
+                                     "per_file": per_file_meta}}, ensure_ascii=False))
+         return 0
+     if sync_only and sync is not None:
+         _print_sync_nudge(sync, diff_range)
+         return 0
+     print(f"受影響功能面({diff_range};{len(files)} 檔;固定席 {len(pins)}+top {len(free)}——審計鏡頭,人判):")
+     for v in pins + free:
+-        mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{v.get('hop','?')}"}.get(v["kind"], "")
++        mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{v.get('hop','?')}", "home": ""}.get(v["kind"], "")
++        hm = "★家★" if v.get("home") else ""            # 推筆記認家 [S8]:這篇管其中某幾支檔
+         ct = f" ★{v['contract']}★" if v.get("contract") else ""
+         pin = " [固定]" if v["pinned"] else ""
+-        print(f"  {v['score']:5.2f} {mk} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
++        print(f"  {v['score']:5.2f} {hm}{mk} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
+     if not merged:
+         print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
+     if sync is not None:
+         _print_sync_nudge(sync, diff_range)
+     return 0
+ 
+ 
+ def _print_sync_nudge(sync, diff_range, cap=8):
+     """落成核對的唯一呈現(2026-08-22 架構對齊席抓到三套並存後收斂成這一份):
+     固定席(合約/事故/直接相依)優先、最多 cap 篇;hooks(pre-commit/pre-push/Stop)只呼叫,不自己重排。"""
+     miss = sorted(sync["missing"], key=lambda m: (not m["pinned"], -m.get("score", 0)))
+     print(f"\n落成核對(這批動過 {len(sync['touched_nodes'])} 篇筆記):")
+     if not miss:
+         print("  ✓ 預期受影響的筆記全數已同步")
+         return
+     pinned = [m for m in miss if m["pinned"]]
+-    print(f"  提醒:下面這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這批沒動:" if pinned
++    print(f"  提醒:下面這些筆記跟改到的程式碼直接相關(家 / 合約 / 事故 / 直接相依),這批沒動:" if pinned
+           else "  提醒:下面這些筆記可能受影響,這批沒動(自由席,可信度較低,人判):")
+     for v in miss[:cap]:
+         mark = "⚠必看" if v["pinned"] else "  "
+         print(f"  {mark} {v['node']}  ←{','.join(v['files'][:2])}")
+     if len(miss) > cap:
+         print(f"  … 還有 {len(miss) - cap} 篇(lumos impact --diff {diff_range} --sync-check --json 看全部)")
+     print("  確定不受影響就略過;受影響的現在補。這裡只提醒不擋。")
+ 
+ 
+ # ── code-loop 留痕(Task 1) ────────────────────────────────────────────────────
+@@ -22107,21 +22394,32 @@ def _codeloop_git_branch(repo_root):
+ # ---------------------------------------------------------------------------
+ # dispatch-lens(Projects/派工鏡頭注入_計劃,2026-09-03):代碼審派工詞的固定席鏡頭
+ # hook 是薄殼(scripts/hooks/claude/dispatch-lens-hook.py),所有 git/合約/圖譜判斷都在這裡,
+ # 沿用既有 helper(_git_commit_exists / INVARIANT_RE 家族 / _vault_in 的排序規則)。
+ # 消毒原則(r2/r3 載荷席):來自圖譜或 diff 的自由文字零輸出——只印固定字彙、base 已追蹤路徑、
+ # base 版合約行(KEY: 行)。清單本身仍用工作樹圖譜算(d3:能藏不能說)。
+ # rc:0=成功(含 0 篇,text 空)/2=輸入或 git 壞/3=vault 缺/4=base 不在主線
+ # ---------------------------------------------------------------------------
+ _LENS_HEADER = "lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)"
+ _LENS_SHA_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+-_LENS_KIND = {"direct": "直接相依", "indirect": "間接相依", "incident": "事故"}
++_LENS_KIND = {"direct": "直接相依", "indirect": "間接相依", "incident": "事故", "home": "家"}
++
++
++def _lens_kind_of(v):
++    """派工鏡頭那一行要標什麼種類(推筆記認家 [S6][S8])。
++
++    「家」是標記不是種類:一篇本來就因為直接相依進來、又剛好是這支檔的家,它的 kind 還是 direct。
++    對讀派工單的人來說「這篇管這支檔」比「這篇有提到這支檔」重要,所以家優先顯示。
++    """
++    if v.get("home"):
++        return _LENS_KIND["home"]
++    return _LENS_KIND.get(v.get("kind"), None)
+ 
+ 
+ def _lens_range_ok(diff_range):
+     """恰好一個 `..`、兩端非空、不含 `...`、不以 - 開頭(r3 極端輸入席收緊)。"""
+     if not isinstance(diff_range, str) or diff_range.startswith("-") or "..." in diff_range:
+         return None
+     parts = diff_range.split("..")
+     if len(parts) != 2 or not parts[0] or not parts[1]:
+         return None
+     if any(ch.isspace() for ch in diff_range):
+@@ -23024,21 +23322,21 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+     vault_rel = f"docs/{slugs[0]}/"
+     listed, omitted_nodes, omitted_files = [], 0, 0
+     for v in pins:
+         node = str(v.get("node", ""))
+         rel = vault_rel + node
+         if rel not in base_tree:
+             omitted_nodes += 1
+             continue
+         files_ok = [f for f in (v.get("files") or []) if isinstance(f, str) and f in base_tree and len(f) <= 200]
+         omitted_files += len(v.get("files") or []) - len(files_ok)
+-        listed.append({"node": node, "rel": rel, "kind": _LENS_KIND.get(v.get("kind"), None),
++        listed.append({"node": node, "rel": rel, "kind": _lens_kind_of(v),
+                        "contract": _lens_contract_class(v), "files": files_ok})
+     # v1.1:綁定測試狀態——測試索引每次執行只建一次(對整 repo os.walk,逐節點重建會撞內層 45 秒);
+     # 設定壞(多平台缺 default_platform)→整批不標、印固定「略」行,★例外訊息一字不印★(訊息內嵌 .lumos/config.json 字串)
+     bound_status, _bidx = "ok", None
+     try:
+         _bidx = _platform_test_index(root)
+     except Exception:
+         bound_status = "skipped-no-config"
+     lines = []
+     fallback_status = "none"
+@@ -23198,49 +23496,56 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
+         remain = _LENS_SPEC_BUDGET - (_time.monotonic() - _t0)
+         try:   # 外家 r1 M1:預算不能只在呼叫前看——單次 impact 也可能 31 秒;子行程帶剩餘秒數 timeout
+             import subprocess as _sp
+             rr = _sp.run([sys.executable, str(Path(__file__).resolve()), "impact", "--file", f, "--repo", str(root), "--json"],
+                          capture_output=True, text=True, timeout=max(1.0, remain))
+             data = _json.loads(rr.stdout.strip().splitlines()[-1]) if rr.returncode == 0 and rr.stdout.strip() else {}
+         except Exception:
+             skipped_files.append(f); continue
+         # impact --file 的 JSON 形狀是 {direct,indirect,incidents}(不是 --diff 的 results/pinned):
+         # 固定席=直接相依全部 + 事故全部 + 帶合約的一跳間接(與 --diff 的 pinned 語意對齊)
+-        picks = [(v, "direct") for v in data.get("direct", []) if isinstance(v, dict)]
++        picks = [(v, "home") for v in data.get("homes", []) if isinstance(v, dict)]
++        picks += [(v, "direct") for v in data.get("direct", []) if isinstance(v, dict)]
+         picks += [(v, "incident") for v in data.get("incidents", []) if isinstance(v, dict)]
+         picks += [(v, "indirect") for v in data.get("indirect", []) if isinstance(v, dict) and v.get("contract") and v.get("hop", 99) <= 1]
+         # 太泛的檔(像本 repo 的 scripts/lumos 單檔 CLI、總測試檔)一個檔就牽 100+ 篇,附了等於沒附:超過上限的整檔略過並在頭部說明
+         if len(picks) > _LENS_SPEC_MAX_PER_FILE:
+             too_generic.append(f"{f}({len(picks)} 篇)"); continue
+         for v, kind in picks:
+             if not v.get("node"):
+                 continue
+             node = str(v["node"])[:-3] if str(v["node"]).endswith(".md") else str(v["node"])
+             if node.startswith("Projects/"):   # 別的計劃不是合約也不是事故,不進固定席
+                 continue
+             pinned.setdefault(node, {"kind": _LENS_KIND.get(kind), "contract": _lens_contract_class(v), "files": [f]})
+             if f not in pinned[node]["files"]:
+                 pinned[node]["files"].append(f)
+     def _rank(v):
+-        return (0 if v.get("kind") == _LENS_KIND["incident"] else 1 if v.get("contract") else 2 if v.get("kind") == _LENS_KIND["direct"] else 3)
++        # 事故 → 家 → 帶合約 → 直接相依 → 其餘(推筆記認家 [S6]);
++        # 家排前面是因為後面只有前幾篇會貼內容,排到後面等於只列個名字。
++        if v.get("kind") == _LENS_KIND["incident"]:
++            return 0
++        if v.get("kind") == _LENS_KIND["home"]:
++            return 1
++        return 2 if v.get("contract") else 3 if v.get("kind") == _LENS_KIND["direct"] else 4
+     listed = [{"node": n, **{"kind": "計劃連結", "contract": None, "files": []}, **pinned.get(n, {}), "kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")} for n in linked]   # 相容:不用 dict |(那是 3.9+,寫這行時專案宣告 ≥3.8;2026-09-06 宣告訂正為 ≥3.9,此寫法保留可用)
+     listed += [{"node": n, **v} for n, v in sorted(pinned.items(), key=lambda kv: _rank(kv[1])) if n not in linked]
+     landing = _nodehome_landing_sizes(root, vault_rel, text)   # [S22] 計劃寫的落點每一篇現在多大
+     bound_status, _bidx = "ok", None
+     try:
+         _bidx = _platform_test_index(root)
+     except Exception:
+         bound_status = "skipped-no-config"
+     lines = []
+     if code_files and not listed:
+         lines.append(_LENS_SPEC_HEADER)
+-        lines.append(f"計劃提到並找得到的程式檔:{', '.join(code_files)}——沒牽到任何帶合約/事故的節點" + (f";太泛不列:{', '.join(too_generic)}" if too_generic else "") + (f";超預算沒算:{', '.join(skipped_files)}" if skipped_files else ""))
++        lines.append(f"計劃提到並找得到的程式檔:{', '.join(code_files)}——沒牽到任何家、合約或事故的節點" + (f";太泛不列:{', '.join(too_generic)}" if too_generic else "") + (f";超預算沒算:{', '.join(skipped_files)}" if skipped_files else ""))
+         lines.extend(landing)
+     if landing and not code_files and not listed:
+         lines.append(_LENS_SPEC_HEADER)
+         lines.extend(landing)
+     if listed:
+         lines.append(_LENS_SPEC_HEADER)
+         lines.append(f"計劃提到並找得到的程式檔:{', '.join(code_files) if code_files else '(沒有)'}" + (f";超預算沒算:{', '.join(skipped_files)}" if skipped_files else "") + (f";太泛不列(一個檔牽超過 {_LENS_SPEC_MAX_PER_FILE} 篇):{', '.join(too_generic)}" if too_generic else ""))
+         for it in listed:
+             it["rel"] = vault_rel + it["node"] + ".md"
+         def _read_wt(rel):

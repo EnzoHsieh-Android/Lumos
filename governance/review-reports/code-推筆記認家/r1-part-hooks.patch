@@ -1,0 +1,77 @@
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 3b8d7bee..a2fdabee 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -756,21 +756,21 @@ def main() -> int:
+         return 0
+ 
+     # 閘門 3
+     graph_touched_via_edit = any(is_graph_file(f, graph_root) for f in file_paths)
+     if graph_touched_via_edit or touched_graph_via_cli(bash_commands):
+         # 2026-08-22(圖譜同步覆蓋):動過圖譜不等於動對篇——拿 impact 算「跟你改的碼直接相關、
+         # 帶合約或出過事故、這輪卻沒動」的筆記點名。只提醒,不擋。
+         missing = _impact_missing(src_files, file_paths, project_root, graph_root)
+         if missing:
+             print("\n".join([
+-                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(合約 / 事故 / 直接相依),還沒動:",
++                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(是它的家 / 帶合約 / 出過事故 / 直接相依),還沒動:",
+                 *[f"   • {m}" for m in missing],
+                 "確定不受影響就略過;受影響的現在補,別等到 pre-push。"]), file=sys.stderr)
+         return 0
+ 
+     # ── 印提醒 ──
+     project_root_resolved = project_root.resolve()
+     rel: list[str] = []
+     seen: set[str] = set()
+     for f in src_files:
+         try:
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 0f57c4f1..ee315b82 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -631,33 +631,38 @@ def build_ranked_context(data: dict) -> str:
+     """v1.1:把 ranked 輸出({results,meta})轉成降噪清單文字。固定席在前(合約/事故),
+     非固定帶分數;截斷數照 meta 標注。尾附棧別效能追問(若 lumos 輸出帶 stack_questions——
+     單源在 scripts/lumos 的 _STACK_PERF_QUESTIONS,本 hook 只格式化不持有內容)。"""
+     lines: list[str] = []
+     res = data.get("results", [])
+     meta = data.get("meta", {})
+     pins = [x for x in res if x.get("pinned")]
+     free = [x for x in res if not x.get("pinned") and not x.get("rescued")]
+     rescued = [x for x in res if x.get("rescued")]
+     if pins:
+-        lines.append(f"必看——這 {len(pins)} 篇帶著不能破壞的合約或出過事故:")
++        # ★家★也會進這一段(推筆記認家 [S8]):它不一定帶合約,開場白只講「合約或事故」會讓人
++        # 以為工具亂推——「這篇管這支檔」本身就是必看的理由。
++        _why = "帶著不能破壞的合約或出過事故" if not any(x.get("home") for x in pins) else "是這支檔的家(管它的那篇),或帶著不能破壞的合約、出過事故"
++        lines.append(f"必看——這 {len(pins)} 篇{_why}:")
+         for x in pins:
+-            mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
++            mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}", "home": ""}.get(x.get("kind"), "")
+             ct = f" {_contract_label(x['contract'])}" if x.get("contract") else ""
+             mb = f"  ({_match_label(x['matched_by'])})" if x.get("matched_by") else ""
+-            # about_code 語意欄位命中(工具清單 #9):讀 about_hit(只在 True 時存在),不碰既有 hit 來源標記
+-            ab = "★關於★" if x.get("about_hit") else ""
+-            lines.append(f"  {ab}{mk}{ct} {_plain_label(x.get('node'))}{mb}")
++            # 語意欄位命中:家(推筆記認家)優先;about_hit 是舊制標記,只在旋鈕關掉家時才會出現
++            ab = "★家★" if x.get("home") else ("★關於★" if x.get("about_hit") else "")
++            lines.append(f"  {ab}{mk}{ct} {_plain_label(x.get('node'))}{mb}".replace("  ★家★", " ★家★"))
+     if free:
+         lines.append(f"可能相關的 {len(free)} 篇(依關聯度排序):")
+         for x in free:
+-            mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
+-            lines.append(f"  {x.get('score',0):.2f} {mk} {_plain_label(x.get('node'))}")
++            mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}", "home": ""}.get(x.get("kind"), "")
++            # 大檔的家只加標記不升級(家太多就沒有鑑別力),它會留在這一段——標記照樣要看得到
++            ab = "★家★" if x.get("home") else ""
++            lines.append(f"  {x.get('score',0):.2f} {ab}{mk} {_plain_label(x.get('node'))}")
+     if rescued:
+         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
+         lines.append(f"另外 {len(rescued)} 篇分數不高但直接提到這個檔,一併列出:")
+         for x in rescued:
+             hit = f"/{x['hit']}" if x.get("hit") == "basename-match" else ""
+             lines.append(f"  {x.get('score',0):.2f} 直接{hit} {_plain_label(x.get('node'))}")
+     if meta.get("truncated"):
+         lines.append(f"  (+{meta['truncated']} 條低分截斷,沒列出來)")
+     # pin-denoise-a-v4:參考道(JSON 獨立頂層鍵;.get 條件鍵慣例——knob=0 時鍵不存在)
+     lane = data.get("lane", [])
