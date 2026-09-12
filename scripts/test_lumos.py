@@ -13225,6 +13225,11 @@ def _make_high_tier_repo(d):
         encoding="utf-8")
     g("add", "app.py")
     g("commit", "-qm", "add high tier code")
+    # ★出廠就把棧別題答好★(2026-09-12):用這個假 repo 的十幾支測試,驗的都是「審查留痕符不符」
+    # 那一關。表態是另一道獨立的閘,Python 棧支援上線之後,上面那行 requests.post 同時觸發了
+    # 兩題 Python 效能檢核,於是那些測試全部改由表態閘擋下——要驗的那一關根本沒被驗到。
+    # 真實的高風險 Python 分支本來就要兩關都過,所以這裡照真實做法先把題答完,讓測試回到它的主題。
+    _answer_stack_questions(d)
 
 
 def _answer_stack_questions(d, diff="main..HEAD"):
@@ -13290,7 +13295,6 @@ def t_codeloop_guard_verdict():
     # ── 情境 1: tier=high ∧ 無留痕 → blocked ──────────────────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
-        _answer_stack_questions(d)   # 先排除表態閘,擋下來就只可能是缺留痕
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
             capture_output=True, text=True)
@@ -13313,7 +13317,6 @@ def t_codeloop_guard_verdict():
     # ── 情境 2: tier=high ∧ pass(HEAD 符) → 不 blocked ───────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
-        _answer_stack_questions(d)
         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
@@ -13331,7 +13334,6 @@ def t_codeloop_guard_verdict():
     # ── 情境 3: tier=high ∧ skip(HEAD 符) → 不 blocked ───────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
-        _answer_stack_questions(d)
         run_lumos(["code-loop", "skip", "--note", "intentional", "--repo", d])
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
@@ -14388,7 +14390,6 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
-        _answer_stack_questions(d)   # 先排除表態閘,擋下來就只可能是缺留痕
         r = _run_pre_push(d)
         check("codeloop_guard_prepush: tier=high∧無留痕 → rc1 擋住",
               r.returncode == 1,
@@ -14408,7 +14409,6 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
-        _answer_stack_questions(d)
         _sp.run([sys.executable, lumos_real, "code-loop", "pass",
                  "--note", "done", "--repo", d],
                 capture_output=True, text=True)
@@ -14421,7 +14421,6 @@ def t_codeloop_guard_prepush():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
-        _answer_stack_questions(d)
         _sp.run([sys.executable, lumos_real, "code-loop", "skip",
                  "--note", "intentional", "--repo", d],
                 capture_output=True, text=True)
@@ -35365,6 +35364,18 @@ def t_init_writes_config_skeleton():
         m._init_config_skeleton(root)
         data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
         check("③多語言走多平台格式(不挑一個猜)", "platforms" in data and len(data["platforms"]) >= 2 and "default_platform" in data, str(list(data)))
+    with tempfile.TemporaryDirectory() as d:
+        # ★五種語言就要五個平台★(2026-09-12 多語言驗證 repo 實撞:原本 ranked[:3] 只列三個,
+        # 其餘語言的測試靜靜掃不到,而掃不到的症狀是合約綁不上、閘靜默放行,不是報錯)。
+        root = Path(d)
+        for ext in ("swift", "ts", "py", "java", "kt"):
+            for n in range(3):
+                (root / f"S{n}.{ext}").write_text("x\n", encoding="utf-8")
+        m._init_config_skeleton(root)
+        data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+        fams = set(data.get("platforms", {}))
+        check("③五種語言全部列進平台表(不是只留前三名)",
+              fams == {"swift", "node", "python", "java", "kotlin"}, str(sorted(fams)))
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         (root / "a.rs").write_text("x\n", encoding="utf-8")
