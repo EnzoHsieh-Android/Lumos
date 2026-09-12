@@ -37111,7 +37111,11 @@ def t_nodehome_stack_test_dirs_not_required():
     root = _nh_repo()
     not_req = ("app/src/androidTest/java/com/x/HiltTestRunner.kt", "app/src/androidTest/java/com/x/CartScreenTest.kt",
                "PosTerminalTests/ScreenshotMaker.swift",
-               "PosTerminalUITests/LaunchHelper.swift", "Foo.IntegrationTests/Fixture.cs", "Tests/AppTests/Helper.swift")
+               "PosTerminalUITests/LaunchHelper.swift", "Foo.IntegrationTests/Fixture.cs", "Tests/AppTests/Helper.swift",
+               # ★2026-09-12 Java 補棧之後從「要家」搬到「不要家」★:這條原本的理由是「對照表沒有 Java 棧」,
+               # 而 java-junit profile 一加進去,Java 的 androidTest 輔助檔就跟 Kotlin 的完全同類——
+               # 前提變了,期望值跟著變,不是把守衛放寬。
+               "feature/cart/src/androidTest/kotlin/FakeRepo.java")
     req_ok = ("app/src/main/java/com/x/di/NetworkModule.kt", "PosTerminal/App.swift", "tools/androidTest/gen.kt",
               "ios/PosTerminalTests/Nested.swift", "src/features/abTests/Flag.kt", "svc/src/scripts/build.py",
               "Foo/Program.cs", "ABTests/ExperimentManager.swift", "PaymentGateway/app.py",
@@ -37156,9 +37160,12 @@ def t_nodehome_stack_test_dirs_not_required():
           {"app/src/androidTest/scripts/evil.py", "mod/src/androidTest/setup.sh"} <= req, str(sorted(req)))
     check("④f4 同一個模組的 src/main 沒有 Kotlin 檔(只有資源)時,androidTest 裡的 Kotlin 檔照舊要家——旁邊要有同一種檔的程式目標",
           "lonely/src/androidTest/Orphan.kt" in req, str(sorted(req)))
-    check("④f3 取捨釘住:別種語言的測試輔助檔照舊要家——Java 寫的 androidTest 輔助檔(對照表沒有 Java 棧)、"
-          "Xcode 測試資料夾裡的橋接標頭 .h(代碼審第三輪牽連席;寧可過嚴,逃生口是 node_home.ignore)",
-          {"feature/cart/src/androidTest/kotlin/FakeRepo.java", "PosTerminalTests/BridgingHeader.h"} <= req, str(sorted(req)))
+    check("④f3 取捨釘住:對照表沒有那一棧的語言,測試輔助檔照舊要家——Xcode 測試資料夾裡的橋接標頭 .h"
+          "(代碼審第三輪牽連席;寧可過嚴,逃生口是 node_home.ignore)",
+          {"PosTerminalTests/BridgingHeader.h"} <= req, str(sorted(req)))
+    check("④f3b Java 進對照表之後(2026-09-12 java-junit profile),Java 的 androidTest 輔助檔跟 Kotlin 同待遇、不要家——"
+          "★這條是前提改變帶來的行為變化,不是守衛被放寬★:同模組 src/main 有 .java 才算",
+          "feature/cart/src/androidTest/kotlin/FakeRepo.java" not in req, str(sorted(req)))
     check("④g 頂層資料夾就叫結尾樣式本身(UITests/、IntegrationTests/,前面沒有 App 名)、副檔名對得上的,照認(代碼審第二輪接手的人席)",
           not (set(bare) & req), str(sorted(req)))
     lay = m._nodehome_layout(["PosTerminal/App.swift", "PosTerminalTests/Fixture.SWIFT"])
