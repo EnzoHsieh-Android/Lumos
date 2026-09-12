@@ -2580,9 +2580,26 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             # 專案——實際上所有自動路徑(pre-push 三處、tier 判定)都帶 --no-lint,CI 也不跑
             # pitfalls,真正會執行 linter 的 _lint_run_and_parse 只有兩個手動呼叫者。也就是
             # 「宣告的形狀」天天有人驗,「宣告的東西跑不跑得動」從來沒有自動驗過一次。
-            ok("linter 宣告檔格式健康——★但這只證明宣告寫得對,不證明 linter 真的在跑★:"
-               "自動路徑(推送前檢查、分級判定、CI)一律不執行 linter,要驗跑不跑得動只能手動 "
-               "lumos lint-check --smoke")
+            ok("linter 宣告檔格式健康——★這只證明宣告寫得對,不證明 linter 真的跑得動★:"
+               "宣告的東西跑不跑得動要手動 lumos lint-check --smoke 驗;"
+               "推送前的新增告警閘會真的執行它們(2026-09-13 起,見 [[Projects/新增告警閘_計劃]])")
+        # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
+        # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
+        _lnr = _vault_repo_root(env)
+        if _lnr is not None:
+            _auto = _lint_new_autopass_count(_lnr)
+            _wv, _wverr = _lint_waivers_load(_lnr)
+            _bits = []
+            if _auto:
+                _bits.append(f"最近 30 天自動放行 {_auto} 次(工具沒裝/逾時/拉不到規則都算)")
+            if _wverr:
+                _bits.append(_wverr)
+            elif _wv:
+                _bits.append(f"放行清單有 {len(_wv)} 條")
+            if _bits:
+                warn_soft(_bits, "新增告警閘的放行狀況(提醒,不擋):",
+                          "自動放行多代表檢查根本沒在跑;逐條放行多代表規則跟這個專案不合。"
+                          "看放行了什麼:lumos lint-waive --list")
         print()
 
     if ci:
@@ -4778,6 +4795,8 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 "anchor", "pitfalls",
                 # 2026-09-11 每支檔有家:提交前/推送前的檢查、健檢三段(沒家的檔/寫了別人的檔名/管太多沒寫負責範圍)
                 "nodehome-check", "check-s8", "check-s9", "check-s10",
+                # 2026-09-13 新增告警閘:環境不可用自動放行、擋下新增告警,兩種事件都用這個閘名
+                "lint-new",
                 # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
                 "check-s11")
 
@@ -17124,6 +17143,51 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     return 1
 
 
+def cmd_lint_waive(key=None, note=None, repo=None, as_json=False, show=False):
+    """把某一條告警的指紋標成已放行(新增告警閘的逃生門)。
+    ★誤報一定會發生★——首次真跑社群規則庫,唯一命中就是誤報(對刻意設 0700 的目錄建議改成 0644)。
+    沒有正式出口的話,結局是有人繞過整道檢查、零留痕;所以這條路第一天就要開好,而且會被數。
+    放行綁指紋不綁版本:綁版本的話每次提交都要重新放行,吵到沒人會用。"""
+    import json
+    import os
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        print("✗ lint-waive: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)
+        return 2
+    if show:
+        cur, err = _lint_waivers_load(repo_root)
+        if err:
+            print(f"✗ lint-waive: {err}", file=sys.stderr)
+            return 2
+        if as_json:
+            print(json.dumps({"waivers": list(cur.values())}, ensure_ascii=False))
+            return 0
+        if not cur:
+            print("這個專案還沒有放行過任何告警")
+            return 0
+        print(f"這個專案放行了 {len(cur)} 條告警(放行是合法的,但會被統計):")
+        for k, it in cur.items():
+            print(f"  {k}  {it.get('file', '')} [{it.get('rule', '')}] — {it.get('reason', '')}")
+        return 0
+    if not key:
+        print("擋下:要放行哪一條?把擋下訊息裡那串指紋帶進來", file=sys.stderr)
+        print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
+        return 2
+    if not (note or "").strip():
+        print("擋下:放行要寫理由(--note)——不寫理由的放行,三個月後沒人知道當初為什麼", file=sys.stderr)
+        return 2
+    who = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+    ok, err = _lint_waivers_add(repo_root, key, "", "", note.strip(), who)
+    if not ok:
+        print(f"✗ lint-waive: {err}", file=sys.stderr)
+        return 1
+    _gate_event_or_warn(repo_root, _LINT_NEW_GATE_NAME, "waived", note.strip()[:120], hard=False)
+    print(f"✓ lint-waive: 指紋 {key} 已放行,理由記下來了——{note.strip()}")
+    print(f"  紀錄寫進 {_LINT_NEW_WAIVERS_REL}(這個檔要一起提交,只留在本機的話換台機器會整批復活擋人)")
+    print("  放行是合法的,但健檢會數這個專案放行了幾條。")
+    return 0
+
+
 def _testlayers_load_config(repo_root):
     """讀取 repo_root/.lumos/test-layers.json → dict;不存在/解析失敗/非 dict → None(fail-open)。"""
     import json
@@ -17153,10 +17217,15 @@ def _testlayers_hits(files, config):
     return [(k, config[k], counts[k]) for k in order]
 
 
-def _lint_run_and_parse(cmd, repo_root):
+def _lint_run_and_parse(cmd, repo_root, path_prefix=None, timeout=None):
     """執行宣告的 lint 指令並解析 SARIF 輸出為 claims 清單。
     cmd: 含 {LINT_SARIF_OUT} 佔位符的 shell 指令字串。
-    repo_root: git repo 根目錄(Path 或 str)。
+    repo_root: git repo 根目錄(Path 或 str)——★同時是「在哪裡跑」與「路徑相對誰」★(既有語意,不動)。
+    path_prefix: 選配。新增告警閘把兩份快照解到 .lumos/lintbase-<隨機>/{base,head}/ 底下跑,
+      工具回報的檔名會帶著那層前綴;給了就從結果裡剝掉,還原成專案相對路徑。
+      ★一定要有預設值★:這支函式有兩個既有呼叫點與七處既有測試都用單一值呼叫。
+    timeout: 選配。不給就用 LINT_CMD_TIMEOUT;新增告警閘會傳「剩餘預算」進來,
+      否則整條閘的時間預算管不到一條正在跑的命令。
     回傳 (list[claim], bool)——claim={file,line,source,rule,message};ok=成功產出可解析 SARIF。
     rc≠0 不算失敗,detekt 等工具有問題時仍輸出有效 SARIF。"""
     import json
@@ -17186,7 +17255,7 @@ def _lint_run_and_parse(cmd, repo_root):
             stderr=subprocess.DEVNULL,
         )
         try:
-            proc.communicate(timeout=LINT_CMD_TIMEOUT)
+            proc.communicate(timeout=(timeout if timeout else LINT_CMD_TIMEOUT))
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -17224,6 +17293,7 @@ def _lint_run_and_parse(cmd, repo_root):
                         rf = r["locations"][0]["resultFile"]
                         uri = rf["uri"]
                         start_line = rf.get("region", {}).get("startLine", 0)
+                        end_line = rf.get("region", {}).get("endLine", start_line)
                         msg = r.get("message")
                         message_text = (msg if isinstance(msg, str) else (msg or {}).get("text", ""))[:120]
                     else:
@@ -17235,6 +17305,7 @@ def _lint_run_and_parse(cmd, repo_root):
                         if uri_base_id and uri_base_id in base:
                             uri = base[uri_base_id]["uri"] + uri
                         start_line = loc.get("region", {}).get("startLine", 0)
+                        end_line = loc.get("region", {}).get("endLine", start_line)
                         msg = r.get("message") or {}
                         message_text = (msg.get("text", "") if isinstance(msg, dict) else str(msg))[:120]
                     # 共用 uri 正規化:剝 file:// + unquote + 絕對路徑 relpath + 反斜線正規化
@@ -17246,10 +17317,15 @@ def _lint_run_and_parse(cmd, repo_root):
                     else:
                         rel = uri
                     rel = rel.replace("\\", "/")
+                    if path_prefix:
+                        _pfx = str(path_prefix).replace("\\", "/").rstrip("/") + "/"
+                        if rel.startswith(_pfx):
+                            rel = rel[len(_pfx):]
                     rule_id = r.get("ruleId", "")
                     claims.append({
                         "file": rel,
                         "line": start_line,
+                        "end_line": end_line,
                         "source": f"lint:{driver_name}",
                         "rule": rule_id,
                         "message": message_text,
@@ -17262,6 +17338,445 @@ def _lint_run_and_parse(cmd, repo_root):
             os.unlink(temp_path)
         except OSError:
             pass
+
+
+# ── 新增告警閘(Projects/新增告警閘_計劃,2026-09-13)────────────────────────────
+# 白話:推送前把檢查工具跑兩次——一次跑「改動前的樣子」、一次跑「現在的樣子」,兩邊比差集,
+# 只有現在才有的告警才算這次新增的、才擋;舊債一概不管。
+# ★為什麼不能只看「告警有沒有落在改動行上」★:檢查工具常把問題報在你沒碰過的行——
+# 你把 except 那一行改壞,它指著上面的 try: 說整段有問題,那條真問題就被靜默丟掉了。
+# 實測重現在 [[Verification/2026-09-13_社群規則庫可行性實測]],既有的行級過濾今天就在漏。
+_LINT_NEW_GATE_MODES = ("block", "warn", "off")
+_LINT_NEW_DEFAULTS = {
+    # ★鍵叫 mode 不叫 gate★:治理閘名的漂移掃描會把 "gate": "…" 的字面值當成閘名,
+    # 這個坑既有的棧別提問設定踩過並留了註解,照抄它的做法(JSON 設定檔那邊照舊寫 gate)
+    "mode": "block",
+    "budget_sec": 300,          # 整條閘的總預算(秒)
+    "per_cmd_floor_sec": 30,    # 單條命令的保底時間:剩餘預算不足這個數就不跑,不用必然逾時的值去跑它
+    "max_file_lines": 4000,     # 單檔行數上限(實測:843 行 1.8 秒、26718 行 105 秒,超線性)
+    "max_file_bytes": 400000,   # 單檔位元組上限——★只看行數會被「整支檔只有一行」的壓縮檔騙過去★
+}
+_LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
+_LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
+_LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 否則記帳靜默失敗
+_LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
+_LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
+
+
+def _lint_new_config(repo_root):
+    """讀 .lumos/config.json 的 lint_new 區塊(同 _stack_questions_config 慣例,直讀不載 vault)。
+    ★不放 .lumos/lint.json★:那個檔的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證,
+    多一個設定鍵會讓 lint-check/doctor 對每個採用的專案判紅。
+    回 {gate, budget_sec, per_cmd_floor_sec, max_file_lines, max_file_bytes, warnings}。"""
+    import json
+    cfg = dict(_LINT_NEW_DEFAULTS)
+    cfg["warnings"] = []
+    p = Path(repo_root) / ".lumos" / "config.json"
+    if not p.is_file():
+        return cfg
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        cfg["warnings"].append(f".lumos/config.json 讀不了({e.__class__.__name__}),新增告警閘用預設值")
+        return cfg
+    sec = data.get("lint_new") if isinstance(data, dict) else None
+    if not isinstance(sec, dict):
+        return cfg
+    g = sec.get("gate", cfg["mode"])
+    if g not in _LINT_NEW_GATE_MODES:
+        cfg["warnings"].append(f"設定檔的 lint_new.gate={g!r} 不合法(只認 {'/'.join(_LINT_NEW_GATE_MODES)}),已用 {cfg['mode']}")
+    else:
+        cfg["mode"] = g
+    for key in ("budget_sec", "per_cmd_floor_sec", "max_file_lines", "max_file_bytes"):
+        v = sec.get(key, cfg[key])
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            if key in sec:
+                cfg["warnings"].append(f"設定檔的 lint_new.{key}={v!r} 不合法(要正整數),已用 {cfg[key]}")
+        else:
+            cfg[key] = v
+    return cfg
+
+
+def _lint_new_changed_files(repo_root, diff_range):
+    """算這次要掃哪些檔,並把改名對回舊路徑。
+    ★另開一支只給這道閘用的查詢★:既有那支 git diff -U3 同時餵給風險掃描、棧別提問、架構對照,
+    在上面加改名偵測會悄悄改掉它們的既有輸出。
+    回 ([(現在路徑, 基準路徑 or None), …], 錯誤訊息 or None);刪除的檔不收(沒有「現在」可掃)。"""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--name-status",
+                            "--find-renames", "-z", diff_range],
+                           capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+    except FileNotFoundError:
+        return ([], "這台機器找不到 git 指令")
+    if r.returncode != 0:
+        return ([], f"git 算不出 {diff_range} 這段差異:{r.stderr.strip()[:120]}")
+    out, parts, i = [], r.stdout.split("\0"), 0
+    while i < len(parts):
+        status = parts[i]
+        if not status:
+            i += 1
+            continue
+        code = status[0]
+        if code in ("R", "C"):          # 改名/複製:舊路徑、新路徑各一欄
+            if i + 2 >= len(parts):
+                break
+            out.append((parts[i + 2], parts[i + 1]))
+            i += 3
+        elif code == "D":               # 刪除:沒有「現在」的內容可掃
+            i += 2
+        elif code == "A":               # 新增:基準版沒有這支檔,它的告警全算新增
+            if i + 1 >= len(parts):
+                break
+            out.append((parts[i + 1], None))
+            i += 2
+        else:                           # M/T 等:兩邊同一條路徑
+            if i + 1 >= len(parts):
+                break
+            out.append((parts[i + 1], parts[i + 1]))
+            i += 2
+    return (out, None)
+
+
+def _lint_new_extract(repo_root, sha, pairs, dest, side):
+    """把某一版的檔案內容逐檔取出來寫進 dest(保持相對路徑)。
+    ★逐檔取,不整批打包★:整批打包時只要清單裡有一個檔在那一版不存在,整條指令 fatal 失敗、零輸出;
+    逐檔取時「取不到」正好等於「這支在那一版不存在」,語意剛好就是我們要的。
+    side='base' 用基準路徑、'head' 用現在路徑。回 {現在路徑: 解出來的絕對路徑};取不到的不列。"""
+    import subprocess
+    got = {}
+    for now_path, base_path in pairs:
+        want = base_path if side == "base" else now_path
+        if want is None:
+            continue
+        r = subprocess.run(["git", "show", f"{sha}:{want}"],
+                           capture_output=True, cwd=str(repo_root))
+        if r.returncode != 0:
+            continue
+        target = Path(dest) / now_path
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(r.stdout)
+        except OSError:
+            continue
+        got[now_path] = str(target)
+    return got
+
+
+def _lint_new_norm_snippet(lines):
+    """指紋用的片段正規化:每行去行尾空白、內部連續空白壓成一個、丟空行,★前導空白原樣保留★。
+    保留縮排是刻意的取捨——抹掉縮排的話,「同一段程式碼被搬進另一個會執行的區塊」會比不出來,
+    那是行為改變卻無聲放行、沒有補救;保留縮排的代價只是「整批重新縮排」會產生一批假新增,那有放行管道可處理。"""
+    out = []
+    for ln in lines:
+        m = re.match(r"^([ \t]*)(.*?)[ \t]*$", ln.rstrip("\n"))
+        if m is None:
+            continue
+        lead, body = m.group(1), re.sub(r"\s+", " ", m.group(2))
+        if body:
+            out.append(lead + body)
+    return "\n".join(out)
+
+
+_LINT_NEW_SEP = "\x00"   # 指紋各段之間的分隔(程式碼裡不會出現,不怕跟內容撞)
+
+
+def _lint_new_key(claim, text_by_file):
+    """一條告警的身分。回 (key, 是不是弱比對)。
+    ★不能用行號當身分★:行號會因為上下文位移而變。優先用「命中處的程式碼片段」;
+    工具沒附片段就自己去讀那幾行補上(實測:主流 Python 檢查器完全不附,所以自己補是常態不是例外);
+    行號缺失、小於一、或超出檔案長度=取不到片段,退到「規則+檔名+訊息」的弱比對並標明。"""
+    rule = claim.get("rule") or ""
+    f = claim.get("file") or ""
+    line = claim.get("line") or 0
+    end = claim.get("end_line") or line
+    lines = text_by_file.get(f)
+    if lines and isinstance(line, int) and 1 <= line <= len(lines):
+        hi = end if isinstance(end, int) and line <= end <= len(lines) else line
+        snippet = _lint_new_norm_snippet(lines[line - 1:hi])
+        if snippet:
+            return (_LINT_NEW_SEP.join([rule, f, snippet]), False)
+    return (_LINT_NEW_SEP.join([rule, f, "~msg~" + str(claim.get("message", ""))]), True)
+
+
+def _lint_new_read_lines(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+
+def _lint_new_diff_claims(base_claims, head_claims, base_files, head_files):
+    """比差集:同一個指紋出現幾次。★算次數不算有無★——基準版一次、現在版三次就是新增兩條;
+    用「有沒有出現過」會讓複製貼上多出來的問題被吃掉。
+    回 (新增的告警清單, 有幾條是弱比對)。"""
+    from collections import Counter
+    import hashlib as _hl
+    base_text = {f: (_lint_new_read_lines(p) or []) for f, p in base_files.items()}
+    head_text = {f: (_lint_new_read_lines(p) or []) for f, p in head_files.items()}
+    base_count = Counter()
+    for c in base_claims:
+        k, _weak = _lint_new_key(c, base_text)
+        base_count[k] += 1
+    new, weak = [], 0
+    seen = Counter()
+    for c in head_claims:
+        k, is_weak = _lint_new_key(c, head_text)
+        seen[k] += 1
+        if seen[k] > base_count.get(k, 0):
+            c = dict(c)
+            c["key"] = _hl.sha256(k.encode("utf-8")).hexdigest()[:16]
+            c["weak"] = is_weak
+            new.append(c)
+            if is_weak:
+                weak += 1
+    return (new, weak)
+
+
+def _lint_waivers_path(repo_root):
+    return Path(repo_root) / _LINT_NEW_WAIVERS_REL
+
+
+def _lint_waivers_load(repo_root):
+    """讀放行檔。回 ({指紋: 那筆紀錄}, 錯誤訊息 or None)。
+    ★讀不了時不可以當成「沒有放行紀錄」★——那會讓所有既有放行瞬間復活、整批擋人;
+    回錯誤訊息讓呼叫端歸進「環境不可用」。"""
+    import json
+    p = _lint_waivers_path(repo_root)
+    if not p.is_file():
+        return ({}, None)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return ({}, "放行檔讀不了(" + e.__class__.__name__ + "):" + _LINT_NEW_WAIVERS_REL)
+    items = data.get("waivers") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return ({}, "放行檔格式不對(要有 waivers 清單):" + _LINT_NEW_WAIVERS_REL)
+    out = {}
+    for it in items:
+        if isinstance(it, dict) and isinstance(it.get("key"), str):
+            out[it["key"]] = it
+    return (out, None)
+
+
+def _lint_waivers_add(repo_root, key, rule, file_rel, reason, who):
+    """加一筆放行。★讀-改-寫要上鎖★:只做原子換名不夠——兩個工作階段同時放行不同指紋,
+    後寫的會整份蓋掉先寫的,一條放行就這樣靜默消失(既有 _write_lf 的說明也講了讀改寫要呼叫端上鎖)。"""
+    import json
+    import time as _time
+    p = _lint_waivers_path(repo_root)
+    with _vault_write_lock(p):
+        cur, err = _lint_waivers_load(repo_root)
+        if err:
+            return (False, err)
+        if key in cur:
+            return (False, "這個指紋已經放行過了(" + key + ")")
+        items = list(cur.values())
+        items.append({"key": key, "rule": rule, "file": file_rel, "reason": reason,
+                      "by": who, "ts": _time.strftime("%Y-%m-%dT%H:%M:%S")})
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _write_lf(p, json.dumps({"waivers": items}, ensure_ascii=False, indent=2) + "\n")
+    return (True, None)
+
+
+def _lint_new_clean_stale(repo_root):
+    """開跑前清掉同前綴、超過一天的殘骸。★強殺(機器休眠判死)時收尾不會執行★,
+    殘骸會留在專案底下那個被忽略的目錄裡;每次名字不同所以不會污染下一次比對,但要有人掃。"""
+    import shutil
+    import time as _time
+    base = Path(repo_root) / ".lumos"
+    if not base.is_dir():
+        return
+    now = _time.time()
+    for d in base.glob("lintbase-*"):
+        try:
+            if d.is_dir() and now - d.stat().st_mtime > _LINT_NEW_STALE_SEC:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _lint_new_verdict(repo_root, diff_range, deadline=None):
+    """新增告警閘的判定——這道閘只問一件事:這次改動有沒有帶進新的告警。
+    回 dict{status, blocked, mode, new, waived, weak, oversize, undone, autopass, ran, report_only, reason, warnings}。
+    status:off(關掉) / no-config(沒宣告檢查工具) / no-files(沒有要掃的檔) / clean / blocked / env-unavailable
+    ★兩類失敗分開★:環境不可用(工具沒裝、命令逾時、拉不到規則、版本代號解析不出、放行檔讀不了)
+    →自動放行並自動記一筆帳;真的有未放行的新增告警、或檔太大沒被檢查→擋,逃生門是人手動放行寫理由。"""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    import time as _time
+
+    out = {"status": "clean", "blocked": False, "mode": "block", "new": [], "waived": 0,
+           "weak": 0, "oversize": [], "undone": [], "autopass": False, "ran": [],
+           "report_only": [], "reason": "", "warnings": []}
+
+    cfg = _lint_new_config(repo_root)
+    out["mode"] = cfg["mode"]
+    out["warnings"] = cfg["warnings"]
+    if os.environ.get("LUMOS_SKIP_LINT_NEW"):
+        out["status"], out["reason"] = "off", "環境變數 LUMOS_SKIP_LINT_NEW 有設,整道閘關掉"
+        return out
+    if cfg["mode"] == "off":
+        out["status"], out["reason"] = "off", "設定檔把這道閘設成 off"
+        return out
+
+    lint_cfg = _lint_load_config(repo_root)
+    if not lint_cfg:
+        out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具(.lumos/lint.json 不存在)"
+        return out
+
+    # 版本代號:兩端都要解析得出來,任一端解析不出(例如只給單一參考點、終點其實是工作樹)就是環境不可用
+    base_ref, head_ref = _diff_range_ends(repo_root, diff_range)
+    if not base_ref or not head_ref:
+        out.update(status="env-unavailable", autopass=True,
+                   reason="這段範圍算不出「改動前」與「現在」兩個版本代號(終點可能是工作目錄),不硬猜")
+        return out
+
+    pairs, err = _lint_new_changed_files(repo_root, diff_range)
+    if err:
+        out.update(status="env-unavailable", autopass=True, reason=err)
+        return out
+    pairs = [(a, b) for (a, b) in pairs if _stack_changed_ok(a)]
+    if not pairs:
+        out["status"], out["reason"] = "no-files", "這次改動沒有要掃的程式碼檔"
+        return out
+
+    cmds = _lint_stacks_for_diff({a: set() for a, _b in pairs}, lint_cfg)
+    if not cmds:
+        out["status"], out["reason"] = "no-files", "這次改動的副檔名沒有對應的檢查工具宣告"
+        return out
+
+    waivers, werr = _lint_waivers_load(repo_root)
+    if werr:
+        out.update(status="env-unavailable", autopass=True, reason=werr)
+        return out
+
+    _lint_new_clean_stale(repo_root)
+    root = Path(repo_root) / ".lumos"
+    root.mkdir(parents=True, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="lintbase-", dir=str(root))
+    try:
+        base_dir, head_dir = Path(work) / "base", Path(work) / "head"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        head_dir.mkdir(parents=True, exist_ok=True)
+        base_files = _lint_new_extract(repo_root, base_ref, pairs, base_dir, "base")
+        head_files = _lint_new_extract(repo_root, head_ref, pairs, head_dir, "head")
+
+        # 單檔上限:行數與位元組數雙門檻,任一超過就不掃並明說(只看行數會被壓縮成一行的大檔騙過去)
+        too_big = []
+        for f, path in list(head_files.items()):
+            try:
+                raw = Path(path).read_bytes()
+            except OSError:
+                continue
+            n_bytes, n_lines = len(raw), raw.count(b"\n") + 1
+            if n_lines > cfg["max_file_lines"] or n_bytes > cfg["max_file_bytes"]:
+                too_big.append({"file": f, "lines": n_lines, "bytes": n_bytes,
+                                "over": "行數" if n_lines > cfg["max_file_lines"] else "位元組數"})
+                head_files.pop(f, None)
+                base_files.pop(f, None)
+        out["oversize"] = too_big
+
+        base_claims, head_claims = [], []
+        budget_end = deadline if deadline else (_time.monotonic() + cfg["budget_sec"])
+        for cmd in cmds:
+            if _LINT_NEW_FILES_TOKEN not in cmd:
+                # 逐命令降級:只影響這一條命令,不讓整道閘降級(舊宣告不擋人,但不能拖累合格的新宣告)
+                out["report_only"].append(cmd)
+                continue
+            left = budget_end - _time.monotonic()
+            if left < cfg["per_cmd_floor_sec"]:
+                # ★不要用一個必然逾時的值去跑它★:剩下的命令沒跑到,判定跟「檔太大」同類(擋),不歸自動放行
+                out["undone"].append({"kind": "budget", "cmd": cmd[:80],
+                                      "detail": "時間預算剩 %.0f 秒,不足單條保底 %d 秒" % (max(left, 0), cfg["per_cmd_floor_sec"])})
+                continue
+            ok_both = True
+            for side, files, wdir in (("base", base_files, base_dir), ("head", head_files, head_dir)):
+                targets = [files[f] for f in sorted(files)] if files else []
+                if not targets:
+                    continue
+                import shlex as _shlex
+                # 多檔各自跳脫後以空白相接——★不是整串一起跳脫★(整串 quote 會把好幾個路徑黏成一個參數)
+                joined = " ".join(_shlex.quote(t) for t in targets)
+                run_cmd = cmd.replace(_LINT_NEW_FILES_TOKEN, joined)
+                prefix = os.path.relpath(str(wdir), str(repo_root))
+                claims, ok = _lint_run_and_parse(run_cmd, repo_root, path_prefix=prefix,
+                                                 timeout=max(1, int(budget_end - _time.monotonic())))
+                if not ok:
+                    ok_both = False
+                    break
+                (base_claims if side == "base" else head_claims).extend(claims)
+            if ok_both:
+                out["ran"].append(cmd)
+            else:
+                out["undone"].append({"kind": "env", "cmd": cmd[:80],
+                                      "detail": "這條命令跑不出可解析的結果(工具沒裝/逾時/拉不到規則)"})
+
+        new, weak = _lint_new_diff_claims(base_claims, head_claims, base_files, head_files)
+        kept = [c for c in new if c.get("key") not in waivers]
+        out["waived"] = len(new) - len(kept)
+        out["new"], out["weak"] = kept, weak
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    env_undone = [u for u in out["undone"] if u["kind"] == "env"]
+    hard_undone = [u for u in out["undone"] if u["kind"] != "env"]
+    if env_undone:
+        out["autopass"] = True
+    hard = bool(out["new"]) or bool(out["oversize"]) or bool(hard_undone)
+    if hard and cfg["mode"] == "block":
+        out["status"], out["blocked"] = "blocked", True
+        bits = []
+        if out["new"]:
+            bits.append("%d 條新增告警" % len(out["new"]))
+        if out["oversize"]:
+            bits.append("%d 支檔太大沒被檢查" % len(out["oversize"]))
+        if hard_undone:
+            bits.append("%d 條命令因為時間預算沒跑到" % len(hard_undone))
+        out["reason"] = "、".join(bits)
+    elif hard:
+        out["status"], out["reason"] = "warn", "設定檔把這道閘設成只報告,不擋"
+    else:
+        out["status"] = "env-unavailable" if env_undone else "clean"
+        out["reason"] = "沒有新增的告警" if not env_undone else "有命令跑不動(已自動放行並記帳)"
+    return out
+
+
+def _lint_new_autopass_count(repo_root, days=30):
+    """數最近 N 天新增告警閘自動放行了幾次(治理帳裡 gate=lint-new 的 fail-open 事件)。
+    ★這個數字是那句「帳是可以統計的」的兌現★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過),
+    沒有人去數,承認風險那句話就只是空頭支票。"""
+    import json
+    import time as _time
+    p = Path(repo_root) / "docs" / ".governance-log.jsonl"
+    if not p.is_file():
+        return 0
+    cutoff = _time.time() - days * 86400
+    n = 0
+    try:
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line.startswith("{") or "lint-new" not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if ev.get("gate") != "lint-new" or ev.get("kind") != "fail-open":
+                continue
+            ts = str(ev.get("ts") or "")
+            try:
+                import datetime as _dt
+                when = _dt.datetime.fromisoformat(ts).timestamp()
+            except Exception:
+                when = cutoff + 1      # 時間讀不出來就算進去(寧可多報,不要靜默少報)
+            if when >= cutoff:
+                n += 1
+    except OSError:
+        return 0
+    return n
 
 
 def _semver_parse(v):
@@ -24946,6 +25461,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     # 留痕比對座標:優先用傳入的(hook 綁被推送 ref),否則讀 checkout
     _codeloop_guard_verdict.last_bound = None   # 每次呼叫先清,提早 fail-open 的分支不會拿到上一輪的殘留
     _codeloop_guard_verdict.last_dispositions = None
+    _codeloop_guard_verdict.last_lint_new = None
     marker_sha = at_sha or _codeloop_git_head(repo_root)
     marker_branch = branch or _codeloop_git_branch(repo_root)
     if not marker_sha:
@@ -25057,6 +25573,28 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         return {"blocked": True, "reason_kind": "dispositions",
                 "reason": f"有 {dv['applicable']} 題適用,表態不完整({len(dv['problems'])} 處)",
                 "tier": tier, "dispositions": dv}
+
+    # 3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):這次改動有沒有帶進新的告警。
+    # ★跟表態一樣不看 tier★——願景是「覆蓋每一次提交」,只在高風險跑就不成立;
+    # 既有的 tier 計算維持原樣(照舊 --no-lint 快算),這是獨立的一條路。
+    lv = None
+    try:
+        import time as _time2
+        lv = _lint_new_verdict(repo_root, diff_range,
+                               deadline=_time2.monotonic() + _lint_new_config(repo_root)["budget_sec"])
+    except Exception as e:
+        _gate_failopen(repo_root, "lint-new", f"新增告警閘出例外,這次放行:{str(e)[:120]}")
+        lv = None
+    _codeloop_guard_verdict.last_lint_new = lv
+    if lv:
+        for _w in lv.get("warnings") or []:
+            print(f"提醒:{_w}", file=sys.stderr)
+        if lv.get("autopass"):
+            _gate_failopen(repo_root, "lint-new", lv.get("reason") or "有檢查命令跑不動")
+        if lv.get("blocked"):
+            return {"blocked": True, "reason_kind": "lint_new",
+                    "reason": lv.get("reason") or "有新增的告警",
+                    "tier": tier, "lint_new": lv}
 
     if tier != "high":
         return {"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier}
@@ -25310,6 +25848,25 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 if at_sha and at_sha != head_sha:
                     _bflag += f" --at-sha {at_sha}"   # 推的不是 checkout 的版本:表態要綁被推的 sha(r1 外家 finder f5)
                 print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
+            elif blocked and verdict.get("reason_kind") == "lint_new":
+                # 三段式:發生什麼 → 為何在意 → 指令獨立一行
+                _lv = verdict.get("lint_new") or {}
+                print(f"擋下:這次改動帶進了新的問題({reason})——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+                for _c in (_lv.get("new") or [])[:8]:
+                    _wk = "(弱比對:工具沒給程式碼片段,只能用訊息比)" if _c.get("weak") else ""
+                    print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:70]}{_wk}", file=sys.stderr)
+                if len(_lv.get("new") or []) > 8:
+                    print(f"  …另有 {len(_lv['new']) - 8} 條", file=sys.stderr)
+                for _o in (_lv.get("oversize") or [])[:5]:
+                    print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查", file=sys.stderr)
+                for _u in _lv.get("undone") or []:
+                    if _u.get("kind") != "env":
+                        print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
+                print("在意的原因:這道閘只擋你這次帶進來的問題,舊的一概不管;放著不處理,下一個人就分不出哪些是新欠的。", file=sys.stderr)
+                print("接下來(確認是誤報就放行,會留下紀錄並被統計):", file=sys.stderr)
+                print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
+                if _lv.get("new"):
+                    print(f"    (第一條的指紋是 {_lv['new'][0].get('key')})", file=sys.stderr)
             elif blocked:
                 print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
                       file=sys.stderr)
@@ -25317,6 +25874,19 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
                 if dv and dv.get("applicable"):
                     print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
+                _lv = getattr(_codeloop_guard_verdict, "last_lint_new", None)
+                if _lv and _lv.get("status") not in ("off", "no-config", "no-files"):
+                    _bits = [f"跑了 {len(_lv.get('ran') or [])} 條檢查命令"]
+                    if _lv.get("waived"):
+                        _bits.append(f"{_lv['waived']} 條先前放行過")
+                    if _lv.get("report_only"):
+                        _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
+                    if _lv.get("autopass"):
+                        # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
+                        # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
+                        _bits.append(f"自動放行並記帳({_lv.get('reason') or '原因不明'})")
+                    _head = "沒有新增的告警" if _lv.get("status") != "env-unavailable" else "沒能完整檢查"
+                    print(f"  新增告警閘:{_head}({'、'.join(_bits)})")
             for _w in ((dv or {}).get("warnings") or []):
                 print(f"  提醒:{_w}")
             # 張力(2026-09-09 Projects/兩席相反時端出張力_計劃):合法的 tension 不擋,但要讓人看見——OK 與 BLOCKED 都印,走 stderr(提醒慣例)
@@ -25888,6 +26458,7 @@ HELP_WHEN = {
     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+    "lint-waive": "新增告警閘擋下來的那條是誤報?帶指紋和理由放行,會留痕被統計。--list 看放行過什麼。",
     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
@@ -26545,6 +27116,13 @@ def main():
     p.add_argument("--smoke", dest="lc_smoke", action="store_true", help="真跑每條宣告命令、驗有無產出可解析 SARIF(抓 task 不存在/工具沒裝的空殼)")
     p.add_argument("--json", dest="lc_json", action="store_true", help="JSON 輸出")
 
+    p = sub.add_parser("lint-waive", help="把某條新增告警的指紋標成已放行(新增告警閘的逃生門;要寫理由、會被統計)")
+    p.add_argument("waive_key", nargs="?", help="擋下訊息裡印的那串指紋")
+    p.add_argument("--note", dest="waive_note", help="為什麼放行(必填)")
+    p.add_argument("--repo", dest="waive_repo", help="repo root(預設 cwd 向上找 .git)")
+    p.add_argument("--list", dest="waive_list", action="store_true", help="列出這個專案已經放行的條目")
+    p.add_argument("--json", dest="waive_json", action="store_true", help="JSON 輸出")
+
     p = sub.add_parser("sqlfluff-sarif", help="sqlfluff --format json(stdin)→ SARIF v2.1(橋接 SQL linter 進 lint-adapter)")
     p.add_argument("--out", dest="sqlfluff_out", help="輸出 SARIF 檔路徑(預設 stdout)")
 
@@ -26722,6 +27300,9 @@ def main():
         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
     if args.cmd == "lint-check":
         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
+    if args.cmd == "lint-waive":
+        return cmd_lint_waive(key=args.waive_key, note=args.waive_note, repo=args.waive_repo,
+                              as_json=args.waive_json, show=args.waive_list)
     if args.cmd == "dispatch-lens":
         _modes = [n for n, v in (("--arm", args.lens_arm), ("--claim", args.lens_claim), ("--disarm", args.lens_disarm), ("--status", args.lens_status), ("--spec", bool(args.lens_spec))) if v]
         if len(_modes) > 1:

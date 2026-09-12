@@ -39597,5 +39597,351 @@ def t_lens_recount_search_r3():
         m.subprocess.run = real_run
     check("r3⑥:判不出 git 時,位置在 .git 底下 → 當會進版控(不寫);不在任何 .git 底下 → 照寫", inside is True and outside is False, f"{inside} {outside}")
 
+
+# ── 新增告警閘(Projects/新增告警閘_計劃,2026-09-13)──────────────────────────
+# 白話:這道閘只擋「你這次帶進來的新告警」,舊債不管。下面每一支對著計劃的一條條款。
+
+
+def _lng_module():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lng", GRAPHCTL, loader=SourceFileLoader("lng", GRAPHCTL))
+    m = U.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _lng_repo(prefix="gctl-lng-"):
+    """建一個帶 git 的臨時 repo,回 (root, git 函式)。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+
+    def git(*a):
+        return sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                      cwd=root, capture_output=True, text=True)
+    git("init")
+    return root, git
+
+
+def _lng_fake_linter(helper_dir, name, markers):
+    """假檢查工具:掃傳進來的每支檔,每遇到一個標記字串就報一條告警(報在那一行)。
+    ★要看內容才報★——固定回同一條的話,新舊版都會有、正好抵銷,測不到「新增」這件事。
+    markers = [(標記字串, ruleId, message), …]。回一條含兩個佔位的命令。"""
+    import json as _j
+    import sys as _s
+    script = Path(helper_dir) / name
+    script.write_text(
+        "import sys, json, os\n"
+        f"MARKERS = {_j.dumps(markers)}\n"
+        "out = sys.argv[1]\n"
+        "res = []\n"
+        "for t in sys.argv[2:]:\n"
+        "    try:\n"
+        "        lines = open(t, encoding='utf-8', errors='replace').read().splitlines()\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    for i, ln in enumerate(lines, 1):\n"
+        "        for mk, rule, msg in MARKERS:\n"
+        "            if mk in ln:\n"
+        "                res.append({'ruleId': rule, 'message': {'text': msg}, 'locations': [\n"
+        "                    {'physicalLocation': {'artifactLocation': {'uri': t},\n"
+        "                     'region': {'startLine': i, 'endLine': i}}}]})\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Fake'}}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    return f"{_s.executable} {script} {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+
+
+def _lng_declare(root, cmds, ext="py"):
+    import json as _j
+    (root / ".lumos").mkdir(parents=True, exist_ok=True)
+    (root / ".lumos" / "lint.json").write_text(_j.dumps({ext: cmds}), encoding="utf-8")
+
+
+def t_lint_new_fingerprint():
+    """[S4] 指紋用多重集合(算次數不算有無);正規化保留前導縮排。"""
+    m = _lng_module()
+    # 同一個指紋:基準一次、現在三次 → 新增兩條(用「有沒有出現過」會判成 0 條,複製貼上就漏擋)
+    one = {"rule": "R", "file": "a.py", "line": 1, "message": "m"}
+    new, _weak = m._lint_new_diff_claims([dict(one)], [dict(one) for _ in range(3)], {}, {})
+    check("S4 多重集合:基準1現在3 → 新增2", len(new) == 2, f"{len(new)}")
+    # 基準就有的,不算新增
+    new2, _ = m._lint_new_diff_claims([dict(one)], [dict(one)], {}, {})
+    check("S4 舊債不算新增", new2 == [], str(new2))
+    # 正規化:行尾空白去掉、內部連續空白壓一個、空行丟掉
+    got = m._lint_new_norm_snippet(["    x  =   1   ", "", "  y = 2"])
+    check("S4 正規化結果", got == "    x = 1\n  y = 2", repr(got))
+    # ★保留縮排★:同一段文字搬到不同縮排深度=不同指紋(抹掉的話,搬進會執行的區塊會無聲放行)
+    shallow = m._lint_new_norm_snippet(["    danger()"])
+    deep = m._lint_new_norm_snippet(["        danger()"])
+    check("S4 不同縮排=不同指紋", shallow != deep, f"{shallow!r} vs {deep!r}")
+
+
+def t_lint_new_weakkey():
+    """[S5] 取不到片段就退到弱比對,而且要標出來。"""
+    m = _lng_module()
+    root = Path(tempfile.mkdtemp(prefix="gctl-lngw-"))
+    (root / "a.py").write_text("line1\nline2\n", encoding="utf-8")
+    files = {"a.py": str(root / "a.py")}
+    txt = {"a.py": ["line1", "line2"]}
+    strong, is_weak = m._lint_new_key({"rule": "R", "file": "a.py", "line": 1, "end_line": 1, "message": "m"}, txt)
+    check("S5 有行號=強比對", is_weak is False and "line1" in strong, strong)
+    for bad in (0, -3, 999):
+        _k, w = m._lint_new_key({"rule": "R", "file": "a.py", "line": bad, "message": "m"}, txt)
+        check(f"S5 行號 {bad} → 弱比對", w is True, f"line={bad}")
+    # 弱比對要被數出來並標在告警上
+    claim = {"rule": "R", "file": "a.py", "line": 0, "message": "m"}
+    new, weak = m._lint_new_diff_claims([], [claim], {}, files)
+    check("S5 弱比對有被數到", weak == 1 and new and new[0].get("weak") is True, f"{weak} {new}")
+
+
+def t_lint_new_baseline():
+    """[S2] 兩邊都從版本庫解快照;逐檔取,基準版沒有的檔=新檔(不是整批失敗)。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    (root / "keep.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "brand_new.py").write_text("b = 2\n", encoding="utf-8")
+    (root / "keep.py").write_text("a = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    pairs, err = m._lint_new_changed_files(root, f"{base}..{head}")
+    check("S2 算得出改動檔", err is None and len(pairs) == 2, f"{err} {pairs}")
+    dest = Path(tempfile.mkdtemp(prefix="gctl-lngb-"))
+    got_base = m._lint_new_extract(root, base, pairs, dest / "base", "base")
+    got_head = m._lint_new_extract(root, head, pairs, dest / "head", "head")
+    # ★逐檔取的關鍵★:清單裡有一個檔在基準版不存在,不會害整批失敗——只是那支取不到
+    check("S2 基準版只取到既有的那支", set(got_base) == {"keep.py"}, str(sorted(got_base)))
+    check("S2 現在版兩支都取到", set(got_head) == {"keep.py", "brand_new.py"}, str(sorted(got_head)))
+    check("S2 取出來的是基準版內容", Path(got_base["keep.py"]).read_text(encoding="utf-8").strip() == "a = 1",
+          Path(got_base["keep.py"]).read_text(encoding="utf-8"))
+
+
+def t_lint_rename():
+    """[S11] 改名的檔要用舊路徑取基準版,不然改名一個大檔=整批算新增。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    (root / "old_name.py").write_text("x = 1\n" * 40, encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    git("mv", "old_name.py", "new_name.py")
+    git("commit", "-m", "rename")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    pairs, err = m._lint_new_changed_files(root, f"{base}..{head}")
+    check("S11 改名對回舊路徑", err is None and pairs == [("new_name.py", "old_name.py")], f"{err} {pairs}")
+    dest = Path(tempfile.mkdtemp(prefix="gctl-lngr-"))
+    got = m._lint_new_extract(root, base, pairs, dest, "base")
+    check("S11 用舊路徑取得基準版內容", "new_name.py" in got, str(got))
+
+
+def t_lint_new_declaration():
+    """[S1] 命令沒有檔案清單佔位 → 只有那一條降級成只報不擋,不讓整道閘降級。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngd-"))
+    good = _lng_fake_linter(helper, "good.py", [["BAD", "R1", "新問題"]])
+    bad = "echo no-placeholder > {LINT_SARIF_OUT}"      # 沒有 {LINT_FILES}
+    _lng_declare(root, [bad, good])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 1\nBAD = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S1 沒有檔案清單佔位的那條被降級", v["report_only"] == [bad], str(v["report_only"]))
+    check("S1 合格的那條照跑、照擋", v["blocked"] is True and len(v["new"]) == 1, str(v))
+
+
+def t_lint_new_pathmap():
+    """[S3] 兩份快照解在不同目錄,回報的檔名要還原成專案相對路徑(不還原=指紋永遠比不到)。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngp-"))
+    cmd = _lng_fake_linter(helper, "p.py", [["BAD", "R1", "本來就有的問題"]])
+    _lng_declare(root, [cmd])
+    (root / "app.py").write_text("BAD = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("BAD = 1\nok = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    # 基準版與現在版都會報同一條;路徑還原對了才會抵銷成 0 條新增(沒還原=兩邊檔名不同,永遠比不到)
+    check("S3 路徑還原對了 → 舊告警不被當成新的", v["new"] == [], str(v["new"]))
+    # 直接驗剝前綴這件事
+    claims, ok = m._lint_run_and_parse("echo skip > {LINT_SARIF_OUT}", root)
+    check("S3 既有呼叫方式不受影響(兩個新參數都有預設值)", ok is False and claims == [], str(claims))
+
+
+def t_lint_oversize():
+    """[S8] 單檔行數與位元組數雙門檻,任一超過就不掃,而且要明說、要擋。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngo-"))
+    cmd = _lng_fake_linter(helper, "o.py", [])
+    _lng_declare(root, [cmd])
+    import json as _j
+    (root / ".lumos" / "config.json").write_text(
+        _j.dumps({"lint_new": {"max_file_lines": 5, "max_file_bytes": 1000000}}), encoding="utf-8")
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("x = 1\n" * 50, encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "big")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S8 行數超過→列出來", len(v["oversize"]) == 1 and v["oversize"][0]["over"] == "行數", str(v["oversize"]))
+    check("S8 檔太大要擋,不是免費放行", v["blocked"] is True and v["autopass"] is False, str(v))
+    # ★單行大檔★:行數騙得過去,位元組數擋得住
+    (root / ".lumos" / "config.json").write_text(
+        _j.dumps({"lint_new": {"max_file_lines": 4000, "max_file_bytes": 50}}), encoding="utf-8")
+    (root / "app.py").write_text("z" * 500, encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "minified")
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S8 單行大檔被位元組門檻擋住", len(v2["oversize"]) == 1 and v2["oversize"][0]["over"] == "位元組數", str(v2["oversize"]))
+
+
+def t_lint_undone_classes():
+    """[S9] 兩類失敗分開:環境不可用自動放行+記帳;放行檔讀不了不可以當成沒有放行紀錄。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    _lng_declare(root, ["this-command-does-not-exist {LINT_SARIF_OUT} {LINT_FILES}"])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S9 工具跑不動=環境不可用,自動放行", v["autopass"] is True and v["blocked"] is False, str(v))
+    check("S9 而且要留下是哪一條跑不動", any(u["kind"] == "env" for u in v["undone"]), str(v["undone"]))
+    # 放行檔壞掉:不可以靜默當成「沒有放行紀錄」(那會讓既有放行全部復活、整批擋人)
+    (root / ".lumos" / "lint-waivers.json").write_text("{ 壞掉", encoding="utf-8")
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S9 放行檔讀不了→環境不可用,不是當成沒有", v2["autopass"] is True and "放行檔讀不了" in v2["reason"], str(v2))
+    # 版本代號解析不出(單一參考點,終點是工作樹)→ 環境不可用,不硬猜
+    v3 = m._lint_new_verdict(root, "HEAD")
+    check("S9 算不出兩端版本→環境不可用", v3["status"] == "env-unavailable" and v3["autopass"] is True, str(v3))
+
+
+def t_lint_budget():
+    """[S10] 剩餘預算不足單條保底時,剩下的命令判成沒跑到並且擋,不是免費放行。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngbg-"))
+    cmd = _lng_fake_linter(helper, "b.py", [])
+    _lng_declare(root, [cmd])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    import time as _t
+    v = m._lint_new_verdict(root, f"{base}..HEAD", deadline=_t.monotonic() - 1)   # 預算早就用完
+    check("S10 預算不足→命令沒跑到", any(u["kind"] == "budget" for u in v["undone"]), str(v["undone"]))
+    check("S10 沒跑到要擋,不歸自動放行", v["blocked"] is True and v["autopass"] is False, str(v))
+
+
+def t_lint_killswitch():
+    """[S12] 環境變數可以整道關掉。"""
+    import os as _os
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngk-"))
+    _lng_declare(root, [_lng_fake_linter(helper, "k.py", [["BAD", "R", "x"]])])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 1\nBAD = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    old = _os.environ.get("LUMOS_SKIP_LINT_NEW")
+    try:
+        _os.environ["LUMOS_SKIP_LINT_NEW"] = "1"
+        v = m._lint_new_verdict(root, f"{base}..HEAD")
+        check("S12 環境變數關得掉", v["status"] == "off" and v["blocked"] is False, str(v))
+    finally:
+        if old is None:
+            _os.environ.pop("LUMOS_SKIP_LINT_NEW", None)
+        else:
+            _os.environ["LUMOS_SKIP_LINT_NEW"] = old
+
+
+def t_lint_gate_modes():
+    """[S13] 設定放 .lumos/config.json 的 lint_new 區塊;三態都要認得,不合法的值要唸並退回預設。"""
+    import json as _j
+    m = _lng_module()
+    root, git = _lng_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngm-"))
+    _lng_declare(root, [_lng_fake_linter(helper, "m.py", [["BAD", "R", "x"]])])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 1\nBAD = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    cfgp = root / ".lumos" / "config.json"
+    cfgp.write_text(_j.dumps({"lint_new": {"gate": "warn"}}), encoding="utf-8")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S13 只報告模式:有新增告警但不擋", v["new"] and v["blocked"] is False and v["status"] == "warn", str(v))
+    cfgp.write_text(_j.dumps({"lint_new": {"gate": "off"}}), encoding="utf-8")
+    check("S13 關閉模式", m._lint_new_verdict(root, f"{base}..HEAD")["status"] == "off", "")
+    cfgp.write_text(_j.dumps({"lint_new": {"gate": "亂寫", "budget_sec": -5}}), encoding="utf-8")
+    cfg = m._lint_new_config(root)
+    check("S13 不合法的值退回預設並唸出來", cfg["mode"] == "block" and cfg["budget_sec"] == 300 and len(cfg["warnings"]) == 2,
+          str(cfg))
+
+
+def t_lint_waive():
+    """[S7] 放行要寫理由、綁指紋、寫進會進版控的檔;讀改寫要上鎖。"""
+    m = _lng_module()
+    root, _git = _lng_repo()
+    ok, err = m._lint_waivers_add(root, "abc123", "R", "a.py", "測試理由", "tester")
+    check("S7 放行寫得進去", ok is True and err is None, str(err))
+    cur, err2 = m._lint_waivers_load(root)
+    check("S7 讀得回來", err2 is None and "abc123" in cur and cur["abc123"]["reason"] == "測試理由", str(cur))
+    ok2, err3 = m._lint_waivers_add(root, "abc123", "R", "a.py", "再來一次", "tester")
+    check("S7 同一個指紋不重複放行", ok2 is False and "已經放行過" in (err3 or ""), str(err3))
+    # 放在會進版控的位置(不是被忽略的暫存目錄)
+    check("S7 放行檔路徑固定", str(m._lint_waivers_path(root)).endswith(".lumos/lint-waivers.json"),
+          str(m._lint_waivers_path(root)))
+    # 併發:兩筆不同指紋各自加,兩筆都要在(只做原子換名的話後寫的會蓋掉先寫的)
+    m._lint_waivers_add(root, "def456", "R2", "b.py", "第二筆", "tester")
+    cur2, _ = m._lint_waivers_load(root)
+    check("S7 兩筆放行都留著", set(cur2) == {"abc123", "def456"}, str(sorted(cur2)))
+
+
+def t_lint_new_gate():
+    """[S6] 這道閘接在代碼審那一關,而且不看風險分級(低風險照樣擋)。"""
+    m = _lng_module()
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    i_disp = src.index("dv = _dispositions_verdict(")
+    i_lint = src.index("lv = _lint_new_verdict(")
+    i_tier = src.index('if tier != "high":\n        return {"blocked": False, "reason": f"tier={tier}(非 high)"')
+    check("S6 排在表態之後", i_lint > i_disp, f"{i_disp} {i_lint}")
+    check("S6 排在風險分級早退之前(低風險也要跑)", i_lint < i_tier, f"{i_lint} {i_tier}")
+    check("S6 擋下時有自己的理由種類", '"reason_kind": "lint_new"' in src, "")
+
+
+def t_lint_autopass_counted():
+    """[S14] 自動放行要被數出來——沒有人數,「有記帳」就是空頭支票。"""
+    import json as _j
+    import time as _time
+    m = _lng_module()
+    root = Path(tempfile.mkdtemp(prefix="gctl-lnga-"))
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    now = _time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    lines = [
+        _j.dumps({"ts": now, "gate": "lint-new", "kind": "fail-open", "hard": False}),
+        _j.dumps({"ts": now, "gate": "lint-new", "kind": "waived", "hard": False}),      # 不是自動放行
+        _j.dumps({"ts": now, "gate": "code-loop", "kind": "fail-open", "hard": False}),  # 別的閘
+        _j.dumps({"ts": "2020-01-01T00:00:00+08:00", "gate": "lint-new", "kind": "fail-open"}),  # 太久以前
+    ]
+    (root / "docs" / ".governance-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    check("S14 只數這道閘最近的自動放行", m._lint_new_autopass_count(root) == 1, str(m._lint_new_autopass_count(root)))
+    check("S14 沒有帳就回 0,不拋例外", m._lint_new_autopass_count(Path(tempfile.mkdtemp())) == 0, "")
+
+
+def t_lint_gov_gate_name():
+    """[S9] 閘名要登記——沒登記的閘名,記帳那支會拒寫,「有記帳」整句話就是假的。"""
+    m = _lng_module()
+    check("閘名 lint-new 有登記", "lint-new" in m._KNOWN_GATES, str(m._KNOWN_GATES[-3:]))
+    check("程式裡用的是同一個名字", m._LINT_NEW_GATE_NAME == "lint-new", m._LINT_NEW_GATE_NAME)
+
 if __name__ == "__main__":
     sys.exit(main())

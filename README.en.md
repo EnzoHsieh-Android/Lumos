@@ -154,6 +154,8 @@ Linters cover encoded rules; stack questions and reviewers challenge context-dep
 
 Pre-push code review is risk-tiered; small changes do not all trigger the same review effort. Gates can require answers and evidence to exist, but format checks alone cannot establish that an answer is correct.
 
+If a project declares linters, one more check runs before every push regardless of tier: each linter runs twice, once against the pre-change snapshot and once against the current one. Only findings new to this change block; pre-existing ones do not. False positives are waived on the record, and an unavailable tool auto-passes with a logged entry.
+
 [See the three layers, stack triggers, and push gates](docs/mental-model.md#7-reading-the-detailed-diagrams)
 
 <a id="write-back"></a>
