@@ -137,6 +137,27 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 **跟 SQL 段的關係**：registry 同是 `pypi:`（sqlfluff 也住 PyPI），lint-watch 盯版本走同一種座標。
 
+## Java／JVM（registry: `maven:<group>:<artifact>`；2026-09-12 補，★本機沒裝 Maven／Gradle，一條都沒實跑過★）
+
+跟其他段最大的差別：**這一段的工具全部要靠建置系統才跑得起來**（Maven 或 Gradle 的 plugin，或編譯器外掛），沒有像 `ruff`／`eslint` 那種裝了就能單獨敲的 CLI。所以下表的接法是照官方文件寫的，等第一個 Java 消費端出現時要實際裝一次再回填。
+
+| linter | 用途 | 備註 |
+|---|---|---|
+| **Error Prone** | 基石：Google 出的**編譯期**檢查，跟 javac 一起跑，錯的直接編不過 | `maven:com.google.errorprone:error_prone_core`；抓 `FutureReturnValueIgnored`（Future 回傳值被丟掉＝例外無聲蒸發）、`EqualsHashCode`、`GuardedBy` 等；★不用另外接進 lint.json，它在編譯那關就擋★ |
+| **SpotBugs** | 讀 bytecode 找 bug 樣式：資源沒關（`OBL_UNSATISFIED_OBLIGATION`）、迴圈裡相接字串（`SBSC_USE_STRINGBUFFER_CONCATENATION`）、同步不一致 | `maven:com.github.spotbugs:spotbugs`；有 SARIF 輸出，可進 `.lumos/lint.json` 的 `"java"` 鍵 |
+| **PMD** | 讀原始碼找規則違反：`CloseResource`、`AvoidInstantiatingObjectsInLoops`、`AvoidCatchingGenericException` | `maven:net.sourceforge.pmd:pmd-core`；規則集要自己挑，預設全開會很吵 |
+| NullAway | Error Prone 的外掛，做空值分析（要先標註哪些套件納管） | `maven:com.uber.nullaway:nullaway`；編譯期 |
+| Checkstyle | 排版與命名風格 | `maven:com.puppycrawl.tools:checkstyle`；跟前三支重疊少，但價值也低——排版問題交給格式化工具 |
+
+**跟 Kotlin/Android 段的關係**：registry 同樣走 `maven:` 與 `google-maven`（版本盯法完全一樣）。混編專案（Kotlin＋Java 舊碼）兩段都要裝：detekt 只看 `.kt`，SpotBugs／PMD 只看 Java。
+
+`.lumos/lint.json` 的鍵就是副檔名，所以接 Java 不用改任何程式：
+
+```json
+{"java": ["./gradlew spotbugsMain -PsarifOut={LINT_SARIF_OUT}"]}
+```
+
+
 ## 架構 lint（抽象軸；2026-07-26 補——AI 世代新品類）
 
 「架構規則寫成單元測試」：分層依賴方向、命名慣例、「UseCase 不准碰 DB」這類規則機械可驗，AI 寫的碼違反 → 測試翻紅 → agent 拿到確定性回饋自己修。2026 年此品類明確以「AI 生成碼的確定性護欄」自我定位。
