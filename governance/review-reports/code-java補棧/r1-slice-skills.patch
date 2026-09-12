@@ -1,0 +1,564 @@
+diff --git a/skills/java-idioms/SKILL.md b/skills/java-idioms/SKILL.md
+new file mode 100644
+index 00000000..1613e8e0
+--- /dev/null
++++ b/skills/java-idioms/SKILL.md
+@@ -0,0 +1,253 @@
++---
++name: java-idioms
++description: 寫或審 Java（JVM 後端服務、Android 舊碼、批次與排程程式）代碼前必讀——通用不變量層的慣例規則：並行等待與有界執行緒池、資源一定要關、外呼逾時與重試、金額用 BigDecimal、時間帶時區、例外不吞、集合與熱路徑、邊界驗證與秘密，另含 Android 生命週期與 JPA 交易兩組平台特有條款。每條附壞例→好例與機檢對照（Error Prone／SpotBugs／PMD／NullAway）。框架選擇（Spring vs Quarkus、JPA vs MyBatis、Gradle vs Maven）不在此裁——查該專案圖譜。
++---
++
++# Java 慣例（通用不變量層）
++
++**這份文件治的病**：AI 寫出「編得過、測得過，但會在半夜炸」的 Java——`Connection` 沒關把連線池名額耗光、`future.get()` 沒帶逾時讓執行緒永遠卡著、`RestTemplate` 沒設逾時讓一個慢的下游拖垮整台機器、金額用 `double` 算到差一分錢、`SimpleDateFormat` 當靜態欄位在多執行緒下吐出亂七八糟的日期、`catch (Exception e) {}` 把真正的錯吞掉。這些都不會炸在單元測試上，炸在跑了三天之後、在下游抖一下的那一刻。
++
++**分層原則**：只寫不隨框架選擇改變的原則。Spring 還是 Quarkus、JPA 還是 MyBatis、Gradle 還是 Maven——查該專案的知識圖譜與 CLAUDE.md（`lumos search <關鍵字>` 起手）。規則用「交易邊界」「連線池」這種能力措辭，不點名框架；真的只有某平台成立的（Android 生命週期、JPA 代理）集中放在最後兩節，並在標題標明。
++
++**機檢欄說明**：`EP:名稱`＝Error Prone（Google 的編譯期檢查外掛，跟 javac 一起跑）；`SB:代碼`＝SpotBugs（讀 bytecode）；`PMD:規則`＝PMD（讀原始碼）；`NullAway`＝空值分析（Error Prone 外掛）；`自訂`＝可寫 ast-grep 規則；`不可機檢`＝只有本文件與審查鏡頭能守——排最前面。
++
++> **誠實邊界（2026-09-12）**：本文件是官方文件整理。工具名與規則名有查過官方頁面，但**本機沒有裝 Maven／Gradle／Error Prone／SpotBugs／PMD，一條都沒有實跑核對過**（對照組：python-idioms 的 28 條 ruff 代號是用本機 `ruff rule` 逐條查過的）。**也尚未在任何真 Java 專案上用過**。第一個接入的專案要回填：哪些規則預設沒開、哪些誤報多到要關、哪些坑這份沒收。
++> REVISIT:2026-10-12 若仍無 Java 消費端，把「未實跑」這件事再標一次，別讓它靜靜變成看起來可信的文件。
++
++---
++
++## 一、並行與執行緒（本文件存在的理由之一）
++
++### R1. 互不依賴的等待必須一起飛 ⚠ 不可機檢，頭號條款
++```java
++// ✗ 笨（延遲相加）
++Balance b = client.balance();
++List<Position> p = client.positions();
++
++// ✓ 一起飛
++CompletableFuture<Balance> bf = CompletableFuture.supplyAsync(client::balance, pool);
++CompletableFuture<List<Position>> pf = CompletableFuture.supplyAsync(client::positions, pool);
++CompletableFuture.allOf(bf, pf).join();
++```
++- 判斷順序：先確認沒有資料依賴，再確認沒有共享資源（**同一個交易、同一條連線的查詢不准平行**），才並行。
++- `supplyAsync` 不指定執行器會用 `ForkJoinPool.commonPool()`——那是整個 JVM 共用的，拿來做阻塞 IO 會把其他人一起餓死。永遠自己給 pool。
++
++### R2. 執行緒池要有界，而且要關 ⚠ 不可機檢，生產最常炸
++```java
++// ✗ newCachedThreadPool 沒有上限：來多少請求就開多少執行緒
++ExecutorService pool = Executors.newCachedThreadPool();
++
++// ✓ 有界，而且滿了要有明確的拒絕策略
++ExecutorService pool = new ThreadPoolExecutor(
++    8, 8, 0L, TimeUnit.MILLISECONDS,
++    new ArrayBlockingQueue<>(500),
++    new ThreadPoolExecutor.CallerRunsPolicy());
++```
++- 大小依**下游能吃多少**算，不是依 CPU 數抄公式：下游是 DB 就看連線池，是外部 API 就看對方的速率限制。
++- 自己建的 pool 一定要有人負責 `shutdown()`；長活的放進容器的生命週期管理，短命的用 try-with-resources（Java 19+ `ExecutorService` 實作了 `AutoCloseable`）。
++
++### R3. `get()` / `join()` 一定要有逾時 ⚠ 不可機檢
++```java
++// ✗ 對方不回，這條執行緒就永遠站在這裡
++Result r = future.get();
++
++// ✓
++Result r = future.get(5, TimeUnit.SECONDS);   // 或 orTimeout(5, SECONDS)
++```
++- 沒有逾時的等待會一路往上堆：執行緒用完 → 佇列滿 → 整個服務不回應。這是「一個慢的下游拖垮整台機器」最常見的路徑。
++- 機檢：`EP:FutureReturnValueIgnored`（Future 回傳值被丟掉＝例外無聲蒸發）能抓另一半的錯，抓不到「沒帶逾時」。
++
++### R4. 共享可變狀態：先想能不能不共享 ⚠ 不可機檢
++- 順序：不可變物件 ＞ 侷限在單一執行緒 ＞ 併發集合（`ConcurrentHashMap`）＞ 細粒度鎖 ＞ 大段 `synchronized`。
++- 雙重檢查鎖定的欄位一定要 `volatile`，不然另一條執行緒可能看到「建好一半」的物件。
++- 機檢：`EP:GuardedBy`（有標註才驗）、`SB:IS2_INCONSISTENT_SYNC`。標註要自己加，不加等於沒有。
++
++---
++
++## 二、資源一定要關
++
++### R5. try-with-resources，不要 finally 手關 `SB:OBL_UNSATISFIED_OBLIGATION` `PMD:CloseResource`
++```java
++// ✗ 中間丟例外就漏一條連線；漏久了整個池子拿不到連線
++Connection c = ds.getConnection();
++PreparedStatement ps = c.prepareStatement(SQL);
++ResultSet rs = ps.executeQuery();
++
++// ✓ 反向依序關閉，例外照樣關
++try (Connection c = ds.getConnection();
++     PreparedStatement ps = c.prepareStatement(SQL);
++     ResultSet rs = ps.executeQuery()) {
++    ...
++}
++```
++- `Files.lines()`、`Files.walk()` 回的是**要關的 Stream**，最常被忘記：`try (Stream<String> lines = Files.lines(p)) { ... }`。
++- 這一類的症狀很晚才出現，而且長得像別的病（「資料庫變慢」「服務偶爾沒回應」），所以值得在審查時直接看有沒有 try-with-resources，不要靠事後查。
++
++### R6. 連線池大小是算出來的 ⚠ 不可機檢
++- 抄預設的後果分兩頭：太小＝請求排隊等連線；太大＝把資料庫壓垮，而資料庫垮了是全體一起垮。
++- 算法要寫進圖譜（實例數 × 每實例池大小 ≤ DB 能承受的連線數），不是留在某個人腦袋裡。
++
++---
++
++## 三、外呼
++
++### R7. 每個外呼都要有連線逾時與讀取逾時 ⚠ 不可機檢，最容易漏
++```java
++// ✗ HttpURLConnection、RestTemplate 的預設是「無限等」
++RestTemplate rt = new RestTemplate();
++
++// ✓
++RestTemplate rt = new RestTemplateBuilder()
++    .setConnectTimeout(Duration.ofSeconds(2))
++    .setReadTimeout(Duration.ofSeconds(5))
++    .build();
++// java.net.http.HttpClient：connectTimeout 建 client 時給、request 逾時每筆給
++```
++- 兩個逾時是不同的東西：連線逾時＝握手握不上；讀取逾時＝握上了但對方不吐資料。只設一個等於沒設。
++
++### R8. 重試要有退避與上限，不可逆的操作不盲目重送 ⚠ 不可機檢
++- 固定間隔的無限重試在對方剛恢復時會變成自己人的 DDoS（驚群）。要指數退避＋抖動＋次數上限。
++- **下單、付款、寄信、發貨這類做了回不去的操作**：重送前一定要有冪等鍵，讓對方能認出「這是同一筆」。否則網路抖一下就變成下兩次單。
++
++---
++
++## 四、正確性地雷（不是效能，是會算錯）
++
++### R9. 金額用 `BigDecimal`，而且用字串建 ⚠ 不可機檢
++```java
++// ✗ double 存不下 0.1；new BigDecimal(0.1) 會把 double 的誤差原封不動搬進來
++double total = 0.1 + 0.2;                 // 0.30000000000000004
++BigDecimal bad = new BigDecimal(0.1);     // 0.1000000000000000055511151231257827...
++
++// ✓
++BigDecimal good = new BigDecimal("0.1");
++BigDecimal sum = good.add(new BigDecimal("0.2"));
++if (sum.compareTo(target) == 0) { ... }   // equals 會比 scale：2.0 不等於 2.00
++```
++- 除法一定要指定 scale 與 `RoundingMode`，不然除不盡直接丟 `ArithmeticException`。
++- 機檢：`PMD:AvoidDecimalLiteralsInBigDecimalConstructor`。
++
++### R10. 時間一律帶時區，不要用 `Date` / `SimpleDateFormat` ⚠ 不可機檢
++```java
++// ✗ SimpleDateFormat 不是執行緒安全的；當靜態欄位共用會吐出亂掉的日期
++static final SimpleDateFormat F = new SimpleDateFormat("yyyy-MM-dd");
++
++// ✓ java.time 全部不可變、執行緒安全
++Instant now = Instant.now();                       // 時間點
++ZonedDateTime local = now.atZone(ZoneId.of("Asia/Taipei"));   // 要顯示才轉時區
++DateTimeFormatter F2 = DateTimeFormatter.ISO_LOCAL_DATE;      // 可安全共用
++```
++- 儲存與傳輸用 `Instant`（UTC），只有要給人看的時候才轉當地時區。`LocalDateTime` 沒有時區，拿它比較跨時區的事情一定錯。
++
++### R11. 例外不要吞、不要拿來當流程控制 `PMD:AvoidCatchingGenericException` `EP:EmptyCatch`
++```java
++// ✗ 錯被吃掉，之後查不出來
++try { doIt(); } catch (Exception e) { }
++
++// ✓ 要嘛處理、要嘛往上丟，而且帶上原因
++try { doIt(); } catch (IOException e) {
++    throw new UncheckedIOException("寫入報表失敗: " + path, e);
++}
++```
++- `catch (InterruptedException e)` 一定要 `Thread.currentThread().interrupt()` 把中斷旗標補回去，否則上層的取消機制失效（`SB:RU_INVOKE_RUN`、`PMD:DoNotUseThreads` 只抓到周邊，這條本身不可機檢）。
++- 日誌要記整個例外物件（`log.error("msg", e)`），不是 `e.getMessage()`——堆疊被丟掉就等於沒記。
++
++### R12. `equals` / `hashCode` 成對，可變物件不要當 Map 的 key `EP:EqualsHashCode`
++- 只改一個 = 放進 `HashMap` 就找不回來。用 record 或 IDE 產，不要手寫一半。
++- 物件當 key 之後又改了它的欄位，那筆資料就永遠撈不出來，也不會有任何錯誤訊息。
++
++### R13. 邊界驗證與秘密 `SB:SQL_INJECTION_JDBC` `EP:UnsafeSqlInjection`
++- SQL 一律 `PreparedStatement` 帶參數，不要字串相接——這是唯一真正擋得住注入的做法。
++- 秘密不寫死在程式碼、不進日誌。設定從環境變數或密鑰管理服務讀。
++- 外部進來的資料在邊界就驗（長度、範圍、格式），不要讓它帶著進到核心邏輯再炸。
++
++---
++
++## 五、集合與熱路徑
++
++### R14. 迴圈裡不要相接字串 `SB:SBSC_USE_STRINGBUFFER_CONCATENATION`
++```java
++// ✗ 每圈生一個新字串，n 個字串就是 O(n²)
++String s = "";
++for (String part : parts) s += part;
++
++// ✓
++StringBuilder sb = new StringBuilder();
++for (String part : parts) sb.append(part);
++```
++
++### R15. 成員查找不要用 List ⚠ 不可機檢
++- `list.contains(x)` 是逐個比（O(n)）。在迴圈裡做就是 O(n²)，資料一多就爆。換 `HashSet` / `HashMap`。
++- `list.remove(0)` 對 `ArrayList` 是整批往前搬；要當佇列用 `ArrayDeque`。
++
++### R16. 熱路徑注意自動裝箱 ⚠ 不可機檢
++- `Integer` 當 `int` 用，每次運算都在配置物件。大迴圈裡用原始型別或 `IntStream`。
++- `Map<Long, Long>` 這種在高頻路徑上是純粹的物件產生器，量大時考慮專用的原始型別集合。
++
++### R17. Stream 只能走一次，而且別在裡面做 IO ⚠ 不可機檢
++- 同一個 Stream 消費兩次會丟 `IllegalStateException`；要用兩次就先收成集合。
++- `parallelStream()` 用的是全 JVM 共用的 `ForkJoinPool.commonPool()`——裡面做阻塞 IO 會拖垮整個 JVM 的其他平行工作。要平行就自己給執行器。
++
++---
++
++## 六、Android 特有（只有 Android 專案適用）
++
++### R18. 不要讓長活物件握著 `Context` / `Activity` ⚠ 不可機檢
++```java
++// ✗ 單例握著 Activity：畫面關了記憶體也收不回
++private static Helper instance;
++Helper(Context context) { this.context = context; }
++
++// ✓ 要長期存就存 applicationContext
++Helper(Context context) { this.context = context.getApplicationContext(); }
++```
++- 同一類的洩漏：非靜態內部類別（隱含握著外層 Activity）、`Handler` 的匿名類別、註冊了沒解除的監聽器與廣播接收器。
++
++### R19. 主執行緒上不做磁碟、網路、大解析 ⚠ 不可機檢
++- 主執行緒被擋超過約 5 秒，系統會判定沒有回應直接殺掉；就算沒到 5 秒，畫面也已經卡住。
++- `SharedPreferences.commit()` 是同步寫磁碟，`apply()` 才是非同步。
++
++### R20. 回呼要跟畫面的生命週期綁 ⚠ 不可機檢
++- `AsyncTask`（已廢棄）、裸的 `Thread`、沒有解除的回呼，都會在畫面已經關掉之後回來寫 UI。
++- `findViewById` 不要在 `getView` / `onBindViewHolder` 裡反覆呼叫——那是每一列都在重新走整棵畫面樹。
++
++---
++
++## 七、JPA / 交易特有（只有用 ORM 的後端適用）
++
++### R21. N+1 查詢 ⚠ 不可機檢（要開 SQL 日誌才看得到）
++```java
++// ✗ 一筆訂單一次查詢：1 + N 次來回
++for (Order o : orderRepo.findAll()) { o.getItems().size(); }
++
++// ✓ 一次撈回來
++@Query("select o from Order o join fetch o.items")     // 或 @EntityGraph
++```
++- 這是後端最常見也最貴的效能問題，而且在測試資料只有三筆的時候完全看不出來。
++
++### R22. `@Transactional` 被同類自呼叫等於沒開 ⚠ 不可機檢
++- 交易是靠代理物件攔截外部呼叫來開的。同一個類別裡 `this.doIt()` 直接呼叫不經過代理，標註完全不生效——**而且不會有任何錯誤訊息**。
++- 交易裡面不要夾外部呼叫（HTTP、寄信）：交易會被拉長，鎖也跟著撐長；而且外呼成功、交易回滾的時候，那封信已經寄出去了收不回來。
++
++### R23. 大結果集要分頁或串流 ⚠ 不可機檢
++- `findAll()` 對一張會長大的表就是一顆定時炸彈。用 `Pageable`，或用串流逐筆處理。
++
++---
++
++## 接線表（怎麼把機檢那半裝起來）
++
++**本機沒有實跑核對過，以下是官方文件的接法，第一個接入的專案要驗一次再回填。**
++
++| 工具 | 裝法 | 進 lumos 的方式 |
++|---|---|---|
++| Error Prone | Gradle／Maven 的編譯器外掛，跟 javac 一起跑 | 編譯期就擋，不需要另外接 |
++| SpotBugs | Gradle／Maven plugin | 可輸出 SARIF，接進 `.lumos/lint.json` 的 `"java"` 鍵 |
++| PMD | Gradle／Maven plugin，規則集要自己挑 | 可輸出 SARIF |
++| NullAway | Error Prone 的外掛，要標註套件範圍 | 編譯期 |
++
++`.lumos/lint.json` 的鍵就是副檔名，所以 Java 不需要改任何程式：
++```json
++{"java": ["./gradlew spotbugsMain -PsarifOut={LINT_SARIF_OUT}"]}
++```
++
++**其餘的坑靠審查鏡頭**：本文標「⚠ 不可機檢」的條目，載重問題已經由 lumos 的效能檢核機制在三個時機自動推送（動手前、推送前、終審），內容來源是圖譜的 `Systems/效能檢核目錄` Java 段——兩邊有雙向同步義務，改一邊要改另一邊。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index 4ad18705..034a1e25 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -259,21 +259,21 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
+ ```
+ 
+ ## 7.6 架構對齊席派工(code-loop 與 design-loop 皆派;2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)
+ 
+ ```
+ 你是架構對齊審查員。你唯一的工作:判這份 diff(或設計)有沒有「跟這個專案既有的做法不一樣」。
+ 不找 bug(別的審查員管),不評風格好壞——只管「一不一致」。
+ 
+ 被審材料:{工作副本路徑}
+ 同層最相似的既有檔(對照用,這些代表專案現在的寫法):{鄰居檔清單,pitfalls --diff 會吐}
+-這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms,依副檔名}
++這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms / java-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
+ 圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..HEAD`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:留一行 `LUMOS-SPEC: <計劃.md>`,hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
+ 
+ 三問(設計審多第四問),逐問答、每問附對照的 file:line:
+ 1. 分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟鄰居檔一樣嗎?有沒有跨層直呼(例:UI 直接打 DB、Service 直接 new 另一個 Service)?
+ 2. 命名與錯誤處理:命名慣例、例外/錯誤回傳方式、日誌方式,跟鄰居檔一樣嗎?
+ 3. 第二種做法:這份 diff 有沒有引入專案裡原本沒有的做法(新的 DI 方式、新的狀態管理、另一套 HTTP client、自創的工具函式而鄰居已有同功能)?
+ 4. (設計審才問)落點合不合理:計劃的 lands_in 列了現況要寫進哪幾篇——該寫進既有那篇,還是另開一篇?派工詞尾端的「落點現況」列了每篇掛幾份計劃、幾行 KEY、管幾支檔;一篇已經很大、或要塞進的東西超出它的負責範圍,就該另開(每支檔有家,2026-09-11)。
+ 
+ 跟棧別檢核題撞到時(2026-09-09 起,Projects/兩席相反時端出張力_計劃):派工單附的表態記錄裡若有 `status=tension` 的題,
+ 那是作者已經看見兩邊——既有寫法 X(existing)、隱患 Y(hazard)、建議 Z(suggestion)、這次選了哪邊(chosen)。
+@@ -321,21 +321,21 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)
+ ★不計入 3 句上限的是既有結構欄位★:severity、blocking 宣告、`引句:「…」`行、`file: \`路徑:行號\`` 佐證行——那些照既有規格照給,不因句數上限省略。
+ 
+ ## 7.8 資安席派工(code-loop 定錨 high 必派,處置閘會擋;2026-09-11 Enzo 裁 d6,單源=[[Projects/代碼審資安席_計劃]])
+ 
+ **為什麼有這一席**:2026-08-27 曾以「單人私有 repo、沒人故意攻擊」刻意不設資安鏡頭;2026-09-11 前提翻了——repo 公開、README 教一行安裝、消費專案裡有對外的會員與金流後端,而且打開陌生 repo 時 hook 曾執行對方的程式。清單與「不報什麼」借 Anthropic 公開的 claude-code-security-review,行動端補 OWASP MASVS。**席名固定寫 `資安-<模型>`**(記帳 `--auditor` 用同一個名字):處置閘只認席名有一段完全等於「資安」或「security」的帳列,而且要它看過的檔涵蓋最後一版凍結 patch 的全部檔——修正時新碰到的檔,要對最新的凍結 patch 再派一次。
+ 
+ ```
+ 你是資安審查員,站在攻擊者那一邊看這份 diff。你只看「能被利用的洞」,不看一般 bug、效能、風格(別席管)。
+ 
+ 被審材料:{凍結 patch 路徑}
+-這個技術棧慣例 skill 裡的資安條款:{目前只有 node-idioms 的邊界驗證/秘密不進 log/速率限制;其他棧沒有就寫「無」}
++這個技術棧慣例 skill 裡的資安條款:{node-idioms 的邊界驗證/秘密不進 log/速率限制;python-idioms 的 R15 邊界驗證/R16 秘密不進 log/R18 反序列化與 shell;java-idioms 的 R13 邊界驗證與 SQL 參數化/秘密不進 log;其他棧沒有就寫「無」}
+ (選配)專案資安類 linter 的輸出:{有宣告才附,沒有寫「無」}——這是另外長出來的材料,拿來跟 diff 對照
+ 
+ 逐類想過(沒有也寫「已看,無」):
+ 1. 不可信輸入流到危險操作:SQL / NoSQL / 命令 / 路徑 / 模板注入、XXE(XML 外部實體注入)、反序列化、eval 類
+ 2. 登入與權限:繞過、越權、session / token / JWT(JSON Web Token 登入憑證)處理
+ 3. 密鑰與個資:寫死在程式裡、進 log / repo / 錯誤訊息、能認出特定個人的資料(PII)外洩
+ 4. 加密與傳輸:弱演算法、關掉憑證驗證、可預測的隨機數
+ 5. 執行邊界:hook、安裝腳本、CI 會不會執行不可信位置的檔;shell 插值;寫進使用者全域設定;授權範圍被放寬
+ 6. 行動端:本機明文儲存、網路安全設定放寬、WebView / 深層連結、剪貼簿
+ 另看這次新加的依賴:沒鎖版本、來源不明。
+diff --git a/skills/python-idioms/SKILL.md b/skills/python-idioms/SKILL.md
+new file mode 100644
+index 00000000..0048b98b
+--- /dev/null
++++ b/skills/python-idioms/SKILL.md
+@@ -0,0 +1,249 @@
++---
++name: python-idioms
++description: 寫或審 Python（asyncio 長跑服務、機器人、排程、資料處理腳本）代碼前必讀——通用不變量層的慣例規則：並行等待與有界並行、不阻塞事件迴圈、task 參照與取消、外呼逾時與重試、例外與程序生命週期、金額用 Decimal、時間帶時區、資源釋放、邊界驗證與秘密。每條附壞例→好例與機檢對照（ruff／mypy／bandit）。框架選擇（Django vs FastAPI、SQLAlchemy vs 其他 ORM、pandas vs polars、requests vs httpx）不在此裁——查該專案圖譜。
++---
++
++# Python 慣例（通用不變量層）
++
++**這份文件治的病**：AI 寫出「正確但笨、或正確但會在半夜炸」的 Python——`async def` 裡塞了 `time.sleep` 和 `requests.get` 讓整個事件迴圈停擺、`asyncio.create_task` 的回傳值沒存（task 可能半路被回收、例外無聲蒸發）、`requests` 沒給 timeout（對方掛了你永遠卡住）、金額用 `float` 算到差一分錢、`datetime.now()` 不帶時區讓跨時區比對全錯、`except Exception: pass` 把真正的錯吞掉。這些不炸在單元測試上，炸在長跑幾天之後、在網路抖一下的那一刻。
++
++**分層原則**：只寫不隨框架選擇改變的原則。Django 還是 FastAPI、哪個 ORM、pandas 還是 polars——查該專案的知識圖譜與 CLAUDE.md（`lumos search <關鍵字>` 起手）。規則以「可注入」「runtime schema」等能力措辭，不點名框架。
++
++**機檢欄說明**：`ruff:代碼`＝Ruff 規則（⚠ Ruff 預設只開 `E`／`F` 兩族，下面引用的 `ASYNC`／`RUF`／`S`／`DTZ`／`B`／`G`／`T20`／`SIM`／`PERF`／`TRY`／`BLE` 要在 `pyproject.toml` 的 `select` 明確開，沒開等於沒裝，接法見文末接線表）；`mypy`＝型別檢查（`--strict`）；`bandit:代碼`＝Bandit；`自訂`＝可寫 ast-grep 規則；`不可機檢`＝只有本文件與審查鏡頭能守——排最前面。
++
++> **誠實邊界（2026-09-11）**：本文件是官方文件整理，規則代號全部用本機 `ruff 0.16.7` 的 `ruff rule <代號>` 逐條核對過；**尚未在任何真 Python 專案上實跑**。第一個接入的是一個自動交易專案（asyncio 長連線＋pandas 回測），它踩到的坑要回填進來。
++
++---
++
++## 一、async 紀律（本文件存在的理由）
++
++> **審查時機管道**：本文標「⚠ 不可機檢」的效能／適用性條目，其載重問已由 lumos 效能檢核機制在三時機自動推送（動手前 impact hook 注入／push 前 pitfalls advisory／終審 code-loop 鏡頭；內容源＝lumos-toolchain 圖譜 Systems/效能檢核目錄 Python 段，雙向同步義務）——可機檢條目歸 Ruff，勿靠人記。
++
++### R1. 互不依賴的等待必須並行 ⚠ 不可機檢，頭號條款
++```python
++# ✗ 笨（延遲相加）
++balance = await client.balance()
++positions = await client.positions()
++
++# ✓ 一起飛（3.11+ 優先用 TaskGroup：一個失敗會取消其他，例外不會被吞）
++async with asyncio.TaskGroup() as tg:
++    b = tg.create_task(client.balance())
++    p = tg.create_task(client.positions())
++balance, positions = b.result(), p.result()
++# 個別失敗不連坐、要每個結果 → asyncio.gather(..., return_exceptions=True)
++```
++- 判斷順序：先確認無資料依賴，再確認無共享資源（同一個 DB transaction／同一條連線的查詢**不准**平行），才並行。
++- 依據：[Python docs — asyncio.TaskGroup](https://docs.python.org/3/library/asyncio-task.html#task-groups)
++
++### R2. `gather` 不是佇列、不是限流器 ⚠ 不可機檢，生產最常炸
++```python
++# ✗ 一千個代號同時打 API：吃到對方速率限制被封、或打爆自己的連線池
++await asyncio.gather(*(fetch(sym) for sym in symbols))
++
++# ✓ 有界並行
++sem = asyncio.Semaphore(10)   # 上限依對方的速率限制算，寫成常數並註明依據
++async def bounded(sym):
++    async with sem:
++        return await fetch(sym)
++await asyncio.gather(*(bounded(s) for s in symbols))
++```
++- 集合大小不是你控制的（來自 DB／外部輸入／交易所清單）就一律有界。
++
++### R3. `create_task` 的回傳值要存起來，例外要有人接
++```python
++# ✗ 事件迴圈只留弱參照：task 可能跑到一半被回收；裡面的例外沒人看見
++asyncio.create_task(heartbeat())
++
++# ✓ 存強參照，完成時移除並檢查例外
++background = set()
++t = asyncio.create_task(heartbeat())
++background.add(t)
++t.add_done_callback(background.discard)
++# 更好：放進 TaskGroup，生命週期跟著作用域走
++```
++- 機檢：`ruff:RUF006`（asyncio-dangling-task）。
++- 依據：[Python docs — asyncio.create_task「Important」段](https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task)
++
++### R4. `async def` 裡禁同步阻塞；CPU 重活離開事件迴圈
++- `time.sleep`、`requests.*`、`urllib.request.urlopen`、同步 `open()` 讀大檔、`subprocess.run`、大 JSON 解析、大迴圈——任一個在 coroutine 裡＝所有 task 一起停（行情漏收、心跳逾時、WebSocket 被伺服器斷線）。
++- 換法：`asyncio.sleep`、非同步 client（能力措辭：支援 async 的 HTTP client）、`asyncio.to_thread(同步函式)`；CPU 重活用 `ProcessPoolExecutor`（標準 CPython 有 GIL，執行緒不會讓 CPU 重活變快）。
++- 「`while True:` + `sleep` 輪詢」優先改成等事件、佇列或交易所推播。
++- 機檢：`ruff:ASYNC251`（time.sleep）、`ruff:ASYNC210`（阻塞 HTTP）、`ruff:ASYNC230`（阻塞 open）、`ruff:ASYNC220`（同步建子程序）、`ruff:ASYNC110`（忙等迴圈）。
++
++### R5. 每個外呼都有逾時；重試有退避、有上限 ⚠ 部分不可機檢
++```python
++# ✗ requests 預設不逾時：對方不回，你就永遠卡在這行
++r = requests.get(url)
++
++# ✓ 同步：明確 timeout（連線, 讀取）
++r = requests.get(url, timeout=(3.05, 10))
++# ✓ 非同步：整段加上限（3.11+）
++async with asyncio.timeout(10):
++    data = await client.get(url)
++```
++- 重試：指數退避＋上限＋只重試「可安全重做」的操作；不可逆操作（下單、付款、寄信）的重試規則見 R17。
++- 連線／session／client 在程序生命週期建一次重用，不要每次請求新建。
++- 機檢：`ruff:S113`（requests 無 timeout）、`ruff:ASYNC109`（async 函式自帶 timeout 參數，改用 `asyncio.timeout`）。
++- 依據：[Requests docs — Timeouts](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts)、[Python docs — asyncio.timeout](https://docs.python.org/3/library/asyncio-task.html#asyncio.timeout)
++
++### R6. 不准吞例外；不准吞取消
++```python
++# ✗ 什麼錯都當沒發生
++try:
++    place_order(o)
++except:            # 連 KeyboardInterrupt、CancelledError 都吞
++    pass
++
++# ✓ 只接你知道怎麼處理的，其他往上丟
++try:
++    place_order(o)
++except OrderRejected as e:
++    log.warning("order rejected: %s", e.reason)
++```
++- `asyncio.CancelledError` 是 `BaseException`（3.8 起），`except Exception` 接不到它——這是對的；但裸 `except:` 或 `except BaseException:` 會把取消吞掉，關閉流程就卡住。真的要接取消做清理，清理完**重新 raise**。
++- 機檢：`ruff:E722`（裸 except）、`ruff:BLE001`（接太寬）、`ruff:S110`（try-except-pass）。
++
++---
++
++## 二、錯誤與程序生命週期
++
++### R7. 例外要保留原因；邊界才轉換
++```python
++# ✗ 原始例外斷掉，stack 看不到真兇
++except KeyError:
++    raise ConfigError("missing key")
++
++# ✓
++except KeyError as e:
++    raise ConfigError("missing key") from e
++```
++- 在 `except` 裡記錄錯誤用 `log.exception(...)`（自動帶 stack），不用 `log.error(...)`。
++- 機檢：`ruff:B904`（except 內 raise 沒 from）、`ruff:TRY400`（except 內用 error 而非 exception）。
++
++### R8. 長跑程序要有優雅關閉 ⚠ 不可機檢
++- 收到 `SIGTERM`／`SIGINT` → 停止接新工作 → 取消背景 task 並等它們收尾 → 關連線／session → 退出。沒這條，每次重啟都可能留下半途的狀態（掛單沒記錄、檔案寫一半）。
++- 能力措辭：`loop.add_signal_handler`（Unix）或框架提供的 lifespan 掛鉤；重啟交給外部 supervisor（systemd、launchd、容器平台）。
++- library 碼不准 `sys.exit()`，只有入口檔可以。
++
++### R9. 日誌用 logging，不用 print；log 參數用延遲格式化
++```python
++# ✗
++print(f"filled {qty} @ {price}")
++log.info(f"filled {qty} @ {price}")     # 就算這個等級沒開也照樣先組字串
++
++# ✓
++log.info("filled %s @ %s", qty, price)
++```
++- 機檢：`ruff:T201`（print）、`ruff:G004`（logging 用 f-string）。
++
++---
++
++## 三、資料與數值
++
++### R10. 金額、價格、數量用 `Decimal`，不用 `float`；`Decimal` 從字串建 ⚠ 部分不可機檢
++```python
++# ✗ 二進位浮點：0.1 + 0.2 != 0.3；累加與比較會漂
++total = 0.1 + 0.2
++qty = Decimal(0.1)                 # 已經是錯的值：Decimal('0.1000000000000000055511151231257827…')
++
++# ✓
++from decimal import Decimal, ROUND_DOWN
++qty = Decimal("0.1")
++qty = (raw_qty / step).to_integral_value(rounding=ROUND_DOWN) * step   # 對齊外部系統給的精度規則
++```
++- 外部系統（交易所、金流）回的數字用字串接進 `Decimal`，捨入方向寫明（`ROUND_DOWN`／`ROUND_HALF_UP`）且只在一處做。
++- 統計與回測的大量運算用 float／numpy 可以，**要送出去的那個數字**（下單量、價格、金額）在邊界轉成 `Decimal` 並對齊精度。
++- 機檢：`ruff:RUF032`（Decimal 用 float 常數建）；「金額用了 float」本身不可機檢。
++- 依據：[Python docs — decimal](https://docs.python.org/3/library/decimal.html)
++
++### R11. 時間一律帶時區（存 UTC，顯示才轉）；量時間間隔用單調時鐘
++```python
++# ✗ naive datetime：跟帶時區的比會直接炸，或默默用錯時區
++now = datetime.now()
++now = datetime.utcnow()            # 3.12 起棄用，而且回的還是 naive
++
++# ✓
++now = datetime.now(timezone.utc)
++t0 = time.monotonic()              # 算逾時、間隔用這個；系統時間被校時會跳
++```
++- 機檢：`ruff:DTZ005`（now 不帶 tz）、`ruff:DTZ003`（utcnow）。
++
++### R12. 不准可變預設參數；閉包別抓迴圈變數
++```python
++# ✗ 所有呼叫共用同一個 list
++def add(order, book=[]): ...
++# ✓
++def add(order, book=None):
++    book = [] if book is None else book
++```
++- 類別層可變屬性（`items: list = []`）同理，所有實例共用。
++- 機檢：`ruff:B006`（可變預設參數）、`ruff:RUF012`（類別層可變預設）、`ruff:B023`（閉包抓迴圈變數）。
++
++---
++
++## 四、資源與記憶體
++
++### R13. 檔案、連線、鎖一律用 `with`／`async with` 管
++- 例外路徑也要釋放；session／client／連線池在程序層建一次（見 R5），不要在函式裡建了不關。
++- 機檢：`ruff:SIM115`（open 沒用 context manager）。
++
++### R14. 大資料逐塊處理；長活集合有上限 ⚠ 不可機檢
++- 大檔逐行或分塊讀（`for line in f`、`read_csv(chunksize=…)`）、大查詢用 cursor 分批，不用 `read()`／`fetchall()` 整包進記憶體。
++- 模組層的 dict／list 當快取＝沒有上限的洩漏；要快取就用有上限的（`lru_cache(maxsize=N)`，不是 `maxsize=None`）或有 TTL 的實作。
++- pandas 熱路徑不用 `iterrows`／`apply(axis=1)`／迴圈裡 `concat`，改向量化或先收成 list 最後一次建（效能題 `py-hotpath` 會在審查時問）。
++
++---
++
++## 五、邊界、型別與安全
++
++### R15. 外部輸入在邊界驗證後才進領域層；型別檢查開 strict
++```python
++# ✗ 把外部 JSON 直接當領域物件用
++price = msg["p"]                       # KeyError、型別是字串還是數字都不知道
++
++# ✓ runtime schema 驗證（能力措辭；pydantic／attrs＋cattrs／自寫都行）→ 得到窄型別
++tick = Tick.model_validate(msg)        # 驗證失敗在邊界就擋下
++```
++- 型別：新專案 `mypy --strict`；公開函式都要有型別註記，`Any` 要有理由。
++- 機檢：`mypy --strict`（`disallow_any_generics`、`disallow_untyped_defs`…）。
++
++### R16. 秘密不進 log、不進錯誤訊息、不進 repo
++- API key／secret 從環境變數或秘密管理讀；`.env` 進 `.gitignore`；log 物件序列化前遮罩；錯誤對外只給錯誤碼。
++- 機檢：`ruff:S105`（寫死的密碼字串）、`bandit`；`自訂`（log 呼叫帶 `secret`／`api_key` 欄位）。
++
++### R17. 不可逆的外部動作（下單、付款、寄信、刪資料）要冪等或有守衛 ⚠ 不可機檢
++- 重試機制（R5）、斷線重連、程序重啟都保證同一動作會再來一次：用冪等 key（例如自己產生的 client order id）、去重表、或送出前「查一下是不是已經做過」，擇一並寫進節點的 `[guard:]`。
++- 對應圖譜 ★IRREVERSIBLE★ 合約的 rollback／guard 要求。
++
++### R18. 不反序列化不信任的資料；不用 shell 拼指令
++- `pickle.load` 不信任的來源＝任意程式碼執行；子程序用參數列表，不用 `shell=True` 拼字串。
++- 機檢：`ruff:S301`（pickle）、`ruff:S602`（shell=True）。
++
++---
++
++## 接線表（裝了不等於開了）
++
++| 規則 | 工具 | 前提 | 動作 |
++|---|---|---|---|
++| R3–R6、R9–R13、R16、R18 | Ruff | `select` 要明確開下面這些族 | 見下方設定 |
++| R15 型別 | mypy | `--strict` | CI 當閘；★沒有 SARIF 輸出★（只有 `--output json`），不登進 `.lumos/lint.json` |
++| R16、R18 資安 | Bandit | 裝 `bandit[sarif]` | `bandit -r src -f sarif -o {LINT_SARIF_OUT}` 可登進 `.lumos/lint.json` |
++| 依賴漏洞 | pip-audit | — | CI 報表；無 SARIF（只有 json／cyclonedx） |
++| 全部 Ruff 告警 | SARIF 進審查 | Ruff 內建 | `.lumos/lint.json`：`{"py": ["ruff check --output-format sarif -o {LINT_SARIF_OUT} src"]}`，接好跑 `lumos lint-check --smoke` |
++
++```toml
++# pyproject.toml
++[tool.ruff.lint]
++select = ["E", "F", "B", "ASYNC", "RUF", "S", "DTZ", "G", "T20", "SIM", "PERF", "TRY", "BLE"]
++# 中文註解與說明文字的全形標點不是混淆字元——沒這行，RUF001/002/003 會把每個「：（）」都報成錯
++# (2026-09-11 首個接入專案第一次跑 ruff 就踩到)
++allowed-confusables = ["：", "，", "（", "）", "；", "！", "？", "～", "｜"]
++
++[tool.ruff.lint.per-file-ignores]
++"tests/**" = ["S101"]    # 測試裡用 assert 是正常的
++
++[tool.mypy]
++strict = true
++```
++
++**依據總表**：[Python docs — Coroutines and Tasks](https://docs.python.org/3/library/asyncio-task.html)、[Python docs — Developing with asyncio](https://docs.python.org/3/library/asyncio-dev.html)、[Python docs — decimal](https://docs.python.org/3/library/decimal.html)、[Requests — Timeouts](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts)、[Ruff rules](https://docs.astral.sh/ruff/rules/)、[mypy — strict](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)、[Bandit](https://bandit.readthedocs.io/)。

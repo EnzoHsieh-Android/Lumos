@@ -27,6 +27,7 @@ summary: |-
   KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
+  KEY:★2026-09-12 這道閘的核心保證被實際打穿過一次(Java 補棧代碼審 r1 資安席)★——閘驗的是「合約綁的名字有沒有出現在 discover_test_methods 掃出來的集合裡」,所以★掃描器認錯名字=閘直接失效★:當時 Java 的方法正則太鬆,一支「掛註解但不是 void 的誘餌方法」後面接一支完全沒掛註解的空方法,那支空方法就被收成真證據,健檢一聲不吭。教訓:新增任何語言的測試掃描時,除了「收得到真測試」還要有「收不到假測試」的斷言,兩邊都要 [test:t_java_profile_discovery]
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/guard-kill]]
   KEY:[2026-09-11 多平台缺指令,Issues/多平台設定下測試指令被默默略過]沒設 run_cmd 改成★逐平台★——有指令的平台照跑,沒指令的平台那幾支列成 not_run(平台點名);全部沒指令才 no-config;原本碰到第一支沒指令就整批 no-config,連前面已判的懸空紅都被吞掉(違反上一行合約「任一懸空 → 擋」的原意)。訊息改由 _no_run_cmd_reason 給:多平台點名平台,最上層還留著 test.run_cmd 就照 2026-07-10 並存優先序講明它不生效、要搬;code-loop check 與 bound-tests 兩條路共用 [test:t_bound_tests_multiplatform_missing_cmd]

@@ -1,0 +1,962 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 4b02b3a8..29cd6837 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3359,20 +3359,28 @@ CODE_EXTS_T = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts
+                ".sql", ".kt", ".java", ".go", ".rs", ".swift", ".dart"}
+ CODE_SKIP_DIRS = {".git", "node_modules", "bin", "obj", "dist", "build",
+                   "__pycache__", "publish", "vendor", ".vs", ".idea"}
+ 
+ # Kotlin/JUnit 測試方法:@Test/@ParameterizedTest 等註解 → (中間不跨 `{`,即不越過方法體)
+ # → fun 方法名(允許反引號帶空白的 Kotlin 測試名)。去註解後比對(同 C#)。
+ KOTLIN_TEST_RE = re.compile(
+     r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]*?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
+     re.S)
+ 
++# Java/JUnit 測試方法:註解 → void 方法名。★中間用非貪婪 `.*?` 而不是 Kotlin 那條的 `[^{]*?`★——
++# Java 的參數化註解會帶大括號(`@ValueSource(ints = {1, 2, 3})`),`[^{]*?` 會在那裡斷掉整支漏掉;
++# 而 JUnit 規定測試方法必須回傳 void,所以「註解之後最近的一個 void 方法名」就是它本人。
++# 代價:萬一有人把 @Test 標在非 void 方法上(JUnit 會拒跑),這條會抓到下一個 void 方法的名字。
++JAVA_TEST_RE = re.compile(
++    r"@(?:Test|ParameterizedTest|RepeatedTest)\b.*?\bvoid\s+([A-Za-z_]\w*)\s*\(",
++    re.S)
++
+ # Maestro(Android E2E)flow 綁 name: 欄位。行尾 \s*$ 錨:多字 name(含空白)NO MATCH
+ # → 與 playwright 對稱、不製造假陽性(識別字安全的 name 才可綁,設計慣例)。
+ MAESTRO_NAME_RE = re.compile(r"(?m)^name:\s*[\"']?([A-Za-z_]\w*)[\"']?\s*$")
+ # file_must_match:只認含 appId: 行首的檔(真 Maestro flow),濾掉 CI 等其他 yaml。
+ MAESTRO_FLOW_RE = re.compile(r"(?m)^appId:")
+ # Playwright(web E2E):test('id')/test.describe('id')。capture 識別字後需緊接引號,
+ # 故含空白 title(如 'should show menu')NO MATCH(設計上不可綁)。
+ PLAYWRIGHT_TEST_RE = re.compile(r"\btest(?:\.describe)?\(\s*[\"']([A-Za-z_]\w*)[\"']")
+ 
+ # Dart/Flutter:test('id')/testWidgets('id') 字串名錨——識別字名才可綁(含空白 NO MATCH,
+@@ -3494,20 +3502,30 @@ TEST_PROFILES = {
+                  "state": (["IntegrationTests"], [])},
+     },
+     "kotlin-junit": {
+         "exts": {".kt"}, "method_re": KOTLIN_TEST_RE, "scaffold_ext": ".kt",
+         "dir_mode": "rglob", "rglob_under": "src",   # 限 Gradle/Maven src/ 下,排除 docs/test 等
+         "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
+         "dirs": {"pure": (["test"], []),
+                  "behavioral": (["androidTest", "test"], []),
+                  "state": (["androidTest", "test"], [])},
+     },
++    # Java/JUnit(2026-09-12 Java 補棧):目錄慣例與 kotlin-junit 相同(同一套 Gradle/Maven 佈局,
++    # Android 的 Java 舊碼一樣住 androidTest/),差別只在副檔名與方法形狀。
++    "java-junit": {
++        "exts": {".java"}, "method_re": JAVA_TEST_RE, "scaffold_ext": ".java",
++        "dir_mode": "rglob", "rglob_under": "src",
++        "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
++        "dirs": {"pure": (["test"], []),
++                 "behavioral": (["androidTest", "test"], []),
++                 "state": (["androidTest", "test"], [])},
++    },
+     # Maestro(Android E2E):測試單位=YAML flow 檔,綁 name: 欄位(識別字安全)。
+     # file_must_match=^appId: 只認真 flow,濾掉 CI 等其他 yaml(否則其 name: 被誤收)。
+     "maestro": {
+         "exts": {".yaml", ".yml"}, "method_re": MAESTRO_NAME_RE, "scaffold_ext": ".yaml",
+         "dir_mode": "rglob", "rglob_under": None, "file_must_match": MAESTRO_FLOW_RE,
+         "attr_hint": "Maestro flow name:", "fail_hint": "assertVisible(哨兵)",
+         "dirs": {"pure": ([], []),
+                  "behavioral": ([".maestro"], []),
+                  "state": ([".maestro"], [])},
+     },
+@@ -10172,22 +10190,22 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
+     border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;user-select:none;
+     transition:all .18s cubic-bezier(.22,.61,.36,1);display:flex;align-items:center;gap:7px;letter-spacing:.2px}
+   .chip:active{transform:scale(.95)}
+   .chip .dot{width:8px;height:8px;border-radius:50%;box-shadow:0 0 8px currentColor}
+   .chip.on{color:var(--text);background:var(--surface2);border-color:var(--faint)}
+   .chip.off{opacity:.38}
+   #cy{position:fixed;top:64px;left:0;right:0;bottom:0;z-index:1}
+   /* 常駐節點標籤:HTML 疊層,逐幀貼到節點螢幕座標上(無 WebGL 文字依賴) */
+   #labels{position:fixed;top:64px;left:0;right:0;bottom:0;z-index:2;pointer-events:none;overflow:hidden}
+   .nlab{position:absolute;top:0;left:0;white-space:nowrap;font-family:var(--font-ui);font-weight:600;
+-    color:rgba(214,220,234,.52);                       /* 淡:半透明霧白 */
+-    text-shadow:0 1px 4px rgba(0,0,0,.92),0 0 2px rgba(0,0,0,.85);  /* 細陰影 → 深色背景與亮節點上都讀得到 */
++    color:#ffffff;                                     /* 醒目:不透明純白(2026-09-11 使用者要求;舊版半透明霧白在亮節點旁讀不到) */
++    text-shadow:0 1px 4px rgba(0,0,0,.95),0 0 3px rgba(0,0,0,.95);  /* 細陰影 → 深色背景與亮節點上都讀得到 */
+     transform:translate(-9999px,-9999px);will-change:transform,opacity;transition:opacity .18s}
+   #panel{position:fixed;top:64px;right:0;bottom:0;width:460px;max-width:90vw;z-index:9;
+     background:linear-gradient(180deg,var(--surface),#0c0e15);border-left:1px solid var(--border);
+     box-shadow:var(--shadow);transform:translateX(102%);
+     transition:transform .42s cubic-bezier(.16,1,.3,1);display:flex;flex-direction:column}
+   #panel.open{transform:translateX(0)}
+   #phead{padding:var(--sp5) var(--sp5) var(--sp4);border-bottom:1px solid var(--border-soft);position:relative}
+   #phead .kicker{font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
+   #phead .ttl{font-family:var(--font-ui);font-size:19px;font-weight:600;line-height:1.34;letter-spacing:.2px;padding-right:34px}
+   #phead .meta{margin-top:13px;display:flex;gap:7px;flex-wrap:wrap}
+@@ -10224,25 +10242,26 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
+   #back:hover{background:var(--surface3);color:var(--text);border-color:var(--border)}
+   #timebar{left:50%;transform:translateX(-50%);bottom:var(--sp5);padding:10px 16px;display:none;
+     align-items:center;gap:12px;width:min(560px,80vw)}
+   #timebar.show{display:flex}
+   #timebar input[type=range]{flex:1;accent-color:#b98cff}
+   #tplay{background:none;border:1px solid var(--border);color:var(--text);border-radius:7px;
+     width:28px;height:28px;cursor:pointer;font-size:12px}
+   #tdate{font-family:var(--font-mono);font-size:11px;color:var(--muted);min-width:84px;text-align:right}
+   .floatcard{position:fixed;z-index:8;background:rgba(15,18,25,.78);backdrop-filter:blur(16px) saturate(140%);
+     border:1px solid var(--border);border-radius:13px;box-shadow:0 10px 40px -10px rgba(0,0,0,.6)}
+-  #legend{left:var(--sp5);bottom:var(--sp5);padding:14px 16px;font-size:11.5px;color:var(--muted)}
+-  #legend .lt{font-family:var(--font-mono);font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--faint);margin-bottom:9px}
+-  #legend .row{display:flex;align-items:center;gap:9px;margin:5px 0}
+-  #legend .sw{width:11px;height:11px;border-radius:50%;box-shadow:0 0 8px currentColor}
+-  #legend .ed{width:20px;height:0;border-top:2px solid}
++  #legend{left:var(--sp5);bottom:var(--sp5);padding:16px 18px;font-size:13px;font-weight:500;color:#ffffff;
++    background:rgba(15,18,25,.92);text-shadow:0 1px 3px rgba(0,0,0,.9)}  /* 醒目:純白字、底更不透明(2026-09-11) */
++  #legend .lt{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#d6dcea;margin-bottom:10px}
++  #legend .row{display:flex;align-items:center;gap:10px;margin:7px 0}
++  #legend .sw{width:14px;height:14px;border-radius:50%;box-shadow:0 0 10px currentColor,0 0 0 1px rgba(255,255,255,.35)}
++  #legend .ed{width:24px;height:0;border-top:3px solid}
+   #hint{position:fixed;left:50%;bottom:var(--sp5);transform:translateX(-50%);z-index:8;color:var(--faint);
+     font-family:var(--font-mono);font-size:11px;letter-spacing:.3px;transition:opacity .4s}
+   ::-webkit-scrollbar{width:10px} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px;border:2px solid var(--surface)}
+   ::-webkit-scrollbar-thumb:hover{background:var(--faint)}
+ </style>
+ </head>
+ <body>
+ <div id="top">
+   <div class="brand"><div class="mark"></div>
+     <div><h1>Lumos · 圖譜語意視圖</h1><div class="sub">__VAULT__ · __NC__ nodes / __EC__ edges · __STAMP__</div></div>
+@@ -10267,21 +10286,21 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
+   <div id="close">✕</div>
+   <div id="phead"><div class="kicker"></div><div class="ttl"></div><div class="meta"></div></div>
+   <div id="pbody"></div>
+ </div>
+ <div id="legend" class="floatcard"></div>
+ <div id="hint">點節點 → 高亮鄰域 + 飛入聚焦 · 拖曳旋轉 · 滾輪縮放 · 右鍵平移</div>
+ <script>
+ const DATA = __DATA__;
+ const TYPE_COLOR = {system:'#6ba5ff',verification:'#4fd6a8',issue:'#f5b15c',project:'#b98cff',moc:'#8b93ad'};
+ const GOLD='#ffd479', STALE='#ff7b91', DIMN='#151924', DIML='rgba(74,84,116,.035)';
+-const LINKBASE={verify:'#3fbf95',plan:'#a87fe6',link:'#4a5474'};
++const LINKBASE={verify:'#4fd6a8',plan:'#b98cff',link:'rgba(116,129,166,.55)'};   // 2026-09-11 分層:計劃/驗證線對齊圖例色、明顯;佔多數的一般連結帶透明度保持安靜(全部調亮會亂)
+ const tc = t => TYPE_COLOR[t] || '#8b93ad';
+ const byId = {}; DATA.nodes.forEach(n=>byId[n.id]=n);
+ function baseColor(n){ if(n.status==='stale') return STALE; if(n.inv&&n.inv.length) return GOLD; return tc(n.type); }
+ 
+ // 3d-force-graph 會把 link.source/target 由 id 字串置換成 node 物件參照(= gdata.nodes 的同一物件)
+ const gdata = {nodes:DATA.nodes, links:DATA.edges.map(e=>({source:e.source,target:e.target,kind:e.kind}))};
+ const nodeOf = x => (x && x.id!==undefined) ? x : byId[x];
+ 
+ // ---- 高亮狀態(點選 = 只亮鄰域,其餘暗化)----
+ const hlN=new Set(), hlL=new Set(); let sel=null, hoverN=null;
+@@ -10306,23 +10325,24 @@ function nvisible(n){
+   if(!active.has(n.type)) return false;
+   if(staleOnly && n.status!=='stale') return false;
+   if(invOnly && !(contractSet.has(n)||contractVerif.has(n))) return false;
+   if(timeCut!==null && n.dnum>timeCut) return false;
+   if(vFold && n.type==='verification' && !hlN.has(n)) return false;  // 摺疊:選中母節點才現形
+   return true;
+ }
+ 
+ function ncolor(n){ if(hlN.size && !hlN.has(n)) return DIMN; if(n===sel) return '#ffffff'; return baseColor(n); }
+ function lcolor(l){ if(hlL.size && !hlL.has(l)) return DIML; return LINKBASE[l.kind]||'#2d3346'; }
+-function lwidth(l){ return hlL.has(l)?2:0.35; }
++function lwidth(l){ if(hlL.has(l)) return 2.6; return l.kind==='link'?0.35:0.7; }
+ function lparticles(l){ return (hlL.has(l) || (hlL.size===0 && l.kind==='plan'))?2:0; }
+-function larrow(l){ if(hlL.size) return hlL.has(l)?3.4:0; return 2.2; }
++function larrow(l){ if(hlL.size) return hlL.has(l)?4:0; return l.kind==='link'?1.6:2.6; }
++function pcolor(l){ return l.kind==='plan'?'#f3e8ff':(l.kind==='verify'?'#dcfff2':'#ffffff'); }   // 粒子用亮色,跟線拉開對比才看得出在流動
+ 
+ const Graph = ForceGraph3D()(document.getElementById('cy'));
+ 
+ // ★ 力場必須在 graphData 之前設定:warmup 在 graphData 當下就用當時的力場把佈局跑完;
+ //   若事後才改強斥力,模擬已冷卻、救不回 → 永遠擠成「病毒團」。這圖很密(~11 邊/點),
+ //   link 吸引力會壓過斥力,故大幅加強斥力 + 拉長連線 + 減弱 link 拉力。
+ Graph.d3Force('charge').strength(-240);
+ Graph.d3Force('link').distance(l => l.kind==='plan' ? 90 : 65).strength(0.18);
+ Graph.d3VelocityDecay(0.3);
+ 
+@@ -10335,27 +10355,28 @@ Graph
+   .nodeRelSize(4)
+   .nodeVal(n=>0.8+Math.pow(Math.min(n.indeg,18),1.15)*0.4)
+   .nodeColor(ncolor)
+   .nodeOpacity(0.9)
+   .nodeResolution(18)
+   // ★節點名用純白★(2026-09-10 Enzo:原本 #edeff6 在深色底上太淡)。
+   // 後面那段型別標註同時提亮一階(#7c8398 → #a8b0c4):它原本淡到幾乎看不見,
+   // 而那裡寫的是「這是什麼型別、有沒有過期、幾條合約」——是要看的資訊不是裝飾。
+   .nodeLabel(n=>'<div style="font:600 12px Space Grotesk,sans-serif;color:#ffffff;background:rgba(15,18,25,.92);padding:5px 10px;border:1px solid #2a3145;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.7)">'+n.label+'<span style="color:#a8b0c4;font-weight:400"> · '+n.type+(n.status==='stale'?' · stale':'')+(n.inv&&n.inv.length?' · ★'+n.inv.length:'')+'</span></div>')
+   .linkColor(lcolor)
+-  .linkOpacity(0.2)
++  .linkOpacity(0.38)
+   .linkWidth(lwidth)
+   .linkDirectionalArrowLength(larrow)
+   .linkDirectionalArrowRelPos(1)
+   .linkDirectionalParticles(lparticles)
+-  .linkDirectionalParticleWidth(1.2)
+-  .linkDirectionalParticleSpeed(0.005)
++  .linkDirectionalParticleWidth(1.9)
++  .linkDirectionalParticleSpeed(0.007)
++  .linkDirectionalParticleColor(pcolor)
+   .nodeVisibility(nvisible)
+   .linkVisibility(l=>nvisible(nodeOf(l.source))&&nvisible(nodeOf(l.target)))
+   .onNodeClick(focusNode)
+   .onNodeHover(n=>{ hoverN=n||null; document.getElementById('cy').style.cursor=n?'pointer':null; })
+   .onBackgroundClick(clearSel);
+ 
+ // ---- 點擊容差:微幅拖曳(旋轉手震)吃掉 click 時,用 pointerup 距離判定兜底 ----
+ let pdown=null, lastFocusTs=0;
+ const cyEl=document.getElementById('cy');
+ cyEl.addEventListener('pointerdown',e=>{ pdown=[e.clientX,e.clientY]; },true);
+@@ -10391,40 +10412,41 @@ function syncLabels(){
+     if(!nvisible(n)){ d.style.opacity=0; return; }                     // type chip / 只看 stale 過濾
+     if(n.lrank>=budget && n!==hoverN && n!==sel && !hlN.has(n)){ d.style.opacity=0; return; }  // LOD 淘汰
+     p.set(n.x||0,n.y||0,n.z||0);
+     const to=p.clone().sub(cam.position);
+     if(to.dot(fwd)<=0){ d.style.opacity=0; return; }                   // 在相機背後 → 不畫
+     const s=Graph.graph2ScreenCoords(n.x||0,n.y||0,n.z||0);
+     if(s.x<-40||s.x>W+40||s.y<-20||s.y>H+20){ d.style.opacity=0; return; }  // 出畫面
+     d.style.transform='translate('+(s.x)+'px,'+(s.y-13)+'px) translateX(-50%)';  // 置中、略抬到球頂上方
+     const dim = hlN.size && !hlN.has(n);                               // 點選聚焦時,非鄰域更淡
+     const far = Math.min(1, (camDist*1.2)/(to.length()||1));           // 相對相機距離淡出(縮放不變)→ 框全圖時仍清楚可見
+-    d.style.opacity = (dim?0.14:0.62) * (0.5+0.5*far);
++    d.style.opacity = (dim?0.25:1) * (0.8+0.2*far);                  // 一般標籤全亮,只留一點遠近淡出
+   });
+ }
+ requestAnimationFrame(syncLabels);
+ 
+ function refresh(){
+   Graph.nodeColor(ncolor).linkColor(lcolor).linkWidth(lwidth)
+        .linkDirectionalArrowLength(larrow).linkDirectionalParticles(lparticles);
+ }
+ function applyVis(){
+   Graph.nodeVisibility(nvisible)
+        .linkVisibility(l=>nvisible(nodeOf(l.source))&&nvisible(nodeOf(l.target)));
+ }
+ 
+ // ---- 點選節點:只高亮自己+鄰居+相連邊,飛入聚焦 ----
+ const navStack=[];
+ function focusNode(n, fromBack){
+   if(sel && sel!==n && !fromBack) navStack.push(sel);
+   document.getElementById('back').classList.toggle('show', navStack.length>0);
+   lastFocusTs=Date.now();
++  document.getElementById('search').value='';   // 點選節點=離開搜尋:清掉搜尋字,免得畫面已是鄰域卻看起來還在篩選(2026-09-11);程式設值不觸發 input,不會把鄰域蓋回搜尋結果
+   hlN.clear(); hlL.clear(); sel=n; hlN.add(n);
+   gdata.links.forEach(l=>{
+     const s=nodeOf(l.source), t=nodeOf(l.target);
+     if(s===n){ hlL.add(l); hlN.add(t); }
+     else if(t===n){ hlL.add(l); hlN.add(s); }
+   });
+   refresh(); applyVis();   // 驗證摺疊的現形依賴 hlN → 選中時要重算可見性
+   const dist=180, h=Math.hypot(n.x||1,n.y||1,n.z||1)||1, r=1+dist/h;
+   Graph.cameraPosition({x:(n.x||0)*r,y:(n.y||0)*r,z:(n.z||0)*r}, n, 1100);
+   open(n);
+@@ -10462,21 +10484,21 @@ document.getElementById('close').onclick=clearSel;
+ 
+ // ---- 搜尋:命中者高亮,其餘暗化 ----
+ const searchEl=document.getElementById('search');
+ searchEl.oninput=e=>{
+   const q=e.target.value.trim().toLowerCase();
+   hlN.clear(); hlL.clear(); sel=null;
+   if(q) DATA.nodes.forEach(n=>{ if(n.label.toLowerCase().includes(q)) hlN.add(n); });
+   refresh();
+ };
+ searchEl.onkeydown=e=>{
+-  if(e.key!=='Enter') return;
++  if(e.key!=='Enter' || e.isComposing || e.keyCode===229) return;   // 中文輸入法選字中的 Enter 只是確認選字,不是搜尋
+   const q=searchEl.value.trim().toLowerCase(); if(!q) return;
+   // 最佳命中:前綴 > 包含;同級取重要度排名前者 → 直接飛過去開面板
+   const hits=DATA.nodes.filter(n=>n.label.toLowerCase().includes(q));
+   if(!hits.length) return;
+   hits.sort((a,b)=>{
+     const ap=a.label.toLowerCase().startsWith(q)?0:1, bp=b.label.toLowerCase().startsWith(q)?0:1;
+     return ap-bp || a.lrank-b.lrank;
+   });
+   focusNode(hits[0]);
+ };
+@@ -14071,20 +14093,24 @@ def _stack_guess():
+ 
+ 
+ _SKELETON_RUN_CMD = {
+     # 骨架裡先給一個「形狀對」的指令當起點——★重點是形狀,不是它在你機器上跑得動★。
+     # xcodebuild 那條刻意寫滿三段(target/類別/方法):少寫一段會讓過濾條件對不到任何測試,
+     # 而那正是 2026-09-09 在第一個 iOS 專案上抓到的假綠來源。
+     # ★也刻意不帶 -quiet★(2026-09-09 r1 折入,實測):-quiet 會把「Executed N tests」那行藏起來,
+     # 而那行是這道閘唯一能證明「真的跑了東西」的證據——帶了 -quiet,跑 1 支跟跑 0 支的輸出一模一樣。
+     "swift-xctest": "xcodebuild test -scheme <你的 scheme> -destination 'platform=iOS Simulator,name=<模擬器名>' -only-testing:<測試 target>/<測試類別>/{method}",
+     "kotlin-junit": "./gradlew test --tests '*{method}'",
++    # Java 專案分 Gradle 與 Maven 兩種建置,骨架先給 Gradle 形(跟 kotlin-junit 同一條,
++    # 混編專案直接沿用);Maven 專案自己換成 `mvn -Dtest='<測試類別>#{method}' test`。
++    # ★本機沒裝 gradle/mvn,這兩條指令沒有實跑核對過★,只保證形狀對(要能只跑一支測試)。
++    "java-junit": "./gradlew test --tests '*{method}'",
+     # ★尾巴那段 runsettings 不能省★(2026-09-09 r1 折入,dotnet 9.0.117 實測):
+     # 沒有它,`dotnet test --filter` 對一個根本不存在的測試名照樣印「No test matches」然後回 0,
+     # 閘拿退出碼當「測試跑過」就是假綠;加上去之後同一條指令回 1,對到真測試時仍回 0。
+     "csharp-xunit": "dotnet test --filter FullyQualifiedName~{method} -- RunConfiguration.TreatNoTestsAsError=true",
+     "python": "python3 -m pytest -k {method}",
+     # jest 沒有對應的旗標(29.x 實測:-t 對不到任何測試仍回 0,--passWithNoTests=false 也一樣)——
+     # 這條靠下面的「跑過的證據」比對摘要行,不靠退出碼。
+     "node-jest": "npx jest -t {method}",
+     "dart": "flutter test --plain-name {method}",
+     "playwright": "npx playwright test -g {method}",
+@@ -14266,31 +14292,35 @@ def _init_config_skeleton(root):
+             body["_請自己填"] = ("這個副檔名在正典表裡只被其中一種 profile 認領,另一個留空給你填:"
+                                 f"test_profile 可選 {'/'.join(sorted(TEST_PROFILES))};"
+                                 f"symbol_profile 可選 {'/'.join(sorted(SYMBOL_PROFILES))}")
+         if g["symbol_weak"]:
+             body["_這個猜得很弱"] = (f"symbol_profile 猜成 {sp},只是因為 {sp} 的副檔名清單裡碰巧收了 {ext}"
+                                     f"——那不代表這是 {sp} 專案。符號檢查會用 {sp} 的清單去找筆記提到的符號,"
+                                     "對不上就整批查不到也不會報。請自己確認,可選:"
+                                     f"{'/'.join(sorted(SYMBOL_PROFILES))}")
+     else:
+         plats = {}
+-        for ext, n in ranked[:3]:
++        # ★每一種偵測得到的語言都要列出來,不能只取前幾名★(2026-09-12 多語言驗證 repo 實撞):
++        # 原本是 ranked[:3],一個九種語言的 repo 只會產出三個平台,其餘六種的測試從此掃不到——
++        # 而掃不到的症狀不是報錯,是合約綁不上、閘靜默放行。多列一個平台的代價只是使用者刪一段設定,
++        # 少列一個的代價是那個語言的守衛整批不存在,兩邊不對等。
++        for ext, n in ranked:
+             g = guess[ext]
+             tp, sp, human = g["test"], g["symbol"], g["human"]
+             if not tp:
+                 continue
+             plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _SKELETON_RUN_CMD.get(tp, ""),
+                                                 "_推測": f"看到 {n} 個 {ext} 檔({human})"})
+         if not plats:
+             body = blank
+         else:
+-            body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄",
++            body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄;偵測得到的語言全部列出來了,不需要的平台整段刪掉就好",
+                     "default_platform": next(iter(plats)), "platforms": plats,
+                     "symbol_profile": guess[ranked[0][0]]["symbol"]}
+     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+     body = {"_請先確認": note, **body}
+     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
+     print(f"  ✓ 設定骨架 {cfg_path}(★技術棧是推測的,請開檔確認★——猜錯會讓測試掃描與符號檢查靜默失效)")
+ 
+ 
+ _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py",
+                         # ★共用模組也要複製★(2026-09-08 code-enforcement-obs r1 外家席 blocker):
+@@ -16622,20 +16652,54 @@ _STACK_QUESTION_SPECS = {
+          "when": ['Sync\\(', 'JSON\\.parse', 'crypto\\.\\w+Sync', 'new RegExp', 'worker_threads', '\\.exec\\(', 'while\\s*\\(\\s*true', '\\bdeasync\\b', 'Atomics\\.wait'], "when_raw": ['child_process']},
+         {"id": "node-parallel", "q": '並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?',
+          "when": ['Promise\\.all', 'Promise\\.allSettled', '\\.map\\(\\s*async', '\\bawait\\b', '\\bcallback\\s*\\(', '\\basync\\.(series|waterfall|eachSeries)\\(', '\\.then\\(']},
+         {"id": "node-data", "q": '資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?',
+          "when": ['\\.query\\(', '\\.find\\(', 'findMany', '\\bSELECT\\b', 'Pool\\(', 'createPool', '\\.connect\\(', '\\.toArray\\(', 'createConnection\\(', 'mysql\\.query'], "when_raw": ['[\'"](SELECT|INSERT|UPDATE|DELETE)\\s[^\'"]*\\b(FROM|INTO|SET|WHERE)\\b']},
+         {"id": "node-external", "q": '外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?',
+          "when": ['fetch\\(', 'axios', 'https?\\.request', 'got\\(', 'AbortSignal', 'AbortController', 'process\\.on\\(', 'unhandledRejection', '\\bhttp\\.get\\(', '\\brequest\\(', 'superagent', 'new XMLHttpRequest'], "when_raw": ['\\.on\\([\'\\"]error']},
+         {"id": "node-memory", "q": '記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?',
+          "when": ['new Map\\(', 'new Set\\(', 'createReadStream', 'createWriteStream', 'pipeline\\(', '\\.pipe\\(', 'Buffer\\.', 'readFile\\(', 'readFile\\(', 'Buffer\\.concat', '\\bglobal\\.\\w+\\s*=']},
+     ],
++    # Python(2026-09-11,plan:Projects/Python補棧_計劃;★尚無真專案跑過★):題組刻意偏「長跑程序/機器人/資料處理」
++    # (asyncio 長連線+pandas),不收 Django/FastAPI 特有題——框架選擇不在此裁。首個消費端=自動交易專案。
++    "py": [
++        {"id": "py-eventloop", "q": '事件迴圈:async def 裡有沒有同步阻塞(time.sleep/requests/同步 open 讀寫/subprocess.run/大 JSON 解析/CPU 重活)?該換 asyncio.sleep、非同步 client,或用 asyncio.to_thread 丟出去?有沒有「while True + sleep」輪詢該改成等事件或佇列?',
++         "when": ['async def', 'time\\.sleep', '\\brequests\\.(get|post|put|patch|delete|head|request)\\(', 'urlopen\\(', 'subprocess\\.(run|call|check_call|check_output|Popen)', 'asyncio\\.to_thread', 'run_in_executor', 'run_until_complete', 'while\\s+True', 'json\\.loads?\\(', 'threading\\.Event']},
++        {"id": "py-parallel", "q": '並行與上限:互不依賴的 await 有沒有 asyncio.gather/TaskGroup 並行?gather 的集合有沒有上限(無界並行會打爆下游連線池或對方的速率限制,該用 Semaphore 有界)?create_task 的回傳值有沒有存起來並接住例外(沒存=可能被回收、例外無聲蒸發)?',
++         "when": ['asyncio\\.gather', 'TaskGroup', 'create_task', 'ensure_future', '\\bawait\\b', 'Semaphore', 'as_completed', 'ThreadPoolExecutor', 'ProcessPoolExecutor', 'threading\\.Thread', 'multiprocessing', '\\bPool\\(', '\\.submit\\(']},
++        {"id": "py-external", "q": '外呼與重試:每個 HTTP/WebSocket/DB 外呼有沒有逾時(requests 預設不逾時=對方掛了你永遠卡住)?重試有沒有退避與上限,而且不會對不可逆操作(下單/付款/寄信)盲目重送?session/client/連線有沒有重用而不是每次新建?斷線重連後本地狀態有沒有重新對齊?',
++         "when": ['\\brequests\\.(get|post|put|patch|delete|head|request|Session)\\b', 'httpx\\.', 'aiohttp', 'ClientSession', 'urlopen\\(', 'urllib\\.request', 'http\\.client', 'websockets?\\.', 'WebSocket', 'timeout\\s*=', '\\bretry', 'tenacity', 'backoff', 'socket\\.', 'create_connection', 'grpc\\.', 'boto3\\.', 'psycopg', 'pymysql', 'sqlite3\\.connect', 'redis\\.']},
++        {"id": "py-memory", "q": '記憶體與資料量:大檔/大回應/大查詢有沒有一次讀進記憶體(read()/readlines()/json.load 大檔/fetchall()/read_csv 不分塊)而不是逐行、分塊或 generator?長活的 dict/list/cache 有沒有上限(lru_cache(maxsize=None)、以請求或時間為鍵的快取只增不減)?迴圈裡有沒有逐筆查 DB 或逐筆打 API(N+1)?',
++         "when": ['\\.read\\(\\)', 'readlines\\(', 'json\\.load\\(', 'fetchall\\(', 'read_csv\\(', 'read_parquet\\(', 'read_json\\(', 'lru_cache', 'functools\\.cache\\b', '@cache\\b', 'pickle\\.loads?\\(', '\\.execute\\(', '\\.cursor\\(', '\\.query\\(', '\\.all\\(\\)', '\\bglobal\\s+\\w+', 'defaultdict\\(']},
++        {"id": "py-hotpath", "q": '熱路徑:這段會跑大量資料或高頻迴圈嗎?pandas 有沒有 iterrows/itertuples/apply(axis=1)/迴圈裡 concat(該向量化,或先收成 list 最後一次建 DataFrame)?索引式迴圈 range(len(x)) 該不該改成直接迭代或向量運算?list 當佇列 pop(0)、在 list 裡做成員查找,該不該換 deque/set?迴圈裡有沒有重複做不變的工作(每圈重新解析設定、重建物件)?',
++         "when": ['iterrows', 'itertuples', '\\.apply\\(', 'pd\\.concat\\(', 'np\\.vectorize', 'np\\.append\\(', '\\.pop\\(0\\)', 'range\\(len\\(', 'DataFrame\\(', '\\.loc\\[', '\\.iloc\\[', '\\.at\\[', '\\.iat\\[', 'rolling\\(', 'groupby\\(']},
++    ],
++    # Java(2026-09-12 補):一張表同時服務 Android 舊碼與 JVM 後端——通用五題(並行/資源/外呼/記憶體/集合)
++    # 兩邊都吃得到,平台特有的兩題(java-data 後端資料層、java-android Android 生命週期)靠觸發字
++    # 自己決定要不要出現:改 Spring/JPA 的檔不會被問 Activity 洩漏,改 Activity 的檔也不會被問交易邊界。
++    "java": [
++        {"id": "java-concurrency", "q": '並行與執行緒:互不依賴的等待有沒有一起飛(CompletableFuture.allOf / invokeAll),還是一條一條等?執行緒池是不是無界(newCachedThreadPool)或大小沒依下游算過?池子用完有沒有 shutdown?future.get()/join() 有沒有帶逾時(不帶=對方不回你就永遠卡著)?共享可變狀態是靠大段 synchronized 還是併發集合/不可變?',
++         "when": ['CompletableFuture', 'ExecutorService', 'Executors\\.', 'ForkJoinPool', '\\.submit\\(', 'invokeAll', 'parallelStream', '\\bnew Thread\\s*\\(', 'Thread\\.sleep', '\\bsynchronized\\b', '\\bvolatile\\b', 'CountDownLatch', 'ThreadLocal', 'AsyncTask', 'ScheduledExecutorService', '\\bTimer\\s*\\(']},
++        {"id": "java-resources", "q": '資源關閉:每個 Connection/Statement/ResultSet/InputStream/Files.lines 有沒有 try-with-resources 包住(漏關一條就少一個連線池名額,撐久了整個服務拿不到連線)?連線池大小是算過的還是抄預設?finally 裡關閉會不會被前面的例外跳過?',
++         "when": ['\\bConnection\\b', 'PreparedStatement', 'ResultSet', '\\bStatement\\b', 'InputStream', 'OutputStream', 'BufferedReader', 'FileReader', 'FileInputStream', 'Files\\.(lines|walk|newBufferedReader|newInputStream)', 'DataSource', 'Hikari', '\\.close\\(\\)', 'try\\s*\\(', '\\bfinally\\b', 'Scanner\\s*\\(']},
++        {"id": "java-data", "q": '資料層(JPA/JDBC):查詢會不會在迴圈裡跑(N+1)?LAZY 關聯是不是在迴圈裡才一筆筆載入(該 join fetch 或 @EntityGraph)?findAll / SELECT * 進大表有沒有分頁或串流?@Transactional 有沒有被同一個類別內部呼叫(代理不生效,交易根本沒開)?交易裡面有沒有夾外部呼叫(把鎖撐長)?',
++         "when": ['@Transactional', '@Entity\\b', '@OneToMany', '@ManyToOne', '@OneToOne', 'FetchType', 'EntityManager', 'JpaRepository', 'CrudRepository', 'createQuery\\(', 'CriteriaQuery', 'findAll\\(', 'JdbcTemplate', 'executeQuery\\(', 'setAutoCommit\\(', '\\bHibernate\\b', '\\bSELECT\\b', 'getResultList\\('],
++         "when_raw": ['"(SELECT|INSERT|UPDATE|DELETE)\\s[^"]*\\b(FROM|INTO|SET|WHERE)\\b']},
++        {"id": "java-external", "q": '外呼:每個 HTTP/RPC 呼叫有沒有同時設連線逾時與讀取逾時(HttpURLConnection、RestTemplate 預設是無限等)?重試有沒有指數退避與次數上限?下單/付款/寄送這類不可逆的操作,重送前有沒有冪等鍵?對方掛掉時這條路徑會拖垮誰?',
++         "when": ['HttpClient', 'HttpURLConnection', 'RestTemplate', 'WebClient', 'OkHttpClient', '\\bRetrofit\\b', 'URLConnection', 'connectTimeout', 'readTimeout', 'setConnectTimeout', 'setReadTimeout', '\\bretry', '@Retryable', 'Resilience4j', 'CircuitBreaker', 'new URL\\(', '\\bSocket\\s*\\(']},
++        {"id": "java-memory", "q": '記憶體與資料量:大檔/大回應/大查詢有沒有一次整包讀進記憶體(readAllBytes / readAllLines / findAll 再 toList)?長活的 static Map/List 當快取有沒有上限與淘汰?ThreadLocal 用完有沒有 remove(執行緒池會重用執行緒,不清就是洩漏)?監聽器/回呼註冊了有沒有對應的解除?',
++         "when": ['readAllBytes', 'readAllLines', 'toByteArray', 'ByteArrayOutputStream', '\\bstatic\\s+(?:final\\s+)?(?:Map|List|Set|HashMap|ArrayList|ConcurrentHashMap)\\b', 'ThreadLocal', 'WeakReference', 'SoftReference', 'System\\.gc\\(', 'addListener\\(', 'registerListener\\(', 'Collectors\\.toList', 'new byte\\[']},
++        {"id": "java-collections", "q": '集合與熱路徑:迴圈裡有沒有字串相接(每圈生一個新字串,該 StringBuilder)?熱路徑用 List.contains / indexOf 做成員查找(逐個比,該換 Set/Map)?大迴圈裡有沒有自動裝箱(Integer 當 int 用)?同一條 Stream 有沒有被重複遍歷,或在 stream 裡做 IO?',
++         "when": ['StringBuilder', '\\bString\\.format\\(', '\\.concat\\(', '\\.contains\\(', '\\.indexOf\\(', '\\.stream\\(\\)', 'Collectors\\.', '\\bArrayList\\b', '\\bLinkedList\\b', '\\bIterator\\b', '\\.remove\\(0\\)', '\\bInteger\\b', '\\bBoxed\\b', 'Collections\\.sort']},
++        {"id": "java-android", "q": 'Android:Context/Activity 有沒有被單例、static 欄位或長活物件握著(畫面關了記憶體收不回)?主執行緒上有沒有磁碟、網路或大 JSON 解析(ANR 面)?AsyncTask/Handler/回呼有沒有跟畫面生命週期綁(畫面沒了還回來寫 UI)?findViewById 有沒有在 getView / onBindViewHolder 裡反覆呼叫?',
++         "when": ['\\bActivity\\b', '\\bContext\\b', 'findViewById', 'RecyclerView', 'notifyDataSetChanged', 'AsyncTask', '\\bHandler\\s*\\(', 'runOnUiThread', 'getApplicationContext', 'onCreate\\(', 'SharedPreferences', 'LayoutInflater', 'startActivity\\(', 'BroadcastReceiver', 'ContentResolver', 'getSystemService\\(']},
++    ],
+ }
+ _STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
+ # when=範式詞+反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能不能亮不同題或不亮——舊法/土法會出現的字也讓同一題亮;反面詞要具體到不誤傷,Thread\( 不是 Thread)
+ # 第三欄 when_raw(r1 外家 finder f7 → code-反面詞 r1 單席 f1 改成逐 pattern):只有這幾條要看字串內容(.on("error"、LIKE '%、
+ # import from "./x"、"SELECT 、require('child_process')),同題其他 pattern 照樣剝字串——整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中
+ _STACK_TRIGGERS = {_k: [(_s["id"], tuple(re.compile(_p, re.I) for _p in _s["when"]), tuple(re.compile(_p, re.I) for _p in _s.get("when_raw", ()))) for _s in _v]
+                    for _k, _v in _STACK_QUESTION_SPECS.items()}   # 載入時編譯:壞 regex=啟動即錯
+ # 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+ _NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
+ _NODE_FLAVOR_CACHE = {}
+@@ -19173,21 +19237,22 @@ def cmd_delguard_check(repo=None, as_json=False):
+         _delguard_log_degraded(_gr, f"error:{e.__class__.__name__}", len(locals().get("tokens", [])))
+         if as_json:
+             _degraded_json("error", len(locals().get("tokens", [])))
+         else:
+             print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查自己出了內部錯誤({e.__class__.__name__}),先放行;已記一筆在治理帳。")
+         return 0
+ 
+ 
+ 
+ _ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
+-                     "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms"}
++                     "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms", "py": "python-idioms",
++                     "java": "java-idioms"}
+ 
+ 
+ def _idiom_skill_for(ext, file_rel, repo_root):
+     """副檔名 → 慣例 skill 名(沒有就 None)。.ts/.js 家族要看 package.json:後端 → node-idioms、
+     前端或找不到 package.json → 沿用 vue-idioms(2026-09-08 前的行為)。"""
+     if ext in _NODE_EXTS:
+         return "node-idioms" if _node_flavor(file_rel, repo_root) == "node" else _ARCH_IDIOM_SKILL.get(ext, "vue-idioms")
+     return _ARCH_IDIOM_SKILL.get(ext)
+ _ARCH_QUESTIONS = [
+     "分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟對照檔一樣嗎?有沒有跨層直呼?",
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e3864eec..324c35a1 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3661,20 +3661,73 @@ def t_export_html():
+     check("export html: 筆記內 </script> 被轉義成 <\\/script>", "<\\/script>" in html, "escape")
+     check("export html: 結尾完整、單一 </html>(未被內文提早關閉)",
+           html.rstrip().endswith("</html>") and html.count("</html>") == 1, "structure")
+     # 2026-07-11 視覺化七項優化的 UI 骨架守衛
+     for marker in ("invtoggle", "vfold", "dim2d", "timetoggle", "timebar",
+                    'id="back"', "lrank", "navStack", "pointerup"):
+         check(f"export html: 優化骨架含 {marker}", marker in html, marker)
+     check("export html: 節點模型含 date(時間軸)", '"date"' in html, "date field")
+ 
+ 
++def t_export_html_labels_readable():
++    """[2026-09-11 使用者要求]節點名字與左下角圖例要醒目:純白、不透明,不再是半透明霧白。
++    舊版 .nlab 用 rgba(214,220,234,.52) 再乘 0.62 的透明度,在亮節點旁幾乎讀不到。
++    翻紅釘:把 .nlab 的 color 改回 rgba(...,.52) → ①翻紅;把圖例 color 改回 var(--muted) → ②翻紅;
++    把一般標籤透明度改回 0.62 → ③翻紅。"""
++    import re as _re, tempfile
++    v = mkvault()
++    write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
++    out = str(Path(tempfile.mkdtemp()) / "g.html")
++    run(v, "export", "--format", "html", "--output", out, expect_rc=0)
++    html = Path(out).read_text(encoding="utf-8")
++    nlab = _re.search(r"\.nlab\{[^}]*\}", html)
++    check("①節點名字是不透明純白", bool(nlab) and "color:#ffffff" in nlab.group(0), nlab.group(0) if nlab else "no .nlab rule")
++    legend = _re.search(r"#legend\{[^}]*\}", html)
++    check("②圖例文字是純白", bool(legend) and "color:#ffffff" in legend.group(0), legend.group(0) if legend else "no #legend rule")
++    title = _re.search(r"#legend \.lt\{[^}]*\}", html)
++    check("②圖例標題不再用最暗的 --faint", bool(title) and "var(--faint)" not in title.group(0), title.group(0) if title else "no .lt rule")
++    op = _re.search(r"d\.style\.opacity = \(dim\?([0-9.]+):([0-9.]+)\)", html)
++    check("③一般(未淡化)標籤的透明度係數是 1", bool(op) and float(op.group(2)) == 1.0, op.group(0) if op else "no opacity line")
++    # 同日第二、三個要求:「線和流動不太明顯」→ 全部調亮後「又太明顯、有點亂」。
++    # 所以守的是中間帶:多數的一般連結保持安靜,少數的計劃/驗證線明顯;不是越亮越好。
++    lo = _re.search(r"\.linkOpacity\(([0-9.]+)\)", html)
++    check("④連線整體透明度在中間帶 0.3~0.45(0.2 太淡、0.5 太亂)", bool(lo) and 0.3 <= float(lo.group(1)) <= 0.45, lo.group(0) if lo else "no linkOpacity")
++    lw = _re.search(r"return l\.kind==='link'\?([0-9.]+):([0-9.]+);", html)
++    check("④一般連結維持細(≤0.45)、計劃/驗證線較粗(≥0.6)",
++          bool(lw) and float(lw.group(1)) <= 0.45 and float(lw.group(2)) >= 0.6, lw.group(0) if lw else "no per-kind lwidth")
++    lb = _re.search(r"const LINKBASE=\{[^}]*link:'(rgba\([^)]*\))'", html)
++    check("④一般連結的顏色帶透明度(讓大多數線安靜)", bool(lb), lb.group(0) if lb else "link color not rgba")
++    pw = _re.search(r"\.linkDirectionalParticleWidth\(([0-9.]+)\)", html)
++    check("⑤流動粒子寬度在中間帶 1.5~2.2", bool(pw) and 1.5 <= float(pw.group(1)) <= 2.2, pw.group(0) if pw else "no particle width")
++    check("⑤流動粒子有獨立的亮色(不跟線同色)", ".linkDirectionalParticleColor(" in html, "no particle color")
++
++
++def t_export_html_click_clears_search():
++    """[2026-09-11 使用者要求]點選節點時自動清空搜尋框——畫面已切到「本身+鄰居」,
++    搜尋字卻還留在框裡,看起來像還在篩選(使用者因此以為鄰居被搜尋字篩掉)。
++    連帶:中文輸入法選字時按的 Enter 不能當成「搜尋並跳過去」,否則選字途中就跳節點、清框,
++    確認後字又回來觸發搜尋,把剛選的鄰域蓋掉。
++    翻紅釘:拿掉 focusNode 裡清空搜尋框那行 → ①翻紅;拿掉 Enter 的 isComposing 判斷 → ②翻紅。"""
++    import re as _re, tempfile
++    v = mkvault()
++    write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
++    out = str(Path(tempfile.mkdtemp()) / "g.html")
++    run(v, "export", "--format", "html", "--output", out, expect_rc=0)
++    html = Path(out).read_text(encoding="utf-8")
++    fn = _re.search(r"function focusNode\(n, fromBack\)\{(.*?)\n\}", html, _re.S)
++    check("①focusNode 會清空搜尋框", bool(fn) and "getElementById('search').value=''" in fn.group(1),
++          fn.group(1)[:300] if fn else "no focusNode")
++    kd = _re.search(r"searchEl\.onkeydown=e=>\{(.*?)\n\};", html, _re.S)
++    check("②輸入法選字中的 Enter 不觸發跳轉", bool(kd) and "e.isComposing" in kd.group(1),
++          kd.group(1)[:200] if kd else "no onkeydown")
++
++
+ def t_invariant_test_binding():
+     # Check T 牙齒:裸 ★INVARIANT★(無 [test:])→ doctor 擋(載重宣稱沒綁可執行證據)
+     v = mkvault()
+     write(v, "Systems/Naked.md",
+           "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 自動型只派 V",
+           body="# Naked\n")
+     r = run(v, "doctor", "--ci")
+     check("Check T: 裸 ★INVARIANT★(無 test 綁定)被 doctor 擋",
+           r.returncode == 1 and "裸 ★INVARIANT★" in r.stdout, r.stdout)
+     # 綁了 [test:X] → 不再算裸合約(沙盒無 repo root,存在性檢查跳過)
+@@ -6713,20 +6766,45 @@ def t_commands_table_shape():
+     for path in files:
+         where = str(path.relative_to(root))
+         for hline, ncol, lineno, n in _md_table_rows(path.read_text(encoding="utf-8")):
+             if n != ncol:
+                 bad.append("%s:%d 這列 %d 格,表頭(第 %d 行)%d 格"
+                            % (where, lineno, n, hline, ncol))
+     check("★表格每一列的格數都跟表頭一樣★", not bad, "共 %d 筆:%s" % (len(bad), bad[:6]))
+     print("  ✓ t_commands_table_shape")
+ 
+ 
++def t_docs_dont_hardcode_command_count():
++    """★對外文件不准寫死「共幾個頂層指令」★(2026-09-12)。
++
++    `lumos --help` 開頭那段刻意寫了「這裡也刻意不寫『共幾個』——寫了就是另一個會
++    過期的數字」,但兩份指令參考各自寫了一個。後來加了一個新指令,中文那份跟著改、
++    英文那份沒有,於是同一件事在兩份文件上是兩個數字(70 與 67),真值是 70。
++    這是「同一份事實散落在好幾個地方,人手同步一定漏掉其中一份」的又一例,所以
++    這裡不是把英文那個數字補對,是禁止任何對外文件再寫死它——沒有數字就不會漂。
++    要講規模就寫「七十來個」這種不隨單一指令進出而失效的講法。
++    """
++    import re as _re
++    root = Path(GRAPHCTL).resolve().parent.parent
++    files = [root / "README.md", root / "README.en.md"]
++    files += sorted((root / "docs").glob("*.md"))
++    check("對外文件掃得到", len(files) >= 6, str(len(files)))
++    pat = _re.compile(r"(?<![\w.])\d+\s*(?:個頂層|top-level)")
++    bad = []
++    for path in files:
++        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
++            if pat.search(line):
++                bad.append("%s:%d %s" % (path.relative_to(root), i, line.strip()[:70]))
++    check("★沒有文件寫死頂層指令數★", not bad, "共 %d 筆:%s" % (len(bad), bad[:4]))
++    print("  ✓ t_docs_dont_hardcode_command_count")
++
++
+ def t_every_subcommand_has_when():
+     """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
+     Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""
+     # 說明文字直接跟 parser 要(format_help() 就是 --help 印出來的那份),
+     # 不再各自起子行程剖字串——同一份真值,見 _lumos_parser_tree() 的說明。
+     tree = _lumos_parser_tree()
+     def helptext(*prefix):
+         return tree[tuple(prefix)].format_help()
+     def subs(*prefix):
+         return _lumos_subcommands(tree, tuple(prefix))
+@@ -13119,20 +13197,54 @@ def _make_high_tier_repo(d):
+     g("commit", "-qm", "init")
+     # 切 feat branch 並加 high-tier 程式
+     g("checkout", "-b", "feat/codeloop-guard-test")
+     (Path(d) / "app.py").write_text(
+         "import requests\n"
+         "def f():\n"
+         "    requests.post('http://x')\n",
+         encoding="utf-8")
+     g("add", "app.py")
+     g("commit", "-qm", "add high tier code")
++    # ★出廠就把棧別題答好★(2026-09-12):用這個假 repo 的十幾支測試,驗的都是「審查留痕符不符」
++    # 那一關。表態是另一道獨立的閘,Python 棧支援上線之後,上面那行 requests.post 同時觸發了
++    # 兩題 Python 效能檢核,於是那些測試全部改由表態閘擋下——要驗的那一關根本沒被驗到。
++    # 真實的高風險 Python 分支本來就要兩關都過,所以這裡照真實做法先把題答完,讓測試回到它的主題。
++    _answer_stack_questions(d)
++
++
++def _answer_stack_questions(d, diff="main..HEAD"):
++    """把假 repo 觸發到的棧別檢核題全部答成「不適用」,讓測試能單獨驗留痕那一關。
++
++    ★為什麼需要這支★(2026-09-12):`_make_high_tier_repo` 用一行 `requests.post` 把風險拉到
++    high,而 Python 棧支援上線之後,同一行也觸發了兩題 Python 效能檢核。表態閘與留痕閘是
++    兩個獨立判定,於是「有 pass 留痕就該放行」那幾個情境全部改由表態閘擋下——**測試想驗的那一關
++    根本沒被驗到**。真實的高風險 Python 分支本來就要兩關都過,所以這裡照真實做法補上表態,
++    而不是把表態閘關掉。
++    """
++    import json as _j, subprocess as _sp
++    # 表態跟留痕一樣要寫進治理帳,而治理帳在 docs/ 底下;假 repo 沒有這個目錄的話
++    # 表態指令會整個拒寫,題目就永遠答不完。這裡就地補上(不動共用的 _make_high_tier_repo,
++    # 免得波及那些自己也建 docs/ 的測試)。
++    (Path(d) / "docs" / "demo-knowledge" / "Systems").mkdir(parents=True, exist_ok=True)
++    r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", diff,
++                 "--dispositions-template", "--repo", d], capture_output=True, text=True)
++    tpl = _j.loads(r.stdout)
++    if not tpl:
++        return
++    for q in tpl.values():
++        if q.get("status") == "":
++            q["status"] = "na"
++            q["reason"] = "這是測試用的假程式,只是為了把風險等級拉高,沒有真的執行路徑要顧"
++    f = Path(d) / "_disp.json"
++    f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
++    _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", str(f), "--repo", d],
++            capture_output=True, text=True)
+ 
+ 
+ def _make_standard_tier_repo(d):
+     """建立 merge-base + tier=standard diff 的 git repo(只有 .md 變更)。"""
+     import subprocess as _sp
+     g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+     g("init", "-q", "-b", "main")
+     g("config", "user.email", "t@t.t")
+     g("config", "user.name", "t")
+     (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+@@ -13167,20 +13279,24 @@ def t_codeloop_guard_verdict():
+             capture_output=True, text=True)
+         check("codeloop_guard: tier=high∧無留痕 → blocked(rc=1)", r.returncode == 1,
+               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+         import json as _j
+         try:
+             data = _j.loads(r.stdout)
+             check("codeloop_guard: --json blocked=true", data.get("blocked") is True,
+                   f"data={data!r}")
+             check("codeloop_guard: --json tier=high", data.get("tier") == "high",
+                   f"data={data!r}")
++            # ★理由也要對★:表態上面已經補齊,這裡只要看到 dispositions 當理由,
++            # 就代表這支測試其實沒驗到「缺留痕會擋」那一關(2026-09-12 真的發生過)
++            check("codeloop_guard: 擋下來的理由是缺審查留痕,不是缺表態",
++                  data.get("reason_kind") == "review", f"data={data!r}")
+         except Exception as ex:
+             check("codeloop_guard: --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
+ 
+     # ── 情境 2: tier=high ∧ pass(HEAD 符) → 不 blocked ───────────────────
+     with tempfile.TemporaryDirectory() as d:
+         _make_high_tier_repo(d)
+         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+         r = _sp.run(
+             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+             capture_output=True, text=True)
+@@ -13210,30 +13326,33 @@ def t_codeloop_guard_verdict():
+                   f"data={data!r}")
+         except Exception as ex:
+             check("codeloop_guard: skip --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
+ 
+     # ── 情境 4: tier=high ∧ pass 但 HEAD 移動(再 commit) → 作廢 blocked ──
+     with tempfile.TemporaryDirectory() as d:
+         _make_high_tier_repo(d)
+         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+         # 再加一個 commit → HEAD sha 改變 → 留痕 sha 過時
+         _add_commit(d, "extra.txt", "bump\n")
++        _answer_stack_questions(d)   # 表態補在移動之後 → 它是新的,擋下來只可能是留痕過期
+         r = _sp.run(
+             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+             capture_output=True, text=True)
+         check("codeloop_guard: pass但HEAD移動 → 作廢 blocked(rc=1)", r.returncode == 1,
+               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+         try:
+             import json as _j
+             data = _j.loads(r.stdout)
+             check("codeloop_guard: HEAD移動後 blocked=true", data.get("blocked") is True,
+                   f"data={data!r}")
++            check("codeloop_guard: HEAD移動後擋的理由是留痕過期,不是缺表態",
++                  data.get("reason_kind") == "review", f"data={data!r}")
+         except Exception as ex:
+             check("codeloop_guard: HEAD移動後 --json 可解析", False,
+                   f"ex={ex}\nstdout={r.stdout!r}")
+ 
+     # ── 情境 5: tier≠high → 不 blocked ───────────────────────────────────
+     with tempfile.TemporaryDirectory() as d:
+         _make_standard_tier_repo(d)
+         r = _sp.run(
+             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+             capture_output=True, text=True)
+@@ -20245,20 +20364,168 @@ def t_pitfalls_stack_questions():
+         (_P(td) / "test_only.cs").write_text("var y = 1;\n", encoding="utf-8")
+         _sp.run(["git", "add", "-A"], cwd=td, check=True)
+         _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                  "commit", "-q", "-m", "c2"], cwd=td, check=True)
+         r = run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+         sq2 = _json.loads(r.stdout).get("stack_questions", {})
+         check("純測試檔不附", sq2 == {}, f"sq2={sq2}")
+     print("  ✓ t_pitfalls_stack_questions")
+ 
+ 
++def t_python_stack_wiring():
++    """[Python 補棧 2026-09-11]py 棧接進既有三時機:.py 改動 → 附 py 五題、慣例 skill 派 python-idioms;
++    測試檔(test_*.py / *_test.py)不附;慣例對映表指到的每個 skill 在來源 repo 真的有 SKILL.md。
++    翻紅釘:把 _ARCH_IDIOM_SKILL 的 "py" 拿掉 → ②翻紅;把 _STACK_QUESTION_SPECS 的 "py" 拿掉 → ①③翻紅;
++    把 python-idioms 目錄改名 → ④翻紅。"""
++    import json as _json
++    import subprocess as _sp
++    m = _load_lumos_inproc()
++    check("①py 題組五題", len(m._STACK_QUESTION_SPECS.get("py", [])) == 5, str(list(m._STACK_QUESTION_SPECS)))
++    with tempfile.TemporaryDirectory() as td:
++        root = Path(td)
++        g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
++        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
++        (root / "bot").mkdir(); (root / "tests").mkdir()
++        (root / "bot" / "strategy.py").write_text("def signal(x):\n    return x\n", encoding="utf-8")
++        (root / "bot" / "exchange.py").write_text("def place(o):\n    return o\n", encoding="utf-8")
++        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert True\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "init")
++        check("②.py → python-idioms", m._idiom_skill_for("py", "bot/strategy.py", td) == "python-idioms",
++              str(m._idiom_skill_for("py", "bot/strategy.py", td)))
++        check("②.py 的效能題鍵是 py", m._stack_key_for_file("bot/strategy.py", td) == "py",
++              str(m._stack_key_for_file("bot/strategy.py", td)))
++        (root / "bot" / "strategy.py").write_text(
++            "import asyncio\n\nasync def signals(xs):\n    return await asyncio.gather(*[one(x) for x in xs])\n", encoding="utf-8")
++        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert 1 == 1\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "gather")
++        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
++        data = _json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
++        sq = data.get("stack_questions", {})
++        check("③py 棧附五題、測試檔不另生鍵", set(sq) == {"py"} and len(sq["py"]) == 5, str(sq)[:300])
++        app = data.get("stack_questions_applicable", {}).get("py", [])
++        par_q = next(s["q"] for s in m._STACK_QUESTION_SPECS["py"] if s["id"] == "py-parallel")
++        check("③asyncio.gather 讓 py-parallel 適用", par_q in app, str(app)[:300])
++        arch = data.get("arch_alignment") or {}
++        check("②架構對齊附 python-idioms(strategy.py 有同層鄰居 exchange.py)",
++              "python-idioms" in arch.get("idiom_skills", []), str(arch)[:300])
++        (root / "tests" / "test_strategy.py").write_text("def test_signal():\n    assert 2 == 2\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "test only")
++        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
++        sq2 = _json.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0]).get("stack_questions", {})
++        check("③純測試檔 diff 不附 py 題", sq2 == {}, str(sq2))
++    skills_dir = Path(__file__).resolve().parent.parent / "skills"
++    if not skills_dir.is_dir():
++        raise _SrcOnly("消費端沒有 skills/(非來源 repo),慣例 skill 存在性這段沒驗到")
++    names = set(m._ARCH_IDIOM_SKILL.values()) | {"node-idioms"}
++    missing = sorted(n for n in names if not (skills_dir / n / "SKILL.md").is_file())
++    check("④慣例對映表指到的每個 skill 都真的存在(打錯字=審查員拿到一份不存在的慣例)", not missing, str(missing))
++
++
++# ── Java 補棧(2026-09-12,Projects/Java補棧_計劃;★尚無真 Java 專案,只有這裡的合成樣本★)──
++def t_java_profile_discovery():
++    """java-junit profile:@Test/@ParameterizedTest/@RepeatedTest 標註的 void 方法認得,
++    JUnit4 的 `@Test public void`、帶大括號的參數化註解(@ValueSource(ints = {1,2}))都要收得到;
++    沒標註的 void 方法不收;註解裡的假測試剝掉。★帶大括號那條是 Kotlin 版正則抓不到的★——
++    Kotlin 那條用 [^{]*? 會在 {1,2} 斷掉,Java 版改用非貪婪 .*? 才收得到。
++    翻紅釘:把 JAVA_TEST_RE 的 .*? 換回 [^{]*? → ②翻紅;把 exts 從 .java 改掉 → ⑤翻紅。"""
++    m = _load_lumos()
++    root = Path(tempfile.mkdtemp(prefix="gctl-javaprof-"))
++    (root / "src" / "test" / "java" / "shop").mkdir(parents=True)
++    (root / "src" / "test" / "java" / "shop" / "CheckoutTest.java").write_text(
++        "package shop;\n"
++        "import org.junit.jupiter.api.Test;\n"
++        "class CheckoutTest {\n"
++        "    @Test\n    void totalIncludesTax() { assertEquals(1, 1); }\n"
++        "    @ParameterizedTest\n    @ValueSource(ints = {1, 2, 3})\n"
++        "    void handlesQuantities(int n) { }\n"
++        "    @Test\n    public void legacyJUnit4Style() throws Exception { }\n"
++        "    void makeSut() { }\n"
++        "    // @Test void commentedOut() {}\n"
++        "    /* @Test void inBlockComment() {} */\n"
++        "}\n", encoding="utf-8")
++    prof = dict(m.TEST_PROFILES["java-junit"])
++    got = m.discover_test_methods(root, prof)
++    check("java ①@Test void 認得", "totalIncludesTax" in got, f"{got}")
++    check("java ②參數化註解帶大括號也認得(Kotlin 版正則在這裡會漏)", "handlesQuantities" in got, f"{got}")
++    check("java ③JUnit4 的 public void 認得", "legacyJUnit4Style" in got, f"{got}")
++    check("java ④沒標註的 void 方法不收", "makeSut" not in got, f"{got}")
++    check("java ⑤註解裡的假測試剝掉", "commentedOut" not in got and "inBlockComment" not in got, f"{got}")
++    check("java ⑥profile 只吃 .java(不搶 .kt)", prof["exts"] == {".java"}, str(prof["exts"]))
++    g = m._stack_guess()[".java"]
++    check("java ⑦init 猜得到測試 profile,符號 profile 借 kotlin 且不再標『猜得很弱』",
++          g["test"] == "java-junit" and g["symbol"] == "kotlin" and g["symbol_weak"] is False, str(g))
++    check("java ⑧骨架有一條只跑單支測試的指令", "{method}" in m._SKELETON_RUN_CMD.get("java-junit", ""),
++          str(m._SKELETON_RUN_CMD.get("java-junit")))
++
++
++def t_java_stack_wiring():
++    """[Java 補棧 2026-09-12]java 棧接進既有三時機:.java 改動 → 附 java 七題、慣例 skill 派 java-idioms;
++    ★平台特有的兩題靠觸發字自己決定要不要出現★(Enzo 2026-09-12 裁「兩邊都顧,依照情況接特有檢查"):
++    改 JPA 的檔只亮 java-data、改 Android 的檔只亮 java-android,互不干擾。測試檔不附題。
++    翻紅釘:把 _ARCH_IDIOM_SKILL 的 "java" 拿掉 → ②翻紅;把 _STACK_QUESTION_SPECS 的 "java" 拿掉 → ①③翻紅。"""
++    import json as _json
++    import subprocess as _sp
++    m = _load_lumos_inproc()
++    check("①java 題組七題", len(m._STACK_QUESTION_SPECS.get("java", [])) == 7, str(list(m._STACK_QUESTION_SPECS)))
++    with tempfile.TemporaryDirectory() as td:
++        root = Path(td)
++        g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
++        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
++        src = root / "src" / "main" / "java" / "shop"
++        src.mkdir(parents=True)
++        (root / "src" / "test" / "java" / "shop").mkdir(parents=True)
++        (src / "OrderService.java").write_text("package shop;\nclass OrderService { int total() { return 1; } }\n", encoding="utf-8")
++        (src / "PriceService.java").write_text("package shop;\nclass PriceService { int unit() { return 1; } }\n", encoding="utf-8")
++        (root / "src" / "test" / "java" / "shop" / "OrderServiceTest.java").write_text(
++            "package shop;\nclass OrderServiceTest { @Test void totals() { } }\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "init")
++        check("②.java → java-idioms", m._idiom_skill_for("java", "src/main/java/shop/OrderService.java", td) == "java-idioms",
++              str(m._idiom_skill_for("java", "src/main/java/shop/OrderService.java", td)))
++        check("②.java 的效能題鍵是 java", m._stack_key_for_file("src/main/java/shop/OrderService.java", td) == "java",
++              str(m._stack_key_for_file("src/main/java/shop/OrderService.java", td)))
++        (src / "OrderService.java").write_text(
++            "package shop;\nclass OrderService {\n"
++            "    List<Order> all() { return repo.findAll(); }\n}\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "jpa")
++        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
++        data = _json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
++        sq = data.get("stack_questions", {})
++        check("③java 棧附七題", set(sq) == {"java"} and len(sq["java"]) == 7, str(sq)[:200])
++        app = data.get("stack_questions_applicable", {}).get("java", [])
++        qof = lambda qid: next(s["q"] for s in m._STACK_QUESTION_SPECS["java"] if s["id"] == qid)
++        check("④後端改動(findAll)只讓 java-data 適用,不問 Android",
++              qof("java-data") in app and qof("java-android") not in app, str(len(app)))
++        arch = data.get("arch_alignment") or {}
++        check("②架構對齊附 java-idioms", "java-idioms" in arch.get("idiom_skills", []), str(arch)[:200])
++        (src / "RowBinder.java").write_text(
++            "package shop;\nclass RowBinder {\n"
++            "    void bind(View row) { row.findViewById(1); }\n}\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "android")
++        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
++        d2 = _json.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0])
++        app2 = d2.get("stack_questions_applicable", {}).get("java", [])
++        # ★樣本刻意另開一支檔★:同一支檔改寫時,被刪掉的那行也算改動行(既有設計:純刪除也要觸發),
++        # 上一版的 findAll 會讓 java-data 跟著亮,那樣就驗不到「平台特有題各自獨立」這件事。
++        check("④Android 改動(findViewById)只讓 java-android 適用,不問 JPA 交易",
++              qof("java-android") in app2 and qof("java-data") not in app2, str(len(app2)))
++        (root / "src" / "test" / "java" / "shop" / "OrderServiceTest.java").write_text(
++            "package shop;\nclass OrderServiceTest { @Test void totals() { int x = 2; } }\n", encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "test only")
++        r3 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
++        sq3 = _json.loads([l for l in r3.stdout.splitlines() if l.startswith("{")][0]).get("stack_questions", {})
++        check("⑤純測試檔 diff 不附 java 題", sq3 == {}, str(sq3))
++    skills_dir = Path(__file__).resolve().parent.parent / "skills"
++    if not skills_dir.is_dir():
++        raise _SrcOnly("消費端沒有 skills/(非來源 repo),java-idioms 存在性這段沒驗到")
++    check("⑥java-idioms 這份慣例 skill 真的存在", (skills_dir / "java-idioms" / "SKILL.md").is_file(), "")
++
++
+ def t_impact_hook_stack_questions():
+     """棧別效能追問 T2:hook 格式化 lumos 輸出的 stack_questions(單源在 lumos,hook 不持有表);
+     僅 stack_questions 無 results 也注入;兩者皆空不注入。"""
+     import contextlib
+     import io
+     from importlib.machinery import SourceFileLoader
+     from pathlib import Path as _P
+     hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+     loader = SourceFileLoader("impact_hook_sq_mod", hook_path)
+     import importlib.util as _iu
+@@ -21828,28 +22095,35 @@ def t_docs_command_count():
+     skip = ("governance/external-reviews/", "governance/golden/", "governance/l4-audit/",
+             "governance/review-reports/", "governance/audits/",
+             "-knowledge/", "/.git/", "node_modules/", ".claude/worktrees/")
+     scanned = 0
+     for p in sorted(root.rglob("*.md")):
+         rel = p.relative_to(root).as_posix()
+         if any(s.strip("/") in rel for s in skip):
+             continue
+         text = p.read_text(encoding="utf-8", errors="replace")
+         nums = set(_re.findall(r"(\d+) 個頂層命令", text)) | set(
+-            _re.findall(r"(\d+) top-level commands", text)) | set(
+-            _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24)
++            _re.findall(r"(\d+) top-level (?:commands|subcommands)", text)) | set(
++            _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24);
++        # ★第四次換措辭逃掉★(2026-09-12):英文版指令參考寫的是 `top-level subcommands`,
++        # 少了 sub 就對不上,於是它停在 67、中文版寫 70、真值 70,三個數字並存沒人紅。
++        # 這裡把 subcommands 也收進來;同時新增 t_docs_dont_hardcode_command_count,
++        # 讓對外文件乾脆不准寫死這個數字——第四次靠補措辭續命,說明白名單這條路本身在漏。
+         if not nums:
+             continue
+         scanned += 1
+         check(f"{rel} 命令數與 argparse 同步",
+               nums == {str(actual)}, f"claim={nums} actual={actual}")
+-    check("命令數守衛真的掃到活文件(>=4 份)", scanned >= 4, f"scanned={scanned}")
++    # 門檻從 4 降到 3(2026-09-12):兩份對外指令參考刻意不再寫死這個數字(改成「七十來個」),
++    # 由 t_docs_dont_hardcode_command_count 反向擋住它們再寫回來。剩下三份是給開發者看的
++    # 架構與參考文件,那裡講清楚規模有用,而且有本守衛盯著,所以保留數字。
++    check("命令數守衛真的掃到活文件(>=3 份)", scanned >= 3, f"scanned={scanned}")
+ 
+ 
+ def t_lint_decisions_structure():
+     """lint 抓 decisions 結構壞損:id 被吞進 content block(外審實錘型)/entry 非 dict。"""
+     v = mkvault()
+     # 壞型一:id 縮排進 content 首行(sibling 被吞)
+     write(v, "Systems/BadDec.md", """type: system
+ summary: |-
+   KEY:x
+ decisions:
+@@ -34131,58 +34405,68 @@ def t_stack_question_triggers():
+     import json as _j
+     m = _load_lumos_inproc()
+     ids = [s["id"] for v in m._STACK_QUESTION_SPECS.values() for s in v]
+     check("①每題 id 唯一且 when 非空(regex 已在載入時編譯)", len(ids) == len(set(ids)) and all(s["when"] for v in m._STACK_QUESTION_SPECS.values() for s in v), str(ids))
+     check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
+           set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
+                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
+                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
+                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
+                        "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
+-                       "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory"}, str(sorted(ids)))
++                       "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
++                       "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath",
++                       "java-concurrency", "java-resources", "java-data", "java-external", "java-memory",
++                       "java-collections", "java-android"}, str(sorted(ids)))
+     import re as _re
+     check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
+     app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
+     got = {r["id"] for r in meta["kt"] if r["applicable"]}
+     check("②命中樣本:viewModelScope.launch → kt-coroutines 適用、kt-compose 不適用", "kt-coroutines" in got and "kt-compose" not in got, str(got))
+     app2, meta2 = m._stack_applicability({"kt": ["    // TODO remove GlobalScope later", "    val s = \"GlobalScope\""]}, 300)
+     check("③註解行與字串字面裡的觸發詞不算", not app2, str(app2))
+     app_ic, _ = m._stack_applicability({"kt": ["val n = 1 // TODO GlobalScope 之後拿掉", "val s = 2 /* viewModelScope.launch */"]}, 300)
+     check("③行尾註解裡的觸發詞也不算(r1 外家備援席 f2)", not app_ic, str(app_ic))
+     # 五棧各一題命中/不命中(r1 合約測試席 f4:原本只有 kt 有直接樣本)
+     _samples = {"cs": ("cs-async", "var x = await svc.GetAsync(ct);", "var y = svc.Get();"),
+                 "sql": ("sql-index", "SELECT id FROM t WHERE a = 1", "INSERT INTO t VALUES (1)"),
+                 "swift": ("swift-swiftui", "struct V: View { var body: some View { Text(\"x\") } }", "let n = 3"),
+                 "node": ("node-parallel", "const r = await Promise.all(items.map(fetchOne))", "const r = items.map(f)"),
+-                "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>")}
++                "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>"),
++                "py": ("py-parallel", "results = await asyncio.gather(*tasks)", "total = price * qty"),
++                "java": ("java-concurrency", "CompletableFuture.allOf(a, b).join();", "int total = price * qty;")}
+     for _stk, (_qid, _hit, _miss) in _samples.items():
+         _a1, _m1 = m._stack_applicability({_stk: [_hit]}, 300)
+         _a2, _m2 = m._stack_applicability({_stk: [_miss]}, 300)
+         _got1 = {r["id"] for r in _m1[_stk] if r["applicable"]}
+         _got2 = {r["id"] for r in _m2[_stk] if r["applicable"]}
+         check(f"③{_stk}:命中樣本觸發 {_qid}、不命中樣本零觸發", _qid in _got1 and not _got2, f"hit={_got1} miss={_got2}")
+     # 反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能要亮同一題,不能不亮):各棧舊法樣本亮的是「同一題」,乾淨舊法樣本零觸發
+     _legacy = {
+         "kt": [("kt-coroutines", "Thread { Thread.sleep(500) }.start()"), ("kt-compose", "val v = findViewById<TextView>(R.id.t)"), (None, "val n = list.size")],
+         "cs": [("cs-async", "Thread.Sleep(1000);"), ("cs-data", 'using var cmd = new SqlCommand("SELECT * FROM t", conn);'), ("cs-connection", "conn.Open();"), (None, "var x = 1;")],
+         "vue": [("vue-parallel", "this.$http.get('/api/list')"), ("vue-reactive", "data() { return { list: [] } }"), (None, "const a = 1")],
+         "sql": [("sql-nplus1", "DECLARE c CURSOR FOR SELECT id FROM t"), ("sql-sargable", "WHERE YEAR(created_at) = 2026"), (None, "INSERT INTO t VALUES (1)")],
+         "swift": [("swift-main", "DispatchQueue.global().async { load() }"), ("swift-swiftui", "func tableView(_ t: UITableView, cellForRowAt i: IndexPath) -> UITableViewCell {"), (None, "let n = 3")],
+         "node": [("node-eventloop", "const cp = require('child_process')"), ("node-data", 'db.query("SELECT * FROM t", cb)'), (None, "const r = items.map(f)")],
++        "py": [("py-eventloop", "time.sleep(1)"), ("py-external", "resp = urllib.request.urlopen(url)"),
++               ("py-memory", "rows = cur.fetchall()"), ("py-hotpath", "for i in range(len(rows)):"),
++               ("py-parallel", "t = threading.Thread(target=worker)"), (None, "total = price * qty")],
+     }
+     # 看字串只限 when_raw 那幾條(code-反面詞 r1 單席 f1):log/錯誤訊息裡的關鍵字不能變假命中;SQL 字串要長得像 SQL
+     for _stk, _line, _bad in [("cs", 'logger.LogError("SELECT query failed, retrying");', "cs-data"),
+                               ("node", 'console.log("remember to call JSON.parse on the config")', "node-eventloop"),
+                               ("node", 'throw new Error("db.query failed, check createPool settings")', "node-data"),
+                               ("swift", "override func viewDidLoad() { super.viewDidLoad() }", "swift-swiftui"),
+                               ("cs", "response.Body.Open();", "cs-connection"),
+-                              ("sql", "SELECT dbo.fn_TotalTrim(name) FROM Users", "sql-sargable")]:
++                              ("sql", "SELECT dbo.fn_TotalTrim(name) FROM Users", "sql-sargable"),
++                              ("py", 'log.error("time.sleep failed, requests.get timed out")', "py-eventloop"),
++                              ("py", "raise ValueError('call fetchall() first')", "py-memory")]:
+         _a, _m = m._stack_applicability({_stk: [_line]}, 300)
+         _got = {r["id"] for r in _m[_stk] if r["applicable"]}
+         check(f"③假命中不回來:{_line[:34]} 不亮 {_bad}", _bad not in _got, str(_got))
+     for _stk, rows_ in _legacy.items():
+         for _qid, _line in rows_:
+             _a, _m = m._stack_applicability({_stk: [_line]}, 300)
+             _got = {r["id"] for r in _m[_stk] if r["applicable"]}
+             if _qid is None:
+                 check(f"③{_stk} 乾淨舊法樣本零觸發:{_line[:30]}", not _got, str(_got))
+             else:
+@@ -35052,20 +35336,32 @@ def t_init_writes_config_skeleton():
+         m._init_config_skeleton(root)
+         check("②既有設定不覆寫", cfg.read_text(encoding="utf-8") == before, "被覆寫了")
+     with tempfile.TemporaryDirectory() as d:
+         root = Path(d)
+         for n in range(4):
+             (root / f"A{n}.swift").write_text("x\n", encoding="utf-8")
+             (root / f"B{n}.ts").write_text("x\n", encoding="utf-8")
+         m._init_config_skeleton(root)
+         data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+         check("③多語言走多平台格式(不挑一個猜)", "platforms" in data and len(data["platforms"]) >= 2 and "default_platform" in data, str(list(data)))
++    with tempfile.TemporaryDirectory() as d:
++        # ★五種語言就要五個平台★(2026-09-12 多語言驗證 repo 實撞:原本 ranked[:3] 只列三個,
++        # 其餘語言的測試靜靜掃不到,而掃不到的症狀是合約綁不上、閘靜默放行,不是報錯)。
++        root = Path(d)
++        for ext in ("swift", "ts", "py", "java", "kt"):
++            for n in range(3):
++                (root / f"S{n}.{ext}").write_text("x\n", encoding="utf-8")
++        m._init_config_skeleton(root)
++        data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
++        fams = set(data.get("platforms", {}))
++        check("③五種語言全部列進平台表(不是只留前三名)",
++              fams == {"swift", "node", "python", "java", "kotlin"}, str(sorted(fams)))
+     with tempfile.TemporaryDirectory() as d:
+         root = Path(d)
+         (root / "a.rs").write_text("x\n", encoding="utf-8")
+         m._init_config_skeleton(root)
+         data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+         check("④認不出:留空並寫說明,不亂猜", data.get("test_profile") == "" and "_說明" in data, str(data))
+ 
+ 
+ def t_init_gitignore_matches_design():
+     """[消費專案接入靜默失效 S6]init 的兩份忽略設定要跟設計一致:治理帳★不在★忽略清單(CI 唯一路徑)、
