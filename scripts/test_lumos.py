@@ -36937,6 +36937,7 @@ def t_impact_hook_shows_home_label():
         {"node": "Systems/管這支的.md", "kind": "home", "pinned": True, "score": 0.0, "home": True},
         {"node": "Systems/只是提到.md", "kind": "direct", "pinned": True, "score": 0.3, "contract": "INVARIANT"},
         {"node": "Systems/大檔的家.md", "kind": "direct", "pinned": False, "score": 0.5, "home": True},
+        {"node": "Systems/家又直接.md", "kind": "direct", "pinned": True, "score": 0.4, "home": True},
     ], "meta": {}})
     l_home = next((l for l in ctx.splitlines() if "管這支的" in l), "")
     l_other = next((l for l in ctx.splitlines() if "只是提到" in l), "")
@@ -36944,6 +36945,13 @@ def t_impact_hook_shows_home_label():
     check("①必看那段:是家的那行標出來", "★家★" in l_home, l_home)
     check("②不是家的那行不要亂標", "★家★" not in l_other, l_other)
     check("③沒升上必看的家(大檔)在下面那段也標得出來", "★家★" in l_free, l_free)
+    # ★釘住「標記跟種類詞之間有空白」★:上一版印成「★家★直接」黏一串,而當時的斷言只做子字串比對,
+    # 所以照樣判過(代碼審 r1 合約席抓到、r2 驗收席指出修完仍沒人釘)。
+    l_both = next((l for l in ctx.splitlines() if "家又直接" in l), "")
+    check("③-1 必看那段:標記跟種類詞之間要有空白,不能黏成一串",
+          "★家★直接" not in l_both and "★家★ 直接" in l_both, repr(l_both))
+    check("③-2 可選名單那段也一樣",
+          "★家★直接" not in l_free and "★家★ 直接" in l_free, repr(l_free))
     check("④必看那段的開場白有提到家", "家" in next((l for l in ctx.splitlines() if "必看" in l), ""),
           next((l for l in ctx.splitlines() if "必看" in l), ""))
     root = _nh_repo()
@@ -36952,14 +36960,18 @@ def t_impact_hook_shows_home_label():
     _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
     r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/pay.py", "--ranked", "--repo", str(root)],
                 capture_output=True, text=True)
-    check("⑤單檔的人讀輸出標出家", "★家★" in next((l for l in r.stdout.splitlines() if "計價規則" in l), ""),
-          r.stdout[:300])
+    _l5 = next((l for l in r.stdout.splitlines() if "計價規則" in l), "")
+    check("⑤單檔的人讀輸出標出家", "★家★" in _l5, r.stdout[:300])
+    check("⑤-1 單檔輸出的標記也不能跟種類詞黏在一起",
+          "★家★直接" not in _l5 and "★家★ 直接" in _l5, repr(_l5))
     _nh_file(root, "src/pay.py", "x = 2\n")
     _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
     r2 = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD", "--repo", str(root)],
                  capture_output=True, text=True)
-    check("⑥多檔的人讀輸出也標出家", "★家★" in next((l for l in r2.stdout.splitlines() if "計價規則" in l), ""),
-          r2.stdout[:300])
+    _l6 = next((l for l in r2.stdout.splitlines() if "計價規則" in l), "")
+    check("⑥多檔的人讀輸出也標出家", "★家★" in _l6, r2.stdout[:300])
+    check("⑥-1 多檔輸出的標記也不能跟種類詞黏在一起",
+          "★家★直接" not in _l6 and "★家★ 直接" in _l6, repr(_l6))
 
 
 def t_pinned_wording_mentions_home():
@@ -37481,6 +37493,104 @@ def t_about_stamp_no_longer_affects_ranking():
     r = _sp.run([sys.executable, GRAPHCTL, "about-code", "--help"], capture_output=True, text=True, cwd=str(root))
     check("④指紋相關的指令保留(舊資料與回滾用)",
           "restamp" in r.stdout and "revert" in r.stdout, r.stdout[:300] + r.stderr[:200])
+
+
+def t_impact_home_incident_keeps_both_labels():
+    """代碼審 r2:一篇同時是事故又是家時,兩個身份都要看得到。
+    原本家會把事故蓋掉——事故是最高優先的安全訊號,蓋掉等於把「這裡出過事」藏起來。
+    ★兩條顯示路徑都要釘★:推送前的派工鏡頭(--diff)與計劃模式的派工鏡頭(--spec)。"""
+    print("t_impact_home_incident_keeps_both_labels")
+    import subprocess as _sp
+    root = _nh_repo()
+    _nh_file(root, "src/pay.py")
+    # ★要 Systems 型★:家的定義就是「狀態現行的 Systems 節點」,Issues 當不了家;
+    # 一個 Systems 節點掛了事故觸發條件,就會同時是事故又是家——這正是這支測試要驗的組合。
+    _nh_node(root, "出過事又管它", about=["src/pay.py"], body="出事的是 `src/pay.py`。",
+             summary="FLOW:x\nKEY:出過事")
+    n = root / "docs" / "kg-knowledge" / "Systems" / "出過事又管它.md"
+    n.write_text(n.read_text(encoding="utf-8").replace("about_code:", "pitfall_when:\n  - glob:src/pay.py\nabout_code:"),
+                 encoding="utf-8")
+    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "base")
+    _nh_file(root, "src/pay.py", "x = 2\n")
+    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "change")
+    r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", "HEAD~1..HEAD", "--repo", str(root)],
+                capture_output=True, text=True)
+    line = next((l for l in r.stdout.splitlines() if "出過事又管它" in l), "")
+    check("①推送前的鏡頭:事故與家兩個都印得出來", "事故" in line and "家" in line,
+          repr(line) + r.stdout[:300])
+    _nh_node(root, "某案_計劃", typ="project", folder="Projects", resp=None,
+             summary="KEY:試", body="要改 `src/pay.py`。")
+    _nh_git(root, "add", "-A"); _nh_git(root, "commit", "-qm", "plan")
+    r2 = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec",
+                  "docs/kg-knowledge/Projects/某案_計劃.md", "--repo", str(root)], capture_output=True, text=True)
+    line2 = next((l for l in r2.stdout.splitlines() if "出過事又管它" in l), "")
+    check("②計劃模式的鏡頭也一樣(這條路原本把家的身份整個丟掉)",
+          "事故" in line2 and "家" in line2, repr(line2) + r2.stdout[:400])
+
+
+def t_impact_home_confirms_non_ascii_path():
+    """代碼審 r2:正文寫出完整路徑的判斷不能挑語言。中文資料夾與檔名在這套工具鏈服務的專案裡很常見,
+    原本字元類寫死英數,對它們等於整條失效,而且沒有任何測試用中文路徑餵過。"""
+    print("t_impact_home_confirms_non_ascii_path")
+    root = _nh_repo()
+    _nh_file(root, "來源/計價規則.py")
+    # 正文寫完整路徑、不加反引號:只有「完整路徑掃描」那條路能認出它
+    _nh_node(root, "中文檔的家", about=["來源/計價規則.py"], body="計價寫在 來源/計價規則.py 裡。")
+    _nh_git(root, "add", "-A")
+    d = _home_impact(root, "來源/計價規則.py")
+    node = next((x for x in d["results"] if "中文檔的家" in x["node"]), None)
+    check("①中文路徑也認得出「正文寫出了這支檔」", node is not None and node.get("home") and node["pinned"],
+          str(d)[:300])
+
+
+def t_home_audit_refuses_paths_outside_repo():
+    """代碼審 r2:抽查腳本會照筆記裡寫的路徑讀檔。筆記是 .md,手改就能寫成 ../ 或絕對路徑,
+    讀到的內容還會原樣寫進常被提交進版控的輸出——越界的一律不讀。
+    ★而且其餘合法配對照印★:第一版的警告把整份報告一起吃掉了。"""
+    print("t_home_audit_refuses_paths_outside_repo")
+    import json as _j, subprocess as _sp
+    root = _nh_repo()
+    secret = root.parent / f"SECRET_{root.name}.txt"
+    secret.write_text("TOP-SECRET-LINE\n", encoding="utf-8")
+    try:
+        _nh_file(root, "src/good.py", "# 正常的檔\n")
+        _nh_node(root, "正常的家", about=["src/good.py"], body="實作在 `src/good.py`。")
+        _nh_node(root, "越界的家", about=[f"../{secret.name}"], body=f"看 `../{secret.name}`。")
+        _nh_git(root, "add", "-A")
+        r = _sp.run([sys.executable, _HOME_AUDIT, "sample", "--vault", str(root / "docs" / "kg-knowledge"),
+                     "--seed", "1", "--repo", str(root), "--lumos", GRAPHCTL], capture_output=True, text=True)
+        check("①專案外的檔一個字都沒讀出來", "TOP-SECRET-LINE" not in r.stdout + r.stderr,
+              (r.stdout + r.stderr)[:400])
+        check("②有講出是哪一對越界、怎麼改", "跑出專案外面" in r.stderr and "about_code" in r.stderr,
+              r.stderr[:400])
+        check("③其餘合法配對照印(警告不該把整份報告吃掉)",
+              r.returncode == 0 and "src/good.py" in r.stdout, f"rc={r.returncode}\n" + r.stdout[:300])
+        d = _j.loads(r.stdout)
+        bad = next((x for x in d["pairs"] if "越界" in x["node"]), None)
+        check("④越界那一對留在清單上、但內容換成說明(人才看得到要修哪一篇)",
+              bad is not None and "跑出專案外面" in bad["head"], str(bad)[:200])
+    finally:
+        secret.unlink(missing_ok=True)
+
+
+def t_home_audit_tally_rejects_stray_ids():
+    """代碼審 r2:人裁檔拿錯輪的,編號對不上這批配對,錯誤率會算出超過 100% 卻不報錯——
+    那個數字看起來還很正常。編號不在這批就擋下。"""
+    print("t_home_audit_tally_rejects_stray_ids")
+    import json as _j, subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="gctl-stray-"))
+    rows = [{"id": "p001", "file": "src/a.py", "node": "Systems/A.md", "key": "K", "head": "", "verdict": "是"},
+            {"id": "p002", "file": "src/b.py", "node": "Systems/B.md", "key": "K", "head": "", "verdict": "否"}]
+    f = d / "verdicts.json"; f.write_text(_j.dumps({"pairs": rows}, ensure_ascii=False), encoding="utf-8")
+    rul = d / "ruling.json"; rul.write_text(_j.dumps({"wrong": ["p001", "p998", "p999"]}), encoding="utf-8")
+    r = _sp.run([sys.executable, _HOME_AUDIT, "tally", str(f), "--ruling", str(rul)], capture_output=True, text=True)
+    check("①編號對不上就擋下", r.returncode == 2, f"rc={r.returncode}")
+    check("②點名是哪幾個編號", "p998" in r.stderr and "p999" in r.stderr, r.stderr[:300])
+    check("③講出最常見的原因(拿錯輪)", "同一輪" in r.stderr or "同一批" in r.stderr, r.stderr[:300])
+    check("④不會印出超過 100% 的錯誤率", "150" not in r.stdout, r.stdout[:300])
+    rul.write_text(_j.dumps({"wrong": ["p001"]}), encoding="utf-8")
+    r2 = _sp.run([sys.executable, _HOME_AUDIT, "tally", str(f), "--ruling", str(rul)], capture_output=True, text=True)
+    check("⑤編號都對得上就照算", r2.returncode == 0 and "50.0%" in r2.stdout, r2.stdout[-200:])
 
 
 def t_impact_diff_keeps_homes():

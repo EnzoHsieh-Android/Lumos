@@ -1459,7 +1459,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     section("S4", "標了 about_code 的合約節點,波及計算連得到嗎(提醒,不擋)")
     # ★只唸「有合約且綁測試」的節點★(消費專案接入靜默失效 [C]/S3;r1 接手席實數:
     # 不縮小條件本 repo 會被唸 40 篇、是計劃自訂門檻的四倍,縮小後 2 篇)。
-    # 理由:about_code 只做固定席排序不做連結(2026-08-23 甲案收窄,設計正確);
+    # 理由:about_code 原本只做固定席排序不做連結(2026-08-23 甲案收窄)。
+    # ★2026-09-12 這個前提已部分翻案★:確認過的家(那篇正文或摘要真的寫出這支檔)現在會直接進必推名單,
+    # 見 [[Projects/推筆記認家_計劃]];這道檢查唸的仍是下面那件事,不受影響。
     # 真正會出事的是「合約綁了測試、但波及計算連不到這個節點」——那道合約測試閘會靜默跳過。
     _unlinked = []
     for rel, n in sorted(notes.items()):
@@ -17799,7 +17801,8 @@ def _nodehome_config(repo_root, text=None, from_snapshot=False):
     return cfg
 
 
-_HOME_MENTION_BOUNDARY = re.compile(r"[A-Za-z0-9_.@+\-]")
+# 斜線也算檔名字元:不然正文寫 lib/src/pay.py 會被判成「有提到 src/pay.py」(代碼審 r2 合約席)
+_HOME_MENTION_BOUNDARY = re.compile(r"[A-Za-z0-9_.@+/\-]")
 
 
 def _home_mentions(scan_text, rel_path):
@@ -21646,7 +21649,11 @@ def _impact_about_max():
     對整個專案靜默關掉,而使用者看不出來(代碼審 r1 邊界席)。這跟旁邊「非數字退回預設」
     同一套處理:無效就當沒設。真要整個關掉有專用旋鈕 LUMOS_IMPACT_HOME=0。
     """
-    v = int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8))
+    raw = _impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)
+    try:
+        v = int(raw)          # nan / inf 是合法 float,會穿過旋鈕那層的檢查,到這裡才炸(代碼審 r2 正確性席)
+    except (ValueError, OverflowError):
+        return 8
     return v if v >= 1 else 8
 
 
@@ -22137,7 +22144,12 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             _inc = {x["node"] for x in all_incidents}
             for _hn in _home_nodes:
                 if _hn in _inc:
-                    continue          # 事故優先,不重複列
+                    # 事故那袋留著它(事故優先,不重複列),但要標出它同時是家
+                    # ——不標的話計劃模式的派工鏡頭看不出來,跟推送前那條路不一致(代碼審 r2 合約席)
+                    for _ix in all_incidents:
+                        if _ix.get("node") == _hn:
+                            _ix["home"] = True
+                    continue
                 _hnote = env.notes.get(_hn)
                 _hc, _hcombo = _impact_contract(_hnote) if _hnote else (None, False)
                 all_homes.append({"node": _hn, "contract": _hc, "combo": _hcombo})
@@ -23558,7 +23570,7 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
             node = str(v["node"])[:-3] if str(v["node"]).endswith(".md") else str(v["node"])
             if node.startswith("Projects/"):   # 別的計劃不是合約也不是事故,不進固定席
                 continue
-            pinned.setdefault(node, {"kind": _LENS_KIND.get(kind), "contract": _lens_contract_class(v), "files": [f]})
+            pinned.setdefault(node, {"kind": _lens_kind_of({**v, "kind": kind}), "contract": _lens_contract_class(v), "files": [f]})
             if f not in pinned[node]["files"]:
                 pinned[node]["files"].append(f)
     def _rank(v):

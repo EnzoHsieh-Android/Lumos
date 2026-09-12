@@ -138,14 +138,16 @@ def cmd_sample(args):
         print(f"抽了 {len(rows)} 對(全部 {len(pairs)} 對,種子 {args.seed}),寫到 {args.out}")
         print("審查員逐對填 verdict:是 / 否 / 判不準,填完跑 tally。")
         print("這份檔帶著各支檔開頭幾行的原文,提交前自己看一眼有沒有抄到不該外流的東西。")
+    else:
+        print(text)
+    # ★警告走 stderr,報告照印★——第一版把這段的 else 接到了 outside 上,結果只要有一對越界,
+    # 整份報告(含其餘合法配對)就從 stdout 消失、退出碼還是 0,人看不到也不知道不見了(代碼審 r2 正確性席)。
     if outside:
-        print(f"⚠ 有 {len(outside)} 對的路徑跑出專案外面,沒有讀它們的內容:", file=sys.stderr)
+        print(f"⚠ 有 {len(outside)} 對的路徑跑出專案外面,沒有讀它們的內容(其餘照常抽):", file=sys.stderr)
         for x in outside[:10]:
             print(f"    {x}", file=sys.stderr)
         print("  那幾篇的 about_code 寫錯了(或被人動過手腳),去那篇改對:", file=sys.stderr)
         print("    lumos remove <節點> about_code <那個路徑>", file=sys.stderr)
-    else:
-        print(text)
     return 0
 
 
