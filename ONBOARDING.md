@@ -130,5 +130,5 @@ lumos set / append / decision-add   # 改欄位、加連結、記決策(每支�
   ~/harness/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
   ```
   重跑=更新工具組,圖譜資料永遠不動。
-- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、只有單一專案在用的框架選型。跨專案通用的技術棧慣例 skill(kotlin / vue / csharp / swift / node / python-idioms;以 `ls skills/` 為準)住這裡,因為它們不綁任何一個專案——邊界跟 README〈邊界〉那節同一句,改一邊要一起改。
+- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、只有單一專案在用的框架選型。跨專案通用的技術棧慣例 skill(kotlin / vue / csharp / swift / node / python / java-idioms;以 `ls skills/` 為準)住這裡,因為它們不綁任何一個專案——邊界跟 README〈邊界〉那節同一句,改一邊要一起改。
 - 此 repo 公開:推東西前確認**無公司識別資訊**(專案名/表名/業務規則);skills 與範本只用通用範例。

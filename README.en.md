@@ -219,6 +219,28 @@ I want context to live outside the model, with its maintenance connected to deve
 
 Lumos is my implementation of that idea.
 
+## Supported languages
+
+Most of Lumos does not care what your project is written in—the notes, dispatch, review, and write-back loop is language-agnostic. Only four things are bound to a stack: **finding your tests** (so contracts can bind to them), **the performance questions worth asking for that stack**, **the coding-conventions skill**, and **which linters to reach for**. The table below is the current state of those four.
+
+| Language / platform | Test discovery | Performance questions | Conventions skill | Linter picks | Used on a real project |
+|---|---|---|---|---|---|
+| Kotlin / Android | ✅ | ✅ 7 | ✅ | ✅ | ✅ |
+| C# / .NET | ✅ | ✅ 5 | ✅ | ✅ | ✅ |
+| Vue / front-end TypeScript | ✅ | ✅ 5 | ✅ | ✅ | ✅ |
+| SQL | — | ✅ 4 | — | ✅ | ✅ |
+| Python | ✅ | ✅ 5 | ✅ | ✅ | ⏳ in progress |
+| Java / JVM | ✅ | ✅ 7 | ✅ | ⚠️ not run yet | ❌ |
+| Swift / iOS | ✅ | ✅ 6 | ✅ | ⚠️ not run yet | ❌ |
+| Node.js backend | ✅ | ✅ 5 | ✅ | ⚠️ not run yet | ❌ |
+| Flutter / Dart | ✅ | — | — | ✅ | ⚠️ surveyed only |
+
+**Read the last column.** The ❌ rows were filled in to the same design and tested against synthetic samples, but **no real project has used them yet**—whether the trigger words fire accurately and whether the convention rules hold is still unmeasured. ⚠️ means two different things: in the linter column, those picks came from official documentation and were never installed and run here; in the last column, Dart means a real project was surveyed but never actually onboarded.
+
+**Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
+
+(Separately: running Lumos itself needs Python 3.9+. That is unrelated to what your project is written in.)
+
 ## Scope
 
 Lumos supplies the reusable toolkit: the notes CLI, working instructions, checks, Git hooks, and cross-project stack conventions. Business knowledge, framework choices, and release procedures belong to each project.

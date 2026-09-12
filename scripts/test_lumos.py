@@ -13213,13 +13213,8 @@ def _make_high_tier_repo(d):
     g("init", "-q", "-b", "main")
     g("config", "user.email", "t@t.t")
     g("config", "user.name", "t")
-    # ★要有 docs/ 這個圖譜落腳處★(2026-09-12):表態跟留痕一樣要寫進治理帳,而治理帳在 docs/ 底下;
-    # 沒有它,表態指令會整個拒寫,於是這個假 repo 永遠答不完題、閘永遠擋——測試就驗不到它真正
-    # 要驗的那一關(留痕符不符)。原本沒事是因為 .py 檔本來不觸發任何棧別題,Python 棧支援上線
-    # 之後才連帶暴露出來。
-    (Path(d) / "docs" / "demo-knowledge" / "Systems").mkdir(parents=True, exist_ok=True)
     (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
-    g("add", "-A")
+    g("add", "README.md")
     g("commit", "-qm", "init")
     # 切 feat branch 並加 high-tier 程式
     g("checkout", "-b", "feat/codeloop-guard-test")
@@ -13242,6 +13237,10 @@ def _answer_stack_questions(d, diff="main..HEAD"):
     而不是把表態閘關掉。
     """
     import json as _j, subprocess as _sp
+    # 表態跟留痕一樣要寫進治理帳,而治理帳在 docs/ 底下;假 repo 沒有這個目錄的話
+    # 表態指令會整個拒寫,題目就永遠答不完。這裡就地補上(不動共用的 _make_high_tier_repo,
+    # 免得波及那些自己也建 docs/ 的測試)。
+    (Path(d) / "docs" / "demo-knowledge" / "Systems").mkdir(parents=True, exist_ok=True)
     r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", diff,
                  "--dispositions-template", "--repo", d], capture_output=True, text=True)
     tpl = _j.loads(r.stdout)
@@ -20441,6 +20440,105 @@ def t_python_stack_wiring():
     names = set(m._ARCH_IDIOM_SKILL.values()) | {"node-idioms"}
     missing = sorted(n for n in names if not (skills_dir / n / "SKILL.md").is_file())
     check("④慣例對映表指到的每個 skill 都真的存在(打錯字=審查員拿到一份不存在的慣例)", not missing, str(missing))
+
+
+# ── Java 補棧(2026-09-12,Projects/Java補棧_計劃;★尚無真 Java 專案,只有這裡的合成樣本★)──
+def t_java_profile_discovery():
+    """java-junit profile:@Test/@ParameterizedTest/@RepeatedTest 標註的 void 方法認得,
+    JUnit4 的 `@Test public void`、帶大括號的參數化註解(@ValueSource(ints = {1,2}))都要收得到;
+    沒標註的 void 方法不收;註解裡的假測試剝掉。★帶大括號那條是 Kotlin 版正則抓不到的★——
+    Kotlin 那條用 [^{]*? 會在 {1,2} 斷掉,Java 版改用非貪婪 .*? 才收得到。
+    翻紅釘:把 JAVA_TEST_RE 的 .*? 換回 [^{]*? → ②翻紅;把 exts 從 .java 改掉 → ⑤翻紅。"""
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-javaprof-"))
+    (root / "src" / "test" / "java" / "shop").mkdir(parents=True)
+    (root / "src" / "test" / "java" / "shop" / "CheckoutTest.java").write_text(
+        "package shop;\n"
+        "import org.junit.jupiter.api.Test;\n"
+        "class CheckoutTest {\n"
+        "    @Test\n    void totalIncludesTax() { assertEquals(1, 1); }\n"
+        "    @ParameterizedTest\n    @ValueSource(ints = {1, 2, 3})\n"
+        "    void handlesQuantities(int n) { }\n"
+        "    @Test\n    public void legacyJUnit4Style() throws Exception { }\n"
+        "    void makeSut() { }\n"
+        "    // @Test void commentedOut() {}\n"
+        "    /* @Test void inBlockComment() {} */\n"
+        "}\n", encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["java-junit"])
+    got = m.discover_test_methods(root, prof)
+    check("java ①@Test void 認得", "totalIncludesTax" in got, f"{got}")
+    check("java ②參數化註解帶大括號也認得(Kotlin 版正則在這裡會漏)", "handlesQuantities" in got, f"{got}")
+    check("java ③JUnit4 的 public void 認得", "legacyJUnit4Style" in got, f"{got}")
+    check("java ④沒標註的 void 方法不收", "makeSut" not in got, f"{got}")
+    check("java ⑤註解裡的假測試剝掉", "commentedOut" not in got and "inBlockComment" not in got, f"{got}")
+    check("java ⑥profile 只吃 .java(不搶 .kt)", prof["exts"] == {".java"}, str(prof["exts"]))
+    g = m._stack_guess()[".java"]
+    check("java ⑦init 猜得到測試 profile,符號 profile 借 kotlin 且不再標『猜得很弱』",
+          g["test"] == "java-junit" and g["symbol"] == "kotlin" and g["symbol_weak"] is False, str(g))
+    check("java ⑧骨架有一條只跑單支測試的指令", "{method}" in m._SKELETON_RUN_CMD.get("java-junit", ""),
+          str(m._SKELETON_RUN_CMD.get("java-junit")))
+
+
+def t_java_stack_wiring():
+    """[Java 補棧 2026-09-12]java 棧接進既有三時機:.java 改動 → 附 java 七題、慣例 skill 派 java-idioms;
+    ★平台特有的兩題靠觸發字自己決定要不要出現★(Enzo 2026-09-12 裁「兩邊都顧,依照情況接特有檢查"):
+    改 JPA 的檔只亮 java-data、改 Android 的檔只亮 java-android,互不干擾。測試檔不附題。
+    翻紅釘:把 _ARCH_IDIOM_SKILL 的 "java" 拿掉 → ②翻紅;把 _STACK_QUESTION_SPECS 的 "java" 拿掉 → ①③翻紅。"""
+    import json as _json
+    import subprocess as _sp
+    m = _load_lumos_inproc()
+    check("①java 題組七題", len(m._STACK_QUESTION_SPECS.get("java", [])) == 7, str(list(m._STACK_QUESTION_SPECS)))
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        src = root / "src" / "main" / "java" / "shop"
+        src.mkdir(parents=True)
+        (root / "src" / "test" / "java" / "shop").mkdir(parents=True)
+        (src / "OrderService.java").write_text("package shop;\nclass OrderService { int total() { return 1; } }\n", encoding="utf-8")
+        (src / "PriceService.java").write_text("package shop;\nclass PriceService { int unit() { return 1; } }\n", encoding="utf-8")
+        (root / "src" / "test" / "java" / "shop" / "OrderServiceTest.java").write_text(
+            "package shop;\nclass OrderServiceTest { @Test void totals() { } }\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        check("②.java → java-idioms", m._idiom_skill_for("java", "src/main/java/shop/OrderService.java", td) == "java-idioms",
+              str(m._idiom_skill_for("java", "src/main/java/shop/OrderService.java", td)))
+        check("②.java 的效能題鍵是 java", m._stack_key_for_file("src/main/java/shop/OrderService.java", td) == "java",
+              str(m._stack_key_for_file("src/main/java/shop/OrderService.java", td)))
+        (src / "OrderService.java").write_text(
+            "package shop;\nclass OrderService {\n"
+            "    List<Order> all() { return repo.findAll(); }\n}\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "jpa")
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        data = _json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+        sq = data.get("stack_questions", {})
+        check("③java 棧附七題", set(sq) == {"java"} and len(sq["java"]) == 7, str(sq)[:200])
+        app = data.get("stack_questions_applicable", {}).get("java", [])
+        qof = lambda qid: next(s["q"] for s in m._STACK_QUESTION_SPECS["java"] if s["id"] == qid)
+        check("④後端改動(findAll)只讓 java-data 適用,不問 Android",
+              qof("java-data") in app and qof("java-android") not in app, str(len(app)))
+        arch = data.get("arch_alignment") or {}
+        check("②架構對齊附 java-idioms", "java-idioms" in arch.get("idiom_skills", []), str(arch)[:200])
+        (src / "RowBinder.java").write_text(
+            "package shop;\nclass RowBinder {\n"
+            "    void bind(View row) { row.findViewById(1); }\n}\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "android")
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        d2 = _json.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0])
+        app2 = d2.get("stack_questions_applicable", {}).get("java", [])
+        # ★樣本刻意另開一支檔★:同一支檔改寫時,被刪掉的那行也算改動行(既有設計:純刪除也要觸發),
+        # 上一版的 findAll 會讓 java-data 跟著亮,那樣就驗不到「平台特有題各自獨立」這件事。
+        check("④Android 改動(findViewById)只讓 java-android 適用,不問 JPA 交易",
+              qof("java-android") in app2 and qof("java-data") not in app2, str(len(app2)))
+        (root / "src" / "test" / "java" / "shop" / "OrderServiceTest.java").write_text(
+            "package shop;\nclass OrderServiceTest { @Test void totals() { int x = 2; } }\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "test only")
+        r3 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        sq3 = _json.loads([l for l in r3.stdout.splitlines() if l.startswith("{")][0]).get("stack_questions", {})
+        check("⑤純測試檔 diff 不附 java 題", sq3 == {}, str(sq3))
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    if not skills_dir.is_dir():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),java-idioms 存在性這段沒驗到")
+    check("⑥java-idioms 這份慣例 skill 真的存在", (skills_dir / "java-idioms" / "SKILL.md").is_file(), "")
 
 
 def t_impact_hook_stack_questions():
@@ -34337,7 +34435,9 @@ def t_stack_question_triggers():
                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
                        "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
                        "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
-                       "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath"}, str(sorted(ids)))
+                       "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath",
+                       "java-concurrency", "java-resources", "java-data", "java-external", "java-memory",
+                       "java-collections", "java-android"}, str(sorted(ids)))
     import re as _re
     check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
     app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
@@ -34353,7 +34453,8 @@ def t_stack_question_triggers():
                 "swift": ("swift-swiftui", "struct V: View { var body: some View { Text(\"x\") } }", "let n = 3"),
                 "node": ("node-parallel", "const r = await Promise.all(items.map(fetchOne))", "const r = items.map(f)"),
                 "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>"),
-                "py": ("py-parallel", "results = await asyncio.gather(*tasks)", "total = price * qty")}
+                "py": ("py-parallel", "results = await asyncio.gather(*tasks)", "total = price * qty"),
+                "java": ("java-concurrency", "CompletableFuture.allOf(a, b).join();", "int total = price * qty;")}
     for _stk, (_qid, _hit, _miss) in _samples.items():
         _a1, _m1 = m._stack_applicability({_stk: [_hit]}, 300)
         _a2, _m2 = m._stack_applicability({_stk: [_miss]}, 300)

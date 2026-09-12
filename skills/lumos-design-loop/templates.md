@@ -266,7 +266,7 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
 
 被審材料:{工作副本路徑}
 同層最相似的既有檔(對照用,這些代表專案現在的寫法):{鄰居檔清單,pitfalls --diff 會吐}
-這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
+這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms / java-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
 圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..HEAD`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:留一行 `LUMOS-SPEC: <計劃.md>`,hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
 
 三問(設計審多第四問),逐問答、每問附對照的 file:line:
@@ -328,7 +328,7 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
 你是資安審查員,站在攻擊者那一邊看這份 diff。你只看「能被利用的洞」,不看一般 bug、效能、風格(別席管)。
 
 被審材料:{凍結 patch 路徑}
-這個技術棧慣例 skill 裡的資安條款:{node-idioms 的邊界驗證/秘密不進 log/速率限制;python-idioms 的 R15 邊界驗證/R16 秘密不進 log/R18 反序列化與 shell;其他棧沒有就寫「無」}
+這個技術棧慣例 skill 裡的資安條款:{node-idioms 的邊界驗證/秘密不進 log/速率限制;python-idioms 的 R15 邊界驗證/R16 秘密不進 log/R18 反序列化與 shell;java-idioms 的 R13 邊界驗證與 SQL 參數化/秘密不進 log;其他棧沒有就寫「無」}
 (選配)專案資安類 linter 的輸出:{有宣告才附,沒有寫「無」}——這是另外長出來的材料,拿來跟 diff 對照
 
 逐類想過(沒有也寫「已看,無」):

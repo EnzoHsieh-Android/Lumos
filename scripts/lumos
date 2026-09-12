@@ -3388,6 +3388,14 @@ KOTLIN_TEST_RE = re.compile(
     r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]*?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
     re.S)
 
+# Java/JUnit 測試方法:註解 → void 方法名。★中間用非貪婪 `.*?` 而不是 Kotlin 那條的 `[^{]*?`★——
+# Java 的參數化註解會帶大括號(`@ValueSource(ints = {1, 2, 3})`),`[^{]*?` 會在那裡斷掉整支漏掉;
+# 而 JUnit 規定測試方法必須回傳 void,所以「註解之後最近的一個 void 方法名」就是它本人。
+# 代價:萬一有人把 @Test 標在非 void 方法上(JUnit 會拒跑),這條會抓到下一個 void 方法的名字。
+JAVA_TEST_RE = re.compile(
+    r"@(?:Test|ParameterizedTest|RepeatedTest)\b.*?\bvoid\s+([A-Za-z_]\w*)\s*\(",
+    re.S)
+
 # Maestro(Android E2E)flow 綁 name: 欄位。行尾 \s*$ 錨:多字 name(含空白)NO MATCH
 # → 與 playwright 對稱、不製造假陽性(識別字安全的 name 才可綁,設計慣例)。
 MAESTRO_NAME_RE = re.compile(r"(?m)^name:\s*[\"']?([A-Za-z_]\w*)[\"']?\s*$")
@@ -3518,6 +3526,16 @@ TEST_PROFILES = {
     "kotlin-junit": {
         "exts": {".kt"}, "method_re": KOTLIN_TEST_RE, "scaffold_ext": ".kt",
         "dir_mode": "rglob", "rglob_under": "src",   # 限 Gradle/Maven src/ 下,排除 docs/test 等
+        "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
+        "dirs": {"pure": (["test"], []),
+                 "behavioral": (["androidTest", "test"], []),
+                 "state": (["androidTest", "test"], [])},
+    },
+    # Java/JUnit(2026-09-12 Java 補棧):目錄慣例與 kotlin-junit 相同(同一套 Gradle/Maven 佈局,
+    # Android 的 Java 舊碼一樣住 androidTest/),差別只在副檔名與方法形狀。
+    "java-junit": {
+        "exts": {".java"}, "method_re": JAVA_TEST_RE, "scaffold_ext": ".java",
+        "dir_mode": "rglob", "rglob_under": "src",
         "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
         "dirs": {"pure": (["test"], []),
                  "behavioral": (["androidTest", "test"], []),
@@ -14114,6 +14132,10 @@ _SKELETON_RUN_CMD = {
     # 而那行是這道閘唯一能證明「真的跑了東西」的證據——帶了 -quiet,跑 1 支跟跑 0 支的輸出一模一樣。
     "swift-xctest": "xcodebuild test -scheme <你的 scheme> -destination 'platform=iOS Simulator,name=<模擬器名>' -only-testing:<測試 target>/<測試類別>/{method}",
     "kotlin-junit": "./gradlew test --tests '*{method}'",
+    # Java 專案分 Gradle 與 Maven 兩種建置,骨架先給 Gradle 形(跟 kotlin-junit 同一條,
+    # 混編專案直接沿用);Maven 專案自己換成 `mvn -Dtest='<測試類別>#{method}' test`。
+    # ★本機沒裝 gradle/mvn,這兩條指令沒有實跑核對過★,只保證形狀對(要能只跑一支測試)。
+    "java-junit": "./gradlew test --tests '*{method}'",
     # ★尾巴那段 runsettings 不能省★(2026-09-09 r1 折入,dotnet 9.0.117 實測):
     # 沒有它,`dotnet test --filter` 對一個根本不存在的測試名照樣印「No test matches」然後回 0,
     # 閘拿退出碼當「測試跑過」就是假綠;加上去之後同一條指令回 1,對到真測試時仍回 0。
@@ -16678,6 +16700,26 @@ _STACK_QUESTION_SPECS = {
          "when": ['\\.read\\(\\)', 'readlines\\(', 'json\\.load\\(', 'fetchall\\(', 'read_csv\\(', 'read_parquet\\(', 'read_json\\(', 'lru_cache', 'functools\\.cache\\b', '@cache\\b', 'pickle\\.loads?\\(', '\\.execute\\(', '\\.cursor\\(', '\\.query\\(', '\\.all\\(\\)', '\\bglobal\\s+\\w+', 'defaultdict\\(']},
         {"id": "py-hotpath", "q": '熱路徑:這段會跑大量資料或高頻迴圈嗎?pandas 有沒有 iterrows/itertuples/apply(axis=1)/迴圈裡 concat(該向量化,或先收成 list 最後一次建 DataFrame)?索引式迴圈 range(len(x)) 該不該改成直接迭代或向量運算?list 當佇列 pop(0)、在 list 裡做成員查找,該不該換 deque/set?迴圈裡有沒有重複做不變的工作(每圈重新解析設定、重建物件)?',
          "when": ['iterrows', 'itertuples', '\\.apply\\(', 'pd\\.concat\\(', 'np\\.vectorize', 'np\\.append\\(', '\\.pop\\(0\\)', 'range\\(len\\(', 'DataFrame\\(', '\\.loc\\[', '\\.iloc\\[', '\\.at\\[', '\\.iat\\[', 'rolling\\(', 'groupby\\(']},
+    ],
+    # Java(2026-09-12 補):一張表同時服務 Android 舊碼與 JVM 後端——通用五題(並行/資源/外呼/記憶體/集合)
+    # 兩邊都吃得到,平台特有的兩題(java-data 後端資料層、java-android Android 生命週期)靠觸發字
+    # 自己決定要不要出現:改 Spring/JPA 的檔不會被問 Activity 洩漏,改 Activity 的檔也不會被問交易邊界。
+    "java": [
+        {"id": "java-concurrency", "q": '並行與執行緒:互不依賴的等待有沒有一起飛(CompletableFuture.allOf / invokeAll),還是一條一條等?執行緒池是不是無界(newCachedThreadPool)或大小沒依下游算過?池子用完有沒有 shutdown?future.get()/join() 有沒有帶逾時(不帶=對方不回你就永遠卡著)?共享可變狀態是靠大段 synchronized 還是併發集合/不可變?',
+         "when": ['CompletableFuture', 'ExecutorService', 'Executors\\.', 'ForkJoinPool', '\\.submit\\(', 'invokeAll', 'parallelStream', '\\bnew Thread\\s*\\(', 'Thread\\.sleep', '\\bsynchronized\\b', '\\bvolatile\\b', 'CountDownLatch', 'ThreadLocal', 'AsyncTask', 'ScheduledExecutorService', '\\bTimer\\s*\\(']},
+        {"id": "java-resources", "q": '資源關閉:每個 Connection/Statement/ResultSet/InputStream/Files.lines 有沒有 try-with-resources 包住(漏關一條就少一個連線池名額,撐久了整個服務拿不到連線)?連線池大小是算過的還是抄預設?finally 裡關閉會不會被前面的例外跳過?',
+         "when": ['\\bConnection\\b', 'PreparedStatement', 'ResultSet', '\\bStatement\\b', 'InputStream', 'OutputStream', 'BufferedReader', 'FileReader', 'FileInputStream', 'Files\\.(lines|walk|newBufferedReader|newInputStream)', 'DataSource', 'Hikari', '\\.close\\(\\)', 'try\\s*\\(', '\\bfinally\\b', 'Scanner\\s*\\(']},
+        {"id": "java-data", "q": '資料層(JPA/JDBC):查詢會不會在迴圈裡跑(N+1)?LAZY 關聯是不是在迴圈裡才一筆筆載入(該 join fetch 或 @EntityGraph)?findAll / SELECT * 進大表有沒有分頁或串流?@Transactional 有沒有被同一個類別內部呼叫(代理不生效,交易根本沒開)?交易裡面有沒有夾外部呼叫(把鎖撐長)?',
+         "when": ['@Transactional', '@Entity\\b', '@OneToMany', '@ManyToOne', '@OneToOne', 'FetchType', 'EntityManager', 'JpaRepository', 'CrudRepository', 'createQuery\\(', 'CriteriaQuery', 'findAll\\(', 'JdbcTemplate', 'executeQuery\\(', 'setAutoCommit\\(', '\\bHibernate\\b', '\\bSELECT\\b', 'getResultList\\('],
+         "when_raw": ['"(SELECT|INSERT|UPDATE|DELETE)\\s[^"]*\\b(FROM|INTO|SET|WHERE)\\b']},
+        {"id": "java-external", "q": '外呼:每個 HTTP/RPC 呼叫有沒有同時設連線逾時與讀取逾時(HttpURLConnection、RestTemplate 預設是無限等)?重試有沒有指數退避與次數上限?下單/付款/寄送這類不可逆的操作,重送前有沒有冪等鍵?對方掛掉時這條路徑會拖垮誰?',
+         "when": ['HttpClient', 'HttpURLConnection', 'RestTemplate', 'WebClient', 'OkHttpClient', '\\bRetrofit\\b', 'URLConnection', 'connectTimeout', 'readTimeout', 'setConnectTimeout', 'setReadTimeout', '\\bretry', '@Retryable', 'Resilience4j', 'CircuitBreaker', 'new URL\\(', '\\bSocket\\s*\\(']},
+        {"id": "java-memory", "q": '記憶體與資料量:大檔/大回應/大查詢有沒有一次整包讀進記憶體(readAllBytes / readAllLines / findAll 再 toList)?長活的 static Map/List 當快取有沒有上限與淘汰?ThreadLocal 用完有沒有 remove(執行緒池會重用執行緒,不清就是洩漏)?監聽器/回呼註冊了有沒有對應的解除?',
+         "when": ['readAllBytes', 'readAllLines', 'toByteArray', 'ByteArrayOutputStream', '\\bstatic\\s+(?:final\\s+)?(?:Map|List|Set|HashMap|ArrayList|ConcurrentHashMap)\\b', 'ThreadLocal', 'WeakReference', 'SoftReference', 'System\\.gc\\(', 'addListener\\(', 'registerListener\\(', 'Collectors\\.toList', 'new byte\\[']},
+        {"id": "java-collections", "q": '集合與熱路徑:迴圈裡有沒有字串相接(每圈生一個新字串,該 StringBuilder)?熱路徑用 List.contains / indexOf 做成員查找(逐個比,該換 Set/Map)?大迴圈裡有沒有自動裝箱(Integer 當 int 用)?同一條 Stream 有沒有被重複遍歷,或在 stream 裡做 IO?',
+         "when": ['StringBuilder', '\\bString\\.format\\(', '\\.concat\\(', '\\.contains\\(', '\\.indexOf\\(', '\\.stream\\(\\)', 'Collectors\\.', '\\bArrayList\\b', '\\bLinkedList\\b', '\\bIterator\\b', '\\.remove\\(0\\)', '\\bInteger\\b', '\\bBoxed\\b', 'Collections\\.sort']},
+        {"id": "java-android", "q": 'Android:Context/Activity 有沒有被單例、static 欄位或長活物件握著(畫面關了記憶體收不回)?主執行緒上有沒有磁碟、網路或大 JSON 解析(ANR 面)?AsyncTask/Handler/回呼有沒有跟畫面生命週期綁(畫面沒了還回來寫 UI)?findViewById 有沒有在 getView / onBindViewHolder 裡反覆呼叫?',
+         "when": ['\\bActivity\\b', '\\bContext\\b', 'findViewById', 'RecyclerView', 'notifyDataSetChanged', 'AsyncTask', '\\bHandler\\s*\\(', 'runOnUiThread', 'getApplicationContext', 'onCreate\\(', 'SharedPreferences', 'LayoutInflater', 'startActivity\\(', 'BroadcastReceiver', 'ContentResolver', 'getSystemService\\(']},
     ],
 }
 _STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
@@ -19406,7 +19448,8 @@ def cmd_delguard_check(repo=None, as_json=False):
 
 
 _ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
-                     "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms", "py": "python-idioms"}
+                     "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms", "py": "python-idioms",
+                     "java": "java-idioms"}
 
 
 def _idiom_skill_for(ext, file_rel, repo_root):
