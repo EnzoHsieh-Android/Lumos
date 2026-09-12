@@ -18,7 +18,7 @@ This is for people who have decided to use it and want to know how it actually w
    Put the decisions and the verification results back while you're still the witness — don't leave the next person doing archaeology.
 
 4. **Enforce it at commit time.**
-   The three above rot if they rely on discipline. So the pre-commit check hard-stops "code changed, notes untouched".
+   The three above rot if they rely on discipline. So the pre-commit check hard-stops "code changed, notes untouched". Two more hard stops sit alongside it: a new source file with no note owning it, and a write-back that landed somewhere other than the owning notes of the files actually changed.
 
 ---
 

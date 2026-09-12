@@ -108,6 +108,8 @@ retrieve the context the change needs.
 
 The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records design reasoning, module boundaries, important rules, incident lessons, and the conditions under which something was verified.
 
+Every source file needs one note that owns it, and the tool blocks a commit that adds a file nobody owns. When you change that file, its owning note is pushed to the front — but only if the note's own text actually mentions the file; listing it in a field is not enough. The restriction exists to stop a note from growing into "one note for everything": a note that names ten modules' files gets pushed for any of the ten, so it keeps growing and nobody wants to read it.
+
 The shop example connects plans, modules, important rules, and their verification records.
 
 The AI can search by question or look up notes associated with a changed file, retrieving material relevant to the task. **Registered links are not a complete dependency analysis**: the graph provides leads that still need checking against code and actual behaviour.
@@ -169,6 +171,8 @@ turn this change's results into the next change's input.
 After a change, the AI writes design trade-offs, review dispositions, verification results, and unresolved work into the relevant notes. The next session can retrieve the reasoning and constraints instead of reconstructing everything from code.
 
 More notes are not automatically better. Decisions can expire and tests have assumptions. Records need updating, re-verification, or stale markers as the system changes.
+
+Write-back also has to land in the right place. The tool checks whether what you wrote went into the owning note of each file you actually changed, and blocks it when it went somewhere else. Otherwise the explanations slowly pile into a handful of large notes that nobody ends up reading.
 
 [Explore write-back in the full loop](docs/mental-model.md#6-what-the-review-loop-actually-runs)
 
