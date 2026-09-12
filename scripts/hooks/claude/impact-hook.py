@@ -638,19 +638,24 @@ def build_ranked_context(data: dict) -> str:
     free = [x for x in res if not x.get("pinned") and not x.get("rescued")]
     rescued = [x for x in res if x.get("rescued")]
     if pins:
-        lines.append(f"必看——這 {len(pins)} 篇帶著不能破壞的合約或出過事故:")
+        # ★家★也會進這一段(推筆記認家 [S8]):它不一定帶合約,開場白只講「合約或事故」會讓人
+        # 以為工具亂推——「這篇管這支檔」本身就是必看的理由。
+        _why = "帶著不能破壞的合約或出過事故" if not any(x.get("home") for x in pins) else "是這支檔的家(管它的那篇),或帶著不能破壞的合約、出過事故"
+        lines.append(f"必看——這 {len(pins)} 篇{_why}:")
         for x in pins:
-            mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
+            mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}", "home": ""}.get(x.get("kind"), "")
             ct = f" {_contract_label(x['contract'])}" if x.get("contract") else ""
             mb = f"  ({_match_label(x['matched_by'])})" if x.get("matched_by") else ""
-            # about_code 語意欄位命中(工具清單 #9):讀 about_hit(只在 True 時存在),不碰既有 hit 來源標記
-            ab = "★關於★" if x.get("about_hit") else ""
-            lines.append(f"  {ab}{mk}{ct} {_plain_label(x.get('node'))}{mb}")
+            # 語意欄位命中:家(推筆記認家)優先;about_hit 是舊制標記,只在旋鈕關掉家時才會出現
+            ab = "★家★" if x.get("home") else ("★關於★" if x.get("about_hit") else "")
+            lines.append(f"  {ab}{mk}{ct} {_plain_label(x.get('node'))}{mb}".replace("  ★家★", " ★家★"))
     if free:
         lines.append(f"可能相關的 {len(free)} 篇(依關聯度排序):")
         for x in free:
-            mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
-            lines.append(f"  {x.get('score',0):.2f} {mk} {_plain_label(x.get('node'))}")
+            mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}", "home": ""}.get(x.get("kind"), "")
+            # 大檔的家只加標記不升級(家太多就沒有鑑別力),它會留在這一段——標記照樣要看得到
+            ab = "★家★" if x.get("home") else ""
+            lines.append(f"  {x.get('score',0):.2f} {ab}{mk} {_plain_label(x.get('node'))}")
     if rescued:
         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
         lines.append(f"另外 {len(rescued)} 篇分數不高但直接提到這個檔,一併列出:")

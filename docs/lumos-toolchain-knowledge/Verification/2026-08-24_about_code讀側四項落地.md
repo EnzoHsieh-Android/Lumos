@@ -1,6 +1,6 @@
 ---
 type: verification
-status: pass
+status: stale
 date: 2026-08-24
 valid_under: 語料 338 篇、83 篇 about_code 存量(batch-2026-08-23)、goldset rev 483c631b7294(釘定快照 9fcb761 早於 83 篇寫入——釘定口徑下 about 不生效)
 revalidate_when: goldset 快照前進到含 about_code 的 commit 後重跑(屆時「固定席前 3 必看命中率」才是有 about 的數字);LUMOS_IMPACT_ABOUT_MAX 門檻要調時;about_code 存量重標超過 20 篇時
@@ -12,7 +12,7 @@ summary: |-
   DEP:[[Projects/固定席扇出降權_計劃]]｜[[Systems/retrieval-ranking]]｜[[Verification/2026-08-23_about_code存量雙評審落地]]
 tags:
   - type/verification
-  - status/pass
+  - status/stale
   - scope/retrieval
 plan_refs:
   - "[[Projects/固定席扇出降權_計劃]]"

@@ -1,0 +1,599 @@
+{
+  "seed": 20260912,
+  "pairs": [
+    {
+      "id": "pos-api-p001",
+      "file": "scripts/serve.sh",
+      "node": "Systems/HTTP介面與原因碼.md",
+      "key": "KEY:★INVARIANT★ 不存在的訂單 id 對三個操作都回 ORDER_NOT_FOUND(404),不是未捕捉例外變 500 [test:unknownOrderIdReturns404NotCrash] [audit:sonnet/2026-09-09]",
+      "head": "#!/bin/sh\n# 開發用後端。★要脫離呼叫者的程序群★——直接用 `&` 起的話,\n# 會跟著開它的那個 shell 一起被收掉(2026-09-10 實際發生過)。\n#\n# ★macOS 沒有 setsid★(那是 Linux 的),所以用 python 的 os.setsid 自己脫離。\n#\n#   ~/harness/pos-api/scripts/serve.sh          # 起在 3100(iOS app 連的埠)\n#   PORT=3000 ~/harness/pos-api/scripts/serve.sh\n#   ~/harness/pos-api/scripts/serve.sh stop\nset -e\ncd \"$(dirname \"$0\")/..\"\nPORT=\"${PORT:-3100}\"\nLOG=\"/tmp/pos-api-$PORT.log\"\n\nstop() {\n  pids=$(lsof -nP -iTCP:\"$PORT\" -sTCP:LISTEN -t 2>/dev/null || true)\n  [ -n \"$pids\" ] && kill $pids 2>/dev/null && echo \"停掉 $PORT 上的 $pids\" || echo \"$PORT 上本來就沒東西\"\n}\n\n[ \"$1\" = \"stop\" ] && { stop; exit 0; }\n\nstop >/dev/null 2>&1 || true\nsleep 1\nPORT=\"$PORT\" python3 -c '\nimport os, sys, subprocess\n# 自己開一個新的 session,這樣呼叫者的 shell 結束時不會連帶收掉它\nlog = open(sys.argv[1], \"ab\", buffering=0)\nsubprocess.Popen([\"npx\", \"ts-node\", \"src/server.ts\"],\n                 stdout=log, stderr=log, stdin=subprocess.DEVNULL,\n                 start_new_session=True)\n' \"$LOG\"\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12; do\n  sleep 1\n  if curl -s -o /dev/null -m 2 \"http://127.0.0.1:$PORT/menu\"; then\n    echo \"後端起來了 → http://127.0.0.1:$PORT   日誌:$LOG\"\n    exit 0\n  fi\ndone\necho \"起不來,看日誌:$LOG\"; tail -20 \"$LOG\"; exit 1\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p002",
+      "file": "src/events.ts",
+      "node": "Systems/訂單事件通道.md",
+      "key": "KEY:★INVARIANT★ 事件★只帶「哪張單、哪一桌、什麼變了」,不帶整張單的內容★:推的當下那張單可能又被改了,收到的人拿到過期快照卻以為是最新的。★事件是「去重讀」的信號,不是資料來源★ [test:sseEventCarriesRefNotPayload] [audit:opus/2026-09-10]",
+      "head": "/**\n * 訂單變動的事件通道（桌邊點單計劃 [S11]〜[S16]）。\n *\n * 用 SSE（伺服器送事件）：單向、`node:http` 原生就能寫、斷線客戶端自己重連。\n * ★不用 WebSocket★——POS 不需要往回推東西，而 Node 原生沒有 WebSocket 伺服器，\n * 要拉套件，跟這個專案的零依賴家規衝突。\n * ★不用 SignalR★——那是 .NET 生態的，接它得另起一個服務當中繼。\n */\n\nimport type { ServerResponse } from \"node:http\";\n\n/**\n * 一則事件。★只帶「哪張單、哪一桌、什麼變了」，不帶整張單的內容★（計劃 [S12]）。\n *\n * 為什麼不塞整張單：推的當下那張單可能又被改了，收到的人拿到的是過期快照\n * 卻以為是最新的。**事件是「去重讀」的信號，不是資料來源。**\n */\nexport interface OrderEvent {\n  /** 什麼變了：客人在手機上送了一輪單／店員動了什麼／單子沒了 */\n  kind: \"guest-sent\" | \"order-changed\" | \"order-gone\";\n  orderId: string;\n  table: string | null;\n  at: string;\n}\n\n/** 心跳間隔。中間的代理常在 30〜60 秒沒資料就切線,15 秒有餘裕。 */\nexport const HEARTBEAT_MS = 15_000;\n\nconst clients = new Set<ServerResponse>();\nlet heartbeat: NodeJS.Timeout | null = null;\n\n/** 目前有幾個連線（測試與健檢用）。 */\nexport function clientCount(): number {\n  return clients.size;\n}\n\nfunction startHeartbeat(): void {\n  if (heartbeat) return;\n  // ★心跳讓中間的代理不會把閒置連線切掉★（計劃 [S14]）。\n  // SSE 的註解行（冒號開頭）不會被當成事件,客戶端會忽略。\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p003",
+      "file": "src/guest.ts",
+      "node": "Systems/桌邊點單客人入口.md",
+      "key": "KEY:★INVARIANT★ 客人入口只有這幾件事:看菜單、看有哪些桌(只有桌號/區/座位數)、內用報價、把整台購物車送進那一桌的單(送廚房)、外帶報價、外帶結帳(只會開一張新的已付款外帶單,碰不到既有的單)。★內用的結帳只在 POS★(決策 d2;外帶由 d3 放寬);送出、打折、換桌、取消、改數量、讀單★根本沒有對應的函式★;從網路打進來,請求裡夾帶任何多餘欄位都動不到既有的單 [test:guestSurfaceIsMenuQuoteSendTakeout] [test:guestTableListCarriesNoOrderData] [test:guestHttpExtraFieldsCannotTouchExistingOrders] [test:guestRouteBlockIsOnlyTheseRoutes] [audit:sonnet/2026-09-11]",
+      "head": "/**\n * 桌邊點單的客人入口（桌邊結帳計劃 [S1]〜[S3]）。\n *\n * ★這個檔存在的唯一理由是「能力要小」★：客人端只有這幾件事——看菜單、看有哪些桌、\n * 算一台購物車多少錢、把整台購物車送進那一桌的單（送廚房）、外帶報價、外帶結帳。\n *\n * ★內用的結帳只能在 POS★（桌邊送單計劃,2026-09-10 改成吃完再結）：這裡沒有內用結帳。\n * ★外帶可以在手機上結帳★（桌邊外帶結帳計劃,Enzo 2026-09-11 裁）：外帶結帳只會開一張新的單,\n * 送廚房與結帳包在 order.ts 的 checkoutTakeout 裡,這個檔只呼叫它。\n * ★客人改不動任何已經在單上的東西★：送出、打折、換桌、取消、改數量、讀單，\n * 在這裡★根本沒有對應的函式★，不是被判斷擋下來的。送單只會「整批加進去」。\n *\n * 為什麼是「不存在」不是「擋下來」：擋下來意味著那條路寫在同一支處理程式裡，\n * 只差一個判斷；判斷寫錯就全開了。\n */\n\nimport { MENU } from \"./menu\";\nimport { TABLES, findTable } from \"./tables\";\nimport { DomainError, Order, checkoutTakeout, priceCart, sendToTable } from \"./order\";\nimport { publish } from \"./events\";\n\n/**\n * 把網址上的桌號驗成真的桌（計劃 [S3]）。\n * ★不存在的桌號要退件★——放行的話會生出一張掛在不存在座位上的單。\n */\nexport function requireGuestTable(raw: unknown): string {\n  const def = findTable(raw);\n  if (!def) {\n    throw new DomainError(\"TABLE_NOT_FOUND\", `沒有 ${String(raw)} 這一桌`);\n  }\n  return def.id;\n}\n\n/**\n * 有哪些桌（桌邊結帳計劃 [S12]）：給手機上的「模擬掃碼」選桌畫面用。\n *\n * ★只給桌號、區、座位數★，不給「那桌有沒有人、點了什麼、多少錢」——\n * POS 的桌位圖有那些，客人端刻意不沿用。清單直接讀後端那一份，\n * 手機上不另外抄一份桌號（兩份一定漂移）。\n */\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p004",
+      "file": "src/menu.ts",
+      "node": "Systems/菜單與加料選項.md",
+      "key": "KEY:售完只擋「加」不擋「減」——已經加進去的東西要能拿掉,否則某道菜售完會把整張單卡住 [test:soldOutItemCannotBeAdded]",
+      "head": "/**\n * 一個可選的加料／調味（計劃 [S1]）。\n * `price` 是**價差**，整數元，可以是 0（例如「去冰」不加價）。\n */\nexport interface MenuOption {\n  readonly id: string;\n  readonly name: string;\n  readonly price: number;\n}\n\n/**\n * 選項組（計劃 [S1]）。\n *\n * ★用「最少選幾個／最多選幾個」表達，而不是「必選」「可複選」兩個布林★：\n * 甜度是「剛好一個」（1,1）、加料是「零到多個」（0,3）、麵量是「剛好一個」（1,1）——\n * 一組數字就表達得完。兩個布林反而會生出「必選但不可選」這種互相矛盾的組合。\n */\nexport interface OptionGroup {\n  readonly id: string;\n  readonly name: string;\n  readonly min: number;\n  readonly max: number;\n  readonly options: readonly MenuOption[];\n}\n\n/**\n * 套餐的一個選配（套餐計劃 [S1]／[S2]）。\n *\n * `itemId` 指向菜單上真的存在的品項——★不能憑空造一個選項★，要賣就先進菜單，\n * 否則廚房收到一個查不到作法的東西。`extra` 是加價，可以是 0。\n */\nexport interface ComboChoice {\n  readonly itemId: string;\n  readonly extra: number;\n}\n\n/**\n * 套餐選配組（套餐計劃 [S1]）：**剛好選一個**。\n *\n * ★這裡不用「最少／最多」那組數字★（加料組才用）：套餐的意思就是\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p005",
+      "file": "src/money.ts",
+      "node": "Systems/金額計算.md",
+      "key": "KEY:★INVARIANT★ 服務費=小計 10% 四捨五入,★四捨五入只准發生在 money.ts 一個地方★——換成無條件捨去每張單都少收,而且沒有別的測試會紅 [test:serviceChargeRoundsHalfUpWithIntegerMath] [audit:sonnet/2026-09-09]",
+      "head": "/**\n * 金額全部是整數新台幣元。★這個檔是四捨五入唯一被允許發生的地方★（計劃 [S6]）。\n *\n * 為什麼要集中：服務費散在各處各算各的，是這類系統對不上帳的頭號原因；\n * 集中之後，改壞它只會有一支測試紅，而不是每張單少收一點卻沒人發現。\n */\n\n/** 服務費率 10%，寫成「乘 10 再除 100」的整數形式。 */\nconst SERVICE_NUMERATOR = 10;\nconst SERVICE_DENOMINATOR = 100;\n\n/**\n * 服務費 = 小計 × 10%，四捨五入到元。\n *\n * 寫法：先用取餘數把被除數削成 100 的整數倍再除。除以 100 的精確倍數在 IEEE754 下是精確的。\n *\n * ★誠實說明（2026-09-09 自己做翻紅驗證時發現）★：我原本在這裡寫「`Math.trunc(x / 100)`\n * 不精確」——**那是沒驗過就下的斷言，而且是錯的**。實際把這一行換成 `Math.trunc(scaled / 100)`\n * 再跑同一支合約測試，★全部通過★。推導也支持：被除數是安全整數時，商的誤差永遠小於\n * 讓截斷結果差一的距離。所以這個寫法不是在修一個已發生的錯，只是把「這裡不碰浮點」\n * 這條約束寫成程式碼看得出來的樣子。**「不碰浮點」這半條合約目前沒有任何測試釘得住。**\n *\n * 先驗：小計 15 → (150+50)=200，200-0=200，200/100 = 2（1.5 進位）\n *       小計 14 → (140+50)=190，190-90=100，100/100 = 1（1.4 捨去）\n *       小計 25 → (250+50)=300，300/100 = 3（2.5 進位）\n */\nexport function serviceCharge(subtotal: number): number {\n  if (!Number.isSafeInteger(subtotal) || subtotal < 0) {\n    throw new RangeError(`小計必須是 0 以上的安全整數，收到 ${subtotal}`);\n  }\n  const scaled = subtotal * SERVICE_NUMERATOR + SERVICE_DENOMINATOR / 2;\n  if (!Number.isSafeInteger(scaled)) {\n    throw new RangeError(`小計大到會讓服務費算不準（${subtotal}）`);\n  }\n  return (scaled - (scaled % SERVICE_DENOMINATOR)) / SERVICE_DENOMINATOR;\n}\n\n/**\n * 百分比折扣金額 = 小計 × 百分比，四捨五入到元（計劃 [S2]）。\n *\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p006",
+      "file": "src/order.ts",
+      "node": "Systems/桌位與換桌.md",
+      "key": "KEY:★INVARIANT★ 一張桌同時只准掛一張沒結完的單,而且★佔用檢查要排除自己★——不排除的話換到自己現在那一桌會回「已被佔用」,店員手滑就看到莫名其妙的錯誤 [test:movingToSameTableIsNoop] [audit:opus/2026-09-10]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p007",
+      "file": "src/order.ts",
+      "node": "Systems/菜單與加料選項.md",
+      "key": "KEY:售完只擋「加」不擋「減」——已經加進去的東西要能拿掉,否則某道菜售完會把整張單卡住 [test:soldOutItemCannotBeAdded]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p008",
+      "file": "src/order.ts",
+      "node": "Systems/訂單保存與淘汰.md",
+      "key": "KEY:★INVARIANT★ 淘汰在★結帳當下★發生,而且只淘汰已結帳的(上限 50 張);挪到查詢歷史時才裁的話,沒人查的期間會無上限累積、上限形同虛設 [test:historyEvictsEagerlyAtCheckout] [audit:sonnet/2026-09-10]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p009",
+      "file": "src/order.ts",
+      "node": "Systems/訂單列與併列.md",
+      "key": "KEY:★INVARIANT★ quantity 是「加減多少」不是「要加幾份」:負數是減,減到 0 移除該列(不留 quantity:0 殘列),減不在單上的品項回 ITEM_NOT_IN_ORDER [test:negativeQuantityRemovesLineCleanly] [audit:sonnet/2026-09-10]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p010",
+      "file": "src/order.ts",
+      "node": "Systems/訂單狀態機.md",
+      "key": "KEY:★INVARIANT★ 送出之後訂單內容凍結——★2026-09-10 改成「只加不改」(決策 d2)★:減少、改列、刪除與再次送出都被擋下,★加點(正數加菜)放行★;被拒的操作不得留下任何痕跡(廚房照這張單在做了,帳面再減就是「做了 A、收了 B」) [test:submitFreezesOrderAndRejectsEmptyOrResubmit] [test:submittedOrderAcceptsAddsOnly] [audit:sonnet/2026-09-09]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p011",
+      "file": "src/order.ts",
+      "node": "Systems/金額計算.md",
+      "key": "KEY:★INVARIANT★ 服務費=小計 10% 四捨五入,★四捨五入只准發生在 money.ts 一個地方★——換成無條件捨去每張單都少收,而且沒有別的測試會紅 [test:serviceChargeRoundsHalfUpWithIntegerMath] [audit:sonnet/2026-09-09]",
+      "head": "import { findComboChoice, findMenuItem, findOption, isCombo, MenuItem } from \"./menu\";\nimport { percentOff, serviceCharge } from \"./money\";\nimport { findTable, TABLES } from \"./tables\";\n\nexport type OrderStatus = \"open\" | \"submitted\" | \"paid\";\nexport type ServiceType = \"dineIn\" | \"takeout\";\n\n/** 錯誤原因碼。★兩兩不得相撞★——前端靠這個碼決定給使用者看什麼（計劃 [S8]）。 */\nexport type ReasonCode =\n  | \"ORDER_NOT_FOUND\"\n  | \"MENU_ITEM_NOT_FOUND\"\n  | \"INVALID_QUANTITY\"\n  | \"ORDER_NOT_OPEN\"\n  | \"ORDER_EMPTY\"\n  | \"ORDER_ALREADY_PAID\"\n  | \"BAD_REQUEST\"\n  // ── 2026-09-10 新增三個。★既有合約寫「八個碼」,現在是十一個——那個數字要跟著改★\n  | \"ITEM_SOLD_OUT\"          // 售完:跟「菜單裡沒有」是不同的兩件事\n  | \"ITEM_NOT_IN_ORDER\"      // 減一個不在單上的品項\n  | \"TOO_MANY_OPEN_ORDERS\"    // 進行中的單超過上限\n  // ── 2026-09-10 折扣與換桌再加四個。★合約寫「十一個碼」,現在是十五★\n  | \"TABLE_OCCUPIED\"          // 那一桌已經有一張沒結完的單\n  | \"TABLE_NOT_FOUND\"         // 沒有這個桌號\n  | \"TABLE_NOT_APPLICABLE\"    // 外帶單不能有桌號\n  | \"INVALID_DISCOUNT\"        // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單再加三個。★合約寫「十五個碼」,現在是十八★\n  | \"INVALID_OPTIONS\"         // 加料選得不合規（超出上下限、或不屬於這個品項）\n  | \"AMBIGUOUS_ITEM\"          // 同品項有多列時，用品項代號增減會不知道要動哪一列\n  | \"LINE_NOT_FOUND\"          // 沒有這個列號\n  // ── 2026-09-10 套餐再加一個。★合約寫「十八個碼」,現在是十九★\n  | \"INVALID_COMBO\"           // 套餐選配不合規(沒選滿、選了不在組裡的、子品項售完)\n  // ── 2026-09-10 桌邊點單再加兩個。★合約寫「十九個碼」,現在是二十一★\n  | \"GUEST_FORBIDDEN\"         // 客人碰了客人不該碰的東西\n  | \"PRICE_CHANGED\"           // 客人結帳時,後端算的總額跟他看到的不一樣(桌邊結帳計劃 [S6])\n  // ── 2026-09-10 收起與取消空單\n  | \"ORDER_NOT_EMPTY\";        // 想取消一張已經點了東西的單\n\nexport class DomainError extends Error {\n  constructor(readonly code: ReasonCode, message: string) {\n    super(message);\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p012",
+      "file": "src/server.ts",
+      "node": "Systems/HTTP介面與原因碼.md",
+      "key": "KEY:★INVARIANT★ 不存在的訂單 id 對三個操作都回 ORDER_NOT_FOUND(404),不是未捕捉例外變 500 [test:unknownOrderIdReturns404NotCrash] [audit:sonnet/2026-09-09]",
+      "head": "import { createServer, IncomingMessage, ServerResponse, Server } from \"node:http\";\nimport { MENU } from \"./menu\";\nimport { guestMenu, guestQuote, guestSend, guestTables, guestTakeoutCheckout, guestTakeoutQuote } from \"./guest\";\nimport { publish, subscribe } from \"./events\";\nimport {\n  DomainError, Order, ReasonCode, addItem, checkoutOrder,\n  getOrder, history, openOrder, setService, submitOrder,\n  setTable, setDiscount, tableMap, stepLine, openOrders, cancelOrder, allOrders,\n} from \"./order\";\n\n/** 原因碼 → HTTP 狀態碼。★這張表是計劃〈API 合約〉那一節的唯一實作★（[S8]）。 */\nconst STATUS_OF: Record<ReasonCode, number> = {\n  ORDER_NOT_FOUND: 404,\n  MENU_ITEM_NOT_FOUND: 404,\n  INVALID_QUANTITY: 400,\n  BAD_REQUEST: 400,\n  ORDER_NOT_OPEN: 409,\n  ORDER_EMPTY: 409,\n  ORDER_ALREADY_PAID: 409,\n  ITEM_SOLD_OUT: 409,\n  ITEM_NOT_IN_ORDER: 409,\n  TOO_MANY_OPEN_ORDERS: 409,\n  // ── 2026-09-10 折扣與換桌（計劃 [S13]）\n  TABLE_OCCUPIED: 409,        // 有人佔著,不是請求本身錯 → 衝突\n  TABLE_NOT_FOUND: 404,       // 桌號不存在,跟「訂單不存在」同一類\n  TABLE_NOT_APPLICABLE: 400,  // 外帶還帶桌號 → 請求本身就矛盾\n  INVALID_DISCOUNT: 400,      // 折扣種類或數值不合法\n  // ── 2026-09-10 加料與未結單（計劃 [S10]）\n  INVALID_OPTIONS: 400,       // 加料選得不合規 → 請求本身錯\n  AMBIGUOUS_ITEM: 409,        // 同品項多列,得指定列號 → 狀態造成的衝突\n  LINE_NOT_FOUND: 404,        // 沒有這個列號\n  // ── 2026-09-10 套餐（套餐計劃 [S10]）\n  INVALID_COMBO: 400,         // 選配沒選滿/選了不在組裡的/包了套餐 → 請求本身錯\n  // ── 2026-09-10 桌邊點單（計劃 [S10]）\n  GUEST_FORBIDDEN: 403,       // 客人碰了不該碰的 → 這是權限問題,不是請求寫錯\n  // ── 2026-09-10 桌邊結帳（桌邊結帳計劃 [S11]）\n  PRICE_CHANGED: 409,         // 客人看到的總額跟結帳時算的不一樣 → 狀態造成的衝突,不是請求寫錯\n  // ── 2026-09-10 收起與取消空單（計劃 [S5]）\n  ORDER_NOT_EMPTY: 409,       // 單上有東西 → 狀態造成的衝突,不是請求寫錯\n};\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-api-p013",
+      "file": "src/tables.ts",
+      "node": "Systems/桌位與換桌.md",
+      "key": "KEY:★INVARIANT★ 一張桌同時只准掛一張沒結完的單,而且★佔用檢查要排除自己★——不排除的話換到自己現在那一桌會回「已被佔用」,店員手滑就看到莫名其妙的錯誤 [test:movingToSameTableIsNoop] [audit:opus/2026-09-10]",
+      "head": "/**\n * 桌位（折扣與換桌計劃 [S7]）。\n *\n * ★固定清單，不能動態新增★：Demo 用固定編制，換一家店就要改這個檔。\n * 真的要上線得搬到設定檔——寫在計劃節點的「實務隱患」裡。\n */\n\nexport interface TableDef {\n  id: string;\n  /** 給前端分區顯示用；不影響任何規則。 */\n  zone: string;\n  /** 座位數。★不參與任何檢查★——不做「人數超過座位就擋」，那是店規不是系統規則。 */\n  seats: number;\n}\n\nexport const TABLES: readonly TableDef[] = Object.freeze([\n  { id: \"A1\", zone: \"A 區\", seats: 2 },\n  { id: \"A2\", zone: \"A 區\", seats: 2 },\n  { id: \"A3\", zone: \"A 區\", seats: 4 },\n  { id: \"A4\", zone: \"A 區\", seats: 4 },\n  { id: \"A5\", zone: \"A 區\", seats: 6 },\n  { id: \"A6\", zone: \"A 區\", seats: 6 },\n  { id: \"B1\", zone: \"B 區\", seats: 4 },\n  { id: \"B2\", zone: \"B 區\", seats: 4 },\n  { id: \"B3\", zone: \"B 區\", seats: 8 },\n  { id: \"B4\", zone: \"B 區\", seats: 8 },\n  { id: \"C1\", zone: \"吧台\", seats: 1 },\n  { id: \"C2\", zone: \"吧台\", seats: 1 },\n  { id: \"C3\", zone: \"吧台\", seats: 1 },\n]);\n\nexport function findTable(id: unknown): TableDef | undefined {\n  if (typeof id !== \"string\") return undefined;\n  return TABLES.find((t) => t.id === id);\n}\n",
+      "verdict": "",
+      "repo": "pos-api"
+    },
+    {
+      "id": "pos-guest-p001",
+      "file": "src/App.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  客人點餐的主畫面（桌邊送單前端計劃、桌邊外帶前端計劃）。\n  流程:開場二選一 →\n    內用:選桌(模擬掃碼) → 點餐(菜單+購物車) → 送單(進廚房) → 收據 → 再點一輪(加點);\n    外帶:點餐 → 付款確認(模擬) → 外帶收據(取餐號) → 再點一單。\n  ★內用的結帳只在店裡的 POS★(2026-09-10 改成吃完再結):內用的畫面沒有結帳、沒有付款。\n  ★外帶可以在手機上結帳★(2026-09-11):付款確認與外帶收據只在外帶時出現;底部按鈕的字由決策層決定。\n  ★桌號與內用外帶只從網址來★(計劃 [S1]):選桌、開場畫面只負責改網址,不另存一份「現在是哪桌」。\n  ★沒有店員的動作★(計劃 [S7]):送出、打折、改桌、取消訂單、結帳在這裡都不存在;\n  客人只能把整台購物車「送單」,改不動任何已經在單上的東西。\n-->\n<script setup>\nimport { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'\nimport { api } from './core/api.js'\nimport {\n  canSend, categoriesOf, describeChoice, mustConfirmSwitch, needsOptions, pickerHref, primaryLabel,\n  quoteAmounts, screenFromLocation, shouldQuote, switchTarget, tableHref, tablePickerOn, takeoutHref,\n  takeoutReceiptOf,\n} from './core/state.js'\nimport { addToCart, cartToLines, countOf, removeFromCart, stepCart } from './core/cart.js'\nimport OptionSheet from './ui/OptionSheet.vue'\nimport TablePicker from './ui/TablePicker.vue'\nimport CartSheet from './ui/CartSheet.vue'\nimport SendSheet from './ui/SendSheet.vue'\nimport Receipt from './ui/Receipt.vue'\nimport ModePicker from './ui/ModePicker.vue'\nimport PaySheet from './ui/PaySheet.vue'\nimport TakeoutReceipt from './ui/TakeoutReceipt.vue'\n\nconst pickerOn = tablePickerOn(import.meta.env.VITE_TABLE_PICKER)\n\nconst screen = ref('start')      // start / pickTable / dineIn / takeout——永遠從網址算\nconst table = ref(null)\nconst menu = ref([])\nconst tables = ref([])\nconst cat = ref(null)\nconst sheetItem = ref(null)\nconst notice = ref(null)        // { kind: 'err' | 'info', text }\nconst busy = ref(false)\nconst booted = ref(false)\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p002",
+      "file": "src/core/api.js",
+      "node": "Systems/客人端對後端的路.md",
+      "key": "KEY:★INVARIANT★ 改不動任何已經在單上的東西:客人端只有六條路(菜單/有哪些桌/內用報價/送單/外帶報價/外帶結帳——外帶結帳只會開一張新單),★沒有用單號的路、也沒有輸入框★;網址上夾帶的東西送不進請求 [test:noWayToReachOtherTables] [test:junkQueryNeverReachesRequests] [audit:sonnet/2026-09-11]",
+      "head": "/**\n * 打 POS 後端的客人入口。★只有六條路★——後端也只給這六條:\n * 看菜單、看有哪些桌、內用算購物車多少錢、把整台購物車送進這一桌的單(送廚房)、外帶報價、外帶結帳。\n *\n * ★內用的結帳只在店裡的 POS★(2026-09-10 改成吃完再結)。\n * ★外帶可以在手機上結帳★(桌邊外帶前端計劃,2026-09-11):外帶結帳只會開一張新的已付款單,不帶桌號。\n * ★改不動任何已經在單上的東西★:沒有用單號的路,也沒有送出/打折/改桌/取消。\n */\n\n/** 後端位址。開發時走 vite 的代理,部署時是同一個網域。 */\nexport const API_BASE = import.meta.env.VITE_API_BASE || ''\n\nasync function call(method, path, body) {\n  let res\n  try {\n    res = await fetch(API_BASE + path, {\n      method,\n      headers: body === undefined ? {} : { 'content-type': 'application/json' },\n      body: body === undefined ? undefined : JSON.stringify(body),\n    })\n  } catch (e) {\n    // ★連不上跟「後端說不行」是兩件事★:一個要客人檢查網路,一個要客人改點別的\n    throw { kind: 'network', message: '連不上店家的系統，請檢查網路或叫服務人員。' }\n  }\n  const json = await res.json().catch(() => null)\n  if (!res.ok) {\n    // ★用後端給的那句話★（計劃 [S2]）:自己另編一句的話,同一個問題會有兩種說法\n    throw { kind: 'api', code: json?.error?.code, message: json?.error?.message || '操作沒有成功。' }\n  }\n  return json\n}\n\nexport const api = {\n  menu: () => call('GET', '/guest/menu'),\n  tables: () => call('GET', '/guest/tables'),\n  quote: (table, lines) => call('POST', `/guest/tables/${encodeURIComponent(table)}/quote`, { lines }),\n  send: (table, lines, expectedTotal) =>\n    call('POST', `/guest/tables/${encodeURIComponent(table)}/send`, { lines, expectedTotal }),\n  // 外帶(形狀照後端〈桌邊外帶結帳_計劃〉做法 5):報價回 { lines, subtotal, service, total };\n  // 結帳回 { orderId, status, serviceType, batch }——只有這一張,沒有桌號、沒有這桌累計\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p003",
+      "file": "src/core/cart.js",
+      "node": "Systems/客人端購物車.md",
+      "key": "KEY:購物車可以改(同品項同加料併成一列、順序不計;減到 0 移除;每列上限 99 跟後端一致) [test:cartMergesStepsAndRemoves]",
+      "head": "/**\n * 手機上的購物車（桌邊送單前端計劃 [S9]）。\n *\n * ★純資料操作：沒有 Vue、沒有網路、沒有金額★——金額一律問後端（報價），\n * 這裡只管「放了什麼、各幾份」。每個操作都回一個新陣列，不改到原本那個：\n * 畫面靠「換了一個新陣列」才知道要重畫。\n */\n\n/** 每列上限。★跟後端同品項上限一致★，不然會做出「加得上去、結帳才被退」的購物車。 */\nexport const MAX_QTY = 99\n\nconst sorted = (ids) => [...(ids || [])].sort()\n\n/**\n * 兩列算不算同一列：同品項、同加料、同套餐選配——★順序不計★。\n * 跟後端的併列規則同一個意思，送過去之後才會一列對一列。\n */\nexport function lineKey(itemId, options, combo) {\n  const opt = sorted(options).join(',')\n  const picks = (combo || [])\n    .map((p) => `${p.groupId}:${p.itemId}(${sorted(p.options).join(',')})`)\n    .sort()\n    .join('|')\n  return `${itemId}#${opt}#${picks}`\n}\n\n/** 放一份進購物車；同一列就加一，不同就新開一列。 */\nexport function addToCart(cart, entry) {\n  const key = lineKey(entry.itemId, entry.options, entry.combo)\n  if (cart.some((l) => l.key === key)) {\n    return cart.map((l) => (l.key === key ? { ...l, quantity: Math.min(MAX_QTY, l.quantity + 1) } : l))\n  }\n  return [...cart, {\n    key,\n    itemId: entry.itemId,\n    name: entry.name,\n    detail: entry.detail || '',\n    options: [...(entry.options || [])],\n    combo: entry.combo ? entry.combo.map((p) => ({ ...p, options: [...(p.options || [])] })) : undefined,\n    quantity: 1,\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p004",
+      "file": "src/core/state.js",
+      "node": "Systems/客人端決策層.md",
+      "key": "KEY:★INVARIANT★ 桌號與內用外帶★只從網址來,沒有就是沒有★:不猜、不預設;網址看不懂(桌號加外帶、不認得的值)一律回開場二選一;★開場與選桌畫面(模擬掃碼)只負責產生網址★,不另存一份「現在是哪桌/哪一種」,跟掃了那張 QR 碼一模一樣。選桌畫面有開關、預設開給 demo,正式上線要關(決策 d2) [test:tableComesFromUrlOnly] [test:tablePickerOnlyWritesUrl] [test:startAsksDineInOrTakeout] [test:urlIsOnlySourceOfScreen] [audit:sonnet/2026-09-11]",
+      "head": "/**\n * 客人端的純決策層。★沒有 Vue、沒有 DOM★——判斷邏輯住在畫面裡的話只能靠慢又脆的\n * UI 測試去驗;獨立出來就能用一般單元測試把每一種狀態釘死。跟 POS 那邊同一個做法。\n */\n\n/** 桌號只從網址來（計劃 [S1]）。★不猜、不預設★——預設成 A1 的話，任何人打開首頁就在 A1 點菜。 */\nexport function tableFromLocation(search, pathname) {\n  const q = new URLSearchParams(search || '')\n  const fromQuery = q.get('t') || q.get('table')\n  if (fromQuery) return fromQuery.trim() || null\n  // 也接受 /A1 這種路徑形式（QR 碼比較短）\n  const seg = (pathname || '').split('/').filter(Boolean)\n  const last = seg[seg.length - 1]\n  if (last && /^[A-Za-z]\\d+$/.test(last)) return last\n  return null\n}\n\n/** 有加料選項的品項要不要先問（計劃 [S3]）。跟 POS 同一條規則。 */\nexport function needsOptions(item) {\n  if (!item) return false\n  if (item.comboGroups?.length) return true          // 套餐一定要問\n  return (item.optionGroups || []).some(\n    (g) => g.min > 0 || g.options.some((o) => o.price > 0))\n}\n\n/** 一組加料選擇合不合規（計劃 [S3]）。跟後端同一條規則，先在前端擋一次省一趟往返。 */\nexport function optionsAreComplete(item, picked) {\n  for (const g of item.optionGroups || []) {\n    const n = g.options.filter((o) => picked.has(o.id)).length\n    if (n < g.min || n > g.max) return false\n  }\n  return true\n}\n\n/** 套餐每一組都要選一個，而且選中那道菜自己的必選加料也要選完（計劃 [S4]）。 */\nexport function comboIsComplete(item, menu, picked, subOptions) {\n  for (const g of item.comboGroups || []) {\n    const chosen = picked[g.id]\n    if (!chosen) return false\n    const sub = menu.find((m) => m.id === chosen)\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p005",
+      "file": "src/main.js",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "import { createApp } from 'vue'\nimport './ui/theme.css'\nimport App from './App.vue'\n\ncreateApp(App).mount('#app')\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p006",
+      "file": "src/ui/CartSheet.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  購物車（桌邊送單前端計劃 [S9]）：看、加減、刪。\n  ★金額全部是後端報價回來的★（計劃 [S6]）——這裡沒有任何加總或乘除。\n-->\n<script setup>\nconst props = defineProps({\n  cart: { type: Array, required: true },\n  amounts: { type: Object, default: null },     // 後端報價;null = 還在算\n  quoteLines: { type: Array, default: null },   // 後端算好的每一列(順序跟購物車一樣時才顯示)\n})\nconst emit = defineEmits(['step', 'drop', 'close'])\n\n/** 這一列後端算的金額。★列數對不上就不顯示★,不自己湊。 */\nfunction lineMoney(i) {\n  if (!props.quoteLines || props.quoteLines.length !== props.cart.length) return null\n  return props.quoteLines[i]?.lineTotal ?? null\n}\n</script>\n\n<template>\n  <div class=\"sheet\" @click.self=\"emit('close')\">\n    <div class=\"panel cartpanel\">\n      <h2>購物車</h2>\n      <div v-for=\"(l, i) in cart\" :key=\"l.key\" class=\"cline\">\n        <div class=\"cinfo\">\n          <div class=\"cname\">{{ l.name }}</div>\n          <div v-if=\"l.detail\" class=\"cdetail\">{{ l.detail }}</div>\n        </div>\n        <div class=\"stepper\">\n          <button class=\"sbtn\" :data-test=\"`minus-${i}`\" @click=\"emit('step', l.key, -1)\">−</button>\n          <span class=\"qty\">{{ l.quantity }}</span>\n          <button class=\"sbtn\" :data-test=\"`plus-${i}`\" @click=\"emit('step', l.key, 1)\">＋</button>\n        </div>\n        <div class=\"cmoney\">\n          <span v-if=\"lineMoney(i) !== null\">${{ lineMoney(i) }}</span>\n          <button class=\"del\" :data-test=\"`drop-${i}`\" @click=\"emit('drop', l.key)\">刪除</button>\n        </div>\n      </div>\n      <div v-if=\"amounts\" class=\"sums\">\n        <div class=\"row\"><span>小計</span><span>${{ amounts.subtotal }}</span></div>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p007",
+      "file": "src/ui/ModePicker.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  開場二選一（桌邊外帶前端計劃 [S1]）。★只負責產生網址★——跟選桌畫面同一種做法:\n  點「內用」= 到選桌畫面(/?mode=dinein),點「外帶」= 到外帶點餐(/?mode=takeout);這個畫面不另存選了什麼。\n-->\n<script setup>\nconst emit = defineEmits(['pick'])\n</script>\n\n<template>\n  <div class=\"picker\">\n    <h2>內用還是外帶？</h2>\n    <p class=\"why\">正式店裡：桌上的碼是內用、櫃台的碼是外帶。這個畫面是 demo 用來代替掃碼。</p>\n    <div class=\"modegrid\">\n      <button class=\"modebtn\" data-test=\"mode-dinein\" @click=\"emit('pick', 'dinein')\">\n        <span class=\"mtitle\">內用</span>\n        <span class=\"msub\">選桌、點餐、送單</span>\n      </button>\n      <button class=\"modebtn\" data-test=\"mode-takeout\" @click=\"emit('pick', 'takeout')\">\n        <span class=\"mtitle\">外帶</span>\n        <span class=\"msub\">不用選桌，點好帶走</span>\n      </button>\n    </div>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p008",
+      "file": "src/ui/OptionSheet.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  加料／套餐的選擇面板。★套餐是兩層★（計劃 [S4]）:\n  外層選「這一份包含哪幾道菜」,選中的那道菜自己的調味展開在它底下——\n  收進另一個畫面的話客人會漏掉甜度,那杯飲料廚房就做不出來。\n-->\n<script setup>\nimport { computed, ref, watch } from 'vue'\nimport { optionsAreComplete, comboIsComplete, previewPrice } from '../core/state.js'\n\nconst props = defineProps({ item: Object, menu: Array })\nconst emit = defineEmits(['confirm', 'close'])\n\nconst picked = ref(new Set())        // 這道菜自己的加料\nconst comboPicked = ref({})          // 套餐:每組選了哪個品項\nconst subOptions = ref({})           // 套餐:選中那道菜的加料\n\nconst isCombo = computed(() => (props.item.comboGroups || []).length > 0)\nconst sub = (id) => props.menu.find((m) => m.id === id)\n\n/** 必選單選的組先給預設(甜度、冰塊),客人只改想改的。 */\nfunction defaultsFor(item) {\n  const out = new Set()\n  for (const g of item?.optionGroups || []) {\n    if (g.min === 1 && g.max === 1 && g.options[0]) out.add(g.options[0].id)\n  }\n  return out\n}\n\nwatch(() => props.item, (it) => {\n  picked.value = defaultsFor(it)\n  comboPicked.value = {}\n  subOptions.value = {}\n  for (const g of it?.comboGroups || []) {\n    const first = g.choices.find((c) => !sub(c.itemId)?.soldOut)\n    if (first) {\n      comboPicked.value[g.id] = first.itemId\n      subOptions.value[g.id] = defaultsFor(sub(first.itemId))\n    }\n  }\n}, { immediate: true })\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p009",
+      "file": "src/ui/PaySheet.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  付款確認（桌邊外帶前端計劃 [S4]）。★只在外帶時出現★(App.vue 掛它的地方有外帶條件)。\n  ★這一版是模擬付款★,畫面上明寫,不讓客人以為真的扣了款;接真金流時整個換成金流的付款頁(計劃的回頭條件)。\n  按下去會把「整台購物車 + 這裡顯示的總額」一起送出;後端算出來不一樣就退件,不收錢。\n  ★按下確認就鎖住、處理中不能關★:防連按變成兩張已付款的單(後端沒有防重複,見計劃的實務隱患)。\n  樣子照同日稍早「先結後吃」那版(沒進主線、從本機舊提交取回)。\n-->\n<script setup>\ndefineProps({ total: { type: Number, required: true }, busy: { type: Boolean, default: false } })\nconst emit = defineEmits(['confirm', 'close'])\n</script>\n\n<template>\n  <div class=\"sheet\" @click.self=\"!busy && emit('close')\">\n    <div class=\"panel paypanel\">\n      <h2>付款</h2>\n      <div class=\"payamt\">${{ total }}</div>\n      <p class=\"paynote\">這是模擬付款，不會真的扣款。按下確認就等於付完錢，餐點會直接送進廚房，好了請到櫃台取餐。</p>\n      <button class=\"mainbtn\" data-test=\"pay-confirm\" :disabled=\"busy\" @click=\"emit('confirm')\">\n        {{ busy ? '處理中…' : `確認付款 $${total}` }}\n      </button>\n      <button class=\"closebtn\" :disabled=\"busy\" @click=\"emit('close')\">先不要</button>\n    </div>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p010",
+      "file": "src/ui/Receipt.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  送單收據（桌邊送單前端計劃 [S13]）。★內容照後端回的★:這一輪送了什麼、這桌目前累計多少。\n  後端刻意只回「這一輪」與累計,不回整張單——客人端沒有讀單的路。\n-->\n<script setup>\nimport { lineDetail as detail } from '../core/state.js'\ndefineProps({ receipt: { type: Object, required: true } })\nconst emit = defineEmits(['next'])\n</script>\n\n<template>\n  <div class=\"receipt\" data-test=\"receipt\">\n    <div class=\"rhead\">\n      <div class=\"rok\">已送單</div>\n      <div class=\"rsub\">單號 {{ receipt.orderId }}　·　{{ receipt.table }} 桌　·　餐點製作中</div>\n    </div>\n    <div class=\"rtitle\">這一輪</div>\n    <div v-for=\"l in receipt.batch.lines\" :key=\"l.lineId\" class=\"rline\">\n      <span>\n        {{ l.name }} ×{{ l.quantity }}\n        <div v-if=\"detail(l)\" class=\"rdetail\">{{ detail(l) }}</div>\n      </span>\n      <span>${{ l.lineTotal }}</span>\n    </div>\n    <div class=\"row\"><span>小計</span><span>${{ receipt.batch.subtotal }}</span></div>\n    <div class=\"row\"><span>服務費</span><span>${{ receipt.batch.service }}</span></div>\n    <div class=\"row total\"><span>這一輪</span><span>${{ receipt.batch.total }}</span></div>\n    <div class=\"row tabletotal\"><span>這桌目前累計</span><span>${{ receipt.tableTotal }}</span></div>\n    <p class=\"rnote\">吃完請到櫃台買單。</p>\n    <button class=\"mainbtn\" data-test=\"next-round\" @click=\"emit('next')\">再點一輪</button>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p011",
+      "file": "src/ui/SendSheet.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  送單確認（桌邊送單前端計劃 [S11]）。★這裡不收錢★——結帳只在店裡的 POS。\n  按下去會把「整台購物車 + 這裡顯示的這一輪金額」一起送出;後端算出來不一樣就退件,請客人重新確認。\n-->\n<script setup>\ndefineProps({ total: { type: Number, required: true }, busy: { type: Boolean, default: false } })\nconst emit = defineEmits(['confirm', 'close'])\n</script>\n\n<template>\n  <div class=\"sheet\" @click.self=\"!busy && emit('close')\">\n    <div class=\"panel sendpanel\">\n      <h2>送單</h2>\n      <div class=\"sendamt\">這一輪 ${{ total }}</div>\n      <p class=\"sendnote\">送單後餐點直接進廚房，已經送的菜就不能再改；想加菜可以再點一輪。吃完請到櫃台買單。</p>\n      <button class=\"mainbtn\" data-test=\"send-confirm\" :disabled=\"busy\" @click=\"emit('confirm')\">\n        {{ busy ? '送單中…' : '確認送單' }}\n      </button>\n      <button class=\"closebtn\" :disabled=\"busy\" @click=\"emit('close')\">先不要</button>\n    </div>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p012",
+      "file": "src/ui/TablePicker.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  選桌畫面（桌邊送單前端計劃 [S12]）——★只是「模擬掃碼」★。\n  點一桌 = 把網址改成那一桌，跟客人掃了那桌桌上的 QR 碼完全一樣；\n  這個畫面不另存「現在是哪一桌」，桌號照舊只從網址來。\n  正式上線要把它關掉（建置時 VITE_TABLE_PICKER=off）。\n-->\n<script setup>\nimport { computed } from 'vue'\nimport { groupTablesByZone } from '../core/state.js'\n\nconst props = defineProps({ tables: { type: Array, required: true } })\nconst emit = defineEmits(['pick'])\nconst zones = computed(() => groupTablesByZone(props.tables))\n</script>\n\n<template>\n  <div class=\"picker\">\n    <h2>選一桌開始點餐</h2>\n    <p class=\"why\">模擬掃碼：正式店裡客人是掃桌上的 QR 碼進來的，這個畫面只是 demo 用來代替掃碼。</p>\n    <div v-for=\"z in zones\" :key=\"z.zone\" class=\"zone\">\n      <div class=\"zname\">{{ z.zone }}</div>\n      <div class=\"tgrid\">\n        <button v-for=\"t in z.tables\" :key=\"t.id\" class=\"tbtn\"\n                :data-test=\"`table-${t.id}`\" @click=\"emit('pick', t.id)\">\n          <span class=\"tid\">{{ t.id }}</span>\n          <span class=\"seats\">{{ t.seats }} 人桌</span>\n        </button>\n      </div>\n    </div>\n    <div v-if=\"!tables.length\" class=\"center\">桌位載入中…</div>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p013",
+      "file": "src/ui/TakeoutReceipt.vue",
+      "node": "Systems/客人端畫面.md",
+      "key": "KEY:送單送★整台購物車加上客人看到的這一輪金額★;後端說價格變了就顯示後端那句話、重新報價,購物車不清空;送出後收據照後端回的(這一輪+這桌累計),再點一輪就是加點 [test:sendShipsCartWithSeenTotal] [test:receiptShowsThisRoundThenNextRound]",
+      "head": "<!--\n  外帶收據（桌邊外帶前端計劃 [S6]）。★內容照後端回的,只有這一張★:取餐號、品項、小計、總額。\n  ★沒有服務費那行(外帶不收)、沒有桌號、沒有「這桌累計」★——那些是內用收據(Receipt.vue)的,這裡不沿用。\n  客人端刻意不存任何東西在瀏覽器,所以重新整理就看不到取餐號(計劃的實務隱患)。\n-->\n<script setup>\nimport { lineDetail as detail } from '../core/state.js'\ndefineProps({ receipt: { type: Object, required: true } })\nconst emit = defineEmits(['next'])\n</script>\n\n<template>\n  <div class=\"receipt\" data-test=\"takeout-receipt\">\n    <div class=\"rhead\">\n      <div class=\"rok\">已付款</div>\n      <div class=\"rsub\">取餐號</div>\n      <div class=\"pickno\" data-test=\"pickup-number\">{{ receipt.orderId }}</div>\n    </div>\n    <div v-for=\"l in receipt.lines\" :key=\"l.lineId\" class=\"rline\">\n      <span>\n        {{ l.name }} ×{{ l.quantity }}\n        <div v-if=\"detail(l)\" class=\"rdetail\">{{ detail(l) }}</div>\n      </span>\n      <span>${{ l.lineTotal }}</span>\n    </div>\n    <div class=\"row\"><span>小計</span><span>${{ receipt.subtotal }}</span></div>\n    <div class=\"row total\"><span>總額</span><span>${{ receipt.total }}</span></div>\n    <p class=\"rnote\">請到櫃台取餐。</p>\n    <button class=\"mainbtn\" data-test=\"next-order\" @click=\"emit('next')\">再點一單</button>\n  </div>\n</template>\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-guest-p014",
+      "file": "vite.config.js",
+      "node": "Systems/客人端對後端的路.md",
+      "key": "KEY:★INVARIANT★ 改不動任何已經在單上的東西:客人端只有六條路(菜單/有哪些桌/內用報價/送單/外帶報價/外帶結帳——外帶結帳只會開一張新單),★沒有用單號的路、也沒有輸入框★;網址上夾帶的東西送不進請求 [test:noWayToReachOtherTables] [test:junkQueryNeverReachesRequests] [audit:sonnet/2026-09-11]",
+      "head": "import { defineConfig } from 'vite'\nimport vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({\n  plugins: [vue()],\n  server: {\n    // ★開發時把後端代理過來★：同源才不用處理跨來源，\n    // 也讓前端的網址跟部署時一樣（部署時前後端在同一個網域）。\n    proxy: { '/guest': 'http://127.0.0.1:3100' },\n  },\n  test: { environment: 'jsdom' },\n})\n",
+      "verdict": "",
+      "repo": "pos-guest"
+    },
+    {
+      "id": "pos-ios-p001",
+      "file": "PosTerminal/Core/OrderModels.swift",
+      "node": "Systems/後端合約鏡射.md",
+      "key": "KEY:★INVARIANT★ 這個 app 裡不得存在任何算錢的程式碼——金額三欄一律讀後端的 subtotal/service/total,連「後端自己算錯」也照顯示(前端蓋掉只會讓後端的 bug 更難發現) [test:testNoLocalMoneyArithmetic] [audit:sonnet/2026-09-09]",
+      "head": "import Foundation\n\n/// 一個可選的加料／調味。`price` 是**價差**（可以是 0）。\nstruct MenuOption: Codable, Identifiable, Equatable {\n    let id: String\n    let name: String\n    let price: Int\n}\n\n/// 選項組。`min`／`max` 是「最少選幾個／最多選幾個」。\n///\n/// ★不用「必選」「可複選」兩個布林★（照後端合約）：一組數字就表達得完，\n/// 兩個布林反而生得出「必選但不可選」這種矛盾組合。\nstruct OptionGroup: Codable, Identifiable, Equatable {\n    let id: String\n    let name: String\n    let min: Int\n    let max: Int\n    let options: [MenuOption]\n\n    /// 剛好要選一個（甜度、冰塊那種）。\n    var isSingleRequired: Bool { min == 1 && max == 1 }\n    /// 這一組非選不可。\n    var isRequired: Bool { min > 0 }\n}\n\n/// 套餐的一個選配。`itemId` 指向菜單上真的存在的品項；`extra` 是加價（可以是 0）。\nstruct ComboChoice: Codable, Identifiable, Equatable {\n    let itemId: String\n    let extra: Int\n    var id: String { itemId }\n}\n\n/// 套餐選配組。★剛好選一個★——跟加料組的「最少／最多」是不同的東西。\nstruct ComboGroup: Codable, Identifiable, Equatable {\n    let id: String\n    let name: String\n    let choices: [ComboChoice]\n}\n\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p002",
+      "file": "PosTerminal/Core/PosApiClient.swift",
+      "node": "Systems/後端合約鏡射.md",
+      "key": "KEY:★INVARIANT★ 這個 app 裡不得存在任何算錢的程式碼——金額三欄一律讀後端的 subtotal/service/total,連「後端自己算錯」也照顯示(前端蓋掉只會讓後端的 bug 更難發現) [test:testNoLocalMoneyArithmetic] [audit:sonnet/2026-09-09]",
+      "head": "import Foundation\n\n/// 可注入的傳輸層。★測試靠它驗「組出來的請求對不對」★（計劃 [S6]／[S14]）——\n/// 直接用 `URLSession.shared` 的話那條條款就永遠驗不到。\nprotocol PosTransport {\n    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)\n}\n\nstruct UrlSessionTransport: PosTransport {\n    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {\n        let (data, response) = try await URLSession.shared.data(for: request)\n        guard let http = response as? HTTPURLResponse else {\n            throw PosError.transport(\"回應不是 HTTP\")\n        }\n        return (data, http)\n    }\n}\n\n/// 打後端的九條路徑。★這個檔不做任何金額運算★（計劃 [S13]）。\nstruct PosApiClient {\n    let baseURL: URL\n    let transport: PosTransport\n\n    init(baseURL: URL, transport: PosTransport = UrlSessionTransport()) {\n        self.baseURL = baseURL\n        self.transport = transport\n    }\n\n    func menu() async throws -> [MenuItem] {\n        try await call(\"GET\", \"/menu\", body: nil, as: MenuResponse.self).items\n    }\n\n    func createOrder(serviceType: ServiceType = .dineIn, people: Int = 1,\n                     table: String? = nil) async throws -> Order {\n        // ★沒有桌號時不要送 table 欄位★：送 null 跟不送在後端是同一條路，\n        // 但少送一個欄位可以讓「外帶單誤帶桌號」這種錯在前端就不會發生。\n        var payload: [String: Any] = [\"serviceType\": serviceType.rawValue, \"people\": people]\n        if let table { payload[\"table\"] = table }\n        let body = try JSONSerialization.data(withJSONObject: payload)\n        return try await call(\"POST\", \"/orders\", body: body, as: Order.self)\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p003",
+      "file": "PosTerminal/Core/PosError.swift",
+      "node": "Systems/後端合約鏡射.md",
+      "key": "KEY:★INVARIANT★ 這個 app 裡不得存在任何算錢的程式碼——金額三欄一律讀後端的 subtotal/service/total,連「後端自己算錯」也照顯示(前端蓋掉只會讓後端的 bug 更難發現) [test:testNoLocalMoneyArithmetic] [audit:sonnet/2026-09-09]",
+      "head": "import Foundation\n\n/// 後端錯誤回應：`{\"error\":{\"code\":..,\"message\":..}}`\nstruct ApiErrorEnvelope: Decodable {\n    struct Payload: Decodable {\n        let code: String\n        let message: String\n    }\n    let error: Payload\n}\n\n/// 這台機器認得的失敗。\nenum PosError: Error, Equatable {\n    /// 後端回的業務錯誤（帶原因碼）\n    case api(code: String)\n    /// 網路層自己失敗：連不上、逾時、回的東西解不出來（★沒有原因碼★，計劃 [S9]）\n    case transport(String)\n}\n\nenum PosMessages {\n    /// 原因碼 → 一句人話。★一碼一句，不共用★（計劃 [S3]）。\n    ///\n    /// 這張表刻意不窮舉後端所有可能的碼：後端還會回 `NOT_FOUND`（路徑不存在）與\n    /// `INTERNAL`（未捕捉例外），那兩個走兜底。**兜底是必經路徑，不是裝飾**。\n    private static let table: [String: String] = [\n        // ★這個碼有兩個來源★:單號不存在、或那張單已經被淘汰(後端只留最近 50 張已結帳的)。\n        // 改這句話之前要知道這件事——它必須同時涵蓋兩者。\n        \"ORDER_NOT_FOUND\": \"找不到這張單，可能已經被清掉了。開一張新的吧。\",\n        \"MENU_ITEM_NOT_FOUND\": \"菜單上沒有這道菜，請重新整理菜單。\",\n        \"INVALID_QUANTITY\": \"數量要在 1 到 99 之間。\",\n        \"BAD_REQUEST\": \"這筆請求後端看不懂，請重試一次。\",\n        \"ORDER_NOT_OPEN\": \"這張單已經送出，不能再改了。\",\n        \"ORDER_EMPTY\": \"單子是空的，先點些東西再送出。\",\n        \"ORDER_ALREADY_PAID\": \"這張單已經結過帳了。\",\n        // ── 後端 2026-09-10 新增三個。★跨 repo 合約漂過三次,新增碼是最容易漏的一種★\n        \"ITEM_SOLD_OUT\": \"這道菜已經售完了。\",\n        \"ITEM_NOT_IN_ORDER\": \"這道菜不在單上，減不了。\",\n        \"TOO_MANY_OPEN_ORDERS\": \"同時開著的單太多了，先結掉幾張再開新的。\",\n        // ── 後端 2026-09-10 再新增四個（折扣與換桌）。★漏抄不會有任何東西翻紅★，\n        // 所以前端有一支測試專門盯這張表跟後端的碼有沒有對齊。\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p004",
+      "file": "PosTerminal/Core/PosEventStream.swift",
+      "node": "Systems/即時收單通道.md",
+      "key": "KEY:★INVARIANT★ 事件的型別★只有四個欄位★(什麼變了/哪張單/哪一桌/什麼時候),★沒有品項也沒有金額★——做不到「拿事件當資料來源」這件事本身就是保證,比寫一條「不要這樣做」的規則強;推出去那一刻那張單可能又被別人改了 [test:testEventTypeCannotCarryOrderData] [audit:opus/2026-09-10]",
+      "head": "import Foundation\n\n/// 後端推過來的一則「有東西變了」。\n///\n/// ★這個型別刻意只有四個欄位★（計劃 [S1]）：什麼變了、哪張單、哪一桌、什麼時候。\n/// **沒有品項、沒有金額——不是忘了放，是刻意不放。**\n///\n/// 它是門鈴，不是包裹：響了只代表有人來，還是要自己去開門看。\n/// 推出去的那一刻那張單可能又被別人改了，把整張單塞進來的話，\n/// 收到的人會拿著過期的快照當最新的用。兩台 POS 加客人的手機同時改同一張單是常態。\n///\n/// 做不到「拿事件當資料來源」這件事本身就是保證，比寫一條「不要這樣做」的規則強。\nstruct PosOrderEvent: Decodable, Equatable {\n    /// 什麼變了。★不認得的種類不得讓整則解不出來★——照 `OrderStatus` 的先例留一個 unknown。\n    enum Kind: Equatable {\n        case guestSent, orderChanged, orderGone\n        case unknown(String)\n\n        init(raw: String) {\n            switch raw {\n            case \"guest-sent\": self = .guestSent\n            case \"order-changed\": self = .orderChanged\n            case \"order-gone\": self = .orderGone\n            default: self = .unknown(raw)\n            }\n        }\n\n        /// 要不要跳提示給店員看。★只有客人在手機上送了一輪單才跳★（桌邊送單收單計劃 [S1]）：\n        /// 店員自己的動作後端也會推，全跳的話這台 POS 會被自己按的每一下洗版。\n        /// 舊的「客人加菜」「客人結帳」後端都不送了，送來也當沒見過的種類、不跳。\n        var raisesBanner: Bool { self == .guestSent }\n    }\n\n    let kind: Kind\n    let orderId: String\n    let table: String?\n    let at: String\n\n    private enum CodingKeys: String, CodingKey { case kind, orderId, table, at }\n\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p005",
+      "file": "PosTerminal/Core/PosScreenState.swift",
+      "node": "Systems/前端顯示規則.md",
+      "key": "KEY:★INVARIANT★ 「還沒有訂單」時★點商品就開單★(2026-09-10 Enzo 裁,實機看到才改):未開單時商品卡不得整片變灰(看起來像菜單壞掉)。★「開新單」那顆按鈕已移除★——自動開單之後它只是多一顆;原設計要防的「第一步卡死」現在由「商品一定可點」本身保證,防的東西沒有變少 [test:testTappingItemWithNoOrderIsAllowed] [audit:sonnet/2026-09-10]",
+      "head": "import Foundation\n\n/// 畫面的**純決策層**：哪些按鈕能按、要顯示什麼字。\n///\n/// ★為什麼要獨立成一個沒有 SwiftUI 的型別★（計劃 r1 架構席）：判斷邏輯住在 View 裡的話，\n/// 只能靠慢又脆的 UI 測試去驗；獨立出來就能用一般單元測試把每一種狀態的按鈕組合釘死。\n/// 這是照 calc-ios 的先例做的。\nstruct PosScreenState: Equatable {\n    /// 同一品項的數量上限。★這個數字是後端的規則★（`MAX_QUANTITY = 99`）——\n    /// 前端要自己知道，否則會做出「按了沒反應的加號」。\n    static let maxQuantity = 99\n\n    var menu: [MenuItem] = []\n    var order: Order? = nil\n    var message: String? = nil\n    /// 訊息是錯誤還是完成通知。★結帳完成那句不該是紅的★——紅色代表出事了。\n    var messageIsError: Bool = true\n    var history: [Order] = []\n    /// 選中的分類；nil = 全部（計劃 [V2]：只影響顯示，不打網路）。\n    var category: String? = nil\n    /// 桌位總覽。切到桌位頁時抓一次，★另外由即時收單那條長連線推著重抓★\n    /// （2026-09-10 起，即時收單計劃 [S8]／[S10]）——不再是「只有切過去才更新」。\n    var tables: [TableSlot] = []\n    /// 未結單（點餐中與已送廚房都算）。\n    var openOrders: [Order] = []\n    /// 訂單頁的內用／外帶篩選；nil = 全部。\n    var serviceFilter: ServiceType? = nil\n    /// 客人在手機上送了單、店員還沒看過的那幾桌（桌邊送單收單計劃 [S2]）。\n    ///\n    /// ★一桌一次★：同一桌送好幾輪都是同一張單，店員要做的事只有一件（去看那一桌）。\n    var guestSent: [GuestSentNotice] = []\n\n    /// 菜單的分類清單，照後端給的順序去重。\n    var categories: [String] {\n        var seen: [String] = []\n        for m in menu where !seen.contains(m.category) { seen.append(m.category) }\n        return seen\n    }\n\n    /// 目前分類要顯示的商品。★售完的照樣在裡面★（計劃 [V3]）。\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p006",
+      "file": "PosTerminal/PosTerminalApp.swift",
+      "node": "Systems/主畫面與導覽.md",
+      "key": "KEY:版面按尺寸類別分兩種,★決策層完全一樣★——兩種版面只是排法不同,能不能按、顯示什麼都照前端顯示規則",
+      "head": "import SwiftUI\n\n@main\nstruct PosTerminalApp: App {\n    /// 本機開發用的後端位址（計劃：由初始化參數帶入，不寫死在畫面層）。\n    private static let backend = URL(string: \"http://127.0.0.1:3100\")!\n\n    var body: some Scene {\n        WindowGroup {\n            PosView(model: PosViewModel(\n                client: PosApiClient(baseURL: Self.backend),\n                // ★即時收單★:客人在桌上點的菜,這條長連線會把「有動靜」推過來。\n                events: PosEventStream(baseURL: Self.backend)))\n        }\n    }\n}\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p007",
+      "file": "PosTerminal/UI/CartPane.swift",
+      "node": "Systems/單據在畫面上的進出.md",
+      "key": "KEY:★INVARIANT★ 結帳成功之後★畫面立刻回到未開單★,並顯示一則★非錯誤★的完成訊息(帶總額);下一次點商品就是新的一單。不清空的話下一位客人的單會疊在上一張的畫面上 [test:testCheckoutClearsCartAndShowsNotice] [audit:sonnet/2026-09-10]",
+      "head": "import SwiftUI\n\n/// 購物車欄（借 `item_cart.xml` 的數量增減器 `llCartStepper`）。\n/// ★三個金額一律讀後端算好的★——這個檔沒有任何算術。\nstruct CartPane: View {\n    let state: PosScreenState\n    let busy: Bool\n    /// (列號, 增減)——★用列號不用品項代號★：同品項加不同的料是不同列。\n    let onStep: (String, Int) -> Void\n    let onService: () -> Void\n    let onDismiss: () -> Void\n    let onDiscount: () -> Void\n    let onTable: () -> Void\n    let onSubmit: () -> Void\n    let onCheckout: () -> Void\n\n    var body: some View {\n        VStack(spacing: 0) {\n            header\n            Divider()\n            if state.order == nil {\n                Spacer()\n                VStack(spacing: 10) {\n                    Image(systemName: \"hand.tap\").font(.system(size: PosTheme.Size.emptyIcon)).foregroundStyle(PosTheme.muted)\n                    Text(\"點左邊的菜開始\")\n                        .font(.system(size: PosTheme.Size.itemPrice)).foregroundStyle(PosTheme.muted)\n                }\n                Spacer()\n            } else {\n                lines\n                Divider()\n                totals\n            }\n            if let message = state.message {\n                // ★完成通知不該是紅的★——紅色代表出事了\n                Text(message).font(.system(size: PosTheme.Size.message))\n                    .foregroundStyle(state.messageIsError ? .red : PosTheme.accent)\n                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)\n                    // 訊息從上面滑下來——冒出來的東西要看得出是新的\n                    .transition(.move(edge: .top).combined(with: .opacity))\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p008",
+      "file": "PosTerminal/UI/CartPane.swift",
+      "node": "Systems/折扣桌位前端規則.md",
+      "key": "KEY:★INVARIANT★ 折扣金額一律讀後端的 discountAmount,前端不做任何百分比運算——自己算的話後端改規則(例如服務費算法變了)畫面會悄悄對不上帳 [test:testFrontEndNeverComputesDiscount] [audit:opus/2026-09-10]",
+      "head": "import SwiftUI\n\n/// 購物車欄（借 `item_cart.xml` 的數量增減器 `llCartStepper`）。\n/// ★三個金額一律讀後端算好的★——這個檔沒有任何算術。\nstruct CartPane: View {\n    let state: PosScreenState\n    let busy: Bool\n    /// (列號, 增減)——★用列號不用品項代號★：同品項加不同的料是不同列。\n    let onStep: (String, Int) -> Void\n    let onService: () -> Void\n    let onDismiss: () -> Void\n    let onDiscount: () -> Void\n    let onTable: () -> Void\n    let onSubmit: () -> Void\n    let onCheckout: () -> Void\n\n    var body: some View {\n        VStack(spacing: 0) {\n            header\n            Divider()\n            if state.order == nil {\n                Spacer()\n                VStack(spacing: 10) {\n                    Image(systemName: \"hand.tap\").font(.system(size: PosTheme.Size.emptyIcon)).foregroundStyle(PosTheme.muted)\n                    Text(\"點左邊的菜開始\")\n                        .font(.system(size: PosTheme.Size.itemPrice)).foregroundStyle(PosTheme.muted)\n                }\n                Spacer()\n            } else {\n                lines\n                Divider()\n                totals\n            }\n            if let message = state.message {\n                // ★完成通知不該是紅的★——紅色代表出事了\n                Text(message).font(.system(size: PosTheme.Size.message))\n                    .foregroundStyle(state.messageIsError ? .red : PosTheme.accent)\n                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)\n                    // 訊息從上面滑下來——冒出來的東西要看得出是新的\n                    .transition(.move(edge: .top).combined(with: .opacity))\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p009",
+      "file": "PosTerminal/UI/ComboSheet.swift",
+      "node": "Systems/菜單與點餐面板.md",
+      "key": "KEY:不能加菜時★把理由講出來★,不是只把整片菜單變灰——灰掉而不說原因,看起來像菜單壞了",
+      "head": "import SwiftUI\n\n/// 套餐選配單（借 mOrangePos 的兩層結構；沒有拷貝任何檔案）。\n///\n/// ★兩層★：外層選「這一份包含哪幾道菜」，選中的那道菜如果自己要調味\n/// （飲料的甜度冰塊），就在它底下展開。展開是刻意的——收在另一個畫面裡的話，\n/// 店員會漏掉甜度，而那杯飲料廚房就做不出來。\nstruct ComboSheet: View {\n    let item: MenuItem\n    /// 查子品項用（選配只給 itemId，名稱與加料組要去菜單查）。\n    let menu: [MenuItem]\n    let onConfirm: ([[String: Any]]) -> Void\n    let onClose: () -> Void\n\n    /// 每一組選了哪個品項\n    @State private var picked: [String: String] = [:]\n    /// 每一組選中那道菜的加料（組 → 選項代號）\n    @State private var subOptions: [String: Set<String>] = [:]\n\n    private func sub(_ itemId: String) -> MenuItem? { menu.first { $0.id == itemId } }\n\n    /// 全部選齊、而且每個子品項的必選加料也選齊，才算完成。\n    private var complete: Bool {\n        for g in item.comboGroups {\n            guard let chosen = picked[g.id], let s = sub(chosen) else { return false }\n            if s.soldOut { return false }\n            if !PosScreenState.optionsAreComplete(s, subOptions[g.id] ?? []) { return false }\n        }\n        return true\n    }\n\n    /// 預覽單價 = 底價 + 選配加價 + 子品項加料價差。★子品項原價不參與★。\n    private var unitPrice: Int {\n        var total = item.price\n        for g in item.comboGroups {\n            guard let chosen = picked[g.id] else { continue }\n            total += g.choices.first { $0.itemId == chosen }?.extra ?? 0\n            if let s = sub(chosen) {\n                let picks = subOptions[g.id] ?? []\n                total += s.optionGroups.flatMap(\\.options)\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p010",
+      "file": "PosTerminal/UI/HistoryPane.swift",
+      "node": "Systems/訂單與歷史頁.md",
+      "key": "KEY:★一定要有未結單這一段★:送出之後購物車就放開了(店員可以接下一位),那張單得有地方找回來結帳;桌位圖不夠——外帶單沒有桌號,在桌位圖上根本不存在",
+      "head": "import SwiftUI\n\n/// 歷史訂單（唯讀）。★沒有加菜／送出／結帳任何按鈕——不是灰的，是不存在★（計劃 [S2]）。\nstruct HistoryPane: View {\n    let orders: [Order]\n    let message: String?\n\n    var body: some View {\n        VStack(spacing: 0) {\n            HStack {\n                Text(\"歷史訂單\").font(.system(size: PosTheme.Size.paneTitle, weight: .bold)).foregroundStyle(PosTheme.deep)\n                Spacer()\n                Text(\"最近 \\(orders.count) 筆\").font(.system(size: PosTheme.Size.cartSub)).foregroundStyle(PosTheme.muted)\n            }\n            .padding()\n            Divider()\n            if let message {\n                Text(message).font(.system(size: PosTheme.Size.message)).foregroundStyle(.red).padding()\n            }\n            if orders.isEmpty {\n                Spacer()\n                // ★空的時候講一句人話，不是空白畫面★（計劃 [S4]）\n                Text(\"還沒有結過帳的單\").font(.system(size: PosTheme.Size.itemPrice)).foregroundStyle(PosTheme.muted)\n                Spacer()\n            } else {\n                ScrollView {\n                    LazyVStack(spacing: PosTheme.gap) {\n                        ForEach(orders, id: \\.id) { card($0) }\n                    }\n                    .padding(PosTheme.gap)\n                }\n            }\n        }\n        .background(PosTheme.surface)\n    }\n\n    /// ★每張單要看得到品項明細與三個金額★——只顯示單號與總額不算數（計劃 [S3]）。\n    private func card(_ order: Order) -> some View {\n        VStack(alignment: .leading, spacing: 6) {\n            HStack {\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p011",
+      "file": "PosTerminal/UI/MenuPane.swift",
+      "node": "Systems/菜單與點餐面板.md",
+      "key": "KEY:不能加菜時★把理由講出來★,不是只把整片菜單變灰——灰掉而不說原因,看起來像菜單壞了",
+      "head": "import SwiftUI\n\n/// 分類直欄（借 mOrangePos `fragment_menu.xml` 的 `rvMenuGoodsKind`）。\nstruct CategoryColumn: View {\n    let categories: [String]\n    @Binding var selected: String?\n\n    var body: some View {\n        ScrollView {\n            VStack(spacing: PosTheme.gap) {\n                chip(title: \"全部\", value: nil)\n                ForEach(categories, id: \\.self) { c in chip(title: c, value: c) }\n            }\n            .padding(PosTheme.gap)\n        }\n        .frame(width: PosTheme.categoryWidth)\n        .background(PosTheme.surface)\n    }\n\n    private func chip(title: String, value: String?) -> some View {\n        let on = selected == value\n        return Button { withAnimation(PosTheme.Motion.quick) { selected = value } } label: {\n            Text(title)\n                .font(.system(size: PosTheme.Size.category, weight: on ? .bold : .medium))\n                .frame(maxWidth: .infinity, minHeight: PosTheme.categoryMinHeight)\n                .foregroundStyle(on ? .white : PosTheme.ink)\n                .background(on ? PosTheme.accent : PosTheme.card)\n                .clipShape(RoundedRectangle(cornerRadius: 12))\n        }\n        .buttonStyle(PressFeedback())\n    }\n}\n\n/// 商品卡片格（借 `item_good.xml`：白底圓角卡、名稱靠左上、售完加邊框變灰）。\nstruct MenuGrid: View {\n    let items: [MenuItem]\n    let state: PosScreenState\n    let onTap: (MenuItem) -> Void\n\n    private let columns = [GridItem(.adaptive(minimum: PosTheme.tileMinWidth), spacing: PosTheme.gap)]\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p012",
+      "file": "PosTerminal/UI/OptionSheet.swift",
+      "node": "Systems/菜單與點餐面板.md",
+      "key": "KEY:不能加菜時★把理由講出來★,不是只把整片菜單變灰——灰掉而不說原因,看起來像菜單壞了",
+      "head": "import SwiftUI\n\n/// 加料／調味選單（借 mOrangePos 的「一組一組出現」編排；沒有拷貝任何檔案）。\n///\n/// ★必選的組（甜度、冰塊）沒選完，確定就是灰的★——按了才報錯比不給按難用。\n/// 前端這道只是省一趟往返，★後端那道才是權威★。\nstruct OptionSheet: View {\n    let item: MenuItem\n    let onConfirm: ([String]) -> Void\n    let onClose: () -> Void\n\n    @State private var picked: Set<String> = []\n\n    private var complete: Bool { PosScreenState.optionsAreComplete(item, picked) }\n    private var unitPrice: Int { PosScreenState.previewUnitPrice(item, picked) }\n\n    var body: some View {\n        VStack(alignment: .leading, spacing: 0) {\n            header\n            Divider()\n            ScrollView {\n                VStack(alignment: .leading, spacing: 22) {\n                    ForEach(item.optionGroups) { group in section(group) }\n                }\n                .padding(24)\n            }\n            Divider()\n            footer\n        }\n        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)\n        .background(PosTheme.surface)\n        .onAppear(perform: preselect)\n    }\n\n    /// ★必選單選的組先幫他選第一個★（正常糖、正常冰）：\n    /// 台灣飲料店的預設就是這個，每次都要點兩下只是拖慢結帳。要改照樣點得動。\n    private func preselect() {\n        for g in item.optionGroups where g.isSingleRequired {\n            if let first = g.options.first { picked.insert(first.id) }\n        }\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p013",
+      "file": "PosTerminal/UI/OrdersPane.swift",
+      "node": "Systems/訂單與歷史頁.md",
+      "key": "KEY:★一定要有未結單這一段★:送出之後購物車就放開了(店員可以接下一位),那張單得有地方找回來結帳;桌位圖不夠——外帶單沒有桌號,在桌位圖上根本不存在",
+      "head": "import SwiftUI\n\n/// 訂單分頁：★未結單在上、已結帳在下★，兩段都能分內用外帶。\n///\n/// 為什麼要有未結單這一段：送出之後購物車就放開了（店員可以接下一位客人），\n/// 那張單得有地方找回來結帳。★桌位圖不夠★——外帶單沒有桌號，在桌位圖上根本不存在。\nstruct OrdersPane: View {\n    let openOrders: [Order]\n    let history: [Order]\n    let filter: ServiceType?\n    let currentOrderId: String?\n    let message: String?\n    let messageIsError: Bool\n    let onFilter: (ServiceType?) -> Void\n    let onPick: (String) -> Void\n    let onNewTakeout: () -> Void\n\n    var body: some View {\n        VStack(spacing: 0) {\n            header\n            if let message {\n                Text(message).font(.system(size: PosTheme.Size.message))\n                    .foregroundStyle(messageIsError ? .red : PosTheme.accent)\n                    .frame(maxWidth: .infinity, alignment: .leading)\n                    .padding(.horizontal, 16).padding(.bottom, 8)\n            }\n            Divider()\n            ScrollView {\n                VStack(alignment: .leading, spacing: 20) {\n                    group(\"未結單\", openOrders, empty: \"沒有還沒結的單\", tappable: true)\n                    group(\"已結帳\", history, empty: \"還沒有結過帳的單\", tappable: false)\n                }\n                .padding(16)\n            }\n        }\n        .frame(maxWidth: .infinity, maxHeight: .infinity)\n        .background(PosTheme.surface)\n    }\n\n    private var header: some View {\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p014",
+      "file": "PosTerminal/UI/PosTheme.swift",
+      "node": "Systems/版面與可讀性.md",
+      "key": "KEY:★app 要宣告支援橫向★(2026-09-10 Enzo 實機轉了才發現):專案原本只宣告 UIInterfaceOrientationPortrait,iPad 轉過去只會把直向畫面塞在中間、兩側補黑。這★不是版面問題是專案設定★——iPad 四向、iPhone 三向(不含上下顛倒)",
+      "head": "import SwiftUI\nimport UIKit\n\n/// 配色與尺寸的★單一來源★（計劃 [V6]）。\n///\n/// 色系取自 `~/mOrangePos`（同機的量產 Android POS）的 `colors.xml`——\n/// **只借配色方向，沒有拷貝任何檔案**。它的名字裡有 orange，實際是藍綠／石板色系。\nenum PosTheme {\n    // MARK: 顏色（對照 mOrangePos colors.xml）\n    /// colorPrimary #648593\n    static let primary = Color(red: 0x64 / 255, green: 0x85 / 255, blue: 0x93 / 255)\n    /// colorAccent #51827E\n    static let accent = Color(red: 0x51 / 255, green: 0x82 / 255, blue: 0x7E / 255)\n    /// colorDeepBlue #274F60\n    static let deep = Color(red: 0x27 / 255, green: 0x4F / 255, blue: 0x60 / 255)\n    /// colorLightYellow #C9DCDA（它的命名如此，實際是淺藍綠）\n    static let tint = Color(red: 0xC9 / 255, green: 0xDC / 255, blue: 0xDA / 255)\n    /// color_middle_light_blue #E1EEED\n    static let surface = Color(red: 0xE1 / 255, green: 0xEE / 255, blue: 0xED / 255)\n    static let card = Color.white\n    static let ink = Color(red: 0x2E / 255, green: 0x2E / 255, blue: 0x2E / 255)\n    static let muted = Color(red: 0x86 / 255, green: 0x86 / 255, blue: 0x86 / 255)\n\n    // MARK: 尺寸（起點對照 item_good.xml：圓角 18、間距 8、最小高 130；item_good_kind：最小高 56）\n    //\n    // ★2026-09-10 整體放大★（折扣換桌計劃 [S8]）：POS 是**站著、隔一個手臂距離**在操作的，\n    // 不是拿在手上的手機。原本沿用一般 app 的字級（側欄標籤 12 點、購物車單價 11 點），\n    // 在那個距離下看不清楚。放大之後 13 吋 iPad 橫向仍放得下三欄。\n    static let cardRadius: CGFloat = 18\n    static let gap: CGFloat = 10\n    static let tileMinHeight: CGFloat = 158\n    static let tileMinWidth: CGFloat = 196\n    static let categoryMinHeight: CGFloat = 68\n    static let sidebarWidth: CGFloat = 118\n    static let sidebarItemHeight: CGFloat = 86\n    static let categoryWidth: CGFloat = 176\n    static let cartWidth: CGFloat = 440   // 2026-09-10 字放大之後跟著加寬(13 吋橫向 1376 點寬,菜單格子還有 800 點以上)\n    static let buttonHeight: CGFloat = 56\n\n    // MARK: 字級（★唯一來源★，折扣換桌計劃 [S8]）\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p015",
+      "file": "PosTerminal/UI/PosView.swift",
+      "node": "Systems/主畫面與導覽.md",
+      "key": "KEY:版面按尺寸類別分兩種,★決策層完全一樣★——兩種版面只是排法不同,能不能按、顯示什麼都照前端顯示規則",
+      "head": "import SwiftUI\n\n/// 主畫面。★版面按尺寸類別分兩種，決策層完全一樣★（計劃 [V1]／[S8]）。\nstruct PosView: View {\n    @StateObject var model: PosViewModel\n    @Environment(\\.horizontalSizeClass) private var sizeClass\n    @State private var tab: PosTab = .menu\n    @State private var sheet: PosSheet? = nil\n\n    /// 疊在畫面上的選單。★用一個列舉而不是兩個布林★——兩個布林可以同時為真，\n    /// 那時候會疊兩層選單。\n    private enum PosSheet: Identifiable {\n        case discount\n        case table\n        /// 點了有選項的商品 → 先問加料\n        case options(MenuItem)\n        /// 點了套餐 → 問選配（兩層：選哪幾道菜、那幾道怎麼做）\n        case combo(MenuItem)\n\n        var id: String {\n            switch self {\n            case .discount: return \"discount\"\n            case .table: return \"table\"\n            case .options(let i): return \"options-\" + i.id\n            case .combo(let i): return \"combo-\" + i.id\n            }\n        }\n    }\n\n    private var regular: Bool { sizeClass == .regular }\n\n    /// 客人在手機上送了單的提示（桌邊送單收單計劃 [S2]／[S3]）。\n    ///\n    /// ★橫的一條、不是彈窗★：彈窗要按掉才能繼續做事,而店員手上通常正在點別桌的菜。\n    /// 點一下就切到訂單頁,那桌的單在未結單那一區。\n    @ViewBuilder\n    private var guestBanner: some View {\n        if let text = model.state.guestBanner {\n            Button {\n                // ★點提示＝店員看到了★（桌邊送單收單 [S3]）：跳到訂單頁（那桌的單在未結單那一區），提示消失\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p016",
+      "file": "PosTerminal/UI/PosViewModel.swift",
+      "node": "Systems/單據在畫面上的進出.md",
+      "key": "KEY:★INVARIANT★ 結帳成功之後★畫面立刻回到未開單★,並顯示一則★非錯誤★的完成訊息(帶總額);下一次點商品就是新的一單。不清空的話下一位客人的單會疊在上一張的畫面上 [test:testCheckoutClearsCartAndShowsNotice] [audit:sonnet/2026-09-10]",
+      "head": "import Foundation\nimport SwiftUI\n\n/// 把決策層接到畫面上。★這裡只做流程編排，不做判斷也不算錢★。\n@MainActor\nfinal class PosViewModel: ObservableObject {\n    @Published private(set) var state = PosScreenState()\n    @Published private(set) var busy = false\n\n    private let client: PosApiClient\n    private let events: PosEventStream?\n\n    init(client: PosApiClient, events: PosEventStream? = nil) {\n        self.client = client\n        self.events = events\n    }\n\n    /// 給截圖產生器用:直接餵一個狀態進來。★決策層與畫面完全不變★;\n    /// 傳入的 client 決定 `.task` 那次載入菜單會拿到什麼(截圖時餵一個假的傳輸層)。\n    init(preloaded: PosScreenState, client: PosApiClient) {\n        self.client = client\n        self.events = nil\n        self.state = preloaded\n    }\n\n    // MARK: - 即時收單（即時收單計劃）\n\n    /// 接上後端那條長連線。★App 一啟動就接★，之後由它自己維持。\n    func startListening() {\n        events?.start(\n            onEvent: { [weak self] ev in\n                guard let self else { return }\n                Task { await self.receive(ev) }\n            },\n            onReconnect: { [weak self] in\n                // ★每次(重)連上都整批重讀★（[S8]）：斷線那段時間推的事件不會補送。\n                await self?.refreshLists()\n            })\n    }\n\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p017",
+      "file": "PosTerminal/UI/Sheets.swift",
+      "node": "Systems/折扣桌位前端規則.md",
+      "key": "KEY:★INVARIANT★ 折扣金額一律讀後端的 discountAmount,前端不做任何百分比運算——自己算的話後端改規則(例如服務費算法變了)畫面會悄悄對不上帳 [test:testFrontEndNeverComputesDiscount] [audit:opus/2026-09-10]",
+      "head": "import SwiftUI\n\n/// 折扣選單。★常用的做成一按就好，少見的才要自己打數字★——\n/// 店裡最常用的是「九折」「八折」「折 50」這幾種，每次都要打字會拖慢結帳。\nstruct DiscountSheet: View {\n    let current: Discount?\n    let onPick: (String, Int) -> Void\n    let onClose: () -> Void\n\n    /// 常用折扣。★這裡是選項清單，不是計算★——折多少錢一律由後端算。\n    private static let percents = [5, 10, 15, 20]\n    private static let amounts = [20, 50, 100]\n\n    var body: some View {\n        VStack(alignment: .leading, spacing: 18) {\n            HStack {\n                Text(\"折扣\").font(.system(size: PosTheme.Size.paneTitle, weight: .bold))\n                    .foregroundStyle(PosTheme.deep)\n                Spacer()\n                Button(\"關閉\", action: onClose).font(.system(size: PosTheme.Size.button))\n            }\n\n            group(\"按百分比\") {\n                ForEach(Self.percents, id: \\.self) { p in\n                    chip(\"\\(p)%\", on: current?.kind == \"percent\" && current?.value == p) {\n                        onPick(\"percent\", p)\n                    }\n                }\n            }\n            group(\"按金額\") {\n                ForEach(Self.amounts, id: \\.self) { a in\n                    chip(\"$\\(a)\", on: current?.kind == \"amount\" && current?.value == a) {\n                        onPick(\"amount\", a)\n                    }\n                }\n            }\n\n            Button { onPick(\"none\", 0) } label: {\n                Text(\"清除折扣\")\n                    .font(.system(size: PosTheme.Size.button, weight: .semibold))\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p018",
+      "file": "PosTerminal/UI/SidebarNav.swift",
+      "node": "Systems/主畫面與導覽.md",
+      "key": "KEY:版面按尺寸類別分兩種,★決策層完全一樣★——兩種版面只是排法不同,能不能按、顯示什麼都照前端顯示規則",
+      "head": "import SwiftUI\n\n/// 導覽分頁。★歷史入口永遠可按★（計劃 [S7]）——鎖死它等於功能不見了。\nenum PosTab: String, CaseIterable, Identifiable {\n    case menu = \"菜單\"\n    case history = \"訂單\"\n    case tables = \"桌位\"\n\n    var id: String { rawValue }\n    var symbol: String {\n        switch self {\n        case .menu: return \"square.grid.2x2\"\n        case .history: return \"list.bullet.rectangle\"\n        case .tables: return \"table.furniture\"\n        }\n    }\n}\n\n/// 左側直立導覽（借 mOrangePos `activity_main.xml` 的分頁結構）。\nstruct SidebarNav: View {\n    @Binding var selected: PosTab\n    /// ★選中的底色是「同一塊在移動」不是各自淡入淡出★——\n    /// 各自淡的話，中間有一格兩邊都半透明，看起來像閃了一下。\n    @Namespace private var pill\n\n    var body: some View {\n        VStack(spacing: 4) {\n            ForEach(PosTab.allCases) { tab in\n                Button {\n                    withAnimation(PosTheme.Motion.pane) { selected = tab }\n                } label: {\n                    VStack(spacing: 8) {\n                        Image(systemName: tab.symbol).font(.system(size: PosTheme.Size.navIcon))\n                        Text(tab.rawValue)\n                            .font(.system(size: PosTheme.Size.navLabel, weight: .semibold))\n                    }\n                    .frame(maxWidth: .infinity, minHeight: PosTheme.sidebarItemHeight)\n                    .foregroundStyle(selected == tab ? PosTheme.deep : .white.opacity(0.75))\n                    .background {\n                        if selected == tab {\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "pos-ios-p019",
+      "file": "PosTerminal/UI/TablePane.swift",
+      "node": "Systems/折扣桌位前端規則.md",
+      "key": "KEY:★INVARIANT★ 折扣金額一律讀後端的 discountAmount,前端不做任何百分比運算——自己算的話後端改規則(例如服務費算法變了)畫面會悄悄對不上帳 [test:testFrontEndNeverComputesDiscount] [audit:opus/2026-09-10]",
+      "head": "import SwiftUI\n\n/// 桌位圖（借 mOrangePos 桌位頁的「一桌一張卡、有人的變色」編排；沒有拷貝任何檔案）。\n///\n/// ★點空桌 = 在那桌開一張新單；點有人的桌 = 切到那張單★。\n/// 這是店員最常看的一頁，所以資訊只放三樣：桌號、幾個人、目前多少錢。\nstruct TablePane: View {\n    let tables: [TableSlot]\n    /// 這一桌的單是不是客人自己在手機上點的（桌邊送單收單 [S6]）。吃完再結之後客人的單會佔著桌。\n    let isGuestOpened: (String) -> Bool\n    let currentTable: String?\n    let message: String?\n    let messageIsError: Bool\n    let onOpen: (String) -> Void\n    let onSelect: (String) -> Void\n\n    private let columns = [GridItem(.adaptive(minimum: 168), spacing: PosTheme.gap)]\n\n    /// 照後端給的順序分區，不重排——重排會讓桌號跟店裡的實際位置對不起來。\n    private var zones: [String] {\n        var seen: [String] = []\n        for t in tables where !seen.contains(t.zone) { seen.append(t.zone) }\n        return seen\n    }\n\n    var body: some View {\n        VStack(spacing: 0) {\n            HStack {\n                Text(\"桌位\").font(.system(size: PosTheme.Size.paneTitle, weight: .bold))\n                    .foregroundStyle(PosTheme.deep)\n                Spacer()\n                legend\n            }\n            .padding(.horizontal, 16).padding(.vertical, 12)\n            if let message {\n                Text(message).font(.system(size: PosTheme.Size.message))\n                    .foregroundStyle(messageIsError ? .red : PosTheme.accent)\n                    .frame(maxWidth: .infinity, alignment: .leading)\n                    .padding(.horizontal, 16).padding(.bottom, 8)\n                    .transition(.move(edge: .top).combined(with: .opacity))\n",
+      "verdict": "",
+      "repo": "pos-ios"
+    },
+    {
+      "id": "toolchain-p001",
+      "file": "governance/autonomous-loop.sh",
+      "node": "Systems/anchor-integrity.md",
+      "key": "KEY:守「驗證器本身被悄悄改成一律通過」——測試綠/hook 放行的前提(批改程式沒被動過)從盲信變成可機械核對宣稱;外部實證=八大評測被 conftest 鉤子破",
+      "head": "#!/usr/bin/env bash\nset -euo pipefail\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\nSCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nREPO=\"$(cd \"$SCRIPT_DIR/..\" && pwd)\"\nMODE=\"${1:---dry-run}\"\nMAXR=\"${2:-6}\"\n# 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離\n# (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞\n# 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。\nif [ \"$MODE\" != \"--dry-run\" ]; then\n  echo \"autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常\" >&2\n  exit 2\nfi\n# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,\n# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。\n#\n# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,\n#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source\n#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):\n#\n#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——\n#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。\n#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯\n#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為\n#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。\n#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。\n#\n#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、\n#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,\n#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。\n#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。\n#\n#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,\n#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。\n#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。\n# ★同源:daily-governance.sh 的取鎖段★。兩邊是同一把鎖的兩份拷貝,\n# 血緣是雙向的——#18 那批先在 daily-governance.sh 上被五席修好,code-batch19 這批\n# 再把修法搬回來,而 batch19 自己的三席又同時修了兩邊。任何一邊改了另一邊要跟著改;\n# 守衛 t_daily_wrapper_lock_matches_source 會比對兩份的關鍵行為(雙向都查)。\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p002",
+      "file": "governance/autonomous-loop.sh",
+      "node": "Systems/autonomous-iteration-loop.md",
+      "key": "KEY:[2026-08-31]daily-governance.sh 第 4 步=lumos doctor --ci(2026-08-30 intake 案加線;08-31 回訪案補 --ci——治理事件每日入帳,gov --nags 14 天空轉升級鏈才有電;裸 doctor 不寫帳=鏈斷路)",
+      "head": "#!/usr/bin/env bash\nset -euo pipefail\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\nSCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nREPO=\"$(cd \"$SCRIPT_DIR/..\" && pwd)\"\nMODE=\"${1:---dry-run}\"\nMAXR=\"${2:-6}\"\n# 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離\n# (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞\n# 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。\nif [ \"$MODE\" != \"--dry-run\" ]; then\n  echo \"autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常\" >&2\n  exit 2\nfi\n# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,\n# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。\n#\n# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,\n#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source\n#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):\n#\n#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——\n#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。\n#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯\n#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為\n#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。\n#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。\n#\n#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、\n#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,\n#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。\n#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。\n#\n#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,\n#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。\n#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。\n# ★同源:daily-governance.sh 的取鎖段★。兩邊是同一把鎖的兩份拷貝,\n# 血緣是雙向的——#18 那批先在 daily-governance.sh 上被五席修好,code-batch19 這批\n# 再把修法搬回來,而 batch19 自己的三席又同時修了兩邊。任何一邊改了另一邊要跟著改;\n# 守衛 t_daily_wrapper_lock_matches_source 會比對兩份的關鍵行為(雙向都查)。\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p003",
+      "file": "governance/autonomous-loop.sh",
+      "node": "Systems/cross-family-audit.md",
+      "key": "KEY:autonomous loop design-loop 收斂判定後、放行前多一道 qwen3-max 跨家族複核，補 opus 同門盲點；不取代每輪 judge-severity-gate",
+      "head": "#!/usr/bin/env bash\nset -euo pipefail\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\nSCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nREPO=\"$(cd \"$SCRIPT_DIR/..\" && pwd)\"\nMODE=\"${1:---dry-run}\"\nMAXR=\"${2:-6}\"\n# 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離\n# (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞\n# 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。\nif [ \"$MODE\" != \"--dry-run\" ]; then\n  echo \"autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常\" >&2\n  exit 2\nfi\n# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,\n# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。\n#\n# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,\n#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source\n#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):\n#\n#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——\n#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。\n#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯\n#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為\n#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。\n#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。\n#\n#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、\n#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,\n#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。\n#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。\n#\n#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,\n#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。\n#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。\n# ★同源:daily-governance.sh 的取鎖段★。兩邊是同一把鎖的兩份拷貝,\n# 血緣是雙向的——#18 那批先在 daily-governance.sh 上被五席修好,code-batch19 這批\n# 再把修法搬回來,而 batch19 自己的三席又同時修了兩邊。任何一邊改了另一邊要跟著改;\n# 守衛 t_daily_wrapper_lock_matches_source 會比對兩份的關鍵行為(雙向都查)。\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p004",
+      "file": "governance/autonomous_loop/confidence_report.py",
+      "node": "Systems/risk-tiered-review.md",
+      "key": "KEY:審查強度跟風險面走——RISK_CLASSES 四類(payment/external-send/prod-irreversible/self-governance)零參數二值分級;high=K3/cap≥8/關 fail-open(degraded 不放行、endorsed-after-refute 不算綠燈,只剩乾淨 endorsed 一條自動路);standard 行為分毫不變",
+      "head": "import json\nfrom pathlib import Path\n\ndef build_report(canary_log, loop_id, residual_risks, tier=None, hits=None, reported_tier=None):\n    rows = []\n    p = Path(canary_log)\n    if p.exists():\n        for l in p.read_text(encoding=\"utf-8\").splitlines():\n            if not l.strip(): continue\n            r = json.loads(l)\n            if r.get(\"loop\") == loop_id: rows.append(r)\n    lines = [f\"## 收斂可信度報告(loop={loop_id})\", \"\"]\n    if tier:\n        mismatch = (f\"(⚠ result JSON 自報 `{reported_tier}` ≠ 自算——紅標,查參數謊報)\"\n                    if reported_tier not in (None, \"\", tier) else \"\")\n        lines.append(f\"**風險級 tier=`{tier}`(wrapper 對最終 spec 自算)**{mismatch}\")\n        for h in (hits or []):\n            lines.append(f\"- hit `{h.get('class')}`:…{h.get('excerpt', '')}…\")\n        lines.append(\"\")\n    lines += [f\"**共 {len(rows)} 輪:**\", \"\"]\n    for i, r in enumerate(rows, 1):\n        lines.append(f\"- R{i}: `{r.get('kind')}` / severity=`{r.get('severity')}` / \"\n                     f\"auditor=`{r.get('auditor','?')}` — {r.get('note','')}\")\n    lines += [\"\", \"### ⚠ 這個迴圈沒檢查到的維度(品質最可能爛在這、放行請特別盯)\", \"\"]\n    lines += [f\"- {risk}\" for risk in residual_risks]\n    lines += [\"\", \"> 放行的人是最後也是唯一真兜底。上列是這個迴圈**結構上沒能自動檢查**的維度——不是它查過沒問題,是它根本沒查;請你的眼睛盯這幾處。\"]\n    return \"\\n\".join(lines)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p005",
+      "file": "governance/autonomous_loop/cross_audit.py",
+      "node": "Systems/cross-family-audit.md",
+      "key": "KEY:autonomous loop design-loop 收斂判定後、放行前多一道 qwen3-max 跨家族複核，補 opus 同門盲點；不取代每輪 judge-severity-gate",
+      "head": "\"\"\"放行前跨家族複核:呼叫 qwen3-max(DashScope 國際 endpoint)補 opus 同門盲點。\n\n設計見 docs/design/2026-06-22-cross-family-audit.md。\n- 無第三方依賴(僅標準庫 urllib),與既有模組一致。\n- verdict 判定在 orchestrator(prompt 層);本模組只回 status + worst_severity。\n\"\"\"\nimport json\nimport os\nimport re\nimport urllib.request\nimport urllib.error\nimport ssl\nfrom pathlib import Path\n\nENDPOINT = \"https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions\"\n_SEV_ORDER = {\"clean\": 0, \"minor\": 1, \"major\": 2, \"blocker\": 3}\n\n\ndef _ssl_context():\n    \"\"\"探測可用 cert bundle 建 SSL context。homebrew python(orchestrator PATH 優先)常無 cert\n    (ssl cafile=None)→ 不指定會 CERTIFICATE_VERIFY_FAILED;探測系統/certifi cert 修之。\"\"\"\n    cands = []\n    d = ssl.get_default_verify_paths()\n    if d.cafile:\n        cands.append(d.cafile)\n    try:\n        import certifi\n        cands.append(certifi.where())\n    except ImportError:\n        pass\n    cands += [\"/etc/ssl/cert.pem\", \"/private/etc/ssl/cert.pem\", \"/etc/ssl/certs/ca-certificates.crt\"]\n    for p in cands:\n        if p and os.path.exists(p):\n            return ssl.create_default_context(cafile=p)\n    return ssl.create_default_context()\n\n\ndef _parse_worst(text):\n    \"\"\"末行優先:取最後一個 strip 後非空行 match「最嚴重 severity = X」→ (值, False);\n    失敗 → 既有全文掃描 fallback(引述可污染,故誠實舉旗)→ (值, True);全無 → (\"clean\", True)。\"\"\"\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p006",
+      "file": "governance/autonomous_loop/gap_select.py",
+      "node": "Systems/autonomous-iteration-loop.md",
+      "key": "KEY:[2026-08-31]daily-governance.sh 第 4 步=lumos doctor --ci(2026-08-30 intake 案加線;08-31 回訪案補 --ci——治理事件每日入帳,gov --nags 14 天空轉升級鏈才有電;裸 doctor 不寫帳=鏈斷路)",
+      "head": "import json, subprocess\nfrom pathlib import Path\nfrom . import backlog\n\n\ndef read_report_gaps(report_path):\n    p = Path(report_path)\n    if not p.exists():\n        return []\n    try:\n        return json.loads(p.read_text(encoding=\"utf-8\")).get(\"gaps\", []) or []\n    except Exception:\n        return []\n\n\ndef pending_exists(mode, pending_dir):\n    if mode == \"dryrun\":\n        return any(Path(pending_dir).glob(\"*.md\"))\n    out = subprocess.run(\n        [\"gh\", \"pr\", \"list\", \"--search\", \"head:auto/spec-\", \"--state\", \"open\", \"--json\", \"number\"],\n        capture_output=True, text=True)\n    return out.returncode == 0 and out.stdout.strip() not in (\"\", \"[]\")\n\n\ndef load_covered(covered_path):\n    \"\"\"已被既有 spec 覆蓋(orchestrator 判過 skip)的 gap weakness 集合——永久排除,不再選/不重加。\"\"\"\n    if not covered_path:\n        return set()\n    p = Path(covered_path)\n    if not p.exists():\n        return set()\n    # 逐行容錯(code-r1 s3-f3/conf-f1):covered 跟 backlog 同款 append-only jsonl,\n    # 一行壞資料不該讓整條迴圈死在選題之前;壞行進 .bad 側檔保留。\n    got, bad = set(), []\n    for l in p.read_text(encoding=\"utf-8\").splitlines():\n        if not l.strip():\n            continue\n        try:\n            w = json.loads(l).get(\"weakness\")\n        except ValueError:\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p007",
+      "file": "scripts/hooks/claude/check-graph-sync.py",
+      "node": "Systems/codex-harness.md",
+      "key": "KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)",
+      "head": "#!/usr/bin/env python3\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n# MIT licensed. Full text: scripts/lumos header, or LICENSE at\n# https://github.com/EnzoHsieh-Android/Lumos\n\"\"\"全域 Stop hook: 提醒「程式碼改了但圖譜沒同步」。\n\n只在當前專案有 docs/*-knowledge/ 或 docs/knowledge/ 時作用,否則完全闭嘴。\n兩家一致(2026-09-05):改了程式碼、筆記沒動 → 回 decision:block ★一次★讓模型續做補筆記或一句話說明;\n  stop_hook_active / session 標記檔雙護欄,LUMOS_STOP_BLOCK_OFF=1 關閉。擋過一次之後才退回 stderr 提醒(那條只進除錯日誌——\n  Claude Code 官方文件:exit 0 的 stderr 模型看不到;Codex 亦然)。--harness codex 只影響逐字稿怎麼讀。\n  沿革:Codex 先做(Projects/Codex行為精修_計劃),同日 README 審視發現 Claude 側「軟提醒」其實沒人看得到,套成一致(Projects/README審視五修_計劃 d2)。\n\n四層閘門:\n  0  圖譜不存在               → exit 0\n  1  這 turn 沒改任何檔        → exit 0\n  2  改的都是非原始碼/在 docs/ → exit 0\n  3  這 turn 已動過圖譜        → exit 0\n  否則                         → 印 stderr 提醒\n\"\"\"\nfrom __future__ import annotations\nimport json\nimport os\nimport re\nimport time\nimport shlex\nimport subprocess\nimport sys\nfrom pathlib import Path\n\n# === 觸發提醒的原始碼副檔名 ===\nCODE_EXTS = {\n    \".cs\",                                                    # C# / .NET\n    \".vue\", \".js\", \".ts\", \".tsx\", \".jsx\", \".mjs\",             # 前端\n    \".sql\",                                                   # DB migration\n    \".py\",                                                    # Python\n    \".kt\", \".kts\",                                            # Kotlin / Compose\n    \".java\",                                                  # Java\n    \".swift\",                                                 # Swift\n    \".go\",                                                    # Go\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p008",
+      "file": "scripts/hooks/pre-commit",
+      "node": "Systems/delguard.md",
+      "key": "KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0→★15.0s(2026-08-27:5.0 在本 vault 377 篇+大 diff 仍常超,一 session 降級多次;Enzo 指示優化)★",
+      "head": "#!/usr/bin/env bash\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n# MIT licensed. Full text: scripts/lumos header, or LICENSE at\n# https://github.com/EnzoHsieh-Android/Lumos\n# Git pre-commit hook — 圖譜同步硬擋 (L2)\n#\n# 設計理由 (2026-05-25 從 PreToolUse 搬家):\n#   舊版 L2 在 Claude Code PreToolUse 攔 `git commit`,但 staged 區在 -a/-am\n#   flag 跟 `git commit <path>` 場景下 hook 看到的是空的 (因 -a 在 git 程序內\n#   部才 stage), 造成 silent 漏網。教 PreToolUse 解 git command 是追 git 尾巴\n#   永遠補不完,根因是「攔截點不對」。改放到 git pre-commit hook,git 內部\n#   已決定最終 staged 內容,所有 commit 形態(-a/-am/<path>/--amend)都涵蓋。\n#\n# Bypass: 用業界標準 `git commit --no-verify` (有儀式感、code review 看得到、\n#         比自製 `[no-graph]` marker 難被無意識濫用)\n#\n# 安裝:\n#   git config core.hooksPath scripts/hooks\n#   (一次設定,之後 git 自動跑此 hook)\n\nset -u\n\n# 找專案 root (避免在 submodule / worktree 出錯)\nREPO_ROOT=\"$(git rev-parse --show-toplevel)\"\ncd \"$REPO_ROOT\" || exit 0\n\n# 找圖譜目錄 (docs/{slug}-knowledge/)\nGRAPH_ROOT=\"\"\nif [[ -d docs ]]; then\n  for d in docs/*-knowledge; do\n    [[ -d \"$d\" ]] && GRAPH_ROOT=\"$d\" && break\n  done\n  [[ -z \"$GRAPH_ROOT\" && -d docs/knowledge ]] && GRAPH_ROOT=\"docs/knowledge\"\nfi\n\n# Gate 0: 圖譜不存在 → 放行\n[[ -z \"$GRAPH_ROOT\" ]] && exit 0\n\n# 拿最終 staged (git 在 pre-commit 時 staged 已確定,-a/-am/path 都涵蓋)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p009",
+      "file": "scripts/lumos",
+      "node": "Systems/anchor-integrity.md",
+      "key": "KEY:守「驗證器本身被悄悄改成一律通過」——測試綠/hook 放行的前提(批改程式沒被動過)從盲信變成可機械核對宣稱;外部實證=八大評測被 conftest 鉤子破",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p010",
+      "file": "scripts/lumos",
+      "node": "Systems/bound-tests-gate.md",
+      "key": "KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p011",
+      "file": "scripts/lumos",
+      "node": "Systems/check-r-guard.md",
+      "key": "KEY:對 ★IRREVERSIBLE★ 新增 [guard:decisions] 作為 [rollback:decisions] 的同等合規路徑——外部不可逆(信已送/下游已消費)用「執行前冪等鍵/核可閘」取代事後補償 [test:t_reversibility_guard_doctor]",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p012",
+      "file": "scripts/lumos",
+      "node": "Systems/cochange-guard.md",
+      "key": "KEY:ROSE非對稱confidence(borrow-design,TSE 2005 error-prevention);門檻conf≥0.8/support≥3(config可覆寫,support硬底線2全域);警告型恆不擋(rc0;git失敗rc2);警告走stdout(hook 2>/dev/null只吞診斷)",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p013",
+      "file": "scripts/lumos",
+      "node": "Systems/codex-harness.md",
+      "key": "KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p014",
+      "file": "scripts/lumos",
+      "node": "Systems/convergence-evidence-gate.md",
+      "key": "KEY:★[2026-08-25 甲裁]panel 閘退役(僅舊迴圈回放)+probe 抽查義務退場+「20 筆抽查帳」通道作廢(Enzo 具名);code 迴圈處置閘加嚴(major 必折,d2)——詳頁頂告示與 [[Projects/probe輪退場_計劃]]★",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p015",
+      "file": "scripts/lumos",
+      "node": "Systems/graph-sync-coverage.md",
+      "key": "KEY:★2026-09-11 起提交前與推送前的點名移出本篇★:原本兩個掛鉤都呼叫 impact --sync-only,以反引號命中的節點為種子,會把人推回寫了一堆別人檔名的大雜燴節點;改由每支檔有家照 about_code 宣告的家點名(家超過 8 篇只印一句)。本篇剩 Stop hook 當輪點名與代碼審留痕前的 --sync-check [test:t_nodehome_sync_nudge_by_home]",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p016",
+      "file": "scripts/lumos",
+      "node": "Systems/heterogeneous-finder-ensemble.md",
+      "key": "KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p017",
+      "file": "scripts/lumos",
+      "node": "Systems/棧別提問表態閘.md",
+      "key": "KEY:[合約候選,未蓋章] 有適用題(stack_questions_applicable 非空)且 gate=all 時,code-loop check 對該分支最後一筆表態逐題核對:缺 id/適用題卻 auto:true/satisfied 的 path:line 在 at_sha 樹不存在/test: 名在平台索引掃不到或 at_sha 樹 git grep -w 不到/todo 的 Issue 不存在或非 open-doing/na 理由不到門檻 → blocked=True rc1,不看 tier [test:t_codeloop_check_dispositions_gate]",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n#\n# ★這支檔會被 `lumos init` / `update` / `bootstrap` 原樣複製進你的專案★,而根目錄的 LICENSE\n# 不會跟著複製(那是刻意的:你的專案有自己的 LICENSE,工具不得覆蓋或刪除它)。所以授權全文\n# 就放在這裡,讓每一份副本自己帶著完整條款,單獨飄出去也說得清自己是什麼。\n#\n# MIT License\n#\n# Copyright (c) 2026 Enzo Hsieh\n#\n# Permission is hereby granted, free of charge, to any person obtaining a copy\n# of this software and associated documentation files (the \"Software\"), to deal\n# in the Software without restriction, including without limitation the rights\n# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n# copies of the Software, and to permit persons to whom the Software is\n# furnished to do so, subject to the following conditions:\n#\n# The above copyright notice and this permission notice shall be included in all\n# copies or substantial portions of the Software.\n#\n# THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n# SOFTWARE.\n#\n# 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律\n# 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。\n\"\"\"Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。\n\n程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。\n不需要裝 Obsidian,CI 上也跑得動。\n\n第一次用,照這三步走:\n  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p018",
+      "file": "scripts/scenario_probe.py",
+      "node": "Systems/codex-harness.md",
+      "key": "KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)",
+      "head": "#!/usr/bin/env python3\n\"\"\"情境探針:模擬場景,看 Claude 會不會自己敲對的 lumos 指令(Projects/指令索引與情境測試_計劃)。\n\n不是直接呼叫指令——那沒意義。做法:\n  1. git clone --local 本 repo 到臨時目錄(Bash 可以放心開,動到的只是副本)\n  2. 對每個情境跑 headless `claude -p <情境> --output-format stream-json`\n  3. 從事件流抓工具呼叫順序;判準 = 期望的 `lumos <指令>` 出現在任何「禁止先做」的工具/指令之前\n  4. 報告每個情境:過/不過、第一個工具呼叫是什麼、全部工具序列\n\n判準的三個刻意設計(外審 2026-08-22 提過,裁定不改):\n  - Skill 調用不算「敲到指令」——要測的就是「調了 skill 之後有沒有真的敲 lumos」。\n  - forbid_before 對非 Bash 工具只比對工具名(Grep/Read/Edit…),不看內容;要禁的是「那一類動作」。\n  - 副本裡 Claude 自己的 hooks(impact 注入等)照常觸發——探針量的是 Claude 在真實環境(規則+hook)下的行為;\n    hook 注入不是工具呼叫,不會被算成它自己敲的指令。\n  - 不開放 Agent 工具:子代理內部的動作對事件流是隱形的,會造成假通過/假失敗。\n\n用法:\n  scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]\n                            [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]\n\"\"\"\nimport argparse, json, os, re, shutil, subprocess, sys, tempfile, time\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parent.parent\n\n\ndef tool_calls_from_codex_json(lines):\n    \"\"\"codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。\n    只認 item.completed:command_execution→(\"Bash\", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→(\"Edit\", 路徑串);\n    回 (calls, final_text)。事件形狀在 0.144.1 實看,改版要重驗。\"\"\"\n    calls, final = [], \"\"\n    for ln in lines:\n        ln = ln.strip()\n        if not ln.startswith(\"{\"):\n            continue\n        try:\n            ev = json.loads(ln)\n        except Exception:\n            continue\n        if ev.get(\"type\") != \"item.completed\":\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p019",
+      "file": "scripts/test_lumos.py",
+      "node": "Systems/授權與歸屬.md",
+      "key": "KEY:★INVARIANT★ 授權檔(LICENSE/COPYING/NOTICE)★永遠不得出現在 _VENDORED_TOOLKIT★——lumos deinit 對白名單每一項無條件 unlink,加進去等於在消費專案跑 deinit 時刪掉使用者自己的 LICENSE。★只驗白名單內容是必要非充分★——繞過白名單直接刪檔看不到,所以另有端到端測試在真的跑完移除流程後確認使用者的 LICENSE/COPYING/NOTICE 還在 [test:t_license_headers_travel_with_vendored_files,t_deinit_never_deletes_user_license] [audit:sonnet/2026-09-06]",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n# MIT licensed. Full text: scripts/lumos header, or LICENSE at\n# https://github.com/EnzoHsieh-Android/Lumos\n\"\"\"test_lumos.py — lumos 行為鎖定測試(stdlib only,零依賴)\n\n跑法: python3 scripts/test_lumos.py\n退出碼: 0 全過 / 1 有失敗(CI 可用)\n\n涵蓋 2026-06-13 Sonnet 對抗審計找到的 bug + 核心讀寫行為。每個 fixture 對應一條\n[[2026-06-13_lumos審計與測試套件]] 列出的優先案例。\n\"\"\"\nimport subprocess\nimport sys\nimport tempfile\nimport unicodedata\nfrom pathlib import Path\n\ntry:\n    sys.stdout.reconfigure(encoding=\"utf-8\")   # cp950 印 ✓/✗ 會 UnicodeEncodeError\nexcept Exception:\n    pass\n\nimport os as _os_k2\n_os_k2.environ.setdefault(\"LUMOS_PANEL_K2_CUTOFF\", \"9999-12-31\")\n# ↑ A案 K=2 cutoff pin(2026-08-05):既有 panel fixtures 建立於執行當日,不 pin 則 2026-08-06 起\n#   整批變「新 loop」使 K=1 PASS 迴歸測試誤紅;K=2 專屬測試(t_panel_k2_and_probe)顯式覆寫。\nGRAPHCTL = str(Path(__file__).resolve().parent / \"lumos\")\nPASS, FAIL, SKIP = 0, 0, 0\n# 跑全套時「預期最多跳過幾支」的基準線。跳過不會紅,所以沒有基準線的話,\n# 「本來跑得到、現在跑不到」會完全無聲——2026-09-06 就這樣漏過一次(見 main() 尾段)。\n# 目前值 0:這台是 POSIX 又是來源 repo,所有跳過通道的條件都不成立。\n# 在別的環境(Windows、消費端)跳過本來就會多,那時照訊息說的調整並寫理由。\nEXPECTED_SKIP_MAX = int(__import__(\"os\").environ.get(\"LUMOSEXPECTED_SKIP_MAX\", \"0\"))\n\n\nclass _SrcOnly(Exception):\n    \"\"\"★這條測試需要「工具鏈來源 repo」才有的東西★(slim/ 交付包、get.sh、\n",
+      "verdict": "",
+      "repo": "toolchain"
+    },
+    {
+      "id": "toolchain-p020",
+      "file": "slim/install.py",
+      "node": "Systems/slim-install-安裝器.md",
+      "key": "KEY:★只動 $HOME 與專案 CLAUDE.md 這一份檔案,不碰專案其餘任何東西★(★2026-07-31 使用者裁定推翻原「不注入/更新任何 CLAUDE.md」的裁定,範圍刀見下條★)——仍不 scaffold 圖譜、不 vendor 工具進專案、不設 core.hooksPath、不裝任何 Claude hook(對比完整版 install.sh 尾端 `_sync_global_claude` 會把 4 支被禁 hook 裝回去,精簡版安裝器刻意不繼承這段)。★2026-07-31 Task 10★:寫入 `~/.local/share/lumos-slim/manifest.json` 不算破例——那是 `$HOME` 下的工具自身狀態,不是使用者專案檔案",
+      "head": "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-FileCopyrightText: 2026 Enzo Hsieh\n# SPDX-License-Identifier: MIT\n# MIT licensed. Full text: scripts/lumos header, or LICENSE at\n# https://github.com/EnzoHsieh-Android/Lumos\n\"\"\"install.py — 公開精簡版 機器層安裝器(stdlib only,Windows 可跑)\n\n★這是唯一的安裝邏輯來源★——`install.sh`／`install.ps1` 都只是薄殼,把參數原樣轉\n發過來(`<python> install.py \"$@\"` / `& $py install.py @args`),真正的行為全在\n這支檔案。這樣改一次邏輯,Unix/Windows 兩邊同步生效,不會漂移成兩份互相打架的\n腳本(bash 版本已經證明維護不動——見 `slim/install.sh` 的舊版註解史)。\n\n★做三件事★:①全域 `lumos` 指令(附帶身分證 manifest,見 `_install_cli()`)\n②實體複製 skill 到 `~/.claude/skills/`(不是 symlink——複製後要跟交付包解耦,\n就算 `~/.lumos-slim` 事後被砍掉,已裝好的東西仍要能動)③在執行時所在目錄(專案\n根)的 `CLAUDE.md` 裡放一塊策展過的精簡版紀律區塊(sentinel\n`<!-- LUMOS-SLIM:START/END -->`)。\n\n★裁定演進(spec [S3],三次,原樣沿用自 bash 版本的裁決記錄)★:原裁定=絕不碰\n專案 CLAUDE.md;第二次=只准 append-only 附加,sentinel 以外一個位元組都不動,\n完整版 `LUMOS:GRAPH-DISCIPLINE` 區塊(若有)原封不動留著;第三次(現行)=若專案\n已有完整版區塊,**整段移除**它,換成這塊精簡版區塊——但移除前先把完整版原文\n位元組級備份(base64 編碼藏進精簡版區塊自己的 HTML 註解裡,見 `claude-block.md`\n的 `FULL-BACKUP` 標記),`uninstall.py` 能用它精確還原。理由:完整版那段本身自稱\n「優先級最高/第一個工具呼叫必須是 lumos」,兩套規則並存時接手者的 Claude 會先讀\n到它、照著撲空(它引用的 design-loop/code-loop/pitfalls 等指令本包都沒交付)。\n\n插入位置:①有完整版區塊 → 原位置整段換掉(不是搬到檔尾——那裡才顯眼)\n         ②沒有 → 插在檔首「# 標題」之後,沒有標題就插最前面\n         ③CLAUDE.md 不存在 → 建立,內容就是這個區塊\n★冪等★:重跑只更新自己那塊(沿用既有備份標記,不重新編碼、不二次包裹)。\n★仍明確不做★:不 scaffold 圖譜、不 vendor 工具進專案、不設 core.hooksPath、\n             不裝任何 Claude hook。\n\n★注入目標守衛(三層)★——★真實事故已咬過兩次★:子代理驗證時忘記先 cd 進交付包\nclone,直接在 lumos-toolchain 這個來源 repo 底下跑,當場改掉了來源 repo 自己的\nCLAUDE.md。三層各擋不同的東西:\n  第一層 擋「在 $HOME 或隨便一個目錄下誤跑」—— 不像專案根就拒絕。\n  第二層 擋「這個目錄其實是 lumos 工具鏈本身的來源 repo」—— ★這層才擋得住\n",
+      "verdict": "",
+      "repo": "toolchain"
+    }
+  ]
+}

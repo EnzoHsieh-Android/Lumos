@@ -763,7 +763,7 @@ def main() -> int:
         missing = _impact_missing(src_files, file_paths, project_root, graph_root)
         if missing:
             print("\n".join([
-                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(合約 / 事故 / 直接相依),還沒動:",
+                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(是它的家 / 帶合約 / 出過事故 / 直接相依),還沒動:",
                 *[f"   • {m}" for m in missing],
                 "確定不受影響就略過;受影響的現在補,別等到 pre-push。"]), file=sys.stderr)
         return 0
