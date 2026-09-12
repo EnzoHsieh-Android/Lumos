@@ -12,7 +12,7 @@
   <img src="../assets/workflow-en.svg" alt="A session has four stages: arrive and read, work and write back, wrap up and self-check, and a final gate before push" width="900">
 </p>
 
-A zero-dependency Python command, 67 top-level subcommands. **`lumos --help` is authoritative**; this page lists the ones you'll actually meet.
+A zero-dependency Python command, some seventy top-level subcommands. **`lumos --help` is authoritative**; this page lists the ones you'll actually meet.
 
 ---
 

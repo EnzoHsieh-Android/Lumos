@@ -20,6 +20,7 @@ summary: |-
   DECISION:先記為 lumos 工具鏈改進 Issue(非某 spec 問題);真要做需自己走 brainstorm→design-loop(注意別遞歸)。與知識同步散落漂移同病根(需機械守衛逼)
   KEY:[2026-07-18]第四場域=權威派工模板漂移——templates.md 辯方段直到今日仍寫「opus;對每條≥major各派一個」:M1 路由制(07-16)與 S5 Codex 辯方(07-18)都只同步了 SKILL 沒動模板,而 design-loop KEY 明文「漂移以模板為準」=權威文件反而最舊;教訓:凡宣告「權威=X」的 X 必須進每次同步的 checklist 首位
   KEY:[2026-07-17]同病新案例=圖譜節點自身也漂——[[design-loop]] M1 落地只在 summary 頂加 KEY 增量行,FLOW 主幹+辯方 KEY 仍舊制(每條≥major開庭/無pre-flight),據 FLOW 畫生命週期圖被誤導;fold-check 只掃 spec 檔,圖譜節點 summary 內 KEY↔FLOW 一致性目前無守衛(scope 缺口)
+  KEY:[2026-09-12]第五場域=守衛自己的白名單靠列措辭,第四次被換句話繞過——命令數守衛只認「N 個頂層命令/N top-level commands/N 是頂層命令數」三種寫法,英文版指令參考寫的是 N top-level subcommands,多一個 sub 就對不上,於是它停在 67、中文版 70、真值 70,三個數字並存沒有任何東西翻紅。修法兩層:①把 subcommands 收進既有守衛;②對外文件(兩份 README 與 docs 下的頁面)禁止寫死這個數字,改講「七十來個」,新測試擋,已用還原成壞版本確認會翻紅。教訓:靠「列出所有寫法」的守衛每被繞一次就補一條,補到第四次就該改成「禁止這個事實出現在人手維護的地方」
   DEP:[[lumos-refcheck]]
   DEP:[[design-loop]]
 ---

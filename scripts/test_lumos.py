@@ -6794,6 +6794,31 @@ def t_commands_table_shape():
     print("  ✓ t_commands_table_shape")
 
 
+def t_docs_dont_hardcode_command_count():
+    """★對外文件不准寫死「共幾個頂層指令」★(2026-09-12)。
+
+    `lumos --help` 開頭那段刻意寫了「這裡也刻意不寫『共幾個』——寫了就是另一個會
+    過期的數字」,但兩份指令參考各自寫了一個。後來加了一個新指令,中文那份跟著改、
+    英文那份沒有,於是同一件事在兩份文件上是兩個數字(70 與 67),真值是 70。
+    這是「同一份事實散落在好幾個地方,人手同步一定漏掉其中一份」的又一例,所以
+    這裡不是把英文那個數字補對,是禁止任何對外文件再寫死它——沒有數字就不會漂。
+    要講規模就寫「七十來個」這種不隨單一指令進出而失效的講法。
+    """
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    files = [root / "README.md", root / "README.en.md"]
+    files += sorted((root / "docs").glob("*.md"))
+    check("對外文件掃得到", len(files) >= 6, str(len(files)))
+    pat = _re.compile(r"(?<![\w.])\d+\s*(?:個頂層|top-level)")
+    bad = []
+    for path in files:
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            if pat.search(line):
+                bad.append("%s:%d %s" % (path.relative_to(root), i, line.strip()[:70]))
+    check("★沒有文件寫死頂層指令數★", not bad, "共 %d 筆:%s" % (len(bad), bad[:4]))
+    print("  ✓ t_docs_dont_hardcode_command_count")
+
+
 def t_every_subcommand_has_when():
     """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
     Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""
@@ -21958,14 +21983,21 @@ def t_docs_command_count():
             continue
         text = p.read_text(encoding="utf-8", errors="replace")
         nums = set(_re.findall(r"(\d+) 個頂層命令", text)) | set(
-            _re.findall(r"(\d+) top-level commands", text)) | set(
-            _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24)
+            _re.findall(r"(\d+) top-level (?:commands|subcommands)", text)) | set(
+            _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24);
+        # ★第四次換措辭逃掉★(2026-09-12):英文版指令參考寫的是 `top-level subcommands`,
+        # 少了 sub 就對不上,於是它停在 67、中文版寫 70、真值 70,三個數字並存沒人紅。
+        # 這裡把 subcommands 也收進來;同時新增 t_docs_dont_hardcode_command_count,
+        # 讓對外文件乾脆不准寫死這個數字——第四次靠補措辭續命,說明白名單這條路本身在漏。
         if not nums:
             continue
         scanned += 1
         check(f"{rel} 命令數與 argparse 同步",
               nums == {str(actual)}, f"claim={nums} actual={actual}")
-    check("命令數守衛真的掃到活文件(>=4 份)", scanned >= 4, f"scanned={scanned}")
+    # 門檻從 4 降到 3(2026-09-12):兩份對外指令參考刻意不再寫死這個數字(改成「七十來個」),
+    # 由 t_docs_dont_hardcode_command_count 反向擋住它們再寫回來。剩下三份是給開發者看的
+    # 架構與參考文件,那裡講清楚規模有用,而且有本守衛盯著,所以保留數字。
+    check("命令數守衛真的掃到活文件(>=3 份)", scanned >= 3, f"scanned={scanned}")
 
 
 def t_lint_decisions_structure():
