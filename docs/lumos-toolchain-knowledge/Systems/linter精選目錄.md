@@ -63,6 +63,10 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 |---|---|---|
 | Java | PMD `rulesets/java/quickstart.xml` | 新方法的 3 條全抓到；**舊方法裡一模一樣的問題沒報**，基準線比對正確 |
 | Node | eslint 10 flat config（`no-unused-vars`／`eqeqeq`） | 新函式的 2 條抓到；**證明快照補設定檔與依賴目錄那一層對真工具有效** |
+| Vue | eslint + `eslint-plugin-vue` flat/recommended | 新加的清單少了 key，抓到 `vue/require-v-for-key` |
+| SQL | sqlfluff（`--dialect tsql`）+ 既有的格式轉接器 | 新加的查詢 6 條全抓到 |
+| Dart | `dart analyze --format=json` + **臨時寫的轉接器** | 抓到新函式的沒用到的變數；**轉接器還沒進工具鏈，這是目前唯一缺的一塊** |
+| C# / .NET | `dotnet build -p:ErrorLog=…` | **接不上**：命令沒辦法只吃改動的那幾支檔，被降級成只報不擋 |
 | Python | ruff | 見工具鏈自己那次：當天擋下一次真推送 |
 
 **規則集要自己挑，預設的不能直接用**：Checkstyle 配它內建的 google 風格，在 3 支 Java 檔上噴 757 條，幾乎全是排版與缺註解；PMD 的 quickstart 在同樣的檔上是 45 條而且是真問題。**這道閘只擋新增的，但噪音大的規則集會讓每次小改都被擋**，所以接的時候先拿專案現有的碼跑一次看數量級。另外 Checkstyle 的訊息會跟著系統語言走（這台機器吐中文）。

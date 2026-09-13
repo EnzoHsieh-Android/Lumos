@@ -249,7 +249,22 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 
 **Read the last column.** The ❌ rows were filled in to the same design and tested against synthetic samples, but **no real project has used them yet**—whether the trigger words fire accurately and whether the convention rules hold is still unmeasured. ⚠️ now appears only in the last column, where Dart means a real project was surveyed but never actually onboarded.
 
-**Whether a linter can actually run is a separate question.** The pre-push new-warnings gate copies the tree twice—before and after the change—and runs each linter on both to diff the findings, so the tool has to start up inside a tree that holds source and nothing else. Self-contained binaries that carry their own rules can: ruff for Python, detekt for Kotlin, SwiftLint for Swift, PMD and Checkstyle for Java, and the dependency-vulnerability scanner have all been verified this way. Tools that only start once the project's dependencies are installed (eslint, for one) need their config files and dependency directories carried in alongside—that path was verified end to end with a real eslint today, so it no longer rests on synthetic tests. **Tools that require a build first (.NET analyzers, Gradle) have not been verified at all; do not assume they work.** SwiftLint has one more trap: with no Xcode toolchain in reach it crashes outright and emits nothing, at which point the gate rules the environment unavailable and lets the change through—auto-passes are counted, but nothing stops you at the time.
+**Whether a linter can actually run is a separate question.** The pre-push new-warnings gate copies the tree twice—before and after the change—and runs each linter on both to diff the findings, so the tool has to start up inside a tree that holds source and nothing else, and it has to accept **just the files this change touched**. As of 2026-09-13, every stack has been put through the gate for real:
+
+| Runs | With |
+|---|---|
+| Python | ruff |
+| Kotlin | detekt |
+| Java | PMD, Checkstyle (neither needs a build tool) |
+| Swift | SwiftLint (you must pass the Xcode toolchain path yourself, or it crashes outright and the gate auto-passes) |
+| Vue / Node | eslint (config files and dependency directories have to be carried into the snapshot; that layer is verified) |
+| SQL | sqlfluff |
+| Dependency vulnerabilities | the cross-language scanner |
+
+**Two do not run, for different reasons:**
+
+- **Dart**'s official analyzer starts fine and emits structured results, but **nothing converts its format yet**. That is a small program to write, not a dead end.
+- **C# / .NET does not fit this gate.** Its analyzers only produce results by compiling the whole project, so the command cannot be narrowed to a handful of files—which is exactly what the gate needs. **That stack is covered by the code-review path instead.**
 
 **Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
 
