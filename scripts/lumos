@@ -17798,19 +17798,57 @@ _LINT_DEP_DIRS = ("node_modules", ".venv", "venv")
 _LINT_CONFIG_MAX_BYTES = 200000     # 設定檔本來就小;超過這個大小的不像設定檔,不搬
 
 
-def _lint_new_support(repo_root, config_ref, rel_paths, dest):
-    """把工具跑得起來需要的周邊東西放進快照:祖先目錄的設定檔(取現在版)+依賴目錄的連結。
-    ★沒有這一步,需要專案脈絡的工具會整個跑不起來★——實測 eslint 對落在設定檔那棵樹之外的檔案直接拒跑。"""
-    import subprocess
+def _lint_support_dirs(rel_paths):
+    """被掃的那些檔的所有祖先目錄(含專案根),由淺到深。"""
     dirs = set()
     for rp in rel_paths:
         d = Path(rp).parent
         while True:
-            dirs.add(d.as_posix() if d.as_posix() != "." else "")
+            dirs.add("" if d.as_posix() == "." else d.as_posix())
             if d.as_posix() in (".", "/", ""):
                 break
             d = d.parent
-    for rel_dir in sorted(dirs):
+    return sorted(dirs)
+
+
+def _lint_copy_configs(repo_root, config_ref, real_dir, snap_dir, rel_dir):
+    """把這一層的設定檔複製進快照。★一律取現在版★——兩次掃描要用同一份規則,
+    基準版那次用舊設定的話,比出來的差集沒有意義。"""
+    import subprocess
+    for pat in _LINT_CONFIG_GLOBS:
+        for f in real_dir.glob(pat):
+            try:
+                if not f.is_file() or f.stat().st_size > _LINT_CONFIG_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            target = snap_dir / f.name
+            if target.exists():
+                continue
+            rel = (Path(rel_dir) / f.name).as_posix() if rel_dir else f.name
+            r = subprocess.run(["git", "show", f"{config_ref}:{rel}"],
+                               capture_output=True, cwd=str(repo_root))
+            try:
+                target.write_bytes(r.stdout if r.returncode == 0 else f.read_bytes())
+            except OSError:
+                continue
+
+
+def _lint_link_deps(real_dir, snap_dir):
+    """依賴目錄用連結指回真的專案(那本來就不進版控,而工具要它才載得動外掛)。"""
+    for dep in _LINT_DEP_DIRS:
+        src, link = real_dir / dep, snap_dir / dep
+        if src.is_dir() and not link.exists():
+            try:
+                link.symlink_to(src, target_is_directory=True)
+            except OSError:
+                pass
+
+
+def _lint_new_support(repo_root, config_ref, rel_paths, dest):
+    """把工具跑得起來需要的周邊東西放進快照:祖先目錄的設定檔(取現在版)+依賴目錄的連結。
+    ★沒有這一步,需要專案脈絡的工具會整個跑不起來★——實測 eslint 對落在設定檔那棵樹之外的檔案直接拒跑。"""
+    for rel_dir in _lint_support_dirs(rel_paths):
         real_dir = Path(repo_root) / rel_dir if rel_dir else Path(repo_root)
         snap_dir = Path(dest) / rel_dir if rel_dir else Path(dest)
         if not real_dir.is_dir():
@@ -17819,28 +17857,8 @@ def _lint_new_support(repo_root, config_ref, rel_paths, dest):
             snap_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             continue
-        for pat in _LINT_CONFIG_GLOBS:
-            for f in real_dir.glob(pat):
-                if not f.is_file() or f.stat().st_size > _LINT_CONFIG_MAX_BYTES:
-                    continue
-                rel = (Path(rel_dir) / f.name).as_posix() if rel_dir else f.name
-                target = snap_dir / f.name
-                if target.exists():
-                    continue
-                r = subprocess.run(["git", "show", f"{config_ref}:{rel}"],
-                                   capture_output=True, cwd=str(repo_root))
-                try:
-                    target.write_bytes(r.stdout if r.returncode == 0 else f.read_bytes())
-                except OSError:
-                    continue
-        for dep in _LINT_DEP_DIRS:
-            src = real_dir / dep
-            link = snap_dir / dep
-            if src.is_dir() and not link.exists():
-                try:
-                    link.symlink_to(src, target_is_directory=True)
-                except OSError:
-                    pass
+        _lint_copy_configs(repo_root, config_ref, real_dir, snap_dir, rel_dir)
+        _lint_link_deps(real_dir, snap_dir)
 
 
 def _lint_new_extract(repo_root, sha, pairs, dest, side):
@@ -18001,6 +18019,53 @@ def _lint_new_clean_stale(repo_root):
             continue
 
 
+def _lint_new_oversize(head_files, base_files, cfg):
+    """挑出「太大所以不掃」的檔,並從兩邊的清單裡拿掉。回 [{file,lines,bytes,key,over}…]。
+    ★大檔也要有指紋才放行得掉★:綁路徑不綁內容——那支檔會一直很大,綁內容的話每改一次就要重新登記。
+    ★只看行數會被「整支檔只有一行」的壓縮檔騙過去★,所以兩個門檻都看。"""
+    import hashlib as _hl
+    out = []
+    for f, path in list(head_files.items()):
+        try:
+            raw = Path(path).read_bytes()
+        except OSError:
+            continue
+        n_bytes, n_lines = len(raw), raw.count(b"\n") + 1
+        if n_lines <= cfg["max_file_lines"] and n_bytes <= cfg["max_file_bytes"]:
+            continue
+        key = _hl.sha256(("oversize" + _LINT_NEW_SEP + f).encode("utf-8")).hexdigest()[:16]
+        out.append({"file": f, "lines": n_lines, "bytes": n_bytes, "key": key,
+                    "over": "行數" if n_lines > cfg["max_file_lines"] else "位元組數"})
+        head_files.pop(f, None)
+        base_files.pop(f, None)
+    return out
+
+
+def _lint_new_classify(out, cfg):
+    """把跑完的結果判成擋或不擋(就地改 out)。★兩類失敗分開★:
+    環境不可用(工具沒裝/逾時/拉不到規則/放行檔讀不了)→自動放行並記帳;
+    真的有未放行的新增告警、檔太大沒被檢查、預算不足沒跑到的命令→擋,逃生門是人手動放行寫理由。"""
+    env_undone = [u for u in out["undone"] if u["kind"] == "env"]
+    hard_undone = [u for u in out["undone"] if u["kind"] != "env"]
+    if env_undone:
+        out["autopass"] = True
+    hard = bool(out["new"]) or bool(out["oversize"]) or bool(hard_undone)
+    if hard and cfg["mode"] == "block":
+        bits = []
+        if out["new"]:
+            bits.append("%d 條新增告警" % len(out["new"]))
+        if out["oversize"]:
+            bits.append("%d 支檔太大沒被檢查" % len(out["oversize"]))
+        if hard_undone:
+            bits.append("%d 條命令因為時間預算沒跑到" % len(hard_undone))
+        out["status"], out["blocked"], out["reason"] = "blocked", True, "、".join(bits)
+    elif hard:
+        out["status"], out["reason"] = "warn", "設定檔把這道閘設成只報告,不擋"
+    else:
+        out["status"] = "env-unavailable" if env_undone else "clean"
+        out["reason"] = "沒有新增的告警" if not env_undone else "有命令跑不動(已自動放行並記帳)"
+
+
 def _lint_new_verdict(repo_root, diff_range, deadline=None):
     """新增告警閘的判定——這道閘只問一件事:這次改動有沒有帶進新的告警。
     回 dict{status, blocked, mode, new, waived, weak, oversize, undone, autopass, ran, report_only, reason, warnings}。
@@ -18082,25 +18147,7 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
         _lint_new_support(repo_root, head_ref, list(base_files), base_dir)
         _lint_new_support(repo_root, head_ref, list(head_files), head_dir)
 
-        # 單檔上限:行數與位元組數雙門檻,任一超過就不掃並明說(只看行數會被壓縮成一行的大檔騙過去)
-        too_big = []
-        for f, path in list(head_files.items()):
-            try:
-                raw = Path(path).read_bytes()
-            except OSError:
-                continue
-            n_bytes, n_lines = len(raw), raw.count(b"\n") + 1
-            if n_lines > cfg["max_file_lines"] or n_bytes > cfg["max_file_bytes"]:
-                # ★大檔也要有指紋才放行得掉★:設計說「檔太大要走放行管道登記才算過」,
-                # 但放行只認告警的指紋——不給大檔一個指紋,那句話就是空的,而且會變成
-                # 「這個專案有一支過大的檔=永遠推不上去、沒有出口」。指紋綁路徑不綁內容:
-                # 那支檔會一直很大,綁內容的話每改一次就要重新登記一次。
-                import hashlib as _hl2
-                _k = _hl2.sha256(("oversize" + _LINT_NEW_SEP + f).encode("utf-8")).hexdigest()[:16]
-                too_big.append({"file": f, "lines": n_lines, "bytes": n_bytes, "key": _k,
-                                "over": "行數" if n_lines > cfg["max_file_lines"] else "位元組數"})
-                head_files.pop(f, None)
-                base_files.pop(f, None)
+        too_big = _lint_new_oversize(head_files, base_files, cfg)
         # 已經登記過的大檔不再擋(但照樣列出來,讓人知道那支檔沒被檢查)
         out["oversize"] = [t for t in too_big if t["key"] not in waivers]
         out["oversize_waived"] = [t for t in too_big if t["key"] in waivers]
@@ -18147,26 +18194,7 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    env_undone = [u for u in out["undone"] if u["kind"] == "env"]
-    hard_undone = [u for u in out["undone"] if u["kind"] != "env"]
-    if env_undone:
-        out["autopass"] = True
-    hard = bool(out["new"]) or bool(out["oversize"]) or bool(hard_undone)
-    if hard and cfg["mode"] == "block":
-        out["status"], out["blocked"] = "blocked", True
-        bits = []
-        if out["new"]:
-            bits.append("%d 條新增告警" % len(out["new"]))
-        if out["oversize"]:
-            bits.append("%d 支檔太大沒被檢查" % len(out["oversize"]))
-        if hard_undone:
-            bits.append("%d 條命令因為時間預算沒跑到" % len(hard_undone))
-        out["reason"] = "、".join(bits)
-    elif hard:
-        out["status"], out["reason"] = "warn", "設定檔把這道閘設成只報告,不擋"
-    else:
-        out["status"] = "env-unavailable" if env_undone else "clean"
-        out["reason"] = "沒有新增的告警" if not env_undone else "有命令跑不動(已自動放行並記帳)"
+    _lint_new_classify(out, cfg)
     return out
 
 
