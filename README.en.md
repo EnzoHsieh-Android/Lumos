@@ -154,9 +154,19 @@ Linters cover encoded rules; stack questions and reviewers challenge context-dep
 
 Pre-push code review is risk-tiered; small changes do not all trigger the same review effort. Gates can require answers and evidence to exist, but format checks alone cannot establish that an answer is correct.
 
-If a project declares linters, one more check runs before every push regardless of tier: each linter runs twice, once against the pre-change snapshot and once against the current one. Only findings new to this change block; pre-existing ones do not. False positives are waived on the record, and an unavailable tool auto-passes with a logged entry.
+#### Five layers of quality control
 
-[See the three layers, stack triggers, and push gates](docs/mental-model.md#7-reading-the-detailed-diagrams)
+No human or AI can guarantee a zero defect rate. Following the Swiss cheese model, Lumos layers risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail. Every layer has blind spots, but a problem must pass through all of them to escape. The external-rules layer blocks only findings new to the change, so an existing codebase is not buried by its backlog when it adopts the gate.
+
+<p align="center">
+  <a href="assets/swiss-cheese-en.svg">
+    <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
+  </a>
+</p>
+
+Two ledgers sit outside the layers: the intercept ledger helps observe precision, while the escape ledger helps observe recall. Escaped defects are attributed and, where possible, converted into mechanical rules or tests so the same class of problem is less likely to escape again. This reduces and exposes risk; it does not promise zero defects.
+
+[Zoom in on how the review step itself is layered, plus stack triggers and push gates](docs/mental-model.md#7-reading-the-detailed-diagrams)
 
 <a id="write-back"></a>
 

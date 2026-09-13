@@ -106,7 +106,11 @@ def map_scene(en):
 def first_scene(en):
     title="A conversation becomes a change." if en else "從一句需求，到有依據的改動"
     b=badge(36,121,"YOU" if en else "你提出需求","green",150)
-    b+=rect(36,172,293,199)+path("M67 371v19l28-19","green",2)
+    b+=rect(36,172,293,199)
+    # A filled, attached speech tail. The former two-stroke green tail looked
+    # like an unexplained check mark at README scale.
+    b+='<path d="M67 370V391L96 370Z" fill="#17253b" stroke="#304461" stroke-width="1.5" stroke-linejoin="round"/>'
+    b+='<path d="M68 370H95" stroke="#17253b" stroke-width="3"/>'
     b+=text(58,266,"“Add refunds.”" if en else "「幫我加退款功能」",26,weight=600)
     b+=text(58,307,"Clarify goals and trade-offs" if en else "釐清需求、限制與取捨",20,"muted")
     b+=path("M329 258H375","blue",2)+arrow(383,258,"right","blue")
@@ -142,6 +146,23 @@ def graph_scene(en):
         b+=rect(30,y,700,111,"#142238","#2b3c55",15)
         b+=text(48,y+28,n,14,"muted",weight=650)
         b+=text(48,y+63,t,en and 21 or 24,c,weight=600)
+    # A small narrative rail makes the animation's current story beat legible
+    # without turning the diagram into a UI mockup or adding decorative icons.
+    b+=text(48,117,"STORY BEATS" if en else "流程節點",13,"muted",weight=650)
+    beats=[(360,.3,"01", "Context" if en else "既有流程","purple"),
+           (472,7.5,"02", "Incident" if en else "事故","coral"),
+           (584,9.0,"03", "Repair" if en else "修正","coral"),
+           (696,11.5,"04", "Recheck" if en else "回歸","green")]
+    b+=path("M360 119H696","#2b3c55",2)
+    previous=360
+    for x,at,n,label,c in beats:
+        if x!=previous:
+            b+=f'<g data-kind="story-progress" data-reveal="{at}" opacity="1">{reveal(at)}'
+            b+=path(f"M{previous+7} 119H{x-7}",c,2.5)+"</g>"
+        b+=f'<g data-kind="story-beat" data-reveal="{at}" opacity="1">{reveal(at)}'
+        b+=circle(x,119,7,"#17263c",C[c],2)+circle(x,119,3,C[c])
+        b+=text(x,110,n+"  "+label,13,c,"middle",650)+"</g>"
+        previous=x
     # The repair plan targets an existing feature, not an unrelated new module.
     edges=[
       ("plan-checkout","feature-checkout","M460 229V287","purple","down",460,287,2.1),
@@ -161,6 +182,13 @@ def graph_scene(en):
             b+=rect(316,254,108,35,"#142238","none",7)
             b+=text(370,278,"Fix points" if en else "修正退點",en and 18 or 20,"coral","middle",550)
         b+='</g>'
+    # Ownership/impact is distinct from chronology: the incident belongs to
+    # checkout even before it creates a repair plan. A fine dotted relation
+    # keeps that fact visible without competing with the repair arrows.
+    at=7.9
+    b+=f'<g data-from="incident" data-to="feature-checkout" data-relation="affected-feature" data-reveal="{at}" opacity="1">{reveal(at)}'
+    b+=path("M299 586C340 554 352 519 374 477C397 433 416 382 440 345","coral",1.8,"3 7")
+    b+=circle(440,345,3,C["coral"])+"</g>"
     nodes=[
       ("plan-points-fix",285,179,"Points-fix plan" if en else "退點修復計劃","purple",16,False),
       ("plan-checkout",460,179,"Checkout plan" if en else "結帳流程計劃","purple",16,False),
@@ -183,7 +211,7 @@ def graph_scene(en):
             b+=text(x,y+7,"★",20,"#172237","middle",650)+'</g>'
         b+=text(x,y+(49 if contract else 41),label,en and 18 or 21,"ink","middle",550)
         b+='</g>'
-    b+=text(415,600,"Repair the existing flow." if en else "回到既有流程修正",en and 21 or 24,"muted")
+    b+=text(415,600,"Affects the checkout flow." if en else "影響既有結帳流程",en and 21 or 24,"muted")
     b+=text(415,633,"Then verify the fix." if en else "修正後，補上回歸驗證",en and 21 or 22,"muted")
     b+='</g>'
     b+=rect(30,688,700,74,"#14243a","#344967",14)
@@ -191,7 +219,7 @@ def graph_scene(en):
     b+=text(79,718,"Gold ring: contract linked to verification" if en else "金環：帶合約，並連到驗證紀錄",en and 20 or 22,"gold")
     b+=path("M45 743H68","coral",2.5)+arrow(69,743,"right","coral")
     b+=text(79,750,"Incident → repair plan → existing feature → recheck" if en else "事故 → 修復計劃 → 既有功能 → 回歸驗證",en and 20 or 22,"coral")
-    return title,785,b,"Illustrative shop graph, assuming checkout owns points returns: plans precede features and verification. A points-not-returned incident creates a points-fix plan that modifies the existing checkout flow, followed by a points regression test. Contract rings and stars appear after evidence. A 24-second cycle builds for 11.8 seconds, then holds the complete graph for 12.2 seconds; static fallback remains complete."
+    return title,785,b,"Illustrative shop graph, assuming checkout owns points returns: plans precede features and verification. A points-not-returned incident is directly related to the checkout feature, creates a points-fix plan that modifies that existing flow, and is followed by a points regression test. Contract rings and stars appear after evidence. A 24-second cycle builds for 11.8 seconds, then holds the complete graph for 12.2 seconds; static fallback remains complete."
 
 def dispatch_scene(en):
     title="One brief. Several independent lenses." if en else "材料相同，判斷保持獨立"
@@ -273,11 +301,54 @@ def evals_scene(en):
     b+=rect(270,484,331,34,"#101d30","none",8)+text(435,508,"Feed subsequent rounds" if en else "帶回後續流程，再留下新紀錄",en and 22 or 20,"coral","middle")
     return title,548,b,"Two evaluation streams: replay review records to compare verdicts, and use human-labelled retrieval questions to compare results. Comparisons inform calibration. This conceptual workbench shows no measured scores or guaranteed improvement."
 
+def swiss_cheese_scene(en):
+    title="Five imperfect layers. Fewer escapes." if en else "五層都有洞，但問題更難一路穿過"
+    b=text(38,126,
+           "Different blind spots reduce the chance of one shared miss." if en else "不同防線有不同盲點；疊起來，漏洞較不容易全部對齊。",
+           en and 19 or 21,"muted")
+    # The coral path sits behind every slice. Masks cut real holes in each
+    # slice, so the path is visible only where one rare route lines up.
+    b+='<g data-kind="aligned-escape">'+path("M590 132V540","coral",3,"9 8",True)+'</g>'
+    rows=[
+      (150,"01","Risk tiering" if en else "風險分級","purple",[(318,164,12),(448,188,9),(590,175,10),(676,161,8)]),
+      (230,"02","Multi-seat review" if en else "多席審查","blue",[(287,246,9),(405,265,13),(522,240,8),(590,255,10),(680,270,11)]),
+      (310,"03","Disposition gate" if en else "放行規則","coral",[(305,340,12),(468,324,9),(590,335,10),(690,348,8)]),
+      (390,"04","External rules" if en else "外部規則","gold",[(280,404,8),(390,430,12),(505,405,10),(590,415,10),(675,432,9)]),
+      (470,"05","Failure-proven tests" if en else "測試翻紅","green",[(315,495,11),(445,480,8),(545,510,12),(590,495,10),(690,482,8)]),
+    ]
+    for i,(y,n,label,c,holes) in enumerate(rows):
+        mask=f"cheese-{i}"
+        b+=f'<g data-kind="defence-layer" data-layer="{n}">'
+        b+=f'<defs><mask id="{mask}"><rect x="244" y="{y}" width="472" height="50" rx="14" fill="white"/>'
+        for hx,hy,hr in holes:
+            b+=f'<circle cx="{hx}" cy="{hy}" r="{hr}" fill="black"/>'
+        b+='</mask></defs>'
+        b+=text(40,y+20,n,13,c,weight=700)
+        b+=text(76,y+34,label,en and 18 or 21,c,weight=600)
+        b+=f'<rect x="244" y="{y}" width="472" height="50" rx="14" fill="#3a3225" stroke="{C[c]}" stroke-width="1.2" mask="url(#{mask})"/>'
+        for hx,hy,hr in holes:
+            b+=circle(hx,hy,hr,"none","#886f4d",1)
+        b+='</g>'
+    b+=arrow(590,546,"down","coral")
+    b+='<g data-kind="escape-ledger">'+rect(403,554,313,77,"#2c2630","#925e67",14)
+    b+=text(424,585,"Escape ledger" if en else "漏網帳",22,"coral",weight=650)
+    b+=text(424,614,"Miss → new rule or test" if en else "漏掉的問題 → 新規則或測試",en and 18 or 20,"muted")+'</g>'
+    b+=path("M403 594H369Q344 594 344 569V435Q344 415 365 415","green",2.5,"8 7")
+    b+=arrow(373,415,"right","green")
+    b+=rect(38,554,305,77,"#14243a","#344967",14)
+    b+=text(58,583,"Intercept ledger → precision" if en else "攔截帳 → 精準度",en and 18 or 20,"blue",weight=550)
+    b+=text(58,613,"Escape ledger → recall" if en else "漏網帳 → 召回率",en and 18 or 20,"green",weight=550)
+    b+=text(380,673,
+            "Not zero risk—visible leakage that becomes harder to repeat." if en else "不是零風險；而是讓漏多少看得見，並讓同類問題更難再漏。",
+            en and 19 or 21,"muted","middle")
+    return title,700,b,"Five Swiss-cheese defence layers: risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail when behaviour is removed. A rare aligned escape enters an escape ledger, which feeds new mechanical rules or tests. Intercept and escape ledgers make precision and recall observable; the model does not claim zero defects."
+
 SCENES={"map":("00 / THE SYSTEM",map_scene),
         "first-change":("START / NATURAL LANGUAGE",first_scene),
         "graph-demo":("01 / KNOWLEDGE",graph_scene),
         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
         "review-overview":("03 / REVIEW",review_scene),
+        "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
         "writeback-overview":("04 / WRITE-BACK",writeback_scene),
         "evals-overview":("EVALS / FEEDBACK",evals_scene)}
 
@@ -304,6 +375,10 @@ def validate(svg):
             assert parent.tag.rsplit("}",1)[-1] in {"path","rect","circle"}
     assert root.find("s:title",ns).text
     assert root.find("s:desc",ns).text
+    if root.find("s:title",ns).text in {"Five imperfect layers. Fewer escapes.","五層都有洞，但問題更難一路穿過"}:
+        assert len(root.findall(".//*[@data-kind='defence-layer']"))==5
+        assert len(root.findall(".//*[@data-kind='aligned-escape']"))==1
+        assert len(root.findall(".//*[@data-kind='escape-ledger']"))==1
     if graph is not None:
         # Preserve the node process, not merely the same palette.
         expected={
@@ -312,6 +387,7 @@ def validate(svg):
             ("feature-checkout","feature-payment"),
             ("feature-checkout","verification-checkout"),
             ("feature-payment","verification-payment"),
+            ("incident","feature-checkout"),
             ("incident","plan-points-fix"),
             ("plan-points-fix","feature-checkout"),
             ("feature-checkout","verification-points"),
@@ -335,6 +411,9 @@ def validate(svg):
         repair=float(by_id["plan-points-fix"].get("data-reveal"))
         recheck=float(by_id["verification-points"].get("data-reveal"))
         repair_edge=next(el for el in graph.iter() if el.get("data-from")=="plan-points-fix")
+        affected=next(el for el in graph.iter() if el.get("data-relation")=="affected-feature")
+        assert affected.get("data-from")=="incident" and affected.get("data-to")=="feature-checkout"
+        assert incident+.3<float(affected.get("data-reveal"))<repair-.3
         assert incident+.3<repair
         assert repair+.3<float(repair_edge.get("data-reveal"))<recheck-.3
         assert max(float(el.get("data-reveal"))+.3 for el in graph.iter() if el.get("data-reveal"))<=14
