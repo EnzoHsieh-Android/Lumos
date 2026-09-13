@@ -39943,5 +39943,295 @@ def t_lint_gov_gate_name():
     check("閘名 lint-new 有登記", "lint-new" in m._KNOWN_GATES, str(m._KNOWN_GATES[-3:]))
     check("程式裡用的是同一個名字", m._LINT_NEW_GATE_NAME == "lint-new", m._LINT_NEW_GATE_NAME)
 
+
+# ── 社群規則第二批:依賴層 / 產線 / 閉環(2026-09-13)──────────────────────────
+
+
+def t_lint_deps_layer():
+    """依賴宣告檔走自己那條路:它們在既有的「要不要掃」過濾裡會被當成非程式碼丟掉。"""
+    m = _lng_module()
+    # 認得的檔名(含 .NET 那種靠副檔名的)
+    for f in ("package.json", "requirements.txt", "go.mod", "Cargo.lock", "Gemfile.lock",
+              "pom.xml", "app/My.csproj", "poetry.lock"):
+        check(f"依賴宣告檔認得 {f}", m._is_dep_manifest(f) is True, f)
+    for f in ("app.py", "src/main.kt", "README.md", "data.json"):
+        check(f"一般檔不算依賴宣告檔 {f}", m._is_dep_manifest(f) is False, f)
+
+    # ★r1 兩席獨立抓到★:第三方或產生出來的目錄裡的宣告檔不算「這個專案的依賴改動」
+    for f in ("node_modules/foo/package.json", "vendor/bundle/Gemfile.lock",
+              "third_party/pkg/pom.xml", "Pods/X/Podfile.lock", "build/package.json"):
+        check(f"第三方目錄裡的宣告檔不算 {f}", m._is_dep_manifest(f) is False, f)
+    # ★r1 通才席抓到的漏★:AI 捏造版本號改的是宣告檔本身,不是自動產生的鎖檔
+    for f in ("Package.swift", "Podfile", "mix.exs"):
+        check(f"人/AI 真正會改的宣告檔也要認得 {f}", m._is_dep_manifest(f) is True, f)
+
+    # ★這是這條路存在的理由★:這幾種副檔名被既有過濾擋掉,不另外走就永遠掃不到
+    for f in ("package.json", "requirements.txt", "Cargo.lock"):
+        check(f"{f} 確實被既有的程式碼過濾擋掉", m._stack_changed_ok(f) is False, f)
+
+    root, git = _lng_repo("gctl-lngdep-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngdep-h-"))
+    cmd = _lng_fake_linter(helper, "d.py", [["BAD-DEP", "VULN", "這個版本有已知漏洞"]])
+    import json as _j
+    (root / ".lumos").mkdir(parents=True, exist_ok=True)
+    # ★依賴層走自己的宣告檔★:lint.json 那個檔的每個頂層鍵都被當成副檔名嚴格驗證,塞保留鍵進去=兩種語意混一起
+    (root / ".lumos" / "lint-deps.json").write_text(_j.dumps({"cmds": [cmd]}), encoding="utf-8")
+    (root / "package.json").write_text('{"dependencies": {"ok": "1"}}\n', encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "package.json").write_text('{"dependencies": {"ok": "1", "BAD-DEP": "0.0.1"}}\n', encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "加依賴")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("依賴層:改依賴宣告檔會被擋", v["blocked"] is True and len(v["new"]) == 1, str(v))
+    check("依賴層:抓到的是那支宣告檔", v["new"] and v["new"][0]["file"] == "package.json", str(v["new"]))
+
+
+def t_lint_cmd_targets():
+    """每條命令只拿自己那個棧的檔——不分的話 Python 的檢查器會收到 Kotlin 檔。"""
+    m = _lng_module()
+    code = [("a.py", "a.py"), ("b.py", "b.py"), ("c.kt", "c.kt")]
+    deps = [("package.json", "package.json")]
+    cfg = {"py": ["PY {LINT_FILES}"], "kt": ["KT {LINT_FILES}"]}
+    dep_cmds = ["DEP {LINT_FILES}"]
+    got = dict((c, tuple(f)) for c, f in m._lint_new_cmd_targets(code, deps, cfg, dep_cmds))
+    check("py 命令只拿 .py", got.get("PY {LINT_FILES}") == ("a.py", "b.py"), str(got))
+    check("kt 命令只拿 .kt", got.get("KT {LINT_FILES}") == ("c.kt",), str(got))
+    check("依賴命令只拿依賴宣告檔", got.get("DEP {LINT_FILES}") == ("package.json",), str(got))
+    # 沒有依賴宣告檔改動時,依賴命令不出現(不要為了沒改的東西白跑一趟)
+    got2 = dict((c, tuple(f)) for c, f in m._lint_new_cmd_targets(code, [], cfg, dep_cmds))
+    check("沒改依賴宣告檔就不跑依賴命令", "DEP {LINT_FILES}" not in got2, str(got2))
+
+
+def _lng_rule_repo(fire=True):
+    """建一個帶自寫規則的臨時 repo;fire=False 時樣本故意不會被規則抓到。"""
+    import json as _j
+    import sys as _s
+    root = Path(tempfile.mkdtemp(prefix="gctl-lngrule-"))
+    import subprocess as sp
+    sp.run(["git", "init"], cwd=root, capture_output=True)
+    rules = root / ".lumos" / "rules"
+    (rules / "samples").mkdir(parents=True, exist_ok=True)
+    (rules / "r.yml").write_text("rules:\n  - id: no-bad\n    message: x\n", encoding="utf-8")
+    (rules / "samples" / "no-bad.txt").write_text("BAD\n" if fire else "fine\n", encoding="utf-8")
+    # 假規則引擎:看到 BAD 就報 no-bad
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngrule-h-"))
+    script = helper / "eng.py"
+    script.write_text(
+        "import sys, json\n"
+        "out = sys.argv[1]\n"
+        "res = []\n"
+        "for t in sys.argv[2:]:\n"
+        "    for i, ln in enumerate(open(t, encoding='utf-8').read().splitlines(), 1):\n"
+        "        if 'BAD' in ln:\n"
+        "            res.append({'ruleId': 'no-bad', 'message': {'text': 'x'}, 'locations': [\n"
+        "                {'physicalLocation': {'artifactLocation': {'uri': t},\n"
+        "                 'region': {'startLine': i, 'endLine': i}}}]})\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Fake'}}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    (rules / "index.json").write_text(_j.dumps({
+        "cmd": f"{_s.executable} {script} {{LINT_SARIF_OUT}} {{LINT_FILES}}",
+        "rules": {"no-bad": "samples/no-bad.txt"}}), encoding="utf-8")
+    return root
+
+
+def t_rule_check():
+    """[產線] 每條自寫規則都要有一個會讓它翻紅的樣本——規則寫了不等於它抓得到東西。"""
+    import io
+    import contextlib
+    m = _lng_module()
+    good = _lng_rule_repo(fire=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.cmd_rule_check(repo=str(good))
+    check("產線:樣本真的翻紅→過", rc == 0 and "每條都有樣本" in buf.getvalue(), f"rc={rc} {buf.getvalue()[:120]}")
+
+    bad = _lng_rule_repo(fire=False)
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        rc2 = m.cmd_rule_check(repo=str(bad))
+    check("產線:樣本不翻紅→擋", rc2 == 1 and "這條規則是死的" in buf2.getvalue(), f"rc={rc2} {buf2.getvalue()[:160]}")
+
+    # 規則檔宣告了、索引沒登記樣本 → 也要擋(索引漏列=那條永遠沒樣本也沒人發現)
+    extra = _lng_rule_repo(fire=True)
+    (extra / ".lumos" / "rules" / "r2.yml").write_text("rules:\n  - id: no-other\n    message: y\n", encoding="utf-8")
+    buf3 = io.StringIO()
+    with contextlib.redirect_stdout(buf3):
+        rc3 = m.cmd_rule_check(repo=str(extra))
+    check("產線:規則沒登記樣本→擋", rc3 == 1 and "索引沒登記樣本" in buf3.getvalue(), f"rc={rc3} {buf3.getvalue()[:160]}")
+
+    # 掃規則檔抓 id:兩種寫法都要認得
+    ids = m._rules_declared_ids(extra)
+    check("產線:掃得出規則檔宣告的 id", set(ids) == {"no-bad", "no-other"}, str(sorted(ids)))
+
+
+def t_rule_gap():
+    """[閉環] 逃逸帳標了「本來哪條規則該抓」但規則還沒寫的,要列成待辦。"""
+    import io
+    import contextlib
+    import json as _j
+    m = _lng_module()
+    root = _lng_rule_repo(fire=True)          # 已經有 no-bad 這條規則
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    lines = [
+        _j.dumps({"ts": "2026-09-13T01:00:00+08:00", "loop": "x", "desc": "沒逾時", "rule": "no-timeout"}),
+        _j.dumps({"ts": "2026-09-13T01:01:00+08:00", "loop": "x", "desc": "又沒逾時", "rule": "no-timeout"}),
+        _j.dumps({"ts": "2026-09-13T01:02:00+08:00", "loop": "x", "desc": "這條已經有規則", "rule": "no-bad"}),
+        _j.dumps({"ts": "2026-09-13T01:03:00+08:00", "loop": "x", "desc": "沒標規則"}),
+    ]
+    (root / "docs" / ".escape-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.cmd_rule_gap(repo=str(root), as_json=True)
+    out = _j.loads(buf.getvalue())
+    check("閉環:漏過兩次又沒規則的被列出來", out["missing"].get("no-timeout", {}).get("n") == 2, str(out))
+    check("閉環:已經寫成規則的不列", "no-bad" not in out["missing"] and "no-bad" in out["covered"], str(out))
+    check("閉環:沒標規則的另外數", out["unlabeled"] == 1, str(out))
+
+
+def t_escape_rule_field():
+    """[閉環] 逃逸帳要收得下「本來哪條規則該抓」這個欄位。"""
+    m = _lng_module()
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    check("escape 有 --rule 旗標", '"--rule", dest="esc_rule"' in src, "")
+    check("記錄真的會寫這個欄位", 'rec["rule"] = rule.strip()' in src, "")
+    check("分派有把旗標傳進去", "rule=args.esc_rule" in src, "")
+
+
+def t_lint_cmd_targets_applied():
+    """★守消費端★:判定真的只把該給的檔傳給每條命令。
+    只驗配對函式不夠——把判定裡取檔那一行改回「全部都給」,配對函式的測試照樣綠(實測過)。"""
+    import json as _j
+    import sys as _s
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lngct-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngct-h-"))
+    # 假檢查工具:把自己收到的檔名寫進一個記錄檔,這樣測試看得到「誰拿到了什麼」
+    rec = helper / "got.txt"
+    script = helper / "rec.py"
+    script.write_text(
+        "import sys, json, os\n"
+        "tag = sys.argv[1]\n"
+        "out = sys.argv[2]\n"
+        f"open({str(rec)!r}, 'a', encoding='utf-8').write(tag + ':' + ','.join(sorted(os.path.basename(t) for t in sys.argv[3:])) + chr(10))\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Fake'}}, 'results': []}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    py_cmd = f"{_s.executable} {script} PY {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+    kt_cmd = f"{_s.executable} {script} KT {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+    (root / ".lumos").mkdir(parents=True, exist_ok=True)
+    (root / ".lumos" / "lint.json").write_text(_j.dumps({"py": [py_cmd], "kt": [kt_cmd]}), encoding="utf-8")
+    (root / "a.py").write_text("a = 1\n", encoding="utf-8")
+    (root / "b.kt").write_text("val b = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "a.py").write_text("a = 2\n", encoding="utf-8")
+    (root / "b.kt").write_text("val b = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    m._lint_new_verdict(root, f"{base}..HEAD")
+    got = rec.read_text(encoding="utf-8") if rec.exists() else ""
+    py_lines = [l for l in got.splitlines() if l.startswith("PY:")]
+    kt_lines = [l for l in got.splitlines() if l.startswith("KT:")]
+    check("消費端:Python 的命令只收到 .py", py_lines and all(l == "PY:a.py" for l in py_lines), got)
+    check("消費端:Kotlin 的命令只收到 .kt", kt_lines and all(l == "KT:b.kt" for l in kt_lines), got)
+
+
+def t_rule_id_scanning():
+    """[r1 折入] 規則 id 掃描:JSON 要真解析、YAML 只認最淺那層、巢狀 metadata 的 id 不算規則。"""
+    import json as _j
+    m = _lng_module()
+    # ★JSON:id 不是最後一個欄位(有尾隨逗號)、以及壓成一行★——原本的行級正則兩種都抓不到
+    pretty = _j.dumps({"rules": [{"id": "no-bad", "message": "x", "languages": ["python"]}]}, indent=2)
+    oneline = _j.dumps({"rules": [{"id": "no-bad", "message": "x", "languages": ["python"]}]})
+    check("JSON 縮排寫法抓得到 id", m._rules_ids_from_json(_j.loads(pretty)) == ["no-bad"], pretty[:60])
+    check("JSON 壓成一行也抓得到", m._rules_ids_from_json(_j.loads(oneline)) == ["no-bad"], oneline[:60])
+    # ★巢狀 metadata 底下的 id 不是規則 id★——算進去會讓合法的規則檔被判「缺樣本」
+    # ★樣本要選「真的會誤判」的形狀★:metadata 裡如果也帶了 severity 這種辨識欄位,
+    # 光靠「這一層長得像規則嗎」擋不住,非得明文跳過 metadata 不可(翻紅驗證實測:樣本挑錯的話,
+    # 把跳過那行拿掉測試照樣綠,等於這條接線沒被守到)
+    nested = _j.loads(_j.dumps({"rules": [{"id": "real", "message": "x",
+                                           "metadata": {"id": "CWE-79", "severity": "high",
+                                                        "message": "外部編號不是規則 id"}}]}))
+    check("JSON:metadata 裡的 id 不算(即使它長得像規則)", m._rules_ids_from_json(nested) == ["real"], str(nested))
+    # YAML:只認縮排最淺的那一層
+    y = ("rules:\n"
+         "  - id: real-rule\n"
+         "    message: x\n"
+         "    metadata:\n"
+         "      id: CWE-79\n")
+    check("YAML:只認最淺那層的 id", m._rules_ids_from_yaml_text(y) == ["real-rule"], repr(y))
+    check("YAML:沒有 id 就回空", m._rules_ids_from_yaml_text("rules: []\n") == [], "")
+
+
+def t_rule_hit_matching():
+    """[r1 折入] 「這條規則有沒有被樣本抓到」的比對:不能用任意字尾,不然不相干的規則會讓它假通過。"""
+    import io
+    import contextlib
+    import json as _j
+    import sys as _s
+    m = _lng_module()
+    root = Path(tempfile.mkdtemp(prefix="gctl-lnghit-"))
+    rules = root / ".lumos" / "rules"
+    (rules / "samples").mkdir(parents=True, exist_ok=True)
+    (rules / "r.yml").write_text("rules:\n  - id: no-bad\n    message: x\n", encoding="utf-8")
+    (rules / "samples" / "no-bad.txt").write_text("anything\n", encoding="utf-8")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lnghit-h-"))
+    script = helper / "eng.py"
+    # 這個假引擎只會吐「字尾剛好相同、但其實不相干」的規則 id
+    script.write_text(
+        "import sys, json\n"
+        "out = sys.argv[1]\n"
+        "res = [{'ruleId': 'xyz-no-bad', 'message': {'text': 'x'}, 'locations': [\n"
+        "    {'physicalLocation': {'artifactLocation': {'uri': sys.argv[2]},\n"
+        "     'region': {'startLine': 1, 'endLine': 1}}}]}]\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'F'}}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    (rules / "index.json").write_text(_j.dumps({
+        "cmd": f"{_s.executable} {script} {{LINT_SARIF_OUT}} {{LINT_FILES}}",
+        "rules": {"no-bad": "samples/no-bad.txt"}}), encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.cmd_rule_check(repo=str(root))
+    check("不相干但字尾相同的規則不算命中", rc == 1 and "這條規則是死的" in buf.getvalue(),
+          f"rc={rc} {buf.getvalue()[:160]}")
+
+    # 反面:工具在前面加命名空間(semgrep 的 a.b.c.<id>)要算命中
+    script2 = helper / "eng2.py"
+    script2.write_text(
+        "import sys, json\n"
+        "out = sys.argv[1]\n"
+        "res = [{'ruleId': 'python.lang.security.no-bad', 'message': {'text': 'x'}, 'locations': [\n"
+        "    {'physicalLocation': {'artifactLocation': {'uri': sys.argv[2]},\n"
+        "     'region': {'startLine': 1, 'endLine': 1}}}]}]\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'F'}}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    (rules / "index.json").write_text(_j.dumps({
+        "cmd": f"{_s.executable} {script2} {{LINT_SARIF_OUT}} {{LINT_FILES}}",
+        "rules": {"no-bad": "samples/no-bad.txt"}}), encoding="utf-8")
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        rc2 = m.cmd_rule_check(repo=str(root))
+    check("帶命名空間前綴的同一條規則算命中", rc2 == 0, f"rc={rc2} {buf2.getvalue()[:160]}")
+
+
+def t_rule_gap_robust():
+    """[r1 折入] rule-gap 遇到壞資料要優雅降級,不要整支崩;索引讀不了要講出來。"""
+    import io
+    import contextlib
+    import json as _j
+    m = _lng_module()
+    root = _lng_rule_repo(fire=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    lines = [
+        _j.dumps({"ts": "2026-09-13T01:00:00+08:00", "loop": "x", "desc": "a", "rule": {"不是": "字串"}}),
+        _j.dumps({"ts": "2026-09-13T01:01:00+08:00", "loop": "x", "desc": "b", "rule": "no-timeout"}),
+        "壞掉的一行不是 JSON",
+    ]
+    (root / "docs" / ".escape-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.cmd_rule_gap(repo=str(root), as_json=True)
+    out = _j.loads(buf.getvalue())
+    check("非字串的 rule 欄位不會讓它崩,算成沒標", rc == 0 and out["unlabeled"] == 1, buf.getvalue()[:120])
+    check("壞掉的那一行跳過,好的照算", out["missing"].get("no-timeout", {}).get("n") == 1, str(out))
+
 if __name__ == "__main__":
     sys.exit(main())

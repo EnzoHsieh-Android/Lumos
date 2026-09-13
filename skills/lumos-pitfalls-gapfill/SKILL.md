@@ -32,12 +32,16 @@ lumos context linter-gap實務隱患        # 無 → lumos new issue "linter-ga
 5. **人輕量放行**(oracle 省不掉):人判這坑對本專案業務/技術現實是否真值得記。
    - 放行 → `Issues/linter-gap實務隱患` 的**〈已採納〉**段:坑描述 + 觸發條件 + 來源 URL(body 表格用 Edit;純量/list 走 lumos)。
    - 駁回 → **〈已評估駁回〉**段:坑 + 為何駁(下次 step 1 跳過)。
-6. **收尾**:節點 `lumos lint` 自驗 → `lumos doctor`。放行的坑之後可被 pitfalls 進場當隱患鏡頭餵(像 refcheck manifest,同 ④ 事故語料)。
+6. **能寫成規則的就寫成規則**(2026-09-13,[[Projects/社群規則第二批_計劃]]):★出口不是只有筆記★——筆記只有人讀到才生效,規則每次提交都會跑。放行的坑逐條判:
+   - **模式比得出來的** → 寫一條規則進 `.lumos/rules/`,**並且在 `.lumos/rules/samples/` 放一支會被它抓到的樣本**,登記進 `.lumos/rules/index.json`,跑 `lumos rule-check` 確認樣本真的翻紅。沒有會翻紅的樣本就不算完成——那條規則可能從頭到尾是死的,而死規則跟沒有規則一樣。
+   - **比不出來的**(要脈絡判斷、要跨檔推理、要業務知識) → 照舊只寫筆記,並在筆記裡寫一句「為什麼寫不成規則」。寫不出理由通常代表其實寫得成。
+7. **收尾**:節點 `lumos lint` 自驗 → `lumos doctor`;有寫規則就再跑一次 `lumos rule-check`。放行的坑之後可被 pitfalls 進場當隱患鏡頭餵(像 refcheck manifest,同 ④ 事故語料)。
 
 ## 誠實天花板(務必向人複述,別讓「駁不倒」被當「真」)
 1. **無機械 oracle**:「舉不了反證 ≠ 真」——這是**缺席證明謬誤**,加上**反證者能力上限**(refuter 沒駁倒可能只是它不夠強,同 canary/`[audit:]`/refcheck 天花板:驗形式不驗真值)。候選是「醒著的反證者沒駁倒」,不是「已證為真」。
 2. **人閘省不掉**:最終真偽 + 是否值得記,靠人對業務/技術現實判。skill 只做**篩選 + 推到眼前**,不做定論。
 3. **量少邊角**:linter 覆蓋大宗;這只補殘餘新坑。跑太勤 = 噪音。
+4. **寫成規則不等於規則是對的**:`lumos rule-check` 只證明那條規則抓得到它自己的樣本,不證明它在真實程式碼上不誤報。誤報要走 `lumos lint-waive` 放行,而放行次數會被健檢數——誤報多的規則遲早要被改掉或拿掉。
 
 > 設計見 `Projects/pitfalls網搜補漏_計劃`(解 `pitfalls-lint-integration_計劃` ③)。跳 design-loop(純散文 skill,design-loop 對散文空轉),驗收走 dogfood 真 stack。
 

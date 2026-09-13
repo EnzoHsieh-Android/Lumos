@@ -1,0 +1,769 @@
+---
+type: project
+status: doing
+created: 2026-09-13
+updated: 2026-09-13
+tags:
+  - type/project
+  - status/doing
+  - scope/stack-knowledge
+aliases:
+  - 社群規則第二批
+  - 依賴層與規則產線
+  - rule-check
+summary: |-
+  FLAG:DECISION
+  KEY:★範圍★ [[Projects/社群規則覆蓋每次提交_計劃]] 的第二批,把剩下三塊做完:④依賴層、③散文→規則產線、⑤逃逸帳閉環,外加②那塊還沒收尾的「把社群規則庫與依賴掃描器正式寫進菜單」
+  KEY:★這批的順序反了:先實作才補設計審(2026-09-13)★——編排者把 Enzo 的「你只給我做設計審」讀成「不要跑設計審」,實際意思是「不要只跑設計審」。實作完成後補跑,審出來的問題照樣折入;留這筆是因為順序影響可信度:審查員看到的是已經寫好的碼,比較容易被既成事實帶著走
+  KEY:★依賴宣告檔要自己走一路★——既有的「這支檔要不要掃」過濾把 .json/.txt/.lock 整批當成非程式碼擋掉,而依賴宣告檔大多是那幾種副檔名(實測:package.json/requirements.txt/Cargo.lock 全被擋)。宣告用 lint.json 的保留鍵 deps(不是副檔名),命中條件=這次改動碰到任何一支依賴宣告檔
+  KEY:★順手修掉一個既有的錯★——原本每條檢查命令都收到「全部的改動檔」,Python 的檢查器會拿到 Kotlin 檔;改成逐命令只給自己那個棧的檔
+  KEY:★產線的出口閘=每條自寫規則都要有一支會翻紅的樣本★——規則寫了不等於它抓得到東西;沒有樣本的規則可能從頭到尾是死的,而死規則跟沒有規則一樣。`lumos rule-check` 跑規則對它自己的樣本,不翻紅就擋
+  KEY:★閉環那一格=逃逸帳標「本來哪條規則該抓」★——不標的話那本帳只記得「漏掉了」,永遠不會變成下次擋得住的東西;`lumos rule-gap` 把「標了該抓但規則還沒寫」列成待辦(附漏過幾次)
+  KEY:★翻紅驗證抓到一支假守衛★——「逐命令只給自己的檔」原本只測配對函式,把消費端改壞測試照樣綠;補了一支守消費端的(假檢查工具把收到的檔名寫進記錄檔)才真的守得住
+  DEP:scripts/lumos(_is_dep_manifest / _lint_new_cmd_targets / cmd_rule_check / cmd_rule_gap / cmd_loop_escape 的 rule 欄位)｜.lumos/lint.json 的 deps 保留鍵｜.lumos/rules/｜[[Systems/pitfalls-lint-adapter]]｜[[Systems/linter精選目錄]]
+  TEST:t_lint_deps_layer｜t_lint_cmd_targets｜t_lint_cmd_targets_applied｜t_rule_check｜t_rule_gap｜t_escape_rule_field
+lands_in:
+  - Systems/pitfalls-lint-adapter
+  - Systems/linter精選目錄
+related:
+  - "[[Projects/社群規則覆蓋每次提交_計劃]]"
+  - "[[Projects/新增告警閘_計劃]]"
+  - "[[Systems/pitfalls-lint-adapter]]"
+  - "[[Systems/linter精選目錄]]"
+  - "[[Systems/pitfalls-code-loop]]"
+---
+# 社群規則第二批_計劃
+
+> 白話：第一批讓「社群規則」每次提交都會跑。這一批補完剩下三塊——**依賴也要看**（AI 最愛捏造套件版本）、**把坑寫成規則的出口**（散文只有人讀到才生效）、**漏網的要能變成下次的守衛**（逃逸帳自己不會長出規則）。
+
+## 條款
+
+- **[S1] 依賴宣告檔自己走一路。** 設定檔多一個保留鍵 `deps`（不是副檔名）；這次改動碰到任何一支依賴宣告檔就跑它宣告的命令。認得的檔名涵蓋 npm／Python／Go／Rust／Java／Ruby／PHP／.NET／Dart／Elixir／Swift／CocoaPods。**理由是實測**：既有的「這支檔要不要掃」過濾把 `.json`／`.txt`／`.lock` 整批當成非程式碼擋掉，不另外走就永遠掃不到。[test:t_lint_deps_layer]
+- **[S2] 每條命令只拿自己那個棧的檔。** 原本是把全部改動檔都丟給每條命令——Python 的檢查器會收到 Kotlin 檔，白跑一趟還可能吐出對不上的告警。依賴掃描只拿依賴宣告檔。[test:t_lint_cmd_targets]
+- **[S3] 上一條要守到消費端，不是只守配對函式。** 翻紅驗證實測：把判定裡取檔那一行改回「全部都給」，只測配對函式的那支測試照樣綠。所以另補一支——假檢查工具把自己收到的檔名寫進記錄檔，測試看得到誰拿到了什麼。[test:t_lint_cmd_targets_applied]
+- **[S4] 產線的出口閘：每條自寫規則都要有一支會讓它翻紅的樣本。** 規則放 `.lumos/rules/`、樣本放 `.lumos/rules/samples/`、登記進 `index.json`；`lumos rule-check` 跑規則對它自己的樣本，不翻紅就擋。**同時掃規則檔宣告的規則 id**——索引漏列一條，那條就永遠沒樣本也沒人發現。[test:t_rule_check]
+- **[S5] 閉環：逃逸帳要標「本來哪條規則該抓」。** 記逃逸帳時帶規則 id（真的沒有對應規則就寫 `none`）；`lumos rule-gap` 把「標了該抓、但規則還沒寫」列成待辦，附漏過幾次。[test:t_rule_gap]
+- **[S6] 逃逸帳的欄位要真的寫進去。** 旗標、記錄欄位、分派三處都要接上——少一處就是旗標收得下但沒人記。[test:t_escape_rule_field]
+- **[S7] 菜單收尾。** 社群規則庫與依賴掃描器寫進 linter 精選目錄，附**實測過**的宣告範本與三個實測踩到的坑。[manual:菜單那一節逐項核,標明哪個未實跑]
+- **[S8] 網搜補漏的出口改掉。** 那支 skill 原本的出口只有「寫進筆記」；改成逐條判「模式比得出來的寫成規則＋樣本，比不出來的才只寫筆記，而且要寫一句為什麼寫不成規則」。[manual:讀那支 skill 的 workflow 第 6 步]
+
+## 刻意不做
+
+- **不內建任何規則。** 規則庫讓給社群、自寫規則歸專案；核心只認格式不認工具，這是既有定位。
+- **不驗規則對不對。** `rule-check` 只證明規則抓得到自己的樣本，不證明它在真實程式碼上不誤報——誤報走放行管道，而放行次數會被健檢數。
+- **不自動從逃逸帳生規則。** `rule-gap` 只列待辦；把漏網變成規則需要人判斷那個坑的模式是什麼。
+
+## 誠實邊界
+
+- **依賴掃描器沒有實跑過。** 菜單裡那一行只查過官方文件；端到端測試用的是我自己寫的假掃描器（形狀對、格式對），真工具沒裝。
+- **零真專案實證。** 跟第一批一樣：誤報率、實際擋下什麼、放行比例都沒有數據。
+- **`rule-gap` 靠人標才有用。** 沒標規則的逃逸不會進統計——這是設計上的取捨（自動歸因會製造假訊號），代價是它的覆蓋率等於「有多少人記得帶那個旗標」。
+- **這批的設計審是事後補的。** 我先實作才跑審查（誤讀了指示）。代價要說清楚：審查員看到的是已經寫好的程式碼，比「還沒動手時的設計稿」更容易被既成事實帶著走——同樣一輪審查，事後補的那一輪含金量比事前低。
+
+
+<!-- 以下是同一輪的第二份材料:程式改動 -->
+
+```diff
+diff --git a/scripts/lumos b/scripts/lumos
+index 4fdb869c..b95faea8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7355,21 +7355,21 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
+ 
+ def _esc_clean(v, limit=200):
+     """逃逸帳顯示消毒(code-escape r1 B-1/B-2):控制字元(含換行/ESC)換空格——
+     --list 的「一行一筆」是攔截/逃逸週報 grep 的載重合約,使用者可控的 desc 不得打穿;
+     ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。"""
+     out = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in str(v))
+     return out if len(out) <= limit else out[:limit] + "…"
+ 
+ 
+ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
+-                    defect_ref=None, list_mode=False):
++                    defect_ref=None, list_mode=False, rule=None):
+     """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地)。
+     語意:某個審查迴圈收斂放行了,下游(實作/CI/prod/人)發現可歸因的缺陷→記一筆。
+     整套審查系統的 ground truth 側;與攔截帳(★圖譜攔截★記號)互為兩面。
+     append-only、不進任何閘;歸因是人工判斷(GIGO 同 cluster 歸併,計劃天花板明載)。
+     ★歸因守衛的職責範圍(r1 外家 ESC-01 裁明)★:只防「編號打錯」(實存性),不驗迴圈
+     收斂/放行狀態——那是語意判斷,歸人;守衛驗語意=偷渡閘,計劃明文不做。"""
+     log = env.vault.parent / ".escape-log.jsonl"
+     _SEV_W = {"minor": 0, "major": 1, "blocker": 2}
+     if list_mode:
+         if loop_id or stage or severity or desc or defect_ref:
+@@ -7444,20 +7444,24 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
+             msg += f"\n  (審查帳另有 {led_bad} 行壞損被跳過——查不到也可能是編號在那幾行裡)"
+         print(msg, file=sys.stderr)
+         return 2
+     import datetime as _dt_esc
+     import secrets as _sec_esc
+     rec = {"ts": _dt_esc.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "token": "ESC-" + _sec_esc.token_hex(4),       # 落盤自驗唯一鍵(canary auto-mint 慣例)
+            "loop": loop_id, "stage": stage.strip(), "severity": severity, "desc": desc.strip()}
+     if defect_ref:
+         rec["defect_ref"] = defect_ref
++    if rule:
++        # ★閉環的那一格★:標「本來哪條規則該抓」,漏網才長得出新的守衛;
++        # 不標的話這本帳只記得「漏掉了」,永遠不會變成下次擋得住的東西(看待辦:lumos rule-gap)
++        rec["rule"] = rule.strip()
+     if log.is_symlink():
+         # r2 終態席實測:既存 symlink 會繞過建檔保護、共用寫入原語 open('a') 跟隨連結寫進外部檔——
+         # 每次寫前先擋本體(殘餘=判斷與開檔間競態,best-effort 同 _ledger_append 家族誠實降級)
+         print(f"擋下:逃逸帳檔是一個符號連結,不往裡寫(帳本必須是普通檔案):\n    {log}", file=sys.stderr)
+         return 2
+     if not log.exists():
+         try:
+             os.close(os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644))
+         except FileExistsError:
+             pass
+@@ -17181,20 +17185,186 @@ def cmd_lint_waive(key=None, note=None, repo=None, as_json=False, show=False):
+     if not ok:
+         print(f"✗ lint-waive: {err}", file=sys.stderr)
+         return 1
+     _gate_event_or_warn(repo_root, _LINT_NEW_GATE_NAME, "waived", note.strip()[:120], hard=False)
+     print(f"✓ lint-waive: 指紋 {key} 已放行,理由記下來了——{note.strip()}")
+     print(f"  紀錄寫進 {_LINT_NEW_WAIVERS_REL}(這個檔要一起提交,只留在本機的話換台機器會整批復活擋人)")
+     print("  放行是合法的,但健檢會數這個專案放行了幾條。")
+     return 0
+ 
+ 
++def _rules_index_path(repo_root):
++    return Path(repo_root) / ".lumos" / "rules" / "index.json"
++
++
++def _rules_load(repo_root):
++    """讀自寫規則的索引。回 (dict, 錯誤訊息 or None);沒有索引回 ({}, None)。
++    形狀:{"cmd": "<含兩個佔位的命令>", "rules": {"<規則id>": "<樣本檔相對路徑>"}}。"""
++    import json
++    p = _rules_index_path(repo_root)
++    if not p.is_file():
++        return ({}, None)
++    try:
++        data = json.loads(p.read_text(encoding="utf-8"))
++    except Exception as e:
++        return ({}, "規則索引讀不了(" + e.__class__.__name__ + "):.lumos/rules/index.json")
++    if not isinstance(data, dict) or not isinstance(data.get("rules"), dict):
++        return ({}, "規則索引格式不對(要有 cmd 與 rules 兩個欄位):.lumos/rules/index.json")
++    return (data, None)
++
++
++_RULE_ID_RE = re.compile(r'^\s*(?:-\s*)?(?:"?id"?)\s*:\s*"?([A-Za-z0-9_.\-]+)"?\s*$', re.M)
++
++
++def _rules_declared_ids(repo_root):
++    """掃 .lumos/rules/ 底下的規則檔,抓出它們宣告了哪些規則 id。
++    ★為什麼要掃檔不是只信索引★:索引漏列一條規則,那條就永遠沒有樣本、也沒人會發現。"""
++    base = Path(repo_root) / ".lumos" / "rules"
++    ids = {}
++    if not base.is_dir():
++        return ids
++    for f in sorted(base.rglob("*")):
++        if not f.is_file() or f.name == "index.json":
++            continue
++        if "samples" in f.relative_to(base).parts:
++            continue
++        if f.suffix.lower() not in (".yml", ".yaml", ".json"):
++            continue
++        try:
++            text = f.read_text(encoding="utf-8", errors="replace")
++        except OSError:
++            continue
++        for m in _RULE_ID_RE.finditer(text):
++            ids.setdefault(m.group(1), str(f.relative_to(repo_root)))
++    return ids
++
++
++def cmd_rule_check(repo=None, as_json=False):
++    """驗「每條自寫規則都有一個會讓它翻紅的樣本」。
++    ★這是散文變成規則的出口閘★:網搜補漏、事故筆記裡的坑,寫成規則才會每次提交都跑;
++    而「寫了一條規則」不等於「那條規則真的會抓到東西」——沒有會翻紅的樣本,它可能從頭到尾都是死的。
++    rc:0=每條都有樣本且樣本真的翻紅 / 1=有規則沒樣本或樣本不翻紅 / 2=索引讀不了。"""
++    import json
++    import shlex as _shlex
++    repo_root = _anchor_repo_root(repo)
++    if repo_root is None:
++        print("✗ rule-check: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)
++        return 2
++    idx, err = _rules_load(repo_root)
++    if err:
++        print("✗ rule-check: " + err, file=sys.stderr)
++        return 2
++    declared = _rules_declared_ids(repo_root)
++    if not idx and not declared:
++        if as_json:
++            print(json.dumps({"rules": 0, "problems": []}, ensure_ascii=False))
++            return 0
++        print("這個專案還沒有自寫規則(.lumos/rules/ 是空的或不存在)。")
++        print("  要把一個坑固化成每次提交都會跑的規則:在 .lumos/rules/ 放規則檔,")
++        print("  在 .lumos/rules/samples/ 放一支「會被它抓到」的樣本,並登記進 .lumos/rules/index.json。")
++        return 0
++    cmd = idx.get("cmd")
++    mapping = idx.get("rules") or {}
++    problems = []
++    for rid, src in sorted(declared.items()):
++        if rid not in mapping:
++            problems.append({"rule": rid, "issue": "規則檔宣告了它,但索引沒登記樣本(" + src + ")"})
++    checked, fired = 0, 0
++    if not isinstance(cmd, str) or _LINT_NEW_FILES_TOKEN not in cmd or "{LINT_SARIF_OUT}" not in cmd:
++        problems.append({"rule": "<cmd>", "issue": "索引的 cmd 要是字串,而且要同時含 {LINT_SARIF_OUT} 與 {LINT_FILES} 兩個佔位"})
++    else:
++        base = Path(repo_root) / ".lumos" / "rules"
++        for rid, sample in sorted(mapping.items()):
++            sp = (base / sample) if not Path(sample).is_absolute() else Path(sample)
++            if not sp.is_file():
++                problems.append({"rule": rid, "issue": "樣本檔不存在:" + str(sample)})
++                continue
++            checked += 1
++            run_cmd = cmd.replace(_LINT_NEW_FILES_TOKEN, _shlex.quote(str(sp)))
++            claims, ok = _lint_run_and_parse(run_cmd, repo_root)
++            if not ok:
++                problems.append({"rule": rid, "issue": "規則跑不動(工具沒裝?命令壞了?),這條等於沒有守衛"})
++                continue
++            if any((c.get("rule") or "").endswith(rid) for c in claims):
++                fired += 1
++            else:
++                problems.append({"rule": rid, "issue": "樣本沒被這條規則抓到——樣本不會翻紅的話,這條規則是死的"})
++    if as_json:
++        print(json.dumps({"rules": len(mapping), "checked": checked, "fired": fired,
++                          "problems": problems}, ensure_ascii=False))
++        return 1 if problems else 0
++    if not problems:
++        print("✓ rule-check: " + str(fired) + " 條自寫規則,每條都有樣本而且樣本真的被抓到了")
++        print("  (這只證明規則活著、抓得到它自己的樣本;不證明它在真實程式碼上不誤報)")
++        return 0
++    print("✗ rule-check: " + str(len(problems)) + " 條規則沒有會翻紅的樣本:")
++    for pr in problems:
++        print("  [" + pr["rule"] + "] " + pr["issue"])
++    print("在意的原因:規則寫了不等於它會抓到東西。沒有樣本的規則可能從頭到尾都是死的,而死規則跟沒有規則一樣。")
++    print("接下來:")
++    print("    在 .lumos/rules/samples/ 放一支會被它抓到的樣本,登記進 .lumos/rules/index.json 的 rules")
++    return 1
++
++
++def cmd_rule_gap(repo=None, as_json=False):
++    """把逃逸帳裡「本來哪條規則該抓」的標記,變成「該寫哪條規則」的待辦。
++    ★這是閉環的那一環★:審查放行之後下游才發現的缺陷,如果有人標了它屬於哪條規則,
++    就能算出「這條規則還沒寫」——沒有這一步,逃逸帳只是一本帳,不會長出新的守衛。"""
++    import json
++    repo_root = _anchor_repo_root(repo)
++    if repo_root is None:
++        print("✗ rule-gap: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)
++        return 2
++    log = Path(repo_root) / "docs" / ".escape-log.jsonl"
++    counts, unlabeled = {}, 0
++    if log.is_file():
++        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
++            line = line.strip()
++            if not line.startswith("{"):
++                continue
++            try:
++                ev = json.loads(line)
++            except Exception:
++                continue
++            rid = (ev.get("rule") or "").strip()
++            if not rid or rid == "none":
++                unlabeled += 1
++                continue
++            counts.setdefault(rid, {"n": 0, "desc": ev.get("desc", "")[:60]})
++            counts[rid]["n"] += 1
++    have = set(_rules_declared_ids(repo_root))
++    idx, _err = _rules_load(repo_root)
++    have |= set((idx.get("rules") or {}))
++    missing = {k: v for k, v in counts.items() if k not in have}
++    if as_json:
++        print(json.dumps({"missing": missing, "covered": sorted(set(counts) & have),
++                          "unlabeled": unlabeled}, ensure_ascii=False))
++        return 0
++    if not counts and not unlabeled:
++        print("逃逸帳是空的:還沒有任何一筆「審查放行後下游才抓到」的紀錄。")
++        print("  空≠零逃逸——也可能是沒人記。要記:")
++        print("    lumos loop escape <迴圈編號> --stage <發現階段> --severity <等級> --desc <一句> --rule <本來哪條規則該抓|none>")
++        return 0
++    if missing:
++        print("這些漏網的問題有人標了「本來哪條規則該抓」,但那條規則還不存在(" + str(len(missing)) + " 條):")
++        for rid, v in sorted(missing.items(), key=lambda kv: -kv[1]["n"]):
++            print("  " + rid + "(漏過 " + str(v["n"]) + " 次)—— " + v["desc"])
++        print("在意的原因:逃逸帳只記「漏掉了」,不會自己長出守衛;把重複漏過的那幾條寫成規則,下次才擋得住。")
++        print("接下來:")
++        print("    在 .lumos/rules/ 寫規則 + 在 samples/ 放會翻紅的樣本,然後 lumos rule-check")
++    else:
++        print("逃逸帳裡標到的規則都已經寫出來了(" + str(len(counts)) + " 條)。")
++    if unlabeled:
++        print("另有 " + str(unlabeled) + " 筆沒標「本來哪條規則該抓」——沒標的算不進這個統計,記的時候順手帶 --rule。")
++    return 0
++
++
+ def _testlayers_load_config(repo_root):
+     """讀取 repo_root/.lumos/test-layers.json → dict;不存在/解析失敗/非 dict → None(fail-open)。"""
+     import json
+     p = Path(repo_root) / ".lumos" / "test-layers.json"
+     if not p.exists():
+         return None
+     try:
+         with open(p, encoding="utf-8") as f:
+             cfg = json.load(f)
+         return cfg if isinstance(cfg, dict) else None
+@@ -17354,20 +17524,66 @@ _LINT_NEW_DEFAULTS = {
+     "budget_sec": 300,          # 整條閘的總預算(秒)
+     "per_cmd_floor_sec": 30,    # 單條命令的保底時間:剩餘預算不足這個數就不跑,不用必然逾時的值去跑它
+     "max_file_lines": 4000,     # 單檔行數上限(實測:843 行 1.8 秒、26718 行 105 秒,超線性)
+     "max_file_bytes": 400000,   # 單檔位元組上限——★只看行數會被「整支檔只有一行」的壓縮檔騙過去★
+ }
+ _LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
+ _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
+ _LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 否則記帳靜默失敗
+ _LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
+ _LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
++# ★依賴層(2026-09-13)★:依賴宣告檔不是程式碼檔,既有的「要不要掃」過濾會把 .json/.txt/.lock 整批擋掉,
++# 所以它們走自己這條路。宣告用 lint.json 的保留鍵 "deps"(不是副檔名),命中條件=這次改動碰到任何一支依賴宣告檔。
++# 為什麼值得接:AI 寫碼特有的錯裡,捏造套件版本是最好抓的一種,而工具是現成的(免費、原生吐同一個格式)。
++_LINT_DEPS_KEY = "deps"
++_DEP_MANIFESTS = frozenset((
++    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
++    "requirements.txt", "requirements-dev.txt", "Pipfile", "Pipfile.lock",
++    "poetry.lock", "pyproject.toml", "uv.lock",
++    "go.mod", "go.sum", "Cargo.toml", "Cargo.lock",
++    "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile",
++    "Gemfile", "Gemfile.lock", "composer.json", "composer.lock",
++    "packages.lock.json", "pubspec.yaml", "pubspec.lock", "mix.lock",
++    "Package.resolved", "Podfile.lock",
++))
++_DEP_MANIFEST_SUFFIXES = (".csproj", ".fsproj", ".vbproj")
++
++
++def _is_dep_manifest(path):
++    """這支檔是不是依賴宣告檔(檔名整個比對,或 .NET 專案檔那種靠副檔名的)。"""
++    name = Path(path).name
++    return name in _DEP_MANIFESTS or name.endswith(_DEP_MANIFEST_SUFFIXES)
++
++
++def _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg):
++    """把「哪條命令該吃哪些檔」配對好。回 [(命令, [現在路徑…]) …]。
++    ★每條命令只拿自己那個棧的檔★——不分的話,Python 的檢查器會收到 Kotlin 檔,
++    白跑一趟還可能吐出對不上的告警。依賴掃描只拿依賴宣告檔。"""
++    out, seen = [], set()
++    by_ext = {}
++    for now_path, _b in code_pairs:
++        by_ext.setdefault(Path(now_path).suffix.lstrip("."), []).append(now_path)
++    for ext, files in by_ext.items():
++        for cmd in (lint_cfg.get(ext) or []):
++            if not isinstance(cmd, str):
++                continue
++            key = (cmd, tuple(sorted(files)))
++            if key in seen:
++                continue
++            seen.add(key)
++            out.append((cmd, sorted(files)))
++    if dep_pairs:
++        dep_files = sorted({a for a, _b in dep_pairs})
++        for cmd in (lint_cfg.get(_LINT_DEPS_KEY) or []):
++            if isinstance(cmd, str):
++                out.append((cmd, dep_files))
++    return out
+ 
+ 
+ def _lint_new_config(repo_root):
+     """讀 .lumos/config.json 的 lint_new 區塊(同 _stack_questions_config 慣例,直讀不載 vault)。
+     ★不放 .lumos/lint.json★:那個檔的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證,
+     多一個設定鍵會讓 lint-check/doctor 對每個採用的專案判紅。
+     回 {gate, budget_sec, per_cmd_floor_sec, max_file_lines, max_file_bytes, warnings}。"""
+     import json
+     cfg = dict(_LINT_NEW_DEFAULTS)
+     cfg["warnings"] = []
+@@ -17627,31 +17843,35 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
+         out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具(.lumos/lint.json 不存在)"
+         return out
+ 
+     # 版本代號:兩端都要解析得出來,任一端解析不出(例如只給單一參考點、終點其實是工作樹)就是環境不可用
+     base_ref, head_ref = _diff_range_ends(repo_root, diff_range)
+     if not base_ref or not head_ref:
+         out.update(status="env-unavailable", autopass=True,
+                    reason="這段範圍算不出「改動前」與「現在」兩個版本代號(終點可能是工作目錄),不硬猜")
+         return out
+ 
+-    pairs, err = _lint_new_changed_files(repo_root, diff_range)
++    pairs_all, err = _lint_new_changed_files(repo_root, diff_range)
+     if err:
+         out.update(status="env-unavailable", autopass=True, reason=err)
+         return out
+-    pairs = [(a, b) for (a, b) in pairs if _stack_changed_ok(a)]
++    # 兩路分開:程式碼檔走既有的「要不要掃」過濾;依賴宣告檔走自己的判斷
++    # (那個過濾把 .json/.txt/.lock 整批當成非程式碼擋掉,依賴宣告檔大多是那幾種副檔名)
++    code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a)]
++    dep_pairs = [(a, b) for (a, b) in pairs_all if _is_dep_manifest(a)]
++    pairs = code_pairs + [x for x in dep_pairs if x not in code_pairs]
+     if not pairs:
+-        out["status"], out["reason"] = "no-files", "這次改動沒有要掃的程式碼檔"
++        out["status"], out["reason"] = "no-files", "這次改動沒有要掃的程式碼檔或依賴宣告檔"
+         return out
+ 
+-    cmds = _lint_stacks_for_diff({a: set() for a, _b in pairs}, lint_cfg)
+-    if not cmds:
++    cmd_targets = _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg)
++    if not cmd_targets:
+         out["status"], out["reason"] = "no-files", "這次改動的副檔名沒有對應的檢查工具宣告"
+         return out
+ 
+     waivers, werr = _lint_waivers_load(repo_root)
+     if werr:
+         out.update(status="env-unavailable", autopass=True, reason=werr)
+         return out
+ 
+     _lint_new_clean_stale(repo_root)
+     root = Path(repo_root) / ".lumos"
+@@ -17674,34 +17894,34 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
+             n_bytes, n_lines = len(raw), raw.count(b"\n") + 1
+             if n_lines > cfg["max_file_lines"] or n_bytes > cfg["max_file_bytes"]:
+                 too_big.append({"file": f, "lines": n_lines, "bytes": n_bytes,
+                                 "over": "行數" if n_lines > cfg["max_file_lines"] else "位元組數"})
+                 head_files.pop(f, None)
+                 base_files.pop(f, None)
+         out["oversize"] = too_big
+ 
+         base_claims, head_claims = [], []
+         budget_end = deadline if deadline else (_time.monotonic() + cfg["budget_sec"])
+-        for cmd in cmds:
++        for cmd, want_files in cmd_targets:
+             if _LINT_NEW_FILES_TOKEN not in cmd:
+                 # 逐命令降級:只影響這一條命令,不讓整道閘降級(舊宣告不擋人,但不能拖累合格的新宣告)
+                 out["report_only"].append(cmd)
+                 continue
+             left = budget_end - _time.monotonic()
+             if left < cfg["per_cmd_floor_sec"]:
+                 # ★不要用一個必然逾時的值去跑它★:剩下的命令沒跑到,判定跟「檔太大」同類(擋),不歸自動放行
+                 out["undone"].append({"kind": "budget", "cmd": cmd[:80],
+                                       "detail": "時間預算剩 %.0f 秒,不足單條保底 %d 秒" % (max(left, 0), cfg["per_cmd_floor_sec"])})
+                 continue
+             ok_both = True
+             for side, files, wdir in (("base", base_files, base_dir), ("head", head_files, head_dir)):
+-                targets = [files[f] for f in sorted(files)] if files else []
++                targets = [files[f] for f in want_files if f in files]
+                 if not targets:
+                     continue
+                 import shlex as _shlex
+                 # 多檔各自跳脫後以空白相接——★不是整串一起跳脫★(整串 quote 會把好幾個路徑黏成一個參數)
+                 joined = " ".join(_shlex.quote(t) for t in targets)
+                 run_cmd = cmd.replace(_LINT_NEW_FILES_TOKEN, joined)
+                 prefix = os.path.relpath(str(wdir), str(repo_root))
+                 claims, ok = _lint_run_and_parse(run_cmd, repo_root, path_prefix=prefix,
+                                                  timeout=max(1, int(budget_end - _time.monotonic())))
+                 if not ok:
+@@ -26452,20 +26672,22 @@ HELP_WHEN = {
+     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
+     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+     "ci-status": "只看上次 CI 結果,不打網路。",
+     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+     "build": "挖掘檔案↔測試的關係,存成地圖。",
+     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+     "lint-waive": "新增告警閘擋下來的那條是誤報?帶指紋和理由放行,會留痕被統計。--list 看放行過什麼。",
++    "rule-check": "自寫規則每條都有會翻紅的樣本嗎。沒樣本的規則可能是死的。",
++    "rule-gap": "逃逸帳標了該抓卻還沒寫的規則,列成待辦。",
+     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
+     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+@@ -26757,20 +26979,21 @@ def main():
+     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
+     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
+     le = lsub.add_parser("escape",
+                          help="逃逸帳:迴圈放行後下游抓到可歸因缺陷→記一筆(--list 看全帳)",
+                          description="什麼時候用:某個審查迴圈收斂放行了,但下游(實作/CI/prod/人)發現可歸因的缺陷——記一筆逃逸帳。append-only、不進任何閘;歸因是人工判斷,編號必須實存於審查帳。看全帳用 --list(唯讀,不能與記帳參數混用)。")
+     le.add_argument("esc_loop_id", nargs="?", default=None, metavar="loop_id", help="放行該缺陷的迴圈編號(必須存在於審查帳)")
+     le.add_argument("--stage", dest="esc_stage", help="在哪一站發現:實作/code-loop/CI/prod/使用者回報…(自由字串)")
+     le.add_argument("--severity", dest="esc_severity", choices=("minor", "major", "blocker"), help="缺陷嚴重度(同審查帳值域)")
+     le.add_argument("--desc", dest="esc_desc", help="一句描述:什麼缺陷、為何可歸因到該迴圈")
+     le.add_argument("--defect-ref", dest="esc_ref", help="佐證指標(commit/Issue/報告路徑,選配)")
++    le.add_argument("--rule", dest="esc_rule", help="本來哪條規則該抓到它(規則 id;真的沒有對應規則就寫 none)。標了才算得出「該寫哪條規則」——看待辦:lumos rule-gap")
+     le.add_argument("--list", dest="esc_list", action="store_true", help="列全帳(按迴圈分組)")
+     ll = lsub.add_parser("list", help="哪些審查迴圈還開著(帳面沒關門的);next/status 都要 loop_id,這支先給你編號")
+     ll.add_argument("--days", dest="ll_days", type=int, default=14, help="幾天內有動才算「在飛」(預設 14)")
+     ll.add_argument("--stale", dest="ll_stale", action="store_true", help="只看超過門檻沒動又沒關門的(空轉候選)")
+     ll.add_argument("--all", dest="ll_all", action="store_true", help="連已關門的也列")
+     ll.add_argument("--exclude", dest="ll_exclude", action="append", default=[], metavar="前綴",
+                     help="略過編號以此開頭的迴圈(可重複;例:--exclude auto- 排掉自主迴圈的每日場次)")
+     ll.add_argument("--json", dest="ll_json", action="store_true")
+     ll.add_argument("--now", dest="ll_now", metavar="YYYY-MM-DD", help="指定「今天」是哪一天(重算/測試用;預設系統日期)")
+     lcs = lsub.add_parser("canary-stats",
+@@ -27116,20 +27339,28 @@ def main():
+     p.add_argument("--smoke", dest="lc_smoke", action="store_true", help="真跑每條宣告命令、驗有無產出可解析 SARIF(抓 task 不存在/工具沒裝的空殼)")
+     p.add_argument("--json", dest="lc_json", action="store_true", help="JSON 輸出")
+ 
+     p = sub.add_parser("lint-waive", help="把某條新增告警的指紋標成已放行(新增告警閘的逃生門;要寫理由、會被統計)")
+     p.add_argument("waive_key", nargs="?", help="擋下訊息裡印的那串指紋")
+     p.add_argument("--note", dest="waive_note", help="為什麼放行(必填)")
+     p.add_argument("--repo", dest="waive_repo", help="repo root(預設 cwd 向上找 .git)")
+     p.add_argument("--list", dest="waive_list", action="store_true", help="列出這個專案已經放行的條目")
+     p.add_argument("--json", dest="waive_json", action="store_true", help="JSON 輸出")
+ 
++    p = sub.add_parser("rule-check", help="驗每條自寫規則都有一個會讓它翻紅的樣本(規則寫了不等於它抓得到東西)")
++    p.add_argument("--repo", dest="rc_repo", help="repo root(預設 cwd 向上找 .git)")
++    p.add_argument("--json", dest="rc_json", action="store_true", help="JSON 輸出")
++
++    p = sub.add_parser("rule-gap", help="逃逸帳裡標了「本來哪條規則該抓」但規則還沒寫的,列成待辦")
++    p.add_argument("--repo", dest="rg_repo", help="repo root(預設 cwd 向上找 .git)")
++    p.add_argument("--json", dest="rg_json", action="store_true", help="JSON 輸出")
++
+     p = sub.add_parser("sqlfluff-sarif", help="sqlfluff --format json(stdin)→ SARIF v2.1(橋接 SQL linter 進 lint-adapter)")
+     p.add_argument("--out", dest="sqlfluff_out", help="輸出 SARIF 檔路徑(預設 stdout)")
+ 
+     p = sub.add_parser("stylelint-sarif", help="stylelint --formatter json(stdin)→ SARIF v2.1(橋接 CSS/SCSS linter 進 lint-adapter)")
+     p.add_argument("--out", dest="stylelint_out", help="輸出 SARIF 檔路徑(預設 stdout)")
+ 
+     p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
+     asub = p.add_subparsers(dest="anchor_cmd", required=True)
+     av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
+     av.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+@@ -27293,20 +27524,24 @@ def main():
+                             branch=getattr(args, "pf_branch", None))
+     if args.cmd == "testmap":
+         if args.tmcmd == "build":
+             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
+         return cmd_testmap_affected(diff=args.tm_diff, repo=args.tm_repo,
+                                     as_json=args.tm_json)
+     if args.cmd == "test-layers":
+         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
+     if args.cmd == "lint-check":
+         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
++    if args.cmd == "rule-check":
++        return cmd_rule_check(repo=args.rc_repo, as_json=args.rc_json)
++    if args.cmd == "rule-gap":
++        return cmd_rule_gap(repo=args.rg_repo, as_json=args.rg_json)
+     if args.cmd == "lint-waive":
+         return cmd_lint_waive(key=args.waive_key, note=args.waive_note, repo=args.waive_repo,
+                               as_json=args.waive_json, show=args.waive_list)
+     if args.cmd == "dispatch-lens":
+         _modes = [n for n, v in (("--arm", args.lens_arm), ("--claim", args.lens_claim), ("--disarm", args.lens_disarm), ("--status", args.lens_status), ("--spec", bool(args.lens_spec))) if v]
+         if len(_modes) > 1:
+             print(f"擋下:{'、'.join(_modes)} 一次只能給一個(給多個會靜默照固定順序做,操作者以為 arm 了其實是別的)", file=sys.stderr)
+             return 2
+         if args.lens_spec:
+             return cmd_dispatch_lens_spec(args.lens_spec, repo=args.lens_repo, as_json=args.lens_json)
+@@ -27543,21 +27778,21 @@ def main():
+             return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
+                                             as_json=args.vp_json)
+         if args.lcmd == "replay":
+             return cmd_loop_replay(env, args.rp_loop_id, golden=args.rp_golden, freeze=args.rp_freeze,
+                                    spec=args.rp_spec, note=args.rp_note, repo=args.rp_repo)
+         if args.lcmd == "rewrite":
+             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
+         if args.lcmd == "escape":
+             return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
+                                    severity=args.esc_severity, desc=args.esc_desc,
+-                                   defect_ref=args.esc_ref, list_mode=args.esc_list)
++                                   defect_ref=args.esc_ref, list_mode=args.esc_list, rule=args.esc_rule)
+         if args.lcmd == "next":
+             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json, orchestrator=args.next_orch,
+                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
+         # capture-counts 已在 vault-free 段提前處理(見上)
+ 
+     if args.cmd == "guard":
+         if args.gcmd == "list":
+             return cmd_guard_list(env, unbound_only=args.unbound)
+         if args.gcmd == "scaffold":
+             return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 3975f3c0..f4e15db7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -39936,12 +39936,191 @@ def t_lint_autopass_counted():
+     check("S14 只數這道閘最近的自動放行", m._lint_new_autopass_count(root) == 1, str(m._lint_new_autopass_count(root)))
+     check("S14 沒有帳就回 0,不拋例外", m._lint_new_autopass_count(Path(tempfile.mkdtemp())) == 0, "")
+ 
+ 
+ def t_lint_gov_gate_name():
+     """[S9] 閘名要登記——沒登記的閘名,記帳那支會拒寫,「有記帳」整句話就是假的。"""
+     m = _lng_module()
+     check("閘名 lint-new 有登記", "lint-new" in m._KNOWN_GATES, str(m._KNOWN_GATES[-3:]))
+     check("程式裡用的是同一個名字", m._LINT_NEW_GATE_NAME == "lint-new", m._LINT_NEW_GATE_NAME)
+ 
++
++# ── 社群規則第二批:依賴層 / 產線 / 閉環(2026-09-13)──────────────────────────
++
++
++def t_lint_deps_layer():
++    """依賴宣告檔走自己那條路:它們在既有的「要不要掃」過濾裡會被當成非程式碼丟掉。"""
++    m = _lng_module()
++    # 認得的檔名(含 .NET 那種靠副檔名的)
++    for f in ("package.json", "requirements.txt", "go.mod", "Cargo.lock", "Gemfile.lock",
++              "pom.xml", "app/My.csproj", "poetry.lock"):
++        check(f"依賴宣告檔認得 {f}", m._is_dep_manifest(f) is True, f)
++    for f in ("app.py", "src/main.kt", "README.md", "data.json"):
++        check(f"一般檔不算依賴宣告檔 {f}", m._is_dep_manifest(f) is False, f)
++    # ★這是這條路存在的理由★:這幾種副檔名被既有過濾擋掉,不另外走就永遠掃不到
++    for f in ("package.json", "requirements.txt", "Cargo.lock"):
++        check(f"{f} 確實被既有的程式碼過濾擋掉", m._stack_changed_ok(f) is False, f)
++
++    root, git = _lng_repo("gctl-lngdep-")
++    helper = Path(tempfile.mkdtemp(prefix="gctl-lngdep-h-"))
++    cmd = _lng_fake_linter(helper, "d.py", [["BAD-DEP", "VULN", "這個版本有已知漏洞"]])
++    import json as _j
++    (root / ".lumos").mkdir(parents=True, exist_ok=True)
++    (root / ".lumos" / "lint.json").write_text(_j.dumps({"deps": [cmd]}), encoding="utf-8")
++    (root / "package.json").write_text('{"dependencies": {"ok": "1"}}\n', encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "base")
++    base = git("rev-parse", "HEAD").stdout.strip()
++    (root / "package.json").write_text('{"dependencies": {"ok": "1", "BAD-DEP": "0.0.1"}}\n', encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "加依賴")
++    v = m._lint_new_verdict(root, f"{base}..HEAD")
++    check("依賴層:改依賴宣告檔會被擋", v["blocked"] is True and len(v["new"]) == 1, str(v))
++    check("依賴層:抓到的是那支宣告檔", v["new"] and v["new"][0]["file"] == "package.json", str(v["new"]))
++
++
++def t_lint_cmd_targets():
++    """每條命令只拿自己那個棧的檔——不分的話 Python 的檢查器會收到 Kotlin 檔。"""
++    m = _lng_module()
++    code = [("a.py", "a.py"), ("b.py", "b.py"), ("c.kt", "c.kt")]
++    deps = [("package.json", "package.json")]
++    cfg = {"py": ["PY {LINT_FILES}"], "kt": ["KT {LINT_FILES}"], "deps": ["DEP {LINT_FILES}"]}
++    got = dict((c, tuple(f)) for c, f in m._lint_new_cmd_targets(code, deps, cfg))
++    check("py 命令只拿 .py", got.get("PY {LINT_FILES}") == ("a.py", "b.py"), str(got))
++    check("kt 命令只拿 .kt", got.get("KT {LINT_FILES}") == ("c.kt",), str(got))
++    check("依賴命令只拿依賴宣告檔", got.get("DEP {LINT_FILES}") == ("package.json",), str(got))
++    # 沒有依賴宣告檔改動時,依賴命令不出現(不要為了沒改的東西白跑一趟)
++    got2 = dict((c, tuple(f)) for c, f in m._lint_new_cmd_targets(code, [], cfg))
++    check("沒改依賴宣告檔就不跑依賴命令", "DEP {LINT_FILES}" not in got2, str(got2))
++
++
++def _lng_rule_repo(fire=True):
++    """建一個帶自寫規則的臨時 repo;fire=False 時樣本故意不會被規則抓到。"""
++    import json as _j
++    import sys as _s
++    root = Path(tempfile.mkdtemp(prefix="gctl-lngrule-"))
++    import subprocess as sp
++    sp.run(["git", "init"], cwd=root, capture_output=True)
++    rules = root / ".lumos" / "rules"
++    (rules / "samples").mkdir(parents=True, exist_ok=True)
++    (rules / "r.yml").write_text("rules:\n  - id: no-bad\n    message: x\n", encoding="utf-8")
++    (rules / "samples" / "no-bad.txt").write_text("BAD\n" if fire else "fine\n", encoding="utf-8")
++    # 假規則引擎:看到 BAD 就報 no-bad
++    helper = Path(tempfile.mkdtemp(prefix="gctl-lngrule-h-"))
++    script = helper / "eng.py"
++    script.write_text(
++        "import sys, json\n"
++        "out = sys.argv[1]\n"
++        "res = []\n"
++        "for t in sys.argv[2:]:\n"
++        "    for i, ln in enumerate(open(t, encoding='utf-8').read().splitlines(), 1):\n"
++        "        if 'BAD' in ln:\n"
++        "            res.append({'ruleId': 'no-bad', 'message': {'text': 'x'}, 'locations': [\n"
++        "                {'physicalLocation': {'artifactLocation': {'uri': t},\n"
++        "                 'region': {'startLine': i, 'endLine': i}}}]})\n"
++        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Fake'}}, 'results': res}]}, open(out, 'w'))\n",
++        encoding="utf-8")
++    (rules / "index.json").write_text(_j.dumps({
++        "cmd": f"{_s.executable} {script} {{LINT_SARIF_OUT}} {{LINT_FILES}}",
++        "rules": {"no-bad": "samples/no-bad.txt"}}), encoding="utf-8")
++    return root
++
++
++def t_rule_check():
++    """[產線] 每條自寫規則都要有一個會讓它翻紅的樣本——規則寫了不等於它抓得到東西。"""
++    import io
++    import contextlib
++    m = _lng_module()
++    good = _lng_rule_repo(fire=True)
++    buf = io.StringIO()
++    with contextlib.redirect_stdout(buf):
++        rc = m.cmd_rule_check(repo=str(good))
++    check("產線:樣本真的翻紅→過", rc == 0 and "每條都有樣本" in buf.getvalue(), f"rc={rc} {buf.getvalue()[:120]}")
++
++    bad = _lng_rule_repo(fire=False)
++    buf2 = io.StringIO()
++    with contextlib.redirect_stdout(buf2):
++        rc2 = m.cmd_rule_check(repo=str(bad))
++    check("產線:樣本不翻紅→擋", rc2 == 1 and "這條規則是死的" in buf2.getvalue(), f"rc={rc2} {buf2.getvalue()[:160]}")
++
++    # 規則檔宣告了、索引沒登記樣本 → 也要擋(索引漏列=那條永遠沒樣本也沒人發現)
++    extra = _lng_rule_repo(fire=True)
++    (extra / ".lumos" / "rules" / "r2.yml").write_text("rules:\n  - id: no-other\n    message: y\n", encoding="utf-8")
++    buf3 = io.StringIO()
++    with contextlib.redirect_stdout(buf3):
++        rc3 = m.cmd_rule_check(repo=str(extra))
++    check("產線:規則沒登記樣本→擋", rc3 == 1 and "索引沒登記樣本" in buf3.getvalue(), f"rc={rc3} {buf3.getvalue()[:160]}")
++
++    # 掃規則檔抓 id:兩種寫法都要認得
++    ids = m._rules_declared_ids(extra)
++    check("產線:掃得出規則檔宣告的 id", set(ids) == {"no-bad", "no-other"}, str(sorted(ids)))
++
++
++def t_rule_gap():
++    """[閉環] 逃逸帳標了「本來哪條規則該抓」但規則還沒寫的,要列成待辦。"""
++    import io
++    import contextlib
++    import json as _j
++    m = _lng_module()
++    root = _lng_rule_repo(fire=True)          # 已經有 no-bad 這條規則
++    (root / "docs").mkdir(parents=True, exist_ok=True)
++    lines = [
++        _j.dumps({"ts": "2026-09-13T01:00:00+08:00", "loop": "x", "desc": "沒逾時", "rule": "no-timeout"}),
++        _j.dumps({"ts": "2026-09-13T01:01:00+08:00", "loop": "x", "desc": "又沒逾時", "rule": "no-timeout"}),
++        _j.dumps({"ts": "2026-09-13T01:02:00+08:00", "loop": "x", "desc": "這條已經有規則", "rule": "no-bad"}),
++        _j.dumps({"ts": "2026-09-13T01:03:00+08:00", "loop": "x", "desc": "沒標規則"}),
++    ]
++    (root / "docs" / ".escape-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
++    buf = io.StringIO()
++    with contextlib.redirect_stdout(buf):
++        rc = m.cmd_rule_gap(repo=str(root), as_json=True)
++    out = _j.loads(buf.getvalue())
++    check("閉環:漏過兩次又沒規則的被列出來", out["missing"].get("no-timeout", {}).get("n") == 2, str(out))
++    check("閉環:已經寫成規則的不列", "no-bad" not in out["missing"] and "no-bad" in out["covered"], str(out))
++    check("閉環:沒標規則的另外數", out["unlabeled"] == 1, str(out))
++
++
++def t_escape_rule_field():
++    """[閉環] 逃逸帳要收得下「本來哪條規則該抓」這個欄位。"""
++    m = _lng_module()
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    check("escape 有 --rule 旗標", '"--rule", dest="esc_rule"' in src, "")
++    check("記錄真的會寫這個欄位", 'rec["rule"] = rule.strip()' in src, "")
++    check("分派有把旗標傳進去", "rule=args.esc_rule" in src, "")
++
++
++def t_lint_cmd_targets_applied():
++    """★守消費端★:判定真的只把該給的檔傳給每條命令。
++    只驗配對函式不夠——把判定裡取檔那一行改回「全部都給」,配對函式的測試照樣綠(實測過)。"""
++    import json as _j
++    import sys as _s
++    m = _lng_module()
++    root, git = _lng_repo("gctl-lngct-")
++    helper = Path(tempfile.mkdtemp(prefix="gctl-lngct-h-"))
++    # 假檢查工具:把自己收到的檔名寫進一個記錄檔,這樣測試看得到「誰拿到了什麼」
++    rec = helper / "got.txt"
++    script = helper / "rec.py"
++    script.write_text(
++        "import sys, json, os\n"
++        "tag = sys.argv[1]\n"
++        "out = sys.argv[2]\n"
++        f"open({str(rec)!r}, 'a', encoding='utf-8').write(tag + ':' + ','.join(sorted(os.path.basename(t) for t in sys.argv[3:])) + chr(10))\n"
++        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Fake'}}, 'results': []}]}, open(out, 'w'))\n",
++        encoding="utf-8")
++    py_cmd = f"{_s.executable} {script} PY {{LINT_SARIF_OUT}} {{LINT_FILES}}"
++    kt_cmd = f"{_s.executable} {script} KT {{LINT_SARIF_OUT}} {{LINT_FILES}}"
++    (root / ".lumos").mkdir(parents=True, exist_ok=True)
++    (root / ".lumos" / "lint.json").write_text(_j.dumps({"py": [py_cmd], "kt": [kt_cmd]}), encoding="utf-8")
++    (root / "a.py").write_text("a = 1\n", encoding="utf-8")
++    (root / "b.kt").write_text("val b = 1\n", encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "base")
++    base = git("rev-parse", "HEAD").stdout.strip()
++    (root / "a.py").write_text("a = 2\n", encoding="utf-8")
++    (root / "b.kt").write_text("val b = 2\n", encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "two")
++    m._lint_new_verdict(root, f"{base}..HEAD")
++    got = rec.read_text(encoding="utf-8") if rec.exists() else ""
++    py_lines = [l for l in got.splitlines() if l.startswith("PY:")]
++    kt_lines = [l for l in got.splitlines() if l.startswith("KT:")]
++    check("消費端:Python 的命令只收到 .py", py_lines and all(l == "PY:a.py" for l in py_lines), got)
++    check("消費端:Kotlin 的命令只收到 .kt", kt_lines and all(l == "KT:b.kt" for l in kt_lines), got)
++
+ if __name__ == "__main__":
+     sys.exit(main())
+```

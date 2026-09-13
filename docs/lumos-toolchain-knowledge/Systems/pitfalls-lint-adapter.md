@@ -13,6 +13,7 @@ related:
   - "[[lumos-refcheck]]"
   - "[[pitfalls-lint-integration_計劃]]"
   - "[[Projects/新增告警閘_計劃]]"
+  - "[[Projects/社群規則第二批_計劃]]"
 summary: |-
   FLOW:偵測 diff 涉及棧(去點副檔名對 .lumos/lint.json key)→ 跑該棧宣告的 lint 指令(各輸出 SARIF、per-command temp)→ 解析合併 SARIF → 對齊則過濾到 diff 觸及行/非對齊降級全收 → 併進 pitfalls --diff manifest 餵 reviewer/code-loop
   KEY:核心定位——lumos 只解 SARIF 一種格式(stdlib json)、不內建任何棧規則、不裝/管 linter;規則庫讓給社群 linter(composition over invention)
@@ -69,3 +70,29 @@ about_code:
 - **指紋算次數不算有無**：規則代號＋專案相對檔名＋正規化後的片段；基準版一次、現在版三次就是新增兩條。正規化去行尾空白、內部連續空白壓一個、丟空行，**但保留前導縮排**——抹掉縮排的話，「同一段程式碼被搬進另一個會執行的區塊」會比不出來，那是行為改變卻無聲放行。
 - **片段取不到就弱比對**：工具沒附片段的（實測：主流 Python 檢查器完全不附）由核心自己讀那幾行補上；行號缺失、小於一、超出檔案長度就是取不到，退到「規則＋檔名＋訊息」比對並標明是弱比對。
 - **改名另開一支查詢**：既有那支差異查詢同時餵給風險掃描、棧別提問、架構對照，在上面加改名偵測會悄悄改掉它們的輸出。
+
+## 依賴層與規則產線（2026-09-13，[[Projects/社群規則第二批_計劃]]）
+
+- **依賴宣告檔走自己一路**。設定檔的保留鍵 `deps`（不是副檔名）；這次改動碰到任何一支依賴宣告檔就跑它宣告的命令。**理由是實測**：既有的「這支檔要不要掃」過濾把 `.json`／`.txt`／`.lock` 整批當成非程式碼擋掉，而依賴宣告檔大多是那幾種副檔名——不另外走就永遠掃不到。認得的檔名涵蓋 npm／Python／Go／Rust／Java／Ruby／PHP／.NET／Dart／Elixir／Swift／CocoaPods。
+- **每條命令只拿自己那個棧的檔**。原本是把全部改動檔丟給每條命令，Python 的檢查器會收到 Kotlin 檔。**這條要守到消費端**：翻紅驗證實測過，只測配對函式的話，把判定裡取檔那一行改壞測試照樣綠。
+- **自寫規則的出口閘**：規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`、登記進 `index.json`。`lumos rule-check` 跑規則對它自己的樣本，不翻紅就擋；同時掃規則檔宣告的規則 id，**索引漏列一條，那條就永遠沒樣本也沒人發現**。
+  - 誠實邊界：這只證明規則抓得到自己的樣本，**不證明它在真實程式碼上不誤報**。
+- **閉環**：記逃逸帳時帶「本來哪條規則該抓」；`lumos rule-gap` 把「標了該抓、但規則還沒寫」列成待辦，附漏過幾次。**不標就不進統計**——自動歸因會製造假訊號，所以這一格靠人標，代價是覆蓋率等於有多少人記得帶那個旗標。
+
+### 怎麼宣告（2026-09-13）
+
+（`{LINT_FILES}` 是這次要掃的檔案清單）。**兩個檔，不是一個**——依賴層走自己的宣告檔，因為 `lint.json` 的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證，混一個非副檔名的鍵進去會讓那個檔同時有兩種語意：
+
+`.lumos/lint.json`（程式碼，按副檔名）：
+
+```json
+{ "py": ["semgrep --config p/python --metrics=off --sarif-output {LINT_SARIF_OUT} {LINT_FILES}"] }
+```
+
+`.lumos/lint-deps.json`（依賴宣告檔改動時才跑）：
+
+```json
+{ "cmds": ["osv-scanner --format sarif --output {LINT_SARIF_OUT} {LINT_FILES}"] }
+```
+
+**自己寫規則**：規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`、登記進 `.lumos/rules/index.json`。`lumos rule-check` 會跑每條規則對它自己的樣本，不翻紅就擋——**沒有會翻紅的樣本，那條規則可能從頭到尾是死的**。工具清單與座標見 [[Systems/linter精選目錄]]。
