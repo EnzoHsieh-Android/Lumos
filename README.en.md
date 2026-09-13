@@ -245,7 +245,7 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 | Java / JVM | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Swift / iOS | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Node.js backend | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Flutter / Dart | ✅ | — | — | ✅ | ⚠️ surveyed only |
+| Flutter / Dart | ✅ | ✅ | ✅ | ✅ | ⚠️ surveyed only |
 
 **Read the last column.** The ❌ rows were filled in to the same design and tested against synthetic samples, but **no real project has used them yet**—whether the trigger words fire accurately and whether the convention rules hold is still unmeasured. ⚠️ now appears only in the last column, where Dart means a real project was surveyed but never actually onboarded.
 

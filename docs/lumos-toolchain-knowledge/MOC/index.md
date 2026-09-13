@@ -98,6 +98,8 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 - [[Systems/linter精選目錄]]
 - [[Systems/pitfalls-lint-adapter]]
 - [[Systems/效能檢核目錄]]
+- [[Systems/補新語言SOP]] — 工具鏈要多認得一種語言:八格盤點與十一步,含每次都會漏的散落清單。
+- [[Projects/Flutter補棧_計劃]] — Dart/Flutter 補三格(符號形狀/效能題組六題/慣例 skill);零真專案實證。
 
 ## 平台、分發與生命週期(`scope/platform`)
 

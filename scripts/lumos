@@ -3492,6 +3492,14 @@ SYMBOL_PROFILES = {
         "suffixes": (), "dotted_ok": True,
         "code_exts": (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"),
     },
+    # Dart / Flutter(2026-09-13;★尚無真專案跑過★):型別 PascalCase、方法 camelCase,大致跟
+    # Kotlin 同形狀,★但不能直接借★——Flutter 的 State 類幾乎都是私有的底線開頭(_MyPageState),
+    # 借 Kotlin 那條會讓筆記裡最常被點名的那種類別一律「查無」。所以只多開一個可選的前置底線。
+    "dart": {
+        "shape_re": r"^_?[A-Z][A-Za-z0-9]*(?:\.[a-zA-Z_][A-Za-z0-9]*)*$",
+        "suffixes": (), "dotted_ok": True,
+        "code_exts": (".dart",),
+    },
 }
 # 否定語境詞表:節點「正確地記錄某符號已不存在」時不該被報錯。
 # ★這是語系相依的★——換英文圖譜要換 lexicon,不是改檢查邏輯。
@@ -16774,6 +16782,43 @@ _STACK_QUESTION_SPECS = {
          # Spring 專案頭上,直接打破「改後端的檔不會被問 Android」這句承諾。改成只收 Android 專有的字。
          "when": ['AppCompatActivity', '\\bandroid\\.', 'findViewById', 'setContentView\\(', 'RecyclerView', 'notifyDataSetChanged', 'AsyncTask', '\\bHandler\\s*\\(', 'runOnUiThread', 'getApplicationContext', 'requireContext\\(', 'startActivity\\(', 'startActivityForResult', 'SharedPreferences', 'LayoutInflater', 'BroadcastReceiver', 'ContentResolver', 'getSystemService\\(']},
     ],
+    # ── Dart / Flutter(2026-09-13 補,★尚無真專案跑過★)────────────────────────
+    # 方向:兩邊都顧,用觸發字分流(跟 Java 同一個裁決)。畫面特有的兩題靠 widget 詞彙才亮,
+    # 非同步/生命週期/資源那四題對純 Dart 後端或套件也成立。
+    # 觸發字一律「範式詞＋反面詞」:只收範式詞的話,用舊寫法做同一件事反而不會被問到。
+    "dart": [
+        {"id": "dart-build",
+         "q": "組建函式:build 裡有沒有做 IO、解析、排序、或每次都新建物件(controller/Future/正規表示式)?這些該搬到 initState 或 model 去。setState 的範圍是不是整頁(該把會變的那塊拆成自己的 widget,或用局部重建)?不會變的子樹有沒有用 const?",
+         "when": ['Widget build\\(', 'setState\\(', 'StatefulWidget', 'StatelessWidget', 'createState\\(',
+                  'MediaQuery\\.of', 'Theme\\.of', 'notifyListeners', 'ChangeNotifier', 'InheritedWidget',
+                  'Provider\\.of', 'context\\.watch', 'context\\.read', 'ValueNotifier']},
+        {"id": "dart-list",
+         "q": "長清單與圖片:清單是不是一次把全部子項建出來(ListView(children:) / SingleChildScrollView 包一長串,該換 ListView.builder)?長清單上有沒有誤加 shrinkWrap 讓它每次量整份?每個項目的 key 穩不穩(用索引當 key 會在增刪時錯位)?網路或資產圖片有沒有給 cacheWidth/cacheHeight 降解析度?",
+         "when": ['ListView', 'GridView', 'SingleChildScrollView', 'shrinkWrap', 'itemBuilder',
+                  'SliverList', 'Image\\.network', 'Image\\.asset', 'CachedNetworkImage',
+                  'cacheWidth', 'ValueKey', 'ObjectKey', '\\.toList\\(\\)']},
+        {"id": "dart-dispose",
+         "q": "生命週期與釋放:AnimationController / StreamSubscription / TextEditingController / ScrollController / FocusNode / Timer 有沒有在 dispose 裡釋放?await 回來之後有沒有先確認畫面還在(mounted)才 setState 或用 context?訂閱是不是每次重建都再訂一次?",
+         "when": ['AnimationController', 'StreamSubscription', 'TextEditingController', 'ScrollController',
+                  'FocusNode', 'Timer\\(', 'Timer\\.periodic', '\\.listen\\(', 'dispose\\(',
+                  'initState\\(', 'didChangeDependencies', '\\bmounted\\b', 'StreamController']},
+        {"id": "dart-async",
+         "q": "非同步與外呼:每個 HTTP / 資料庫 / 平台呼叫有沒有逾時?錯誤有沒有人接(丟出去的 Future 沒 await 也沒 catch,例外會無聲蒸發)?迴圈裡是不是逐筆 await(該用 Future.wait 並行,但要有上限,不然會打爆對方)?重試有沒有退避與上限,而且不會對付款、下單這種不可逆的動作盲目重送?",
+         "when": ['\\bFuture\\b', '\\basync\\b', '\\bawait\\b', 'http\\.(get|post|put|delete)',
+                  '\\bDio\\b', '\\.timeout\\(', 'Future\\.wait', 'unawaited\\(', 'catchError',
+                  # ★反面詞★:不用 async/await、改寫成 .then 鏈做同一件事,要亮同一題
+                  '\\.then\\(', '\\.whenComplete\\(', 'Future\\.delayed',
+                  'Completer', 'StreamBuilder', 'FutureBuilder', 'retry']},
+        {"id": "dart-isolate",
+         "q": "重活有沒有離開畫面執行緒:JSON 解析、影像處理、加解密、大排序、大檔讀寫有沒有丟給 compute 或 Isolate.run?Dart 是單執行緒的,這些留在主 isolate 會直接卡住畫面。",
+         "when": ['jsonDecode', 'jsonEncode', 'compute\\(', 'Isolate\\.', 'dart:convert',
+                  '\\.sort\\(', 'base64', 'sha256', 'readAsString', 'readAsBytes', 'decodeImage']},
+        {"id": "dart-platform",
+         "q": "平台通道與本機資源:MethodChannel / EventChannel 的呼叫有沒有逾時與錯誤處理(對面沒回應這邊會一直等)?偏好設定、檔案、資料庫的讀寫是不是在畫面執行緒同步做?大檔是不是一次讀進記憶體而不是串流?資料庫查詢有沒有在迴圈裡逐筆打?",
+         "when": ['MethodChannel', 'EventChannel', 'BasicMessageChannel', 'SharedPreferences',
+                  'path_provider', 'getApplicationDocumentsDirectory', '\\bFile\\(', 'writeAsString',
+                  'sqflite', 'openDatabase', 'rawQuery', 'Hive\\.']},
+    ],
 }
 _STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
 # when=範式詞+反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能不能亮不同題或不亮——舊法/土法會出現的字也讓同一題亮;反面詞要具體到不誤傷,Thread\( 不是 Thread)
@@ -20456,7 +20501,7 @@ def cmd_delguard_check(repo=None, as_json=False):
 
 _ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
                      "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms", "py": "python-idioms",
-                     "java": "java-idioms"}
+                     "java": "java-idioms", "dart": "dart-idioms"}
 
 
 def _idiom_skill_for(ext, file_rel, repo_root):

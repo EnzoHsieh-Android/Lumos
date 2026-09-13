@@ -20536,6 +20536,98 @@ def t_test_regex_scan_bounded():
               spent < 2.0, f"{spent:.3f}s")
 
 
+def t_dart_profile_discovery():
+    """dart profile:test('名')/testWidgets('名') 認得,註解裡的假測試剝掉,不搶別的副檔名。
+    ★符號形狀不能借 Kotlin★:Flutter 的 State 類幾乎都是底線開頭的私有類別(_HomePageState),
+    Kotlin 那條 ^[A-Z] 會讓筆記裡最常被點名的那種類別一律「查無」。
+    翻紅釘:把 dart 的 symbol profile 拿掉 → ⑤翻紅(init 會退回借別人的並標「猜得很弱」);
+    把 shape_re 的前置底線拿掉 → ⑥翻紅。"""
+    import re as _re
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-dartprof-"))
+    (root / "test").mkdir(parents=True)
+    (root / "test" / "cart_test.dart").write_text(
+        "import 'package:flutter_test/flutter_test.dart';\n"
+        "void main() {\n"
+        "  test('totalIncludesTax', () { expect(1, 1); });\n"
+        "  testWidgets('rendersEmptyState', (tester) async { });\n"
+        "  // test('commentedOut', () {});\n"
+        "  /* testWidgets('inBlockComment', (t) async {}); */\n"
+        "}\n", encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["dart"])
+    got = m.discover_test_methods(root, prof)
+    check("dart ①test('名') 認得", "totalIncludesTax" in got, str(got))
+    check("dart ②testWidgets('名') 認得", "rendersEmptyState" in got, str(got))
+    check("dart ③註解裡的假測試剝掉", "commentedOut" not in got and "inBlockComment" not in got, str(got))
+    check("dart ④profile 只吃 .dart", prof["exts"] == {".dart"}, str(prof["exts"]))
+    g = m._stack_guess()[".dart"]
+    check("dart ⑤init 猜得到自己的符號 profile,不再標『猜得很弱』",
+          g["test"] == "dart" and g["symbol"] == "dart" and g["symbol_weak"] is False, str(g))
+    shape = _re.compile(m.SYMBOL_PROFILES["dart"]["shape_re"])
+    check("dart ⑥底線開頭的私有 State 類收得到(借 Kotlin 那條會漏掉)",
+          bool(shape.fullmatch("_HomePageState")) and bool(shape.fullmatch("CartPage"))
+          and bool(shape.fullmatch("CartPage.build")), "_HomePageState/CartPage/CartPage.build")
+    check("dart ⑦裸 camelCase 不進候選(跟其他棧一樣的保守天花板)",
+          not shape.fullmatch("fetchUser"), "fetchUser")
+
+
+def t_dart_stack_wiring():
+    """[Dart 補棧 2026-09-13]dart 棧接進既有三時機:.dart 改動 → 附 dart 六題、慣例 skill 派 dart-idioms;
+    ★畫面特有的題靠觸發字自己決定要不要出現★(Enzo 2026-09-13 裁「兩邊都顧,用觸發字分流」):
+    純 Dart 的非同步碼只亮 dart-async,不會被問畫面重建;widget 檔才亮 dart-build/dart-list。
+    翻紅釘:把 _ARCH_IDIOM_SKILL 的 "dart" 拿掉 → ②翻紅;把 _STACK_QUESTION_SPECS 的 "dart" 拿掉 → ①③翻紅。"""
+    import json as _json
+    import subprocess as _sp
+    m = _load_lumos_inproc()
+    check("①dart 題組六題", len(m._STACK_QUESTION_SPECS.get("dart", [])) == 6, str(list(m._STACK_QUESTION_SPECS)))
+    check("②慣例 skill 本體存在", (Path(GRAPHCTL).parent.parent / "skills" / "dart-idioms" / "SKILL.md").is_file(), "skills/dart-idioms/SKILL.md")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        lib = root / "lib"; lib.mkdir(parents=True)
+        (root / "test").mkdir(parents=True)
+        (lib / "api.dart").write_text("class Api { int ping() => 1; }\n", encoding="utf-8")
+        (lib / "page.dart").write_text("class Page { int n = 1; }\n", encoding="utf-8")
+        (root / "test" / "api_test.dart").write_text(
+            "void main() { test('pings', () {}); }\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        check("②.dart → dart-idioms", m._idiom_skill_for("dart", "lib/api.dart", td) == "dart-idioms",
+              str(m._idiom_skill_for("dart", "lib/api.dart", td)))
+        check("②.dart 的效能題鍵是 dart", m._stack_key_for_file("lib/api.dart", td) == "dart",
+              str(m._stack_key_for_file("lib/api.dart", td)))
+        (lib / "api.dart").write_text(
+            "class Api {\n  Future<String> load() async { return await http.get(uri); }\n}\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "async")
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        data = _json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+        sq = data.get("stack_questions", {})
+        check("③dart 棧附六題", set(sq) == {"dart"} and len(sq["dart"]) == 6, str(sq)[:200])
+        app = data.get("stack_questions_applicable", {}).get("dart", [])
+        qof = lambda qid: next(s["q"] for s in m._STACK_QUESTION_SPECS["dart"] if s["id"] == qid)
+        check("④純非同步改動只讓 dart-async 適用,不問畫面重建",
+              qof("dart-async") in app and qof("dart-build") not in app and qof("dart-list") not in app, str(len(app)))
+        arch = data.get("arch_alignment") or {}
+        check("②架構對齊附 dart-idioms", "dart-idioms" in arch.get("idiom_skills", []), str(arch)[:200])
+        # ★樣本刻意另開一支檔★:同一支檔改寫時被刪掉的行也算改動行(既有設計),
+        # 上一版的 await 會讓 dart-async 跟著亮,那樣就驗不到「畫面題各自獨立」。
+        (lib / "page.dart").write_text(
+            "class Page {\n  Widget build(BuildContext c) => ListView(children: rows);\n}\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "widget")
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        d2 = _json.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0])
+        app2 = d2.get("stack_questions_applicable", {}).get("dart", [])
+        check("④widget 改動亮 dart-build 與 dart-list,不問平台通道",
+              qof("dart-build") in app2 and qof("dart-list") in app2 and qof("dart-platform") not in app2, str(len(app2)))
+        # 測試檔不附題(跟其他棧一致)
+        (root / "test" / "api_test.dart").write_text(
+            "void main() { test('loads', () async { await api.load(); }); }\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "test only")
+        r3 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", td])
+        d3 = _json.loads([l for l in r3.stdout.splitlines() if l.startswith("{")][0])
+        check("⑤只改測試檔不附效能題", not (d3.get("stack_questions") or {}), str(d3.get("stack_questions"))[:120])
+
+
 def t_java_stack_wiring():
     """[Java 補棧 2026-09-12]java 棧接進既有三時機:.java 改動 → 附 java 七題、慣例 skill 派 java-idioms;
     ★平台特有的兩題靠觸發字自己決定要不要出現★(Enzo 2026-09-12 裁「兩邊都顧,依照情況接特有檢查"):
@@ -34504,7 +34596,8 @@ def t_stack_question_triggers():
                        "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
                        "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath",
                        "java-concurrency", "java-resources", "java-data", "java-external", "java-memory",
-                       "java-collections", "java-android"}, str(sorted(ids)))
+                       "java-collections", "java-android",
+                       "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform"}, str(sorted(ids)))
     import re as _re
     check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
     app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
@@ -34521,7 +34614,8 @@ def t_stack_question_triggers():
                 "node": ("node-parallel", "const r = await Promise.all(items.map(fetchOne))", "const r = items.map(f)"),
                 "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>"),
                 "py": ("py-parallel", "results = await asyncio.gather(*tasks)", "total = price * qty"),
-                "java": ("java-concurrency", "CompletableFuture.allOf(a, b).join();", "int total = price * qty;")}
+                "java": ("java-concurrency", "CompletableFuture.allOf(a, b).join();", "int total = price * qty;"),
+                "dart": ("dart-async", "final res = await http.get(uri);", "final total = price * qty;")}
     for _stk, (_qid, _hit, _miss) in _samples.items():
         _a1, _m1 = m._stack_applicability({_stk: [_hit]}, 300)
         _a2, _m2 = m._stack_applicability({_stk: [_miss]}, 300)
@@ -34539,6 +34633,11 @@ def t_stack_question_triggers():
         "py": [("py-eventloop", "time.sleep(1)"), ("py-external", "resp = urllib.request.urlopen(url)"),
                ("py-memory", "rows = cur.fetchall()"), ("py-hotpath", "for i in range(len(rows)):"),
                ("py-parallel", "t = threading.Thread(target=worker)"), (None, "total = price * qty")],
+        # Dart(2026-09-13 補棧):舊法=不用 async/await 改寫成 .then 鏈、清單直接塞 children
+        "dart": [("dart-async", "fetch().then((v) => cache = v);"),
+                 ("dart-list", "ListView(children: items.map(row).toList())"),
+                 ("dart-isolate", "final items = jsonDecode(body) as List;"),
+                 (None, "final total = price * qty;")],
     }
     # 看字串只限 when_raw 那幾條(code-反面詞 r1 單席 f1):log/錯誤訊息裡的關鍵字不能變假命中;SQL 字串要長得像 SQL
     for _stk, _line, _bad in [("cs", 'logger.LogError("SELECT query failed, retrying");', "cs-data"),
@@ -35686,8 +35785,13 @@ def t_stack_guess_derived_from_canonical_tables():
     bad = [f"{e}:test={v['test']}" for e, v in g.items() if v["test"] and v["test"] not in m.TEST_PROFILES]
     bad += [f"{e}:symbol={v['symbol']}" for e, v in g.items() if v["symbol"] and v["symbol"] not in m.SYMBOL_PROFILES]
     check("①猜出來的每個值都是正典表裡真的有的 profile 名", not bad, "; ".join(bad))
+    # ★這條的舉例換過一次(2026-09-13)★:原本拿 `.dart` 當「正典沒認領」的例子,而 Flutter 補棧
+    # 之後 `.dart` 有自己的符號 profile 了,例子失效——**這不是測試寫錯,是純新增動到了邊界**。
+    # 換成當下仍未被認領的 `.jsx`;斷言的意思沒變:沒人認領就留空,不准硬湊一個表裡沒有的名字。
     check("②正典沒認領就留空,不硬湊一個不存在的值",
-          g[".vue"]["symbol"] in m.SYMBOL_PROFILES and g[".dart"]["symbol"] == "", str((g[".vue"], g[".dart"])))
+          g[".vue"]["symbol"] in m.SYMBOL_PROFILES and g[".jsx"]["symbol"] == "", str((g[".vue"], g[".jsx"])))
+    check("②被補上 profile 的副檔名就要指到正典裡真的有的那個(Flutter 補棧 2026-09-13)",
+          g[".dart"]["symbol"] == "dart" and "dart" in m.SYMBOL_PROFILES, str(g[".dart"]))
     check("③`.js` 挑到跟它的測試 profile 同語言的那個符號 profile(不是清單裡碰巧排前面的)",
           (g[".js"]["test"], g[".js"]["symbol"]) == ("node-jest", "typescript"), str(g[".js"]))
     for ext in (".swift", ".kt", ".cs", ".py"):
