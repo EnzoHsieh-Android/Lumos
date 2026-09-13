@@ -40277,5 +40277,87 @@ def t_lint_shebang_ext():
     check("沒副檔名的檔真的被掃到了", v["blocked"] is True and any(c["file"] == "tool" for c in v["new"]),
           str(v["new"])[:200])
 
+
+def t_lint_snapshot_support():
+    """★工具要跑得起來,光有被掃的檔不夠★(2026-09-13 真專案實測撞到):
+    eslint 的設定在子目錄、外掛要 node_modules,快照裡只有改動檔的話它直接拒跑。
+    所以快照要補:祖先目錄的設定檔(取現在版,兩邊同一份規則)+依賴目錄的連結。"""
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lngsup-")
+    (root / "client" / "src").mkdir(parents=True, exist_ok=True)
+    (root / "client" / "src" / "a.js").write_text("var x = 1\n", encoding="utf-8")
+    (root / "client" / "eslint.config.mjs").write_text("export default []\n", encoding="utf-8")
+    (root / "client" / "package.json").write_text('{"name":"c"}\n', encoding="utf-8")
+    (root / "pyproject.toml").write_text("[tool.ruff]\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    # 依賴目錄不進版控,用真的目錄
+    (root / "client" / "node_modules" / "pkg").mkdir(parents=True, exist_ok=True)
+
+    dest = Path(tempfile.mkdtemp(prefix="gctl-lngsup-d-"))
+    m._lint_new_support(root, head, ["client/src/a.js"], dest)
+    check("子目錄的設定檔有被補進去", (dest / "client" / "eslint.config.mjs").is_file(),
+          str(sorted(x.name for x in (dest / "client").glob("*")) if (dest / "client").is_dir() else []))
+    check("同一層的 package.json 也補", (dest / "client" / "package.json").is_file(), "")
+    check("專案根的設定檔也補", (dest / "pyproject.toml").is_file(), "")
+    check("依賴目錄用連結指回真的專案", (dest / "client" / "node_modules").is_symlink(), "")
+    # 被掃的檔本身不該被這一步蓋掉(它是 extract 放進去的)
+    check("不會把原始碼一起搬進來", not (dest / "client" / "src" / "a.js").exists(), "")
+
+
+def t_lint_config_from_head_only():
+    """設定檔一律取現在版——基準版那次用舊設定的話,比出來的差集沒有意義(同一份規則比兩次)。"""
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lngcfg-")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "ruff.toml").write_text("OLD\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "ruff.toml").write_text("NEW\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "改設定")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    d_base = Path(tempfile.mkdtemp(prefix="gctl-lngcfg-b-"))
+    # 呼叫端固定傳 head_ref,所以基準版那邊也會拿到新設定
+    m._lint_new_support(root, head, ["app.py"], d_base)
+    got = (d_base / "ruff.toml").read_text(encoding="utf-8").strip()
+    check("基準版快照拿到的是現在版的設定", got == "NEW", got)
+
+
+def t_lint_snapshot_support_applied():
+    """★守消費端★:判定真的會把設定檔補進快照。
+    只測那支輔助函式不夠——把判定裡呼叫它那兩行拿掉,輔助函式的測試照樣綠(實測過,同一型假守衛第三次)。"""
+    import json as _j
+    import sys as _s
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lngsa-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngsa-h-"))
+    # 假檢查工具:★要在被掃檔案的同一層找到設定檔才肯跑★(仿 eslint 找不到設定就拒跑)
+    script = helper / "needcfg.py"
+    script.write_text(
+        "import sys, json, os\n"
+        "out = sys.argv[1]\n"
+        "targets = sys.argv[2:]\n"
+        "for t in targets:\n"
+        "    if not os.path.isfile(os.path.join(os.path.dirname(t), 'tool.config.js')):\n"
+        "        sys.exit(3)            # 找不到設定:直接拒跑,連 SARIF 都不吐\n"
+        "res = [{'ruleId': 'NEEDCFG', 'message': {'text': 'x'}, 'locations': [\n"
+        "    {'physicalLocation': {'artifactLocation': {'uri': t},\n"
+        "     'region': {'startLine': 1, 'endLine': 1}}}]} for t in targets\n"
+        "       if 'BAD' in open(t, encoding='utf-8').read()]\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'F'}}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    (root / ".lumos").mkdir(parents=True, exist_ok=True)
+    (root / ".lumos" / "lint.json").write_text(_j.dumps({
+        "py": [f"{_s.executable} {script} {{LINT_SARIF_OUT}} {{LINT_FILES}}"]}), encoding="utf-8")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "tool.config.js").write_text("// 設定\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("x = 1\nBAD = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("設定檔有被補進快照,工具才跑得起來", v["blocked"] is True and len(v["new"]) == 1,
+          f"status={v['status']} reason={v['reason'][:60]} undone={v['undone']}")
+
 if __name__ == "__main__":
     sys.exit(main())

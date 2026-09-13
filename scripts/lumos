@@ -17786,6 +17786,63 @@ def _lint_new_changed_files(repo_root, diff_range):
     return (out, None)
 
 
+# 工具要跑得起來,光有被掃的檔還不夠(2026-09-13 真專案實測):
+# ①它的設定檔:eslint 的設定在子目錄裡,快照只有改動檔的話它找不到而直接拒跑
+# ②它的依賴:eslint 要 node_modules 才載得了外掛——那不進版控,所以用連結指回真的專案
+# ★設定檔一律取「現在版」★:兩次掃描要用同一份規則,基準版那次用舊設定的話比出來的差集沒有意義
+_LINT_CONFIG_GLOBS = ("*.config.js", "*.config.mjs", "*.config.cjs", "*.config.ts",
+                      ".eslintrc*", "package.json", "tsconfig*.json", "pyproject.toml",
+                      "setup.cfg", "ruff.toml", ".ruff.toml", "detekt.yml", ".swiftlint.yml",
+                      ".stylelintrc*", "stylelint.config.*", ".sqlfluff", "analysis_options.yaml")
+_LINT_DEP_DIRS = ("node_modules", ".venv", "venv")
+_LINT_CONFIG_MAX_BYTES = 200000     # 設定檔本來就小;超過這個大小的不像設定檔,不搬
+
+
+def _lint_new_support(repo_root, config_ref, rel_paths, dest):
+    """把工具跑得起來需要的周邊東西放進快照:祖先目錄的設定檔(取現在版)+依賴目錄的連結。
+    ★沒有這一步,需要專案脈絡的工具會整個跑不起來★——實測 eslint 對落在設定檔那棵樹之外的檔案直接拒跑。"""
+    import subprocess
+    dirs = set()
+    for rp in rel_paths:
+        d = Path(rp).parent
+        while True:
+            dirs.add(d.as_posix() if d.as_posix() != "." else "")
+            if d.as_posix() in (".", "/", ""):
+                break
+            d = d.parent
+    for rel_dir in sorted(dirs):
+        real_dir = Path(repo_root) / rel_dir if rel_dir else Path(repo_root)
+        snap_dir = Path(dest) / rel_dir if rel_dir else Path(dest)
+        if not real_dir.is_dir():
+            continue
+        try:
+            snap_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        for pat in _LINT_CONFIG_GLOBS:
+            for f in real_dir.glob(pat):
+                if not f.is_file() or f.stat().st_size > _LINT_CONFIG_MAX_BYTES:
+                    continue
+                rel = (Path(rel_dir) / f.name).as_posix() if rel_dir else f.name
+                target = snap_dir / f.name
+                if target.exists():
+                    continue
+                r = subprocess.run(["git", "show", f"{config_ref}:{rel}"],
+                                   capture_output=True, cwd=str(repo_root))
+                try:
+                    target.write_bytes(r.stdout if r.returncode == 0 else f.read_bytes())
+                except OSError:
+                    continue
+        for dep in _LINT_DEP_DIRS:
+            src = real_dir / dep
+            link = snap_dir / dep
+            if src.is_dir() and not link.exists():
+                try:
+                    link.symlink_to(src, target_is_directory=True)
+                except OSError:
+                    pass
+
+
 def _lint_new_extract(repo_root, sha, pairs, dest, side):
     """把某一版的檔案內容逐檔取出來寫進 dest(保持相對路徑)。
     ★逐檔取,不整批打包★:整批打包時只要清單裡有一個檔在那一版不存在,整條指令 fatal 失敗、零輸出;
@@ -18021,6 +18078,9 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
         head_dir.mkdir(parents=True, exist_ok=True)
         base_files = _lint_new_extract(repo_root, base_ref, pairs, base_dir, "base")
         head_files = _lint_new_extract(repo_root, head_ref, pairs, head_dir, "head")
+        # 兩邊都補上「跑得起來需要的東西」,而且設定檔一律取現在版(同一份規則比兩次)
+        _lint_new_support(repo_root, head_ref, list(base_files), base_dir)
+        _lint_new_support(repo_root, head_ref, list(head_files), head_dir)
 
         # 單檔上限:行數與位元組數雙門檻,任一超過就不掃並明說(只看行數會被壓縮成一行的大檔騙過去)
         too_big = []
