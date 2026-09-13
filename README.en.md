@@ -264,7 +264,7 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 **Two do not run, for different reasons:**
 
 - **Dart**'s official analyzer starts fine and emits structured results, but **nothing converts its format yet**. That is a small program to write, not a dead end.
-- **C# / .NET does not fit this gate.** Its analyzers only produce results by compiling the whole project, so the command cannot be narrowed to a handful of files—which is exactly what the gate needs. **That stack is covered by the code-review path instead.**
+- **C# / .NET is not covered by this gate today, and the reason is not cost.** Measured on a 347-file project: a full build takes 8.5 seconds, a second build 3.6, and it emits a format this gate already reads. The real reason is that **the tree the gate copies out holds only the files this change touched**—the project file and the rest of the source are absent, so nothing compiles. Making it work means materialising the whole tree instead (measured at 0.1–0.7 seconds per tree), which would affect the other stacks too, **so it stays as it is for now**. That stack is covered by the code-review path instead.
 
 **Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
 
