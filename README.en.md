@@ -237,17 +237,19 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 
 | Language / platform | Test discovery | Performance questions | Conventions skill | Linter picks | Used on a real project |
 |---|---|---|---|---|---|
-| Kotlin / Android | ✅ | ✅ 7 | ✅ | ✅ | ✅ |
-| C# / .NET | ✅ | ✅ 5 | ✅ | ✅ | ✅ |
-| Vue / front-end TypeScript | ✅ | ✅ 5 | ✅ | ✅ | ✅ |
-| SQL | — | ✅ 4 | — | ✅ | ✅ |
-| Python | ✅ | ✅ 5 | ✅ | ✅ | ⏳ in progress |
-| Java / JVM | ✅ | ✅ 7 | ✅ | ⚠️ not run yet | ❌ |
-| Swift / iOS | ✅ | ✅ 6 | ✅ | ⚠️ not run yet | ❌ |
-| Node.js backend | ✅ | ✅ 5 | ✅ | ⚠️ not run yet | ❌ |
+| Kotlin / Android | ✅ | ✅ | ✅ | ✅ | ✅ |
+| C# / .NET | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Vue / front-end TypeScript | ✅ | ✅ | ✅ | ✅ | ✅ |
+| SQL | — | ✅ | — | ✅ | ✅ |
+| Python | ✅ | ✅ | ✅ | ✅ | ✅ Lumos itself |
+| Java / JVM | ✅ | ✅ | ✅ | ⚠️ not run yet | ❌ |
+| Swift / iOS | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Node.js backend | ✅ | ✅ | ✅ | ⚠️ not run yet | ❌ |
 | Flutter / Dart | ✅ | — | — | ✅ | ⚠️ surveyed only |
 
 **Read the last column.** The ❌ rows were filled in to the same design and tested against synthetic samples, but **no real project has used them yet**—whether the trigger words fire accurately and whether the convention rules hold is still unmeasured. ⚠️ means two different things: in the linter column, those picks came from official documentation and were never installed and run here; in the last column, Dart means a real project was surveyed but never actually onboarded.
+
+**Whether a linter can actually run is a separate question.** The pre-push new-warnings gate copies the tree twice—before and after the change—and runs each linter on both to diff the findings, so the tool has to start up inside a tree that holds source and nothing else. Self-contained binaries that carry their own rules can: ruff for Python, detekt for Kotlin, SwiftLint for Swift, and the dependency-vulnerability scanner have all been verified this way. Tools that only start once the project's dependencies are installed (eslint, for one) need their config files and dependency directories carried in alongside, and that path is currently held up by synthetic tests only—no real tool has been run through it. **Tools that require a build first (.NET analyzers, Gradle) have not been verified at all; do not assume they work.** SwiftLint has one more trap: with no Xcode toolchain in reach it crashes outright and emits nothing, at which point the gate rules the environment unavailable and lets the change through—auto-passes are counted, but nothing stops you at the time.
 
 **Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
 

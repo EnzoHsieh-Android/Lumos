@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-09-11
+updated: 2026-09-13
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -20,9 +20,9 @@ summary: |-
   KEY:Kotlin/Android(github/google-maven)——detekt(github:detekt/detekt,複雜度/實踐;★coroutines 規則集=併發軸主力:GlobalScope 濫用/結構化併發破壞/Dispatchers 誤用/blocking 混入 suspend,2026-07-26 補點名★)｜ktlint(github:pinterest/ktlint,格式)｜ktfmt(github:facebook/ktfmt,格式,與ktlint二選一)｜Android Lint(隨AGP,google-maven盯AGP,平台特定);[2026-07-27]標準接法立=brew 安裝+本repo configs/detekt/android.yml 共用差分(開預設關的 GlobalCoroutineUsage/SuspendFunSwallowedCancellation/CouldBeSequence——coroutines 規則集「有裝≠有開」),lint.json 樣板見本文,KDS 首消費端
   KEY:Vue/TS/JS(npm)——eslint(基石)｜eslint-plugin-vue(<template>AST,需vue-eslint-parser)｜@vue/eslint-config-typescript(Vue+TS flat config)｜typescript-eslint(TS規則)｜oxlint(Rust 50-100x快,大repo前置加速)｜@biomejs/biome(25-35x+含formatter,ESLint替代)
   KEY:SQL(pypi)——sqlfluff(支援 T-SQL 等多方言,免連DB靜態解析+auto-fix;LandmarkMember/KDS 的 .sql 適用)
-  KEY:[2026-09-08 iOS/Node 補棧,★兩棧都尚無消費端實跑★,[[Projects/iOS與Node後端補棧_計劃]]]Swift/iOS(github)——SwiftLint(github:realm/SwiftLint,風格+實踐;★內建 `--reporter sarif` 可直接進 lint.json★)｜SwiftFormat(github:nicklockwood/SwiftFormat,格式)或 swift-format(Apple 官方,Swift 6 起隨 toolchain)二選一｜Periphery(github:peripheryapp/periphery,死碼)｜Harmonize(架構 lint,已列);SwiftPM 依賴無中央 registry→lint-watch 用 github 座標盯 release
+  KEY:[2026-09-08 iOS/Node 補棧,★消費專案仍零實跑;SwiftLint 本身 2026-09-13 實跑過(孤立目錄能跑、吐 SARIF),★找不到 Xcode 工具鏈時整支崩潰退出碼 133、零輸出,閘判環境不可用自動放行★;eslint 這台機器根本沒裝,Node/Vue 那條路只有合成測試撐著★,[[Projects/iOS與Node後端補棧_計劃]]]Swift/iOS(github)——SwiftLint(github:realm/SwiftLint,風格+實踐;★內建 `--reporter sarif` 可直接進 lint.json★)｜SwiftFormat(github:nicklockwood/SwiftFormat,格式)或 swift-format(Apple 官方,Swift 6 起隨 toolchain)二選一｜Periphery(github:peripheryapp/periphery,死碼)｜Harmonize(架構 lint,已列);SwiftPM 依賴無中央 registry→lint-watch 用 github 座標盯 release
   KEY:[2026-09-08]Node.js/TS 後端(npm)——eslint+typescript-eslint(基石;SARIF 走 @microsoft/eslint-formatter-sarif,`-f @microsoft/sarif`)｜eslint-plugin-n(Node 專用:未處理 rejection/廢棄 API/同步 fs)｜eslint-plugin-security(注入/regex 回溯/child_process)｜@biomejs/biome(★2.4 起原生 `--reporter=sarif`★,2026 首個 minor)｜knip(專案級死 export/死依賴,ESLint 看不到跨檔)｜dependency-cruiser(分層,已列);跟 Vue 段共用 eslint 家族但插件不同,別把 eslint-plugin-vue 裝進純後端
-  KEY:[2026-09-11 Python 補棧,★首個消費端建置中未實跑★,[[Projects/Python補棧_計劃]]]Python(pypi)——ruff(pypi:ruff,lint+format 基石;★內建 --output-format sarif 直接進 lint.json★;ASYNC/RUF006/S113/RUF032/DTZ 族要在 select 明開,預設只開 E/F)｜mypy(strict,無 SARIF 只 --output json,當 CI 閘)｜bandit(資安,bandit[sarif] 才有 -f sarif,與 ruff S 族重疊)｜pip-audit(依賴漏洞,無 SARIF)｜ty(Astral 新型別檢查器,0.0.x beta 無 SARIF,雷達);格式支援 2026-09-11 本機實跑 --help 核對
+  KEY:[2026-09-11 Python 補棧,★2026-09-13 工具鏈自己接上 ruff 實跑,當天真的擋下一次推送(20 條新增告警,含 5 條自己剛寫太複雜的函式)★,[[Projects/Python補棧_計劃]]]Python(pypi)——ruff(pypi:ruff,lint+format 基石;★內建 --output-format sarif 直接進 lint.json★;ASYNC/RUF006/S113/RUF032/DTZ 族要在 select 明開,預設只開 E/F)｜mypy(strict,無 SARIF 只 --output json,當 CI 閘)｜bandit(資安,bandit[sarif] 才有 -f sarif,與 ruff S 族重疊)｜pip-audit(依賴漏洞,無 SARIF)｜ty(Astral 新型別檢查器,0.0.x beta 無 SARIF,雷達);格式支援 2026-09-11 本機實跑 --help 核對
   KEY:[2026-07-26 補]架構 lint 品類(抽象軸,AI 世代新主流)——架構規則寫成單元測試,AI 違反→測試翻紅→agent 拿確定性回饋自修:Konsist(Kotlin,github:LemonAppDev/konsist)｜ArchUnitNET(C#,nuget:ArchUnitNET)｜Harmonize(Swift,2026 明打 AI 護欄定位)。★lumos 天作之合:架構規則=可執行測試=可被 [test:] 綁→分層邊界這類散文合約可升正式 invariant 走完整合約鏈★
   KEY:[2026-07-26 補]ast-grep(跨語言 AST 結構比對引擎,github:ast-grep/ast-grep)——「事故→固化機械規則」的升級引擎:pitfalls 手刻 regex 升 AST 級(誤報少表達力強);CodeRabbit 拿它當底層,官方有 llms.txt 供 LLM 寫規則(誠實:官方自認 AI 生成規則錯誤率仍高,需自修迴圈)。走既有 .lumos/lint.json SARIF 橋接=外部 linter 不碰零依賴家規
   KEY:2026 現況三鐵則——①前端:oxlint/Biome 崛起但 eslint-plugin-vue 自帶compiler產改造AST,oxlint 官方明說不完整相容→Vue專案 ESLint 仍主力,oxlint 當前置加速器(eslint-plugin-oxlint 讓ESLint跳過已覆蓋規則) ②.NET:.NET10 起 Roslyn analyzer 是 SDK 核心,NetAnalyzers 內建,第三方疊加 ③Kotlin:detekt(bug/實踐)+ktlint或ktfmt(格式)分工,別重複
@@ -40,6 +40,20 @@ verified_by:
 > **緣起**:2026-07-17 使用者發現 lint-watch 收到的是套件升級(ClosedXML/Dapper/SqlClient…)而非 linter——追出宣告檔被誤塞執行期依賴(見 [[Issues/lint-watch空轉假綠]])。收窄回本分之餘,搜社群精選補齊此菜單。
 
 PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 2026 對比評測(oxlint/Biome/ESLint)搜證,非憑印象;裁定=borrow(收錄社群共識,不自造 linter)。
+
+## 工具在「只有原始碼的樹」裡跑不跑得動（2026-09-13 實跑）
+
+> 白話：推送前那道新增告警閘會把改動前後各複製一份出來、各跑一次檢查工具比差集。複製出來的那棵樹只有原始碼——沒有依賴目錄、沒有建置產物。所以「這個工具裝好了」不等於「這道閘用得上它」。
+
+實際跑出來分三類：
+
+| 類別 | 這次驗到的 | 結論 |
+|---|---|---|
+| 自帶規則的獨立執行檔 | ruff（Python）、detekt（Kotlin）、SwiftLint（Swift）、依賴漏洞掃描器 | **跑得動**，直接吐標準格式 |
+| 要專案先裝依賴才啟動 | eslint（Vue／Node） | 要把設定檔與依賴目錄一起帶進快照才行；**這台機器根本沒裝 eslint，所以這條路目前只有合成測試撐著、沒有真工具實證** |
+| 要先建置才能檢查 | .NET 的 analyzer、Gradle | **完全沒驗過，交付時不要宣稱它可以** |
+
+**SwiftLint 有一個要寫下來的坑**：環境裡找不到 Xcode 工具鏈時，它不是報錯而是整支崩潰——退出碼 133、標準輸出一個字都沒有。這時閘解析不到結果，判定「環境不可用」自動放行。放行會被記次數，但當下不會擋人。接 Swift 專案的命令要自己帶上工具鏈路徑。
 
 ## C#/.NET（registry: `nuget:<id>`）
 | linter | 用途 | 備註 |
