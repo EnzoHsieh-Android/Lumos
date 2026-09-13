@@ -12,6 +12,7 @@ tags:
 related:
   - "[[Systems/lint-version-watch]]"
   - "[[Systems/pitfalls-lint-adapter]]"
+  - "[[Projects/社群規則第二批_計劃]]"
 summary: |-
   KEY:各語言精選 linter 參考目錄(2026-07 社群現況搜證)——供各專案 setup 時挑要裝的 linter;裝了才進該專案 .lumos/lint.json(跑 SARIF)+ .lumos/lint-watch.json(盯新版)。此節點是「該裝什麼」的權威菜單,不是「已裝什麼」的清單
   KEY:linter=風格+最佳實踐檢查(抓代碼問題),≠一般依賴——lint-watch.json 只放真 linter(2026-07-17 收窄事故[[Issues/lint-watch空轉假綠]]:LandmarkMember 誤塞 ClosedXML/Dapper/SqlClient 等執行期依賴,已清成只留 StyleCop;[2026-07-27]二次收口:留下的 StyleCop 查證亦從未裝過(csproj 0 引用,「已裝」係循環引用 watch 條目),watch 清空——「裝了才進 watch」須以 csproj 為準,不可信 watch 自身)
@@ -180,3 +181,22 @@ AST 級結構比對（比 regex 誤報少、表達力強），多語言單一引
 - REVISIT:2027-01-31 重搜 linter 生態(半年快照到期;上行條款)
 - 「該裝哪些」是團隊決定,此菜單只列社群共識選項,不強制;裝了才進 lint.json/lint-watch.json。
 - registry 座標須與 [[Systems/lint-version-watch]] 支援的 type 對齊(nuget/npm/pypi/github/maven/google-maven);detekt/ktlint 走 github release(maven artifact 亦可)。
+
+## 跨語言的社群規則庫與依賴掃描（2026-09-13，[[Projects/社群規則第二批_計劃]]）
+
+> 這兩個跟上面各語言的 linter 不同：**一個工具吃很多語言**，而且是「社群把經驗寫成規則」的主要載體。兩者都原生吐 SARIF，所以接法跟其他 linter 完全一樣。
+
+| 工具 | 用途 | 座標 | 實測（2026-09-13） |
+|---|---|---|---|
+| **semgrep** | 跨語言的社群規則庫；規則本身是一小段模式比對，自己也寫得出來 | `pypi:semgrep` | 1.177.0；不用登入可用（`p/python` 151 條規則、含下載約 2 秒）；登入才有更多免費規則 |
+| **OSV-Scanner** | 依賴層：已知漏洞與捏造的套件版本，11+ 生態系 | `github:google/osv-scanner` | **未實跑**（只查過官方文件）；已知限制：SARIF 嚴重度一律標 warning，不能用嚴重度分級 |
+
+**怎麼宣告給工具鏈用**：見 [[Systems/pitfalls-lint-adapter]]（程式碼與依賴層各有自己的宣告檔，格式與佔位符都寫在那裡）。
+
+**三個實測踩到的坑**：
+
+- **沒有副檔名的檔在「掃目錄」時被靜默跳過**（工具鏈自己的主程式就是這種檔）。明確把檔名當參數傳就會掃——所以宣告一定要帶檔案清單佔位。
+- **速度是超線性的**：843 行的檔 1.8 秒，26718 行的主程式 105 秒。新增告警閘會跑兩次，所以單檔大小上限是必要配套。
+- **首次真跑，唯一一條命中是誤報**：對一個刻意設 0700 的快取目錄建議改成 0644（更不安全）——規則是為檔案寫的卻套到目錄。誤報用 `lumos lint-waive` 放行。
+
+**自己寫規則**：把事故或網搜補漏抓到的坑固化成規則的做法（規則放哪、樣本怎麼擺、怎麼驗它真的翻紅）見 [[Systems/pitfalls-lint-adapter]]。
