@@ -40246,5 +40246,36 @@ def t_rule_gap_robust():
     check("非字串的 rule 欄位不會讓它崩,算成沒標", rc == 0 and out["unlabeled"] == 1, buf.getvalue()[:120])
     check("壞掉的那一行跳過,好的照算", out["missing"].get("no-timeout", {}).get("n") == 1, str(out))
 
+
+def t_lint_shebang_ext():
+    """★沒有副檔名的檔要看第一行★——工具鏈自己的主程式就是這種檔(python3 但沒有 .py)。
+    2026-09-13 真的裝了 linter 實跑才撞到:它過得了「要不要掃」那一關,
+    但照副檔名對宣告的話任何宣告都對不上它,這個專案最重要的那支檔對整道閘是隱形的。"""
+    import json as _j
+    import sys as _s
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lngsb-")
+    (root / "tool").write_text("#!/usr/bin/env python3\nBAD = 1\n", encoding="utf-8")
+    (root / "plain").write_text("just text, no shebang\n", encoding="utf-8")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    check("有副檔名的照舊", m._lint_file_ext("app.py", root, head) == "py", "")
+    check("沒副檔名但有 python shebang → 當 py", m._lint_file_ext("tool", root, head) == "py", "")
+    check("沒副檔名也沒 shebang → 不硬猜", m._lint_file_ext("plain", root, head) == "", "")
+    check("bash shebang → 當 sh", m._lint_file_ext("x", None, None) == "", "沒有 repo 也不該炸")
+
+    # 接線:沒有副檔名的檔真的會被派給對應的命令
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lngsb-h-"))
+    cmd = _lng_fake_linter(helper, "s.py", [["BAD", "R", "x"]])
+    (root / ".lumos").mkdir(parents=True, exist_ok=True)
+    (root / ".lumos" / "lint.json").write_text(_j.dumps({"py": [cmd]}), encoding="utf-8")
+    base = head
+    (root / "tool").write_text("#!/usr/bin/env python3\nBAD = 1\nBAD = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("沒副檔名的檔真的被掃到了", v["blocked"] is True and any(c["file"] == "tool" for c in v["new"]),
+          str(v["new"])[:200])
+
 if __name__ == "__main__":
     sys.exit(main())

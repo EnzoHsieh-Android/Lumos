@@ -17651,7 +17651,41 @@ def _lint_deps_load(repo_root):
     return ([c for c in cmds if isinstance(c, str) and c.strip()], None)
 
 
-def _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds=()):
+_SHEBANG_LANG = (("python", "py"), ("node", "js"), ("bash", "sh"), ("sh", "sh"),
+                 ("zsh", "sh"), ("ruby", "rb"), ("perl", "pl"))
+
+
+def _lint_file_ext(path, repo_root=None, ref=None):
+    """這支檔該算哪個副檔名。★沒有副檔名的檔要看第一行★——
+    工具鏈自己的主程式就是這種檔(`scripts/lumos`,python3 但沒有 .py),
+    照副檔名對宣告的話,這個專案最重要的那支檔對整道閘是隱形的(2026-09-13 實跑撞到)。"""
+    import subprocess
+    ext = Path(path).suffix.lstrip(".").lower()
+    if ext:
+        return ext
+    first = ""
+    try:
+        if repo_root and ref:
+            r = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, cwd=str(repo_root))
+            if r.returncode == 0:
+                first = r.stdout.split(b"\n", 1)[0].decode("utf-8", "replace")
+        if not first and repo_root:
+            fp = Path(repo_root) / path
+            if fp.is_file():
+                with open(fp, "rb") as fh:
+                    first = fh.readline().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    if not first.startswith("#!"):
+        return ""
+    low = first.lower()
+    for key, mapped in _SHEBANG_LANG:
+        if key in low:
+            return mapped
+    return ""
+
+
+def _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds=(), repo_root=None, ref=None):
     """把「哪條命令該吃哪些檔」配對好。回 [(命令, [現在路徑…]) …]。
     ★每條命令只拿自己那個棧的檔★——不分的話,Python 的檢查器會收到 Kotlin 檔,
     白跑一趟還可能吐出對不上的告警。依賴掃描只拿依賴宣告檔。
@@ -17660,10 +17694,14 @@ def _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds=()):
     out = []
     by_ext = {}
     for now_path, _b in code_pairs:
-        by_ext.setdefault(Path(now_path).suffix.lstrip("."), []).append(now_path)
+        by_ext.setdefault(_lint_file_ext(now_path, repo_root, ref), []).append(now_path)
     for ext, files in sorted(by_ext.items()):
-        # 用共用那支挑命令(它負責「這個副檔名有沒有宣告、順序與去重」),這裡只補上檔案清單
-        for cmd in _lint_stacks_for_diff({f: set() for f in files}, lint_cfg):
+        if not ext:
+            continue      # 認不出是什麼語言的檔(沒副檔名也沒 shebang):不硬猜
+        # 用共用那支挑命令(它負責「這個副檔名有沒有宣告、順序與去重」),這裡只補上檔案清單。
+        # 餵一個帶正確副檔名的假檔名進去:真檔名可能沒有副檔名(靠 shebang 認出來的),
+        # 而那支共用函式只看副檔名——不這樣接的話等於又寫一份比對邏輯
+        for cmd in _lint_stacks_for_diff({("_." + ext): set()}, lint_cfg):
             out.append((cmd, sorted(files)))
     if dep_pairs:
         dep_files = sorted({a for a, _b in dep_pairs})
@@ -17962,7 +18000,8 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
     if dep_err:
         out.update(status="env-unavailable", autopass=True, reason=dep_err)
         return out
-    cmd_targets = _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds)
+    cmd_targets = _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds,
+                                        repo_root=repo_root, ref=head_ref)
     if not cmd_targets:
         out["status"], out["reason"] = "no-files", "這次改動的副檔名沒有對應的檢查工具宣告"
         return out
