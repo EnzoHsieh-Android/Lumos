@@ -49,11 +49,23 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 | 類別 | 這次驗到的 | 結論 |
 |---|---|---|
-| 自帶規則的獨立執行檔 | ruff（Python）、detekt（Kotlin）、SwiftLint（Swift）、依賴漏洞掃描器 | **跑得動**，直接吐標準格式 |
-| 要專案先裝依賴才啟動 | eslint（Vue／Node） | 要把設定檔與依賴目錄一起帶進快照才行；**這台機器根本沒裝 eslint，所以這條路目前只有合成測試撐著、沒有真工具實證** |
+| 自帶規則的獨立執行檔 | ruff（Python）、detekt（Kotlin）、SwiftLint（Swift）、PMD／Checkstyle（Java）、依賴漏洞掃描器 | **跑得動**，直接吐標準格式 |
+| 要專案先裝依賴才啟動 | eslint（Vue／Node） | **跑得動**，但要把設定檔與依賴目錄一起帶進快照——2026-09-13 拿真的 eslint 端到端驗過，不再只有合成測試 |
 | 要先建置才能檢查 | .NET 的 analyzer、Gradle | **完全沒驗過，交付時不要宣稱它可以** |
 
 **SwiftLint 有一個要寫下來的坑**：環境裡找不到 Xcode 工具鏈時，它不是報錯而是整支崩潰——退出碼 133、標準輸出一個字都沒有。這時閘解析不到結果，判定「環境不可用」自動放行。放行會被記次數，但當下不會擋人。接 Swift 專案的命令要自己帶上工具鏈路徑。
+
+### 端到端實跑紀錄（2026-09-13）
+
+三個棧各建一個臨時 repo、宣告檢查工具、故意加一段有問題的新碼，跑推送前那道閘：
+
+| 棧 | 工具與規則集 | 結果 |
+|---|---|---|
+| Java | PMD `rulesets/java/quickstart.xml` | 新方法的 3 條全抓到；**舊方法裡一模一樣的問題沒報**，基準線比對正確 |
+| Node | eslint 10 flat config（`no-unused-vars`／`eqeqeq`） | 新函式的 2 條抓到；**證明快照補設定檔與依賴目錄那一層對真工具有效** |
+| Python | ruff | 見工具鏈自己那次：當天擋下一次真推送 |
+
+**規則集要自己挑，預設的不能直接用**：Checkstyle 配它內建的 google 風格，在 3 支 Java 檔上噴 757 條，幾乎全是排版與缺註解；PMD 的 quickstart 在同樣的檔上是 45 條而且是真問題。**這道閘只擋新增的，但噪音大的規則集會讓每次小改都被擋**，所以接的時候先拿專案現有的碼跑一次看數量級。另外 Checkstyle 的訊息會跟著系統語言走（這台機器吐中文）。
 
 ## C#/.NET（registry: `nuget:<id>`）
 | linter | 用途 | 備註 |
@@ -125,7 +137,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 **SwiftPM 沒有中央 registry**：依賴就是 git repo，所以 lint-watch 對 Swift linter 一律用 `github:<owner>/<repo>` 盯 release（既有 kind，不用加）。CocoaPods 專案的 Podspec 版本目前**沒有** registry 種類支援，要盯得自己看。
 
-## Node.js / TypeScript 後端（registry: `npm:<pkg>`；2026-09-08 補，★尚無 Node 後端消費端，未實裝跑過★）
+## Node.js / TypeScript 後端（registry: `npm:<pkg>`；2026-09-08 補，★2026-09-13 eslint 真的裝起來、在推送前的新增告警閘裡端到端跑通；消費專案仍零接入★）
 | linter | 用途 | 備註 |
 |---|---|---|
 | **eslint** ＋ **typescript-eslint** | 基石（flat config）；`no-floating-promises`/`no-misused-promises`/`require-await` 是後端 async 紀律的機檢主力（需 type-aware 設定） | SARIF：`@microsoft/eslint-formatter-sarif`，指令 `eslint -f @microsoft/sarif -o <檔>`（縮寫 `-f sarif` 不能用，套件名不是 eslint-formatter-* 形） |
@@ -152,7 +164,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 **跟 SQL 段的關係**：registry 同是 `pypi:`（sqlfluff 也住 PyPI），lint-watch 盯版本走同一種座標。
 
-## Java／JVM（registry: `maven:<group>:<artifact>`；2026-09-12 補，★尚無 Java 消費端，而且本機沒裝 Maven／Gradle，一條都沒實跑過★）
+## Java／JVM（registry: `maven:<group>:<artifact>`；2026-09-12 補，★2026-09-13 PMD 與 Checkstyle 都裝起來實跑通，兩支都不需要 Maven／Gradle；消費專案仍零接入★）
 
 跟其他段最大的差別：**這一段的工具全部要靠建置系統才跑得起來**（Maven 或 Gradle 的 plugin，或編譯器外掛），沒有像 `ruff`／`eslint` 那種裝了就能單獨敲的 CLI。所以下表的接法是照官方文件寫的，等第一個 Java 消費端出現時要實際裝一次再回填。
 
