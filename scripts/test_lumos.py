@@ -39798,6 +39798,19 @@ def t_lint_oversize():
     v2 = m._lint_new_verdict(root, f"{base}..HEAD")
     check("S8 單行大檔被位元組門檻擋住", len(v2["oversize"]) == 1 and v2["oversize"][0]["over"] == "位元組數", str(v2["oversize"]))
 
+    # ★大檔要放行得掉★:設計說「檔太大要走放行管道登記才算過」,
+    # 但放行原本只認告警指紋——不給大檔指紋的話那句話是空的,而且
+    # 「這個專案有一支過大的檔」會變成永遠推不上去、沒有出口
+    v3 = m._lint_new_verdict(root, f"{base}..HEAD")
+    key = v3["oversize"][0]["key"]
+    check("S8 大檔有指紋可以登記", isinstance(key, str) and len(key) == 16, str(v3["oversize"][0]))
+    ok, err = m._lint_waivers_add(root, key, "", "app.py", "這支檔本來就這麼大", "tester")
+    check("S8 登記得進去", ok is True, str(err))
+    v4 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S8 登記過就不再擋", v4["blocked"] is False and v4["oversize"] == [], str(v4))
+    check("S8 但照樣列出來讓人知道那支沒被檢查", len(v4["oversize_waived"]) == 1, str(v4["oversize_waived"]))
+
+
 
 def t_lint_undone_classes():
     """[S9] 兩類失敗分開:環境不可用自動放行+記帳;放行檔讀不了不可以當成沒有放行紀錄。"""

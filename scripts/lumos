@@ -17580,8 +17580,13 @@ _LINT_NEW_DEFAULTS = {
     "mode": "block",
     "budget_sec": 300,          # 整條閘的總預算(秒)
     "per_cmd_floor_sec": 30,    # 單條命令的保底時間:剩餘預算不足這個數就不跑,不用必然逾時的值去跑它
-    "max_file_lines": 4000,     # 單檔行數上限(實測:843 行 1.8 秒、26718 行 105 秒,超線性)
-    "max_file_bytes": 400000,   # 單檔位元組上限——★只看行數會被「整支檔只有一行」的壓縮檔騙過去★
+    # ★單檔上限不是時間防線★(2026-09-13 實測翻掉原本的訂法):時間防線是上面那兩個預算,
+    # 它們能中斷正在跑的命令;單檔上限擋的是「病態大檔」——壓縮成一行的 bundle、產生出來的巨檔,
+    # 那種東西會讓工具吃記憶體或跑到天荒地老。原本照最慢的工具(社群規則庫:26718 行 105 秒)訂成
+    # 四千行,結果是同一支檔 ruff 只要 0.05 秒卻被判「太大不掃」——把快工具也一起罰了。
+    # 慢工具的專案自己把這兩個值調小;預設放寬到「正常的原始碼都掃得到」。
+    "max_file_lines": 60000,
+    "max_file_bytes": 5000000,  # ★只看行數會被「整支檔只有一行」的壓縮檔騙過去★,所以兩個都看
 }
 _LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
 _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
@@ -17914,7 +17919,7 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
     import time as _time
 
     out = {"status": "clean", "blocked": False, "mode": "block", "new": [], "waived": 0,
-           "weak": 0, "oversize": [], "undone": [], "autopass": False, "ran": [],
+           "weak": 0, "oversize": [], "oversize_waived": [], "undone": [], "autopass": False, "ran": [],
            "report_only": [], "reason": "", "warnings": []}
 
     cfg = _lint_new_config(repo_root)
@@ -17987,11 +17992,19 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
                 continue
             n_bytes, n_lines = len(raw), raw.count(b"\n") + 1
             if n_lines > cfg["max_file_lines"] or n_bytes > cfg["max_file_bytes"]:
-                too_big.append({"file": f, "lines": n_lines, "bytes": n_bytes,
+                # ★大檔也要有指紋才放行得掉★:設計說「檔太大要走放行管道登記才算過」,
+                # 但放行只認告警的指紋——不給大檔一個指紋,那句話就是空的,而且會變成
+                # 「這個專案有一支過大的檔=永遠推不上去、沒有出口」。指紋綁路徑不綁內容:
+                # 那支檔會一直很大,綁內容的話每改一次就要重新登記一次。
+                import hashlib as _hl2
+                _k = _hl2.sha256(("oversize" + _LINT_NEW_SEP + f).encode("utf-8")).hexdigest()[:16]
+                too_big.append({"file": f, "lines": n_lines, "bytes": n_bytes, "key": _k,
                                 "over": "行數" if n_lines > cfg["max_file_lines"] else "位元組數"})
                 head_files.pop(f, None)
                 base_files.pop(f, None)
-        out["oversize"] = too_big
+        # 已經登記過的大檔不再擋(但照樣列出來,讓人知道那支檔沒被檢查)
+        out["oversize"] = [t for t in too_big if t["key"] not in waivers]
+        out["oversize_waived"] = [t for t in too_big if t["key"] in waivers]
 
         base_claims, head_claims = [], []
         budget_end = deadline if deadline else (_time.monotonic() + cfg["budget_sec"])
@@ -26172,7 +26185,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 if len(_lv.get("new") or []) > 8:
                     print(f"  …另有 {len(_lv['new']) - 8} 條", file=sys.stderr)
                 for _o in (_lv.get("oversize") or [])[:5]:
-                    print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查", file=sys.stderr)
+                    print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查"
+                          f"(要讓它一直算過就登記:{_o.get('key')})", file=sys.stderr)
                 for _u in _lv.get("undone") or []:
                     if _u.get("kind") != "env":
                         print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
@@ -26195,6 +26209,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                         _bits.append(f"{_lv['waived']} 條先前放行過")
                     if _lv.get("report_only"):
                         _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
+                    if _lv.get("oversize_waived"):
+                        _bits.append(f"{len(_lv['oversize_waived'])} 支檔太大沒檢查(已登記)")
                     if _lv.get("autopass"):
                         # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
                         # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
