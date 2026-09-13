@@ -39876,6 +39876,30 @@ def t_lint_killswitch():
             _os.environ["LUMOS_SKIP_LINT_NEW"] = old
 
 
+def t_lint_not_checked():
+    """[S9b] 一條都沒跑就不准說「乾淨」——宣告沒帶檔案清單佔位的會被降級成只報不擋,
+    全部都是這種的時候整道閘等於沒作用,收尾行卻寫「沒有新增的告警」。
+    真機坐實:某個 742 支檔的專案五條宣告沒有一條帶佔位。"""
+    m = _lng_module()
+    root, git = _lng_repo()
+    # 沒有 {LINT_FILES} 佔位:整個專案掃一遍那種老式宣告
+    _lng_declare(root, ["echo x > {LINT_SARIF_OUT}"])
+    (root / "app.py").write_text("a = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "app.py").write_text("a = 2\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "two")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S9b 一條都沒跑→狀態不是 clean", v["status"] == "not-checked", str(v["status"]))
+    check("S9b 而且要講出「其實沒有被檢查」", "沒有被檢查" in (v.get("reason") or ""), str(v.get("reason")))
+    check("S9b 但不擋(宣告寫法不對是設定問題,不是新增告警)", v["blocked"] is False, str(v))
+    check("S9b 降級的那條要列出來", len(v.get("report_only") or []) == 1, str(v.get("report_only")))
+    # ★對照組★:同一個專案換成帶佔位的宣告,而且真的沒有新增告警 → 這時才准說 clean
+    _lng_declare(root, ["echo '{\"version\":\"2.1.0\",\"runs\":[]}' > {LINT_SARIF_OUT} && echo {LINT_FILES} >/dev/null"])
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S9b 對照組:有佔位又真的沒告警→才是 clean", v2["status"] == "clean", str(v2["status"]))
+
+
 def t_lint_gate_modes():
     """[S13] 設定放 .lumos/config.json 的 lint_new 區塊;三態都要認得,不合法的值要唸並退回預設。"""
     import json as _j

@@ -41,6 +41,20 @@ about_code:
 
 `pitfalls --diff` 從 regex 提示器升級為 **lint 整合器**——偵測 diff 涉及的棧,跑專案 `.lumos/lint.json` 宣告的一組 lint 指令(各輸出 SARIF),lumos 解析合併、過濾到 diff 觸及行,併進既有 pitfalls manifest 餵 reviewer / `lumos-code-loop`。**lumos 只解 SARIF 一種格式、不內建棧規則、不管理 linter**;無宣告則 regex-only 分毫不變。
 
+
+## 一條都沒跑就不准說「乾淨」（2026-09-13）
+
+> 白話：宣告了檢查工具、閘卻一條都沒跑，收尾行還寫「沒有新增的告警」——看的人會以為檢查過了。
+
+**怎麼發生的**：宣告的命令要帶一個「把改動的檔案清單塞進來」的佔位，閘才有辦法只檢查這次動到的檔。沒帶佔位的命令會被**降級成只報不擋**（那是刻意的：舊專案的整包掃描宣告不該拖累合格的新宣告）。問題在於，**全部的命令都被降級時，判定仍然回「乾淨」**。
+
+**為什麼不是理論問題**：一個 742 支 C# 檔的真專案，`.lumos/lint.json` 裡五條宣告——`cs`、`sql`、`vue`、`js`、`css`——**沒有一條帶佔位**。那個專案接上這道閘之後，每一次推送都會拿到「沒有新增的告警」，而實際上一個字都沒檢查。
+
+**改成怎樣**：全部降級、一條都沒跑時，判定狀態是「沒有被檢查」，收尾行直接寫「★這次改動沒有被檢查★」並講出有幾條宣告沒帶佔位。**不改擋不擋**——宣告寫法不對是設定問題，不是這次改動帶進了新問題，擋了會讓那個專案立刻推不動。[test:t_lint_not_checked]
+
+**.NET 這一類天生接不上這道閘**：Roslyn 的分析器要靠編譯整個專案才會產出結果，命令沒辦法只吃幾支檔，所以必然落在「只報不擋」那一類。要在 .NET 專案用這道閘，得換成能單獨吃檔案的工具，或者接受這一格由代碼審那條路徑覆蓋。
+
+
 ## 組件(spec 逐行權威 `docs/design/2026-07-04-pitfalls-lint-adapter.md`)
 - **①② config + 偵測**:`_lint_load_config(repo_root)` 讀 `.lumos/lint.json`(缺/壞→None);`_lint_stacks_for_diff(added,config)` 對 added 每檔 `Path(f).suffix.lstrip('.')` 對 config key、命中收指令(去重)。
 - **③ runner + SARIF 解析**:`_lint_run_and_parse(cmd,repo_root)→(claims,ok)`,承重點見 summary(temp/shell/timeout/killpg/uri 正規化/location-less 不連坐/run 級容錯)。

@@ -18061,15 +18061,25 @@ def _lint_new_classify(out, cfg):
         out["status"], out["blocked"], out["reason"] = "blocked", True, "、".join(bits)
     elif hard:
         out["status"], out["reason"] = "warn", "設定檔把這道閘設成只報告,不擋"
+    elif env_undone:
+        out["status"] = "env-unavailable"
+        out["reason"] = "有命令跑不動(已自動放行並記帳)"
+    elif not out["ran"] and out["report_only"]:
+        # ★一條都沒跑就不准說「乾淨」★:宣告沒帶檔案清單佔位的命令會被降級成只報不擋,
+        # 全部都是這種的時候等於整道閘沒作用。原本這裡回 clean,收尾行就寫成「沒有新增的告警」——
+        # 那句話會讓人以為檢查過了。真機坐實:某個 742 支檔的專案五條宣告沒有一條帶佔位。
+        out["status"] = "not-checked"
+        out["reason"] = ("宣告的 %d 條檢查命令都沒有 {LINT_FILES} 佔位,一條都沒跑"
+                         "——這次改動其實沒有被檢查" % len(out["report_only"]))
     else:
-        out["status"] = "env-unavailable" if env_undone else "clean"
-        out["reason"] = "沒有新增的告警" if not env_undone else "有命令跑不動(已自動放行並記帳)"
+        out["status"] = "clean"
+        out["reason"] = "沒有新增的告警"
 
 
 def _lint_new_verdict(repo_root, diff_range, deadline=None):
     """新增告警閘的判定——這道閘只問一件事:這次改動有沒有帶進新的告警。
     回 dict{status, blocked, mode, new, waived, weak, oversize, undone, autopass, ran, report_only, reason, warnings}。
-    status:off(關掉) / no-config(沒宣告檢查工具) / no-files(沒有要掃的檔) / clean / blocked / env-unavailable
+    status:off(關掉) / no-config(沒宣告檢查工具) / no-files(沒有要掃的檔) / not-checked(宣告都沒帶檔案清單佔位,一條都沒跑) / clean / blocked / env-unavailable
     ★兩類失敗分開★:環境不可用(工具沒裝、命令逾時、拉不到規則、版本代號解析不出、放行檔讀不了)
     →自動放行並自動記一筆帳;真的有未放行的新增告警、或檔太大沒被檢查→擋,逃生門是人手動放行寫理由。"""
     import os
@@ -26342,7 +26352,9 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                         # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
                         # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
                         _bits.append(f"自動放行並記帳({_lv.get('reason') or '原因不明'})")
-                    _head = "沒有新增的告警" if _lv.get("status") != "env-unavailable" else "沒能完整檢查"
+                    _st = _lv.get("status")
+                    _head = {"env-unavailable": "沒能完整檢查",
+                             "not-checked": "★這次改動沒有被檢查★"}.get(_st, "沒有新增的告警")
                     print(f"  新增告警閘:{_head}({'、'.join(_bits)})")
             for _w in ((dv or {}).get("warnings") or []):
                 print(f"  提醒:{_w}")
