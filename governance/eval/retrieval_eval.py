@@ -151,6 +151,20 @@ def edit_universe(case):
 SEARCH_TOUCH = 10
 
 
+def _macro_on(rows, key, gate_key):
+    """限縮巨集平均:只算 gate_key 不是 None 的那些題(2026-09-15 修,
+    Issues/尺切換恆等斷言反覆不過 原因一)。
+
+    為什麼要這個:新尺的題級門檻會把候選不足的題整題丟出分母(c_* 記 None),
+    舊尺照算。恆等斷言若拿「全部題的舊尺平均」對「有效題的新尺平均」,
+    ★那是兩組不同題目的平均在比★,未標歸零也不可能相等——2026-09-15 實跑
+    五組全不等,消融掉題級門檻後三組立刻相等,證實差額就是這個。
+    ★這不是改尺:兩把尺的算法都沒動,改的只是「拿什麼跟什麼比」★。"""
+    vals = [r[key] for r in rows
+            if r.get(gate_key) is not None and r.get(key) is not None]
+    return round(sum(vals) / len(vals), 4) if vals else None
+
+
 def _touched_search(legacy, ranked):
     """search 題計分觸及集=兩臂各前 SEARCH_TOUCH,保序去重。"""
     seen, out = set(), []
@@ -172,12 +186,29 @@ def split_buckets(res):
 
 
 def _touched_edit(res, k=8):
-    """edit 題計分觸及集=free 前 k+全部 pins+全部 lane(lane 視同 pins:人看得到就要標過)。"""
+    """edit 題計分觸及集=★三條排法各自的前 k★+全部 pins+全部 lane。
+
+    2026-09-15 修(Issues/尺切換恆等斷言反覆不過 原因二):原本只取 free 前 k,
+    而那等於只涵蓋「綜合」那一條排法的視窗。但 eval_edit 對「只比文字」(L)與
+    「只比圖」(_graph_score)另外各自重排並各自截前 k 算分——排進那兩條自己前 k、
+    卻不在綜合前 k 的候選,永遠不會被判定為未標,補標流程也就永遠碰不到,
+    於是檢查說「未標=0」而那兩條其實有未標(實測:消融題級門檻後,只剩這兩條不等,
+    且新尺分數變高=未標被當 0 分拖累的效果出現在檢查看不到的地方)。
+    ★三條排法要跟 eval_edit 的 orders 用同一組排序鍵,改一邊要改兩邊★。"""
     _p, _f, _l = split_buckets(res)
-    free = [x["node"] for x in _f]
     pins = [x["node"] for x in _p] + [x["node"] for x in _l]
+    # ★綜合那條沿用上游既有順序、不重排★(純加法修改:重排會在沒有 score 或分數相同時
+    # 退化成按檔名排,把上游排序破壞掉——2026-09-15 被 t_eval_touched_universe_bounds 抓到)
+    arms = (_f,
+            sorted(_f, key=lambda x: (-x.get("L", 0.0), x["node"])),
+            sorted(_f, key=lambda x: (-_graph_score(x), x["node"])))
     seen, out = set(), []
-    for n in free[:k] + pins:
+    for seq in [a[:k] for a in arms]:
+        for x in seq:
+            if x["node"] not in seen:
+                seen.add(x["node"])
+                out.append(x["node"])
+    for n in pins:
         if n not in seen:
             seen.add(n)
             out.append(n)
@@ -504,7 +535,11 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         print(f"  第一個對的答案多靠前:{rm}(舊 {lm};1.0=都在第一名)  |  前 10 名撈到該撈的比例:{rr}(舊 {lr})")
         verdict["search_lift_pct"] = round(lift, 1)
         verdict["search_gate"] = _search_gate_ok(lift, ln)
-        verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 恆等斷言配對用([S3]①)
+        verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 顯示/歷史用(全題平均)
+        # 恆等斷言配對用([S3]①;2026-09-15 修):★限縮到新尺也認可的那些題★,
+        # 否則是兩組不同題目的平均在比,未標歸零也不可能相等。
+        verdict["_rn_eq"] = _macro_on(srows, "ranked_ndcg", "c_ranked_ndcg")
+        verdict["_ln_eq"] = _macro_on(srows, "legacy_ndcg", "c_legacy_ndcg")
         # ── 新尺預覽(condensed;[S3]② gate 恆以舊尺拍板,這裡只算只印)──
         c_ln, c_rn = _macro(srows, "c_legacy_ndcg"), _macro(srows, "c_ranked_ndcg")
         c_valid = sum(1 for r in srows if r.get("c_ranked_ndcg") is not None)
@@ -569,7 +604,11 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
               f"|edit 面覆蓋率 {e_cov}、有效 {e_valid}/{len(erows)} 題"
               + ("  ⚠ 有效題數不足半數=弱證據" if verdict["condensed_edit"]["weak"] else ""))
         # fusion 各勝至少一主指標,另一指標不倒退超過 0.02——beats 已升模組層(code-r1 s1-f1)
-        verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 恆等斷言配對用
+        verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 顯示/歷史用(全題平均)
+        # 恆等斷言配對用(2026-09-15 修,同 search 面理由):三條排法各自限縮
+        verdict["_fp_eq"] = _macro_on(erows, "fusion_p", "c_fusion_p")
+        verdict["_bp_eq"] = _macro_on(erows, "bm25_p", "c_bm25_p")
+        verdict["_gp_eq"] = _macro_on(erows, "graph_p", "c_graph_p")
         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
         verdict["free_median_le_topk"] = med is not None and med <= k_edit
@@ -647,11 +686,14 @@ def _switch_equal(v):
     回 (equal: bool, diffs: [str])。"""
     diffs = []
     cs, ce = v.get("condensed_search") or {}, v.get("condensed_edit") or {}
-    pairs = [("search ranked nDCG", v.get("_rn_raw"), cs.get("ndcg")),
-             ("search legacy nDCG", v.get("_ln_raw"), cs.get("ndcg_legacy")),
-             ("edit fusion P", v.get("hook_p"), ce.get("p")),
-             ("edit bm25 P", v.get("_bp_raw"), ce.get("bm25_p")),
-             ("edit graph P", v.get("_gp_raw"), ce.get("graph_p"))]
+    # ★2026-09-15 修:吃的是「限縮到新尺也認可的題」的舊尺平均(_*_eq),
+    # 不是全題平均(_*_raw)——後者會讓兩組不同題目的平均互比,永遠不等。
+    # 缺 _*_eq 鍵時★不得靜默當相等★:列成差異讓切換中止(fail-closed)。
+    pairs = [("search ranked nDCG", v.get("_rn_eq"), cs.get("ndcg")),
+             ("search legacy nDCG", v.get("_ln_eq"), cs.get("ndcg_legacy")),
+             ("edit fusion P", v.get("_fp_eq"), ce.get("p")),
+             ("edit bm25 P", v.get("_bp_eq"), ce.get("bm25_p")),
+             ("edit graph P", v.get("_gp_eq"), ce.get("graph_p"))]
     for name, old, new in pairs:
         if old is None and new is None:
             continue

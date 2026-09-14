@@ -26926,7 +26926,9 @@ def t_eval_condensed_switch():
     ok3, _ = m.pin_noise_ratchet(hist, "aaa", "all", 3, metric_rev="condensed-v1", inherit=True)
     check("噪音棘輪繼承:2→3 被擋", ok3 is False, "")
     # 恆等斷言:同值過/異值列差
-    v = {"_rn_raw": 0.8, "_ln_raw": 0.4, "hook_p": 0.75, "_bp_raw": 0.5, "_gp_raw": 0.25,
+    # ★2026-09-15 起恆等斷言吃限縮鍵 _*_eq(限縮到新尺也認可的題),不吃全題平均 _*_raw★
+    # ——後者會讓兩組不同題目的平均互比,未標歸零也永遠不等(Issues/尺切換恆等斷言反覆不過 原因一)
+    v = {"_rn_eq": 0.8, "_ln_eq": 0.4, "_fp_eq": 0.75, "_bp_eq": 0.5, "_gp_eq": 0.25,
          "condensed_search": {"ndcg": 0.8, "ndcg_legacy": 0.4},
          "condensed_edit": {"p": 0.75, "bm25_p": 0.5, "graph_p": 0.25}}
     eq, diffs = m._switch_equal(v)
@@ -26942,6 +26944,67 @@ def t_eval_condensed_switch():
     check("hook gate helper:None/weak=不轉綠", m._hook_gate_ok(None) is False
           and m._hook_gate_ok(0.75, weak=True) is False and m._hook_gate_ok(0.75) is True, "")
     print("  ✓ t_eval_condensed_switch")
+
+
+def t_eval_switch_equal_same_question_set():
+    """尺切換恆等斷言要比對「同一組題」(Issues/尺切換恆等斷言反覆不過 原因一)。
+
+    症狀:新尺的題級門檻把候選不足的題整題丟出分母、舊尺照算,於是兩邊拿
+    ★不同題目集算出來的平均★在比相不相等,永遠不等。2026-09-15 實跑重現:
+    未標=0 但五組全不等;消融掉門檻後三組立刻相等。
+    翻紅釘:把 _macro_on 的 gate_key 過濾拿掉(改成等同 _macro)→ 第 2 條翻紅。"""
+    _need_src("governance/eval")
+    root, _gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    # 三題:第三題被新尺判無效(c_* 是 None),舊尺照算
+    rows = [{"ranked_ndcg": 0.9, "c_ranked_ndcg": 0.9},
+            {"ranked_ndcg": 0.7, "c_ranked_ndcg": 0.7},
+            {"ranked_ndcg": 0.1, "c_ranked_ndcg": None}]
+    check("_macro 全算(含新尺丟掉的題)", m._macro(rows, "ranked_ndcg") == 0.5667,
+          str(m._macro(rows, "ranked_ndcg")))
+    check("★_macro_on 只算新尺也認可的題★",
+          m._macro_on(rows, "ranked_ndcg", "c_ranked_ndcg") == 0.8,
+          str(m._macro_on(rows, "ranked_ndcg", "c_ranked_ndcg")))
+    # 恆等斷言吃的是限縮後的值
+    v = {"_rn_eq": 0.8, "_ln_eq": 0.4, "_fp_eq": 0.75, "_bp_eq": 0.5, "_gp_eq": 0.25,
+         "condensed_search": {"ndcg": 0.8, "ndcg_legacy": 0.4},
+         "condensed_edit": {"p": 0.75, "bm25_p": 0.5, "graph_p": 0.25}}
+    eq, diffs = m._switch_equal(v)
+    check("限縮後同值→恆等過", eq is True and diffs == [], str(diffs))
+    v["condensed_edit"]["bm25_p"] = 0.9
+    eq2, d2 = m._switch_equal(v)
+    check("限縮後仍有差→照樣不過", eq2 is False and any("bm25" in x for x in d2), str(d2))
+    check("★缺限縮鍵不得靜默當相等★", m._switch_equal({"condensed_search": {"ndcg": 0.8}})[0] is False, "")
+    print("  ✓ t_eval_switch_equal_same_question_set")
+
+
+def t_eval_touched_edit_covers_all_arms():
+    """未標檢查要涵蓋三條排法各自的前 k(Issues/尺切換恆等斷言反覆不過 原因二)。
+
+    症狀:edit 面用綜合/只比文字/只比圖三種排法各自截前 k 算分,但未標判定
+    只看綜合那一條的前 k,另外兩條視窗裡的未標永遠不會被判定為未標、補標
+    流程也碰不到 → 檢查說「未標=0」而那兩條其實有未標。
+    翻紅釘:把 _touched_edit 改回只取 free[:k] → 第 2、3 條翻紅。"""
+    _need_src("governance/eval")
+    root, _gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    # 綜合分數高的在前;只比文字(L)與只比圖(in_deg)各有自己的贏家
+    # 只比圖那條看的是 kind/hop(直接關聯=1.0,間接照 hop 衰減),不是入度
+    res = [{"node": "A.md", "score": 0.9, "L": 0.1, "kind": "indirect", "hop": 3},
+           {"node": "B.md", "score": 0.8, "L": 0.2, "kind": "indirect", "hop": 3},
+           {"node": "C.md", "score": 0.1, "L": 0.9, "kind": "indirect", "hop": 3},   # 只比文字的第一名
+           {"node": "D.md", "score": 0.05, "L": 0.0, "kind": "direct"}]              # 只比圖的第一名
+    touched = m._touched_edit(res, k=2)
+    check("綜合前 2 名在", "A.md" in touched and "B.md" in touched, str(touched))
+    check("★只比文字的前 2 名也要在★", "C.md" in touched, str(touched))
+    check("★只比圖的前 2 名也要在★", "D.md" in touched, str(touched))
+    check("不重複", len(touched) == len(set(touched)), str(touched))
+    # 固定席與參考道照舊全納入
+    res2 = res + [{"node": "P.md", "score": 0.0, "pinned": True},
+                  {"node": "L.md", "score": 0.0, "lane": "soft-guard"}]
+    t2 = m._touched_edit(res2, k=1)
+    check("固定席與參考道仍全納入", "P.md" in t2 and "L.md" in t2, str(t2))
+    print("  ✓ t_eval_touched_edit_covers_all_arms")
 
 
 def t_refresh_delta():
@@ -27218,11 +27281,19 @@ def t_eval_touched_universe_bounds():
     t = m._touched_search(legacy, ranked)
     check("search 觸及=兩臂各前10 去重", set(t) == set(legacy[:10]) | set(ranked[:10]), str(t))
     check("legacy 第11名起不入(L12 不在)", "L12.md" not in t, str(t))
-    res = ([{"node": f"F{i}.md", "pinned": False} for i in range(12)]
+    # ★2026-09-15 合約擴張(Issues/尺切換恆等斷言反覆不過 原因二)★:edit 面用三條排法
+    # 各自截前 k 算分,而 bm25_p/graph_p 各自驅動一道 gate——那兩條窗裡的未標★會實際
+    # 影響分數★,正是本測試 docstring 自己講的收斂判準所要求納入的。舊合約只含綜合窗,
+    # 相對於它自己宣告的原則是★漏收★,不是本次改動把母體放寬。
+    res = ([{"node": f"F{i}.md", "pinned": False, "score": 1.0 - i / 100} for i in range(12)]
            + [{"node": f"P{i}.md", "pinned": True} for i in range(20)])
     te = m._touched_edit(res, k=8)
-    check("edit 觸及=free 前8+全部 pins", set(te) == {f"F{i}.md" for i in range(8)} | {f"P{i}.md" for i in range(20)}, str(te))
-    check("free 第9名起不入(F9 不在)", "F9.md" not in te, str(te))
+    check("綜合窗仍是 free 前8(上游順序不被重排)", {f"F{i}.md" for i in range(8)} <= set(te), str(te))
+    check("全部 pins 仍全入", {f"P{i}.md" for i in range(20)} <= set(te), str(te))
+    check("★仍有上界:free 側至多 3 條窗×k★", len([x for x in te if x.startswith("F")]) <= 3 * 8, str(te))
+    check("不重複", len(te) == len(set(te)), str(te))
+    # 三臂同序時(本 fixture 的 L/kind 皆缺→同分)退化成同一組,free 側就是前 8
+    check("三臂同序時 free 側=前8(F9 不在)", "F9.md" not in te, str(te))
 
 
 def _mk_eval_fixture2():

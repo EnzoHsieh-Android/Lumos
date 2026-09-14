@@ -9,6 +9,7 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  KEY:[2026-09-15 尺切換解卡,plan:[[Issues/尺切換恆等斷言反覆不過]]]★2026-08-26 寫好的 condensed 尺三週來一次都沒上線過——本日修掉兩個缺陷後切過去了★(歷史檔帶切換標記 0→1)。缺陷一:恆等斷言拿★全題平均★對★新尺有效題平均★,是兩組不同題目的平均在比,未標歸零也永遠不等;修法=新增 `_macro_on(rows,key,gate_key)` 只算 gate_key 非 None 的題,斷言改吃 `_rn_eq`/`_ln_eq`/`_fp_eq`/`_bp_eq`/`_gp_eq`,★缺鍵 fail-closed 不得靜默當相等★ [test:t_eval_switch_equal_same_question_set]。缺陷二:未標判定只涵蓋綜合那條排法的前 k,而 bm25/graph 各自截前 k 算分、各驅動一道 gate——那兩條窗的未標會實際影響分數卻永遠碰不到;修法=`_touched_edit` 改成★三條窗聯集(綜合那條沿用上游順序不重排,純加法;第一版重排被 t_eval_touched_universe_bounds 抓到破壞上游序)★ [test:t_eval_touched_edit_covers_all_arms]。★兩把尺的計分算法一行未動,改的只有「拿什麼跟什麼比」與「檢查哪些窗」,不涉 2026-08-26 翻案裁定★。副作用:缺陷二讓原本看不見的未標現形(釘定語料下 0→7 筆,已由 A 席獨立標+Enzo 逐筆裁定補完),補標工作量變大
   KEY:★2026-08-26 評測尺翻案(condensed,plan:[[Projects/評測尺翻案_計劃]])★——「未標=0」翻案:全品質尺加 condensed 版(觸及集窗內已判子列表計分,MRR→MRR@10),題級門檻 ceil(k/2) 低覆蓋記 None 不進 macro、面別覆蓋率分算;雙報期 gate 恆以舊尺拍板、新尺走 history 巢狀欄 condensed_preview(一輪一筆不破);切換點=repin(母體未標=0 時兩尺恆等,恆等斷言過才切、棘輪基線跨 metric_rev 繼承僅限該輪);pin_noise 維持未標=噪音(顯式三態);消融 rc3 零容忍不動
   KEY:[2026-09-12 推筆記認家落地,plan:[[Projects/推筆記認家_計劃]]]★確認過的家成為第四條入口★——目標檔的家(狀態 doing/done/stale 的 Systems 節點 about_code 列了它)只要那篇的摘要或正文寫出完整路徑、或反引號裡寫出在受版控檔裡唯一的裸檔名,就直接進必推名單(kind=home、分數 0、標 home);沒確認的家什麼都不做;家 ≥LUMOS_IMPACT_ABOUT_MAX(預設 8)的大檔整批不當入口、只加標記。必推排序改成 事故 → 家 → 其餘照分數;多檔聚合時家的標記跨檔取或、home_of 記下是哪幾支檔的家;不帶排序的輸出多一個頂層 homes 鍵(派工鏡頭計劃模式用)。旋鈕 LUMOS_IMPACT_HOME=0 回到舊制(about_hit 只加分那條路)。★翻了 [[Projects/固定席扇出降權_計劃]] 的「about 不是第四條入口」★ [test:t_impact_home_confirmed_is_entry_and_pinned] [test:t_impact_diff_keeps_homes]
   KEY:[2026-09-12 推筆記認家代碼審折入]確認「這篇有沒有寫出這支檔」的三條邊界:①完整路徑的掃描不挑語言(中文資料夾與檔名照樣認,原本寫死英數字元類、對中文專案等於整條失效);②★路徑比對區分大小寫,這是刻意的★——git 記錄的路徑是權威,同名不同大小寫本來就是兩支檔,做大小寫不敏感會讓它們互相認到對方的家;打錯大小寫只會少推不會多推,方向安全;③大檔門檻給 0 或負數是無效值、退回預設 8(不擋的話等於把家這條入口對整個專案靜默關掉,而使用者看不出來)。顯示上「★家★」跟種類詞之間要有空白,而且一篇同時是事故又是家時印成「事故·家」——事故是最高優先的安全訊號,不能被蓋掉 [test:t_impact_about_max_has_floor] [test:t_impact_repo_files_reads_bytes]
@@ -45,6 +46,7 @@ aliases:
   - 檢索排序與關聯推薦
 about_code:
   - scripts/lumos
+  - governance/eval/retrieval_eval.py
 ---
 # retrieval-ranking（檢索排序與關聯推薦 v1）
 
