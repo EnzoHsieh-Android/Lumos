@@ -8,13 +8,13 @@ about_code_stamp: batch-2026-08-23/2026-08-23/4322216d8cf2
 tags:
   - type/system
   - status/done
-  - prior-art
   - scope/node-content
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/verification-rot-eval]]"
   - "[[Projects/from-scratch重生守衛_計劃]]"
 summary: |-
+  PRIOR-ART:langchain-ai/openwiki（2026-06 建、11.6k★、MIT、TypeScript）——「CLI 掃 repo → LLM 生成 markdown wiki → CI 排程重生開 PR」的 code 衍生 wiki 原型；與本圖譜是垂直疊（導覽層 vs 合約層），非並排競品。
   FLAG:ORIGIN
   KEY:PRIOR-ART 對照——langchain-ai/openwiki(2026-06 建、11.6k★、MIT、TS):「CLI 掃 repo→LLM 生成 openwiki/ markdown wiki→CI 排程重生開 PR」的 code 衍生 wiki 原型。同樣往 repo 根 CLAUDE.md/AGENTS.md 塞受管區塊叫 agent「先讀 wiki」——與 lumos 使命重疊、但底層賭注相反
   KEY:定位——openwiki 站在 lumos「圖譜先行後 grep code 驗證」的『grep code 那半(導覽/orientation 層)』,正是 lumos 家規故意不入圖的 code 結構層;兩者是垂直疊(導覽層 vs 合約層)非並排競品

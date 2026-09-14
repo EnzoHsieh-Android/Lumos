@@ -7,7 +7,6 @@ tags:
   - type/project
   - status/doing
   - scope/agent-dag
-  - prior-art
 related:
   - "[[Issues/流程自產工作量未量測]]"
   - "[[Projects/工具鏈全環節體檢_調研]]"
@@ -22,6 +21,7 @@ related:
   - "[[Projects/派工鏡頭注入_計劃]]"
   - "[[Projects/工具分類_計劃]]"
 summary: |-
+  PRIOR-ART:調研對象本身就是世界解——Spotify 2026-09 公開的 Portal shunt 插件（擋大檔讀取、改派便宜模型回結構化條列）；本案的做法是先用自家儀器量本 repo 的真實分布再裁，沒有照抄。
   FLAG:TECHNICAL
   KEY:調研對象=Spotify 2026-09 公開的 Portal shunt 插件(Claude Code 插件:PreToolUse 擋 Read 與 Bash cat 類讀 >350 行的檔,改派 Gemini 2.5 Flash 便宜讀者只回結構化條列;另一便宜模型照範例寫樣板碼直接落盤;CLAUDE.md 寫規則被無視後搬進 hook 層)——「90%」是 162K 行 Java 三個單發讀檔情境的 chars/4 平均(82/94/94),不是 session 帳;code-writer 無強制;摘要無可靠行號、便宜模型漏 thread-safety bug,明寫排除 debugging/架構/安全碼
   KEY:★先量再裁(2026-09-09,儀器 scripts/usage_scan.py 掃本 repo 14 天 21 session 12,482 請求)★——每次請求 context p50 486K/p90 880K,≥400K 桶佔 token 量 81%;工具輸出直接進 context 只 ≈280 萬 token 對比快取重讀 62 億;Read 佔工具輸出 1.8%、≥350 行大檔讀取 0.87%(scripts/lumos 讀 19 次平均 4.6K 字元=已是定點讀);模型自身輸出駐留 1.32× 全部工具輸出
