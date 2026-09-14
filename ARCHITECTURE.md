@@ -105,11 +105,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (73 個頂層命令)
+## 3. CLI 子命令家族 (74 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 73 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 74 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]
@@ -128,7 +128,7 @@ flowchart TB
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
     LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check} · bound-tests (--advisory)<br/>canary {record · second} · loop {status·next·replay·verify-progress·…}<br/>dispatch-lens {<base>..<head> · --spec <計劃.md> · --arm·--claim·--disarm·--status}(派工鏡頭:diff 與設計審兩模式)<br/>交回來的驗收:fold-check · refcheck · quote-check · seat-check · severity-check"]
     INTEG --> I["anchor {verify · approve}<br/>impact (影響半徑 + 事故觸發 + --sync-check)<br/>cochange · delguard · testmap {build · affected}"]
-    SARIF --> ST["sqlfluff-sarif · stylelint-sarif<br/>compose-metrics · lint-check"]
+    SARIF --> ST["sqlfluff-sarif · stylelint-sarif · dart-sarif<br/>compose-metrics · lint-check"]
     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit · teardown"]
 
     classDef root fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
@@ -139,7 +139,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,C,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 73 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 74 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
 ## 4. 筆記不腐爛,靠的是五段接力
 

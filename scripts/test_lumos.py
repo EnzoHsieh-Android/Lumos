@@ -11237,6 +11237,178 @@ def t_stylelint_sarif_bridge():
     check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
 
 
+
+def t_dart_sarif_bridge():
+    """dart analyze --format=json → lumos dart-sarif → SARIF → _lint_run_and_parse(Dart/Flutter 進 lint-adapter)。
+    ★跟另外兩支橋接不一樣的地方:讀不懂就失敗,不吐空結果★——照宣告寫法(錯誤訊息丟掉),dart 沒裝或
+    沒跑起來時標準輸出是空的;吐一份「零條告警」的 SARIF 等於替一條根本沒跑的檢查報平安,
+    正是新增告警閘 2026-09-13 修掉的那種假綠。閘那一層的接線另見 t_dart_gate_with_fake_analyzer。"""
+    import importlib.util as U, json as J, subprocess as sp, sys as _sys, tempfile, os as _os, shutil as _sh
+    from importlib.machinery import SourceFileLoader
+    root = Path(tempfile.mkdtemp(prefix="gctl-dartb-"))
+    # 形狀照 2026-09-14 實跑 Dart 3.13.3 的輸出(檔名是絕對路徑、行號在 range.start)
+    def diag(code, sev, line, msg):
+        return {"code": code, "severity": sev, "type": "STATIC_WARNING",
+                "location": {"file": str(root / "lib" / "a.dart"),
+                             "range": {"start": {"offset": 1, "line": line, "column": 3},
+                                       "end": {"offset": 5, "line": line, "column": 7}}},
+                "problemMessage": msg}
+    dj = J.dumps({"version": 1, "diagnostics": [
+        diag("unused_local_variable", "WARNING", 6, "The value of the local variable 'unused' isn't used."),
+        diag("expected_token", "ERROR", 4, "Expected to find ';'.")]})
+    out = root / "o.sarif"
+    r = sp.run([_sys.executable, GRAPHCTL, "dart-sarif", "--out", str(out)], input=dj,
+               capture_output=True, text=True, cwd=str(root))
+    check("dart-sarif rc0", r.returncode == 0, r.stderr)
+    d = J.loads(out.read_text(encoding="utf-8"))
+    res = d["runs"][0]["results"]
+    check("SARIF driver dart + 2 results", d["runs"][0]["tool"]["driver"]["name"] == "dart" and len(res) == 2, str(d)[:160])
+    check("路徑原樣交給適配器(橋接層不自己算路徑,r1 架構對齊席)",
+          res[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == str(root / "lib" / "a.dart"), str(res[0])[:200])
+    check("嚴重度對到 SARIF level", [x.get("level") for x in res] == ["warning", "error"], str([x.get("level") for x in res]))
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    claims, ok = m._lint_run_and_parse(f"cp {out} {{LINT_SARIF_OUT}}", root)
+    check("lint-adapter 吃到 dart claim",
+          ok and len(claims) == 2 and claims[0]["source"] == "lint:dart" and claims[0]["file"] == "lib/a.dart"
+          and claims[0]["line"] == 6 and claims[0]["rule"] == "unused_local_variable", str(claims))
+    # 乾淨:dart 真的跑了、零條 → 這才准吐空結果
+    r_clean = sp.run([_sys.executable, GRAPHCTL, "dart-sarif"], input='{"version":1,"diagnostics":[]}',
+                     capture_output=True, text=True)
+    check("真的跑了而且零條 → rc0、空結果", r_clean.returncode == 0 and '"results": []' in r_clean.stdout, r_clean.stdout[:120])
+    # ★讀不懂就失敗★:空輸入(dart 沒裝/沒跑起來)、混了別的字、形狀不對、清單裡混進看不懂的項目
+    _ok_diag = J.dumps(diag("x", "WARNING", 1, "m"))
+    for name, bad in (("空輸入(dart 沒裝時標準輸出是空的)", ""),
+                      ("前面混了別的字(不是整段 JSON)", "Some banner\n" + dj),
+                      ("JSON 但不是 dart 的形狀", '{"hello": 1}'),
+                      ("清單裡混進不是物件的項目(r1 正確性席/外家席)", '{"version":1,"diagnostics":[42]}'),
+                      ("好項目後面跟一個看不懂的項目", '{"version":1,"diagnostics":[' + _ok_diag + ',"x"]}'),
+                      ("位置欄位型別不對(r1 正確性席)", J.dumps({"version": 1, "diagnostics": [
+                          {"code": "x", "severity": "WARNING", "location": {"file": "/a.dart", "range": {"start": [1, 2]}},
+                           "problemMessage": "m"}]}))):
+        o2 = root / "bad.sarif"
+        if o2.exists():
+            o2.unlink()
+        rb = sp.run([_sys.executable, GRAPHCTL, "dart-sarif", "--out", str(o2)], input=bad, capture_output=True, text=True)
+        check(f"讀不懂 → rc 非 0 而且不寫結果檔:{name}", rb.returncode != 0 and not o2.exists(), f"rc={rb.returncode} exists={o2.exists()}")
+    # ★編譯期錯誤不收★(r1 外家席實測:快照只有改動檔,import 的檔找不到→新碼上報假的「找不到函式」)
+    dj_ce = J.dumps({"version": 1, "diagnostics": [
+        dict(diag("undefined_function", "ERROR", 3, "The function 'Helper' isn't defined."), type="COMPILE_TIME_ERROR"),
+        diag("unused_local_variable", "WARNING", 4, "unused")]})
+    r_ce = sp.run([_sys.executable, GRAPHCTL, "dart-sarif"], input=dj_ce, capture_output=True, text=True)
+    check("編譯期錯誤不收、警告照收", r_ce.returncode == 0 and "undefined_function" not in r_ce.stdout
+          and "unused_local_variable" in r_ce.stdout, r_ce.stdout[:200])
+    # ★共用路徑正規化比真實路徑★:專案根是符號連結、工具回報真實路徑時,照樣算成專案相對
+    real = root / "realproj"
+    (real / "lib").mkdir(parents=True)
+    link = root / "linkproj"
+    link.symlink_to(real, target_is_directory=True)
+    one = J.dumps({"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "dart"}}, "results": [
+        {"ruleId": "r", "message": {"text": "m"}, "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": _os.path.realpath(str(real / "lib" / "a.dart"))}, "region": {"startLine": 1}}}]}]}]})
+    (root / "one.sarif").write_text(one, encoding="utf-8")
+    c_link, ok_link = m._lint_run_and_parse(f"cp {root / 'one.sarif'} {{LINT_SARIF_OUT}}", link)
+    check("專案根是符號連結、回報真實路徑 → 照樣算成專案相對", ok_link and c_link and c_link[0]["file"] == "lib/a.dart",
+          str(c_link))
+    r_out = sp.run([_sys.executable, GRAPHCTL, "dart-sarif", "--out", str(root / "沒有這個目錄" / "o.sarif")],
+                   input='{"version":1,"diagnostics":[]}', capture_output=True, text=True)
+    check("結果檔路徑的目錄不存在 → rc2 講清楚,不丟追蹤訊息(r1 邊界席)",
+          r_out.returncode == 2 and "寫不進去" in r_out.stderr and "Traceback" not in r_out.stderr, r_out.stderr[:200])
+    rb2 = sp.run([_sys.executable, GRAPHCTL, "dart-sarif"], input="", capture_output=True, text=True)
+    check("讀不懂時講清楚為什麼(stderr),而且標準輸出不吐假的空結果", "dart" in rb2.stderr and '"results"' not in rb2.stdout, rb2.stderr[:120])
+    claims_bad, ok_bad = m._lint_run_and_parse(f"printf '' | {_sys.executable} {GRAPHCTL} dart-sarif --out {{LINT_SARIF_OUT}}", root)
+    check("閘那一層:dart 沒產出時判「跑不動」,不是「乾淨」", ok_bad is False and claims_bad == [], str((claims_bad, ok_bad)))
+    # 真機端到端(這台有 dart 才跑;CI 沒有 dart 時照實說沒驗到)
+    dart = _sh.which("dart")
+    if not dart:
+        print("  ⚠ 這台沒有 dart,真機端到端那段沒驗到(轉換本身上面已驗)")
+        return
+    proj = root / "proj"
+    (proj / "lib").mkdir(parents=True)
+    (proj / "pubspec.yaml").write_text("name: probe\nenvironment:\n  sdk: ^3.0.0\n", encoding="utf-8")
+    (proj / "lib" / "b.dart").write_text("int bad(int x) {\n  var unused = 1;\n  return x;\n}\n", encoding="utf-8")
+    claims_real, ok_real = m._lint_run_and_parse(
+        f"{dart} analyze --format=json lib/b.dart 2>/dev/null | {_sys.executable} {GRAPHCTL} dart-sarif --out {{LINT_SARIF_OUT}}", proj)
+    check("真機:真的 dart analyze 接起來,抓到沒用到的變數、路徑是專案相對",
+          ok_real and any(c["rule"] == "unused_local_variable" and c["file"] == "lib/b.dart" and c["line"] == 2 for c in claims_real),
+          str((ok_real, claims_real))[:300])
+
+
+def t_dart_gate_with_fake_analyzer():
+    """★新增告警閘那一層的接線★(2026-09-14 代碼審 r1 外家席:原測試只呼叫適配器,沒走閘)。
+    用一支假的「dart analyze」(照真 dart 的 JSON 形狀、回報絕對路徑)接 lumos dart-sarif,走 _lint_new_verdict:
+    ①舊函式已有的告警不報、新函式的才擋 ②新碼上的編譯期錯誤(快照解析不到造成的)不擋
+    ③工具不存在 → 跑不動、放行並記帳,不是乾淨。CI 沒有 dart 也跑得到。"""
+    import sys as _s
+    m = _lng_module()
+    root, git = _lng_repo("gctl-dartgate-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-dartfake-"))
+    fake = helper / "fake_dart.py"
+    fake.write_text(
+        "import sys, json, os\n"
+        "diags = []\n"
+        "for t in sys.argv[1:]:\n"
+        "    for i, ln in enumerate(open(t, encoding='utf-8').read().splitlines(), 1):\n"
+        "        for mk, code, typ in (('UNUSED', 'unused_local_variable', 'STATIC_WARNING'),\n"
+        "                              ('UNRESOLVED', 'undefined_function', 'COMPILE_TIME_ERROR')):\n"
+        "            if mk in ln:\n"
+        "                diags.append({'code': code, 'severity': 'WARNING', 'type': typ,\n"
+        "                              'location': {'file': os.path.abspath(t), 'range': {'start': {'line': i}, 'end': {'line': i}}},\n"
+        "                              'problemMessage': code})\n"
+        "print(json.dumps({'version': 1, 'diagnostics': diags}))\n", encoding="utf-8")
+    cmd = f"{_s.executable} {fake} {{LINT_FILES}} 2>/dev/null | {_s.executable} {GRAPHCTL} dart-sarif --out {{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="dart")
+    (root / "lib").mkdir()
+    (root / "lib" / "a.dart").write_text("int add() {\n  var x = 1; // UNUSED\n  return 1;\n}\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "lib" / "a.dart").write_text(
+        "int add() {\n  var x = 1; // UNUSED\n  return 1;\n}\n\nint bad() {\n  Helper(); // UNRESOLVED\n  var y = 2; // UNUSED new\n  return 2;\n}\n",
+        encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "head")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    new = [(x["file"], x["line"], x["rule"]) for x in v.get("new") or []]
+    check("閘:只擋新函式裡的沒用到的變數", v["status"] == "blocked" and new == [("lib/a.dart", 8, "unused_local_variable")],
+          str((v["status"], new)))
+    check("閘:新碼上的編譯期錯誤不擋(快照解析不到造成的假告警)",
+          all(r != "undefined_function" for _f, _l, r in new), str(new))
+    _lng_declare(root, [cmd.replace(str(fake), str(helper / "沒有這支.py"))], ext="dart")
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("閘:工具跑不起來 → 跑不動、放行,不是乾淨", v2["status"] == "env-unavailable" and not v2["blocked"],
+          str((v2["status"], v2.get("reason"))))
+
+
+def t_lintcheck_smoke_fills_lint_files():
+    """★冒煙要跟閘一樣把 {LINT_FILES} 換成真檔★(2026-09-14 代碼審 r1 整合席實測):原本字面原樣送出,
+    讀不懂就失敗的工具(dart-sarif)會被判「跑不動」,照文件接好的宣告驗收時現場翻紅。"""
+    import subprocess as sp, sys as _s
+    root, git = _lng_repo("gctl-smokefill-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-smokefake-"))
+    strict = helper / "strict.py"
+    # 參數裡任何一支檔不存在就不產結果——模擬「讀不懂就失敗」的工具
+    strict.write_text("import sys, os, json\nout, files = sys.argv[1], sys.argv[2:]\n"
+                      "if not files or not all(os.path.isfile(f) for f in files): sys.exit(2)\n"
+                      "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'S'}}, 'results': []}]}, open(out, 'w'))\n",
+                      encoding="utf-8")
+    (root / "lib").mkdir()
+    (root / "lib" / "a b.dart").write_text("int a() => 1;\n", encoding="utf-8")
+    _lng_declare(root, [f"{_s.executable} {strict} {{LINT_SARIF_OUT}} {{LINT_FILES}}"], ext="dart")
+    git("add", "-A")
+    git("commit", "-m", "x")
+    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--smoke"], capture_output=True, text=True, timeout=60)
+    check("冒煙把 {LINT_FILES} 換成專案裡的真檔(檔名含空白也行)→ 通過", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+    # ★還沒 git add 的檔也要算★(r2 修正差異席):剛寫好第一支檔就先冒煙
+    root2, _git2 = _lng_repo("gctl-smokefill2-")
+    (root2 / "lib").mkdir()
+    (root2 / "lib" / "first.dart").write_text("int a() => 1;\n", encoding="utf-8")
+    _lng_declare(root2, [f"{_s.executable} {strict} {{LINT_SARIF_OUT}} {{LINT_FILES}}"], ext="dart")
+    r2 = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root2), "--smoke"], capture_output=True, text=True, timeout=60)
+    check("冒煙:還沒 git add 的檔也拿來換 → 通過", r2.returncode == 0, r2.stdout[-300:] + r2.stderr[-200:])
+
+
 # ─── Task 1: lumos impact 子命令骨架 + rc 協定 ────────────────────────────────
 
 def t_impact_cli_skeleton():

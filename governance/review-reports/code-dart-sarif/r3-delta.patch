@@ -1,0 +1,134 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index ca297d01..e335126d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17163,18 +17163,19 @@ def _lint_load_and_validate(repo_root):
+ 
+ def _lintcheck_smoke_cmd(cmd, stack, repo_root, sample=3):
+     """冒煙時把 {LINT_FILES} 換成專案裡真的有的那個棧的檔(取前幾支)。
+     ★原本字面原樣送出★(2026-09-14 代碼審 r1 整合席實測):工具把 `{LINT_FILES}` 當成不存在的路徑,
+     有的工具照樣吐得出結果(看起來通過)、有的印用法說明——dart-sarif 讀不懂就失敗,於是照文件接好的
+     Dart 宣告在冒煙時被判「跑不動」。新增告警閘真跑時一定會換成檔案清單,冒煙要跟它一樣。
++    ★還沒 git add 的檔也算★(r2 修正差異席):剛裝好宣告、寫了第一支檔就先冒煙,正是最常見的驗收時序。
+     這個棧在專案裡一支檔都沒有時原樣送出(冒煙只驗得到「命令本身」)。"""
+     import shlex
+     import subprocess
+     if _LINT_NEW_FILES_TOKEN not in cmd:
+         return cmd
+-    r = subprocess.run(["git", "ls-files", "-z", "--", "*." + str(stack)],
++    r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*." + str(stack)],
+                        capture_output=True, text=True, cwd=str(repo_root))
+     files = [f for f in (r.stdout.split("\0") if r.returncode == 0 else []) if f][:sample]
+     if not files:
+         return cmd
+     return cmd.replace(_LINT_NEW_FILES_TOKEN, " ".join(shlex.quote(f) for f in files))
+ 
+@@ -20981,13 +20982,16 @@ def cmd_stylelint_sarif(out=None):
+ 
+ 
+ _DART_LEVEL = {"ERROR": "error", "WARNING": "warning", "INFO": "note"}
+ # ★編譯期錯誤不收★(2026-09-14 代碼審 r1 外家席,實測重現):新增告警閘的快照只有改動檔,
+ # 改動檔 import 的其他檔、套件解析設定都不在裡面,dart 會在新碼上報一堆「找不到函式/類別」——
+ # 在專案裡直接分析只有 1 條沒用到的變數,快照裡多出 1 條假的 undefined_function。
+-# 真正的編譯錯誤由建置與 CI 抓;這道閘對 Dart 只收警告、lint 規則與提示。
++# ★代價要講明(r2 修正差異席實測,Enzo 裁維持)★:參數個數錯、型別不符、用了沒定義的名字這些真 bug,
++# dart 也歸在這一類,所以★這道閘對 Dart 抓不到編譯錯誤,新碼有這種錯也會判乾淨★——那要靠建置與 CI。
++# 補過一次「帶依賴設定」量過沒用:外部套件解析得到,專案自己其他檔的引用照樣找不到。
++# 真要收得靠「比對時放整份原始碼」,那是改所有語言共用的閘,第一個真 Flutter 專案接進來時再評。
+ _DART_SKIP_TYPES = {"COMPILE_TIME_ERROR"}
+ 
+ 
+ def _dart_sarif_results(data):
+     """dart analyze --format=json 的內容 → SARIF results。★形狀有任何一處不對就丟 ValueError★,
+     由呼叫端當成讀不懂——略過看不懂的項目等於把讀不懂的輸入報成乾淨(r1 正確性席與外家席同時抓到)。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index eb65ea23..46a424c5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11388,12 +11388,19 @@ def t_lintcheck_smoke_fills_lint_files():
+     (root / "lib").mkdir()
+     (root / "lib" / "a b.dart").write_text("int a() => 1;\n", encoding="utf-8")
+     _lng_declare(root, [f"{_s.executable} {strict} {{LINT_SARIF_OUT}} {{LINT_FILES}}"], ext="dart")
+     git("add", "-A"); git("commit", "-m", "x")
+     r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--smoke"], capture_output=True, text=True, timeout=60)
+     check("冒煙把 {LINT_FILES} 換成專案裡的真檔(檔名含空白也行)→ 通過", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
++    # ★還沒 git add 的檔也要算★(r2 修正差異席):剛寫好第一支檔就先冒煙
++    root2, git2 = _lng_repo("gctl-smokefill2-")
++    (root2 / "lib").mkdir()
++    (root2 / "lib" / "first.dart").write_text("int a() => 1;\n", encoding="utf-8")
++    _lng_declare(root2, [f"{_s.executable} {strict} {{LINT_SARIF_OUT}} {{LINT_FILES}}"], ext="dart")
++    r2 = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root2), "--smoke"], capture_output=True, text=True, timeout=60)
++    check("冒煙:還沒 git add 的檔也拿來換 → 通過", r2.returncode == 0, r2.stdout[-300:] + r2.stderr[-200:])
+ 
+ 
+ # ─── Task 1: lumos impact 子命令骨架 + rc 協定 ────────────────────────────────
+ 
+ def t_impact_cli_skeleton():
+     # 非 vault 目錄 → rc 3(vault 找不到)
+diff --git a/README.en.md b/README.en.md
+index 46cc161e..ef204bb1 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -256,13 +256,13 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
+ | Python | ruff |
+ | Kotlin | detekt |
+ | Java | PMD, Checkstyle (neither needs a build tool) |
+ | Swift | SwiftLint (you must pass the Xcode toolchain path yourself, or it crashes outright and the gate auto-passes) |
+ | Vue / Node | eslint (config files and dependency directories have to be carried into the snapshot; that layer is verified) |
+ | SQL | sqlfluff |
+-| Dart / Flutter | `dart analyze`, piped through `lumos dart-sarif` (if the output can't be read, the gate reports "couldn't run" instead of "clean"; compile-time errors are left to your build, because the copied tree can't resolve imports) |
++| Dart / Flutter | `dart analyze`, piped through `lumos dart-sarif` (if the output can't be read, the gate reports "couldn't run" instead of "clean"; **this gate does not catch Dart compile errors**—wrong argument counts and type mismatches included—because the copied tree can't resolve imports; your build and CI have to) |
+ | Dependency vulnerabilities | the cross-language scanner |
+ 
+ **One does not run:**
+ 
+ - **C# / .NET is not covered by this gate today, and the reason is not cost.** Measured on a 347-file project: a full build takes 8.5 seconds, a second build 3.6, and it emits a format this gate already reads. The real reason is that **the tree the gate copies out holds only the files this change touched**—the project file and the rest of the source are absent, so nothing compiles. Making it work means materialising the whole tree instead (measured at 0.1–0.7 seconds per tree), which would affect the other stacks too, **so it stays as it is for now**. That stack is covered by the code-review path instead.
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-lint-adapter.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-lint-adapter.md
+index 31b7db03..3c3cd069 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-lint-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-lint-adapter.md
+@@ -116,17 +116,21 @@ about_code:
+ 
+ ## Dart 橋接:讀不懂就失敗,不吐空結果（2026-09-14）
+ 
+ `lumos dart-sarif` 把 `dart analyze --format=json` 轉成 SARIF,接法跟另外兩支橋接一樣(專案 `.lumos/lint.json` 的 dart 棧:`dart analyze --format=json {LINT_FILES} 2>/dev/null | python3 scripts/lumos dart-sarif --out {LINT_SARIF_OUT}`)。
+ 
+ - **★跟 sqlfluff-sarif / stylelint-sarif 刻意不一樣:讀不懂就 rc2、不寫結果檔★**。那兩支讀不懂時吐一份零條告警的 SARIF;照上面那條宣告(錯誤訊息丟掉),dart 沒裝或沒跑起來時送進來的標準輸出是空的——照舊寫法會替一條根本沒跑的檢查報平安,正是新增告警閘 2026-09-13 修掉的假綠。不寫檔之後,閘讀到空檔判「跑不動」、放行並記帳。**形狀有任何一處不對也一樣**:清單裡混進看不懂的項目、欄位型別不對、前後混了別的字,一律當讀不懂(代碼審 r1 正確性席與外家席抓到原本會略過看不懂的項目、照樣報乾淨)。**那兩支的舊行為沒動**(有測試釘著「空輸入不崩、吐空結果」,改它們要另外評估;代碼審 r1 架構對齊席判這是正當的刻意差異)。
+-- **★編譯期錯誤不收★**(代碼審 r1 外家席,實測重現):閘的快照只有改動檔,改動檔 import 的其他檔、套件解析設定都不在裡面,dart 在新碼上會報「找不到函式/類別」。實測一個有依賴、有相對 import 的 Dart 套件:專案裡直接分析只有 1 條沒用到的變數,快照裡多出 1 條假的 `undefined_function`。所以轉換器丟掉 `type=COMPILE_TIME_ERROR` 的項目,這道閘對 Dart 只收警告、lint 規則與提示;真正的編譯錯誤由建置與 CI 抓。代價:解析不到的型別會被當成動態型別,依賴它的部分警告可能報不出來(漏報,不是誤擋)。
++- **★編譯期錯誤不收★**(代碼審 r1 外家席,實測重現):閘的快照只有改動檔,改動檔 import 的其他檔、套件解析設定都不在裡面,dart 在新碼上會報「找不到函式/類別」。實測一個有依賴、有相對 import 的 Dart 套件:專案裡直接分析只有 1 條沒用到的變數,快照裡多出 1 條假的 `undefined_function`。所以轉換器丟掉 `type=COMPILE_TIME_ERROR` 的項目,這道閘對 Dart 只收警告、lint 規則與提示。
++  - **★代價要講明:這道閘對 Dart 抓不到編譯錯誤★**(代碼審 r2 修正差異席實測):參數個數錯、型別不符、用了沒定義的名字這些真 bug,dart 也歸在編譯期錯誤這一類——新碼有這種錯,這道閘照樣判乾淨。編譯錯誤要靠建置與 CI(Flutter 專案本來就會跑)。另外解析不到的型別會被當成動態型別,依賴它的部分警告也可能報不出來。**Enzo 2026-09-14 裁:維持不收、文件講明**。
++  - **補救量過沒用**:讓快照帶上 `pubspec.yaml` 與 `.dart_tool` 連結,外部套件(例如 collection)解析得到了,但專案自己其他檔的引用(`package:自己/…` 或相對路徑)照樣找不到,假錯誤照樣出來——而 Flutter 專案幾乎每支檔都會引用自己專案的其他檔。真要收編譯錯誤得靠「比對時放整份原始碼」,那是改所有語言共用的閘、專案越大越慢。
++  - 回頭條件:第一個真 Flutter 專案接進來時,量一次 CI 有沒有跑建置/`flutter analyze`、這道閘漏掉的編譯錯誤有沒有在 CI 被接住;沒有 CI 建置的專案要另外評估放整份原始碼。
++REVISIT:2026-12-14 還沒有真 Flutter 專案接進來的話,重看 Dart 這道閘該不該補整份原始碼(看有沒有人因為編譯錯漏進主線而回報)
+ - **路徑交給適配器的共用正規化**(代碼審 r1 架構對齊席:原本橋接層自己另寫一套):轉換器原樣放 dart 回報的絕對路徑;共用正規化這次補上「字面算不進專案時,兩邊換成真實路徑再算一次」——macOS 暫存目錄是符號連結(`/var` → `/private/var`),只比字面會算出一串 `../`。這條補在共用層,所有回報絕對路徑的工具都受益。
+-- **冒煙檢查跟閘對齊**(代碼審 r1 整合席實測):`lumos lint-check --smoke` 原本把 `{LINT_FILES}` 字面原樣送出,讀不懂就失敗的工具會被判「跑不動」——照文件接好的 Dart 宣告驗收時現場翻紅。改成換成專案裡真的有的那個棧的檔(取前三支)。
++- **冒煙檢查跟閘對齊**(代碼審 r1 整合席實測):`lumos lint-check --smoke` 原本把 `{LINT_FILES}` 字面原樣送出,讀不懂就失敗的工具會被判「跑不動」——照文件接好的 Dart 宣告驗收時現場翻紅。改成換成專案裡真的有的那個棧的檔(取前三支,還沒 git add 的也算)。
+ - **實跑**:Dart 3.13.3,臨時專案裡舊函式已有一個沒用到的變數、新函式再加一個——閘只擋新的那條;把 dart 拿出 PATH,閘判「環境不可用」而不是乾淨。
+-- **測試**:轉換與讀不懂的各種形狀 [test:t_dart_sarif_bridge];閘那一層用假的 dart(照真 dart 的輸出形狀)走完整條,CI 沒有 dart 也跑得到 [test:t_dart_gate_with_fake_analyzer];冒煙換檔 [test:t_lintcheck_smoke_fills_lint_files]。
++- **測試**:轉換與讀不懂的各種形狀 [test:t_dart_sarif_bridge];閘那一層用假的 dart(照真 dart 的輸出形狀)走完整條,CI 沒有 dart 也跑得到 [test:t_dart_gate_with_fake_analyzer];冒煙換檔(含還沒 git add 的檔,r2 修正差異席) [test:t_lintcheck_smoke_fills_lint_files]。
+ - 天花板:真 dart 端到端只在有 dart 的機器上跑(沒有時測試會印一行說沒驗到)。零真 Flutter 專案。`--out` 給到不存在的目錄時這支講清楚並 rc2(代碼審 r1 邊界席);另外兩支橋接同樣的寫法會丟追蹤訊息,閘一律用系統暫存檔路徑呼叫、碰不到,沒動。
+ 
+ ## 複雜度當判準（2026-09-13）
+ 
+ > 白話：「這次改動有沒有把某支函式弄得太複雜」可以當閘，**而且不需要新程式**——各語言的檢查工具本來就有複雜度規則，全都吐同一種格式，這道閘本來就只擋新增的。
+ 
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/linter\347\262\276\351\201\270\347\233\256\351\214\204.md" "b/docs/lumos-toolchain-knowledge/Systems/linter\347\262\276\351\201\270\347\233\256\351\214\204.md"
+index f3eddcbe..b207276b 100644
+--- "a/docs/lumos-toolchain-knowledge/Systems/linter\347\262\276\351\201\270\347\233\256\351\214\204.md"
++++ "b/docs/lumos-toolchain-knowledge/Systems/linter\347\262\276\351\201\270\347\233\256\351\214\204.md"
+@@ -62,13 +62,13 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
+ | 棧 | 工具與規則集 | 結果 |
+ |---|---|---|
+ | Java | PMD `rulesets/java/quickstart.xml` | 新方法的 3 條全抓到；**舊方法裡一模一樣的問題沒報**，基準線比對正確 |
+ | Node | eslint 10 flat config（`no-unused-vars`／`eqeqeq`） | 新函式的 2 條抓到；**證明快照補設定檔與依賴目錄那一層對真工具有效** |
+ | Vue | eslint + `eslint-plugin-vue` flat/recommended | 新加的清單少了 key，抓到 `vue/require-v-for-key` |
+ | SQL | sqlfluff（`--dialect tsql`）+ 既有的格式轉接器 | 新加的查詢 6 條全抓到 |
+-| Dart | `dart analyze --format=json` + `lumos dart-sarif` | 抓到新函式的沒用到的變數；**轉接器 2026-09-14 已進工具鏈**，讀不懂就失敗、不吐空結果；**編譯期錯誤不收**（快照只有改動檔、import 解析不到會誤報，見 [[Systems/pitfalls-lint-adapter]]） |
++| Dart | `dart analyze --format=json` + `lumos dart-sarif` | 抓到新函式的沒用到的變數；**轉接器 2026-09-14 已進工具鏈**，讀不懂就失敗、不吐空結果；**編譯期錯誤不收**（快照只有改動檔、import 解析不到會誤報）——**所以這道閘對 Dart 抓不到編譯錯誤**（參數錯、型別不符也算在內），要靠建置與 CI，見 [[Systems/pitfalls-lint-adapter]] |
+ | C# / .NET | `dotnet build -p:ErrorLog=…` | **今天沒被覆蓋，但不是因為貴**：實測 347 支檔的專案完整建置 8.5 秒、第二次 3.6 秒，格式也讀得懂；真正卡住的是快照裡只有改動檔，編譯起不來 |
+ | Python | ruff | 見工具鏈自己那次：當天擋下一次真推送 |
+ 
+ **中文專案要放行全形標點（2026-09-14 決定）**：ruff 的 `RUF001`／`RUF002`／`RUF003` 把全形逗號、分號、括號當成「可能打錯的英文標點」。這個 repo 的註解與訊息通篇中文，**一天之內為它繞路三次**（改掉自己寫的標點才推得動）。改法是在宣告裡列白名單（`lint.allowed-confusables`），把我們實際會用的全形標點放進去——**保留它擋真正同形字攻擊那一半價值**（像西里爾字母的 а 冒充拉丁字母 a），只關掉中文標點那一類誤報。實測同一支檔從 11 條降到 0 條。
+ 
+ **規則集要自己挑，預設的不能直接用**：Checkstyle 配它內建的 google 風格，在 3 支 Java 檔上噴 757 條，幾乎全是排版與缺註解；PMD 的 quickstart 在同樣的檔上是 45 條而且是真問題。**這道閘只擋新增的，但噪音大的規則集會讓每次小改都被擋**，所以接的時候先拿專案現有的碼跑一次看數量級。另外 Checkstyle 的訊息會跟著系統語言走（這台機器吐中文）。

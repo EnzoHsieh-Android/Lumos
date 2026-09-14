@@ -17161,6 +17161,25 @@ def _lint_load_and_validate(repo_root):
     return out
 
 
+def _lintcheck_smoke_cmd(cmd, stack, repo_root, sample=3):
+    """冒煙時把 {LINT_FILES} 換成專案裡真的有的那個棧的檔(取前幾支)。
+    ★原本字面原樣送出★(2026-09-14 代碼審 r1 整合席實測):工具把 `{LINT_FILES}` 當成不存在的路徑,
+    有的工具照樣吐得出結果(看起來通過)、有的印用法說明——dart-sarif 讀不懂就失敗,於是照文件接好的
+    Dart 宣告在冒煙時被判「跑不動」。新增告警閘真跑時一定會換成檔案清單,冒煙要跟它一樣。
+    ★還沒 git add 的檔也算★(r2 修正差異席):剛裝好宣告、寫了第一支檔就先冒煙,正是最常見的驗收時序。
+    這個棧在專案裡一支檔都沒有時原樣送出(冒煙只驗得到「命令本身」)。"""
+    import shlex
+    import subprocess
+    if _LINT_NEW_FILES_TOKEN not in cmd:
+        return cmd
+    r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*." + str(stack)],
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+    files = [f for f in (r.stdout.split("\0") if r.returncode == 0 else []) if f][:sample]
+    if not files:
+        return cmd
+    return cmd.replace(_LINT_NEW_FILES_TOKEN, " ".join(shlex.quote(f) for f in files))
+
+
 def cmd_lint_check(repo=None, smoke=False, as_json=False):
     """檢查 .lumos/lint.json 宣告健康度(收「宣告了跑不動的東西」破口)。
     靜態層(恆跑):格式校驗(見 _lintcheck_validate)。--smoke:真跑每條命令、驗有無產出可解析
@@ -17186,6 +17205,7 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     if smoke and not problems and isinstance(config, dict):
         for stack, cmds in config.items():
             for cmd in (cmds if isinstance(cmds, list) else []):
+                cmd = _lintcheck_smoke_cmd(cmd, stack, repo_root)
                 _claims, ok = _lint_run_and_parse(cmd, repo_root)
                 if not ok:
                     problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{cmd[:60]}"})
@@ -17593,6 +17613,13 @@ def _lint_run_and_parse(cmd, repo_root, path_prefix=None, timeout=None):
                     uri = urllib.parse.unquote(uri)
                     if os.path.isabs(uri):
                         rel = os.path.relpath(uri, repo_root)
+                        if rel.startswith(".."):
+                            # ★字面算不進專案時,兩邊都換成真實路徑再算一次★(2026-09-14 代碼審 r1):
+                            # macOS 暫存目錄是符號連結(/var → /private/var),工具回報真實路徑、
+                            # 專案根是字面路徑時,只比字面會算出一串 ../,快照前綴剝不掉、告警對不上檔。
+                            _real = os.path.relpath(os.path.realpath(uri), os.path.realpath(repo_root))
+                            if not _real.startswith(".."):
+                                rel = _real
                     else:
                         rel = uri
                     rel = rel.replace("\\", "/")
@@ -20949,6 +20976,88 @@ def cmd_stylelint_sarif(out=None):
     if out:
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(text)
+    else:
+        print(text)
+    return 0
+
+
+_DART_LEVEL = {"ERROR": "error", "WARNING": "warning", "INFO": "note"}
+# ★編譯期錯誤不收★(2026-09-14 代碼審 r1 外家席,實測重現):新增告警閘的快照只有改動檔,
+# 改動檔 import 的其他檔、套件解析設定都不在裡面,dart 會在新碼上報一堆「找不到函式/類別」——
+# 在專案裡直接分析只有 1 條沒用到的變數,快照裡多出 1 條假的 undefined_function。
+# ★代價要講明(r2 修正差異席實測,Enzo 裁維持)★:參數個數錯、型別不符、用了沒定義的名字這些真 bug,
+# dart 也歸在這一類,所以★這道閘對 Dart 抓不到編譯錯誤,新碼有這種錯也會判乾淨★——那要靠建置與 CI。
+# 補過一次「帶依賴設定」量過沒用:外部套件解析得到,專案自己其他檔的引用照樣找不到。
+# 真要收得靠「比對時放整份原始碼」,那是改所有語言共用的閘,第一個真 Flutter 專案接進來時再評。
+_DART_SKIP_TYPES = {"COMPILE_TIME_ERROR"}
+
+
+def _dart_sarif_results(data):
+    """dart analyze --format=json 的內容 → SARIF results。★形狀有任何一處不對就丟 ValueError★,
+    由呼叫端當成讀不懂——略過看不懂的項目等於把讀不懂的輸入報成乾淨(r1 正確性席與外家席同時抓到)。
+    路徑原樣放,轉相對交給適配器的共用正規化(r1 架構對齊席:橋接層不自己算路徑)。"""
+    if not isinstance(data, dict) or not isinstance(data.get("diagnostics"), list):
+        raise ValueError("不是 dart analyze --format=json 的輸出(沒有 diagnostics 清單)")
+    results = []
+    for g in data["diagnostics"]:
+        loc = g.get("location") if isinstance(g, dict) else None
+        rng = loc.get("range") if isinstance(loc, dict) else None
+        start = rng.get("start") if isinstance(rng, dict) else None
+        end = rng.get("end") if isinstance(rng, dict) else None
+        line = start.get("line") if isinstance(start, dict) else None
+        path = loc.get("file") if isinstance(loc, dict) else None
+        if not (isinstance(line, int) and line >= 1 and isinstance(path, str) and path):
+            raise ValueError("診斷清單裡有看不懂的項目:%r" % (str(g)[:80],))
+        if str(g.get("type", "")).upper() in _DART_SKIP_TYPES:
+            continue
+        end_line = end.get("line") if isinstance(end, dict) and isinstance(end.get("line"), int) else line
+        item = {
+            "ruleId": str(g.get("code", "")),
+            "message": {"text": str(g.get("problemMessage", ""))},
+            "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": path},
+                "region": {"startLine": line, "endLine": max(end_line, line)},
+            }}],
+        }
+        level = _DART_LEVEL.get(str(g.get("severity", "")).upper())
+        if level:
+            item["level"] = level
+        results.append(item)
+    return results
+
+
+def cmd_dart_sarif(out=None):
+    """dart analyze --format=json(stdin)→ SARIF v2.1(--out 或 stdout)。
+    橋接:Dart/Flutter 的分析器沒有原生 SARIF → 轉成 lint-adapter 吃的 SARIF。
+    用法(專案 .lumos/lint.json 的 dart 棧):
+      dart analyze --format=json {LINT_FILES} 2>/dev/null | python3 scripts/lumos dart-sarif --out {LINT_SARIF_OUT}
+
+    ★跟 sqlfluff-sarif / stylelint-sarif 不一樣:讀不懂就失敗(rc2、不寫結果檔),不吐空結果★。
+    實跑量過:dart 沒裝、或命令沒跑起來時,上面那條宣告送進來的標準輸出是空的(錯誤訊息被 2>/dev/null 丟掉)。
+    這時吐一份「零條告警」的 SARIF,等於替一條根本沒跑的檢查報平安——新增告警閘 2026-09-13
+    修掉的就是這種假綠。不寫檔,閘讀到空檔會判「跑不動」。
+    ★只認整段就是一份 JSON★:前後混了別的字一律當讀不懂(實跑的 dart 輸出沒有混雜,不猜怎麼救)。
+    ★編譯期錯誤不收★:見 _DART_SKIP_TYPES。"""
+    import json
+    raw = sys.stdin.read()
+    try:
+        results = _dart_sarif_results(json.loads(raw))
+    except (json.JSONDecodeError, ValueError) as e:
+        why = ("標準輸出是空的(dart 沒裝或沒跑起來?)" if not raw.strip()
+               else f"讀到的不是 dart analyze --format=json 的輸出({str(e)[:80]})")
+        print(f"擋下:{why}——不產出結果檔,免得一條沒跑的檢查被當成乾淨。", file=sys.stderr)
+        return 2
+    sarif = {"version": "2.1.0",
+             "runs": [{"tool": {"driver": {"name": "dart"}}, "results": results}]}
+    text = json.dumps(sarif, ensure_ascii=False)
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as e:
+            # 代碼審 r1 邊界席:原本丟 Python 追蹤訊息、rc1;閘一律用系統暫存檔路徑呼叫碰不到,手動給錯路徑時講清楚
+            print(f"擋下:結果檔寫不進去({e.__class__.__name__}):{out}", file=sys.stderr)
+            return 2
     else:
         print(text)
     return 0
@@ -26984,6 +27093,7 @@ HELP_WHEN = {
     "rule-gap": "逃逸帳標了該抓卻還沒寫的規則,列成待辦。",
     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+    "dart-sarif": "把 dart analyze 的 JSON 輸出轉成 SARIF,接進 lint 適配器;讀不懂就失敗、不吐空結果。",
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
@@ -27661,6 +27771,9 @@ def main():
     p = sub.add_parser("stylelint-sarif", help="stylelint --formatter json(stdin)→ SARIF v2.1(橋接 CSS/SCSS linter 進 lint-adapter)")
     p.add_argument("--out", dest="stylelint_out", help="輸出 SARIF 檔路徑(預設 stdout)")
 
+    p = sub.add_parser("dart-sarif", help="dart analyze --format=json(stdin)→ SARIF v2.1(橋接 Dart/Flutter 分析器進 lint-adapter;讀不懂 rc2 不寫檔)")
+    p.add_argument("--out", dest="dart_out", help="輸出 SARIF 檔路徑(預設 stdout)")
+
     p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
     asub = p.add_subparsers(dest="anchor_cmd", required=True)
     av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
@@ -27893,6 +28006,8 @@ def main():
         return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "stylelint-sarif":
         return cmd_stylelint_sarif(out=args.stylelint_out)
+    if args.cmd == "dart-sarif":
+        return cmd_dart_sarif(out=args.dart_out)
     if args.cmd == "quote-check":
         return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
     if args.cmd == "seat-check":

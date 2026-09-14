@@ -249,7 +249,7 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 
 **Read the last column.** The ❌ rows were filled in to the same design and tested against synthetic samples, but **no real project has used them yet**—whether the trigger words fire accurately and whether the convention rules hold is still unmeasured. ⚠️ now appears only in the last column, where Dart means a real project was surveyed but never actually onboarded.
 
-**Whether a linter can actually run is a separate question.** The pre-push new-warnings gate copies the tree twice—before and after the change—and runs each linter on both to diff the findings, so the tool has to start up inside a tree that holds source and nothing else, and it has to accept **just the files this change touched**. As of 2026-09-13, every stack has been put through the gate for real:
+**Whether a linter can actually run is a separate question.** The pre-push new-warnings gate copies the tree twice—before and after the change—and runs each linter on both to diff the findings, so the tool has to start up inside a tree that holds source and nothing else, and it has to accept **just the files this change touched**. Every stack below has been put through the gate for real (Dart on 2026-09-14, the rest on 2026-09-13):
 
 | Runs | With |
 |---|---|
@@ -259,11 +259,11 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 | Swift | SwiftLint (you must pass the Xcode toolchain path yourself, or it crashes outright and the gate auto-passes) |
 | Vue / Node | eslint (config files and dependency directories have to be carried into the snapshot; that layer is verified) |
 | SQL | sqlfluff |
+| Dart / Flutter | `dart analyze`, piped through `lumos dart-sarif` (if the output can't be read, the gate reports "couldn't run" instead of "clean"; **this gate does not catch Dart compile errors**—wrong argument counts and type mismatches included—because the copied tree can't resolve imports; your build and CI have to) |
 | Dependency vulnerabilities | the cross-language scanner |
 
-**Two do not run, for different reasons:**
+**One does not run:**
 
-- **Dart**'s official analyzer starts fine and emits structured results, but **nothing converts its format yet**. That is a small program to write, not a dead end.
 - **C# / .NET is not covered by this gate today, and the reason is not cost.** Measured on a 347-file project: a full build takes 8.5 seconds, a second build 3.6, and it emits a format this gate already reads. The real reason is that **the tree the gate copies out holds only the files this change touched**—the project file and the rest of the source are absent, so nothing compiles. Making it work means materialising the whole tree instead (measured at 0.1–0.7 seconds per tree), which would affect the other stacks too, **so it stays as it is for now**. That stack is covered by the code-review path instead.
 
 **Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
