@@ -59,19 +59,23 @@ PER_CMD_CAP = 15.0          # 單條檢查最多跑這麼久
 # 2026-09-14 實測:76 篇記憶裡 34 篇點名了圖譜節點,其中 30 篇是專案狀態。
 _STATUS_WORDS = re.compile(
     r"(還沒推|未推|沒推|還沒裝|沒有裝|未裝|尚未|還沒做|目前沒有|進行中|建置中|待裁|未修|未解|未開工|交付狀態)")
-_NODE_REF = re.compile(r"(?:Projects|Systems|Issues|Verification)/([^\s`。,、)\]]+)")
+# ★分隔符要列全★(2026-09-14 實踩):原本只排除空白/反引號/頓號/右括號/右方括號,
+# 於是分號、引號、左括號都被當成節點名的一部分,吐出「…實作;09-15」這種查無的假壞指標。
+# 一份有假陽性的清單沒人會信,跟沒有一樣。另外要求至少兩個字,排掉裸寫的 `Issues/`。
+_NODE_REF = re.compile(
+    r"(?:Projects|Systems|Issues|Verification)/([^\s`。,、;；:：()（）\[\]\"'／|]{2,})")
 
 
 def graph_stems(start):
-    """找這個專案的圖譜節點名。找不到就回 None(代表這個專案沒有圖譜,不做這項偵測)。"""
+    """找這個專案的圖譜。回 (根目錄, 節點名集合);找不到回 (None, None)。"""
     d = pathlib.Path(start).resolve()
     for cand in [d] + list(d.parents):
         for g in sorted((cand / "docs").glob("*knowledge*")) if (cand / "docs").is_dir() else []:
             if g.is_dir():
-                return {f.stem for f in g.rglob("*.md")}
+                return g, {f.stem for f in g.rglob("*.md")}
         if (cand / ".git").exists():
             break
-    return None
+    return None, None
 
 
 def shadow_copies(here, stems):
@@ -91,11 +95,64 @@ def shadow_copies(here, stems):
         words = sorted(set(_STATUS_WORDS.findall(body)))
         if not words:
             continue
-        hit = sorted({n.rstrip(".md") for n in _NODE_REF.findall(t)} & stems)
+        hit = sorted({_stem(n) for n in _NODE_REF.findall(t)} & stems)
         if hit:
             # ★要印出是哪個字觸發的★:只給檔名不給理由的話,看的人得自己重讀整篇找,
             # 成本一高就沒人動——今天早上那份空轉週報就是這樣躺了 70 天。
             out.append((f.name, hit[:2], words[:4]))
+    return out
+
+
+# ── 指標健康與狀態打架 ──────────────────────────────────────────────────────
+# 業界做法(Oracle 兩層模式 / CoALA 語意記憶歸真相層):記憶是衍生層,只能回答「去哪裡查」,
+# 不能回答「是什麼」。衍生層的兩種壞法都要能被機械抓到:
+#   ① 壞指標——指到一個已經不存在(或改名)的圖譜節點。指標壞了,記憶就變成孤立的斷言。
+#   ② 狀態打架——記憶說「還沒做」而那個節點 status 已經是 done(或反過來)。
+#      ★衝突要浮上來,不要靜靜挑一個★:這支只喊,不替任何一邊決定誰對。
+_LINKED_REF = re.compile(r"\[\[([^\]|#]+)\]\]")
+
+def _stem(name):
+    """去掉結尾的 .md。★不能用 rstrip(".md")★——那是「刪掉結尾所有屬於 . m d 的字元」,
+    會把 shared-worktree-git-add-hazard 削成 …hazar(2026-09-14 實踩,吐出一串查無的假壞指標)。"""
+    return name[:-3] if name.endswith(".md") else name
+
+_DONE_WORDS = re.compile(r"(還沒做|未開工|進行中|建置中|尚未|還沒推|未推|沒推)")
+_LIVE_WORDS = re.compile(r"(已交付|全交付|已完成|已收案|落地完成)")
+
+
+def node_status(graph_root, stem):
+    """讀某個圖譜節點開頭欄位的 status;讀不到回 None。"""
+    for f in graph_root.rglob(stem + ".md"):
+        head = f.read_text(encoding="utf-8", errors="replace")[:1200]
+        m = re.search(r"(?m)^status:[ \t]*([A-Za-z_-]+)", head)
+        return m.group(1) if m else None
+    return None
+
+
+def pointer_problems(here, graph_root, stems):
+    """回 [(檔名, 種類, 細節)]:壞指標與狀態打架。"""
+    out = []
+    mem_stems = {p.stem for p in here.glob("*.md")}
+    for f in sorted(here.glob("*.md")):
+        if f.name == "MEMORY.md":
+            continue
+        t = f.read_text(encoding="utf-8")
+        body = t.split("---", 2)[2] if t.count("---") >= 2 else t
+        named = {_stem(n) for n in _NODE_REF.findall(t)}
+        # ★壞指標只認寫成 [[…]] 的★:散文裡順口提到「像 Issues/金額計算 那種」不是承諾,
+        # 拿它當壞指標就會製造假陽性,而一份有假陽性的清單沒人會信。
+        linked = {_stem(n.split("/")[-1]) for n in _LINKED_REF.findall(t)}
+        # ★記憶之間也用 [[…]] 互連★(2026-09-14 第三次修這支偵測):扣掉記憶檔自己的名字,
+        # 否則每一條「相關:[[某篇記憶]]」都會被報成壞指標——整份清單瞬間全是雜訊。
+        dead = sorted(n for n in linked if n not in stems and n not in mem_stems)
+        if dead:
+            out.append((f.name, "指到不存在的節點", "、".join(dead[:3])))
+        for n in sorted(named & stems):
+            st = node_status(graph_root, n)
+            if st == "done" and _DONE_WORDS.search(body):
+                out.append((f.name, "說還沒做,但節點已 done", n))
+            elif st in ("doing", "open") and _LIVE_WORDS.search(body):
+                out.append((f.name, "說已交付,但節點還是 " + st, n))
     return out
 
 
@@ -155,9 +212,19 @@ def stamp(text, failed, today):
     return head + "\n" + warn + body.lstrip("\n")
 
 
+def is_stamped(text):
+    """這篇有沒有被蓋過章。★只認行首的欄位與行首的警告行★——用子字串比對的話,
+    「說明這個機制」的那篇記憶正文裡寫到 status: stale 這幾個字就會被當成蓋過章,
+    於是它永遠處在「原本蓋過章、現在又成立了」的狀態,每次開場都吵一次(2026-09-14 實踩)。"""
+    return bool(re.search(r"(?m)^  status: stale[ \t]*$", text)
+                or re.search(r"(?m)^%s" % re.escape(MARK), text))
+
+
 def unstamp(text):
     text = re.sub(r"(?m)^  (status|stale_at|stale_by): .*\n", "", text)
-    return re.sub(r"(?m)^%s.*\n\n?" % re.escape(MARK), "", text)
+    # ★只吃掉警告那一行,不要連後面的空行一起吃★:吃掉的話撤章之後開頭欄位跟正文之間
+    # 就沒有空行了,蓋章→撤章不是原樣還原。這種小失真每次來回都會累積。
+    return re.sub(r"(?m)^%s.*\n" % re.escape(MARK), "", text)
 
 
 def main():
@@ -207,8 +274,7 @@ def main():
                 failed.append(claim)
         # ★只認行首的欄位與行首的警告行★(2026-09-14 實踩):用子字串比對的話,
         # 「說明這個機制」的那篇記憶正文裡寫到 status: stale 這幾個字,就會被當成蓋過章。
-        was = bool(re.search(r"(?m)^  status: stale[ \t]*$", text)
-                   or re.search(r"(?m)^%s" % re.escape(MARK), text))
+        was = is_stamped(text)
         if failed:
             if not was:
                 newly_stale += 1
@@ -226,15 +292,21 @@ def main():
             lines.append("? %s 這條驗不了(命令壞了或逾時):%s" % (f.name, c))
 
     shadows = []
-    stems = graph_stems(pathlib.Path.cwd())
+    graph_root, stems = graph_stems(pathlib.Path.cwd())
+    ptr = []
     if stems:
         shadows = shadow_copies(here, stems)
+        ptr = pointer_problems(here, graph_root, stems)
+    if ptr:
+        lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+        for n, kind, detail in ptr:
+            lines.append("    %s  %s:%s" % (n, kind, detail))
     if shadows:
         lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
         for n, nodes, words in shadows:
             lines.append("    %s  (踩到:%s) → %s" % (n, "、".join(words), "、".join(nodes)))
 
-    changed = newly_stale or recovered or unknown_n or skipped or shadows
+    changed = newly_stale or recovered or unknown_n or skipped or shadows or ptr
     if a.quiet and not changed:
         return 0
     if lines:

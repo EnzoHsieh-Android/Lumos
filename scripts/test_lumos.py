@@ -39980,6 +39980,44 @@ def t_lint_killswitch():
             _os.environ["LUMOS_SKIP_LINT_NEW"] = old
 
 
+def t_memory_sweep_core():
+    """[記憶過期清掃]這支 hook 會★改記憶檔★,所以它自己的解析與蓋章要有守衛。
+    四條都是實作時真的踩過、而且是靜默型的坑(不報錯,只是守衛悄悄失效)。
+    翻紅釘:把 _stem 換回 name.rstrip(".md") → ②翻紅;
+    把 is_stamped 換成子字串比對 → ④翻紅。"""
+    import importlib.util as _iu
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "memory-sweep.py"
+    if not hook.is_file():
+        raise _SrcOnly("不在來源 repo(沒有 hook 檔),這段沒驗到")
+    spec = _iu.spec_from_file_location("ms_core", hook)
+    ms = _iu.module_from_spec(spec); spec.loader.exec_module(ms)
+
+    # ① verify 區塊解析:認得 claim/cmd 成對,不被正文的同名行騙走
+    txt = ("---\nname: x\nmetadata:\n  type: project\n"
+           "verify:\n  - claim: 甲\n    cmd: true\n  - claim: 乙\n    cmd: false\n---\n\n"
+           "正文裡也寫了 - claim: 丙 這種字\n")
+    got = ms.verify_blocks(txt)
+    check("① verify 區塊只收開頭欄位那一段", got == [("甲", "true"), ("乙", "false")], str(got))
+
+    # ② 去 .md 不能用 rstrip(字元集)——會把結尾的 d/m 也削掉
+    check("② 去副檔名不削掉結尾字母", ms._stem("shared-worktree-git-add-hazard.md") == "shared-worktree-git-add-hazard",
+          ms._stem("shared-worktree-git-add-hazard.md"))
+    check("② 沒有副檔名的原樣回傳", ms._stem("abc") == "abc", ms._stem("abc"))
+
+    # ③ 蓋章:開頭欄位沒有 modified 也要蓋得上(手寫的記憶檔就是這樣)
+    bare = "---\nname: y\ndescription: d\nmetadata:\n  type: project\n---\n\n正文\n"
+    st = ms.stamp(bare, ["某條對不上"], "2026-09-14")
+    check("③ 沒有 modified 欄位照樣蓋得上章(不是只加正文警告)",
+          "  status: stale" in st and ms.MARK in st, st[:160])
+
+    # ④ 撤章:只認行首的欄位,不可用子字串——說明這個機制的那篇正文會寫到同樣的字
+    prose = bare.replace("正文", "正文提到 status: stale 這幾個字")
+    check("④ 正文寫到那幾個字不算蓋過章", ms.is_stamped(prose) is False, "被誤判成蓋過章")
+    check("④ 行首欄位才算蓋過章", ms.is_stamped(st) is True, "真的蓋過章卻認不出來")
+    check("④ unstamp 不動沒蓋章的檔", ms.unstamp(prose) == prose, "unstamp 動了不該動的")
+    check("④ 真的蓋過章的撤得掉", ms.unstamp(st).strip() == bare.strip(), ms.unstamp(st)[:120])
+
+
 def t_lint_not_checked():
     """[S9b] 一條都沒跑就不准說「乾淨」——宣告沒帶檔案清單佔位的會被降級成只報不擋,
     全部都是這種的時候整道閘等於沒作用,收尾行卻寫「沒有新增的告警」。
