@@ -26,7 +26,6 @@
 """
 import argparse
 import datetime as dt
-import os
 import pathlib
 import re
 import subprocess
@@ -44,7 +43,7 @@ _OUTER = None
 
 
 def _inner_budget(elapsed=None, default=10.0):
-    """從現在到預算用完還剩幾秒(外層 × 0.7 − 已耗)。下限 1 秒。
+    """從現在到預算用完還剩幾秒(外層 × 0.7 - 已耗)。下限 1 秒。
     ★這是「還剩多少」不是「每段配額」★——連續呼叫兩次拿到的數字不該相加。"""
     total = (_OUTER if _OUTER else default) * 0.7
     used = elapsed if elapsed is not None else (time.monotonic() - _T0)
@@ -69,7 +68,7 @@ _NODE_REF = re.compile(
 def graph_stems(start):
     """找這個專案的圖譜。回 (根目錄, 節點名集合);找不到回 (None, None)。"""
     d = pathlib.Path(start).resolve()
-    for cand in [d] + list(d.parents):
+    for cand in [d, *d.parents]:
         for g in sorted((cand / "docs").glob("*knowledge*")) if (cand / "docs").is_dir() else []:
             if g.is_dir():
                 # ★一次走完整棵樹,之後都查這份對照★:原本每查一個節點的 status 就 rglob 一次,
@@ -231,7 +230,88 @@ def unstamp(text):
     return re.sub(r"(?m)^%s.*\n" % re.escape(MARK), "", text)
 
 
-def main():
+class Tally:
+    """一輪清掃數到的東西。★用一個物件裝★:原本這些是 main 裡的六個區域變數,
+    跟三層迴圈混在一起,複雜度 27(門檻 10)——正是本 repo 自己立的那條判準。"""
+
+    def __init__(self):
+        self.lines = []
+        self.newly_stale = self.recovered = self.unknown_n = self.skipped = self.checked = 0
+
+    @property
+    def changed(self):
+        return bool(self.newly_stale or self.recovered or self.unknown_n or self.skipped)
+
+
+def check_one(text, deadline, tally):
+    """跑一篇的所有檢查。回 (對不上的, 驗不了的)。"""
+    failed, unknown = [], []
+    for claim, cmd in verify_blocks(text):
+        left = (deadline - time.monotonic()) if deadline else PER_CMD_CAP
+        if deadline and left <= 0:
+            tally.skipped += 1
+            continue
+        tally.checked += 1
+        ok = run_check(cmd, min(left, PER_CMD_CAP))
+        if ok is None:
+            unknown.append(claim)
+            tally.unknown_n += 1
+        elif not ok:
+            failed.append(claim)
+    return failed, unknown
+
+
+def apply_one(f, text, failed, unknown, today, write, tally):
+    """照檢查結果蓋章或撤章,並把要印的話放進 tally。"""
+    was = is_stamped(text)
+    if failed:
+        if not was:
+            tally.newly_stale += 1
+        tally.lines.append("✗ %s" % f.name)
+        tally.lines.extend("    對不上了:%s" % c for c in failed)
+        if write:
+            f.write_text(stamp(text, failed, today), encoding="utf-8")
+    elif was and not unknown:
+        tally.recovered += 1
+        tally.lines.append("✓ %s(原本蓋過章,現在又成立了,已撤掉)" % f.name)
+        if write:
+            f.write_text(unstamp(text), encoding="utf-8")
+    tally.lines.extend("? %s 這條驗不了(命令壞了或逾時):%s" % (f.name, c) for c in unknown)
+
+
+def sweep(here, deadline, today, write):
+    """跑完整個記憶目錄,回 Tally。"""
+    tally = Tally()
+    for f in sorted(here.glob("*.md")):
+        if f.name == "MEMORY.md":
+            continue
+        text = f.read_text(encoding="utf-8")
+        if not verify_blocks(text):
+            continue
+        failed, unknown = check_one(text, deadline, tally)
+        apply_one(f, text, failed, unknown, today, write, tally)
+    return tally
+
+
+def cross_check(here, tally):
+    """記憶跟圖譜對不對得上:影子副本、壞指標、狀態打架。回有沒有發現。"""
+    _root, stems = graph_stems(pathlib.Path.cwd())
+    if not stems:
+        return False
+    shadows = shadow_copies(here, stems)
+    ptr = pointer_problems(here, stems)
+    if shadows:
+        tally.lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
+        for n, nodes, words in shadows:
+            tally.lines.append("    %s  (踩到:%s) → %s" % (n, "、".join(words), "、".join(nodes)))
+    if ptr:
+        tally.lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+        for n, kind, detail in ptr:
+            tally.lines.append("    %s  %s:%s" % (n, kind, detail))
+    return bool(shadows or ptr)
+
+
+def _build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--quiet", action="store_true", help="沒有任何變化就完全不出聲(hook 用)")
@@ -241,11 +321,17 @@ def main():
     # 安裝器對 Codex 那一家會多帶 --harness codex;不認得的旗標會讓 argparse 直接死,
     # hook 就整支失敗了。收下但不用它——這支對兩家做的事一樣。
     ap.add_argument("--harness", default="claude")
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    global _OUTER
+    a = _build_parser().parse_args()
     here = memory_dir(a.dir)
     if not here.is_dir():
         return 0                                   # 這個專案沒有記憶目錄,安靜退出
-    today = dt.date.today().isoformat()
+    # ★不要用 date.today()★:它是 naive 的,換時區跑出來的日期會不一樣。
+    today = dt.datetime.now().astimezone().date().isoformat()
 
     if a.restore:
         f = here / a.restore
@@ -253,74 +339,21 @@ def main():
         print("撤掉蓋章:" + a.restore)
         return 0
 
-    global _OUTER
     _OUTER = a.budget or None
     deadline = (time.monotonic() + _inner_budget()) if a.budget else None
-    lines, newly_stale, recovered, unknown_n, skipped, checked = [], 0, 0, 0, 0, 0
-    for f in sorted(here.glob("*.md")):
-        if f.name == "MEMORY.md":
-            continue
-        text = f.read_text(encoding="utf-8")
-        blocks = verify_blocks(text)
-        if not blocks:
-            continue
-        failed, unknown = [], []
-        for claim, cmd in blocks:
-            left = (deadline - time.monotonic()) if deadline else PER_CMD_CAP
-            if deadline and left <= 0:
-                skipped += 1
-                continue
-            checked += 1
-            ok = run_check(cmd, min(left, PER_CMD_CAP))
-            if ok is None:
-                unknown.append(claim); unknown_n += 1
-            elif not ok:
-                failed.append(claim)
-        # ★只認行首的欄位與行首的警告行★(2026-09-14 實踩):用子字串比對的話,
-        # 「說明這個機制」的那篇記憶正文裡寫到 status: stale 這幾個字,就會被當成蓋過章。
-        was = is_stamped(text)
-        if failed:
-            if not was:
-                newly_stale += 1
-            lines.append("✗ %s" % f.name)
-            for c in failed:
-                lines.append("    對不上了:%s" % c)
-            if a.write:
-                f.write_text(stamp(text, failed, today), encoding="utf-8")
-        elif was and not unknown:
-            recovered += 1
-            lines.append("✓ %s(原本蓋過章,現在又成立了,已撤掉)" % f.name)
-            if a.write:
-                f.write_text(unstamp(text), encoding="utf-8")
-        for c in unknown:
-            lines.append("? %s 這條驗不了(命令壞了或逾時):%s" % (f.name, c))
+    tally = sweep(here, deadline, today, a.write)
+    crossed = cross_check(here, tally)
 
-    shadows = []
-    _graph_root, stems = graph_stems(pathlib.Path.cwd())
-    ptr = []
-    if stems:
-        shadows = shadow_copies(here, stems)
-        ptr = pointer_problems(here, stems)
-    if ptr:
-        lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
-        for n, kind, detail in ptr:
-            lines.append("    %s  %s:%s" % (n, kind, detail))
-    if shadows:
-        lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
-        for n, nodes, words in shadows:
-            lines.append("    %s  (踩到:%s) → %s" % (n, "、".join(words), "、".join(nodes)))
-
-    changed = newly_stale or recovered or unknown_n or skipped or shadows or ptr
-    if a.quiet and not changed:
+    if a.quiet and not (tally.changed or crossed):
         return 0
-    if lines:
+    if tally.lines:
         print("記憶過期清掃:")
-        for l in lines:
-            print("  " + l)
-    if skipped:
-        print("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★" % skipped)
+        for ln in tally.lines:
+            print("  " + ln)
+    if tally.skipped:
+        print("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★" % tally.skipped)
     if not a.quiet:
-        print("跑了 %d 條檢查%s。" % (checked, "(已蓋章)" if a.write else "(只看)"))
+        print("跑了 %d 條檢查%s。" % (tally.checked, "(已蓋章)" if a.write else "(只看)"))
     return 0                                        # hook 不因為有過期就讓 session 失敗
 
 
