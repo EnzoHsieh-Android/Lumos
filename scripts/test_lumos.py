@@ -27007,6 +27007,43 @@ def t_eval_touched_edit_covers_all_arms():
     print("  ✓ t_eval_touched_edit_covers_all_arms")
 
 
+def t_symbol_vocab_single_source_and_reach():
+    """摘要符號詞彙表:①單一來源(不得兩份寫死)②抓錯字的正則伸得到含連字號的前綴
+    ③PRIOR-ART/REVISIT 收進詞彙表(兩者都是紀律文件明文要求寫的)。
+
+    出身(2026-09-15,Projects/標籤系統精簡_計劃 S10):原本 SYMBOL_RE 與 SYMBOL_NAMES
+    是★兩份各自寫死的九值★,只改一份會讓「已收編」只有一半是真的;而抓錯字的
+    SYMBOLISH_RE 只認連續大寫,★含連字號的前綴從一開始就不會被比對到★——
+    所以把 PRIOR-ART 加進白名單是無效動作,測試若只斷言「寫了不報錯」會永遠空過。
+    翻紅釘:①把 SYMBOL_NAMES 改回獨立字面集合 → 第 1 條翻紅
+            ②把 SYMBOLISH_RE 改回 ^([A-Z]{2,}): → 第 3 條翻紅"""
+    import re as _re
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    # ① 單一來源:SYMBOL_RE 必須由 SYMBOL_NAMES 生成,不得再有第二份字面九值
+    check("★兩份表合一:SYMBOL_RE 由 SYMBOL_NAMES 生成★",
+          _re.search(r"SYMBOL_RE\s*=\s*re\.compile\([^)]*SYMBOL_NAMES", src) is not None,
+          "SYMBOL_RE 仍是獨立寫死的字面表")
+    m = _load_lumos_inproc()
+    check("② 詞彙表含 PRIOR-ART 與 REVISIT",
+          {"PRIOR-ART", "REVISIT"} <= set(m.SYMBOL_NAMES), str(sorted(m.SYMBOL_NAMES)))
+    check("② 既有九值一個都沒少",
+          {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE"}
+          <= set(m.SYMBOL_NAMES), str(sorted(m.SYMBOL_NAMES)))
+    # ③ 抓錯字的正則要伸得到含連字號的前綴——★不准空過★:打錯字的變體仍要被抓
+    R = m.SYMBOLISH_RE
+    check("★正則伸得到含連字號的前綴★", R.match("PRIOR-ART:x") is not None, "比對不到=加白名單是無效動作")
+    check("★不空過:打錯字的含連字號變體仍被抓到★",
+          R.match("PRIOR-ARTT:x") is not None
+          and R.match("PRIOR-ARTT:x").group(1) not in m.SYMBOL_NAMES, "")
+    check("正常前綴照舊抓得到", R.match("KEYY:x") is not None
+          and R.match("KEYY:x").group(1) not in m.SYMBOL_NAMES, "")
+    check("合法前綴不被當錯字", R.match("KEY:x").group(1) in m.SYMBOL_NAMES
+          and R.match("REVISIT:2026-12-01 x").group(1) in m.SYMBOL_NAMES, "")
+    check("不是符號宣告的行不誤抓(小寫/中文開頭)",
+          R.match("key:x") is None and R.match("這是中文:x") is None, "")
+    print("  ✓ t_symbol_vocab_single_source_and_reach")
+
+
 def t_refresh_delta():
     """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
     _need_src("governance/eval")

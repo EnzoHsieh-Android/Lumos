@@ -2635,7 +2635,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
 
 # ═══════════════════════ 階段二: 讀側 ═══════════════════════
 
-SYMBOL_RE = re.compile(r"^(KEY|FLOW|DEP|TEST|AUTH|FLAG|DECISION|VERIFY|CORE):")
+# ★摘要符號詞彙表的單一來源★(2026-09-15,plan:[[Projects/標籤系統精簡_計劃]] S10):
+# 原本這裡與 SYMBOLISH_RE 那邊各寫死一份九值,只改一份會讓「已收編」只有一半是真的
+# ——搜尋會把命中行標成錯的符號區域,而單篇快檢卻說沒問題。
+# PRIOR-ART / REVISIT 兩個是紀律文件明文要求寫的(CLAUDE.md 設計段與鐵則四),
+# 之前不在表內:前者含連字號、連抓錯字的正則都比對不到(加白名單是無效動作),
+# 後者會被當成打錯字唸——兩種相反的壞法。
+SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE",
+                "PRIOR-ART", "REVISIT"}
+SYMBOL_RE = re.compile(r"^(" + "|".join(sorted(SYMBOL_NAMES, key=len, reverse=True)) + r"):")
 FM_KEY_RE = re.compile(r"^\s*([A-Za-z_][\w-]*):")
 
 
@@ -4028,8 +4036,10 @@ def cmd_contracts(env, rel=None):
 
 
 KNOWN_TYPES = {"system", "verification", "issue", "project", "moc"}
-SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE"}
-SYMBOLISH_RE = re.compile(r"^([A-Z]{2,}):")   # 像「符號宣告」的行(全大寫前綴)→ 抓 typo
+# SYMBOL_NAMES 的定義已上移到 SYMBOL_RE 旁(單一來源,見那裡的說明)。
+# ★2026-09-15 放寬:認得連字號★——原本 ^([A-Z]{2,}): 只吃連續大寫,
+# 含連字號的前綴整行躲過檢查(打成 PRIOR-ARTT: 也沒人唸)。
+SYMBOLISH_RE = re.compile(r"^([A-Z][A-Z-]*[A-Z]):")   # 像「符號宣告」的行→ 抓 typo
 
 
 def _git_commit_exists(repo_root, sha):
@@ -22500,9 +22510,14 @@ def _impact_contract(note):
                 contract = "IRREVERSIBLE"  # 最高優先,覆蓋 INVARIANT
                 break
 
-    # RISK 軸(2026-08-05 標籤結構優化):risk/ 標節點保送固定席——light 硬否決的
-    # honor-system(「碰金流/對外/不可逆/守衛面就不給 light」靠自核)有了機械眼線。
+    # RISK 軸(2026-08-05 標籤結構優化):risk/ 標節點標成 RISK·<值>,給 light 硬否決的
+    # honor-system(「碰金流/對外/不可逆/守衛面就不給 light」靠自核)一條機械眼線。
     # 軸序最低:合約標記存在時仍以合約身分出席。
+    # ★2026-09-15 更正過期敘述(plan:[[Projects/標籤系統精簡_計劃]] S14):原文寫「保送固定席」,
+    # 那是 2026-08-05 到 08-24 之間的行為。2026-08-24 pin-denoise-a-v4 起 RISK·* 類
+    # ★不再保送必看★——降入「參考道」(lane,上限 LUMOS_IMPACT_LANE_N 預設 3),
+    # 固定席只認 INVARIANT/IRREVERSIBLE 與事故;理由見下游 lane_raw 那段註解
+    # (樞紐筆記搭便車、是 held 噪音的主力)。同一支檔兩段註解相反曾掛了三週。
     if contract is None:
         for tg in (note.fields.get("tags") or []):
             if isinstance(tg, str) and tg.startswith("risk/"):
