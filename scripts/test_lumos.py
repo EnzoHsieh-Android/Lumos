@@ -14027,7 +14027,15 @@ def t_lens_timeout_keeps_warming_cache():
     head = sha(ml)
     if not base or not head:
         raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
-    cpath = m._lens_cache_path(repo, base, head)
+    # ★快取位置要跟 lumos 算得一模一樣★(2026-09-14 推送前全套測試假紅):本機有這個分支的
+    # 表態記錄時,lumos 會把那份記錄的指紋併進快取位置;原本這裡沒併,於是只要推送前剛表態過
+    # (正是推送當下的狀態),背景其實寫好了快取,這支卻去看另一個位置、判「快取沒出現」。
+    _rec = m._codeloop_read_dispositions(repo, m._codeloop_git_branch(repo), marker_only=True)
+    _extra = ""
+    if _rec:
+        import hashlib as _hl
+        _extra = _hl.sha256(_j.dumps(_rec, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    cpath = m._lens_cache_path(repo, base, head, extra=_extra)
     lock = cpath.with_name(cpath.name + ".warming")
     for f in (cpath, lock):
         try:
