@@ -77,6 +77,16 @@ HOOK_BUDGET = {
     # 代價誠實講:這支掛在收工事件,使用者最壞情況要多等到 28 秒。
     # REVISIT:2026-12-07 量一次這段實際耗時分布;若多數遠低於 25 秒,把天花板調回去
     "check-graph-sync.py": 40,
+    # 記憶過期清掃:多數檢查是本機指令(毫秒),慢的是要連遠端問「推了沒」那幾條。
+    # 預算用完會明說「還有幾條沒驗到」,不會假裝驗過。
+    "memory-sweep.py": 12,
+}
+
+# 有些 hook 除了 --budget 還要別的旗標。★寫在這裡而不是散在下面的註冊表裡★,
+# 理由同 HOOK_BUDGET:天花板與旗標都只能有一個來源,否則改一個地方會漏另一個。
+HOOK_ARGS = {
+    # --write 才會真的蓋章(只看不寫的話等於沒守衛);--quiet 讓它沒事完全不出聲。
+    "memory-sweep.py": "--write --quiet",
 }
 
 
@@ -92,15 +102,18 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
         py = _PY.replace("\\", "/") if sys.platform == "win32" else _PY
         _b = HOOK_BUDGET.get(rel_path)
         _bf = f' --budget {_b}' if _b else ''
+        _bf += (' ' + HOOK_ARGS[rel_path]) if rel_path in HOOK_ARGS else ''
         return (f'{py} "{hooks_dir}/{rel_path}" --harness codex{_bf}' if sys.platform != "win32"
                 else f'"{py}" "{hooks_dir}/{rel_path}" --harness codex{_bf}')
     if sys.platform == "win32":
         py = _PY.replace("\\", "/")
         _b = HOOK_BUDGET.get(rel_path)
         _bf = f' --budget {_b}' if _b else ''
+        _bf += (' ' + HOOK_ARGS[rel_path]) if rel_path in HOOK_ARGS else ''
         return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"{_bf}'
     _b = HOOK_BUDGET.get(rel_path)
     _bf = f' --budget {_b}' if _b else ''
+    _bf += (' ' + HOOK_ARGS[rel_path]) if rel_path in HOOK_ARGS else ''
     return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"{_bf}'
 
 
@@ -130,7 +143,21 @@ HOOK_ENTRIES = {
                     "timeout": HOOK_BUDGET["ci-status-hook.py"],
                 }
             ],
-        }
+        },
+        {
+            # 記憶過期清掃(2026-09-14):Claude Code 的記憶檔會講「當下狀態」——某某還沒推、
+            # 某某還沒裝——而推翻那句話的事件不會回來改那個檔。★而且記憶是開場自動塞進視野的、
+            # 圖譜要主動查,所以錯的那份反而先被讀到★(實測 76 篇裡三篇在說謊)。
+            # 這支跑每篇自帶的 verify 檢查,對不上就當場蓋章留痕(可復原),
+            # 並揪出「抄了圖譜狀態」的影子副本。沒有記憶目錄的專案完全靜默。
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("memory-sweep.py"),
+                    "timeout": HOOK_BUDGET["memory-sweep.py"],
+                }
+            ],
+        },
     ],
     "PreToolUse": [
         {
