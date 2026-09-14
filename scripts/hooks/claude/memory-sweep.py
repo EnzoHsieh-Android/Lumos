@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """記憶過期清掃(SessionStart hook 版)。
 
 會腐爛的記憶不是「舊的」,是「講當下狀態」的:某某還沒推、某某還沒裝、目前沒有某某。
