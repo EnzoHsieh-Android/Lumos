@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-09-13
+updated: 2026-09-14
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -65,7 +65,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 | Node | eslint 10 flat config（`no-unused-vars`／`eqeqeq`） | 新函式的 2 條抓到；**證明快照補設定檔與依賴目錄那一層對真工具有效** |
 | Vue | eslint + `eslint-plugin-vue` flat/recommended | 新加的清單少了 key，抓到 `vue/require-v-for-key` |
 | SQL | sqlfluff（`--dialect tsql`）+ 既有的格式轉接器 | 新加的查詢 6 條全抓到 |
-| Dart | `dart analyze --format=json` + **臨時寫的轉接器** | 抓到新函式的沒用到的變數；**轉接器還沒進工具鏈，這是目前唯一缺的一塊** |
+| Dart | `dart analyze --format=json` + `lumos dart-sarif` | 抓到新函式的沒用到的變數；**轉接器 2026-09-14 已進工具鏈**，讀不懂就失敗、不吐空結果；**編譯期錯誤不收**（快照只有改動檔、import 解析不到會誤報）——**所以這道閘對 Dart 抓不到編譯錯誤**（參數錯、型別不符也算在內），要靠建置與 CI，見 [[Systems/pitfalls-lint-adapter]] |
 | C# / .NET | `dotnet build -p:ErrorLog=…` | **今天沒被覆蓋，但不是因為貴**：實測 347 支檔的專案完整建置 8.5 秒、第二次 3.6 秒，格式也讀得懂；真正卡住的是快照裡只有改動檔，編譯起不來 |
 | Python | ruff | 見工具鏈自己那次：當天擋下一次真推送 |
 
@@ -151,7 +151,7 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 - **架構軸(import 邊界,Dart 3.10+ 才可用)**:`import_rules`(2026/02,YAML 宣告 import 約束進 dart analyze)｜`import_lint`(2026/04)｜`barrel_file_lints`(feature 分層/barrel 規則)。
 - ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flutter 後解鎖;過渡期用 analysis_options 手開嚴格規則(零依賴不受版本卡)。
 - **Check T**:dart profile 已內建(test('id')/testWidgets('id') 識別字名錨+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
-- SARIF 橋:`dart analyze` 無原生 SARIF → .lumos/lint.json 接法待 Dart 3 升級後再評(現以 analyzer 直跑為主)。
+- SARIF 橋:`dart analyze` 無原生 SARIF → 2026-09-14 起用 `lumos dart-sarif` 轉(`dart analyze --format=json {LINT_FILES} 2>/dev/null | python3 scripts/lumos dart-sarif --out {LINT_SARIF_OUT}`),Dart 3.13.3 實跑過閘。
 
 ## Swift/iOS（registry: `github:<owner>/<repo>`；2026-09-08 補，★尚無 Swift 消費端，未實裝跑過★）
 | linter | 用途 | 備註 |
