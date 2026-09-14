@@ -39994,10 +39994,21 @@ def t_memory_sweep_core():
 
     # ① verify 區塊解析:認得 claim/cmd 成對,不被正文的同名行騙走
     txt = ("---\nname: x\nmetadata:\n  type: project\n"
-           "verify:\n  - claim: 甲\n    cmd: true\n  - claim: 乙\n    cmd: false\n---\n\n"
+           "verify:\n  - claim: 甲\n    pushed: abc1234\n"
+           "  - claim: 乙\n    not-installed: eslint\n---\n\n"
            "正文裡也寫了 - claim: 丙 這種字\n")
     got = ms.verify_blocks(txt)
-    check("① verify 區塊只收開頭欄位那一段", got == [("甲", "true"), ("乙", "false")], str(got))
+    check("① verify 區塊只收開頭欄位那一段、而且認得型別",
+          got == [("甲", "pushed", "abc1234"), ("乙", "not-installed", "eslint")], str(got))
+    # ★不執行任意字串★:舊的 cmd: 寫法要被明確報成驗不了,不可以靜靜跳過
+    old = txt.replace("    pushed: abc1234", "    cmd: rm -rf /")
+    got2 = ms.verify_blocks(old)
+    check("① 舊的 cmd: 寫法收下但標成 cmd(由上層喊出來,不執行)",
+          ("甲", "cmd", "rm -rf /") in got2, str(got2))
+    check("① cmd 型別一律回「驗不了」,不會被執行", ms.run_check("cmd", "rm -rf /", Path(".")) is None, "")
+    # 型別檢查本身:不經過 shell,參數格式不對就回驗不了
+    check("① 工具名格式不對→驗不了,不亂查", ms.run_check("installed", "a; rm -rf /", Path(".")) is None, "")
+    check("① 版本代號格式不對→驗不了", ms.run_check("pushed", "not-a-sha!!", Path(".")) is None, "")
 
     # ② 去 .md 不能用 rstrip(字元集)——會把結尾的 d/m 也削掉
     check("② 去副檔名不削掉結尾字母", ms._stem("shared-worktree-git-add-hazard.md") == "shared-worktree-git-add-hazard",

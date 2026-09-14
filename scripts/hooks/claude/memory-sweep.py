@@ -28,6 +28,7 @@ import argparse
 import datetime as dt
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -167,8 +168,95 @@ def memory_dir(explicit=None):
     return pathlib.Path.home() / ".claude" / "projects" / slug / "memory"
 
 
+
+# ── 四種宣告式檢查 ─────────────────────────────────────────────────────────
+# 回 True=宣稱仍成立 / False=對不上 / None=驗不了(★驗不了不判死★)。
+# 全部用參數陣列呼叫外部程式,沒有 shell,所以記憶檔裡的字串不可能被當成指令執行。
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _git(*args, cwd=None, timeout=20):
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                              text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _upstream_ref(root):
+    """目前分支追的那個遠端 ref(例如 Lumos/main);問不出來回 None。"""
+    r = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", cwd=root)
+    return r.stdout.strip() if (r and r.returncode == 0 and r.stdout.strip()) else None
+
+
+def _is_pushed(sha, root):
+    if not _SHA_RE.match(sha):
+        return None
+    up = _upstream_ref(root)
+    if not up:
+        return None
+    _git("fetch", "-q", up.split("/")[0], cwd=root, timeout=25)
+    r = _git("merge-base", "--is-ancestor", sha, up, cwd=root)
+    if r is None or r.returncode not in (0, 1):
+        return None
+    return r.returncode == 0
+
+
+def _chk_pushed(arg, root):
+    return _is_pushed(arg, root)
+
+
+def _chk_not_pushed(arg, root):
+    v = _is_pushed(arg, root)
+    return None if v is None else (not v)
+
+
+def _chk_installed(arg, root):
+    return shutil.which(arg) is not None if _NAME_RE.match(arg) else None
+
+
+def _chk_not_installed(arg, root):
+    v = _chk_installed(arg, root)
+    return None if v is None else (not v)
+
+
+def _chk_file_exists(arg, root):
+    return pathlib.Path(arg).expanduser().exists()
+
+
+def _chk_no_file(arg, root):
+    return not pathlib.Path(arg).expanduser().exists()
+
+
+def _chk_before(arg, root):
+    try:
+        d = dt.date.fromisoformat(arg)
+    except ValueError:
+        return None
+    return dt.datetime.now().astimezone().date() < d
+
+
+CHECKS = {
+    "pushed": _chk_pushed,              # 這個提交已經在遠端上
+    "not-pushed": _chk_not_pushed,      # 還沒推
+    "installed": _chk_installed,        # 這台機器裝了這個工具
+    "not-installed": _chk_not_installed,
+    "file-exists": _chk_file_exists,    # 這個檔還在
+    "no-file": _chk_no_file,
+    "before": _chk_before,              # 今天還沒到這個日期
+}
+
+
 def verify_blocks(text):
-    m = re.search(r"(?m)^verify:\n((?:[ ]+.*\n)+)", text)   # 同上:不可開 DOTALL
+    """撈開頭欄位的 verify 區塊。回 [(claim, kind, arg)];沒有就回空。
+
+    ★只認宣告式的型別,不再執行任何外來字串★(2026-09-14 改):
+    第一版是 `cmd:` 一行 shell,而這支 hook ★每次開場自動跑★、內容來自記憶檔——
+    等於任何能往記憶目錄寫檔的東西都拿到「你一開專案就執行一次」的能力。
+    實際用過的五條檢查全部落在下面四型裡,所以換成宣告式沒有損失任何能力。
+    """
+    m = re.search(r"(?m)^verify:\n((?:[ ]+.*\n)+)", text)
     if not m:
         return []
     out, claim = [], None
@@ -176,21 +264,27 @@ def verify_blocks(text):
         s = line.strip()
         if s.startswith("- claim:"):
             claim = s[len("- claim:"):].strip()
-        elif s.startswith("cmd:") and claim is not None:
-            out.append((claim, s[len("cmd:"):].strip()))
+            continue
+        if claim is None or ":" not in s:
+            continue
+        k, _, v = s.partition(":")
+        k, v = k.strip(), v.strip()
+        if k in CHECKS:
+            out.append((claim, k, v))
+            claim = None
+        elif k == "cmd":
+            # 舊寫法:明確報成「驗不了」,不要靜靜跳過(靜靜跳過=看起來有守衛其實沒有)
+            out.append((claim, "cmd", v))
             claim = None
     return out
 
 
-def run_check(cmd, timeout):
-    """exit 0 = 宣稱仍成立。逾時/壞命令回 None=驗不了,★不判死★。"""
-    if timeout <= 0:
+def run_check(kind, arg, root):
+    """跑一條宣告式檢查。舊的 cmd: 寫法一律回 None(驗不了)並由呼叫端喊出來。"""
+    if kind == "cmd":
         return None
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    return r.returncode == 0
+    fn = CHECKS.get(kind)
+    return None if fn is None else fn(arg, root)
 
 
 def stamp(text, failed, today):
@@ -243,18 +337,20 @@ class Tally:
         return bool(self.newly_stale or self.recovered or self.unknown_n or self.skipped)
 
 
-def check_one(text, deadline, tally):
+def check_one(text, deadline, tally, root):
     """跑一篇的所有檢查。回 (對不上的, 驗不了的)。"""
     failed, unknown = [], []
-    for claim, cmd in verify_blocks(text):
-        left = (deadline - time.monotonic()) if deadline else PER_CMD_CAP
-        if deadline and left <= 0:
+    for claim, kind, arg in verify_blocks(text):
+        if deadline and (deadline - time.monotonic()) <= 0:
             tally.skipped += 1
             continue
         tally.checked += 1
-        ok = run_check(cmd, min(left, PER_CMD_CAP))
+        ok = run_check(kind, arg, root)
         if ok is None:
-            unknown.append(claim)
+            # ★驗不了的原因要分開講★:「這種寫法不支援了」跟「工具壞了」要做的事完全不同。
+            why = ("舊的 cmd: 寫法不支援了(會執行任意指令),改成宣告式的型別"
+                   if kind == "cmd" else "型別不認得、參數格式不對、或問不到上游")
+            unknown.append((claim, why))
             tally.unknown_n += 1
         elif not ok:
             failed.append(claim)
@@ -276,10 +372,10 @@ def apply_one(f, text, failed, unknown, today, write, tally):
         tally.lines.append("✓ %s(原本蓋過章,現在又成立了,已撤掉)" % f.name)
         if write:
             f.write_text(unstamp(text), encoding="utf-8")
-    tally.lines.extend("? %s 這條驗不了(命令壞了或逾時):%s" % (f.name, c) for c in unknown)
+    tally.lines.extend("? %s 這條驗不了(%s):%s" % (f.name, why, c) for c, why in unknown)
 
 
-def sweep(here, deadline, today, write):
+def sweep(here, deadline, today, write, root):
     """跑完整個記憶目錄,回 Tally。"""
     tally = Tally()
     for f in sorted(here.glob("*.md")):
@@ -288,7 +384,7 @@ def sweep(here, deadline, today, write):
         text = f.read_text(encoding="utf-8")
         if not verify_blocks(text):
             continue
-        failed, unknown = check_one(text, deadline, tally)
+        failed, unknown = check_one(text, deadline, tally, root)
         apply_one(f, text, failed, unknown, today, write, tally)
     return tally
 
@@ -341,7 +437,7 @@ def main():
 
     _OUTER = a.budget or None
     deadline = (time.monotonic() + _inner_budget()) if a.budget else None
-    tally = sweep(here, deadline, today, a.write)
+    tally = sweep(here, deadline, today, a.write, pathlib.Path.cwd())
     crossed = cross_check(here, tally)
 
     if a.quiet and not (tally.changed or crossed):
