@@ -28,7 +28,10 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 - [[Systems/check-y-symbol-existence]]
 - [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/self-audit;T1 寫後自驗 atomic。
 - [[Systems/外部對照-code衍生wiki]] — langchain-ai/openwiki(11.6k★ code 衍生 wiki)反例世界解:站在 lumos 導覽層、賭注相反(code 衍生+可丟 vs 圖譜手寫+機械守);核心論點=重生保新鮮≠正確、無輸出 oracle(maker-only),反證 lumos「圖譜即真相/合約驗證層」的必要。
+- [[Projects/OpenSpec_調研]] — Fission-AI/OpenSpec(67.8k★ spec-driven development)對照留痕:站在「動手前先講好要做什麼」層、lumos 站在「做完後為什麼/邊界/驗過沒」層;最深差別=它刻意零強制(convention not enforcement)、漂移是社群最大抱怨且官方解法收費;可借候選五條待 Enzo 裁。
 - [[Systems/節點還原]]
+- [[Projects/標籤系統盤點_調研]] — 八個標籤家族與摘要符號的使用率盤點:65% 標籤行是欄位副本、scope 意外進了搜尋排序、flag 零消費點;含業界對照與六個可動選項(待裁)。
+- [[Projects/標籤系統精簡_計劃]] — 鏡像標籤改成讀時合成(兩份真相變一份)、同步器與兩道漂移閘退場、語意警示與優先級兩家族凍結退場;研究方向進排序那一項只量不改。
 
 ## 節點檢索與推薦(`scope/retrieval`)
 
@@ -36,6 +39,11 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 
 - [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
 - [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
+- [[Projects/檢索訊號三件_計劃]] `[todo]` — 排隊中:別名欄只填 12% 但權重第二高、沒有真實查詢紀錄所以評測題庫是人編的、導覽樞紐標(被殺的 A3 是量法不是訊號)。
+- [[Projects/檢索核心重建_計劃]] `[todo]` — 排隊中,等評測尺修復。撈候選那一關換成標準函式庫的全文索引(零新依賴):0.7 秒→0.2 毫秒、多詞召回破口一併修、三條字面路徑共用同一份索引;另接三個標籤用途(風險類進注入、優先級進待辦排序、別名回填)。
+- [[Projects/評測尺修復_計劃]] — 前置案:量出來的尺壞了(未標 222/790 計 0 分、34 題只有 3 題帶空白、標註停在 766 個提交前、已誤導過一次撤回決策);補標＋擴題＋用已知答案的改動校準,不改計分算法。
+- [[Issues/尺切換恆等斷言反覆不過]] `[doing]` — 新尺寫好三週一次沒上線過，程式自己印著「這不該發生」；2026-09-15 消融確認根因是兩個小缺陷（拿不同題目集的平均在比相等、未標檢查只涵蓋三條排法裡的一條），修法各幾行。
+- [[Issues/評測事故數字兩個版本打架]] — 同一個評測事故在 repo 裡有兩個版本的數字，從同一個提交起就並存、從沒調和過；那是「尺會懲罰改善」的唯一實證。
 
 ## 迴圈工程(`scope/loop-engineering`)
 
