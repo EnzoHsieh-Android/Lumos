@@ -51,6 +51,8 @@ decisions:
 | 審查席身分 | 派工詞自帶框架 | ★三席★ `CODEX_HOME/agents/` 下 `lumos_reviewer`(sol+medium,散文審,預設)、`lumos_reviewer_code`(sol+xhigh,程式碼審)、`lumos_reviewer_max`(sol+xhigh,tier=high);三席 `developer_instructions` 相同=框架單源,差別只在模型與推理強度。2026-09-08 實測 TOML 的 `model` / `model_reasoning_effort` 欄位有效 |
 | 逐字稿 | `~/.claude/projects/**/*.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(首行 session_meta 帶 cli_version) |
 
+**只對 Claude 有意義的 hook 也照樣兩家都註冊**(2026-09-14,記憶過期清掃):註冊表兩家共用一份、不另開例外,Codex 那邊命令列帶 `--harness codex`,hook 進場讀到就安靜退出(記憶是 Claude Code 自己的機制)。所以 Codex 的 `hooks.json` 從五支變六支;代價是 Codex 每次開場多一個進場就結束的 Python 行程。現況與設計見 [[Systems/記憶過期清掃]]。
+
 ## 收工擋一次為什麼兩家一致
 
 先做 Codex 的理由:Codex 側 stderr 對模型完全看不見,唯一能把「你漏了」送到模型面前的通道就是 `decision:block`(它會把 reason 當下一個提示續做)。同日 README 審視發現 Claude 側也一樣——Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌,所謂「軟提醒」從沒有人看到過。2026-07-06 撤的是每回合刷屏的 nag;這裡同 session 只擋一次、只在改了碼沒寫回時,不是重開 nag,所以套成兩家一致([[Projects/README審視五修_計劃]] d2);實驗設計與三輪代碼審抓到的坑(名額白燒、symlink、反引號跳出 code span)都在 [[Projects/Codex行為精修_計劃]]。

@@ -1,0 +1,295 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 237e6325..2726b48a 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -45,12 +45,15 @@ import sys
+ import time
+ 
+ PER_CMD_CAP = 15.0          # 單條檢查的硬上限;實際用的是它與「預算還剩多少」取小的那個
+ MAX_CLAIMS_PER_FILE = 30    # ★單篇最多驗幾條★(r6 資安席 major:一份灌水檔能燒光整輪預算)
+ MAX_FILES = 300             # ★整輪最多看幾篇★(r7 資安席 major:八千個小檔各自卡在單篇上限內一樣能淹掉)
+ MAX_CLAIMS_TOTAL = 600      # ★整輪最多驗幾條★;實測這個專案 79 篇、十幾條,離上限很遠
++MAX_LINES = 80              # 開場注入最多印幾行(手動模式全印)
++MAX_BYTES = 64 * 1024       # ★單篇最多讀多大★(r9 資安席 major:一篇 240MB 的檔讓對帳那段跑 15 秒);
++                            # 實測這個專案最大一篇 9KB、整個目錄 408KB
+ 
+ # ── ★注入框:把「機器附加的內容」跟系統話明確分開★ ────────────────────────
+ # 單源說明在 Systems/hook信任邊界;這段在幾支 hook 與 scripts/lumos 裡是逐字相同的複本,
+ # 有守衛盯著不准漂(hook 是獨立檔、複製出去後彼此 import 不到)。
+ #
+ # 出身:這些文字是以「系統附加」的口吻直接進對話的,而內容來自圖譜筆記、CI 紀錄這類
+@@ -442,34 +445,54 @@ def node_status(stems, stem):
+     except OSError:
+         return None
+     m = re.search(r"(?m)^status:[ \t]*([A-Za-z_-]+)", head)
+     return m.group(1) if m else None
+ 
+ 
+-def _claims_near(body, stem):
++def _paragraphs(body):
++    """以空行分段,並先算好每段點名了哪些節點(一篇只算一次,不是每個節點重算一次)。"""
++    return [(para, _nodes_in(para)) for para in re.split(r"\n[ \t]*\n", body)]
++
++
++def _claims_near(body, stem, paras=None):
+     """這篇對「這個節點」講了什麼狀態詞。
+ 
+     ★要綁到節點,不能拿整篇去套★(r1 外家席)。★只看同一行又會漏★(r2):分兩行寫很常見。
+     所以以空行分段:**該段點名的節點恰好只有這一個**,整段的狀態詞才算給它;
+     一段裡點名好幾個就退回只看點名它的那一行。★判不清楚時用比較窄的規則,不猜★。
+     """
+     done = live = False
+-    for para in re.split(r"\n[ \t]*\n", body):
+-        named = _nodes_in(para)
++    for para, named in (paras if paras is not None else _paragraphs(body)):
+         if stem not in named:
+             continue
+         scope = [para] if named == {stem} else [ln for ln in para.splitlines() if stem in _nodes_in(ln)]
+         for chunk in scope:
+             done = done or bool(_DONE_WORDS.search(chunk))
+             live = live or bool(_LIVE_WORDS.search(chunk))
+     return done, live
+ 
+ 
+-def shadow_copies(stems, files):
++class _Clock:
++    """★每一段都吃同一個時間預算★(r9 資安席 major):原本只有逐條檢查那段看時間,
++    跟圖譜對帳那段沒有,灌一篇大檔就讓它單獨跑超過外層逾時、整支被砍掉完全不出聲。
++    時間到了就停,由呼叫端喊「結果不完整」。"""
++
++    def __init__(self, deadline):
++        self.deadline, self.expired = deadline, False
++
++    def up(self):
++        if self.deadline and time.monotonic() >= self.deadline:
++            self.expired = True
++        return self.expired
++
++
++def shadow_copies(stems, files, clock=None):
+     out = []
+     for f, text in files:
++        if clock and clock.up():
++            break
+         fm = frontmatter(text) or ""
+         if re.search(r"(?m)^shadow_ok:[ \t]*(.{4,})$", fm):
+             continue
+         body = _scannable(_body(text))
+         words = sorted(set(_STATUS_WORDS.findall(body)))
+         if not words:
+@@ -477,24 +500,31 @@ def shadow_copies(stems, files):
+         hit = sorted(n for n in _nodes_in(_scannable(text)) if n in stems)
+         if hit:
+             out.append((f.name, hit[:2], words[:4]))
+     return out
+ 
+ 
+-def pointer_problems(stems, files, mem_stems):
+-    out = []
++def pointer_problems(stems, files, mem_stems, clock=None):
++    out, status = [], {}          # 節點狀態一輪只讀一次(原本每篇記憶點名一次就讀一次)
+     for f, text in files:
++        if clock and clock.up():
++            break
+         scan = _scannable(text)
+         body = _scannable(_body(text))
+         linked = {_stem(n.split("/")[-1]) for n in _LINKED_REF.findall(scan)}
+         dead = sorted(n for n in linked if n not in stems and n not in mem_stems)
+         if dead:
+             out.append((f.name, "指到不存在的節點", "、".join(dead[:3])))
++        paras = _paragraphs(body)
+         for n in sorted(n for n in _nodes_in(scan) if n in stems):
+-            st = node_status(stems, n)
+-            done, live = _claims_near(body, n)
++            if clock and clock.up():
++                break
++            if n not in status:
++                status[n] = node_status(stems, n)
++            st = status[n]
++            done, live = _claims_near(body, n, paras)
+             if st == "done" and done:
+                 out.append((f.name, "說還沒做,但節點已 done", n))
+             elif st in ("doing", "open") and live:
+                 out.append((f.name, "說已交付,但節點還是 " + st, n))
+     return out
+ 
+@@ -593,13 +623,15 @@ def _read_own_file(f):
+         raise e
+     try:
+         why = _opened_reason(os.fstat(fd), pre)
+         if why:
+             return None, why
+         with os.fdopen(fd, "rb", closefd=False) as fh:
+-            raw = fh.read()
++            raw = fh.read(MAX_BYTES + 1)
++        if len(raw) > MAX_BYTES:            # 看完大小到讀之間檔案被加長,照樣不讀
++            return None, "讀的時候超過單篇上限 %d KB,不讀" % (MAX_BYTES // 1024)
+     finally:
+         os.close(fd)
+     return raw.decode("utf-8"), None
+ 
+ 
+ def _opened_reason(st, pre):
+@@ -608,12 +640,15 @@ def _opened_reason(st, pre):
+     if (st.st_dev, st.st_ino) != (pre.st_dev, pre.st_ino):
+         return "在檢查與打開之間被換掉了"
+     if _st.S_ISDIR(st.st_mode):
+         return "dir"
+     if not _st.S_ISREG(st.st_mode):
+         return "不是一般檔"
++    if st.st_size > MAX_BYTES:
++        return ("有 %d KB,超過單篇上限 %d KB(正常記憶檔只有幾 KB,可能是灌檔),不讀"
++                % (st.st_size // 1024, MAX_BYTES // 1024))
+     if st.st_nlink != 1:
+         return ("有 %d 個硬連結(可能是從別處連進來的;若是備份或同步工具造成的,"
+                 "把這篇複製成一般檔就會恢復讀取)" % st.st_nlink)
+     return None
+ 
+ 
+@@ -674,19 +709,20 @@ def _sweep_one(f, text, deadline, tally, root):
+     # 那一整行會被安全框的框線過濾器整行砍掉——這條發現就靜靜消失了。
+     tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, _clean(why, cap=160), _clean(c))
+                        for c, why in unknown)
+     return len(blocks)
+ 
+ 
+-def cross_check(files, mem_stems, tally):
++def cross_check(files, mem_stems, tally, deadline=None):
+     _root, stems = graph_stems(pathlib.Path.cwd())
+     if not stems:
+         return False
++    clock = _Clock(deadline)
+     try:
+-        shadows = shadow_copies(stems, files)
+-        ptr = pointer_problems(stems, files, mem_stems)
++        shadows = shadow_copies(stems, files, clock)
++        ptr = pointer_problems(stems, files, mem_stems, clock)
+     except Exception as e:                          # 對帳出錯只跳過這段
+         tally.lines.append("! 跟圖譜對帳時出錯(%s),這段跳過" % e.__class__.__name__)
+         tally.broken += 1
+         return True
+     if shadows:
+         tally.lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
+@@ -694,13 +730,15 @@ def cross_check(files, mem_stems, tally):
+             tally.lines.append("    %s  (踩到:%s) → %s" % (_clean(n), "、".join(words),
+                                                            "、".join(_clean(x) for x in nodes)))
+     if ptr:
+         tally.lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+         for n, kind, detail in ptr:
+             tally.lines.append("    %s  %s:%s" % (_clean(n), kind, _clean(detail)))
+-    return bool(shadows or ptr)
++    if clock.expired:
++        tally.flood.append("跟圖譜對帳時時間預算用完,只對了一部分——下面「跟圖譜對不上」那段不完整。")
++    return bool(shadows or ptr or clock.expired)
+ 
+ 
+ def _build_parser():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--quiet", action="store_true",
+                     help="沒有任何發現就完全不出聲;有話說時輸出走 hook 的 JSON 通道並加安全框")
+@@ -716,20 +754,25 @@ def _emit(tally, crossed, quiet, here):
+     body = []
+     if tally.flood:
+         body.append("★記憶過期清掃這輪的結果不完整★:")
+         body.extend("  ★%s★" % x for x in tally.flood)
+     if tally.lines:
+         body.append("記憶過期清掃(唯讀,沒有改任何檔):")
+-        body.extend("  " + ln for ln in tally.lines)
++        shown = tally.lines if not quiet else tally.lines[:MAX_LINES]
++        body.extend("  " + ln for ln in shown)
++        if len(shown) < len(tally.lines):
++            # ★開場注入的行數也要有上限★:灌檔時幾百行「驗不了」會整批塞進對話
++            body.append("  ……還有 %d 行沒印(開場只印前 %d 行),完整報告用下面那行指令看。"
++                        % (len(tally.lines) - len(shown), MAX_LINES))
+     if tally.skipped:
+         body.append("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★沒驗完 %d 篇,前幾篇:%s"
+                     % (tally.skipped, len(tally.unfinished), "、".join(tally.unfinished[:10]) or "(不明)"))
+     if tally.stale or crossed:
+         # ★報告要附下一步★(r1 架構對齊席 minor):只列問題不說怎麼辦,就跟空轉週報一樣沒人動
+         body.append("  對不上的那幾篇:改圖譜裡的真相,再把記憶改成指路或更新那條 verify。")
+-    if tally.broken or tally.unknown_n:
++    if tally.broken or tally.unknown_n or len(tally.lines) > MAX_LINES:
+         body.append("  單獨看這個目錄的完整報告:")
+         body.append("    python3 ~/.claude/hooks/memory-sweep.py --dir %s" % here)
+     if not quiet:
+         body.append("跑了 %d 條檢查。" % tally.checked)
+     msg = "\n".join(body)
+     if not msg:
+@@ -752,13 +795,13 @@ def main():
+     if not here.is_dir():
+         return 0                                   # 這個專案沒有記憶目錄,安靜退出
+     deadline = (time.monotonic() + _inner_budget()) if a.budget else None
+     tally = Tally()
+     files = read_memories(here, tally)
+     sweep(files, deadline, tally, pathlib.Path.cwd())
+-    crossed = cross_check(files, {f.stem for f, _ in files}, tally)
++    crossed = cross_check(files, {f.stem for f, _ in files}, tally, deadline)
+     if a.quiet and not (tally.changed or crossed):
+         return 0
+     _emit(tally, crossed, a.quiet, here)
+     return 0                                        # hook 不因為有發現就讓 session 失敗
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e108965b..0f9b861f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40152,12 +40152,22 @@ def t_memory_sweep_core():
+              None, tl21b, Path("."))
+     check("㉑ 總條數超過上限 → 報告要喊、而且停在上限", any("上限" in x for x in tl21b.flood)
+           and tl21b.checked <= ms.MAX_CLAIMS_TOTAL, str((tl21b.flood, tl21b.checked)))
+     buf21 = _io.StringIO()
+     with _cl.redirect_stdout(buf21):
+         ms._emit(tl21, [], True, Path("."))
++    check("㉑ 開場注入的行數有上限,而且講還有幾行沒印",
++          buf21.getvalue().count("\\n") < ms.MAX_LINES + 20 or "沒印" in buf21.getvalue(), buf21.getvalue()[-300:])
++    tl21c = ms.Tally()
++    tl21c.lines = ["? x 驗不了 %d" % i for i in range(ms.MAX_LINES + 50)]
++    tl21c.unknown_n = len(tl21c.lines)
++    buf21c = _io.StringIO()
++    with _cl.redirect_stdout(buf21c):
++        ms._emit(tl21c, [], True, Path("."))
++    check("㉑ 安靜模式只印前面那幾行、並講還有 50 行沒印",
++          "驗不了 %d" % (ms.MAX_LINES + 49) not in buf21c.getvalue() and "還有 50 行沒印" in buf21c.getvalue(), buf21c.getvalue()[-200:])
+     check("㉑ 安靜模式下,結果不完整那段排在報告最前面",
+           "結果不完整" in buf21.getvalue().split("記憶過期清掃(唯讀")[0], buf21.getvalue()[:300])
+ 
+     # ㉒ ★先數再讀★(r8 資安席 major):灌大量檔時,讀檔之前就要決定只讀前 MAX_FILES 篇並記下喊聲,
+     # 否則光讀檔就把時間用光、喊聲印出來之前就被逾時砍掉
+     d22 = Path(_tf.mkdtemp(prefix="gctl-ms22-"))
+@@ -40173,12 +40183,35 @@ def t_memory_sweep_core():
+     finally:
+         ms._read_own_file = _orig_read
+     check("㉒ 超過上限時只打開前 MAX_FILES 篇", len(opened) == ms.MAX_FILES and len(got22) == ms.MAX_FILES, str(len(opened)))
+     check("㉒ 喊聲在讀檔階段就記下了(不等 sweep)", tl22.flood and "結果不完整" in tl22.flood[0], str(tl22.flood))
+     check("㉒ 索引檔 MEMORY.md 不算記憶檔", "MEMORY.md" not in opened, "")
+ 
++    # ㉓ ★單篇大小上限★(r9 資安席 major):一篇超大的檔不讀、報出來,不拖垮後面的對帳
++    d23 = Path(_tf.mkdtemp(prefix="gctl-ms23-"))
++    (d23 / "big.md").write_text(small + ("[[Systems/foo]]\n" * (ms.MAX_BYTES // 10)), encoding="utf-8")
++    (d23 / "ok.md").write_text(small, encoding="utf-8")
++    tl23 = ms.Tally()
++    got23 = [f.name for f, _ in ms.read_memories(d23, tl23)]
++    check("㉓ 超過單篇大小上限的檔不讀", got23 == ["ok.md"], str(got23))
++    check("㉓ 而且報出來(不是靜靜跳過)", any("big.md" in x and "上限" in x for x in tl23.lines), str(tl23.lines))
++
++    # ㉔ ★跟圖譜對帳也吃同一個時間預算★(r9 資安席 major):時間到就停、而且喊結果不完整
++    _orig_gs = ms.graph_stems
++    try:
++        ms.graph_stems = lambda cwd: (Path("."), {"Alpha": Path("/nonexistent/Alpha.md")})
++        tl24 = ms.Tally()
++        crossed24 = ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl24,
++                                   ms.time.monotonic() - 1)
++        check("㉔ 對帳時間用完 → 喊結果不完整", crossed24 and any("對帳" in x for x in tl24.flood), str(tl24.flood))
++        tl24b = ms.Tally()
++        ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl24b, None)
++        check("㉔ 對照組:沒有時間限制時不喊", not tl24b.flood, str(tl24b.flood))
++    finally:
++        ms.graph_stems = _orig_gs
++
+     # ⑰ ★手動模式也要加框★(r6 資安席 minor)
+     check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
+ 
+     # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
+     dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
+     check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))

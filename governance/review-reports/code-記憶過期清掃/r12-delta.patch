@@ -1,0 +1,237 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 0fa3c6f3..765e5c9c 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -41,12 +41,14 @@ import pathlib
+ import re
+ import shutil
+ import subprocess
+ import sys
+ import time
+ 
++_PROC_START = time.monotonic()   # ★看門的時間從程式一啟動就算★(r11 資安席:不是從看門那一刻才算)
++
+ PER_CMD_CAP = 15.0          # 單條檢查的硬上限;實際用的是它與「預算還剩多少」取小的那個
+ MAX_CLAIMS_PER_FILE = 30    # ★單篇最多驗幾條★(r6 資安席 major:一份灌水檔能燒光整輪預算)
+ MAX_FILES = 300             # ★整輪最多看幾篇★(r7 資安席 major:八千個小檔各自卡在單篇上限內一樣能淹掉)
+ MAX_CLAIMS_TOTAL = 600      # ★整輪最多驗幾條★;實測這個專案 79 篇、十幾條,離上限很遠
+ MAX_LINES = 80              # 開場注入最多印幾行(手動模式全印)
+ MAX_BYTES = 64 * 1024       # ★單篇最多讀多大★(r9 資安席 major:一篇 240MB 的檔讓對帳那段跑 15 秒);
+@@ -599,25 +601,24 @@ def read_memories(here, tally):
+ def _read_own_file(f):
+     """★先打開、再在同一個檔案代碼上檢查、再從同一個代碼讀★(r4 兩條 major):
+     原本「先看是不是符號連結、再用路徑讀」中間有時間差,換掉檔案就能讀到任意路徑;
+     而且只擋符號連結不擋硬連結——別的專案的記憶檔硬連結進來會被當成這個專案的讀進對話。
+     O_NOFOLLOW 讓符號連結在打開那一刻就失敗;fstat 確認打開的是一般檔、而且只有一個連結。
+     回 (內容, None) 或 (None, 不讀的理由)。"""
+-    import stat as _st
+     # ★不能只靠 O_NOFOLLOW★(r5 major):Windows 沒有這個旗標(getattr 給 0),防護會整個消失。
+     # 所以一律先 lstat:本身是連結就不打開;打開後再 fstat,跟 lstat 看到的必須是同一個檔
+     # (同一個裝置、同一個 inode)——中間被換掉的話兩次對不上,照樣拒讀。
+     try:
+         pre = os.lstat(str(f))
+     except OSError:
+         raise
+-    if _st.S_ISLNK(pre.st_mode):
+-        return None, "是符號連結"
+-    if _st.S_ISDIR(pre.st_mode):
+-        return None, "dir"
+-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
++    why = _pre_reason(pre)
++    if why:
++        return None, why
++    # O_NONBLOCK:萬一 lstat 之後被換成具名管道,打開那一步也不會卡住(換掉了會被下面 fstat 比對擋)
++    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+     try:
+         fd = os.open(str(f), flags)
+     except OSError as e:
+         if f.is_symlink():
+             return None, "是符號連結"
+         if f.is_dir():
+@@ -633,12 +634,25 @@ def _read_own_file(f):
+             return None, "讀的時候超過單篇上限 %d KB,不讀" % (MAX_BYTES // 1024)
+     finally:
+         os.close(fd)
+     return raw.decode("utf-8"), None
+ 
+ 
++def _pre_reason(pre):
++    """打開之前就看得出來不該讀的:連結、目錄、★任何不是一般檔的東西★(r11 資安席:
++    具名管道、裝置檔在打開那一步就會卡住,等不到打開後的檢查)。"""
++    import stat as _st
++    if _st.S_ISLNK(pre.st_mode):
++        return "是符號連結"
++    if _st.S_ISDIR(pre.st_mode):
++        return "dir"
++    if not _st.S_ISREG(pre.st_mode):
++        return "不是一般檔(具名管道、裝置檔之類)"
++    return None
++
++
+ def _opened_reason(st, pre):
+     """打開之後用檔案代碼看到的狀態,有問題回理由、沒問題回 None。"""
+     import stat as _st
+     if (st.st_dev, st.st_ino) != (pre.st_dev, pre.st_ino):
+         return "在檢查與打開之間被換掉了"
+     if _st.S_ISDIR(st.st_mode):
+@@ -796,40 +810,81 @@ _CHILD_ENV = "LUMOS_MEMORY_SWEEP_CHILD"
+ 
+ def _watchdog(quiet, here, limit, cmd=None):
+     """★外層看門★(r10 資安席 major,Enzo 裁):時間預算只在迴圈之間檢查,擋不住「單一步驟卡住」
+     (一次比對、一次子行程)。前四輪每封一種變形就冒出下一種,所以換形狀:真正的清掃放進子行程,
+     這一層只負責計時——子行程在時間內沒跑完就停掉它,由這一層自己印「超時沒跑完、結果不完整」。
+     不管卡在哪一步,開場一定有一句出聲,不會被外層逾時砍到完全沒聲音。"""
+-    cmd = cmd or [sys.executable, str(pathlib.Path(__file__).resolve()), *sys.argv[1:]]
++    cmd = cmd or [sys.executable, str(pathlib.Path(__file__).resolve()), *_child_argv(limit)]
++    try:
++        proc = subprocess.Popen(cmd, env=dict(os.environ, **{_CHILD_ENV: "1"}), stdout=subprocess.PIPE,
++                                stderr=subprocess.DEVNULL, text=True, start_new_session=(os.name == "posix"))
++    except OSError:
++        return 0
+     try:
+-        r = subprocess.run(cmd, env=dict(os.environ, **{_CHILD_ENV: "1"}),
+-                           capture_output=True, text=True, timeout=limit)
++        out, _ = proc.communicate(timeout=limit)
+     except subprocess.TimeoutExpired:
++        _kill_tree(proc)
+         tally = Tally()
+         tally.broken = 1
+         tally.flood.append("這輪清掃超過 %.0f 秒還沒跑完,被停掉了——結果完全沒出來。可能有記憶檔讓它卡住,"
+                            "用下面那行指令單獨跑看卡在哪。" % limit)
+         _emit(tally, False, quiet, here)
+         return 0
+-    except OSError:
+-        return 0
+-    if r.stdout:
+-        print(r.stdout, end="")               # 轉印子行程的輸出(不寫任何檔)
++    if out:
++        print(out, end="")                    # 轉印子行程的輸出(不寫任何檔)
+     return 0
+ 
+ 
++def _watchdog_limit():
++    """★從程式一啟動就算★(r11 資安席 major):原本從看門那一刻起算外層的 0.85,沒扣掉之前事件記帳
++    那層已經花掉的時間(最壞約 3 秒),兩者疊加會超過外層 12 秒、在喊出來之前被砍。下限 0.5 秒。"""
++    return max(0.5, _outer_budget() * 0.85 - (time.monotonic() - _PROC_START))
++
++
++def _child_argv(limit):
++    """子行程的預算改成看門剩下的時間,讓它的內部預算(×0.7)在看門停掉它之前就先收尾。"""
++    out, skip = [], False
++    for x in sys.argv[1:]:
++        if skip:
++            skip = False
++            continue
++        if x == "--budget":
++            skip = True
++            continue
++        if not x.startswith("--budget="):
++            out.append(x)
++    return [*out, "--budget", "%.2f" % limit]
++
++
++def _kill_tree(proc):
++    """★連孫行程一起停★(r11 資安席 minor):只停直接子行程的話,它開的 git 會變孤兒繼續跑。
++    子行程開在自己的行程群組裡,停整個群組。"""
++    import signal as _sig
++    try:
++        if os.name == "posix":
++            os.killpg(proc.pid, _sig.SIGKILL)
++        else:
++            proc.kill()
++    except OSError:
++        pass
++    try:
++        proc.communicate(timeout=1)
++    except (subprocess.TimeoutExpired, OSError, ValueError):
++        pass
++
++
+ def main():
+     a = _build_parser().parse_args()
+     if a.harness != "claude":
+         return 0
+     here = memory_dir(a.dir)
+     if not here.is_dir():
+         return 0                                   # 這個專案沒有記憶目錄,安靜退出
+     if a.budget and not os.environ.get(_CHILD_ENV):
+         # 子行程自己的預算是外層的 0.7;這層等到 0.85,中間留給子行程收尾與印出
+-        return _watchdog(a.quiet, here, _outer_budget() * 0.85)
++        return _watchdog(a.quiet, here, _watchdog_limit())
+     deadline = (time.monotonic() + _inner_budget()) if a.budget else None
+     tally = Tally()
+     files = read_memories(here, tally)
+     sweep(files, deadline, tally, pathlib.Path.cwd())
+     crossed = cross_check(files, {f.stem for f, _ in files}, tally, deadline)
+     if a.quiet and not (tally.changed or crossed):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 45abdaba..5ac461f8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40220,15 +40220,66 @@ def t_memory_sweep_core():
+           buf25.getvalue()[:300])
+     buf25b = _io.StringIO()
+     with _cl.redirect_stdout(buf25b):
+         ms._watchdog(True, Path("."), 10, cmd=[_sys25.executable, "-c", "print('子行程的報告')"])
+     check("㉕ 對照組:子行程時間內跑完 → 原樣轉印、不喊超時",
+           "子行程的報告" in buf25b.getvalue() and "還沒跑完" not in buf25b.getvalue(), buf25b.getvalue())
++    check("㉛ 看門實際用的是改過預算的子行程參數", "*_child_argv(limit)]" in src, "")
+     check("㉕ hook 模式(有帶預算)真的走看門那一層",
+           "return _watchdog(" in src and "if a.budget and not os.environ.get(_CHILD_ENV)" in src, "")
+ 
++    # ㉘ ★具名管道不打開★(r11 資安席):打開那一步就會卡住,等不到打開後的檢查
++    import threading as _th28
++    import os as _os28
++    if hasattr(_os28, "mkfifo"):
++        d28 = Path(_tf.mkdtemp(prefix="gctl-ms28-"))
++        _os28.mkfifo(d28 / "pipe.md")
++        res28 = []
++        th = _th28.Thread(target=lambda: res28.append(ms._read_own_file(d28 / "pipe.md")), daemon=True)
++        th.start(); th.join(3)
++        check("㉘ 記憶目錄裡的具名管道不會讓讀檔卡住", not th.is_alive(), "卡住了")
++        check("㉘ 而且報成不是一般檔", bool(res28) and res28[0][0] is None and "一般檔" in (res28[0][1] or ""), str(res28))
++
++    # ㉙ ★看門的時間從程式一啟動就算★(r11 資安席 major)
++    _saved_start = ms._PROC_START
++    try:
++        ms._PROC_START = ms.time.monotonic() - 5
++        _saved_argv = ms.sys.argv
++        ms.sys.argv = ["x", "--budget", "12", "--quiet"]
++        lim = ms._watchdog_limit()
++        check("㉙ 已經花掉 5 秒 → 看門只剩 12×0.85−5 左右", 4.9 <= lim <= 5.3, str(lim))
++        ms._PROC_START = ms.time.monotonic() - 100
++        check("㉙ 早就超過 → 下限 0.5 秒,不會是負的", ms._watchdog_limit() == 0.5, str(ms._watchdog_limit()))
++        # ㉛ 子行程的預算改成看門剩下的時間
++        ms.sys.argv = ["x", "--budget", "12", "--quiet", "--budget=9"]
++        ca = ms._child_argv(3.0)
++        check("㉛ 子行程只帶一個 --budget、值是看門剩下的", ca.count("--budget") == 1 and ca[-1] == "3.00"
++              and "--quiet" in ca and not any(x.startswith("--budget=") for x in ca), str(ca))
++    finally:
++        ms._PROC_START = _saved_start
++        ms.sys.argv = _saved_argv
++
++    # ㉚ ★逾時連孫行程一起停★(r11 資安席 minor)
++    if ms.os.name == "posix":
++        pidf = Path(_tf.mkdtemp(prefix="gctl-ms30-")) / "pid"
++        prog = ("import subprocess,time; p=subprocess.Popen(['sleep','30']); "
++                "open(%r,'w').write(str(p.pid)); time.sleep(30)" % str(pidf))
++        with _cl.redirect_stdout(_io.StringIO()):
++            ms._watchdog(True, Path("."), 1.0, cmd=[_sys25.executable, "-c", prog])
++        gone = False
++        if pidf.exists():
++            gpid = int(pidf.read_text())
++            for _ in range(40):
++                try:
++                    ms.os.kill(gpid, 0)
++                except ProcessLookupError:
++                    gone = True
++                    break
++                ms.time.sleep(0.05)
++        check("㉚ 看門停掉子行程時,它開的孫行程也一起停了", pidf.exists() and gone, str(pidf.exists()))
++
+     # ㉖ ★找連結的比對不能平方級變慢★(r10 資安席 major):一整串沒收尾的 [[
+     t26 = ms.time.monotonic()
+     ms._LINKED_REF.findall("[[" * 16000)
+     check("㉖ 三萬兩千個字元的 [[ 一秒內比完(原本約六秒)", ms.time.monotonic() - t26 < 1.0, str(ms.time.monotonic() - t26))
+     check("㉖ 正常的連結照樣抓得到", ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]") == ["Systems/記憶過期清掃", "Projects/甲_計劃"],
+           str(ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]")))

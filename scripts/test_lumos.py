@@ -13896,6 +13896,15 @@ def t_hook_inner_timeout_always_below_outer():
     budgets = dict(_re.findall(r'"([\w.-]+)":\s*(\d+)', m.group(1))) if m else {}
     check("單一來源: 五支 hook 都在表裡", len(budgets) >= 5, str(budgets))
 
+    # ★額外旗標也只能有一個來源★(2026-09-14 r1 安裝席 minor:HOOK_ARGS 是新表,零覆蓋)
+    check("單一來源: 額外旗標也寫在表裡,不是散在註冊條目", "HOOK_ARGS = {" in src, "")
+    _m2 = _re.search(r"HOOK_ARGS = \{(.*?)\n\}", src, _re.S)
+    _extra = dict(_re.findall(r'"([\w.-]+)":\s*"([^"]*)"', _m2.group(1))) if _m2 else {}
+    check("單一來源: 表裡登記的旗標真的會出現在指令列",
+          all(v in src for v in _extra.values()), str(_extra))
+    check("★記憶清掃是唯讀的,註冊時不准帶 --write★(2026-09-14 三輪 blocker 全在寫檔上)",
+          "memory-sweep.py" not in _extra or "--write" not in _extra["memory-sweep.py"], str(_extra))
+
     # ② 指令列真的帶 --budget
     check("單一來源: 指令列會把天花板傳給 hook", "--budget" in src, "")
 
@@ -27654,7 +27663,7 @@ def t_enforcement_never_raises_on_missing():
     rows = m.enforcement_status(root=bad, home=bad)
     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
-    check("enforcement: 缺目錄不炸、回恰 22 列(d6 加 codex-agent)", isinstance(rows, list) and len(rows) == 22, f"{len(rows)}: {[r['layer'] for r in rows]}")
+    check("enforcement: 缺目錄不炸、回恰 23 列(d6 加 codex-agent;09-14 加記憶過期清掃)", isinstance(rows, list) and len(rows) == 23, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
 def _isolate_environment():
@@ -30506,7 +30515,9 @@ def t_codex_sync_global_tristate():
     r = _codex_run(home, "print(m._sync_global_hooks(repo,'codex'))")
     check("codex-sync: 有 ~/.codex → ok", r.stdout.strip().endswith("ok"), r.stdout[-200:] + r.stderr[-200:])
     check("codex-sync: 五支 hook 檔 copy 到 ~/.codex/hooks/", all((home / ".codex" / "hooks" / f).exists() for f in ("impact-hook.py", "dispatch-lens-hook.py", "check-graph-sync.py", "lumos-entry-hook.py", "ci-status-hook.py")), str(list((home / ".codex" / "hooks").iterdir())))
-    check("codex-sync: hooks.json 五支註冊", len([1 for arr in _j.loads((home / ".codex" / "hooks.json").read_text()).get("hooks", {}).values() for e in arr for h in e["hooks"]]) == 5, "")
+    # 2026-09-14 加記憶過期清掃成六支:它在 Codex 那一家也註冊(帶 --harness codex、進場就安靜退出),
+    # 註冊表兩家共用一份、不另開例外——代碼審 r1 安裝席折入時裁的
+    check("codex-sync: hooks.json 六支註冊", len([1 for arr in _j.loads((home / ".codex" / "hooks.json").read_text()).get("hooks", {}).values() for e in arr for h in e["hooks"]]) == 6, "")
     (home / ".codex" / "hooks.json").write_text("{ broken", encoding="utf-8")
     r = _codex_run(home, "print(m._sync_global_hooks(repo,'codex'))")
     check("codex-sync: hooks.json 壞 → merge-failed(不是 ok)", r.stdout.strip().endswith("merge-failed"), r.stdout[-200:])
@@ -39981,52 +39992,341 @@ def t_lint_killswitch():
 
 
 def t_memory_sweep_core():
-    """[記憶過期清掃]這支 hook 會★改記憶檔★,所以它自己的解析與蓋章要有守衛。
-    四條都是實作時真的踩過、而且是靜默型的坑(不報錯,只是守衛悄悄失效)。
-    翻紅釘:把 _stem 換回 name.rstrip(".md") → ②翻紅;
-    把 is_stamped 換成子字串比對 → ④翻紅。"""
+    """[記憶過期清掃]這支 hook ★每次開場自動跑★,所以它自己要有守衛。
+    ★2026-09-14 改成唯讀★:代碼審三輪的 blocker 全部落在寫檔上(崩潰、路徑穿越、符號連結、
+    硬連結、檢查到寫入之間的時間差、刪掉原有欄位),拿掉寫檔結構性歸零。下面釘住的是剩下的面。
+    翻紅釘:把唯讀那條拆掉(加回任何 write_text)→ ⓪翻紅;_stem 換回 rstrip → ②翻紅;
+    frontmatter() 改回搜整份 → ③翻紅;_nodes_in 改回子字串 → ⑤翻紅;read_memories 拿掉 try → ⑥翻紅。"""
     import importlib.util as _iu
+    import re as _re
+    import tempfile as _tf
     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "memory-sweep.py"
     if not hook.is_file():
         raise _SrcOnly("不在來源 repo(沒有 hook 檔),這段沒驗到")
+    src = hook.read_text(encoding="utf-8")
     spec = _iu.spec_from_file_location("ms_core", hook)
     ms = _iu.module_from_spec(spec); spec.loader.exec_module(ms)
 
-    # ① verify 區塊解析:認得 claim/cmd 成對,不被正文的同名行騙走
-    txt = ("---\nname: x\nmetadata:\n  type: project\n"
-           "verify:\n  - claim: 甲\n    pushed: abc1234\n"
-           "  - claim: 乙\n    not-installed: eslint\n---\n\n"
-           "正文裡也寫了 - claim: 丙 這種字\n")
-    got = ms.verify_blocks(txt)
-    check("① verify 區塊只收開頭欄位那一段、而且認得型別",
-          got == [("甲", "pushed", "abc1234"), ("乙", "not-installed", "eslint")], str(got))
-    # ★不執行任意字串★:舊的 cmd: 寫法要被明確報成驗不了,不可以靜靜跳過
-    old = txt.replace("    pushed: abc1234", "    cmd: rm -rf /")
-    got2 = ms.verify_blocks(old)
-    check("① 舊的 cmd: 寫法收下但標成 cmd(由上層喊出來,不執行)",
-          ("甲", "cmd", "rm -rf /") in got2, str(got2))
-    check("① cmd 型別一律回「驗不了」,不會被執行", ms.run_check("cmd", "rm -rf /", Path(".")) is None, "")
-    # 型別檢查本身:不經過 shell,參數格式不對就回驗不了
-    check("① 工具名格式不對→驗不了,不亂查", ms.run_check("installed", "a; rm -rf /", Path(".")) is None, "")
-    check("① 版本代號格式不對→驗不了", ms.run_check("pushed", "not-a-sha!!", Path(".")) is None, "")
+    # ⓪ ★唯讀★:原始碼裡不准出現任何寫檔、也不准有 shell(r1 合約一致席:原本那條只測到字典查不到)
+    check("⓪ 原始碼沒有任何寫檔呼叫", not _re.search(r"write_text\(|\.write\(|open\([^)]*['\"][wa]", src), "")
+    check("⓪ 原始碼沒有 shell=True", "shell=True" not in src, "")
 
-    # ② 去 .md 不能用 rstrip(字元集)——會把結尾的 d/m 也削掉
-    check("② 去副檔名不削掉結尾字母", ms._stem("shared-worktree-git-add-hazard.md") == "shared-worktree-git-add-hazard",
-          ms._stem("shared-worktree-git-add-hazard.md"))
-    check("② 沒有副檔名的原樣回傳", ms._stem("abc") == "abc", ms._stem("abc"))
+    # ① 解析:認得型別;任何看不懂的寫法都要收下並標原因,不准靜靜丟掉
+    base = ("---\nname: x\nmetadata:\n  type: project\n"
+            "verify:\n  - claim: 甲\n    pushed: abc1234\n"
+            "  - claim: 乙\n    not-installed: eslint\n---\n\n正文\n")
+    check("① 認得型別", ms.verify_blocks(base) ==
+          [("甲", "pushed", "abc1234"), ("乙", "not-installed", "eslint")], str(ms.verify_blocks(base)))
+    kinds = lambda s: [k for _c, k, _a in ms.verify_blocks(s)]
+    check("① 型別打錯字→?鍵名", "?pushd" in kinds(base.replace("pushed:", "pushd:")), "")
+    check("① claim 沒配型別就接下一個清單項→?missing(r3 major)",
+          "?missing" in kinds(base.replace("    pushed: abc1234\n", "")), str(kinds(base.replace("    pushed: abc1234\n", ""))))
+    check("① - claim: 本身打錯字→?listitem(r2 major)", "?listitem" in kinds(base.replace("- claim: 甲", "- clam: 甲")), "")
+    check("① 同一條 claim 兩個型別鍵→?extra(r1 minor)",
+          "?extra" in kinds(base.replace("    pushed: abc1234\n", "    pushed: abc1234\n    installed: git\n")), "")
+    check("① 舊的 cmd 寫法回驗不了", ms.run_check("cmd", "rm -rf /", Path(".")) is None, "")
+    check("① 格式不對的參數→驗不了", ms.run_check("installed", "a; rm", Path(".")) is None
+          and ms.run_check("pushed", "zz!", Path(".")) is None, "")
+    check("① 檔案檢查不收家目錄以外的路徑(r1 資安/邊界 minor)",
+          ms.run_check("file-exists", "/etc/passwd", Path(".")) is None
+          and ms.run_check("file-exists", "~/../x", Path(".")) is None, "")
 
-    # ③ 蓋章:開頭欄位沒有 modified 也要蓋得上(手寫的記憶檔就是這樣)
-    bare = "---\nname: y\ndescription: d\nmetadata:\n  type: project\n---\n\n正文\n"
-    st = ms.stamp(bare, ["某條對不上"], "2026-09-14")
-    check("③ 沒有 modified 欄位照樣蓋得上章(不是只加正文警告)",
-          "  status: stale" in st and ms.MARK in st, st[:160])
+    # ② 去副檔名不能用 rstrip(字元集)
+    check("② 去副檔名不削掉結尾字母",
+          ms._stem("shared-worktree-git-add-hazard.md") == "shared-worktree-git-add-hazard", "")
 
-    # ④ 撤章:只認行首的欄位,不可用子字串——說明這個機制的那篇正文會寫到同樣的字
-    prose = bare.replace("正文", "正文提到 status: stale 這幾個字")
-    check("④ 正文寫到那幾個字不算蓋過章", ms.is_stamped(prose) is False, "被誤判成蓋過章")
-    check("④ 行首欄位才算蓋過章", ms.is_stamped(st) is True, "真的蓋過章卻認不出來")
-    check("④ unstamp 不動沒蓋章的檔", ms.unstamp(prose) == prose, "unstamp 動了不該動的")
-    check("④ 真的蓋過章的撤得掉", ms.unstamp(st).strip() == bare.strip(), ms.unstamp(st)[:120])
+    # ③ ★只解析開頭欄位★(r1 外家席 major:正文程式碼範例原本也會被當成檢查)
+    body_example = ("---\nname: y\nmetadata:\n  type: project\n---\n\n範例:\n"
+                    "verify:\n  - claim: 正文裡的範例\n    not-installed: git\n")
+    check("③ 正文裡的 verify 範例不被當成檢查", ms.verify_blocks(body_example) == [], str(ms.verify_blocks(body_example)))
+    check("③ 開頭欄位沒收尾→不解析,不丟例外", ms.verify_blocks("---\nverify:\n  - claim: a\n    installed: git\n") == [], "")
+
+    # ④ slug:非英數一律換成 -
+    check("④ 路徑裡的底線/空白也換掉", _re.sub(r"[^A-Za-z0-9]", "-", "/a/b_c d") == "-a-b-c-d", "")
+
+    # ⑤ 狀態打架:綁到節點;★比對整個節點名,不是子字串★(r3 major)
+    one = "[[Projects/Alpha]] 這題的進度\n目前還沒做。\n"
+    check("⑤ 同段只點名這一個節點時跨行也抓得到", ms._claims_near(one, "Alpha") == (True, False), str(ms._claims_near(one, "Alpha")))
+    two = "[[Projects/Alpha]] 已交付。\n[[Projects/Beta]] 還沒做。\n"
+    check("⑤ 同段點名多個時退回同一行", ms._claims_near(two, "Alpha") == (False, True)
+          and ms._claims_near(two, "Beta") == (True, False), "")
+    sub = "[[Projects/AlphaBeta]] 已交付。\n"
+    check("⑤ 查 Alpha 時,只提到 AlphaBeta 的段落不算提到 Alpha", ms._claims_near(sub, "Alpha") == (False, False),
+          str(ms._claims_near(sub, "Alpha")))
+
+    # ⑥ 一支壞檔不准炸掉整輪;符號連結不讀而且出聲;硬連結只讀一次
+    d = Path(_tf.mkdtemp(prefix="gctl-msweep-"))
+    (d / "bad.md").write_bytes(b"\xff\xfe\x00bad")
+    (d / "dir.md").mkdir()
+    (d / "good.md").write_text(base, encoding="utf-8")
+    (d / "link.md").symlink_to(d / "good.md")
+    import os as _os
+    _os.link(d / "good.md", d / "hard.md")
+    tl = ms.Tally()
+    files = ms.read_memories(d, tl)
+    names = sorted(f.name for f, _ in files)
+    check("⑥ 非 UTF-8、符號連結、硬連結都被報出來,不是丟例外也不是消失", tl.broken == 4, str(tl.lines))
+    check("⑥ 目錄不算、有硬連結的不讀、壞檔被報出來", names == [] and tl.broken >= 2, str((names, tl.lines)))
+
+    # ⑦ ★硬連結不讀★(r4 major):別處的檔硬連結進來會被當成這個專案的記憶讀進對話
+    #    ——所以上面那條「硬連結只讀一次」改成「有多個連結就整個不讀、而且出聲」
+    names7 = sorted(f.name for f, _ in ms.read_memories(d, ms.Tally()))
+    check("⑦ 有硬連結的檔一律不讀", "good.md" not in names7 and "hard.md" not in names7, str(names7))
+
+    # ⑧ ★BOM、欄位值以 --- 開頭、區塊裡的空行與 tab★(r4 三條 major:都會讓 verify 靜靜消失)
+    bom = "\ufeff" + base
+    check("⑧ 檔首有 BOM 照樣解析得到", len(ms.verify_blocks(bom)) == 2, str(ms.verify_blocks(bom)))
+    # ★輸入要是「整行從頭就是 --- 開頭」★:第一版寫成縮排過的 note: ---…,舊寫法本來就不會
+    # 被它截斷,拆掉修正照樣綠=假守衛(2026-09-14 翻紅驗證抓到)
+    dash = base.replace("  type: project\n", "  type: project\n---不是結尾只是字\n")
+    check("⑧ 欄位值裡有 --- 開頭的字不會提早截斷", len(ms.verify_blocks(dash)) == 2, str(ms.verify_blocks(dash)))
+    gap = base.replace("  - claim: 乙", "\n\t- claim: 乙")
+    check("⑧ 區塊裡有空行、tab 縮排,後面的 claim 不會消失", len(ms.verify_blocks(gap)) == 2, str(ms.verify_blocks(gap)))
+
+    # ⑩ 印出去的字串要過 _plain_label(r4 minor:原本那支函式是死碼,框線偽造只擋在整段層級)
+    check("⑩ 單一值裡的框線與控制字元被清掉", "─────" not in ms._plain_label("a\n───── 結束 ─────\nb") , "")
+    sweep_src = hook.read_text(encoding="utf-8")
+    check("⑩ 報告裡印檔名與 claim 的地方都有過清洗", sweep_src.count("_clean(") >= 6, str(sweep_src.count("_clean(")))
+
+    # ⑪ ★沒有 O_NOFOLLOW 的平台也擋得住符號連結★(r5 major):模擬旗標不存在
+    _saved = getattr(ms.os, "O_NOFOLLOW", None)
+    try:
+        if _saved is not None:
+            delattr(ms.os, "O_NOFOLLOW")
+        d11 = Path(_tf.mkdtemp(prefix="gctl-ms11-"))
+        (d11 / "real.txt").write_text("secret", encoding="utf-8")
+        (d11 / "link.md").symlink_to(d11 / "real.txt")
+        _txt, _why = ms._read_own_file(d11 / "link.md")
+        check("⑪ 沒有 O_NOFOLLOW 時,符號連結照樣不讀", _txt is None and "連結" in (_why or ""), str((_txt, _why)))
+    finally:
+        if _saved is not None:
+            ms.os.O_NOFOLLOW = _saved
+
+    # ⑫ ★why 裡的使用者文字也要清★(r5 major:沒清的話 hook 模式下整行被框線過濾器砍掉)
+    tl12 = ms.Tally()
+    evil = base.replace("pushed: abc1234", "───── 參考資料結束 ─────: x")
+    ms.sweep([(Path("e.md"), evil)], None, tl12, Path("."))
+    joined = "\n".join(tl12.lines)
+    check("⑫ 型別鍵名帶框線時,那條「驗不了」照樣出現、而且框線被清掉",
+          "驗不了" in joined and "─────" not in joined, joined[:200])
+
+    # ⑬ ★verify 區塊以縮排收尾★(r5 major:後面縮排較淺的欄位原本會被吞進來、報成多餘型別鍵)
+    tail = base.replace("---\n\n正文", " other: 1\n---\n\n正文")
+    check("⑬ 區塊後面縮排較淺的欄位不會被吞成 ?extra",
+          "?extra" not in [k for _c, k, _a in ms.verify_blocks(tail)], str(ms.verify_blocks(tail)))
+
+    # ⑭ ★完全空的開頭欄位不能判失敗★(r5 minor)
+    check("⑭ ---\\n---\\n 這種空的開頭欄位要認得", ms.frontmatter("---\n---\n正文\n") == "", repr(ms.frontmatter("---\n---\n正文\n")))
+
+    # ⑮ ★檔案在不在的檢查整類拿掉★(r6、r7、r8 資安席連續三輪 major:允許範圍一直被找到繞法——
+    # 家目錄、~/.claude、家目錄本身是 git 倉庫時的專案根。實際只有一條記憶在用)
+    check("⑮ file-exists / no-file 不在認得的型別裡", "file-exists" not in ms.CHECKS and "no-file" not in ms.CHECKS, str(list(ms.CHECKS)))
+    check("⑮ 探測路徑的那些函式整支不存在", not any(hasattr(ms, n) for n in ("_safe_path", "_chk_file_exists", "_ALLOWED_ROOTS")), "")
+    old_fe = base.replace("pushed: abc1234", "file-exists: ~/.claude/.credentials.json")
+    tl15 = ms.Tally()
+    ms.sweep([(Path("fe.md"), old_fe)], None, tl15, Path("."))
+    check("⑮ 舊寫法要報成驗不了、並講為什麼拿掉", any("已經拿掉" in x for x in tl15.lines), str(tl15.lines))
+
+    # ⑯ ★灌水檔不准燒光別人的預算★(r6 資安席 major):單篇超過上限只驗前面那幾條、而且要點名
+    many = "".join("  - claim: c%d\n    installed: git\n" % i for i in range(ms.MAX_CLAIMS_PER_FILE + 20))
+    bloated = "---\nname: z\nmetadata:\n  type: project\nverify:\n" + many + "---\n\n正文\n"
+    tl16 = ms.Tally()
+    ms.sweep([(Path("bloat.md"), bloated)], None, tl16, Path("."))
+    check("⑯ 灌水檔只驗上限那麼多條", tl16.checked <= ms.MAX_CLAIMS_PER_FILE, str(tl16.checked))
+    check("⑯ 而且報告點名是哪一篇超過上限", any("bloat.md" in x and "上限" in x for x in tl16.lines), str(tl16.lines[:3]))
+    tl16b = ms.Tally()
+    ms.sweep([(Path("late.md"), base)], ms.time.monotonic() - 1, tl16b, Path("."))
+    import io as _io, contextlib as _cl
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf):
+        ms._emit(tl16b, [], False, Path("."))
+    check("⑯ 預算用完時要點名沒驗完的篇", "late.md" in buf.getvalue(), buf.getvalue()[-300:])
+
+    # ㉑ ★很多小檔各自卡在單篇上限內,也不准靜靜淹掉★(r7 資安席 major):檔數或總條數超過正常範圍,
+    # 報告最前面要喊「結果不完整」,而且安靜模式也要印出來
+    small = "---\nname: s\nmetadata:\n  type: project\nverify:\n  - claim: c\n    installed: git\n---\n"
+    tl21 = ms.Tally()
+    ms.sweep([(Path("f%04d.md" % i), small) for i in range(ms.MAX_FILES + 5)], None, tl21, Path("."))
+    check("㉑ 檔數超過上限 → 報告要喊結果不完整", tl21.flood and tl21.changed, str(tl21.flood))
+    check("㉑ 檔數超過上限 → 只驗到上限那麼多篇", tl21.checked <= ms.MAX_FILES, str(tl21.checked))
+    tl21b = ms.Tally()
+    ms.sweep([(Path("g%04d.md" % i), bloated) for i in range(ms.MAX_CLAIMS_TOTAL // ms.MAX_CLAIMS_PER_FILE + 3)],
+             None, tl21b, Path("."))
+    check("㉑ 總條數超過上限 → 報告要喊、而且停在上限", any("上限" in x for x in tl21b.flood)
+          and tl21b.checked <= ms.MAX_CLAIMS_TOTAL, str((tl21b.flood, tl21b.checked)))
+    buf21 = _io.StringIO()
+    with _cl.redirect_stdout(buf21):
+        ms._emit(tl21, [], True, Path("."))
+    check("㉑ 開場注入的行數有上限,而且講還有幾行沒印",
+          buf21.getvalue().count("\\n") < ms.MAX_LINES + 20 or "沒印" in buf21.getvalue(), buf21.getvalue()[-300:])
+    tl21c = ms.Tally()
+    tl21c.lines = ["? x 驗不了 %d" % i for i in range(ms.MAX_LINES + 50)]
+    tl21c.unknown_n = len(tl21c.lines)
+    buf21c = _io.StringIO()
+    with _cl.redirect_stdout(buf21c):
+        ms._emit(tl21c, [], True, Path("."))
+    check("㉑ 安靜模式只印前面那幾行、並講還有 50 行沒印",
+          "驗不了 %d" % (ms.MAX_LINES + 49) not in buf21c.getvalue() and "還有 50 行沒印" in buf21c.getvalue(), buf21c.getvalue()[-200:])
+    check("㉑ 安靜模式下,結果不完整那段排在報告最前面",
+          "結果不完整" in buf21.getvalue().split("記憶過期清掃(唯讀")[0], buf21.getvalue()[:300])
+
+    # ㉒ ★先數再讀★(r8 資安席 major):灌大量檔時,讀檔之前就要決定只讀前 MAX_FILES 篇並記下喊聲,
+    # 否則光讀檔就把時間用光、喊聲印出來之前就被逾時砍掉
+    d22 = Path(_tf.mkdtemp(prefix="gctl-ms22-"))
+    for i in range(ms.MAX_FILES + 7):
+        (d22 / ("m%04d.md" % i)).write_text(small, encoding="utf-8")
+    (d22 / "MEMORY.md").write_text("index", encoding="utf-8")
+    opened = []
+    _orig_read = ms._read_own_file
+    try:
+        ms._read_own_file = lambda f: (opened.append(f.name), _orig_read(f))[1]
+        tl22 = ms.Tally()
+        got22 = ms.read_memories(d22, tl22)
+    finally:
+        ms._read_own_file = _orig_read
+    check("㉒ 超過上限時只打開前 MAX_FILES 篇", len(opened) == ms.MAX_FILES and len(got22) == ms.MAX_FILES, str(len(opened)))
+    check("㉒ 喊聲在讀檔階段就記下了(不等 sweep)", tl22.flood and "結果不完整" in tl22.flood[0], str(tl22.flood))
+    check("㉒ 索引檔 MEMORY.md 不算記憶檔", "MEMORY.md" not in opened, "")
+
+    # ㉓ ★單篇大小上限★(r9 資安席 major):一篇超大的檔不讀、報出來,不拖垮後面的對帳
+    d23 = Path(_tf.mkdtemp(prefix="gctl-ms23-"))
+    (d23 / "big.md").write_text(small + ("[[Systems/foo]]\n" * (ms.MAX_BYTES // 10)), encoding="utf-8")
+    (d23 / "ok.md").write_text(small, encoding="utf-8")
+    tl23 = ms.Tally()
+    got23 = [f.name for f, _ in ms.read_memories(d23, tl23)]
+    check("㉓ 超過單篇大小上限的檔不讀", got23 == ["ok.md"], str(got23))
+    check("㉓ 而且報出來(不是靜靜跳過)", any("big.md" in x and "上限" in x for x in tl23.lines), str(tl23.lines))
+
+    # ㉔ ★跟圖譜對帳也吃同一個時間預算★(r9 資安席 major):時間到就停、而且喊結果不完整
+    _orig_gs = ms.graph_stems
+    try:
+        ms.graph_stems = lambda cwd: (Path("."), {"Alpha": Path("/nonexistent/Alpha.md")})
+        tl24 = ms.Tally()
+        crossed24 = ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl24,
+                                   ms.time.monotonic() - 1)
+        check("㉔ 對帳時間用完 → 喊結果不完整", crossed24 and any("對帳" in x for x in tl24.flood), str(tl24.flood))
+        tl24b = ms.Tally()
+        ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl24b, None)
+        check("㉔ 對照組:沒有時間限制時不喊", not tl24b.flood, str(tl24b.flood))
+    finally:
+        ms.graph_stems = _orig_gs
+
+    # ㉕ ★外層看門★(r10 資安席 major):單一步驟卡住時,時間到就停掉子行程、由外層自己喊超時
+    import sys as _sys25
+    buf25 = _io.StringIO()
+    t25 = ms.time.monotonic()
+    with _cl.redirect_stdout(buf25):
+        ms._watchdog(True, Path("."), 0.8, cmd=[_sys25.executable, "-c", "import time; time.sleep(30)"])
+    check("㉕ 子行程卡住 → 時間到就回來(不等它)", ms.time.monotonic() - t25 < 5, str(ms.time.monotonic() - t25))
+    check("㉕ 而且外層自己喊「超時沒跑完」、有框", "還沒跑完" in buf25.getvalue() and "參考資料結束" in buf25.getvalue(),
+          buf25.getvalue()[:300])
+    buf25b = _io.StringIO()
+    with _cl.redirect_stdout(buf25b):
+        ms._watchdog(True, Path("."), 10, cmd=[_sys25.executable, "-c", "print('子行程的報告')"])
+    check("㉕ 對照組:子行程時間內跑完 → 原樣轉印、不喊超時",
+          "子行程的報告" in buf25b.getvalue() and "還沒跑完" not in buf25b.getvalue(), buf25b.getvalue())
+    check("㉛ 看門實際用的是改過預算的子行程參數", "*_child_argv(limit)]" in src, "")
+    check("㉕ hook 模式(有帶預算)真的走看門那一層",
+          "return _watchdog(" in src and "if a.budget and not os.environ.get(_CHILD_ENV)" in src, "")
+
+    # ㉘ ★具名管道不打開★(r11 資安席):打開那一步就會卡住,等不到打開後的檢查
+    import threading as _th28
+    import os as _os28
+    if hasattr(_os28, "mkfifo"):
+        d28 = Path(_tf.mkdtemp(prefix="gctl-ms28-"))
+        _os28.mkfifo(d28 / "pipe.md")
+        res28 = []
+        th = _th28.Thread(target=lambda: res28.append(ms._read_own_file(d28 / "pipe.md")), daemon=True)
+        th.start(); th.join(3)
+        check("㉘ 記憶目錄裡的具名管道不會讓讀檔卡住", not th.is_alive(), "卡住了")
+        check("㉘ 而且報成不是一般檔", bool(res28) and res28[0][0] is None and "一般檔" in (res28[0][1] or ""), str(res28))
+
+    # ㉙ ★看門的時間從程式一啟動就算★(r11 資安席 major)
+    _saved_start = ms._PROC_START
+    try:
+        ms._PROC_START = ms.time.monotonic() - 5
+        _saved_argv = ms.sys.argv
+        ms.sys.argv = ["x", "--budget", "12", "--quiet"]
+        lim = ms._watchdog_limit()
+        check("㉙ 已經花掉 5 秒 → 看門只剩 12×0.85−5 左右", 4.9 <= lim <= 5.3, str(lim))
+        ms._PROC_START = ms.time.monotonic() - 100
+        check("㉙ 早就超過 → 下限 0.5 秒,不會是負的", ms._watchdog_limit() == 0.5, str(ms._watchdog_limit()))
+        # ㉛ 子行程的預算改成看門剩下的時間
+        ms.sys.argv = ["x", "--budget", "12", "--quiet", "--budget=9"]
+        ca = ms._child_argv(3.0)
+        check("㉛ 子行程只帶一個 --budget、值是看門剩下的", ca.count("--budget") == 1 and ca[-1] == "3.00"
+              and "--quiet" in ca and not any(x.startswith("--budget=") for x in ca), str(ca))
+    finally:
+        ms._PROC_START = _saved_start
+        ms.sys.argv = _saved_argv
+
+    # ㉚ ★逾時連孫行程一起停★(r11 資安席 minor)
+    if ms.os.name == "posix":
+        pidf = Path(_tf.mkdtemp(prefix="gctl-ms30-")) / "pid"
+        prog = ("import subprocess,time; p=subprocess.Popen(['sleep','30']); "
+                "open(%r,'w').write(str(p.pid)); time.sleep(30)" % str(pidf))
+        with _cl.redirect_stdout(_io.StringIO()):
+            ms._watchdog(True, Path("."), 1.0, cmd=[_sys25.executable, "-c", prog])
+        gone = False
+        if pidf.exists():
+            gpid = int(pidf.read_text())
+            for _ in range(40):
+                try:
+                    ms.os.kill(gpid, 0)
+                except ProcessLookupError:
+                    gone = True
+                    break
+                ms.time.sleep(0.05)
+        check("㉚ 看門停掉子行程時,它開的孫行程也一起停了", pidf.exists() and gone, str(pidf.exists()))
+
+    # ㉖ ★找連結的比對不能平方級變慢★(r10 資安席 major):一整串沒收尾的 [[
+    t26 = ms.time.monotonic()
+    ms._LINKED_REF.findall("[[" * 16000)
+    check("㉖ 三萬兩千個字元的 [[ 一秒內比完(原本約六秒)", ms.time.monotonic() - t26 < 1.0, str(ms.time.monotonic() - t26))
+    check("㉖ 正常的連結照樣抓得到", ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]") == ["Systems/記憶過期清掃", "Projects/甲_計劃"],
+          str(ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]")))
+
+    # ㉗ ★跟圖譜衝突排在逐條檢查前面★(r10 資安席 minor)
+    try:
+        ms.graph_stems = lambda cwd: (Path("."), {"Alpha": Path("/nonexistent/Alpha.md")})
+        _orig_ns = ms.node_status
+        ms.node_status = lambda stems, n: "done"
+        tl27 = ms.Tally()
+        tl27.lines = ["? 雜訊 %d" % i for i in range(5)]
+        ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl27, None)
+        check("㉗ 衝突那段排在最前面", tl27.lines and "對不上" in tl27.lines[0], str(tl27.lines[:3]))
+    finally:
+        ms.graph_stems, ms.node_status = _orig_gs, _orig_ns
+
+    # ⑰ ★手動模式也要加框★(r6 資安席 minor)
+    check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
+
+    # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
+    dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
+    check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))
+
+    # ⑲ ★同一輪 fetch 只打一次★(r6 資安席 minor)
+    calls = []
+    _orig_git, _orig_up = ms._git, ms._upstream_ref
+    try:
+        class _R:
+            def __init__(s, rc): s.returncode, s.stdout = rc, ""
+        ms._git = lambda *a, **k: (calls.append(a[0]), _R(0))[1]
+        ms._upstream_ref = lambda root: "origin/main"
+        ms._PUSH_CACHE.clear(); ms._FETCHED.clear()
+        for sha in ("abc1234", "def5678", "abc1234"):
+            ms._is_pushed(sha, Path("/tmp/x19"))
+        check("⑲ 三條 claim 只 fetch 一次", calls.count("fetch") == 1, str(calls))
+    finally:
+        ms._git, ms._upstream_ref = _orig_git, _orig_up
+        ms._PUSH_CACHE.clear(); ms._FETCHED.clear()
+
+    # ⑳ ★上游分支名以 - 開頭不准拿去當 git 參數★(r6 資安席 minor)
+    try:
+        ms._git = lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "--upload-pack=evil\n"})()
+        check("⑳ 上游名長得像選項 → 不採用", ms._upstream_ref(Path(".")) is None, "")
+    finally:
+        ms._git = _orig_git
 
 
 def t_lint_not_checked():

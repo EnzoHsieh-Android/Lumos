@@ -1,0 +1,517 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index b8c78fba..db5245ea 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -38,15 +38,15 @@ import os
+ import pathlib
+ import re
+ import shutil
+ import subprocess
+ import sys
+ import time
+-import time as _tm
+ 
+ PER_CMD_CAP = 15.0          # 單條檢查的硬上限;實際用的是它與「預算還剩多少」取小的那個
++MAX_CLAIMS_PER_FILE = 30    # ★單篇最多驗幾條★(r6 資安席 major:一份灌水檔能燒光整輪預算)
+ 
+ # ── ★注入框:把「機器附加的內容」跟系統話明確分開★ ────────────────────────
+ # 單源說明在 Systems/hook信任邊界;這段在幾支 hook 與 scripts/lumos 裡是逐字相同的複本,
+ # 有守衛盯著不准漂(hook 是獨立檔、複製出去後彼此 import 不到)。
+ #
+ # 出身:這些文字是以「系統附加」的口吻直接進對話的,而內容來自圖譜筆記、CI 紀錄這類
+@@ -176,32 +176,47 @@ def _git(*args, cwd=None):
+         return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                               text=True, timeout=_budget_left())
+     except (subprocess.TimeoutExpired, OSError):
+         return None
+ 
+ 
++_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$")
++
++
+ def _upstream_ref(root):
++    """★拿到的分支名要驗格式★(r6 資安席 minor):這個字串會被當成 git 的遠端名與 ref,
++    以 - 開頭就會變成 git 的選項。要能改 .git/config 才觸發得了,但驗一行就沒了。"""
+     r = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", cwd=root)
+-    return r.stdout.strip() if (r and r.returncode == 0 and r.stdout.strip()) else None
++    up = r.stdout.strip() if (r and r.returncode == 0) else ""
++    return up if _REF_RE.match(up) and ".." not in up else None
++
++
++_PUSH_CACHE = {}      # (root, sha) -> 結果;★一輪只 fetch 一次★(r6 資安席 minor:原本每條 claim 各打一次)
++_FETCHED = {}         # root -> fetch 成功與否
+ 
+ 
+ def _is_pushed(sha, root):
+     """★fetch 失敗就回「驗不了」,不拿舊快照硬答★(r1 正確性席與外家席獨立指出):
+     離線時遠端追蹤分支是舊的,拿它判「推了沒」會給出自信而錯誤的答案。"""
+     if not _SHA_RE.match(sha):
+         return None
+     up = _upstream_ref(root)
+     if not up or "/" not in up:
+         return None
+-    fetched = _git("fetch", "-q", up.split("/")[0], cwd=root)
+-    if fetched is None or fetched.returncode != 0:
++    key = (str(root), sha)
++    if key in _PUSH_CACHE:
++        return _PUSH_CACHE[key]
++    if str(root) not in _FETCHED:
++        fetched = _git("fetch", "-q", up.split("/")[0], cwd=root)
++        _FETCHED[str(root)] = bool(fetched is not None and fetched.returncode == 0)
++    if not _FETCHED[str(root)]:
+         return None
+     r = _git("merge-base", "--is-ancestor", sha, up, cwd=root)
+-    if r is None or r.returncode not in (0, 1):
+-        return None
+-    return r.returncode == 0
++    res = None if (r is None or r.returncode not in (0, 1)) else (r.returncode == 0)
++    _PUSH_CACHE[key] = res
++    return res
+ 
+ 
+ def _chk_pushed(arg, root):
+     return _is_pushed(arg, root)
+ 
+ 
+@@ -225,19 +240,41 @@ def _safe_path(arg):
+     還會卡住整支 hook。限在家目錄底下之後,兩件事都沒了;實際用過的檢查也都在這個範圍裡。"""
+     if not arg or ".." in pathlib.PurePosixPath(arg).parts:
+         return None
+     p = pathlib.Path(os.path.expanduser(arg))
+     if not p.is_absolute():
+         return None
+-    # ★要比 resolve 之後的路徑★(r4 minor):家目錄裡放一個指到外面的符號連結,
+-    # 字串層級比對會被繞過。
++    # ★只准看兩個地方★(r6 資安席 major):原本整個家目錄都行,等於一台「~/.ssh/id_rsa、
++    # ~/.aws/credentials 存不存在」的問卷機——結果會不會出現在報告裡精確對應檔案存不存在。
++    # 實際用過的檢查只看 ~/.claude 底下與專案本身,所以收窄到這兩處。
++    # 仍要比 resolve 之後的路徑(r4:放一個指到外面的符號連結會繞過字串比對)。
+     try:
+-        p.resolve().relative_to(pathlib.Path.home().resolve())
+-    except (ValueError, OSError, RuntimeError):
++        real = p.resolve()
++    except (OSError, RuntimeError):
+         return None
+-    return p
++    for allowed in _ALLOWED_ROOTS():
++        try:
++            real.relative_to(allowed)
++            return p
++        except ValueError:
++            continue
++    return None
++
++
++_ROOTS_CACHE = []    # 一輪只問一次 git 專案根在哪(否則每條檔案檢查各開一個子行程)
++
++
++def _ALLOWED_ROOTS():
++    if _ROOTS_CACHE:
++        return _ROOTS_CACHE
++    roots = [(pathlib.Path.home() / ".claude").resolve()]
++    r = _git("rev-parse", "--show-toplevel", cwd=pathlib.Path.cwd())
++    if r is not None and r.returncode == 0 and r.stdout.strip():
++        roots.append(pathlib.Path(r.stdout.strip()).resolve())
++    _ROOTS_CACHE.extend(roots)
++    return _ROOTS_CACHE
+ 
+ 
+ def _chk_file_exists(arg, root):
+     p = _safe_path(arg)
+     return None if p is None else p.exists()
+ 
+@@ -269,12 +306,23 @@ CHECKS = {
+ def run_check(kind, arg, root):
+     """跑一條宣告式檢查。不認得的型別一律回 None(驗不了),由上層喊出來。"""
+     fn = CHECKS.get(kind)
+     return None if fn is None else fn(arg, root)
+ 
+ 
++def _clean(value, cap=120):
++    """印出去之前的逐值清洗。先過正典的 _plain_label,再多清兩類(r6 資安席 minor):
++    ★不可見字元★(零寬、方向控制等,Unicode 類別 Cf)與★整個框線字元區塊★(U+2500 到 U+257F)。
++    正典的框線過濾只認「─」一個字元,相似字元能拼出看起來一樣的假框線。
++    ★不改正典那兩支函式★:它們在五支 hook 之間逐字相同、有守衛盯著不准漂。"""
++    import unicodedata as _ud
++    s = "".join(ch for ch in str(value)
++                if _ud.category(ch) != "Cf" and not ("\u2500" <= ch <= "\u257f"))
++    return _plain_label(s, cap=cap)
++
++
+ # ── 解析 ───────────────────────────────────────────────────────────────────
+ _FM_RE = re.compile(r"---[ \t]*\n((?:.*\n)*?)---[ \t]*(?:\n|$)")
+ 
+ 
+ def frontmatter(text):
+     """回開頭欄位那一段(不含上下兩條 ---);沒有完整的開頭欄位回 None。
+@@ -303,50 +351,60 @@ def verify_blocks(text):
+         return []
+     # ★空白行與 tab 縮排不准截斷區塊★(r4 major):原本只收「空格開頭的行」,
+     # 區塊裡一個空行或用 tab 縮排,後面本來合法的 claim 就整批靜靜消失。
+     m = re.search(r"(?m)^verify:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)+)", fm + "\n")
+     if not m:
+         return []
+-    out, claim, took, base = [], None, False, None
++    out, st, base = [], [None, False], None      # st = [目前這條 claim, 它拿到型別鍵沒]
+     for line in m.group(1).splitlines():
+         s = line.strip()
+         if not s:
+             continue
+-        # 量縮排前先把 tab 展開:不展開的話一個 tab 只算 1 格,比兩個空格淺,
+-        # 會被誤判成區塊結束(折 r5 那條時自己撞到的)
+-        wide = line.expandtabs(4)
+-        ind = len(wide) - len(wide.lstrip(" "))
++        ind = _indent(line)
+         if base is None:
+             base = ind
+         elif ind < base:
+             # ★縮排比區塊第一行還淺=區塊已經結束★(r5 major):放寬接受空行與 tab 之後,
+             # 後面縮排一格的其他欄位會被整段吞進來、誤判成前一條 claim 的多餘型別鍵。
+             break
+-        if s.startswith("-"):
+-            if claim is not None and not took:
+-                out.append((claim, "?missing", ""))
+-            if s.startswith("- claim:"):
+-                claim, took = s[len("- claim:"):].strip(), False
+-            else:
+-                out.append((s[:40], "?listitem", ""))
+-                claim, took = None, False
+-            continue
+-        if claim is None or ":" not in s:
+-            continue
+-        k, _, v = s.partition(":")
+-        k, v = k.strip(), v.strip()
+-        if took:
+-            out.append((claim, "?extra", k))
+-            continue
+-        out.append((claim, k if k in CHECKS else "?" + k, v))
+-        took = True
+-    if claim is not None and not took:
+-        out.append((claim, "?missing", ""))
++        _block_line(s, st, out)
++    if st[0] is not None and not st[1]:
++        out.append((st[0], "?missing", ""))
+     return out
+ 
+ 
++def _indent(line):
++    """量縮排前先把 tab 展開:不展開的話一個 tab 只算 1 格,比兩個空格淺,
++    會被誤判成區塊結束(折 r5 那條時自己撞到的)。"""
++    wide = line.expandtabs(4)
++    return len(wide) - len(wide.lstrip(" "))
++
++
++def _block_line(s, st, out):
++    """verify 區塊裡的一行(已去頭尾空白)。st = [目前這條 claim, 它拿到型別鍵沒],就地更新。"""
++    claim, took = st
++    if s.startswith("-"):
++        if claim is not None and not took:
++            out.append((claim, "?missing", ""))
++        if s.startswith("- claim:"):
++            st[:] = [s[len("- claim:"):].strip(), False]
++        else:
++            out.append((s[:40], "?listitem", ""))
++            st[:] = [None, False]
++        return
++    if claim is None or ":" not in s:
++        return
++    k, _, v = s.partition(":")
++    k, v = k.strip(), v.strip()
++    if took:
++        out.append((claim, "?extra", k))
++        return
++    out.append((claim, k if k in CHECKS else "?" + k, v))
++    st[1] = True
++
++
+ def why_unknown(kind, arg=""):
+     if kind == "?missing":
+         return "這條 claim 底下沒有任何看得懂的檢查型別"
+     if kind == "?listitem":
+         return "這一行長得像清單項但不是 - claim:(打錯字?)"
+     if kind == "?extra":
+@@ -489,12 +547,13 @@ def pointer_problems(stems, files, mem_stems):
+ 
+ # ── 一輪清掃(唯讀) ──────────────────────────────────────────────────────────
+ class Tally:
+     def __init__(self):
+         self.lines = []
+         self.stale = self.unknown_n = self.skipped = self.checked = self.broken = 0
++        self.unfinished = []      # ★沒驗完的篇名要點名★,不能只給一個總數
+ 
+     @property
+     def changed(self):
+         return bool(self.stale or self.unknown_n or self.skipped or self.broken)
+ 
+ 
+@@ -508,19 +567,19 @@ def read_memories(here, tally):
+         if f.name == "MEMORY.md":
+             continue
+         try:
+             text, why = _read_own_file(f)
+         except (OSError, UnicodeDecodeError) as e:
+             tally.broken += 1
+-            tally.lines.append("! %s 讀不了(%s),這篇跳過" % (_plain_label(f.name), e.__class__.__name__))
++            tally.lines.append("! %s 讀不了(%s),這篇跳過" % (_clean(f.name), e.__class__.__name__))
+             continue
+         if why == "dir":
+             continue
+         if why:
+             tally.broken += 1
+-            tally.lines.append("! %s %s,不當成記憶檔讀" % (_plain_label(f.name), why))
++            tally.lines.append("! %s %s,不當成記憶檔讀" % (_clean(f.name), why))
+             continue
+         out.append((f, text))
+     return out
+ 
+ 
+ def _read_own_file(f):
+@@ -548,78 +607,98 @@ def _read_own_file(f):
+         if f.is_symlink():
+             return None, "是符號連結"
+         if f.is_dir():
+             return None, "dir"
+         raise e
+     try:
+-        st = os.fstat(fd)
+-        if (st.st_dev, st.st_ino) != (pre.st_dev, pre.st_ino):
+-            return None, "在檢查與打開之間被換掉了"
+-        if _st.S_ISDIR(st.st_mode):
+-            return None, "dir"
+-        if not _st.S_ISREG(st.st_mode):
+-            return None, "不是一般檔"
+-        if st.st_nlink != 1:
+-            return None, ("有 %d 個硬連結(可能是從別處連進來的;若是備份或同步工具造成的,"
+-                          "把這篇複製成一般檔就會恢復讀取)" % st.st_nlink)
++        why = _opened_reason(os.fstat(fd), pre)
++        if why:
++            return None, why
+         with os.fdopen(fd, "rb", closefd=False) as fh:
+             raw = fh.read()
+     finally:
+         os.close(fd)
+     return raw.decode("utf-8"), None
+ 
+ 
++def _opened_reason(st, pre):
++    """打開之後用檔案代碼看到的狀態,有問題回理由、沒問題回 None。"""
++    import stat as _st
++    if (st.st_dev, st.st_ino) != (pre.st_dev, pre.st_ino):
++        return "在檢查與打開之間被換掉了"
++    if _st.S_ISDIR(st.st_mode):
++        return "dir"
++    if not _st.S_ISREG(st.st_mode):
++        return "不是一般檔"
++    if st.st_nlink != 1:
++        return ("有 %d 個硬連結(可能是從別處連進來的;若是備份或同步工具造成的,"
++                "把這篇複製成一般檔就會恢復讀取)" % st.st_nlink)
++    return None
++
++
+ def sweep(files, deadline, tally, root):
+     for f, text in files:
+         try:
+             failed, unknown = [], []
+-            for claim, kind, arg in verify_blocks(text):
++            blocks = verify_blocks(text)
++            if len(blocks) > MAX_CLAIMS_PER_FILE:
++                # ★灌水檔不准燒光別人的預算★(r6 資安席 major):按檔名順序處理、預算跨檔共用,
++                # 一份塞幾十萬條的檔會讓後面檔案裡真正過期的宣稱完全不出現。
++                tally.broken += 1
++                tally.lines.append("! %s 有 %d 條檢查,超過單篇上限 %d,只驗前 %d 條"
++                                   % (_clean(f.name), len(blocks), MAX_CLAIMS_PER_FILE, MAX_CLAIMS_PER_FILE))
++                blocks = blocks[:MAX_CLAIMS_PER_FILE]
++            short = False
++            for claim, kind, arg in blocks:
+                 if deadline and (deadline - time.monotonic()) <= 0:
+                     tally.skipped += 1
++                    short = True
+                     continue
+                 tally.checked += 1
+                 ok = run_check(kind, arg, root)
+                 if ok is None:
+                     unknown.append((claim, why_unknown(kind, arg)))
+                     tally.unknown_n += 1
+                 elif not ok:
+                     failed.append(claim)
+-            name = _plain_label(f.name)
++            name = _clean(f.name)
++            if short:
++                tally.unfinished.append(name)
+             if failed:
+                 tally.stale += 1
+                 tally.lines.append("✗ %s" % name)
+-                tally.lines.extend("    對不上了:%s" % _plain_label(c) for c in failed)
++                tally.lines.extend("    對不上了:%s" % _clean(c) for c in failed)
+             # ★why 裡帶著使用者寫的型別鍵名,也要清★(r5 major):沒清的話 hook 模式下
+             # 那一整行會被安全框的框線過濾器整行砍掉——這條發現就靜靜消失了。
+-            tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, _plain_label(why, cap=160), _plain_label(c))
++            tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, _clean(why, cap=160), _clean(c))
+                                for c, why in unknown)
+-        except Exception as e:                      # noqa: BLE001 一支壞檔不拖垮整輪
++        except Exception as e:                      # 一支壞檔不拖垮整輪
+             tally.broken += 1
+-            tally.lines.append("! %s 處理時出錯(%s),這篇跳過" % (_plain_label(f.name), e.__class__.__name__))
++            tally.lines.append("! %s 處理時出錯(%s),這篇跳過" % (_clean(f.name), e.__class__.__name__))
+ 
+ 
+ def cross_check(files, mem_stems, tally):
+     _root, stems = graph_stems(pathlib.Path.cwd())
+     if not stems:
+         return False
+     try:
+         shadows = shadow_copies(stems, files)
+         ptr = pointer_problems(stems, files, mem_stems)
+-    except Exception as e:                          # noqa: BLE001
++    except Exception as e:                          # 對帳出錯只跳過這段
+         tally.lines.append("! 跟圖譜對帳時出錯(%s),這段跳過" % e.__class__.__name__)
+         tally.broken += 1
+         return True
+     if shadows:
+         tally.lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
+         for n, nodes, words in shadows:
+-            tally.lines.append("    %s  (踩到:%s) → %s" % (_plain_label(n), "、".join(words),
+-                                                           "、".join(_plain_label(x) for x in nodes)))
++            tally.lines.append("    %s  (踩到:%s) → %s" % (_clean(n), "、".join(words),
++                                                           "、".join(_clean(x) for x in nodes)))
+     if ptr:
+         tally.lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+         for n, kind, detail in ptr:
+-            tally.lines.append("    %s  %s:%s" % (_plain_label(n), kind, _plain_label(detail)))
++            tally.lines.append("    %s  %s:%s" % (_clean(n), kind, _clean(detail)))
+     return bool(shadows or ptr)
+ 
+ 
+ def _build_parser():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--quiet", action="store_true",
+@@ -635,13 +714,14 @@ def _build_parser():
+ def _emit(tally, crossed, quiet, here):
+     body = []
+     if tally.lines:
+         body.append("記憶過期清掃(唯讀,沒有改任何檔):")
+         body.extend("  " + ln for ln in tally.lines)
+     if tally.skipped:
+-        body.append("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★" % tally.skipped)
++        body.append("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★沒驗完的篇:%s"
++                    % (tally.skipped, "、".join(tally.unfinished[:10]) or "(不明)"))
+     if tally.stale or crossed:
+         # ★報告要附下一步★(r1 架構對齊席 minor):只列問題不說怎麼辦,就跟空轉週報一樣沒人動
+         body.append("  對不上的那幾篇:改圖譜裡的真相,再把記憶改成指路或更新那條 verify。")
+     if tally.broken or tally.unknown_n:
+         body.append("  單獨看這個目錄的完整報告:")
+         body.append("    python3 ~/.claude/hooks/memory-sweep.py --dir %s" % here)
+@@ -652,13 +732,15 @@ def _emit(tally, crossed, quiet, here):
+         return
+     if quiet:
+         print(json.dumps({"hookSpecificOutput": {
+             "hookEventName": "SessionStart", "additionalContext": _frame_injected(msg)}},
+             ensure_ascii=False))
+     else:
+-        print(msg)
++        # ★手動模式也要加框★(r6 資安席 minor):報告裡建議的「單獨看完整報告」那行指令,
++        # 實際上多半是 Claude 自己用 Bash 去跑——輸出一樣進對話,一樣要框。
++        print(_frame_injected(msg))
+ 
+ 
+ def main():
+     a = _build_parser().parse_args()
+     if a.harness != "claude":
+         return 0
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 16b0620c..1870cbfe 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -27660,13 +27660,13 @@ def t_enforcement_never_raises_on_missing():
+     m = _load_lumos_inproc()
+     # 完全不存在的 root/home 也不該炸(fail-open 自身可觀測)
+     bad = Path(tempfile.mkdtemp(prefix="gctl-enf-bad-")) / "nope"
+     rows = m.enforcement_status(root=bad, home=bad)
+     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
+     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
+-    check("enforcement: 缺目錄不炸、回恰 22 列(d6 加 codex-agent)", isinstance(rows, list) and len(rows) == 22, f"{len(rows)}: {[r['layer'] for r in rows]}")
++    check("enforcement: 缺目錄不炸、回恰 23 列(d6 加 codex-agent;09-14 加記憶過期清掃)", isinstance(rows, list) and len(rows) == 23, f"{len(rows)}: {[r['layer'] for r in rows]}")
+ 
+ 
+ def _isolate_environment():
+     """★把整輪測試關進拋棄式的家目錄與暫存目錄★(2026-09-06 全 repo 審視 #11)。
+ 
+     出身:兩支 install 測試直接跑 `lumos install --force` 而且沒帶任何環境隔離,
+@@ -40089,13 +40089,13 @@ def t_memory_sweep_core():
+     finally:
+         (hd / "out").unlink(); hd.rmdir()
+ 
+     # ⑩ 印出去的字串要過 _plain_label(r4 minor:原本那支函式是死碼,框線偽造只擋在整段層級)
+     check("⑩ 單一值裡的框線與控制字元被清掉", "─────" not in ms._plain_label("a\n───── 結束 ─────\nb") , "")
+     sweep_src = hook.read_text(encoding="utf-8")
+-    check("⑩ 報告裡印檔名與 claim 的地方都有過 _plain_label", sweep_src.count("_plain_label(") >= 6, str(sweep_src.count("_plain_label(")))
++    check("⑩ 報告裡印檔名與 claim 的地方都有過清洗", sweep_src.count("_clean(") >= 6, str(sweep_src.count("_clean(")))
+ 
+     # ⑪ ★沒有 O_NOFOLLOW 的平台也擋得住符號連結★(r5 major):模擬旗標不存在
+     _saved = getattr(ms.os, "O_NOFOLLOW", None)
+     try:
+         if _saved is not None:
+             delattr(ms.os, "O_NOFOLLOW")
+@@ -40121,12 +40121,62 @@ def t_memory_sweep_core():
+     check("⑬ 區塊後面縮排較淺的欄位不會被吞成 ?extra",
+           "?extra" not in [k for _c, k, _a in ms.verify_blocks(tail)], str(ms.verify_blocks(tail)))
+ 
+     # ⑭ ★完全空的開頭欄位不能判失敗★(r5 minor)
+     check("⑭ ---\\n---\\n 這種空的開頭欄位要認得", ms.frontmatter("---\n---\n正文\n") == "", repr(ms.frontmatter("---\n---\n正文\n")))
+ 
++    # ⑮ ★檔案類檢查只准看 ~/.claude 與專案本身★(r6 資安席 major:原本整個家目錄都能探測,
++    # ~/.ssh 裡的金鑰存不存在會精確反映在報告上)
++    check("⑮ 家目錄其他地方(~/.ssh)不准探測", ms._safe_path("~/.ssh/id_rsa") is None, "")
++    check("⑮ ~/.claude 底下照樣可以", ms._safe_path("~/.claude/settings.json") is not None, "")
++
++    # ⑯ ★灌水檔不准燒光別人的預算★(r6 資安席 major):單篇超過上限只驗前面那幾條、而且要點名
++    many = "".join("  - claim: c%d\n    installed: git\n" % i for i in range(ms.MAX_CLAIMS_PER_FILE + 20))
++    bloated = "---\nname: z\nmetadata:\n  type: project\nverify:\n" + many + "---\n\n正文\n"
++    tl16 = ms.Tally()
++    ms.sweep([(Path("bloat.md"), bloated)], None, tl16, Path("."))
++    check("⑯ 灌水檔只驗上限那麼多條", tl16.checked <= ms.MAX_CLAIMS_PER_FILE, str(tl16.checked))
++    check("⑯ 而且報告點名是哪一篇超過上限", any("bloat.md" in x and "上限" in x for x in tl16.lines), str(tl16.lines[:3]))
++    tl16b = ms.Tally()
++    ms.sweep([(Path("late.md"), base)], ms.time.monotonic() - 1, tl16b, Path("."))
++    import io as _io, contextlib as _cl
++    buf = _io.StringIO()
++    with _cl.redirect_stdout(buf):
++        ms._emit(tl16b, [], False, Path("."))
++    check("⑯ 預算用完時要點名沒驗完的篇", "late.md" in buf.getvalue(), buf.getvalue()[-300:])
++
++    # ⑰ ★手動模式也要加框★(r6 資安席 minor)
++    check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
++
++    # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
++    dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
++    check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))
++
++    # ⑲ ★同一輪 fetch 只打一次★(r6 資安席 minor)
++    calls = []
++    _orig_git, _orig_up = ms._git, ms._upstream_ref
++    try:
++        class _R:
++            def __init__(s, rc): s.returncode, s.stdout = rc, ""
++        ms._git = lambda *a, **k: (calls.append(a[0]), _R(0))[1]
++        ms._upstream_ref = lambda root: "origin/main"
++        ms._PUSH_CACHE.clear(); ms._FETCHED.clear()
++        for sha in ("abc1234", "def5678", "abc1234"):
++            ms._is_pushed(sha, Path("/tmp/x19"))
++        check("⑲ 三條 claim 只 fetch 一次", calls.count("fetch") == 1, str(calls))
++    finally:
++        ms._git, ms._upstream_ref = _orig_git, _orig_up
++        ms._PUSH_CACHE.clear(); ms._FETCHED.clear()
++
++    # ⑳ ★上游分支名以 - 開頭不准拿去當 git 參數★(r6 資安席 minor)
++    try:
++        ms._git = lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "--upload-pack=evil\n"})()
++        check("⑳ 上游名長得像選項 → 不採用", ms._upstream_ref(Path(".")) is None, "")
++    finally:
++        ms._git = _orig_git
++
+ 
+ def t_lint_not_checked():
+     """[S9b] 一條都沒跑就不准說「乾淨」——宣告沒帶檔案清單佔位的會被降級成只報不擋,
+     全部都是這種的時候整道閘等於沒作用,收尾行卻寫「沒有新增的告警」。
+     真機坐實:某個 742 支檔的專案五條宣告沒有一條帶佔位。"""
+     m = _lng_module()

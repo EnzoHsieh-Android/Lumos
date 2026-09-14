@@ -1,0 +1,168 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 2726b48a..0fa3c6f3 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -400,13 +400,15 @@ def graph_stems(start):
+     return None, None
+ 
+ 
+ # ★節點名只收這些字元★(r1 正確性席):漏列一個標點就讓節點名跑飛到整句話,所以用白名單。
+ _NODE_REF = re.compile(
+     r"(?:Projects|Systems|Issues|Verification)/([\w.\-㐀-鿿]{2,})")
+-_LINKED_REF = re.compile(r"\[\[([^\]|#]+)\]\]")
++# ★字元類要排除 [ 與換行、長度要有上限★(r10 資安席 major):原本 [^\]|#]+ 會吃進 [,
++# 一整串沒收尾的 [[ 讓每個起點都掃到檔尾——平方級變慢,65KB 的檔整支跑 72 秒。
++_LINKED_REF = re.compile(r"\[\[([^\[\]|#\n]{1,200})\]\]")
+ _STATUS_WORDS = re.compile(
+     r"(還沒推|未推|沒推|還沒裝|沒有裝|未裝|尚未|還沒做|目前沒有|進行中|建置中|待裁|未修|未解|未開工|交付狀態)")
+ _DONE_WORDS = re.compile(r"(還沒做|未開工|進行中|建置中|尚未|還沒推|未推|沒推)")
+ _LIVE_WORDS = re.compile(r"(已交付|全交付|已完成|已收案|落地完成)")
+ 
+ 
+@@ -721,21 +723,23 @@ def cross_check(files, mem_stems, tally, deadline=None):
+         shadows = shadow_copies(stems, files, clock)
+         ptr = pointer_problems(stems, files, mem_stems, clock)
+     except Exception as e:                          # 對帳出錯只跳過這段
+         tally.lines.append("! 跟圖譜對帳時出錯(%s),這段跳過" % e.__class__.__name__)
+         tally.broken += 1
+         return True
+-    if shadows:
+-        tally.lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
+-        for n, nodes, words in shadows:
+-            tally.lines.append("    %s  (踩到:%s) → %s" % (_clean(n), "、".join(words),
+-                                                           "、".join(_clean(x) for x in nodes)))
++    # ★跟圖譜對不上的排在逐條檢查的雜訊前面★(r10 資安席 minor):開場只印前 80 行,
++    # 原本它排最後,十幾篇格式錯誤的檔就能把真正的衝突擠出視窗。
++    front = []
+     if ptr:
+-        tally.lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+-        for n, kind, detail in ptr:
+-            tally.lines.append("    %s  %s:%s" % (_clean(n), kind, _clean(detail)))
++        front.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
++        front.extend("    %s  %s:%s" % (_clean(n), kind, _clean(detail)) for n, kind, detail in ptr)
++    if shadows:
++        front.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
++        front.extend("    %s  (踩到:%s) → %s" % (_clean(n), "、".join(words), "、".join(_clean(x) for x in nodes))
++                     for n, nodes, words in shadows)
++    tally.lines[0:0] = front
+     if clock.expired:
+         tally.flood.append("跟圖譜對帳時時間預算用完,只對了一部分——下面「跟圖譜對不上」那段不完整。")
+     return bool(shadows or ptr or clock.expired)
+ 
+ 
+ def _build_parser():
+@@ -784,19 +788,48 @@ def _emit(tally, crossed, quiet, here):
+     else:
+         # ★手動模式也要加框★(r6 資安席 minor):報告裡建議的「單獨看完整報告」那行指令,
+         # 實際上多半是 Claude 自己用 Bash 去跑——輸出一樣進對話,一樣要框。
+         print(_frame_injected(msg))
+ 
+ 
++_CHILD_ENV = "LUMOS_MEMORY_SWEEP_CHILD"
++
++
++def _watchdog(quiet, here, limit, cmd=None):
++    """★外層看門★(r10 資安席 major,Enzo 裁):時間預算只在迴圈之間檢查,擋不住「單一步驟卡住」
++    (一次比對、一次子行程)。前四輪每封一種變形就冒出下一種,所以換形狀:真正的清掃放進子行程,
++    這一層只負責計時——子行程在時間內沒跑完就停掉它,由這一層自己印「超時沒跑完、結果不完整」。
++    不管卡在哪一步,開場一定有一句出聲,不會被外層逾時砍到完全沒聲音。"""
++    cmd = cmd or [sys.executable, str(pathlib.Path(__file__).resolve()), *sys.argv[1:]]
++    try:
++        r = subprocess.run(cmd, env=dict(os.environ, **{_CHILD_ENV: "1"}),
++                           capture_output=True, text=True, timeout=limit)
++    except subprocess.TimeoutExpired:
++        tally = Tally()
++        tally.broken = 1
++        tally.flood.append("這輪清掃超過 %.0f 秒還沒跑完,被停掉了——結果完全沒出來。可能有記憶檔讓它卡住,"
++                           "用下面那行指令單獨跑看卡在哪。" % limit)
++        _emit(tally, False, quiet, here)
++        return 0
++    except OSError:
++        return 0
++    if r.stdout:
++        print(r.stdout, end="")               # 轉印子行程的輸出(不寫任何檔)
++    return 0
++
++
+ def main():
+     a = _build_parser().parse_args()
+     if a.harness != "claude":
+         return 0
+     here = memory_dir(a.dir)
+     if not here.is_dir():
+         return 0                                   # 這個專案沒有記憶目錄,安靜退出
++    if a.budget and not os.environ.get(_CHILD_ENV):
++        # 子行程自己的預算是外層的 0.7;這層等到 0.85,中間留給子行程收尾與印出
++        return _watchdog(a.quiet, here, _outer_budget() * 0.85)
+     deadline = (time.monotonic() + _inner_budget()) if a.budget else None
+     tally = Tally()
+     files = read_memories(here, tally)
+     sweep(files, deadline, tally, pathlib.Path.cwd())
+     crossed = cross_check(files, {f.stem for f, _ in files}, tally, deadline)
+     if a.quiet and not (tally.changed or crossed):
+@@ -812,10 +845,12 @@ if __name__ == "__main__":
+     import pathlib as _p
+     _s.path.insert(0, str(_p.Path(__file__).resolve().parent))
+     try:
+         from _hookevent import guard as _guard
+     except Exception:
+         _guard = None
++    if os.environ.get(_CHILD_ENV):                  # 看門那層已經記過事件,子行程不重記
++        _guard = None
+     try:
+         sys.exit(_guard("sessionstart-memory-sweep", __file__, main, swallow=True) if _guard else main())
+     except Exception:
+         sys.exit(0)                                 # fail-open:絕不擋開場
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0f9b861f..45abdaba 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40206,12 +40206,48 @@ def t_memory_sweep_core():
+         tl24b = ms.Tally()
+         ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl24b, None)
+         check("㉔ 對照組:沒有時間限制時不喊", not tl24b.flood, str(tl24b.flood))
+     finally:
+         ms.graph_stems = _orig_gs
+ 
++    # ㉕ ★外層看門★(r10 資安席 major):單一步驟卡住時,時間到就停掉子行程、由外層自己喊超時
++    import sys as _sys25
++    buf25 = _io.StringIO()
++    t25 = ms.time.monotonic()
++    with _cl.redirect_stdout(buf25):
++        ms._watchdog(True, Path("."), 0.8, cmd=[_sys25.executable, "-c", "import time; time.sleep(30)"])
++    check("㉕ 子行程卡住 → 時間到就回來(不等它)", ms.time.monotonic() - t25 < 5, str(ms.time.monotonic() - t25))
++    check("㉕ 而且外層自己喊「超時沒跑完」、有框", "還沒跑完" in buf25.getvalue() and "參考資料結束" in buf25.getvalue(),
++          buf25.getvalue()[:300])
++    buf25b = _io.StringIO()
++    with _cl.redirect_stdout(buf25b):
++        ms._watchdog(True, Path("."), 10, cmd=[_sys25.executable, "-c", "print('子行程的報告')"])
++    check("㉕ 對照組:子行程時間內跑完 → 原樣轉印、不喊超時",
++          "子行程的報告" in buf25b.getvalue() and "還沒跑完" not in buf25b.getvalue(), buf25b.getvalue())
++    check("㉕ hook 模式(有帶預算)真的走看門那一層",
++          "return _watchdog(" in src and "if a.budget and not os.environ.get(_CHILD_ENV)" in src, "")
++
++    # ㉖ ★找連結的比對不能平方級變慢★(r10 資安席 major):一整串沒收尾的 [[
++    t26 = ms.time.monotonic()
++    ms._LINKED_REF.findall("[[" * 16000)
++    check("㉖ 三萬兩千個字元的 [[ 一秒內比完(原本約六秒)", ms.time.monotonic() - t26 < 1.0, str(ms.time.monotonic() - t26))
++    check("㉖ 正常的連結照樣抓得到", ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]") == ["Systems/記憶過期清掃", "Projects/甲_計劃"],
++          str(ms._LINKED_REF.findall("見 [[Systems/記憶過期清掃]] 與 [[Projects/甲_計劃]]")))
++
++    # ㉗ ★跟圖譜衝突排在逐條檢查前面★(r10 資安席 minor)
++    try:
++        ms.graph_stems = lambda cwd: (Path("."), {"Alpha": Path("/nonexistent/Alpha.md")})
++        _orig_ns = ms.node_status
++        ms.node_status = lambda stems, n: "done"
++        tl27 = ms.Tally()
++        tl27.lines = ["? 雜訊 %d" % i for i in range(5)]
++        ms.cross_check([(Path("a.md"), "---\nname: a\n---\n[[Alpha]] 還沒做\n")], set(), tl27, None)
++        check("㉗ 衝突那段排在最前面", tl27.lines and "對不上" in tl27.lines[0], str(tl27.lines[:3]))
++    finally:
++        ms.graph_stems, ms.node_status = _orig_gs, _orig_ns
++
+     # ⑰ ★手動模式也要加框★(r6 資安席 minor)
+     check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
+ 
+     # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
+     dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
+     check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))

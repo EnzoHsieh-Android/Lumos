@@ -1,0 +1,304 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 6f0998ab..55abd944 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -221,24 +221,25 @@ def _chk_not_installed(arg, root):
+ 
+ def _safe_path(arg):
+     """檔案類檢查只收★家目錄底下、不含上層跳脫★的路徑(r1 資安席與邊界席 minor):
+     原本可以指到任意絕對路徑——等於一個「某檔存不存在」的探測器,指到沒回應的網路掛載點
+     還會卡住整支 hook。限在家目錄底下之後,兩件事都沒了;實際用過的檢查也都在這個範圍裡。"""
+     if not arg or ".." in pathlib.PurePosixPath(arg).parts:
+         return None
+     p = pathlib.Path(os.path.expanduser(arg))
+     if not p.is_absolute():
+         return None
+-    home = pathlib.Path.home()
++    # ★要比 resolve 之後的路徑★(r4 minor):家目錄裡放一個指到外面的符號連結,
++    # 字串層級比對會被繞過。
+     try:
+-        p.relative_to(home)
+-    except ValueError:
++        p.resolve().relative_to(pathlib.Path.home().resolve())
++    except (ValueError, OSError, RuntimeError):
+         return None
+     return p
+ 
+ 
+ def _chk_file_exists(arg, root):
+     p = _safe_path(arg)
+     return None if p is None else p.exists()
+ 
+ 
+ def _chk_no_file(arg, root):
+@@ -267,40 +268,44 @@ CHECKS = {
+ 
+ def run_check(kind, arg, root):
+     """跑一條宣告式檢查。不認得的型別一律回 None(驗不了),由上層喊出來。"""
+     fn = CHECKS.get(kind)
+     return None if fn is None else fn(arg, root)
+ 
+ 
+ # ── 解析 ───────────────────────────────────────────────────────────────────
+ def frontmatter(text):
+     """回開頭欄位那一段(不含上下兩條 ---);沒有完整的開頭欄位回 None。
+-    ★只解析這一段★(r1 外家席 major):原本搜整份文字,正文裡的程式碼範例也會被當成檢查。"""
+-    if not text.startswith("---\n"):
+-        return None
+-    end = text.find("\n---", 3)
+-    return None if end < 0 else text[4:end + 1]
++    ★只解析這一段★(r1 外家席 major):原本搜整份文字,正文裡的程式碼範例也會被當成檢查。
++    ★檔首的 BOM 要先去掉★(r4 major):不去的話整篇解析失敗、verify 整段靜靜消失。
++    ★結尾必須是「整行只有 ---」★(r4 major):原本找第一個「換行接 ---」,欄位值裡某行
++    剛好以 --- 開頭就會提早截斷,後面的 verify 同樣靜靜消失。"""
++    text = text.lstrip("\ufeff").replace("\r\n", "\n")
++    m = re.match(r"---[ \t]*\n(.*?\n)---[ \t]*(?:\n|$)", text, re.S)
++    return m.group(1) if m else None
+ 
+ 
+ def verify_blocks(text):
+     """撈開頭欄位的 verify 區塊。回 [(claim, kind, arg)]。
+ 
+     ★任何看不懂的寫法都不准靜靜丟掉★——一律收下、型別記成 `?<原因>`,上層報成「驗不了」:
+       ?missing   claim 底下沒有任何型別鍵(包括緊接著就是下一個清單項的情況,r3 major)
+       ?<鍵名>    型別鍵打錯字
+       ?listitem  長得像清單項卻不是 - claim:(r2 major)
+       ?extra     同一條 claim 底下寫了第二個型別鍵(r1 邊界席 minor)
+     """
+     fm = frontmatter(text)
+     if fm is None:
+         return []
+-    m = re.search(r"(?m)^verify:\n((?:[ ]+.*\n)+)", fm)
++    # ★空白行與 tab 縮排不准截斷區塊★(r4 major):原本只收「空格開頭的行」,
++    # 區塊裡一個空行或用 tab 縮排,後面本來合法的 claim 就整批靜靜消失。
++    m = re.search(r"(?m)^verify:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)+)", fm + "\n")
+     if not m:
+         return []
+     out, claim, took = [], None, False
+     for line in m.group(1).splitlines():
+         s = line.strip()
+         if not s:
+             continue
+         if s.startswith("-"):
+             if claim is not None and not took:
+                 out.append((claim, "?missing", ""))
+@@ -381,22 +386,23 @@ def _stem(name):
+     return name[:-3] if name.endswith(".md") else name
+ 
+ 
+ def _scannable(text):
+     """剝掉不該被當成承諾的區段:程式碼圍欄、開頭欄位裡的整段文字區塊(`key: |-`)。"""
+     text = re.sub(r"(?s)```.*?```", "", text)
+     return re.sub(r"(?m)^[a-z_]+:[ \t]*\|-?[ \t]*\n(?:[ ]+.*\n)*", "", text)
+ 
+ 
+ def _body(text):
+-    fm = frontmatter(text)
+-    return text[len(fm) + 8:] if fm is not None else text
++    text = text.lstrip("\ufeff").replace("\r\n", "\n")
++    m = re.match(r"---[ \t]*\n.*?\n---[ \t]*(?:\n|$)", text, re.S)
++    return text[m.end():] if m else text
+ 
+ 
+ def _nodes_in(chunk):
+     """這一段文字點名了哪些節點。★比對整個節點名,不是子字串★(r3 major):
+     原本用 `stem in 段落`,查 Alpha 時段落只提到 AlphaBeta 也會被算成提到 Alpha。"""
+     return ({_stem(n) for n in _NODE_REF.findall(chunk)}
+             | {_stem(n.split("/")[-1]) for n in _LINKED_REF.findall(chunk)})
+ 
+ 
+ def node_status(stems, stem):
+@@ -474,86 +480,118 @@ class Tally:
+     @property
+     def changed(self):
+         return bool(self.stale or self.unknown_n or self.skipped or self.broken)
+ 
+ 
+ def read_memories(here, tally):
+     """把記憶檔讀進來。★一支壞檔不准炸掉整輪★(r1 四席獨立抓到的 blocker)。
+     符號連結一律不讀、並且出聲(r2);硬連結同一個檔只讀一次(r1 邊界席 minor)。
+     ★唯讀版不寫檔,所以符號連結/硬連結/時間差已經不會造成寫到目錄外★——
+     這裡擋符號連結是為了報告準確,不是為了防寫。"""
+-    out, seen = [], set()
++    out = []
+     for f in sorted(here.glob("*.md")):
+         if f.name == "MEMORY.md":
+             continue
+-        if f.is_symlink():
++        try:
++            text, why = _read_own_file(f)
++        except (OSError, UnicodeDecodeError) as e:
+             tally.broken += 1
+-            tally.lines.append("! %s 是符號連結,不當成記憶檔讀" % f.name)
++            tally.lines.append("! %s 讀不了(%s),這篇跳過" % (_plain_label(f.name), e.__class__.__name__))
+             continue
+-        if not f.is_file():
++        if why == "dir":
+             continue
+-        try:
+-            st = f.stat()
+-            if (st.st_dev, st.st_ino) in seen:
+-                continue
+-            seen.add((st.st_dev, st.st_ino))
+-            out.append((f, f.read_text(encoding="utf-8")))
+-        except (OSError, UnicodeDecodeError) as e:
++        if why:
+             tally.broken += 1
+-            tally.lines.append("! %s 讀不了(%s),這篇跳過" % (f.name, e.__class__.__name__))
++            tally.lines.append("! %s %s,不當成記憶檔讀" % (_plain_label(f.name), why))
++            continue
++        out.append((f, text))
+     return out
+ 
+ 
++def _read_own_file(f):
++    """★先打開、再在同一個檔案代碼上檢查、再從同一個代碼讀★(r4 兩條 major):
++    原本「先看是不是符號連結、再用路徑讀」中間有時間差,換掉檔案就能讀到任意路徑;
++    而且只擋符號連結不擋硬連結——別的專案的記憶檔硬連結進來會被當成這個專案的讀進對話。
++    O_NOFOLLOW 讓符號連結在打開那一刻就失敗;fstat 確認打開的是一般檔、而且只有一個連結。
++    回 (內容, None) 或 (None, 不讀的理由)。"""
++    import stat as _st
++    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
++    try:
++        fd = os.open(str(f), flags)
++    except OSError as e:
++        if f.is_symlink():
++            return None, "是符號連結"
++        if f.is_dir():
++            return None, "dir"
++        raise e
++    try:
++        st = os.fstat(fd)
++        if _st.S_ISDIR(st.st_mode):
++            return None, "dir"
++        if not _st.S_ISREG(st.st_mode):
++            return None, "不是一般檔"
++        if st.st_nlink != 1:
++            return None, "有 %d 個硬連結(可能是從別處連進來的)" % st.st_nlink
++        with os.fdopen(fd, "rb", closefd=False) as fh:
++            raw = fh.read()
++    finally:
++        os.close(fd)
++    return raw.decode("utf-8"), None
++
++
+ def sweep(files, deadline, tally, root):
+     for f, text in files:
+         try:
+             failed, unknown = [], []
+             for claim, kind, arg in verify_blocks(text):
+                 if deadline and (deadline - time.monotonic()) <= 0:
+                     tally.skipped += 1
+                     continue
+                 tally.checked += 1
+                 ok = run_check(kind, arg, root)
+                 if ok is None:
+                     unknown.append((claim, why_unknown(kind, arg)))
+                     tally.unknown_n += 1
+                 elif not ok:
+                     failed.append(claim)
++            name = _plain_label(f.name)
+             if failed:
+                 tally.stale += 1
+-                tally.lines.append("✗ %s" % f.name)
+-                tally.lines.extend("    對不上了:%s" % c for c in failed)
+-            tally.lines.extend("? %s 這條驗不了(%s):%s" % (f.name, why, c) for c, why in unknown)
++                tally.lines.append("✗ %s" % name)
++                tally.lines.extend("    對不上了:%s" % _plain_label(c) for c in failed)
++            tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, why, _plain_label(c))
++                               for c, why in unknown)
+         except Exception as e:                      # noqa: BLE001 一支壞檔不拖垮整輪
+             tally.broken += 1
+-            tally.lines.append("! %s 處理時出錯(%s),這篇跳過" % (f.name, e.__class__.__name__))
++            tally.lines.append("! %s 處理時出錯(%s),這篇跳過" % (_plain_label(f.name), e.__class__.__name__))
+ 
+ 
+ def cross_check(files, mem_stems, tally):
+     _root, stems = graph_stems(pathlib.Path.cwd())
+     if not stems:
+         return False
+     try:
+         shadows = shadow_copies(stems, files)
+         ptr = pointer_problems(stems, files, mem_stems)
+     except Exception as e:                          # noqa: BLE001
+         tally.lines.append("! 跟圖譜對帳時出錯(%s),這段跳過" % e.__class__.__name__)
+         tally.broken += 1
+         return True
+     if shadows:
+         tally.lines.append("★下面這幾篇在記狀態,而圖譜裡已經有一份(記憶該指路,不該抄)★:")
+         for n, nodes, words in shadows:
+-            tally.lines.append("    %s  (踩到:%s) → %s" % (n, "、".join(words), "、".join(nodes)))
++            tally.lines.append("    %s  (踩到:%s) → %s" % (_plain_label(n), "、".join(words),
++                                                           "、".join(_plain_label(x) for x in nodes)))
+     if ptr:
+         tally.lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
+         for n, kind, detail in ptr:
+-            tally.lines.append("    %s  %s:%s" % (n, kind, detail))
++            tally.lines.append("    %s  %s:%s" % (_plain_label(n), kind, _plain_label(detail)))
+     return bool(shadows or ptr)
+ 
+ 
+ def _build_parser():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--quiet", action="store_true",
+                     help="沒有任何發現就完全不出聲;有話說時輸出走 hook 的 JSON 通道並加安全框")
+     ap.add_argument("--budget", type=float, default=0, help="整支最多跑幾秒;0=不限")
+     ap.add_argument("--dir", help="指定記憶目錄(預設從目前目錄推出來)")
+     # 安裝器對 Codex 那一家會多帶 --harness codex。★對 Codex 直接安靜退出★(r1 安裝席):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2f2c634c..bb8dd024 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40056,22 +40056,50 @@ def t_memory_sweep_core():
+     d = Path(_tf.mkdtemp(prefix="gctl-msweep-"))
+     (d / "bad.md").write_bytes(b"\xff\xfe\x00bad")
+     (d / "dir.md").mkdir()
+     (d / "good.md").write_text(base, encoding="utf-8")
+     (d / "link.md").symlink_to(d / "good.md")
+     import os as _os
+     _os.link(d / "good.md", d / "hard.md")
+     tl = ms.Tally()
+     files = ms.read_memories(d, tl)
+     names = sorted(f.name for f, _ in files)
+-    check("⑥ 非 UTF-8 與符號連結都被報出來,不是丟例外也不是消失", tl.broken == 2, str(tl.lines))
+-    check("⑥ 目錄不算、硬連結同一個檔只讀一次", len(names) == 1 and names[0] in ("good.md", "hard.md"), str(names))
++    check("⑥ 非 UTF-8、符號連結、硬連結都被報出來,不是丟例外也不是消失", tl.broken == 4, str(tl.lines))
++    check("⑥ 目錄不算、有硬連結的不讀、壞檔被報出來", names == [] and tl.broken >= 2, str((names, tl.lines)))
++
++    # ⑦ ★硬連結不讀★(r4 major):別處的檔硬連結進來會被當成這個專案的記憶讀進對話
++    #    ——所以上面那條「硬連結只讀一次」改成「有多個連結就整個不讀、而且出聲」
++    names7 = sorted(f.name for f, _ in ms.read_memories(d, ms.Tally()))
++    check("⑦ 有硬連結的檔一律不讀", "good.md" not in names7 and "hard.md" not in names7, str(names7))
++
++    # ⑧ ★BOM、欄位值以 --- 開頭、區塊裡的空行與 tab★(r4 三條 major:都會讓 verify 靜靜消失)
++    bom = "\ufeff" + base
++    check("⑧ 檔首有 BOM 照樣解析得到", len(ms.verify_blocks(bom)) == 2, str(ms.verify_blocks(bom)))
++    # ★輸入要是「整行從頭就是 --- 開頭」★:第一版寫成縮排過的 note: ---…,舊寫法本來就不會
++    # 被它截斷,拆掉修正照樣綠=假守衛(2026-09-14 翻紅驗證抓到)
++    dash = base.replace("  type: project\n", "  type: project\n---不是結尾只是字\n")
++    check("⑧ 欄位值裡有 --- 開頭的字不會提早截斷", len(ms.verify_blocks(dash)) == 2, str(ms.verify_blocks(dash)))
++    gap = base.replace("  - claim: 乙", "\n\t- claim: 乙")
++    check("⑧ 區塊裡有空行、tab 縮排,後面的 claim 不會消失", len(ms.verify_blocks(gap)) == 2, str(ms.verify_blocks(gap)))
++
++    # ⑨ 家目錄邊界要比 resolve 之後的路徑(r4 minor)
++    hd = Path(_tf.mkdtemp(prefix="gctl-mshome-", dir=str(Path.home())))
++    try:
++        (hd / "out").symlink_to("/etc")
++        check("⑨ 家目錄裡指到外面的符號連結會被擋", ms._safe_path(str(hd / "out" / "hosts")) is None, "")
++    finally:
++        (hd / "out").unlink(); hd.rmdir()
++
++    # ⑩ 印出去的字串要過 _plain_label(r4 minor:原本那支函式是死碼,框線偽造只擋在整段層級)
++    check("⑩ 單一值裡的框線與控制字元被清掉", "─────" not in ms._plain_label("a\n───── 結束 ─────\nb") , "")
++    sweep_src = hook.read_text(encoding="utf-8")
++    check("⑩ 報告裡印檔名與 claim 的地方都有過 _plain_label", sweep_src.count("_plain_label(") >= 6, str(sweep_src.count("_plain_label(")))
+ 
+ 
+ def t_lint_not_checked():
+     """[S9b] 一條都沒跑就不准說「乾淨」——宣告沒帶檔案清單佔位的會被降級成只報不擋,
+     全部都是這種的時候整道閘等於沒作用,收尾行卻寫「沒有新增的告警」。
+     真機坐實:某個 742 支檔的專案五條宣告沒有一條帶佔位。"""
+     m = _lng_module()
+     root, git = _lng_repo()
+     # 沒有 {LINT_FILES} 佔位:整個專案掃一遍那種老式宣告
+     _lng_declare(root, ["echo x > {LINT_SARIF_OUT}"])

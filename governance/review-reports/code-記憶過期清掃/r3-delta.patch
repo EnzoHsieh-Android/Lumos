@@ -1,0 +1,230 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 9bacb1aa..837465ad 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -273,34 +273,41 @@ def verify_blocks(text):
+     if not m:
+         return []
+     out, claim = [], None
+     for line in m.group(1).splitlines():
+         s = line.strip()
+         if s.startswith("- claim:"):
+             if claim is not None:                       # 上一條沒配到型別鍵
+                 out.append((claim, "?missing", ""))
+             claim = s[len("- claim:"):].strip()
+             continue
++        if s.startswith("-"):
++            # 長得像清單項卻不是 - claim: → 出聲,不要靜靜丟掉(r2 修正差異席 major)
++            out.append((s[:40], "?listitem", ""))
++            claim = None
++            continue
+         if claim is None or ":" not in s:
+             continue
+         k, _, v = s.partition(":")
+         k, v = k.strip(), v.strip()
+         out.append((claim, k if k in CHECKS else "?" + k, v))
+         claim = None
+     if claim is not None:
+         out.append((claim, "?missing", ""))
+     return out
+ 
+ 
+ def why_unknown(kind):
+     if kind == "?missing":
+         return "這條 claim 底下沒有任何看得懂的檢查型別"
++    if kind == "?listitem":
++        return "這一行長得像清單項但不是 - claim:(打錯字?)"
+     if kind == "cmd" or kind == "?cmd":
+         return "舊的 cmd: 寫法不支援了(會執行任意指令),改成宣告式的型別"
+     if kind.startswith("?"):
+         return "不認得的檢查型別 " + kind[1:] + "(只收:" + "、".join(CHECKS) + ")"
+     return "參數格式不對、或問不到上游"
+ 
+ 
+ def is_stamped(text):
+     """這篇有沒有被蓋過章。★只認行首的欄位與行首的警告行★——用子字串比對的話,
+     「說明這個機制」的那篇記憶正文裡寫到 status: stale 這幾個字就會被當成蓋過章。"""
+@@ -400,28 +407,38 @@ def node_status(stems, stem):
+         return None
+     try:
+         head = f.read_text(encoding="utf-8", errors="replace")[:1200]
+     except OSError:
+         return None
+     m = re.search(r"(?m)^status:[ \t]*([A-Za-z_-]+)", head)
+     return m.group(1) if m else None
+ 
+ 
+ def _claims_near(body, stem):
+-    """這篇對「這個節點」講了什麼狀態詞。★要綁到節點,不能拿整篇去套★
+-    (r1 外家席):原本對每個被點名的節點都拿整篇正文搜狀態詞,於是一篇裡有兩個
+-    狀態相反的節點時,兩個都被報成衝突。改成只看提到該節點那一行。"""
++    """這篇對「這個節點」講了什麼狀態詞。
++
++    ★要綁到節點,不能拿整篇去套★(r1 外家席):原本對每個被點名的節點都拿整篇正文搜,
++    一篇裡有兩個狀態相反的節點時兩個都被報成衝突。
++    ★但只看同一行又會漏★(r2 修正差異席):節點名跟狀態詞常常分兩行寫。
++    折衷:以空行分段,**該段只提到這一個節點時**才把整段的狀態詞算給它;
++    一段裡提到好幾個節點就退回只看同一行——**判不清楚時用比較窄的規則,不猜**。
++    """
+     done = live = False
+-    for ln in body.splitlines():
+-        if stem in ln:
+-            done = done or bool(_DONE_WORDS.search(ln))
+-            live = live or bool(_LIVE_WORDS.search(ln))
++    for para in re.split(r"\n[ \t]*\n", body):
++        if stem not in para:
++            continue
++        named = {_stem(n) for n in _NODE_REF.findall(para)} | {
++            _stem(n.split("/")[-1]) for n in _LINKED_REF.findall(para)}
++        scope = [para] if len(named) <= 1 else [ln for ln in para.splitlines() if stem in ln]
++        for chunk in scope:
++            done = done or bool(_DONE_WORDS.search(chunk))
++            live = live or bool(_LIVE_WORDS.search(chunk))
+     return done, live
+ 
+ 
+ def shadow_copies(here, stems, files):
+     out = []
+     for f, text in files:
+         if re.search(r"(?m)^shadow_ok:[ \t]*(.{4,})$", text):
+             continue
+         body = _scannable(text.split("---", 2)[2] if text.count("---") >= 2 else text)
+         words = sorted(set(_STATUS_WORDS.findall(body)))
+@@ -460,35 +477,38 @@ class Tally:
+         self.checked = self.broken = 0
+ 
+     @property
+     def changed(self):
+         return bool(self.newly_stale or self.recovered or self.unknown_n
+                     or self.skipped or self.broken)
+ 
+ 
+ def check_one(text, deadline, tally, root):
+     """跑一篇的所有檢查。回 (對不上的, 驗不了的, 是否每一條都真的跑完)。"""
+-    failed, unknown, complete = [], [], True
++    failed, unknown, complete, ran = [], [], True, 0
+     for claim, kind, arg in verify_blocks(text):
+         if deadline and (deadline - time.monotonic()) <= 0:
+             tally.skipped += 1
+             complete = False
+             continue
+         tally.checked += 1
++        ran += 1
+         ok = run_check(kind, arg, root)
+         if ok is None:
+             unknown.append((claim, why_unknown(kind)))
+             tally.unknown_n += 1
+             complete = False
+         elif not ok:
+             failed.append(claim)
+-    return failed, unknown, complete
++    # ★一條都沒跑就不算「跑完而且通過」★(r2 修正差異席 major):
++    # verify 區塊被清空時,failed 與 unknown 都是空的,原本會判定成立、印出假訊息、把章撤掉。
++    return failed, unknown, complete and ran > 0
+ 
+ 
+ def apply_one(f, text, failed, unknown, complete, today, write, tally):
+     was = is_stamped(text)
+     if failed:
+         if not was:
+             tally.newly_stale += 1
+         tally.lines.append("✗ %s" % f.name)
+         tally.lines.extend("    對不上了:%s" % c for c in failed)
+         if _frontmatter_end(text) is None:
+@@ -508,27 +528,45 @@ def apply_one(f, text, failed, unknown, complete, today, write, tally):
+ 
+ 
+ def _safe_write(f, text, tally):
+     try:
+         f.write_text(text, encoding="utf-8")
+     except OSError as e:
+         tally.broken += 1
+         tally.lines.append("! %s 寫不進去(%s),這篇這輪沒蓋到章" % (f.name, e.__class__.__name__))
+ 
+ 
++def _inside(f, here):
++    """這個檔的真實位置還在記憶目錄裡嗎。★一定要看 resolve 後的路徑★
++    (r2 修正差異席 blocker):檔名正常、實際是指到目錄外的符號連結時,
++    原本連一般的 --write 掃描都會照樣讀取**並且寫入**目錄以外的任意檔案——
++    比只在 --restore 擋路徑穿越更嚴重,因為不需要任何人手動下指令。"""
++    try:
++        return f.resolve(strict=True).parent == here.resolve(strict=True)
++    except (OSError, RuntimeError):
++        return False
++
++
+ def read_memories(here, tally):
+     """把記憶檔讀進來。★一支壞檔不准炸掉整輪★(r1 四席獨立抓到的 blocker):
+     非 UTF-8、剛好叫 x.md 的目錄、讀不到權限——原本任一種就整支 Traceback,
+     連排在後面的檔跟跟圖譜對帳那一整段都不會跑。"""
+     out = []
+     for f in sorted(here.glob("*.md")):
+-        if f.name == "MEMORY.md" or not f.is_file():
++        if f.name == "MEMORY.md":
++            continue
++        if f.is_symlink() or not _inside(f, here):
++            # ★不是只跳過,要出聲★(r2:壞掉的符號連結原本完全消失、不進任何統計)
++            tally.broken += 1
++            tally.lines.append("! %s 不是記憶目錄裡的真檔(符號連結或指到目錄外),整輪跳過" % f.name)
++            continue
++        if not f.is_file():
+             continue
+         try:
+             out.append((f, f.read_text(encoding="utf-8")))
+         except (OSError, UnicodeDecodeError) as e:
+             tally.broken += 1
+             tally.lines.append("! %s 讀不了(%s),這篇整輪跳過" % (f.name, e.__class__.__name__))
+     return out
+ 
+ 
+ def sweep(files, deadline, today, write, tally, root):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7668fcd3..97f40f0c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40073,20 +40073,45 @@ def t_memory_sweep_core():
+     tl3 = ms.Tally()
+     files = ms.read_memories(d, tl3)
+     check("⑦ 非 UTF-8 的檔被報出來,不是丟例外", tl3.broken == 1, str(tl3.lines))
+     check("⑦ 叫 x.md 的目錄不算記憶檔", [f.name for f, _ in files] == ["good.md"], str([f.name for f, _ in files]))
+ 
+     # ⑧ 狀態打架要綁到那個節點那一行(r1 外家席:原本拿整篇套到每個節點)
+     body = "[[Projects/Alpha]] 已交付。\n[[Projects/Beta]] 還沒做。\n"
+     check("⑧ 狀態詞綁到提到該節點的那一行",
+           ms._claims_near(body, "Alpha") == (False, True) and ms._claims_near(body, "Beta") == (True, False),
+           str((ms._claims_near(body, "Alpha"), ms._claims_near(body, "Beta"))))
++    # ★只看同一行又會漏★(r2 修正差異席 major):節點名跟狀態詞常常分兩行寫
++    two = "[[Projects/Alpha]] 這題的進度\n目前還沒做。\n\n別段:[[Projects/Beta]] 已交付。\n"
++    check("⑧ 同段只提到一個節點時,整段的狀態詞算給它(跨行也抓得到)",
++          ms._claims_near(two, "Alpha") == (True, False), str(ms._claims_near(two, "Alpha")))
++
++    # ⑨ ★符號連結指到目錄外:一般掃描就不准讀也不准寫★(r2 修正差異席 blocker)
++    d2 = Path(_tf.mkdtemp(prefix="gctl-mssym-")); out = Path(_tf.mkdtemp(prefix="gctl-msout-"))
++    (out / "secret.md").write_text("---\nname: s\n---\n\n目錄外\n", encoding="utf-8")
++    (d2 / "innocent.md").symlink_to(out / "secret.md")
++    (d2 / "broken.md").symlink_to(d2 / "nope-xyz")
++    tl4 = ms.Tally()
++    got4 = ms.read_memories(d2, tl4)
++    check("⑨ 指到目錄外的符號連結不被當成記憶檔", got4 == [], str([f.name for f, _ in got4]))
++    check("⑨ 而且要出聲,不是憑空消失", tl4.broken == 2, str(tl4.lines))
++
++    # ⑩ ★verify 區塊被清空時不准「空歡喜」撤章★(r2 修正差異席 major)
++    empty = "---\nname: z\nmetadata:\n  type: project\n  status: stale\n---\n\n正文\n"
++    f4, u4, c4 = ms.check_one(empty, None, ms.Tally(), Path("."))
++    check("⑩ 一條檢查都沒有時,complete 不成立", c4 is False, str((f4, u4, c4)))
++
++    # ⑪ ★長得像清單項卻不是 - claim: 的,要出聲★(r2 修正差異席 major)
++    typo = ("---\nname: x\nmetadata:\n  type: project\n"
++            "verify:\n  - clam: 打錯字\n    pushed: abc1234\n---\n\n正文\n")
++    kinds = [k for _c, k, _a in ms.verify_blocks(typo)]
++    check("⑪ - claim: 打錯字不會靜靜消失", "?listitem" in kinds, str(ms.verify_blocks(typo)))
+ 
+ 
+ def t_lint_not_checked():
+     """[S9b] 一條都沒跑就不准說「乾淨」——宣告沒帶檔案清單佔位的會被降級成只報不擋,
+     全部都是這種的時候整道閘等於沒作用,收尾行卻寫「沒有新增的告警」。
+     真機坐實:某個 742 支檔的專案五條宣告沒有一條帶佔位。"""
+     m = _lng_module()
+     root, git = _lng_repo()
+     # 沒有 {LINT_FILES} 佔位:整個專案掃一遍那種老式宣告
+     _lng_declare(root, ["echo x > {LINT_SARIF_OUT}"])

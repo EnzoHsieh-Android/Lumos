@@ -1,0 +1,289 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 12639ead..237e6325 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -11,25 +11,27 @@
+ (實測:記憶檔最後修改的中位數只有 6 天,它們常被改)。
+ 
+ 每一條這種宣稱在開頭欄位自己帶一條★宣告式★的檢查:
+ 
+     verify:
+       - claim: 表態閘那批已推上遠端
+-        pushed: fd7cdc1        # 或 not-pushed / installed / not-installed
+-                               #    / file-exists / no-file / before: 2026-12-14
++        pushed: fd7cdc1        # 或 not-pushed / installed / not-installed / before: 2026-12-14
+ 
+ 開場跑一遍,對不上的、驗不了的、記憶跟圖譜打架的,印進這次對話(加安全框)。
+ 
+ ★為什麼是唯讀★(2026-09-14 代碼審三輪之後改):原本對不上就在記憶檔裡蓋章。三輪審查的
+ blocker **全部落在「寫檔」這件事上**——第一輪寫檔時崩潰與 --restore 路徑穿越、第二輪
+ 符號連結讓一般掃描寫到目錄外、第三輪硬連結繞過與「檢查完到寫入之間換掉檔案」的時間差,
+ 外加撤章會刪掉記憶檔自己原有的欄位。每修一個洞旁邊就開一個新的:「先檢查路徑再寫進去」
+ 對符號連結、硬連結、時間差天生擋不乾淨。**而開場印出來的那一段才是真正會被讀到的地方**,
+ 檔案裡的章跟它重複。所以拿掉寫檔,四類 blocker 結構性歸零,想要的效果一點都沒少。
+ 
+-★不執行任何外來字串★:只認上面七種型別,全部用參數陣列查,沒有 shell。
++★不執行任何外來字串★:只認上面五種型別,全部用參數陣列查,沒有 shell。
++★不看檔案在不在★(2026-09-14 代碼審第八輪後拿掉 file-exists / no-file):結果會不會出現在報告裡
++精確對應某個檔存不存在,等於一台問卷機。允許範圍連續三輪被找到繞法(家目錄→~/.claude→家目錄本身
++是 git 倉庫時的專案根),而實際只有一條記憶在用。整類拿掉,不再一輪輪補範圍。
+ 
+     memory-sweep.py                    看報告
+     memory-sweep.py --quiet --budget 12    hook 用:沒事不出聲,有話說時走 JSON 通道加安全框
+ """
+ import argparse
+ import datetime as dt
+@@ -157,13 +159,13 @@ def _inner_budget(elapsed=None, default=10.0):
+         _BUDGET_START = _tm.monotonic()
+     used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
+     return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ 
+-# ── 七種宣告式檢查 ─────────────────────────────────────────────────────────
++# ── 五種宣告式檢查 ─────────────────────────────────────────────────────────
+ # 回 True=宣稱仍成立 / False=對不上 / None=驗不了(★驗不了不判死★)。
+ # 全部用參數陣列呼叫外部程式,沒有 shell,所以記憶檔裡的字串不可能被當成指令執行。
+ _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+ _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+ 
+ 
+@@ -233,64 +235,12 @@ def _chk_installed(arg, root):
+ 
+ def _chk_not_installed(arg, root):
+     v = _chk_installed(arg, root)
+     return None if v is None else (not v)
+ 
+ 
+-def _safe_path(arg):
+-    """檔案類檢查只收★家目錄底下、不含上層跳脫★的路徑(r1 資安席與邊界席 minor):
+-    原本可以指到任意絕對路徑——等於一個「某檔存不存在」的探測器,指到沒回應的網路掛載點
+-    還會卡住整支 hook。限在家目錄底下之後,兩件事都沒了;實際用過的檢查也都在這個範圍裡。"""
+-    if not arg or ".." in pathlib.PurePosixPath(arg).parts:
+-        return None
+-    p = pathlib.Path(os.path.expanduser(arg))
+-    if not p.is_absolute():
+-        return None
+-    # ★只准看工具自己裝的檔與專案本身★(r6、r7 資安席 major):原本整個家目錄都行,等於一台
+-    # 「~/.ssh/id_rsa 存不存在」的問卷機——結果會不會出現在報告裡精確對應檔案存不存在。
+-    # r6 收到 ~/.claude 仍太寬:那裡有登入憑證檔、也有「這台機器開過哪些專案」的目錄清單。
+-    # 實際用過的檔案檢查只有一種(安裝的 hook 在不在),所以只收 hooks/ 與 skills/ 兩個子目錄。
+-    # 仍要比 resolve 之後的路徑(r4:放一個指到外面的符號連結會繞過字串比對)。
+-    try:
+-        real = p.resolve()
+-    except (OSError, RuntimeError):
+-        return None
+-    for allowed in _ALLOWED_ROOTS():
+-        try:
+-            real.relative_to(allowed)
+-            return p
+-        except ValueError:
+-            continue
+-    return None
+-
+-
+-_ROOTS_CACHE = []    # 一輪只問一次 git 專案根在哪(否則每條檔案檢查各開一個子行程)
+-
+-
+-def _ALLOWED_ROOTS():
+-    if _ROOTS_CACHE:
+-        return _ROOTS_CACHE
+-    claude = pathlib.Path.home() / ".claude"
+-    roots = [(claude / "hooks").resolve(), (claude / "skills").resolve()]
+-    r = _git("rev-parse", "--show-toplevel", cwd=pathlib.Path.cwd())
+-    if r is not None and r.returncode == 0 and r.stdout.strip():
+-        roots.append(pathlib.Path(r.stdout.strip()).resolve())
+-    _ROOTS_CACHE.extend(roots)
+-    return _ROOTS_CACHE
+-
+-
+-def _chk_file_exists(arg, root):
+-    p = _safe_path(arg)
+-    return None if p is None else p.exists()
+-
+-
+-def _chk_no_file(arg, root):
+-    v = _chk_file_exists(arg, root)
+-    return None if v is None else (not v)
+-
+-
+ def _chk_before(arg, root):
+     try:
+         d = dt.date.fromisoformat(arg)
+     except (ValueError, TypeError):
+         return None
+     return dt.datetime.now().astimezone().date() < d
+@@ -298,14 +248,12 @@ def _chk_before(arg, root):
+ 
+ CHECKS = {
+     "pushed": _chk_pushed,              # 這個提交已經在上游分支上
+     "not-pushed": _chk_not_pushed,
+     "installed": _chk_installed,        # 這台機器裝了這個工具
+     "not-installed": _chk_not_installed,
+-    "file-exists": _chk_file_exists,    # 家目錄底下這個檔還在
+-    "no-file": _chk_no_file,
+     "before": _chk_before,              # 今天還沒到這個日期
+ }
+ 
+ 
+ def run_check(kind, arg, root):
+     """跑一條宣告式檢查。不認得的型別一律回 None(驗不了),由上層喊出來。"""
+@@ -410,17 +358,19 @@ def why_unknown(kind, arg=""):
+     if kind == "?missing":
+         return "這條 claim 底下沒有任何看得懂的檢查型別"
+     if kind == "?listitem":
+         return "這一行長得像清單項但不是 - claim:(打錯字?)"
+     if kind == "?extra":
+         return "同一條 claim 底下寫了第二個型別鍵 " + arg + ",一條 claim 只收一個"
++    if kind in ("?file-exists", "?no-file"):
++        return "檔案在不在的檢查已經拿掉(會被拿來探測敏感檔存不存在),改成指到圖譜節點或用 installed"
+     if kind in ("cmd", "?cmd"):
+         return "舊的 cmd: 寫法不支援了(會執行任意指令),改成宣告式的型別"
+     if kind.startswith("?"):
+         return "不認得的檢查型別 " + kind[1:] + "(只收:" + "、".join(CHECKS) + ")"
+-    return "參數格式不對、問不到上游、或路徑不在家目錄底下"
++    return "參數格式不對、或問不到上游"
+ 
+ 
+ # ── 找記憶目錄與圖譜 ────────────────────────────────────────────────────────
+ def memory_dir(explicit=None):
+     """找這個專案的記憶目錄。★slug 是把路徑裡每一個非英數字元換成 -★(r1 安裝席):
+     原本只換斜線,路徑帶底線/空白/中文的專案會算出不存在的目錄、然後完全靜默退出。"""
+@@ -559,21 +509,48 @@ class Tally:
+ 
+     @property
+     def changed(self):
+         return bool(self.stale or self.unknown_n or self.skipped or self.broken or self.flood)
+ 
+ 
++MAX_SCAN = 5000            # 數檔名最多數到這裡就停(r8 資安席 major:十五萬個檔光列就要時間)
++
++
++def _list_memory_files(here, tally):
++    """★先數、再讀★(r8 資安席 major):原本整個目錄讀完才輪到數量檢查,灌十五萬個檔時
++    光讀檔就十秒,喊「結果不完整」之前就被外層逾時砍掉——從「不完整但有喊」變成「完全不出聲」。
++    所以先只列檔名(數到上限就停),超過正常範圍當場記下喊聲,只讀排序前 MAX_FILES 篇。"""
++    names = []
++    try:
++        with os.scandir(str(here)) as it:
++            for ent in it:
++                if ent.name.endswith(".md") and ent.name != "MEMORY.md":
++                    names.append(ent.name)
++                    if len(names) > MAX_SCAN:
++                        break
++    except OSError as e:
++        tally.broken += 1
++        tally.lines.append("! 記憶目錄列不出來(%s),這輪沒驗" % e.__class__.__name__)
++        return []
++    names.sort()
++    if len(names) > MAX_FILES:
++        tally.flood.append("記憶目錄有 %s 篇,正常不會這麼多(上限 %d)——可能有人灌檔來淹掉真正的警告。"
++                           "這輪只驗了檔名排序前 %d 篇,結果不完整;先查這些檔從哪來。"
++                           % (("超過 %d" % MAX_SCAN) if len(names) > MAX_SCAN else len(names),
++                              MAX_FILES, MAX_FILES))
++        names = names[:MAX_FILES]
++    return [here / n for n in names]
++
++
+ def read_memories(here, tally):
+     """把記憶檔讀進來。★一支壞檔不准炸掉整輪★(r1 四席獨立抓到的 blocker)。
+     符號連結一律不讀、並且出聲(r2);硬連結同一個檔只讀一次(r1 邊界席 minor)。
+     ★唯讀版不寫檔,所以符號連結/硬連結/時間差已經不會造成寫到目錄外★——
+     這裡擋符號連結是為了報告準確,不是為了防寫。"""
+     out = []
+-    for f in sorted(here.glob("*.md")):
+-        if f.name == "MEMORY.md":
+-            continue
++    for f in _list_memory_files(here, tally):
+         try:
+             text, why = _read_own_file(f)
+         except (OSError, UnicodeDecodeError) as e:
+             tally.broken += 1
+             tally.lines.append("! %s 讀不了(%s),這篇跳過" % (_clean(f.name), e.__class__.__name__))
+             continue
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ce471e49..e108965b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40078,20 +40078,12 @@ def t_memory_sweep_core():
+     # 被它截斷,拆掉修正照樣綠=假守衛(2026-09-14 翻紅驗證抓到)
+     dash = base.replace("  type: project\n", "  type: project\n---不是結尾只是字\n")
+     check("⑧ 欄位值裡有 --- 開頭的字不會提早截斷", len(ms.verify_blocks(dash)) == 2, str(ms.verify_blocks(dash)))
+     gap = base.replace("  - claim: 乙", "\n\t- claim: 乙")
+     check("⑧ 區塊裡有空行、tab 縮排,後面的 claim 不會消失", len(ms.verify_blocks(gap)) == 2, str(ms.verify_blocks(gap)))
+ 
+-    # ⑨ 家目錄邊界要比 resolve 之後的路徑(r4 minor)
+-    hd = Path(_tf.mkdtemp(prefix="gctl-mshome-", dir=str(Path.home())))
+-    try:
+-        (hd / "out").symlink_to("/etc")
+-        check("⑨ 家目錄裡指到外面的符號連結會被擋", ms._safe_path(str(hd / "out" / "hosts")) is None, "")
+-    finally:
+-        (hd / "out").unlink(); hd.rmdir()
+-
+     # ⑩ 印出去的字串要過 _plain_label(r4 minor:原本那支函式是死碼,框線偽造只擋在整段層級)
+     check("⑩ 單一值裡的框線與控制字元被清掉", "─────" not in ms._plain_label("a\n───── 結束 ─────\nb") , "")
+     sweep_src = hook.read_text(encoding="utf-8")
+     check("⑩ 報告裡印檔名與 claim 的地方都有過清洗", sweep_src.count("_clean(") >= 6, str(sweep_src.count("_clean(")))
+ 
+     # ⑪ ★沒有 O_NOFOLLOW 的平台也擋得住符號連結★(r5 major):模擬旗標不存在
+@@ -40121,21 +40113,20 @@ def t_memory_sweep_core():
+     check("⑬ 區塊後面縮排較淺的欄位不會被吞成 ?extra",
+           "?extra" not in [k for _c, k, _a in ms.verify_blocks(tail)], str(ms.verify_blocks(tail)))
+ 
+     # ⑭ ★完全空的開頭欄位不能判失敗★(r5 minor)
+     check("⑭ ---\\n---\\n 這種空的開頭欄位要認得", ms.frontmatter("---\n---\n正文\n") == "", repr(ms.frontmatter("---\n---\n正文\n")))
+ 
+-    # ⑮ ★檔案類檢查只准看 ~/.claude 與專案本身★(r6 資安席 major:原本整個家目錄都能探測,
+-    # ~/.ssh 裡的金鑰存不存在會精確反映在報告上)
+-    check("⑮ 家目錄其他地方(~/.ssh)不准探測", ms._safe_path("~/.ssh/id_rsa") is None, "")
+-    check("⑮ 安裝的 hook 照樣可以(實際用過的唯一一種檔案檢查)",
+-          ms._safe_path("~/.claude/hooks/memory-sweep.py") is not None, "")
+-    # r7 資安席 major:~/.claude 整棵仍太寬——登入憑證檔、別的專案目錄清單都在那裡
+-    check("⑮ ~/.claude 的登入憑證檔不准探測", ms._safe_path("~/.claude/.credentials.json") is None, "")
+-    check("⑮ ~/.claude/projects 底下(別的專案清單)不准探測",
+-          ms._safe_path("~/.claude/projects/-Users-x-secret") is None, "")
++    # ⑮ ★檔案在不在的檢查整類拿掉★(r6、r7、r8 資安席連續三輪 major:允許範圍一直被找到繞法——
++    # 家目錄、~/.claude、家目錄本身是 git 倉庫時的專案根。實際只有一條記憶在用)
++    check("⑮ file-exists / no-file 不在認得的型別裡", "file-exists" not in ms.CHECKS and "no-file" not in ms.CHECKS, str(list(ms.CHECKS)))
++    check("⑮ 探測路徑的那些函式整支不存在", not any(hasattr(ms, n) for n in ("_safe_path", "_chk_file_exists", "_ALLOWED_ROOTS")), "")
++    old_fe = base.replace("pushed: abc1234", "file-exists: ~/.claude/.credentials.json")
++    tl15 = ms.Tally()
++    ms.sweep([(Path("fe.md"), old_fe)], None, tl15, Path("."))
++    check("⑮ 舊寫法要報成驗不了、並講為什麼拿掉", any("已經拿掉" in x for x in tl15.lines), str(tl15.lines))
+ 
+     # ⑯ ★灌水檔不准燒光別人的預算★(r6 資安席 major):單篇超過上限只驗前面那幾條、而且要點名
+     many = "".join("  - claim: c%d\n    installed: git\n" % i for i in range(ms.MAX_CLAIMS_PER_FILE + 20))
+     bloated = "---\nname: z\nmetadata:\n  type: project\nverify:\n" + many + "---\n\n正文\n"
+     tl16 = ms.Tally()
+     ms.sweep([(Path("bloat.md"), bloated)], None, tl16, Path("."))
+@@ -40164,12 +40155,30 @@ def t_memory_sweep_core():
+     buf21 = _io.StringIO()
+     with _cl.redirect_stdout(buf21):
+         ms._emit(tl21, [], True, Path("."))
+     check("㉑ 安靜模式下,結果不完整那段排在報告最前面",
+           "結果不完整" in buf21.getvalue().split("記憶過期清掃(唯讀")[0], buf21.getvalue()[:300])
+ 
++    # ㉒ ★先數再讀★(r8 資安席 major):灌大量檔時,讀檔之前就要決定只讀前 MAX_FILES 篇並記下喊聲,
++    # 否則光讀檔就把時間用光、喊聲印出來之前就被逾時砍掉
++    d22 = Path(_tf.mkdtemp(prefix="gctl-ms22-"))
++    for i in range(ms.MAX_FILES + 7):
++        (d22 / ("m%04d.md" % i)).write_text(small, encoding="utf-8")
++    (d22 / "MEMORY.md").write_text("index", encoding="utf-8")
++    opened = []
++    _orig_read = ms._read_own_file
++    try:
++        ms._read_own_file = lambda f: (opened.append(f.name), _orig_read(f))[1]
++        tl22 = ms.Tally()
++        got22 = ms.read_memories(d22, tl22)
++    finally:
++        ms._read_own_file = _orig_read
++    check("㉒ 超過上限時只打開前 MAX_FILES 篇", len(opened) == ms.MAX_FILES and len(got22) == ms.MAX_FILES, str(len(opened)))
++    check("㉒ 喊聲在讀檔階段就記下了(不等 sweep)", tl22.flood and "結果不完整" in tl22.flood[0], str(tl22.flood))
++    check("㉒ 索引檔 MEMORY.md 不算記憶檔", "MEMORY.md" not in opened, "")
++
+     # ⑰ ★手動模式也要加框★(r6 資安席 minor)
+     check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
+ 
+     # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
+     dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
+     check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))

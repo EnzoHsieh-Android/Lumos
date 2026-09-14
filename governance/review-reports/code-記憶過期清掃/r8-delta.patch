@@ -1,0 +1,259 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index db5245ea..12639ead 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -41,12 +41,14 @@ import shutil
+ import subprocess
+ import sys
+ import time
+ 
+ PER_CMD_CAP = 15.0          # 單條檢查的硬上限;實際用的是它與「預算還剩多少」取小的那個
+ MAX_CLAIMS_PER_FILE = 30    # ★單篇最多驗幾條★(r6 資安席 major:一份灌水檔能燒光整輪預算)
++MAX_FILES = 300             # ★整輪最多看幾篇★(r7 資安席 major:八千個小檔各自卡在單篇上限內一樣能淹掉)
++MAX_CLAIMS_TOTAL = 600      # ★整輪最多驗幾條★;實測這個專案 79 篇、十幾條,離上限很遠
+ 
+ # ── ★注入框:把「機器附加的內容」跟系統話明確分開★ ────────────────────────
+ # 單源說明在 Systems/hook信任邊界;這段在幾支 hook 與 scripts/lumos 裡是逐字相同的複本,
+ # 有守衛盯著不准漂(hook 是獨立檔、複製出去後彼此 import 不到)。
+ #
+ # 出身:這些文字是以「系統附加」的口吻直接進對話的,而內容來自圖譜筆記、CI 紀錄這類
+@@ -240,15 +242,16 @@ def _safe_path(arg):
+     還會卡住整支 hook。限在家目錄底下之後,兩件事都沒了;實際用過的檢查也都在這個範圍裡。"""
+     if not arg or ".." in pathlib.PurePosixPath(arg).parts:
+         return None
+     p = pathlib.Path(os.path.expanduser(arg))
+     if not p.is_absolute():
+         return None
+-    # ★只准看兩個地方★(r6 資安席 major):原本整個家目錄都行,等於一台「~/.ssh/id_rsa、
+-    # ~/.aws/credentials 存不存在」的問卷機——結果會不會出現在報告裡精確對應檔案存不存在。
+-    # 實際用過的檢查只看 ~/.claude 底下與專案本身,所以收窄到這兩處。
++    # ★只准看工具自己裝的檔與專案本身★(r6、r7 資安席 major):原本整個家目錄都行,等於一台
++    # 「~/.ssh/id_rsa 存不存在」的問卷機——結果會不會出現在報告裡精確對應檔案存不存在。
++    # r6 收到 ~/.claude 仍太寬:那裡有登入憑證檔、也有「這台機器開過哪些專案」的目錄清單。
++    # 實際用過的檔案檢查只有一種(安裝的 hook 在不在),所以只收 hooks/ 與 skills/ 兩個子目錄。
+     # 仍要比 resolve 之後的路徑(r4:放一個指到外面的符號連結會繞過字串比對)。
+     try:
+         real = p.resolve()
+     except (OSError, RuntimeError):
+         return None
+     for allowed in _ALLOWED_ROOTS():
+@@ -263,13 +266,14 @@ def _safe_path(arg):
+ _ROOTS_CACHE = []    # 一輪只問一次 git 專案根在哪(否則每條檔案檢查各開一個子行程)
+ 
+ 
+ def _ALLOWED_ROOTS():
+     if _ROOTS_CACHE:
+         return _ROOTS_CACHE
+-    roots = [(pathlib.Path.home() / ".claude").resolve()]
++    claude = pathlib.Path.home() / ".claude"
++    roots = [(claude / "hooks").resolve(), (claude / "skills").resolve()]
+     r = _git("rev-parse", "--show-toplevel", cwd=pathlib.Path.cwd())
+     if r is not None and r.returncode == 0 and r.stdout.strip():
+         roots.append(pathlib.Path(r.stdout.strip()).resolve())
+     _ROOTS_CACHE.extend(roots)
+     return _ROOTS_CACHE
+ 
+@@ -548,16 +552,17 @@ def pointer_problems(stems, files, mem_stems):
+ # ── 一輪清掃(唯讀) ──────────────────────────────────────────────────────────
+ class Tally:
+     def __init__(self):
+         self.lines = []
+         self.stale = self.unknown_n = self.skipped = self.checked = self.broken = 0
+         self.unfinished = []      # ★沒驗完的篇名要點名★,不能只給一個總數
++        self.flood = []           # ★數量異常★要排在報告最前面大聲喊(r7 資安席 major)
+ 
+     @property
+     def changed(self):
+-        return bool(self.stale or self.unknown_n or self.skipped or self.broken)
++        return bool(self.stale or self.unknown_n or self.skipped or self.broken or self.flood)
+ 
+ 
+ def read_memories(here, tally):
+     """把記憶檔讀進來。★一支壞檔不准炸掉整輪★(r1 四席獨立抓到的 blocker)。
+     符號連結一律不讀、並且出聲(r2);硬連結同一個檔只讀一次(r1 邊界席 minor)。
+     ★唯讀版不寫檔,所以符號連結/硬連結/時間差已經不會造成寫到目錄外★——
+@@ -633,52 +638,71 @@ def _opened_reason(st, pre):
+         return ("有 %d 個硬連結(可能是從別處連進來的;若是備份或同步工具造成的,"
+                 "把這篇複製成一般檔就會恢復讀取)" % st.st_nlink)
+     return None
+ 
+ 
+ def sweep(files, deadline, tally, root):
+-    for f, text in files:
++    """★灌檔的防線是「喊出來」不是「挑對檔」★(r7 資安席 major):不管上限怎麼切、先驗哪幾篇,
++    攻擊者都能用檔名排序或檔數把真的警告擠到後面。所以數量一超過正常範圍,就在報告最前面
++    講「結果不完整、可能被灌檔」——被淹掉的警告救不回來,但這一輪不會被當成乾淨的。"""
++    if len(files) > MAX_FILES:
++        tally.flood.append("記憶目錄有 %d 篇,正常不會這麼多(上限 %d)——可能有人灌檔來淹掉真正的警告。"
++                           "這輪只驗了檔名排序前 %d 篇,結果不完整;先查這些檔從哪來。"
++                           % (len(files), MAX_FILES, MAX_FILES))
++        files = files[:MAX_FILES]
++    seen = 0
++    for i, (f, text) in enumerate(files):
++        if seen >= MAX_CLAIMS_TOTAL:
++            tally.flood.append("這輪檢查累計已到 %d 條上限,還有 %d 篇沒驗——正常不會這麼多,"
++                               "可能有人灌檔;結果不完整。" % (MAX_CLAIMS_TOTAL, len(files) - i))
++            break
+         try:
+-            failed, unknown = [], []
+-            blocks = verify_blocks(text)
+-            if len(blocks) > MAX_CLAIMS_PER_FILE:
+-                # ★灌水檔不准燒光別人的預算★(r6 資安席 major):按檔名順序處理、預算跨檔共用,
+-                # 一份塞幾十萬條的檔會讓後面檔案裡真正過期的宣稱完全不出現。
+-                tally.broken += 1
+-                tally.lines.append("! %s 有 %d 條檢查,超過單篇上限 %d,只驗前 %d 條"
+-                                   % (_clean(f.name), len(blocks), MAX_CLAIMS_PER_FILE, MAX_CLAIMS_PER_FILE))
+-                blocks = blocks[:MAX_CLAIMS_PER_FILE]
+-            short = False
+-            for claim, kind, arg in blocks:
+-                if deadline and (deadline - time.monotonic()) <= 0:
+-                    tally.skipped += 1
+-                    short = True
+-                    continue
+-                tally.checked += 1
+-                ok = run_check(kind, arg, root)
+-                if ok is None:
+-                    unknown.append((claim, why_unknown(kind, arg)))
+-                    tally.unknown_n += 1
+-                elif not ok:
+-                    failed.append(claim)
+-            name = _clean(f.name)
+-            if short:
+-                tally.unfinished.append(name)
+-            if failed:
+-                tally.stale += 1
+-                tally.lines.append("✗ %s" % name)
+-                tally.lines.extend("    對不上了:%s" % _clean(c) for c in failed)
+-            # ★why 裡帶著使用者寫的型別鍵名,也要清★(r5 major):沒清的話 hook 模式下
+-            # 那一整行會被安全框的框線過濾器整行砍掉——這條發現就靜靜消失了。
+-            tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, _clean(why, cap=160), _clean(c))
+-                               for c, why in unknown)
++            seen += _sweep_one(f, text, deadline, tally, root)
+         except Exception as e:                      # 一支壞檔不拖垮整輪
+             tally.broken += 1
+             tally.lines.append("! %s 處理時出錯(%s),這篇跳過" % (_clean(f.name), e.__class__.__name__))
+ 
+ 
++def _sweep_one(f, text, deadline, tally, root):
++    """驗一篇,結果記進 tally。回這篇佔掉幾條檢查額度。"""
++    failed, unknown = [], []
++    blocks = verify_blocks(text)
++    if len(blocks) > MAX_CLAIMS_PER_FILE:
++        # ★灌水檔不准燒光別人的預算★(r6 資安席 major):按檔名順序處理、預算跨檔共用,
++        # 一份塞幾十萬條的檔會讓後面檔案裡真正過期的宣稱完全不出現。
++        tally.broken += 1
++        tally.lines.append("! %s 有 %d 條檢查,超過單篇上限 %d,只驗前 %d 條"
++                           % (_clean(f.name), len(blocks), MAX_CLAIMS_PER_FILE, MAX_CLAIMS_PER_FILE))
++        blocks = blocks[:MAX_CLAIMS_PER_FILE]
++    short = False
++    for claim, kind, arg in blocks:
++        if deadline and (deadline - time.monotonic()) <= 0:
++            tally.skipped += 1
++            short = True
++            continue
++        tally.checked += 1
++        ok = run_check(kind, arg, root)
++        if ok is None:
++            unknown.append((claim, why_unknown(kind, arg)))
++            tally.unknown_n += 1
++        elif not ok:
++            failed.append(claim)
++    name = _clean(f.name)
++    if short:
++        tally.unfinished.append(name)
++    if failed:
++        tally.stale += 1
++        tally.lines.append("✗ %s" % name)
++        tally.lines.extend("    對不上了:%s" % _clean(c) for c in failed)
++    # ★why 裡帶著使用者寫的型別鍵名,也要清★(r5 major):沒清的話 hook 模式下
++    # 那一整行會被安全框的框線過濾器整行砍掉——這條發現就靜靜消失了。
++    tally.lines.extend("? %s 這條驗不了(%s):%s" % (name, _clean(why, cap=160), _clean(c))
++                       for c, why in unknown)
++    return len(blocks)
++
++
+ def cross_check(files, mem_stems, tally):
+     _root, stems = graph_stems(pathlib.Path.cwd())
+     if not stems:
+         return False
+     try:
+         shadows = shadow_copies(stems, files)
+@@ -710,18 +734,21 @@ def _build_parser():
+     ap.add_argument("--harness", default="claude")
+     return ap
+ 
+ 
+ def _emit(tally, crossed, quiet, here):
+     body = []
++    if tally.flood:
++        body.append("★記憶過期清掃這輪的結果不完整★:")
++        body.extend("  ★%s★" % x for x in tally.flood)
+     if tally.lines:
+         body.append("記憶過期清掃(唯讀,沒有改任何檔):")
+         body.extend("  " + ln for ln in tally.lines)
+     if tally.skipped:
+-        body.append("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★沒驗完的篇:%s"
+-                    % (tally.skipped, "、".join(tally.unfinished[:10]) or "(不明)"))
++        body.append("  ★時間預算用完,還有 %d 條沒驗到——沒驗到不等於成立。★沒驗完 %d 篇,前幾篇:%s"
++                    % (tally.skipped, len(tally.unfinished), "、".join(tally.unfinished[:10]) or "(不明)"))
+     if tally.stale or crossed:
+         # ★報告要附下一步★(r1 架構對齊席 minor):只列問題不說怎麼辦,就跟空轉週報一樣沒人動
+         body.append("  對不上的那幾篇:改圖譜裡的真相,再把記憶改成指路或更新那條 verify。")
+     if tally.broken or tally.unknown_n:
+         body.append("  單獨看這個目錄的完整報告:")
+         body.append("    python3 ~/.claude/hooks/memory-sweep.py --dir %s" % here)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1870cbfe..ce471e49 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40124,13 +40124,18 @@ def t_memory_sweep_core():
+     # ⑭ ★完全空的開頭欄位不能判失敗★(r5 minor)
+     check("⑭ ---\\n---\\n 這種空的開頭欄位要認得", ms.frontmatter("---\n---\n正文\n") == "", repr(ms.frontmatter("---\n---\n正文\n")))
+ 
+     # ⑮ ★檔案類檢查只准看 ~/.claude 與專案本身★(r6 資安席 major:原本整個家目錄都能探測,
+     # ~/.ssh 裡的金鑰存不存在會精確反映在報告上)
+     check("⑮ 家目錄其他地方(~/.ssh)不准探測", ms._safe_path("~/.ssh/id_rsa") is None, "")
+-    check("⑮ ~/.claude 底下照樣可以", ms._safe_path("~/.claude/settings.json") is not None, "")
++    check("⑮ 安裝的 hook 照樣可以(實際用過的唯一一種檔案檢查)",
++          ms._safe_path("~/.claude/hooks/memory-sweep.py") is not None, "")
++    # r7 資安席 major:~/.claude 整棵仍太寬——登入憑證檔、別的專案目錄清單都在那裡
++    check("⑮ ~/.claude 的登入憑證檔不准探測", ms._safe_path("~/.claude/.credentials.json") is None, "")
++    check("⑮ ~/.claude/projects 底下(別的專案清單)不准探測",
++          ms._safe_path("~/.claude/projects/-Users-x-secret") is None, "")
+ 
+     # ⑯ ★灌水檔不准燒光別人的預算★(r6 資安席 major):單篇超過上限只驗前面那幾條、而且要點名
+     many = "".join("  - claim: c%d\n    installed: git\n" % i for i in range(ms.MAX_CLAIMS_PER_FILE + 20))
+     bloated = "---\nname: z\nmetadata:\n  type: project\nverify:\n" + many + "---\n\n正文\n"
+     tl16 = ms.Tally()
+     ms.sweep([(Path("bloat.md"), bloated)], None, tl16, Path("."))
+@@ -40141,12 +40146,30 @@ def t_memory_sweep_core():
+     import io as _io, contextlib as _cl
+     buf = _io.StringIO()
+     with _cl.redirect_stdout(buf):
+         ms._emit(tl16b, [], False, Path("."))
+     check("⑯ 預算用完時要點名沒驗完的篇", "late.md" in buf.getvalue(), buf.getvalue()[-300:])
+ 
++    # ㉑ ★很多小檔各自卡在單篇上限內,也不准靜靜淹掉★(r7 資安席 major):檔數或總條數超過正常範圍,
++    # 報告最前面要喊「結果不完整」,而且安靜模式也要印出來
++    small = "---\nname: s\nmetadata:\n  type: project\nverify:\n  - claim: c\n    installed: git\n---\n"
++    tl21 = ms.Tally()
++    ms.sweep([(Path("f%04d.md" % i), small) for i in range(ms.MAX_FILES + 5)], None, tl21, Path("."))
++    check("㉑ 檔數超過上限 → 報告要喊結果不完整", tl21.flood and tl21.changed, str(tl21.flood))
++    check("㉑ 檔數超過上限 → 只驗到上限那麼多篇", tl21.checked <= ms.MAX_FILES, str(tl21.checked))
++    tl21b = ms.Tally()
++    ms.sweep([(Path("g%04d.md" % i), bloated) for i in range(ms.MAX_CLAIMS_TOTAL // ms.MAX_CLAIMS_PER_FILE + 3)],
++             None, tl21b, Path("."))
++    check("㉑ 總條數超過上限 → 報告要喊、而且停在上限", any("上限" in x for x in tl21b.flood)
++          and tl21b.checked <= ms.MAX_CLAIMS_TOTAL, str((tl21b.flood, tl21b.checked)))
++    buf21 = _io.StringIO()
++    with _cl.redirect_stdout(buf21):
++        ms._emit(tl21, [], True, Path("."))
++    check("㉑ 安靜模式下,結果不完整那段排在報告最前面",
++          "結果不完整" in buf21.getvalue().split("記憶過期清掃(唯讀")[0], buf21.getvalue()[:300])
++
+     # ⑰ ★手動模式也要加框★(r6 資安席 minor)
+     check("⑰ 手動模式的輸出也有框", "參考資料結束" in buf.getvalue(), buf.getvalue()[-200:])
+ 
+     # ⑱ ★不可見字元與相似框線字元也要清★(r6 資安席 minor)
+     dirty = ms._clean("a\u200bb\u2501\u2501\u2501c\u202ed")
+     check("⑱ 零寬、方向控制、相似框線全清掉", dirty == "abcd", repr(dirty))
