@@ -72,7 +72,10 @@ def graph_stems(start):
     for cand in [d] + list(d.parents):
         for g in sorted((cand / "docs").glob("*knowledge*")) if (cand / "docs").is_dir() else []:
             if g.is_dir():
-                return g, {f.stem for f in g.rglob("*.md")}
+                # ★一次走完整棵樹,之後都查這份對照★:原本每查一個節點的 status 就 rglob 一次,
+                # 76 篇記憶 × 各自點名的節點 = 上百次整樹走訪(每次 500+ 個檔)。
+                # 這就是「迴圈裡逐筆查」那一型,只是查的是檔案系統不是資料庫。
+                return g, {f.stem: f for f in g.rglob("*.md")}
         if (cand / ".git").exists():
             break
     return None, None
@@ -95,7 +98,7 @@ def shadow_copies(here, stems):
         words = sorted(set(_STATUS_WORDS.findall(body)))
         if not words:
             continue
-        hit = sorted({_stem(n) for n in _NODE_REF.findall(t)} & stems)
+        hit = sorted(n for n in {_stem(n) for n in _NODE_REF.findall(t)} if n in stems)
         if hit:
             # ★要印出是哪個字觸發的★:只給檔名不給理由的話,看的人得自己重讀整篇找,
             # 成本一高就沒人動——今天早上那份空轉週報就是這樣躺了 70 天。
@@ -120,16 +123,17 @@ _DONE_WORDS = re.compile(r"(還沒做|未開工|進行中|建置中|尚未|還�
 _LIVE_WORDS = re.compile(r"(已交付|全交付|已完成|已收案|落地完成)")
 
 
-def node_status(graph_root, stem):
-    """讀某個圖譜節點開頭欄位的 status;讀不到回 None。"""
-    for f in graph_root.rglob(stem + ".md"):
-        head = f.read_text(encoding="utf-8", errors="replace")[:1200]
-        m = re.search(r"(?m)^status:[ \t]*([A-Za-z_-]+)", head)
-        return m.group(1) if m else None
-    return None
+def node_status(stems, stem):
+    """讀某個圖譜節點開頭欄位的 status;讀不到回 None。stems 是走過一次的 stem→路徑對照。"""
+    f = stems.get(stem)
+    if f is None:
+        return None
+    head = f.read_text(encoding="utf-8", errors="replace")[:1200]   # 只讀開頭,不整檔進記憶體
+    m = re.search(r"(?m)^status:[ \t]*([A-Za-z_-]+)", head)
+    return m.group(1) if m else None
 
 
-def pointer_problems(here, graph_root, stems):
+def pointer_problems(here, stems):
     """回 [(檔名, 種類, 細節)]:壞指標與狀態打架。"""
     out = []
     mem_stems = {p.stem for p in here.glob("*.md")}
@@ -147,8 +151,8 @@ def pointer_problems(here, graph_root, stems):
         dead = sorted(n for n in linked if n not in stems and n not in mem_stems)
         if dead:
             out.append((f.name, "指到不存在的節點", "、".join(dead[:3])))
-        for n in sorted(named & stems):
-            st = node_status(graph_root, n)
+        for n in sorted(n for n in named if n in stems):
+            st = node_status(stems, n)
             if st == "done" and _DONE_WORDS.search(body):
                 out.append((f.name, "說還沒做,但節點已 done", n))
             elif st in ("doing", "open") and _LIVE_WORDS.search(body):
@@ -292,11 +296,11 @@ def main():
             lines.append("? %s 這條驗不了(命令壞了或逾時):%s" % (f.name, c))
 
     shadows = []
-    graph_root, stems = graph_stems(pathlib.Path.cwd())
+    _graph_root, stems = graph_stems(pathlib.Path.cwd())
     ptr = []
     if stems:
         shadows = shadow_copies(here, stems)
-        ptr = pointer_problems(here, graph_root, stems)
+        ptr = pointer_problems(here, stems)
     if ptr:
         lines.append("★記憶跟圖譜對不上(衝突只喊、不替任何一邊決定誰對)★:")
         for n, kind, detail in ptr:
