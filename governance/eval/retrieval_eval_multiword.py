@@ -274,6 +274,62 @@ def load_inputs(vault, pool_path):
     return pool
 
 
+def contamination_ok(vault, pool, rebuilding, allow):
+    """污染檢查與處置。乾淨或明著放行回 True,要擋回 False(呼叫端回退出碼 2)。
+
+    抽成獨立一支是因為新增告警閘判進入點太複雜(2026-09-15 推送前擋下兩次)。
+    """
+    bad = contaminated(vault, pool)
+    if not bad:
+        return True
+    print("這幾題的查詢在語料裡查得到,拆詞那一臂不會啟動,兩臂會量出一樣的數字:",
+          file=sys.stderr)
+    for cid, q, hits in bad:
+        print(f"  {cid} 「{q}」 ← 查得到它的筆記:{', '.join(hits)}", file=sys.stderr)
+    print("  為什麼在意:那一題從此測不到任何東西,而且不會有錯誤訊息,"
+          "數字看起來正常、其實是兩臂相同。", file=sys.stderr)
+    print("  處置:把那幾篇筆記裡的查詢改成用斜線分隔(像「圖譜／同步／閘」),"
+          "查詢字面只留在題庫檔裡。", file=sys.stderr)
+    # ★重組候選池一律不接受污染,逃生旗標對它無效★(2026-09-15 r2 折入驗收席實測:
+    # 原本兩條路共用同一道閘,加了旗標連重組都照組,而且★把造成污染的那篇筆記
+    # 收進池裡★——等於把壞掉的題目烤進資料,後面每一次量測都繼承)。
+    if rebuilding:
+        print("  ★重組候選池不接受污染,也不吃 --allow-contaminated★:改乾淨再跑一次。",
+              file=sys.stderr)
+        return False
+    # ★量測路徑一樣要擋★(2026-09-15 r1 資安席與正確性席各自抓到):原本只在重組時擋,
+    # 量測時只印錯誤輸出就照算,把錯誤輸出丟掉就看不出來——而量測正是產出治理數字
+    # 的那條路,漏在這裡等於守衛沒有守到要守的東西。
+    if not allow:
+        print("  ★這一輪不跑★:改乾淨再來;真的要拿污染的題跑(例如重現舊結果),"
+              "明著加 --allow-contaminated。", file=sys.stderr)
+        return False
+    # ★用了逃生旗標就要留在報告本體裡★(2026-09-15 r2 資安席:原本警告只印在錯誤輸出,
+    # 標準輸出跟乾淨結果一字不差,事後從報告完全看不出來)。
+    print("★★★ 這份結果是在允許污染的情況下跑的,不得當成證據 ★★★")
+    for cid, q, _h in bad:
+        print(f"    受影響的題:{cid}「{q}」——它的兩臂量出來是一樣的")
+    print()
+    return True
+
+
+def do_rebuild(vault, pool, out_path):
+    """重組候選池並寫出,印出每題的來源分佈。回退出碼。
+
+    抽成獨立一支是因為新增告警閘判進入點太複雜(2026-09-15 推送前擋下三次)。
+    """
+    newpool = rebuild_pool(vault, pool)
+    write_json_atomic(out_path, newpool)
+    tot = sum(v["n_pool"] for v in newpool.values())
+    print(f"✓ 候選池重組好了:{len(newpool)} 題、共 {tot} 筆候選 → {out_path}")
+    for cid in sorted(newpool):
+        v = newpool[cid]
+        print(f"  {cid} {v['query']:<20} 池 {v['n_pool']:>3} 筆"
+              f"(拆詞臂前10 {v['n_any']}、逐詞前3 {v['n_term']}、全詞同篇前10 {v['n_cooccur']})")
+    print("  接下來要標註:池裡每一筆都要判「對這個查詢有多相關」,"
+          "走既有的雙評審加人裁,標完才量得出分數。")
+    return 0
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", help="標註檔;量測時必填,只重組候選池時不用")
@@ -291,51 +347,11 @@ def main():
         return 2
 
     # ★污染檢查,兩條路徑都擋★:查詢字面查得到,拆詞那一臂就不會啟動。
-    bad = contaminated(a.vault, pool)
-    if bad:
-        print("這幾題的查詢在語料裡查得到,拆詞那一臂不會啟動,兩臂會量出一樣的數字:",
-              file=sys.stderr)
-        for cid, q, hits in bad:
-            print(f"  {cid} 「{q}」 ← 查得到它的筆記:{', '.join(hits)}", file=sys.stderr)
-        print("  為什麼在意:那一題從此測不到任何東西,而且不會有錯誤訊息,"
-              "數字看起來正常、其實是兩臂相同。", file=sys.stderr)
-        print("  處置:把那幾篇筆記裡的查詢改成用斜線分隔(像「圖譜／同步／閘」),"
-              "查詢字面只留在題庫檔裡。", file=sys.stderr)
-        # ★量測路徑一樣要擋★(2026-09-15 r1 資安席與正確性席各自抓到):
-        # 原本只在重組時擋,量測時只印 stderr 就照算,把 stderr 丟掉就看不出來——
-        # 而量測正是產出治理數字的那條路,漏在這裡等於守衛沒有守到要守的東西。
-        # ★重組候選池一律不接受污染,逃生旗標對它無效★(2026-09-15 r2 折入驗收席實測:
-        # 原本兩條路共用同一道閘,加了旗標連重組都照組,而且★把造成污染的那篇筆記
-        # 收進池裡★——那等於把壞掉的題目烤進資料,後面每一次量測都繼承)。
-        # 量測那條留逃生口是為了重現舊結果,重組沒有這種需要。
-        if a.rebuild_pool:
-            print("  ★重組候選池不接受污染,也不吃 --allow-contaminated★:改乾淨再跑一次。",
-                  file=sys.stderr)
-            return 2
-        if not a.allow_contaminated:
-            print("  ★這一輪不跑★:改乾淨再來;真的要拿污染的題跑(例如重現舊結果),"
-                  "明著加 --allow-contaminated。", file=sys.stderr)
-            return 2
-        # ★用了逃生旗標就要留在報告本體裡★(2026-09-15 r2 資安席:原本警告只印在
-        # 錯誤輸出,標準輸出跟乾淨結果一字不差,事後從報告完全看不出來——
-        # 遇到擋就加旗標讓它變綠,是同等級的審計盲點)。
-        print("★★★ 這份結果是在允許污染的情況下跑的,不得當成證據 ★★★")
-        for cid, q, _h in bad:
-            print(f"    受影響的題:{cid}「{q}」——它的兩臂量出來是一樣的")
-        print()
+    if not contamination_ok(a.vault, pool, a.rebuild_pool, a.allow_contaminated):
+        return 2
 
     if a.rebuild_pool:
-        newpool = rebuild_pool(a.vault, pool)
-        write_json_atomic(a.rebuild_pool, newpool)
-        tot = sum(v["n_pool"] for v in newpool.values())
-        print(f"✓ 候選池重組好了:{len(newpool)} 題、共 {tot} 筆候選 → {a.rebuild_pool}")
-        for cid in sorted(newpool):
-            v = newpool[cid]
-            print(f"  {cid} {v['query']:<20} 池 {v['n_pool']:>3} 筆"
-                  f"(拆詞臂前10 {v['n_any']}、逐詞前3 {v['n_term']}、全詞同篇前10 {v['n_cooccur']})")
-        print("  接下來要標註:池裡每一筆都要判「對這個查詢有多相關」,"
-              "走既有的雙評審加人裁,標完才量得出分數。")
-        return 0
+        return do_rebuild(a.vault, pool, a.rebuild_pool)
 
     if not a.labels:
         print("ERROR: 量測要有標註檔,請帶 --labels(只想重組候選池就帶 --rebuild-pool)",
