@@ -249,6 +249,31 @@ def write_json_atomic(path, data):
         raise
 
 
+def load_inputs(vault, pool_path):
+    """驗語料路徑與題庫檔,過了回題庫、不過印原因回 None(呼叫端回退出碼 2)。
+
+    抽成獨立一支是因為新增告警閘判 main 太複雜(2026-09-15 推送前擋下);
+    這幾道檢查本來就是一組「進場前先驗輸入」,放在一起也比較好讀。
+    每一道的出身見 t_mw_bad_input_says_what_is_wrong 的說明。
+    """
+    vp = pathlib.Path(vault)
+    if not vp.is_dir():
+        print(f"ERROR: 語料目錄不存在或不是目錄:{vault}", file=sys.stderr)
+        return None
+    if not any(vp.rglob("*.md")):
+        print(f"ERROR: 語料目錄裡一篇筆記都沒有:{vault}——路徑是不是指錯了?", file=sys.stderr)
+        return None
+    try:
+        pool = json.loads(pathlib.Path(pool_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        print(f"ERROR: 題庫檔讀不進來({ex});要的是一份「題號→{{query, pool}}」的 JSON", file=sys.stderr)
+        return None
+    if not isinstance(pool, dict) or not pool:
+        print("ERROR: 題庫檔的形狀不對:要一份題號對應題目的 JSON 物件,而且不能是空的", file=sys.stderr)
+        return None
+    return pool
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", help="標註檔;量測時必填,只重組候選池時不用")
@@ -261,22 +286,8 @@ def main():
                     help="★明知有題目被污染仍要跑量測★:分數會含測不到東西的題,只在刻意重現舊結果時用")
     a = ap.parse_args()
 
-    # 語料路徑先驗(r1 邊界席:路徑打錯時什麼都撈不到,卻印「重組好了」而且退出碼 0)
-    vp = pathlib.Path(a.vault)
-    if not vp.is_dir():
-        print(f"ERROR: 語料目錄不存在或不是目錄:{a.vault}", file=sys.stderr)
-        return 2
-    if not any(vp.rglob("*.md")):
-        print(f"ERROR: 語料目錄裡一篇筆記都沒有:{a.vault}——路徑是不是指錯了?", file=sys.stderr)
-        return 2
-
-    try:
-        pool = json.loads(pathlib.Path(a.pool).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as ex:
-        print(f"ERROR: 題庫檔讀不進來({ex});要的是一份「題號→{{query, pool}}」的 JSON", file=sys.stderr)
-        return 2
-    if not isinstance(pool, dict) or not pool:
-        print(f"ERROR: 題庫檔的形狀不對:要一份題號對應題目的 JSON 物件,而且不能是空的", file=sys.stderr)
+    pool = load_inputs(a.vault, a.pool)
+    if pool is None:
         return 2
 
     # ★污染檢查,兩條路徑都擋★:查詢字面查得到,拆詞那一臂就不會啟動。
