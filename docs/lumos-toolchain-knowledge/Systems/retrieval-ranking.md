@@ -43,6 +43,7 @@ verified_by:
   - "[[Verification/2026-08-24_固定席降噪A層落地]]"
   - "[[Verification/2026-08-26_評測尺翻案落地]]"
   - "[[Verification/2026-09-12_推筆記認家落地]]"
+  - "[[Verification/2026-09-15_多詞題在主題庫量不到]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
