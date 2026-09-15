@@ -1,0 +1,773 @@
+diff --git a/governance/eval/retrieval_eval_multiword.py b/governance/eval/retrieval_eval_multiword.py
+index 9999185f..9a2bce6c 100644
+--- a/governance/eval/retrieval_eval_multiword.py
++++ b/governance/eval/retrieval_eval_multiword.py
+@@ -10,23 +10,27 @@
+ gate 的分母出現 0 而失義。★但計分函式一律從 retrieval_eval import,不另寫一份★
+ (2026-08-02 教訓:預檢與主迴圈兩份實作立刻就漂移了)。
+ 
+ ★誠實邊界(必讀)★:
+ - 候選池有一半來自 `--any` 自己的 top-10 → **pooling bias**:被它排前面的一定被標到,
+   而「更好的系統會找到、但它沒找到」的節點★可能不在池裡★,偽陰性量不到。
+   緩解=池的第三來源是「逐詞出現次數 top-3」,★不經 BM25F★,是獨立來源。仍不完全乾淨。
+ - IDCG 以「池內標到的最佳排列」為基準,故分數是★池內相對值★,不是絕對召回品質。
+ """
+ import argparse
++import hashlib
+ import json
++import os
+ import pathlib
++import random
+ import subprocess
++import tempfile
+ import sys
+ 
+ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+ from retrieval_eval import ndcg_at_k, mrr, precision_at_k  # noqa: E402  ★單一實作來源★
+ 
+ ROOT = pathlib.Path(__file__).resolve().parents[2]
+ LUMOS = ROOT / "scripts" / "lumos"
+ 
+ 
+ def search_files(vault, query, any_terms):
+@@ -45,78 +49,341 @@ def search_files(vault, query, any_terms):
+     args.append("--any" if any_terms else "--no-any")
+     r = subprocess.run(args, capture_output=True, text=True)
+     out = []
+     for ln in r.stdout.splitlines():
+         ln = ln.strip()
+         if ".md" in ln and ln.endswith(")"):
+             out.append(ln.rsplit(" (", 1)[0])
+     return out
+ 
+ 
++POOL_SALT = "lumos-mw-pool-v1"
++
++
++def load_labels(path):
++    """標註檔兩種格式都吃:扁平({節點: 分數})與含各評審意見({節點: {final, ...}})。
++
++    ★2026-09-15 修(Issues/多詞評測吃錯標註檔直接拋例外)★:原本只吃扁平那份,
++    餵含各評審意見那份會在算相關數時拿字典去跟數字比大小,直接拋 TypeError,
++    而訊息完全沒提到是檔案拿錯——同一個目錄裡兩份檔名只差一個字。
++    """
++    raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
++    # ★也吃「題庫外殼」那種形狀★:合併與寫回兩步沿用既有的標註工具,而那支要求檔案
++    # 有 labels / search / edit 三個鍵(search 與 edit 在這裡是空的——本題庫的題目存在
++    # 候選池檔裡)。沿用而不自己再寫一份,是因為那支帶著寫入鎖、原子寫入,以及
++    # 「還有人裁沒填就不准寫」那道閘;自己重寫一份等於把那三樣一起重寫。
++    if isinstance(raw, dict) and "labels" in raw and isinstance(raw["labels"], dict):
++        raw = raw["labels"]
++    out = {}
++    for cid, per_node in raw.items():
++        if not isinstance(per_node, dict):
++            print(f"ERROR: 標註檔 {path} 的 {cid} 不是「節點→分數」的對應,讀不下去", file=sys.stderr)
++            raise SystemExit(2)
++        flat = {}
++        for node, v in per_node.items():
++            if isinstance(v, dict):
++                if "final" not in v:
++                    print(f"ERROR: 標註檔 {path} 的 {cid} / {node} 是含各評審意見的格式,"
++                          f"但裡面沒有最終分那一欄,無法取用", file=sys.stderr)
++                    raise SystemExit(2)
++                v = v["final"]
++            if v is None:
++                continue          # 未裁決:當成沒標,不當 0 分
++            # 值的型別要驗(r1 邊界席:字串型分數會在算分深處拋 TypeError,訊息看不懂)
++            if isinstance(v, bool) or not isinstance(v, int):
++                print(f"ERROR: 標註檔 {path} 的 {cid} / {node} 分數是 {v!r},"
++                      f"要的是整數 0/1/2", file=sys.stderr)
++                raise SystemExit(2)
++            if v not in (0, 1, 2):
++                print(f"ERROR: 標註檔 {path} 的 {cid} / {node} 分數是 {v},"
++                      f"只接受 0(不相干)/1(有用)/2(必看)", file=sys.stderr)
++                raise SystemExit(2)
++            flat[node] = v
++        out[cid] = flat
++    return out
++
++
++def search_hits(vault, query, any_terms=False):
++    """回 {節點: 命中次數}——★語意完全由搜尋自己決定,這支不再自己判斷什麼算命中★。
++
++    2026-09-15 代碼審 r1 四席各自抓到同一個根因:原本這裡自己掃原始 Markdown
++    做 `q in txt`,而真正的搜尋做的是另一套。實測三處不一致,每一處都會讓結果錯:
++      ①搜尋不分大小寫,原本的比對分——大小寫不同的污染漏擋
++      ②搜尋預設排除程式碼區塊、行內程式碼與作廢節點,原本的比對全都算進去
++        ——只出現在範例指令裡的字串會被誤判成污染,而本工具的文件慣例正好
++        就是用程式碼區塊寫查詢範例
++      ③中文重疊命中:Python 的 count 對「哈哈哈」數「哈哈」只回 1,實際有兩處
++    所以改成問搜尋,不自己算。附帶好處是不必把整個語料讀進記憶體。
++    """
++    args = [sys.executable, str(LUMOS), "--vault", str(vault), "search", query, "--files-only",
++            "--any" if any_terms else "--no-any"]
++    r = subprocess.run(args, capture_output=True, text=True)
++    out = {}
++    for ln in r.stdout.splitlines():
++        ln = ln.strip()
++        if ".md" not in ln or not ln.endswith(")"):
++            continue
++        node, _, cnt = ln.rpartition(" (")
++        try:
++            out[node] = int(cnt[:-1])
++        except ValueError:
++            out[node] = 1
++    return out
++
++
++def contaminated(vault, pool):
++    """回 [(題號, 查詢, [搜尋撈得到這串片語的筆記])] ——查詢字面在語料裡查得到的題。
++
++    ★為什麼要檢查★(Issues/評測題目寫進圖譜就毀掉那一題):圖譜本身就是這套評測的
++    語料。查詢字串一旦寫進任何一篇筆記,「整串當片語查」那一臂就有命中,
++    拆詞那一臂便不觸發(它只在整串無命中時啟動),兩臂結果一模一樣、測不到
++    任何東西,而且不會有任何錯誤訊息。2026-09-15 查出十題裡三題已被污染,
++    其中兩題是被這套評測自己的設計文件寫進去的,壞了一個多月沒人發現。
++
++    ★判準就是搜尋自己的判準★:問它「這串片語查不查得到」,查得到就是污染。
++    """
++    bad = []
++    for cid in sorted(pool):
++        q = pool_query(pool, cid)
++        hits = sorted(search_hits(vault, q, any_terms=False))
++        if hits:
++            bad.append((cid, q, hits))
++    return bad
++
++
++def pool_query(pool, cid):
++    """取一題的查詢字串,形狀不對就講人話再結束(r1 邊界席:原本會拋 KeyError 看不懂)。"""
++    item = pool.get(cid)
++    if not isinstance(item, dict) or not isinstance(item.get("query"), str) or not item["query"].strip():
++        print(f"ERROR: 題庫裡 {cid} 這一題沒有可用的查詢字串,題庫檔壞了", file=sys.stderr)
++        raise SystemExit(2)
++    return item["query"]
++
++
++def rebuild_pool(vault, pool_old):
++    """重組候選池:三個來源聯集,其中兩個不經排序器。
++
++    來源一 拆詞那一臂的前 10——現行系統自己撈到的。
++    來源二 每個詞各自命中次數最多的前 3 篇——不經排序器,但命中判準問搜尋。
++    來源三 所有詞都命中的篇,依「命中次數最少的那個詞」取前 10——同樣不經排序器。
++           ★2026-09-15 新增★:前兩個來源合起來仍有一半來自現行系統,
++           更好的系統找得到而現行系統沒找到的節點不在池裡就永遠標不到,
++           量出來會讓新系統看起來更差(與本專案已踩過四次的拿不同批互比同一族)。
++
++    池的順序打散(固定亂數種子,同一份輸入每次結果一樣)——標註的人不該看到名次。
++    """
++    out = {}
++    for cid in sorted(pool_old):
++        q = pool_query(pool_old, cid)
++        terms = q.split()
++        if not terms:
++            print(f"ERROR: 題庫裡 {cid} 這一題的查詢拆不出任何詞,題庫檔壞了", file=sys.stderr)
++            raise SystemExit(2)
++        per_term = {t: search_hits(vault, t, any_terms=False) for t in terms}
++
++        s1 = list(search_hits(vault, q, any_terms=True))[:10]
++        s2 = []
++        for t in terms:
++            h = per_term[t]
++            s2 += [k for k, _ in sorted(h.items(), key=lambda kv: (-kv[1], kv[0]))[:3]]
++        s2 = list(dict.fromkeys(s2))
++        common = set.intersection(*[set(h) for h in per_term.values()]) if per_term else set()
++        s3 = [k for k, _ in sorted(((k, min(per_term[t].get(k, 0) for t in terms)) for k in common),
++                                   key=lambda kv: (-kv[1], kv[0]))[:10]]
++
++        pool = list(dict.fromkeys(s1 + s2 + s3))
++        rnd = random.Random(hashlib.sha256((q + POOL_SALT).encode("utf-8")).hexdigest())
++        rnd.shuffle(pool)
++        out[cid] = {"query": q, "pool": pool,
++                    "n_any": len(s1), "n_term": len(s2), "n_cooccur": len(s3),
++                    "n_pool": len(pool)}
++    return out
++
++
++def write_json_atomic(path, data):
++    """先寫暫存再換名,★暫存檔名不可預測、不跟著符號連結、換名保留原權限★。
++
++    2026-09-15 代碼審 r1(資安席實跑、架構對齊席、邊界席、外家席各自抓到):
++    原本用固定的「<輸出>.tmp」,三個後果都實測重現過——
++      ①資安席先把那個固定名字建成指向別的檔的符號連結,再跑一次重組:
++        受害檔被整個覆寫,而工具印的是成功
++      ②兩個行程同時寫同一個輸出:一方 os.replace 時暫存檔已被對方換走,拋
++        FileNotFoundError;另一方靜默獲勝,沒有任何訊息說前一份不見了
++      ③覆寫既有檔時權限被暫存檔的新建權限取代(實測 600 變 644)
++    這個 repo 已經為同一個反模式付過兩次學費(標註刷新那支、主程式那支),
++    兩處的正解都是不可預測的暫存名。這裡照做:用 mkstemp(O_EXCL、不跟連結),
++    並在目標檔已存在時把它的權限抄過來。
++    """
++    path = pathlib.Path(path)
++    if path.parent and not path.parent.is_dir():
++        print(f"ERROR: 輸出目錄不存在,寫不了 {path}", file=sys.stderr)
++        raise SystemExit(2)
++    mode = None
++    try:
++        mode = os.stat(path, follow_symlinks=False).st_mode & 0o777
++    except OSError:
++        pass
++    fd, tmp = tempfile.mkstemp(dir=str(path.parent or "."), prefix=path.name + ".", suffix=".tmp")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as fh:
++            json.dump(data, fh, ensure_ascii=False, indent=1)
++            fh.flush()
++            os.fsync(fh.fileno())
++        if mode is not None:
++            os.chmod(tmp, mode)
++        os.replace(tmp, path)
++    except BaseException:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++        raise
++
++
+ def main():
+     ap = argparse.ArgumentParser()
+-    ap.add_argument("--labels", required=True)
++    ap.add_argument("--labels", help="標註檔;量測時必填,只重組候選池時不用")
+     ap.add_argument("--pool", required=True)
+     ap.add_argument("--vault", required=True)
+     ap.add_argument("-k", type=int, default=5)
++    ap.add_argument("--rebuild-pool", metavar="出檔",
++                    help="重組候選池寫到這個檔,然後結束;★不量測、不碰標註★")
++    ap.add_argument("--allow-contaminated", action="store_true",
++                    help="★明知有題目被污染仍要跑量測★:分數會含測不到東西的題,只在刻意重現舊結果時用")
+     a = ap.parse_args()
+ 
+-    labels = json.loads(pathlib.Path(a.labels).read_text(encoding="utf-8"))
+-    pool = json.loads(pathlib.Path(a.pool).read_text(encoding="utf-8"))
++    # 語料路徑先驗(r1 邊界席:路徑打錯時什麼都撈不到,卻印「重組好了」而且退出碼 0)
++    vp = pathlib.Path(a.vault)
++    if not vp.is_dir():
++        print(f"ERROR: 語料目錄不存在或不是目錄:{a.vault}", file=sys.stderr)
++        return 2
++    if not any(vp.rglob("*.md")):
++        print(f"ERROR: 語料目錄裡一篇筆記都沒有:{a.vault}——路徑是不是指錯了?", file=sys.stderr)
++        return 2
++
++    try:
++        pool = json.loads(pathlib.Path(a.pool).read_text(encoding="utf-8"))
++    except (OSError, ValueError) as ex:
++        print(f"ERROR: 題庫檔讀不進來({ex});要的是一份「題號→{{query, pool}}」的 JSON", file=sys.stderr)
++        return 2
++    if not isinstance(pool, dict) or not pool:
++        print(f"ERROR: 題庫檔的形狀不對:要一份題號對應題目的 JSON 物件,而且不能是空的", file=sys.stderr)
++        return 2
++
++    # ★污染檢查,兩條路徑都擋★:查詢字面查得到,拆詞那一臂就不會啟動。
++    bad = contaminated(a.vault, pool)
++    if bad:
++        print("這幾題的查詢在語料裡查得到,拆詞那一臂不會啟動,兩臂會量出一樣的數字:",
++              file=sys.stderr)
++        for cid, q, hits in bad:
++            print(f"  {cid} 「{q}」 ← 查得到它的筆記:{', '.join(hits)}", file=sys.stderr)
++        print("  為什麼在意:那一題從此測不到任何東西,而且不會有錯誤訊息,"
++              "數字看起來正常、其實是兩臂相同。", file=sys.stderr)
++        print("  處置:把那幾篇筆記裡的查詢改成用斜線分隔(像「圖譜／同步／閘」),"
++              "查詢字面只留在題庫檔裡。", file=sys.stderr)
++        # ★量測路徑一樣要擋★(2026-09-15 r1 資安席與正確性席各自抓到):
++        # 原本只在重組時擋,量測時只印 stderr 就照算,把 stderr 丟掉就看不出來——
++        # 而量測正是產出治理數字的那條路,漏在這裡等於守衛沒有守到要守的東西。
++        if not a.allow_contaminated:
++            print("  ★這一輪不跑★:改乾淨再來;真的要拿污染的題跑(例如重現舊結果),"
++                  "明著加 --allow-contaminated。", file=sys.stderr)
++            return 2
++        print("  ⚠ 你用了 --allow-contaminated,以下分數含測不到東西的題,不得當成證據。",
++              file=sys.stderr)
++
++    if a.rebuild_pool:
++        newpool = rebuild_pool(a.vault, pool)
++        write_json_atomic(a.rebuild_pool, newpool)
++        tot = sum(v["n_pool"] for v in newpool.values())
++        print(f"✓ 候選池重組好了:{len(newpool)} 題、共 {tot} 筆候選 → {a.rebuild_pool}")
++        for cid in sorted(newpool):
++            v = newpool[cid]
++            print(f"  {cid} {v['query']:<20} 池 {v['n_pool']:>3} 筆"
++                  f"(拆詞臂前10 {v['n_any']}、逐詞前3 {v['n_term']}、全詞同篇前10 {v['n_cooccur']})")
++        print("  接下來要標註:池裡每一筆都要判「對這個查詢有多相關」,"
++              "走既有的雙評審加人裁,標完才量得出分數。")
++        return 0
++
++    if not a.labels:
++        print("ERROR: 量測要有標註檔,請帶 --labels(只想重組候選池就帶 --rebuild-pool)",
++              file=sys.stderr)
++        return 2
++    labels = load_labels(a.labels)
+     k = a.k
+ 
+     print(f"=== 中文多詞查詢的「0 筆回退」量測(整串查無 → 拆詞 OR 再查;語料釘 {a.vault}) ===")
+     print(f"  每行:題號 查詢 | 候選數 無回退→有回退 | 排序品質 nDCG@{k} 無→有 | 前 {k} 名對的比例 | 第一名的標註(2=必看/1=有用/0=不相干,★=第一名不相干)")
+     rows = []
+     for cid in sorted(pool):
+         q = pool[cid]["query"]
+         gold = labels.get(cid, {})
+         # ★IDCG 基準=該題全部金標(不是取回集自證)★——否則「什麼都沒回」零懲罰,
+         # 兩臂不在同一把尺(retrieval_eval 的 r1 panel s4 major 同一條)。
+         all_rels = list(gold.values())
+         n_rel = sum(1 for v in all_rels if v >= 1)
+ 
+         base = search_files(a.vault, q, any_terms=False)
+         fb = search_files(a.vault, q, any_terms=True)
+         base_lab = [gold.get(x, 0) for x in base]
+         fb_lab = [gold.get(x, 0) for x in fb]
++        # ★沒標過 ≠ 判過不相干★(r1 正確性席:兩者在算分時都變成 0,承諾的區分沒有實效)。
++        # 算分沿用 0(改成別的會讓這把尺跟姊妹工具不同口徑),但★把沒標過的數出來★,
++        # 下面會逐題印,並在整體結果標成弱證據——不讓它靜靜地被當成「判過不相干」。
++        n_unjudged = sum(1 for x in fb[:k] if x not in gold)
+ 
+         row = {
+             "cid": cid, "query": q, "n_rel": n_rel,
+             "base_n": len(base), "fb_n": len(fb),
+             "base_ndcg": round(ndcg_at_k(base_lab, k, all_rels), 4),
+             "fb_ndcg": round(ndcg_at_k(fb_lab, k, all_rels), 4),
+             "base_mrr": round(mrr(base_lab), 4), "fb_mrr": round(mrr(fb_lab), 4),
+             "base_p": round(precision_at_k(base_lab, k), 4),
+             "fb_p": round(precision_at_k(fb_lab, k), 4),
+             "top1": (fb[0] if fb else None),
+             "top1_label": (gold.get(fb[0], 0) if fb else None),
++            "n_unjudged": n_unjudged,
+         }
+         rows.append(row)
++        unj = f"  ★前{k}名有 {n_unjudged} 筆沒標過(當 0 分算,分數被低估)★" if n_unjudged else ""
+         flag = "★" if row["top1_label"] == 0 else " "
+         print(f"  {cid} {q:<20} 候選 {row['base_n']:>2}→{row['fb_n']:<3} "
+               f"nDCG@{k} {row['base_ndcg']:.3f}→{row['fb_ndcg']:.3f}  "
+-              f"P@{k} {row['fb_p']:.2f}  {flag}top1={row['top1_label']}")
++              f"P@{k} {row['fb_p']:.2f}  {flag}top1={row['top1_label']}{unj}")
+ 
+     n = len(rows)
+     def mac(key):
+         return round(sum(r[key] for r in rows) / n, 4) if n else 0.0
+     print()
+     print(f"整體({n} 題,原本整串查是 0 筆的那種):")
+     print(f"  排序品質 nDCG@{k}:無回退 {mac('base_ndcg')} → 有回退 {mac('fb_ndcg')}    ← 回退有沒有把對的撈回來、還排得前")
+     print(f"  第一個對的答案多靠前(MRR):{mac('base_mrr')} → {mac('fb_mrr')}  |  前 {k} 名對的比例:{mac('base_p')} → {mac('fb_p')}")
+     top1_good = sum(1 for r in rows if (r["top1_label"] or 0) >= 2)
+     top1_any = sum(1 for r in rows if (r["top1_label"] or 0) >= 1)
+     print(f"  第一名的品質:{top1_good}/{n} 題第一名就是必看、{top1_any}/{n} 題第一名至少有用(剩下的第一名是雜訊)")
+-    zero = [r["cid"] for r in rows if r["fb_ndcg"] == 0]
++    # ★訊息講錯過一次(2026-09-15)★:原本寫「回退了還是一篇都撈不到」,
++    # 但 nDCG 為 0 是「前幾名裡沒有標成相關的」,不是「沒有候選」——那幾題各有
++    # 三四百個候選。照原訊息會把「標註過期」誤判成「分詞救不了」,我自己就誤判了一次。
++    zero = [(r["cid"], r["fb_n"]) for r in rows if r["fb_ndcg"] == 0]
+     if zero:
+-        print(f"  ★回退了還是一篇都撈不到的題★: {zero}    ← 這些是拆詞也救不了的,要看分詞或同義詞")
++        print("  ★拆詞之後前幾名裡一個標成相關的都沒有的題★:")
++        # 迴圈變數不要叫 n(r1 正確性席:會遮蔽上面算平均用的題數;目前呼叫順序下
++        # 不影響輸出,但之後在這個迴圈後面再加統計就會靜默算錯分母)
++        for cid, n_cand in zero:
++            print(f"      {cid}(候選 {n_cand} 筆,不是沒撈到,是撈到的前幾名沒一個被標成相關)")
++        print("      可能是排序沒把對的推上來,★也可能是這些候選根本還沒標過★——"
++              "標註如果比語料舊,沒標的一律當 0 分,看起來就會像排序爛掉。先確認標註是不是最新的。")
++    tot_unj = sum(r["n_unjudged"] for r in rows)
++    if tot_unj:
++        print()
++        print(f"  ★弱證據★:計分視窗裡有 {tot_unj} 筆候選從來沒標過,算分時一律當 0 分。")
++        print("      「沒標過」跟「判過不相干」在分數上分不出來,所以上面的分數是★被低估的下限★,")
++        print("      不得拿來判「退步」。要有結論就先補標(把新撈上來的候選標完再跑一次)。")
+     print()
+     print("★誠實邊界★:候選池半數來自 --any 自己的 top-10(pooling bias),"
+           "「更好的系統會找到但它沒找到」的節點可能不在池裡;"
+           "第三來源(逐詞出現次數 top-3,不經 BM25F)是獨立來源但不完全乾淨。"
+           "分數為★池內相對值★,非絕對召回品質。")
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 53595d1a..0820205d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -41639,12 +41639,388 @@ def t_lint_snapshot_support_applied():
+     (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+     (root / "tool.config.js").write_text("// 設定\n", encoding="utf-8")
+     git("add", "-A"); git("commit", "-m", "base")
+     base = git("rev-parse", "HEAD").stdout.strip()
+     (root / "app.py").write_text("x = 1\nBAD = 2\n", encoding="utf-8")
+     git("add", "-A"); git("commit", "-m", "two")
+     v = m._lint_new_verdict(root, f"{base}..HEAD")
+     check("設定檔有被補進快照,工具才跑得起來", v["blocked"] is True and len(v["new"]) == 1,
+           f"status={v['status']} reason={v['reason'][:60]} undone={v['undone']}")
+ 
++
++def _mk_mw_fixture(query="斑馬 條紋 計數", contaminate=False, extra=0):
++    """見下方 _mk_mw_fixture_body;extra 會多建幾篇只含單一詞的筆記,
++    讓「逐詞前三」與「全詞同篇」兩個來源撈得到不同的東西(r1 測試品質席:
++    三來源聯集原本零覆蓋——把來源二三清空,四支測試照樣全綠)。"""
++    return _mk_mw_fixture_body(query, contaminate, extra)
++
++
++def _mk_mw_fixture_body(query="斑馬 條紋 計數", contaminate=False, extra=0):
++    """多詞評測的小夾具:一個 vault + 一份題庫。回 (vault, poolfile)。
++
++    contaminate=True 時把查詢字面寫進其中一篇筆記——重現「題目被寫進語料」那個坑。"""
++    import json as _json
++    root = Path(tempfile.mkdtemp(prefix="gctl-mw-"))
++    vault = root / "kg"
++    (vault / "Systems").mkdir(parents=True)
++    (vault / "Systems" / "A.md").write_text(
++        "---\ntype: system\nstatus: done\n---\n# A\n斑馬 很多。條紋 很密。計數 很難。\n",
++        encoding="utf-8")
++    (vault / "Systems" / "B.md").write_text(
++        "---\ntype: system\nstatus: done\n---\n# B\n斑馬 出沒。條紋 淺。\n", encoding="utf-8")
++    (vault / "Systems" / "C.md").write_text(
++        "---\ntype: system\nstatus: done\n---\n# C\n計數 方法。條紋 分析。斑馬 生態。\n",
++        encoding="utf-8")
++    # 只含單一詞的筆記:全詞同篇那個來源永遠撈不到它們,逐詞那個來源撈得到
++    for i in range(extra):
++        w = query.split()[i % len(query.split())]
++        (vault / "Systems" / f"only{i}.md").write_text(
++            "---\ntype: system\nstatus: done\n---\n# only%d\n" % i
++            + (w + " ") * (12 + i) + "\n", encoding="utf-8")
++    if contaminate:
++        f = vault / "Systems" / "D.md"
++        f.write_text("---\ntype: system\nstatus: done\n---\n# D\n這篇提到 " + query + " 這串。\n",
++                     encoding="utf-8")
++    poolfile = root / "pool.json"
++    poolfile.write_text(_json.dumps({"M01": {"query": query, "pool": []}}, ensure_ascii=False),
++                        encoding="utf-8")
++    return vault, poolfile
++
++
++def t_mw_queries_absent_from_vault():
++    """★真守衛★:多詞題庫裡每一題的查詢,都不准逐字出現在圖譜任何一篇筆記裡。
++
++    出身(Issues/評測題目寫進圖譜就毀掉那一題):圖譜本身就是這套評測的語料。
++    查詢字串一旦逐字寫進筆記,「整串當片語查」那一臂就有命中,「拆詞各查」那一臂
++    便不會啟動(它只在整串全庫零命中時觸發),於是兩臂量出一模一樣的數字,
++    ★而且不會有任何錯誤訊息★。2026-09-15 查出十題裡三題已被污染,其中兩題是
++    被這套評測自己的設計文件寫進去的——沒人是故意的,寫的人只是把題目記下來。
++
++    所以這條不能靠紀律,要靠這支測試:題庫一改、筆記一寫,都會在這裡翻紅。
++
++    翻紅釘:把任一題的查詢原樣貼進任一篇筆記 → 本條翻紅並印出是哪一篇。"""
++    _need_src("governance/eval/multiword/mw-pool.json", "docs/lumos-toolchain-knowledge")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    pool = _json.loads((repo / "governance" / "eval" / "multiword" / "mw-pool.json")
++                       .read_text(encoding="utf-8"))
++    vault = repo / "docs" / "lumos-toolchain-knowledge"
++    docs = {}
++    for f in vault.rglob("*.md"):
++        try:
++            docs[str(f.relative_to(vault))] = f.read_text(encoding="utf-8", errors="replace")
++        except OSError:
++            continue
++    check("題庫讀得到而且不是空的", len(pool) > 0, f"題數={len(pool)}")
++    check("圖譜讀得到而且不是空的", len(docs) > 20, f"篇數={len(docs)}")
++    dirty = []
++    for cid in sorted(pool):
++        q = pool[cid]["query"]
++        hits = sorted(n for n, txt in docs.items() if q in txt)
++        if hits:
++            dirty.append(f"{cid}「{q}」出現在 {', '.join(hits[:3])}")
++    check("★沒有任何一題的查詢逐字出現在圖譜裡★"
++          "(出現了就代表那一題的兩臂會量出一樣的數字、測不到東西)",
++          not dirty, "；".join(dirty))
++    print("  ✓ t_mw_queries_absent_from_vault")
++
++
++def t_mw_rebuild_pool_refuses_contamination():
++    """重組候選池時碰到被污染的題要擋下來,不是照組。
++
++    照組會產出一份「看起來正常、其實那題已經廢了」的池,而標註要花的是人的時間——
++    等標完才發現白標,成本比擋下來高得多。
++
++    翻紅釘:把 main() 裡「重組時不接受污染」那個 return 2 拿掉 → 第 3、4 條翻紅。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
++    q = "斑馬 條紋 計數"
++
++    vault, poolfile = _mk_mw_fixture(q, contaminate=False)
++    out = Path(vault).parent / "pool-new.json"
++    r = subprocess.run([sys.executable, str(script), "--pool", str(poolfile),
++                        "--vault", str(vault), "--rebuild-pool", str(out)],
++                       capture_output=True, text=True)
++    check("乾淨的題庫組得起來", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-400:]}")
++    check("組出來的檔真的有寫出去", out.exists(), str(out))
++
++    vault2, poolfile2 = _mk_mw_fixture(q, contaminate=True)
++    out2 = Path(vault2).parent / "pool-new.json"
++    r2 = subprocess.run([sys.executable, str(script), "--pool", str(poolfile2),
++                         "--vault", str(vault2), "--rebuild-pool", str(out2)],
++                        capture_output=True, text=True)
++    check("★查詢被寫進語料時,重組要擋下來(rc2)★", r2.returncode == 2,
++          f"rc={r2.returncode}\n{r2.stdout[-300:]}\n{r2.stderr[-400:]}")
++    check("★擋下來時要講出是哪一篇筆記污染的★,不然人不知道去改哪裡",
++          "D.md" in r2.stderr, r2.stderr[-500:])
++    check("擋下來就不准留下半份池檔", not out2.exists(), str(out2))
++    print("  ✓ t_mw_rebuild_pool_refuses_contamination")
++
++
++def t_mw_labels_accept_both_shapes():
++    """標註檔兩種格式都要吃,而且吃出同一份結果(Issues/多詞評測吃錯標註檔直接拋例外)。
++
++    同一個目錄裡兩份標註檔檔名只差一個字:一份扁平(節點→分數),一份含各評審意見
++    (節點→{最終分, 各席分})。原本只吃扁平那份,餵另一份會拿字典去跟數字比大小、
++    直接拋型別錯誤,而訊息完全沒提到是檔案拿錯。
++
++    翻紅釘:把 load_labels 裡取最終分那一段拿掉 → 第 2 條翻紅(拋例外)。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import json as _json
++    import importlib.util as _ilu
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    spec = _ilu.spec_from_file_location(
++        "_mw", repo / "governance" / "eval" / "retrieval_eval_multiword.py")
++    mod = _ilu.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    root = Path(tempfile.mkdtemp(prefix="gctl-mwlab-"))
++    flat = root / "flat.json"
++    nested = root / "nested.json"
++    flat.write_text(_json.dumps({"M01": {"Systems/A.md": 2, "Systems/B.md": 0}},
++                                ensure_ascii=False), encoding="utf-8")
++    nested.write_text(_json.dumps({"M01": {"Systems/A.md": {"final": 2, "claude": 2, "codex": 1},
++                                           "Systems/B.md": {"final": 0, "claude": 0, "codex": 0}}},
++                                  ensure_ascii=False), encoding="utf-8")
++    a = mod.load_labels(str(flat))
++    check("扁平格式讀得出來", a == {"M01": {"Systems/A.md": 2, "Systems/B.md": 0}}, repr(a))
++    b = mod.load_labels(str(nested))
++    check("★含各評審意見的格式也讀得出來,而且結果跟扁平一樣★", a == b, f"{a!r} vs {b!r}")
++    # 未裁決的那種要當「沒標」,不能當 0 分——0 分是「判過,不相干」,兩者不同
++    und = root / "und.json"
++    und.write_text(_json.dumps({"M01": {"Systems/A.md": {"final": None, "claude": 1}}},
++                               ensure_ascii=False), encoding="utf-8")
++    c = mod.load_labels(str(und))
++    check("★還沒裁決的不進標註★(當 0 分會讓沒判過的看起來像判過不相干)",
++          c == {"M01": {}}, repr(c))
++    # 合併與寫回沿用既有的標註工具,它產出的是「題庫外殼」那種形狀
++    wrap = root / "wrap.json"
++    wrap.write_text(_json.dumps({"search": [], "edit": [],
++                                 "labels": {"M01": {"Systems/A.md": {"final": 2}}}},
++                                ensure_ascii=False), encoding="utf-8")
++    # ★用 try 包住★:讀不懂時那支是直接結束整個程式(SystemExit),不包的話
++    # 這條一紅就會把整輪測試拖死,而不是乾淨地報一條紅(2026-09-15 翻紅釘時實測到)
++    try:
++        d = mod.load_labels(str(wrap))
++    except SystemExit as e:
++        d = f"讀不懂而直接結束:{e}"
++    check("★題庫外殼那種形狀也讀得出來★(不然沿用既有寫回工具的產出會讀不進來)",
++          d == {"M01": {"Systems/A.md": 2}}, repr(d))
++    print("  ✓ t_mw_labels_accept_both_shapes")
++
++
++def t_mw_pool_order_is_not_rank():
++    """候選池的順序要打散,而且同一份輸入每次都一樣。
++
++    池若照名次排,標註的人會先看到「系統認為最相關的」——標出來的答案就不再獨立於
++    被它驗證的那套排序(跟 [S8] 同一條錨定路徑,那條在另一支腳本上已經修過)。
++    可重現則是為了回溯:標註結果要對得回當初看的是哪一份順序。
++
++    翻紅釘:把 rebuild_pool 裡的 shuffle 拿掉 → 第 2 條翻紅(順序=名次序)。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
++    q = "斑馬 條紋 計數"
++    vault, poolfile = _mk_mw_fixture(q, contaminate=False, extra=8)   # r1 測試品質席:3 筆太少,洗牌可能剛好等於名次序
++    o1 = Path(vault).parent / "p1.json"
++    o2 = Path(vault).parent / "p2.json"
++    for o in (o1, o2):
++        r = subprocess.run([sys.executable, str(script), "--pool", str(poolfile),
++                            "--vault", str(vault), "--rebuild-pool", str(o)],
++                           capture_output=True, text=True)
++        check(f"組得起來({o.name})", r.returncode == 0, r.stderr[-300:])
++    p1 = _json.loads(o1.read_text(encoding="utf-8"))["M01"]["pool"]
++    p2 = _json.loads(o2.read_text(encoding="utf-8"))["M01"]["pool"]
++    # 名次序=拆詞那一臂自己回的順序
++    rank = mw_rank_order(script, vault, q)
++    check("夾具有撈到東西,不然這條測不到", len(p1) >= 3, f"池={p1}")
++    check("★池的順序不是名次序★", p1 != rank[:len(p1)], f"池={p1} 名次={rank}")
++    check("★同一份輸入跑兩次順序一樣★(標註要回溯得到當初看的是什麼)",
++          p1 == p2, f"{p1} vs {p2}")
++    check("兩次組出來的內容也一樣", sorted(p1) == sorted(p2), f"{sorted(p1)} vs {sorted(p2)}")
++    print("  ✓ t_mw_pool_order_is_not_rank")
++
++
++def mw_rank_order(script, vault, q):
++    """拆詞那一臂自己回的順序(給上面那條比對用)。"""
++    import importlib.util as _ilu
++    spec = _ilu.spec_from_file_location("_mw2", script)
++    mod = _ilu.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    return mod.search_files(str(vault), q, any_terms=True)
++
++
++
++def t_mw_pool_three_sources_all_contribute():
++    """三個來源各自都要真的貢獻候選,少一個要看得出來。
++
++    出身(2026-09-15 代碼審 r1 測試品質席):席位把來源二與來源三整個清空,
++    ★四支既有測試照樣全綠★——也就是這批改動的核心行為(三來源聯集,為的是
++    不要只標得到現行系統找得到的)完全沒有測試守著。
++
++    翻紅釘:把 rebuild_pool 裡逐詞那一段或全詞同篇那一段的結果改成空清單
++    → 對應的那條斷言翻紅。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
++    q = "斑馬 條紋 計數"
++    vault, poolfile = _mk_mw_fixture(q, contaminate=False, extra=14)  # 夠多才切得到「拆詞臂前十」的上限,聯集才看得出來
++    out = Path(vault).parent / "pool3.json"
++    r = subprocess.run([sys.executable, str(script), "--pool", str(poolfile),
++                        "--vault", str(vault), "--rebuild-pool", str(out)],
++                       capture_output=True, text=True)
++    check("組得起來", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-400:]}")
++    if r.returncode != 0:
++        print("  ✓ t_mw_pool_three_sources_all_contribute")
++        return
++    v = _json.loads(out.read_text(encoding="utf-8"))["M01"]
++    check("★逐詞那個來源有撈到東西★(它是不經排序器的獨立來源,空了等於只標得到現行系統找得到的)",
++          v["n_term"] > 0, _json.dumps(v, ensure_ascii=False))
++    check("★全詞同篇那個來源有撈到東西★", v["n_cooccur"] > 0, _json.dumps(v, ensure_ascii=False))
++    check("拆詞臂那個來源有撈到東西", v["n_any"] > 0, _json.dumps(v, ensure_ascii=False))
++    # ★這裡不能斷言「池比任一來源大」★:小語料裡拆詞臂本來就可能涵蓋全部,
++    # 那不是這段程式保證得了的性質(2026-09-15 寫這條時第一版就是這樣寫錯的)。
++    # 能保證的是聯集的上下界:不小於最大的單一來源、不大於三者相加。
++    check("池不小於最大的單一來源(聯集的下界)",
++          v["n_pool"] >= max(v["n_any"], v["n_term"], v["n_cooccur"]),
++          _json.dumps(v, ensure_ascii=False))
++    check("池不大於三個來源相加(聯集的上界;超過代表有重複沒去掉)",
++          v["n_pool"] <= v["n_any"] + v["n_term"] + v["n_cooccur"],
++          _json.dumps(v, ensure_ascii=False))
++    print("  ✓ t_mw_pool_three_sources_all_contribute")
++
++
++def t_mw_measure_path_also_blocks_contamination():
++    """量測那條路碰到污染也要擋,不是只印警告就照算。
++
++    出身(2026-09-15 代碼審 r1,資安席與正確性席各自抓到):原本只在重組候選池時
++    ★擋★,量測時只往 stderr 印一行就繼續算,把 stderr 丟掉就完全看不出來——
++    ★而量測正是產出治理數字的那條路★,守衛漏在這裡等於沒有守到要守的東西。
++
++    翻紅釘:把 main 裡量測路徑那個 return 2 拿掉 → 第 1、2 條翻紅。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
++    q = "斑馬 條紋 計數"
++    vault, poolfile = _mk_mw_fixture(q, contaminate=True)
++    pool = _json.loads(Path(poolfile).read_text(encoding="utf-8"))
++    pool["M01"]["pool"] = ["Systems/A.md", "Systems/B.md"]
++    Path(poolfile).write_text(_json.dumps(pool, ensure_ascii=False), encoding="utf-8")
++    labf = Path(vault).parent / "lab.json"
++    labf.write_text(_json.dumps({"M01": {"Systems/A.md": 2, "Systems/B.md": 0}},
++                                ensure_ascii=False), encoding="utf-8")
++    r = subprocess.run([sys.executable, str(script), "--labels", str(labf),
++                        "--pool", str(poolfile), "--vault", str(vault)],
++                       capture_output=True, text=True)
++    check("★量測路徑碰到污染要擋(rc2)★,不是印個警告就照算", r.returncode == 2,
++          f"rc={r.returncode}\n{r.stdout[-300:]}")
++    check("★把 stderr 丟掉之後,標準輸出裡不得出現看起來正常的分數★"
++          "(原本的洞就是這個:2>/dev/null 之後完全看不出有污染)",
++          "整體" not in r.stdout, r.stdout[-400:])
++    r2 = subprocess.run([sys.executable, str(script), "--labels", str(labf),
++                         "--pool", str(poolfile), "--vault", str(vault),
++                         "--allow-contaminated"], capture_output=True, text=True)
++    check("明著說要跑污染的題時跑得起來(留一條刻意重現舊結果的路)",
++          r2.returncode == 0, f"rc={r2.returncode}\n{r2.stderr[-300:]}")
++    check("而且要在訊息裡講明那些分數不得當證據",
++          "不得當成證據" in r2.stderr, r2.stderr[-300:])
++    print("  ✓ t_mw_measure_path_also_blocks_contamination")
++
++
++def t_mw_atomic_write_is_symlink_safe():
++    """寫檔的暫存名不可預測、不跟著符號連結走、換名保留原權限。
++
++    出身(2026-09-15 代碼審 r1,資安席實跑重現):原本用固定的「<輸出>.tmp」。
++    資安席先把那個固定名字建成指向別的檔的符號連結,再跑一次重組,
++    ★受害檔被整個覆寫,而工具印的是成功★。這個 repo 已經為同一個反模式
++    付過兩次學費(標註刷新那支、主程式那支),兩處的正解都是不可預測的暫存名。
++
++    翻紅釘:把 write_json_atomic 改回固定的 path.with_suffix(...+'.tmp')
++    → 第 2 條翻紅(受害檔被覆寫)。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import importlib.util as _ilu
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    spec = _ilu.spec_from_file_location(
++        "_mw3", repo / "governance" / "eval" / "retrieval_eval_multiword.py")
++    mod = _ilu.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    root = Path(tempfile.mkdtemp(prefix="gctl-mwatomic-"))
++    victim = root / "victim.txt"
++    victim.write_text("原本的內容不可以被動到", encoding="utf-8")
++    out = root / "out.json"
++    # 把「固定暫存名」那個位置先佔成指向受害者的符號連結
++    trap = root / "out.json.tmp"
++    try:
++        trap.symlink_to(victim)
++    except OSError:
++        print("  ✓ t_mw_atomic_write_is_symlink_safe(這個系統建不了符號連結,跳過)")
++        return
++    mod.write_json_atomic(str(out), {"a": 1})
++    check("正常寫得出去", out.is_file() and not out.is_symlink(), str(out))
++    check("★受害檔沒有被動到★(暫存名可預測時,這裡會被整個覆寫成 JSON)",
++          victim.read_text(encoding="utf-8") == "原本的內容不可以被動到",
++          victim.read_text(encoding="utf-8")[:80])
++    # 覆寫既有檔要保留原權限
++    out.chmod(0o600)
++    mod.write_json_atomic(str(out), {"a": 2})
++    check("★覆寫既有檔時保留原權限★(原本會被換成新建檔的權限,實測 600 變 644)",
++          (out.stat().st_mode & 0o777) == 0o600, oct(out.stat().st_mode & 0o777))
++    check("內容真的換新了", "2" in out.read_text(encoding="utf-8"), out.read_text(encoding="utf-8"))
++    print("  ✓ t_mw_atomic_write_is_symlink_safe")
++
++
++def t_mw_bad_input_says_what_is_wrong():
++    """壞掉的輸入要講人話,不是拋看不懂的例外、也不是安靜產出空東西。
++
++    出身(2026-09-15 代碼審 r1 邊界席,每一條都實跑重現過):
++      ①題庫某題缺查詢欄位 → 原本拋 KeyError
++      ②查詢只有空白 → 原本在取最小值時崩潰
++      ③標註值是字串 → 原本在算分深處拋 TypeError
++      ④語料路徑打錯 → ★原本印「重組好了」而且退出碼 0,0 筆候選★(最危險的一種)
++
++    翻紅釘:把 main 裡那幾道前置檢查各拿掉一道 → 對應那條翻紅。"""
++    _need_src("governance/eval/retrieval_eval_multiword.py")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
++    vault, poolfile = _mk_mw_fixture("斑馬 條紋 計數")
++    root = Path(vault).parent
++
++    def run(pool_obj=None, vault_path=None, labels_obj=None, rebuild=True):
++        pf = root / "p.json"
++        pf.write_text(_json.dumps(pool_obj if pool_obj is not None else
++                                  _json.loads(Path(poolfile).read_text(encoding="utf-8")),
++                                  ensure_ascii=False), encoding="utf-8")
++        args = [sys.executable, str(script), "--pool", str(pf),
++                "--vault", str(vault_path or vault)]
++        if rebuild:
++            args += ["--rebuild-pool", str(root / "o.json")]
++        else:
++            lf = root / "l.json"
++            lf.write_text(_json.dumps(labels_obj, ensure_ascii=False), encoding="utf-8")
++            args += ["--labels", str(lf)]
++        return subprocess.run(args, capture_output=True, text=True)
++
++    r = run(pool_obj={"M01": {"pool": []}})
++    check("★缺查詢欄位:要講人話不是拋看不懂的例外★",
++          r.returncode == 2 and "查詢字串" in (r.stderr + r.stdout),
++          f"rc={r.returncode}\n{r.stderr[-200:]}")
++    r = run(pool_obj={"M01": {"query": "   ", "pool": []}})
++    check("★查詢只有空白:要擋下來不是崩潰★",
++          r.returncode == 2 and "Traceback" not in r.stderr,
++          f"rc={r.returncode}\n{r.stderr[-200:]}")
++    r = run(vault_path=root / "沒這個目錄")
++    check("★語料路徑打錯:要擋下來★(原本印「重組好了」而且退出碼 0,是最危險的一種)",
++          r.returncode == 2 and "語料目錄" in r.stderr,
++          f"rc={r.returncode}\n{r.stdout[-200:]}{r.stderr[-200:]}")
++    r = run(rebuild=False, labels_obj={"M01": {"Systems/A.md": "2"}})
++    check("★標註值是字串:要講清楚哪一筆不對★",
++          r.returncode != 0 and "整數" in (r.stderr + r.stdout),
++          f"rc={r.returncode}\n{r.stderr[-200:]}")
++    print("  ✓ t_mw_bad_input_says_what_is_wrong")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

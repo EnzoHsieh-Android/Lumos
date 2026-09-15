@@ -41924,8 +41924,11 @@ def t_mw_measure_path_also_blocks_contamination():
                          "--allow-contaminated"], capture_output=True, text=True)
     check("明著說要跑污染的題時跑得起來(留一條刻意重現舊結果的路)",
           r2.returncode == 0, f"rc={r2.returncode}\n{r2.stderr[-300:]}")
-    check("而且要在訊息裡講明那些分數不得當證據",
-          "不得當成證據" in r2.stderr, r2.stderr[-300:])
+    # ★2026-09-15 r2 折入後改了位置★:那句警語從錯誤輸出搬到報告本體
+    # (資安席:只印在錯誤輸出的話,把錯誤輸出丟掉就跟乾淨結果一字不差)。
+    # 這條斷言跟著改成看標準輸出;細節由 t_mw_escape_hatch_cannot_reach_rebuild 守。
+    check("而且要在報告本體裡講明那些分數不得當證據",
+          "不得當成證據" in r2.stdout, r2.stdout[:300])
     print("  ✓ t_mw_measure_path_also_blocks_contamination")
 
 
@@ -42020,6 +42023,94 @@ def t_mw_bad_input_says_what_is_wrong():
           r.returncode != 0 and "整數" in (r.stderr + r.stdout),
           f"rc={r.returncode}\n{r.stderr[-200:]}")
     print("  ✓ t_mw_bad_input_says_what_is_wrong")
+
+
+
+def t_mw_escape_hatch_cannot_reach_rebuild():
+    """那個逃生旗標不得用在重組候選池,而且用在量測時要印在報告本體裡。
+
+    出身(2026-09-15 代碼審 r2):
+      ①折入驗收席實測——原本量測與重組共用同一道閘,加了旗標連重組都照組,
+        ★而且把造成污染的那篇筆記收進池裡★,等於把壞掉的題目烤進資料,
+        後面每一次量測都繼承。
+      ②資安席實測——用了旗標之後,標準輸出跟乾淨結果★一字不差★,警告只在
+        錯誤輸出;遇到擋就加旗標讓它變綠,事後從報告完全看不出來。
+
+    翻紅釘:把重組那道 return 2 拿掉 → 第 1、2 條翻紅;
+            把報告本體那句警語拿掉 → 第 4 條翻紅。"""
+    _need_src("governance/eval/retrieval_eval_multiword.py")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "retrieval_eval_multiword.py"
+    import json as _json
+    q = "斑馬 條紋 計數"
+    vault, poolfile = _mk_mw_fixture(q, contaminate=True)
+    out = Path(vault).parent / "bypass.json"
+    r = subprocess.run([sys.executable, str(script), "--pool", str(poolfile),
+                        "--vault", str(vault), "--rebuild-pool", str(out),
+                        "--allow-contaminated"], capture_output=True, text=True)
+    check("★逃生旗標不得讓重組通過★", r.returncode == 2,
+          f"rc={r.returncode}\n{r.stdout[-300:]}")
+    check("★擋下來就不准留下池檔★(留了就等於把壞掉的題目烤進資料)",
+          not out.exists(), str(out))
+    # 量測那條:旗標仍可用,但要印在報告本體
+    pool = _json.loads(Path(poolfile).read_text(encoding="utf-8"))
+    pool["M01"]["pool"] = ["Systems/A.md", "Systems/B.md"]
+    Path(poolfile).write_text(_json.dumps(pool, ensure_ascii=False), encoding="utf-8")
+    labf = Path(vault).parent / "lab2.json"
+    labf.write_text(_json.dumps({"M01": {"Systems/A.md": 2, "Systems/B.md": 0}},
+                                ensure_ascii=False), encoding="utf-8")
+    r2 = subprocess.run([sys.executable, str(script), "--labels", str(labf),
+                         "--pool", str(poolfile), "--vault", str(vault),
+                         "--allow-contaminated"], capture_output=True, text=True)
+    check("量測那條仍可用逃生旗標(要留一條重現舊結果的路)", r2.returncode == 0,
+          f"rc={r2.returncode}\n{r2.stderr[-300:]}")
+    check("★而且要印在報告本體裡★,不是只印在錯誤輸出"
+          "(把錯誤輸出丟掉就看不出來的話,這個旗標等於沒有痕跡)",
+          "不得當成證據" in r2.stdout, r2.stdout[:400])
+    check("報告本體要逐題列出受影響的是哪幾題", "M01" in r2.stdout, r2.stdout[:400])
+    print("  ✓ t_mw_escape_hatch_cannot_reach_rebuild")
+
+
+def t_mw_atomic_write_does_not_widen_perms():
+    """目標若是符號連結,不得把連結那組幾乎全開的權限抄到產出的檔上。
+
+    出身(2026-09-15 代碼審 r2 資安席實測):修 r1 那條時加了「覆寫既有檔要保留原權限」,
+    但讀權限用的是不解參照的方式——目標若是預先埋好的符號連結,讀到的是★連結自己★
+    那組裝飾性位元(某些系統固定回報全開),抄過來會讓產出的檔權限被放寬,
+    而且照印成功。內容沒有被寫穿(換名是整個替換、不解參照),被放寬的是權限。
+
+    翻紅釘:把「只有普通檔才抄權限」那個判斷拿掉 → 第 2 條翻紅。"""
+    _need_src("governance/eval/retrieval_eval_multiword.py")
+    import importlib.util as _ilu
+    import os as _os
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = _ilu.spec_from_file_location(
+        "_mw4", repo / "governance" / "eval" / "retrieval_eval_multiword.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    root = Path(tempfile.mkdtemp(prefix="gctl-mwperm-"))
+    victim = root / "victim.txt"
+    victim.write_text("受害者", encoding="utf-8")
+    victim.chmod(0o600)
+    out = root / "out.json"
+    try:
+        out.symlink_to(victim)          # 輸出路徑本身先被埋成符號連結
+    except OSError:
+        print("  ✓ t_mw_atomic_write_does_not_widen_perms(這個系統建不了符號連結,跳過)")
+        return
+    # ★斷言不能挑「全世界可寫」這個症狀★:符號連結的權限位元在不同系統回報不一樣
+    # (這台量到 0o755、另一種系統是 0o777),挑症狀的話在前者就永遠是綠的——
+    # 2026-09-15 第一版就是這樣寫的,翻紅釘當場顯示「拆了還綠」。
+    # 改成直接斷言「產出的檔沒有沿用連結那組位元」,跟平台無關。
+    link_mode = _os.lstat(out).st_mode & 0o777
+    mod.write_json_atomic(str(out), {"a": 1})
+    check("寫得出去而且把連結整個換成普通檔", out.is_file() and not out.is_symlink(), str(out))
+    got = out.stat().st_mode & 0o777
+    check("★產出的檔不得沿用符號連結那組權限★",
+          got != link_mode, f"連結={oct(link_mode)} 產出={oct(got)}")
+    check("受害檔的內容沒有被寫穿", victim.read_text(encoding="utf-8") == "受害者",
+          victim.read_text(encoding="utf-8")[:40])
+    print("  ✓ t_mw_atomic_write_does_not_widen_perms")
 
 
 if __name__ == "__main__":
