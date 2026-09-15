@@ -1,0 +1,142 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index a16bd596..f383f0c0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22993,20 +22993,43 @@ def _impact_load_config(repo_root):
+         if isinstance(depth_val, int) and not isinstance(depth_val, bool):
+             result["depth"] = depth_val
+         ttl_val = raw.get("ttl_min")
+         if isinstance(ttl_val, int) and not isinstance(ttl_val, bool):
+             result["ttl_min"] = ttl_val
+         return result
+     except Exception:
+         return dict(_DEFAULTS)
+ 
+ 
++def _sort_pins(pins, home_on):
++    """固定席排序的★唯一實作★:事故最前 → 家 → 其餘;★同鍵一律以節點名斷開★。
++
++    為什麼末項一定要有節點名(2026-09-15 實測根因):原本寫成
++    `r["node"] if r.get("home") else ""`——只有「家」那一類才拿節點名斷同分,
++    ★不是家的全部拿到空字串、完全同鍵★,順序就整個交給上游。而上游那個順序
++    ★本身不穩定★:同一份語料連跑三次,同分的 7 筆跑出三種排法。
++    stable sort 只保證同鍵者維持輸入序,輸入序會變就等於沒保證。
++
++    往下游的殺傷力:名次會抖 → 截前 k 的視窗邊緣換人 → 「這題有沒有未標」跟著變,
++    而那餵的是★不可逆★的尺切換判定(見 [[Issues/未標候選順序每次跑都不一樣]])。
++
++    ★改這裡就是改所有固定席的呈現順序★,不要在別處再寫一份。
++    """
++    out = list(pins)
++    if home_on:
++        out.sort(key=lambda r: (r["kind"] != "incident", not r.get("home", False),
++                                -r["score"] if r.get("home") else 0.0, r["node"]))
++    else:
++        out.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False), r["node"]))
++    return out
++
++
+ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False,
+                payload=None, preloaded=None):
+     """動手前算出哪些知識圖譜節點會被 code 改動波及。
+     rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
+     Task 7: 排序 + --json schema + 人讀輸出。
+     """
+     import json
+ 
+     # 1. 解析 repo root
+@@ -23263,28 +23286,21 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                                 "score": R, "L": round(L, 4), "hop": hop, "contract": contract})
+         # ★家★(推筆記認家 [S2]–[S5]):旋鈕開著時走「家」這條入口,旋鈕關掉照舊走 about 標記那一套。
+         # --incidents-only 快速路徑整段跳過。
+         _home_on = int(_impact_knob("LUMOS_IMPACT_HOME", 1))
+         if not incidents_only:
+             if _home_on:
+                 _impact_mark_home(env, results, lane_raw, rel_file, repo_root)
+             else:
+                 _impact_mark_about(env, results, rel_file)   # about_code 語意欄位(工具清單 #4):只標記、不動 pinned
+         # 分固定/非固定;非固定過閾+排序+補到 top_k
+-        pins = [r for r in results if r["pinned"]]
+-        # 固定席內 stable sort:事故永遠最前(std-r1 s1f10),其次家(旋鈕關掉時是 about 命中者),其餘保持三軸原序;
+-        # 家之間照分數高到低、同分照篇名([S3])
+-        if _home_on:
+-            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("home", False),
+-                                     -r["score"] if r.get("home") else 0, r["node"] if r.get("home") else ""))
+-        else:
+-            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))
++        pins = _sort_pins([r for r in results if r["pinned"]], _home_on)
+         free = [r for r in results if not r["pinned"]]
+         max_free = max((r["score"] for r in free), default=0.0)
+         thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.65) * max_free)
+         free = [r for r in free if r["score"] >= thresh]
+         free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
+         # 名額制(v1.1):單體檔洪水按排名剪尾——閾值管品質、名額管上限(gate 對齊 top_k+2=10);
+         # 剪的是 11 名以後,不動前 8 的視野(精度/必看召回不受影響)
+         # PPR 分量(檢索PPR邊權_計劃)已試已殺(2026-07-28 edit 卷 train 網格全負:
+         # baseline nDCG@8 0.9831 vs ppr w0.2/0.4/0.6=0.9817/0.9668/0.9598,b1 純 PPR 與
+         # b2 cochange 邊權同分=邊權零貢獻;free 池中位 3 席使 P@8 對重排零鑑別,裁決依 nDCG)。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 420138b4..d278e4c8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11719,20 +11719,59 @@ def t_impact_core_refs_leaf():
+     check("impact_core_refs: 葉的 no_expand is True",
+           leaf[0]["no_expand"] is True, f"leaf={leaf}")
+     check("impact_core_refs: 葉的 via == core_refs",
+           leaf[0].get("via") == "core_refs", f"leaf={leaf}")
+     check("impact_core_refs: 葉的 cross_repo is True",
+           leaf[0]["cross_repo"] is True, f"leaf={leaf}")
+ 
+ 
+ # ─── Task 7: 排序 + --json schema 輸出 + 人讀輸出 ─────────────────────────────
+ 
++def t_impact_pins_order_is_total():
++    """固定席的排序要是★全序★——同鍵者不得把順序交給上游(2026-09-15 實測根因)。
++
++    症狀:同一份題庫同一份語料連跑三次,有四題的候選順序跑出不同排法(名單完全相同)。
++    根因:固定席排序鍵寫成 `r["node"] if r.get("home") else ""`——★只有「家」那一類
++    才拿節點名斷開同分,不是家的全部拿到空字串★,於是那一批完全同鍵。註解寫「其餘保持
++    三軸原序」,但★上游那個原序本身不穩定★(實測同分 7 筆跑三次三種排法),
++    stable sort 只保證同鍵者維持輸入序,輸入序會變就等於沒保證。
++
++    往下游的殺傷力:名次會抖→截前 k 的視窗邊緣換人→「這題有沒有未標」跟著變,
++    而那餵的是★不可逆★的尺切換判定([[Issues/未標候選順序每次跑都不一樣]])。
++
++    翻紅釘:把排序鍵末項改回 `r["node"] if r.get("home") else ""` → 第 2 條翻紅。"""
++    import random as _rnd
++    m = _load_lumos_inproc()
++    # 造一批固定席:同 kind、同 home 旗標、同分——舊寫法下完全同鍵
++    base = [{"node": f"Systems/P{i:02d}.md", "pinned": True, "kind": "contract",
++             "score": 0.7, "home": False} for i in range(7)]
++    check("★排序有單一來源 _sort_pins★(兩處各寫一份=會無聲漂移)",
++          hasattr(m, "_sort_pins"), "產品端沒有具名實作,測試就只能自己算一遍=假守衛")
++    def _order(rows):   # ★問產品的唯一實作,不自己算★
++        return [r["node"] for r in m._sort_pins(list(rows), True)]
++    _perm = list(base); _rnd.Random(7).shuffle(_perm)
++    check("★前置★ 打亂後的輸入確實跟原本不同序(不然下一條空過)",
++          [r["node"] for r in _perm] != [r["node"] for r in base], "洗回原序了")
++    check("★餵順序不同的同一批固定席,排出來要一樣★",
++          _order(base) == _order(_perm),
++          f"原序排出:{_order(base)[:3]}\n打亂後排出:{_order(_perm)[:3]}")
++    check("排序不得增減候選(只換順序)", sorted(_order(base)) == sorted(r["node"] for r in base), "")
++    # 事故仍要最前、家仍要排在非家之前(不能為了全序把既有優先序弄丟)
++    mixed = [{"node": "Systems/Z.md", "pinned": True, "kind": "contract", "score": 0.9, "home": True},
++             {"node": "Systems/A.md", "pinned": True, "kind": "incident", "score": 0.1, "home": False},
++             {"node": "Systems/M.md", "pinned": True, "kind": "contract", "score": 0.5, "home": False}]
++    got = _order(mixed)
++    check("事故仍排最前", got[0] == "Systems/A.md", str(got))
++    check("家仍排在非家之前", got.index("Systems/Z.md") < got.index("Systems/M.md"), str(got))
++    print("  ✓ t_impact_pins_order_is_total")
++
++
+ def t_impact_json_schema_and_sort():
+     """Task 7: --json schema 欄位齊 + 合約節點排最前 + 空集回 rc0。
+ 
+     fixture:
+     - Systems/WithContract.md  含 ★INVARIANT★,body 引 `scripts/lumos` → 直接+有合約
+     - Systems/NoContract.md    無合約,body 引 `scripts/lumos` → 直接+無合約
+     - Systems/Indirect.md      related 指向 NoContract → 間接(hop1)
+     空集合:新建 empty_repo → 回 {direct:[], indirect:[]} rc0。
+     """
+     import json as _json

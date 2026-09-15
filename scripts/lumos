@@ -23000,6 +23000,37 @@ def _impact_load_config(repo_root):
         return dict(_DEFAULTS)
 
 
+def _impact_sort_pins(pins, home_on, score_all=False):
+    """固定席排序的★唯一實作★:事故最前 → 家 → 其餘;★同鍵一律以節點名斷開★。
+
+    為什麼末項一定要有節點名(2026-09-15 實測根因):原本寫成
+    `r["node"] if r.get("home") else ""`——只有「家」那一類才拿節點名斷同分,
+    ★不是家的全部拿到空字串、完全同鍵★,順序就整個交給上游。而上游那個順序
+    ★本身不穩定★:同一份語料連跑三次,同分的 7 筆跑出三種排法。
+    stable sort 只保證同鍵者維持輸入序,輸入序會變就等於沒保證。
+
+    往下游的殺傷力:名次會抖 → 截前 k 的視窗邊緣換人 → 「這題有沒有未標」跟著變,
+    而那餵的是★不可逆★的尺切換判定(見 [[Issues/未標候選順序每次跑都不一樣]])。
+
+    ★改這裡就是改所有固定席的呈現順序★,不要在別處再寫一份。
+
+    ★兩條分支都改了,不是只改旋鈕開著那條★(2026-09-15 邊界輸入席指出):
+    旋鈕關掉那條舊碼★完全不碰節點名★,這次也一併補上末項斷開。
+    理由:同一個偏序問題兩條都有,只修一條等於留一半;但要誠實記著
+    ★這比「修好同分順序」這個描述涵蓋的範圍更廣★——關掉旋鈕的路徑目前到不了,
+    所以沒有實測資料佐證那條分支改動後的行為,只有推理與單元測試。
+    """
+    out = list(pins)
+    if home_on:
+        out.sort(key=lambda r: (r["kind"] != "incident", not r.get("home", False),
+                                -r["score"] if (score_all or r.get("home")) else 0.0, r["node"]))
+    elif score_all:
+        out.sort(key=lambda r: (-r["score"], r["node"]))
+    else:
+        out.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False), r["node"]))
+    return out
+
+
 def cmd_impact(file, repo=None, depth=None, as_json=False,
                ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False,
                payload=None, preloaded=None):
@@ -23270,14 +23301,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             else:
                 _impact_mark_about(env, results, rel_file)   # about_code 語意欄位(工具清單 #4):只標記、不動 pinned
         # 分固定/非固定;非固定過閾+排序+補到 top_k
-        pins = [r for r in results if r["pinned"]]
-        # 固定席內 stable sort:事故永遠最前(std-r1 s1f10),其次家(旋鈕關掉時是 about 命中者),其餘保持三軸原序;
-        # 家之間照分數高到低、同分照篇名([S3])
-        if _home_on:
-            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("home", False),
-                                     -r["score"] if r.get("home") else 0, r["node"] if r.get("home") else ""))
-        else:
-            pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))
+        pins = _impact_sort_pins([r for r in results if r["pinned"]], _home_on)
         free = [r for r in results if not r["pinned"]]
         max_free = max((r["score"] for r in free), default=0.0)
         thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.65) * max_free)
@@ -23610,9 +23634,12 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     # 家的分數是它原本的相依分數(新增項為 0),照分數排會把「這批改動的管家」排到最後,
     # 而派工鏡頭只把前幾篇貼內容、其餘只列名——排錯等於白認。
     _home_on = int(_impact_knob("LUMOS_IMPACT_HOME", 1))
-    pins = sorted([v for v in merged.values() if v["pinned"]],
-                  key=(lambda v: (v["kind"] != "incident", not v.get("home", False), -v["score"], v["node"]))
-                  if _home_on else (lambda v: (-v["score"], v["node"])))
+    # ★跟逐檔那側共用同一支排序★(2026-09-15 code r1 正確性席:這裡原本自己手寫一份,
+    # 而註解卻寫著「跟逐檔那側同一套口徑」——實測餵同一批候選給兩份公式★順序相反★,
+    # 那句話是假宣稱)。差別用參數表達:這一側所有固定席都照分數排(家的分數是相依分數,
+    # 排錯等於白認家),逐檔那側只有家之間照分數。
+    pins = _impact_sort_pins([v for v in merged.values() if v["pinned"]], _home_on,
+                             score_all=True)
     free = sorted([v for v in merged.values() if not v["pinned"]],
                   key=lambda v: (-v["score"], v["node"]))[:int(top)]
     # 落成位置閉環(sync-check):預期受影響節點 ∩ 分支實際動過的圖譜節點——

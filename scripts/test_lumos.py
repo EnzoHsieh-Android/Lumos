@@ -11726,6 +11726,91 @@ def t_impact_core_refs_leaf():
 
 # ─── Task 7: 排序 + --json schema 輸出 + 人讀輸出 ─────────────────────────────
 
+def t_impact_pins_order_is_total():
+    """固定席的排序要是★全序★——同鍵者不得把順序交給上游(2026-09-15 實測根因)。
+
+    症狀:同一份題庫同一份語料連跑三次,有四題的候選順序跑出不同排法(名單完全相同)。
+    根因:固定席排序鍵寫成 `r["node"] if r.get("home") else ""`——★只有「家」那一類
+    才拿節點名斷開同分,不是家的全部拿到空字串★,於是那一批完全同鍵。註解寫「其餘保持
+    三軸原序」,但★上游那個原序本身不穩定★(實測同分 7 筆跑三次三種排法),
+    stable sort 只保證同鍵者維持輸入序,輸入序會變就等於沒保證。
+
+    往下游的殺傷力:名次會抖→截前 k 的視窗邊緣換人→「這題有沒有未標」跟著變,
+    而那餵的是★不可逆★的尺切換判定([[Issues/未標候選順序每次跑都不一樣]])。
+
+    翻紅釘:把排序鍵末項改回 `r["node"] if r.get("home") else ""` → 第 2 條翻紅。"""
+    import random as _rnd
+    m = _load_lumos_inproc()
+    # 造一批固定席:同 kind、同 home 旗標、同分——舊寫法下完全同鍵
+    base = [{"node": f"Systems/P{i:02d}.md", "pinned": True, "kind": "contract",
+             "score": 0.7, "home": False} for i in range(7)]
+    check("★排序有單一來源 _impact_sort_pins★(兩處各寫一份=會無聲漂移)",
+          hasattr(m, "_impact_sort_pins"), "產品端沒有具名實作,測試就只能自己算一遍=假守衛")
+    # ★光查名字在不在,查不到「是不是真的只有一份」★(2026-09-15 code r1 測試品質席:
+    #  被審那個提交裡另一個入口早就自己另寫了一份,而這條檢查對它毫無偵測力)。
+    #  改成數:對固定席排序的地方只准有一處(就是唯一實作自己),其餘一律呼叫它。
+    import inspect as _insp
+    _src = _insp.getsource(m).split("\n")
+    _pin_sorts = [i for i, l in enumerate(_src)
+                  if 'if v["pinned"]' in l or 'if r["pinned"]' in l]
+    _bad = []
+    for _i in _pin_sorts:
+        _seg = "\n".join(_src[_i:_i + 4])
+        if "_impact_sort_pins" not in _seg and "sort" in _seg.lower():
+            _bad.append(_src[_i].strip()[:70])
+    check("★固定席排序只准有一處實作,其餘要呼叫它★",
+          not _bad, f"這幾處自己排了固定席、沒走唯一實作:{_bad}")
+    def _order(rows):   # ★問產品的唯一實作,不自己算★
+        return [r["node"] for r in m._impact_sort_pins(list(rows), True)]
+    _perm = list(base); _rnd.Random(7).shuffle(_perm)
+    check("★前置★ 打亂後的輸入確實跟原本不同序(不然下一條空過)",
+          [r["node"] for r in _perm] != [r["node"] for r in base], "洗回原序了")
+    check("★餵順序不同的同一批固定席,排出來要一樣★",
+          _order(base) == _order(_perm),
+          f"原序排出:{_order(base)[:3]}\n打亂後排出:{_order(_perm)[:3]}")
+    check("排序不得增減候選(只換順序)", sorted(_order(base)) == sorted(r["node"] for r in base), "")
+    # 事故仍要最前、家仍要排在非家之前(不能為了全序把既有優先序弄丟)
+    # ★家的分數要用 0★(2026-09-15 code r1 測試品質席:原本給 0.9,光靠分數那個鍵就
+    #  足以把家排到前面,真正負責這條規則的鍵★完全沒被用到★——把它拔掉測試照樣全綠)。
+    #  而分數 0 的家是★常態不是邊角★:產品端新確認的家「還不是候選的 → 新增一項,
+    #  種類 home、分數 0」(scripts/lumos:22827),所以夾具要用 0 才是真實形狀。
+    mixed = [{"node": "Systems/Z.md", "pinned": True, "kind": "contract", "score": 0.0, "home": True},
+             {"node": "Systems/A.md", "pinned": True, "kind": "incident", "score": 0.1, "home": False},
+             {"node": "Systems/M.md", "pinned": True, "kind": "contract", "score": 0.5, "home": False}]
+    got = _order(mixed)
+    check("事故仍排最前", got[0] == "Systems/A.md", str(got))
+    check("家仍排在非家之前", got.index("Systems/Z.md") < got.index("Systems/M.md"), str(got))
+    # ★四條路徑都要守★(2026-09-15 code r1 正確性席:原本只驗旗標開著那條,
+    #  拆掉關閉那條的修復照樣全綠;而折入時又多了一個 score_all 參數,等於再多兩條)
+    _mixed = [{"node": "Systems/Z.md", "pinned": True, "kind": "contract", "score": 0.9,
+               "home": False, "about_hit": False},
+              {"node": "Systems/A.md", "pinned": True, "kind": "contract", "score": 0.1,
+               "home": False, "about_hit": False},
+              {"node": "Systems/M.md", "pinned": True, "kind": "contract", "score": 0.5,
+               "home": False, "about_hit": False}]
+    def _p(rows, home_on, score_all=False):
+        return [r["node"] for r in m._impact_sort_pins(list(rows), home_on, score_all=score_all)]
+    # ★同分才暴露得出「缺篇名斷開」★:分數各不相同的資料任何寫法都排得穩,
+    #  第一版就是這樣讓一條變異沒翻紅的(假守衛)。再加一組同分的餵同樣四條路徑。
+    _tie = [{"node": f"Systems/T{i}.md", "pinned": True, "kind": "contract",
+             "score": 0.5, "home": False, "about_hit": False} for i in range(5)]
+    _perm2 = list(_mixed); _rnd.Random(3).shuffle(_perm2)
+    _permT = list(_tie); _rnd.Random(5).shuffle(_permT)
+    for _tag, _ho, _sa in (("旗標開", 1, False), ("旗標關", 0, False),
+                           ("旗標開+全照分數", 1, True), ("旗標關+全照分數", 0, True)):
+        check(f"★{_tag}:餵打亂的同一批也要排出一樣★",
+              _p(_mixed, _ho, _sa) == _p(_perm2, _ho, _sa),
+              f"原序{_p(_mixed, _ho, _sa)[:3]} 打亂後{_p(_perm2, _ho, _sa)[:3]}")
+        check(f"★{_tag}:★同分★的那批打亂後也要排出一樣★(這條才驗得到缺篇名斷開)",
+              _p(_tie, _ho, _sa) == _p(_permT, _ho, _sa),
+              f"原序{_p(_tie, _ho, _sa)[:3]} 打亂後{_p(_permT, _ho, _sa)[:3]}")
+    check("★全照分數那條真的照分數★(diff 那側要的;壓成字母序就等於把兩側行為併成一種)",
+          _p(_mixed, 1, True) == ["Systems/Z.md", "Systems/M.md", "Systems/A.md"], str(_p(_mixed, 1, True)))
+    check("★不全照分數那條照篇名★(逐檔那側要的)",
+          _p(_mixed, 1, False) == ["Systems/A.md", "Systems/M.md", "Systems/Z.md"], str(_p(_mixed, 1, False)))
+    print("  ✓ t_impact_pins_order_is_total")
+
+
 def t_impact_json_schema_and_sort():
     """Task 7: --json schema 欄位齊 + 合約節點排最前 + 空集回 rc0。
 
