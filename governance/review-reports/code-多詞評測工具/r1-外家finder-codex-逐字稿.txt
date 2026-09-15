@@ -1,0 +1,39 @@
+===BEGIN_REPORT===
+severity: major
+
+1. 污染守衛與實際搜尋不是同一種比對，會同時漏擋與誤擋。守衛直接對原始全文做區分大小寫的 `q in txt`；實際搜尋則先 NFC、轉小寫，並排除 fenced code、inline code 與作廢節點。因此大小寫不同的污染會漏過，讓兩臂靜默相同；只出現在程式碼區塊或作廢筆記的字串反而會阻止合法重組。實際搜尋語意見 `scripts/lumos:3019`、`scripts/lumos:3034`、`scripts/lumos:3102`、`scripts/lumos:3108`。
+
+引句:「hits = sorted(n for n, txt in docs.items() if q in txt)」
+
+severity: major
+blocking: 是
+
+2. 兩個獨立候選來源掃的是原始 Markdown，而非搜尋真正可見且有效的語料。它們會把 fenced code、inline code、frontmatter，甚至已作廢節點算進候選池；其中被標為相關但搜尋永遠不會返回的節點仍會進 IDCG，系統分數會被不可能召回的答案壓低。實際搜尋會排除這些內容，見 `scripts/lumos:3019`、`scripts/lumos:3102`、`scripts/lumos:3108`。
+
+引句:「c = {k: v.count(term) for k, v in docs.items()}」
+
+severity: major
+blocking: 是
+
+3. 中文出現次數用 `str.count`，重疊命中會被少算。例如 `哈哈哈`.count(`哈哈`) 只回 1，但字面其實在位置 0、1 出現兩次。這會直接改變逐詞前三與三詞同篇前十的排序和入池名單，讓宣稱獨立於排序器的候選來源漏掉高頻文件。
+
+引句:「cs = [v.count(t) for t in terms]」
+
+severity: major
+blocking: 是
+
+4. 所謂原子寫入共用固定的 `<輸出>.tmp`。兩個重組程序同時寫同一路徑時會互相截斷或覆寫暫存檔；其中一方換名後，另一方還可能因暫存檔消失而失敗。除此之外，替換既有檔案會把原權限換成依目前 umask 新建的暫存檔權限。目的檔的單次換名雖然原子，但整個寫入協議不具併發安全性，也不保留權限。
+
+引句:「tmp = path.with_suffix(path.suffix + ".tmp")」
+
+severity: major
+blocking: 是
+
+5. 「約一萬六千次字串掃描」低估至少一倍。每題三個詞時，逐詞來源做 `3 × 528` 次 `count`，同篇來源再做 `3 × 528` 次，十題光這兩段就是 31,680 次；另有污染掃描及十次獨立啟動的 `lumos search` 全庫搜尋。唯讀實跑目前 528 篇、5.53 MiB，重組在寫檔權限失敗前已耗時約 9.44 秒，並非表態暗示的輕量 16,000 次掃描。
+
+引句:「來源三 三個詞全都出現在同一篇、依最少的那個詞出現幾次取前 10」
+
+severity: minor
+blocking: 否
+===END_REPORT===
+codex rc=0
