@@ -27346,6 +27346,160 @@ def t_refresh_delta():
     check("goldset 缺=rc2", r2.returncode == 2, str(r2.returncode))
 
 
+def t_delta_sheet_is_shuffled():
+    """[S8] 未標清單端給標註者之前要洗牌(Projects/評測尺修復_計劃)。
+
+    出身:建題庫那支腳本早就在洗(`rnd.shuffle(pool)` 兩處),但增量補標這支
+    ★原樣沿用未標判定回傳的有序清單★——而那個順序就是現行排序的名次。
+    把「系統認為誰該排前面」先告訴標註者,標出來的答案就不再獨立於被它驗證的排序,
+    而那些答案正是不可逆尺切換的依據(2026-09-15 代碼審資安席獨立再撞到一次)。
+
+    ★洗牌要可重現★:同一份題庫跑兩次順序必須一樣,否則標註結果回溯不到當初看的是什麼。
+
+    翻紅釘(條號為實測值,2026-09-15 測試品質席逐條核對):把 cmd_delta 的洗牌整段拆光
+    → ★第 1、4 條★翻紅(「順序不是名次序」與「上游被打亂時輸出仍一樣」);
+    「同一份題庫跑兩次一樣」那條仍是綠的,因為不洗牌本來就穩定。
+    ★原本寫第 1、2 條是錯的★——這種「憑推想寫翻紅釘」的錯,同一批工作已經犯第三次。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root, gs = _mk_eval_fixture()
+    # 造一題有 12 個未標候選,名次序就是 N00..N11;候選夠多才看得出洗牌
+    kg = root / "docs" / "kg-knowledge" / "Systems"
+    names = [f"N{i:02d}.md" for i in range(12)]
+    for n in names:
+        (kg / n).write_text("---\ntype: system\nstatus: done\n---\n# " + n[:-3]
+                            + "\nzebrafish 測試節點。\n", encoding="utf-8")
+    gs["labels"].setdefault("S01", {})
+    gpath = root / "goldset-shuffle.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    _rlpath = repo / "governance" / "eval" / "refresh_labels.py"
+    def _run(out):
+        r = subprocess.run([sys.executable, str(_rlpath),
+                            "delta", "--goldset", str(gpath), "--repo", str(root),
+                            "--json", "--out", str(out)], capture_output=True, text=True)
+        assert r.returncode == 0, f"delta 沒跑起來:{r.stderr[-300:]}"
+        d = _json.loads((Path(str(out) + ".json")).read_text(encoding="utf-8"))
+        return {c["id"]: c["unjudged"] for c in d["cases"]}
+    first = _run(root / "d1")
+    second = _run(root / "d2")
+    # 找一個候選數 ≥4 的案例來比對(太少的話洗不洗都可能同序)
+    cid = next((k for k, v in first.items() if len(v) >= 4), None)
+    check("★前置★ 有候選數夠多的案例可驗(不然這支測試等於空過)", cid is not None,
+          f"各案例候選數:{ {k: len(v) for k, v in first.items()} }")
+    if cid is None:
+        print("  ✓ t_delta_sheet_is_shuffled")
+        return
+    _m = _load_retrieval_eval(root)   # 本檔既有的共用夾具輔助,不自己重寫載入樣板
+    ranked = _m.collect_unjudged(gs)["per_case"].get(cid, [])
+    check("★端出去的順序不是名次序★(名次序=先告訴標註者系統認為誰該排前面)",
+          list(first[cid]) != list(ranked) or len(ranked) < 4,
+          f"洗過:{first[cid][:5]}\n名次:{list(ranked)[:5]}")
+    check("★同一份題庫跑兩次順序一樣★(不可重現的話標註結果回溯不到當初看的是什麼)",
+          first[cid] == second[cid], f"第一次:{first[cid][:5]}\n第二次:{second[cid][:5]}")
+    check("洗牌不得增減候選(只換順序)", sorted(first[cid]) == sorted(ranked),
+          f"洗過 {len(first[cid])} 個、名次 {len(ranked)} 個")
+    # ★上游順序不穩定時也要洗得出同一個結果★(2026-09-15 真實資料上實測踩到:
+    #  同一份題庫同一份語料連跑三次,有四題的候選順序跑出不同排法;直接洗不穩定的輸入
+    #  等於同種子也洗不出同結果,「可重現」是假的)。夾具的順序是穩的,所以這條要
+    #  ★自己把輸入打亂再餵★,不然測試會在夾具上空過、真實資料上才爆。
+    # ★驗產品真的先正規化再洗,不是測試自己算一遍★(前一版就是這樣空過的:
+    #  把產品端的 sorted 拿掉,測試照樣全綠)。做法=匯入那支腳本、換掉它拿未標清單的入口,
+    #  讓上游回傳「同一批候選但順序被打亂」,再跑一次真的 delta,看吐出來的表一不一樣。
+    import importlib.util as _iu, random as _rnd
+    _spec = _iu.spec_from_file_location("_rl_probe", _rlpath)
+    _rl = _iu.module_from_spec(_spec); _spec.loader.exec_module(_rl)
+    _orig_load = _rl._load_re
+    def _load_shuffled():
+        _mm = _orig_load()
+        _oc = _mm.collect_unjudged
+        def _spy(_gs, split=None, k=8):
+            _u = _oc(_gs, split, k=k)
+            for _c in _u["per_case"]:
+                _l = list(_u["per_case"][_c]); _rnd.Random(99).shuffle(_l)
+                _u["per_case"][_c] = _l
+            return _u
+        _mm.collect_unjudged = _spy
+        return _mm
+    # ★為什麼一定要到這一層★(2026-09-15 架構對齊席指出這比既有白箱前例深一層):
+    # 要驗的行為是「產品拿到★順序不穩定★的上游時,吐出來的表仍然一樣」,
+    # 所以非得讓上游回傳打亂過的順序不可;而上游是子行程內部才載入的,
+    # 走 CLI 注入不進去。既有前例(t_refresh_atomic_and_lock)同樣是匯入模組換掉裡面的東西,
+    # 形狀一致——差別只在那支換的是私有小函式、這支換的是模組級輔助。
+    # ★照前例補上 finally 還原★,不讓替身洩漏到同一行程的其他測試。
+    _rl._load_re = _load_shuffled
+    import types as _types   # 用本檔既有慣例造 args(參數解析包在 main 裡,沒有獨立入口可借)
+    _args = _types.SimpleNamespace(goldset=str(gpath), repo=str(root), snapshot=None,
+                                   split=None, json=True, out=str(root / "d3"))
+    import io as _io, contextlib as _cl
+    try:
+        with _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
+            _rc = _rl.cmd_delta(_args)
+    finally:
+        _rl._load_re = _orig_load
+    check("★前置★ 上游被換掉之後 delta 仍跑得起來(跑不起來=下一條驗不到)", _rc == 0, f"rc={_rc}")
+    _p3 = Path(str(root / "d3") + ".json")
+    check("★前置★ 探針有產出檔", _p3.exists(), str(_p3))
+    if _rc == 0 and _p3.exists():
+        third = {c["id"]: c["unjudged"] for c in _json.loads(_p3.read_text(encoding="utf-8"))["cases"]}
+        check("★上游順序被打亂時吐出來的表仍要一樣★(產品端要先正規化再洗,不是直接洗)",
+              third.get(cid) == first[cid],
+              f"原本:{first[cid][:3]}\n上游打亂後:{third.get(cid, [])[:3]}")
+    print("  ✓ t_delta_sheet_is_shuffled")
+
+
+def t_rater_material_has_no_labels():
+    """[S13] 評審拿到的材料不得含既有答案(Projects/評測尺修復_計劃;實跑逃逸 2026-09-15)。
+
+    出身:派工詞叫評審去讀題庫檔取查詢字串,★但那個檔裡同時就存著既有標註答案★——
+    某席實跑時自陳「初讀題庫時意外顯示部分既有 labels」,治理帳已記一筆逃逸。
+    這跟 [S8] 的名次洩漏是★兩條不同的錨定路徑★,補了一條不等於補了另一條。
+
+    修法=產一份只含題目、不含任何標註的材料檔給評審讀。
+    翻紅釘:讓材料檔改成直接複製整份題庫 → 第 2、3 條翻紅(答案跟著跑進去)。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root, gs = _mk_eval_fixture()
+    # 夾具的答案要夠特別,才驗得出「有沒有漏進材料」
+    gs["labels"]["S01"]["Systems/Beta.md"] = {"final": 2, "claude": 2, "codex": 1}
+    gpath = root / "goldset-mat.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    out = root / "material.md"
+    r = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
+                        "material", "--goldset", str(gpath), "--out", str(out)],
+                       capture_output=True, text=True)
+    check("material 子命令跑得起來", r.returncode == 0, r.stderr[-400:])
+    if r.returncode != 0:
+        print("  ✓ t_rater_material_has_no_labels")
+        return
+    txt = out.read_text(encoding="utf-8")
+    check("★材料裡找不到任何標註欄位名★(final/claude/codex 都是答案欄)",
+          not any(w in txt for w in ("final", '"claude"', '"codex"', "labels")),
+          txt[:400])
+    check("★材料裡找不到既有答案的節點路徑★(有答案的節點名本身就是提示)",
+          "Systems/Beta.md" not in txt, txt[:400])
+    check("題目本身要在(不然材料沒用)", "zebrafish" in txt and "S01" in txt, txt[:300])
+    check("編輯題的檔名也要在", "src/app.py" in txt, txt[:400])
+    # ★答案也可能從編輯題的「改動片段」流進來★(2026-09-15 外家席 blocker):
+    # 那個欄位是★原封不動抄來的程式片段★,而這個 repo 的註解到處寫節點路徑;
+    # 現況題庫剛好零命中,但那是運氣不是守衛——防線要擋在輸出端。
+    gs2 = _json.loads(gpath.read_text(encoding="utf-8"))
+    gs2["edit"][0]["delta"] = "# 見 Systems/Beta.md 的說明;另參 Projects/Gamma.md"
+    gpath.write_text(_json.dumps(gs2, ensure_ascii=False), encoding="utf-8")
+    out2 = root / "material2.md"
+    r2 = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
+                         "material", "--goldset", str(gpath), "--out", str(out2)],
+                        capture_output=True, text=True)
+    check("改動片段帶節點路徑時 material 仍跑得起來", r2.returncode == 0, r2.stderr[-300:])
+    txt2 = out2.read_text(encoding="utf-8") if out2.exists() else ""
+    check("★改動片段裡的節點路徑不得原樣印出★(有答案的節點名本身就是提示)",
+          "Systems/Beta.md" not in txt2 and "Projects/Gamma.md" not in txt2, txt2[:400])
+    check("擋掉路徑之後,那一題本身還在(不是整題消失)",
+          "E01" in txt2, txt2[:300])
+    print("  ✓ t_rater_material_has_no_labels")
+
+
 def t_refresh_repin():
     """T4:repin 機械閘——未標>0 rc1 且 goldset 逐位元不變;全判後 rc0 僅 snapshot_commit 變;壞輸入 rc2。"""
     _need_src("governance/eval")
@@ -27359,7 +27513,13 @@ def t_refresh_repin():
     r = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
                         "--repo", str(root)], capture_output=True, text=True)
     check("未標>0 → rc1 硬擋", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
-    check("rc1 吐 delta 清單(Gamma 在 stderr)", "Projects/Gamma.md" in r.stderr, r.stderr[-400:])
+    # ★2026-09-15 翻掉這條舊斷言★(外家席指出這是第三條洩漏路徑):原本要求失敗訊息
+    # ★逐筆印出候選★,而那順序就是現行排序的名次——只要標註者看得到這段診斷輸出,
+    # 待標清單洗牌就前功盡棄。現在改成「給數量與去哪拿洗過的清單,但不列候選」。
+    check("★rc1 不得逐筆印出候選★(那順序就是名次,等於繞過洗牌)",
+          "Projects/Gamma.md" not in r.stderr, r.stderr[-400:])
+    check("rc1 仍要講得出還差幾筆(不能只說失敗)", "未標" in r.stderr, r.stderr[-400:])
+    check("rc1 要指路去拿洗過順序的清單", "delta" in r.stderr, r.stderr[-400:])
     check("rc1 時 goldset 逐位元不變", gpath.read_bytes() == before, "")
     # 補齊全部未標(用 delta --json 取清單,照單全判 0)
     out = root / "d2"

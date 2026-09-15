@@ -3,6 +3,9 @@
 
 子命令:
   delta   對目標語料算評測母體、diff labels → 未標清單+delta 標註表(觀測,恆 rc0;輸入壞 rc2)
+          ★清單端出去之前先排序再洗牌★,不然順序就是現行排序的名次([S8] 評測尺修復)
+  material 給評審讀的題目卷:★只有題目、沒有任何標註★(rc0;輸入壞 rc2)。派工詞要指這份,
+          不要叫評審去開題庫檔——那個檔裡同時存著既有答案([S13],實跑逃逸過一次)
   repin   評測母體 unjudged==0 才寫 snapshot_commit(rc0=已重釘/rc1=有未標硬擋/rc2=輸入壞)
   merge   雙評審輸出合併:一致(同值)→agreed;不一致→disputed;B 席缺→degraded 全 disputed
   apply   人放行動作:把 merge(+人裁 adjudication)寫進 goldset labels(atomic;唯一寫 labels 入口)
@@ -11,13 +14,19 @@
 母體/未標判定=retrieval_eval.collect_unjudged 單一實作(S0 同源紀律,禁另寫)。
 """
 import argparse
+import re
 import datetime
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+# 洗牌用的固定鹽——跟建題庫那支同名同值(build_goldset.py:12),兩邊是同一套去識別化;
+# 值改了等於既有題庫的洗法全變,不要隨手動。
+SHUFFLE_SALT = "lumos-retr-v1"
 
 HERE = Path(__file__).resolve().parent
 
@@ -109,6 +118,60 @@ def _orphans(re_mod, gs):
     return out
 
 
+def cmd_material(args):
+    """[S13] 產一份給評審讀的材料:★只有題目,沒有任何答案★。
+
+    出身(實跑逃逸 2026-09-15):派工詞叫評審去讀題庫檔取查詢字串,而那個檔裡
+    ★同時就存著既有標註答案★,某席自陳「初讀題庫時意外顯示部分既有 labels」。
+    用被既有答案錨定過的標註去驗排序,等於讓尺被它要量的東西污染。
+
+    ★這跟 [S8] 的名次洩漏是兩條不同的路徑★——洗牌補的是順序,這支補的是內容;
+    補了一條不等於補了另一條。派工詞要改成指向這份材料,不要再指題庫檔。
+
+    ★誠實天花板:這支★只提供一份乾淨材料,沒有任何機械手段擋住評審自己去開題庫檔★
+    (2026-09-15 資安席)——上次的洩漏正是這樣發生的:派工詞叫評審去讀題庫,他就讀了。
+    這支讓「照派工詞做」的人不會再看到答案,但擋不住「多開一個檔」的人。
+    要真的擋住,得讓評審在讀不到題庫檔的環境裡工作(例如只掛載這份材料的沙箱),
+    那是派工環境的事、不是這支腳本能做的。
+    REVISIT:2026-11-15 若又發生一次同型逃逸,就不能再只靠派工詞,要把評審環境收窄。
+    """
+    gs = _read_goldset(args.goldset)
+    if gs is None:
+        return 2
+    out = Path(args.out or (HERE / "rater-material.md"))
+    lines = ["# 檢索評測題目卷(給評審讀)",
+             "",
+             "> ★這份刻意不含任何既有標註★——評審看到既有答案就不再是獨立判斷,",
+             "> 而這些判斷是不可逆尺切換的依據。要查答案請找編排者,不要去開題庫檔。",
+             ""]
+    lines.append("## 搜尋題")
+    lines.append("")
+    # ★缺欄位不要整支炸★(2026-09-15 邊界輸入席):同檔 delta 對缺欄位用的是安全預設,
+    # 新寫的這支卻直接索引,同一支腳本兩種脾氣。題庫壞掉時要照本檔慣例回 rc2 或標出來,
+    # 不是拋一個沒人接的 KeyError。
+    for c in sorted(gs.get("search", []), key=lambda x: str(x.get("id", ""))):
+        lines.append(f"- {c.get('id', '(缺編號)')}｜查詢:「{c.get('query', '(缺查詢字)')}」")
+    lines.append("")
+    # ★改動片段要先遮掉節點路徑★(2026-09-15 外家席 blocker):那個欄位是★原封不動抄來的
+    # 程式片段★,而這個 repo 的註解到處寫節點路徑;片段裡一旦出現某篇節點,等於直接把
+    # 「這題的答案可能是它」告訴評審。現況題庫剛好零命中,★但那是運氣不是守衛★——
+    # 防線要擋在輸出端,不能靠題庫每次重建都剛好乾淨。
+    _NODE_PATH = re.compile(
+        r"(?:Systems|Projects|Issues|Verification|MOC|Decisions)/[^\s\"`,;)\]]+")
+    def _mask(s):
+        return _NODE_PATH.sub("(節點路徑已遮)", str(s))
+    lines.append("## 編輯題")
+    lines.append("")
+    for c in sorted(gs.get("edit", []), key=lambda x: str(x.get("id", ""))):
+        lines.append(f"- {c.get('id', '(缺編號)')}｜改到的檔:`{c.get('file', '(缺檔名)')}`"
+                     f"｜改動:{_mask(c.get('delta', '(未記)'))}")
+    lines.append("")
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"material: 搜尋題 {len(gs.get('search', []))}、編輯題 {len(gs.get('edit', []))} → {out}"
+          f"(不含任何標註)")
+    return 0
+
+
 def cmd_delta(args):
     gs = _read_goldset(args.goldset)
     if gs is None:
@@ -119,7 +182,37 @@ def cmd_delta(args):
     u = re_mod.collect_unjudged(gs, args.split)
     orphans = _orphans(re_mod, gs)
     target = args.snapshot or "worktree"
-    cases = [{"id": cid, "unjudged": nodes} for cid, nodes in sorted(u["per_case"].items())]
+    # ★端給標註者之前要洗牌★([S8] Projects/評測尺修復_計劃;2026-09-15 代碼審資安席獨立再撞到):
+    # 未標判定回傳的順序★就是現行排序的名次★,原樣端出去等於先告訴標註者「系統認為誰該排前面」,
+    # 標出來的答案就不再獨立於被它驗證的那個排序——而那些答案正是不可逆尺切換的依據。
+    # 建題庫那支腳本早就在洗(build_goldset.py 兩處 rnd.shuffle),這支漏了。
+    # ★用固定種子★:同一份題庫跑兩次順序必須一樣,否則標註結果回溯不到當初看的是什麼;
+    # 種子綁題庫身分與案例編號,不同案例各自洗、不同題庫也不會洗成同一種排法。
+    import random as _random
+    # ★洗牌的做法照建題庫那支的既有前例★(2026-09-15 架構對齊席):
+    # 那邊一律 `random.Random(hashlib.sha256((鍵 + SALT).encode()).hexdigest())`,
+    # 用同一個模組常數當鹽(build_goldset.py:52,166;規格 governance/golden/retrieval/spec.md:266)。
+    # ★鍵裡要帶題庫指紋★(外家席):原本直接拿 split_salt 當種子是錯的——那是分組用的版本
+    # 常數(現值 lumos-retr-v1),兩份不同題庫很可能一樣,於是不同題庫洗出同一種排法,
+    # 「跨題庫隔離」是假宣稱。把題庫內容指紋放進鍵,兩個要求就同時滿足:
+    # 形狀跟既有前例一致,而且題庫變了順序就變、同一份跑幾次都一樣。
+    _ident = json.dumps({"s": gs.get("search"), "e": gs.get("edit"),
+                         "c": gs.get("snapshot_commit")}, ensure_ascii=False, sort_keys=True)
+    _gs_fp = hashlib.sha256(_ident.encode("utf-8")).hexdigest()[:16]
+    cases = []
+    for cid, nodes in sorted(u["per_case"].items()):
+        # ★先排序再洗★:上游給的順序★本身就不穩定★(2026-09-15 實測:同一份題庫同一份語料
+        # 連跑三次,有四題的候選順序跑出不同排法)。直接洗不穩定的輸入=同種子也洗不出同結果,
+        # 「可重現」就是假的。先按節點名排成唯一的正規順序,洗出來才真的可重現。
+        # 副作用剛好是要的:排序也把名次序一併洗掉了。
+        if not all(isinstance(_n, str) for _n in nodes):
+            # ★本檔慣例是印 ERROR: 回 rc2,不是拋沒人接的 TypeError★(2026-09-15 邊界輸入席)
+            print(f"ERROR: 案例 {cid} 的候選裡有非字串項,未標清單來源壞了", file=sys.stderr)
+            return 2
+        _shuffled = sorted(nodes)
+        _random.Random(hashlib.sha256(
+            (f"{_gs_fp}|{cid}" + SHUFFLE_SALT).encode("utf-8")).hexdigest()).shuffle(_shuffled)
+        cases.append({"id": cid, "unjudged": _shuffled})
     result = {"target": target, "cases": cases, "skipped": u["skipped"], "orphans": orphans,
               "count": u["count"], "denom": u["denom"], "rate": round(u["rate"], 4)}
     out = args.out or str(HERE / "retrieval-delta")
@@ -179,10 +272,14 @@ def cmd_repin(args):
         return 2
     u = re_mod.collect_unjudged(gs, args.split)
     if u["count"] > 0:
-        print(f"⛔ repin 擋下:評測母體尚有 {u['count']} 筆未標(先跑 delta→補標→apply):", file=sys.stderr)
-        for cid, nodes in sorted(u["per_case"].items()):
-            for n in nodes:
-                print(f"  {cid}: {n}", file=sys.stderr)
+        # ★這裡★不再★逐筆印出候選★(2026-09-15 外家席):原本按未標判定的順序把
+        # 每個候選印出來,而那順序就是現行排序的名次——等於開了第三條洩漏路徑,
+        # 只要標註者看得到這段診斷輸出就前功盡棄。改成只給數量與「去哪裡拿洗過的清單」。
+        print(f"⛔ repin 擋下:評測母體尚有 {u['count']} 筆未標(散在 {len(u['per_case'])} 題)",
+              file=sys.stderr)
+        print("  要補標請跑 delta 產洗過順序的清單,不要照這裡的順序標:", file=sys.stderr)
+        print("    python3 governance/eval/refresh_labels.py delta --goldset <題庫> --out <輸出前綴>",
+              file=sys.stderr)
         return 1
     try:
         with _goldset_lock(args.goldset):
@@ -341,6 +438,10 @@ def main():
     d.add_argument("--json", action="store_true")
     d.add_argument("--out", help="輸出前綴(產 <out>-sheet.md 與 <out>.json)")
 
+    mt = sub.add_parser("material", help="[S13] 給評審讀的題目卷(★不含任何標註★)")
+    mt.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
+    mt.add_argument("--out", help="輸出檔(預設 rater-material.md)")
+
     r = sub.add_parser("repin", help="unjudged==0 才寫 snapshot_commit(rc0/1/2)")
     r.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
     r.add_argument("--repo", default=str(HERE.parents[1]))
@@ -364,7 +465,7 @@ def main():
     sg.add_argument("--threshold", type=float, default=0.10)
 
     args = ap.parse_args()
-    return {"delta": cmd_delta, "repin": cmd_repin,
+    return {"delta": cmd_delta, "material": cmd_material, "repin": cmd_repin,
             "merge": cmd_merge, "apply": cmd_apply, "signal": cmd_signal}[args.cmd](args)
 
 
