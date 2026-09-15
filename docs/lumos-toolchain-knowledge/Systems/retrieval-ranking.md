@@ -47,6 +47,7 @@ verified_by:
   - "[[Verification/2026-09-15_放寬拆詞觸發的前提被實測推翻]]"
   - "[[Verification/2026-09-16_收斂候選規則的篩選量測]]"
   - "[[Verification/2026-09-16_收斂候選實作後的前後對照]]"
+  - "[[Verification/2026-09-16_別名欄對檢索的實際貢獻]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
