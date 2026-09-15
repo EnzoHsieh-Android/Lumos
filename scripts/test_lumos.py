@@ -41958,8 +41958,9 @@ def t_mw_atomic_write_is_symlink_safe():
     try:
         trap.symlink_to(victim)
     except OSError:
-        print("  ✓ t_mw_atomic_write_is_symlink_safe(這個系統建不了符號連結,跳過)")
-        return
+        # ★跳過要用 _SrcOnly,不能 return★:這個 repo 有一支後設測試在擋
+        # 「一條斷言都沒跑就 return」的測試(那種在某些機器上會變成永遠不驗)
+        raise _SrcOnly("這個系統建不了符號連結,這條驗不了(非失敗)")
     mod.write_json_atomic(str(out), {"a": 1})
     check("正常寫得出去", out.is_file() and not out.is_symlink(), str(out))
     check("★受害檔沒有被動到★(暫存名可預測時,這裡會被整個覆寫成 JSON)",
@@ -42096,8 +42097,9 @@ def t_mw_atomic_write_does_not_widen_perms():
     try:
         out.symlink_to(victim)          # 輸出路徑本身先被埋成符號連結
     except OSError:
-        print("  ✓ t_mw_atomic_write_does_not_widen_perms(這個系統建不了符號連結,跳過)")
-        return
+        # ★跳過要用 _SrcOnly,不能 return★:這個 repo 有一支後設測試在擋
+        # 「一條斷言都沒跑就 return」的測試(那種在某些機器上會變成永遠不驗)
+        raise _SrcOnly("這個系統建不了符號連結,這條驗不了(非失敗)")
     # ★斷言不能挑「全世界可寫」這個症狀★:符號連結的權限位元在不同系統回報不一樣
     # (這台量到 0o755、另一種系統是 0o777),挑症狀的話在前者就永遠是綠的——
     # 2026-09-15 第一版就是這樣寫的,翻紅釘當場顯示「拆了還綠」。
