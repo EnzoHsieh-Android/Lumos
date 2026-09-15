@@ -24,6 +24,7 @@ summary: |-
   KEY:★DEBT★ 多詞片語候選=legacy片語語意(0候選不回退)★2026-08-02 部分緩解:`--any` 旗標(預設關)在整串片語全庫無命中時退成各詞 OR 召回;fallback-only 故對既有查詢零回歸(現有 goldset 30 題全部回>0候選,回退條件永不觸發)。Landmark 284 篇真庫實測:10/10 現實多詞查詢在預設下全 0 命中,`--any` 後 7/10 第一名正確。★2026-08-03 人裁翻預設★:多詞回退改為預設開、`--no-any` 逃生、`--any` 留相容。證據=補了 10 題多詞評測(雙評 Claude+Codex 跨家族、分歧交乾淨 opus 裁決):nDCG@5 0→0.767、MRR 0.95、第一名為「必看」7/10;對照組 5 題(現有命中的多詞查詢)逐檔完全相同=零回歸實證。誠實邊界:pooling bias(池半數來自回退自己)、n=10、單一快照。交付版已同步重生。見 [[Projects/檢索多詞回退_計劃]]★｜cochange proxy對圖譜related面太稀(兩vault實證,僅sanity check)｜hook接線v1.1待評測
   DEP:[[Systems/lumos-cli-read]][[Systems/cochange-guard]]
   TEST:t_tokenizer/search_ranked/context_recommend/impact_ranked/impact_diff/impact_hook_v11 全綠+全套1018 | VERIFY:[[Verification/2026-07-11_hook面v1.1轉正]] | VERIFY:[[Verification/2026-07-10_檢索排序v1]][[Verification/2026-07-11_檢索goldset評測]]
+  KEY:[2026-09-15 評測尺切換與跨臂對齊]★新尺(condensed)自 2026-09-15 起真的上線了★,歷史帳帶切換標記、切了不回頭。同批改動修掉四處同族缺陷(都是「拿不同批題目的平均互比」):新舊尺之間、編輯面三條排法的視窗、兩條臂之間、恆等斷言用的五個參考值。★原委、重現方式、真實語料量測與還沒補的缺口一律看 [[Issues/尺切換恆等斷言反覆不過]]★;未補的那條在 [[Issues/held閘沒看弱證據旗標]]
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Systems/lumos-cli-read]]"

@@ -1,0 +1,387 @@
+diff --git a/governance/eval/retrieval_eval.py b/governance/eval/retrieval_eval.py
+index be5f63c4..936c2759 100755
+--- a/governance/eval/retrieval_eval.py
++++ b/governance/eval/retrieval_eval.py
+@@ -187,30 +187,28 @@ def split_buckets(res):
+ 
+ def _touched_edit(res, k=8):
+     """edit 題計分觸及集=★三條排法各自的前 k★+全部 pins+全部 lane。
+ 
+     2026-09-15 修(Issues/尺切換恆等斷言反覆不過 原因二):原本只取 free 前 k,
+     而那等於只涵蓋「綜合」那一條排法的視窗。但 eval_edit 對「只比文字」(L)與
+     「只比圖」(_graph_score)另外各自重排並各自截前 k 算分——排進那兩條自己前 k、
+     卻不在綜合前 k 的候選,永遠不會被判定為未標,補標流程也就永遠碰不到,
+     於是檢查說「未標=0」而那兩條其實有未標(實測:消融題級門檻後,只剩這兩條不等,
+     且新尺分數變高=未標被當 0 分拖累的效果出現在檢查看不到的地方)。
+-    ★三條排法要跟 eval_edit 的 orders 用同一組排序鍵,改一邊要改兩邊★。"""
++    ★2026-09-15 起排序鍵已抽成 _edit_orders 唯一實作,兩邊共用——這句舊指示作廢★。"""
+     _p, _f, _l = split_buckets(res)
+     pins = [x["node"] for x in _p] + [x["node"] for x in _l]
+-    # ★綜合那條沿用上游既有順序、不重排★(純加法修改:重排會在沒有 score 或分數相同時
+-    # 退化成按檔名排,把上游排序破壞掉——2026-09-15 被 t_eval_touched_universe_bounds 抓到)
+-    arms = (_f,
+-            sorted(_f, key=lambda x: (-x.get("L", 0.0), x["node"])),
+-            sorted(_f, key=lambda x: (-_graph_score(x), x["node"])))
++    # ★三條排法一律問 _edit_orders(唯一實作),不自己寫排序鍵★
++    # (2026-09-15 code-r1:原本綜合臂沿用上游順序,而上游鍵與算分鍵不同,
++    #  同分不同 hop 或被救回的候選會落在計分窗內卻不在觸及集)
+     seen, out = set(), []
+-    for seq in [a[:k] for a in arms]:
++    for seq in [a[:k] for a in _edit_orders(_f).values()]:
+         for x in seq:
+             if x["node"] not in seen:
+                 seen.add(x["node"])
+                 out.append(x["node"])
+     for n in pins:
+         if n not in seen:
+             seen.add(n)
+             out.append(n)
+     return out
+ 
+@@ -442,20 +440,37 @@ def _condense(window_nodes, lab, k, thr=None):
+     need = thr if thr is not None else math.ceil(k / 2) if k else 1
+     return judged, cov, (denom > 0 and len(judged) >= need)
+ 
+ 
+ def _graph_score(r):
+     if r.get("kind") == "direct":
+         return 1.0
+     return 0.60 * min(1.0, 2.0 / (2 ** r.get("hop", 2)))
+ 
+ 
++def _edit_orders(free):
++    """★edit 面三條排法的唯一實作★(2026-09-15,code-r1 四席獨立命中)。
++
++    為什麼要抽出來:原本 eval_edit 的 orders 與 _touched_edit 的視窗各手寫一份
++    排序鍵,而複製當下就抄錯——綜合臂沿用上游順序(上游是 (-score, hop, node) 三鍵、
++    rescued 又排在 free 之後),算分卻是 (-score, node) 兩鍵;同分不同 hop、或被
++    救回的候選會落在計分窗內卻不在觸及集,★正是這次修法要杜絕的那類漏洞★。
++    本檔對「唯一實作」有既有紀律(collect_unjudged 自稱 S0 同源、禁另寫),
++    留一句「改一邊要改兩邊」等於自白已知反模式靠人手同步。
++    ★改這裡就是同時改兩邊;有測試斷言兩邊前 k 一致(t_eval_edit_orders_single_source)★。"""
++    return {
++        "fusion": sorted(free, key=lambda x: (-x.get("score", 0.0), x["node"])),
++        "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
++        "graph": sorted(free, key=lambda x: (-_graph_score(x), x["node"])),
++    }
++
++
+ def eval_edit(gs, split=None, k=8):
+     """edit/hook 面:impact --ranked。P@top_k/nDCG@top_k(非固定席);
+     ablation=同候選集重排(fusion=score/BM25-only=L/graph-only=結構分)。
+     固定席另計(安全機保,不算噪音);label2 固定席 recall 檢核。"""
+     rows = []
+     for case in gs["edit"]:
+         if split and case["split"] != split:
+             continue
+         cid = case["id"]
+         lab = _labels_of(gs, cid)
+@@ -463,25 +478,21 @@ def eval_edit(gs, split=None, k=8):
+             continue
+         # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
+         # 呼叫收斂進 edit_universe(與評測母體同源,標註刷新 T2);None=file-gone/不可解,照舊跳。
+         res = edit_universe(case)
+         if res is None:
+             continue
+         pins, free, lane_items = split_buckets(res)   # v4:free 不含 lane(P@8 母體);out_nodes 含 lane(下方讀完整 res)
+         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
+         # edit 面 nDCG 沿用候選集自證 IDCG:三排序共用同一 free 集,相對比較有效;
+         # 絕對值偏高(漏檢不罰),不得跨面引用(r1 panel s4)。
+-        orders = {
+-            "fusion": sorted(free, key=lambda x: (-x["score"], x["node"])),
+-            "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
+-            "graph": sorted(free, key=lambda x: (-_graph_score(x), x["node"])),
+-        }
++        orders = _edit_orders(free)   # ★唯一實作,與 _touched_edit 共用★
+ 
+         n_rel_free = sum(1 for x in free if lab.get(x["node"], 0) >= 1)
+         for name, order in orders.items():
+             labels = [lab.get(x["node"], 0) for x in order]
+             kk = min(k, len(labels)) or 1
+             row[f"{name}_p"] = round(precision_at_k(labels, kk), 4) if labels else None
+             row[f"{name}_ndcg"] = round(ndcg_at_k(labels, k), 4) if labels else None
+             # condensed([S1]):窗=free 前 k(與 _touched_edit 同界)
+             _win = [x["node"] for x in order[:k]]
+             _judged, _cov, _valid = _condense(_win, lab, k)
+@@ -528,21 +539,24 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+     if srows:
+         ln, rn = _macro(srows, "legacy_ndcg"), _macro(srows, "ranked_ndcg")
+         lm, rm = _macro(srows, "legacy_mrr"), _macro(srows, "ranked_mrr")
+         lr, rr = _macro(srows, "legacy_r10"), _macro(srows, "ranked_r10")
+         lift = (rn - ln) / ln * 100 if ln else 0.0   # ln=0 → fail-closed(不給 inf 免費過 gate)
+         print(f"搜尋(打一句話找筆記,{len(srows)} 題有答案):")
+         print(f"  前 {k_search} 名的品質 {rn}(舊排序 {ln}),{'好了' if lift >= 0 else '★退了★'} {abs(lift):.1f}%    ← 這是主要的尺(nDCG@{k_search})")
+         print(f"  第一個對的答案多靠前:{rm}(舊 {lm};1.0=都在第一名)  |  前 10 名撈到該撈的比例:{rr}(舊 {lr})")
+         verdict["search_lift_pct"] = round(lift, 1)
+         verdict["search_gate"] = _search_gate_ok(lift, ln)
+-        verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 顯示/歷史用(全題平均)
++        # ★這兩個現在沒人讀★(2026-09-15 code-r1 正確性席):歷史紀錄組裝會濾掉底線開頭的鍵,
++        # 面板印的是區域變數。留著只為讓 t_eval_eq_keys_are_wired_in 能對照「限縮 vs 全題」,
++        # ★不是「顯示/歷史用」——那句是舊註解被替換後留下的錯誤說法★。
++        verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 全題平均,僅供測試對照
+         # 恆等斷言配對用([S3]①;2026-09-15 修):★限縮到新尺也認可的那些題★,
+         # 否則是兩組不同題目的平均在比,未標歸零也不可能相等。
+         verdict["_rn_eq"] = _macro_on(srows, "ranked_ndcg", "c_ranked_ndcg")
+         verdict["_ln_eq"] = _macro_on(srows, "legacy_ndcg", "c_legacy_ndcg")
+         # ── 新尺預覽(condensed;[S3]② gate 恆以舊尺拍板,這裡只算只印)──
+         c_ln, c_rn = _macro(srows, "c_legacy_ndcg"), _macro(srows, "c_ranked_ndcg")
+         c_valid = sum(1 for r in srows if r.get("c_ranked_ndcg") is not None)
+         s_cov = _macro(srows, "ranked_cov")
+         if c_ln is not None and c_rn is not None and c_ln > 0:
+             c_lift = round((c_rn - c_ln) / c_ln * 100, 1)
+@@ -597,21 +611,21 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+         e_cov = _macro(erows, "fusion_cov")
+         verdict["condensed_edit"] = {
+             "p": c_fp, "ndcg": c_fn, "bm25_p": c_bp, "graph_p": c_gp,
+             "bm25_ndcg": _macro(erows, "c_bm25_ndcg"), "graph_ndcg": _macro(erows, "c_graph_ndcg"),
+             "cov": e_cov, "valid_n": e_valid, "total_n": len(erows),
+             "weak": e_valid < (len(erows) + 1) // 2}
+         print(f"  新尺預覽(已判子集內前 {k_edit}):對的比例 {_pct(c_fp)}(只比文字 {_pct(c_bp)}、只比圖 {_pct(c_gp)})"
+               f"|edit 面覆蓋率 {e_cov}、有效 {e_valid}/{len(erows)} 題"
+               + ("  ⚠ 有效題數不足半數=弱證據" if verdict["condensed_edit"]["weak"] else ""))
+         # fusion 各勝至少一主指標,另一指標不倒退超過 0.02——beats 已升模組層(code-r1 s1-f1)
+-        verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 顯示/歷史用(全題平均)
++        verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 全題平均,僅供測試對照(同上,沒人讀)
+         # 恆等斷言配對用(2026-09-15 修,同 search 面理由):三條排法各自限縮
+         verdict["_fp_eq"] = _macro_on(erows, "fusion_p", "c_fusion_p")
+         verdict["_bp_eq"] = _macro_on(erows, "bm25_p", "c_bm25_p")
+         verdict["_gp_eq"] = _macro_on(erows, "graph_p", "c_graph_p")
+         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
+         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
+         verdict["free_median_le_topk"] = med is not None and med <= k_edit
+         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
+         verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
+         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
+@@ -688,21 +702,26 @@ def _switch_equal(v):
+     cs, ce = v.get("condensed_search") or {}, v.get("condensed_edit") or {}
+     # ★2026-09-15 修:吃的是「限縮到新尺也認可的題」的舊尺平均(_*_eq),
+     # 不是全題平均(_*_raw)——後者會讓兩組不同題目的平均互比,永遠不等。
+     # 缺 _*_eq 鍵時★不得靜默當相等★:列成差異讓切換中止(fail-closed)。
+     pairs = [("search ranked nDCG", v.get("_rn_eq"), cs.get("ndcg")),
+              ("search legacy nDCG", v.get("_ln_eq"), cs.get("ndcg_legacy")),
+              ("edit fusion P", v.get("_fp_eq"), ce.get("p")),
+              ("edit bm25 P", v.get("_bp_eq"), ce.get("bm25_p")),
+              ("edit graph P", v.get("_gp_eq"), ce.get("graph_p"))]
+     for name, old, new in pairs:
++        # ★兩邊同時沒資料★不得當成恆等(2026-09-15 code-r1 邊界席+正確性席獨立命中):
++        # 限縮鍵與新尺值是對同一批列取平均、分母集合相同,所以沒有任何一題通過題級門檻時
++        # 兩邊必定同時變 None;原本的 continue 等於把「完全沒有可比資料」當成「經檢驗恆等」
++        # 放行切換——★比舊寫法還寬鬆★(舊的全題平均幾乎必為非 None,同情境會被判有 vs 無而擋下)。
+         if old is None and new is None:
++            diffs.append(f"{name}: 兩邊都沒有可比資料(新尺這條指標零有效題)——不算恆等")
+             continue
+         if old is None or new is None or abs(old - new) > 1e-6:
+             diffs.append(f"{name}: 舊 {old} vs 新 {new}")
+     return (not diffs), diffs
+ 
+ 
+ def _history_metric_rev(history):
+     """sticky:history 任一列帶 metric_rev 即已切換(之後每輪照寫)。"""
+     for rec in reversed(history or []):
+         if rec.get("metric_rev"):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ef864d16..2382aefc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -27000,37 +27000,137 @@ def t_eval_touched_edit_covers_all_arms():
+     check("★只比圖的前 2 名也要在★", "D.md" in touched, str(touched))
+     check("不重複", len(touched) == len(set(touched)), str(touched))
+     # 固定席與參考道照舊全納入
+     res2 = res + [{"node": "P.md", "score": 0.0, "pinned": True},
+                   {"node": "L.md", "score": 0.0, "lane": "soft-guard"}]
+     t2 = m._touched_edit(res2, k=1)
+     check("固定席與參考道仍全納入", "P.md" in t2 and "L.md" in t2, str(t2))
+     print("  ✓ t_eval_touched_edit_covers_all_arms")
+ 
+ 
++def t_eval_edit_orders_single_source():
++    """edit 面三條排法只有一份實作,未標判定與算分共用(code-r1 四席獨立命中)。
++
++    出身:r1 外家/正確性/合約圖譜/架構對齊四席各自用不同反例命中同一件事——
++    _touched_edit 把排序鍵複製了一份,而且複製當下就抄錯:綜合臂沿用上游順序
++    (上游是 (-score, hop, node) 三鍵、rescued 又排在 free 之後),算分卻是
++    (-score, node) 兩鍵,同分不同 hop 或被救回的候選會落在計分窗內卻不在觸及集。
++    架構席另指出這違反本檔自己的「唯一實作」禁令。
++    ★本測試釘的是「同一份輸入,兩邊算出的前 k 必須一致」——不是比對原始碼文字★。
++    翻紅釘:讓 _touched_edit 的綜合臂改回沿用上游順序 → 第 2 條翻紅。"""
++    _need_src("governance/eval")
++    root, _gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    check("★排序鍵有單一來源 _edit_orders★", hasattr(m, "_edit_orders"), "兩邊各寫一份=會無聲漂移")
++    # 同分不同 hop + rescued:四席反例的共同形狀
++    res = [{"node": "B.md", "score": 0.7, "L": 0.1, "kind": "direct"},
++           {"node": "A.md", "score": 0.7, "L": 0.2, "kind": "indirect", "hop": 1},
++           {"node": "C.md", "score": 0.66, "L": 0.9, "kind": "indirect", "hop": 3}]
++    for k in (1, 2, 3):
++        touched = set(m._touched_edit(res, k=k))
++        for name, order in m._edit_orders(res).items():
++            top = {x["node"] for x in order[:k]}
++            check(f"★k={k} {name} 的計分前 k 全在觸及集裡★", top <= touched,
++                  f"漏掉 {sorted(top - touched)}(觸及集 {sorted(touched)})")
++    print("  ✓ t_eval_edit_orders_single_source")
++
++
++def t_eval_switch_equal_no_data_is_not_equal():
++    """兩側同時沒有可比資料時不得判恆等(code-r1 邊界席+正確性席獨立命中)。
++
++    出身:限縮鍵與新尺值是對同一批列取平均,分母集合完全相同,所以沒有任何一題
++    通過題級門檻時★兩邊必定同時變 None★;而恆等斷言對 (None, None) 是 continue,
++    等於把「完全沒有可比資料」當成「經檢驗恆等」放行切換——★比舊寫法還寬鬆★
++    (舊的全題平均幾乎必為非 None,同情境會被判有 vs 無而擋下)。
++    翻紅釘:把 _switch_equal 對兩側皆 None 的處理改回 continue → 第 1、3、4 條翻紅(實測 3 條)。"""
++    _need_src("governance/eval")
++    root, _gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    v_none = {"_rn_eq": None, "_ln_eq": None, "_fp_eq": None, "_bp_eq": None, "_gp_eq": None,
++              "condensed_search": {"ndcg": None, "ndcg_legacy": None},
++              "condensed_edit": {"p": None, "bm25_p": None, "graph_p": None}}
++    eq, diffs = m._switch_equal(v_none)
++    check("★五個指標全無資料→不得判恆等★", eq is False and len(diffs) >= 1, f"{eq} {diffs}")
++    # 訊息要講得出「不是數值不同,是根本沒得比」——驗語意不驗特定措辭
++    check("差異訊息要區分得出「沒得比」與「值不同」",
++          all("vs" not in d for d in diffs) and all("資料" in d for d in diffs), str(diffs))
++    check("五個指標一條都不漏", len(diffs) == 5, str(diffs))
++    # 部分無資料也不行
++    v_part = dict(v_none); v_part.update({"_rn_eq": 0.8, "_ln_eq": 0.4, "_fp_eq": 0.75})
++    v_part["condensed_search"] = {"ndcg": 0.8, "ndcg_legacy": 0.4}
++    v_part["condensed_edit"] = {"p": 0.75, "bm25_p": None, "graph_p": None}
++    eq2, d2 = m._switch_equal(v_part)
++    check("★部分指標無資料也不得判恆等★", eq2 is False, str(d2))
++    # 有資料且相等才算過(反向對照:證明上面不是靠改到永遠 False 換來的)
++    v_ok = {"_rn_eq": 0.8, "_ln_eq": 0.4, "_fp_eq": 0.75, "_bp_eq": 0.5, "_gp_eq": 0.25,
++            "condensed_search": {"ndcg": 0.8, "ndcg_legacy": 0.4},
++            "condensed_edit": {"p": 0.75, "bm25_p": 0.5, "graph_p": 0.25}}
++    check("反向對照:有資料且相等仍要判過", m._switch_equal(v_ok)[0] is True, "")
++    print("  ✓ t_eval_switch_equal_no_data_is_not_equal")
++
++
++def t_eval_eq_keys_are_wired_in():
++    """限縮鍵有沒有真的被接上報告流程(code-r1 測試品質席 blocker)。
++
++    出身:變異測試證明——把 report_goldset 裡五處賦值從 _macro_on 改回 _macro
++    (函式本體不動),★82 支評測測試全綠★:本次修的缺陷若被撤回,沒有任何測試會發現。
++    原因是舊測試只驗函式本身會不會算,不驗它有沒有被接上。
++    ★本測試把受控的 rows 餵進真實的 report_goldset,驗它吐出來的 verdict★——
++    改回全題平均時 _rn_eq 會從 0.8 變成 0.5667,直接翻紅。
++    翻紅釘:把 report_goldset 裡五處 _macro_on 改回 _macro → 第 2、3、4 條翻紅
++    (第 4 條也會紅:舊鍵與被改壞的限縮鍵變得相等;實測 3 條)。"""
++    _need_src("governance/eval")
++    root, _gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    # 第三題被新尺判無效(c_* 是 None):限縮=前兩題平均 0.8,全題=0.5667
++    srows = [{"ranked_ndcg": 0.9, "c_ranked_ndcg": 0.9, "legacy_ndcg": 0.8, "c_legacy_ndcg": 0.8,
++              "ranked_mrr": 1.0, "legacy_mrr": 1.0, "ranked_r10": 1.0, "legacy_r10": 1.0, "ranked_cov": 1.0},
++             {"ranked_ndcg": 0.7, "c_ranked_ndcg": 0.7, "legacy_ndcg": 0.6, "c_legacy_ndcg": 0.6,
++              "ranked_mrr": 1.0, "legacy_mrr": 1.0, "ranked_r10": 1.0, "legacy_r10": 1.0, "ranked_cov": 1.0},
++             {"ranked_ndcg": 0.1, "c_ranked_ndcg": None, "legacy_ndcg": 0.1, "c_legacy_ndcg": None,
++              "ranked_mrr": 0.0, "legacy_mrr": 0.0, "ranked_r10": 0.0, "legacy_r10": 0.0, "ranked_cov": 0.1}]
++    _orig_s, _orig_e = m.eval_search, m.eval_edit
++    try:
++        m.eval_search = lambda gs, split=None, k=5: srows
++        m.eval_edit = lambda gs, split=None, k=8: []
++        _rep = m.report_goldset({"search": [], "edit": [], "labels": {}}, split=None)
++    finally:
++        m.eval_search, m.eval_edit = _orig_s, _orig_e
++    v = _rep.get("verdict", _rep)   # 報告回外層包裝,判定在 verdict 鍵
++    check("前置:報告流程有吐出限縮鍵", "_rn_eq" in v, str(sorted(v))[:200])
++    check("★_rn_eq 是限縮值 0.8,不是全題平均 0.5667★", v.get("_rn_eq") == 0.8,
++          f"拿到 {v.get('_rn_eq')}(全題平均會是 {m._macro(srows, 'ranked_ndcg')})")
++    check("★_ln_eq 同理是 0.7 不是 0.5★", v.get("_ln_eq") == 0.7,
++          f"拿到 {v.get('_ln_eq')}(全題平均會是 {m._macro(srows, 'legacy_ndcg')})")
++    check("舊鍵仍是全題平均(兩者確實不同,證明這顆資料分得出來)",
++          v.get("_rn_raw") == m._macro(srows, "ranked_ndcg") and v["_rn_raw"] != v["_rn_eq"], "")
++    print("  ✓ t_eval_eq_keys_are_wired_in")
++
++
+ def t_symbol_vocab_single_source_and_reach():
+     """摘要符號詞彙表:①單一來源(不得兩份寫死)②抓錯字的正則伸得到含連字號的前綴
+     ③PRIOR-ART/REVISIT 收進詞彙表(兩者都是紀律文件明文要求寫的)。
+ 
+     出身(2026-09-15,Projects/標籤系統精簡_計劃 S10):原本 SYMBOL_RE 與 SYMBOL_NAMES
+     是★兩份各自寫死的九值★,只改一份會讓「已收編」只有一半是真的;而抓錯字的
+     SYMBOLISH_RE 只認連續大寫,★含連字號的前綴從一開始就不會被比對到★——
+     所以把 PRIOR-ART 加進白名單是無效動作,測試若只斷言「寫了不報錯」會永遠空過。
+     翻紅釘:①把 SYMBOL_NAMES 改回獨立字面集合 → 第 1 條翻紅
+             ②把 SYMBOLISH_RE 改回 ^([A-Z]{2,}): → 第 3 條翻紅"""
+-    import re as _re
+-    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+-    # ① 單一來源:SYMBOL_RE 必須由 SYMBOL_NAMES 生成,不得再有第二份字面九值
+-    check("★兩份表合一:SYMBOL_RE 由 SYMBOL_NAMES 生成★",
+-          _re.search(r"SYMBOL_RE\s*=\s*re\.compile\([^)]*SYMBOL_NAMES", src) is not None,
+-          "SYMBOL_RE 仍是獨立寫死的字面表")
+     m = _load_lumos_inproc()
++    # ① 單一來源——★驗實際辨識行為,不掃原始碼文字★(code-r1 測試品質席:文字掃描擋不住
++    # 「文字上仍引用該集合、推導時偷偷排除一個值」的變異,實測那樣改 8 條斷言全綠而行為已壞)
++    _missed = [n for n in m.SYMBOL_NAMES if not m.SYMBOL_RE.match(n + ":x")]
++    check("★詞彙表每一個值,搜尋的符號正則都認得出來★", _missed == [],
++          f"認不出來的:{sorted(_missed)}(兩份表已經漂移)")
++    _extra = m.SYMBOL_RE.match("NOTASYMBOL:x")
++    check("不在表裡的不得被認成符號", _extra is None or _extra.group(1) in m.SYMBOL_NAMES, "")
+     check("② 詞彙表含 PRIOR-ART 與 REVISIT",
+           {"PRIOR-ART", "REVISIT"} <= set(m.SYMBOL_NAMES), str(sorted(m.SYMBOL_NAMES)))
+     check("② 既有九值一個都沒少",
+           {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE"}
+           <= set(m.SYMBOL_NAMES), str(sorted(m.SYMBOL_NAMES)))
+     # ③ 抓錯字的正則要伸得到含連字號的前綴——★不准空過★:打錯字的變體仍要被抓
+     R = m.SYMBOLISH_RE
+     check("★正則伸得到含連字號的前綴★", R.match("PRIOR-ART:x") is not None, "比對不到=加白名單是無效動作")
+     check("★不空過:打錯字的含連字號變體仍被抓到★",
+           R.match("PRIOR-ARTT:x") is not None
+@@ -27300,44 +27400,51 @@ def t_refresh_signal():
+     r3 = _run([{"mode": "goldset", "unjudged_rate": 0.04},
+                {"mode": "goldset-transition", "unjudged_rate": 0.12, "unjudged_count": 9}])
+     check("transition 輪也算考卷輪、超線 over=yes",
+           "unjudged_rate=0.12" in r3.stdout and "over=yes" in r3.stdout, r3.stdout)
+     r4 = subprocess.run([sys.executable, str(script), "signal", "--history", str(d / "無.jsonl")],
+                         capture_output=True, text=True)
+     check("history 缺=rc2", r4.returncode == 2, str(r4.returncode))
+ 
+ 
+ def t_eval_touched_universe_bounds():
+-    """T8 落地後發現修正:評測母體=「計分觸及集」——search 兩臂各取前 10、edit=free 前 k+全部 pins。
++    """T8 落地後發現修正:評測母體=「計分觸及集」——search 兩臂各取前 10、
++    edit=★三條排法各自前 k 的聯集★+全部 pins(2026-09-15 起;原本只有綜合那條)。
+     全母體口徑實測連原快照都 54% 未標(金標只批過出卷小池)→ repin 永不可過,母體必須收斂到
+     「未標了會實際影響分數」的位置。純函式直測邊界。"""
+     _need_src("governance/eval")
+     root, _ = _mk_eval_fixture()
+     m = _load_retrieval_eval(root)
+     legacy = [f"L{i}.md" for i in range(15)]
+     ranked = [f"R{i}.md" for i in range(15)] + ["L3.md"]
+     t = m._touched_search(legacy, ranked)
+     check("search 觸及=兩臂各前10 去重", set(t) == set(legacy[:10]) | set(ranked[:10]), str(t))
+     check("legacy 第11名起不入(L12 不在)", "L12.md" not in t, str(t))
+     # ★2026-09-15 合約擴張(Issues/尺切換恆等斷言反覆不過 原因二)★:edit 面用三條排法
+     # 各自截前 k 算分,而 bm25_p/graph_p 各自驅動一道 gate——那兩條窗裡的未標★會實際
+     # 影響分數★,正是本測試 docstring 自己講的收斂判準所要求納入的。舊合約只含綜合窗,
+     # 相對於它自己宣告的原則是★漏收★,不是本次改動把母體放寬。
+-    res = ([{"node": f"F{i}.md", "pinned": False, "score": 1.0 - i / 100} for i in range(12)]
++    # ★候選數要遠超上界,上界斷言才分得出來★(code-r1:原本 12 個候選斷言 ≤24,恆真、
++    # 對「改回單臂」或「改成五臂」都無鑑別力;實測把實作改回單臂,該測試 7 條全綠)
++    res = ([{"node": f"F{i:02d}.md", "pinned": False, "score": 1.0 - i / 100,
++             "L": i / 100, "kind": "indirect", "hop": 1 + i % 3} for i in range(40)]
+            + [{"node": f"P{i}.md", "pinned": True} for i in range(20)])
+     te = m._touched_edit(res, k=8)
+-    check("綜合窗仍是 free 前8(上游順序不被重排)", {f"F{i}.md" for i in range(8)} <= set(te), str(te))
+     check("全部 pins 仍全入", {f"P{i}.md" for i in range(20)} <= set(te), str(te))
+-    check("★仍有上界:free 側至多 3 條窗×k★", len([x for x in te if x.startswith("F")]) <= 3 * 8, str(te))
+     check("不重複", len(te) == len(set(te)), str(te))
+-    # 三臂同序時(本 fixture 的 L/kind 皆缺→同分)退化成同一組,free 側就是前 8
+-    check("三臂同序時 free 側=前8(F9 不在)", "F9.md" not in te, str(te))
++    _fcount = len([x for x in te if x.startswith("F")])
++    check("★上界:free 側至多 3 條窗×k★", _fcount <= 3 * 8, f"{_fcount} 個")
++    check("★下界:三臂各取前 8、彼此不同 → free 側必多於單臂的 8 個★", _fcount > 8,
++          f"只有 {_fcount} 個,等於退化回單臂")
++    # 三臂的前 k 全要在觸及集裡(與 _edit_orders 對帳,不靠固定案例猜)
++    for name, order in m._edit_orders([x for x in res if not x.get("pinned")]).items():
++        check(f"{name} 的前 8 全在觸及集", {x["node"] for x in order[:8]} <= set(te), name)
+ 
+ 
+ def _mk_eval_fixture2():
+     """雙 commit fixture:c1=基礎三節點;c2=+Delta.md(也講 zebrafish)。回 (root, gs, c1, c2)。"""
+     import os
+     root, gs = _mk_eval_fixture()
+     c1 = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
+                         capture_output=True, text=True).stdout.strip()
+     (root / "docs" / "kg-knowledge" / "Systems" / "Delta.md").write_text(
+         "---\ntype: system\nstatus: done\n---\n# Delta\nzebrafish 新規則,關聯 `src/app.py`。\n",
