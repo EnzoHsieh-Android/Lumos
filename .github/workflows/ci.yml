@@ -34,6 +34,24 @@ jobs:
           for job in $(jobs -p); do wait "$job" || rc=1; done
           for i in 1 2 3 4; do
             echo "===== 第 $i 片 ====="
+            # 紅的時候先把失敗那幾行撈出來——tail 只看得到尾巴,而紅的那支通常在中間,
+            # 以前紅了要靠猜是哪一支(2026-09-15 實際踩到:CI 紅、本機全綠、查不出名字)
+            if grep -qE "^  ✗|, [1-9][0-9]* failed" "/tmp/shard-$i.log"; then
+              echo "--- 這一片紅了,以下是失敗的斷言與所在測試 ---"
+              grep -nE "^  ✗|EXCEPTION" "/tmp/shard-$i.log" | tail -40 || true
+              echo "--- 失敗處前後文 ---"
+              # ★這裡的 || true 不是裝飾★(2026-09-15 審查席抓到):撈不到就回非零,
+              # 目前這步的殼是 bash -e 沒有 pipefail、管線末端是 while 所以不會中止;
+              # 但只要有人把這步改成 shell: bash(預設帶 pipefail),沒接住就會★整步當場死掉★,
+              # 連還沒印的片都一起失聲,比改動前更糟。實測過兩種殼,差別就在這個旗標。
+              # 另外要認得逾時/零斷言/跳過判紅——那三種紅不印 FAILED 也不印 EXCEPTION,
+              # 而它們正是「CI 紅、本機綠」最常見的成因,漏掉等於在最該用的場合失效。
+              grep -nE "^  ✗ (FAILED|TIMEOUT|判紅)|EXCEPTION|^  ✗ .*一條斷言都沒有" \
+                "/tmp/shard-$i.log" | head -3 | cut -d: -f1 | while read ln; do
+                sed -n "$((ln>12 ? ln-12 : 1)),$((ln+3))p" "/tmp/shard-$i.log"
+              done || true
+              echo "--- 以下是該片尾端 ---"
+            fi
             tail -25 "/tmp/shard-$i.log"
           done
           exit $rc

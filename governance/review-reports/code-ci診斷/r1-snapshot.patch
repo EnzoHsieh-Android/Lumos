@@ -1,0 +1,36 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 3702e66a..b078c493 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -27,20 +27,31 @@ jobs:
+       - name: Full test suite (切 4 片同時跑)
+         run: |
+           set -u
+           rc=0
+           for i in 1 2 3 4; do
+             python scripts/test_lumos.py --shard "$i/4" > "/tmp/shard-$i.log" 2>&1 &
+           done
+           for job in $(jobs -p); do wait "$job" || rc=1; done
+           for i in 1 2 3 4; do
+             echo "===== 第 $i 片 ====="
++            # 紅的時候先把失敗那幾行撈出來——tail 只看得到尾巴,而紅的那支通常在中間,
++            # 以前紅了要靠猜是哪一支(2026-09-15 實際踩到:CI 紅、本機全綠、查不出名字)
++            if grep -qE "^  ✗|, [1-9][0-9]* failed" "/tmp/shard-$i.log"; then
++              echo "--- 這一片紅了,以下是失敗的斷言與所在測試 ---"
++              grep -nE "^  ✗|EXCEPTION" "/tmp/shard-$i.log" | tail -40
++              echo "--- 失敗處前後文 ---"
++              grep -nE "^  ✗ FAILED|EXCEPTION" "/tmp/shard-$i.log" | head -3 | cut -d: -f1 | while read ln; do
++                sed -n "$((ln>12 ? ln-12 : 1)),$((ln+3))p" "/tmp/shard-$i.log"
++              done
++              echo "--- 以下是該片尾端 ---"
++            fi
+             tail -25 "/tmp/shard-$i.log"
+           done
+           exit $rc
+       # 2026-08-29 接線:這支的 106 個測試先前沒有任何自動路徑在跑(CI 與 pre-push 都只跑
+       # test_lumos.py),而它是 autonomous_loop 十個模組中九個的唯一覆蓋,且早已在 anchor
+       # 基準線裡被防竄改守著——綠紅沒人看,卻有人守。
+       - name: 自主迴圈測試
+         run: python scripts/test_autonomous_loop.py
+       - name: Graph doctor (strict)
+         run: python scripts/lumos doctor --ci
