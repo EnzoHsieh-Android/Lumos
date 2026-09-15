@@ -66,6 +66,12 @@ def load_labels(path):
     而訊息完全沒提到是檔案拿錯——同一個目錄裡兩份檔名只差一個字。
     """
     raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    # ★也吃「題庫外殼」那種形狀★:合併與寫回兩步沿用既有的標註工具,而那支要求檔案
+    # 有 labels / search / edit 三個鍵(search 與 edit 在這裡是空的——本題庫的題目存在
+    # 候選池檔裡)。沿用而不自己再寫一份,是因為那支帶著寫入鎖、原子寫入,以及
+    # 「還有人裁沒填就不准寫」那道閘;自己重寫一份等於把那三樣一起重寫。
+    if isinstance(raw, dict) and "labels" in raw and isinstance(raw["labels"], dict):
+        raw = raw["labels"]
     out = {}
     for cid, per_node in raw.items():
         if not isinstance(per_node, dict):

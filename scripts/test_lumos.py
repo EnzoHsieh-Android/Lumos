@@ -41779,6 +41779,19 @@ def t_mw_labels_accept_both_shapes():
     c = mod.load_labels(str(und))
     check("★還沒裁決的不進標註★(當 0 分會讓沒判過的看起來像判過不相干)",
           c == {"M01": {}}, repr(c))
+    # 合併與寫回沿用既有的標註工具,它產出的是「題庫外殼」那種形狀
+    wrap = root / "wrap.json"
+    wrap.write_text(_json.dumps({"search": [], "edit": [],
+                                 "labels": {"M01": {"Systems/A.md": {"final": 2}}}},
+                                ensure_ascii=False), encoding="utf-8")
+    # ★用 try 包住★:讀不懂時那支是直接結束整個程式(SystemExit),不包的話
+    # 這條一紅就會把整輪測試拖死,而不是乾淨地報一條紅(2026-09-15 翻紅釘時實測到)
+    try:
+        d = mod.load_labels(str(wrap))
+    except SystemExit as e:
+        d = f"讀不懂而直接結束:{e}"
+    check("★題庫外殼那種形狀也讀得出來★(不然沿用既有寫回工具的產出會讀不進來)",
+          d == {"M01": {"Systems/A.md": 2}}, repr(d))
     print("  ✓ t_mw_labels_accept_both_shapes")
 
 
