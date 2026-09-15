@@ -28,7 +28,6 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 - [[Systems/check-y-symbol-existence]]
 - [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/self-audit;T1 寫後自驗 atomic。
 - [[Systems/外部對照-code衍生wiki]] — langchain-ai/openwiki(11.6k★ code 衍生 wiki)反例世界解:站在 lumos 導覽層、賭注相反(code 衍生+可丟 vs 圖譜手寫+機械守);核心論點=重生保新鮮≠正確、無輸出 oracle(maker-only),反證 lumos「圖譜即真相/合約驗證層」的必要。
-- [[Projects/OpenSpec_調研]] — Fission-AI/OpenSpec(67.8k★ spec-driven development)對照留痕:站在「動手前先講好要做什麼」層、lumos 站在「做完後為什麼/邊界/驗過沒」層;最深差別=它刻意零強制(convention not enforcement)、漂移是社群最大抱怨且官方解法收費;可借候選五條待 Enzo 裁。
 - [[Systems/節點還原]]
 - [[Projects/標籤系統盤點_調研]] — 八個標籤家族與摘要符號的使用率盤點:65% 標籤行是欄位副本、scope 意外進了搜尋排序、flag 零消費點;含業界對照與六個可動選項(待裁)。
 - [[Projects/標籤系統精簡_計劃]] — 鏡像標籤改成讀時合成(兩份真相變一份)、同步器與兩道漂移閘退場、語意警示與優先級兩家族凍結退場;研究方向進排序那一項只量不改。
