@@ -1,13 +1,13 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-08-26
 updated: 2026-08-26
 aliases: []
 about_code: []
 tags:
   - type/issue
-  - status/open
+  - status/done
   - scope/node-content
 summary: |-
   FLAG:TECHNICAL
@@ -16,7 +16,10 @@ summary: |-
 ---
 # lint不守驗證紀錄空回頭條件
 
-- REVISIT:2026-09-12 房務批開工:lint 對空 valid_under/revalidate_when 出 warning(欄位層可讀,免正文管線;Enzo 2026-09-01 委任裁辦)
+- ★2026-09-16 已做★:`lumos lint` 對 `type: verification` 且 `status: pass` 的節點，兩個條件欄任一空著就出一句提醒（只提醒不擋）。訊息講明「空著＝掃描工具永遠掃不到這篇，這個結論會一直被當成還有效」。
+- **只提醒不擋是刻意的**：真語料上量到 **20 篇**會被叫到（都是舊帳）。擋了等於每個提交都紅，而提醒的作用是讓**寫的時候**看到，不是逼人回頭清舊帳。
+- **只對 pass 的**：其他型別沒有這兩個欄位；標成待重驗或失敗的本來就還在處理中，不必催。
+- 守衛拆掉驗證過會翻紅。
 
 # lint不守驗證紀錄空回頭條件
 

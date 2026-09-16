@@ -42163,5 +42163,52 @@ def t_rel_cascade_visited_only_for_empty():
     print("  ✓ t_rel_cascade_visited_only_for_empty")
 
 
+
+def t_lint_warns_empty_revalidate_when():
+    """★驗證紀錄的「什麼時候要回頭重驗」欄位空著,lint 要出聲★
+    (Issues/lint不守驗證紀錄空回頭條件;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
+
+    出身:某一天五篇驗證★全★把回頭條件寫進正文、欄位留空,於是掃描工具全掃不到、
+    lint 全綠放行——鐵則四「承認風險要附回頭看的條件」被靜默架空而沒有任何機械提醒。
+    是審查席讀出來的,不是工具抓到的。
+
+    ★只出 warning 不擋★(修法本來就這樣裁):舊帳很多,擋了等於每個提交都紅;
+    warning 的作用是讓寫的人當下看到,不是回頭清舊帳。
+
+    ★只對 type=verification 且 status=pass 的★:其他型別沒有這兩個欄位;
+    status 不是 pass 的(stale/fail)本來就還在處理中,不必催。
+
+    翻紅釘:把那段檢查拿掉 → 第 2、3 條翻紅。"""
+    v = mkvault()
+    # ① 兩欄都有值:不該叫
+    write(v, "Verification/有寫的.md",
+          "type: verification\nstatus: pass\nvalid_under: 在某某前提下\n"
+          "revalidate_when: 改到某某的時候")
+    r = run(v, "lint", "有寫的", expect_rc=0)
+    check("兩欄都有值時不出聲(不要製造雜訊)",
+          "回頭" not in r.stdout and "重驗" not in r.stdout, r.stdout[:200])
+    # ② 回頭條件空:要叫
+    write(v, "Verification/沒寫的.md",
+          "type: verification\nstatus: pass\nvalid_under: 在某某前提下\nrevalidate_when:")
+    r = run(v, "lint", "沒寫的", expect_rc=0)
+    check("★回頭條件空著要出聲★(空著=掃描工具永遠掃不到,鐵則被靜默架空)",
+          "重驗" in r.stdout or "回頭" in r.stdout, r.stdout[:300])
+    # ③ 前提空:也要叫
+    write(v, "Verification/前提空的.md",
+          "type: verification\nstatus: pass\nvalid_under:\nrevalidate_when: 改到某某的時候")
+    r = run(v, "lint", "前提空的", expect_rc=0)
+    check("★前提欄空著也要出聲★(不寫前提=不知道這個結論在什麼條件下才算數)",
+          "前提" in r.stdout or "valid_under" in r.stdout, r.stdout[:300])
+    # ④ 只是提醒,不能擋
+    check("★只出提醒不擋★(舊帳很多,擋了等於每個提交都紅)", r.returncode == 0, str(r.returncode))
+    # ⑤ 別的型別不該被這條叫到
+    write(v, "Systems/別的型別.md",
+          "type: system\nstatus: done\nsummary: |-\n  FLOW:甲到乙\n  KEY:重點一句")
+    r = run(v, "lint", "別的型別", expect_rc=0)
+    check("其他型別不適用這條(它們沒有這兩個欄位)",
+          "重驗" not in r.stdout, r.stdout[:200])
+    print("  ✓ t_lint_warns_empty_revalidate_when")
+
+
 if __name__ == "__main__":
     sys.exit(main())

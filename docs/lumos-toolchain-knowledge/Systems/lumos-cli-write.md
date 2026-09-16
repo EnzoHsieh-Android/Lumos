@@ -30,6 +30,7 @@ summary: |-
   KEY:decisions[] 是巢狀結構,只能走 decision-add/decision-supersede/decision-reindex 的 surgical line-based 手術(非 ruamel round-trip,避免 reflow 破壞最小 diff);要求 2-space 縮排
   KEY:[M1/P2 2026-07-15]決策穩定 ID——add 指派 id:d<max+1>(翻案永不重用)、supersede 唯一命中(子字串多重命中 rc=2 列候選/#dN 精確定址)+回傳全域 id <rel>#d<N>(dispatcher 解包,CLI 對外仍 int rc)、reindex 冪等回填(混合狀態 max+1 不撞號);寫後自驗升級 ID 精確驗證(有 id 時)
   KEY:[M4/S1 2026-07-15]supersede 觸發主網 surfacing——rc=0 後 dispatcher 獨立 try 包「rel_cascade_create 建帳+cascade_surface 列鄰居」;stdout 首行逐字保留、cascade 面全走 stderr(CASCADE/NEIGHBOR 行式 schema);無 id→CASCADE-SKIP、失敗→CASCADE-ERROR fail-open(rc 仍 0,補網 E2 兜底)
+  KEY:[驗證紀錄兩個條件欄 2026-09-16]lint 多一句軟提醒:type=verification 且 status=pass 的節點,valid_under(這結論在什麼前提下才算數)或 revalidate_when(改到什麼時候該回頭重驗)是空的就唸一句。★出身★:某天五篇驗證★全★把回頭條件寫進正文、欄位留空,於是掃描工具全掃不到、lint 全綠放行,鐵則四被靜默架空——是審查席讀出來的,不是工具抓到的。★只提醒不擋★(舊帳很多,光排序那一篇就掛著五份空條件的驗證,擋了每個提交都紅);★只對 pass★(其他型別沒這兩個欄位,stale/fail 本來就還在處理中不必催)。出身見 [[Issues/lint不守驗證紀錄空回頭條件]] [test:t_lint_warns_empty_revalidate_when]
   KEY:[連鎖待辦單 2026-09-16]`rel-cascade visited`=空單銷帳。★空不空當場機械驗★:重放帳本、展開待判鄰居(跟 resume 共用 `_rel_cascade_pending` 唯一實作),一個都沒有才准記;有待辦就 rc2 擋下並印還剩幾篇——這個動詞唯一的危險是變成萬用消音鍵,呼叫端說了不算。帳本讀取放行 `visited` 事件(它沒有鄰居與邊型欄位,折疊的 all(k) 會自動略過,不影響任何既有判定);收它的唯一用途是讓健檢的「零筆=沒看過」對空單閉嘴。上線當天 15 張零判定的單裡 14 張是空的,一次銷完。出身見 [[Issues/空連鎖單巡過無法銷帳]];同機制的未修缺口見 [[Issues/連鎖判定confirm會寫進被翻案的舊決策編號]]
   KEY:[decision_refs 自動養成 P+T1 2026-07-15]decision-reindex --all 批次編號(顯式,前置);rel-cascade confirm 回寫 decision_ref(_append_decision_ref exact-string dedup,非 link_target——它剝 #dN 會誤合同節點不同決策)。不對稱信任雙欄:by ai→decision_refs_ai(E3 firing 讀聯集/E2 抑制碰不到)、by human→decision_refs(可抑制)
   KEY:[2026-07-20]set status 反正規化同步——status 存兩處(欄位+tags 的 status/* 標籤,模板生),set status 同一次原子寫入就地改寫 tags 內既有 status/* 項(無則不添,純同步不發明);寫後自驗同驗兩處;繞過路徑(手改/外部工具)由 lint+doctor Check M 漂移守衛硬擋(見[[Projects/狀態標籤同步守衛_計劃]])
@@ -67,6 +68,8 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+about_code:
+  - scripts/lumos
 ---
 # lumos-cli-write
 
