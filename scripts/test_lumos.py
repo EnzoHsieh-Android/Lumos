@@ -42115,5 +42115,53 @@ def t_mw_atomic_write_does_not_widen_perms():
     print("  ✓ t_mw_atomic_write_does_not_widen_perms")
 
 
+
+def t_rel_cascade_visited_only_for_empty():
+    """★空的連鎖待辦單要能銷帳,但有待辦的不准用這個動詞閉嘴★
+    (Issues/空連鎖單巡過無法銷帳;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
+
+    背景:決策翻案會自動開一張「去看看誰還引用舊決策」的待辦單。單如果★天生是空的★
+    (翻案當下沒人引用),就沒有東西可判——但體檢認「有判定才算看過」,於是空單會被
+    嘮叨到天荒地老,嘮叨久了人就學會忽略(提醒麻痺)。2026-09-16 實測 15 張零判定的單
+    裡★14 張是空的★,正好命中那篇 Issue 自己寫的升級條件「又一張空票出現」。
+
+    ★這個動詞唯一的危險是變成萬用消音鍵★:所以「空不空」必須★當場機械驗★
+    ——重放帳本、展開待判鄰居,真的一個都沒有才准記。呼叫的人說了不算。
+
+    翻紅釘:把 visited 的空集合檢查拿掉(改成無條件記) → 第 4 條翻紅
+    (有待judging 的單也被消音);把 visited 動詞整個拿掉 → 第 1、2 條翻紅。"""
+    v = mkvault()
+    write(v, "Projects/決策源.md", "type: project\nstatus: done")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/決策源.md#d1"
+
+    # ① 天生空的單:沒有任何筆記引用那個決策
+    cid_empty = lm.rel_cascade_create(env, gid, "Projects/決策源.md")
+    p_empty = v / "governance" / "rel-cascade" / (cid_empty + ".jsonl")
+    _, tr = lm._ledger_read(p_empty)
+    check("★前置★ 現場成立:這張單真的是空的(零筆判定)", not tr, str(tr))
+    r = run(v, "rel-cascade", "visited", "--cascade-id", cid_empty, "--from", gid, expect_rc=0)
+    _, tr2 = lm._ledger_read(p_empty)
+    check("★空單巡過之後帳本有一筆事件★(體檢數的是有沒有事件,有了就不再嘮叨)",
+          len(tr2) == 1, str(tr2))
+    check("那筆事件要標成巡過,不能假裝成判定過某個鄰居",
+          tr2 and tr2[0].get("event") == "visited", str(tr2))
+
+    # ② 有待判鄰居的單:不准用這個動詞消音
+    write(v, "Systems/鄰居甲.md",
+          "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/決策源]]\"")
+    env2 = lm.Env(v)
+    cid_busy = lm.rel_cascade_create(env2, gid, "Projects/決策源.md")
+    p_busy = v / "governance" / "rel-cascade" / (cid_busy + ".jsonl")
+    r2 = run(v, "rel-cascade", "visited", "--cascade-id", cid_busy, "--from", gid, expect_rc=2)
+    _, tr3 = lm._ledger_read(p_busy)
+    check("★有待判鄰居時要擋下來★(否則這個動詞會變成萬用消音鍵)",
+          not tr3, f"帳本被寫了:{tr3}")
+    check("擋下來時要講出還剩幾篇要判",
+          "鄰居" in (r2.stdout + r2.stderr) or "待判" in (r2.stdout + r2.stderr),
+          (r2.stdout + r2.stderr)[-300:])
+    print("  ✓ t_rel_cascade_visited_only_for_empty")
+
+
 if __name__ == "__main__":
     sys.exit(main())

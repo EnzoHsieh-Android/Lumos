@@ -11900,7 +11900,10 @@ def _ledger_read(path):
             # [code-loop r1 CX2] 必要欄位齊才算合法 header——空殼 {"event":"header"} 會讓
             #   resume 拿空 root 靜默 rc=0 裝成功,而非走「不可恢復 rc=1」救援語意
             header = o
-        elif o.get("event") == "transition":
+        elif o.get("event") in ("transition", "visited"):
+            # visited=空單巡過(2026-09-16,Issues/空連鎖單巡過無法銷帳):它沒有鄰居與邊型欄位,
+            # 折疊那支用 all(k) 過濾會自動略過它,所以收進來不影響任何既有判定;
+            # 收它的唯一用途是讓體檢的「零筆=沒看過」不再對空單嘮叨。
             trans.append(o)
     return header, trans
 
@@ -12463,18 +12466,31 @@ def cmd_rel_cascade_resume(env, cascade_id):
         print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
         return 1
     root_gid = header.get("root_decision_id", "")
+    pending = _rel_cascade_pending(env, header, trans, quiet=False)
+    print(f"CASCADE {cascade_id} ROOT {root_gid}")
+    for line in pending:
+        print(line)
+    return 0
+
+
+def _rel_cascade_pending(env, header, trans, quiet=True):
+    """回這張單「還剩哪些鄰居沒判」的行清單(空清單=沒東西可判)。
+
+    ★唯一實作★:resume 與 visited 都問這一支,不各寫一份——這個 repo 已經為
+    「同一個問題長出第二份獨立實作」付過兩次學費。visited 要判「這張單是不是真的空」,
+    問的就是同一件事,差別只在它不印、只看空不空。
+    """
+    root_gid = header.get("root_decision_id", "")
     node = header.get("node", "")
     state = _ledger_fold(trans)
     confirmed = sorted({k[0] for k, t in state.items() if t.get("state") == "confirmed"})
     seeds = [node] + [c for c in confirmed if c != node]
     idx = build_typed_index(env)
-    print(f"CASCADE {cascade_id} ROOT {root_gid}")
-    pending = []
-    seen = set()
-    expanded = set()
+    pending, seen, expanded = [], set(), set()
     for s in seeds:   # visited=root∪最終態 confirmed;粒度鍵冪等,重複展開無害只多列
         if s in expanded:   # 菱形:同節點經兩路抵達 → 不再展,stderr 留痕(反靜默紀律)
-            print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
+            if not quiet:
+                print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
             continue
         expanded.add(s)
         neighbors, ambigs = _typed_hop1(env, s, idx=idx)
@@ -12489,8 +12505,46 @@ def cmd_rel_cascade_resume(env, cascade_id):
             if (s, lit) not in seen:
                 seen.add((s, lit))
                 pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
-    for line in pending:
-        print(line)
+    return pending
+
+
+def cmd_rel_cascade_visited(env, cascade_id, from_id):
+    """[2026-09-16] 空的連鎖待辦單記一筆「巡過」,讓體檢不再嘮叨。
+
+    出身(Issues/空連鎖單巡過無法銷帳,2026-08-31 立、2026-09-01 Enzo 委任裁辦):
+    決策翻案會自動開一張「去看看誰還引用舊決策」的待辦單。單如果★天生是空的★
+    (翻案當下沒人引用),就沒有東西可判——但體檢認「有判定才算看過」,於是空單會被
+    嘮叨到天荒地老,嘮叨久了人就學會忽略,正是提醒麻痺型。2026-09-16 實測 15 張零判定
+    的單裡★14 張是空的★,命中那篇 Issue 自己寫的升級條件「又一張空票出現」。
+
+    ★與「零筆=沒看過」那條裁定相容★(Projects/連鎖佇列軟提醒_計劃 d2):嘮叨偵測的是
+    「你從沒看過這張單」,巡過就是看過了,該閉嘴。
+
+    ★這個動詞唯一的危險是變成萬用消音鍵★,所以「空不空」★當場機械驗★:
+    重放帳本、展開待判鄰居,真的一個都沒有才准記。呼叫的人說了不算。
+    """
+    _validate_cascade_id(cascade_id)
+    _validate_from_gid(from_id)
+    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+    if not p.exists():
+        raise ValueError(f"找不到 cascade 帳本 {cascade_id}——帳本只會在 decision-supersede 翻案時建立")
+    header, trans = _ledger_read(p)
+    if header is None:
+        raise ValueError("cascade 帳本的開頭壞了,不寫;用 resume 會把它標成不可恢復")
+    if header.get("root_decision_id") != from_id.strip():
+        raise ValueError(f"--from 指的決策不屬本 cascade(這本帳的起點是 {header.get('root_decision_id')})")
+    pending = _rel_cascade_pending(env, header, trans)
+    if pending:
+        print(f"擋下:這張單還有 {len(pending)} 個鄰居沒判,不能記巡過。", file=sys.stderr)
+        print("  為什麼在意:巡過是給「天生沒東西可判」的空單用的;"
+              "有待判的還記巡過,等於把該回頭看的事消音。", file=sys.stderr)
+        print("  接下來:逐篇判完再說,看還剩哪些:", file=sys.stderr)
+        print(f"    lumos rel-cascade resume {cascade_id}", file=sys.stderr)
+        return 2
+    _ledger_append(p, {"event": "visited", "ts": _utc_ts(),
+                       "from_decision_id": from_id.strip(),
+                       "note": "空單:重放當下零個待判鄰居"})
+    print(f"✓ rel-cascade visited {cascade_id}(空單,零個待判鄰居;體檢不再把它算成沒看過)")
     return 0
 
 
@@ -27632,7 +27686,7 @@ def main():
     p.add_argument("--all", action="store_true", dest="reindex_all", help="批次套用到所有有 decisions 的節點(顯式指令)")
 
     p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
-    p.add_argument("verb", choices=["confirm", "prune", "list", "resume"])
+    p.add_argument("verb", choices=["confirm", "prune", "list", "resume", "visited"])
     p.add_argument("arg", nargs="?", help="confirm/prune=<鄰居節點>;resume=<cascade-id>;list 不吃")
     p.add_argument("--cascade-id", dest="rc_cid", help="confirm/prune 必填(帳本由 supersede 觸發端建立)")
     p.add_argument("--from", dest="rc_from", help="root 全域決策 id <節點rel>#d<N>(裸 dN 拒收;v1 全鏈同源)")
@@ -28345,6 +28399,13 @@ def main():
                     print("擋下:rel-cascade resume 要給要接續的 cascade 編號", file=sys.stderr)
                     return 2
                 return cmd_rel_cascade_resume(env, args.arg)
+            if args.verb == "visited":
+                missing = [f for f, v in (("--cascade-id", args.rc_cid),
+                                          ("--from", args.rc_from)) if not v]
+                if missing:
+                    print(f"擋下:rel-cascade visited 少給了參數: {' '.join(missing)}", file=sys.stderr)
+                    return 2
+                return cmd_rel_cascade_visited(env, args.rc_cid, args.rc_from)
             return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
         except (ValueError, RuntimeError, OSError) as e:
             # [code-loop r1 B3] 含 OSError:磁碟滿/權限/TOCTOU 檔案消失/O_NOFOLLOW 拒 symlink
