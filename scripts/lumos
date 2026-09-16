@@ -11138,6 +11138,52 @@ _VAULT_LOCK_HELD = {}         # 這個程序已經拿著的寫入鎖 → 巢狀�
 _VAULT_LOCK_WARNED = {}        # 鎖的位置換過一次就別再唸(同一個程序內)
 
 
+def _vault_lock_where(vault):
+    """這個筆記庫的寫入鎖該放哪、位置有沒有不對勁。回 (鎖檔路徑, 不對勁的原因|None)。
+
+    ★獨立一支,不是巢狀函式★(2026-09-16 推送前的新增告警閘擋下:算進外層之後超過複雜度
+    上限)。分開之後還多買到一件事:「決定位置」與「拿鎖」各自看得完,代碼審 r2 抓到的那個坑
+    (位置算在可重入判斷後面、巢狀呼叫卡死自己)變成結構上不可能再犯。
+
+    ★鎖檔的資料夾要過信任檢查★(同族掃描):放的位置是照派工鏡頭快取的先例抄的,但
+    ★只抄了放哪裡、沒抄那道檢查★。★不可信就換個地方鎖,不是乾脆不鎖★(代碼審 r1 外家席):
+    不鎖等於把一個安全問題換成一個正確性問題——原本鎖檔雖然落在不可信的地方、鎖本身仍然有效;
+    不鎖之後兩個程序就能同時做讀—改—寫,而且觸發條件不需要攻擊者,把快取目錄搬到別的磁碟
+    就會踩到。退路選筆記庫自己:要寫的就是它、使用者一定擁有它,兩個程序算出來的路徑一樣,
+    互斥照樣成立。
+
+    ★沒擋到的殘留(照實寫,別當成全防住了)★:檢查排在建資料夾之後,連結指到的地方仍會多出
+    一個空資料夾——鄰居那幾處同樣順序,是共用寫法本來就有的缺口,不是這處特有;真正危險的
+    動作(寫鎖檔、改權限、刪目錄)都在檢查之後。
+    """
+    import hashlib
+    key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
+    primary = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
+    try:
+        primary.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return primary, ("no-dir", str(e))
+    if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
+        return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
+    return primary, None
+
+
+def _vault_lock_say(lock, why):
+    """鎖的位置不對勁時講一次(呼叫端負責「同一個程序只講一次」)。"""
+    if why[0] == "no-dir":
+        print(f"提醒:寫入鎖的資料夾建不起來({why[1]}),這次不排隊直接寫。", file=sys.stderr)
+        print("  為什麼在意:同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。",
+              file=sys.stderr)
+        return
+    print(f"提醒:放寫入鎖的資料夾不可信({why[1]})——它自己或上層被換成了"
+          "指向別處的連結、或別人也寫得進去。", file=sys.stderr)
+    print("  為什麼在意:鎖是用來擋「兩個程序同時改同一個筆記庫、後寫的蓋掉先寫的」;"
+          f"這次改把鎖放在筆記庫自己裡面({lock.name}),功能不變,只是位置換了。",
+          file=sys.stderr)
+    print("  要回到原本的位置,先看那條路徑是誰建的:", file=sys.stderr)
+    print(f"    ls -ld {why[1]} {Path(why[1]).parent}", file=sys.stderr)
+
+
 def _vault_write_lock(vault):
     """同一個筆記庫的 set/append/remove 一次只讓一個程序做「讀—改—寫」(2026-09-10 代碼審 r3 併發資源席:
     沒有鎖時,回報成功的項目會被同時跑的另一個程序蓋掉)。
@@ -11147,37 +11193,15 @@ def _vault_write_lock(vault):
     鎖檔放 ~/.cache/lumos/vault-lock/(照 dispatch-lens 快取的先例:不放共用暫存目錄——路徑可預測、會被別的使用者先佔)。
     同一個程序巢狀拿同一把鎖直接過(第四輪:原本自己卡自己 60 秒,訊息還說「別的程序在寫」);
     鎖的資料夾建不起來就照寫,但會講一聲(第四輪:原本默默不上鎖)。"""
-    import contextlib, hashlib, time as _t
+    import contextlib, time as _t
 
     @contextlib.contextmanager
     def _cm():
-        key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
-        primary = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
-
-        # ★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★(2026-09-16 代碼審 r2)。
-        # 第一版把退路排在可重入判斷後面,於是巢狀呼叫時拿主要路徑的鍵去查、查不到,
-        # 內層會卡滿 60 秒再拋「別的程序正在寫」——那是假訊息,而且正是本函式說明裡
-        # 「第四輪已修過」的舊坑從退路分支重新長出來。
-        lock, why = primary, None
-        try:
-            primary.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            why = ("no-dir", str(e))
-        else:
-            # ★鎖檔的資料夾也要過信任檢查★(2026-09-16 同族掃描):放的位置是照派工鏡頭
-            # 快取的先例抄的,但★只抄了放哪裡、沒抄那道檢查★。實測把 ~/.cache/lumos 做成
-            # 指向別人目錄的連結,鎖的資料夾真的被建到那邊去。
-            # ★不可信就換個地方鎖,不是乾脆不鎖★(代碼審 r1 外家席):第一版寫成「不可信
-            # 就直接寫」,那是把一個安全問題換成一個正確性問題——原本鎖檔雖然落在不可信的
-            # 地方、鎖本身仍然有效;不鎖之後兩個程序就能同時做讀—改—寫。而且觸發條件不需要
-            # 攻擊者,把快取目錄搬到別的磁碟就會踩到。退路選筆記庫自己:要寫的就是它、
-            # 使用者一定擁有它,兩個程序算出來的路徑一樣,互斥照樣成立。
-            # ★沒擋到的殘留(照實寫)★:檢查排在建資料夾之後,所以連結指到的地方還是會多出
-            # 一個空資料夾——鄰居那幾處同樣順序,是共用寫法本來就有的缺口。真正危險的動作
-            # (寫鎖檔、改權限、刪目錄)都在檢查之後。
-            if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
-                lock = Path(vault) / f".lumos-vault-{key}.lock"
-                why = ("untrusted", str(primary.parent))
+        # ★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★(2026-09-16 代碼審 r2):
+        # 排在後面的話,巢狀呼叫會拿舊路徑的鍵去查、查不到,內層卡滿 60 秒再拋
+        # 「別的程序正在寫」這句假訊息——那正是本函式說明裡「第四輪已修過」的舊坑
+        # 從退路分支重新長出來。現在決定位置是獨立一支,結構上不可能再排錯順序。
+        lock, why = _vault_lock_where(vault)
         k = str(lock)
 
         if _VAULT_LOCK_HELD.get(k):          # 自己已經拿著這把鎖:巢狀直接過
@@ -11188,20 +11212,9 @@ def _vault_write_lock(vault):
                 _VAULT_LOCK_HELD[k] -= 1
             return
 
-        if why and not _VAULT_LOCK_WARNED.get(k):    # 位置不對勁只講一次,不每次都唸
+        if why and not _VAULT_LOCK_WARNED.get(k):
             _VAULT_LOCK_WARNED[k] = True
-            if why[0] == "no-dir":
-                print(f"提醒:寫入鎖的資料夾建不起來({why[1]}),這次不排隊直接寫。", file=sys.stderr)
-                print("  為什麼在意:同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。",
-                      file=sys.stderr)
-            else:
-                print(f"提醒:放寫入鎖的資料夾不可信({why[1]})——它自己或上層被換成了"
-                      "指向別處的連結、或別人也寫得進去。", file=sys.stderr)
-                print("  為什麼在意:鎖是用來擋「兩個程序同時改同一個筆記庫、後寫的蓋掉先寫的」;"
-                      f"這次改把鎖放在筆記庫自己裡面({lock.name}),功能不變,只是位置換了。",
-                      file=sys.stderr)
-                print("  要回到原本的位置,先看那條路徑是誰建的:", file=sys.stderr)
-                print(f"    ls -ld {why[1]} {Path(why[1]).parent}", file=sys.stderr)
+            _vault_lock_say(lock, why)
         if why and why[0] == "no-dir":       # 連資料夾都建不起來:沒有退路,照寫但已經出過聲
             yield
             return
@@ -17539,7 +17552,6 @@ def cmd_rule_check(repo=None, as_json=False):
     而「寫了一條規則」不等於「那條規則真的會抓到東西」——沒有會翻紅的樣本,它可能從頭到尾都是死的。
     rc:0=每條都有樣本且樣本真的翻紅 / 1=有規則沒樣本或樣本不翻紅 / 2=索引讀不了。"""
     import json
-    import shlex as _shlex
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
         print("✗ rule-check: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)

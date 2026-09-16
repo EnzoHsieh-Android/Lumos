@@ -14379,8 +14379,12 @@ def t_private_dir_trust_shared_across_four_sites():
     #    實測:把 ~/.cache/lumos 做成指向別人目錄的 symlink,鎖的資料夾真的被建到那邊去,
     #    而同一支信任檢查對那條路徑判「不可信」。鎖失效的後果是兩個程序互蓋筆記庫的修改。
     src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+    # ★2026-09-16 起筆記庫寫入鎖那處改叫 _vault_lock_where★:原本檢查寫在 _vault_write_lock
+    #   裡面,推送前的新增告警閘嫌它太複雜,於是把「決定鎖放哪」抽成模組層獨立一支,
+    #   信任檢查跟著搬過去。★這條測試當場翻紅★——它是用函式名抓區段的,搬家就抓不到,
+    #   正好證明它真的在盯而不是擺著好看。
     for site in ("_lens_arm_dir_ok", "_lens_cache_write", "cmd_dispatch_lens_arm",
-                 "cmd_dispatch_lens_disarm", "_vault_write_lock"):
+                 "cmd_dispatch_lens_disarm", "_vault_lock_where"):
         import re as _re
         mm = _re.search(rf"def {site}\(.*?(?=\ndef )", src, _re.S)
         check(f"私有目錄: {site} 有走共用的信任檢查",
