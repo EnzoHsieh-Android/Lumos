@@ -25510,7 +25510,7 @@ rel-cascade search set show stale stats sync-verified-by""".split())
           "{mermaid,dot,html}" in _help("export").replace(" ", ""), _help("export")[:300])
     # 來源② positional 帶 choices
     check("S6-3: rel-cascade verb 有 choices(→機械枚舉)",
-          "{confirm,prune,list,resume}" in _help("rel-cascade").replace(" ", ""),
+          "{confirm,prune,list,resume,visited}" in _help("rel-cascade").replace(" ", ""),
           _help("rel-cascade")[:300])
     # 來源① subparsers
     g = _help("guard")
@@ -42160,6 +42160,34 @@ def t_rel_cascade_visited_only_for_empty():
     check("擋下來時要講出還剩幾篇要判",
           "鄰居" in (r2.stdout + r2.stderr) or "待判" in (r2.stdout + r2.stderr),
           (r2.stdout + r2.stderr)[-300:])
+
+    # ③ ★巡過紀錄不准混進判定狀態★(r1 外家席 c1)。原本的說法是「visited 沒有鄰居與
+    #   邊型欄位,折疊會自動略過」——那只是★寫入端的慣例★,讀取端一個字都沒保證。
+    #   帳本是 append-only 的純文字,任何一筆手改或別的工具寫進來的 visited 只要帶齊
+    #   三個粒度欄位,就會蓋掉真正的待判狀態,空單守衛跟著放行。
+    fold = lm._ledger_fold
+    key = {"neighbor": "Systems/鄰居甲.md", "edge_type": "verified_by",
+           "from_decision_id": gid}
+    only_pending = [dict(key, event="transition", state="pending")]
+    check("★前置★ 現場成立:只有一筆待判時,折疊結果就是那筆待判",
+          [t2.get("state") for t2 in fold(only_pending).values()] == ["pending"],
+          str(fold(only_pending)))
+    mixed = only_pending + [dict(key, event="visited", state="confirmed")]
+    check("★帶著粒度欄位的巡過紀錄不得蓋掉待判狀態★(否則它變成萬用消音鍵)",
+          [t2.get("state") for t2 in fold(mixed).values()] == ["pending"],
+          str(fold(mixed)))
+
+    # ④ ★展不開不等於空★(r1 外家席 c2):起點筆記被刪掉或改名之後,展開鄰居會得到
+    #   零筆——但那是「問不到」,不是「真的沒人引用」。當成空單放行等於把還沒確認完的
+    #   待辦悄悄消掉。
+    cid_gone = lm.rel_cascade_create(lm.Env(v), gid, "Projects/決策源.md")
+    (v / "Projects" / "決策源.md").unlink()
+    r3 = run(v, "rel-cascade", "visited", "--cascade-id", cid_gone, "--from", gid, expect_rc=2)
+    _, tr4 = lm._ledger_read(v / "governance" / "rel-cascade" / (cid_gone + ".jsonl"))
+    check("★起點筆記不存在時要擋★(展不開是問不到,不是沒東西可判)",
+          not tr4, f"帳本被寫了:{tr4}")
+    check("擋下來時要講出是起點不見了,不要只說空單",
+          "起點" in (r3.stdout + r3.stderr), (r3.stdout + r3.stderr)[-300:])
     print("  ✓ t_rel_cascade_visited_only_for_empty")
 
 
@@ -42197,10 +42225,24 @@ def t_lint_warns_empty_revalidate_when():
     write(v, "Verification/前提空的.md",
           "type: verification\nstatus: pass\nvalid_under:\nrevalidate_when: 改到某某的時候")
     r = run(v, "lint", "前提空的", expect_rc=0)
+    # ★斷言不可以命中檔名★(r1 外家席 c4、單reviewer 席同題):lint 的第一行固定印節點
+    # 路徑,案例叫「前提空的」就讓「前提」兩個字恆真——把整段檢查拆掉它照樣綠。
+    # 比對警告本身講的欄位名才有鑑別力。
     check("★前提欄空著也要出聲★(不寫前提=不知道這個結論在什麼條件下才算數)",
-          "前提" in r.stdout or "valid_under" in r.stdout, r.stdout[:300])
+          "valid_under 是空的" in r.stdout, r.stdout[:300])
     # ④ 只是提醒,不能擋
     check("★只出提醒不擋★(舊帳很多,擋了等於每個提交都紅)", r.returncode == 0, str(r.returncode))
+    # ⑥ ★全部項目都是空白字串的清單★(r1 外家席 c3):它是非空 list,轉成字串之後
+    #    帶著括號與引號,舊寫法會判成「有寫」——但掃描端逐項去空白後拿到的是零條,
+    #    等於還是掃不到。判空要跟掃描端用同一支 helper。
+    write(v, "Verification/全空白的.md",
+          "type: verification\nstatus: pass\nvalid_under:\n  - \"\"\n  - \"   \"\n"
+          "revalidate_when:\n  - \"\"\n  - \"   \"")
+    r = run(v, "lint", "全空白的", expect_rc=0)
+    check("★清單裡全是空白字串也算沒寫★(掃描端逐項去空白後拿到零條)",
+          "valid_under 是空的" in r.stdout and "revalidate_when 是空的" in r.stdout,
+          r.stdout[:400])
+
     # ⑤ 別的型別不該被這條叫到
     write(v, "Systems/別的型別.md",
           "type: system\nstatus: done\nsummary: |-\n  FLOW:甲到乙\n  KEY:重點一句")

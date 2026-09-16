@@ -1,0 +1,362 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 767c14d3..4d5504b2 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4334,20 +4334,34 @@ def cmd_lint(env, node):
+     與 doctor 分工:doctor 是全圖權威(跨節點完整性 + [test:] 存在性),lint 只看這一篇、
+     predicts pre-push 會不會擋(error 即 doctor --ci 會擋的同類)。"""
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
+     n = env.notes[rel]
+     errs = list(n.lint)          # frontmatter 指紋(ghost trap / 重複鍵 / 日期引號…)= error
+     warns = []
+ 
++    # ★驗證紀錄的兩個條件欄空著要出聲★(2026-09-16;Issues/lint不守驗證紀錄空回頭條件,
++    # 2026-09-01 Enzo 委任裁辦)。出身:某天五篇驗證★全★把回頭條件寫進正文、欄位留空,
++    # 於是掃描工具全掃不到、lint 全綠放行——鐵則四「承認風險要附回頭看的條件」被靜默架空
++    # 而沒有任何機械提醒,是審查席讀出來的、不是工具抓到的。
++    # ★只提醒不擋★:舊帳很多(上線當天光是排序那一篇就掛著五份空條件的驗證),擋了等於
++    # 每個提交都紅;提醒的作用是讓寫的人當下看到,不是回頭清舊帳。
++    # ★只對 pass 的驗證紀錄★:其他型別沒有這兩個欄位;stale/fail 本來就還在處理中,不必催。
++    if n.fields.get("type") == "verification" and n.fields.get("status") == "pass":
++        for _f, _what in (("valid_under", "這個結論在什麼前提下才算數"),
++                          ("revalidate_when", "改到什麼時候該回頭重驗")):
++            if not str(n.fields.get(_f) or "").strip():
++                warns.append(f"{_f} 是空的——沒寫「{_what}」,"
++                             f"掃描工具就永遠掃不到這篇,這個結論會一直被當成還有效")
++
+     # ★開頭欄位鍵打錯會被所有檢查靜默略過★(2026-09-06 全 repo 審視 #16):
+     # 打成 valid_unde / verifed_by,lint 一句話都不說、doctor 也看不到,那個欄位等於沒寫。
+     # ★只給軟提醒不升 error★:工具對未知欄位的立場是「前向相容、容忍」(消費專案與
+     # core-knowledge 各有自己的欄位),升成 error 會讓別人的 vault 每次 lint 都被嘮叨。
+     # 清單可用 .lumos/config.json 的 extra_frontmatter_keys 擴充。
+     _known = set(_KNOWN_FRONTMATTER_KEYS) | set(LIST_KEYS) | set(LINK_KEYS) | set(_extra_fm_keys(env))
+     _unknown = [k for k in n.fields.keys() if k not in _known]
+     for _k in _unknown:
+         _near = sorted(c for c in _known if _levenshtein_le1(_k, c))   # r1:_known 是 set,不排序的話多個等距候選每次給的建議會漂
+         _hint = f"——是不是想寫 {_near[0]}?" if _near else "——工具不認得這個欄位,它不會被任何檢查讀到"
+@@ -11893,21 +11907,24 @@ def _ledger_read(path):
+     for i, line in enumerate(raw.splitlines()):
+         try:
+             o = json.loads(line)
+         except ValueError:
+             continue
+         if i == 0 and o.get("event") == "header" \
+                 and str(o.get("root_decision_id", "")).strip() and str(o.get("node", "")).strip():
+             # [code-loop r1 CX2] 必要欄位齊才算合法 header——空殼 {"event":"header"} 會讓
+             #   resume 拿空 root 靜默 rc=0 裝成功,而非走「不可恢復 rc=1」救援語意
+             header = o
+-        elif o.get("event") == "transition":
++        elif o.get("event") in ("transition", "visited"):
++            # visited=空單巡過(2026-09-16,Issues/空連鎖單巡過無法銷帳):它沒有鄰居與邊型欄位,
++            # 折疊那支用 all(k) 過濾會自動略過它,所以收進來不影響任何既有判定;
++            # 收它的唯一用途是讓體檢的「零筆=沒看過」不再對空單嘮叨。
+             trans.append(o)
+     return header, trans
+ 
+ 
+ def _ledger_fold(transitions):
+     """狀態折疊:同 (neighbor×edge_type×from_decision_id) 取物理序最後一筆。"""
+     state = {}
+     for t in transitions:
+         k = (t.get("neighbor"), t.get("edge_type"), t.get("from_decision_id"))
+         if all(k):
+@@ -12456,48 +12473,99 @@ def cmd_rel_cascade_resume(env, cascade_id):
+     中斷接續/escalate 待人項/誤 prune 翻案補跑下游 三場景共用。torn header → rc=1。"""
+     _validate_cascade_id(cascade_id)
+     p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+     if not p.exists():
+         raise ValueError(f"找不到 cascade 帳本: {cascade_id}")
+     header, trans = _ledger_read(p)
+     if header is None:
+         print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
+         return 1
+     root_gid = header.get("root_decision_id", "")
++    pending = _rel_cascade_pending(env, header, trans, quiet=False)
++    print(f"CASCADE {cascade_id} ROOT {root_gid}")
++    for line in pending:
++        print(line)
++    return 0
++
++
++def _rel_cascade_pending(env, header, trans, quiet=True):
++    """回這張單「還剩哪些鄰居沒判」的行清單(空清單=沒東西可判)。
++
++    ★唯一實作★:resume 與 visited 都問這一支,不各寫一份——這個 repo 已經為
++    「同一個問題長出第二份獨立實作」付過兩次學費。visited 要判「這張單是不是真的空」,
++    問的就是同一件事,差別只在它不印、只看空不空。
++    """
++    root_gid = header.get("root_decision_id", "")
+     node = header.get("node", "")
+     state = _ledger_fold(trans)
+     confirmed = sorted({k[0] for k, t in state.items() if t.get("state") == "confirmed"})
+     seeds = [node] + [c for c in confirmed if c != node]
+     idx = build_typed_index(env)
+-    print(f"CASCADE {cascade_id} ROOT {root_gid}")
+-    pending = []
+-    seen = set()
+-    expanded = set()
++    pending, seen, expanded = [], set(), set()
+     for s in seeds:   # visited=root∪最終態 confirmed;粒度鍵冪等,重複展開無害只多列
+         if s in expanded:   # 菱形:同節點經兩路抵達 → 不再展,stderr 留痕(反靜默紀律)
+-            print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
++            if not quiet:
++                print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
+             continue
+         expanded.add(s)
+         neighbors, ambigs = _typed_hop1(env, s, idx=idx)
+         for (src, etype, inv_n) in neighbors:
+             k = (src, etype, root_gid)
+             if k in state or k in seen:
+                 continue
+             seen.add(k)
+             tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+             pending.append(f"NEIGHBOR {src} EDGE {etype}{tag}")
+         for (lit, n) in ambigs:
+             if (s, lit) not in seen:
+                 seen.add((s, lit))
+                 pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
+-    for line in pending:
+-        print(line)
++    return pending
++
++
++def cmd_rel_cascade_visited(env, cascade_id, from_id):
++    """[2026-09-16] 空的連鎖待辦單記一筆「巡過」,讓體檢不再嘮叨。
++
++    出身(Issues/空連鎖單巡過無法銷帳,2026-08-31 立、2026-09-01 Enzo 委任裁辦):
++    決策翻案會自動開一張「去看看誰還引用舊決策」的待辦單。單如果★天生是空的★
++    (翻案當下沒人引用),就沒有東西可判——但體檢認「有判定才算看過」,於是空單會被
++    嘮叨到天荒地老,嘮叨久了人就學會忽略,正是提醒麻痺型。2026-09-16 實測 15 張零判定
++    的單裡★14 張是空的★,命中那篇 Issue 自己寫的升級條件「又一張空票出現」。
++
++    ★與「零筆=沒看過」那條裁定相容★(Projects/連鎖佇列軟提醒_計劃 d2):嘮叨偵測的是
++    「你從沒看過這張單」,巡過就是看過了,該閉嘴。
++
++    ★這個動詞唯一的危險是變成萬用消音鍵★,所以「空不空」★當場機械驗★:
++    重放帳本、展開待判鄰居,真的一個都沒有才准記。呼叫的人說了不算。
++    """
++    _validate_cascade_id(cascade_id)
++    _validate_from_gid(from_id)
++    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
++    if not p.exists():
++        raise ValueError(f"找不到 cascade 帳本 {cascade_id}——帳本只會在 decision-supersede 翻案時建立")
++    header, trans = _ledger_read(p)
++    if header is None:
++        raise ValueError("cascade 帳本的開頭壞了,不寫;用 resume 會把它標成不可恢復")
++    if header.get("root_decision_id") != from_id.strip():
++        raise ValueError(f"--from 指的決策不屬本 cascade(這本帳的起點是 {header.get('root_decision_id')})")
++    pending = _rel_cascade_pending(env, header, trans)
++    if pending:
++        print(f"擋下:這張單還有 {len(pending)} 個鄰居沒判,不能記巡過。", file=sys.stderr)
++        print("  為什麼在意:巡過是給「天生沒東西可判」的空單用的;"
++              "有待判的還記巡過,等於把該回頭看的事消音。", file=sys.stderr)
++        print("  接下來:逐篇判完再說,看還剩哪些:", file=sys.stderr)
++        print(f"    lumos rel-cascade resume {cascade_id}", file=sys.stderr)
++        return 2
++    _ledger_append(p, {"event": "visited", "ts": _utc_ts(),
++                       "from_decision_id": from_id.strip(),
++                       "note": "空單:重放當下零個待判鄰居"})
++    print(f"✓ rel-cascade visited {cascade_id}(空單,零個待判鄰居;體檢不再把它算成沒看過)")
+     return 0
+ 
+ 
+ TEMPLATES = {
+     "system": ("Systems", "type: system\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
+                "aliases: []\n"
+                "about_code: []\n"
+                "tags:\n  - type/system\n  - status/doing\nsummary: |-\n  FLOW:\n  KEY:\n  DEP:\n  TEST:"),
+     "verification": ("Verification", "type: verification\nstatus: pass\ndate: {today}\n"
+                      "valid_under:\nrevalidate_when:\ntags:\n  - type/verification\n  - status/pass"),
+@@ -27625,21 +27693,21 @@ def main():
+     p.add_argument("note")
+     p.add_argument("match", help="決策 content 子字串(多重命中 rc=2 列候選,防改錯項)或 \"#dN\" 精確定址(節點未 reindex 查無→rc=2)")
+     p.add_argument("--by", required=True, help="被誰取代(superseded_by 值)")
+     p.add_argument("--ended", help="失效日期 YYYY-MM-DD(選填)")
+ 
+     p = sub.add_parser("decision-reindex", help="[M1/P2] 回填遷移:對無 id 決策從既有最大 id+1 接續編號(冪等);--all 批次套用全部決策節點(decision_refs 養成前置)")
+     p.add_argument("note", nargs="?", help="單節點;省略需 --all")
+     p.add_argument("--all", action="store_true", dest="reindex_all", help="批次套用到所有有 decisions 的節點(顯式指令)")
+ 
+     p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
+-    p.add_argument("verb", choices=["confirm", "prune", "list", "resume"])
++    p.add_argument("verb", choices=["confirm", "prune", "list", "resume", "visited"])
+     p.add_argument("arg", nargs="?", help="confirm/prune=<鄰居節點>;resume=<cascade-id>;list 不吃")
+     p.add_argument("--cascade-id", dest="rc_cid", help="confirm/prune 必填(帳本由 supersede 觸發端建立)")
+     p.add_argument("--from", dest="rc_from", help="root 全域決策 id <節點rel>#d<N>(裸 dN 拒收;v1 全鏈同源)")
+     p.add_argument("--edge", dest="rc_edge", choices=["verified_by", "plan_refs"], help="邊型(方向語意明確者)")
+     p.add_argument("--by", dest="rc_by", choices=["ai", "human"], help="誰判的(ai 判的可抽查/翻案)")
+     p.add_argument("--stale", dest="rc_stale", type=int, help="list:只列最後事件早於 N 天的 cascade(活動齡)")
+ 
+     p = sub.add_parser("decision-add", help="T3 巢狀:新增一條 ADR 決策")
+     p.add_argument("note")
+     p.add_argument("content")
+@@ -28338,20 +28406,27 @@ def main():
+                 if missing:
+                     print(f"擋下:rel-cascade {args.verb} 少給了參數: {' '.join(missing)}", file=sys.stderr)
+                     return 2
+                 return cmd_rel_cascade_write(env, args.verb, args.arg, args.rc_cid,
+                                              args.rc_from, args.rc_edge, args.rc_by)
+             if args.verb == "resume":
+                 if not args.arg:
+                     print("擋下:rel-cascade resume 要給要接續的 cascade 編號", file=sys.stderr)
+                     return 2
+                 return cmd_rel_cascade_resume(env, args.arg)
++            if args.verb == "visited":
++                missing = [f for f, v in (("--cascade-id", args.rc_cid),
++                                          ("--from", args.rc_from)) if not v]
++                if missing:
++                    print(f"擋下:rel-cascade visited 少給了參數: {' '.join(missing)}", file=sys.stderr)
++                    return 2
++                return cmd_rel_cascade_visited(env, args.rc_cid, args.rc_from)
+             return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
+         except (ValueError, RuntimeError, OSError) as e:
+             # [code-loop r1 B3] 含 OSError:磁碟滿/權限/TOCTOU 檔案消失/O_NOFOLLOW 拒 symlink
+             #   ——帳本走檔案系統,IO 例外是本分支常態失敗面,裸 traceback 會破壞 rc=2 行式協議
+             print(f"擋下:{e}", file=sys.stderr)
+             return 2
+ 
+     if args.cmd == "decision-refs":
+         dc = args.dref_cmd
+         # code-dref s1-f2:包 try/except 照姊妹寫入指令(atomic_write_verify/權限/型別衝突→
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index 0c8bb964..262e1100 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -35,21 +35,21 @@ Edit / Write 之前 hook 會自動推一份「必看合約 / 事故 + 相關筆
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+ 6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+ 
+ ### 給人看的回報用白話
+ 先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。
+ 
+ ### 設計與排查
+-設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
++設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+ 
+ ### 提交與推送
+ 一個功能一個提交，說明用白話：
+ - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
+ - 標題寫這次改了什麼、使用者看得到的差別；不寫內部代號（第幾輪、幾席、F3、決策編號、提交編號）；內文最多五條白話條列。
+ - 程式、圖譜筆記、審查卷證放同一個提交；做到一半的本機提交，推之前壓成一個（同一個工作目錄有別的會談時只加自己的檔，不用 `git add -A`）。
+ - 過代碼審的功能多一個帳本提交：留痕綁版本，通過後只准再提交帳本（訊息固定 `chore(lumos): 記錄代碼審通過`）；凍結判定併進功能提交，步驟見 lumos-code-loop。
+ 
+ ### 遇到這些情境就調用對應 skill
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 63a4feee..f27ef8f5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -42108,12 +42108,107 @@ def t_mw_atomic_write_does_not_widen_perms():
+     mod.write_json_atomic(str(out), {"a": 1})
+     check("寫得出去而且把連結整個換成普通檔", out.is_file() and not out.is_symlink(), str(out))
+     got = out.stat().st_mode & 0o777
+     check("★產出的檔不得沿用符號連結那組權限★",
+           got != link_mode, f"連結={oct(link_mode)} 產出={oct(got)}")
+     check("受害檔的內容沒有被寫穿", victim.read_text(encoding="utf-8") == "受害者",
+           victim.read_text(encoding="utf-8")[:40])
+     print("  ✓ t_mw_atomic_write_does_not_widen_perms")
+ 
+ 
++
++def t_rel_cascade_visited_only_for_empty():
++    """★空的連鎖待辦單要能銷帳,但有待辦的不准用這個動詞閉嘴★
++    (Issues/空連鎖單巡過無法銷帳;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
++
++    背景:決策翻案會自動開一張「去看看誰還引用舊決策」的待辦單。單如果★天生是空的★
++    (翻案當下沒人引用),就沒有東西可判——但體檢認「有判定才算看過」,於是空單會被
++    嘮叨到天荒地老,嘮叨久了人就學會忽略(提醒麻痺)。2026-09-16 實測 15 張零判定的單
++    裡★14 張是空的★,正好命中那篇 Issue 自己寫的升級條件「又一張空票出現」。
++
++    ★這個動詞唯一的危險是變成萬用消音鍵★:所以「空不空」必須★當場機械驗★
++    ——重放帳本、展開待判鄰居,真的一個都沒有才准記。呼叫的人說了不算。
++
++    翻紅釘:把 visited 的空集合檢查拿掉(改成無條件記) → 第 4 條翻紅
++    (有待judging 的單也被消音);把 visited 動詞整個拿掉 → 第 1、2 條翻紅。"""
++    v = mkvault()
++    write(v, "Projects/決策源.md", "type: project\nstatus: done")
++    lm = _lm(); env = lm.Env(v)
++    gid = "Projects/決策源.md#d1"
++
++    # ① 天生空的單:沒有任何筆記引用那個決策
++    cid_empty = lm.rel_cascade_create(env, gid, "Projects/決策源.md")
++    p_empty = v / "governance" / "rel-cascade" / (cid_empty + ".jsonl")
++    _, tr = lm._ledger_read(p_empty)
++    check("★前置★ 現場成立:這張單真的是空的(零筆判定)", not tr, str(tr))
++    r = run(v, "rel-cascade", "visited", "--cascade-id", cid_empty, "--from", gid, expect_rc=0)
++    _, tr2 = lm._ledger_read(p_empty)
++    check("★空單巡過之後帳本有一筆事件★(體檢數的是有沒有事件,有了就不再嘮叨)",
++          len(tr2) == 1, str(tr2))
++    check("那筆事件要標成巡過,不能假裝成判定過某個鄰居",
++          tr2 and tr2[0].get("event") == "visited", str(tr2))
++
++    # ② 有待判鄰居的單:不准用這個動詞消音
++    write(v, "Systems/鄰居甲.md",
++          "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/決策源]]\"")
++    env2 = lm.Env(v)
++    cid_busy = lm.rel_cascade_create(env2, gid, "Projects/決策源.md")
++    p_busy = v / "governance" / "rel-cascade" / (cid_busy + ".jsonl")
++    r2 = run(v, "rel-cascade", "visited", "--cascade-id", cid_busy, "--from", gid, expect_rc=2)
++    _, tr3 = lm._ledger_read(p_busy)
++    check("★有待判鄰居時要擋下來★(否則這個動詞會變成萬用消音鍵)",
++          not tr3, f"帳本被寫了:{tr3}")
++    check("擋下來時要講出還剩幾篇要判",
++          "鄰居" in (r2.stdout + r2.stderr) or "待判" in (r2.stdout + r2.stderr),
++          (r2.stdout + r2.stderr)[-300:])
++    print("  ✓ t_rel_cascade_visited_only_for_empty")
++
++
++
++def t_lint_warns_empty_revalidate_when():
++    """★驗證紀錄的「什麼時候要回頭重驗」欄位空著,lint 要出聲★
++    (Issues/lint不守驗證紀錄空回頭條件;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
++
++    出身:某一天五篇驗證★全★把回頭條件寫進正文、欄位留空,於是掃描工具全掃不到、
++    lint 全綠放行——鐵則四「承認風險要附回頭看的條件」被靜默架空而沒有任何機械提醒。
++    是審查席讀出來的,不是工具抓到的。
++
++    ★只出 warning 不擋★(修法本來就這樣裁):舊帳很多,擋了等於每個提交都紅;
++    warning 的作用是讓寫的人當下看到,不是回頭清舊帳。
++
++    ★只對 type=verification 且 status=pass 的★:其他型別沒有這兩個欄位;
++    status 不是 pass 的(stale/fail)本來就還在處理中,不必催。
++
++    翻紅釘:把那段檢查拿掉 → 第 2、3 條翻紅。"""
++    v = mkvault()
++    # ① 兩欄都有值:不該叫
++    write(v, "Verification/有寫的.md",
++          "type: verification\nstatus: pass\nvalid_under: 在某某前提下\n"
++          "revalidate_when: 改到某某的時候")
++    r = run(v, "lint", "有寫的", expect_rc=0)
++    check("兩欄都有值時不出聲(不要製造雜訊)",
++          "回頭" not in r.stdout and "重驗" not in r.stdout, r.stdout[:200])
++    # ② 回頭條件空:要叫
++    write(v, "Verification/沒寫的.md",
++          "type: verification\nstatus: pass\nvalid_under: 在某某前提下\nrevalidate_when:")
++    r = run(v, "lint", "沒寫的", expect_rc=0)
++    check("★回頭條件空著要出聲★(空著=掃描工具永遠掃不到,鐵則被靜默架空)",
++          "重驗" in r.stdout or "回頭" in r.stdout, r.stdout[:300])
++    # ③ 前提空:也要叫
++    write(v, "Verification/前提空的.md",
++          "type: verification\nstatus: pass\nvalid_under:\nrevalidate_when: 改到某某的時候")
++    r = run(v, "lint", "前提空的", expect_rc=0)
++    check("★前提欄空著也要出聲★(不寫前提=不知道這個結論在什麼條件下才算數)",
++          "前提" in r.stdout or "valid_under" in r.stdout, r.stdout[:300])
++    # ④ 只是提醒,不能擋
++    check("★只出提醒不擋★(舊帳很多,擋了等於每個提交都紅)", r.returncode == 0, str(r.returncode))
++    # ⑤ 別的型別不該被這條叫到
++    write(v, "Systems/別的型別.md",
++          "type: system\nstatus: done\nsummary: |-\n  FLOW:甲到乙\n  KEY:重點一句")
++    r = run(v, "lint", "別的型別", expect_rc=0)
++    check("其他型別不適用這條(它們沒有這兩個欄位)",
++          "重驗" not in r.stdout, r.stdout[:200])
++    print("  ✓ t_lint_warns_empty_revalidate_when")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
