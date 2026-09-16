@@ -10860,6 +10860,50 @@ def t_pitfalls_lint_gets_the_changed_files():
     print("  ✓ t_pitfalls_lint_gets_the_changed_files")
 
 
+def t_never_create_dirs_under_an_untrusted_path():
+    """★不可信的路徑上連一個空資料夾都不准建★(2026-09-16 收尾)。
+
+    出身:家目錄底下那幾個寫入點(派工鏡頭快取、武裝目錄、綁定測試快取、筆記庫寫入鎖)
+    都是「先 mkdir 出整條路徑,再檢查這條路徑可不可信」。★順序反了★:檢查不過的時候,
+    連結指到的地方(可能是別人的目錄)已經被建出一層空資料夾了。真正危險的動作
+    (寫檔、改權限、刪目錄)確實都在檢查之後,所以以前只當成殘留記在註解裡——
+    但「在別人的目錄裡留東西」本來就不該做,而且這是這幾處★共用的★缺口。
+
+    正解是從家目錄往下逐層建、逐層檢查:每建一層就確認它是真目錄、是自己的、
+    別人不可寫;任何一層不過就停手,已經建的不回頭刪(那反而是在動別人的東西)。
+
+    翻紅釘:把逐層檢查改回一次 mkdir 整條路徑 → 第 2 條翻紅。"""
+    import os as _os
+    m = _lm()
+    home = Path(tempfile.mkdtemp(prefix="gctl-mkdir-home-"))
+    victim = Path(tempfile.mkdtemp(prefix="gctl-mkdir-victim-"))
+    (home / ".cache").mkdir()
+    (home / ".cache" / "lumos").symlink_to(victim)     # 中間一層換成指向別人的連結
+
+    old_home = _os.environ.get("HOME")
+    _os.environ["HOME"] = str(home)
+    try:
+        before = sorted(q.name for q in victim.iterdir())
+        check("★前置★ 現場成立:受害者的目錄本來是空的", before == [], str(before))
+        ok = m._mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens")
+        check("★不可信就回報失敗★", not ok, "它說可以建")
+        after = sorted(q.name for q in victim.iterdir())
+        check("★而且不准在連結指到的地方留下任何東西(連空資料夾都不行)★",
+              after == [], f"受害者目錄多了:{after}")
+
+        # 對照:路徑正常時照樣建得起來、而且回報成功
+        (home / ".cache" / "lumos").unlink()
+        ok2 = m._mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens")
+        made = home / ".cache" / "lumos" / "dispatch-lens"
+        check("路徑正常時照樣建得起來(別把功能一起關掉)",
+              ok2 and made.is_dir(), f"ok={ok2} exists={made.exists()}")
+    finally:
+        if old_home is not None:
+            _os.environ["HOME"] = old_home
+
+    print("  ✓ t_never_create_dirs_under_an_untrusted_path")
+
+
 def t_vault_lock_falls_back_instead_of_giving_up():
     """★鎖的地方不可信時要換個地方鎖,不是乾脆不鎖★
     (2026-09-16 代碼審 r1 外家席)。

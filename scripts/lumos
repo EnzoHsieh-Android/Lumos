@@ -11159,10 +11159,10 @@ def _vault_lock_where(vault):
     import hashlib
     key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
     primary = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
-    try:
-        primary.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        return primary, ("no-dir", str(e))
+    # ★逐層建、逐層檢查★(2026-09-16):原本一次 mkdir 出整條路徑再檢查,
+    # 檢查不過時連結指到的地方已經被建出一層空資料夾了。
+    if not _mkdir_trusted_under_home(".cache", "lumos", "vault-lock"):
+        return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
     if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
         return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
     return primary, None
@@ -24059,7 +24059,10 @@ def _lens_cache_write(path, data):
     寫入端沒有——現在兩邊都走同一支 _trusted_private_dir。不過關就靜默不寫(fail-open)。"""
     import json as _json, tempfile as _tf
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # ★逐層建、逐層檢查★(2026-09-16):原本一次 mkdir 出整條路徑再檢查,
+        # 檢查不過時連結指到的地方已經被建出一層空資料夾了。
+        if not _mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens"):
+            return
         if not _trusted_private_dir(path.parent, ".cache", "lumos", "dispatch-lens"):
             return
         os.chmod(path.parent, 0o700)
@@ -24439,6 +24442,49 @@ def _trusted_private_dir(d, *rel_segments):
     return True
 
 
+def _mkdir_trusted_under_home(*rel_segments):
+    """從家目錄往下逐層建、逐層檢查,全過才回 True。
+
+    ★為什麼要有這一支★(2026-09-16):家目錄底下那幾個寫入點原本都是「先 mkdir 出整條路徑,
+    再檢查這條路徑可不可信」。★順序反了★——檢查不過的時候,連結指到的地方(可能是別人的
+    目錄)已經被建出一層空資料夾了。真正危險的動作(寫檔、改權限、刪目錄)確實都排在檢查
+    之後,所以以前只當成殘留寫在註解裡;但「在別人的目錄裡留東西」本來就不該做,而且這是
+    那幾處★共用的★缺口,不是誰特有。
+
+    逐層的意思:每建一層就確認它是真目錄、是自己的、別人不可寫(跟 `_trusted_private_dir`
+    同一套判準,而且同樣是「家目錄本身可以是連結、家目錄以下每一層都必須是真目錄」)。
+    ★任何一層不過就停手,已經建好的不回頭刪★——刪反而是在動別人的東西,跟「不信、不碰」
+    的家規相反。
+
+    ★誠實邊界★:跟 `_trusted_private_dir` 一樣,這是路徑層檢查,擋不住同一個帳號底下的搶跑
+    (檢查完到下一層動作之間有時間差,同 UID 的程序可以在那個縫裡把目錄換掉)。要真正關掉
+    得改用 dirfd / O_NOFOLLOW 那一套。沒做的理由:能在你的帳號下跑程式的人本來就能做任何事。
+    **不得宣稱「換掉也擋得住」**。
+    """
+    import stat as _stat
+    cur = Path.home()
+    for seg in rel_segments:
+        cur = cur / seg
+        try:
+            cur.mkdir(exist_ok=True)     # 不帶 parents:一層一層來,才檢查得到每一層
+        except FileExistsError:
+            pass                          # 已經在了(可能是連結),交給下面的檢查判
+        except OSError:
+            return False
+        try:
+            if cur.is_symlink() or not cur.is_dir():
+                return False
+            st = cur.stat()
+        except OSError:
+            return False
+        if hasattr(os, "getuid"):
+            if st.st_uid != os.getuid():
+                return False
+            if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+                return False
+    return True
+
+
 def _lens_arm_dir_ok(d):
     """armed 目錄安全檢查——走共用的 _trusted_private_dir。
 
@@ -24487,6 +24533,14 @@ def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
                   f"\n      rm -rf {d}", file=sys.stderr)
             return 2
         shutil.rmtree(d, ignore_errors=True)
+    # ★逐層建、逐層檢查★(2026-09-16):目錄不存在時原本一次 mkdir 出整條路徑,
+    # 上層被換成指向別處的連結時,別人的目錄裡就會多出一層空資料夾。
+    if not _mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens", "armed"):
+        print(f"擋下:放武裝目錄的那條路徑不可信({d.parent})——它自己或上層被換成了"
+              "指向別處的連結、或別人也寫得進去,不在那裡建東西。", file=sys.stderr)
+        print("  檢查一下那條路徑是誰建的:", file=sys.stderr)
+        print(f"    ls -ld {d.parent} {d.parent.parent}", file=sys.stderr)
+        return 2
     d.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(d, 0o700)
@@ -25459,8 +25513,9 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
     else:
         ok, why = True, f"冒煙測試回 rc={rc},指令分得出找不到測試"
     try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        if _trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter"):
+        # ★逐層建、逐層檢查★(2026-09-16):同上,不要在不可信的路徑上留空資料夾
+        if _mkdir_trusted_under_home(".cache", "lumos", "bound-filter") \
+                and _trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter"):
             _write_lf(cache, _j.dumps({"trustworthy": ok, "why": why, "secs": secs}, ensure_ascii=False) + "\n")
     except OSError:
         pass

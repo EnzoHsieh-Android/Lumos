@@ -4,13 +4,15 @@ status: doing
 created: 2026-09-06
 updated: 2026-09-06
 aliases: []
-about_code: []
+about_code:
+  - scripts/lumos
 tags:
   - type/system
   - status/doing
   - scope/platform
 summary: |-
   FLOW:hook 要用 lumos 時 → _trusted_lumos()(系統裝的 → $LUMOS_HOME → 預設來源)→ 都找不到就跳過那段功能(fail-open),★絕不執行被打開那個資料夾裡的 scripts/lumos★
+  KEY:[逐層建逐層檢查 2026-09-16]★家目錄底下不再一次 mkdir 出整條路徑★——原本四個寫入點(派工鏡頭快取、武裝目錄、綁定測試快取、筆記庫寫入鎖)都是「先建整條、再檢查這條可不可信」,★順序反了★:檢查不過時,連結指到的地方已經被建出一層空資料夾。真正危險的動作(寫檔、改權限、刪目錄)確實都排在檢查之後,所以原本只當殘留寫在註解裡——但在別人的目錄裡留東西本來就不該做,而且這是那幾處★共用的★缺口。改法=`_mkdir_trusted_under_home` 從家目錄往下逐層建、逐層驗(是真目錄、是自己的、別人不可寫),★任何一層不過就停手,已經建好的不回頭刪★(刪反而是在動別人的東西)。實測:中間一層換成指向別人目錄的連結,攻擊者目錄裡一個東西都沒留下;舊行為則是既說可以建、又真的留下一個資料夾。★誠實邊界★:路徑層檢查,擋不住同帳號搶跑(檢查完到下一層動作之間有時間差),要真正關掉得改用 dirfd / O_NOFOLLOW 那一套 [test:t_never_create_dirs_under_an_untrusted_path]
   KEY:★2026-09-06 實地重現★進場 hook 原本執行「被打開那個資料夾」自己的 scripts/lumos,唯一判準是它有 docs/*-knowledge——clone 陌生 repo、開一下 Claude,對方的 python 就跑了;而且是被 python 執行的,那個檔連執行權限都不需要(實測權限 -rw-r--r-- 照樣跑)
   KEY:三支 hook(進場 / 圖譜同步 / 影響鏡頭)的解析函式是逐字相同的複本——hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,所以用「複製+守衛」不是抽共用模組;守衛盯著三份不准漂,改一支忘了另兩支破口會悄悄長回來
   KEY:世界的解同一個結論——git safe.directory(CVE-2022-24765)、VS Code Workspace Trust:★工具自己的碼可以跑,從當前資料夾撿到的碼要先被信任★
