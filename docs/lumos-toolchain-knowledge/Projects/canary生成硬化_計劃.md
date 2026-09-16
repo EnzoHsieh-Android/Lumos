@@ -17,6 +17,10 @@ decisions:
 related:
   - "[[Projects/社群演算法補強_調研]]"
   - "[[Systems/canary-audit]]"
+aliases:
+  - canary難度過濾
+  - haiku弱模型探針
+  - FLAWS difficulty filter
 ---
 # canary生成硬化_計劃
 

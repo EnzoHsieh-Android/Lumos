@@ -29,6 +29,11 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
+aliases:
+  - delta-scoped審查
+  - risk-cluster三態帳resolved/accepted-minor/disputed-major
+  - pre-flight cascade
+  - M2 cluster帳
 ---
 # design-loop提效_計劃
 

@@ -74,6 +74,11 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-08-11_AndroidUI工作流A段落地]]"
+aliases:
+  - guard bind --platform maestro
+  - 換裝置沒改名重複單號
+  - SeekBar要swipe不能tap
+  - tapOn文字比對是正則會誤點
 ---
 # Android 側 UI 測試綁圖譜工作流_計劃
 

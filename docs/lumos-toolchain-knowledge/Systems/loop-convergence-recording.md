@@ -71,6 +71,11 @@ related:
   - "[[Issues/loop-next吐不可宣告的tier]]"
 about_code:
   - scripts/lumos
+aliases:
+  - canary record
+  - loop status --need
+  - K-streak 收斂
+  - caught missed 記帳
 ---
 # loop-convergence-recording
 

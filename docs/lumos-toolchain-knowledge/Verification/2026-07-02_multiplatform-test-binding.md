@@ -21,6 +21,10 @@ tags:
   - scope/guards-gates
 decision_refs_ai:
   - "Projects/多平台合約測試綁定_計劃.md#d1"
+aliases:
+  - [test:plat:] 標記
+  - guard bind --platform
+  - maestro playwright 合約綁定
 ---
 # 驗證：多平台合約測試綁定
 

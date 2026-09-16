@@ -18,6 +18,11 @@ summary: |-
   KEY:S3 抄鎖要寫下五個非顯而易見的細節,並★兩者都做★:同源回指註解 + 一條比對兩份關鍵行為的測試(repo 既有立場是二選一,本案兩個都做)
   KEY:S4 帳本門檻:N 填 5 MB(現在 3.97);★「每日 500 筆」對不上真實曲線★(近三天已破 500 且逐日翻倍),改成看「近 7 日均值比前 7 日成長超過一倍」;「先不分檔」的理由訂正——雜湊閉包讀的是另一本帳,四個整檔讀者這半才是真的
   DEP:governance/daily-governance.sh|governance/autonomous-loop.sh 的取鎖段|scripts/lumos 的 doctor 分段|~/Library/LaunchAgents
+aliases:
+  - 自動化腳本回0但沒跑完
+  - 看門狗排程
+  - 健康狀態JSON
+  - 持鎖行程還活著判準
 ---
 # 每日治理wrapper活著沒_計劃
 

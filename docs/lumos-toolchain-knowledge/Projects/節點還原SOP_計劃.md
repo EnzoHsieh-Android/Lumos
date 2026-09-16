@@ -75,6 +75,11 @@ decisions:
     why_chosen: 讓現實測文件:實作階段的檢驗(代碼審/探針/實跑)測的是行為不是散文;比第 31 個審查員划算
     decided: 2026-08-24
     valid: true
+aliases:
+  - 接手舊專案圖譜是空的
+  - brownfield 還原
+  - 冷啟動圖譜
+  - commands/09
 ---
 # 節點還原SOP_計劃
 

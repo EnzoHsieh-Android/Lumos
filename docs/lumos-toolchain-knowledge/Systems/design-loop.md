@@ -124,6 +124,11 @@ decisions:
     valid: true
 about_code:
   - scripts/lumos
+aliases:
+  - 處置閘
+  - disposal gate
+  - 設計審查迴圈
+  - loop status --disposal
 ---
 # design-loop
 

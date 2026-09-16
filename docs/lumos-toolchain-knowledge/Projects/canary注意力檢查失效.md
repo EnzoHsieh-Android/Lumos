@@ -36,6 +36,11 @@ decisions:
     valid: true
 about_code:
   - scripts/lumos
+aliases:
+  - 抑噪紀律逼審計員漏抓canary
+  - 輪有效降級為觀測
+  - capture-recapture不可稽核
+  - attention check方法學
 ---
 # canary 注意力檢查失效（計劃）
 

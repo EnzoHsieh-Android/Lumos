@@ -21,6 +21,11 @@ about_code:
   - .github/workflows/ci.yml
   - scripts/lumos
   - scripts/test_lumos.py
+aliases:
+  - 假確信
+  - 治理熵超過維護力
+  - guard kill排程化
+  - 合約普查INVARIANT密度
 ---
 # Codex 外審吸收（2026-07-29）
 

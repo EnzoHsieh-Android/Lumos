@@ -24,6 +24,11 @@ summary: |-
   PRIOR-ART:①最小解=hook 讀 stdin 是 git 原生合約,零新機制;code-loop check 加一選配旗標 ②世界解=githooks(5) 官方文件明定 pre-push stdin 格式,業界 hook(husky/lefthook)皆此模式——標準做法非發明 ③裁定=borrow(git 官方合約原生用)
 verified_by:
   - "[[Verification/2026-07-22_prepush範圍修法落地]]"
+aliases:
+  - main-direct盲區
+  - pre-push讀stdin推送範圍
+  - merge-base算不到diff
+  - code-loop check --diff --at-sha --branch
 ---
 # prepush主幹範圍修法_計劃
 

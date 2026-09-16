@@ -7,6 +7,10 @@ tags:
   - type/project
   - status/done
   - scope/loop-engineering
+aliases:
+  - near-perfect輪有效
+  - missed-rate分帳
+  - 冗餘canary不算獨立票
 ---
 # 收斂閘caught-rate修正_計劃
 

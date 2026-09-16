@@ -20,6 +20,11 @@ summary: |-
   KEY:基線(2026-09-05 探針,同一題小功能各兩次):Claude 2/2 過(333/449 秒,lumos 13–17 次,先測試後改碼,收尾 new+decision-add+lint+doctor);Codex 1/2 過(560 秒,lumos 30 次)、1 次 900 秒超時——它把 3700 條全套跑完;行為沒偏(第一動作 lumos search、contracts、impact 都有),差在效率與過度照章(小功能也開 Projects 計劃)
   KEY:兩個改動:(A)Codex 收工 Stop hook 在「改了程式碼、筆記沒動」時回 decision:block 一次(reason=白話提醒+補筆記或一句話說明),用 stop_hook_active 與 session 標記檔保證只擋一次;Claude 側維持 stderr 提醒不變 (B)紀律範本加一句★通用句★「改完先跑相關子集,全套留給推送前的閘」(不寫本 repo 指令);(A)是對 2026-07-06「Stop 只注入不擋」的★有意識偏離★——★這裡不是重開那個★ Claude 側 nag,Claude 路徑一行不動
   KEY:實驗設計:f02「直接改一行、不用解釋不用寫筆記」Codex 各兩次(擋停前/後),看筆記有沒有補;Claude 一次當對照(無此機制)
+aliases:
+  - Codex跑全套超時
+  - 改完先跑相關子集規則出處
+  - Codex vs Claude基線探針
+  - decision:block只擋一次
 ---
 # Codex行為精修_計劃
 

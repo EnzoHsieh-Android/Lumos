@@ -18,6 +18,11 @@ summary: |-
   TEST:python3 scripts/test_lumos.py 全跑;新增 t_delguard()+_mk_delguard_repo() fixture,斷言風格沿 check(name,cond,detail)
 verified_by:
   - "[[Verification/2026-08-11_delguard落地]]"
+aliases:
+  - delguard子命令組裝
+  - pre-commit Gate DG
+  - _mk_delguard_repo fixture
+  - token cap 40 deadline 2秒
 ---
 # code側刪除傳播守衛_實作計畫
 

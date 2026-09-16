@@ -58,6 +58,11 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-08-11_delguard落地]]"
+aliases:
+  - delguard
+  - 刪掉的函式圖譜還在講
+  - 只改連結沒改敘述算沒同步
+  - 死碼盲區S1抓不到
 ---
 # code 側刪除傳播守衛_計劃
 

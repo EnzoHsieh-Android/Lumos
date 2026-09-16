@@ -61,6 +61,11 @@ decisions:
     valid: true
 about_code:
   - scripts/lumos
+aliases:
+  - lumos gov
+  - 治理帳彙整
+  - 六本帳來源
+  - signoff 簽核留痕
 ---
 # reversibility-governance-ledger
 

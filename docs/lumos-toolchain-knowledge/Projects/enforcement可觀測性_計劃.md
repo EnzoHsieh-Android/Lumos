@@ -23,6 +23,11 @@ related:
   - "[[Systems/hook逾時預算]]"
   - "[[Projects/派工鏡頭注入_計劃]]"
   - "[[Projects/每日治理wrapper活著沒_計劃]]"
+aliases:
+  - hooksPath絕對路徑比對錯誤誤判inactive
+  - lumos gate waive
+  - 近7天跑過是假綠
+  - hard=true 0筆
 ---
 # enforcement可觀測性_計劃
 

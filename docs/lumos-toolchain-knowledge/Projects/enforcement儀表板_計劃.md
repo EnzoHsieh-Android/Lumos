@@ -25,6 +25,11 @@ decisions:
     why_chosen: enforcement 真新+低成本+對症(fail-open 盲區);拆檔維持緩辦(單人期);manifest 併拆檔風險;relevance 既有守衛在做;/tmp minor;裁判定位純講法已採
     decided: 2026-09-02
     valid: true
+aliases:
+  - lumos enforcement
+  - 防護有沒有生效
+  - active/inactive/unknown三態
+  - Effective protection分母排除unknown
 ---
 # enforcement儀表板_計劃
 

@@ -109,6 +109,12 @@ about_code:
   - governance/autonomous_loop/cross_audit.py
   - governance/autonomous_loop/gap_select.py
   - governance/daily-governance.sh
+aliases:
+  - daily-governance.sh
+  - 自動迭代排程
+  - orchestrator 派工
+  - gap_select 選題
+  - N=1 閘卡住
 ---
 # autonomous-iteration-loop
 

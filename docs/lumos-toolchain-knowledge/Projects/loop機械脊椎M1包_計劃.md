@@ -30,6 +30,11 @@ summary: |-
   PRIOR-ART:①最小解=#2-#4 為既有 record/status 兩指令的欄位旗標擴充;#1 為 loop 子指令組**新增第三個 subparser**(status/capture-counts 之外)——新增一條唯讀查詢介面,**非零新指令**(r1 折入:原「全部零新命令」宣稱與 #1 自相矛盾,自我治理判準不得帶頭失守);仍零新治理層/零新檔 ②世界解=[[Projects/全盤外審2026-07_調研]]本體已裁(#1 Codex 摩擦診斷+git status next-action 普適模式/#3 content-address 綁定=git 血統/#4 OpenAI third-party evals+Anthropic demystifying-evals 把 budget 欄列為 eval 判讀必要上下文) ③裁定=borrow-design 全部(stdlib sha256/argparse 原生)
 verified_by:
   - "[[Verification/2026-07-21_loop機械脊椎M1包]]"
+aliases:
+  - lumos loop next
+  - light收斂K=1謂詞
+  - reviewed_sha256 result_sha256雙hash鏈
+  - canary record --tokens --wallclock-min
 ---
 # loop機械脊椎M1包_計劃
 

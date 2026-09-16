@@ -48,6 +48,11 @@ decisions:
     why_chosen: 全流程重設計比局部換錨更對症;loop design-loop判準重定位 r1 帳保留(達 r1 未收斂、案被吸收)
     decided: 2026-08-04
     valid: true
+aliases:
+  - 37/38過不了design-loop閘
+  - 評分換成處置
+  - blocker只能folded不能accepted
+  - 輪有效量到的是有沒有違反抑噪紀律
 ---
 # design-loop 判準重定位（計劃）
 

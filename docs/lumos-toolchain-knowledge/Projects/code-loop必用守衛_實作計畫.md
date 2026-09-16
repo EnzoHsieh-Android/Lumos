@@ -18,6 +18,10 @@ summary: |-
   DECISION:subagent-driven TDD;基線=main 現值(先跑取)
   DEP:[[code-loop必用守衛_計劃]]
   TEST:未開工
+aliases:
+  - governance/code-loop/<branch>.json
+  - pass skip留痕格式
+  - tier-high沒pass沒skip就擋
 ---
 # code-loop 必用守衛 Implementation Plan
 

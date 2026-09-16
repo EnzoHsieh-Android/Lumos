@@ -22,6 +22,11 @@ summary: |-
   KEY:誠實天花板=canary 注意力測試正交於辯論共識,壓縮須保留 per-auditor canary;「2 票」定理反對天真擴 panel→多樣性(型別+鏡頭+家族)是關鍵非數量;本計劃自己該用新規則 dogfood
   DEP:[[design-loop]]
   TEST:待實作;本計劃以「用新 ≤3 輪規則跑自己收斂」為第一驗證
+aliases:
+  - design-loop 6輪壓成3輪
+  - panel平行審查
+  - 9 judge只值2票
+  - falsification-存活收斂判準
 ---
 # loop 三輪壓縮_計劃
 

@@ -15,6 +15,11 @@ related:
   - "[[Projects/GraphRAG對節點關聯_調研]]"
   - "[[Projects/主session鏡頭利用率_計劃]]"
   - "[[Systems/retrieval-ranking]]"
+aliases:
+  - 推播miss
+  - recount.py
+  - 編輯時推播沒推到但被讀到
+  - lumos search零命中量測
 ---
 # 推播miss量測_計劃
 

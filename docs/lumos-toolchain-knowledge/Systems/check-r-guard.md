@@ -42,6 +42,11 @@ decisions:
     valid: true
 about_code:
   - scripts/lumos
+aliases:
+  - Check R
+  - [guard:] 標記
+  - ★IRREVERSIBLE★缺回退
+  - 不可逆但沒有回退路徑
 ---
 # check-r-guard
 

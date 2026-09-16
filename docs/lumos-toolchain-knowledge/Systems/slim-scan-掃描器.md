@@ -32,6 +32,10 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 related:
   - "[[Systems/slim-readme]]"
+aliases:
+  - slim-scan.py
+  - 懸空指令引用掃描
+  - 精簡版文件校對
 ---
 # slim-scan-掃描器
 

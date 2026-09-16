@@ -36,6 +36,11 @@ related:
   - "[[Systems/test-profile-multiplatform]]"
 about_code:
   - scripts/lumos
+aliases:
+  - lumos guard kill
+  - mutation testing變異測試
+  - killed survived timeout error
+  - 壞法配方
 ---
 # guard殺傷力驗證_計劃
 

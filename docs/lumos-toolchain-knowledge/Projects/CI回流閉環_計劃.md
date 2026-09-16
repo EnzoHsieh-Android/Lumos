@@ -19,6 +19,11 @@ summary: |-
   DEP:[[Systems/reversibility-governance-ledger]]
 verified_by:
   - "[[Verification/2026-07-29_CI回流閉環v1落地]]"
+aliases:
+  - lumos ci-wait
+  - watch-fix-retry
+  - CI紅了本機不知道
+  - ci.flow設定direct/pr/tier
 ---
 # CI 回流閉環_計劃
 

@@ -24,6 +24,11 @@ decisions:
     why_chosen: 兩個建議都是先量再做、零依賴可實作,而且建議一產出的 miss 是 agent 真實行為,能打破同源自驗
     decided: 2026-09-11
     valid: true
+aliases:
+  - GraphRAG
+  - PPR重排消融殺除
+  - LazyGraphRAG詞共現改寫
+  - agentic search勝過預先塞內容
 ---
 # GraphRAG對節點關聯_調研
 
