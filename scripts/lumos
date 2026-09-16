@@ -2865,7 +2865,13 @@ def _visible_lines(lines, keep_fenced=False):
             if fence is None:
                 fence = (ch, run)
                 continue
-            if ch == fence[0] and run >= fence[1]:
+            # ★收尾圍欄不准帶語言標記★(2026-09-16 代碼審 r1 外家席;CommonMark 本來就這樣定)。
+            # 原本只看「同一個字元、長度夠」,沒看後面還有沒有東西,於是巢狀範例裡的
+            # ```python / ~~~python 會被拿來把外層圍欄關掉——範例裡的樣板文字就變成看得見,
+            # 下游(前掃宣告、合約行、路徑宣稱)會把它當成真的。
+            # ★改之前先量過影響面★:對圖譜 537 篇逐篇比對「看得見哪些行」,只有 1 篇會變,
+            # 而且那篇改嚴才是對的(一篇 markdown 範例裡包了 yaml 區塊)。
+            if ch == fence[0] and run >= fence[1] and s[run:].strip() == "":
                 fence = None
                 continue
         if fence is not None and not keep_fenced:
@@ -11118,6 +11124,9 @@ _VAULT_LOCK_STALE_SEC = 30   # 一次筆記寫入不到一秒;鎖檔 30 秒還�
 _VAULT_LOCK_HELD = {}         # 這個程序已經拿著的寫入鎖 → 巢狀呼叫直接過(可重入),不自己卡自己
 
 
+_VAULT_LOCK_WARNED = {}        # 鎖的位置換過一次就別再唸(同一個程序內)
+
+
 def _vault_write_lock(vault):
     """同一個筆記庫的 set/append/remove 一次只讓一個程序做「讀—改—寫」(2026-09-10 代碼審 r3 併發資源席:
     沒有鎖時,回報成功的項目會被同時跑的另一個程序蓋掉)。
@@ -11159,13 +11168,24 @@ def _vault_write_lock(vault):
         # 擋住了。要連空資料夾都不建,得改成從家目錄往下逐層建、逐層檢查,那會動到鄰居那
         # 幾處,另案處理。
         if not _trusted_private_dir(lock.parent, ".cache", "lumos", "vault-lock"):
-            print(f"提醒:放寫入鎖的資料夾不可信({lock.parent})——它自己或上層被換成了"
-                  "指向別處的連結、或別人也寫得進去。這次不在那裡建鎖,直接寫;"
-                  "同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。", file=sys.stderr)
-            print("  檢查一下那條路徑是誰建的:", file=sys.stderr)
-            print(f"    ls -ld {lock.parent} {lock.parent.parent}", file=sys.stderr)
-            yield
-            return
+            # ★不可信就換個地方鎖,不是乾脆不鎖★(2026-09-16 代碼審 r1 外家席):
+            # 第一版寫成「不可信就直接寫」,那是★把安全問題換成正確性問題★——原本鎖檔
+            # 雖然落在不可信的地方,鎖本身仍然有效;不鎖之後兩個程序就能同時做讀—改—寫,
+            # 後寫的蓋掉先寫的。而且觸發條件不需要攻擊者,把快取目錄搬到別的磁碟就會踩到。
+            # 退路選筆記庫自己:要寫的就是它、使用者一定擁有它,兩個程序算出來的路徑一樣,
+            # 互斥照樣成立。★一次性提醒,不是每次都唸★(同一個程序只講一次)。
+            fallback = Path(vault) / f".lumos-vault-{key}.lock"
+            if not _VAULT_LOCK_WARNED.get(k):
+                _VAULT_LOCK_WARNED[k] = True
+                print(f"提醒:放寫入鎖的資料夾不可信({lock.parent})——它自己或上層被換成了"
+                      "指向別處的連結、或別人也寫得進去。", file=sys.stderr)
+                print("  為什麼在意:鎖是用來擋「兩個程序同時改同一個筆記庫、後寫的蓋掉先寫的」;"
+                      f"這次改把鎖放在筆記庫自己裡面({fallback.name}),功能不變,只是位置換了。",
+                      file=sys.stderr)
+                print("  要回到原本的位置,先看那條路徑是誰建的:", file=sys.stderr)
+                print(f"    ls -ld {lock.parent} {lock.parent.parent}", file=sys.stderr)
+            lock = fallback
+            k = str(lock)
         deadline = _t.monotonic() + 60
         while not _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC):
             if _t.monotonic() > deadline:
@@ -17222,7 +17242,9 @@ def _lint_load_config(repo_root):
 def _lint_stacks_for_diff(added, config, repo_root=None):
     """由 added({file: set(line_numbers)}) 與 config(lint.json dict) 推導「要跑哪些指令、
     各自要檢查哪些檔」。回 {命令: [檔, ...]},保持 first-seen 順序;只迭代它的呼叫端
-    拿到的仍是命令清單,行為不變。
+    拿到的仍是命令清單,行為不變——★這是明文合約不是巧合★:直接迭代=拿到命令、照 first-seen
+    順序、同一條只出現一次(有呼叫端就是這樣用的,t_lint_config 釘住;r1 架構席指出原本
+    只是「剛好因為迭代對應表拿到的是鍵」才相容,沒人釘住)。
 
     ★怎麼判一支檔算哪個棧★:走共用的那支(`_lint_file_ext`),它在沒有副檔名時會看第一行
     的 shebang。★給了 repo_root 才看得到第一行★——沒給就退回只看副檔名(既有呼叫端餵的是
@@ -17292,14 +17314,18 @@ def _lintcheck_smoke_cmd(cmd, stack, repo_root, sample=3):
     有的工具照樣吐得出結果(看起來通過)、有的印用法說明——dart-sarif 讀不懂就失敗,於是照文件接好的
     Dart 宣告在冒煙時被判「跑不動」。新增告警閘真跑時一定會換成檔案清單,冒煙要跟它一樣。
     ★還沒 git add 的檔也算★(r2 修正差異席):剛裝好宣告、寫了第一支檔就先冒煙,正是最常見的驗收時序。
-    這個棧在專案裡一支檔都沒有時原樣送出(冒煙只驗得到「命令本身」)。"""
-    import shlex
+    ★這個棧一支檔都沒有時回 None★(2026-09-16 代碼審 r1 單reviewer 席):原本是原樣送出去,
+    而同一天在執行入口加了「佔位符沒換掉就不跑」之後,原樣送出去等於保證失敗——冒煙會回
+    「命令跑不出可解析 SARIF(task 不存在/工具沒裝?)」,★而那句診斷是假的★,工具好好的,
+    只是還沒有那個副檔名的檔。呼叫端收到 None 就照實說「這個棧還沒有檔可驗」。"""
     import subprocess
     if _LINT_NEW_FILES_TOKEN not in cmd:
         return cmd
     r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*." + str(stack)],
                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     files = [f for f in (r.stdout.split("\0") if r.returncode == 0 else []) if f][:sample]
+    if not files:
+        return None
     return _lint_cmd_with_files(cmd, files)
 
 
@@ -17325,18 +17351,27 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     config = lf.get("config")
     problems = lf["problems"]
     # --smoke:靜態層無格式問題才冒煙(格式壞的命令沒必要跑)
+    skipped_stacks = []            # 這個棧還沒有檔,冒煙驗不到——不是問題,但要講出來
     if smoke and not problems and isinstance(config, dict):
         for stack, cmds in config.items():
             for cmd in (cmds if isinstance(cmds, list) else []):
-                cmd = _lintcheck_smoke_cmd(cmd, stack, repo_root)
-                _claims, ok = _lint_run_and_parse(cmd, repo_root)
+                ready = _lintcheck_smoke_cmd(cmd, stack, repo_root)
+                if ready is None:
+                    # ★沒檔可驗,不是命令壞了★:講實話,不要假警報也不要假裝驗過
+                    skipped_stacks.append(stack)
+                    continue
+                _claims, ok = _lint_run_and_parse(ready, repo_root)
                 if not ok:
-                    problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{cmd[:60]}"})
+                    problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{ready[:60]}"})
     if as_json:
         print(json.dumps({"problems": problems, "declared": True}, ensure_ascii=False))
         return 1 if problems else 0
     if not problems:
         print(f"✓ lint-check: .lumos/lint.json 宣告健康({'冒煙通過' if smoke else '格式通過,--smoke 可再驗命令'})")
+        if skipped_stacks:
+            print(f"  提醒:這幾個棧的命令沒有真的跑過,因為專案裡還沒有它們的檔:{', '.join(sorted(set(skipped_stacks)))}")
+            print("  為什麼在意:宣告寫對了不等於命令跑得動,寫了第一支檔之後再驗一次才算數:")
+            print("    lumos lint-check --smoke")
         return 0
     print(f"✗ lint-check: .lumos/lint.json 有 {len(problems)} 個問題:")
     for pr in problems:
@@ -17927,7 +17962,10 @@ def _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds=(), repo_roo
         # 用共用那支挑命令(它負責「這個副檔名有沒有宣告、順序與去重」),這裡只補上檔案清單。
         # 餵一個帶正確副檔名的假檔名進去:真檔名可能沒有副檔名(靠 shebang 認出來的),
         # 而那支共用函式只看副檔名——不這樣接的話等於又寫一份比對邏輯
-        for cmd in _lint_stacks_for_diff({("_." + ext): set()}, lint_cfg):
+        # ★明寫只要命令★(2026-09-16 代碼審 r1 架構席):那支 2026-09-16 起回的是
+        # 「命令 → 檔清單」的對應表,這裡自己算檔清單、只借它挑命令。原本寫成直接迭代,
+        # ★只是剛好因為迭代對應表拿到的是鍵才還能動★——那種相容沒人釘住,寫明比較誠實。
+        for cmd in list(_lint_stacks_for_diff({("_." + ext): set()}, lint_cfg)):
             out.append((cmd, sorted(files)))
     if dep_pairs:
         dep_files = sorted({a for a, _b in dep_pairs})
@@ -20934,10 +20972,16 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     lint_skipped = []
     lint_claims = []
 
+    # 推送前那道閘只跑「帶檔清單佔位」的宣告,沒帶的它降級成只報不擋。所以下面要記得
+    # 每一條發現是哪種宣告報的——對不齊時的降級只能套在推送閘真的接得住的那種。
     for cmd, cmd_files in cmds.items():
         lc, ok = _lint_run_and_parse(_lint_cmd_with_files(cmd, sorted(cmd_files)), repo_root)
         if ok:
             lint_ran.append(cmd)
+            # 每條發現標記它是哪種宣告報的:推送前那道閘只跑「帶檔清單佔位」的宣告,
+            # 沒帶的它降級成只報不擋。下面決定分級時要分開看。
+            for c in lc:
+                c["_push_gate_covers"] = _LINT_NEW_FILES_TOKEN in cmd
             lint_claims.extend(lc)
         else:
             lint_skipped.append(cmd)
@@ -20965,7 +21009,15 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     # 這次帶進來的,拿來撐分級只會讓最高級變成常態、然後沒人當一回事。
     # ★發現照樣列出來★(資訊不丟,帶 filtered=false 標記讓讀的人知道沒對齊);
     # 真正擋「新帶進來的告警」的是推送前那道閘(比對兩份快照,跟對齊無關),不是這裡。
-    _tier_claims = (lint_claims if filtered_marker is not False else []) + claims
+    # ★降級只套用在推送閘接得住的那種宣告★(2026-09-16 代碼審 r1 外家席):原本一律不算,
+    # 而理由是「真正擋新帶進來的告警的是推送前那道閘」——那句話只對一半,那道閘★不跑★
+    # 沒有帶檔清單佔位的宣告。那種宣告如果這裡也放掉,就兩邊都漏。
+    if filtered_marker is False:
+        _tier_claims = [c for c in lint_claims if not c.get("_push_gate_covers")] + claims
+    else:
+        _tier_claims = lint_claims + claims
+    for c in lint_claims:          # 內部標記不外流到輸出
+        c.pop("_push_gate_covers", None)
 
     all_claims = lint_claims + claims
     out = {"claims": all_claims, "tier": "high" if _tier_claims else "standard",
