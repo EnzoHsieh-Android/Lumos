@@ -9554,12 +9554,15 @@ def t_lint_config():
     # added: a.kt 第 1 行
     added = {"a.kt": {1}}
     cmds = m._lint_stacks_for_diff(added, config)
-    check("lint_config: .kt 命中 → [cmd1]", cmds == ["cmd1"], str(cmds))
+    # ★2026-09-16 起回的是「命令 → 這次改到的哪幾支檔」★:只迭代它的呼叫端拿到的仍是
+    # 命令清單(行為不變),而算風險那條路需要檔清單才能把真檔名送進 linter。
+    check("lint_config: .kt 命中 → 只有 cmd1", list(cmds) == ["cmd1"], str(cmds))
+    check("lint_config: .kt 命中 → cmd1 要檢查 a.kt", cmds["cmd1"] == ["a.kt"], str(cmds))
 
     # Case 2: 無宣告副檔名 .vue → []
     added_vue = {"a.vue": {1}}
     cmds_vue = m._lint_stacks_for_diff(added_vue, config)
-    check("lint_config: .vue 無宣告 → []", cmds_vue == [], str(cmds_vue))
+    check("lint_config: .vue 無宣告 → 一條都不跑", not cmds_vue, str(cmds_vue))
 
     # Case 3: 無 .lumos/lint.json → _lint_load_config 回 None
     root2 = Path(tempfile.mkdtemp(prefix="gctl-lc2-"))
@@ -9569,7 +9572,9 @@ def t_lint_config():
     # Case 4: 多檔共享 stack → 去重,不重複 cmd
     added_multi = {"a.kt": {1}, "b.kt": {2}}
     cmds_multi = m._lint_stacks_for_diff(added_multi, config)
-    check("lint_config: 多 .kt 共享 stack → 去重 [cmd1]", cmds_multi == ["cmd1"], str(cmds_multi))
+    check("lint_config: 多 .kt 共享 stack → 命令去重成一條", list(cmds_multi) == ["cmd1"], str(cmds_multi))
+    check("★但兩支檔都要送進那條命令★(去重的是命令,不是要檢查的檔)",
+          sorted(cmds_multi["cmd1"]) == ["a.kt", "b.kt"], str(cmds_multi))
 
     # Case 5: 壞 JSON → None
     lint_json.write_text("{bad json}", encoding="utf-8")
@@ -9839,7 +9844,7 @@ def t_pitfalls_diff_ignores_vendored_toolchain():
     saved = {k: getattr(m, k) for k in ("_lint_load_config", "_lint_stacks_for_diff", "_lint_aligned", "_lint_run_and_parse")}
     try:
         m._lint_load_config = lambda root: {"py": ["fakelint"]}
-        m._lint_stacks_for_diff = lambda added, cfg: ["fakelint"]
+        m._lint_stacks_for_diff = lambda added, cfg, repo_root=None: {"fakelint": []}
         m._lint_run_and_parse = lambda cmd, root: ([
             {"file": vend, "line": 2, "source": "lint:fake", "class": "lint", "question": "q"},
             {"file": "src/mine.py", "line": 1, "source": "lint:fake", "class": "lint", "question": "q"}], True)
@@ -10552,7 +10557,7 @@ def t_pitfalls_lint_integration():
 
     r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
     check("pitfalls-lint: rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stderr}")
-    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    data = _json.loads(next(ln for ln in r.stdout.splitlines() if ln.strip().startswith("{")))
 
     sources = [c.get("source", "") for c in data["claims"]]
     # Case 1: 兩種 source 都在
@@ -10668,6 +10673,203 @@ def t_pitfalls_lint_integration():
     r6 = run(root6, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root6), "--json")
     data6 = _json.loads([l for l in r6.stdout.splitlines() if l.strip().startswith("{")][0])
     check("pitfalls-lint: 未碰宣告棧 → lint_ran 空", data6.get("lint_ran") == [], str(data6))
+
+
+def t_pitfalls_lint_gets_the_changed_files():
+    """★算風險時,宣告的 linter 指令要真的收到「這次改了哪些檔」★
+    (Issues/風險掃描的linter那隻手沒送檔進去,2026-09-16)。
+
+    出身:宣告檔裡的指令寫著兩個佔位符,一個是「結果寫到哪」、一個是「要檢查哪些檔」。
+    ★只有前者被換掉★,後者原樣送給工具,工具當場回報「找不到這個檔」。兩個方向都傷到:
+    ①真問題完全看不到(工具根本沒讀到任何一支檔)②那句「找不到檔」自己被當成一條發現、
+    把風險分級撐成最高級,等於為了一個工具 bug 白跑一整輪多席審查。
+
+    ★這個洞躲過既有測試的原因★:既有 fixture 的假 linter 不使用那個佔位符,
+    所以它收到什麼檔都無所謂。這支測試的假 linter ★會把自己實際收到的參數寫出來★。
+
+    五個呼叫端裡只有算風險這一條漏換;冒煙、規則索引、新增告警閘三條都有換。
+
+    翻紅釘:把換佔位符那一步拿掉 → 第 2、3、4 條翻紅。"""
+    import json as _json
+    import subprocess as sp
+    import sys as _sys
+
+    root = Path(tempfile.mkdtemp(prefix="gctl-lintfiles-"))
+
+    def git(*a):
+        sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lintfiles-h-")) / "recorder.py"
+    got = root / "收到的參數.txt"
+    # 假 linter:argv[1]=SARIF 輸出路徑,argv[2:]=它實際收到的檔清單。
+    # 把收到的檔原樣記下來,並且★針對真的收到的那支檔★報一條 finding(行號 2 = 這次新增的行)。
+    helper.write_text(
+        "import sys, json\n"
+        "out, files = sys.argv[1], sys.argv[2:]\n"
+        f"open({str(got)!r}, 'w').write(repr(files))\n"
+        "res = [{'ruleId': 'REAL001', 'message': {'text': '真的讀到檔了'},\n"
+        "        'locations': [{'physicalLocation': {\n"
+        "            'artifactLocation': {'uri': f}, 'region': {'startLine': 2}}}]}\n"
+        "       for f in files]\n"
+        "json.dump({'runs': [{'tool': {'driver': {'name': 'RecLint'}},\n"
+        "                     'originalUriBaseIds': {}, 'results': res}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    cmd = f"{_sys.executable} {helper} {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "lint.json").write_text(_json.dumps({"kt": [cmd]}), encoding="utf-8")
+    (root / "base.kt").write_text("// base\n", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    (root / "base.kt").write_text("// base\n    val x = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "change kt")
+
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads(next(ln for ln in r.stdout.splitlines() if ln.strip().startswith("{")))
+
+    check("★前置★ 現場成立:這條宣告的指令真的跑了",
+          bool(data.get("lint_ran")), str(data)[:300])
+    received = got.read_text(encoding="utf-8") if got.exists() else "(檔沒被寫出來=linter 沒跑)"
+    check("★linter 要收到這次真的改到的那支檔★",
+          "base.kt" in received, f"它實際收到的是:{received}")
+    check("★不准把佔位符原樣送出去★(送出去等於一支檔都沒檢查)",
+          "LINT_FILES" not in received, f"它實際收到的是:{received}")
+
+    claims = data.get("claims", [])
+    files = [c.get("file", "") for c in claims]
+    check("★工具報的問題要進得來★(收得到檔才報得出真問題)",
+          any(f.endswith("base.kt") for f in files), str(claims)[:400])
+    check("★不准出現檔名是佔位符字串的假發現★(那是工具在喊找不到檔,不是真問題)",
+          not any("LINT_FILES" in f for f in files), str(claims)[:400])
+
+    # ── 對不齊座標時,linter 的發現不准自己把分級撐高 ──────────────────
+    # ★量出來的事實★(2026-09-16):佔位符修好、linter 真的開始讀檔之後,對不齊那條路
+    # (工作目錄不乾淨、或審的是比 HEAD 舊的範圍)會把★改到的檔裡所有舊有問題★全收進來——
+    # 這個 repo 實測是 1446 條,分級必定最高級。對齊時只有 3 條,而且都落在新增的行上。
+    # 這條路以前無害只是因為 linter 根本沒讀到檔,現在它會讓分級永遠喊最高級。
+    # ★處置★:對不齊時 linter 的發現照樣列出來(資訊不丟),但不參與分級——
+    # 分級的意思是「這次改動有多risky」,而對不齊時根本分不出哪條是這次帶進來的。
+    # 真正擋「新帶進來的告警」的是推送前那道閘(它比對兩份快照,跟對齊無關),不是這裡。
+    (root / "dirty.txt").write_text("讓工作目錄變髒\n", encoding="utf-8")
+    r2 = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d2 = _json.loads(next(ln for ln in r2.stdout.splitlines() if ln.strip().startswith("{")))
+    check("★前置★ 現場成立:這次真的是對不齊的那條路",
+          d2.get("filtered") is False, str(d2)[:300])
+    check("對不齊時 linter 的發現照樣列出來(資訊不丟)",
+          any("lint:" in c.get("source", "") for c in d2.get("claims", [])), str(d2)[:400])
+    check("★對不齊時 linter 的發現不准自己把分級撐高★(分不出是不是這次帶進來的)",
+          d2["tier"] == "standard", f"tier={d2['tier']} claims={len(d2.get('claims', []))}")
+
+    # ── 沒有副檔名的程式檔也要被認出來 ────────────────────────────────
+    # ★這個 repo 最重要的那支檔就是這種★:主程式 scripts/lumos 是 python3 但沒有 .py。
+    # 專案裡早就有一支「沒有副檔名就看第一行 shebang」的函式(2026-09-13 為了這件事寫的),
+    # 但算風險這條路沒用它、自己用副檔名 → 主程式對整道 linter 檢查是隱形的。
+    root7 = Path(tempfile.mkdtemp(prefix="gctl-lintfiles-noext-"))
+
+    def git7(*a):
+        sp.run(["git", *a], cwd=root7, capture_output=True)
+    git7("init")
+    git7("config", "user.email", "t@t")
+    git7("config", "user.name", "t")
+    got7 = root7 / "收到的參數.txt"
+    helper7 = Path(tempfile.mkdtemp(prefix="gctl-lintfiles-h7-")) / "recorder.py"
+    helper7.write_text(
+        "import sys, json\n"
+        "out, files = sys.argv[1], sys.argv[2:]\n"
+        f"open({str(got7)!r}, 'w').write(repr(files))\n"
+        "json.dump({'runs': [{'tool': {'driver': {'name': 'RecLint'}},\n"
+        "                     'originalUriBaseIds': {}, 'results': []}]}, open(out, 'w'))\n",
+        encoding="utf-8")
+    cmd7 = f"{_sys.executable} {helper7} {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+    (root7 / ".lumos").mkdir()
+    (root7 / ".lumos" / "lint.json").write_text(_json.dumps({"py": [cmd7]}), encoding="utf-8")
+    (root7 / "主程式").write_text("#!/usr/bin/env python3\nx = 1\n", encoding="utf-8")
+    git7("add", "-A")
+    git7("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    (root7 / "主程式").write_text("#!/usr/bin/env python3\nx = 1\ny = 2\n", encoding="utf-8")
+    git7("add", "-A")
+    git7("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "change")
+
+    r7 = run(root7, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root7), "--json")
+    d7 = _json.loads(next(ln for ln in r7.stdout.splitlines() if ln.strip().startswith("{")))
+    check("★沒有副檔名但第一行寫了語言的程式檔,也要跑它那個棧的檢查★",
+          bool(d7.get("lint_ran")), str(d7)[:300])
+    got7_txt = got7.read_text(encoding="utf-8") if got7.exists() else "(linter 根本沒跑)"
+    check("★而且要真的把那支檔送進去★",
+          "主程式" in got7_txt, f"它實際收到的是:{got7_txt}")
+
+    print("  ✓ t_pitfalls_lint_gets_the_changed_files")
+
+
+def t_intake_declaration_uses_shared_fence_stripping():
+    """★前掃留痕的宣告行判定要走全檔唯一那支剝圍欄實作★
+    (2026-09-16 同族掃描 B 類)。
+
+    出身:那支判定自己寫了一個 ````…```` 的正則,而專案裡早就有一支「全檔唯一的
+    圍欄判定」——它的說明白紙黑字寫著「所有人都必須走這裡」,因為自己寫的正則有兩個
+    致命假設(圍欄一定成對、標記一定在第 0 欄)。這處沒走,於是兩邊對同一段文字給出
+    不同答案。
+
+    ★後果★:這個宣告行是用來觀測「首輪前掃到底有沒有真的跑過」的(處置閘印它、
+    體檢的滾動窗也數它,兩邊都只觀測不擋)。把樣板原樣貼進圍欄裡就算數的話,
+    那個觀測數字就不再代表任何事——而那支判定的說明自己就寫著要防「模板照抄即偽造」。
+
+    翻紅釘:改回自己寫的正則 → 第 2、3 條翻紅。"""
+    m = _lm()
+    decl, vis = m._intake_declared, m._visible_lines
+
+    def visible(txt):
+        return any("preflight-4:" in str(ln) for _no, ln in vis(txt.split("\n")))
+
+    plain = "preflight-4: ran\n"
+    check("★前置★ 現場成立:沒被圍欄包住時兩邊都算數",
+          decl(plain) and visible(plain), "")
+    nested = "````\n```\npreflight-4: ran\n````\n"
+    check("★四個反引號外層、三個反引號內層:貼在裡面的樣板不算數★",
+          not decl(nested), f"共用那支的答案是 {visible(nested)}")
+    tilde = "~~~\npreflight-4: ran\n~~~\n"
+    check("★波浪號也是圍欄:貼在裡面的樣板不算數★",
+          not decl(tilde), f"共用那支的答案是 {visible(tilde)}")
+    fenced = "```\npreflight-4: ran\n```\n"
+    check("三個反引號包住的照樣不算數(原本就對,別改壞)", not decl(fenced), "")
+
+    print("  ✓ t_intake_declaration_uses_shared_fence_stripping")
+
+
+def t_lint_files_substitution_has_one_implementation():
+    """★「要檢查哪些檔」的替換只准有一份實作★
+    (Issues/風險掃描的linter那隻手沒送檔進去,2026-09-16)。
+
+    出身:這件事原本在四個地方各寫一次,★算改動風險那一條漏了★,於是那條路等於從來
+    沒檢查過任何一支檔。抽成共用函式之後我在註解裡寫了「唯一實作,不會再漏第四個地方」
+    ——同族掃描當場打臉:另外兩處(冒煙、規則索引核對)還是各自手寫一份,那句話名不副實。
+
+    ★這條測試就是那句話的機械保證★:除了共用函式自己那一行,整支程式不准再有別人
+    直接對這個佔位符做替換。純字串檢查,便宜而且擋得住未來的分裂。"""
+    src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8")
+    hits = [(i + 1, ln.strip()) for i, ln in enumerate(src.split("\n"))
+            if "replace(_LINT_NEW_FILES_TOKEN" in ln or 'replace("{LINT_FILES}"' in ln]
+    check("★前置★ 現場成立:找得到替換這個佔位符的地方(不然這條測試等於沒在驗)",
+          len(hits) >= 1, str(hits))
+    check("★只准有一處在替換那個佔位符★(其他地方要呼叫共用函式,不要自己再寫一份)",
+          len(hits) == 1, "自己動手替換的地方:" + str(hits))
+
+    # 共用函式的行為本身也釘一下:沒有佔位符照原樣、檔清單空的照原樣、多檔各自跳脫
+    m = _lm()
+    f = m._lint_cmd_with_files
+    check("沒有那個佔位符的指令原樣回傳(掃整個資料夾的宣告是合法的)",
+          f("lint --all {LINT_SARIF_OUT}", ["a.py"]) == "lint --all {LINT_SARIF_OUT}", "")
+    check("檔清單是空的就原樣回傳(塞空字串進去等於叫工具檢查空檔名)",
+          f("lint {LINT_FILES}", []) == "lint {LINT_FILES}", "")
+    check("★多支檔要各自跳脫再以空白相接★(整串一起跳脫會把好幾個路徑黏成一個參數)",
+          f("lint {LINT_FILES}", ["a b.py", "c.py"]) == "lint 'a b.py' c.py",
+          f("lint {LINT_FILES}", ["a b.py", "c.py"]))
+
+    print("  ✓ t_lint_files_substitution_has_one_implementation")
 
 
 def t_lint_watch_semver():
@@ -13889,10 +14091,14 @@ def t_private_dir_trust_shared_across_four_sites():
         pass   # 照真實流程:不可信就什麼都不做
     check("★私有目錄(寫入端)★: 受害者的檔案沒有被刪", precious.exists(), "")
 
-    # ⑦ 原始碼層:四處都要呼叫到共用那支,不准各寫各的
+    # ⑦ 原始碼層:在家目錄底下寫東西的地方都要呼叫到共用那支,不准各寫各的
+    #    ★2026-09-16 同族掃描補進來的那一處★:筆記庫的寫入鎖也把鎖檔建在家目錄底下
+    #    (註解甚至寫著「照鏡頭快取的先例」),但★只抄了放哪裡、沒抄那道信任檢查★。
+    #    實測:把 ~/.cache/lumos 做成指向別人目錄的 symlink,鎖的資料夾真的被建到那邊去,
+    #    而同一支信任檢查對那條路徑判「不可信」。鎖失效的後果是兩個程序互蓋筆記庫的修改。
     src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
     for site in ("_lens_arm_dir_ok", "_lens_cache_write", "cmd_dispatch_lens_arm",
-                 "cmd_dispatch_lens_disarm"):
+                 "cmd_dispatch_lens_disarm", "_vault_write_lock"):
         import re as _re
         mm = _re.search(rf"def {site}\(.*?(?=\ndef )", src, _re.S)
         check(f"私有目錄: {site} 有走共用的信任檢查",

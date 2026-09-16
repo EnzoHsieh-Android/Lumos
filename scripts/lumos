@@ -5377,9 +5377,14 @@ def _intake_declared(text):
     值域封閉單值 ③同檔多條宣告行=格式壞,視同無(fail-closed;後果只是 T2 的 ⚠,不擋)。
     回傳 True=有且僅有一條合法宣告行。"""
     import re as _re
-    body = _re.sub(r"```.*?```", "", text, flags=_re.S)   # 未閉合圍欄:剝到文末=保守方向(視同無)
-    body = _re.sub(r"```.*\Z", "", body, flags=_re.S)
-    hits = [ln for ln in body.splitlines() if ln.startswith("preflight-4:")]
+    # ★走全檔唯一那支剝圍欄實作★(2026-09-16 同族掃描):原本這裡自己寫了一個
+    # ```…``` 的正則,而那支共用函式的說明白紙黑字寫著「所有人都必須走這裡」——
+    # 自己寫的正則有兩個致命假設(圍欄一定成對、標記一定在第 0 欄)。實測兩種形狀
+    # 兩邊答案相反:①外層四個反引號、內層三個反引號 ②波浪號圍欄。
+    # 兩種都讓「把樣板原樣貼進圍欄裡」被算成真的跑過前掃,正是這支判定自己
+    # 宣稱要防的「模板照抄即偽造」。
+    hits = [ln for _no, ln in _visible_lines(text.split("\n"))
+            if ln.startswith("preflight-4:")]
     if len(hits) != 1:
         return False
     return _re.fullmatch(r"preflight-4:[ \t]*ran[ \t]*", hits[0]) is not None
@@ -11141,6 +11146,24 @@ def _vault_write_lock(vault):
         except OSError as e:
             print(f"提醒:寫入鎖的資料夾建不起來({e}),這次不排隊直接寫——"
                   "同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的", file=sys.stderr)
+            yield
+            return
+        # ★鎖檔的資料夾也要過信任檢查★(2026-09-16 同族掃描):上面那句註解說「照鏡頭快取
+        # 的先例」,但★只抄了放哪裡、沒抄那道檢查★。實測把 ~/.cache/lumos 做成指向別人
+        # 目錄的 symlink,鎖的資料夾真的被建到那邊去,而同一支檢查對那條路徑判不可信。
+        # 不過關就不在別人的目錄上動手——跟鄰居一樣「不信、不碰」,但要出聲說鎖沒生效,
+        # 因為鎖失效的後果是兩個程序互相蓋掉筆記庫的修改。
+        # ★沒擋到的殘留(照實寫,別當成全防住了)★:檢查排在建資料夾之後,所以連結指到的
+        # 地方還是會多出一個★空資料夾★——鄰居那幾處也是同樣順序,這是共用寫法本來就有的
+        # 缺口,不是這一處特有。真正危險的動作(寫鎖檔、改權限、刪目錄)都在檢查之後,
+        # 擋住了。要連空資料夾都不建,得改成從家目錄往下逐層建、逐層檢查,那會動到鄰居那
+        # 幾處,另案處理。
+        if not _trusted_private_dir(lock.parent, ".cache", "lumos", "vault-lock"):
+            print(f"提醒:放寫入鎖的資料夾不可信({lock.parent})——它自己或上層被換成了"
+                  "指向別處的連結、或別人也寫得進去。這次不在那裡建鎖,直接寫;"
+                  "同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。", file=sys.stderr)
+            print("  檢查一下那條路徑是誰建的:", file=sys.stderr)
+            print(f"    ls -ld {lock.parent} {lock.parent.parent}", file=sys.stderr)
             yield
             return
         deadline = _t.monotonic() + 60
@@ -17196,19 +17219,22 @@ def _lint_load_config(repo_root):
         return None
 
 
-def _lint_stacks_for_diff(added, config):
-    """由 added({file: set(line_numbers)}) 與 config(lint.json dict) 推導待執行指令列表。
-    每個 added 檔案取副檔名(lstrip('.'))比對 config key;命中則收其指令 list。
-    去重保序(first-seen order),同一指令只收一次。"""
-    seen = set()
-    result = []
+def _lint_stacks_for_diff(added, config, repo_root=None):
+    """由 added({file: set(line_numbers)}) 與 config(lint.json dict) 推導「要跑哪些指令、
+    各自要檢查哪些檔」。回 {命令: [檔, ...]},保持 first-seen 順序;只迭代它的呼叫端
+    拿到的仍是命令清單,行為不變。
+
+    ★怎麼判一支檔算哪個棧★:走共用的那支(`_lint_file_ext`),它在沒有副檔名時會看第一行
+    的 shebang。★給了 repo_root 才看得到第一行★——沒給就退回只看副檔名(既有呼叫端餵的是
+    合成檔名,本來就只有副檔名可看)。2026-09-13 就是為了這件事寫了那支函式:這個 repo
+    最重要的那支檔 `scripts/lumos` 是 python3 但沒有 .py,照副檔名比對的話它對整道檢查隱形。
+    ★這裡原本自己用 Path(f).suffix 又寫了一次★,於是那支函式的好處完全沒吃到
+    (2026-09-16,Issues/風險掃描的linter那隻手沒送檔進去)。"""
+    result = {}
     for f in added:
-        ext = Path(f).suffix.lstrip(".")
-        if ext in config:
-            for cmd in config[ext]:
-                if cmd not in seen:
-                    seen.add(cmd)
-                    result.append(cmd)
+        ext = (_lint_file_ext(f, repo_root) if repo_root else Path(f).suffix.lstrip(".").lower())
+        for cmd in (config.get(ext) or []) if isinstance(config.get(ext), list) else []:
+            result.setdefault(cmd, []).append(f)
     return result
 
 
@@ -17274,9 +17300,7 @@ def _lintcheck_smoke_cmd(cmd, stack, repo_root, sample=3):
     r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*." + str(stack)],
                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     files = [f for f in (r.stdout.split("\0") if r.returncode == 0 else []) if f][:sample]
-    if not files:
-        return cmd
-    return cmd.replace(_LINT_NEW_FILES_TOKEN, " ".join(shlex.quote(f) for f in files))
+    return _lint_cmd_with_files(cmd, files)
 
 
 def cmd_lint_check(repo=None, smoke=False, as_json=False):
@@ -17496,7 +17520,7 @@ def cmd_rule_check(repo=None, as_json=False):
                 problems.append({"rule": rid, "issue": "樣本檔不存在:" + str(sample)})
                 continue
             checked += 1
-            run_cmd = cmd.replace(_LINT_NEW_FILES_TOKEN, _shlex.quote(str(sp)))
+            run_cmd = _lint_cmd_with_files(cmd, [str(sp)])
             claims, ok = _lint_run_and_parse(run_cmd, repo_root)
             if not ok:
                 problems.append({"rule": rid, "issue": "規則跑不動(工具沒裝?命令壞了?),這條等於沒有守衛"})
@@ -17640,6 +17664,11 @@ def _lint_run_and_parse(cmd, repo_root, path_prefix=None, timeout=None):
     os.close(fd)
     try:
         # 注入臨時檔路徑到指令
+        # ★佔位符沒被換掉就不跑★(2026-09-16):原樣送出去,linter 會把那串文字當成一個
+        # 不存在的路徑、回報「找不到檔」——而那條錯誤會被當成一條真發現,把風險分級撐高,
+        # 同時真正該檢查的檔一支都沒讀到。回 ok=False 讓呼叫端記成「這條沒跑」而不是「乾淨」。
+        if _LINT_NEW_FILES_TOKEN in cmd:
+            return [], False
         injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
         # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg。
         # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
@@ -17771,6 +17800,25 @@ _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本�
 _LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 否則記帳靜默失敗
 _LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
 _LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
+
+
+def _lint_cmd_with_files(cmd, files):
+    """把宣告指令裡的「要檢查哪些檔」佔位符換成真的檔名清單。
+
+    ★唯一實作★(2026-09-16,Issues/風險掃描的linter那隻手沒送檔進去):這件事原本在
+    三個地方各寫一次(冒煙、規則索引、新增告警閘),而★算改動風險那一條漏了★,於是
+    佔位符原樣送給 linter、linter 回報「找不到這個檔」——真問題一條都看不到,而那句
+    找不到檔自己被當成一條發現、把風險分級撐成最高級。抽成一支就不會再漏第四個地方。
+
+    ★多檔各自跳脫再以空白相接★,不是整串一起跳脫(整串跳脫會把好幾個路徑黏成一個參數)。
+    指令沒有那個佔位符是合法的(例如直接掃整個資料夾或用 glob 的宣告),原樣回傳。
+    檔清單是空的也原樣回傳:塞一個空字串進去等於叫 linter 檢查「空檔名」。
+    """
+    import shlex as _shlex
+    if _LINT_NEW_FILES_TOKEN not in cmd or not files:
+        return cmd
+    return cmd.replace(_LINT_NEW_FILES_TOKEN,
+                       " ".join(_shlex.quote(str(f)) for f in files))
 # ★依賴層(2026-09-13)★:依賴宣告檔不是程式碼檔,既有的「要不要掃」過濾會把 .json/.txt/.lock 整批擋掉,
 # 所以它們走自己這條路。宣告用 lint.json 的保留鍵 "deps"(不是副檔名),命中條件=這次改動碰到任何一支依賴宣告檔。
 # 為什麼值得接:AI 寫碼特有的錯裡,捏造套件版本是最好抓的一種,而工具是現成的(免費、原生吐同一個格式)。
@@ -18358,10 +18406,7 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
                 targets = [files[f] for f in want_files if f in files]
                 if not targets:
                     continue
-                import shlex as _shlex
-                # 多檔各自跳脫後以空白相接——★不是整串一起跳脫★(整串 quote 會把好幾個路徑黏成一個參數)
-                joined = " ".join(_shlex.quote(t) for t in targets)
-                run_cmd = cmd.replace(_LINT_NEW_FILES_TOKEN, joined)
+                run_cmd = _lint_cmd_with_files(cmd, targets)
                 prefix = os.path.relpath(str(wdir), str(repo_root))
                 claims, ok = _lint_run_and_parse(run_cmd, repo_root, path_prefix=prefix,
                                                  timeout=max(1, int(budget_end - _time.monotonic())))
@@ -20882,14 +20927,15 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     for c in claims:
         c["source"] = "pitfalls-builtin"
 
-    cmds = _lint_stacks_for_diff(added, config)
+    # 回的是「命令 → 這次改到的哪幾支檔」;宣告的指令要收到真檔名才檢查得到東西
+    cmds = _lint_stacks_for_diff(added, config, repo_root)
     aligned = _lint_aligned(diff_range, repo_root)
     lint_ran = []
     lint_skipped = []
     lint_claims = []
 
-    for cmd in cmds:
-        lc, ok = _lint_run_and_parse(cmd, repo_root)
+    for cmd, cmd_files in cmds.items():
+        lc, ok = _lint_run_and_parse(_lint_cmd_with_files(cmd, sorted(cmd_files)), repo_root)
         if ok:
             lint_ran.append(cmd)
             lint_claims.extend(lc)
@@ -20911,8 +20957,18 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     else:
         filtered_marker = False  # 未對齊 → 全收 + 標記
 
+    # ★對不齊時,linter 的發現不參與分級★(2026-09-16,
+    # Issues/風險掃描的linter那隻手沒送檔進去)。實測:佔位符修好、linter 真的開始讀檔
+    # 之後,對不齊那條路會把★改到的檔裡所有舊有問題★全收進來——本 repo 量到 1446 條,
+    # 分級必定最高級;對齊時只有 3 條而且都落在新增的行上。這條路以前無害,只是因為
+    # linter 根本沒讀到檔。分級的意思是「★這次改動★有多危險」,對不齊時分不出哪一條是
+    # 這次帶進來的,拿來撐分級只會讓最高級變成常態、然後沒人當一回事。
+    # ★發現照樣列出來★(資訊不丟,帶 filtered=false 標記讓讀的人知道沒對齊);
+    # 真正擋「新帶進來的告警」的是推送前那道閘(比對兩份快照,跟對齊無關),不是這裡。
+    _tier_claims = (lint_claims if filtered_marker is not False else []) + claims
+
     all_claims = lint_claims + claims
-    out = {"claims": all_claims, "tier": "high" if all_claims else "standard",
+    out = {"claims": all_claims, "tier": "high" if _tier_claims else "standard",
            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
            "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
            "stack_questions_meta": stack_meta, "arch_alignment": arch}

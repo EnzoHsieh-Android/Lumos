@@ -15,6 +15,7 @@ related:
   - "[[Systems/check-u-overgeneralization]]"
   - "[[Projects/工具分類_計劃]]"
 summary: |-
+  KEY:[寫入鎖的資料夾也要過信任檢查 2026-09-16]筆記庫寫入鎖把鎖檔建在家目錄底下,註解寫著「照派工鏡頭快取的先例」,★但只抄了放哪裡、沒抄那道信任檢查★。實測把中間一層換成指向別處的符號連結,鎖檔真的被寫到那邊去,而同一支檢查對那條路徑判「不可信」;鎖失效的後果是兩個程序互相蓋掉筆記庫的修改。修法=不過關就不在那裡建鎖、直接寫並出聲說鎖沒生效。★沒擋到的殘留★:檢查排在建資料夾之後,連結指到的地方仍會多出一個空資料夾——鄰居那幾處同樣順序,是共用寫法本來就有的缺口,不是這處特有;真正危險的動作(寫檔、改權限、刪目錄)都在檢查之後。要連空資料夾都不建得改成逐層建逐層檢查,會動到鄰居,另案。 [test:t_private_dir_trust_shared_across_four_sites]
   KEY:[2026-09-08 scope 值域宣告制]lint 多一段 scope/ 檢查(plan:[[Projects/工具分類_計劃]]):只在 vault 往上找到的 .lumos/config.json 有 scope 區塊({values:[…],required:bool})時啟動,沒宣告=一個字不說;啟動後 非 MOC 節點 沒掛(required)/掛超過兩個/值不在表內 → ★只 warning 不擋★,不走 created cutoff。設定檔搜尋與 extra_frontmatter_keys 共用同一支 helper(_lumos_config_near_vault) [test:t_lint_scope_policy]
   KEY:[2026-08-05 標籤收編]值域 lint(cutoff 2026-08-06 新節點硬擋,舊帳不回溯)——status 依 type enum(verification 用 pass)/summary FLAG: 三值(敘述移 KEY 行)/priority P0-P3/risk 四值;feature/area 凍結 warning 勸轉 scope/。schema 表單源=lumos-project-notes SKILL〈標籤家族〉 [test:t_lint_tag_value_enums]
   KEY:[2026-08-05]aliases 宣告制——system/issue 新節點(created≥2026-08-05)lint 硬擋「缺 aliases 鍵」;逼★判過★不逼有值(aliases: []=明示無同義詞,合法;湊數別名吃 3.5 檢索權重=主動污染排序)。配套:模板自帶 aliases: []+NEW_HINT 教學(來源限真實出現過的說法)+append 白名單納 aliases;兩庫回填 2026-08-05(toolchain 22 節點 23 條/Landmark 71 節點 152 條,grounded 規則) [test:t_lint_aliases_declared]
