@@ -10897,10 +10897,30 @@ def t_vault_lock_falls_back_instead_of_giving_up():
               not any(str(victim) in s for s in seen), str(seen))
         check("★但還是要有鎖★(沒有鎖=兩個程序互相蓋掉修改,比原本更糟)",
               any(str(v) in s for s in seen), f"一個鎖檔都沒有:{seen}")
-        # 互斥要真的成立:同一個筆記庫再拿一次鎖,巢狀允許、不同鍵不互相干擾
-        with m._vault_write_lock(v):
-            pass
-        check("同一個程序巢狀拿同一把鎖不會卡死自己", True, "")
+        # ★真的巢狀,不是前後兩個區塊★(r2 修正差異席):上一版寫成兩個不重疊的 with,
+        # 根本沒測到巢狀——而退路分支剛好把可重入的鍵算錯,真巢狀會卡滿 60 秒才拋
+        # 「別的程序在寫」這句假訊息。用短逾時代替 60 秒,卡住就當場失敗而不是讓整套測試停擺。
+        import signal as _sig
+
+        def _boom(_s, _f):
+            raise TimeoutError("巢狀拿同一把鎖卡住了(可重入判斷沒認出是自己)")
+        _old = _sig.signal(_sig.SIGALRM, _boom)
+        _sig.alarm(8)
+        try:
+            with m._vault_write_lock(v):
+                with m._vault_write_lock(v):       # ← 外層還沒退出,內層再拿一次
+                    pass
+            check("★同一個程序真巢狀拿同一把鎖不會卡死自己★(退路換了位置,可重入的鍵要跟著換)",
+                  True, "")
+        except TimeoutError as e:
+            check("★同一個程序真巢狀拿同一把鎖不會卡死自己★(退路換了位置,可重入的鍵要跟著換)",
+                  False, str(e))
+        except RuntimeError as e:
+            check("★同一個程序真巢狀拿同一把鎖不會卡死自己★(退路換了位置,可重入的鍵要跟著換)",
+                  False, f"拋了假訊息:{e}")
+        finally:
+            _sig.alarm(0)
+            _sig.signal(_sig.SIGALRM, _old)
     finally:
         if old_home is not None:
             _os.environ["HOME"] = old_home
@@ -11000,6 +11020,20 @@ def t_closing_fence_must_not_carry_a_language_tag():
     trailing_ws = "```\n程式碼\n```   \n後面\n"
     check("收尾圍欄後面只有空白照樣算收尾", seen(trailing_ws) == ["後面"], str(seen(trailing_ws)))
 
+    # ★收緊之後不准讓打錯字變成災難★(r2 修正差異席):嚴格讀法(收尾不得帶任何東西)
+    # 比題目寬——題目是「語言標記」,但打錯一個字、多敲一鍵也會變成「關不掉」,
+    # 後面到檔尾所有內容★包含合約行★全部無聲隱形。這正是這支函式自己警告過的最危險模式,
+    # 換個門重新長出來。做法:先照規格讀;規格讀出「有圍欄一直沒關到檔尾」才退回寬鬆讀法。
+    typo = "前面\n```\n程式碼\n```x\n中間的真內容\n★INVARIANT★ 不能破壞的規則\n後面\n"
+    got = seen(typo)
+    check("★收尾打錯字不准讓後面整段消失★(合約行消失是這裡最嚴重的失敗模式)",
+          "★INVARIANT★ 不能破壞的規則" in got, str(got))
+    check("打錯字那種情況,前後的散文都要看得見",
+          got == ["前面", "中間的真內容", "★INVARIANT★ 不能破壞的規則", "後面"], str(got))
+    # 但退回寬鬆只在「規格讀法讀不完」時才發生:巢狀那題規格讀得完,照樣要擋得住偽造
+    check("巢狀那題規格讀得完,不會因為有退路就被放水",
+          seen(tagged_close) == [], str(seen(tagged_close)))
+
     print("  ✓ t_closing_fence_must_not_carry_a_language_tag")
 
 
@@ -11063,7 +11097,32 @@ def t_lint_files_substitution_has_one_implementation():
                 return True
         return False
 
-    subs = []          # (函式名, 行號):拿那個佔位符做替換的呼叫
+    # ★改成白名單制★(r2 修正差異席):上一版只找「直接把佔位符當參數丟給 replace」的呼叫,
+    # 而 r1 明明示範過「先賦值給變數再用」這招——實測它完全沒防住,我卻在註解裡寫了
+    # 「拿變數繞也擋得住」。這是同一個毛病第三次:把守衛的能力講得比實際寬。
+    # 白名單制不看你怎麼寫,只看★哪些函式碰得到這個佔位符★:名單外的函式只要提到它就紅,
+    # 逼人當場說明為什麼要碰。
+    ALLOWED = {
+        "_lint_cmd_with_files",   # 唯一准做替換的那支
+        "_lint_run_and_parse",    # 只做「還沒換掉就別跑」的檢查
+        "_lintcheck_smoke_cmd",   # 只做「這條命令要不要換檔」的檢查
+        "cmd_rule_check",         # 只做同樣的檢查
+        "_lint_new_verdict",      # 只做同樣的檢查
+        "_pitfall_diff_collect",  # 只做「這條命令推送閘接不接得住」的檢查
+    }
+    touchers = {}
+    for fn in _ast.walk(tree):
+        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        if _mentions_token(fn):
+            touchers[fn.name] = True
+    check("★前置★ 現場成立:白名單裡的函式真的都還在(名單過期了這條就等於沒在驗)",
+          ALLOWED <= set(touchers), f"名單裡有幾支已經不碰它了:{sorted(ALLOWED - set(touchers))}")
+    check("★名單外的函式不准碰這個佔位符★"
+          "(要換檔就呼叫共用那支;真的需要碰,先把函式名加進這份名單並寫清楚為什麼)",
+          set(touchers) <= ALLOWED, f"名單外碰到它的:{sorted(set(touchers) - ALLOWED)}")
+
+    subs = []          # 名單內的那幾支裡面,真的做替換的有幾處
     for fn in _ast.walk(tree):
         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
             continue
@@ -11072,19 +11131,14 @@ def t_lint_files_substitution_has_one_implementation():
                 continue
             f = call.func
             name = f.attr if isinstance(f, _ast.Attribute) else getattr(f, "id", "")
-            if name not in ("replace", "sub"):
-                continue
-            if any(_mentions_token(a) for a in call.args):
+            if name in ("replace", "sub") and any(_mentions_token(a) for a in call.args):
                 subs.append((fn.name, call.lineno))
-    check("★前置★ 現場成立:找得到替換這個佔位符的地方(不然這條測試等於沒在驗)",
-          len(subs) >= 1, str(subs))
-    check("★只准有一處在替換那個佔位符★(其他地方要呼叫共用函式,不要自己再寫一份)",
-          len(subs) == 1, "自己動手替換的地方:" + str(subs))
-    check("而且那一處要在共用函式裡面",
-          bool(subs) and subs[0][0] == "_lint_cmd_with_files", str(subs))
-    # ★這條買到什麼、沒買到什麼★:語法樹擋得住「換行、換縮排、換成 re.sub、拿變數繞」,
-    # 擋不住「用 getattr 取到 replace」或「在別的模組裡做」——後者這個 repo 不會發生
-    # (零依賴單檔),前者要刻意才寫得出來。不宣稱密不透風。
+    check("★真的動手替換的只准有一處,而且在共用函式裡★",
+          len(subs) == 1 and subs[0][0] == "_lint_cmd_with_files", str(subs))
+    # ★這條買到什麼、沒買到什麼★:白名單擋得住「新開一支函式自己做替換」,不管它寫成幾行、
+    # 用不用變數、用 replace 還是 re.sub。擋不住「在名單內的函式裡多做一次替換」
+    # (第三條斷言接住直接寫的那種,但同樣用變數繞就看不到)、也擋不住 getattr 取方法。
+    # 不宣稱密不透風——上一版就是因為宣稱過頭被抓。
 
     # 共用函式的行為本身也釘一下:沒有佔位符照原樣、檔清單空的照原樣、多檔各自跳脫
     m = _lm()

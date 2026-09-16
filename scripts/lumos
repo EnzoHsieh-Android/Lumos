@@ -2851,32 +2851,43 @@ def _visible_lines(lines, keep_fenced=False):
     ②的消費端是治理機制本身(refcheck → design-loop 的 G1 硬閘、Edit/Write 前
     自動注入必看合約的 impact hook)——★一個縮排的 ``` 就能把某節點的鐵則警告
     靜默關掉★。逐行 toggle 對兩個假設都免疫。
+    
+    ★兩段式讀法(2026-09-16 代碼審 r2)★:先照 CommonMark 讀——收尾圍欄後面只能有空白,
+    帶語言標記的那行不算收尾(不然巢狀範例裡的樣板會被當成真的)。但這條規則比題目寬:
+    收尾★打錯一個字、多敲一鍵★也會變成「關不掉」,後面到檔尾所有內容(含合約行)
+    無聲隱形——正是下面警告過的最危險模式換個門長出來。所以規格讀法如果讀完還有圍欄沒關,
+    就整份退回寬鬆讀法(同字元、長度夠就算關)。取捨:同一份文件裡同時有巢狀範例★和★
+    沒關到的圍欄時,會退回寬鬆、巢狀那題就擋不住——那等於回到 2026-09-16 之前的行為,
+    不算退步,而且真的有沒關到的圍欄本來就該先修那個。
     """
-    fence = None          # 開著的圍欄:(字元, 長度)。同字元且至少一樣長才能關(CommonMark;-b r2/r3 外家席:兩種共用 toggle 會交錯反轉、```` 被 ``` 提前關)
-    # ★不偵測 HTML 註解★(-b r3 單reviewer 兩條 blocker:`-->  <!--` 先關再開會把後面整份藏掉;曾短暫加過,同日拿掉)
-    for i, ln in enumerate(lines):
-        indent = len(ln) - len(ln.lstrip(" "))
-        s = ln.lstrip(" ")
-        # 縮排 ≤3 格才是圍欄標記;4 格以上(或 tab)是縮排程式碼區塊的內容,不是邊界(-b r3 外家席:四空白的 ``` 曾吞掉後面真條款)
-        is_marker = indent <= 3 and not ln.startswith("\t") and s.startswith(("```", "~~~"))
-        if is_marker:
-            ch = s[0]
-            run = len(s) - len(s.lstrip(ch))
-            if fence is None:
-                fence = (ch, run)
+    def _scan(strict):
+        """回 (看得見的行, 收尾時還有沒有圍欄開著)。strict=照 CommonMark(收尾不得帶東西)。"""
+        fence = None      # 開著的圍欄:(字元, 長度)。同字元且至少一樣長才能關
+        # ★不偵測 HTML 註解★(-b r3 單reviewer 兩條 blocker:`-->  <!--` 先關再開會把後面整份藏掉)
+        out = []
+        for i, ln in enumerate(lines):
+            indent = len(ln) - len(ln.lstrip(" "))
+            s = ln.lstrip(" ")
+            # 縮排 ≤3 格才是圍欄標記;4 格以上(或 tab)是縮排程式碼區塊的內容,不是邊界
+            is_marker = indent <= 3 and not ln.startswith("\t") and s.startswith(("```", "~~~"))
+            if is_marker:
+                ch = s[0]
+                run = len(s) - len(s.lstrip(ch))
+                if fence is None:
+                    fence = (ch, run)
+                    continue
+                if ch == fence[0] and run >= fence[1] and (not strict or s[run:].strip() == ""):
+                    fence = None
+                    continue
+            if fence is not None and not keep_fenced:
                 continue
-            # ★收尾圍欄不准帶語言標記★(2026-09-16 代碼審 r1 外家席;CommonMark 本來就這樣定)。
-            # 原本只看「同一個字元、長度夠」,沒看後面還有沒有東西,於是巢狀範例裡的
-            # ```python / ~~~python 會被拿來把外層圍欄關掉——範例裡的樣板文字就變成看得見,
-            # 下游(前掃宣告、合約行、路徑宣稱)會把它當成真的。
-            # ★改之前先量過影響面★:對圖譜 537 篇逐篇比對「看得見哪些行」,只有 1 篇會變,
-            # 而且那篇改嚴才是對的(一篇 markdown 範例裡包了 yaml 區塊)。
-            if ch == fence[0] and run >= fence[1] and s[run:].strip() == "":
-                fence = None
-                continue
-        if fence is not None and not keep_fenced:
-            continue
-        yield i + 1, ln
+            out.append((i + 1, ln))
+        return out, fence is not None
+
+    out, unterminated = _scan(True)
+    if unterminated:                      # 規格讀法讀不完 → 退回寬鬆(見說明的取捨)
+        out, _ = _scan(False)
+    yield from out
 
 
 def _strip_fences_text(text):
@@ -11141,51 +11152,59 @@ def _vault_write_lock(vault):
     @contextlib.contextmanager
     def _cm():
         key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
-        lock = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
+        primary = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
+
+        # ★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★(2026-09-16 代碼審 r2)。
+        # 第一版把退路排在可重入判斷後面,於是巢狀呼叫時拿主要路徑的鍵去查、查不到,
+        # 內層會卡滿 60 秒再拋「別的程序正在寫」——那是假訊息,而且正是本函式說明裡
+        # 「第四輪已修過」的舊坑從退路分支重新長出來。
+        lock, why = primary, None
+        try:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            why = ("no-dir", str(e))
+        else:
+            # ★鎖檔的資料夾也要過信任檢查★(2026-09-16 同族掃描):放的位置是照派工鏡頭
+            # 快取的先例抄的,但★只抄了放哪裡、沒抄那道檢查★。實測把 ~/.cache/lumos 做成
+            # 指向別人目錄的連結,鎖的資料夾真的被建到那邊去。
+            # ★不可信就換個地方鎖,不是乾脆不鎖★(代碼審 r1 外家席):第一版寫成「不可信
+            # 就直接寫」,那是把一個安全問題換成一個正確性問題——原本鎖檔雖然落在不可信的
+            # 地方、鎖本身仍然有效;不鎖之後兩個程序就能同時做讀—改—寫。而且觸發條件不需要
+            # 攻擊者,把快取目錄搬到別的磁碟就會踩到。退路選筆記庫自己:要寫的就是它、
+            # 使用者一定擁有它,兩個程序算出來的路徑一樣,互斥照樣成立。
+            # ★沒擋到的殘留(照實寫)★:檢查排在建資料夾之後,所以連結指到的地方還是會多出
+            # 一個空資料夾——鄰居那幾處同樣順序,是共用寫法本來就有的缺口。真正危險的動作
+            # (寫鎖檔、改權限、刪目錄)都在檢查之後。
+            if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
+                lock = Path(vault) / f".lumos-vault-{key}.lock"
+                why = ("untrusted", str(primary.parent))
         k = str(lock)
-        if _VAULT_LOCK_HELD.get(k):
+
+        if _VAULT_LOCK_HELD.get(k):          # 自己已經拿著這把鎖:巢狀直接過
             _VAULT_LOCK_HELD[k] += 1
             try:
                 yield
             finally:
                 _VAULT_LOCK_HELD[k] -= 1
             return
-        try:
-            lock.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            print(f"提醒:寫入鎖的資料夾建不起來({e}),這次不排隊直接寫——"
-                  "同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的", file=sys.stderr)
-            yield
-            return
-        # ★鎖檔的資料夾也要過信任檢查★(2026-09-16 同族掃描):上面那句註解說「照鏡頭快取
-        # 的先例」,但★只抄了放哪裡、沒抄那道檢查★。實測把 ~/.cache/lumos 做成指向別人
-        # 目錄的 symlink,鎖的資料夾真的被建到那邊去,而同一支檢查對那條路徑判不可信。
-        # 不過關就不在別人的目錄上動手——跟鄰居一樣「不信、不碰」,但要出聲說鎖沒生效,
-        # 因為鎖失效的後果是兩個程序互相蓋掉筆記庫的修改。
-        # ★沒擋到的殘留(照實寫,別當成全防住了)★:檢查排在建資料夾之後,所以連結指到的
-        # 地方還是會多出一個★空資料夾★——鄰居那幾處也是同樣順序,這是共用寫法本來就有的
-        # 缺口,不是這一處特有。真正危險的動作(寫鎖檔、改權限、刪目錄)都在檢查之後,
-        # 擋住了。要連空資料夾都不建,得改成從家目錄往下逐層建、逐層檢查,那會動到鄰居那
-        # 幾處,另案處理。
-        if not _trusted_private_dir(lock.parent, ".cache", "lumos", "vault-lock"):
-            # ★不可信就換個地方鎖,不是乾脆不鎖★(2026-09-16 代碼審 r1 外家席):
-            # 第一版寫成「不可信就直接寫」,那是★把安全問題換成正確性問題★——原本鎖檔
-            # 雖然落在不可信的地方,鎖本身仍然有效;不鎖之後兩個程序就能同時做讀—改—寫,
-            # 後寫的蓋掉先寫的。而且觸發條件不需要攻擊者,把快取目錄搬到別的磁碟就會踩到。
-            # 退路選筆記庫自己:要寫的就是它、使用者一定擁有它,兩個程序算出來的路徑一樣,
-            # 互斥照樣成立。★一次性提醒,不是每次都唸★(同一個程序只講一次)。
-            fallback = Path(vault) / f".lumos-vault-{key}.lock"
-            if not _VAULT_LOCK_WARNED.get(k):
-                _VAULT_LOCK_WARNED[k] = True
-                print(f"提醒:放寫入鎖的資料夾不可信({lock.parent})——它自己或上層被換成了"
+
+        if why and not _VAULT_LOCK_WARNED.get(k):    # 位置不對勁只講一次,不每次都唸
+            _VAULT_LOCK_WARNED[k] = True
+            if why[0] == "no-dir":
+                print(f"提醒:寫入鎖的資料夾建不起來({why[1]}),這次不排隊直接寫。", file=sys.stderr)
+                print("  為什麼在意:同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。",
+                      file=sys.stderr)
+            else:
+                print(f"提醒:放寫入鎖的資料夾不可信({why[1]})——它自己或上層被換成了"
                       "指向別處的連結、或別人也寫得進去。", file=sys.stderr)
                 print("  為什麼在意:鎖是用來擋「兩個程序同時改同一個筆記庫、後寫的蓋掉先寫的」;"
-                      f"這次改把鎖放在筆記庫自己裡面({fallback.name}),功能不變,只是位置換了。",
+                      f"這次改把鎖放在筆記庫自己裡面({lock.name}),功能不變,只是位置換了。",
                       file=sys.stderr)
                 print("  要回到原本的位置,先看那條路徑是誰建的:", file=sys.stderr)
-                print(f"    ls -ld {lock.parent} {lock.parent.parent}", file=sys.stderr)
-            lock = fallback
-            k = str(lock)
+                print(f"    ls -ld {why[1]} {Path(why[1]).parent}", file=sys.stderr)
+        if why and why[0] == "no-dir":       # 連資料夾都建不起來:沒有退路,照寫但已經出過聲
+            yield
+            return
         deadline = _t.monotonic() + 60
         while not _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC):
             if _t.monotonic() > deadline:
