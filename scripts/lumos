@@ -11162,20 +11162,18 @@ def _vault_lock_where(vault):
     # ★逐層建、逐層檢查★(2026-09-16):原本一次 mkdir 出整條路徑再檢查,
     # 檢查不過時連結指到的地方已經被建出一層空資料夾了。
     if not _mkdir_trusted_under_home(".cache", "lumos", "vault-lock"):
-        return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
+        return Path(vault) / f".lumos-vault-{key}.lock", ("unusable", str(primary.parent))
     if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
-        return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
+        return Path(vault) / f".lumos-vault-{key}.lock", ("unusable", str(primary.parent))
     return primary, None
 
 
 def _vault_lock_say(lock, why):
     """鎖的位置不對勁時講一次(呼叫端負責「同一個程序只講一次」)。"""
-    if why[0] == "no-dir":
-        print(f"提醒:寫入鎖的資料夾建不起來({why[1]}),這次不排隊直接寫。", file=sys.stderr)
-        print("  為什麼在意:同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。",
-              file=sys.stderr)
-        return
-    print(f"提醒:放寫入鎖的資料夾不可信({why[1]})——它自己或上層被換成了"
+    # ★只剩一種原因★(2026-09-16 代碼審 資安席):改用逐層建之後,「決定位置」那支
+    # 不再區分「建不起來」與「不可信」——兩種都退到同一條退路,所以原本那個分支是死碼,
+    # 而且把兩種原因混成同一句話會讓人去檢查一條其實沒有連結問題的路徑。
+    print(f"提醒:放寫入鎖的資料夾用不了({why[1]})——它自己或上層被換成了"
           "指向別處的連結、或別人也寫得進去。", file=sys.stderr)
     print("  為什麼在意:鎖是用來擋「兩個程序同時改同一個筆記庫、後寫的蓋掉先寫的」;"
           f"這次改把鎖放在筆記庫自己裡面({lock.name}),功能不變,只是位置換了。",
@@ -11215,9 +11213,6 @@ def _vault_write_lock(vault):
         if why and not _VAULT_LOCK_WARNED.get(k):
             _VAULT_LOCK_WARNED[k] = True
             _vault_lock_say(lock, why)
-        if why and why[0] == "no-dir":       # 連資料夾都建不起來:沒有退路,照寫但已經出過聲
-            yield
-            return
         deadline = _t.monotonic() + 60
         while not _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC):
             if _t.monotonic() > deadline:
@@ -24464,6 +24459,13 @@ def _mkdir_trusted_under_home(*rel_segments):
     import stat as _stat
     cur = Path.home()
     for seg in rel_segments:
+        # ★每一段都必須是一個單純的名字★(2026-09-16 外家備援席):Python 的路徑接合遇到
+        # 絕對路徑會★整個重置★,`..` 也照走——實測絕對路徑段直接在別的地方建出資料夾、
+        # 而且回報成功,這支函式的名字就叫「留在家目錄底下」,那樣等於沒做到。
+        # 呼叫端目前全是寫死的字面段,所以這是守衛完整性,不是現行可被利用的洞。
+        if (not isinstance(seg, str) or not seg or seg in (".", "..")
+                or "/" in seg or "\\" in seg or Path(seg).is_absolute()):
+            return False
         cur = cur / seg
         try:
             cur.mkdir(exist_ok=True)     # 不帶 parents:一層一層來,才檢查得到每一層
@@ -24483,6 +24485,32 @@ def _mkdir_trusted_under_home(*rel_segments):
             if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
                 return False
     return True
+
+
+def _chmod_no_follow(d, mode):
+    """改一個★目錄★的權限,而且不准跟著符號連結走。成功回 True。
+
+    ★為什麼不直接 os.chmod★(2026-09-16 代碼審 資安席):`os.chmod` 會跟著連結走。
+    武裝目錄那處父層已經逐層驗過了,★但葉節點那一層還是「先建、先改權限、才驗」★——
+    葉節點在檢查之後被換成指向別人目錄的連結時,權限就改到別人的目錄上;
+    最後那道驗證雖然擋得下寫入,但權限已經動過、回不去了。
+
+    做法是用 O_NOFOLLOW|O_DIRECTORY 開它再 fchmod:不是目錄、或是連結,開的時候就失敗。
+    ★這是這份工具裡第一處真的用 dirfd 關掉競速窗口的地方★——其餘幾處仍是路徑層檢查,
+    仍然擋不住同帳號搶跑(那條誠實邊界照舊成立,不要因為這裡做了就以為全都做了)。
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+    try:
+        fd = os.open(str(d), flags)
+    except OSError:
+        return False
+    try:
+        os.fchmod(fd, mode)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def _lens_arm_dir_ok(d):
@@ -24542,10 +24570,13 @@ def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
         print(f"    ls -ld {d.parent} {d.parent.parent}", file=sys.stderr)
         return 2
     d.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(d, 0o700)
-    except OSError:
-        pass
+    if not _chmod_no_follow(d, 0o700):
+        print(f"擋下:武裝目錄 {d} 不是一個真的目錄(可能被換成指向別處的連結)——不碰它。",
+              file=sys.stderr)
+        print("  為什麼在意:改權限會跟著連結走,那等於去動別人的目錄。", file=sys.stderr)
+        print("  確定是你自己的東西壞掉了,手動刪掉再跑一次:", file=sys.stderr)
+        print(f"    rm -rf {d}", file=sys.stderr)
+        return 2
     # 建完再驗一次。★不宣稱「換掉也擋得住」★(外家席 r1 抓到那句是假的):
     # 這是路徑層檢查,同帳號的搶跑擋不住;再驗一次只是把窗口縮小,不是關掉。
     if not _lens_arm_dir_ok(d):

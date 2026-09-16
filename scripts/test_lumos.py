@@ -10901,7 +10901,84 @@ def t_never_create_dirs_under_an_untrusted_path():
         if old_home is not None:
             _os.environ["HOME"] = old_home
 
+    # ── 路徑段不准帶人跳出家目錄 ──────────────────────────────────────
+    # ★外家備援席(gemini)抓到★:這支函式的名字就叫「留在家目錄底下」,但 Python 的路徑
+    # 接合遇到絕對路徑會★整個重置★,`..` 也照走——實測絕對路徑段直接在別的地方建出資料夾,
+    # 而且回報成功。目前所有呼叫端都是寫死的字面段、利用不到,但守衛沒做到它名字說的事。
+    escape = Path(tempfile.mkdtemp(prefix="gctl-mkdir-escape-"))
+    _os.environ["HOME"] = str(home)
+    try:
+        for name, segs in (("絕對路徑段", (str(escape / "壞"),)),
+                           ("上層跳脫段", ("..", "壞")),
+                           ("夾了路徑分隔符", ("a/b",)),
+                           ("空字串段", ("", "壞")),
+                           ("單點", (".", "壞"))):
+            ok = m._mkdir_trusted_under_home(*segs)
+            check(f"★{name}不准放行★(這支的職責就是留在家目錄底下)", not ok, f"它說可以建")
+        left = sorted(q.name for q in escape.iterdir())
+        check("★而且不准在家目錄外面留下任何東西★", left == [], f"外面多了:{left}")
+    finally:
+        if old_home is not None:
+            _os.environ["HOME"] = old_home
+
     print("  ✓ t_never_create_dirs_under_an_untrusted_path")
+
+
+def t_arm_dir_chmod_must_not_follow_a_symlink():
+    """★改權限不准跟著連結走★(2026-09-16 代碼審 資安席)。
+
+    出身:武裝目錄那處,父層改成逐層建逐層檢查了,★但葉節點那一層還是舊寫法★——
+    先 mkdir、先改權限、才驗。葉節點如果在檢查之後被換成指向別人目錄的連結,
+    `os.chmod` 會跟著連結把★別人目錄的權限★改掉;最後那道驗證雖然會擋下寫入,
+    但權限已經動過、回不去了。
+
+    ★誠實前提★:要同一個 OS 帳號、而且要贏一個很窄的競速窗口;同帳號本來就能直接改
+    自己任何目錄的權限,所以實際多拿到的東西趨近於零。這條的價值是★完整性★——
+    新函式宣稱覆蓋四個寫入點的每一層,實際漏了這一層。
+
+    翻紅釘:把 O_NOFOLLOW 那道拿掉、改回直接 os.chmod → 第 2 條翻紅。"""
+    import os as _os
+    m = _lm()
+    armed = Path(tempfile.mkdtemp(prefix="gctl-chmod-armed-"))
+    other = Path(tempfile.mkdtemp(prefix="gctl-chmod-other-"))
+    _os.chmod(other, 0o755)
+    d = armed / "指紋"
+    d.symlink_to(other)
+    before = oct(other.stat().st_mode & 0o777)
+    check("★前置★ 現場成立:別人的目錄現在是 0o755", before == "0o755", before)
+    ok = m._chmod_no_follow(d, 0o700)
+    after = oct(other.stat().st_mode & 0o777)
+    check("★連結指到的目錄權限不准被改★", after == before, f"{before} → {after}")
+    check("而且要回報失敗,不能默默當成功", not ok, "它說改成功了")
+
+    # 對照:真的是自己的目錄時照樣改得動
+    real = armed / "真目錄"
+    real.mkdir(mode=0o755)
+    ok2 = m._chmod_no_follow(real, 0o700)
+    check("真目錄照樣改得動(別把功能一起關掉)",
+          ok2 and oct(real.stat().st_mode & 0o777) == "0o700",
+          f"ok={ok2} mode={oct(real.stat().st_mode & 0o777)}")
+
+    print("  ✓ t_arm_dir_chmod_must_not_follow_a_symlink")
+
+
+def t_vault_lock_message_says_the_real_reason():
+    """★鎖的位置不對勁時,訊息要講對是哪一種不對勁★(2026-09-16 代碼審 資安席)。
+
+    出身:改用逐層建之後,「決定鎖放哪」那支★已經不可能再回報「資料夾建不起來」★
+    (逐層那支回的是 True/False,不再拋例外),但呼叫端還留著一整段在處理那個情況——死碼。
+    而且兩種原因被混成同一句話,使用者會被叫去檢查一條其實沒有連結問題的路徑。
+
+    行為上沒有變得比較不安全(兩種都退到同一條退路),壞的是★診斷不準★。"""
+    m = _lm()
+    import inspect as _i
+    src = _i.getsource(m._vault_lock_where)
+    check("★決定位置那支不再產出「建不起來」這種原因★(不然下面的斷言等於沒在驗)",
+          "no-dir" not in src, src[-400:])
+    src2 = _i.getsource(m._vault_write_lock) + _i.getsource(m._vault_lock_say)
+    check("★呼叫端也不准留著處理那個情況的死碼★", "no-dir" not in src2, "還留著 no-dir 分支")
+
+    print("  ✓ t_vault_lock_message_says_the_real_reason")
 
 
 def t_vault_lock_falls_back_instead_of_giving_up():

@@ -1,0 +1,247 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 42a05057..936f478e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11152,24 +11152,24 @@ def _vault_lock_where(vault):
+     就會踩到。退路選筆記庫自己:要寫的就是它、使用者一定擁有它,兩個程序算出來的路徑一樣,
+     互斥照樣成立。
+ 
+     ★沒擋到的殘留(照實寫,別當成全防住了)★:檢查排在建資料夾之後,連結指到的地方仍會多出
+     一個空資料夾——鄰居那幾處同樣順序,是共用寫法本來就有的缺口,不是這處特有;真正危險的
+     動作(寫鎖檔、改權限、刪目錄)都在檢查之後。
+     """
+     import hashlib
+     key = hashlib.sha256(os.path.realpath(str(vault)).encode("utf-8")).hexdigest()[:32]
+     primary = Path.home() / ".cache" / "lumos" / "vault-lock" / f"{key}.lock"
+-    try:
+-        primary.parent.mkdir(parents=True, exist_ok=True)
+-    except OSError as e:
+-        return primary, ("no-dir", str(e))
++    # ★逐層建、逐層檢查★(2026-09-16):原本一次 mkdir 出整條路徑再檢查,
++    # 檢查不過時連結指到的地方已經被建出一層空資料夾了。
++    if not _mkdir_trusted_under_home(".cache", "lumos", "vault-lock"):
++        return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
+     if not _trusted_private_dir(primary.parent, ".cache", "lumos", "vault-lock"):
+         return Path(vault) / f".lumos-vault-{key}.lock", ("untrusted", str(primary.parent))
+     return primary, None
+ 
+ 
+ def _vault_lock_say(lock, why):
+     """鎖的位置不對勁時講一次(呼叫端負責「同一個程序只講一次」)。"""
+     if why[0] == "no-dir":
+         print(f"提醒:寫入鎖的資料夾建不起來({why[1]}),這次不排隊直接寫。", file=sys.stderr)
+         print("  為什麼在意:同時有別的程序在寫同一個筆記庫的話,後寫的會蓋掉先寫的。",
+@@ -24052,21 +24052,24 @@ def _lens_cache_read(path, ttl_sec=1200):
+     except (OSError, ValueError):
+         return None
+ 
+ 
+ def _lens_cache_write(path, data):
+     """★寫入端也要驗目錄★(2026-09-06 全 repo 審視 #6):原本直接 mkdir + chmod(0700),
+     目錄若被換成指向別處的 symlink,就會把**別人的目錄**權限改掉。讀取端一直都有檢查,
+     寫入端沒有——現在兩邊都走同一支 _trusted_private_dir。不過關就靜默不寫(fail-open)。"""
+     import json as _json, tempfile as _tf
+     try:
+-        path.parent.mkdir(parents=True, exist_ok=True)
++        # ★逐層建、逐層檢查★(2026-09-16):原本一次 mkdir 出整條路徑再檢查,
++        # 檢查不過時連結指到的地方已經被建出一層空資料夾了。
++        if not _mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens"):
++            return
+         if not _trusted_private_dir(path.parent, ".cache", "lumos", "dispatch-lens"):
+             return
+         os.chmod(path.parent, 0o700)
+         fd, tmp = _tf.mkstemp(dir=str(path.parent), suffix=".tmp")
+         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+             fh.write(_json.dumps(data, ensure_ascii=False))
+         os.chmod(tmp, 0o600)
+         os.replace(tmp, path)
+     except OSError:
+         pass
+@@ -24432,20 +24435,63 @@ def _trusted_private_dir(d, *rel_segments):
+     if not d.is_dir():
+         return False
+     if hasattr(os, "getuid"):
+         if st.st_uid != os.getuid():
+             return False
+         if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+             return False
+     return True
+ 
+ 
++def _mkdir_trusted_under_home(*rel_segments):
++    """從家目錄往下逐層建、逐層檢查,全過才回 True。
++
++    ★為什麼要有這一支★(2026-09-16):家目錄底下那幾個寫入點原本都是「先 mkdir 出整條路徑,
++    再檢查這條路徑可不可信」。★順序反了★——檢查不過的時候,連結指到的地方(可能是別人的
++    目錄)已經被建出一層空資料夾了。真正危險的動作(寫檔、改權限、刪目錄)確實都排在檢查
++    之後,所以以前只當成殘留寫在註解裡;但「在別人的目錄裡留東西」本來就不該做,而且這是
++    那幾處★共用的★缺口,不是誰特有。
++
++    逐層的意思:每建一層就確認它是真目錄、是自己的、別人不可寫(跟 `_trusted_private_dir`
++    同一套判準,而且同樣是「家目錄本身可以是連結、家目錄以下每一層都必須是真目錄」)。
++    ★任何一層不過就停手,已經建好的不回頭刪★——刪反而是在動別人的東西,跟「不信、不碰」
++    的家規相反。
++
++    ★誠實邊界★:跟 `_trusted_private_dir` 一樣,這是路徑層檢查,擋不住同一個帳號底下的搶跑
++    (檢查完到下一層動作之間有時間差,同 UID 的程序可以在那個縫裡把目錄換掉)。要真正關掉
++    得改用 dirfd / O_NOFOLLOW 那一套。沒做的理由:能在你的帳號下跑程式的人本來就能做任何事。
++    **不得宣稱「換掉也擋得住」**。
++    """
++    import stat as _stat
++    cur = Path.home()
++    for seg in rel_segments:
++        cur = cur / seg
++        try:
++            cur.mkdir(exist_ok=True)     # 不帶 parents:一層一層來,才檢查得到每一層
++        except FileExistsError:
++            pass                          # 已經在了(可能是連結),交給下面的檢查判
++        except OSError:
++            return False
++        try:
++            if cur.is_symlink() or not cur.is_dir():
++                return False
++            st = cur.stat()
++        except OSError:
++            return False
++        if hasattr(os, "getuid"):
++            if st.st_uid != os.getuid():
++                return False
++            if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
++                return False
++    return True
++
++
+ def _lens_arm_dir_ok(d):
+     """armed 目錄安全檢查——走共用的 _trusted_private_dir。
+ 
+     ★預期路徑怎麼算★:armed 目錄底下多一層 repo 指紋。這裡把「家目錄以下的每一層」用字面段
+     交出去(不是交一個組好的路徑),所以前綴那幾層被換成 symlink 一樣擋得下來——
+     交組好的路徑會讓兩邊一起解析而自我抵銷,那是第一版的錯法。
+     指紋那層是我們自己算出來的、不是外來輸入,所以直接用 d 的名字。"""
+     return _trusted_private_dir(d, ".cache", "lumos", "dispatch-lens", "armed", Path(d).name)
+ 
+ 
+@@ -24480,20 +24526,28 @@ def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
+     # 指向別處的 symlink 時,這三步會照著**刪掉別人的東西**再把權限改掉。
+     # 讀取端早就有檢查了,寫入端沒有,這是最危險的那一半。
+     if d.exists() or d.is_symlink():
+         if not _lens_arm_dir_ok(d):
+             print(f"擋下:武裝目錄 {d} 不是自己的、或路徑上有 symlink 指到別處——不碰它。"
+                   f"\n  這是安全檢查:那個位置本來該是這套工具自己建的私有目錄。"
+                   f"\n  真的是你自己的東西壞掉了,手動刪掉它再跑一次:"
+                   f"\n      rm -rf {d}", file=sys.stderr)
+             return 2
+         shutil.rmtree(d, ignore_errors=True)
++    # ★逐層建、逐層檢查★(2026-09-16):目錄不存在時原本一次 mkdir 出整條路徑,
++    # 上層被換成指向別處的連結時,別人的目錄裡就會多出一層空資料夾。
++    if not _mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens", "armed"):
++        print(f"擋下:放武裝目錄的那條路徑不可信({d.parent})——它自己或上層被換成了"
++              "指向別處的連結、或別人也寫得進去,不在那裡建東西。", file=sys.stderr)
++        print("  檢查一下那條路徑是誰建的:", file=sys.stderr)
++        print(f"    ls -ld {d.parent} {d.parent.parent}", file=sys.stderr)
++        return 2
+     d.mkdir(parents=True, exist_ok=True)
+     try:
+         os.chmod(d, 0o700)
+     except OSError:
+         pass
+     # 建完再驗一次。★不宣稱「換掉也擋得住」★(外家席 r1 抓到那句是假的):
+     # 這是路徑層檢查,同帳號的搶跑擋不住;再驗一次只是把窗口縮小,不是關掉。
+     if not _lens_arm_dir_ok(d):
+         print(f"擋下:武裝目錄 {d} 建完之後檢查沒過,不寫", file=sys.stderr)
+         return 2
+@@ -25452,22 +25506,23 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
+           "結果會快取,不是每次推送都跑)", file=sys.stderr)
+     rc, tail, secs, to = _kill_run(probe_cmd, str(root), timeout)
+     if to:
+         ok, why = True, f"冒煙測試超時({int(secs)}s),不因此判它不可信"
+     elif rc == 0:
+         ok, why = False, ("這個測試指令對一個根本不存在的測試名也回成功——代表它的過濾條件沒有生效,"
+                           "閘拿它的退出碼當「測試跑過」會是假綠")
+     else:
+         ok, why = True, f"冒煙測試回 rc={rc},指令分得出找不到測試"
+     try:
+-        cache.parent.mkdir(parents=True, exist_ok=True)
+-        if _trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter"):
++        # ★逐層建、逐層檢查★(2026-09-16):同上,不要在不可信的路徑上留空資料夾
++        if _mkdir_trusted_under_home(".cache", "lumos", "bound-filter") \
++                and _trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter"):
+             _write_lf(cache, _j.dumps({"trustworthy": ok, "why": why, "secs": secs}, ensure_ascii=False) + "\n")
+     except OSError:
+         pass
+     return ok, why
+ 
+ 
+ def _run_bound_tests(repo_root, items):
+     """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。
+ 
+     verdict ∈ green / red / unproven。unproven=「指令回成功,但它自己的輸出裡看不到有跑過任何測試」
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1b68be68..84494da6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -10853,20 +10853,64 @@ def t_pitfalls_lint_gets_the_changed_files():
+     check("★前置★ 現場成立:這次是對不齊的那條路,而且 linter 真的報了東西",
+           d8.get("filtered") is False
+           and any("lint:" in c.get("source", "") for c in d8.get("claims", [])), str(d8)[:400])
+     check("★沒有檔清單佔位的宣告,對不齊時仍要把分級撐高★"
+           "(推送閘不跑它,這裡再放掉就兩邊都漏)",
+           d8["tier"] == "high", f"tier={d8['tier']}")
+ 
+     print("  ✓ t_pitfalls_lint_gets_the_changed_files")
+ 
+ 
++def t_never_create_dirs_under_an_untrusted_path():
++    """★不可信的路徑上連一個空資料夾都不准建★(2026-09-16 收尾)。
++
++    出身:家目錄底下那幾個寫入點(派工鏡頭快取、武裝目錄、綁定測試快取、筆記庫寫入鎖)
++    都是「先 mkdir 出整條路徑,再檢查這條路徑可不可信」。★順序反了★:檢查不過的時候,
++    連結指到的地方(可能是別人的目錄)已經被建出一層空資料夾了。真正危險的動作
++    (寫檔、改權限、刪目錄)確實都在檢查之後,所以以前只當成殘留記在註解裡——
++    但「在別人的目錄裡留東西」本來就不該做,而且這是這幾處★共用的★缺口。
++
++    正解是從家目錄往下逐層建、逐層檢查:每建一層就確認它是真目錄、是自己的、
++    別人不可寫;任何一層不過就停手,已經建的不回頭刪(那反而是在動別人的東西)。
++
++    翻紅釘:把逐層檢查改回一次 mkdir 整條路徑 → 第 2 條翻紅。"""
++    import os as _os
++    m = _lm()
++    home = Path(tempfile.mkdtemp(prefix="gctl-mkdir-home-"))
++    victim = Path(tempfile.mkdtemp(prefix="gctl-mkdir-victim-"))
++    (home / ".cache").mkdir()
++    (home / ".cache" / "lumos").symlink_to(victim)     # 中間一層換成指向別人的連結
++
++    old_home = _os.environ.get("HOME")
++    _os.environ["HOME"] = str(home)
++    try:
++        before = sorted(q.name for q in victim.iterdir())
++        check("★前置★ 現場成立:受害者的目錄本來是空的", before == [], str(before))
++        ok = m._mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens")
++        check("★不可信就回報失敗★", not ok, "它說可以建")
++        after = sorted(q.name for q in victim.iterdir())
++        check("★而且不准在連結指到的地方留下任何東西(連空資料夾都不行)★",
++              after == [], f"受害者目錄多了:{after}")
++
++        # 對照:路徑正常時照樣建得起來、而且回報成功
++        (home / ".cache" / "lumos").unlink()
++        ok2 = m._mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens")
++        made = home / ".cache" / "lumos" / "dispatch-lens"
++        check("路徑正常時照樣建得起來(別把功能一起關掉)",
++              ok2 and made.is_dir(), f"ok={ok2} exists={made.exists()}")
++    finally:
++        if old_home is not None:
++            _os.environ["HOME"] = old_home
++
++    print("  ✓ t_never_create_dirs_under_an_untrusted_path")
++
++
+ def t_vault_lock_falls_back_instead_of_giving_up():
+     """★鎖的地方不可信時要換個地方鎖,不是乾脆不鎖★
+     (2026-09-16 代碼審 r1 外家席)。
+ 
+     出身:同一天補了「鎖檔的資料夾也要過信任檢查」,不過關就直接放行不上鎖。
+     ★那是把一個安全問題換成一個正確性問題★:修之前鎖檔雖然建在不可信的地方,
+     ★鎖本身仍然有效★;修之後不可信就完全沒有鎖,兩個程序可以同時做讀—改—寫,
+     後寫的蓋掉先寫的。而且觸發條件不需要攻擊者——把快取目錄搬到別的磁碟這種
+     正常設定就會踩到。
+ 
