@@ -47135,3 +47135,452 @@
 {"ts": "2026-09-16T02:18:20+08:00", "commit": "b06a28d9", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=14 soft=21"}
 {"ts": "2026-09-16T02:13:42+08:00", "commit": "b06a28d", "gate": "code-loop", "kind": "dispositions", "hard": false, "nodes": [], "detail": "表態 5 題", "branch": "main", "head_sha": "b06a28d976cabb5742dd0fc323bb207b6aaac7cd", "dispositions": {"py-eventloop": {"status": "na", "question": "事件迴圈:async def 裡有沒有同步阻塞(time.sleep/requests/同步 open 讀寫/subprocess.run/大 JSON 解析/CPU 重活)?該換 asyncio.sleep、非同步 client,或用 asyncio.to_thread 丟出去?有沒有「while True + sleep」輪詢該改成等事件或佇列?", "evidence": "", "reason": "這支工具沒有這個面向:整支沒有任何 async def、沒有 await 也沒有並行,不打網路也不連資料庫;唯一的外部呼叫是同步叫同一個 repo 裡的搜尋指令,解析不出東西就回空清單,不會卡住,也沒有重試或不可逆操作。", "issue": "", "carried": true}, "py-parallel": {"status": "na", "question": "並行與上限:互不依賴的 await 有沒有 asyncio.gather/TaskGroup 並行?gather 的集合有沒有上限(無界並行會打爆下游連線池或對方的速率限制,該用 Semaphore 有界)?create_task 的回傳值有沒有存起來並接住例外(沒存=可能被回收、例外無聲蒸發)?", "evidence": "", "reason": "這支工具沒有這個面向:整支沒有任何 async def、沒有 await 也沒有並行,不打網路也不連資料庫;唯一的外部呼叫是同步叫同一個 repo 裡的搜尋指令,解析不出東西就回空清單,不會卡住,也沒有重試或不可逆操作。", "issue": "", "carried": true}, "py-external": {"status": "na", "question": "外呼與重試:每個 HTTP/WebSocket/DB 外呼有沒有逾時(requests 預設不逾時=對方掛了你永遠卡住)?重試有沒有退避與上限,而且不會對不可逆操作(下單/付款/寄信)盲目重送?session/client/連線有沒有重用而不是每次新建?斷線重連後本地狀態有沒有重新對齊?", "evidence": "", "reason": "這支工具沒有這個面向:整支沒有任何 async def、沒有 await 也沒有並行,不打網路也不連資料庫;唯一的外部呼叫是同步叫同一個 repo 裡的搜尋指令,解析不出東西就回空清單,不會卡住,也沒有重試或不可逆操作。", "issue": "", "carried": true}, "py-memory": {"status": "satisfied", "question": "記憶體與資料量:大檔/大回應/大查詢有沒有一次讀進記憶體(read()/readlines()/json.load 大檔/fetchall()/read_csv 不分塊)而不是逐行、分塊或 generator?長活的 dict/list/cache 有沒有上限(lru_cache(maxsize=None)、以請求或時間為鍵的快取只增不減)?迴圈裡有沒有逐筆查 DB 或逐筆打 API(N+1)?", "evidence": "governance/eval/retrieval_eval_multiword.py:94", "reason": "★這欄的答案在代碼審折入後變了★:原本污染檢查會把整個語料讀進一個字典(實測 528 篇共 5.5 MB),折入後改成問搜尋、不再自己讀檔,記憶體佔用降成幾份搜尋輸出。沒有長活快取,也沒有以請求或時間為鍵、只增不減的字典。", "issue": "", "carried": true}, "py-hotpath": {"status": "satisfied", "question": "熱路徑:這段會跑大量資料或高頻迴圈嗎?pandas 有沒有 iterrows/itertuples/apply(axis=1)/迴圈裡 concat(該向量化,或先收成 list 最後一次建 DataFrame)?索引式迴圈 range(len(x)) 該不該改成直接迭代或向量運算?list 當佇列 pop(0)、在 list 裡做成員查找,該不該換 deque/set?迴圈裡有沒有重複做不變的工作(每圈重新解析設定、重建物件)?", "evidence": "test:t_mw_pool_three_sources_all_contribute", "reason": "熱路徑是重組候選池:每題一次片語搜尋加每詞一次搜尋(十題約四十次子行程),實測重組一次約 30 秒。★原本這欄寫「約一萬六千次字串掃描」是錯的,代碼審外家席打臉屬實(實際三萬一千多次)★;折入後改成問搜尋、不自己掃檔,是刻意用時間換正確性——自己掃檔跟搜尋的命中判準有三處不一致,每一處都會讓結果錯。量測是離線跑一次的工具,30 秒可接受。", "issue": "", "carried": true}}, "candidates": 0, "written_at": "2026-09-16T02:40:36.482877+08:00"}
 {"ts": "2026-09-16T02:13:42+08:00", "commit": "b06a28d", "gate": "code-loop", "kind": "passed", "hard": false, "nodes": [], "detail": "兩輪八席+兩席驗收:r1 八席 32 條全折(含資安席兩條阻擋級),r2 兩席 5 條全折(逃生旗標繞道、權限放寬);兩輪處置閘皆 PASS、判定已凍結回放一致。r2 之後有四個提交席位沒看過:r2 折入、符號連結測試的跳過改用專用例外、清掉新增告警(進入點複雜度連擋三次,抽成三支獨立函式)。全套 6152 過 0 紅,ruff 的 C901/F541 清乾淨。★本輪最重要的不是程式缺陷:逐條處置表有三列是我照派工詞編的、原報告查無出處,由驗收席查帳抓到,已訂正並立事故筆記★", "branch": "main", "head_sha": "b06a28d976cabb5742dd0fc323bb207b6aaac7cd"}
+{"ts": "2026-09-16T02:40:37+08:00", "commit": "b06a28d9", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T02:40:38+08:00", "commit": "b06a28d", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "b06a28d976cabb5742dd0fc323bb207b6aaac7cd"}
+{"ts": "2026-09-16T03:06:35+08:00", "commit": "804e5695", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T03:06:36+08:00", "commit": "804e569", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "804e5695a4c04aef7217f3e375d1e1a11d7208c6"}
+{"ts": "2026-09-16T03:11:24+08:00", "commit": "fc779c00", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T03:11:25+08:00", "commit": "fc779c0", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "fc779c00de56abb7f9ffe56901345d0ae4e54f96"}
+{"ts": "2026-09-16T03:42:02+08:00", "commit": "8d48a174", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T03:42:03+08:00", "commit": "8d48a17", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "8d48a1743a3556e6c752d6c04e927cc2cb611428"}
+{"ts": "2026-09-16T03:45:09+08:00", "commit": "0afc211b", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T03:45:11+08:00", "commit": "0afc211", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "0afc211b78f47aaed1eb736dbbbeae18f3b491fa"}
+{"ts": "2026-09-16T04:05:32+08:00", "commit": "dadb26e8", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T04:05:34+08:00", "commit": "dadb26e", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "dadb26e80659aee959d9414911406b6ec0ec33ff"}
+{"ts": "2026-09-16T04:24:58+08:00", "commit": "032e6a4e", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T04:24:58+08:00", "commit": "032e6a4", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "032e6a4ed6add224b3fb1700be1c586132303d51"}
+{"ts": "2026-09-16T04:30:46+08:00", "commit": "cf3e93fa", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T04:30:47+08:00", "commit": "cf3e93f", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "cf3e93fa058c086f1b10a23dd95f457eb63bcfbf"}
+{"ts": "2026-09-16T04:44:02+08:00", "commit": "ed11b002", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T04:44:03+08:00", "commit": "ed11b00", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "ed11b002d65a1240869b09ad0887f7cd63d244f6"}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-lint-adapter"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["效能檢核目錄"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["棧別提問表態閘"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["每支檔有家"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["節點範圍與索引守衛"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["補新語言SOP"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["index"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["check-y-symbol-existence"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["測試假綠形態"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "ledger-growth", "kind": "fast", "hard": false, "nodes": [], "detail": "檔案 7.0 MB,超過 5 MB；近 7 日平均每天 2299 筆,是前 7 日(1053 筆)的 2.2 倍"}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["固定席扇出降權_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=15 broken=0"}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-26_改制回測落地", "2026-09-11_推播漏網量測實作", "ci-wait對當日run判no-run", "codex-harness", "graph-engineering掃描2026-08-19_調研", "lint不守驗證紀錄空回頭條件", "loop機制痛點_Landmark_code-crossclaim實跑回饋", "接手視圖_計劃", "空連鎖單巡過無法銷帳", "第二輪審視六修_計劃"], "note": "due=10 bad=0"}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-07-20_棧別效能追問"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["標籤系統精簡_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["檢索核心重建_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["空轉週報誤報復發_計劃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["assets/readme-diagrams/generate.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["get.ps1"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/ai-governance-research.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/__init__.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/backlog.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lens_weekly.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/line_notify.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lint_watch_dedup.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/orchestrator_result.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/replay_weekly.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/run_ledger.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ablation_lumos_first.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/build_goldset.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/cd_fix.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/k1_stop_replay.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ledger_analysis.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/lens-utilization/recount.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/refresh_labels.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/rule_conflict_scan.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/seat-coverage/recount.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/governance_flex_builder.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/install-watchdog.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/lint-watch-check.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/wrapper-watchdog.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["install.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/external-seat.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/fetch-notesmd.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/graph-rename.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/_hookevent.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/ci-status-hook.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/lumos-entry-hook.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/post-commit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-graph-toolchain.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-hooks.sh"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-gen.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-scan.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/usage_scan.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/3d-force-graph.min.js"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/marked.min.js"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/post-commit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/pre-commit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/update_cmd.py"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["core-invariant-baseline"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["cross-family-audit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["graph-sync-coverage"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-perturbation-stability"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-severity-gate"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lint-version-watch"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-lifecycle"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["native-windows-support"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-gen-生成器"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-install-安裝器"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-readme"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-scan-掃描器"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-skill-修剪"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-uninstall-一行卸載"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["verification-rot-eval"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["外部對照-code衍生wiki"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["診斷迴圈先行"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["risk-tiered-review"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T09:39:37+08:00", "commit": "17d9f431", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=4 gates=14 soft=21"}
+{"ts": "2026-09-16T10:07:31+08:00", "commit": "17d9f431", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T10:07:54+08:00", "commit": "17d9f43", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "17d9f431a68cf3edf66c6d428ae4c844b6181472"}
+{"ts": "2026-09-16T11:15:01+08:00", "commit": "9f8281ca", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:15:04+08:00", "commit": "9f8281c", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "9f8281ca6063fa7f2e00f5d25d8bdfa07843676b"}
+{"ts": "2026-09-16T11:15:32+08:00", "commit": "15b737dc", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:15:33+08:00", "commit": "15b737d", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "15b737dc4302c2c2c3f39d6aadf5e588d4ffa71c"}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-lint-adapter"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["效能檢核目錄"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["棧別提問表態閘"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["每支檔有家"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["節點範圍與索引守衛"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["補新語言SOP"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["index"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["check-y-symbol-existence"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["測試假綠形態"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "daily-wrapper", "kind": "step-failed", "hard": false, "nodes": [], "detail": "失敗的步驟:doctor"}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "ledger-growth", "kind": "fast", "hard": false, "nodes": [], "detail": "檔案 7.0 MB,超過 5 MB；近 7 日平均每天 2299 筆,是前 7 日(1053 筆)的 2.2 倍"}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["固定席扇出降權_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["codex-harness", "graph-engineering掃描2026-08-19_調研", "loop機制痛點_Landmark_code-crossclaim實跑回饋", "接手視圖_計劃", "第二輪審視六修_計劃"], "note": "due=5 bad=0"}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-07-20_棧別效能追問"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["標籤系統精簡_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["檢索核心重建_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["空轉週報誤報復發_計劃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["assets/readme-diagrams/generate.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["get.ps1"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/ai-governance-research.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/__init__.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/backlog.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lens_weekly.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/line_notify.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lint_watch_dedup.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/orchestrator_result.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/replay_weekly.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/run_ledger.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ablation_lumos_first.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/build_goldset.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/cd_fix.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/k1_stop_replay.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ledger_analysis.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/lens-utilization/recount.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/refresh_labels.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/rule_conflict_scan.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/seat-coverage/recount.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/governance_flex_builder.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/install-watchdog.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/lint-watch-check.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/wrapper-watchdog.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["install.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/external-seat.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/fetch-notesmd.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/graph-rename.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/_hookevent.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/ci-status-hook.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/lumos-entry-hook.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/post-commit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-graph-toolchain.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-hooks.sh"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-gen.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-scan.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/usage_scan.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/3d-force-graph.min.js"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/marked.min.js"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/post-commit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/pre-commit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/update_cmd.py"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["core-invariant-baseline"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["cross-family-audit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["graph-sync-coverage"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-perturbation-stability"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-severity-gate"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lint-version-watch"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-lifecycle"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["native-windows-support"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-gen-生成器"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-install-安裝器"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-readme"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-scan-掃描器"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-skill-修剪"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-uninstall-一行卸載"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["verification-rot-eval"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["外部對照-code衍生wiki"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["診斷迴圈先行"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["risk-tiered-review"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:23:42+08:00", "commit": "538f4040", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=4 gates=13 soft=21"}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["pitfalls-lint-adapter"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["效能檢核目錄"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["棧別提問表態閘"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["每支檔有家"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["節點範圍與索引守衛"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["補新語言SOP"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["index"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["check-y-symbol-existence"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["pitfalls-code-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s3", "kind": "warned", "hard": false, "nodes": []}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s4", "kind": "warned", "hard": false, "nodes": ["測試假綠形態"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "daily-wrapper", "kind": "step-failed", "hard": false, "nodes": [], "detail": "失敗的步驟:doctor"}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "ledger-growth", "kind": "fast", "hard": false, "nodes": [], "detail": "檔案 7.1 MB,超過 5 MB；近 7 日平均每天 2299 筆,是前 7 日(1053 筆)的 2.2 倍"}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["固定席扇出降權_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["codex-harness", "graph-engineering掃描2026-08-19_調研", "loop機制痛點_Landmark_code-crossclaim實跑回饋", "接手視圖_計劃", "第二輪審視六修_計劃"], "note": "due=5 bad=0"}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-07-20_棧別效能追問"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["標籤系統精簡_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["檢索核心重建_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s5", "kind": "warned", "hard": false, "nodes": ["空轉週報誤報復發_計劃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["多詞評測"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s6", "kind": "warned", "hard": false, "nodes": ["記憶過期清掃"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["assets/readme-diagrams/generate.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["get.ps1"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/ai-governance-research.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/__init__.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/backlog.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lens_weekly.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/line_notify.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/lint_watch_dedup.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/orchestrator_result.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/replay_weekly.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/autonomous_loop/run_ledger.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ablation_lumos_first.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/build_goldset.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/cd_fix.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/k1_stop_replay.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/ledger_analysis.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/lens-utilization/recount.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/refresh_labels.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/rule_conflict_scan.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/eval/seat-coverage/recount.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/governance_flex_builder.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/install-watchdog.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/lint-watch-check.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["governance/wrapper-watchdog.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["install.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/external-seat.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/fetch-notesmd.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/graph-rename.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/_hookevent.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/ci-status-hook.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/claude/lumos-entry-hook.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/hooks/post-commit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-graph-toolchain.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/install-hooks.sh"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-gen.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/slim-scan.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/usage_scan.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/3d-force-graph.min.js"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["scripts/vendor/marked.min.js"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/post-commit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/hooks/pre-commit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s8", "kind": "warned", "hard": false, "nodes": ["slim/update_cmd.py"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["core-invariant-baseline"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["cross-family-audit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["graph-sync-coverage"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-perturbation-stability"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["judge-severity-gate"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lint-version-watch"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-lifecycle"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-cli-write"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["lumos-deinit"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["native-windows-support"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["retrieval-ranking"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-gen-生成器"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-install-安裝器"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-readme"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-scan-掃描器"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-skill-修剪"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["slim-uninstall-一行卸載"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["verification-rot-eval"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["外部對照-code衍生wiki"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s9", "kind": "warned", "hard": false, "nodes": ["診斷迴圈先行"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s10", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["autonomous-iteration-loop"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["risk-tiered-review"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "check-s11", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+{"ts": "2026-09-16T11:38:08+08:00", "commit": "538f4040", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=4 gates=13 soft=21"}
+{"ts": "2026-09-16T11:53:05+08:00", "commit": "538f4040", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:53:08+08:00", "commit": "538f404", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "538f4040fe9a211eaa59cd5fcc907326b84104c4"}
+{"ts": "2026-09-16T11:53:32+08:00", "commit": "bf7590b6", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:53:35+08:00", "commit": "bf7590b", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "bf7590b6478f0f2e1ee099c67af03b205badc4d0"}
+{"ts": "2026-09-16T11:54:06+08:00", "commit": "538f4040", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:54:09+08:00", "commit": "538f404", "gate": "nodehome-check", "kind": "blocked", "hard": true, "nodes": ["scripts/lumos"], "note": "這次提交:新違規 1 條", "detail": "這次提交:新違規 1 條", "head_sha": "538f4040fe9a211eaa59cd5fcc907326b84104c4", "pairs": [["scripts/lumos", "Systems/lumos-cli-write.md"]], "notes": ["Systems/lumos-cli-write.md"]}
+{"ts": "2026-09-16T11:55:09+08:00", "commit": "538f4040", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:55:12+08:00", "commit": "538f404", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "538f4040fe9a211eaa59cd5fcc907326b84104c4"}
+{"ts": "2026-09-16T11:55:24+08:00", "commit": "5feec3d1", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+{"ts": "2026-09-16T11:55:25+08:00", "commit": "5feec3d", "gate": "nodehome-check", "kind": "passed", "hard": false, "nodes": [], "note": "這次提交:新違規 0 條", "detail": "這次提交:新違規 0 條", "head_sha": "5feec3d1d46fa8deaca2b5fbbc733aab8d8e1d01"}

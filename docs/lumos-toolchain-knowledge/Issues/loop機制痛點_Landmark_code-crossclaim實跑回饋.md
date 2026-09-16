@@ -25,7 +25,7 @@ summary: |-
 ---
 # loop機制痛點_Landmark_code-crossclaim實跑回饋
 
-- REVISIT:2026-09-14 痛點④對話裁定明文化攤 Enzo(內容=其口頭裁定,不可代筆;2026-09-01 委任時明確保留給人)
+- REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★ 上面第④點(對話裡直接拍板,什麼時候可以取代正式設計審查)要寫成明文規則。★這條不能代筆★:內容就是 Enzo 自己的口頭裁定,2026-09-01 把其他事委任出來時明確把這條留給人。
 
 來源:2026-08-14 Enzo 要 Landmark 專案的 session 回報當日 loop 過程(跨 session 傳訊),回報中的「機制不順」段。原始回報存於該 session 對話;其圖譜留痕見 Landmark repo governance/review-reports/code-crossclaim/(該輪留痕在 Landmark repo,本 repo 無此目錄)。
 

@@ -11,7 +11,7 @@ tags:
 plan_refs:
   - "[[Projects/Codex完全支援_計劃]]"
 decision_refs_ai:
-  - "Projects/Codex完全支援_計劃.md#d5"
+  - "Projects/Codex完全支援_計劃.md#d6"
 ---
 # 2026-09-04_Codex完全支援S1hook適配驗收
 
