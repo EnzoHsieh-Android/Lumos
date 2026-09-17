@@ -26,14 +26,14 @@ summary: |-
   KEY:零覆蓋不再靜默(同上 [E]):四種來源各自出聲(找不到知識庫/沒節點引用/沒綁測試/算不出範圍),訊息帶「受波及合約測試」關鍵字以通過 pre-push 對 check 輸出的 grep 過濾 [test:t_bound_tests_explains_no_pins]
   KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
-  KEY:[2026-09-17 雙向門放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(雙向門計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 一律放行(fail-open)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
+  KEY:[2026-09-17 風險低放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(風險低計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 一律放行(fail-open)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
   KEY:★2026-09-12 這道閘的核心保證被實際打穿過一次(Java 補棧代碼審 r1 資安席)★——閘驗的是「合約綁的名字有沒有出現在 discover_test_methods 掃出來的集合裡」,所以★掃描器認錯名字=閘直接失效★:當時 Java 的方法正則太鬆,一支「掛註解但不是 void 的誘餌方法」後面接一支完全沒掛註解的空方法,那支空方法就被收成真證據,健檢一聲不吭。教訓:新增任何語言的測試掃描時,除了「收得到真測試」還要有「收不到假測試」的斷言,兩邊都要 [test:t_java_profile_discovery]
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/guard-kill]]
   KEY:[2026-09-11 多平台缺指令,Issues/多平台設定下測試指令被默默略過]沒設 run_cmd 改成★逐平台★——有指令的平台照跑,沒指令的平台那幾支列成 not_run(平台點名);全部沒指令才 no-config;原本碰到第一支沒指令就整批 no-config,連前面已判的懸空紅都被吞掉(違反上一行合約「任一懸空 → 擋」的原意)。訊息改由 _no_run_cmd_reason 給:多平台點名平台,最上層還留著 test.run_cmd 就照 2026-07-10 並存優先序講明它不生效、要搬;code-loop check 與 bound-tests 兩條路共用 [test:t_bound_tests_multiplatform_missing_cmd]
   KEY:[2026-09-12]CI 的全套測試改成切 4 片同時跑(`--shard i/4`,跟推送前掛鉤同一支旗標);單行程版本已經從 25–27 分鐘漲到撞 job 上限 30 分被砍(8a45751b 那次),不是測試紅、是跑不完。上限同時拉到 45 分留餘裕;任一片紅就整步紅,四片的尾端都會印出來
-  KEY:[2026-09-17]推送閘擋下時的逃逸自動記:code-loop check 回 rc1 那個分支多兩個 grep——「受波及合約的測試沒過」→ lumos loop escape --auto --stage push-gate;「tier=high 且」開頭的缺留痕句 → --stage push-gate-unreviewed(lumos 端查有雙向門留痕才記);兩者都 || true,記帳失敗不能變成擋推送的第二個理由。單源:[[Projects/逃逸自動記_計劃]]
+  KEY:[2026-09-17]推送閘擋下時的逃逸自動記:code-loop check 回 rc1 那個分支多兩個 grep——「受波及合約的測試沒過」→ lumos loop escape --auto --stage push-gate;「tier=high 且」開頭的缺留痕句 → --stage push-gate-unreviewed(lumos 端查有風險低留痕才記);兩者都 || true,記帳失敗不能變成擋推送的第二個理由。單源:[[Projects/逃逸自動記_計劃]]
   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"

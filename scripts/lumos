@@ -2242,36 +2242,36 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
     print()
 
-    section("S14", "雙向門放行:放行了幾份、逃逸幾筆(按門與階段)、三條撤除條件的分子——人讀人裁,不自動擋(提醒,不擋)")
+    section("S14", "風險低計劃放行(舊稱雙向門放行):放行了幾份、逃逸幾筆(按門與階段)、三條撤除條件的分子——人讀人裁,不自動擋(提醒,不擋)")
     try:
         _sg_latest = _spec_gate_latest_records(env)
-        _two = {lp: r for lp, r in _sg_latest.items() if r.get("door") == "two-way"}
-        _one = {lp: r for lp, r in _sg_latest.items() if r.get("door") == "one-way"}
+        _two = {lp: r for lp, r in _sg_latest.items() if _rec_plan_risk(r) == "low"}
+        _one = {lp: r for lp, r in _sg_latest.items() if _rec_plan_risk(r) == "high"}
         if not _sg_latest:
             ok("還沒有任何計劃留過規格閘的門(lumos spec-gate <計劃> 過了會留)")
         else:
             _mo = sum(1 for r in _two.values() if r.get("manual_only"))
-            ok(f"雙向門放行 {len(_two)} 份(其中全靠人驗、走小改動閘的 {_mo} 份)、單向門 {len(_one)} 份(每條迴圈只看最後一筆留痕;門判定規則版本 {_DOOR_RULE_VERSION}、小改動規則版本 {_SMALL_CHANGE_RULE_VERSION})")
+            ok(f"風險低計劃放行 {len(_two)} 份(其中全靠人驗、走小改動閘的 {_mo} 份)、風險高計劃 {len(_one)} 份(每條迴圈只看最後一筆留痕;門判定規則版本 {_DOOR_RULE_VERSION}、小改動規則版本 {_SMALL_CHANGE_RULE_VERSION})")
             _esc = _escape_rows_for(env)
             _by = {}
             for _e in _esc:
-                _dr = _e.get("door") or _door_for_loop(env, str(_e.get("loop", "")))
+                _dr = _rec_plan_risk(_e) if (_e.get("plan_risk") or _e.get("door")) else _door_for_loop(env, str(_e.get("loop", "")))
                 _by.setdefault(_dr, {}).setdefault(str(_e.get("stage") or "?"), 0)
                 _by[_dr][str(_e.get("stage") or "?")] += 1
-            for _dr in ("two-way", "one-way", "unknown"):
+            for _dr in ("low", "high", "unknown"):
                 if _by.get(_dr):
-                    print(f"    逃逸({'雙向門' if _dr == 'two-way' else '單向門' if _dr == 'one-way' else '門不明'})按階段:" + "、".join(f"{k} {v}" for k, v in sorted(_by[_dr].items())))
-            _tw_esc = [_e for _e in _esc if (_e.get("door") or _door_for_loop(env, str(_e.get("loop", "")))) == "two-way" and _e.get("precision") != "round"]
+                    print(f"    逃逸({'風險低計劃' if _dr == 'low' else '風險高計劃' if _dr == 'high' else '風險不明'})按階段:" + "、".join(f"{k} {v}" for k, v in sorted(_by[_dr].items())))
+            _tw_esc = [_e for _e in _esc if ((_rec_plan_risk(_e) if (_e.get("plan_risk") or _e.get("door")) else _door_for_loop(env, str(_e.get("loop", "")))) == "low") and _e.get("precision") != "round"]
             _first30 = set(sorted(_two, key=lambda lp: str(_two[lp].get("ts", "")))[:30])
             _n_blocker = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("severity") == "blocker"})
             _n_major = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("severity") in ("major", "blocker") and str(_e.get("loop")) in _first30})
             _n_unrev = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("stage") == "push-gate-unreviewed"})
             _round_only = sum(1 for _e in _esc if _e.get("precision") == "round")
             print(f"    撤除條件分子(只數 precision≠round 與手動記的列;輪級粗判 {_round_only} 列另計不入):blocker 級逃逸 {_n_blocker} 份 / 前 30 份裡 major 以上 {_n_major} 份 / push-gate-unreviewed {_n_unrev} 份")
-            print("    門檻(拍的,結果出來前不改):①blocker ≥1 份 → 立刻退回雙向門放行 ②前 30 份 major 以上 ≥3 份 → 退回 ③push-gate-unreviewed ≥2 份 → 門判定規則重審")
+            print("    門檻(拍的,結果出來前不改):①blocker ≥1 份 → 立刻退回風險低計劃放行 ②前 30 份 major 以上 ≥3 份 → 退回 ③push-gate-unreviewed ≥2 份 → 門判定規則重審")
             if _two:
                 _rows = [f"{lp}:條款 {r.get('n_clauses', '?')}/紅 {r.get('n_red', '?')}/keeps {r.get('n_keeps', 0)}(留痕 {str(r.get('ts', ''))[:10]})" for lp, r in sorted(_two.items())]
-                warn_soft(_rows, f"雙向門計劃的條款數與紅測試數({len(_rows)} 份;分不清「規則太嚴」還是「沒空寫測試」時看這裡):", "紅要在推送前做綠;一直沒推=沒人做,不是閘的問題")
+                warn_soft(_rows, f"風險低計劃的條款數與紅測試數({len(_rows)} 份;分不清「規則太嚴」還是「沒空寫測試」時看這裡):", "紅要在推送前做綠;一直沒推=沒人做,不是閘的問題")
                 import datetime as _dtm
                 _now = _dtm.datetime.now().astimezone()
                 _stale = []
@@ -2287,7 +2287,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                     if _age > _DOOR_STALE_DAYS:
                         _stale.append(f"{lp}:{_age} 天沒新留痕({_pp.name})")
                 if _stale:
-                    warn_soft(_stale, f"雙向門 doing 計劃超過 {_DOOR_STALE_DAYS} 天沒新留痕({len(_stale)} 份):", "做完就 lumos set 成 done;還在做就重跑 lumos spec-gate 留一筆")
+                    warn_soft(_stale, f"風險低 doing 計劃超過 {_DOOR_STALE_DAYS} 天沒新留痕({len(_stale)} 份):", "做完就 lumos set 成 done;還在做就重跑 lumos spec-gate 留一筆")
     except Exception as _e:
         warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
     print()
@@ -3509,7 +3509,7 @@ _MANUAL_MIN_CHARS = 4
 # src|git 擴充(M1 Check J):影響 11 處行號/8 類呼叫點(Check T 乾淨宣稱/contracts/lint 訊息/
 # guard 分類·list·trace/scaffold/kill-add/audit)——行為後果:guard 定位對「正文相同只差指針」
 # 的合約改多重命中=要求更精確正文(指針非宣稱正文,符合語意非退化);[test:] 抽取不受影響。
-INV_TAG_RE = re.compile(r"\[(?:(?:test|audit|kill|src|git):\s*[^\]]+|manual:\s*[^\]]*|keeps)\]")   # keeps=雙向門「維持既有行為」裸標籤(雙向門放行_計劃 S15)   # manual 允許空(要能剝掉 [manual: ]),其餘照舊至少一字
+INV_TAG_RE = re.compile(r"\[(?:(?:test|audit|kill|src|git):\s*[^\]]+|manual:\s*[^\]]*|keeps)\]")   # keeps=風險低「維持既有行為」裸標籤(雙向門放行_計劃 S15)   # manual 允許空(要能剝掉 [manual: ]),其餘照舊至少一字
 KILL_REF_RE = re.compile(r"\[kill:\s*recipes\s*\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
@@ -4374,7 +4374,7 @@ _KNOWN_FRONTMATTER_KEYS = (
     "decision_refs", "decision_refs_ai", "pitfall_when", "pitfall_ask", "pitfall_source",
     "signed_off", "kill_recipes", "core_refs", "regen",
     "responsibility", "lands_in",   # 2026-09-11 每支檔有家:Systems 的負責範圍、計劃的落點
-    "door",   # 2026-09-17 雙向門放行:作者只能把門往嚴調(one-way);two-way 寫了沒意義
+    "plan_risk", "door",   # 2026-09-17 計劃風險(作者只能往嚴標 high);door 是舊寫法,讀得懂但提醒改
 )
 # ↑ 2026-09-06 全 repo 審視 #16。★代碼審 r1 訂正★:初版清單來源是「掃本 vault 428 篇出現過的鍵」,
 #   結果漏掉 core_refs(跨專案升格參照,doctor Check C 與 impact 跨 repo 展開都在讀)與 regen(重建溯源在讀)
@@ -4491,9 +4491,12 @@ def cmd_lint(env, node):
         _near = sorted(c for c in _known if _levenshtein_le1(_k, c))   # r1:_known 是 set,不排序的話多個等距候選每次給的建議會漂
         _hint = f"——是不是想寫 {_near[0]}?" if _near else "——工具不認得這個欄位,它不會被任何檢查讀到"
         warns.append(f"開頭欄位有個沒見過的鍵『{_k}』{_hint}(真的要用就加進 .lumos/config.json 的 extra_frontmatter_keys)")
-    _door = n.fields.get("door")
-    if _door is not None and str(_door).strip() not in ("one-way", "two-way"):
-        warns.append(f"door 只認 one-way / two-way,你寫的是 {str(_door)!r}(規格閘會當沒寫;two-way 寫了也不會比機械判定更鬆)")
+    _pr = n.fields.get("plan_risk")
+    if _pr is not None and str(_pr).strip() not in ("high", "low"):
+        warns.append(f"plan_risk 只認 high / low,你寫的是 {str(_pr)!r}(規格閘會當沒寫;low 寫了也不會比機械判定更鬆)")
+    if n.fields.get("door") is not None:
+        _dv = str(n.fields.get("door")).strip()
+        warns.append("door 是舊寫法(2026-09-17 改名),改成 plan_risk: high(舊值仍讀得懂)" + ("" if _plan_risk_norm(_dv) != "unknown" else f";而且 {_dv!r} 這個值工具不認得,會當沒寫"))
 
     t = n.fields.get("type")
     if not isinstance(t, str) or not t:
@@ -4823,10 +4826,33 @@ def _rollback_check_lines(text, P):
     if rb is not None and rb >= _ROLLBACK_MIN_CHARS:
         return []
     return [f"{P} ✗ — 有條款的計劃要有「## 回退」節且內容 ≥{_ROLLBACK_MIN_CHARS} 字含實字(" + ("沒有這一節——標題要寫成二級 `## 回退`,底線式(Setext)與其他層級不認" if rb is None else f"現在 {rb} 字;引用塊不算") + ")",
-            "    寫清楚出事故要退回哪一版、怎麼退;退不回去的就是單向門,回退節要講清楚代價"]
+            "    寫清楚出事故要退回哪一版、怎麼退;退不回去的就是風險高,回退節要講清楚代價"]
 
 
-# ── 雙向門(Projects/雙向門放行_計劃;Enzo 2026-09-17 裁「做出來在模擬測試就好」,不等草稿寫的 30 份計劃)──
+# ── 風險低(Projects/雙向門放行_計劃;Enzo 2026-09-17 裁「做出來在模擬測試就好」,不等草稿寫的 30 份計劃)──
+_PLAN_RISK_LEGACY = {"one-way": "high", "two-way": "low", "high-risk": "high", "low-risk": "low", "high": "high", "low": "low"}
+
+
+def _plan_risk_norm(v):
+    """計劃風險值正規化:high / low / unknown。舊帳與舊寫法(door: one-way/two-way)照讀(2026-09-17 改名:風險高→風險高、風險低→風險低)。"""
+    return _PLAN_RISK_LEGACY.get(str(v or "").strip(), "unknown")
+
+
+def _rec_plan_risk(d):
+    """留痕/逃逸列的計劃風險:新欄位 plan_risk 優先,舊欄位 door 相容。"""
+    return _plan_risk_norm(d.get("plan_risk") or d.get("door"))
+
+
+def _note_plan_risk_flag(note):
+    """作者自己標的計劃風險:開頭欄位 plan_risk: high(舊寫法 door: one-way 相容);只能往嚴標,low 沒意義。"""
+    if note is None:
+        return None
+    v = note.fields.get("plan_risk")
+    if v is None:
+        v = note.fields.get("door")
+    return _plan_risk_norm(v) if v is not None else None
+
+
 _DOOR_RULE_VERSION = 1   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 合約行掃描任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅)
 _DOOR_CLASS_ZH = {"payment": "金流", "external-send": "對外送出", "prod-irreversible": "不可逆", "self-governance": "守衛面"}   # 四類正式中文名(=lint 的 _RISK_ENUM)
 _EXCL_LEAD_RE = re.compile(r"^[\s>*+•—·\-\d.、)]*")   # 已排除行的前綴:跟條款定義行同一組清單/引用符號
@@ -4834,9 +4860,9 @@ _EXCLUDED_RE = re.compile(r"^已排除\s*[:：]\s*([^:：]+?)\s*[:：]\s*(.*)$")
 _HAZARD_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?實務隱患\s*(?:[(（][^)）]*[)）])?\s*$")
 _KEEPS_RE = re.compile(r"\[keeps\]")
 _KEEPS_VARIANT_RE = re.compile(r"[\[［【]\s*keeps\s*[\]］】]", re.I)
-_DOOR_STALE_DAYS = 30   # 健檢:雙向門 doing 計劃多少天沒新留痕就提醒(不擋)
+_DOOR_STALE_DAYS = 30   # 健檢:風險低 doing 計劃多少天沒新留痕就提醒(不擋)
 # 小改動閘(雙向門放行_計劃 S27;Enzo 2026-09-17 裁「小改動不至於要綁測試」+「行數太 low,看 AWS/Meta/學術怎麼判」):
-# 全靠人驗的雙向門計劃,推送時四個維度全部成立才放行。判準借即時缺陷預測(Mockus&Weiss 2000、Kamei 2013)的擴散/相對量/歷史/目的,
+# 全靠人驗的風險低計劃,推送時四個維度全部成立才放行。判準借即時缺陷預測(Mockus&Weiss 2000、Kamei 2013)的擴散/相對量/歷史/目的,
 # 不拿絕對行數當唯一判準;數字是拍的(RETIRE-IF 在計劃),改了就 bump 版本(留痕記 small_change_rule)。
 _SMALL_CHANGE_RULE_VERSION = 1
 _SMALL_CHANGE = {"max_files": 5, "max_dirs": 2, "max_rel_churn": 0.2, "max_abs_lines": 300, "escape_days": 90}
@@ -4889,8 +4915,8 @@ def _door_linked_signals(env, note, text):
 
 def _door_judge(env, note, text):
     """門怎麼判(機械;★預設單向,雙向要證明★):回 {door, signals, missing, exclusions, linked}。
-    硬單向門(任一命中):①四類關鍵字表命中——掃全文可見行,只跳過實務隱患節內合格的已排除行 ②連到的節點帶不可逆/檢查點合約或 risk/ 標籤
-    ③自帶 risk/ 標籤 ④開頭欄位 door: one-way。都沒命中、且四類各有一行合格已排除 → 雙向門;缺哪一類列出來。door: two-way 沒有意義。
+    硬風險高(任一命中):①四類關鍵字表命中——掃全文可見行,只跳過實務隱患節內合格的已排除行 ②連到的節點帶不可逆/檢查點合約或 risk/ 標籤
+    ③自帶 risk/ 標籤 ④開頭欄位 door: one-way。都沒命中、且四類各有一行合格已排除 → 風險低;缺哪一類列出來。door: two-way 沒有意義。
     ★這四行通常是 AI 自己寫的=自我認證(Enzo 裁不補人簽),唯一糾錯是逃逸帳與撤除條件★。"""
     exclusions, skip = _door_exclusions(text)
     signals = []
@@ -4908,10 +4934,10 @@ def _door_judge(env, note, text):
     signals += [f"連到 {lk}({why})" for lk, why in linked]
     if note is not None:
         signals += [f"自帶標籤 {t}" for t in as_list(note.fields.get("tags")) if str(t).startswith("risk/")]
-        if str(note.fields.get("door") or "").strip() == "one-way":
-            signals.append("開頭欄位 door: one-way")
+        if _note_plan_risk_flag(note) == "high":
+            signals.append("開頭欄位 plan_risk: high(作者自己標)")
     missing = [z for z in _DOOR_CLASS_ZH.values() if z not in exclusions]
-    return {"door": "one-way" if (signals or missing) else "two-way", "signals": signals, "missing": missing,
+    return {"door": "high" if (signals or missing) else "low", "signals": signals, "missing": missing,
             "exclusions": exclusions, "linked": linked}
 
 
@@ -4941,11 +4967,11 @@ def _clause_block_sha(text, rows_b, linked, exclusions=None):
 
 
 def _clause_check_twoway(P, clauses):
-    """雙向門加嚴(不派審):測試不存在/懸空擋、兩條綁同一支擋;[manual:] 收(推送時全靠人的計劃走小改動閘)。回要印的行;沒事回 []。"""
+    """風險低加嚴(不派審):測試不存在/懸空擋、兩條綁同一支擋;[manual:] 收(推送時全靠人的計劃走小改動閘)。回要印的行;沒事回 []。"""
     # [manual:] 收(Enzo 2026-09-17 裁「小改動不至於要綁測試」):全靠人的計劃推送時走小改動閘(_small_change_check)
     hang = [b for b in clauses if b["state"] in _CLAUSE_HANG_STATES or b["state"] == "bad-name"]
     if hang:
-        return [f"{P} ✗ — 雙向門的測試要真的存在:" + "、".join(f"{b['id']} {'/'.join(map(str, b['refs']))}({_CLAUSE_STATE_ZH.get(b['state'], b['state'])})" for b in hang),
+        return [f"{P} ✗ — 風險低的測試要真的存在:" + "、".join(f"{b['id']} {'/'.join(map(str, b['refs']))}({_CLAUSE_STATE_ZH.get(b['state'], b['state'])})" for b in hang),
                 "    先把測試寫出來(現在紅沒關係),或把門升成單向"]
     seen, dup = {}, []
     for b in clauses:
@@ -4954,7 +4980,7 @@ def _clause_check_twoway(P, clauses):
                 dup.append(f"{nm}({seen[nm]} 與 {b['id']})")
             seen.setdefault(nm, b["id"])
     if dup:
-        return [f"{P} ✗ — 雙向門每條條款的測試名要互不相同(重複:" + "、".join(dup) + ")",
+        return [f"{P} ✗ — 風險低每條條款的測試名要互不相同(重複:" + "、".join(dup) + ")",
                 "    一支測試證一條條款;十條全綁同一支也能「全部存在」,所以擋"]
     return []
 
@@ -4996,8 +5022,8 @@ def _test_exists_before(rr, commit, name):
 
 
 def _spec_gate_twoway_static(text, clauses, names, rr, plan_repo_rel):
-    """雙向門的靜態條件(跑測試之前):至少一條沒標 keeps;標 keeps 的測試在計劃建立前就存在(計劃沒進歷史=驗不了,擋)。回 (要印的行, 擋不擋)。"""
-    P = "[spec-gate] 雙向門:"
+    """風險低的靜態條件(跑測試之前):至少一條沒標 keeps;標 keeps 的測試在計劃建立前就存在(計劃沒進歷史=驗不了,擋)。回 (要印的行, 擋不擋)。"""
+    P = "[spec-gate] 風險低:"
     keeps, variant = _spec_gate_keeps_rows(text, clauses)
     out = []
     if variant:
@@ -5020,7 +5046,7 @@ def _spec_gate_twoway_static(text, clauses, names, rr, plan_repo_rel):
 
 
 def _spec_gate_twoway_run_verdict(clauses, keeps, verdicts):
-    """雙向門的放行條件(跑完之後):沒標 keeps 的每一條各自紅(綠=沒做卻說做了、弱證據≠紅);標 keeps 的要綠。回沒過的清單。"""
+    """風險低的放行條件(跑完之後):沒標 keeps 的每一條各自紅(綠=沒做卻說做了、弱證據≠紅);標 keeps 的要綠。回沒過的清單。"""
     fails = []
     for b in clauses:
         if b["state"] == "manual":
@@ -5042,17 +5068,17 @@ def _spec_gate_twoway_run_verdict(clauses, keeps, verdicts):
 
 def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts):
     """規格閘留痕:走審查帳同一支寫入口(_jsonl_append_verified+vault 寫入鎖),kind=spec-gate(讀側的輪次判定要略過它——S16)。
-    帶門、四行已排除理由(雙向門)或命中訊號(單向門)、全部測試名、條款區塊指紋、門判定規則版本、條款數/紅數/keeps 數。回寫成沒有。"""
+    帶門、四行已排除理由(風險低)或命中訊號(風險高)、全部測試名、條款區塊指紋、門判定規則版本、條款數/紅數/keeps 數。回寫成沒有。"""
     import datetime as _dt
     import secrets as _sec
     tests = sorted({m for b in clauses for m in names.get(b["id"], [])})
     rec = {"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"), "kind": "spec-gate", "token": "SPEC-" + _sec.token_hex(4),
-           "loop": _loop_id_for_plan(rel), "plan": rel, "door": judged["door"], "door_rule": _DOOR_RULE_VERSION,
+           "loop": _loop_id_for_plan(rel), "plan": rel, "plan_risk": judged["door"], "door_rule": _DOOR_RULE_VERSION,
            "clause_sha": _clause_block_sha(text, rows_b, judged["linked"], judged["exclusions"]), "tests": tests,
            "n_clauses": len(clauses), "n_red": counts.get("red", 0), "n_keeps": len(keeps),
            "n_manual": sum(1 for b in clauses if b["state"] == "manual"), "manual_only": not tests,
            "small_change_rule": _SMALL_CHANGE_RULE_VERSION if not tests else None}
-    if judged["door"] == "two-way":
+    if judged["door"] == "low":
         rec["exclusions"] = judged["exclusions"]
     else:
         rec["signals"] = judged["signals"][:8]
@@ -5065,14 +5091,14 @@ def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, cou
 
 
 def _spec_gate_print_door(judged):
-    if judged["door"] == "two-way":
-        print("[spec-gate] 門: 雙向門(硬單向門訊號都沒命中;四類已排除:" + "、".join(f"{k}={v[:12]}" for k, v in judged["exclusions"].items()) + ")")
+    if judged["door"] == "low":
+        print("[spec-gate] 計劃風險: 低(硬訊號都沒命中;四類已排除:" + "、".join(f"{k}={v[:12]}" for k, v in judged["exclusions"].items()) + ")")
         return
     why = judged["signals"][:6]
     if judged["missing"]:
         why.append("實務隱患節缺已排除行:" + "、".join(judged["missing"]))
-    print("[spec-gate] 門: 單向門(" + ";".join(why) + ("" if len(judged["signals"]) <= 6 else f";另 {len(judged['signals']) - 6} 個訊號") + ")")
-    print("    單向門=退不回或沒證明退得回,照走設計審;要當雙向門:硬訊號一個都不能命中,且「## 實務隱患」節裡四類各一行 `已排除:<類>:<理由≥4 字>`")
+    print("[spec-gate] 計劃風險: 高(" + ";".join(why) + ("" if len(judged["signals"]) <= 6 else f";另 {len(judged['signals']) - 6} 個訊號") + ")")
+    print("    風險高=還原提交之後外面還要人收拾(金流、對外送出、資料不可逆、守衛面)或沒證明不用,照走設計審;要當風險低:硬訊號一個都不能命中,且「## 實務隱患」節裡四類各一行 `已排除:<類>:<理由≥4 字>`")
 
 
 def _clause_check(text, rows_b, grammar=True, tag="disposal", door=None):
@@ -5080,7 +5106,7 @@ def _clause_check(text, rows_b, grammar=True, tag="disposal", door=None):
     回 (status, lines)。status ∈ ok/fail;lines 是要印的「[tag] 條款綁定: …」行。
     綁定的判定原封沿用處置閘第五步既有語意(沒標的擋、懸空只提醒不擋、看不懂的清單寫法擋、重複定義擋);
     grammar=True 才驗句式與回退節(呼叫端按首筆帳是否早於 _SPEC_GATE_SINCE 決定——檢查器不管不回溯)。
-    door="two-way" 加嚴:不收 manual、測試要存在、名字互不相同、不要求回退節(雙向門放行_計劃 S3/S18/S19);處置閘呼叫時 door=None(=單向門語意)。"""
+    door="low" 加嚴:不收 manual、測試要存在、名字互不相同、不要求回退節(雙向門放行_計劃 S3/S18/S19);處置閘呼叫時 door=None(=風險高語意)。"""
     P = f"[{tag}] 條款綁定:"
     clauses = [b for b in rows_b if b["state"] != "undefined"]
     undef = [b for b in rows_b if b["state"] == "undefined"]
@@ -5106,11 +5132,11 @@ def _clause_check(text, rows_b, grammar=True, tag="disposal", door=None):
         if fw:
             out.append("    看到 `[manual：` 用了全形冒號(" + "、".join(b["id"] for b in fw) + "),改成半形 `[manual:` 才認得")
         return "fail", out
-    if door == "two-way":
+    if door == "low":
         tw = _clause_check_twoway(P, clauses)
         if tw:
             return "fail", out + tw
-    if grammar and door != "two-way":
+    if grammar and door != "low":
         rb_lines = _rollback_check_lines(text, P)
         if rb_lines:
             return "fail", out + rb_lines
@@ -5267,7 +5293,7 @@ def _plan_system_links(note, text=None, systems_only=True):
         for ln in summ.split("\n"):
             if ln.strip().startswith("DEP:"):
                 links += re.findall(r"\[\[([^\]|#]+)", ln)
-    if text:   # 正文只看可見行、剝行內程式碼(代碼審 r2:圍欄裡示範語法的 [[連結]] 不是真連結,會把合格的雙向門打成單向門)
+    if text:   # 正文只看可見行、剝行內程式碼(代碼審 r2:圍欄裡示範語法的 [[連結]] 不是真連結,會把合格的風險低打成風險高)
         for _no, ln in _visible_lines(text.splitlines()):
             links += [link_target(m) for m in WIKILINK_RE.findall(_strip_inline_markup(ln)[0])]
     out, seen = [], set()
@@ -5305,15 +5331,15 @@ def _loop_first_ts_key(env, loop_id):
 
 
 def _spec_gate_clause_part(env, text, rel, rr, door=None):
-    """①②:句式(按首筆帳決定驗不驗)+綁定+回退節(單向門);有結論回 (rc, rows),要繼續跑回 (None, rows)。door 傳給檢查器(雙向門加嚴、零條款擋)。"""
+    """①②:句式(按首筆帳決定驗不驗)+綁定+回退節(風險高);有結論回 (rc, rows),要繼續跑回 (None, rows)。door 傳給檢查器(風險低加嚴、零條款擋)。"""
     loop_id = _loop_id_for_plan(rel)
     first = _loop_first_ts_key(env, loop_id) if loop_id else None
     grammar = first is None or first >= _loop_ts_key(_SPEC_GATE_SINCE)
     if not grammar:
         print(f"[spec-gate] 句式: —(迴圈「{loop_id}」首筆帳早於 {_SPEC_GATE_SINCE[:10]},不回溯;綁定照驗)")
     if not SPEC_CLAUSE_RE.search(text):
-        if door == "two-way":
-            print("[spec-gate] 條款綁定: ✗ — 雙向門零條款一律擋(空集合會放行一份什麼都沒驗的計劃);寫成 `- [S1] 當…,主體應… [test:測試名]`")
+        if door == "low":
+            print("[spec-gate] 條款綁定: ✗ — 風險低零條款一律擋(空集合會放行一份什麼都沒驗的計劃);寫成 `- [S1] 當…,主體應… [test:測試名]`")
             return 1, []
         print("[spec-gate] 條款綁定: —(計劃無 [SN] 條款,沒有東西可驗;寫成 `- [S1] 當…,主體應… [test:測試名]` 才進閘)")
         return 0, []
@@ -5441,7 +5467,7 @@ def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_r
 
 
 def _spec_gate_front(env, node, no_run):
-    """規格閘前半(⓪門 ①句式 ②綁定 + 雙向門靜態條件 + 平台索引):有結論回 rc(int),要繼續跑回一組材料。"""
+    """規格閘前半(⓪門 ①句式 ②綁定 + 風險低靜態條件 + 平台索引):有結論回 rc(int),要繼續跑回一組材料。"""
     p, text, rel = _spec_gate_load(env, node)
     if p is None:   # 找不到/讀不動:_spec_gate_load 自己已印原因
         return 2
@@ -5455,13 +5481,13 @@ def _spec_gate_front(env, node, no_run):
     clauses = [b for b in rows_b if b["state"] != "undefined"]
     prep = _spec_gate_prepare(rr, text, clauses)
     if prep is None:
-        return 1 if door == "two-way" else 0
-    keeps = _spec_gate_twoway_gate(p, rr, text, clauses, prep[4]) if door == "two-way" else set()
+        return 1 if door == "low" else 0
+    keeps = _spec_gate_twoway_gate(p, rr, text, clauses, prep[4]) if door == "low" else set()
     if keeps is None:
         return 1
     if no_run:
-        if door == "two-way":
-            print("[spec-gate] 跑: —(--no-run;雙向門要跑過測試才放行、才留痕)")
+        if door == "low":
+            print("[spec-gate] 跑: —(--no-run;風險低要跑過測試才放行、才留痕)")
         return 0
     return p, text, rel, rr, judged, rows_b, clauses, keeps, prep
 
@@ -5480,7 +5506,7 @@ def _spec_gate_prepare(rr, text, clauses):
 
 
 def _spec_gate_twoway_gate(p, rr, text, clauses, names):
-    """雙向門的靜態條件(跑之前):印結果;過了回 keeps 集合,擋下回 None。"""
+    """風險低的靜態條件(跑之前):印結果;過了回 keeps 集合,擋下回 None。"""
     try:
         prel = str(p.resolve().relative_to(rr.resolve())).replace(os.sep, "/")
     except ValueError:
@@ -5507,11 +5533,11 @@ def _spec_gate_print_regress(reg_fail, reg_ok, reg_nodes):
 
 
 def _spec_gate_print_twoway(clauses, keeps, verdicts):
-    """雙向門放行條件(跑之後)印出;沒過回 False。"""
+    """風險低計劃放行條件(跑之後)印出;沒過回 False。"""
     fails = _spec_gate_twoway_run_verdict(clauses, keeps, verdicts)
     if not fails:
         return True
-    print(f"[spec-gate] 雙向門: ✗ — {len(fails)} 條沒過放行條件(沒標 keeps 的每一條各自紅、標 keeps 的綠、弱證據不算):")
+    print(f"[spec-gate] 風險低: ✗ — {len(fails)} 條沒過放行條件(沒標 keeps 的每一條各自紅、標 keeps 的綠、弱證據不算):")
     for x in fails:
         print(f"    • {x}")
     return False
@@ -5519,8 +5545,8 @@ def _spec_gate_print_twoway(clauses, keeps, verdicts):
 
 def cmd_spec_gate(env, node, no_run=False):
     """規格閘:⓪門(單向/雙向,機械判)①句式 ②綁定+回退節 ③把綁的測試真跑一次 ④相依回歸(全綠才過)⑤匯總+留痕。
-    單向門(半套語意):紅綠只印不擋,接著走 lumos loop next。雙向門(雙向門放行_計劃):至少一條新行為、每條沒標 keeps 的各自紅、
-    keeps 的既存且綠、弱證據不算 → PASS(雙向門):直接實作、不派審;留痕 kind=spec-gate 進審查帳(推送閘讀它)。
+    風險高(半套語意):紅綠只印不擋,接著走 lumos loop next。風險低(雙向門放行_計劃):至少一條新行為、每條沒標 keeps 的各自紅、
+    keeps 的既存且綠、弱證據不算 → PASS(風險低):直接實作、不派審;留痕 kind=spec-gate 進審查帳(推送閘讀它)。
     判定走跟處置閘第五步同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗。rc:擋下 1;其餘 0。"""
     front = _spec_gate_front(env, node, no_run)
     if isinstance(front, int):
@@ -5537,14 +5563,14 @@ def cmd_spec_gate(env, node, no_run=False):
     reg_fail, reg_ok, reg_nodes = _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run)
     if not _spec_gate_print_regress(reg_fail, reg_ok, reg_nodes):
         return 1
-    if door == "two-way" and not _spec_gate_print_twoway(clauses, keeps, verdicts):
+    if door == "low" and not _spec_gate_print_twoway(clauses, keeps, verdicts):
         return 1
     summ = _clause_summary(clauses)
     print(f"[spec-gate] 匯總: 條款 {len(clauses)}/綁了 {summ['bound']}/靠人 {summ['manual']}/紅 {counts['red']}/綠 {counts['green']}/弱證據 {counts['weak']}/相依回歸 {reg_ok} 支綠" + (f"/keeps {len(keeps)}" if keeps else ""))
-    if door == "two-way":
-        print("[spec-gate] PASS(雙向門):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+    if door == "low":
+        print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
     else:
-        print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;單向門只印不擋。接著走:\n    lumos loop next")
+        print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;風險高只印不擋。接著走:\n    lumos loop next")
     _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts)
     note = " ".join(f"{cid}={verdicts[cid][0]}" for cid in sorted(verdicts, key=lambda x: int(x[1:]))) or "no-run"
     _append_governance_log(env.vault, [{"gate": "spec-gate", "kind": "spec-gate-run", "hard": False, "nodes": [rel],
@@ -5594,6 +5620,43 @@ def _spec_gate_push_candidates(env, rr, vrel, touched):
     return plans
 
 
+def _head_is_shebang(head):
+    """檔案開頭那段 bytes 的第一行是不是 #!(每支檔有家與 _is_code_file 共用這一支——代碼審 r2 架構席:別各寫一份)。"""
+    return bool(head) and head[:200].split(b"\n", 1)[0].startswith(b"#!")
+
+
+def _is_code_file(rr, path, base=None):
+    """「需要有家的程式檔」判定(每支檔有家同一套):副檔名在清單裡=是;沒副檔名要看首行是不是 #!(.gitignore/Makefile 這種不是)。
+    磁碟上沒有(這次被刪)就從範圍起點 base 讀;兩邊都讀不到★保守當程式檔★(代碼審 r2 通才席 blocker:刪掉 hook 本身被判成沒程式檔 → light 漏派審)。
+    豁免層也同一套(代碼審 r3 通才席):排除 glob(docs/*、node_modules、bin…)、測試檔、.lumos/config 的 ignore——這些每支檔有家不要求有家,這裡也不算程式檔。"""
+    import fnmatch as _fn
+    if any(_fn.fnmatch(path, g) for g in _NODEHOME_EXCLUDE_GLOBS) or _nodehome_is_test(path):
+        return False
+    try:
+        if _cochange_excluded(path, _nodehome_config(rr)["ignore"]):
+            return False
+    except Exception:
+        pass
+    kind = _nodehome_code_kind(path)
+    if kind == "ext":
+        return True
+    if kind != "shebang?":
+        return False
+    try:
+        with open(Path(rr) / path, "rb") as f:
+            return _head_is_shebang(f.read(200))
+    except OSError:
+        pass
+    if base:
+        try:
+            g = subprocess.run(["git", "-C", str(rr), "show", f"{base}:{path}"], capture_output=True, errors=None)
+            if g.returncode == 0:
+                return _head_is_shebang(g.stdout[:200])
+        except OSError:
+            pass
+    return True
+
+
 def _sc_changed_files(rr, git_range, vrel):
     """小改動閘的改動清單 [(新路徑, 新增, 刪除, 二進位, 舊路徑)];算不出回 (None, 原因)。
     用 -z:改名印成 la\tld\t\0舊\0新\0 各自完整欄位(r3 架構席:repo 慣例是 -z + 欄位,不自刻正則解 {a => b};r2 通才席:純改名的大檔不算重寫)。
@@ -5629,17 +5692,19 @@ def _sc_changed_files(rr, git_range, vrel):
     return files, None
 
 
-def _sc_diffusion(env, files, links):
+def _sc_diffusion(env, rr, files, links, base=None):
     """擴散:檔數/目錄數上限、每支都在計劃落點(lands_in/related 節點的 about_code)內。"""
     C, bad = _SMALL_CHANGE, []
-    dirs = {str(Path(f[0]).parent) for f in files}
-    if len(files) > C["max_files"] or len(dirs) > C["max_dirs"]:
-        bad.append(f"擴散:碰了 {len(files)} 個程式檔/{len(dirs)} 個目錄,小改動上限 {C['max_files']} 檔/{C['max_dirs']} 目錄")
+    code = [f for f in files if _is_code_file(rr, f[0], base)]   # 擴散與落點只算需要有家的程式檔;文件/圖/資料只在相對量那一維度算(2026-09-18:README+圖把目錄數撐破)
+    dirs = {str(Path(f[0]).parent) for f in code}
+    if len(code) > C["max_files"] or len(dirs) > C["max_dirs"]:
+        bad.append(f"擴散:碰了 {len(code)} 個程式檔/{len(dirs)} 個目錄,小改動上限 {C['max_files']} 檔/{C['max_dirs']} 目錄")
     _homes, own = _impact_home_map(env)
     allowed = set()
     for lk in links:
         allowed |= own.get(lk + ".md", set()) | own.get(lk, set())
-    outside = [f[0] for f in files if _nodehome_key(f[0]) not in allowed]
+    # 落點只查「需要有家的程式檔」(每支檔有家同一套定義 _nodehome_code_kind);README/圖/JSON 這種不需要家的檔只算檔數與改動量(2026-09-18 實測:改 README 被判落點外)
+    outside = [f[0] for f in code if _nodehome_key(f[0]) not in allowed]
     if outside:
         bad.append("落點外:" + "、".join(outside[:5]) + (f" 等 {len(outside)} 支" if len(outside) > 5 else "") + "(計劃 lands_in/related 那些節點的 about_code 沒列它)")
     return bad
@@ -5697,7 +5762,7 @@ def _sc_history(env, rr, files, links):
 
 
 def _small_change_check(env, rr, git_range, prel, note):
-    """全靠人驗的雙向門計劃的推送閘:回沒過的原因清單(空=過)。四維度各一支:擴散 _sc_diffusion、相對量 _sc_churn、歷史 _sc_history、目的(計劃連 Issues 不算小改動)。"""
+    """全靠人驗的風險低計劃的推送閘:回沒過的原因清單(空=過)。四維度各一支:擴散 _sc_diffusion、相對量 _sc_churn、歷史 _sc_history、目的(計劃連 Issues 不算小改動)。"""
     try:
         vrel = str(env.vault.resolve().relative_to(rr)).replace(os.sep, "/")
     except ValueError:
@@ -5708,7 +5773,8 @@ def _small_change_check(env, rr, git_range, prel, note):
     if not files:
         return []
     links = _plan_system_links(note)
-    bad = _sc_diffusion(env, files, links) + _sc_churn(rr, git_range, files) + _sc_history(env, rr, files, links)
+    base = git_range.split("..")[0] if ".." in git_range else None
+    bad = _sc_diffusion(env, rr, files, links, base) + _sc_churn(rr, git_range, files) + _sc_history(env, rr, files, links)
     try:
         ptxt = (env.vault / prel).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
@@ -5728,15 +5794,15 @@ def _spec_gate_push_stale(env, rr, prel, n, rec):
     if err:
         return f"{prel}:測試索引建不起來({err})"
     now = _door_judge(env, n, text)   # ★門整個重判★(代碼審 r1 F1 blocker):指紋只蓋條款與理由,正文塞進關鍵字、補 risk/ 標籤、改 door 欄位都要在這裡被抓到
-    if now["door"] != "two-way":
-        return f"{prel}:留痕時是雙向門,現在判成單向門({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——雙向門的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {Path(prel).stem}"
+    if now["door"] != "low":
+        return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {Path(prel).stem}"
     if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"]) != rec.get("clause_sha"):
-        return f"{prel}:雙向門留痕過期(條款、測試名、已排除理由、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {Path(prel).stem}"
+        return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {Path(prel).stem}"
     return None
 
 
 def _spec_gate_push_one(env, rr, prel, n, rec, idx):
-    """推送前查一份雙向門計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range)。"""
+    """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range)。"""
     P = "[spec-gate 推送前]"
     stale = _spec_gate_push_stale(env, rr, prel, n, rec)
     if stale:
@@ -5746,7 +5812,7 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx):
     if not tests:   # 全靠人驗:沒有測試可跑,改跑小改動閘(四維度全過才放行)
         sc = _small_change_check(env, rr, idx[4], prel, n)
         if sc:
-            return f"{prel}:全靠人驗的雙向門計劃,這次改動不算小改動——" + ";".join(sc) + f"(補測試、縮小改動、或升成單向門走設計審;規則版本 {_SMALL_CHANGE_RULE_VERSION})", None
+            return f"{prel}:全靠人驗的風險低計劃,這次改動不算小改動——" + ";".join(sc) + f"(補測試、縮小改動、或升成風險高走設計審;規則版本 {_SMALL_CHANGE_RULE_VERSION})", None
         return None, f"{P} ✓ {Path(prel).stem}:全靠人驗,改動通過小改動閘(擴散/相對量/歷史/目的四維度)"
     split, default, methods_for, plats, _rng = idx
     items = [(loop_id, pl, m, "real" if m in methods_for(pl) else "dangling") for t in tests for pl, m in resolve_test_refs(f"[test:{t}]", split, default)]
@@ -5761,8 +5827,8 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx):
         if v != "green":
             reds.append(f"{m}:{'紅' if v == 'red' else why}")
     if reds:
-        try:   # 逃逸自動記:雙向門沒人審,推送閘擋下就是下游抓到的洞(fail-open,記不成不影響擋)
-            _auto_escape(env, "push-gate", "major", f"推送閘擋下:雙向門計劃 {Path(prel).stem} 的條款測試沒全綠({reds[0][:60]})",
+        try:   # 逃逸自動記:風險低計劃沒人審,推送閘擋下就是下游抓到的洞(fail-open,記不成不影響擋)
+            _auto_escape(env, "push-gate", "major", f"推送閘擋下:風險低計劃 {Path(prel).stem} 的條款測試沒全綠({reds[0][:60]})",
                          [(loop_id, prel)], _git_head(rr), source="spec-gate-push")
         except Exception as _ex:
             _escape_auto_failed(env, loop_id, "push-gate", str(_ex))
@@ -5771,15 +5837,15 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx):
 
 
 def _spec_gate_push_scan(env, rr, plans, git_range):
-    """逐份查有雙向門留痕的 doing 計劃;回沒過的原因清單(全綠的當場印一行);平台設定讀不動印一句回 None(放行)。"""
+    """逐份查有風險低留痕的 doing 計劃;回 (沒過的原因清單, 過了的 [(計劃, 全靠人驗)]),全綠的當場印一行;平台設定讀不動印一句回 (None, [])(放行)。"""
     latest = _spec_gate_latest_records(env)
-    bad, idx = [], None
+    bad, oks, idx = [], [], None
     for prel in sorted(plans):
         n = env.notes.get(prel)
         if n is None or str(n.fields.get("status")) != "doing":
             continue
         rec = latest.get(nfc(_loop_id_for_plan(prel)))
-        if not rec or rec.get("door") != "two-way":
+        if not rec or _rec_plan_risk(rec) != "low":
             continue
         if idx is None:
             try:
@@ -5787,18 +5853,20 @@ def _spec_gate_push_scan(env, rr, plans, git_range):
                 idx = (split, default, methods_for, load_platforms(rr)["platforms"], git_range)
             except (ValueError, OSError) as e:
                 print(f"[spec-gate 推送前] 平台設定讀不動({e}),放行")
-                return None
+                return None, []
         why, ok_line = _spec_gate_push_one(env, rr, prel, n, rec, idx)
         if why:
             bad.append(why)
-        elif ok_line:
-            print(ok_line)
-    return bad
+        else:
+            oks.append((prel, not (rec.get("tests") or [])))
+            if ok_line:
+                print(ok_line)
+    return bad, oks
 
 
 def _spec_gate_push_check(env, git_range, repo=None):
     """推送前(雙向門放行_計劃 S11-S14/S21/S23/S25):範圍碰到的計劃檔、加上連到「被碰到的 Systems 節點或被改程式檔的家」的 doing 計劃,
-    有雙向門留痕的 → 先把門整個重判(不再雙向擋)、條款指紋對得上才算留痕有效、留痕裡的測試全綠才准推。雙向門不派審,這裡是它唯一的閘。
+    有風險低留痕的 → 先把門整個重判(不再雙向擋)、條款指紋對得上才算留痕有效、留痕裡的測試全綠才准推。風險低不派審,這裡是它唯一的閘。
     rc1 擋、0 過;算不出範圍/索引 fail-open 印一句回 0(擋不了≠沒事,但推送閘不能因為工具壞而擋所有人)。"""
     P = "[spec-gate 推送前]"
     rr = Path(repo).resolve() if repo else _vault_repo_root(env)
@@ -5820,11 +5888,13 @@ def _spec_gate_push_check(env, git_range, repo=None):
     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
     if not plans:
         return 0
-    bad = _spec_gate_push_scan(env, rr, plans, git_range)
+    bad, oks = _spec_gate_push_scan(env, rr, plans, git_range)
     if bad is None:
         return 0
+    if not bad and oks and all(mo for _p, mo in oks):   # 計劃風險低+全靠人驗+小改動閘過 → 改動風險分級 light(2026-09-18 Enzo 裁;pitfalls/code-loop 都是 vault-free,只有這裡有圖譜)
+        print(f"{P} 改動風險分級:light(計劃風險低且全靠人驗,小改動閘通過:{'、'.join(Path(p).stem for p, _m in oks)})——代碼審只派架構對齊席;lumos loop next <編號> --tier light")
     if bad:
-        print(f"{P} ✗ — {len(bad)} 份雙向門計劃沒過(雙向門不派審,推送閘是它唯一的閘):")
+        print(f"{P} ✗ — {len(bad)} 份風險低計劃沒過(風險低不派審,推送閘是它唯一的閘):")
         for x in bad:
             print(f"    • {x}")
         print("    規格閘要紅、推送閘要綠,兩頭夾住:把條款的測試做綠再推;留痕過期就重跑 lumos spec-gate <計劃>")
@@ -8636,14 +8706,14 @@ def _door_for_loop(env, loop_id):
         except ValueError:
             continue
         if isinstance(d, dict) and d.get("kind") == "spec-gate" and nfc(str(d.get("loop", ""))) == nfc(loop_id):
-            door = d.get("door") or door
+            door = _rec_plan_risk(d) if (d.get("plan_risk") or d.get("door")) else door
     return door
 
 
 def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
     """逃逸自動記(規格落成可驗收條件_計劃 第五節):
     loops=[(迴圈編號, 計劃相對路徑或 None)]。歸因守衛放寬成「迴圈在審查帳 OR 計劃檔存在」——
-    雙向門不派審的計劃本來就不會出現在審查帳,只認審查帳會讓它們永遠記不到。
+    風險低不派審的計劃本來就不會出現在審查帳,只認審查帳會讓它們永遠記不到。
     去重鍵 (迴圈, 階段, sha)。回寫入筆數。不擋、不炸:任何一步失敗只印一行。"""
     log = env.vault.parent / ".escape-log.jsonl"
     ledger = env.vault.parent / ".canary-log.jsonl"
@@ -8677,9 +8747,9 @@ def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
                 print(f"逃逸自動記:「{loop_id}」既不在審查帳、也沒有計劃檔,對不回,不記")
                 continue
             door = _door_for_loop(env, loop_id)
-            if stage == "push-gate-unreviewed" and door != "two-way":
-                # 這一型的語意是「被判成雙向門、跳過審查,結果推送閘擋下」;單向門計劃缺留痕是流程沒走完,不是逃逸
-                print(f"逃逸自動記:「{loop_id}」沒有雙向門留痕(門:{door}),缺審查留痕算流程沒走完,不記")
+            if stage == "push-gate-unreviewed" and door != "low":
+                # 這一型的語意是「被判成風險低、跳過審查,結果推送閘擋下」;風險高計劃缺留痕是流程沒走完,不是逃逸
+                print(f"逃逸自動記:「{loop_id}」沒有風險低留痕(計劃風險:{door}),缺審查留痕算流程沒走完,不記")
                 continue
             if (nfc(loop_id), stage, sha) in existing:
                 print(f"逃逸自動記:「{loop_id}」在 {stage} 同一個 sha 已經記過,不重複")
@@ -8687,7 +8757,7 @@ def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
             rec = {"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                    "token": "ESC-" + _sec.token_hex(4),
                    "loop": loop_id, "stage": stage, "severity": severity, "desc": " ".join(desc.split()),
-                   "auto": True, "source": source, "sha": sha, "attribution": attribution, "door": door}
+                   "auto": True, "source": source, "sha": sha, "attribution": attribution, "plan_risk": door}
             if plan_rel:
                 rec["plan"] = plan_rel
             if extra:
@@ -8695,7 +8765,7 @@ def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
             if _jsonl_append_verified(log, rec, "token", rec["token"]) == 0:
                 written += 1
                 existing.add((nfc(loop_id), stage, sha))
-                print(f"✓ 逃逸自動入帳:「{loop_id}」在 {stage} 記到 {severity}(門:{rec['door']},歸因:{attribution})")
+                print(f"✓ 逃逸自動入帳:「{loop_id}」在 {stage} 記到 {severity}(計劃風險:{rec['plan_risk']},歸因:{attribution})")
             else:
                 _escape_auto_failed(env, loop_id, stage, "append 自驗失敗")
     return written
@@ -20782,7 +20852,7 @@ def _nodehome_required(repo_root, side, cfg, vendored_skip):
                 ok = side.shebang[p] = side.share.shebang[p]
             else:
                 head = side._reader(p)
-                ok = side.shebang[p] = bool(head) and head[:200].split(b"\n", 1)[0].startswith(b"#!")
+                ok = side.shebang[p] = _head_is_shebang(head)
             if not ok:
                 continue
         try:
@@ -22184,6 +22254,29 @@ def _stack_changed_ok(cur_file, skip=frozenset()):
             and not (skip and _posix_norm(cur_file) in skip))
 
 
+def _pitfall_tier(claims, files, repo_root, diff_range):
+    """改動風險分級(單一算法;★vault-free★,pitfalls 在 pre-push 熱路徑上不載圖譜——代碼審 r1 架構席):
+    命中風險型樣或新告警 → high;改動裡沒有任何「需要有家的程式檔」(_is_code_file,每支檔有家同一套定義)→ light;其餘 standard。
+    「計劃風險低且小改動閘過 → light」那一層要讀圖譜,由 spec-gate --push-check(本來就有圖譜、本來就在 pre-push 跑)印;這裡只用審查帳字串便宜提示一句。回 (tier, 一句為什麼)。"""
+    if claims:
+        return "high", "命中風險型樣或新告警"
+    base = diff_range.split("..")[0] if diff_range and ".." in diff_range else None
+    code = [f for f in files if not (f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS)) and _is_code_file(repo_root, f, base)]
+    if not code:
+        return "light", "改動裡沒有程式檔(只有文件/資料/圖譜)"
+    return "standard", "有程式檔改動、沒命中風險型樣" + (";審查帳有全靠人驗的風險低留痕,跑 lumos spec-gate --push-check <範圍> 看是不是 light" if _ledger_has_manual_only(repo_root) else "")
+
+
+def _ledger_has_manual_only(repo_root):
+    """便宜前置(不載圖譜):審查帳裡有沒有全靠人驗的風險低留痕。找不到 vault 或讀不動=沒有。"""
+    try:
+        vault = find_vault(Path(repo_root))
+        ledger = vault.parent / ".canary-log.jsonl" if vault else None
+        return bool(ledger and ledger.exists() and '"manual_only": true' in ledger.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+
+
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
@@ -22292,7 +22385,8 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     config = None if no_lint else _lint_load_config(repo_root)
     if config is None:
         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
-        return {"claims": claims, "tier": "high" if claims else "standard",
+        _t, _why = _pitfall_tier(claims, list(added) + list(changed_lines), repo_root, diff_range)
+        return {"claims": claims, "tier": _t, "tier_reason": _why,
                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
 
@@ -22355,7 +22449,8 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         c.pop("_push_gate_covers", None)
 
     all_claims = lint_claims + claims
-    out = {"claims": all_claims, "tier": "high" if _tier_claims else "standard",
+    _t, _why = _pitfall_tier(_tier_claims, list(added) + list(changed_lines), repo_root, diff_range)
+    out = {"claims": all_claims, "tier": _t, "tier_reason": _why,
            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
            "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
            "stack_questions_meta": stack_meta, "arch_alignment": arch}
@@ -22402,7 +22497,7 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
                 print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
             if arch.get("candidates_truncated"):
                 print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
-        print(f"tier: {data['tier']}")
+        print(f"tier: {data['tier']}" + (f"({data['tier_reason']})" if data.get("tier_reason") else ""))
         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
         # 當第二鏡頭」,但那是★純紀律層、沒有任何機械提醒★——2026-08-02 實測編排者自己
@@ -29218,8 +29313,8 @@ def main():
 
     p = sub.add_parser("spec-gate", help="規格閘(半套):條款句式+綁定+回退節(擋)、把綁的測試真跑一次印紅/綠/弱證據(不擋)、治理帳留一行")
     p.add_argument("node", nargs="?", help="計劃節點(Projects/<名>_計劃)")
-    p.add_argument("--no-run", dest="sg_no_run", action="store_true", help="只驗句式與綁定,不跑測試(雙向門不會放行、不留痕)")
-    p.add_argument("--push-check", dest="sg_push", metavar="RANGE", help="推送前用(pre-push 呼叫):範圍碰到的雙向門計劃,留痕裡的測試全綠才放行;rc1 擋")
+    p.add_argument("--no-run", dest="sg_no_run", action="store_true", help="只驗句式與綁定,不跑測試(風險低不會放行、不留痕)")
+    p.add_argument("--push-check", dest="sg_push", metavar="RANGE", help="推送前用(pre-push 呼叫):範圍碰到的風險低計劃,留痕裡的測試全綠才放行;rc1 擋")
     p.add_argument("--repo", dest="sg_repo", help="--push-check 用:repo 根(預設由 vault 反推)")
     p.add_argument("--door-rule", dest="sg_door_rule", action="store_true", help="印門判定規則版本與輸入指紋(改規則要 bump 版本、更新釘住的測試)")
 

@@ -154,6 +154,18 @@ Linters cover encoded rules; stack questions and reviewers challenge context-dep
 
 Pre-push code review is risk-tiered; small changes do not all trigger the same review effort. Gates can require answers and evidence to exist, but format checks alone cannot establish that an answer is correct.
 
+#### Not every plan needs a design review
+
+<p align="center">
+  <a href="assets/spec-gate-en.svg">
+    <img src="assets/spec-gate-en.svg" alt="Plans are classified high or low risk first: high-risk plans go through the design review loop; low-risk plans replace design review with tests that must be red now, re-checked and re-run at push time" width="760">
+  </a>
+</p>
+
+A finished plan goes through the spec gate first. One question splits plans in two: after reverting the commit, would anything outside the repo still need cleaning up by hand? Plans touching money, outbound messages, irreversible data, or the guard code itself are **high risk** and go through the multi-seat design review. Plans that can rule out all four classes with one written reason each are **low risk**: no design review, but every acceptance clause must bind a test that is red now; at push time the gate re-classifies the plan and re-runs those tests, and only all-green gets pushed. Genuinely small changes may be verified by a person instead, in which case the push gate checks diffusion, relative size, history and purpose.
+
+The classification is mechanical and defaults to high risk; authors can only tighten it. Some of the thresholds are guesses with retirement conditions written into the plan; see the mental model doc for the criteria, the sources, and the over- and under-strict cases measured so far.
+
 #### Five layers of quality control
 
 No human or AI can guarantee a zero defect rate. Following the Swiss cheese model, Lumos layers risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail. Every layer has blind spots, but a problem must pass through all of them to escape. The external-rules layer blocks only findings new to the change, so an existing codebase is not buried by its backlog when it adopts the gate.
