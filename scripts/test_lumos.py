@@ -43522,6 +43522,10 @@ def t_spec_gate_twoway_needs_four_exclusions():
     _sg_plan2(kg, "丁", ["- [S1] 系統應回 200 [test:t_red]"], excl=_SG_EXCL_ALL[:3] + ["已排除：守衛面：不碰任何閘或掛鉤"])
     r = run(kg, "spec-gate", "Projects/丁_計劃", "--no-run")
     check("④ 全形冒號也收", "雙向門" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "戊", ["- [S1] 系統應回 200 [test:t_red]"], excl=["**已排除:金流:** 這份計劃不碰任何收費或扣款的流程", "**已排除:對外送出:** 不寄信不推播不呼叫外部服務", "**已排除:不可逆:** 只改本機檔案,改壞了重跑一次就回來", "**已排除:守衛面:** 不碰任何閘或掛鉤的判定"])
+    r = run(kg, "spec-gate", "Projects/戊_計劃")
+    rec = [x for x in _sg_records(kg) if x.get("loop") == "戊"]
+    check("⑤ 粗體寫法也收,理由不帶星號", r.returncode == 0 and rec and all("*" not in v for v in rec[0]["exclusions"].values()), (r.stdout[-300:], rec[:1]))
 
 
 def t_spec_gate_twoway_rejects_manual():
