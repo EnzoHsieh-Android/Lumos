@@ -1,0 +1,99 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index a6b93e7a..7a551d12 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4679,23 +4679,26 @@ def _clause_grammar(body):
+     stop = any(b.startswith(w) for w in _TRIGGER_STOPWORDS)
+     trig = None if stop else next((w for w in _TRIGGER_WORDS if b.startswith(w)), None)
+     if trig:
+         m = _CLAUSE_SEP_RE.search(b)
+         if not m:
+             return False, "trigger", f"觸發子句缺逗號:句首『{trig}…』被當觸發詞卻找不到「,」分隔——不是觸發請改寫或用主體開頭;是常用詞就把它加進 _TRIGGER_STOPWORDS"
+         rest = b[m.end():].lstrip()
+         if rest.startswith("則"):
+             rest = rest[1:].lstrip()
+         # 複合觸發=回應段自己又長成「觸發詞…分隔」(代碼審 r1:「當收到請求,在三秒內系統應…」的「在」是介詞,不能光看開頭字)
+-        # 第二個「當/若/若啟用」一律是第二個條件句(有沒有逗號都算,代碼審 r2);「在」常當介詞(「在三秒內」),只有後面還有分隔才算條件句
++        # 第二個「當/若/若啟用」一律是第二個條件句(有沒有逗號都算,代碼審 r2);「在」常當介詞(「在三秒內」),
++        # 只有「在…應」之間還有分隔才算條件句——回應段後面列兩件事的逗號不算(代碼審 r3)。子集從 _TRIGGER_WORDS 推,不另抄
+         if not any(rest.startswith(w) for w in _TRIGGER_STOPWORDS):
+-            if any(rest.startswith(w) for w in ("若啟用", "當", "若")) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(rest)):
++            hard = tuple(w for w in _TRIGGER_WORDS if w != "在")
++            head = rest.split("應", 1)[0]
++            if any(rest.startswith(w) for w in hard) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(head)):
+                 return False, "trigger", "複合觸發(一條只准一個觸發子句,拆成兩條)"
+         if "應" not in rest:
+             return False, "trigger", "回應段缺「應」(主體 應 回應)"
+         return True, "trigger", ""
+     if "應" not in b:
+         return False, "unconditional", "缺「應」(主體 應 回應)"
+     return True, "unconditional", ""
+ 
+ 
+ def _rollback_section_chars(text):
+@@ -4923,30 +4926,29 @@ def _regress_sources(env, plan_rel):
+             continue
+         for reftext in _contract_texts(sm):
+             clean, refs = strip_test_refs(reftext)
+             snippet = clean[:40] + ("…" if len(clean) > 40 else "")
+             (bound if refs else unbound).append((lk, snippet, reftext) if refs else (lk, snippet))
+     return bound, unbound
+ 
+ 
+ def _plan_system_links(note):
+     """計劃連到的 Systems 節點(lands_in + related + DEP 行的 [[連結]]),去重、保序。"""
+-    # 字串/清單都收(代碼審 r1)、[[…]] 也剝(代碼審 r2:lands_in 寫成連結字串會被 startswith 濾掉)
+-    links = [re.sub(r"^\[\[|\]\]$", "", str(x).strip().strip('"')) for x in as_list(note.fields.get("lands_in")) + as_list(note.fields.get("related"))]
++    # 字串/清單都收(代碼審 r1);[[…]]/別名/錨點/引號一律交給既有 link_target(代碼審 r2/r3:別自己再刻一份剝括號)
++    links = [link_target(x) for x in as_list(note.fields.get("lands_in")) + as_list(note.fields.get("related"))]
+     summ = note.fields.get("summary")
+     if isinstance(summ, str):
+         for ln in summ.split("\n"):
+             if ln.strip().startswith("DEP:"):
+                 links += re.findall(r"\[\[([^\]|#]+)", ln)
+     out, seen = [], set()
+     for lk in links:
+-        lk = lk.split("|", 1)[0].split("#", 1)[0].strip()
+         if lk.startswith("Systems/") and lk not in seen:
+             seen.add(lk)
+             out.append(lk)
+     return out
+ 
+ 
+ def _contract_texts(summary):
+     """摘要區塊裡的合約行(★INVARIANT★/★CHECKPOINT★/★IRREVERSIBLE★)正文,含 [test:] 標記。"""
+     return [m.group(1).strip() for _s, m in _contract_key_matches(summary)]
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 79cda332..1f3075cb 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -43378,20 +43378,28 @@ def t_spec_gate_code_review_r1_folds():
+     r3 = run(kg, "spec-gate", "Projects/字串_計劃")
+     check("③ lands_in 是字串 → 相依回歸照樣抓到 Alpha", r3.returncode == 0 and "Alpha" in r3.stdout and "R1" in r3.stdout, r3.stdout[-500:])
+     _sg_plan(kg, "底線", ["- [S1] 系統應回 200 [test:t_green]"], rollback="\n回退\n----\n把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n")
+     r4 = run(kg, "spec-gate", "Projects/底線_計劃")
+     check("④ Setext 寫法不認(設計寫死只認 ## 回退),擋下並提示標題寫法(代碼審 r2:自建 Setext 判定是第二套且有 fence 錯配洞)",
+           r4.returncode == 1 and "## 回退" in r4.stdout and "底線" in r4.stdout, r4.stdout[-400:])
+     # 代碼審 r2:複合觸發判準不能因為第二個觸發詞後面沒逗號就放過;「在」當介詞仍不算
+     _sg_plan(kg, "複合", ["- [S1] 當甲成立,若乙為真系統應回應 [test:t_green]", "- [S2] 當甲成立,在三秒內系統應回應 [test:t_green]", "- [S3] 當甲成立,當乙成立系統應回應 [test:t_green]"])
+     r5 = run(kg, "spec-gate", "Projects/複合_計劃")
+     check("⑤ 第二個觸發詞是當/若就是複合(有沒有逗號都擋);「在」介詞不算", r5.returncode == 1 and "S1(" in r5.stdout and "S3(" in r5.stdout and "S2(" not in r5.stdout, r5.stdout[-500:])
++    # 代碼審 r3:「在」的分隔只看「在…應」之間,回應段後面列兩件事的逗號不算複合;「在乙,則應丙」仍是複合
++    _sg_plan(kg, "列舉", ["- [S1] 當甲成立,在三秒內系統應回應,並記錄 [test:t_green]", "- [S2] 當甲成立,在乙成立時,則系統應回丙 [test:t_green]"])
++    r7 = run(kg, "spec-gate", "Projects/列舉_計劃")
++    check("⑦ 回應段列兩件事的逗號不算複合;「在乙,則應」仍擋", r7.returncode == 1 and "S2(" in r7.stdout and "S1(" not in r7.stdout, r7.stdout[-500:])
++    p3 = kg / "Projects" / "別名_計劃.md"
++    p3.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha|甲]]\"\n---\n# 別名\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
++    r8 = run(kg, "spec-gate", "Projects/別名_計劃")
++    check("⑧ lands_in 帶別名的連結字串 → 走 link_target 照抓", r8.returncode == 0 and "Alpha" in r8.stdout and "R1" in r8.stdout, r8.stdout[-400:])
+     # 代碼審 r2:lands_in 寫成 [[…]] 字串也要抓到
+     p2 = kg / "Projects" / "括號_計劃.md"
+     p2.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha]]\"\n---\n# 括號\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r6 = run(kg, "spec-gate", "Projects/括號_計劃")
+     check("⑥ lands_in 是 [[Systems/Alpha]] 字串 → 照抓", r6.returncode == 0 and "Alpha" in r6.stdout and "R1" in r6.stdout, r6.stdout[-400:])
+ 
+ 
+ def t_disposal_step5_shares_checker():
+     """[規格落成可驗收條件 S9] 處置閘第五步與規格閘共用同一支檢查器:同一份計劃(閘後迴圈、有格式看不懂的條款)兩邊判定相同。
+     翻紅釘:處置閘不走 _clause_check → ① 翻紅。"""

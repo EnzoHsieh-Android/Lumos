@@ -60,7 +60,7 @@ Edit / Write 之前 hook 會自動推一份「必看合約 / 事故 + 相關筆�
 |---|---|
 | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
 | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
-| 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 設計 spec 寫完:先 `lumos spec-gate <計劃>`(條款句式、綁定、回退節、跑紅綠),再進實作前的審查迴圈 | **`lumos-design-loop`** |
 | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
 
 > lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案自己的技術棧 skill 慣例列在本檔末尾〈架構參考 Skills〉一節；沒有那一節就是還沒有。

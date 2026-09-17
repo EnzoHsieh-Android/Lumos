@@ -39,6 +39,8 @@ summary: |-
   KEY:缺 severity 視同未收斂(逼明確宣告、不得當 clean);exit 0=CONVERGED｜1=未收斂(含無記錄=還沒開始)｜2=真錯誤(argparse/IO)
   KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+auditor;結局帳 --outcome 豁免——★cb3 折入:原 loop+round+auditor 三者齊備觸發=漏打 round 即繞道,已放寬;處置帳另必綁輪次+讀側 round-less 處置帳拒判★)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
   KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+spec 窗末 sha+卷證 HEAD blob+engine_rev)入 governance/replay/;回放唯讀(治理帳零寫入、無觀測尾巴),差異四分類:邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期(engine_rev 分流)=列出不紅;重凍比照 anchor approve 留痕+歸檔不覆寫;週跑 run_replay 補漏+輪替抽查(便宜自動升全跑);CONVERGED 仍非防竄改正確性證明,但「同輸入同判定」自此可每週機械重問
+  KEY:[2026-09-17]逃逸帳多了自動模式:lumos loop escape --auto --range a..b(碰到的計劃各記一筆、對不回不記、去重鍵=迴圈/階段/sha);三個來源自動掛——代碼審 code-<主題> 記到 major 以上、推送閘擋下(fail-open)、CI 紅(範圍=上一個綠..這次紅)。歸因守衛在自動模式放寬成「迴圈在審查帳或計劃檔存在」,帳上 attribution 標 ledger|plan-file;door 欄由規格閘留痕填、上線前一律 unknown。單源:[[Projects/規格落成可驗收條件_計劃]] 第五節
+  KEY:[2026-09-17]逃逸自動記(三來源掛勾、--auto、precision 欄、CI 步驟名判準)的單源改成 [[Projects/逃逸自動記_計劃]](從規格落成可驗收條件_計劃拆出);上一行提到的「第五節」已搬走
   DEP:scripts/lumos cmd_canary(+loop/+severity)｜cmd_loop_status｜cmd_gov canary mapper(detail 附 loop/sev 放最前)｜.canary-log.jsonl(複用,不新增 log)
   TEST:t_loop_status + t_canary_loop_fields;258 passed
   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]

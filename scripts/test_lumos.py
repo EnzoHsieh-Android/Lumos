@@ -4682,12 +4682,15 @@ def t_gov_query():
     (vault / "MOC").mkdir(parents=True)
     (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     docs = root / "docs"
+    # ★日期用相對今天★:gov 只看近 90 天;原本寫死 2026-06-18,到 2026-09-17 剛好過期整條翻紅(不是被測程式的錯)
+    import datetime as _dt
+    _d1 = (_dt.date.today() - _dt.timedelta(days=5)).isoformat(); _d2 = (_dt.date.today() - _dt.timedelta(days=4)).isoformat()
     (docs / ".bypass-log.jsonl").write_bytes(
-        '{"ts":"2026-06-18T10:00:00","commit":"abc","subject":"skip graph"}\n'.encode("utf-8"))
+        f'{{"ts":"{_d1}T10:00:00","commit":"abc","subject":"skip graph"}}\n'.encode("utf-8"))
     (docs / ".rot-queue.jsonl").write_bytes(
-        '{"ts":"2026-06-18T11:00:00","commit":"abc12","verification":"docs/kg/Verification/Foo.md","reason":"schema 變"}\n'.encode("utf-8"))
+        f'{{"ts":"{_d1}T11:00:00","commit":"abc12","verification":"docs/kg/Verification/Foo.md","reason":"schema 變"}}\n'.encode("utf-8"))
     (docs / ".governance-log.jsonl").write_bytes(
-        '{"ts":"2026-06-19T09:00:00","commit":"def","gate":"check-r","kind":"blocked","hard":true,"nodes":["OrderSvc"]}\n'.encode("utf-8"))
+        f'{{"ts":"{_d2}T09:00:00","commit":"def","gate":"check-r","kind":"blocked","hard":true,"nodes":["OrderSvc"]}}\n'.encode("utf-8"))
     try:
         r = run(vault, "gov")
         check("gov: 兩來源合併", "check-r" in r.stdout and "skip graph" in r.stdout, r.stdout)
@@ -10922,6 +10925,45 @@ def t_never_create_dirs_under_an_untrusted_path():
             _os.environ["HOME"] = old_home
 
     print("  ✓ t_never_create_dirs_under_an_untrusted_path")
+
+
+def t_stop_block_dir_does_not_touch_someone_elses_dir():
+    """★收工擋停的標記目錄也不准在別人的地方留東西★(2026-09-16 補審 delta 那一輪)。
+
+    出身:那支 hook 的註解寫著「不在別人的目錄上寫標記」,實際卻是
+    ★先一次 mkdir 出整條路徑、再檢查可不可信★——上層被換成指向別處的連結時,
+    別人的目錄裡已經多出一個 stop-block 資料夾了,檢查才說「不碰它」。
+    跟註解自己的承諾矛盾。
+
+    ★同一個形狀今天第五次★:主程式那邊當天剛改成逐層建逐層檢查,這支 hook 沒跟上,
+    兩份判準就此不一致——而這支 hook 的說明還寫著「跟主程式同一套威脅模型」。
+
+    翻紅釘:把逐層那道拿掉、改回一次 mkdir 整條路徑 → 第 2 條翻紅。"""
+    import os as _os
+    import subprocess as _sp
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    if not hook.is_file():
+        raise _SrcOnly("找不到收工檢查那支 hook(非來源 repo),這段沒驗到")
+    home = Path(tempfile.mkdtemp(prefix="gctl-stopdir-home-"))
+    victim = Path(tempfile.mkdtemp(prefix="gctl-stopdir-victim-"))
+    (home / ".cache").mkdir()
+    (home / ".cache" / "lumos").symlink_to(victim)      # 上層換成指向別人目錄的連結
+
+    code = ("import importlib.util as U;"
+            f"spec=U.spec_from_file_location('cgs', {str(hook)!r});"
+            "m=U.module_from_spec(spec);\n"
+            "try: spec.loader.exec_module(m)\n"
+            "except SystemExit: pass\n"
+            "m._stop_block_dir()\n")
+    r = _sp.run([sys.executable, "-c", code],
+                env={**_os.environ, "HOME": str(home)}, capture_output=True, text=True)
+    check("★前置★ 現場成立:那支 hook 真的跑得起來(不然這條等於沒在驗)",
+          "Traceback" not in r.stderr or "SystemExit" in r.stderr, r.stderr[-300:])
+    left = sorted(q.name for q in victim.rglob("*"))
+    check("★不准在連結指到的地方留下任何東西★(那支 hook 的註解自己承諾過不碰別人的目錄)",
+          left == [], f"別人的目錄裡多了:{left}")
+
+    print("  ✓ t_stop_block_dir_does_not_touch_someone_elses_dir")
 
 
 def t_arm_dir_chmod_must_not_follow_a_symlink():
@@ -31211,6 +31253,271 @@ def t_entry_latch_advisories():
 
 
 
+def _esc_auto_repo():
+    """受控:git repo + vault + 一份計劃筆記已提交。回 (root, vault, plan)。"""
+    import subprocess
+    root, vault = _mk_git_vault()
+    (vault / "Projects").mkdir(exist_ok=True)
+    plan = vault / "Projects" / "甲_計劃.md"
+    plan.write_text("---\ntype: project\nstatus: doing\n---\n# 甲\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "plan"], cwd=root, capture_output=True)
+    return root, vault, plan
+
+
+def _esc_rows(vault):
+    import json as _j
+    f = vault.parent / ".escape-log.jsonl"
+    if not f.exists():
+        return []
+    return [_j.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def t_escape_auto_from_prepush():
+    """[規格落成可驗收條件 S10] 當推送閘因測試紅擋下且提交範圍碰到計劃筆記,逃逸帳應自動多一筆。
+    背景:逃逸帳 6 筆對 127 條迴圈=從沒量過漏網率(2026-09-17);雙向門不派審之後它是唯一的安全網。
+    翻紅釘:範圍掃不到計劃 → ②翻紅;守衛不放行「計劃檔在但迴圈沒進審查帳」→ ③翻紅;缺 sha/plan 欄 → ①翻紅。"""
+    import subprocess
+    root, vault, plan = _esc_auto_repo()
+    head = lambda: subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    # 迴圈「甲」在審查帳裡(照既有逃逸測試的記法)
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan),
+        "--tier", "standard", "--report", _sevrep(vault.parent), expect_rc=0)
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n改一行\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "touch plan"], cwd=root, capture_output=True)
+    r = run(vault, "loop", "escape", "--auto", "--stage", "push-gate", "--severity", "major",
+            "--desc", "推送閘擋下:合約測試紅", "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    rows = _esc_rows(vault)
+    check("① 自動記一筆,帶 plan/sha/auto,歸因到那份計劃的迴圈",
+          len(rows) == 1 and rows[0]["loop"] == "甲" and rows[0]["stage"] == "push-gate"
+          and rows[0]["severity"] == "major" and rows[0].get("auto") is True
+          and rows[0].get("plan", "").endswith("Projects/甲_計劃.md") and rows[0].get("sha") == head(),
+          str(rows)[:300] + r.stdout[:200])
+    # 範圍沒碰到計劃 → 不記、講明對不回
+    (root / "code.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "code"], cwd=root, capture_output=True)
+    r2 = run(vault, "loop", "escape", "--auto", "--stage", "push-gate", "--severity", "major",
+             "--desc", "x", "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    check("② 提交範圍沒碰到計劃 → 不硬記,印「對不回」", len(_esc_rows(vault)) == 1 and "對不回" in r2.stdout, r2.stdout[:200])
+    # 計劃檔在、但迴圈從沒進審查帳(雙向門不審的正是這種)→ 放行、歸因標成 plan-file
+    p2 = vault / "Projects" / "乙_計劃.md"
+    p2.write_text("---\ntype: project\nstatus: doing\n---\n# 乙\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "plan2"], cwd=root, capture_output=True)
+    run(vault, "loop", "escape", "--auto", "--stage", "push-gate", "--severity", "major",
+        "--desc", "x", "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    rows = _esc_rows(vault)
+    check("③ 迴圈不在審查帳但計劃檔在(沒審過的雙向門)→ 照記,歸因標 plan-file",
+          len(rows) == 2 and rows[1]["loop"] == "乙" and rows[1].get("attribution") == "plan-file", str(rows[-1:])[:300])
+    check("④ 手動記帳的守衛不受影響:編號不存在照擋",
+          run(vault, "loop", "escape", "丙", "--stage", "prod", "--severity", "major", "--desc", "x").returncode == 2, "")
+
+
+def t_escape_auto_from_ci():
+    """[規格落成可驗收條件 第五節第三來源] CI 紅且「上一個綠..這次紅」的範圍碰到計劃 → 逃逸帳自動一筆;綠不記。
+    翻紅釘:拆 _ci_record 裡的掛勾 → ①翻紅;範圍不用上一個綠 sha 而用 sha^ → ③翻紅(計劃是在更早的提交碰到的)。"""
+    import subprocess, json as _j
+    root, vault, plan = _esc_auto_repo()
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
+    sha_green = git("rev-parse", "HEAD")
+    # 綠的那筆先入 CI 帳(直接寫檔,形狀照 _ci_record)
+    (vault.parent / ".ci-log.jsonl").write_text(_j.dumps({"ts": "2026-09-17T00:00:00+08:00", "sha": sha_green,
+        "branch": "main", "workflow": "CI", "conclusion": "success", "dedup_key": "g"}) + "\n", encoding="utf-8")
+    # 之後兩個提交:先碰計劃,再碰程式;CI 在第二個提交紅
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n改\n", encoding="utf-8")
+    git("commit", "-qam", "plan")
+    (root / "c.py").write_text("x=1\n", encoding="utf-8"); git("add", "-A"); git("commit", "-qm", "code")
+    sha_red = git("rev-parse", "HEAD")
+    mod = _load_lumos_module()
+    env = mod.Env(vault)
+    rc = mod._ci_record(env, [{"run_id": "1", "attempt": 1, "conclusion": "failure", "workflow": "CI", "url": "", "failed_step": "test"}], sha_red, "main")
+    rows = _esc_rows(vault)
+    check("① CI 紅 → 逃逸自動一筆(階段 CI、歸因到「甲」)", rc == 0 and len(rows) == 1 and rows[0]["stage"] == "CI" and rows[0]["loop"] == "甲", str(rows)[:300])
+    rc2 = mod._ci_record(env, [{"run_id": "2", "attempt": 1, "conclusion": "success", "workflow": "CI", "url": "", "failed_step": ""}], sha_red, "main")
+    check("② CI 綠不記", rc2 == 0 and len(_esc_rows(vault)) == 1, "")
+    check("③ 範圍是「上一個綠..這次紅」:計劃是在 sha^ 之前那個提交碰到的,仍被對回", rows and rows[0].get("plan", "").endswith("甲_計劃.md"), str(rows)[:200])
+
+
+def t_escape_auto_scope_rules():
+    """[規格落成可驗收條件 S9] 代碼審來源只收 finding_kind=code 的 major 以上(r2 拆分:CI 與 unreviewed 各自獨立成
+    t_escape_auto_ci_only_test_step / t_escape_auto_unreviewed_twoway,S18/S19 的條款才綁得到真測試)。翻紅釘:代碼審不篩 kind → ①翻紅。"""
+    import subprocess, json as _j
+    root, vault, plan = _esc_auto_repo()
+    base = ["--round", "r1", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard"]
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--severity", "clean", "--findings", "0", "--report", _sevrep(vault.parent), *base, expect_rc=0)
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n這一段是給載體引句用的正文,長度超過十個字。\n", encoding="utf-8")
+    rep = vault.parent / "rep1.md"
+    rep.write_text("severity: major\n\n## F1\nseverity: major\n引句:「這一段是給載體引句用的正文,長度超過十個字。」\n", encoding="utf-8")
+    snap = vault.parent / "snap.md"; snap.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+    one = ["--findings", "1", "--findings-set", "f1", "--folded-set", "f1", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap), *base]
+    # ① 代碼審 major 但發現型是 spec → 不記;型是 code → 記
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "major", "--finding-kind", "f1=spec", *one, expect_rc=0)
+    check("① 代碼審 major 但 finding_kind=spec 不記逃逸", len(_esc_rows(vault)) == 0, str(_esc_rows(vault))[:200])
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "major", "--finding-kind", "f1=code", *one, expect_rc=0)
+    check("② finding_kind=code 才記", len(_esc_rows(vault)) == 1 and _esc_rows(vault)[0]["stage"] == "code-loop", str(_esc_rows(vault))[:200])
+
+
+def t_escape_auto_ci_only_test_step():
+    """[規格落成可驗收條件 S19] CI 紅但失敗步驟不是測試,逃逸帳不應多一筆。
+    r2 正確性席:「含 test 子字串」會把 latest / attestation 也當測試步——改成切詞後有一個詞等於 test/tests/pytest/unittest。
+    翻紅釘:改回子字串比對 → ③c 翻紅;不看 failed_step → ③ 翻紅。"""
+    import subprocess
+    root, vault, plan = _esc_auto_repo()
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--round", "r1", "--severity", "clean", "--findings", "0", "--auditor", "s1",
+        "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard", "--report", _sevrep(vault.parent), expect_rc=0)
+    mod = _load_lumos_module(); env = mod.Env(vault)
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n改\n", encoding="utf-8"); git("commit", "-qam", "p")
+    sha = git("rev-parse", "HEAD")
+    ci = lambda rid, step: mod._ci_record(env, [{"run_id": rid, "attempt": 1, "conclusion": "failure", "workflow": "CI", "url": "", "failed_step": step}], sha, "main")
+    ci("1", "build")
+    check("③ CI 紅但失敗在 build 不記", len(_esc_rows(vault)) == 0, str(_esc_rows(vault))[:200])
+    ci("2", "Publish latest image")
+    ci("3", "attestation")
+    check("③c 步驟名只是含 test 子字串(latest/attestation)不記", len(_esc_rows(vault)) == 0, str(_esc_rows(vault))[:200])
+    ci("4", "test (unit)")
+    check("③b 失敗在測試步才記", len(_esc_rows(vault)) == 1 and _esc_rows(vault)[0]["stage"] == "CI", str(_esc_rows(vault)[-1:])[:200])
+    check("③d 判準是獨立函式:Run tests / pytest 算,contest 不算",
+          mod._ci_step_is_test("Run tests") and mod._ci_step_is_test("pytest -q") and not mod._ci_step_is_test("contest") and not mod._ci_step_is_test(""), "")
+    # r3 回滾席:帳上的 failed_step 是「工作名/步驟名」,本 repo 唯一的工作叫 test → 前綴會把每一步都偽裝成測試步;只看步驟名那半
+    # r3 邊界席:切詞只認 a-z0-9,中文步驟名「自主迴圈測試」切成空 → 步驟名含「測試」也算
+    check("③e 工作名前綴不算:test/Anchor verify 不是測試步、test/Full test suite 是",
+          not mod._ci_step_is_test("test/Anchor verify (baseline 缺失必紅)") and not mod._ci_step_is_test("test/code-loop gate (push 後盾;體檢")
+          and mod._ci_step_is_test("test/Full test suite (切 4 片同時跑)"), "")
+    check("③f 中文步驟名含「測試」算;多步驟用 ; 串接任一命中即算",
+          mod._ci_step_is_test("test/自主迴圈測試") and mod._ci_step_is_test("build/lint;test/unit tests") and not mod._ci_step_is_test("test/lint;test/SyntaxWarning 歸零閘"), "")
+
+
+def t_escape_auto_unreviewed_twoway():
+    """[規格落成可驗收條件 S18] 推送閘因高風險缺審查留痕擋下、而該計劃有雙向門留痕 → 記成 push-gate-unreviewed;沒有留痕 → 不記。
+    r2 架構對齊席:階段名用連字號(本 repo 欄位值沒有冒號複合詞)。翻紅釘:unreviewed 不分階段 → ④a 翻紅。"""
+    import json as _j, subprocess
+    root, vault, plan = _esc_auto_repo()
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--round", "r1", "--severity", "clean", "--findings", "0", "--auditor", "s1",
+        "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard", "--report", _sevrep(vault.parent), expect_rc=0)
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n改\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "p"], cwd=root, capture_output=True)
+    r = run(vault, "loop", "escape", "--auto", "--stage", "push-gate-unreviewed", "--severity", "major", "--desc", "tier=high 缺留痕",
+            "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    check("④a 計劃沒有雙向門留痕 → unreviewed 不記", len(_esc_rows(vault)) == 0 and "沒有雙向門留痕" in r.stdout, r.stdout[:200])
+    (vault.parent / ".canary-log.jsonl").open("a", encoding="utf-8").write(_j.dumps({"ts": "2026-09-17T00:00:00+08:00", "kind": "spec-gate", "loop": "甲", "door": "two-way", "token": "CANARY-sg1"}) + "\n")
+    run(vault, "loop", "escape", "--auto", "--stage", "push-gate-unreviewed", "--severity", "major", "--desc", "tier=high 缺留痕",
+        "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    rows = _esc_rows(vault)
+    check("④b 有雙向門留痕 → 記,階段 push-gate-unreviewed、door=two-way",
+          len(rows) == 1 and rows[0]["stage"] == "push-gate-unreviewed" and rows[0].get("door") == "two-way", str(rows[-1:])[:200])
+    # 推送閘那支 hook 只准用「tier=high 且」開頭的缺留痕句判 unreviewed(r2 回滾席:測試紅的擋下句也含 tier=high,兩個 grep 會同時中)
+    import re
+    hook = (Path(__file__).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    m = re.search(r'grep -q "([^"]+)"[^\n]*\n[^\n]*push-gate-unreviewed', hook)
+    pat = m.group(1) if m else ""
+    both = "受波及合約的測試沒過:x [m] d(tier=high,--bound-tests-advisory 不適用)"
+    check("④c 推送閘的 unreviewed 判準不會被「測試紅+tier=high」那句同時命中",
+          bool(pat) and pat not in both and pat in "tier=high 且無留痕(尚未跑 code-loop pass/skip)", repr(pat))
+
+
+def t_escape_auto_code_finding_severity():
+    """[規格落成可驗收條件 S9,r2 回滾席] 代碼審逃逸要看「造成 major 的那條是不是 code 型」,不是「這輪有任一條 code」。
+    給了 --finding-severity 就逐條判;沒給退回輪級判準並在帳上標 precision=round。翻紅釘:不看逐條嚴重度 → ① 翻紅。"""
+    root, vault, plan = _esc_auto_repo()
+    base = ["--round", "r1", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard"]
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--severity", "clean", "--findings", "0", "--report", _sevrep(vault.parent), *base, expect_rc=0)
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n這一段是給載體引句用的正文,長度超過十個字。\n", encoding="utf-8")
+    rep = vault.parent / "rep1.md"
+    rep.write_text("severity: major\n\n## F1\nseverity: major\n引句:「這一段是給載體引句用的正文,長度超過十個字。」\n\n## F2\nseverity: minor\n引句:「這一段是給載體引句用的正文,長度超過十個字。」\n", encoding="utf-8")
+    snap = vault.parent / "snap.md"; snap.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+    two = ["--findings", "2", "--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap), *base]
+    # ① 輪級 major 是 spec 型那條撐起來的,code 型那條只是 minor → 不記
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "major", "--finding-kind", "f1=code", "--finding-kind", "f2=spec",
+        "--finding-severity", "f1=minor", "--finding-severity", "f2=major", *two, expect_rc=0)
+    check("① code 型那條只是 minor → 不記逃逸", len(_esc_rows(vault)) == 0, str(_esc_rows(vault))[:200])
+    # ② code 型那條自己就是 major → 記,precision=finding
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "major", "--finding-kind", "f1=code", "--finding-kind", "f2=spec",
+        "--finding-severity", "f1=major", "--finding-severity", "f2=minor", *two, expect_rc=0)
+    rows = _esc_rows(vault)
+    check("② code 型那條 major → 記,帳上 precision=finding", len(rows) == 1 and rows[0].get("precision") == "finding", str(rows)[:200])
+    # ③ 沒給逐條嚴重度 → 退回輪級判準,帳上標 precision=round(讀側分得出來哪些是粗的);換一個 sha 才不會被去重擋掉
+    import subprocess
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n再改\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "p2"], cwd=root, capture_output=True)
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--round", "r2", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard",
+        "--severity", "major", "--finding-kind", "f1=code", "--finding-kind", "f2=spec", "--findings", "2", "--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap), expect_rc=0)
+    rows = _esc_rows(vault)
+    check("③ 沒給逐條嚴重度 → 輪級判準照記,但 precision=round", len(rows) == 2 and rows[1].get("precision") == "round", str(rows[-1:])[:200])
+    # ⑤ 給了逐條嚴重度但沒給型別 → 分不出是不是 code 型,保守記但精度只能標 round(r3 邊界席:標 finding 是謊報高信心)
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n三改\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "p3"], cwd=root, capture_output=True)
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--round", "r4", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard",
+        "--severity", "major", "--finding-severity", "f1=major", "--finding-severity", "f2=minor", "--findings", "2", "--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap), expect_rc=0)
+    rows = _esc_rows(vault)
+    check("⑤ 有逐條嚴重度、沒型別 → 記,但 precision=round", len(rows) == 3 and rows[2].get("precision") == "round", str(rows[-1:])[:200])
+    # ⑥ 部分覆蓋:只標不重要的那條、漏掉真正 major 的 code 型 → 要擋(r4 邊界席:子集就放行=可以靜默壓下逃逸,還標成高精度)
+    check("⑥ --finding-severity 只給部分發現 → 擋,要每條各標一個",
+          run(vault, "canary", "record", "none", "--loop", "code-甲", "--round", "r5", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard",
+              "--severity", "major", "--finding-kind", "f1=code", "--finding-kind", "f2=spec", "--finding-severity", "f2=clean", "--findings", "2", "--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap)).returncode == 2, "")
+    # ④ 參數守衛:鍵不在全集、值不在列舉 → 擋
+    check("④ --finding-severity 鍵不在發現集合 → 擋",
+          run(vault, "canary", "record", "none", "--loop", "code-甲", "--round", "r3", "--auditor", "s1", "--reviewed", _sha256_of(plan), "--spec", str(plan), "--tier", "standard",
+              "--severity", "major", "--finding-severity", "f9=major", "--findings", "2", "--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none", "--report", str(rep), "--snapshot", str(snap)).returncode == 2, "")
+
+
+def t_escape_auto_lock():
+    """[規格落成可驗收條件 r1 折入 S20] 兩個行程同時自動記同計劃同階段同 sha,逃逸帳只多一筆——寫側要上 vault 寫入鎖。
+    並行放大不保證翻紅(20 個行程在快機器上會自然序列化),改成結構性驗證:_auto_escape 必須進 _vault_write_lock。
+    翻紅釘:拿掉鎖 → ①翻紅。"""
+    root, vault, plan = _esc_auto_repo()
+    mod = _load_lumos_module(); env = mod.Env(vault)
+    entered = []
+    real = mod._vault_write_lock
+    def spy(v):
+        entered.append(str(v)); return real(v)
+    mod._vault_write_lock = spy
+    try:
+        mod._auto_escape(env, "push-gate", "major", "x", [("甲", "Projects/甲_計劃.md")], "deadbeef", source="test")
+    finally:
+        mod._vault_write_lock = real
+    check("① 自動記逃逸時進了 vault 寫入鎖(同一把鎖,跟 set/append 共用)", len(entered) == 1 and entered[0] == str(vault), str(entered))
+    check("② 記進去了", len(_esc_rows(vault)) == 1, "")
+
+
+def t_escape_auto_dedup():
+    """[規格落成可驗收條件 S11] 若同一計劃、同階段、同 sha 已有逃逸紀錄,則不應重複寫入。
+    翻紅釘:拿掉去重 → ①翻紅;去重鍵漏 stage → ②翻紅。"""
+    import subprocess
+    root, vault, plan = _esc_auto_repo()
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n改\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "t"], cwd=root, capture_output=True)
+    for _ in range(2):
+        run(vault, "loop", "escape", "--auto", "--stage", "push-gate", "--severity", "major",
+            "--desc", "x", "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    check("① 同計劃同階段同 sha 跑兩次只有一筆", len(_esc_rows(vault)) == 1, str(_esc_rows(vault))[:200])
+    run(vault, "loop", "escape", "--auto", "--stage", "CI", "--severity", "major",
+        "--desc", "x", "--range", "HEAD~1..HEAD", "--repo", str(root), expect_rc=0)
+    check("② 換一個階段就是另一筆(去重鍵含 stage)", len(_esc_rows(vault)) == 2, "")
+
+
+def t_escape_auto_from_code_loop():
+    """[規格落成可驗收條件 S9] 當代碼審記下 major 以上且該迴圈對得回計劃(code-<主題> → <主題>),逃逸帳應自動多一筆。
+    翻紅釘:拿掉 cmd_canary 裡的掛勾 → ①翻紅;minor 也記 → ②翻紅;對不回的硬記 → ③翻紅。"""
+    root, vault, plan = _esc_auto_repo()
+    common = ["--round", "r1", "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(plan),
+              "--spec", str(plan), "--tier", "standard", "--report", _sevrep(vault.parent)]
+    run(vault, "canary", "record", "caught", "--loop", "甲", "--severity", "clean", *common, expect_rc=0)
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "major", *common, expect_rc=0)
+    rows = _esc_rows(vault)
+    check("① 代碼審 major → 逃逸帳自動一筆,階段 code-loop、歸因到「甲」、auto 標記",
+          len(rows) == 1 and rows[0]["loop"] == "甲" and rows[0]["stage"] == "code-loop"
+          and rows[0]["severity"] == "major" and rows[0].get("auto") is True, str(rows)[:300])
+    run(vault, "canary", "record", "none", "--loop", "code-甲", "--severity", "minor", *common, expect_rc=0)
+    check("② minor 不記", len(_esc_rows(vault)) == 1, "")
+    run(vault, "canary", "record", "none", "--loop", "code-丙", "--severity", "blocker", *common, expect_rc=0)
+    check("③ 對不回計劃(既無迴圈也無計劃檔)不硬記", len(_esc_rows(vault)) == 1, str(_esc_rows(vault))[:200])
+    check("④ 審查帳本身照常寫入,掛勾不影響原功能",
+          sum(1 for l in (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()) == 4, "")
+
+
 def t_loop_escape_ledger():
     """[逃逸帳原語](spec:Projects/loop數據收集_計劃 M1②)r1 六席折入後合約:
     紅釘:①未知迴圈擋(歸因守衛)②--list 與記帳參數互斥(靜默吞資料 C-1/ESC-04)
@@ -42863,6 +43170,285 @@ def t_lint_warns_empty_revalidate_when():
     check("其他型別不適用這條(它們沒有這兩個欄位)",
           "重驗" not in r.stdout, r.stdout[:200])
     print("  ✓ t_lint_warns_empty_revalidate_when")
+
+
+
+# ─── 規格落成可驗收條件_計劃(半套):lumos spec-gate + 處置閘第五步共用檢查器 ───
+
+def _mk_spec_gate_repo(d, run_cmd="python3 tests/run.py {method}"):
+    """半套規格閘 fixture:git repo + .lumos/config.json + 假測試執行器(印「lumos 測試(N 案例)」,支數由方法名決定:
+    t_red → 1 支紅;t_green → 1 支綠;t_multi → 2 支;t_zero → 0 支;t_skip → 1 支但 skipped)+ vault docs/x-knowledge。"""
+    import subprocess as _sp, json as _j
+    d = Path(d)
+    _sp.run(["git", "init", "-q", str(d)])
+    (d / "tests").mkdir()
+    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_multi():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
+    (d / "tests" / "run.py").write_text(
+        "import sys\n"
+        "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "table = {'t_red': (1, '0 passed, 1 failed', 1), 't_green': (1, '3 passed, 0 failed', 0), 't_multi': (2, '2 passed, 0 failed', 0),\n"
+        "         't_zero': (0, '0 passed, 0 failed', 0), 't_skip': (1, '0 passed, 0 failed (skipped=1)', 0)}\n"
+        "if m not in table:\n    print('no such test', m); sys.exit(2)\n"
+        "n, line, rc = table[m]\n"
+        "print(f'lumos 測試({n} 案例)')\nprint(line)\nsys.exit(rc)\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
+    if run_cmd:
+        cfg["test"]["run_cmd"] = run_cmd
+    (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+    kg = d / "docs" / "x-knowledge"; (kg / "Projects").mkdir(parents=True)
+    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+    return d, kg
+
+
+_SG_ROLLBACK = "\n## 回退\n把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n"
+
+
+def _sg_plan(kg, name, clauses, rollback=_SG_ROLLBACK):
+    p = kg / "Projects" / f"{name}_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\n---\n# " + name + "\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
+    return p
+
+
+def t_spec_gate_ears_shapes():
+    """[規格落成可驗收條件 S1] 定義行不合那條文法或帶複合觸發 → 「格式看不懂」不是條款。翻紅釘:拿掉文法檢查 → ① 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg1")
+    _sg_plan(kg, "甲", ["- [S1] 當送出表單,系統應回 200 [test:t_green]", "- [S2] 系統應拒絕空白輸入 [test:t_green]",
+                       "- [S3] 在後台裡,若管理員登入,則系統應顯示按鈕 [test:t_green]", "- [S4] 當送出表單,系統回 200 [test:t_green]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("① 複合觸發與缺「應」的兩條被判格式看不懂、rc1", r.returncode == 1 and "格式看不懂" in r.stdout and "S3" in r.stdout and "S4" in r.stdout, r.stdout[-500:])
+    check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
+
+
+def t_spec_gate_stopwords():
+    """[規格落成可驗收條件 S2] 句首是停用詞(當然/在此…)→ 當無條件型,不是格式看不懂。翻紅釘:停用詞表清空 → ① 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg2")
+    _sg_plan(kg, "乙", ["- [S1] 當然系統應保留舊資料 [test:t_green]", "- [S2] 在此情境下系統應拒絕 [test:t_green]"])
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    check("① 停用詞開頭的兩條都算條款、rc0", r.returncode == 0 and "格式看不懂" not in r.stdout, r.stdout[-500:])
+
+
+def t_spec_gate_missing_separator():
+    """[規格落成可驗收條件 S13] 句首是觸發詞但整行沒有分隔 → 格式看不懂並印缺逗號(r5 正確性席:原本兩邊都掉不進去)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg13")
+    _sg_plan(kg, "丙", ["- [S1] 當送出表單系統應回 200 [test:t_green]"])
+    r = run(kg, "spec-gate", "Projects/丙_計劃")
+    check("① 缺逗號 → rc1,訊息說缺逗號且提到停用詞表", r.returncode == 1 and "缺逗號" in r.stdout and "_TRIGGER_STOPWORDS" in r.stdout, r.stdout[-500:])
+
+
+def t_spec_gate_needs_rollback():
+    """[規格落成可驗收條件 S3] 有條款的計劃回退節不足 20 字含實字 → 擋;引用塊不算實字;沒條款的計劃不管回退節。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg3")
+    c = ["- [S1] 系統應回 200 [test:t_green]"]
+    r = run(kg, "spec-gate", "Projects/丁_計劃") if False else None
+    _sg_plan(kg, "丁1", c, rollback=""); r1 = run(kg, "spec-gate", "Projects/丁1_計劃")
+    check("① 沒有回退節 → rc1 提回退", r1.returncode == 1 and "回退" in r1.stdout, r1.stdout[-400:])
+    _sg_plan(kg, "丁2", c, rollback="\n## 回退\n改回去。\n"); r2 = run(kg, "spec-gate", "Projects/丁2_計劃")
+    check("② 回退節只有 3 字 → rc1", r2.returncode == 1 and "回退節" in r2.stdout, r2.stdout[-400:])
+    _sg_plan(kg, "丁3", c, rollback="\n## 回退\n> 把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n"); r3 = run(kg, "spec-gate", "Projects/丁3_計劃")
+    check("③ 全是引用塊 → 不算實字,rc1", r3.returncode == 1 and "回退節" in r3.stdout, r3.stdout[-400:])
+    _sg_plan(kg, "丁4", c); r4 = run(kg, "spec-gate", "Projects/丁4_計劃")
+    check("④ 回退節夠長 → 過", r4.returncode == 0, r4.stdout[-400:])
+    _sg_plan(kg, "丁5", ["純散文,沒有條款。"], rollback=""); r5 = run(kg, "spec-gate", "Projects/丁5_計劃")
+    check("⑤ 沒有 [SN] 的計劃不查回退節(整步跳過)", r5.returncode == 0 and "回退節" not in r5.stdout, r5.stdout[-400:])
+
+
+def t_spec_gate_manual_min_chars():
+    """[規格落成可驗收條件 S4] manual 不足 4 字擋;全形冒號的 [manual：] 當沒標,訊息要提全形(r5 邊界席)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg4")
+    _sg_plan(kg, "戊1", ["- [S1] 系統應回 200 [manual:看]"]); r1 = run(kg, "spec-gate", "Projects/戊1_計劃")
+    check("① manual 1 字 → rc1", r1.returncode == 1 and "S1(" in r1.stdout, r1.stdout[-400:])
+    _sg_plan(kg, "戊2", ["- [S1] 系統應回 200 [manual：人工對帳一次]"]); r2 = run(kg, "spec-gate", "Projects/戊2_計劃")
+    check("② 全形冒號 → rc1 且提示全形", r2.returncode == 1 and "全形" in r2.stdout, r2.stdout[-400:])
+
+
+def t_spec_gate_needs_method_filter():
+    """[規格落成可驗收條件 S5] run_cmd 不能鎖單支 → 略過跑的步驟並印怎麼改,不擋。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg5", run_cmd="python3 tests/run.py")
+    _sg_plan(kg, "己", ["- [S1] 系統應回 200 [test:t_green]"]); r = run(kg, "spec-gate", "Projects/己_計劃")
+    check("① 略過跑並印 {method}", r.returncode == 0 and "略過" in r.stdout and "{method}" in r.stdout, r.stdout[-400:])
+
+
+def t_spec_gate_zero_ran_is_weak():
+    """[規格落成可驗收條件 S6] 一支都沒跑到、或那一支被跳過 → 弱證據,不印紅綠。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg6")
+    _sg_plan(kg, "庚", ["- [S1] 系統應回 200 [test:t_zero]", "- [S2] 系統應回 201 [test:t_skip]"]); r = run(kg, "spec-gate", "Projects/庚_計劃")
+    tail = r.stdout.split("跑")[-1]
+    check("① 兩條都弱證據", r.returncode == 0 and tail.count("弱證據") >= 2 and "紅" not in tail.split("匯總")[0].replace("紅綠弱", ""), r.stdout[-600:])
+
+
+def t_spec_gate_multi_ran_is_weak():
+    """[規格落成可驗收條件 S7] 篩選匹配到兩支以上 → 印測試名要唯一,不印紅綠。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg7")
+    _sg_plan(kg, "辛", ["- [S1] 系統應回 200 [test:t_multi]"]); r = run(kg, "spec-gate", "Projects/辛_計劃")
+    check("① 匹配 2 支 → 測試名要唯一", r.returncode == 0 and "匹配到 2 支" in r.stdout and "唯一" in r.stdout, r.stdout[-500:])
+
+
+def t_spec_gate_run_summary():
+    """[規格落成可驗收條件 S8] 恰好一支 → 按結果印紅或綠並匯總。翻紅釘:支數改讀 passed 數 → ① 翻紅(t_green 印 3 passed)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg8")
+    _sg_plan(kg, "壬", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應回 201 [test:t_green]"]); r = run(kg, "spec-gate", "Projects/壬_計劃")
+    check("① S1 紅、S2 綠、匯總 紅 1/綠 1", r.returncode == 0 and "S1" in r.stdout and "紅 1" in r.stdout and "綠 1" in r.stdout and "匹配到" not in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_writes_run_record():
+    """[規格落成可驗收條件 S12] 跑完一份計劃往治理帳寫一行 spec-gate-run,帶每條紅綠弱。"""
+    import json as _j
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg12")
+    _sg_plan(kg, "癸", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應回 201 [test:t_green]"]); run(kg, "spec-gate", "Projects/癸_計劃", expect_rc=0)
+    rows = [_j.loads(l) for l in (d / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    sg = [r for r in rows if r.get("kind") == "spec-gate-run"]
+    check("① 治理帳多一行 spec-gate-run,note 含 S1=red 與 S2=green", len(sg) == 1 and "S1=red" in sg[0].get("note", "") and "S2=green" in sg[0].get("note", ""), str(rows[-1:])[:300])
+
+
+def _sg_loop_with_ts(kg, name, clauses, ts):
+    """在審查帳記一筆讓迴圈有首筆帳,再把 ts 改成指定值(決定不回溯);回計劃路徑。"""
+    p = _sg_plan(kg, name, clauses)
+    snap = kg / "Projects" / f"{name}-snap.md"; snap.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    rpt = kg / "Projects" / f"{name}-rpt.md"; rpt.write_text("severity: minor\n甲\n引句:「把處置閘第五步改回上一版,指令保留只印不擋」\n", encoding="utf-8")
+    run(kg, "canary", "record", "none", "--loop", name, "--round", "r1", "--auditor", "s1-sonnet", "--severity", "minor",
+        "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1", "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(p), "--reviewed", _sha256_of(p), expect_rc=0)
+    _ledger_patch_last(kg.parent / ".canary-log.jsonl", name, ts=ts)
+    return p
+
+
+def _sg_plan_linked(kg, name, clauses, links, rollback=_SG_ROLLBACK):
+    """帶 lands_in / DEP 連結的計劃(相依回歸的來源)。"""
+    p = kg / "Projects" / f"{name}_計劃.md"
+    li = "\n".join(f"  - {x}" for x in links)
+    dep = "、".join(f"[[{x}]]" for x in links)
+    p.write_text(f"---\ntype: project\nstatus: doing\nlands_in:\n{li}\nsummary: |-\n  DEP:{dep}\n---\n# {name}\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
+    return p
+
+
+def _sg_system(kg, name, key_lines):
+    d = kg / "Systems"; d.mkdir(exist_ok=True)
+    body = "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:x\n" + "".join(f"  {k}\n" for k in key_lines) + "---\n# " + name + "\n"
+    (d / f"{name}.md").write_text(body, encoding="utf-8")
+
+
+def t_spec_gate_regress_lists_linked_contract_tests():
+    """[規格落成可驗收條件 S15] 規格閘應從 lands_in 與 DEP 的 Systems 節點抓合約行綁的測試,印成相依回歸條款並跑;全綠才過。
+    翻紅釘:不抓連結節點 → ① 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg15")
+    _sg_system(kg, "Alpha", ["KEY:★INVARIANT★ 甲的合約 [test:t_green]"])
+    _sg_system(kg, "Gamma", ["KEY:★CHECKPOINT★ 丙的檢查點 [test:t_green]"])
+    _sg_plan_linked(kg, "回一", ["- [S1] 系統應回 200 [test:t_green]"], ["Systems/Alpha", "Systems/Gamma"])
+    r = run(kg, "spec-gate", "Projects/回一_計劃")
+    check("① 印出兩個節點的相依回歸條款並全綠、rc0", r.returncode == 0 and "相依回歸" in r.stdout and "Alpha" in r.stdout and "Gamma" in r.stdout and "R1" in r.stdout and "R2" in r.stdout, r.stdout[-700:])
+
+
+def t_spec_gate_regress_red_blocks():
+    """[規格落成可驗收條件 S16] 相依回歸任一支紅或驗不了(0 支/多支)→ 規格閘擋下並印是哪個節點哪支測試。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg16")
+    _sg_system(kg, "Alpha", ["KEY:★INVARIANT★ 甲的合約 [test:t_red]"])
+    _sg_plan_linked(kg, "回二", ["- [S1] 系統應回 200 [test:t_green]"], ["Systems/Alpha"])
+    r = run(kg, "spec-gate", "Projects/回二_計劃")
+    check("① 相依合約測試紅 → rc1 並點名 Alpha/t_red", r.returncode == 1 and "Alpha" in r.stdout and "t_red" in r.stdout and "回歸" in r.stdout, r.stdout[-600:])
+    _sg_system(kg, "Alpha", ["KEY:★INVARIANT★ 甲的合約 [test:t_zero]"])
+    r2 = run(kg, "spec-gate", "Projects/回二_計劃")
+    check("② 相依合約測試一支都沒跑到 → 驗不了≠過,rc1", r2.returncode == 1 and "弱證據" in r2.stdout, r2.stdout[-600:])
+
+
+def t_spec_gate_regress_unbound_contract_flagged():
+    """[規格落成可驗收條件 S17] 相依節點的合約沒綁測試 → 印「沒綁測試,驗不了回歸」,不擋(那是那個節點的債)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg17")
+    _sg_system(kg, "Beta", ["KEY:★INVARIANT★ 乙的合約沒有綁任何測試"])
+    _sg_plan_linked(kg, "回三", ["- [S1] 系統應回 200 [test:t_green]"], ["Systems/Beta"])
+    r = run(kg, "spec-gate", "Projects/回三_計劃")
+    check("① 沒綁測試的合約被點名但不擋", r.returncode == 0 and "Beta" in r.stdout and "沒綁測試" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_code_review_r1_folds():
+    """[代碼審 code-規格閘半套 r1] 三條折入的釘子:①短名叫節點要找得到(走 env.find,同 spec-trace)②回應段以「在」當介詞開頭不是複合觸發
+    ③lands_in 是字串不是清單時照樣抓相依回歸。翻紅釘:各自改回原寫法就紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sgcr1")
+    _sg_plan(kg, "短名", ["- [S1] 系統應回 200 [test:t_green]"])
+    r = run(kg, "spec-gate", "短名_計劃")
+    check("① 用短名叫節點 → 找得到、rc0", r.returncode == 0 and "找不到" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-300:])
+    r0 = run(kg, "spec-gate", "不存在的計劃")
+    check("①b 真的不存在 → rc2 且給近名提示(同其他指令)", r0.returncode == 2 and ("search" in r0.stderr or "近" in r0.stderr or "找不到" in r0.stderr), (r0.stdout + r0.stderr)[-300:])
+    _sg_plan(kg, "介詞", ["- [S1] 當收到請求,在三秒內系統應回 200 [test:t_green]", "- [S2] 若啟用開關,在收到請求時系統應回 200 [test:t_green]", "- [S3] 在後台裡,若管理員登入,則系統應顯示按鈕 [test:t_green]"])
+    r2 = run(kg, "spec-gate", "Projects/介詞_計劃")
+    check("② 回應段「在…」當介詞不算複合;真的第二個條件句仍擋", r2.returncode == 1 and "S3(" in r2.stdout and "S1(" not in r2.stdout and "S2(" not in r2.stdout, r2.stdout[-500:])
+    _sg_system(kg, "Alpha", ["KEY:★INVARIANT★ 甲的合約 [test:t_green]"])
+    p = kg / "Projects" / "字串_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\nlands_in: Systems/Alpha\n---\n# 字串\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+    r3 = run(kg, "spec-gate", "Projects/字串_計劃")
+    check("③ lands_in 是字串 → 相依回歸照樣抓到 Alpha", r3.returncode == 0 and "Alpha" in r3.stdout and "R1" in r3.stdout, r3.stdout[-500:])
+    _sg_plan(kg, "底線", ["- [S1] 系統應回 200 [test:t_green]"], rollback="\n回退\n----\n把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n")
+    r4 = run(kg, "spec-gate", "Projects/底線_計劃")
+    check("④ Setext 寫法不認(設計寫死只認 ## 回退),擋下並提示標題寫法(代碼審 r2:自建 Setext 判定是第二套且有 fence 錯配洞)",
+          r4.returncode == 1 and "## 回退" in r4.stdout and "底線" in r4.stdout, r4.stdout[-400:])
+    # 代碼審 r2:複合觸發判準不能因為第二個觸發詞後面沒逗號就放過;「在」當介詞仍不算
+    _sg_plan(kg, "複合", ["- [S1] 當甲成立,若乙為真系統應回應 [test:t_green]", "- [S2] 當甲成立,在三秒內系統應回應 [test:t_green]", "- [S3] 當甲成立,當乙成立系統應回應 [test:t_green]"])
+    r5 = run(kg, "spec-gate", "Projects/複合_計劃")
+    check("⑤ 第二個觸發詞是當/若就是複合(有沒有逗號都擋);「在」介詞不算", r5.returncode == 1 and "S1(" in r5.stdout and "S3(" in r5.stdout and "S2(" not in r5.stdout, r5.stdout[-500:])
+    # 代碼審 r3:「在」的分隔只看「在…應」之間,回應段後面列兩件事的逗號不算複合;「在乙,則應丙」仍是複合
+    _sg_plan(kg, "列舉", ["- [S1] 當甲成立,在三秒內系統應回應,並記錄 [test:t_green]", "- [S2] 當甲成立,在乙成立時,則系統應回丙 [test:t_green]"])
+    r7 = run(kg, "spec-gate", "Projects/列舉_計劃")
+    check("⑦ 回應段列兩件事的逗號不算複合;「在乙,則應」仍擋", r7.returncode == 1 and "S2(" in r7.stdout and "S1(" not in r7.stdout, r7.stdout[-500:])
+    p3 = kg / "Projects" / "別名_計劃.md"
+    p3.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha|甲]]\"\n---\n# 別名\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+    r8 = run(kg, "spec-gate", "Projects/別名_計劃")
+    check("⑧ lands_in 帶別名的連結字串 → 走 link_target 照抓", r8.returncode == 0 and "Alpha" in r8.stdout and "R1" in r8.stdout, r8.stdout[-400:])
+    # 代碼審 v2 r1:條件段裡的「反應/效應」不能被當成回應的「應」,否則後面真正的第二條件句漏判
+    _sg_plan(kg, "反應", ["- [S1] 當甲成立,在收到用戶反應後,則系統應回覆 [test:t_green]", "- [S2] 當甲成立,在效應評估後系統應回覆 [test:t_green]"])
+    r9 = run(kg, "spec-gate", "Projects/反應_計劃")
+    check("⑨ 「反應」不是回應的應:S1 仍判複合、S2(無第二逗號)不判", r9.returncode == 1 and "S1(" in r9.stdout and "S2(" not in r9.stdout, r9.stdout[-500:])
+    # 代碼審 v2 r2:缺應判斷也要跳複合詞;表要含順應/理應/照應/接應;「問答應於…」的應是真的應
+    _sg_plan(kg, "缺應", ["- [S1] 當甲成立,系統反應 [test:t_green]", "- [S2] 當甲成立,在為順應法規後,則系統應調整 [test:t_green]", "- [S3] 客服問答應於一日內回覆 [test:t_green]"])
+    r10 = run(kg, "spec-gate", "Projects/缺應_計劃")
+    check("⑩ 「系統反應」=缺應擋;「順應」後的第二條件句判複合;「問答應於」算有應", r10.returncode == 1 and "S1(" in r10.stdout and "S2(" in r10.stdout and "S3(" not in r10.stdout, r10.stdout[-600:])
+    # 代碼審 v2 r3:「理應/自應」是情態(=應該),不是複合名詞,不能排除;「照應/接應」排除,但主體字尾撞到時仍以第一個真的應為準
+    _sg_plan(kg, "情態", ["- [S1] 系統自應保留舊資料 [test:t_green]", "- [S2] 處理應在三秒內完成 [test:t_green]", "- [S3] 當甲成立,在照應舊客戶後,則系統應寄信 [test:t_green]", "- [S4] 當甲成立,在接應完成後,則系統應寄信 [test:t_green]"])
+    r11 = run(kg, "spec-gate", "Projects/情態_計劃")
+    check("⑪ 自應/處理應算有應(不擋);照應/接應後的第二條件句仍判複合", r11.returncode == 1 and "S1(" not in r11.stdout and "S2(" not in r11.stdout and "S3(" in r11.stdout and "S4(" in r11.stdout, r11.stdout[-600:])
+    # 代碼審 r2:lands_in 寫成 [[…]] 字串也要抓到
+    p2 = kg / "Projects" / "括號_計劃.md"
+    p2.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha]]\"\n---\n# 括號\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+    r6 = run(kg, "spec-gate", "Projects/括號_計劃")
+    check("⑥ lands_in 是 [[Systems/Alpha]] 字串 → 照抓", r6.returncode == 0 and "Alpha" in r6.stdout and "R1" in r6.stdout, r6.stdout[-400:])
+
+
+def t_disposal_step5_shares_checker():
+    """[規格落成可驗收條件 S9] 處置閘第五步與規格閘共用同一支檢查器:同一份計劃(閘後迴圈、有格式看不懂的條款)兩邊判定相同。
+    翻紅釘:處置閘不走 _clause_check → ① 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg9")
+    p = _sg_loop_with_ts(kg, "子", ["- [S1] 當送出表單系統應回 200 [test:t_green]"], "2026-09-19T10:00:00+08:00")
+    a = run(kg, "loop", "status", "子", "--disposal", "--spec", str(p), "--repo", str(d))
+    b = run(kg, "spec-gate", "Projects/子_計劃")
+    check("① 處置閘第五步擋下且理由是格式看不懂", a.returncode == 1 and "條款綁定: ✗" in a.stdout and "格式看不懂" in a.stdout, a.stdout[-500:])
+    check("② 規格閘同一份計劃也擋、同一個理由", b.returncode == 1 and "格式看不懂" in b.stdout, b.stdout[-500:])
+
+
+def t_spec_gate_not_retroactive():
+    """[規格落成可驗收條件 S10] 首筆帳早於句式閘上線的迴圈:規格閘與處置閘第五步都跳過句式檢查。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg10")
+    p = _sg_loop_with_ts(kg, "丑", ["- [S1] 當送出表單系統應回 200 [test:t_green]"], "2026-09-15T10:00:00+08:00")
+    a = run(kg, "loop", "status", "丑", "--disposal", "--spec", str(p), "--repo", str(d))
+    b = run(kg, "spec-gate", "Projects/丑_計劃")
+    check("① 處置閘:舊迴圈不驗句式 → 條款那一步 ✓ 且註明句式未驗", "條款綁定: ✓" in a.stdout and "句式未驗" in a.stdout and "格式看不懂" not in a.stdout, a.stdout[-500:])
+    check("② 規格閘:同一迴圈也跳句式、印出不回溯", b.returncode == 0 and "不回溯" in b.stdout, b.stdout[-500:])
+
+
+def t_disposal_step5_grammar_skip_only():
+    """[規格落成可驗收條件 S14] 首筆帳早於句式閘上線 → 處置閘只跳句式與回退節,綁定照驗(沒標照擋)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg14")
+    p = _sg_loop_with_ts(kg, "寅", ["- [S1] 當送出表單系統應回 200"], "2026-09-15T10:00:00+08:00")
+    a = run(kg, "loop", "status", "寅", "--disposal", "--spec", str(p), "--repo", str(d))
+    check("① 舊迴圈:句式不驗但沒標照擋", a.returncode == 1 and "S1(第" in a.stdout and "格式看不懂" not in a.stdout, a.stdout[-500:])
+
+
+def t_doctor_spec_gate_stats():
+    """[規格落成可驗收條件 S11] 健檢印有條款的計劃比例與每份計劃的紅綠弱;分母為零印 0/0。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg11")
+    r = run(kg, "doctor")
+    check("① 空 vault:印 0/0 還沒有計劃掛條款", "0/0" in r.stdout and "還沒有計劃掛條款" in r.stdout, r.stdout[-800:])
+    _sg_plan(kg, "卯", ["- [S1] 系統應回 200 [test:t_red]"]); run(kg, "spec-gate", "Projects/卯_計劃", expect_rc=0)
+    r2 = run(kg, "doctor")
+    check("② 跑過一份後:健檢印那份計劃的紅綠弱", "卯" in r2.stdout and "紅 1" in r2.stdout, r2.stdout[-800:])
 
 
 if __name__ == "__main__":

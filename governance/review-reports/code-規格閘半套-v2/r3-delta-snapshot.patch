@@ -1,0 +1,96 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 15346304..d4b165d5 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4648,29 +4648,29 @@ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了",
+                     "shadowed": "定義過,又出現在認不得的清單行(第二次寫法看不懂)"}
+ # ★「懸空」的唯一定義★:spec-trace 的 hang 與 doctor 的 S5 都引用這一組,
+ # 不各自手抄(2026-09-10 代碼審抓到手抄版編了兩個不存在的字串、又漏掉兩種真的)。
+ _CLAUSE_HANG_STATES = ("dangling", "unrecognized", "mentioned")
+ 
+ _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
+ _SPEC_GATE_SINCE = "2026-09-18T00:00:00+08:00"     # 規格落成可驗收條件_計劃(半套):句式與回退節只看首筆帳在這之後的迴圈;綁定照驗(_CLAUSE_GATE_SINCE 管整步)
+ _TRIGGER_WORDS = ("若啟用", "當", "在", "若")          # 一條文法的觸發詞(長的先比);半套只認中文
+ _TRIGGER_STOPWORDS = ("當然", "當下", "當前", "在此", "在於", "若干", "若是")   # 句首命中就當無條件型;只准增不准刪(表列不齊是已知的,失敗是報錯不是靜默)
+ _CLAUSE_SEP_RE = re.compile(r"[,，]")
+-_SHALL_COMPOUND_PREV = "反效因適回對相供答感響呼"   # 這些字後面的「應」是複合詞(反應/效應/因應…),不是「主體 應 回應」的應(代碼審 v2 r1)
++# 「主體 應 回應」那個「應」:前一字是這些就是複合詞(反應/效應/因應/適應/回應/對應/相應/供應/感應/響應/呼應/順應/理應/照應/接應/自應),不算
++# (代碼審 v2 r1/r2:用負向 lookbehind 一次搜,跟本檔其他「排除上下文」的正則同一招;「答」不列——「問答應於…」的應是真的應)
++_SHALL_RE = re.compile(r"(?<![反效因適回對相供感響呼順理照接自])應")
+ 
+ 
+ def _shall_index(text):
+-    """「主體 應 回應」那個「應」的位置;跳過複合詞裡的應。找不到回 -1。"""
+-    i = text.find("應")
+-    while i != -1 and i > 0 and text[i - 1] in _SHALL_COMPOUND_PREV:
+-        i = text.find("應", i + 1)
+-    return i
++    """「主體 應 回應」那個「應」的位置;找不到回 -1。"""
++    m = _SHALL_RE.search(text)
++    return m.start() if m else -1
+ _ROLLBACK_H2_RE = re.compile(r"^##\s+回退\s*(?:[(（][^)）]*[)）])?\s*$")
+ _ROLLBACK_MIN_CHARS = 20
+ 
+ 
+ def _clause_body_of(line):
+     """定義行去掉行首前綴與 [SN]、去掉尾端 [test:]/[manual:]/[keeps] 標記後的條款正文(給文法檢查用)。"""
+     m = _CLAUSE_LEAD_RE.match(line)
+     body = line[m.end():] if m else line
+     body = INV_TAG_RE.sub("", body)
+     body = MANUAL_REF_RE.sub("", body)
+@@ -4696,24 +4696,24 @@ def _clause_grammar(body):
+             rest = rest[1:].lstrip()
+         # 複合觸發=回應段自己又長成「觸發詞…分隔」(代碼審 r1:「當收到請求,在三秒內系統應…」的「在」是介詞,不能光看開頭字)
+         # 第二個「當/若/若啟用」一律是第二個條件句(有沒有逗號都算,代碼審 r2);「在」常當介詞(「在三秒內」),
+         # 只有「在…應」之間還有分隔才算條件句——回應段後面列兩件事的逗號不算(代碼審 r3)。子集從 _TRIGGER_WORDS 推,不另抄
+         if not any(rest.startswith(w) for w in _TRIGGER_STOPWORDS):
+             hard = tuple(w for w in _TRIGGER_WORDS if w != "在")
+             idx = _shall_index(rest)
+             head = rest if idx < 0 else rest[:idx]
+             if any(rest.startswith(w) for w in hard) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(head)):
+                 return False, "trigger", "複合觸發(一條只准一個觸發子句,拆成兩條)"
+-        if "應" not in rest:
++        if _shall_index(rest) < 0:   # 缺應也要跳複合詞(代碼審 v2 r2:「系統反應」不算有應)
+             return False, "trigger", "回應段缺「應」(主體 應 回應)"
+         return True, "trigger", ""
+-    if "應" not in b:
++    if _shall_index(b) < 0:
+         return False, "unconditional", "缺「應」(主體 應 回應)"
+     return True, "unconditional", ""
+ 
+ 
+ def _rollback_section_chars(text):
+     """「## 回退」節(二級標題精確,允許尾端括號;到下一個 ## 為止;fence 內不算;引用塊行不算)裡的實字數;沒有節回 None。"""
+     lines = text.splitlines()
+     total, found, inside = 0, False, False
+     for _no, ln in _visible_lines(lines):
+         if ln.startswith("#"):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7cd11d11..42ba4ca3 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -43390,20 +43390,24 @@ def t_spec_gate_code_review_r1_folds():
+     r7 = run(kg, "spec-gate", "Projects/列舉_計劃")
+     check("⑦ 回應段列兩件事的逗號不算複合;「在乙,則應」仍擋", r7.returncode == 1 and "S2(" in r7.stdout and "S1(" not in r7.stdout, r7.stdout[-500:])
+     p3 = kg / "Projects" / "別名_計劃.md"
+     p3.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha|甲]]\"\n---\n# 別名\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r8 = run(kg, "spec-gate", "Projects/別名_計劃")
+     check("⑧ lands_in 帶別名的連結字串 → 走 link_target 照抓", r8.returncode == 0 and "Alpha" in r8.stdout and "R1" in r8.stdout, r8.stdout[-400:])
+     # 代碼審 v2 r1:條件段裡的「反應/效應」不能被當成回應的「應」,否則後面真正的第二條件句漏判
+     _sg_plan(kg, "反應", ["- [S1] 當甲成立,在收到用戶反應後,則系統應回覆 [test:t_green]", "- [S2] 當甲成立,在效應評估後系統應回覆 [test:t_green]"])
+     r9 = run(kg, "spec-gate", "Projects/反應_計劃")
+     check("⑨ 「反應」不是回應的應:S1 仍判複合、S2(無第二逗號)不判", r9.returncode == 1 and "S1(" in r9.stdout and "S2(" not in r9.stdout, r9.stdout[-500:])
++    # 代碼審 v2 r2:缺應判斷也要跳複合詞;表要含順應/理應/照應/接應;「問答應於…」的應是真的應
++    _sg_plan(kg, "缺應", ["- [S1] 當甲成立,系統反應 [test:t_green]", "- [S2] 當甲成立,在為順應法規後,則系統應調整 [test:t_green]", "- [S3] 客服問答應於一日內回覆 [test:t_green]"])
++    r10 = run(kg, "spec-gate", "Projects/缺應_計劃")
++    check("⑩ 「系統反應」=缺應擋;「順應」後的第二條件句判複合;「問答應於」算有應", r10.returncode == 1 and "S1(" in r10.stdout and "S2(" in r10.stdout and "S3(" not in r10.stdout, r10.stdout[-600:])
+     # 代碼審 r2:lands_in 寫成 [[…]] 字串也要抓到
+     p2 = kg / "Projects" / "括號_計劃.md"
+     p2.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha]]\"\n---\n# 括號\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r6 = run(kg, "spec-gate", "Projects/括號_計劃")
+     check("⑥ lands_in 是 [[Systems/Alpha]] 字串 → 照抓", r6.returncode == 0 and "Alpha" in r6.stdout and "R1" in r6.stdout, r6.stdout[-400:])
+ 
+ 
+ def t_disposal_step5_shares_checker():
+     """[規格落成可驗收條件 S9] 處置閘第五步與規格閘共用同一支檢查器:同一份計劃(閘後迴圈、有格式看不懂的條款)兩邊判定相同。
+     翻紅釘:處置閘不走 _clause_check → ① 翻紅。"""

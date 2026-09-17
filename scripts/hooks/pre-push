@@ -233,6 +233,19 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
       --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} 2>&1)" || cl_rc=$?
     if [[ "$cl_rc" -eq 1 ]]; then
+      # 逃逸自動記(規格落成可驗收條件_計劃 第五節):推送閘擋下=下游抓到了設計審/規格閘放行後的洞,
+      # 碰到的計劃筆記各記一筆;對不回就不記。★永遠 fail-open★——記帳失敗不能變成擋推送的第二個理由。
+      # ★只認「受波及合約的測試沒過」那型★:缺表態/高風險缺留痕是流程沒走完,不是下游抓到缺陷,不進逃逸帳(首輪前掃訂正)
+      if printf '%s' "$_cl_out" | grep -q "受波及合約的測試沒過"; then
+        "$PY" "$GRAPHCTL" loop escape --auto --stage push-gate --severity major \
+          --desc "推送閘擋下:$(printf '%s' "$_cl_out" | grep -m1 '受波及合約的測試沒過')" --range "$_range" --repo "$REPO_ROOT" >&2 || true
+      fi
+      # 高風險缺審查留痕:只有「該計劃被判成雙向門、跳過審查」才算逃逸(lumos 那邊查有沒有雙向門留痕,沒有就不記)
+      # ★只認「tier=high 且…」開頭的缺留痕句★:測試紅的擋下句尾巴也帶 tier=high,認整個詞會兩筆都記(r2 回滾席)
+      if printf '%s' "$_cl_out" | grep -q "tier=high 且"; then
+        "$PY" "$GRAPHCTL" loop escape --auto --stage push-gate-unreviewed --severity major \
+          --desc "推送閘擋下:高風險缺審查留痕" --range "$_range" --repo "$REPO_ROOT" >&2 || true
+      fi
       {
         echo ""
         printf '%s\n' "$_cl_out"

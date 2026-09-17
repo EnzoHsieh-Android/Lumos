@@ -2188,6 +2188,60 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             gov_events.append({"gate": "check-s11", "kind": "warned", "hard": False, "nodes": [Path(_r).stem]})
     print()
 
+    section("S12", "規格閘(半套):新迴圈的計劃有幾成掛了條款,還有每份計劃最近一次跑出來的紅綠弱證據(提醒,不擋)")
+    try:
+        _sg_since = _loop_ts_key(_SPEC_GATE_SINCE)
+        _first = {}
+        _cl = env.vault.parent / ".canary-log.jsonl"
+        if _cl.exists():
+            for _ln in _cl.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    _d = json.loads(_ln)
+                except ValueError:
+                    continue
+                _lp = str(_d.get("loop", "") or "")
+                if not isinstance(_d, dict) or not _lp or _lp.startswith("code-") or not _d.get("ts"):
+                    continue
+                _k = _loop_ts_key(str(_d["ts"]))
+                if _k is not None and (_lp not in _first or _k < _first[_lp]):
+                    _first[_lp] = _k
+        _new = sorted(lp for lp, k in _first.items() if k >= _sg_since)
+        _with = 0
+        for _lp in _new:
+            _pp = env.vault / "Projects" / f"{_lp}_計劃.md"
+            try:
+                if _pp.exists() and SPEC_CLAUSE_RE.search(_pp.read_text(encoding="utf-8", errors="replace")):
+                    _with += 1
+            except OSError:
+                pass
+        if not _new:
+            ok("有條款的計劃比例 0/0,還沒有計劃掛條款(句式閘上線後還沒有新迴圈)")
+        else:
+            ok(f"有條款的計劃比例 {_with}/{len(_new)}(分母=首筆帳晚於 {_SPEC_GATE_SINCE[:10]} 的設計迴圈;RETIRE-IF ① 看它降不降)")
+        _latest = {}
+        _gl = env.vault.parent / ".governance-log.jsonl"
+        if _gl.exists():
+            for _ln in _gl.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    _d = json.loads(_ln)
+                except ValueError:
+                    continue
+                if isinstance(_d, dict) and _d.get("kind") == "spec-gate-run":
+                    for _nd in _d.get("nodes") or []:
+                        _latest[str(_nd)] = _d.get("note", "")
+        if _latest:
+            _rows = []
+            for _nd, _note in sorted(_latest.items()):
+                _m = re.search(r"red=(\d+) green=(\d+) weak=(\d+)", _note or "")
+                _rows.append(f"{Path(_nd).stem}: 紅 {_m.group(1)}/綠 {_m.group(2)}/弱證據 {_m.group(3)}" if _m else f"{Path(_nd).stem}: {_note}")
+            warn_soft(_rows, f"最近一次規格閘跑出來的紅綠弱證據({len(_rows)} 份計劃;紅=新行為還沒做,綠=做完或既有,弱=證據不夠):",
+                      "紅的條款做完會變綠;一直紅=沒人理它,RETIRE-IF ② 看這個")
+        else:
+            ok("還沒有任何計劃跑過規格閘(lumos spec-gate <計劃>)")
+    except Exception as _e:   # 健檢一段壞了不能拖垮整份;標題寫「不擋」就只准 warn_soft
+        warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
+    print()
+
     section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
     if not ci:
         print("  (僅 --ci 模式掃 diff;互動模式略過)")
@@ -4597,6 +4651,158 @@ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了",
 _CLAUSE_HANG_STATES = ("dangling", "unrecognized", "mentioned")
 
 _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
+_SPEC_GATE_SINCE = "2026-09-18T00:00:00+08:00"     # 規格落成可驗收條件_計劃(半套):句式與回退節只看首筆帳在這之後的迴圈;綁定照驗(_CLAUSE_GATE_SINCE 管整步)
+_TRIGGER_WORDS = ("若啟用", "當", "在", "若")          # 一條文法的觸發詞(長的先比);半套只認中文
+_TRIGGER_STOPWORDS = ("當然", "當下", "當前", "在此", "在於", "若干", "若是")   # 句首命中就當無條件型;只准增不准刪(表列不齊是已知的,失敗是報錯不是靜默)
+_CLAUSE_SEP_RE = re.compile(r"[,，]")
+# 「主體 應 回應」那個「應」:前一字是這些就是複合詞(反應/效應/因應/適應/回應/對應/相應/供應/感應/響應/呼應/順應/理應/照應/接應/自應),不算
+# (代碼審 v2 r1/r2:用負向 lookbehind 一次搜,跟本檔其他「排除上下文」的正則同一招;「答」「理」「自」不列——問答應於/處理應/自應 的應是真的應)
+_SHALL_RE = re.compile(r"(?<![反效因適回對相供感響呼順照接])應")   # 「理應/自應」是情態(=應該)不排除(代碼審 v2 r3:「處理應在…」「系統自應…」被誤判缺應)
+
+
+def _shall_index(text):
+    """「主體 應 回應」那個「應」的位置;找不到回 -1。"""
+    m = _SHALL_RE.search(text)
+    return m.start() if m else -1
+_ROLLBACK_H2_RE = re.compile(r"^##\s+回退\s*(?:[(（][^)）]*[)）])?\s*$")
+_ROLLBACK_MIN_CHARS = 20
+
+
+def _clause_body_of(line):
+    """定義行去掉行首前綴與 [SN]、去掉尾端 [test:]/[manual:]/[keeps] 標記後的條款正文(給文法檢查用)。"""
+    m = _CLAUSE_LEAD_RE.match(line)
+    body = line[m.end():] if m else line
+    body = INV_TAG_RE.sub("", body)
+    body = MANUAL_REF_RE.sub("", body)
+    body = re.sub(r"\[manual[:：][^\]]*\]|\[keeps\]", "", body)
+    return _strip_inline_markup(body)[0].strip()
+
+
+def _clause_grammar(body):
+    """一條文法(規格落成可驗收條件_計劃 第一節):回 (合不合, 型, 原因)。
+    觸發子句? 主體 應 回應;觸發詞=當/在/若啟用/若;句首命中停用詞 → 無條件型;
+    句首是觸發詞但整行沒有分隔 → 格式看不懂(r5 正確性席:這種行原本兩邊都掉不進去);複合觸發拆兩條。"""
+    b = body.strip()
+    if not b:
+        return False, "", "條款正文是空的"
+    stop = any(b.startswith(w) for w in _TRIGGER_STOPWORDS)
+    trig = None if stop else next((w for w in _TRIGGER_WORDS if b.startswith(w)), None)
+    if trig:
+        m = _CLAUSE_SEP_RE.search(b)
+        if not m:
+            return False, "trigger", f"觸發子句缺逗號:句首『{trig}…』被當觸發詞卻找不到「,」分隔——不是觸發請改寫或用主體開頭;是常用詞就把它加進 _TRIGGER_STOPWORDS"
+        rest = b[m.end():].lstrip()
+        if rest.startswith("則"):
+            rest = rest[1:].lstrip()
+        # 複合觸發=回應段自己又長成「觸發詞…分隔」(代碼審 r1:「當收到請求,在三秒內系統應…」的「在」是介詞,不能光看開頭字)
+        # 第二個「當/若/若啟用」一律是第二個條件句(有沒有逗號都算,代碼審 r2);「在」常當介詞(「在三秒內」),
+        # 只有「在…應」之間還有分隔才算條件句——回應段後面列兩件事的逗號不算(代碼審 r3)。子集從 _TRIGGER_WORDS 推,不另抄
+        if not any(rest.startswith(w) for w in _TRIGGER_STOPWORDS):
+            hard = tuple(w for w in _TRIGGER_WORDS if w != "在")
+            idx = _shall_index(rest)
+            head = rest if idx < 0 else rest[:idx]
+            if any(rest.startswith(w) for w in hard) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(head)):
+                return False, "trigger", "複合觸發(一條只准一個觸發子句,拆成兩條)"
+        if _shall_index(rest) < 0:   # 缺應也要跳複合詞(代碼審 v2 r2:「系統反應」不算有應)
+            return False, "trigger", "回應段缺「應」(主體 應 回應)"
+        return True, "trigger", ""
+    if _shall_index(b) < 0:
+        return False, "unconditional", "缺「應」(主體 應 回應)"
+    return True, "unconditional", ""
+
+
+def _rollback_section_chars(text):
+    """「## 回退」節(二級標題精確,允許尾端括號;到下一個 ## 為止;fence 內不算;引用塊行不算)裡的實字數;沒有節回 None。"""
+    lines = text.splitlines()
+    total, found, inside = 0, False, False
+    for _no, ln in _visible_lines(lines):
+        if ln.startswith("#"):
+            if _ROLLBACK_H2_RE.match(ln.strip()):
+                found, inside = True, True
+                continue
+            if ln.startswith("##") or ln.startswith("# "):
+                inside = False
+                continue
+        if inside and not ln.lstrip().startswith(">"):
+            total += len(re.findall(r"[^\W_]", ln))
+    # 只認 ATX 的 `## 回退`(設計寫死;代碼審 r2:自建 Setext 判定是第二套標題邏輯,還有 fence 錯配與 H1/H2 不分兩個洞,拿掉)
+    return total if found else None
+
+
+def _clause_structure_verdict(P, clauses, undef):
+    """條款的結構性判定(看不懂的清單寫法/零條款/重複定義/被遮蔽):有結論回 (status, lines),沒事回 None。"""
+    listlike = [b for b in undef if b.get("listlike")]
+    if listlike:
+        return "fail", [f"{P} ✗ — {len(listlike)} 個 [SN] 看起來是條款卻用了這裡不認得的清單寫法(第 " + "、".join(str(b["line"]) for b in listlike) + " 行);看不懂的寫法不放行——條款要寫成 `- [S1] …`/`### [S1] …`/`1. [S1] …`/表格列/`- [ ] [S1] …`"]
+    if not clauses:
+        return "skip", [f"{P} —(計劃只在散文/標題裡提到 [SN] {len(undef)} 次,沒有條款定義行,視同 opt-in 未啟用)"]
+    dups = [b for b in clauses if b["state"] == "duplicate"]
+    if dups:
+        return "fail", [f"{P} ✗ — 條款編號重複定義:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in dups) + ";一個編號只能定義一次,不然第二筆沒標會漏過"]
+    shad = [b for b in clauses if b["state"] == "shadowed"]
+    if shad:
+        return "fail", [f"{P} ✗ — 條款定義過、又出現在這裡不認得的清單行:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in shad) + ";看不懂的寫法不放行"]
+    return None
+
+
+def _clauses_grammar_bad(clauses, lines_all):
+    """逐條驗一條文法,回 [(條款列, 為什麼不合)]。"""
+    bad = []
+    for b in clauses:
+        ln = lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else ""
+        okg, _kind, why = _clause_grammar(_clause_body_of(ln))
+        if not okg:
+            bad.append((b, why))
+    return bad
+
+
+def _rollback_check_lines(text, P):
+    """回退節不夠就回要印的兩行;夠回 []。"""
+    rb = _rollback_section_chars(text)
+    if rb is not None and rb >= _ROLLBACK_MIN_CHARS:
+        return []
+    return [f"{P} ✗ — 有條款的計劃要有「## 回退」節且內容 ≥{_ROLLBACK_MIN_CHARS} 字含實字(" + ("沒有這一節——標題要寫成二級 `## 回退`,底線式(Setext)與其他層級不認" if rb is None else f"現在 {rb} 字;引用塊不算") + ")",
+            "    寫清楚出事故要退回哪一版、怎麼退;退不回去的就是單向門,回退節要講清楚代價"]
+
+
+def _clause_check(text, rows_b, grammar=True, tag="disposal"):
+    """規格閘與處置閘第五步共用的條款檢查器(規格落成可驗收條件_計劃 S9):
+    回 (status, lines)。status ∈ ok/fail;lines 是要印的「[tag] 條款綁定: …」行。
+    綁定的判定原封沿用處置閘第五步既有語意(沒標的擋、懸空只提醒不擋、看不懂的清單寫法擋、重複定義擋);
+    grammar=True 才驗句式與回退節(呼叫端按首筆帳是否早於 _SPEC_GATE_SINCE 決定——檢查器不管不回溯)。門的參數第二階段再加(代碼審 r1:沒人讀的參數不留)。"""
+    P = f"[{tag}] 條款綁定:"
+    clauses = [b for b in rows_b if b["state"] != "undefined"]
+    undef = [b for b in rows_b if b["state"] == "undefined"]
+    early = _clause_structure_verdict(P, clauses, undef)
+    if early:
+        return early
+    lines_all = text.splitlines()
+    out = []
+    if grammar:
+        bad = _clauses_grammar_bad(clauses, lines_all)
+        if bad:
+            out.append(f"{P} ✗ — {len(bad)} 條格式看不懂(不算條款):" + "、".join(f"{b['id']}(第 {b['line']} 行:{why})" for b, why in bad))
+            out.append("    一條文法:觸發子句?(當/在/若啟用/若 … ,)主體 應 回應;一條一個觸發;句首是停用詞(當然/在此…)就當無條件型")
+            return "fail", out
+    unt = [b for b in clauses if b["state"] == "untagged"]
+    summ = _clause_summary(clauses)
+    hang = sum(summ[_st] for _st in _CLAUSE_HANG_STATES) + summ["bad-name"]
+    tail_u = f";另有 {len(undef)} 個 id 只在範例/引用裡出現,不算條款" if undef else ""
+    if unt:
+        out.append(f"{P} ✗ — {len(unt)}/{len(clauses)} 條驗收條款沒標:" + "、".join(f"{b['id']}(第 {b['line']} 行)" for b in unt) + tail_u)
+        out.append("    每條要嘛在那一行綁 [test:測試名],要嘛寫 [manual:一句怎麼驗];沒有測試可掛也得講清楚靠人怎麼驗")
+        fw = [b for b in unt if re.search(r"\[manual：", lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else "")]
+        if fw:
+            out.append("    看到 `[manual：` 用了全形冒號(" + "、".join(b["id"] for b in fw) + "),改成半形 `[manual:` 才認得")
+        return "fail", out
+    if grammar:
+        rb_lines = _rollback_check_lines(text, P)
+        if rb_lines:
+            return "fail", out + rb_lines
+    out.append(f"{P} ✓ — {len(clauses)} 條全標(綁了 {summ['bound']}/靠人 {summ['manual']}"
+               + (f";懸空 {hang} 只提醒不擋,spec-trace 會唸" if hang else "") + (";句式與回退節已驗" if grammar else ";句式未驗(首筆帳早於句式閘上線,不回溯)") + tail_u + ")")
+    return "ok", out
+
 _SECURITY_SEAT_SINCE = "2026-09-12T00:00:00+08:00"   # 處置閘「資安席」一步只看首筆帳在這之後的迴圈——不回溯,理由同上一行(Projects/代碼審資安席_計劃 [S3])。
 # 設隔日不設當日(同 _SEV_WRITESIDE_CUTOFF 的理由:合入當天白天用舊碼寫的帳,日粒度切不開先後);比對走 _loop_ts_key 換算 UTC(r1 單reviewer:字串比日期會依記帳機器時區判不同)。
 
@@ -4713,6 +4919,246 @@ def _clause_summary(rows):
     for r in rows:
         c[r["state"]] += 1
     return c
+
+
+def _regress_sources(env, plan_rel):
+    """相依回歸(規格落成可驗收條件_計劃 S15-S17;Enzo 2026-09-17 裁):計劃 lands_in 與 DEP/related 裡的 Systems 節點(一跳),
+    抓它們合約行(★INVARIANT★/★CHECKPOINT★/★IRREVERSIBLE★)綁的 [test:] → 機器產的回歸條款,作者不能挑。
+    回 (bound[(節點, 合約摘要, refs 文字)], unbound[(節點, 合約摘要)])。"""
+    note = env.notes.get(plan_rel)
+    if note is None:
+        return [], []
+    bound, unbound = [], []
+    for lk in _plan_system_links(note):
+        n = env.notes.get(lk + ".md") or env.notes.get(lk)
+        sm = n.fields.get("summary") if n is not None else None
+        if not isinstance(sm, str):
+            continue
+        for reftext in _contract_texts(sm):
+            clean, refs = strip_test_refs(reftext)
+            snippet = clean[:40] + ("…" if len(clean) > 40 else "")
+            (bound if refs else unbound).append((lk, snippet, reftext) if refs else (lk, snippet))
+    return bound, unbound
+
+
+def _plan_system_links(note):
+    """計劃連到的 Systems 節點(lands_in + related + DEP 行的 [[連結]]),去重、保序。"""
+    # 字串/清單都收(代碼審 r1);[[…]]/別名/錨點/引號一律交給既有 link_target(代碼審 r2/r3:別自己再刻一份剝括號)
+    links = [link_target(x) for x in as_list(note.fields.get("lands_in")) + as_list(note.fields.get("related"))]
+    summ = note.fields.get("summary")
+    if isinstance(summ, str):
+        for ln in summ.split("\n"):
+            if ln.strip().startswith("DEP:"):
+                links += re.findall(r"\[\[([^\]|#]+)", ln)
+    out, seen = [], set()
+    for lk in links:
+        if lk.startswith("Systems/") and lk not in seen:
+            seen.add(lk)
+            out.append(lk)
+    return out
+
+
+def _contract_texts(summary):
+    """摘要區塊裡的合約行(★INVARIANT★/★CHECKPOINT★/★IRREVERSIBLE★)正文,含 [test:] 標記。"""
+    return [m.group(1).strip() for _s, m in _contract_key_matches(summary)]
+
+
+def _loop_first_ts_key(env, loop_id):
+    """審查帳裡這條迴圈的首筆帳(UTC 可比的鍵);沒有帳回 None。"""
+    ledger = env.vault.parent / ".canary-log.jsonl"
+    best = None
+    if ledger.exists():
+        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            if not isinstance(d, dict) or nfc(str(d.get("loop", ""))) != nfc(loop_id) or not d.get("ts"):
+                continue
+            k = _loop_ts_key(str(d["ts"]))
+            if k is not None and (best is None or k < best):
+                best = k
+    return best
+
+
+def _spec_gate_clause_part(env, text, rel, rr):
+    """①②:句式(按首筆帳決定驗不驗)+綁定+回退節;有結論回 (rc, rows),要繼續跑回 (None, rows)。"""
+    loop_id = _loop_id_for_plan(rel)
+    first = _loop_first_ts_key(env, loop_id) if loop_id else None
+    grammar = first is None or first >= _loop_ts_key(_SPEC_GATE_SINCE)
+    if not grammar:
+        print(f"[spec-gate] 句式: —(迴圈「{loop_id}」首筆帳早於 {_SPEC_GATE_SINCE[:10]},不回溯;綁定照驗)")
+    if not SPEC_CLAUSE_RE.search(text):
+        print("[spec-gate] 條款綁定: —(計劃無 [SN] 條款,沒有東西可驗;寫成 `- [S1] 當…,主體應… [test:測試名]` 才進閘)")
+        return 0, []
+    rows_b, err = _clause_bindings_for(env, text, root=rr)
+    if err:
+        print(f"[spec-gate] 條款綁定: ✗ — 測試索引建不起來({err}),驗不了≠通過")
+        return 1, []
+    status, lines = _clause_check(text, rows_b, grammar=grammar, tag="spec-gate")
+    for ln in lines:
+        print(ln)
+    if status == "fail":
+        return 1, rows_b
+    if status == "skip":
+        return 0, rows_b
+    return None, rows_b
+
+
+def _spec_gate_load(env, node):
+    """找計劃檔、讀文字;回 (Path, text, vault 相對路徑) 或 (None, 錯誤訊息, None)。"""
+    rel = env.find(node)   # 跟 spec-trace 與其他吃節點名的指令同一條路(代碼審 r1:短名叫不到、退回手拼漏了 Projects/)
+    if not rel:
+        _node_not_found(env, node)
+        return None, "", None
+    p = env.vault / rel
+    try:
+        text = p.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"擋下:計劃讀不成文字({e.__class__.__name__}):\n    {p}", file=sys.stderr)
+        return None, "", None
+    return p, text, rel
+
+
+def _spec_gate_verdict(n, skipped, verdict, detail):
+    """一支測試的規格閘判定:回 (red|green|weak, 為什麼)。支數 N 先於退出碼看。"""
+    if n is not None and n >= 2:
+        return "weak", f"篩選匹配到 {n} 支,測試名要唯一(換更長、不互為子字串的名字)"
+    if n == 1 and skipped:
+        return "weak", "弱證據:那一支被跳過(skipped/xfail)"
+    if verdict in ("no-cmd", "unproven") or n == 0:
+        return "weak", "弱證據:一支都沒跑到(匯入錯、檔名錯、環境缺?)"
+    if n is None:
+        return ("red" if verdict == "red" else "green"), "這棧還讀不出支數,只印有沒有跑過"
+    if verdict == "red":
+        return "red", detail
+    return "green", ""
+
+
+def _spec_gate_items(text, clauses, split, default):
+    """綁了測試的條款 → _run_bound_tests 的 items[(條款 id, 平台, 方法, real)]。"""
+    lines_all = text.splitlines()
+    items = []
+    for b in clauses:
+        if b["state"] != "bound":
+            continue
+        seg = lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else ""
+        items += [(b["id"], plat, method, "real") for plat, method in resolve_test_refs(seg, split, default)]
+    return items
+
+
+def _spec_gate_runnable(items, plats):
+    """能不能跑:沒東西/指令不能鎖單支都印一行略過,回 False。"""
+    if not items:
+        print("[spec-gate] 跑: —(沒有綁 [test:] 的條款,沒東西可跑)")
+        return False
+    nocmd = [pl for pl in {i[1] for i in items} if "{method}" not in str((plats.get(pl) or {}).get("run_cmd") or "")]
+    if nocmd:
+        print(f"[spec-gate] 跑: —(略過:平台 {'/'.join(sorted(nocmd))} 的測試指令不能只跑一支;在 .lumos/config.json 的 test.run_cmd 加上 {{method}} 佔位符,例如 `python3 -m pytest -k {{method}}`)")
+        return False
+    return True
+
+
+def _spec_gate_run_clauses(rr, plats, items, per_prof):
+    """把條款綁的測試跑一次;回 {條款 id: (verdict, why, method)}。一條多支測試時,任一非綠就蓋過綠。"""
+    tails = {}
+    results, rerr = _run_bound_tests(rr, items, tails=tails)
+    if results is None:
+        print(f"[spec-gate] 跑: —(略過:{rerr})")
+        return {}
+    verdicts = {}
+    for node_id, plat, method, verdict, detail, _secs in results:
+        n, skipped = _ran_count(per_prof(plat), tails.get((node_id, plat, method), ""))
+        v, why = _spec_gate_verdict(n, skipped, verdict, detail)
+        prev = verdicts.get(node_id)
+        if prev is None or (prev[0] == "green" and v != "green"):
+            verdicts[node_id] = (v, why, method)
+    for cid in sorted(verdicts, key=lambda x: int(x[1:])):
+        v, why, method = verdicts[cid]
+        mark = {"red": "紅", "green": "綠", "weak": "弱證據"}[v]
+        print(f"[spec-gate] 跑: {cid} {mark}({method}" + (f";{why}" if why and v != "red" else "") + ")")
+    return verdicts
+
+
+def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run):
+    """⑤ 相依回歸(S15-S17):連到的 Systems 節點的合約測試,機器產 [R] 條款;全綠才過。回 (沒過的清單, 綠的支數, 來源節點數)。"""
+    rb, ru = _regress_sources(env, rel)
+    for lk, snip in ru:
+        print(f"[spec-gate] 相依回歸: ⚠ {lk} 的合約「{snip}」沒綁測試,驗不了回歸(那篇的債,不擋)")
+    if not rb:
+        return [], 0, 0
+    ritems, rmap, fails = [], {}, []
+    for i, (lk, snip, reftext) in enumerate(rb, 1):
+        rid = f"R{i}"
+        print(f"[spec-gate] 相依回歸: [{rid}] 當本計劃落地,{lk} 的「{snip}」應維持 ← {' '.join(invariant_test_refs(reftext))}")
+        for plat, method in resolve_test_refs(reftext, split, default):
+            ritems.append((rid, plat, method, "real" if method in methods_for(plat) else "dangling"))
+            rmap[(rid, plat, method)] = lk
+    ok = 0
+    if ritems and not no_run:
+        rtails = {}
+        rres, rerr = _run_bound_tests(rr, ritems, tails=rtails)
+        if rres is None:
+            fails.append(f"相依回歸跑不起來:{rerr}")
+        else:
+            for rid, plat, method, verdict, detail, _secs in rres:
+                n, skipped = _ran_count(per_prof(plat), rtails.get((rid, plat, method), ""))
+                v, why = _spec_gate_verdict(n, skipped, verdict, detail)
+                lk = rmap.get((rid, plat, method), "?")
+                if v == "green":
+                    ok += 1
+                elif v == "red":
+                    fails.append(f"{rid} {lk}/{method}:紅({str(detail)[:80]})——既有行為回歸,或環境壞")
+                else:
+                    fails.append(f"{rid} {lk}/{method}:{why}——驗不了≠過")
+    return fails, ok, len({x[0] for x in rb})
+
+
+def cmd_spec_gate(env, node, no_run=False):
+    """規格閘(規格落成可驗收條件_計劃,半套):①句式 ②綁定+回退節 ③把綁的測試真跑一次印紅/綠/弱證據(不擋)④相依回歸(全綠才過)⑤匯總+治理帳一行。
+    判定走跟處置閘第五步同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗(全新計劃沒有帳=閘後)。
+    rc:格式/綁定/回退節/相依回歸擋下 → 1;其餘 0。"""
+    p, text, rel = _spec_gate_load(env, node)
+    if p is None:   # 找不到/讀不動:_spec_gate_load 自己已印原因
+        return 2
+    rr = _vault_repo_root(env)
+    rc, rows_b = _spec_gate_clause_part(env, text, rel, rr)
+    if rc is not None:
+        return rc
+    if no_run:
+        return 0
+    clauses = [b for b in rows_b if b["state"] != "undefined"]
+    try:
+        _, split, default, methods_for, _hay = _platform_test_index(rr)
+        plats = load_platforms(rr)["platforms"]
+    except (ValueError, OSError) as e:
+        print(f"[spec-gate] 跑: —(平台設定讀不動:{e};略過)")
+        return 0
+    def per_prof(plat):
+        return (plats.get(plat) or {}).get("profile_name")
+    items = _spec_gate_items(text, clauses, split, default)
+    verdicts = {}
+    if _spec_gate_runnable(items, plats):
+        verdicts = _spec_gate_run_clauses(rr, plats, items, per_prof)
+    counts = {k: sum(1 for v in verdicts.values() if v[0] == k) for k in ("red", "green", "weak")}
+    reg_fail, reg_ok, reg_nodes = _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run)
+    if reg_fail:
+        print(f"[spec-gate] 相依回歸: ✗ — {len(reg_fail)} 支沒過(相依功能的合約測試要全綠才算驗收):")
+        for x in reg_fail:
+            print(f"    • {x}")
+        print("    先修回歸再進審;真的要改那條合約,先在那篇節點改合約行與測試(綁測試加審計)")
+        return 1
+    if reg_nodes:
+        print(f"[spec-gate] 相依回歸: ✓ — {reg_ok} 支全綠(來自 {reg_nodes} 個節點)")
+    summ = _clause_summary(clauses)
+    print(f"[spec-gate] 匯總: 條款 {len(clauses)}/綁了 {summ['bound']}/靠人 {summ['manual']}/紅 {counts['red']}/綠 {counts['green']}/弱證據 {counts['weak']}/相依回歸 {reg_ok} 支綠")
+    print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;半套只印不擋。接著走:\n    lumos loop next")
+    note = " ".join(f"{cid}={verdicts[cid][0]}" for cid in sorted(verdicts, key=lambda x: int(x[1:]))) or "no-run"
+    _append_governance_log(env.vault, [{"gate": "spec-gate", "kind": "spec-gate-run", "hard": False, "nodes": [rel],
+                                        "note": f"clauses={len(clauses)} bound={summ['bound']} red={counts['red']} green={counts['green']} weak={counts['weak']} regress={reg_ok} {note}"}])
+    return 0
 
 
 def cmd_spec_trace(env, node, as_json=False):
@@ -4845,6 +5291,8 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 "daily-wrapper", "ledger-growth",
                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
                 "anchor", "pitfalls",
+                # 2026-09-17 逃逸自動記 fail-open 失敗留痕(escape-auto-failed)與規格閘每次跑的觀測行(spec-gate-run)
+                "escape-auto", "spec-gate",
                 # 2026-09-11 每支檔有家:提交前/推送前的檢查、健檢三段(沒家的檔/寫了別人的檔名/管太多沒寫負責範圍)
                 "nodehome-check", "check-s8", "check-s9", "check-s10",
                 # 2026-09-13 新增告警閘:環境不可用自動放行、擋下新增告警,兩種事件都用這個閘名
@@ -5738,7 +6186,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -5983,6 +6431,25 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                 print(f"擋下:--finding-kind 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(kinds)})", file=sys.stderr)
                 return 2
             rec["finding_kinds"] = kinds
+        # 逐條嚴重度(r2 回滾席,2026-09-17):輪級 severity 是整輪最高值,分不出「造成 major 的是哪一條」;
+        # 逃逸自動記要判「code 型那條自己是不是 major 以上」就得逐條給。選填;給了鍵要 ⊆ 全集。
+        if finding_severities:
+            sevs = {}
+            for item in finding_severities:
+                if "=" not in item:
+                    print(f"擋下:--finding-severity 要寫成 id=clean|minor|major|blocker,你給的是 {item!r}", file=sys.stderr)
+                    return 2
+                k, _, v = item.partition("=")
+                k, v = k.strip(), v.strip()
+                if v not in ("clean", "minor", "major", "blocker"):
+                    print(f"擋下:--finding-severity 的值只能是 clean / minor / major / blocker,{k} 給的是 {v!r}", file=sys.stderr)
+                    return 2
+                sevs[k] = v
+            if set(sevs) != F:
+                # 跟 --finding-kind 一樣要全集(r4 邊界席:只標子集就能把真正 major 的那條漏掉,逃逸不記還標成逐條精度)
+                print(f"擋下:--finding-severity 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(sevs)})", file=sys.stderr)
+                return 2
+            rec["finding_severities"] = sevs
         # 辯方明確表態(2026-08-27,Systems/finding-refute):辯方對它判過的每條發現表態三選一——
         # agree(同意是真的→維持折入)/ evidence(拿反證降級,須附 file:line→放行)/ concern(只存疑無反證→維持折入)。
         # ★純記帳,不改降級規則★:降級去向仍由 folded/accepted 決定,本欄只記辯方怎麼表態、不回頭改判閘。
@@ -6176,6 +6643,27 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         return rc
     print(f"✓ 這筆審查結果({kind})記下來了,憑證 {token}" + (f" (審查員 {auditor})" if auditor else "")
           + f"\n    寫入 {path.resolve()}")
+    # 逃逸自動記(規格落成可驗收條件_計劃 第五節):代碼審(code-<主題>)記到 major 以上,
+    # 對回 <主題> 那條設計迴圈/計劃就記一筆。永遠不影響審查帳本身(任何失敗只印一行)。
+    _kinds = rec.get("finding_kinds") if isinstance(rec.get("finding_kinds"), dict) else None
+    _sevs = rec.get("finding_severities") if isinstance(rec.get("finding_severities"), dict) else None
+    if _sevs is not None:
+        # 逐條判(r2 回滾席):code 型那條自己要是 major 以上;沒標型別的那條當分不出、保守算
+        _hit = any(v in ("major", "blocker") and (_kinds is None or _kinds.get(k) == "code") for k, v in _sevs.items())
+        _precision = "finding" if _kinds is not None else "round"   # 沒標型別=分不出是不是 code 型,不能謊報成逐條精度(r3 邊界席)
+    else:
+        _has_code = (_kinds is None) or any(str(v) == "code" for v in _kinds.values())   # 沒標型別=分不出,保守記;標了就只收 code 型
+        _hit = severity in ("major", "blocker") and _has_code
+        _precision = "round"   # 輪級判準:這輪最高 major 且任一條是 code 型——粗,帳上標出來讓讀側分得出
+    if loop and str(loop).startswith("code-") and _hit:
+        try:
+            derived = str(loop)[len("code-"):]
+            _auto_escape(env, "code-loop", severity,
+                         f"代碼審記到 {severity}({auditor or '?'}{' ' + str(round_id) if round_id else ''})",
+                         [(derived, _plan_for_loop(env, derived))],
+                         _git_head(env.vault.parent.parent), source="code-loop", extra={"precision": _precision})
+        except Exception as _ex:   # 掛勾不准弄壞記帳
+            _escape_auto_failed(env, str(loop), "code-loop", str(_ex))
     return 0
 
 
@@ -7418,8 +7906,156 @@ def _esc_clean(v, limit=200):
     return out if len(out) <= limit else out[:limit] + "…"
 
 
+
+def _git_head(repo_root):
+    try:
+        r = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except OSError:
+        return ""
+
+
+def _plans_in_range(repo_root, git_range, vault):
+    """提交範圍碰到的計劃筆記(repo 相對路徑)。對回啟發式:碰到 Projects/*.md 就算。"""
+    try:
+        # ★中文檔名:git 預設把非 ASCII 路徑加引號並轉義,不關掉會一個計劃都對不上(taskbank 同型坑 2026-09-15)★
+        r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "--name-only", git_range, "--"],
+                           capture_output=True, text=True)
+    except OSError:
+        return []
+    if r.returncode != 0:
+        return []
+    try:
+        vrel = str(Path(vault).resolve().relative_to(Path(repo_root).resolve())).replace(os.sep, "/")
+    except ValueError:
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith(vrel + "/Projects/") and line.endswith(".md"):
+            out.append(line)
+    return out
+
+
+def _loop_id_for_plan(plan_rel):
+    """計劃檔名 → 迴圈編號:去 _計劃(design-loop skill 的慣例)。"""
+    stem = Path(plan_rel).stem
+    return stem[:-len("_計劃")] if stem.endswith("_計劃") else stem
+
+
+def _plan_for_loop(env, loop_id):
+    """迴圈編號 → 計劃筆記(vault 相對);找不到回 None。"""
+    for cand in (f"{loop_id}_計劃.md", f"{loop_id}.md"):
+        if (env.vault / "Projects" / cand).is_file():
+            return f"Projects/{cand}"
+    return None
+
+
+def _door_for_loop(env, loop_id):
+    """規格閘留痕裡這條迴圈最後一次判的門;沒有就 unknown(規格閘上線前一律 unknown)。"""
+    path = env.vault.parent / ".canary-log.jsonl"
+    door = "unknown"
+    if not path.exists():
+        return door
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not ln.strip():
+            continue
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("kind") == "spec-gate" and nfc(str(d.get("loop", ""))) == nfc(loop_id):
+            door = d.get("door") or door
+    return door
+
+
+def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
+    """逃逸自動記(規格落成可驗收條件_計劃 第五節):
+    loops=[(迴圈編號, 計劃相對路徑或 None)]。歸因守衛放寬成「迴圈在審查帳 OR 計劃檔存在」——
+    雙向門不派審的計劃本來就不會出現在審查帳,只認審查帳會讓它們永遠記不到。
+    去重鍵 (迴圈, 階段, sha)。回寫入筆數。不擋、不炸:任何一步失敗只印一行。"""
+    log = env.vault.parent / ".escape-log.jsonl"
+    ledger = env.vault.parent / ".canary-log.jsonl"
+    known = set()
+    if ledger.exists():
+        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                v = json.loads(ln).get("loop")
+            except ValueError:
+                continue
+            if isinstance(v, str):
+                known.add(nfc(v))
+    import datetime as _dt
+    import secrets as _sec
+    written = 0
+    # ★寫側上鎖(r1 回滾席):兩個 hook 同時寫,各自讀到「還沒包含對方那筆」的 existing,去重會被繞過;
+    # 讀 existing→判→append 整段都要在同一把 vault 寫入鎖裡(跟 set/append 共用)。
+    with _vault_write_lock(env.vault):
+        existing = set()
+        for r in _escape_rows_for(env):
+            existing.add((nfc(str(r.get("loop", ""))), r.get("stage"), r.get("sha")))
+        for loop_id, plan_rel in loops:
+            plan_ok = bool(plan_rel) and _plan_file_exists(env, plan_rel)
+            if nfc(loop_id) in known:
+                attribution = "ledger"
+            elif plan_ok:
+                attribution = "plan-file"
+            else:
+                print(f"逃逸自動記:「{loop_id}」既不在審查帳、也沒有計劃檔,對不回,不記")
+                continue
+            door = _door_for_loop(env, loop_id)
+            if stage == "push-gate-unreviewed" and door != "two-way":
+                # 這一型的語意是「被判成雙向門、跳過審查,結果推送閘擋下」;單向門計劃缺留痕是流程沒走完,不是逃逸
+                print(f"逃逸自動記:「{loop_id}」沒有雙向門留痕(門:{door}),缺審查留痕算流程沒走完,不記")
+                continue
+            if (nfc(loop_id), stage, sha) in existing:
+                print(f"逃逸自動記:「{loop_id}」在 {stage} 同一個 sha 已經記過,不重複")
+                continue
+            rec = {"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                   "token": "ESC-" + _sec.token_hex(4),
+                   "loop": loop_id, "stage": stage, "severity": severity, "desc": " ".join(desc.split()),
+                   "auto": True, "source": source, "sha": sha, "attribution": attribution, "door": door}
+            if plan_rel:
+                rec["plan"] = plan_rel
+            if extra:
+                rec.update(extra)
+            if _jsonl_append_verified(log, rec, "token", rec["token"]) == 0:
+                written += 1
+                existing.add((nfc(loop_id), stage, sha))
+                print(f"✓ 逃逸自動入帳:「{loop_id}」在 {stage} 記到 {severity}(門:{rec['door']},歸因:{attribution})")
+            else:
+                _escape_auto_failed(env, loop_id, stage, "append 自驗失敗")
+    return written
+
+
+def _plan_file_exists(env, plan_rel):
+    """計劃檔存在性,兩邊都做 NFC 再比(r1 邊界席:git 回的路徑與磁碟檔名的正規化形式可能不同)。"""
+    if (env.vault / plan_rel).is_file():
+        return True
+    parent = (env.vault / plan_rel).parent
+    if not parent.is_dir():
+        return False
+    want = nfc(Path(plan_rel).name)
+    try:
+        return any(nfc(q.name) == want for q in parent.iterdir())
+    except OSError:
+        return False
+
+
+def _escape_auto_failed(env, loop_id, stage, why):
+    """fail-open 的失敗要看得見(r1 回滾席):無人看顧時 stderr 等於消失,寫一筆進治理帳。"""
+    try:
+        _append_governance_log(env.vault, [{"gate": "escape-auto", "kind": "escape-auto-failed", "hard": False,
+                                            "nodes": [str(loop_id)], "note": f"{stage}: {why}"}])
+    except Exception:
+        pass
+    print(f"逃逸自動記失敗({stage}/{loop_id}): {why}", file=sys.stderr)
+
+
 def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
-                    defect_ref=None, list_mode=False, rule=None):
+                    defect_ref=None, list_mode=False, rule=None, auto=False, git_range=None, sha=None, repo=None):
     """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地)。
     語意:某個審查迴圈收斂放行了,下游(實作/CI/prod/人)發現可歸因的缺陷→記一筆。
     整套審查系統的 ground truth 側;與攔截帳(★圖譜攔截★記號)互為兩面。
@@ -7428,6 +8064,26 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
     收斂/放行狀態——那是語意判斷,歸人;守衛驗語意=偷渡閘,計劃明文不做。"""
     log = env.vault.parent / ".escape-log.jsonl"
     _SEV_W = {"minor": 0, "major": 1, "blocker": 2}
+    if auto:
+        # 自動模式(規格落成可驗收條件_計劃 第五節):給提交範圍,碰到的計劃筆記各記一筆;對不回就不記。
+        if loop_id or list_mode:
+            print("擋下:--auto 不吃迴圈編號也不能跟 --list 混用;編號由提交範圍碰到的計劃筆記推出來", file=sys.stderr)
+            return 2
+        if severity not in _SEV_W or not (stage or "").strip() or not (desc or "").strip():
+            print("擋下:--auto 一樣要帶 --stage、--severity(minor|major|blocker)、--desc", file=sys.stderr)
+            return 2
+        if not git_range:
+            print("擋下:--auto 要帶 --range <a..b>(推送/CI 的提交範圍),沒有範圍就對不回計劃", file=sys.stderr)
+            return 2
+        repo_root = Path(repo) if repo else env.vault.parent.parent
+        plans = _plans_in_range(repo_root, git_range, env.vault)
+        if not plans:
+            print(f"逃逸自動記:範圍 {git_range} 對不回任何計劃筆記,不記(這不是錯,只是這次推送沒碰到計劃)")
+            return 0
+        vrel = str(Path(env.vault).resolve().relative_to(Path(repo_root).resolve())).replace(os.sep, "/")
+        loops = [(_loop_id_for_plan(p), p[len(vrel) + 1:]) for p in plans]
+        _auto_escape(env, stage.strip(), severity, desc, loops, sha or _git_head(repo_root), source=stage.strip())
+        return 0
     if list_mode:
         if loop_id or stage or severity or desc or defect_ref:
             print("擋下:--list 是唯讀,不能跟記帳參數混用——照原樣執行你會以為記了、其實一筆都沒寫。要記帳就拿掉 --list 重跑", file=sys.stderr)
@@ -8185,7 +8841,7 @@ def _node_not_found(env, name, *, write_side=False):
     print(f"擋下:圖譜裡找不到叫「{name}」的筆記。", file=sys.stderr)
     try:
         cands = [rel for rel in env.notes if _el_near_name(name, Path(rel).stem)][:5]
-    except Exception:                      # noqa: BLE001 — 找不到就找不到,不能因為找近名而炸
+    except Exception:                      # 找不到就找不到,不能因為找近名而炸
         cands = []
     if cands:
         print("  是不是想找這幾篇之一:", file=sys.stderr)
@@ -11668,7 +12324,7 @@ def cmd_about_code_revert(env, batch_date, dry_run=False):
                 if cmd_remove(env, rel, "about_code", v) != 0:
                     bad = v
                     break
-            except Exception as e:   # noqa: BLE001 — 一篇壞不該拖垮整批
+            except Exception as e:   # 一篇壞不該拖垮整批
                 bad = f"{v}({e})"
                 break
         if bad is not None:
@@ -15565,35 +16221,12 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
     if err:
         print(f"[disposal] 條款綁定: ✗ — 測試索引建不起來({err}),驗不了≠通過")
         return "fail"
-    clauses = [b for b in rows_b if b["state"] != "undefined"]
-    undef = [b for b in rows_b if b["state"] == "undefined"]
-    listlike = [b for b in undef if b.get("listlike")]
-    if listlike:
-        # 有 [SN] 在行首附近、卻是這裡不認得的清單寫法(r2 外家席用 `- [ ] [S1]` 實跑出「零條款照過」;-b r1 外家席:只在零條款時查會被「加一條合法條款」繞過)——不管有沒有別的條款,格式看不懂就擋
-        print(f"[disposal] 條款綁定: ✗ — {len(listlike)} 個 [SN] 看起來是條款卻用了這裡不認得的清單寫法(第 " + "、".join(str(b["line"]) for b in listlike) + " 行);看不懂的寫法不放行——條款要寫成 `- [S1] …`/`### [S1] …`/`1. [S1] …`/表格列/`- [ ] [S1] …`")
-        return "fail"
-    if not clauses:
-        print(f"[disposal] 條款綁定: —(計劃只在散文/標題裡提到 [SN] {len(undef)} 次,沒有條款定義行,視同 opt-in 未啟用)")
-        return "skip"
-    dups = [b for b in clauses if b["state"] == "duplicate"]
-    if dups:
-        print("[disposal] 條款綁定: ✗ — 條款編號重複定義:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in dups) + ";一個編號只能定義一次,不然第二筆沒標會漏過")
-        return "fail"
-    shad = [b for b in clauses if b["state"] == "shadowed"]
-    if shad:
-        print("[disposal] 條款綁定: ✗ — 條款定義過、又出現在這裡不認得的清單行:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in shad) + ";看不懂的寫法不放行")
-        return "fail"
-    unt = [b for b in clauses if b["state"] == "untagged"]
-    summ = _clause_summary(clauses)
-    hang = sum(summ[_st] for _st in _CLAUSE_HANG_STATES) + summ["bad-name"]
-    tail_u = f";另有 {len(undef)} 個 id 只在範例/引用裡出現,不算條款" if undef else ""
-    if unt:
-        print(f"[disposal] 條款綁定: ✗ — {len(unt)}/{len(clauses)} 條驗收條款沒標:" + "、".join(f"{b['id']}(第 {b['line']} 行)" for b in unt) + tail_u)
-        print("    每條要嘛在那一行綁 [test:測試名],要嘛寫 [manual:一句怎麼驗];沒有測試可掛也得講清楚靠人怎麼驗")
-        return "fail"
-    print(f"[disposal] 條款綁定: ✓ — {len(clauses)} 條全標(綁了 {summ['bound']}/靠人 {summ['manual']}"
-          + (f";懸空 {hang} 只提醒不擋,spec-trace 會唸" if hang else "") + tail_u + ")")
-    return "ok"
+    # 規格落成可驗收條件_計劃(半套)S9/S14:判定走跟 lumos spec-gate 同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗(綁定照驗)
+    grammar = not keys or min(k for k, _ in keys) >= _loop_ts_key(_SPEC_GATE_SINCE)
+    status, lines = _clause_check(text, rows_b, grammar=grammar, tag="disposal")
+    for ln in lines:
+        print(ln)
+    return status
 
 
 _LANDING_GATE_SINCE = "2026-09-12T00:00:00+08:00"   # 處置閘的落點那一步只看首筆帳在這之後的迴圈——不回溯(同 _CLAUSE_GATE_SINCE)
@@ -22146,7 +22779,54 @@ def _ci_record(env, rows, sha, branch):
         rc = _ci_write(env, rec)
         if rc != 0:
             return rc
+        if concl in _CI_RED and _ci_step_is_test(r.get("failed_step", "")):   # r1:build/lint/timeout 不是逃逸
+            _ci_red_escape(env, sha, concl, r.get("workflow", ""))
     return 0
+
+
+def _ci_step_is_test(name):
+    """CI 失敗步驟是不是「測試那一步」。帳上的 failed_step 長「工作名/步驟名」、多步用 ';' 串——
+    只看每段「/」後面的步驟名(r3 回滾席:本 repo 唯一的工作叫 test,看整串會把每一步都當測試步);
+    步驟名切詞後有一個詞等於 test/tests/pytest/unittest/testing,或含中文「測試」(r3 邊界席:切詞只認 a-z0-9,中文步驟名切成空)。
+    r2 正確性席:子字串比對會把 latest / attestation / contest 也當測試步,污染逃逸率。"""
+    for seg in str(name or "").split(";"):
+        step = seg.split("/", 1)[1] if "/" in seg else seg
+        if "測試" in step:
+            return True
+        words = re.split(r"[^a-z0-9]+", step.lower())
+        if any(w in ("test", "tests", "pytest", "unittest", "testing") for w in words):
+            return True
+    return False
+
+
+def _ci_red_escape(env, sha, concl, workflow):
+    """CI 紅 → 逃逸自動記(規格落成可驗收條件_計劃 第五節第三來源)。
+    範圍=上一個綠 sha..這個 sha(帳上找;找不到就 sha^..sha);碰到的計劃各記一筆,對不回不記。
+    ★fail-open★:任何一步失敗只印一行,不影響 CI 帳。"""
+    try:
+        root = env.vault.parent.parent
+        prev_green = None
+        lp = _ci_log_path(env)
+        if lp.exists():
+            for ln in lp.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    d = json.loads(ln)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get("sha") and d.get("sha") != sha and (d.get("conclusion") or "") in _CI_GREEN:
+                    prev_green = d["sha"]
+        rng = f"{prev_green}..{sha}" if prev_green else f"{sha}^..{sha}"
+        plans = _plans_in_range(root, rng, env.vault)
+        if not plans:
+            return 0
+        vrel = str(Path(env.vault).resolve().relative_to(Path(root).resolve())).replace(os.sep, "/")
+        loops = [(_loop_id_for_plan(pl), pl[len(vrel) + 1:]) for pl in plans]
+        return _auto_escape(env, "CI", "major", f"CI {concl} {sha[:7]} [{workflow}]", loops, sha, source="CI")
+    except Exception as _ex:
+        _escape_auto_failed(env, "?", "CI", str(_ex))
+        return 0
 
 
 def cmd_ci_status(env, repo_dir=None, as_json=False):
@@ -24070,16 +24750,23 @@ def _lens_cache_write(path, data):
         pass
 
 
-def _lens_contract_lines(text, cap=40):
-    """base 版節點全文裡的合約行:只認 KEY: 行(INVARIANT_RE/CHECKPOINT_RE/IRREVERSIBLE_RE),不掃正文。"""
+def _contract_key_matches(text, with_kind=False):
+    """★全檔唯一的「合約行」掃描★:逐行只認 KEY: 行(INVARIANT_RE/CHECKPOINT_RE/IRREVERSIBLE_RE),回 [(整行, match)];不掃正文。
+    派工鏡頭(_lens_contract_lines/_lens_contract_rows)與規格閘的相依回歸(_contract_texts)都走這裡(代碼審 r1/r2 架構席:別再各寫一份);with_kind=True 多回哪一種合約。"""
     out = []
     for line in text.split("\n"):
         s = line.strip()
-        if INVARIANT_RE.match(s) or CHECKPOINT_RE.match(s) or IRREVERSIBLE_RE.match(s):
-            out.append(s[:200])
-            if len(out) >= cap:
+        for kind, rx in (("INVARIANT", INVARIANT_RE), ("CHECKPOINT", CHECKPOINT_RE), ("IRREVERSIBLE", IRREVERSIBLE_RE)):
+            m = rx.match(s)
+            if m:
+                out.append((s, m, kind) if with_kind else (s, m))
                 break
     return out
+
+
+def _lens_contract_lines(text, cap=40):
+    """base 版節點全文裡的合約行(截到 200 字、最多 cap 條,給派工鏡頭印)。"""
+    return [s[:200] for s, _m in _contract_key_matches(text)][:cap]
 
 
 _LENS_BADGE = {"real": "[綁定測試:有]", "dangling": "[綁定測試:懸空]", "fake": "[綁定測試:偽證據]",
@@ -24090,16 +24777,7 @@ _LENS_FOOT_SKIP = "綁定測試狀態:略(平台設定讀不到)"
 
 def _lens_contract_rows(text):
     """base 版節點全文裡的合約行→[(kind, 完整行)];只認 KEY: 行(三個既有正規式),★不截斷★——分類要用原文,截斷只在顯示。"""
-    rows = []
-    for line in text.split("\n"):
-        s = line.strip()
-        if INVARIANT_RE.match(s):
-            rows.append(("INVARIANT", s))
-        elif CHECKPOINT_RE.match(s):
-            rows.append(("CHECKPOINT", s))
-        elif IRREVERSIBLE_RE.match(s):
-            rows.append(("IRREVERSIBLE", s))
-    return rows
+    return [(kind, s) for s, _m, kind in _contract_key_matches(text, with_kind=True)]
 
 
 # v1.2 備援段:所有邏輯只用 base 樹;預算=hook 內層 45 秒總帳扣 impact 已耗
@@ -25457,11 +26135,37 @@ _RAN_EVIDENCE = {
     },
     "python": {
         "re": r"[1-9]\d*\s+passed",
+        # 規格閘用的「篩到幾支」(規格落成可驗收條件_計劃 S6-S8):支數不是斷言數——本 repo 自家 runner 的「N passed」數的是 check() 次數,
+        # 它印「lumos 測試(N 案例)」那行才是支數;unittest 讀 Ran N test(s);pytest 用摘要行各類相加(在 _ran_count 裡)
+        "count_re": [r"lumos 測試\((\d+) 案例\)", r"\bRan (\d+) tests?\b"],
         "measured": "pytest 8 實測:跑到印「1 passed in 0.01s」;對不到本來就回 5(非零),這條只是雙保險",
         "fix_hint": "pytest 的 -q/-p no:terminal 會把摘要行拿掉——留著預設輸出",
     },
 }
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+_PYTEST_SUMMARY_RE = re.compile(r"(\d+)\s+(failed|passed|skipped|errors?|xfailed|xpassed)\b")
+
+
+def _ran_count(profile, out):
+    """從測試工具輸出讀「篩到幾支」:回 (N 或 None, 那一支是不是被跳過)。None=這棧還讀不出支數,只能印有沒有跑過。
+    profile 的 count_re 逐條試(第一個命中為準);python 讀不到就用 pytest 摘要行各類相加(r4/r5:含 skipped/error/xfail 才不會漏算撞名)。"""
+    spec = _RAN_EVIDENCE.get(profile or "") or {}
+    text = out or ""
+    for pat in spec.get("count_re") or []:
+        m = re.search(pat, text)
+        if m:
+            n = int(m.group(1))
+            skipped = bool(re.search(r"skipped\s*=\s*[1-9]|\b[1-9]\d*\s+skipped\b", text))
+            return n, skipped
+    if (profile or "") == "python":
+        found = _PYTEST_SUMMARY_RE.findall(text)
+        if found:
+            n = sum(int(a) for a, _ in found)
+            skipped = any(k == "skipped" for _, k in found) and all(k in ("skipped", "xfailed") for _, k in found)
+            return n, skipped
+    return None, False
 
 
 def _ran_evidence_re(profile):
@@ -25553,8 +26257,9 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
     return ok, why
 
 
-def _run_bound_tests(repo_root, items):
+def _run_bound_tests(repo_root, items, tails=None):
     """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。
+    tails 給一個 dict 就順便填 (node, plat, method) → 輸出尾巴(規格閘拿去讀「篩到幾支」;不給不填,回傳形狀不變)。
 
     verdict ∈ green / red / unproven。unproven=「指令回成功,但它自己的輸出裡看不到有跑過任何測試」
     ——那不是紅(測試沒失敗),但也絕對不是綠。"""
@@ -25590,6 +26295,8 @@ def _run_bound_tests(repo_root, items):
             rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6,
                                            keep_re=_ran_evidence_re(pentry.get("profile_name")))
             seen[key] = (rc, tail, secs, to)
+        if tails is not None:
+            tails[(node, plat, method)] = tail
         if to:
             results.append((node, plat, method, "red", f"超時(>{int(timeout)}s)", secs))
         elif rc != 0:
@@ -27399,6 +28106,7 @@ HELP_WHEN = {
     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
+    "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次印紅綠(不擋)。",
     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
@@ -27689,6 +28397,8 @@ def main():
                     help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
     cr.add_argument("--finding-kind", dest="finding_kinds", action="append",
                     help="每條發現在修什麼:id=code(程式缺陷)|spec(被審文件缺陷)|process(流程要求的文件/留痕/範本);選填,給了要全集對得上——量「流程自產工作量」用")
+    cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                    help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
 
@@ -27753,6 +28463,11 @@ def main():
     le.add_argument("--severity", dest="esc_severity", choices=("minor", "major", "blocker"), help="缺陷嚴重度(同審查帳值域)")
     le.add_argument("--desc", dest="esc_desc", help="一句描述:什麼缺陷、為何可歸因到該迴圈")
     le.add_argument("--defect-ref", dest="esc_ref", help="佐證指標(commit/Issue/報告路徑,選配)")
+    le.add_argument("--auto", dest="esc_auto", action="store_true",
+                    help="自動記:不給編號,改給 --range,碰到的計劃筆記各記一筆(推送閘/CI 用);對不回不記")
+    le.add_argument("--range", dest="esc_range", help="--auto 用:提交範圍 a..b")
+    le.add_argument("--sha", dest="esc_sha", help="--auto 用:去重鍵的 sha(不給就取 HEAD)")
+    le.add_argument("--repo", dest="esc_repo", help="--auto 用:repo 根(不給就用 vault 的上兩層)")
     le.add_argument("--rule", dest="esc_rule", help="本來哪條規則該抓到它(規則 id;真的沒有對應規則就寫 none)。標了才算得出「該寫哪條規則」——看待辦:lumos rule-gap")
     le.add_argument("--list", dest="esc_list", action="store_true", help="列全帳(按迴圈分組)")
     ll = lsub.add_parser("list", help="哪些審查迴圈還開著(帳面沒關門的);next/status 都要 loop_id,這支先給你編號")
@@ -27824,6 +28539,10 @@ def main():
     gk.add_argument("--platform", dest="gk_platform", help="覆蓋配方平台")
     gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
     gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
+
+    p = sub.add_parser("spec-gate", help="規格閘(半套):條款句式+綁定+回退節(擋)、把綁的測試真跑一次印紅/綠/弱證據(不擋)、治理帳留一行")
+    p.add_argument("node", help="計劃節點(Projects/<名>_計劃)")
+    p.add_argument("--no-run", dest="sg_no_run", action="store_true", help="只驗句式與綁定,不跑測試")
 
     p = sub.add_parser("spec-trace", help="條款級追溯:計劃 [SN] 條款那一行綁的 [test:]/[manual:](裁決,有未標 rc1)× 回指 Verification 認領(舊制對照欄)")
     p.add_argument("node", help="計劃節點")
@@ -28490,6 +29209,8 @@ def main():
     if args.cmd == "lint":
         return cmd_lint(env, args.note)
 
+    if args.cmd == "spec-gate":
+        return cmd_spec_gate(env, args.node, no_run=args.sg_no_run)
     if args.cmd == "spec-trace":
         return cmd_spec_trace(env, args.node, as_json=args.st_json)
     if args.cmd == "signoff":
@@ -28525,6 +29246,7 @@ def main():
                           findings_set=args.findings_set, folded_set=args.folded_set,
                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
                           finding_kinds=getattr(args, 'finding_kinds', None),
+                          finding_severities=getattr(args, 'finding_severities', None),
                           refute_verdicts=getattr(args, 'refute_verdicts', None),
                           refuted_set=getattr(args, 'refuted_set', None))
 
@@ -28557,7 +29279,8 @@ def main():
         if args.lcmd == "escape":
             return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
                                    severity=args.esc_severity, desc=args.esc_desc,
-                                   defect_ref=args.esc_ref, list_mode=args.esc_list, rule=args.esc_rule)
+                                   defect_ref=args.esc_ref, list_mode=args.esc_list, rule=args.esc_rule,
+                                   auto=args.esc_auto, git_range=args.esc_range, sha=args.esc_sha, repo=args.esc_repo)
         if args.lcmd == "next":
             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json, orchestrator=args.next_orch,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
