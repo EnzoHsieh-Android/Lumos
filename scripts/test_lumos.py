@@ -29837,8 +29837,8 @@ def t_tier_roster_table():
     """S1 防雙真相釘:panel 條目佔 W 席數==width、single=1;requirement 恆裸枚舉;無 code/standard。"""
     m = _load_lumos_module()
     tbl = m._TIER_ROSTER
-    check("roster: 表存在且含五組合", set(tbl.keys()) ==
-          {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high"),
+    check("roster: 表存在且含六組合(2026-09-17 加 code/light)", set(tbl.keys()) ==
+          {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high"), ("code", "light"),
            ("code", "standard")},
           str(sorted(tbl.keys())))
     check("roster: code/standard 補列(循序 tier 錨定案 supersede v1 範圍釘)",
@@ -29900,8 +29900,8 @@ def t_loop_next_roster():
     # 查表 miss:code+light
     r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--orchestrator", "claude", "--json")
     d3 = _j.loads(r3.stdout.strip())
-    check("next-roster: code/light 查表 miss→roster null+無編制宣告",
-          d3.get("roster") is None and "無編制宣告" in r3.stdout, r3.stdout[:300])
+    check("next-roster: code/light 有編制(2026-09-17 Enzo 裁架構對齊每級都派)→ 只派架構對齊一席",
+          d3.get("roster") is not None and "架構對齊" in r3.stdout and "無編制宣告" not in r3.stdout, r3.stdout[:300])
     # indeterminate id(codestage 型)
     r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--orchestrator", "claude", "--json")
     d4 = _j.loads(r4.stdout.strip())
@@ -43528,12 +43528,105 @@ def t_spec_gate_twoway_needs_four_exclusions():
     check("⑤ 粗體寫法也收,理由不帶星號", r.returncode == 0 and rec and all("*" not in v for v in rec[0]["exclusions"].values()), (r.stdout[-300:], rec[:1]))
 
 
-def t_spec_gate_twoway_rejects_manual():
-    """[雙向門放行 S3] 雙向門計劃的條款帶 [manual:] → 擋下,提示綁測試或把門升成單向。"""
+def t_spec_gate_twoway_accepts_manual():
+    """[雙向門放行 S3](Enzo 2026-09-17 裁「小改動不至於要綁測試」)雙向門收 [manual:]:有測試的條款照跑紅綠,靠人的不判;
+    一支測試都沒有 → 照樣放行,留痕標 manual_only 與小改動規則版本,並印小改動閘的條件。"""
     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw3")
     _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應好看 [manual:人工看一眼畫面]"])
-    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
-    check("① rc1、點名 S2、提示升門", r.returncode == 1 and "S2" in r.stdout and "單向" in r.stdout and "manual" in r.stdout, r.stdout[-600:])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    rec = [x for x in _sg_records(kg) if x.get("loop") == "甲"]
+    check("① 混合:rc0 PASS,留痕 n_manual=1、manual_only=False", r.returncode == 0 and "PASS(雙向門)" in r.stdout and rec and rec[0].get("n_manual") == 1 and rec[0].get("manual_only") is False, r.stdout[-400:])
+    _sg_plan2(kg, "乙", ["- [S1] 按鈕應改成藍色 [manual:人工開畫面看]", "- [S2] 間距應加大 [manual:人工比對截圖]"])
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    rec = [x for x in _sg_records(kg) if x.get("loop") == "乙"]
+    check("② 全靠人:rc0 PASS、印小改動閘條件,留痕 manual_only=True 帶規則版本", r.returncode == 0 and "小改動閘" in r.stdout and rec and rec[0].get("manual_only") is True and isinstance(rec[0].get("small_change_rule"), int), r.stdout[-500:] + str(rec[:1]))
+    _sg_plan2(kg, "丙", ["- [S1] 系統應回 200 [test:t_green] [keeps]"])
+    r = run(kg, "spec-gate", "Projects/丙_計劃")
+    check("③ 全部 keeps 仍擋", r.returncode == 1 and "至少一條" in r.stdout, r.stdout[-400:])
+
+
+def _sc_setup(tag, extra_links="", home_tags=""):
+    """小改動閘 fixture:Home 管 tests/test_x.py;全靠人的雙向門計劃落在 Home;放行、提交。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / tag)
+    (kg / "Systems").mkdir(exist_ok=True)
+    (kg / "Systems" / "Home.md").write_text("---\ntype: system\nstatus: doing\nabout_code:\n  - tests/test_x.py\n" + home_tags + "summary: |-\n  FLOW:x\n---\n# Home\n", encoding="utf-8")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/Home\n" + extra_links + "---\n# 甲\n\n- [S1] 按鈕應改成藍色 [manual:人工開畫面看]\n\n## 實務隱患\n"
+                 + "\n".join("- " + x for x in _SG_EXCL_ALL) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    _sg_commit(d, "plan")
+    return d, kg, p
+
+
+def t_prepush_small_change_gate():
+    """[雙向門放行 S27] 全靠人驗的雙向門計劃,推送時走小改動閘:擴散(檔數/目錄/落點內)、相對量、歷史(風險標籤/裁判檔/近期逃逸)、目的(修 bug)。
+    翻紅釘:把 _small_change_check 的任一維度拿掉 → 對應案例翻紅。"""
+    d, kg, p = _sc_setup("sc1")
+    tx = d / "tests" / "test_x.py"
+    tx.write_text(tx.read_text() + "\n# 小改一行\n"); _sg_commit(d, "small")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① 一支檔一行、在落點內 → 過", r.returncode == 0 and "小改動閘" in r.stdout, r.stdout[-400:])
+    (d / "src").mkdir(); (d / "src" / "other.py").write_text("x = 1\n"); tx.write_text(tx.read_text() + "\n# 再一行\n"); _sg_commit(d, "outside")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("② 同一次改動碰到落點外的檔 → 擋、說落點外(只碰落點外的提交對不回這份計劃,本來就不是它的候選)", r.returncode == 1 and "落點外" in r.stdout and "src/other.py" in r.stdout, r.stdout[-500:])
+    tx.write_text(tx.read_text() + "".join(f"\n# pad {i}" for i in range(400))); _sg_commit(d, "big")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("③ 一支檔改 400 行(原本十幾行)→ 擋、說相對量", r.returncode == 1 and "相對量" in r.stdout, r.stdout[-500:])
+    (d / "scripts").mkdir(exist_ok=True); (d / "scripts" / "hooks").mkdir(exist_ok=True); (d / "scripts" / "hooks" / "pre-push").write_text("#!/bin/sh\n"); tx.write_text(tx.read_text() + "\n# 又一行\n"); _sg_commit(d, "hook")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("④ 碰到 hook → 擋、說裁判檔", r.returncode == 1 and "裁判檔" in r.stdout, r.stdout[-500:])
+    d2, kg2, p2 = _sc_setup("sc2", home_tags="tags:\n  - risk/守衛面\n")
+    r = run(kg2, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("⑤ 落點掛風險標籤 → 門本來就判單向,不會走到小改動閘", "[spec-gate] 門: 單向門" in r.stdout, r.stdout[-300:])
+    d3, kg3, p3 = _sc_setup("sc3")
+    (kg3 / "Issues").mkdir(exist_ok=True); (kg3 / "Issues" / "壞了.md").write_text("---\ntype: issue\nstatus: open\n---\n# 壞了\n", encoding="utf-8")
+    p3.write_text(p3.read_text(encoding="utf-8").replace("# 甲\n", "# 甲\n\n修 [[Issues/壞了]]。\n"), encoding="utf-8")
+    run(kg3, "spec-gate", "Projects/甲_計劃", expect_rc=0); _sg_commit(d3, "plan links issue")
+    tx3 = d3 / "tests" / "test_x.py"; tx3.write_text(tx3.read_text() + "\n# fix\n"); _sg_commit(d3, "fix")
+    r = run(kg3, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d3))
+    check("⑥ 計劃連到 Issues(修 bug)→ 擋、說目的", r.returncode == 1 and "目的" in r.stdout, r.stdout[-500:])
+    # 代碼審 r1 折入:改名、二進位檔、跨時區逃逸時間戳
+    import subprocess as _sp, json as _j
+    d4, kg4, p4 = _sc_setup("sc4")
+    (kg4 / "Systems" / "Home.md").write_text((kg4 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - tests/test_y.py\n"), encoding="utf-8")
+    _sg_commit(d4, "home lists new name")
+    _sp.run(["git", "-C", str(d4), "mv", "tests/test_x.py", "tests/test_y.py"]); (d4 / "tests" / "test_y.py").write_text((d4 / "tests" / "test_y.py").read_text() + "\n# 改名後加一行\n"); _sg_commit(d4, "rename")
+    r = run(kg4, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d4))
+    check("⑦ 改名+一行、新名在落點內 → 過(numstat 用 --no-renames 才不會印成 {a => b})", r.returncode == 0 and "小改動閘" in r.stdout, r.stdout[-500:])
+    (d4 / "tests" / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4); (d4 / "tests" / "test_y.py").write_text((d4 / "tests" / "test_y.py").read_text() + "\n# 又一行\n"); _sg_commit(d4, "binary")
+    (kg4 / "Systems" / "Home.md").write_text((kg4 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_y.py\n", "  - tests/test_y.py\n  - tests/pic.png\n"), encoding="utf-8")
+    r = run(kg4, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d4))
+    check("⑧ 二進位檔即使在落點內 → 算不出量、擋", r.returncode == 1 and "二進位" in r.stdout, r.stdout[-500:])
+    d5, kg5, p5 = _sc_setup("sc5")
+    import datetime as _dtm
+    recent_utc = (_dtm.datetime.now(_dtm.timezone.utc) - _dtm.timedelta(days=3)).isoformat(timespec="seconds")
+    with open(kg5.parent / ".escape-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"ts": recent_utc, "token": "ESC-tz", "loop": "甲", "stage": "CI", "severity": "major", "desc": "x", "plan": "Projects/甲_計劃.md", "door": "two-way"}, ensure_ascii=False) + "\n")
+    tx5 = d5 / "tests" / "test_x.py"; tx5.write_text(tx5.read_text() + "\n# 一行\n"); _sg_commit(d5, "small")
+    r = run(kg5, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d5))
+    check("⑨ 逃逸帳用 UTC 寫的三天前那筆也算近期 → 擋、說歷史(時間戳換算後比,不是字串比)", r.returncode == 1 and "逃逸" in r.stdout, r.stdout[-500:])
+    # r2 折入:純改名的大檔、JSON 大改動
+    d6, kg6, p6 = _sc_setup("sc6")
+    big = d6 / "tests" / "big.py"; big.write_text("".join(f"x{i} = {i}\n" for i in range(400))); _sg_commit(d6, "big file")
+    (kg6 / "Systems" / "Home.md").write_text((kg6 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - tests/big2.py\n  - tests/data.json\n"), encoding="utf-8")
+    _sp.run(["git", "-C", str(d6), "mv", "tests/big.py", "tests/big2.py"]); tx6 = d6 / "tests" / "test_x.py"; tx6.write_text(tx6.read_text() + "\n# 一行\n"); _sg_commit(d6, "pure rename")
+    r = run(kg6, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d6))
+    check("⑩ 純改名 400 行的檔(內容不動)→ 不算改動量,過", r.returncode == 0 and "小改動閘" in r.stdout, r.stdout[-500:])
+    (d6 / "tests" / "data.json").write_text("[\n" + ",\n".join(f'  {{"i": {i}}}' for i in range(2000)) + "\n]\n"); tx6.write_text(tx6.read_text() + "\n# 再一行\n"); _sg_commit(d6, "json big")
+    r = run(kg6, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d6))
+    check("⑪ JSON 檔(在落點內)整支新增上千元素 → 照量,新增檔沒有原本行數且 >300 行 → 擋", r.returncode == 1 and "相對量" in r.stdout and "data.json" in r.stdout, r.stdout[-500:])
+    # r3 折入:搬進卷證目錄不豁免;改名+大改用舊路徑查原本行數
+    d7, kg7, p7 = _sc_setup("sc7")
+    (d7 / "governance" / "replay").mkdir(parents=True, exist_ok=True)
+    _sp.run(["git", "-C", str(d7), "mv", "tests/run.py", "governance/replay/run.py"]); tx7 = d7 / "tests" / "test_x.py"; tx7.write_text(tx7.read_text() + "\n# 一行\n"); _sg_commit(d7, "hide into evidence dir")
+    r = run(kg7, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d7))
+    check("⑫ 程式檔搬進卷證目錄 → 不豁免,落點外擋", r.returncode == 1 and "落點外" in r.stdout and "governance/replay/run.py" in r.stdout, r.stdout[-500:])
+    d8, kg8, p8 = _sc_setup("sc8")
+    big8 = d8 / "tests" / "big.py"; big8.write_text("".join(f"x{i} = {i}\n" for i in range(2000))); _sg_commit(d8, "big")
+    (kg8 / "Systems" / "Home.md").write_text((kg8 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - tests/big2.py\n"), encoding="utf-8")
+    _sp.run(["git", "-C", str(d8), "mv", "tests/big.py", "tests/big2.py"]); b2 = d8 / "tests" / "big2.py"; b2.write_text(b2.read_text() + "".join(f"y{i} = {i}\n" for i in range(350))); tx8 = d8 / "tests" / "test_x.py"; tx8.write_text(tx8.read_text() + "\n# 一行\n"); _sg_commit(d8, "rename + 350 lines")
+    r = run(kg8, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d8))
+    check("⑬ 改名+加 350 行(原本 2000 行=17.5% ≤ 20%)→ 用舊路徑查到原本行數、過", r.returncode == 0 and "小改動閘" in r.stdout, r.stdout[-500:])
 
 
 def t_spec_gate_twoway_pass_each_red():

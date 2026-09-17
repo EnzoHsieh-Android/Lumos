@@ -1,0 +1,171 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index b6955629..790b8d08 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4833,21 +4833,21 @@ _EXCL_LEAD_RE = re.compile(r"^[\s>*+•—·\-\d.、)]*")   # 已排除行的前
+ _EXCLUDED_RE = re.compile(r"^已排除\s*[:：]\s*([^:：]+?)\s*[:：]\s*(.*)$")
+ _HAZARD_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?實務隱患\s*(?:[(（][^)）]*[)）])?\s*$")
+ _KEEPS_RE = re.compile(r"\[keeps\]")
+ _KEEPS_VARIANT_RE = re.compile(r"[\[［【]\s*keeps\s*[\]］】]", re.I)
+ _DOOR_STALE_DAYS = 30   # 健檢:雙向門 doing 計劃多少天沒新留痕就提醒(不擋)
+ # 小改動閘(雙向門放行_計劃 S27;Enzo 2026-09-17 裁「小改動不至於要綁測試」+「行數太 low,看 AWS/Meta/學術怎麼判」):
+ # 全靠人驗的雙向門計劃,推送時四個維度全部成立才放行。判準借即時缺陷預測(Mockus&Weiss 2000、Kamei 2013)的擴散/相對量/歷史/目的,
+ # 不拿絕對行數當唯一判準;數字是拍的(RETIRE-IF 在計劃),改了就 bump 版本(留痕記 small_change_rule)。
+ _SMALL_CHANGE_RULE_VERSION = 1
+ _SMALL_CHANGE = {"max_files": 5, "max_dirs": 2, "max_rel_churn": 0.2, "max_abs_lines": 300, "escape_days": 90}
+-_BOOKKEEPING_RE = re.compile(r"^(docs/\.[^/]+\.jsonl|governance/|\.lumos/)")   # 帳本、卷證、設定:不算擴散也不算量
++# 「哪些檔不算程式改動」沿用既有單一源:簿記檔 _BOOKKEEPING_FILES/_BOOKKEEPING_DIR + 非代碼副檔名 _PITFALL_DIFF_SKIP_EXT + 圖譜筆記(代碼審 r1 架構席:自開正則=第二套判準會漂)
+ 
+ 
+ def _excluded_line(line):
+     """「已排除:<類>:<理由>」行的★唯一★解析——判定(掃描跳不跳這行)與證明(算不算四行之一)共用同一支
+     (r2 正確性/邊界席:兩邊各寫一份、只認字首,任何段落寫一行「已排除:…」就能把它洗出掃描)。
+     回 None(不是已排除行)或 (類名, 理由, 合格):合格=類名是四類中文名之一且理由 ≥4 個實字;半形全形冒號都收。"""
+     s = _EXCL_LEAD_RE.sub("", _strip_inline_markup(line)[0]).strip()
+     m = _EXCLUDED_RE.match(s)
+     if not m:
+         return None
+@@ -5594,81 +5594,87 @@ def _spec_gate_push_candidates(env, rr, vrel, touched):
+ 
+ 
+ def _small_change_check(env, rr, git_range, prel, note):
+     """全靠人驗的雙向門計劃的推送閘:回沒過的原因清單(空=過)。
+     擴散:碰的程式檔 ≤max_files、目錄 ≤max_dirs、每支都在計劃落點(lands_in/related 節點 about_code)內;
+     相對量:每檔 (新增+刪除) ≤ 原本行數×max_rel_churn 或 ≤max_abs_lines;
+     歷史:落點沒 risk/ 標籤、碰的檔不是裁判檔(hook/錨點清單)、近 escape_days 天逃逸帳沒有歸到同落點的列;目的:計劃不連 Issues(修 bug 不算小改動)。"""
+     C = _SMALL_CHANGE
+     bad = []
+     try:
+-        r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "diff", "--numstat", git_range, "--"], capture_output=True, text=True, errors="replace")
++        # --no-renames:改名會被印成 a/{x => y}.py 這種合併字串,目錄/落點/原行數全算錯(代碼審 r1 通才席);拆成刪+加就是普通路徑
++        r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "diff", "--numstat", "--no-renames", git_range, "--"], capture_output=True, text=True, errors="replace")
+     except OSError as e:
+         return [f"算不出改動量({e})"]
+     if r.returncode != 0:
+         return [f"範圍 {git_range} 算不出來"]
+     try:
+         vrel = str(env.vault.resolve().relative_to(rr)).replace(os.sep, "/")
+     except ValueError:
+         vrel = None
+     files = []
+     for ln in r.stdout.splitlines():
+         parts = ln.split("\t")
+         if len(parts) != 3:
+             continue
+         la, ld, path = parts
+         path = nfc(path.strip())
+-        if _BOOKKEEPING_RE.match(path) or (vrel and path.startswith(vrel + "/")):
+-            continue   # 帳本/卷證/筆記不算
+-        files.append((path, int(la) if la.isdigit() else 0, int(ld) if ld.isdigit() else 0))
++        if (path in _BOOKKEEPING_FILES or path.startswith(_BOOKKEEPING_DIR) or Path(path).suffix.lower() in _PITFALL_DIFF_SKIP_EXT
++                or (vrel and path.startswith(vrel + "/"))):
++            continue   # 帳本/卷證/資料檔/筆記不算程式改動
++        binary = not (la.isdigit() and ld.isdigit())   # numstat 對二進位檔印 -\t-:算不出量(代碼審 r1 通才席:記成 0 會讓相對量恆過)
++        files.append((path, int(la) if la.isdigit() else 0, int(ld) if ld.isdigit() else 0, binary))
+     if not files:
+         return []
+     dirs = {str(Path(f[0]).parent) for f in files}
+     if len(files) > C["max_files"] or len(dirs) > C["max_dirs"]:
+         bad.append(f"擴散:碰了 {len(files)} 個程式檔/{len(dirs)} 個目錄,小改動上限 {C['max_files']} 檔/{C['max_dirs']} 目錄")
+     links = _plan_system_links(note)
+     homes, own = _impact_home_map(env)
+     allowed = set()
+     for lk in links:
+         allowed |= own.get(lk + ".md", set()) | own.get(lk, set())
+     outside = [f[0] for f in files if _nodehome_key(f[0]) not in allowed]
+     if outside:
+         bad.append("落點外:" + "、".join(outside[:5]) + (f" 等 {len(outside)} 支" if len(outside) > 5 else "") + "(計劃 lands_in/related 那些節點的 about_code 沒列它)")
+     base = git_range.split("..")[0] if ".." in git_range else None
+-    for path, la, ld in files:
++    for path, la, ld, binary in files:
++        if binary:
++            bad.append(f"相對量:{path} 是二進位檔,算不出改動量,不當小改動")
++            continue
+         churn = la + ld
+         if churn <= C["max_abs_lines"]:
+             continue
+         lt = None
+         if base:
+             g = subprocess.run(["git", "-C", str(rr), "show", f"{base}:{path}"], capture_output=True, text=True, errors="replace")
+             lt = len(g.stdout.splitlines()) if g.returncode == 0 else 0
+         if lt is None or churn > lt * C["max_rel_churn"]:
+             bad.append(f"相對量:{path} 改了 {churn} 行(原本 {lt if lt is not None else '?'} 行),超過 {int(C['max_rel_churn'] * 100)}% 也超過 {C['max_abs_lines']} 行")
+     for lk in links:
+         hn = env.notes.get(lk + ".md") or env.notes.get(lk)
+         if hn is not None and any(str(t).startswith("risk/") for t in as_list(hn.fields.get("tags"))):
+             bad.append(f"歷史:落點 {lk} 掛了風險標籤,不算小改動")
+     anchors = set()
+-    try:
++    try:   # 錨點清單走既有路徑常數與解析寫法(代碼審 r1 架構席:別再手寫路徑、別再猜形狀)
+         import json as _j
+-        ab = _j.loads((rr / "governance" / "anchor-baseline.json").read_text(encoding="utf-8"))
+-        anchors = {nfc(str(k)) for k in (ab.get("anchors") or ab if isinstance(ab, dict) else {})}
+-    except (OSError, ValueError):
++        anchors = {nfc(str(k)) for k in (_j.loads((rr / _ANCHOR_BASELINE_REL).read_text(encoding="utf-8")).get("anchors") or {})}
++    except (OSError, ValueError, AttributeError):
+         pass
+     judge = [f[0] for f in files if f[0] in anchors or f[0].startswith("scripts/hooks/")]
+     if judge:
+         bad.append("歷史:碰到裁判檔(hook/錨點):" + "、".join(judge[:5]))
+     import datetime as _dt
+-    cutoff = (_dt.datetime.now().astimezone() - _dt.timedelta(days=C["escape_days"])).isoformat()
++    cutoff_key = _loop_ts_key((_dt.datetime.now().astimezone() - _dt.timedelta(days=C["escape_days"])).isoformat())
+     for e in _escape_rows_for(env):
+-        if str(e.get("ts", "")) < cutoff or not e.get("plan"):
++        k = _loop_ts_key(str(e.get("ts", "")))   # 時間戳一律換算 UTC 再比(代碼審 r1 兩席:字串比對在時區位移不同時會靜默反過來)
++        if k is None or cutoff_key is None or k < cutoff_key or not e.get("plan"):
+             continue
+         en = env.notes.get(str(e["plan"]))
+         if en is not None and set(_plan_system_links(en)) & set(links):
+             bad.append(f"歷史:近 {C['escape_days']} 天逃逸帳有同落點的列(迴圈 {e.get('loop')},{str(e.get('ts'))[:10]}),這個落點最近出過事")
+             break
+     try:
+         ptxt = (env.vault / prel).read_text(encoding="utf-8-sig")
+     except (OSError, UnicodeDecodeError):
+         ptxt = ""
+     if any(str(lk).startswith("Issues/") for lk in _plan_system_links(note, text=ptxt, systems_only=False)):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ec41dbf5..cb1d0778 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -43578,20 +43578,40 @@ def t_prepush_small_change_gate():
+     d2, kg2, p2 = _sc_setup("sc2", home_tags="tags:\n  - risk/守衛面\n")
+     r = run(kg2, "spec-gate", "Projects/甲_計劃", "--no-run")
+     check("⑤ 落點掛風險標籤 → 門本來就判單向,不會走到小改動閘", "[spec-gate] 門: 單向門" in r.stdout, r.stdout[-300:])
+     d3, kg3, p3 = _sc_setup("sc3")
+     (kg3 / "Issues").mkdir(exist_ok=True); (kg3 / "Issues" / "壞了.md").write_text("---\ntype: issue\nstatus: open\n---\n# 壞了\n", encoding="utf-8")
+     p3.write_text(p3.read_text(encoding="utf-8").replace("# 甲\n", "# 甲\n\n修 [[Issues/壞了]]。\n"), encoding="utf-8")
+     run(kg3, "spec-gate", "Projects/甲_計劃", expect_rc=0); _sg_commit(d3, "plan links issue")
+     tx3 = d3 / "tests" / "test_x.py"; tx3.write_text(tx3.read_text() + "\n# fix\n"); _sg_commit(d3, "fix")
+     r = run(kg3, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d3))
+     check("⑥ 計劃連到 Issues(修 bug)→ 擋、說目的", r.returncode == 1 and "目的" in r.stdout, r.stdout[-500:])
++    # 代碼審 r1 折入:改名、二進位檔、跨時區逃逸時間戳
++    import subprocess as _sp, json as _j
++    d4, kg4, p4 = _sc_setup("sc4")
++    (kg4 / "Systems" / "Home.md").write_text((kg4 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - tests/test_y.py\n"), encoding="utf-8")
++    _sg_commit(d4, "home lists new name")
++    _sp.run(["git", "-C", str(d4), "mv", "tests/test_x.py", "tests/test_y.py"]); (d4 / "tests" / "test_y.py").write_text((d4 / "tests" / "test_y.py").read_text() + "\n# 改名後加一行\n"); _sg_commit(d4, "rename")
++    r = run(kg4, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d4))
++    check("⑦ 改名+一行、新名在落點內 → 過(numstat 用 --no-renames 才不會印成 {a => b})", r.returncode == 0 and "小改動閘" in r.stdout, r.stdout[-500:])
++    (d4 / "tests" / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4); (d4 / "tests" / "test_y.py").write_text((d4 / "tests" / "test_y.py").read_text() + "\n# 又一行\n"); _sg_commit(d4, "binary")
++    (kg4 / "Systems" / "Home.md").write_text((kg4 / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_y.py\n", "  - tests/test_y.py\n  - tests/pic.png\n"), encoding="utf-8")
++    r = run(kg4, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d4))
++    check("⑧ 二進位檔即使在落點內 → 算不出量、擋", r.returncode == 1 and "二進位" in r.stdout, r.stdout[-500:])
++    d5, kg5, p5 = _sc_setup("sc5")
++    import datetime as _dtm
++    recent_utc = (_dtm.datetime.now(_dtm.timezone.utc) - _dtm.timedelta(days=3)).isoformat(timespec="seconds")
++    with open(kg5.parent / ".escape-log.jsonl", "a", encoding="utf-8") as f:
++        f.write(_j.dumps({"ts": recent_utc, "token": "ESC-tz", "loop": "甲", "stage": "CI", "severity": "major", "desc": "x", "plan": "Projects/甲_計劃.md", "door": "two-way"}, ensure_ascii=False) + "\n")
++    tx5 = d5 / "tests" / "test_x.py"; tx5.write_text(tx5.read_text() + "\n# 一行\n"); _sg_commit(d5, "small")
++    r = run(kg5, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d5))
++    check("⑨ 逃逸帳用 UTC 寫的三天前那筆也算近期 → 擋、說歷史(時間戳換算後比,不是字串比)", r.returncode == 1 and "逃逸" in r.stdout, r.stdout[-500:])
+ 
+ 
+ def t_spec_gate_twoway_pass_each_red():
+     """[雙向門放行 S4] 雙向門:至少一條、測試都存在且名字互不相同、沒標 keeps 的每一條都紅 → 放行、審查帳留 kind=spec-gate。
+     翻紅釘:把「每條各自紅」改成「至少一支紅」→ t_spec_gate_green_new_clause_rejected ① 翻紅。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw4")
+     # 「送出」在四類關鍵字表裡(對外送出),寫進條款就會被判單向門——這是「預設單向」的真實代價,條款措辭要避開
+     _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 當按下儲存,系統應存檔 [test:t_red2]"])
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     check("① rc0 並印 PASS(雙向門)", r.returncode == 0 and "PASS(雙向門)" in r.stdout and "不派審" in r.stdout, r.stdout[-800:])
