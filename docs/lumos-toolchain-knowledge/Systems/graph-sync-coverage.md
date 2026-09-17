@@ -17,6 +17,7 @@ summary: |-
   KEY:★2026-09-11 起提交前與推送前的點名移出本篇★:原本兩個掛鉤都呼叫 impact --sync-only,以反引號命中的節點為種子,會把人推回寫了一堆別人檔名的大雜燴節點;改由每支檔有家照 about_code 宣告的家點名(家超過 8 篇只印一句)。本篇剩 Stop hook 當輪點名與代碼審留痕前的 --sync-check [test:t_nodehome_sync_nudge_by_home]
   KEY:「動過圖譜」不等於「動對篇」——(2026-09-11 前)三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
+  KEY:[2026-09-17]收工擋停的標記目錄改成逐層建逐層檢查:原本一次 mkdir 整條路徑再檢查,上層被換成指向別人目錄的連結時,別人的目錄裡已經多出一個 stop-block 資料夾,檢查才說不碰它,跟它註解的承諾矛盾。判準跟主程式 _mkdir_trusted_under_home 同一套(真目錄、屬於自己、別人不可寫;任一層不過就停手、已建的不回頭刪),這支 hook 是獨立檔不 import 主程式所以邏輯抄一份,★一邊改了另一邊要跟著改★;誠實邊界:擋不住同帳號搶跑 [test:t_stop_block_dir_does_not_touch_someone_elses_dir]
   DEP:[[Systems/lumos-cli-read]]
   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
 verified_by:

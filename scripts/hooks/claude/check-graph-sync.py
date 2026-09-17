@@ -620,7 +620,16 @@ def _stop_block_dir() -> Path:
     之前會跟著 chmod 並刪掉目標裡超過 7 天的檔——現在 symlink/不是自己的/別人可寫 一律不碰,交給後面的 _stop_dir_ok 判不擋)。"""
     d = Path.home() / ".cache" / "lumos" / "stop-block"
     try:
-        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # ★逐層建、逐層檢查★(2026-09-16 補審 delta 那一輪):原本一次 mkdir 出整條路徑再檢查,
+        # 上層被換成指向別處的連結時,★別人的目錄裡已經多出一個 stop-block 資料夾了★,
+        # 檢查才說「不碰它」——跟上面那句「不在別人的目錄上寫標記」自己矛盾。
+        # 主程式的 `_mkdir_trusted_under_home` 同一天改成這樣,這支 hook 是獨立檔不能 import,
+        # ★所以邏輯抄一份、判準必須跟它對齊★(是真目錄、屬於自己、別人不可寫;任何一層不過就停手,
+        # 已經建好的不回頭刪——刪反而是在動別人的東西)。
+        if not _mkdir_under_home(".cache", "lumos", "stop-block"):
+            print(f"lumos 收工擋停停用:{d} 這條路徑上有一層不是自己的真目錄"
+                  "(被換成指向別處的連結、或別人也寫得進去)——不在那裡建東西。", file=sys.stderr)
+            return d
         if not _stop_dir_ok(d):
             print(f"lumos 收工擋停停用:標記目錄 {d} 不是自己的 0700 目錄(symlink / 別人可寫 / chmod 失敗)——修好權限才會再擋", file=sys.stderr)   # r2 delta #3:靜默停用要有訊號(給 log,Codex 模型看不到)
             return d
@@ -637,9 +646,55 @@ def _stop_block_dir() -> Path:
     return d
 
 
+def _mkdir_under_home(*segs) -> bool:
+    """從家目錄往下逐層建、逐層檢查,全過才回 True。
+
+    ★跟主程式 `_mkdir_trusted_under_home` 同一套判準★(2026-09-16):這支 hook 是獨立檔、
+    不 import 主程式,所以邏輯抄一份;★判準有任何一邊改了,另一邊要跟著改★
+    ——今天就是因為主程式改了、這裡沒跟上,兩份才不一致。
+
+    每一段必須是一個單純的名字(路徑接合遇到絕對路徑會整個重置,`..` 也照走);
+    每建一層就確認它是真目錄、屬於自己、別人不可寫;任何一層不過就停手,
+    ★已經建好的不回頭刪★(刪反而是在動別人的東西)。
+
+    ★誠實邊界★:路徑層檢查,擋不住同帳號搶跑(檢查完到下一層動作之間有時間差)。
+    要真正關掉得改用 dirfd / O_NOFOLLOW 那一套;沒做的理由是能在你帳號下跑程式的人
+    本來就能做任何事。**不得宣稱「換掉也擋得住」**。
+    """
+    import stat as _stat
+    cur = Path.home()
+    for seg in segs:
+        if (not isinstance(seg, str) or not seg or seg in (".", "..")
+                or "/" in seg or "\\" in seg or Path(seg).is_absolute()):
+            return False
+        cur = cur / seg
+        try:
+            cur.mkdir(exist_ok=True, mode=0o700)   # 不帶 parents:一層一層來才檢查得到每一層
+        except FileExistsError:
+            pass
+        except OSError:
+            return False
+        try:
+            if cur.is_symlink() or not cur.is_dir():
+                return False
+            st = cur.stat()
+        except OSError:
+            return False
+        if hasattr(os, "getuid"):
+            if st.st_uid != os.getuid():
+                return False
+            if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+                return False
+    return True
+
+
 def _stop_dir_ok(d: Path) -> bool:
     """標記目錄信任檢查(spec-conformance r1:跟 scripts/lumos 的 _lens_arm_dir_ok 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫。
-    不過關=不擋(寧可漏),不在別人的目錄上寫標記。"""
+    不過關=不擋(寧可漏),不在別人的目錄上寫標記。
+
+    ★誠實邊界(2026-09-16 補審 delta 那一輪:主程式那份有寫、這裡漏抄)★:這是路徑層檢查,
+    擋不住同帳號搶跑——檢查完到真的寫標記檔之間有時間差,同 UID 的程序可以在那個縫裡把目錄換掉。
+    要真正關掉得改用 dirfd / O_NOFOLLOW 那一套。**不得宣稱「換掉也擋得住」**。"""
     import stat as _stat
     try:
         if d.is_symlink():      # r2 外家:symlink 指到別處=別人的目錄,不信
