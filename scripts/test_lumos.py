@@ -43182,11 +43182,13 @@ def _mk_spec_gate_repo(d, run_cmd="python3 tests/run.py {method}"):
     d = Path(d)
     _sp.run(["git", "init", "-q", str(d)])
     (d / "tests").mkdir()
-    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_multi():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
+    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_red2():\n    assert False\n\ndef t_green2():\n    assert True\n\ndef t_flip():\n    pass\n\ndef t_multi():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
     (d / "tests" / "run.py").write_text(
         "import sys\n"
         "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "import os\n"
         "table = {'t_red': (1, '0 passed, 1 failed', 1), 't_green': (1, '3 passed, 0 failed', 0), 't_multi': (2, '2 passed, 0 failed', 0),\n"
+        "         't_red2': (1, '0 passed, 1 failed', 1), 't_green2': (1, '1 passed, 0 failed', 0), 't_flip': (1, '1 passed, 0 failed', 0) if os.path.exists('tests/flip.ok') else (1, '0 passed, 1 failed', 1),\n"
         "         't_zero': (0, '0 passed, 0 failed', 0), 't_skip': (1, '0 passed, 0 failed (skipped=1)', 0)}\n"
         "if m not in table:\n    print('no such test', m); sys.exit(2)\n"
         "n, line, rc = table[m]\n"
@@ -43449,6 +43451,404 @@ def t_doctor_spec_gate_stats():
     _sg_plan(kg, "卯", ["- [S1] 系統應回 200 [test:t_red]"]); run(kg, "spec-gate", "Projects/卯_計劃", expect_rc=0)
     r2 = run(kg, "doctor")
     check("② 跑過一份後:健檢印那份計劃的紅綠弱", "卯" in r2.stdout and "紅 1" in r2.stdout, r2.stdout[-800:])
+
+
+# ── 雙向門放行(Projects/雙向門放行_計劃;Enzo 2026-09-17 裁「做出來在模擬測試就好」)──
+_SG_EXCL_ALL = ["已排除:金流:這份計劃不碰任何收費或扣款的流程", "已排除:對外送出:不寄信不推播不呼叫外部服務",
+                "已排除:不可逆:只改本機檔案,改壞了重跑一次就回來", "已排除:守衛面:不碰任何閘或掛鉤的判定"]
+
+
+def _sg_plan2(kg, name, clauses, excl=_SG_EXCL_ALL, body="", fm="", rollback=_SG_ROLLBACK, hazard_h2="## 實務隱患", after_excl=""):
+    """帶「實務隱患」節(四行已排除)的計劃——不命中任何硬單向門訊號就是雙向門。"""
+    p = kg / "Projects" / f"{name}_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\n" + fm + "---\n# " + name + "\n\n" + body + "\n" + "\n".join(clauses)
+                 + "\n\n" + hazard_h2 + "\n" + "\n".join("- " + x for x in excl) + "\n" + after_excl + rollback, encoding="utf-8")
+    return p
+
+
+def _sg_commit(d, msg="p"):
+    import subprocess as _sp
+    _sp.run(["git", "-C", str(d), "add", "-A"])
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg, "--no-verify"])
+
+
+def _sg_records(kg, kind="spec-gate"):
+    import json as _j
+    p = kg.parent / ".canary-log.jsonl"
+    if not p.exists():
+        return []
+    return [_j.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip() and _j.loads(x).get("kind") == kind]
+
+
+def t_spec_gate_door_signals():
+    """[雙向門放行 S1] 關鍵字命中/連到帶不可逆合約或風險標籤的節點/door: one-way/自帶 risk 標籤 → 單向門並印訊號;都沒有且四行已排除齊 → 雙向門。
+    翻紅釘:把關鍵字掃描拿掉 → ① 翻紅;把連結節點掃描拿掉 → ② 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw1")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], body="這段會跑 DELETE FROM 清資料。")
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 關鍵字命中 → 單向門並印哪個字、哪一類", "單向門" in r.stdout and "DELETE FROM" in r.stdout and "不可逆" in r.stdout, r.stdout[-600:])
+    _sg_system(kg, "Risky", ["KEY:★IRREVERSIBLE★ 上架後撤不回"])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], fm='related:\n  - "[[Systems/Risky]]"\n')
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("② 連到帶 ★IRREVERSIBLE★ 的節點 → 單向門並點名該節點", "單向門" in r.stdout and "Risky" in r.stdout, r.stdout[-600:])
+    _sg_system(kg, "Tagged", ["KEY:普通的一行"])
+    (kg / "Systems" / "Tagged.md").write_text("---\ntype: system\nstatus: doing\ntags:\n  - risk/金流\nsummary: |-\n  FLOW:x\n---\n# Tagged\n", encoding="utf-8")
+    _sg_plan2(kg, "丙", ["- [S1] 系統應回 200 [test:t_red]"], body="細節見 [[Systems/Tagged]]。")
+    r = run(kg, "spec-gate", "Projects/丙_計劃", "--no-run")
+    check("③ 正文連到掛 risk/ 標籤的節點 → 單向門", "單向門" in r.stdout and "Tagged" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "丁", ["- [S1] 系統應回 200 [test:t_red]"], fm="door: one-way\n")
+    r = run(kg, "spec-gate", "Projects/丁_計劃", "--no-run")
+    check("④ 作者寫 door: one-way → 單向門(訊號寫 door 欄位)", "單向門" in r.stdout and "door" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "戊", ["- [S1] 系統應回 200 [test:t_red]"])
+    r = run(kg, "spec-gate", "Projects/戊_計劃", "--no-run")
+    check("⑤ 沒訊號、四行已排除齊 → 雙向門", "[spec-gate] 門: 雙向門" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "己", ["- [S1] 系統應回 200 [test:t_red]"], fm="door: two-way\n", body="會 DROP TABLE。")
+    r = run(kg, "spec-gate", "Projects/己_計劃", "--no-run")
+    check("⑥ 寫 door: two-way 不會比機械判定更鬆", "單向門" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_twoway_needs_four_exclusions():
+    """[雙向門放行 S2] 硬單向門沒命中、但實務隱患節缺任一類已排除行(含零行、理由太短)→ 單向門並印缺哪一類。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw2")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], excl=_SG_EXCL_ALL[:3])
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 缺守衛面那行 → 單向門、印缺哪一類", "單向門" in r.stdout and "缺" in r.stdout and "守衛面" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], excl=[])
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("② 零行 → 單向門、四類都列", all(x in r.stdout for x in ("金流", "對外送出", "不可逆", "守衛面")), r.stdout[-600:])
+    _sg_plan2(kg, "丙", ["- [S1] 系統應回 200 [test:t_red]"], excl=_SG_EXCL_ALL[:3] + ["已排除:守衛面:無"])
+    r = run(kg, "spec-gate", "Projects/丙_計劃", "--no-run")
+    check("③ 理由不到 4 個實字 → 那類算缺", "單向門" in r.stdout and "守衛面" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "丁", ["- [S1] 系統應回 200 [test:t_red]"], excl=_SG_EXCL_ALL[:3] + ["已排除：守衛面：不碰任何閘或掛鉤"])
+    r = run(kg, "spec-gate", "Projects/丁_計劃", "--no-run")
+    check("④ 全形冒號也收", "雙向門" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_twoway_rejects_manual():
+    """[雙向門放行 S3] 雙向門計劃的條款帶 [manual:] → 擋下,提示綁測試或把門升成單向。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw3")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應好看 [manual:人工看一眼畫面]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① rc1、點名 S2、提示升門", r.returncode == 1 and "S2" in r.stdout and "單向" in r.stdout and "manual" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_twoway_pass_each_red():
+    """[雙向門放行 S4] 雙向門:至少一條、測試都存在且名字互不相同、沒標 keeps 的每一條都紅 → 放行、審查帳留 kind=spec-gate。
+    翻紅釘:把「每條各自紅」改成「至少一支紅」→ t_spec_gate_green_new_clause_rejected ① 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw4")
+    # 「送出」在四類關鍵字表裡(對外送出),寫進條款就會被判單向門——這是「預設單向」的真實代價,條款措辭要避開
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 當按下儲存,系統應存檔 [test:t_red2]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("① rc0 並印 PASS(雙向門)", r.returncode == 0 and "PASS(雙向門)" in r.stdout and "不派審" in r.stdout, r.stdout[-800:])
+    recs = _sg_records(kg)
+    check("② 審查帳有一筆 kind=spec-gate、door=two-way、loop=甲、tests 兩支", len(recs) == 1 and recs[0].get("door") == "two-way" and recs[0].get("loop") == "甲" and sorted(recs[0].get("tests") or []) == ["t_red", "t_red2"], str(recs)[:400])
+
+
+def t_spec_gate_green_new_clause_rejected():
+    """[雙向門放行 S5] 雙向門:沒標 keeps 的條款其測試是綠的 → 拒絕放行並說是哪一條。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw5")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應存檔 [test:t_green]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("① rc1、點名 S2 綠", r.returncode == 1 and "S2" in r.stdout and "綠" in r.stdout and "PASS(雙向門)" not in r.stdout, r.stdout[-800:])
+    check("② 沒放行就沒留痕", _sg_records(kg) == [], str(_sg_records(kg)))
+
+
+def t_spec_gate_twoway_unique_tests():
+    """[雙向門放行 S18] 雙向門:兩條綁同一支測試 → 擋下(十條全綁同一支也能過「全部存在」——r1 邊界席)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw18")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應存檔 [test:t_red]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① rc1、說測試名要互不相同", r.returncode == 1 and "t_red" in r.stdout and ("互不相同" in r.stdout or "重複" in r.stdout), r.stdout[-600:])
+
+
+def t_spec_gate_twoway_weak_blocks():
+    """[雙向門放行 S19] 雙向門:弱證據(0 支/多支/被跳過)不算紅 → 擋下;懸空(測試不存在)也擋。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw19")
+    for nm, tn in (("甲", "t_zero"), ("乙", "t_multi"), ("丙", "t_skip")):
+        _sg_plan2(kg, nm, [f"- [S1] 系統應回 200 [test:{tn}]"])
+        r = run(kg, "spec-gate", f"Projects/{nm}_計劃")
+        check(f"① {tn} → rc1 弱證據不放行", r.returncode == 1 and "弱證據" in r.stdout and "PASS(雙向門)" not in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "丁", ["- [S1] 系統應回 200 [test:t_nope]"])
+    r = run(kg, "spec-gate", "Projects/丁_計劃", "--no-run")
+    check("② 測試不存在 → 雙向門擋下(單向門只提醒)", r.returncode == 1 and "t_nope" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_keeps_bypass_rejected():
+    """[雙向門放行 S15] 全標 keeps → 擋;計劃沒進 git 歷史 → keeps 驗不了擋;keeps 的測試在計劃建立前的樹裡不存在 → 擋;
+    既存且綠 + 新條款紅 → 放行;[Keeps] 變體當沒標(綠就擋)並提示。"""
+    import subprocess as _sp
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw15")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_green] [keeps]", "- [S2] 系統應存檔 [test:t_green2] [keeps]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("① 全標 keeps → rc1、說至少一條新行為", r.returncode == 1 and "keeps" in r.stdout and "至少一條" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_green] [keeps]", "- [S2] 系統應存檔 [test:t_red]"])
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    check("② 計劃還沒進 git 歷史 → rc1 說 keeps 驗不了", r.returncode == 1 and "git" in r.stdout and "keeps" in r.stdout, r.stdout[-600:])
+    _sg_commit(d, "plan 乙")
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    check("③ 進了歷史、t_green 在計劃建立前就存在且綠 → 放行", r.returncode == 0 and "PASS(雙向門)" in r.stdout, r.stdout[-800:])
+    tx = d / "tests" / "test_x.py"
+    tx.write_text(tx.read_text() + "\ndef t_fresh():\n    pass\n")
+    rp = d / "tests" / "run.py"
+    rp.write_text(rp.read_text().replace("'t_zero':", "'t_fresh': (1, '1 passed, 0 failed', 0), 't_zero':"))
+    _sg_plan2(kg, "丙", ["- [S1] 系統應回 200 [test:t_fresh] [keeps]", "- [S2] 系統應存檔 [test:t_red]"])
+    _sg_commit(d, "plan 丙 + fresh test")
+    r = run(kg, "spec-gate", "Projects/丙_計劃")
+    check("④ keeps 的測試是跟計劃同一批才出現的 → rc1 說它在計劃建立前不存在", r.returncode == 1 and "t_fresh" in r.stdout and "建立前" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "丁", ["- [S1] 系統應回 200 [test:t_green] [Keeps]", "- [S2] 系統應存檔 [test:t_red]"])
+    _sg_commit(d, "plan 丁")
+    r = run(kg, "spec-gate", "Projects/丁_計劃")
+    check("⑤ [Keeps] 變體當沒標 → 綠的 S1 被擋、並提示疑似 keeps 變體", r.returncode == 1 and "S1" in r.stdout and "變體" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_records_exclusions():
+    """[雙向門放行 S7] 雙向門放行留痕帶四行已排除理由、全部測試名、條款區塊指紋、門判定規則版本(=程式常數)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw7")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"])
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    rec = _sg_records(kg)[0]
+    ex = rec.get("exclusions") or {}
+    check("① 四類理由都在", sorted(ex) == ["不可逆", "守衛面", "對外送出", "金流"] and "收費" in ex["金流"], str(rec)[:500])
+    check("② 測試清單、指紋、規則版本、計劃路徑", rec.get("tests") == ["t_red"] and len(str(rec.get("clause_sha", ""))) == 64 and isinstance(rec.get("door_rule"), int) and rec.get("plan", "").endswith("甲_計劃.md"), str(rec)[:500])
+    r = run(kg, "spec-gate", "--door-rule")
+    check("③ 留痕的 door_rule 等於程式常數", f"door_rule={rec.get('door_rule')}" in r.stdout, r.stdout)
+
+
+def t_door_rule_version_pin():
+    """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
+    ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
+    r = run(mkvault(), "spec-gate", "--door-rule")
+    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=1 " in r.stdout and "inputs_sha=6c5cfb40c137f47d3c8573e774214624eaa8e629b66d10875c58bbc0730677a0" in r.stdout, r.stdout)
+
+
+def t_spec_gate_skips_exclusion_lines():
+    """[雙向門放行 S8] 實務隱患節內合格的四類已排除行本身含類別名甚至關鍵字,不計入命中(不跳過就機制自我否決)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw8")
+    ex = list(_SG_EXCL_ALL); ex[2] = "已排除:不可逆:沒有 DELETE FROM 也沒有遷移,只動本機檔"
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], excl=ex)
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 已排除行裡的 DELETE FROM 不算命中 → 雙向門", "雙向門" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_scans_unqualified_exclusion():
+    """[雙向門放行 S10] 「已排除:」開頭的行不在實務隱患節、或類名不在四類 → 照掃(r2:只認字首會讓任何段落都能洗出掃描)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw10")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], body="已排除:不可逆:這段其實在講 DELETE FROM\n")
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 節外的已排除行照掃 → 單向門(命中「不可逆」或 DELETE FROM 都算)", "[spec-gate] 門: 單向門" in r.stdout and ("DELETE FROM" in r.stdout or "不可逆" in r.stdout), r.stdout[-600:])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], excl=_SG_EXCL_ALL + ["已排除:效能:會跑 DROP TABLE 重建"])
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("② 節內但類名不在四類的已排除行照掃 → 單向門", "單向門" in r.stdout and "DROP TABLE" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_section_bounds():
+    """[雙向門放行 S9] 實務隱患標題帶序號前綴/括號後綴、節內有三級標題 → 到下一個二級標題為止都算該節;已排除行落在下一個二級節就不算。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw9")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], hazard_h2="## (五) 實務隱患(補)\n### 細節", after_excl="")
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 帶前綴後綴與三級標題 → 仍認得四行,雙向門", "雙向門" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], excl=[], after_excl="## 其他\n" + "\n".join("- " + x for x in _SG_EXCL_ALL) + "\n")
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("② 四行寫在下一個二級節 → 不算,單向門缺四類", "單向門" in r.stdout and "缺" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_oneway_keeps_halfset():
+    """[雙向門放行 S20] 單向門照半套:紅綠只印不擋、回退節照擋、印「接著走 lumos loop next」;也留一筆 door=one-way 的痕(逃逸帳分門用)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw20")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_green]"], body="會動 pre-push hook。")
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("① 單向門、綠不擋、rc0、指路 loop next、沒有 PASS(雙向門)", r.returncode == 0 and "單向門" in r.stdout and "loop next" in r.stdout and "PASS(雙向門)" not in r.stdout, r.stdout[-600:])
+    recs = _sg_records(kg)
+    check("② 留一筆 door=one-way", len(recs) == 1 and recs[0].get("door") == "one-way", str(recs)[:300])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_green]"], body="會動 pre-push hook。", rollback="")
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("③ 單向門沒有回退節 → 照擋", r.returncode == 1 and "回退" in r.stdout, r.stdout[-600:])
+
+
+def t_round_valid_ignores_spec_gate():
+    """[雙向門放行 S16] 審查帳裡的 spec-gate 留痕不是審查輪:loop next / loop status 不把它當一輪、也不因它判無效或報帳序壞。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw16")
+    p = _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"])
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    r = run(kg, "loop", "next", "甲", "--tier", "standard", "--orchestrator", "claude", "--spec", str(p))
+    check("① loop next 不被那筆留痕絆倒(算第 1 輪、沒有擋下;rc1 是它「還沒收斂」的常態碼)", r.returncode in (0, 1) and "第 1 輪" in r.stdout and "擋下" not in r.stderr, r.stdout[-300:] + r.stderr[-300:])
+    r = run(kg, "loop", "status", "甲")
+    check("② loop status 當成跑了 0 輪(rc1),不是帳壞(rc2)", r.returncode == 1 and "0 輪" in r.stdout, r.stdout[-300:] + r.stderr[-300:])
+
+
+def _sg_push_setup(tag, plan_name="甲", clauses=None, fm="", body=""):
+    """雙向門放行→提交計劃→回 (d, kg, plan)。條款預設綁 t_flip(有 tests/flip.ok 才綠)。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / tag)
+    p = _sg_plan2(kg, plan_name, clauses or ["- [S1] 系統應回 200 [test:t_flip]"], fm=fm, body=body)
+    run(kg, "spec-gate", f"Projects/{plan_name}_計劃", expect_rc=0)
+    _sg_commit(d, "plan")
+    return d, kg, p
+
+
+def t_prepush_spec_gate_tests_green():
+    """[雙向門放行 S11] 推送前:範圍碰到、仍 doing、有雙向門留痕的計劃,其留痕裡的測試全跑;全綠 rc0。"""
+    d, kg, p = _sg_push_setup("tw11")
+    (d / "tests" / "flip.ok").write_text("")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① 全綠 rc0、印跑了 t_flip", r.returncode == 0 and "t_flip" in r.stdout and "綠" in r.stdout, r.stdout[-600:] + r.stderr[-300:])
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD~1", "--repo", str(d))
+    check("② 範圍沒碰到計劃 → 沒東西可查,rc0", r.returncode == 0 and "t_flip" not in r.stdout, r.stdout[-300:])
+
+
+def t_prepush_spec_gate_red_blocks():
+    """[雙向門放行 S12] 那份清單裡任一支紅 → 推送閘擋下(rc1)、印是哪一支,並自動記一筆逃逸(門 two-way、站 push-gate)。"""
+    d, kg, p = _sg_push_setup("tw12")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① rc1、點名 t_flip", r.returncode == 1 and "t_flip" in r.stdout and "紅" in r.stdout, r.stdout[-600:])
+    esc = (kg.parent / ".escape-log.jsonl")
+    check("② 逃逸帳多一筆 push-gate、door two-way", esc.exists() and '"stage": "push-gate"' in esc.read_text() and '"door": "two-way"' in esc.read_text(), esc.read_text()[-400:] if esc.exists() else "no log")
+
+
+def t_prepush_spec_gate_stale_record():
+    """[雙向門放行 S13] 留痕記的條款區塊指紋跟現況不同(改了條款/換了測試名)→ 擋下,提示重跑規格閘。"""
+    d, kg, p = _sg_push_setup("tw13")
+    (d / "tests" / "flip.ok").write_text("")
+    p.write_text(p.read_text(encoding="utf-8").replace("系統應回 200", "系統應回 201"), encoding="utf-8")
+    _sg_commit(d, "edit clause")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① rc1、說留痕過期要重跑", r.returncode == 1 and "過期" in r.stdout and "spec-gate" in r.stdout, r.stdout[-600:])
+    # ② 連到的節點事後補了 risk/ 標籤 → 門判定訊號 2 的輸入變了,指紋也要過期(r4 回滾席:否則門不會被重判)
+    d2, kg2 = _mk_spec_gate_repo(mkvault().parent.parent / "tw13b")
+    _sg_system(kg2, "Home", ["KEY:普通的一行"])
+    p2 = _sg_plan2(kg2, "乙", ["- [S1] 系統應回 200 [test:t_flip]"], body="落點見 [[Systems/Home]]。")
+    run(kg2, "spec-gate", "Projects/乙_計劃", expect_rc=0)
+    _sg_commit(d2, "plan")
+    (d2 / "tests" / "flip.ok").write_text("")
+    hp = kg2 / "Systems" / "Home.md"
+    hp.write_text(hp.read_text(encoding="utf-8").replace("status: doing\n", "status: doing\ntags:\n  - risk/金流\n"), encoding="utf-8")
+    _sg_commit(d2, "home gets risk tag")
+    r = run(kg2, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d2))
+    check("② 連結節點補了 risk/ 標籤 → 留痕過期 rc1", r.returncode == 1 and "過期" in r.stdout, r.stdout[-600:])
+
+
+def t_prepush_spec_gate_nonclause_edit_ok():
+    """[雙向門放行 S14] 只改條款以外的內容(正文、updated 欄位)→ 留痕仍有效。"""
+    d, kg, p = _sg_push_setup("tw14")
+    (d / "tests" / "flip.ok").write_text("")
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: doing\nupdated: 2026-09-18").replace("# 甲\n", "# 甲\n\n多寫一段說明。\n"), encoding="utf-8")
+    _sg_commit(d, "edit prose")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① rc0", r.returncode == 0 and "過期" not in r.stdout, r.stdout[-600:])
+
+
+def t_prepush_spec_gate_lands_in():
+    """[雙向門放行 S21] 範圍只碰到某篇 Systems 節點、沒碰計劃檔,但某份 doing 的雙向門計劃 lands_in 指向它 → 那份計劃也要查。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw21")
+    _sg_system(kg, "Home", ["KEY:普通的一行"])
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/Home\n---\n# 甲\n\n- [S1] 系統應回 200 [test:t_flip]\n\n## 實務隱患\n"
+                 + "\n".join("- " + x for x in _SG_EXCL_ALL) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    _sg_commit(d, "plan")
+    (kg / "Systems" / "Home.md").write_text((kg / "Systems" / "Home.md").read_text(encoding="utf-8") + "\n改了家。\n", encoding="utf-8")
+    _sg_commit(d, "touch home")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① 只碰到家 → 仍查那份計劃,t_flip 紅 rc1", r.returncode == 1 and "t_flip" in r.stdout and "甲" in r.stdout, r.stdout[-600:])
+
+
+def t_prepush_spec_gate_door_rejudged():
+    """[雙向門放行 S23](代碼審 r1 F1 blocker)留痕後正文塞進金流敘述、條款一字不動 → 推送前重判門成單向,擋下。翻紅釘:拿掉 push-check 裡的 _door_judge → ① 翻紅。"""
+    d, kg, p = _sg_push_setup("tw23")
+    (d / "tests" / "flip.ok").write_text("")
+    p.write_text(p.read_text(encoding="utf-8").replace("# 甲\n", "# 甲\n\n這支功能其實會呼叫 Stripe billing 扣款退款流程。\n"), encoding="utf-8")
+    _sg_commit(d, "sneak")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① rc1、說現在判成單向門並點出 Stripe", r.returncode == 1 and "單向門" in r.stdout and "Stripe" in r.stdout, r.stdout[-600:])
+    d2, kg2, p2 = _sg_push_setup("tw23b")
+    (d2 / "tests" / "flip.ok").write_text("")
+    p2.write_text(p2.read_text(encoding="utf-8").replace("已排除:金流:這份計劃不碰任何收費或扣款的流程", "已排除:金流:改口了但仍然合格的理由"), encoding="utf-8")
+    _sg_commit(d2, "edit reason")
+    r = run(kg2, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d2))
+    check("② 只改已排除理由(門仍雙向)→ 指紋過期擋下", r.returncode == 1 and "過期" in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_exclusion_blockquote_ignored():
+    """[雙向門放行 S24](代碼審 r1 F2)四行已排除放在 > 引用塊裡(等於引來的範本)→ 不算,判單向門缺四類。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw24")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], excl=[], after_excl="以下引用自範本:\n" + "\n".join("> - " + x for x in _SG_EXCL_ALL) + "\n")
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 引用塊裡的已排除行不算 → 單向門、缺四類", "[spec-gate] 門: 單向門" in r.stdout and "缺" in r.stdout, r.stdout[-600:])
+
+
+def t_prepush_spec_gate_code_home():
+    """[雙向門放行 S25](編排者實測 E2)範圍只碰程式檔、不碰計劃也不碰 Systems 節點,但那支檔的家(about_code)被某份 doing 雙向門計劃連到 → 那份計劃也要查。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw25")
+    (kg / "Systems").mkdir(exist_ok=True)
+    (kg / "Systems" / "Home.md").write_text("---\ntype: system\nstatus: doing\nabout_code:\n  - tests/test_x.py\nsummary: |-\n  FLOW:x\n---\n# Home\n", encoding="utf-8")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/Home\n---\n# 甲\n\n- [S1] 系統應回 200 [test:t_flip]\n\n## 實務隱患\n"
+                 + "\n".join("- " + x for x in _SG_EXCL_ALL) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    _sg_commit(d, "plan")
+    tx = d / "tests" / "test_x.py"; tx.write_text(tx.read_text() + "\n# touched\n")
+    _sg_commit(d, "touch code only")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① 只碰程式檔 → 經它的家找到計劃,t_flip 紅 rc1", r.returncode == 1 and "t_flip" in r.stdout and "甲" in r.stdout, r.stdout[-600:])
+    hp = kg / "Systems" / "Home.md"
+    hp.write_text(hp.read_text(encoding="utf-8").replace("status: doing", "status: superseded"), encoding="utf-8")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("② 家已作廢(superseded)→ 不算家、不觸發(代碼審 r2 架構席:走唯一算法才有 status 過濾)", r.returncode == 0 and "t_flip" not in r.stdout, r.stdout[-600:])
+
+
+def t_spec_gate_body_link_in_fence_ignored():
+    """[雙向門放行 S26](代碼審 r2 F1)正文圍欄裡示範語法的 [[Systems/Risky]] 不是真連結 → 不算門判定訊號,仍是雙向門;圍欄外真連結才算。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw26")
+    _sg_system(kg, "Risky", ["KEY:★IRREVERSIBLE★ 上架後撤不回"])
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], body="示範怎麼寫連結:\n\n```\n- [[Systems/Risky]]\n```\n\n行內程式碼 `[[Systems/Risky]]` 也不算。\n")
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    check("① 圍欄與行內程式碼裡的連結不算 → 雙向門", "[spec-gate] 門: 雙向門" in r.stdout, r.stdout[-600:])
+    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], body="真的會碰到 [[Systems/Risky]]。\n")
+    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
+    check("② 圍欄外的真連結照算 → 單向門", "[spec-gate] 門: 單向門" in r.stdout and "Risky" in r.stdout, r.stdout[-600:])
+
+
+def t_prepush_hook_calls_spec_gate_push_check():
+    """[雙向門放行 S11 掛接] pre-push hook 真的呼叫了 spec-gate --push-check(不然上面那幾支只證明指令能用)。"""
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+    if not hook.is_file():
+        raise _SrcOnly("找不到 pre-push(非來源 repo)")
+    import re as _re
+    t = hook.read_text(encoding="utf-8")
+    check("① hook 有 spec-gate --push-check 且 rc1 會 exit 1", 'spec-gate --push-check' in t and _re.search(r'sg_rc"? -eq 1', t) is not None, "")
+
+
+def t_doctor_escape_by_door():
+    """[雙向門放行 S6] 健檢按門與階段印放行數與逃逸數;門檻分子只數 precision 不是 round 的列;印每份雙向門計劃條款數/紅測試數。"""
+    import json as _j
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw6")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應存檔 [test:t_red2]"])
+    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+    run(kg, "loop", "escape", "甲", "--stage", "CI", "--severity", "major", "--desc", "CI 紅了一支", expect_rc=0)
+    log = kg.parent / ".escape-log.jsonl"
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"ts": "2026-09-17T10:00:00+08:00", "token": "ESC-r", "loop": "甲", "stage": "code-loop", "severity": "blocker", "desc": "輪級粗判", "auto": True, "precision": "round", "door": "two-way"}, ensure_ascii=False) + "\n")
+    import re as _re
+    r = run(kg, "doctor")
+    out = r.stdout[r.stdout.find("S14"):] if "S14" in r.stdout else r.stdout
+    out = out[:out.find("\n\n") + 2000] if out else out
+    check("① 有雙向門那一段、放行 1 份", "雙向門放行 1 份" in out, out[-1500:])
+    check("② 按階段列出 CI 1 筆", _re.search(r"逃逸\(雙向門\)按階段:[^\n]*CI 1", out) is not None, out[-1500:])
+    check("③ 門檻分子排掉 precision=round:blocker 級逃逸 0、major 以上 1", "blocker 級逃逸 0 份" in out and "major 以上 1 份" in out, out[-1500:])
+    check("④ 印條款數與紅測試數", _re.search(r"甲:條款 2/紅 2", out) is not None, out[-1500:])
+
+
+def t_lint_door_field():
+    """[雙向門放行 S22] door 是已知欄位:one-way/two-way 不被 lint 說不認得;別的值軟提醒。"""
+    kg = mkvault()
+    (kg / "Projects").mkdir(exist_ok=True)
+    p = kg / "Projects" / "門_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\ncreated: 2026-09-17\ndoor: one-way\n---\n# 門\n\n說明。\n", encoding="utf-8")
+    r = run(kg, "lint", "Projects/門_計劃")
+    check("① door: one-way 不被說不認得", "door" not in r.stdout or "不認得" not in r.stdout, r.stdout[-400:])
+    p.write_text(p.read_text(encoding="utf-8").replace("door: one-way", "door: sideways"), encoding="utf-8")
+    r = run(kg, "lint", "Projects/門_計劃")
+    check("② door: sideways 軟提醒", "door" in r.stdout and "sideways" in r.stdout, r.stdout[-400:])
+
 
 
 if __name__ == "__main__":

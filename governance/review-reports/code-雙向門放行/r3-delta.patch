@@ -1,0 +1,99 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index dea0bfcc..76f11964 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5248,22 +5248,23 @@ def _plan_system_links(note, text=None, systems_only=True):
+     """計劃連到的節點(lands_in + related + DEP 行的 [[連結]];給了 text 再加正文全部 [[連結]]),去重、保序。
+     ★全檔唯一的「計劃連到誰」★:相依回歸(預設:只 Systems、不掃正文)、門判定訊號 2 與推送前「誰的落點被碰到」
+     (text 給正文、systems_only=False 收全部節點)都走這裡——代碼審 r1 架構席:別再開第二支平行函式,兩套算法會各自漂。"""
+     # 字串/清單都收(代碼審 r1);[[…]]/別名/錨點/引號一律交給既有 link_target(代碼審 r2/r3:別自己再刻一份剝括號)
+     links = [link_target(x) for x in as_list(note.fields.get("lands_in")) + as_list(note.fields.get("related"))] if note is not None else []
+     summ = note.fields.get("summary") if note is not None else None
+     if isinstance(summ, str):
+         for ln in summ.split("\n"):
+             if ln.strip().startswith("DEP:"):
+                 links += re.findall(r"\[\[([^\]|#]+)", ln)
+-    if text:
+-        links += [link_target(m) for m in WIKILINK_RE.findall(text)]
++    if text:   # 正文只看可見行、剝行內程式碼(代碼審 r2:圍欄裡示範語法的 [[連結]] 不是真連結,會把合格的雙向門打成單向門)
++        for _no, ln in _visible_lines(text.splitlines()):
++            links += [link_target(m) for m in WIKILINK_RE.findall(_strip_inline_markup(ln)[0])]
+     out, seen = [], set()
+     for lk in links:
+         lk = str(lk).strip()
+         if lk and (lk.startswith("Systems/") or not systems_only) and lk not in seen:
+             seen.add(lk)
+             out.append(lk)
+     return out
+ 
+ 
+ def _contract_texts(summary):
+@@ -5539,23 +5540,24 @@ def _spec_gate_push_check(env, git_range, repo=None):
+         return 0
+     try:
+         vrel = str(env.vault.resolve().relative_to(rr)).replace(os.sep, "/")
+     except ValueError:
+         print(f"{P} 圖譜不在這個 repo 底下,放行")
+         return 0
+     touched = [nfc(ln.strip()) for ln in r.stdout.splitlines() if ln.strip()]
+     plans = {t[len(vrel) + 1:] for t in touched if t.startswith(vrel + "/Projects/") and t.endswith(".md")}
+     systems = {t[len(vrel) + 1:-3] for t in touched if t.startswith(vrel + "/Systems/") and t.endswith(".md")}
+     code = [t for t in touched if not t.startswith(vrel + "/")]
+-    if code:   # 實作提交常只動程式檔不動筆記(編排者實測 E2):被改的檔的家(about_code 列了它的 Systems 節點)也算被碰到
+-        for srel, n in env.notes.items():
+-            if srel.startswith("Systems/") and any(nfc(str(x)) in code for x in as_list(n.fields.get("about_code"))):
++    if code:   # 實作提交常只動程式檔不動筆記(編排者實測 E2):被改的檔的家也算被碰到——家對照表走唯一算法 _impact_home_map(代碼審 r2 架構席:自己掃 about_code 會漏掉 status 過濾與路徑正規化)
++        homes, _own = _impact_home_map(env)
++        for f in code:
++            for srel in homes.get(_nodehome_key(f), []):
+                 systems.add(srel[:-3] if srel.endswith(".md") else srel)
+     if systems:   # 落點被碰到:lands_in/related/正文連結任一指向被改的 Systems 節點(跟門判定訊號 2 同一份連結來源)
+         for prel, n in env.notes.items():
+             if not prel.startswith("Projects/") or str(n.fields.get("status")) != "doing":
+                 continue
+             try:
+                 ptxt = (env.vault / prel).read_text(encoding="utf-8-sig")
+             except (OSError, UnicodeDecodeError):
+                 ptxt = ""
+             if set(_plan_system_links(n, text=ptxt, systems_only=False)) & systems:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 63067e8a..212c48bb 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -43782,20 +43782,36 @@ def t_prepush_spec_gate_code_home():
+     (kg / "Systems" / "Home.md").write_text("---\ntype: system\nstatus: doing\nabout_code:\n  - tests/test_x.py\nsummary: |-\n  FLOW:x\n---\n# Home\n", encoding="utf-8")
+     p = kg / "Projects" / "甲_計劃.md"
+     p.write_text("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/Home\n---\n# 甲\n\n- [S1] 系統應回 200 [test:t_flip]\n\n## 實務隱患\n"
+                  + "\n".join("- " + x for x in _SG_EXCL_ALL) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+     run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+     _sg_commit(d, "plan")
+     tx = d / "tests" / "test_x.py"; tx.write_text(tx.read_text() + "\n# touched\n")
+     _sg_commit(d, "touch code only")
+     r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+     check("① 只碰程式檔 → 經它的家找到計劃,t_flip 紅 rc1", r.returncode == 1 and "t_flip" in r.stdout and "甲" in r.stdout, r.stdout[-600:])
++    hp = kg / "Systems" / "Home.md"
++    hp.write_text(hp.read_text(encoding="utf-8").replace("status: doing", "status: superseded"), encoding="utf-8")
++    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
++    check("② 家已作廢(superseded)→ 不算家、不觸發(代碼審 r2 架構席:走唯一算法才有 status 過濾)", r.returncode == 0 and "t_flip" not in r.stdout, r.stdout[-600:])
++
++
++def t_spec_gate_body_link_in_fence_ignored():
++    """[雙向門放行 S26](代碼審 r2 F1)正文圍欄裡示範語法的 [[Systems/Risky]] 不是真連結 → 不算門判定訊號,仍是雙向門;圍欄外真連結才算。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw26")
++    _sg_system(kg, "Risky", ["KEY:★IRREVERSIBLE★ 上架後撤不回"])
++    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], body="示範怎麼寫連結:\n\n```\n- [[Systems/Risky]]\n```\n\n行內程式碼 `[[Systems/Risky]]` 也不算。\n")
++    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("① 圍欄與行內程式碼裡的連結不算 → 雙向門", "[spec-gate] 門: 雙向門" in r.stdout, r.stdout[-600:])
++    _sg_plan2(kg, "乙", ["- [S1] 系統應回 200 [test:t_red]"], body="真的會碰到 [[Systems/Risky]]。\n")
++    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
++    check("② 圍欄外的真連結照算 → 單向門", "[spec-gate] 門: 單向門" in r.stdout and "Risky" in r.stdout, r.stdout[-600:])
+ 
+ 
+ def t_prepush_hook_calls_spec_gate_push_check():
+     """[雙向門放行 S11 掛接] pre-push hook 真的呼叫了 spec-gate --push-check(不然上面那幾支只證明指令能用)。"""
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     if not hook.is_file():
+         raise _SrcOnly("找不到 pre-push(非來源 repo)")
+     import re as _re
+     t = hook.read_text(encoding="utf-8")
+     check("① hook 有 spec-gate --push-check 且 rc1 會 exit 1", 'spec-gate --push-check' in t and _re.search(r'sg_rc"? -eq 1', t) is not None, "")

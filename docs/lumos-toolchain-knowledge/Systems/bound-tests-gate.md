@@ -26,6 +26,7 @@ summary: |-
   KEY:零覆蓋不再靜默(同上 [E]):四種來源各自出聲(找不到知識庫/沒節點引用/沒綁測試/算不出範圍),訊息帶「受波及合約測試」關鍵字以通過 pre-push 對 check 輸出的 grep 過濾 [test:t_bound_tests_explains_no_pins]
   KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
+  KEY:[2026-09-17 雙向門放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(雙向門計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 一律放行(fail-open)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
   KEY:★2026-09-12 這道閘的核心保證被實際打穿過一次(Java 補棧代碼審 r1 資安席)★——閘驗的是「合約綁的名字有沒有出現在 discover_test_methods 掃出來的集合裡」,所以★掃描器認錯名字=閘直接失效★:當時 Java 的方法正則太鬆,一支「掛註解但不是 void 的誘餌方法」後面接一支完全沒掛註解的空方法,那支空方法就被收成真證據,健檢一聲不吭。教訓:新增任何語言的測試掃描時,除了「收得到真測試」還要有「收不到假測試」的斷言,兩邊都要 [test:t_java_profile_discovery]
   DEP:[[Systems/pitfalls-code-loop]]
