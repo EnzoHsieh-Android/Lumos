@@ -1,0 +1,19 @@
+severity: clean
+
+## 驗過的路徑
+
+這輪(r3,只驗第二輪四條折法)逐條查證如下,全部在 `git worktree add --detach /tmp/seat-單reviewer-r3-sonnet HEAD` 的隔離目錄裡做實驗,結束已 `git worktree remove --force` 收掉。
+
+**① 掛鉤探執行器有沒有 `"--graph"` 字樣,沒有就退全套**:讀 `scripts/hooks/pre-push` 通篇,`_suite_args+=(--graph)` 那段的 `else` 分支確實把 `_suite_mode="full"; _suite_args=(); _suite_word="全部測試"` 三個變數一起清乾淨,不是只清其中一個。緊接在後面的 `_keys_args` 判斷式讀的是這次「已經可能被回退過」的 `_suite_mode`(不是 `_SUITE_LIGHT` 原始旗標),所以當某個 ref 判成 light、另一個 ref 碰到圖譜筆記又剛好遇到舊版執行器觸發整批退全套時,`_suite_mode` 會從 `light` 被改成 `full`,`_keys_args` 那段的 `if [[ "$_suite_mode" == "light" ... ]]` 條件式因此不成立,keys 那一趟不會多跑——沒有「退了全套、keys 卻還單獨跑一次」這種重複/矛盾的路。反過來,light 與 graph 出現在不同 ref、且執行器支援 `--graph`(不觸發回退)時,兩條路各自正常跑(主組帶 `--suite docs --graph`,keys 組照跑），沒有互相踩線。另外實際 `grep -c -- '"--graph"' scripts/test_lumos.py` 在真執行器上是 8 筆(真的有 `--graph` 的 `add_argument`),探測邏輯對著真執行器不會誤判成舊版。
+
+**② `_vault_slug_of` 對原本兩處(`cmd_home_check`、`cmd_dispatch_lens`)的行為有沒有不同**:逐字比對這兩處的舊寫法(`p.split("/", 2)[1] for p in ... if p.startswith("docs/") and p.count("/") >= 2 and p.split("/", 2)[1].endswith("-knowledge")`)跟新的 `_vault_slug_of` 函式,判斷式完全等價,不是重寫、只是抽成共用函式。用 `docs//x`(空字串 slug)、`docs/-knowledge/x`、`docs/a-knowledge`(只有一個斜線)、`docs/A-KNOWLEDGE/x`、`docs/foo-Knowledge/x` 五組邊界輸入實際跑過新舊兩份邏輯,對這兩處原本的呼叫點結果全部一致(都是 None/不算)。★唯一有差的是第三處★——`_test_suite_for_range` 裡原本是 `re.match(r"docs/[^/]+-knowledge/", f)`,這個正則對 `docs/-knowledge/x` 判 False(因為 `[^/]+` 要求 `-knowledge` 前面至少一個非斜線字元,而該路徑的整段就是 `-knowledge` 本身,回溯找不到第二次匹配),`_vault_slug_of` 判斷式對它回真——但這是刻意的統一(注解寫明「三個讀者共用……第三處又換正則」),而且觸發條件是「vault 目錄字面上就叫 `-knowledge`」這種不會真實存在的畸形路徑,不影響本 repo 或任何正常專案的行為。
+
+**find_vault 在 CI 找不找得到**:CI 用 `actions/checkout@v4` 帶 `fetch-depth: 0`,沒有 sparse-checkout 設定,整個 repo(含 `docs/lumos-toolchain-knowledge/`)都會被檢出;`find_vault` 只是往上找 `docs/*-knowledge` 目錄,在 CI 的 full checkout 下跟本機行為一致,找得到。另外 CI 的 `--graph` 附加沒有像 pre-push 那樣先探「執行器認不認得」,但這是安全的——`.github/workflows/ci.yml` 本身不在 vendored 清單裡(`grep -n "ci.yml" scripts/lumos` 沒有命中任何 `_vendor_toolchain` 之類的清單),CI 永遠是跟 hook、runner 同一個 commit 一起 checkout,不存在消費端「hook 版本比 runner 新」那種版本錯位,所以不需要重複探測。
+
+**④ 加回的 12 支實際是哪幾支、有沒有該加沒加**:實際跑 `--list --suite docs` 得 63 支、`--list --suite docs --graph` 得 75 支,差集(`comm -23`)剛好 12 支:`t_dispatch_lens_spec_mode`、`t_fold_check_regression`、`t_impact_end_to_end`、`t_impact_incidents_regression`、`t_impact_incidents_smoke`、`t_loop_close_kinds_classified`、`t_mw_queries_absent_from_vault`、`t_node_not_found_gives_candidates_not_write_side_message`、`t_precommit_whitelist_drift_guard`、`t_slim_gate`、`t_slim_gate_search_equivalence_counterfactual`、`t_tension_doc_sync`,跟 patch 註解「加回 46 支裡 34 支是假環境」暗示的「12 支才是真的」對得上。反查全檔 `grep -n "lumos-toolchain-knowledge"` 命中的每一處,定位到它們所在的測試函式,再比對這 12 支之外還有 `t_claude_block_matches_template`、`t_delguard`、`t_dispatch_lens_hook_timeout_notice_and_spec_marker`、`t_docs_enumeration_drift`、`t_metric_criteria_drift_guard`(這五支已經在 baseline docs 子集裡,不需要 `--graph` 加回)以及 `t_delguard_excludes_prose_dirs`、`t_vendored_consumer_srconly_skip_regression`(這兩支即使加 `--graph` 也沒被選中)。逐一讀了這兩支的原始碼:`t_delguard_excludes_prose_dirs` 只是把字面字串 `"docs/lumos-toolchain-knowledge"` 當一個參數傳給 `_delguard_parse_diff`(純解析邏輯測試,不觸碰真圖譜檔案內容),且用的是 `Path(GRAPHCTL).resolve().parent`(單層 parent,取 `scripts/hooks`,不是 repo 根)不吃 `rx_real`;`t_vendored_consumer_srconly_skip_regression` 提到 `docs/lumos-toolchain-knowledge` 只出現在 docstring 說明文字裡,實際測試邏輯是特地建一個「沒有 `docs/`」的模擬消費端環境驗 skip 行為,本來就不該算進「讀真圖譜」。兩支都不是漏加,是正確排除。
+
+另外實際端到端驗證:在隔離 worktree 裡對一支真圖譜筆記(`docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md`)造一個真提交,跑 `python3 scripts/lumos pitfalls --diff <base>..HEAD --no-lint --json --repo .`,拿到 `"suite": "docs"`、`"suite_graph": true`,理由句正確帶「含圖譜筆記,加跑讀真圖譜的測試」——不是只看測試斷言,是真的跑過一次產出真實 JSON。
+
+**測試子集實跑**:`t_runner_suite_flags`(18 passed)、`t_test_suite_docs_only_judgement`(22 passed)、`t_prepush_docs_and_light_run_subset`(13 passed)、`t_prepush_and_ci_wired_for_docs_suite`(7 passed)四支跟這輪改動最相關的測試全綠,沒有另外執行全套。
+
+沒有發現 blocker/major/minor 等級的問題。
