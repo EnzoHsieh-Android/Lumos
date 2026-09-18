@@ -22364,6 +22364,24 @@ def _test_suite_for_range(repo_root, diff_range):
             "code": code, "light_ok": len(code) == len(non_docs), "graph": False}
 
 
+def _keys_mentioned(text, keys):
+    """回 text 裡★整字★出現過的 keys(前後都不是英數字底線;key 照字面比,句點不當萬用字元)。
+    整字比對的唯一定義:測試執行器的 --suite keys 與推送前「自主迴圈要不要整支跑」都用它
+    (2026-09-18 代碼審 code-light自主迴圈 r1 架構席:掛鉤原本自己用 grep -w,句點被當萬用字元,跟執行器判得不一樣)。"""
+    return [k for k in keys if k and re.search(r"(?<![A-Za-z0-9_])" + re.escape(k) + r"(?![A-Za-z0-9_])", text)]
+
+
+def _autoloop_full_for(repo_root, keys):
+    """light 推送時,自主迴圈測試要不要整支跑:抽不出關鍵字就整支跑(不知道改了什麼,不能賭——r1 通才席);
+    有關鍵字就看它們有沒有整字出現在那支測試的原始碼裡。讀不到那支檔(消費專案沒有)回 False。"""
+    f = Path(repo_root) / "scripts" / "test_autonomous_loop.py"
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return (not keys) or bool(_keys_mentioned(text, keys))
+
+
 _KEY_OK_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{2,}")   # 不准 - 開頭:進了執行器的 --keys 會被 argparse 當旗標(r2 資安席/邊界席)
 
 
@@ -22506,8 +22524,9 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
         _t, _why = _pitfall_tier(claims, list(added) + list(changed_lines), repo_root, diff_range)
         _sr = _test_suite_for_range(repo_root, diff_range)
+        _ak = _affected_test_keys(repo_root, diff_range, _sr["code"])
         return {"claims": claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-                "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
+                "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
 
@@ -22572,8 +22591,9 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     all_claims = lint_claims + claims
     _t, _why = _pitfall_tier(_tier_claims, list(added) + list(changed_lines), repo_root, diff_range)
     _sr = _test_suite_for_range(repo_root, diff_range)
+    _ak = _affected_test_keys(repo_root, diff_range, _sr["code"])
     out = {"claims": all_claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-           "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
+           "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
            "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
            "stack_questions_meta": stack_meta, "arch_alignment": arch}

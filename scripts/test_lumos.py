@@ -68,9 +68,9 @@ def _keys_suite_select(tests, keys, cap=0.3):
         except (OSError, TypeError):
             srcs.append((t, ""))
     picked, dropped = {}, []
+    _mentioned = _load_lumos_inproc()._keys_mentioned   # 整字比對只有一份定義(在 lumos;推送前掛鉤那邊也用它)
     for k in keys:
-        rx = _re.compile(r"(?<![A-Za-z0-9_])" + _re.escape(k) + r"(?![A-Za-z0-9_])")
-        hit = [t for t, src in srcs if rx.search(src)]
+        hit = [t for t, src in srcs if _mentioned(src, [k])]
         if tests and len(hit) > cap * len(tests):
             dropped.append(k)
             continue
@@ -44663,6 +44663,14 @@ def t_test_suite_docs_only_judgement():
     (d / "README.md").write_text("# hi2\n"); _sg_commit(d, "readme again")
     r = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--repo", str(d))
     check("⑨b docs 印「測試範圍:只跑文件子集」", "測試範圍:只跑文件子集" in r.stdout, r.stdout[:300])
+    # 整字比對只有一份定義(code-light自主迴圈 r1 架構席):句點照字面、前後不能是英數字底線
+    check("⑩a _keys_mentioned:句點照字面(main.py 不命中 mainXpy)、整字(main_py 命中、main 不命中 main_py)",
+          m._keys_mentioned("x = mainXpy; import main_py", ["main.py", "main_py", "main"]) == ["main_py"], "")
+    af = d / "scripts" / "test_autonomous_loop.py"; af.parent.mkdir(exist_ok=True); af.write_text("# 測 gap_select\n")
+    check("⑩b 自主迴圈要不要整支跑:抽不出關鍵字 → 整支(r1 通才席:不知道改了什麼不能賭)、關鍵字有被它提到 → 整支、沒提到 → 不用",
+          m._autoloop_full_for(d, []) is True and m._autoloop_full_for(d, ["gap_select"]) is True and m._autoloop_full_for(d, ["other"]) is False, "")
+    af.unlink()
+    check("⑩c 沒有那支測試檔(消費專案)→ 不用整支(本來就不會跑)", m._autoloop_full_for(d, []) is False, "")
     check("⑩ 範圍算不出 → full(多跑不是少跑)", m._test_suite_for_range(d, "zzz..HEAD")["suite"] == "full" and m._affected_test_keys(d, "zzz..HEAD", ["scripts/t.py"]) == [], "")
     # 三點範圍(r1 正確性席):feature 刪掉一支在 merge-base 時是 #! 的無副檔名程式檔,main 之後把同一支改成純文字;
     # 起點若拿左端點 main 讀首行就不是 #! → 誤判沒程式檔;要拿 merge-base
@@ -44754,12 +44762,17 @@ def t_prepush_docs_and_light_run_subset():
         "import sys, os\n"
         f"open({str(argl)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
         "sys.exit(int(os.environ.get('FAKE_KEYS_RC', '3')) if 'keys' in sys.argv else 0)\n")
+    # 假的自主迴圈測試:只記參數到另一個檔(不混進上面的執行器紀錄);原始碼提到 other_mod 這個名字
+    alog = d.parent / "autoloop-args.log"
+    (d / "scripts" / "test_autonomous_loop.py").write_text(
+        "import sys\n# 這支假測試測的是 other_mod\n"
+        f"open({str(alog)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
     _sg_commit(d, "harness")
     def g(*a):
         return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True).stdout.strip()
     def push(base, head, **env_extra):
         env = dict(_os.environ); env["GIT_DIR"] = str(d / ".git"); env["LUMOS_TEST_SHARDS"] = "2"; env.update(env_extra)
-        argl.write_text("")
+        argl.write_text(""); alog.write_text("")
         r = _sp.run(["bash", hook], cwd=str(d), input=f"refs/heads/main {head} refs/heads/main {base}\n", capture_output=True, text=True, env=env)
         return r, argl.read_text().splitlines()
     base = g("rev-parse", "HEAD")
@@ -44767,6 +44780,7 @@ def t_prepush_docs_and_light_run_subset():
     r, calls = push(base, g("rev-parse", "HEAD"))
     check("純文件:放行、兩片都帶 --suite docs、沒有 keys 那一趟", r.returncode == 0 and len(calls) == 2 and all("--suite docs" in c and "--shard" in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
     check("純文件(沒碰圖譜):不帶 --graph", all("--graph" not in c for c in calls), str(calls))
+    check("純文件:自主迴圈只跑讀真 CLAUDE.md 那條", alog.read_text().strip() == "-k real_claude_md", alog.read_text())
     base_g = g("rev-parse", "HEAD")
     gn = kg / "Systems" / "Home.md"; gn.write_text(gn.read_text(encoding="utf-8") + "\n多一句。\n", encoding="utf-8"); _sg_commit(d, "graph note only")
     rg_, calls_g = push(base_g, g("rev-parse", "HEAD"))
@@ -44788,6 +44802,12 @@ def t_prepush_docs_and_light_run_subset():
     ks = [c for c in calls if "--suite keys --keys" in c]; ds = [c for c in calls if "--suite docs" in c]
     check("light:放行、docs 兩片 + keys 兩片(關鍵字含檔名 main)", r.returncode == 0 and len(ds) == 2 and len(ks) == 2 and all("main" in c and "--shard" in c for c in ks), f"rc={r.returncode}\n{calls}\n{r.stderr[-600:]}")
     check("light:keys 沒對到(rc3)不擋,講明 CI 會跑全套", "CI 會跑全套當後盾" in r.stderr, r.stderr[-400:])
+    check("light:改到的東西自主迴圈測試沒提到 → 它只跑讀真 CLAUDE.md 那條(2026-09-18 實測 light 108 秒裡 67 秒是它)", alog.read_text().strip() == "-k real_claude_md", alog.read_text())
+    af = d / "scripts" / "test_autonomous_loop.py"; _af0 = af.read_text()
+    af.write_text(_af0.replace("other_mod", "other_mod 與 main"))
+    r2, _c2 = push(base, g("rev-parse", "HEAD"))
+    af.write_text(_af0)
+    check("light:改到的檔名(main)有出現在自主迴圈測試裡 → 整支跑(不帶 -k)", r2.returncode == 0 and alog.read_text().strip() == "", repr(alog.read_text()))
     r, calls = push(base, g("rev-parse", "HEAD"), FAKE_KEYS_RC="1")
     check("light:keys 那趟有紅(rc1)→ 擋(r1 合約席:這條路要有測試走到)", r.returncode == 1 and any("--suite keys" in c for c in calls) and "有測試沒過" in r.stderr, f"rc={r.returncode}\n{r.stderr[-400:]}")
     # 夾一支測試檔:小改動閘照過(擴散只算程式檔)、但 pitfalls light_ok 假 → 全套
@@ -44802,6 +44822,7 @@ def t_prepush_docs_and_light_run_subset():
     (d / "scripts" / "other.py").write_text("z = 3\n"); _sg_commit(d, "plain code")
     r, calls = push(base, g("rev-parse", "HEAD"))
     check("一般程式改動:放行、執行器不帶 --suite(全套)", r.returncode == 0 and len(calls) == 2 and all("--suite" not in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    check("一般程式改動:自主迴圈整支跑", alog.read_text().strip() == "", repr(alog.read_text()))
     r, calls = push(base, g("rev-parse", "HEAD"), LUMOS_TEST_SHARDS="abc")
     check("片數給非數字 → 串行一片、不是零片回綠(r2 邊界席 blocker)", r.returncode == 0 and len(calls) == 1 and "--shard" not in calls[0], f"rc={r.returncode}\n{calls}")
     r, calls = push(base, g("rev-parse", "HEAD"), TMPDIR=str(d / "no-such-dir"))
@@ -44817,6 +44838,9 @@ def t_prepush_and_ci_wired_for_docs_suite():
     check("掛鉤:push-check 輸出用 tee 即時印(r1 併發席)、暫存目錄掛在 trap 上清、片數要正整數", "| tee \"$_sg_out\"" in hook and 'PIPESTATUS[0]' in hook and 'rm -rf "$_PP_TMP"' in hook and '=~ ^[0-9]+$' in hook, "")
     check("掛鉤:執行器不認得 --suite 就退全套(讀檔探旗標)", "'\"--suite\"'" in hook, "")
     check("自主迴圈測試:純文件推送兩邊都只跑讀真 CLAUDE.md 那條(-k real_claude_md),其餘整支", "_AUTOLOOP_ARGS=(-k real_claude_md)" in hook and 'extra="-k real_claude_md"' in ci and "test_autonomous_loop.py $extra" in ci, "")
+    check("推送前兩組子集真的同時跑(背景起、分別 wait)", "( run_group s " in hook and "( run_group k " in hook and 'wait "$_kpid"' in hook, "")
+    check("自主迴圈要不要整支跑:掛鉤只讀 pitfalls 的 autoloop_full,不自己在 bash 比對關鍵字(r1 架構席)", '"autoloop_full": *true' in hook and "grep -qw" not in hook, "")
+    check("執行器的關鍵字子集用 lumos 那支整字比對(只有一份定義)", "_load_lumos_inproc()._keys_mentioned" in (root / "scripts" / "test_lumos.py").read_text(encoding="utf-8"), "")
     check("碰到圖譜筆記:掛鉤與 CI 都加 --graph;掛鉤先探執行器認不認得", '"suite_graph": *true' in hook and "_suite_args+=(--graph)" in hook and "'\"--graph\"'" in hook and 'extra="$extra --graph"' in ci, "")
     import subprocess as _sp
     _r = _sp.run([sys.executable, str(root / "scripts" / "test_autonomous_loop.py"), "-k", "real_claude_md"], capture_output=True, text=True)

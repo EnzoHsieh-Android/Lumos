@@ -166,7 +166,7 @@ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
 # 推送前要跑哪個測試範圍(2026-09-18 Enzo 裁:純文件改動、或判成 light 的小改動,不用等全套):
 # 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
 # light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
-_SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""; _SUITE_GRAPH=0
+_SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""; _SUITE_GRAPH=0; _AUTOLOOP_FULL=0
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   read -r _lref _lsha _rref _rsha <<< "$_ppl"
   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
@@ -252,6 +252,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     _suite_this="light"
     _k="$(printf '%s' "$pf_json" | "$PY" -c 'import json,sys; print(",".join(json.load(sys.stdin).get("affected_keys", [])))' 2>/dev/null || true)"
     [[ -n "$_k" ]] && _SUITE_KEYS="${_SUITE_KEYS:+$_SUITE_KEYS,}$_k"
+    printf '%s' "$pf_json" | grep -q '"autoloop_full": *true' && _AUTOLOOP_FULL=1
   fi
   case "$_suite_this" in full) _SUITE_FULL=1 ;; light) _SUITE_LIGHT=1 ;; esac
   if [[ "$sg_rc" -eq 1 ]]; then
@@ -347,9 +348,13 @@ fi
 
 # 純文件推送(每個 ref 都判成 docs)自主迴圈那支只跑讀真 CLAUDE.md 的那一條(2026-09-18 實推量到整支 68 秒,
 # 而它 144 支裡只有這一條讀 repo 的文件,其餘測的是自主迴圈的程式);light 或全套照舊整支跑。CI 同一條規則。
+# light 也一樣(2026-09-18 實測 light 推送前 108 秒、其中 67 秒是這支):除非 pitfalls 說 autoloop_full——
+# 改到的檔名或函式名整字出現在這支測試裡(它測自主迴圈模組、主程式常數、兩支探針腳本),或抽不出任何關鍵字(不知道改了什麼)。
+# 判斷在 lumos 裡做(_autoloop_full_for,整字比對跟執行器同一支 _keys_mentioned),這裡只讀結果(r1 架構席:別在 bash 另刻一份)。
 _AUTOLOOP_ARGS=()
-if [[ "$_SUITE_SEEN" -eq 1 && "$_SUITE_FULL" -eq 0 && "$_SUITE_LIGHT" -eq 0 ]]; then
+if [[ "$_SUITE_SEEN" -eq 1 && "$_SUITE_FULL" -eq 0 ]]; then
   _AUTOLOOP_ARGS=(-k real_claude_md)
+  [[ "$_SUITE_LIGHT" -eq 1 && "$_AUTOLOOP_FULL" -eq 1 ]] && _AUTOLOOP_ARGS=()
 fi
 if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
   # 支數從實際輸出讀,不寫死——寫死的會靜靜地漂(2026-09-08:實際 144,訊息還印著 132)
@@ -452,10 +457,16 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   else
     echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
   fi
-  _grc=0; run_group s ${_suite_args+"${_suite_args[@]}"} || _grc=$?
+  # 兩組真的同時跑(2026-09-18 實測:原本 keys 那組等文件子集跑完才開始,註解卻寫「平行」)
+  _grc=0; _krc=0
+  ( run_group s ${_suite_args+"${_suite_args[@]}"} ) & _gpid=$!
+  if [[ ${#_keys_args[@]} -gt 0 ]]; then
+    ( run_group k "${_keys_args[@]}" ) & _kpid=$!
+    wait "$_kpid" || _krc=$?
+  fi
+  wait "$_gpid" || _grc=$?
   [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
   if [[ ${#_keys_args[@]} -gt 0 ]]; then
-    _krc=0; run_group k "${_keys_args[@]}" || _krc=$?
     if [[ "$_krc" -eq 3 ]]; then
       echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
     elif [[ "$_krc" -ne 0 ]]; then
