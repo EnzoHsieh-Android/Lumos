@@ -1,0 +1,334 @@
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index bf2c9614..b8b2653a 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -52,21 +52,27 @@ impact_once() {   # $1=diff range;算一次,結果放進 $_IMPACT_JSON
+      && [ -s "$_f" ]; then
+     _IMPACT_JSON="$_f"
+   else
+     rm -f "$_f"
+   fi
+ }
+ impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""; }
+ # ★硬擋或收到訊號時也要清★(代碼審 r1 外家否決席判 minor,屬實):
+ # 上面那支只在 ref 迴圈正常跑到尾端時執行。高風險那條路 rc1 會直接 exit 1,
+ # 收到訊號也一樣——每被硬擋一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
+-_PP_TMP="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-XXXXXX")"   # 本次推送所有暫存檔的家,離開時整個清(r1 併發席:逐檔 rm 在 exit 1 / Ctrl-C 那條路會漏)
++# 本次推送所有暫存檔的家,離開時整個清(r1 併發席:逐檔 rm 在 exit 1 / Ctrl-C 那條路會漏)。
++# 建不出來就擋(r2 邊界席):空字串會讓後面每個 "$_PP_TMP/…" 變成根目錄路徑,測試 log 全寫不出來、擋下訊息一片空白。
++_PP_TMP="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-XXXXXX" 2>/dev/null || true)"
++if [[ -z "$_PP_TMP" || ! -d "$_PP_TMP" ]]; then
++  echo "擋下:推送前檢查需要一個暫存目錄,但 ${TMPDIR:-/tmp} 建不出來(不存在或不可寫);修好 TMPDIR 再推。" >&2
++  exit 1
++fi
+ trap 'impact_done; rm -rf "$_PP_TMP"' EXIT INT TERM
+ # (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
+ #  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
+ # ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
+ # 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+ # ——而這支腳本自己在別的地方就把那條當第三選項在教,那條零留痕。
+ bound_tests_advisory() {   # $1=diff range(暫存檔沒算出來時退回自己算)
+   [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+   if [ -n "$_IMPACT_JSON" ]; then
+     "$PY" "$GRAPHCTL" bound-tests --from-json "$_IMPACT_JSON" --advisory --repo "$REPO_ROOT" || true
+@@ -362,20 +368,22 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+ fi
+ 
+ # 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
+ # 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
+ # 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
+ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
+   # ★分片並行★(2026-09-06 全 repo 審視 #12):全套串行約 8 分鐘,大部分時間在等子進程
+   # 而不是吃 CPU,所以切成幾片同時跑很划算。實測四片牆鐘 271 秒(對照串行 480 秒,省 43%
+   # ——不是四倍,因為瓶頸是 IO 不是 CPU)。片數可用 LUMOS_TEST_SHARDS 調;設 1 就是串行。
+   _shards="${LUMOS_TEST_SHARDS:-4}"
++  # 不是正整數就串行(r2 邊界席 blocker:給 abc 會讓 seq 一片都不起,零測試回綠)
++  [[ "$_shards" =~ ^[0-9]+$ && "$_shards" -ge 1 ]] || _shards=1
+   # ★先探這支 runner 支不支援分片★:新 hook 配到舊的(或別人自己寫的)runner 時,
+   # 硬塞它不認得的旗標會讓它整個報錯 → 人被莫名其妙擋下。探不到就乖乖退回串行,
+   # 行為跟以前一模一樣。(2026-09-06 實際踩到:假 runner 不認得新旗標,當場被判紅。)
+   #
+   # ★探測不能用「跑 --help 看輸出」★(r1 外家席抓到):舊版 runner 正是「不認得的參數
+   # 就靜默丟掉」,所以餵它 --help 等於什麼都沒帶——**它會直接跑滿八分鐘的全套**,
+   # 探測完再串行跑一次,一次推送變十六分鐘。改成直接讀檔找旗標字樣:不執行、瞬間完成,
+   # 而且對「會把 --help 當成沒帶參數」的舊 runner 一樣有效。
+   if ! grep -q -- '"--shard"' "$REPO_ROOT/scripts/test_lumos.py" 2>/dev/null; then
+     _shards=1
+@@ -394,21 +402,21 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   # light 的關鍵字子集跟文件子集一起分片、平行跑(r1 併發席:原本等分片收完才串行跑一趟);
+   # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:CI 會跑全套當後盾。有紅照擋。
+   _keys_args=()
+   if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
+     _keys_args=(--suite keys --keys "$_SUITE_KEYS")
+   elif [[ "$_suite_mode" == "light" ]]; then
+     echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+   fi
+   _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
+   _rc=0; _krc_all3=1
+-  _run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
++  run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
+     local _pfx="$1"; shift
+     local _pids=() _i _p _r _any3=0 _bad=0
+     for _i in $(seq 1 "$_shards"); do
+       if [[ "$_shards" -le 1 ]]; then
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       else
+         # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
+         # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       fi
+@@ -421,24 +429,24 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+     [[ "$_any3" -eq 1 ]] && return 3
+     return 0
+   }
+   if [[ "$_suite_mode" != "full" ]]; then
+     echo "推送前先跑$_suite_word(切成 $_shards 片同時跑;嫌久可 --no-verify,CI 會兜底)…" >&2
+   elif [[ "$_shards" -le 1 ]]; then
+     echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+   else
+     echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+   fi
+-  _grc=0; _run_group s ${_suite_args+"${_suite_args[@]}"} || _grc=$?
++  _grc=0; run_group s ${_suite_args+"${_suite_args[@]}"} || _grc=$?
+   [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
+   if [[ ${#_keys_args[@]} -gt 0 ]]; then
+-    _krc=0; _run_group k "${_keys_args[@]}" || _krc=$?
++    _krc=0; run_group k "${_keys_args[@]}" || _krc=$?
+     if [[ "$_krc" -eq 3 ]]; then
+       echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
+     elif [[ "$_krc" -ne 0 ]]; then
+       _rc=1
+     fi
+   fi
+   cat "$_sdir"/*.log > "$_TESTS_LOG" 2>/dev/null || true
+   if [[ $_rc -ne 0 ]]; then
+     {
+       echo ""
+diff --git a/scripts/lumos b/scripts/lumos
+index 87bed2ef..1dfa0178 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5706,21 +5706,21 @@ def _sc_diffusion(env, rr, files, links, base=None):
+     # 落點只查「需要有家的程式檔」(每支檔有家同一套定義 _nodehome_code_kind);README/圖/JSON 這種不需要家的檔只算檔數與改動量(2026-09-18 實測:改 README 被判落點外)
+     outside = [f[0] for f in code if _nodehome_key(f[0]) not in allowed]
+     if outside:
+         bad.append("落點外:" + "、".join(outside[:5]) + (f" 等 {len(outside)} 支" if len(outside) > 5 else "") + "(計劃 lands_in/related 那些節點的 about_code 沒列它)")
+     return bad
+ 
+ 
+ def _sc_churn(rr, git_range, files):
+     """相對量:每檔 (新增+刪除) ≤ 原本行數×比例 或 ≤ 絕對上限;二進位算不出量不當小改動;原本行數用舊路徑查 base 樹(r3 通才席)。"""
+     C, bad = _SMALL_CHANGE, []
+-    base = git_range.split("..")[0] if ".." in git_range else None
++    base = _range_base(rr, git_range)   # 三點範圍要 merge-base(代碼審 r2 架構席:同檔同算法要收斂成一份)
+     for path, la, ld, binary, old in files:
+         if binary:
+             bad.append(f"相對量:{path} 是二進位檔,算不出改動量,不當小改動")
+             continue
+         churn = la + ld
+         if churn <= C["max_abs_lines"]:
+             continue
+         lt = None
+         if base:
+             g = subprocess.run(["git", "-C", str(rr), "show", f"{base}:{old}"], capture_output=True, text=True, errors="replace")
+@@ -5766,21 +5766,21 @@ def _small_change_check(env, rr, git_range, prel, note):
+     try:
+         vrel = str(env.vault.resolve().relative_to(rr)).replace(os.sep, "/")
+     except ValueError:
+         vrel = None
+     files, err = _sc_changed_files(rr, git_range, vrel)
+     if files is None:
+         return [err]
+     if not files:
+         return []
+     links = _plan_system_links(note)
+-    base = git_range.split("..")[0] if ".." in git_range else None
++    base = _range_base(rr, git_range)
+     bad = _sc_diffusion(env, rr, files, links, base) + _sc_churn(rr, git_range, files) + _sc_history(env, rr, files, links)
+     try:
+         ptxt = (env.vault / prel).read_text(encoding="utf-8-sig")
+     except (OSError, UnicodeDecodeError):
+         ptxt = ""
+     if any(str(lk).startswith("Issues/") for lk in _plan_system_links(note, text=ptxt, systems_only=False)):
+         bad.append("目的:計劃連到 Issues(修 bug),缺陷率高於新功能,不算小改動")
+     return bad
+ 
+ 
+@@ -22334,27 +22334,27 @@ def _test_suite_for_range(repo_root, diff_range):
+     files = [f for f in r.stdout.split("\0") if f.strip()
+              and not (f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS))]
+     non_docs = [f for f in files if not _docs_only_file(f)]
+     if not non_docs:
+         return {"suite": "docs", "reason": "改到的只有 README、docs、assets 這類文件(沒碰程式與 skills)", "code": [], "light_ok": False}
+     code = [f for f in non_docs if _is_code_file(repo_root, f, base)]
+     return {"suite": "full", "reason": "改到 " + "、".join(non_docs[:3]) + ("…" if len(non_docs) > 3 else "") + " 這種不是純文件的檔",
+             "code": code, "light_ok": len(code) == len(non_docs)}
+ 
+ 
+-_KEY_OK_RE = re.compile(r"[A-Za-z0-9_.-]{3,}")
++_KEY_OK_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{2,}")   # 不准 - 開頭:進了執行器的 --keys 會被 argparse 當旗標(r2 資安席/邊界席)
+ 
+ 
+ def _affected_test_keys(repo_root, diff_range, code_files):
+     """小改動推送前挑測試用的關鍵字:改到的程式檔裡動到的★頂層★函式名(hunk 標頭與 +/- 頂格的 def 行;縮排的 def 是巢狀/方法,
+     像測試裡到處都有的 check,拿來挑會選中全部——代碼審 r1 併發席)、加檔名(去副檔名)。
+-    只留 [A-Za-z0-9_.-] 且 ≥3 字的(逗號、空白這種會在 shell 的逗號串裡被切錯——r1 邊界席);算不出回空清單。"""
++    只留 [A-Za-z0-9_.-] 且 ≥3 字、不以 - 開頭的(逗號、空白會在 shell 的逗號串裡被切錯——r1 邊界席;- 開頭會被 argparse 當旗標——r2 資安席);算不出回空清單。"""
+     if not code_files:
+         return []
+     try:
+         d = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "-U0", diff_range, "--", *code_files],
+                            capture_output=True, text=True, errors="replace")
+     except OSError:
+         return []
+     keys = []
+     def _add(k):
+         if k and k not in keys and _KEY_OK_RE.fullmatch(k):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 28f54a9c..d2cadc73 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -29391,20 +29391,25 @@ def main():
+                 _i, _n = (int(x) for x in _args.shard.split("/", 1))
+             except ValueError:
+                 print(f"擋下:--shard 要寫成「第幾片/共幾片」,例如 2/4;收到的是 {_args.shard!r}",
+                       file=sys.stderr)
+                 return 2
+             if _n < 1 or not (1 <= _i <= _n):
+                 print(f"擋下:--shard {_args.shard} 不合理(第幾片要在 1 到共幾片之間)", file=sys.stderr)
+                 return 2
+             tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
+             print(f"這是第 {_i} 片(共 {_n} 片),分到 {len(tests)} 支")
++            if not tests and _args.suite:
++                # 子集配分片(r2 正確性席 blocker):關鍵字子集常常只選中一兩支,切 4 片必有空片;子集整體非空(上面 rc3 那關已過),
++                # 空片是「沒分到」不是「跑了個寂寞」,回 0 讓掛鉤把其他片的結果當數
++                print(f"第 {_i} 片沒分到(子集比片數少,別片有跑),這片算過")
++                return 0
+             if not tests:
+                 print(f"擋下:第 {_i} 片一支測試都沒分到——片數比測試數還多,或切法寫錯了;"
+                       f"跑了個寂寞不算通過", file=sys.stderr)
+                 return 1
+ 
+         # ★上次紅過的先跑★:配 -x 用,修完重跑幾秒就知道好了沒,不用等八分鐘。
+         # ★r1 折入:排序必須在分片之後★——原本先重排再分片,而各片是獨立行程、
+         #   讀到的快取可能不同(某片先跑完就把快取覆蓋掉了),於是「第 k 支」對不同片
+         #   指的不是同一支,**各片聯集不再等於全部:有些跑兩次、有些一次都沒跑**。
+         #   分片先做(在穩定的排序清單上切),重排只影響片內順序,聯集就永遠正確。
+@@ -44125,20 +44130,21 @@ def t_lint_door_field():
+ 
+ 
+ def t_test_suite_docs_only_judgement():
+     """純文件推送只跑文件子集(2026-09-18 Enzo 裁):pitfalls --json 多 suite/suite_reason/affected_keys/light_ok。
+     兩層白名單:路徑(README/docs/assets/governance…)且副檔名在文件清單(不分大小寫)才算 docs——代碼審 r1 邊界席(blocker)與正確性席各繞過一次
+     「路徑白名單+不在程式清單就算文件」:governance/ 底下的 .rb、.PY 都被當文件;改成反過來列文件。沒副檔名一律不算文件;scripts/skills/.github 任一支、
+     從 scripts/ 搬進 docs/ 的(--no-renames 看成刪程式檔)都 full;只有簿記帳也算 docs;範圍算不出 → full。
+     affected_keys:改到的程式檔裡動到的★頂層★函式名(cmd_x 也給子命令名 x;縮排的 def 不算——併發席:check 會選中全部)與檔名,含逗號/空白的丟掉(邊界席)。
+     light_ok:非文件檔全部是程式檔(資安席:測試檔/skills 這種既非文件也非程式的不准跟著 light 少跑全套)。三點範圍的起點是 merge-base(正確性席)。"""
+     import json as _j, subprocess as _sp
++    m = _load_lumos_inproc()
+     d, kg, p = _sc_setup("suite-docs")
+     def pf(rng="HEAD~1..HEAD"):
+         r = run(kg, "pitfalls", "--diff", rng, "--no-lint", "--json", "--repo", str(d))
+         return _j.loads(r.stdout), r.stdout[:300]
+     (d / "README.md").write_text("# hi\n"); (d / "assets").mkdir(); (d / "assets" / "a.SVG").write_text("<svg/>"); (d / "LICENSE").write_text("MIT\n"); _sg_commit(d, "docs")
+     dd, o = pf()
+     check("① README+.SVG(大寫也認)+LICENSE → docs", dd["suite"] == "docs" and "文件" in dd["suite_reason"], o)
+     check("①b 純文件沒有關鍵字、light_ok 假", dd["affected_keys"] == [] and dd["light_ok"] is False, o)
+     (d / "docs").mkdir(exist_ok=True); (d / "docs" / "notes").write_text("plain text\n"); _sg_commit(d, "no ext under docs")
+     dd, o = pf(); check("② docs/ 底下沒副檔名 → full(不認得的不算文件)", dd["suite"] == "full" and "docs/notes" in dd["suite_reason"], o)
+@@ -44147,35 +44153,36 @@ def t_test_suite_docs_only_judgement():
+     (d / "governance").mkdir(exist_ok=True); (d / "governance" / "x.rb").write_text("system('rm -rf /')\n"); _sg_commit(d, "rb under governance")
+     dd, o = pf(); check("③b governance/ 底下程式清單沒收的 .rb → full(r1 邊界席 blocker)", dd["suite"] == "full", o)
+     (d / "governance" / "Tool.PY").write_text("x = 1\n"); _sg_commit(d, "PY under governance")
+     dd, o = pf(); check("③c 副檔名大小寫 .PY → full(r1 正確性席)", dd["suite"] == "full", o)
+     (d / "skills").mkdir(); (d / "skills" / "x.md").write_text("# skill\n"); _sg_commit(d, "skill md")
+     dd, o = pf(); check("④ skills/ 的 markdown → full(lumos 自己讀進去用的)、light_ok 假(不是程式檔)", dd["suite"] == "full" and dd["light_ok"] is False, o)
+     (d / "scripts").mkdir(); (d / "scripts" / "t.py").write_text("def foo():\n    def check():\n        pass\n\ndef cmd_spec_gate():\n    pass\n"); _sg_commit(d, "code")
+     dd, o = pf()
+     check("⑤ scripts/ 的程式檔 → full、light_ok 真(非文件檔全是程式檔)", dd["suite"] == "full" and dd["light_ok"] is True, o)
+     check("⑤b 關鍵字含頂層函式名、cmd_ 的子命令名、檔名;縮排的 check 不算", all(k in dd["affected_keys"] for k in ("foo", "cmd_spec_gate", "spec-gate")) and "check" not in dd["affected_keys"], o)
+-    (d / "scripts" / "a,b c.py").write_text("y = 1\n"); (d / "tests").mkdir(exist_ok=True); (d / "tests" / "test_y.py").write_text("z = 1\n"); _sg_commit(d, "odd name + test file")
++    (d / "scripts" / "a,b c.py").write_text("y = 1\n"); (d / "scripts" / "-x.py").write_text("y = 2\n"); (d / "tests").mkdir(exist_ok=True); (d / "tests" / "test_y.py").write_text("z = 1\n"); _sg_commit(d, "odd name + test file")
+     dd, o = pf()
+-    check("⑤c 檔名含逗號/空白不當關鍵字;改到測試檔 → light_ok 假", not any("," in k or " " in k for k in dd["affected_keys"]) and dd["light_ok"] is False, o)
++    check("⑤c 檔名含逗號/空白、或 - 開頭(進執行器會被當旗標,r2 資安席)不當關鍵字;改到測試檔 → light_ok 假", not any("," in k or " " in k or k.startswith("-") for k in dd["affected_keys"]) and dd["light_ok"] is False, o)
++    import inspect as _insp
++    check("⑤d 小改動閘的相對量/落點也用 _range_base(r2 架構席:同檔同算法一份)", "_range_base(" in _insp.getsource(m._sc_churn) and "_range_base(" in _insp.getsource(m._small_change_check) and 'split("..")' not in _insp.getsource(m._sc_churn), "")
+     (d / "scripts" / "t.py").rename(d / "docs" / "t.md"); _sg_commit(d, "move code into docs")
+     dd, o = pf(); check("⑥ 從 scripts/ 搬進 docs/ → 當「刪程式檔+加文件」→ full", dd["suite"] == "full" and "scripts/t.py" in dd["suite_reason"], o)
+     (d / "docs" / ".canary-log.jsonl").write_text('{"kind":"x"}\n'); _sg_commit(d, "ledger only")
+     dd, o = pf(); check("⑦ 只有簿記帳 → docs(沒東西要測)", dd["suite"] == "docs", o)
+     (d / ".github").mkdir(); (d / ".github" / "ci.yml").write_text("name: x\n"); _sg_commit(d, "workflow")
+     dd, o = pf(); check("⑧ .github/ 不在白名單 → full", dd["suite"] == "full", o)
+     r = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--repo", str(d))
+     check("⑨ 人可讀輸出:full 不印「測試範圍」那行", "測試範圍" not in r.stdout, r.stdout[:300])
+     (d / "README.md").write_text("# hi2\n"); _sg_commit(d, "readme again")
+     r = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--repo", str(d))
+     check("⑨b docs 印「測試範圍:只跑文件子集」", "測試範圍:只跑文件子集" in r.stdout, r.stdout[:300])
+-    m = _load_lumos_inproc()
+     check("⑩ 範圍算不出 → full(多跑不是少跑)", m._test_suite_for_range(d, "zzz..HEAD")["suite"] == "full" and m._affected_test_keys(d, "zzz..HEAD", ["scripts/t.py"]) == [], "")
+     # 三點範圍(r1 正確性席):feature 刪掉一支在 merge-base 時是 #! 的無副檔名程式檔,main 之後把同一支改成純文字;
+     # 起點若拿左端點 main 讀首行就不是 #! → 誤判沒程式檔;要拿 merge-base
+     def g(*a):
+         return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True).stdout.strip()
+     (d / "tools").mkdir(); (d / "tools" / "run").write_text("#!/bin/sh\necho hi\n"); _sg_commit(d, "shebang tool"); mb = g("rev-parse", "HEAD")
+     g("checkout", "-q", "-b", "feature"); (d / "tools" / "run").unlink(); _sg_commit(d, "delete tool"); g("checkout", "-q", "main")
+     (d / "tools" / "run").write_text("plain text now\n"); _sg_commit(d, "main moves on")
+     check("⑪ a...b 的起點是 merge-base", m._range_base(d, "main...feature") == mb and m._range_base(d, "zzz..HEAD") == "zzz" and m._range_base(d, "HEAD") is None, f"{m._range_base(d, 'main...feature')} vs {mb}")
+     g("checkout", "-q", "feature")   # 站在範圍終點看(磁碟上那支已刪);_is_code_file 磁碟優先、磁碟沒有才讀起點——起點拿 main 讀到的是純文字、拿 merge-base 才是 #!
+@@ -44208,20 +44215,24 @@ def t_runner_suite_flags():
+     total = len(r_all.stdout.split())
+     check("docs 子集包含讀真 README/CLAUDE.md 的測試", {"t_docs_enumeration_drift", "t_claude_block_matches_template", "t_slim_readme_assertions", "t_docs_command_count"} <= names, str(sorted(names))[:300])
+     # 2026-09-18 實測 209/1021 ≈ 20%;上限訂四分之一——超過就代表挑法又鬆掉了(第一版 254 支跑 9 分半,比全套分片還慢),要回頭收緊
+     check("docs 子集不超過全套四分之一(不然省不到時間)", 0 < len(names) <= total * 0.25, f"{len(names)}/{total}")
+     check("docs 子集含靠輔助函式讀文件的測試(r1 合約席:t_commands_table_shape 自己一個路徑字樣都沒有)", "t_commands_table_shape" in names, "")
+     check("docs 子集不含跟文件無關的測試", "t_runner_exitfirst_and_failfirst" not in names and "t_guard_kill" not in names, "")
+     r = run_r("--list", "--suite", "keys", "--keys", "check")
+     check("太泛的關鍵字(check 選中全部)整個丟掉、印出來(r1 併發席)", r.returncode == 0 and "太泛的關鍵字不算" in r.stderr and not r.stdout.split(), f"rc={r.returncode} {r.stderr[:200]} n={len(r.stdout.split())}")
+     r4 = run_r("--list", "--suite", "docs", "--shard", "4/4")
+     check("先挑子集再切片:第 4 片還有東西", r4.returncode == 0 and len(r4.stdout.split()) > 0 and len(r4.stdout.split()) < len(names), r4.stdout[:200])
++    r = run_r("--suite", "keys", "--keys", "_range_base", "--shard", "3/4")   # 只選中一兩支 → 第 3 片空
++    check("子集配分片、這片沒分到 → rc0 說「沒分到」(r2 正確性席 blocker:原本判紅擋合法推送)", r.returncode == 0 and "沒分到" in r.stdout, f"rc={r.returncode} {r.stdout[-200:]}")
++    r = run_r("--shard", "3/2")
++    check("沒帶 --suite 的空片照舊擋(不是子集就真的是切錯)", r.returncode != 0, f"rc={r.returncode}")
+     # ★不存在的名字要在跑的時候拼出來★:寫成字面值,這支測試自己的原始碼就「整字提到」它,keys 子集會選中本支、
+     # 本支再巢狀跑自己……直到超時(2026-09-18 第一版真的這樣紅掉)。
+     nope = "zzz_" + "nope_at_all"
+     r = run_r("--list", "--suite", "keys", "--keys", "_docs_suite_select," + nope)
+     check("keys 子集:整字對到 _docs_suite_select 的測試(含本支)", "t_runner_suite_flags" in r.stdout.split() and "t_docs_enumeration_drift" not in r.stdout.split(), r.stdout[:300])
+     r = run_r("--suite", "keys", "--keys", nope)
+     check("keys 0 支:rc3(不是 1,讓呼叫端分得出「沒對到」跟「有紅」)", r.returncode == 3 and "選中 0 個" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+     r = run_r("--list", "--suite", "keys", "--keys", nope)
+     check("--list 0 支是查詢,rc0", r.returncode == 0 and "沒有對到" in r.stderr, f"rc={r.returncode}")
+     r = run_r("--suite", "keys"); check("--suite keys 沒給 --keys 擋 rc2", r.returncode == 2, f"rc={r.returncode}")
+@@ -44275,25 +44286,29 @@ def t_prepush_docs_and_light_run_subset():
+     mp.write_text("x = 1\ny = 2\nz = 3\n"); tx = d / "tests" / "test_x.py"; tx.write_text(tx.read_text() + "\n# 一行\n"); _sg_commit(d, "code + test file")
+     r, calls = push(base, g("rev-parse", "HEAD"))
+     check("light 但夾了測試檔(既非文件也非程式)→ 不少跑,執行器不帶 --suite(r1 資安席)", r.returncode == 0 and calls and all("--suite" not in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+     # 一般程式改動:計劃收案(沒有風險低留痕可套)、檔有家 → 一路放行到測試段,執行器不帶 --suite(全套)
+     run(kg, "set", "Projects/甲_計劃", "status", "done", expect_rc=0)
+     hm.write_text(hm.read_text(encoding="utf-8").replace("  - app/main.py\n", "  - app/main.py\n  - scripts/other.py\n"), encoding="utf-8")
+     _sg_commit(d, "close plan"); base = g("rev-parse", "HEAD")
+     (d / "scripts" / "other.py").write_text("z = 3\n"); _sg_commit(d, "plain code")
+     r, calls = push(base, g("rev-parse", "HEAD"))
+     check("一般程式改動:放行、執行器不帶 --suite(全套)", r.returncode == 0 and len(calls) == 2 and all("--suite" not in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
++    r, calls = push(base, g("rev-parse", "HEAD"), LUMOS_TEST_SHARDS="abc")
++    check("片數給非數字 → 串行一片、不是零片回綠(r2 邊界席 blocker)", r.returncode == 0 and len(calls) == 1 and "--shard" not in calls[0], f"rc={r.returncode}\n{calls}")
++    r, calls = push(base, g("rev-parse", "HEAD"), TMPDIR=str(d / "no-such-dir"))
++    check("暫存目錄建不出來 → 擋、講明(r2 邊界席:不擋會變根目錄路徑、log 全空)", r.returncode == 1 and "暫存目錄" in r.stderr and not calls, f"rc={r.returncode}\n{r.stderr[-300:]}")
+ 
+ 
+ def t_prepush_and_ci_wired_for_docs_suite():
+     """接線守衛:掛鉤與 CI 都真的接了純文件子集(掛鉤還接了 light 的 keys 那趟),而且 CI 判不出來時退全套(保守方向)。"""
+     root = Path(__file__).resolve().parent.parent
+     hook = (root / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
+     ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+     check("掛鉤:讀 pitfalls 的 suite 與 light_ok、push-check 的 light、跑 --suite docs / --suite keys", all(x in hook for x in ('"suite": *"docs"', '"light_ok": *true', "改動風險分級:light", "--suite docs", "--suite keys --keys")), "")
+-    check("掛鉤:push-check 輸出用 tee 即時印(r1 併發席)、暫存目錄掛在 trap 上清", "| tee \"$_sg_out\"" in hook and 'PIPESTATUS[0]' in hook and 'rm -rf "$_PP_TMP"' in hook, "")
++    check("掛鉤:push-check 輸出用 tee 即時印(r1 併發席)、暫存目錄掛在 trap 上清、片數要正整數", "| tee \"$_sg_out\"" in hook and 'PIPESTATUS[0]' in hook and 'rm -rf "$_PP_TMP"' in hook and '=~ ^[0-9]+$' in hook, "")
+     check("掛鉤:執行器不認得 --suite 就退全套(讀檔探旗標)", "'\"--suite\"'" in hook, "")
+     check("CI:push 事件用 before..sha 問 lumos,docs 才帶 --suite docs,其餘全套;起點寫法跟同檔既有步驟一致(^{commit})", all(x in ci for x in ("pitfalls --diff \"$BEFORE..$SHA\"", "--suite docs", "[ \"$suite\" = docs ] || suite=full", "0000000000000000000000000000000000000000", 'git cat-file -e "$BEFORE^{commit}"')), "")
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())

@@ -59,7 +59,14 @@ impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""
 # ★硬擋或收到訊號時也要清★(代碼審 r1 外家否決席判 minor,屬實):
 # 上面那支只在 ref 迴圈正常跑到尾端時執行。高風險那條路 rc1 會直接 exit 1,
 # 收到訊號也一樣——每被硬擋一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
-trap 'impact_done' EXIT INT TERM
+# 本次推送所有暫存檔的家,離開時整個清(r1 併發席:逐檔 rm 在 exit 1 / Ctrl-C 那條路會漏)。
+# 建不出來就擋(r2 邊界席):空字串會讓後面每個 "$_PP_TMP/…" 變成根目錄路徑,測試 log 全寫不出來、擋下訊息一片空白。
+_PP_TMP="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-XXXXXX" 2>/dev/null || true)"
+if [[ -z "$_PP_TMP" || ! -d "$_PP_TMP" ]]; then
+  echo "擋下:推送前檢查需要一個暫存目錄,但 ${TMPDIR:-/tmp} 建不出來(不存在或不可寫);修好 TMPDIR 再推。" >&2
+  exit 1
+fi
+trap 'impact_done; rm -rf "$_PP_TMP"' EXIT INT TERM
 # (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
 #  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
 # ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
@@ -156,6 +163,10 @@ fi
 # high 未過即擋。fail-open 僅剩:pitfalls 本身出錯 / empty-tree 都跑不動。
 _ZERO="0000000000000000000000000000000000000000"
 _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+# 推送前要跑哪個測試範圍(2026-09-18 Enzo 裁:純文件改動、或判成 light 的小改動,不用等全套):
+# 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
+# light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
+_SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   read -r _lref _lsha _rref _rsha <<< "$_ppl"
   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
@@ -210,6 +221,9 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   _tier_high=0
   printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
+  _SUITE_SEEN=1
+  _suite_this="full"
+  printf '%s' "$pf_json" | grep -q '"suite": *"docs"' && _suite_this="docs"
   if [[ "$_tier_high" -eq 1 ]]; then
     {
       echo ""
@@ -225,7 +239,20 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   # 雙向門放行(Projects/雙向門放行_計劃 S11–S14/S21):這次範圍碰到、仍 doing、有雙向門留痕的計劃,留痕裡的測試全綠才准推;
   # 留痕過期(條款或它連到的節點變了)也擋。風險低計劃不派設計審,這裡是它唯一的閘;lumos 算不出範圍/索引就 fail-open 放行(rc≠1)。
   sg_rc=0
-  "$PY" "$GRAPHCTL" spec-gate --push-check "$_range" --repo "$REPO_ROOT" >&2 || sg_rc=$?
+  _sg_out="$_PP_TMP/sg-$RANDOM.log"
+  # tee:一邊即時印到 stderr(r1 併發席:先存檔跑完才印,人會以為卡住去 Ctrl-C)、一邊留一份給下面認 light 用;rc 取管線第一段
+  "$PY" "$GRAPHCTL" spec-gate --push-check "$_range" --repo "$REPO_ROOT" 2>&1 | tee "$_sg_out" >&2
+  sg_rc="${PIPESTATUS[0]}"
+  # push-check 判成 light(它才有圖譜、才知道計劃風險低與小改動閘過):改到程式檔也不跑全套,
+  # 只跑文件子集 + 原始碼提到「改到的函式/子命令/檔名」的測試;CI 那邊照樣跑全套當後盾。
+  # ★還要 pitfalls 說 light_ok★(r1 資安席):小改動閘的擴散只查程式檔,測試檔/skills/workflow 這種既不是文件也不是程式的
+  # 會從它眼皮下溜過——範圍裡只要有一支這種檔,就不准少跑全套。
+  if [[ "$_suite_this" == "full" ]] && grep -q '改動風險分級:light' "$_sg_out" && printf '%s' "$pf_json" | grep -q '"light_ok": *true'; then
+    _suite_this="light"
+    _k="$(printf '%s' "$pf_json" | "$PY" -c 'import json,sys; print(",".join(json.load(sys.stdin).get("affected_keys", [])))' 2>/dev/null || true)"
+    [[ -n "$_k" ]] && _SUITE_KEYS="${_SUITE_KEYS:+$_SUITE_KEYS,}$_k"
+  fi
+  case "$_suite_this" in full) _SUITE_FULL=1 ;; light) _SUITE_LIGHT=1 ;; esac
   if [[ "$sg_rc" -eq 1 ]]; then
     echo "" >&2
     echo "風險低計劃的條款測試沒全綠(或留痕過期),推送擋下:把測試做綠、或重跑 lumos spec-gate <計劃> 之後再推。" >&2
@@ -348,6 +375,8 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   # 而不是吃 CPU,所以切成幾片同時跑很划算。實測四片牆鐘 271 秒(對照串行 480 秒,省 43%
   # ——不是四倍,因為瓶頸是 IO 不是 CPU)。片數可用 LUMOS_TEST_SHARDS 調;設 1 就是串行。
   _shards="${LUMOS_TEST_SHARDS:-4}"
+  # 不是正整數就串行(r2 邊界席 blocker:給 abc 會讓 seq 一片都不起,零測試回綠)
+  [[ "$_shards" =~ ^[0-9]+$ && "$_shards" -ge 1 ]] || _shards=1
   # ★先探這支 runner 支不支援分片★:新 hook 配到舊的(或別人自己寫的)runner 時,
   # 硬塞它不認得的旗標會讓它整個報錯 → 人被莫名其妙擋下。探不到就乖乖退回串行,
   # 行為跟以前一模一樣。(2026-09-06 實際踩到:假 runner 不認得新旗標,當場被判紅。)
@@ -359,27 +388,65 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   if ! grep -q -- '"--shard"' "$REPO_ROOT/scripts/test_lumos.py" 2>/dev/null; then
     _shards=1
   fi
-  _sdir="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-shards-XXXXXX")"
-  _rc=0
-  if [[ "$_shards" -le 1 ]]; then
-    echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
-    "$PY" "$REPO_ROOT/scripts/test_lumos.py" > "$_sdir/s1.log" 2>&1 || _rc=1
-  else
-    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
-    _pids=()
+  # 純文件 / light 只跑子集(2026-09-18):runner 認得 --suite 才走;每個 ref 都不是全套才算。
+  # 探法同上:讀檔找旗標字樣,不執行。
+  _suite_mode="full"
+  if [[ "$_SUITE_SEEN" -eq 1 && "$_SUITE_FULL" -eq 0 ]] && grep -q -- '"--suite"' "$REPO_ROOT/scripts/test_lumos.py" 2>/dev/null; then
+    _suite_mode="docs"; [[ "$_SUITE_LIGHT" -eq 1 ]] && _suite_mode="light"
+  fi
+  _suite_args=(); _suite_word="全部測試"
+  if [[ "$_suite_mode" != "full" ]]; then
+    _suite_args=(--suite docs)
+    _suite_word="文件子集(這次沒改到程式、或改動判成 light,不跑全套)"
+  fi
+  # light 的關鍵字子集跟文件子集一起分片、平行跑(r1 併發席:原本等分片收完才串行跑一趟);
+  # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:CI 會跑全套當後盾。有紅照擋。
+  _keys_args=()
+  if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
+    _keys_args=(--suite keys --keys "$_SUITE_KEYS")
+  elif [[ "$_suite_mode" == "light" ]]; then
+    echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+  fi
+  _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
+  _rc=0; _krc_all3=1
+  run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
+    local _pfx="$1"; shift
+    local _pids=() _i _p _r _any3=0 _bad=0
     for _i in $(seq 1 "$_shards"); do
-      # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
-      # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
-      "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" \
-        > "$_sdir/s$_i.log" 2>&1 &
+      if [[ "$_shards" -le 1 ]]; then
+        "$PY" "$REPO_ROOT/scripts/test_lumos.py" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+      else
+        # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
+        # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
+        "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+      fi
       _pids+=($!)
     done
     # ★用每個子行程自己的離開碼判★,不是用有沒有寫出摘要檔判——摘要檔是給人看的加值,
     # 拿它當判準等於「runner 不支援新旗標就一律紅」。
-    for _p in "${_pids[@]}"; do wait "$_p" || _rc=1; done
+    for _p in "${_pids[@]}"; do _r=0; wait "$_p" || _r=$?; [[ "$_r" -eq 3 ]] && _any3=1; [[ "$_r" -ne 0 && "$_r" -ne 3 ]] && _bad=1; done
+    [[ "$_bad" -eq 1 ]] && return 1
+    [[ "$_any3" -eq 1 ]] && return 3
+    return 0
+  }
+  if [[ "$_suite_mode" != "full" ]]; then
+    echo "推送前先跑$_suite_word(切成 $_shards 片同時跑;嫌久可 --no-verify,CI 會兜底)…" >&2
+  elif [[ "$_shards" -le 1 ]]; then
+    echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+  else
+    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
   fi
-  cat "$_sdir"/s*.log > "$_TESTS_LOG" 2>/dev/null || true
-  rm -rf "$_sdir"
+  _grc=0; run_group s ${_suite_args+"${_suite_args[@]}"} || _grc=$?
+  [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
+  if [[ ${#_keys_args[@]} -gt 0 ]]; then
+    _krc=0; run_group k "${_keys_args[@]}" || _krc=$?
+    if [[ "$_krc" -eq 3 ]]; then
+      echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
+    elif [[ "$_krc" -ne 0 ]]; then
+      _rc=1
+    fi
+  fi
+  cat "$_sdir"/*.log > "$_TESTS_LOG" 2>/dev/null || true
   if [[ $_rc -ne 0 ]]; then
     {
       echo ""

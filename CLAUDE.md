@@ -74,3 +74,5 @@ python3 scripts/test_lumos.py -k <關鍵字>
 ```
 
 關鍵字比對測試函式名(例:`-k stop_block`、`-k codex`);對照組 Codex 曾因在對話裡跑全套而超時([[Projects/Codex行為精修_計劃]] 基線)。
+
+推送前的閘會自己看這次改了什麼:只改 README / docs / assets 這類文件就只跑文件子集(`--suite docs`),改到程式但判成 light 的再加跑「原始碼提到改到的函式或檔名」的測試(`--suite keys`),其餘才跑全套;CI 對純文件推送也只跑文件子集。細節在 [[Systems/bound-tests-gate]]。
