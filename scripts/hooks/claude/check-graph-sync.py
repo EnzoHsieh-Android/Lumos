@@ -318,9 +318,12 @@ def _git(project_root: Path, *args, text=True):
     **不宣稱「所有設定都擋得住」**。純 clone 不會把該設定帶過來(實測),
     真正的交付路徑是「直接拿到別人的整個目錄」。
     這支檔其他地方的版本控制呼叫沒有走這條路,是否要一併收攏另案處理。"""
+    # ★防護讀同一份清單,不要寫死★:寫死的話清單加一項這裡不會跟,
+    # 就會出現「清單上有、某個呼叫點沒有」的不一致——而那正是這條問題前三輪的死法。
+    # 環境變數那層已經涵蓋所有子行程,這裡是雙保險:測試會直接呼叫這個函式、不經進入點。
+    unsafe = [x for k in _GIT_UNSAFE_CONFIG for x in ("-c", k + "=")]
     return subprocess.run(
-        ["git", "-C", str(project_root), "-c", "core.quotePath=false", "-c", "core.fsmonitor="]
-        + list(args),
+        ["git", "-C", str(project_root), "-c", "core.quotePath=false", *unsafe, *args],
         capture_output=True, text=text, timeout=_inner_budget(default=20))
 
 

@@ -43,7 +43,7 @@ def scenarios(root):
 
 def run(name, expect, rows, root):
     tpath = HERE / ("probe-" + name + ".jsonl")
-    body = [{"type": "user", "message": {"role": "user", "content": "改一下"}}] + rows
+    body = [{"type": "user", "message": {"role": "user", "content": "改一下"}}, *rows]
     tpath.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in body), encoding="utf-8")
     payload = {"session_id": "probe-" + name, "transcript_path": str(tpath),
                "cwd": root, "hook_event_name": "Stop"}
