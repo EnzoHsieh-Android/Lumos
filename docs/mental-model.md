@@ -172,6 +172,19 @@ The file extension and project configuration determine which stack applies; only
 
 <a id="7-four-design-principles"></a>
 
+<a id="spec-gate-plans-sorted-by-risk"></a>
+
+### The spec gate: plans are sorted by risk first
+
+<p align="center">
+  <img src="../assets/spec-gate-en.svg" alt="The spec gate asks one question: if this breaks, is a revert enough? High-risk plans go through design review; low-risk plans bind red tests and implement directly; both are checked again before push" width="900">
+</p>
+
+One question decides it: if this breaks, is reverting the commit enough? Money already charged, messages already sent, data already deleted, and whatever a broken guard let through while it was broken: reverting code does not undo these four, so a plan that touches them is **high risk** and goes through the multi-seat design review. A plan that can rule out all four with one written reason each is **low risk**: no design review; each acceptance clause binds a test that is red now (existing behavior is marked keeps and must be green), and before push the plan is re-sorted and the tests re-run. Genuinely small changes may be verified by a person instead; the push gate then checks diffusion, relative size, history and purpose.
+
+The sorting is mechanical and defaults to high risk; authors can only tighten it. The sources are Amazon's reversibility test, Meta's funnel for auto-landing low-risk diffs, and just-in-time defect-prediction research showing that diffusion predicts trouble better than line count. The thresholds are guesses with retirement conditions written into the plan. Known skew so far: common words (payment, send) push unrelated plans to high risk; the guard-code keyword list misses pre-commit, and file deletion is not in the irreversible list, so those come out too lenient. Full criteria and sources live in `docs/lumos-toolchain-knowledge/Systems/規格閘.md`.
+
+
 ## 8. Four design principles
 
 - **Zero dependencies** — pure Python standard library. CI runs it directly; nothing to install.

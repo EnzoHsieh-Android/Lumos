@@ -158,13 +158,15 @@ Pre-push code review is risk-tiered; small changes do not all trigger the same r
 
 <p align="center">
   <a href="assets/spec-gate-en.svg">
-    <img src="assets/spec-gate-en.svg" alt="Plans are classified high or low risk first: high-risk plans go through the design review loop; low-risk plans replace design review with tests that must be red now, re-checked and re-run at push time" width="760">
+    <img src="assets/spec-gate-en.svg" alt="The spec gate asks one question: if this breaks, is a revert enough? High-risk plans go through design review; low-risk plans bind red tests and implement directly; both are checked again before push" width="760">
   </a>
 </p>
 
-A finished plan goes through the spec gate first. One question splits plans in two: after reverting the commit, would anything outside the repo still need cleaning up by hand? Plans touching money, outbound messages, irreversible data, or the guard code itself are **high risk** and go through the multi-seat design review. Plans that can rule out all four classes with one written reason each are **low risk**: no design review, but every acceptance clause must bind a test that is red now; at push time the gate re-classifies the plan and re-runs those tests, and only all-green gets pushed. Genuinely small changes may be verified by a person instead, in which case the push gate checks diffusion, relative size, history and purpose.
+A finished plan goes through the spec gate first, which asks one question: if this breaks, is a revert enough? Plans touching money, outbound sends, irreversible data, or the guard code itself are high risk and go through design review. Plans that rule out all four are low risk: no review, each acceptance clause binds a test that is red now, and implementation starts directly; before push the plan is re-sorted and the tests re-run.
 
-The classification is mechanical and defaults to high risk; authors can only tighten it. Some of the thresholds are guesses with retirement conditions written into the plan; see the mental model doc for the criteria, the sources, and the over- and under-strict cases measured so far.
+The sorting is mechanical and defaults to high risk; authors can only tighten it. It catches missing proof, not wrong proof.
+
+[See the criteria, the sources, and the skew measured so far](docs/mental-model.md#spec-gate-plans-sorted-by-risk)
 
 #### Five layers of quality control
 
