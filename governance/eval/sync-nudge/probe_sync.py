@@ -35,7 +35,7 @@ def _mk_repo():
         encoding="utf-8")
     for args in (["init", "-q"], ["add", "-A"],
                  ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
-        subprocess.run(["git", "-C", str(root)] + args, capture_output=True)
+        subprocess.run(["git", "-C", str(root), *args], capture_output=True)
     return root
 
 
