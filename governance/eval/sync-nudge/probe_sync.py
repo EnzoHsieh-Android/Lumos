@@ -1,76 +1,127 @@
 #!/usr/bin/env python3
-"""收工點名的情境產生器:造一份假的對話紀錄餵給 hook,比對「實際改幾支」與「它說幾支」。
+"""收工點名的情境產生器:造一個真的現場,餵給 hook,比對「實際改幾支」與「它說幾支」。
 
-用法: python3 probe_sync.py <repo根> [情境名...]
-不帶情境名就全跑。只讀 hook、不改被檢查的 repo 任何檔;假紀錄寫在本腳本所在目錄。
+用法: python3 probe_sync.py [對照的 hook 路徑]
+  不帶參數就用已部署的那份(~/.claude/hooks/check-graph-sync.py)——★那才是實際會跑的★。
+
+★現場一定要真的改檔★(2026-09-18 實地踩到):第一版只在對話紀錄裡「宣稱」改過檔、
+沒有真的動檔案。清單來源改成問版本控制之後,工作樹乾淨它就正確地回答「沒有」——
+於是九個情境全 FAIL,而每一個 FAIL 其實都是新行為的正確表現。
+這支工具是撤除條件依賴的儀器,壞掉的話那個判準會永遠成立、等於被自己的儀器架空。
+
+它不改被檢查的 repo:每個情境都在自己的臨時倉庫裡跑完就丟。
 """
-import json, os, re, subprocess, sys
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
-HOOK = Path.home() / ".claude/hooks/check-graph-sync.py"
-HERE = Path(__file__).resolve().parent
+DEFAULT_HOOK = Path.home() / ".claude/hooks/check-graph-sync.py"
 
 
-def tool_use(name, inp):
-    return {"type": "assistant", "message": {"role": "assistant",
-            "content": [{"type": "tool_use", "id": "t", "name": name, "input": inp}]}}
+def _mk_repo():
+    """造一個臨時倉庫:有一個提交、有圖譜目錄、有兩支程式碼檔(一支有副檔名、一支沒有)。"""
+    root = Path(tempfile.mkdtemp(prefix="probe-sync-"))
+    (root / "scripts").mkdir()
+    (root / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
+    (root / "scripts" / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "scripts" / "tool").write_text("#!/usr/bin/env python3\ny = 1\n", encoding="utf-8")
+    (root / "docs" / "t-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-09-18\n---\n# s\n\n說明。\n",
+        encoding="utf-8")
+    for args in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", str(root)] + args, capture_output=True)
+    return root
 
 
-def scenarios(root):
-    """每個情境:(名稱, 這輪實際改了幾支 code 檔, 該輪的工具呼叫序列)"""
-    a = root + "/scripts/lumos"
-    b = root + "/scripts/test_lumos.py"
-    c = root + "/scripts/hooks/pre-push"
-    heredoc = "cat > " + c + " <<'EOF'\n#!/bin/sh\nEOF"
-    return {
-        # 現況就會過的兩個(對照組,證明儀器本身有在動)
-        "write":    (1, [tool_use("Write", {"file_path": a, "content": "x"})]),
-        "cp":       (1, [tool_use("Bash", {"command": "cp /tmp/a.py " + a})]),
-        # 現況會漏的三種主流寫法
-        "redirect": (1, [tool_use("Bash", {"command": 'echo "# x" > ' + a})]),
-        "sed":      (1, [tool_use("Bash", {"command": "sed -i '' 's/a/b/' " + a})]),
-        "heredoc":  (1, [tool_use("Bash", {"command": heredoc})]),
-        # 方案「沒列舉過」的手法——S1 要求這些也不能漏,這三個是修對了沒的真考題
-        "tee":      (1, [tool_use("Bash", {"command": "printf x | tee " + a})]),
-        "python1":  (1, [tool_use("Bash", {"command": 'python3 -c "open(\'' + a + '\',\'w\').write(\'x\')"'})]),
-        "shwrap":   (1, [tool_use("Bash", {"command": "sh -c 'echo x > " + a + "'"})]),
-        # 混用:一支走編輯工具、兩支走 shell。這一列是整件事的核心症狀
-        "mixed":    (3, [tool_use("Write", {"file_path": a, "content": "x"}),
-                         tool_use("Bash", {"command": "sed -i '' 's/a/b/' " + b}),
-                         tool_use("Bash", {"command": heredoc})]),
-    }
+def _turn(*tools):
+    rows = [{"type": "user", "message": {"role": "user", "content": "改一下"}}]
+    for name, inp in tools:
+        rows.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t", "name": name, "input": inp}]}})
+    return rows
 
 
-def run(name, expect, rows, root):
-    tpath = HERE / ("probe-" + name + ".jsonl")
-    body = [{"type": "user", "message": {"role": "user", "content": "改一下"}}, *rows]
-    tpath.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in body), encoding="utf-8")
-    payload = {"session_id": "probe-" + name, "transcript_path": str(tpath),
-               "cwd": root, "hook_event_name": "Stop"}
-    env = dict(os.environ, LUMOS_STOP_BLOCK_OFF="1")
-    r = subprocess.run(["/opt/homebrew/bin/python3", str(HOOK), "--budget", "40"],
-                       input=json.dumps(payload), capture_output=True, text=True,
-                       cwd=root, env=env)
-    out = (r.stderr or "") + (r.stdout or "")
-    m = re.search(r"這一輪改了 (\d+) 個程式碼檔", out)
-    said = int(m.group(1)) if m else 0
-    listed = len(re.findall(r"^\s+• ", out, re.M))
-    degraded = ("可能" in out) and (("不是這輪" in out) or ("不完整" in out))
-    ok = (said == expect)
-    mark = "OK  " if ok else "FAIL"
-    extra = ",有降級提示" if degraded else ""
-    print("  %s %-9s 實際改 %d 支 / 它說 %d 支(清單列了 %d 項%s)" % (mark, name, expect, said, listed, extra))
-    return ok
+# 每個情境:(說明, 真的怎麼改, 對話紀錄裡的工具呼叫, 應該報幾支)
+# ★前三個是修之前就會過的對照組★——它們證明儀器本身在動,不是全部一起壞。
+# ★中間五個是修之前會完全沒輸出的★,其中後三個是設計時沒有列舉過的手法。
+# ★最後一個是核心症狀★:混用時修之前只報一支。
+def _cases(root):
+    keep = root / "scripts" / "keep.py"
+    tool = root / "scripts" / "tool"
+    newf = root / "scripts" / "brand_new.py"
+    pkg = root / "scripts" / "newpkg"
+
+    def edit_keep(v):
+        return lambda: keep.write_text("x = %d\n" % v, encoding="utf-8")
+
+    return [
+        ("write", edit_keep(2), _turn(("Write", {"file_path": str(keep), "content": "x = 2\n"})), 1),
+        ("cp", edit_keep(3), _turn(("Bash", {"command": "cp /tmp/a.py scripts/keep.py"})), 1),
+        ("delete", lambda: tool.unlink(), _turn(("Bash", {"command": "rm scripts/tool"})), 1),
+        ("redirect", edit_keep(4), _turn(("Bash", {"command": "echo 'x = 4' > scripts/keep.py"})), 1),
+        ("sed", edit_keep(5), _turn(("Bash", {"command": "sed -i '' 's/1/5/' scripts/keep.py"})), 1),
+        ("heredoc", lambda: newf.write_text("z = 1\n", encoding="utf-8"),
+         _turn(("Bash", {"command": "cat > scripts/brand_new.py <<'EOF'\nz = 1\nEOF"})), 1),
+        ("tee", edit_keep(6), _turn(("Bash", {"command": "printf 'x = 6' | tee scripts/keep.py"})), 1),
+        ("python1", edit_keep(7),
+         _turn(("Bash", {"command": "python3 -c \"open('scripts/keep.py','w').write('x = 7')\""})), 1),
+        ("shwrap", edit_keep(8), _turn(("Bash", {"command": "sh -c 'echo x = 8 > scripts/keep.py'"})), 1),
+        ("newdir", lambda: (pkg.mkdir(), (pkg / "a.py").write_text("a = 1\n", encoding="utf-8"),
+                            (pkg / "b.py").write_text("b = 1\n", encoding="utf-8")),
+         _turn(("Bash", {"command": "mkdir scripts/newpkg && echo a > scripts/newpkg/a.py"})), 2),
+        ("mixed", lambda: (keep.write_text("x = 9\n", encoding="utf-8"),
+                           newf.write_text("z = 2\n", encoding="utf-8"),
+                           tool.unlink()),
+         _turn(("Write", {"file_path": str(keep), "content": "x = 9\n"}),
+               ("Bash", {"command": "echo z = 2 > scripts/brand_new.py"}),
+               ("Bash", {"command": "rm scripts/tool"})), 3),
+    ]
 
 
 def main():
-    root = sys.argv[1]
-    want = sys.argv[2:]
-    sc = scenarios(root)
-    names = want or list(sc)
-    print("對照 hook: %s" % HOOK)
-    print("repo 根  : %s" % root)
-    results = [run(n, sc[n][0], sc[n][1], root) for n in names]
+    hook = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_HOOK
+    if not hook.is_file():
+        print("找不到要對照的 hook:%s" % hook)
+        sys.exit(2)
+    print("對照 hook: %s" % hook)
+    print("現場    : ★每個情境都真的改檔★,各自在臨時倉庫裡跑完就丟\n")
+    root_for_cases = _mk_repo()
+    names = [c[0] for c in _cases(root_for_cases)]
+    shutil.rmtree(root_for_cases, ignore_errors=True)
+    results = []
+    for name in names:
+        # 每個情境重新造現場(_cases 綁在各自的 root 上)
+        root = _mk_repo()
+        case = next(c for c in _cases(root) if c[0] == name)
+        home = Path(tempfile.mkdtemp(prefix="probe-home-"))
+        try:
+            case[1]()
+            tp = home / "t.jsonl"
+            tp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in case[2]),
+                          encoding="utf-8")
+            env = dict(os.environ, HOME=str(home), LUMOS_STOP_BLOCK_OFF="1")
+            r = subprocess.run([sys.executable, str(hook), "--budget", "40"],
+                               input=json.dumps({"session_id": "probe-" + name,
+                                                 "transcript_path": str(tp), "cwd": str(root),
+                                                 "hook_event_name": "Stop"}),
+                               capture_output=True, text=True, cwd=str(root), env=env)
+            out = (r.stdout or "") + (r.stderr or "")
+            m = re.search(r"有 (\d+) 個程式碼檔還沒提交", out)
+            said = int(m.group(1)) if m else 0
+            listed = len(re.findall(r"^\s+• ", out, re.M))
+            ok = (said == case[3])
+            results.append(ok)
+            print("  %s %-9s 實際改 %d 支 / 它說 %d 支(清單列了 %d 項)"
+                  % ("OK  " if ok else "FAIL", name, case[3], said, listed))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
     bad = sum(1 for x in results if not x)
     print("\n%d 個情境,%d 個不符預期" % (len(results), bad))
     sys.exit(1 if bad else 0)
