@@ -32986,6 +32986,9 @@ def t_codex_stop_block_once():
     (repo / "docs" / "x-knowledge" / "Systems" / "a.md").write_text("---\nname: a\n---\n", encoding="utf-8")
     (repo / "src").mkdir(); (repo / "src" / "app.py").write_text("x=1\n", encoding="utf-8")
     _sp.run(["git", "init", "-q"], cwd=str(repo)); _sp.run(["git", "-C", str(repo), "add", "-A"]); _sp.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"])
+    # ★現場要真的改檔★(收工點名改問版本控制之後):清單來源是工作樹上未提交的東西,
+    # 只在逐字稿裡宣稱改過、工作樹卻乾淨的話,算出來是空的於是靜默——那不是這支測試要測的情境。
+    (repo / "src" / "app.py").write_text("x=2\n", encoding="utf-8")
     def line(t, payload): return _j.dumps({"timestamp": "t", "type": t, "payload": payload}, ensure_ascii=False)
     lines = [line("session_meta", {"cli_version": "0.153.2", "cwd": str(repo)}),
              line("event_msg", {"type": "user_message", "message": "go"}),
@@ -44016,6 +44019,466 @@ def t_lint_door_field():
     p.write_text(p.read_text(encoding="utf-8").replace("plan_risk: high", "plan_risk: sideways"), encoding="utf-8")
     r = run(kg, "lint", "Projects/門_計劃")
     check("② plan_risk: sideways 軟提醒", "plan_risk" in r.stdout and "sideways" in r.stdout, r.stdout[-400:])
+
+
+
+
+
+# ── 收工點名改問版本控制(Projects/收工點名問版本控制_計劃) ────────────────────
+# 出身:收工那句「這一輪改了 N 個程式碼檔」靠列舉工具名算清單,用 shell 改的檔一支都不算。
+# 實測一輪改三支只報一支;最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。
+# 設計審兩輪(第一版整份重寫、第二版折入 44 條)卷證在 governance/review-reports/ 兩個迴圈目錄。
+
+def _cgs():
+    """載入收工檢查那支 hook;非來源 repo 就跳過(同檔其他 hook 測試的慣例)。"""
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    if not hook.is_file():
+        raise _SrcOnly("找不到收工檢查那支 hook(非來源 repo),這段沒驗到")
+    return _load_hook_mod("cgs_sync_nudge", "check-graph-sync.py")
+
+
+def _mk_repo_with_graph():
+    """造一個臨時 repo:有一個提交、有圖譜目錄。回 repo 路徑。"""
+    import subprocess as _sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-nudge-repo-"))
+    (root / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
+    (root / "docs" / "t-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-09-18\n---\n# s\n\n說明。\n", encoding="utf-8")
+    (root / "scripts").mkdir()
+    (root / "scripts" / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "scripts" / "tool").write_text("#!/usr/bin/env python3\ny = 1\n", encoding="utf-8")
+    for args in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+        _sp.run(["git", "-C", str(root)] + args, capture_output=True)
+    return root
+
+
+def _turn(*tools):
+    """造一輪對話紀錄:每個 tools 是 (工具名, 輸入 dict)。"""
+    rows = [{"type": "user", "message": {"role": "user", "content": "做點事"}}]
+    for name, inp in tools:
+        rows.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t", "name": name, "input": inp}]}})
+    return rows
+
+
+def _run_stop(root, rows, session_id="s1", home=None):
+    """把一輪對話紀錄餵給收工 hook,回 (rc, 合併輸出)。擋停關掉,只看提醒本身。"""
+    import json as _j, os as _os, subprocess as _sp
+    tp = Path(tempfile.mkdtemp(prefix="gctl-nudge-tr-")) / "t.jsonl"
+    tp.write_text("\n".join(_j.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    payload = {"session_id": session_id, "transcript_path": str(tp),
+               "cwd": str(root), "hook_event_name": "Stop"}
+    env = {**_os.environ, "LUMOS_STOP_BLOCK_OFF": "1"}
+    if home:
+        env["HOME"] = str(home)
+    r = _sp.run([sys.executable, str(hook), "--budget", "40"], input=_j.dumps(payload),
+                capture_output=True, text=True, cwd=str(root), env=env)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def t_sync_nudge_lists_shell_written_files():
+    """[S1] 用 shell 改的程式碼檔要進清單。
+
+    出身:清單來自列舉工具名(三個編輯工具 + rm/mv/cp/git rm/git mv),
+    `echo >`、`sed -i`、heredoc 一律不算。實測一輪改三支只報一支。
+    翻紅釘:把清單來源改回讀逐字稿認工具名 → 第 ①②③ 條翻紅。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "keep.py").write_text("x = 2\n", encoding="utf-8")   # 等同 sed -i 改既有檔
+    (root / "scripts" / "brand_new.py").write_text("z = 1\n", encoding="utf-8")  # 等同 echo > 建新檔
+    _, out = _run_stop(root, _turn(("Bash", {"command": "sed -i '' 's/1/2/' scripts/keep.py"}),
+                                    ("Bash", {"command": "echo 'z = 1' > scripts/brand_new.py"})))
+    check("① 改到的既有檔要列出來", "keep.py" in out, out[-500:])
+    check("② ★從未被追蹤的新檔也要列出來★(既有查詢看不到它,這條是本案核心)",
+          "brand_new.py" in out, out[-500:])
+    check("③ 數字要等於清單長度", "2 個程式碼檔" in out, out[-500:])
+    print("  ✓ t_sync_nudge_lists_shell_written_files")
+
+
+def t_sync_nudge_gate3_sees_shell_written_notes():
+    """[S2] 用 shell 改的圖譜筆記,閘門 3 要判成「動過圖譜」。
+
+    出身:閘門 3 的分岔判準也靠認名字(工具名清單 + 一份寫入子命令名單),
+    用 shell 改筆記時會誤判「筆記沒動」——同一種少報換個位置活下來。
+    翻紅釘:把閘門 3 的判準改回讀逐字稿認名字 → 第 ② 條翻紅。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "keep.py").write_text("x = 3\n", encoding="utf-8")
+    rows = _turn(("Bash", {"command": "sed -i '' 's/1/3/' scripts/keep.py"}))
+
+    # 對照組:只改程式碼、不碰筆記 → 它應該講「筆記沒有跟著動」
+    _, out0 = _run_stop(root, rows, session_id="g3a")
+    check("★前置★ 對照組成立:不碰筆記時會說「筆記沒有跟著動」(沒有這條,下一條會假綠)",
+          "知識筆記沒有跟著動" in out0, out0[-500:])
+
+    # 實驗組:同一個現場,改用 shell 動了一篇筆記 → 就不該再那樣說
+    (root / "docs" / "t-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-09-18\n---\n# s\n\n改過了。\n", encoding="utf-8")
+    _, out = _run_stop(root, _turn(("Bash", {"command": "sed -i '' 's/1/3/' scripts/keep.py"}),
+                                    ("Bash", {"command": "cat > docs/t-knowledge/Systems/s.md <<EOF"})),
+                        session_id="g3b")
+    check("① ★筆記也被 shell 改過,不該再說「筆記沒有跟著動」★",
+          "知識筆記沒有跟著動" not in out, out[-500:])
+    check("② 不是靠整支閉嘴混過去:對照組有講、這組沒講,差別來自筆記被看到了",
+          ("知識筆記沒有跟著動" in out0) and ("知識筆記沒有跟著動" not in out),
+          "對照組:%s / 實驗組:%s" % (out0[-200:], out[-200:]))
+    print("  ✓ t_sync_nudge_gate3_sees_shell_written_notes")
+
+
+def t_sync_nudge_message_says_uncommitted_not_this_turn():
+    """[S3] 訊息不准再宣稱那些檔是「這一輪」改的。
+
+    出身:清單改成工作樹語意之後,裡面含這輪以外的未提交改動,
+    共用工作目錄下還可能含別人的——再說「這一輪改了」就是假話。
+    翻紅釘:把訊息改回「這一輪改了 N 個程式碼檔」 → 第 ① 條翻紅。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "keep.py").write_text("x = 4\n", encoding="utf-8")
+    _, out = _run_stop(root, _turn(("Bash", {"command": "sed -i '' 's/1/4/' scripts/keep.py"})))
+    check("★前置★ 現場成立:有開口講話(沒輸出的話下一條會假綠)", out.strip() != "", out[-400:])
+    check("① ★不得出現「這一輪改了」★(那是說不出口的宣稱)",
+          out.strip() != "" and "這一輪改了" not in out, out[-400:])
+    check("② 要用工作樹語意講(未提交)", "未提交" in out or "還沒提交" in out, out[-400:])
+    print("  ✓ t_sync_nudge_message_says_uncommitted_not_this_turn")
+
+
+def t_sync_nudge_counts_deleted_extensionless_script():
+    """[S4] 刪掉一支沒有副檔名的程式檔,也要進清單並標示是刪除。
+
+    出身:判斷是不是程式碼檔靠開檔讀首行,而那個函式第一步就問「這個檔存在嗎」——
+    檔案刪掉之後永遠回 False。本 repo 主程式正是沒有副檔名、只能靠首行認出來的檔。
+    設計審三席獨立報同一條。
+    翻紅釘:把「改讀它在上次提交裡的內容」那段拿掉 → 第 ①② 條翻紅。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "tool").unlink()
+    _, out = _run_stop(root, _turn(("Bash", {"command": "rm scripts/tool"})))
+    check("① ★刪掉的無副檔名程式檔要列出來★", "tool" in out, out[-500:])
+    check("② 要標示是刪除", "刪除" in out or "刪掉" in out, out[-500:])
+    print("  ✓ t_sync_nudge_counts_deleted_extensionless_script")
+
+
+def t_sync_nudge_suppresses_identical_repeat():
+    """[S5] 清單跟上次印的一樣就不印;那份紀錄讀不到時要照印、不准少報。
+
+    出身:清單改成「工作樹上未提交的」之後不限這一輪,不抑制重複會變成
+    每輪都唸同一批檔=重現 2026-07-06 撤掉的刷屏。
+    ★這份狀態在體驗路徑不在正確性路徑★:壞掉只會多印一次,不會少報。
+    翻紅釘:把抑制那段拿掉 → 第 ② 條翻紅;把「讀不到就當沒印過」改成「讀不到就閉嘴」 → 第 ③ 條翻紅。"""
+    _cgs()
+    home = Path(tempfile.mkdtemp(prefix="gctl-nudge-home-"))
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "keep.py").write_text("x = 5\n", encoding="utf-8")
+    rows = _turn(("Bash", {"command": "sed -i '' 's/1/5/' scripts/keep.py"}))
+    _, out1 = _run_stop(root, rows, session_id="dup1", home=home)
+    check("① 第一次要印", "keep.py" in out1, out1[-400:])
+    _, out2 = _run_stop(root, rows, session_id="dup1", home=home)
+    check("② ★同一批檔第二次不再印★(不然就是每輪刷屏)",
+          ("keep.py" in out1) and ("keep.py" not in out2), "第一次:%s / 第二次:%s" % (out1[-200:], out2[-200:]))
+    for q in (home / ".cache" / "lumos" / "stop-printed").glob("*"):
+        if q.is_file():
+            q.unlink()
+    _, out3 = _run_stop(root, rows, session_id="dup1", home=home)
+    check("③ ★那份紀錄被刪掉時要當作沒印過、照印★(壞掉只准多印不准少報)",
+          "keep.py" in out3, out3[-400:])
+    print("  ✓ t_sync_nudge_suppresses_identical_repeat")
+
+
+def t_sync_nudge_fails_open_on_git_error():
+    """[S6] 版本控制查詢失敗時靜默放行,不擋也不當機。
+
+    出身:設計審三席各自指出初稿沒交代查詢失敗怎麼辦。照鄰近程式碼的既有慣例
+    一律 fail-open——擋住使用者收工的代價遠大於漏一次提醒,而且提交前那道閘還在。
+    翻紅釘:把包住查詢的那個 try 拿掉 → 第 ②③ 條翻紅。"""
+    _cgs()
+    root = Path(tempfile.mkdtemp(prefix="gctl-nudge-nogit-"))   # 不是版本控制倉庫
+    (root / "docs" / "t-knowledge").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / "scripts" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    rc, out = _run_stop(root, _turn(("Bash", {"command": "echo x > scripts/a.py"})))
+    check("① 不是倉庫也不能當機", "Traceback" not in out, out[-500:])
+    check("② 要靜默放行(退出碼 0)", rc == 0, f"rc={rc} out={out[-300:]}")
+    check("③ 不准擋停", '"decision"' not in out and "block" not in out, out[-300:])
+    print("  ✓ t_sync_nudge_fails_open_on_git_error")
+
+
+def t_sync_nudge_lists_untracked_dir_files_individually():
+    """[S7] 全新目錄裡的檔要逐支列出,不准把目錄摺成一行。
+
+    出身:狀態查詢不帶展開旗標時,一個全新目錄會被摺成 `?? dir/` 一行,
+    裡面幾支檔一支都列不出來。本 repo 自己的程式碼早已記載這件事。
+    ★旗標是斷言不是裝飾★:驗收要先拆掉它跑一次、確認會漏,才算證明它有作用。
+    翻紅釘:把展開旗標拿掉 → 第 ①② 條翻紅(會變成只看到目錄名)。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "newpkg").mkdir()
+    (root / "scripts" / "newpkg" / "a.py").write_text("a = 1\n", encoding="utf-8")
+    (root / "scripts" / "newpkg" / "b.py").write_text("b = 1\n", encoding="utf-8")
+    _, out = _run_stop(root, _turn(("Bash", {"command": "mkdir scripts/newpkg && echo a > scripts/newpkg/a.py"})))
+    check("① 新目錄裡第一支檔要列出來", "newpkg/a.py" in out, out[-500:])
+    check("② 第二支也要", "newpkg/b.py" in out, out[-500:])
+    check("③ 數字要等於逐支的數量,不是目錄數", "2 個程式碼檔" in out, out[-500:])
+    print("  ✓ t_sync_nudge_lists_untracked_dir_files_individually")
+
+
+
+def t_sync_nudge_handles_non_ascii_filenames():
+    """[代碼審 r1 外家備援 blocker] 中文檔名不准被轉義成八進位當路徑用。
+
+    出身:版本控制預設會把非 ASCII 檔名跳脫成 `"\\346\\224\\266..."` 這種八進位形式,
+    解析時只 strip 掉引號根本還原不了——★而這個專案的檔名大量是中文★,
+    等於清單裡會出現一堆指向不存在的檔的路徑。
+    ★同一天自己踩到的諷刺★:凍結被審 diff 時用了 `-c core.quotePath=false`(流程文件明寫要用),
+    實作這支查詢時卻忘了帶。
+
+    翻紅釘:把查詢裡的 `-c core.quotePath=false` 拿掉 → 第 ②③ 條翻紅。"""
+    _cgs()
+    root = _mk_repo_with_graph()
+    cjk = root / "scripts" / "收工點名.py"
+    cjk.write_text("y = 1\n", encoding="utf-8")
+    m = _load_hook_mod("cgs_cjk", "check-graph-sync.py")
+    entries = m._git_status_entries(root)
+    paths = [p for _, p in entries]
+    check("★前置★ 現場成立:真的有一支中文檔名的新檔", cjk.exists(), str(cjk))
+    check("① 查得到東西", len(entries) >= 1, str(entries))
+    check("② ★解析出來的路徑要指向真的存在的檔★(八進位轉義沒還原的話這條會紅)",
+          all((root / p).exists() for p in paths), str(paths))
+    check("③ 中文檔名要原樣出現,不是反斜線八進位",
+          any("收工點名.py" in p for p in paths), str(paths))
+    _, out = _run_stop(root, _turn(("Bash", {"command": "echo 'y = 1' > scripts/收工點名.py"})))
+    check("④ 提醒裡也要印得出中文檔名", "收工點名.py" in out, out[-400:])
+    print("  ✓ t_sync_nudge_handles_non_ascii_filenames")
+
+
+
+def t_sync_nudge_model_message_lists_shell_written_files():
+    """[代碼審 r1 合約一致席 + 正確性席 兩席獨立] 送給模型那條也不准用壞掉的清單算。
+
+    出身:為了不把別人的改動塞給模型,原本讓模型那條只列「這一輪」的檔——
+    ★而拿來算「這一輪」的,正是這次要換掉的那套工具名清單★。
+    於是用 shell 改的檔在模型那條完全不列名(退化成「算不出來」),
+    少報換個位置原封不動活著。而且七支新測試一支都沒測到這條路(它們都把擋停關掉)。
+
+    解法不是修交集,是承認「這一輪」算不準:模型那條也列完整清單,
+    風險改用措辭講明(這些是工作樹上未提交的,不一定都是你這輪改的)。
+
+    翻紅釘:把模型那條改回取交集 → 第 ②③ 條翻紅。"""
+    import json as _j, os as _os, subprocess as _sp
+    _cgs()
+    root = _mk_repo_with_graph()
+    (root / "scripts" / "keep.py").write_text("x = 9\n", encoding="utf-8")
+    home = Path(tempfile.mkdtemp(prefix="gctl-nudge-mh-"))
+    rows = _turn(("Bash", {"command": "sed -i '' 's/1/9/' scripts/keep.py"}))
+    tp = Path(tempfile.mkdtemp(prefix="gctl-nudge-mt-")) / "t.jsonl"
+    tp.write_text("\n".join(_j.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    payload = {"session_id": "model-path", "transcript_path": str(tp),
+               "cwd": str(root), "hook_event_name": "Stop"}
+    env = {**_os.environ, "HOME": str(home)}
+    env.pop("LUMOS_STOP_BLOCK_OFF", None)     # ★這支就是要走擋停那條路★
+    r = _sp.run([sys.executable, str(hook), "--budget", "40"], input=_j.dumps(payload),
+                capture_output=True, text=True, cwd=str(root), env=env)
+    out = (r.stdout or "").strip()
+    check("★前置★ 現場成立:真的走到擋停那條路(不然下面兩條會假綠)",
+          '"decision"' in out and "block" in out, out[:300])
+    check("① 退出碼 0", r.returncode == 0, str(r.returncode))
+    check("② ★用 shell 改的檔,模型那條也要列得出檔名★", "keep.py" in out, out[:400])
+    check("③ 不得退化成「算不出來」", "算不出來" not in out, out[:400])
+    print("  ✓ t_sync_nudge_model_message_lists_shell_written_files")
+
+
+def t_sync_nudge_excludes_deleted_files_under_excluded_dirs():
+    """[代碼審 r1 邊界席] 排除規則對「被刪掉的檔」也要生效。
+
+    出身:那些「不要管」的路徑寫成前後帶斜線的形式(例如 /dist/),
+    而狀態查詢給的是不帶前導斜線的相對路徑(dist/bundle.js)——頂層目錄永遠對不上。
+    沒被刪的檔後面還有一道檢查會補救,★被刪的檔沒有★,
+    於是刪掉建置產物裡的檔會被誤報成「該寫筆記的程式碼檔」。
+
+    翻紅釘:把比對用的路徑正規化那段拿掉 → 第 ② 條翻紅。"""
+    _cgs()
+    import subprocess as _sp
+    root = _mk_repo_with_graph()
+    (root / "dist").mkdir()
+    (root / "dist" / "bundle.js").write_text("var a=1\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "add dist"], capture_output=True)
+    (root / "dist" / "bundle.js").unlink()
+    (root / "scripts" / "keep.py").write_text("x = 7\n", encoding="utf-8")
+    _, out = _run_stop(root, _turn(("Bash", {"command": "rm dist/bundle.js"})), session_id="exdel")
+    check("★前置★ 現場成立:有開口講話", out.strip() != "", out[-300:])
+    check("① 該管的檔還是要列", "keep.py" in out, out[-400:])
+    check("② ★被刪掉的建置產物不該進清單★(排除規則對刪除也要生效)",
+          "bundle.js" not in out, out[-400:])
+    print("  ✓ t_sync_nudge_excludes_deleted_files_under_excluded_dirs")
+
+
+def t_sync_nudge_git_call_disables_fsmonitor():
+    """[代碼審 r1 資安席,編排者實測重現] 被打開的資料夾自帶的設定不准讓我們執行任意指令。
+
+    出身:這支 hook 是開啟資料夾就自動跑的。查工作樹狀態那個呼叫,
+    會吃被打開那個資料夾自己的版本控制設定——其中有一個設定項的值會被當成指令執行。
+    ★實測★:在一個惡意設定的倉庫上查一次狀態,攻擊者指定的指令就跑了、證據檔被建出來。
+    ★觸發面是本案擴大的★:改動前這條路完全不呼叫版本控制(只有「這輪動過筆記」那條才間接呼叫),
+    改動後幾乎每輪都呼叫。
+
+    ★誠實邊界★:這條只關掉已知會執行指令的那一項;版本控制的設定面很大,
+    不宣稱「所有設定都擋得住」。純 clone 不會把該設定帶過來(實測),
+    真正的交付路徑是「直接拿到別人的整個目錄」。
+
+    翻紅釘:把關掉那一項的旗標拿掉 → 第 ② 條翻紅。"""
+    _cgs()
+    import subprocess as _sp
+    root = _mk_repo_with_graph()
+    proof = Path(tempfile.mkdtemp(prefix="gctl-nudge-proof-")) / "PWNED"
+    _sp.run(["git", "-C", str(root), "config", "core.fsmonitor",
+             "bash -c 'echo x > %s'" % proof], capture_output=True)
+    (root / "scripts" / "keep.py").write_text("x = 8\n", encoding="utf-8")
+    m = _load_hook_mod("cgs_fsmon", "check-graph-sync.py")
+    entries = m._git_status_entries(root)
+    check("★前置★ 現場成立:惡意設定真的寫進去了",
+          "fsmonitor" in _sp.run(["git", "-C", str(root), "config", "--list"],
+                                 capture_output=True, text=True).stdout, "")
+    check("① 查詢本身還是要能用", entries is not None and len(entries) >= 1, str(entries))
+    check("② ★不准執行被打開那個資料夾指定的指令★", not proof.exists(),
+          "證據檔被建出來了:%s" % proof)
+    print("  ✓ t_sync_nudge_git_call_disables_fsmonitor")
+
+
+
+def t_sync_nudge_hardens_git_for_all_subprocesses():
+    """[代碼審 r2 驗收席 blocker] 防護要涵蓋這支 hook 開出去的★所有★子行程。
+
+    出身:r1 資安席報「被打開的資料夾自帶的設定會被當成指令執行」,
+    ★r1 的修法只補了自己新增的兩個呼叫點★——閘門 3 那條會去呼叫主程式,
+    主程式內部的版本控制呼叫沒被補,r2 驗收席端到端重現了完整攻擊。
+    ★而且這批改動自己放寬了那條路的觸發條件★(從「這輪用工具動過筆記」
+    變成「工作樹上有任何未提交的筆記」),讓沒補的那條更容易被踩到。
+
+    這支測試跟 t_sync_nudge_git_call_disables_fsmonitor 的差別:
+    那支只測查詢函式本身,這支跑★完整的 hook★、而且現場刻意造成「會走到閘門 3 為真」
+    (未提交的程式碼檔 + 未提交的圖譜筆記),逼它去呼叫主程式。
+
+    翻紅釘:把進入點那行 _harden_git_env() 拿掉 → 第 ③ 條翻紅。"""
+    import json as _j, os as _os, subprocess as _sp
+    _cgs()
+    root = _mk_repo_with_graph()
+    proof = Path(tempfile.mkdtemp(prefix="gctl-nudge-p2-")) / "PWNED"
+    _sp.run(["git", "-C", str(root), "config", "core.fsmonitor",
+             "bash -c 'echo x > %s'" % proof], capture_output=True)
+    # 兩種未提交的檔都要有,才會走到「動過筆記」那條分支(它會去呼叫主程式)
+    (root / "scripts" / "keep.py").write_text("x = 11\n", encoding="utf-8")
+    (root / "docs" / "t-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-09-18\n---\n# s\n\n改過\n", encoding="utf-8")
+    home = Path(tempfile.mkdtemp(prefix="gctl-nudge-h2-"))
+    tp = Path(tempfile.mkdtemp(prefix="gctl-nudge-t2-")) / "t.jsonl"
+    rows = _turn(("Bash", {"command": "echo x=11 > scripts/keep.py"}))
+    tp.write_text("\n".join(_j.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    payload = {"session_id": "harden", "transcript_path": str(tp),
+               "cwd": str(root), "hook_event_name": "Stop"}
+    env = {**_os.environ, "HOME": str(home), "LUMOS_STOP_BLOCK_OFF": "1"}
+    env.pop("GIT_CONFIG_PARAMETERS", None)
+    r = _sp.run([sys.executable, str(hook), "--budget", "40"], input=_j.dumps(payload),
+                capture_output=True, text=True, cwd=str(root), env=env)
+    check("★前置★ 現場成立:惡意設定真的寫進去了",
+          "fsmonitor" in _sp.run(["git", "-C", str(root), "config", "--list"],
+                                 capture_output=True, text=True).stdout, "")
+    check("① hook 本身不能當掉", "Traceback" not in (r.stdout + r.stderr), (r.stderr or "")[-300:])
+    check("② 退出碼 0", r.returncode == 0, str(r.returncode))
+    check("③ ★整支 hook 跑完,攻擊者的指令都不准執行★(含它去呼叫主程式那條路)",
+          not proof.exists(), "證據檔被建出來了:%s" % proof)
+    print("  ✓ t_sync_nudge_hardens_git_for_all_subprocesses")
+
+
+
+def t_sync_nudge_blocks_every_listed_unsafe_git_config():
+    """[代碼審 r2 資安複審] 清單上的每一項設定都要真的擋得住——逐項端到端驗,不是只驗第一項。
+
+    出身:同一類問題冒出三次——
+      r1 資安席報第一項 → 修法只補了自己新增的兩個呼叫點
+      r2 驗收席抓到漏補第三處(會去呼叫主程式那條)→ 改成注入環境變數
+      r2 資安複審又找到第二項設定 → ★而當時的註解已經寫了「涵蓋得到(實測驗過)」★
+    那句話只對當時驗過的那一項成立。所以這支測試★逐項★跑,清單加一項就自動多驗一項,
+    不會再出現「宣稱涵蓋、實際只驗了一項」。
+
+    ★這支測試證明的是「清單上的擋得住」,不是「所有設定都擋得住」★——
+    清單是列舉法,測試也只能釘住列舉到的部分。
+
+    翻紅釘:清單裡拿掉任何一項 → 那一項的斷言翻紅。"""
+    import json as _j, os as _os, subprocess as _sp
+    _cgs()
+    m = _load_hook_mod("cgs_unsafe", "check-graph-sync.py")
+    keys = list(getattr(m, "_GIT_UNSAFE_CONFIG", ()))
+    check("★前置★ 清單不是空的(空的話下面一條都不會跑,等於假綠)", len(keys) >= 2, str(keys))
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    for key in keys:
+        root = _mk_repo_with_graph()
+        proof = Path(tempfile.mkdtemp(prefix="gctl-unsafe-")) / "PWNED"
+        _sp.run(["git", "-C", str(root), "config", key,
+                 "bash -c 'echo x > %s' #" % proof], capture_output=True)
+        # 兩種未提交的檔都要有,才會走到會呼叫主程式那條分支
+        (root / "scripts" / "keep.py").write_text("x = 12\n", encoding="utf-8")
+        (root / "docs" / "t-knowledge" / "Systems" / "s.md").write_text(
+            "---\ntype: system\nstatus: doing\ncreated: 2026-09-18\n---\n# s\n\n改過\n", encoding="utf-8")
+        home = Path(tempfile.mkdtemp(prefix="gctl-unsafe-h-"))
+        tp = Path(tempfile.mkdtemp(prefix="gctl-unsafe-t-")) / "t.jsonl"
+        rows = _turn(("Bash", {"command": "echo x=12 > scripts/keep.py"}))
+        tp.write_text("\n".join(_j.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+        env = {**_os.environ, "HOME": str(home), "LUMOS_STOP_BLOCK_OFF": "1"}
+        env.pop("GIT_CONFIG_PARAMETERS", None)
+        payload = {"session_id": "unsafe-" + key.replace(".", "-"),
+                   "transcript_path": str(tp), "cwd": str(root), "hook_event_name": "Stop"}
+        r = _sp.run([sys.executable, str(hook), "--budget", "40"], input=_j.dumps(payload),
+                    capture_output=True, text=True, cwd=str(root), env=env)
+        check("清單項「%s」:hook 不能當掉" % key,
+              "Traceback" not in (r.stdout + r.stderr), (r.stderr or "")[-200:])
+        check("清單項「%s」:★攻擊者的指令不准執行★" % key, not proof.exists(),
+              "證據檔被建出來了:%s" % proof)
+    print("  ✓ t_sync_nudge_blocks_every_listed_unsafe_git_config")
+
+
+
+def t_lumos_content_diffs_all_disable_external_drivers():
+    """[代碼審 r3 資安終審] 每一處「取差異內容」的版本控制呼叫都要關掉外部驅動器。
+
+    出身:被打開的資料夾可以放一份★未提交、未追蹤★的屬性檔,把某支檔指到一個
+    ★攻擊者自己命名★的差異驅動器,再用那個名字設定要執行的指令。
+    ★鍵名是他取的,所以列舉清單原理上擋不住★——這條打破的不是某個實作細節,
+    是「列舉危險設定」這個形狀本身。三輪三種修法都被打穿:
+      逐點加參數 → 漏呼叫點;注入環境變數 → 漏設定項;列舉清單 → 鍵名由攻擊者決定。
+
+    正解是關掉整類機制:那兩個旗標不管設定裡寫什麼名字都生效(實測驗過)。
+
+    ★範圍靠實測畫的★:只取檔名/統計/狀態的呼叫不觸發(實測),所以不強制它們帶旗標;
+    取內容的才要。這支測試釘的是★性質★不是行號——新增一處取內容卻沒帶旗標的,它會自己翻紅。
+
+    翻紅釘:任一處取內容的呼叫拿掉旗標 → 這條翻紅。"""
+    import re as _re
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    lines = src.split("\n")
+    safe_shape = ("--name-only", "--numstat", "--name-status", "--shortstat", "--stat")
+    guard = "--no-ext-diff"
+    bad = []
+    for i, l in enumerate(lines):
+        if '"diff"' not in l and "diff --" not in l:
+            continue
+        ctx = " ".join(lines[i:i + 3])
+        if not _re.search(r'["\']diff["\']', ctx):
+            continue
+        if any(s in ctx for s in safe_shape):      # 只取檔名/統計,實測不觸發
+            continue
+        if guard in ctx:
+            continue
+        bad.append((i + 1, l.strip()[:90]))
+    check("★前置★ 這支檔裡真的找得到取差異內容的呼叫(找不到=判準寫壞了,下一條會假綠)",
+          any(guard in l for l in lines), "整份都沒有 %s,判準可能沒套上" % guard)
+    check("★每一處取差異內容的呼叫都要帶防護旗標★(列舉設定擋不住自訂名字的驅動器)",
+          not bad, "沒帶旗標的:%s" % bad)
+    print("  ✓ t_lumos_content_diffs_all_disable_external_drivers")
 
 
 

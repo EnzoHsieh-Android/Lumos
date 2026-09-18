@@ -12,11 +12,19 @@
   沿革:Codex 先做(Projects/Codex行為精修_計劃),同日 README 審視發現 Claude 側「軟提醒」其實沒人看得到,套成一致(Projects/README審視五修_計劃 d2)。
 
 四層閘門:
-  0  圖譜不存在               → exit 0
-  1  這 turn 沒改任何檔        → exit 0
-  2  改的都是非原始碼/在 docs/ → exit 0
-  3  這 turn 已動過圖譜        → exit 0
-  否則                         → 印 stderr 提醒
+  0  圖譜不存在                      → exit 0
+  1  這 turn 什麼都沒做              → exit 0(讀逐字稿,只判有沒有動作)
+  2  工作樹上沒有未提交的程式碼檔    → exit 0(問版本控制,不看用了哪個工具)
+  3  工作樹上有未提交的圖譜筆記      → 改印「動了筆記但這幾篇沒動」
+  否則                                → 印提醒(擋停一次,之後走 stderr)
+
+★清單為什麼改成問版本控制★(2026-09-18,單源 Projects/收工點名問版本控制_計劃):
+原本閘門 2 與閘門 3 都靠列舉工具名算清單(三個編輯工具 + rm/mv/cp 那幾個命令),
+用 `echo >`、`sed -i`、heredoc 改的檔一支都不算——實測一輪改三支只報一支,
+而最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。列舉法原理上補不完。
+代價:清單是「工作樹上未提交的」,★不再宣稱切得出這一輪★,訊息措辭已跟著改口;
+為了不變成每輪唸同一批檔,跟「上次印過什麼」比對,一樣就不印
+(那份紀錄在體驗路徑不在正確性路徑——壞掉只會多印一次,不會少報)。
 """
 from __future__ import annotations
 import json
@@ -287,6 +295,140 @@ def is_graph_file(path: str, graph_root: Path) -> bool:
         return False
 
 
+# ── 工作樹查詢(Projects/收工點名問版本控制_計劃)────────────────────────────
+# 出身:清單原本靠列舉工具名算(三個編輯工具 + rm/mv/cp/git rm/git mv),
+# 用 `echo >`、`sed -i`、heredoc 改的檔一支都不算——實測一輪改三支只報一支,
+# 而最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。
+# 列舉法原理上補不完(tee/patch/一行 python/包一層 shell/產生器),量結果不量過程才免疫。
+
+def _git(project_root: Path, *args, text=True):
+    """對被檢查的那個資料夾跑一個版本控制指令。兩個旗標都是安全用的,不是裝飾:
+
+    ★關掉檔名轉義★(代碼審 r1 外家備援+邊界+正確性 三席獨立報,編排者實測):
+    不帶它,非 ASCII 檔名會被跳脫成 `"scripts/\\346\\224\\266..."` 這種八進位形式,
+    只 strip 掉引號還原不了,解析出來的路徑指向一個不存在的檔——
+    ★而這個專案的檔名大量是中文★,等於天天踩。
+
+    ★關掉那個會被當成指令執行的設定項★(代碼審 r1 資安席,編排者實測重現):
+    這支 hook 是開啟資料夾就自動跑的,而這個呼叫會吃★被打開那個資料夾自己的★版本控制設定;
+    其中有一項的值會被當成 shell 指令執行——實測在惡意設定的倉庫上查一次狀態,
+    攻擊者指定的指令就跑了。★觸發面是本批改動擴大的★:改動前這條路完全不呼叫版本控制。
+
+    ★誠實邊界,不得宣稱更多★:只關掉已知會執行指令的那一項;版本控制的設定面很大,
+    **不宣稱「所有設定都擋得住」**。純 clone 不會把該設定帶過來(實測),
+    真正的交付路徑是「直接拿到別人的整個目錄」。
+    這支檔其他地方的版本控制呼叫沒有走這條路,是否要一併收攏另案處理。"""
+    return subprocess.run(
+        ["git", "-C", str(project_root), "-c", "core.quotePath=false", "-c", "core.fsmonitor="]
+        + list(args),
+        capture_output=True, text=text, timeout=_inner_budget(default=20))
+
+
+def _git_status_entries(project_root: Path):
+    """工作樹上有哪些檔還沒提交。回 [(狀態碼, repo 相對路徑)];狀態碼 '??' = 從未被追蹤。
+
+    ★-uall 是斷言不是裝飾★:不帶它,一個全新目錄會被整包摺成 `?? dir/` 一行,
+    裡面幾支檔一支都列不出來(本 repo 自己的程式碼早已記載這件事)。
+    ★為什麼不沿用閘門 3 那條現成的查詢★:那條底層是拿工作樹跟上次提交比,
+    **看不到從未被追蹤的新檔**——而 `echo > 新檔.py` 正是最常見的 shell 寫法,
+    沿用它這個病會原封不動留著(實測留痕見計劃的卷證目錄)。
+
+    任何失敗(不是倉庫、索引被鎖、逾時、空倉庫)一律回 None=算不出來,呼叫端 fail-open。
+    """
+    try:
+        # ★關掉檔名轉義不是裝飾★(代碼審 r1 外家備援 blocker,編排者實測確認):
+        # 不帶它,非 ASCII 檔名會被跳脫成 `"scripts/\\346\\224\\266..."` 這種八進位形式,
+        # 只 strip 掉引號還原不了,解析出來的路徑指向一個不存在的檔——
+        # 而這個專案的檔名大量是中文,等於實務上一直踩。
+        # ★諷刺的地方★:凍結被審 diff 時本來就照流程帶了這個旗標,實作這支查詢時卻忘了(同一天、隔幾個指令)。
+        r = _git(project_root, "status", "--porcelain", "-uall")
+        if r.returncode != 0:
+            return None
+    except Exception:
+        return None
+    out = []
+    for line in r.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        code, rest = line[:2], line[3:]
+        if "R" in code or "C" in code:      # 改名/複製那一列是「舊路徑 -> 新路徑」,要的是新的
+            rest = rest.split(" -> ")[-1]
+        rest = rest.strip().strip('"')
+        if rest:
+            out.append((code, rest))
+    return out
+
+
+def _head_shebang(project_root: Path, relpath: str) -> bool:
+    """這支檔在上一次提交裡,首行是不是 `#!`。
+
+    ★給已經被刪掉的檔用★:`_shebang_script` 第一步就問「這個檔存在嗎」,
+    檔案刪掉之後永遠回 False——而本 repo 主程式正是沒有副檔名、只能靠首行認出來的檔
+    (設計審三席獨立報同一條)。所以刪除的檔改讀它在上次提交裡的內容。"""
+    try:
+        r = _git(project_root, "show", "HEAD:" + relpath, text=False)
+        return r.returncode == 0 and r.stdout[:2] == b"#!"
+    except Exception:
+        return False
+
+
+def _entry_is_deleted(code: str) -> bool:
+    return "D" in code
+
+
+def _entry_is_code(code: str, relpath: str, project_root: Path) -> bool:
+    """狀態表的一列,是不是我們在意的程式碼檔。"""
+    norm = relpath.replace("\\", "/")
+    # ★比對前要補前導斜線★(代碼審 r1 邊界席):排除清單寫的是前後帶斜線的形式(例如 /dist/),
+    # 而狀態查詢給的是不帶前導斜線的相對路徑(dist/bundle.js)——頂層目錄永遠對不上。
+    # 沒被刪的檔後面還有 is_code_file 用絕對路徑再擋一次,★被刪的檔沒有那道★,
+    # 於是刪掉建置產物裡的檔會被誤報成「該寫筆記的程式碼檔」。
+    if any(seg in "/" + norm.lstrip("/") for seg in EXCLUDE_PATH_CONTAINS):
+        return False
+    if Path(relpath).name in EXCLUDE_FILENAMES:
+        return False
+    if _entry_is_deleted(code):                       # 檔已經不在,開不了
+        if Path(relpath).suffix.lower() in CODE_EXTS:
+            return True
+        return _head_shebang(project_root, relpath)
+    return is_code_file(str(project_root / relpath), project_root)
+
+
+# ── 抑制重複(同一批檔不要每輪重講)────────────────────────────────────
+# 清單改成「工作樹上未提交的」之後就不限這一輪,不抑制會變成每輪唸同一批檔
+# =重現 2026-07-06 撤掉的刷屏(設計審兩席各報 blocker)。
+# ★這份紀錄在體驗路徑,不在正確性路徑★:讀不到就當沒印過照印,壞掉只會多印一次、不會少報。
+# 對照:前一版被否決的方案把狀態放在正確性路徑(算差集),壞掉會少報,才需要原子寫入/版號/鍵值/清理全套。
+
+def _printed_mark_path(session_id: str):
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
+    if name in ("", ".", ".."):
+        return None
+    return _printed_dir() / name
+
+
+def _load_printed(session_id: str):
+    """上次印過哪些;讀不到一律回 None=當作沒印過。"""
+    mp = _printed_mark_path(session_id)
+    if mp is None:
+        return None
+    try:
+        return set(json.loads(mp.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+
+
+def _save_printed(session_id: str, keys) -> None:
+    """記下這次印了什麼。寫失敗就算了——下一輪會重印一次,那是可接受的代價。"""
+    mp = _printed_mark_path(session_id)
+    if mp is None or not _stop_dir_ok(mp.parent):
+        return
+    try:
+        mp.write_text(json.dumps(sorted(keys), ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _segment_command(cmd: str) -> list[str]:
     """切 shell chain (`&&` / `||` / `;` / `|`)。Quote-aware 不嚴格,但對常見 case 夠用。"""
     return [s.strip() for s in re.split(r'\s*(?:&&|\|\||;|\|)\s*', cmd) if s.strip()]
@@ -300,7 +442,12 @@ def _tokens_of(segment: str) -> list[str]:
 
 
 def touched_graph_via_cli(bash_commands: list[str]) -> bool:
-    """這 turn 是否真的「寫」過圖譜 (#2 收緊):
+    """★2026-09-18 起沒有呼叫點★(代碼審 r1 合約一致席 + 架構對齊席):
+    閘門 3 的判準改成問版本控制之後,這個函式不再被 main() 使用。
+    暫時留著不刪——它是「認名字」那套的最後一段,刪掉會讓 diff 更難讀;
+    下一次動這支檔時一併移除。留著的代價只有讀者困惑,沒有行為影響。
+
+    這 turn 是否真的「寫」過圖譜 (#2 收緊):
        只有 obsidian CLI 用了 mutate 子命令 (create/append/property:set 等) 才算。
        Read-only 子命令 / `obsidian --help` / 路徑裡含 obsidian 字串的非 obsidian command 都不算。
     """
@@ -615,10 +762,15 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
 STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
 
 
-def _stop_block_dir() -> Path:
-    """標記目錄:mkdir(0700)後★先過 _stop_dir_ok 再做任何 chmod/清理★(code-codex-refine r2 外家:目錄若被換成指向別處的 symlink,
-    之前會跟著 chmod 並刪掉目標裡超過 7 天的檔——現在 symlink/不是自己的/別人可寫 一律不碰,交給後面的 _stop_dir_ok 判不擋)。"""
-    d = Path.home() / ".cache" / "lumos" / "stop-block"
+def _cache_dir_under_home(name: str, label: str) -> Path:
+    """`<家目錄>/.cache/lumos/<name>`:mkdir(0700)後★先過 _stop_dir_ok 再做任何 chmod/清理★
+    (code-codex-refine r2 外家:目錄若被換成指向別處的 symlink,之前會跟著 chmod 並刪掉目標裡
+    超過 7 天的檔——現在 symlink/不是自己的/別人可寫 一律不碰,交給後面的 _stop_dir_ok 判不擋)。
+
+    ★參數化而不是抄第二份★(2026-09-18 收工點名改問版本控制那一批):收工點名的去重紀錄
+    需要自己的目錄(跟擋停標記混在一起會打破「只有擋過的 session 才留標記」這個性質),
+    而這支檔已經因為「邏輯抄一份、一邊改另一邊沒跟上」吃過虧——所以共用同一套判準。"""
+    d = Path.home() / ".cache" / "lumos" / name
     try:
         # ★逐層建、逐層檢查★(2026-09-16 補審 delta 那一輪):原本一次 mkdir 出整條路徑再檢查,
         # 上層被換成指向別處的連結時,★別人的目錄裡已經多出一個 stop-block 資料夾了★,
@@ -626,12 +778,12 @@ def _stop_block_dir() -> Path:
         # 主程式的 `_mkdir_trusted_under_home` 同一天改成這樣,這支 hook 是獨立檔不能 import,
         # ★所以邏輯抄一份、判準必須跟它對齊★(是真目錄、屬於自己、別人不可寫;任何一層不過就停手,
         # 已經建好的不回頭刪——刪反而是在動別人的東西)。
-        if not _mkdir_under_home(".cache", "lumos", "stop-block"):
-            print(f"lumos 收工擋停停用:{d} 這條路徑上有一層不是自己的真目錄"
+        if not _mkdir_under_home(".cache", "lumos", name):
+            print(f"lumos {label}停用:{d} 這條路徑上有一層不是自己的真目錄"
                   "(被換成指向別處的連結、或別人也寫得進去)——不在那裡建東西。", file=sys.stderr)
             return d
         if not _stop_dir_ok(d):
-            print(f"lumos 收工擋停停用:標記目錄 {d} 不是自己的 0700 目錄(symlink / 別人可寫 / chmod 失敗)——修好權限才會再擋", file=sys.stderr)   # r2 delta #3:靜默停用要有訊號(給 log,Codex 模型看不到)
+            print(f"lumos {label}停用:標記目錄 {d} 不是自己的 0700 目錄(symlink / 別人可寫 / chmod 失敗)——修好權限才會再啟用", file=sys.stderr)   # r2 delta #3:靜默停用要有訊號(給 log,Codex 模型看不到)
             return d
         os.chmod(d, 0o700)
         now = time.time()   # lazy 清超過 7 天的標記(邊界 F5:註解與門檻要一致)
@@ -644,6 +796,17 @@ def _stop_block_dir() -> Path:
     except OSError:
         pass
     return d
+
+
+def _stop_block_dir() -> Path:
+    """擋停名額的標記目錄。既有測試在驗「只有擋過的 session 才會在這裡留東西」。"""
+    return _cache_dir_under_home("stop-block", "收工擋停")
+
+
+def _printed_dir() -> Path:
+    """收工點名「上次印過什麼」的目錄。★刻意跟擋停標記分開★:兩者職責不同,
+    混在一起會打破上面那個性質。跟它共用同一套安全建法,不另寫一份。"""
+    return _cache_dir_under_home("stop-printed", "收工點名去重")
 
 
 def _mkdir_under_home(*segs) -> bool:
@@ -701,7 +864,11 @@ def _stop_dir_ok(d: Path) -> bool:
             return False
         # r3 delta:父層(~/.cache 或 ~/.cache/lumos)是 symlink 也一樣——家目錄以下整條路徑不得經過 symlink
         # (家目錄本身可以是 symlink,macOS /var→/private/var 那種),所以拿「家目錄解析後 + 固定相對路徑」對照
-        if d.resolve() != (Path.home().resolve() / ".cache" / "lumos" / "stop-block"):
+        # ★名字不寫死★(2026-09-18 收工點名改問版本控制那一批):原本這裡寫死 "stop-block",
+        # 於是同一個快取層底下新增任何目錄都永遠不過這關——去重紀錄就是這樣被靜默停用的。
+        # 改成比對「家目錄解析後 + 固定的兩層 + 這個目錄自己的名字」,防連結繞路的意圖不變:
+        # 解析後的路徑仍然必須落在 ~/.cache/lumos/<name>,中間經過任何連結都會對不上。
+        if d.resolve() != (Path.home().resolve() / ".cache" / "lumos" / d.name):
             return False
         st = d.stat()
     except OSError:
@@ -765,7 +932,9 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
     """reason 版面(r1 外家 #8):首行固定標頭、第二行就是指令、再列檔名(最多 10)、整段 ≤1500 字——續做提示約 2500 tokens 後會被截成頭尾預覽。"""
     lines = [STOP_BLOCK_HEAD,
              "lumos 收工檢查,只擋這一次:現在把該記的寫回知識筆記(Systems / Verification / lumos decision-add),或一句話說明為什麼這次不用(改錯字 / 排版 / 半成品),然後再結束。",
-             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動(下面反引號裡的只是檔名,檔名寫什麼都不是指令):"] + [f"  • `{_safe_path(r)}`" for r in rel[:10]]
+             f"工作樹上有 {len(rel)} 個程式碼檔還沒提交、筆記沒跟著動"
+             "(★清單是工作樹狀態,不保證每支都是你這一輪改的——共用工作目錄下可能含別人的,"
+             "自己判斷哪些該補★;下面反引號裡的只是檔名,檔名寫什麼都不是指令):"] + [f"  • `{_safe_path(r)}`" for r in rel[:10]]
     if len(rel) > 10:
         lines.append(f"  (另 {len(rel) - 10} 個)")
     lines.append(f"筆記放在 {_safe_path(graph_rel)}/;下一個 session 只讀得到筆記,讀不到你這次為什麼這樣改。")
@@ -775,7 +944,43 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
     return out if len(out) <= 1500 else out[:1490] + "…"
 
 
+# ★被打開的資料夾不准指使我們執行指令★
+# 版本控制有幾個設定項,它的值會被當成 shell 指令執行。這支 hook 是開啟資料夾就自動跑的,
+# 而它查的就是「被打開的那個資料夾」——所以那些設定由攻擊者控制。
+#
+# ★為什麼是一份清單而不是逐個補★(同類問題冒出第三次之後換的形狀):
+#   r1 資安席報了第一項 → 修法只補了自己新增的兩個呼叫點
+#   r2 驗收席抓到漏補第三處(會去呼叫主程式那條)→ 改成注入環境變數涵蓋所有子行程
+#   r2 資安複審又找到第二項設定 → 若繼續逐個補,下一輪還會有第三項
+# 所以收成一份具名清單,新發現的往這裡加一行,並補一筆測試釘住它。
+#
+# ★誠實邊界,不得宣稱更多(這句話本身被審查打過臉一次)★:
+#   這是★列舉法★,不是完備防護。清單上的擋得住,清單外的擋不住。
+#   前一版註解寫過「主程式內部的呼叫也涵蓋得到(實測驗過)」——那句話只對當時清單上的那一項成立,
+#   對後來發現的第二項是假的。**驗過的是哪幾項,就只能說哪幾項。**
+#   已實測不觸發、因此沒列入的:別名、分頁器、過濾器的塗抹指令(r2 資安複審試過這三個)。
+#   純 clone 不會把這些設定帶過來(實測);真正的交付路徑是「直接拿到別人的整個目錄」。
+#   這支 hook 以外的地方(提交前、推送前那兩道閘)沒有走這條路——那些是使用者主動執行的,
+#   不是開資料夾就自動跑,風險形狀不同,另案處理。
+_GIT_UNSAFE_CONFIG = (
+    "core.fsmonitor",   # r1 資安席:值會被當成指令執行,查工作樹狀態時觸發
+    "diff.external",    # r2 資安複審:值會被當成指令執行,主程式逐檔比對差異時觸發
+)
+
+
+def _harden_git_env() -> None:
+    """把上面那份清單套到★這支 hook 開出去的所有子行程★。
+
+    用環境變數而不是逐個呼叫點加參數:版本控制會把它當成命令列上的 -c 參數,
+    ★子行程一律繼承★,所以主程式內部的呼叫也涵蓋得到(實測驗過)。
+    同名鍵已存在時採後值優先,所以附加在尾端是安全的(r2 資安複審實測驗過)。"""
+    want = " ".join("'%s='" % k for k in _GIT_UNSAFE_CONFIG)
+    cur = os.environ.get("GIT_CONFIG_PARAMETERS", "")
+    os.environ["GIT_CONFIG_PARAMETERS"] = (cur + " " + want).strip()
+
+
 def main() -> int:
+    _harden_git_env()
     harness = "codex" if "--harness" in sys.argv and sys.argv[sys.argv.index("--harness") + 1:][:1] == ["codex"] else "claude"
     try:
         payload = json.loads(sys.stdin.read())
@@ -805,14 +1010,20 @@ def main() -> int:
     if not file_paths and not bash_commands:
         return 0
 
-    # 閘門 2
-    src_files = [f for f in file_paths if is_code_file(f, project_root)]
-    if not src_files:
+    # 閘門 2:清單問版本控制,不再靠列舉工具名(單源 Projects/收工點名問版本控制_計劃)
+    entries = _git_status_entries(project_root)
+    if entries is None:
+        return 0                       # 算不出來就靜默放行:擋住收工的代價遠大於漏一次提醒
+    code_entries = [(c, r) for c, r in entries if _entry_is_code(c, r, project_root)]
+    if not code_entries:
         return 0
+    src_files = [str(project_root / r) for _, r in code_entries]
+    deleted_rel = {r for c, r in code_entries if _entry_is_deleted(c)}
 
-    # 閘門 3
-    graph_touched_via_edit = any(is_graph_file(f, graph_root) for f in file_paths)
-    if graph_touched_via_edit or touched_graph_via_cli(bash_commands):
+    # 閘門 3:判準同樣改問版本控制——原本它跟閘門 2 共用「認名字」那套,
+    # 用 shell 改筆記時會誤判「筆記沒動」,同一種少報換個位置活下來(設計審正確性席 blocker)
+    graph_touched = any(is_graph_file(str(project_root / r), graph_root) for _, r in entries)
+    if graph_touched:
         # 2026-08-22(圖譜同步覆蓋):動過圖譜不等於動對篇——拿 impact 算「跟你改的碼直接相關、
         # 帶合約或出過事故、這輪卻沒動」的筆記點名。只提醒,不擋。
         missing = _impact_missing(src_files, file_paths, project_root, graph_root)
@@ -827,23 +1038,29 @@ def main() -> int:
     project_root_resolved = project_root.resolve()
     rel: list[str] = []
     seen: set[str] = set()
-    for f in src_files:
-        try:
-            r = str(Path(f).resolve().relative_to(project_root_resolved))
-        except (ValueError, OSError):
-            r = f
+    for _, r in code_entries:
         if r not in seen:
             seen.add(r)
             rel.append(r)
+
+    # 同一批檔第二次就不再講(清單已經不限這一輪,不抑制會變成每輪刷屏)
+    sid_for_dup = str(payload.get("session_id") or "")
+    printed_key = sorted((("D " if r in deleted_rel else "M ") + r) for r in rel)
+    if sid_for_dup:
+        prev = _load_printed(sid_for_dup)
+        if prev is not None and prev == set(printed_key):
+            return 0
 
     try:
         graph_rel = graph_root.resolve().relative_to(project_root_resolved)
     except (ValueError, OSError):
         graph_rel = graph_root
 
+    # ★不再宣稱切得出「這一輪」★:清單是工作樹上未提交的東西,含這輪以外的改動,
+    # 共用工作目錄下還可能含別人的。換來的是「用什麼工具改的都看得到」。
     msg = [
-        f"提醒:這一輪改了 {len(rel)} 個程式碼檔,但知識筆記沒有跟著動:",
-        *[f"   • {r}" for r in rel],
+        f"提醒:工作樹上有 {len(rel)} 個程式碼檔還沒提交,知識筆記沒有跟著動:",
+        *[f"   • {r}{'(已刪除)' if r in deleted_rel else ''}" for r in rel],
         "",
         "程式碼只記「現在長怎樣」;為什麼這樣改、改動牽連到哪裡,要寫進筆記,下一個 session 才接得上。",
         "筆記放在這裡:",
@@ -866,6 +1083,12 @@ def main() -> int:
     sid = str(payload.get("session_id") or "")
     try:   # 只包擋停分支:失敗退回下面的 stderr 提醒(進除錯日誌)
         if stop_block_decision(payload, sid):
+            # ★模型那條也列完整清單★(代碼審 r1 合約一致席 + 正確性席,兩席獨立報)。
+            # 初版為了「不把別人的改動塞給模型」而只列這一輪的檔,
+            # ★而拿來算「這一輪」的正是這次要換掉的那套工具名清單★——
+            # 於是用 shell 改的檔在這條路完全不列名(退化成「算不出來」),少報換個位置活著。
+            # 正解不是修交集,是承認「這一輪」算不準:列完整清單,
+            # 風險改用措辭講明(見 stop_block_reason 的首句),讓模型自己判斷哪些不是它動的。
             reason = stop_block_reason(rel, graph_rel, mentions)
             if reason.strip():
                 # r2 delta #1:名額已佔,輸出一定要送到——用 bytes 寫 stdout(不受 locale/ASCII 影響);真寫不出去就把名額退回,下一次 Stop 再試
@@ -883,6 +1106,8 @@ def main() -> int:
     except Exception:
         pass
     print("\n".join(msg), file=sys.stderr)
+    if sid_for_dup:
+        _save_printed(sid_for_dup, printed_key)
     return 0
 
 

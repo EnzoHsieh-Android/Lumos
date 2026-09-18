@@ -4003,7 +4003,15 @@ def _scan_diff_for_irreversible_hints(cwd):
     _SKIP_EXT = {".md", ".txt", ".rst"}
     _TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
 
-    for cmd in (["git", "diff", "--staged"], ["git", "diff", "HEAD~1..HEAD"]):
+    # ★取差異內容的呼叫一律關掉外部驅動器★(2026-09-18 代碼審 r3 資安終審,單源
+    # [[Projects/收工點名問版本控制_計劃]]):被打開的資料夾可以放一份未提交、未追蹤的屬性檔,
+    # 把某支檔指到一個★攻擊者自己命名★的差異驅動器,再用那個名字設定要執行的指令。
+    # 鍵名是他取的,所以「列舉危險設定」原理上擋不住——三輪三種修法都被打穿。
+    # 這兩個旗標關掉的是整類機制,不管設定裡寫什麼名字。
+    # ★範圍靠實測畫★:只取檔名/統計/狀態的呼叫不觸發,所以那些不強制帶;取內容的才要。
+    # t_lumos_content_diffs_all_disable_external_drivers 會掃全檔釘住這條性質。
+    for cmd in (["git", "diff", "--no-ext-diff", "--no-textconv", "--staged"],
+                ["git", "diff", "--no-ext-diff", "--no-textconv", "HEAD~1..HEAD"]):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", cwd=cwd)
         except FileNotFoundError:
@@ -22026,7 +22034,7 @@ def cmd_delguard_check(repo=None, as_json=False):
         # 檔頭會變成 `--- app/x` 或 `--- i/app/x`,` b/` 抽檔名整條失效 → token 全漏(r1 D)
         r = subprocess.run(["git", "-c", "core.quotePath=off",
                             "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
-                            "diff", "--cached", "-M", "--no-color"],
+                            "diff", "--no-ext-diff", "--no-textconv", "--cached", "-M", "--no-color"],
                            capture_output=True, text=True, errors="replace", cwd=root,
                            timeout=max(0.1, deadline - (time.monotonic() - t0)))
         if r.returncode != 0:
@@ -22287,7 +22295,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
         # errors="replace":提交裡有非 UTF-8 內容時照樣讀得完(2026-09-11,Issues/風險掃描遇到非UTF-8內容整支中斷:
         # 原本解碼丟錯整支停,推送檢查那邊則是放行——「高風險要先審查」整個消失);照刪除守衛讀差異的先例
-        r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "-U3", diff_range],
                            capture_output=True, text=True, errors="replace", cwd=str(repo_root))
     except FileNotFoundError:
         print("擋下:這台機器找不到 git 指令", file=sys.stderr)
@@ -25259,7 +25267,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
     for f in files:
         d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
-                     "diff", diff_range, "--", f], capture_output=True, text=True, errors="replace")
+                     "diff", "--no-ext-diff", "--no-textconv", diff_range, "--", f], capture_output=True, text=True, errors="replace")
         hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
                         if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
         buf = io.StringIO()
@@ -25594,7 +25602,8 @@ def _lens_py_defs(text):
 
 def _lens_hunks_base_ranges(repo_root, base_sha, head_sha, path, timeout=10):
     """`git diff -U0 base head -- path` 的 - 側行範圍 [(a, a+b-1)];純新增 b=0 不產生範圍(另計);整檔刪除回 ('deleted', n)。"""
-    r = _lens_git(repo_root, "diff", "-U0", base_sha, head_sha, "--", path, quote=True)
+    r = _lens_git(repo_root, "diff", "--no-ext-diff", "--no-textconv", "-U0",
+                  base_sha, head_sha, "--", path, quote=True)
     if r is None or r.returncode != 0:
         return [], 0, False
     ranges, pure_add = [], 0

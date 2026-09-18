@@ -75,6 +75,7 @@ related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
   - "[[Systems/slim-install-安裝器]]"
   - "[[Systems/slim-uninstall-一行卸載]]"
+  - "[[Projects/收工點名問版本控制_計劃]]"
 verified_by:
   - "[[Verification/2026-07-06_CLAUDE注入re-sync]]"
   - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
@@ -127,6 +128,8 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - `_link_or_copy` fallback 到 copytree 後就失去「pull 即更新」(該機器無法建連結時)。
 - bootstrap/init 裝完 hooks 需**重啟 Claude Code session** 才載入 L1/L3 hooks。
 - 源起:CLI 核心非日報觸發(基礎設施原語,非由 governance 日報 gap/inspiration 驅動;`governance/reports/*` 無對應項)。
+- ★改了 repo 裡的 hook 檔不等於已部署★(2026-09-18 實測):同一支 hook 存在於三類位置——repo 裡的原始檔、家目錄下兩份(兩種 AI 工具各一)、以及每個接入專案自己的一份。改完要跑安裝指令才會同步到家目錄那兩份;接入專案那份是另一個指令、而且要在各專案裡各跑一次。**當天實測家目錄那份的內容雜湊跟 repo 裡的不一樣,也就是已部署的版本落後**。改 hook 的計劃要把「改完跑一次安裝指令、對兩個部署位置各比一次 sha256」寫進驗收,否則改對了也等於沒改。
+- ★接入專案那份退不乾淨,這是限制不是待辦★:整個工具裡沒有任何地方登記「這台機器上有哪些專案裝過」,所以沒有清單可以枚舉,也就無法確認是不是都更新/退回了。想要可保證得先做一個安裝登記機制,那是獨立題目。回頭條件=下次因為「某個接入專案跑的是舊版」踩到坑時,重新評估要不要做。單源 [[Projects/收工點名問版本控制_計劃]]〈回退〉節。
 
 ## 相關
 - 對稱反安裝細節:[[Systems/lumos-deinit]](唯一有獨立設計稿 `docs/design/2026-06-26-lumos-deinit.md` 的生命週期指令)。

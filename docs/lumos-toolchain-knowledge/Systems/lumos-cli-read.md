@@ -144,6 +144,8 @@ about_code:
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。
 
 ## 近期修正
+
+- **[2026-09-18] 取差異內容的呼叫一律關掉外部程式與文字轉換**:`impact --diff` 逐檔取 hunk 那次呼叫(以及本檔其餘四處取內容的呼叫)加了兩個防護旗標。★功能語意不變★——正常情況下輸出一樣;變的是「被打開的資料夾不能再用一份未提交的屬性檔指使我們執行任意指令」。為什麼列舉設定擋不住、三輪被打穿的過程、以及誠實邊界,單源 [[Systems/hook信任邊界]] 的〈第二個入口〉節。釘住的測試是 `t_lumos_content_diffs_all_disable_external_drivers`(掃全檔,釘的是性質不是行號)。
 - 2026-07-11 export html 視覺化七項優化（使用者提案全採）：①標籤 LOD（重要度排名×相機距離預算,hover/選中恆顯）②驗證摺疊預設開（Verification 隱藏、母節點標 ✓N 徽章、選中母節點自動現形）③單擊容差（pointerup 位移<5px 兜底,修 3D 旋轉吃 click）＋2D/3D 切換（numDimensions+鎖旋轉）④搜尋 Enter 飛至最佳命中開面板（前綴>包含,同級取重要度）⑤「只看合約」chip（合約節點+其 verify 目標）⑥面板返回鈕（navStack;搜尋跳轉不入棧=已知取捨）⑦時間軸生長回放（節點 date/created,拉桿+▶ 播放）。真機驗證：Chrome 擴充+Playwright 雙路實測全過;t_export_html +10 骨架斷言。
 
 
