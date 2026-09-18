@@ -38,20 +38,23 @@ jobs:
           if [ "${{ github.event_name }}" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             out="$(python scripts/lumos pitfalls --diff "$BEFORE..$SHA" --no-lint --json --repo . 2>/dev/null || true)"
-            s="$(printf '%s' "$out" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("suite","full")); print(d.get("suite_reason",""))' 2>/dev/null || printf 'full\nlumos 算不出來')"
-            suite="$(printf '%s' "$s" | sed -n 1p)"; why="$(printf '%s' "$s" | sed -n 2p)"
+            s="$(printf '%s' "$out" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("suite","full")); print(d.get("suite_reason","")); print("graph" if d.get("suite_graph") else "")' 2>/dev/null || printf 'full\nlumos 算不出來\n')"
+            suite="$(printf '%s' "$s" | sed -n 1p)"; why="$(printf '%s' "$s" | sed -n 2p)"; graph="$(printf '%s' "$s" | sed -n 3p)"
             [ "$suite" = docs ] || suite=full
           fi
           echo "suite=$suite" >> "$GITHUB_OUTPUT"
+          echo "graph=$graph" >> "$GITHUB_OUTPUT"
           echo "測試範圍:$suite($why)"
       - name: Full test suite (切 4 片同時跑;純文件推送只跑文件子集)
         env:
           SUITE: ${{ steps.suite.outputs.suite }}
+          GRAPH: ${{ steps.suite.outputs.graph }}
         run: |
           set -u
           rc=0
           extra=""
           if [ "$SUITE" = docs ]; then extra="--suite docs"; echo "純文件推送:只跑文件子集(--suite docs),不跑全套"; fi
+          if [ "$SUITE" = docs ] && [ "$GRAPH" = graph ]; then extra="$extra --graph"; echo "含圖譜筆記:加跑讀真圖譜的測試(--graph)"; fi
           for i in 1 2 3 4; do
             python scripts/test_lumos.py --shard "$i/4" $extra > "/tmp/shard-$i.log" 2>&1 &
           done
@@ -83,7 +86,13 @@ jobs:
       # test_lumos.py),而它是 autonomous_loop 十個模組中九個的唯一覆蓋,且早已在 anchor
       # 基準線裡被防竄改守著——綠紅沒人看,卻有人守。
       - name: 自主迴圈測試
-        run: python scripts/test_autonomous_loop.py
+        # 純文件推送只跑讀真 CLAUDE.md 的那一條(144 支裡只有它讀 repo 的文件;整支 63 秒)——跟推送前掛鉤同一條規則
+        env:
+          SUITE: ${{ steps.suite.outputs.suite }}
+        run: |
+          extra=""
+          if [ "$SUITE" = docs ]; then extra="-k real_claude_md"; fi
+          python scripts/test_autonomous_loop.py $extra
       - name: Graph doctor (strict)
         run: python scripts/lumos doctor --ci
       - name: code-loop gate (push 後盾;體檢 #5)

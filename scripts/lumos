@@ -21475,8 +21475,7 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
         print("每支檔有家:git 讀不到檔案清單,跳過(fail-open)", file=sys.stderr)
         return 0
     # 圖譜位置:被檢查的那個版本裡的 docs/*-knowledge(推送一個不是目前 checkout 的分支,工作目錄那份可能不一樣)
-    vaults = sorted({p.split("/", 2)[1] for p in lst[1] if p.startswith("docs/") and p.count("/") >= 2
-                     and p.split("/", 2)[1].endswith("-knowledge")})
+    vaults = sorted({_vault_slug_of(p) for p in lst[1]} - {None})
     wv = _vault_in(root)
     wv_rel = wv.resolve().relative_to(root.resolve()).as_posix() if wv is not None else None
     if wv_rel and wv_rel.startswith("docs/") and wv_rel.split("/", 1)[1] in vaults:
@@ -22273,6 +22272,16 @@ def _ledger_has_manual_only(repo_root):
         return False
 
 
+def _vault_slug_of(path):
+    """git 路徑字串(不是檔案系統路徑)落在 docs/<名>-knowledge/ 底下就回 <名>-knowledge,否則 None。
+    三個讀者共用(推送前家的檢查、刪除守衛、推送測試範圍);2026-09-18 代碼審 code-文件子集收緊 r2 架構席:原本兩處各寫一次、第三處又換正則。"""
+    if path.startswith("docs/") and path.count("/") >= 2:
+        slug = path.split("/", 2)[1]
+        if slug.endswith("-knowledge"):
+            return slug
+    return None
+
+
 # 純文件推送只跑文件子集(2026-09-18 Enzo 裁「像這種改動 CI 可以跳過吧,跟程式碼無關」):
 # 兩層白名單都要過才算純文件:★路徑★在 _DOCS_ONLY_PATHS 裡(不在的——scripts/、skills/、.github/、slim/…——一律跑全套;
 # skills/ 的 markdown 是 lumos 自己讀進去用的、被幾十支測試驗,不算文件),而且★副檔名★在 _DOCS_ONLY_EXTS 裡(比對不分大小寫)。
@@ -22322,7 +22331,7 @@ def _test_suite_for_range(repo_root, diff_range):
     自己用 git 算檔清單(不用 pitfalls 的 files:那份已經把 .json/.jsonl 按副檔名擋掉);--no-renames:從 scripts/ 搬進 docs/ 的檔會拆成
     「刪程式檔+加文件」,刪的那支讓它跑全套。簿記帳與卷證不算;算不出範圍 → full(fail-safe 是多跑,不是少跑)。"""
     base = _range_base(repo_root, diff_range)
-    full = {"suite": "full", "code": [], "light_ok": False}
+    full = {"suite": "full", "code": [], "light_ok": False, "graph": False}
     try:
         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "--name-only", "-z",
                             "--no-renames", diff_range, "--"], capture_output=True, text=True, errors="replace")
@@ -22337,10 +22346,14 @@ def _test_suite_for_range(repo_root, diff_range):
     files = [f for f in raw if not (f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS))]
     non_docs = [f for f in files if not _docs_only_file(f)]
     if not non_docs:
-        return {"suite": "docs", "reason": "改到的只有 README、docs、assets 這類文件(沒碰程式與 skills)", "code": [], "light_ok": False}
+        # 碰到圖譜筆記(docs/<名>-knowledge/)要多跑「讀真圖譜」的測試(檢索品質、評測、goldset):圖譜健檢只驗結構,
+        # 驗不到「搜尋還找不找得到」(2026-09-18 代碼審 code-文件子集收緊 r1 通才席)
+        graph = any(_vault_slug_of(f) for f in files)
+        return {"suite": "docs", "reason": "改到的只有 README、docs、assets 這類文件(沒碰程式與 skills)" + (";含圖譜筆記,加跑讀真圖譜的測試" if graph else ""),
+                "code": [], "light_ok": False, "graph": graph}
     code = [f for f in non_docs if _is_code_file(repo_root, f, base)]
     return {"suite": "full", "reason": "改到 " + "、".join(non_docs[:3]) + ("…" if len(non_docs) > 3 else "") + " 這種不是純文件的檔",
-            "code": code, "light_ok": len(code) == len(non_docs)}
+            "code": code, "light_ok": len(code) == len(non_docs), "graph": False}
 
 
 _KEY_OK_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{2,}")   # 不准 - 開頭:進了執行器的 --keys 會被 argparse 當旗標(r2 資安席/邊界席)
@@ -22483,7 +22496,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         _t, _why = _pitfall_tier(claims, list(added) + list(changed_lines), repo_root, diff_range)
         _sr = _test_suite_for_range(repo_root, diff_range)
         return {"claims": claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-                "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"],
+                "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
 
@@ -22549,7 +22562,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     _t, _why = _pitfall_tier(_tier_claims, list(added) + list(changed_lines), repo_root, diff_range)
     _sr = _test_suite_for_range(repo_root, diff_range)
     out = {"claims": all_claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-           "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"],
+           "affected_keys": _affected_test_keys(repo_root, diff_range, _sr["code"]), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
            "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
            "stack_questions_meta": stack_meta, "arch_alignment": arch}
@@ -26503,7 +26516,7 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
             continue
     base_tree = set(base_modes)
     # 圖譜根從 base 樹解析(工作樹版 _vault_in 取排序第一個,分支加一個空目錄就能熄燈——r3 載荷席)
-    slugs = sorted({p.split("/", 2)[1] for p in base_tree if p.startswith("docs/") and p.count("/") >= 2 and p.split("/", 2)[1].endswith("-knowledge")})
+    slugs = sorted({_vault_slug_of(p) for p in base_tree} - {None})
     if not slugs:
         print("擋下:base 樹裡沒有 docs/*-knowledge", file=sys.stderr)
         return 3

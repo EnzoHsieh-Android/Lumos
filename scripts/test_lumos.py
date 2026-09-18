@@ -79,18 +79,32 @@ def _keys_suite_select(tests, keys, cap=0.3):
     return [t for t in tests if t.__name__ in picked], dropped
 
 
-def _docs_suite_select(tests):
-    """挑出原始碼(含它呼叫的本檔輔助函式,一跳)提到任何一個純文件路徑的測試(README.md 也認 README、README.en.md)。"""
+def _docs_suite_select(tests, graph=False):
+    """挑出★真的去讀這個 repo 的文件★的測試:測試(或它呼叫的本檔輔助函式,一跳)用了「真 repo 根」的寫法,
+    而且同一批原始碼提到純文件路徑(README、CLAUDE.md、docs/、assets/…)。
+
+    2026-09-18 實推一次 README 改字才量到:第一版只看「有沒有提到那些路徑」,挑了 209 支、四片跑 234 秒,
+    跟全套幾乎一樣慢——因為一堆整合測試在假環境裡順手寫了一份 CLAUDE.md 或 README(最慢一支 136 秒)。
+    假環境裡的文件跟這次改的真文件無關,所以改成兩個條件都要:讀的是真 repo 根、而且讀的是文件。"""
     import inspect as _insp
     import re as _re
     paths = tuple(_load_lumos_inproc()._DOCS_ONLY_PATHS)
-    # docs/ 與 governance/ 在 fixture 裡到處都是(假 vault 也放 docs/、假帳也放 governance/),單看字樣會把
-    # 四分之一的測試都挑進來(實測 254 支跑 9 分半,比全套分片還慢);這兩個要跟「真 repo 根」的寫法同現才算。
-    generic = {"docs/", "governance/"}
-    frags = sorted({w.split(".")[0] if not w.endswith("/") else w for w in paths} - generic, key=len, reverse=True)
-    rx = _re.compile("|".join(_re.escape(f) for f in frags) + r"|docs/(mental-model|心智模型|command-reference|指令參考|taking-over|接手舊專案)")
-    rx_generic = _re.compile("|".join(_re.escape(f) for f in sorted(generic)))
-    rx_real = _re.compile(r"parent\.parent|__file__|REPO_ROOT|Path\(GRAPHCTL\)")
+    frags = sorted({w.split(".")[0] if not w.endswith("/") else w for w in paths} - {"governance/", "docs/"}, key=len, reverse=True)
+    # docs/ 只認圖譜以外的(心智模型、指令參考…);讀真圖譜(docs/*-knowledge)的測試不算——圖譜筆記由推送前與 CI 都會跑的
+    # `lumos doctor --ci`(嚴格)驗,那些測試多半是拿真圖譜當語料的重測試(t_slim_gate 34 秒);帳本(docs/.xxx.jsonl)也不算
+    rx_doc = _re.compile("|".join(_re.escape(f) for f in frags) + r"|docs/(?![\w.-]*-knowledge)(?!\.)")
+    # 真 repo 根的幾種寫法(本檔實際出現過的):Path(GRAPHCTL).resolve().parent.parent、_P(GRAPHCTL).parent.parent、
+    # Path(__file__).resolve().parent.parent、REPO_ROOT
+    rx_real = _re.compile(r"\(GRAPHCTL\)(?:\.resolve\(\))?\.parent\.parent|\(__file__\)\.resolve\(\)\.parent\.parent|REPO_ROOT")
+    # graph=True(推送碰到圖譜筆記):讀★真★圖譜的測試也算——檢索品質、評測、goldset 這些圖譜健檢驗不到(r1 通才席)。
+    # 只認真圖譜的目錄名(lumos 自己找到的那個,本 repo 是 lumos-toolchain-knowledge):只認 -knowledge 字樣會把
+    # x-knowledge / demo-knowledge 這種假環境圖譜的測試全帶回來(r2 通才席:加回 46 支裡 34 支是假環境,時間翻倍)
+    _vault = None
+    try:
+        _vault = _load_lumos_inproc().find_vault(Path(GRAPHCTL).resolve().parent.parent)
+    except Exception:
+        pass
+    rx_graph = _re.compile(_re.escape(_vault.name) if _vault else r"(?!x)x")
     out = []
     for t in tests:
         try:
@@ -98,8 +112,8 @@ def _docs_suite_select(tests):
         except (OSError, TypeError):
             out.append(t)      # 讀不到原始碼就保守算進來
             continue
-        # 輔助函式只用「根目錄文件字樣」那條規則:建 fixture 的輔助函式幾乎都同時有 docs/ 與 __file__,套第二條會把一半測試拉進來
-        if rx.search(src) or (rx_generic.search(src) and rx_real.search(src)) or any(rx.search(h) for h in _helper_sources_in(src)):
+        blobs = [src, *_helper_sources_in(src)]
+        if any(rx_real.search(x) for x in blobs) and (any(rx_doc.search(x) for x in blobs) or (graph and any(rx_graph.search(x) for x in blobs))):
             out.append(t)
     return out
 
@@ -29348,11 +29362,16 @@ def main():
     _p.add_argument("--suite", default=None, choices=("docs", "keys"),
                     help="只跑某個子集:docs=原始碼提到 README/docs/assets 這些文件路徑的測試(純文件推送用);"
                          "keys=原始碼整字提到 --keys 任一名字的測試(小改動推送用)")
+    _p.add_argument("--graph", action="store_true",
+                    help="配 --suite docs:推送碰到圖譜筆記時,讀真圖譜的測試(檢索品質、評測)也算進來")
     _p.add_argument("--keys", default=None, metavar="名字,名字",
                     help="配 --suite keys:改到的函式名/子命令名/檔名,逗號隔開(lumos pitfalls --json 的 affected_keys)")
     _args = _p.parse_args()
     if _args.suite == "keys" and not [k for k in (_args.keys or "").split(",") if k.strip()]:
         print("擋下:--suite keys 要配 --keys 給至少一個名字", file=sys.stderr)
+        return 2
+    if _args.graph and _args.suite != "docs":
+        print("擋下:--graph 只配 --suite docs 用", file=sys.stderr)
         return 2
     if _args.keys and _args.suite != "keys":
         print("擋下:--keys 只配 --suite keys 用", file=sys.stderr)
@@ -29367,7 +29386,7 @@ def main():
         tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
         # ★子集要在分片之前挑★:先切片再挑,某一片可能一支都不剩,「0 支視為失敗」就會冤枉它。
         if _args.suite == "docs":
-            tests = _docs_suite_select(tests)
+            tests = _docs_suite_select(tests, graph=_args.graph)
             if not _args.list:
                 print(f"文件子集:{len(tests)} 支(原始碼提到 README/docs/assets 這些路徑的)")
         elif _args.suite == "keys":
@@ -44168,7 +44187,9 @@ def t_test_suite_docs_only_judgement():
     (d / "scripts" / "t.py").rename(d / "docs" / "t.md"); _sg_commit(d, "move code into docs")
     dd, o = pf(); check("⑥ 從 scripts/ 搬進 docs/ → 當「刪程式檔+加文件」→ full", dd["suite"] == "full" and "scripts/t.py" in dd["suite_reason"], o)
     (d / "docs" / ".canary-log.jsonl").write_text('{"kind":"x"}\n'); _sg_commit(d, "ledger only")
-    dd, o = pf(); check("⑦ 只有簿記帳 → docs(沒東西要測)", dd["suite"] == "docs", o)
+    dd, o = pf(); check("⑦ 只有簿記帳 → docs(沒東西要測)、不算碰圖譜", dd["suite"] == "docs" and dd["suite_graph"] is False, o)
+    gn = next(kg.glob("Systems/*.md")); gn.write_text(gn.read_text(encoding="utf-8") + "\n多一句。\n", encoding="utf-8"); _sg_commit(d, "graph note")
+    dd, o = pf(); check("⑦a 只改圖譜筆記 → docs 且 suite_graph 真(要加跑讀真圖譜的測試)", dd["suite"] == "docs" and dd["suite_graph"] is True and "圖譜" in dd["suite_reason"], o)
     (d / "governance" / "anchor-baseline.json").write_text("{}\n"); _sg_commit(d, "baseline only")
     dd, o = pf(); check("⑦b 只改 hook 防竄改基準線 → full(r3 資安席:它是守衛本身,驗它的測試只在全套)", dd["suite"] == "full" and "守衛" in dd["suite_reason"], o)
     (d / "governance" / "code-loop").mkdir(); (d / "governance" / "code-loop" / "main.json").write_text("{}\n"); _sg_commit(d, "code-loop ledger")
@@ -44217,9 +44238,18 @@ def t_runner_suite_flags():
     names = set(r.stdout.split())
     r_all = run_r("--list")
     total = len(r_all.stdout.split())
-    check("docs 子集包含讀真 README/CLAUDE.md 的測試", {"t_docs_enumeration_drift", "t_claude_block_matches_template", "t_slim_readme_assertions", "t_docs_command_count"} <= names, str(sorted(names))[:300])
-    # 2026-09-18 實測 209/1021 ≈ 20%;上限訂四分之一——超過就代表挑法又鬆掉了(第一版 254 支跑 9 分半,比全套分片還慢),要回頭收緊
-    check("docs 子集不超過全套四分之一(不然省不到時間)", 0 < len(names) <= total * 0.25, f"{len(names)}/{total}")
+    check("docs 子集包含讀真 README/CLAUDE.md 的測試", {"t_docs_enumeration_drift", "t_claude_block_matches_template", "t_release_channel_is_wired_everywhere", "t_docs_command_count"} <= names, str(sorted(names))[:300])
+    # 2026-09-18 實推量到:只因假環境裡寫了 CLAUDE.md/README 就被挑進來的重測試,讓子集跟全套一樣慢
+    check("docs 子集不含只在假環境寫文件的重測試(t_ci_wait 136 秒、t_slim_gate 34 秒)", "t_ci_wait" not in names and "t_slim_gate" not in names, "")
+    rg = run_r("--list", "--suite", "docs", "--graph")
+    gnames = set(rg.stdout.split())
+    check("--graph(推送碰到圖譜筆記):加上讀真圖譜的測試,檢索品質那支在(r1 通才席:圖譜健檢驗不到搜尋還找不找得到)", names < gnames and "t_slim_gate" in gnames and "t_slim_gate_search_equivalence_counterfactual" in gnames and "t_ci_wait" not in gnames, f"{len(names)} vs {len(gnames)}")
+    # r2 通才席:只認 -knowledge 字樣時加回 46 支、其中 34 支是 x-knowledge/demo-knowledge 假環境;只認真圖譜目錄名後加回的要少於一半
+    check("--graph 只加回讀真圖譜的測試(不含只建假環境圖譜的評測 fixture)", len(gnames - names) < 30 and "t_eval_lane_buckets" not in gnames, f"加回 {len(gnames - names)} 支:{sorted(gnames - names)[:12]}")
+    r = run_r("--graph"); check("--graph 沒配 --suite docs 擋 rc2", r.returncode == 2, f"rc={r.returncode}")
+    # 2026-09-18 收緊後實測 66/1021 ≈ 6%、四組同時跑 38 秒;上限訂一成——超過就代表挑法又鬆掉了
+    # (第一版 254 支跑 9 分半;第二版 209 支實推 234 秒,都跟全套差不多慢),要回頭收緊
+    check("docs 子集不超過全套一成(不然省不到時間)", 0 < len(names) <= total * 0.10, f"{len(names)}/{total}")
     check("docs 子集含靠輔助函式讀文件的測試(r1 合約席:t_commands_table_shape 自己一個路徑字樣都沒有)", "t_commands_table_shape" in names, "")
     check("docs 子集不含跟文件無關的測試", "t_runner_exitfirst_and_failfirst" not in names and "t_guard_kill" not in names, "")
     r = run_r("--list", "--suite", "keys", "--keys", "check")
@@ -44256,9 +44286,9 @@ def t_prepush_docs_and_light_run_subset():
     (d / "skills" / "lumos-project-notes").mkdir(parents=True)
     (d / "scripts").mkdir(exist_ok=True)
     (d / "scripts" / "lumos").symlink_to(lumos_real)
-    argl = d / "runner-args.log"
+    argl = d.parent / "runner-args.log"   # ★放 repo 外★:放裡面會被 fixture 的 git add -A 帶進提交,推送範圍多一支非文件檔、判定就變了
     (d / "scripts" / "test_lumos.py").write_text(
-        '# 假執行器:認得 "--shard" 與 "--suite"(掛鉤是讀檔找這兩個字樣);把每次的參數記一行;keys 那趟的離開碼由 FAKE_KEYS_RC 決定(預設 3=沒對到)\n'
+        '# 假執行器:認得 "--shard"、"--suite" 與 "--graph"(掛鉤是讀檔找這些字樣);把每次的參數記一行;keys 那趟的離開碼由 FAKE_KEYS_RC 決定(預設 3=沒對到)\n'
         "import sys, os\n"
         f"open({str(argl)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
         "sys.exit(int(os.environ.get('FAKE_KEYS_RC', '3')) if 'keys' in sys.argv else 0)\n")
@@ -44274,6 +44304,18 @@ def t_prepush_docs_and_light_run_subset():
     (d / "README.md").write_text("# hi\n"); _sg_commit(d, "docs only")
     r, calls = push(base, g("rev-parse", "HEAD"))
     check("純文件:放行、兩片都帶 --suite docs、沒有 keys 那一趟", r.returncode == 0 and len(calls) == 2 and all("--suite docs" in c and "--shard" in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    check("純文件(沒碰圖譜):不帶 --graph", all("--graph" not in c for c in calls), str(calls))
+    base_g = g("rev-parse", "HEAD")
+    gn = kg / "Systems" / "Home.md"; gn.write_text(gn.read_text(encoding="utf-8") + "\n多一句。\n", encoding="utf-8"); _sg_commit(d, "graph note only")
+    rg_, calls_g = push(base_g, g("rev-parse", "HEAD"))
+    check("只改圖譜筆記:兩片都帶 --suite docs --graph", rg_.returncode == 0 and len(calls_g) == 2 and all("--suite docs --graph" in c for c in calls_g), f"rc={rg_.returncode}\n{calls_g}\n{rg_.stderr[-400:]}")
+    # r2 通才席:執行器是舊版(認得 --suite、不認得 --graph)→ 退全套,不是硬塞旗標讓它報錯被判紅
+    runner = d / "scripts" / "test_lumos.py"; _orig = runner.read_text()
+    runner.write_text(_orig.replace(' 與 "--graph"', '(舊版,沒有圖譜旗標)'))
+    check("(現場成立)舊版假執行器真的沒有 --graph 字樣、還有 --suite", '"--graph"' not in runner.read_text() and '"--suite"' in runner.read_text(), runner.read_text()[:120])
+    rg_, calls_g = push(base_g, g("rev-parse", "HEAD"))
+    runner.write_text(_orig)
+    check("執行器不認得 --graph:退全套(不帶任何 --suite)、放行、訊息說全部測試", rg_.returncode == 0 and len(calls_g) == 2 and all("--suite" not in c and "--graph" not in c for c in calls_g) and "推送前先跑全部測試" in rg_.stderr, f"rc={rg_.returncode}\n{calls_g}\n{rg_.stderr[-300:]}")
     check("純文件:訊息講明只跑文件子集、不再接「全套約 N 分鐘」", "文件子集" in r.stderr and "全套約" not in r.stderr.split("推送前先跑文件子集")[-1][:80], r.stderr[-400:])
     # light:風險低計劃(全靠人驗)落點內的小改動 → push-check 印 light、pitfalls light_ok → 文件子集 + keys 各兩片
     (d / "app").mkdir(); mp = d / "app" / "main.py"; mp.write_text("x = 1\n")
@@ -44312,6 +44354,11 @@ def t_prepush_and_ci_wired_for_docs_suite():
     check("掛鉤:讀 pitfalls 的 suite 與 light_ok、push-check 的 light、跑 --suite docs / --suite keys", all(x in hook for x in ('"suite": *"docs"', '"light_ok": *true', "改動風險分級:light", "--suite docs", "--suite keys --keys")), "")
     check("掛鉤:push-check 輸出用 tee 即時印(r1 併發席)、暫存目錄掛在 trap 上清、片數要正整數", "| tee \"$_sg_out\"" in hook and 'PIPESTATUS[0]' in hook and 'rm -rf "$_PP_TMP"' in hook and '=~ ^[0-9]+$' in hook, "")
     check("掛鉤:執行器不認得 --suite 就退全套(讀檔探旗標)", "'\"--suite\"'" in hook, "")
+    check("自主迴圈測試:純文件推送兩邊都只跑讀真 CLAUDE.md 那條(-k real_claude_md),其餘整支", "_AUTOLOOP_ARGS=(-k real_claude_md)" in hook and 'extra="-k real_claude_md"' in ci and "test_autonomous_loop.py $extra" in ci, "")
+    check("碰到圖譜筆記:掛鉤與 CI 都加 --graph;掛鉤先探執行器認不認得", '"suite_graph": *true' in hook and "_suite_args+=(--graph)" in hook and "'\"--graph\"'" in hook and 'extra="$extra --graph"' in ci, "")
+    import subprocess as _sp
+    _r = _sp.run([sys.executable, str(root / "scripts" / "test_autonomous_loop.py"), "-k", "real_claude_md"], capture_output=True, text=True)
+    check("那條 -k 真的選得到東西(改名就紅,不會變成零支回綠)", _r.returncode == 0 and "Ran 1 test" in _r.stderr, _r.stderr[-200:])
     check("CI:push 事件用 before..sha 問 lumos,docs 才帶 --suite docs,其餘全套;起點寫法跟同檔既有步驟一致(^{commit})", all(x in ci for x in ("pitfalls --diff \"$BEFORE..$SHA\"", "--suite docs", "[ \"$suite\" = docs ] || suite=full", "0000000000000000000000000000000000000000", 'git cat-file -e "$BEFORE^{commit}"')), "")
 
 

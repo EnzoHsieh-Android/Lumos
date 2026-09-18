@@ -166,7 +166,7 @@ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
 # 推送前要跑哪個測試範圍(2026-09-18 Enzo 裁:純文件改動、或判成 light 的小改動,不用等全套):
 # 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
 # light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
-_SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""
+_SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""; _SUITE_GRAPH=0
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   read -r _lref _lsha _rref _rsha <<< "$_ppl"
   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
@@ -224,6 +224,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   _SUITE_SEEN=1
   _suite_this="full"
   printf '%s' "$pf_json" | grep -q '"suite": *"docs"' && _suite_this="docs"
+  printf '%s' "$pf_json" | grep -q '"suite_graph": *true' && _SUITE_GRAPH=1
   if [[ "$_tier_high" -eq 1 ]]; then
     {
       echo ""
@@ -344,10 +345,16 @@ if [[ -z "$_AUTOLOOP_LOG" || -z "$_TESTS_LOG" ]]; then
   exit 1
 fi
 
+# 純文件推送(每個 ref 都判成 docs)自主迴圈那支只跑讀真 CLAUDE.md 的那一條(2026-09-18 實推量到整支 68 秒,
+# 而它 144 支裡只有這一條讀 repo 的文件,其餘測的是自主迴圈的程式);light 或全套照舊整支跑。CI 同一條規則。
+_AUTOLOOP_ARGS=()
+if [[ "$_SUITE_SEEN" -eq 1 && "$_SUITE_FULL" -eq 0 && "$_SUITE_LIGHT" -eq 0 ]]; then
+  _AUTOLOOP_ARGS=(-k real_claude_md)
+fi
 if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
   # 支數從實際輸出讀,不寫死——寫死的會靜靜地漂(2026-09-08:實際 144,訊息還印著 132)
   _autoloop_count() { sed -n 's/^Ran \([0-9]*\) tests.*/\1/p' "$_AUTOLOOP_LOG" | tail -1; }
-  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >"$_AUTOLOOP_LOG" 2>&1; then
+  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" ${_AUTOLOOP_ARGS+"${_AUTOLOOP_ARGS[@]}"} >"$_AUTOLOOP_LOG" 2>&1; then
     _AUTOLOOP_N="$(_autoloop_count)"
     {
       echo ""
@@ -398,6 +405,15 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   if [[ "$_suite_mode" != "full" ]]; then
     _suite_args=(--suite docs)
     _suite_word="文件子集(這次沒改到程式、或改動判成 light,不跑全套)"
+    # 碰到圖譜筆記:加跑讀真圖譜的測試(檢索品質、評測)。執行器不認得 --graph(舊版)就退全套——跟上面探 --suite/--shard
+    # 同一個理由:硬塞不認得的旗標,執行器會整個報錯,被判成「測試有紅」(r2 通才席實測重現)
+    if [[ "$_SUITE_GRAPH" -eq 1 ]]; then
+      if grep -q -- '"--graph"' "$REPO_ROOT/scripts/test_lumos.py" 2>/dev/null; then
+        _suite_args+=(--graph)
+      else
+        _suite_mode="full"; _suite_args=(); _suite_word="全部測試"
+      fi
+    fi
   fi
   # light 的關鍵字子集跟文件子集一起分片、平行跑(r1 併發席:原本等分片收完才串行跑一趟);
   # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:CI 會跑全套當後盾。有紅照擋。

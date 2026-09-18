@@ -1,0 +1,177 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 8e4d72bc..a7969c73 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -76,21 +76,25 @@ jobs:
+               done || true
+               echo "--- 以下是該片尾端 ---"
+             fi
+             tail -25 "/tmp/shard-$i.log"
+           done
+           exit $rc
+       # 2026-08-29 接線:這支的 106 個測試先前沒有任何自動路徑在跑(CI 與 pre-push 都只跑
+       # test_lumos.py),而它是 autonomous_loop 十個模組中九個的唯一覆蓋,且早已在 anchor
+       # 基準線裡被防竄改守著——綠紅沒人看,卻有人守。
+       - name: 自主迴圈測試
+-        run: python scripts/test_autonomous_loop.py
++        # 純文件推送只跑讀真 CLAUDE.md 的那一條(144 支裡只有它讀 repo 的文件;整支 63 秒)——跟推送前掛鉤同一條規則
++        env:
++          SUITE: ${{ steps.suite.outputs.suite }}
++        run: |
++          if [ "$SUITE" = docs ]; then python scripts/test_autonomous_loop.py -k real_claude_md; else python scripts/test_autonomous_loop.py; fi
+       - name: Graph doctor (strict)
+         run: python scripts/lumos doctor --ci
+       - name: code-loop gate (push 後盾;體檢 #5)
+         # `git push --no-verify` 會整個跳過 pre-push——測試/doctor/anchor 這裡都已重跑,唯獨 tier=high
+         # 的對抗審查閘與表態閘(2026-09-09)沒人補查,繞過零留痕。本步在 push 事件重算 pitfalls tier/適用題並比對留痕:
+         # rc1=高風險 diff 無 pass/skip 留痕 → CI 紅(可見的痕跡;ci-wait/ci-log 會收到)。
+         if: github.event_name == 'push'
+         env:
+           LUMOS_SKIP_BOUND_TESTS: "1"   # 受波及合約測試在本機 pre-push 真跑;CI 已跑全套當後盾,不重跑
+           BEFORE: ${{ github.event.before }}
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index b8b2653a..4c95cd58 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -337,24 +337,30 @@ if [[ -z "$_AUTOLOOP_LOG" || -z "$_TESTS_LOG" ]]; then
+     echo "擋下:建不出暫存檔,所以這次的測試沒辦法跑。"
+     echo "★不是測試紅了,是暫存目錄有問題★——多半是空間滿了或沒有寫入權限。"
+     echo ""
+     echo "先看一眼暫存目錄:"
+     echo "      df -h \"${TMPDIR:-/tmp}\" && ls -ld \"${TMPDIR:-/tmp}\""
+     echo ""
+   } >&2
+   exit 1
+ fi
+ 
++# 純文件推送(每個 ref 都判成 docs)自主迴圈那支只跑讀真 CLAUDE.md 的那一條(2026-09-18 實推量到整支 68 秒,
++# 而它 144 支裡只有這一條讀 repo 的文件,其餘測的是自主迴圈的程式);light 或全套照舊整支跑。CI 同一條規則。
++_AUTOLOOP_ARGS=()
++if [[ "$_SUITE_SEEN" -eq 1 && "$_SUITE_FULL" -eq 0 && "$_SUITE_LIGHT" -eq 0 ]]; then
++  _AUTOLOOP_ARGS=(-k real_claude_md)
++fi
+ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
+   # 支數從實際輸出讀,不寫死——寫死的會靜靜地漂(2026-09-08:實際 144,訊息還印著 132)
+   _autoloop_count() { sed -n 's/^Ran \([0-9]*\) tests.*/\1/p' "$_AUTOLOOP_LOG" | tail -1; }
+-  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >"$_AUTOLOOP_LOG" 2>&1; then
++  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" ${_AUTOLOOP_ARGS+"${_AUTOLOOP_ARGS[@]}"} >"$_AUTOLOOP_LOG" 2>&1; then
+     _AUTOLOOP_N="$(_autoloop_count)"
+     {
+       echo ""
+       echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那${_AUTOLOOP_N:+ $_AUTOLOOP_N }支)。"
+       echo "完整輸出在這裡:"
+       echo "   $_AUTOLOOP_LOG"
+       tail -15 "$_AUTOLOOP_LOG" | sed 's/^/    /'
+       echo ""
+       echo "兩條路選一條:"
+       echo "  1. 修到全綠再推(正常做法)。"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 138e6dd9..e906a985 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -73,40 +73,45 @@ def _keys_suite_select(tests, keys, cap=0.3):
+         hit = [t for t, src in srcs if rx.search(src)]
+         if tests and len(hit) > cap * len(tests):
+             dropped.append(k)
+             continue
+         for t in hit:
+             picked[t.__name__] = t
+     return [t for t in tests if t.__name__ in picked], dropped
+ 
+ 
+ def _docs_suite_select(tests):
+-    """挑出原始碼(含它呼叫的本檔輔助函式,一跳)提到任何一個純文件路徑的測試(README.md 也認 README、README.en.md)。"""
++    """挑出★真的去讀這個 repo 的文件★的測試:測試(或它呼叫的本檔輔助函式,一跳)用了「真 repo 根」的寫法,
++    而且同一批原始碼提到純文件路徑(README、CLAUDE.md、docs/、assets/…)。
++
++    2026-09-18 實推一次 README 改字才量到:第一版只看「有沒有提到那些路徑」,挑了 209 支、四片跑 234 秒,
++    跟全套幾乎一樣慢——因為一堆整合測試在假環境裡順手寫了一份 CLAUDE.md 或 README(最慢一支 136 秒)。
++    假環境裡的文件跟這次改的真文件無關,所以改成兩個條件都要:讀的是真 repo 根、而且讀的是文件。"""
+     import inspect as _insp
+     import re as _re
+     paths = tuple(_load_lumos_inproc()._DOCS_ONLY_PATHS)
+-    # docs/ 與 governance/ 在 fixture 裡到處都是(假 vault 也放 docs/、假帳也放 governance/),單看字樣會把
+-    # 四分之一的測試都挑進來(實測 254 支跑 9 分半,比全套分片還慢);這兩個要跟「真 repo 根」的寫法同現才算。
+-    generic = {"docs/", "governance/"}
+-    frags = sorted({w.split(".")[0] if not w.endswith("/") else w for w in paths} - generic, key=len, reverse=True)
+-    rx = _re.compile("|".join(_re.escape(f) for f in frags) + r"|docs/(mental-model|心智模型|command-reference|指令參考|taking-over|接手舊專案)")
+-    rx_generic = _re.compile("|".join(_re.escape(f) for f in sorted(generic)))
+-    rx_real = _re.compile(r"parent\.parent|__file__|REPO_ROOT|Path\(GRAPHCTL\)")
++    frags = sorted({w.split(".")[0] if not w.endswith("/") else w for w in paths} - {"governance/", "docs/"}, key=len, reverse=True)
++    # docs/ 只認圖譜以外的(心智模型、指令參考…);讀真圖譜(docs/*-knowledge)的測試不算——圖譜筆記由推送前與 CI 都會跑的
++    # `lumos doctor --ci`(嚴格)驗,那些測試多半是拿真圖譜當語料的重測試(t_slim_gate 34 秒);帳本(docs/.xxx.jsonl)也不算
++    rx_doc = _re.compile("|".join(_re.escape(f) for f in frags) + r"|docs/(?![\w.-]*-knowledge)(?!\.)")
++    # 真 repo 根的幾種寫法(本檔實際出現過的):Path(GRAPHCTL).resolve().parent.parent、_P(GRAPHCTL).parent.parent、
++    # Path(__file__).resolve().parent.parent、REPO_ROOT
++    rx_real = _re.compile(r"\(GRAPHCTL\)(?:\.resolve\(\))?\.parent\.parent|\(__file__\)\.resolve\(\)\.parent\.parent|REPO_ROOT")
+     out = []
+     for t in tests:
+         try:
+             src = _insp.getsource(t)
+         except (OSError, TypeError):
+             out.append(t)      # 讀不到原始碼就保守算進來
+             continue
+-        # 輔助函式只用「根目錄文件字樣」那條規則:建 fixture 的輔助函式幾乎都同時有 docs/ 與 __file__,套第二條會把一半測試拉進來
+-        if rx.search(src) or (rx_generic.search(src) and rx_real.search(src)) or any(rx.search(h) for h in _helper_sources_in(src)):
++        blobs = [src, *_helper_sources_in(src)]
++        if any(rx_real.search(x) for x in blobs) and any(rx_doc.search(x) for x in blobs):
+             out.append(t)
+     return out
+ 
+ 
+ PASS, FAIL, SKIP = 0, 0, 0
+ # 跑全套時「預期最多跳過幾支」的基準線。跳過不會紅,所以沒有基準線的話,
+ # 「本來跑得到、現在跑不到」會完全無聲——2026-09-06 就這樣漏過一次(見 main() 尾段)。
+ # 目前值 0:這台是 POSIX 又是來源 repo,所有跳過通道的條件都不成立。
+ # 在別的環境(Windows、消費端)跳過本來就會多,那時照訊息說的調整並寫理由。
+ EXPECTED_SKIP_MAX = int(__import__("os").environ.get("LUMOSEXPECTED_SKIP_MAX", "0"))
+@@ -44210,23 +44215,26 @@ def t_docs_suite_reads_lumos_whitelist():
+ def t_runner_suite_flags():
+     """執行器 --suite docs / --suite keys --keys:子集在分片之前挑(每片才不會空)、0 支 rc3(呼叫端決定退不退全套)、--list 0 支 rc0、旗標配對要對。"""
+     import subprocess as _sp
+     runner = str(Path(__file__).resolve())
+     def run_r(*a):
+         return _sp.run([sys.executable, runner, *a], capture_output=True, text=True)
+     r = run_r("--list", "--suite", "docs")
+     names = set(r.stdout.split())
+     r_all = run_r("--list")
+     total = len(r_all.stdout.split())
+-    check("docs 子集包含讀真 README/CLAUDE.md 的測試", {"t_docs_enumeration_drift", "t_claude_block_matches_template", "t_slim_readme_assertions", "t_docs_command_count"} <= names, str(sorted(names))[:300])
+-    # 2026-09-18 實測 209/1021 ≈ 20%;上限訂四分之一——超過就代表挑法又鬆掉了(第一版 254 支跑 9 分半,比全套分片還慢),要回頭收緊
+-    check("docs 子集不超過全套四分之一(不然省不到時間)", 0 < len(names) <= total * 0.25, f"{len(names)}/{total}")
++    check("docs 子集包含讀真 README/CLAUDE.md 的測試", {"t_docs_enumeration_drift", "t_claude_block_matches_template", "t_release_channel_is_wired_everywhere", "t_docs_command_count"} <= names, str(sorted(names))[:300])
++    # 2026-09-18 實推量到:只因假環境裡寫了 CLAUDE.md/README 就被挑進來的重測試,讓子集跟全套一樣慢
++    check("docs 子集不含只在假環境寫文件的重測試(t_ci_wait 136 秒、t_slim_gate 34 秒)", "t_ci_wait" not in names and "t_slim_gate" not in names, "")
++    # 2026-09-18 收緊後實測 66/1021 ≈ 6%、四組同時跑 38 秒;上限訂一成——超過就代表挑法又鬆掉了
++    # (第一版 254 支跑 9 分半;第二版 209 支實推 234 秒,都跟全套差不多慢),要回頭收緊
++    check("docs 子集不超過全套一成(不然省不到時間)", 0 < len(names) <= total * 0.10, f"{len(names)}/{total}")
+     check("docs 子集含靠輔助函式讀文件的測試(r1 合約席:t_commands_table_shape 自己一個路徑字樣都沒有)", "t_commands_table_shape" in names, "")
+     check("docs 子集不含跟文件無關的測試", "t_runner_exitfirst_and_failfirst" not in names and "t_guard_kill" not in names, "")
+     r = run_r("--list", "--suite", "keys", "--keys", "check")
+     check("太泛的關鍵字(check 選中全部)整個丟掉、印出來(r1 併發席)", r.returncode == 0 and "太泛的關鍵字不算" in r.stderr and not r.stdout.split(), f"rc={r.returncode} {r.stderr[:200]} n={len(r.stdout.split())}")
+     r4 = run_r("--list", "--suite", "docs", "--shard", "4/4")
+     check("先挑子集再切片:第 4 片還有東西", r4.returncode == 0 and len(r4.stdout.split()) > 0 and len(r4.stdout.split()) < len(names), r4.stdout[:200])
+     r = run_r("--suite", "keys", "--keys", "_range_base", "--shard", "3/4")   # 只選中一兩支 → 第 3 片空
+     check("子集配分片、這片沒分到 → rc0 說「沒分到」(r2 正確性席 blocker:原本判紅擋合法推送)", r.returncode == 0 and "沒分到" in r.stdout, f"rc={r.returncode} {r.stdout[-200:]}")
+     # ★片號要在片數之內★(r3 架構席:3/2 會先被「第幾片要在 1 到共幾片之間」那關擋成 rc2,根本走不到「這片沒分到」那條路——假綠見證)
+     r = run_r("--shard", "2000/2000")
+@@ -44305,15 +44313,19 @@ def t_prepush_docs_and_light_run_subset():
+ 
+ 
+ def t_prepush_and_ci_wired_for_docs_suite():
+     """接線守衛:掛鉤與 CI 都真的接了純文件子集(掛鉤還接了 light 的 keys 那趟),而且 CI 判不出來時退全套(保守方向)。"""
+     root = Path(__file__).resolve().parent.parent
+     hook = (root / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
+     ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+     check("掛鉤:讀 pitfalls 的 suite 與 light_ok、push-check 的 light、跑 --suite docs / --suite keys", all(x in hook for x in ('"suite": *"docs"', '"light_ok": *true', "改動風險分級:light", "--suite docs", "--suite keys --keys")), "")
+     check("掛鉤:push-check 輸出用 tee 即時印(r1 併發席)、暫存目錄掛在 trap 上清、片數要正整數", "| tee \"$_sg_out\"" in hook and 'PIPESTATUS[0]' in hook and 'rm -rf "$_PP_TMP"' in hook and '=~ ^[0-9]+$' in hook, "")
+     check("掛鉤:執行器不認得 --suite 就退全套(讀檔探旗標)", "'\"--suite\"'" in hook, "")
++    check("自主迴圈測試:純文件推送兩邊都只跑讀真 CLAUDE.md 那條(-k real_claude_md),其餘整支", "_AUTOLOOP_ARGS=(-k real_claude_md)" in hook and "test_autonomous_loop.py -k real_claude_md" in ci, "")
++    import subprocess as _sp
++    _r = _sp.run([sys.executable, str(root / "scripts" / "test_autonomous_loop.py"), "-k", "real_claude_md"], capture_output=True, text=True)
++    check("那條 -k 真的選得到東西(改名就紅,不會變成零支回綠)", _r.returncode == 0 and "Ran 1 test" in _r.stderr, _r.stderr[-200:])
+     check("CI:push 事件用 before..sha 問 lumos,docs 才帶 --suite docs,其餘全套;起點寫法跟同檔既有步驟一致(^{commit})", all(x in ci for x in ("pitfalls --diff \"$BEFORE..$SHA\"", "--suite docs", "[ \"$suite\" = docs ] || suite=full", "0000000000000000000000000000000000000000", 'git cat-file -e "$BEFORE^{commit}"')), "")
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
