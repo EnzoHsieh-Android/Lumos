@@ -235,6 +235,26 @@ def _scen_visible_text(path):
     return "\n".join(l for l in txt.split("\n") if not _SCEN_LINE_COMMENT_RE.match(l))
 
 
+def _check_one_target(sid, item, repo):
+    """驗一條 target 宣告,回傳問題說明清單(空=沒問題)。"""
+    if not isinstance(item, (list, tuple)) or not item or not str(item[0]).strip():
+        return [f"{sid}:target 格式要寫成 [[路徑]] 或 [[路徑, 要找的字串], …]"]
+    rel = str(item[0])
+    needle = str(item[1]) if len(item) > 1 else None
+    if needle == "":
+        return [f"{sid}:target 的比對字串是空的,那等於沒驗內容——"
+                f"只驗存在就寫成 [\"{rel}\"],不要留空字串"]
+    f = repo / rel
+    if f.is_dir():
+        return [f"{sid}:target 指的 {rel} 是目錄,不是檔案——target 要指到單一檔案"]
+    if not f.is_file():
+        return [f"{sid}:target 指的 {rel} 不存在"]
+    if needle is not None and needle not in _scen_visible_text(f):
+        return [f"{sid}:{rel} 裡找不到 {needle}(整行註解不算數)"
+                "——題目講的那段已經被改掉或移除"]
+    return []
+
+
 def check_scenario_targets(scenarios, repo):
     """回傳「這題的目標已經不在了」的說明清單(空=全部健在)。"""
     repo = Path(repo)
@@ -246,27 +266,7 @@ def check_scenario_targets(scenarios, repo):
             if _scen_resolve(repo, rel) is None:
                 bad.append(f"{sid}:題目提到 {rel},但它在 repo 裡不存在(改名或刪掉了?)")
         for item in (s.get("target") or []):
-            if not isinstance(item, (list, tuple)) or not item or not str(item[0]).strip():
-                bad.append(f"{sid}:target 格式要寫成 [[路徑]] 或 [[路徑, 要找的字串], …]")
-                continue
-            rel = str(item[0])
-            needle = str(item[1]) if len(item) > 1 else None
-            if needle is not None and needle == "":
-                bad.append(f"{sid}:target 的比對字串是空的,那等於沒驗內容——"
-                           f"只驗存在就寫成 [\"{rel}\"],不要留空字串")
-                continue
-            f = repo / rel
-            if f.is_dir():
-                bad.append(f"{sid}:target 指的 {rel} 是目錄,不是檔案——target 要指到單一檔案")
-                continue
-            if not f.is_file():
-                bad.append(f"{sid}:target 指的 {rel} 不存在")
-                continue
-            if needle is None:
-                continue
-            if needle not in _scen_visible_text(f):
-                bad.append(f"{sid}:{rel} 裡找不到 {needle}(整行註解不算數)"
-                           "——題目講的那段已經被改掉或移除")
+            bad.extend(_check_one_target(sid, item, repo))
     return bad
 
 
