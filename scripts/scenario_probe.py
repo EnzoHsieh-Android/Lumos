@@ -177,6 +177,38 @@ def global_skills_health():
     return bad
 
 
+# ★題目會跟著程式碼腐爛★(2026-09-21,Issues/探針以工作樹為來源會改到本體 同一天):
+# 紀律題組六題有兩題叫 AI 去改一段 2026-09-11 就被移除的東西。AI 查了波及、讀了碼、
+# 發現前提不成立就停下來問——這是正確行為,卻因為「沒照題目改完再寫回」被判不及格。
+# 腐爛的題目不會報錯,只會安靜地量出「規矩失效」的假訊號,差一點就照它去改紀律。
+# 兩層檢查,跑之前先驗:①題目裡提到的路徑要存在 ②`target` 宣告的字串要在那個檔裡找得到。
+_SCEN_PATH_RE = re.compile(r"(?<![\w./-])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)")
+
+
+def check_scenario_targets(scenarios, repo):
+    """回傳「這題的目標已經不在了」的說明清單(空=全部健在)。"""
+    repo = Path(repo)
+    bad = []
+    for s in scenarios:
+        sid = s.get("id", "(無 id)")
+        prompt = s.get("prompt") or s.get("question") or ""
+        for rel in dict.fromkeys(_SCEN_PATH_RE.findall(prompt)):
+            if not (repo / rel).exists():
+                bad.append(f"{sid}:題目提到 {rel},但它在 repo 裡不存在(改名或刪掉了?)")
+        for item in (s.get("target") or []):
+            try:
+                rel, needle = item[0], item[1]
+            except (TypeError, IndexError):
+                bad.append(f"{sid}:target 格式要寫成 [[路徑, 要找的字串], …]")
+                continue
+            f = repo / rel
+            if not f.is_file():
+                bad.append(f"{sid}:target 指的 {rel} 不存在")
+            elif needle not in f.read_text(encoding="utf-8", errors="replace"):
+                bad.append(f"{sid}:{rel} 裡找不到 {needle}——題目講的那段已經被改掉或移除")
+    return bad
+
+
 def _git_env():
     """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
     指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
@@ -477,6 +509,8 @@ def main():
     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+    ap.add_argument("--allow-stale-targets", action="store_true",
+                    help="題目指的東西已經不存在也照跑(預設停手;腐爛的題目會量出假訊號)")
     # ── 修法 A ablation 兩個旗標(預設值=改前行為)──
     ap.add_argument("--runs", type=int, default=1,
                     help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
@@ -517,6 +551,17 @@ def main():
     if not (src / ".git").exists():
         print(f"✗ --repo {src} 不是 git repo(找不到 .git),停手", file=sys.stderr)
         return 2
+    # ★跑之前先驗題目的目標還在不在★:腐爛的題目會安靜地量出假訊號(見 check_scenario_targets)
+    rot = check_scenario_targets(scs, src)
+    if rot:
+        print("✗ 題目腐爛了,這一輪不跑——量到的會是假訊號,不是規矩失效:", file=sys.stderr)
+        for line in rot:
+            print("    " + line, file=sys.stderr)
+        print("  修法:把題目換成現在真的存在的目標(條件:①現在真的存在 ②改了會影響行為 "
+              "③它的家有筆記在講它),或在題目加 target 欄位宣告要驗什麼。", file=sys.stderr)
+        print("  真的要照跑(例如就是要量腐爛時的行為):--allow-stale-targets", file=sys.stderr)
+        if not a.allow_stale_targets:
+            return 3
     work = make_sandbox(src, a.arm)
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
     print(f"探的是: {src}\n臨時副本: {work}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),

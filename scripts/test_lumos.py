@@ -694,6 +694,64 @@ def t_install_global_hook_sync():
           not (h6 / "retired-example-hook.py").exists())
 
 
+def t_probe_detects_rotten_targets():
+    """★題目指的東西不見了要當場紅,不能安靜地量出假訊號★
+
+    出身(2026-09-21):紀律題組六題裡有兩題的目標(pre-push 裡的 sync_nudge)
+    在 2026-09-11 被移除。AI 查了波及、讀了碼、發現前提不成立就停下來問——正確行為,
+    卻因為「沒照題目改完再寫回」被判不及格。舊定位跑同一題同樣 0/3,
+    差一點就照這個假訊號去改紀律。腐爛率當時是六分之二。
+    兩層檢查:①題目裡提到的路徑要存在 ②`target` 欄位宣告的字串要在那個檔裡找得到。
+    翻紅釘:拿掉 check_scenario_targets 的任一層 → 對應那條紅。
+    """
+    import importlib.util, tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("probe_rot", repo / "scripts" / "scenario_probe.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    root = _P(_tf.mkdtemp(prefix="probe-rot-"))
+    (root / "sub").mkdir()
+    (root / "sub" / "real.py").write_text("FLAG = 1\n", encoding="utf-8")
+
+    healthy = {"id": "ok1", "prompt": "把 sub/real.py 的 FLAG 改成 2。",
+               "target": [["sub/real.py", "FLAG"]]}
+    gone_path = {"id": "bad1", "prompt": "把 sub/missing.py 的 X 改掉。"}
+    gone_text = {"id": "bad2", "prompt": "把 sub/real.py 的 SYNC_NUDGE 拿掉。",
+                 "target": [["sub/real.py", "SYNC_NUDGE"]]}
+
+    bad = m.check_scenario_targets([healthy], root)
+    check("題目健康 → 不報問題", bad == [], str(bad))
+    bad = m.check_scenario_targets([gone_path], root)
+    check("題目提到的路徑不存在 → 報出來", len(bad) == 1 and "bad1" in bad[0], str(bad))
+    check("訊息要指出是哪個路徑", "sub/missing.py" in (bad[0] if bad else ""), str(bad))
+    bad = m.check_scenario_targets([gone_text], root)
+    check("target 宣告的字串找不到 → 報出來", len(bad) == 1 and "bad2" in bad[0], str(bad))
+    check("訊息要指出是哪個字串", "SYNC_NUDGE" in (bad[0] if bad else ""), str(bad))
+    # 兩題一起壞 → 兩條都要報,不是只報第一條
+    bad = m.check_scenario_targets([gone_path, gone_text, healthy], root)
+    check("多題壞 → 逐題報", len(bad) == 2, str(bad))
+
+
+def t_probe_discipline_targets_are_fresh():
+    """本 repo 紀律題組的目標現在全部存在——腐爛了這條就紅,不用等下次跑探針才發現。"""
+    import importlib.util, json as _json
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    f = repo / "governance" / "scenarios" / "discipline.jsonl"
+    if not f.is_file():
+        check("紀律題組不存在(skip)", True, "")
+        return
+    spec = importlib.util.spec_from_file_location("probe_fresh", repo / "scripts" / "scenario_probe.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    scs = [_json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+    bad = m.check_scenario_targets(scs, repo)
+    check("紀律題組六題的目標都還在", bad == [],
+          "題目腐爛了,量到的會是假訊號(2026-09-21 踩過):\n" + "\n".join(bad))
+
+
 def t_probe_sandbox_refuses_worktree_source():
     """★來源是 git worktree 就停手★:worktree 的 .git 是一行指回本體的檔,
     rsync 原樣複製後,沙盒裡的 git 指令會全部落在本體上——拔遠端拔到真遠端、
