@@ -733,6 +733,52 @@ def t_probe_detects_rotten_targets():
     bad = m.check_scenario_targets([gone_path, gone_text, healthy], root)
     check("多題壞 → 逐題報", len(bad) == 2, str(bad))
 
+    # ★名字還在、東西已經沒了★(2026-09-21 審查席 blocker):本 repo 移除東西時的慣例是
+    # 留一句提到舊名字的註解說明它被拿掉了,純字串比對會把那句註解當成「還健在」——
+    # 而那正是原始事故的形狀。比對前要先把整行註解剝掉。
+    (root / "sub" / "hook.sh").write_text(
+        "#!/bin/sh\n# 2026-09-11 起改用別的做法,不再讀 sync_nudge 這一份。\necho ok\n",
+        encoding="utf-8")
+    ghost = {"id": "ghost", "prompt": "改 sub/hook.sh 的東西。",
+             "target": [["sub/hook.sh", "sync_nudge"]]}
+    bad = m.check_scenario_targets([ghost], root)
+    check("只剩註解提到舊名字 → 仍判腐爛", len(bad) == 1 and "ghost" in bad[0], str(bad))
+    # 反面:真的還活著的那行不准被剝掉
+    alive = {"id": "alive", "prompt": "改 sub/hook.sh 的東西。",
+             "target": [["sub/hook.sh", "echo ok"]]}
+    check("活著的內容不受剝註解影響", m.check_scenario_targets([alive], root) == [], "")
+
+    # ★版本號不是路徑★(審查席 major):`0.144.1/0.153.2` 這種寫法本 repo 筆記裡就有
+    check("版本對照不被當成路徑", m._scen_paths("版本表 0.144.1/0.153.2,不在表略過不猜") == [],
+          str(m._scen_paths("版本表 0.144.1/0.153.2,不在表略過不猜")))
+    check("真路徑照樣抓得到", m._scen_paths("改 scripts/hooks/pre-push 那行") == ["scripts/hooks/pre-push"],
+          str(m._scen_paths("改 scripts/hooks/pre-push 那行")))
+
+    check("網址不被當成 repo 裡的路徑",
+          m._scen_paths("看 https://example.com/docs/x.md 這篇") == [],
+          str(m._scen_paths("看 https://example.com/docs/x.md 這篇")))
+    check("沒有副檔名的路徑也抓得到",
+          m._scen_paths("改 scripts/hooks/pre-push 那行") == ["scripts/hooks/pre-push"],
+          str(m._scen_paths("改 scripts/hooks/pre-push 那行")))
+    # ★沒有副檔名的節點名也要抓★(審查席 minor):圖譜節點寫成 Systems/xxx
+    check("圖譜節點名抓得到", m._scen_paths("在 Systems/graph-sync-coverage 這篇筆記加一段")
+          == ["Systems/graph-sync-coverage"],
+          str(m._scen_paths("在 Systems/graph-sync-coverage 這篇筆記加一段")))
+
+    # ★空字串 needle 等於沒檢查★(審查席 minor):要嘛明寫只驗存在,要嘛當格式錯
+    empty = {"id": "empty", "prompt": "x", "target": [["sub/real.py", ""]]}
+    bad = m.check_scenario_targets([empty], root)
+    check("空字串 needle → 當格式錯講清楚", len(bad) == 1 and "只驗存在" in bad[0], str(bad))
+    only_exists = {"id": "onlyexists", "prompt": "x", "target": [["sub/real.py"]]}
+    check("只給路徑 → 只驗存在,合法", m.check_scenario_targets([only_exists], root) == [], "")
+
+    # ★目錄不是「不存在」★(審查席 minor):訊息要講對,不然人會去找一個其實在的檔
+    (root / "sub" / "adir").mkdir()
+    dirt = {"id": "dirt", "prompt": "x", "target": [["sub/adir", "x"]]}
+    bad = m.check_scenario_targets([dirt], root)
+    check("target 指到目錄 → 訊息講「是目錄」不是「不存在」",
+          len(bad) == 1 and "目錄" in bad[0] and "不存在" not in bad[0], str(bad))
+
 
 def t_probe_discipline_targets_are_fresh():
     """本 repo 紀律題組的目標現在全部存在——腐爛了這條就紅,不用等下次跑探針才發現。"""
@@ -17819,7 +17865,11 @@ _ENTRY_POINT_FILES = (
     # r3 折入:這篇的流程圖被改成新定位,但它自己的 FLOW 摘要行(lumos search / context --brief
     # 端出去的就是這段)還在講舊順序——同一篇筆記內部新舊打架,而計劃筆記卻宣稱守衛釘住了它。
     "docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md",
+    # 2026-09-21 第三次漏網:README 連出去的對外文件也是入口,讀者照樣會照它做
+    "ONBOARDING.md",
+    "docs/心智模型.md",
 )
+
 # 舊定位的說法。這幾句只要出現在「會被當成指令讀」的入口檔就是矛盾;
 # 歷史筆記、卷證、實驗紀錄照樣可以寫,不在掃描範圍內。
 # r3 折入:第二版只列三句,但「先查圖譜」「第一步敲 lumos」這兩種更口語的說法沒收進來,
@@ -17829,7 +17879,7 @@ _ENTRY_POINT_FILES = (
 #   把定位那句話做成單一來源、像紀律區塊一樣注入這幾個檔,讓它不可能各寫各的。
 #   REVISIT:2026-11-21 看這半年有沒有第三次漏網,有就改形狀。★
 _OLD_POSITION_PHRASES = ("第一個工具呼叫", "圖譜先行", "唯一真相來源",
-                         "先查圖譜", "第一步敲 lumos")
+                         "先查圖譜", "先查筆記", "第一步敲 lumos")
 
 
 def t_entry_points_agree_with_code_first():

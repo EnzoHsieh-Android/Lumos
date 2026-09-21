@@ -11,7 +11,7 @@
 
 **Lumos is an engineering governance toolkit for natural-language-driven development.**
 
-You describe goals, clarify constraints, and make trade-offs in conversation. Within the scope you authorize, the AI carries out the development workflow—from retrieving context and implementing changes to testing, committing, and pushing.
+You describe goals, clarify constraints, and make trade-offs in conversation. Within the scope you authorize, the AI carries out the development workflow—from reading the current code and filling in the missing context, to implementing, testing, committing, and pushing.
 
 Lumos connects rules and checks to that workflow. When a requirement is unmet, the AI receives the reason for the block, addresses it or asks you to decide, and records decisions and verification results for future work. A change leaves more than code: it also leaves the reasoning, its impact, and how it was checked.
 

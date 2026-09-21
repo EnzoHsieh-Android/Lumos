@@ -182,7 +182,57 @@ def global_skills_health():
 # 發現前提不成立就停下來問——這是正確行為,卻因為「沒照題目改完再寫回」被判不及格。
 # 腐爛的題目不會報錯,只會安靜地量出「規矩失效」的假訊號,差一點就照它去改紀律。
 # 兩層檢查,跑之前先驗:①題目裡提到的路徑要存在 ②`target` 宣告的字串要在那個檔裡找得到。
-_SCEN_PATH_RE = re.compile(r"(?<![\w./-])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)")
+#
+# ★比對前先剝掉整行註解★(審查席 blocker):本 repo 移除東西時的慣例是留一句提到舊名字的
+# 註解說明它被拿掉了(pre-push 裡的 sync_nudge 就是),純字串比對會把那句註解當成「還健在」,
+# 而那正好是原始事故的形狀——防線對最自然的寫法失效。只剝「整行都是註解」的行,
+# 行尾註解不碰(剝了會誤傷字串字面值);Markdown 走 <!-- --> 區塊。
+# ★誠實界線★:這只擋得住「整行註解」這一種殘留。名字被留在字串字面值、docstring 或
+# 檔名裡的情形仍會判成健在,機械判不出來——真要確定,還是得人看一次。
+_SCEN_LINE_COMMENT_RE = re.compile(r"^\s*(#|//|--|;)")
+_SCEN_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+# 路徑候選:至少一層目錄。判準是「每一段都要含字母」——
+# 版本對照 `0.144.1/0.153.2`(本 repo 筆記真的這樣寫,審查席 major)每段都是數字,擋掉;
+# 沒有副檔名的 `scripts/hooks/pre-push` 與圖譜節點 `Systems/graph-sync-coverage` 都收得到,
+# 不必為「有沒有副檔名」各寫一條規則。網址另外擋,不然 example.com/x 會被當成缺檔。
+_SCEN_PATH_RE = re.compile(r"(?<![\w.-])((?:[\w.-]+/)+[\w.-]+)")
+_SCEN_HAS_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _scen_paths(prompt):
+    """從題目文字抽出「看起來像檔案路徑或圖譜節點」的候選,保持出現順序、去重。"""
+    out = []
+    for m in _SCEN_PATH_RE.finditer(prompt):
+        rel = m.group(1)
+        if prompt[max(0, m.start() - 3):m.start()].endswith("//"):
+            continue                      # 網址的一部分,不是 repo 裡的路徑
+        if any(not _SCEN_HAS_LETTER_RE.search(seg) for seg in rel.split("/")):
+            continue                      # 有一段沒字母 → 版本號之類,不是路徑
+        if rel not in out:
+            out.append(rel)
+    return out
+
+
+def _scen_resolve(repo, rel):
+    """候選對應到實際檔案:先當一般路徑,再當圖譜節點(<vault>/<節點>.md)。找不到回 None。"""
+    p = repo / rel
+    if p.exists():
+        return p
+    if not rel.endswith(".md"):
+        for vault in sorted(repo.glob("docs/*-knowledge")):
+            cand = vault / (rel + ".md")
+            if cand.exists():
+                return cand
+    return None
+
+
+def _scen_visible_text(path):
+    """把整行註解剝掉之後的內容——只有這裡出現的字串才算「東西還在」。"""
+    txt = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix.lower() in (".md", ".markdown", ".html", ".svg", ".xml"):
+        txt = _SCEN_HTML_COMMENT_RE.sub("", txt)
+        return txt
+    return "\n".join(l for l in txt.split("\n") if not _SCEN_LINE_COMMENT_RE.match(l))
 
 
 def check_scenario_targets(scenarios, repo):
@@ -192,20 +242,31 @@ def check_scenario_targets(scenarios, repo):
     for s in scenarios:
         sid = s.get("id", "(無 id)")
         prompt = s.get("prompt") or s.get("question") or ""
-        for rel in dict.fromkeys(_SCEN_PATH_RE.findall(prompt)):
-            if not (repo / rel).exists():
+        for rel in _scen_paths(prompt):
+            if _scen_resolve(repo, rel) is None:
                 bad.append(f"{sid}:題目提到 {rel},但它在 repo 裡不存在(改名或刪掉了?)")
         for item in (s.get("target") or []):
-            try:
-                rel, needle = item[0], item[1]
-            except (TypeError, IndexError):
-                bad.append(f"{sid}:target 格式要寫成 [[路徑, 要找的字串], …]")
+            if not isinstance(item, (list, tuple)) or not item or not str(item[0]).strip():
+                bad.append(f"{sid}:target 格式要寫成 [[路徑]] 或 [[路徑, 要找的字串], …]")
+                continue
+            rel = str(item[0])
+            needle = str(item[1]) if len(item) > 1 else None
+            if needle is not None and needle == "":
+                bad.append(f"{sid}:target 的比對字串是空的,那等於沒驗內容——"
+                           f"只驗存在就寫成 [\"{rel}\"],不要留空字串")
                 continue
             f = repo / rel
+            if f.is_dir():
+                bad.append(f"{sid}:target 指的 {rel} 是目錄,不是檔案——target 要指到單一檔案")
+                continue
             if not f.is_file():
                 bad.append(f"{sid}:target 指的 {rel} 不存在")
-            elif needle not in f.read_text(encoding="utf-8", errors="replace"):
-                bad.append(f"{sid}:{rel} 裡找不到 {needle}——題目講的那段已經被改掉或移除")
+                continue
+            if needle is None:
+                continue
+            if needle not in _scen_visible_text(f):
+                bad.append(f"{sid}:{rel} 裡找不到 {needle}(整行註解不算數)"
+                           "——題目講的那段已經被改掉或移除")
     return bad
 
 
