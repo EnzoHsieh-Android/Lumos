@@ -2753,6 +2753,155 @@ SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIF
                 "PRIOR-ART", "REVISIT",
                 "WHY", "RULE", "PITFALL", "FACT"}
 SYMBOL_RE = re.compile(r"^(" + "|".join(sorted(SYMBOL_NAMES, key=len, reverse=True)) + r"):")
+
+# ★脈絡標記的「同一行還要有什麼」★(2026-09-21 第三階段;單源=紀律範本〈寫筆記時〉那一節)
+# 只唸警告不擋:規則是寫給人判斷的,機械只能看形狀,判錯就擋會逼人繞過去。
+# ★只套四個新前綴★:FLOW:/DEP: 在本 repo 就有 277 行舊的,一開就是幾百條警告——
+# 「誤報多過真報」的機制活不過一週,舊帳不追改,新寫的現況描述請改用 FACT:。
+# RETIRE-IF:連續兩個月零觸發(大家本來就寫對了),或誤報多過真報 → 撤掉這一段。
+# REVISIT:2026-11-21 看觸發統計,順便決定要不要延伸到 FLOW:/DEP:。
+_CTX_REGRESS_RE = re.compile(r"\[test:|重現|repro", re.I)
+_CTX_QUERY_RE = re.compile(r"`[^`]{6,}`")          # 一條可重跑的查詢指令(反引號包起來)
+# 出處 = 日期 / 決策編號 / [[節點]] / 既有的 [src:] 標記 / 真的像 sha 的字串
+# (★不收純數字★:2026-09-21 通才席 F5——原本 [0-9a-f]{7,40} 讓任意 7 位數字都算出處)
+_CTX_SRC_RE = re.compile(r"20\d\d-\d\d-\d\d|#d\d+|\[\[|\[src:|\bd\d+\b"
+                         r"|\b(?=[0-9a-f]{7,40}\b)[0-9a-f]*[a-f][0-9a-f]*\b")
+
+# 前綴 → (判定函式, 缺什麼的白話, 怎麼補)
+_CONTEXT_MARKER_RULES = {
+    "WHY": (lambda s: bool(_CTX_SRC_RE.search(s)),
+            "出處",
+            "行內補一個日期、決策編號(#d3)、提交 sha 或 [[節點]],不然下一個人沒辦法查證這句話"),
+    "PITFALL": (lambda s: bool(_CTX_REGRESS_RE.search(s)),
+                "防回歸",
+                "補 [test:測試名],或寫一條會重現的指令;兩個都沒有,這條只是感想"),
+    "FACT": (lambda s: "以程式碼為準" in s and bool(_CTX_QUERY_RE.search(s)),
+             "以程式碼為準的標註或查詢指令",
+             "現況描述會過期:同一行標「以程式碼為準」並用反引號附一條可重跑的查詢指令;"
+             "能從程式碼直接查到的,其實不該抄進筆記"),
+}
+
+# ★RULE: 的生命週期欄位★(2026-09-21 外家審計 F4 折入)
+# 原本只驗「行內有日期字樣 + 有退場字樣」,`RULE:2030-99-99 退場:永不撤` 這種假規則零警告,
+# 而且「這條過期了沒」沒人判得出來——散文寫的有效期不等於可執行的有效期。
+# 欄位沿用本 repo 既有的 [test:]/[audit:] 行內寫法,不新發明語法:
+#   [since:YYYY-MM-DD] 什麼時候立的(必填)   [retire:<條件>] 看到什麼就該撤掉(必填)
+#   [until:YYYY-MM-DD] 硬到期日(選填)       [confirmed:YYYY-MM-DD] 最後一次確認(選填)
+#   [status:active|superseded] 預設 active  [applies:<版本或範圍>](選填)
+# 只有 since 與 retire 都寫齊、且不是 superseded 的 RULE 行,才有挑戰程式碼的效力(見紀律範本第 3 條)。
+# 一欄位一個正則,形狀跟鄰居 TEST_REF_RE / AUDIT_REF_RE / ROLLBACK_REF_RE 一致
+# (2026-09-21 架構對齊席:原本寫成一條合併正則+dict,是這支檔裡的第二種做法)
+SINCE_REF_RE = re.compile(r"\[since:\s*([^\]]*)\]")
+UNTIL_REF_RE = re.compile(r"\[until:\s*([^\]]*)\]")
+CONFIRMED_REF_RE = re.compile(r"\[confirmed:\s*([^\]]*)\]")
+STATUS_REF_RE = re.compile(r"\[status:\s*([^\]]*)\]")
+RETIRE_REF_RE = re.compile(r"\[retire:\s*([^\]]*)\]")
+APPLIES_REF_RE = re.compile(r"\[applies:\s*([^\]]*)\]")
+_RULE_FIELD_RES = {"since": SINCE_REF_RE, "until": UNTIL_REF_RE, "confirmed": CONFIRMED_REF_RE,
+                   "status": STATUS_REF_RE, "retire": RETIRE_REF_RE, "applies": APPLIES_REF_RE}
+_RULE_CONFIRM_STALE_DAYS = 180
+
+
+def parse_rule_fields(rest):
+    """把 RULE: 行裡的 [key:value] 抓成 dict(重複出現取最後一個,跟鄰居一樣)。"""
+    out = {}
+    for k, rx in _RULE_FIELD_RES.items():
+        ms = list(rx.finditer(rest))
+        if ms:
+            out[k] = ms[-1].group(1).strip()
+    return out
+
+
+def rule_field_truncated(rest):
+    """值裡含右中括號(典型:退場條件引用 [[節點]])會被截斷,截掉的部分沒人看得到。
+
+    既有的 [test:]/[audit:] 家族也是同一種截斷,差別在那些欄位的值本來就是識別字;
+    [retire:] 是散文,踩到的機會高很多,所以這裡主動唸出來而不是默默截掉。
+    """
+    bad = []
+    for k, rx in _RULE_FIELD_RES.items():
+        for m in rx.finditer(rest):
+            if rest[m.end():m.end() + 1] == "]":
+                bad.append(k)
+    return sorted(set(bad))
+
+
+def _rule_date(v):
+    import datetime as _dt
+    try:
+        return _dt.date.fromisoformat(v)
+    except Exception:
+        return None
+
+
+def rule_lifecycle_warnings(rest, today=None):
+    """一條 RULE: 行的生命週期檢查,回傳警告清單(不擋)。"""
+    f = parse_rule_fields(rest)
+    out = []
+    # 同一行塞兩條 RULE:,後面那條沒填欄位也會借用前面的(2026-09-21 通才席 F4)
+    if rest.count("RULE:") >= 1:
+        out.append("一行只放一條 RULE:——同一行寫兩條時欄位會混在一起算,"
+                   f"沒填欄位的那條會借用旁邊的而被判過關:{rest.strip()[:40]}")
+    trunc = rule_field_truncated(rest)
+    if trunc:
+        out.append("這幾個欄位的值裡有右中括號,會被截斷(常見於退場條件引用 [[節點]]):"
+                   + "、".join(f"[{k}:…]" for k in trunc)
+                   + "——改寫成不帶中括號的一句話,或把節點名寫在欄位外面"
+                   + f":{rest.strip()[:40]}")
+    missing = [k for k in ("since", "retire") if not f.get(k)]
+    if missing:
+        out.append("脈絡標記『RULE:』缺 " + "、".join(f"[{k}:…]" for k in missing)
+                   + "——規則要機械讀得到「什麼時候立的」和「看到什麼就該撤掉」,"
+                     "散文寫的有效期沒人判得出來;寫不出退場條件,就是還沒想清楚這條該不該立"
+                   + f":{rest.strip()[:40]}")
+    st = (f.get("status") or "active").lower()
+    if st == "superseded":
+        out.append("這條 RULE 標了 [status:superseded],已經沒有挑戰程式碼的效力,"
+                   "只能當歷史線索;確定撤掉就把整行刪掉,別留著讓人誤讀"
+                   f":{rest.strip()[:40]}")
+    elif st != "active":
+        out.append(f"[status:{st}] 不是認得的值(只收 active / superseded):{rest.strip()[:40]}")
+    import datetime as _dt
+    today = today or _dt.date.today()
+    for key, label in (("since", "立的日期"), ("until", "到期日"), ("confirmed", "最後確認")):
+        v = f.get(key)
+        if v and _rule_date(v) is None:
+            out.append(f"[{key}:{v}] 不是合法日期({label}要寫成 YYYY-MM-DD):{rest.strip()[:40]}")
+    until = _rule_date(f.get("until") or "")
+    if until and until < today and st == "active":
+        out.append(f"這條 RULE 的 [until:{f['until']}] 已經過期({today} 了)還標著 active——"
+                   "確認還要不要留:要留就往後延並補 [confirmed:],不留就刪掉或標 superseded"
+                   f":{rest.strip()[:40]}")
+    conf = _rule_date(f.get("confirmed") or "")
+    if conf and (today - conf).days > _RULE_CONFIRM_STALE_DAYS and st == "active":
+        out.append(f"這條 RULE 超過 {_RULE_CONFIRM_STALE_DAYS} 天沒人確認過"
+                   f"(最後一次是 {f['confirmed']})——還成立就更新 [confirmed:],不成立就撤掉"
+                   f":{rest.strip()[:40]}")
+    return out
+
+
+def context_marker_warnings(summary_text):
+    """檢查摘要裡四個脈絡前綴的形狀,回傳警告字串清單(不產生 error)。"""
+    out = []
+    for raw in (summary_text or "").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        m = SYMBOL_RE.match(line)
+        if not m:
+            continue
+        if m.group(1) == "RULE":
+            out.extend(rule_lifecycle_warnings(line[len("RULE:"):]))
+            continue
+        rule = _CONTEXT_MARKER_RULES.get(m.group(1))
+        if not rule:
+            continue
+        ok, missing, how = rule
+        rest = line[len(m.group(1)) + 1:]
+        if not ok(rest):
+            out.append(f"脈絡標記『{m.group(1)}:』缺{missing}——{how}:{rest.strip()[:40]}")
+    return out
+
 FM_KEY_RE = re.compile(r"^\s*([A-Za-z_][\w-]*):")
 
 
@@ -4638,6 +4787,8 @@ def cmd_lint(env, node):
                         and ("★INVARIANT★" in line or "★IRREVERSIBLE★" in line)):
                     continue
                 errs.append(f"{mark} 必須是 KEY 行前綴(寫成 KEY:{mark} ...),放別處工具掃合約會直接漏看:{line[:48]}")
+
+    warns.extend(context_marker_warnings(summ))
 
     invs, _ = extract_contracts(n)
     for inv in invs:

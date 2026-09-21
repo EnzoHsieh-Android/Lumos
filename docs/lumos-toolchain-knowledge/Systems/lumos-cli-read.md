@@ -10,6 +10,7 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  RULE:[since:2026-09-21][confirmed:2026-09-21][retire:連續兩個月零觸發,或誤報多過真報]`lint` 會唸四個脈絡前綴的形狀(WHY 要出處、RULE 要日期加退場條件、PITFALL 要防回歸、FACT 要「以程式碼為準」加查詢指令),只警告不擋——規則是寫給人判斷的,機械只看形狀,判錯就擋會逼人繞過去。★刻意不套 `FLOW:`/`DEP:`★:本 repo 這兩個前綴有 277 行舊的,一開就是幾百條警告,誤報多過真報的機制活不過一週;新寫的現況描述改用 `FACT:` 就會被管到。單源 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]] 第三階段 [test:t_lint_context_marker_requirements]
   KEY:[2026-09-15 摘要符號詞彙表單一來源,plan:[[Projects/標籤系統精簡_計劃]] S10]原本 `SYMBOL_RE`(搜尋用來標記命中行屬於哪個符號區域)與 `SYMBOL_NAMES`(單篇快檢用來抓錯字)★各寫死一份九值★,只改一份會變成「單篇檢查說沒問題、搜尋卻標成錯的區域」;現在 `SYMBOL_RE` 由 `SYMBOL_NAMES` 生成。★更根本的是 `SYMBOLISH_RE` 原本只認連續大寫 `^([A-Z]{2,}):`★——CLAUDE.md 明文要求寫的 `PRIOR-ART:` 含連字號、從一開始就不會被比對到（打成 `PRIOR-ARTT:` 也沒人唸，把它加進白名單是無效動作）；而 `REVISIT:` 認得到、寫進摘要反而被當成打錯字——★一個管太鬆一個管太嚴，兩種相反的壞法★。正則放寬成 `^([A-Z][A-Z-]*[A-Z]):`，兩個前綴收進詞彙表。★測試釘住不准空過★：要同時斷言打錯字的含連字號變體仍被抓到，否則有沒有真的接上都會綠 [test:t_symbol_vocab_single_source_and_reach]。改動後全庫 lint 零 error、健檢 0 issues。
   KEY:[2026-09-08 ~~~ 圍欄]`_visible_lines`(search 與所有「哪些字看得見」的唯一實作)從此把 `~~~` 跟 ``` 一樣當 fenced code 邊界(兩種各自配對、關的至少要跟開的一樣長、縮排 ≤3 格才算標記——四空白是縮排程式碼不是圍欄);★不偵測 HTML 註解★(-b r3 兩席證明偵測本身是洞,同日拿掉)——條款綁定 -b r1 外家席抓到 CommonMark 另一種圍欄沒被遮;影響面=search/refcheck/條款解析對 ~~~ 內文字一律不看 [test:t_clause_bindings_states]
   KEY:[2026-09-08 handoff 條款行]計劃有 [SN] 時 `lumos handoff` 多印一行「驗收條款 N 條:綁了測試/靠人/未標/懸空 + 指路 lumos spec-trace」——只印文字計數不印每條的表,★不撤「不判完成、不印進度」的範圍刀★(條款綁測試算進度 r1 接手席 F-S3-1);--json 多 clauses 鍵 [test:t_handoff_clause_pointer_only]

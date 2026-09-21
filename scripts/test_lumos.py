@@ -3951,6 +3951,126 @@ def t_lint():
     check("lint: 找不到節點 → rc2", r.returncode == 2, r.stdout + r.stderr)
 
 
+def t_lint_context_marker_requirements():
+    """四個分類前綴的「同一行還要有什麼」,lint 要唸(警告,不擋)。
+
+    出身(2026-09-21 第三階段):紀律範本要求 RULE: 有退場條件、PITFALL: 有防回歸、
+    FACT: 標以程式碼為準並附查詢指令、WHY: 有出處,但工具一條都沒驗,規範等於全靠自覺。
+    只套在這四個新前綴上:FLOW:/DEP: 有 277 行舊的,一開就是幾百條警告,
+    「誤報多過真報」的機制活不過一週;新寫的現況描述請改用 FACT:。
+    翻紅釘:把 _CONTEXT_MARKER_RULES 任一條拿掉 → 對應那條斷言紅。
+    """
+    v = mkvault()
+    if True:
+        # ① 四條都寫得不合格 → 四條警告,但 rc0(只提醒不擋)
+        write(v, "Systems/Bad.md",
+              "type: system\nstatus: doing\nsummary: |-\n"
+              "  WHY:當初就這樣決定的\n"
+              "  RULE:大額退費要人工核可\n"
+              "  PITFALL:邊跑邊改腳本會出事\n"
+              "  FACT:門檻是 180 秒\n",
+              body="# B\n")
+        r = run(v, "lint", "Systems/Bad")
+        check("lint 脈絡標記: 四條不合格都唸到、但不擋(rc0)", r.returncode == 0, r.stdout)
+        for pfx, want in (("WHY:", "出處"), ("RULE:", "退場條件"),
+                          ("PITFALL:", "防回歸"), ("FACT:", "以程式碼為準")):
+            check(f"lint 脈絡標記: {pfx} 缺{want}要唸", want in r.stdout and pfx in r.stdout,
+                  r.stdout)
+        # ② 四條都寫合格 → 一條都不唸
+        write(v, "Systems/Ok.md",
+              "type: system\nstatus: doing\nsummary: |-\n"
+              "  WHY:[2026-09-21 Enzo 裁]改成程式碼為主\n"
+              "  RULE:[since:2026-09-21][retire:改用新閘之後撤]大額退費要人工核可\n"
+              "  PITFALL:[2026-09-05]邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]\n"
+              "  FACT:[以程式碼為準]門檻 180 秒;查:`grep -n FULL_SWEEP_SECONDS governance/autonomous_loop/replay_weekly.py`\n",
+              body="# O\n")
+        r2 = run(v, "lint", "Systems/Ok")
+        check("lint 脈絡標記: 寫合格就一條都不唸", r2.returncode == 0 and "脈絡標記" not in r2.stdout,
+              r2.stdout)
+        # ③ 舊的 FLOW:/DEP:/KEY: 不套新規則(兩百多行舊帳,開了就是警告洪水)
+        write(v, "Systems/Legacy.md",
+              "type: system\nstatus: doing\nsummary: |-\n"
+              "  FLOW:a→b→c\n  DEP:[[X]]\n  KEY:某個概念\n",
+              body="# L\n")
+        r3 = run(v, "lint", "Systems/Legacy")
+        check("lint 脈絡標記: 舊前綴不套新規則", r3.returncode == 0 and "脈絡標記" not in r3.stdout,
+              r3.stdout)
+
+
+def t_rule_lifecycle_fields():
+    """`RULE:` 的生命週期改成機械讀得到的行內欄位,不再只是「有沒有日期字樣」。
+
+    出身(2026-09-21 外家審計 F4):原本只驗「行內有日期正則」+「有退場字樣」,
+    所以 `RULE:2030-99-99 退場:永不撤` 這種假規則零警告,而且規則過沒過期沒人判得出來。
+    欄位沿用本 repo 既有的 [test:]/[audit:] 行內寫法:
+      [since:YYYY-MM-DD] 立的時間(必填)  [retire:<條件>] 什麼情況該撤掉(必填)
+      [until:YYYY-MM-DD] 硬到期日(選填)  [confirmed:YYYY-MM-DD] 最後確認(選填)
+      [status:active|superseded] 預設 active   [applies:<版本>] 適用範圍(選填)
+    翻紅釘:拿掉 until 過期那條判斷 → ③ 紅;把 since 改回只認日期正則 → ① 紅。
+    """
+    v = mkvault()
+    # ① 缺 since / retire → 唸
+    write(v, "Systems/R1.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:2030-99-99 退場:永不撤 假規則\n", body="# R1\n")
+    r = run(v, "lint", "Systems/R1")
+    check("RULE 生命週期: 只有日期字樣不算,缺 since/retire 要唸",
+          r.returncode == 0 and "[since:" in r.stdout and "[retire:" in r.stdout, r.stdout)
+    # ② 欄位齊 → 不唸
+    write(v, "Systems/R2.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2026-09-21][retire:改用新閘之後撤]大額退費要人工核可\n", body="# R2\n")
+    r2 = run(v, "lint", "Systems/R2")
+    check("RULE 生命週期: 欄位齊就不唸", r2.returncode == 0 and "脈絡標記" not in r2.stdout, r2.stdout)
+    # ③ until 已過 → 唸「已過期」
+    write(v, "Systems/R3.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2020-01-01][until:2020-06-30][retire:改用新閘之後撤]舊相容限制\n", body="# R3\n")
+    r3 = run(v, "lint", "Systems/R3")
+    check("RULE 生命週期: until 過了要唸已過期",
+          r3.returncode == 0 and "過期" in r3.stdout, r3.stdout)
+    # ④ status:superseded → 明講它已經沒有挑戰程式碼的效力
+    write(v, "Systems/R4.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2020-01-01][retire:改用新閘之後撤][status:superseded]舊限制\n", body="# R4\n")
+    r4 = run(v, "lint", "Systems/R4")
+    check("RULE 生命週期: 標了 superseded 要講它沒效力了",
+          r4.returncode == 0 and "superseded" in r4.stdout, r4.stdout)
+    # ⑤ confirmed 太久沒更新 → 唸
+    write(v, "Systems/R5.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2020-01-01][retire:改用新閘之後撤][confirmed:2020-02-01]很久沒確認的限制\n",
+          body="# R5\n")
+    r5 = run(v, "lint", "Systems/R5")
+    check("RULE 生命週期: 太久沒確認要唸",
+          r5.returncode == 0 and "沒人確認" in r5.stdout, r5.stdout)
+    # ⑥ 退場條件裡引用 [[節點]] → 值被截斷,要唸出來別默默吃掉(2026-09-21 通才席 F3)
+    write(v, "Systems/R6.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2026-09-21][retire:等 [[Systems/新閘]] 上線就撤]舊限制\n", body="# R6\n")
+    r6 = run(v, "lint", "Systems/R6")
+    check("RULE 生命週期: 值被中括號截斷要唸",
+          r6.returncode == 0 and "截斷" in r6.stdout, r6.stdout)
+    # ⑦ 一行兩條 RULE → 後面那條會借用前面的欄位(2026-09-21 通才席 F4)
+    write(v, "Systems/R7.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  RULE:[since:2026-09-21][retire:改用新閘之後撤]甲限制 RULE:乙限制沒欄位\n", body="# R7\n")
+    r7 = run(v, "lint", "Systems/R7")
+    check("RULE 生命週期: 一行兩條要唸",
+          r7.returncode == 0 and "一行只放一條" in r7.stdout, r7.stdout)
+    # ⑧ WHY 的出處不收純數字(2026-09-21 通才席 F5:任意 7 位數字曾被當成 sha)
+    write(v, "Systems/W1.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  WHY:當初訂了 1234567 這個上限\n", body="# W1\n")
+    w1 = run(v, "lint", "Systems/W1")
+    check("WHY 出處: 純數字不算出處", w1.returncode == 0 and "缺出處" in w1.stdout, w1.stdout)
+    write(v, "Systems/W2.md",
+          "type: system\nstatus: doing\nsummary: |-\n"
+          "  WHY:[src:2026-09-21 Enzo 在對話裡裁的]改成程式碼為主\n", body="# W2\n")
+    w2 = run(v, "lint", "Systems/W2")
+    check("WHY 出處: [src:] 標記算出處", w2.returncode == 0 and "缺出處" not in w2.stdout, w2.stdout)
+
+
 def t_guard():
     """guard list/scaffold/bind — 對談驅動守衛 scaffold(2026-06-15)。
     需 repo_root + 真 .cs(discover_test_methods),故自建 docs/ 結構而非 mkvault。"""
@@ -17585,10 +17705,25 @@ def t_entry_points_agree_with_code_first():
         check("entry_points_agree: 範本不存在(skip)", True, "")
         return
     body = tpl.read_text(encoding="utf-8")
-    if "先讀程式碼" not in body:
-        # 定位又改回「圖譜先行」的話這道守衛自動讓位,不要變成擋路的化石
-        check("entry_points_agree: 範本不是程式碼為主定位(skip)", True, "")
-        return
+    # ★不准靜默 skip★(2026-09-21 外家審計):原本寫成「範本不含『先讀程式碼』就跳過」,
+    # 把那句改成同義詞(例如「先看原始碼」)整支守衛就不跑了,而且不會有人知道——
+    # 這是 fail-open。定位真的要改回去,是改這裡的斷言、留下痕跡,不是讓守衛自己消失。
+    # ★看的是「〈怎麼用〉那節的第 1 個編號項」,不是整檔搜字★(2026-09-21 架構對齊席):
+    # 原本寫成 `"先讀程式碼" in body`,把第 1 步改掉再補一行 HTML 註解寫上那四個字就過關。
+    # 改成解析節區 + 只認 `1. ` 開頭的清單項:註解行不會以 `1. ` 開頭,貼字騙不過。
+    step1 = None
+    try:
+        sec = body[body.index("### 怎麼用"):body.index("### 寫筆記時")]
+        for ln in sec.split("\n"):
+            if ln.startswith("1. "):
+                step1 = ln
+                break
+    except ValueError:
+        pass
+    check("entry_points_agree: 範本〈怎麼用〉第 1 步仍是先讀程式碼",
+          step1 is not None and "先讀程式碼" in step1,
+          f"第 1 步現在是 {step1!r}。定位若真要改,連同這支守衛與 _OLD_POSITION_PHRASES 一起改,"
+          "不要靠改措辭或補註解讓守衛靜音")
     for rel in _ENTRY_POINT_FILES:
         f = root / rel
         if not f.is_file():
@@ -17624,6 +17759,65 @@ def t_template_keeps_absence_claim_guard():
         # 被刪掉也不會紅。守衛的覆蓋範圍要跟它宣稱保護的段落對齊。
         check(f"absence_guard: {rel} 留著「同一篇筆記內部也會新舊打架」",
               "新舊打架" in txt, f"{rel} 少了「同一篇筆記內部新舊矛盾要去程式碼裁」")
+
+
+# 逐字內嵌範本〈寫筆記時〉那一段的檔。允許複製,但必須一字不差——
+# 2026-09-21 代碼審 r1 折入:第一版守衛只查「WHY:/RULE:/退場條件/以程式碼為準」這幾個 token
+# 在檔裡出現過沒有,審查席把整段真內容換成一行含這些字的裝飾註解,九條斷言照樣全綠;
+# 同一輪還發現兩份手打複本當下就已經全形/半形括號分岔。改成整段逐字比對,兩種都擋得住。
+_NOTE_CONVENTION_FILES = (
+    "skills/lumos-project-notes/SKILL.md",
+    "skills/lumos-project-notes/commands/03-寫回圖譜.md",
+)
+
+
+def _note_convention_block(root):
+    """從紀律範本抽出〈寫筆記時〉整節(到〈鐵則〉之前),這是分類規則的唯一來源。"""
+    tpl = root / "scripts" / "templates" / "graph-discipline.md"
+    if not tpl.is_file():
+        return None
+    body = tpl.read_text(encoding="utf-8")
+    try:
+        s = body.index("### 寫筆記時")
+        e = body.index("### 鐵則", s)
+    except ValueError:
+        return None
+    return body[s:e].strip()
+
+
+def t_note_convention_single_source():
+    """分類規則只准有一份定義:在紀律範本裡。skill 只放指路,不放複本。
+
+    出身(2026-09-21 三次被繞):先是只查 token 存在(整段換成裝飾註解照樣綠),
+    改成整段逐字比對後,又被「複本前面插一段唱反調的快速版」和「未閉合 HTML 註解裡放正確副本」
+    各繞一次。第三次不再補條件,改形狀:沒有複本就沒有這三種洞,
+    判準也從「某段文字必須出現」(肯定式,可以靠貼字騙過)換成「不准有第二份定義」(否定式)。
+    ★誠實界線★:這支擋的是「兩份定義各自演化」,擋不住有人在 skill 裡寫一段跟範本矛盾的散文——
+    那是內容審查的事,機械判不出來,不要宣稱它擋得住。
+    翻紅釘:把範本那張表複製回 SKILL.md → 這條紅。
+    """
+    root = _repo_root_for_discipline()
+    block = _note_convention_block(root)
+    if block is None:
+        check("note_single_source: 範本或那一節不存在", False, "分類規則的唯一來源不見了")
+        return
+    for w in ("WHY:", "RULE:", "PITFALL:", "FACT:", "[retire:", "[since:", "以程式碼為準"):
+        check(f"note_single_source: 範本那一節還留著「{w}」", w in block,
+              f"範本的〈寫筆記時〉少了 {w},分類規則被改動或刪掉了")
+    # 表格列的樣子:`| \`WHY:\` |` —— 出現在 skill 裡就代表那裡又長出第二份定義
+    row = "| `WHY:` |"
+    for rel in _NOTE_CONVENTION_FILES:
+        f = root / rel
+        if not f.is_file():
+            check(f"note_single_source: {rel} 不存在", False, "指路頁被搬走,守衛要跟著更新")
+            continue
+        txt = f.read_text(encoding="utf-8")
+        check(f"note_single_source: {rel} 沒有第二份分類定義",
+              row not in txt,
+              f"{rel} 又出現分類表了;規則只放紀律範本一份,這裡只留指路")
+        check(f"note_single_source: {rel} 有指回範本的那一句",
+              "唯一來源是紀律範本" in txt,
+              f"{rel} 要明寫規則以 scripts/templates/graph-discipline.md 為準")
 
 
 def t_doctor_reports_drift():

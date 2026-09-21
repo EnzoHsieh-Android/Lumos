@@ -389,6 +389,12 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 
 ## 摘要區塊
 
+### 先分「程式碼推不推得出來」（2026-09-21 起）
+
+**分類規則的唯一來源是紀律範本** `scripts/templates/graph-discipline.md` 的〈寫筆記時〉一節，它會被注入每個專案的 CLAUDE.md，所以動筆時本來就在眼前；`SKILL.md` 放的是它的逐字複本（`t_note_convention_synced_to_skill` 比對整段一字不差）。**這一節不重寫那張表**，只補範本放不下的東西：底下兩張符號表哪些前綴屬於哪一類、以及寫法範例。要改規則本身，改範本，不要改這裡。
+
+判準一句話：**程式碼推不推得出來，不是重不重要**。程式碼查得到的現況描述別抄，抄了就會過期。
+
 ### summary 欄位（中文結構化摘要）
 
 **所有 Systems 和 Issues 筆記必須有 `summary` 欄位。** 讓 Claude Code 掃一眼 frontmatter 就掌握模組全貌，不需要讀完整篇筆記。
@@ -399,7 +405,11 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 |------|------|------|
 | `FLOW:` | 核心流程 | `reserve→complete→void` |
 | `AUTH:` | 認證方式 | `HMAC-SHA256`, `JWT` |
-| `KEY:` | 關鍵概念/欄位 | `transactionId貫穿三階段` |
+| `KEY:` | 關鍵概念/欄位（**過渡標記，新筆記改用下面四類**） | `transactionId貫穿三階段` |
+| `WHY:` | 當初為什麼這樣決定（要求見上一節） | `[d3]改抽樣不全跑是因為預算 300 秒` |
+| `RULE:` | 程式看不到的限制（要求見上一節） | `[2026-09-21 起，退場:改用新閘後撤] 大額退費要人工核可` |
+| `PITFALL:` | 踩過的坑、事故根因（要求見上一節） | `[2026-09-05] 邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]` |
+| `FACT:` | 現況描述（要求見上一節） | `[以程式碼為準] 門檻 180 秒；查:grep FULL_SWEEP_SECONDS …` |
 | `DEP:` | 依賴模組（用 wikilink） | `[[Billing]][[Inventory]]` |
 | `TEST:` | 測試狀態 | `12/12通過(2026-04-07)` |
 | `VERIFY:` | 驗證紀錄連結 | `[[2026-04-07_API審計修復]]` |
@@ -428,7 +438,9 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 | 前綴 | 用途 | 前綴 | 用途 |
 |---|---|---|---|
 | `FLOW:` | 核心流程 `a→b→c` | `VERIFY:` | 驗證紀錄 `[[..]]` |
-| `KEY:` | 關鍵概念/欄位 | `DECISION:` | 決策簡版 `[日期]內容(valid)` |
+| `KEY:` | 關鍵概念/欄位（過渡） | `DECISION:` | 決策簡版 `[日期]內容(valid)` |
+| `WHY:` | 為什麼這樣決定 | `RULE:` | 程式看不到的限制 |
+| `PITFALL:` | 踩過的坑、事故根因 | `FACT:` | 現況描述（能查到的別抄） |
 | `DEP:` | 依賴模組 `[[..]]` | `FLAG:` | 語意標記 TECHNICAL/DECISION/ORIGIN |
 | `TEST:` | 測試狀態 | `AUTH:` | 認證方式 |
 

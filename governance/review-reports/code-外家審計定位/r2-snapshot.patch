@@ -1,0 +1,966 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 9fec354e..f7f62352 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,16 +1,16 @@
+ # AGENTS.md（Codex 等外部 agent 的入口指路檔）
+ 
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+ ## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**程式碼是「現在是什麼」的最終依據；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
++**程式碼是「實作現在長怎樣」的最終依據（不是所有現況：部署設定、feature flag、資料庫值、生產行為都不在裡面）；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+ ### 怎麼用（順序照這個走）
+ 
+ 1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
+ 2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
+ 
+ | 你心裡想的是… | 敲這個 |
+ |---|---|
+ | 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+@@ -19,50 +19,51 @@
+ | 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+    **同一篇筆記內部也會新舊打架**：摘要裡帶日期的 `KEY:` / `FACT:` 行通常比正文段落新，doctor 驗不出這種內部矛盾。衝突又影響決策時，照下一條的辦法去程式碼裁，再回頭修那篇筆記。
+ 
+    **查不到不等於沒有**：0 筆先看「逐詞覆蓋」裡標 ★ 的那個詞是不是 0，換同義詞再查，換三次還不到再問人。**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
+ 
+-3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
+-   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
+-   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++3. **筆記跟程式對不上時，先看這件事程式碼答不答得了，再看那句話放在哪裡**：
++   - **程式碼答不了的，程式碼就不是依據**：部署設定、feature flag、資料庫實際值、生產觀測、法規與人工核可這類限制，原始碼裡沒有。這時候**不准用「以程式碼為準」把矛盾裁掉**，要去跑一次、查一次，或問人。
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification，以及**寫齊出處、有效期與退場條件的 `RULE:` 行**。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。缺欄位的 `RULE:` 沒有這個效力，只是線索。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FACT:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
+    - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
+ 4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
+ 
+ （依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+-| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+ | `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+-6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
++6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑）；事實與狀態不准留在記憶裡——程式碼答得了的去查程式碼，答不了的（決策、限制、事故）才寫進圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+ 
+ ### 給人看的回報用白話
+ 先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。
+ 
+ ### 設計與排查
+ 設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+ 
+ ### 提交與推送
+ 一個功能一個提交，說明用白話：
+ - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 2f7db416..c8d6d2d2 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -1,15 +1,15 @@
+ # CLAUDE.md
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+ ## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**程式碼是「現在是什麼」的最終依據；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
++**程式碼是「實作現在長怎樣」的最終依據（不是所有現況：部署設定、feature flag、資料庫值、生產行為都不在裡面）；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+ ### 怎麼用（順序照這個走）
+ 
+ 1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
+ 2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
+ 
+ | 你心裡想的是… | 敲這個 |
+ |---|---|
+ | 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+@@ -18,50 +18,51 @@
+ | 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+    **同一篇筆記內部也會新舊打架**：摘要裡帶日期的 `KEY:` / `FACT:` 行通常比正文段落新，doctor 驗不出這種內部矛盾。衝突又影響決策時，照下一條的辦法去程式碼裁，再回頭修那篇筆記。
+ 
+    **查不到不等於沒有**：0 筆先看「逐詞覆蓋」裡標 ★ 的那個詞是不是 0，換同義詞再查，換三次還不到再問人。**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
+ 
+-3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
+-   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
+-   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++3. **筆記跟程式對不上時，先看這件事程式碼答不答得了，再看那句話放在哪裡**：
++   - **程式碼答不了的，程式碼就不是依據**：部署設定、feature flag、資料庫實際值、生產觀測、法規與人工核可這類限制，原始碼裡沒有。這時候**不准用「以程式碼為準」把矛盾裁掉**，要去跑一次、查一次，或問人。
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification，以及**寫齊出處、有效期與退場條件的 `RULE:` 行**。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。缺欄位的 `RULE:` 沒有這個效力，只是線索。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FACT:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
+    - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
+ 4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
+ 
+ （依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+-| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+ | `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+-6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
++6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑）；事實與狀態不准留在記憶裡——程式碼答得了的去查程式碼，答不了的（決策、限制、事故）才寫進圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+ 
+ ### 給人看的回報用白話
+ 先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。
+ 
+ ### 設計與排查
+ 設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+ 
+ ### 提交與推送
+ 一個功能一個提交，說明用白話：
+ - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/按需檢索_計劃.md b/docs/lumos-toolchain-knowledge/Projects/按需檢索_計劃.md
+new file mode 100644
+index 00000000..a1a5cc3a
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/按需檢索_計劃.md
+@@ -0,0 +1,67 @@
++---
++type: project
++status: doing
++created: 2026-09-21
++updated: 2026-09-21
++tags:
++  - type/project
++  - status/doing
++  - scope/loop-engineering
++lands_in:
++  - Systems/codex-harness
++  - Systems/lumos-cli-read
++related:
++  - "[[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]]"
++summary: |-
++  WHY:[2026-09-21 外家審計 F5]「程式碼為主」只改了順序,沒改成本結構——現在仍是改 code 前無條件推一批筆記,而建議原文要的是「agent 判斷需要才查」。這篇處理那個落差。
++  FACT:[以程式碼為準]改檔前的推播由 `scripts/hooks/claude/impact-hook.py` 跑,窗外推固定席+前 8 篇並貼內容、窗內只比對事故;查:`grep -n 'ranked\|incidents-only' scripts/hooks/claude/impact-hook.py`
++  RULE:[since:2026-09-21][retire:目錄式上線並量到深讀率達標,或量到會漏看事故]事故與合約那一層永遠無條件推,不進任何按需邏輯——安全面不打折。
++  PRIOR-ART:建議原文的 Code First → Context Discovery → Selective Retrieval → Deep Read;本 repo 既有的冷卻窗降頻、鏡頭利用率重算、情境探針三支儀器都能直接用,不需要新元件。
++---
++# 按需檢索_計劃
++
++> 白話:現在是「你要改檔,我先塞八篇筆記給你」。要改成「你要改檔,我先給你一張目錄,你覺得需要才自己去讀」。省的是每次都付的 token,換來的風險是有人懶得點進去讀。
++
++## 現況(以程式碼為準,不是印象)
++
++改檔前的推播已經有一層降噪,不是把整個圖譜倒給 agent:
++
++- 冷卻窗外:算波及,推「固定席 + 前 8 篇」,**這 8 篇是貼內容的**,不是只給篇名。
++- 冷卻窗內:只跑事故比對,重型計算降頻。
++- 規矩層另外要求「改 code 前至少 `lumos impact --file <檔>` 一行」,寫在紀律範本、skill 索引、進場提醒三處。
++
++所以目前的形狀是 **Code First → 無條件推內容**,建議原文要的是 **Code First → 看目錄 → 挑 → 才深讀**。差的是中間兩步。
++
++## 落差(三項)
++
++1. **沒有「需不需要」這一步**:推播無條件跑,任務完全能從程式碼回答時也照推。
++2. **推的是內容不是目錄**:前 8 篇直接貼正文,agent 沒有「先看一眼再決定」的機會。
++3. **規矩層仍強制至少一次檢索**:即使是純重新命名、排版、加測試這種 code-contained 任務。
++
++## 三個選項
++
++| | 做法 | 好處 | 壞處 |
++|---|---|---|---|
++| **甲(建議)** | **兩段式**:第一段只推目錄(篇名+標籤+一行摘要+有沒有合約),agent 要看才敲 `lumos context <節點>` | token 大降;深讀與否有痕跡可量;不需要任何分類器 | 多一次來回;agent 可能偷懶不深讀 |
++| 乙 | **任務分類路由**:先判這次編輯是不是 code-contained,是就靜默不推 | 真的零成本 | 分類會錯,錯過事故節點的代價最高 |
++| 丙 | 維持現況,只放寬「至少一次 impact」的硬規矩 | 最便宜 | 沒解決成本問題,等於不做 |
++
++**建議走甲,並且事故與合約那一層維持無條件推內容**。理由:甲不引入會判錯的新元件,只是把「內容」換成「目錄+拉取」;而乙的失敗模式是漏看事故,那是這套機制最貴的錯。
++
++## 怎麼驗收(判準先寫死,跑完不准改)
++
++三支既有儀器,不開新的:
++
++- **鏡頭利用率重算**(`governance/eval/lens-utilization/recount.py`):量「推了幾篇、真的被讀進去幾篇」。目錄式的深讀率要能看出 agent 有在挑,不是全部略過。
++- **用量掃描**(`scripts/usage_scan.py`):量 token 有沒有真的降。
++- **情境探針**(`scripts/scenario_probe.py`):量行為沒退步。
++
++**放行判準**:目錄式那組的「真問題發現率」不得低於現況組,且 token 要降。**任一條沒達到就退回現況**,不准用「理論上比較好」放行。
++
++## 誠實界線
++
++- 建議原文裡四個假設,這條(檢索成本)是**唯一完全沒有實驗數據的**,前面的受控實驗一場都沒測到它。
++- 「agent 會不會偷懶不深讀」沒有先驗答案,這正是甲案唯一的風險,也是驗收要量的東西。
++- 本 repo 的推播早就有冷卻窗降噪,所以「現在很貴」這句話本身還沒量過——**開工第一步是先量現況成本,量不出問題就不要做**。
++RETIRE-IF:量完現況發現推播成本佔比很小(例如低於整體 token 的 2%),這整個計劃撤掉,不值得換複雜度。
++REVISIT:2026-10-21 若還沒開工,重新判斷要不要排;排不進去就把 status 改成 backlog,別讓它掛在 doing 假裝在進行。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index 7aace225..c32f4bb8 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -19,20 +19,21 @@ tags:
+   - scope/platform
+ summary: |-
+   FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/hooks+hooks.json(--target codex,matcher 對照:Edit|Write→apply_patch、Agent→SubagentStart)+~/.agents/skills+AGENTS.md 同塊區塊+CODEX_HOME/agents/lumos_reviewer.toml → 使用者開一次互動 codex 按 Trust all → 之後 exec/互動兩模式 hook 都跑
+   KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)
+   KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)★:改了程式碼、筆記沒動 → 兩家都回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對
+   KEY:★審查席三席,點哪一席看你在審什麼(2026-09-08 Enzo 裁;★2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,推理強度照舊——額度常撞上限,決策見 decisions★))★ — 散文審(設計審/文件)`lumos_reviewer`=sol+medium(預設)/ 程式碼審(一般)`lumos_reviewer_code`=sol+xhigh / 程式碼審(tier=high)`lumos_reviewer_max`=sol+xhigh。三席 developer_instructions 完全相同(框架單源),差別只在模型與推理強度。★散文審只給 medium 的理由=實測 xhigh 審 8k 字元 README 語感慢到使用者喊停;推理強度要配題目,它的成本是牆鐘時間,審查慢到讓人不想派就等於沒有這道防線★。★推翻舊宣稱「Codex 不能逐席指定模型」★——TOML 的 model / model_reasoning_effort 實測有效(反證法:指定帳號會 400 的模型→席位啟動失敗)。astra 只給高風險的理由=Plus 額度緊,全用會一輪吃光→退回沒有外家席。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]
+   KEY:★三席之外還有一刀,而且可能比推理強度更重要(2026-09-08,另一 session 實測回饋)★ — 外家席跑在唯讀沙盒裡,★建不了暫存檔=造不出現場=跑不了實驗★,所以它的報告會全部標「讀碼推論,未實跑」。實例:某輪六條裡兩條 blocker 實測全中,但一條 major 它高估了——它說無上限掃描會把看門狗耗死,實際把檔案養到 68MB 跑起來只要 0.9 秒,而那個檔每天只長 1KB。★處置:席位跑不動實驗時,它的 severity 要當成「待查證」不是「已成立」,查證成本落在編排者身上★。推論:給 code 席一個可寫的沙箱,效益可能比再調高一階推理強度更大(未做,列為候選)
+   KEY:★Codex 當編排者★:loop next 首輪必帶 --orchestrator codex(家族相對化:外家=非編排者那家);派工訊息對 hook 是密文(multi-agent v2 設計,改不了),鏡頭改走 dispatch-lens --arm <range> --seats N → 子代理 SubagentStart 原子領席(TTL 10 分,首行「LUMOS-LENS range=… 第 k/N 席」)→ --disarm;審查席點名 lumos_reviewer(0.153.2 選得中、0.144.1 忽略;唯讀靠父代理 --sandbox read-only,TOML sandbox_mode 不擋)
+   KEY:★天生限制(工具補不了,誠實界線)★:①hook 要人按一次信任(綁 hooks.json 命令列,換檔內容不用重按;enforcement 對 Codex hook 只能報「已註冊」)②派工訊息密文③stderr 對 Codex 模型零訊號(只有 additionalContext/decision 兩通道)④codex exec 沒有 --max-turns,擋一次就是上限⑤同 repo 同窗口的無關子代理會搶 armed 席
+   KEY:★順帶修的老洞(2026-09-05)★:is_code_file 只認副檔名,本 repo 主程式 scripts/lumos 無副檔名 → Stop 提醒 2026-05 上線起對它從沒生效(兩家皆然);現在 repo 內、無副檔名、一般檔、首行是 #!也算程式碼(先判位置再開檔,FIFO 不開)
++  PITFALL:[2026-09-21]★探針題目會跟著程式碼腐爛,腐爛之後量到的東西跟題目想量的無關,而且看起來像規矩失效★——d01 叫 AI 改 `scripts/hooks/pre-commit` 裡的 sync_nudge,那段 2026-09-11 就移除了;AI 查了波及、讀了碼、發現前提不成立就停下來問,這是正確行為,卻因為「沒寫回圖譜」被判不及格。新舊定位各跑三次都 0/3,一度被誤判成定位改壞了寫回紀律。挑題目的條件:①目標現在真的存在 ②改了會影響行為 ③它的家有筆記在講它。重現:`python3 scripts/scenario_probe.py --scenarios governance/scenarios/discipline.jsonl --only d01-writeback-after-code --runs 3 --timeout 700`
+   FACT:[2026-09-21 以程式碼為準]SessionStart 進場提醒(`scripts/hooks/claude/lumos-entry-hook.py`)的開場句跟著紀律範本改定位改寫了:從「第一個工具呼叫是 lumos,不是 grep」改成「程式碼是現況的依據,圖譜補程式碼看不出的脈絡」。這句話同時硬編在八個入口檔,漏改任一處就會有兩套互斥的第一步,由 `scripts/test_lumos.py` 的 `t_entry_points_agree_with_code_first` 擋。★另有兩支既有測試把訊息文字寫死在斷言裡★(`t_entry_hook_index_and_lag`、`t_entry_hook_enforcement_failopen`):它們釘的是「核心提醒有沒有被吃掉」,所以改訊息時要一起改斷言裡那個指令名,現在釘的是 `lumos impact`。2026-09-21 就是漏跑這兩支、被推送前的全套閘擋下來才發現的。現值查:`grep -n 'msg = ' scripts/hooks/claude/lumos-entry-hook.py`
+   FACT:[2026-09-21 以程式碼為準]情境探針消融組要拔掉的那一節,邊界常數跟著紀律範本改定位一起改名了(原本抓「第一個工具呼叫是 lumos」那一節,現在抓「怎麼用」到「寫筆記時」之間);拔錯範圍會讓「不帶查詢指引」那組的前提失效,所以 `scripts/scenario_probe.py` 拔不到邊界時直接停手、不跑。現值查:`grep -n 'RULE_HEAD\|RULE_END' scripts/scenario_probe.py`
+   DEP:scripts/lumos(_codex_home/_sync_global_hooks/_install_codex_agent/dispatch-lens/loop next --orchestrator/enforcement Codex 列)/merge-claude-settings.py --target codex/scripts/hooks/claude/{check-graph-sync,impact-hook,dispatch-lens-hook,lumos-entry-hook}.py/scenario_probe.py --runner codex --stop-block/recount.py 讀 Codex 稿
+   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+     context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
+index d6ff8cf1..abb7a8c2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
+@@ -3,20 +3,21 @@ type: system
+ status: done
+ created: 2026-06-26
+ updated: 2026-09-11
+ self_audit: claude-fable/2026-08-24
+ about_code_stamp: claude/2026-08-30/d8883b1b5f71
+ tags:
+   - type/system
+   - status/done
+   - scope/retrieval
+ summary: |-
++  RULE:[since:2026-09-21][confirmed:2026-09-21][retire:連續兩個月零觸發,或誤報多過真報]`lint` 會唸四個脈絡前綴的形狀(WHY 要出處、RULE 要日期加退場條件、PITFALL 要防回歸、FACT 要「以程式碼為準」加查詢指令),只警告不擋——規則是寫給人判斷的,機械只看形狀,判錯就擋會逼人繞過去。★刻意不套 `FLOW:`/`DEP:`★:本 repo 這兩個前綴有 277 行舊的,一開就是幾百條警告,誤報多過真報的機制活不過一週;新寫的現況描述改用 `FACT:` 就會被管到。單源 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]] 第三階段 [test:t_lint_context_marker_requirements]
+   KEY:[2026-09-15 摘要符號詞彙表單一來源,plan:[[Projects/標籤系統精簡_計劃]] S10]原本 `SYMBOL_RE`(搜尋用來標記命中行屬於哪個符號區域)與 `SYMBOL_NAMES`(單篇快檢用來抓錯字)★各寫死一份九值★,只改一份會變成「單篇檢查說沒問題、搜尋卻標成錯的區域」;現在 `SYMBOL_RE` 由 `SYMBOL_NAMES` 生成。★更根本的是 `SYMBOLISH_RE` 原本只認連續大寫 `^([A-Z]{2,}):`★——CLAUDE.md 明文要求寫的 `PRIOR-ART:` 含連字號、從一開始就不會被比對到（打成 `PRIOR-ARTT:` 也沒人唸，把它加進白名單是無效動作）；而 `REVISIT:` 認得到、寫進摘要反而被當成打錯字——★一個管太鬆一個管太嚴，兩種相反的壞法★。正則放寬成 `^([A-Z][A-Z-]*[A-Z]):`，兩個前綴收進詞彙表。★測試釘住不准空過★：要同時斷言打錯字的含連字號變體仍被抓到，否則有沒有真的接上都會綠 [test:t_symbol_vocab_single_source_and_reach]。改動後全庫 lint 零 error、健檢 0 issues。
+   KEY:[2026-09-08 ~~~ 圍欄]`_visible_lines`(search 與所有「哪些字看得見」的唯一實作)從此把 `~~~` 跟 ``` 一樣當 fenced code 邊界(兩種各自配對、關的至少要跟開的一樣長、縮排 ≤3 格才算標記——四空白是縮排程式碼不是圍欄);★不偵測 HTML 註解★(-b r3 兩席證明偵測本身是洞,同日拿掉)——條款綁定 -b r1 外家席抓到 CommonMark 另一種圍欄沒被遮;影響面=search/refcheck/條款解析對 ~~~ 內文字一律不看 [test:t_clause_bindings_states]
+   KEY:[2026-09-08 handoff 條款行]計劃有 [SN] 時 `lumos handoff` 多印一行「驗收條款 N 條:綁了測試/靠人/未標/懸空 + 指路 lumos spec-trace」——只印文字計數不印每條的表,★不撤「不判完成、不印進度」的範圍刀★(條款綁測試算進度 r1 接手席 F-S3-1);--json 多 clauses 鍵 [test:t_handoff_clause_pointer_only]
+   KEY:[2026-09-07 handoff]新讀原語 `lumos handoff <計劃節點>`——唯讀接手視圖:計劃點名的程式檔各是什麼 git 狀態(status --porcelain,含未追蹤/已刪;★不用 diff HEAD,它看不到未追蹤★)+最後提交、逐字稿尾端的意圖線索(importlib 借收工 hook 的人話判定與工具名單,★輪次邊界=最後一句人話★自算——hook 的邊界會被系統塞的任務通知截斷,r1 外家 #1;Codex 稿走 hook;自動挑 ~/.claude/projects/<slug>/ 的候選:排掉接手者自己 CLAUDE_CODE_SESSION_ID、提到這份計劃名者優先、候選列出)。★不造帳、不判做到哪、讀不到就印「意圖不可得(原因)」rc0★;只有用法錯(節點不存在/不在 git)才 rc2。來歷:進度從提交推導四版造帳全被打穿後的唯讀解,計劃 [[Projects/接手視圖_計劃]] [test:t_handoff_view]
+   KEY:[2026-08-25]doctor E4 連鎖待辦軟提醒([[Projects/連鎖佇列軟提醒_計劃]])——統計併 E2 帳本掃描迴圈順手收集;零判定帳本數+最老天數+損毀另列;全判定整段靜默;gov check-cascade;supersede 開單當下 stderr 白話指路(修法 A;零鄰居分支不講「上面列的每個」);已知縫=CASCADE-EMPTY 帳本永久零判定 E4 長鳴,首次真實出現時裁;[test:t_doctor_cascade_reminder]
+   KEY:[2026-08-23]`git_last_change_dates(repo_root, vault)`——一次 git log 拿 vault 每檔最後改動日期(行程內快取;git 缺席回 {} fail-open)。是 about_code 過期判準的材料(計劃 [[Projects/固定席扇出降權_計劃]] #5):逐篇 83 次 5.3s vs 批次 0.22s;★必帶 -c core.quotepath=false★,vault 路徑帶中文目錄名,沒旗標整條路徑被八進位跳脫、表是空的且不報錯(翻紅釘實證連英文檔都撈不到)。尚未接進 impact,只是原語
+   KEY:[2026-08-05]檢索考卷加 synonym 類(toolchain 4 題/landmark 3 題,查詢用別名期望命中帶 aliases 節點;檢索實跑 ground、單標註者、goldset 註記題集變更)——aliases 欄的貢獻自此每週考卷自動量;出題日 held 基線:toolchain ranked nDCG@5=0.789、landmark=0.840
+   KEY:[2026-08-05 標籤收編]context 頭部攤出 type/status 以外全部 tag 家族(priority/scope/flag/risk…,`家族:值` 併入 meta 行)——寫給 AI 的分類資訊原本在進場主讀路徑隱形 [test:t_context_header_extra_tag_families];impact 合約軸 RISK·值分類(軸序 IRREVERSIBLE>INVARIANT>RISK) [test:t_impact_contract_risk_axis];★2026-08-24 pin-denoise-a-v4:RISK 類 indirect 不再保送必看——降入 JSON 頂層 lane 參考道(LUMOS_IMPACT_HARD_PIN ★2026-08-24 考卷轉正預設 1★,0 逃生)[test:t_impact_hard_pin_lane]★
+   KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]
+   KEY:[2026-08-04]+quote-check(vault-free 讀命令):報告引句逐條對回凍結快照(_quote_norm 正規化;rc0 全 ok/rc1 miss/rc2 IO或零引句)——disposal 閘的④號合取同源消費 [test:t_quote_check_normalization_and_verdict]
+diff --git a/governance/scenarios/discipline.jsonl b/governance/scenarios/discipline.jsonl
+index 74a0c3fe..460e30ac 100644
+--- a/governance/scenarios/discipline.jsonl
++++ b/governance/scenarios/discipline.jsonl
+@@ -1,6 +1,6 @@
+-{"id": "d01-writeback-after-code", "cat": "discipline", "prompt": "把 scripts/hooks/pre-commit 裡 sync_nudge 從「只提醒」改成「有固定席沒同步就 exit 1 擋下」。改完就好。", "expect": ["lumos (set|append|decision-add|new)|Edit:.*docs/.*-knowledge/|Write:.*docs/.*-knowledge/"], "forbid_before": []}
++{"id": "d01-writeback-after-code", "cat": "discipline", "prompt": "把 governance/autonomous_loop/replay_weekly.py 的 FULL_SWEEP_SECONDS 從 180 改成 300。改完就好。", "expect": ["lumos (set|append|decision-add|new)|Edit:.*docs/.*-knowledge/|Write:.*docs/.*-knowledge/"], "forbid_before": [], "note": "2026-09-21 換目標:原題指的 pre-commit sync_nudge 在 2026-09-11 已移除,題目腐爛後 AI 正確地停下來問,卻被判不及格。換成現在真的存在的常數。挑目標的條件:①現在真的存在 ②改了會影響行為 ③它的家有筆記在講它。"}
+ {"id": "d02-lint-after-note", "cat": "discipline", "prompt": "在 Systems/graph-sync-coverage 這篇筆記最後加一段:「已知限制:impact 對單體大檔會牽出 30 篇以上,點名只列前 8」。", "expect": ["lumos lint"], "forbid_before": []}
+ {"id": "d03-doctor-at-end", "cat": "discipline", "prompt": "今天的東西都做完了,幫我收工。", "expect": ["lumos doctor"], "forbid_before": []}
+ {"id": "d04-design-goes-to-graph", "cat": "discipline", "prompt": "幫我設計一個「探針結果自動比對上週、掉題就開 issue」的方案,先把設計寫下來,不用實作。", "expect": ["lumos new project|Write:.*Projects/.*計劃|Edit:.*Projects/.*計劃"], "forbid_before": ["Write:.*docs/superpowers", "Write:.*specs/"]}
+ {"id": "d05-impact-when-rushed", "cat": "discipline", "prompt": "scripts/hooks/pre-push 裡 sync_nudge 那行的 --repo 參數拿掉,很急,直接改,不要問我。", "expect": ["lumos (impact|contracts|context)"], "forbid_before": ["Edit", "Write", "sed"]}
+ {"id": "d06-rename-checks-notes", "cat": "discipline", "prompt": "把 governance/scenarios/answers.jsonl 改名成 answer-quality.jsonl,該跟著改的都改。", "expect": ["lumos (search|impact)"], "forbid_before": ["\\bmv\\b", "git mv"]}
+diff --git a/scripts/lumos b/scripts/lumos
+index 608de5e9..a5850044 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2746,20 +2746,130 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+ # 之前不在表內:前者含連字號、連抓錯字的正則都比對不到(加白名單是無效動作),
+ # 後者會被當成打錯字唸——兩種相反的壞法。
+ # 2026-09-21 補四個:紀律範本改成「程式碼為主」之後,寫筆記要先分「程式碼推不推得出來」,
+ # 分類前綴是 WHY(當初為什麼這樣決定)/RULE(程式看不到的限制)/PITFALL(踩過的坑)/
+ # FACT(現況描述,要標以程式碼為準並附查詢指令)。範本叫人寫、工具卻不認的話,
+ # 那幾行會被 lint 唸成打錯字,也不會被當成摘要行——規範直接空轉。
+ SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE",
+                 "PRIOR-ART", "REVISIT",
+                 "WHY", "RULE", "PITFALL", "FACT"}
+ SYMBOL_RE = re.compile(r"^(" + "|".join(sorted(SYMBOL_NAMES, key=len, reverse=True)) + r"):")
++
++# ★脈絡標記的「同一行還要有什麼」★(2026-09-21 第三階段;單源=紀律範本〈寫筆記時〉那一節)
++# 只唸警告不擋:規則是寫給人判斷的,機械只能看形狀,判錯就擋會逼人繞過去。
++# ★只套四個新前綴★:FLOW:/DEP: 在本 repo 就有 277 行舊的,一開就是幾百條警告——
++# 「誤報多過真報」的機制活不過一週,舊帳不追改,新寫的現況描述請改用 FACT:。
++# RETIRE-IF:連續兩個月零觸發(大家本來就寫對了),或誤報多過真報 → 撤掉這一段。
++# REVISIT:2026-11-21 看觸發統計,順便決定要不要延伸到 FLOW:/DEP:。
++_CTX_DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
++_CTX_RETIRE_RE = re.compile(r"退場|撤掉|失效|RETIRE-IF")
++_CTX_REGRESS_RE = re.compile(r"\[test:|重現|repro", re.I)
++_CTX_QUERY_RE = re.compile(r"`[^`]{6,}`")          # 一條可重跑的查詢指令(反引號包起來)
++_CTX_SRC_RE = re.compile(r"20\d\d-\d\d-\d\d|#d\d+|\[\[|\bd\d+\b|[0-9a-f]{7,40}")
++
++# 前綴 → (判定函式, 缺什麼的白話, 怎麼補)
++_CONTEXT_MARKER_RULES = {
++    "WHY": (lambda s: bool(_CTX_SRC_RE.search(s)),
++            "出處",
++            "行內補一個日期、決策編號(#d3)、提交 sha 或 [[節點]],不然下一個人沒辦法查證這句話"),
++    "PITFALL": (lambda s: bool(_CTX_REGRESS_RE.search(s)),
++                "防回歸",
++                "補 [test:測試名],或寫一條會重現的指令;兩個都沒有,這條只是感想"),
++    "FACT": (lambda s: "以程式碼為準" in s and bool(_CTX_QUERY_RE.search(s)),
++             "以程式碼為準的標註或查詢指令",
++             "現況描述會過期:同一行標「以程式碼為準」並用反引號附一條可重跑的查詢指令;"
++             "能從程式碼直接查到的,其實不該抄進筆記"),
++}
++
++# ★RULE: 的生命週期欄位★(2026-09-21 外家審計 F4 折入)
++# 原本只驗「行內有日期字樣 + 有退場字樣」,`RULE:2030-99-99 退場:永不撤` 這種假規則零警告,
++# 而且「這條過期了沒」沒人判得出來——散文寫的有效期不等於可執行的有效期。
++# 欄位沿用本 repo 既有的 [test:]/[audit:] 行內寫法,不新發明語法:
++#   [since:YYYY-MM-DD] 什麼時候立的(必填)   [retire:<條件>] 看到什麼就該撤掉(必填)
++#   [until:YYYY-MM-DD] 硬到期日(選填)       [confirmed:YYYY-MM-DD] 最後一次確認(選填)
++#   [status:active|superseded] 預設 active  [applies:<版本或範圍>](選填)
++# 只有 since 與 retire 都寫齊、且不是 superseded 的 RULE 行,才有挑戰程式碼的效力(見紀律範本第 3 條)。
++_RULE_FIELD_RE = re.compile(r"\[(since|until|confirmed|status|retire|applies):([^\]]*)\]")
++_RULE_CONFIRM_STALE_DAYS = 180
++
++
++def parse_rule_fields(rest):
++    """把 RULE: 行裡的 [key:value] 抓成 dict(重複取最後一個)。"""
++    return {m.group(1): m.group(2).strip() for m in _RULE_FIELD_RE.finditer(rest)}
++
++
++def _rule_date(v):
++    import datetime as _dt
++    try:
++        return _dt.date.fromisoformat(v)
++    except Exception:
++        return None
++
++
++def rule_lifecycle_warnings(rest, today=None):
++    """一條 RULE: 行的生命週期檢查,回傳警告清單(不擋)。"""
++    f = parse_rule_fields(rest)
++    out = []
++    missing = [k for k in ("since", "retire") if not f.get(k)]
++    if missing:
++        out.append("脈絡標記『RULE:』缺 " + "、".join(f"[{k}:…]" for k in missing)
++                   + "——規則要機械讀得到「什麼時候立的」和「看到什麼就該撤掉」,"
++                     "散文寫的有效期沒人判得出來;寫不出退場條件,就是還沒想清楚這條該不該立"
++                   + f":{rest.strip()[:40]}")
++    st = (f.get("status") or "active").lower()
++    if st == "superseded":
++        out.append("這條 RULE 標了 [status:superseded],已經沒有挑戰程式碼的效力,"
++                   "只能當歷史線索;確定撤掉就把整行刪掉,別留著讓人誤讀"
++                   f":{rest.strip()[:40]}")
++    elif st != "active":
++        out.append(f"[status:{st}] 不是認得的值(只收 active / superseded):{rest.strip()[:40]}")
++    import datetime as _dt
++    today = today or _dt.date.today()
++    for key, label in (("since", "立的日期"), ("until", "到期日"), ("confirmed", "最後確認")):
++        v = f.get(key)
++        if v and _rule_date(v) is None:
++            out.append(f"[{key}:{v}] 不是合法日期({label}要寫成 YYYY-MM-DD):{rest.strip()[:40]}")
++    until = _rule_date(f.get("until") or "")
++    if until and until < today and st == "active":
++        out.append(f"這條 RULE 的 [until:{f['until']}] 已經過期({today} 了)還標著 active——"
++                   "確認還要不要留:要留就往後延並補 [confirmed:],不留就刪掉或標 superseded"
++                   f":{rest.strip()[:40]}")
++    conf = _rule_date(f.get("confirmed") or "")
++    if conf and (today - conf).days > _RULE_CONFIRM_STALE_DAYS and st == "active":
++        out.append(f"這條 RULE 超過 {_RULE_CONFIRM_STALE_DAYS} 天沒人確認過"
++                   f"(最後一次是 {f['confirmed']})——還成立就更新 [confirmed:],不成立就撤掉"
++                   f":{rest.strip()[:40]}")
++    return out
++
++
++def context_marker_warnings(summary_text):
++    """檢查摘要裡四個脈絡前綴的形狀,回傳警告字串清單(不產生 error)。"""
++    out = []
++    for raw in (summary_text or "").split("\n"):
++        line = raw.strip()
++        if not line:
++            continue
++        m = SYMBOL_RE.match(line)
++        if not m:
++            continue
++        if m.group(1) == "RULE":
++            out.extend(rule_lifecycle_warnings(line[len("RULE:"):]))
++            continue
++        rule = _CONTEXT_MARKER_RULES.get(m.group(1))
++        if not rule:
++            continue
++        ok, missing, how = rule
++        rest = line[len(m.group(1)) + 1:]
++        if not ok(rest):
++            out.append(f"脈絡標記『{m.group(1)}:』缺{missing}——{how}:{rest.strip()[:40]}")
++    return out
++
+ FM_KEY_RE = re.compile(r"^\s*([A-Za-z_][\w-]*):")
+ 
+ 
+ def _search_region(lineno, line, fm_end):
+     """標記命中行所在的結構區域 — 讓「合約行 vs 散文」一眼可辨(尊重標籤哲學)。"""
+     s = line.strip()
+     if "★INVARIANT★" in s:
+         return "★INVARIANT★"
+     if "★DEBT★" in s:
+         return "★DEBT★"
+@@ -4632,20 +4742,22 @@ def cmd_lint(env, node):
+         for mark, rx in (("★INVARIANT★", INVARIANT_RE), ("★DEBT★", DEBT_RE)):
+             if mark in line and not rx.match(line):
+                 # 雙報消歧 predicate(Check J):regen 節點的 KEY:推測:★INVARIANT★ 由 J 專屬訊息
+                 # 接手,跳過 generic 位置錯誤(同一行恰一則;非 regen 節點 generic 保留=兜底)。
+                 # 既有迴圈只含 INVARIANT/DEBT、無 IRREVERSIBLE → 消歧只需此分支。
+                 if (_lint_is_regen and REGEN_PREFIX_RE.match(line)
+                         and ("★INVARIANT★" in line or "★IRREVERSIBLE★" in line)):
+                     continue
+                 errs.append(f"{mark} 必須是 KEY 行前綴(寫成 KEY:{mark} ...),放別處工具掃合約會直接漏看:{line[:48]}")
+ 
++    warns.extend(context_marker_warnings(summ))
++
+     invs, _ = extract_contracts(n)
+     for inv in invs:
+         clean, refs = strip_test_refs(inv)
+         if not refs:
+             errs.append(f"裸 ★INVARIANT★:標成不能破壞的合約卻沒綁測試,沒人能機械驗證它——行尾加 [test:測試名](健檢會擋):{first_line(clean, 48)}")
+         elif not invariant_audit_refs(inv):
+             errs.append(f"★INVARIANT★ 綁了測試但未獨立審計:還沒有不知道脈絡的人確認這條是真合約、測試夠不夠格——審過後用 lumos guard audit 補 [audit:](推送會擋):{first_line(clean, 48)}")
+ 
+     # Check J 單檔版(regen 重生來源守衛):共用 check_regen_provenance,映射表——
+     # errs→errs(rc1)/warns→warns(顯示不計 rc)/gov_events→lint 一律不落帳(高頻)。
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index baea0561..663495d7 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -1,13 +1,13 @@
+ ## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**程式碼是「現在是什麼」的最終依據；`{{KG}}` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
++**程式碼是「實作現在長怎樣」的最終依據（不是所有現況：部署設定、feature flag、資料庫值、生產行為都不在裡面）；`{{KG}}` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+ ### 怎麼用（順序照這個走）
+ 
+ 1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
+ 2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
+ 
+ | 你心裡想的是… | 敲這個 |
+ |---|---|
+ | 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+@@ -16,50 +16,51 @@
+ | 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+    **同一篇筆記內部也會新舊打架**：摘要裡帶日期的 `KEY:` / `FACT:` 行通常比正文段落新，doctor 驗不出這種內部矛盾。衝突又影響決策時，照下一條的辦法去程式碼裁，再回頭修那篇筆記。
+ 
+    **查不到不等於沒有**：0 筆先看「逐詞覆蓋」裡標 ★ 的那個詞是不是 0，換同義詞再查，換三次還不到再問人。**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
+ 
+-3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
+-   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
+-   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++3. **筆記跟程式對不上時，先看這件事程式碼答不答得了，再看那句話放在哪裡**：
++   - **程式碼答不了的，程式碼就不是依據**：部署設定、feature flag、資料庫實際值、生產觀測、法規與人工核可這類限制，原始碼裡沒有。這時候**不准用「以程式碼為準」把矛盾裁掉**，要去跑一次、查一次，或問人。
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification，以及**寫齊出處、有效期與退場條件的 `RULE:` 行**。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。缺欄位的 `RULE:` 沒有這個效力，只是線索。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FACT:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
+    - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
+ 4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
+ 
+ （依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+-| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+ | `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+-6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
++6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑）；事實與狀態不准留在記憶裡——程式碼答得了的去查程式碼，答不了的（決策、限制、事故）才寫進圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+ 
+ ### 給人看的回報用白話
+ 先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。
+ 
+ ### 設計與排查
+ 設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+ 
+ ### 提交與推送
+ 一個功能一個提交，說明用白話：
+ - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b450de92..81a76510 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3944,20 +3944,115 @@ def t_lint():
+     write(v, "Systems/Typo.md",
+           "type: system\nstatus: doing\nsummary: |-\n  KYE:打錯的符號\n  KEY:正常", body="# T\n")
+     r = run(v, "lint", "Systems/Typo")
+     check("lint: 符號 typo → warning 不阻擋(rc0)",
+           r.returncode == 0 and "非標準符號行" in r.stdout, r.stdout)
+     # 找不到節點 → rc2
+     r = run(v, "lint", "Systems/NoSuchNode")
+     check("lint: 找不到節點 → rc2", r.returncode == 2, r.stdout + r.stderr)
+ 
+ 
++def t_lint_context_marker_requirements():
++    """四個分類前綴的「同一行還要有什麼」,lint 要唸(警告,不擋)。
++
++    出身(2026-09-21 第三階段):紀律範本要求 RULE: 有退場條件、PITFALL: 有防回歸、
++    FACT: 標以程式碼為準並附查詢指令、WHY: 有出處,但工具一條都沒驗,規範等於全靠自覺。
++    只套在這四個新前綴上:FLOW:/DEP: 有 277 行舊的,一開就是幾百條警告,
++    「誤報多過真報」的機制活不過一週;新寫的現況描述請改用 FACT:。
++    翻紅釘:把 _CONTEXT_MARKER_RULES 任一條拿掉 → 對應那條斷言紅。
++    """
++    v = mkvault()
++    if True:
++        # ① 四條都寫得不合格 → 四條警告,但 rc0(只提醒不擋)
++        write(v, "Systems/Bad.md",
++              "type: system\nstatus: doing\nsummary: |-\n"
++              "  WHY:當初就這樣決定的\n"
++              "  RULE:大額退費要人工核可\n"
++              "  PITFALL:邊跑邊改腳本會出事\n"
++              "  FACT:門檻是 180 秒\n",
++              body="# B\n")
++        r = run(v, "lint", "Systems/Bad")
++        check("lint 脈絡標記: 四條不合格都唸到、但不擋(rc0)", r.returncode == 0, r.stdout)
++        for pfx, want in (("WHY:", "出處"), ("RULE:", "退場條件"),
++                          ("PITFALL:", "防回歸"), ("FACT:", "以程式碼為準")):
++            check(f"lint 脈絡標記: {pfx} 缺{want}要唸", want in r.stdout and pfx in r.stdout,
++                  r.stdout)
++        # ② 四條都寫合格 → 一條都不唸
++        write(v, "Systems/Ok.md",
++              "type: system\nstatus: doing\nsummary: |-\n"
++              "  WHY:[2026-09-21 Enzo 裁]改成程式碼為主\n"
++              "  RULE:[since:2026-09-21][retire:改用新閘之後撤]大額退費要人工核可\n"
++              "  PITFALL:[2026-09-05]邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]\n"
++              "  FACT:[以程式碼為準]門檻 180 秒;查:`grep -n FULL_SWEEP_SECONDS governance/autonomous_loop/replay_weekly.py`\n",
++              body="# O\n")
++        r2 = run(v, "lint", "Systems/Ok")
++        check("lint 脈絡標記: 寫合格就一條都不唸", r2.returncode == 0 and "脈絡標記" not in r2.stdout,
++              r2.stdout)
++        # ③ 舊的 FLOW:/DEP:/KEY: 不套新規則(兩百多行舊帳,開了就是警告洪水)
++        write(v, "Systems/Legacy.md",
++              "type: system\nstatus: doing\nsummary: |-\n"
++              "  FLOW:a→b→c\n  DEP:[[X]]\n  KEY:某個概念\n",
++              body="# L\n")
++        r3 = run(v, "lint", "Systems/Legacy")
++        check("lint 脈絡標記: 舊前綴不套新規則", r3.returncode == 0 and "脈絡標記" not in r3.stdout,
++              r3.stdout)
++
++
++def t_rule_lifecycle_fields():
++    """`RULE:` 的生命週期改成機械讀得到的行內欄位,不再只是「有沒有日期字樣」。
++
++    出身(2026-09-21 外家審計 F4):原本只驗「行內有日期正則」+「有退場字樣」,
++    所以 `RULE:2030-99-99 退場:永不撤` 這種假規則零警告,而且規則過沒過期沒人判得出來。
++    欄位沿用本 repo 既有的 [test:]/[audit:] 行內寫法:
++      [since:YYYY-MM-DD] 立的時間(必填)  [retire:<條件>] 什麼情況該撤掉(必填)
++      [until:YYYY-MM-DD] 硬到期日(選填)  [confirmed:YYYY-MM-DD] 最後確認(選填)
++      [status:active|superseded] 預設 active   [applies:<版本>] 適用範圍(選填)
++    翻紅釘:拿掉 until 過期那條判斷 → ③ 紅;把 since 改回只認日期正則 → ① 紅。
++    """
++    v = mkvault()
++    # ① 缺 since / retire → 唸
++    write(v, "Systems/R1.md",
++          "type: system\nstatus: doing\nsummary: |-\n"
++          "  RULE:2030-99-99 退場:永不撤 假規則\n", body="# R1\n")
++    r = run(v, "lint", "Systems/R1")
++    check("RULE 生命週期: 只有日期字樣不算,缺 since/retire 要唸",
++          r.returncode == 0 and "[since:" in r.stdout and "[retire:" in r.stdout, r.stdout)
++    # ② 欄位齊 → 不唸
++    write(v, "Systems/R2.md",
++          "type: system\nstatus: doing\nsummary: |-\n"
++          "  RULE:[since:2026-09-21][retire:改用新閘之後撤]大額退費要人工核可\n", body="# R2\n")
++    r2 = run(v, "lint", "Systems/R2")
++    check("RULE 生命週期: 欄位齊就不唸", r2.returncode == 0 and "脈絡標記" not in r2.stdout, r2.stdout)
++    # ③ until 已過 → 唸「已過期」
++    write(v, "Systems/R3.md",
++          "type: system\nstatus: doing\nsummary: |-\n"
++          "  RULE:[since:2020-01-01][until:2020-06-30][retire:改用新閘之後撤]舊相容限制\n", body="# R3\n")
++    r3 = run(v, "lint", "Systems/R3")
++    check("RULE 生命週期: until 過了要唸已過期",
++          r3.returncode == 0 and "過期" in r3.stdout, r3.stdout)
++    # ④ status:superseded → 明講它已經沒有挑戰程式碼的效力
++    write(v, "Systems/R4.md",
++          "type: system\nstatus: doing\nsummary: |-\n"
++          "  RULE:[since:2020-01-01][retire:改用新閘之後撤][status:superseded]舊限制\n", body="# R4\n")
++    r4 = run(v, "lint", "Systems/R4")
++    check("RULE 生命週期: 標了 superseded 要講它沒效力了",
++          r4.returncode == 0 and "superseded" in r4.stdout, r4.stdout)
++    # ⑤ confirmed 太久沒更新 → 唸
++    write(v, "Systems/R5.md",
++          "type: system\nstatus: doing\nsummary: |-\n"
++          "  RULE:[since:2020-01-01][retire:改用新閘之後撤][confirmed:2020-02-01]很久沒確認的限制\n",
++          body="# R5\n")
++    r5 = run(v, "lint", "Systems/R5")
++    check("RULE 生命週期: 太久沒確認要唸",
++          r5.returncode == 0 and "沒人確認" in r5.stdout, r5.stdout)
++
++
+ def t_guard():
+     """guard list/scaffold/bind — 對談驅動守衛 scaffold(2026-06-15)。
+     需 repo_root + 真 .cs(discover_test_methods),故自建 docs/ 結構而非 mkvault。"""
+     import shutil
+     root = Path(tempfile.mkdtemp(prefix="gctl-guard-"))
+     vault = root / "docs" / "demo-knowledge"
+     for sub in ("Systems", "Verification", "Projects", "MOC"):
+         (vault / sub).mkdir(parents=True)
+     (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+     (vault / "Systems" / "Demo.md").write_bytes(
+@@ -17578,24 +17673,27 @@ def t_entry_points_agree_with_code_first():
+     """範本說「先讀程式碼」時,其他進場入口不准還在說「第一個工具呼叫是 lumos」。
+ 
+     翻紅釘:把三個檔任一個改回「第一個工具呼叫…不是 grep」的舊句式 → 這條紅。
+     """
+     root = _repo_root_for_discipline()
+     tpl = (root / "scripts" / "templates" / "graph-discipline.md")
+     if not tpl.is_file():
+         check("entry_points_agree: 範本不存在(skip)", True, "")
+         return
+     body = tpl.read_text(encoding="utf-8")
+-    if "先讀程式碼" not in body:
+-        # 定位又改回「圖譜先行」的話這道守衛自動讓位,不要變成擋路的化石
+-        check("entry_points_agree: 範本不是程式碼為主定位(skip)", True, "")
+-        return
++    # ★不准靜默 skip★(2026-09-21 外家審計):原本寫成「範本不含『先讀程式碼』就跳過」,
++    # 把那句改成同義詞(例如「先看原始碼」)整支守衛就不跑了,而且不會有人知道——
++    # 這是 fail-open。定位真的要改回去,是改這裡的斷言、留下痕跡,不是讓守衛自己消失。
++    check("entry_points_agree: 範本仍是程式碼為主定位",
++          "先讀程式碼" in body,
++          "範本的〈怎麼用〉第 1 步不再寫「先讀程式碼」。定位若真要改,"
++          "連同這支守衛與 _OLD_POSITION_PHRASES 一起改,不要靠改措辭讓守衛靜音")
+     for rel in _ENTRY_POINT_FILES:
+         f = root / rel
+         if not f.is_file():
+             check(f"entry_points_agree: {rel} 不存在", False, "進場入口檔被搬走或改名,守衛要跟著更新")
+             continue
+         txt = f.read_text(encoding="utf-8")
+         hit = [w for w in _OLD_POSITION_PHRASES if w in txt]
+         check(f"entry_points_agree: {rel} 沒有殘留舊定位說法",
+               not hit,
+               f"{rel} 還留著 {hit},跟範本的「程式碼為主、圖譜補脈絡」互斥")
+@@ -17619,20 +17717,88 @@ def t_template_keeps_absence_claim_guard():
+         check(f"absence_guard: {rel} 留著「換同義詞再查」",
+               "換三次" in txt, f"{rel} 少了「0 筆先換同義詞、換三次才問人」")
+         check(f"absence_guard: {rel} 留著「宣稱不存在要先派乾淨 agent 驗」",
+               "乾淨 agent" in txt, f"{rel} 少了「說沒有之前先派一個乾淨 agent 對一次」")
+         # r2 折入:第一版只釘原段落四點裡的兩點,第三點(單篇筆記內部新舊打架要去 code 裁)
+         # 被刪掉也不會紅。守衛的覆蓋範圍要跟它宣稱保護的段落對齊。
+         check(f"absence_guard: {rel} 留著「同一篇筆記內部也會新舊打架」",
+               "新舊打架" in txt, f"{rel} 少了「同一篇筆記內部新舊矛盾要去程式碼裁」")
+ 
+ 
++# 逐字內嵌範本〈寫筆記時〉那一段的檔。允許複製,但必須一字不差——
++# 2026-09-21 代碼審 r1 折入:第一版守衛只查「WHY:/RULE:/退場條件/以程式碼為準」這幾個 token
++# 在檔裡出現過沒有,審查席把整段真內容換成一行含這些字的裝飾註解,九條斷言照樣全綠;
++# 同一輪還發現兩份手打複本當下就已經全形/半形括號分岔。改成整段逐字比對,兩種都擋得住。
++_NOTE_CONVENTION_FILES = (
++    "skills/lumos-project-notes/SKILL.md",
++    "skills/lumos-project-notes/commands/03-寫回圖譜.md",
++)
++
++
++def _strip_html_comments(text):
++    """把 <!-- --> 整段拿掉——註解裡的內容讀的人看不到,不能拿來充數。"""
++    import re as _re
++    return _re.sub(r"<!--.*?-->", "", text, flags=_re.S)
++
++
++def _note_convention_block(root):
++    """從紀律範本抽出〈寫筆記時〉整節(到〈鐵則〉之前),這是分類規則的唯一來源。"""
++    tpl = root / "scripts" / "templates" / "graph-discipline.md"
++    if not tpl.is_file():
++        return None
++    body = tpl.read_text(encoding="utf-8")
++    try:
++        s = body.index("### 寫筆記時")
++        e = body.index("### 鐵則", s)
++    except ValueError:
++        return None
++    return body[s:e].strip()
++
++
++def t_note_convention_synced_to_skill():
++    """範本〈寫筆記時〉那一節,要一字不差地出現在寫筆記 skill 的兩個落腳處。
++
++    出身:範本注入每個專案的 CLAUDE.md,skill 是 AI 真正翻來查「該怎麼寫」的那份。
++    兩邊各寫各的就會分岔,而分岔正是這整批工作要解決的問題。
++    翻紅釘:改任一份複本的一個字(含全形半形標點) → 這條紅;把整段換成含關鍵字的註解 → 一樣紅。
++    """
++    root = _repo_root_for_discipline()
++    block = _note_convention_block(root)
++    if block is None:
++        check("note_convention: 範本或那一節不存在(skip)", True, "")
++        return
++    # 「退場條件」在 2026-09-21 外家審計後改成機械欄位 [retire:…],釘欄位名比釘散文穩
++    for w in ("WHY:", "RULE:", "PITFALL:", "FACT:", "[retire:", "[since:", "以程式碼為準"):
++        check(f"note_convention: 範本那一節本身還留著「{w}」", w in block,
++              f"範本的〈寫筆記時〉少了 {w},分類規則被改動或刪掉了")
++    for rel in _NOTE_CONVENTION_FILES:
++        f = root / rel
++        if not f.is_file():
++            check(f"note_convention: {rel} 不存在", False, "寫法規範的落腳處被搬走,守衛要跟著更新")
++            continue
++        txt = f.read_text(encoding="utf-8")
++        # ★註解不算數★(2026-09-21 外家審計實測):原本只判 `block in txt`,
++        # 把整段藏進 <!-- --> 再把正文改壞照樣全綠——讀的人看不到註解,等於規範消失。
++        visible = _strip_html_comments(txt)
++        check(f"note_convention: {rel} 逐字帶著範本那一節(且不在註解裡)",
++              block in visible,
++              f"{rel} 的複本跟範本對不上(連標點都要一樣,藏進 HTML 註解不算);"
++              "改規則改範本,再把整段複製過來")
++    # reference.md 不准自稱單一來源,否則又變成第三份會各自演化的定義
++    ref = root / "skills" / "lumos-project-notes" / "reference.md"
++    if ref.is_file():
++        rtxt = ref.read_text(encoding="utf-8")
++        check("note_convention: reference.md 指回範本、不自稱單一來源",
++              "分類規則的唯一來源是紀律範本" in rtxt,
++              "reference.md 要明寫規則以範本為準,不要再自己定義一次")
++
++
+ def t_doctor_reports_drift():
+     """CLAUDE.md block body 與範本不一致 → Check D 報漂移(issue≥1)。"""
+     import tempfile
+     TPL = "知識圖譜路徑:{{KG}}\n\n這是圖譜紀律說明。"
+     SLUG = "myproj"
+     block = _make_check_d_block(TPL, SLUG)
+     # 人為把 CLAUDE.md 的 block body 改一行
+     tampered_block = block.replace("這是圖譜紀律說明。", "這是被人改過的說明。")
+     claude_content = "# CLAUDE.md\n\n前言\n\n" + tampered_block + "\n\n後記\n"
+     with tempfile.TemporaryDirectory() as td:
+diff --git a/skills/lumos-project-notes/SKILL.md b/skills/lumos-project-notes/SKILL.md
+index edb30c61..e02b6fee 100644
+--- a/skills/lumos-project-notes/SKILL.md
++++ b/skills/lumos-project-notes/SKILL.md
+@@ -47,21 +47,40 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—
+ **合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+ ```
+ KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+ KEY:★DEBT★ <偶然行為,可改>
+ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+ ```
+ - 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+ - 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+ - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+ 
+-**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
++**摘要區塊**(Systems/Issues 必有)——分類規則的唯一來源是紀律範本 `scripts/templates/graph-discipline.md`,下面這段是它的逐字複本(`t_note_convention_synced_to_skill` 比對整段一字不差,兩邊分岔會紅):
++
++### 寫筆記時：先分「程式碼推不推得出來」
++
++摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
++
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
++
++`KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
++
++`TEST:` `VERIFY:` `DECISION:` `AUTH:` 照舊;Issues 另有 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN)。
++**為什麼要分**:抄進筆記的現況描述會過期,而讀的人分不出哪句是脈絡、哪句是過期的現況——2026-09 受控實驗裡,圖譜刻意寫錯的現況描述會讓較弱的模型照抄,在同一行標「以程式碼為準」才收得回來;反過來,程式碼推不出來的規則,有筆記的那組才守得住。單源 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]]。
++**寫 RULE 卻寫不出退場條件**,就是還沒想清楚這條該不該立——跟承認風險要附重驗條件同一個道理。
++
++**Issue 要四段齊**(這是「程式碼看不出的脈絡」最常落腳的地方,戊組實驗裡唯一有鑑別力的那題就靠它):① 症狀(看得到什麼) ② **根因**(為什麼會這樣,缺這段的 Issue 之後沒人敢動) ③ 現在怎麼繞 ④ 什麼條件算修好。已結案的 Issue 正文第一段要有結案橫幅並標明「以下是當時的排查紀錄,不是現況」(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+ **每支檔有家**(2026-09-11,提交前與推送前擋新違規,舊帳看 `lumos doctor` 的 S8–S10;單源 [[Projects/每支檔有家_計劃]]):① 每支程式檔要有一篇管它的 Systems 節點(about_code 列了它);新開用 `lumos new system <名> --code <檔> … --responsibility "<負責什麼、不負責什麼>"`,一個模組一篇 ② 節點只准用反引號寫自己家的檔,別人的檔寫成那支檔的家的 `[[連結]]`(寫了別人的檔名,改那支檔時就推出這篇,這就是節點長成一篇包全部的成因) ③ 改了程式要寫說明,寫進改到那支檔的家;要往圖譜寫說明,改到的每支檔都得先有家 ④ 新開的節點一律寫負責範圍,舊篇管超過 3 支檔也要 ⑤ 計劃寫 `lands_in`(現況落在哪幾篇,或新開哪一篇),設計審出口會看。
+ **標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(一篇一個主類;值域專案在 `.lumos/config.json` 宣告了 lint 才唸;feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+ 
+ **決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+ 
+ **承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+ 
+ ## 4. 收工
+ 
+ 1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+diff --git a/skills/lumos-project-notes/commands/03-寫回圖譜.md b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+index 2fe3a579..6eb218f1 100644
+--- a/skills/lumos-project-notes/commands/03-寫回圖譜.md
++++ b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+@@ -13,11 +13,45 @@
+ | 「推翻一條舊決策」 | `lumos decision-supersede <節點> "<片段或 #dN>" --by "<新決策>"`(要比對的片段是位置參數,沒有 --match) | 舊的標 valid:false 並指向新的;會開一本連鎖帳 | 建在被推翻決策上的筆記沒人提醒 |
+ | 「舊筆記的決策沒編號」 | `lumos decision-reindex <節點>` 或 `--all` | 補 dN | 無法被引用 |
+ | 「翻案後,鄰居筆記要不要跟著改?」 | `lumos rel-cascade list`;逐篇 `confirm`/`prune` `<鄰居> --cascade-id <id> --from <節點>#dN`;中斷後 `lumos rel-cascade resume <id>` | 帳本記你判過哪些 | doctor 的 E2 會一直提醒 |
+ | 「做完了,要留驗證紀錄並掛回功能」 | `lumos new verification <名> --plan … --systems …`;漏掛的事後 `lumos sync-verified-by --apply` | doctor 1/4~4/4 不再報孤兒 | 驗證沒人找得到 |
+ | 「某篇功能筆記內容我重新確認過還站得住」 | `lumos self-audit <節點> [--date …]` | 寫 self_audit 戳記 | doctor [S] 一直提醒 |
+ | 「業務方點頭了,要留痕」 | `lumos signoff <節點> --note "<確認了什麼>"` | 寫簽核帳 | — |
+ | 「計劃條款每條綁了測試沒」 | `lumos spec-trace <計劃節點>` | 每條 綁了/靠人/未標/懸空;有未標 rc1(舊制「誰認領」欄照印當對照) | 計劃結案但條款沒綁測試也沒寫怎麼驗 |
+ | 「老驗證紀錄太多,要歸檔」 | `lumos archive [--days N] [--apply]` | 先 dry-run 再 --apply | — |
+ | 「改名/搬檔」 | `scripts/graph-rename.sh <舊> <新>` | 連結一起改寫 | 手搬斷連結 |
+ 
++## 寫什麼進去(上面是敲什麼,這裡是寫什麼)
++
++**第一個問題永遠是:這句話程式碼推不推得出來。** 推得出來的別抄,抄了就會過期,而且讀的人分不出哪句是脈絡、哪句是過期的現況。
++
++分類規則的唯一來源是紀律範本 `scripts/templates/graph-discipline.md`,下面是它的逐字複本(`t_note_convention_synced_to_skill` 比對整段一字不差,兩邊分岔會紅):
++
++### 寫筆記時：先分「程式碼推不推得出來」
++
++摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
++
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
++
++`KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
++
++**寫不出來的時候**:
++- `WHY:` 查不到出處就先問人,不要憑印象寫。
++- `RULE:` 寫不出退場條件,就是還沒想清楚這條該不該立。
++- `PITFALL:` 沒有測試就附一條會重現的指令;兩個都沒有,這條只是感想。
++- `FACT:`/`FLOW:`/`DEP:` 先問要不要寫——`lumos search <詞> --code` 查得到的就刪掉這行。
++
++**重大決策填四欄**(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編——`decisions` 欄位是少數能挑戰程式碼的地方之一,所以它要經得起被引用。
++
++**Issue 要四段齊**:① 症狀(看得到什麼) ② **根因**(為什麼會這樣) ③ 現在怎麼繞 ④ 什麼條件算修好。
++- 缺根因的 Issue 之後沒人敢動,只能重查一遍。
++- Issue 是「程式碼看不出的規則」最常落腳的地方:2026-09 受控實驗四題裡,唯一分得出勝負的那題(大額退費要人工核可),規則就只寫在 Issue 裡——只看程式碼那組全錯,有筆記的組過半。
++- 結案的 Issue 正文第一段要有結案橫幅,並標明「以下是當時的排查紀錄,不是現況」。
++
++**承認風險要附回頭看的條件**:寫「沒機械守衛 / 只提醒不擋 / 單次量測」這類句子,旁邊必須有什麼時候重驗。帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`,**一行只講一件事**(doctor 到期唸的時候會截斷,後面黏別的內容會被吃掉)。
++
+ 寫完任何節點 → `lumos lint <節點>`(見 04)。
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 7e04f3a0..8b3683e8 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -23,22 +23,22 @@
+ | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
+ | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
+ | 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆;直接硬讀 code 會漏承重牆與 why |
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+-| 改完東西,要寫回圖譜 | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
++| 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+ | 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / guard list·scaffold·bind·audit·trace·kill-add·kill / ci-wait / ci-status |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
+-2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。
++2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別抄(會過期),要寫就標「以程式碼為準」加一條查詢指令;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index d4a05d3a..f3ef78b9 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -382,31 +382,41 @@ find docs/{vault-name} -name '*\]\]*'
+ 
+ ```bash
+ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="status/doing, type/project" type="list"
+ ```
+ 
+ 
+ ---
+ 
+ ## 摘要區塊
+ 
++### 先分「程式碼推不推得出來」（2026-09-21 起）
++
++**分類規則的唯一來源是紀律範本** `scripts/templates/graph-discipline.md` 的〈寫筆記時〉一節，它會被注入每個專案的 CLAUDE.md，所以動筆時本來就在眼前；`SKILL.md` 放的是它的逐字複本（`t_note_convention_synced_to_skill` 比對整段一字不差）。**這一節不重寫那張表**，只補範本放不下的東西：底下兩張符號表哪些前綴屬於哪一類、以及寫法範例。要改規則本身，改範本，不要改這裡。
++
++判準一句話：**程式碼推不推得出來，不是重不重要**。程式碼查得到的現況描述別抄，抄了就會過期。
++
+ ### summary 欄位（中文結構化摘要）
+ 
+ **所有 Systems 和 Issues 筆記必須有 `summary` 欄位。** 讓 Claude Code 掃一眼 frontmatter 就掌握模組全貌，不需要讀完整篇筆記。
+ 
+ 符號規則：
+ 
+ | 符號 | 用途 | 範例 |
+ |------|------|------|
+ | `FLOW:` | 核心流程 | `reserve→complete→void` |
+ | `AUTH:` | 認證方式 | `HMAC-SHA256`, `JWT` |
+-| `KEY:` | 關鍵概念/欄位 | `transactionId貫穿三階段` |
++| `KEY:` | 關鍵概念/欄位（**過渡標記，新筆記改用下面四類**） | `transactionId貫穿三階段` |
++| `WHY:` | 當初為什麼這樣決定（要求見上一節） | `[d3]改抽樣不全跑是因為預算 300 秒` |
++| `RULE:` | 程式看不到的限制（要求見上一節） | `[2026-09-21 起，退場:改用新閘後撤] 大額退費要人工核可` |
++| `PITFALL:` | 踩過的坑、事故根因（要求見上一節） | `[2026-09-05] 邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]` |
++| `FACT:` | 現況描述（要求見上一節） | `[以程式碼為準] 門檻 180 秒；查:grep FULL_SWEEP_SECONDS …` |
+ | `DEP:` | 依賴模組（用 wikilink） | `[[Billing]][[Inventory]]` |
+ | `TEST:` | 測試狀態 | `12/12通過(2026-04-07)` |
+ | `VERIFY:` | 驗證紀錄連結 | `[[2026-04-07_API審計修復]]` |
+ | `DECISION:` | 重大決策（簡版） | `[日期]內容(valid/superseded)` |
+ | `FLAG:` | 語意標記 | `TECHNICAL`, `DECISION`, `ORIGIN` |
+ | `→` | 流程方向 | `A→B→C` |
+ | `｜` | 分隔同類項目 | `A｜B｜C` |
+ | `,` | 分隔同欄細項 | `a,b,c` |
+ | `(valid)` | 現行有效 | |
+ | `(superseded)` | 已被取代 | |
+@@ -421,21 +431,23 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
+ 
+ > （以下為 2026-08-22 搬入版之精簡摘要符號表；兩版並存）
+ 
+ ### summary block(Systems/Issues 必有;掃一眼掌握全貌)
+ 
+ 每行一個前綴。Systems 重 `FLOW`+`KEY`+`DEP`+`TEST`;Issues 重 `FLAG`+`DECISION`+`KEY`;Verification 重 `TEST`+`VERIFY`。
+ 
+ | 前綴 | 用途 | 前綴 | 用途 |
+ |---|---|---|---|
+ | `FLOW:` | 核心流程 `a→b→c` | `VERIFY:` | 驗證紀錄 `[[..]]` |
+-| `KEY:` | 關鍵概念/欄位 | `DECISION:` | 決策簡版 `[日期]內容(valid)` |
++| `KEY:` | 關鍵概念/欄位（過渡） | `DECISION:` | 決策簡版 `[日期]內容(valid)` |
++| `WHY:` | 為什麼這樣決定 | `RULE:` | 程式看不到的限制 |
++| `PITFALL:` | 踩過的坑、事故根因 | `FACT:` | 現況描述（能查到的別抄） |
+ | `DEP:` | 依賴模組 `[[..]]` | `FLAG:` | 語意標記 TECHNICAL/DECISION/ORIGIN |
+ | `TEST:` | 測試狀態 | `AUTH:` | 認證方式 |
+ 
+ 分隔:`→` 流程方向、`｜` 分隔同類、`,` 分隔同欄。
+ 
+ ### ★已結案的 Issue:body 開頭必須有結案橫幅★(2026-08-13 立,血換的)
+ 
+ `status: done/resolved` 的 Issue 節點,**body 第一段就要寫「已結案 + 一句修法 + 一句實證」**,
+ 並標明「以下症狀/根因是當時的排查紀錄,不是現況」。
+ 

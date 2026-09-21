@@ -54,7 +54,17 @@ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPO
 - 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
 - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
 
-**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**摘要區塊**(Systems/Issues 必有)——分類規則的唯一來源是紀律範本 `scripts/templates/graph-discipline.md`,下面這段是它的逐字複本(`t_note_convention_synced_to_skill` 比對整段一字不差,兩邊分岔會紅):
+
+**分類規則不在這裡**:摘要行怎麼分類(`WHY:` / `RULE:` / `PITFALL:` / `FACT:`)、每類同一行還要有什麼,**唯一來源是紀律範本 `scripts/templates/graph-discipline.md` 的〈寫筆記時〉那一節**,它會被注入每個專案的 CLAUDE.md,動筆時本來就在你眼前,直接看那份。
+這裡刻意不放複本——複本前面被插一段唱反調的「快速版」、複本被藏進註解、複本標點跟本尊分岔,2026-09-21 一天之內被三種手法各繞過一次;守衛改成「不准有第二份定義」,比「複本要一字不差」穩。
+
+
+`TEST:` `VERIFY:` `DECISION:` `AUTH:` 照舊;Issues 另有 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN)。
+**為什麼要分**:抄進筆記的現況描述會過期,而讀的人分不出哪句是脈絡、哪句是過期的現況——2026-09 受控實驗裡,圖譜刻意寫錯的現況描述會讓較弱的模型照抄,在同一行標「以程式碼為準」才收得回來;反過來,程式碼推不出來的規則,有筆記的那組才守得住。單源 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]]。
+**寫 RULE 卻寫不出退場條件**,就是還沒想清楚這條該不該立——跟承認風險要附重驗條件同一個道理。
+
+**Issue 要四段齊**(這是「程式碼看不出的脈絡」最常落腳的地方,戊組實驗裡唯一有鑑別力的那題就靠它):① 症狀(看得到什麼) ② **根因**(為什麼會這樣,缺這段的 Issue 之後沒人敢動) ③ 現在怎麼繞 ④ 什麼條件算修好。已結案的 Issue 正文第一段要有結案橫幅並標明「以下是當時的排查紀錄,不是現況」(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
 **每支檔有家**(2026-09-11,提交前與推送前擋新違規,舊帳看 `lumos doctor` 的 S8–S10;單源 [[Projects/每支檔有家_計劃]]):① 每支程式檔要有一篇管它的 Systems 節點(about_code 列了它);新開用 `lumos new system <名> --code <檔> … --responsibility "<負責什麼、不負責什麼>"`,一個模組一篇 ② 節點只准用反引號寫自己家的檔,別人的檔寫成那支檔的家的 `[[連結]]`(寫了別人的檔名,改那支檔時就推出這篇,這就是節點長成一篇包全部的成因) ③ 改了程式要寫說明,寫進改到那支檔的家;要往圖譜寫說明,改到的每支檔都得先有家 ④ 新開的節點一律寫負責範圍,舊篇管超過 3 支檔也要 ⑤ 計劃寫 `lands_in`(現況落在哪幾篇,或新開哪一篇),設計審出口會看。
 **標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(一篇一個主類;值域專案在 `.lumos/config.json` 宣告了 lint 才唸;feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
 
