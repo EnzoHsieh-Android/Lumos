@@ -694,6 +694,74 @@ def t_install_global_hook_sync():
           not (h6 / "retired-example-hook.py").exists())
 
 
+def t_codeloop_pass_lists_dirty_bookkeeping():
+    """★留痕之後直接把「還沒提交的簿記檔」列成可貼的指令★
+
+    出身(2026-09-21 同一天犯兩次):留痕前會跑 anchor approve,簽名檔因此變髒;
+    提交帳本時我手打路徑清單、兩次都漏掉它,推送被「簽名檔改過了但沒提交」擋下。
+    這條不是新的閘,是把手打清單換成工具列出來——重複犯的是打字,不是判斷。
+    清單沿用既有的 _BOOKKEEPING_FILES / _BOOKKEEPING_DIRS,不自開第二份判準。
+    翻紅釘:把列印那段拿掉 → 第 2、3 條紅。
+    """
+    import subprocess as _sp, tempfile as _tf
+    from pathlib import Path as _P
+    src = _P(_tf.mkdtemp(prefix="clpass-")) / "repo"
+    (src / "docs").mkdir(parents=True)
+    _sp.run(["git", "init", "-q", str(src)], check=True)
+    (src / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (src / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
+    _sp.run(["git", "add", "-A"], cwd=str(src), check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+            cwd=str(src), check=True)
+
+    # 沒有任何簿記檔髒 → 不要多印東西煩人
+    r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "乾淨", "--repo", str(src)],
+                capture_output=True, text=True)
+    check("留痕本身成功", r.returncode == 0, r.stdout + r.stderr)
+    clean_has = "還沒提交" in r.stdout
+    # pass 自己會寫治理帳 → 它一定會髒,所以這裡預期「有列出來」
+    check("留痕寫了治理帳,就要列出它還沒提交", clean_has, r.stdout)
+
+    # 簽名檔也髒 → 兩個都要列在同一行指令裡
+    (src / "governance").mkdir(exist_ok=True)
+    (src / "governance" / "anchor-baseline.json").write_text("{}\n", encoding="utf-8")
+    r2 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "兩個都髒", "--repo", str(src)],
+                 capture_output=True, text=True)
+    check("簽名檔也列進去", "governance/anchor-baseline.json" in r2.stdout, r2.stdout)
+    check("列成可直接貼的提交指令",
+          "git commit" in r2.stdout and "docs/.governance-log.jsonl" in r2.stdout, r2.stdout)
+    check("不擋,只是多印一段", r2.returncode == 0, r2.stdout + r2.stderr)
+
+    # ★卷證目錄不准列進來★(2026-09-21 自己試跑時踩到):真 repo 裡那些目錄有別的 session
+    # 的檔,一起列出來會有 126 個,照貼等於提交別人的東西。卷證屬於功能提交。
+    ev = src / "governance" / "review-reports" / "code-x"
+    ev.mkdir(parents=True, exist_ok=True)
+    (ev / "r1-別人的報告.md").write_text("x\n", encoding="utf-8")
+    r3 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "有卷證", "--repo", str(src)],
+                 capture_output=True, text=True)
+    check("卷證目錄不列進帳本提交指令",
+          "review-reports" not in r3.stdout, r3.stdout[-400:])
+    check("帳本檔照樣列", "docs/.governance-log.jsonl" in r3.stdout, r3.stdout[-400:])
+
+    # ★改名狀態的第二個片段是裸路徑★(2026-09-21 審查席 minor):
+    # porcelain -z 對 R/C 會吐兩個片段,第二個沒有「兩碼狀態+空白」前綴,
+    # 一律切 ent[3:] 會把它砍掉三個字元變成垃圾字串。
+    # ★直接測解析★:走完整流程測不出來——切壞的字串本來就不會命中白名單,
+    # 那種測試是假綠,釘不住這個修正。
+    import importlib.util as _ilu
+    from importlib.machinery import SourceFileLoader as _SFL
+    _spec = _ilu.spec_from_file_location("_lumos_pz", GRAPHCTL, loader=_SFL("_lumos_pz", GRAPHCTL))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    raw = "R  docs/new.jsonl\0docs/.governance-log.jsonl\0 M docs/.usage-log.jsonl\0"
+    paths = _m._porcelain_z_paths(raw)
+    check("改名的新路徑取得到", "docs/new.jsonl" in paths, str(paths))
+    check("改名的舊路徑不被當成新條目切壞",
+          not any(x.startswith("s/") or x == "s/.governance-log.jsonl" for x in paths), str(paths))
+    check("一般修改照樣取得到", "docs/.usage-log.jsonl" in paths, str(paths))
+    check("改名只算一個條目", len(paths) == 2, str(paths))
+
+
 def t_probe_detects_rotten_targets():
     """★題目指的東西不見了要當場紅,不能安靜地量出假訊號★
 

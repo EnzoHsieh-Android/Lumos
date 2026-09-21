@@ -27033,6 +27033,61 @@ def _codeloop_read_from_ledger(repo_root, branch):
             "note": last.get("detail"), "ts": last.get("ts"), "_source": "ledger"}
 
 
+def _porcelain_z_paths(out):
+    """把 `git status --porcelain -z` 的輸出切成路徑清單。
+
+    ★改名/複製會吐兩個片段★(2026-09-21 審查席):第一個是「兩碼狀態+空白+新路徑」,
+    第二個是**裸的舊路徑,沒有前綴**。一律切 [3:] 會把舊路徑砍掉三個字元變成垃圾字串。
+    目前帳本白名單全是固定字面路徑所以打不到,但前提本身是錯的,白名單一擴充就會漏列。
+    """
+    parts = [x for x in out.split("\0") if x]
+    paths, i = [], 0
+    while i < len(parts):
+        ent = parts[i]
+        if len(ent) < 4:
+            i += 1
+            continue
+        paths.append(ent[3:])
+        i += 2 if (ent[0] in ("R", "C") or ent[1] in ("R", "C")) else 1
+    return paths
+
+
+def _codeloop_print_dirty_bookkeeping(repo_root, status):
+    """留痕之後,把「還沒提交的簿記檔」列成一行可直接貼的提交指令。
+
+    ★不是新的閘,是把手打路徑清單換成工具列出來★(2026-09-21 同一天犯兩次):
+    留痕前通常剛跑過 anchor approve,簽名檔因此變髒;人手打清單時漏掉它,
+    推送會被「簽名檔改過了但沒提交」擋下——重複犯的是打字,不是判斷。
+    清單沿用 _BOOKKEEPING_FILES / _BOOKKEEPING_DIRS,不自開第二份判準。
+    """
+    import subprocess as _sp
+    # -uall:未追蹤的目錄預設會被摺成一行(例如只印 governance/),逐檔列才對得上白名單
+    r = _sp.run(["git", "status", "--porcelain", "-z", "-uall"], cwd=str(repo_root),
+                capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:
+        return
+    dirty = []
+    for rel in _porcelain_z_paths(r.stdout):
+        # ★只列帳本檔本身,不列卷證目錄★(2026-09-21 自己試跑時踩到):
+        # 把 _BOOKKEEPING_DIRS 一起算進來會列出 126 個檔,裡面全是別的 session 的
+        # 審查卷證與舊的未提交證據——照貼會把別人的檔一起提交(同工作區夾帶風險)。
+        # 卷證屬於功能提交,帳本檔才是留痕之後該單獨提交的東西。
+        if rel in _BOOKKEEPING_FILES and rel not in dirty:
+            dirty.append(rel)
+    if not dirty:
+        return
+    msg = "chore(lumos): 記錄代碼審通過" if status == "passed" else "chore(lumos): 記錄代碼審跳過"
+    print(f"  這幾個簿記檔還沒提交({len(dirty)} 個)——留痕之後只准提交它們,漏掉哪個推送都會被擋:")
+    quoted = " ".join(_sh_quote(d) for d in dirty)
+    print(f"    git commit -m '{msg}' -- {quoted}")
+
+
+def _sh_quote(s):
+    """路徑含空白或中文時照樣貼得上去。"""
+    import shlex
+    return shlex.quote(s)
+
+
 def _codeloop_write(repo_root, branch, status, note, head_sha, ts):
     """寫 governance/code-loop/<branch>.json。"""
     import json
@@ -28567,6 +28622,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
         what = "審查通過,已留痕" if status == "passed" else "刻意跳過審查,已留痕"
         print(f"{label} code-loop {status}:{what}(分支 {branch},版本 {head_sha[:8]})" + (f"——{note}" if note else ""))
         print("  這筆紀錄只認目前這個版本:之後再改任何程式碼(工具自己的紀錄檔除外)它就失效,要重跑一次 pass 或 skip。")
+        _codeloop_print_dirty_bookkeeping(repo_root, status)
         return 0
 
     if subcmd == "check":

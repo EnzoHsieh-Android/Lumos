@@ -27,6 +27,7 @@ verified_by:
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-09_審查有沒有用記帳落地]]"
 summary: |-
+  PITFALL:[2026-09-21]★留痕之後手打帳本提交的路徑清單,同一天漏掉簽名檔兩次★——每次 `anchor approve` 都會弄髒簽名檔,而推送前的閘會擋「簽名檔改過了但沒提交」(它擋的是本機綠、CI 會紅)。現在 `code-loop pass|skip` 收尾會把還沒提交的帳本檔列成一行可直接貼的提交指令。★只列帳本檔,不列卷證目錄★:一起列會變成上百個檔、混進別的 session 的卷證,照貼等於提交別人的東西。[test:t_codeloop_pass_lists_dirty_bookkeeping];解析 `git status --porcelain -z` 時改名會吐兩個片段(第二個是裸的舊路徑),拆成 `_porcelain_z_paths` 處理——走完整流程測不出這個(切壞的字串本來就不會命中白名單),所以直接餵合成輸出測解析。
   KEY:[2026-09-17 風險低放行].canary-log.jsonl 多一種 kind=spec-gate(規格閘留痕:door/tests/clause_sha/door_rule/exclusions),不是審查輪:_loop_records 與 loop status 讀帳時略過,不算席數、不使輪無效;寫側走同一支 _jsonl_append_verified+vault 寫入鎖;讀它的只有 [[Systems/規格閘]] 的推送前檢查、_door_for_loop(逃逸帳分門)與 doctor S14 [test:t_round_valid_ignores_spec_gate]
   KEY:[2026-09-09 審查有沒有用記帳]寫側第三道硬擋:席報告沒正規化(檔首檔級行、每條 finding 恰一行獨立 severity、殘留寫法)→ rc2 並在治理帳留 canary/blocked;`reported` 由機器數落帳、--findings 不得多於它;載體必帶 --refuted-set(intake 整字驗);問閘尾一行「席位報→存活/重現不到→折/放行」(觀測不進合取,舊帳印 ?)[test:t_canary_reported_normalized][test:t_canary_refuted_set][test:t_gov_stats_review_yield];單源 [[Projects/審查有沒有用記帳_計劃]]
   KEY:[2026-08-05]`loop canary-stats [<id>]`——d4 跨輪累積帳的★讀取面★(席位×caught/missed×尾端連續 missed;streak≥2 印「升 opus」提示=該升級規則的機械眼);唯讀恆 rc0、壞行跳過註記、不進任何 gate [test:t_loop_canary_stats]。★[2026-08-14 停用制適配]★協議停用(canary-audit d5)後升級訊號改看 quote-check,本報表轉歷史帳回放;對純 none 的停用制 loop 印停用提示而非「無記錄」(終審 F1:原樣會誤讀成什麼都沒發生),none 輪計數顯示但不入 caught/missed 統計 [test:t_loop_panel_none_kind]
