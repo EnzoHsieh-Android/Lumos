@@ -15,7 +15,7 @@ You describe goals, clarify constraints, and make trade-offs in conversation. Wi
 
 Lumos connects rules and checks to that workflow. When a requirement is unmet, the AI receives the reason for the block, addresses it or asks you to decide, and records decisions and verification results for future work. A change leaves more than code: it also leaves the reasoning, its impact, and how it was checked.
 
-Each change moves through four stations: **Notes → Dispatch → Review → Write-back**. Around that loop, evals use the accumulated records to check and calibrate the process.
+The code is the reference for what exists today; each change moves through four stations: **Notes → Dispatch → Review → Write-back**, which add what the code cannot produce. Around that loop, evals use the accumulated records to check and calibrate the process.
 
 [Who it's for](#who-this-is-for) · [Install](#getting-it-installed) · [First use](#your-first-time-through) · [How it works](#how-it-works) · [Limits and scope](#scope) · [Documentation](#going-deeper)
 
@@ -74,7 +74,7 @@ For Windows, existing Lumos projects, offline installation, and removal, see [on
 
 Start with a small change that is easy to verify. For example, tell the AI:
 
-> Add refunds to the existing payment flow. First check the project notes and identify rules that must hold, affected areas, and how to verify the change. Confirm the approach before implementing it, then write back the decisions and verification results.
+> Add refunds to the existing payment flow. Read the existing code first and propose an approach, then check the project notes for constraints and incidents the code cannot show. Identify rules that must hold, affected areas, and how to verify the change. Confirm the approach before implementing it, then write back the decisions and verification results.
 
 This illustrates the workflow; it is not a complete refund specification. If eligibility, amounts, or permissions are unclear, the AI should ask you.
 
@@ -98,7 +98,7 @@ At the end, look for three things: **what changed, what was actually verified, a
 
 ### ① Notes
 
-retrieve the context the change needs.
+add back what the code cannot produce.
 
 <p align="center">
   <a href="assets/graph-demo-en.svg">
@@ -106,13 +106,19 @@ retrieve the context the change needs.
   </a>
 </p>
 
-The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records design reasoning, module boundaries, important rules, incident lessons, and the conditions under which something was verified.
+The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records what the code cannot show: design reasoning, alternatives that were rejected, constraints invisible to the code, incident lessons, and the conditions under which something was verified.
+
+Facts you can look up in the code — field names, default values, data flow — should not be copied into a note. A copy goes stale, and the next reader cannot tell which line is context and which is an outdated description. If you must write one, say on the same line that the code is the reference and attach a query that can be re-run; the note check flags lines that do not.
 
 Every source file needs one note that owns it, and the tool blocks a commit that adds a file nobody owns. When you change that file, its owning note is pushed to the front — but only if the note's own text actually mentions the file; listing it in a field is not enough. The restriction exists to stop a note from growing into "one note for everything": a note that names ten modules' files gets pushed for any of the ten, so it keeps growing and nobody wants to read it.
 
 The shop example connects plans, modules, important rules, and their verification records.
 
 The AI can search by question or look up notes associated with a changed file, retrieving material relevant to the task. **Registered links are not a complete dependency analysis**: the graph provides leads that still need checking against code and actual behaviour.
+
+When a note and the code disagree, look at where the sentence sits, not at how confident it sounds. **Decision records, contract lines, issues, verification records, and rule lines that carry a source and a retirement condition** may say the code is wrong; everything else defers to the code, and the note is corrected or filed as an issue.
+
+The code is not a container for every current fact, though: deployment settings, feature flags, database values and production behaviour are not in the source. Those conflicts cannot be settled by deferring to the code — run it, look it up, or bring it back to you.
 
 Important rules can be marked as contracts and bound to tests. That makes a “must not change” claim traceable, but passing tests establish only the scenarios they cover. Whether a rule still fits the business is not a tool-only decision.
 
