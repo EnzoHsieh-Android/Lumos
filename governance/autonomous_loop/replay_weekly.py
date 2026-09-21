@@ -16,6 +16,10 @@ from pathlib import Path
 
 BUDGET_SECONDS = 300
 SAMPLE_PER_WEEK = 5
+# 「跑得完就全量跑」的門檻(秒)。2026-08-26 訂 60 秒,當時 17 包、0.24 秒一包;2026-09-21 存量 134 包、
+# 實測全量 58 秒、平均 0.45 秒一包 → 估算 60.3 秒剛好卡在門檻外,於是每週只抽 5 包、跑完一圈要半年。
+# 放寬到 180 秒(仍在 300 秒總預算內,且下面的 _left() 會再擋一次):存量成長到約 400 包才會退回抽樣。
+FULL_SWEEP_SECONDS = 180
 RED_MARKERS = ("邏輯漂移", "帳被動", "凍結檔被動", "佚失")
 STALE_MARKER = "golden 過期"
 
@@ -108,7 +112,8 @@ def run_weekly(repo, lumos="scripts/lumos"):
     sample = pool[:SAMPLE_PER_WEEK]
 
     # ── ③ 回放(預算內);跑完基本盤後按實測耗時判「升級全量」——
-    # spec 機械條件:單包耗時×存量 ≤60 秒就全跑(2026-08-26 首跑實測 0.24s/包,17 包 4.1s)。
+    # spec 機械條件:單包耗時×存量 ≤FULL_SWEEP_SECONDS 就全跑(2026-08-26 首跑實測 0.24s/包,17 包 4.1s;
+    # 2026-09-21 存量 134 包、全量 58 秒,門檻從 60 放寬到 180 秒——見常數旁的說明)。
     def _replay_one(lid):
         if _left() < 15:
             out["skipped"].append(lid)
@@ -137,7 +142,7 @@ def run_weekly(repo, lumos="scripts/lumos"):
     rest = [l for l in allv if l not in set(base)]
     if base and out["replayed"] and rest:
         avg = spent / max(1, len(out["replayed"]))
-        if avg * len(allv) <= 60 and _left() > avg * len(rest) + 15:
+        if avg * len(allv) <= FULL_SWEEP_SECONDS and _left() > avg * len(rest) + 15:
             for lid in rest:
                 _replay_one(lid)
             sample = sample + rest   # 全跑視同整圈抽完(游標推進涵蓋)

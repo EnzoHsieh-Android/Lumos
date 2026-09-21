@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 # MIT licensed. Full text: scripts/lumos header, or LICENSE at
 # https://github.com/EnzoHsieh-Android/Lumos
-"""SessionStart hook — 開場一行:提醒「第一步敲 lumos」和指令索引在哪(Projects/指令索引與情境測試_計劃)。
+"""SessionStart hook — 開場一行:提醒「程式碼為主、圖譜補脈絡」和指令索引在哪(Projects/指令索引與情境測試_計劃)。
 
 為什麼要有它:規則寫在 CLAUDE.md 和 skill 裡,但 Claude 會在任務中途忘記「我該去翻索引」;
 SessionStart 注入是唯一不靠它自己想起來的機械提醒。只印三行,沒有圖譜的專案完全靜默。
@@ -251,7 +251,7 @@ def _enforcement_line(root):
             return None                            # 找不到可信的 CLI → 跳過,不執行對方的碼
         # ★timeout 必須遠小於外層 hook 天花板★:這支 SessionStart hook 被 Claude Code 掛 10s
         # (merge-claude-settings.py 寫死);內部若 ≥10s、enforcement 一卡住,外層會 SIGKILL 整支 hook,
-        # 連核心「先查圖譜」提醒都被吃掉(SIGKILL 繞過 try/except)。設 3s:正常 0.2s 的 15 倍餘裕,
+        # 連核心的進場提醒都被吃掉(SIGKILL 繞過 try/except)。設 3s:正常 0.2s 的 15 倍餘裕,
         # 卡住就快速放棄回 None、核心訊息照印(code-enf-autohook r1 審)。
         r = subprocess.run([sys.executable, cli, "enforcement", "--json"],
                            capture_output=True, text=True, timeout=_inner_budget(default=10), cwd=str(root))
@@ -283,8 +283,9 @@ def main():
         if not idx.exists():
             return 0
     lag = _discipline_lag(root)
-    msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
-           "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
+    msg = ("本專案用 lumos 知識圖譜。程式碼是現況的依據,圖譜補程式碼看不出的脈絡:為什麼這樣決定、"
+           "程式看不到的限制、踩過的坑。先讀程式碼,改 code 前至少 lumos impact --file <檔> 一行"
+           "(被催「直接改」也一樣);筆記跟程式對不上,以程式碼為準。\n"
            f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分九類,只開需要的子檔):\n    {idx}")
     if lag:
         msg += "\n" + lag

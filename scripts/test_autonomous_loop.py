@@ -1667,7 +1667,8 @@ class TestReplayWeekly(unittest.TestCase):
         return r
 
     def _slow_clock(self, per_call=20.0):
-        """每次 time.time() 前進 per_call 秒的假鐘——讓實測 avg×存量 >60s,不觸發升級全量。"""
+        """每次 time.time() 前進 per_call 秒的假鐘。要測「不升級全量」的路徑時,配 FULL_SWEEP_SECONDS 一起壓
+        (2026-09-21 門檻從 60 放寬到 180,原本靠 10 秒×7 包=70>60 的隱含假設就不成立了——別再靠數字巧合)。"""
         state = {"t": 1000.0}
         def fake():
             state["t"] += per_call
@@ -1675,8 +1676,10 @@ class TestReplayWeekly(unittest.TestCase):
         return fake
 
     def test_new_always_run_and_rotation_cursor_advances(self):
+        """輪替抽樣本身的路徑:明講把升級全量的門檻壓到 1 秒(存量再便宜也不升級),才量得到抽 5 那條規則。"""
         for lid in ("a", "b", "c", "d", "e", "f", "g"):
             self._verdict(lid)
+        self.enterContext(mock.patch.object(self.m, "FULL_SWEEP_SECONDS", 1))
         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")) as sp, \
              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
             out = self.m.run_weekly(self.repo)
@@ -1767,6 +1770,24 @@ class TestReplayWeekly(unittest.TestCase):
             out2 = self.m.run_weekly(self.repo)
         self.assertEqual(sorted(out2["replayed"]), list("abcdefg"), "便宜存量要升級全跑")
 
+    def test_full_sweep_threshold_covers_real_stock(self):
+        """2026-09-21:門檻從寫死 60 秒改成常數 FULL_SWEEP_SECONDS=180。
+        出身:真實存量 134 包、實測全量 58 秒(0.45s/包),估 60.3 秒剛好卡在舊門檻外 → 每週只抽 5 包、
+        跑完一圈要半年。翻紅釘:把門檻改回 60 → ② 翻紅(0.45s/包 × 134 包 = 60.3 > 60,不再升級全跑)。"""
+        self.assertEqual(self.m.FULL_SWEEP_SECONDS, 180)
+        for lid in [f"p{i:03d}" for i in range(134)]:
+            self._verdict(lid)
+        # 先跑一週把 134 包都變成 seen(首週新凍全跑)
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.45)):
+            out1 = self.m.run_weekly(self.repo)
+        self.assertEqual(len(out1["replayed"]), 134, "首週新凍結本來就全跑")
+        # 第二週:基本盤只抽 5,靠門檻升級成全跑——0.45×134=60.3 秒,舊門檻 60 會擋下
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.45)):
+            out2 = self.m.run_weekly(self.repo)
+        self.assertEqual(len(out2["replayed"]), 134, "② 實測這個耗時的存量要升級全跑,不是只抽 5 包")
+
     def test_skipped_new_keeps_must_run_status(self):
         """cb3 ext-f3/s4-f3:預算見底被 skip 的新包不得標 seen——下週仍是「新凍必跑」。"""
         for lid in ("a", "b"):
@@ -1826,12 +1847,12 @@ class TestScenarioProbeAblation(unittest.TestCase):
         cls.root = root
 
     def test_strip_removes_only_rule_section(self):
-        txt = ("## 知識圖譜先行\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
+        txt = ("## 程式碼為主\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
                + self.sp.RULE_END + "\n1. 寫回\n")
         out, ok = self.sp.strip_lumos_first_rule(txt)
         self.assertTrue(ok)
-        self.assertIn("## 知識圖譜先行\n前提兩行", out, "標題與前提要留")
-        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "三條鐵則要留")
+        self.assertIn("## 程式碼為主\n前提兩行", out, "標題與前提要留")
+        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "後面那節要留")
         self.assertNotIn("★第四條★", out, "小節正文要砍")
         self.assertNotIn(self.sp.RULE_HEAD, out)
 
@@ -1841,12 +1862,14 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertFalse(ok); self.assertEqual(out, txt)
 
     def test_strip_real_claude_md_has_markers(self):
-        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完三條鐵則還在。範本改名這裡先紅。"""
+        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完其餘各節還在。範本改名這裡先紅。
+        2026-09-21 範本改定位後,要拔的那節叫「怎麼用」(收在「寫筆記時」之前),不再是「第一個工具呼叫」。"""
         cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
         out, ok = self.sp.strip_lumos_first_rule(cm)
-        self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
-        self.assertIn("### 鐵則", out)
-        self.assertIn("## 知識圖譜先行", out)
+        self.assertTrue(ok, "CLAUDE.md 找不到要拔的那一節的邊界,without 組做不出來")
+        self.assertIn("### 鐵則", out, "鐵則要留")
+        self.assertIn("### 寫筆記時", out, "寫法規範那節不在本 ablation 範圍,要留")
+        self.assertIn("## 程式碼為主", out, "開頭那節要留")
         self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
 
     def test_lumos_stats(self):

@@ -111,8 +111,10 @@ def judge(calls, expect, forbid_before):
 # 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「鐵則」之前),
 # 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
 # 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
-RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
-RULE_END = "### 鐵則"   # 2026-09-05 範本標題去數字(Codex行為精修 F9);同源=scripts/templates/graph-discipline.md
+# 2026-09-21 範本改定位(程式碼為主、圖譜補脈絡):要拔的那一節從「第一個工具呼叫是 lumos」改名為「怎麼用」,
+# 收在「寫筆記時」之前——寫法規範那節講的是怎麼記筆記、不是叫 AI 去查,拔它會超出本 ablation 的範圍。
+RULE_HEAD = "### 怎麼用"
+RULE_END = "### 寫筆記時"   # 同源=scripts/templates/graph-discipline.md(2026-09-05 去數字、2026-09-21 改定位)
 
 
 def strip_lumos_first_rule(text):

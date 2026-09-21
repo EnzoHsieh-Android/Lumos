@@ -5,6 +5,7 @@ created: 2026-06-26
 updated: 2026-08-30
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-08-30/6964ab246141
+responsibility: 負責每天 09:30 自動迴圈的編排:選題、派工、收斂、每週凍結判定回放與預算控制(含 `governance/autonomous_loop/replay_weekly.py` 的抽樣與升級全量門檻);不負責審查迴圈本身的判準、也不負責 gap 的內容品質
 tags:
   - type/system
   - status/done
@@ -34,7 +35,8 @@ summary: |-
   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
   KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 `main "$@"; exit`——bash 邊讀邊跑,跑到一半改檔會從舊 byte 位置續讀(當天實發生 syntax error 後段全沒跑;沒 exit 更會整支重跑一遍)。守衛 [test:t_daily_governance_wrapper_is_function_wrapped](前奏白名單/五步名冊/結尾 exit/bash -n);之後再有長跑 wrapper 沿用這個寫法,不要各自發明(代碼審 r1 架構對齊席)。實驗 [[Verification/2026-09-05_wrapper邊跑邊改實驗]]
   KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了——而三處筆記寫著「便宜的日常段照跑」,落地當下那句就是假的。★監看的東西和被監看的東西同命★,回訪到期的升級鏈因此沒有出口,那正是同期「五件逾期沒人管」的上游原因。修法照 feature toggle 只包最小單元:開關搬進 autonomous-loop.sh、放在選 gap 之前,wrapper 無條件呼叫 [test:t_autoloop_pause_only_stops_dispatch]
-  DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
+  KEY:[2026-09-21]回放週跑的「夠快就全量跑」門檻改成常數 `FULL_SWEEP_SECONDS=180`(原本寫死 60 秒):存量長到 134 包、實測全量 58 秒、平均 0.45 秒一包,估 60.3 秒剛好卡在舊門檻外,於是每週只抽 5 包、跑完一圈要半年(游標實況 done 110/134)。180 秒仍在 300 秒總預算內,存量約 400 包才會退回抽樣;測試 t_full_sweep_threshold_covers_real_stock 用 134 包 × 0.45 秒釘住,門檻改回 60 就翻紅
+  DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger,replay_weekly}.py(replay_weekly=每週凍結判定回放:新凍必跑+輪替抽 5,實測夠便宜才升級全量) + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
   TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(入口現=daily-governance 09:30;測試數 2026-08-30 為 106 條)
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
 decisions:
@@ -109,6 +111,7 @@ about_code:
   - governance/autonomous_loop/cross_audit.py
   - governance/autonomous_loop/gap_select.py
   - governance/daily-governance.sh
+  - governance/autonomous_loop/replay_weekly.py
 aliases:
   - daily-governance.sh
   - 自動迭代排程

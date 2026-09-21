@@ -17536,6 +17536,93 @@ def t_claude_block_matches_template():
           f"rc={r.returncode}\nstdout={r.stdout}")
 
 
+def _repo_root_for_discipline():
+    return Path(GRAPHCTL).resolve().parent.parent
+
+
+# 這兩支是 2026-09-21 代碼審 r1 折入的漂移守衛。範本改成「程式碼為主」時,同一套
+# 進場規矩還有三份硬編副本(SessionStart hook 的提醒、skill 索引、skill 進場頁)沒跟著改,
+# 一個 session 會同時收到兩套互斥的「第一步」。機制同步只改最相關那份、漏掉散落副本是
+# 本 repo 反覆踩過的形狀,所以這裡用機械守衛釘住,不靠紀律。
+# 2026-09-21 代碼審 r2 折入:第一版只盯三個檔、只比對「第一個工具呼叫」這一種措辭,
+# 結果漏掉 AGENTS.md 自己在區塊外寫的「圖譜先行」「圖譜是唯一真相來源」與架構圖的標籤
+# ——換個說法就繞過去了。改成「入口檔 × 舊定位說法」的白名單掃描,措辭列表跟著檔一起長。
+_ENTRY_POINT_FILES = (
+    "scripts/hooks/claude/lumos-entry-hook.py",
+    "skills/lumos-project-notes/commands/INDEX.md",
+    "skills/lumos-project-notes/commands/01-進場查脈絡.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "ARCHITECTURE.md",
+    "README.md",
+    # r3 折入:這篇的流程圖被改成新定位,但它自己的 FLOW 摘要行(lumos search / context --brief
+    # 端出去的就是這段)還在講舊順序——同一篇筆記內部新舊打架,而計劃筆記卻宣稱守衛釘住了它。
+    "docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md",
+)
+# 舊定位的說法。這幾句只要出現在「會被當成指令讀」的入口檔就是矛盾;
+# 歷史筆記、卷證、實驗紀錄照樣可以寫,不在掃描範圍內。
+# r3 折入:第二版只列三句,但「先查圖譜」「第一步敲 lumos」這兩種更口語的說法沒收進來,
+# 已經在掃描名單裡的檔案照樣漏網。措辭清單現在管的是「宣告順序」的說法,不是「圖譜」這個詞本身
+# ——描述工具用途可以提圖譜,宣告「先查圖譜」就是舊定位。
+# ★這是第二次靠「把清單加長」收斂。再漏第三次不要再加字串,改成結構保證:
+#   把定位那句話做成單一來源、像紀律區塊一樣注入這幾個檔,讓它不可能各寫各的。
+#   REVISIT:2026-11-21 看這半年有沒有第三次漏網,有就改形狀。★
+_OLD_POSITION_PHRASES = ("第一個工具呼叫", "圖譜先行", "唯一真相來源",
+                         "先查圖譜", "第一步敲 lumos")
+
+
+def t_entry_points_agree_with_code_first():
+    """範本說「先讀程式碼」時,其他進場入口不准還在說「第一個工具呼叫是 lumos」。
+
+    翻紅釘:把三個檔任一個改回「第一個工具呼叫…不是 grep」的舊句式 → 這條紅。
+    """
+    root = _repo_root_for_discipline()
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md")
+    if not tpl.is_file():
+        check("entry_points_agree: 範本不存在(skip)", True, "")
+        return
+    body = tpl.read_text(encoding="utf-8")
+    if "先讀程式碼" not in body:
+        # 定位又改回「圖譜先行」的話這道守衛自動讓位,不要變成擋路的化石
+        check("entry_points_agree: 範本不是程式碼為主定位(skip)", True, "")
+        return
+    for rel in _ENTRY_POINT_FILES:
+        f = root / rel
+        if not f.is_file():
+            check(f"entry_points_agree: {rel} 不存在", False, "進場入口檔被搬走或改名,守衛要跟著更新")
+            continue
+        txt = f.read_text(encoding="utf-8")
+        hit = [w for w in _OLD_POSITION_PHRASES if w in txt]
+        check(f"entry_points_agree: {rel} 沒有殘留舊定位說法",
+              not hit,
+              f"{rel} 還留著 {hit},跟範本的「程式碼為主、圖譜補脈絡」互斥")
+
+
+def t_template_keeps_absence_claim_guard():
+    """「查 0 筆不等於沒有、宣稱不存在前先驗證」這道守衛不得隨改版被整段刪掉。
+
+    它管的是任何 AI 說「沒人做過 / 不存在」之前要不要先驗證,跟圖譜先不先行無關;
+    2026-09-21 改定位時被整段刪掉、九個消費專案會跟著失去這道保護,由代碼審接住。
+    翻紅釘:把範本裡那段拿掉 → 這條紅。
+    """
+    root = _repo_root_for_discipline()
+    targets = ["scripts/templates/graph-discipline.md", "CLAUDE.md", "AGENTS.md"]
+    for rel in targets:
+        f = root / rel
+        if not f.is_file():
+            check(f"absence_guard: {rel} 不存在(skip)", True, "")
+            continue
+        txt = f.read_text(encoding="utf-8")
+        check(f"absence_guard: {rel} 留著「換同義詞再查」",
+              "換三次" in txt, f"{rel} 少了「0 筆先換同義詞、換三次才問人」")
+        check(f"absence_guard: {rel} 留著「宣稱不存在要先派乾淨 agent 驗」",
+              "乾淨 agent" in txt, f"{rel} 少了「說沒有之前先派一個乾淨 agent 對一次」")
+        # r2 折入:第一版只釘原段落四點裡的兩點,第三點(單篇筆記內部新舊打架要去 code 裁)
+        # 被刪掉也不會紅。守衛的覆蓋範圍要跟它宣稱保護的段落對齊。
+        check(f"absence_guard: {rel} 留著「同一篇筆記內部也會新舊打架」",
+              "新舊打架" in txt, f"{rel} 少了「同一篇筆記內部新舊矛盾要去程式碼裁」")
+
+
 def t_doctor_reports_drift():
     """CLAUDE.md block body 與範本不一致 → Check D 報漂移(issue≥1)。"""
     import tempfile
@@ -28129,6 +28216,12 @@ def t_symbol_vocab_single_source_and_reach():
     check("② 既有九值一個都沒少",
           {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE"}
           <= set(m.SYMBOL_NAMES), str(sorted(m.SYMBOL_NAMES)))
+    # 2026-09-21:紀律範本改定位後,寫筆記要用 WHY/RULE/PITFALL/FACT 分類「程式碼推不推得出來」。
+    # 範本叫人寫,工具卻不認,那幾行會被 lint 唸成打錯字、也不會被當成摘要行——規範等於空轉。
+    # 這是照範本實際寫一行 FACT: 時當場撞到的,不是推測。翻紅釘:從表裡拿掉任一個 → 這條紅。
+    check("② 詞彙表含範本新定的四個分類前綴",
+          {"WHY", "RULE", "PITFALL", "FACT"} <= set(m.SYMBOL_NAMES),
+          str(sorted(m.SYMBOL_NAMES)))
     # ③ 抓錯字的正則要伸得到含連字號的前綴——★不准空過★:打錯字的變體仍要被抓
     R = m.SYMBOLISH_RE
     check("★正則伸得到含連字號的前綴★", R.match("PRIOR-ART:x") is not None, "比對不到=加白名單是無效動作")

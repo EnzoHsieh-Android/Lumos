@@ -1,0 +1,1348 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index de85bf75..89f3ea8e 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,42 +1,54 @@
+ # AGENTS.md（Codex 等外部 agent 的入口指路檔）
+ 
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+-## 知識圖譜先行（必讀，優先級最高）
++## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
++**程式碼是「現在是什麼」的最終依據；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+-### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
++### 怎麼用（順序照這個走）
+ 
+-| 你心裡想的是… | 先敲這個 |
++1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
++2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
++
++| 你心裡想的是… | 敲這個 |
+ |---|---|
+-| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——黏成一串沒有「各詞」可退，幾乎必定 0 筆 |
+-| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+-| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+-| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+-| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
++| 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
++| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
++| 「有沒有程式看不出的規則或事故？」 | `lumos search "詞 詞"`（**中文概念之間加空白**：`lumos search "作廢 收回 點數"`，黏成一串幾乎必定 0 筆） |
++| 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+-| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+-| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>`（唯讀：點名檔各自的 git 狀態＋逐字稿尾端「上一輪在動什麼、人最後說了什麼」；不判進度、逐字稿缺就明說） |
++| 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜；④ **要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
++3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++   - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
++4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
++
++（依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
++
++### 寫筆記時：先分「程式碼推不推得出來」
+ 
+-兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
++摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+-Edit / Write 之前 hook 會自動推一份「必看合約 / 事故 + 相關筆記」——它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+-**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`；需要才產節點，有就照慣例用）。
+-**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（按你正在做的事分九類，只開需要的子檔）。
++`KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+ 6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 3ffe4a0a..544b3094 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -1,41 +1,53 @@
+ # CLAUDE.md
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+-## 知識圖譜先行（必讀，優先級最高）
++## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
++**程式碼是「現在是什麼」的最終依據；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+-### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
++### 怎麼用（順序照這個走）
+ 
+-| 你心裡想的是… | 先敲這個 |
++1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
++2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
++
++| 你心裡想的是… | 敲這個 |
+ |---|---|
+-| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——黏成一串沒有「各詞」可退，幾乎必定 0 筆 |
+-| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+-| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+-| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+-| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
++| 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
++| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
++| 「有沒有程式看不出的規則或事故？」 | `lumos search "詞 詞"`（**中文概念之間加空白**：`lumos search "作廢 收回 點數"`，黏成一串幾乎必定 0 筆） |
++| 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+-| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+-| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>`（唯讀：點名檔各自的 git 狀態＋逐字稿尾端「上一輪在動什麼、人最後說了什麼」；不判進度、逐字稿缺就明說） |
++| 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜；④ **要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
++3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++   - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
++4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
++
++（依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
++
++### 寫筆記時：先分「程式碼推不推得出來」
+ 
+-兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
++摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+-Edit / Write 之前 hook 會自動推一份「必看合約 / 事故 + 相關筆記」——它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+-**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`；需要才產節點，有就照慣例用）。
+-**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（按你正在做的事分九類，只開需要的子檔）。
++`KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+ 6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Lumos定位_程式碼為主脈絡為輔_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Lumos定位_程式碼為主脈絡為輔_計劃.md
+new file mode 100644
+index 00000000..4895d33c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Lumos定位_程式碼為主脈絡為輔_計劃.md
+@@ -0,0 +1,79 @@
++---
++type: project
++status: doing
++created: 2026-09-21
++updated: 2026-09-21
++tags:
++  - type/project
++  - status/doing
++  - scope/evals
++---
++# Lumos定位_程式碼為主脈絡為輔_計劃
++
++白話:圖譜不要去講程式碼自己就說得清楚的事;它該存的是「即使把整個 repo 重讀一遍也還原不出來」的那些脈絡——當初為什麼這樣決定、有什麼程式看不到的限制、踩過什麼坑、哪些方案被否決、未來什麼條件才能改。Enzo 2026-09-21 提出的方向文件(原文存 `governance/reports/lumos-code-first-direction-2026-09-21.md`)。
++
++## 新舊假設
++
++- 舊:把專案知識整理成圖譜餵給 coding agent,普遍提升品質與效率。**沒有實驗支持**。
++- 新:**程式碼是「現在是什麼」的真相層;圖譜是「為什麼會變成這樣」的脈絡層**。兩者不重疊,重疊處以程式碼為準。
++
++## 手上的數據支持到哪(2026-09-18~19 受控實驗,單源 `Projects/圖譜效用受控實驗_計劃`(在 lumos-gvc 工作樹的 graph-vs-code 分支,未合回主線))
++
++| 文件的主張 | 我們的數據 | 判定 |
++|---|---|---|
++| 不看圖譜比較快 | Haiku 1.0 vs 2.4 分/場;Opus 1.2 vs 5.7 分/場,token 多 1–3 倍 | 支持 |
++| 過期或錯誤的筆記會誤導 | Haiku 有圖譜 12/25 vs 只看程式碼 20/25,8 對不一致全是圖譜組錯(p≈0.008) | 支持,但★只在弱模型★:Opus 四組皆 25/25 |
++| 圖譜若只是重述程式碼,價值有限甚至有害 | LandmarkMember 那批最嚴重的獨有缺陷,源頭是 Systems 抄了會過期的欄位表 | 支持 |
++| 價值出現在「答案不在程式碼裡」 | 只有一場的正面跡象(讀進事故筆記那次) | **還沒量**,是戊組要做的事 |
++| code-contained task 不應增加負擔 | 加標籤後 Haiku 回到 20/25,但每場仍多 1.2 分鐘、token 多一倍 | 前半成立、後半**不成立** |
++
++★措辭修正★:我們的實驗是**刻意埋錯筆記**的傷害上限測試,不能推成「圖譜普遍降低正確率」;筆記正確時的表現尚未量。
++
++## 四個待驗假設與現況
++
++- **H1 程式碼內的題目,圖譜不該幫也不該扣分**:扣分來自錯筆記而非圖譜本身;事實句標「以程式碼為準」可把扣分收回(丙組 20/25)。延遲與 token 的負擔仍在 → H1 後半未過。
++- **H2 程式碼外的脈絡題目**:戊組已跑完(2026-09-21,80 場,Haiku)。**H2 得到支持但只靠一題**:H06(大額退費要人工核可)只看程式碼 0/5、三個有筆記的組合計 8/15;另三題四組都近滿分、鑑別力為零。代價是每場多一倍 token。結論記在 lumos-gvc 的 Verification/2026-09-21_戊組知識只在Issue的四題八十場。★方法學教訓★:要量「幫助」,題目必須先過「只看程式碼真的推不出來」這關,實測 7 條候選只有 3 條過、最後仍有 3 題沒鑑別力。
++- **H3 標頭/標籤當路由,不需要時近乎零成本**:未測。做法=只給標頭與標籤、要深讀才展開,量 retrieval 次數與 token。
++- **H4 證據支撐的知識降低誤導**:丙組是它的弱化版(旁註+查詢指令),已見效;完整版=每條 claim 附可追溯出處與 Status/Last-Confirmed。
++
++## 圖譜規則要動的地方
++
++- 現成可用:`decisions` 欄位(編號/背景/為什麼選/翻案)、合約行、Issues、Verification——都帶出處,對應文件說的 Decision / Constraint / Historical Context。
++- **缺的是反向規則**:禁止在筆記裡重抄程式碼的事實(欄位表、單位、流程),以及 lint 去擋。目前沒有,這是受控實驗最直接支持的一條。
++- 待設計:知識本身的時效欄位(Active / Superseded / Last-Confirmed / 適用版本),避免歷史決策被當成現行限制。
++
++## 順序
++
++1. 戊組驗 H2(唯一零數據的方向,也是本文件的核心主張)。
++2. 「事實句要標以程式碼為準、否則 lint 擋」落成規則(已有實驗支持)。
++3. H3 的路由版本(要改推送機制,工程量較大)。
++
++## 落地進度與交棒(2026-09-21;Enzo 裁「直接改成程式碼為主+結構化」「記錄方式要區分程式碼沒有的脈絡」「含有效期與退場」)
++
++**三階段(已定案,證據強弱見上表)**
++1. 改說法:紀律區塊開頭兩節 + 寫法分類表。**做了一半,未提交**。
++2. 改寫法規範:事實句禁抄/標註、脈絡三件套(出處/有效期/退場)、Issue 固定欄位 → 要寫進 `lumos-project-notes` skill。**未開工**。
++3. 機械檢查:lint 先做警告(FACT/FLOW/DEP 無查詢指令、RULE 無退場條件、PITFALL 無防回歸、Issue 缺根因)、doctor 唸到期。**未開工**。
++
++**摘要行前綴(Enzo 已點頭,判準=程式碼推不推得出來,不是重不重要)**
++
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 為什麼這樣決定、否決過什麼 | 出處 |
++| `RULE:` | 程式看不到的限制 | 出處 + 有效期 + 退場條件 |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:`/`FLOW:`/`DEP:` | 現況描述 | 能查到的別抄;要寫就同行標「以程式碼為準」+ 一條查詢指令 |
++
++`KEY:` 降級為未分類過渡標記,舊筆記不追改。
++
++**這一批已改、尚未提交的檔**:`scripts/templates/graph-discipline.md`(開頭兩節改寫 + 分類表)、`CLAUDE.md`、`AGENTS.md`(用 `lumos update --no-pull` 同步,不要手改)。另有前一批未提交:`governance/autonomous_loop/replay_weekly.py` + `scripts/test_autonomous_loop.py`(回放全量門檻 60→180 秒)與 `Systems/autonomous-iteration-loop.md`。
++
++**卡點(續接第一件事)**:`t_claude_block_matches_template` 有一條斷言要求 `lumos doctor` 0 issues,現在卡在 **Check Y 誤報**——`Systems/效能檢核目錄.md` 第 223 行是 cs-connection 檢核規則的「關鍵字表格」,裡面的 `OpenAsync` 被當成在點名程式裡的方法。跟本批改動無關(那篇 2026-09-13 之後沒動過)。三條路擇一:①那張表的關鍵字改成不用行內程式碼格式 ②Check Y 對「表格儲存格裡的頓號清單」放行 ③那篇加註來源。選②要改 doctor,得走代碼審。
++
++**續接順序**:①解掉卡點讓漂移守衛綠 → ②跑代碼審(改到範本與 CLAUDE.md,分級應為 standard)→ ③推送並在九個消費專案 `lumos update` → ④第二階段寫法規範 → ⑤第三階段 lint 警告 → ⑥用實驗當回歸(Haiku 跑丙組與戊組,判準:加註組不得低於只看程式碼組)。
++
++## 誠實界線
++
++- 所有結論來自單一受控專案、兩個模型、每格 25 場;只看得出大差距。
++- 真實專案的圖譜裡「現況描述」佔多少比例沒量過,所以「改成脈絡為主」能回收多少成本是估的。
++REVISIT:2026-10-21 若戊組已出結果,回頭決定 2、3 要不要做;若戊組仍未開跑,檢討是卡在外家還是題目設計。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/審查評測集_計劃.md b/docs/lumos-toolchain-knowledge/Projects/審查評測集_計劃.md
+new file mode 100644
+index 00000000..0922c04b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/審查評測集_計劃.md
+@@ -0,0 +1,50 @@
++---
++type: project
++status: doing
++created: 2026-09-21
++updated: 2026-09-21
++tags:
++  - type/project
++  - status/doing
++  - scope/evals
++---
++# 審查評測集_計劃
++
++白話:審查迴圈跑了 528 輪、8449 條發現,但沒有一欄說「這條是不是真問題」。所以評測集只收**有外部事實可以對答案**的案例,其餘不收。資料與說明在 `governance/eval/review-evalset/`(v1.json、README.md)。
++
++## 為什麼要有這個(Enzo 2026-09-21 問「沒有 audit log 拿什麼當 evalset」)
++
++- 帳其實很完整:1711 筆席次、528 輪、292 個迴圈、8449 條發現(折入 4614、放行 45、駁回 10),每筆綁報告與凍結材料的雜湊,可重算、可回放。
++- 但**證據要求只證到形式**:引句錨得到、佐證行號存在、每條都有去向。這些不證明那條發現是真問題,也不證明沒漏。自家帳就有反例:10 條引句佐證齊全卻機械重現不到而駁回;23 筆逃逸是全閘通過後下游才抓到。
++- 所以評測價值在「有外部事實」的那一小撮,不在通過的大多數。
++
++## v1 的內容與邊界
++
++- 核心題 21 筆:漏抓 15(來自逃逸帳,對得到當初輪次與凍結材料)、多抓 6(審查帳 refuted_set)。
++- 待人工判定 8 筆:CI 紅自動記的逃逸、或對不到輪次的,人看過才升格。
++- 不收:通過的發現(無外部答案,折入≠正確)、格式或流程被擋的輪次(那是工具回歸測試的範圍)。
++- 兩型方向相反(一個只講召回、一個只講精確率),不合成單一分數。
++
++## 三層評測(邊界寫死)
++
++1. **機械事實**:卷證未被動、帳可重算、引句錨定、處置全清。`lumos loop replay --golden` 就是這層;2026-09-21 全量回放 134 份,133 份一致、1 份不一致(消費專案接入靜默失效 r1:收貨表在凍結後被同日的功能提交改過)。這層不需要標註,適合接每日治理。
++2. **下游事實**:逃逸與駁回,即本評測集。樣本靠事件累積,慢。
++3. **人工標註**:若要算精確率與召回率,須先定義標籤(甲=寫得出翻紅測試、乙=指得出決策/合約/事故依據、丙=只是意見),標註者不得是當初那一輪的編排者,並先做兩人一致性試標。未開工。
++
++## 待辦
++
++- [x] 回頭挖(2026-09-21):近 90 天 341 筆 fix → 取刪掉的行,比對 389 輪凍結 patch 的新增行 → **41 筆漏抓候選**(`governance/eval/review-evalset/miss-candidates-v1.json`),尚未人工確認。
++  - 第一版只比檔名,得到 7139 筆無意義候選(主程式幾乎每輪都被審);改成比對「修掉的那幾行有沒有出現在審查材料的新增行裡」才有鑑別力。
++  - 過濾掉審查自己的折入(標題含折入/代碼審、或審後 <2 天),1209 → 337 → 逐 fix 去重 41。
++- [ ] 人工確認那 41 筆:後來被改掉≠當初是缺陷(可能需求變、重構)。確認過的才升格進核心題。
++- [ ] 待判定 8 筆逐筆人看,決定升格或剔除。
++- [ ] 代理指標(不需標註):逐輪對照「折入條數」與該提交的測試變動量,量「改了但沒釘測試」的比例。
++- [x] 第 1 層的排程(2026-09-21):**早就有了**——`governance/autonomous_loop/replay_weekly.py` 每週跑,每日治理無條件呼叫。問題是它只抽 5 包:「夠快就全量」的門檻寫死 60 秒,而 134 包實測 58 秒、估算 60.3 秒剛好卡在外面,跑完一圈要半年(游標 done 110/134)。改成常數 180 秒後會每週全量,單源見 [[Systems/autonomous-iteration-loop]]。
++- [ ] 下週確認 autonomous.log 的回放段真的變成全量(游標 done 應跳到 134 並清空重來)。
++- [x] 代理指標(2026-09-21):341 輪有折入紀錄(4136 條),339 輪當天有動測試檔、只有 2 輪沒動(code-resid-adv r1 折入 11 條、已知坑策展庫 r1 折入 5 條)。**這把尺太粗**——「當天有測試變動」本來就幾乎天天成立,證不了「每條折入都配了翻紅測試」;要真的量得逐條追對應測試,回到需要標註。
++
++## 誠實界線
++
++- 21 筆只看得出大差距,且每筆都是單一事件、不是抽樣;逃逸偏召回、駁回偏精確率,兩邊都不成系統。
++- 這份不評「設計好不好」——散文層收斂不到機械答案(見 [[Systems/convergence-evidence-gate]] 的誠實天花板),那要看落地後的逃逸與返工。
++REVISIT:2026-10-21 若漏抓樣本仍 <50,或這份從未被用來比較任何配置,就撤掉別養。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+index 9f9307ea..3e36a028 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+@@ -1,17 +1,18 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+ updated: 2026-08-30
+ self_audit: sonnet/2026-08-30
+ about_code_stamp: claude/2026-08-30/6964ab246141
++responsibility: 負責每天 09:30 自動迴圈的編排:選題、派工、收斂、每週凍結判定回放與預算控制(含 `governance/autonomous_loop/replay_weekly.py` 的抽樣與升級全量門檻);不負責審查迴圈本身的判準、也不負責 gap 的內容品質
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/loop-engineering
+ verified_by:
+   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+   - "[[Verification/2026-08-26_自主迴圈三症修理落地]]"
+@@ -27,21 +28,22 @@ summary: |-
+   KEY:全自動判收斂仍是沒閉合的迴歸——judge/cross-family 只把自評推遠一層未消滅,末端人 review PR 是最後也唯一真兜底(誠實天花板)
+   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
+   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
+   KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --disposal 機械重驗(★2026-08-27 遷,原 --gate★)③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+   KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_message('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
+   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
+   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
+   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
+   KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 `main "$@"; exit`——bash 邊讀邊跑,跑到一半改檔會從舊 byte 位置續讀(當天實發生 syntax error 後段全沒跑;沒 exit 更會整支重跑一遍)。守衛 [test:t_daily_governance_wrapper_is_function_wrapped](前奏白名單/五步名冊/結尾 exit/bash -n);之後再有長跑 wrapper 沿用這個寫法,不要各自發明(代碼審 r1 架構對齊席)。實驗 [[Verification/2026-09-05_wrapper邊跑邊改實驗]]
+   KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了——而三處筆記寫著「便宜的日常段照跑」,落地當下那句就是假的。★監看的東西和被監看的東西同命★,回訪到期的升級鏈因此沒有出口,那正是同期「五件逾期沒人管」的上游原因。修法照 feature toggle 只包最小單元:開關搬進 autonomous-loop.sh、放在選 gap 之前,wrapper 無條件呼叫 [test:t_autoloop_pause_only_stops_dispatch]
+-  DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
++  KEY:[2026-09-21]回放週跑的「夠快就全量跑」門檻改成常數 `FULL_SWEEP_SECONDS=180`(原本寫死 60 秒):存量長到 134 包、實測全量 58 秒、平均 0.45 秒一包,估 60.3 秒剛好卡在舊門檻外,於是每週只抽 5 包、跑完一圈要半年(游標實況 done 110/134)。180 秒仍在 300 秒總預算內,存量約 400 包才會退回抽樣;測試 t_full_sweep_threshold_covers_real_stock 用 134 包 × 0.45 秒釘住,門檻改回 60 就翻紅
++  DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger,replay_weekly}.py(replay_weekly=每週凍結判定回放:新凍必跑+輪替抽 5,實測夠便宜才升級全量) + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
+   TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(入口現=daily-governance 09:30;測試數 2026-08-30 為 106 條)
+   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
+ decisions:
+   - content: 定調為「自動備料 + 自審 + 停在放行閘等人」,而非「無人迭代」;放行(merge PR)永遠人手動,自動只到「備好待放行 spec」,絕不自動實作 / 自動 merge
+     id: d1
+     context: user 願景是「永遠在迭代的 lumos」;但全自動判收斂仍是沒閉合的迴歸(judge/cross-family 也是 AI、也會錯),且自動 brainstorm 沒人回澄清、AI 自選 gap 有自我強化偏誤
+     why_chosen: 放大放行帶寬不等於消滅放行;末端人 review PR 是全鏈唯一外部錨點、最後真兜底,對齊「AI 全工人只驗證撐不起、人只在最高槓桿放行點」
+     decided: 2026-06-20
+     valid: true
+   - content: dry-run≠模擬——orchestrator-prompt 加「執行紀律」塊強制真執行所有工具,收尾前自查 scratch spec + .canary-log.jsonl 必須存在,否則本輪無效重做;dry-run 與 --pr 唯一差別在收尾(寫 pending vs 開 PR),過程完全相同
+@@ -102,20 +104,21 @@ decisions:
+     id: d11
+     context: code-batch19 通才席 blocker:名字比對被實跑打穿——持鎖者透過符號連結啟動時 ps 指令列裡沒有腳本名字,活著的持鎖者被判成死的,它量到兩個行程同時拿到鎖並同時執行,正是這把鎖唯一要防的資料互蓋。改用腳本自己的檔名當錨(外家席 f4)只縮小不關閉。備選:鎖裡放隨機 nonce(通才席建議)——nonce 認得出這把鎖是誰寫的,但答不出那個行程還活不活著;或不驗身分只靠 60 分鐘鎖齡——回到永久停擺與雙開之間二選一。
+     why_chosen: pid 會被作業系統回收、名字會因啟動方式而變,但「同一個 pid 而且啟動時刻一模一樣」只可能是同一個行程。ps -o lstart= 實測穩定(同一行程重複問值相同)、跨使用者可讀、pid 不存在時回空字串,零依賴。
+     decided: 2026-09-07
+     valid: true
+ about_code:
+   - governance/autonomous-loop.sh
+   - governance/autonomous_loop/cross_audit.py
+   - governance/autonomous_loop/gap_select.py
+   - governance/daily-governance.sh
++  - governance/autonomous_loop/replay_weekly.py
+ aliases:
+   - daily-governance.sh
+   - 自動迭代排程
+   - orchestrator 派工
+   - gap_select 選題
+   - N=1 閘卡住
+ ---
+ # autonomous-iteration-loop
+ 
+ 每天日報產出後,**自動備好一份已自審的 lumos 改進 spec、停在放行閘等人**的閉環。
+diff --git a/governance/autonomous_loop/replay_weekly.py b/governance/autonomous_loop/replay_weekly.py
+index 0627d965..c3fbec6f 100644
+--- a/governance/autonomous_loop/replay_weekly.py
++++ b/governance/autonomous_loop/replay_weekly.py
+@@ -9,20 +9,24 @@ loop 自動 --freeze;沒有 spec_path 的(舊帳)列名單喊人不硬猜。②
+ fail-open:本模組任何失敗都不該擋 autonomous-loop 主流程(呼叫端 || true)。
+ 狀態檔 .rotation-cursor 是週跑自身狀態(比照 run_nags 週戳記的「job 狀態檔」擺法),非帳。
+ """
+ import json
+ import subprocess
+ import time
+ from pathlib import Path
+ 
+ BUDGET_SECONDS = 300
+ SAMPLE_PER_WEEK = 5
++# 「跑得完就全量跑」的門檻(秒)。2026-08-26 訂 60 秒,當時 17 包、0.24 秒一包;2026-09-21 存量 134 包、
++# 實測全量 58 秒、平均 0.45 秒一包 → 估算 60.3 秒剛好卡在門檻外,於是每週只抽 5 包、跑完一圈要半年。
++# 放寬到 180 秒(仍在 300 秒總預算內,且下面的 _left() 會再擋一次):存量成長到約 400 包才會退回抽樣。
++FULL_SWEEP_SECONDS = 180
+ RED_MARKERS = ("邏輯漂移", "帳被動", "凍結檔被動", "佚失")
+ STALE_MARKER = "golden 過期"
+ 
+ 
+ def _read_json(p, default):
+     try:
+         return json.loads(Path(p).read_text(encoding="utf-8"))
+     except (OSError, ValueError):
+         return default
+ 
+@@ -101,21 +105,22 @@ def run_weekly(repo, lumos="scripts/lumos"):
+ 
+     # ── ② 名單:新凍結必跑+存量輪替抽樣 ──
+     allv = sorted(p.parent.name for p in rdir.glob("*/verdict.json"))
+     cur_p = rdir / ".rotation-cursor"
+     cur = _read_json(cur_p, {"cycle_started": "", "done": [], "seen": []})
+     new = [l for l in allv if l not in set(cur.get("seen", []))]
+     pool = [l for l in allv if l not in set(new) and l not in set(cur.get("done", []))]
+     sample = pool[:SAMPLE_PER_WEEK]
+ 
+     # ── ③ 回放(預算內);跑完基本盤後按實測耗時判「升級全量」——
+-    # spec 機械條件:單包耗時×存量 ≤60 秒就全跑(2026-08-26 首跑實測 0.24s/包,17 包 4.1s)。
++    # spec 機械條件:單包耗時×存量 ≤FULL_SWEEP_SECONDS 就全跑(2026-08-26 首跑實測 0.24s/包,17 包 4.1s;
++    # 2026-09-21 存量 134 包、全量 58 秒,門檻從 60 放寬到 180 秒——見常數旁的說明)。
+     def _replay_one(lid):
+         if _left() < 15:
+             out["skipped"].append(lid)
+             return 0.0
+         t1 = time.time()
+         try:
+             r = _run(["loop", "replay", lid, "--golden",
+                       f"governance/replay/{lid}/verdict.json", "--repo", str(repo)],
+                      timeout=max(15, _left()))
+         except subprocess.TimeoutExpired:
+@@ -130,21 +135,21 @@ def run_weekly(repo, lumos="scripts/lumos"):
+         elif r.returncode != 0:
+             out["errors"].append(f"replay:{lid}:rc{r.returncode}")
+         return time.time() - t1
+     spent = 0.0
+     base = new + sample
+     for lid in base:
+         spent += _replay_one(lid)
+     rest = [l for l in allv if l not in set(base)]
+     if base and out["replayed"] and rest:
+         avg = spent / max(1, len(out["replayed"]))
+-        if avg * len(allv) <= 60 and _left() > avg * len(rest) + 15:
++        if avg * len(allv) <= FULL_SWEEP_SECONDS and _left() > avg * len(rest) + 15:
+             for lid in rest:
+                 _replay_one(lid)
+             sample = sample + rest   # 全跑視同整圈抽完(游標推進涵蓋)
+ 
+     # ── ④ 游標推進(輪完一圈清空重來) ──
+     # cb3 ext-f3/s4-f3:seen 只記「真的回放過的」新包——預算見底被 skip 的新包保留必跑資格。
+     cur["seen"] = sorted(set(cur.get("seen", [])) | {l for l in new if l in set(out["replayed"])} | set(sample))
+     cur["done"] = sorted(set(cur.get("done", [])) | set(s for s in sample if s in out["replayed"]))
+     if set(cur["done"]) >= set(allv):
+         cur = {"cycle_started": "", "done": [], "seen": cur["seen"]}
+diff --git a/governance/eval/review-evalset/README.md b/governance/eval/review-evalset/README.md
+new file mode 100644
+index 00000000..7adb224e
+--- /dev/null
++++ b/governance/eval/review-evalset/README.md
+@@ -0,0 +1,31 @@
++# 審查迴圈評測集(v1)
++
++白話:設計審與代碼審跑了 528 輪、8449 條發現,但沒有任何一欄說「這條是不是真問題」。所以這份評測集**只收有外部事實可以對答案的案例**,其餘一律不收。
++
++## 收什麼
++
++| 型 | 來源 | 外部事實是什麼 | 能量什麼 |
++|---|---|---|---|
++| 漏抓 | 逃逸帳 `docs/.escape-log.jsonl` | 放行之後下游(推送閘、CI、消費專案、使用者)抓到的洞 | 召回:同一份凍結材料重跑,新配置抓不抓得到 |
++| 多抓 | 審查帳的 `refuted_set` | 引句與佐證齊全,但編排者機械重現不到 | 精確率:好的審查不該產出這種 |
++
++`v1.json`:核心題 21 筆(漏抓 15、多抓 6)、待人工判定 8 筆。
++
++## 不收什麼,為什麼
++
++- **通過的 8449 條發現**:沒有外部答案。用「折入」當正確與否的答案,等於拿自己的判斷當標準答案。
++- **因格式或流程被擋下的輪次**(引句跨行、報告沒正規化、載體席選錯):反映的是流程,不是審查品質。這類適合當工具的回歸測試,見 `lumos loop replay`。
++- **CI 紅而自動記下的逃逸**:CI 紅的原因可能是環境、他人改動或不穩定測試,不等於審查漏抓。放「待人工判定」,人看過才升格。
++
++## 怎麼用
++
++- 一題 = 一份凍結材料 + 當初的判定 + 外部事實。重跑時餵凍結材料,不要餵今天的樹。
++- 漏抓題:算「這次抓到了沒」。多抓題:算「這次還報不報這條」。
++- 兩邊方向相反、各自偏一邊,不要合成單一分數。
++
++## 誠實界線
++
++- **21 筆太少**,只看得出大差距;每一筆都是單一事件,不是抽樣。
++- 逃逸帳是被動累積的,要等下游出事,所以召回那側天生偏少。要補,得回頭挖已修缺陷、或像受控實驗那樣人工造。
++- 多抓只有 6 筆,而且集中在少數幾個迴圈,不能代表整體假陽性率。
++- 這份不評「設計好不好」。散文層的判斷收斂不到機械答案,那要看落地後的逃逸與返工。
+diff --git a/governance/eval/review-evalset/v1.json b/governance/eval/review-evalset/v1.json
+new file mode 100644
+index 00000000..4d5196b3
+--- /dev/null
++++ b/governance/eval/review-evalset/v1.json
+@@ -0,0 +1,634 @@
++{
++ "版本": "v1",
++ "產生於": "2026-09-21T01:48:05+08:00",
++ "說明": "審查迴圈評測集:只收有外部事實可對答案的案例。漏抓=放行後下游抓到(逃逸帳);多抓=引句佐證齊全但編排者機械重現不到而駁回。通過的發現沒有外部答案,不收。",
++ "核心題": [
++  {
++   "型": "漏抓",
++   "id": "ESC-ffd18403",
++   "迴圈": "code-enforcement-obs",
++   "站": "push-gate",
++   "嚴重度": "major",
++   "外部事實": "gov --stats 的 hook 統計段用 cwd 的 git 根找事件檔:假 vault 測試讀到真 repo 的檔,平行推送閘期間被追加 → t_gov_stats_rc_and_full 假紅擋推送(單跑綠);#19 審查放行後才被推送閘抓到,修於 code-gov-stats-root-b",
++   "修在哪": "code-gov-stats-root-b",
++   "ts": "2026-09-08T22:18:13+08:00",
++   "當初輪次": [
++    "r1"
++   ],
++   "凍結材料": [
++    "governance/review-reports/code-enforcement-obs/r1-snapshot.patch"
++   ],
++   "席位報告": [
++    "governance/review-reports/code-enforcement-obs/r1-通才.md",
++    "governance/review-reports/code-enforcement-obs/r1-架構對齊.md",
++    "governance/review-reports/code-enforcement-obs/r1-外家否決.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-75f0bfd0",
++   "迴圈": "code-每支檔有家",
++   "站": "消費專案真推送(pos-ios)",
++   "嚴重度": "major",
++   "外部事實": "推送前逐提交看寫回時,「那篇內容有沒有變」卻拿整段頭尾比:前一個純整理提交改了節點內容、後一個改程式提交只替它補驗證連結,被誤判成寫回落錯篇而擋下合法推送;兩輪代碼審與設計審都沒抓到這個組合",
++   "修在哪": "pos-ios afe67c5 推送被擋;修正見測試 t_nodehome_diff_route_counts_content_per_commit",
++   "ts": "2026-09-11T23:23:30+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/code-每支檔有家/r1-snapshot.patch",
++    "governance/review-reports/code-每支檔有家/r2-snapshot.patch"
++   ],
++   "席位報告": [
++    "governance/review-reports/code-每支檔有家/r1-資安-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-對答案-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-整合-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-測試殺傷力-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-邊界-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-正確性-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-架構對齊-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r2-架構對齊-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-b69b008c",
++   "迴圈": "code-推播漏網量測",
++   "站": "prod",
++   "嚴重度": "major",
++   "外部事實": "搜尋零命中量測少算:一次指令串多個 lumos search 只記第一個查詢、其餘不算搜尋也不算零命中;推送後乾淨 agent 人工數一個月 81 次零命中(34 次用詞對不上),儀器同期約 13 次",
++   "修在哪": null,
++   "ts": "2026-09-11T22:07:19+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/code-推播漏網量測/r1-snapshot.patch",
++    "governance/review-reports/code-推播漏網量測/r2-snapshot.patch"
++   ],
++   "席位報告": [
++    "governance/review-reports/code-推播漏網量測/r1-架構對齊-sonnet.md",
++    "governance/review-reports/code-推播漏網量測/r1-外家否決-codex.md",
++    "governance/review-reports/code-推播漏網量測/r1-單reviewer-sonnet.md",
++    "governance/review-reports/code-推播漏網量測/r2-架構對齊-sonnet.md",
++    "governance/review-reports/code-推播漏網量測/r2-資安-sonnet.md",
++    "governance/review-reports/code-推播漏網量測/r2-單reviewer-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-18f03ede",
++   "迴圈": "code-每支檔有家",
++   "站": "使用者回報",
++   "嚴重度": "major",
++   "外部事實": "各棧測試資料夾(Xcode 頂層 <App>Tests、Gradle src/androidTest)沒被認成測試:平板 POS 截圖輔助檔、Android 儀器測試 Kotlin 檔被要求有家,新增會被提交前擋;審查時測試檔判定只驗了測試地圖那份規則",
++   "修在哪": null,
++   "ts": "2026-09-12T02:41:42+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/code-每支檔有家/r1-snapshot.patch",
++    "governance/review-reports/code-每支檔有家/r2-snapshot.patch"
++   ],
++   "席位報告": [
++    "governance/review-reports/code-每支檔有家/r1-資安-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-對答案-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-整合-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-測試殺傷力-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-邊界-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-正確性-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r1-架構對齊-sonnet.md",
++    "governance/review-reports/code-每支檔有家/r2-架構對齊-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-009ee550",
++   "迴圈": "lint-new-gate",
++   "站": "實作",
++   "嚴重度": "major",
++   "外部事實": "設計說檔太大要走放行管道登記才算過,但放行只認告警指紋,大檔根本沒有東西可以登記;後果是專案裡有一支過大的檔就永遠推不上去",
++   "修在哪": null,
++   "ts": "2026-09-13T11:14:31+08:00",
++   "當初輪次": [
++    "r1",
++    "r3"
++   ],
++   "凍結材料": [
++    "governance/review-reports/lint-new-gate/r1-snapshot.md",
++    "governance/review-reports/lint-new-gate/r3-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/lint-new-gate/r1-邊界可執行.md",
++    "governance/review-reports/lint-new-gate/r1-資源併發.md",
++    "governance/review-reports/lint-new-gate/r1-架構對齊.md",
++    "governance/review-reports/lint-new-gate/r1-通才.md",
++    "governance/review-reports/lint-new-gate/r3-驗收.md",
++    "governance/review-reports/lint-new-gate/r3-接手通才.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-89858a5c",
++   "迴圈": "評測尺修復",
++   "站": "實作",
++   "嚴重度": "major",
++   "外部事實": "派工詞叫評審去讀題庫檔取查詢字串,但那個檔裡同時存著既有標註答案——評審自陳初讀時意外看到。設計審三席都沒抓到這條錨定路徑(標註品質席抓到的是清單順序洩漏名次,是另一條)",
++   "修在哪": null,
++   "ts": "2026-09-15T01:03:23+08:00",
++   "當初輪次": [
++    "r1"
++   ],
++   "凍結材料": [
++    "governance/review-reports/評測尺修復/r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/評測尺修復/r1-通才-sonnet.md",
++    "governance/review-reports/評測尺修復/r1-尺切換-sonnet.md",
++    "governance/review-reports/評測尺修復/r1-標註品質-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-a528fbff",
++   "迴圈": "規格落成可驗收條件",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 9bfa759 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T14:50:51+08:00",
++   "當初輪次": [
++    "r1",
++    "r2",
++    "r3",
++    "r4",
++    "r5"
++   ],
++   "凍結材料": [
++    "governance/review-reports/規格落成可驗收條件/r1-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r2-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r3-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r4-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r5-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/規格落成可驗收條件/r1-正確性-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-簡化守護者-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-接手-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-回滾-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-架構對齊-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-邊界-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-正確性2-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-邊界2-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-3e9b81a1",
++   "迴圈": "規格落成可驗收條件",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure a2d7726 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T16:00:15+08:00",
++   "當初輪次": [
++    "r1",
++    "r2",
++    "r3",
++    "r4",
++    "r5"
++   ],
++   "凍結材料": [
++    "governance/review-reports/規格落成可驗收條件/r1-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r2-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r3-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r4-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r5-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/規格落成可驗收條件/r1-正確性-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-簡化守護者-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-接手-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-回滾-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-架構對齊-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-邊界-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-正確性2-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-邊界2-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-4c5082eb",
++   "迴圈": "Codex行為精修",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 696709b [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T19:50:28+08:00",
++   "當初輪次": [
++    "r1"
++   ],
++   "凍結材料": [
++    "governance/review-reports/Codex行為精修/r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/Codex行為精修/r1-外家否決.md",
++    "governance/review-reports/Codex行為精修/r1-架構對齊.md",
++    "governance/review-reports/Codex行為精修/r1-整合知識同步.md",
++    "governance/review-reports/Codex行為精修/r1-邊界可執行.md",
++    "governance/review-reports/Codex行為精修/r1-通才.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-813babfb",
++   "迴圈": "規格落成可驗收條件",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 696709b [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T19:50:28+08:00",
++   "當初輪次": [
++    "r1",
++    "r2",
++    "r3",
++    "r4",
++    "r5"
++   ],
++   "凍結材料": [
++    "governance/review-reports/規格落成可驗收條件/r1-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r2-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r3-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r4-snapshot.md",
++    "governance/review-reports/規格落成可驗收條件/r5-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/規格落成可驗收條件/r1-正確性-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-簡化守護者-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-接手-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-回滾-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-架構對齊-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r1-邊界-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-正確性2-sonnet.md",
++    "governance/review-reports/規格落成可驗收條件/r2-邊界2-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-09047cd0",
++   "迴圈": "收工點名問版本控制",
++   "站": "實作",
++   "嚴重度": "major",
++   "外部事實": "判斷快取目錄可不可信的那個函式把目錄名寫死成舊目錄,新增任何同層目錄都永遠不過檢查=新機制被靜默停用;設計期討論過要新增一份狀態檔,卻沒人去看那個檢查怎麼寫的",
++   "修在哪": null,
++   "ts": "2026-09-18T09:35:04+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/收工點名問版本控制/r2-snapshot.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-回滾-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-簡化-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-架構對齊-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-正確性-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-e9717329",
++   "迴圈": "收工點名問版本控制",
++   "站": "實作",
++   "嚴重度": "minor",
++   "外部事實": "既有擋停測試的現場只在逐字稿宣稱改過檔、工作樹是乾淨的,換成問版本控制後那個現場算不出東西;設計期把「逐字稿說改了但工作樹沒對應改動」列進已知限制,卻沒想到它會打到既有測試",
++   "修在哪": null,
++   "ts": "2026-09-18T09:35:05+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/收工點名問版本控制/r2-snapshot.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-回滾-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-簡化-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-架構對齊-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-正確性-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-2b363a68",
++   "迴圈": "收工點名問版本控制",
++   "站": "code-loop",
++   "嚴重度": "blocker",
++   "外部事實": "代碼審記到 blocker(資安-sonnet r1)",
++   "修在哪": null,
++   "ts": "2026-09-18T11:19:30+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/收工點名問版本控制/r2-snapshot.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-回滾-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-簡化-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-架構對齊-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-正確性-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-c074e5d9",
++   "迴圈": "收工點名問版本控制",
++   "站": "code-loop",
++   "嚴重度": "blocker",
++   "外部事實": "代碼審記到 blocker(驗收-sonnet r2)",
++   "修在哪": null,
++   "ts": "2026-09-18T12:05:10+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/收工點名問版本控制/r2-snapshot.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-回滾-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-簡化-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-架構對齊-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-正確性-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md"
++   ]
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-b399b1b6",
++   "迴圈": "收工點名問版本控制",
++   "站": "code-loop",
++   "嚴重度": "blocker",
++   "外部事實": "代碼審記到 blocker(資安-sonnet r3)",
++   "修在哪": null,
++   "ts": "2026-09-18T14:04:26+08:00",
++   "當初輪次": [
++    "r1",
++    "r2"
++   ],
++   "凍結材料": [
++    "governance/review-reports/收工點名問版本控制/r2-snapshot.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-snapshot.md"
++   ],
++   "席位報告": [
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-回滾-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-簡化-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-架構對齊-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-正確性-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-邊界-sonnet.md",
++    "governance/review-reports/收工點名問版本控制/v2-r1-接手-sonnet.md"
++   ]
++  },
++  {
++   "型": "多抓",
++   "id": "code-兩席相反時端出張力/r1/架構對齊-sonnet",
++   "迴圈": "code-兩席相反時端出張力",
++   "輪": "r1",
++   "席": "架構對齊-sonnet",
++   "被駁回的條": [
++    "A1"
++   ],
++   "收貨表": "governance/review-reports/code-兩席相反時端出張力/r1-intake.md",
++   "報告": "governance/review-reports/code-兩席相反時端出張力/r1-s2-架構對齊.md",
++   "凍結材料": [
++    "governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch"
++   ],
++   "ts": "2026-09-09T16:42:44+08:00"
++  },
++  {
++   "型": "多抓",
++   "id": "code-兩席相反時端出張力-v2/r1/架構對齊-sonnet",
++   "迴圈": "code-兩席相反時端出張力-v2",
++   "輪": "r1",
++   "席": "架構對齊-sonnet",
++   "被駁回的條": [
++    "A1"
++   ],
++   "收貨表": "governance/review-reports/code-兩席相反時端出張力/r1-intake.md",
++   "報告": "governance/review-reports/code-兩席相反時端出張力/r1-s2-架構對齊.md",
++   "凍結材料": [
++    "governance/review-reports/code-兩席相反時端出張力/r1-snapshot.patch"
++   ],
++   "ts": "2026-09-09T16:43:03+08:00"
++  },
++  {
++   "型": "多抓",
++   "id": "code-各棧測試資料夾/r1/正確性-sonnet",
++   "迴圈": "code-各棧測試資料夾",
++   "輪": "r1",
++   "席": "正確性-sonnet",
++   "被駁回的條": [
++    "C2",
++    "C3",
++    "C4",
++    "C5"
++   ],
++   "收貨表": "governance/review-reports/code-各棧測試資料夾/r1-intake.md",
++   "報告": "governance/review-reports/code-各棧測試資料夾/r1-正確性-sonnet.md",
++   "凍結材料": [
++    "governance/review-reports/code-各棧測試資料夾/r1-snapshot.patch"
++   ],
++   "ts": "2026-09-12T03:04:55+08:00"
++  },
++  {
++   "型": "多抓",
++   "id": "推筆記認家/r2/正確性-sonnet",
++   "迴圈": "推筆記認家",
++   "輪": "r2",
++   "席": "正確性-sonnet",
++   "被駁回的條": [
++    "H8"
++   ],
++   "收貨表": "governance/review-reports/推筆記認家/r2-intake.md",
++   "報告": "governance/review-reports/推筆記認家/r2-正確性-sonnet.md",
++   "凍結材料": [
++    "governance/review-reports/推筆記認家/r2-snapshot.md"
++   ],
++   "ts": "2026-09-12T03:00:40+08:00"
++  },
++  {
++   "型": "多抓",
++   "id": "code-記憶過期清掃/r1/邊界可執行-sonnet",
++   "迴圈": "code-記憶過期清掃",
++   "輪": "r1",
++   "席": "邊界可執行-sonnet",
++   "被駁回的條": [
++    "f23"
++   ],
++   "收貨表": "governance/review-reports/code-記憶過期清掃/r1-intake.md",
++   "報告": "governance/review-reports/code-記憶過期清掃/r1-邊界可執行.md",
++   "凍結材料": [
++    "governance/review-reports/code-記憶過期清掃/r1-snapshot.patch"
++   ],
++   "ts": "2026-09-14T16:10:33+08:00"
++  },
++  {
++   "型": "多抓",
++   "id": "code-逐層建逐層檢查/r1/外家備援-gemini-carrier",
++   "迴圈": "code-逐層建逐層檢查",
++   "輪": "r1",
++   "席": "外家備援-gemini-carrier",
++   "被駁回的條": [
++    "g2",
++    "g3"
++   ],
++   "收貨表": "governance/review-reports/code-逐層建逐層檢查/r1-intake.md",
++   "報告": "governance/review-reports/code-逐層建逐層檢查/r1-外家備援-gemini.md",
++   "凍結材料": [
++    "governance/review-reports/code-逐層建逐層檢查/r1-snapshot.patch"
++   ],
++   "ts": "2026-09-16T22:29:51+08:00"
++  }
++ ],
++ "待人工判定": [
++  {
++   "型": "漏抓",
++   "id": "ESC-8483c3f0",
++   "迴圈": "逃逸自動記",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 9bfa759 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T14:50:51+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-96257a8c",
++   "迴圈": "雙向門放行",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 9bfa759 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T14:50:51+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-a2605a02",
++   "迴圈": "逃逸自動記",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure a2d7726 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T16:00:15+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-7c969435",
++   "迴圈": "雙向門放行",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure a2d7726 [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T16:00:15+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-c7fc3fc8",
++   "迴圈": "雙向門放行",
++   "站": "code-loop",
++   "嚴重度": "major",
++   "外部事實": "代碼審記到 major(架構對齊-sonnet r1)",
++   "修在哪": null,
++   "ts": "2026-09-17T18:28:11+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-e95db020",
++   "迴圈": "雙向門放行",
++   "站": "code-loop",
++   "嚴重度": "major",
++   "外部事實": "代碼審記到 major(架構對齊-r2-sonnet r2)",
++   "修在哪": null,
++   "ts": "2026-09-17T18:40:03+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-3a867ac7",
++   "迴圈": "逃逸自動記",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 696709b [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T19:50:28+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  },
++  {
++   "型": "漏抓",
++   "id": "ESC-8a35c850",
++   "迴圈": "雙向門放行",
++   "站": "CI",
++   "嚴重度": "major",
++   "外部事實": "CI failure 696709b [CI]",
++   "修在哪": null,
++   "ts": "2026-09-17T19:50:28+08:00",
++   "當初輪次": [],
++   "凍結材料": [],
++   "席位報告": []
++  }
++ ],
++ "邊界": [
++  "漏抓只證明召回不足,不證明精確率;多抓反之。",
++  "CI 紅而自動記的逃逸不等於審查漏抓(可能是環境或他人改動),放待判定。",
++  "卷證檔不在或對不到輪次的,不進核心題。",
++  "不得用『折入』當正確與否的答案:折入只代表當時採納。"
++ ]
++}
+\ No newline at end of file
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 95b91f7a..01c32ed7 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -104,22 +104,24 @@ def judge(calls, expect, forbid_before):
+         for f in forbid_before:
+             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+     return True, "ok", first
+ 
+ 
+ # ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
+ # 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「鐵則」之前),
+ # 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
+ # 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
+-RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
+-RULE_END = "### 鐵則"   # 2026-09-05 範本標題去數字(Codex行為精修 F9);同源=scripts/templates/graph-discipline.md
++# 2026-09-21 範本改定位(程式碼為主、圖譜補脈絡):要拔的那一節從「第一個工具呼叫是 lumos」改名為「怎麼用」,
++# 收在「寫筆記時」之前——寫法規範那節講的是怎麼記筆記、不是叫 AI 去查,拔它會超出本 ablation 的範圍。
++RULE_HEAD = "### 怎麼用"
++RULE_END = "### 寫筆記時"   # 同源=scripts/templates/graph-discipline.md(2026-09-05 去數字、2026-09-21 改定位)
+ 
+ 
+ def strip_lumos_first_rule(text):
+     """回 (新文字, 有沒有砍到)。找不到兩個邊界、順序反了、或標記不只出現一次 → 原文、False。
+     ★r1 邊界席:兩個標記若各出現多次,find 只取第一個、可能砍錯段且無聲。要求各恰好一次,否則安全回退★。"""
+     if text.count(RULE_HEAD) != 1 or text.count(RULE_END) != 1:
+         return text, False
+     s = text.find(RULE_HEAD)
+     e = text.find(RULE_END)
+     if s < 0 or e < 0 or e <= s:
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index ab231ebd..e9e03777 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -1,39 +1,51 @@
+-## 知識圖譜先行（必讀，優先級最高）
++## 程式碼為主，知識圖譜補脈絡（必讀）
+ 
+-**`{{KG}}` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
++**程式碼是「現在是什麼」的最終依據；`{{KG}}` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
+ 
+-### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
++### 怎麼用（順序照這個走）
+ 
+-| 你心裡想的是… | 先敲這個 |
++1. **先讀程式碼**：自己讀懂現況、得出改法，照程式實際的行為寫。
++2. **動手改之前，系統會把相關筆記推到你眼前**（這支檔的家、出過的事故、合約）；也可以自己查：
++
++| 你心裡想的是… | 敲這個 |
+ |---|---|
+-| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——黏成一串沒有「各詞」可退，幾乎必定 0 筆 |
+-| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+-| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+-| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+-| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
++| 「改這支檔會牽連什麼？這一帶出過什麼事？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
++| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
++| 「有沒有程式看不出的規則或事故？」 | `lumos search "詞 詞"`（**中文概念之間加空白**：`lumos search "作廢 收回 點數"`，黏成一串幾乎必定 0 筆） |
++| 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+-| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+-| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>`（唯讀：點名檔各自的 git 狀態＋逐字稿尾端「上一輪在動什麼、人最後說了什麼」；不判進度、逐字稿缺就明說） |
++| 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜；④ **要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講）。判斷錯本來就要重查一次，這一步只是提前付；**只有這個場合要派，其他查詢照常**。
++3. **筆記跟程式對不上時，看那句話放在哪裡，不看它寫得多篤定**：
++   - **有結構、有出處的才能挑戰程式碼**：`decisions:` 欄位裡的決策紀錄、★INVARIANT★ 這類合約行、Issues、Verification。程式違反它們才算程式的問題——照它修，並在結果裡指出是哪一筆。
++   - **其他都是線索**：摘要裡的 `KEY:` / `FLOW:` / `DEP:` 與正文段落。就算寫得像規則、附了日期，也不能拿來推翻程式；對不上時**以程式碼為準**，照程式行為寫，並立一篇 Issue 記下那句筆記錯在哪。
++   - 判不出來：兩邊都不改，在結果裡明講哪裡對不上。
++4. **交結果前**，把筆記補到的東西寫進結果：多改了哪裡、確認過哪條規則、發現哪句筆記錯了。
++
++（依據：2026-09-18~21 受控實驗——圖譜裡刻意寫錯的「現況描述」會讓較弱的模型照抄，在句子旁標明「以程式碼為準」可以收回；而程式碼推不出來的規則，有筆記的組才守得住。單源見 `Projects/Lumos定位_程式碼為主脈絡為輔_計劃`。）
++
++### 寫筆記時：先分「程式碼推不推得出來」
+ 
+-兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
++摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+-Edit / Write 之前 hook 會自動推一份「必看合約 / 事故 + 相關筆記」——它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
++| 前綴 | 存什麼 | 額外要求 |
++|---|---|---|
++| `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
++| `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 出處 + 有效期 + **退場條件**（什麼情況這條該撤掉） |
++| `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
+ 
+-**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`；需要才產節點，有就照慣例用）。
+-**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（按你正在做的事分九類，只開需要的子檔）。
++`KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+ 6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑），事實與狀態一律歸圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index db903d75..a0577fcc 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1660,30 +1660,33 @@ class TestReplayWeekly(unittest.TestCase):
+ 
+     def _cursor(self):
+         p = self.repo / "governance" / "replay" / ".rotation-cursor"
+         return json.loads(p.read_text(encoding="utf-8"))
+ 
+     def _run_ok(self, out_lines=""):
+         r = mock.Mock(); r.returncode = 0; r.stdout = out_lines; r.stderr = ""
+         return r
+ 
+     def _slow_clock(self, per_call=20.0):
+-        """每次 time.time() 前進 per_call 秒的假鐘——讓實測 avg×存量 >60s,不觸發升級全量。"""
++        """每次 time.time() 前進 per_call 秒的假鐘。要測「不升級全量」的路徑時,配 FULL_SWEEP_SECONDS 一起壓
++        (2026-09-21 門檻從 60 放寬到 180,原本靠 10 秒×7 包=70>60 的隱含假設就不成立了——別再靠數字巧合)。"""
+         state = {"t": 1000.0}
+         def fake():
+             state["t"] += per_call
+             return state["t"]
+         return fake
+ 
+     def test_new_always_run_and_rotation_cursor_advances(self):
++        """輪替抽樣本身的路徑:明講把升級全量的門檻壓到 1 秒(存量再便宜也不升級),才量得到抽 5 那條規則。"""
+         for lid in ("a", "b", "c", "d", "e", "f", "g"):
+             self._verdict(lid)
++        self.enterContext(mock.patch.object(self.m, "FULL_SWEEP_SECONDS", 1))
+         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")) as sp, \
+              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+             out = self.m.run_weekly(self.repo)
+         # 首週:全部是「新凍結」→ 全跑
+         self.assertEqual(sorted(out["replayed"]), list("abcdefg"))
+         cur = self._cursor()
+         self.assertEqual(sorted(cur["seen"]), list("abcdefg"))
+         # 第二週:無新→輪替抽 5(sorted 前 5)
+         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+@@ -1760,20 +1763,38 @@ class TestReplayWeekly(unittest.TestCase):
+         # 先跑一週建 seen(快鐘,0.01s/包→升級觸發,首週本來就全跑)
+         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+             self.m.run_weekly(self.repo)
+         # 第二週:基本盤只抽 5,但便宜→升級全跑 7 包
+         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+             out2 = self.m.run_weekly(self.repo)
+         self.assertEqual(sorted(out2["replayed"]), list("abcdefg"), "便宜存量要升級全跑")
+ 
++    def test_full_sweep_threshold_covers_real_stock(self):
++        """2026-09-21:門檻從寫死 60 秒改成常數 FULL_SWEEP_SECONDS=180。
++        出身:真實存量 134 包、實測全量 58 秒(0.45s/包),估 60.3 秒剛好卡在舊門檻外 → 每週只抽 5 包、
++        跑完一圈要半年。翻紅釘:把門檻改回 60 → ② 翻紅(0.45s/包 × 134 包 = 60.3 > 60,不再升級全跑)。"""
++        self.assertEqual(self.m.FULL_SWEEP_SECONDS, 180)
++        for lid in [f"p{i:03d}" for i in range(134)]:
++            self._verdict(lid)
++        # 先跑一週把 134 包都變成 seen(首週新凍全跑)
++        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
++             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.45)):
++            out1 = self.m.run_weekly(self.repo)
++        self.assertEqual(len(out1["replayed"]), 134, "首週新凍結本來就全跑")
++        # 第二週:基本盤只抽 5,靠門檻升級成全跑——0.45×134=60.3 秒,舊門檻 60 會擋下
++        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
++             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.45)):
++            out2 = self.m.run_weekly(self.repo)
++        self.assertEqual(len(out2["replayed"]), 134, "② 實測這個耗時的存量要升級全跑,不是只抽 5 包")
++
+     def test_skipped_new_keeps_must_run_status(self):
+         """cb3 ext-f3/s4-f3:預算見底被 skip 的新包不得標 seen——下週仍是「新凍必跑」。"""
+         for lid in ("a", "b"):
+             self._verdict(lid)
+         # 假鐘:第一包跑完即預算見底 → b 被 skip
+         state = {"t": 1000.0, "n": 0}
+         def clock():
+             state["n"] += 1
+             state["t"] += 0 if state["n"] < 4 else 10_000
+             return state["t"]
+@@ -1819,41 +1840,43 @@ class TestScenarioProbeAblation(unittest.TestCase):
+         import importlib.util
+         root = Path(__file__).resolve().parent.parent
+         spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+         cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
+         spec2 = importlib.util.spec_from_file_location("ablation_lumos_first",
+                                                        root / "governance" / "eval" / "ablation_lumos_first.py")
+         cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
+         cls.root = root
+ 
+     def test_strip_removes_only_rule_section(self):
+-        txt = ("## 知識圖譜先行\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
++        txt = ("## 程式碼為主\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
+                + self.sp.RULE_END + "\n1. 寫回\n")
+         out, ok = self.sp.strip_lumos_first_rule(txt)
+         self.assertTrue(ok)
+-        self.assertIn("## 知識圖譜先行\n前提兩行", out, "標題與前提要留")
+-        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "三條鐵則要留")
++        self.assertIn("## 程式碼為主\n前提兩行", out, "標題與前提要留")
++        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "後面那節要留")
+         self.assertNotIn("★第四條★", out, "小節正文要砍")
+         self.assertNotIn(self.sp.RULE_HEAD, out)
+ 
+     def test_strip_missing_marker_returns_unchanged(self):
+         txt = "沒有那一節的檔"
+         out, ok = self.sp.strip_lumos_first_rule(txt)
+         self.assertFalse(ok); self.assertEqual(out, txt)
+ 
+     def test_strip_real_claude_md_has_markers(self):
+-        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完三條鐵則還在。範本改名這裡先紅。"""
++        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完其餘各節還在。範本改名這裡先紅。
++        2026-09-21 範本改定位後,要拔的那節叫「怎麼用」(收在「寫筆記時」之前),不再是「第一個工具呼叫」。"""
+         cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
+         out, ok = self.sp.strip_lumos_first_rule(cm)
+-        self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
+-        self.assertIn("### 鐵則", out)
+-        self.assertIn("## 知識圖譜先行", out)
++        self.assertTrue(ok, "CLAUDE.md 找不到要拔的那一節的邊界,without 組做不出來")
++        self.assertIn("### 鐵則", out, "鐵則要留")
++        self.assertIn("### 寫筆記時", out, "寫法規範那節不在本 ablation 範圍,要留")
++        self.assertIn("## 程式碼為主", out, "開頭那節要留")
+         self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
+ 
+     def test_lumos_stats(self):
+         calls = [("Read", "x"), ("Bash", "scripts/lumos search foo"), ("Bash", "grep y")]
+         self.assertEqual(self.sp.lumos_stats(calls), (True, 1))
+         self.assertEqual(self.sp.lumos_stats([]), (False, None))
+         self.assertEqual(self.sp.lumos_stats([("Bash", "ls lumosity")]), (False, None), "字界:lumosity 不算")
+         self.assertEqual(self.sp.lumos_stats([("Skill", "lumos-project-notes")]), (False, None), "Skill 不算敲到")
+         # 2026-09-02 灌水修正:grep 知識庫目錄路徑不是敲 lumos;帶 python3 前綴、帶管線的子指令要算
+         self.assertEqual(self.sp.lumos_stats([("Bash", 'grep -rn "canary" docs/lumos-toolchain-knowledge/Systems/')]), (False, None))
