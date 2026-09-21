@@ -1,0 +1,205 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/探針以工作樹為來源會改到本體.md b/docs/lumos-toolchain-knowledge/Issues/探針以工作樹為來源會改到本體.md
+new file mode 100644
+index 00000000..98272eba
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Issues/探針以工作樹為來源會改到本體.md
+@@ -0,0 +1,64 @@
++---
++type: issue
++status: open
++created: 2026-09-21
++updated: 2026-09-21
++aliases:
++  - 探針隔離破口
++  - probe worktree 破口
++about_code: []
++tags:
++  - type/issue
++  - status/open
++  - priority/P0
++  - risk/守衛面
++  - scope/loop-engineering
++related:
++  - "[[Systems/codex-harness]]"
++summary: |-
++  FLAG:TECHNICAL
++  PITFALL:[2026-09-21]★情境探針拿 git worktree 當來源時,三道隔離全部寫進真 repo★——工作樹的 `.git` 是一行指回本體的文字檔,rsync 原樣複製,沙盒的 git 指令就落在本體上:遠端被拔光、hooks 路徑被指到臨時目錄,所有防護層靜默失效。重現:`git worktree add --detach /tmp/x HEAD` 後用它當 `--repo` 跑一次探針,再看本體的 `git remote -v`
++  WHY:[src:2026-09-21 做新舊定位對照時實際踩到]沙盒設計假設來源的 `.git` 是目錄;主 repo 是目錄所以一直沒事,worktree 是檔就破了。
++---
++# 探針以工作樹為來源會改到本體
++
++## 症狀
++
++用 `git worktree` 開的臨時樹當情境探針的 `--repo` 來源,跑完之後**本體 repo** 出現:
++
++- `git remote -v` 空的,推不上去(`fatal: 'Lumos' does not appear to be a git repository`)。
++- `core.hooksPath` 指向一個已被刪掉的探針臨時目錄,於是 pre-commit / pre-push / 收工提醒全部靜默不跑。
++- 設定檔的時間戳是探針跑的那一刻。
++
++**最危險的不是推不上去,是防護層失效不會有人發現**——推不上去會當場報錯,防護失效只會讓下一批改動一路綠燈進去。
++
++## 根因
++
++管沙盒的那支腳本(它的家在 [[Systems/codex-harness]])用 rsync 把來源整個複製過去,然後在副本裡跑三道隔離:拔掉所有遠端、把 hooks 路徑指到副本專用目錄、寫一支硬擋的 pre-push。
++
++這三道都帶了工作目錄參數,寫法沒錯。**錯在前提**:它假設來源的 `.git` 是目錄。
++
++- 主 repo 的 `.git` 是目錄 → rsync 複製一整份 → 副本的 git 指令落在副本上,隔離成立。
++- `git worktree` 開出來的樹,`.git` 是**一行文字的檔**,內容是 `gitdir: <本體路徑>/.git/worktrees/<名>` → rsync 原樣複製 → 副本的 git 指令**全部落在本體上**。
++
++所以三道隔離反向生效:拔的是真遠端,改的是真 hooks 路徑,硬擋的 pre-push 反而沒裝到本體。
++
++## 現在怎麼繞
++
++跑探針時**不要拿 worktree 當來源**,只給真 clone 的根目錄。要做「舊版設定」這種對照組,改用完整 clone(`git clone`)而不是 `git worktree add`。
++
++踩到之後的復原:
++
++```
++git -C <本體> config core.hooksPath scripts/hooks
++git -C <本體> remote add <名> <網址>
++lumos enforcement        # 驗防護層有沒有全部回來
++```
++
++## 什麼條件算修好
++
++1. 來源的 `.git` 是檔(worktree)時,建沙盒直接停手並講清楚原因,不是照跑。
++2. 有一條測試餵一個 worktree 形狀的來源,證明它會停手而不是動到本體。
++3. 復原步驟寫進說明,並且 `lumos enforcement` 能驗出防護有沒有回來(這條現在就成立)。
++
++REVISIT:2026-10-05 若還沒修,把探針的 `--repo` 暫時限制成只收真 clone 根目錄,先把破口封住再談完整修法。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index a8634f3f..95d25139 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -19,20 +19,21 @@ tags:
+   - scope/platform
+ summary: |-
+   FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/hooks+hooks.json(--target codex,matcher 對照:Edit|Write→apply_patch、Agent→SubagentStart)+~/.agents/skills+AGENTS.md 同塊區塊+CODEX_HOME/agents/lumos_reviewer.toml → 使用者開一次互動 codex 按 Trust all → 之後 exec/互動兩模式 hook 都跑
+   KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)
+   KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)★:改了程式碼、筆記沒動 → 兩家都回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對
+   KEY:★審查席三席,點哪一席看你在審什麼(2026-09-08 Enzo 裁;★2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,推理強度照舊——額度常撞上限,決策見 decisions★))★ — 散文審(設計審/文件)`lumos_reviewer`=sol+medium(預設)/ 程式碼審(一般)`lumos_reviewer_code`=sol+xhigh / 程式碼審(tier=high)`lumos_reviewer_max`=sol+xhigh。三席 developer_instructions 完全相同(框架單源),差別只在模型與推理強度。★散文審只給 medium 的理由=實測 xhigh 審 8k 字元 README 語感慢到使用者喊停;推理強度要配題目,它的成本是牆鐘時間,審查慢到讓人不想派就等於沒有這道防線★。★推翻舊宣稱「Codex 不能逐席指定模型」★——TOML 的 model / model_reasoning_effort 實測有效(反證法:指定帳號會 400 的模型→席位啟動失敗)。astra 只給高風險的理由=Plus 額度緊,全用會一輪吃光→退回沒有外家席。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]
+   KEY:★三席之外還有一刀,而且可能比推理強度更重要(2026-09-08,另一 session 實測回饋)★ — 外家席跑在唯讀沙盒裡,★建不了暫存檔=造不出現場=跑不了實驗★,所以它的報告會全部標「讀碼推論,未實跑」。實例:某輪六條裡兩條 blocker 實測全中,但一條 major 它高估了——它說無上限掃描會把看門狗耗死,實際把檔案養到 68MB 跑起來只要 0.9 秒,而那個檔每天只長 1KB。★處置:席位跑不動實驗時,它的 severity 要當成「待查證」不是「已成立」,查證成本落在編排者身上★。推論:給 code 席一個可寫的沙箱,效益可能比再調高一階推理強度更大(未做,列為候選)
+   KEY:★Codex 當編排者★:loop next 首輪必帶 --orchestrator codex(家族相對化:外家=非編排者那家);派工訊息對 hook 是密文(multi-agent v2 設計,改不了),鏡頭改走 dispatch-lens --arm <range> --seats N → 子代理 SubagentStart 原子領席(TTL 10 分,首行「LUMOS-LENS range=… 第 k/N 席」)→ --disarm;審查席點名 lumos_reviewer(0.153.2 選得中、0.144.1 忽略;唯讀靠父代理 --sandbox read-only,TOML sandbox_mode 不擋)
+   KEY:★天生限制(工具補不了,誠實界線)★:①hook 要人按一次信任(綁 hooks.json 命令列,換檔內容不用重按;enforcement 對 Codex hook 只能報「已註冊」)②派工訊息密文③stderr 對 Codex 模型零訊號(只有 additionalContext/decision 兩通道)④codex exec 沒有 --max-turns,擋一次就是上限⑤同 repo 同窗口的無關子代理會搶 armed 席
+   KEY:★順帶修的老洞(2026-09-05)★:is_code_file 只認副檔名,本 repo 主程式 scripts/lumos 無副檔名 → Stop 提醒 2026-05 上線起對它從沒生效(兩家皆然);現在 repo 內、無副檔名、一般檔、首行是 #!也算程式碼(先判位置再開檔,FIFO 不開)
++  PITFALL:[2026-09-21]★拿 git worktree 當探針來源,三道隔離會全部寫進本體★——worktree 的 `.git` 是一行指回本體的檔,rsync 原樣複製後,沙盒裡的拔遠端與設 hooks 路徑都落在真 repo 上,防護層靜默失效(推不上去才會發現)。已加前提檢查:來源的 `.git` 是檔就停手。單源 [[Issues/探針以工作樹為來源會改到本體]] [test:t_probe_sandbox_refuses_worktree_source]
+   PITFALL:[2026-09-21]★探針題目會跟著程式碼腐爛,腐爛之後量到的東西跟題目想量的無關,而且看起來像規矩失效★——d01 叫 AI 改提交前那道閘([[Systems/每支檔有家]] 管的那支)裡的 sync_nudge,那段 2026-09-11 就移除了;AI 查了波及、讀了碼、發現前提不成立就停下來問,這是正確行為,卻因為「沒寫回圖譜」被判不及格。新舊定位各跑三次都 0/3,一度被誤判成定位改壞了寫回紀律。挑題目的條件:①目標現在真的存在 ②改了會影響行為 ③它的家有筆記在講它。重現:`python3 scripts/scenario_probe.py --scenarios governance/scenarios/discipline.jsonl --only d01-writeback-after-code --runs 3 --timeout 700`
+   FACT:[2026-09-21 以程式碼為準]SessionStart 進場提醒(`scripts/hooks/claude/lumos-entry-hook.py`)的開場句跟著紀律範本改定位改寫了:從「第一個工具呼叫是 lumos,不是 grep」改成「程式碼是現況的依據,圖譜補程式碼看不出的脈絡」。這句話同時硬編在八個入口檔,漏改任一處就會有兩套互斥的第一步,由 `scripts/test_lumos.py` 的 `t_entry_points_agree_with_code_first` 擋。★另有兩支既有測試把訊息文字寫死在斷言裡★(`t_entry_hook_index_and_lag`、`t_entry_hook_enforcement_failopen`):它們釘的是「核心提醒有沒有被吃掉」,所以改訊息時要一起改斷言裡那個指令名,現在釘的是 `lumos impact`。2026-09-21 就是漏跑這兩支、被推送前的全套閘擋下來才發現的。現值查:`grep -n 'msg = ' scripts/hooks/claude/lumos-entry-hook.py`
+   FACT:[2026-09-21 以程式碼為準]情境探針消融組要拔掉的那一節,邊界常數跟著紀律範本改定位一起改名了(原本抓「第一個工具呼叫是 lumos」那一節,現在抓「怎麼用」到「寫筆記時」之間);拔錯範圍會讓「不帶查詢指引」那組的前提失效,所以 `scripts/scenario_probe.py` 拔不到邊界時直接停手、不跑。現值查:`grep -n 'RULE_HEAD\|RULE_END' scripts/scenario_probe.py`
+   DEP:scripts/lumos(_codex_home/_sync_global_hooks/_install_codex_agent/dispatch-lens/loop next --orchestrator/enforcement Codex 列)/merge-claude-settings.py --target codex/scripts/hooks/claude/{check-graph-sync,impact-hook,dispatch-lens-hook,lumos-entry-hook}.py/scenario_probe.py --runner codex --stop-block/recount.py 讀 Codex 稿
+   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 01c32ed7..e39e12a0 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -183,20 +183,32 @@ def make_sandbox(src, arm="with"):
+     這樣情境之間的 git checkout -- . 不會把它復原。
+ 
+     2026-08-23 事故:守衛題 a05 的情境是「沒有我就開工做」,被測 AI 真的改了計劃檔並 push——
+     臨時副本是 rsync 來的,.git/config 裡的 remote 跟著複製,push 就直接推到真遠端,
+     主幹多了一筆 author=probe@local 的「probe snapshot」(已覆蓋)。
+     隔離不只是「動到的只是副本」,還要「副本推不出去」。三道:
+       ① 拔掉所有 remote(沒有目標就沒得推)
+       ② pre-push hook 寫死 exit 1(就算被測 AI 自己加回 remote 也擋;hooksPath 指向副本內的專用目錄)
+       ③ 假身分 probe@local 維持——即使前兩道都失效,GitHub 上也認得出這不是人
+     """
++    # ★來源不能是 git worktree★(2026-09-21 實際踩到,Issues/探針以工作樹為來源會改到本體):
++    # worktree 的 .git 是一行 `gitdir: <本體>/.git/worktrees/<名>` 的文字檔,rsync 原樣複製後,
++    # 下面三道隔離(拔 remote / 設 hooksPath / 裝 pre-push)全部會落在★本體★上:
++    # 真遠端被拔光、真 hooksPath 指到臨時目錄,所有防護層靜默失效,而且推不上去才會發現。
++    # 隔離的前提是「副本有自己的 .git」,前提不成立就停手,不照跑。
++    src_git = Path(src) / ".git"
++    if src_git.is_file():
++        raise RuntimeError(
++            f"來源 {src} 是 git worktree(它的 .git 是檔,指回本體),"
++            "沙盒的隔離動作會寫進本體 repo——拔掉真遠端、改掉真 hooksPath,防護會靜默失效。"
++            "要做對照組請用完整 clone(git clone),不要用 git worktree add。"
++        )
+     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
+     work = tmp / "repo"
+     work.mkdir(parents=True)
+     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
+                     f"{src}/", f"{work}/"], check=True)
+     # ① 拔 remote
+     r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True)
+     for name in r.stdout.split():
+         subprocess.run(["git", "remote", "remove", name], cwd=str(work))
+     # ② 副本專用 hooks 目錄:pre-push 硬擋;其餘 hook 不存在=不跑(取代原本指向 /dev/null 的做法)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index df24ce38..6467c662 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -687,20 +687,67 @@ def t_install_global_hook_sync():
+              # 同上:注入合成的相容期名字,測的是「teardown 會不會清空殼」這個機制
+              "m._RETIRED_STUB_CLAUDE_HOOKS = ('retired-example-hook.py',);"
+              "m._teardown_global_claude(Path(sys.argv[2]))")
+     _sp.run([sys.executable, "-c", code6, GRAPHCTL, str(repo)],
+             env=dict(os.environ, HOME=str(fake6), USERPROFILE=str(fake6)),
+             capture_output=True, text=True)
+     check("撤除兩階段: teardown 連相容期空殼一起清掉",
+           not (h6 / "retired-example-hook.py").exists())
+ 
+ 
++def t_probe_sandbox_refuses_worktree_source():
++    """★來源是 git worktree 就停手★:worktree 的 .git 是一行指回本體的檔,
++    rsync 原樣複製後,沙盒裡的 git 指令會全部落在本體上——拔遠端拔到真遠端、
++    hooks 路徑改到真 repo,所有防護層靜默失效。
++
++    出身(2026-09-21 實際踩到,[[Issues/探針以工作樹為來源會改到本體]]):做新舊定位對照時
++    用 `git worktree add` 開臨時樹當來源,跑完本體的 remote 全沒了、core.hooksPath 指到
++    已刪掉的臨時目錄。三道隔離寫法都沒錯,錯在假設來源的 .git 是目錄。
++    翻紅釘:把 make_sandbox 裡那道 .git 是不是檔的檢查拿掉 → 這條紅(而且會真的改到來源)。
++    """
++    import importlib.util, subprocess as _sp, tempfile as _tf
++    from pathlib import Path as _P
++    repo = _P(GRAPHCTL).resolve().parent.parent
++    spec = importlib.util.spec_from_file_location("probe_wt", repo / "scripts" / "scenario_probe.py")
++    m = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(m)
++
++    src = _P(_tf.mkdtemp(prefix="probe-wtsrc-")) / "repo"
++    src.mkdir()
++    _sp.run(["git", "init", "-q", str(src)], check=True)
++    (src / "a.txt").write_text("x\n", encoding="utf-8")
++    _sp.run(["git", "add", "a.txt"], cwd=str(src), check=True)
++    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
++            cwd=str(src), check=True)
++    _sp.run(["git", "remote", "add", "origin", "https://example.invalid/x.git"],
++            cwd=str(src), check=True)
++    wt = _P(_tf.mkdtemp(prefix="probe-wt-")) / "tree"
++    _sp.run(["git", "worktree", "add", "--detach", str(wt), "HEAD"],
++            cwd=str(src), capture_output=True, check=True)
++    check("前提: worktree 的 .git 是檔不是目錄", (wt / ".git").is_file(), str(wt / ".git"))
++
++    raised = ""
++    try:
++        m.make_sandbox(wt)
++    except Exception as e:      # 這裡就是要確認它有停手,所以寬接
++        raised = str(e)
++    check("worktree 當來源 → 停手,不照跑", raised != "", "make_sandbox 沒有停手")
++    check("停手訊息要講得出為什麼", "worktree" in raised or "工作樹" in raised, raised)
++    # ★真正的傷害面★:來源的 remote 與 hooksPath 不准被動到
++    remotes = _sp.run(["git", "remote"], cwd=str(src), capture_output=True, text=True).stdout.split()
++    check("來源的 remote 沒被拔掉", remotes == ["origin"], str(remotes))
++    hp = _sp.run(["git", "config", "core.hooksPath"], cwd=str(src),
++                 capture_output=True, text=True).stdout.strip()
++    check("來源的 hooksPath 沒被改", hp == "", repr(hp))
++    _sp.run(["git", "worktree", "remove", "--force", str(wt)], cwd=str(src), capture_output=True)
++
++
+ def t_probe_sandbox_cannot_push():
+     """★探針沙盒推不出去★:被測 AI 在副本裡做什麼都行,但 push 必須被擋。
+ 
+     2026-08-23 事故:守衛題的情境是「沒有我就開工做」,被測 AI 真的改檔並 push,
+     副本 rsync 來的 .git/config 帶著 remote,一筆 author=probe@local 的假快照上了主幹。
+     三道:拔 remote / pre-push 硬擋 / 假身分。本測試★真的試 push★,不只看設定。
+     翻紅釘:把 make_sandbox 裡拔 remote 與 pre-push 那兩段拿掉 → 第 2、3 條翻紅。"""
+     import importlib.util, subprocess as _sp, tempfile as _tf
+     from pathlib import Path as _P
+     repo = _P(GRAPHCTL).resolve().parent.parent

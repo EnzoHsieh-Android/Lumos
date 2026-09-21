@@ -177,6 +177,16 @@ def global_skills_health():
     return bad
 
 
+def _git_env():
+    """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
+    指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
+    env = dict(os.environ)
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+              "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+        env.pop(k, None)
+    return env
+
+
 def make_sandbox(src, arm="with"):
     """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
     arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
@@ -190,15 +200,36 @@ def make_sandbox(src, arm="with"):
       ② pre-push hook 寫死 exit 1(就算被測 AI 自己加回 remote 也擋;hooksPath 指向副本內的專用目錄)
       ③ 假身分 probe@local 維持——即使前兩道都失效,GitHub 上也認得出這不是人
     """
+    # ★隔離的前提:副本要有自己的 git 目錄★(2026-09-21,Issues/探針以工作樹為來源會改到本體)
+    # 下面三道隔離(拔 remote / 設 hooksPath / 裝 pre-push)都靠「git 指令落在副本上」才成立。
+    # 前提不成立時它們會反過來寫進本體:真遠端被拔光、真 hooksPath 被指到臨時目錄,
+    # 所有防護層靜默失效,而且要等到 push 失敗才有人發現。
+    # ★用正面條件判,不列舉壞形狀★(審查席:第一版只擋「.git 是檔」,漏了 symlink 與 GIT_DIR):
+    #   ① 問 git 來源的 git 目錄實際在哪,要求它就在來源底下(worktree/symlink/separate-git-dir 一起涵蓋)
+    #   ② 問的時候與之後所有 git 呼叫都用洗過的環境,GIT_DIR / GIT_WORK_TREE 這類會蓋掉 cwd 的變數一律拔掉
+    genv = _git_env()
+    real_src = Path(os.path.realpath(src))
+    probe = subprocess.run(["git", "-C", str(real_src), "rev-parse", "--absolute-git-dir"],
+                           capture_output=True, text=True, env=genv)
+    if probe.returncode != 0:
+        raise RuntimeError(f"來源 {src} 問不出 git 目錄({probe.stderr.strip()[:120]}),沙盒隔離的前提不成立,停手")
+    gitdir = Path(os.path.realpath(probe.stdout.strip()))
+    if not str(gitdir).startswith(str(real_src) + os.sep):
+        raise RuntimeError(
+            f"來源 {src} 的 git 目錄在 {gitdir},不在來源目錄裡(常見原因:它是 git worktree、"
+            ".git 是指到別處的 symlink、或用了 --separate-git-dir)。"
+            "沙盒的隔離動作會寫進那個 git 目錄所屬的 repo——拔掉真遠端、改掉真 hooksPath,防護會靜默失效。"
+            "要做對照組請用完整 clone(git clone),不要用 git worktree add。"
+        )
     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
     work = tmp / "repo"
     work.mkdir(parents=True)
     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
                     f"{src}/", f"{work}/"], check=True)
     # ① 拔 remote
-    r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True)
+    r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True, env=genv)
     for name in r.stdout.split():
-        subprocess.run(["git", "remote", "remove", name], cwd=str(work))
+        subprocess.run(["git", "remote", "remove", name], cwd=str(work), env=genv)
     # ② 副本專用 hooks 目錄:pre-push 硬擋;其餘 hook 不存在=不跑(取代原本指向 /dev/null 的做法)
     hooks = tmp / "hooks"
     hooks.mkdir()
@@ -212,9 +243,9 @@ def make_sandbox(src, arm="with"):
             raise RuntimeError("without 組:CLAUDE.md 找不到「第一個工具呼叫」小節的邊界,拔不乾淨,實驗無效,停手")
         cm.write_text(new, encoding="utf-8")
     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
-    subprocess.run(["git", "add", "-A"], cwd=str(work))
+    subprocess.run(["git", "add", "-A"], cwd=str(work), env=genv)
     subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
-                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work))
+                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work), env=genv)
     return work
 
 

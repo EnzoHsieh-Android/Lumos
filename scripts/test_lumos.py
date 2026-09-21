@@ -694,6 +694,86 @@ def t_install_global_hook_sync():
           not (h6 / "retired-example-hook.py").exists())
 
 
+def t_probe_sandbox_refuses_worktree_source():
+    """★來源是 git worktree 就停手★:worktree 的 .git 是一行指回本體的檔,
+    rsync 原樣複製後,沙盒裡的 git 指令會全部落在本體上——拔遠端拔到真遠端、
+    hooks 路徑改到真 repo,所有防護層靜默失效。
+
+    出身(2026-09-21 實際踩到,[[Issues/探針以工作樹為來源會改到本體]]):做新舊定位對照時
+    用 `git worktree add` 開臨時樹當來源,跑完本體的 remote 全沒了、core.hooksPath 指到
+    已刪掉的臨時目錄。三道隔離寫法都沒錯,錯在假設來源的 .git 是目錄。
+    翻紅釘:把 make_sandbox 裡那道 .git 是不是檔的檢查拿掉 → 這條紅(而且會真的改到來源)。
+    """
+    import importlib.util, subprocess as _sp, tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("probe_wt", repo / "scripts" / "scenario_probe.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    src = _P(_tf.mkdtemp(prefix="probe-wtsrc-")) / "repo"
+    src.mkdir()
+    _sp.run(["git", "init", "-q", str(src)], check=True)
+    (src / "a.txt").write_text("x\n", encoding="utf-8")
+    _sp.run(["git", "add", "a.txt"], cwd=str(src), check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+            cwd=str(src), check=True)
+    _sp.run(["git", "remote", "add", "origin", "https://example.invalid/x.git"],
+            cwd=str(src), check=True)
+    wt = _P(_tf.mkdtemp(prefix="probe-wt-")) / "tree"
+    _sp.run(["git", "worktree", "add", "--detach", str(wt), "HEAD"],
+            cwd=str(src), capture_output=True, check=True)
+    check("前提: worktree 的 .git 是檔不是目錄", (wt / ".git").is_file(), str(wt / ".git"))
+
+    def _try(src_dir, env=None):
+        import os as _os
+        old = dict(_os.environ)
+        if env:
+            _os.environ.update(env)
+        try:
+            m.make_sandbox(src_dir)
+            return ""
+        except Exception as e:      # 這裡就是要確認它有停手,所以寬接
+            return str(e)
+        finally:
+            _os.environ.clear()
+            _os.environ.update(old)
+
+    raised = _try(wt)
+    check("worktree 當來源 → 停手,不照跑", raised != "", "make_sandbox 沒有停手")
+    check("停手訊息要講得出為什麼",
+          any(w in raised for w in ("worktree", "工作樹", "不在來源目錄裡")), raised)
+    # ★真正的傷害面★:來源的 remote 與 hooksPath 不准被動到
+    remotes = _sp.run(["git", "remote"], cwd=str(src), capture_output=True, text=True).stdout.split()
+    check("來源的 remote 沒被拔掉", remotes == ["origin"], str(remotes))
+    hp = _sp.run(["git", "config", "core.hooksPath"], cwd=str(src),
+                 capture_output=True, text=True).stdout.strip()
+    check("來源的 hooksPath 沒被改", hp == "", repr(hp))
+    # ★同族形狀一起擋★(2026-09-21 審查席:只擋 .git 是檔,漏了 symlink 與環境變數):
+    # ② .git 是 symlink 指到別處的目錄——is_file() 會回 False,但副本的 git 指令一樣落在本體
+    sym = _P(_tf.mkdtemp(prefix="probe-sym-")) / "repo"
+    sym.mkdir(parents=True)
+    (sym / "a.txt").write_text("x\n", encoding="utf-8")
+    (sym / ".git").symlink_to(src / ".git")
+    r2 = _try(sym)
+    check(".git 是 symlink 指到別處 → 停手", r2 != "", "symlink 形狀沒被擋")
+    remotes2 = _sp.run(["git", "remote"], cwd=str(src), capture_output=True, text=True).stdout.split()
+    check("symlink 情形下來源的 remote 也沒被拔", remotes2 == ["origin"], str(remotes2))
+    # ③ GIT_DIR 已設——來源完全正常也會讓 git 指令落到別的 repo
+    plain = _P(_tf.mkdtemp(prefix="probe-plain-")) / "repo"
+    plain.mkdir(parents=True)
+    _sp.run(["git", "init", "-q", str(plain)], check=True)
+    (plain / "a.txt").write_text("x\n", encoding="utf-8")
+    _sp.run(["git", "add", "a.txt"], cwd=str(plain), check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+            cwd=str(plain), check=True)
+    r3 = _try(plain, env={"GIT_DIR": str(src / ".git")})
+    check("GIT_DIR 已設 → 要嘛停手、要嘛不受它影響", True, "")   # 行為擇一,下面驗真正的傷害面
+    remotes3 = _sp.run(["git", "remote"], cwd=str(src), capture_output=True, text=True).stdout.split()
+    check("GIT_DIR 情形下來源的 remote 沒被拔", remotes3 == ["origin"], f"{remotes3} / raised={r3!r}")
+    _sp.run(["git", "worktree", "remove", "--force", str(wt)], cwd=str(src), capture_output=True)
+
+
 def t_probe_sandbox_cannot_push():
     """★探針沙盒推不出去★:被測 AI 在副本裡做什麼都行,但 push 必須被擋。
 
