@@ -7034,7 +7034,10 @@ def t_entry_hook_enforcement_failopen():
         ("逾時", "import time; time.sleep(999)\n"),
     ):
         r, _d = run_in(body)
-        ok = r.returncode == 0 and "lumos search" in r.stdout and "commands/INDEX.md" in r.stdout
+        # 2026-09-21:進場提醒跟著紀律範本改定位,核心那句從「第一個工具呼叫是 lumos search」
+        # 改成「先讀程式碼,改 code 前至少 lumos impact 一行」。這裡釘的是「核心提醒有沒有被吃掉」,
+        # 不是釘某個指令名,所以換成新訊息裡的核心指令。
+        ok = r.returncode == 0 and "lumos impact" in r.stdout and "commands/INDEX.md" in r.stdout
         check(f"enforcement {label} → 核心訊息照印、rc0", ok, f"rc={r.returncode} out={r.stdout[:120]!r} err={r.stderr[:120]!r}")
         check(f"enforcement {label} → 不追防護提醒行", "防護有" not in r.stdout, r.stdout[:150])
 
@@ -7070,7 +7073,7 @@ def t_entry_hook_index_and_lag():
         (d / "CLAUDE.md").write_text("# x\n<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\n" + body + "\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
         out = run_hook(d, {"LUMOS_HOME": str(root)})
         ctx = _j.loads(out)["hookSpecificOutput"]["additionalContext"]
-        check("有圖譜 → 印索引路徑", "commands/INDEX.md" in ctx and "lumos search" in ctx, ctx)
+        check("有圖譜 → 印索引路徑", "commands/INDEX.md" in ctx and "lumos impact" in ctx, ctx)
         check("區塊=範本 → 不提醒落後", "lumos update" not in ctx, ctx)
         (d / "CLAUDE.md").write_text("# x\n<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9 -->\n舊的規則\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
         ctx = _j.loads(run_hook(d, {"LUMOS_HOME": str(root)}))["hookSpecificOutput"]["additionalContext"]
