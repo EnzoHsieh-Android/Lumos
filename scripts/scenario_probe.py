@@ -232,7 +232,7 @@ def _scen_visible_text(path):
     if path.suffix.lower() in (".md", ".markdown", ".html", ".svg", ".xml"):
         txt = _SCEN_HTML_COMMENT_RE.sub("", txt)
         return txt
-    return "\n".join(l for l in txt.split("\n") if not _SCEN_LINE_COMMENT_RE.match(l))
+    return "\n".join(ln for ln in txt.split("\n") if not _SCEN_LINE_COMMENT_RE.match(ln))
 
 
 def _check_one_target(sid, item, repo):
