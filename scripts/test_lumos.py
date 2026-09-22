@@ -4574,6 +4574,134 @@ def t_guard_overdue_blocks_doctor():
           late.stdout[-600:])
 
 
+def t_guard_overdue_local_blocks_only_touched():
+    """本機推送只擋「這次改動碰到的」那幾條逾期合約,沒碰到的只列出來不擋;CI 照舊擋全部。
+
+    出身:必要合約清單_計劃〈擋的範圍〉第一層。沒有這一層的話,圖譜裡任何一條別人的逾期預告
+    都會擋掉所有人的所有推送,而被擋的人還解不開(那條不是他的)——防忘記變成防做事。
+    翻紅釘:把收窄那段拿掉(不看碰到沒碰到) → ③紅;把沒碰到的那條也算進 issue → ④紅。
+    """
+    import datetime, re as _re
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Systems/Ship.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/ship.py\nsummary: |-\n  FLOW:b", body="# Ship\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    for node, claim, phase in (("Systems/Pay", "退費那條逾期了", "Phase 1"),
+                               ("Systems/Ship", "出貨那條逾期了", "Phase 2")):
+        r = run(v, "guard", "plan", node, claim, "--plan", "Projects/退款_計劃",
+                "--phase", phase, "--due", old, "--why", "還沒做", "--owner", "enzo")
+        check(f"① 預告建得起來({claim})", r.returncode == 0, r.stdout + r.stderr)
+
+    def _issues(out):
+        m = _re.search(r"發現 (\d+) 個 issue", out)
+        return int(m.group(1)) if m else 0
+
+    both = run(v, "doctor", "--ci")
+    check("② 沒給清單時(CI)兩條都算 issue、退出碼非零",
+          _issues(both.stdout) >= 2 and both.returncode != 0,
+          f"issues={_issues(both.stdout)} rc={both.returncode}\n" + both.stdout[-500:])
+
+    touched = v.parent / "touched.txt"
+    touched.write_text("scripts/pay.py\n", encoding="utf-8")
+    one = run(v, "doctor", "--ci", "--touched-from", str(touched))
+    seg = _section_of(one.stdout, "S15")
+    check("③ 給了清單時,碰到的那條仍然擋(退出碼非零)", one.returncode != 0,
+          f"rc={one.returncode}\n" + seg)
+    hard = [ln for ln in seg.split("\n") if "退費那條逾期了" in ln]
+    soft = [ln for ln in seg.split("\n") if "出貨那條逾期了" in ln]
+    check("③ 擋下的訊息指名碰到的那條", hard != [], seg)
+    check("④ 沒碰到的那條仍然列出來(不是消失)", soft != [], seg)
+    check("④ 沒碰到的那條不算進 issue", _issues(one.stdout) < _issues(both.stdout),
+          f"兩條={_issues(both.stdout)} 收窄後={_issues(one.stdout)}\n" + seg)
+
+    none_touched = v.parent / "touched2.txt"
+    none_touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
+    zero = run(v, "doctor", "--ci", "--touched-from", str(none_touched))
+    zseg = _section_of(zero.stdout, "S15")
+    check("⑤ 一條都沒碰到時不擋(退出碼 0)", zero.returncode == 0,
+          f"rc={zero.returncode}\n" + zseg)
+    check("⑤ 但兩條還是都列出來", "退費那條逾期了" in zseg and "出貨那條逾期了" in zseg, zseg)
+
+
+def t_prepush_passes_touched_list_to_doctor():
+    """推送前的閘要把「這次推了哪些檔」算給自檢,別人的逾期預告才不會擋到你的推送。
+
+    這支是真跑整支 pre-push,不是檢查腳本裡有沒有那個字串——只比對字串的話,
+    把旗標拼錯、或算出來的清單是空的,測試照樣綠(測試假綠形態第①型)。
+    翻紅釘:把掛鉤裡傳清單那行拿掉 → ③紅(沒碰到的那條會把推送擋下來)。
+    """
+    import subprocess as _sp, os as _os, datetime, tempfile
+    pre_push = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+
+    def _build(d, home_about, touch_file):
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        vault = Path(d) / "docs" / "t-knowledge"
+        for sub in ("Systems", "Verification", "Projects", "MOC"):
+            (vault / sub).mkdir(parents=True, exist_ok=True)
+        (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+        (vault / "Systems" / "Pay.md").write_text(
+            f"---\ntype: system\nstatus: doing\nabout_code:\n  - {home_about}\n"
+            "summary: |-\n  FLOW:a\n---\n# Pay\n", encoding="utf-8")
+        (vault / "Projects" / "P.md").write_text("---\ntype: project\nstatus: doing\n---\n# P\n", encoding="utf-8")
+        Path(d, "scripts").mkdir(exist_ok=True)
+        (Path(d) / "scripts" / "lumos").symlink_to(lumos_real)
+        _sp.run([sys.executable, lumos_real, "--vault", str(vault), "guard", "plan",
+                 "Systems/Pay", "逾期的那條", "--plan", "Projects/P", "--phase", "P1",
+                 "--due", old, "--why", "還沒做", "--owner", "enzo"], capture_output=True, text=True)
+        (Path(d) / touch_file).parent.mkdir(parents=True, exist_ok=True)
+        (Path(d) / touch_file).write_text("x = 1\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        (Path(d) / touch_file).write_text("x = 2\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "change")
+        head = g("rev-parse", "HEAD").stdout.strip()
+        base = g("rev-parse", "HEAD~1").stdout.strip()
+        env = dict(_os.environ); env["GIT_DIR"] = str(Path(d) / ".git")
+        return _sp.run(["bash", pre_push], cwd=d, env=env, capture_output=True, text=True,
+                       input=f"refs/heads/main {head} refs/heads/main {base}\n")
+
+    with tempfile.TemporaryDirectory() as d:
+        r = _build(d, "app/pay.py", "app/other.py")
+        check("③ 這次沒碰到那條合約管的檔 → 推送不被擋",
+              r.returncode == 0, f"rc={r.returncode}\n{r.stdout[-1200:]}\n{r.stderr[-600:]}")
+        check("③ 但那條還是有被列出來(不是靜音)",
+              "逾期的那條" in r.stdout, r.stdout[-1200:])
+    with tempfile.TemporaryDirectory() as d:
+        r = _build(d, "app/pay.py", "app/pay.py")
+        check("④ 這次真的碰到了 → 推送被擋下",
+              r.returncode != 0, f"rc={r.returncode}\n{r.stdout[-1200:]}\n{r.stderr[-600:]}")
+        check("④ 訊息說得出是你改到哪支檔踩到它",
+              "app/pay.py" in r.stdout, r.stdout[-1200:])
+
+
+def t_guard_overdue_local_skips_home_without_code():
+    """家節點沒寫「管哪幾支檔」時,本機那一層算不出有沒有碰到,照設計不擋(CI 仍擋)。
+
+    出身:必要合約清單_計劃〈擋的範圍〉——本機那一層的定位是窄而準,誤擋一次的代價是
+    有人被卡住又解不開;算不出來就交給 CI,不會真的漏掉。
+    翻紅釘:把「算不出來就不擋」改成「算不出來也擋」 → ②紅。
+    """
+    import datetime, re as _re
+    v = mkvault()
+    write(v, "Systems/NoCode.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# NoCode\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    run(v, "guard", "plan", "Systems/NoCode", "沒寫管哪幾支檔的那條", "--plan", "Projects/退款_計劃",
+        "--phase", "Phase 1", "--due", old, "--why", "還沒做", "--owner", "enzo")
+    touched = v.parent / "touched3.txt"
+    touched.write_text("scripts/pay.py\n", encoding="utf-8")
+    r = run(v, "doctor", "--ci", "--touched-from", str(touched))
+    seg = _section_of(r.stdout, "S15")
+    check("② 本機那一層不擋", r.returncode == 0, f"rc={r.returncode}\n" + seg)
+    check("② 但還是列出來,而且講明為什麼這次沒擋",
+          "沒寫管哪幾支檔的那條" in seg, seg)
+    ci = run(v, "doctor", "--ci")
+    check("③ CI(不給清單)照舊擋", ci.returncode != 0, ci.stdout[-400:])
+
+
 def t_context_shows_planned_contract():
     """查功能節點時,預告中的合約要另起一段印出來,不能跟已生效的混在一起。
 
@@ -27301,7 +27429,7 @@ def t_slim_gate_doctor_nameerror_counterfactual():
     check("★C3 反事實★ fixture: 生成 rc0", r.returncode == 0, r.stdout + r.stderr)
 
     text = dist_cli.read_text(encoding="utf-8")
-    marker = "def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):"  # 2026-08-21 +verbose(體檢 #10)
+    marker = "def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False, touched=None):"  # 2026-08-21 +verbose(體檢 #10);2026-09-22 +touched(本機只擋碰到的)
     check("★C3 反事實★ 產物含預期的 run_doctor 簽名(竄改點存在,前提沒漂移)",
           marker in text, "")
     tampered = text.replace(

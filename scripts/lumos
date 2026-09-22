@@ -971,7 +971,22 @@ def _append_governance_log(vault, events):
         pass
 
 
-def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):
+def _read_touched_list(path):
+    """讀「這次推送改到哪些檔」的清單(一行一個)。沒給=None(代表不收窄、照舊全擋)。
+
+    ★讀不到也回 None,不是回空集合★:空集合的意思是「這次什麼都沒碰到」,會讓整段靜音;
+    檔案打不開是我們自己的問題,不該因此少擋一條(必要合約清單_計劃〈擋的範圍〉)。
+    """
+    if not path:
+        return None
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    return {ln.strip() for ln in lines if ln.strip()}
+
+
+def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False, touched=None):
     C = {k: (v if color else "") for k, v in
          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
     notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
@@ -2296,7 +2311,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     try:
         import datetime as _gd
         _gtoday = _gd.date.today()
-        _gover, _gsoon = [], []
+        _gover, _gover_other, _gsoon = [], [], []
         for _grel, _gn in sorted(env.notes.items()):
             if _gn.fields.get("type") != "verification" or not _gn.fields.get(GUARD_MARK_FIELD):
                 continue
@@ -2313,13 +2328,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             _gclaim = (_gm.group(1).strip() if _gm else _grel)
             # ★到期當天不算過期★:最遲日期是人手寫的本地日期,誤擋一次比漏擋一天貴
             if _gd2 < _gtoday:
-                _gover.append(f"{_gclaim}(負責人 {_gowner},最遲 {_gd2});{_grel}")
+                _ghit, _gwhy = _guard_touches(_gn, env, touched)
+                _gline = f"{_gclaim}(負責人 {_gowner},最遲 {_gd2});{_grel}"
+                (_gover if _ghit else _gover_other).append(_gline + _gwhy)
             elif (_gd2 - _gtoday).days <= 7:
                 _gsoon.append(f"{_gclaim}(負責人 {_gowner},最遲 {_gd2});{_grel}")
         if _gover:
             warn(_gover, f"有 {len(_gover)} 條預告的合約已經逾期(不准延期,只能做完或棄置):",
                  "做完了:lumos guard settle <守衛節點> --test <測試方法>;"
                  "決定不做:先 lumos signoff <守衛節點> --ref <守衛節點> --note \"<為什麼>\",再 lumos guard abandon")
+        if _gover_other:
+            # ★本機那一層只擋這次碰到的★(必要合約清單_計劃〈擋的範圍〉第一層):
+            # 這幾條是別人的債,列出來讓人知道,但不擋這次推送——被擋的人解不開別人的合約,
+            # 那不是嚴格,是防做事。CI 不給清單,所以那邊照舊全擋。
+            warn_soft(_gover_other, f"另有 {len(_gover_other)} 條逾期的預告合約,但這次改動沒碰到它們(不擋這次推送):",
+                      "推送前的閘只擋你這次碰到的;這幾條由負責人自己收,CI 會擋全部")
         if _gsoon:
             warn_soft(_gsoon, f"有 {len(_gsoon)} 條預告的合約七天內到期(先講,還不擋):",
                       "現在做完最省事:lumos guard settle <守衛節點> --test <測試方法>")
@@ -10783,6 +10806,32 @@ def _guard_home_of(n):
     if isinstance(g, list) and g:
         return str(g[0]).strip()
     return str(g or "").strip()
+
+
+def _guard_touches(gn, env, touched):
+    """這條逾期的預告合約,跟「這次改動碰到的檔」有沒有關係。回 (要不要擋, 補充說明)。
+
+    ★本機那一層只擋碰到的、CI 擋全部★(必要合約清單_計劃〈擋的範圍〉三層):
+    分辨兩層靠的是有沒有給清單——推送前的閘算得出這次推了哪些檔就給,CI 不給。
+    給了清單卻算不出這條跟哪些檔有關(家節點不見、或家節點沒寫 about_code),本機這一層放行:
+    這一層的定位是窄而準,誤擋一次的代價是有人被卡住又解不開別人的合約;CI 那邊照樣會擋,漏不掉。
+    """
+    if touched is None:
+        return True, ""            # 沒給清單=CI 那一層,照舊全擋
+    home = _guard_home_of(gn)
+    if not home:
+        return False, ";這篇沒寫它守的是哪篇功能節點,算不出有沒有碰到"
+    hrel = env.find(home)
+    hn = env.notes.get(hrel) if hrel else None
+    if hn is None:
+        return False, f";找不到它守的功能節點 {home},算不出有沒有碰到"
+    files = [str(x).strip() for x in as_list(hn.fields.get("about_code")) if str(x).strip()]
+    if not files:
+        return False, f";{hrel} 沒寫它管哪幾支檔(about_code),算不出有沒有碰到"
+    hit = sorted(set(files) & set(touched))
+    if hit:
+        return True, f";你這次改到 {'、'.join(hit[:3])}"
+    return False, ""
 
 
 def cmd_guard_settle(env, ref, method):
@@ -29894,6 +29943,9 @@ def main():
     d = sub.add_parser("doctor", help="圖譜健康巡檢")
     d.add_argument("--strict", action="store_true", help="有 finding 即 exit 1 (CI 用)")
     d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩(+軟提醒全列)")
+    d.add_argument("--touched-from", dest="touched_from",
+                   help="一個列出「這次推送改到哪些檔」的檔案(一行一個,repo 相對路徑)。"
+                        "給了它,預告合約逾期那一段就只擋這次碰到的;不給=擋全部(CI 走這條)")
     d.add_argument("--verbose", action="store_true", help="軟提醒全列(預設每段最多 3 條,硬檢查不受影響)")
     d.add_argument("--suggest", action="store_true",
                    help="orphan Verification 附推薦掛載 Systems(從正文連結/plan_refs/feature 推斷,供人確認)")
@@ -30776,7 +30828,9 @@ def main():
 
     if args.cmd == "doctor":
         color = sys.stdout.isatty() and not args.ci
-        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci, verbose=args.verbose)
+        _touched = _read_touched_list(getattr(args, "touched_from", None))
+        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest,
+                          ci=args.ci, verbose=args.verbose, touched=_touched)
 
     if args.cmd in ("links", "backlinks", "context", "map", "show") or \
        (args.cmd == "decisions" and not args.superseded):
