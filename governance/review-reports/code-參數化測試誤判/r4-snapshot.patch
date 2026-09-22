@@ -1,0 +1,780 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index b2bd41f8..9b43a2a0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1289,21 +1289,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+                 if not invariant_audit_refs(inv):     # 綁了測試但沒經獨立合法性審計
+                     unaudited.append((rel, clean))
+             else:
+                 naked.append((rel, clean, refs))
+         dangling, fake, bad_platform = [], [], []
+         if bound:
+             if repo_root is None:
+                 print(f"  {C['Y']}—{C['X']} 無法定位 repo root,跳過 test_ref 存在性檢查(裸合約仍檢)")
+             else:
+                 # 多平台感知:每 ref 依平台前綴選對 root+profile 的 method set/haystack(跨 repo)。
+-                pdata, split, default, methods_for, hay_for = _platform_test_index(repo_root)
++                pdata, split, default, methods_for, hay_for, loose_for = _platform_test_index(repo_root)
+                 for rel, clean, refs in bound:
+                     for seg in refs:
+                         if split and ":" in seg:            # 多平台:含冒號 = 平台:名
+                             plat, name = seg.split(":", 1)
+                             plat, name = plat.strip(), name.strip()
+                             if plat not in split:           # 未定義前綴 → 明確報錯(不誤當方法名)
+                                 bad_platform.append(
+                                     f"{rel}: [test:{seg}] 平台前綴 '{plat}' 未定義於 platforms"
+                                     f"({', '.join(split)})")
+                                 continue
+@@ -4331,61 +4331,125 @@ def build_code_haystack(repo_root):
+         dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
+         for f in files:
+             if Path(f).suffix.lower() in CODE_EXTS_T:
+                 try:
+                     parts.append((Path(dp) / f).read_text(encoding="utf-8", errors="ignore"))
+                 except Exception:
+                     pass
+     return "\n".join(parts)
+ 
+ 
++def _py_declared_methods(repo_root, profile):
++    """Python 那棧的宣告集:用標準函式庫的語法剖析,不管縮排、類別內外都算。剖不動任一檔就回 None。
++
++    ★不要用放寬的正則去掃★(代碼審 r2 通才席 blocker):Python 的掃描刻意不剝字串,
++    而原本的行首錨同時兼任了「別把字串裡的東西當宣告」這個守門。把錨放寬之後,
++    docstring 裡縮排的程式範例會被當成真宣告——實測本 repo 自己的測試檔就多算 148 個,
++    那會把「同一支測試的多組輸入」誤判成撞名,原地重現這批本來要修的那個誤擋。
++    語法剖析看的是真的語法樹,字串就是字串,不會有這個問題。
++    """
++    import ast
++    mre = profile["method_re"]
++    names = set()
++    for txt in _walk_test_files(repo_root, profile):
++        try:
++            tree = ast.parse(txt)
++        except (SyntaxError, ValueError, RecursionError):
++            return None      # 有檔剖不動 → 這個 repo 我沒把握掃得全,回「不知道」
++        for node in ast.walk(tree):
++            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++                names.add(node.name)
++    # 用這個 profile 自己的樣式篩出「長得像測試」的。★要試好幾種寫法★(代碼審 r3):
++    # 只拿 "def x(" 一種去比對,遇到自訂成「只認類別裡的方法」(帶前導空白)或「async def」的樣式
++    # 就會整批篩空——那會讓這批修好的東西對那些專案悄悄失效,而且沒有任何提示。
++    probes = ("def {n}(", "    def {n}(", "async def {n}(", "    async def {n}(")
++    keep = {n for n in names if any(mre.match(pb.format(n=n)) for pb in probes)}
++    if names and not keep:
++        return None   # 一個都篩不出來=這個樣式我認不得,回「不知道」而不是「沒有別的」
++    return keep
++
++
++def _loose_declared_methods(repo_root, profile=None):
++    """回「不管縮排、類別內外都算」的宣告集;沒有精確的做法就回 None(=不知道,不豁免)。
++
++    回 None 的意思是「這個棧我沒把握掃得全」,呼叫端要當成「不知道」而不是「沒有別的」——
++    少算一支就會把真撞名放行(代碼審 r1 blocker)。
++    """
++    profile = profile or load_test_profile(repo_root)
++    mre = profile.get("method_re")
++    src = getattr(mre, "pattern", "") or ""
++    if not src:
++        return None
++    import re as _re
++    body = _re.sub(r"^\(\?[aiLmsux]+\)", "", src)   # 先剝行內旗標,旗標順序不該影響判斷
++    if not body.startswith("^"):
++        # 這個棧的宣告樣式本來就不錨在行首,正規那支已經掃得到縮排與類別裡的
++        return discover_test_methods(repo_root, profile)
++    if ".py" in {str(x).lower() for x in (profile.get("exts") or ())}:
++        return _py_declared_methods(repo_root, profile)
++    # 錨在行首、又不是 Python:沒有精確的放寬做法(放寬正則會把字串內容也撈進來),不豁免
++    return None
++
++
++def _walk_test_files(repo_root, profile):
++    """走過這個 profile 認得的測試檔,一個一個吐出內容(已套副檔名、檔名錨、file_must_match 篩選)。
++
++    ★走檔只有這一份★:宣告掃描(discover_test_methods)與「刻意放寬」那份都走這裡。
++    兩邊各寫一份 os.walk,哪天檔案篩選改了只改一邊,兩份看到的檔就不一樣,而差異沒有東西會翻紅。
++    """
++    import os, fnmatch
++    exts = profile["exts"]
++    must = profile.get("file_must_match")   # 選填:只認內容含此 marker 的檔(如 Maestro ^appId:)
++    fname_globs = profile.get("file_name_match")   # 選填:basename fnmatch 檔名錨(python:test_*.py)
++    for dp, dirs, files in os.walk(repo_root):
++        dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
++        for f in files:
++            if Path(f).suffix.lower() not in exts:
++                continue
++            # 檔名錨:ext 檢查後、讀檔前套(CheckT-Python-profile_計劃 std F4)
++            if fname_globs and not any(fnmatch.fnmatch(f, g) for g in fname_globs):
++                continue
++            try:
++                txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
++            except Exception:
++                continue
++            # file_must_match:讀檔後、去註解前先過濾(如 .yaml 一堆,只認真 Maestro flow;
++            # 濾掉 CI yaml 的 name: 被誤收)。現有 profile 無此鍵→.get() 回 None→不過濾。
++            if must is not None and not must.search(txt):
++                continue
++            yield txt
++
++
+ def discover_test_methods(repo_root, profile=None):
+     """掃 repo 內測試檔,回傳「真實測試方法名」集合(被測試框架註解標註者)。
+     測試棧 profile 決定掃哪些副檔名 + 用哪條方法 regex(預設 csharp-xunit;P5 語言可插拔)。
+     Check T 用此集合驗證 ★INVARIANT★ 綁定的是『可執行證據』而非散文裡的字面巧合(B6 審計)。"""
+-    import os, fnmatch
+     profile = profile or load_test_profile(repo_root)
+-    exts, mre = profile["exts"], profile["method_re"]
+-    must = profile.get("file_must_match")   # 選填:只認內容含此 marker 的檔(如 Maestro ^appId:)
+-    fname_globs = profile.get("file_name_match")   # 選填:basename fnmatch 檔名錨(python:test_*.py)
++    mre = profile["method_re"]
+     strip = profile.get("comment_strip", "c-style")  # 預設 c-style 向後相容;python="none"
+     methods = set()
+-    for dp, dirs, files in os.walk(repo_root):
+-        dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
+-        for f in files:
+-            if Path(f).suffix.lower() in exts:
+-                # 檔名錨:ext 檢查後、讀檔前套(CheckT-Python-profile_計劃 std F4)
+-                if fname_globs and not any(fnmatch.fnmatch(f, g) for g in fname_globs):
+-                    continue
+-                try:
+-                    txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
+-                except Exception:
+-                    continue
+-                # file_must_match:讀檔後、去註解前先過濾(如 .yaml 一堆,只認真 Maestro flow;
+-                # 濾掉 CI yaml 的 name: 被誤收)。現有 profile 無此鍵→.get() 回 None→不過濾。
+-                if must is not None and not must.search(txt):
+-                    continue
+-                # 去註解(語言感知,2026-07-25 根因修):c-style 剝 // 與 /*..*/(行尾註解會打斷
+-                # 「註解串→方法簽章」連續比對,真測試被誤判偽證據)。★python 走 "none" 不剝★——
+-                # Python 無 C 式註解,剝了反被中文註解/字串字面裡的 /*..*/ 配對誤吃大段內容
+-                # (實測 test_lumos.py 260→94);被註解的 # def 不在行首,PYTHON_TEST_RE 行首錨排除。
+-                if strip in ("c-style", "c-style+strings"):
+-                    txt = re.sub(r"//[^\n]*", "", txt)
+-                    txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+-                # ★"c-style+strings" 多剝字串字面★(2026-09-12 Java 補棧代碼審 r1):字串內容清空但保留
+-                # 引號本身,所以「字串裡剛好寫著方法簽章」不會被當成真的測試方法。單行內比對(不跨換行),
+-                # 跨行的 Java text block 不在此列——那是已知邊界,寫在 JAVA_TEST_RE 的註解裡。
+-                if strip == "c-style+strings":
+-                    txt = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', txt)
+-                    txt = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", txt)
+-                for m in mre.finditer(txt):
+-                    methods.add(m.group(1).strip("`"))  # Kotlin 反引號測試名去引號
++    for txt in _walk_test_files(repo_root, profile):
++        # 去註解(語言感知,2026-07-25 根因修):c-style 剝 // 與 /*..*/(行尾註解會打斷
++        # 「註解串→方法簽章」連續比對,真測試被誤判偽證據)。★python 走 "none" 不剝★——
++        # Python 無 C 式註解,剝了反被中文註解/字串字面裡的 /*..*/ 配對誤吃大段內容
++        # (實測 test_lumos.py 260→94);被註解的 # def 不在行首,PYTHON_TEST_RE 行首錨排除。
++        if strip in ("c-style", "c-style+strings"):
++            txt = re.sub(r"//[^\n]*", "", txt)
++            txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
++        # ★"c-style+strings" 多剝字串字面★(2026-09-12 Java 補棧代碼審 r1):字串內容清空但保留
++        # 引號本身,所以「字串裡剛好寫著方法簽章」不會被當成真的測試方法。單行內比對(不跨換行),
++        # 跨行的 Java text block 不在此列——那是已知邊界,寫在 JAVA_TEST_RE 的註解裡。
++        if strip == "c-style+strings":
++            txt = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', txt)
++            txt = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", txt)
++        for m in mre.finditer(txt):
++            methods.add(m.group(1).strip("`"))  # Kotlin 反引號測試名去引號
+     return methods
+ 
+ 
+ def cmd_contracts(env, rel=None):
+     """合約登記簿: ★INVARIANT★(改=breaking) / ★DEBT★(可改)。
+     動某模組前先查它的硬合約 — Obsidian 做不到(子字串不在它的 graph 裡)。
+     ★INVARIANT★ 顯示綁定的測試(可執行證據);未綁=⚠(doctor Check T 會擋)。"""
+     targets = [rel] if rel else sorted(env.notes)
+     n_inv = n_debt = 0
+     for r in targets:
+@@ -5499,21 +5563,21 @@ def clause_bindings(text, split, default, methods_for, hay_for):
+     return out
+ 
+ 
+ def _clause_bindings_for(env, text, root=None):
+     """cmd_spec_trace / cmd_handoff / 處置閘共用:用 vault 反推的 repo 根建平台索引(★不用 cwd★,同 gov --stats 教訓),
+     回 (rows, err)。索引建不起來(設定壞)回 ([], 一句原因),呼叫端印出來、不炸查詢。"""
+     try:
+         # 顯式 root(呼叫端已照 --repo 覆蓋規則算好)贏,env 反推只是預設——跟 _loop_status_disposal 其餘四步同一條優先序
+         # (r1 架構席/單reviewer 都抓到我寫反了:git-less 部署副本裡 .git 不在,反推會落錯根)
+         rr = Path(root) if root else _vault_repo_root(env)
+-        _, split, default, methods_for, hay_for = _platform_test_index(rr)
++        _, split, default, methods_for, hay_for, loose_for = _platform_test_index(rr)
+         return clause_bindings(text, split, default, methods_for, hay_for), None
+     except (ValueError, OSError) as e:
+         return [], f"{e.__class__.__name__}: {e}"
+ 
+ 
+ def _clause_summary(rows):
+     c = {k: 0 for k in _CLAUSE_STATE_ZH}   # 含 undefined 桶;呼叫端多半先濾掉再算
+     for r in rows:
+         c[r["state"]] += 1
+     return c
+@@ -5625,43 +5689,43 @@ def _spec_gate_load(env, node):
+         text = p.read_text(encoding="utf-8-sig")
+     except (OSError, UnicodeDecodeError) as e:
+         print(f"擋下:計劃讀不成文字({e.__class__.__name__}):\n    {p}", file=sys.stderr)
+         return None, "", None
+     return p, text, rel
+ 
+ 
+ def _spec_gate_declared(method, methods):
+     """程式裡真的宣告了幾支「名字對得上這個篩選字串」的測試。算不出來回 None。
+ 
++    ★餵進來的要是「刻意放寬」的那份宣告集★(代碼審 r1 blocker):正規那份錨在欄位 0,
++    看不到類別裡的測試,而跑的時候子字串過濾會把它選中——少算一支就把真撞名當成參數化放行。
++
+     ★收集到幾個案例 ≠ 選到幾支測試★(2026-09-22 rtb-production-agent-demo 回報):
+     參數化測試(同一支測試餵多組輸入)跑一次會收集到很多個案例,測試工具的摘要行只數案例,
+     分不出「一支測試的九組輸入」跟「撞名選到九支不同的測試」。前者一起跑、全綠才是正確語意,
+     判它「測試名要唯一」是誤擋——對方 4 支合約因此全被擋住,而那些測試本身是好的。
+     篩選是子字串比對,所以這裡數的是「名字含這個字串的宣告」有幾個。
+     """
+     if not methods:
+         return None
+     m = str(method or "").strip()
+     if not m:
+         return None
+     return sum(1 for nm in methods if m in str(nm))
+ 
+ 
+ def _spec_gate_verdict(n, skipped, verdict, detail, declared=None):
+     """一支測試的規格閘判定:回 (red|green|weak, 為什麼)。支數 N 先於退出碼看。"""
+-    if n is not None and n >= 2:
+-        if declared == 1:
+-            # 只宣告了一支、卻收集到好幾個案例 → 同一支測試的多組輸入,一起跑全綠才算過
+-            pass
+-        else:
+-            _extra = "" if declared is None else f"(程式裡有 {declared} 支名字對得上)"
+-            return "weak", f"篩選匹配到 {n} 支,測試名要唯一(換更長、不互為子字串的名字){_extra}"
++    # declared == 1:只宣告了一支、卻收集到好幾個案例 → 同一支測試的多組輸入,一起跑全綠才算過
++    if n is not None and n >= 2 and declared != 1:
++        _extra = "" if declared is None else f"(程式裡有 {declared} 支名字對得上)"
++        return "weak", f"篩選匹配到 {n} 支,測試名要唯一(換更長、不互為子字串的名字){_extra}"
+     if n == 1 and skipped:
+         return "weak", "弱證據:那一支被跳過(skipped/xfail)"
+     if verdict in ("no-cmd", "unproven") or n == 0:
+         return "weak", "弱證據:一支都沒跑到(匯入錯、檔名錯、環境缺?)"
+     if n is None:
+         return ("red" if verdict == "red" else "green"), "這棧還讀不出支數,只印有沒有跑過"
+     if verdict == "red":
+         return "red", detail
+     return "green", ""
+ 
+@@ -5683,43 +5747,43 @@ def _spec_gate_runnable(items, plats):
+     if not items:
+         print("[spec-gate] 跑: —(沒有綁 [test:] 的條款,沒東西可跑)")
+         return False
+     nocmd = [pl for pl in {i[1] for i in items} if "{method}" not in str((plats.get(pl) or {}).get("run_cmd") or "")]
+     if nocmd:
+         print(f"[spec-gate] 跑: —(略過:平台 {'/'.join(sorted(nocmd))} 的測試指令不能只跑一支;在 .lumos/config.json 的 test.run_cmd 加上 {{method}} 佔位符,例如 `python3 -m pytest -k {{method}}`)")
+         return False
+     return True
+ 
+ 
+-def _spec_gate_run_clauses(rr, plats, items, per_prof, methods_for):
++def _spec_gate_run_clauses(rr, plats, items, per_prof, loose_for):
+     """把條款綁的測試跑一次;回 {條款 id: (verdict, why, method)}。一條多支測試時,任一非綠就蓋過綠。"""
+     tails = {}
+     results, rerr = _run_bound_tests(rr, items, tails=tails)
+     if results is None:
+         print(f"[spec-gate] 跑: —(略過:{rerr})")
+         return {}
+     verdicts = {}
+     for node_id, plat, method, verdict, detail, _secs in results:
+         n, skipped = _ran_count(per_prof(plat), tails.get((node_id, plat, method), ""))
+         v, why = _spec_gate_verdict(n, skipped, verdict, detail,
+-                                    declared=_spec_gate_declared(method, methods_for(plat)))
++                                    declared=_spec_gate_declared(method, loose_for(plat)))
+         prev = verdicts.get(node_id)
+         if prev is None or (prev[0] == "green" and v != "green"):
+             verdicts[node_id] = (v, why, method)
+     for cid in sorted(verdicts, key=lambda x: int(x[1:])):
+         v, why, method = verdicts[cid]
+         mark = {"red": "紅", "green": "綠", "weak": "弱證據"}[v]
+         print(f"[spec-gate] 跑: {cid} {mark}({method}" + (f";{why}" if why and v != "red" else "") + ")")
+     return verdicts
+ 
+ 
+-def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run):
++def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run, loose_for):
+     """⑤ 相依回歸(S15-S17):連到的 Systems 節點的合約測試,機器產 [R] 條款;全綠才過。回 (沒過的清單, 綠的支數, 來源節點數)。"""
+     rb, ru = _regress_sources(env, rel)
+     for lk, snip in ru:
+         print(f"[spec-gate] 相依回歸: ⚠ {lk} 的合約「{snip}」沒綁測試,驗不了回歸(那篇的債,不擋)")
+     if not rb:
+         return [], 0, 0
+     ritems, rmap, fails = [], {}, []
+     for i, (lk, snip, reftext) in enumerate(rb, 1):
+         rid = f"R{i}"
+         print(f"[spec-gate] 相依回歸: [{rid}] 當本計劃落地,{lk} 的「{snip}」應維持 ← {' '.join(invariant_test_refs(reftext))}")
+@@ -5729,21 +5793,21 @@ def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_r
+     ok = 0
+     if ritems and not no_run:
+         rtails = {}
+         rres, rerr = _run_bound_tests(rr, ritems, tails=rtails)
+         if rres is None:
+             fails.append(f"相依回歸跑不起來:{rerr}")
+         else:
+             for rid, plat, method, verdict, detail, _secs in rres:
+                 n, skipped = _ran_count(per_prof(plat), rtails.get((rid, plat, method), ""))
+                 v, why = _spec_gate_verdict(n, skipped, verdict, detail,
+-                                            declared=_spec_gate_declared(method, methods_for(plat)))
++                                            declared=_spec_gate_declared(method, loose_for(plat)))
+                 lk = rmap.get((rid, plat, method), "?")
+                 if v == "green":
+                     ok += 1
+                 elif v == "red":
+                     fails.append(f"{rid} {lk}/{method}:紅({str(detail)[:80]})——既有行為回歸,或環境壞")
+                 else:
+                     fails.append(f"{rid} {lk}/{method}:{why}——驗不了≠過")
+     return fails, ok, len({x[0] for x in rb})
+ 
+ 
+@@ -5767,30 +5831,30 @@ def _spec_gate_front(env, node, no_run):
+     if keeps is None:
+         return 1
+     if no_run:
+         if door == "low":
+             print("[spec-gate] 跑: —(--no-run;風險低要跑過測試才放行、才留痕)")
+         return 0
+     return p, text, rel, rr, judged, rows_b, clauses, keeps, prep
+ 
+ 
+ def _spec_gate_prepare(rr, text, clauses):
+-    """平台測試索引 + 每條條款綁的測試名;設定讀不動印一句回 None。"""
++    """平台測試索引 + 每條條款綁的測試名 + 刻意放寬的那份宣告集;設定讀不動印一句回 None。"""
+     try:
+-        _, split, default, methods_for, _hay = _platform_test_index(rr)
++        _, split, default, methods_for, _hay, loose_for = _platform_test_index(rr)
+         plats = load_platforms(rr)["platforms"]
+     except (ValueError, OSError) as e:
+         print(f"[spec-gate] 跑: —(平台設定讀不動:{e};略過)")
+         return None
+     lines_all = text.splitlines()
+     names = {b["id"]: [m for _pl, m in resolve_test_refs(lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else "", split, default)] for b in clauses}
+-    return split, default, methods_for, plats, names
++    return split, default, methods_for, plats, names, loose_for
+ 
+ 
+ def _spec_gate_twoway_gate(p, rr, text, clauses, names):
+     """風險低的靜態條件(跑之前):印結果;過了回 keeps 集合,擋下回 None。"""
+     try:
+         prel = str(p.resolve().relative_to(rr.resolve())).replace(os.sep, "/")
+     except ValueError:
+         prel = str(p)
+     tw_lines, tw_block = _spec_gate_twoway_static(text, clauses, names, rr, prel)
+     for ln in tw_lines:
+@@ -5825,30 +5889,30 @@ def _spec_gate_print_twoway(clauses, keeps, verdicts):
+ 
+ 
+ def cmd_spec_gate(env, node, no_run=False):
+     """規格閘:⓪門(單向/雙向,機械判)①句式 ②綁定+回退節 ③把綁的測試真跑一次 ④相依回歸(全綠才過)⑤匯總+留痕。
+     風險高(半套語意):紅綠只印不擋,接著走 lumos loop next。風險低(雙向門放行_計劃):至少一條新行為、每條沒標 keeps 的各自紅、
+     keeps 的既存且綠、弱證據不算 → PASS(風險低):直接實作、不派審;留痕 kind=spec-gate 進審查帳(推送閘讀它)。
+     判定走跟處置閘第五步同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗。rc:擋下 1;其餘 0。"""
+     front = _spec_gate_front(env, node, no_run)
+     if isinstance(front, int):
+         return front
+-    _p, text, rel, rr, judged, rows_b, clauses, keeps, (split, default, methods_for, plats, names) = front
++    _p, text, rel, rr, judged, rows_b, clauses, keeps, (split, default, methods_for, plats, names, loose_for) = front
+     door = judged["door"]
+     def per_prof(plat):
+         return (plats.get(plat) or {}).get("profile_name")
+     items = _spec_gate_items(text, clauses, split, default)
+     verdicts = {}
+     if _spec_gate_runnable(items, plats):
+-        verdicts = _spec_gate_run_clauses(rr, plats, items, per_prof, methods_for)
++        verdicts = _spec_gate_run_clauses(rr, plats, items, per_prof, loose_for)
+     counts = {k: sum(1 for v in verdicts.values() if v[0] == k) for k in ("red", "green", "weak")}
+-    reg_fail, reg_ok, reg_nodes = _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run)
++    reg_fail, reg_ok, reg_nodes = _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run, loose_for)
+     if not _spec_gate_print_regress(reg_fail, reg_ok, reg_nodes):
+         return 1
+     if door == "low" and not _spec_gate_print_twoway(clauses, keeps, verdicts):
+         return 1
+     summ = _clause_summary(clauses)
+     print(f"[spec-gate] 匯總: 條款 {len(clauses)}/綁了 {summ['bound']}/靠人 {summ['manual']}/紅 {counts['red']}/綠 {counts['green']}/弱證據 {counts['weak']}/相依回歸 {reg_ok} 支綠" + (f"/keeps {len(keeps)}" if keeps else ""))
+     if door == "low":
+         print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+     else:
+         print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;風險高只印不擋。接著走:\n    lumos loop next")
+@@ -6076,43 +6140,43 @@ def _spec_gate_push_stale(env, rr, prel, n, rec):
+         return f"{prel}:測試索引建不起來({err})"
+     now = _door_judge(env, n, text)   # ★門整個重判★(代碼審 r1 F1 blocker):指紋只蓋條款與理由,正文塞進關鍵字、補 risk/ 標籤、改 door 欄位都要在這裡被抓到
+     if now["door"] != "low":
+         return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {Path(prel).stem}"
+     if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"]) != rec.get("clause_sha"):
+         return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {Path(prel).stem}"
+     return None
+ 
+ 
+ def _spec_gate_push_one(env, rr, prel, n, rec, idx):
+-    """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range)。"""
++    """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range, loose_for)。"""
+     P = "[spec-gate 推送前]"
+     stale = _spec_gate_push_stale(env, rr, prel, n, rec)
+     if stale:
+         return stale, None
+     tests = [str(t) for t in (rec.get("tests") or [])]
+     loop_id = _loop_id_for_plan(prel)
+     if not tests:   # 全靠人驗:沒有測試可跑,改跑小改動閘(四維度全過才放行)
+         sc = _small_change_check(env, rr, idx[4], prel, n)
+         if sc:
+             return f"{prel}:全靠人驗的風險低計劃,這次改動不算小改動——" + ";".join(sc) + f"(補測試、縮小改動、或升成風險高走設計審;規則版本 {_SMALL_CHANGE_RULE_VERSION})", None
+         return None, f"{P} ✓ {Path(prel).stem}:全靠人驗,改動通過小改動閘(擴散/相對量/歷史/目的四維度)"
+-    split, default, methods_for, plats, _rng = idx
++    split, default, methods_for, plats, _rng, loose_for = idx
+     items = [(loop_id, pl, m, "real" if m in methods_for(pl) else "dangling") for t in tests for pl, m in resolve_test_refs(f"[test:{t}]", split, default)]
+     tails = {}
+     results, rerr = _run_bound_tests(rr, items, tails=tails)
+     if results is None:
+         return f"{prel}:留痕裡的測試跑不起來({rerr})", None
+     reds = []
+     for node_id, pl, m, verdict, detail, _secs in results:
+         nn, sk = _ran_count((plats.get(pl) or {}).get("profile_name"), tails.get((node_id, pl, m), ""))
+         v, why = _spec_gate_verdict(nn, sk, verdict, detail,
+-                                    declared=_spec_gate_declared(m, methods_for(pl)))
++                                    declared=_spec_gate_declared(m, loose_for(pl)))
+         if v != "green":
+             reds.append(f"{m}:{'紅' if v == 'red' else why}")
+     if reds:
+         try:   # 逃逸自動記:風險低計劃沒人審,推送閘擋下就是下游抓到的洞(fail-open,記不成不影響擋)
+             _auto_escape(env, "push-gate", "major", f"推送閘擋下:風險低計劃 {Path(prel).stem} 的條款測試沒全綠({reds[0][:60]})",
+                          [(loop_id, prel)], _git_head(rr), source="spec-gate-push")
+         except Exception as _ex:
+             _escape_auto_failed(env, loop_id, "push-gate", str(_ex))
+         return f"{prel}:留痕裡的測試沒全綠——" + "、".join(reds), None
+     return None, f"{P} ✓ {Path(prel).stem}:留痕裡的 {len(tests)} 支測試全綠({'、'.join(tests)})"
+@@ -6124,22 +6188,22 @@ def _spec_gate_push_scan(env, rr, plans, git_range):
+     bad, oks, idx = [], [], None
+     for prel in sorted(plans):
+         n = env.notes.get(prel)
+         if n is None or str(n.fields.get("status")) != "doing":
+             continue
+         rec = latest.get(nfc(_loop_id_for_plan(prel)))
+         if not rec or _rec_plan_risk(rec) != "low":
+             continue
+         if idx is None:
+             try:
+-                _, split, default, methods_for, _hay = _platform_test_index(rr)
+-                idx = (split, default, methods_for, load_platforms(rr)["platforms"], git_range)
++                _, split, default, methods_for, _hay, loose_for = _platform_test_index(rr)
++                idx = (split, default, methods_for, load_platforms(rr)["platforms"], git_range, loose_for)
+             except (ValueError, OSError) as e:
+                 print(f"[spec-gate 推送前] 平台設定讀不動({e}),放行")
+                 return None, []
+         why, ok_line = _spec_gate_push_one(env, rr, prel, n, rec, idx)
+         if why:
+             bad.append(why)
+         else:
+             oks.append((prel, not (rec.get("tests") or [])))
+             if ok_line:
+                 print(ok_line)
+@@ -10371,21 +10435,22 @@ GUARD_ICON = {"real": "✅ 已綁真方法", "dangling": "❌ 懸空(找不到
+ def _repo_root_from_env(env):
+     for p in env.vault.parents:
+         if p.name == "docs":
+             return p.parent
+     return env.vault.parent  # standalone vault root
+ 
+ 
+ def _platform_test_index(repo_root):
+     """依 .lumos/config 建「平台 → (method set, code haystack)」的惰性索引 + 解析參數。
+     多平台 discover 呼叫點(Check T / classify_invariants / cmd_archive)共用,避免各自重寫平台迴圈。
+-    回 (split, default, methods_for, hay_for):
++    回 (pdata, split, default, methods_for, hay_for, loose_for)——★六個值★
++    (2026-09-22 代碼審 r2 架構席:說明本來就跟實際回傳值對不上,這次一併訂正):
+     - split = multiplatform 時的 platforms dict、legacy 時 {}(→ resolve_test_refs 不切分);
+     - default = default_platform;
+     - methods_for(plat)/hay_for(plat) = 惰性(一次 CLI 內快取)取該平台 root+profile 的測試方法集/haystack
+       (haystack 也跨 repo,修 r4:fake vs dangling 訊息品質)。"""
+     pdata = load_platforms(repo_root)
+     split = pdata["platforms"] if pdata["multiplatform"] else {}
+     default = pdata["default_platform"]
+     mcache, hcache = {}, {}
+ 
+     def methods_for(plat):
+@@ -10393,21 +10458,37 @@ def _platform_test_index(repo_root):
+             p = pdata["platforms"].get(plat)
+             mcache[plat] = discover_test_methods(p["root"], p["profile"]) if p else set()
+         return mcache[plat]
+ 
+     def hay_for(plat):
+         if plat not in hcache:
+             p = pdata["platforms"].get(plat)
+             hcache[plat] = build_code_haystack(p["root"]) if p else ""
+         return hcache[plat]
+ 
+-    return pdata, split, default, methods_for, hay_for
++    lcache = {}
++
++    def loose_for(plat):
++        """刻意放寬的宣告掃描:連縮排的、類別裡的都算。算不出來回 None。
++
++        ★只給「要不要豁免測試名不唯一」用★:正規那支 methods_for 是錨在欄位 0 的(對齊
++        「module-global 才會被收集」的語意,那是它自己寫明的天花板)。拿那份來判撞名會漏看
++        類別裡的測試——而真正跑測試時是子字串過濾,不管縮排也不管在不在類別裡,那支會真的被選中。
++        漏看就會把「真撞名」當成「同一支測試的多組輸入」放行,比改之前更寬鬆(代碼審 r1 blocker)。
++        這裡多算沒關係:多算只是維持原本的嚴格,少算才會放過假綠。
++        """
++        if plat not in lcache:
++            pl = pdata["platforms"].get(plat)
++            lcache[plat] = _loose_declared_methods(pl["root"], pl["profile"]) if pl else None
++        return lcache[plat]
++
++    return pdata, split, default, methods_for, hay_for, loose_for
+ 
+ 
+ def _classify_one(x, split, default, methods_for, hay_for):
+     """單條 ★INVARIANT★ 的綁定狀態:naked/real/fake/dangling(多平台:每 ref 對其平台判、取最壞)。
+     未定義平台前綴(resolve 報 ValueError)→ dangling(guard list 不 crash;doctor Check T 另明確報)。"""
+     _, refs = strip_test_refs(x)
+     if not refs:
+         return "naked"
+     try:
+         resolved = resolve_test_refs(x, split, default)
+@@ -10420,21 +10501,21 @@ def _classify_one(x, split, default, methods_for, hay_for):
+         elif name in hay_for(plat):
+             sts.append("fake")
+         else:
+             sts.append("dangling")
+     return "dangling" if "dangling" in sts else ("fake" if "fake" in sts else "real")
+ 
+ 
+ def classify_invariants(env):
+     """每條 ★INVARIANT★ 的綁定狀態:real / dangling / fake / naked(多平台感知)。"""
+     repo_root = _repo_root_from_env(env)
+-    _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
++    _, split, default, methods_for, hay_for, loose_for = _platform_test_index(repo_root)
+     rows = []
+     for rel in sorted(env.notes):
+         inv, _ = extract_contracts(env.notes[rel])
+         for x in inv:
+             clean, refs = strip_test_refs(x)
+             status = _classify_one(x, split, default, methods_for, hay_for)
+             rows.append({"node": rel, "text": clean, "refs": refs, "status": status,
+                          "audited": bool(invariant_audit_refs(x)),
+                          "audit": invariant_audit_refs(x),
+                          "has_kill": bool(KILL_REF_RE.search(x))})   # 從原始行判(clean 已剝)
+@@ -15009,21 +15090,21 @@ def cmd_archive(env, days, apply, today):
+     repo_root = None
+     for p in env.vault.parents:
+         if p.name == "docs":
+             repo_root = p.parent
+             break
+     live_guard_tests = set()
+     guard_re = None
+     if repo_root is not None:
+         # 多平台感知:每 invariant 依平台前綴解析,對其平台 root+profile 的 method set 判存活。
+         # 收「存活的裸方法名」(非帶前綴的 ref)——guard_re 要在 Verification 文字裡搜方法名。
+-        _, split, default, methods_for, _hay = _platform_test_index(repo_root)
++        _, split, default, methods_for, _hay, loose_for = _platform_test_index(repo_root)
+         for _n in env.notes.values():
+             invs, _ = extract_contracts(_n)
+             for inv in invs:
+                 try:
+                     for plat, name in resolve_test_refs(inv, split, default):
+                         if name in methods_for(plat):
+                             live_guard_tests.add(name)
+                 except ValueError:
+                     continue   # 未定義平台前綴:非有效綁定,不護
+         if live_guard_tests:
+@@ -27795,21 +27876,21 @@ def _bound_tests_for_diff(repo_root, diff_range, payload=None):
+         try:
+             data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+         except Exception:
+             return [], "diff-unavailable"
+     pins = [r["node"] for r in data.get("results", []) if r.get("pinned") and r.get("contract")]
+     vault = _vault_in(repo_root)   # 前面已擋過 None,這裡只是拿來建索引
+     if not pins:
+         return [], "no-pins"
+     try:
+         env = Env(vault)
+-        _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
++        _, split, default, methods_for, hay_for, loose_for = _platform_test_index(repo_root)
+     except Exception as e:   # 設定檔壞(多平台沒填 default_platform 等)→ fail-open 記 no-config,不能炸成假 rc1
+         return [], f"no-config:{str(e)[:80]}"
+     items = []
+     for node in pins:
+         n = env.notes.get(node) or env.notes.get(node[:-3] if node.endswith(".md") else node + ".md")
+         if n is None:
+             continue
+         inv, _ = extract_contracts(n)
+         for x in inv:
+             try:
+@@ -28655,21 +28736,21 @@ def _dispositions_check_path_line(repo_root, at_sha, ev):
+         return True, ""
+     where = f"推送版本 {at_sha[:8]} 的樹" if at_sha else "工作樹"
+     why = "不存在(未追蹤/未提交?)" if st == "missing" else "行號超出檔案長度"
+     return False, f"{p}:{line} 在{where}{why}"
+ 
+ 
+ def _dispositions_check_test(repo_root, at_sha, ev, pidx):
+     """satisfied 的 test: 錨點兩道都要過(r2 三席一致,不要求工作樹乾淨):①工作樹 discovery(profile 語意、多平台)名字在集合裡
+     ②有 at_sha 時 `git grep -F` 在被推送的樹的該平台 root 命中(未追蹤/未提交的測試自然不在樹)。root 在 repo 外(跨 repo)只做①。"""
+     import subprocess as _sp
+-    pdata, split, default, methods_for, _hay = pidx
++    pdata, split, default, methods_for, _hay, _loose = pidx   # ★六個值★:整包存起來、在這裡才解構,加欄位時最容易漏掉這一種
+     plat, name = _dispositions_split_test(ev, split, default)
+     if plat is None:
+         return False, name
+     if name not in methods_for(plat):
+         return False, f"測試 {name!r} 在平台 {plat!r} 的工作樹掃不到(profile 認不得,或名字打錯)"
+     if not at_sha:
+         return True, ""
+     root = Path(pdata["platforms"][plat]["root"]).resolve()
+     rr = Path(repo_root).resolve()
+     try:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d387efc2..3b884389 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3795,21 +3795,21 @@ def t_python_profile_multiplatform():
+     """std F6:multiplatform 路徑 dict(TEST_PROFILES[p]) 繞過 load_test_profile——新欄位放 dict 靜態值,此路徑也吃到。"""
+     import json as _j
+     m = _load_lumos()
+     root = Path(tempfile.mkdtemp(prefix="gctl-pymulti-"))
+     (root / ".lumos").mkdir()
+     (root / ".lumos" / "config.json").write_text(_j.dumps(
+         {"platforms": {"py": {"profile": "python", "root": "."}}, "default_platform": "py"}),
+         encoding="utf-8")
+     (root / "test_m.py").write_text("def t_multi():\n    pass\n# status/* 註解\nX='glob:**/'\n",
+                                     encoding="utf-8")
+-    _, _, _, methods_for, _ = m._platform_test_index(root)
++    _, _, _, methods_for, _, _loose = m._platform_test_index(root)
+     got = methods_for("py")
+     check("pyprof multiplatform: t_multi 認得(欄位經 dict 直達)", "t_multi" in got, f"{got}")
+ 
+ 
+ # ── 真遺忘:search 預設排除 superseded(不排 stale),--include-superseded 逃生 ──
+ def t_search_forget_superseded():
+     import json as _json
+     v = mkvault()
+     write(v, "Systems/Live.md", "type: system\nstatus: done", body="# Live\nwidgetflow 活規則\n")
+     write(v, "Systems/Dead.md", "type: system\nstatus: superseded", body="# Dead\nwidgetflow 舊規則\n")
+@@ -44479,29 +44479,30 @@ def t_lint_warns_empty_revalidate_when():
+ def _mk_spec_gate_repo(d, run_cmd="python3 tests/run.py {method}"):
+     """半套規格閘 fixture:git repo + .lumos/config.json + 假測試執行器(印「lumos 測試(N 案例)」,支數由方法名決定:
+     t_red → 1 支紅;t_green → 1 支綠;t_multi → 2 支;t_zero → 0 支;t_skip → 1 支但 skipped)+ vault docs/x-knowledge。"""
+     import subprocess as _sp, json as _j
+     d = Path(d)
+     _sp.run(["git", "init", "-q", str(d)])
+     (d / "tests").mkdir()
+     # ★t_multi 旁邊真的要有第二支名字含它的測試★:篩選是子字串比對,「匹配到兩支」指的是
+     # 真的有兩支不同的測試被選到。只宣告一支卻回報兩個案例,那是同一支測試的多組輸入(參數化),
+     # 不是撞名——fixture 不擺出真正的撞名,那條測試就是在驗一個不存在的情境。
+-    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_red2():\n    assert False\n\ndef t_green2():\n    assert True\n\ndef t_flip():\n    pass\n\ndef t_multi():\n    pass\n\ndef t_multi_extra():\n    pass\n\ndef t_param():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
++    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_red2():\n    assert False\n\ndef t_green2():\n    assert True\n\ndef t_flip():\n    pass\n\ndef t_multi():\n    pass\n\ndef t_multi_extra():\n    pass\n\ndef t_param():\n    pass\n\ndef t_nested():\n    pass\n\nclass TestGroup:\n    def t_nested_inner(self):\n        pass\n\ndef t_doc():\n    \"\"\"說明裡夾一段縮排的程式範例:\n\n        def t_doc_helper():\n            pass\n    \"\"\"\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
+     (d / "tests" / "run.py").write_text(
+         "import sys\n"
+         "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+         "import os\n"
+         "table = {'t_red': (1, '0 passed, 1 failed', 1), 't_green': (1, '3 passed, 0 failed', 0), 't_multi': (2, '2 passed, 0 failed', 0),\n"
+         "         't_red2': (1, '0 passed, 1 failed', 1), 't_green2': (1, '1 passed, 0 failed', 0), 't_flip': (1, '1 passed, 0 failed', 0) if os.path.exists('tests/flip.ok') else (1, '0 passed, 1 failed', 1),\n"
+         "         't_zero': (0, '0 passed, 0 failed', 0), 't_skip': (1, '0 passed, 0 failed (skipped=1)', 0),\n"
+-        "         't_multi_extra': (1, '1 passed, 0 failed', 0), 't_param': (9, '9 passed, 0 failed', 0)}\n"
++        "         't_multi_extra': (1, '1 passed, 0 failed', 0), 't_param': (9, '9 passed, 0 failed', 0),\n"
++        "         't_nested': (2, '2 passed, 0 failed', 0), 't_doc': (9, '9 passed, 0 failed', 0)}\n"
+         "if m not in table:\n    print('no such test', m); sys.exit(2)\n"
+         "n, line, rc = table[m]\n"
+         "print(f'lumos 測試({n} 案例)')\nprint(line)\nsys.exit(rc)\n", encoding="utf-8")
+     (d / ".lumos").mkdir()
+     cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
+     if run_cmd:
+         cfg["test"]["run_cmd"] = run_cmd
+     (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+     kg = d / "docs" / "x-knowledge"; (kg / "Projects").mkdir(parents=True)
+     _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+@@ -44602,20 +44603,93 @@ def t_spec_gate_parametrized_is_not_weak():
+     """
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sgparam")
+     _sg_plan(kg, "參數化", ["- [S1] 當輸入不合法,系統應拒絕 [test:t_param]"])
+     r = run(kg, "spec-gate", "Projects/參數化_計劃")
+     check("① 跑得起來", r.returncode == 0, r.stdout[-400:])
+     check("② 收集到 9 個案例但只宣告一支 → 判綠,不是弱證據",
+           "綠" in r.stdout and "唯一" not in r.stdout and "匹配到 9 支" not in r.stdout,
+           r.stdout[-600:])
+ 
+ 
++def t_spec_gate_collision_inside_class_still_weak():
++    """撞名的那支縮排在類別裡時,照樣要判「測試名要唯一」,不准當成參數化放行。
++
++    出身:代碼審 r1 通才席 blocker——判「有沒有撞名」原本讀的是錨在欄位 0 的宣告掃描,
++    它看不到類別裡的測試;而真的跑測試時是子字串過濾,不管縮排也不管在不在類別裡,
++    那支會真的被選中一起跑。少算一支就把真撞名當成「同一支測試的多組輸入」放行
++    ——比這批改動之前更寬鬆,而風險低的計劃過了規格閘就直接跳過設計審,沒有下游補救。
++    翻紅釘:把放寬掃描換回正規那支(錨在欄位 0) → ②紅。
++    """
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sgnest")
++    _sg_plan(kg, "類內撞名", ["- [S1] 當輸入不合法,系統應拒絕 [test:t_nested]"])
++    r = run(kg, "spec-gate", "Projects/類內撞名_計劃")
++    check("① 跑得起來", r.returncode == 0, r.stdout[-400:])
++    check("② 類別裡那支也算,判測試名要唯一",
++          "唯一" in r.stdout and "匹配到 2 支" in r.stdout, r.stdout[-600:])
++
++
++def t_spec_gate_docstring_example_is_not_a_declaration():
++    """說明文字裡縮排的程式範例,不算一支測試宣告,不能因此把參數化誤判成撞名。
++
++    出身:代碼審 r2 通才席 blocker——第一版用放寬的正則去掃,而 Python 那棧刻意不剝字串,
++    原本的行首錨同時兼任「別把字串裡的東西當宣告」的守門;放寬之後 docstring 裡的範例被當成真宣告
++    (實測本 repo 自己的測試檔多算 148 個),把同一支測試的多組輸入誤判成撞名,
++    原地重現這批本來要修的誤擋。現在改用語法剖析,字串就是字串。
++    翻紅釘:把語法剖析換回放寬的正則 → ②紅。
++    """
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sgdoc")
++    _sg_plan(kg, "說明裡有範例", ["- [S1] 當輸入不合法,系統應拒絕 [test:t_doc]"])
++    r = run(kg, "spec-gate", "Projects/說明裡有範例_計劃")
++    check("① 跑得起來", r.returncode == 0, r.stdout[-400:])
++    check("② 收集到 9 個案例仍判綠(說明裡那段不算宣告)",
++          "綠" in r.stdout and "唯一" not in r.stdout, r.stdout[-600:])
++
++
++def t_platform_index_consumers_all_unpack_same_arity():
++    """平台測試索引回幾個值,所有解構它的地方就要解幾個——機械掃,不靠人記得改。
++
++    出身:2026-09-22 這批給那支索引加了第六個值,同一族的漏改連冒三次
++    (先是表態閘那個「整包存起來、在別的函式裡才解構」的,再是測試檔裡的)。
++    每一次都是人去數「有幾個呼叫點」而數漏。這支把「數對了沒」變成機器的事。
++    翻紅釘:把任一處解構改回五個 → ②紅。
++    """
++    import re as _re
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    tst = Path(__file__).read_text(encoding="utf-8")
++    m = _re.search(r"^    return pdata, ([\w, ]+)$", src, _re.M)
++    check("① 找得到那支索引的回傳行", m is not None, "")
++    if not m:
++        return
++    arity = 1 + len(m.group(1).split(","))
++    # 直接解構的、以及「整包存成一個變數之後才解構」的,兩種都要掃
++    holders = set(_re.findall(r"^\s*(\w+)\s*=\s*(?:m\.)?_platform_test_index\(", src, _re.M))
++    holders |= set(_re.findall(r"^\s*(\w+)\s*=\s*(?:m\.)?_platform_test_index\(", tst, _re.M))
++    holders = {h for h in holders if "," not in h}
++    bad = []
++    for label, text in (("主程式", src), ("測試檔", tst)):
++        for i, ln in enumerate(text.split("\n"), 1):
++            mm = _re.match(r"^\s*([\w, ]+?)\s*=\s*(?:m\.)?_platform_test_index\(", ln)
++            if mm and "," in mm.group(1):
++                n = len(mm.group(1).split(","))
++                if n != arity:
++                    bad.append(f"{label}:{i} 解了 {n} 個(該 {arity} 個):{ln.strip()[:60]}")
++            for h in holders:
++                # ★行尾允許有註解★:第一版錨死在行尾,而那一行正好帶著註解,整條就被跳過
++                # ——拆掉修法測試照樣綠(測試假綠形態第①型),是自己做翻紅驗證時抓到的
++                mh = _re.match(r"^\s*([\w, ]+?)\s*=\s*" + _re.escape(h) + r"\s*(?:#.*)?$", ln)
++                if mh and "," in mh.group(1):
++                    n = len(mh.group(1).split(","))
++                    if n != arity:
++                        bad.append(f"{label}:{i} 整包存起來後解了 {n} 個(該 {arity} 個):{ln.strip()[:60]}")
++    check("② 每一處解構的個數都對得上", bad == [], "\n".join(bad))
++
++
+ def t_spec_gate_run_summary():
+     """[規格落成可驗收條件 S8] 恰好一支 → 按結果印紅或綠並匯總。翻紅釘:支數改讀 passed 數 → ① 翻紅(t_green 印 3 passed)。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg8")
+     _sg_plan(kg, "壬", ["- [S1] 系統應回 200 [test:t_red]", "- [S2] 系統應回 201 [test:t_green]"]); r = run(kg, "spec-gate", "Projects/壬_計劃")
+     check("① S1 紅、S2 綠、匯總 紅 1/綠 1", r.returncode == 0 and "S1" in r.stdout and "紅 1" in r.stdout and "綠 1" in r.stdout and "匹配到" not in r.stdout, r.stdout[-600:])
+ 
+ 
+ def t_spec_gate_writes_run_record():
+     """[規格落成可驗收條件 S12] 跑完一份計劃往治理帳寫一行 spec-gate-run,帶每條紅綠弱。"""
+     import json as _j
