@@ -11,6 +11,8 @@ tags:
   - risk/守衛面
   - scope/guards-gates
 summary: |-
+  RULE:[since:2026-09-22][confirmed:2026-09-22][retire:連續兩季沒有任何專案用 guard plan,或誤擋多過真擋]合約可以「預告」:`lumos guard plan` 一次寫好預告標記(`★INVARIANT-PLANNED★`,既有合約抓取撈不到它)與一個待完成的守衛驗證節點並雙向連好;查那篇功能節點時預告會另起一段印出來(還沒有測試在守、最遲哪天);逾期讓自檢出 issue(推送與 CI 靠它擋)、七天內先唸不擋、**到期當天不算過期**、**不准延期**;做完 `guard settle` 就地轉正,不做了 `guard abandon` 立墓碑(要先 `signoff --ref`)。★威脅模型是防忘記不防繞過★:改日期、改型別、刪節點檔都繞得過,刻意不補,寫在計劃的誠實界線。單源 [[Projects/必要合約清單_計劃]] [test:t_guard_plan_creates_marker_and_node]
+  FACT:[2026-09-22 以程式碼為準]規則只認「節點身上有 guards 欄位」的守衛節點,不看 status 字面值——手寫 `status: pending` 的人不該被拖進整套規則;判準跟著節點走,改名搬家都對得上。查:`grep -n 'GUARD_MARK_FIELD' scripts/lumos`
   KEY:★INVARIANT★ guard kill rc 優先序:survived→rc1、drifted/abort/error→rc2、弱證據(unattributed/timeout)不放行執行錯誤 [test:t_guard_kill_rc_precedence] [audit:sonnet/2026-07-29]
   KEY:★INVARIANT★ guard kill --json 模式**成功跑完時(rc 0/1)** stdout 恰一行合法 JSON(所有診斷走 stderr;rc2 早退路徑不印 JSON=範圍外,明文收窄) [test:t_guard_kill_json_purity] [audit:sonnet/2026-07-29]
   FLOW:kill-add(配方進kill_recipes+KEY行[kill:recipes],同檔原子寫)→kill(依platform分組→worktree於系統temp→baseline綠→套壞法(圍欄+唯一命中)→綁定測試必翻紅→七態verdict→docs/.kill-log.jsonl留痕)
