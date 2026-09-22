@@ -3669,6 +3669,32 @@ INVARIANT_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★INVARIANT★\s*(.*)")
 DEBT_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★DEBT★\s*(.*)")
 
 
+PLANNED_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★INVARIANT-PLANNED★\s*(.*)")
+WATCH_REF_RE = re.compile(r"\[watch:\s*([^\]]+)\]")
+DUE_REF_RE = re.compile(r"\[due:\s*([^\]]+)\]")
+# ★只剝行尾那一對★(代碼審 r2 通才席 blocker):預告行是「合約文字 + 空格 + [watch:…] [due:…]」,
+# 兩個標籤是指令自己接在最後面的。原本用「把整行所有 [watch:]/[due:] 都拿掉」來還原合約文字,
+# 合約文字本身只要寫到這兩個字樣(這個 repo 滿篇都是這種方括號寫法),還原出來的就跟原文對不上
+# ——那條預告從此轉不了正也棄置不掉,逾期還會一直擋推送,只剩手改檔案一條路。
+_PLANNED_TAIL_RE = re.compile(r"\s*\[watch:[^\]]*\]\s*\[due:[^\]]*\]\s*$")
+
+
+def extract_planned(note):
+    """從 summary 抽預告中的合約(★INVARIANT-PLANNED★ 行),回每行剝掉前綴後的內容。
+
+    跟 extract_contracts 成對:那支只認正式合約記號(刻意撈不到預告),這支只認預告記號。
+    ★兩支都放這裡★(代碼審 r1 架構席):第一版把掃描迴圈寫在輸出層,等於同一件事兩個地方各做一次。
+    """
+    summ = note.fields.get("summary")
+    out = []
+    if isinstance(summ, str):
+        for line in summ.split("\n"):
+            m = PLANNED_RE.match(line.strip())
+            if m:
+                out.append(m.group(1).strip())
+    return out
+
+
 def extract_contracts(note):
     """從 summary block 的 KEY 行抽標準格式 ★INVARIANT★ / ★DEBT★。回傳 (invariants, debts)。
     只認 KEY 行前綴(標準格式),散文中提及不算 — 否則方法論文件會誤報。"""
@@ -4573,6 +4599,7 @@ _KNOWN_FRONTMATTER_KEYS = (
     "decision_refs", "decision_refs_ai", "pitfall_when", "pitfall_ask", "pitfall_source",
     "signed_off", "kill_recipes", "core_refs", "regen",
     "responsibility", "lands_in",   # 2026-09-11 每支檔有家:Systems 的負責範圍、計劃的落點
+    "guards", "due", "owner", "phases",   # 2026-09-22 預告合約:守衛節點的四個欄位(不登記的話這機制產的每篇節點都被唸欄位名打錯)
     "plan_risk", "door",   # 2026-09-17 計劃風險(作者只能往嚴標 high);door 是舊寫法,讀得懂但提醒改
 )
 # ↑ 2026-09-06 全 repo 審視 #16。★代碼審 r1 訂正★:初版清單來源是「掃本 vault 428 篇出現過的鍵」,
@@ -10538,9 +10565,9 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
 # ★標籤為什麼是 [watch:] 不是 [guard:]★:後者在本 repo 已被可逆性那一軸佔用(值固定 decisions),
 # 同名兩義會讓既有正則把節點路徑撈進去(設計審 r2 blocker)。
 PLANNED_MARK = "★INVARIANT-PLANNED★"
-PLANNED_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★INVARIANT-PLANNED★\s*(.*)")
-WATCH_REF_RE = re.compile(r"\[watch:\s*([^\]]+)\]")
-DUE_REF_RE = re.compile(r"\[due:\s*([^\]]+)\]")
+# ↑ 這一組的正則(PLANNED_RE / WATCH_REF_RE / DUE_REF_RE / _PLANNED_TAIL_RE)不在這裡,
+#   在上面合約抽取那一區、緊貼 extract_planned——全檔每一支「從 KEY 行抽標記」的函式
+#   都是正則貼著函式放(代碼審 r2 架構席:這支原本是唯一的例外,正則離函式 6800 行)。
 # 節點自己身上的標記:規則只認帶這個欄位的節點,不看 status 字面值、也不查外部帳
 # (設計審 r1/r2 blocker:pending 是很自然的英文字,手寫的人不該被拖進整套規則;
 #  判準放節點自己身上,改名搬家都跟著走)
@@ -10556,6 +10583,17 @@ def _guard_plan_slug(text):
 def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
     """預告一條之後要有的合約:寫標記 + 建待完成守衛節點,雙向連好。"""
     import datetime
+    # ★合約文字不准含換行★(代碼審 r1 blocker,實測會吃掉既有合約):
+    # 摘要是 YAML block scalar,一個換行就把區塊打斷,後面每一行都變成別的欄位——
+    # 同一篇裡原本綁了測試又審計過的真合約會整段從圖譜消失,而指令還回報成功。
+    _c = (claim or "")
+    if not _c.strip():
+        print("擋下:合約那句話不能是空的", file=sys.stderr)
+        return 2
+    if "\n" in _c or "\r" in _c:
+        print("擋下:合約那句話不能換行(摘要是一行一條,換行會把整個摘要區塊打斷,"
+              "連同這篇既有的合約一起從圖譜消失)", file=sys.stderr)
+        return 2
     missing = [(v, lbl) for v, lbl in ((plan, "計劃參照"), (phase, "階段"), (due, "最遲日期"),
                                        (why, "理由"), (owner, "負責人")) if not (v or "").strip()]
     if missing:
@@ -10687,18 +10725,34 @@ def _guard_find(env, ref):
     return rel, n
 
 
-def _guard_planned_line(env, home_rel, claim_sub):
-    """在功能節點裡找那一行預告標記,回 (lines, idx, e) 或 (None, None, None)。"""
+def _guard_planned_line(env, home_rel, claim):
+    """在功能節點裡找那一行預告標記,回 (lines, idx, e, err)。
+
+    ★比照既有引擎的兩道防呆★(代碼審 r1 blocker):`cmd_guard_bind`/`cmd_guard_audit` 對
+    「在功能節點裡找某條 KEY 行」都會 ①命中多條就擋,不猜是哪一條 ②找不到就擋。
+    第一版用「合約前 12 字」當子字串比對,同一篇預告兩條而前 12 字相同時會改到別條、互相覆蓋。
+    這裡改成比對「剝掉 [watch:]/[due:] 之後的完整文字」,並保留多條就擋。"""
     path = env.vault / home_rel
     try:
         lines, _, e = load_raw_for_edit(path)
-    except (ValueError, RuntimeError):
-        return None, None, None
+    except (ValueError, RuntimeError) as ex:
+        return None, None, None, f"{home_rel} 打不開:{ex}"
+    want = (claim or "").strip()
+    idx = None
     for i in range(1, e):
-        s = lines[i].strip()
-        if PLANNED_RE.match(s) and claim_sub in s:
-            return lines, i, e
-    return None, None, None
+        m = PLANNED_RE.match(lines[i].strip())
+        if not m:
+            continue
+        body = _PLANNED_TAIL_RE.sub("", m.group(1)).strip()
+        if body != want:
+            continue
+        if idx is not None:
+            return None, None, None, (f"{home_rel} 裡同時有好幾行預告寫著同一句話,分不清是哪一條"
+                                      "——先手動把重複的那行處理掉")
+        idx = i
+    if idx is None:
+        return None, None, None, f"{home_rel} 裡找不到預告行『{want[:30]}』(被手改過或已經轉正?)"
+    return lines, idx, e, None
 
 
 def _guard_home_of(n):
@@ -10732,9 +10786,9 @@ def cmd_guard_settle(env, ref, method):
     if not claim:
         print(f"擋下:{rel} 裡讀不出預告的合約是哪一條", file=sys.stderr)
         return 2
-    lines, idx, _e = _guard_planned_line(env, home_rel, claim[:12])
+    lines, idx, _e, _err = _guard_planned_line(env, home_rel, claim)
     if lines is None:
-        print(f"擋下:{home_rel} 裡找不到對應的預告標記(被手改過?)", file=sys.stderr)
+        print(f"擋下:{_err}", file=sys.stderr)
         return 2
     newline = f"  KEY:★INVARIANT★ {claim} [test:{method}]"
     try:
@@ -10792,14 +10846,26 @@ def cmd_guard_abandon(env, ref, why):
     body = (env.vault / rel).read_text(encoding="utf-8")
     m = re.search(r"^預告的合約:(.+)$", body, re.M)
     claim = m.group(1).strip() if m else ""
-    if home_rel and claim:
-        lines, idx, _e = _guard_planned_line(env, home_rel, claim[:12])
-        if lines is not None:
-            try:
-                atomic_write_verify(env.vault / home_rel, lines[:idx] + lines[idx + 1:],
-                                    "", lambda f: claim[:12] not in str(f.get("summary") or ""))
-            except (ValueError, RuntimeError) as ex:
-                print(f"⚠ 墓碑已立,但功能節點的預告行沒拿掉: {ex}", file=sys.stderr)
+    if not home_rel:
+        print(f"擋下:守衛節點指名的功能節點 {home} 找不到——棄置前先把 guards 欄位指對,"
+              "不然那篇的預告行會永遠留著,跟墓碑互相矛盾", file=sys.stderr)
+        return 2
+    if not claim:
+        print(f"擋下:{rel} 裡讀不出預告的合約是哪一條(被手改過?)", file=sys.stderr)
+        return 2
+    lines, idx, _e, _err = _guard_planned_line(env, home_rel, claim)
+    if lines is None:
+        # ★找不到就擋,不靜默略過★(代碼審 r1 blocker):guards 被改指到別篇時,
+        # 原本會靜默成功,真正的家節點永久留著一條沒人管的預告行。
+        print(f"擋下:{_err}", file=sys.stderr)
+        print("  棄置會把功能節點那行預告拿掉;對不到那一行就不知道該拿掉哪一條,不能硬做", file=sys.stderr)
+        return 2
+    try:
+        atomic_write_verify(env.vault / home_rel, lines[:idx] + lines[idx + 1:],
+                            "", lambda f: claim not in str(f.get("summary") or ""))
+    except (ValueError, RuntimeError) as ex:
+        print(f"擋下:功能節點的預告行拿不掉,墓碑也不立(不留半套): {ex}", file=sys.stderr)
+        return 2
     rc = cmd_set(env, rel, "status", "abandoned")
     print(f"✓ 已棄置:{rel} 立成墓碑(不是刪掉,下一個人看得到曾經打算做什麼、為什麼不做了)")
     return rc
@@ -11776,13 +11842,10 @@ def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, a
     # ★預告中的合約另起一段★(必要合約清單_計劃):上面那段的標題語意是「現在生效、動了會壞」,
     # 把還沒生效的印在同一段,字面上等於說它已經生效(設計審 r2)。
     # 而它最該被看見——因為它還沒有測試在守,任何人為了別的事來看這篇都該知道。
-    _pl = []
-    _psum = n.fields.get("summary")
-    if isinstance(_psum, str):
-        for _l in _psum.split("\n"):
-            _m = PLANNED_RE.match(_l.strip())
-            if _m:
-                _pl.append(_m.group(1).strip())
+    # ★用共用的抽取函式,不要在這裡重寫一次掃描迴圈★(代碼審 r1 架構席):
+    # 既有的 extract_contracts 只認正式合約記號,預告記號它撈不到(那是刻意的),
+    # 所以另外有一支 extract_planned;兩支都放在合約抽取那一區,不散在輸出層。
+    _pl = extract_planned(n)
     if _pl:
         print("提醒:這篇有預告了但還沒做的合約(還沒有測試在守,到期會擋推送):")
         for _x in _pl:
