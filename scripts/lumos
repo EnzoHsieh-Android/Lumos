@@ -10630,18 +10630,13 @@ def _guard_plan_check(env, node, claim, plan, phase, due, why, owner):
     return rel, prel, phases, gname, gpath
 
 
-def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
-    """預告一條之後要有的合約:寫標記 + 建待完成守衛節點,雙向連好。"""
-    import datetime
-    checked = _guard_plan_check(env, node, claim, plan, phase, due, why, owner)
-    if checked is None:
-        return 2
-    rel, prel, phases, gname, gpath = checked
-    today = datetime.date.today().isoformat()
+def _guard_plan_write_node(gpath, gname, rel, prel, phases, today, claim, due, why, owner):
+    """把守衛節點的內容組出來落盤,成功回 True(失敗已經印過為什麼)。
 
-    # ── 先建守衛節點(可重建的那一邊),再寫功能節點的標記(權威那一邊)。
-    # ★不宣稱回滾★(設計審 r1 blocker):本 repo 的寫入原語沒有刪除這一步,真回滾搭不起來;
-    # 既有兩處同類問題都是「先寫衍生、後寫權威,後者失敗印警告不回滾」。
+    ★先建守衛節點(可重建的那一邊),再寫功能節點的標記(權威那一邊)★(設計審 r1 blocker):
+    本 repo 的寫入原語沒有刪除這一步,真回滾搭不起來;既有兩處同類問題都是
+    「先寫衍生、後寫權威,後者失敗印警告不回滾」。
+    """
     guard_lines = [
         "---\n", "type: verification\n", "status: pending\n",
         f"created: {today}\n", f"updated: {today}\n", f"due: {due.strip()}\n",
@@ -10667,8 +10662,21 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
             raise RuntimeError("寫完讀回來對不上")
     except (OSError, RuntimeError) as ex:
         print(f"擋下:守衛節點寫不進去,什麼都沒動: {ex}", file=sys.stderr)
-        return 2
+        return False
+    return True
 
+
+def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
+    """預告一條之後要有的合約:寫標記 + 建待完成守衛節點,雙向連好。"""
+    import datetime
+    checked = _guard_plan_check(env, node, claim, plan, phase, due, why, owner)
+    if checked is None:
+        return 2
+    rel, prel, phases, gname, gpath = checked
+    today = datetime.date.today().isoformat()
+
+    if not _guard_plan_write_node(gpath, gname, rel, prel, phases, today, claim, due, why, owner):
+        return 2
     # ── 再寫功能節點的預告標記
     gref = f"Verification/{gname}"
     path = env.vault / rel
@@ -10923,7 +10931,7 @@ def cmd_guard_required(env, as_json=False):
         print(f"  ⚠ 快到期 {due}(負責人 {owner}):{claim}")
         print(f"      {rel}")
     if not overdue and not soon and pend:
-        for rel, _st, due, home, owner, claim in pend:
+        for _rel, _st, due, _home, owner, claim in pend:
             print(f"  · 待完成 {due}(負責人 {owner}):{claim}")
     return 1 if overdue else 0
 
