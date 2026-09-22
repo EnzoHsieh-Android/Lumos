@@ -2342,12 +2342,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             # 這幾條是別人的債,列出來讓人知道,但不擋這次推送——被擋的人解不開別人的合約,
             # 那不是嚴格,是防做事。CI 不給清單,所以那邊照舊全擋。
             warn_soft(_gover_other, f"另有 {len(_gover_other)} 條逾期的預告合約,但這次改動沒碰到它們(不擋這次推送):",
-                      "推送前的閘只擋你這次碰到的;這幾條由負責人自己收,CI 會擋全部")
+                      "推送前的閘只擋你這次碰到的,CI 會擋全部;想看全部待完成的:lumos guard required")
         if _gsoon:
             warn_soft(_gsoon, f"有 {len(_gsoon)} 條預告的合約七天內到期(先講,還不擋):",
                       "現在做完最省事:lumos guard settle <守衛節點> --test <測試方法>")
-        if not _gover and not _gsoon:
+        if not _gover and not _gsoon and not _gover_other:
             ok("沒有逾期或快到期的預告合約")
+        elif not _gover and not _gsoon:
+            # ★這一行是唯一會被當成「全都乾淨」掃過去的訊號★(代碼審 r1 通才席):
+            # 上面剛列完「還有 N 條逾期」,這裡再印「沒有逾期」會讓人誤信沒事。
+            ok(f"這次改動沒碰到任何逾期的預告合約(上面那 {len(_gover_other)} 條還在,只是不擋這次推送)")
     except Exception as _e:
         warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
     print()
@@ -10808,6 +10812,42 @@ def _guard_home_of(n):
     return str(g or "").strip()
 
 
+def _guard_touched_hits(files, touched):
+    """家節點管的那些檔,跟這次改到的檔對得上哪幾個。回 (對上的清單, 是不是只在忽略大小寫時才對上)。
+
+    ★比對鍵走既有那支★(代碼審 r2 架構席 blocker):about_code 的比對鍵全 repo 只有一個算法
+    `_nodehome_key`(路徑正規化 + NFC),2026-09-10 那輪代碼審就是為了收斂「三處各寫一份、
+    各版解得不一樣」才立的。第一版自己刻了一份,解不了 `a/../b`——而那正是這個 repo
+    自己認證過、也修過一次的人手寫法,漏掉的話該擋的推送會安靜放行。
+
+    在那之上多兩條**只會多擋、不會少擋**的保險:家節點寫的是資料夾(看底下的檔)、只有忽略大小寫
+    才對得上。寫入端(`_about_code_path`)確實已經擋掉這兩種寫法(要求是檔案、大小寫要跟磁碟一致),
+    所以走指令寫進去的不會踩到;留著是因為★寫入端的保證不等於讀取端的保證★——開頭欄位可以被手改,
+    而這一層漏掉是沒人會發現的(多擋一次訊息會講清楚為什麼)。
+    """
+    tset = {_nodehome_key(x) for x in touched}
+    tset.discard("")
+    hits, only_case = [], []
+    for raw in files:
+        f = _nodehome_key(raw)
+        if not f:
+            continue
+        if f in tset:
+            hits.append(raw)
+            continue
+        under = sorted(x for x in tset if x.startswith(f + "/"))
+        if under:
+            hits.append(f"{raw}(底下的 {under[0]})")
+            continue
+        # ★排序後取第一個★(代碼審 r2 通才席):只差大小寫的兩支檔在大小寫敏感的檔案系統上
+        # 可以同時存在,用 dict 收會因為雜湊順序而每次點名到不同那支,排查訊息不穩定。
+        same = sorted(x for x in tset if x.lower() == f.lower())
+        if same:
+            hits.append(f"{raw}(大小寫不同:{same[0]})")
+            only_case.append(raw)
+    return hits, only_case
+
+
 def _guard_touches(gn, env, touched):
     """這條逾期的預告合約,跟「這次改動碰到的檔」有沒有關係。回 (要不要擋, 補充說明)。
 
@@ -10818,20 +10858,43 @@ def _guard_touches(gn, env, touched):
     """
     if touched is None:
         return True, ""            # 沒給清單=CI 那一層,照舊全擋
-    home = _guard_home_of(gn)
-    if not home:
+    # ★guards 可以有好幾個值★(代碼審 r1 通才席):欄位本來就是清單,只看第一個會讓第二篇家節點
+    # 管的檔永遠算不到。_guard_home_of 是給「改哪一篇」用的(只能有一個目標),這裡要全看。
+    homes = [str(x).strip() for x in as_list(gn.fields.get(GUARD_MARK_FIELD)) if str(x).strip()]
+    if not homes:
         return False, ";這篇沒寫它守的是哪篇功能節點,算不出有沒有碰到"
-    hrel = env.find(home)
-    hn = env.notes.get(hrel) if hrel else None
-    if hn is None:
-        return False, f";找不到它守的功能節點 {home},算不出有沒有碰到"
-    files = [str(x).strip() for x in as_list(hn.fields.get("about_code")) if str(x).strip()]
+    files, found, missing, nocode = [], [], [], []
+    for home in homes:
+        hrel = env.find(home)
+        hn = env.notes.get(hrel) if hrel else None
+        if hn is None:
+            missing.append(home)
+            continue
+        found.append(hrel)
+        got = [str(x).strip() for x in as_list(hn.fields.get("about_code")) if str(x).strip()]
+        if got:
+            files += got
+        else:
+            nocode.append(hrel)
+    # ★連結斷掉的那幾篇,不管這次擋不擋都要講★(代碼審 r2 通才席):
+    # 半條算得出來、半條算不出來時,算不出來的那半原本會無聲消失,那條合約就一直帶著沒人發現的壞連結。
+    broken = f"(另外 {'、'.join(missing)} 這幾篇找不到,連結可能斷了)" if missing else ""
     if not files:
-        return False, f";{hrel} 沒寫它管哪幾支檔(about_code),算不出有沒有碰到"
-    hit = sorted(set(files) & set(touched))
-    if hit:
-        return True, f";你這次改到 {'、'.join(hit[:3])}"
-    return False, ""
+        if missing and not found:
+            return False, f";找不到它守的功能節點 {'、'.join(missing)},算不出有沒有碰到"
+        return False, f";{'、'.join(nocode)} 沒寫它管哪幾支檔(about_code),算不出有沒有碰到{broken}"
+    hits, only_case = _guard_touched_hits(files, touched)
+    if hits:
+        # ★只列解析得到的那幾篇★(代碼審 r2 通才席):這句話存在的目的是讓被擋的人知道去哪篇查,
+        # 把找不到的節點也列進來,照著查的人會撲空。
+        # ★收窄的粒度是「整篇家節點」不是「每條合約」★(代碼審 r1):同一篇掛兩條逾期合約時兩條都會擋。
+        # 做得更細要讓每條合約自己記檔案清單(另一套資料);現在的代價是偶爾多擋一條,方向安全,
+        # 但要讓人看得出來為什麼,不要變成無法解釋的誤擋。
+        why = f";你這次改到 {'、'.join(hits[:3])}(它掛在 {'、'.join(found[:2])} 底下){broken}"
+        if only_case and len(only_case) == len(hits):
+            why += "——只有忽略大小寫才對得上,寧可多擋一次也不漏"
+        return True, why
+    return False, ("" if not broken else f";這次沒碰到它管的檔{broken}")
 
 
 def cmd_guard_settle(env, ref, method):

@@ -1,0 +1,357 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md b/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
+index efc61377..5ac2101b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
+@@ -239,20 +239,24 @@ REVISIT:2026-10-22 第二批還沒開工就重新判斷要不要做——第一
+ **退不回去的部分**:歷史帳(上面〈成員身分〉裡被裁掉的那本「成員帳」,留下來只當歷史紀錄)是只增不改的治理帳,還原提交不會把已經寫進去的成員列刪掉;那份帳被別的機制讀到的話會看到一批它不認得的列。代價是治理帳多了一段沒人用的紀錄,不影響判定。
+ 
+ **出事故時的最小動作**:還原工具層這批提交。
+ ★2026-09-22 補跑前掃訂正★:原本這裡寫「把專案設定檔的這道閘關掉」,那個開關**不存在**——這套機制沒有讀任何專案設定。要嘛補實作,要嘛就是只有還原提交這一條路(現況是後者)。
+ 
+ ## 誠實界線
+ 
+ - 測試綠由既有機制負責,它只保證「跑過而且綠」,不保證測試真的測到那條合約——那是殺傷力驗證的事,不在這次範圍。
+ - 「階段已完成」無論哪種判法都是靠宣告,沒有人真的去驗那個階段做完了沒。
+ - **逾期就擋、而且不准延期,會在最忙的時候擋死推送**。這是使用者當面裁的,沒有繞道:只能做完或當著人的面棄置。代價要寫進文件第一段,不要讓人上線之後才發現。
++- **本機收窄的粒度是「整篇家節點」,不是「每一條合約」**(2026-09-22 代碼審指出,接受):
++  一篇功能節點掛兩條預告合約時,只要碰到那篇管的任何一支檔,兩條都會被判成碰到。
++  要做得更細就得讓每條合約自己記「我管哪幾支檔」,那是另一套資料;目前靠家節點這一跳換來的是零新欄位。
++  代價是本機偶爾多擋一條——方向安全(多擋看得見,漏擋沒人發現),而且家節點切得夠細就不會發生。
+ - 直接 `rm` 掉節點檔就抓不到——這是 2026-09-22 裁定的取捨,換來的是改名搬家不會被誤擋。
+ 
+ **長跑會談裡的提醒可能被壓掉**:預告標記寫在節點裡,查那篇節點時看得到;但如果一個會談跑很久、上下文被壓縮,先前看過的那段提醒可能不在了。這個 repo 控制不了壓縮,只能靠「下次再查那篇節點時又會看到」與「到期會擋」兜底。
+ 
+ **四條已知繞法,刻意不補(威脅模型是防忘記,不是防繞過)**:
+ 
+ 1. **直接改最遲日期就等於延期**,而且比走流程還乾淨——連留痕都沒有。「不准延期」是不提供延期指令,不是鎖住那個欄位。
+ 2. **把守衛節點的 `type` 改掉**,整套機制就當它不存在。不是刪除,連結還在,自檢不會叫。
+ 3. **刪掉守衛節點檔就真的消失,沒人擋**(2026-09-22 裁定拿掉「成員變少要簽核」之後的後果)。歷史帳裡還留著它曾經存在的紀錄,但那只是歷史,不會讓任何閘紅。
+ 4. **簽核擋的是「有沒有那一列」,不是「誰簽的」**。偽造一列很輕鬆。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 08fde11e..106ca754 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -43,22 +43,26 @@ pp_range_for() {
+     printf '%s..%s' "$1" "$2"
+   fi
+ }
+ 
+ # 這次推送總共改到哪些檔(所有 ref 的聯集,一行一個)。寫進暫存檔,回印路徑;算不出來回空字串。
+ # ★給圖譜健康那一段用★:逾期的預告合約,本機這一層只擋「這次碰到的」那幾條,
+ # 別人的逾期不該擋掉你的推送(被擋的人解不開別人的合約)。CI 不給這份清單,那邊照舊擋全部。
+ pp_touched_file() {
+   local _f _r
+   [[ -n "$_EMPTY_TREE" ]] || return 0
+-  _f="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-touched-XXXXXX" 2>/dev/null || true)"
+-  [[ -n "$_f" ]] || return 0
++  # ★放進 $_PP_TMP,不要自己另外 mktemp 一個檔★(代碼審 r1 架構席):那個目錄有 trap 在收,
++  # 正常結束、exit 1、Ctrl-C、被砍都會清掉。自己逐處 rm 會在「還沒回傳路徑就被打斷」時漏掉
++  # ——這支腳本前面那段註解就是為了同一種漏而寫的,不要再走一次同一條路。
++  [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
++  _f="$_PP_TMP/touched.txt"
++  : > "$_f" 2>/dev/null || return 0
+   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     read -r _ _lsha _ _rsha <<< "$_ppl"
+     [[ "$_lsha" == "$_ZERO" ]] && continue
+     _r="$(pp_range_for "$_rsha" "$_lsha")"
+     git diff --no-ext-diff --no-textconv --name-only "$_r" >> "$_f" 2>/dev/null || true
+   done
+   if [[ -s "$_f" ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+ }
+ 
+ # 無 lumos / python3 → 降級放行(不為缺環境 brick push,CI 兜底)
+@@ -168,35 +172,33 @@ fi
+ # ★2026-09-06 重排:原本這段在最後面,而且「沒有 vault 就 exit 0」會直接結束整支 hook。
+ #   現在它排在全套測試之前,那個 exit 0 會把後面的測試閘一起跳掉——所以改成只跳過這一段。
+ have_vault=0
+ for d in docs/*-knowledge docs/knowledge; do
+   [[ -d "$d" ]] && have_vault=1 && break
+ done
+ _TOUCHED_F="$(pp_touched_file)"
+ _DOCTOR_ARGS=(doctor --ci)
+ [[ -n "$_TOUCHED_F" ]] && _DOCTOR_ARGS+=(--touched-from "$_TOUCHED_F")
+ if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" "${_DOCTOR_ARGS[@]}"; then
+-  [[ -n "$_TOUCHED_F" ]] && rm -f "$_TOUCHED_F"
+   {
+     echo ""
+     echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
+     echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
+     echo ""
+     echo "三條路選一條:"
+     echo "  1. 照上面的提示把筆記修好再推。"
+     echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
+     echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
+     echo ""
+   } >&2
+   exit 1
+ fi
+-[[ -n "$_TOUCHED_F" ]] && rm -f "$_TOUCHED_F"
+ 
+ 
+ # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
+ # prepush範圍修法(2026-07-21):改讀 stdin 推送範圍逐 ref 判,取代 merge-base——分支與
+ # main-direct 同軌;無基準(新 ref/缺物件)倒向保守掃 empty-tree..local_sha(非 fail-open,
+ # 否則守衛升格成穩定繞法);留痕綁 remote_ref 目的地(非 checkout);逐 ref 獨立判,某 ref
+ # high 未過即擋。fail-open 僅剩:pitfalls 本身出錯 / empty-tree 都跑不動。
+ # 推送前要跑哪個測試範圍(2026-09-18 Enzo 裁:純文件改動、或判成 light 的小改動,不用等全套):
+ # 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
+ # light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
+diff --git a/scripts/lumos b/scripts/lumos
+index 25c4608e..4fd323b1 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2335,26 +2335,30 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+                 _gsoon.append(f"{_gclaim}(負責人 {_gowner},最遲 {_gd2});{_grel}")
+         if _gover:
+             warn(_gover, f"有 {len(_gover)} 條預告的合約已經逾期(不准延期,只能做完或棄置):",
+                  "做完了:lumos guard settle <守衛節點> --test <測試方法>;"
+                  "決定不做:先 lumos signoff <守衛節點> --ref <守衛節點> --note \"<為什麼>\",再 lumos guard abandon")
+         if _gover_other:
+             # ★本機那一層只擋這次碰到的★(必要合約清單_計劃〈擋的範圍〉第一層):
+             # 這幾條是別人的債,列出來讓人知道,但不擋這次推送——被擋的人解不開別人的合約,
+             # 那不是嚴格,是防做事。CI 不給清單,所以那邊照舊全擋。
+             warn_soft(_gover_other, f"另有 {len(_gover_other)} 條逾期的預告合約,但這次改動沒碰到它們(不擋這次推送):",
+-                      "推送前的閘只擋你這次碰到的;這幾條由負責人自己收,CI 會擋全部")
++                      "推送前的閘只擋你這次碰到的,CI 會擋全部;想看全部待完成的:lumos guard required")
+         if _gsoon:
+             warn_soft(_gsoon, f"有 {len(_gsoon)} 條預告的合約七天內到期(先講,還不擋):",
+                       "現在做完最省事:lumos guard settle <守衛節點> --test <測試方法>")
+-        if not _gover and not _gsoon:
++        if not _gover and not _gsoon and not _gover_other:
+             ok("沒有逾期或快到期的預告合約")
++        elif not _gover and not _gsoon:
++            # ★這一行是唯一會被當成「全都乾淨」掃過去的訊號★(代碼審 r1 通才席):
++            # 上面剛列完「還有 N 條逾期」,這裡再印「沒有逾期」會讓人誤信沒事。
++            ok(f"這次改動沒碰到任何逾期的預告合約(上面那 {len(_gover_other)} 條還在,只是不擋這次推送)")
+     except Exception as _e:
+         warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
+     print()
+ 
+     section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
+     if not ci:
+         print("  (僅 --ci 模式掃 diff;互動模式略過)")
+     else:
+         hint_hits = _scan_diff_for_irreversible_hints(str(env.vault))
+         if not hint_hits:
+@@ -10801,43 +10805,103 @@ def _guard_planned_line(env, home_rel, claim):
+     return lines, idx, e, None
+ 
+ 
+ def _guard_home_of(n):
+     g = n.fields.get(GUARD_MARK_FIELD)
+     if isinstance(g, list) and g:
+         return str(g[0]).strip()
+     return str(g or "").strip()
+ 
+ 
++def _norm_code_path(s):
++    """把路徑正規化成「跟 git 吐出來的名字可以直接比」的樣子:砍掉 ./ 前綴、結尾斜線、重複斜線。
++
++    ★不做這件事的話,本機那一層會安靜地失效★(代碼審 r1 通才席 blocker):about_code 是人手寫的,
++    寫成 `./scripts/pay.py` 很自然;而 git 吐的是 `scripts/pay.py`。純字串比對會把「真的改到了」
++    判成「沒碰到」,而且不出任何聲音——跟真的沒碰到長得一模一樣。
++    """
++    s = str(s or "").strip().replace("\\", "/")
++    while s.startswith("./"):
++        s = s[2:]
++    while "//" in s:
++        s = s.replace("//", "/")
++    return s.rstrip("/")
++
++
++def _guard_touched_hits(files, touched):
++    """家節點管的那些檔,跟這次改到的檔對得上哪幾個。回 (對上的清單, 是不是只在忽略大小寫時才對上)。
++
++    三種算對上:①正規化之後一字不差 ②家節點寫的是資料夾(這次改到的檔在它底下)
++    ③只有忽略大小寫才對得上——★這種也算碰到★:大小寫不敏感的檔案系統上它們本來就是同一支檔,
++    而這一層寧可多擋一次也不要安靜漏掉(漏掉沒人會發現,多擋一次訊息會講清楚為什麼)。
++    """
++    tset = {_norm_code_path(x) for x in touched}
++    tlower = {x.lower(): x for x in tset}
++    hits, only_case = [], []
++    for raw in files:
++        f = _norm_code_path(raw)
++        if not f:
++            continue
++        if f in tset:
++            hits.append(raw)
++            continue
++        under = sorted(x for x in tset if x.startswith(f + "/"))
++        if under:
++            hits.append(f"{raw}(底下的 {under[0]})")
++            continue
++        same = tlower.get(f.lower())
++        if same is not None:
++            hits.append(f"{raw}(大小寫不同:{same})")
++            only_case.append(raw)
++    return hits, only_case
++
++
+ def _guard_touches(gn, env, touched):
+     """這條逾期的預告合約,跟「這次改動碰到的檔」有沒有關係。回 (要不要擋, 補充說明)。
+ 
+     ★本機那一層只擋碰到的、CI 擋全部★(必要合約清單_計劃〈擋的範圍〉三層):
+     分辨兩層靠的是有沒有給清單——推送前的閘算得出這次推了哪些檔就給,CI 不給。
+     給了清單卻算不出這條跟哪些檔有關(家節點不見、或家節點沒寫 about_code),本機這一層放行:
+     這一層的定位是窄而準,誤擋一次的代價是有人被卡住又解不開別人的合約;CI 那邊照樣會擋,漏不掉。
+     """
+     if touched is None:
+         return True, ""            # 沒給清單=CI 那一層,照舊全擋
+-    home = _guard_home_of(gn)
+-    if not home:
++    # ★guards 可以有好幾個值★(代碼審 r1 通才席):欄位本來就是清單,只看第一個會讓第二篇家節點
++    # 管的檔永遠算不到。_guard_home_of 是給「改哪一篇」用的(只能有一個目標),這裡要全看。
++    homes = [str(x).strip() for x in as_list(gn.fields.get(GUARD_MARK_FIELD)) if str(x).strip()]
++    if not homes:
+         return False, ";這篇沒寫它守的是哪篇功能節點,算不出有沒有碰到"
+-    hrel = env.find(home)
+-    hn = env.notes.get(hrel) if hrel else None
+-    if hn is None:
+-        return False, f";找不到它守的功能節點 {home},算不出有沒有碰到"
+-    files = [str(x).strip() for x in as_list(hn.fields.get("about_code")) if str(x).strip()]
++    files, missing, nocode = [], [], []
++    for home in homes:
++        hrel = env.find(home)
++        hn = env.notes.get(hrel) if hrel else None
++        if hn is None:
++            missing.append(home)
++            continue
++        got = [str(x).strip() for x in as_list(hn.fields.get("about_code")) if str(x).strip()]
++        if got:
++            files += got
++        else:
++            nocode.append(hrel)
+     if not files:
+-        return False, f";{hrel} 沒寫它管哪幾支檔(about_code),算不出有沒有碰到"
+-    hit = sorted(set(files) & set(touched))
+-    if hit:
+-        return True, f";你這次改到 {'、'.join(hit[:3])}"
++        if missing:
++            return False, f";找不到它守的功能節點 {'、'.join(missing)},算不出有沒有碰到"
++        return False, f";{'、'.join(nocode)} 沒寫它管哪幾支檔(about_code),算不出有沒有碰到"
++    hits, only_case = _guard_touched_hits(files, touched)
++    if hits:
++        # ★講出是哪一篇家節點在管★(代碼審 r1 通才席):收窄的粒度是「整篇家節點」不是「每條合約」,
++        # 同一篇掛兩條逾期合約時兩條都會擋。做得更細要讓每條合約自己記檔案清單(另一套資料),
++        # 現在的代價是偶爾多擋一條;方向安全,但要讓人看得出來為什麼,不要變成無法解釋的誤擋。
++        why = f";你這次改到 {'、'.join(hits[:3])}(它掛在 {'、'.join(homes[:2])} 底下)"
++        if only_case and len(only_case) == len(hits):
++            why += "——只有忽略大小寫才對得上,寧可多擋一次也不漏"
++        return True, why
+     return False, ""
+ 
+ 
+ def cmd_guard_settle(env, ref, method):
+     """轉正:預告行換成正式合約行並綁上測試,守衛節點轉成已通過。"""
+     if not IDENT_RE.match(method or ""):
+         print(f"擋下:測試方法名『{method}』不合法(只能字母/數字/底線,不能數字開頭)", file=sys.stderr)
+         return 2
+     rel, n = _guard_find(env, ref)
+     if rel is None:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index eaa6b23d..f63295c7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4617,20 +4617,102 @@ def t_guard_overdue_local_blocks_only_touched():
+ 
+     none_touched = v.parent / "touched2.txt"
+     none_touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
+     zero = run(v, "doctor", "--ci", "--touched-from", str(none_touched))
+     zseg = _section_of(zero.stdout, "S15")
+     check("⑤ 一條都沒碰到時不擋(退出碼 0)", zero.returncode == 0,
+           f"rc={zero.returncode}\n" + zseg)
+     check("⑤ 但兩條還是都列出來", "退費那條逾期了" in zseg and "出貨那條逾期了" in zseg, zseg)
+ 
+ 
++def t_guard_touched_path_forms_still_match():
++    """家節點的路徑寫法跟 git 吐出來的不完全一樣時,照樣算得出「碰到了」,不會安靜漏掉。
++
++    出身:代碼審 r1 通才席 blocker——原本是純字串比對,about_code 寫成 `./scripts/pay.py`
++    (人手寫很自然)就永遠判成「沒碰到」,而且不出任何聲音,跟真的沒碰到長得一模一樣。
++    翻紅釘:把正規化拿掉(改回純字串交集) → ②③④ 全紅。
++    """
++    import importlib.util, importlib.machinery, sys as _sys
++    loader = importlib.machinery.SourceFileLoader("lumosmod_touch", GRAPHCTL)
++    spec = importlib.util.spec_from_loader("lumosmod_touch", loader)
++    m = importlib.util.module_from_spec(spec)
++    _argv = _sys.argv; _sys.argv = ["lumos"]
++    try:
++        loader.exec_module(m)
++    finally:
++        _sys.argv = _argv
++    touched = {"scripts/pay.py"}
++    for label, written in (("前面多了 ./", "./scripts/pay.py"),
++                           ("結尾多了斜線", "scripts/pay.py/"),
++                           ("中間重複斜線", "scripts//pay.py")):
++        hits, _only = m._guard_touched_hits([written], touched)
++        check(f"② {label} 照樣算碰到", hits != [], f"{written} → {hits}")
++    hits, _o = m._guard_touched_hits(["scripts"], touched)
++    check("③ 家節點寫的是資料夾,底下的檔被改到也算碰到", hits != [], str(hits))
++    hits, only = m._guard_touched_hits(["Scripts/Pay.py"], touched)
++    check("④ 只有大小寫不同時也算碰到(寧可多擋一次)", hits != [], str(hits))
++    check("④ 而且要標明是靠忽略大小寫才對上的", only != [], str(only))
++    hits, _o = m._guard_touched_hits(["scripts/other.py"], touched)
++    check("⑤ 真的不相干的檔不算碰到", hits == [], str(hits))
++
++
++def t_guard_touched_reads_all_home_links():
++    """守衛節點的 guards 欄位有兩個家時,兩邊管的檔都要算進去,不能只看第一個。
++
++    出身:代碼審 r1 通才席——欄位本來就是清單,只取第一項會讓第二篇家節點管的檔永遠算不到,
++    那條合約在本機那一層就對它失效。
++    翻紅釘:把「全看」改回「只取第一個」 → ②紅。
++    """
++    import datetime
++    v = mkvault()
++    write(v, "Systems/A.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/a.py\nsummary: |-\n  FLOW:a", body="# A\n")
++    write(v, "Systems/B.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/b.py\nsummary: |-\n  FLOW:b", body="# B\n")
++    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
++    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
++    run(v, "guard", "plan", "Systems/A", "兩個家的那條", "--plan", "Projects/P",
++        "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
++    node = list((v / "Verification").glob("*.md"))[0]
++    txt = node.read_text(encoding="utf-8")
++    node.write_text(txt.replace("  - Systems/A\n", "  - Systems/A\n  - Systems/B\n", 1), encoding="utf-8")
++    check("① 手改成兩個家之後檔案真的有兩行", node.read_text(encoding="utf-8").count("  - Systems/") == 2,
++          node.read_text(encoding="utf-8")[:400])
++    touched = v.parent / "t.txt"
++    touched.write_text("scripts/b.py\n", encoding="utf-8")   # 只碰到第二個家管的檔
++    r = run(v, "doctor", "--ci", "--touched-from", str(touched))
++    seg = _section_of(r.stdout, "S15")
++    check("② 碰到第二個家管的檔也要擋", r.returncode != 0, f"rc={r.returncode}\n" + seg)
++
++
++def t_guard_overdue_tail_line_matches_the_list():
++    """列了「另有 N 條逾期」之後,收尾那行不准再說「沒有逾期」。
++
++    出身:代碼審 r1 通才席——收尾那行是唯一會被當成「全都乾淨」掃過去的訊號,
++    前一句剛說還有逾期、下一句說沒有,人會誤信沒事。
++    翻紅釘:把收尾判斷改回只看前兩堆 → ②紅。
++    """
++    import datetime
++    v = mkvault()
++    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# Pay\n")
++    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
++    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
++    run(v, "guard", "plan", "Systems/Pay", "沒碰到的那條", "--plan", "Projects/P",
++        "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
++    touched = v.parent / "t2.txt"
++    touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
++    seg = _section_of(run(v, "doctor", "--ci", "--touched-from", str(touched)).stdout, "S15")
++    check("① 那條有被列出來", "沒碰到的那條" in seg, seg)
++    check("② 收尾那行不准說「沒有逾期或快到期的預告合約」",
++          "沒有逾期或快到期的預告合約" not in seg, seg)
++    check("② 收尾那行要講明那幾條還在、只是不擋這次",
++          "還在" in seg and "不擋這次推送" in seg, seg)
++
++
+ def t_prepush_passes_touched_list_to_doctor():
+     """推送前的閘要把「這次推了哪些檔」算給自檢,別人的逾期預告才不會擋到你的推送。
+ 
+     這支是真跑整支 pre-push,不是檢查腳本裡有沒有那個字串——只比對字串的話,
+     把旗標拼錯、或算出來的清單是空的,測試照樣綠(測試假綠形態第①型)。
+     翻紅釘:把掛鉤裡傳清單那行拿掉 → ③紅(沒碰到的那條會把推送擋下來)。
+     """
+     import subprocess as _sp, os as _os, datetime, tempfile
+     pre_push = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+     lumos_real = str(Path(__file__).resolve().parent / "lumos")

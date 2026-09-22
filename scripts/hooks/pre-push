@@ -50,8 +50,12 @@ pp_range_for() {
 pp_touched_file() {
   local _f _r
   [[ -n "$_EMPTY_TREE" ]] || return 0
-  _f="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-touched-XXXXXX" 2>/dev/null || true)"
-  [[ -n "$_f" ]] || return 0
+  # ★放進 $_PP_TMP,不要自己另外 mktemp 一個檔★(代碼審 r1 架構席):那個目錄有 trap 在收,
+  # 正常結束、exit 1、Ctrl-C、被砍都會清掉。自己逐處 rm 會在「還沒回傳路徑就被打斷」時漏掉
+  # ——這支腳本前面那段註解就是為了同一種漏而寫的,不要再走一次同一條路。
+  [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
+  _f="$_PP_TMP/touched.txt"
+  : > "$_f" 2>/dev/null || return 0
   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     read -r _ _lsha _ _rsha <<< "$_ppl"
     [[ "$_lsha" == "$_ZERO" ]] && continue
@@ -175,7 +179,6 @@ _TOUCHED_F="$(pp_touched_file)"
 _DOCTOR_ARGS=(doctor --ci)
 [[ -n "$_TOUCHED_F" ]] && _DOCTOR_ARGS+=(--touched-from "$_TOUCHED_F")
 if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" "${_DOCTOR_ARGS[@]}"; then
-  [[ -n "$_TOUCHED_F" ]] && rm -f "$_TOUCHED_F"
   {
     echo ""
     echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
@@ -189,7 +192,6 @@ if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" "${_DOCTOR_ARGS[@]}"; then
   } >&2
   exit 1
 fi
-[[ -n "$_TOUCHED_F" ]] && rm -f "$_TOUCHED_F"
 
 
 # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。

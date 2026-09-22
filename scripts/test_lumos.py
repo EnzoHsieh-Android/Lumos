@@ -4624,6 +4624,114 @@ def t_guard_overdue_local_blocks_only_touched():
     check("⑤ 但兩條還是都列出來", "退費那條逾期了" in zseg and "出貨那條逾期了" in zseg, zseg)
 
 
+def t_guard_touched_path_forms_still_match():
+    """家節點的路徑寫法跟 git 吐出來的不完全一樣時,照樣算得出「碰到了」,不會安靜漏掉。
+
+    出身:代碼審 r1 通才席 blocker——原本是純字串比對,about_code 寫成 `./scripts/pay.py`
+    (人手寫很自然)就永遠判成「沒碰到」,而且不出任何聲音,跟真的沒碰到長得一模一樣。
+    翻紅釘:把正規化拿掉(改回純字串交集) → ②③④ 全紅。
+    """
+    import importlib.util, importlib.machinery
+    loader = importlib.machinery.SourceFileLoader("lumosmod_touch", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumosmod_touch", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    touched = {"scripts/pay.py"}
+    for label, written in (("前面多了 ./", "./scripts/pay.py"),
+                           ("結尾多了斜線", "scripts/pay.py/"),
+                           ("中間重複斜線", "scripts//pay.py"),
+                           ("繞一圈的相對路徑", "scripts/../scripts/pay.py")):
+        hits, _only = m._guard_touched_hits([written], touched)
+        check(f"② {label} 照樣算碰到", hits != [], f"{written} → {hits}")
+    hits, _o = m._guard_touched_hits(["scripts"], touched)
+    check("③ 家節點寫的是資料夾,底下的檔被改到也算碰到", hits != [], str(hits))
+    hits, only = m._guard_touched_hits(["Scripts/Pay.py"], touched)
+    check("④ 只有大小寫不同時也算碰到(寧可多擋一次)", hits != [], str(hits))
+    check("④ 而且要標明是靠忽略大小寫才對上的", only != [], str(only))
+    hits, _o = m._guard_touched_hits(["scripts/other.py"], touched)
+    check("⑤ 真的不相干的檔不算碰到", hits == [], str(hits))
+
+
+def t_guard_touched_reads_all_home_links():
+    """守衛節點的 guards 欄位有兩個家時,兩邊管的檔都要算進去,不能只看第一個。
+
+    出身:代碼審 r1 通才席——欄位本來就是清單,只取第一項會讓第二篇家節點管的檔永遠算不到,
+    那條合約在本機那一層就對它失效。
+    翻紅釘:把「全看」改回「只取第一個」 → ②紅。
+    """
+    import datetime
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/a.py\nsummary: |-\n  FLOW:a", body="# A\n")
+    write(v, "Systems/B.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/b.py\nsummary: |-\n  FLOW:b", body="# B\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    run(v, "guard", "plan", "Systems/A", "兩個家的那條", "--plan", "Projects/P",
+        "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
+    node = list((v / "Verification").glob("*.md"))[0]
+    txt = node.read_text(encoding="utf-8")
+    node.write_text(txt.replace("  - Systems/A\n", "  - Systems/A\n  - Systems/B\n", 1), encoding="utf-8")
+    check("① 手改成兩個家之後檔案真的有兩行", node.read_text(encoding="utf-8").count("  - Systems/") == 2,
+          node.read_text(encoding="utf-8")[:400])
+    touched = v.parent / "t.txt"
+    touched.write_text("scripts/b.py\n", encoding="utf-8")   # 只碰到第二個家管的檔
+    r = run(v, "doctor", "--ci", "--touched-from", str(touched))
+    seg = _section_of(r.stdout, "S15")
+    check("② 碰到第二個家管的檔也要擋", r.returncode != 0, f"rc={r.returncode}\n" + seg)
+
+
+def t_guard_touched_reports_broken_home_links():
+    """守衛節點指到的家節點有一篇不見時:擋下訊息不准把它列成「去這篇查」,但要另外講連結斷了。
+
+    出身:代碼審 r2 通才席——那句「它掛在哪一篇底下」存在的目的就是讓被擋的人知道去哪查,
+    列進一篇根本不存在的節點,照著查的人會撲空;而且斷掉的連結在「有碰到」那條路上會被完全吞掉。
+    翻紅釘:把顯示用的清單換回「全部的 guards 值」 → ②紅;拿掉斷連結那句 → ③紅。
+    """
+    import datetime
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# A\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    run(v, "guard", "plan", "Systems/A", "半條斷了的那條", "--plan", "Projects/P",
+        "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
+    node = list((v / "Verification").glob("*.md"))[0]
+    txt = node.read_text(encoding="utf-8")
+    node.write_text(txt.replace("  - Systems/A\n", "  - Systems/A\n  - Systems/Gone\n", 1), encoding="utf-8")
+    touched = v.parent / "t3.txt"
+    touched.write_text("scripts/pay.py\n", encoding="utf-8")
+    seg = _section_of(run(v, "doctor", "--ci", "--touched-from", str(touched)).stdout, "S15")
+    line = [ln for ln in seg.split("\n") if "半條斷了的那條" in ln]
+    check("① 有擋下並列出這一條", line != [], seg)
+    if not line:
+        return
+    ln = line[0]
+    check("② 「去哪篇查」只列解析得到的那篇", "掛在 Systems/A" in ln and "掛在 Systems/A、Systems/Gone" not in ln, ln)
+    check("③ 斷掉的那篇另外講、不是無聲消失", "Systems/Gone" in ln and "連結可能斷了" in ln, ln)
+
+
+def t_guard_overdue_tail_line_matches_the_list():
+    """列了「另有 N 條逾期」之後,收尾那行不准再說「沒有逾期」。
+
+    出身:代碼審 r1 通才席——收尾那行是唯一會被當成「全都乾淨」掃過去的訊號,
+    前一句剛說還有逾期、下一句說沒有,人會誤信沒事。
+    翻紅釘:把收尾判斷改回只看前兩堆 → ②紅。
+    """
+    import datetime
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    run(v, "guard", "plan", "Systems/Pay", "沒碰到的那條", "--plan", "Projects/P",
+        "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
+    touched = v.parent / "t2.txt"
+    touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
+    seg = _section_of(run(v, "doctor", "--ci", "--touched-from", str(touched)).stdout, "S15")
+    check("① 那條有被列出來", "沒碰到的那條" in seg, seg)
+    check("② 收尾那行不准說「沒有逾期或快到期的預告合約」",
+          "沒有逾期或快到期的預告合約" not in seg, seg)
+    check("② 收尾那行要講明那幾條還在、只是不擋這次",
+          "還在" in seg and "不擋這次推送" in seg, seg)
+
+
 def t_prepush_passes_touched_list_to_doctor():
     """推送前的閘要把「這次推了哪些檔」算給自檢,別人的逾期預告才不會擋到你的推送。
 
