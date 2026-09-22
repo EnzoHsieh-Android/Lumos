@@ -10580,8 +10580,13 @@ def _guard_plan_slug(text):
     return s or "guard"
 
 
-def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
-    """預告一條之後要有的合約:寫標記 + 建待完成守衛節點,雙向連好。"""
+def _guard_plan_check(env, node, claim, plan, phase, due, why, owner):
+    """預告指令的入口檢查,全部擋下的理由集中在這裡。
+
+    回 (rel, prel, phases, gname, gpath) 或 None(已經印過為什麼擋)。
+    ★抽出來是因為主體分支太多★:檢查跟動手寫混在一支函式裡,靜態檢查判它複雜度 17(上限 10),
+    而且讀的人要先跳過三十行檢查才看得到真正做事的那段。
+    """
     import datetime
     # ★合約文字不准含換行★(代碼審 r1 blocker,實測會吃掉既有合約):
     # 摘要是 YAML block scalar,一個換行就把區塊打斷,後面每一行都變成別的欄位——
@@ -10589,11 +10594,11 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
     _c = (claim or "")
     if not _c.strip():
         print("擋下:合約那句話不能是空的", file=sys.stderr)
-        return 2
+        return None
     if "\n" in _c or "\r" in _c:
         print("擋下:合約那句話不能換行(摘要是一行一條,換行會把整個摘要區塊打斷,"
               "連同這篇既有的合約一起從圖譜消失)", file=sys.stderr)
-        return 2
+        return None
     missing = [(v, lbl) for v, lbl in ((plan, "計劃參照"), (phase, "階段"), (due, "最遲日期"),
                                        (why, "理由"), (owner, "負責人")) if not (v or "").strip()]
     if missing:
@@ -10601,28 +10606,38 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
         print(f"擋下:預告合約要寫清楚才追得動,還缺:{names}", file=sys.stderr)
         print("  缺什麼就補什麼:--plan <計劃節點> --phase <階段,可多個逗號分隔> "
               "--due YYYY-MM-DD --why <為什麼還不做> --owner <誰負責>", file=sys.stderr)
-        return 2
+        return None
     try:
         datetime.date.fromisoformat(due.strip())
     except ValueError:
         print(f"擋下:最遲日期『{due}』不是 YYYY-MM-DD", file=sys.stderr)
-        return 2
+        return None
     rel = env.find(node)
     if rel is None:
         print(f"擋下:圖譜裡找不到叫 {node} 的筆記(lumos search <關鍵字> 可以找)", file=sys.stderr)
-        return 2
+        return None
     prel = env.find(plan)
     if prel is None:
         print(f"擋下:圖譜裡找不到計劃節點 {plan}", file=sys.stderr)
-        return 2
+        return None
     phases = [x.strip() for x in str(phase).split(",") if x.strip()]
-    today = datetime.date.today().isoformat()
-    gname = f"{today}_{_guard_plan_slug(claim)}"
+    gname = f"{datetime.date.today().isoformat()}_{_guard_plan_slug(claim)}"
     gpath = env.vault / "Verification" / f"{gname}.md"
     if gpath.exists():
         print(f"擋下:守衛節點 {gname} 已經存在,換一句話或改名再試"
               "(不靜默覆蓋:兩個人同時建同名節點會把對方的蓋掉)", file=sys.stderr)
+        return None
+    return rel, prel, phases, gname, gpath
+
+
+def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
+    """預告一條之後要有的合約:寫標記 + 建待完成守衛節點,雙向連好。"""
+    import datetime
+    checked = _guard_plan_check(env, node, claim, plan, phase, due, why, owner)
+    if checked is None:
         return 2
+    rel, prel, phases, gname, gpath = checked
+    today = datetime.date.today().isoformat()
 
     # ── 先建守衛節點(可重建的那一邊),再寫功能節點的標記(權威那一邊)。
     # ★不宣稱回滾★(設計審 r1 blocker):本 repo 的寫入原語沒有刪除這一步,真回滾搭不起來;
@@ -10641,7 +10656,7 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
         "---\n", f"# {gname}\n", "\n",
         f"預告的合約:{claim.strip()}\n", "\n",
         f"為什麼還不做:{why.strip()}\n", "\n",
-        f"做完之後跑 `lumos guard settle` 轉正,不要手改狀態。\n",
+        "做完之後跑 `lumos guard settle` 轉正,不要手改狀態。\n",
     ]
     # 新建檔走 vault 唯一寫入原語(tmp→os.replace);atomic_write_verify 是給「改既有檔」用的,
     # 它會先讀原檔,對新檔會 FileNotFoundError。寫完自己讀回驗一次(★回報成功未落盤★的老教訓)。
@@ -10679,7 +10694,7 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
         print("  不回滾;先給那篇補 summary 再手動加這一行:", file=sys.stderr)
         print("    " + marker.strip(), file=sys.stderr)
         return 2
-    new_lines = lines[:ins] + [marker] + lines[ins:]
+    new_lines = [*lines[:ins], marker, *lines[ins:]]
     try:
         atomic_write_verify(path, new_lines, PLANNED_MARK,
                             lambda f: PLANNED_MARK in str(f.get("summary") or ""))
@@ -10693,7 +10708,7 @@ def cmd_guard_plan(env, node, claim, plan, phase, due, why, owner):
     # 掛了也順便讓「查那篇功能節點就看得到它」成立(設計審重點)。
     _rc_v = cmd_append(env, rel, "verified_by", f"[[{gref}]]")
     if _rc_v != 0:
-        print(f"⚠ 標記與守衛節點都寫好了,但 verified_by 沒掛上——它會被當成孤兒驗證紀錄", file=sys.stderr)
+        print("⚠ 標記與守衛節點都寫好了,但 verified_by 沒掛上——它會被當成孤兒驗證紀錄", file=sys.stderr)
         print(f"  手動補:lumos append {rel[:-3] if rel.endswith('.md') else rel} verified_by \"[[{gref}]]\"", file=sys.stderr)
     print(f"✓ 預告合約已登記:{rel} 多了一行預告標記,{gref} 在守它")
     print(f"  最遲 {due.strip()} 要做完(負責人 {owner.strip()});逾期會擋推送,而且不准延期")
@@ -10792,7 +10807,7 @@ def cmd_guard_settle(env, ref, method):
         return 2
     newline = f"  KEY:★INVARIANT★ {claim} [test:{method}]"
     try:
-        atomic_write_verify(env.vault / home_rel, lines[:idx] + [newline] + lines[idx + 1:],
+        atomic_write_verify(env.vault / home_rel, [*lines[:idx], newline, *lines[idx + 1:]],
                             f"[test:{method}]",
                             lambda f: f"[test:{method}]" in str(f.get("summary") or ""))
     except (ValueError, RuntimeError) as ex:
@@ -10908,7 +10923,7 @@ def cmd_guard_required(env, as_json=False):
         print(f"  ⚠ 快到期 {due}(負責人 {owner}):{claim}")
         print(f"      {rel}")
     if not overdue and not soon and pend:
-        for rel, st, due, home, owner, claim in pend:
+        for rel, _st, due, home, owner, claim in pend:
             print(f"  · 待完成 {due}(負責人 {owner}):{claim}")
     return 1 if overdue else 0
 
