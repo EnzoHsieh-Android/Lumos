@@ -44483,14 +44483,18 @@ def _mk_spec_gate_repo(d, run_cmd="python3 tests/run.py {method}"):
     d = Path(d)
     _sp.run(["git", "init", "-q", str(d)])
     (d / "tests").mkdir()
-    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_red2():\n    assert False\n\ndef t_green2():\n    assert True\n\ndef t_flip():\n    pass\n\ndef t_multi():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
+    # ★t_multi 旁邊真的要有第二支名字含它的測試★:篩選是子字串比對,「匹配到兩支」指的是
+    # 真的有兩支不同的測試被選到。只宣告一支卻回報兩個案例,那是同一支測試的多組輸入(參數化),
+    # 不是撞名——fixture 不擺出真正的撞名,那條測試就是在驗一個不存在的情境。
+    (d / "tests" / "test_x.py").write_text("def t_red():\n    assert False\n\ndef t_green():\n    assert True\n\ndef t_red2():\n    assert False\n\ndef t_green2():\n    assert True\n\ndef t_flip():\n    pass\n\ndef t_multi():\n    pass\n\ndef t_multi_extra():\n    pass\n\ndef t_param():\n    pass\n\ndef t_zero():\n    pass\n\ndef t_skip():\n    pass\n", encoding="utf-8")
     (d / "tests" / "run.py").write_text(
         "import sys\n"
         "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
         "import os\n"
         "table = {'t_red': (1, '0 passed, 1 failed', 1), 't_green': (1, '3 passed, 0 failed', 0), 't_multi': (2, '2 passed, 0 failed', 0),\n"
         "         't_red2': (1, '0 passed, 1 failed', 1), 't_green2': (1, '1 passed, 0 failed', 0), 't_flip': (1, '1 passed, 0 failed', 0) if os.path.exists('tests/flip.ok') else (1, '0 passed, 1 failed', 1),\n"
-        "         't_zero': (0, '0 passed, 0 failed', 0), 't_skip': (1, '0 passed, 0 failed (skipped=1)', 0)}\n"
+        "         't_zero': (0, '0 passed, 0 failed', 0), 't_skip': (1, '0 passed, 0 failed (skipped=1)', 0),\n"
+        "         't_multi_extra': (1, '1 passed, 0 failed', 0), 't_param': (9, '9 passed, 0 failed', 0)}\n"
         "if m not in table:\n    print('no such test', m); sys.exit(2)\n"
         "n, line, rc = table[m]\n"
         "print(f'lumos 測試({n} 案例)')\nprint(line)\nsys.exit(rc)\n", encoding="utf-8")
@@ -44585,6 +44589,24 @@ def t_spec_gate_multi_ran_is_weak():
     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg7")
     _sg_plan(kg, "辛", ["- [S1] 系統應回 200 [test:t_multi]"]); r = run(kg, "spec-gate", "Projects/辛_計劃")
     check("① 匹配 2 支 → 測試名要唯一", r.returncode == 0 and "匹配到 2 支" in r.stdout and "唯一" in r.stdout, r.stdout[-500:])
+
+
+def t_spec_gate_parametrized_is_not_weak():
+    """同一支測試餵多組輸入(參數化)收集到很多案例時,不該被判成「測試名不唯一」。
+
+    出身:rtb-production-agent-demo 2026-09-22 回報——它 4 支已綁合約的測試是參數化的,
+    篩選收集到 5/5/9/25 個案例,規格閘全判「測試名要唯一,驗不了≠過」,擋住設計審進場。
+    那些案例不是不同的測試,是同一支測試的多組輸入;一起跑、全綠才是正確語意。
+    判準改成看「程式裡真的宣告了幾支名字對得上的測試」,不是看跑起來收集到幾個案例。
+    翻紅釘:把判準改回只看案例數 → ②紅。
+    """
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sgparam")
+    _sg_plan(kg, "參數化", ["- [S1] 當輸入不合法,系統應拒絕 [test:t_param]"])
+    r = run(kg, "spec-gate", "Projects/參數化_計劃")
+    check("① 跑得起來", r.returncode == 0, r.stdout[-400:])
+    check("② 收集到 9 個案例但只宣告一支 → 判綠,不是弱證據",
+          "綠" in r.stdout and "唯一" not in r.stdout and "匹配到 9 支" not in r.stdout,
+          r.stdout[-600:])
 
 
 def t_spec_gate_run_summary():
