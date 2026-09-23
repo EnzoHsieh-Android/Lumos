@@ -1,0 +1,245 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md b/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
+index d6609b1d..77a971f3 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/必要合約清單_計劃.md
+@@ -191,21 +191,21 @@ KEY:★INVARIANT-PLANNED★ <一句話合約> [watch:Verification/<守衛節點>
+ - [S14] 當最遲日期在七天內,自檢應在不擋的那一層先唸出來 [test:t_guard_overdue_blocks_doctor]
+ - [S12] 當簽核帶 --ref,主體應把它記進簽核帳且不影響沒帶 --ref 的既有用法 [test:t_guard_settle_and_abandon]
+ 
+ ## 守衛節點的檔名(2026-09-23 追加,rtb-production-agent-demo 回報)
+ 
+ **問題**:`guard plan` 原本拿合約原文前 40 字當檔名,產生「2026-09-22_事故-F2-工作者在副作用與持久結果都已完成-但送出確認前當機時-重新投遞後新的」這種斷在句子中間的名字。使用者覺得檔名太隨便,也跟同資料夾手取的短名字不一致。
+ 
+ **裁定(2026-09-23 使用者)**:
+ - 登記時就要給短名字。`guard plan` 多一個必填的 `--name`;沒給、空白、太長、或含檔名不能用的字,當場擋下並給範例。
+ - **日期前綴保留**:檔名 = `YYYY-MM-DD_<短名>`。本 repo 203 篇驗證紀錄全部是這個格式;守衛節點本來就是某天登記的一件事。專案自己想拿掉日期可以事後改名,工具不擋。
+-- **自檢只點出「舊規則截斷出來的」**,不查所有驗證紀錄的長度:判法是「檔名等於合約原文被舊規則截斷的樣子、而且原文確實比截斷長度長」——每篇守衛節點都存著完整合約原文,所以這是精確比對不是猜,零誤報。缺點:手取的長檔名不會被點到(使用者接受)。
++- **自檢只點出「舊規則截斷出來的」**,不查所有驗證紀錄的長度:判法是「檔名等於合約原文被舊規則截斷的樣子、而且原文確實比截斷長度長」——每篇守衛節點都存著完整合約原文,所以這是精確比對不是猜:經指令建立的節點不會誤判。例外是繞過指令手寫節點檔、又刻意把檔名寫成跟截斷樣子一模一樣——那種會被點到(代碼審 r1 通才席指出;短名上限 24 字、截斷樣子通常近 40 字,走指令到不了這裡)。缺點:手取的長檔名不會被點到(使用者接受)。轉正或棄置過的守衛節點照樣點,因為檔名一樣難看;改名之後就不再點。
+ 
+ **長度上限 24 字(短名那段,不含日期)**:本 repo 驗證紀錄含日期的長度中位數 24、90 分位 32,扣掉日期前綴 11 字,短名那段中位數約 13、90 分位約 21。24 留了餘裕、又逼得出短名字。回報者自己取的名字(「事故F2_確認前當機不重複副作用」)是 16 字。
+ 
+ **相容性**:`--name` 變必填會讓沒帶它的舊呼叫方式失敗。這個指令 2026-09-22 才上線,已知唯一的使用者就是提出這個要求的專案,所以現在改成本最低。
+ 
+ PRIOR-ART:本 repo 的驗證紀錄一律「日期_短名」(203/203),`lumos new verification` 讓作者自己取名;這次只是讓 `guard plan` 對齊同一個慣例。
+ RETIRE-IF:之後有專案反映「必填短名」擋掉了正常工作流程(例如批次用腳本登記大量預告),就改回可選、沒給時退回用合約原文。
+ 
+ - [S19] 當呼叫預告指令卻沒給 `--name`、或給的是空白,主體應擋下並給範例 [test:t_guard_plan_requires_short_name]
+ - [S20] 當給的短名超過 24 字、或含檔名不能用的字,主體應擋下並講明是哪一種問題 [test:t_guard_plan_requires_short_name]
+diff --git a/scripts/lumos b/scripts/lumos
+index 7aa9ad4c..36ee03ae 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2350,29 +2350,31 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         # 會斷在句子中間。判法是精確比對不是猜:每篇守衛節點都存著完整合約原文,檔名(去掉日期)等於
+         # 「原文被舊規則截斷的樣子」、而且原文確實比截斷長度長,才算。手取的名字不會被點到。
+         _gtrunc = []
+         for _grel, _gn in sorted(env.notes.items()):
+             if _gn.fields.get("type") != "verification" or not _gn.fields.get(GUARD_MARK_FIELD):
+                 continue
+             _gm2 = re.search(r"^預告的合約:(.+)$", (env.vault / _grel).read_text(encoding="utf-8", errors="replace"), re.M)
+             if not _gm2:
+                 continue
+             _gc = _gm2.group(1).strip()
+-            _gfull = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", _gc).strip("-")
++            _gfull = re.sub(f"[^{_GUARD_NAME_CHARS}]+", "-", _gc).strip("-")
+             _gstem = re.sub(r"^\d{4}-\d{2}-\d{2}_", "", Path(_grel).stem)
+             if _gstem == _guard_plan_slug(_gc) and _gstem != _gfull:
+                 _gtrunc.append(_grel)
+         if _gtrunc:
+             warn_soft(_gtrunc, f"有 {len(_gtrunc)} 篇守衛節點的檔名是舊規則從合約原文截斷出來的(斷在句子中間):",
+                       "改成短名(日期前綴可留可拿掉),連同引用一起改:scripts/graph-rename.sh <舊名> <新名>")
+         if not _gover and not _gsoon and not _gover_other:
+-            ok("沒有逾期或快到期的預告合約")
++            # ★有檔名提醒時不准印得像全都乾淨★(代碼審 r1 架構席):這一行是會被當成「沒事」掃過去的訊號,
++            # 同一段先前就因為同樣形狀被擋過一次(逾期但沒碰到那一堆)
++            ok("沒有逾期或快到期的預告合約" + (f"(但上面有 {len(_gtrunc)} 篇檔名要改)" if _gtrunc else ""))
+         elif not _gover and not _gsoon:
+             # ★這一行是唯一會被當成「全都乾淨」掃過去的訊號★(代碼審 r1 通才席):
+             # 上面剛列完「還有 N 條逾期」,這裡再印「沒有逾期」會讓人誤信沒事。
+             ok(f"這次改動沒碰到任何逾期的預告合約(上面那 {len(_gover_other)} 條還在,只是不擋這次推送)")
+     except Exception as _e:
+         warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
+     print()
+ 
+     section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
+     if not ci:
+@@ -10742,40 +10744,43 @@ PLANNED_MARK = "★INVARIANT-PLANNED★"
+ #   在上面合約抽取那一區、緊貼 extract_planned——全檔每一支「從 KEY 行抽標記」的函式
+ #   都是正則貼著函式放(代碼審 r2 架構席:這支原本是唯一的例外,正則離函式 6800 行)。
+ # 節點自己身上的標記:規則只認帶這個欄位的節點,不看 status 字面值、也不查外部帳
+ # (設計審 r1/r2 blocker:pending 是很自然的英文字,手寫的人不該被拖進整套規則;
+ #  判準放節點自己身上,改名搬家都跟著走)
+ GUARD_MARK_FIELD = "guards"
+ 
+ 
+ def _guard_plan_slug(text):
+     """守衛節點檔名:取合約前段做 slug,保留中文,砍掉檔名不能用的字。"""
+-    s = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", text.strip())[:40].strip("-")
++    s = re.sub(f"[^{_GUARD_NAME_CHARS}]+", "-", text.strip())[:40].strip("-")
+     return s or "guard"
+ 
+ 
+ _GUARD_NAME_MAX = 24
+ # ↑ 短名那段(不含日期)的上限。依據:本 repo 驗證紀錄含日期的長度中位數 24、90 分位 32,
+ #   扣掉 11 字的日期前綴,短名那段中位數約 13、90 分位約 21;24 留了餘裕又逼得出短名字。
+-_GUARD_NAME_OK_RE = re.compile(r"[\w\u4e00-\u9fff-]")   # 跟舊的自動檔名同一套字元規則
++# ★檔名能用的字只有這一份★(代碼審 r1 架構席:原本自動檔名與短名驗證各寫一份字面,容易悄悄不同步)。
++# \w 在 Python 預設收所有語言的字母與數字(韓文、全形也算),不是只有中英數字——說明要照實講(代碼審 r1 通才席)。
++_GUARD_NAME_CHARS = r"\w\u4e00-\u9fff-"
++_GUARD_NAME_OK_RE = re.compile(f"[{_GUARD_NAME_CHARS}]")
+ 
+ 
+ def _guard_name_problem(name):
+     """守衛節點短名哪裡不合格;合格回 None。"""
+-    n = (name or "").strip()
++    n = nfc((name or "").strip())
+     if not n:
+         return "預告合約要給一個短名(--name)——不給的話,檔名只能拿合約原文截斷,會斷在句子中間"
+     if len(n) > _GUARD_NAME_MAX:
+         return f"短名太長({len(n)} 字,上限 {_GUARD_NAME_MAX} 字)"
+     bad = sorted({c for c in n if not _GUARD_NAME_OK_RE.match(c)})
+     if bad:
+-        return f"短名裡有檔名不能用的字:{' '.join(repr(c) for c in bad)}(只收中英數字、底線、連字號)"
++        return f"短名裡有檔名不能用的字:{' '.join(repr(c) for c in bad)}(只收字母、數字、中文、底線、連字號;不收空白與標點)"
+     return None
+ 
+ 
+ def _guard_plan_check(env, node, claim, plan, phase, due, why, owner, name=None):
+     """預告指令的入口檢查,全部擋下的理由集中在這裡。
+ 
+     回 (rel, prel, phases, gname, gpath) 或 None(已經印過為什麼擋)。
+     ★抽出來是因為主體分支太多★:檢查跟動手寫混在一支函式裡,靜態檢查判它複雜度 17(上限 10),
+     而且讀的人要先跳過三十行檢查才看得到真正做事的那段。
+     """
+@@ -10784,27 +10789,29 @@ def _guard_plan_check(env, node, claim, plan, phase, due, why, owner, name=None)
+     # 摘要是 YAML block scalar,一個換行就把區塊打斷,後面每一行都變成別的欄位——
+     # 同一篇裡原本綁了測試又審計過的真合約會整段從圖譜消失,而指令還回報成功。
+     _c = (claim or "")
+     if not _c.strip():
+         print("擋下:合約那句話不能是空的", file=sys.stderr)
+         return None
+     if "\n" in _c or "\r" in _c:
+         print("擋下:合約那句話不能換行(摘要是一行一條,換行會把整個摘要區塊打斷,"
+               "連同這篇既有的合約一起從圖譜消失)", file=sys.stderr)
+         return None
++    # ★短名也進這張清單★(代碼審 r1 架構席):分開檢查的話,同時漏 --plan 跟 --name 要補兩次才看得到兩個問題
+     missing = [(v, lbl) for v, lbl in ((plan, "計劃參照"), (phase, "階段"), (due, "最遲日期"),
+-                                       (why, "理由"), (owner, "負責人")) if not (v or "").strip()]
++                                       (why, "理由"), (owner, "負責人"), (name, "短名")) if not (v or "").strip()]
+     if missing:
+         names = "、".join(lbl for _v, lbl in missing)
+         print(f"擋下:預告合約要寫清楚才追得動,還缺:{names}", file=sys.stderr)
+         print("  缺什麼就補什麼:--plan <計劃節點> --phase <階段,可多個逗號分隔> "
+-              "--due YYYY-MM-DD --why <為什麼還不做> --owner <誰負責>", file=sys.stderr)
++              "--due YYYY-MM-DD --why <為什麼還不做> --owner <誰負責> "
++              f"--name <短名,當檔名,{_GUARD_NAME_MAX} 字內,例:事故F2_確認前當機不重複副作用>", file=sys.stderr)
+         return None
+     try:
+         datetime.date.fromisoformat(due.strip())
+     except ValueError:
+         print(f"擋下:最遲日期『{due}』不是 YYYY-MM-DD", file=sys.stderr)
+         return None
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return None
+@@ -10814,21 +10821,23 @@ def _guard_plan_check(env, node, claim, plan, phase, due, why, owner, name=None)
+         return None
+     phases = [x.strip() for x in str(phase).split(",") if x.strip()]
+     # ★檔名用人給的短名,不再截合約原文★(必要合約清單_計劃 S19–S21,2026-09-23 rtb-production-agent-demo 回報):
+     # 原本拿合約前 40 字當檔名,產生斷在句子中間的名字。日期前綴保留——本 repo 驗證紀錄全是「日期_短名」。
+     _nerr = _guard_name_problem(name)
+     if _nerr:
+         print(f"擋下:{_nerr}", file=sys.stderr)
+         print(f"  守衛節點的檔名要一個短名(會自動加日期前綴,{_GUARD_NAME_MAX} 字以內),例如:", file=sys.stderr)
+         print("    --name 事故F2_確認前當機不重複副作用", file=sys.stderr)
+         return None
+-    gname = f"{datetime.date.today().isoformat()}_{name.strip()}"
++    # ★用正規化過的寫法★(代碼審 r1 通才席):同一個字的組合寫法與預組合寫法位元組不同,
++    # macOS 會摺成同一個檔,Linux 不會——撞名保護就會在 CI 那種機器上失效。載入圖譜時本來就用 nfc。
++    gname = f"{datetime.date.today().isoformat()}_{nfc(name.strip())}"
+     gpath = env.vault / "Verification" / f"{gname}.md"
+     if gpath.exists():
+         print(f"擋下:守衛節點 {gname} 已經存在,換一句話或改名再試"
+               "(不靜默覆蓋:兩個人同時建同名節點會把對方的蓋掉)", file=sys.stderr)
+         return None
+     return rel, prel, phases, gname, gpath
+ 
+ 
+ def _guard_plan_write_node(gpath, gname, rel, prel, phases, today, claim, due, why, owner):
+     """把守衛節點的內容組出來落盤,成功回 True(失敗已經印過為什麼)。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 23aaaef9..7f780a01 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4448,20 +4448,36 @@ def t_guard_plan_requires_short_name():
+     check("③ 超過 24 字 → 擋下,並講是太長", r.returncode == 2 and "24" in r.stderr, r.stderr[:300])
+     r = run(v, *base, "--name", "事故F2/確認前當機")
+     check("④ 含檔名不能用的字 → 擋下,並講是哪個字", r.returncode == 2 and "/" in r.stderr, r.stderr[:300])
+     check("①–④ 擋下的那幾次都沒有留下半套", list((v / "Verification").glob("*.md")) == [],
+           str(list((v / "Verification").glob("*.md"))))
+     r = run(v, *base, "--name", "事故F2_確認前當機不重複副作用")
+     check("⑤ 合格的短名 → 建得起來", r.returncode == 0, r.stdout + r.stderr)
+     want = f"{datetime.date.today().isoformat()}_事故F2_確認前當機不重複副作用.md"
+     names = [q.name for q in (v / "Verification").glob("*.md")]
+     check("⑤ 檔名是「日期_短名」,不是合約原文", names == [want], str(names))
++    # ⑥ 代碼審 r1 架構席:同時漏 --plan 與 --name,一次就要列出兩項(不必補兩次)
++    r = run(v, "guard", "plan", "Systems/Pay", "另一條合約", "--phase", "P1", "--due", "2099-12-31",
++            "--why", "還沒做", "--owner", "enzo")
++    # ★只看「還缺:」那一行★:下面那行提示本身就寫著 --name <短名…>,看整段輸出會被提示滿足(翻紅驗證抓到的假綠)
++    miss = [ln for ln in r.stderr.split("\n") if "還缺:" in ln]
++    check("⑥ 同時缺計劃參照與短名,一次列出兩項",
++          r.returncode == 2 and miss != [] and "計劃參照" in miss[0] and "短名" in miss[0], r.stderr[:300])
++    # ⑦ 代碼審 r1 通才席:同一個字的組合寫法(NFD)要存成預組合寫法(NFC),不然 Linux 上撞名保護失效
++    import unicodedata as _ud
++    nfd_name = _ud.normalize("NFD", "café事故")
++    check("⑦ 現場成立:這個名字的兩種寫法位元組真的不同", nfd_name != _ud.normalize("NFC", nfd_name), "")
++    r = run(v, *base[:3], "組合字元那條", *base[4:], "--name", nfd_name)
++    check("⑦ 組合寫法的短名建得起來", r.returncode == 0, r.stdout + r.stderr)
++    got = [q.name for q in (v / "Verification").glob("*café*.md")] + [q.name for q in (v / "Verification").glob("*cafe*.md")]
++    check("⑦ 檔名存的是預組合寫法", any(_ud.is_normalized("NFC", g) and "café" in _ud.normalize("NFC", g) for g in got)
++          and all(_ud.is_normalized("NFC", g) for g in got), str(got))
+ 
+ 
+ def t_doctor_flags_truncated_guard_names():
+     """守衛節點的檔名是舊規則從合約原文截斷出來的,自檢要點出來;手取的名字不准被點到。
+ 
+     出身:同上(必要合約清單_計劃 S22)。判法是精確比對:每篇守衛節點都存著完整合約原文,
+     檔名等於「原文被舊規則截斷的樣子」、而且原文確實比截斷長度長,才算——不是猜「看起來像句子」。
+     翻紅釘:拿掉這段檢查 → ②紅;把「原文確實比截斷長度長」拿掉 → ③紅(短合約的自動名不是截斷)。
+     """
+     import datetime
+@@ -4484,20 +4500,33 @@ def t_doctor_flags_truncated_guard_names():
+     (ver / f"{today}_暫時名B.md").rename(ver / f"{today}_{_old_slug('短合約不必截斷')}.md")
+     seg = _section_of(run(v, "doctor").stdout, "S15")
+     check("① 現場成立:三篇守衛節點都在", len(list(ver.glob("*.md"))) == 3, str([q.name for q in ver.glob("*.md")]))
+     _full = _re.sub(r"[^\w\u4e00-\u9fff-]+", "-", long_claim.strip()).strip("-")
+     check("① 現場成立:長合約真的被舊規則截斷了(第一版的測試資料不夠長,根本沒截斷)",
+           _old_slug(long_claim) != _full, f"{len(_full)} 字")
+     check("② 舊規則截斷出來的那篇被點出來", _old_slug(long_claim) in seg, seg[-800:])
+     check("② 並給改名的方法", "graph-rename" in seg, seg[-800:])
+     check("③ 短合約的自動名沒有被截斷,不點", "短合約不必截斷" not in seg, seg[-800:])
+     check("④ 手取的名字不被點到", "手取的好名字" not in seg, seg[-800:])
++    # ⑤ 代碼審 r1 架構席:有檔名提醒時,收尾那行不准印得像全都乾淨
++    tail = [ln for ln in seg.split("\n") if "沒有逾期或快到期的預告合約" in ln]
++    check("⑤ 收尾那行講明上面還有檔名要改", tail != [] and all("檔名要改" in ln for ln in tail), "\n".join(tail) or seg[-400:])
++    # ⑥ 代碼審 r1 通才席:轉正之後檔名一樣難看,照樣點;改名之後就消失(不是永遠唸)
++    old_file = ver / f"{today}_{_old_slug(long_claim)}.md"
++    sr = run(v, "guard", "settle", f"Verification/{old_file.stem}", "--test", "t_whatever_real_test")
++    check("⑥ 現場成立:轉正真的成功了(節點狀態變 pass)",
++          sr.returncode == 0 and "status: pass" in old_file.read_text(encoding="utf-8"), sr.stdout[-300:] + sr.stderr[-300:])
++    seg2 = _section_of(run(v, "doctor").stdout, "S15")
++    check("⑥ 轉正後的舊截斷檔名照樣點出來", _old_slug(long_claim) in seg2, seg2[-600:])
++    old_file.rename(ver / f"{today}_改好的短名.md")
++    seg3 = _section_of(run(v, "doctor").stdout, "S15")
++    check("⑥ 改成短名之後就不再點", _old_slug(long_claim) not in seg3 and "檔名要改" not in seg3, seg3[-600:])
+ 
+ 
+ def t_guard_plan_requires_all_fields():
+     """缺任一必填就擋,而且要講出缺哪一項——防忘記的機制不講怎麼解就變成防做事。
+ 
+     翻紅釘:拿掉任一必填檢查 → 對應那條紅。
+     """
+     v = mkvault()
+     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")

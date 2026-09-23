@@ -4332,7 +4332,7 @@ def t_guard_plan_creates_marker_and_node():
     v = mkvault()
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b", body="# Pay\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
-    r = run(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
+    r = _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
             "--plan", "Projects/退款_計劃", "--phase", "Phase 4",
             "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo")
     check("① guard plan 跑得起來且成功", r.returncode == 0, r.stdout + r.stderr)
@@ -4363,7 +4363,7 @@ def t_guard_claim_with_bracket_tags_still_settles():
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b", body="# Pay\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
     claim = "預告行一定要帶 [watch:守衛節點] 跟 [due:日期] 兩個標籤"
-    r = run(v, "guard", "plan", "Systems/Pay", claim,
+    r = _gp(v, "guard", "plan", "Systems/Pay", claim,
             "--plan", "Projects/退款_計劃", "--phase", "Phase 1",
             "--due", "2099-12-31", "--why", "標籤格式還沒定案", "--owner", "enzo")
     check("① 這種合約文字預告得起來", r.returncode == 0, r.stdout + r.stderr)
@@ -4395,7 +4395,7 @@ def t_guard_plan_node_passes_lint_clean():
     v = mkvault()
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b", body="# Pay\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
-    r = run(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
+    r = _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
             "--plan", "Projects/退款_計劃", "--phase", "Phase 4",
             "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo")
     check("① 預告建得起來", r.returncode == 0, r.stdout + r.stderr)
@@ -4410,6 +4410,127 @@ def t_guard_plan_node_passes_lint_clean():
     check("② 守衛節點的開頭欄位工具全認得", bad == [], "\n".join(bad) or (lr.stdout + lr.stderr))
     for field in ("guards", "due", "owner", "phases"):
         check(f"② 『{field}』沒被唸成打錯字", not any(f"『{field}』" in ln for ln in bad), "\n".join(bad))
+
+
+def _gp(v, *args, **kw):
+    """跑 `guard plan`,沒帶 --name 就自動補一個由合約原文雜湊出來的短名。
+
+    2026-09-23 起 --name 必填(必要合約清單_計劃 S19)。既有測試驗的是別的事(逾期、轉正、收窄…),
+    不是檔名;這裡統一補上,免得每個呼叫點各自手寫。★用合約雜湊不用固定字串★:
+    有些測試在迴圈裡一次預告好幾條,固定字串會撞名被擋。要驗「沒給 --name」的測試直接用 run。
+    """
+    import hashlib as _h
+    a = list(args)
+    if "--name" not in a and len(a) >= 4 and a[0] == "guard" and a[1] == "plan":
+        a += ["--name", "測" + _h.sha1(str(a[3]).encode("utf-8")).hexdigest()[:10]]
+    return run(v, *a, **kw)
+
+
+def t_guard_plan_requires_short_name():
+    """預告指令要給短名字當檔名(日期_短名),沒給、空白、太長、含不能用的字都當場擋。
+
+    出身:2026-09-23 rtb-production-agent-demo 回報——原本拿合約原文前 40 字當檔名,
+    產生斷在句子中間的名字。使用者裁定:登記時就要短名、保留日期前綴(必要合約清單_計劃 S19–S21)。
+    翻紅釘:拿掉必填檢查 → ①紅;拿掉長度上限 → ③紅;檔名改回用合約原文 → ⑤紅。
+    """
+    import datetime
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
+    base = ["guard", "plan", "Systems/Pay", "工作者在副作用與持久結果都已完成、但送出確認前當機時,重新投遞後不得重做副作用",
+            "--plan", "Projects/P", "--phase", "P1", "--due", "2099-12-31", "--why", "還沒做", "--owner", "enzo"]
+    r = run(v, *base)
+    check("① 沒給 --name → 擋下", r.returncode == 2, r.stdout + r.stderr)
+    check("① 擋下時給範例", "--name" in r.stderr and "例" in r.stderr, r.stderr[:300])
+    r = run(v, *base, "--name", "   ")
+    check("② 只有空白 → 擋下", r.returncode == 2, r.stderr[:200])
+    r = run(v, *base, "--name", "這是一個超過二十四個字的名字所以應該要被擋下來才對")
+    check("③ 超過 24 字 → 擋下,並講是太長", r.returncode == 2 and "24" in r.stderr, r.stderr[:300])
+    r = run(v, *base, "--name", "事故F2/確認前當機")
+    check("④ 含檔名不能用的字 → 擋下,並講是哪個字", r.returncode == 2 and "/" in r.stderr, r.stderr[:300])
+    check("①–④ 擋下的那幾次都沒有留下半套", list((v / "Verification").glob("*.md")) == [],
+          str(list((v / "Verification").glob("*.md"))))
+    r = run(v, *base, "--name", "事故F2_確認前當機不重複副作用")
+    check("⑤ 合格的短名 → 建得起來", r.returncode == 0, r.stdout + r.stderr)
+    want = f"{datetime.date.today().isoformat()}_事故F2_確認前當機不重複副作用.md"
+    names = [q.name for q in (v / "Verification").glob("*.md")]
+    check("⑤ 檔名是「日期_短名」,不是合約原文", names == [want], str(names))
+    # ⑥ 代碼審 r1 架構席:同時漏 --plan 與 --name,一次就要列出兩項(不必補兩次)
+    r = run(v, "guard", "plan", "Systems/Pay", "另一條合約", "--phase", "P1", "--due", "2099-12-31",
+            "--why", "還沒做", "--owner", "enzo")
+    # ★只看「還缺:」那一行★:下面那行提示本身就寫著 --name <短名…>,看整段輸出會被提示滿足(翻紅驗證抓到的假綠)
+    miss = [ln for ln in r.stderr.split("\n") if "還缺:" in ln]
+    check("⑥ 同時缺計劃參照與短名,一次列出兩項",
+          r.returncode == 2 and miss != [] and "計劃參照" in miss[0] and "短名" in miss[0], r.stderr[:300])
+    # ⑦ 代碼審 r1 通才席:同一個字的組合寫法(NFD)要存成預組合寫法(NFC),不然 Linux 上撞名保護失效
+    import unicodedata as _ud
+    nfd_name = _ud.normalize("NFD", "café事故")
+    check("⑦ 現場成立:這個名字的兩種寫法位元組真的不同", nfd_name != _ud.normalize("NFC", nfd_name), "")
+    r = run(v, *base[:3], "組合字元那條", *base[4:], "--name", nfd_name)
+    check("⑦ 組合寫法的短名建得起來", r.returncode == 0, r.stdout + r.stderr)
+    got = [q.name for q in (v / "Verification").glob("*café*.md")] + [q.name for q in (v / "Verification").glob("*cafe*.md")]
+    check("⑦ 檔名存的是預組合寫法", any(_ud.is_normalized("NFC", g) and "café" in _ud.normalize("NFC", g) for g in got)
+          and all(_ud.is_normalized("NFC", g) for g in got), str(got))
+
+
+def t_doctor_flags_truncated_guard_names():
+    """守衛節點的檔名是舊規則從合約原文截斷出來的,自檢要點出來;手取的名字不准被點到。
+
+    出身:同上(必要合約清單_計劃 S22)。判法是精確比對:每篇守衛節點都存著完整合約原文,
+    檔名等於「原文被舊規則截斷的樣子」、而且原文確實比截斷長度長,才算——不是猜「看起來像句子」。
+    翻紅釘:拿掉這段檢查 → ②紅;把「原文確實比截斷長度長」拿掉 → ③紅(短合約的自動名不是截斷)。
+    """
+    import datetime
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
+    common = ["--plan", "Projects/P", "--phase", "P1", "--due", "2099-12-31", "--why", "還沒做", "--owner", "enzo"]
+    long_claim = "工作者在副作用與持久結果都已完成、但送出確認前當機時,重新投遞後新的工作者不得再做一次同樣的副作用,只能對帳"
+    run(v, "guard", "plan", "Systems/Pay", long_claim, *common, "--name", "暫時名A", expect_rc=0)
+    run(v, "guard", "plan", "Systems/Pay", "短合約不必截斷", *common, "--name", "暫時名B", expect_rc=0)
+    run(v, "guard", "plan", "Systems/Pay", "手取名字的那條合約,原文也很長很長很長很長很長很長很長很長",
+        *common, "--name", "手取的好名字", expect_rc=0)
+    today = datetime.date.today().isoformat()
+    # 模擬舊版留下的檔:把前兩篇改名成舊規則會產生的名字
+    import re as _re
+    def _old_slug(s):
+        return _re.sub(r"[^\w\u4e00-\u9fff-]+", "-", s.strip())[:40].strip("-") or "guard"
+    ver = v / "Verification"
+    (ver / f"{today}_暫時名A.md").rename(ver / f"{today}_{_old_slug(long_claim)}.md")
+    (ver / f"{today}_暫時名B.md").rename(ver / f"{today}_{_old_slug('短合約不必截斷')}.md")
+    seg = _section_of(run(v, "doctor").stdout, "S15")
+    check("① 現場成立:三篇守衛節點都在", len(list(ver.glob("*.md"))) == 3, str([q.name for q in ver.glob("*.md")]))
+    _full = _re.sub(r"[^\w\u4e00-\u9fff-]+", "-", long_claim.strip()).strip("-")
+    check("① 現場成立:長合約真的被舊規則截斷了(第一版的測試資料不夠長,根本沒截斷)",
+          _old_slug(long_claim) != _full, f"{len(_full)} 字")
+    check("② 舊規則截斷出來的那篇被點出來", _old_slug(long_claim) in seg, seg[-800:])
+    check("② 並給改名的方法", "graph-rename" in seg, seg[-800:])
+    check("③ 短合約的自動名沒有被截斷,不點", "短合約不必截斷" not in seg, seg[-800:])
+    check("④ 手取的名字不被點到", "手取的好名字" not in seg, seg[-800:])
+    # ⑤ 代碼審 r1 架構席:有檔名提醒時,收尾那行不准印得像全都乾淨
+    tail = [ln for ln in seg.split("\n") if "沒有逾期或快到期的預告合約" in ln]
+    check("⑤ 收尾那行講明上面還有檔名要改", tail != [] and all("檔名要改" in ln for ln in tail), "\n".join(tail) or seg[-400:])
+    # ⑤b 代碼審 r2 兩席:收尾有兩條打勾分支,「這次沒碰到別人的逾期」那條也要提檔名
+    write(v, "Systems/Other.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/other.py\nsummary: |-\n  FLOW:o", body="# O\n")
+    past = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    run(v, "guard", "plan", "Systems/Other", "別人的逾期那條", "--plan", "Projects/P", "--phase", "P1",
+        "--due", past, "--why", "還沒做", "--owner", "enzo", "--name", "別人的逾期", expect_rc=0)
+    touched = v.parent / "t_none.txt"; touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
+    segb = _section_of(run(v, "doctor", "--touched-from", str(touched)).stdout, "S15")
+    tailb = [ln for ln in segb.split("\n") if "這次改動沒碰到任何逾期的預告合約" in ln]
+    check("⑤b 現場成立:走到的是「這次沒碰到別人的逾期」那條收尾", tailb != [], segb[-600:])
+    check("⑤b 那條收尾也講明上面有檔名要改", tailb != [] and "檔名要改" in tailb[0], "\n".join(tailb))
+    (v / "Verification" / f"{today}_別人的逾期.md").unlink()
+    # ⑥ 代碼審 r1 通才席:轉正之後檔名一樣難看,照樣點;改名之後就消失(不是永遠唸)
+    old_file = ver / f"{today}_{_old_slug(long_claim)}.md"
+    sr = run(v, "guard", "settle", f"Verification/{old_file.stem}", "--test", "t_whatever_real_test")
+    check("⑥ 現場成立:轉正真的成功了(節點狀態變 pass)",
+          sr.returncode == 0 and "status: pass" in old_file.read_text(encoding="utf-8"), sr.stdout[-300:] + sr.stderr[-300:])
+    seg2 = _section_of(run(v, "doctor").stdout, "S15")
+    check("⑥ 轉正後的舊截斷檔名照樣點出來", _old_slug(long_claim) in seg2, seg2[-600:])
+    old_file.rename(ver / f"{today}_改好的短名.md")
+    seg3 = _section_of(run(v, "doctor").stdout, "S15")
+    check("⑥ 改成短名之後就不再點", _old_slug(long_claim) not in seg3 and "檔名要改" not in seg3, seg3[-600:])
 
 
 def t_guard_plan_requires_all_fields():
@@ -4468,7 +4589,7 @@ def t_guard_settle_and_abandon():
     v = mkvault()
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
-    run(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
+    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可",
         "--plan", "Projects/退款_計劃", "--phase", "Phase 4",
         "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo")
     gn = list((v / "Verification").glob("*.md"))[0]
@@ -4481,9 +4602,9 @@ def t_guard_settle_and_abandon():
     check("② 守衛節點轉成已通過", "status: pass" in gn.read_text(encoding="utf-8"), gn.read_text(encoding="utf-8")[:200])
 
     # 再預告一條來測棄置
-    run(v, "guard", "plan", "Systems/Pay", "另一條之後再說",
+    _gp(v, "guard", "plan", "Systems/Pay", "另一條之後再說",
         "--plan", "Projects/退款_計劃", "--phase", "Phase 5",
-        "--due", "2099-12-31", "--why", "需求還沒定", "--owner", "enzo")
+        "--due", "2099-12-31", "--why", "需求還沒定", "--owner", "enzo", "--name", "另一條")
     g2 = [x for x in (v / "Verification").glob("*.md") if "另一條" in x.stem][0]
     g2ref = "Verification/" + g2.stem
     r2 = run(v, "guard", "abandon", g2ref, "--why", "這件事決定不做了")
@@ -4500,8 +4621,10 @@ def t_guard_settle_and_abandon():
     planned_lines = [l for l in pay2.split("\n") if "★INVARIANT-PLANNED★" in l]
     check("⑤ 棄置後功能節點不再留著那條預告行",
           not any("另一條之後再說" in l for l in planned_lines), "\n".join(planned_lines) or pay2)
+    # ★找的是連到那篇守衛節點的連結本身★:第一版搜合約原文,只因為舊的檔名裡含原文才對得上;
+    # 2026-09-23 起檔名是人給的短名,改成直接找那篇節點的名字(比搜原文更準)。
     check("⑤ 但連到墓碑的連結要留著(下一個人看得到曾經打算做什麼)",
-          "另一條之後再說" in pay2, pay2)
+          f"[[Verification/{g2.stem}]]" in pay2, pay2)
 
 
 def t_guard_overdue_blocks():
@@ -4517,7 +4640,7 @@ def t_guard_overdue_blocks():
     for claim, due in (("今天到期的", today.isoformat()),
                        ("昨天就到期的", (today - datetime.timedelta(days=1)).isoformat()),
                        ("三天後到期的", (today + datetime.timedelta(days=3)).isoformat())):
-        run(v, "guard", "plan", "Systems/Pay", claim, "--plan", "Projects/退款_計劃",
+        _gp(v, "guard", "plan", "Systems/Pay", claim, "--plan", "Projects/退款_計劃",
             "--phase", "Phase 4", "--due", due, "--why", "還沒做", "--owner", "enzo")
     r = run(v, "guard", "required")
     out = r.stdout + r.stderr
@@ -4556,13 +4679,13 @@ def t_guard_overdue_blocks_doctor():
         return int(m.group(1)) if m else 0
 
     base = _issues(run(v, "doctor", "--ci").stdout)
-    run(v, "guard", "plan", "Systems/Pay", "還沒逾期的那條", "--plan", "Projects/退款_計劃",
+    _gp(v, "guard", "plan", "Systems/Pay", "還沒逾期的那條", "--plan", "Projects/退款_計劃",
         "--phase", "Phase 4", "--due", (today + datetime.timedelta(days=30)).isoformat(),
         "--why", "還沒做", "--owner", "enzo")
     mid = run(v, "doctor", "--ci")
     check("① 沒逾期不多出 issue", _issues(mid.stdout) == base,
           f"base={base} now={_issues(mid.stdout)}\n" + mid.stdout[-400:])
-    run(v, "guard", "plan", "Systems/Pay", "已經逾期的那條", "--plan", "Projects/退款_計劃",
+    _gp(v, "guard", "plan", "Systems/Pay", "已經逾期的那條", "--plan", "Projects/退款_計劃",
         "--phase", "Phase 5", "--due", (today - datetime.timedelta(days=2)).isoformat(),
         "--why", "還沒做", "--owner", "enzo")
     late = run(v, "doctor", "--ci")
@@ -4589,7 +4712,7 @@ def t_guard_overdue_local_blocks_only_touched():
     old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
     for node, claim, phase in (("Systems/Pay", "退費那條逾期了", "Phase 1"),
                                ("Systems/Ship", "出貨那條逾期了", "Phase 2")):
-        r = run(v, "guard", "plan", node, claim, "--plan", "Projects/退款_計劃",
+        r = _gp(v, "guard", "plan", node, claim, "--plan", "Projects/退款_計劃",
                 "--phase", phase, "--due", old, "--why", "還沒做", "--owner", "enzo")
         check(f"① 預告建得起來({claim})", r.returncode == 0, r.stdout + r.stderr)
 
@@ -4665,7 +4788,7 @@ def t_guard_touched_reads_all_home_links():
     write(v, "Systems/B.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/b.py\nsummary: |-\n  FLOW:b", body="# B\n")
     write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
     old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
-    run(v, "guard", "plan", "Systems/A", "兩個家的那條", "--plan", "Projects/P",
+    _gp(v, "guard", "plan", "Systems/A", "兩個家的那條", "--plan", "Projects/P",
         "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
     node = list((v / "Verification").glob("*.md"))[0]
     txt = node.read_text(encoding="utf-8")
@@ -4691,7 +4814,7 @@ def t_guard_touched_reports_broken_home_links():
     write(v, "Systems/A.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# A\n")
     write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
     old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
-    run(v, "guard", "plan", "Systems/A", "半條斷了的那條", "--plan", "Projects/P",
+    _gp(v, "guard", "plan", "Systems/A", "半條斷了的那條", "--plan", "Projects/P",
         "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
     node = list((v / "Verification").glob("*.md"))[0]
     txt = node.read_text(encoding="utf-8")
@@ -4720,7 +4843,7 @@ def t_guard_overdue_tail_line_matches_the_list():
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nabout_code:\n  - scripts/pay.py\nsummary: |-\n  FLOW:a", body="# Pay\n")
     write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n")
     old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
-    run(v, "guard", "plan", "Systems/Pay", "沒碰到的那條", "--plan", "Projects/P",
+    _gp(v, "guard", "plan", "Systems/Pay", "沒碰到的那條", "--plan", "Projects/P",
         "--phase", "P1", "--due", old, "--why", "還沒做", "--owner", "enzo")
     touched = v.parent / "t2.txt"
     touched.write_text("scripts/unrelated.py\n", encoding="utf-8")
@@ -4759,7 +4882,8 @@ def t_prepush_passes_touched_list_to_doctor():
         (Path(d) / "scripts" / "lumos").symlink_to(lumos_real)
         _sp.run([sys.executable, lumos_real, "--vault", str(vault), "guard", "plan",
                  "Systems/Pay", "逾期的那條", "--plan", "Projects/P", "--phase", "P1",
-                 "--due", old, "--why", "還沒做", "--owner", "enzo"], capture_output=True, text=True)
+                 "--due", old, "--why", "還沒做", "--owner", "enzo", "--name", "逾期的那條"],
+                capture_output=True, text=True)
         (Path(d) / touch_file).parent.mkdir(parents=True, exist_ok=True)
         (Path(d) / touch_file).write_text("x = 1\n", encoding="utf-8")
         g("add", "-A"); g("commit", "-qm", "init")
@@ -4797,7 +4921,7 @@ def t_guard_overdue_local_skips_home_without_code():
     write(v, "Systems/NoCode.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# NoCode\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
     old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
-    run(v, "guard", "plan", "Systems/NoCode", "沒寫管哪幾支檔的那條", "--plan", "Projects/退款_計劃",
+    _gp(v, "guard", "plan", "Systems/NoCode", "沒寫管哪幾支檔的那條", "--plan", "Projects/退款_計劃",
         "--phase", "Phase 1", "--due", old, "--why", "還沒做", "--owner", "enzo")
     touched = v.parent / "touched3.txt"
     touched.write_text("scripts/pay.py\n", encoding="utf-8")
@@ -4823,7 +4947,7 @@ def t_context_shows_planned_contract():
           "  KEY:★INVARIANT★ 已經生效的那條 [test:t_a] [audit:sonnet/2026-09-01]",
           body="# Pay\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
-    run(v, "guard", "plan", "Systems/Pay", "還沒做的那條", "--plan", "Projects/退款_計劃",
+    _gp(v, "guard", "plan", "Systems/Pay", "還沒做的那條", "--plan", "Projects/退款_計劃",
         "--phase", "Phase 4", "--due", "2099-12-31", "--why", "介面沒定", "--owner", "enzo")
     r = run(v, "context", "Systems/Pay")
     out = r.stdout
@@ -4890,19 +5014,19 @@ def t_guard_plan_hostile_claims():
     ok_args = ["--plan", "Projects/退款_計劃", "--phase", "P4",
                "--due", "2099-12-31", "--why", "理由", "--owner", "enzo"]
 
-    r = run(v, "guard", "plan", "Systems/Pay", "A\nB: 壞掉", *ok_args)
+    r = _gp(v, "guard", "plan", "Systems/Pay", "A\nB: 壞掉", *ok_args)
     check("① 含換行的合約要擋", r.returncode != 0, f"rc={r.returncode} {r.stdout}{r.stderr}")
     # ★真正的傷害面★:擋不住的話,這篇原本那條綁了測試又審計過的合約會整段消失
     gl = run(v, "guard", "list")
     check("② 既有的真合約還在(換行沒把摘要區塊打斷)",
           "很重要的真合約" in gl.stdout, gl.stdout[:400])
 
-    r2 = run(v, "guard", "plan", "Systems/Pay", "   ", *ok_args)
+    r2 = _gp(v, "guard", "plan", "Systems/Pay", "   ", *ok_args)
     check("③ 純空白的合約要擋", r2.returncode != 0, f"rc={r2.returncode} {r2.stdout}{r2.stderr}")
 
     # ④ 同一篇預告兩條、前段文字相同:轉正必須改到對的那一條
-    run(v, "guard", "plan", "Systems/Pay", "退費流程必須先做這件事情:甲案要人工核可", *ok_args)
-    run(v, "guard", "plan", "Systems/Pay", "退費流程必須先做這件事情:乙案要雙人覆核", *ok_args)
+    _gp(v, "guard", "plan", "Systems/Pay", "退費流程必須先做這件事情:甲案要人工核可", *ok_args, "--name", "甲案")
+    _gp(v, "guard", "plan", "Systems/Pay", "退費流程必須先做這件事情:乙案要雙人覆核", *ok_args, "--name", "乙案")
     # ★前 12 字必須真的相同★:第一版用「退費規則甲/乙」,第 5 個字就不同,
     # 所以把比對改回前綴也不會紅——測不到它要測的 bug(當場植入驗證抓到)。
     gn = [x for x in (v / "Verification").glob("*.md") if "乙案" in x.stem]
@@ -4927,7 +5051,7 @@ def t_guard_abandon_wrong_home_blocks():
     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
     write(v, "Systems/Other.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:b", body="# Other\n")
     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
-    run(v, "guard", "plan", "Systems/Pay", "某條合約", "--plan", "Projects/退款_計劃",
+    _gp(v, "guard", "plan", "Systems/Pay", "某條合約", "--plan", "Projects/退款_計劃",
         "--phase", "P4", "--due", "2099-12-31", "--why", "理由", "--owner", "enzo")
     gp = list((v / "Verification").glob("*.md"))[0]
     gref = "Verification/" + gp.stem
