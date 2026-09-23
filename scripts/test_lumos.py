@@ -9353,7 +9353,14 @@ def t_confirm_tty_unit():
         os.write(master, b"y\n")
         r = m._confirm_tty("build? ")
         check("confirm ③: 第2階 pty 答 y → True(且 stdin 未被讀)", r is True, f"got {r}")
-        prompt_echo = os.read(master, 256)   # prompt 有寫到 tty
+        # prompt 有寫到 tty。★要讀到看見為止,不能只讀一次★(2026-09-23 CI 實踩假紅):
+        # 上面先往 master 寫了 "y\n",pty 會立刻把它回顯成 b"y\r\n";只讀一次的話,
+        # 在快的機器上只會拿到那段回顯、prompt 還沒到——跟被測的程式對不對無關,是測試自己的競態。
+        import select as _sel, time as _tm
+        prompt_echo, _dl = b"", _tm.monotonic() + 2.0
+        while b"build?" not in prompt_echo and _tm.monotonic() < _dl:
+            if _sel.select([master], [], [], 0.05)[0]:
+                prompt_echo += os.read(master, 256)
         check("confirm ③: prompt 有寫進 tty", b"build?" in prompt_echo, prompt_echo[:60])
         os.close(master); os.close(slave)
         # ④ timeout → None(pty 無人回答,timeout 縮短)
