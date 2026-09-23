@@ -1,0 +1,234 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 62db4360..531f1702 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -13,21 +13,21 @@ tags:
+ verified_by:
+   - "[[Verification/2026-07-04_pitfalls-code-loop]]"
+   - "[[Verification/2026-07-05_code-loop必用守衛]]"
+   - "[[Verification/2026-07-10_合約鏈補強234]]"
+   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
+   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-09-11_代碼審資安席落地]]"
+   - "[[Verification/2026-09-11_全報vs抑噪試點]]"
+ summary: |-
+-  PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審(迴圈編號 code- 開頭)從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則 [test:t_code_loop_record_requires_provenance_from_first_row]
++  PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則。★「code 開頭卻不是 code-」這種看不出是哪一種審查的,照最嚴的當代碼審★——代碼審 r1 說這會誤擋 codestage 這類真的設計審,r2 說同檔三處既有呼叫點對這個灰色地帶一律從嚴、就是為了擋「取個 codeX 的編號就繞過」;兩輪方向相反,照既有慣例裁從嚴,而 r1 真正的傷(訊息硬說它是代碼審、誤導人去找不存在的凍結 patch)改用既有那幾處的說法老實講來解。從嚴的代價很小:設計審進了處置閘之後本來也要帶這兩個 [test:t_code_loop_record_requires_provenance_from_first_row]
+   PITFALL:[2026-09-22 同上]★把本機提交壓成一個或 rebase 之後,表態與審查留痕都會失效,內容沒變也一樣★:兩者都只認「同一個提交、或是它的祖先且中間只動簿記檔」,壓過之後原本記的提交不再是祖先。原本擋下訊息只丟兩個 sha,看不出是自己剛壓的提交造成的;現在訊息會點出這個原因並給重來的兩條指令。順序上要先壓、再表態與留痕 [test:t_codeloop_record_invalid_after_squash_says_why]
+   KEY:[代碼審 r1 折入 2026-09-16]★對不齊就不算分級,範圍原本訂太寬★——當初的理由是「真正擋新帶進來的告警的是推送前那道閘」,而那道閘★不跑★沒有帶檔清單佔位符的宣告(把它降級成只報不擋)。那種宣告如果分級這邊也放掉就兩邊都漏。現在每條發現會記下它是哪種宣告報的,降級只套在推送閘真的接得住的那種 [test:t_pitfalls_lint_gets_the_changed_files]
+   KEY:[linter 那隻手 2026-09-16]算風險有兩隻手:自己的規則、和專案宣告的 linter。★linter 那隻手在 2026-09-16 之前從來沒真的檢查過任何一行★——指令裡「要檢查哪些檔」的佔位符沒被換成真檔名,原樣送給工具,工具回報「找不到檔」;而那條錯誤自己被當成一條發現、把分級撐成最高級。修法:換佔位符走共用那支、執行入口對沒換掉的佔位符 fail-closed(記成「這條沒跑」不是「乾淨」)、棧別辨識改用會看第一行 shebang 的那支(主程式沒有副檔名,在此之前對整道檢查隱形)。★修完量到的副作用與處置★:linter 真的讀檔之後,對不齊座標時(工作目錄不乾淨、或審比目前版本舊的範圍)會把改到的檔裡所有舊有問題全收進來——本 repo 實測 1446 條、分級必定最高級;對齊時只有 3 條且都落在新增行上。★對不齊時 linter 的發現照樣列出來但不參與分級★:分級問的是「這次改動有多危險」,對不齊時分不出哪條是這次帶進來的;真正擋「新帶進來的告警」的是推送前那道閘(比對兩份快照,跟對齊無關)。出身見 [[Issues/風險掃描的linter那隻手沒送檔進去]] [test:t_pitfalls_lint_gets_the_changed_files]
+   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/三道防污染/判定/missed 懲罰全停;輪記帳改 `canary record none`;panel 輪有效=記帳席≥2(Landmark r5「單席 caught<2 白跑」型不再發生);repro triage 觸發改「可疑席(引句錨不到/通用回應)」;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
+   KEY:[2026-08-05]UI 層驗收慣例(MCP 接驗證層,Enzo 靈感;立慣例不綁案)——test-layers 宣告 layer 含「UI 驗收」的棧被 diff 命中時,終審驗收=agent 以 Playwright MCP(乾淨瀏覽器)/claude-in-chrome(真登入態)真開頁執行驗收條款,截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/ 由 Verification 引用(哲學同 quote-check:證據可重放非口頭);起不了環境=明記未驗+原因不得靜默跳;Landmark .lumos/test-layers.json 已宣告 vue/html/js→UI 驗收、cs→dotnet test;首用=下一個天然帶 UI 面的工作(RSNO 暫緩,人裁);★Android 通道(2026-08-11,[[Projects/Android側UI測試綁圖譜工作流_計劃]])★=maestro MCP list_devices→inspect_screen→run,與 Playwright/chrome 並列;★前置:只准對「已標可自動且測試門店已確認」的 flow 自動跑★(否則會在真裝置真後端開真單),未達條件的 flow 一律僅手動、終審走 lumos code-loop skip --note 留痕;★截圖基準通道(2026-09-10,[[Projects/截圖基準驗收流程_計劃]])★=專案 .maestro/ 有 visual-check.sh 的畫面,終審跑 `.maestro/visual-check.sh <畫面> <證據目錄>` 代替「開頁看一眼」,退出 1 照抄它印的「相符率/門檻/diff 路徑」那行回報;agent 不動基準圖、不降門檻;沒有基準圖的畫面照舊
+   KEY:[2026-08-05]pitfalls --diff 排除 governance/review-reports/ 路徑——歸檔證物(席報告/canary 快照 .patch)★故意★含 bug,當代碼掃=push 被自己的留痕擋下(C 慣例落地首推實錄);排除不外溢(收緊釘:同內容在該路徑外照掃) [test:t_pitfalls_diff_skips_review_report_artifacts]
+   KEY:[2026-08-11]同型第二例——簿記帳也排除(_BOOKKEEPING_FILES/_DIR:治理帳/usage-log/ci-log/anchor-baseline/code-loop 留痕)。★自我餵食迴圈★:治理帳裡記的 skip 理由本身在描述「命中 open(...)」→掃自己的紀錄再次命中→再 skip→再寫一行理由進治理帳,實測誤觸發 9 次(3978732、837bbff 等皆此形態)。白名單與 code-loop 留痕失效豁免★共用同一組常數★(原本 code-loop 端寫成區域變數,兩處會漂移) [test:t_pitfalls_diff_skips_bookkeeping_ledgers]
+   KEY:[2026-08-05]missed 席 findings 改★機械 repro triage★(取代直接丟)——canary 硬閘不動(該席判決仍作廢),但 findings 逐條試真碼/真跑證實;證實走通道 a 折入(note 記「機械證實非席信用」)、repro 不出才丟。實證=T8 r1 missed 席兩條真 major 靠 repro 撈回,原「撈」是編排者裁量現為硬步驟(結構性誤殺的機制化補丁;與 design-loop d4 分流不變:代碼有真 oracle 故走 repro 不走「不作廢」)
+   KEY:[2026-08-05]席報告留痕慣例+收貨 quote-check(advisory)——報告落 governance/review-reports/<loop-id>/(原躺 scratchpad 蒸發,帳上 note 指空;T8 實錄);record 帶 --report/--snapshot 讓 sha 落帳(不帶 findings_set 不觸 T6 定錨);逐席 quote-check 對工作副本驗引句(§3 錨定紀律的機械收貨端;不進 gate,panel 判準一字不動)
+   KEY:[2026-08-04]pass/skip 留痕的簿記白名單豁免([[Issues/code-loop-pass自失效追尾]])——留痕 sha 之後的 commit 只動簿記檔(治理帳/usage-log/anchor-baseline/code-loop 留痕)且留痕 sha 為目標祖先 → 留痕仍有效;其他檔一動照樣失效、改寫史拒認。「HEAD 移動→作廢」原意=pass 不得蓋到新代碼,此為精化非放寬(原嚴格等值下 pass 自己 append 的治理帳行被 commit 即自失效→追尾) [test:t_codeloop_pass_survives_bookkeeping_commits]
+diff --git a/scripts/lumos b/scripts/lumos
+index 7d1c1a17..051a0e3c 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7701,25 +7701,32 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+             _stored = str(_pr.relative_to(_vault_repo_root(env)))
+         except ValueError:
+             _stored = str(_pr)
+         rec[_k + "_path"], rec[_k + "_sha256"] = _stored, _h
+     path = env.vault.parent / ".canary-log.jsonl"
+     # ── 代碼審從第一筆就要留痕(2026-09-22 rtb-production-agent-demo 回報)──
+     # 下面那道「定錨後才強制」對代碼審太晚:代碼審的慣例是先記非載體席、再記載體席,
+     # 第一席記帳時還沒有任何一筆帶發現清單(沒定錨),漏帶 --snapshot 會安靜通過,
+     # 要到問處置閘才以「資安席留痕對不上」這種看不出原因的訊息爆出來——而帳本不能撤銷,只能整輪換編號重記。
+     # 代碼審的手冊本來就要求每一席都帶這兩個,所以這裡寫側當場擋、直接講缺哪個。
+-    # ★只收代碼審★:設計審(散文)仍照原本的定錨規則,相容鐵則;判「是不是代碼審」用迴圈編號前綴,
+-    # 跟 doctor [I] 段與 code-loop 的既有判法同一個(code-<主題>)。
+-    if loop and str(loop).startswith("code") and not (report and snapshot):
++    # ★設計審(散文)不動★:仍照原本的定錨規則,相容鐵則。判法走全檔唯一那支 _roster_kind(代碼審 r1 兩席 blocker:
++    # 第一版自己寫 startswith("code"),把「code 開頭沒連字號」的也講成代碼審)。
++    # ★「看不出是哪一種」照最嚴的處理★(代碼審 r2 架構席 blocker):同檔三處既有呼叫點對 None 都是從嚴,
++    # 就是為了擋「取個 codeX 的編號就繞過」(r2 外家席實跑抓到過);第二版這裡從寬,codeXreview 就能漏帶快照。
++    # 從嚴的代價很小:設計審進了處置閘之後本來也要帶這兩個。訊息照既有那幾處的說法講,不硬說它是代碼審。
++    # ★只記結局的帳排除★(r1 通才席):帶 --outcome 的那種結構上就不帶報告與快照(上面有互斥規則)。
++    _rk = _roster_kind(str(loop)) if loop else "design"
++    if loop and _rk != "design" and outcome is None and not (report and snapshot):
+         _miss = [f for f, v in (("--report", report), ("--snapshot", snapshot)) if not v]
+-        print(f"擋下:代碼審({loop})的每一筆記帳都要帶 {' 與 '.join(_miss)}——"
++        _what = (f"代碼審({loop})" if _rk == "code"
++                 else f"迴圈 {loop}(編號 code 開頭卻不是 code-,看不出是哪一種審查,照最嚴的當代碼審)")
++        print(f"擋下:{_what}的每一筆記帳都要帶 {' 與 '.join(_miss)}——"
+               "現在不擋的話,要到問處置閘才會發現,而那時帳本已經不能撤銷,只能整輪換編號重記", file=sys.stderr)
+         print("  --report <這一席的報告>  --snapshot <這一輪凍結的 patch>", file=sys.stderr)
+         return 2
+     # ── T6 收緊(design-loop重設計 實作計畫):disposal 定錨後留痕轉強制 ──
+     # 定錨=該 loop 帳面已有任一筆帶 findings_set(同 M2 cluster「首個有效輪定錨」前例)。
+     # 定錨後每筆 record 必帶 report+snapshot;未定錨/舊 loop 完全不受影響(相容鐵則)。
+     if loop and path.exists() and not (report and snapshot):
+         _anchored = False
+         try:
+             import json as _json6
+@@ -28698,20 +28705,25 @@ def _codeloop_record_valid(repo_root, rec_sha, marker_sha):
+     """留痕座標有效性(pass/skip 與表態共用同一套):同 sha;或 rec_sha 是 marker_sha 的祖先且中間只動簿記檔
+     ([[Issues/code-loop-pass自失效追尾]] 的豁免)。回 (ok, 一句為什麼)。"""
+     import subprocess as _sp
+     if not rec_sha:
+         return False, "記錄沒有 sha"
+     if rec_sha == marker_sha:
+         return True, f"同版本 {marker_sha[:8]}"
+     try:
+         anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
++        if anc.returncode not in (0, 1):
++            # ★git 回 1 才是「不是祖先」;其他非零是那個提交在這份 repo 裡根本找不到★(代碼審 r1 通才席):
++            # 寫錯的 sha、淺 clone、或物件被清掉。第一版把這種也講成「多半是壓過提交」,給了文不對題的重來指令。
++            return False, (f"記錄 sha {rec_sha[:8]} 在這份 repo 裡找不到(寫錯、淺 clone、或已被清掉),"
++                           "判不了是不是祖先——先確認那個提交還在,不在就照重來的步驟重記")
+         if anc.returncode != 0:
+             # ★講出最常見的原因與怎麼重來★(2026-09-22 rtb-production-agent-demo 回報):
+             # 把本機提交壓成一個、或 rebase 之後,內容可以一模一樣,原本記的那個提交卻不再是祖先。
+             # 只丟兩個 sha 的話,人看不出是自己剛做的壓提交造成的,也不知道要重跑哪兩個指令。
+             return False, (f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先——多半是壓過提交或 rebase 改寫過歷史"
+                            "(內容沒變也一樣失效)。重來:表態 `lumos pitfalls --diff <範圍> --dispositions-template --carry`"
+                            " 再 `lumos code-loop dispositions <檔>`;審查留痕重跑 `lumos code-loop pass --note \"…\"`")
+         df = _sp.run(["git", "diff", "--name-only", rec_sha, marker_sha],
+                      capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_disp_git_timeout())
+     except _sp.TimeoutExpired:
+@@ -29125,31 +29137,35 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+         rec_sha = rec.get("head_sha", "")
+         rec_status = rec.get("status", "")
+         if rec_sha == marker_sha and rec_status in ("passed", "skipped"):
+             _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
+             return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]},來源 {_src})", "tier": tier}
+         # 簿記白名單豁免([[Issues/code-loop-pass自失效追尾]] 2026-08-04):pass 自己會往
+         # tracked 的治理帳 append 一行,照「先 commit 再 push」直覺把它 commit 進去,
+         # HEAD 前進 → pass 自失效 → 追尾。豁免=留痕 sha 之後的 commit ★只動簿記檔★
+         # 且留痕 sha 是目標 sha 的★祖先★(改寫史拒認)→ 留痕仍有效。
+         # 「HEAD 移動→作廢」的原意=pass 不得蓋到新★代碼★——任何非白名單檔一動照樣失效。
++        _vwhy = None
+         if rec_sha and rec_sha != marker_sha and rec_status in ("passed", "skipped"):
+             # 祖先+簿記豁免走跟表態同一支 _codeloop_record_valid(r1 架構對齊席 f1:原本兩段逐字相同各自維護)
+             _vok, _vwhy = _codeloop_record_valid(repo_root, rec_sha, marker_sha)
+             if _vok:
+                 _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
+                 return {"blocked": False,
+                         "reason": f"有效留痕({rec_status}@{rec_sha[:8]},來源 {_src}+{_vwhy})",
+                         "tier": tier}
+         # 留痕存在但 sha 不符或狀態不對
+         if rec_sha != marker_sha:
+-            reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)"
++            # ★把判有效性那支講的原因接過來★(2026-09-22 代碼審 r1 架構席):這條是推送前真正會擋的路,
++            # 原本只印固定的「非純簿記增量」——壓過提交的時候那句話根本是錯的,而重來的指令也沒印出來。
++            reason = (f"tier=high 且留痕過時:{_vwhy}" if _vwhy else
++                      f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)")
+         else:
+             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
+         if _codeloop_marker_skipped(repo_root, reason, marker_sha):
+             return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+         return {"blocked": True, "reason": reason, "tier": tier, "reason_kind": "review"}
+ 
+     # 5. 無留痕
+     _r5 = "tier=high 且無留痕(尚未跑 code-loop pass/skip)"
+     if _codeloop_marker_skipped(repo_root, _r5, marker_sha):
+         return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index efe45b97..f3d77f93 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23368,51 +23368,93 @@ def t_code_loop_record_requires_provenance_from_first_row():
+             "--severity", "clean", "--findings", "0", "--report", str(rpt))
+     check("① 現場成立:這是這條迴圈的第一筆,還沒有任何一筆帶發現清單(沒定錨)", True, "")
+     check("② 代碼審第一筆就缺 --snapshot → 當場 rc2", r.returncode == 2, f"rc={r.returncode} {r.stderr[:200]}")
+     check("② 訊息直接講缺的是凍結快照", "--snapshot" in r.stderr, r.stderr[:300])
+     ok = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "架構對齊-sonnet",
+              "--severity", "clean", "--findings", "0", "--report", str(rpt), "--snapshot", str(snap))
+     check("③ 兩個都帶齊就記得進去", ok.returncode == 0, f"rc={ok.returncode} {ok.stderr[:200]}")
+     free = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", f"design-自由-{_M1U}",
+                "--auditor", "s1", "--severity", "minor")
+     check("④ 相容:設計審(非代碼審)還沒定錨時照舊不強制", free.returncode == 0, f"rc={free.returncode} {free.stderr[:200]}")
++    # ⑤ code 開頭沒連字號的(帳裡真的有 codestage):看不出是哪種審查,照 repo 既有慣例從嚴——
++    #   代碼審 r2 架構席 blocker:從寬的話取個 codeX 的編號就能漏帶快照。但訊息不准硬說它是代碼審
++    #   (r1 兩席抓到第一版講成「代碼審」,誤導人去找一份不存在的凍結 patch)。
++    odd = run(v, "canary", "record", "none", "--loop", f"codeXreview-{_M1U}", "--round", "r1", "--auditor", "s1",
++              "--severity", "clean", "--findings", "0", "--report", str(rpt))
++    check("⑤ 看不出是哪種審查的也要擋(不能靠取編號繞過)", odd.returncode == 2, f"rc={odd.returncode} {odd.stderr[:200]}")
++    check("⑤ 但訊息老實講「看不出是哪一種」,不硬說它是代碼審",
++          "看不出是哪一種審查" in odd.stderr and "擋下:代碼審(" not in odd.stderr, odd.stderr[:300])
++    # ⑥ 同輪通才席:只記結局的帳結構上就不帶報告與快照
++    oc = run(v, "canary", "record", "none", "--loop", f"code-結局-{_M1U}", "--auditor", "orchestrator",
++             "--outcome", "skipped")
++    check("⑥ 只記結局的帳(--outcome)不被這道擋", oc.returncode == 0, f"rc={oc.returncode} {oc.stderr[:200]}")
+ 
+ 
+ def t_codeloop_record_invalid_after_squash_says_why():
+     """壓過提交之後留痕失效時,訊息要講出「多半是壓過提交」和怎麼重來,不能只丟兩個 sha。
+ 
+     出身:2026-09-22 rtb-production-agent-demo 回報。表態與審查留痕都綁在某個提交上,
+     只認「同一個、或是它的祖先且中間只動簿記檔」。把幾個本機提交壓成一個之後,內容一模一樣,
+     原本記的那個提交卻不再是祖先——推送被擋,而訊息只說「sha A 不是 sha B 的祖先」,
+     看不出是自己剛做的壓提交造成的,也不知道要重跑哪兩個指令。
+     翻紅釘:把訊息改回只有兩個 sha → ②紅。
+     """
+     import subprocess as _sp, tempfile
+-    import importlib.util, importlib.machinery
+-    loader = importlib.machinery.SourceFileLoader("lumosmod_sq", GRAPHCTL)
+-    spec = importlib.util.spec_from_loader("lumosmod_sq", loader)
+-    m = importlib.util.module_from_spec(spec)
+-    loader.exec_module(m)
++    m = _import_lumos()
+     with tempfile.TemporaryDirectory() as d:
+         g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+         g("init", "-q", "-b", "main"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+         Path(d, "a.py").write_text("x = 1\n", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "base")
+         Path(d, "a.py").write_text("x = 2\n", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "wip1")
+         recorded = g("rev-parse", "HEAD").stdout.strip()      # 表態/留痕記在這個提交上
+         Path(d, "a.py").write_text("x = 3\n", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "wip2")
+         g("reset", "--soft", "HEAD~2"); g("commit", "-qm", "squashed")   # 壓成一個
+         head = g("rev-parse", "HEAD").stdout.strip()
+         ok, why = m._codeloop_record_valid(Path(d), recorded, head)
+         check("① 現場成立:壓過之後原本那個提交已經不是祖先", ok is False, why)
+         check("② 訊息點出多半是壓過提交或改寫過歷史", "壓" in why and ("rebase" in why or "改寫" in why), why)
+         check("② 訊息給得出重來的指令(表態與審查留痕各一條)",
+               "--dispositions-template --carry" in why and "code-loop pass" in why, why)
++        # ③ 代碼審 r1 通才席:提交根本找不到(寫錯、淺 clone、被清掉)時,不准講成「多半是壓過提交」
++        ok2, why2 = m._codeloop_record_valid(Path(d), "0" * 39 + "1", head)
++        check("③ 找不到的提交:講「找不到」,不講成壓過提交", ok2 is False and "找不到" in why2 and "壓過提交" not in why2, why2)
++
++
++def t_codeloop_check_after_squash_says_why():
++    """壓過提交之後,推送閘判審查留痕的那條路也要講出原因與怎麼重來。
++
++    出身:代碼審 r1 架構席——第一版只改了判有效性那支函式的訊息,而推送閘判審查留痕的那條路
++    在失效時完全不讀那個訊息,印的是固定的「非純簿記增量」(壓過提交時這句話根本是錯的)。
++    ★這支直接看那條路的判定結果,不看整個 code-loop check 的輸出★:第二版看整段輸出,
++    結果被「表態過期」那一行(它也講壓過提交、也給 code-loop pass 指令)滿足,
++    把推送閘那條路改回固定字串照樣綠——是翻紅驗證抓到的假綠。
++    翻紅釘:推送閘那條路改回印固定字串 → ②紅。
++    """
++    import subprocess as _sp, tempfile, os as _os
++    m = _import_lumos()
++    lumos_real = str(Path(__file__).resolve().parent / "lumos")
++    with tempfile.TemporaryDirectory() as d:
++        _make_high_tier_repo(d)
++        env = dict(_os.environ); env["GIT_DIR"] = str(Path(d) / ".git")
++        pr = _sp.run([sys.executable, lumos_real, "code-loop", "pass", "--note", "審過了", "--repo", d],
++                     capture_output=True, text=True, env=env)
++        check("① 現場成立:審查留痕記得進去", pr.returncode == 0, pr.stdout[-300:] + pr.stderr[-300:])
++        _sp.run(["git", "commit", "--amend", "-q", "--no-edit", "--no-verify", "-m", "squashed"],
++                cwd=d, capture_output=True, text=True)   # 內容不變,只改寫歷史
++        # 照真實的重來順序:表態先在新提交上重答,才看得到審查留痕那一關(表態那關先擋會蓋掉它)
++        _answer_stack_questions(d)
++        v = m._codeloop_guard_verdict(Path(d))
++        reason = str(v.get("reason", ""))
++        check("① 現場成立:判的是審查留痕過時(不是別的原因)",
++              v.get("blocked") and v.get("reason_kind") == "review" and "留痕" in reason and "過時" in reason, str(v)[:400])
++        check("② 那一句就講得出多半是壓過提交,並給重來的指令",
++              "壓過提交" in reason and "code-loop pass" in reason, reason[:400])
+ 
+ 
+ def t_loop_status_disposal_gate():
+     """[T4 處置閘](spec:Projects/design-loop重設計 三;plan:同名_實作計畫 T4)
+ 
+     `loop status <id> --disposal --spec <真檔> --repo <root>`:新閘走★獨立路徑★,
+     四條合取全部讀側可重算:①G3 hash 鏈 ②處置集合(重算,不信寫側)③留痕讀側重驗
+     (report/snapshot 存在且 sha256 與帳面一致——record 完刪檔照樣擋)④quote-check
+     對帳面 snapshot 重跑全 ok。
+ 
