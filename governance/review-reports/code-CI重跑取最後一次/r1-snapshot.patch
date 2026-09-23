@@ -1,0 +1,269 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/CI回流開場提醒.md b/docs/lumos-toolchain-knowledge/Systems/CI回流開場提醒.md
+new file mode 100644
+index 00000000..437ebaa8
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/CI回流開場提醒.md
+@@ -0,0 +1,26 @@
++---
++type: system
++status: doing
++created: 2026-09-23
++updated: 2026-09-23
++responsibility: 開場時讀 CI 帳,當前提交的 CI 是紅的就提醒一次;只讀帳不打網路、不跑 CI、不寫帳(寫帳是 ci-wait 的事)。Claude 與 Codex 共用這一支(安裝時各複製一份)
++aliases: []
++about_code:
++  - scripts/hooks/claude/ci-status-hook.py
++tags:
++  - type/system
++  - status/doing
++  - scope/guards-gates
++related:
++  - "[[Projects/CI回流閉環_計劃]]"
++summary: |-
++  WHY:[2026-09-23]這支 hook 在 CI 回流閉環上線時就有,但一直沒有家;這次修它的判法時補上。
++  PITFALL:[2026-09-23 實踩]★同一個 CI 執行重跑過,只算最後一次嘗試★:判「上次 CI 是紅的」是對當前提交的全部筆取最壞,那是為了多支 workflow 各記一筆時綠的不要蓋掉紅的;但同一個執行重跑也是新的一筆,第 1 次紅、第 2 次綠時舊的紅永遠贏——重跑變綠了,開場還一直喊紅。現在先把同一個執行只留最後一次嘗試,再跨執行取最壞。重現:帳裡同一個 run_id 寫一筆 attempt 1 紅、一筆 attempt 2 綠,開一個新會談 [test:t_ci_rerun_latest_attempt_wins]
++  RULE:[since:2026-09-23][confirmed:2026-09-23][retire:hook 改成能 import 主程式(不再是獨立複本)]★判法在主程式與這支 hook 各有一份逐字相同的複本★:hook 是獨立檔,複製到全域後 import 不到主程式。改了一邊沒改另一邊,主程式的 ci-status 與開場提醒對同一次 CI 會給相反結論;有測試比對兩份的語法樹 [test:t_ci_latest_attempts_copies_identical]
++  PITFALL:[2026-09-23 同一次實踩的另一半]★CI 重跑之後要再跑一次 `lumos ci-wait`★,不要只用 gh 看結果——不跑的話成功那次根本不會進帳,ci-status 與開場提醒讀到的永遠是重跑前那筆。重現:`gh run rerun <id> --failed` 後不跑 ci-wait,直接 `lumos ci-status`
++---
++# CI回流開場提醒
++
++`scripts/hooks/claude/ci-status-hook.py` 在開場時讀 CI 帳,當前提交的 CI 是紅的就提醒一次。只讀帳,不打網路、不跑 CI、不寫帳——寫帳是 `lumos ci-wait` 的事,唯讀查詢是 `lumos ci-status`(兩者都在主程式裡,這篇只管這支 hook)。
++
++Claude 與 Codex 共用這一支檔,安裝時各複製一份到全域的 hooks 目錄。
+diff --git a/scripts/hooks/claude/ci-status-hook.py b/scripts/hooks/claude/ci-status-hook.py
+index 923eba61..7df5e378 100755
+--- a/scripts/hooks/claude/ci-status-hook.py
++++ b/scripts/hooks/claude/ci-status-hook.py
+@@ -33,20 +33,43 @@ def _repo_root(cwd):
+ 
+ 
+ def _ci_enabled(root):
+     try:
+         data = json.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+     except (OSError, ValueError):
+         return False
+     return isinstance(data, dict) and isinstance(data.get("ci"), dict)
+ 
+ 
++def _ci_latest_attempts(rows):
++    """同一個 CI 執行(run_id)重跑過的,只留最後一次嘗試;沒有 run_id 的原樣保留。
++
++    ★「取最壞」只該跨不同執行★(2026-09-23 實踩):同一個執行第 1 次紅、第 2 次綠時,
++    舊的紅不該讓開場提醒一直喊「上次 CI 是紅的」。
++    ★這是 scripts/lumos 裡同名函式的逐字複本★(hook 是獨立檔 import 不到),有測試盯著兩份一致。
++    """
++    best, keep = {}, []
++    for r in rows:
++        rid = r.get("run_id")
++        if rid is None:
++            keep.append(r)
++            continue
++        try:
++            att = int(r.get("attempt") or 0)
++        except (TypeError, ValueError):
++            att = 0
++        cur = best.get(rid)
++        if cur is None or att >= cur[0]:
++            best[rid] = (att, r)
++    return keep + [r for _a, r in best.values()]
++
++
+ def _find_log(root):
+     for d in sorted((root / "docs").glob("*-knowledge")):
+         p = d.parent / CI_LOG_NAME
+         if p.exists():
+             return p
+     return None
+ 
+ 
+ # ── ★注入框:把「機器附加的內容」跟系統話明確分開★ ────────────────────────
+ # 單源說明在 Systems/hook信任邊界;這段在幾支 hook 與 scripts/lumos 裡是逐字相同的複本,
+@@ -185,21 +208,21 @@ def main():
+                 if not line.strip():
+                     continue
+                 try:
+                     d = json.loads(line)
+                 except ValueError:
+                     continue                        # 壞行跳過（半寫入容錯）
+                 if isinstance(d, dict) and d.get("sha") == sha:
+                     rows.append(d)
+     except OSError:
+         return 0
+-    reds = [r for r in rows if (r.get("conclusion") or "") in RED]
++    reds = [r for r in _ci_latest_attempts(rows) if (r.get("conclusion") or "") in RED]
+     if not reds:
+         return 0                                    # 綠或無資料：零噪音
+ 
+     # ★這些欄位來自專案裡的 CI 紀錄檔,是 repo 控制的自由文字★(2026-09-07 外家審查席):
+     # 直接放進 additionalContext 等於「repo 裡的人能以系統口吻對你說話」。消毒 + 加框。
+     first = reds[0]
+     detail = f"（{_plain_label(first.get('workflow') or 'CI', cap=60)}"
+     if first.get("failed_step"):
+         detail += f" / {_plain_label(first['failed_step'], cap=60)}"
+     detail += "）"
+diff --git a/scripts/lumos b/scripts/lumos
+index 01c5c49f..20d012c2 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -24658,20 +24658,44 @@ def _ci_red_escape(env, sha, concl, workflow):
+         if not plans:
+             return 0
+         vrel = str(Path(env.vault).resolve().relative_to(Path(root).resolve())).replace(os.sep, "/")
+         loops = [(_loop_id_for_plan(pl), pl[len(vrel) + 1:]) for pl in plans]
+         return _auto_escape(env, "CI", "major", f"CI {concl} {sha[:7]} [{workflow}]", loops, sha, source="CI")
+     except Exception as _ex:
+         _escape_auto_failed(env, "?", "CI", str(_ex))
+         return 0
+ 
+ 
++def _ci_latest_attempts(rows):
++    """同一個 CI 執行(run_id)重跑過的,只留最後一次嘗試;沒有 run_id 的原樣保留。
++
++    ★「取最壞」只該跨不同執行★(2026-09-23 實踩):同一個提交的全部筆取最壞,是為了
++    「多支 workflow 各記一筆、綠的排在紅的後面時不要被蓋掉」;但同一個執行重跑一次也是新的一筆,
++    第 1 次紅、第 2 次綠時,舊的紅會永遠蓋掉新的綠——重跑過的 CI 永遠報紅。
++    ★開場提醒那支 hook 有一份逐字相同的複本★(獨立檔 import 不到),改這裡要一起改。
++    """
++    best, keep = {}, []
++    for r in rows:
++        rid = r.get("run_id")
++        if rid is None:
++            keep.append(r)
++            continue
++        try:
++            att = int(r.get("attempt") or 0)
++        except (TypeError, ValueError):
++            att = 0
++        cur = best.get(rid)
++        if cur is None or att >= cur[0]:
++            best[rid] = (att, r)
++    return keep + [r for _a, r in best.values()]
++
++
+ def cmd_ci_status(env, repo_dir=None, as_json=False):
+     """[S3] 唯讀查最後一次 CI 結果(不打網路,供離線與 hook)。恆 rc0。"""
+     import json
+     import datetime
+     root = repo_dir or _anchor_repo_root(None)
+     if root is None or not Path(root).is_dir():
+         print(f"擋下:--repo-dir 指的目錄不存在: {repo_dir!r}", file=sys.stderr)
+         return 2
+     enabled, _cfg = _ci_config(root)
+     if not enabled:
+@@ -24692,21 +24716,21 @@ def cmd_ci_status(env, repo_dir=None, as_json=False):
+                     continue
+                 if isinstance(d, dict):
+                     rows.append(d)
+     except OSError:
+         rows = []
+     # 「最後一筆」不等於「最新結論」:同一 sha 多支 workflow 各記一筆,檔尾那筆可能正好是綠的、
+     # 把紅的蓋掉(2026-07-29 沿 SessionStart hook 同型修法)。取最新 sha 的**全部**筆、報最壞的。
+     last = None
+     if rows:
+         newest_sha = rows[-1].get("sha")
+-        same = [r for r in rows if r.get("sha") == newest_sha] or [rows[-1]]
++        same = _ci_latest_attempts([r for r in rows if r.get("sha") == newest_sha] or [rows[-1]])
+         last = (next((r for r in same if (r.get("conclusion") or "") in _CI_RED), None)
+                 or next((r for r in same if (r.get("conclusion") or "") not in _CI_GREEN), None)
+                 or same[-1])
+     if last is None:
+         if as_json:
+             print(json.dumps({"verdict": "no-data"}, ensure_ascii=False))
+         else:
+             print("(尚無 CI 紀錄——先跑 lumos ci-wait)")
+         return 0
+     if as_json:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 773eab57..4875f065 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -24999,20 +24999,89 @@ def t_ci_status_and_gov():
+         ensure_ascii=False) + "\n", encoding="utf-8")
+     # gov 第 7 源
+     r = _ci_run(root, v, env, "gov")
+     check("gov 見得到 CI 事件", "ci" in r.stdout and "failure" in r.stdout, r.stdout[-400:])
+     # 總開關:移除 ci 區塊 → gov 不 load
+     (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
+     r = _ci_run(root, v, env, "gov")
+     check("gov 總開關:移除宣告後不顯示", "failure" not in r.stdout, r.stdout[-300:])
+ 
+ 
++def t_ci_rerun_latest_attempt_wins():
++    """同一個 CI 執行重跑過(第 1 次紅、第 2 次綠),只算最後那次——兩個讀帳的地方都一樣。
++
++    出身:2026-09-23 實踩。推上去 CI 紅了一次(測試時序競態),重跑變綠,但 ci-status 仍回報 failure。
++    原因之一是當時直接用 gh 重跑、沒再跑 ci-wait,成功那次根本沒進帳;但就算進了帳也一樣錯:
++    讀帳的地方對「同一個提交的全部筆」取最壞,而同一個執行的兩次嘗試是兩筆,舊的那次紅永遠蓋掉新的綠。
++    「取最壞」只該跨不同執行(不同 workflow),同一個執行要先只留最後一次嘗試。
++    開場提醒那支 hook 是同一個錯(任何一筆紅就喊紅),一起修。
++    翻紅釘:ci-status 拿掉「同一個執行只留最後一次」→ ①紅;hook 拿掉 → ③紅。
++    """
++    import json as _json, subprocess as _sp
++    from pathlib import Path as _P
++    stub = _GH_STUB_HEAD + "sys.exit(9)\n"
++    root, v, env = _mk_ci_env(stub)
++    sha = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
++    log = v.parent / ".ci-log.jsonl"
++    def row(run_id, att, concl, wf="CI", ts="2026-09-23T10:00:00+08:00"):
++        return {"ts": ts, "run_id": run_id, "attempt": att, "sha": sha, "branch": "main", "workflow": wf,
++                "conclusion": concl, "title": "t", "url": f"u{run_id}", "failed_step": "test" if concl != "success" else "",
++                "dedup_key": f"{run_id}:{att}:{concl}"}
++    def put(rows):
++        log.write_text("".join(_json.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
++    def status():
++        r = _ci_run(root, v, env, "ci-status", "--json")
++        return _json.loads(r.stdout.strip().splitlines()[-1])
++    put([row(5, 1, "failure"), row(5, 2, "success", ts="2026-09-23T10:30:00+08:00")])
++    check("① 同一個執行第 1 次紅、第 2 次綠 → 報綠", status().get("conclusion") == "success", str(status()))
++    put([row(5, 2, "success", ts="2026-09-23T10:30:00+08:00"), row(5, 1, "failure")])
++    check("① 反序寫進帳也一樣報綠(看的是嘗試次數,不是在檔裡的位置)", status().get("conclusion") == "success", str(status()))
++    put([row(5, 1, "failure"), row(5, 2, "success"), row(6, 1, "failure", wf="Lint")])
++    check("② 不同執行(另一支 workflow)紅了,照舊報紅(取最壞只跨執行)",
++          status().get("conclusion") == "failure" and status().get("workflow") == "Lint", str(status()))
++    hook = _P(__file__).resolve().parent / "hooks" / "claude" / "ci-status-hook.py"
++    def run_hook():
++        return _sp.run([sys.executable, str(hook)], input=_json.dumps({"cwd": str(root)}), capture_output=True,
++                       text=True, cwd=str(root), env=env, timeout=60)
++    put([row(5, 1, "failure"), row(5, 2, "success")])
++    h = run_hook()
++    check("③ 開場提醒:重跑變綠的不再喊紅", "CI 是紅的" not in h.stdout, h.stdout[:300])
++    put([row(5, 1, "failure"), row(5, 2, "success"), row(6, 1, "failure", wf="Lint")])
++    h = run_hook()
++    check("④ 開場提醒:別的執行真的紅,照舊喊", "CI 是紅的" in h.stdout and "Lint" in h.stdout, h.stdout[:300])
++
++
++def t_ci_latest_attempts_copies_identical():
++    """「同一個執行只留最後一次嘗試」在主程式與開場提醒 hook 各有一份,兩份的程式必須一模一樣。
++
++    hook 是獨立檔、複製到全域後 import 不到主程式,只能各放一份;沒有這支守衛,
++    改了一邊忘了另一邊,兩個地方對同一次 CI 就會給出相反的結論。比的是語法樹(說明文字可以不同)。
++    翻紅釘:改 hook 那份的任一行邏輯 → ②紅。
++    """
++    import ast as _ast
++    from pathlib import Path as _P
++    base = _P(__file__).resolve().parent
++    def body(path):
++        tree = _ast.parse(path.read_text(encoding="utf-8"))
++        for n in _ast.walk(tree):
++            if isinstance(n, _ast.FunctionDef) and n.name == "_ci_latest_attempts":
++                stmts = list(n.body)
++                if stmts and isinstance(stmts[0], _ast.Expr) and isinstance(getattr(stmts[0], "value", None), _ast.Constant):
++                    stmts = stmts[1:]   # 說明文字不比
++                return _ast.dump(_ast.Module(body=stmts, type_ignores=[]))
++        return None
++    a = body(base / "lumos")
++    b = body(base / "hooks" / "claude" / "ci-status-hook.py")
++    check("① 兩份都找得到", a is not None and b is not None, f"{a is None} {b is None}")
++    check("② 兩份的程式一模一樣", a == b, "主程式與 hook 的 _ci_latest_attempts 不一致")
++
++
+ def t_ci_hooks():
+     """[S2b] SessionStart hook 註冊對稱 + 提醒判法(該 sha 全部筆/總開關)。"""
+     import json as _json
+     import subprocess as _sp
+     from pathlib import Path as _P
+     root_repo = _P(__file__).resolve().parent.parent
+     hook = root_repo / "scripts" / "hooks" / "claude" / "ci-status-hook.py"
+     check("hook 檔存在", hook.exists(), str(hook))
+     src = (root_repo / "scripts" / "lumos").read_text(encoding="utf-8")
+     check("hook 進 _GLOBAL_CLAUDE_HOOKS 白名單(生命週期對稱)",
