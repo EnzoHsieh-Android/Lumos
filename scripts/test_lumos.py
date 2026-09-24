@@ -42779,6 +42779,83 @@ def t_nodehome_diff_route_per_commit():
     check("②同一個提交裡改程式又寫進不是家的節點 → 照擋", rc == 1 and "Systems/B" in out, out[-600:])
 
 
+def t_nodehome_merge_auto_combined_not_blocked():
+    """兩條分支各自改同一篇筆記的不同段、同一支程式的不同行,合併時 git 自動合在一起——推送前不該擋。
+
+    出身:2026-09-24 rtb-production-agent-demo 回報(第三次發生)。推送前逐提交檢查對合併提交,
+    原本把「跟每一個上一版都不一樣」的路徑當成合併自己改的;但兩邊都改過、git 自動合起來的檔,
+    合併後也會跟兩邊都不一樣——於是另一邊配好家的筆記,被拿去跟這邊的程式湊成一對,判成
+    「寫了說明卻不是改動檔的家」。實際核對那次合併:合併本身真正多改的(git 的 remerge-diff)
+    是治理帳、record.py、ruff 設定,那篇筆記不在裡面。
+    翻紅釘:合併提交改回用「跟每個上一版都不一樣」→ ②紅。
+    """
+    print("t_nodehome_merge_auto_combined_not_blocked")
+    root = _nh_repo()
+    _nh_file(root, "src/a.py", "x = 1\n")
+    _nh_file(root, "src/b.py", "l1\nl2\nl3\nl4\nl5\nl6\n")
+    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 第一段\n\n中間不動\n\n中間不動二\n\n第四段")
+    _nh_node(root, "B", about=["src/b.py"], body="實作在 `src/b.py`。")
+    _nh_commit(root, "init")
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_git(root, "branch", "-M", "main")
+    # 主線:改 A 的最後一段 + A 的家 a.py(配對正確)+ 另外改 b.py 的最後一行
+    _nh_git(root, "checkout", "-q", "-b", "feature")
+    _nh_git(root, "checkout", "-q", "main")
+    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 第一段\n\n中間不動\n\n中間不動二\n\n第四段(主線改)")
+    _nh_file(root, "src/a.py", "x = 2\n")
+    _nh_file(root, "src/b.py", "l1\nl2\nl3\nl4\nl5\nl6 主線\n")
+    _nh_commit(root, "主線:A 的說明配 a.py,另改 b.py")
+    # 功能分支:改 A 的第一段 + 同樣改 a.py(兩邊一樣,合併後 a.py 跟兩邊都相同)+ 改 b.py 的第一行
+    _nh_git(root, "checkout", "-q", "feature")
+    _nh_node(root, "A", about=["src/a.py"], body="`src/a.py` 第一段(分支改)\n\n中間不動\n\n中間不動二\n\n第四段")
+    _nh_file(root, "src/a.py", "x = 2\n")
+    _nh_file(root, "src/b.py", "l1 分支\nl2\nl3\nl4\nl5\nl6\n")
+    _nh_commit(root, "分支:A 的說明配 a.py,另改 b.py")
+    m = _nh_git(root, "merge", "-q", "--no-ff", "--no-edit", "main")
+    check("① 現場成立:合併自動完成、沒有衝突", m.returncode == 0, m.stdout + m.stderr)
+    for f in ("docs/kg-knowledge/Systems/A.md", "src/b.py"):
+        d1 = _nh_git(root, "diff", "--quiet", "HEAD^1", "HEAD", "--", f).returncode
+        d2 = _nh_git(root, "diff", "--quiet", "HEAD^2", "HEAD", "--", f).returncode
+        check(f"① 現場成立:{f} 合併後跟兩邊都不一樣(兩邊都改過、git 自動合起來)", d1 == 1 and d2 == 1, f"{d1} {d2}")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("② 兩邊各自配好家的說明,合併自動合起來 → 不擋", rc == 0, out[-800:])
+    # ③ 專案的 git 設定註冊了自訂合併驅動器:精確判法會在記憶體裡重做合併、跑那個驅動器——不准跑
+    marker = root / "DRIVER_RAN"
+    _nh_git(root, "config", "merge.evil.driver", f"touch {marker} && false")
+    (root / ".gitattributes").write_text("* merge=evil\n", encoding="utf-8")
+    rc3, out3 = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("③ 有自訂合併驅動器時,那個驅動器的指令完全沒被執行", not marker.exists(), out3[-400:])
+
+
+def t_nodehome_octopus_merge_own_violation_still_blocked():
+    """一次合三條以上分支的合併(章魚合併),合併提交自己順手改程式、把說明寫進不是家的節點——照擋。
+
+    出身:代碼審 r1 通才席。git 對章魚合併不做 remerge-diff:只在標準輸出印一行警告、退出碼照樣是 0,
+    被當成「這個合併什麼都沒改」——合併裡夾帶的違規整個放行。章魚合併要退回舊判法。
+    翻紅釘:章魚合併也走精確判法 → ②紅。
+    """
+    print("t_nodehome_octopus_merge_own_violation_still_blocked")
+    root = _nh_repo()
+    _nh_base(root)
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_git(root, "branch", "-M", "main")
+    for b in ("x", "y"):
+        _nh_git(root, "checkout", "-q", "-b", b, "main")
+        _nh_file(root, f"src/{b}.txt", b + "\n")
+        _nh_commit(root, f"分支 {b}")
+    _nh_git(root, "checkout", "-q", "main")
+    _nh_file(root, "src/m.txt", "m\n")
+    _nh_commit(root, "主線")
+    m = _nh_git(root, "merge", "-q", "--no-ff", "--no-commit", "x", "y")
+    _nh_file(root, "src/a.py", "x = 2\n")
+    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 合併時順手寫了 a 的事")
+    _nh_commit(root, "章魚合併,順手改 a、說明寫進 B")
+    np = len(_nh_git(root, "log", "-1", "--format=%P").stdout.split())
+    check("① 現場成立:合併有三個上一版", m.returncode == 0 and np == 3, f"{m.stdout}{m.stderr} parents={np}")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("② 章魚合併自己夾帶的違規 → 照擋", rc == 1 and "Systems/B" in out, out[-600:])
+
+
 def t_nodehome_diff_route_counts_content_per_commit():
     """[S11] 推送前逐提交看寫回時,「那篇內容有沒有變」也要逐提交算:前一個純整理的提交改了 B 的內容、
     後一個改程式的提交只替 B 補驗證連結(簿記欄位),不算後者把說明寫進不是家的節點。
