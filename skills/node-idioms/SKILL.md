@@ -46,7 +46,7 @@ await Promise.all(ids.map(id => limit(() => fetchOne(id))));
 
 ### R3. 沒有 floating promise：每個 promise 要嘛 `await`、要嘛明確 `void` 並處理錯誤
 ```ts
-// ✗ 例外無聲蒸發；下一版 Node 未處理 rejection 直接砸 process
+// ✗ 未處理的 rejection：Node 15 起預設直接結束 process；有全域 handler 吞掉的話則是無聲蒸發
 sendEmail(user);
 
 // ✓

@@ -5,7 +5,7 @@ description: 跨專案共用的核心業務規則怎麼查、怎麼升格、怎�
 
 # 跨專案核心圖譜(core-knowledge)
 
-> 依據:graph-as-contract 文件 Part 2。**v1 試點階段(2026-06-10 起)**——一條核心 + 一個 facet + 純手動同步。標 ⚠v2 的規則是規劃,尚未實作。
+> 依據:graph-as-contract 文件 Part 2。目前是 v1:同步全靠手動。標 ⚠v2 的是規劃,還沒實作。
 
 ## 位置與掛載
 
@@ -96,12 +96,10 @@ MOC/              # 索引
 2. **粒度 ≥ 最小可獨立驗證的 Bounded Context**:小到寫不出有意義 alternatives 的規則,併進更大節點
 3. **引用密度 ≥2 專案**才是真核心;只被 1 個專案用的內容回專案層(v1 節點豁免——它是「候選核心」,第二專案接入才測純度)
 
-## v1 已知盲區(詳 README,動手前讀)
+## v1 已知盲區(全文在 `$CORE_KNOWLEDGE_ROOT/README.md`〈已知盲區〉,動手前讀)
 
 新核心識別無機械輔助(最弱環節)/判斷漂移/單人前提/品質失守=定時炸彈/休眠專案隱形腐爛/facet 漏登記靜默漏抓。
 
 ## v1 不做(⚠v2 規劃,別當現有功能)
 
-掃描機制(implements 反查 diff)、跨 repo hook、`verified_at` 影響分析、偏離計數快取表。
-
-> 已落地(原列此處,現移除):**`core_refs` 指針存在性檢查**=lumos doctor Check C(跨 repo 驗專案指針指到的核心檔還在不在);更深的「核心模式」(implements↔core_refs 雙向核對、deviation 掃描)仍待 v2。
+掃描機制(implements 反查 diff、implements↔core_refs 雙向核對、deviation 掃描)、跨 repo hook、`verified_at` 影響分析、偏離計數快取表。

@@ -18,6 +18,7 @@ tags:
   - status/done
   - scope/platform
 summary: |-
+  KEY:[2026-09-25 prompt 稽核]進場 hook 開場白改成跟紀律範本一致:改檔前筆記會自動推、想自己查才敲 impact(拿掉「至少一行、被催也一樣」的舊補丁);對不上怎麼裁指回紀律區塊第 3 條,不再一刀切「以程式碼為準」。派工鏡頭超時說明是附在審查席派工詞上的,改成只叫它照派工詞審、★不附可照跑的補算指令★(審查席會照跑)。框外指示的規矩見 [[Systems/hook信任邊界]] [test:t_dispatch_lens_hook_timeout_notice_and_spec_marker]
   FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/hooks+hooks.json(--target codex,matcher 對照:Edit|Write→apply_patch、Agent→SubagentStart)+~/.agents/skills+AGENTS.md 同塊區塊+CODEX_HOME/agents/lumos_reviewer.toml → 使用者開一次互動 codex 按 Trust all → 之後 exec/互動兩模式 hook 都跑
   KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)
   KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)★:改了程式碼、筆記沒動 → 兩家都回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對

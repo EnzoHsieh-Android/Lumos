@@ -11,6 +11,9 @@ description: 寫或審 C#/.NET（ASP.NET Core Web API）代碼前必讀——通
 
 **機檢欄縮寫**：CA＝Roslyn 內建、AF＝AsyncFixer、VSTHRD＝VS Threading Analyzers、MA＝Meziantou、CS＝編譯器警告。⚠ 多數關鍵規則**預設不開或僅 suggestion**——見文末接線表，不升級嚴重度等於沒裝。
 
+> **核對邊界（未核對）**：本文件的規則名、「預設開／關」、版本門檻與規則條數是網搜與官方文件整理，**尚未用本機工具逐條核對**；接入時以該工具當前的規則清單為準，核對後把日期與工具版本補在這裡。
+> REVISIT:2026-10-25 補上核對日期或標明仍未核對。
+
 ---
 
 ## 一、並行與 async 紀律
@@ -63,7 +66,7 @@ public async Task<T> Get(CancellationToken ct) => await _repo.QueryAsync(ct);
 - 機檢：CA2016／MA0040 抓「方法內有 token 沒轉發」；**「簽名根本沒收 token」抓不到**——靠本條＋審查。`await foreach` 配 `.WithCancellation(ct)`（MA0079/80）。自建 CTS（timeout/linked）必 `using`。
 
 ### R6. 資源釋放紀律
-有 async 釋放能力的（交易、連線、writer）用 `await using`；Stream 類 Dispose 前先 `FlushAsync`（否則 Dispose 內同步阻塞）；**不疊 using**（同 block 頭兩個 using，第二個建構拋例外時第一個不會釋放——逐個宣告）；請求路徑不 new/dispose `HttpClient`（socket 耗盡，用注入的工廠／共享 client 能力）。
+有 async 釋放能力的（交易、連線、writer）用 `await using`；Stream 類 Dispose 前先 `FlushAsync`（否則 Dispose 內同步阻塞）；**別在一個運算式裡巢狀建構要釋放的物件**（`new StreamWriter(new FileStream(...))`：外層建構拋例外時內層不會被釋放——各自宣告成獨立的 using）；請求路徑不 new/dispose `HttpClient`（socket 耗盡，用注入的工廠／共享 client 能力）。
 - 依據：[implementing DisposeAsync](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-disposeasync)
 
 ## 三、DI 與背景工作
@@ -89,7 +92,7 @@ singleton 建構子不得持有 scoped/transient 依賴（scoped 被抓住＝變
 不回傳同步列舉的大 `IEnumerable` 給 serializer（OOM／執行緒池飢餓級）；只取當次需要的欄位與列；避免抓全量進記憶體再 LINQ、避免 N+1。
 - 機檢：`不可機檢`
 
-### R12. `ConfigureAwait` 裁定（防 AI 兩邊亂撒）
+### R12. `ConfigureAwait` 裁定
 可重用類庫碼加 `ConfigureAwait(false)`；ASP.NET Core 應用碼無 SynchronizationContext、不強制。一句話：library 加、app 隨意但一致。
 
 ---
@@ -124,4 +127,4 @@ Roslyn 吐 SARIF（`dotnet build -p:ErrorLog=...`）宣告進 `.lumos/lint.json`
 1. 病最重的四條（R1 並行、R2 全鏈、R5 token、R7 背景捕獲）機檢缺席或只蓋一半——本文件＋審查鏡頭是主防線。
 2. R1 有真實反例教訓：看似無依賴的批次若共用 conn/tx，平行化是把 bug 換 bug——並行前先過「資源共享」檢查。
 3. 本文件不裁框架；與專案當地慣例衝突時當地贏，衝突記進該專案圖譜。
-4. 飛輪：每次人工糾正 AI 一個醜寫法，回填一條或一例。
+4. 回填：被人工糾正的寫法先記進該專案圖譜；確認它在多數專案都會再犯（不是單次個案），才走 [[Projects/idioms自維護迴路_計劃]] 的候選流程加進本文件。

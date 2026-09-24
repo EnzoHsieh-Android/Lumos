@@ -47,8 +47,12 @@ unawaited(saveDraft(text).catchError(reportError));
 // ✗ 一百筆就是一百趟來回
 for (final id in ids) { results.add(await fetch(id)); }
 
-// ✓ 並行，但要有上限
-final results = await Future.wait(ids.take(20).map(fetch));
+// ✓ 並行，但要有上限：分批，每批最多 20 個同時飛
+final results = <Item>[];
+for (var i = 0; i < ids.length; i += 20) {
+  final batch = ids.sublist(i, min(i + 20, ids.length));
+  results.addAll(await Future.wait(batch.map(fetch)));
+}
 ```
 - 判斷順序：先確認彼此沒有資料依賴，再確認**下游吃得下**（對方的速率限制、資料庫連線池），才並行。
 - `Future.wait` 沒有上限——一次丟一千個請求會把對方打掛，也會把自己的連線池耗光。要分批或用有上限的池子。
@@ -125,8 +129,9 @@ final items = await compute(parseItems, body);
 // ✗ 欄位型別跟你想的不一樣就直接爆 type cast
 final n = json['count'] as int;
 
-// ✓
-final n = json['count'] is int ? json['count'] as int : int.tryParse('${json['count']}') ?? 0;
+// ✓ 在邊界轉型，轉不了就明確失敗（或回傳解析錯誤給上層決定降級）
+final raw = json['count'];
+final n = raw is int ? raw : int.tryParse('$raw') ?? (throw FormatException('count 不是整數: $raw'));
 ```
 - 後端把 `int` 改成 `String` 是很常見的事。解析層要有明確的預設值與錯誤路徑，不要讓一個欄位型別變動炸掉整個畫面。
 - 機檢：`lint:avoid_dynamic_calls` 能抓一部分「對 dynamic 直接呼叫方法」的寫法。
@@ -146,8 +151,7 @@ try { await sync(); } on TimeoutException catch (e, s) { log.warning('同步逾�
 - 接住例外的三個正當理由：**換成使用者看得懂的訊息**、**降級成可用狀態**、**記錄後重新丟出**。都不是的話就別接。
 - 只丟 `Error` 的子類或自訂例外，不要 `throw '字串'`（`lint:only_throw_errors`）。
 
-### R14. 正式版不要用 print `lint:avoid_print`
-- `print` 在正式版仍會執行，而且可能把使用者資料寫進系統日誌。用有等級的 logger，並且確認正式版的等級設定。
+### R14. 正式版用有等級的 logger，不用 print `lint:avoid_print`
 
 ---
 
@@ -187,8 +191,7 @@ ListView.builder(itemCount: items.length, itemBuilder: (_, i) => buildRow(items[
 - 一張 4000×3000 的圖顯示在 100×100 的格子裡，記憶體裡仍然是全尺寸。`Image.network`／`Image.asset` 要給 `cacheWidth`／`cacheHeight`。
 - 這是清單捲動卡頓與記憶體爆掉最常見的單一原因。
 
-### R19. 版面不要用多餘的容器 `lint:avoid_unnecessary_containers` `lint:sized_box_for_whitespace`
-- 只是為了留白的 `Container` 改用 `SizedBox`（它是 const 的）。多餘的一層容器每次重建都要量一次。
+### R19. 留白用 `SizedBox`，不包多餘的 `Container` `lint:avoid_unnecessary_containers` `lint:sized_box_for_whitespace`
 
 ---
 

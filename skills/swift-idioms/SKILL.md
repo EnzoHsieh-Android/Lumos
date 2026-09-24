@@ -80,7 +80,7 @@ actor Cache {
 - 依據：[SE-0306 Actors — Reentrancy](https://github.com/apple/swift-evolution/blob/main/proposals/0306-actors.md#actor-reentrancy)
 
 ### R6. `@MainActor` 只做 UI；解碼／IO／大計算離開主執行緒 ⚠ 不可機檢
-- `@MainActor` 類別（ViewModel 常見）裡的 `await` 之後的重活還是在主執行緒；重活包成 `nonisolated` 函式或丟給非主 actor／`Task.detached` 再回來。
+- `@MainActor` 類別（ViewModel 常見）裡的 `await` 之後的重活還是在主執行緒；重活標 `@concurrent`（Swift 6.2 起；專案開了 NonisolatedNonsendingByDefault／Approachable Concurrency 時，單純 `nonisolated async` 會留在呼叫者的 actor，不會離開主執行緒），或丟給非主 actor 再回來。
 - 機檢：`Instruments`（Hangs、Time Profiler）；review 先問。
 - 依據：[WWDC — Analyze hangs with Instruments](https://developer.apple.com/videos/play/wwdc2023/10248/)
 
@@ -101,7 +101,7 @@ timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _
 
 ### R8. 值語意優先：`struct` ＋ `let`；`class` 只在需要身份或共享可變狀態時
 - 資料模型、UI state、API 回應一律 struct（Sendable 免費得到，跨 actor 不用想）。需要引用語意的（快取、連線、協調器）才用 class，並明確標 `final` 與隔離。
-- 機檢：`SwiftLint:final_class`（opt-in 版本名依版本異動，查當前 rule 清單）。
+- 機檢：`自訂`（SwiftLint 有沒有對應的現成規則未核對；接入時用 `swiftlint rules` 查過再填名字）。
 
 ---
 
@@ -136,7 +136,7 @@ var body: some View { List(vm.sortedItems) { Text(Self.f.string(from: $0.date)) 
 ## 四、錯誤、可選、邊界
 
 ### R12. 非測試碼禁止 `!` 強制解包、`try!`、`as!`
-- 這三個是「我保證不會 nil／不會 throw」的宣示，而 AI 最常在**不保證**的地方寫它。用 `guard let`／`if let`／`try?`＋明確錯誤路徑。
+- 這三個是「我保證不會 nil／不會 throw」的宣示，只寫在真的能保證的地方；其他用 `guard let`／`if let`／`try?`＋明確錯誤路徑。
 - 機檢：`SwiftLint:force_unwrapping`（**opt-in**）、`SwiftLint:force_try`、`SwiftLint:force_cast`（後兩者預設開）、`SwiftLint:implicitly_unwrapped_optional`（opt-in）。
 
 ### R13. 錯誤要有型別邊界，`catch { }` 不准吞

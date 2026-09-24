@@ -59,7 +59,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **測試層軟提醒（diff 命中宣告棧→提醒該跑的測試層）** | `python3 scripts/lumos test-layers --diff <range> [--json]` — 恆 rc0 advisory;讀 .lumos/test-layers.json,無宣告靜默 |
 | **lint 宣告健康檢查（宣告了跑不動的 linter 抓出來）** | `python3 scripts/lumos lint-check [--repo R] [--smoke]` — 靜態格式校驗+--smoke 真跑冒煙;rc 0健康/1有問題/2非JSON |
 | 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/rot/governance-log;本機可見性 |
-| **設計 spec 進實作前打磨**（對抗審計 loop 到收斂;canary 協議 2026-08-14 已停用） | 調用 **`lumos-design-loop`** skill;原語 `lumos canary record --loop/--severity/--findings` + `lumos loop status <id> --need 2 --gate --spec <md> --repo <root>`(證據閘:K-streak ∧ 引用座標 refcheck ∧ 發現枯竭)。收斂另有三模式:`--gate --panel`(不吃 --need)/`--light`/`--gate --spec --settle <清單.json>`(結清,互斥群 rc2);輔助原語 `loop next`(settle 不支援)/`loop compress`/`loop verify-progress`——詳 design-loop skill |
+| **設計 spec 進實作前打磨**（對抗審計 loop 到收斂;canary 協議 2026-08-14 已停用） | 調用 **`lumos-design-loop`** skill;收斂閘=`lumos loop status <編號> --disposal --spec <計劃> --repo <根>`,旗標與其他原語見 `commands/05-設計審查迴圈.md` |
 | 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `python3 scripts/lumos doctor [--ci]` |
 | 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |
 | 全 vault 掃被推翻決策 | `python3 scripts/lumos decisions --superseded` |
@@ -77,7 +77,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **全文搜尋** | `python3 scripts/lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
 | **spec 指涉宣稱機械核對(vault-free)** | `lumos refcheck <md檔> [--repo <root>] [--json]` — 抽 inline-code 檔路徑/行號、核對存在性/行號範圍、輸出證據 manifest(含行內容摘錄);design-loop 審計前先跑,存在性查證不靠 LLM。rc:全 ok=0/有 missing 或超界=1/參數錯=2 |
 | **實務隱患掃描(vault-free，三模式)** | `lumos pitfalls <md>` — 輸出提問清單(spec 潛在隱患);`lumos pitfalls <md> --check` — 缺「## 實務隱患」節 rc 1(逼補節);`lumos pitfalls --diff <merge-base>..HEAD` — 代碼變更風險 manifest + 尾行 `tier: high\|standard`(`tier: high` → 調用 `lumos-code-loop` 做對抗代碼審)。**專案配 `.lumos/lint.json`(一棧一組指令、各輸出 SARIF)則 `--diff` 自動吃社群 linter**:偵測 diff 涉及棧→跑 lint→解析合併 SARIF→過濾到 diff 觸及行→併進 manifest(claim 帶 `source:"lint:<driver>"`);無宣告則 regex-only 分毫不變。lumos 只解 SARIF、不內建棧規則。`--no-lint`:`--diff` 只跑快的 regex 層(不跑專案 lint 指令)。**pre-push hook 單點把關(blocking)**(2026-07-06 ADR:撤除每回合 Stop nag——太擾民,push 才是把關時點):push 前跑 `--diff --no-lint`,tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**;提示三路(跑 lumos-code-loop / `lumos code-loop skip --note` / `git push --no-verify`);tier≠high 不誤傷 |
-| **code-loop 收斂留痕(vault-free;留痕=逐筆 append 的持久紀錄檔,pre-push 讀它判放行)** | `lumos code-loop pass --note "<收斂理由>"` — 寫 `governance/code-loop/<branch>.json`({head_sha,status:"passed",note,ts}),綁當前 HEAD sha;`lumos code-loop skip --note "<理由>"` — 同,status="skipped"(假陽性逃生閥,繞行也留痕);`lumos code-loop check [--json] [--repo <root>]` — 判定 tier=high∧無有效 pass/skip(HEAD sha 相符)→ blocked(rc1),否則 rc0;`--json` 輸出結構化 verdict。**tier=high 分支 loop status 收斂後必須執行 `lumos code-loop pass` 再 push,否則 pre-push 硬擋** |
+| **code-loop 收斂留痕(vault-free;留痕=逐筆 append 的持久紀錄檔,pre-push 讀它判放行)** | `lumos code-loop pass --note "<收斂理由>"` / `lumos code-loop skip --note "<理由>"`(留痕綁當下版本,寫 `governance/code-loop/<branch>.json`)/ `lumos code-loop check`——check 的判定項目與順序見 `commands/06-代碼審與推送.md`。**tier=high 分支收斂後必須 `lumos code-loop pass` 再 push,否則 pre-push 硬擋** |
 | **受波及合約測試(vault-free;2026-09-07 從 code-loop check 裡拆出來)** | `lumos bound-tests --diff <範圍> [--advisory] [--from-json <已算好的波及結果>] [--json]` — 跑「這次改動碰到的硬合約」綁的那些測試,回 green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕**——這是拆出來的整個理由:以前紅了會讓 `code-loop check` 回 rc1,而 pre-push 把所有 rc1 一律解讀成「還沒審查」,叫人去跑 `code-loop pass`,而補留痕修不好一支紅掉的測試。★人裁 2026-09-07★:低風險推送也跑,紅了印出來、記帳,但 `--advisory` 不擋;高風險照舊擋。`--from-json` 吃 pre-push 算好的那份波及結果(一次推送只算一次)。帳的類別:green / red-advisory / red-blocked / skipped-flag / skipped-env / no-config / no-pins / no-bound / range-unavailable / whole-suite-deferred |
 | **錨點完整性(vault-free)** | `lumos anchor verify [--repo] [--json]`/`lumos anchor approve --note "<理由>"` — 測試 runner+把關 hooks 的 sha256 baseline(`governance/anchor-baseline.json`);verify 不符 rc=1(pre-push/自主 loop 入口擋)、approve=改錨點合法路徑(治理帳留痕)。改測試 runner/hooks 後記得 approve |
 | **派工鏡頭(vault-free)** | `lumos dispatch-lens <base>..<head> [--json]` — 代碼審派工詞的固定席(Claude 側 hook 看 `LUMOS-IMPACT:` 自動叫;派工前先手敲一次暖 20 分快取,大範圍 45 秒會超時、超時會附一行說明);`lumos dispatch-lens --spec <計劃.md>` — 設計審用,從計劃提到的程式檔與直接連結節點算(hook 看 `LUMOS-SPEC:`;2026-09-05);`--arm/--claim/--disarm/--status` Codex 編排用 |
@@ -131,10 +131,8 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 > body 段落/checkbox/表格 → 用 **Edit**(非 lumos T1 範圍);版本歷史 → git。
 > 對抗審計 loop(`pitfalls`/`canary`/`loop`/`code-loop`/`refcheck`/`impact`/`cochange`/`fold-check` 等)→ 見 `lumos-design-loop`、`lumos-code-loop` skill。
 
-### 降級模式（lumos 與 obsidian 都不可用時）
-以下情況才允許 Read/Edit/Write 直接碰 .md：
-- `scripts/lumos` 不存在 **且** Obsidian App 未執行 / vault 未註冊 / CLI 報錯
-- lumos 無法精準替換特定內容時（如修改表格某一行），可用 Edit 輔助（這類 body 表格編輯本就不是 lumos T1 範圍）
+### 降級模式（lumos 不可用時）
+開頭欄位平常只准走 lumos 指令；`scripts/lumos` 不存在或報錯時才可以直接改，改完用〈Frontmatter 鐵則〉那條 `ruby -ryaml` 巡檢指令驗一次。正文段落任何時候都用 Edit。
 
 ### 實戰範例（lumos 為主；body 編輯走 Edit）
 
@@ -391,7 +389,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 
 ### 先分「程式碼推不推得出來」（2026-09-21 起）
 
-**分類規則的唯一來源是紀律範本** `scripts/templates/graph-discipline.md` 的〈寫筆記時〉一節，它會被注入每個專案的 CLAUDE.md，所以動筆時本來就在眼前；`SKILL.md` 放的是它的逐字複本（`t_note_convention_synced_to_skill` 比對整段一字不差）。**這一節不重寫那張表**，只補範本放不下的東西：底下兩張符號表哪些前綴屬於哪一類、以及寫法範例。要改規則本身，改範本，不要改這裡。
+**分類規則的唯一來源是紀律範本** `scripts/templates/graph-discipline.md` 的〈寫筆記時〉一節，它會被注入每個專案的 CLAUDE.md，所以動筆時本來就在眼前；skill 裡不放複本（`t_note_convention_single_source` 擋第二份定義）。**這一節不重寫那張表**，只補範本放不下的東西：底下兩張符號表哪些前綴屬於哪一類、以及寫法範例。要改規則本身，改範本，不要改這裡。
 
 判準一句話：**程式碼推不推得出來，不是重不重要**。程式碼查得到的現況描述別抄，抄了就會過期。
 
@@ -424,7 +422,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 | `★DEBT★` | KEY 行前綴：已知偶然行為，可改不算 breaking | `KEY:★DEBT★ RetentionDays=7寫死非設定` |
 
 不同筆記類型的重點：
-- **Systems**: FLOW + KEY + DEP + TEST（流程、關鍵欄位、依賴、測試）
+- **Systems**: WHY + RULE + PITFALL 為主；FLOW/DEP 只寫指針，現況描述照〈寫筆記時〉標「以程式碼為準」
 - **Issues**: FLAG + DECISION + KEY（標記、決策、關鍵發現）
 - **Verification**: TEST + VERIFY（測試結果、驗證紀錄）
 
@@ -433,7 +431,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 
 ### summary block(Systems/Issues 必有;掃一眼掌握全貌)
 
-每行一個前綴。Systems 重 `FLOW`+`KEY`+`DEP`+`TEST`;Issues 重 `FLAG`+`DECISION`+`KEY`;Verification 重 `TEST`+`VERIFY`。
+每行一個前綴。Systems 以 `WHY`/`RULE`/`PITFALL` 為主,`FLOW`/`DEP` 只寫指針;Issues 重 `FLAG`+`DECISION` 並照四段寫;Verification 重 `TEST`+`VERIFY`。
 
 | 前綴 | 用途 | 前綴 | 用途 |
 |---|---|---|---|
@@ -901,15 +899,9 @@ python3 scripts/lumos context Systems/OrderService --brief
 
 要測試某個功能前，**優先順序**：
 
-1. **先讀對應 Systems 筆記的 `verified_by`**（最快，O(1) frontmatter 讀取）：
-   ```bash
-   obsidian vault="{vault}" property:read path="Systems/相關系統.md" name="verified_by"
-   ```
-2. **若 Systems 無 `verified_by` 或不確定完整性，再 fallback search**：
-   ```bash
-   obsidian vault="{vault}" search query="功能關鍵字" path="Verification"
-   ```
-3. **同步檢查**：跑「verified_by 自動同步檢查 eval」確認 Systems 的 verified_by 是否完整（見上方）
+1. **先讀對應 Systems 筆記的 `verified_by`**（最快）：`lumos context Systems/<相關系統> --brief`
+2. **若 Systems 無 `verified_by` 或不確定完整性，再搜**：`lumos search <功能關鍵字> --path Verification`
+3. **同步檢查**：`lumos doctor` 會列出 verified_by 漏掛的；補掛用 `lumos sync-verified-by --apply`
 
 判斷準則：
 - **有，`status: pass` 且 `valid_under` 條件仍成立** → 照著紀錄的測試項目跑，更新 `date` / `commit`
@@ -926,9 +918,7 @@ python3 scripts/lumos context Systems/OrderService --brief
 
 每完成一個功能並測試通過後，在 `Verification/` 建立驗證紀錄。**`valid_under` 與 `revalidate_when` 是必填欄位**（讓未來的人/AI 知道這份驗證在什麼條件下還算數）：
 
-```bash
-obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" content="---\ntype: verification\nstatus: pass\nfeature: {功能描述}\ncommit: {commit hash}\ndate: {日期}\nvalid_under:\n  - \"DB schema v1.0.20（Member 表結構未變）\"\n  - \"並發 ≤ 1000 RPS\"\n  - \"三竹 SMS API v2\"\n  - \"Android 14 + 三星 One UI 6.0（若涉及行動端）\"\nrevalidate_when:\n  - \"Member 表結構變更（加欄位/改型別）\"\n  - \"RPS 超過 1200（30 櫃位尖峰再 2x）\"\n  - \"三竹 API 改版\"\n  - \"Android 16 GA\"\ntags:\n  - type/verification\n  - status/pass\n---\n# 驗證：{功能名稱}\n\n## 變更範圍\n- ...\n\n## 測試項目\n\n### 1. {測試場景}\n| 步驟 | 預期 | 結果 |\n|------|------|------|\n| ... | ... | ✅/❌ |\n\n## 測試方式\n{如何測試：API 呼叫、瀏覽器、腳本等}\n\n## 相關模組\n- [[Systems/xxx]]"
-```
+建檔用 `lumos new verification <日期>_<功能名稱> --plan <計劃> --systems <節點>`（自動雙向連好）；建好後用 Edit 填 `valid_under` / `revalidate_when` 與正文（變更範圍、測試項目表、測試方式）。
 
 **命名規則**：`{日期}_{功能簡稱}`，如 `2026-04-01_點數圈存顯示`
 
@@ -1020,12 +1010,11 @@ python3 scripts/lumos doctor
 **做法**：用 Agent tool 派出 subagent，`model: sonnet`(Codex 下用 spawn_agent 點名席位;★席位 TOML 的 model 欄位 2026-09-08 實測有效,舊的「不能逐席指定模型」已作廢★——散文審 `lumos_reviewer`(medium)、程式碼審 `lumos_reviewer_code`(xhigh)、高風險 `lumos_reviewer_max`(xhigh;2026-09-11 起三席模型都是 gpt-5.6-sol))，prompt 模板：
 
 ```
-你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；優先用 obsidian CLI，
-帶 leading vault="{vault-name}"，查詢指令見 search/backlinks/property:read/eval），
+你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；用 lumos search / context / show / backlinks / decisions 查），
 禁止讀程式碼、git log、其他文件——模擬「只有圖譜」的新 session。
 
 請基於圖譜還原以下脈絡，據實回答，圖譜裡找不到的就明說「圖譜未記載」不要腦補：
-1. {本次更新涉及的模組} 的現況：核心流程、關鍵欄位、現行有效的決策
+1. {本次更新涉及的模組} 當初為什麼這樣做、程式碼看不出的限制與踩過的坑、現行有效的決策
 2. 最近一次對 {模組} 的變更做了什麼、為什麼做、驗證狀態如何
 3. 有哪些進行中(doing)/被阻擋(blocked)的工作與未決問題
 4. 哪些決策已被推翻、被什麼取代
@@ -1043,9 +1032,9 @@ python3 scripts/lumos doctor
 | agent 自己回報「模糊/矛盾」| ⚠️ 視同缺漏 | 逐條釐清補寫 |
 
 **注意**：
-- 審計 agent 與主對話相同，優先用 obsidian CLI 查詢（圖譜感知能力：backlinks/property:read/eval）；CLI 不可用時才降級 Read/Grep（唯讀豁免）
+- 審計 agent 用 lumos 查（search / context / backlinks / decisions）；lumos 不可用時才用 Read/Grep 唯讀
 - 主對話**不可把自己的脈絡餵給 agent**（污染測試），prompt 只給「審哪些模組」的範圍
-- 比對時注意 agent 還原不出來的東西，到底是「圖譜缺漏」還是「本來就不該進圖譜」（如一次性對話細節）——後者不用補
+- 比對時注意 agent 還原不出來的東西，到底是「圖譜缺漏」還是「本來就不該進圖譜」（如一次性對話細節、程式碼查得到的現況）——後者不用補
 
 **留痕（2026-06-23）**：審過且補到一致後，`lumos self-audit <node> [--model sonnet] [--date YYYY-MM-DD]` 蓋 `self_audit: <model>/<date>` 戳記到該節點 frontmatter（純量、走 T1 寫入）。語意：「這整篇被無脈絡乾淨 agent 還原審過」——**節點級**戳記，有別於 ★INVARIANT★ 軸的行級 `[audit:]`（驗單條合約合法性），兩軸獨立。**工具只記留痕，不證明審計真乾淨**（同 guard audit 的 maker/checker 誠實前提）。
 - **doctor Check S（軟提醒、不擋）**：`type=system` 節點**無 `self_audit`** → 列「從未跑 L4」；`self_audit` 日期 **< `updated`** → 列「節點更新後未重審（過期）」。用 `warn_soft`、不計 issues、`doctor --ci` 仍 exit 0，是摩擦地板不是 gate（真實性機器驗不了）。
@@ -1114,11 +1103,7 @@ python3 scripts/lumos doctor
 ## 同步規則（何時更新知識圖譜）
 
 ### 程式碼變更後（必做）
-更新對應 Systems 筆記：
-- 串接狀態（mock → 已串接）
-- 新增/修改的檔案、API 端點
-- DB 表結構變更
-- 待辦完成打勾（`obsidian task ... done`）
+寫進改到那支檔的家（`lumos impact --file <檔>` 找）：這次為什麼這樣改（`WHY:`）、新出現的程式看不到的限制（`RULE:`）、踩到的坑（`PITFALL:`）；程式碼查得到的檔案、端點、表結構不要抄。計劃裡完成的項目用 Edit 打勾。
 
 ### 更新筆記後（必做）
 `lumos backlinks <剛改的節點>` 看誰引用它 → `lumos search <相關關鍵字>` 逐一確認是否過時。
@@ -1236,24 +1221,18 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 
 ### 注意事項
 
-1. **create 不帶 .md**：`name=` / `path=` 參數不帶副檔名，CLI 自動加 `.md`
-2. **其他命令帶 .md**：`property:set`、`read`、`append`、`backlinks` 等用完整路徑含 `.md`
-3. **file= vs path=**：`file=` 用 wikilink 解析（不需完整路徑），`path=` 要完整路徑
-4. **內容換行**：用 `\n` 表示換行，`\t` 表示 tab。**Mermaid 區塊內換行用 `<br/>` 不是 `\n`**
-5. **Wikilink**：筆記間互連用 `[[筆記名]]` 或 `[[資料夾/筆記名]]`
-6. **不要覆寫**：優先用 `append` / Edit，除非明確要重建
-7. **更新 updated**：每次修改筆記後，更新 `updated` property
-8. **中文檔名**：可直接使用
-9. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
-10. **衝突處理**：知識圖譜 vs Memory vs Session 有出入時，向使用者確認
-11. **vault 動態取得**：不要硬寫 vault 名稱，每次用 `obsidian vaults` 確認
-12. **複製輸出**：任何命令加 `--copy` 可複製結果到剪貼簿
-13. **Obsidian 必須執行中**：CLI 需要連接正在運行的 Obsidian App
-14. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
-15. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`
-16. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
-17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
-18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+1. **Mermaid 換行**：Mermaid 區塊內換行用 `<br/>` 不是 `\n`
+2. **Wikilink**：筆記間互連用 `[[筆記名]]` 或 `[[資料夾/筆記名]]`
+3. **不要覆寫**：優先用 `append` / Edit，除非明確要重建
+4. **更新 updated**：每次修改筆記後，更新 `updated` property
+5. **中文檔名**：可直接使用
+6. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
+7. **衝突處理**：圖譜、記憶、程式碼對不上時，照 CLAUDE.md〈怎麼用〉第 3 條裁；記憶不能當依據
+8. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
+9. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`
+10. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
+11. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+12. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
 
 ### 指令怎麼找(別憑記憶,開索引)
 
@@ -1276,8 +1255,6 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 ---
 
 ## 歷史與停用(只供回放舊帳判讀,不是現行規則)
-
-# 寫入規範與紀律全文(2026-08-22 從 SKILL.md 頭版搬入;頭版只留一頁手冊,本章是權威展開)
 
 ### 對抗設計審計的 canary（test-the-tester，2026-06-19）
 

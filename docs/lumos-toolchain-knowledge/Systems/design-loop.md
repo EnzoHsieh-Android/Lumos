@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-29
+updated: 2026-09-25
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
@@ -116,7 +116,9 @@ decisions:
     context: 承 d6(鏡頭措辭升級)再前一步;單源=[[Projects/席位人格化_計劃]] d1(Enzo 裁 A+C)。世界背書:對抗式審查生效三條件 (a)席位夠不一樣 (b)批評扣事實 (c)裁判獎勵可查證——(b)(c) 早有,(a) 原本只做到換鏡頭文字
     why_chosen: 零額外 token、與禁互辯/抑噪/前置加重一律拒全相容;只取差異化不取互相攻擊到共識(諂媚從眾 85.5%、oracle gap 32.3pp、第三輪 23.9% 一致錯誤)。實作用單一新節 §7.7 + 三處指標,不改動每個模板(改動面最小、漂移面最小)
     decided: 2026-08-29
-    valid: true
+    valid: false
+    superseded_by: Systems/design-loop.md#d10
+    ended: 2026-09-25
   - content: 圖譜鏡頭擴到每一席(2026-08-29):code-loop 派工時,impact 的固定席(帶硬合約或出過事故的節點)★逐條貼進每一席派工詞★、固定席必答;不再只給架構對齊席,也不採「給 manifest 路徑讓審查員自己讀」。派工詞附兩個填寫雷:①來源是 governance/review-reports/** 凍結快照 patch 的節點要剔掉(審計證物、故意埋 bug,impact 沒排除會頂到滿分)②「還有 N 篇」會少報(非固定席上游已截成 8,真數在 meta.free_total)
     id: d8
     context: "[[Projects/impact鏡頭機械化_計劃]] 兩輪設計審停案後留下的正途:工具層沒有機械強制點(派工在 agent 呼叫裡,無 hook 攔得到),但派工模板層可行——架構對齊席 §7.6 早有一格內插固定席,是今天唯一真在消費圖譜節點的派工路徑;其餘席沒有。實帳:code 迴圈派工單提到 impact 的僅個位數"
@@ -126,6 +128,12 @@ decisions:
   - content: d8 量詞修正(Enzo 2026-09-01 委任裁):code 迴圈固定席以落成核對 capped 節錄為準——上限內貼內容必答、超出列名不必答;證據=爆炸半徑案 M-3 實測固定席 31 篇無上限、規則上線後 0 執行的結構因;design 迴圈維持原樣(pinned 集小)
     id: d9
     decided: 2026-09-01
+    valid: true
+  - content: 席位立場與輸出格式 §7.7 修訂(2026-09-25):多席 panel 每席在鏡頭外加立場+預設姿態照舊(七個鏡頭各一、三條硬性配套照舊);輸出格式拿掉句數上限,改成敘述只寫到讀的人能重現問題為止(哪個輸入、走到哪一段、壞在哪),不准模稜兩可照留(判不準標 ⚠)
+    id: d10
+    context: 單源=[[Projects/席位人格化_計劃]] d2(Enzo 2026-09-25 裁拿掉句數上限);取代本篇 2026-08-29 那條 A+C 落地決策
+    why_chosen: 數字上限與同一份範本「講清楚哪個輸入走到哪一行」的要求互相拉扯;抑噪靠逐字引句、refcheck、不准模稜兩可,不靠句數
+    decided: 2026-09-25
     valid: true
 about_code:
   - scripts/lumos

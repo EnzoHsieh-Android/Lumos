@@ -11,6 +11,9 @@ description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——�
 
 **機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。
 
+> **核對邊界（未核對）**：本文件的規則名、「預設開／關」、版本門檻與規則條數是網搜與官方文件整理，**尚未用本機工具逐條核對**；接入時以該工具當前的規則清單為準，核對後把日期與工具版本補在這裡。
+> REVISIT:2026-10-25 補上核對日期或標明仍未核對。
+
 ---
 
 ## 一、並行與 Flow（本文件存在的理由）
@@ -53,7 +56,7 @@ combine(flowA, flowB) { a, b -> UiState(a, b) }
 - 依據：[sharein-statein 官方文章](https://medium.com/androiddevelopers/things-to-know-about-flows-sharein-and-statein-operators-20e6ccb2bc74)
 
 ### R4. state 更新一律原子 `update { it.copy(...) }`，禁 `.value =` 做讀改寫
-`_state.value = _state.value.copy(...)` 在併發下丟更新——AI 高頻犯，且測試測不出來。
+`_state.value = _state.value.copy(...)` 在併發下丟更新，而且測試測不出來。
 - 機檢：`自訂`
 
 ### R5. `shareIn`/`stateIn` 禁止放在函式回傳裡
@@ -71,7 +74,7 @@ combine(flowA, flowB) { a, b -> UiState(a, b) }
 ## 二、協程紀律
 
 ### R8. suspend 函式必須 main-safe ⚠ 不可機檢，第二重要
-做阻塞／耗時工作的**那個類別自己**負責 `withContext(io)`；呼叫端永遠可以在主執行緒直接呼叫，不准要求呼叫端補 withContext。AI 常反著寫（在呼叫端亂包），一句話記住：**誰阻塞，誰負責**。
+做阻塞／耗時工作的**那個類別自己**負責 `withContext(io)`；呼叫端永遠可以在主執行緒直接呼叫，不准要求呼叫端補 withContext。一句話記住：**誰阻塞，誰負責**。
 - 依據：[Google coroutines best practices](https://developer.android.com/kotlin/coroutines/coroutines-best-practices)
 
 ### R9. Dispatcher 不准硬編碼，必須可注入可替換
@@ -101,11 +104,11 @@ catch (e: IOException) { log(e) }
 ## 三、Compose
 
 ### R13. 收流一律 `collectAsStateWithLifecycle()`
-`collectAsState()` 在 App 退到背景時照樣收集，浪費電和網路——且要跟 R3 的 `WhileSubscribed` 成對才生效。AI 訓練語料舊，極常寫錯這條。
+`collectAsState()` 在 App 退到背景時照樣收集，浪費電和網路——且要跟 R3 的 `WhileSubscribed` 成對才生效。
 - 機檢：`detekt:ForbiddenMethodCall` 配置 `collectAsState`
 
 ### R14. Lazy 清單必給穩定 key
-`items(list, key = { it.id })`——AI 幾乎必漏；症狀是捲動閃跳與整列白白重組，使用者看得到。
+`items(list, key = { it.id })`；少了 key，症狀是捲動閃跳與整列白白重組，使用者看得到。
 - 機檢：`自訂`
 
 ### R15. 重組效能三件套 ⚠ 不可機檢
@@ -123,7 +126,7 @@ data/domain 層：一次性操作＝`suspend fun(): Result`、串流＝非 suspe
 - 機檢：`不可機檢`
 
 ### R18. 越層 import 當 build error 治
-AI 一個世代就能打穿分層（UI 直接 import DAO）。自訂 detekt `ForbiddenImport`／層白名單規則，讓越層直接紅。
+分層一旦只靠紀律守就會被打穿（UI 直接 import DAO）。自訂 detekt `ForbiddenImport`／層白名單規則，讓越層直接紅。
 - 機檢：`自訂`（[完整範例](https://dev.to/wakita181009/an-llm-broke-my-architecture-in-one-generation-i-made-that-a-build-error-1ae0)）
 
 ---
@@ -154,4 +157,4 @@ style:
 1. 最重要的三條（R1 並行、R2 combine、R8 main-safe）恰好都不可機檢——「無依賴」「該不該合成」是語意判斷，這份文件＋審查鏡頭是唯一防線，這正是它存在的理由。
 2. 機檢規則抓形狀不抓意圖：過了 detekt 不代表寫得好。
 3. 本文件不裁框架。發現某條規則與專案當地慣例衝突時：當地慣例贏，但把衝突記進該專案圖譜（可能是當地的技術債，也可能是本文件該修）。
-4. 飛輪：每次人工糾正 AI 一個醜寫法，回來加一條或補一個例——這份文件跟事故語料一樣，是越用越厚的。
+4. 回填：被人工糾正的寫法先記進該專案圖譜；確認它在多數專案都會再犯（不是單次個案），才走 [[Projects/idioms自維護迴路_計劃]] 的候選流程加進本文件。

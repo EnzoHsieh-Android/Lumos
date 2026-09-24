@@ -67,7 +67,7 @@
 ### 提交與推送
 一個功能一個提交，說明用白話：
 - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
-- 標題寫這次改了什麼、使用者看得到的差別；不寫內部代號（第幾輪、幾席、F3、決策編號、提交編號）；內文最多五條白話條列。
+- 標題寫這次改了什麼、使用者看得到的差別；不寫內部代號（第幾輪、幾席、F3、決策編號、提交編號）；內文用白話條列，一條一件事，只寫讀 log 的人需要知道的差別。
 - 程式、圖譜筆記、審查卷證放同一個提交；做到一半的本機提交，推之前壓成一個（同一個工作目錄有別的會談時只加自己的檔，不用 `git add -A`）。
 - 過代碼審的功能多一個帳本提交：留痕綁版本，通過後只准再提交帳本（訊息固定 `chore(lumos): 記錄代碼審通過`）；凍結判定併進功能提交，步驟見 lumos-code-loop。
 
@@ -86,6 +86,6 @@
 本 repo 的規矩與現況**單一來源**如下，本檔只指路、不複製內容（防漂移）：
 
 1. **專案規矩**：讀 `CLAUDE.md`（程式碼為主、圖譜補脈絡、零依賴家規、合約鏈、寫入規範）。
-2. **系統現況**：讀 `docs/lumos-toolchain-knowledge/MOC/index.md`（知識圖譜索引），再按需讀 `Systems/`（機制）、`Projects/`（計劃與決策）、`Verification/`（驗證紀錄）。程式碼是「現在是什麼」的最終依據，圖譜補的是程式碼產生不出的脈絡；兩邊衝突時以程式碼為準，只有決策紀錄、合約行（★INVARIANT★）、Issues、Verification 這四種有結構有出處的內容才能挑戰程式碼。
-3. **CLI**：`python3 scripts/lumos --help`（75 個頂層命令；讀圖譜用 `context`/`search`/`contracts`/`query`）。
+2. **系統現況**：讀 `docs/lumos-toolchain-knowledge/MOC/index.md`（知識圖譜索引），再按需讀 `Systems/`（機制）、`Projects/`（計劃與決策）、`Verification/`（驗證紀錄）。筆記跟程式碼衝突時怎麼裁，照上方紀律區塊「怎麼用」第 3 條，這裡不另寫。
+3. **CLI**：`python3 scripts/lumos --help`（每個子命令附一句什麼時候用；讀圖譜用 `context`/`search`/`contracts`/`query`）。
 4. **看你被派來做什麼**:被派成唯讀審計員/辯方(`codex exec --sandbox read-only`)時,**不要**改 `docs/*-knowledge/` 下的檔,發現問題用報告回覆;被當協作者開在這個 repo 裡時,照 `CLAUDE.md`(與下方紀律區塊)的規矩走——改了會影響行為/決策/驗證的 code,當次就把脈絡寫回圖譜。

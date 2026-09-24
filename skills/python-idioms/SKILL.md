@@ -125,15 +125,7 @@ except KeyError as e:
 - 能力措辭：`loop.add_signal_handler`（Unix）或框架提供的 lifespan 掛鉤；重啟交給外部 supervisor（systemd、launchd、容器平台）。
 - library 碼不准 `sys.exit()`，只有入口檔可以。
 
-### R9. 日誌用 logging，不用 print；log 參數用延遲格式化
-```python
-# ✗
-print(f"filled {qty} @ {price}")
-log.info(f"filled {qty} @ {price}")     # 就算這個等級沒開也照樣先組字串
-
-# ✓
-log.info("filled %s @ %s", qty, price)
-```
+### R9. 日誌用 logging 不用 print；log 參數用延遲格式化（`log.info("%s", x)`，不用 f-string）
 - 機檢：`ruff:T201`（print）、`ruff:G004`（logging 用 f-string）。
 
 ---
@@ -168,15 +160,7 @@ t0 = time.monotonic()              # 算逾時、間隔用這個；系統時間�
 ```
 - 機檢：`ruff:DTZ005`（now 不帶 tz）、`ruff:DTZ003`（utcnow）。
 
-### R12. 不准可變預設參數；閉包別抓迴圈變數
-```python
-# ✗ 所有呼叫共用同一個 list
-def add(order, book=[]): ...
-# ✓
-def add(order, book=None):
-    book = [] if book is None else book
-```
-- 類別層可變屬性（`items: list = []`）同理，所有實例共用。
+### R12. 不准可變預設參數（含類別層可變屬性）；閉包別抓迴圈變數
 - 機檢：`ruff:B006`（可變預設參數）、`ruff:RUF012`（類別層可變預設）、`ruff:B023`（閉包抓迴圈變數）。
 
 ---

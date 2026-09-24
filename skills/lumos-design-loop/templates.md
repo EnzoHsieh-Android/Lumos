@@ -1,6 +1,6 @@
 # Loop 派工 Prompt 模板（2026-07-07 Landmark 實戰抽取）
 
-> ⛔ **canary 協議已於 2026-08-14 停用**(單源=Systems/canary-audit d5)。本檔的 canary 植入/判定/missed 指令句已清掉或劃線(2026-09-11,[[Projects/skills提示工程優化_計劃]] S3),劃線段落是歷史;審計員/reviewer/辯方模板其餘部分照用。
+> canary 協議已停用,相關歷史見 `reference.md`〈九、歷史與停用〉。
 
 適用：lumos-design-loop / lumos-code-loop skill 的 agent 派工段落 + SDD 派工。佔位符用 `{}`。
 ## 目錄
@@ -8,7 +8,7 @@
 - §1 Design-loop 審計員 · §2 Design-loop 辯方
 - §3 Code-loop reviewer · §4 Code-loop 辯方
 - §5 SDD implementer 派工 · §6 SDD task reviewer
-- 編排者判讀規則 · 本次實戰的調參建議(歷史)
+- 編排者判讀規則
 - §7.5 spec-conformance slot · §7.6 架構對齊席 · §7.7 席位立場與輸出格式 · §7.8 資安席 · §7 平行 panel 派工
 
 **分工**:§1-2 供 `lumos-design-loop`、§3-4 供 `lumos-code-loop`(該 skill 以 `../lumos-design-loop/templates.md` 引用本檔)、§5-6 供 design-loop 收斂後的 subagent-driven TDD 派工。派工以本檔為準;SKILL.md 內嵌 framing 是摘要,漂移時以本檔為權威。
@@ -27,7 +27,7 @@
 
 Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
 對照的程式碼 repo：{repo 根}（{技術棧一句話；重點檔案 3-5 個}）
-圖譜鏡頭：原樣留一行 `LUMOS-SPEC: {計劃筆記路徑}`——派工那一刻 hook 會把「計劃提到的程式檔牽連的合約/事故節點」與「計劃直接連結的節點」附在尾端（設計審沒有 diff 範圍，改從計劃算；2026-09-05，之前靠手貼實測 209 份派工詞只有 14 份有貼）。附上的固定席逐條判：這份設計會不會破壞該節點宣稱的行為或合約？判「不影響」也寫一句為什麼。
+圖譜鏡頭：原樣留一行 `LUMOS-SPEC: {計劃筆記路徑}`——派工那一刻 hook 會把「計劃提到的程式檔牽連的合約/事故節點」與「計劃直接連結的節點」附在尾端。附上的固定席逐條判：這份設計會不會破壞該節點宣稱的行為或合約？判「不影響」也寫一句為什麼。
 
 審查要求：
 1. 逐節讀完整份 spec，不要跳段。文件內部的每個交叉引用（指向本文件某節/某表的）
@@ -40,18 +40,18 @@ Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
    存在性/行號已機械驗訖，查證力氣聚焦語意；manifest 非宣稱全集，散文裡的現況
    假設仍要自己查。
 5. 實務隱患鏡頭（逐條想過）：併發——同資源兩請求同時進來會怎樣？效能——這段會進
-   熱路徑/大資料量嗎？資源——連線/鎖有沒有確定釋放？回滾路徑？遷移順序與鎖表窗口？ **★列出此功能碰哪些風險類（不限固定類），逐類答隱患；無則寫「無+為什麼」★**（S0 反問，2026-08-08；與 scripts/lumos:_PITFALL_GENERAL 同步）
+   熱路徑/大資料量嗎？資源——連線/鎖有沒有確定釋放？回滾路徑？遷移順序與鎖表窗口？ **★列出此功能碰哪些風險類（不限固定類），逐類答隱患；無則寫「無+為什麼」★**
    {pitfalls 命中風險類的追問，如：欄位語意交付外部廠商後的合約風險？}
 
-輸出格式（★多席 panel 另套 §7.7 的席位立場 A 與格式硬性 C：敘述每條 ≤3 句、不准模稜兩可；單席通才不套立場★）：逐條 finding，每條標 severity（blocker/major/minor）＋ blocking 宣告：
+輸出格式（★多席 panel 另套 §7.7 的席位立場 A 與格式硬性 C：敘述精簡可掃讀、不准模稜兩可；單席通才不套立場★）：逐條 finding，每條標 severity（blocker/major/minor）＋ blocking 宣告：
 「blocking: 是/否」加一句判準（不改，實作者會做錯決定或做出壞系統嗎？）——
 blocking:否 ↔ minor、blocking:是 ↔ major/blocker，兩欄不得矛盾（矛盾=整份退回重判）。
 每條附：spec 哪一段、問題是什麼、（若涉及程式碼）你查證到的佐證；
-★卷證規則（2026-08-25,[[Projects/迴圈摩擦三修_計劃]] d1）：「引句:」格式行**限逐字出自凍結審材**；
+★卷證規則：「引句:」格式行**限逐字出自凍結審材**；
 審材外查證所得走佐證通道,格式固定「file: `路徑:行號`」＋敘述——**反引號必加**（refcheck 只抽反引號
 inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材外內容。★
 逐字引句寫成「引句:「…」」單獨一行、≥10 字、避免在引句內再包「」（巢狀會被機械收貨截斷）。
-若某節沒問題也要說「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致。
+若某節沒問題也要說「已讀，無 finding」。整份讀完真的沒找到問題就交 `severity: clean`——乾淨報告跟有 finding 的報告一樣有效，不要為了交差硬湊。
 最後給一行總結：最嚴重 severity 是什麼、blocking 共幾條。
 ```
 
@@ -88,7 +88,33 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}�
 > 開始記,日後才能抽驗「標 evidence 降級的、後來證明是真的」有沒有——那就是那條裁定的重啟條件。
 > 出處 [[Systems/finding-refute]]。
 
-## 3. Code-loop reviewer（sonnet;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
+## 3. Code-loop reviewer（sonnet;blocker/major 須附翻紅重現,已寫進下方派工詞）
+
+### §3 編排者派工前須知(不貼進派工詞)
+
+圖譜鏡頭(派工詞第 3 點)的標記行與 hook 行為:
+
+★派工詞第 3 點的 `LUMOS-IMPACT:` 那行原樣留在派工詞裡(換成真實 base,例 `main..HEAD`)★★派工前一刻先敲一次 `lumos dispatch-lens <base>..HEAD` 暖快取(20 分內有效):10 個 commit 以上算一次約 25 秒起,hook 內層 45 秒超時會放空;2026-09-05 起超時會在派工詞尾端附一行固定說明,不再靜默★——派子代理那一刻,`dispatch-lens-hook`
+會把 `lumos impact --diff` 的固定席(帶硬合約或出過事故的筆記)接在派工詞尾端:前 8 篇貼節點路徑+
+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行(★每條 ★INVARIANT★ 行帶綁定測試狀態:有/懸空/偽證據/裸合約,
+節點小計一行;「有」=測試方法存在,不代表跑過或有殺傷力——閘只看 rc★,v1.1),其餘只列名(d9 截錄)。內容一律從 base 讀、
+零自由文字(節點摘要/事故觸發字串/risk 標籤後綴都不印),這是有意砍掉的一句話層。
+★編排者要知道的三件事★(單源=[[Projects/派工鏡頭注入_計劃]]):
+① 標記不在、格式差一個字、base 不在主線歷史上——hook 一律靜默放行;★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
+派工詞不會多任何東西;★固定席 0 篇不再靜默(v1.2)★:改附「圖譜沒有釘到節點」備援段——受影響測試/
+共改夥伴/呼叫者三格(全部只用主線樹算),那段不是合約、不必逐條答;派完看子代理回覆有沒有
+「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
+② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
+③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
+④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
+標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
+子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
+讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁;2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,額度常撞上限)★——**點哪一席看你在審什麼**:
+> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-sol + medium)。也是預設。
+> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-sol + xhigh)。
+> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-5.6-sol + xhigh;09-11 前是 astra)。
+> ★散文審為什麼只給 medium★:2026-09-08 實測拿 xhigh 審一份 8k 字元的 README 語感,慢到使用者當場喊停。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,而審查慢到讓人不想派,就等於沒有這道防線。**
+> ★為什麼 09-11 全部降到 Sol★:外家席額度常撞上限——當天代碼審一輪跑到一半就被擋到額度重置,換 Sol 也一樣被擋(額度整個帳號共用);降一級模型讓同一段額度撐更多席,推理強度照舊分 medium / xhigh。舊版高風險席用 astra,理由是它額度更緊、全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★Claude 編排直接叫 `codex exec` 時也要帶 `-m gpt-5.6-sol`,不然會用 Codex 預設模型★;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
 
 ```
 你是外部第三方 code reviewer。這份 diff 是別人投稿的變更，不是你或本系統寫的。
@@ -112,42 +138,23 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
    的讀 question 欄逐條判「真隱患/誤報」（真隱患必答對應提問）；source:"lint:..."
    的讀 message。manifest 命中位置是注意力導引，不是全部——散文外的 hunk 也要自己看。
-3. **圖譜鏡頭——這次改動牽連到的筆記(2026-09-03 起由 hook 機器附,編排者只留一行標記)**:
+3. **圖譜鏡頭——這次改動牽連到的筆記**:
 LUMOS-IMPACT: {base}..HEAD
-   ★上面那行原樣留在派工詞裡(換成真實 base,例 `main..HEAD`)★★派工前一刻先敲一次 `lumos dispatch-lens <base>..HEAD` 暖快取(20 分內有效):10 個 commit 以上算一次約 25 秒起,hook 內層 45 秒超時會放空;2026-09-05 起超時會在派工詞尾端附一行固定說明,不再靜默★——派子代理那一刻,`dispatch-lens-hook`
-   會把 `lumos impact --diff` 的固定席(帶硬合約或出過事故的筆記)接在派工詞尾端:前 8 篇貼節點路徑+
-   相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行(★每條 ★INVARIANT★ 行帶綁定測試狀態:有/懸空/偽證據/裸合約,
-   節點小計一行;「有」=測試方法存在,不代表跑過或有殺傷力——閘只看 rc★,v1.1),其餘只列名(d9 截錄)。內容一律從 base 讀、
-   零自由文字(節點摘要/事故觸發字串/risk 標籤後綴都不印),這是有意砍掉的一句話層。
+   派工時 hook 會在尾端附上固定席筆記(帶硬合約或出過事故的節點)。
    逐條判:這份 diff 會不會破壞該節點宣稱的行為或合約?**固定席必答**(可分組摘要,
    判「不影響」也要寫一句為什麼)。這些筆記記的是「為什麼這樣設計、哪裡不能碰、以前
    在這裡出過什麼包」——**是 code 本身讀不出來的東西**。
-   ★編排者要知道的三件事★(單源=[[Projects/派工鏡頭注入_計劃]]):
-   ① 標記不在、格式差一個字、base 不在主線歷史上——hook 一律靜默放行;★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
-      派工詞不會多任何東西;★固定席 0 篇不再靜默(v1.2)★:改附「圖譜沒有釘到節點」備援段——受影響測試/
-      共改夥伴/呼叫者三格(全部只用主線樹算),那段不是合約、不必逐條答;派完看子代理回覆有沒有
-      「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
-   ② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
-   ③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
-   ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
-      標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
-      子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
-      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁;2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,額度常撞上限)★——**點哪一席看你在審什麼**:
-> ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-sol + medium)。也是預設。
-> ・**程式碼審(一般風險)→ `lumos_reviewer_code`**(gpt-5.6-sol + xhigh)。
-> ・**程式碼審且 `pitfalls --diff` 判 tier=high → `lumos_reviewer_max`**(gpt-5.6-sol + xhigh;09-11 前是 astra)。
-> ★散文審為什麼只給 medium★:2026-09-08 實測拿 xhigh 審一份 8k 字元的 README 語感,慢到使用者當場喊停。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,而審查慢到讓人不想派,就等於沒有這道防線。**
-> ★為什麼 09-11 全部降到 Sol★:外家席額度常撞上限——當天代碼審一輪跑到一半就被擋到額度重置,換 Sol 也一樣被擋(額度整個帳號共用);降一級模型讓同一段額度撐更多席,推理強度照舊分 medium / xhigh。舊版高風險席用 astra,理由是它額度更緊、全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★Claude 編排直接叫 `codex exec` 時也要帶 `-m gpt-5.6-sol`,不然會用 Codex 預設模型★;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
+   若尾端是「圖譜沒有釘到節點」備援段,那段不是合約、不必逐條答。
 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
 
 錨定紀律（硬性；2026-08-04 重設計）：
 - 每條 finding 必附一段**從文件逐字複製的原文引句（≥10 字）**——編不出引句的疑慮不要交。
   （收貨端跑 `lumos quote-check` 逐條驗；錨不到＝該條不採信。）
+- 你指出的 blocker/major 必須附能當場翻紅的最小重現(一條測試或一條指令+輸出);附不出就如實標「未能重現」,severity 自降一級。
 
 抑噪紀律（嚴格遵守）：
 - 低嚴重度疑慮，給不出具體失敗場景就不要標。
   ★但未定義的詞／壞引用／內部不一致例外——一律要報，不受失敗場景要求限制★
-  （2026-08-04：canary 配對實驗顯示此紀律與文件級瑕疵偵測有張力，n=20 未定論、先開例外口。）
 - 不能從 diff 指出具體受影響的 file:line 路徑，就不准臆測「可能會壞別處」。
 
 輸出：逐條 finding 標 severity（clean/minor/major/blocker）+ file:line +
@@ -210,7 +217,6 @@ binding constraints，3-6 條}
 
 ## 編排者判讀規則（prompt 之外、skill 正文用）
 
-- ~~canary caught 判準~~ **⛔ 已停用(2026-08-14 d5)**——無植入即無判定;「審計員有沒有讀」由 quote-check 引句錨定把關。(舊判準留供歷史帳回放:清楚點出植入瑕疵的「性質」才算;token 出現或泛泛說「有問題」不算。)
 - **剝除克制**：只有能指出 finding 客觀錯在哪（被 spec/code file:line 反證）才剝；
   判不準保留（寧可高估）。辯方只買 code 層假陽性，業務層留人。
 - **severity 錨（2026-07-16 M1，與 SKILL.md 判讀 ② 同句）：major=照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度/測試枚舉完整性/措辭=minor,除非漏的是合約級。**難判搖擺場換問法重問一次**(「這條 finding 若實作照做,具體錯在哪個行為?」),兩問等級不一致=取高並記 unstable(Sage 2026-07-27)。
@@ -221,21 +227,6 @@ binding constraints，3-6 條}
 - **carrier 選席 SOP（2026-08-25 d1）**：記帳前對候選席報告跑 quote-check,選全錨席當 carrier——carrier=記帳載體、非證據總集（機制兜底=d5 記帳型態:各席一筆帶 report+sha,僅 carrier 帶三個 set）。
 - **rN-intake.md 收貨紀錄（2026-08-25 d1;新增於收貨三道之外,非取代）**：編排者對佐證通道與錨不到引句的機械重現留痕檔,落 `governance/review-reports/<迴圈>/rN-intake.md`。每條格式=重現命令+輸出摘錄+**HIT/MISS 結論**;判準=命令必須能重現該席宣稱的那個結果,只證存在的查詢不算;**MISS=該條佐證不採信,其支撐的 finding 退回該席補證或降級**。此步為編排者人工判讀+機械留痕,非全機械。前掃語意類修正也逐條記這裡,**必含「修改前原句→修改後」對照**,派工詞告知席位可覆核推翻。★宣告行(2026-08-30 intake守衛 d1)★:首輪前掃第四類跑完,intake 檔**頂格獨立一行** `preflight-4: ran`(值域只有 ran;零命中也寫——跑了沒挖到東西仍是跑了;同檔多行=格式壞視同無;別把示例留在檔裡——parse 會剝 fenced 圍欄,但圍欄外的照抄殘留=偽宣告)。處置閘會印 intake 觀測行(advisory 不擋),doctor [I] 段滾動窗計出現率;記帳可帶選配 `--intake <rN-intake.md>`(存 sha,處置閘全輪重驗,竄改同罪)。
 - **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數。
-- ~~canary 型別輪替/低耦合植入/溯源排除~~ **⛔ 已停用(2026-08-14 d5,無植入)**。
-
-## 本次實戰的調參建議（skill 文本修訂候選）
-
-1. **實質收斂 early-exit**（design-loop）：G2 靠 findings 數字枯竭，但審計 framing
-   「你一定找得到」保證每輪必交 minor，數字壓不到 ≤1。建議加條款：
-   「連 K 輪乾淨(舊寫 caught,canary 停用後改口徑)且無 blocker/major、且新 findings 全為文件精度級 minor 時，
-   編排者可提前向人攤牌請裁『實質收斂』，不必跑滿 cap。」（本次 r4-r5 就該問，
-   多燒了 3 輪 ≈ 半小時。）
-2. **機械任務免獨立審**（SDD 配套）：migration 腳本、純文件類 task 由編排者
-   自審（diff 逐行核對 + 事實源比對），省一個 reviewer 派工。
-3. **辯方順產 fix**：辯方降級時若附「最小修法建議」，直接轉入 fix 佇列——
-   本次 migration 自癒段即此路徑，值得寫成慣例。
-4. **re-review 用 SendMessage 回原審查者**（context 還在，比新派便宜且能對照
-   自己前次結論），fix 報告 append 原 report 檔。
 
 ---
 
@@ -317,8 +308,8 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
 
 ### C · 輸出格式硬性(只約束結構,不約束用詞)
 
-每條 finding 的**敘述部分**:編號條列、**每條 ≤3 句**、不准散文段落、不准「可能/或許/建議考慮」這類模稜兩可的收尾——判不準就標 ⚠ 交編排者,不要用含糊當保險。
-★不計入 3 句上限的是既有結構欄位★:severity、blocking 宣告、`引句:「…」`行、`file: \`路徑:行號\`` 佐證行——那些照既有規格照給,不因句數上限省略。
+每條 finding 的**敘述部分**:編號條列,只寫到讓讀的人能重現問題為止——哪個輸入、走到哪一段、壞在哪;不寫鋪陳段落,不准用「可能/或許/建議考慮」收尾——判不準就標 ⚠ 交編排者,不要用含糊當保險。
+既有結構欄位照給、不因求精簡省略:severity、blocking 宣告、`引句:「…」`行、`file: \`路徑:行號\`` 佐證行。
 
 ## 7.8 資安席派工(code-loop 定錨 high 必派,處置閘會擋;2026-09-11 Enzo 裁 d6,單源=[[Projects/代碼審資安席_計劃]])
 
@@ -361,10 +352,10 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
 取代 6 輪同族循序。一輪 = **同一則訊息內平行派 W 個審計員**(§1 模板,但差異化):
 
 - **W 由 tier 定**：`difficulty.params(tier)['panel_width']`（standard=3 / high=5）。
-- **多樣化軸**(「9 judge 2 票」:要獨立票不要數量;~~canary 型別輪替軸~~已隨協議停用):
+- **多樣化軸**(「9 judge 2 票」:要獨立票不要數量):
   1. **鏡頭各異**(席名=<鏡頭>-<模型>):正確性/邏輯、邊界可執行、整合知識同步、(W>3)資源併發、回滾。★每席另加「立場+預設姿態」與輸出格式硬性,見 §7.7(2026-08-29 A+C)★
-  2. **≥1 跨家族**:一個 slot 走 qwen(cross_audit)——獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂)。
-- **判讀(編排者一次跨 W 份做)**:①逐席過收貨三道(quote-check/refcheck/seat-check;~~canary caught/missed 判定~~已停用) ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
+  2. **≥1 跨家族**:一席走外家(預設 Codex,不可用時 Gemini 備援,Gemini 的 ≥major 不算否決票)——獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂)。
+- **判讀(編排者一次跨 W 份做)**:①逐席過收貨三道(quote-check/refcheck/seat-check) ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
 - **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板;kind 一律 `none`,2026-08-14 d5):
   `lumos canary record none --loop <id> --round <rid> --auditor <鏡頭>-<模型> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
 - **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 帳=兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none])＋min-seats∧G3;capture-recapture 殘餘=advisory 觀測不進合取(2026-08-14 降級);cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。

@@ -1,6 +1,6 @@
 ---
 name: lumos-project-notes
-description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——讀懂程式碼現況後,要補「為什麼這樣、邊界在哪、哪些不能改、會波及什麼」這類程式碼看不出的脈絡時用 lumos 查;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:排查、理解既有系統、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
 ---
 # lumos 專案知識圖譜——一頁手冊
 
@@ -54,7 +54,7 @@ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPO
 - 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
 - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
 
-**摘要區塊**(Systems/Issues 必有)——分類規則的唯一來源是紀律範本 `scripts/templates/graph-discipline.md`,下面這段是它的逐字複本(`t_note_convention_synced_to_skill` 比對整段一字不差,兩邊分岔會紅):
+**摘要區塊**(Systems/Issues 必有):
 
 **分類規則不在這裡**:摘要行怎麼分類(`WHY:` / `RULE:` / `PITFALL:` / `FACT:`)、每類同一行還要有什麼,**唯一來源是紀律範本 `scripts/templates/graph-discipline.md` 的〈寫筆記時〉那一節**,它會被注入每個專案的 CLAUDE.md,動筆時本來就在你眼前,直接看那份。
 這裡刻意不放複本——複本前面被插一段唱反調的「快速版」、複本被藏進註解、複本標點跟本尊分岔,2026-09-21 一天之內被三種手法各繞過一次;守衛改成「不准有第二份定義」,比「複本要一字不差」穩。
@@ -87,7 +87,7 @@ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPO
 | 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
 | 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
 | 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
-| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈開頭欄位與標籤〉〈摘要區塊〉〈同步規則〉〈跨 session 傳訊與 CI〉 |
 | 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
 | maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
 | 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |

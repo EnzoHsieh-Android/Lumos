@@ -62,6 +62,7 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
 ## 再深一層(按需開)
 | 要做 | 開 |
 |---|---|
-| 席位紀律、抑噪、辯方順產 fix | `reference.md`〈步驟 3 — 派乾淨 reviewer〉〈步驟 4 — 判讀 + 辯方〉 |
+| 席位紀律、抑噪、辯方順產 fix | `reference.md`〈3 · 派乾淨 reviewer〉〈4 · 判讀 + 辯方〉 |
 | 入口頁每條規則的由來、實際踩過的事故 | `reference.md`〈入口頁舊版全文(去時效前)〉 |
-| mutation 算子理由、capture-recapture、完整範例、全部歷史修正 | `reference.md`〈舊頭版全文〉 |
+| mutation 算子理由、capture-recapture 算法 | `reference.md`〈mutation 與 capture-recapture〉〈panel 模式與收斂判準〉 |
+| 已停用的 canary 流程與全部歷史修正 | `reference.md`〈歷史與停用〉 |

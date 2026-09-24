@@ -152,9 +152,7 @@ try { doIt(); } catch (IOException e) {
 - `catch (InterruptedException e)` 一定要 `Thread.currentThread().interrupt()` 把中斷旗標補回去，否則上層的取消機制失效（`SB:RU_INVOKE_RUN`、`PMD:DoNotUseThreads` 只抓到周邊，這條本身不可機檢）。
 - 日誌要記整個例外物件（`log.error("msg", e)`），不是 `e.getMessage()`——堆疊被丟掉就等於沒記。
 
-### R12. `equals` / `hashCode` 成對，可變物件不要當 Map 的 key `EP:EqualsHashCode`
-- 只改一個 = 放進 `HashMap` 就找不回來。用 record 或 IDE 產，不要手寫一半。
-- 物件當 key 之後又改了它的欄位，那筆資料就永遠撈不出來，也不會有任何錯誤訊息。
+### R12. `equals`／`hashCode` 成對，可變物件不當 Map 的 key `EP:EqualsHashCode`
 
 ### R13. 邊界驗證與秘密 `SB:SQL_INJECTION_JDBC`
 - SQL 一律 `PreparedStatement` 帶參數，不要字串相接——這是唯一真正擋得住注入的做法。
@@ -165,28 +163,11 @@ try { doIt(); } catch (IOException e) {
 
 ## 五、集合與熱路徑
 
-### R14. 迴圈裡不要相接字串 `SB:SBSC_USE_STRINGBUFFER_CONCATENATION`
-```java
-// ✗ 每圈生一個新字串，n 個字串就是 O(n²)
-String s = "";
-for (String part : parts) s += part;
-
-// ✓
-StringBuilder sb = new StringBuilder();
-for (String part : parts) sb.append(part);
-```
-
-### R15. 成員查找不要用 List ⚠ 不可機檢
-- `list.contains(x)` 是逐個比（O(n)）。在迴圈裡做就是 O(n²)，資料一多就爆。換 `HashSet` / `HashMap`。
-- `list.remove(0)` 對 `ArrayList` 是整批往前搬；要當佇列用 `ArrayDeque`。
-
-### R16. 熱路徑注意自動裝箱 ⚠ 不可機檢
-- `Integer` 當 `int` 用，每次運算都在配置物件。大迴圈裡用原始型別或 `IntStream`。
-- `Map<Long, Long>` 這種在高頻路徑上是純粹的物件產生器，量大時考慮專用的原始型別集合。
-
-### R17. Stream 只能走一次，而且別在裡面做 IO ⚠ 不可機檢
-- 同一個 Stream 消費兩次會丟 `IllegalStateException`；要用兩次就先收成集合。
-- `parallelStream()` 用的是全 JVM 共用的 `ForkJoinPool.commonPool()`——裡面做阻塞 IO 會拖垮整個 JVM 的其他平行工作。要平行就自己給執行器。
+### R14–R17. 其餘通則（機檢兜底或一句帶過，不佔篇幅）
+- R14 迴圈裡不相接字串，用 `StringBuilder`：`SB:SBSC_USE_STRINGBUFFER_CONCATENATION`
+- R15 成員查找用 `HashSet`／`HashMap`、佇列用 `ArrayDeque` ⚠ 不可機檢
+- R16 熱路徑避免自動裝箱（原始型別、`IntStream`）⚠ 不可機檢
+- R17 Stream 只走一次；`parallelStream()` 用的是全 JVM 共用的 `ForkJoinPool.commonPool()`，裡面不做阻塞 IO（要平行就自己給執行器）⚠ 不可機檢
 
 ---
 

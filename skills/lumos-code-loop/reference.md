@@ -17,25 +17,14 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 8. 參考(需要才讀)
 9. 歷史與停用(舊頭版全文;只供回放舊帳判讀,不是現行規則)
 10. 入口頁舊版全文(去時效前)(2026-09-11 從 SKILL.md 搬入的原文,只供查每條規則的由來與事故)
-   (「一眼看懂」併在 1 底下;「護欄」併在 3 底下;兩版「平行 panel 模式」併在 4 底下)
+   (「護欄」併在 3 底下;兩版「平行 panel 模式」併在 4 底下)
 
 ## 何時用 / 何時跳
 
-- **觸發**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD`。
-  - `tier: standard`(manifest 無命中)→ 現行單 reviewer 終審,**不走本 skill**。
-  - `tier: high`(manifest 命中任一 pattern)→ 本 skill。★K 看模式:循序=2、平行 panel=1(tier=high 實務走 panel)。原本這裡只寫 K=2,對走 panel 的人是錯的——2026-08-03 修★
-- **trivial 可跳**:改 typo / 純文檔 / 一行無邏輯 diff → 跳 loop,**但寫一句為什麼跳**(commit message)。
+- 分級和各級要派誰,以 SKILL.md〈什麼時候用〉為準。
 - **loop id** = `code-<topic>`(例:`code-payment-retry`、`code-worker-refactor`)。
-
-
-> (⚠ 上方為舊版、下方為 2026-08-22 搬入的現行版;兩版並存只為保留原文,**照下方做,勿照上方執行**)
-
-### 一眼看懂
-
-- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★2026-08-18 起循序 loop 可正常錨定 `--tier standard`(cap 3),守衛誤擋已修——首筆 record 就帶 --tier★;★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
-- **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
-- **loop id** = `code-<topic>`（例 `code-payment-retry`）。
-- **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:
+- 進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
+- **gate/守衛類 code 建議 feature branch**:pre-push 對 branch 與 main-direct 同軌檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
 
 ## 每一輪的現行步驟
 
@@ -77,28 +66,6 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
 ### 2 · ~~植 bug canary~~ ⛔ 已停用(2026-08-14,見頁頂)
 本步驟與三道防污染自檢不再執行,直接進步驟 3。舊型別輪替表/生成硬化見 git 史與 design-loop reference §A(歷史帳判讀用)。reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**。
 
-### 步驟 3 — 派乾淨 reviewer
-
-
-Agent tool、`model: sonnet`(空泛或引句大面積錨不到才升 opus;★Codex 可以逐席指定模型——2026-09-07 實測推翻舊說法★:席位 TOML 的 `model` / `model_reasoning_effort` 兩個欄位都有效(給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值)。lumos 已寫三席:`lumos_reviewer`=sol+medium 散文審(預設)、`lumos_reviewer_code`=sol+xhigh 程式碼審(一般)、`lumos_reviewer_max`=sol+xhigh(2026-09-11 起三席都用 gpt-5.6-sol) 只給 tier=high。⚠ 別用「叫席位自報模型代號」驗——實測它會答錯)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
-> ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
-
-**framing(refute framing)**:
-「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞——正確性(★2026-08-28 升級:每個可疑處挑一個具體輸入把執行走一遍、別用名字猜;邊界 空/單一/溢位、資源 錯誤路徑釋放了嗎、例外/None 接了嗎、冪等併發 重跑或同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準)
-
-**抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
-- 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
-- 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
-- ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
-
-**受影響功能面鏡頭(2026-07-11 橋接,檢索排序轉正後啟用)**:派 reviewer 前跑
-`lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。★2026-08-29 改:固定席**逐條貼進每一席的派工詞**(不是給 manifest 路徑讓它自己讀——給路徑那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]])★,要它「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
-
-> manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
-
-~~第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
-
----
 
 
 ### 3 · 派乾淨 reviewer
@@ -111,13 +78,13 @@ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大�
 - 「不能指出具體受影響 file:line,就不准臆測『可能會壞別處』。」
 - （不設 findings 硬上限——會藏真 finding、污染 G2 收斂信號。）
 
-**席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述每條 ≤3 句、不准模稜兩可(結構欄位不計);★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
+**席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述只寫到讀的人能重現問題為止、不准模稜兩可;★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
 
 **圖譜鏡頭(★2026-08-29 改:每席都附、貼內容不給路徑★)**:派前跑 `lumos impact --diff <range>`,把**固定席**(帶硬合約或出過事故的節點)**逐條貼進每一席的派工詞**——不是給 manifest 路徑讓它自己讀(給路徑那條 2026-08-29 兩輪設計審否掉了,見 [[Projects/impact鏡頭機械化_計劃]])。派工詞寫「逐條判此 diff 破不破壞節點合約;固定席必答」(advisory 人判)。完整格式見 `../lumos-design-loop/templates.md` §3 鏡頭 3,含兩個填寫雷:①來源是 `governance/review-reports/**` 凍結快照 patch 的節點要剔掉(審計證物,裡面故意埋 bug)②「還有 N 篇」的 N 會少報。
 
 **test-layers 鏡頭(有宣告才附)**:派前跑 `lumos test-layers --diff <range> --json`,`hits` 非空 → 附給 reviewer:「diff 碰到 <棧> 且專案宣告 <層> 測試(<cmd>)——判斷此改動需不需要補/跑該層;需要而缺 → 列 finding(severity 依風險自判)」。無宣告檔則略過此鏡頭。
 
-~~第一次 missed 起加碼:「你一定找得到至少一個植入 bug;沒找到就是沒讀仔細。」~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
+> manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
 
 ### 收貨三道
 
@@ -128,29 +95,12 @@ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大�
 ③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳,觀測恆 rc0)
 > ⛔ `lumos mutate` 已退場(2026-08-26 建了沒人跑批次裁定:2026-08-08 裁死消費者後治理帳 0 次使用;指令與測試已拆,復活=有真消費者立案從 git 史撿回,詳 [[Projects/建了沒人跑批次裁定_計劃]])。
 
-### 步驟 4 — 判讀 + 辯方
-
-
-**① canary 判讀**
-caught = reviewer 清楚且正確點出那個植入 bug 的「性質」(如「邊界 off-by-one」「鎖未釋放」);光 token 出現、或泛泛說「這段有問題」不算。
-
-**② 真 finding 取 max severity**
-排掉 canary 及其溯源影子後,剩餘 findings 的 max severity(`clean` / `minor` / `major` / `blocker`)。
-剝「審計員誤判」要克制:只有能指出該 finding 客觀錯在哪(被真 diff 的 file:line 反證)才剝;判不準就保留(寧可高估),剝除理由記入審計紀錄。
-
-**③ 辯方 refute(對 ② 標為 ≥major 的每條 finding)**
-派 1 個獨立 Codex 辯方(`codex exec --sandbox read-only`,乾淨脈絡、不傳 reviewer 報告結論;2026-07-18 S5,不可用退 opus 註記偏離。詳見下方「辯方(對每條 ≥major)」),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
-- **辯方工具加 `git log`/`git show`**——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4(2026-07-07 Landmark 實戰)。
-- **辯方順產 fix(實戰調參)**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)——別浪費辯方查證時看到的低垂果實。
-
-**④ 該輪 severity = 辯方裁決後存活 findings 的最高**
-
-
-
 ### 4 · 判讀 + 辯方
 - ~~canary 判定~~ **⛔ 已停用(見頁頂)**——「reviewer 有沒有真的讀」由收貨三道的 quote-check 引句錨定把關。
 - **max severity**:存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
-- **辯方(對每條 ≥major;預設 Codex,2026-07-18 S5)**:派 1 個 **Codex 辯方**(`codex exec --sandbox read-only`,乾淨脈絡)——判決單點最怕同門盲點,外家反證價值最高;Codex 不可用退 opus 並於留痕註記偏離。framing=「預設此 finding 假,構造反駁證據、必附 file:line(grep/Read 真碼),拿不出則維持」。可加 `git log`/`git show`(commit 考古常決定性)。辯方降級若順手附最小修法 → 轉 fix 佇列。
+- **辯方(對每條 ≥major;預設 Codex)**:派 1 個 **Codex 辯方**(`codex exec --sandbox read-only`,乾淨脈絡、不傳 reviewer 報告結論)——判決單點最怕同門盲點,外家反證價值最高;Codex 不可用退 opus 並於留痕註記偏離。framing=「預設此 finding 假,構造反駁證據、必附 file:line(grep/Read 真碼),拿不出則維持」。辯方**明確三選一**([[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。只有 evidence 會降;concern 不能單獨殺 finding。
+- 辯方工具加 `git log`/`git show`——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4。
+- **辯方順產 fix**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)。
 - **該輪 severity** ＝ 辯方裁決後存活 max。
 
 ### 修與翻紅釘
@@ -169,37 +119,27 @@ fix commit(含必要的新測試)。測試收口分兩級:
   - **寫測試/審測試前對照 [[Systems/測試假綠形態]] 八型清單**(恆真斷言/斷言太鬆/驗寫法不驗行為/現場走不到被測分支/fixture 無鑑別力/根本沒去驗/白名單過寬/依賴環境巧合)。⚠ **對照過清單 ≠ 測試夠格**——清單是提示器不是偵測器,且★一定有第九型★。
   - 業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
 
-### 步驟 5 — 記錄
-> ⛔ `canary record caught|missed` 的 kind 隨植入協議 2026-08-14 停用;現行一律 `canary record none … --findings-set/--folded-set/--accepted-set --refuted-set --report --snapshot --scope-lines`,語法見下方「5 · 記錄」。
-
-```bash
-lumos canary record caught|missed \
-  --loop code-<topic> \
-  --severity <辯方裁決後存活 max> \
-  --findings <存活折入數> \
-  --auditor <模型>
-```
-
-- `--severity` = ④ 辯方重算後的存活 max(非 reviewer 原評)。
-- `--findings` = ④ 辯方裁決後存活並折入的真 finding 條數。
-- ~~**missed → 該輪判決不採信、findings 全不折**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
-- ~~**連 2 missed → 升 opus**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)。~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
-
----
-
-
 ### 5 · 記錄
+完整旗標以 `lumos loop next` 印出的記帳範本與 SKILL.md〈一輪怎麼跑〉第 6 步為準;同輪分兩種席:
+
+**一般席**(同輪其餘各席,只記嚴重度與條數):
 ```bash
-lumos canary record none --loop code-<topic> \
-  --severity <辯方後存活 max> --findings <存活折入數> --auditor <模型> \
-  --scope-lines <這輪 diff 幾行> \
-  --report <席報告路徑> --snapshot <工作副本路徑>
+lumos canary record none --loop code-<topic> --round rN --auditor <鏡頭>-<模型> \
+  --severity <辯方後存活 max> --findings <存活折入數> \
+  --scope-lines <這輪 diff 幾行> --report <席報告路徑> --snapshot <審查快照路徑>
 ```
 
-**留痕慣例(2026-08-05 借 design-loop T3;原:報告躺 scratchpad,session 一清就蒸發,帳上 note
-指向不存在的東西——T8 三輪實錄)**:席報告落 `governance/review-reports/<loop-id>/<round>-<席>.md`、
-工作副本(=審查快照)存 `<round>-s<席>-snapshot.md` 或共用一份;record 帶
-`--report`/`--snapshot` 讓 sha 落帳可重算。code-loop record 不帶 findings_set,不會誤觸 T6 定錨。
+**載體席**(同輪恰一席,彙整全輪處置;這輪有任何發現就必帶處置清單,帶了 `--findings-set` 沒帶 `--refuted-set` 會被擋下 rc2):
+```bash
+lumos canary record none --loop code-<topic> --round rN --auditor <席> \
+  --severity … --findings … --scope-lines … --report … --snapshot … \
+  --findings-set <id,…> --folded-set <id,…> --accepted-set <id,…> \
+  --accept-reason <id=理由>  # 放行幾條就給幾個旗標
+  --refuted-set <id=理由,…|none> [--intake <rN-intake.md>]
+```
+folded/accepted 沒有項目就給空字串 `""`(寫 `none` 會被當成一個 id);`--refuted-set` 的 none 是字面值。
+
+**留痕慣例**:席報告落 `governance/review-reports/<loop-id>/<round>-<席>.md`,審查快照存同目錄(`<round>-snapshot.patch` 或逐席一份);record 帶 `--report`/`--snapshot` 讓 sha 落帳可重算。
 
 
 
@@ -218,36 +158,11 @@ capture-recapture 的 finder 串也有了可信座標來源。
 
 > **`--scope-lines` 為什麼要填**:外部實測指出**東西越多越抓不到**是最主導的因素(arXiv 2606.15689:抓得到合成缺陷**不可靠地預測**抓得到真實缺陷,且 **diff 大小是主導混淆變數**)。本專案十輪 code-loop 的 diff 從 332 到 2770 行,**在帳上長得一模一樣**——不填就永遠答不出「小 diff 上的 caught 是不是灌水」。**不進 gate、純 telemetry**;`wc -l <patch>` 即可。
 
-### 步驟 6 — 問收斂
-> ⛔ 本步驟裡的 `--need 2 --gate`(K-streak)已於 2026-08-08 被處置閘取代:現行問 `lumos loop status code-<topic> --disposal --spec <凍結 patch> --repo <repo根>`(見〈panel 模式與收斂判準〉開頭「現行收斂閘=處置閘」)。舊指令只供舊帳回放。
-
-```bash
-lumos loop status code-<topic> --need 2 --gate --repo <repo根>
-```
-
-無 `--spec`(code-loop 無 spec 對象,G1 引用座標對代碼無意義):
-- G1 印 `[gate] G1 refcheck: skipped(無 spec 對象)`、**不計 fail**。
-- K-streak(★**循序模式**:連 2 輪 caught 且無 blocker/major;★**panel 模式只看最後一輪(K=1)**★) ∧ G2 發現枯竭 → exit 0(GATE PASS)→ 進 finishing。
-> ⛔ 此判準已被處置閘取代,見〈panel 模式與收斂判準〉開頭;K 值討論只供舊帳回放
-- exit 1 → 逐錨明細指出斷在哪 → 回步驟 1。
-
----
-
-
 ### 6 · 問收斂
 ```bash
+lumos loop status code-<topic> --disposal --spec <凍結 patch> --repo <repo根>
 ```
-無 `--spec`(代碼無引用座標):G1 印 `skipped` 不計 fail。K-streak ∧ G2 枯竭 → exit 0(PASS)→ finishing;exit 1 → 回步驟 1。
-
-**誠實天花板(收斂後務必向人提醒)**
-
-
-1. **pattern 掃描是提示器不是偵測器**:N+1/race 多數形態 regex 抓不到;買到的是「reviewer 注意力被導到高風險位置」,漏網靠 reviewer 本身 + canary 紀律 + 測試。單行掃描能力邊界:「迴圈體內/交易語境/續行 timeout」等跨行語境單行不可判,實作以單行 + 小行窗啟發為限;做不到的形態誠實不掃、不硬湊。
-2. **bug canary 的校準與污染殘餘**:「認真審抓得到、不一眼看穿」靠植入者自律(同 design-loop 校準鐵則);溯源排除規則由編排者人工判,判錯方向偏「多排」,殘餘=真 finding 被誤排的假陰性,下一輪重挖兜底。
-3. **mutation 冒煙的誠實邊界**:3-5 個手植變異是抽樣不是覆蓋;活變異=測試缺口的存在證明,死光≠測試充分;flaky 測試會汙染訊號。
-4. **code-loop 收斂少一道 G1**:gate 對代碼只剩 K-streak ∧ G2,「引用座標」類機械錨無對應物;衍生的機械錨(如 mutation 全滅)留 v2 評估是否進 gate。
-
----
+rc0 = 通過,去留痕;rc1 = 照逐錨明細修,回第 1 步。
 
 
 **誠實天花板**(收斂後必向人講):
@@ -255,7 +170,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 1. pattern 掃描是提示器非偵測器(N+1/race 多形態 regex 抓不到);漏網靠 reviewer + 測試。
 2. 收斂只證「這批 reviewer 挖不出新的」,不證乾淨;findings 存廢仍由編排者判,無外部 oracle。
 3. mutation 3-5 個是抽樣非覆蓋;死光≠測試充分;flaky 污染訊號。
-4. code-loop 少一道 G1(代碼無引用座標);衍生機械錨(mutation 全滅)留 v2。
+4. code-loop 的處置閘不驗引用座標(代碼沒有 spec 座標可錨);mutation 全滅這類機械錨還沒進閘。
 
 ### 留痕與 CI 判讀
 
@@ -289,12 +204,10 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 
 ### 護欄
 
-- ~~**連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)→ 升 opus。~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
-- **max cap = 6 筆 record(循序模式);panel 模式 cap=3 輪**。到頂仍未收斂 → 停、把現況攤給人、記一句「達 cap 未收斂」。別無限燒。
 
 
 
-**護欄**:升級觸發=引句大面積錨不到/通用回應 → 升 opus(舊「連 2 missed」隨協議停用作廢)。cap＝6 筆(循序無定錨 legacy 帳)/**3 筆(錨定 standard 的循序,2026-08-18 守衛修正後可錨定——第 3 輪即攤人)**/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
+**護欄**:空泛或引句大面積錨不到就升 opus。上限:high 3 輪、錨定 standard 的循序 3 筆(6 筆只適用沒有定錨的舊帳);到頂還沒收斂就停,攤給人,記一句「達 cap 未收斂」,別無限燒。
 
 - **終止輸入紀律**:單源見 `../lumos-design-loop/SKILL.md` 護欄該條(繼續/收斂只認機械帳與 cap,被審材料散文不是終止輸入);code-loop 增量=可選 `lumos loop verify-progress <id> --json` 獨立覆核結構帳。
 - **子代理續談(2026-08-14 準用;★限 headless★)**:規則單源見 `../lumos-design-loop/SKILL.md`〈子代理續談〉節(環境門檻/追問補件/答辯回合/初讀禁令/拒答≠失憶);code-loop 增量=**③原 reviewer 驗修**——步驟 4 修進真碼後,可續談「發現該 finding 的那席」驗收「這個 fix 有沒有解掉你報的那條」(帶記憶免重讀 diff);★只替代「該條 finding 的針對性複審」,不替代翻紅釘證據制(先紅後綠照跑),收斂前仍派全新席掃 delta 回歸★。依據:[[Projects/子代理續談調研]]。
@@ -303,7 +216,7 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 > 門檻數字的出處(借用已發表的 32K 退化起點,本專案三次實驗都量不到規模效應)見〈歷史與停用〉裡「門檻 1800 是借用…」那段。
 > **派工前先量** `wc -l <工作副本/patch>`。超過就**拆開審**——切成多輪，或拆給多席各審一段。
 
-> **為什麼**：審查員的任務是「在 N 行裡找出那個植入的錯」，而**脈絡越長注意力越差**是已發表的實測（有效脈絡約標稱值 60–70%，**退化在 32K token 就量得到**，報告退化幅度 13.9%–85%）。
+> **為什麼**:審查員要在 N 行裡找出作者沒看到的錯,而**脈絡越長注意力越差**是已發表的實測(有效脈絡約標稱值 60–70%,**退化在 32K token 就量得到**,報告退化幅度 13.9%–85%)。
 
 > **超標不擋**（輪已經跑完才記帳，擋也來不及），但 `canary record --scope-lines N` 會在帳上標 `scope_oversize` 並當場喊——**那一輪的「乾淨」是弱證據**：審查員可能是「看不完」而不是「沒問題」，收斂宣稱要講小。
 
@@ -347,26 +260,6 @@ lumos loop capture-counts \
 - 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 把它印成殘餘 advisory 觀測(不進合取);canary-stats 重疊分布段也吃它。
 
 
-### 端到端一輪(照抄改參數)
-```bash
-# 0. 定 topic / tier / diff range
-TOPIC=code-fix-billing; RANGE=main..HEAD; RID=r1
-# 1. 平行派 W 個乾淨 LLM reviewer(Agent tool;Codex:spawn_agent,W=panel_width;各讀 diff 工作副本、含輪替 bug canary)
-#    → 收各 reviewer 的 findings,正規化成 file:line
-# 2. 算重疊(LLM 手動 --finder + linter/regex 自動 --from-pitfalls)
-lumos loop capture-counts \
-  --finder "billing.py:88,billing.py:120" \  # reviewer A
-  --finder "billing.py:88,tax.py:12" \       # reviewer B(billing.py:88 與 A 重疊)
-  --from-pitfalls "$RANGE" --repo .          # linter/regex 確定性 finder 自動收割
-#    → 印 capture_counts=… 與可貼的 `--capture-counts <串>`
-# 3. 記這一輪(W 筆共享同一 --round;此處示意 caught 輪)
-lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
-  --auditor bug-sonnet --severity minor --capture-counts "2,1,1"
-# 4. 問收斂
-lumos loop status "code-$TOPIC" --disposal --spec "$PATCH" --repo .   # 2026-08-25 起;舊迴圈回放才用 --gate --panel。rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
-# 5. 收斂後記留痕才能 push
-lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs X.XX advisory)"
-```
 
 
 - **收斂**——★K 取決於你跑哪個模式,別記成同一個數★(2026-08-03 修:本行原本只寫「連 2 輪」,與下方 panel 節的「一乾淨輪即收斂」自相矛盾;**code 實作的是 panel 節那個**——`_loop_status_panel` 只取 `next(reversed(groups.items()))`,也就是★只看最後一輪★):
@@ -396,8 +289,7 @@ lumos loop capture-counts \
   --finder "billing.py:88,billing.py:120" --finder "billing.py:88,tax.py:12" \
   --from-pitfalls "$RANGE" --repo .
 # 3. 記這輪(W 筆共享 --round)
-lumos canary record none --loop "code-$TOPIC" --round "$RID" \
-  --auditor bug-sonnet --severity minor --capture-counts "2,1,1"   # 席名慣例:<鏡頭>-<模型>
+# 3. 記這輪:照 lumos loop next 印出的記帳範本(一般席 / 載體席兩種,見〈5 · 記錄〉)
 # 4. 問收斂(2026-08-25 甲裁後現行;舊迴圈回放才用 --gate --panel)
 lumos loop status "code-$TOPIC" --disposal --spec <凍結patch> --repo .
 # 5. 收斂後留痕才能 push
@@ -475,6 +367,104 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
 
 
 以下整段搬自本檔各處已標「⛔ 已停用/已撤回/某日修正」的純歷史內容,只供回放舊帳判讀,不是現行規則。
+
+
+### 從〈每一輪的現行步驟〉移出的舊寫法(只供回放舊帳判讀,不是現行規則)
+
+#### 原〈何時用 / 何時跳〉與〈一眼看懂〉
+
+## 何時用 / 何時跳
+
+- **觸發**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD`。
+  - `tier: standard`(manifest 無命中)→ 現行單 reviewer 終審,**不走本 skill**。
+  - `tier: high`(manifest 命中任一 pattern)→ 本 skill。★K 看模式:循序=2、平行 panel=1(tier=high 實務走 panel)。原本這裡只寫 K=2,對走 panel 的人是錯的——2026-08-03 修★
+- **trivial 可跳**:改 typo / 純文檔 / 一行無邏輯 diff → 跳 loop,**但寫一句為什麼跳**(commit message)。
+- **loop id** = `code-<topic>`(例:`code-payment-retry`、`code-worker-refactor`)。
+
+
+> (⚠ 上方為舊版、下方為 2026-08-22 搬入的現行版;兩版並存只為保留原文,**照下方做,勿照上方執行**)
+
+### 一眼看懂
+
+- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★2026-08-18 起循序 loop 可正常錨定 `--tier standard`(cap 3),守衛誤擋已修——首筆 record 就帶 --tier★;★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
+- **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
+- **loop id** = `code-<topic>`（例 `code-payment-retry`）。
+- **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:
+
+#### 原〈步驟 3 — 派乾淨 reviewer〉
+
+### 步驟 3 — 派乾淨 reviewer
+
+
+Agent tool、`model: sonnet`(空泛或引句大面積錨不到才升 opus;★Codex 可以逐席指定模型——2026-09-07 實測推翻舊說法★:席位 TOML 的 `model` / `model_reasoning_effort` 兩個欄位都有效(給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值)。lumos 已寫三席:`lumos_reviewer`=sol+medium 散文審(預設)、`lumos_reviewer_code`=sol+xhigh 程式碼審(一般)、`lumos_reviewer_max`=sol+xhigh(2026-09-11 起三席都用 gpt-5.6-sol) 只給 tier=high。⚠ 別用「叫席位自報模型代號」驗——實測它會答錯)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
+> ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
+
+**framing(refute framing)**:
+「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞——正確性(★2026-08-28 升級:每個可疑處挑一個具體輸入把執行走一遍、別用名字猜;邊界 空/單一/溢位、資源 錯誤路徑釋放了嗎、例外/None 接了嗎、冪等併發 重跑或同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準)
+
+**抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
+- 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
+- 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
+- ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
+
+**受影響功能面鏡頭(2026-07-11 橋接,檢索排序轉正後啟用)**:派 reviewer 前跑
+`lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。★2026-08-29 改:固定席**逐條貼進每一席的派工詞**(不是給 manifest 路徑讓它自己讀——給路徑那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]])★,要它「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
+
+> manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
+
+~~第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
+
+#### 原〈步驟 4 — 判讀 + 辯方〉
+
+### 步驟 4 — 判讀 + 辯方
+
+
+**① canary 判讀**
+caught = reviewer 清楚且正確點出那個植入 bug 的「性質」(如「邊界 off-by-one」「鎖未釋放」);光 token 出現、或泛泛說「這段有問題」不算。
+
+**② 真 finding 取 max severity**
+排掉 canary 及其溯源影子後,剩餘 findings 的 max severity(`clean` / `minor` / `major` / `blocker`)。
+剝「審計員誤判」要克制:只有能指出該 finding 客觀錯在哪(被真 diff 的 file:line 反證)才剝;判不準就保留(寧可高估),剝除理由記入審計紀錄。
+
+**③ 辯方 refute(對 ② 標為 ≥major 的每條 finding)**
+派 1 個獨立 Codex 辯方(`codex exec --sandbox read-only`,乾淨脈絡、不傳 reviewer 報告結論;2026-07-18 S5,不可用退 opus 註記偏離。詳見下方「辯方(對每條 ≥major)」),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
+- **辯方工具加 `git log`/`git show`**——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4(2026-07-07 Landmark 實戰)。
+- **辯方順產 fix(實戰調參)**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)——別浪費辯方查證時看到的低垂果實。
+
+**④ 該輪 severity = 辯方裁決後存活 findings 的最高**
+
+#### 原〈步驟 5 — 記錄〉(canary record caught|missed)
+
+### 步驟 5 — 記錄
+> ⛔ `canary record caught|missed` 的 kind 隨植入協議 2026-08-14 停用;現行一律 `canary record none … --findings-set/--folded-set/--accepted-set --refuted-set --report --snapshot --scope-lines`,語法見下方「5 · 記錄」。
+
+```bash
+lumos canary record caught|missed \
+  --loop code-<topic> \
+  --severity <辯方裁決後存活 max> \
+  --findings <存活折入數> \
+  --auditor <模型>
+```
+
+- `--severity` = ④ 辯方重算後的存活 max(非 reviewer 原評)。
+- `--findings` = ④ 辯方裁決後存活並折入的真 finding 條數。
+- ~~**missed → 該輪判決不採信、findings 全不折**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
+- ~~**連 2 missed → 升 opus**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)。~~ ⛔ 已停用(canary 協議 2026-08-14 停用,沒有 missed 狀態了;現行升級觸發=引句大面積錨不到或答得空泛)
+
+#### 原〈步驟 6 — 問收斂〉(--need 2 --gate / K-streak)
+
+### 步驟 6 — 問收斂
+> ⛔ 本步驟裡的 `--need 2 --gate`(K-streak)已於 2026-08-08 被處置閘取代:現行問 `lumos loop status code-<topic> --disposal --spec <凍結 patch> --repo <repo根>`(見〈panel 模式與收斂判準〉開頭「現行收斂閘=處置閘」)。舊指令只供舊帳回放。
+
+```bash
+lumos loop status code-<topic> --need 2 --gate --repo <repo根>
+```
+
+無 `--spec`(code-loop 無 spec 對象,G1 引用座標對代碼無意義):
+- G1 印 `[gate] G1 refcheck: skipped(無 spec 對象)`、**不計 fail**。
+- K-streak(★**循序模式**:連 2 輪 caught 且無 blocker/major;★**panel 模式只看最後一輪(K=1)**★) ∧ G2 發現枯竭 → exit 0(GATE PASS)→ 進 finishing。
+> ⛔ 此判準已被處置閘取代,見〈panel 模式與收斂判準〉開頭;K 值討論只供舊帳回放
+- exit 1 → 逐錨明細指出斷在哪 → 回步驟 1。
 
 > ⛔ **canary 協議已於 2026-08-14 停用**(Enzo 裁;單源=Systems/canary-audit d5 與 SKILL.md 頁頂告示)。本檔 canary 相關段(植入/判定/missed 懲罰)**僅供回放歷史帳判讀**;每輪記帳改 `canary record none`。
 
