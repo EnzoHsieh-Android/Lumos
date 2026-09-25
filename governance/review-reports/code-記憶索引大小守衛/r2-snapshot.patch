@@ -1,0 +1,115 @@
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 7a413b2e..8de98f91 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -375,31 +375,62 @@ def why_unknown(kind, arg=""):
+     return "參數格式不對、或問不到上游"
+ 
+ 
+-# ── 找記憶目錄與圖譜 ────────────────────────────────────────────────────────
++# ── 記憶索引大小 ──────────────────────────────────────────────────────────
+ # ★記憶索引的載入上限★:開場只載入 MEMORY.md 的前 200 行或 25 KB(取小的;官方 memory 文件,2026-09-25 查),
+ # 超過的部分靜默截掉——而新條目都加在最後,最先被截掉的是最近學到的經驗。到八成提醒、到九成五大聲講。
++# KB 跟本檔其他地方一樣按 1024 算;上限取 25000 位元組,比 25×1024 小,寧可早一點提醒。
+ _INDEX_MAX_BYTES = 25000
+ _INDEX_MAX_LINES = 200
+ 
+ 
+-def index_size_note(here):
+-    """量記憶索引的大小;沒到提醒線回 None。只讀、不寫。"""
+-    p = pathlib.Path(here) / "MEMORY.md"
++def _index_bytes(p):
++    """★跟讀記憶檔同一套防護★(2026-09-25 代碼審 r1 major):索引也在記憶目錄裡,
++    符號連結、不是一般檔、檢查與打開之間被換掉都不讀;超過單篇上限不讀內容,只回檔案大小。
++    回 (大小, 內容或 None);不該量回 None。"""
+     try:
+-        raw = p.read_bytes()
++        pre = os.lstat(str(p))
+     except OSError:
+         return None
+-    size, lines = len(raw), raw.count(b"\n") + (1 if raw and not raw.endswith(b"\n") else 0)
++    if _pre_reason(pre):
++        return None
++    try:
++        fd = os.open(str(p), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
++    except OSError:
++        return None
++    try:
++        st = os.fstat(fd)
++        if (st.st_dev, st.st_ino) != (pre.st_dev, pre.st_ino) or _pre_reason(st):
++            return None
++        if st.st_size > MAX_BYTES:
++            return st.st_size, None
++        with os.fdopen(fd, "rb", closefd=False) as fh:
++            raw = fh.read(MAX_BYTES + 1)
++    finally:
++        os.close(fd)
++    return (len(raw), None) if len(raw) > MAX_BYTES else (len(raw), raw)
++
++
++def index_size_note(here):
++    """量記憶索引的大小;沒到提醒線回 None。只讀、不寫。"""
++    got = _index_bytes(pathlib.Path(here) / "MEMORY.md")
++    if got is None:
++        return None
++    size, raw = got
++    if raw is None:                 # 大到不讀內容:光看大小就遠超過上限
++        return ("記憶索引 MEMORY.md 有 %d KB,遠超過開場載入上限 %d KB,大部分開場看不到——★現在就瘦身★:"
++                "每條縮成一行「一句話+去哪查」,細節留在各條自己的檔。" % (size // 1024, _INDEX_MAX_BYTES // 1000))
++    lines = raw.count(b"\n") + (1 if raw and not raw.endswith(b"\n") else 0)
+     b_ratio, l_ratio = size / _INDEX_MAX_BYTES, lines / _INDEX_MAX_LINES
+     if max(b_ratio, l_ratio) < 0.8:
+         return None
+     head = ("記憶索引 MEMORY.md 現在 %.1f KB、%d 行;開場只載入前 %d 行或 %d KB(取小的),超過的部分開場看不到"
+-            % (size / 1000, lines, _INDEX_MAX_LINES, _INDEX_MAX_BYTES // 1000))
++            % (size / 1024, lines, _INDEX_MAX_LINES, _INDEX_MAX_BYTES // 1000))
+     if max(b_ratio, l_ratio) >= 0.95:
+         return head + "——★快被截掉了(或已經截掉)★,新條目加在最後,最先讀不到的是最近學到的經驗。現在就瘦身:每條縮成一行「一句話+去哪查」,細節留在各條自己的檔。"
+     return head + "。該瘦身了:索引每條只留一行「一句話+去哪查」,狀態與細節放各條自己的檔或圖譜。"
+ 
+ 
++# ── 找記憶目錄與圖譜 ────────────────────────────────────────────────────────
+ def memory_dir(explicit=None):
+     """找這個專案的記憶目錄。★slug 是把路徑裡每一個非英數字元換成 -★(r1 安裝席):
+     原本只換斜線,路徑帶底線/空白/中文的專案會算出不存在的目錄、然後完全靜默退出。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b131e735..c57de836 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -44012,15 +44012,19 @@ def t_memory_sweep_index_size():
+     """[記憶過期清掃] 記憶索引 MEMORY.md 開場只載入前 200 行或 25 KB(取小的,官方 memory 文件),
+     超過的部分靜默截掉、而新條目都加在最後——開場清掃量它的大小:到 80% 提醒、到 95% 大聲講會被截掉。
+     出身:2026-09-25 查 claude-token-optimizer 時查到官方上限,本 repo 的索引已 20.8 KB/95 行。
+-    翻紅釘:拿掉大小檢查 → ②③④紅。"""
++    翻紅釘:拿掉大小檢查 → ②③④⑥紅;改回直接讀檔 → ⑤紅。"""
+     print("t_memory_sweep_index_size")
+-    import subprocess as _sp, tempfile as _tf, json as _j
++    import subprocess as _sp, tempfile as _tf, json as _j, os
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "memory-sweep.py"
+     if not hook.is_file():
+         raise _SrcOnly("不在來源 repo(沒有 hook 檔),這段沒驗到")
+-    def ctx_for(index_text):
++    def ctx_for(index_text, link=False):
+         d = Path(_tf.mkdtemp(prefix="gctl-ms-"))
+-        (d / "MEMORY.md").write_text(index_text, encoding="utf-8")
++        if link:                    # 索引是指到別處大檔的符號連結
++            (d.parent / (d.name + "-big.md")).write_text(index_text, encoding="utf-8")
++            os.symlink(str(d.parent / (d.name + "-big.md")), str(d / "MEMORY.md"))
++        else:
++            (d / "MEMORY.md").write_text(index_text, encoding="utf-8")
+         r = _sp.run([sys.executable, str(hook), "--dir", str(d), "--quiet"], capture_output=True, text=True, timeout=60)
+         if not r.stdout.strip():
+             return ""
+@@ -44034,6 +44038,12 @@ def t_memory_sweep_index_size():
+     check("③ 逼近 25 KB → 大聲講會被截掉", "MEMORY.md" in big and "截掉" in big, big[-400:])
+     many = ctx_for(line * 195)
+     check("④ 行數逼近 200 行 → 也講會被截掉", "MEMORY.md" in many and "截掉" in many and "行" in many, many[-400:])
++    # ⑤⑥ 2026-09-25 代碼審 r1 major:索引也在記憶目錄裡,要跟讀記憶檔同一套防護
++    huge_text = ("- [某條](x.md) — " + "字" * 120 + "\n") * 300      # 約 112 KB,超過單篇讀取上限
++    linked = ctx_for(huge_text, link=True)
++    check("⑤ 索引是符號連結 → 不跟過去量(跟讀記憶檔同一套防護)", "MEMORY.md" not in linked, linked[-300:])
++    huge = ctx_for(huge_text)
++    check("⑥ 索引大過單篇讀取上限 → 不讀內容、光看大小就大聲講", "MEMORY.md" in huge and "遠超過" in huge, huge[-300:])
+ 
+ 
+ def t_memory_sweep_core():

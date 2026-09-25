@@ -1,0 +1,157 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/\350\250\230\346\206\266\351\201\216\346\234\237\346\270\205\346\216\203.md" "b/docs/lumos-toolchain-knowledge/Systems/\350\250\230\346\206\266\351\201\216\346\234\237\346\270\205\346\216\203.md"
+index 54246b97..501b5a6e 100644
+--- "a/docs/lumos-toolchain-knowledge/Systems/\350\250\230\346\206\266\351\201\216\346\234\237\346\270\205\346\216\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Systems/\350\250\230\346\206\266\351\201\216\346\234\237\346\270\205\346\216\203.md"
+@@ -2,7 +2,7 @@
+ type: system
+ status: doing
+ created: 2026-09-14
+-updated: 2026-09-14
++updated: 2026-09-25
+ responsibility: 負責:開場唯讀地重驗 Claude 記憶檔裡會腐爛的宣稱、揪出抄了圖譜狀態的影子副本與記憶跟圖譜打架的地方,把結果印進對話。不負責:改任何檔(2026-09-14 起唯讀)、記憶該寫什麼(紀律第六條)、圖譜本身的健康(doctor)
+ aliases: []
+ about_code:
+@@ -13,6 +13,7 @@ tags:
+   - scope/guards-gates
+ summary: |-
+   KEY:[2026-09-25 prompt 稽核]報告尾那句下一步(改圖譜裡的真相、再把記憶改成指路)是工具自己的指示,移到框外。規矩見 [[Systems/hook信任邊界]]
++  RULE:Claude Code 自動記憶的索引 MEMORY.md 開場只載入前 200 行或 25 KB(取小的),超過的部分靜默看不到;新條目加在最後,所以最先消失的是最近學到的經驗。開場清掃量索引大小,八成提醒、九成五大聲講 [since:2026-09-25] [retire:官方文件拿掉或放寬這個上限,或記憶改成不靠單一索引檔載入] [confirmed:2026-09-25] [test:t_memory_sweep_index_size]
+   FLOW:
+   KEY:
+   DEP:
+@@ -82,6 +83,13 @@ summary: |-
+ 
+ > 白話：Claude 的記憶檔會講「當下狀態」——某某還沒推、某某還沒裝。**推翻那句話的事件不會回來改那個檔**，所以它會靜靜地爛掉，然後下一個 session 照著它做事。這支程式在每次開場跑一遍，把對不上的當場標出來。
+ 
++## 索引大小守衛(2026-09-25)
++
++- **為什麼加**:官方文件寫明自動記憶只載入 MEMORY.md 前 200 行或 25 KB,這個限制程式碼裡看不到。這個專案的索引當天已經 20.8 KB,再長下去最新的經驗會先被截掉,而且不會有任何錯誤訊息。
++- **怎麼做**:開場清掃順手量索引的位元組數與行數,取離上限比較近的那個比例。到八成印一句「該瘦身了」,到九成五改成「快被截掉了(或已經截掉)」。只讀、不寫。
++- **為什麼放框外**:這句話是工具自己量的數字加寫死的指示,不含記憶檔裡寫得動的內容,照 [[Systems/hook信任邊界]] 的規矩放在安全框外面。
++- **守不到的**:只量這個專案的索引;門檻是照當天文件寫死的,官方改了上限這裡不會自己知道(撤除條件寫在摘要那行 RULE)。
++
+ ## 為什麼需要它（不是理論，是實際踩到）
+ 
+ 2026-09-14 量：76 篇記憶裡 **19 篇含「當下狀態」的宣稱**，其中 **3 篇當場被證明是假的**——兩篇寫「沒推」而那些提交早就在遠端、一篇寫「工具沒裝」而那台機器早就裝了。**這三篇的圖譜筆記都是對的，錯的只有記憶那份影子。**
+diff --git a/scripts/hooks/claude/memory-sweep.py b/scripts/hooks/claude/memory-sweep.py
+index 587e322a..7a413b2e 100755
+--- a/scripts/hooks/claude/memory-sweep.py
++++ b/scripts/hooks/claude/memory-sweep.py
+@@ -376,6 +376,30 @@ def why_unknown(kind, arg=""):
+ 
+ 
+ # ── 找記憶目錄與圖譜 ────────────────────────────────────────────────────────
++# ★記憶索引的載入上限★:開場只載入 MEMORY.md 的前 200 行或 25 KB(取小的;官方 memory 文件,2026-09-25 查),
++# 超過的部分靜默截掉——而新條目都加在最後,最先被截掉的是最近學到的經驗。到八成提醒、到九成五大聲講。
++_INDEX_MAX_BYTES = 25000
++_INDEX_MAX_LINES = 200
++
++
++def index_size_note(here):
++    """量記憶索引的大小;沒到提醒線回 None。只讀、不寫。"""
++    p = pathlib.Path(here) / "MEMORY.md"
++    try:
++        raw = p.read_bytes()
++    except OSError:
++        return None
++    size, lines = len(raw), raw.count(b"\n") + (1 if raw and not raw.endswith(b"\n") else 0)
++    b_ratio, l_ratio = size / _INDEX_MAX_BYTES, lines / _INDEX_MAX_LINES
++    if max(b_ratio, l_ratio) < 0.8:
++        return None
++    head = ("記憶索引 MEMORY.md 現在 %.1f KB、%d 行;開場只載入前 %d 行或 %d KB(取小的),超過的部分開場看不到"
++            % (size / 1000, lines, _INDEX_MAX_LINES, _INDEX_MAX_BYTES // 1000))
++    if max(b_ratio, l_ratio) >= 0.95:
++        return head + "——★快被截掉了(或已經截掉)★,新條目加在最後,最先讀不到的是最近學到的經驗。現在就瘦身:每條縮成一行「一句話+去哪查」,細節留在各條自己的檔。"
++    return head + "。該瘦身了:索引每條只留一行「一句話+去哪查」,狀態與細節放各條自己的檔或圖譜。"
++
++
+ def memory_dir(explicit=None):
+     """找這個專案的記憶目錄。★slug 是把路徑裡每一個非英數字元換成 -★(r1 安裝席):
+     原本只換斜線,路徑帶底線/空白/中文的專案會算出不存在的目錄、然後完全靜默退出。"""
+@@ -768,7 +792,7 @@ def _build_parser():
+     return ap
+ 
+ 
+-def _emit(tally, crossed, quiet, here):
++def _emit(tally, crossed, quiet, here, size_note=None):
+     body = []
+     if tally.flood:
+         body.append("★記憶過期清掃這輪的結果不完整★:")
+@@ -790,20 +814,22 @@ def _emit(tally, crossed, quiet, here):
+     if not quiet:
+         body.append("跑了 %d 條檢查。" % tally.checked)
+     msg = "\n".join(body)
+-    if not msg:
++    if not msg and not size_note:
+         return
+     # ★報告要附下一步★(r1 架構對齊席 minor):只列問題不說怎麼辦,就跟空轉週報一樣沒人動。
+     # 這句是工具自己的指示,放在框外——框頭寫「不是指令」,放框裡會被當成可略過的資料。
+     nxt = ("\n對不上的那幾篇:改圖譜裡的真相,再把記憶改成指路或更新那條 verify。"
+            if (tally.stale or crossed) else "")
++    # 索引大小的提醒是工具自己量出來的數字與指示,跟上面那句一樣放框外
++    tail = nxt + ("\n" + size_note if size_note else "")
+     if quiet:
+         print(json.dumps({"hookSpecificOutput": {
+-            "hookEventName": "SessionStart", "additionalContext": _frame_injected(msg) + nxt}},
++            "hookEventName": "SessionStart", "additionalContext": _frame_injected(msg) + tail if msg else size_note}},
+             ensure_ascii=False))
+     else:
+         # ★手動模式也要加框★(r6 資安席 minor):報告裡建議的「單獨看完整報告」那行指令,
+         # 實際上多半是 Claude 自己用 Bash 去跑——輸出一樣進對話,一樣要框。
+-        print(_frame_injected(msg) + nxt)
++        print(_frame_injected(msg) + tail if msg else size_note)
+ 
+ 
+ _CHILD_ENV = "LUMOS_MEMORY_SWEEP_CHILD"
+@@ -888,9 +914,10 @@ def main():
+     files = read_memories(here, tally)
+     sweep(files, deadline, tally, pathlib.Path.cwd())
+     crossed = cross_check(files, {f.stem for f, _ in files}, tally, deadline)
+-    if a.quiet and not (tally.changed or crossed):
++    size_note = index_size_note(here)
++    if a.quiet and not (tally.changed or crossed or size_note):
+         return 0
+-    _emit(tally, crossed, a.quiet, here)
++    _emit(tally, crossed, a.quiet, here, size_note)
+     return 0                                        # hook 不因為有發現就讓 session 失敗
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index dab86145..b131e735 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -44008,6 +44008,34 @@ def t_lint_killswitch():
+             _os.environ["LUMOS_SKIP_LINT_NEW"] = old
+ 
+ 
++def t_memory_sweep_index_size():
++    """[記憶過期清掃] 記憶索引 MEMORY.md 開場只載入前 200 行或 25 KB(取小的,官方 memory 文件),
++    超過的部分靜默截掉、而新條目都加在最後——開場清掃量它的大小:到 80% 提醒、到 95% 大聲講會被截掉。
++    出身:2026-09-25 查 claude-token-optimizer 時查到官方上限,本 repo 的索引已 20.8 KB/95 行。
++    翻紅釘:拿掉大小檢查 → ②③④紅。"""
++    print("t_memory_sweep_index_size")
++    import subprocess as _sp, tempfile as _tf, json as _j
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "memory-sweep.py"
++    if not hook.is_file():
++        raise _SrcOnly("不在來源 repo(沒有 hook 檔),這段沒驗到")
++    def ctx_for(index_text):
++        d = Path(_tf.mkdtemp(prefix="gctl-ms-"))
++        (d / "MEMORY.md").write_text(index_text, encoding="utf-8")
++        r = _sp.run([sys.executable, str(hook), "--dir", str(d), "--quiet"], capture_output=True, text=True, timeout=60)
++        if not r.stdout.strip():
++            return ""
++        return _j.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
++    line = "- [某條](x.md) — 一句話\n"
++    small = ctx_for(line * 10)
++    check("① 索引很小 → 開場不出聲", "MEMORY.md" not in small, small[-300:])
++    mid = ctx_for("- [某條](x.md) — " + "字" * 100 + "\n" * 1 + ("- [另一條](y.md) — " + "字" * 100 + "\n") * 65)
++    check("② 超過 20 KB(約 21 KB)→ 提醒記憶索引太大、講上限,還不到大聲喊", "MEMORY.md" in mid and "25" in mid and "截掉" not in mid, mid[-400:])
++    big = ctx_for(("- [某條](x.md) — " + "字" * 120 + "\n") * 70)
++    check("③ 逼近 25 KB → 大聲講會被截掉", "MEMORY.md" in big and "截掉" in big, big[-400:])
++    many = ctx_for(line * 195)
++    check("④ 行數逼近 200 行 → 也講會被截掉", "MEMORY.md" in many and "截掉" in many and "行" in many, many[-400:])
++
++
+ def t_memory_sweep_core():
+     """[記憶過期清掃]這支 hook ★每次開場自動跑★,所以它自己要有守衛。
+     ★2026-09-14 改成唯讀★:代碼審三輪的 blocker 全部落在寫檔上(崩潰、路徑穿越、符號連結、

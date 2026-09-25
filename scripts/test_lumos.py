@@ -44008,6 +44008,72 @@ def t_lint_killswitch():
             _os.environ["LUMOS_SKIP_LINT_NEW"] = old
 
 
+def t_memory_sweep_index_size():
+    """[記憶過期清掃] 記憶索引 MEMORY.md 開場只載入前 200 行或 25 KB(取小的,官方 memory 文件),
+    超過的部分靜默截掉、而新條目都加在最後——開場清掃量它的大小:到 80% 提醒、到 95% 大聲講會被截掉。
+    出身:2026-09-25 查 claude-token-optimizer 時查到官方上限,本 repo 的索引已 20.8 KB/95 行。
+    翻紅釘:拿掉門檻判斷 → ②③④紅;拿掉超大檔只看大小那行 → ⑥紅;改回直接讀檔 → ⑤⑦紅;上限改回 1000 底 → ⑧紅;拿掉讀檔出錯的攔截 → ⑨紅。"""
+    print("t_memory_sweep_index_size")
+    import subprocess as _sp, tempfile as _tf, json as _j, os
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "memory-sweep.py"
+    if not hook.is_file():
+        raise _SrcOnly("不在來源 repo(沒有 hook 檔),這段沒驗到")
+    def ctx_for(index_text, link=False):
+        d = Path(_tf.mkdtemp(prefix="gctl-ms-"))
+        if link:                    # 索引是指到別處大檔的符號連結
+            (d.parent / (d.name + "-big.md")).write_text(index_text, encoding="utf-8")
+            os.symlink(str(d.parent / (d.name + "-big.md")), str(d / "MEMORY.md"))
+        else:
+            (d / "MEMORY.md").write_text(index_text, encoding="utf-8")
+        r = _sp.run([sys.executable, str(hook), "--dir", str(d), "--quiet"], capture_output=True, text=True, timeout=60)
+        if not r.stdout.strip():
+            return ""
+        return _j.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    line = "- [某條](x.md) — 一句話\n"
+    small = ctx_for(line * 10)
+    check("① 索引很小 → 開場不出聲", "MEMORY.md" not in small, small[-300:])
+    mid = ctx_for("- [某條](x.md) — " + "字" * 100 + "\n" * 1 + ("- [另一條](y.md) — " + "字" * 100 + "\n") * 65)
+    check("② 超過 20 KB(約 21 KB)→ 提醒記憶索引太大、講上限,還不到大聲喊", "MEMORY.md" in mid and "25" in mid and "截掉" not in mid, mid[-400:])
+    big = ctx_for(("- [某條](x.md) — " + "字" * 120 + "\n") * 70)
+    check("③ 逼近 25 KB → 大聲講會被截掉", "MEMORY.md" in big and "截掉" in big, big[-400:])
+    many = ctx_for(line * 195)
+    check("④ 行數逼近 200 行 → 也講會被截掉", "MEMORY.md" in many and "截掉" in many and "行" in many, many[-400:])
+    # ⑤⑥ 2026-09-25 代碼審 r1 major:索引也在記憶目錄裡,要跟讀記憶檔同一套防護
+    huge_text = ("- [某條](x.md) — " + "字" * 120 + "\n") * 300      # 約 112 KB,超過單篇讀取上限
+    linked = ctx_for(huge_text, link=True)
+    check("⑤ 索引是符號連結 → 不跟過去量(跟讀記憶檔同一套防護)", "MEMORY.md" not in linked, linked[-300:])
+    huge = ctx_for(huge_text)
+    check("⑥ 索引大過單篇讀取上限 → 不讀內容、光看大小就大聲講,講的是真正的大小(不是讀取上限截斷後的 64 KB)",
+          "MEMORY.md" in huge and "遠超過" in huge and "有 %d KB" % (len(huge_text.encode("utf-8")) // 1024) in huge, huge[-300:])
+    # ⑦⑧ 2026-09-25 代碼審 r2:打開後的檢查共用讀記憶檔那支(含硬連結);KB 顯示「現在」與「上限」同一個底
+    d7 = Path(_tf.mkdtemp(prefix="gctl-ms-"))
+    (d7.parent / (d7.name + "-other.md")).write_text(huge_text, encoding="utf-8")
+    os.link(str(d7.parent / (d7.name + "-other.md")), str(d7 / "MEMORY.md"))
+    r7 = _sp.run([sys.executable, str(hook), "--dir", str(d7), "--quiet"], capture_output=True, text=True, timeout=60)
+    check("⑦ 索引是硬連結(別處的檔連進來)→ 不量", "MEMORY.md" not in r7.stdout, r7.stdout[-300:])
+    over = ctx_for("- [某條](x.md) — 一句話\n" + "x" * (25 * 1024 + 100) + "\n")
+    # ⑨ r3 major:量索引時讀檔出錯,只放棄這一句,不拋出去(拋出去會連帶吞掉同一次開場的其他發現)
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("_ms_idx", str(hook))
+    _ms = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_ms)
+    d9 = Path(_tf.mkdtemp(prefix="gctl-ms-"))
+    (d9 / "MEMORY.md").write_text(line * 195, encoding="utf-8")
+    _orig = _ms.os.fstat
+    def _boom(fd):
+        raise OSError(5, "模擬讀取錯誤")
+    _ms.os.fstat = _boom
+    try:
+        try:
+            r9 = _ms.index_size_note(str(d9))
+        except OSError as e:
+            r9 = "拋出:%s" % e
+    finally:
+        _ms.os.fstat = _orig
+    check("⑨ 量索引時讀檔出錯 → 回 None、不拋出", r9 is None, repr(r9))
+    check("⑧ 剛超過上限 → 顯示的現在大小不小於上限(同一個 KB 底,不會說「24.4 KB、上限 25 KB、已截掉」)",
+          "25.1 KB" in over and "25 KB" in over, over[-300:])
+
+
 def t_memory_sweep_core():
     """[記憶過期清掃]這支 hook ★每次開場自動跑★,所以它自己要有守衛。
     ★2026-09-14 改成唯讀★:代碼審三輪的 blocker 全部落在寫檔上(崩潰、路徑穿越、符號連結、
