@@ -20,6 +20,8 @@ aliases:
   - recount.py
   - 編輯時推播沒推到但被讀到
   - lumos search零命中量測
+lands_in:
+  - Systems/retrieval-ranking
 ---
 # 推播miss量測_計劃
 

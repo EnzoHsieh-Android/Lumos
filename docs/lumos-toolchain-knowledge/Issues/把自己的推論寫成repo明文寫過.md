@@ -8,8 +8,6 @@ tags:
   - type/issue
   - status/open
   - scope/node-content
-about_code:
-  - docs/lumos-toolchain-knowledge/Projects/中文無空白查詢回退_計劃.md
 summary: |-
   FLAG:ORIGIN
   KEY:症狀=我在設計計劃裡寫「這個 repo 明文寫過『0 筆不是沒記,但也不能假裝有記』」,而那句話全 repo 查不到、是我自己造的;兩個獨立審查席各自 grep 後同時抓到
@@ -27,6 +25,7 @@ summary: |-
   KEY:★這個病跟「不小心」無關★:三次都發生在寫「不要順手寫沒查過的說法」這件事的當下,而且同一小時內另一個 session 也犯了一次同型。兩個 session、一小時、三次、三種面孔,每次都是在很有把握的時候。它跟「需要一個結論來收尾」有關
 related:
   - "[[Issues/引句錨定只驗前綴_後半可編造]]"
+  - "[[Projects/中文無空白查詢回退_計劃]]"
 ---
 # 把自己的推論寫成repo明文寫過
 

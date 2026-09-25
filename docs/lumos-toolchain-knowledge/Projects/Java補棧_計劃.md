@@ -41,6 +41,8 @@ decisions:
     decided: 2026-09-12
     valid: true
 plan_refs: []
+lands_in:
+  - Systems/效能檢核目錄
 ---
 # Java 補棧（2026-09-12）
 

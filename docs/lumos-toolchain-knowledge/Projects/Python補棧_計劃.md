@@ -40,6 +40,8 @@ decisions:
     trade_offs: "Django/FastAPI 特有的坑(ORM 惰性載入、middleware 同步阻塞)沒有專題;第一個 Web 消費端接入時要評估是否折進 py-memory/py-eventloop 或加題"
     decided: 2026-09-11
     valid: true
+lands_in:
+  - Systems/效能檢核目錄
 ---
 # Python 補棧（2026-09-11）
 

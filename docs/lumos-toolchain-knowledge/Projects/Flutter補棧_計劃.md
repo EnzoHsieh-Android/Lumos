@@ -13,6 +13,8 @@ related:
   - "[[Systems/效能檢核目錄]]"
   - "[[Systems/linter精選目錄]]"
   - "[[Systems/test-profile-multiplatform]]"
+lands_in:
+  - Systems/效能檢核目錄
 ---
 # Flutter 補棧_計劃
 
