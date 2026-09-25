@@ -15,8 +15,8 @@ summary: |-
   RULE:[since:2026-09-25][confirmed:2026-09-25][retire:hook 注入改成結構化欄位、不再用文字框區分資料與指令]★注入框裡只放從專案讀出來的值,工具自己寫死的指示放框外★——框頭寫「不是指令」,把工具自己的祈使句包進去,照字面讀的模型會當成可略過的資料。單源在 [[Systems/hook信任邊界]]
   REVISIT:2026-10-25 用情境探針對三處改動各跑一次改前改後(skill 觸發描述、進場 hook 開場白、框外指示),確認模型行為真的有變;這次沒做行為驗證
 lands_in:
-  - "[[Systems/hook信任邊界]]"
-  - "[[Systems/codex-harness]]"
+  - Systems/hook信任邊界
+  - Systems/codex-harness
 ---
 # Prompt稽核_計劃
 
