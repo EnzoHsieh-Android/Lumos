@@ -7235,7 +7235,35 @@ def _report_normalize_issues(text):
         vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
         if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
             issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
+    issues.extend(_report_findings_missing_severity(lines, _top))
     return issues
+
+
+_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已看,無", "已看，無", "已讀,無", "已讀，無")
+# 只收完整片語、不收單獨的「已讀」「已看」:「已讀取失敗」會被誤豁免(代碼審 r1 架構席);
+# 「已看,無」是資安席範本規定的寫法(歷史報告 code-純文件子集 r1 資安席實例),拿掉會誤擋
+
+
+def _report_findings_missing_severity(lines, top):
+    """★檔首判成非 clean 時,發現段的數量不能多過 severity 行★(2026-09-25:一份 F1、F2 都漏寫的報告在收貨偵測被說成
+    已正規化,到記帳時才因「報了幾條」對不上被擋)。缺的不補值(不能替審查席決定等級),只回給呼叫端印出來要人改。
+    ★只數數量、不分析標題結構★(代碼審三輪、Enzo 裁甲:逐段找範圍的做法每輪都被標題寫法的邊界打穿——子標題、
+    層級錯位、一字不差的兩個標題、縮排、F1.1 編號子標題——而且每輪的洞都是上一輪修正帶進來的)。記帳時「報了幾條」
+    也是數 severity 行,兩邊同一種數法。
+    ★天花板★:指不出是哪一條漏寫;某條寫了兩行、另一條沒寫時數量對得上會漏看。
+    不算發現段的:clean 報告、標題寫明已驗過/沒問題/已看,無 的段、F 後面接小數點的編號子標題(F1.1)。"""
+    if top not in ("minor", "major", "blocker"):
+        return []
+    heads = [(no, ln) for no, ln in _visible_lines(lines, keep_fenced=False)
+             if re.match(r"^\s{0,3}#{2,6}\s*F\d+(?![.\d])", ln, re.I)
+             and not any(w in ln for w in _FINDING_VERIFIED_WORDS)]
+    n_sev = len(_report_severities("\n".join(lines))) - 1   # 扣掉檔首那一行
+    if len(heads) <= n_sev:
+        return []
+    return [(heads[0][0], f"有 {len(heads)} 個發現段、卻只有 {n_sev} 行 severity: <值>——有發現漏寫等級"
+                          "(檔首判成非 clean 時每個 F 段都要有自己一行;要請審查席自己補)", heads[0][1])]
+
+
 
 
 _SEV_INLINE_DECL_RE = re.compile(r"^(\s*(?:[-*+]\s*)?(?:\*\*)?)(?:severity|Severity|嚴重度)(?:\*\*)?\s*[:：]\s*(clean|minor|major|blocker)\b\s*(.*)$")
@@ -10428,15 +10456,17 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             _qid = _shlex.quote(loop_id)
             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
             _orch_flag = f" --orchestrator {eff_orch}"
-            out["record_cmd"] = (f"lumos canary record caught|missed --loop {_qid}{rmode}"
+            # ★用現行類別 none★:caught|missed 是 canary 植入協議的類別,2026-08-14 已停用(Systems/canary-audit d5),
+            # 照抄舊模板等於教人記一筆已停用的帳;--snapshot:代碼審記帳從第一筆就要附審材,沒帶會被擋
+            out["record_cmd"] = (f"lumos canary record none --loop {_qid}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
-                                 f" --report <席報告.md>"
+                                 f" --report <席報告.md> --snapshot <凍結快照.md>"
                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
                                  f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
             if not light and eff_tier != "legacy":
                 out["disposal_cmd"] = (
-                    f"lumos canary record caught|missed --loop {_qid}{rmode}"
+                    f"lumos canary record none --loop {_qid}{rmode}"
                     f" --auditor <席> --severity <s>"
                     f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
                     f" --accept-reason <id=理由> --refuted-set none"

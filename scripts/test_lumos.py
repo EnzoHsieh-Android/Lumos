@@ -21912,6 +21912,65 @@ def t_lint_empty_date_is_error():
         check(f"③ 決策的 {k} 寫成空字串 → 報錯", r.returncode == 1 and k in r.stdout, r.stdout[-300:])
 
 
+def t_loop_next_record_templates_use_current_kind():
+    """loop next 印的記帳指令要用現行的類別 none,不能再建議已停用的 caught|missed(2026-08-14 canary 協議停用);
+    record_cmd 要帶 --snapshot(代碼審記帳從第一筆就要附審材,照抄沒帶會被擋)。
+    出身:2026-09-25 代碼審「筆記欄位關卡補齊」時照 loop next 的輸出看到舊類別。翻紅釘:模板改回 caught|missed → ②紅。"""
+    print("t_loop_next_record_templates_use_current_kind")
+    import json as _j
+    v = mkvault()
+    for lid in (f"code-模板-{_M1U}", f"design-模板-{_M1U}"):
+        d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
+        cmds = [d.get("record_cmd", ""), d.get("disposal_cmd", "")]
+        check(f"①[{lid[:6]}] 現場成立:有吐記帳模板", bool(d.get("record_cmd")), str(d)[:200])
+        check(f"②[{lid[:6]}] 模板用 none、不出現 caught 或 missed",
+              all("canary record none" in c and "caught" not in c and "missed" not in c for c in cmds if c), str(cmds)[:300])
+        check(f"③[{lid[:6]}] record_cmd 帶 --snapshot", "--snapshot" in d["record_cmd"], d["record_cmd"])
+
+
+def t_report_normalize_flags_finding_without_severity():
+    """檔首判成非 clean,卻有「## F<n>」發現段沒有獨立 severity 行 → 報成要人改(不能說已正規化)。
+    出身:2026-09-25 設計審「筆記欄位關卡補齊」正確性席的報告,F1、F2 都漏了 severity 行,report-normalize 卻說已正規化,
+    到記帳時才因「報了幾條」對不上被擋。clean 報告、以及標題寫明已驗過/沒問題的段落不算(那種段落本來就不准掛 severity)。
+    翻紅釘:拿掉這項檢查 → ②紅。代碼審三輪後改成只數數量(Enzo 裁甲),③–⑬ 是三輪審查各自抓到的邊界。"""
+    print("t_report_normalize_flags_finding_without_severity")
+    v = mkvault()
+    d = v.parent
+    def rn(name, text):
+        f = d / name
+        f.write_text(text, encoding="utf-8")
+        return run(v, "report-normalize", str(f))
+    r = rn("ok.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n引句:「這是一段足夠長的引句內容」\n")
+    check("① 現場成立:每條都有 severity → 已正規化(rc0)", r.returncode == 0, r.stdout[-300:])
+    r = rn("miss.md", "severity: blocker\n\n## F1 第一條\n引句:「這是一段足夠長的引句內容」\n\n## F2 第二條\n引句:「這是另一段足夠長的引句」\n")
+    check("② 檔首 blocker、F1 F2 都沒 severity 行 → 報出「2 個發現段、只有 0 行」、rc1", r.returncode == 1 and "2 個發現段" in r.stdout and "只有 0 行" in r.stdout, r.stdout[-400:])
+    r = rn("clean.md", "severity: clean\n\n## F1 三個翻紅釘全部驗證屬實\n引句:「這是一段足夠長的引句內容」\n")
+    check("③ clean 報告裡的 F 段不算", r.returncode == 0, r.stdout[-300:])
+    r = rn("verified.md", "severity: minor\n\n## F1 一條\nseverity: minor\nblocking: no\n\n## F2 已驗過、沒問題的部分\n引句:「這是一段足夠長的引句內容」\n")
+    check("④ 標題寫已驗過、沒問題的段落不算", r.returncode == 0, r.stdout[-300:])
+    # 代碼審 r1 通才席、架構席
+    r = rn("lower.md", "severity: major\n\n## f1 小寫標題\n引句:「這是一段足夠長的引句內容」\n")
+    check("⑤ 小寫 f1 標題、沒 severity → 也要抓", r.returncode == 1 and "f1" in r.stdout, r.stdout[-300:])
+    r = rn("sub.md", "severity: major\n\n## F1 一條\n### 重現\n引句:「這是一段足夠長的引句內容」\nseverity: major\nblocking: yes\n")
+    check("⑥ F 段裡有子標題、severity 寫在子標題下面 → 不算缺", r.returncode == 0, r.stdout[-300:])
+    r = rn("loose.md", "severity: major\n\n## F1 已讀取設定失敗\n引句:「這是一段足夠長的引句內容」\n")
+    check("⑦ 標題只是剛好含「已讀」兩字(已讀取)→ 不豁免、照抓", r.returncode == 1, r.stdout[-300:])
+    # 代碼審 r2 通才席:## F1 後面接 ### F2,F2 的 severity 被算給 F1
+    r = rn("depth.md", "severity: major\n\n## F1 沒寫等級\n引句:「這是一段足夠長的引句內容」\n\n### F2 層級寫錯\nseverity: major\nblocking: yes\n")
+    check("⑧ ## F1 後面接 ### F2、只有一行等級 → 報出「2 個發現段、只有 1 行」", r.returncode == 1 and "2 個發現段" in r.stdout and "只有 1 行" in r.stdout, r.stdout[-400:])
+    r = rn("h3.md", "severity: major\n\n## Findings\n\n### F1 三級標題\n#### 重現\nseverity: major\nblocking: yes\n\n### F2 也是三級\nseverity: minor\nblocking: no\n")
+    check("⑩ ## Findings 底下用 ### F 的合法報告不誤擋(四級子標題也不切段)", r.returncode == 0, r.stdout[-400:])
+    r = rn("seen.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n\n## F2 已看,無新增獨立發現\n引句:「這是一段足夠長的引句內容」\n")
+    check("⑪ 資安席範本的「已看,無」段不算缺(歷史報告實例:code-純文件子集 r1 資安席)", r.returncode == 0, r.stdout[-400:])
+    # 代碼審 r3 通才席
+    r = rn("indent.md", "severity: blocker\n\n  ## F1 縮排標題\n引句:「這是一段足夠長的引句內容」\n")
+    check("⑫ 縮排的標題(Markdown 照樣是標題)沒等級 → 照抓", r.returncode == 1, r.stdout[-300:])
+    r = rn("sub-num.md", "severity: major\n\n## F1 一條\n### F1.1 細節\n### F1.2 另一個細節\nseverity: major\nblocking: yes\n")
+    check("⑬ F1.1 這類編號子標題不算發現段 → 不誤擋", r.returncode == 0, r.stdout[-300:])
+    r = rn("dup.md", "severity: major\n\n## F1 同名\nseverity: major\nblocking: yes\n\n## F1 同名\n引句:「這是一段足夠長的引句內容」\n")
+    check("⑨ 兩段標題一字不差,後一段沒寫等級 → 照抓(不因前一段有寫就放過)", r.returncode == 1, r.stdout[-400:])
+
+
 def t_lint_aliases_declared():
     """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
     (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
@@ -23784,7 +23843,7 @@ def t_loop_next_disposal_cmd_actually_runs():
                   .replace("<s>", "minor").replace("<M>", "0")
                   .replace("<席報告.md>", _sevrep(v.parent, "minor"))
                   .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
-                  .replace("<這輪審了幾行>", "10"))
+                  .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
     check("★前置★ record_cmd 填完無殘留佔位符", "<" not in rec_filled, rec_filled)
     rrec = run(v, *rec_filled.split()[1:])
     check("★record_cmd 模板真的跑得動(rc0)★", rrec.returncode == 0, f"rc={rrec.returncode} {rrec.stderr[:200]}")
@@ -24605,7 +24664,7 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
                  .replace("<s>", "clean").replace("<M>", "0")
                  .replace("<席報告.md>", _sevrep(v.parent))
                  .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
-                 .replace("<這輪審了幾行>", "10"))
+                 .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
     argv = filled.split()
     check("★前置★ 現場成立:填完沒有殘留佔位符(不然是在跑別的東西)",
           "<" not in filled and argv[0] == "lumos", filled)
@@ -33166,10 +33225,13 @@ def t_entry_latch_advisories():
     rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
           "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
+    import re as _re_snap
     _snap = v / "Projects" / "r9-snapshot.md"; _snap.write_text("s\n", encoding="utf-8")
     rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--orchestrator", "claude", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
     check("★code-r2 D2-2:spec 殘渣(snapshot)不得變建議指令——spec 無訊號一律用編號版★",
-          "snapshot" not in rt2c.stdout and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
+          # 只查「檔名殘渣變成搜尋詞或被印出來」:記帳模板本身帶 --snapshot 旗標(2026-09-25),整段查 snapshot 字樣會誤報
+          not _re_snap.search(r'search\s+"[^"]*snapshot', rt2c.stdout) and "r9-snapshot" not in rt2c.stdout
+          and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
           rt2c.stdout[-300:])
     rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])

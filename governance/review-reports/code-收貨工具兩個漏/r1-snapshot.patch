@@ -1,0 +1,225 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/design-loop.md b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+index abaa6a79..0ef00e28 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/design-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+@@ -25,20 +25,21 @@ verified_by:
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-25_設計審收斂重定義落地]]"
+   - "[[Verification/2026-08-25_迴圈摩擦兩修落地]]"
+   - "[[Verification/2026-08-26_新舊制同料對照_v0]]"
+   - "[[Verification/2026-08-30_intake守衛T1-T4落地]]"
+   - "[[Verification/2026-09-03_席間覆蓋率離線量測]]"
+   - "[[Verification/2026-09-03_派工攔截點實測]]"
+   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+   - "[[Verification/2026-09-11_skills健檢]]"
+ summary: |-
++  PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時每個 `## F<n>` 段都要有自己的 severity 行,缺的只印出來要審查席自己補(不替它填值),clean 報告與標題寫明已驗過/沒問題的段不算。只在記帳當下檢查,不回頭驗舊報告(掃過 1885 份歷史報告有 6 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
+   KEY:[代碼審 r2 折入 2026-09-16]★收尾圍欄改嚴,改得比題目寬★——題目是「不得帶語言標記」,第一版寫成「後面不得有任何東西」,結果★打錯一個字、多敲一鍵,後面到檔尾所有內容(含合約行)就無聲隱形★,正是這支函式自己警告過的最危險模式換個門長出來。改成兩段式:先照 CommonMark 讀,規格讀出「有圍欄一直沒關到檔尾」才整份退回寬鬆讀法。★取捨要講清楚★:同一份文件同時有巢狀範例和沒關到的圍欄時會退回寬鬆、巢狀那題擋不住——那等於回到改動前的行為,不算退步,而且真有沒關到的圍欄本來就該先修那個。影響面重量:跟改動前比 537 篇仍只有 1 篇會變 [test:t_closing_fence_must_not_carry_a_language_tag]
+   KEY:[代碼審 r1 折入 2026-09-16]★收尾圍欄不准帶語言標記★——改用共用那支之後冒出反向誤判,根因在★共用那支自己★:判「這行關不關得掉圍欄」只看同字元、長度夠,沒看後面還有沒有東西,而 CommonMark 規定收尾圍欄不得帶標記。於是巢狀範例裡的 ```python / ~~~python 會把外層圍欄關掉,範例裡的樣板文字變成看得見。修在共用那支身上,★改嚴之前先量影響面★:對圖譜 537 篇逐篇比對「看得見哪些行」,只有 1 篇會變(一篇 markdown 範例裡包了 yaml 區塊),而且那篇改嚴才是對的 [test:t_closing_fence_must_not_carry_a_language_tag]
+   KEY:[前掃宣告行改走共用剝圍欄 2026-09-16]判斷 intake 檔有沒有那行前掃宣告時,原本自己寫了一個反引號圍欄的正則,★而專案裡那支「全檔唯一的圍欄判定」的說明白紙黑字寫著「所有人都必須走這裡」★(自己寫的正則假設圍欄一定成對、標記一定在第 0 欄)。實測兩種形狀兩邊答案相反:①外層四個反引號、內層三個反引號 ②波浪號圍欄——兩種都讓「把樣板原樣貼進圍欄裡」被算成真的跑過前掃,正是那支判定自己宣稱要防的「模板照抄即偽造」。★只影響觀測數字不擋任何閘★(處置閘印它、體檢滾動窗數它,兩邊都只觀測),但那個數字本來就是拿來看「前掃有沒有真的在跑」的。 [test:t_intake_declaration_uses_shared_fence_stripping]
+   KEY:[2026-09-09 審查有沒有用記帳]收貨線多一道機械閘:席報告沒正規化(檔首檔級 severity 行、每條 finding 恰一行獨立宣告)記帳 rc2 並在治理帳留 canary/blocked;`lumos report-normalize` 只搬格式(vault-free);載體必帶 --refuted-set(intake 整字驗、圍欄不算);問閘尾一行「席位報 N(機器數)→存活/重現不到→折/放行」觀測不進合取;單源 [[Projects/審查有沒有用記帳_計劃]]
+   KEY:[2026-09-17 Enzo 裁]架構對齊席每個分級都派(_TIER_ROSTER 六組合:design/code × light/standard/high):code/light 以前沒編制、skill 寫可跳,現在=只派架構對齊一席(算人數);design/light 多一席架構對齊(不算人數)。理由:小改動也不能脫離原有架構亂加 [test:t_tier_roster_table] [test:t_loop_next_roster]
+   KEY:[2026-09-17 風險低放行]處置閘第五步呼叫 _clause_check 時 door=None(=風險高語意:收 manual、要回退節);風險低的加嚴只在規格閘那一路(plan_risk=low);風險低計劃不會進處置閘(不派審),進來了也照風險高判——判定不會比規格閘鬆
+   KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 [test:]/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+   KEY:[2026-09-08 條款綁定]為什麼加在閘不是 skill 散文:接手席/架構席/簡化席三席獨立查證「設計審出口寫一句流程規則」零約束,跟 spec-trace 33 篇 15 篇零認領同型;閘是設計審往下走的唯一入口(進度從提交推導 d9)。漏洞:整份不寫 [SN] 可繞過 → REVISIT:2026-11-08 那次連「過審計劃有 [SN] 的比例」一起量
+   KEY:處置閘第六步「落點」(2026-09-11,[[Projects/每支檔有家_計劃]] [S21]):設計審的計劃(Projects 底下、type: project)要有 lands_in(現況落在哪幾篇、或新開哪一篇,每項 Systems/<名>),空的或格式不對不得 PASS;首筆帳在 2026-09-12T00:00+08:00 之後的迴圈才看、不回溯,形狀照第五步;派工鏡頭(LUMOS-SPEC)附上落點每篇的現況(掛幾份計劃、幾行 KEY、幾條合約、管幾支檔),架構對齊席多第四問「落點合不合理」——節點長成一篇包全部,是因為落點從來沒被審過 [test:t_disposal_gate_requires_landing] [test:t_design_dispatch_shows_landing_sizes]
+   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
+diff --git a/scripts/lumos b/scripts/lumos
+index ab6b7b73..ec36ce07 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7228,23 +7228,50 @@ def _report_normalize_issues(text):
+             _vis_lv = re.sub(r"(?i)\b(?:clean|minor|major|blocker)\b\s*[:：]?\s*0\s*條", "", _strip_inline_markup(ln)[0])
+             _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _vis_lv)]
+             if _top is not None and all(_SEV_ORDER[w] <= _SEV_ORDER[_top] for w in _lv):
+                 continue
+             if _lv:
+                 issues.append((no, f"總結句提到的等級({'/'.join(_lv)})高於檔級宣告({_top or '缺'})——總結句只能重述,不能藏更高的等級", ln))
+                 continue
+         vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
+         if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
+             issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
++    issues.extend(_report_findings_missing_severity(lines, _top))
+     return issues
+ 
+ 
++_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已讀", "已看")
++
++
++def _report_findings_missing_severity(lines, top):
++    """★檔首判成非 clean,每個「## F<n>」發現段都要有自己的 severity 行★(2026-09-25:一份 F1、F2 都漏寫的報告
++    在收貨偵測被說成已正規化,到記帳時才因「報了幾條」對不上被擋)。clean 報告的 F 段、標題寫明已驗過/沒問題的段不算
++    ——那種段落本來就不准掛 severity。缺的不補值(不能替審查席決定等級),只回給呼叫端印出來要人改。"""
++    if top not in ("minor", "major", "blocker"):
++        return []
++    out, cur = [], None
++    for no, ln in _visible_lines(lines, keep_fenced=False):
++        if re.match(r"^\s*#{1,6}\s", ln):
++            if cur is not None:
++                out.append(cur)
++            cur = None
++            if re.match(r"^\s*#{2,6}\s*F\d+\b", ln) and not any(w in ln for w in _FINDING_VERIFIED_WORDS):
++                cur = (no, "這條發現沒有自己的一行 severity: <值>(檔首判成非 clean 時,每個 F 段都要有;要請審查席自己補)", ln)
++        elif cur is not None and _SEV_DECL_LINE_RE.fullmatch(ln):
++            cur = None
++    if cur is not None:
++        out.append(cur)
++    return out
++
++
++
++
+ _SEV_INLINE_DECL_RE = re.compile(r"^(\s*(?:[-*+]\s*)?(?:\*\*)?)(?:severity|Severity|嚴重度)(?:\*\*)?\s*[:：]\s*(clean|minor|major|blocker)\b\s*(.*)$")
+ _SEV_HEADING_DECL_RE = re.compile(r"^(\s*#{1,6}\s.*?)\s*[—–-]{1,2}\s*(?:severity\s*[:：]\s*)?(blocker|major|minor|clean)\b\s*[,，;；]?\s*(.*)$", re.I)
+ 
+ 
+ def normalize_report_text(text):
+     """[審查有沒有用記帳 S1/S4] 把席報告常見的嚴重度寫法機械轉成 SOP 格式(獨立一行 severity: <值>),回 (新文字, 改了幾處, 還剩的殘留清單)。
+     做的事只有三種、都是純格式:①行內/列表/粗體的 `severity: X ...` → 一行 `severity: X` + 其餘文字另起一行;
+     ②標題裡嵌等級(`### F1 —— severity: blocker,blocking: 是` / `## F1 — BLOCKER`)→ 標題保留、下一行插 `severity: x`;
+     ③第一個宣告不在檔首 → 檔首插一行檔級宣告(值=所有宣告裡最高的;原本就有檔級行則不動)。
+     ★不碰內容、不改 severity 值、不動引句/圍欄★;轉不了的原樣留下,由 _report_normalize_issues 印給人改。"""
+@@ -10421,29 +10448,31 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+             # 定錨,下一輪 next 又推成 legacy、又吐一條跑不動的指令。
+             # ★這個 bug 自己維持自己★:2026-08 三個走循序的 loop(code-slim-python /
+             # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
+             # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+             # ★編號加 shell 引號★(代碼審 r3 資安 G1):loop_id 是自由字串,`code-x; touch … #` 原樣塞進
+             # 這幾條每輪都印、照慣例原樣照抄的指令,`;` 之後就被當成指令跑;一般編號 shlex.quote 不加引號
+             import shlex as _shlex
+             _qid = _shlex.quote(loop_id)
+             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
+             _orch_flag = f" --orchestrator {eff_orch}"
+-            out["record_cmd"] = (f"lumos canary record caught|missed --loop {_qid}{rmode}"
++            # ★用現行類別 none★:caught|missed 是 canary 植入協議的類別,2026-08-14 已停用(Systems/canary-audit d5),
++            # 照抄舊模板等於教人記一筆已停用的帳;--snapshot:代碼審記帳從第一筆就要附審材,沒帶會被擋
++            out["record_cmd"] = (f"lumos canary record none --loop {_qid}{rmode}"
+                                  f" --auditor <席> --severity <s> --findings <M>"
+-                                 f" --report <席報告.md>"
++                                 f" --report <席報告.md> --snapshot <凍結快照.md>"
+                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
+                                  f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
+             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
+             if not light and eff_tier != "legacy":
+                 out["disposal_cmd"] = (
+-                    f"lumos canary record caught|missed --loop {_qid}{rmode}"
++                    f"lumos canary record none --loop {_qid}{rmode}"
+                     f" --auditor <席> --severity <s>"
+                     f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
+                     f" --accept-reason <id=理由> --refuted-set none"
+                     f" --report <席報告.md> --snapshot <凍結快照.md>"
+                     f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}")
+                 out["disposal_gate"] = f"lumos loop status {_qid} --disposal --spec <計劃節點.md> --repo <root>"
+             if eff_tier == "legacy":
+                 if _roster_kind(loop_id) == "code":
+                     # 循序codeloop-tier錨定案:standard 對 code 循序已格式相容,但補標=cap 陷阱——警告式,不邀請
+                     out["tier_hint"] = (
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 941693e8..8c9e78cc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21905,20 +21905,58 @@ def t_lint_empty_date_is_error():
+         check(f"② {label} → 報錯", r.returncode == 1 and ("created" in r.stdout or "updated" in r.stdout), r.stdout[-300:])
+     # ③ 決策的 decided/ended 寫成空字串也一樣(代碼審 r2 五席同一條:只補了頂層三個,同構的決策日期沒跟上)
+     for k in ("decided", "ended"):
+         dec = "decisions:\n  - content: 一條決策\n    id: d1\n    decided: 2026-09-05\n    valid: false\n    ended: 2026-09-20\n"
+         dec = dec.replace(f"    {k}: 2026-09-{'05' if k == 'decided' else '20'}\n", f'    {k}: ""\n')
+         _nl_note(v, "Systems", f"決策{k}空", _NL_OK_SYS + dec)
+         r = run(v, "lint", f"決策{k}空")
+         check(f"③ 決策的 {k} 寫成空字串 → 報錯", r.returncode == 1 and k in r.stdout, r.stdout[-300:])
+ 
+ 
++def t_loop_next_record_templates_use_current_kind():
++    """loop next 印的記帳指令要用現行的類別 none,不能再建議已停用的 caught|missed(2026-08-14 canary 協議停用);
++    record_cmd 要帶 --snapshot(代碼審記帳從第一筆就要附審材,照抄沒帶會被擋)。
++    出身:2026-09-25 代碼審「筆記欄位關卡補齊」時照 loop next 的輸出看到舊類別。翻紅釘:模板改回 caught|missed → ②紅。"""
++    print("t_loop_next_record_templates_use_current_kind")
++    import json as _j
++    v = mkvault()
++    for lid in (f"code-模板-{_M1U}", f"design-模板-{_M1U}"):
++        d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
++        cmds = [d.get("record_cmd", ""), d.get("disposal_cmd", "")]
++        check(f"①[{lid[:6]}] 現場成立:有吐記帳模板", bool(d.get("record_cmd")), str(d)[:200])
++        check(f"②[{lid[:6]}] 模板用 none、不出現 caught 或 missed",
++              all("canary record none" in c and "caught" not in c and "missed" not in c for c in cmds if c), str(cmds)[:300])
++        check(f"③[{lid[:6]}] record_cmd 帶 --snapshot", "--snapshot" in d["record_cmd"], d["record_cmd"])
++
++
++def t_report_normalize_flags_finding_without_severity():
++    """檔首判成非 clean,卻有「## F<n>」發現段沒有獨立 severity 行 → 報成要人改(不能說已正規化)。
++    出身:2026-09-25 設計審「筆記欄位關卡補齊」正確性席的報告,F1、F2 都漏了 severity 行,report-normalize 卻說已正規化,
++    到記帳時才因「報了幾條」對不上被擋。clean 報告、以及標題寫明已驗過/沒問題的段落不算(那種段落本來就不准掛 severity)。
++    翻紅釘:拿掉這項檢查 → ②紅。"""
++    print("t_report_normalize_flags_finding_without_severity")
++    v = mkvault()
++    d = v.parent
++    def rn(name, text):
++        f = d / name
++        f.write_text(text, encoding="utf-8")
++        return run(v, "report-normalize", str(f))
++    r = rn("ok.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n引句:「這是一段足夠長的引句內容」\n")
++    check("① 現場成立:每條都有 severity → 已正規化(rc0)", r.returncode == 0, r.stdout[-300:])
++    r = rn("miss.md", "severity: blocker\n\n## F1 第一條\n引句:「這是一段足夠長的引句內容」\n\n## F2 第二條\n引句:「這是另一段足夠長的引句」\n")
++    check("② 檔首 blocker、F1 F2 都沒 severity 行 → 報出來、rc1", r.returncode == 1 and "F1" in r.stdout and "F2" in r.stdout, r.stdout[-400:])
++    r = rn("clean.md", "severity: clean\n\n## F1 三個翻紅釘全部驗證屬實\n引句:「這是一段足夠長的引句內容」\n")
++    check("③ clean 報告裡的 F 段不算", r.returncode == 0, r.stdout[-300:])
++    r = rn("verified.md", "severity: minor\n\n## F1 一條\nseverity: minor\nblocking: no\n\n## F2 已驗過、沒問題的部分\n引句:「這是一段足夠長的引句內容」\n")
++    check("④ 標題寫已驗過、沒問題的段落不算", r.returncode == 0, r.stdout[-300:])
++
++
+ def t_lint_aliases_declared():
+     """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
+     (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
+     直接逼「必須有別名」會製造湊數別名,而 aliases 吃 3.5 檢索權重,爛別名主動污染排序
+     ——同「不確定就不標」精神。舊節點不回溯(created 早於 cutoff 不管);verification/project 豁免。
+     翻紅釘:拔檢查 → 缺鍵案例翻紅。"""
+     v = mkvault()
+     (v / "Systems" / "新缺鍵.md").write_text(
+         "---\ntype: system\nstatus: doing\ncreated: 2026-08-05\nupdated: 2026-08-05\n"
+         "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# 新缺鍵\n", encoding="utf-8")
+@@ -23777,21 +23815,21 @@ def t_loop_next_disposal_cmd_actually_runs():
+               .replace(" --accept-reason <id=理由>", "")
+               .replace("<席報告.md>", str(rpt)).replace("<凍結快照.md>", str(spec))
+               .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h))
+     argv = filled.split()
+     check("★前置★ 填完無殘留佔位符", "<" not in filled and argv[0] == "lumos", filled)
+     # cb3 s3-f1:record_cmd 同樣真跑——寫側新規曾讓它照跑必 rc2,模板已補 --report,這釘防回歸
+     rec_filled = (d["record_cmd"].replace("caught|missed", "caught").replace("<席>", "s9")
+                   .replace("<s>", "minor").replace("<M>", "0")
+                   .replace("<席報告.md>", _sevrep(v.parent, "minor"))
+                   .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
+-                  .replace("<這輪審了幾行>", "10"))
++                  .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
+     check("★前置★ record_cmd 填完無殘留佔位符", "<" not in rec_filled, rec_filled)
+     rrec = run(v, *rec_filled.split()[1:])
+     check("★record_cmd 模板真的跑得動(rc0)★", rrec.returncode == 0, f"rc={rrec.returncode} {rrec.stderr[:200]}")
+     rr = run(v, *argv[1:])
+     check("★disposal_cmd 模板真的跑得動(rc0)★", rr.returncode == 0,
+           f"rc={rr.returncode} {rr.stderr[:200]}")
+     g = (d["disposal_gate"].replace("<計劃節點.md>", str(spec)).replace("<root>", str(v.parent)))
+     rg = run(v, *g.split()[1:])
+     check("★disposal_gate 模板跑得動且對剛記的帳給出判定(rc0/1 非 rc2)★", rg.returncode in (0, 1),
+           f"rc={rg.returncode} {rg.stderr[:200]}")
+@@ -24598,21 +24636,21 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
+ 
+     cmd = d["record_cmd"]
+     check("★legacy 不得出現在 record_cmd 的 --tier★(它不是可宣告值)",
+           "--tier legacy" not in cmd, cmd)
+ 
+     # ★真跑★:填掉佔位符,原樣執行 next 給的指令
+     filled = (cmd.replace("caught|missed", "caught").replace("<席>", "s2")
+                  .replace("<s>", "clean").replace("<M>", "0")
+                  .replace("<席報告.md>", _sevrep(v.parent))
+                  .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
+-                 .replace("<這輪審了幾行>", "10"))
++                 .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
+     argv = filled.split()
+     check("★前置★ 現場成立:填完沒有殘留佔位符(不然是在跑別的東西)",
+           "<" not in filled and argv[0] == "lumos", filled)
+     rr = run(v, *argv[1:])
+     check("★next 吐的指令必須真的跑得動★(rc0)", rr.returncode == 0,
+           f"rc={rr.returncode} cmd={filled}\n{rr.stderr[:300]}")
+ 
+     check("★要講清楚這個 loop 補標不了、得開新 id★(不然人只會困惑地把旗標拿掉)",
+           "開新的審查編號" in d.get("tier_hint", "") and "最多 6 輪" in d.get("tier_hint", ""),
+           d.get("tier_hint", "")[:200])

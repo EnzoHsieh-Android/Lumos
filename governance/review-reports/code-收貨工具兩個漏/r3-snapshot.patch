@@ -1,0 +1,142 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index ec36ce07..4903191e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5288,30 +5288,31 @@ def _clause_grammar(body):
+             if any(rest.startswith(w) for w in hard) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(head)):
+                 return False, "trigger", "複合觸發(一條只准一個觸發子句,拆成兩條)"
+         if _shall_index(rest) < 0:   # 缺應也要跳複合詞(代碼審 v2 r2:「系統反應」不算有應)
+             return False, "trigger", "回應段缺「應」(主體 應 回應)"
+         return True, "trigger", ""
+     if _shall_index(b) < 0:
+         return False, "unconditional", "缺「應」(主體 應 回應)"
+     return True, "unconditional", ""
+ 
+ 
+-def _h2_section_lines(text, h2_re):
+-    """某個二級節(標題行符合 h2_re)裡的可見行 [(行號, 原始行)]:到下一個 `## `/`# ` 為止(三級標題不切節、標題行本身不算);
++def _h2_section_lines(text, h2_re, level=2):
++    """某一節(標題行符合 h2_re)裡的可見行 [(行號, 原始行)]:到下一個同層或更高層的標題為止(level=2 時就是 `## `/`# `,
++    三級標題不切節;標題行本身不算);level 給審查報告的發現段用(那裡常見 `### F1`,2026-09-25);
+     fence 內不算;沒有那一節回 None。回退節與實務隱患節共用(雙向門放行_計劃 S9;r4 架構對齊席:找節邏輯不准長出第三套)。
+     只認 ATX 標題(代碼審 r2:自建 Setext 判定是第二套標題邏輯,還有 fence 錯配與 H1/H2 不分兩個洞)。"""
+     out, found, inside = [], False, False
+     for no, ln in _visible_lines(text.splitlines()):
+         if ln.startswith("#"):
+             if h2_re.match(ln.strip()):
+                 found, inside = True, True
+-            elif ln.startswith("## ") or ln.startswith("# "):
++            elif len(ln) - len(ln.lstrip("#")) <= level and ln[len(ln) - len(ln.lstrip("#")):].startswith(" "):
+                 inside = False
+             continue
+         if inside:
+             out.append((no, ln))
+     return out if found else None
+ 
+ 
+ def _rollback_section_chars(text):
+     """「## 回退」節(二級標題精確,允許尾端括號;到下一個 ## 為止;fence 內不算;引用塊行不算)裡的實字數;沒有節回 None。"""
+     rows = _h2_section_lines(text, _ROLLBACK_H2_RE)
+@@ -7232,41 +7233,48 @@ def _report_normalize_issues(text):
+             if _lv:
+                 issues.append((no, f"總結句提到的等級({'/'.join(_lv)})高於檔級宣告({_top or '缺'})——總結句只能重述,不能藏更高的等級", ln))
+                 continue
+         vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
+         if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
+             issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
+     issues.extend(_report_findings_missing_severity(lines, _top))
+     return issues
+ 
+ 
+-_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已讀", "已看")
++_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已看,無", "已看，無", "已讀,無", "已讀，無")
++# 只收完整片語、不收單獨的「已讀」「已看」:「已讀取失敗」會被誤豁免(代碼審 r1 架構席);
++# 「已看,無」是資安席範本規定的寫法(歷史報告 code-純文件子集 r1 資安席實例),拿掉會誤擋
+ 
+ 
+ def _report_findings_missing_severity(lines, top):
+     """★檔首判成非 clean,每個「## F<n>」發現段都要有自己的 severity 行★(2026-09-25:一份 F1、F2 都漏寫的報告
+     在收貨偵測被說成已正規化,到記帳時才因「報了幾條」對不上被擋)。clean 報告的 F 段、標題寫明已驗過/沒問題的段不算
+     ——那種段落本來就不准掛 severity。缺的不補值(不能替審查席決定等級),只回給呼叫端印出來要人改。"""
+     if top not in ("minor", "major", "blocker"):
+         return []
+-    out, cur = [], None
+-    for no, ln in _visible_lines(lines, keep_fenced=False):
+-        if re.match(r"^\s*#{1,6}\s", ln):
+-            if cur is not None:
+-                out.append(cur)
+-            cur = None
+-            if re.match(r"^\s*#{2,6}\s*F\d+\b", ln) and not any(w in ln for w in _FINDING_VERIFIED_WORDS):
+-                cur = (no, "這條發現沒有自己的一行 severity: <值>(檔首判成非 clean 時,每個 F 段都要有;要請審查席自己補)", ln)
+-        elif cur is not None and _SEV_DECL_LINE_RE.fullmatch(ln):
+-            cur = None
+-    if cur is not None:
+-        out.append(cur)
++    # 找段用既有的 _h2_section_lines(代碼審 r2 架構席:找節邏輯不准長出第三套;它的語意正是要的——
++    # 三級子標題不切節、圍欄內不算;代碼審 r1 通才席:子標題原本會把段落切斷而誤擋)。F 不分大小寫(小寫 f1 原本漏看)。
++    # 每段的範圍截在下一個發現標題之前(代碼審 r2 通才席:## F1 後接 ### F2 時,三級標題不切節,F2 的 severity 被算給 F1;
++    # 一字不差的兩個標題也會被 _h2_section_lines 併成一段——截在自己與下一個發現標題之間,兩種都分得開)。
++    # 發現段常見二級(## F1)也常見三級(## Findings 底下 ### F1),各用自己的層級找段。
++    text = "\n".join(lines)
++    heads = [(no, ln, len(m.group(1))) for no, ln in _visible_lines(lines, keep_fenced=False)
++             for m in [re.match(r"^(#{2,6})\s*F\d+\b", ln, re.I)] if m]
++    out = []
++    for idx, (no, ln, lv) in enumerate(heads):
++        if any(w in ln for w in _FINDING_VERIFIED_WORDS):
++            continue
++        end = heads[idx + 1][0] if idx + 1 < len(heads) else float("inf")
++        rows = [(n, r) for n, r in (_h2_section_lines(text, re.compile(re.escape(ln.strip()) + r"\s*$"), level=lv) or [])
++                if no < n < end]
++        if not any(_SEV_DECL_LINE_RE.fullmatch(r) for _n, r in rows):
++            out.append((no, "這條發現沒有自己的一行 severity: <值>(檔首判成非 clean 時,每個 F 段都要有;要請審查席自己補)", ln))
+     return out
+ 
+ 
+ 
+ 
+ _SEV_INLINE_DECL_RE = re.compile(r"^(\s*(?:[-*+]\s*)?(?:\*\*)?)(?:severity|Severity|嚴重度)(?:\*\*)?\s*[:：]\s*(clean|minor|major|blocker)\b\s*(.*)$")
+ _SEV_HEADING_DECL_RE = re.compile(r"^(\s*#{1,6}\s.*?)\s*[—–-]{1,2}\s*(?:severity\s*[:：]\s*)?(blocker|major|minor|clean)\b\s*[,，;；]?\s*(.*)$", re.I)
+ 
+ 
+ def normalize_report_text(text):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8c9e78cc..478948d9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21941,20 +21941,36 @@ def t_report_normalize_flags_finding_without_severity():
+         f.write_text(text, encoding="utf-8")
+         return run(v, "report-normalize", str(f))
+     r = rn("ok.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n引句:「這是一段足夠長的引句內容」\n")
+     check("① 現場成立:每條都有 severity → 已正規化(rc0)", r.returncode == 0, r.stdout[-300:])
+     r = rn("miss.md", "severity: blocker\n\n## F1 第一條\n引句:「這是一段足夠長的引句內容」\n\n## F2 第二條\n引句:「這是另一段足夠長的引句」\n")
+     check("② 檔首 blocker、F1 F2 都沒 severity 行 → 報出來、rc1", r.returncode == 1 and "F1" in r.stdout and "F2" in r.stdout, r.stdout[-400:])
+     r = rn("clean.md", "severity: clean\n\n## F1 三個翻紅釘全部驗證屬實\n引句:「這是一段足夠長的引句內容」\n")
+     check("③ clean 報告裡的 F 段不算", r.returncode == 0, r.stdout[-300:])
+     r = rn("verified.md", "severity: minor\n\n## F1 一條\nseverity: minor\nblocking: no\n\n## F2 已驗過、沒問題的部分\n引句:「這是一段足夠長的引句內容」\n")
+     check("④ 標題寫已驗過、沒問題的段落不算", r.returncode == 0, r.stdout[-300:])
++    # 代碼審 r1 通才席、架構席
++    r = rn("lower.md", "severity: major\n\n## f1 小寫標題\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑤ 小寫 f1 標題、沒 severity → 也要抓", r.returncode == 1 and "f1" in r.stdout, r.stdout[-300:])
++    r = rn("sub.md", "severity: major\n\n## F1 一條\n### 重現\n引句:「這是一段足夠長的引句內容」\nseverity: major\nblocking: yes\n")
++    check("⑥ F 段裡有子標題、severity 寫在子標題下面 → 不算缺", r.returncode == 0, r.stdout[-300:])
++    r = rn("loose.md", "severity: major\n\n## F1 已讀取設定失敗\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑦ 標題只是剛好含「已讀」兩字(已讀取)→ 不豁免、照抓", r.returncode == 1, r.stdout[-300:])
++    # 代碼審 r2 通才席:## F1 後面接 ### F2,F2 的 severity 被算給 F1
++    r = rn("depth.md", "severity: major\n\n## F1 沒寫等級\n引句:「這是一段足夠長的引句內容」\n\n### F2 層級寫錯\nseverity: major\nblocking: yes\n")
++    check("⑧ ## F1 後面接 ### F2 → F1 照抓(F2 的等級不算給 F1),F2 有寫不抓", r.returncode == 1 and "## F1" in r.stdout and "### F2" not in r.stdout, r.stdout[-400:])
++    r = rn("h3.md", "severity: major\n\n## Findings\n\n### F1 三級標題\n#### 重現\nseverity: major\nblocking: yes\n\n### F2 也是三級\nseverity: minor\nblocking: no\n")
++    check("⑩ ## Findings 底下用 ### F 的合法報告不誤擋(四級子標題也不切段)", r.returncode == 0, r.stdout[-400:])
++    r = rn("seen.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n\n## F2 已看,無新增獨立發現\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑪ 資安席範本的「已看,無」段不算缺(歷史報告實例:code-純文件子集 r1 資安席)", r.returncode == 0, r.stdout[-400:])
++    r = rn("dup.md", "severity: major\n\n## F1 同名\nseverity: major\nblocking: yes\n\n## F1 同名\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑨ 兩段標題一字不差,後一段沒寫等級 → 照抓(不因前一段有寫就放過)", r.returncode == 1, r.stdout[-400:])
+ 
+ 
+ def t_lint_aliases_declared():
+     """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
+     (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
+     直接逼「必須有別名」會製造湊數別名,而 aliases 吃 3.5 檢索權重,爛別名主動污染排序
+     ——同「不確定就不標」精神。舊節點不回溯(created 早於 cutoff 不管);verification/project 豁免。
+     翻紅釘:拔檢查 → 缺鍵案例翻紅。"""
+     v = mkvault()
+     (v / "Systems" / "新缺鍵.md").write_text(

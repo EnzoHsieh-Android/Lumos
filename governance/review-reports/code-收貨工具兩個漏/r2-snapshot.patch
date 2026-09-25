@@ -1,0 +1,85 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index ec36ce07..1c6b02df 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7232,37 +7232,43 @@ def _report_normalize_issues(text):
+             if _lv:
+                 issues.append((no, f"總結句提到的等級({'/'.join(_lv)})高於檔級宣告({_top or '缺'})——總結句只能重述,不能藏更高的等級", ln))
+                 continue
+         vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
+         if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
+             issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
+     issues.extend(_report_findings_missing_severity(lines, _top))
+     return issues
+ 
+ 
+-_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已讀", "已看")
++_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding")   # 不收單獨的「已讀」「已看」:「已讀取失敗」會被誤豁免(代碼審 r1 架構席);SOP 寫法「已讀,無 finding」由「無 finding」涵蓋
+ 
+ 
+ def _report_findings_missing_severity(lines, top):
+     """★檔首判成非 clean,每個「## F<n>」發現段都要有自己的 severity 行★(2026-09-25:一份 F1、F2 都漏寫的報告
+     在收貨偵測被說成已正規化,到記帳時才因「報了幾條」對不上被擋)。clean 報告的 F 段、標題寫明已驗過/沒問題的段不算
+     ——那種段落本來就不准掛 severity。缺的不補值(不能替審查席決定等級),只回給呼叫端印出來要人改。"""
+     if top not in ("minor", "major", "blocker"):
+         return []
+-    out, cur = [], None
++    # 段落只由「同層或更高層」的標題結束:F 段裡的子標題(### 重現)不算換段(代碼審 r1 通才席:
++    # 子標題原本會把段落切斷,severity 寫在子標題下面的合法報告被誤擋);F 不分大小寫(小寫 f1 原本整段漏看)
++    out, cur, cur_lv = [], None, 0
+     for no, ln in _visible_lines(lines, keep_fenced=False):
+-        if re.match(r"^\s*#{1,6}\s", ln):
++        mh = re.match(r"^\s*(#{1,6})\s", ln)
++        if mh:
++            lv = len(mh.group(1))
++            if cur is not None and lv > cur_lv:
++                continue
+             if cur is not None:
+                 out.append(cur)
+             cur = None
+-            if re.match(r"^\s*#{2,6}\s*F\d+\b", ln) and not any(w in ln for w in _FINDING_VERIFIED_WORDS):
+-                cur = (no, "這條發現沒有自己的一行 severity: <值>(檔首判成非 clean 時,每個 F 段都要有;要請審查席自己補)", ln)
++            if lv >= 2 and re.match(r"^\s*#{2,6}\s*F\d+\b", ln, re.I) and not any(w in ln for w in _FINDING_VERIFIED_WORDS):
++                cur, cur_lv = (no, "這條發現沒有自己的一行 severity: <值>(檔首判成非 clean 時,每個 F 段都要有;要請審查席自己補)", ln), lv
+         elif cur is not None and _SEV_DECL_LINE_RE.fullmatch(ln):
+             cur = None
+     if cur is not None:
+         out.append(cur)
+     return out
+ 
+ 
+ 
+ 
+ _SEV_INLINE_DECL_RE = re.compile(r"^(\s*(?:[-*+]\s*)?(?:\*\*)?)(?:severity|Severity|嚴重度)(?:\*\*)?\s*[:：]\s*(clean|minor|major|blocker)\b\s*(.*)$")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8c9e78cc..09c9f718 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21941,20 +21941,27 @@ def t_report_normalize_flags_finding_without_severity():
+         f.write_text(text, encoding="utf-8")
+         return run(v, "report-normalize", str(f))
+     r = rn("ok.md", "severity: major\n\n## F1 一條\nseverity: major\nblocking: yes\n引句:「這是一段足夠長的引句內容」\n")
+     check("① 現場成立:每條都有 severity → 已正規化(rc0)", r.returncode == 0, r.stdout[-300:])
+     r = rn("miss.md", "severity: blocker\n\n## F1 第一條\n引句:「這是一段足夠長的引句內容」\n\n## F2 第二條\n引句:「這是另一段足夠長的引句」\n")
+     check("② 檔首 blocker、F1 F2 都沒 severity 行 → 報出來、rc1", r.returncode == 1 and "F1" in r.stdout and "F2" in r.stdout, r.stdout[-400:])
+     r = rn("clean.md", "severity: clean\n\n## F1 三個翻紅釘全部驗證屬實\n引句:「這是一段足夠長的引句內容」\n")
+     check("③ clean 報告裡的 F 段不算", r.returncode == 0, r.stdout[-300:])
+     r = rn("verified.md", "severity: minor\n\n## F1 一條\nseverity: minor\nblocking: no\n\n## F2 已驗過、沒問題的部分\n引句:「這是一段足夠長的引句內容」\n")
+     check("④ 標題寫已驗過、沒問題的段落不算", r.returncode == 0, r.stdout[-300:])
++    # 代碼審 r1 通才席、架構席
++    r = rn("lower.md", "severity: major\n\n## f1 小寫標題\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑤ 小寫 f1 標題、沒 severity → 也要抓", r.returncode == 1 and "f1" in r.stdout, r.stdout[-300:])
++    r = rn("sub.md", "severity: major\n\n## F1 一條\n### 重現\n引句:「這是一段足夠長的引句內容」\nseverity: major\nblocking: yes\n")
++    check("⑥ F 段裡有子標題、severity 寫在子標題下面 → 不算缺", r.returncode == 0, r.stdout[-300:])
++    r = rn("loose.md", "severity: major\n\n## F1 已讀取設定失敗\n引句:「這是一段足夠長的引句內容」\n")
++    check("⑦ 標題只是剛好含「已讀」兩字(已讀取)→ 不豁免、照抓", r.returncode == 1, r.stdout[-300:])
+ 
+ 
+ def t_lint_aliases_declared():
+     """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
+     (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
+     直接逼「必須有別名」會製造湊數別名,而 aliases 吃 3.5 檢索權重,爛別名主動污染排序
+     ——同「不確定就不標」精神。舊節點不回溯(created 早於 cutoff 不管);verification/project 豁免。
+     翻紅釘:拔檢查 → 缺鍵案例翻紅。"""
+     v = mkvault()
+     (v / "Systems" / "新缺鍵.md").write_text(
