@@ -21,6 +21,10 @@ related:
 
 PRIOR-ART: ①最小解層級=改文字與一行健檢提醒,不動機制 ②世界解過:官方 Sonnet 5 審查建議「全報、交給後段過濾」、官方 skill 指南「不放會過時的資訊」「參照一層」「評測先行」(來源見調研卷證) ③裁定=借用官方做法,沿用 07-29 上下文瘦身「搬家不刪義」
 
+## 落點
+
+改的是 skills 底下的入口頁、參考檔與派工範本(skills/lumos-code-loop、skills/lumos-design-loop、skills/lumos-project-notes),不是程式檔,沒有管它們的 Systems 節點,所以不寫 lands_in。照 CLAUDE.md〈每支檔有家〉:落到 skill 或範本的寫在計劃正文——就是這一段。(2026-09-25 補寫;筆記欄位關卡補齊時發現這篇沒有落點。)
+
 ## 條款
 
 - [S1] Sonnet 5「全報 vs 抑噪」對照實驗,判準先寫死、結果留成驗證紀錄 [manual:讀驗證紀錄,六份報告都在、評分表逐條對得回標準答案]
