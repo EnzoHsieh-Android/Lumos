@@ -1,0 +1,250 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+index 536bab19..dd351edc 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
++++ b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+@@ -10,21 +10,21 @@ about_code:
+   - scripts/hooks/pre-commit
+   - scripts/hooks/pre-push
+   - governance/eval/home_audit.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   PITFALL:[2026-09-24 rtb-production-agent-demo 回報,第三次發生]★推送前逐提交檢查,合併提交「自己改了什麼」不能用「跟每一個上一版都不一樣」判★:兩條分支都改過、git 自動合起來的檔,合併後也跟兩邊都不一樣,會被當成合併自己寫的——另一邊配好家的筆記就被拿去跟這邊的程式湊成一對,判成「寫了說明卻不是改動檔的家」。現在用 git 的 remerge-diff(跟 git 自動合併的結果比,只列手動解衝突或順手多改的);拿不到(git 2.36 以前、或專案設定註冊了自訂合併驅動器——remerge-diff 會在記憶體裡重做合併、跑那個驅動器,不冒這個險)才退回舊判法,那時仍可能誤擋。實際核對:rtb 那次合併 remerge-diff 列出的是治理帳、record.py、ruff 設定,那篇筆記不在裡面;先前四次誤擋(三次用單一合併的範圍、第四次用當時實際的推送範圍 e8b26f6..b8e582f)全部重現、修後都過。重現:兩條分支各改同一篇筆記的不同段、同一支程式的不同行,合併後跑 `lumos home check --diff <起點>..<合併>` [test:t_nodehome_merge_auto_combined_not_blocked]
+   PITFALL:[2026-09-24 代碼審 r1 通才席]★一次合三條以上分支的章魚合併不能走 remerge-diff★:git 對章魚合併跳過 remerge-diff,只在標準輸出印一行警告、退出碼照樣是 0,會被讀成「這個合併什麼都沒改」——合併裡夾帶的違規整個放行。所以只有兩邊合併走精確判法,章魚合併退回舊判法。重現:`git merge --no-commit x y` 後在合併提交裡改程式、把說明寫進別的節點,再跑 home check [test:t_nodehome_octopus_merge_own_violation_still_blocked]
+-  PITFALL:[2026-09-25 rtb-production-agent-demo 回報,remerge-diff 修法之後又一次]★有衝突的合併,remerge-diff 會把每一支解過衝突的檔都列成合併改的★——git 重做的自動合併裡留著衝突標記,解法就算只是兩邊段落都留,比起來也是「改了」。rtb 那次三個合併裡,被判寫錯家的三篇筆記與 task_store.py,解衝突後多出的每一行都在某個上一版找得到;同一個合併裡 ai_judge 這幾支才是真的新寫了行(而且寫回落在它們的家,放行是對的)。現在合併提交裡一支檔要有「兩個上一版都沒有的新行」才算合併自己改的。★天花板★:只刪不加(挑一邊、刪一段)不算寫;新寫的行剛好跟上一版別處某行一字不差也會漏算——兩種都偏向少擋。重現:兩條分支各改同一篇筆記同一段與同一支程式同一行,合併衝突時兩邊都留(或換順序留),跑 `lumos home check --diff <起點>..<合併>` [test:t_nodehome_merge_conflict_union_not_blocked]
++  PITFALL:[2026-09-25 rtb-production-agent-demo 回報,remerge-diff 修法之後又一次]★有衝突的合併,remerge-diff 會把每一支解過衝突的檔都列成合併改的★——git 重做的自動合併裡留著衝突標記,解法就算只是兩邊段落都留,比起來也是「改了」。rtb 那次三個合併裡,被判寫錯家的三篇筆記與 task_store.py,解衝突後多出的每一行都在某個上一版找得到;同一個合併裡 ai_judge 這幾支才是真的新寫了行(而且寫回落在它們的家,放行是對的)。現在合併提交裡一支檔要有「兩個上一版都沒有的新行」才算合併自己改的——直接拿合併結果比兩個上一版(git 自動合併只產出來自兩邊的行,所以兩者等價),★每個上一版各自偵測改名★(一邊改名一邊改內容時 remerge-diff 只給新檔名,共用舊路徑會漏讀沒改名那邊,代碼審 r1 兩席各自實測),內容用一個 git 行程批次讀完(逐支讀 200 支衝突檔要 13.5 秒,批次 1.4 秒,不過濾 1.2 秒)。★天花板★:只刪不加(挑一邊、刪一段)不算寫;新寫的行剛好跟上一版別處某行一字不差也會漏算——這兩種偏向少擋;git 認不出是改名時那一邊讀不到,偏向多擋。重現:兩條分支各改同一篇筆記同一段與同一支程式同一行,合併衝突時兩邊都留(或換順序留),跑 `lumos home check --diff <起點>..<合併>` [test:t_nodehome_merge_conflict_union_not_blocked] [test:t_nodehome_merge_rename_one_side_not_blocked]
+   PITFALL:[2026-09-25 代碼審 r2 通才席,接受不修]★淺層複製(只抓最近幾個提交)裡 remerge-diff 讀不到上一版,也是退出碼 0,會把整支檔當成合併新增的★——方向是多擋不是漏擋;CI 設了抓完整歷史碰不到,舊判法在淺層複製裡本來也讀不到上一版。回頭條件:有人回報在淺層複製裡推送被合併提交誤擋,就在 remerge-diff 前先問 `git rev-parse --is-shallow-repository`,是就退回舊判法(事件入口:消費專案的誤擋回報)。重現:`git clone --depth 1 --no-single-branch file://<有合併的 repo> x` 後在 x 裡跑 `git show --remerge-diff --format= --name-status HEAD`,沒改的檔也列成 A
+   FLOW:提交前掛鉤 → `lumos home check --staged`(讀提交索引)→ 比提交前後兩份快照 → 新違規印白話並 rc1 擋;推送前掛鉤 → `lumos home check --diff <起點>..<終點>`(整段比,起點早於上線點就改從上線點)→ 同上;兩個掛鉤「該動哪篇」的點名都照家算(不再用反引號為種子那一套);健檢 S8–S10 → 同一套函式列舊帳(只提醒,三段都分「上線後才出現」與「上線前就在」)
+   KEY:家=狀態 doing/done/stale 的 Systems 節點 about_code 列了這支檔;只看欄位值、不看預標指紋;比對用字面比對鍵、不讀磁碟(推送別的分支時磁碟拼法對不上);Issues 不算 [test:t_nodehome_home_definition] [test:t_nodehome_other_branch_rename_uses_commit_spelling]
+   KEY:需要家的檔=受版控一般檔 × 程式副檔名(跟「改程式要動圖譜」同一份清單,五份由一致性測試釘住)或首行 #! × 不在排除清單(docs/與建置夾、測試檔、原封不動的工具自裝檔、node_home.ignore、非 UTF-8 檔名);測試檔另認各棧的測試資料夾——從測試棧對照表推(Gradle src/ 底下的 androidTest、Xcode 與 .NET 頂層名稱以 Tests 結尾的資料夾,後者要去掉結尾的同名頂層資料夾裡有同一種副檔名的檔;Gradle 那條要緊接在 src 下一層、副檔名屬於那一棧、同模組 src/main 有同一種副檔名的檔;別種語言的測試輔助檔照舊要家),2026-09-12 平板 POS 與 Android 儀器測試誤擋後補,測試地圖自己的判定不動 [test:t_nodehome_required_files_definition] [test:t_code_exts_lists_agree] [test:t_nodehome_stack_test_dirs_not_required]
+   KEY:擋的五種新違規:新增的檔沒家(含這次才變成程式檔的:捷徑檔換成真檔、沒副檔名的檔補上 #!——git 標 T/M 不是 A,只看 A 會降成提醒)、原本有家變沒家、節點新寫進別人的檔名(含新增的檔喚醒了沒改的節點原本寫著的檔名)、寫回落在不是改動檔(含刪掉的檔)家的節點、有寫回時改到的檔還沒家;新開或這次才成為現況的節點沒寫負責範圍、舊篇管的檔變多超過上限沒寫、這次新蓋「從程式重建」章卻一支檔都不管又沒重寫負責範圍(還原節點是圖譜重生的起點,它不說自己管哪些檔,之後每次寫回都不知道該落哪篇)也擋 [test:t_nodehome_check_blocks_new_homeless_file] [test:t_nodehome_newly_required_file_counts_as_new] [test:t_nodehome_check_blocks_home_removal] [test:t_nodehome_check_blocks_new_foreign_ref] [test:t_nodehome_check_blocks_write_back_to_non_home] [test:t_nodehome_write_back_requires_every_changed_file_homed]
+   KEY:新增的檔喚醒了沒改的節點原本寫著的檔名(可能只是剛好同名的舉例):照擋——從這次起改那支檔就會推出那篇;但同一個提交裡改那篇會被寫回落點擋,所以擋下訊息指路「另開一個只改筆記的提交先改」,分「原本就在講它→改連結」「剛好同名→把檔名改寫掉」兩種 [test:t_nodehome_new_file_awakens_foreign_ref]
+   KEY:推送前逐提交看寫回:改程式的那個提交裡、那篇的內容(摘要、決策、正文)是在這個提交改的才算寫回——只補驗證連結、計劃連結這類簿記欄位不算;內容有沒有變也逐提交算,不拿整段頭尾比(2026-09-11 平板 POS 第一次真推送踩到,記逃逸帳);判定在那個提交自己裡面做:讀取那層先記下「內容在這個提交改的節點」與它在這個提交前後管的檔,判定那層只比同一個提交裡管的檔跟改的程式、不碰 git、不跨提交追名字(合併進來的平行分支、一次推送改名好幾次都不影響);合併提交也查,只算它自己多改的(兩邊合併看 remerge-diff,拿不到或章魚合併才退回「跟每一個上一版都不一樣的」,見上面兩條 PITFALL);能不能當家看這個提交前後兩版與推送終點那一版,擋狀態切換的繞法 [test:t_nodehome_diff_route_per_commit] [test:t_nodehome_diff_route_counts_content_per_commit]
+   KEY:改到之前就沒家的舊檔:沒寫說明只提醒,有寫說明就擋(決策 d4,取代 d3);兩個舊 Android 專案節點全沒填 about_code,「改到就擋」會等於每個提交都擋 [test:t_nodehome_touched_legacy_homeless_warns_without_write_back]
+   KEY:「別人的檔」的抽取跟改檔前推筆記、refcheck 共用同一支(完整路徑+在受版控檔裡唯一的裸檔名)——兩套算法一定分岔 [test:t_nodehome_foreign_ref_uses_impact_extraction]
+   KEY:提交前只讀提交索引、推送前只讀範圍兩端的提交(跟磁碟一樣的直接讀,不一樣的用既有 git show 包裝讀;起點那一側只讀有變動的節點、其餘跟終點共用);設定、工具自裝檔、圖譜位置也從同一個版本讀——工作目錄裡沒暫存的「關掉」關不掉檢查。2026-09-11 本工具鏈 65 篇:提交前 0.65 秒、推送前 10 個提交 0.81 秒 [test:t_nodehome_reads_index_not_worktree] [test:t_nodehome_diff_shares_unchanged_notes] [test:t_nodehome_config_and_vendored_from_snapshot]
+diff --git a/scripts/lumos b/scripts/lumos
+index 2d03b780..7c9d3df5 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21901,51 +21901,102 @@ def _nodehome_merge_own_changes(repo_root, sha, parents):
+     git 2.36 以前沒有 remerge-diff,也回 None 退回舊判法。
+     """
+     drv = _lens_git(repo_root, "config", "--get-regexp", r"^merge\..*\.driver$", binary=True)
+     if drv is None or drv.returncode != 1:     # 0=有自訂驅動器;其他=判不了。兩種都不冒險
+         return None
+     r = _nodehome_git(repo_root, "show", "--remerge-diff", "--no-ext-diff", "--no-textconv", "--format=",
+                       "--name-status", "-z", "-M", sha)
+     if r is None:
+         return None
+     paths, src, gone = _nodehome_name_status(r)
+-    kept = {p for p in paths if _nodehome_merge_wrote_new_lines(repo_root, sha, parents, p, src.get(p, p))}
++    # ★每個上一版各自偵測改名★(代碼審 r1 通才席、架構對齊席各自實測):一邊改名、一邊改內容的合併,
++    # remerge-diff 只給新檔名、不標改名;共用一個舊路徑的話,沒改名那一邊用新檔名找不到,它的內容整個漏掉,
++    # 從那一邊搬來的行就被判成合併新寫的。讀不到改名對照就當判不了(照舊查)。
++    renames = []
++    for p in parents:
++        rr = _nodehome_git(repo_root, "diff-tree", "--no-commit-id", "--name-status", "-z", "-M", "-r", p, sha)
++        renames.append(None if rr is None else _nodehome_name_status(rr)[1])
++    order = sorted(paths)
++    specs = []
++    for x in order:
++        specs.append(f"{sha}:{x}")
++        specs += [f"{p}:{x if ren is None else ren.get(x, x)}" for p, ren in zip(parents, renames)]
++    blobs = _nodehome_cat_blobs(repo_root, specs)
++    kept = set()
++    for n, x in enumerate(order):
++        if blobs is None or None in renames:
++            kept.add(x)     # 讀不到就當判不了,照舊查
++            continue
++        merged, *olds = blobs[n * (1 + len(parents)):(n + 1) * (1 + len(parents))]
++        if _nodehome_merge_wrote_new_lines(merged, olds):
++            kept.add(x)
+     return kept, {k: v for k, v in src.items() if k in kept}, gone
+ 
+ 
+-def _nodehome_merge_wrote_new_lines(repo_root, sha, parents, path, old_path):
+-    """合併提交裡,這支檔解衝突後有沒有「兩個上一版都沒有的新行」。判不了一律當有(照舊查)。
++def _nodehome_cat_blobs(repo_root, specs):
++    """一次讀很多個「版本:路徑」的內容,回同順序的 bytes|None(那個版本沒有這支檔就是 None);git 跑不起來回 None。
++
++    ★為什麼不照鄰居逐支 git show★(代碼審 r1 通才席量代價):成本在開 git 行程本身——200 支衝突檔的合併,
++    每支三次讀取就是 600 個行程,實測 13.5 秒;用 git 內建的批次讀取(cat-file --batch)一個行程讀完。
++    原始內容照讀、不經任何轉換程式。路徑裡有換行時批次讀取表達不了,整批當判不了。"""
++    import subprocess as _sp
++    if not specs:
++        return []
++    if any("\n" in s_ for s_ in specs):
++        return None
++    try:
++        r = _sp.run(["git", "-C", str(repo_root), "cat-file", "--batch"],
++                    input=("\n".join(specs) + "\n").encode("utf-8", "surrogateescape"),
++                    capture_output=True, timeout=60)
++    except (OSError, _sp.TimeoutExpired):
++        return None
++    if r.returncode != 0:
++        return None
++    out, pos, res = r.stdout, 0, []
++    for _ in specs:
++        nl = out.find(b"\n", pos)
++        if nl < 0:
++            return None
++        head = out[pos:nl].split(b" ")
++        pos = nl + 1
++        if len(head) == 3 and head[1] == b"blob" and head[2].isdigit():
++            size = int(head[2])
++            res.append(out[pos:pos + size])
++            pos += size + 1
++        elif len(head) == 3 and head[2].isdigit():
++            pos += int(head[2]) + 1     # 不是檔案(例如子模組、目錄)——內容跳過,當讀不到
++            res.append(None)
++        else:
++            res.append(None)            # missing / ambiguous
++    return res
++
++
++def _nodehome_merge_wrote_new_lines(merged, olds):
++    """合併提交裡,這支檔有沒有「兩個上一版都沒有的新行」。判不了一律當有(照舊查)。
+ 
+     ★為什麼 remerge-diff 列出來還不夠★(2026-09-25 rtb-production-agent-demo 回報,remerge-diff 修法之後又一次):
+     只要有衝突,git 重做的自動合併裡就留著衝突標記,所以每一支解過衝突的檔都會被列成合併改的——
+     就算解法只是把兩邊段落都留下。那時筆記被當成合併新寫的說明,跟同一個合併裡別的程式湊成一對誤擋。
+     實際核對那三個合併:被判寫錯家的三篇筆記與一支程式,解衝突後多出的每一行都在某個上一版找得到。
++    ★直接拿合併結果比兩個上一版,不再逐檔重做合併★(代碼審 r1 通才席量代價):git 自動合併只會產出
++    來自兩邊的行(外加衝突標記),所以「解衝突時新寫的行」就是「合併結果裡兩個上一版都沒有的行」。
++    逐檔重做合併的版本,200 支衝突檔多花 8.7 秒;內容一次批次讀完,見 _nodehome_cat_blobs。
+     ★天花板★:比的是「整行有沒有出現在上一版的任何地方」,解衝突時只刪不加(挑一邊、刪一段)不算寫;
+-    新寫的行剛好跟上一版別處某一行一字不差也會漏算——兩種都偏向少擋,不會多擋。"""
+-    d = _nodehome_git(repo_root, "show", "--remerge-diff", "--no-ext-diff", "--no-textconv", "--format=",
+-                      sha, "--", path)
+-    if d is None:
+-        return True
+-    if b"\nBinary files " in b"\n" + d:
++    新寫的行剛好跟上一版別處某一行一字不差也會漏算——這兩種偏向少擋。改名要靠 git 認得出來(每個上一版
++    各自對合併結果偵測);內容改太多、git 認不出是改名時,那一邊的內容讀不到,會偏向多擋(照舊查)。"""
++    if merged is None or b"\0" in merged:
+         return True
+-    added = [ln[1:].strip() for ln in d.split(b"\n") if ln.startswith(b"+") and not ln.startswith(b"+++")]
+-    added = [ln for ln in added if ln]
+-    if not added:
+-        return False
+     seen = set()
+-    for p in parents:
+-        blob = _nodehome_git(repo_root, "show", "--no-textconv", f"{p}:{old_path}")
+-        if blob is None and old_path != path:
+-            blob = _nodehome_git(repo_root, "show", "--no-textconv", f"{p}:{path}")
++    for blob in olds:
+         if blob is not None:
+             seen.update(ln.strip() for ln in blob.split(b"\n"))
+-    return any(ln not in seen for ln in added)
++    return any(ln.strip() and ln.strip() not in seen for ln in merged.split(b"\n"))
+ 
+ 
+ def _nodehome_commit_groups(repo_root, base, tip):
+     """推送前:範圍裡每個提交各自改了哪些路徑(改名兩邊都算)。git 失敗回 None(退回整批一個提交)。
+     每個提交回 {sha, parents, paths, src, gone}:src=這個提交裡改名的新路徑→舊路徑、gone=刪掉或改名掉的舊路徑。
+     ★合併提交也要查★(代碼審 r3 單reviewer:原本整個排除,解衝突時在合併提交裡順手寫的說明、改的程式都沒人看):
+     只算它自己多改的:兩邊合併用 git 的 remerge-diff(跟 git 自動合併會產生的結果比,兩邊都改過、git 自動合起來的
+     不算);拿不到精確答案時(舊 git、專案設了自訂合併驅動器、三條以上的章魚合併)退回「跟每一個上一版都不一樣的
+     路徑」——這個退路會把自動合起來的檔也算進來、可能誤擋。照搬某一邊進來的,那一邊的提交已經各自查過。"""
+     raw = _nodehome_git(repo_root, "rev-list", "--reverse", "--parents", f"{base}..{tip}" if base else tip)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 063cea66..03cf0de2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -42862,21 +42862,21 @@ def t_nodehome_merge_auto_combined_not_blocked():
+ 
+ 
+ def t_nodehome_merge_conflict_union_not_blocked():
+     """合併時解衝突只是把兩邊都留下(每一行都能在某個上一版找到)——不算合併自己寫的,推送前不該擋;
+     解衝突時真的新寫了一行,照擋。
+ 
+     出身:2026-09-25 rtb-production-agent-demo 回報(remerge-diff 修法之後又一次)。只要有衝突,
+     git 重做的自動合併裡就留著衝突標記,remerge-diff 會把「每一支解過衝突的檔」都列成合併自己改的——
+     就算解法只是兩邊段落都留。實際核對那三個合併:被判寫錯家的三篇筆記與 task_store.py,
+     解衝突後多出的每一行都在某個上一版找得到;同一個合併裡 ai_judge 這幾支才是真的新寫了行。
+-    翻紅釘:「沒有新增行」那一步改成當有寫 → ②[union] 紅;逐行比對改成一律當有寫 → ②[swap] 紅。
++    翻紅釘:逐行比對改成一律當有寫 → ②[union] 與 ②[swap] 都紅。
+     """
+     print("t_nodehome_merge_conflict_union_not_blocked")
+     def resolve_union(root, rel, extra=None, swap=False):
+         p = root / rel
+         lines = p.read_text(encoding="utf-8").split("\n")
+         if swap:
+             # 兩邊的段落換個順序留:remerge-diff 會出現「新增的行」,但每一行都在某個上一版找得到
+             # (rtb 那次實際的形狀——只刪衝突標記的話根本沒有新增行,走不到逐行比對那一段)
+             i, j, k = (next(n for n, ln in enumerate(lines) if ln.startswith(t)) for t in ("<<<<<<<", "=======", ">>>>>>>"))
+             lines = lines[:i] + lines[j + 1:k] + lines[i + 1:j] + lines[k + 1:]
+@@ -42920,20 +42920,70 @@ def t_nodehome_merge_conflict_union_not_blocked():
+             d = _nh_git(root, "show", "--remerge-diff", "--format=", "HEAD", "--", a_md).stdout
+             check("①[swap] 現場成立:remerge-diff 裡 A 的說明真的有新增行", any(
+                 ln.startswith("+") and not ln.startswith("+++") and ln[1:].strip() for ln in d.splitlines()), d[-400:])
+         if case in ("union", "swap"):
+             check(f"②[{case}] 解衝突只是兩邊都留下(每一行都在某個上一版) → 不擋", rc == 0, out[-800:])
+         else:
+             check("③ 解衝突時在 A 的說明與 b.py 都新寫了一行 → 照擋(A 不是 b.py 的家)",
+                   rc == 1 and "Systems/A" in out, out[-800:])
+ 
+ 
++def t_nodehome_merge_rename_one_side_not_blocked():
++    """一邊改檔名、另一邊改內容,合併衝突時兩邊都留(換順序)——每一行都在某個上一版找得到,不算合併自己寫的。
++
++    出身:2026-09-25 代碼審 r1 通才席與架構對齊席各自實測重現。這種合併 remerge-diff 不會標成改名,
++    只給新檔名;原本共用一個舊路徑去兩個上一版找內容,沒改名那一邊用新檔名找不到,它的內容整個
++    漏掉,「從那一邊搬來的行」就被判成合併新寫的——正好跟說明寫的「不會多擋」相反。
++    翻紅釘:每個上一版改回共用同一個舊路徑 → ②紅。
++    """
++    print("t_nodehome_merge_rename_one_side_not_blocked")
++    root = _nh_repo()
++    _nh_file(root, "src/a.py", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n")
++    _nh_file(root, "src/b.py", "x = 1\n")
++    _nh_node(root, "A", about=["src/a.py", "src/a2.py"], body="`src/a.py` 說明")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 第一段\n\n末段")
++    _nh_commit(root, "init")
++    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "branch", "-M", "main")
++    _nh_git(root, "checkout", "-q", "-b", "feature")
++    _nh_git(root, "checkout", "-q", "main")
++    _nh_git(root, "mv", "src/a.py", "src/a2.py")
++    _nh_file(root, "src/a2.py", "l1\nl2 主線\nl3\nl4\nl5\nl6\nl7\nl8\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 第一段\n\n末段(主線)")
++    _nh_file(root, "src/b.py", "x = 2\n")
++    _nh_commit(root, "主線:a.py 改名成 a2.py 並改一行;B 配 b.py")
++    _nh_git(root, "checkout", "-q", "feature")
++    _nh_file(root, "src/a.py", "l1\nl2 分支\nl3\nl4\nl5\nl6\nl7\nl8\n")
++    _nh_node(root, "B", about=["src/b.py"], body="`src/b.py` 第一段\n\n末段(分支)")
++    _nh_file(root, "src/b.py", "x = 2\n")
++    _nh_commit(root, "分支:只改 a.py 的同一行;B 配 b.py")
++    m = _nh_git(root, "merge", "-q", "--no-ff", "--no-edit", "main")
++    a2 = root / "src/a2.py"
++    check("① 現場成立:改名那支合併時衝突", m.returncode != 0 and a2.exists() and "<<<<<<<" in a2.read_text(encoding="utf-8"),
++          m.stdout + m.stderr)
++    for rel in ("src/a2.py", "docs/kg-knowledge/Systems/B.md"):
++        p = root / rel
++        lines = p.read_text(encoding="utf-8").split("\n")
++        i, j, k = (next(n for n, ln in enumerate(lines) if ln.startswith(t)) for t in ("<<<<<<<", "=======", ">>>>>>>"))
++        merged = lines[:i] + lines[j + 1:k] + lines[i + 1:j] + lines[k + 1:]
++        if rel.endswith("B.md"):
++            merged.insert(len(merged) - 1, "合併時補的一句說明")   # 合併真的在 B 新寫了說明(但沒改任何程式)
++        p.write_text("\n".join(merged), encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    _nh_git(root, "commit", "-q", "--no-edit")
++    ns = _nh_git(root, "show", "--remerge-diff", "--format=", "--name-status", "-M", "HEAD").stdout
++    check("① 現場成立:remerge-diff 把改名那支只列成新檔名、沒標改名", "src/a2.py" in ns and not ns.lstrip().startswith("R"), ns)
++    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
++    check("② 改名那支解衝突只是兩邊都留(換順序),合併沒改任何程式 → 合併在 B 補的說明不被判成寫給 a2.py 的 → 不擋",
++          rc == 0, out[-800:])
++
++
+ def t_nodehome_octopus_merge_own_violation_still_blocked():
+     """一次合三條以上分支的合併(章魚合併),合併提交自己順手改程式、把說明寫進不是家的節點——照擋。
+ 
+     出身:代碼審 r1 通才席。git 對章魚合併不做 remerge-diff:只在標準輸出印一行警告、退出碼照樣是 0,
+     被當成「這個合併什麼都沒改」——合併裡夾帶的違規整個放行。章魚合併要退回舊判法。
+     翻紅釘:章魚合併也走精確判法 → ②紅。
+     """
+     print("t_nodehome_octopus_merge_own_violation_still_blocked")
+     root = _nh_repo()
+     _nh_base(root)
