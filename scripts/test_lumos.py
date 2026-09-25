@@ -21595,6 +21595,323 @@ def t_lint_decisions_nested_list_not_false_positive():
           and "decisions" in r2.stdout, f"rc={r2.returncode}\n{r2.stdout[:200]}")
 
 
+def _nl_vault(gate=None, raw_cfg=None):
+    """筆記欄位關卡補齊的測試圖譜:設定檔放在圖譜上一層(standalone 圖譜的 repo 根)。
+    gate=None 且 raw_cfg=None → 不寫設定檔(沒設)。raw_cfg 直接寫進 config.json 原文。"""
+    import json as _j
+    v = mkvault()
+    root = v.parent
+    if raw_cfg is not None or gate is not None:
+        (root / ".lumos").mkdir(exist_ok=True)
+        txt = raw_cfg if raw_cfg is not None else _j.dumps({"note_lint": {"gate": gate}})
+        (root / ".lumos" / "config.json").write_text(txt, encoding="utf-8")
+    return v
+
+
+def _nl_note(v, sub, name, fm):
+    """寫一篇筆記;fm 是開頭欄位(不含 ---)。"""
+    (v / sub / f"{name}.md").write_text(f"---\n{fm}---\n# {name}\n", encoding="utf-8")
+
+
+_NL_OK_SYS = ("type: system\nstatus: doing\ncreated: 2026-09-26\nupdated: 2026-09-26\naliases: []\n"
+              "tags:\n  - type/system\n  - status/doing\nsummary: |-\n  KEY:x\n")
+
+
+def t_lint_status_required():
+    """[S6] 筆記欄位關卡補齊:system/project/verification/issue 沒填 status 或寫成空字串 → 新規則報出來、講允許的值。
+    出身:2026-09-25 盤點——status 沒填完全不擋(值域檢查只在有值時比)。翻紅釘:拿掉 status 必填 → ②紅。"""
+    print("t_lint_status_required")
+    v = _nl_vault("on")
+    _nl_note(v, "Systems", "有狀態", _NL_OK_SYS)
+    check("① 現場成立:欄位齊全的 system 通過", run(v, "lint", "有狀態").returncode == 0, run(v, "lint", "有狀態").stdout[-300:])
+    _nl_note(v, "Systems", "沒狀態", _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", ""))
+    r = run(v, "lint", "沒狀態")
+    check("② 沒填 status → 報錯並列出允許的值", r.returncode == 1 and "status" in r.stdout and "doing" in r.stdout, r.stdout[-400:])
+    _nl_note(v, "Systems", "空狀態", _NL_OK_SYS.replace("status: doing\n", "status: \"  \"\n").replace("  - status/doing\n", ""))
+    r = run(v, "lint", "空狀態")
+    check("③ status 寫成空白字串也算沒填", r.returncode == 1 and "status" in r.stdout, r.stdout[-400:])
+    for t in ("project", "verification", "issue"):
+        sub = {"project": "Projects", "verification": "Verification", "issue": "Systems"}[t]
+        _nl_note(v, sub, f"沒狀態{t}", f"type: {t}\ncreated: 2026-09-26\nupdated: 2026-09-26\naliases: []\ntags:\n  - type/{t}\nsummary: |-\n  KEY:x\n")
+        r = run(v, "lint", f"沒狀態{t}")
+        check(f"④ {t} 沒填 status 也報", r.returncode == 1 and "status" in r.stdout, r.stdout[-300:])
+
+
+def t_lint_date_fields_format():
+    """[S7] 建立日、更新日、日期、決策日期、結束日要是年-月-日(而且是真的日期)。翻紅釘:拿掉日期格式檢查 → ②③紅。"""
+    print("t_lint_date_fields_format")
+    v = _nl_vault("on")
+    _nl_note(v, "Systems", "壞建立日", _NL_OK_SYS.replace("created: 2026-09-26", "created: 2026/09/26"))
+    r = run(v, "lint", "壞建立日")
+    check("② 建立日寫成斜線 → 報錯", r.returncode == 1 and "created" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Systems", "不存在的日", _NL_OK_SYS.replace("updated: 2026-09-26", "updated: 2026-13-40"))
+    r = run(v, "lint", "不存在的日")
+    check("③ 格式對但不是真的日期(13 月 40 日)→ 報錯", r.returncode == 1 and "updated" in r.stdout, r.stdout[-300:])
+    dec = ("decisions:\n  - content: 一條決策\n    id: d1\n    decided: 2026-9-5\n    valid: true\n")
+    _nl_note(v, "Systems", "壞決策日", _NL_OK_SYS + dec)
+    r = run(v, "lint", "壞決策日")
+    check("④ 決策日期少了補零 → 報錯", r.returncode == 1 and "decided" in r.stdout, r.stdout[-300:])
+    dec_ok = dec.replace("2026-9-5", "2026-09-05") + "    ended: 2026-09-20\n"
+    _nl_note(v, "Systems", "好決策日", _NL_OK_SYS + dec_ok)
+    check("⑤ 格式都對 → 通過", run(v, "lint", "好決策日").returncode == 0, run(v, "lint", "好決策日").stdout[-300:])
+
+
+def t_lint_decision_valid_boolean():
+    """[S8] 決策有寫 valid 就只能是 true/false(不分大小寫);沒寫不算錯(讀的地方把沒寫當 true)。
+    出身:讀的地方只比 "false",寫成 no、0 會被當成仍有效。翻紅釘:拿掉 valid 檢查 → ②紅。"""
+    print("t_lint_decision_valid_boolean")
+    v = _nl_vault("on")
+    base = "decisions:\n  - content: 一條決策\n    id: d1\n    decided: 2026-09-05\n"
+    _nl_note(v, "Systems", "寫no", _NL_OK_SYS + base + "    valid: no\n")
+    r = run(v, "lint", "寫no")
+    check("② valid: no → 報錯", r.returncode == 1 and "valid" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Systems", "大寫", _NL_OK_SYS + base + "    valid: FALSE\n")
+    check("③ valid: FALSE 不算錯", run(v, "lint", "大寫").returncode == 0, run(v, "lint", "大寫").stdout[-300:])
+    _nl_note(v, "Systems", "沒寫", _NL_OK_SYS + base)
+    check("④ 沒寫 valid 不算錯", run(v, "lint", "沒寫").returncode == 0, run(v, "lint", "沒寫").stdout[-300:])
+
+
+def t_lint_about_code_must_exist():
+    """[S9] about_code 每一項要是磁碟上的檔、而且不在圖譜資料夾裡;寫成單一字串當一項。翻紅釘:拿掉 about_code 檢查 → ②③紅。"""
+    print("t_lint_about_code_must_exist")
+    v = _nl_vault("on")
+    root = v.parent
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _nl_note(v, "Systems", "有檔", _NL_OK_SYS + "about_code:\n  - src/a.py\n")
+    check("① 現場成立:指到存在的程式檔 → 通過", run(v, "lint", "有檔").returncode == 0, run(v, "lint", "有檔").stdout[-300:])
+    _nl_note(v, "Systems", "沒檔", _NL_OK_SYS + "about_code:\n  - src/nope.py\n")
+    r = run(v, "lint", "沒檔")
+    check("② 指到不存在的檔 → 報錯", r.returncode == 1 and "about_code" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Systems", "指筆記", _NL_OK_SYS + "about_code:\n  - kg/Systems/有檔.md\n")
+    r = run(v, "lint", "指筆記")
+    check("③ 指到圖譜資料夾裡的筆記 → 報錯", r.returncode == 1 and "about_code" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Systems", "字串寫法", _NL_OK_SYS + "about_code: src/a.py\n")
+    check("④ 寫成單一字串、指到存在的檔 → 通過", run(v, "lint", "字串寫法").returncode == 0, run(v, "lint", "字串寫法").stdout[-300:])
+    _nl_note(v, "Systems", "字串壞", _NL_OK_SYS + "about_code: src/nope.py\n")
+    check("⑤ 寫成單一字串、指到不存在的檔 → 報錯", run(v, "lint", "字串壞").returncode == 1, run(v, "lint", "字串壞").stdout[-300:])
+
+
+def t_lint_plan_requires_lands_in():
+    """[S10] type project、檔名以 _計劃 結尾、建立日 ≥ 2026-09-12 的要有 lands_in,每項是 Systems/<名> 純字串;
+    指到還不存在的節點不算錯;_調研 與更早的不管。翻紅釘:拿掉落點規則 → ②③紅。"""
+    print("t_lint_plan_requires_lands_in")
+    v = _nl_vault("on")
+    fm = "type: project\nstatus: doing\ncreated: {c}\nupdated: {c}\ntags:\n  - type/project\n  - status/doing\n"
+    _nl_note(v, "Projects", "新_計劃", fm.format(c="2026-09-12"))
+    r = run(v, "lint", "新_計劃")
+    check("② 09-12 建立的計劃沒寫 lands_in → 報錯", r.returncode == 1 and "lands_in" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Projects", "連結_計劃", fm.format(c="2026-09-20") + 'lands_in:\n  - "[[Systems/某篇]]"\n')
+    r = run(v, "lint", "連結_計劃")
+    check("③ lands_in 寫成 [[連結]] → 報錯", r.returncode == 1 and "lands_in" in r.stdout, r.stdout[-300:])
+    _nl_note(v, "Projects", "新開_計劃", fm.format(c="2026-09-20") + "lands_in:\n  - Systems/還沒開的篇\n")
+    check("④ 指到還不存在的節點不算錯", run(v, "lint", "新開_計劃").returncode == 0, run(v, "lint", "新開_計劃").stdout[-300:])
+    _nl_note(v, "Projects", "舊_計劃", fm.format(c="2026-09-11"))
+    check("⑤ 09-11 建立的不回溯", run(v, "lint", "舊_計劃").returncode == 0, run(v, "lint", "舊_計劃").stdout[-300:])
+    _nl_note(v, "Projects", "某題_調研", fm.format(c="2026-09-20"))
+    check("⑥ _調研 不受影響", run(v, "lint", "某題_調研").returncode == 0, run(v, "lint", "某題_調研").stdout[-300:])
+
+
+def t_note_lint_gate_default_warns():
+    """[S2] 沒設開關(或 warn):新規則在提交前只提醒、lint 回 0;健檢 L 段擴充只提醒、不影響退出碼,並講怎麼打開。
+    翻紅釘:預設改成 on → ②③紅。"""
+    print("t_note_lint_gate_default_warns")
+    v0 = _nl_vault()
+    check("① 現場成立:乾淨圖譜健檢 rc0", run(v0, "doctor", "--ci").returncode == 0, run(v0, "doctor", "--ci").stdout[-600:])
+    for gate in (None, "warn"):
+        v = _nl_vault(gate)
+        _nl_note(v, "Systems", "沒狀態", _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", ""))
+        r = run(v, "lint", "沒狀態")
+        check(f"②[{gate}] lint 回 0 但印出提醒", r.returncode == 0 and "status" in r.stdout, r.stdout[-300:])
+        d = run(v, "doctor", "--ci")
+        check(f"③[{gate}] 健檢不因此擋,並講怎麼打開", d.returncode == 0 and "note_lint.gate" in d.stdout and "沒狀態" in d.stdout, d.stdout[-800:])
+
+
+def t_doctor_note_lint_gate_on_blocks():
+    """[S1] 開關 on:健檢 L 段對整個圖譜跑 lint 錯誤等級規則(原有與新增),有錯就擋並列篇名;L 段原本的解析指紋照舊。
+    翻紅釘:L 段不跑擴充部分 → ②紅。"""
+    print("t_doctor_note_lint_gate_on_blocks")
+    v = _nl_vault("on")
+    check("① 現場成立:乾淨圖譜健檢 rc0", run(v, "doctor", "--ci").returncode == 0, run(v, "doctor", "--ci").stdout[-600:])
+    _nl_note(v, "Systems", "沒狀態", _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", ""))
+    d = run(v, "doctor", "--ci")
+    check("② 新規則抓到 → 健檢擋、列出篇名", d.returncode != 0 and "沒狀態" in d.stdout, d.stdout[-800:])
+    v2 = _nl_vault("on")
+    _nl_note(v2, "Systems", "壞型別", _NL_OK_SYS.replace("type: system", "type: 奇怪"))
+    d2 = run(v2, "doctor", "--ci")
+    check("③ 原有規則抓到(type 不認得)→ 也擋、列出篇名", d2.returncode != 0 and "壞型別" in d2.stdout, d2.stdout[-800:])
+
+
+def t_note_lint_gate_off():
+    """[S3] 開關 off:新規則不跑;健檢 L 段擴充不跑並講它被關了。翻紅釘:off 當成 warn → ②紅。"""
+    print("t_note_lint_gate_off")
+    v = _nl_vault("off")
+    _nl_note(v, "Systems", "沒狀態", _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", ""))
+    r = run(v, "lint", "沒狀態")
+    check("② lint 不跑新規則(不提 status)", r.returncode == 0 and "status" not in r.stdout, r.stdout[-300:])
+    d = run(v, "doctor", "--ci")
+    check("③ 健檢講 note_lint 被關了", d.returncode == 0 and "note_lint.gate" in d.stdout and "關" in d.stdout, d.stdout[-800:])
+
+
+def t_note_lint_gate_bad_config():
+    """[S4] 值看不懂 → 當 on 並警告;設定檔壞掉、note_lint 不是物件 → 當沒設(warn)並警告。
+    翻紅釘:看不懂的值當 warn → ②紅。"""
+    print("t_note_lint_gate_bad_config")
+    bad = _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", "")
+    v = _nl_vault("maybe")
+    _nl_note(v, "Systems", "沒狀態", bad)
+    r = run(v, "lint", "沒狀態")
+    check("② 值看不懂 → 當 on(擋)並警告", r.returncode == 1 and "看不懂" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
+    for label, raw in (("JSON 壞掉", "{not json"), ("note_lint 是清單", '{"note_lint": ["on"]}')):
+        v = _nl_vault(raw_cfg=raw)
+        _nl_note(v, "Systems", "沒狀態", bad)
+        r = run(v, "lint", "沒狀態")
+        out = r.stdout + r.stderr
+        check(f"③[{label}] 當沒設(不擋)並警告", r.returncode == 0 and "config.json" in out or (r.returncode == 0 and "note_lint" in out and "物件" in out), out[-400:])
+
+
+def t_doctor_note_lint_ignores_touched_list():
+    """[S5] 健檢帶碰到清單跑,L 段結果跟不帶一樣(整個圖譜);預告合約那段不受影響。翻紅釘:L 段改成只看碰到的 → ②紅。"""
+    print("t_doctor_note_lint_ignores_touched_list")
+    v = _nl_vault("on")
+    _nl_note(v, "Systems", "沒狀態", _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", ""))
+    lst = v.parent / "touched.txt"
+    lst.write_text("別的檔.py\n", encoding="utf-8")
+    d = run(v, "doctor", "--ci", "--touched-from", str(lst))
+    check("② 碰到清單不含那篇,L 段照樣擋並列出", d.returncode != 0 and "沒狀態" in d.stdout, d.stdout[-800:])
+
+
+def t_note_lint_gate_does_not_relax_existing_rules():
+    """[S13] 開關 warn 或 off 時,lint 原有的錯誤等級規則照舊擋提交。翻紅釘:開關套到原有規則 → ②紅。"""
+    print("t_note_lint_gate_does_not_relax_existing_rules")
+    for gate in ("warn", "off"):
+        v = _nl_vault(gate)
+        _nl_note(v, "Systems", "壞型別", _NL_OK_SYS.replace("type: system", "type: 奇怪"))
+        r = run(v, "lint", "壞型別")
+        check(f"②[{gate}] type 不認得照舊擋", r.returncode == 1 and "type" in r.stdout, r.stdout[-300:])
+
+
+def t_set_responsibility_min_length():
+    """[S11] lumos set responsibility 不過新開節點那支判斷就擋、檔案不動,不看開關。翻紅釘:拿掉 set 的檢查 → ②紅。"""
+    print("t_set_responsibility_min_length")
+    v = _nl_vault("warn")
+    _nl_note(v, "Systems", "某篇", _NL_OK_SYS + "responsibility: 負責這一塊的程式規則,不管畫面長怎樣\n")
+    f = v / "Systems" / "某篇.md"
+    before = f.read_text(encoding="utf-8")
+    r = run(v, "set", "某篇", "responsibility", "太短")
+    check("② 太短 → 擋下、檔案不變(開關是 warn 也擋)", r.returncode != 0 and f.read_text(encoding="utf-8") == before, (r.stdout + r.stderr)[-300:])
+    r = run(v, "set", "某篇", "responsibility", "管合併提交的判法,不管畫面與網路")
+    check("③ 夠長 → 寫入", r.returncode == 0 and "管合併提交的判法" in f.read_text(encoding="utf-8"), (r.stdout + r.stderr)[-300:])
+
+
+def t_about_code_writer_rejects_vault_path():
+    """[S14] append / new --code 要把圖譜資料夾裡的路徑寫進 about_code → 擋下、檔案不變。
+    出身:那篇 Issue 就是 append 寫進筆記路徑的。翻紅釘:拿掉寫入端的圖譜資料夾檢查 → ②紅。"""
+    print("t_about_code_writer_rejects_vault_path")
+    v = _nl_vault("on")
+    _nl_note(v, "Systems", "某篇", _NL_OK_SYS)
+    f = v / "Systems" / "某篇.md"
+    before = f.read_text(encoding="utf-8")
+    r = run(v, "append", "某篇", "about_code", "kg/Systems/某篇.md")
+    check("② append 圖譜裡的路徑 → 擋下、檔案不變", r.returncode != 0 and f.read_text(encoding="utf-8") == before, (r.stdout + r.stderr)[-300:])
+    r = run(v, "new", "system", "新篇", "--code", "kg/Systems/某篇.md", "--responsibility", "負責這一塊的程式規則,不管畫面長怎樣")
+    check("③ new --code 圖譜裡的路徑 → 擋下、沒建檔", r.returncode != 0 and not (v / "Systems" / "新篇.md").exists(), (r.stdout + r.stderr)[-300:])
+
+
+def t_repo_graph_passes_note_lint():
+    """[S12] 本 repo 圖譜每一篇都通過 lint 的原有與新增錯誤規則(直接跑規則、不經開關)。"""
+    print("t_repo_graph_passes_note_lint")
+    m = _load_lumos()
+    root = Path(GRAPHCTL).resolve().parent.parent
+    vault = root / "docs" / "lumos-toolchain-knowledge"
+    if not vault.is_dir():
+        raise _SrcOnly("不是來源 repo,沒有本 repo 的圖譜")
+    env = m.Env(vault)
+    bad = []
+    for rel in sorted(env.notes):
+        errs, _w = m._lint_collect(env, rel)
+        new = m._lint_new_rules(env, rel)
+        if errs or new:
+            bad.append(f"{rel}: {(errs + new)[0][:80]}")
+    check("每一篇都通過", not bad, f"{len(bad)} 篇:{bad[:5]}")
+
+
+def t_note_lint_gate_repo_root_layouts():
+    """[S1][S4] 開關要從跟「每支檔有家」同一個 repo 根讀(_vault_repo_root:從圖譜往上找 .git)。
+    出身:代碼審 r1 正確性席(圖譜就在 repo 根)、外家兩席(巢狀專案、monorepo 深層)——原本用另一支找根,
+    三種擺法都讀錯位置、開關一律被當成 warn。翻紅釘:改回原本的找根法 → ②③紅。"""
+    print("t_note_lint_gate_repo_root_layouts")
+    import json as _j, tempfile as _tf
+    bad = _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", "")
+    # ② 圖譜就在 repo 根(.git 在圖譜資料夾本身)
+    root = Path(_tf.mkdtemp(prefix="gctl-nl-")) / "kg"
+    for sub in ("Systems", "Projects", "Verification", "MOC"):
+        (root / sub).mkdir(parents=True)
+    (root / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_lint": {"gate": "on"}}), encoding="utf-8")
+    _nl_note(root, "Systems", "沒狀態", bad)
+    r = run(root, "lint", "沒狀態")
+    check("② 圖譜就在 repo 根:開關 on 要被讀到(擋)", r.returncode == 1 and "status" in r.stdout, (r.stdout + r.stderr)[-300:])
+    # ③ monorepo:.git 在最外層、圖譜在 docs/x-knowledge 深層,開關放在 .git 那層
+    mono = Path(_tf.mkdtemp(prefix="gctl-nl-"))
+    subprocess.run(["git", "init", "-q", str(mono)], check=True)
+    v = mono / "apps" / "web" / "docs" / "web-knowledge"
+    for sub in ("Systems", "Projects", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True)
+    (v / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (mono / ".lumos").mkdir()
+    (mono / ".lumos" / "config.json").write_text(_j.dumps({"note_lint": {"gate": "on"}}), encoding="utf-8")
+    _nl_note(v, "Systems", "沒狀態", bad)
+    r = run(v, "lint", "沒狀態")
+    check("③ monorepo 深層圖譜:讀到 .git 那層的開關 on(擋)", r.returncode == 1 and "status" in r.stdout, (r.stdout + r.stderr)[-300:])
+
+
+def t_doctor_note_lint_survives_malformed_note():
+    """[S1] 健檢 L 段對整個圖譜跑 lint:一篇筆記的 type 寫成清單不能讓整個健檢當掉,要當成那篇的錯誤列出來。
+    出身:代碼審 r1 邊界席——原本 lint 只查被點名的那篇,改成整個圖譜跑之後一篇壞筆記就讓健檢丟 TypeError。
+    翻紅釘:拿掉 type 非字串的防呆 → ②紅。"""
+    print("t_doctor_note_lint_survives_malformed_note")
+    v = _nl_vault("on")
+    _nl_note(v, "Systems", "清單型別", _NL_OK_SYS.replace("type: system\n", "type:\n  - system\n  - issue\n"))
+    d = run(v, "doctor", "--ci")
+    check("② 健檢沒有當掉(沒有 Traceback),並把那篇列成錯誤", "Traceback" not in d.stderr and "清單型別" in d.stdout and d.returncode != 0,
+          (d.stdout[-500:] + d.stderr[-500:]))
+    r = run(v, "lint", "清單型別")
+    check("③ 單篇 lint 也不當掉,報 type 的錯", "Traceback" not in r.stderr and r.returncode == 1 and "type" in r.stdout, (r.stdout + r.stderr)[-400:])
+
+
+def t_note_lint_config_not_object_warns():
+    """[S4] 設定檔整份不是物件(null、陣列、純量)→ 當沒設並警告,不能悄悄吃掉。出身:代碼審 r1 邊界席。翻紅釘:拿掉這個警告 → ②紅。"""
+    print("t_note_lint_config_not_object_warns")
+    bad = _NL_OK_SYS.replace("status: doing\n", "").replace("  - status/doing\n", "")
+    for raw in ("null", "[1, 2]", "3"):
+        v = _nl_vault(raw_cfg=raw)
+        _nl_note(v, "Systems", "沒狀態", bad)
+        r = run(v, "lint", "沒狀態")
+        check(f"②[{raw}] 當沒設(不擋)並警告設定檔不是物件", r.returncode == 0 and "物件" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-300:])
+
+
+def t_lint_empty_date_is_error():
+    """[S7] 日期欄位寫了卻是空的(含引號包住的空字串)→ 報錯。出身:代碼審 r1 外家兩席——空字串會同時繞過日期規則與既有的建立日切點。
+    翻紅釘:空值略過 → ②紅。"""
+    print("t_lint_empty_date_is_error")
+    v = _nl_vault("on")
+    for label, rep in (("created 空白", "created: \"\"\n"), ("updated 空白", None)):
+        fm = _NL_OK_SYS.replace("created: 2026-09-26\n", rep) if rep else _NL_OK_SYS.replace("updated: 2026-09-26\n", "updated: \"\"\n")
+        _nl_note(v, "Systems", label, fm)
+        r = run(v, "lint", label)
+        check(f"② {label} → 報錯", r.returncode == 1 and ("created" in r.stdout or "updated" in r.stdout), r.stdout[-300:])
+    # ③ 決策的 decided/ended 寫成空字串也一樣(代碼審 r2 五席同一條:只補了頂層三個,同構的決策日期沒跟上)
+    for k in ("decided", "ended"):
+        dec = "decisions:\n  - content: 一條決策\n    id: d1\n    decided: 2026-09-05\n    valid: false\n    ended: 2026-09-20\n"
+        dec = dec.replace(f"    {k}: 2026-09-{'05' if k == 'decided' else '20'}\n", f'    {k}: ""\n')
+        _nl_note(v, "Systems", f"決策{k}空", _NL_OK_SYS + dec)
+        r = run(v, "lint", f"決策{k}空")
+        check(f"③ 決策的 {k} 寫成空字串 → 報錯", r.returncode == 1 and k in r.stdout, r.stdout[-300:])
+
+
 def t_lint_aliases_declared():
     """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
     (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
