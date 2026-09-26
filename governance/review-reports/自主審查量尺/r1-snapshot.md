@@ -1,11 +1,11 @@
 ---
 type: project
-status: superseded
+status: doing
 created: 2026-09-25
 updated: 2026-09-25
 tags:
   - type/project
-  - status/superseded
+  - status/doing
   - scope/loop-engineering
 summary: |-
   WHY:[2026-09-25 Enzo 裁「從那兩件開始」]長期目標是審查不再需要人介入(產量上來人一定跟不上);業界做到的前提是「用結果校準、自主權掙來也收得回去」(Meta RADAR,arXiv 2605.30208v1),而我們現在連「自動放行之後到底漏了多少」都量不出來——先把量尺做出來,其他所有少審一點的機制才有依據
@@ -16,7 +16,6 @@ summary: |-
 related:
   - "[[Projects/逃逸自動記_計劃]]"
   - "[[Projects/代碼審跑滿上限的判斷依據_計劃]]"
-  - "[[Projects/逃逸帳對得起來_計劃]]"
 lands_in:
   - Systems/loop-convergence-recording
 ---

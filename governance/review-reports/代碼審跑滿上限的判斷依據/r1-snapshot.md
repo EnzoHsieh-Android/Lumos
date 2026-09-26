@@ -1,11 +1,11 @@
 ---
 type: project
-status: superseded
+status: doing
 created: 2026-09-25
 updated: 2026-09-25
 tags:
   - type/project
-  - status/superseded
+  - status/doing
   - scope/loop-engineering
 summary: |-
   WHY:[2026-09-25 Enzo 問「三輪之後依然折很多,是固定問要不要第四輪嗎」→ 要求上網查更好的做法 → 裁寫計劃]代碼審跑滿上限時,工具只說「停下來交給人」,人拿不到任何判斷依據;編排者當場攤的選項常常只有「要不要再一輪」
@@ -16,8 +16,6 @@ summary: |-
   REVISIT:2026-10-25 實作完回測歷史上 11 個超過上限的迴圈,看建議跟當時實際走向(或事後看該怎麼走)對得上幾個
 lands_in:
   - Systems/loop-convergence-recording
-related:
-  - "[[Projects/審查跑滿上限提示_計劃]]"
 ---
 # 代碼審跑滿上限的判斷依據_計劃
 
