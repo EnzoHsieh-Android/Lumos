@@ -1,0 +1,203 @@
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7518,7 +7518,7 @@
+                 continue
+             try:
+                 d = json.loads(ln)
+-            except ValueError:
++            except (ValueError, RecursionError):   # 合法但超深巢狀的一行解析會遞迴過深,也只跳過那行(code-逃逸帳 r3 邊界席)
+                 continue
+             if isinstance(d, dict):
+                 out.append(d)
+@@ -8203,7 +8203,7 @@
+                     continue
+                 try:
+                     d = json.loads(line)
+-                except ValueError:
++                except (ValueError, RecursionError):   # 別筆是超深巢狀行也只跳過;否則已寫進去卻報沒記成功(code-逃逸帳 r3 邊界席)
+                     continue
+                 if isinstance(d, dict) and d.get(key_field) == key_value:
+                     return 0
+@@ -9493,7 +9493,7 @@
+             continue
+         try:
+             d = json.loads(ln)
+-        except ValueError:
++        except (ValueError, RecursionError):   # 自動記逃逸會走到這裡,它答應不炸(code-逃逸帳 r3 邊界席)
+             continue
+         if isinstance(d, dict) and d.get("kind") == "spec-gate" and nfc(str(d.get("loop", ""))) == nfc(loop_id):
+             door = _rec_plan_risk(d) if (d.get("plan_risk") or d.get("door")) else door
+@@ -9514,7 +9514,7 @@
+                 continue
+             try:
+                 v = json.loads(ln).get("loop")
+-            except ValueError:
++            except (ValueError, AttributeError, RecursionError):   # 超深巢狀行解析會遞迴過深(code-逃逸帳 r3 邊界席)
+                 continue
+             if isinstance(v, str):
+                 known.add(nfc(v))
+@@ -9691,7 +9691,7 @@
+                 continue
+             try:
+                 d = _je.loads(ln)
+-            except ValueError:
++            except (ValueError, RecursionError):
+                 bad.append(no)
+                 continue
+             if not isinstance(d, dict):
+@@ -9751,7 +9751,7 @@
+             try:
+                 _d = _je2.loads(ln)
+                 v = _d.get("loop")
+-            except (ValueError, AttributeError):
++            except (ValueError, AttributeError, RecursionError):
+                 led_bad += 1
+                 continue
+             if isinstance(v, str):
+@@ -9852,7 +9852,7 @@
+         for ln in (env.vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
+             try:
+                 d = json.loads(ln)
+-            except ValueError:
++            except (ValueError, RecursionError):
+                 continue
+             if isinstance(d, dict) and d.get("kind") in _REVIEW_RECORD_KINDS and isinstance(d.get("loop"), str):
+                 by_loop.setdefault(nfc(d["loop"]), []).append(d)
+@@ -9869,7 +9869,7 @@
+         for ln in (env.vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
+             try:
+                 d = json.loads(ln)
+-            except ValueError:
++            except (ValueError, RecursionError):
+                 continue
+             if (isinstance(d, dict) and d.get("kind") == "converged" and d.get("gate") == "design-loop"
+                     and isinstance(d.get("nodes"), list) and d["nodes"] and isinstance(d["nodes"][0], str)):
+@@ -20725,7 +20725,7 @@
+             if not rid or rid == "none":
+                 unlabeled += 1
+                 continue
+-            counts.setdefault(rid, {"n": 0, "desc": ev.get("desc", "")[:60]})
++            counts.setdefault(rid, {"n": 0, "desc": _esc_clean(ev.get("desc", ""), 60)})
+             counts[rid]["n"] += 1
+     have = set(_rules_declared_ids(repo_root))
+     idx, idx_err = _rules_load(repo_root)
+@@ -20746,7 +20746,7 @@
+     if missing:
+         print("這些漏網的問題有人標了「本來哪條規則該抓」,但那條規則還不存在(" + str(len(missing)) + " 條):")
+         for rid, v in sorted(missing.items(), key=lambda kv: -kv[1]["n"]):
+-            print("  " + rid + "(漏過 " + str(v["n"]) + " 次)—— " + v["desc"])
++            print("  " + _esc_clean(rid, 80) + "(漏過 " + str(v["n"]) + " 次)—— " + v["desc"])   # 帳是誰都能記的,控制字元不准進終端(code-逃逸帳 r3 資安席)
+         print("在意的原因:逃逸帳只記「漏掉了」,不會自己長出守衛;把重複漏過的那幾條寫成規則,下次才擋得住。")
+         print("接下來:")
+         print("    在 .lumos/rules/ 寫規則 + 在 samples/ 放會翻紅的樣本,然後 lumos rule-check")
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33376,6 +33376,44 @@
+     _node = type("N", (), {"fields": {"tags": ["scope/evals"]}})()
+     env5 = type("E", (), {"vault": v5, "notes": {unicodedata.normalize("NFD", f"Projects/{name}_計劃.md"): _node}})()   # 索引鍵跟查到的路徑寫法不同(一邊 NFD、一邊 NFC)
+     check("r2 NFD 檔名的計劃照樣分到範圍類", m._escape_plan_scopes(env5, "code-café案") == ["evals"], repr(m._escape_plan_scopes(env5, "code-café案")))
++
++
++def t_escape_review_r3_fixes():
++    """代碼審 r3 折入的行為:帳裡一行超深巢狀(合法 JSON、解析會遞迴過深)只跳過那一行,
++    逃逸統計、清單、手動記、自動記都不崩;規則缺口清單印說明與規則名前清控制字元。"""
++    import json as _j, subprocess as _sp, sys as _sy
++    m = _load_lumos()
++    deep = "[" * 200000 + "]" * 200000
++    v = _mk_escape_fixture(review=[("甲", "standard")], converged=["甲"],
++                           escapes=[deep, _esc_row("甲", token="E1", sha="s1")])
++    r = run(v, "loop", "escape-stats", "--json")
++    check("r3 逃逸帳超深巢狀行 → 統計只跳過那行", r.returncode == 0 and "Traceback" not in r.stderr
++          and (_esc_cat(_j.loads(r.stdout), "design") or {}).get("leaked") == 1, (r.stderr or r.stdout)[-300:])
++    r = run(v, "loop", "escape", "--list")
++    check("r3 逃逸帳超深巢狀行 → 清單照列、標壞行", r.returncode == 0 and "E1" in r.stdout, (r.stderr or r.stdout)[-300:])
++    led = v.parent / ".canary-log.jsonl"
++    led.write_text(deep + "\n" + led.read_text(encoding="utf-8"), encoding="utf-8")
++    r = run(v, "loop", "escape-stats", "--json")
++    check("r3 審查帳超深巢狀行 → 統計不崩", r.returncode == 0 and "Traceback" not in r.stderr, (r.stderr or r.stdout)[-300:])
++    gov = v.parent / ".governance-log.jsonl"
++    gov.write_text(deep + "\n" + gov.read_text(encoding="utf-8"), encoding="utf-8")
++    r = run(v, "loop", "escape-stats", "--json")
++    check("r3 治理帳超深巢狀行 → 統計不崩、放行照認", r.returncode == 0 and "Traceback" not in r.stderr
++          and (_esc_cat(_j.loads(r.stdout), "design") or {}).get("leaked") == 1, (r.stderr or r.stdout)[-300:])
++    r = run(v, "loop", "escape", "甲", "--stage", "CI", "--severity", "minor", "--desc", "深巢狀後照記", "--sha", "s2")
++    check("r3 審查帳超深巢狀行 → 手動記不擋", r.returncode == 0, (r.stderr or r.stdout)[-300:])
++    env = type("E", (), {"vault": v})()
++    check("r3 審查帳超深巢狀行 → 自動記不崩", m._auto_escape(env, "CI", "major", "x", [("甲", None)], "s3", "CI") == 1, "")
++    repo = v.parent / "rg"
++    (repo / "docs").mkdir(parents=True)
++    _sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
++    (repo / "docs" / ".escape-log.jsonl").write_text(
++        _j.dumps(_esc_row("甲", token="E9", rule="R\x1b[8mHIDDEN\x1b[0m", desc="d\x1b]52;c;bWFs\x07")) + "\n"
++        + _j.dumps(_esc_row("甲", token="E8", rule="R2", desc=12345)) + "\n", encoding="utf-8")
++    r = _sp.run([_sy.executable, str(GRAPHCTL), "rule-gap", "--repo", str(repo)], capture_output=True, text=True)
++    check("r3 規則缺口清單不把控制字元印到終端", r.returncode == 0 and "\x1b" not in r.stdout and "\x07" not in r.stdout
++          and "HIDDEN" in r.stdout, (r.stderr or r.stdout)[-300:])
++    check("r3 說明不是字串也不崩", "R2" in r.stdout, (r.stderr or r.stdout)[-300:])
+ 
+ 
+ # ── 審查跑滿上限提示(Projects/審查跑滿上限提示_計劃)──
+--- a/docs/lumos-toolchain-knowledge/Projects/逃逸帳對得起來_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/逃逸帳對得起來_計劃.md
+@@ -139,3 +139,6 @@
+   - 折入:撤回紀錄永遠不當逃逸列、各讀者都不算它(正確性、邊界、整合、回滾,四席一致);非物件 JSON 行當壞行(外家);撤回者改 `--by` 明講、空的擋下(架構、邊界);撤回寫入走 `_jsonl_append_verified`(外家);`--list --withdrawn` 是修飾旗標(外家);手動 `--sha` 寫進列、佐證與理由去空白後不得為空、理由旗標改 `--missing-defect-ref`(正確性、外家、架構);有 converged 就算放行(邊界、外家);分母的「審查帳有它」寫成可執行判準(整合);分類只認審查紀錄、不認規格閘留痕(外家);回退段寫清 `_plan_for_loop` 真正的依賴者(回滾);撤回紀錄不帶 loop_kind(外家)。
+ - r3(2026-09-26,七席,末輪):13 條/blocking 11/沒有 blocker;★跑滿三輪未收斂,Enzo 裁「兩份都折完就實作」(決策 d1)★,剩下的精確度交給條款測試與代碼審。
+   - 折入:撤回確認目標改用含撤回紀錄的原始讀法(併發、回滾);`loop escape` 指令分派補接例外(整合、併發);符號連結檢查抽成共用、撤回也過(外家);`--withdraw` 不准混用(邊界);撤回理由門檻跟缺佐證理由一樣(回滾);歸因不明先剔無佐證列、只在分母母體內比(正確性、邊界);code 類只含手動逃逸、輸出明寫低估(外家);回退時留住撤回紀錄過濾(外家);缺佐證理由寫進 `defect_ref_missing`(外家);手動記帳也上鎖(架構)。
++- 代碼審(2026-09-26,high,三席鏡頭以外加架構對齊、資安、兩個外家 Codex,共七到九席):r1 17 條、r2 11 條、r3 2 條全折;席報告在 `governance/review-reports/code-逃逸帳對得起來/`。
++  - r3 兩條:逃逸帳家族讀帳遇到合法但超深巢狀的一行會丟遞迴過深錯誤而整支崩(邊界席;同族掃到共用的寫完讀回自驗與判門也一起補,前者會在已寫入後誤報沒記成功);規則缺口清單把說明與規則名原樣印到終端(資安席)。
++  - ★跑滿三輪上限,Enzo 裁「兩條都修,修正差異另開小審再推」★;小審編號 `code-逃逸帳對得起來-末輪修正`。其餘 55 處同樣寫法記在 [[Issues/帳本讀取沒接遞迴過深]],不在本案掃。
+--- a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
++++ b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+@@ -29,6 +29,7 @@
+ summary: |-
+   WHY:[2026-09-26 [[Projects/逃逸帳對得起來_計劃]] d1]逃逸帳對得起來:①新列帶 `loop_kind`(code/design/plan,只看 loop 欄與審查紀錄、規格閘留痕不算,`_escape_loop_kind`);②手動記帳要 --sha 或 --defect-ref,沒有就 --missing-defect-ref 講理由(至少 4 字實字);手動記帳與撤回都上寫入鎖、共用符號連結檢查 `_escape_log_guard`;③`loop escape --withdraw <token> --reason --withdrawn-by` 追加撤回紀錄(撤回者自報不驗身分;token 在 --list 每列印出;token 重複不准撤),`_escape_rows_for` 永遠不回撤回紀錄、預設不回被撤的列,自動記的去重用 include_withdrawn(撤過的不會被同觸發補回),清單照列並標已撤回,rule-gap 保留自己找檔再套同一支判斷;④`loop escape-stats`:列上已記的 loop_kind 為準、sha 與 defect_ref 各自比對歸因;單位是迴圈、分母只認 converged 且審查帳有紀錄、下一站接住(實作/code-loop/push-gate*)另列、歸因不明只在分母母體內比、code 類標明只含手動逃逸 [test:t_escape_withdraw_validation] [test:t_escape_withdrawn_not_resurrected_by_auto] [test:t_escape_stats_rate_unit_is_loop] [test:t_escape_manual_requires_defect_ref]
+   WHY:[2026-09-26 [[Projects/審查跑滿上限提示_計劃]] d1]多席迴圈輪數到分級上限、或各輪累計折入超過 20 條時,loop next 與處置閘都在輸出末尾印 `[cap-hint]` 段:每輪折入數(`_review_yield_round` 的折欄;空輪看各席 findings 全 0)、最高嚴重度、閘狀態與一條提示(換做法/可以停/由人裁/判不了)。只印不擋、不寫帳、回放不印,處置閘那邊印的時候任何例外都吞掉(代碼審 r1:帳上某輪欄位壞掉曾讓處置閘噴例外);light、循序單審、2026-08-26 以前的舊迴圈不印。理由:處置閘一輪全部處置完就過關,多跑的輪是過了閘之後自己再開的,問題在「沒人看得到走勢」而不在出口。分輪抽成 `_disposal_round_groups` 與處置閘共用 [test:t_cap_hint_not_declining_reshape] [test:t_loop_next_cap_hint_appended_without_changing_phase] [test:t_disposal_cap_hint_without_changing_verdict] [test:t_cap_hint_breaker_total_folded]
++  PITFALL:[2026-09-26 代碼審 code-逃逸帳對得起來 r3]帳本一行合法但巢狀極深的 JSON 解析時丟遞迴過深錯誤(不是 ValueError),逃逸帳家族讀帳、共用寫完讀回自驗 `_jsonl_append_verified`、判門 `_door_for_loop` 都改成一起接;寫完讀回沒接會在已寫入後誤報沒記成功。rule-gap 印說明與規則名前過 `_esc_clean`(帳是誰都能記的)。其餘讀帳點見 [[Issues/帳本讀取沒接遞迴過深]] [test:t_escape_review_r3_fixes]
+   PITFALL:[2026-09-21]★留痕之後手打帳本提交的路徑清單,同一天漏掉簽名檔兩次★——每次 `anchor approve` 都會弄髒簽名檔,而推送前的閘會擋「簽名檔改過了但沒提交」(它擋的是本機綠、CI 會紅)。現在 `code-loop pass|skip` 收尾會把還沒提交的帳本檔列成一行可直接貼的提交指令。★只列帳本檔,不列卷證目錄★:一起列會變成上百個檔、混進別的 session 的卷證,照貼等於提交別人的東西。[test:t_codeloop_pass_lists_dirty_bookkeeping];解析 `git status --porcelain -z` 時改名會吐兩個片段(第二個是裸的舊路徑),拆成 `_porcelain_z_paths` 處理——走完整流程測不出這個(切壞的字串本來就不會命中白名單),所以直接餵合成輸出測解析。
+   KEY:[2026-09-17 風險低放行].canary-log.jsonl 多一種 kind=spec-gate(規格閘留痕:door/tests/clause_sha/door_rule/exclusions),不是審查輪:_loop_records 與 loop status 讀帳時略過,不算席數、不使輪無效;寫側走同一支 _jsonl_append_verified+vault 寫入鎖;讀它的只有 [[Systems/規格閘]] 的推送前檢查、_door_for_loop(逃逸帳分門)與 doctor S14 [test:t_round_valid_ignores_spec_gate]
+   KEY:[2026-09-09 審查有沒有用記帳]寫側第三道硬擋:席報告沒正規化(檔首檔級行、每條 finding 恰一行獨立 severity、殘留寫法)→ rc2 並在治理帳留 canary/blocked;`reported` 由機器數落帳、--findings 不得多於它;載體必帶 --refuted-set(intake 整字驗);問閘尾一行「席位報→存活/重現不到→折/放行」(觀測不進合取,舊帳印 ?)[test:t_canary_reported_normalized][test:t_canary_refuted_set][test:t_gov_stats_review_yield];單源 [[Projects/審查有沒有用記帳_計劃]]
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Issues/帳本讀取沒接遞迴過深.md
+@@ -0,0 +1,42 @@
++---
++type: issue
++status: open
++created: 2026-09-26
++updated: 2026-09-26
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/issue
++  - status/open
++  - scope/guards-gates
++summary: |-
++  FLAG:TECHNICAL
++  KEY:帳本裡一行合法但巢狀極深的 JSON,解析時丟的是遞迴過深錯誤(RuntimeError 的子類)不是 ValueError,只接 ValueError 的讀帳點會整支崩
++  PITFALL:[2026-09-26 代碼審 code-逃逸帳對得起來 r3 邊界席]逃逸帳家族 8 處已補(含共用的寫完讀回自驗與判門);其餘讀帳點沒掃 [test:t_escape_review_r3_fixes]
++  REVISIT:2026-10-26 決定整批補還是收進一支共用讀 jsonl 的函式
++---
++# 帳本讀取沒接遞迴過深
++
++## 現象
++
++帳本(`.canary-log.jsonl`、`.escape-log.jsonl`、`.governance-log.jsonl` 等)裡如果有一行 `[[[[…]]]]` 這種合法但深到二十萬層的 JSON,Python 解析時丟 `RecursionError`,不是 `ValueError`。只寫 `except ValueError` 的讀帳點接不住,指令會帶著原始錯誤堆疊結束。
++
++更糟的一種:共用的「寫完讀回自驗」如果碰到別筆是這種行,會在**已經寫進去之後**報「沒記成功」。這一處已在逃逸帳那次一起修了。
++
++## 範圍
++
++- 已修(2026-09-26):逃逸帳的讀取、清單、手動記、自動記、逃逸統計讀審查帳與治理帳、判門、共用寫完讀回自驗。
++- 沒修:2026-09-26 機械數,主程式裡「`.loads(` 後五行內第一個 except 沒接 RecursionError、也不是接全部」的有 55 處(口徑:只看呼叫 `.loads(` 的行往下五行內第一個 except;不含沒包 try 的呼叫點)。重算:
++
++```
++python3 - <<'X'
++import re
++L=open("scripts/lumos",encoding="utf-8").read().split("\n")
++print(sum(1 for i,l in enumerate(L) if ".loads(" in l for j in range(i+1,min(i+6,len(L))) if L[j].lstrip().startswith("except") and "RecursionError" not in L[j] and not re.search(r"except Exception|except:$",L[j]) and not any(L[k].lstrip().startswith("except") for k in range(i+1,j))))
++X
++```
++
++## 為什麼沒一起修
++
++要觸發得有人往帳本塞一行幾十萬字元的怪資料;後果多半是唯讀指令崩掉,不會寫錯帳(寫完讀回那處例外,已修)。五十幾處逐一改是同族掃描,但更好的形狀是收進一支共用的讀 jsonl 函式,那是另一件事。

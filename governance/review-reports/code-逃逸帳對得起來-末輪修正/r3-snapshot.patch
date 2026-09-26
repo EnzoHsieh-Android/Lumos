@@ -1,0 +1,44 @@
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20721,7 +20721,7 @@
+             if _escape_is_withdraw(ev) or ev.get("token") in _gone:
+                 continue
+             _raw = ev.get("rule")
+-            rid = _raw.strip() if isinstance(_raw, str) else ""   # 非字串不要整支崩,當成沒標
++            rid = _esc_clean(_raw.strip()) if isinstance(_raw, str) else ""   # 非字串不要整支崩,當成沒標;讀進來就清控制字元,清完撞名的次數合併、文字與 --json 同一份(code-逃逸帳 r3 資安席、末輪修正 r2 通才席)
+             if not rid or rid == "none":
+                 unlabeled += 1
+                 continue
+@@ -20735,9 +20735,7 @@
+         print("提醒:" + idx_err + "——這份清單少算了索引裡登記過的規則,先修好索引再看", file=sys.stderr)
+     missing = {k: v for k, v in counts.items() if k not in have}
+     if as_json:
+-        # JSON 不轉義 DEL 與 C1 控制碼,規則名一樣要清(code-逃逸帳對得起來-末輪修正 r1 通才席)
+-        print(json.dumps({"missing": {_esc_clean(k, 80): v for k, v in missing.items()},
+-                          "covered": sorted(_esc_clean(k, 80) for k in set(counts) & have),
++        print(json.dumps({"missing": missing, "covered": sorted(set(counts) & have),
+                           "unlabeled": unlabeled}, ensure_ascii=False))
+         return 0
+     if not counts and not unlabeled:
+@@ -20748,7 +20746,7 @@
+     if missing:
+         print("這些漏網的問題有人標了「本來哪條規則該抓」,但那條規則還不存在(" + str(len(missing)) + " 條):")
+         for rid, v in sorted(missing.items(), key=lambda kv: -kv[1]["n"]):
+-            print("  " + _esc_clean(rid, 80) + "(漏過 " + str(v["n"]) + " 次)—— " + v["desc"])   # 帳是誰都能記的,控制字元不准進終端(code-逃逸帳 r3 資安席)
++            print("  " + rid + "(漏過 " + str(v["n"]) + " 次)—— " + v["desc"])
+         print("在意的原因:逃逸帳只記「漏掉了」,不會自己長出守衛;把重複漏過的那幾條寫成規則,下次才擋得住。")
+         print("接下來:")
+         print("    在 .lumos/rules/ 寫規則 + 在 samples/ 放會翻紅的樣本,然後 lumos rule-check")
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33419,6 +33419,10 @@
+     r = _sp.run([_sy.executable, str(GRAPHCTL), "rule-gap", "--repo", str(repo), "--json"], capture_output=True, text=True)
+     check("r3 規則缺口 --json 也不讓 DEL/C1 控制碼穿透", r.returncode == 0 and not any("\x7f" <= ch <= "\x9f" for ch in r.stdout)
+           and "missing" in _j.loads(r.stdout), repr(r.stdout[-300:]))
++    (repo / "docs" / ".escape-log.jsonl").write_text(
++        _j.dumps(_esc_row("甲", token="E5", rule="R\x7fA", desc="d1")) + "\n" + _j.dumps(_esc_row("甲", token="E6", rule="R A", desc="d2")) + "\n", encoding="utf-8")
++    r = _sp.run([_sy.executable, str(GRAPHCTL), "rule-gap", "--repo", str(repo), "--json"], capture_output=True, text=True)
++    check("r3 清洗後撞名的規則次數合併、不吃掉一筆", _j.loads(r.stdout)["missing"].get("R A", {}).get("n") == 2, repr(r.stdout[-300:]))
+ 
+ 
+ # ── 審查跑滿上限提示(Projects/審查跑滿上限提示_計劃)──

@@ -1,0 +1,27 @@
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20735,7 +20735,9 @@
+         print("提醒:" + idx_err + "——這份清單少算了索引裡登記過的規則,先修好索引再看", file=sys.stderr)
+     missing = {k: v for k, v in counts.items() if k not in have}
+     if as_json:
+-        print(json.dumps({"missing": missing, "covered": sorted(set(counts) & have),
++        # JSON 不轉義 DEL 與 C1 控制碼,規則名一樣要清(code-逃逸帳對得起來-末輪修正 r1 通才席)
++        print(json.dumps({"missing": {_esc_clean(k, 80): v for k, v in missing.items()},
++                          "covered": sorted(_esc_clean(k, 80) for k in set(counts) & have),
+                           "unlabeled": unlabeled}, ensure_ascii=False))
+         return 0
+     if not counts and not unlabeled:
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33414,6 +33414,11 @@
+     check("r3 規則缺口清單不把控制字元印到終端", r.returncode == 0 and "\x1b" not in r.stdout and "\x07" not in r.stdout
+           and "HIDDEN" in r.stdout, (r.stderr or r.stdout)[-300:])
+     check("r3 說明不是字串也不崩", "R2" in r.stdout, (r.stderr or r.stdout)[-300:])
++    (repo / "docs" / ".escape-log.jsonl").write_text(
++        _j.dumps(_esc_row("甲", token="E7", rule="R\x7f\x9b[8m", desc="d\x9b[31m"), ensure_ascii=False) + "\n", encoding="utf-8")
++    r = _sp.run([_sy.executable, str(GRAPHCTL), "rule-gap", "--repo", str(repo), "--json"], capture_output=True, text=True)
++    check("r3 規則缺口 --json 也不讓 DEL/C1 控制碼穿透", r.returncode == 0 and not any("\x7f" <= ch <= "\x9f" for ch in r.stdout)
++          and "missing" in _j.loads(r.stdout), repr(r.stdout[-300:]))
+ 
+ 
+ # ── 審查跑滿上限提示(Projects/審查跑滿上限提示_計劃)──
