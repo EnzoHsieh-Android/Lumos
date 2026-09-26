@@ -33012,6 +33012,242 @@ def t_disposal_severity_tail():
           r2.returncode == 2 and "必須綁輪次" in r2.stderr, f"rc={r2.returncode} {r2.stderr[:200]}")
 
 
+# ── 審查跑滿上限提示(Projects/審查跑滿上限提示_計劃)──
+def _cap_real_cutoff(fn):
+    """測試總開關把舊閘退役日設成 9999(舊測試凍結在退役前語意);跑滿上限提示只給退役後的迴圈,
+    這幾支在跑的期間改回真實退役日,跑完還原。"""
+    import functools
+    @functools.wraps(fn)
+    def _w(*a, **k):
+        old = _os_mod.environ.get("LUMOS_PANEL_RETIRE_CUTOFF")
+        _os_mod.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = "2026-08-26"
+        try:
+            return fn(*a, **k)
+        finally:
+            if old is None:
+                _os_mod.environ.pop("LUMOS_PANEL_RETIRE_CUTOFF", None)
+            else:
+                _os_mod.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = old
+    return _w
+
+
+def _cap_rows(spec_rounds, loop="caphint", tier="standard", ts="2026-09-20T10:00:00+08:00", with_round=True):
+    """spec_rounds:每輪 (折入條數 或 None=沒記處置, 最高嚴重度, 各席 findings 值清單)。回帳列清單。"""
+    rows = []
+    for i, (folded, sev, seat_findings) in enumerate(spec_rounds, 1):
+        rid = f"r{i}"
+        for j, f in enumerate(seat_findings):
+            r = {"ts": ts, "kind": "none", "loop": loop, "auditor": f"s{j}-sonnet", "severity": sev,
+                 "token": f"T{i}{j}", "tier": tier, "reviewed_sha256": "x" * 64}
+            if f is not ...:
+                r["findings"] = f
+            if with_round:
+                r["round"] = rid
+            rows.append(r)
+        if folded is not None:
+            ids = [f"{rid}-F{k}" for k in range(folded)]
+            rows.append({"ts": ts, "kind": "none", "loop": loop, "round": rid, "auditor": "s0-sonnet", "severity": sev,
+                         "token": f"C{i}", "tier": tier, "findings": folded, "reviewed_sha256": "x" * 64,
+                         "findings_set": ids, "folded_set": ids, "accepted_set": [], "refuted_set": []})
+    return rows
+
+
+def _cap_hint_of(rows, gate=None):
+    return _load_lumos()._cap_hint(rows, gate=gate)
+
+
+@_cap_real_cutoff
+def t_cap_hint_not_declining_reshape():
+    """[S4] 最後一輪折入數 ≥ 前一輪 → 提示是換做法。"""
+    h = _cap_hint_of(_cap_rows([(5, "major", [3]), (2, "major", [2]), (3, "major", [3])]))
+    check("S4 持平或上升 → 換做法", h is not None and h["hint"] == "reshape", repr(h))
+    h2 = _cap_hint_of(_cap_rows([(5, "major", [5]), (2, "major", [2]), (2, "major", [2])]))
+    check("S4 持平(2→2)也是換做法", h2 is not None and h2["hint"] == "reshape", repr(h2))
+
+
+@_cap_real_cutoff
+def t_cap_hint_declining_minor_can_stop():
+    """[S5] 在降且最後一輪最高 ≤ minor → 可以停。"""
+    h = _cap_hint_of(_cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "minor", [1])]))
+    check("S5 在降且只剩 minor → 可以停", h is not None and h["hint"] == "can-stop", repr(h))
+
+
+@_cap_real_cutoff
+def t_cap_hint_declining_major_human_decides():
+    """[S6] 在降但仍有 major → 由人裁,不得寫成建議再一輪。"""
+    m = _load_lumos()
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    h = m._cap_hint(rows)
+    check("S6 在降仍有 major → 由人裁", h is not None and h["hint"] == "human-decides", repr(h))
+    txt = "\n".join(m._cap_hint_lines(h))
+    check("S6 文字不得寫「建議再一輪」", "建議再一輪" not in txt and "由人裁" in txt, txt)
+
+
+@_cap_real_cutoff
+def t_cap_hint_vacuous_round_counts_zero():
+    """[S7] 沒彙總帳而各席 findings 全 0 → 折 0;有人報了條數卻沒彙總帳 → 沒記處置、判不了。"""
+    h = _cap_hint_of(_cap_rows([(4, "major", [4]), (2, "major", [2]), (None, "clean", [0, 0])]))
+    check("S7 空輪算折 0", h is not None and [r["folded"] for r in h["rounds"]] == [4, 2, 0], repr(h))
+    check("S7 空輪算有記處置", h is not None and h["rounds"][-1]["recorded"] is True, repr(h))
+    h2 = _cap_hint_of(_cap_rows([(4, "major", [4]), (2, "major", [2]), (None, "major", [3, 0])]))
+    check("S7 有報沒處置 → 判不了", h2 is not None and h2["hint"] == "unknown" and h2["rounds"][-1]["recorded"] is False, repr(h2))
+
+
+@_cap_real_cutoff
+def t_cap_hint_breaker_total_folded():
+    """[S8] 累計折入 > 20 → 印拆小;不論輪數;沒記處置的輪不加進累計並註明。"""
+    m = _load_lumos()
+    h = m._cap_hint(_cap_rows([(21, "major", [21])]))
+    check("S8 只有一輪但累計 21 → 熔斷", h is not None and h["breaker"] and h["breaker"]["total"] == 21, repr(h))
+    check("S8 只有一輪 → 提示判不了、熔斷並列", h is not None and h["hint"] == "unknown", repr(h))
+    _t = "\n".join(m._cap_hint_lines(h))
+    check("S8 只有一輪的熔斷:文字同時有「判不了」與「拆小」", "判不了" in _t and "拆小" in _t, _t)
+    h2 = m._cap_hint(_cap_rows([(12, "major", [12]), (None, "major", [4]), (10, "major", [10])]))
+    check("S8 沒記處置的輪不加進累計並註明", h2 is not None and h2["breaker"] and h2["breaker"]["total"] == 22
+          and h2["breaker"]["unrecorded_rounds"] == 1, repr(h2))
+    check("S8 文字有拆小", h2 is not None and "拆小" in "\n".join(m._cap_hint_lines(h2)), "")
+
+
+@_cap_real_cutoff
+def t_cap_hint_out_of_scope_silent():
+    """[S9] light、循序單審(不帶輪次)、2026-08-26 以前的舊迴圈 → 不印。"""
+    m = _load_lumos()
+    check("S9 不帶輪次(循序單審) → 不印",
+          m._cap_hint(_cap_rows([(5, "major", [5])] * 4, with_round=False)) is None, "")
+    check("S9 light → 不印", m._cap_hint(_cap_rows([(5, "major", [5])] * 3, tier="light")) is None, "")
+    check("S9 舊迴圈 → 不印", m._cap_hint(_cap_rows([(5, "major", [5])] * 3, ts="2026-08-20T10:00:00+08:00")) is None, "")
+
+
+@_cap_real_cutoff
+def t_cap_hint_can_stop_carries_gate_status():
+    """[S12] 可以停時同一行帶閘狀態。"""
+    m = _load_lumos()
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "minor", [1])])
+    for gate, want in ((None, "--spec"), ({"passed": True, "fails": []}, "已過閘"),
+                       ({"passed": False, "fails": ["G3"]}, "G3")):
+        lines = m._cap_hint_lines(m._cap_hint(rows, gate=gate))
+        hint_line = next((l for l in lines if "可以停" in l), "")
+        check(f"S12 可以停帶閘狀態({want})", want in hint_line, "\n".join(lines))
+
+
+@_cap_real_cutoff
+def t_cap_hint_untiered_falls_back():
+    """[S13] 帳上沒分級 → 照 standard(上限 3);不出錯。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    for r in rows:
+        r.pop("tier", None)
+    h = _cap_hint_of(rows)
+    check("S13 沒分級照 standard 上限 3 → 到上限會印", h is not None and h["cap"] == 3, repr(h))
+
+
+@_cap_real_cutoff
+def t_cap_hint_round_order_by_appearance():
+    """[S14] 輪次跳號 → 前一輪是出現順序的上一輪。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (4, "major", [4])])
+    for r in rows:
+        r["round"] = {"r1": "r1", "r2": "r3", "r3": "r7"}[r["round"]]
+    h = _cap_hint_of(rows)
+    check("S14 跳號仍照出現順序比(3→4 不降 → 換做法)", h is not None and [x["round"] for x in h["rounds"]] == ["r1", "r3", "r7"]
+          and h["hint"] == "reshape", repr(h))
+
+
+@_cap_real_cutoff
+def t_cap_hint_missing_findings_not_vacuous():
+    """[S15] 某輪有一席缺 findings 欄 → 沒記處置,不是折 0。"""
+    h = _cap_hint_of(_cap_rows([(4, "major", [4]), (2, "major", [2]), (None, "clean", [0, ...])]))
+    check("S15 缺 findings 欄 → 沒記處置", h is not None and h["rounds"][-1]["recorded"] is False, repr(h))
+
+
+def _cap_vault(rows):
+    import json as _j
+    v = mkvault()
+    (v.parent / ".canary-log.jsonl").write_text("".join(_j.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    spec = v.parent / "cap-spec.md"
+    spec.write_text("規則甲:照字面實作要對,十個字以上。\n", encoding="utf-8")
+    return v, spec
+
+
+@_cap_real_cutoff
+def t_loop_next_cap_hint_appended_without_changing_phase():
+    """[S1] 到上限時 loop next 末尾加一段,階段與退出碼照舊(今天 gate-pending、rc1)。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    v, _spec = _cap_vault(rows)
+    r = run(v, "loop", "next", "caphint")
+    check("S1 階段照舊 gate-pending", "現在狀態 gate-pending" in r.stdout, r.stdout[:300])
+    check("S1 退出碼照舊 1", r.returncode == 1, str(r.returncode))
+    _ls = r.stdout.rstrip().splitlines()
+    _hi = next((i for i, l in enumerate(_ls) if l.startswith("[cap-hint]")), None)
+    check("S1 末尾加上 [cap-hint] 段(段首一行帶標籤、之後都是縮排的段內行)",
+          _hi is not None and all(l.startswith("  ") for l in _ls[_hi + 1:]) and len(_ls) > _hi + 1, r.stdout[-400:])
+    v2, _ = _cap_vault(rows[: len(rows) * 2 // 3])
+    r2 = run(v2, "loop", "next", "caphint")
+    check("S1 沒到上限不印", "[cap-hint]" not in r2.stdout, r2.stdout[-300:])
+
+
+@_cap_real_cutoff
+def t_loop_next_cap_hint_json_fields():
+    """[S10] --json 帶 cap_hint 物件,欄位 rounds/hint/breaker。"""
+    import json as _j
+    v, _ = _cap_vault(_cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])]))
+    r = run(v, "loop", "next", "caphint", "--json")
+    d = _j.loads(r.stdout)
+    ch = d.get("cap_hint") or {}
+    check("S10 cap_hint 有 rounds/hint/breaker", set(("rounds", "hint", "breaker")) <= set(ch), repr(ch))
+    check("S10 rounds 每筆有 round/folded/max_severity/recorded",
+          all(set(("round", "folded", "max_severity", "recorded")) <= set(x) for x in ch.get("rounds", [])) and ch.get("rounds"), repr(ch))
+
+
+@_cap_real_cutoff
+def t_disposal_cap_hint_without_changing_verdict():
+    """[S2] 到上限時處置閘判定之後印同一段,不論過關與否;判定與退出碼不變。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    v, spec = _cap_vault(rows)
+    r = run(v, "loop", "status", "caphint", "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("S2 處置閘印 [cap-hint]", "[cap-hint]" in r.stdout, r.stdout[-500:])
+    check("S2 判定行在前、提示段在後", "DISPOSAL GATE" in r.stdout and r.stdout.index("DISPOSAL GATE") < r.stdout.index("[cap-hint]"), r.stdout[-500:])
+    v2, spec2 = _cap_vault(rows[:-2])   # 少一輪:沒到上限
+    r2 = run(v2, "loop", "status", "caphint", "--disposal", "--spec", str(spec2), "--repo", str(v2.parent))
+    check("S2 退出碼跟沒印時同一個判法(兩邊都沒過 → 1)", r.returncode == r2.returncode == 1, f"{r.returncode} {r2.returncode}")
+
+
+@_cap_real_cutoff
+def t_disposal_cap_hint_silent_when_readonly():
+    """[S3] 唯讀呼叫(回放、凍結)不印。"""
+    import io, contextlib
+    m = _load_lumos()
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    v, spec = _cap_vault(rows)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        m._loop_status_disposal(rows, "caphint", str(spec), 0, v.parent, readonly=True)
+    check("S3 唯讀不印 [cap-hint]", "[cap-hint]" not in buf.getvalue(), buf.getvalue()[-300:])
+
+
+@_cap_real_cutoff
+def t_disposal_cap_hint_fail_open():
+    """[S2] 帳上某輪欄位壞掉(refuted_set 不是清單)時,處置閘照常結束,不因提示段噴例外、退出碼不變(代碼審 r1 blocker)。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    for r in rows:
+        if r.get("round") == "r1" and "findings_set" in r:
+            r["refuted_set"] = 5
+    v, spec = _cap_vault(rows)
+    r = run(v, "loop", "status", "caphint", "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("S2 欄位壞掉時處置閘不噴例外", "Traceback" not in r.stderr and r.returncode in (0, 1), r.stderr[-400:])
+
+
+@_cap_real_cutoff
+def t_cap_hint_writes_no_extra_ledger():
+    """[S11] 印這段不多寫帳:loop next 與沒過關的處置閘前後,審查帳與治理帳行數不變。"""
+    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
+    v, spec = _cap_vault(rows)
+    logs = [v.parent / ".canary-log.jsonl", v.parent / ".governance-log.jsonl"]
+    before = [p.read_text(encoding="utf-8").count("\n") if p.exists() else 0 for p in logs]
+    run(v, "loop", "next", "caphint")
+    run(v, "loop", "status", "caphint", "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    after = [p.read_text(encoding="utf-8").count("\n") if p.exists() else 0 for p in logs]
+    check("S11 帳本行數不變", before == after, f"{before} → {after}")
+
+
 def t_loop_replay_ignores_spec_gate_rows():
     """[凍結判定] 規格閘自己的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個編號下;處置閘本來就略過它,
     凍結與回放讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍。出身:2026-09-26 兩份設計審過閘後凍結被擋。

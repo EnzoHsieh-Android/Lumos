@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-14
+updated: 2026-09-26
 self_audit: sonnet/2026-08-26
 about_code_stamp: claude/2026-08-30/be0e9557e400
 tags:
@@ -27,6 +27,7 @@ verified_by:
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-09_審查有沒有用記帳落地]]"
 summary: |-
+  WHY:[2026-09-26 [[Projects/審查跑滿上限提示_計劃]] d1]多席迴圈輪數到分級上限、或各輪累計折入超過 20 條時,loop next 與處置閘都在輸出末尾印 `[cap-hint]` 段:每輪折入數(`_review_yield_round` 的折欄;空輪看各席 findings 全 0)、最高嚴重度、閘狀態與一條提示(換做法/可以停/由人裁/判不了)。只印不擋、不寫帳、回放不印,處置閘那邊印的時候任何例外都吞掉(代碼審 r1:帳上某輪欄位壞掉曾讓處置閘噴例外);light、循序單審、2026-08-26 以前的舊迴圈不印。理由:處置閘一輪全部處置完就過關,多跑的輪是過了閘之後自己再開的,問題在「沒人看得到走勢」而不在出口。分輪抽成 `_disposal_round_groups` 與處置閘共用 [test:t_cap_hint_not_declining_reshape] [test:t_loop_next_cap_hint_appended_without_changing_phase] [test:t_disposal_cap_hint_without_changing_verdict] [test:t_cap_hint_breaker_total_folded]
   PITFALL:[2026-09-21]★留痕之後手打帳本提交的路徑清單,同一天漏掉簽名檔兩次★——每次 `anchor approve` 都會弄髒簽名檔,而推送前的閘會擋「簽名檔改過了但沒提交」(它擋的是本機綠、CI 會紅)。現在 `code-loop pass|skip` 收尾會把還沒提交的帳本檔列成一行可直接貼的提交指令。★只列帳本檔,不列卷證目錄★:一起列會變成上百個檔、混進別的 session 的卷證,照貼等於提交別人的東西。[test:t_codeloop_pass_lists_dirty_bookkeeping];解析 `git status --porcelain -z` 時改名會吐兩個片段(第二個是裸的舊路徑),拆成 `_porcelain_z_paths` 處理——走完整流程測不出這個(切壞的字串本來就不會命中白名單),所以直接餵合成輸出測解析。
   KEY:[2026-09-17 風險低放行].canary-log.jsonl 多一種 kind=spec-gate(規格閘留痕:door/tests/clause_sha/door_rule/exclusions),不是審查輪:_loop_records 與 loop status 讀帳時略過,不算席數、不使輪無效;寫側走同一支 _jsonl_append_verified+vault 寫入鎖;讀它的只有 [[Systems/規格閘]] 的推送前檢查、_door_for_loop(逃逸帳分門)與 doctor S14 [test:t_round_valid_ignores_spec_gate]
   KEY:[2026-09-09 審查有沒有用記帳]寫側第三道硬擋:席報告沒正規化(檔首檔級行、每條 finding 恰一行獨立 severity、殘留寫法)→ rc2 並在治理帳留 canary/blocked;`reported` 由機器數落帳、--findings 不得多於它;載體必帶 --refuted-set(intake 整字驗);問閘尾一行「席位報→存活/重現不到→折/放行」(觀測不進合取,舊帳印 ?)[test:t_canary_reported_normalized][test:t_canary_refuted_set][test:t_gov_stats_review_yield];單源 [[Projects/審查有沒有用記帳_計劃]]

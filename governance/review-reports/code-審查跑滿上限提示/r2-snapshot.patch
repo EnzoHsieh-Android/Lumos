@@ -1,0 +1,378 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index be011304..82021c74 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7387,6 +7387,270 @@ def _review_yield_round(rows):
+     return {"N": N, "M": M, "R": R, "F": F, "A": A, "S": S, "has_carrier": carrier is not None}
+ 
+ 
++_SEV_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
++# 生效日:只給讀側([S2] 歷史掃分新舊帳)消費;寫側每筆 ts 天生=now 恆為「新」,
++# 不刻 ts 分支,更嚴禁為了豁免而加 --ts/backdate 覆寫(=時戳造假後門)。(r2 delta d-f5)
++# 設隔日不設當日:合入日(08-26)白天經舊碼寫入的帳列若被標「寫側 bug」是誤告——
++# 日粒度切不開同日先後,保守往後推一天;當晚合入後的新列反正被寫側硬擋,只是掃描器標籤軟一階。
++_SEV_WRITESIDE_CUTOFF = "2026-08-27"
++# 改制回測 [S2]:判定制度版本常數——d5 判定語意改版就 bump;golden 閉包記它,
++# replay 比對前先對版本:不同=「golden 過期」(指路重凍,不紅)——制度合法演進≠漂移(r1 s3-f3/ext-f2)。
++_REPLAY_ENGINE_REV = "d5-2026-08-25"
++
++
++def _intake_declared(text):
++    """intake守衛 T1(2026-08-30 d1):intake 檔的前掃宣告行判定。
++    規則(r2/r3 折入):①先剝 fenced 圍欄(```…```)再掃——同款行首 fullmatch 對圍欄內
++    頂格示例照計,模板照抄即偽造(r2 b-F6 實測)②行首錨定 fullmatch `preflight-4: ran`,
++    值域封閉單值 ③同檔多條宣告行=格式壞,視同無(fail-closed;後果只是 T2 的 ⚠,不擋)。
++    回傳 True=有且僅有一條合法宣告行。"""
++    import re as _re
++    # ★走全檔唯一那支剝圍欄實作★(2026-09-16 同族掃描):原本這裡自己寫了一個
++    # ```…``` 的正則,而那支共用函式的說明白紙黑字寫著「所有人都必須走這裡」——
++    # 自己寫的正則有兩個致命假設(圍欄一定成對、標記一定在第 0 欄)。實測兩種形狀
++    # 兩邊答案相反:①外層四個反引號、內層三個反引號 ②波浪號圍欄。
++    # 兩種都讓「把樣板原樣貼進圍欄裡」被算成真的跑過前掃,正是這支判定自己
++    # 宣稱要防的「模板照抄即偽造」。
++    hits = [ln for _no, ln in _visible_lines(text.split("\n"))
++            if ln.startswith("preflight-4:")]
++    if len(hits) != 1:
++        return False
++    return _re.fullmatch(r"preflight-4:[ \t]*ran[ \t]*", hits[0]) is not None
++
++
++def _intake_dir_status(repo_root, loop_id):
++    """intake守衛 T2 判準:迴圈目錄的前掃留痕狀態。
++    回傳 "no-dir"(目錄不存在=scratch 迴圈,跳過不印——r2 b-F1:自主迴圈 /tmp 工作區,
++    不跳會每天印進沒人讀的 log)/"ok"(至少一份 *intake*.md 含合法宣告行——綁迴圈不綁輪,
++    r2 b-F4/c-F5:實帳 11 份有 10 份在 r1、判定輪多為 r2+,綁輪必長噪)/"missing"。"""
++    d = Path(repo_root) / "governance" / "review-reports" / str(loop_id)
++    if not d.is_dir():
++        return "no-dir"
++    for f in sorted(d.glob("*intake*.md")):
++        try:
++            if _intake_declared(f.read_text(encoding="utf-8", errors="replace")):
++                return "ok"
++        except OSError:
++            continue
++    return "missing"
++
++
++_SEV_DECL_LINE_RE = re.compile(r"severity:[ \t]*(clean|minor|major|blocker)[ \t]*")   # ★獨立宣告行的唯一定義★(code-review-yield r1 架構席 a2:原本逐字複製了五處,值域改一字要改五處)
++
++
++def _report_severities(text):
++    """[嚴重度綁定機械掃 S1] 報告檔 severity 宣告的★單一 parse 實作★(寫側+severity-check 共用)。
++    逐行 fullmatch、空白只認水平空白(反斜線s 會吞換行讓標籤與值跨行黏上,r2 ext);
++    行首錨定天生排掉引句行(以標籤起頭)與 blockquote(以 > 起頭)兩型逃逸(r1 s1/s2);
++    大小寫、全形冒號、行首雜字一律不認(fixture 釘)。回 list[str](出現序)。"""
++    out = []
++    text = text.lstrip("\ufeff")   # BOM 不算內容(codex r1 f4)
++    # 圍欄內不算(2026-09-09,審查有沒有用記帳 S1):reported 由這支數、拒收偵測走 _visible_lines 不看圍欄,
++    # 兩邊可見性要同一套——不然席位在 ``` 裡示範一行 severity: blocker 會灌進 reported 與帳面下限。
++    for _no, line in _visible_lines(text.splitlines(), keep_fenced=False):
++        m = _SEV_DECL_LINE_RE.fullmatch(line)
++        if m:
++            out.append(m.group(1))
++    return out
++
++
++_SEV_RESIDUE_RE = re.compile(r"(?i)(?:\bsev(?:erity)?(?:\*\*|__)?\s*[:：]|嚴重度(?:\*\*|__)?\s*[:：]|\[(?:clean|minor|major|blocker)\]|[—–-]\s*(?:BLOCKER|MAJOR|MINOR)\b(?=\s*(?:$|[:：,，;；/|(（—–-])))")   # (?:\*\*|__)? = 粗體只包字不包冒號(**severity**: major);破折號型只在等級字後面接結尾或分隔符才算——「- minor 問題:…」「non-major 的調整」是散文(code-review-yield r1 f1),「- major / blocking: 是」「- MAJOR」才是殘留
++_SEV_HEADING_LEVEL_RE = re.compile(r"(?i)^\s*#{1,6}\s.*[—–:：-]\s*(?:blocker|major|minor)\b")   # 標題裡嵌等級(## F1 — BLOCKER / ## f1: major):r3 通才席拿 code-batch20 真報告證明會被放過;標題散文裡提到 major 這個字不算
++_SEV_SUMMARY_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s*|[-*+>]\s*|\d+[.)]\s*)?(?:\*\*|__)?\s*(最嚴重|最高|整份|總結|不對齊共|blocking 條數)")
++# ↑ 總結句照 SOP 本來就要寫 severity 字樣,不算殘留。★只認行首★(可帶標題/清單/引用/編號/粗體記號;2026-09-10 code 迴圈 r3):
++#   原本整行任何位置出現「最高/總結/整份」就當總結句,內文講到「總結句」這條規則、或用到「最高並發」這種詞,
++#   又碰巧提到比檔級高的等級,就被誤擋。不在行首的行照一般規則檢查(帶 severity: 的照樣算殘留)。
++
++
++def _report_normalize_issues(text):
++    """[審查有沒有用記帳 S1] 席報告「有沒有正規化」的★拒收偵測★(只用來拒、不用來數;數一律走 _report_severities):
++    ①檔首(跳過開頭 HTML 註解與空行)第一個非空行必須是檔級獨立宣告 `severity: <值>`;
++    ②其餘可見行(圍欄內不看)若含 severity/嚴重度/方括號等級字樣、卻不是 _report_severities 認得的獨立宣告行 → 殘留寫法;
++      引句行(引句:/引句:/> 開頭)不算——那是逐字引審材。
++    回 list[(行號, 原因, 行)];空=正規化過。r1–r3 五席各拿一種真實格式證明「放過就少算」,所以認不得就擋、不列舉例外。"""
++    text = text.lstrip("\ufeff")   # BOM 不算內容(codex r1 f4:帶 BOM 的外部報告會被永久誤擋、normalizer 也修不了)
++    lines = text.splitlines()
++    issues = []
++    i = 0
++    while i < len(lines) and not lines[i].strip():
++        i += 1
++    _mt = _SEV_DECL_LINE_RE.fullmatch(lines[i]) if i < len(lines) else None
++    _top = _mt.group(1) if _mt else None   # 檔級宣告的值;總結句豁免要拿它對
++    # ★不跳 HTML 註解★(r3 架構席:專案三處明令不偵測註解;來源註記寫在檔級行之後)
++    if _top is None:
++        issues.append((i + 1 if i < len(lines) else 1, "檔首第一個非空行要是檔級 severity: <clean|minor|major|blocker>(來源註記之類放它後面)", lines[i] if i < len(lines) else ""))
++    for no, ln in _visible_lines(lines, keep_fenced=False):
++        s = ln.lstrip()
++        if s.startswith(("引句:", "引句：", ">")):
++            continue
++        if _SEV_DECL_LINE_RE.fullmatch(ln):
++            continue
++        if _SEV_SUMMARY_LINE_RE.search(ln):
++            # 總結句豁免有條件(code-review-yield r1 外家席 f1):提到的等級不得高於檔級宣告——「severity: clean / 總結: severity: blocker」
++            # 就是拿白名單夾帶 blocker 又數成 0 條;檔級行缺(_top None)一律不豁免
++            # 「其中 major 0 條」是在數零條,不是宣告等級(架構對齊席範本必寫這句;2026-09-10 code-工具自裝檔不算消費專案 r2
++            # 檔級 minor 的架構席報告因此被擋)。只剝「等級字後面緊接 0 條」這種計數;非零、或 0 後面不是「條」
++            # (「blocker 0 台」數的是台數,r3 正確性席)照樣算夾帶
++            _vis_lv = re.sub(r"(?i)\b(?:clean|minor|major|blocker)\b\s*[:：]?\s*0\s*條", "", _strip_inline_markup(ln)[0])
++            _lv = [w.lower() for w in re.findall(r"(?i)\b(clean|minor|major|blocker)\b", _vis_lv)]
++            if _top is not None and all(_SEV_ORDER[w] <= _SEV_ORDER[_top] for w in _lv):
++                continue
++            if _lv:
++                issues.append((no, f"總結句提到的等級({'/'.join(_lv)})高於檔級宣告({_top or '缺'})——總結句只能重述,不能藏更高的等級", ln))
++                continue
++        vis = _strip_inline_markup(ln)[0]   # 反引號裡的是在「講」格式(`- severity: X`),不是在宣告——沿用行內可見規則
++        if _SEV_RESIDUE_RE.search(vis) or _SEV_HEADING_LEVEL_RE.match(vis):
++            issues.append((no, "嚴重度要寫成獨立一行 severity: <值>(不是列表項、標題、粗體、方括號、破折號或別的拼法)", ln))
++    issues.extend(_report_findings_missing_severity(lines, _top))
++    return issues
++
++
++_FINDING_VERIFIED_WORDS = ("已驗過", "沒問題", "無 finding", "已看,無", "已看，無", "已讀,無", "已讀，無")
++# 只收完整片語、不收單獨的「已讀」「已看」:「已讀取失敗」會被誤豁免(代碼審 r1 架構席);
++# 「已看,無」是資安席範本規定的寫法(歷史報告 code-純文件子集 r1 資安席實例),拿掉會誤擋
++
++
++def _report_findings_missing_severity(lines, top):
++    """★檔首判成非 clean 時,發現段的數量不能多過 severity 行★(2026-09-25:一份 F1、F2 都漏寫的報告在收貨偵測被說成
++    已正規化,到記帳時才因「報了幾條」對不上被擋)。缺的不補值(不能替審查席決定等級),只回給呼叫端印出來要人改。
++    ★只數數量、不分析標題結構★(代碼審三輪、Enzo 裁甲:逐段找範圍的做法每輪都被標題寫法的邊界打穿——子標題、
++    層級錯位、一字不差的兩個標題、縮排、F1.1 編號子標題——而且每輪的洞都是上一輪修正帶進來的)。記帳時「報了幾條」
++    也是數 severity 行,兩邊同一種數法。
++    ★天花板★:指不出是哪一條漏寫;某條寫了兩行、另一條沒寫時數量對得上會漏看。
++    不算發現段的:clean 報告、標題寫明已驗過/沒問題/已看,無 的段、F 後面接小數點的編號子標題(F1.1)。"""
++    if top not in ("minor", "major", "blocker"):
++        return []
++    heads = [(no, ln) for no, ln in _visible_lines(lines, keep_fenced=False)
++             if re.match(r"^\s{0,3}#{2,6}\s*F\d+(?![.\d])", ln, re.I)
++             and not any(w in ln for w in _FINDING_VERIFIED_WORDS)]
++    n_sev = len(_report_severities("\n".join(lines))) - 1   # 扣掉檔首那一行
++    if len(heads) <= n_sev:
++        return []
++    return [(heads[0][0], f"有 {len(heads)} 個發現段、卻只有 {n_sev} 行 severity: <值>——有發現漏寫等級"
++                          "(檔首判成非 clean 時每個 F 段都要有自己一行;要請審查席自己補)", heads[0][1])]
++
++
++
++
++_SEV_INLINE_DECL_RE = re.compile(r"^(\s*(?:[-*+]\s*)?(?:\*\*)?)(?:severity|Severity|嚴重度)(?:\*\*)?\s*[:：]\s*(clean|minor|major|blocker)\b\s*(.*)$")
++_SEV_HEADING_DECL_RE = re.compile(r"^(\s*#{1,6}\s.*?)\s*[—–-]{1,2}\s*(?:severity\s*[:：]\s*)?(blocker|major|minor|clean)\b\s*[,，;；]?\s*(.*)$", re.I)
++
++
++def normalize_report_text(text):
++    """[審查有沒有用記帳 S1/S4] 把席報告常見的嚴重度寫法機械轉成 SOP 格式(獨立一行 severity: <值>),回 (新文字, 改了幾處, 還剩的殘留清單)。
++    做的事只有三種、都是純格式:①行內/列表/粗體的 `severity: X ...` → 一行 `severity: X` + 其餘文字另起一行;
++    ②標題裡嵌等級(`### F1 —— severity: blocker,blocking: 是` / `## F1 — BLOCKER`)→ 標題保留、下一行插 `severity: x`;
++    ③第一個宣告不在檔首 → 檔首插一行檔級宣告(值=所有宣告裡最高的;原本就有檔級行則不動)。
++    ★不碰內容、不改 severity 值、不動引句/圍欄★;轉不了的原樣留下,由 _report_normalize_issues 印給人改。"""
++    if text.startswith("\ufeff"):
++        text = text[1:]; changed_bom = 1   # codex r1 f4:BOM 剝掉算一處修改
++    else:
++        changed_bom = 0
++    lines = text.splitlines()
++    out, changed = [], changed_bom
++    fence = None
++    for ln in lines:
++        s = ln.lstrip(" ")
++        if s.startswith(("```", "~~~")) and len(ln) - len(s) <= 3:
++            ch = s[0]; run = len(s) - len(s.lstrip(ch))
++            if fence is None: fence = (ch, run)
++            elif ch == fence[0] and run >= fence[1]: fence = None
++            out.append(ln); continue
++        if fence is not None or s.startswith(("引句:", "引句：", ">")) or _SEV_DECL_LINE_RE.fullmatch(ln):
++            out.append(ln); continue
++        if _SEV_SUMMARY_LINE_RE.search(ln):
++            out.append(ln); continue
++        m = _SEV_INLINE_DECL_RE.match(ln)
++        if m and "`" in ln[:m.start(2)]:
++            m = None   # 反引號裡的是在講格式,不轉
++        if m:
++            out.append(f"severity: {m.group(2).lower()}")
++            rest = m.group(3).strip().lstrip("/／|,，;；").strip()
++            if rest:
++                out.append(rest)
++            changed += 1
++            continue
++        m = _SEV_HEADING_DECL_RE.match(ln)
++        if m:
++            out.append(m.group(1).rstrip())
++            out.append(f"severity: {m.group(2).lower()}")
++            rest = m.group(3).strip()
++            if rest:
++                out.append(rest)
++            changed += 1
++            continue
++        out.append(ln)
++    decl = _report_severities("\n".join(out))
++    i = 0
++    while i < len(out) and not out[i].strip():
++        i += 1
++    if decl and not (i < len(out) and _SEV_DECL_LINE_RE.fullmatch(out[i])):
++        top = max(decl, key=lambda v: _SEV_ORDER[v])
++        out.insert(i, f"severity: {top}")
++        changed += 1
++    new = "\n".join(out) + ("\n" if text.endswith("\n") else "")
++    return new, changed, _report_normalize_issues(new)
++
++
++def cmd_report_normalize(path, write=False):
++    """`lumos report-normalize <席報告.md> [--write]`:收貨正規化的機械那一半。不帶 --write 只印會改什麼與還剩什麼;帶了才原子覆寫。
++    vault-free(跟 fold-check/prose-lint/quote-check 同層:只吃一個 markdown 路徑,不碰圖譜;r1 架構席 a1——原本接在 canary 那組後面,沒圖譜的 repo 跑不了)。
++    rc:0=已正規化或改完沒殘留;1=改完仍有殘留(印行號,要人改);2=檔讀不到。"""
++    try:
++        text = Path(path).read_text(encoding="utf-8", errors="replace")
++    except OSError as e:
++        print(f"擋下:讀不到 {path}({e})", file=sys.stderr)
++        return 2
++    new, changed, issues = normalize_report_text(text)
++    if changed == 0 and not issues:
++        print(f"✓ {path} 已是正規化格式(檔級行在檔首、每條 finding 一行 severity),不用改")
++        return 0
++    if write and new != text:
++        _write_lf(Path(path), new)
++        print(f"✓ 改了 {changed} 處並寫回 {path}")
++    else:
++        print(f"會改 {changed} 處(加 --write 才寫回):")
++        import difflib
++        for d in list(difflib.unified_diff(text.splitlines(), new.splitlines(), lineterm="", n=0))[2:40]:
++            print("    " + d)
++    if issues:
++        print(f"⚠ 還有 {len(issues)} 處機器轉不了,要人改(不然 canary record 會擋):")
++        for no, why, ln in issues[:10]:
++            print(f"    第 {no} 行:{why}\n      {ln[:100]}")
++        return 1
++    return 0
++
++
++def _report_reported_count(text):
++    """[審查有沒有用記帳 S1] 報了幾條=檔級之後的獨立宣告行數(排除 clean)。前提是報告已通過 _report_normalize_issues。"""
++    decl = _report_severities(text)
++    return sum(1 for v in decl[1:] if v != "clean")
++
++
++def _review_yield_round(rows):
++    """[審查有沒有用記帳 S3] 一輪帳列 → 漏斗數字 dict(N 報/M 存活/R 重現不到/F 折/A 放行/S 存活多於席位報)。
++    N=席位列 reported 加總,★同席同報告只算一次★(同一席會先留痕一筆、再當載體一筆;以 (auditor, report_sha256) 去重);
++    任一欄缺(2026-09-09 前的帳沒這些鍵)→ 該格 None(印 ?),N/M/R 任一 None 就不算 S。純函式,disposal 尾與 gov --stats 共用。"""
++    seen, N, n_missing = set(), 0, False
++    for r in rows:
++        key = (r.get("auditor"), r.get("report_sha256"))
++        if key in seen:
++            continue
++        seen.add(key)
++        if r.get("reported") is None:
++            n_missing = True
++        else:
++            N += int(r["reported"])
++    carrier = next((r for r in rows if r.get("findings_set")), None)
++    M = len(carrier["findings_set"]) if carrier else None
++    R = len(carrier["refuted_set"]) if carrier and carrier.get("refuted_set") is not None else None
++    F = len(carrier.get("folded_set") or []) if carrier else None
++    A = len(carrier.get("accepted_set") or []) if carrier else None
++    N = None if n_missing or not seen else N
++    S = None if (N is None or M is None or R is None) else max(0, M + R - N)
++    return {"N": N, "M": M, "R": R, "F": F, "A": A, "S": S, "has_carrier": carrier is not None}
++
++
+ def _disposal_round_groups(rounds):
+     """處置閘的分輪:照帳上第一次出現的順序,同一輪的列放一起。回 (groups, None) 或 (None, 擋下訊息)。
+     處置閘與跑滿上限提示共用這一支(Projects/審查跑滿上限提示_計劃),不各寫一份。"""
+@@ -7464,16 +7728,25 @@ def _cap_hint(rows, gate=None):
+             "breaker": breaker, "gate_status": gate}
+ 
+ 
++def _cap_hint_print(rows, gate=None):
++    """處置閘印跑滿上限提示:任何例外都吞掉、什麼都不印,不得影響判定與退出碼(代碼審 r1:帳上某輪欄位壞掉會讓處置閘噴例外)。"""
++    try:
++        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate)):
++            print(_ln)
++    except Exception:
++        pass
++
++
+ def _cap_hint_lines(h):
+     """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。"""
+     if not h:
+         return []
+-    P = "[cap-hint] "
++    P = "  "   # 標籤只印在段首一行,後面縮排(跟處置閘各段的輸出慣例一樣)
+     lines = []
+     if h["at_cap"]:
+-        lines.append(P + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
++        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
+     else:
+-        lines.append(P + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
++        lines.append("[cap-hint] " + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
+     for x in h["rounds"]:
+         f = "這輪沒記處置" if not x["recorded"] else f"折 {x['folded']} 條"
+         lines.append(P + f"  {x['round']}:{f},最高 {x['max_severity'] or '?'}")
+@@ -7491,8 +7764,7 @@ def _cap_hint_lines(h):
+         "can-stop": "可以停:折入在降、最後一輪只剩 minor 以下;" + gate_txt,
+         "human-decides": "有進展(折入在降),但還有 major 以上而且已到上限:要不要破例再一輪,由人裁",
+     }[h["hint"]]
+-    if h["at_cap"] or h["hint"] != "unknown":
+-        lines.append(P + "提示:" + msg)
++    lines.append(P + "提示:" + msg)   # 一律印:熔斷觸發但判不了時也要講判不了(設計 S8「並列」)
+     if h.get("breaker"):
+         b = h["breaker"]
+         lines.append(P + f"熔斷:各輪累計折入已經 {b['total']} 條(超過 {_CAP_HINT_BREAKER}),建議拆小改動"
+@@ -18685,8 +18957,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     if fails:
+         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+         if not readonly:   # 跑滿上限提示:只印不擋、回放與凍結不印(審查跑滿上限提示_計劃 S2/S3)
+-            for _ln in _cap_hint_lines(_cap_hint(rounds, gate={"passed": False, "fails": list(fails)})):
+-                print(_ln)
++            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)})
+         return 1
+     # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
+     _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld)) if st == "ok")
+@@ -18696,8 +18967,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定{_extra})")
+     if not readonly:
+         _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+-        for _ln in _cap_hint_lines(_cap_hint(rounds, gate={"passed": True, "fails": []})):   # 審查跑滿上限提示_計劃 S2
+-            print(_ln)
++        _cap_hint_print(rounds, gate={"passed": True, "fails": []})   # 審查跑滿上限提示_計劃 S2
+     return 0
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7a85a13b..88a2492e 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33100,6 +33100,8 @@ def t_cap_hint_breaker_total_folded():
+     h = m._cap_hint(_cap_rows([(21, "major", [21])]))
+     check("S8 只有一輪但累計 21 → 熔斷", h is not None and h["breaker"] and h["breaker"]["total"] == 21, repr(h))
+     check("S8 只有一輪 → 提示判不了、熔斷並列", h is not None and h["hint"] == "unknown", repr(h))
++    _t = "\n".join(m._cap_hint_lines(h))
++    check("S8 只有一輪的熔斷:文字同時有「判不了」與「拆小」", "判不了" in _t and "拆小" in _t, _t)
+     h2 = m._cap_hint(_cap_rows([(12, "major", [12]), (None, "major", [4]), (10, "major", [10])]))
+     check("S8 沒記處置的輪不加進累計並註明", h2 is not None and h2["breaker"] and h2["breaker"]["total"] == 22
+           and h2["breaker"]["unrecorded_rounds"] == 1, repr(h2))
+@@ -33173,7 +33175,10 @@ def t_loop_next_cap_hint_appended_without_changing_phase():
+     r = run(v, "loop", "next", "caphint")
+     check("S1 階段照舊 gate-pending", "現在狀態 gate-pending" in r.stdout, r.stdout[:300])
+     check("S1 退出碼照舊 1", r.returncode == 1, str(r.returncode))
+-    check("S1 末尾加上 [cap-hint] 段", "[cap-hint]" in r.stdout and r.stdout.rstrip().splitlines()[-1].startswith("[cap-hint]"), r.stdout[-400:])
++    _ls = r.stdout.rstrip().splitlines()
++    _hi = next((i for i, l in enumerate(_ls) if l.startswith("[cap-hint]")), None)
++    check("S1 末尾加上 [cap-hint] 段(段首一行帶標籤、之後都是縮排的段內行)",
++          _hi is not None and all(l.startswith("  ") for l in _ls[_hi + 1:]) and len(_ls) > _hi + 1, r.stdout[-400:])
+     v2, _ = _cap_vault(rows[: len(rows) * 2 // 3])
+     r2 = run(v2, "loop", "next", "caphint")
+     check("S1 沒到上限不印", "[cap-hint]" not in r2.stdout, r2.stdout[-300:])
+@@ -33219,6 +33224,18 @@ def t_disposal_cap_hint_silent_when_readonly():
+ 
+ 
+ @_cap_real_cutoff
++@_cap_real_cutoff
++def t_disposal_cap_hint_fail_open():
++    """[S2] 帳上某輪欄位壞掉(refuted_set 不是清單)時,處置閘照常結束,不因提示段噴例外、退出碼不變(代碼審 r1 blocker)。"""
++    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
++    for r in rows:
++        if r.get("round") == "r1" and "findings_set" in r:
++            r["refuted_set"] = 5
++    v, spec = _cap_vault(rows)
++    r = run(v, "loop", "status", "caphint", "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    check("S2 欄位壞掉時處置閘不噴例外", "Traceback" not in r.stderr and r.returncode in (0, 1), r.stderr[-400:])
++
++
+ def t_cap_hint_writes_no_extra_ledger():
+     """[S11] 印這段不多寫帳:loop next 與沒過關的處置閘前後,審查帳與治理帳行數不變。"""
+     rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])

@@ -1,0 +1,166 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index be011304..c026f380 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7387,29 +7387,6 @@ def _review_yield_round(rows):
+     return {"N": N, "M": M, "R": R, "F": F, "A": A, "S": S, "has_carrier": carrier is not None}
+ 
+ 
+-def _disposal_round_groups(rounds):
+-    """處置閘的分輪:照帳上第一次出現的順序,同一輪的列放一起。回 (groups, None) 或 (None, 擋下訊息)。
+-    處置閘與跑滿上限提示共用這一支(Projects/審查跑滿上限提示_計劃),不各寫一份。"""
+-    from collections import OrderedDict
+-    groups = OrderedDict()
+-    for r in rounds:
+-        rid_ = r.get("round")
+-        if rid_ is None:
+-            # round-less 逐筆自成一輪(r2 回歸修:併成單一 __legacy 組會讓較早 carrier
+-            # 冒充最新判定/合法 legacy 第二筆假 rc2;守衛只管顯式 round-id)
+-            groups[f"__seq{len(groups)}"] = [r]
+-            continue
+-        if rid_.startswith("__"):
+-            # r3 修(3 席重疊):防舊帳/手改帳撞內部鍵(寫側已擋新寫入,讀側防守舊資料)
+-            return None, f"擋下:記錄裡有輪次編號 {rid_!r} 用了工具保留的 __ 字首(手改過或舊版寫的),先改掉"
+-        if rid_ in groups and next(reversed(groups)) != rid_:
+-            # 同 panel 守衛:round-id 被其他輪隔開後重現=append-only 帳次序損壞
+-            return None, f"擋下:第 {rid_!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),帳的順序亂了,沒辦法判斷"
+-        groups.setdefault(rid_, []).append(r)
+-    return groups, None
+-
+-
+-_SEV_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+ _CAP_HINT_BREAKER = 20   # 累計折入超過這個數就提示拆小(照抄拒絕熔斷器的起點,回看後再調)
+ 
+ 
+@@ -7464,16 +7441,25 @@ def _cap_hint(rows, gate=None):
+             "breaker": breaker, "gate_status": gate}
+ 
+ 
++def _cap_hint_print(rows, gate=None):
++    """處置閘印跑滿上限提示:任何例外都吞掉、什麼都不印,不得影響判定與退出碼(代碼審 r1:帳上某輪欄位壞掉會讓處置閘噴例外)。"""
++    try:
++        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate)):
++            print(_ln)
++    except Exception:
++        pass
++
++
+ def _cap_hint_lines(h):
+     """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。"""
+     if not h:
+         return []
+-    P = "[cap-hint] "
++    P = "  "   # 標籤只印在段首一行,後面縮排(跟處置閘各段的輸出慣例一樣)
+     lines = []
+     if h["at_cap"]:
+-        lines.append(P + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
++        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
+     else:
+-        lines.append(P + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
++        lines.append("[cap-hint] " + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
+     for x in h["rounds"]:
+         f = "這輪沒記處置" if not x["recorded"] else f"折 {x['folded']} 條"
+         lines.append(P + f"  {x['round']}:{f},最高 {x['max_severity'] or '?'}")
+@@ -7491,8 +7477,7 @@ def _cap_hint_lines(h):
+         "can-stop": "可以停:折入在降、最後一輪只剩 minor 以下;" + gate_txt,
+         "human-decides": "有進展(折入在降),但還有 major 以上而且已到上限:要不要破例再一輪,由人裁",
+     }[h["hint"]]
+-    if h["at_cap"] or h["hint"] != "unknown":
+-        lines.append(P + "提示:" + msg)
++    lines.append(P + "提示:" + msg)   # 一律印:熔斷觸發但判不了時也要講判不了(設計 S8「並列」)
+     if h.get("breaker"):
+         b = h["breaker"]
+         lines.append(P + f"熔斷:各輪累計折入已經 {b['total']} 條(超過 {_CAP_HINT_BREAKER}),建議拆小改動"
+@@ -18189,6 +18174,28 @@ def _gated_seat_rows(rounds, loop_id):
+     return [r for r in rounds if any(_auditor_matches_slot(r.get("auditor"), s) for s in slots)]
+ 
+ 
++def _disposal_round_groups(rounds):
++    """處置閘的分輪:照帳上第一次出現的順序,同一輪的列放一起。回 (groups, None) 或 (None, 擋下訊息)。
++    處置閘與跑滿上限提示共用這一支(Projects/審查跑滿上限提示_計劃),不各寫一份。"""
++    from collections import OrderedDict
++    groups = OrderedDict()
++    for r in rounds:
++        rid_ = r.get("round")
++        if rid_ is None:
++            # round-less 逐筆自成一輪(r2 回歸修:併成單一 __legacy 組會讓較早 carrier
++            # 冒充最新判定/合法 legacy 第二筆假 rc2;守衛只管顯式 round-id)
++            groups[f"__seq{len(groups)}"] = [r]
++            continue
++        if rid_.startswith("__"):
++            # r3 修(3 席重疊):防舊帳/手改帳撞內部鍵(寫側已擋新寫入,讀側防守舊資料)
++            return None, f"擋下:記錄裡有輪次編號 {rid_!r} 用了工具保留的 __ 字首(手改過或舊版寫的),先改掉"
++        if rid_ in groups and next(reversed(groups)) != rid_:
++            # 同 panel 守衛:round-id 被其他輪隔開後重現=append-only 帳次序損壞
++            return None, f"擋下:第 {rid_!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),帳的順序亂了,沒辦法判斷"
++        groups.setdefault(rid_, []).append(r)
++    return groups, None
++
++
+ def _disposal_security_step(rounds, rid, loop_id, prov_path):
+     """處置閘第六步「資安席」(第五步是條款綁定):回 "fail" / "ok" / "skip",自己印 [disposal] 資安席 那幾行。
+     定錨 high、生效日後的代碼審,編制表上每個 required-gated 席:①整個迴圈有它的帳(席名判法見 _auditor_matches_slot)
+@@ -18685,8 +18692,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     if fails:
+         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+         if not readonly:   # 跑滿上限提示:只印不擋、回放與凍結不印(審查跑滿上限提示_計劃 S2/S3)
+-            for _ln in _cap_hint_lines(_cap_hint(rounds, gate={"passed": False, "fails": list(fails)})):
+-                print(_ln)
++            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)})
+         return 1
+     # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
+     _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld)) if st == "ok")
+@@ -18696,8 +18702,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定{_extra})")
+     if not readonly:
+         _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+-        for _ln in _cap_hint_lines(_cap_hint(rounds, gate={"passed": True, "fails": []})):   # 審查跑滿上限提示_計劃 S2
+-            print(_ln)
++        _cap_hint_print(rounds, gate={"passed": True, "fails": []})   # 審查跑滿上限提示_計劃 S2
+     return 0
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7a85a13b..30881e38 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33100,6 +33100,8 @@ def t_cap_hint_breaker_total_folded():
+     h = m._cap_hint(_cap_rows([(21, "major", [21])]))
+     check("S8 只有一輪但累計 21 → 熔斷", h is not None and h["breaker"] and h["breaker"]["total"] == 21, repr(h))
+     check("S8 只有一輪 → 提示判不了、熔斷並列", h is not None and h["hint"] == "unknown", repr(h))
++    _t = "\n".join(m._cap_hint_lines(h))
++    check("S8 只有一輪的熔斷:文字同時有「判不了」與「拆小」", "判不了" in _t and "拆小" in _t, _t)
+     h2 = m._cap_hint(_cap_rows([(12, "major", [12]), (None, "major", [4]), (10, "major", [10])]))
+     check("S8 沒記處置的輪不加進累計並註明", h2 is not None and h2["breaker"] and h2["breaker"]["total"] == 22
+           and h2["breaker"]["unrecorded_rounds"] == 1, repr(h2))
+@@ -33173,7 +33175,10 @@ def t_loop_next_cap_hint_appended_without_changing_phase():
+     r = run(v, "loop", "next", "caphint")
+     check("S1 階段照舊 gate-pending", "現在狀態 gate-pending" in r.stdout, r.stdout[:300])
+     check("S1 退出碼照舊 1", r.returncode == 1, str(r.returncode))
+-    check("S1 末尾加上 [cap-hint] 段", "[cap-hint]" in r.stdout and r.stdout.rstrip().splitlines()[-1].startswith("[cap-hint]"), r.stdout[-400:])
++    _ls = r.stdout.rstrip().splitlines()
++    _hi = next((i for i, l in enumerate(_ls) if l.startswith("[cap-hint]")), None)
++    check("S1 末尾加上 [cap-hint] 段(段首一行帶標籤、之後都是縮排的段內行)",
++          _hi is not None and all(l.startswith("  ") for l in _ls[_hi + 1:]) and len(_ls) > _hi + 1, r.stdout[-400:])
+     v2, _ = _cap_vault(rows[: len(rows) * 2 // 3])
+     r2 = run(v2, "loop", "next", "caphint")
+     check("S1 沒到上限不印", "[cap-hint]" not in r2.stdout, r2.stdout[-300:])
+@@ -33218,6 +33223,18 @@ def t_disposal_cap_hint_silent_when_readonly():
+     check("S3 唯讀不印 [cap-hint]", "[cap-hint]" not in buf.getvalue(), buf.getvalue()[-300:])
+ 
+ 
++@_cap_real_cutoff
++def t_disposal_cap_hint_fail_open():
++    """[S2] 帳上某輪欄位壞掉(refuted_set 不是清單)時,處置閘照常結束,不因提示段噴例外、退出碼不變(代碼審 r1 blocker)。"""
++    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
++    for r in rows:
++        if r.get("round") == "r1" and "findings_set" in r:
++            r["refuted_set"] = 5
++    v, spec = _cap_vault(rows)
++    r = run(v, "loop", "status", "caphint", "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    check("S2 欄位壞掉時處置閘不噴例外", "Traceback" not in r.stderr and r.returncode in (0, 1), r.stderr[-400:])
++
++
+ @_cap_real_cutoff
+ def t_cap_hint_writes_no_extra_ledger():
+     """[S11] 印這段不多寫帳:loop next 與沒過關的處置閘前後,審查帳與治理帳行數不變。"""
