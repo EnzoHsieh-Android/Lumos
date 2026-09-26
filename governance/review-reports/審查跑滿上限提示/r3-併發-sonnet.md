@@ -1,0 +1,20 @@
+severity: blocker
+
+## F1 S2 要求「不論過關與否都印」跟 S11「印出時治理帳行數不變」在處置閘 PASS-at-cap 這個可達狀態下互相矛盾
+severity: blocker
+blocking: 是——實作者會照 S11 字面寫一支斷言「印出 cap_hint 時 .governance-log.jsonl 行數不變」的測試/文件,但處置閘在「輪數已達上限且這一輪剛好判 PASS」時,同一次呼叫本來就會呼叫既有的 `_loop_gov_mark`(scripts/lumos:549)寫一行治理帳(scripts/lumos:18583-18585:`if not readonly: _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")` 之後才 `return 0`;0 發現空輪的 PASS 分支 scripts/lumos:18579-18585 是同一段程式碼,一樣會走到這次寫入)。S2 明文要求「不論過關與否」都要印這段(見下方引句),所以 PASS 那一輪本來就會印 cap_hint;而 disposal 閘的現場呼叫(scripts/lumos:9629 `_loop_status_disposal(...)`)一律 `readonly=False`(沒有傳 `readonly=True`),不是回放/凍結的唯讀路徑,所以那個 `_loop_gov_mark` 呼叫真的會執行、真的會 append 一行。這代表:一個多席迴圈跑到輪數等於分級上限(`_TIER_PARAMS[tier]` 的 cap)、而剛好那一輪處置全清過關,操作者跑 `lumos loop status <id> --disposal --spec <計劃>` 時,cap_hint 段落印出來的同一次呼叫,治理帳行數就是從 N 變 N+1——跟 S11「印出時治理帳行數應不變」字面矛盾。而且這不是稀有邊角:計劃自己在〈審計修正紀錄〉引用的 r2g-F1 重現(`lumos loop status 逃逸帳對得起來 --disposal --spec …` r1 即 PASS)就是同一種形狀(某一輪剛好過關),只是那次輪數還沒到 cap;「過關的那一輪同時是第 cap 輪」在多席審查裡完全可能發生(例如 tier=standard cap=3,第 3 輪剛好折完收斂)。
+引句:「處置閘應在判定之後印同一段,不論過關與否,且過關判定與退出碼不變」
+引句:「當這一段印出,治理帳與審查帳的行數應不變」
+file: `scripts/lumos:18579-18585` —— PASS(含 0 發現空輪 PASS)分支在 `return 0` 前呼叫 `_loop_gov_mark(env, loop_id, "converged", ...)`,append 一行到 `docs/.governance-log.jsonl`;這段是 spec 明講「機制層沿用」「不動」的既有處置閘判定,不是這份計劃要拔掉的東西。
+file: `scripts/lumos:9629` —— `cmd_loop_status` 呼叫 `_loop_status_disposal` 的現場路徑沒有傳 `readonly`,預設 `readonly=False`(定義見 `scripts/lumos:18265`),所以上面那次寫入不是回放/凍結的唯讀分支,真的會執行。
+這條矛盾沒有兩全的修法在這份 spec 現有的「已排除」清單內:要嘛在 PASS 且已達上限時抑制 cap_hint(違反 S2「不論過關與否」),要嘛讓既有的 `_loop_gov_mark(converged)` 變成有條件/去重寫入(那是在改「處置閘判定」以外的既有寫入行為,spec 的〈做法〉與〈已排除〉都沒提到要動它,而且會牽動 `gov --stats` 現有的 converged 計數口徑,超出這份「只印不擋、不寫任何帳」的範圍聲明)。「已排除」段落的「不可逆:不寫任何帳,回退就是拔掉兩處呼叫」這句在 PASS-at-cap 這個可達狀態下不成立——回退拔掉兩處新呼叫並不會讓那次 disposal PASS 少寫那一行治理帳,那行寫入的因是既有的 `_loop_gov_mark`,不是這份計劃新加的兩處呼叫。
+
+## F2(觀察,非獨立扣分項,併入 F1 佐證)併發下 cap_hint 的措辭會放大既有的「PASS 無去重、重複寫」問題
+severity: minor
+blocking: 否——不會讓實作者做錯決定或做壞系統,是提醒 spec 該不該在誠實界線多寫一句,不改變任何判定或介面
+引句:「要知道過了沒,帶 --spec 問處置閘」
+敘述:loop next 在 cap_hint 段落(二節做法1)對「過關」的答案設計成「不自己判,叫人另外去問處置閘」,這會鼓勵多個會談/多次呼叫各自對同一個已達上限的迴圈重覆跑 `--disposal`。`_loop_gov_mark`(scripts/lumos:549-971)本身沒有任何 dedup 或「已經記過 converged 就不再記」的判斷,每次 PASS 呼叫都無條件 append 一行(dedup 註解寫明「留給讀時」,見 `_append_governance_log` docstring)。在 F1 那個 PASS-at-cap 的可達狀態下,cap_hint 的措辭等於主動引導更多次呼叫去命中同一個會寫帳的分支,讓 F1 的矛盾從「單次呼叫行數 +1」變成「行數隨呼叫次數線性增長」。這不需要另開條款去擋(那是既有寫入行為,不歸這份計劃管),但 spec〈誠實界線〉目前只寫「不改變過關判定與退出碼」,沒有提到「印這段可能間接催生更多次會寫既有帳的處置閘呼叫」,補一句會讓交底更誠實。
+
+已看,無:①〈做法〉一「到上限」與「熔斷」兩個觸發條件只做讀取——「到上限」讀 `_TIER_PARAMS[eff_tier]`(scripts/lumos:9801)與 `_loop_anchor_tier`(scripts/lumos:17905-17908,純函式,只掃 `rounds` 帶 tier 的第一筆)、「熔斷」讀每輪呼叫 `_review_yield_round`(scripts/lumos:7364-7385,純函式,不寫入、不呼叫任何 I/O)——這兩條路徑本身不寫任何檔,跟 S11 的矛盾完全來自別的既有分支(F1 講的 `_loop_gov_mark`),不是這兩條規則自己的問題。②loop next 這一側:對 2026-08-26 後的多席(panel_fmt)迴圈,帶 `--spec` 一律先在委派舊閘那步以 rc=2 被擋下(`_panel_retired_for` 擋在 `scripts/lumos:18343-18350` 那條退役訊息之前,經 `governance/review-reports/審查跑滿上限提示/r1-intake.md` 重現屬實),emit() 從不會被呼叫,cap_hint 不會印,S1「被擋下提早結束的路徑不印」在這裡天然成立,不會跟 `scripts/lumos:10677` 那個既有 `_loop_gov_mark("cap-reached", …)` 共呼叫——不是併發/副作用問題。不帶 `--spec` 則一律先落 `gate-pending`(`scripts/lumos:10633-10662` 這段在 rounds_count≥cap 的檢查〈scripts/lumos:10676〉之前就會 return),同樣走不到那個既有的 cap-reached 寫帳點,所以 loop next 這一側,cap_hint 印出的當下不會跟任何既有寫帳呼叫同一次執行——只有處置閘那一側(F1)有問題。③S9 排除的「代碼審循序單審」(`seq` 變數,`scripts/lumos:10402-10404`)與 light 分級兩種形狀,本來就不印這段,不需要再驗證它們跟寫入路徑的互動。④讀帳路徑本身(`_loop_records`/`.canary-log.jsonl`/`.governance-log.jsonl` 的讀取)對格式錯誤行一律 `except ValueError: continue` 略過,不會因為另一個會談同時在寫入而 crash 或讀到半行——這是既有的容錯慣例,這份計劃沒有新增讀取路徑,不用另外驗。⑤效能:cap_hint 只對「這一個編號」的帳列逐輪呼叫一次 `_review_yield_round`,不掃全庫、不讀凍結審材,單一迴圈的輪數受 `_TIER_PARAMS` 上限約束(cap 最大 6),即使熔斷規則要求「不論輪數」往回累加,實務上這類迴圈的輪數量級是個位數到十位數,運算成本可忽略——「已排除:效能」那句成立。⑥金流、對外送出兩類風險類:這份功能全程只讀本機兩份 jsonl 帳本、印文字/JSON,不呼叫任何外部服務或計費邏輯,spec 自己的「已排除」段落屬實。⑦守衛面:目前讀到的〈做法〉全篇,新段落的觸發條件(`rounds_count>=cap`、累計折入>20)都只affect 要不要印那一段文字,沒有出現在 `fails`/`rc`/phase 名的計算式裡,不會改變處置閘的過關判定或 loop next 的退出碼——「已排除:守衛面」的宣稱在讀到的程式碼結構上成立。
+
+最嚴重 severity: blocker;blocking 共 1 條(F1;F2 為觀察性 minor、不列入 blocking 計數)。
