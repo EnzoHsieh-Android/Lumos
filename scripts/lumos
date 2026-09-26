@@ -13345,6 +13345,7 @@ def cmd_export_html(env, out_path, standalone=False):
 
 SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source", "about_code_stamp", "responsibility"}  # pitfall_* 2026-08-09 已知坑策展庫;about_code_stamp 2026-08-23(語意欄位基礎,計劃:固定席扇出降權)
 LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when", "core_refs", "about_code", "lands_in"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger);core_refs 2026-08-11(升格加指針/降格拆指針,兩向都要 T1;值是純路徑非 wikilink——lumos-core-knowledge skill 明令禁跨 vault wikilink)
+COND_KEYS = ("valid_under", "revalidate_when")   # 驗收前提/回頭條件:set 整欄換掉(一個值=單行、多個=清單);spec=Projects/驗收前提欄位可改_計劃
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -13387,6 +13388,39 @@ def fm_structure(fm_lines):
     return out
 
 
+# 標準 YAML(1.1/1.2,Obsidian 用的 js-yaml)不加引號會讀成數字、日期、無限大的寫法——這些要加引號才是字串
+# (2026-09-26 代碼審 r2 通才席:原本只認十進位整數與小數)。日期欄位(DATE_KEYS)刻意不加引號,走另一條路,不經這裡。
+_YAML_TYPED_RE = re.compile(
+    r"[-+]?(\d[\d_]*(\.[\d_]*)?|\.\d[\d_]*)([eE][-+]?\d+)?"       # 十進位、小數、科學記號
+    r"|[-+]?0[xX][0-9a-fA-F_]+|[-+]?0[oO]?[0-7_]+|[-+]?0[bB][01_]+"  # 十六、八、二進位
+    r"|[-+]?\d[\d_]*(:[0-5]?\d)+(\.[\d_]*)?"                        # 六十進位(1:20:30)
+    r"|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)"                          # 無限大、非數
+    r"|\d{4}-\d\d?-\d\d?([Tt ].*)?")                                  # 日期、日期時間
+_YAML_PLAIN_BAD_START = set("-?:,[]{}#&*!|>'\"%@`")
+
+
+def _yaml_plain_ok(v):
+    """★白名單★:這個值不加引號時,本工具的簡易讀法與標準 YAML(Obsidian 等)讀出來一模一樣嗎。
+    只放行確定沒事的;拿不準的一律加引號(2026-09-26 代碼審 r1:原本只列「要加引號的」,
+    漏了「空白 + #」被標準 YAML 當註解切掉、「- 」開頭被當清單)。"""
+    return (v != "" and v == v.strip() and "\n" not in v and "\t" not in v
+            and v[0] not in _YAML_PLAIN_BAD_START and ": " not in v and " #" not in v and not v.endswith(":")
+            and v.lower() not in ("true", "false", "null", "yes", "no", "on", "off", "~")
+            and not _YAML_TYPED_RE.fullmatch(v))
+
+
+def _yaml_quote(v, what):
+    """加引號,只用兩邊讀法一致的寫法:本工具讀的一側只剝掉頭尾一層引號、不解任何跳脫。
+    雙引號在標準 YAML 裡會解反斜線跳脫 → 只在沒有反斜線、沒有雙引號時用;
+    否則單引號(標準 YAML 裡除了 '' 以外一律照字面)→ 只在沒有單引號時用;兩種都不行就擋。"""
+    if '"' not in v and "\\" not in v:
+        return '"' + v + '"'
+    if "'" not in v:
+        return "'" + v + "'"
+    raise ValueError(f"{what}「{v}」同時有單引號、又有雙引號或反斜線,工具寫不出本工具和 Obsidian 都讀得一樣的寫法,"
+                     "檔案沒動;把其中一種引號換掉再寫")
+
+
 def fmt_scalar(key, value):
     """純量值格式化。日期 bare(不加引號避污染指紋);含 ': ' 或特殊字元才引號。"""
     v = value.strip()
@@ -13395,20 +13429,14 @@ def fmt_scalar(key, value):
             raise ValueError(f"{key} 要寫成 年-月-日(例如 2026-08-22),你給的是 {v}")
         return v  # bare,絕不加引號
     # YAML 型別劫持守衛: true/false/null/yes/no/~ 與純數字當 status 會被解析成 bool/num/null
-    if v.lower() in ("true", "false", "null", "yes", "no", "on", "off", "~") or \
-       re.fullmatch(r"-?\d+(\.\d+)?", v):
-        return '"' + v + '"'
-    if re.search(r":\s|^[\[\{>|*&!#@`]|^\s|\s$", v) or v == "":
-        return '"' + v.replace('"', '\\"') + '"'
-    return v
+    # YAML 型別劫持守衛(true/false/null/純數字會被讀成布林/空值/數字)也在白名單判斷裡
+    return v if _yaml_plain_ok(v) else _yaml_quote(v, key)
 
 
 def fmt_list_item(value):
     """list 項格式化。wikilink / 含特殊字元 → 引號(鐵則1 安全:一項一行)。"""
     v = value.strip()
-    if v.startswith("[[") or re.search(r":\s|^[\[\{]", v):
-        return '"' + v.replace('"', '\\"') + '"'
-    return v
+    return v if _yaml_plain_ok(v) else _yaml_quote(v, "清單項")
 
 
 def edit_fm_scalar(fm_lines, key, value):
@@ -13781,8 +13809,17 @@ def cmd_set(env, rel, key, value):
 
 
 def _cmd_set_locked(env, rel, key, value):
+    if key in COND_KEYS:
+        return _set_conditions_locked(env, rel, key, value if isinstance(value, list) else [value])
+    if isinstance(value, list):
+        if len(value) != 1:
+            print(f"擋下:{key} 只收一個值,你給了 {len(value)} 個,檔案沒動(給多個值只有 {'、'.join(COND_KEYS)} 收)",
+                  file=sys.stderr)
+            return 2
+        value = value[0]
     if key not in SCALAR_KEYS:
-        print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS)}"
+        print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS)},"
+              f"以及整欄換掉的 {'、'.join(COND_KEYS)}"
               f"(清單欄位用 lumos append;決策新增/翻案用 lumos decision-add / decision-supersede)", file=sys.stderr)
         return 2
     # ★負責範圍跟新開節點用同一支判斷、同樣擋★(筆記欄位關卡補齊_計劃 S11;不看開關——r3 架構席:
@@ -13812,6 +13849,37 @@ def _cmd_set_locked(env, rel, key, value):
 
     atomic_write_verify(path, new_lines, key, _check)
     print(f"✓ set {rel}: {key} 已改成 {exp}" + ("(狀態標籤 status/* 也同步改了)" if tag_synced else ""))
+    return 0
+
+
+def _set_conditions_locked(env, rel, key, values):
+    """驗收紀錄的前提/回頭條件整欄換掉(Projects/驗收前提欄位可改_計劃)。
+
+    ★為什麼整欄換、不走 append/remove★:這兩欄是散文、常提到連結;append/remove 判斷「同一項」看連結目標,
+    兩條提到同一篇的不同條件會被當成重複。原本四種寫法(單行、清單、空的、多行區塊)並存,一律整段拿掉重寫。"""
+    vals = [str(v).strip() for v in values]
+    if not vals or any(not v for v in vals):
+        print(f"擋下:{key} 的每一條都不能是空的,檔案沒動(前提寫這個結論在什麼情況下才算數,回頭條件寫改到什麼該重驗)",
+              file=sys.stderr)
+        return 2
+    if any("\n" in v or "\r" in v for v in vals):
+        print(f"擋下:{key} 一條條件只能一行,檔案沒動(要寫多條就給多個值:lumos set <筆記> {key} \"條件一\" \"條件二\")",
+              file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    lines, _s, e = load_raw_for_edit(path)
+    fm = list(lines[1:e])
+    new = ([f"{key}: {fmt_scalar(key, vals[0])}"] if len(vals) == 1
+           else [f"{key}:"] + [f"  - {fmt_scalar(key, v)}" for v in vals])
+    struct = {k: (a, b) for k, a, b, _kind in fm_structure(fm)}
+    if key in struct:
+        a, b = struct[key]
+        fm[a:b + 1] = new
+    else:   # 插的位置照 edit_fm_scalar:第一個清單或多行區塊欄位之前,都沒有就放最後
+        at = next((a for _k, a, _b, kind in fm_structure(fm) if kind in ("list", "block")), len(fm))
+        fm[at:at] = new
+    atomic_write_verify(path, lines[:1] + fm + lines[e:], key, lambda f: _conds(f.get(key)) == vals)
+    print(f"✓ set {rel}: {key} 整欄換成 {len(vals)} 條" + ("" if len(vals) == 1 else "(一行一項的清單)"))
     return 0
 
 
@@ -14250,11 +14318,10 @@ def _fm_of(all_lines):
 
 
 def _fmt_decision_value(v):
-    """decision 子欄位值格式化(含 ': ' 或特殊字元 → 引號,避鐵則 3)。"""
+    """decision 子欄位值格式化:跟 fmt_scalar 共用同一套白名單與加引號規則(2026-09-26 代碼審 r2 架構席:
+    原本是第三套手刻判準,結尾裸冒號讓標準 YAML 報錯、含「: 」又有雙引號的寫不進去)。"""
     v = v.strip()
-    if re.search(r":\s|^[\[\{>|*&!#@`\"']|^\s|\s$", v) or v == "":
-        return '"' + v.replace('"', '\\"') + '"'
-    return v
+    return v if _yaml_plain_ok(v) else _yaml_quote(v, "決策內容")
 
 
 def cmd_decision_supersede(env, rel, match, by, ended=None):
@@ -30928,10 +30995,10 @@ def main():
     p.add_argument("--standalone", action="store_true", help="html 內聯 cytoscape/marked(去 CDN,離線/防火牆可開)")
 
     # T1 寫側(行級手術,寫後自驗 atomic)
-    p = sub.add_parser("set", help="改純量欄位(status/updated/created/type)")
+    p = sub.add_parser("set", help="改純量欄位(status/updated/created/type);valid_under/revalidate_when 整欄換掉(可給多個值)")
     p.add_argument("note")
     p.add_argument("key")
-    p.add_argument("value")
+    p.add_argument("value", nargs="+")
     p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/related/tags)")
     p.add_argument("note")
     p.add_argument("key")

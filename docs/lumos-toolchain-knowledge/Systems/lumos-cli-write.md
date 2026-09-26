@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-23
+updated: 2026-09-26
 self_audit: claude-fable/2026-08-24
 tags:
   - type/system
@@ -15,6 +15,7 @@ related:
   - "[[Systems/check-u-overgeneralization]]"
   - "[[Projects/工具分類_計劃]]"
 summary: |-
+  WHY:[2026-09-26 驗收前提欄位可改,另一個對話回報、Enzo 裁「好」]`set` 收 valid_under/revalidate_when,整欄換掉(一個值=單行、多個值=一行一項清單,原本單行/清單/空的/多行區塊都拿乾淨);另列 COND_KEYS、不併進 SCALAR_KEYS(那份白名單的數量有漂移守衛在數,且這兩欄本質可以是清單)。不給 append/remove:這兩欄是散文常提連結,append/remove 用連結目標判「同一項」會把提到同一篇的不同條件當重複。其他欄位給兩個值照擋。★引號改白名單、全寫入指令共用★(代碼審 r1 兩席:原本只列「要加引號的」,本工具自己讀自己永遠對得上,標準 YAML/Obsidian 讀卻會把「空白+#」後面當註解切掉、把雙引號裡的反斜線當跳脫):`_yaml_plain_ok` 只放行確定兩邊讀法一樣的值,其餘由 `_yaml_quote` 加引號——沒反斜線沒雙引號用雙引號、否則單引號、兩種都不行就擋;fmt_scalar、fmt_list_item 與決策文字欄位(`_fmt_decision_value`,r2 架構席抓到的第三套手刻判準)都改走它,所以 set 其他欄位、append、decision-add/supersede 一併修到;白名單另擋標準 YAML 會讀成日期、十六/八/二進位、六十進位、無限大的寫法(r2 通才席)。副作用:signoff 寫的日期現在加引號(本工具讀起來一樣,Obsidian 改讀成字串);DATE_KEYS 照舊刻意不加引號、不經這裡 [test:t_set_condition_fields_standard_yaml_safe] [test:t_decision_add_standard_yaml_safe] [test:t_set_condition_fields_replace_any_shape] [test:t_set_condition_fields_multi_values] [test:t_set_condition_fields_reject_bad_values] [test:t_set_other_keys_single_value_only] [test:t_set_condition_fields_keep_other_lines]
   KEY:[2026-09-25 筆記欄位關卡補齊]寫入指令補兩道:①`set responsibility` 用新開節點那支判斷(`_nodehome_resp_ok`,至少 10 字、要有實字),不過就擋、檔案不動,不看開關——跟 `new --responsibility` 同一種擋法(原本 set 可以寫進一個字);②`append about_code`、`new --code` 共用的 `_about_code_path` 補「不在圖譜資料夾裡」——有一篇 Issue 就是用 append 把筆記路徑寫進 about_code;要連結別篇請寫 related。lint 的 about_code 規則也呼叫同一支,兩邊判法一致 [test:t_set_responsibility_min_length] [test:t_about_code_writer_rejects_vault_path] [test:t_lint_about_code_must_exist]
   KEY:[推送閘回頭擋住自己 2026-09-16]修好 linter 送檔那批之後第一次推,★推送前的新增告警閘當場擋下★,抓到三條這批自己帶進來的新告警:兩個函式超過複雜度上限、一個 import 沒人用。三條都修掉、沒有走放行。★這道閘以前根本不會擋★——它跑的是同一份宣告,而那份宣告在當天之前從來沒真的檢查過任何一行。修複雜度的做法不是硬拆:把「決定鎖放哪」抽成模組層獨立一支(`_vault_lock_where`),順便讓代碼審 r2 抓到的那個坑(位置排在可重入判斷後面)變成★結構上不可能再犯★。連帶一條測試翻紅——它用函式名抓區段來驗「有沒有走共用的信任檢查」,檢查搬家就抓不到,正好證明它真的在盯
   KEY:[代碼審 r2 折入 2026-09-16]★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★——退路那版把判斷排在可重入檢查後面,巢狀呼叫時拿舊路徑的鍵去查、查不到,內層卡滿 60 秒再拋「別的程序正在寫」這句★假訊息★;而這正是本函式說明裡「第四輪已修過」的舊坑從退路分支重新長出來。★同批還抓到自己的假測試★:原本那條「巢狀允許」寫成前後兩個不重疊的區塊,根本沒測到巢狀,改成真巢狀(用短逾時代替 60 秒)當場翻紅 [test:t_vault_lock_falls_back_instead_of_giving_up]

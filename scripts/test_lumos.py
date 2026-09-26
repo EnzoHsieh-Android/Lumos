@@ -2209,6 +2209,141 @@ def t_set_status_syncs_tag():
     check("set 非 status key 不碰標籤", "- status/doing" in read(p4), read(p4))
 
 
+# ── set 整欄換掉驗收紀錄的前提與回頭條件(Projects/驗收前提欄位可改_計劃) ──
+def _conds_of(path, key):
+    m = _load_lumos()
+    fm, _body = m.split_frontmatter(read(path))
+    fields, _bk, _lint = m.parse_frontmatter(fm)
+    return m._conds(fields.get(key))
+
+
+def _cond_shape_runs():
+    """前提欄位四種寫法(加上沒這欄)各跑一次 set,回 [(寫法, rc 輸出, 路徑, head, tail, body, 原本有沒有這欄)]。"""
+    shapes = {
+        "單行": "valid_under: 舊前提 A",
+        "清單": "valid_under:\n  - 舊前提 A\n  - 舊前提 B",
+        "空的": "valid_under:",
+        "多行區塊": "valid_under: |\n  舊前提 A\n  舊前提 B",
+        "沒這欄": "",
+    }
+    out = []
+    for name, vu in shapes.items():
+        v = mkvault()
+        head = "type: verification\nstatus: pass\ndate: 2026-01-01"
+        tail = "revalidate_when: 改到 X 時\ntags:\n  - type/verification\n  - status/pass"
+        body = "# 驗收\n\n正文 [[Systems/A]] 保持不變\n"
+        p = write(v, "Verification/V.md", head + ("\n" + vu if vu else "") + "\n" + tail, body=body)
+        r = run(v, "set", "V", "valid_under", "錄製批次入庫後的新前提(見 [[Systems/A]])")
+        out.append((name, r, p, head, tail, body, bool(vu)))
+    return out
+
+
+def t_set_condition_fields_replace_any_shape():
+    """[S1] 前提/回頭條件四種寫法並存(單行、清單、空的、多行區塊),set 給一個值整欄換成那一條。
+    出身:另一個對話回報這兩欄沒有指令改得動,Codex 複製 lumos 到 /tmp 繞過。"""
+    for name, r, p, _h, _t, _b, _had in _cond_shape_runs():
+        check(f"S1 {name} → set 成功", r.returncode == 0, r.stdout + r.stderr)
+        check(f"S1 {name} → 只剩給的那一條", _conds_of(p, "valid_under") == ["錄製批次入庫後的新前提(見 [[Systems/A]])"],
+              repr(_conds_of(p, "valid_under")))
+    v = mkvault()
+    p = write(v, "Verification/R.md", "type: verification\nstatus: pass\nrelated:\n  - x\ntags:\n  - y")
+    run(v, "set", "R", "valid_under", "新前提", expect_rc=0)
+    check("S1 沒這欄 → 插在第一個清單欄位之前(跟 set 其他欄位同一個位置規則)",
+          "status: pass\nvalid_under: 新前提\nrelated:" in read(p), read(p))
+    v = mkvault()
+    p = write(v, "Verification/W.md", "type: verification\nstatus: pass\nrevalidate_when:\n  - 舊條件")
+    run(v, "set", "W", "revalidate_when", "README 重寫時", expect_rc=0)
+    check("S1 回頭條件也能整欄換", _conds_of(p, "revalidate_when") == ["README 重寫時"], read(p))
+
+
+def t_set_condition_fields_keep_other_lines():
+    """[S5] 整欄換掉時,開頭其他欄位與正文一字不差(舊寫法的每一行都拿乾淨)。"""
+    for name, r, p, head, tail, body, had in _cond_shape_runs():
+        txt = read(p)
+        kept = (("\n" + tail + "\n---\n") in txt if had else   # 沒這欄:新欄插在 tags 前面,其他行逐行還在
+                all(("\n" + ln + "\n") in txt for ln in tail.split("\n")))
+        check(f"S5 {name} → 其他欄位與正文不變",
+              txt.startswith("---\n" + head + "\n") and kept and txt.endswith(body) and "舊前提" not in txt, txt)
+
+
+def t_set_condition_fields_multi_values():
+    """[S2] 給兩個以上的值 → 一行一項的清單,讀回來順序與內容相同(含冒號、方括號開頭、連結這些要加引號的)。"""
+    v = mkvault()
+    p = write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 舊的")
+    vals = ["條件一", "註: 帶冒號的條件", "[[Systems/A]] 還是現在的做法", "- 看起來像清單項的條件"]
+    r = run(v, "set", "V", "valid_under", *vals)
+    check("S2 多個值 → set 成功", r.returncode == 0, r.stdout + r.stderr)
+    check("S2 多個值 → 讀回來一模一樣", _conds_of(p, "valid_under") == vals, repr(_conds_of(p, "valid_under")))
+    check("S2 多個值 → 寫成一行一項的清單", "valid_under:\n  - 條件一\n" in read(p), read(p))
+    # 單一值也要能以「- 」開頭而不被讀成清單
+    run(v, "set", "V", "valid_under", "- 開頭是破折號", expect_rc=0)
+    check("S2 單一值以破折號開頭 → 讀回來原字", _conds_of(p, "valid_under") == ["- 開頭是破折號"], read(p))
+    check("S2 破折號開頭要加引號(標準 YAML 裡 `key: - x` 不合法,Obsidian 讀不了)",
+          'valid_under: "- 開頭是破折號"' in read(p), read(p))
+
+
+def t_set_condition_fields_reject_bad_values():
+    """[S3] 空值、只有空白、含換行 → 擋下、檔案不變。"""
+    v = mkvault()
+    p = write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 原本的")
+    before = read(p)
+    for name, vals in (("空值", [""]), ("只有空白", ["   "]), ("含換行", ["a\nb"]), ("多個值裡有一個空的", ["ok", ""])):
+        r = run(v, "set", "V", "valid_under", *vals)
+        want = "只能一行" if name == "含換行" else "不能是空的"
+        check(f"S3 {name} → 擋下,並講清楚是哪裡不行({want})", r.returncode != 0 and want in r.stderr, r.stdout + r.stderr)
+        check(f"S3 {name} → 檔案不變", read(p) == before, read(p))
+
+
+def t_set_condition_fields_standard_yaml_safe():
+    """[S6] 寫出來的東西本工具與標準 YAML(Obsidian)讀起來一樣:不加引號只給白名單內的值;
+    「空白+#」(標準 YAML 當註解)要加引號、有反斜線改用單引號(雙引號裡標準 YAML 會解跳脫)、
+    單引號又有雙引號或反斜線就擋。同一支格式化也管 set 其他欄位與 append。
+    出身:2026-09-26 代碼審 r1 兩席——本工具自己讀自己永遠對得上,標準 YAML 讀會腰斬或把 \\n 變換行。"""
+    v = mkvault()
+    p = write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 舊的\nrelated:\n  - x")
+    cases = [("見 [[Systems/A]] #3 那段", 'valid_under: "見 [[Systems/A]] #3 那段"'),
+             ("路徑 C:\\new 底下", "valid_under: 路徑 C:\\new 底下"),        # 不加引號時反斜線照字面,不用引號
+             ("#3 路徑 C:\\new 底下", "valid_under: '#3 路徑 C:\\new 底下'"),  # 要加引號又有反斜線 → 單引號
+             ('#3 他說 "好" 才算', "valid_under: '#3 他說 \"好\" 才算'"),
+             ("結尾是冒號:", 'valid_under: "結尾是冒號:"'),
+             ("普通的一句話,含 [[Systems/A]] 連結", "valid_under: 普通的一句話,含 [[Systems/A]] 連結"),
+             # r2 通才席:標準 YAML 會讀成日期、數字、無限大的寫法都要加引號
+             ("2026-09-26", 'valid_under: "2026-09-26"'), ("0x1A", 'valid_under: "0x1A"'),
+             ("1:20:30", 'valid_under: "1:20:30"'), (".inf", 'valid_under: ".inf"'), ("1e3", 'valid_under: "1e3"'),
+             ("v2 版以後", "valid_under: v2 版以後")]
+    for val, line in cases:
+        r = run(v, "set", "V", "valid_under", val)
+        check(f"S6 「{val}」→ 寫成 {line}", r.returncode == 0 and ("\n" + line + "\n") in read(p), r.stderr + read(p))
+        check(f"S6 「{val}」→ 本工具讀回原字", _conds_of(p, "valid_under") == [val], repr(_conds_of(p, "valid_under")))
+    before = read(p)
+    r = run(v, "set", "V", "valid_under", "#it's \\ 要加引號又兩種都有")
+    check("S6 要加引號、有單引號又有反斜線 → 擋下、檔案不變", r.returncode != 0 and read(p) == before, r.stderr)
+    run(v, "append", "V", "related", "註記 #1", expect_rc=0)
+    check("S6 append 走同一支:空白+# 也加引號", '\n  - "註記 #1"\n' in read(p), read(p))
+
+
+def t_decision_add_standard_yaml_safe():
+    """[S7] 決策內容也走同一套白名單與加引號規則(2026-09-26 代碼審 r2 架構席:原本是第三套手刻判準)。"""
+    v, p = _vault_with_decisions()
+    r = run(v, "decision-add", "X", "結尾是冒號:", "--decided", "2026-06-13")
+    check("S7 決策內容結尾裸冒號 → 加引號(標準 YAML 否則報錯)", r.returncode == 0 and '- content: "結尾是冒號:"' in read(p), r.stderr + read(p))
+    r = run(v, "decision-add", "X", '含冒號: 又有 "雙引號"', "--decided", "2026-06-13")
+    check("S7 決策內容含「: 」又有雙引號 → 改單引號寫得進去",
+          r.returncode == 0 and "- content: '含冒號: 又有 \"雙引號\"'" in read(p), r.stderr + read(p))
+
+
+def t_set_other_keys_single_value_only():
+    """[S4] 其他欄位給兩個值 → 擋下、檔案不變;只給一個值照舊。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: doing")
+    before = read(p)
+    r = run(v, "set", "S", "status", "done", "doing")
+    check("S4 其他欄位給兩個值 → 擋下", r.returncode != 0, r.stdout + r.stderr)
+    check("S4 其他欄位給兩個值 → 檔案不變", read(p) == before, read(p))
+    run(v, "set", "S", "status", "done", expect_rc=0)
+    check("S4 只給一個值照舊", "status: done" in read(p), read(p))
+
+
 # ── lint/doctor 漂移守衛:status 欄位 vs status/* 標籤不一致([S2]) ──
 def t_status_tag_drift_guard():
     v = mkvault()
