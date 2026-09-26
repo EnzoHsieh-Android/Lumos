@@ -33012,6 +33012,43 @@ def t_disposal_severity_tail():
           r2.returncode == 2 and "必須綁輪次" in r2.stderr, f"rc={r2.returncode} {r2.stderr[:200]}")
 
 
+def t_loop_replay_ignores_spec_gate_rows():
+    """[凍結判定] 規格閘自己的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個編號下;處置閘本來就略過它,
+    凍結與回放讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍。出身:2026-09-26 兩份設計審過閘後凍結被擋。
+    翻紅釘:拿掉讀帳時略過 spec-gate 那個條件 → 凍結 rc2。"""
+    import json as _j, hashlib as _h, subprocess as _sp, tempfile as _tf
+    v = mkvault()
+    for _c in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
+               ["commit", "-qm", "init", "--allow-empty"]):
+        _sp.run(["git", "-C", str(v.parent)] + _c, capture_output=True)
+    repo = Path(_tf.mkdtemp(prefix="gctl-replay-sg-"))
+    for _c in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        _sp.run(["git", "-C", str(repo)] + _c, capture_output=True)
+    d = repo / "governance" / "review-reports" / "sg"
+    d.mkdir(parents=True)
+    spec = repo / "sg-spec.md"
+    spec.write_text("規則甲:回放要決定論,十個字以上。\n", encoding="utf-8")
+    hsp = _h.sha256(spec.read_bytes()).hexdigest()
+    rpt = d / "r1-s1.md"
+    rpt.write_text("severity: minor\n引句:「回放要決定論,十個字以上」\n", encoding="utf-8")
+    snap = d / "r1-snapshot.md"
+    snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
+    row = {"ts": "2026-09-20T10:00:00+08:00", "kind": "none", "loop": "sg", "round": "r1",
+           "auditor": "s1", "token": "SG1", "severity": "minor", "findings": 1,
+           "findings_set": ["f1"], "folded_set": ["f1"], "accepted_set": [],
+           "result_sha256": hsp, "reviewed_sha256": hsp,
+           "report_path": "governance/review-reports/sg/r1-s1.md", "report_sha256": _h.sha256(rpt.read_bytes()).hexdigest(),
+           "snapshot_path": "governance/review-reports/sg/r1-snapshot.md", "snapshot_sha256": _h.sha256(snap.read_bytes()).hexdigest()}
+    sg = {"ts": "2026-09-20T09:00:00+08:00", "kind": "spec-gate", "token": "SPEC-1", "loop": "sg", "door": "high"}
+    (v.parent / ".canary-log.jsonl").write_text(_j.dumps(sg) + "\n" + _j.dumps(row) + "\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+    r = run(v, "loop", "replay", "sg", "--freeze", "--spec", str(spec), "--repo", str(repo))
+    check("凍結:帳上有規格閘留痕照樣凍得起來", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
+    r = run(v, "loop", "replay", "sg", "--golden", str(repo / "governance" / "replay" / "sg" / "verdict.json"), "--repo", str(repo))
+    check("回放:帳上有規格閘留痕照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
+
+
 def t_loop_replay_freeze_and_golden():
     """[改制回測 S1/S2] 凍結+回放全鏈:閉包完整/spec 活檔免疫/帳本長大不紅/帳被動紅/
     凍結檔被動紅(不誤報邏輯漂移)/golden 過期不紅指路重凍/邏輯漂移紅/唯讀(治理帳零寫入+
