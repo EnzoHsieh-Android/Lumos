@@ -1,0 +1,99 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 2898234e..ccbe91b3 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -23877,23 +23877,25 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+     mode, _w = _note_shape_config(txt)
+     if mode != "block":
+         out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
+                    "沒寫來源的現況描述不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     if ymls:
+         body = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in ymls)
+         step = ("- run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+                 "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
+-                "python3 scripts/lumos note-shape --diff \"${{ github.event.before }}..${{ github.sha }}\" "
++                "B=\"${{ github.event.before }}\"; case \"$B\" in 0000000000000000000000000000000000000000|\"\") "
++                "B=4b825dc642cb6eb9a060e54bf8d69288fbee4904;; esac; "
++                "python3 scripts/lumos note-shape --diff \"$B..${{ github.sha }}\" "
+                 "(checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了讓已在主線上的提交不重查;"
+-                "新分支首推前一版全零時改從空樹給,lumos 會自己截到上線點)")
++                "新分支首推前一版是 40 個 0,換成空樹,lumos 會自己截到上線點——lumos 本身也認 40 個 0,兩道保險)")
+         if "note-shape --diff" not in body:
+             out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
+         elif "fetch-depth: 0" not in body:
+             out.append("專案 CI 呼叫了 note-shape,但沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過")
+     if ci:
+         # 推送前與 CI 已經用 note-shape --diff 查這次的範圍;事後掃描逐提交重算、會隨歷史線性變慢(代碼審 r1 單reviewer
+         # 量到 500 個提交 9 秒),不放在每次推送都跑的 --ci 路徑上
+         return out
+     gl = _nodehome_golive(root, "HEAD", _NOTE_SHAPE_GOLIVE_MARK)
+     if gl is None:
+@@ -23967,20 +23969,24 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None):
+         if rg is None:
+             print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有", file=sys.stderr)
+             return 2
+         sh = _lens_git(root, "rev-parse", "--is-shallow-repository")
+         if sh is not None and sh.stdout.strip() == "true":
+             print("筆記形狀擋:淺層 clone 算不出範圍(找不到上線點與上一個提交),這次不查——CI 請設 fetch-depth: 0",
+                   file=sys.stderr)
+             _gate_event_or_warn(root, "note-shape", "skipped-env", "shallow clone")
+             return 0
+         a, b = rg
++        if re.fullmatch(r"0{40}", a or ""):
++            # GitHub 對新分支首推給的 before 是 40 個 0:當成空樹(之後照樣截到上線點)。原本當成「範圍找不到」放行,
++            # 照 doctor 給的 CI 步驟貼的消費專案新分支首推整批放過(2026-09-28 下游設計審抓到的漏網)
++            a = _EMPTY_TREE_SHA
+         tip = _lens_full_sha(root, b)
+         base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
+         if tip is None or base is None:
+             print(f"筆記形狀擋:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
+             return 0
+         base = _nodehome_clamp_base(root, base, tip, _NOTE_SHAPE_GOLIVE_MARK)
+         base_where = None if base == _EMPTY_TREE_SHA else base
+         tip_where, mode_word = tip, "這次推送"
+     lst = _nodehome_list(root, tip_where)
+     if lst is None:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b88ac739..7f7c7120 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -48781,20 +48781,37 @@ def t_note_shape_code_review_r3_regressions():
+     _nh_commit(r, "gone")
+     sha = head(r)
+     _nh_git(r, "rm", "-q", "src/gone.py")
+     _nh_commit(r, "rm")
+     q = kb(r) / "Q.md"
+     q.write_text(f"---\ntype: system\n---\n# Q\n見 `src/gone.py@{sha[:12]}:1`\n", encoding="utf-8")
+     rr = sp.run([sys.executable, GRAPHCTL, "refcheck", str(q), "--repo", str(r), "--json"], capture_output=True, text=True)
+     check("⑪refcheck 認已刪檔的歷史釘版本", '"missing": 0' in rr.stdout and '"ok": 1' in rr.stdout, rr.stdout[-300:])
+ 
+ 
++def t_note_shape_all_zero_base_is_empty_tree():
++    """範圍起點是 40 個 0(GitHub 對新分支首推給的 before)時當成空樹照查,不當成「範圍找不到」放行
++    (2026-09-28 下游設計審抓到的漏網:照 doctor 給的 CI 步驟貼的消費專案,新分支首推整批放過)。"""
++    print("t_note_shape_all_zero_base_is_empty_tree")
++    r = _ns_repo()
++    _ns_note(r, body="新寫 `src/a.py:4`")
++    _nh_commit(r, "bad")
++    tip = _nh_git(r, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(r, "--diff", "0" * 40 + ".." + tip)
++    check("起點 40 個 0 照查、擋下新寫的行號引用", rc == 1 and "a.py:4" in out, out[-400:])
++    m = _load_lumos_inproc()
++    (r / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
++    (r / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
++    lines = m._note_shape_doctor_lines(r, r / "docs" / "kg-knowledge", ci=True)
++    step = next((l for l in lines if "note-shape --diff" in l), "")
++    check("doctor 給的那步也把 40 個 0 換成空樹", "0000000000000000000000000000000000000000" in step and "4b825dc642cb6eb9a060e54bf8d69288fbee4904" in step, step[-500:])
++
+ def t_note_shape_acceptance_regressions():
+     """上限之外加跑的驗收輪抓到的洞各一條:NFD 檔名的筆記在合併提交、終點不是 HEAD 時照查(git 查詢用原樣路徑);
+     「寫的時候這道檢查在不在」看那個提交自己的掛鉤,兩條分支各自裝過也照查;上線前分支帶進來的行,喚醒那條路也不擋;
+     喚醒只認指向新程式檔本身的片段(不吃前綴);refcheck 的釘版本不受「現在還在的頂層目錄」過濾。"""
+     print("t_note_shape_acceptance_regressions")
+     import subprocess as sp, unicodedata
+     kb = lambda r: r / "docs" / "kg-knowledge" / "Systems"
+     head = lambda r: _nh_git(r, "rev-parse", "HEAD").stdout.strip()
+     branch = lambda r: _nh_git(r, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+     nfd = unicodedata.normalize("NFD", "ポリシー")

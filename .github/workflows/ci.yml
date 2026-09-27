@@ -106,9 +106,8 @@ jobs:
           SHA: ${{ github.sha }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
-          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
-          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+          # 前一版原樣交給 lumos(40 個 0 或本機找不到時它自己判起點,跟 note-shape 那步同一支判法;找不到主線時代碼審這道照舊用空樹、不截上線點)
+          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
           echo "range: $BEFORE..$SHA branch=$BRANCH"
           python scripts/lumos code-loop check --diff "$BEFORE..$SHA" --at-sha "$SHA" --branch "$BRANCH" --repo . || {
             rc=$?
@@ -122,7 +121,8 @@ jobs:
         # 筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP(Projects/筆記形狀擋_計劃)。note-shape 不重查「已經在主線上」
         # 的提交,主線=本地 main 的 upstream;推 main 時 origin/main 就是這次的頂端,lumos 看到頂端已在主線裡就不拿它排除。
         # 本 workflow 只在推 main 時跑這步;建本地 main 那行是給 PR / 其他分支觸發的專案照抄用的(doctor 給的也是這步)。
-        # 新分支首推給空樹,lumos 會自己截到上線點。
+        # 前一版原樣交給 lumos:40 個 0(新分支首推)或本機找不到(force-push 後的舊頂端)時,它自己判——頂端落後或等於主線頂端就不查,
+        # 其他從跟主線的分岔點算(2026-09-28 漏網 ESC-61fc2d87;繞過本機掛鉤又 force-push 改寫主線屬存心繞過,不在範圍)。
         if: github.event_name == 'push'
         env:
           BEFORE: ${{ github.event.before }}
@@ -130,9 +130,7 @@ jobs:
         run: |
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true
-          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
-          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
-          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
           python scripts/lumos note-shape --diff "$BEFORE..$SHA" --repo . || {
             rc=$?
             if [ "$rc" -eq 1 ]; then

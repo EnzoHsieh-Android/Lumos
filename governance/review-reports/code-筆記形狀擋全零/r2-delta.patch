@@ -1,0 +1,373 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 298d0c04..c985f55f 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -115,31 +115,30 @@ jobs:
+             if [ "$rc" -eq 1 ]; then
+               echo "::error::code-loop check 擋下(原因在上面:合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕)——本機 pre-push 被繞過(--no-verify)或留痕失效;照上面 check 印的指令補留痕(dispositions / pass|skip --note)後重推"
+               exit 1
+             fi
+             exit "$rc"
+           }
+       - name: note-shape gate (筆記形狀擋;--no-verify 後盾)
+         # 筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP(Projects/筆記形狀擋_計劃)。note-shape 不重查「已經在主線上」
+         # 的提交,主線=本地 main 的 upstream;推 main 時 origin/main 就是這次的頂端,lumos 看到頂端已在主線裡就不拿它排除。
+         # 本 workflow 只在推 main 時跑這步;建本地 main 那行是給 PR / 其他分支觸發的專案照抄用的(doctor 給的也是這步)。
+-        # 新分支首推給空樹,lumos 會自己截到上線點。
++        # 前一版原樣交給 lumos:40 個 0(新分支首推)或本機找不到(force-push 後的舊頂端)時,它自己判——頂端已在主線上就不查,
++        # 不然從跟主線的分岔點算(2026-09-28 漏網 ESC-61fc2d87:原本在這裡換成空樹,會把主線上線後的舊帳當新增)。
+         if: github.event_name == 'push'
+         env:
+           BEFORE: ${{ github.event.before }}
+           SHA: ${{ github.sha }}
+         run: |
+           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+           git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true
+-          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+-          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
+-          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
++          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
+           python scripts/lumos note-shape --diff "$BEFORE..$SHA" --repo . || {
+             rc=$?
+             if [ "$rc" -eq 1 ]; then
+               echo "::error::note-shape 擋下(原因在上面):筆記新寫了程式行號引用或沒寫來源的現況描述——本機提交前/推送前被繞過(--no-verify)或用了 LUMOS_SKIP_NOTE_SHAPE 單次跳過;改寫那幾行後重推,或把專案的 note_shape.gate 設成 warn"
+               exit 1
+             fi
+             exit "$rc"
+           }
+       - name: Anchor verify (baseline 缺失必紅)
+         run: |
+diff --git a/scripts/lumos b/scripts/lumos
+index ccbe91b3..9dd84f99 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -23367,23 +23367,27 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
+     else:
+         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
+         # 三個點的寫法變成「起點 到 .終點」、找不到就放行,同一條違規完全沒擋(代碼審 r1 邊界席)
+         rg = _lens_range_ok(diff_range)
+         if rg is None:
+             print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有(三個點的寫法這裡不收:"
+                   "先用 git merge-base 算出起點再給)", file=sys.stderr)
+             return 2
+         a, b = rg
+         tip = _lens_full_sha(root, b)
+-        base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
+-        if tip is None or base is None:
+-            print(f"每支檔有家:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
++        if tip is None:
++            print(f"每支檔有家:範圍 {diff_range} 的終點在本機找不到,跳過(fail-open)", file=sys.stderr)
++            return 0
++        base, why = _lens_push_base(root, a, tip)
++        if why:
++            print(f"每支檔有家:{why}", file=sys.stderr)
++        if base is None:
+             return 0
+         base = _nodehome_clamp_base(root, base, tip)
+         base_where = None if base == _EMPTY_TREE_SHA else base
+         tip_where, mode_word = tip, "這次推送"
+         changes = _nodehome_changes(root, base_where, tip)
+     if changes is None:
+         print("每支檔有家:git 算不出這次的改動,跳過(fail-open)", file=sys.stderr)
+         return 0
+     lst = _nodehome_list(root, tip_where)
+     if lst is None:
+@@ -23875,27 +23879,25 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+     except OSError:
+         txt = None
+     mode, _w = _note_shape_config(txt)
+     if mode != "block":
+         out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
+                    "沒寫來源的現況描述不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     if ymls:
+         body = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in ymls)
+-        step = ("- run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
++        step = ("\n    - run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+                 "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
+-                "B=\"${{ github.event.before }}\"; case \"$B\" in 0000000000000000000000000000000000000000|\"\") "
+-                "B=4b825dc642cb6eb9a060e54bf8d69288fbee4904;; esac; "
+-                "python3 scripts/lumos note-shape --diff \"$B..${{ github.sha }}\" "
+-                "(checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了讓已在主線上的提交不重查;"
+-                "新分支首推前一版是 40 個 0,換成空樹,lumos 會自己截到上線點——lumos 本身也認 40 個 0,兩道保險)")
++                "python3 scripts/lumos note-shape --diff \"${{ github.event.before }}..${{ github.sha }}\""
++                "\n  (這步只在 push 事件跑(`if: github.event_name == 'push'`),pull_request 沒有前一版;checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了找得到主線:"
++                "已在主線上的提交不重查,新分支首推(前一版是 40 個 0)或 force-push 後舊頂端找不到時,lumos 從跟主線的分岔點算)")
+         if "note-shape --diff" not in body:
+             out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
+         elif "fetch-depth: 0" not in body:
+             out.append("專案 CI 呼叫了 note-shape,但沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過")
+     if ci:
+         # 推送前與 CI 已經用 note-shape --diff 查這次的範圍;事後掃描逐提交重算、會隨歷史線性變慢(代碼審 r1 單reviewer
+         # 量到 500 個提交 9 秒),不放在每次推送都跑的 --ci 路徑上
+         return out
+     gl = _nodehome_golive(root, "HEAD", _NOTE_SHAPE_GOLIVE_MARK)
+     if gl is None:
+@@ -23969,28 +23971,28 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None):
+         if rg is None:
+             print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有", file=sys.stderr)
+             return 2
+         sh = _lens_git(root, "rev-parse", "--is-shallow-repository")
+         if sh is not None and sh.stdout.strip() == "true":
+             print("筆記形狀擋:淺層 clone 算不出範圍(找不到上線點與上一個提交),這次不查——CI 請設 fetch-depth: 0",
+                   file=sys.stderr)
+             _gate_event_or_warn(root, "note-shape", "skipped-env", "shallow clone")
+             return 0
+         a, b = rg
+-        if re.fullmatch(r"0{40}", a or ""):
+-            # GitHub 對新分支首推給的 before 是 40 個 0:當成空樹(之後照樣截到上線點)。原本當成「範圍找不到」放行,
+-            # 照 doctor 給的 CI 步驟貼的消費專案新分支首推整批放過(2026-09-28 下游設計審抓到的漏網)
+-            a = _EMPTY_TREE_SHA
+         tip = _lens_full_sha(root, b)
+-        base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
+-        if tip is None or base is None:
+-            print(f"筆記形狀擋:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
++        if tip is None:
++            print(f"筆記形狀擋:範圍 {diff_range} 的終點在本機找不到,跳過(fail-open)", file=sys.stderr)
++            return 0
++        base, why = _lens_push_base(root, a, tip)
++        if why:
++            print(f"筆記形狀擋:{why}", file=sys.stderr)
++        if base is None:
+             return 0
+         base = _nodehome_clamp_base(root, base, tip, _NOTE_SHAPE_GOLIVE_MARK)
+         base_where = None if base == _EMPTY_TREE_SHA else base
+         tip_where, mode_word = tip, "這次推送"
+     lst = _nodehome_list(root, tip_where)
+     if lst is None:
+         print("筆記形狀擋:git 讀不到檔案清單,跳過(fail-open)", file=sys.stderr)
+         return 0
+     vaults = sorted({_vault_slug_of(p) for p in lst[1]} - {None})
+     if not vaults:
+@@ -28083,20 +28085,48 @@ def _lens_range_ok(diff_range):
+     if not isinstance(diff_range, str) or diff_range.startswith("-") or "..." in diff_range:
+         return None
+     parts = diff_range.split("..")
+     if len(parts) != 2 or not parts[0] or not parts[1]:
+         return None
+     if any(ch.isspace() for ch in diff_range):
+         return None
+     return parts[0], parts[1]
+ 
+ 
++_ZERO_SHA_RE = re.compile(r"0{40}")
++
++
++def _lens_push_base(repo_root, a, tip):
++    """推送範圍的起點 → (起點 sha 或 None, 說明)。None=這次沒有新東西、不用查。
++    起點是 40 個 0(GitHub 對新分支首推給的 before)或本機找不到(force-push 後的舊頂端)時:頂端已經在主線上
++    (本地主分支的 upstream)就沒有新東西;不然從跟主線的分岔點算;連主線都找不到才用空樹(之後照樣截到上線點)。
++    ★不能直接回「範圍找不到、放行」★:照 doctor 給的 CI 步驟貼的消費專案,新分支首推會整批放過(2026-09-28 漏網
++    ESC-61fc2d87);★也不能一律當空樹★:新分支開在主線頂端時會把主線上線後的舊帳當新增誤擋(同一件事的代碼審)。
++    明寫空樹的起點照原意(從空樹比)。筆記形狀擋與每支檔有家共用這支。"""
++    if a == _EMPTY_TREE_SHA:
++        return a, ""
++    if not _ZERO_SHA_RE.fullmatch(a or ""):
++        s = _lens_full_sha(repo_root, a)
++        if s is not None:
++            return s, ""
++    why = "新分支首推" if _ZERO_SHA_RE.fullmatch(a or "") else "起點在本機找不到"
++    ml = _mainline_ref(repo_root, remote_only=True)
++    if ml:
++        anc = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, ml[1])
++        if anc is not None and anc.returncode == 0:
++            return None, f"{why},而且頂端已經在主線({ml[0]})上——沒有新東西"
++        mb = _lens_git(repo_root, "merge-base", tip, ml[1])
++        if mb is not None and mb.returncode == 0 and mb.stdout.strip():
++            return mb.stdout.strip(), f"{why}:從跟主線({ml[0]})的分岔點算"
++    return _EMPTY_TREE_SHA, f"{why}:找不到主線,從空樹算(截到上線點)"
++
++
+ def _lens_git(repo_root, *args, quote=False, binary=False):
+     """binary=True:輸出照位元組回(不解碼)——讀檔案內容算指紋用,非 UTF-8 的內容也不會在解碼時噴錯。"""
+     import subprocess as _sp
+     cmd = ["git", "-C", str(repo_root)]
+     if quote:
+         cmd += ["-c", "core.quotePath=false"]
+     try:
+         if binary:
+             return _sp.run(cmd + list(args), capture_output=True, timeout=20)
+         return _sp.run(cmd + list(args), capture_output=True, text=True, errors="replace", timeout=20)
+@@ -30670,20 +30700,33 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+                         capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+             if r.returncode == 0 and r.stdout.strip():
+                 mb = r.stdout.strip()
+                 if mb == head_sha:
+                     return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+                 break
+         if not mb:
+             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
+             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+         diff_range = f"{mb}..HEAD"
++    else:
++        # 起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,照筆記形狀擋與每支檔有家共用的判法換成真的起點;
++        # 原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open(2026-09-28 全零修正的代碼審通才席)
++        rg = _lens_range_ok(diff_range)
++        if rg is not None:
++            a, b = rg
++            if a != _EMPTY_TREE_SHA and (_ZERO_SHA_RE.fullmatch(a) or _lens_full_sha(repo_root, a) is None):
++                tip = _lens_full_sha(repo_root, b)
++                if tip is not None:
++                    base, _why = _lens_push_base(repo_root, a, tip)
++                    if base is None:
++                        return {"blocked": False, "reason": _why, "tier": "standard"}
++                    diff_range = f"{base}..{tip}"
+ 
+     # 2.5 受波及合約測試真跑(不分 tier;紅就擋)
+     # ★高風險這條路也要吃那份算好的★(2026-09-07 代碼審 r1 通才席的附註,查證屬實):
+     # 第一版只接了低風險那條,於是高風險推送仍然算兩次(一次給同步點名、一次在這裡)
+     # ——而我在 pre-push 的註解裡寫的是「★一次推送只算一次波及★」。
+     # ★那句話當時只在低風險成立,是我自己寫太大的宣稱。★ 接上之後才是真的。
+     bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
+                             payload=payload, advisory=bound_advisory)   # advisory 也要傳進去(r1 外家否決 f3:不傳會對低風險跑整套 600 秒)
+     _codeloop_guard_verdict.last_bound = bt
+     # ★「證不出跑過」跟紅一樣擋★(2026-09-09 r1 單reviewer f2,blocker):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7f7c7120..05e8ed4c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -39527,21 +39527,21 @@ def t_codeloop_dispositions_r1_folds():
+     # ⑪ advisory 旗標對算出 tier=high 的推送無效(r1 外家 finder f4/否決 f3):程序內替身
+     from unittest import mock as _mock
+     with tempfile.TemporaryDirectory() as d:
+         sha = _disp_repo(d)
+         R = Path(d)
+         real_run = m.subprocess.run if hasattr(m, "subprocess") else __import__("subprocess").run
+         import subprocess as _sp2
+         def fake_run(argv, *a, **kw):
+             if len(argv) > 2 and argv[2] == "pitfalls":
+                 return _sp2.CompletedProcess(argv, 0, _j.dumps({"tier": "high", "stack_questions_applicable": {}, "stack_questions_meta": {}}), "")
+-            return _sp2.run(argv, *a, **kw)
++            return real_run(argv, *a, **kw)      # 呼叫替換前存好的那支:呼叫 _sp2.run 會打到替身自己、無限遞迴
+         calls = []
+         def fake_bt(*a, **kw):
+             calls.append(kw.get("advisory")); return {"status": "red", "reason": "模擬:合約測試紅了"}
+         g = m._codeloop_guard_verdict.__globals__
+         with _mock.patch.object(_sp2, "run", side_effect=fake_run), _mock.patch.dict(g, {"_bound_tests_check": fake_bt, "_codeloop_read": lambda *a: {"status": "passed", "head_sha": sha}, "_gate_failopen": lambda *a: None}):
+             v = m._codeloop_guard_verdict(R, diff_range="HEAD~1..HEAD", at_sha=sha, branch="feat/disp", bound_advisory=True)
+         check("⑪帶 advisory 但算出 high → 紅測試硬跑一次(advisory=False)並擋", v["blocked"] is True and calls == [True, False], f"blocked={v.get('blocked')} calls={calls} reason={v.get('reason')}")
+     # ⑫ 要看字串內容的三題(r1 外家 finder f7)
+     a1, m1 = m._stack_applicability({"node": ['socket.on("error", handleError)']}, 300)
+     a2, m2 = m._stack_applicability({"sql": ["SELECT 1 FROM t WHERE name LIKE '%foo'"]}, 300)
+@@ -43227,21 +43227,21 @@ def t_nodehome_check_cli_modes():
+     import subprocess as sp
+     root = _nh_repo()
+     _nh_base(root)
+     _nh_file(root, "src/c.py")
+     _nh_commit(root, "c 沒家(繞過提交前檢查)")
+     rc, out = _nh_check(root, "--diff", "HEAD~1..HEAD")
+     check("①--diff 把範圍兩端當一次改動比 → 抓到 c.py 沒家 rc1", rc == 1 and "c.py" in out and "這次推送" in out, out[-600:])
+     r = sp.run([sys.executable, GRAPHCTL, "home", "check", "--repo", str(root)], capture_output=True, text=True)
+     check("②沒帶 --staged / --diff → rc2", r.returncode == 2, r.stderr[-300:])
+     rc, out = _nh_check(root, "--diff", "deadbeef..HEAD")
+-    check("③範圍在本機找不到 → fail-open rc0 並說明", rc == 0 and "找不到" in out, out[-300:])
++    check("③起點在本機找不到、也沒有主線 → 從空樹算、照查(不再 fail-open;2026-09-28 漏網修正)", rc == 1 and "找不到" in out and "c.py" in out, out[-300:])
+     # 代碼審 r1 邊界席:三個點原本被切成「HEAD~1 到 .HEAD」、找不到就放行——同一條違規完全沒擋
+     for bad in ("HEAD~1...HEAD", "HEAD~1..HEAD..HEAD", "..HEAD", "HEAD~1..", ""):
+         rc, out = _nh_check(root, "--diff", bad)
+         check(f"③b 範圍寫法不對({bad})→ rc2、講明要兩個點兩端都有,不當成找不到放行", rc == 2 and "兩個點" in out, out[-300:])
+     bare = Path(tempfile.mkdtemp(prefix="gctl-nh-novault-"))
+     sp.run(["git", "init", "-q", str(bare)], capture_output=True)
+     rc, out = _nh_check(bare)
+     check("④沒有圖譜 → 說一句跳過 rc0", rc == 0 and "沒有圖譜" in out, out[-300:])
+ 
+ 
+@@ -48781,36 +48781,86 @@ def t_note_shape_code_review_r3_regressions():
+     _nh_commit(r, "gone")
+     sha = head(r)
+     _nh_git(r, "rm", "-q", "src/gone.py")
+     _nh_commit(r, "rm")
+     q = kb(r) / "Q.md"
+     q.write_text(f"---\ntype: system\n---\n# Q\n見 `src/gone.py@{sha[:12]}:1`\n", encoding="utf-8")
+     rr = sp.run([sys.executable, GRAPHCTL, "refcheck", str(q), "--repo", str(r), "--json"], capture_output=True, text=True)
+     check("⑪refcheck 認已刪檔的歷史釘版本", '"missing": 0' in rr.stdout and '"ok": 1' in rr.stdout, rr.stdout[-300:])
+ 
+ 
+-def t_note_shape_all_zero_base_is_empty_tree():
+-    """範圍起點是 40 個 0(GitHub 對新分支首推給的 before)時當成空樹照查,不當成「範圍找不到」放行
+-    (2026-09-28 下游設計審抓到的漏網:照 doctor 給的 CI 步驟貼的消費專案,新分支首推整批放過)。"""
+-    print("t_note_shape_all_zero_base_is_empty_tree")
++def _pb_remote(root):
++    """掛一個本機裸遠端、把目前分支推成 origin/main 並設成 upstream(主線=upstream)。"""
++    import subprocess as sp
++    bare = Path(tempfile.mkdtemp(prefix="gctl-pb-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    _nh_git(root, "remote", "add", "origin", str(bare))
++    br = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
++    _nh_git(root, "push", "-q", "--no-verify", "origin", f"{br}:main")
++    _nh_git(root, "fetch", "-q", "origin")
++    _nh_git(root, "branch", "--set-upstream-to=origin/main")
++    return br
++
++
++def t_push_base_zero_or_missing():
++    """推送範圍的起點是 40 個 0(新分支首推)或本機找不到(force-push 後的舊頂端)時:頂端已在主線上就沒有新東西、不查;
++    不然從跟主線的分岔點算;筆記形狀擋與每支檔有家共用同一支判法(2026-09-28 漏網 ESC-61fc2d87 與它的代碼審)。
++    原本兩道閘都回「範圍找不到、跳過」放行;只把 40 個 0 當空樹又會把主線上線後的舊帳當新增誤擋。"""
++    print("t_push_base_zero_or_missing")
++    zero = "0" * 40
++    head = lambda r: _nh_git(r, "rev-parse", "HEAD").stdout.strip()
++    # ①②③ 筆記形狀擋
+     r = _ns_repo()
+-    _ns_note(r, body="新寫 `src/a.py:4`")
+-    _nh_commit(r, "bad")
+-    tip = _nh_git(r, "rev-parse", "HEAD").stdout.strip()
+-    rc, out = _ns(r, "--diff", "0" * 40 + ".." + tip)
+-    check("起點 40 個 0 照查、擋下新寫的行號引用", rc == 1 and "a.py:4" in out, out[-400:])
++    _ns_note(r, body="主線上線後留下的舊帳 `src/a.py:4`")
++    _nh_commit(r, "old debt on main (bypassed)")
++    _pb_remote(r)
++    _nh_git(r, "checkout", "-qb", "release-1")
++    rc, out = _ns(r, "--diff", f"{zero}..{head(r)}")
++    check("①新分支開在主線頂端、沒有新提交:不查、不把主線舊帳當新增", rc == 0 and "a.py:4" not in out, out[-400:])
++    _ns_note(r, name="New", body="新分支新寫 `src/a.py:6`")
++    _nh_commit(r, "new on branch")
++    rc, out = _ns(r, "--diff", f"{zero}..{head(r)}")
++    check("②新分支有新提交:只查分岔點之後的,擋新寫的、不報主線舊帳", rc == 1 and "a.py:6" in out and "a.py:4" not in out, out[-400:])
++    rc, out = _ns(r, "--diff", f"{'1' * 40}..{head(r)}")
++    check("③起點在本機找不到(force-push 後的舊頂端):照分岔點查,不放行", rc == 1 and "a.py:6" in out, out[-400:])
++    # ④⑤ 每支檔有家
++    h = _nh_repo()
++    _nh_base(h)
++    (h / "scripts" / "hooks").mkdir(parents=True)
++    (h / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\nlumos home check --staged\n", encoding="utf-8")
++    _nh_commit(h, "裝上這道檢查")
++    _pb_remote(h)
++    _nh_git(h, "checkout", "-qb", "feat")
++    rc, out = _nh_check(h, "--diff", f"{zero}..{head(h)}")
++    check("④每支檔有家:新分支沒有新提交時不查", rc == 0, out[-400:])
++    _nh_file(h, "src/new.py")
++    _nh_commit(h, "沒家的新檔")
++    rc, out = _nh_check(h, "--diff", f"{zero}..{head(h)}")
++    check("⑤每支檔有家:新分支首推的沒家新檔照擋", rc == 1 and "new.py" in out, out[-400:])
++    # ⑦ 代碼審那道收到同樣的範圍:不再走 fail-open
++    m7 = _load_lumos_inproc()
++    v = m7._codeloop_guard_verdict(r, diff_range=f"{zero}..{head(r)}")
++    check("⑦代碼審那道:起點 40 個 0 時照分岔點算分級,不走 fail-open", v.get("tier") not in ("unknown", None) and "fail-open" not in str(v.get("reason", "")), str(v)[:300])
++    _nh_git(r, "checkout", "-q", "-")
++    v = m7._codeloop_guard_verdict(r, diff_range=f"{zero}..{head(r)}")
++    check("⑦代碼審那道:頂端已在主線上時說沒有新東西", v.get("blocked") is False and "主線" in str(v.get("reason", "")), str(v)[:300])
++    _nh_git(r, "checkout", "-q", "release-1")
++    # ⑥ doctor 給的那步:原樣把 before 交給工具,命令與說明分行
+     m = _load_lumos_inproc()
+     (r / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+     (r / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
+     lines = m._note_shape_doctor_lines(r, r / "docs" / "kg-knowledge", ci=True)
+-    step = next((l for l in lines if "note-shape --diff" in l), "")
+-    check("doctor 給的那步也把 40 個 0 換成空樹", "0000000000000000000000000000000000000000" in step and "4b825dc642cb6eb9a060e54bf8d69288fbee4904" in step, step[-500:])
++    msg = next((l for l in lines if "note-shape --diff" in l), "")
++    cmd = next((x for x in msg.split("\n") if "- run:" in x), "")
++    check("⑥doctor 給的命令那一行只有命令:before 原樣交給工具、不在 shell 裡換、說明另起一行",
++          '--diff "${{ github.event.before }}..${{ github.sha }}"' in cmd and "case" not in cmd and "(" not in cmd.split("note-shape --diff", 1)[1],
++          msg[-600:])
+ 
+ def t_note_shape_acceptance_regressions():
+     """上限之外加跑的驗收輪抓到的洞各一條:NFD 檔名的筆記在合併提交、終點不是 HEAD 時照查(git 查詢用原樣路徑);
+     「寫的時候這道檢查在不在」看那個提交自己的掛鉤,兩條分支各自裝過也照查;上線前分支帶進來的行,喚醒那條路也不擋;
+     喚醒只認指向新程式檔本身的片段(不吃前綴);refcheck 的釘版本不受「現在還在的頂層目錄」過濾。"""
+     print("t_note_shape_acceptance_regressions")
+     import subprocess as sp, unicodedata
+     kb = lambda r: r / "docs" / "kg-knowledge" / "Systems"
+     head = lambda r: _nh_git(r, "rev-parse", "HEAD").stdout.strip()
+     branch = lambda r: _nh_git(r, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()

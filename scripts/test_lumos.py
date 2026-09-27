@@ -39534,7 +39534,7 @@ def t_codeloop_dispositions_r1_folds():
         def fake_run(argv, *a, **kw):
             if len(argv) > 2 and argv[2] == "pitfalls":
                 return _sp2.CompletedProcess(argv, 0, _j.dumps({"tier": "high", "stack_questions_applicable": {}, "stack_questions_meta": {}}), "")
-            return _sp2.run(argv, *a, **kw)
+            return real_run(argv, *a, **kw)      # 呼叫替換前存好的那支:呼叫 _sp2.run 會打到替身自己、無限遞迴
         calls = []
         def fake_bt(*a, **kw):
             calls.append(kw.get("advisory")); return {"status": "red", "reason": "模擬:合約測試紅了"}
@@ -43234,7 +43234,7 @@ def t_nodehome_check_cli_modes():
     r = sp.run([sys.executable, GRAPHCTL, "home", "check", "--repo", str(root)], capture_output=True, text=True)
     check("②沒帶 --staged / --diff → rc2", r.returncode == 2, r.stderr[-300:])
     rc, out = _nh_check(root, "--diff", "deadbeef..HEAD")
-    check("③範圍在本機找不到 → fail-open rc0 並說明", rc == 0 and "找不到" in out, out[-300:])
+    check("③起點在本機找不到、也沒有主線 → 從空樹算、照查(不再 fail-open;2026-09-28 漏網修正)", rc == 1 and "找不到" in out and "c.py" in out, out[-300:])
     # 代碼審 r1 邊界席:三個點原本被切成「HEAD~1 到 .HEAD」、找不到就放行——同一條違規完全沒擋
     for bad in ("HEAD~1...HEAD", "HEAD~1..HEAD..HEAD", "..HEAD", "HEAD~1..", ""):
         rc, out = _nh_check(root, "--diff", bad)
@@ -48787,6 +48787,94 @@ def t_note_shape_code_review_r3_regressions():
     rr = sp.run([sys.executable, GRAPHCTL, "refcheck", str(q), "--repo", str(r), "--json"], capture_output=True, text=True)
     check("⑪refcheck 認已刪檔的歷史釘版本", '"missing": 0' in rr.stdout and '"ok": 1' in rr.stdout, rr.stdout[-300:])
 
+
+def _pb_remote(root):
+    """掛一個本機裸遠端、把目前分支推成 origin/main 並設成 upstream(主線=upstream)。"""
+    import subprocess as sp
+    bare = Path(tempfile.mkdtemp(prefix="gctl-pb-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    br = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "push", "-q", "--no-verify", "origin", f"{br}:main")
+    _nh_git(root, "fetch", "-q", "origin")
+    _nh_git(root, "branch", "--set-upstream-to=origin/main")
+    return br
+
+
+def t_push_base_zero_or_missing():
+    """推送範圍的起點是 40 個 0(新分支首推)或本機找不到(force-push 後的舊頂端)時:頂端已在主線上就沒有新東西、不查;
+    不然從跟主線的分岔點算;筆記形狀擋與每支檔有家共用同一支判法(2026-09-28 漏網 ESC-61fc2d87 與它的代碼審)。
+    原本兩道閘都回「範圍找不到、跳過」放行;只把 40 個 0 當空樹又會把主線上線後的舊帳當新增誤擋。"""
+    print("t_push_base_zero_or_missing")
+    zero = "0" * 40
+    head = lambda r: _nh_git(r, "rev-parse", "HEAD").stdout.strip()
+    # ①②③ 筆記形狀擋
+    r = _ns_repo()
+    _ns_note(r, body="主線上線後留下的舊帳 `src/a.py:4`")
+    _nh_commit(r, "old debt on main (bypassed)")
+    _pb_remote(r)
+    _nh_git(r, "checkout", "-qb", "old-tag", "HEAD~1")
+    rc, out = _ns(r, "--diff", f"{zero}..{head(r)}")
+    check("①頂端落後主線(舊提交上的分支或標籤):沒有新東西、不查", rc == 0 and "a.py:4" not in out, out[-400:])
+    _nh_git(r, "checkout", "-q", "-")
+    rc, out = _ns(r, "--diff", f"{zero}..{head(r)}")
+    check("①b 頂端正好等於主線頂端(零提交的新分支或推主線本身):沒有新東西、不查、不拿主線舊帳誤擋,並記一筆 skipped 帳",
+          rc == 0 and "a.py:4" not in out and any(e.get("gate") == "note-shape" and e.get("kind") == "skipped" for e in _ns_gov(r)), out[-400:])
+    _nh_git(r, "checkout", "-qb", "release-1")
+    _ns_note(r, name="New", body="新分支新寫 `src/a.py:6`")
+    _nh_commit(r, "new on branch")
+    rc, out = _ns(r, "--diff", f"{zero}..{head(r)}")
+    check("②新分支有新提交:只查分岔點之後的,擋新寫的、不報主線舊帳", rc == 1 and "a.py:6" in out and "a.py:4" not in out, out[-400:])
+    rc, out = _ns(r, "--diff", f"{'1' * 40}..{head(r)}")
+    check("③起點在本機找不到(force-push 後的舊頂端):照分岔點查,不放行", rc == 1 and "a.py:6" in out, out[-400:])
+    # ④⑤ 每支檔有家
+    h = _nh_repo()
+    _nh_base(h)
+    (h / "scripts" / "hooks").mkdir(parents=True)
+    (h / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\nlumos home check --staged\n", encoding="utf-8")
+    _nh_commit(h, "裝上這道檢查")
+    _pb_remote(h)
+    _nh_git(h, "checkout", "-qb", "feat")
+    rc, out = _nh_check(h, "--diff", f"{zero}..{head(h)}")
+    check("④每支檔有家:新分支沒有新提交時不查,並記一筆 skipped 帳", rc == 0 and any(e.get("gate") == "nodehome-check" and e.get("kind") == "skipped" for e in _ns_gov(h)), out[-400:])
+    _nh_file(h, "src/new.py")
+    _nh_commit(h, "沒家的新檔")
+    rc, out = _nh_check(h, "--diff", f"{zero}..{head(h)}")
+    check("⑤每支檔有家:新分支首推的沒家新檔照擋", rc == 1 and "new.py" in out, out[-400:])
+    # ⑦ 代碼審那道收到同樣的範圍:不再走 fail-open
+    m7 = _load_lumos_inproc()
+    v = m7._codeloop_guard_verdict(r, diff_range=f"{zero}..{head(r)}")
+    check("⑦代碼審那道:起點 40 個 0 時照分岔點算分級,不走 fail-open", v.get("tier") not in ("unknown", None) and "fail-open" not in str(v.get("reason", "")), str(v)[:300])
+    old = _nh_git(r, "rev-parse", "old-tag").stdout.strip()   # 不切分支:上一個呼叫會寫紀錄檔,工作目錄髒了切不過去
+    v = m7._codeloop_guard_verdict(r, diff_range=f"{zero}..{old}")
+    check("⑦代碼審那道:頂端落後主線時說沒有新東西", v.get("blocked") is False and "主線" in str(v.get("reason", "")), str(v)[:300])
+    mt = _nh_git(r, "rev-parse", "main@{upstream}").stdout.strip() or _nh_git(r, "rev-parse", "master@{upstream}").stdout.strip()
+    v = m7._codeloop_guard_verdict(r, diff_range=f"{zero}..{mt}")
+    check("⑦代碼審那道:頂端正好等於主線頂端時也說沒有新東西,不整庫當新增", v.get("blocked") is False and "主線" in str(v.get("reason", "")), str(v)[:300])
+    # ⑧ force-push 改寫主線:推的就是主線、舊頂端找不到 → 照查(r2 通才席:原本「頂端在主線上」恆成立,整批放過)
+    f = _ns_repo()
+    _ns_note(f, body="乾淨")
+    _nh_commit(f, "c1")
+    _pb_remote(f)
+    _ns_note(f, body="force-push 塞進來的 `src/a.py:6`")
+    _nh_git(f, "add", "-A")
+    _nh_git(f, "commit", "-q", "--amend", "-m", "c1 rewritten", "--no-verify")
+    _nh_git(f, "push", "-q", "--no-verify", "--force", "origin", "HEAD:main")
+    _nh_git(f, "fetch", "-q", "origin")
+    rc, out = _ns(f, "--diff", f"{'2' * 40}..{head(f)}")
+    check("⑧繞過本機掛鉤又 force-push 改寫主線:頂端就是主線頂端,算沒有新東西(存心繞過不在範圍,見 _lens_push_base 說明),記一筆 skipped 帳",
+          rc == 0 and any(e.get("gate") == "note-shape" and e.get("kind") == "skipped" for e in _ns_gov(f)), out[-400:])
+    # ⑥ doctor 給的那步:原樣把 before 交給工具,命令與說明分行
+    m = _load_lumos_inproc()
+    (r / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (r / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
+    lines = m._note_shape_doctor_lines(r, r / "docs" / "kg-knowledge", ci=True)
+    msg = next((l for l in lines if "note-shape --diff" in l), "")
+    cmd = next((x for x in msg.split("\n") if "- run:" in x), "")
+    check("⑥b doctor 給的那步:前一版是空的(pull_request)時補成 40 個 0,不讓整步因格式錯而紅", "github.event.before || '0000000000000000000000000000000000000000'" in cmd, cmd[-300:])
+    check("⑥doctor 給的命令那一行只有命令:before 原樣交給工具、不在 shell 裡換、說明另起一行",
+          '--diff "${{ github.event.before' in cmd and "case" not in cmd and "(" not in cmd.split("note-shape --diff", 1)[1],
+          msg[-600:])
 
 def t_note_shape_acceptance_regressions():
     """上限之外加跑的驗收輪抓到的洞各一條:NFD 檔名的筆記在合併提交、終點不是 HEAD 時照查(git 查詢用原樣路徑);

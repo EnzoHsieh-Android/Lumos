@@ -23374,9 +23374,14 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
             return 2
         a, b = rg
         tip = _lens_full_sha(root, b)
-        base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
-        if tip is None or base is None:
-            print(f"每支檔有家:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
+        if tip is None:
+            print(f"每支檔有家:範圍 {diff_range} 的終點在本機找不到,跳過(fail-open)", file=sys.stderr)
+            return 0
+        base, why = _lens_push_base(root, a, tip)
+        if why:
+            print(f"每支檔有家:{why}", file=sys.stderr)
+        if base is None:
+            _gate_event_or_warn(root, "nodehome-check", "skipped", why)
             return 0
         base = _nodehome_clamp_base(root, base, tip)
         base_where = None if base == _EMPTY_TREE_SHA else base
@@ -23882,11 +23887,11 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
     if ymls:
         body = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in ymls)
-        step = ("- run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+        step = ("\n    - run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
                 "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
-                "python3 scripts/lumos note-shape --diff \"${{ github.event.before }}..${{ github.sha }}\" "
-                "(checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了讓已在主線上的提交不重查;"
-                "新分支首推前一版全零時改從空樹給,lumos 會自己截到上線點)")
+                "python3 scripts/lumos note-shape --diff \"${{ github.event.before || '0000000000000000000000000000000000000000' }}..${{ github.sha }}\""
+                "\n  (這步只在 push 事件跑(`if: github.event_name == 'push'`),pull_request 沒有前一版;checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了找得到主線:"
+                "已在主線上的提交不重查,新分支首推(前一版是 40 個 0)或 force-push 後舊頂端找不到時,lumos 從跟主線的分岔點算)")
         if "note-shape --diff" not in body:
             out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
         elif "fetch-depth: 0" not in body:
@@ -23975,9 +23980,14 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None):
             return 0
         a, b = rg
         tip = _lens_full_sha(root, b)
-        base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
-        if tip is None or base is None:
-            print(f"筆記形狀擋:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
+        if tip is None:
+            print(f"筆記形狀擋:範圍 {diff_range} 的終點在本機找不到,跳過(fail-open)", file=sys.stderr)
+            return 0
+        base, why = _lens_push_base(root, a, tip)
+        if why:
+            print(f"筆記形狀擋:{why}", file=sys.stderr)
+        if base is None:
+            _gate_event_or_warn(root, "note-shape", "skipped", why)
             return 0
         base = _nodehome_clamp_base(root, base, tip, _NOTE_SHAPE_GOLIVE_MARK)
         base_where = None if base == _EMPTY_TREE_SHA else base
@@ -28084,6 +28094,38 @@ def _lens_range_ok(diff_range):
     return parts[0], parts[1]
 
 
+_ZERO_SHA_RE = re.compile(r"0{40}")
+
+
+def _lens_push_base(repo_root, a, tip):
+    """推送範圍的起點 → (起點 sha 或 None, 說明)。None=這次沒有新東西、不用查。
+    起點是 40 個 0(GitHub 對新分支首推給的 before)或本機找不到(force-push 後的舊頂端)時:頂端落後或等於主線(本地主分支
+    的 upstream)頂端就沒有新東西;其他從跟主線的分岔點算;連主線都找不到才用空樹(筆記形狀擋與每支檔有家之後截到上線點;
+    代碼審那道照它原本拿到空樹的做法)。
+    ★頂端等於主線頂端也算沒有新東西★:代碼審 r2 曾改成「從上線點起全查」想擋 force-push 改寫主線,r3 查出它讓零提交的新分支
+    被主線舊帳誤擋、代碼審那道整庫當新增、而且 force-push 後再推一次照樣漏——「繞過本機掛鉤又 force-push 改寫主線」是存心繞過,
+    跟筆記內容審只防疏忽同一條線,不在這道後盾要防的範圍(呼叫端回 None 時記一筆 skipped 帳,事後看得到)。
+    ★不能直接回「範圍找不到、放行」★:照 doctor 給的 CI 步驟貼的消費專案,新分支首推會整批放過(2026-09-28 漏網
+    ESC-61fc2d87);★也不能一律當空樹★:新分支開在主線頂端時會把主線上線後的舊帳當新增誤擋(同一件事的代碼審)。
+    明寫空樹的起點照原意(從空樹比)。筆記形狀擋與每支檔有家共用這支。"""
+    if a == _EMPTY_TREE_SHA:
+        return a, ""
+    if not _ZERO_SHA_RE.fullmatch(a or ""):
+        s = _lens_full_sha(repo_root, a)
+        if s is not None:
+            return s, ""
+    why = "新分支首推" if _ZERO_SHA_RE.fullmatch(a or "") else "起點在本機找不到"
+    ml = _mainline_ref(repo_root, remote_only=True)
+    if ml:
+        anc = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, ml[1])
+        if anc is not None and anc.returncode == 0:
+            return None, f"{why},而且頂端已在主線({ml[0]})上——沒有新東西"
+        mb = _lens_git(repo_root, "merge-base", tip, ml[1])
+        if mb is not None and mb.returncode == 0 and mb.stdout.strip():
+            return mb.stdout.strip(), f"{why}:從跟主線({ml[0]})的分岔點算"
+    return _EMPTY_TREE_SHA, f"{why}:找不到主線,從空樹算(截到上線點)"
+
+
 def _lens_git(repo_root, *args, quote=False, binary=False):
     """binary=True:輸出照位元組回(不解碼)——讀檔案內容算指紋用,非 UTF-8 的內容也不會在解碼時噴錯。"""
     import subprocess as _sp
@@ -30671,6 +30713,19 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
         diff_range = f"{mb}..HEAD"
+    else:
+        # 起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,照筆記形狀擋與每支檔有家共用的判法換成真的起點;
+        # 原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open(2026-09-28 全零修正的代碼審通才席)
+        rg = _lens_range_ok(diff_range)
+        if rg is not None:
+            a, b = rg
+            if a != _EMPTY_TREE_SHA and (_ZERO_SHA_RE.fullmatch(a) or _lens_full_sha(repo_root, a) is None):
+                tip = _lens_full_sha(repo_root, b)
+                if tip is not None:
+                    base, _why = _lens_push_base(repo_root, a, tip)
+                    if base is None:
+                        return {"blocked": False, "reason": _why, "tier": "standard"}
+                    diff_range = f"{base}..{tip}"
 
     # 2.5 受波及合約測試真跑(不分 tier;紅就擋)
     # ★高風險這條路也要吃那份算好的★(2026-09-07 代碼審 r1 通才席的附註,查證屬實):
