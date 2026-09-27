@@ -118,6 +118,29 @@ jobs:
             fi
             exit "$rc"
           }
+      - name: note-shape gate (筆記形狀擋;--no-verify 後盾)
+        # 筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP(Projects/筆記形狀擋_計劃)。note-shape 不重查「已經在主線上」
+        # 的提交,主線=本地 main 的 upstream;推 main 時 origin/main 就是這次的頂端,lumos 看到頂端已在主線裡就不拿它排除。
+        # 本 workflow 只在推 main 時跑這步;建本地 main 那行是給 PR / 其他分支觸發的專案照抄用的(doctor 給的也是這步)。
+        # 新分支首推給空樹,lumos 會自己截到上線點。
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true
+          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
+          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+          python scripts/lumos note-shape --diff "$BEFORE..$SHA" --repo . || {
+            rc=$?
+            if [ "$rc" -eq 1 ]; then
+              echo "::error::note-shape 擋下(原因在上面):筆記新寫了程式行號引用或沒寫來源的現況描述——本機提交前/推送前被繞過(--no-verify)或用了 LUMOS_SKIP_NOTE_SHAPE 單次跳過;改寫那幾行後重推,或把專案的 note_shape.gate 設成 warn"
+              exit 1
+            fi
+            exit "$rc"
+          }
       - name: Anchor verify (baseline 缺失必紅)
         run: |
           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }

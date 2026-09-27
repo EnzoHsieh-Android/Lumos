@@ -114,7 +114,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull]` | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
 | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
 
-> **子命令全覽（75 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown`）。
+> **子命令全覽（76 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown`）。
 >
 > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
 
@@ -401,14 +401,14 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 
 | 符號 | 用途 | 範例 |
 |------|------|------|
-| `FLOW:` | 核心流程 | `reserve→complete→void` |
+| `FLOW:` | 流程指路（程式碼推得出的流程不寫；只留連結，或程式碼答不了的要帶 `[來源:…]`） | `見 [[Systems/付款流程]]` |
 | `AUTH:` | 認證方式 | `HMAC-SHA256`, `JWT` |
 | `KEY:` | 關鍵概念/欄位（**過渡標記，新筆記改用下面四類**） | `transactionId貫穿三階段` |
 | `WHY:` | 當初為什麼這樣決定（要求見上一節） | `[d3]改抽樣不全跑是因為預算 300 秒` |
 | `RULE:` | 程式看不到的限制（要求見上一節） | `[2026-09-21 起，退場:改用新閘後撤] 大額退費要人工核可` |
 | `PITFALL:` | 踩過的坑、事故根因（要求見上一節） | `[2026-09-05] 邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]` |
-| `FACT:` | 現況描述（要求見上一節） | `[以程式碼為準] 門檻 180 秒；查:grep FULL_SWEEP_SECONDS …` |
-| `DEP:` | 依賴模組（用 wikilink） | `[[Billing]][[Inventory]]` |
+| `FACT:` | 現況描述，只准寫程式碼答不了的（要求見紀律範本〈寫筆記時〉） | `東京機房的連線上限是 200 [來源:部署]` |
+| `DEP:` | 依賴指路（只放 wikilink；寫成句子就要帶 `[來源:…]`） | `[[Billing]][[Inventory]]` |
 | `TEST:` | 測試狀態 | `12/12通過(2026-04-07)` |
 | `VERIFY:` | 驗證紀錄連結 | `[[2026-04-07_API審計修復]]` |
 | `DECISION:` | 重大決策（簡版） | `[日期]內容(valid/superseded)` |
@@ -422,7 +422,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 | `★DEBT★` | KEY 行前綴：已知偶然行為，可改不算 breaking | `KEY:★DEBT★ RetentionDays=7寫死非設定` |
 
 不同筆記類型的重點：
-- **Systems**: WHY + RULE + PITFALL 為主；FLOW/DEP 只寫指針，現況描述照〈寫筆記時〉標「以程式碼為準」
+- **Systems**: WHY + RULE + PITFALL 為主；FLOW/DEP 只寫指針；程式碼查得到的現況一律不寫，程式碼答不了的照〈寫筆記時〉帶 `[來源:…]`
 - **Issues**: FLAG + DECISION + KEY（標記、決策、關鍵發現）
 - **Verification**: TEST + VERIFY（測試結果、驗證紀錄）
 

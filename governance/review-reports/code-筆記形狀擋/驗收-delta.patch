@@ -1,0 +1,653 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 06bdd33e..11515e48 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -19872,21 +19872,22 @@ def _node_code_ref_tokens(text, top_dirs, *, bare_text=False, anchors=False, kee
+     full=含 / 且頂層目錄存在的 (token, 行號) 清單(依出現順序、去重,帶 :行號 的剝成第二欄);bare=不含 / 的裸 token 集合。
+     ★refcheck、改檔前推筆記、每支檔有家三處共用這一支★——推筆記認得的,跟每支檔有家認得的,一定一樣
+     (兩套算法一定分岔,而分岔時沒有東西會翻紅;Projects/每支檔有家_計劃 [S7])。
+ 
+     筆記形狀擋(Projects/筆記形狀擋_計劃 [S9])加的選項,★預設全關,既有使用者行為不變★:
+     bare_text=也認沒包反引號的 `路徑:行號`;anchors=也認 `路徑#L行號`;keep_fences=圍欄裡的內容也看
+     (預設一開頭就把圍欄整段刪掉,那是 refcheck 家族要的)。
+     ★釘版本寫法 `路徑@<提交>:行號` 只有傳了 pins=[] 的呼叫端才解析★(refcheck、筆記形狀擋);其他呼叫端的結果
+     跟改動前逐字一樣(每支檔有家那幾處用 `for t, _l in full` 兩欄拆,也不需要知道釘版本)。解析時:整串是一支存在的檔
+     就不切(`icon@2x.png`、`run@v2`);否則在某個 `@` 左邊那段是存在的檔時切開,右邊整段當提交字串照原樣給
+-    (HEAD、分支名、`v1.2.3`、`origin/main` 也收),合不合法由呼叫端判;「存在」由呼叫端給 exists(路徑)→bool
++    (HEAD、分支名、`v1.2.3`、`origin/main` 也收),合不合法由呼叫端判;「存在」由呼叫端給 exists(路徑, 釘的提交=None)→bool
++    (問切點時第二個參數給 @ 右邊那段,refcheck 拿它認「現在刪掉了、但釘的那個提交裡有」的檔;代碼審 r3 外家席)
+     (代碼審 r2:原本用「@ 後面有沒有點」猜,`@v1.2.3` 與 `@origin/main` 都被放過)。釘版本只進 pins、不進 full。
+     singles=[]:另外收沒有 / 的 `檔名:行號`(裸 token 原本只回集合、不帶行號)。"""
+     _suffix_re = re.compile(r":([^/]+)$")
+     # ★不可換回 FENCE_RE★(見 _visible_lines):此處餵 G1 硬閘與 impact hook
+     src = "\n".join(ln for _no, ln in _visible_lines(text.split("\n"), keep_fenced=True)) if keep_fences \
+         else _strip_fences_text(text)
+     spans = [s.strip("`") for s in INLINE_CODE_RE.findall(src)]
+     raws = list(spans)
+     if bare_text:
+         rest = INLINE_CODE_RE.sub(" ", src)
+@@ -19903,21 +19904,21 @@ def _node_code_ref_tokens(text, top_dirs, *, bare_text=False, anchors=False, kee
+             line = sfx if re.fullmatch(r"\d+(?:-\d+)?", sfx) else ""
+         else:
+             token = raw
+         if anchors and not line:
+             ma = re.search(r"#L(\d+)(?:-L?\d+)?$", token)
+             if ma:
+                 token, line = token[:ma.start()], ma.group(1)
+         pin = None
+         if pins is not None and "@" in token and exists is not None and not exists(token):
+             for i in [k for k, c in enumerate(token) if c == "@"][::-1]:
+-                if i > 0 and exists(token[:i]):
++                if i > 0 and exists(token[:i], token[i + 1:]):
+                     token, pin = token[:i], token[i + 1:]
+                     break
+         if "/" not in token:
+             if singles is not None and line and token and (token, line, pin) not in seen:
+                 seen.add((token, line, pin))
+                 singles.append((token, line, pin))
+             continue
+         if token.split("/")[0] not in top_dirs:
+             continue
+         if pin is not None and pins is not None:
+@@ -19930,30 +19931,40 @@ def _node_code_ref_tokens(text, top_dirs, *, bare_text=False, anchors=False, kee
+             continue
+         seen.add((token, line))
+         full.append((token, line))
+     return full, {s for s in spans if "/" not in s}
+ 
+ 
+ # 裸寫的 `路徑:行號` / `路徑#L行號` / `路徑@提交:行號`(筆記形狀擋 [S1]):前面不能緊貼路徑字元,
+ # 路徑至少要有 / 或副檔名的點(擋掉 d12:3 這類決策編號、12:30 這類時間)
+ _NODE_BARE_REF_RE = re.compile(
+     r"(?<![A-Za-z0-9_./@\-])(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_\-]*[./][A-Za-z0-9_.\-]*"
+-    r"(?:@[A-Za-z0-9_.\-~^]+)?(?::\d+(?:-\d+)?|#L\d+)(?![\w/])")
++    r"(?:@[A-Za-z0-9_.\-~^/]+)?(?::\d+(?:-\d+)?|#L\d+)(?![\w/])")
++
++
++def _path_at_pin(repo_root, path, pin):
++    """釘的提交(合法釘版本才算)裡有沒有這支檔。pin 為 None 或不合法 → False。"""
++    sha = _pin_commit(repo_root, pin) if pin else None
++    if not sha:
++        return False
++    r = _lens_git(repo_root, "cat-file", "-e", f"{sha}:{path}")
++    return r is not None and r.returncode == 0
+ 
+ 
+ def _refcheck_scan(text, repo_root):
+     """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+     cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+     核對段走 _validate_repo_ref(與 Check J 共用);抽取段(inline-code+top_dirs 過濾)維持原規則。"""
+     top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+     pins = []
+-    full, _bare = _node_code_ref_tokens(text, top_dirs, pins=pins, exists=lambda p_: (repo_root / p_).exists())
++    full, _bare = _node_code_ref_tokens(text, top_dirs, pins=pins,
++                                        exists=lambda p_, s_=None: (repo_root / p_).exists() or _path_at_pin(repo_root, p_, s_))
+     claims = []
+     # 釘版本 `路徑@<提交>:行號` 對那個提交驗(筆記形狀擋 [S2]):不這樣做,它會被當成一支叫「路徑@提交」、
+     # 或行號對不上目前版本的檔,設計審放行前的引用檢查就把合法寫法判成幻覺證據
+     for token, line, pin in pins:
+         sha = _pin_commit(repo_root, pin)
+         status, excerpt = _validate_repo_ref(repo_root, token, line, at_sha=sha) if sha else ("missing", "")
+         claims.append({"token": f"{token}@{pin}", "line": line, "status": status, "excerpt": excerpt})
+     for token, line in full:
+         status, excerpt = _validate_repo_ref(repo_root, token, line)
+         claim = {"token": token, "line": line, "status": status, "excerpt": excerpt}
+@@ -23555,35 +23566,45 @@ def _ns_exclusions(repo_root, tip):
+     """_ns_mainline_refs 裡「沒有已經包含 tip」的那些。CI 上本地 main 追蹤的 origin/main 就是這次推上來的頂端,
+     拿它排除等於整批不查(r2 編排者自查;工具鏈自己的 CI 先刪掉那個參照才沒中,消費專案照 doctor 給的那步貼會中)。"""
+     out = []
+     for ref in _ns_mainline_refs(repo_root):
+         r = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, ref)
+         if r is not None and r.returncode == 1:
+             out.append(ref)
+     return out
+ 
+ 
+-def _ns_range_added(repo_root, base, tip, vault_rel, exclude_remote=True):
++def _ns_range_added(repo_root, base, tip, vault_rel, exclude_remote=True, golive=None, max_count=None):
+     """推送前:範圍裡每個提交各自新增的筆記行 → ({終點路徑: 行文字集合}, 範圍淨改動的筆記路徑)。git 失敗回 None。
+     ★照檔案記,不跨篇用文字比★(代碼審 r2 外家席:別篇加了又刪的同一句,會把另一篇原本就有的舊行誤擋);
+     改名照每個提交的改名偵測往後帶到終點路徑。
+     ★合併提交只算它自己寫的★:合併結果裡每一個上一版都找不到的行(_merge_new_lines);每個上一版各自偵測改名
+     再讀(代碼審 r2 外家席:合併時改名,原本拿新檔名去讀上一版讀不到,把上一版帶進來的行當成新寫)。
+-    ★已經在主線上的提交不重查★(exclude_remote,見 _ns_mainline_refs)。"""
++    ★已經在主線上的提交不重查★(exclude_remote,見 _ns_mainline_refs)。
++    ★上線點不是祖先的提交不查★(golive):上線前開的分支上線後才合進來,那些提交寫的時候還沒有這道檢查,是舊帳
++    (代碼審 r3 通才席);合併提交本身照樣只算它自己寫的行。max_count:只看最新那幾個提交(doctor 的上限)。"""
+     rl = ["rev-list", "--reverse", "--parents", f"{base}..{tip}" if base else tip]
+     if exclude_remote:
+         ml = _ns_exclusions(repo_root, tip)
+         if ml:
+             rl += ["--not", *ml]
++    if max_count:
++        rl.append(f"--max-count={int(max_count)}")
+     raw = _nodehome_git(repo_root, *rl)
+     if raw is None:
+         return None
++    live = None
++    if golive:
++        ap = _nodehome_git(repo_root, "rev-list", "--ancestry-path", f"{golive}..{tip}")
++        if ap is None:
++            return None
++        live = set(ap.decode("ascii", errors="replace").split()) | {golive}
+     by_path = {}
+ 
+     def _renames(a, b):
+         r = _ns_git(repo_root, "diff", "--name-status", "-z", "-M", a, b, "--", vault_rel)
+         return None if r is None else _nodehome_name_status(r)[1]        # 新路徑 → 舊路徑
+ 
+     def _carry(ren):
+         for new_, old_ in (ren or {}).items():
+             if old_ in by_path and old_ != new_:
+                 by_path.setdefault(new_, set()).update(by_path.pop(old_))
+@@ -23591,105 +23612,123 @@ def _ns_range_added(repo_root, base, tip, vault_rel, exclude_remote=True):
+     for line in raw.decode("ascii", errors="replace").splitlines():
+         shas = line.split()
+         if not shas:
+             continue
+         sha, parents = shas[0], shas[1:]
+         first = parents[0] if parents else _EMPTY_TREE_SHA
+         ren = _renames(first, sha)
+         if ren is None:
+             return None
+         _carry(ren)
++        if live is not None and sha not in live:
++            continue
+         if len(parents) <= 1:
+             d = _ns_diff(repo_root, first, sha, "--", vault_rel)
+             if d is None:
+                 return None
+             for p, rows in _ns_parse_added(d).items():
+                 by_path.setdefault(p, set()).update(t_.strip() for _n, t_ in rows if t_.strip())
+             continue
+         names = _ns_git(repo_root, "diff", "--name-only", "-z", "-M", first, sha, "--", vault_rel)
+         if names is None:
+             return None
+-        paths = [p for p in _nodehome_split_z(names) if p.endswith(".md")]
++        paths = [nfc(p) for p in _nodehome_split_z(names) if p.endswith(".md")]
+         pren = [_renames(pp, sha) or {} for pp in parents]
++        for pr in pren[1:]:
++            # 另一邊在舊檔名寫的行也搬到合併結果的檔名(代碼審 r3 外家席:原本只搬第一個上一版的改名,
++            # 主線改名、側分支在舊檔名新寫,處理順序對了就整批漏查)
++            _carry(pr)
+         specs = []
+         for p in paths:
+             specs.append(f"{sha}:{p}")
+             specs += [f"{pp}:{pr.get(p, p)}" for pp, pr in zip(parents, pren)]
+         blobs = _nodehome_cat_blobs(repo_root, specs) if specs else []
+         k = 1 + len(parents)
+         for i, p in enumerate(paths):
+             merged, *olds = (blobs[i * k:(i + 1) * k] if blobs is not None else [None] * k)
+             new = _merge_new_lines(merged, olds) if blobs is not None else None
+             if new is None:                       # 判不了:照一般提交跟第一個上一版比(多查不漏查)
+                 d = _ns_diff(repo_root, first, sha, "--", p)
+                 if d is None:
+                     return None
+                 for _p, rows in _ns_parse_added(d).items():
+                     by_path.setdefault(p, set()).update(t_.strip() for _n, t_ in rows if t_.strip())
+             else:
+                 by_path.setdefault(p, set()).update(x.decode("utf-8", errors="surrogateescape") for x in new)
+     net = _ns_git(repo_root, "diff", "--name-only", "-z", "-M", "--diff-filter=AMR", base or _EMPTY_TREE_SHA, tip, "--", vault_rel)
+     if net is None:
+         return None
+-    return by_path, [p for p in _nodehome_split_z(net) if p.endswith(".md")]
++    # 路徑一律 NFC,跟 _ns_parse_added、_nodehome_name_status 的鍵一致(代碼審 r3 通才席:git 裡存 NFD 的檔名整篇查不到)
++    return by_path, [nfc(p) for p in _nodehome_split_z(net) if p.endswith(".md")]
+ 
+ 
+ def _ns_is_code(path, reader, files):
+     """這個路徑在被檢查的版本裡是不是程式檔或測試檔(副檔名清單或開頭 #!;測試也算;只收一般檔)。"""
+     if path not in files:
+         return False
+     kind = _nodehome_code_kind(path)
+     if kind == "ext":
+         return True
+     if kind != "shebang?":
+         return False
+     b = reader(path)
+     return b is not None and _head_is_shebang(b[:200])
+ 
+ 
+-# 只放連結的指路行:連結裡不准有別名(`[[目標|別名]]` 的別名可以夾帶現況,代碼審 r2 通才席);分隔含全形逗號
+-_NS_POINTER_ONLY_RE = re.compile(r"^(?:\s*(?:\[\[[^\]|]+\]\]|見|→|,|,|、|\||｜)\s*)*$")
++# 只放連結的指路行:連結裡不准有別名或段落(`[[目標|別名]]`、`[[目標#段落]]` 都能夾帶現況,代碼審 r2、r3 通才席);
++# 分隔認中文常用的標點與連接詞(r3 外家席:原本把全形逗號打成半形,測試也用半形,假綠)
++_NS_POINTER_ONLY_RE = re.compile(r"^(?:\s*(?:\[\[[^\]|#]+\]\]|見|→|,|\uff0c|、|\u3002|;|\uff1b|與|和|及|\||｜)\s*)*$")
++
++
++def _ns_pin_ok(repo_root, p, l, s):
++    sha = _pin_commit(repo_root, s)
++    return sha is not None and _validate_repo_ref(repo_root, p, l, at_sha=sha)[0] == "ok"
++
++
++def _ns_is_regen(text):
++    """帶 regen 的重建筆記:照 Check J 看解析後的值(空字串不算;代碼審 r3 外家席:原本看原始文字,`regen: ""` 也算)。"""
++    fm, _b = split_frontmatter(text)
++    if not fm:
++        return False
++    v = parse_frontmatter(fm)[0].get("regen")
++    return isinstance(v, str) and bool(v.strip())
+ 
+ 
+ def _ns_check_line(repo_root, text, region, files, reader, top_dirs, by_name, regen=False):
+     """一行新增內容 → [(規則, 片段, 改法)]。by_name(檔名)→ 同名的程式檔清單。"""
+     out = []
+     # [src:路徑:行號] 是從程式碼重建的筆記的出處標記,★只在帶 regen 的筆記的 summary 裡★歸重建守衛(Check J)驗;
+     # 別的地方照一般行號引用判(代碼審 r2 通才席:原本對所有筆記豁免,一般筆記寫 [src:…] 就能夾帶行號)
+     scan = SRC_REF_RE.sub(" ", text) if (regen and region == "summary") else text
+     pins, singles = [], []
+     full, _bare = _node_code_ref_tokens(scan, top_dirs, bare_text=True, anchors=True, keep_fences=True,
+                                         pins=pins, singles=singles,
+-                                        exists=lambda x: x in files or ("/" not in x and bool(by_name(x))))
++                                        exists=lambda x, _s=None: x in files or ("/" not in x and bool(by_name(x))))
+     fix_pin = ("`@` 後面要是至少 12 位、在某個分支歷史上的提交編號,而且那個提交裡這支檔有這一行;"
+                "HEAD、分支名、標籤會移動,不算釘住")
+ 
+-    def _pin_ok(p, l, s):
+-        sha = _pin_commit(repo_root, s)
+-        return sha is not None and _validate_repo_ref(repo_root, p, l, at_sha=sha)[0] == "ok"
+-
+     for p, l, s in pins:
+         # 只管程式檔與測試檔——跟沒釘版本時一致(.md、不存在的路徑都不管;代碼審 r1 測試席、r2 外家席)
+-        if l and _ns_is_code(p, reader, files) and not _pin_ok(p, l, s):
++        if l and _ns_is_code(p, reader, files) and not _ns_pin_ok(repo_root, p, l, s):
+             out.append(("釘版本不合法", f"`{p}@{s}:{l}`", fix_pin))
+     for p, l in full:
+         if l and _ns_is_code(p, reader, files):
+             out.append(("程式行號引用", f"`{p}:{l}`",
+                         f"行號一改碼就錯位:改寫成「哪支檔的哪個函式」、要指測試就寫測試名,或釘版本 `{p}@<至少12位提交編號>:{l}`"))
+     for name, l, s in singles:
+         cands = by_name(name)
+         if len(cands) != 1:
+             continue
+         if s is None:
+             out.append(("程式行號引用", f"`{name}:{l}`(= {cands[0]})",
+                         f"行號一改碼就錯位:改寫成「哪支檔的哪個函式」,或釘版本 `{cands[0]}@<至少12位提交編號>:{l}`"))
+-        elif not _pin_ok(cands[0], l, s):
++        elif not _ns_pin_ok(repo_root, cands[0], l, s):
+             out.append(("釘版本不合法", f"`{name}@{s}:{l}`(= {cands[0]})", fix_pin))
+     if region == "summary":
+         m = SYMBOL_RE.match(text.strip())
+         body = text.strip()[len(m.group(1)) + 1:].strip() if m else ""
+         # 骨架留的空前綴(lumos new 產的 FLOW:/DEP:)不是現況描述;只放連結的指路行只給 FLOW/DEP(代碼審 r1、r2)
+         skip = (not body) or (m and m.group(1) in ("FLOW", "DEP") and _NS_POINTER_ONLY_RE.match(body))
+         if m and not skip:
+             for _w in context_marker_warnings(text, rules=_NOTE_SHAPE_PREFIX_RULES):
+                 out.append(("現況描述沒寫來源", text.strip()[:60],
+                             "只准寫程式碼答不了的現況並帶 [來源:部署|資料庫|生產|外部|人工];程式碼查得到的就刪掉"))
+@@ -23711,21 +23750,21 @@ def _ns_became_code(repo_root, base_where, tip_where, reader_tip):
+         if not new or code == "D":
+             continue
+         if not _ns_is_code(new, reader_tip, lst_t[0]):
+             continue
+         # 看「新路徑」在起點是不是已經是程式檔:改名過來的路徑對舊引用來說是新出現的(代碼審 r2 外家席)
+         if new not in lst_b[0] or not _ns_is_code(new, reader_b, lst_b[0]):
+             out.append(new)
+     return out
+ 
+ 
+-def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None):
++def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None, max_count=None):
+     """算這次的違規 → (violations[(筆記路徑, 行號, 規則, 片段, 改法)], errors[訊息])。"""
+     reader = _nodehome_reader(repo_root, tip_where)
+     lst = _nodehome_list(repo_root, tip_where)
+     if lst is None:
+         return None
+     files = lst[0]
+     top_dirs = {p.split("/", 1)[0] for p in files if "/" in p}
+     _names, _name_cache = {}, {}
+     for p in files:
+         if _nodehome_code_kind(p) is not None:
+@@ -23740,38 +23779,38 @@ def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclud
+     viol, errs = [], []
+     # 1) 這次新增的行
+     if staged:
+         d = _ns_diff(repo_root, "--cached", "--", vault_rel)
+         if d is None:
+             return None
+         added = {p: rows for p, rows in _ns_parse_added(d).items() if p.endswith(".md")}
+         cand = {p: {n for n, _t in rows} for p, rows in added.items()}
+         texts_by = None
+     else:
+-        ra = _ns_range_added(repo_root, base_where, tip_where, vault_rel, exclude_remote)
++        ra = _ns_range_added(repo_root, base_where, tip_where, vault_rel, exclude_remote,
++                             golive=_nodehome_golive(repo_root, tip_where, mark or _NOTE_SHAPE_GOLIVE_MARK), max_count=max_count)
+         if ra is None:
+             return None
+         texts_by, paths = ra
+         cand = {p: None for p in paths}
+     for p, linenos in sorted(cand.items()):
+         b = reader(p)
+         if b is None:
+             continue
+         try:
+             text = b.decode("utf-8-sig")        # 帶 BOM 的筆記照認(全庫讀取器都用 utf-8-sig;代碼審 r1 兩席)
+         except UnicodeDecodeError:
+             errs.append(f"{p}:這篇筆記不是 UTF-8 文字,檢查不了——轉成 UTF-8 再提交")
+             continue
+         lines = text.split("\n")
+         regs = _ns_regions(text)
+-        _fm, _b = split_frontmatter(text)
+-        regen = bool(_fm) and any(re.match(r"^regen:\s*\S", x) for x in _fm)
++        regen = _ns_is_regen(text)
+         for i, ln in enumerate(lines, 1):
+             if linenos is not None and i not in linenos:
+                 continue
+             if texts_by is not None and ln.strip() not in texts_by.get(p, ()):
+                 continue
+             if not ln.strip() or regs[i - 1] == "other":
+                 continue
+             for rule, frag, fix in _ns_check_line(repo_root, ln, regs[i - 1], files, reader, top_dirs, by_name, regen):
+                 viol.append((p, i, rule, frag, fix))
+     # 2) 新程式檔喚醒舊引用(筆記這次沒改也查;上線點版本裡就有的那行是舊帳,不算)
+@@ -23787,40 +23826,36 @@ def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclud
+             blobs = _nodehome_cat_blobs(repo_root, [f"{spec}:{x}" for x in notes_]) or []
+             gl_reader = _nodehome_reader(repo_root, gl)
+             seen = {(v[0], v[1]) for v in viol}
+             keys = set(became) | {x.rsplit("/", 1)[-1] for x in became}
+             for p, blob in zip(notes_, blobs):
+                 if blob is None:
+                     continue
+                 text = blob.decode("utf-8-sig", errors="replace")
+                 if not any(x in text for x in keys):
+                     continue
+-                old = None
++                old, regs_, regen_ = None, _ns_regions(text), _ns_is_regen(text)
+                 for n, ln in enumerate(text.split("\n"), 1):
+-                    if (p, n) in seen or not any(x in ln for x in keys):
++                    if (p, n) in seen or regs_[n - 1] == "other" or not any(x in ln for x in keys):
+                         continue
+                     if old is None:
+                         ob = gl_reader(p)
+                         old = {x.strip() for x in ob.decode("utf-8-sig", errors="replace").split("\n")} if ob is not None else set()
+                     if ln.strip() in old:
+                         continue
+-                    sg = []
+-                    fl, _b = _node_code_ref_tokens(ln, top_dirs, bare_text=True, anchors=True, keep_fences=True,
+-                                                   pins=[], singles=sg,
+-                                                   exists=lambda x: x in files or ("/" not in x and bool(by_name(x))))
+-                    hits = [(tok, l) for tok, l in fl if tok in became and l]
+-                    # 單一檔名也喚醒(代碼審 r2 外家席):唯一同名程式檔就是這次變成程式檔的那支
+-                    hits += [(c[0], l) for nm, l, s in sg if s is None for c in [by_name(nm)]
+-                             if len(c) == 1 and c[0] in became]
+-                    for tok, l in hits:
+-                        viol.append((p, n, "程式行號引用(新程式檔喚醒)", f"`{tok}:{l}`",
+-                                     f"這支檔這次才變成程式檔,舊筆記裡指向它的行號也會錯位:改寫或釘版本 `{tok}@<提交編號>:{l}`"))
++                    # 跟新增行走同一支逐行檢查(區塊、regen 的 [src:] 豁免、釘版本、單一檔名都一致;代碼審 r3 兩席:
++                    # 原本另抽一次,漏了 [src:] 豁免、也把釘版本整批丟掉),只留指向這次變成程式檔的那幾條
++                    for rule, frag, fix in _ns_check_line(repo_root, ln, regs_[n - 1], files, reader, top_dirs, by_name, regen_):
++                        if rule == "現況描述沒寫來源" or not any(f"`{x}" in frag or f"= {x})" in frag for x in became):
++                            continue
++                        viol.append((p, n, rule + "(新程式檔喚醒)", frag,
++                                     "這支檔這次才變成程式檔,舊筆記裡指向它的行號也會錯位:" + fix))
+     return viol, errs
+ 
+ 
+ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+     """lumos doctor 開頭的筆記形狀擋提醒(Projects/筆記形狀擋_計劃 [S8][S11]):
+     ①開關不是 block 就講(照 node_home.gate 先例:關掉要看得見);②專案 CI 沒呼叫 note-shape --diff、
+     或沒抓完整歷史(淺層 clone 算不出範圍)就給要貼的那一步——lumos update 不會動各專案的 CI 設定;
+     ③上線點之後、已推上遠端卻違反兩條規則的新增行(抓 --no-verify 繞過)。"""
+     out = []
+     root = Path(repo_root)
+@@ -23834,21 +23869,21 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+         txt = None
+     mode, _w = _note_shape_config(txt)
+     if mode != "block":
+         out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
+                    "沒寫來源的現況描述不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     if ymls:
+         body = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in ymls)
+         step = ("- run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+-                "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main) && "
++                "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
+                 "python3 scripts/lumos note-shape --diff \"${{ github.event.before }}..${{ github.sha }}\" "
+                 "(checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了讓已在主線上的提交不重查;"
+                 "新分支首推前一版全零時改從空樹給,lumos 會自己截到上線點)")
+         if "note-shape --diff" not in body:
+             out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
+         elif "fetch-depth: 0" not in body:
+             out.append("專案 CI 呼叫了 note-shape,但沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過")
+     if ci:
+         # 推送前與 CI 已經用 note-shape --diff 查這次的範圍;事後掃描逐提交重算、會隨歷史線性變慢(代碼審 r1 單reviewer
+         # 量到 500 個提交 9 秒),不放在每次推送都跑的 --ci 路徑上
+@@ -23869,29 +23904,26 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+     tip = _lens_full_sha(root, ref) if ref else None
+     if tip is None:
+         return out
+     a = _lens_git(root, "merge-base", "--is-ancestor", gl, tip)
+     if a is None or a.returncode != 0:
+         return out
+     try:
+         vault_rel = Path(vault).resolve().relative_to(root.resolve()).as_posix()
+     except ValueError:
+         return out
+-    base, capped = gl, False
+     cnt = _lens_git(root, "rev-list", "--count", f"{gl}..{tip}")
+-    if cnt is not None and cnt.returncode == 0 and cnt.stdout.strip().isdigit() and int(cnt.stdout.strip()) > _NS_DOCTOR_SCAN_CAP:
+-        b2 = _lens_full_sha(root, f"{tip}~{_NS_DOCTOR_SCAN_CAP}")
+-        # 沿第一個上一版數的邊界可能落在上線點之前(合併式歷史),那樣會把上線前的舊帳報成繞過(代碼審 r2 通才席)
+-        anc = _lens_git(root, "merge-base", "--is-ancestor", gl, b2) if b2 else None
+-        if b2 and anc is not None and anc.returncode == 0:
+-            base, capped = b2, True
+-    res = _note_shape_eval(root, False, base, tip, vault_rel, exclude_remote=False)
++    capped = cnt is not None and cnt.returncode == 0 and cnt.stdout.strip().isdigit() and int(cnt.stdout.strip()) > _NS_DOCTOR_SCAN_CAP
++    # 上限用「最新 N 個提交」算,不用 tip~N:沿第一個上一版數的邊界在合併式歷史裡會退到上線點之前、或根本數不到 N 步
++    # 而整個取消(代碼審 r2、r3 通才席);起點固定在上線點
++    res = _note_shape_eval(root, False, gl, tip, vault_rel, exclude_remote=False,
++                           max_count=_NS_DOCTOR_SCAN_CAP if capped else None)
+     if capped:
+         out.append(f"(筆記形狀擋的事後掃描只看遠端最近 {_NS_DOCTOR_SCAN_CAP} 個提交,更早的沒掃)")
+     if res:
+         viol, errs = res
+         if viol:
+             shown = "; ".join(f"{p}:{n} {rule} {frag}" for p, n, rule, frag, _f in viol[:10])
+             more = f"(另有 {len(viol) - 10} 處)" if len(viol) > 10 else ""
+             out.append(f"已推上遠端({ref})卻違反筆記形狀擋的新增行 {len(viol)} 處(多半是 --no-verify 繞過):{shown}{more}")
+     return out
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d40924b2..937a6569 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -48339,21 +48339,21 @@ def t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed():
+     """[S9] 抽取器新選項預設關閉,既有使用者結果跟改動前逐字一樣(釘版本寫法也不切,仍是兩欄、不出錯);
+     傳了 pins 與 exists 的呼叫端,在「@ 左邊是存在的檔」處切開,另外拿到路徑、行號與提交。"""
+     print("t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed")
+     m = _load_lumos_inproc()
+     text = "見 `src/a.py:3` 與 `src/b.py` 還有裸寫 src/c.py:4 和\n```\n`src/d.py:5`\n```\n"
+     full, bare = m._node_code_ref_tokens(text, {"src"})
+     check("①預設:只認反引號、不看圍欄、不認裸寫", full == [("src/a.py", "3"), ("src/b.py", "")], str(full))
+     full2, _ = m._node_code_ref_tokens("釘 `src/a.py@0123456789ab:7`", {"src"})
+     check("②釘版本對既有使用者照改動前:兩欄、不切", full2 == [("src/a.py@0123456789ab", "7")], str(full2))
+     pins = []
+-    full2b, _ = m._node_code_ref_tokens("釘 `src/a.py@0123456789ab:7`", {"src"}, pins=pins, exists=lambda x: x == "src/a.py")
++    full2b, _ = m._node_code_ref_tokens("釘 `src/a.py@0123456789ab:7`", {"src"}, pins=pins, exists=lambda x, _s=None: x == "src/a.py")
+     check("③多傳參數拿到路徑、行號、提交", pins == [("src/a.py", "7", "0123456789ab")] and full2b == [], str((pins, full2b)))
+     full3, _ = m._node_code_ref_tokens(text, {"src"}, bare_text=True, anchors=True, keep_fences=True)
+     toks = {t for t, _l in full3}
+     check("④三個選項打開:認到裸寫與圍欄內", {"src/c.py", "src/d.py"} <= toks, str(full3))
+     full4, _ = m._node_code_ref_tokens("錨點 `src/a.py#L9`", {"src"}, anchors=True)
+     check("⑤#L 錨點拆成行號", full4 == [("src/a.py", "9")], str(full4))
+ 
+ 
+ def t_discipline_current_state_row_narrowed():
+     """[S10] 紀律範本與 skill 不再教「以程式碼為準加查詢就能寫」,改成 d3 收窄說法與 [來源:…] 五類。"""
+@@ -48527,21 +48527,21 @@ def t_note_shape_code_review_r2_regressions():
+     _nh_git(root, "tag", "v1.2.3")
+     _nh_file(root, "scripts/run@v2", "#!/bin/sh\necho 1\necho 2\n")
+     _nh_commit(root, "run@v2")
+     cases = [
+         ("一般筆記正文的 [src:] 照擋", dict(body="見 [src:src/a.py:5]"), True),
+         ("@ 標籤帶點", dict(body="見 `src/a.py@v1.2.3:5`"), True),
+         ("@ 遠端分支名", dict(body="見 `src/a.py@origin/main:5`"), True),
+         ("真檔名含 @ 當一般引用", dict(body="見 `scripts/run@v2:2`"), True),
+         (".md 的壞釘法不擋", dict(body="見 `README.md@HEAD:1`"), False),
+         ("別名夾帶現況", dict(summary="KEY:x\nDEP:[[Systems/Billing|扣款門檻 180 秒]]"), True),
+-        ("全形逗號分隔的指路行", dict(summary="KEY:x\nDEP:[[A]],[[B]]"), False),
++        ("全形逗號分隔的指路行", dict(summary="KEY:x\nDEP:[[A]]\uff0c[[B]]"), False),
+         ("FACT 不吃指路豁免", dict(summary="KEY:x\nFACT:[[A]]"), True),
+     ]
+     for label, kw, want in cases:
+         _ns_note(root, **kw)
+         _ns_stage(root)
+         rc, out = _ns(root)
+         check(f"①{label}:{'擋' if want else '不擋'}", (rc == 1) == want, out[-400:])
+         _ns_reset(root)
+     _ns_note(root, summary="KEY:x\nKEY:出處 [src:src/a.py:5]", extra="regen: from-scratch/2026-09-27")
+     _ns_stage(root)
+@@ -48641,12 +48641,152 @@ def t_note_shape_code_review_r2_regressions():
+     sp.run(["git", "init", "-q", "--bare", str(bare10)], capture_output=True)
+     _nh_git(r10, "remote", "add", "origin", str(bare10))
+     br = _nh_git(r10, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+     _nh_git(r10, "push", "-q", "--no-verify", "origin", f"{br}:main")
+     _nh_git(r10, "fetch", "-q", "origin")
+     _nh_git(r10, "branch", "--set-upstream-to=origin/main")
+     rc, out = _ns(r10, "--diff", f"{b10}..{t10}")
+     check("⑩頂端已在主線裡(CI 推 main)照查,不整批排除", rc == 1 and "a.py:3" in out, out[-400:])
+ 
+ 
++def t_note_shape_code_review_r3_regressions():
++    """代碼審 r3 抓到的洞各一條:喚醒那條路也吃重建筆記的 [src:] 豁免、regen 空值不算重建筆記、指路行的全形標點與
++    #段落、合併時主線改名側分支新寫照擋、NFD 檔名推送範圍照查、裸寫 @含斜線的分支名照擋、上線前開的分支上線後才合進來
++    不擋舊帳、喚醒也驗釘版本、doctor 上限在合併式歷史照樣生效、doctor 給的那步建不成本地 main 也不中斷、refcheck 認
++    已刪檔的歷史釘版本。"""
++    print("t_note_shape_code_review_r3_regressions")
++    import subprocess as sp, unicodedata
++    kb = lambda r: r / "docs" / "kg-knowledge" / "Systems"
++    head = lambda r: _nh_git(r, "rev-parse", "HEAD").stdout.strip()
++    branch = lambda r: _nh_git(r, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
++    # ①重建筆記 summary 的 [src:] 指向同一次新增的程式檔:喚醒那條路也豁免
++    r = _ns_repo()
++    _nh_file(r, "src/new.py", "a = 1\nb = 2\nc = 3\n")
++    _ns_note(r, summary="KEY:x\nKEY:出處 [src:src/new.py:3]", extra="regen: from-scratch/2026-09-27")
++    _ns_stage(r)
++    rc, out = _ns(r)
++    check("①重建筆記的 [src:] 指向新程式檔,不被喚醒誤擋", rc == 0, out[-400:])
++    # ②regen 空值不算重建筆記(跟 Check J 一樣看解析後的值)
++    r = _ns_repo()
++    _ns_note(r, summary="KEY:x\nKEY:出處 [src:src/a.py:5]", extra='regen: ""')
++    _ns_stage(r)
++    rc, out = _ns(r)
++    check("②regen 空值不給 [src:] 豁免", rc == 1 and "a.py:5" in out, out[-400:])
++    # ③指路行:全形標點與連接詞照放,#段落跟 |別名 一樣不准夾帶
++    r = _ns_repo()
++    for label, summ, want in [("全形逗號", "DEP:[[A]]，[[B]]", False), ("句號結尾", "DEP:見 [[A]]。", False),
++                              ("與連接", "DEP:[[A]] 與 [[B]]", False), ("全形分號", "FLOW:→ [[A]]；[[B]]", False),
++                              ("#段落夾帶現況", "DEP:[[Systems/Billing#扣款門檻 180 秒]]", True)]:
++        _ns_note(r, summary="KEY:x\n" + summ)
++        _ns_stage(r)
++        rc, out = _ns(r)
++        check(f"③{label}:{'擋' if want else '不擋'}", (rc == 1) == want, out[-400:])
++        _ns_reset(r)
++    # ④主線把 N.md 改名成 M.md,側分支還在 N.md 新寫違規,合併後照擋
++    r = _ns_repo()
++    (kb(r) / "N.md").write_text("---\ntype: system\n---\n# N\n一\n二\n三\n四\n", encoding="utf-8")
++    _nh_commit(r, "N")
++    b4, main4 = head(r), branch(r)
++    import os as _os
++
++    def _dated(msg, when):     # 固定提交時間:改名先、側分支新寫後,逐提交處理的順序才踩得到這個洞(不固定會靠運氣綠)
++        e = dict(_os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when)
++        sp.run(["git", "-C", str(r), "add", "-A"], capture_output=True, env=e)
++        sp.run(["git", "-C", str(r), "commit", "-qm", msg, "--no-verify"], capture_output=True, env=e)
++    _nh_git(r, "mv", "docs/kg-knowledge/Systems/N.md", "docs/kg-knowledge/Systems/M.md")
++    _dated("rename on main", "2030-01-01T00:00:00")
++    _nh_git(r, "checkout", "-qb", "side", b4)
++    (kb(r) / "N.md").write_text("---\ntype: system\n---\n# N\n一\n二\n三\n四\n見 `src/a.py:2`\n", encoding="utf-8")
++    _dated("side adds", "2030-01-02T00:00:00")
++    _nh_git(r, "checkout", "-q", main4)
++    e_ = dict(_os.environ, GIT_COMMITTER_DATE="2030-01-03T00:00:00", GIT_AUTHOR_DATE="2030-01-03T00:00:00")
++    sp.run(["git", "-C", str(r), "merge", "-q", "--no-edit", "--no-ff", "side"], capture_output=True, env=e_)
++    order = _nh_git(r, "log", "--reverse", "--format=%s", f"{b4}..HEAD").stdout.split("\n")[:2]
++    has = (kb(r) / "M.md").exists() and "src/a.py:2" in (kb(r) / "M.md").read_text(encoding="utf-8")
++    rc, out = _ns(r, "--diff", f"{b4}..{head(r)}")
++    check("④主線改名、側分支在舊檔名新寫的違規,合併後照擋(現場:合併結果的 M.md 有那行、先處理改名)",
++          has and order[:1] == ["rename on main"] and rc == 1 and "a.py:2" in out, f"has={has} order={order} " + out[-400:])
++    # ⑤git 裡存成 NFD 的筆記檔名,推送範圍照查
++    r = _ns_repo()
++    _nh_git(r, "config", "core.precomposeunicode", "false")
++    b5 = head(r)
++    nfd = unicodedata.normalize("NFD", "ポリシー")
++    (kb(r) / f"{nfd}.md").write_text("---\ntype: system\n---\n# P\n見 `src/a.py:5`\n", encoding="utf-8")
++    _nh_commit(r, "nfd")
++    stored = _nh_git(r, "-c", "core.quotepath=false", "ls-files").stdout
++    rc, out = _ns(r, "--diff", f"{b5}..{head(r)}")
++    check("⑤NFD 檔名的筆記推送範圍照查(現場:git 裡存的是 NFD)", nfd in stored and rc == 1, out[-400:])
++    # ⑥裸寫的 @含斜線的分支名
++    r = _ns_repo()
++    for label, body in [("裸寫 @遠端分支名", "見 src/a.py@origin/main:5"), ("裸寫 @分支名#L", "見 src/a.py@feature/x#L5")]:
++        _ns_note(r, body=body)
++        _ns_stage(r)
++        rc, out = _ns(r)
++        check(f"⑥{label}:擋", rc == 1, out[-400:])
++        _ns_reset(r)
++    # ⑦上線前開的分支上線後才合進來:裡面上線前寫的舊帳不擋;上線後開的分支照擋(對照組)
++    r = _ns_repo(golive=False)
++    _nh_file(r, "scripts/hooks/pre-commit", "#!/bin/bash\n")
++    _nh_commit(r, "hook")
++    main7 = branch(r)
++    _nh_git(r, "checkout", "-qb", "old-side")
++    _ns_note(r, name="Old", body="上線前的舊帳 `src/a.py:5`")
++    _nh_commit(r, "old")
++    _nh_git(r, "checkout", "-q", main7)
++    _nh_file(r, "scripts/hooks/pre-commit", "#!/bin/bash\n# " + _NS_HOOK_LINE + "\n")
++    _nh_commit(r, "golive")
++    b7 = head(r)
++    _nh_git(r, "merge", "-q", "--no-edit", "--no-ff", "old-side")
++    rc, out = _ns(r, "--diff", f"{b7}..{head(r)}")
++    check("⑦上線前開的分支上線後才合進來,舊帳不擋", rc == 0, out[-400:])
++    b7b = head(r)
++    _nh_git(r, "checkout", "-qb", "new-side")
++    _ns_note(r, name="New", body="上線後新寫 `src/a.py:6`")
++    _nh_commit(r, "new")
++    _nh_git(r, "checkout", "-q", main7)
++    _nh_git(r, "merge", "-q", "--no-edit", "--no-ff", "new-side")
++    rc, out = _ns(r, "--diff", f"{b7b}..{head(r)}")
++    check("⑦對照:上線後開的分支合進來照擋", rc == 1 and "a.py:6" in out, out[-400:])
++    # ⑧先寫壞釘法(檔還不在)、後加檔:喚醒也驗釘版本
++    r = _ns_repo()
++    _ns_note(r, body="見 `src/later.py@HEAD:3`")
++    _nh_commit(r, "step1")
++    _nh_file(r, "src/later.py", "a = 1\nb = 2\nc = 3\n")
++    _ns_stage(r)
++    rc, out = _ns(r)
++    check("⑧先寫壞釘法、後加檔:喚醒照擋", rc == 1 and "later.py" in out, out[-400:])
++    # ⑨合併式歷史(第一個上一版只有幾步、總數超過 200):doctor 照樣只掃最近 200 個
++    r = _ns_repo()
++    main9 = branch(r)
++    _nh_git(r, "checkout", "-qb", "long")
++    for i in range(205):
++        _nh_git(r, "commit", "-q", "--allow-empty", "--no-verify", "-m", f"e{i}")
++    _nh_git(r, "checkout", "-q", main9)
++    _nh_git(r, "merge", "-q", "--no-edit", "--no-ff", "long")
++    bare9 = Path(tempfile.mkdtemp(prefix="gctl-ns-r3cap-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare9)], capture_output=True)
++    _nh_git(r, "remote", "add", "origin", str(bare9))
++    _nh_git(r, "push", "-q", "--no-verify", "-u", "origin", main9)
++    d = sp.run([sys.executable, GRAPHCTL, "doctor"], cwd=str(r), capture_output=True, text=True)
++    check("⑨合併式歷史照樣只掃最近 200 個", "只看遠端最近" in (d.stdout + d.stderr), (d.stdout + d.stderr)[-500:])
++    # ⑩doctor 給消費專案的那步:建不成本地 main 也不中斷後面的 note-shape
++    m = _load_lumos_inproc()
++    r = _ns_repo()
++    (r / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
++    (r / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
++    lines = m._note_shape_doctor_lines(r, r / "docs" / "kg-knowledge", ci=True)
++    check("⑩doctor 給的那步建本地 main 失敗也接著跑", any("origin/main || true)" in l for l in lines), str(lines)[-400:])
++    # ⑪refcheck:檔已經刪掉,但釘在它還在的那個提交 → 對得上
++    r = _ns_repo()
++    _nh_file(r, "src/gone.py", "g = 1\n")
++    _nh_commit(r, "gone")
++    sha = head(r)
++    _nh_git(r, "rm", "-q", "src/gone.py")
++    _nh_commit(r, "rm")
++    q = kb(r) / "Q.md"
++    q.write_text(f"---\ntype: system\n---\n# Q\n見 `src/gone.py@{sha[:12]}:1`\n", encoding="utf-8")
++    rr = sp.run([sys.executable, GRAPHCTL, "refcheck", str(q), "--repo", str(r), "--json"], capture_output=True, text=True)
++    check("⑪refcheck 認已刪檔的歷史釘版本", '"missing": 0' in rr.stdout and '"ok": 1' in rr.stdout, rr.stdout[-300:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

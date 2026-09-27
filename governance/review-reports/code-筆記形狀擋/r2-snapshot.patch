@@ -1,0 +1,2109 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 98b95067..97e47c66 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -111,14 +111,36 @@ jobs:
+           git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+           echo "range: $BEFORE..$SHA branch=$BRANCH"
+           python scripts/lumos code-loop check --diff "$BEFORE..$SHA" --at-sha "$SHA" --branch "$BRANCH" --repo . || {
+             rc=$?
+             if [ "$rc" -eq 1 ]; then
+               echo "::error::code-loop check 擋下(原因在上面:合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕)——本機 pre-push 被繞過(--no-verify)或留痕失效;照上面 check 印的指令補留痕(dispositions / pass|skip --note)後重推"
+               exit 1
+             fi
+             exit "$rc"
+           }
++      - name: note-shape gate (筆記形狀擋;--no-verify 後盾)
++        # 筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP(Projects/筆記形狀擋_計劃)。先把所有遠端分支抓下來、
++        # 再刪掉這條分支自己的遠端參照:note-shape 只查「不在任何其他遠端分支上」的提交;新分支首推給空樹,lumos 會自己截到上線點。
++        if: github.event_name == 'push'
++        env:
++          BEFORE: ${{ github.event.before }}
++          SHA: ${{ github.sha }}
++          BRANCH: ${{ github.ref_name }}
++        run: |
++          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
++          git update-ref -d "refs/remotes/origin/$BRANCH" || true
++          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
++          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
++          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
++          python scripts/lumos note-shape --diff "$BEFORE..$SHA" --repo . || {
++            rc=$?
++            if [ "$rc" -eq 1 ]; then
++              echo "::error::note-shape 擋下(原因在上面):筆記新寫了程式行號引用或沒寫來源的現況描述——本機提交前/推送前被繞過(--no-verify)或用了 LUMOS_SKIP_NOTE_SHAPE 單次跳過;改寫那幾行後重推,或把專案的 note_shape.gate 設成 warn"
++              exit 1
++            fi
++            exit "$rc"
++          }
+       - name: Anchor verify (baseline 缺失必紅)
+         run: |
+           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
+           python scripts/lumos anchor verify
+diff --git a/AGENTS.md b/AGENTS.md
+index fbb74db7..798771d7 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -37,21 +37,21 @@
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+ | `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+-| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述，**只准寫程式碼答不了的**（部署設定、資料庫實際值、生產觀測、外部、人工核可） | **程式碼查得到的一律不寫**；要寫就同一行帶 `[來源:部署]`／`[來源:資料庫]`／`[來源:生產]`／`[來源:外部]`／`[來源:人工]` 其一。只標「以程式碼為準」加查詢不再算數。沒帶來源的這三種行、新寫的程式行號引用，提交時會被擋（行號改寫成「哪支檔的哪個函式」、寫測試名，或釘版本 `路徑@<提交編號>:行號`；誤擋用 `LUMOS_SKIP_NOTE_SHAPE=1` 單次跳過、會留帳，但推上主線時 CI 照樣會擋，要改寫或把專案設成 warn） |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index b1c43bd0..bb2e45de 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -98,25 +98,25 @@ flowchart LR
+     end
+ 
+     classDef boot fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
+     classDef upd fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
+     classDef new fill:#3a2a1b,stroke:#dcab3d,color:#fff5e0
+     class BOOT,B1,B2,B3,B4,B5 boot
+     class UPD,U1,U2,U3,U4,U5 upd
+     class NEW,N1,N2,N3,N4 new
+ ```
+ 
+-## 3. CLI 子命令家族 (75 個頂層命令)
++## 3. CLI 子命令家族 (76 個頂層命令)
+ 
+ ```mermaid
+ flowchart TB
+-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 75 個頂層命令)"]
++    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 76 個頂層命令)"]
+ 
+     ROOT --> READ["讀取 / 導航"]
+     ROOT --> HEALTH["巡檢 / 治理"]
+     ROOT --> WRITE["寫入"]
+     ROOT --> GUARD["合約守衛 (guard*)"]
+     ROOT --> LOOP["對抗審計 loop"]
+     ROOT --> INTEG["完整性 / 影響"]
+     ROOT --> SARIF["社群 linter 橋"]
+     ROOT --> CI["CI 回流觀測"]
+     ROOT --> LIFE["安裝 / 生命週期"]
+@@ -132,21 +132,21 @@ flowchart TB
+     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit · teardown"]
+ 
+     classDef root fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
+     classDef cat fill:#2a3142,stroke:#5a9bd6,color:#e0f0ff
+     classDef leaf fill:#222,stroke:#666,color:#ddd
+     class ROOT root
+     class READ,HEALTH,WRITE,GUARD,LOOP,INTEG,SARIF,CI,LIFE cat
+     class R,H,W,G,LP,I,ST,C,L leaf
+ ```
+ 
+-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 75 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
++> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 76 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+ 
+ ## 4. 筆記不腐爛,靠的是五段接力
+ 
+ **工作進行中,系統在四個時點主動把東西推到你眼前**(這些只提醒,不擋):
+ 
+ - 一進場:提醒程式碼為主、筆記補脈絡
+ - 改檔之前:「你要改的這個檔會波及哪幾篇」
+ - 派審查員之前:把牽連到的規則和事故自動附上去
+ - 收工時:改了程式卻沒動筆記,擋一次要你補或說明
+ 
+diff --git a/CLAUDE.md b/CLAUDE.md
+index b02cd59a..382e434d 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -36,21 +36,21 @@
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+ | `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+-| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述，**只准寫程式碼答不了的**（部署設定、資料庫實際值、生產觀測、外部、人工核可） | **程式碼查得到的一律不寫**；要寫就同一行帶 `[來源:部署]`／`[來源:資料庫]`／`[來源:生產]`／`[來源:外部]`／`[來源:人工]` 其一。只標「以程式碼為準」加查詢不再算數。沒帶來源的這三種行、新寫的程式行號引用，提交時會被擋（行號改寫成「哪支檔的哪個函式」、寫測試名，或釘版本 `路徑@<提交編號>:行號`；誤擋用 `LUMOS_SKIP_NOTE_SHAPE=1` 單次跳過、會留帳，但推上主線時 CI 照樣會擋，要改寫或把專案設成 warn） |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+diff --git a/docs/.escape-log.jsonl b/docs/.escape-log.jsonl
+index 1fcaf926..6a9aa7a0 100644
+--- a/docs/.escape-log.jsonl
++++ b/docs/.escape-log.jsonl
+@@ -19,10 +19,11 @@
+ {"ts": "2026-09-18T09:35:04+08:00", "token": "ESC-09047cd0", "loop": "收工點名問版本控制", "stage": "實作", "severity": "major", "desc": "判斷快取目錄可不可信的那個函式把目錄名寫死成舊目錄,新增任何同層目錄都永遠不過檢查=新機制被靜默停用;設計期討論過要新增一份狀態檔,卻沒人去看那個檢查怎麼寫的"}
+ {"ts": "2026-09-18T09:35:05+08:00", "token": "ESC-e9717329", "loop": "收工點名問版本控制", "stage": "實作", "severity": "minor", "desc": "既有擋停測試的現場只在逐字稿宣稱改過檔、工作樹是乾淨的,換成問版本控制後那個現場算不出東西;設計期把「逐字稿說改了但工作樹沒對應改動」列進已知限制,卻沒想到它會打到既有測試"}
+ {"ts": "2026-09-18T11:19:30+08:00", "token": "ESC-2b363a68", "loop": "收工點名問版本控制", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(資安-sonnet r1)", "auto": true, "source": "code-loop", "sha": "4eb10396705e95475d6ac4da37766964673d456a", "attribution": "ledger", "plan_risk": "high", "plan": "Projects/收工點名問版本控制_計劃.md", "precision": "round"}
+ {"ts": "2026-09-18T12:05:10+08:00", "token": "ESC-c074e5d9", "loop": "收工點名問版本控制", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(驗收-sonnet r2)", "auto": true, "source": "code-loop", "sha": "29f55e43144617c5e4cb430578e4ce52fbc09966", "attribution": "ledger", "plan_risk": "high", "plan": "Projects/收工點名問版本控制_計劃.md", "precision": "round"}
+ {"ts": "2026-09-18T14:04:26+08:00", "token": "ESC-b399b1b6", "loop": "收工點名問版本控制", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(資安-sonnet r3)", "auto": true, "source": "code-loop", "sha": "7ccac03637aa31e13b4feaa733fb01b0bcd83c73", "attribution": "ledger", "plan_risk": "high", "plan": "Projects/收工點名問版本控制_計劃.md", "precision": "round"}
+ {"ts": "2026-09-25T15:54:41+08:00", "token": "ESC-697f1a98", "loop": "筆記欄位關卡補齊", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(正確性-sonnet r1)", "auto": true, "source": "code-loop", "sha": "80a2a6dae44ace528fdee0773be3e1ce3503d394", "attribution": "plan-file", "plan_risk": "unknown", "plan": "Projects/筆記欄位關卡補齊_計劃.md", "precision": "round"}
+ {"ts": "2026-09-26T10:59:12+08:00", "token": "ESC-24a85578", "loop": "驗收前提欄位可改", "stage": "code-loop", "severity": "major", "desc": "代碼審記到 major(架構對齊-sonnet r1)", "auto": true, "source": "code-loop", "sha": "163933e99cdf494b9145acf4b608c34876d6e1b0", "attribution": "ledger", "plan_risk": "high", "plan": "Projects/驗收前提欄位可改_計劃.md", "precision": "round"}
+ {"ts": "2026-09-26T21:03:11+08:00", "token": "ESC-923f9a6b", "loop": "雙向門放行", "stage": "prod", "severity": "major", "desc": "規格閘留痕記進審查帳時,處置閘等三處讀帳改成略過它,凍結判定與回放(loop replay)漏改;先跑規格閘再開設計審的迴圈全都凍不起來,2026-09-26 兩份設計審過閘後凍結被擋才發現", "defect_ref": "fix 提交:設計審的判定凍結不再被規格閘留痕擋下(t_loop_replay_ignores_spec_gate_rows)"}
+ {"ts": "2026-09-26T21:40:56+08:00", "token": "ESC-0db83093", "loop": "審查跑滿上限提示", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(通才-sonnet r1)", "auto": true, "source": "code-loop", "sha": "7cc2b9dab75816d10d5057fcd2aa70afad2f6efc", "attribution": "ledger", "plan_risk": "high", "plan": "Projects/審查跑滿上限提示_計劃.md", "precision": "round"}
+ {"ts": "2026-09-26T22:37:40+08:00", "token": "ESC-f37566d2", "loop": "逃逸帳對得起來", "stage": "code-loop", "severity": "major", "desc": "代碼審記到 major(回滾-sonnet r1)", "auto": true, "source": "code-loop", "sha": "40fcad7b0760b6ffda258bc322d48e112b5d83d2", "attribution": "ledger", "plan_risk": "high", "loop_kind": "design", "plan": "Projects/逃逸帳對得起來_計劃.md", "precision": "round"}
++{"ts": "2026-09-27T13:45:47+08:00", "token": "ESC-eec57bc5", "loop": "筆記形狀擋", "stage": "code-loop", "severity": "blocker", "desc": "代碼審記到 blocker(單reviewer-opus r1)", "auto": true, "source": "code-loop", "sha": "87e7feeebf64f60c4e9781d327ffb1373c018e75", "attribution": "ledger", "plan_risk": "unknown", "loop_kind": "design", "plan": "Projects/筆記形狀擋_計劃.md", "precision": "round"}
+diff --git a/docs/lumos-toolchain-knowledge/Projects/筆記形狀擋_計劃.md b/docs/lumos-toolchain-knowledge/Projects/筆記形狀擋_計劃.md
+index 16bf0a6f..85492d65 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/筆記形狀擋_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/筆記形狀擋_計劃.md
+@@ -60,41 +60,41 @@ REVISIT:2026-11-27 量上面三個數,跟大計劃的回頭日同一天。
+ `lumos update` 不會動各專案的 CI 設定檔。所以 `lumos doctor` 檢查專案 CI 有沒有呼叫 `note-shape --diff`,沒有就每次印一行並給要貼的那一步(含「先抓所有遠端分支」);另外 doctor 對上線點之後、已推上遠端的提交跑一次 note-shape,有違規就列出來(抓 `--no-verify` 繞過)。工具鏈自己的 CI 手動加那一步。
+ 
+ ## 條款
+ 
+ - [S1] 若新增行(含圍欄內)有指向被檢查版本裡真的存在的程式檔或測試檔的行號引用(反引號或裸寫;含沒有副檔名、開頭是 `#!` 的主程式;單一檔名要恰好對到一支),則 note-shape 應擋下並列出每一處;指向不存在路徑或 `.md` 的、沒改動的舊行不應擋 [test:t_note_shape_line_refs_existing_code_new_only]
+ - [S2] 釘版本寫法只有 `<提交>` 是至少 12 位、解析結果以它開頭、在某個本機或遠端追蹤分支的歷史上、那個提交裡有該路徑、行號在該版本檔長內時才放行;`HEAD`、分支名(含全十六進位命名的分支)、標籤、相對寫法、找不到的編號、不在任何分支歷史上的捏造提交、行號 0 或超長應照樣擋;`lumos refcheck` 對合法的釘版本引用應判對得上 [test:t_note_shape_pinned_ref_requires_real_sha_and_line]
+ - [S3] 若 summary 區塊新增的 `FACT:` `FLOW:` `DEP:` 行沒帶五種 `[來源:…]` 之一,則應擋下;只有「以程式碼為準」加查詢的也應擋下;FACT 行 `lumos lint` 應給同樣判定,FLOW/DEP 行 `lumos lint` 應維持現行(不新增警告);正文裡的同形狀行不在這條;帶 regen 的筆記寫 `[來源:部署]` 不應被重建守衛當成檔案路徑 [test:t_note_shape_current_state_prefix_requires_source]
+ - [S4] 推送前遇到新分支或本機沒有遠端版本時,起點應為「不在任何遠端分支上的最早提交」的上一個;CI 新分支首推應先抓遠端分支再用同一算法;三者的起點早於 note-shape 自己的上線點(不是每支檔有家的)時應改從上線點算;上線前就有的舊內容首次推送不應被擋;每支檔有家的上線點判定應不變;淺層 clone 裡應不算範圍、放行並寫一筆 skipped-env [test:t_note_lines_range_base_and_own_golive_clamp]
+ - [S5] 提交前正在合併時應跳過並說一句;推送前的合併提交只應查合併結果裡每個上一版都沒有的行,從上一版帶進來的不應擋;每支檔有家對合併的判定應不變 [test:t_note_lines_merge_commit_new_lines_only]
+ - [S6] 新增行集合應含正文(含圍欄內)、summary 區塊、decisions 區塊(含任意縮排的巢狀清單),且應排除其他開頭欄位與 decisions 的結構鍵;改名應認成同一篇;筆記檔讀不成 UTF-8 時應 rc1 並指名那支檔 [test:t_note_lines_scope_rename_and_non_utf8]
+-- [S7] 擋下時應印每一處的檔、行、規則與改法,且不得改動筆記與暫存區;只有擋下與跳過(環境變數、淺層 clone)寫事件,放行不寫;不是 git 或找不到 lumos 時應放行並說一句;寫帳失敗不應改變擋不擋 [test:t_note_shape_block_message_and_fail_open]
++- [S7] 擋下時應印每一處的檔、行、規則與改法,且不得改動筆記與暫存區;只有擋下、warn 模式的違規提醒與跳過(環境變數、淺層 clone)寫事件,沒違規的放行不寫;不是 git 或找不到 lumos 時應放行並說一句;寫帳失敗不應改變擋不擋 [test:t_note_shape_block_message_and_fail_open]
+ - [S8] `note_shape.gate` 應從被檢查的版本讀,工作樹未暫存的 off 不應生效;設 off 或 warn 時 doctor 應印一行;`LUMOS_SKIP_NOTE_SHAPE=1` 應放行並寫一筆 skipped-env [test:t_note_shape_config_from_snapshot_and_visible]
+ - [S9] 抽取器的三個新選項預設關閉,既有使用者對不含釘版本寫法的文字抽取結果應與改動前相同;含釘版本寫法時既有使用者應拿到去掉 `@<提交>` 的兩欄、不得出錯,多傳參數的呼叫端應另外拿到路徑、行號與提交 [test:t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed]
+ - [S10] 紀律範本的 FACT/FLOW/DEP 那列,以及 skill 的 reference.md(FACT 範例、Systems 寫法)與 commands/INDEX.md(核心規矩)都應寫 d3 的收窄說法與 `[來源:…]` 五類,不得再有「以程式碼為準加查詢就能寫」的指示;各專案注入的紀律區塊應與範本一致 [test:t_discipline_current_state_row_narrowed]
+ - [S11] doctor 應在專案 CI 沒呼叫 `note-shape --diff`、或沒抓完整歷史時印一行並給要貼的步驟,並列出上線點之後已推上遠端卻違反兩條規則的新增行 [test:t_doctor_note_shape_ci_and_bypass_scan]
+ - [S12] 若範圍內有路徑從「不是程式檔」變成「是程式檔或測試檔」(新增、改名、加 `#!`、類型改變),而筆記裡有指向它、沒釘版本、且在上線點版本裡還沒有的行號引用,則應擋下(即使那篇筆記這次沒改);上線點版本就有的舊引用不應擋 [test:t_note_shape_new_code_file_wakes_old_refs]
+ 
+ ## 回退
+ 
+ 照這個順序,反過來會卡住別人推送:
+ 1. 先拿掉工具鏈自己 `.github/workflows/ci.yml` 裡的 note-shape 那一步(這支檔不在 `lumos update` 同步清單裡,要手改)。
+ 2. 消費專案不用等中心:各自把 `note_shape.gate` 設成 off(要提交才生效)就停。
+ 3. 拿掉提交前與推送前 hook 裡的呼叫;★note-shape 指令改成只印「已撤除」並回 0,而且永久保留★——消費專案自己貼在 CI 裡的那一步不受 `lumos update` 管,工具鏈這邊看不到它們有沒有拿掉,指令一刪它們的 CI 就每次紅;空殼幾行程式,留著沒有成本。
+ 4. `_CONTEXT_MARKER_RULES` 的 FACT 規則改回舊判準、拿掉 FLOW/DEP 那兩條;抽取器的三個選項、上線點函式的標記參數、合併函式拆出的那支都可以留著(預設值就是原行為);★釘版本解析要留★——拿掉的話,已經寫進筆記的 `路徑@<提交>:數字` 會被 refcheck 當成不存在的檔。
+ 5. 紀律範本那列改回舊句時要先想好:舊句正是讓現況描述留存的出口(見〈檢討〉第 4 點)。
+ 6. 被擋下的內容從沒進過 git,只在作者的工作目錄。
+ 
+ ## 實務隱患
+ 
+ - 守衛面:新的擋人機制,誤擋會讓人習慣繞過——所以只看新行、上線前的舊帳截掉、合併不重查、不存在的路徑與文件路徑不擋、有嚴格驗過的釘版本寫法、有開關與跳過且都看得見,全部進 RETIRE-IF ①。
+-- 資源併發:note-shape 只讀不寫筆記;寫治理帳照既有寫入器現況(那個寫入器本身沒鎖的問題另記在 [[Issues/治理帳多個寫入者都沒上鎖]],本計劃只在擋下與跳過(環境變數、淺層 clone)時各寫一筆,放行不寫,頻率略增,那篇已註明)。擋下時治理帳會多一行未提交的內容:這跟每支檔有家等既有閘擋下時的行為一樣,治理帳本來就是會隨提交一起進版控的簿記檔,之後被一般提交帶進去不會誤導任何讀者(那一行記的就是一次真實的擋下)。
++- 資源併發:note-shape 只讀不寫筆記;寫治理帳照既有寫入器現況(那個寫入器本身沒鎖的問題另記在 [[Issues/治理帳多個寫入者都沒上鎖]],本計劃只在擋下、warn 模式的違規提醒與跳過(環境變數、淺層 clone)時各寫一筆,沒違規的放行不寫,頻率略增,那篇已註明)。擋下時治理帳會多一行未提交的內容:這跟每支檔有家等既有閘擋下時的行為一樣,治理帳本來就是會隨提交一起進版控的簿記檔,之後被一般提交帶進去不會誤導任何讀者(那一行記的就是一次真實的擋下)。
+ - 已排除:對外送出:只在本機讀 git 與檔案,不送任何內容到外部服務
+ - 已排除:不可逆:擋下時不產生提交、hook 不動工作目錄,內容留在作者手上;拿掉閘並照回退順序做就恢復原狀,沒有留下拿不掉的機制
+ - 已排除:金流:不碰任何付款或計費流程
+ 
+ ## 誠實界線
+ 
+ - 這一層只擋兩種形狀;rtb 稽核裡漂移最多的「目前沒有 / 只有 N 種」句型、貼錯標籤的 WHY 行、done 計劃的現況段,形狀都不固定(句型比對抽樣準度約三分之一),要等第二層。在第二層上線前,這些照樣寫得進去。
+ - 行號引用的抽樣 12/12 是單人目測、樣本小;把圍欄也納入後,貼在圍欄裡的舊輸出會被擋,這部分沒有抽樣過,是 RETIRE-IF ① 要盯的誤擋來源。
+ - 沒有接 CI 的消費專案,`--no-verify` 推上去當下擋不住;doctor 事後會列出來,但那時已經在遠端了。
+ 
+@@ -103,10 +103,22 @@ REVISIT:2026-11-27 量上面三個數,跟大計劃的回頭日同一天。
+ - r1(2026-09-27,7 席:正確性、邊界、接手、併發、回滾各一席 sonnet,架構對齊 sonnet,外家否決 Codex):35 條/blocking 32 條(blocker 5、major 27;minor 3),機器從各席報告的逐條 severity 行數出,全折、0 放行。卷證在 `governance/review-reports/筆記形狀擋/`。
+   - 最大宗(七席裡四席、約三分之一的發現)是治理帳加鎖:動到所有閘共用的寫入器、逾時回 2 違反寫入器契約又會被 hook 吞掉、漏了其他寫入者、沒沿用既有鎖、回退段自相矛盾——整塊移出到 [[Issues/治理帳多個寫入者都沒上鎖]]。
+   - 折入:`[src:]` 撞名改成 `[來源:…]` 並改既有 FACT 規則而不另寫一份(三席);圍欄內照查(正確性 blocker、邊界);釘版本要真的提交編號(兩席);路徑要存在、內容從被檢查版本讀、不套家的豁免(正確性、外家);上線點截斷、合併提交處理、設定從被檢查版本讀,照每支檔有家整套借(外家、邊界、接手);CI 新分支先抓遠端分支、最壞退到上線點(邊界 blocker);decisions 用區塊行範圍判、不靠解析欄位(邊界);抽取器擴充而不另寫(接手);off/warn 不逐次寫帳、只記 skipped-env,照鄰居(架構對齊);回退時指令先留一版空殼(回滾)。
+   - 鏡像核對(便宜席):35 條 34 條已處理或已移出且 Issue 寫到了對應失效情境;1 條部分(架構對齊建議加鎖說明落在既有治理帳節點,改成 Issue 掛上那篇為家、修好後寫回那篇);無前後矛盾。
+ - r2(2026-09-27,5 席全新:正確性、邊界、接手、架構對齊各一席 sonnet,外家否決 Codex;只審 r1 修正差異):15 條/blocking 15 條(blocker 3、major 12),全折、0 放行。重點是「照名字借」借不動:抽取器一開頭就刪掉圍欄、上線點標記寫死給每支檔有家、合併函式只回真假、釘版本寫法會被既有引用檢查判成不存在的檔、lint 只掃 summary。
+   - 折入:PRIOR-ART 逐項寫明借法(加參數、拆函式、另開讀取器)並列出四項新寫的東西;抽取器三個選項加釘版本解析,refcheck 對釘版本改成對那個提交驗(正確性 blocker、接手 blocker、邊界 blocker);裸文字候選規則與單一檔名規則(正確性);釘版本要驗行號範圍(外家);新程式檔喚醒舊引用(外家);上線點與合併改成加參數、拆函式(邊界、架構對齊、外家);現況前綴只看 summary,與 lint 同範圍(接手、架構對齊);CI 抓遠端分支那一步寫明是新寫的(接手);放行不寫事件、只記擋下與跳過,措辭改成不動筆記與暫存區(外家);skill reference.md 的舊範例一起改(接手)。
+   - 鏡像核對(便宜席):15 條 14 條已處理、1 條部分(外家 F1:擋下時治理帳多一行未提交內容——已在實務隱患寫明這是既有各閘同樣的行為與為什麼不造成誤導);另抓到實務隱患仍寫「每次提交都寫一筆」與做法打架,已改。
+ - r3(2026-09-27,4 席全新:正確性、邊界、架構對齊各一席 sonnet,外家否決 Codex;最後一輪,只審 r2 修正差異):13 條/blocking 11 條(blocker 3、major 8;minor 2),機器從各席報告的逐條 severity 行數出,全折、0 放行。
+   - 折入:釘版本要在某個分支歷史上、解析結果要以那串開頭(正確性 blocker:本機 `git commit-tree` 捏造的提交可通過,已實測;全十六進位命名的分支);抽取器回給既有使用者的仍是兩欄、要提交的另外拿(邊界 blocker、架構對齊);淺層 clone 不算範圍、CI 要抓完整歷史、doctor 檢查(邊界 blocker);FLOW/DEP 只給 note-shape、不接進 lint 以免 277 行舊帳噴警告,依據改引 d3(邊界);喚醒改成「變成程式檔」都算、上線點前就有的引用不算(外家兩條);skill 的 INDEX.md 與 reference.md 兩處舊指示一起改(外家);d7 以 d8 取代、大計劃裡加鎖的舊說法標已移出(外家);回退的空殼永久保留(外家);放行不寫事件改稱刻意跟鄰居不同(架構對齊、正確性)。
+   - 鏡像核對(便宜席):13 條 12 條已處理、1 條部分(FLOW/DEP 的決策依據:改成在依據段明寫引 d3);另補淺層 clone 偵測列入新寫清單、實務隱患的事件說法、白話段 d7 改注 d8。
++
++## 代碼審修正紀錄
++
++- 代碼審 r1(2026-09-27,一般分級;主審 opus、測試席 sonnet、架構對齊 sonnet、外家否決 Codex):去重後約 25 條,全折、0 放行。卷證在 `governance/review-reports/code-筆記形狀擋/`。改到設計的幾條:
++  - ★推送範圍只排除「已經在主線上」的提交(遠端預設分支)★,不再排除所有遠端分支——先用 `--no-verify` 推到別的分支、再推主線,那些提交原本永遠沒人查(主審、外家各自實測繞過)。
++  - 骨架留的空前綴(`lumos new` 產的 `FLOW:` `DEP:`)與只有連結的指路行不算現況描述,不擋;skill 的 FLOW/DEP 範例改成指路寫法。
++  - `[src:路徑:行號]`(從程式碼重建的筆記的出處標記)不歸這道。
++  - 釘版本只在 `@` 後面不含「.」時才切開(`icon@2x.png` 這種檔名照舊);路徑不存在時壞釘法也不擋(跟沒釘時一致)。
++  - warn 模式有違規也記一筆 warned;沒違規的放行照舊不寫。
++  - 環境變數單次跳過只管本機,推上主線 CI 照擋——範本與 CI 錯誤訊息寫明。
++  - doctor 的事後掃描不在 `--ci` 路徑跑、最多看遠端最近 200 個提交。
++  - 其餘是實作:中文與含空白檔名、BOM、同名非程式檔、同一行合法釘版本吃掉未釘的、喚醒改成批次讀筆記在記憶體比對、開頭欄位邊界改用共用函式、CI 錯誤標註、設定資料夾是捷徑的防護;另補兩支原本假綠的測試(釘版本改對內容不同的舊提交驗、改名測試關掉 git 預設改名偵測)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+index dd351edc..3cb679bd 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
++++ b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+@@ -41,20 +41,24 @@ plan_refs:
+ verified_by:
+   - "[[Verification/2026-09-11_每支檔有家落地]]"
+   - "[[Verification/2026-09-12_推筆記認家落地]]"
+ decision_refs:
+   - "Projects/每支檔有家_計劃.md#d4"
+ ---
+ # 每支檔有家
+ 
+ > 白話：每支程式檔都要有一篇「管它的」節點；節點只准寫自己管的檔；程式改了，說明寫進改到那支檔的那一篇。新加的違規在提交前、推送前當場擋，舊帳交給健檢提醒。
+ 
++## 同一個位置的鄰居:筆記形狀擋(2026-09-27)
++
++提交前與推送前掛鉤在這道檢查的緊後面,多呼叫一次 `lumos note-shape`(同一段範圍、同樣只認 rc1 為擋)。它借了這道的新分支起點算法、上線點截斷與合併處理——上線點與合併的兩支函式加了參數、拆出一支,這道自己的行為不變(預設值就是原本的)。它管的是筆記內容的形狀,不是檔案歸屬,細節見 [[Systems/筆記內容閘]]。改這道的範圍、上線點或合併判法時,記得那邊共用同一套。
++
+ ## 為什麼有這一道
+ 
+ 2026-09-11 對三個 POS 消費專案健檢，客人網頁那個專案又長成一篇包全部——距離後端第一次長歪不到兩天，而且整套工具全綠。
+ 查下來不是哪道檢查壞了，是**沒有檢查在量這個形狀**：節點用反引號寫了別人的檔，改那些檔時工具就推它、寫回就落它；
+ 提交前只看「有沒有動任何一篇」；合約條數提醒只數合約。詳細的來龍去脈、兩次設計審的發現與處置在 [[Projects/每支檔有家_計劃]]。
+ 
+ ## 三個進入點共用同一套判定
+ 
+ | 進入點 | 讀哪個版本 | 判什麼 |
+ |---|---|---|
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+new file mode 100644
+index 00000000..6a0acbea
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+@@ -0,0 +1,38 @@
++---
++type: system
++status: doing
++created: 2026-09-27
++updated: 2026-09-27
++responsibility: 管筆記內容的機械擋:提交前與推送前擋新寫的程式行號引用、沒寫來源的現況描述(note-shape),以及它借用的範圍與行判定;不管程式檔歸屬(那是每支檔有家)、不管推送前 AI 審查員(第二層計劃)
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/system
++  - status/doing
++  - scope/guards-gates
++summary: |-
++  WHY:[2026-09-27 Issue d1/d5/d6/d8,Enzo 裁]筆記不留存程式碼推得出來的東西,而且要機械擋——rtb 在「程式碼為主」新規則下寫的筆記,抽樣現況句仍有 41% 過時;寫法規範同一形狀失效三次(6 月、08-21、09-21),見 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]]〈檢討〉
++  WHY:[2026-09-27 Issue〈擋什麼的初步實測〉]這一層只擋兩種形狀固定的(程式行號引用、沒寫來源的 FACT/FLOW/DEP):「目前沒有/只有 N 種」句型比對抽樣準度約三分之一、撐不起硬擋,看意思的交給第二層 [[Projects/筆記不存程式碼推得出的事_計劃]]
++  WHY:[2026-09-27 設計審 r1 三席]來源標記叫 [來源:…] 不叫 [src:]——[src:] 是從程式碼重建的筆記指向程式位置的出處標記,帶 regen 的筆記會把 [src:部署] 當成一支叫「部署」的檔去驗
++  WHY:[2026-09-27 設計審 r3 邊界席]FLOW/DEP 只在新增行上查、不接進 lint 整篇——lint 那段程式的 2026-09-21 裁決記著接進去會對幾百行舊帳一次噴警告,等它自己的 REVISIT 再決定
++  WHY:[2026-09-27 rtb 回饋第 4 項]沒違規的放行不寫治理帳、只記擋下、warn 提醒與跳過,刻意跟每支檔有家每次都寫 passed 不同:每次提交一筆沒資訊的行正是 rtb 抱怨的帳本雜訊
++  PITFALL:[2026-09-27 代碼審 r1 兩席實測]推送範圍若排除所有遠端分支,先 --no-verify 推到別的分支再推主線就永遠沒人查;只排除主線已有的 [test:t_note_shape_code_review_r1_regressions]
++  PITFALL:[2026-09-27 代碼審 r1 兩席實測]git 預設把中文檔名印成帶引號的跳脫字串,解析不到路徑就整篇漏查;呼叫 git 一律關掉路徑引號 [test:t_note_shape_code_review_r1_regressions]
++  PITFALL:[2026-09-27 設計審 r3 正確性席實測]釘版本只查「提交物件存在」會被 git commit-tree 在本機捏造、從沒進過分支的提交繞過;要查在某個分支歷史上 [test:t_note_shape_pinned_ref_requires_real_sha_and_line]
++  PITFALL:[2026-09-27 設計審 r3 邊界席實測]淺層 clone 找不到上線點與上一個提交,範圍會退回空樹把整庫舊筆記當新增;偵測到淺層就不查並留帳,CI 要抓完整歷史 [test:t_note_lines_range_base_and_own_golive_clamp]
++  PITFALL:[2026-09-27 設計審 r3 邊界席]共用抽取器回給既有使用者一定要維持兩欄,每支檔有家三處用兩欄拆,多一欄當場出錯 [test:t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed]
++verified_by:
++  - "[[Verification/2026-09-27_筆記形狀擋落地]]"
++---
++# 筆記內容閘
++
++白話:筆記裡只留程式碼推不出來的東西。這道閘在提交前與推送前,擋下兩種一看就知道是「程式碼推得出來、而且會過期」的新寫法:指向程式某一行的行號引用,以及沒寫出程式碼答不了之來源的現況描述(FACT/FLOW/DEP 摘要行)。舊筆記不回頭清,只看這次新寫的行。
++
++設計、條款、三輪設計審的處置見 [[Projects/筆記形狀擋_計劃]];問題來源與裁定見 [[Issues/筆記把程式現況寫進脈絡而漂移_rtb實測回饋]]。治理帳寫入沒上鎖的問題不在這裡處理,見 [[Issues/治理帳多個寫入者都沒上鎖]]。
++
++這篇管 `scripts/lumos` 裡的 note-shape 子指令(提交前 `--staged`、推送前與 CI `--diff`)、doctor 開頭那三行筆記形狀擋提醒,以及為它加的共用零件:共用抽取器的三個選項與釘版本解析、refcheck 對釘版本改用那個提交驗、摘要行前綴規則表的來源判定。範圍、上線點、合併的算法本身的家是 [[Systems/每支檔有家]]。
++
++怎麼放行:行號改寫成「哪支檔的哪個函式」、寫測試名,或釘版本 `路徑@<至少 12 位提交編號>:行號`;現況描述刪掉,或只寫程式碼答不了的並帶 `[來源:部署|資料庫|生產|外部|人工]`。誤擋單次用 `LUMOS_SKIP_NOTE_SHAPE=1`(會留帳);整個專案先只提醒,把 `.lumos/config.json` 的 `note_shape.gate` 設成 warn。
++
++REVISIT:2026-11-27 照計劃的 RETIRE-IF 量三個數:被擋後繞過的比例、上線後新增行的抽樣、零觸發;同一天在 rtb 重做一次漂移抽樣
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-09-27_筆記形狀擋落地.md b/docs/lumos-toolchain-knowledge/Verification/2026-09-27_筆記形狀擋落地.md
+new file mode 100644
+index 00000000..7436ca45
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-09-27_筆記形狀擋落地.md
+@@ -0,0 +1,38 @@
++---
++type: verification
++status: pass
++date: 2026-09-27
++valid_under: note-shape 的兩條規則與範圍算法未改;scripts/hooks 的提交前與推送前仍呼叫它
++revalidate_when: 改到 _node_code_ref_tokens、_nodehome_golive/_nodehome_clamp_base、_merge_new_lines、_CONTEXT_MARKER_RULES 或兩支 hook 的呼叫段時
++tags:
++  - type/verification
++  - status/pass
++  - scope/guards-gates
++plan_refs:
++  - "[[Projects/筆記形狀擋_計劃]]"
++---
++# 2026-09-27_筆記形狀擋落地
++
++白話:第一層筆記形狀擋做完、測試全綠,而且拿掉關鍵檢查時測試會紅(不是假綠)。
++
++## 驗了什麼
++
++- 12 條條款各一支測試,全綠:`python3 scripts/test_lumos.py -k note_shape`、`-k note_lines`、`-k node_code_ref`、`-k discipline_current`、`-k doctor_note_shape`。
++- 會被波及的既有測試子集全綠:每支檔有家 240 條、提交前掛鉤 55 條、推送前掛鉤 113 條、refcheck 14 條、lint 脈絡標記 7 條、紀律區塊同步 21 條。
++- 既有測試的共用假筆記摘要原本寫「FLOW:x」,新規則會擋它(這正是規則要的效果),改成「KEY:x」;lint 脈絡標記那支測試的 FACT 合格範例改成帶 `[來源:部署]`。
++
++## 反向驗證(拿掉檢查,測試要紅)
++
++逐一改壞、清快取、只跑對應測試、還原(還原後逐位元比對原檔):
++- 釘版本不查「在分支歷史上」→ 捏造提交那條紅。
++- 拿掉上線點截斷 → 舊違規不擋那條紅。
++- 合併不算「只有自己寫的行」→ 合併時新寫、已在遠端不重查兩條紅。
++- 改成跳過圍欄內的行 → 圍欄內那條紅。
++- FLOW 不要求來源 → FLOW 沒來源那條紅。
++一開始有兩項改法沒打中(逐行檢查本來就不受圍欄開關影響、合併那條的斷言標籤對錯),換成真正的回歸寫法才紅——紀錄在此,別以為那兩條沒守。
++
++## 沒驗到的
++
++- 真實 GitHub Actions 上的 CI 那一步(抓所有遠端分支、刪自己的遠端參照)只在本機測過同樣的 git 操作,沒在 CI 真跑過。REVISIT 見下。
++- 上線前校準那種「誤擋率」沒量:圍欄裡貼的舊輸出帶行號會被擋,這在真實筆記裡有多常見沒抽樣。
++REVISIT:2026-10-11 看工具鏈自己 CI 第一次跑到 note-shape 那一步有沒有綠、有沒有誤擋;同時數這兩週被擋與跳過的事件
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 19759e00..a46dfba2 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -118,20 +118,29 @@ fi
+ # 合併提交由 lumos 自己判斷跳過(推送前會把合併的結果整段查一次)。
+ # 「該動哪篇」的點名(原本在這裡呼叫 impact --sync-only,以反引號為種子)也改由它照家算——
+ # 反引號那一套會把人推回寫了一堆別人檔名的大雜燴節點(計劃「為什麼」第 3 條)。
+ # rc1=新違規擋;其他非零(lumos 自己出錯)=放行,這道不因為環境壞了擋人。
+ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+   nh_rc=0
+   "$CC_PY" "$REPO_ROOT/scripts/lumos" home check --staged --repo "$REPO_ROOT" || nh_rc=$?
+   [[ "$nh_rc" -eq 1 ]] && exit 1
+ fi
+ 
++# Gate NS: 筆記形狀擋(2026-09-27,Projects/筆記形狀擋_計劃):筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP 擋下。
++# 判定全在 lumos 裡,這裡只呼叫;rc1=擋,其他非零放行(環境壞了不擋人)。
++# ★下一行的「note-shape --staged」字樣是上線點標記★:lumos 用 git log -S 找這串第一次出現的提交,那之前的筆記算舊帳。
++if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
++  ns_rc=0
++  "$CC_PY" "$REPO_ROOT/scripts/lumos" note-shape --staged --repo "$REPO_ROOT" || ns_rc=$?
++  [[ "$ns_rc" -eq 1 ]] && exit 1
++fi
++
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+ CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
+ 
+ # 排除路徑
+ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+   local path="$1" base
+   # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
+   if [[ "$path" == \"*\" && ${#path} -ge 2 ]]; then   # 長度守衛:單一個引號的假輸入不做子字串(r3 delta minor,set -u 下會吐錯)
+     path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="$(printf '%b' "$path")"   # \" 手解;\\ \t \ooo(控制字元)交給 printf %b(r3 外家:八進位沒解 → 找不到 → 放行)
+   fi
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 106ca754..09f560f9 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -235,20 +235,31 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     nh_rc=0
+     "$PY" "$GRAPHCTL" home check --diff "$_hrange" --repo "$REPO_ROOT" || nh_rc=$?
+     if [[ "$nh_rc" -eq 1 ]]; then
+       {
+         echo ""
+         echo "逃生:照上面的指令替檔安家、或把說明改寫進對的那篇,再推;整個專案先改成只提醒 → .lumos/config.json 的 node_home.gate 設成 warn;緊急硬推 git push --no-verify(本機不留痕)。"
+         echo ""
+       } >&2
+       exit 1
+     fi
++    # 筆記形狀擋(Projects/筆記形狀擋_計劃):同一段範圍再查一次,接住 --no-verify 跳過提交前那道的;範圍算法同上(不用空樹兜底)
++    ns_rc=0
++    "$PY" "$GRAPHCTL" note-shape --diff "$_hrange" --repo "$REPO_ROOT" || ns_rc=$?
++    if [[ "$ns_rc" -eq 1 ]]; then
++      {
++        echo ""
++        echo "逃生:照上面改寫(行號改成函式名或測試名、或釘版本 路徑@<提交編號>:行號;現況描述刪掉或帶 [來源:…]);誤擋就 LUMOS_SKIP_NOTE_SHAPE=1 單次跳過(會留帳);整個專案先只提醒 → .lumos/config.json 的 note_shape.gate 設成 warn。"
++        echo ""
++      } >&2
++      exit 1
++    fi
+   fi
+ 
+   impact_once "$_range"
+   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+   _tier_high=0
+   printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
+   _SUITE_SEEN=1
+   _suite_this="full"
+   printf '%s' "$pf_json" | grep -q '"suite": *"docs"' && _suite_this="docs"
+   printf '%s' "$pf_json" | grep -q '"suite_graph": *true' && _SUITE_GRAPH=1
+diff --git a/scripts/lumos b/scripts/lumos
+index 7f46cd18..a4f68b2e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -990,20 +990,25 @@ def _read_touched_list(path):
+ 
+ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False, touched=None):
+     C = {k: (v if color else "") for k, v in
+          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
+     notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
+     print(f"{C['B']}lumos doctor{C['X']} — vault: {C['B']}{env.vault}{C['X']} (self-contained, no Obsidian)")
+     # [S37] 每支檔有家的擋被關成 warn/off 時開頭就講——關掉這件事要看得見
+     _nh_mode = _nodehome_config(_vault_repo_root(env))["mode"]
+     if _nh_mode != "on":
+         print(f"  {C['Y']}⚠{C['X']} 這個專案把「每支檔有家」的擋設成 {_nh_mode}(.lumos/config.json 的 node_home.gate)——新增沒家的檔、寫回落錯篇不會被擋")
++    try:
++        for _ln in _note_shape_doctor_lines(_vault_repo_root(env), env.vault, ci=ci):
++            print(f"  {C['Y']}⚠{C['X']} {_ln}")
++    except Exception as _e:        # 體檢的提醒段不因這段壞掉而整支中斷
++        print(f"  (筆記形狀擋的健檢提醒算不出來:{_e.__class__.__name__})")
+     print()
+     issues = 0
+     gov_events = []          # 本輪 gate findings → governance-log(--ci 才寫)
+ 
+     def section(idx, title):
+         print(f"{C['B']}[{idx}]{C['X']} {title}")
+ 
+     def ok(msg):
+         print(f"  {C['G']}✓{C['X']} {msg}")
+ 
+@@ -2887,26 +2892,33 @@ _CTX_SRC_RE = re.compile(r"20\d\d-\d\d-\d\d|#d\d+|\[\[|\[src:|\bd\d+\b"
+                          r"|\b(?=[0-9a-f]{7,40}\b)[0-9a-f]*[a-f][0-9a-f]*\b")
+ 
+ # 前綴 → (判定函式, 缺什麼的白話, 怎麼補)
+ _CONTEXT_MARKER_RULES = {
+     "WHY": (lambda s: bool(_CTX_SRC_RE.search(s)),
+             "出處",
+             "行內補一個日期、決策編號(#d3)、提交 sha 或 [[節點]],不然下一個人沒辦法查證這句話"),
+     "PITFALL": (lambda s: bool(_CTX_REGRESS_RE.search(s)),
+                 "防回歸",
+                 "補 [test:測試名],或寫一條會重現的指令;兩個都沒有,這條只是感想"),
+-    "FACT": (lambda s: "以程式碼為準" in s and bool(_CTX_QUERY_RE.search(s)),
+-             "以程式碼為準的標註或查詢指令",
+-             "現況描述會過期:同一行標「以程式碼為準」並用反引號附一條可重跑的查詢指令;"
+-             "能從程式碼直接查到的,其實不該抄進筆記"),
++    "FACT": (lambda s: bool(_CTX_SOURCE_RE.search(s)),
++             "程式碼答不了的來源",
++             "只准寫程式碼答不了的現況,同一行帶 [來源:部署]、[來源:資料庫]、[來源:生產]、[來源:外部]、[來源:人工] 其中之一;"
++             "程式碼查得到的一律刪掉(2026-09-27 起「以程式碼為準」加查詢不再算數,Projects/筆記形狀擋_計劃)"),
+ }
+ 
++# 現況描述的來源類別(Projects/筆記形狀擋_計劃 [S3],Issue d3):★不用 [src:]★——那是「從程式碼重建的筆記」
++# 指向程式位置的出處標記,帶 regen 的筆記會把 [src:部署] 當成一支叫「部署」的檔去驗。
++_CTX_SOURCE_RE = re.compile(r"\[來源:\s*(部署|資料庫|生產|外部|人工)\s*\]")
++# note-shape 對新增的摘要行套的是 FACT/FLOW/DEP 三條;lint 整篇照舊只套上面那幾條——
++# FLOW/DEP 接進 lint 會對 277 行舊帳一次噴警告(見上面 2026-09-21 那段與它的 REVISIT)
++_NOTE_SHAPE_PREFIX_RULES = {k: _CONTEXT_MARKER_RULES["FACT"] for k in ("FACT", "FLOW", "DEP")}
++
+ # ★RULE: 的生命週期欄位★(2026-09-21 外家審計 F4 折入)
+ # 原本只驗「行內有日期字樣 + 有退場字樣」,`RULE:2030-99-99 退場:永不撤` 這種假規則零警告,
+ # 而且「這條過期了沒」沒人判得出來——散文寫的有效期不等於可執行的有效期。
+ # 欄位沿用本 repo 既有的 [test:]/[audit:] 行內寫法,不新發明語法:
+ #   [since:YYYY-MM-DD] 什麼時候立的(必填)   [retire:<條件>] 看到什麼就該撤掉(必填)
+ #   [until:YYYY-MM-DD] 硬到期日(選填)       [confirmed:YYYY-MM-DD] 最後一次確認(選填)
+ #   [status:active|superseded] 預設 active  [applies:<版本或範圍>](選填)
+ # 只有 since 與 retire 都寫齊、且不是 superseded 的 RULE 行,才有挑戰程式碼的效力(見紀律範本第 3 條)。
+ # 一欄位一個正則,形狀跟鄰居 TEST_REF_RE / AUDIT_REF_RE / ROLLBACK_REF_RE 一致
+ # (2026-09-21 架構對齊席:原本寫成一條合併正則+dict,是這支檔裡的第二種做法)
+@@ -2992,34 +3004,35 @@ def rule_lifecycle_warnings(rest, today=None):
+                    "確認還要不要留:要留就往後延並補 [confirmed:],不留就刪掉或標 superseded"
+                    f":{rest.strip()[:40]}")
+     conf = _rule_date(f.get("confirmed") or "")
+     if conf and (today - conf).days > _RULE_CONFIRM_STALE_DAYS and st == "active":
+         out.append(f"這條 RULE 超過 {_RULE_CONFIRM_STALE_DAYS} 天沒人確認過"
+                    f"(最後一次是 {f['confirmed']})——還成立就更新 [confirmed:],不成立就撤掉"
+                    f":{rest.strip()[:40]}")
+     return out
+ 
+ 
+-def context_marker_warnings(summary_text):
+-    """檢查摘要裡四個脈絡前綴的形狀,回傳警告字串清單(不產生 error)。"""
++def context_marker_warnings(summary_text, rules=None):
++    """檢查摘要裡四個脈絡前綴的形狀,回傳警告字串清單(不產生 error)。
++    rules=別的規則表(筆記形狀擋傳 _NOTE_SHAPE_PREFIX_RULES,只看 FACT/FLOW/DEP;RULE 行的生命週期檢查只在預設時跑)。"""
+     out = []
+     for raw in (summary_text or "").split("\n"):
+         line = raw.strip()
+         if not line:
+             continue
+         m = SYMBOL_RE.match(line)
+         if not m:
+             continue
+-        if m.group(1) == "RULE":
++        if m.group(1) == "RULE" and rules is None:
+             out.extend(rule_lifecycle_warnings(line[len("RULE:"):]))
+             continue
+-        rule = _CONTEXT_MARKER_RULES.get(m.group(1))
++        rule = (rules if rules is not None else _CONTEXT_MARKER_RULES).get(m.group(1))
+         if not rule:
+             continue
+         ok, missing, how = rule
+         rest = line[len(m.group(1)) + 1:]
+         if not ok(rest):
+             out.append(f"脈絡標記『{m.group(1)}:』缺{missing}——{how}:{rest.strip()[:40]}")
+     return out
+ 
+ FM_KEY_RE = re.compile(r"^\s*([A-Za-z_][\w-]*):")
+ 
+@@ -6590,21 +6603,23 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
+                 "daily-wrapper", "ledger-growth",
+                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
+                 "anchor", "pitfalls",
+                 # 2026-09-17 逃逸自動記 fail-open 失敗留痕(escape-auto-failed)與規格閘每次跑的觀測行(spec-gate-run)
+                 "escape-auto", "spec-gate",
+                 # 2026-09-11 每支檔有家:提交前/推送前的檢查、健檢三段(沒家的檔/寫了別人的檔名/管太多沒寫負責範圍)
+                 "nodehome-check", "check-s8", "check-s9", "check-s10",
+                 # 2026-09-13 新增告警閘:環境不可用自動放行、擋下新增告警,兩種事件都用這個閘名
+                 "lint-new",
+                 # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
+-                "check-s11")
++                "check-s11",
++                # 2026-09-27 筆記形狀擋:擋下與跳過(Projects/筆記形狀擋_計劃)
++                "note-shape")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+ 
+@@ -19844,55 +19859,105 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
+         file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+     except OSError:
+         file_lines = None
+     if file_lines is None or lo < 1 or hi < lo or lo > len(file_lines) or hi > len(file_lines):
+         return "line_out_of_range", ""
+     if lo == hi:
+         return "ok", file_lines[lo - 1]
+     return "ok", file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
+ 
+ 
+-def _node_code_ref_tokens(text, top_dirs):
++def _node_code_ref_tokens(text, top_dirs, *, bare_text=False, anchors=False, keep_fences=False, pins=None, singles=None):
+     """節點文字裡用反引號寫的程式路徑引用,回 (full, bare):
+     full=含 / 且頂層目錄存在的 (token, 行號) 清單(依出現順序、去重,帶 :行號 的剝成第二欄);bare=不含 / 的裸 token 集合。
+     ★refcheck、改檔前推筆記、每支檔有家三處共用這一支★——推筆記認得的,跟每支檔有家認得的,一定一樣
+-    (兩套算法一定分岔,而分岔時沒有東西會翻紅;Projects/每支檔有家_計劃 [S7])。"""
++    (兩套算法一定分岔,而分岔時沒有東西會翻紅;Projects/每支檔有家_計劃 [S7])。
++
++    筆記形狀擋(Projects/筆記形狀擋_計劃 [S9])加的選項,★預設全關,既有使用者行為不變★:
++    bare_text=也認沒包反引號的 `路徑:行號`;anchors=也認 `路徑#L行號`;keep_fences=圍欄裡的內容也看
++    (預設一開頭就把圍欄整段刪掉,那是 refcheck 家族要的)。
++    ★釘版本寫法 `路徑@<提交>:行號` 預設就解析★:full 裡給的仍是兩欄、路徑去掉 `@<提交>`——每支檔有家那三處用
++    `for t, _l in full` 兩欄拆,多一欄就當場出錯(筆記形狀擋 r3 邊界席);要知道釘了哪個提交的呼叫端傳 pins=[],
++    會另外收到 (路徑, 行號, 提交字串)——提交字串照原樣給(HEAD、分支名也收),合不合法由呼叫端判。
++    singles=[]:另外收沒有 / 的 `檔名:行號`(裸 token 原本只回集合、不帶行號)。"""
+     _suffix_re = re.compile(r":([^/]+)$")
+     # ★不可換回 FENCE_RE★(見 _visible_lines):此處餵 G1 硬閘與 impact hook
+-    spans = [s.strip("`") for s in INLINE_CODE_RE.findall(_strip_fences_text(text))]
++    src = "\n".join(ln for _no, ln in _visible_lines(text.split("\n"), keep_fenced=True)) if keep_fences \
++        else _strip_fences_text(text)
++    spans = [s.strip("`") for s in INLINE_CODE_RE.findall(src)]
++    raws = list(spans)
++    if bare_text:
++        rest = INLINE_CODE_RE.sub(" ", src)
++        raws += [m.group(0) for m in _NODE_BARE_REF_RE.finditer(rest)]
+     seen = set()
+     full = []
+-    for raw in spans:
++    for raw in raws:
+         if "://" in raw or any(c in raw for c in "*<>?"):
+             continue
+         m = _suffix_re.search(raw)
++        line = ""
+         if m:
+             token, sfx = raw[:m.start()], m.group(1)
+             line = sfx if re.fullmatch(r"\d+(?:-\d+)?", sfx) else ""
+         else:
+-            token, line = raw, ""
+-        if "/" not in token or (token, line) in seen:
++            token = raw
++        if anchors and not line:
++            ma = re.search(r"#L(\d+)(?:-L?\d+)?$", token)
++            if ma:
++                token, line = token[:ma.start()], ma.group(1)
++        pin = None
++        last = token.rsplit("/", 1)[-1]
++        # 只有 @ 後面不含「.」才當釘版本:`icon@2x.png`、`run@v2.sh` 這種檔名本來就有 @(代碼審 r1 單reviewer:
++        # 原本一律切開,refcheck 與設計審的 G1 把真檔判成不存在)
++        if "@" in last and "." not in last.rsplit("@", 1)[1]:
++            token, pin = token.rsplit("@", 1)
++        if "/" not in token:
++            if singles is not None and line and token and (token, line, pin) not in seen:
++                seen.add((token, line, pin))
++                singles.append((token, line, pin))
+             continue
+         if token.split("/")[0] not in top_dirs:
+             continue
++        if pin is not None and pins is not None:
++            # 要知道釘了哪個提交的呼叫端:釘版本只進 pins、不進 full——不然同一行「合法釘版本 + 未釘的同一個引用」
++            # 會被 (路徑, 行號) 去重吃掉後面那個(代碼審 r1 外家席)
++            if (token, line, pin) not in pins:
++                pins.append((token, line, pin))
++            continue
++        if (token, line) in seen:
++            continue
+         seen.add((token, line))
+         full.append((token, line))
+     return full, {s for s in spans if "/" not in s}
+ 
+ 
++# 裸寫的 `路徑:行號` / `路徑#L行號` / `路徑@提交:行號`(筆記形狀擋 [S1]):前面不能緊貼路徑字元,
++# 路徑至少要有 / 或副檔名的點(擋掉 d12:3 這類決策編號、12:30 這類時間)
++_NODE_BARE_REF_RE = re.compile(
++    r"(?<![A-Za-z0-9_./@\-])(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_\-]*[./][A-Za-z0-9_.\-]*"
++    r"(?:@[A-Za-z0-9_.\-~^]+)?(?::\d+(?:-\d+)?|#L\d+)(?![\w/])")
++
++
+ def _refcheck_scan(text, repo_root):
+     """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+     cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+     核對段走 _validate_repo_ref(與 Check J 共用);抽取段(inline-code+top_dirs 過濾)維持原規則。"""
+     top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+-    full, _bare = _node_code_ref_tokens(text, top_dirs)
++    pins = []
++    full, _bare = _node_code_ref_tokens(text, top_dirs, pins=pins)
+     claims = []
++    # 釘版本 `路徑@<提交>:行號` 對那個提交驗(筆記形狀擋 [S2]):不這樣做,它會被當成一支叫「路徑@提交」、
++    # 或行號對不上目前版本的檔,設計審放行前的引用檢查就把合法寫法判成幻覺證據
++    for token, line, pin in pins:
++        sha = _pin_commit(repo_root, pin)
++        status, excerpt = _validate_repo_ref(repo_root, token, line, at_sha=sha) if sha else ("missing", "")
++        claims.append({"token": f"{token}@{pin}", "line": line, "status": status, "excerpt": excerpt})
+     for token, line in full:
+         status, excerpt = _validate_repo_ref(repo_root, token, line)
+         claim = {"token": token, "line": line, "status": status, "excerpt": excerpt}
+         if status == "ok" and (repo_root / token).is_dir():
+             claim["dir"] = True
+         claims.append(claim)
+ 
+     n_missing = sum(1 for c in claims if c["status"] == "missing")
+     n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
+     n_ok = sum(1 for c in claims if c["status"] == "ok")
+@@ -22760,27 +22825,34 @@ def _nodehome_merge_wrote_new_lines(merged, olds):
+     ★為什麼 remerge-diff 列出來還不夠★(2026-09-25 rtb-production-agent-demo 回報,remerge-diff 修法之後又一次):
+     只要有衝突,git 重做的自動合併裡就留著衝突標記,所以每一支解過衝突的檔都會被列成合併改的——
+     就算解法只是把兩邊段落都留下。那時筆記被當成合併新寫的說明,跟同一個合併裡別的程式湊成一對誤擋。
+     實際核對那三個合併:被判寫錯家的三篇筆記與一支程式,解衝突後多出的每一行都在某個上一版找得到。
+     ★直接拿合併結果比兩個上一版,不再逐檔重做合併★(代碼審 r1 通才席量代價):git 自動合併只會產出
+     來自兩邊的行(外加衝突標記),所以「解衝突時新寫的行」就是「合併結果裡兩個上一版都沒有的行」。
+     逐檔重做合併的版本,200 支衝突檔多花 8.7 秒;內容一次批次讀完,見 _nodehome_cat_blobs。
+     ★天花板★:比的是「整行有沒有出現在上一版的任何地方」,解衝突時只刪不加(挑一邊、刪一段)不算寫;
+     新寫的行剛好跟上一版別處某一行一字不差也會漏算——這兩種偏向少擋。改名要靠 git 認得出來(每個上一版
+     各自對合併結果偵測);內容改太多、git 認不出是改名時,那一邊的內容讀不到,會偏向多擋(照舊查)。"""
++    new = _merge_new_lines(merged, olds)
++    return True if new is None else bool(new)
++
++
++def _merge_new_lines(merged, olds):
++    """合併結果裡「每一個上一版都找不到」的那些行(去頭尾空白後的位元組集合);判不了回 None。
++    從 _nodehome_merge_wrote_new_lines 拆出來(筆記形狀擋 [S5] 要的是哪幾行,不是有沒有);天花板見那支的說明。"""
+     if merged is None or b"\0" in merged:
+-        return True
++        return None
+     seen = set()
+     for blob in olds:
+         if blob is not None:
+             seen.update(ln.strip() for ln in blob.split(b"\n"))
+-    return any(ln.strip() and ln.strip() not in seen for ln in merged.split(b"\n"))
++    return {ln.strip() for ln in merged.split(b"\n") if ln.strip() and ln.strip() not in seen}
+ 
+ 
+ def _nodehome_commit_groups(repo_root, base, tip):
+     """推送前:範圍裡每個提交各自改了哪些路徑(改名兩邊都算)。git 失敗回 None(退回整批一個提交)。
+     每個提交回 {sha, parents, paths, src, gone}:src=這個提交裡改名的新路徑→舊路徑、gone=刪掉或改名掉的舊路徑。
+     ★合併提交也要查★(代碼審 r3 單reviewer:原本整個排除,解衝突時在合併提交裡順手寫的說明、改的程式都沒人看):
+     只算它自己多改的:兩邊合併用 git 的 remerge-diff(跟 git 自動合併會產生的結果比,兩邊都改過、git 自動合起來的
+     不算);拿不到精確答案時(舊 git、專案設了自訂合併驅動器、三條以上的章魚合併)退回「跟每一個上一版都不一樣的
+     路徑」——這個退路會把自動合起來的檔也算進來、可能誤擋。照搬某一邊進來的,那一邊的提交已經各自查過。"""
+     raw = _nodehome_git(repo_root, "rev-list", "--reverse", "--parents", f"{base}..{tip}" if base else tip)
+@@ -22844,34 +22916,35 @@ def _nodehome_mark_note_content(repo_root, groups, vault_rel):
+             for x in [n] + olds:
+                 if x is not None:
+                     own |= {k for k in (_nodehome_key(v) for v in x["about"]) if k}
+                     statuses.add(x["status"])
+             # 狀態看這個提交前後兩版(代碼審 r3 單reviewer:只看之後的,「這個提交降成 planned 順便寫、下一個再升回來」就繞過了)
+             notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
+         g["content_notes"] = notes
+     return groups
+ 
+ 
+-def _nodehome_golive(repo_root, tip):
+-    """[S39] 這個 repo 裡「提交前掛鉤第一次包含這道檢查」的那個提交(tip 的歷史裡最早那一個);沒有回 None。"""
+-    raw = _nodehome_git(repo_root, "log", "--reverse", "--format=%H", f"-S{_NODEHOME_GOLIVE_MARK}",
++def _nodehome_golive(repo_root, tip, mark=None):
++    """[S39] 這個 repo 裡「提交前掛鉤第一次包含這道檢查」的那個提交(tip 的歷史裡最早那一個);沒有回 None。
++    mark=要找的標記字串,預設是每支檔有家自己的;筆記形狀擋傳它自己的(Projects/筆記形狀擋_計劃 [S4])。"""
++    raw = _nodehome_git(repo_root, "log", "--reverse", "--format=%H", f"-S{mark or _NODEHOME_GOLIVE_MARK}",
+                         tip or "HEAD", "--", "scripts/hooks/pre-commit")
+     if not raw:
+         return None
+     first = raw.split(b"\n", 1)[0].strip().decode("ascii", errors="replace")
+     return first if _LENS_SHA_RE.match(first) else None
+ 
+ 
+-def _nodehome_clamp_base(repo_root, base, tip):
++def _nodehome_clamp_base(repo_root, base, tip, mark=None):
+     """推送前的範圍起點若早於上線點,改從上線點算:上線前進來的東西是舊帳,不是這次推送的新違規
+-    (新接上的遠端、或整段歷史被當成新改動時,不會把舊帳誤擋成新違規)。"""
+-    gl = _nodehome_golive(repo_root, tip)
++    (新接上的遠端、或整段歷史被當成新改動時,不會把舊帳誤擋成新違規)。mark 見 _nodehome_golive。"""
++    gl = _nodehome_golive(repo_root, tip, mark)
+     if gl is None:
+         return base
+     r = _lens_git(repo_root, "merge-base", "--is-ancestor", gl, tip)
+     if r is None or r.returncode != 0:
+         return base                                    # 上線點不在這條歷史上
+     if base in (None, _EMPTY_TREE_SHA):
+         return gl
+     r = _lens_git(repo_root, "merge-base", "--is-ancestor", base, gl)
+     return gl if (r is not None and r.returncode == 0 and base != gl) else base
+ 
+@@ -23351,20 +23424,530 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
+     if res["pairs"]:
+         extra["pairs"] = [list(x) for x in res["pairs"][:100]]
+     if notes_:
+         extra["notes"] = sorted(notes_)[:50]
+     _gate_event_or_warn(root, "nodehome-check", kind,
+                         f"{mode_word}:新違規 {len(res['blocks'])} 條" + ("(warn 模式不擋)" if blocked and cfg["mode"] == "warn" else ""),
+                         hard=(kind == "blocked"), nodes=sorted(files)[:50], extra=extra or None)
+     return 1 if kind == "blocked" else 0
+ 
+ 
++# ── 筆記形狀擋(Projects/筆記形狀擋_計劃,2026-09-27;Issue 筆記把程式現況寫進脈絡而漂移_rtb實測回饋 d1–d6、d8)──
++# 筆記不留存程式碼推得出來的東西。這一層只擋形狀固定、機械判得準的兩種(看意思的交給第二層審查員):
++# ①新寫的程式行號引用(行號一改碼就錯位) ②新寫的 FACT/FLOW/DEP 摘要行沒寫出程式碼答不了的來源。
++# 只看這次新增或改動的行(d2:舊筆記不回頭清);範圍、上線點、合併照每支檔有家的算法。
++_NOTE_SHAPE_GOLIVE_MARK = "note-shape --staged"     # 提交前掛鉤裡有這串=這道檢查上線了(上線點截斷用)
++_NOTE_SHAPE_GATE_VALUES = ("block", "warn", "off")
++_NS_DOCTOR_SCAN_CAP = 200                            # doctor 事後掃描最多看幾個提交(每個約 20 ms)
++_NS_PIN_HEX_RE = re.compile(r"^[0-9a-fA-F]{12,40}$")
++_NS_STRUCT_KEY_RE = re.compile(r"^\s*(?:-\s+)?(id|decided|valid|superseded_by|ended|decided_by|replaces)\s*:")
++
++
++def _pin_commit(repo_root, pin):
++    """釘版本 `@<提交>` 的提交字串 → 完整提交編號;不合法回 None(筆記形狀擋 [S2])。
++    ★至少 12 位十六進位★(HEAD、分支名、標籤、main~1 這類會移動的名字不收);★解析結果要以它開頭★
++    (剛好取名成十六進位的分支會被 git 當分支解析,指到的是會移動的分支頂端);★要在某個本機或遠端追蹤分支的歷史上★
++    (用 git commit-tree 在本機捏造、從沒進過任何分支的提交物件,只查存在性會被放過——r3 正確性席實測)。"""
++    if not pin or not _NS_PIN_HEX_RE.match(pin):
++        return None
++    full = _lens_full_sha(repo_root, pin)
++    if not full or not full.lower().startswith(pin.lower()):
++        return None
++    r = _lens_git(repo_root, "for-each-ref", "--count=1", "--contains", full, "--format=%(refname)",
++                  "refs/heads", "refs/remotes")
++    if r is None or r.returncode != 0 or not r.stdout.strip():
++        return None
++    return full
++
++
++def _note_shape_config(text):
++    """note_shape 設定(從被檢查的版本讀,照 _nodehome_config 的快照讀法):回 (mode, warnings)。
++    mode ∈ block/warn/off;沒設或壞值=block。★鍵叫 mode 不叫 gate★ 的理由同 _nodehome_config。"""
++    if text is None:
++        return "block", []
++    raw = text.decode("utf-8-sig", errors="replace") if isinstance(text, (bytes, bytearray)) else str(text)
++    try:
++        data = json.loads(raw)
++    except Exception as e:
++        return "block", [f".lumos/config.json 讀不了({e.__class__.__name__}),筆記形狀擋照預設擋"]
++    ns = data.get("note_shape") if isinstance(data, dict) else None
++    if ns is None:
++        return "block", []
++    if not isinstance(ns, dict):
++        return "block", ["設定檔的 note_shape 不是物件,筆記形狀擋照預設擋"]
++    g = ns.get("gate", "block")
++    if g not in _NOTE_SHAPE_GATE_VALUES:
++        return "block", [f"設定檔的 note_shape.gate={g!r} 看不懂(只認 {'/'.join(_NOTE_SHAPE_GATE_VALUES)}),照預設擋"]
++    return g, []
++
++
++def _ns_regions(text):
++    """筆記每一行落在哪一塊 → 清單(跟行一一對應):body / summary / decisions / other。
++    decisions 裡鍵名是結構鍵(id、decided、valid…)的行算 other。開頭欄位的邊界與頂層鍵沿用全庫共用的
++    split_frontmatter / TOP_KEY_RE(代碼審 r1 架構對齊席:原本自己又刻一套);用行範圍判,不靠解析欄位值——縮排怎麼寫都認得到。"""
++    lines = text.split("\n")
++    fm, _body = split_frontmatter(text)
++    if fm is None:
++        if text.startswith("---"):
++            return ["other"] * len(lines)        # 開頭欄位沒關:整篇不判(lint 會擋)
++        return ["body"] * len(lines)
++    out = ["body"] * len(lines)
++    end = len(fm) + 1                            # 收尾 --- 那一行
++    out[0] = out[end] = "other"
++    cur = "other"
++    for i in range(1, end):
++        ln = lines[i]
++        m = TOP_KEY_RE.match(ln)
++        if m:
++            k = m.group(1)
++            cur = "summary" if k == "summary" else ("decisions" if k == "decisions" else "other")
++            out[i] = "other"
++            continue
++        out[i] = "other" if (cur == "decisions" and _NS_STRUCT_KEY_RE.match(ln)) else cur
++    return out
++
++
++def _ns_parse_added(raw):
++    """git diff -U0 輸出 → {新路徑: [(新行號, 行文字)]}。"""
++    out, path, n = {}, None, 0
++    for ln in raw.decode("utf-8", errors="surrogateescape").split("\n"):
++        if ln.startswith("+++ "):
++            p = ln[4:].rstrip("\t")                # 含空白的檔名 git 會在檔頭尾端補一個 TAB
++            path = nfc(p[2:]) if p.startswith("b/") else None
++            continue
++        if ln.startswith("@@"):
++            m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
++            n = int(m.group(1)) if m else 0
++            continue
++        if path is None or ln.startswith("---"):
++            continue
++        if ln.startswith("+"):
++            out.setdefault(path, []).append((n, ln[1:]))
++            n += 1
++    return out
++
++
++def _ns_git(repo_root, *args):
++    """跑 git、位元組照回;★路徑不加引號★(core.quotePath=false)——預設設定下中文與特殊字元檔名會被印成
++    帶引號的跳脫字串,解析不到路徑、整篇漏查(代碼審 r1 單reviewer 與外家席各自實測:本 repo 大半筆記是中文檔名)。"""
++    r = _lens_git(repo_root, *args, quote=True, binary=True)
++    if r is None or r.returncode != 0:
++        return None
++    return r.stdout
++
++
++def _ns_diff(repo_root, *args):
++    return _ns_git(repo_root, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
++                   "--src-prefix=a/", "--dst-prefix=b/", *args)
++
++
++def _ns_mainline_refs(repo_root):
++    """各遠端的預設分支參照(refs/remotes/<遠端>/HEAD 指到的那條,沒有就 main、master)。
++    推送範圍只排除「已經在主線上」的提交——★不排除所有遠端分支★:先用 --no-verify 推到別的分支、再推主線,
++    那些提交從沒被查過(代碼審 r1 單reviewer 與外家席各自實測繞過)。"""
++    rr = _lens_git(repo_root, "remote")
++    remotes = rr.stdout.split() if rr is not None and rr.returncode == 0 else []
++    out = []
++    for rm in remotes:
++        s = _lens_git(repo_root, "symbolic-ref", "-q", f"refs/remotes/{rm}/HEAD")
++        cands = [s.stdout.strip()] if s is not None and s.returncode == 0 and s.stdout.strip() else []
++        cands += [f"refs/remotes/{rm}/main", f"refs/remotes/{rm}/master"]
++        for c in cands:
++            if _lens_full_sha(repo_root, c):
++                out.append(c)
++                break
++    return out
++
++
++def _ns_range_added(repo_root, base, tip, vault_rel, exclude_remote=True):
++    """推送前:範圍裡每個提交各自新增的筆記行文字 → (集合, 範圍淨改動的筆記路徑)。git 失敗回 None。
++    ★合併提交只算它自己寫的★:合併結果裡每一個上一版都找不到的行(_merge_new_lines);
++    ★已經在主線上的提交不重查★(exclude_remote,見 _ns_mainline_refs)。"""
++    rl = ["rev-list", "--reverse", "--parents", f"{base}..{tip}" if base else tip]
++    if exclude_remote:
++        ml = _ns_mainline_refs(repo_root)
++        if ml:
++            rl += ["--not", *ml]
++    raw = _nodehome_git(repo_root, *rl)
++    if raw is None:
++        return None
++    texts = set()
++    for line in raw.decode("ascii", errors="replace").splitlines():
++        shas = line.split()
++        if not shas:
++            continue
++        sha, parents = shas[0], shas[1:]
++        if len(parents) <= 1:
++            d = _ns_diff(repo_root, parents[0] if parents else _EMPTY_TREE_SHA, sha, "--", vault_rel)
++            if d is None:
++                return None
++            for _p, rows in _ns_parse_added(d).items():
++                texts.update(t_.strip() for _n, t_ in rows if t_.strip())
++            continue
++        names = _ns_git(repo_root, "diff", "--name-only", "-z", "-M", parents[0], sha, "--", vault_rel)
++        if names is None:
++            return None
++        paths = [p for p in _nodehome_split_z(names) if p.endswith(".md")]
++        specs = []
++        for p in paths:
++            specs.append(f"{sha}:{p}")
++            specs += [f"{pp}:{p}" for pp in parents]
++        blobs = _nodehome_cat_blobs(repo_root, specs) if specs else []
++        k = 1 + len(parents)
++        for i, p in enumerate(paths):
++            merged, *olds = (blobs[i * k:(i + 1) * k] if blobs is not None else [None] * k)
++            new = _merge_new_lines(merged, olds) if blobs is not None else None
++            if new is None:                       # 判不了:照一般提交跟第一個上一版比(多查不漏查)
++                d = _ns_diff(repo_root, parents[0], sha, "--", p)
++                if d is None:
++                    return None
++                for _p, rows in _ns_parse_added(d).items():
++                    texts.update(t_.strip() for _n, t_ in rows if t_.strip())
++            else:
++                texts.update(x.decode("utf-8", errors="surrogateescape") for x in new)
++    net = _ns_git(repo_root, "diff", "--name-only", "-z", "-M", "--diff-filter=AMR", base or _EMPTY_TREE_SHA, tip, "--", vault_rel)
++    if net is None:
++        return None
++    return texts, [p for p in _nodehome_split_z(net) if p.endswith(".md")]
++
++
++def _ns_is_code(path, reader, files):
++    """這個路徑在被檢查的版本裡是不是程式檔或測試檔(副檔名清單或開頭 #!;測試也算;只收一般檔)。"""
++    if path not in files:
++        return False
++    kind = _nodehome_code_kind(path)
++    if kind == "ext":
++        return True
++    if kind != "shebang?":
++        return False
++    b = reader(path)
++    return b is not None and _head_is_shebang(b[:200])
++
++
++_NS_SRC_MARK_RE = re.compile(r"\[src:[^\]]*\]")
++_NS_POINTER_ONLY_RE = re.compile(r"^(?:\s*(?:\[\[[^\]]+\]\]|見|→|,|,|、|\||｜)\s*)*$")
++
++
++def _ns_check_line(repo_root, text, region, files, reader, top_dirs, by_name):
++    """一行新增內容 → [(規則, 片段, 改法)]。"""
++    out = []
++    # [src:路徑:行號] 是從程式碼重建的筆記的出處標記,歸重建守衛(Check J)驗,不歸這道(代碼審 r1 單reviewer)
++    scan = _NS_SRC_MARK_RE.sub(" ", text)
++    pins, singles = [], []
++    full, _bare = _node_code_ref_tokens(scan, top_dirs, bare_text=True, anchors=True, keep_fences=True,
++                                        pins=pins, singles=singles)
++    fix_pin = ("`@` 後面要是至少 12 位、在某個分支歷史上的提交編號,而且那個提交裡這支檔有這一行;"
++               "HEAD、分支名、標籤會移動,不算釘住")
++
++    def _pin_ok(p, l, s):
++        sha = _pin_commit(repo_root, s)
++        return sha is not None and _validate_repo_ref(repo_root, p, l, at_sha=sha)[0] == "ok"
++
++    for p, l, s in pins:
++        # 路徑在被檢查的版本裡不存在(舉例、別的專案)就不管——跟沒釘版本時一致(代碼審 r1 測試席)
++        if l and p in files and not _pin_ok(p, l, s):
++            out.append(("釘版本不合法", f"`{p}@{s}:{l}`", fix_pin))
++    for p, l in full:
++        if l and _ns_is_code(p, reader, files):
++            out.append(("程式行號引用", f"`{p}:{l}`",
++                        f"行號一改碼就錯位:改寫成「哪支檔的哪個函式」、要指測試就寫測試名,或釘版本 `{p}@<至少12位提交編號>:{l}`"))
++    for name, l, s in singles:
++        cands = by_name.get(name, [])
++        if len(cands) != 1:
++            continue
++        if s is None:
++            out.append(("程式行號引用", f"`{name}:{l}`(= {cands[0]})",
++                        f"行號一改碼就錯位:改寫成「哪支檔的哪個函式」,或釘版本 `{cands[0]}@<至少12位提交編號>:{l}`"))
++        elif not _pin_ok(cands[0], l, s):
++            out.append(("釘版本不合法", f"`{name}@{s}:{l}`(= {cands[0]})", fix_pin))
++    if region == "summary":
++        m = SYMBOL_RE.match(text.strip())
++        body = text.strip()[len(m.group(1)) + 1:] if m else ""
++        # 骨架留的空前綴(lumos new 產的 FLOW:/DEP:)、只放連結的指路行,不是現況描述(代碼審 r1 單reviewer、外家席)
++        if m and not _NS_POINTER_ONLY_RE.match(body):
++            for _w in context_marker_warnings(text, rules=_NOTE_SHAPE_PREFIX_RULES):
++                out.append(("現況描述沒寫來源", text.strip()[:60],
++                            "只准寫程式碼答不了的現況並帶 [來源:部署|資料庫|生產|外部|人工];程式碼查得到的就刪掉"))
++    return out
++
++
++def _ns_became_code(repo_root, base_where, tip_where, reader_tip):
++    """範圍內「起點不是程式檔、終點是」的路徑(新增、改名過來、加 #!、類型改變都算)。"""
++    ch = _nodehome_changes(repo_root, base_where, tip_where)
++    if ch is None:
++        return []
++    lst_t = _nodehome_list(repo_root, tip_where)
++    lst_b = _nodehome_list(repo_root, base_where)
++    if lst_t is None or lst_b is None:
++        return []
++    reader_b = _nodehome_reader(repo_root, base_where)
++    out = []
++    for code, old, new in ch:
++        if not new or code == "D":
++            continue
++        if not _ns_is_code(new, reader_tip, lst_t[0]):
++            continue
++        prev = old or new
++        if prev not in lst_b[0] or not _ns_is_code(prev, reader_b, lst_b[0]):
++            out.append(new)
++    return out
++
++
++def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None):
++    """算這次的違規 → (violations[(筆記路徑, 行號, 規則, 片段, 改法)], errors[訊息])。"""
++    reader = _nodehome_reader(repo_root, tip_where)
++    lst = _nodehome_list(repo_root, tip_where)
++    if lst is None:
++        return None
++    files = lst[0]
++    top_dirs = {p.split("/", 1)[0] for p in files if "/" in p}
++    by_name = {}
++    for p in files:
++        # 只算真的程式檔:沒副檔名的要看得到 #! 才算(代碼審 r1 外家席:同名純文字檔讓唯一程式檔的單一檔名漏抓)
++        if _nodehome_code_kind(p) is not None and _ns_is_code(p, reader, files):
++            by_name.setdefault(p.rsplit("/", 1)[-1], []).append(p)
++    viol, errs = [], []
++    # 1) 這次新增的行
++    if staged:
++        d = _ns_diff(repo_root, "--cached", "--", vault_rel)
++        if d is None:
++            return None
++        added = {p: rows for p, rows in _ns_parse_added(d).items() if p.endswith(".md")}
++        cand = {p: {n for n, _t in rows} for p, rows in added.items()}
++        texts = None
++    else:
++        ra = _ns_range_added(repo_root, base_where, tip_where, vault_rel, exclude_remote)
++        if ra is None:
++            return None
++        texts, paths = ra
++        cand = {p: None for p in paths}
++    for p, linenos in sorted(cand.items()):
++        b = reader(p)
++        if b is None:
++            continue
++        try:
++            text = b.decode("utf-8-sig")        # 帶 BOM 的筆記照認(全庫讀取器都用 utf-8-sig;代碼審 r1 兩席)
++        except UnicodeDecodeError:
++            errs.append(f"{p}:這篇筆記不是 UTF-8 文字,檢查不了——轉成 UTF-8 再提交")
++            continue
++        lines = text.split("\n")
++        regs = _ns_regions(text)
++        for i, ln in enumerate(lines, 1):
++            if linenos is not None and i not in linenos:
++                continue
++            if texts is not None and ln.strip() not in texts:
++                continue
++            if not ln.strip() or regs[i - 1] == "other":
++                continue
++            for rule, frag, fix in _ns_check_line(repo_root, ln, regs[i - 1], files, reader, top_dirs, by_name):
++                viol.append((p, i, rule, frag, fix))
++    # 2) 新程式檔喚醒舊引用(筆記這次沒改也查;上線點版本裡就有的那行是舊帳,不算)
++    became = _ns_became_code(repo_root, base_where if not staged else _lens_full_sha(repo_root, "HEAD"),
++                             tip_where, reader)
++    if became:
++        gl = _nodehome_golive(repo_root, tip_where if tip_where != "index" else "HEAD", mark or _NOTE_SHAPE_GOLIVE_MARK)
++        if gl is not None:
++            # 被檢查版本裡所有筆記一次批次讀進來比對(照每支檔有家「新增的檔喚醒沒改的節點」在記憶體比對的做法;
++            # 代碼審 r1 架構對齊席:原本另開 git grep 再手拆輸出,是第二種做法)
++            notes_ = [x for x in files if x.startswith(vault_rel + "/") and x.endswith(".md")]
++            spec = "" if tip_where == "index" else tip_where
++            blobs = _nodehome_cat_blobs(repo_root, [f"{spec}:{x}" for x in notes_]) or []
++            gl_reader = _nodehome_reader(repo_root, gl)
++            seen = {(v[0], v[1]) for v in viol}
++            for p, blob in zip(notes_, blobs):
++                if blob is None:
++                    continue
++                text = blob.decode("utf-8-sig", errors="replace")
++                if not any(x in text for x in became):
++                    continue
++                old = None
++                for n, ln in enumerate(text.split("\n"), 1):
++                    if (p, n) in seen or not any(x in ln for x in became):
++                        continue
++                    if old is None:
++                        ob = gl_reader(p)
++                        old = {x.strip() for x in ob.decode("utf-8-sig", errors="replace").split("\n")} if ob is not None else set()
++                    if ln.strip() in old:
++                        continue
++                    fl, _b = _node_code_ref_tokens(_NS_SRC_MARK_RE.sub(" ", ln), top_dirs, bare_text=True,
++                                                   anchors=True, keep_fences=True, pins=[])
++                    for tok, l in fl:
++                        if tok in became and l:
++                            viol.append((p, n, "程式行號引用(新程式檔喚醒)", f"`{tok}:{l}`",
++                                         f"這支檔這次才變成程式檔,舊筆記裡指向它的行號也會錯位:改寫或釘版本 `{tok}@<提交編號>:{l}`"))
++    return viol, errs
++
++
++def _note_shape_doctor_lines(repo_root, vault, ci=False):
++    """lumos doctor 開頭的筆記形狀擋提醒(Projects/筆記形狀擋_計劃 [S8][S11]):
++    ①開關不是 block 就講(照 node_home.gate 先例:關掉要看得見);②專案 CI 沒呼叫 note-shape --diff、
++    或沒抓完整歷史(淺層 clone 算不出範圍)就給要貼的那一步——lumos update 不會動各專案的 CI 設定;
++    ③上線點之後、已推上遠端卻違反兩條規則的新增行(抓 --no-verify 繞過)。"""
++    out = []
++    root = Path(repo_root)
++    cp = root / ".lumos" / "config.json"
++    txt = None
++    try:
++        # 整條路徑都要看:.lumos 資料夾本身是捷徑也不跟過去讀(同 _nodehome_config;代碼審 r1 架構對齊席)
++        if cp.is_file() and not cp.is_symlink() and cp.resolve() == root.resolve() / ".lumos" / "config.json":
++            txt = cp.read_bytes()
++    except OSError:
++        txt = None
++    mode, _w = _note_shape_config(txt)
++    if mode != "block":
++        out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
++                   "沒寫來源的現況描述不會被擋")
++    wf = root / ".github" / "workflows"
++    ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
++    if ymls:
++        body = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in ymls)
++        step = ("- run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
++                "python3 scripts/lumos note-shape --diff \"${{ github.event.before }}..${{ github.sha }}\" "
++                "(checkout 要設 fetch-depth: 0;新分支首推前一版全零時改從空樹給,lumos 會自己截到上線點)")
++        if "note-shape --diff" not in body:
++            out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
++        elif "fetch-depth: 0" not in body:
++            out.append("專案 CI 呼叫了 note-shape,但沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過")
++    if ci:
++        # 推送前與 CI 已經用 note-shape --diff 查這次的範圍;事後掃描逐提交重算、會隨歷史線性變慢(代碼審 r1 單reviewer
++        # 量到 500 個提交 9 秒),不放在每次推送都跑的 --ci 路徑上
++        return out
++    gl = _nodehome_golive(root, "HEAD", _NOTE_SHAPE_GOLIVE_MARK)
++    if gl is None:
++        return out
++    ref = None
++    up = _lens_git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
++    if up is not None and up.returncode == 0 and up.stdout.strip():
++        ref = up.stdout.strip()
++    else:
++        br = _lens_git(root, "rev-parse", "--abbrev-ref", "HEAD")
++        name = br.stdout.strip() if br is not None and br.returncode == 0 else ""
++        rr = _lens_git(root, "for-each-ref", "--format=%(refname)", f"refs/remotes/*/{name}") if name else None
++        cands = rr.stdout.split() if rr is not None and rr.returncode == 0 else []
++        ref = cands[0] if cands else None
++    tip = _lens_full_sha(root, ref) if ref else None
++    if tip is None:
++        return out
++    a = _lens_git(root, "merge-base", "--is-ancestor", gl, tip)
++    if a is None or a.returncode != 0:
++        return out
++    try:
++        vault_rel = Path(vault).resolve().relative_to(root.resolve()).as_posix()
++    except ValueError:
++        return out
++    base, capped = gl, False
++    cnt = _lens_git(root, "rev-list", "--count", f"{gl}..{tip}")
++    if cnt is not None and cnt.returncode == 0 and cnt.stdout.strip().isdigit() and int(cnt.stdout.strip()) > _NS_DOCTOR_SCAN_CAP:
++        b2 = _lens_full_sha(root, f"{tip}~{_NS_DOCTOR_SCAN_CAP}")
++        if b2:
++            base, capped = b2, True
++    res = _note_shape_eval(root, False, base, tip, vault_rel, exclude_remote=False)
++    if capped:
++        out.append(f"(筆記形狀擋的事後掃描只看遠端最近 {_NS_DOCTOR_SCAN_CAP} 個提交,更早的沒掃)")
++    if res:
++        viol, errs = res
++        if viol:
++            shown = "; ".join(f"{p}:{n} {rule} {frag}" for p, n, rule, frag, _f in viol[:10])
++            more = f"(另有 {len(viol) - 10} 處)" if len(viol) > 10 else ""
++            out.append(f"已推上遠端({ref})卻違反筆記形狀擋的新增行 {len(viol)} 處(多半是 --no-verify 繞過):{shown}{more}")
++    return out
++
++
++def cmd_note_shape(repo=None, staged=False, diff_range=None):
++    """lumos note-shape --staged | --diff A..B(Projects/筆記形狀擋_計劃):有新違規 rc1,沒有 rc0;參數錯 rc2。
++    不是 git、git 算不出來、淺層 clone、合併中、開關 off → 說一句、rc0(fail-open;推送前與 CI 會再跑)。
++    ★設定與內容都從被檢查的版本讀★(提交前=提交索引、推送前=終點提交),工作目錄沒暫存的東西不算。
++    有違規(擋下,或 warn 模式的提醒)與跳過才寫治理帳,沒違規的放行不寫——刻意跟每支檔有家每次都寫 passed 不同:
++    每次提交一筆沒資訊的行正是 rtb 回饋抱怨的帳本雜訊。"""
++    root = Path(repo).resolve() if repo else None
++    if root is None:
++        r = _lens_git(".", "rev-parse", "--show-toplevel")
++        if r is None or r.returncode != 0:
++            print("筆記形狀擋:這裡不是 git 專案,跳過", file=sys.stderr)
++            return 0
++        root = Path(r.stdout.strip())
++    r = _lens_git(root, "rev-parse", "--is-inside-work-tree")
++    if r is None or r.returncode != 0:
++        print("筆記形狀擋:這裡不是 git 專案,跳過", file=sys.stderr)
++        return 0
++    if os.environ.get("LUMOS_SKIP_NOTE_SHAPE"):
++        print("筆記形狀擋:LUMOS_SKIP_NOTE_SHAPE 設了,這次跳過(已記進治理帳)", file=sys.stderr)
++        _gate_event_or_warn(root, "note-shape", "skipped-env", "LUMOS_SKIP_NOTE_SHAPE")
++        return 0
++    if staged:
++        mh = _lens_git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD")
++        if mh is not None and mh.returncode == 0:
++            print("筆記形狀擋:合併提交跳過(推送前只查合併自己多寫的行)", file=sys.stderr)
++            return 0
++        base_where, tip_where, mode_word = _lens_full_sha(root, "HEAD"), "index", "這次提交"
++    else:
++        rg = _lens_range_ok(diff_range)
++        if rg is None:
++            print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有", file=sys.stderr)
++            return 2
++        sh = _lens_git(root, "rev-parse", "--is-shallow-repository")
++        if sh is not None and sh.stdout.strip() == "true":
++            print("筆記形狀擋:淺層 clone 算不出範圍(找不到上線點與上一個提交),這次不查——CI 請設 fetch-depth: 0",
++                  file=sys.stderr)
++            _gate_event_or_warn(root, "note-shape", "skipped-env", "shallow clone")
++            return 0
++        a, b = rg
++        tip = _lens_full_sha(root, b)
++        base = a if a == _EMPTY_TREE_SHA else _lens_full_sha(root, a)
++        if tip is None or base is None:
++            print(f"筆記形狀擋:範圍 {diff_range} 在本機找不到,跳過(fail-open)", file=sys.stderr)
++            return 0
++        base = _nodehome_clamp_base(root, base, tip, _NOTE_SHAPE_GOLIVE_MARK)
++        base_where = None if base == _EMPTY_TREE_SHA else base
++        tip_where, mode_word = tip, "這次推送"
++    lst = _nodehome_list(root, tip_where)
++    if lst is None:
++        print("筆記形狀擋:git 讀不到檔案清單,跳過(fail-open)", file=sys.stderr)
++        return 0
++    vaults = sorted({_vault_slug_of(p) for p in lst[1]} - {None})
++    if not vaults:
++        print("筆記形狀擋:這個專案沒有圖譜,跳過")
++        return 0
++    wv = _vault_in(root)
++    wv_rel = wv.resolve().relative_to(root.resolve()).as_posix() if wv is not None else None
++    vault_rel = wv_rel if (wv_rel and wv_rel.startswith("docs/") and wv_rel.split("/", 1)[1] in vaults) else "docs/" + vaults[0]
++    mode, warns = _note_shape_config(_nodehome_reader(root, tip_where)(".lumos/config.json"))
++    for w in warns:
++        print(f"提醒:{w}", file=sys.stderr)
++    if mode == "off":
++        print("筆記形狀擋:這個專案把這道檢查關掉了(note_shape.gate=off),跳過", file=sys.stderr)
++        return 0
++    res = _note_shape_eval(root, staged, base_where, tip_where, vault_rel)
++    if res is None:
++        print("筆記形狀擋:git 算不出這次的改動,跳過(fail-open)", file=sys.stderr)
++        return 0
++    viol, errs = res
++    if not viol and not errs:
++        return 0
++    head = "擋下" if mode == "block" else "提醒(note_shape.gate=warn,不擋)"
++    print(f"{head}:{mode_word}的筆記有新寫的、程式碼推得出來的形狀(筆記形狀擋)——", file=sys.stderr)
++    for e in errs:
++        print(f"  {e}", file=sys.stderr)
++    for p, n, rule, frag, fix in viol:
++        print(f"  {p}:{n}  {rule} {frag}:{fix}", file=sys.stderr)
++    if mode == "block":
++        print("內容還在工作目錄,改完再提交(這道檢查不動筆記、不動暫存區)。為什麼擋:筆記只留程式碼推不出來的東西,"
++              "推得出來的一寫進去就會過期——見 Projects/筆記形狀擋_計劃。", file=sys.stderr)
++        _gate_event_or_warn(root, "note-shape", "blocked", f"{mode_word}:新違規 {len(viol) + len(errs)} 條",
++                            hard=True, nodes=sorted({v[0] for v in viol} | {e.split(':', 1)[0] for e in errs})[:50])
++        return 1
++    # warn 模式有違規也記一筆(照鄰居的 warned;沒違規的放行才不寫——代碼審 r1 架構對齊席)
++    _gate_event_or_warn(root, "note-shape", "warned", f"{mode_word}:新違規 {len(viol) + len(errs)} 條(warn 模式不擋)",
++                        nodes=sorted({v[0] for v in viol})[:50])
++    return 0
++
++
+ # ── cochange:co-change 漏改守衛(vault-free;borrow-design ROSE error-prevention) ──
+ # 規則:conf(A⇒B)=shared/freq(A)(非對稱條件機率,ROSE TSE 2005 §5);support=絕對共改次數。
+ # 設計 spec:docs/lumos-toolchain-knowledge/Projects/cochange守衛_計劃.md
+ 
+ _COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 20}
+ _COCHANGE_DEFAULT_EXCLUDE = [
+     "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl", "docs/.ci-log.jsonl",
+     "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
+     "docs/.signoff-log.jsonl", "docs/.usage-log.jsonl",
+     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
+@@ -31003,20 +31586,21 @@ HELP_WHEN = {
+     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
++    "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西)。",
+     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
+     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+     "rules": "列出共改規則集。",
+     "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
+     "code-loop check": "我現在推得上去嗎:合約測試紅、觸發到的效能檢核題沒表態、tier=high 又沒有效留痕,任一成立就 BLOCKED,並講原因。",
+     "code-loop dispositions": "推送前對這次改動觸發到的棧別效能檢核題逐題表態(做到了附證據/不適用附理由/待辦連 Issue);樣板從 pitfalls --diff --dispositions-template 來。",
+     "code-loop recall-miss": "審查席抓到「對得上某未觸發題」的問題時登記一筆;同題累積 3 次 gov --stats 列成觸發太窄候選。",
+     "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
+     "code-loop": "推送前的留痕:pass 審過、skip 刻意不審、dispositions 對效能檢核題表態、check 現在推得上去嗎。",
+     "loop rewrite": "人裁判「整份重寫」後收尾:記 rewrite 事件+血緣(prev/successor)進治理帳;連續第二次判重寫會警告強制攤人。",
+@@ -31783,20 +32367,25 @@ def main():
+     ccc.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccc.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+ 
+     hm = sub.add_parser("home", help="每支檔有家:程式檔歸屬與寫回落點的檢查(提交前/推送前擋新違規);spec=Projects/每支檔有家_計劃")
+     hmsub = hm.add_subparsers(dest="hmcmd", required=True)
+     hmc = hmsub.add_parser("check", help="這次提交或這段推送有沒有新違規(有 rc1、沒有 rc0;沒圖譜/合併中/開關 off 跳過 rc0)")
+     hmc.add_argument("--staged", action="store_true", dest="hm_staged", help="看這次要提交的內容(提交索引);不能跟 --diff 一起用")
+     hmc.add_argument("--diff", dest="hm_diff", default=None, metavar="A..B", help="把範圍兩端當成一次改動比(推送前用);不能跟 --staged 一起用")
+     hmc.add_argument("--repo", dest="hm_repo", default=None, help="repo root(預設 cwd 所在的 git 專案)")
+ 
++    ns_p = sub.add_parser("note-shape", help="筆記形狀擋:新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP 擋下(有 rc1、沒有 rc0;跳過 rc0);spec=Projects/筆記形狀擋_計劃")
++    ns_p.add_argument("--staged", action="store_true", dest="ns_staged", help="看這次要提交的內容(提交索引);不能跟 --diff 一起用")
++    ns_p.add_argument("--diff", dest="ns_diff", default=None, metavar="A..B", help="推送範圍(推送前與 CI 用);不能跟 --staged 一起用")
++    ns_p.add_argument("--repo", dest="ns_repo", default=None, help="repo root(預設 cwd 所在的 git 專案)")
++
+     dg = sub.add_parser("delguard", help="code 側刪除傳播守衛(advisory):staged 被刪符號→grep vault 指名過期原句;spec=Projects/code側刪除傳播守衛_計劃")
+     dg.add_argument("--staged", action="store_true", help="掃 staged diff(目前唯一模式,旗標留語意)")
+     dg.add_argument("--json", action="store_true")
+     dg.add_argument("--repo")
+ 
+     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
+     clsub = cl.add_subparsers(dest="clcmd", required=True)
+     for _clname, _clhelp in (
+         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+@@ -31986,20 +32575,28 @@ def main():
+         # 兩個同給=用法錯誤(rc2),不靜默選邊(第二輪外家席);寫法同 loop status 的 --light/--panel——
+         # 不用 argparse 的互斥群組:整支工具只有這裡用它,而且它的錯誤訊息是英文(代碼審 r1 架構席)
+         # 用 is None 分「沒給」與「給了空字串」:--diff "" 是範圍寫錯,要走下面範圍判法講對原因(代碼審 r2 邊界席)
+         if args.hm_staged and args.hm_diff is not None:
+             print("擋下:--staged 和 --diff 不能一起用(一個看這次要提交的內容、一個看一段推送範圍,兩條不同的路),擇一", file=sys.stderr)
+             return 2
+         if not args.hm_staged and args.hm_diff is None:
+             print("擋下:lumos home check 要帶 --staged 或 --diff <起點>..<終點>", file=sys.stderr)
+             return 2
+         return cmd_home_check(repo=args.hm_repo, staged=args.hm_staged, diff_range=args.hm_diff)
++    if args.cmd == "note-shape":
++        if args.ns_staged and args.ns_diff is not None:
++            print("擋下:--staged 和 --diff 不能一起用,擇一", file=sys.stderr)
++            return 2
++        if not args.ns_staged and args.ns_diff is None:
++            print("擋下:lumos note-shape 要帶 --staged 或 --diff <起點>..<終點>", file=sys.stderr)
++            return 2
++        return cmd_note_shape(repo=args.ns_repo, staged=args.ns_staged, diff_range=args.ns_diff)
+     if args.cmd == "delguard":
+         return cmd_delguard_check(repo=args.repo, as_json=args.json)
+     if args.cmd == "bound-tests":
+         if args.bt_skip and not (args.bt_note or "").strip():
+             print("擋下:--skip 要附一句理由(--note),不然帳上看不出為什麼跳過", file=sys.stderr)
+             return 2
+         if not args.bt_diff and not args.bt_from_json:
+             print("擋下:要嘛給 --diff <範圍>,要嘛給 --from-json <已算好的結果>", file=sys.stderr)
+             return 2
+         return cmd_bound_tests(args.bt_diff, repo=args.bt_repo, as_json=args.bt_json,
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index 04860c16..582072c5 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -34,21 +34,21 @@
+ 
+ ### 寫筆記時：先分「程式碼推不推得出來」
+ 
+ 摘要行用前綴分類，**判準是程式碼推不推得出來，不是重不重要**：
+ 
+ | 前綴 | 存什麼 | 額外要求 |
+ |---|---|---|
+ | `WHY:` | 當初為什麼這樣決定、否決過什麼方案 | 出處（提交／決策編號／對話） |
+ | `RULE:` | 程式看不到的限制（相容性、法規、要人工核可…） | 行內欄位：`[since:日期]` 必填、`[retire:條件]` 必填（什麼情況這條該撤掉）；選填 `[until:日期]` `[confirmed:日期]` `[status:active\|superseded]` `[applies:範圍]`。寫齊才有挑戰程式碼的效力 |
+ | `PITFALL:` | 踩過的坑、事故根因 | 出處 + 防回歸測試或重現指令 |
+-| `FACT:` `FLOW:` `DEP:` | 現況描述（欄位、單位、預設值、資料流、相依） | **能從程式碼查到的就別抄**；真要寫，同一行標「以程式碼為準」並附一條可重跑的查詢指令 |
++| `FACT:` `FLOW:` `DEP:` | 現況描述，**只准寫程式碼答不了的**（部署設定、資料庫實際值、生產觀測、外部、人工核可） | **程式碼查得到的一律不寫**；要寫就同一行帶 `[來源:部署]`／`[來源:資料庫]`／`[來源:生產]`／`[來源:外部]`／`[來源:人工]` 其一。只標「以程式碼為準」加查詢不再算數。沒帶來源的這三種行、新寫的程式行號引用，提交時會被擋（行號改寫成「哪支檔的哪個函式」、寫測試名，或釘版本 `路徑@<提交編號>:行號`；誤擋用 `LUMOS_SKIP_NOTE_SHAPE=1` 單次跳過、會留帳，但推上主線時 CI 照樣會擋，要改寫或把專案設成 warn） |
+ 
+ `KEY:` 是未分類的過渡標記，舊筆記不用追改；新寫的請用上面四類。
+ 
+ ### 鐵則
+ 
+ 1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+ 2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+ 3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。改完程式先跑跟改動相關的測試子集，全套留給推送前的閘（全套跑在對話裡會超時、也讓人等）；子集怎麼跑看專案自己的說明。
+ 4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件沒人會回頭。
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f00a64ad..f17c4a88 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4336,47 +4336,49 @@ def t_lint():
+     # 找不到節點 → rc2
+     r = run(v, "lint", "Systems/NoSuchNode")
+     check("lint: 找不到節點 → rc2", r.returncode == 2, r.stdout + r.stderr)
+ 
+ 
+ def t_lint_context_marker_requirements():
+     """四個分類前綴的「同一行還要有什麼」,lint 要唸(警告,不擋)。
+ 
+     出身(2026-09-21 第三階段):紀律範本要求 RULE: 有退場條件、PITFALL: 有防回歸、
+     FACT: 標以程式碼為準並附查詢指令、WHY: 有出處,但工具一條都沒驗,規範等於全靠自覺。
++    2026-09-27 起 FACT 改成要帶 [來源:部署|資料庫|生產|外部|人工](Projects/筆記形狀擋_計劃 [S3]):
++    只寫以程式碼為準加查詢不再算數——程式碼查得到的就不該寫。
+     只套在這四個新前綴上:FLOW:/DEP: 有 277 行舊的,一開就是幾百條警告,
+     「誤報多過真報」的機制活不過一週;新寫的現況描述請改用 FACT:。
+     翻紅釘:把 _CONTEXT_MARKER_RULES 任一條拿掉 → 對應那條斷言紅。
+     """
+     v = mkvault()
+     if True:
+         # ① 四條都寫得不合格 → 四條警告,但 rc0(只提醒不擋)
+         write(v, "Systems/Bad.md",
+               "type: system\nstatus: doing\nsummary: |-\n"
+               "  WHY:當初就這樣決定的\n"
+               "  RULE:大額退費要人工核可\n"
+               "  PITFALL:邊跑邊改腳本會出事\n"
+               "  FACT:門檻是 180 秒\n",
+               body="# B\n")
+         r = run(v, "lint", "Systems/Bad")
+         check("lint 脈絡標記: 四條不合格都唸到、但不擋(rc0)", r.returncode == 0, r.stdout)
+         for pfx, want in (("WHY:", "出處"), ("RULE:", "退場條件"),
+-                          ("PITFALL:", "防回歸"), ("FACT:", "以程式碼為準")):
++                          ("PITFALL:", "防回歸"), ("FACT:", "來源")):
+             check(f"lint 脈絡標記: {pfx} 缺{want}要唸", want in r.stdout and pfx in r.stdout,
+                   r.stdout)
+         # ② 四條都寫合格 → 一條都不唸
+         write(v, "Systems/Ok.md",
+               "type: system\nstatus: doing\nsummary: |-\n"
+               "  WHY:[2026-09-21 Enzo 裁]改成程式碼為主\n"
+               "  RULE:[since:2026-09-21][retire:改用新閘之後撤]大額退費要人工核可\n"
+               "  PITFALL:[2026-09-05]邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]\n"
+-              "  FACT:[以程式碼為準]門檻 180 秒;查:`grep -n FULL_SWEEP_SECONDS governance/autonomous_loop/replay_weekly.py`\n",
++              "  FACT:東京機房的連線上限 [來源:部署]\n",
+               body="# O\n")
+         r2 = run(v, "lint", "Systems/Ok")
+         check("lint 脈絡標記: 寫合格就一條都不唸", r2.returncode == 0 and "脈絡標記" not in r2.stdout,
+               r2.stdout)
+         # ③ 舊的 FLOW:/DEP:/KEY: 不套新規則(兩百多行舊帳,開了就是警告洪水)
+         write(v, "Systems/Legacy.md",
+               "type: system\nstatus: doing\nsummary: |-\n"
+               "  FLOW:a→b→c\n  DEP:[[X]]\n  KEY:某個概念\n",
+               body="# L\n")
+         r3 = run(v, "lint", "Systems/Legacy")
+@@ -41769,21 +41771,21 @@ def _nh_repo(cfg=None):
+     for sub in ("Systems", "Projects", "Verification", "MOC", "Issues"):
+         (kb / sub).mkdir(parents=True)
+     (kb / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# 索引\n", encoding="utf-8")
+     if cfg is not None:
+         (root / ".lumos").mkdir()
+         (root / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+     return root
+ 
+ 
+ def _nh_node(root, name, about=(), status="doing", resp="負責這一塊的程式規則,不管畫面長怎樣", body="",
+-             summary="FLOW:x", typ="system", folder="Systems", extra=""):
++             summary="KEY:x", typ="system", folder="Systems", extra=""):
+     lines = [f"type: {typ}", f"status: {status}", "created: 2026-09-11", "updated: 2026-09-11", "aliases: []",
+              "tags:", f"  - type/{typ}", f"  - status/{status}"]
+     if about:
+         lines.append("about_code:")
+         lines += [f"  - {a}" for a in about]
+     else:
+         lines.append("about_code: []")
+     if resp is not None:
+         lines.append(f"responsibility: {resp}")
+     if extra:
+@@ -48010,12 +48012,508 @@ def t_prepush_and_ci_wired_for_docs_suite():
+     check("推送前兩組子集真的同時跑(背景起、分別 wait)", "( run_group s " in hook and "( run_group k " in hook and 'wait "$_kpid"' in hook, "")
+     check("自主迴圈要不要整支跑:掛鉤只讀 pitfalls 的 autoloop_full,不自己在 bash 比對關鍵字(r1 架構席)", '"autoloop_full": *true' in hook and "grep -qw" not in hook, "")
+     check("執行器的關鍵字子集用 lumos 那支整字比對(只有一份定義)", "_load_lumos_inproc()._keys_mentioned" in (root / "scripts" / "test_lumos.py").read_text(encoding="utf-8"), "")
+     check("碰到圖譜筆記:掛鉤與 CI 都加 --graph;掛鉤先探執行器認不認得", '"suite_graph": *true' in hook and "_suite_args+=(--graph)" in hook and "'\"--graph\"'" in hook and 'extra="$extra --graph"' in ci, "")
+     import subprocess as _sp
+     _r = _sp.run([sys.executable, str(root / "scripts" / "test_autonomous_loop.py"), "-k", "real_claude_md"], capture_output=True, text=True)
+     check("那條 -k 真的選得到東西(改名就紅,不會變成零支回綠)", _r.returncode == 0 and "Ran 1 test" in _r.stderr, _r.stderr[-200:])
+     check("CI:push 事件用 before..sha 問 lumos,docs 才帶 --suite docs,其餘全套;起點寫法跟同檔既有步驟一致(^{commit})", all(x in ci for x in ("pitfalls --diff \"$BEFORE..$SHA\"", "--suite docs", "[ \"$suite\" = docs ] || suite=full", "0000000000000000000000000000000000000000", 'git cat-file -e "$BEFORE^{commit}"')), "")
+ 
+ 
++
++# ── 筆記形狀擋(Projects/筆記形狀擋_計劃,2026-09-27)──────────────────────────────────────────
++_NS_HOOK_LINE = 'lumos" note-shape --staged'
++
++
++def _ns_repo(cfg=None, golive=True):
++    """筆記形狀擋的測試專案:每支檔有家那個骨架 + 一支含上線標記的提交前掛鉤(當上線點)+ 一支程式檔。"""
++    root = _nh_repo(cfg)
++    _nh_file(root, "src/a.py", "\n".join(f"x{i} = {i}" for i in range(1, 21)) + "\n")
++    _nh_file(root, "README.md", "# r\n")
++    if golive:
++        _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n# " + _NS_HOOK_LINE + "\n")
++    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。")
++    _nh_commit(root, "init")
++    return root
++
++
++def _ns(root, *args, env=None):
++    import subprocess as sp, os as _os
++    e = dict(_os.environ)
++    e.pop("LUMOS_SKIP_NOTE_SHAPE", None)
++    if env:
++        e.update(env)
++    r = sp.run([sys.executable, GRAPHCTL, "note-shape", *(args or ("--staged",)), "--repo", str(root)],
++               capture_output=True, text=True, env=e)
++    return r.returncode, r.stdout + r.stderr
++
++
++def _ns_note(root, body="", summary="KEY:x", name="A", extra=""):
++    return _nh_node(root, name, about=["src/a.py"] if name == "A" else (), body="實作在 `src/a.py`。\n" + body,
++                    summary=summary, extra=extra)
++
++
++def _ns_stage(root):
++    _nh_git(root, "add", "-A")
++
++
++def _ns_reset(root):
++    _nh_git(root, "reset", "-q", "--hard", "HEAD")
++    _nh_git(root, "clean", "-qfd")
++
++
++def _ns_gov(root):
++    import json as _j
++    p = root / "docs" / ".governance-log.jsonl"
++    if not p.is_file():
++        return []
++    return [_j.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
++
++
++def t_note_shape_line_refs_existing_code_new_only():
++    """[S1] 新增行裡指向真的存在的程式檔或測試檔的行號引用要擋(反引號、裸寫、#L、圍欄內、無副檔名 #! 主程式、
++    唯一的單一檔名);指向不存在路徑或 .md 的不擋;沒改動的舊行不擋。"""
++    print("t_note_shape_line_refs_existing_code_new_only")
++    root = _ns_repo()
++    _nh_file(root, "src/run", "#!/usr/bin/env python3\nprint(1)\nprint(2)\n")
++    _ns_note(root, body="舊的引用 `src/a.py:3` 上線前就在。")
++    _nh_commit(root, "old ref")
++    cases = [
++        ("反引號", "新寫 `src/a.py:5` 那一行", True),
++        ("裸寫", "新寫 src/a.py:6 那一行", True),
++        ("#L", "新寫 `src/a.py#L7` 那一行", True),
++        ("無副檔名主程式", "新寫 `src/run:2`", True),
++        ("唯一單一檔名", "新寫 a.py:4 這裡", True),
++        ("圍欄內", "```\nTraceback src/a.py:8\n```", True),
++        ("不存在的路徑", "舉例 `src/nope.py:4`", False),
++        (".md 文件", "見 `README.md:1`", False),
++    ]
++    for label, add, want_block in cases:
++        _ns_note(root, body="舊的引用 `src/a.py:3` 上線前就在。\n" + add)
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"①{label}:{'擋' if want_block else '不擋'}", (rc == 1) == want_block, out[-500:])
++        if want_block:
++            check(f"②{label}:舊行 src/a.py:3 不列", "a.py:3" not in out.replace("a.py:3 ", "a.py:3 ") or out.count("`src/a.py:3`") == 0, out[-500:])
++        _ns_reset(root)
++
++
++def t_note_shape_pinned_ref_requires_real_sha_and_line():
++    """[S2] 釘版本只有「至少 12 位、解析結果以它開頭、在分支歷史上、那個提交有該路徑、行號在檔長內」才放行;
++    HEAD、分支名(含全十六進位命名的分支)、找不到的編號、捏造的不可達提交、行號超長都擋;refcheck 對合法釘版本判對得上。"""
++    print("t_note_shape_pinned_ref_requires_real_sha_and_line")
++    root = _ns_repo()
++    sha = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "branch", "deadbeefcafe")
++    import subprocess as sp
++    # 用 HEAD 的樹捏一個從沒進過任何分支的提交:裡面有 src/a.py,只查「物件存在」會放過它(r3 正確性席實測的繞法)
++    fake = sp.run(["git", "-C", str(root), "commit-tree", "HEAD^{tree}", "-m", "fake"], capture_output=True, text=True).stdout.strip()
++    cases = [
++        ("合法釘版本", f"`src/a.py@{sha[:12]}:5`", False),
++        ("完整編號", f"`src/a.py@{sha}:5`", False),
++        ("HEAD", "`src/a.py@HEAD:5`", True),
++        ("分支名", "`src/a.py@main:5`", True),
++        ("全十六進位分支名", "`src/a.py@deadbeefcafe:5`", True),
++        ("太短", f"`src/a.py@{sha[:8]}:5`", True),
++        ("找不到的編號", "`src/a.py@0123456789abcdef:5`", True),
++        ("捏造的不可達提交", f"`src/a.py@{fake}:5`", True),
++        ("行號超長", f"`src/a.py@{sha[:12]}:999`", True),
++    ]
++    for label, add, want_block in cases:
++        _ns_note(root, body=add)
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"①{label}:{'擋' if want_block else '放行'}", (rc == 1) == want_block, out[-500:])
++        _ns_reset(root)
++    # ②refcheck 要真的對「釘住的那個提交」驗:現在版本把 src/a.py 砍到 3 行,釘在舊提交的第 18 行只有舊版有
++    _nh_file(root, "src/a.py", "x = 1\ny = 2\nz = 3\n")
++    _nh_commit(root, "shrink a.py")
++    note = root / "docs" / "kg-knowledge" / "Systems" / "P.md"
++    note.write_text(f"---\ntype: system\n---\n# P\n見 `src/a.py@{sha[:12]}:18`\n", encoding="utf-8")
++    import json as _j
++    r = sp.run([sys.executable, GRAPHCTL, "refcheck", str(note), "--repo", str(root), "--json"], capture_output=True, text=True)
++    try:
++        d = _j.loads(r.stdout)
++    except Exception:
++        d = {}
++    check("②refcheck 對釘住的舊提交驗:舊版有第 18 行 → 對得上(照現在版本驗會超出檔長)",
++          d.get("missing") == 0 and d.get("out_of_range") == 0 and d.get("ok") == 1, r.stdout[-400:])
++
++
++def t_note_shape_current_state_prefix_requires_source():
++    """[S3] summary 新增的 FACT/FLOW/DEP 要帶五種 [來源:…] 之一;只寫以程式碼為準加查詢也擋;正文的同形狀行不歸這條;
++    FACT 行 lint 給同樣判定、FLOW/DEP lint 維持現行;帶 regen 的筆記寫 [來源:部署] 不被重建守衛當成路徑。"""
++    print("t_note_shape_current_state_prefix_requires_source")
++    root = _ns_repo()
++    cases = [
++        ("FACT 沒來源", "KEY:x\nFACT:門檻 180 秒", True),
++        ("FLOW 沒來源", "KEY:x\nFLOW:a 到 b", True),
++        ("DEP 沒來源", "KEY:x\nDEP:要先有 X", True),
++        ("只寫以程式碼為準", "KEY:x\nFACT:[以程式碼為準]門檻 180 秒;查:`grep -n X y`", True),
++        ("帶來源", "KEY:x\nFACT:東京機房 [來源:部署]", False),
++        ("人工來源", "KEY:x\nDEP:要法務點頭 [來源:人工]", False),
++    ]
++    for label, summ, want_block in cases:
++        _ns_note(root, summary=summ)
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"①{label}:{'擋' if want_block else '放行'}", (rc == 1) == want_block, out[-500:])
++        _ns_reset(root)
++    _ns_note(root, body="FACT:正文裡長得像摘要行")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("②正文裡的同形狀行不歸這條", rc == 0, out[-500:])
++    _ns_reset(root)
++    v = mkvault()
++    write(v, "Systems/F.md", "type: system\nstatus: doing\nsummary: |-\n  FACT:門檻 180 秒\n  FLOW:a→b\n", body="# F\n")
++    r = run(v, "lint", "Systems/F")
++    check("③lint:FACT 沒來源要唸來源", "FACT:" in r.stdout and "來源" in r.stdout, r.stdout)
++    check("④lint:FLOW 維持現行(不新增警告)", "FLOW:" not in r.stdout.split("脈絡標記")[-1] if "脈絡標記" in r.stdout else True, r.stdout)
++    write(v, "Systems/G.md", "type: system\nstatus: doing\nsummary: |-\n  FACT:東京機房 [來源:部署]\n", body="# G\n")
++    r = run(v, "lint", "Systems/G")
++    check("⑤lint:FACT 帶來源不唸", "脈絡標記" not in r.stdout, r.stdout)
++    write(v, "Systems/R.md", "type: system\nstatus: doing\nregen: from-scratch/2026-09-27\nsummary: |-\n  FACT:東京機房 [來源:部署]\n", body="# R\n")
++    r = run(v, "lint", "Systems/R")
++    check("⑥帶 regen 的筆記寫 [來源:部署] 不被當成檔案路徑", "部署" not in r.stdout or "幻覺" not in r.stdout, r.stdout)
++
++
++def t_note_lines_range_base_and_own_golive_clamp():
++    """[S4] --diff 範圍起點早於 note-shape 自己的上線點時從上線點算(不是每支檔有家的);上線前的舊違規不擋;
++    淺層 clone 不算範圍、放行並寫一筆 skipped-env。"""
++    print("t_note_lines_range_base_and_own_golive_clamp")
++    root = _ns_repo(golive=False)
++    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n# home check --staged\n")
++    _ns_note(root, body="上線前的舊違規 `src/a.py:2`")
++    _nh_commit(root, "old violation, before note-shape golive")
++    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n# home check --staged\n# " + _NS_HOOK_LINE + "\n")
++    _nh_commit(root, "golive")
++    _ns_note(root, body="上線前的舊違規 `src/a.py:2`\n乾淨的一行")
++    _nh_commit(root, "clean")
++    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    empty = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
++    rc, out = _ns(root, "--diff", f"{empty}..{tip}")
++    check("①從空樹起算會被截到 note-shape 上線點:舊違規不擋", rc == 0, out[-500:])
++    _ns_note(root, body="上線前的舊違規 `src/a.py:2`\n乾淨的一行\n新違規 `src/a.py:9`")
++    _nh_commit(root, "new violation")
++    tip2 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root, "--diff", f"{empty}..{tip2}")
++    check("②上線後的新違規照擋、只列新的", rc == 1 and "a.py:9" in out and "a.py:2" not in out, out[-500:])
++    import subprocess as sp
++    sh = Path(tempfile.mkdtemp(prefix="gctl-ns-shallow-")) / "c"
++    sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
++    for k, v in (("user.email", "t@t.t"), ("user.name", "t")):
++        sp.run(["git", "-C", str(sh), "config", k, v], capture_output=True)
++    rc, out = _ns(sh, "--diff", f"{empty}..HEAD")
++    check("③淺層 clone:不算範圍、放行、講原因", rc == 0 and "淺層" in out, out[-500:])
++    check("④淺層 clone 寫一筆 skipped-env", any(e.get("gate") == "note-shape" and e.get("kind") == "skipped-env" for e in _ns_gov(sh)), str(_ns_gov(sh))[-300:])
++
++
++def t_note_lines_merge_commit_new_lines_only():
++    """[S5] 提交前正在合併要跳過;推送前合併提交只查合併結果裡每個上一版都沒有的行;已在遠端追蹤分支上的提交不重查。"""
++    print("t_note_lines_merge_commit_new_lines_only")
++    root = _ns_repo()
++    m0 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "checkout", "-qb", "side")
++    _ns_note(root, body="side 帶進來的 `src/a.py:4`")
++    _nh_commit(root, "side")
++    s1 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root, "checkout", "-q", "master") if _nh_git(root, "rev-parse", "-q", "--verify", "master").returncode == 0 else _nh_git(root, "checkout", "-q", "main")
++    _nh_file(root, "src/other.py", "y = 1\n")
++    _nh_commit(root, "main side work")
++    _nh_git(root, "merge", "-q", "--no-edit", "--no-ff", "side")
++    m2 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root, "--diff", f"{s1}..{m2}")
++    check("①合併只把上一版帶進來的行接起來:不擋", rc == 0, out[-500:])
++    note = root / "docs" / "kg-knowledge" / "Systems" / "A.md"
++    note.write_text(note.read_text(encoding="utf-8") + "合併時新寫 `src/a.py:7`\n", encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    _nh_git(root, "commit", "-q", "--amend", "--no-edit", "--no-verify")
++    m2b = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root, "--diff", f"{s1}..{m2b}")
++    check("②合併時新寫的行照擋", rc == 1 and "a.py:7" in out and "a.py:4" not in out, out[-500:])
++    import subprocess as sp
++    bare = Path(tempfile.mkdtemp(prefix="gctl-ns-remote-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    _nh_git(root, "remote", "add", "origin", str(bare))
++    # ③只排除「已經在主線上」的提交(遠端預設分支):side 的內容推進遠端 main 之後,再推含它的合併就不重查
++    #   (只在別的遠端分支上、還沒進主線的照查,見 t_note_shape_code_review_r1_regressions ③)
++    _nh_git(root, "push", "-q", "--no-verify", "origin", "side:main")
++    _nh_git(root, "fetch", "-q", "origin")
++    rc, out = _ns(root, "--diff", f"{m0}..{m2}")
++    check("③已在遠端主線上的提交(side)不重查", rc == 0, out[-500:])
++    _nh_git(root, "checkout", "-q", "side")
++    _nh_git(root, "checkout", "-q", "-b", "tmp", m0)
++    _nh_git(root, "merge", "-q", "--no-commit", "--no-ff", "side")
++    rc, out = _ns(root)
++    check("④提交前正在合併:跳過並說一句", rc == 0 and "合併" in out, out[-300:])
++
++
++def t_note_lines_scope_rename_and_non_utf8():
++    """[S6] 行的範圍:正文、summary、decisions(含巢狀清單)算;其他開頭欄位與 decisions 結構鍵不算;
++    改名認成同一篇(舊行不重查);讀不成 UTF-8 的筆記 rc1 並指名。"""
++    print("t_note_lines_scope_rename_and_non_utf8")
++    root = _ns_repo()
++    cases = [
++        ("summary", dict(summary="KEY:x\nWHY:[2026-09-27] 見 `src/a.py:3`"), True),
++        ("decisions 巢狀", dict(extra="decisions:\n  - id: d1\n    content: 選 A\n    alternatives_considered:\n      - 見 `src/a.py:3` 那段"), True),
++        ("aliases", dict(extra="links:\n  - \"src/a.py:3\""), False),
++    ]
++    for label, kw, want_block in cases:
++        _ns_note(root, **kw)
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"①{label}:{'算' if want_block else '不算'}", (rc == 1) == want_block, out[-500:])
++        _ns_reset(root)
++    _ns_note(root, body="舊的 `src/a.py:3`")
++    _nh_commit(root, "old")
++    _nh_git(root, "config", "diff.renames", "false")      # 關掉 git 預設的改名偵測:只有程式自己帶 -M 才認得出改名(代碼審 r1 測試席)
++    _nh_git(root, "mv", "docs/kg-knowledge/Systems/A.md", "docs/kg-knowledge/Systems/A2.md")
++    p = root / "docs" / "kg-knowledge" / "Systems" / "A2.md"
++    p.write_text(p.read_text(encoding="utf-8") + "新增一行乾淨的\n", encoding="utf-8")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("②改名認成同一篇:舊行不重查", rc == 0, out[-500:])
++    _ns_reset(root)
++    (root / "docs" / "kg-knowledge" / "Systems" / "Bad.md").write_bytes(b"---\ntype: system\n---\n\xff\xfe bad\n")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("③讀不成 UTF-8:rc1 並指名那支檔", rc == 1 and "Bad.md" in out, out[-400:])
++
++
++def t_note_shape_block_message_and_fail_open():
++    """[S7] 擋下印檔、行、規則、改法與「內容還在工作目錄」;不改筆記與暫存區;只有擋下寫事件、放行不寫;
++    不是 git 時放行並說一句。"""
++    print("t_note_shape_block_message_and_fail_open")
++    root = _ns_repo()
++    _ns_note(root, body="新寫 `src/a.py:5`")
++    _ns_stage(root)
++    before = _nh_git(root, "diff", "--cached").stdout + _nh_git(root, "diff", "--", "docs/kg-knowledge").stdout
++    rc, out = _ns(root)
++    after = _nh_git(root, "diff", "--cached").stdout + _nh_git(root, "diff", "--", "docs/kg-knowledge").stdout
++    check("①擋下訊息有檔、行號、規則、改法、內容還在", rc == 1 and all(x in out for x in ("A.md", "行號引用", "@", "內容還在工作目錄")), out[-600:])
++    check("②不改筆記與暫存區", before == after, "")
++    ev = [e for e in _ns_gov(root) if e.get("gate") == "note-shape"]
++    check("③擋下寫一筆 blocked", any(e.get("kind") == "blocked" for e in ev), str(ev)[-300:])
++    _ns_reset(root)
++    n0 = len([e for e in _ns_gov(root) if e.get("gate") == "note-shape"])
++    _ns_note(root, body="乾淨的一行")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("④放行 rc0 且不寫事件", rc == 0 and len([e for e in _ns_gov(root) if e.get("gate") == "note-shape"]) == n0, out[-300:])
++    nogit = Path(tempfile.mkdtemp(prefix="gctl-ns-nogit-"))
++    rc, out = _ns(nogit)
++    check("⑤不是 git:放行並說一句", rc == 0 and out.strip(), out[-300:])
++
++
++def t_note_shape_config_from_snapshot_and_visible():
++    """[S8] note_shape.gate 從被檢查的版本讀;工作樹未暫存的 off 關不掉;off/warn 時 doctor 印一行;
++    LUMOS_SKIP_NOTE_SHAPE=1 放行並寫 skipped-env。"""
++    print("t_note_shape_config_from_snapshot_and_visible")
++    import json as _j
++    root = _ns_repo(cfg={"note_shape": {"gate": "block"}})
++    _ns_note(root, body="新寫 `src/a.py:5`")
++    _nh_git(root, "add", "docs")
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_shape": {"gate": "off"}}), encoding="utf-8")
++    rc, out = _ns(root)
++    check("①工作樹未暫存的 off 關不掉", rc == 1, out[-400:])
++    _nh_git(root, "add", ".lumos/config.json")
++    rc, out = _ns(root)
++    check("②暫存的 off:放行並說一句", rc == 0 and "note_shape" in out, out[-400:])
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_shape": {"gate": "warn"}}), encoding="utf-8")
++    _nh_git(root, "add", ".lumos/config.json")
++    rc, out = _ns(root)
++    check("③warn:只印不擋", rc == 0 and "a.py:5" in out, out[-400:])
++    _nh_commit(root, "warn mode")
++    import subprocess as sp
++    d = sp.run([sys.executable, GRAPHCTL, "doctor"], cwd=str(root), capture_output=True, text=True)
++    check("④doctor:不是 block 時印一行", "note_shape" in (d.stdout + d.stderr), (d.stdout + d.stderr)[-600:])
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_shape": {"gate": "block"}}), encoding="utf-8")
++    _ns_note(root, body="再寫 `src/a.py:6`")
++    _ns_stage(root)
++    rc, out = _ns(root, env={"LUMOS_SKIP_NOTE_SHAPE": "1"})
++    check("⑤環境變數跳過:放行", rc == 0, out[-300:])
++    check("⑥環境變數跳過寫 skipped-env", any(e.get("gate") == "note-shape" and e.get("kind") == "skipped-env" for e in _ns_gov(root)), "")
++
++
++def t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed():
++    """[S9] 抽取器三個新選項預設關閉,既有使用者結果不變;釘版本寫法對既有使用者給去掉 @提交 的兩欄、不出錯;
++    多傳參數的呼叫端另外拿到路徑、行號與提交。"""
++    print("t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed")
++    m = _load_lumos_inproc()
++    text = "見 `src/a.py:3` 與 `src/b.py` 還有裸寫 src/c.py:4 和\n```\n`src/d.py:5`\n```\n"
++    full, bare = m._node_code_ref_tokens(text, {"src"})
++    check("①預設:只認反引號、不看圍欄、不認裸寫", full == [("src/a.py", "3"), ("src/b.py", "")], str(full))
++    full2, _ = m._node_code_ref_tokens("釘 `src/a.py@0123456789ab:7`", {"src"})
++    check("②釘版本對既有使用者是兩欄、路徑去掉 @提交", full2 == [("src/a.py", "7")], str(full2))
++    pins = []
++    m._node_code_ref_tokens("釘 `src/a.py@0123456789ab:7`", {"src"}, pins=pins)
++    check("③多傳參數拿到路徑、行號、提交", pins == [("src/a.py", "7", "0123456789ab")], str(pins))
++    full3, _ = m._node_code_ref_tokens(text, {"src"}, bare_text=True, anchors=True, keep_fences=True)
++    toks = {t for t, _l in full3}
++    check("④三個選項打開:認到裸寫與圍欄內", {"src/c.py", "src/d.py"} <= toks, str(full3))
++    full4, _ = m._node_code_ref_tokens("錨點 `src/a.py#L9`", {"src"}, anchors=True)
++    check("⑤#L 錨點拆成行號", full4 == [("src/a.py", "9")], str(full4))
++
++
++def t_discipline_current_state_row_narrowed():
++    """[S10] 紀律範本與 skill 不再教「以程式碼為準加查詢就能寫」,改成 d3 收窄說法與 [來源:…] 五類。"""
++    print("t_discipline_current_state_row_narrowed")
++    base = Path(GRAPHCTL).resolve().parent.parent
++    tpl = (base / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
++    row = [l for l in tpl.splitlines() if l.startswith("| `FACT:`")]
++    check("①範本 FACT/FLOW/DEP 那列有 [來源:", row and "[來源:" in row[0], str(row))
++    check("②範本那列不再教標以程式碼為準加查詢", row and "附一條可重跑的查詢指令" not in row[0], str(row))
++    for rel in ("skills/lumos-project-notes/reference.md", "skills/lumos-project-notes/commands/INDEX.md"):
++        txt = (base / rel).read_text(encoding="utf-8")
++        check(f"③{rel} 不再教「標以程式碼為準」寫現況", "要寫就標「以程式碼為準」加一條查詢指令" not in txt and "`[以程式碼為準] 門檻 180 秒" not in txt and "現況描述照〈寫筆記時〉標「以程式碼為準」" not in txt, rel)
++        check(f"④{rel} 提到 [來源:", "[來源:" in txt, rel)
++    for rel in ("CLAUDE.md", "AGENTS.md"):
++        p = base / rel
++        if p.is_file():
++            check(f"⑤{rel} 注入的紀律區塊同步了", "[來源:" in p.read_text(encoding="utf-8"), rel)
++
++
++def t_doctor_note_shape_ci_and_bypass_scan():
++    """[S11] doctor:CI 沒呼叫 note-shape --diff 或沒抓完整歷史時印一行;列出上線點之後已推上遠端卻違反規則的新增行。"""
++    print("t_doctor_note_shape_ci_and_bypass_scan")
++    import subprocess as sp
++    root = _ns_repo()
++    (root / ".github" / "workflows").mkdir(parents=True)
++    (root / ".github" / "workflows" / "ci.yml").write_text("jobs:\n  t:\n    steps:\n      - uses: actions/checkout@v4\n", encoding="utf-8")
++    _ns_note(root, body="繞過推上去的 `src/a.py:5`")
++    _nh_commit(root, "bypass")
++    bare = Path(tempfile.mkdtemp(prefix="gctl-ns-doc-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    _nh_git(root, "remote", "add", "origin", str(bare))
++    br = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
++    _nh_git(root, "push", "-q", "--no-verify", "origin", br)
++    _nh_git(root, "fetch", "-q", "origin")
++    d = sp.run([sys.executable, GRAPHCTL, "doctor"], cwd=str(root), capture_output=True, text=True)
++    out = d.stdout + d.stderr
++    check("①CI 沒呼叫 note-shape:印一行", "note-shape --diff" in out, out[-800:])
++    check("②列出上線點之後已推上遠端的違規行", "a.py:5" in out, out[-800:])
++
++
++def t_note_shape_new_code_file_wakes_old_refs():
++    """[S12] 範圍內有路徑變成程式檔(新增、加 #!),筆記裡指向它、沒釘版本、上線點版本還沒有的引用要擋;
++    上線點版本就有的舊引用不擋。"""
++    print("t_note_shape_new_code_file_wakes_old_refs")
++    root = _ns_repo(golive=False)
++    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n")
++    _ns_note(root, body="上線前寫的 `src/old.py:2`")
++    _nh_commit(root, "old ref before golive")
++    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n# " + _NS_HOOK_LINE + "\n")
++    _nh_commit(root, "golive")
++    _ns_note(root, body="上線前寫的 `src/old.py:2`\n上線後先寫 `src/new.py:3`\n還有 `src/tool:2`")
++    _nh_file(root, "src/tool", "echo not a script\n")
++    _nh_commit(root, "ref first")
++    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_file(root, "src/new.py", "a = 1\nb = 2\nc = 3\n")
++    _nh_file(root, "src/old.py", "a = 1\nb = 2\n")
++    _nh_commit(root, "files later")
++    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root, "--diff", f"{base}..{tip}")
++    check("①新程式檔喚醒上線後寫的舊引用:擋", rc == 1 and "new.py:3" in out, out[-500:])
++    check("②上線點版本就有的引用不擋", "old.py:2" not in out, out[-500:])
++    _nh_file(root, "src/tool", "#!/bin/bash\necho 1\n")
++    _nh_commit(root, "tool becomes script")
++    tip2 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root, "--diff", f"{tip}..{tip2}")
++    check("③既有檔加了 #! 變成程式檔也喚醒", rc == 1 and "tool:2" in out, out[-500:])
++
++
++
++def t_note_shape_code_review_r1_regressions():
++    """代碼審 r1 抓到的洞各一條:中文與含空白檔名、只排除主線已有的提交、骨架與純連結的前綴行、檔名含 @、
++    單一檔名的釘版本、同一行合法釘版本不吃掉未釘的、BOM、同名非程式檔、[src:] 出處標記、不存在路徑的壞釘法、
++    warn 模式寫 warned、CI 那一步有錯誤標註。"""
++    print("t_note_shape_code_review_r1_regressions")
++    import subprocess as sp
++    root = _ns_repo()
++    sha = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    kb = root / "docs" / "kg-knowledge" / "Systems"
++    for name in ("中文筆記", "a b"):
++        (kb / f"{name}.md").write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  FACT:門檻 30 秒\n---\n# x\n見 `src/a.py:4`\n", encoding="utf-8")
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"①{name}.md 提交前照查(兩條都擋)", rc == 1 and "a.py:4" in out and "現況描述" in out, out[-400:])
++        _nh_commit(root, f"bypass {name}")
++        tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++        rc, out = _ns(root, "--diff", f"{tip}~1..{tip}")
++        check(f"②{name}.md 推送範圍照查", rc == 1 and "a.py:4" in out, out[-400:])
++    # ③只排除主線(遠端預設分支)已有的提交:先推到別的分支的違規,推主線時照查
++    root2 = _ns_repo()
++    bare = Path(tempfile.mkdtemp(prefix="gctl-ns-r1-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    _nh_git(root2, "remote", "add", "origin", str(bare))
++    main = _nh_git(root2, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
++    _nh_git(root2, "push", "-q", "--no-verify", "origin", main)
++    base2 = _nh_git(root2, "rev-parse", "HEAD").stdout.strip()
++    _nh_git(root2, "checkout", "-qb", "tmp")
++    _ns_note(root2, body="偷推到別的分支 `src/a.py:12`")
++    _nh_commit(root2, "bypass on tmp")
++    _nh_git(root2, "push", "-q", "--no-verify", "origin", "tmp")
++    _nh_git(root2, "fetch", "-q", "origin")
++    tip2 = _nh_git(root2, "rev-parse", "HEAD").stdout.strip()
++    rc, out = _ns(root2, "--diff", f"{base2}..{tip2}")
++    check("③已推到別的遠端分支、還沒進主線的提交照查", rc == 1 and "a.py:12" in out, out[-400:])
++    # ④骨架的空 FLOW:/DEP:、只有連結的 DEP 不擋
++    root3 = _ns_repo()
++    _ns_note(root3, summary="KEY:x\nFLOW:\nDEP:\nDEP:[[Billing]][[Inventory]]\nFLOW:見 [[Systems/付款流程]]")
++    _ns_stage(root3)
++    rc, out = _ns(root3)
++    check("④骨架空行與只有連結的前綴行不擋", rc == 0, out[-400:])
++    _ns_reset(root3)
++    # ⑤檔名含 @ 的合法引用:refcheck 照舊判對得上
++    _nh_file(root3, "assets/icon@2x.png", "png\n")
++    _nh_commit(root3, "asset")
++    note = kb.parent.parent.parent / "x.md"
++    note = root3 / "docs" / "kg-knowledge" / "Systems" / "Q.md"
++    note.write_text("---\ntype: system\n---\n# Q\n見 `assets/icon@2x.png` 與 `src/a.py:2`\n", encoding="utf-8")
++    r = sp.run([sys.executable, GRAPHCTL, "refcheck", str(note), "--repo", str(root3), "--json"], capture_output=True, text=True)
++    check("⑤檔名含 @ 不被切成釘版本", '"missing": 0' in r.stdout, r.stdout[-300:])
++    # ⑥單一檔名的釘版本也要驗;⑦同一行合法釘版本不吃掉未釘的同一個引用
++    for label, body, want in (("單一檔名 @HEAD", "見 `a.py@HEAD:4`", True),
++                              ("單一檔名合法釘", f"見 `a.py@{sha[:12]}:4`", False),
++                              ("同行合法釘+未釘", f"見 `src/a.py@{sha[:12]}:4` 與 `src/a.py:4`", True),
++                              ("不存在路徑的壞釘法", "舉例 `src/nope.py@HEAD:5`", False)):
++        _ns_note(root, body=body)
++        _ns_stage(root)
++        rc, out = _ns(root)
++        check(f"⑥{label}:{'擋' if want else '不擋'}", (rc == 1) == want, out[-400:])
++        _ns_reset(root)
++    # ⑧BOM:summary 照查
++    (kb / "B.md").write_bytes("﻿---\ntype: system\nsummary: |-\n  FACT:門檻 30 秒\n---\n# b\n".encode("utf-8"))
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑧帶 BOM 的筆記 summary 照查", rc == 1 and "現況描述" in out, out[-400:])
++    _ns_reset(root)
++    # ⑨同名的非程式檔不影響唯一程式檔的單一檔名判定
++    _nh_file(root, "scripts/tool", "#!/bin/sh\necho 1\necho 2\n")
++    _nh_file(root, "fixtures/tool", "plain\ntext\n")
++    _nh_commit(root, "tools")
++    _ns_note(root, body="見 `tool:2`")      # 沒副檔名的單一檔名只認反引號寫法(裸寫要有 / 或副檔名的點,擋掉 d12:3 這類)
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑨同名非程式檔不讓唯一程式檔漏抓", rc == 1 and "tool:2" in out, out[-400:])
++    _ns_reset(root)
++    # ⑩[src:路徑:行號] 是重建筆記的出處標記,不歸這道
++    _ns_note(root, summary="KEY:x\nKEY:共用面 [src:src/a.py:12]")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑩[src:…] 裡的行號不擋", rc == 0, out[-400:])
++    _ns_reset(root)
++    # ⑪warn 模式有違規時寫一筆 warned
++    import json as _j
++    (root / ".lumos").mkdir(exist_ok=True)
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_shape": {"gate": "warn"}}), encoding="utf-8")
++    _ns_note(root, body="見 `src/a.py:7`")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑪warn 模式寫 warned", rc == 0 and any(e.get("gate") == "note-shape" and e.get("kind") == "warned" for e in _ns_gov(root)), out[-300:])
++    ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
++    step = ci[ci.index("note-shape gate"):ci.index("Anchor verify")]
++    check("⑫CI 那一步擋下時有 ::error:: 標註並保留 rc", "::error::" in step and "rc=$?" in step, step[-400:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-project-notes/commands/03-寫回圖譜.md b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+index 6db175fb..d21e6720 100644
+--- a/skills/lumos-project-notes/commands/03-寫回圖譜.md
++++ b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+@@ -1,17 +1,18 @@
+ # 03 寫回圖譜(改完東西之後)
+ 
+ 鐵則:frontmatter(開頭欄位)一律用指令改,別手改;正文段落用 Edit。多個連結必須一行一項。
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「要新開一篇筆記」 | `lumos new <system\|issue\|verification\|project\|moc> <名稱>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 | 骨架建好,印出該填什麼;接著填摘要 | 手建檔漏 type/aliases,lint 擋 |
++| 「提交被『筆記形狀擋』擋下,或想先自己查一次」 | `lumos note-shape --staged`(提交前那份)/`--diff <起點>..<終點>`(推送前那份) | 列出新寫的程式行號引用與沒帶 `[來源:…]` 的 FACT/FLOW/DEP 摘要行並 rc1;舊行不管;誤擋單次 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳,CI 照擋);整個專案先只提醒:`.lumos/config.json` 的 `note_shape.gate` 設 warn | 程式碼推得出的內容一寫進筆記就會過期,讀的人分不出哪句過期了(rtb 抽樣四成) |
+ | 「提交被『每支檔有家』擋下,或想先自己查一次」 | `lumos home check --staged`(提交前那份)/`--diff <起點>..<終點>`(推送前那份);補家 `lumos new system <名> --code <檔> --responsibility "…"` 或 `lumos append <節點> about_code <檔>` | 新違規列出來並 rc1;舊帳只在 `lumos doctor` 的 S8–S10 提醒;整個專案先改成只提醒:`.lumos/config.json` 的 `node_home.gate` 設 warn | 程式檔沒家、節點寫別人的檔名,改那支檔時推不出該看的筆記,寫回也落錯篇——節點會長成一篇包全部 |
+ | 「改狀態/日期/類型這種單一值」 | `lumos set <節點> <欄位> <值>` | 印改成什麼;改 status 會連帶同步標籤 | 手改漏同步標籤,doctor 報漂移 |
+ | 「驗收紀錄的前提或回頭條件過時了」 | `lumos set <節點> valid_under "<條件>"`(`revalidate_when` 同);多條就給多個值:`lumos set <節點> valid_under "條件一" "條件二"` | 整欄換掉:一個值寫成單行、多個寫成一行一項;原本什麼寫法都行 | 只能在正文補「以本段為準」,開頭那欄照舊被進場提醒念出來 |
+ | 「加一條驗證紀錄/關聯/標籤到清單欄位」 | `lumos append <節點> <欄位> "[[x]]"` | 自動去重 | 單字串塞多連結變 ghost 節點 |
+ | 「把清單裡一項拿掉(死背書、降格的指針)」 | `lumos remove <節點> <欄位> <值>` | 找不到會拒絕,不會亂刪 | — |
+ | 「記一條決策」 | `lumos decision-add <節點> "<內容>" --decided <日期>` | 回編號 dN | 手寫 decisions 格式壞,整條消失 |
+ | 「推翻一條舊決策」 | `lumos decision-supersede <節點> "<片段或 #dN>" --by "<新決策>"`(要比對的片段是位置參數,沒有 --match) | 舊的標 valid:false 並指向新的;會開一本連鎖帳 | 建在被推翻決策上的筆記沒人提醒 |
+ | 「舊筆記的決策沒編號」 | `lumos decision-reindex <節點>` 或 `--all` | 補 dN | 無法被引用 |
+ | 「翻案後,鄰居筆記要不要跟著改?」 | `lumos rel-cascade list`;逐篇 `confirm`/`prune` `<鄰居> --cascade-id <id> --from <節點>#dN`;中斷後 `lumos rel-cascade resume <id>` | 帳本記你判過哪些 | doctor 的 E2 會一直提醒 |
+ | 「做完了,要留驗證紀錄並掛回功能」 | `lumos new verification <名> --plan … --systems …`;漏掛的事後 `lumos sync-verified-by --apply` | doctor 1/4~4/4 不再報孤兒 | 驗證沒人找得到 |
+diff --git a/skills/lumos-project-notes/commands/08-自動跑的.md b/skills/lumos-project-notes/commands/08-自動跑的.md
+index 62ffe9e3..0f182172 100644
+--- a/skills/lumos-project-notes/commands/08-自動跑的.md
++++ b/skills/lumos-project-notes/commands/08-自動跑的.md
+@@ -1,15 +1,15 @@
+ # 08 自動跑的(hook 會替你呼叫,不用手敲;但要看得懂它印什麼)
+ 
+ | 時機 | 自動跑什麼 | 擋不擋 |
+ |---|---|---|
+-| `git commit` 前(pre-commit) | 污染檢查、`lumos lint` 逐篇、`lumos home check --staged`(每支檔有家;「該動哪篇」的點名也在這裡照家算)、「改 code 沒動圖譜」檢查、`lumos cochange check`、`lumos delguard` | 前四項擋;後兩項提醒 |
++| `git commit` 前(pre-commit) | 污染檢查、`lumos lint` 逐篇、`lumos home check --staged`(每支檔有家;「該動哪篇」的點名也在這裡照家算)、`lumos note-shape --staged`(筆記形狀擋)、「改 code 沒動圖譜」檢查、`lumos cochange check`、`lumos delguard` | 前四項擋;後兩項提醒 |
+ | `git commit` 後(post-commit) | 記 bypass 帳(用 --no-verify 繞過也會留痕) | 不擋 |
+-| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos doctor --ci` | 全擋 |
++| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos note-shape --diff`(筆記形狀擋,同一段範圍)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos doctor --ci` | 全擋 |
+ | `git push` 前(pre-push,低風險那一路) | 同一次 `code-loop check` 帶 `--bound-tests-advisory`:這次改動碰到的硬合約綁的測試紅了只印 | ★合約測試只提醒不擋★(人裁 2026-09-07);表態閘照擋(不看 tier,2026-09-09) |
+ | CI(push 後) | 同 pre-push + `lumos code-loop check`(補查 --no-verify 繞過的) | 紅燈 |
+ | Claude 要 Edit/Write 前(impact hook) | `lumos impact --file <檔>` 的結果注入 | 只提醒;邊界仍要自己查 |
+ | 回合結束(check-graph-sync,Stop hook) | 提醒「改了 code 還沒動圖譜」 | 兩家同 session 擋一次續做(`LUMOS_STOP_BLOCK_OFF=1` 關;2026-09-05 起 Claude 也擋) |
+ | 每天 09:30(autonomous-loop) | 自動選題 → 設計審查 → 備 pending 等人放行 | — |
+ | 每天 09:30(launchd daily-governance) | 治理日報、lint-watch 版本掃、doctor --ci、testmap 重建、每週回放與探針抽查;★自主迭代 loop 的派工 2026-09-05 起暫停(LUMOS_AUTOLOOP_OFF 預設 1)★ | 全 fail-open;腳本已包成 main() 免邊跑邊改讀到半行 |
+ 
+ 看到「擋下:」就是上面某一道擋了,訊息第一句講發生什麼、最後一行給該敲的指令。
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 7c1c2625..b0e9e5d0 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -33,12 +33,12 @@
+ | 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+ | 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / guard list·scaffold·bind·audit·trace·kill-add·kill / ci-wait / ci-status |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
+-2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別抄(會過期),要寫就標「以程式碼為準」加一條查詢指令;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
++2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別寫(會過期;新寫的程式行號引用、沒帶 `[來源:…]` 的 FACT/FLOW/DEP 提交時會被擋),程式碼答不了的現況才寫、同一行帶 `[來源:部署|資料庫|生產|外部|人工]`;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 3f656a58..627466ba 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -107,21 +107,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+ | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull]` | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+-> **子命令全覽（75 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown`）。
++> **子命令全覽（76 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown`）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
+ 第三方 `notesmd-cli`（原 Yakitrak/obsidian-cli，Go 單檔）**只准用 `move`**（rename 連結改寫含 frontmatter 字串,2026-06-13 驗收通過;即上方 `graph-rename.sh` 封的那層）。**`frontmatter --edit` 嚴禁對真實 vault 使用**：實測會把整篇 frontmatter 鍵序重排成字母序、縮排 2→4、**日期加引號（property 型別 date→text 靜默損傷）**——一碰整篇 diff 不可審,且 pre-commit 污染指紋會擋。frontmatter 寫入合法路徑只有：lumos T1（純量/list/decisions）、obsidian `processFrontMatter` eval（白名單外）。驗收證據：MyApp vault 的 `2026-06-13_Yakitrak三題驗收`。
+ 
+ 
+@@ -394,42 +394,42 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
+ 判準一句話：**程式碼推不推得出來，不是重不重要**。程式碼查得到的現況描述別抄，抄了就會過期。
+ 
+ ### summary 欄位（中文結構化摘要）
+ 
+ **所有 Systems 和 Issues 筆記必須有 `summary` 欄位。** 讓 Claude Code 掃一眼 frontmatter 就掌握模組全貌，不需要讀完整篇筆記。
+ 
+ 符號規則：
+ 
+ | 符號 | 用途 | 範例 |
+ |------|------|------|
+-| `FLOW:` | 核心流程 | `reserve→complete→void` |
++| `FLOW:` | 流程指路（程式碼推得出的流程不寫；只留連結，或程式碼答不了的要帶 `[來源:…]`） | `見 [[Systems/付款流程]]` |
+ | `AUTH:` | 認證方式 | `HMAC-SHA256`, `JWT` |
+ | `KEY:` | 關鍵概念/欄位（**過渡標記，新筆記改用下面四類**） | `transactionId貫穿三階段` |
+ | `WHY:` | 當初為什麼這樣決定（要求見上一節） | `[d3]改抽樣不全跑是因為預算 300 秒` |
+ | `RULE:` | 程式看不到的限制（要求見上一節） | `[2026-09-21 起，退場:改用新閘後撤] 大額退費要人工核可` |
+ | `PITFALL:` | 踩過的坑、事故根因（要求見上一節） | `[2026-09-05] 邊跑邊改腳本會從舊位置續讀 [test:t_daily_governance_wrapper]` |
+-| `FACT:` | 現況描述（要求見上一節） | `[以程式碼為準] 門檻 180 秒；查:grep FULL_SWEEP_SECONDS …` |
+-| `DEP:` | 依賴模組（用 wikilink） | `[[Billing]][[Inventory]]` |
++| `FACT:` | 現況描述，只准寫程式碼答不了的（要求見紀律範本〈寫筆記時〉） | `東京機房的連線上限是 200 [來源:部署]` |
++| `DEP:` | 依賴指路（只放 wikilink；寫成句子就要帶 `[來源:…]`） | `[[Billing]][[Inventory]]` |
+ | `TEST:` | 測試狀態 | `12/12通過(2026-04-07)` |
+ | `VERIFY:` | 驗證紀錄連結 | `[[2026-04-07_API審計修復]]` |
+ | `DECISION:` | 重大決策（簡版） | `[日期]內容(valid/superseded)` |
+ | `FLAG:` | 語意標記 | `TECHNICAL`, `DECISION`, `ORIGIN` |
+ | `→` | 流程方向 | `A→B→C` |
+ | `｜` | 分隔同類項目 | `A｜B｜C` |
+ | `,` | 分隔同欄細項 | `a,b,c` |
+ | `(valid)` | 現行有效 | |
+ | `(superseded)` | 已被取代 | |
+ | `★INVARIANT★` | KEY 行前綴：業務合約，改動 = breaking | `KEY:★INVARIANT★ 自動型只派V` |
+ | `★DEBT★` | KEY 行前綴：已知偶然行為，可改不算 breaking | `KEY:★DEBT★ RetentionDays=7寫死非設定` |
+ 
+ 不同筆記類型的重點：
+-- **Systems**: WHY + RULE + PITFALL 為主；FLOW/DEP 只寫指針，現況描述照〈寫筆記時〉標「以程式碼為準」
++- **Systems**: WHY + RULE + PITFALL 為主；FLOW/DEP 只寫指針；程式碼查得到的現況一律不寫，程式碼答不了的照〈寫筆記時〉帶 `[來源:…]`
+ - **Issues**: FLAG + DECISION + KEY（標記、決策、關鍵發現）
+ - **Verification**: TEST + VERIFY（測試結果、驗證紀錄）
+ 
+ 
+ > （以下為 2026-08-22 搬入版之精簡摘要符號表；兩版並存）
+ 
+ ### summary block(Systems/Issues 必有;掃一眼掌握全貌)
+ 
+ 每行一個前綴。Systems 以 `WHY`/`RULE`/`PITFALL` 為主,`FLOW`/`DEP` 只寫指針;Issues 重 `FLAG`+`DECISION` 並照四段寫;Verification 重 `TEST`+`VERIFY`。
+ 
