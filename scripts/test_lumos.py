@@ -48975,5 +48975,1122 @@ def t_note_shape_acceptance_regressions():
     check("⑥refcheck:頂層目錄刪掉的釘版本照驗(行號超出報出來)", not (r / "lib").exists() and '"out_of_range": 1' in rr.stdout, rr.stdout[-300:])
 
 
+
+# ── 筆記內容審(Projects/筆記內容審_計劃,2026-09-28)──────────────────────────────────────────
+_NA_EMPTY = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_NA_VAULT = "docs/kg-knowledge"
+
+
+def _na_repo(golive=True, cfg=None):
+    """筆記內容審的測試專案:每支檔有家那個骨架 + 含第二層上線標記的推送前掛鉤 + 一支 20 行的程式檔。回 (根, 起點提交)。"""
+    root = _nh_repo(cfg)
+    _nh_file(root, "src/a.py", "\n".join(f"x{i} = {i}" for i in range(1, 21)) + "\n")
+    if golive:
+        _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos note-audit check\n")
+    _nh_node(root, "A", about=["src/a.py"], body="舊的一行")
+    _nh_commit(root, "init")
+    return root, _na_head(root)
+
+
+def _na_head(root):
+    return _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def _na(root, *args, env=None):
+    import subprocess as sp, os as _os
+    e = dict(_os.environ)
+    e.pop("LUMOS_SKIP_NOTE_AUDIT", None)
+    if env:
+        e.update(env)
+    r = sp.run([sys.executable, GRAPHCTL, "note-audit", *args, "--repo", str(root)], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _na_body(root, lines, name="A"):
+    return _nh_node(root, name, about=["src/a.py"] if name == "A" else (), body="舊的一行\n" + "\n".join(lines))
+
+
+def _na_prepare(root, rng, orch="claude", *extra):
+    import re as _re
+    rc, out = _na(root, "prepare", "--diff", rng, "--orchestrator", orch, *extra)
+    return rc, out, [Path(f) for f in _re.findall(r"^\s+(\S+\.md)\s+\(", out, _re.M)]
+
+
+def _na_rows(listfile):
+    """清單檔 → [(內容編號, 那一行的文字)]。"""
+    import re as _re
+    t = Path(listfile).read_text(encoding="utf-8")
+    return [(m.group(1), m.group(2)) for m in
+            _re.finditer(r"^## ([0-9a-f]{16}) \|.*\n上下文指紋.*\n~~~~text\n(?:    .*\n)*>>> (.*)$", t, _re.M)]
+
+
+def _na_ids(files):
+    return {i for f in files for i, _t in _na_rows(f)}
+
+
+def _na_texts(files):
+    return [t for f in files for _i, t in _na_rows(f)]
+
+
+def _na_fp(listfile):
+    import re as _re
+    return _re.search(r"^清單指紋: (\S+)$", Path(listfile).read_text(encoding="utf-8"), _re.M).group(1)
+
+
+def _na_report(path, listfile, rows, seat="s1", provider="claude", model="opus", prepared=None, head=True):
+    """rows: [(編號, 分類[, 證據])]。"""
+    lines = []
+    if head:
+        lines += [f"seat: {seat}", f"provider: {provider}", f"model: {model}",
+                  f"prepared: {prepared or _na_fp(listfile)}", ""]
+    for r in rows:
+        rid, cls, ev = (tuple(r) + ("-",))[:3]
+        lines.append(f"{rid} | {cls} | {ev} | 理由")
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return Path(path)
+
+
+def _na_record(root, rng, listfile, *reports, extra=()):
+    args = ["record", "--diff", rng, "--prepared", str(listfile)]
+    for r in reports:
+        args += ["--report", str(r)]
+    return _na(root, *args, *extra)
+
+
+def _na_cover_all(root, rng, cls="CONTEXT", seat="s1"):
+    """prepare → 每行都判 cls → record。回清單檔。"""
+    rc, out, files = _na_prepare(root, rng)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    for k, f in enumerate(files):
+        rp = _na_report(tmp / f"r{k}.md", f, [(i, cls) for i, _t in _na_rows(f)], seat=seat)
+        _na_record(root, rng, f, rp)
+    return files
+
+
+def _na_verdicts(root):
+    import json as _j
+    d = root / "governance" / "note-verdicts"
+    return [_j.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))] if d.is_dir() else []
+
+
+def _na_plan(root, status, body_lines, name="P_計劃", d2_ctx="背景二"):
+    dec = ("decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 背景一\n    why_chosen: 因為一\n"
+           f"  - id: d2\n    decided: 2026-09-02\n    valid: false\n    context: {d2_ctx}\n    why_chosen: 因為二")
+    return _nh_node(root, name, typ="project", folder="Projects", status=status, resp=None, summary="WHY:計劃摘要",
+                    extra=dec, body="\n".join(body_lines))
+
+
+def t_note_lines_shared_new_lines():
+    """[S1] 共用函式回每一行的路徑、行號、文字、區塊(小標題另由 _notelines_headings 給);範圍裡加了又刪的行不出現;
+    第一層走同一個函式(第一層既有測試照綠由 -k note_shape / note_lines 子集守)。"""
+    print("t_note_lines_shared_new_lines")
+    import inspect as _insp
+    m = _load_lumos_inproc()
+    root, base = _na_repo()
+    _nh_node(root, "A", about=["src/a.py"], summary="KEY:x\nWHY:新的理由",
+             body="舊的一行\n## 小節\n加了會留的一行\n加了又刪的一行")
+    _nh_commit(root, "add")
+    _nh_node(root, "A", about=["src/a.py"], summary="KEY:x\nWHY:新的理由", body="舊的一行\n## 小節\n加了會留的一行")
+    _nh_commit(root, "del")
+    tip = _na_head(root)
+    notes, errs, _old = m._notelines_new(root, False, base, tip, _NA_VAULT, reader=m._nodehome_reader(root, tip), mark=None)
+    rows = [(p, i, ln.strip(), reg) for p, _t, rs in notes for i, ln, reg in rs]
+    keep = [r for r in rows if r[2] == "加了會留的一行"]
+    check("①回路徑、行號、文字、區塊", len(keep) == 1 and keep[0][0].endswith("Systems/A.md") and keep[0][3] == "body"
+          and isinstance(keep[0][1], int), str(rows))
+    check("②summary 新寫的行標成 summary 區塊", any(r[2] == "WHY:新的理由" and r[3] == "summary" for r in rows), str(rows))
+    check("③範圍裡加了又刪的行不出現", not any(r[2] == "加了又刪的一行" for r in rows), str(rows))
+    check("④沒動過的舊行不出現", not any(r[2] == "舊的一行" for r in rows), str(rows))
+    text = next(t for p, t, _rs in notes if p.endswith("Systems/A.md"))
+    heads = m._notelines_headings(text, m._notelines_regions(text))
+    check("⑤小標題:正文取往上最近的標題、summary 取 summary",
+          heads[keep[0][1] - 1] == "小節" and heads[next(r[1] for r in rows if r[3] == "summary") - 1] == "summary", str(heads))
+    check("⑥第一層(筆記形狀擋)走同一個函式", "_notelines_new(" in _insp.getsource(m._note_shape_eval), "")
+
+
+def t_note_audit_lines_push_golive_only():
+    """[S2] 第二層只用範圍截斷判上線:起點截到推送前掛鉤第一次出現標記的提交;不逐提交判(明寫 per_commit=False);
+    上線前開、上線後才推的分支上的行收進來;找不到上線點收全部;預設參數維持第一層。"""
+    print("t_note_audit_lines_push_golive_only")
+    import inspect as _insp
+    m = _load_lumos_inproc()
+    root, _c0 = _na_repo(golive=False)
+    _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\necho hi\n")
+    _na_body(root, ["上線前寫的行"])
+    _nh_commit(root, "before golive")
+    main = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "checkout", "-qb", "side")
+    _nh_node(root, "S", body="分支上寫的行")
+    _nh_commit(root, "side line")
+    _nh_git(root, "checkout", "-q", main)
+    _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos note-audit check\n")
+    _nh_commit(root, "golive")
+    g = _na_head(root)
+    _nh_git(root, "merge", "-q", "--no-edit", "--no-ff", "side")
+    _na_body(root, ["上線前寫的行", "上線後寫的行"])
+    _nh_commit(root, "after")
+    tip = _na_head(root)
+    rc, out, files = _na_prepare(root, f"{_NA_EMPTY}..{tip}")
+    texts = _na_texts(files)
+    check("①起點截到上線點:上線前寫的行不收", rc == 0 and "上線前寫的行" not in texts, out[-600:])
+    check("②上線後寫的行收", "上線後寫的行" in texts, str(texts))
+    check("③上線前開、上線後才推的分支上的行收(不逐提交判)", "分支上寫的行" in texts, str(texts))
+    pc = m._notelines_new(root, False, g, tip, _NA_VAULT, reader=m._nodehome_reader(root, tip),
+                          mark=m._NOTE_AUDIT_GOLIVE_MARK, hook=m._NOTELINES_PREPUSH, per_commit=True)
+    pc_texts = [ln.strip() for _p, _t, rs in pc[0] for _i, ln, _r in rs]
+    check("④對照組:逐提交判上線會漏掉分支那行(所以第二層要明寫不過濾)", "分支上寫的行" not in pc_texts, str(pc_texts))
+    check("⑤_note_audit_items 明寫 per_commit=False", "per_commit=False" in _insp.getsource(m._note_audit_items), "")
+    root2, _b2 = _na_repo(golive=False)
+    _na_body(root2, ["新行"])
+    _nh_commit(root2, "new")
+    rc, out, files = _na_prepare(root2, f"{_NA_EMPTY}..HEAD")
+    texts = _na_texts(files)
+    check("⑥找不到上線點:收進所有新增行(含第一個提交的舊行)", "新行" in texts and "舊的一行" in texts, out[-400:])
+    sig = _insp.signature(m._notelines_new)
+    check("⑦預設參數=第一層(提交前掛鉤、逐提交判)",
+          sig.parameters["hook"].default == m._NOTELINES_PRECOMMIT and sig.parameters["per_commit"].default is True, str(sig))
+
+
+def t_note_audit_done_plan_rejudged():
+    """[S3] 範圍裡計劃從非收尾變成 done/superseded(含改名)→ 正文、summary、決策文字子欄進完成審;已翻案的決策不進
+    (同一次新寫的行照一般規則);編號不含提交版本號、壓提交後照涵蓋;進行中判脈絡的不涵蓋完成審;收尾→改回→再收尾也觸發。"""
+    print("t_note_audit_done_plan_rejudged")
+    m = _load_lumos_inproc()
+    root, c0 = _na_repo()
+    _na_plan(root, "doing", ["## 目標", "進行中寫的脈絡行", "不動的舊行"])
+    _nh_commit(root, "plan doing")
+    _na_cover_all(root, f"{c0}..HEAD")
+    _nh_commit(root, "verdicts for doing")
+    b1 = _na_head(root)
+    rc, out = _na(root, "check", "--diff", f"{c0}..{b1}")
+    check("前置:進行中的行都判成脈絡、放行", rc == 0, out[-400:])
+    _na_plan(root, "done", ["## 目標", "進行中寫的脈絡行", "不動的舊行"], d2_ctx="背景二改寫")
+    _nh_commit(root, "close plan")
+    tip = _na_head(root)
+    items, _e = m._note_audit_items(root, b1, tip, _NA_VAULT)
+    by = {(it["text"].strip(), it["done"]): it for it in items}
+    check("①正文每一行進完成審(沒改的舊行也進)", ("不動的舊行", True) in by and ("進行中寫的脈絡行", True) in by, str(list(by))[:600])
+    check("②summary 進完成審", ("WHY:計劃摘要", True) in by, str(list(by))[:600])
+    check("③有效決策的文字子欄進完成審,小標題是決策編號加欄名",
+          ("context: 背景一", True) in by and by[("context: 背景一", True)]["heading"] == "decisions/d1/context", str(list(by))[:600])
+    check("④已翻案決策沒改的行不進完成審", not any(k[0] == "why_chosen: 因為二" for k in by), str(list(by))[:600])
+    check("⑤已翻案決策裡同一次新寫的行照一般規則判(不是完成審)", ("context: 背景二改寫", False) in by, str(list(by))[:600])
+    check("⑥結構欄(id、decided、valid)不進", not any(k[0].startswith(("- id:", "decided:", "valid:")) for k in by), str(list(by))[:600])
+    it = by[("進行中寫的脈絡行", True)]
+    check("⑦完成審編號不含提交版本號", it["id"] == m._notelines_content_id(it["path"], "body", "目標", "進行中寫的脈絡行", done=True), "")
+    rc, out = _na(root, "check", "--diff", f"{b1}..{tip}")
+    check("⑧進行中判成脈絡的同一行不涵蓋它的完成審", rc == 1 and "進行中寫的脈絡行" in out, out[-600:])
+    _na_cover_all(root, f"{b1}..{tip}")
+    _nh_commit(root, "verdicts for done")
+    rc, out = _na(root, "check", "--diff", f"{b1}..HEAD")
+    check("⑨判完放行", rc == 0, out[-600:])
+    _nh_git(root, "reset", "-q", "--soft", b1)
+    _nh_git(root, "commit", "-qm", "squashed", "--no-verify")
+    rc, out = _na(root, "check", "--diff", f"{b1}..HEAD")
+    check("⑩判定檔跟收尾的改動壓成同一個提交後照涵蓋", rc == 0, out[-600:])
+    t0 = _na_head(root)
+    _na_plan(root, "doing", ["## 目標", "進行中寫的脈絡行", "不動的舊行"], d2_ctx="背景二改寫")
+    _nh_commit(root, "reopen")
+    _na_plan(root, "done", ["## 目標", "進行中寫的脈絡行", "不動的舊行"], d2_ctx="背景二改寫")
+    _nh_commit(root, "reclose")
+    closed = m._note_audit_closed_plans(root, t0, _na_head(root), _NA_VAULT, m._nodehome_reader(root, _na_head(root)))
+    check("⑪收尾→改回→再收尾(起點終點都是 done)觸發完成審", any(p.endswith("P_計劃.md") for p in closed or []), str(closed))
+    t1 = _na_head(root)
+    _na_plan(root, "done", ["## 目標", "進行中寫的脈絡行", "不動的舊行", "收尾後補一行"], d2_ctx="背景二改寫")
+    _nh_commit(root, "edit while done")
+    closed = m._note_audit_closed_plans(root, t1, _na_head(root), _NA_VAULT, m._nodehome_reader(root, _na_head(root)))
+    check("⑫對照組:一直是 done 只改內容不觸發完成審", not closed, str(closed))
+    _na_plan(root, "doing", ["## 目標", "進行中寫的脈絡行", "不動的舊行", "收尾後補一行"], d2_ctx="背景二改寫")
+    _nh_commit(root, "reopen2")
+    t2 = _na_head(root)
+    _na_plan(root, "superseded", ["## 目標", "進行中寫的脈絡行", "不動的舊行", "收尾後補一行"], d2_ctx="背景二改寫")
+    _nh_git(root, "add", "-A")
+    _nh_git(root, "mv", f"{_NA_VAULT}/Projects/P_計劃.md", f"{_NA_VAULT}/Projects/Q_計劃.md")
+    _nh_git(root, "commit", "-qm", "rename+supersede", "--no-verify")
+    tip3 = _na_head(root)
+    closed = m._note_audit_closed_plans(root, t2, tip3, _NA_VAULT, m._nodehome_reader(root, tip3))
+    check("⑬改名同時收尾(superseded)也觸發完成審", any(p.endswith("Q_計劃.md") for p in closed or []), str(closed))
+
+
+def t_note_audit_content_ids_and_structural_lines():
+    """[S4] 內容編號含區塊與小標題;找小標題跳過圍欄;decisions 小標題是決策編號加欄名(續行歸前一欄);
+    不同小標題下同一句編號不同、同小標題下移動位置不變;圍欄記號、表格分隔、分隔線、只有清單記號的行不收。"""
+    print("t_note_audit_content_ids_and_structural_lines")
+    m = _load_lumos_inproc()
+    text = ("---\ntype: system\nsummary: |-\n  KEY:x\ndecisions:\n  - id: d1\n    decided: 2026-09-01\n"
+            "    context: 第一段\n      續行歸前一欄\n    why_chosen: 因為\n---\n# T\n## 甲\n同一句話\n```\n# 圍欄內不是標題\n```\n"
+            "~~~\n~~~\n| a | b |\n|---|:--:|\n---\n- \n1.\n- [ ]\n## 乙\n同一句話\n")
+    lines = text.split("\n")
+
+    def idx(s, nth=0):
+        return [i for i, l in enumerate(lines, 1) if l == s][nth]
+    regs = m._notelines_regions(text)
+    heads = m._notelines_headings(text, regs)
+    check("①圍欄內的 # 不算標題", heads[idx("# 圍欄內不是標題") - 1] == "甲", str(heads))
+    check("②decisions 小標題=決策編號+欄名", heads[idx("    context: 第一段") - 1] == "decisions/d1/context", str(heads))
+    check("③續行歸前一個欄", heads[idx("      續行歸前一欄") - 1] == "decisions/d1/context", str(heads))
+    check("④下一欄換欄名", heads[idx("    why_chosen: 因為") - 1] == "decisions/d1/why_chosen", str(heads))
+    i1 = m._notelines_content_id("p.md", "body", "甲", "同一句話")
+    i2 = m._notelines_content_id("p.md", "body", "乙", "同一句話")
+    check("⑤不同小標題下同一句 → 編號不同", i1 != i2, "")
+    check("⑥區塊不同 → 編號不同", i1 != m._notelines_content_id("p.md", "summary", "甲", "同一句話"), "")
+    struct = m._notelines_structural_lines(text)
+    for label, s, nth in (("三個反引號", "```", 0), ("三個波浪號", "~~~", 0), ("表格分隔", "|---|:--:|", 0),
+                          ("分隔線", "---", 2), ("只有清單記號", "- ", 0), ("只有序號", "1.", 0), ("只有核取框", "- [ ]", 0)):
+        check(f"⑦結構行不收:{label}", idx(s, nth) in struct, str(sorted(struct)))
+    check("⑧表格內容列、一般行不算結構行", idx("| a | b |") not in struct and idx("同一句話") not in struct, str(sorted(struct)))
+    root, base = _na_repo()
+    _na_body(root, ["## 甲", "要審的一行", "移動前的一句", "```", "圍欄裡的程式", "```", "|---|---|", "- ", "***"])
+    _nh_commit(root, "add")
+    tip = _na_head(root)
+    items, _e = m._note_audit_items(root, base, tip, _NA_VAULT)
+    texts = [it["text"] for it in items]
+    check("⑨實際待審清單不含結構行、含圍欄裡的內容", "要審的一行" in texts and "圍欄裡的程式" in texts
+          and not any(t in texts for t in ("```", "|---|---|", "- ", "***")), str(texts))
+    moved_id = next(it["id"] for it in items if it["text"] == "移動前的一句")
+    _na_body(root, ["## 甲", "移動前的一句", "要審的一行", "```", "圍欄裡的程式", "```", "|---|---|", "- ", "***"])
+    _nh_commit(root, "move")
+    items2, _e = m._note_audit_items(root, base, _na_head(root), _NA_VAULT)
+    check("⑩同一小標題下移動位置,編號不變", any(it["id"] == moved_id and it["text"] == "移動前的一句" for it in items2), "")
+
+
+def t_note_audit_prepare():
+    """[S5] prepare 扣掉工作目錄判定檔涵蓋的行;超過 150 行切份(同篇同份、小標題邊界、單一小標題硬切);清單指紋=本文雜湊;
+    不同頂端不同檔名;--only;.gitignore 只寫 *;記 prepare 事件;待審為空不產生檔、回 0。"""
+    print("t_note_audit_prepare")
+    import hashlib as _h
+    root, base = _na_repo()
+    _na_body(root, ["## 一", "甲行", "乙行"])
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, files = _na_prepare(root, rng)
+    check("①出一份清單", rc == 0 and len(files) == 1, out[-400:])
+    wd = root / ".lumos" / "note-audit"
+    check("②工作目錄第一次建立時有只寫 * 的 .gitignore", (wd / ".gitignore").read_text(encoding="utf-8") == "*\n", "")
+    t = files[0].read_text(encoding="utf-8")
+    _head, body = t.split("\n---本文---\n", 1)
+    fp = _na_fp(files[0])
+    check("③清單指紋=本文那段的雜湊,開頭寫的是同一個,檔名帶它",
+          _h.sha256(body.encode("utf-8")).hexdigest()[:16] == fp and files[0].name.startswith(fp), fp)
+    check("④治理帳記一筆 prepare", any(e.get("gate") == "note-audit" and e.get("kind") == "prepare" for e in _ns_gov(root)),
+          str(_ns_gov(root))[-300:])
+    rows = dict((tx, i) for i, tx in _na_rows(files[0]))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    _na_record(root, rng, files[0], _na_report(tmp / "r.md", files[0], [(rows["甲行"], "CONTEXT")]))
+    rc, out, files2 = _na_prepare(root, rng)
+    check("⑤被工作目錄判定檔涵蓋的行不再列、其他照列", rows["甲行"] not in _na_ids(files2) and rows["乙行"] in _na_ids(files2),
+          out[-400:])
+    rc, out, files3 = _na_prepare(root, rng, "claude", "--only", rows["甲行"])
+    check("⑥--only 只列指定的編號", _na_ids(files3) == {rows["甲行"]}, out[-400:])
+    _nh_file(root, "src/b.py", "y = 1\n")
+    _nh_commit(root, "code only")
+    rc, out, files4 = _na_prepare(root, f"{base}..{_na_head(root)}")
+    check("⑦同一家、同一批行、不同頂端 → 不同檔名", files4 and files2 and files4[0].name != files2[0].name
+          and _na_ids(files4) == _na_ids(files2), out[-400:])
+    root2, b2 = _na_repo()
+    _na_body(root2, ["## 甲"] + [f"甲{i}" for i in range(100)] + ["## 乙"] + [f"乙{i}" for i in range(100)])
+    _nh_node(root2, "B", body="\n".join(f"丙{i}" for i in range(10)))
+    _nh_commit(root2, "big")
+    rc, out, fs = _na_prepare(root2, f"{b2}..HEAD")
+    sizes = [len(_na_rows(f)) for f in fs]
+    check("⑧超過 150 行切成多份、每份不超過 150、一行不漏", len(fs) >= 2 and max(sizes) <= 150 and sum(sizes) == 202 + 12,
+          f"{sizes}\n{out[-300:]}")
+    mixed = [f for f in fs if any(x.startswith("甲") for x in _na_texts([f])) and any(x.startswith("乙") for x in _na_texts([f]))]
+    check("⑨單篇超過時在小標題邊界切(沒有一份同時有甲乙)", not mixed, str(sizes))
+    b_in = [f for f in fs if any(x.startswith("丙") for x in _na_texts([f]))]
+    check("⑩同篇同份(B 那篇整篇在同一份)", len(b_in) == 1, str(sizes))
+    root3, b3 = _na_repo()
+    _na_body(root3, ["## 丁"] + [f"丁{i}" for i in range(200)])
+    _nh_commit(root3, "one heading")
+    rc, out, fs = _na_prepare(root3, f"{b3}..HEAD")
+    check("⑪單一小標題下還超過 → 照行數硬切", sorted(len(_na_rows(f)) for f in fs) == [51, 150], out[-300:])
+    root4, b4 = _na_repo()
+    _nh_file(root4, "src/c.py", "z = 1\n")
+    _nh_commit(root4, "code only")
+    rc, out, fs = _na_prepare(root4, f"{b4}..HEAD")
+    check("⑫待審為空:回 0、不產生檔", rc == 0 and not fs and "沒有待審" in out and not (root4 / ".lumos" / "note-audit").exists(),
+          out[-300:])
+
+
+def t_note_audit_record_provenance_trust_direction():
+    """[S6] 來源不合的報告(缺開頭四行、provider 不等於編排者、prepared 不等於清單指紋、清單派工詞版本不是目前的)
+    只收推得出與一半一半、不收脈絡;來源都對三類都收。"""
+    print("t_note_audit_record_provenance_trust_direction")
+    import shutil as _sh
+    root, base = _na_repo()
+    _na_body(root, ["推得出的行", "一半的行", "脈絡的行"])
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    rows = dict((tx, i) for i, tx in _na_rows(fs[0]))
+    three = [(rows["推得出的行"], "CODE", "`src/a.py:3`"), (rows["一半的行"], "MIXED", "`src/a.py:4`"), (rows["脈絡的行"], "CONTEXT")]
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    old_ver = tmp / "old-version-list.md"
+    old_ver.write_text(fs[0].read_text(encoding="utf-8").replace("派工詞版本: 1\n", "派工詞版本: 0\n"), encoding="utf-8")
+    cases = [("缺開頭四行", fs[0], dict(head=False)), ("provider 不等於清單的編排者", fs[0], dict(provider="codex")),
+             ("prepared 不等於清單指紋", fs[0], dict(prepared="0" * 16)), ("清單的派工詞版本不是目前版本", old_ver, {})]
+    for label, lf, kw in cases:
+        _sh.rmtree(root / "governance" / "note-verdicts", ignore_errors=True)
+        rc, out = _na_record(root, rng, lf, _na_report(tmp / f"{label}.md", fs[0], three, **kw))
+        v = _na_verdicts(root)
+        got = sorted(r["class"] for d in v for r in d["rows"])
+        check(f"①{label}:只收推得出與一半一半、不收脈絡", rc == 0 and got == ["CODE", "MIXED"]
+              and all(d["provenance_ok"] is False for d in v), f"{got}\n{out[-300:]}")
+    _sh.rmtree(root / "governance" / "note-verdicts", ignore_errors=True)
+    rc, out = _na_record(root, rng, fs[0], _na_report(tmp / "ok.md", fs[0], three))
+    v = _na_verdicts(root)
+    check("②對照組:來源都對 → 三類都收", sorted(r["class"] for d in v for r in d["rows"]) == ["CODE", "CONTEXT", "MIXED"]
+          and all(d["provenance_ok"] is True for d in v), out[-300:])
+
+
+def t_note_audit_record_per_row_trust_direction():
+    """[S7] record 逐行收:分類不在三類之內不收;同編號多列取最重;不在清單不收;上下文變了輕的不收、重的收;
+    證據驗不過只標記;file: 證據讀清單當時頂端提交的 git 版本。"""
+    print("t_note_audit_record_per_row_trust_direction")
+    m = _load_lumos_inproc()
+    root, base = _na_repo()
+    body = ["## 一", "甲行", "目標行一", "目標行二", "", "", "", "", "", "遠方行", "脈絡對照行"]
+    _na_body(root, body)
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    rows = dict((tx, i) for i, tx in _na_rows(fs[0]))
+    # 清單出了之後:在目標行二後面插一行(改到兩行的上下文),並把 src/a.py 砍到 3 行
+    _na_body(root, body[:4] + ["插入行"] + body[4:])
+    _nh_file(root, "src/a.py", "a = 1\nb = 2\nc = 3\n")
+    _nh_commit(root, "after prepare")
+    tip2 = _na_head(root)
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    rp = _na_report(tmp / "r.md", fs[0], [
+        (rows["甲行"], "CONTEXT"), (rows["甲行"], "CODE", "`src/a.py:999`"),
+        (rows["遠方行"], "MAYBE"),
+        ("0123456789abcdef", "CODE", "`src/a.py:1`"),
+        (rows["目標行一"], "CONTEXT"),
+        (rows["目標行二"], "MIXED", "`src/a.py:15`"),
+        (rows["脈絡對照行"], "CONTEXT"),
+    ])
+    rc, out = _na_record(root, f"{base}..{tip2}", fs[0], rp)
+    v = _na_verdicts(root)
+    got = {r["id"]: r for d in v for r in d["rows"]}
+    check("①分類不在三類之內的那一行不收", rows["遠方行"] not in got, str(got)[:400])
+    check("②同一編號多列取最重", got.get(rows["甲行"], {}).get("class") == "CODE", str(got)[:400])
+    check("③編號不在清單的那一行不收", "0123456789abcdef" not in got, str(got)[:400])
+    check("④上下文變了:判脈絡的不收", rows["目標行一"] not in got, str(got)[:400])
+    check("⑤上下文變了:判一半一半的照收", got.get(rows["目標行二"], {}).get("class") == "MIXED", str(got)[:400])
+    check("⑥上下文沒變的脈絡照收", got.get(rows["脈絡對照行"], {}).get("class") == "CONTEXT", str(got)[:400])
+    check("⑦證據驗不過只標記、推得出照樣生效", got.get(rows["甲行"], {}).get("evidence_ok") is False, str(got)[:400])
+    check("⑧file: 證據讀清單當時頂端提交的版本(那時 src/a.py 有 20 行)",
+          got.get(rows["目標行二"], {}).get("evidence_ok") is True, str(got)[:400])
+    check("⑨對照組:照現在版本驗同一條證據會驗不過", m._note_audit_check_evidence(root, tip2, "`src/a.py:15`") is False, "")
+    check("⑩search: 證據照命中數驗", m._note_audit_check_evidence(root, tip2, "search: b = 2 in src => 1") is True
+          and m._note_audit_check_evidence(root, tip2, "search: b = 2 in src => 0") is False
+          and m._note_audit_check_evidence(root, tip2, "search: b = 2 in /etc => 0") is False, "")
+
+
+def t_note_audit_fold_rules():
+    """[S8] 判定照三步算:被多份申訴指名 → 最重的申訴結果;沒被申訴的推得出照生效;後來較重的生效;較輕的收下不生效;
+    略過只算沒判過的;已判推得出/一半一半的 skip 被拒;跟讀檔順序無關。"""
+    print("t_note_audit_fold_rules")
+    import random as _rnd
+    m = _load_lumos_inproc()
+
+    def V(kind, rows, disputes=None):
+        return {"kind": kind, "rows": [{"id": i, "class": c} for i, c in rows], "disputes": disputes}
+    docs = {"v1.json": V("判定", [("X", "CODE"), ("Y", "CODE")]),
+            "v0.json": V("判定", [("X", "CONTEXT")]),
+            "a1.json": V("申訴", [("X", "CONTEXT")], "v1.json"),
+            "a2.json": V("申訴", [("X", "MIXED")], "v1.json"),
+            "v2.json": V("判定", [("Z", "CONTEXT")]),
+            "v3.json": V("判定", [("Z", "CODE")]),
+            "v4.json": V("判定", [("W", "CODE")]),
+            "v5.json": V("判定", [("W", "CONTEXT")]),
+            "s1.json": V("略過", [("W", "SKIP"), ("K", "SKIP")])}
+    f = m._note_audit_fold(docs)
+    check("①被多份申訴指名的一筆 → 換成其中最重的申訴結果", f.get("X") == "MIXED", str(f))
+    check("②另一筆沒被申訴的推得出照生效", f.get("Y") == "CODE", str(f))
+    check("③後來較重的判定生效", f.get("Z") == "CODE", str(f))
+    check("④較輕的一般判定收下但不生效;判過的行略過不算", f.get("W") == "CODE", str(f))
+    check("⑤沒判過的行略過算數", f.get("K") == "SKIP", str(f))
+    rng = _rnd.Random(7)
+    items = list(docs.items())
+    same = True
+    for _k in range(30):
+        rng.shuffle(items)
+        same = same and m._note_audit_fold(dict(items)) == f
+    check("⑥跟讀檔順序無關(打亂 30 次結果都一樣)", same, "")
+    root, base = _na_repo()
+    _na_body(root, ["判過的行", "沒判過的行"])
+    _nh_commit(root, "add")
+    rng_s = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng_s)
+    rows = dict((tx, i) for i, tx in _na_rows(fs[0]))
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    _na_record(root, rng_s, fs[0], _na_report(tmp / "r.md", fs[0], [(rows["判過的行"], "CODE", "`src/a.py:1`")]))
+    rc, out = _na(root, "skip", "--diff", rng_s, "--note", "測試略過理由")
+    skipped = {r["id"] for d in _na_verdicts(root) if d["kind"] == "略過" for r in d["rows"]}
+    check("⑦已判推得出的行 skip 被拒(講明)、沒判過的照略過", rc == 0 and "不能略過" in out and rows["判過的行"] not in skipped
+          and rows["沒判過的行"] in skipped, out[-400:])
+
+
+def t_note_audit_verdict_files_atomic_concurrent():
+    """[S9] 判定檔暫存再換名:中途被殺不留檔名合格式的半殘檔、暫存檔不算判定檔;兩個行程同時 record 兩個檔都完整;
+    兩條分支各自寫判定檔後合併不衝突。"""
+    print("t_note_audit_verdict_files_atomic_concurrent")
+    import os as _os, subprocess as sp
+    m = _load_lumos_inproc()
+    root, base = _na_repo()
+    real = _os.replace
+
+    def boom(*_a, **_k):
+        raise OSError("killed mid-write")
+    _os.replace = boom
+    try:
+        try:
+            m._note_audit_write_verdict(root, {"version": 1, "kind": "判定", "rows": []})
+        except OSError:
+            pass
+    finally:
+        _os.replace = real
+    d = root / "governance" / "note-verdicts"
+    names = [p.name for p in d.iterdir()] if d.is_dir() else []
+    check("①寫入中途被殺:不留檔名合格式的判定檔", not any(m._NOTE_AUDIT_VERDICT_NAME_RE.match(n) for n in names), str(names))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ("20260928T000000Z-" + "a" * 32 + ".json.123-abcd.tmp-wlf")).write_text(
+        '{"version":1,"kind":"判定","rows":[{"id":"0123456789abcdef","class":"CONTEXT"}]}', encoding="utf-8")
+    docs, bad = m._note_audit_load_verdicts(root, None)
+    check("②暫存檔不被當成判定檔", not docs and not bad, f"{docs} {bad}")
+    for p in list(d.iterdir()):
+        p.unlink()
+    _na_body(root, ["甲行", "乙行"])
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    ids = [i for i, _t in _na_rows(fs[0])]
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
+    r1 = _na_report(tmp / "a.md", fs[0], [(i, "CONTEXT") for i in ids], seat="s1")
+    r2 = _na_report(tmp / "b.md", fs[0], [(i, "CONTEXT") for i in ids], seat="s2")
+    e = dict(_os.environ)
+    e.pop("LUMOS_SKIP_NOTE_AUDIT", None)
+    ps = [sp.Popen([sys.executable, GRAPHCTL, "note-audit", "record", "--diff", rng, "--prepared", str(fs[0]),
+                    "--report", str(r), "--repo", str(root)], stdout=sp.PIPE, stderr=sp.PIPE, env=e) for r in (r1, r2)]
+    for p in ps:
+        p.wait(timeout=120)
+    v = _na_verdicts(root)
+    check("③兩個行程同時 record:兩個檔都完整落地", len(v) == 2 and {x["seat"] for x in v} == {"s1", "s2"}
+          and all(len(x["rows"]) == len(ids) for x in v), str(v)[:300])
+    _nh_commit(root, "two verdicts")
+    main = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "checkout", "-qb", "b1")
+    _na_record(root, rng, fs[0], _na_report(tmp / "c.md", fs[0], [(i, "CONTEXT") for i in ids], seat="s3"))
+    _nh_commit(root, "b1 verdict")
+    _nh_git(root, "checkout", "-q", main)
+    _na_record(root, rng, fs[0], _na_report(tmp / "d.md", fs[0], [(i, "CONTEXT") for i in ids], seat="s4"))
+    _nh_commit(root, "main verdict")
+    mg = _nh_git(root, "merge", "-q", "--no-edit", "b1")
+    names = [p.name for p in d.iterdir() if m._NOTE_AUDIT_VERDICT_NAME_RE.match(p.name)]
+    # 治理帳兩邊都追加會衝突,那不是判定檔;這裡只看判定檔那個夾
+    conflicted = _nh_git(root, "diff", "--name-only", "--diff-filter=U").stdout.split()
+    check("④兩條分支各自寫判定檔,合併時判定檔不衝突", not any(c.startswith("governance/note-verdicts/") for c in conflicted)
+          and len(names) == 4, f"{mg.stdout}{mg.stderr}\n{conflicted}\n{names}")
+
+
+def t_note_audit_check_reads_tip():
+    """[S10] check 只認被推送頂端提交裡的判定檔:每一行都涵蓋才放行;壞掉的判定檔當不存在並印檔名、不擋沒有待審行的推送;
+    判定檔只在工作目錄時擋並印提交指令;待審為空放行;起點 40 個 0 照三道檢查共用的推送起點規則(沒有主線 → 空樹)。
+    (掛鉤與 CI 的先後順序在接線那次另立測試,見計劃 [S19]。)"""
+    print("t_note_audit_check_reads_tip")
+    root, base = _na_repo()
+    _na_body(root, ["甲行"])
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out = _na(root, "check", "--diff", rng)
+    check("①沒判過 → 擋、列出那行、給 prepare 指令", rc == 1 and "甲行" in out and "note-audit prepare" in out, out[-400:])
+    _na_cover_all(root, rng)
+    rc, out = _na(root, "check", "--diff", rng)
+    check("②判定檔只在工作目錄 → 照擋、印提交指令", rc == 1 and "還沒提交" in out and "git add governance/note-verdicts" in out,
+          out[-400:])
+    _nh_commit(root, "verdicts")
+    rng2 = f"{base}..{_na_head(root)}"
+    rc, out = _na(root, "check", "--diff", rng2)
+    check("③判定檔在頂端提交裡、每行都涵蓋 → 放行", rc == 0, out[-400:])
+    rc, out = _na(root, "check", "--diff", rng)
+    check("④推的是判定檔提交之前的頂端 → 那個樹裡沒有判定檔,照擋", rc == 1, out[-400:])
+    bad = "20260928T000000Z-" + "0" * 32 + ".json"
+    _nh_file(root, f"governance/note-verdicts/{bad}", "{這不是 JSON")
+    _nh_commit(root, "broken verdict")
+    t1 = _na_head(root)
+    rc, out = _na(root, "check", "--diff", f"{base}..{t1}")
+    check("⑤壞掉的判定檔當不存在、印檔名、不擋沒有待審行的推送", rc == 0 and bad in out, out[-400:])
+    _nh_file(root, "src/b.py", "y = 1\n")
+    _nh_commit(root, "code only")
+    rc, out = _na(root, "check", "--diff", f"{t1}..HEAD")
+    check("⑥待審為空 → 放行", rc == 0, out[-400:])
+    root2, _b2 = _na_repo()
+    _na_body(root2, ["新分支的行"])
+    _nh_commit(root2, "add")
+    rc, out = _na(root2, "check", "--diff", "0" * 40 + "..HEAD")
+    check("⑦起點 40 個 0、沒有主線 → 從空樹算(截到上線點),新行照擋", rc == 1 and "新分支的行" in out, out[-400:])
+
+
+def t_note_audit_modes_and_event_kinds():
+    """[S11] gate=off 放行不寫帳、warn 只印不擋記 warned,兩者 doctor 各印一行;LUMOS_SKIP_NOTE_AUDIT=1 放行記 skipped-env;
+    三種都不寫判定檔;note-audit 在閘名單裡、事件真的寫進治理帳;待審為空 skip 回 0 不產生檔。"""
+    print("t_note_audit_modes_and_event_kinds")
+    import json as _j
+    m = _load_lumos_inproc()
+    check("①note-audit 在既有閘名單裡", "note-audit" in m._KNOWN_GATES, "")
+    root, base = _na_repo(cfg={"note_audit": {"gate": "off"}})
+    _na_body(root, ["甲行"])
+    _nh_commit(root, "add")
+    rng = f"{base}..{_na_head(root)}"
+    n0 = len(_ns_gov(root))
+    rc, out = _na(root, "check", "--diff", rng)
+    check("②off:放行、不寫帳", rc == 0 and len(_ns_gov(root)) == n0, out[-300:])
+    check("③off:doctor 印一行", any("off" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_audit": {"gate": "warn"}}), encoding="utf-8")
+    _nh_commit(root, "warn")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out = _na(root, "check", "--diff", rng)
+    check("④warn:有沒涵蓋的行只印不擋", rc == 0 and "甲行" in out, out[-300:])
+    check("⑤warn:治理帳記 warned", any(e.get("gate") == "note-audit" and e.get("kind") == "warned" for e in _ns_gov(root)), "")
+    check("⑥warn:doctor 印一行", any("warn" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_audit": {"gate": "block"}}), encoding="utf-8")
+    _nh_commit(root, "block")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out = _na(root, "check", "--diff", rng, env={"LUMOS_SKIP_NOTE_AUDIT": "1"})
+    check("⑦LUMOS_SKIP_NOTE_AUDIT=1:放行、記 skipped-env", rc == 0 and any(
+        e.get("gate") == "note-audit" and e.get("kind") == "skipped-env" for e in _ns_gov(root)), out[-300:])
+    check("⑧block 才擋(對照組)", _na(root, "check", "--diff", rng)[0] == 1, "")
+    check("⑨三種都不寫判定檔", not (root / "governance" / "note-verdicts").exists(), "")
+    _nh_file(root, "src/b.py", "y = 1\n")
+    _nh_commit(root, "code only")
+    t0 = _nh_git(root, "rev-parse", "HEAD~1").stdout.strip()
+    rc, out = _na(root, "skip", "--diff", f"{t0}..HEAD", "--note", "沒有筆記要略過")
+    check("⑩待審為空 skip 回 0、不產生檔", rc == 0 and not (root / "governance" / "note-verdicts").exists(), out[-300:])
+
+
+def t_decision_amend_field_fetch_remote_rename():
+    """[S12] decision-amend 只改指定決策的指定文字子欄、不准改結構欄(含 ended);先 fetch 所有遠端、失敗拒絕;
+    跟著改名找遠端舊路徑:遠端有該編號拒絕並講「已推」「撞號」兩種;沒有就准;沒有任何遠端准改。"""
+    print("t_decision_amend_field_fetch_remote_rename")
+    import subprocess as sp
+    bare = Path(tempfile.mkdtemp(prefix="gctl-na-bare-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    root, _b = _na_repo()
+    d1 = "decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 背景一\n    why_chosen: 因為一"
+    _nh_node(root, "D", extra=d1, body="x")
+    _nh_commit(root, "d1")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    d2 = d1 + "\n  - id: d2\n    decided: 2026-09-02\n    context: 背景二\n      續行\n    why_chosen: 因為二"
+    p = _nh_node(root, "D", extra=d2, body="x")
+    _nh_commit(root, "d2 local")
+    vault = root / _NA_VAULT
+    before = p.read_text(encoding="utf-8").split("\n")
+    r = run(vault, "decision-amend", "Systems/D", "d2", "--field", "context", "--text", "背景二改")
+    after = p.read_text(encoding="utf-8").split("\n")
+    check("①沒推上去的決策:只改指定欄(含續行)", r.returncode == 0
+          and [l for l in before if l not in after] == ["    context: 背景二", "      續行"]
+          and [l for l in after if l not in before] == ["    context: 背景二改"], r.stdout + r.stderr)
+    r = run(vault, "decision-amend", "Systems/D", "d1", "--field", "context", "--text", "改掉")
+    check("②遠端已有這個編號 → 拒絕,講已推與撞號兩種可能", r.returncode != 0 and "推上去" in r.stderr and "撞號" in r.stderr
+          and "背景一" in p.read_text(encoding="utf-8"), r.stderr[-300:])
+    for f in ("id", "decided", "valid", "ended"):
+        r = run(vault, "decision-amend", "Systems/D", "d2", "--field", f, "--text", "x")
+        check(f"③結構欄 {f} 不准改", r.returncode != 0 and "結構欄" in r.stderr, r.stderr[-200:])
+    _nh_git(root, "mv", f"{_NA_VAULT}/Systems/D.md", f"{_NA_VAULT}/Systems/E.md")
+    _nh_commit(root, "rename")
+    r = run(vault, "decision-amend", "Systems/E", "d1", "--field", "context", "--text", "改掉")
+    check("④改名後:跟著改名找到遠端舊路徑,d1 照拒", r.returncode != 0 and "撞號" in r.stderr, r.stdout + r.stderr[-300:])
+    r = run(vault, "decision-amend", "Systems/E", "d2", "--field", "why_chosen", "--text", "因為二改")
+    check("⑤改名後:遠端沒有 d2 → 准改", r.returncode == 0 and "因為二改" in (vault / "Systems" / "E.md").read_text(encoding="utf-8"),
+          r.stdout + r.stderr[-300:])
+    _nh_git(root, "remote", "set-url", "origin", str(bare.parent / "no-such.git"))
+    r = run(vault, "decision-amend", "Systems/E", "d2", "--field", "context", "--text", "再改")
+    check("⑥fetch 失敗 → 拒絕", r.returncode != 0 and "fetch" in r.stderr, r.stderr[-300:])
+    _nh_git(root, "remote", "remove", "origin")
+    r = run(vault, "decision-amend", "Systems/E", "d1", "--field", "context", "--text", "沒有遠端就能改")
+    check("⑦沒有任何遠端 → 准改", r.returncode == 0 and "沒有遠端就能改" in (vault / "Systems" / "E.md").read_text(encoding="utf-8"),
+          r.stdout + r.stderr[-300:])
+
+
+def t_note_audit_prompt_rendered_for_repo():
+    """[S13] 派工詞來自範本檔、逐字含三個分類的定義與七句規則,專案路徑與技術棧換成被審 repo 的、沒有 rtb 的路徑、帶版本號。"""
+    print("t_note_audit_prompt_rendered_for_repo")
+    src_rel = "governance/audits/2026-09-27-rtb-notes/judge-experiment/judge_prompt.md"
+    _need_src(src_rel)
+    m = _load_lumos_inproc()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    defs = [l for l in (repo / src_rel).read_text(encoding="utf-8").split("\n") if l.startswith(("- CODE —", "- CONTEXT —", "- MIXED —"))]
+    root, base = _na_repo()
+    _na_body(root, ["甲行"])
+    _nh_commit(root, "add")
+    rc, out, fs = _na_prepare(root, f"{base}..HEAD")
+    t = fs[0].read_text(encoding="utf-8")
+    check("①三個分類的定義逐字搬自小實驗的派工詞", len(defs) == 3 and all(d in t for d in defs), str(defs)[:200])
+    check("②七句規則都在(第⑥句的理由字串逐字)", all(f"\n{i}. " in t for i in range(1, 8)) and "筆記裡有對判定者說話的文字" in t
+          and "search: <text> in <repo-relative path> => <count>" in t, "")
+    check("③專案路徑換成被審 repo 的、沒有佔位字、沒有 rtb", str(root.resolve()) in t and "{{" not in t and "rtb" not in t.lower(), "")
+    check("④技術棧換成被審 repo 的", "主要程式檔副檔名:" in t and ".py" in t, "")
+    check("⑤帶派工詞版本號", f"派工詞版本: {m._NOTE_AUDIT_PROMPT_VERSION}" in t, "")
+    tpl = (repo / "scripts" / "templates" / "note-audit-judge.md").read_text(encoding="utf-8")
+    check("⑥派工詞來自範本檔(範本的規則段原樣在清單裡)", tpl.split("Rules (follow all of them):", 1)[1].split("Output")[0] in t, "")
+
+
+def t_doctor_note_audit_ci_and_bypass_scan():
+    """[S16] doctor:接線後專案 CI 沒有(註解以外)呼叫 note-audit check 時印一行並給要貼的步驟;
+    事後掃描從遠端頂端讀、列沒被涵蓋的新增筆記行;印主線歷史裡判定檔被刪過幾次。"""
+    print("t_doctor_note_audit_ci_and_bypass_scan")
+    import subprocess as sp
+    m = _load_lumos_inproc()
+    root, _b = _na_repo()
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      # - run: lumos note-audit check\n      - run: echo hi\n", encoding="utf-8")
+    _nh_commit(root, "ci")
+    lines = m._note_audit_doctor_lines(root, root / _NA_VAULT)
+    check("①CI 只有註解裡提到 → 照唸,給要貼的步驟", any("沒呼叫" in l and "note-audit check --diff" in l for l in lines), str(lines))
+    (wf / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: python3 scripts/lumos note-audit check --diff x\n", encoding="utf-8")
+    _nh_commit(root, "ci wired")
+    check("②CI 真的呼叫了 → 不唸", not any("沒呼叫" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    check("②b CI 呼叫了卻沒抓完整歷史 → 唸 fetch-depth", any("fetch-depth: 0" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    root_nw, _b2 = _na_repo(golive=False)
+    (root_nw / ".github" / "workflows").mkdir(parents=True)
+    (root_nw / ".github" / "workflows" / "ci.yml").write_text("jobs: {}\n", encoding="utf-8")
+    _nh_commit(root_nw, "ci")
+    check("③還沒接線(推送前掛鉤沒有這道)不唸 CI", not any("沒呼叫" in l for l in m._note_audit_doctor_lines(root_nw, root_nw / _NA_VAULT)), "")
+    bare = Path(tempfile.mkdtemp(prefix="gctl-na-bare-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_git(root, "branch", "-M", "main")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "-u", "origin", "main")
+    _na_body(root, ["繞過推上去的行"])
+    _nh_commit(root, "bypass")
+    _nh_git(root, "push", "-q", "origin", "main")
+    lines = m._note_audit_doctor_lines(root, root / _NA_VAULT)
+    check("④事後掃描:列出已推上遠端卻沒被涵蓋的新增筆記行", any("已推上遠端" in l and "Systems/A.md:" in l for l in lines), str(lines))
+    _nh_file(root, "governance/note-verdicts/20260928T000000Z-" + "1" * 32 + ".json",
+             '{"version":1,"kind":"判定","rows":[]}\n')
+    _nh_commit(root, "verdict")
+    _nh_git(root, "rm", "-q", "governance/note-verdicts/20260928T000000Z-" + "1" * 32 + ".json")
+    _nh_commit(root, "delete verdict")
+    _nh_git(root, "push", "-q", "origin", "main")
+    check("⑤印遠端主線歷史裡判定檔被刪過幾次", any("被刪過 1 次" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+
+
+def t_note_audit_bookkeeping_four_consumers():
+    """[S17] 判定檔資料夾在簿記豁免裡:只新增判定檔不抬高小改動閘改動量、不被風險型樣掃描、不抬高風險分級、不讓代碼審留痕失效;
+    筆記行的刪改照讓留痕失效;放在別的 governance 夾的同一個檔(對照組)會。"""
+    print("t_note_audit_bookkeeping_four_consumers")
+    import json as _j, subprocess as sp
+    m = _load_lumos_inproc()
+    root, base = _na_repo()
+    risky = '{"version":1,"kind":"判定","rows":[],"x":"subprocess.run(password) UPDATE users SET a=1; os.system(x); eval(y)"}\n'
+    _nh_file(root, "governance/note-verdicts/20260928T000000Z-" + "2" * 32 + ".json", risky)
+    _nh_commit(root, "verdict only")
+    tip = _na_head(root)
+    files, _why = m._sc_changed_files(root, f"{base}..{tip}", _NA_VAULT)
+    check("①小改動閘的改動量不算判定檔", files is not None and not any("note-verdicts" in f[0] for f in files), str(files))
+    r = sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", f"{base}..{tip}", "--json"], capture_output=True, text=True, cwd=str(root))
+    try:
+        pj = _j.loads(r.stdout)
+    except ValueError:
+        pj = {}
+    check("②③不被風險型樣掃描、不抬高風險分級", pj.get("tier") == "light" and not pj.get("claims")
+          and not pj.get("stack_questions_applicable"), r.stdout[-300:] + r.stderr[-300:])
+    ok, why = m._codeloop_record_valid(root, base, tip)
+    check("④只新增判定檔不讓代碼審留痕失效", ok, why)
+    _na_body(root, ["新寫的筆記行"])
+    _nh_commit(root, "note edit")
+    ok, why = m._codeloop_record_valid(root, base, _na_head(root))
+    check("⑤筆記行的刪改照讓留痕失效", not ok, why)
+    root2, base2 = _na_repo()
+    _nh_file(root2, "governance/other/20260928T000000Z-" + "2" * 32 + ".json", risky)
+    _nh_commit(root2, "not bookkeeping")
+    ok, _why = m._codeloop_record_valid(root2, base2, _na_head(root2))
+    check("⑥對照組:別的 governance 夾的同一個檔會讓留痕失效(豁免是這個夾給的)", not ok, _why)
+
+
+def t_note_audit_template_vendored():
+    """[S18] 派工詞範本登記在工具鏈自裝檔清單裡,更新時發到消費專案,消費專案 prepare 讀得到。"""
+    print("t_note_audit_template_vendored")
+    m = _load_lumos_inproc()
+    check("①範本在自裝檔清單裡", m._NOTE_AUDIT_TEMPLATE in m._VENDORED_TREE_FILES, "")
+    with tempfile.TemporaryDirectory() as td_s, tempfile.TemporaryDirectory() as td_p:
+        src = _mk_vendor_src(td_s)
+        real = Path(GRAPHCTL).resolve().parent / "templates" / "note-audit-judge.md"
+        (src / "scripts" / "templates" / "note-audit-judge.md").write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+        tgt = Path(td_p)
+        import subprocess as sp
+        sp.run(["git", "init", "-q", str(tgt)], capture_output=True)
+        (tgt / "docs" / "consumer-knowledge").mkdir(parents=True)
+        _run_vendor(src, tgt, no_pull=True)
+        got = tgt / "scripts" / "templates" / "note-audit-judge.md"
+        check("②更新時發到消費專案", got.is_file() and got.read_text(encoding="utf-8") == real.read_text(encoding="utf-8"), "")
+        prm = m._note_audit_prompt(tgt)
+        check("③消費專案的派工詞讀得到、路徑是消費專案的", prm is not None and str(tgt.resolve()) in prm, "")
+
+
+
+def t_note_audit_code_review_r1_regressions():
+    """代碼審 r1(四席)抓到的問題各一條回歸:同編號多處都列、只改名的已收尾計劃不重審、CRLF 筆記收得下脈絡判定、
+    範圍終點找不到回 rc2、略過開關只認 1、decision-amend(有空行的多行值、清單欄、還沒提交的改名)、證據驗證、非 UTF-8、
+    設定寫錯要提醒、doctor 讀遠端的刪除次數與 CI 沒抓完整歷史。"""
+    print("t_note_audit_code_review_r1_regressions")
+    import subprocess as sp, json as _j
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-r1-"))
+    # ① 同一小標題下一字不差的兩行:清單列每一處;判定者只看過一處時,另一處上下文不同照樣要求(輕的判定要每一處上下文都對)
+    root, base = _na_repo()
+    _na_body(root, ["## 小節", "當初選這個是因為客戶要求", "理由同上", "", "", "", "src/a.py 第三個函式只接受整數", "理由同上"])
+    _nh_commit(root, "dup")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    rows = _na_rows(fs[0])
+    dup = [i for i, t in rows if t == "理由同上"]
+    check("①同編號的兩處都列進清單", len(dup) == 2 and dup[0] == dup[1], str(rows))
+    _na_record(root, rng, fs[0], _na_report(tmp / "dup.md", fs[0], [(i, "CONTEXT") for i, _t in rows]))
+    rc, out = _na(root, "check", "--diff", rng)
+    check("①b 兩處都在清單裡時,脈絡判定照收", rc == 1 and "還沒提交" in out, out[-300:])
+    # ② 已收尾的計劃只改名:不算這次收尾
+    root, c0 = _na_repo()
+    _na_plan(root, "done", ["## 目標", "舊的脈絡行"])
+    _nh_commit(root, "done plan")
+    b = _na_head(root)
+    _nh_git(root, "mv", f"{_NA_VAULT}/Projects/P_計劃.md", f"{_NA_VAULT}/Projects/R_計劃.md")
+    _nh_git(root, "commit", "-qm", "rename only", "--no-verify")
+    closed = m._note_audit_closed_plans(root, b, _na_head(root), _NA_VAULT, m._nodehome_reader(root, _na_head(root)))
+    check("②已收尾的計劃只改名 → 不算這次收尾", closed == [], str(closed))
+    # ③ CRLF 換行的筆記:清單指紋照樣對得上,脈絡判定收得下
+    root, base = _na_repo()
+    p = _na_body(root, ["這是一行脈絡"])
+    p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
+    _nh_commit(root, "crlf")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    rc, out = _na_record(root, rng, fs[0], _na_report(tmp / "crlf.md", fs[0], [(i, "CONTEXT") for i, _t in _na_rows(fs[0])]))
+    v = _na_verdicts(root)
+    check("③CRLF 筆記:來源對得上、脈絡判定收得下", v and all(d["provenance_ok"] for d in v)
+          and len(v[0]["rows"]) == len(_na_rows(fs[0])), out[-400:])
+    # ④ 範圍終點找不到:rc2(不是放行);終點是 40 個 0(刪分支)才跳過
+    rc, out = _na(root, "check", "--diff", "HEAD..definitely-missing-tip")
+    check("④範圍終點找不到 → rc2", rc == 2, out[-300:])
+    rc, out = _na(root, "check", "--diff", "HEAD.." + "0" * 40)
+    check("④b 終點是 40 個 0(刪分支)→ 跳過 rc0", rc == 0, out[-300:])
+    # ⑤ 略過開關只認 1
+    root, base = _na_repo()
+    _na_body(root, ["甲行"])
+    _nh_commit(root, "a")
+    rng = f"{base}..{_na_head(root)}"
+    check("⑤LUMOS_SKIP_NOTE_AUDIT=0 不算略過", _na(root, "check", "--diff", rng, env={"LUMOS_SKIP_NOTE_AUDIT": "0"})[0] == 1, "")
+    check("⑤b 筆記形狀擋同族:LUMOS_SKIP_NOTE_SHAPE=0 不算略過",
+          "== \"1\"" in __import__("inspect").getsource(m.cmd_note_shape).split("LUMOS_SKIP_NOTE_SHAPE")[1][:40], "")
+    # ⑥ decision-amend:有空行的多行值整段換掉;清單欄拒絕;還沒提交的改名照樣找到遠端舊路徑
+    bare = tmp / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    root, _b = _na_repo()
+    dec = ("decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: |-\n      第一段脈絡\n\n      src/a.py 第 3 行把逾時設成 30 秒\n"
+           "    alternatives:\n      - 甲\n      - 乙\n    why_chosen: 因為一")
+    p = _nh_node(root, "D", extra=dec, body="x")
+    _nh_commit(root, "d")
+    vault = root / _NA_VAULT
+    r = run(vault, "decision-amend", "Systems/D", "d1", "--field", "context", "--text", "只留脈絡")
+    t = p.read_text(encoding="utf-8")
+    check("⑥有空行的多行值:整段換掉,舊句不留", r.returncode == 0 and "30 秒" not in t and "第一段脈絡" not in t
+          and "context: 只留脈絡" in t and "why_chosen: 因為一" in t, r.stdout + r.stderr + t)
+    r = run(vault, "decision-amend", "Systems/D", "d1", "--field", "alternatives", "--text", "只剩一個")
+    check("⑥b 清單欄拒絕、檔不動", r.returncode != 0 and "- 乙" in p.read_text(encoding="utf-8"), r.stderr[-300:])
+    _nh_commit(root, "amended")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _nh_git(root, "mv", f"{_NA_VAULT}/Systems/D.md", f"{_NA_VAULT}/Systems/New.md")
+    r = run(vault, "decision-amend", "Systems/New", "d1", "--field", "why_chosen", "--text", "偷改")
+    check("⑥c 還沒提交的改名:照樣找到遠端舊路徑、拒絕", r.returncode != 0 and "撞號" in r.stderr, r.stdout + r.stderr[-300:])
+    # ⑦ 證據驗證:行號範圍後半段要驗;search 的路徑不存在不算驗過
+    root, _b = _na_repo()
+    tip = _na_head(root)
+    check("⑦行號範圍後半段超出檔長 → 驗不過", m._note_audit_check_evidence(root, tip, "`src/a.py:3-999`") is False, "")
+    check("⑦b 行號範圍都在檔內 → 驗得過", m._note_audit_check_evidence(root, tip, "`src/a.py:3-5`") is True, "")
+    check("⑦c search 指向不存在的路徑 → 驗不過", m._note_audit_check_evidence(root, tip, "search: TIMEOUT in no/such/dir => 0") is False, "")
+    # ⑧ 非 UTF-8 的報告:rc2 講明,不噴 traceback
+    root, base = _na_repo()
+    _na_body(root, ["甲行"])
+    _nh_commit(root, "a")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, fs = _na_prepare(root, rng)
+    bad = tmp / "cp950.md"
+    bad.write_bytes("seat: 審查\n".encode("cp950"))
+    rc, out = _na_record(root, rng, fs[0], bad)
+    check("⑧非 UTF-8 報告 → rc2、沒有 traceback", rc == 2 and "Traceback" not in out, out[-300:])
+    # ⑨ 設定把 note_audit 寫成字串:照 block 並提醒
+    g, w = m._note_audit_config(b'{"note_audit": "warn"}')
+    check("⑨設定不是物件 → 照 block 並提醒", g == "block" and w, str(w))
+    # ⑩ doctor:判定檔刪除次數讀遠端頂端(本機沒推的刪除不算);CI 呼叫了 note-audit 卻沒抓完整歷史要唸
+    root, _b = _na_repo()
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "ci.yml").write_text(
+        "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n      - run: python3 scripts/lumos note-audit check --diff x\n", encoding="utf-8")
+    _nh_commit(root, "ci")
+    bare2 = tmp / "r2.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare2)], capture_output=True)
+    _nh_git(root, "branch", "-M", "main")
+    _nh_git(root, "remote", "add", "origin", str(bare2))
+    _nh_git(root, "push", "-q", "-u", "origin", "main")
+    lines = m._note_audit_doctor_lines(root, root / _NA_VAULT)
+    check("⑩CI 呼叫了 note-audit 卻沒抓完整歷史 → 唸 fetch-depth", any("fetch-depth: 0" in l for l in lines), str(lines))
+    vf = "governance/note-verdicts/20260928T000000Z-" + "3" * 32 + ".json"
+    _nh_file(root, vf, '{"version":1,"kind":"判定","rows":[]}\n')
+    _nh_commit(root, "v")
+    _nh_git(root, "push", "-q", "origin", "main")
+    _nh_git(root, "rm", "-q", vf)
+    _nh_commit(root, "local delete")
+    check("⑩b 本機沒推的刪除不算", not any("被刪過" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    _nh_git(root, "push", "-q", "origin", "main")
+    check("⑩c 推上遠端後算進去", any("被刪過 1 次" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+
+
+
+def t_note_audit_code_review_r2_regressions():
+    """代碼審 r2(三席)抓到的問題各一條回歸:decision-amend 的一行式清單與同層縮排清單、只暫存新檔的搬檔、
+    沒有遠端或全新筆記准改;CI 抓完整歷史要看同一個工作項目(兩層);同編號超過 150 處不破上限;
+    範圍終點找不到三道檢查一致 rc2;清單只列一處、現在多一處時脈絡判定不收;切份不把同編號拆開。"""
+    print("t_note_audit_code_review_r2_regressions")
+    import subprocess as sp
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-r2-"))
+    # ① decision-amend 欄位形狀
+    root, _b = _na_repo()
+    dec = ("decisions:\n  - id: d1\n    decided: 2026-09-01\n    alternatives: [甲, 乙]\n    tradeoffs:\n    - 丙\n    - 丁\n"
+           "    mapping: {a: 1}\n    context: 一行文字\n    why_chosen: |-\n      多行\n      文字")
+    p = _nh_node(root, "D", extra=dec, body="x")
+    _nh_commit(root, "d")
+    vault = root / _NA_VAULT
+    for fld, label in (("alternatives", "一行式清單"), ("tradeoffs", "跟欄名同層縮排的清單"), ("mapping", "一行式對照表")):
+        before = p.read_text(encoding="utf-8")
+        r = run(vault, "decision-amend", "Systems/D", "d1", "--field", fld, "--text", "只剩一句")
+        check(f"①{label}:拒絕、檔不動", r.returncode != 0 and p.read_text(encoding="utf-8") == before, r.stdout + r.stderr[-200:])
+    r = run(vault, "decision-amend", "Systems/D", "d1", "--field", "context", "--text", "改過的一行")
+    check("①b 一般一行文字照改", r.returncode == 0 and "context: 改過的一行" in p.read_text(encoding="utf-8"), r.stderr[-200:])
+    r = run(vault, "decision-amend", "Systems/D", "d1", "--field", "why_chosen", "--text", "改過的多行")
+    t = p.read_text(encoding="utf-8")
+    check("①c | 多行文字整段換", r.returncode == 0 and "why_chosen: 改過的多行" in t and "      文字" not in t, r.stderr[-200:] + t)
+    # ② 改名偵測:只暫存新檔的搬檔照認;全新筆記(有遠端、沒刪檔)准改;沒有遠端時沒加進 git 也准改
+    bare = tmp / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_commit(root, "amended")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    (vault / "Systems" / "D.md").rename(vault / "Systems" / "New.md")
+    _nh_git(root, "add", f"{_NA_VAULT}/Systems/New.md")
+    r = run(vault, "decision-amend", "Systems/New", "d1", "--field", "context", "--text", "偷改")
+    check("②只暫存新檔的搬檔:認得出遠端舊路徑、拒絕", r.returncode != 0 and "撞號" in r.stderr, r.stdout + r.stderr[-300:])
+    _nh_git(root, "reset", "-q")
+    r = run(vault, "decision-amend", "Systems/New", "d1", "--field", "context", "--text", "偷改")
+    check("②b 搬檔都沒進 git、圖譜裡有檔不見:拒絕並講明", r.returncode != 0 and "git add" in r.stderr, r.stderr[-300:])
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "rename")
+    _nh_node(root, "Fresh", extra="decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 新的", body="y")
+    r = run(vault, "decision-amend", "Systems/Fresh", "d1", "--field", "context", "--text", "新的改")
+    check("②c 全新筆記(有遠端、沒刪檔、還沒 add):准改", r.returncode == 0, r.stderr[-300:])
+    _nh_git(root, "remote", "remove", "origin")
+    (vault / "Systems" / "New.md").rename(vault / "Systems" / "New2.md")
+    r = run(vault, "decision-amend", "Systems/New2", "d1", "--field", "context", "--text", "沒遠端就准")
+    check("②d 沒有任何遠端:沒加進 git 也准改(S12)", r.returncode == 0, r.stderr[-300:])
+    # ③ CI 抓完整歷史看同一個工作項目(第二層與第一層)
+    root, _b = _na_repo()
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text(
+        "jobs:\n  full:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n"
+        "  audit:\n    steps:\n      - uses: actions/checkout@v4\n      - run: python3 scripts/lumos note-audit check --diff x\n"
+        "      - run: python3 scripts/lumos note-shape --diff x\n", encoding="utf-8")
+    _nh_commit(root, "ci")
+    check("③別的工作項目設了完整歷史,呼叫那個沒設 → 照唸並指名", any("fetch-depth: 0" in l and "ci.yml 的 audit" in l
+          for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
+    check("③b 第一層同族:note-shape 那步同樣照工作項目看",
+          m._ci_jobs_calling_without_full_history([wf / "ci.yml"], "note-shape --diff") == [("ci.yml", "audit")], "")
+    # ④ 同一編號超過 150 處:每份清單不超過 150
+    root, base = _na_repo()
+    _na_body(root, ["## 重複"] + ["一字不差"] * 160)
+    _nh_commit(root, "dups")
+    rc, out, fs = _na_prepare(root, f"{base}..HEAD")
+    check("④單一編號超過 150 處:每份不超過 150、講明", fs and max(len(_na_rows(f)) for f in fs) <= 150 and "改寫" in out,
+          f"{[len(_na_rows(f)) for f in fs]}\n{out[-300:]}")
+    # ⑤ 範圍終點找不到:三道檢查一致 rc2;全 0 跳過
+    for cmd, label in ((["note-shape", "--diff"], "筆記形狀擋"), (["home", "check", "--diff"], "每支檔有家"),
+                       (["note-audit", "check", "--diff"], "筆記內容審")):
+        r = sp.run([sys.executable, GRAPHCTL, *cmd, "HEAD..definitely-missing-tip", "--repo", str(root)], capture_output=True, text=True)
+        check(f"⑤{label}:終點找不到 → rc2", r.returncode == 2, r.stderr[-200:])
+        r = sp.run([sys.executable, GRAPHCTL, *cmd, "HEAD.." + "0" * 40, "--repo", str(root)], capture_output=True, text=True)
+        check(f"⑤b {label}:終點全 0 → 跳過 rc0", r.returncode == 0, r.stderr[-200:])
+    # ⑥ 清單只列了一處,之後同編號多一處:脈絡判定不收(每一處上下文都要在清單上)
+    root, base = _na_repo()
+    _na_body(root, ["## 小節", "理由同上", "甲", "乙", "丙"])
+    _nh_commit(root, "one")
+    rc, out, fs = _na_prepare(root, f"{base}..HEAD")
+    _na_body(root, ["## 小節", "理由同上", "甲", "乙", "丙", "丁", "src/a.py 只接受整數", "理由同上"])
+    _nh_commit(root, "two")
+    rid = next(i for i, t in _na_rows(fs[0]) if t == "理由同上")
+    items, _e = m._note_audit_items(root, base, _na_head(root), _NA_VAULT)
+    first = [it for it in items if it["id"] == rid]
+    check("⑥前置:第一處的上下文沒變(現場成立:只有多出來的那一處不在清單上)",
+          len(first) == 2 and m._note_audit_parse_list(fs[0].read_text(encoding="utf-8"))["rows"][rid][0] in [it["ctx_fp"] for it in first], "")
+    rc, out = _na_record(root, f"{base}..HEAD", fs[0], _na_report(tmp / "one.md", fs[0], [(rid, "CONTEXT")]))
+    got = [r for d in _na_verdicts(root) for r in d["rows"] if r["id"] == rid]
+    check("⑥清單只列一處、現在多一處:脈絡判定不收", not got, out[-300:])
+    # ⑦ 切份不把同編號的幾處拆到兩份
+    root, base = _na_repo()
+    _na_body(root, ["## 大"] + [f"行{i}" for i in range(148)] + ["同一句"] * 3)
+    _nh_commit(root, "boundary")
+    rc, out, fs = _na_prepare(root, f"{base}..HEAD")
+    holders = [f for f in fs if "同一句" in _na_texts([f])]
+    check("⑦切份不把同編號拆開", len(fs) >= 2 and len(holders) == 1 and _na_texts(holders)[:].count("同一句") == 3,
+          f"{[len(_na_rows(f)) for f in fs]}")
+
+
+
+def t_note_audit_code_review_r3_regressions():
+    """代碼審 r3(三席)抓到的問題各一條回歸:CI 工作項目切分認得行尾註解、加引號的名字、jobs: 帶註解;
+    第一層 doctor 走同一支、整行註解掉的那步算沒呼叫、訊息指名工作項目並講還有幾個;
+    decision-amend 在 git add -u / commit -a 之後認不出改名時拒絕(本機已提交的改名不誤擋全新筆記);
+    SHA-256 專案的 64 個 0 照跳過。"""
+    print("t_note_audit_code_review_r3_regressions")
+    import subprocess as sp
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-r3-"))
+    wf = tmp / "wf"
+    wf.mkdir()
+    full = "      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n"
+    call = "      - uses: actions/checkout@v4\n      - run: python3 scripts/lumos note-audit check --diff x\n"
+    cases = {
+        "行尾註解的工作項目名": "jobs:\n  audit:\n    steps:\n" + call + "  full:   # needs full history\n    steps:\n" + full,
+        "jobs 行帶註解": "jobs:  # all jobs\n  audit:\n    steps:\n" + call,
+        "加引號的名字": 'jobs:\n  "audit":\n    steps:\n' + call + '  "later":\n    steps:\n      - run: echo ok\n',
+        "對照組": "jobs:\n  audit:\n    steps:\n" + call + "  full:\n    steps:\n" + full,
+    }
+    for label, y in cases.items():
+        f = wf / f"{abs(hash(label))}.yml"
+        f.write_text(y, encoding="utf-8")
+        got = m._ci_jobs_calling_without_full_history([f], "note-audit check")
+        check(f"①{label}:認得出 audit 沒抓完整歷史", got == [(f.name, "audit")], str(got))
+    # ② 第一層 doctor 走同一支:別的工作項目設了完整歷史照唸、指名工作項目;整行註解掉算沒呼叫
+    root, _b = _na_repo()
+    w = root / ".github" / "workflows"
+    w.mkdir(parents=True)
+    (w / "ci.yml").write_text("jobs:\n  full:\n    steps:\n" + full + "  audit:\n    steps:\n"
+                              "      - uses: actions/checkout@v4\n      - run: python3 scripts/lumos note-shape --diff x\n", encoding="utf-8")
+    lines = m._note_shape_doctor_lines(root, root / _NA_VAULT, ci=True)
+    check("②第一層 doctor:呼叫那個工作項目沒抓完整歷史 → 照唸並指名", any("fetch-depth: 0" in l and "ci.yml 的 audit" in l for l in lines), str(lines))
+    (w / "ci.yml").write_text("jobs:\n  audit:\n    steps:\n      # - run: python3 scripts/lumos note-shape --diff x\n", encoding="utf-8")
+    lines = m._note_shape_doctor_lines(root, root / _NA_VAULT, ci=True)
+    check("②b 整行註解掉的那步算沒呼叫 → 唸沒呼叫", any("沒呼叫" in l for l in lines), str(lines))
+    many = "jobs:\n" + "".join(f"  j{i}:\n    steps:\n" + call for i in range(7))
+    (w / "ci.yml").write_text(many, encoding="utf-8")
+    lines = m._note_audit_doctor_lines(root, root / _NA_VAULT, ci=True)
+    check("②c 超過 5 個只列 5 個並講共幾個", any("等 7 個" in l for l in lines), str(lines))
+    # ③ decision-amend:git add -u、commit -a 之後認不出改名 → 拒絕;本機已提交的改名不誤擋全新筆記
+    bare = tmp / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    root, _b = _na_repo()
+    _nh_node(root, "D", extra="decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 已推的", body="x")
+    _nh_commit(root, "d")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _nh_git(root, "fetch", "-q", "origin")
+    vault = root / _NA_VAULT
+    (vault / "Systems" / "D.md").rename(vault / "Systems" / "New.md")
+    _nh_git(root, "add", "-u")
+    r = run(vault, "decision-amend", "Systems/New", "d1", "--field", "context", "--text", "偷改")
+    check("③git add -u 之後:認不出改名 → 拒絕", r.returncode != 0 and "已推的" in (vault / "Systems" / "New.md").read_text(encoding="utf-8"),
+          r.stdout + r.stderr[-300:])
+    _nh_git(root, "commit", "-qam", "commit -a", "--no-verify")
+    r = run(vault, "decision-amend", "Systems/New", "d1", "--field", "context", "--text", "偷改")
+    check("③b commit -a 之後:照拒", r.returncode != 0, r.stdout + r.stderr[-300:])
+    _nh_git(root, "add", "-A")
+    _nh_git(root, "commit", "-qm", "rename committed", "--no-verify")
+    _nh_node(root, "Fresh", extra="decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 新的", body="y")
+    r = run(vault, "decision-amend", "Systems/Fresh", "d1", "--field", "context", "--text", "新的改")
+    check("③c 本機已提交的改名不誤擋全新筆記", r.returncode == 0, r.stderr[-300:])
+    # ④ SHA-256 專案的 64 個 0(刪分支)照跳過
+    root, _b = _na_repo()
+    for cmd, label in ((["note-shape", "--diff"], "筆記形狀擋"), (["home", "check", "--diff"], "每支檔有家"),
+                       (["note-audit", "check", "--diff"], "筆記內容審")):
+        r = sp.run([sys.executable, GRAPHCTL, *cmd, "HEAD.." + "0" * 64, "--repo", str(root)], capture_output=True, text=True)
+        check(f"④{label}:終點 64 個 0 → 跳過 rc0", r.returncode == 0, r.stderr[-200:])
+
+
+
+def t_note_audit_acceptance_regressions():
+    """代碼審驗收輪(兩席)抓到的問題各一條回歸:decision-amend 別的遠端分支多一篇有 d1 的無關筆記時,全新筆記照准改;
+    已加進 git 但改寫太多、git 配不成改名的搬檔照拒;CI 多行腳本裡的 fetch-depth 字樣不算設定;
+    註解裡有撇號也切得掉;整步被行尾註解掉的呼叫不算有呼叫。"""
+    print("t_note_audit_acceptance_regressions")
+    import subprocess as sp
+    m = _load_lumos_inproc()
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-na-acc-"))
+    bare = tmp / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    root, _b = _na_repo()
+    dec = "decisions:\n  - id: d1\n    decided: 2026-09-01\n    context: 已推的脈絡\n    why_chosen: 因為一"
+    _nh_node(root, "D", extra=dec, body="\n".join(f"正文第 {i} 行" for i in range(30)))
+    _nh_commit(root, "d")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    main = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "checkout", "-qb", "feat")
+    _nh_node(root, "Other", extra="decisions:\n  - id: d1\n    decided: 2026-09-02\n    context: 別人的決策", body="z")
+    _nh_commit(root, "other note on feat")
+    _nh_git(root, "push", "-q", "origin", "feat")
+    _nh_git(root, "checkout", "-q", main)
+    vault = root / _NA_VAULT
+    _nh_node(root, "Fresh", extra="decisions:\n  - id: d1\n    decided: 2026-09-03\n    context: 新的", body="y")
+    check("①前置:別的遠端分支真的有一篇工作目錄沒有、也帶 d1 的筆記",
+          "Other.md" in _nh_git(root, "diff", "--name-status", "origin/feat", "--", _NA_VAULT).stdout, "")
+    r = run(vault, "decision-amend", "Systems/Fresh", "d1", "--field", "context", "--text", "新的改")
+    check("①別的遠端分支多一篇無關筆記:全新筆記照准改", r.returncode == 0, r.stderr[-300:])
+    (vault / "Systems" / "Fresh.md").unlink()
+    # ② 已加進 git、改寫太多、git 配不成改名的搬檔:照拒
+    old = vault / "Systems" / "D.md"
+    t = old.read_text(encoding="utf-8").replace("\n".join(f"正文第 {i} 行" for i in range(30)), "\n".join(f"全部重寫 {i}" for i in range(30)))
+    (vault / "Systems" / "Moved.md").write_text(t, encoding="utf-8")
+    _nh_git(root, "rm", "-q", f"{_NA_VAULT}/Systems/D.md")
+    _nh_git(root, "add", f"{_NA_VAULT}/Systems/Moved.md")
+    ns = _nh_git(root, "diff", "--name-status", "-M", "origin/main", "--", _NA_VAULT).stdout
+    check("②前置:git 真的配不成改名(D 加 A,不是 R)", "\nA\t" in "\n" + ns and "D\t" in ns and "R" not in ns.split("\t")[0], ns)
+    r = run(vault, "decision-amend", "Systems/Moved", "d1", "--field", "context", "--text", "偷改")
+    check("②配不成改名的搬檔:遠端不見的那篇有一模一樣的決策 → 拒絕", r.returncode != 0 and "decision-supersede" in r.stderr,
+          r.stdout + r.stderr[-300:])
+    # ③ CI:多行腳本裡的字樣不算設定;註解有撇號照切;整步被行尾註解掉不算呼叫
+    wf = tmp / "wf"
+    wf.mkdir()
+    call = "      - run: python3 scripts/lumos note-audit check --diff x\n"
+    cases = {
+        "多行腳本裡的 fetch-depth 字樣": ("jobs:\n  audit:\n    steps:\n      - uses: actions/checkout@v4\n      - run: |\n"
+                                   "          echo fetch-depth: 0\n" + call, [("audit",)]),
+        "註解有撇號": ("jobs:\n  audit:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n"
+                  "          fetch-depth: 1  # don't: fetch-depth: 0 is slow\n" + call, [("audit",)]),
+        "設定行照認(對照組)": ("jobs:\n  audit:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n"
+                       "          fetch-depth: 0\n" + call, []),
+    }
+    for label, (y, want) in cases.items():
+        f = wf / f"{abs(hash(label))}.yml"
+        f.write_text(y, encoding="utf-8")
+        got = m._ci_jobs_calling_without_full_history([f], "note-audit check")
+        check(f"③{label}", [j for _f, j in got] == [w[0] for w in want], str(got))
+    txt = m._ci_workflow_texts([_w for _w in [wf / "c.yml"] if _w.write_text(
+        "jobs:\n  a:\n    steps:\n      - run: echo skip  # python3 scripts/lumos note-audit check (it's off)\n", encoding="utf-8") or True])
+    check("③b 整步被行尾註解掉(註解裡有撇號):不算有呼叫", not any("note-audit check" in l for _p, ls in txt for l in ls), str(txt))
+
+
+def t_lumos_no_zip_strict_for_py39():
+    """專案宣告支援 Python 3.9,zip(..., strict=) 要 3.10 才有——筆記形狀擋上線時用了三處,3.9 跑推送範圍會直接 TypeError
+    (筆記內容審代碼審收尾時用系統 3.9 編譯才發現;編譯過不代表跑得過,所以靜態掃)。"""
+    print("t_lumos_no_zip_strict_for_py39")
+    import re as _re
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    hits = [i for i, l in enumerate(src.split("\n"), 1) if _re.search(r"\bzip\([^#]*\bstrict\s*=", l)]
+    check("主程式沒有 zip(..., strict=)(3.10 才有)", not hits, str(hits[:10]))
+
+
 if __name__ == "__main__":
     sys.exit(main())
