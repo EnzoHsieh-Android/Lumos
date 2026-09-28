@@ -1,0 +1,596 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/治理帳多個寫入者都沒上鎖.md b/docs/lumos-toolchain-knowledge/Issues/治理帳多個寫入者都沒上鎖.md
+index 2d9777c3..25945172 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/治理帳多個寫入者都沒上鎖.md
++++ b/docs/lumos-toolchain-knowledge/Issues/治理帳多個寫入者都沒上鎖.md
+@@ -33,20 +33,20 @@ related:
+ - `_codeloop_gov_log`(代碼審的通過與跳過)
+ - `_append_governance_log`(doctor、spec-gate、delguard、bound-tests、設計審等)
+ - 代碼審表態(dispositions)自己的一支
+ 
+ 讀端(`lumos gov`、代碼審讀帳、doctor 等)解析失敗的行一律跳過,不報錯。
+ 
+ 這幾支寫入器的家是 [[Systems/reversibility-governance-ledger]];修好後說明寫回那一篇,本篇結案。
+ 
+ ## 現在怎麼繞
+ 
+-沒有繞法;靠同時寫的機率低。注意:[[Projects/筆記形狀擋_計劃]] 上線後,每次擋下與環境變數跳過會多寫一筆(放行不寫),寫帳頻率會略增。
++沒有繞法;靠同時寫的機率低。注意:[[Projects/筆記形狀擋_計劃]] 上線後,每次擋下與環境變數跳過會多寫一筆(放行不寫),寫帳頻率會略增。2026-09-28 [[Systems/存量漂移守衛]] 又多兩個寫入者:表態檔(一行一筆,追加後讀回自驗,但沒跟別的寫入者共用鎖)與 drift-check 閘事件(走通用寫入器);2026-10-11 回頭看時一起算。
+ 
+ ## 什麼算修好
+ 
+ 1. 所有寫入者共用同一把鎖,而且沿用專案唯一那套鎖檔做法(`_excl_lock_try`,筆記庫寫入鎖與派工鏡頭快取鎖都用它;專案記過「第二種鎖」被打掉的舊帳)。
+ 2. 鎖等不到時照 `_gate_event` 既有契約:不改變閘的判定,只在 stderr 講一句;不能變成擋人,也不能丟裸例外。
+ 3. 代碼審通過時「先寫本機標記、後寫治理帳」的順序要一起看:帳寫不進去時本機標記會讓本機放行、乾淨的 CI 卻紅。
+ 4. 有一支測試同時從兩個行程寫,確認兩筆都完整落帳。
+ 
+ REVISIT:2026-10-11 跟 rtb 回饋那篇同一天決定要不要另開計劃修。第二層([[Projects/筆記內容審_計劃]],取代了原本寫在這裡的舊計劃)2026-09-28 收窄後不拿治理帳判涵蓋,壞行只影響它的觀測數字,但寫入頻率會變高,決定時把它算成第一個受影響的使用者。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index ae26349f..bb9f3a87 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -8,20 +8,22 @@ about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/guards-gates
+ summary: |-
+   RULE:[since:2026-09-22][confirmed:2026-09-22][retire:連續兩季沒有任何專案用 guard plan,或誤擋多過真擋]合約可以「預告」:`lumos guard plan … --name <短名>` 一次寫好預告標記(`★INVARIANT-PLANNED★`,既有合約抓取撈不到它)與一個待完成的守衛驗證節點並雙向連好;查那篇功能節點時預告會另起一段印出來(還沒有測試在守、最遲哪天);逾期讓自檢出 issue(推送與 CI 靠它擋)、七天內先唸不擋、**到期當天不算過期**、**不准延期**;★本機推送只擋「這次改動碰到的」那幾條★(靠守衛節點→家節點→about_code 兩跳算交集;算不出來本機放行、CI 仍擋),別人的逾期會列出來但不擋你的推送;做完 `guard settle` 就地轉正,不做了 `guard abandon` 立墓碑(要先 `signoff --ref`)。★威脅模型是防忘記不防繞過★:改日期、改型別、刪節點檔都繞得過,刻意不補,寫在計劃的誠實界線。單源 [[Projects/必要合約清單_計劃]] [test:t_guard_plan_creates_marker_and_node]
+   PITFALL:[2026-09-22 代碼審 r2 blocker]預告行是「合約文字 + 指令接在行尾的 `[watch:…] [due:…]`」,轉正與棄置要靠還原出原始合約文字才找得到那一行。★只能剝行尾那一對,不能把整行同樣字樣都剝掉★:合約文字自己寫到那兩個字樣時(這個 repo 滿篇都是方括號標籤寫法)就還原不出原文,那條預告從此轉不了正也棄置不掉、逾期還一直擋推送,只剩手改檔案一條路 [test:t_guard_claim_with_bracket_tags_still_settles]
+   RULE:[since:2026-09-23][confirmed:2026-09-23][retire:有專案反映必填短名擋掉了正常流程(例如批次腳本登記大量預告)]★守衛節點的檔名要人給短名★:`--name` 必填、24 字內、只收中英數字底線連字號,檔名 = 日期_短名。原本拿合約原文前 40 字當檔名,斷在句子中間(rtb-production-agent-demo 回報)。舊規則截斷出來的檔名,自檢會在不擋的那一層點出來——判法是精確比對(檔名等於原文被截斷的樣子、而且原文真的比截斷長度長),手取的名字不會被點到。單源 [[Projects/必要合約清單_計劃]] 〈守衛節點的檔名〉 [test:t_guard_plan_requires_short_name]
+   FACT:[2026-09-22 以程式碼為準]規則只認「節點身上有 guards 欄位」的守衛節點,不看 status 字面值——手寫 `status: pending` 的人不該被拖進整套規則;判準跟著節點走,改名搬家都對得上。查:`grep -n 'GUARD_MARK_FIELD' scripts/lumos`
++  WHY:[2026-09-28 Projects/存量漂移防線_計劃]settle 轉正時把 guard plan 寫的四種預告句改成歷史說法(TEST 句改成哪天轉正、由家筆記的正式行守,不寫測試名;WHY 行尾加已轉正;正文兩句改寫),status、標籤與句子同一次寫入。原本轉正後守衛紀錄照樣寫著「還沒有測試在守」(rtb 考卷 A4–A6)。句型比對跟 [[Systems/存量漂移守衛]] 的 c1 共用同一支,從行首比、第四句含反引號
++  PITFALL:[2026-09-28 設計審 r3 外家席]plan、settle、abandon 原本改家筆記都在寫入鎖外,兩個指令同時改同一篇家筆記,後寫的會用舊內容蓋掉先寫的(例:settle 蓋掉同時 plan 寫的預告行,留下 pending 守衛紀錄卻沒有預告行);現在三支各自從讀到寫整段拿鎖。settle 第一步做完、第二步失敗時重跑只補第二步,守衛紀錄已是 pass 就回 0 [test:t_guard_commands_hold_vault_lock] [test:t_guard_settle_recovers_half_done]
+   KEY:★INVARIANT★ guard kill rc 優先序:survived→rc1、drifted/abort/error→rc2、弱證據(unattributed/timeout)不放行執行錯誤 [test:t_guard_kill_rc_precedence] [audit:sonnet/2026-07-29]
+   KEY:★INVARIANT★ guard kill --json 模式**成功跑完時(rc 0/1)** stdout 恰一行合法 JSON(所有診斷走 stderr;rc2 早退路徑不印 JSON=範圍外,明文收窄) [test:t_guard_kill_json_purity] [audit:sonnet/2026-07-29]
+   FLOW:kill-add(配方進kill_recipes+KEY行[kill:recipes],同檔原子寫)→kill(依platform分組→worktree於系統temp→baseline綠→套壞法(圍欄+唯一命中)→綁定測試必翻紅→七態verdict→docs/.kill-log.jsonl留痕)
+   KEY:宣告式壞法(人寫,從業務行為推導非實作反轉;繞開等價變異不可判定)｜run_cmd由config宣告(platforms.X.run_cmd/legacy test.run_cmd,{method}佔位+shlex.quote+killpg)｜**七態**(2026-07-29 oracle品質包升級,取代舊六態):killed(強證據,歸因到綁定測試)/killed_unattributed(紅了但歸不到該測試)/timed_out_weak(**不再計為 killed**,舊版歸 killed 是假強殺)/survived(稻草人rc1)/drifted/abort/error
+   KEY:baseline前置(cargo-mutants)防假殺;timeout=baseline×5下限20s(LUMOS_KILL_TIMEOUT_FLOOR可覆寫);worktree只隔離原始碼不隔離DB(hermetic警語);HEAD基準(dirty大聲警告)
+   KEY:★DEBT★ hydration(未提交帶入)與lockfile v1砍(否決位裁);E2E maestro {method}不適用;冷build成本;submodule不init
+   KEY:★誠實界線[2026-07-23 日報吸收]★——殺傷率有天花板:「殺得掉」≠「殺得準」。研究(arXiv 2606.10417)實測突變殺傷率 7-9 成的測試仍漏一大片未真正驗到的行為,且很多「殺掉」是程式碰巧崩(rc≠0)、非斷言真的檢查了被改壞的行為。**對 lumos 兩重意義**:①guard-kill 的 survived(rc1)只證「綁定測試對這個壞法翻紅」,不證斷言指到被改的業務欄位——高風險合約可加一句「準殺」檢查(失敗測試斷言須提及被弄壞的欄位/行為,非只看 rc)②**打臉 2026-07-22 日報 inspiration「把 Check K 健康指標從『數測試』換成『殺傷率』」**(該 inspiration 未落地)——別把可鑽的『數量』換成另一個可鑽的『殺傷率』;真要換,健康指標得是『準殺』(斷言驗到規則),不是裸殺傷率。載重合約留「這條到底驗了哪些行為」比留一個殺傷率數字誠實
+   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
+   TEST:t_guard_kill(七態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
+ related:
+diff --git a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+index 11812f53..619cc010 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
++++ b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+@@ -21,20 +21,21 @@ summary: |-
+   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
+   FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:decisions] → doctor Check R / lint 強制 → ③ findings 經 doctor(僅 --ci)append .governance-log.jsonl → lumos gov 唯讀彙整查詢
+   KEY:可逆性走平行函式 extract_reversibility,完全不碰 extract_contracts 的 7 個 callsite(invariant 合約家族零靜默失效)[test:t_reversibility_doctor]
+   KEY:不可逆標記缺實質回退 → doctor --ci / lint error(硬擋);兩軌任一合規即放行:[rollback:decisions](事後回退)或 [guard:decisions](事前冪等/核可閘)[test:t_reversibility_guard_doctor]
+   KEY:checkpoint 標記缺回退只 warn_soft(印但不計 issues)→ doctor --ci 仍 rc0;新增 warn_soft 因既有 warn 會 issues+=1 在 --ci 下誤擋[test:t_reversibility_doctor]
+   KEY:可逆性標記僅限 type=system;標在 Issue/Verification → error 標錯型別;type 缺失/非字串不崩不誤報
+   KEY:[rollback:]/[guard:] v1 唯一支援形式 = decisions,語義=本節點 decisions[] 有 ≥1 條非空 rollback/guard 內容;其他 ref 值視為未解析
+   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
+   KEY:gov 彙整多本帳(6 源 <!--lumos:count=6 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME) in=scripts/lumos-->:bypass/governance/signoff/kill/canary/ci,ci 條件載入;★原記 7 源含 rot-queue,2026-08-22 該 loader 拆除(寫帳的 verification-rot-check 8/21 已撤、本機無此檔,留著只是假名額)——Check N 當天就抓到數字漂,由另一個 session 順手修★),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內)——原記「皆 gitignore local-only」已不成立;**根因**=scaffold 把 ignore 清單寫在 vault 內、帳檔在上一層 `docs/`,從未生效(同日修,新專案起生效;本 repo 維持追蹤,見 [[Verification/2026-08-21_doctor-run事件落地]])★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
+   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
++  WHY:[2026-09-28 Projects/存量漂移防線_計劃]閘名單加 drift-check:存量漂移守衛的擋下、提醒、跳過、表態都記在這個閘名下;放行不寫帳(同筆記形狀擋),doctor Z 段也不寫——存量每天唸同一批會被週報升級成噪音
+   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
+   KEY:對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄)=canary 分帳尾加「折入 N 筆缺陷[severity 分佈]|依審計員」——折入=caught 輪辯方裁決後存活折入的真缺陷(測試綠後仍被抓,天生=測試漏掉的);長期趨零=整套對抗機關裝飾品該砍,這是驗證層對自己的驗證。missed 輪不計;findings 欄 M1(07-21)前舊輪誠實另計。首跑真帳:近 90 天折入 866 筆(blocker 404/major 403/minor 59)——機關非裝飾實證 [test:t_gov_adversarial_increment]
+   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
+   DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_marker_doc_sync](L4 審計 2026-07-24 修:原指 t_reversibility_drift 不存在)
+   TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_write/t_gov_query(無 reversibility 前綴)+ t_marker_doc_sync(文件漂移)+ t_gov_denoise(去噪)
+   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
+ decisions:
+   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
+     id: d1
+     context: design-loop R1-BLOCKER-1 / R2-BLOCKER-A — 若把可逆性塞進 extract_contracts,其 7 個 callsite(Check T、cmd_contracts、guard 家族、_html_model)語義被牽動,有靜默失效風險
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+new file mode 100644
+index 00000000..c94b75d9
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -0,0 +1,44 @@
++---
++type: system
++status: doing
++created: 2026-09-28
++updated: 2026-09-28
++responsibility: 負責 lumos drift 家族(check、scan、ack、exam)、五種狀態一致檢查、計劃收尾的連帶待辦與 doctor Z 段;不負責新寫句子的形狀(筆記內容閘)、判定者怎麼判(筆記內容審)、guard settle 本身(guard-kill)
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/system
++  - status/doing
++  - scope/node-content
++summary: |-
++  WHY:[2026-09-28 Projects/存量漂移防線_計劃]筆記形狀擋與筆記內容審只管新寫的句子;已經寫進去的句子因為別處狀態變了而過期,現有健檢一處都抓不到(rtb 抽查 33 處、20 處漂移)。這篇管「甲」:狀態改了連帶處理——五種狀態一致檢查、計劃收尾時列連帶待辦、推送時只擋「這次轉正、預告句還留著」
++  WHY:[2026-09-28 設計審 r1–r3]推送閘只擋 c1:只有它是工具自己寫的固定句型、判得準;c2–c5 連的是人寫的連結,連結有時只是參考,擋了會逼人亂結案,所以只列出
++  WHY:[2026-09-28 設計審 r2 外家席]check 判不了(git 失敗、逾時、預算用完)算要處理,跟筆記內容審相反(那邊判不了放行):判不了就放行等於給了一條繞過的路;真要推用單次略過,會留帳
++  RULE:[since:2026-09-28][retire:三條門檻考過、預設改成 block 並接進掛鉤與 CI 時撤掉這條]還沒接線,沒寫設定時預設 warn;預設改 block 要三條全過:考卷正例全對、工具鏈自己最近 100 個提交重放每筆要處理都判成真、每次要處理 ≤5(計劃〈做法〉第 4 節第 4 點)
++  PITFALL:[2026-09-28 實作翻紅檢查]考試的 status_replay 有兩條點到的路(記憶體重放連帶待辦、真實範圍的 check 列出 c2),真實提交本身就收尾計劃時兩條都會中,測試分不出重放有沒有做;另放一題「提交本身沒收尾、只有重放才抓得到」 [test:t_drift_exam_scores]
++  TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section
++related:
++  - "[[Projects/存量漂移防線_計劃]]"
++  - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
++  - "[[Systems/guard-kill]]"
++  - "[[Systems/筆記內容審]]"
++---
++# 存量漂移守衛
++
++白話:句子寫進圖譜那天是對的,後來別處的狀態變了(合約轉正、計劃收尾、提交了),句子就過期了。這篇管的機制在「狀態改了」那一刻把連著的舊句子指出來。設計與取捨全在 [[Projects/存量漂移防線_計劃]],這裡只記程式碼看不出來的部分。
++
++## 五種狀態一致檢查
++
++scan、check、doctor Z 共用同一支檢查,也能跑在任一個提交的樹上(考試與推送檢查用)。種類與「只列出/會擋」的分法見計劃〈做法〉第 1 節第 4、5 點;轉正預告句的比對跟 [[Systems/guard-kill]] 的 settle 改寫共用同一支,兩邊不能各寫一份——各寫一份時,settle 改完的句子可能又被認成預告,轉正後的推送被自己擋。
++
++## 跟設計稿不一樣的兩處(實作時決定)
++
++- **doctor 的「開關不是 block」提醒只在接線後才印**:計劃寫的是一律印。還沒接線時預設就是 warn,每個專案每天多一行「這道檢查是 warn」只是噪音;接線(推送前掛鉤出現 `drift check` 標記)之後才有意義。
++- **考試的「誤報」只算題目那篇以外的發現**:c1 一句一筆,一篇守衛紀錄有四句預告句,題目只考 TEST 那句,另外三句是同一個事件的真發現,算成誤報會把「抓得對」算成「亂抓」。
++
++## 怎麼用
++
++- 健檢全圖譜:`lumos drift scan`(`--at <提交>` 看某個版本、`--json` 給修復清單用)。
++- 某一行確定照留:`lumos drift ack <節點> <行號> --kind <種類> --reason "…"`,提交進去才算;那一行一改就失效。
++- 考試:`lumos drift exam <考卷> --repo <被考的 repo>`;`--history N` 對最近 N 個主線提交重放(門檻②)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
+index 5d71342a..6e33ab66 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
+@@ -10,20 +10,21 @@ about_code:
+   - scripts/templates/note-audit-judge.md
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:[2026-09-28 Projects/筆記內容審_計劃〈做法〉第 0 節,Enzo 裁「收窄成防疏忽」]只防忘了審、不防存心繞過——判定檔與報告都能手寫,要防竄改得有簽章或伺服器端,成本遠大於主要失誤;刪判定檔的次數由 doctor 數給計劃的 RETIRE-IF 看
+   WHY:[2026-09-28 計劃〈做法〉第 2 節]信任方向:判得重(CODE/MIXED)的一律收,判得輕(CONTEXT)的要來源對、上下文沒變才收——誤判成重只多一次申訴,誤判成輕就放過一句程式碼推得出的話
+   WHY:[2026-09-28 計劃設計審 r2 正確性席]第二層上線只看範圍截斷、不逐提交判:推送前掛鉤在推送當下跑,逐提交判會把「上線前開、上線後才推」的分支整批漏掉(第一層是提交當下跑,才逐提交判)
+   WHY:[2026-09-28 計劃〈做法〉第 1 節]計劃收尾整篇再判一次(完成審):進行中寫的「目前做到哪」收尾後就成了過期現況;完成審編號多一個標記,進行中判成脈絡的不涵蓋它
++  WHY:[2026-09-28 Projects/存量漂移防線_計劃]逐提交讀 status 找「範圍裡收尾」的那段抽成共用(計劃收尾與守衛紀錄 pending→pass 用同一支),推送範圍起點的判法也共用、閘名與上線標記由呼叫端傳入;改這兩段要一起跑 -k note_audit 與 -k drift
+   RULE:派工詞範本改任何一個字要升版號,並重跑 68 句小實驗、結果記進計劃;判定者換模型也一樣 [since:2026-09-28] [retire:判定改成不需要小實驗校準的機械判法,或第二層整個撤掉] [applies:scripts/templates/note-audit-judge.md]
+   PITFALL:[2026-09-28 實作時實測]git log -z --format=%H --name-only 印成「提交編號、分隔字元、換行加路徑、分隔字元」,照換行切一篇收尾都認不出 [test:t_note_audit_done_plan_rejudged]
+   PITFALL:[2026-09-28 實作時實測]「收尾→改回→再收尾」頭尾版本一模一樣,只看頭尾差異找候選會整篇漏掉;候選要取範圍裡任一提交碰過的筆記 [test:t_note_audit_done_plan_rejudged]
+   PITFALL:[2026-09-28 實作時實測]改名偵測的路徑篩選只給新路徑時 git 看不到舊路徑、認不出改名;decision-amend 找遠端舊版要把整個圖譜夾交給 git,專案根也要問 git、不能拿圖譜夾頂替 [test:t_decision_amend_field_fetch_remote_rename]
+   PITFALL:[2026-09-28 代碼審 r1 正確性席、外家席]同一小標題下一字不差的兩行共用一個內容編號,只列第一處時判定者沒看過另一處的上下文,輕的判定卻涵蓋兩處;清單要每處都列、輕的判定要每處上下文都對 [test:t_note_audit_code_review_r1_regressions]
+   PITFALL:[2026-09-28 代碼審 r1 正確性席]清單要照位元組讀:文字模式讀檔會把筆記裡的 CR 換掉,清單指紋對不上,CRLF 筆記的脈絡判定一行都收不下 [test:t_note_audit_code_review_r1_regressions]
+   PITFALL:[2026-09-28 代碼審 r1 外家席]決策欄的值寫在下一行起、又不是多行文字記號時,那是清單或巢狀欄;當成文字整段換掉會靜默把清單壓成一句 [test:t_note_audit_code_review_r1_regressions]
+   PITFALL:[2026-09-28 代碼審 r3、驗收輪共四席]decision-amend 找「這篇在遠端的舊路徑」不能靠「有檔不見」或「有同編號」:決策編號每篇都從 d1 起,別人分支多一篇筆記就誤擋,改寫太多的搬檔 git 又配不成改名;要比對不見的那篇裡同編號決策的其他欄是否一模一樣 [test:t_note_audit_acceptance_regressions]
+ related:
+   - "[[Projects/筆記內容審_計劃]]"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index bcf49c87..d1228dd3 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -50085,12 +50085,436 @@ def t_note_audit_acceptance_regressions():
+ def t_lumos_no_zip_strict_for_py39():
+     """專案宣告支援 Python 3.9,zip(..., strict=) 要 3.10 才有——筆記形狀擋上線時用了三處,3.9 跑推送範圍會直接 TypeError
+     (筆記內容審代碼審收尾時用系統 3.9 編譯才發現;編譯過不代表跑得過,所以靜態掃)。"""
+     print("t_lumos_no_zip_strict_for_py39")
+     import re as _re
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
+     hits = [i for i, l in enumerate(src.split("\n"), 1) if _re.search(r"\bzip\([^#]*\bstrict\s*=", l)]
+     check("主程式沒有 zip(..., strict=)(3.10 才有)", not hits, str(hits[:10]))
+ 
+ 
++# ═══ 存量漂移守衛(Projects/存量漂移防線_計劃)甲:狀態指令連帶處理 ═══
++
++_DR_VAULT = "docs/kg-knowledge"
++
++
++def _dr_guard_text(status="pending", home="Systems/Pay", claim="大額退費要人工核可", why="下游介面還沒定案",
++                   plan="Projects/退款_計劃", prose=True, settled_why=False):
++    """一篇 guard plan 樣板長相的守衛紀錄(直接寫檔,不經指令——用來造「舊版 settle 轉正後留著預告句」的現場)。"""
++    wline = f"  WHY:[2026-09-01]預告這條合約但還沒做:{why}" + ("(2026-09-20 已轉正)" if settled_why else "")
++    summ = [wline, "  TEST:還沒有測試在守這條;最遲 2099-12-31 要做完,負責人 enzo"] if prose else ["  KEY:x"]
++    body = [f"預告的合約:{claim}", ""]
++    if prose:
++        body += [f"為什麼還不做:{why}", "", "做完之後跑 `lumos guard settle` 轉正,不要手改狀態。"]
++    return ("---\ntype: verification\nstatus: " + status + "\ncreated: 2026-09-01\nupdated: 2026-09-01\n"
++            "due: 2099-12-31\nowner: enzo\nguards:\n  - " + home + "\nphases:\n  - P1\nplan_refs:\n"
++            f"  - \"[[{plan}]]\"\ntags:\n  - type/verification\n  - status/{status}\nsummary: |-\n"
++            + "\n".join(summ) + "\n---\n# G\n\n" + "\n".join(body) + "\n")
++
++
++def _dr_repo(cfg=None, golive=True):
++    """存量漂移的測試專案:每支檔有家那個骨架 + 含 drift check 上線標記的推送前掛鉤 + 家筆記 Pay 與計劃。"""
++    root = _nh_repo(cfg)
++    if golive:
++        _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
++    _nh_node(root, "Pay", summary="FLOW:a")
++    _nh_node(root, "退款_計劃", typ="project", folder="Projects", resp=None, summary="KEY:p")
++    _nh_commit(root, "init")
++    return root
++
++
++def _dr(root, *args, env=None):
++    import subprocess as sp, os as _os
++    e = dict(_os.environ)
++    e.pop("LUMOS_SKIP_DRIFT_CHECK", None)
++    if env:
++        e.update(env)
++    r = sp.run([sys.executable, GRAPHCTL, "drift", *args, "--repo", str(root)], capture_output=True, text=True, env=e)
++    return r.returncode, r.stdout + r.stderr
++
++
++def _dr_scan(vault, *extra):
++    import json as _j
++    r = run(vault, "drift", "scan", "--json", *extra)
++    return _j.loads(r.stdout)["findings"] if r.returncode == 0 else r.stdout + r.stderr
++
++
++def t_guard_settle_rewrites_planned_prose():
++    """[S4] settle 轉正把 guard plan 寫的四種預告句改成歷史說法、其他行不動、status 同一次寫入;
++    新版轉正後的推送不被自己的 c1 擋;找不到句型時提醒但照樣成功。
++
++    翻紅釘:拿掉 _guard_settle_rewrite 的呼叫 → ②③紅;第四句前綴拿掉反引號 → ② 第四句紅;
++    c1 改成子字串比對(不從行首)→ ⑤ 被「預告當時為什麼還不做」擋紅。
++    """
++    print("t_guard_settle_rewrites_planned_prose")
++    import datetime
++    today = datetime.date.today().isoformat()
++    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
++    vault = root / _DR_VAULT
++    base = _na_head(root)
++    _gp(vault, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃",
++        "--phase", "P1", "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo", "--name", "大額退費")
++    g = [x for x in (vault / "Verification").glob("*.md")][0]
++    before = g.read_text(encoding="utf-8")
++    check("①前置:樣板真的寫了四種預告句", all(x in before for x in (
++        "TEST:還沒有測試在守這條", "]預告這條合約但還沒做:", "\n為什麼還不做:", "做完之後跑 `lumos guard settle` 轉正")), before)
++    _nh_commit(root, "plan")
++    r = run(vault, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund_manual")
++    after = g.read_text(encoding="utf-8")
++    check("①settle 成功", r.returncode == 0, r.stdout + r.stderr)
++    check("②TEST 句改成哪天轉正、由家筆記的正式行守,不寫測試名",
++          f"TEST:[{today}] 預告已轉正,合約改由 [[Systems/Pay]] 的正式合約行守" in after and "t_refund_manual" not in after, after)
++    check("②WHY 句行尾加已轉正", f"預告這條合約但還沒做:下游介面還沒定案({today} 已轉正)" in after, after)
++    check("②正文「為什麼還不做」改成預告當時", "\n預告當時為什麼還不做:下游介面還沒定案" in after and "\n為什麼還不做:" not in after, after)
++    check("②第四句整行換成已轉正", f"\n({today} 已轉正)\n" in after and "做完之後跑" not in after, after)
++    check("③status 與標籤同一次改成 pass", "status: pass" in after and "status/pass" in after and "status/pending" not in after, after)
++    check("③其他行一字不動", "預告的合約:大額退費要人工核可" in after and "due: 2099-12-31" in after, after)
++    fs = _dr_scan(vault)
++    check("④新版轉正後 scan 沒有 c1", isinstance(fs, list) and not [f for f in fs if f["kind"] == "c1"], str(fs))
++    _nh_commit(root, "settle")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("⑤轉正後緊接的推送不被自己的 c1 擋", rc == 0 and "c1" not in out, out)
++    # 找不到句型:手改掉 TEST 句 → 提醒、照樣成功
++    _gp(vault, "guard", "plan", "Systems/Pay", "另一條合約", "--plan", "Projects/退款_計劃",
++        "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "另一條")
++    g2 = [x for x in (vault / "Verification").glob("*.md") if "另一條" in x.stem][0]
++    g2.write_text(g2.read_text(encoding="utf-8").replace("TEST:還沒有測試在守這條", "TEST:作者自己改寫過"), encoding="utf-8")
++    r2 = run(vault, "guard", "settle", "Verification/" + g2.stem, "--test", "t_other")
++    check("⑥找不到句型:照樣成功並提醒那一句", r2.returncode == 0 and "找不到摘要的 TEST 預告句" in r2.stdout,
++          r2.stdout + r2.stderr)
++    check("⑥手改過的那句不動", "TEST:作者自己改寫過" in g2.read_text(encoding="utf-8"), g2.read_text(encoding="utf-8"))
++
++
++def t_guard_settle_recovers_half_done():
++    """[S5] 家筆記已經是正式行(其他標記不影響)而守衛紀錄還是 pending:只補第二步;已經 pass:印已轉正、回 0。
++
++    翻紅釘:拿掉 _guard_formal_line 那個分支 → ①紅(找不到預告行擋下);拿掉 status==pass 的早退 → ③紅。
++    """
++    print("t_guard_settle_recovers_half_done")
++    v = mkvault()
++    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
++    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
++    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃",
++        "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
++    g = list((v / "Verification").glob("*.md"))[0]
++    pay = v / "Systems" / "Pay.md"
++    t = pay.read_text(encoding="utf-8")
++    import re as _re
++    t2 = _re.sub(r"  KEY:★INVARIANT-PLANNED★ 大額退費要人工核可.*",
++                 "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund] [audit:opus/2026-09-20]", t)
++    pay.write_text(t2, encoding="utf-8")
++    check("①前置:家筆記已是正式行、守衛紀錄還是 pending", "★INVARIANT-PLANNED★" not in t2
++          and "status: pending" in g.read_text(encoding="utf-8"), t2)
++    r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
++    check("①做到一半:只補守衛紀錄、成功", r.returncode == 0 and "只補守衛紀錄" in r.stdout, r.stdout + r.stderr)
++    check("②守衛紀錄轉成 pass、預告句改寫", "status: pass" in g.read_text(encoding="utf-8")
++          and "還沒有測試在守" not in g.read_text(encoding="utf-8"), g.read_text(encoding="utf-8"))
++    check("②家筆記那行沒被再動", pay.read_text(encoding="utf-8") == t2, pay.read_text(encoding="utf-8"))
++    r2 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
++    check("③已經 pass:印已轉正、回 0", r2.returncode == 0 and "已轉正,不用再做" in r2.stdout, r2.stdout + r2.stderr)
++    g.write_text(g.read_text(encoding="utf-8").replace("status: pass", "status: abandoned"), encoding="utf-8")
++    r3 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
++    check("④墓碑照舊擋", r3.returncode == 2, r3.stdout + r3.stderr)
++
++
++def t_guard_commands_hold_vault_lock():
++    """[S19] guard plan/settle/abandon 讀家筆記時已經拿著寫入鎖(從讀到寫整段在鎖裡,另一個程序才蓋不掉)。
++
++    翻紅釘:把任一支的 `with _vault_write_lock` 拿掉 → 對應那條紅。
++    """
++    print("t_guard_commands_hold_vault_lock")
++    m = _load_lumos_inproc()
++    v = mkvault()
++    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
++    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
++    seen = []
++    orig = m.load_raw_for_edit
++
++    def spy(path, *a, **kw):
++        if Path(path).name == "Pay.md":
++            seen.append(bool(m._VAULT_LOCK_HELD))
++        return orig(path, *a, **kw)
++    import contextlib, io
++    m.load_raw_for_edit = spy
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = m.cmd_guard_plan(m.Env(v), "Systems/Pay", "合約甲", "Projects/退款_計劃", "P1", "2099-12-31",
++                                  "還沒定", "enzo", name="合約甲")
++        check("①plan 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
++        g = [x for x in (v / "Verification").glob("*.md")][0]
++        seen.clear()
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = m.cmd_guard_settle(m.Env(v), "Verification/" + g.stem, "t_a")
++        check("②settle 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            m.cmd_guard_plan(m.Env(v), "Systems/Pay", "合約乙", "Projects/退款_計劃", "P1", "2099-12-31",
++                             "還沒定", "enzo", name="合約乙")
++        g2 = [x for x in (v / "Verification").glob("*.md") if "合約乙" in x.stem][0]
++        run(v, "signoff", "Verification/" + g2.stem, "--note", "確認不做了", "--ref", "Verification/" + g2.stem)
++        seen.clear()
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = m.cmd_guard_abandon(m.Env(v), "Verification/" + g2.stem, "決定不做")
++        check("③abandon 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
++    finally:
++        m.load_raw_for_edit = orig
++    check("④鎖用完放掉", not m._VAULT_LOCK_HELD, str(m._VAULT_LOCK_HELD))
++
++
++def t_set_plan_closed_lists_followups():
++    """[S6] lumos set 把計劃改成 done/superseded 時列連帶待辦:有連結的開著的 Issue(寫方向)、跟 c3 同一個集合的
++    pending 驗證紀錄,每項附檢視指令;其他狀態、非計劃不多印;改狀態本身照舊成功。
++
++    翻紅釘:拿掉 set 那段 _drift_print_followups → ①紅;_drift_c3_hit 的 override 拿掉 → ③V1 紅。
++    """
++    print("t_set_plan_closed_lists_followups")
++    v = mkvault()
++    (v / "Issues").mkdir()
++    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n見 [[Issues/I3]]\n")
++    write(v, "Projects/Q_計劃.md", "type: project\nstatus: doing", body="# Q\n")
++    write(v, "Issues/I1.md", "type: issue\nstatus: open", body="# I1\n跟 [[Projects/P_計劃]] 有關\n")
++    write(v, "Issues/I2.md", "type: issue\nstatus: done", body="# I2\n跟 [[Projects/P_計劃]] 有關\n")
++    write(v, "Issues/I3.md", "type: issue\nstatus: doing", body="# I3\n")
++    write(v, "Verification/V1.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/P_計劃]]"', body="# V1\n")
++    write(v, "Verification/V2.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/P_計劃]]"\n'
++          '  - "[[Projects/Q_計劃]]"', body="# V2\n")
++    write(v, "Verification/V3.md", 'type: verification\nstatus: pending\nguards:\n  - Systems/X\nplan_refs:\n'
++          '  - "[[Projects/P_計劃]]"', body="# V3\n")
++    r = run(v, "set", "Projects/P_計劃", "status", "done")
++    out = r.stdout
++    check("①改狀態成功並列連帶待辦", r.returncode == 0 and "連帶待辦" in out, out + r.stderr)
++    check("②開著的 Issue 列出並寫方向", "Issues/I1(open,它連到計劃)" in out and "Issues/I3(doing,計劃連到它)" in out, out)
++    check("②已結案的 Issue 不列", "Issues/I2" not in out, out)
++    check("③跟 c3 同一個集合:V1 列、另一份計劃還開著的 V2 不列、守衛紀錄 V3 不列",
++          "Verification/V1" in out and "Verification/V2" not in out and "Verification/V3" not in out, out)
++    check("③每項附檢視指令、不給改狀態的指令", "lumos context Issues/I1" in out and "lumos set Issues" not in out, out)
++    r2 = run(v, "set", "Projects/Q_計劃", "status", "doing")
++    check("④不是收尾狀態不多印", r2.returncode == 0 and "連帶待辦" not in r2.stdout, r2.stdout)
++    r3 = run(v, "set", "Issues/I3", "status", "done")
++    check("④不是計劃不多印", r3.returncode == 0 and "連帶待辦" not in r3.stdout, r3.stdout)
++
++
++def t_drift_state_consistency_checks():
++    """[S7] c1–c5 各自成立與不成立判對、每筆回報所在行(c1 一句一筆);c3 排除空的/壞的/非計劃的 plan_refs 與守衛紀錄;
++    c4 同一句有「未提交」與「工作樹」照樣成立、「釘在某提交的乾淨工作樹」不成立。
++
++    翻紅釘:c4 加回「含工作樹就排除」→ ⑤E3 那種寫法紅;c1 改成一篇一筆 → ②紅;c3 拿掉「全都是計劃」→ ④紅。
++    """
++    print("t_drift_state_consistency_checks")
++    v = mkvault()
++    (v / "Issues").mkdir()
++    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n"
++          "  KEY:★INVARIANT★ 半套的合約 [test:t_x] [audit:opus/2026-09-01]", body="# Pay\n")
++    write(v, "Projects/Done_計劃.md", "type: project\nstatus: done", body="# D\n")
++    write(v, "Projects/Open_計劃.md", "type: project\nstatus: doing", body="# O\n")
++    (v / "Verification" / "G1.md").write_text(_dr_guard_text("pass"), encoding="utf-8")
++    (v / "Verification" / "G2.md").write_text(_dr_guard_text("pass", prose=False), encoding="utf-8")
++    (v / "Verification" / "G3.md").write_text(_dr_guard_text("pass", settled_why=True).replace(
++        "  TEST:還沒有測試在守這條;最遲 2099-12-31 要做完,負責人 enzo\n", "").replace("為什麼還不做:", "預告當時為什麼還不做:")
++        .replace("做完之後跑 `lumos guard settle` 轉正,不要手改狀態。", "(2026-09-20 已轉正)"), encoding="utf-8")
++    (v / "Verification" / "G4.md").write_text(_dr_guard_text("pending", claim="半套的合約"), encoding="utf-8")
++    write(v, "Issues/I.md", "type: issue\nstatus: open", body="# I\n[[Projects/Done_計劃]]\n")
++    write(v, "Verification/V_ok.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/Done_計劃]]"', body="# v\n")
++    write(v, "Verification/V_empty.md", "type: verification\nstatus: pending\nplan_refs: []", body="# v\n")
++    write(v, "Verification/V_ghost.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/不存在]]"', body="# v\n")
++    write(v, "Verification/V_issue.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Issues/I]]"', body="# v\n")
++    write(v, "Verification/V_mixed.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/Done_計劃]]"\n'
++          '  - "[[Projects/Open_計劃]]"', body="# v\n")
++    write(v, "Verification/E3.md", "type: verification\nstatus: pass\nvalid_under: 僅本工作樹(未提交、未過代碼審);全套測試", body="# e\n")
++    write(v, "Verification/Clean.md", "type: verification\nstatus: pass\nvalid_under: 釘在提交 abc123 的乾淨工作樹", body="# c\n")
++    fs = _dr_scan(v)
++    check("①scan 跑得起來", isinstance(fs, list), str(fs))
++    if not isinstance(fs, list):
++        return
++    by = lambda k: sorted((f["path"], f["line"]) for f in fs if f["kind"] == k)
++    g1 = (v / "Verification" / "G1.md").read_text(encoding="utf-8").split("\n")
++    want = sorted(("Verification/G1.md", i + 1) for i, l in enumerate(g1)
++                  if l.strip().startswith(("WHY:[", "TEST:還沒有", "為什麼還不做:", "做完之後跑")))
++    check("②c1 一句一筆、四句都在、行號對", by("c1") == want and len(want) == 4, f"{by('c1')} vs {want}")
++    check("②c1 不列沒有預告句的、也不列已改成歷史說法的", not any(p in ("Verification/G2.md", "Verification/G3.md")
++                                                   for p, _l in by("c1")), str(by("c1")))
++    check("③c2:開著的 Issue 連到收尾計劃,回報 status 那行", by("c2") == [("Issues/I.md", 3)], str(by("c2")))
++    check("④c3 只列 plan_refs 全是已收尾計劃的那篇", [p for p, _l in by("c3")] == ["Verification/V_ok.md"], str(by("c3")))
++    check("⑤c4:同一句有未提交與工作樹照樣成立;乾淨工作樹不成立", [p for p, _l in by("c4")] == ["Verification/E3.md"], str(by("c4")))
++    check("⑥c5:pending 但家筆記已是正式行(audit 標記不影響)", [p for p, _l in by("c5")] == ["Verification/G4.md"], str(by("c5")))
++
++
++def t_drift_check_state_events_in_range():
++    """[S8][S1][S3] 推送範圍裡有守衛紀錄 pending→pass 且留著預告句 → 擋那一篇的 c1;c2–c5 只列出;範圍外的不擋、scan 照列;
++    三態開關、略過只認 1、上線點之前的不查;表態要提交才算、改那行就失效並印舊理由、理由太短拒絕。
++
++    翻紅釘:c1 不看「範圍裡轉正」→ ⑤範圍外那篇紅;表態讀工作目錄 → ⑧紅;略過改成有設就跳 → ③紅。
++    """
++    print("t_drift_check_state_events_in_range")
++    import json as _j
++    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
++    vault = root / _DR_VAULT
++    (vault / "Issues").mkdir(exist_ok=True)
++    (vault / "Verification" / "Old.md").write_text(_dr_guard_text("pass", claim="早就轉正的"), encoding="utf-8")
++    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
++    _nh_commit(root, "base")
++    base = _na_head(root)
++    g = vault / "Verification" / "G.md"
++    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
++                 encoding="utf-8")
++    p = vault / "Projects" / "退款_計劃.md"
++    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done").replace("status/doing", "status/done"),
++                 encoding="utf-8")
++    _nh_commit(root, "舊版 settle 的轉正,順手收尾計劃")
++    rng = f"{base}..HEAD"
++    rc, out = _dr(root, "check", "--diff", rng)
++    check("①block:範圍裡轉正還留著預告句 → rc1", rc == 1 and "Verification/G.md" in out, out)
++    check("②c1 一句一筆都列出", out.count("[c1 ") == 4, out)
++    check("②c2 只列出(計劃在範圍裡收尾、連著開著的 Issue)", "只列出" in out and "Issues/I.md" in out, out)
++    check("⑤範圍外早就轉正的那篇不擋", "Old.md" not in out, out)
++    fs = _dr_scan(vault)
++    check("⑤但 scan 照列範圍外那篇", any(f["path"] == "Verification/Old.md" and f["kind"] == "c1" for f in fs), str(fs)[:300])
++    rc, out = _dr(root, "check", "--diff", rng, env={"LUMOS_SKIP_DRIFT_CHECK": "1"})
++    check("③略過設成 1:放行並記 skipped-env", rc == 0 and "skipped-env" in (vault.parent / ".governance-log.jsonl").read_text(
++        encoding="utf-8"), out)
++    rc, out = _dr(root, "check", "--diff", rng, env={"LUMOS_SKIP_DRIFT_CHECK": "0"})
++    check("③設成別的值不算略過", rc == 1, out)
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "warn"}}), encoding="utf-8")
++    _nh_commit(root, "warn")
++    rc, out = _dr(root, "check", "--diff", rng)
++    check("④warn:只印、rc0、記 warned", rc == 0 and "提醒(drift_check.gate=warn" in out and "\"warned\"" in (
++        vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8"), out)
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "off"}}), encoding="utf-8")
++    _nh_commit(root, "off")
++    rc, out = _dr(root, "check", "--diff", rng)
++    check("④off:放行", rc == 0 and "關掉" in out, out)
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "block"}}), encoding="utf-8")
++    _nh_commit(root, "block again")
++    # 表態
++    lines = g.read_text(encoding="utf-8").split("\n")
++    nums = [i + 1 for i, l in enumerate(lines) if l.strip().startswith(("WHY:[", "TEST:還沒有", "為什麼還不做:", "做完之後跑"))]
++    r = run(vault, "drift", "ack", "Verification/G", str(nums[0]), "--kind", "c1", "--reason", "短")
++    check("⑦理由少於 4 個字拒絕", r.returncode == 2, r.stdout + r.stderr)
++    for n in nums:
++        r = run(vault, "drift", "ack", "Verification/G", str(n), "--kind", "c1", "--reason", "歷史紀錄照留,不改")
++    check("⑦表態寫進表態檔並記 acked", r.returncode == 0 and (root / "governance" / "drift-acks.jsonl").is_file()
++          and "\"acked\"" in (vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8"), r.stdout + r.stderr)
++    rc, out = _dr(root, "check", "--diff", rng)
++    check("⑧表態還沒提交:照擋(只認被推送頂端提交裡的表態檔)", rc == 1, out)
++    _nh_commit(root, "acks")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("⑧表態提交後:不再擋", rc == 0, out)
++    g.write_text(g.read_text(encoding="utf-8").replace("為什麼還不做:下游介面還沒定案", "為什麼還不做:下游介面還沒定案,改了一個字"),
++                 encoding="utf-8")
++    _nh_commit(root, "edit line")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("⑨改了那一行:表態失效照擋", rc == 1 and "為什麼還不做" in out, out)
++    # 上線點:標記在範圍中段才出現,之前的轉正不查
++    root2 = _dr_repo(cfg={"drift_check": {"gate": "block"}}, golive=False)
++    v2 = root2 / _DR_VAULT
++    (v2 / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    _nh_commit(root2, "base")
++    b2 = _na_head(root2)
++    gg = v2 / "Verification" / "G.md"
++    gg.write_text(gg.read_text(encoding="utf-8").replace("status: pending", "status: pass"), encoding="utf-8")
++    _nh_commit(root2, "舊轉正")
++    _nh_file(root2, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
++    _nh_commit(root2, "上線")
++    rc, out = _dr(root2, "check", "--diff", f"{b2}..HEAD")
++    check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
++
++
++def t_drift_unknown_blocks_check_not_scan():
++    """[S2] check 判不了(git 算不出範圍事件)→ 算要處理、印原因(block 模式 rc1)。
++
++    翻紅釘:判不了改成放行 → ①紅。(scan 那一半的「判不了」屬於乙的條件評估,乙做完補在同一支測試。)
++    """
++    print("t_drift_unknown_blocks_check_not_scan")
++    import contextlib, io
++    m = _load_lumos_inproc()
++    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
++    base = _na_head(root)
++    _nh_node(root, "Pay", summary="FLOW:b")
++    _nh_commit(root, "c")
++    orig = m._drift_range_events
++    m._drift_range_events = lambda *a, **k: None
++    err = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
++            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{base}..HEAD")
++    finally:
++        m._drift_range_events = orig
++    check("①判不了:算要處理、rc1、印原因", rc == 1 and "判不了" in err.getvalue(), err.getvalue())
++
++
++def t_drift_exam_scores():
++    """[S13](甲的部分)exam 依考法算擋到/點到/漏/誤列,status_replay 照 status_targets 改狀態,用 note_at_event 比對,
++    略過機制①並印幾題、不認得的考法回 2,不寫任何帳或檔。
++
++    翻紅釘:status_replay 不套 status_targets → ②E 題漏;note_at_event 不用 → ①A 題漏。
++    """
++    print("t_drift_exam_scores")
++    import json as _j
++    root = _dr_repo()
++    vault = root / _DR_VAULT
++    (vault / "Issues").mkdir(exist_ok=True)
++    (vault / "Verification" / "長檔名守衛.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
++    _nh_file(root, f"{_DR_VAULT}/Issues/OK.md", "---\ntype: issue\nstatus: open\n---\n# OK\n")
++    _nh_commit(root, "base")
++    g = vault / "Verification" / "長檔名守衛.md"
++    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass"), encoding="utf-8")
++    _nh_commit(root, "轉正")
++    ev_commit = _na_head(root)
++    tline = [i + 1 for i, l in enumerate(g.read_text(encoding="utf-8").split("\n")) if "TEST:還沒有" in l][0]
++    _nh_git(root, "mv", f"{_DR_VAULT}/Verification/長檔名守衛.md", f"{_DR_VAULT}/Verification/短名.md")
++    _nh_commit(root, "改短名")
++    p = vault / "Projects" / "退款_計劃.md"
++    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++    _nh_commit(root, "收尾")
++    close_commit = _na_head(root)
++    gov = vault.parent / ".governance-log.jsonl"
++    gov_before = gov.read_text(encoding="utf-8") if gov.exists() else ""
++    exam = [
++        {"id": "A", "exam_event": "commit", "note": "Verification/短名.md", "note_at_event": "Verification/長檔名守衛.md",
++         "line": tline, "invalidating_commits": [ev_commit]},
++        {"id": "E", "exam_event": "status_replay", "note": "Issues/I.md", "line": 3,
++         "invalidating_commits": [close_commit], "status_targets": ["Projects/退款_計劃"]},
++        # 只有記憶體重放抓得到:這個提交本身沒收尾計劃,真實範圍的 check 列不到 I(翻紅釘:不套 status_targets → 漏)
++        {"id": "E2", "exam_event": "status_replay", "note": "Issues/I.md", "line": 3,
++         "invalidating_commits": [ev_commit], "status_targets": ["Projects/退款_計劃"]},
++        {"id": "N", "exam_event": "current_state", "note": "Issues/OK.md", "line": 3},
++        {"id": "M", "exam_event": "mechanism1_experiment", "note": "x", "line": 1},
++    ]
++    ef = root / "exam.json"
++    ef.write_text(_j.dumps(exam, ensure_ascii=False), encoding="utf-8")
++    import subprocess as sp
++    r = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(ef), "--repo", str(root), "--json"], capture_output=True, text=True)
++    try:
++        d = _j.loads(r.stdout)
++    except ValueError:
++        d = {}
++    res = {x["id"]: x["result"] for x in d.get("rows", [])}
++    check("①commit 題用 note_at_event 比對:擋到", res.get("A") == "擋到", r.stdout + r.stderr)
++    check("②status_replay 照 status_targets:點到(含只有重放才抓得到的那題)",
++          res.get("E") == "點到" and res.get("E2") == "點到", str(res))
++    check("③current_state 非漂移題:沒誤列", res.get("N") == "沒誤列", str(res))
++    check("④機制①略過並計數", d.get("skipped_mechanism1") == 1 and "M" not in res, str(d)[:300])
++    check("⑤不寫治理帳", (gov.read_text(encoding="utf-8") if gov.exists() else "") == gov_before, "")
++    ef.write_text(_j.dumps(exam + [{"id": "X", "exam_event": "亂寫", "note": "x", "line": 1}], ensure_ascii=False), encoding="utf-8")
++    r2 = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(ef), "--repo", str(root)], capture_output=True, text=True)
++    check("⑥不認得的考法回 2", r2.returncode == 2, r2.stdout + r2.stderr)
++
++
++def t_doctor_drift_section():
++    """[S14](甲的部分)doctor 開一段 Z 列 c1–c5 的筆數與前幾筆;沒有發現時整段不印(全靜默)。
++
++    翻紅釘:拿掉 run_doctor 裡 Z 段 → ①紅;沒發現也印 → ②紅。
++    """
++    print("t_doctor_drift_section")
++    v = mkvault()
++    (v / "Issues").mkdir()
++    r0 = run(v, "doctor")
++    check("②沒有發現:沒有 [Z]", "[Z]" not in r0.stdout, r0.stdout[-500:])
++    write(v, "Projects/Done_計劃.md", "type: project\nstatus: done", body="# D\n")
++    write(v, "Issues/I.md", "type: issue\nstatus: open", body="# I\n[[Projects/Done_計劃]]\n")
++    r = run(v, "doctor")
++    check("①有 c2:印 [Z] 段與筆數、前幾筆", "[Z]" in r.stdout and "[c2]" in r.stdout and "Issues/I:" in r.stdout, r.stdout[-800:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

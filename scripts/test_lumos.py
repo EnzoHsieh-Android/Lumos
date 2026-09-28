@@ -28288,6 +28288,11 @@ def t_slim_skill_reference_scan_assertions():
         # enforcement 是英文常用詞(強制力),不是指令引用;2026-09-02 新增 lumos enforcement
         # 指令後才與指令名撞號。prose 形態、語境無關,同 playwright 那條。
         ("reference.md", 484, "enforcement", "prose"),
+        # ★已審查的假陽性★(2026-09-29):這三處的 drift 是英文常用詞(漂移),不是指令引用;
+        # 新增 lumos drift 指令(存量漂移守衛)後才與指令名撞號。prose 形態、語境無關,同 enforcement 那條。
+        ("SKILL.md", 43, "drift", "prose"),
+        ("reference.md", 482, "drift", "prose"),
+        ("reference.md", 495, "drift", "prose"),
     }
     unexpected = [c for c in cands
                   if (_P(c["file"]).name, c["line"], c["token"], c["form"]) not in reviewed]
@@ -50090,6 +50095,888 @@ def t_lumos_no_zip_strict_for_py39():
     src = Path(GRAPHCTL).read_text(encoding="utf-8")
     hits = [i for i, l in enumerate(src.split("\n"), 1) if _re.search(r"\bzip\([^#]*\bstrict\s*=", l)]
     check("主程式沒有 zip(..., strict=)(3.10 才有)", not hits, str(hits[:10]))
+
+
+# ═══ 存量漂移守衛(Projects/存量漂移防線_計劃)甲:狀態指令連帶處理 ═══
+
+_DR_VAULT = "docs/kg-knowledge"
+
+
+def _dr_guard_text(status="pending", home="Systems/Pay", claim="大額退費要人工核可", why="下游介面還沒定案",
+                   plan="Projects/退款_計劃", prose=True, settled_why=False):
+    """一篇 guard plan 樣板長相的守衛紀錄(直接寫檔,不經指令——用來造「舊版 settle 轉正後留著預告句」的現場)。"""
+    wline = f"  WHY:[2026-09-01]預告這條合約但還沒做:{why}" + ("(2026-09-20 已轉正)" if settled_why else "")
+    summ = [wline, "  TEST:還沒有測試在守這條;最遲 2099-12-31 要做完,負責人 enzo"] if prose else ["  KEY:x"]
+    body = [f"預告的合約:{claim}", ""]
+    if prose:
+        body += [f"為什麼還不做:{why}", "", "做完之後跑 `lumos guard settle` 轉正,不要手改狀態。"]
+    return ("---\ntype: verification\nstatus: " + status + "\ncreated: 2026-09-01\nupdated: 2026-09-01\n"
+            "due: 2099-12-31\nowner: enzo\nguards:\n  - " + home + "\nphases:\n  - P1\nplan_refs:\n"
+            f"  - \"[[{plan}]]\"\ntags:\n  - type/verification\n  - status/{status}\nsummary: |-\n"
+            + "\n".join(summ) + "\n---\n# G\n\n" + "\n".join(body) + "\n")
+
+
+def _dr_repo(cfg=None, golive=True):
+    """存量漂移的測試專案:每支檔有家那個骨架 + 含 drift check 上線標記的推送前掛鉤 + 家筆記 Pay 與計劃。"""
+    root = _nh_repo(cfg)
+    if golive:
+        _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+    _nh_node(root, "Pay", summary="FLOW:a")
+    _nh_node(root, "退款_計劃", typ="project", folder="Projects", resp=None, summary="KEY:p")
+    _nh_commit(root, "init")
+    return root
+
+
+def _dr(root, *args, env=None):
+    import subprocess as sp, os as _os
+    e = dict(_os.environ)
+    e.pop("LUMOS_SKIP_DRIFT_CHECK", None)
+    if env:
+        e.update(env)
+    r = sp.run([sys.executable, GRAPHCTL, "drift", *args, "--repo", str(root)], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _dr_scan(vault, *extra):
+    import json as _j
+    r = run(vault, "drift", "scan", "--json", *extra)
+    return _j.loads(r.stdout)["findings"] if r.returncode == 0 else r.stdout + r.stderr
+
+
+def t_guard_settle_rewrites_planned_prose():
+    """[S4] settle 轉正把 guard plan 寫的四種預告句改成歷史說法、其他行不動、status 同一次寫入;
+    新版轉正後的推送不被自己的 c1 擋;找不到句型時提醒但照樣成功。
+
+    翻紅釘:拿掉 _guard_settle_rewrite 的呼叫 → ②③紅;第四句前綴拿掉反引號 → ② 第四句紅;
+    c1 改成子字串比對(不從行首)→ ⑤ 被「預告當時為什麼還不做」擋紅。
+    """
+    print("t_guard_settle_rewrites_planned_prose")
+    import datetime
+    today = datetime.date.today().isoformat()
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    vault = root / _DR_VAULT
+    base = _na_head(root)
+    _gp(vault, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃",
+        "--phase", "P1", "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo", "--name", "大額退費")
+    g = [x for x in (vault / "Verification").glob("*.md")][0]
+    before = g.read_text(encoding="utf-8")
+    check("①前置:樣板真的寫了四種預告句", all(x in before for x in (
+        "TEST:還沒有測試在守這條", "]預告這條合約但還沒做:", "\n為什麼還不做:", "做完之後跑 `lumos guard settle` 轉正")), before)
+    _nh_commit(root, "plan")
+    r = run(vault, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund_manual")
+    after = g.read_text(encoding="utf-8")
+    check("①settle 成功", r.returncode == 0, r.stdout + r.stderr)
+    check("②TEST 句改成哪天轉正、由家筆記的正式行守,不寫測試名",
+          f"TEST:[{today}] 預告已轉正,合約改由 [[Systems/Pay]] 的正式合約行守" in after and "t_refund_manual" not in after, after)
+    check("②WHY 句行尾加已轉正", f"預告這條合約但還沒做:下游介面還沒定案({today} 已轉正)" in after, after)
+    check("②正文「為什麼還不做」改成預告當時", "\n預告當時為什麼還不做:下游介面還沒定案" in after and "\n為什麼還不做:" not in after, after)
+    check("②第四句整行換成已轉正", f"\n({today} 已轉正)\n" in after and "做完之後跑" not in after, after)
+    check("③status 與標籤同一次改成 pass", "status: pass" in after and "status/pass" in after and "status/pending" not in after, after)
+    check("③其他行一字不動", "預告的合約:大額退費要人工核可" in after and "due: 2099-12-31" in after, after)
+    fs = _dr_scan(vault)
+    check("④新版轉正後 scan 沒有 c1", isinstance(fs, list) and not [f for f in fs if f["kind"] == "c1"], str(fs))
+    _nh_commit(root, "settle")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("⑤轉正後緊接的推送不被自己的 c1 擋", rc == 0 and "c1" not in out, out)
+    # 找不到句型:手改掉 TEST 句 → 提醒、照樣成功
+    _gp(vault, "guard", "plan", "Systems/Pay", "另一條合約", "--plan", "Projects/退款_計劃",
+        "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "另一條")
+    g2 = [x for x in (vault / "Verification").glob("*.md") if "另一條" in x.stem][0]
+    g2.write_text(g2.read_text(encoding="utf-8").replace("TEST:還沒有測試在守這條", "TEST:作者自己改寫過"), encoding="utf-8")
+    r2 = run(vault, "guard", "settle", "Verification/" + g2.stem, "--test", "t_other")
+    check("⑥找不到句型:照樣成功並提醒那一句", r2.returncode == 0 and "找不到摘要的 TEST 預告句" in r2.stdout,
+          r2.stdout + r2.stderr)
+    check("⑥手改過的那句不動", "TEST:作者自己改寫過" in g2.read_text(encoding="utf-8"), g2.read_text(encoding="utf-8"))
+
+
+def t_guard_settle_recovers_half_done():
+    """[S5] 家筆記已經是正式行(其他標記不影響)而守衛紀錄還是 pending:只補第二步;已經 pass:印已轉正、回 0。
+
+    翻紅釘:拿掉 _guard_formal_line 那個分支 → ①紅(找不到預告行擋下);拿掉 status==pass 的早退 → ③紅。
+    """
+    print("t_guard_settle_recovers_half_done")
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃",
+        "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
+    g = list((v / "Verification").glob("*.md"))[0]
+    pay = v / "Systems" / "Pay.md"
+    t = pay.read_text(encoding="utf-8")
+    import re as _re
+    t2 = _re.sub(r"  KEY:★INVARIANT-PLANNED★ 大額退費要人工核可.*",
+                 "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund] [audit:opus/2026-09-20]", t)
+    pay.write_text(t2, encoding="utf-8")
+    check("①前置:家筆記已是正式行、守衛紀錄還是 pending", "★INVARIANT-PLANNED★" not in t2
+          and "status: pending" in g.read_text(encoding="utf-8"), t2)
+    r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+    check("①做到一半:只補守衛紀錄、成功", r.returncode == 0 and "只補守衛紀錄" in r.stdout, r.stdout + r.stderr)
+    check("②守衛紀錄轉成 pass、預告句改寫", "status: pass" in g.read_text(encoding="utf-8")
+          and "還沒有測試在守" not in g.read_text(encoding="utf-8"), g.read_text(encoding="utf-8"))
+    check("②家筆記那行沒被再動", pay.read_text(encoding="utf-8") == t2, pay.read_text(encoding="utf-8"))
+    r2 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+    check("③已經 pass:印已轉正、回 0", r2.returncode == 0 and "已轉正,不用再做" in r2.stdout, r2.stdout + r2.stderr)
+    g.write_text(g.read_text(encoding="utf-8").replace("status: pass", "status: abandoned"), encoding="utf-8")
+    r3 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+    check("④墓碑照舊擋", r3.returncode == 2, r3.stdout + r3.stderr)
+
+
+def t_guard_commands_hold_vault_lock():
+    """[S19] guard plan/settle/abandon 讀家筆記時已經拿著寫入鎖(從讀到寫整段在鎖裡,另一個程序才蓋不掉)。
+
+    翻紅釘:把任一支的 `with _vault_write_lock` 拿掉 → 對應那條紅。
+    """
+    print("t_guard_commands_hold_vault_lock")
+    m = _load_lumos_inproc()
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    seen = []
+    orig = m.load_raw_for_edit
+
+    def spy(path, *a, **kw):
+        if Path(path).name == "Pay.md":
+            seen.append(bool(m._VAULT_LOCK_HELD))
+        return orig(path, *a, **kw)
+    import contextlib, io
+    m.load_raw_for_edit = spy
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = m.cmd_guard_plan(m.Env(v), "Systems/Pay", "合約甲", "Projects/退款_計劃", "P1", "2099-12-31",
+                                  "還沒定", "enzo", name="合約甲")
+        check("①plan 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
+        g = [x for x in (v / "Verification").glob("*.md")][0]
+        seen.clear()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = m.cmd_guard_settle(m.Env(v), "Verification/" + g.stem, "t_a")
+        check("②settle 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            m.cmd_guard_plan(m.Env(v), "Systems/Pay", "合約乙", "Projects/退款_計劃", "P1", "2099-12-31",
+                             "還沒定", "enzo", name="合約乙")
+        g2 = [x for x in (v / "Verification").glob("*.md") if "合約乙" in x.stem][0]
+        run(v, "signoff", "Verification/" + g2.stem, "--note", "確認不做了", "--ref", "Verification/" + g2.stem)
+        seen.clear()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = m.cmd_guard_abandon(m.Env(v), "Verification/" + g2.stem, "決定不做")
+        check("③abandon 讀家筆記時拿著鎖", rc == 0 and seen and all(seen), f"rc={rc} {seen}")
+    finally:
+        m.load_raw_for_edit = orig
+    check("④鎖用完放掉", not m._VAULT_LOCK_HELD, str(m._VAULT_LOCK_HELD))
+
+
+def t_set_plan_closed_lists_followups():
+    """[S6] lumos set 把計劃改成 done/superseded 時列連帶待辦:有連結的開著的 Issue(寫方向)、跟 c3 同一個集合的
+    pending 驗證紀錄,每項附檢視指令;其他狀態、非計劃不多印;改狀態本身照舊成功。
+
+    翻紅釘:拿掉 set 那段 _drift_print_followups → ①紅;_drift_c3_hit 的 override 拿掉 → ③V1 紅。
+    """
+    print("t_set_plan_closed_lists_followups")
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n見 [[Issues/I3]]\n")
+    write(v, "Projects/Q_計劃.md", "type: project\nstatus: doing", body="# Q\n")
+    write(v, "Issues/I1.md", "type: issue\nstatus: open", body="# I1\n跟 [[Projects/P_計劃]] 有關\n")
+    write(v, "Issues/I2.md", "type: issue\nstatus: done", body="# I2\n跟 [[Projects/P_計劃]] 有關\n")
+    write(v, "Issues/I3.md", "type: issue\nstatus: doing", body="# I3\n")
+    write(v, "Verification/V1.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/P_計劃]]"', body="# V1\n")
+    write(v, "Verification/V2.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/P_計劃]]"\n'
+          '  - "[[Projects/Q_計劃]]"', body="# V2\n")
+    write(v, "Verification/V3.md", 'type: verification\nstatus: pending\nguards:\n  - Systems/X\nplan_refs:\n'
+          '  - "[[Projects/P_計劃]]"', body="# V3\n")
+    r = run(v, "set", "Projects/P_計劃", "status", "done")
+    out = r.stdout
+    check("①改狀態成功並列連帶待辦", r.returncode == 0 and "連帶待辦" in out, out + r.stderr)
+    check("②開著的 Issue 列出並寫方向", "Issues/I1(open,它連到計劃)" in out and "Issues/I3(doing,計劃連到它)" in out, out)
+    check("②已結案的 Issue 不列", "Issues/I2" not in out, out)
+    check("③跟 c3 同一個集合:V1 列、另一份計劃還開著的 V2 不列、守衛紀錄 V3 不列",
+          "Verification/V1" in out and "Verification/V2" not in out and "Verification/V3" not in out, out)
+    check("③每項附檢視指令、不給改狀態的指令", "lumos context Issues/I1" in out and "lumos set Issues" not in out, out)
+    r2 = run(v, "set", "Projects/Q_計劃", "status", "doing")
+    check("④不是收尾狀態不多印", r2.returncode == 0 and "連帶待辦" not in r2.stdout, r2.stdout)
+    r3 = run(v, "set", "Issues/I3", "status", "done")
+    check("④不是計劃不多印", r3.returncode == 0 and "連帶待辦" not in r3.stdout, r3.stdout)
+
+
+def t_drift_state_consistency_checks():
+    """[S7] c1–c5 各自成立與不成立判對、每筆回報所在行(c1 一句一筆);c3 排除空的/壞的/非計劃的 plan_refs 與守衛紀錄;
+    c4 同一句有「未提交」與「工作樹」照樣成立、「釘在某提交的乾淨工作樹」不成立。
+
+    翻紅釘:c4 加回「含工作樹就排除」→ ⑤E3 那種寫法紅;c1 改成一篇一筆 → ②紅;c3 拿掉「全都是計劃」→ ④紅。
+    """
+    print("t_drift_state_consistency_checks")
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n"
+          "  KEY:★INVARIANT★ 半套的合約 [test:t_x] [audit:opus/2026-09-01]", body="# Pay\n")
+    write(v, "Projects/Done_計劃.md", "type: project\nstatus: done", body="# D\n")
+    write(v, "Projects/Open_計劃.md", "type: project\nstatus: doing", body="# O\n")
+    (v / "Verification" / "G1.md").write_text(_dr_guard_text("pass"), encoding="utf-8")
+    (v / "Verification" / "G2.md").write_text(_dr_guard_text("pass", prose=False), encoding="utf-8")
+    (v / "Verification" / "G3.md").write_text(_dr_guard_text("pass", settled_why=True).replace(
+        "  TEST:還沒有測試在守這條;最遲 2099-12-31 要做完,負責人 enzo\n", "").replace("為什麼還不做:", "預告當時為什麼還不做:")
+        .replace("做完之後跑 `lumos guard settle` 轉正,不要手改狀態。", "(2026-09-20 已轉正)"), encoding="utf-8")
+    (v / "Verification" / "G4.md").write_text(_dr_guard_text("pending", claim="半套的合約"), encoding="utf-8")
+    write(v, "Issues/I.md", "type: issue\nstatus: open", body="# I\n[[Projects/Done_計劃]]\n")
+    write(v, "Verification/V_ok.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/Done_計劃]]"', body="# v\n")
+    write(v, "Verification/V_empty.md", "type: verification\nstatus: pending\nplan_refs: []", body="# v\n")
+    write(v, "Verification/V_ghost.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/不存在]]"', body="# v\n")
+    write(v, "Verification/V_issue.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Issues/I]]"', body="# v\n")
+    write(v, "Verification/V_mixed.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/Done_計劃]]"\n'
+          '  - "[[Projects/Open_計劃]]"', body="# v\n")
+    write(v, "Verification/E3.md", "type: verification\nstatus: pass\nvalid_under: 僅本工作樹(未提交、未過代碼審);全套測試", body="# e\n")
+    write(v, "Verification/Clean.md", "type: verification\nstatus: pass\nvalid_under: 釘在提交 abc123 的乾淨工作樹", body="# c\n")
+    fs = _dr_scan(v)
+    check("①scan 跑得起來", isinstance(fs, list), str(fs))
+    if not isinstance(fs, list):
+        return
+    by = lambda k: sorted((f["path"], f["line"]) for f in fs if f["kind"] == k)
+    g1 = (v / "Verification" / "G1.md").read_text(encoding="utf-8").split("\n")
+    want = sorted(("Verification/G1.md", i + 1) for i, l in enumerate(g1)
+                  if l.strip().startswith(("WHY:[", "TEST:還沒有", "為什麼還不做:", "做完之後跑")))
+    check("②c1 一句一筆、四句都在、行號對", by("c1") == want and len(want) == 4, f"{by('c1')} vs {want}")
+    check("②c1 不列沒有預告句的、也不列已改成歷史說法的", not any(p in ("Verification/G2.md", "Verification/G3.md")
+                                                   for p, _l in by("c1")), str(by("c1")))
+    check("③c2:開著的 Issue 連到收尾計劃,回報 status 那行", by("c2") == [("Issues/I.md", 3)], str(by("c2")))
+    check("④c3 只列 plan_refs 全是已收尾計劃的那篇", [p for p, _l in by("c3")] == ["Verification/V_ok.md"], str(by("c3")))
+    check("⑤c4:同一句有未提交與工作樹照樣成立;乾淨工作樹不成立", [p for p, _l in by("c4")] == ["Verification/E3.md"], str(by("c4")))
+    check("⑥c5:pending 但家筆記已是正式行(audit 標記不影響)", [p for p, _l in by("c5")] == ["Verification/G4.md"], str(by("c5")))
+
+
+def t_drift_check_state_events_in_range():
+    """[S8][S1][S3] 推送範圍裡有守衛紀錄 pending→pass 且留著預告句 → 擋那一篇的 c1;c2–c5 只列出;範圍外的不擋、scan 照列;
+    三態開關、略過只認 1、上線點之前的不查;表態要提交才算、改那行就失效並印舊理由、理由太短拒絕。
+
+    翻紅釘:c1 不看「範圍裡轉正」→ ⑤範圍外那篇紅;表態讀工作目錄 → ⑧紅;略過改成有設就跳 → ③紅。
+    """
+    print("t_drift_check_state_events_in_range")
+    import json as _j
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    vault = root / _DR_VAULT
+    (vault / "Issues").mkdir(exist_ok=True)
+    (vault / "Verification" / "Old.md").write_text(_dr_guard_text("pass", claim="早就轉正的"), encoding="utf-8")
+    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
+    _nh_commit(root, "base")
+    base = _na_head(root)
+    g = vault / "Verification" / "G.md"
+    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                 encoding="utf-8")
+    p = vault / "Projects" / "退款_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done").replace("status/doing", "status/done"),
+                 encoding="utf-8")
+    _nh_commit(root, "舊版 settle 的轉正,順手收尾計劃")
+    rng = f"{base}..HEAD"
+    rc, out = _dr(root, "check", "--diff", rng)
+    check("①block:範圍裡轉正還留著預告句 → rc1", rc == 1 and "Verification/G.md" in out, out)
+    check("②c1 一句一筆都列出", out.count("[c1 ") == 4, out)
+    check("②c2 只列出(計劃在範圍裡收尾、連著開著的 Issue)", "只列出" in out and "Issues/I.md" in out, out)
+    check("⑤範圍外早就轉正的那篇不擋", "Old.md" not in out, out)
+    fs = _dr_scan(vault)
+    check("⑤但 scan 照列範圍外那篇", any(f["path"] == "Verification/Old.md" and f["kind"] == "c1" for f in fs), str(fs)[:300])
+    rc, out = _dr(root, "check", "--diff", rng, env={"LUMOS_SKIP_DRIFT_CHECK": "1"})
+    check("③略過設成 1:放行並記 skipped-env", rc == 0 and "skipped-env" in (vault.parent / ".governance-log.jsonl").read_text(
+        encoding="utf-8"), out)
+    rc, out = _dr(root, "check", "--diff", rng, env={"LUMOS_SKIP_DRIFT_CHECK": "0"})
+    check("③設成別的值不算略過", rc == 1, out)
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "warn"}}), encoding="utf-8")
+    _nh_commit(root, "warn")
+    rc, out = _dr(root, "check", "--diff", rng)
+    check("④warn:只印、rc0、記 warned", rc == 0 and "提醒(drift_check.gate=warn" in out and "\"warned\"" in (
+        vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8"), out)
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "off"}}), encoding="utf-8")
+    _nh_commit(root, "off")
+    rc, out = _dr(root, "check", "--diff", rng)
+    check("④off:放行", rc == 0 and "關掉" in out, out)
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "block"}}), encoding="utf-8")
+    _nh_commit(root, "block again")
+    # 表態
+    lines = g.read_text(encoding="utf-8").split("\n")
+    nums = [i + 1 for i, l in enumerate(lines) if l.strip().startswith(("WHY:[", "TEST:還沒有", "為什麼還不做:", "做完之後跑"))]
+    r = run(vault, "drift", "ack", "Verification/G", str(nums[0]), "--kind", "c1", "--reason", "短")
+    check("⑦理由少於 4 個字拒絕", r.returncode == 2, r.stdout + r.stderr)
+    for n in nums:
+        r = run(vault, "drift", "ack", "Verification/G", str(n), "--kind", "c1", "--reason", "歷史紀錄照留,不改")
+    check("⑦表態寫進表態檔並記 acked", r.returncode == 0 and (root / "governance" / "drift-acks.jsonl").is_file()
+          and "\"acked\"" in (vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8"), r.stdout + r.stderr)
+    rc, out = _dr(root, "check", "--diff", rng)
+    check("⑧表態還沒提交:照擋(只認被推送頂端提交裡的表態檔)", rc == 1, out)
+    _nh_commit(root, "acks")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("⑧表態提交後:不再擋", rc == 0, out)
+    g.write_text(g.read_text(encoding="utf-8").replace("為什麼還不做:下游介面還沒定案", "為什麼還不做:下游介面還沒定案,改了一個字"),
+                 encoding="utf-8")
+    _nh_commit(root, "edit line")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("⑨改了那一行:表態失效照擋", rc == 1 and "為什麼還不做" in out, out)
+    # 上線點:標記在範圍中段才出現,之前的轉正不查
+    root2 = _dr_repo(cfg={"drift_check": {"gate": "block"}}, golive=False)
+    v2 = root2 / _DR_VAULT
+    (v2 / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_commit(root2, "base")
+    b2 = _na_head(root2)
+    gg = v2 / "Verification" / "G.md"
+    gg.write_text(gg.read_text(encoding="utf-8").replace("status: pending", "status: pass"), encoding="utf-8")
+    _nh_commit(root2, "舊轉正")
+    _nh_file(root2, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+    _nh_commit(root2, "上線")
+    rc, out = _dr(root2, "check", "--diff", f"{b2}..HEAD")
+    check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
+
+
+def t_drift_unknown_blocks_check_not_scan():
+    """[S2] check 判不了(git 算不出範圍事件)→ 算要處理、印原因(block 模式 rc1)。
+
+    翻紅釘:判不了改成放行 → ①紅。(scan 那一半的「判不了」屬於乙的條件評估,乙做完補在同一支測試。)
+    """
+    print("t_drift_unknown_blocks_check_not_scan")
+    import contextlib, io
+    m = _load_lumos_inproc()
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    base = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:b")
+    _nh_commit(root, "c")
+    orig = m._drift_range_events
+    m._drift_range_events = lambda *a, **k: None
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{base}..HEAD")
+    finally:
+        m._drift_range_events = orig
+    check("①判不了:算要處理、rc1、印原因", rc == 1 and "判不了" in err.getvalue(), err.getvalue())
+
+
+def t_drift_exam_scores():
+    """[S13](甲的部分)exam 依考法算擋到/點到/漏/誤列,status_replay 照 status_targets 改狀態,用 note_at_event 比對,
+    略過機制①並印幾題、不認得的考法回 2,不寫任何帳或檔。
+
+    翻紅釘:status_replay 不套 status_targets → ②E 題漏;note_at_event 不用 → ①A 題漏。
+    """
+    print("t_drift_exam_scores")
+    import json as _j
+    root = _dr_repo()
+    vault = root / _DR_VAULT
+    (vault / "Issues").mkdir(exist_ok=True)
+    (vault / "Verification" / "長檔名守衛.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
+    _nh_file(root, f"{_DR_VAULT}/Issues/OK.md", "---\ntype: issue\nstatus: open\n---\n# OK\n")
+    _nh_commit(root, "base")
+    g = vault / "Verification" / "長檔名守衛.md"
+    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass"), encoding="utf-8")
+    _nh_commit(root, "轉正")
+    ev_commit = _na_head(root)
+    tline = [i + 1 for i, l in enumerate(g.read_text(encoding="utf-8").split("\n")) if "TEST:還沒有" in l][0]
+    _nh_git(root, "mv", f"{_DR_VAULT}/Verification/長檔名守衛.md", f"{_DR_VAULT}/Verification/短名.md")
+    _nh_commit(root, "改短名")
+    p = vault / "Projects" / "退款_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _nh_commit(root, "收尾")
+    close_commit = _na_head(root)
+    gov = vault.parent / ".governance-log.jsonl"
+    gov_before = gov.read_text(encoding="utf-8") if gov.exists() else ""
+    exam = [
+        {"id": "A", "exam_event": "commit", "note": "Verification/短名.md", "note_at_event": "Verification/長檔名守衛.md",
+         "line": tline, "invalidating_commits": [ev_commit]},
+        {"id": "E", "exam_event": "status_replay", "note": "Issues/I.md", "line": 3,
+         "invalidating_commits": [close_commit], "status_targets": ["Projects/退款_計劃"]},
+        # 只有記憶體重放抓得到:這個提交本身沒收尾計劃,真實範圍的 check 列不到 I(翻紅釘:不套 status_targets → 漏)
+        {"id": "E2", "exam_event": "status_replay", "note": "Issues/I.md", "line": 3,
+         "invalidating_commits": [ev_commit], "status_targets": ["Projects/退款_計劃"]},
+        {"id": "N", "exam_event": "current_state", "note": "Issues/OK.md", "line": 3},
+        {"id": "M", "exam_event": "mechanism1_experiment", "note": "x", "line": 1},
+    ]
+    ef = root / "exam.json"
+    ef.write_text(_j.dumps(exam, ensure_ascii=False), encoding="utf-8")
+    import subprocess as sp
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(ef), "--repo", str(root), "--json"], capture_output=True, text=True)
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {}
+    res = {x["id"]: x["result"] for x in d.get("rows", [])}
+    check("①commit 題用 note_at_event 比對:擋到", res.get("A") == "擋到", r.stdout + r.stderr)
+    check("②status_replay 照 status_targets:點到(含只有重放才抓得到的那題)",
+          res.get("E") == "點到" and res.get("E2") == "點到", str(res))
+    check("③current_state 非漂移題:沒誤列", res.get("N") == "沒誤列", str(res))
+    check("④機制①略過並計數", d.get("skipped_mechanism1") == 1 and "M" not in res, str(d)[:300])
+    check("⑤不寫治理帳", (gov.read_text(encoding="utf-8") if gov.exists() else "") == gov_before, "")
+    ef.write_text(_j.dumps(exam + [{"id": "X", "exam_event": "亂寫", "note": "x", "line": 1}], ensure_ascii=False), encoding="utf-8")
+    r2 = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(ef), "--repo", str(root)], capture_output=True, text=True)
+    check("⑥不認得的考法回 2", r2.returncode == 2, r2.stdout + r2.stderr)
+
+
+def t_doctor_drift_section():
+    """[S14](甲的部分)doctor 開一段 Z 列 c1–c5 的筆數與前幾筆;沒有發現時整段不印(全靜默)。
+
+    翻紅釘:拿掉 run_doctor 裡 Z 段 → ①紅;沒發現也印 → ②紅。
+    """
+    print("t_doctor_drift_section")
+    v = mkvault()
+    (v / "Issues").mkdir()
+    r0 = run(v, "doctor")
+    check("②沒有發現:沒有 [Z]", "[Z]" not in r0.stdout, r0.stdout[-500:])
+    write(v, "Projects/Done_計劃.md", "type: project\nstatus: done", body="# D\n")
+    write(v, "Issues/I.md", "type: issue\nstatus: open", body="# I\n[[Projects/Done_計劃]]\n")
+    r = run(v, "doctor")
+    check("①有 c2:印 [Z] 段與筆數、前幾筆", "[Z]" in r.stdout and "[c2]" in r.stdout and "Issues/I:" in r.stdout, r.stdout[-800:])
+
+
+def t_drift_code_review_r1_regressions():
+    """存量漂移守衛代碼審 r1 的回歸釘(每條先在舊碼上紅)。
+
+    ①合約原文帶方括號標籤時做到一半的 settle 認得正式行 ②只認摘要裡的正式行 ③正式行與預告行同時在:拿掉預告行
+    ④guards 欄在但是空的不算 c3 ⑤同名筆記時連帶待辦不猜第一篇、改看明確連結 ⑥scan --at 用那個提交自己的圖譜位置
+    ⑦考卷形狀不對或缺欄位不崩 ⑧解不開的守衛紀錄算判不了 ⑨欄位發現用那一行的實際文字(引號寫法也表態得到)
+    ⑩舊理由不借給另一篇還在的筆記 ⑪樹上的排序跟磁碟一致 ⑫考試誤報只排除同一篇同一種 ⑬只有判不了時訊息講判不了
+    """
+    print("t_drift_code_review_r1_regressions")
+    import json as _j, pathlib, contextlib, io, subprocess as sp
+    m = _load_lumos_inproc()
+    Vp = pathlib.Path("docs/kg-knowledge")
+    # ① 方括號標籤
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 錯誤帶 [status:manual] 時要人工核可 [test:t_manual] [audit:opus/2026-09-20]", "---"]
+    check("①合約原文帶方括號標籤:認得正式行", m._guard_formal_line(ls, 3, "錯誤帶 [status:manual] 時要人工核可", "t_manual") is not None, "")
+    check("①別的測試名不算", m._guard_formal_line(ls, 3, "錯誤帶 [status:manual] 時要人工核可", "t_other") is None, "")
+    # ② 只看摘要
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT-PLANNED★ 大額退費 [watch:Verification/G] [due:2099-12-31]",
+          "valid_under: |-", "  KEY:★INVARIANT★ 大額退費 [test:t_refund]", "---"]
+    check("②摘要以外的欄位裡的正式行不算", m._guard_formal_line(ls, 5, "大額退費", "t_refund") is None, "")
+    # ③ 正式行與預告行同時在
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund]",
+          body="# Pay\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃", "--phase", "P1",
+        "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
+    g = list((v / "Verification").glob("*.md"))[0]
+    r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+    pay = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
+    check("③正式行已在時也要把預告行拿掉、不留兩條", r.returncode == 0 and "★INVARIANT-PLANNED★" not in pay
+          and pay.count("★INVARIANT★ 大額退費要人工核可") == 1, r.stdout + r.stderr + pay)
+    # ④ 空 guards
+    T = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n",
+         "Verification/V.md": "---\ntype: verification\nstatus: pending\nguards: []\nplan_refs:\n  - \"[[Projects/P]]\"\n---\n# V\n"}
+    e = m.Env.from_texts(Vp, T)
+    check("④guards 欄在但是空的:不算 c3", not [f for f in m._drift_state_findings(e) if f["kind"] == "c3"], "")
+    # ⑤ 同名筆記
+    T = {"Projects/退款.md": "---\ntype: project\nstatus: doing\n---\n# P\n",
+         "Issues/退款.md": "---\ntype: issue\nstatus: open\n---\n# I\n",
+         "Verification/V1.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/退款]]\"\n---\n# V\n",
+         "Verification/V2.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[退款]]\"\n---\n# V\n"}
+    e = m.Env.from_texts(Vp, T)
+    fu = m._drift_plan_followups(e, "Projects/退款.md", "done")
+    check("⑤明確寫路徑的照列;只寫檔名、同名猜不準的另列並註明猜不準(不靜默猜第一篇)",
+          [p for _k, p, _w in fu] == ["Verification/V1.md", "Verification/V2.md"] and "猜不準" in fu[1][2], str(fu))
+    # ⑥ scan --at 用那個提交自己的圖譜位置
+    root = _nh_repo()
+    _nh_node(root, "退款_計劃", typ="project", folder="Projects", resp=None, status="done", summary="KEY:p")
+    _nh_file(root, "docs/kg-knowledge/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
+    _nh_commit(root, "old vault")
+    old = _na_head(root)
+    _nh_git(root, "mv", "docs/kg-knowledge", "docs/new-knowledge")
+    _nh_commit(root, "rename vault")
+    r = run(root / "docs" / "new-knowledge", "drift", "scan", "--json", "--at", old)
+    try:
+        got = [f["kind"] for f in _j.loads(r.stdout)["findings"]]
+    except ValueError:
+        got = r.stdout + r.stderr
+    check("⑥scan --at 讀舊提交時用它自己的圖譜位置", got == ["c2"], str(got))
+    # ⑦ 考卷形狀
+    ef = root / "exam.json"
+    for bad in ("42", '["a", "b"]', '[{"id": "X", "exam_event": "current_state", "line": 3}]'):
+        ef.write_text(bad, encoding="utf-8")
+        rr = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(ef), "--repo", str(root)], capture_output=True, text=True)
+        check(f"⑦考卷 {bad[:30]}:不崩(擋下或略過,沒有 Traceback)", "Traceback" not in rr.stderr, rr.stderr[-300:])
+    # ⑧ 解不開的守衛紀錄
+    root2 = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    gp = root2 / _DR_VAULT / "Verification" / "G.md"
+    gp.write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_commit(root2, "base")
+    b2 = _na_head(root2)
+    gp.write_bytes(_dr_guard_text("pass").encode("utf-8") + b"\n\xff\xfe\n")
+    _nh_commit(root2, "非 UTF-8 的轉正")
+    rc, out = _dr(root2, "check", "--diff", f"{b2}..HEAD")
+    check("⑧解不開的守衛紀錄:判不了、擋", rc == 1 and "判不了" in out, out)
+    check("⑬只有判不了時訊息講判不了,不說有 0 處要處理", "有 0 處要處理" not in out, out)
+    # ⑨ 欄位發現用實際文字
+    T = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n",
+         "Issues/I.md": "---\ntype: issue\nstatus: \"open\"\n---\n# I\n[[Projects/P]]\n",
+         "Verification/E.md": "---\ntype: verification\nstatus: pass\nvalid_under:\n  - 釘在提交 abc\n  - 本工作樹(未提交)\n---\n# E\n"}
+    e = m.Env.from_texts(Vp, T)
+    fs = {f["kind"]: f for f in m._drift_state_findings(e)}
+    check("⑨c2 的原文是那一行實際的字", fs.get("c2", {}).get("text") == 'status: "open"', str(fs.get("c2")))
+    check("⑨c4 指到真的含未提交的那一行", fs.get("c4", {}).get("line") == 6 and "未提交" in fs.get("c4", {}).get("text", ""),
+          str(fs.get("c4")))
+    # ⑩ 舊理由
+    f = {"kind": "c1", "path": "Verification/B.md", "text": "TEST:還沒有測試在守這條;x", "line": 3}
+    acks = [{"path": "docs/kg-knowledge/Verification/A.md", "text": "TEST:還沒有測試在守這條;x", "kind": "c1", "reason": "A 照留"}]
+    check("⑩另一篇還在:不借它的舊理由", m._drift_old_reason(f, acks, alive={"docs/kg-knowledge/Verification/A.md"}) is None, "")
+    check("⑩原本那篇不見了(改名):印舊理由", m._drift_old_reason(f, acks, alive=set()) == "A 照留", "")
+    # ⑪ 排序
+    T = {"Projects/X.md": "---\ntype: project\n---\n", "Projects-old/X.md": "---\ntype: project\n---\n"}
+    e = m.Env.from_texts(Vp, T)
+    check("⑪樹上的同名排序跟磁碟一致(逐層比)", e.by_stem["x"][0] == "Projects/X.md", str(e.by_stem["x"]))
+    # ⑫ 考試誤報
+    must = [{"kind": "c1", "path": "N.md", "line": 3}, {"kind": "c1", "path": "N.md", "line": 4},
+            {"kind": "c4", "path": "N.md", "line": 9}, {"kind": "c1", "path": "O.md", "line": 3}]
+    oth = m._drift_exam_others(must, "N.md", 3, "c1")
+    check("⑫同一篇同一種的兄弟句不算誤報,同篇別種與別篇算", sorted((x["path"], x["line"]) for x in oth) == [("N.md", 9), ("O.md", 3)],
+          str(oth))
+
+
+def t_drift_code_review_r2_regressions():
+    """存量漂移守衛代碼審 r2 的回歸釘(修正本身帶進來的與沒修乾淨的)。
+
+    ①行尾只認工具接上去的標記(test/audit/kill),合約原文結尾的 [鍵:值] 是原文 ②已有正式行綁別的測試:擋,不寫第二條
+    ③正式行在、預告行重複兩條:擋,不當成做到一半 ④批次讀失敗不當成沒有狀態翻轉 ⑤狀態歷史的批次讀接上預算
+    ⑥plan_refs 同一份計劃兩種寫法照樣算 c3 ⑦猜不準那一項不列守衛紀錄 ⑧status_replay 用上一版自己的圖譜位置
+    ⑨scan 列出解不開的筆記 ⑩status_replay 點到的那筆不同時算誤報 ⑪Z 段只剩已表態時不開段
+    """
+    print("t_drift_code_review_r2_regressions")
+    import pathlib, types, contextlib, io, json as _j
+    m = _load_lumos_inproc()
+    Vp = pathlib.Path("docs/kg-knowledge")
+    # ①
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [scope:企業戶] [test:t_refund]", "---"]
+    check("①原文結尾的 [scope:…] 是原文,不算這句的正式行", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund") is None, "")
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund] [audit:opus/2026-09-20] [kill:recipes]", "---"]
+    check("①工具接的 test/audit/kill 照樣剝", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund") is not None, "")
+    # ② ③:走真指令
+    for label, extra_formal, dup in (("②", "[test:t_old]", False), ("③", "[test:t_refund]", True)):
+        v = mkvault()
+        write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 大額退費要人工核可 " + extra_formal,
+              body="# Pay\n")
+        write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+        _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃", "--phase", "P1",
+            "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
+        pay = v / "Systems" / "Pay.md"
+        if dup:
+            t = pay.read_text(encoding="utf-8")
+            pl = [x for x in t.split("\n") if "★INVARIANT-PLANNED★" in x][0]
+            pay.write_text(t.replace(pl, pl + "\n" + pl), encoding="utf-8")
+        before = pay.read_text(encoding="utf-8")
+        g = list((v / "Verification").glob("*.md"))[0]
+        r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+        check(f"{label}擋下、家筆記不動、守衛紀錄還是 pending",
+              r.returncode == 2 and pay.read_text(encoding="utf-8") == before and "status: pending" in g.read_text(encoding="utf-8"),
+              r.stdout + r.stderr)
+    # ④ ⑤
+    f = m._note_status_seq
+    g_ = f.__globals__
+    saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs")}
+    p = "docs/kg-knowledge/Verification/G.md"
+    a = "a" * 40
+    calls = []
+    try:
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else b"")
+        # 只讓「歷史那一批」讀失敗、起點那一版讀得到(兩批都失敗時起點那道會先接住,分不出這一處有沒有修)
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: (None if specs[0].startswith(a) else
+                                                                [b"---\nstatus: pending\n---\n" for _ in specs])
+        # r3 起只有存量漂移那條路嚴格(strict=True);筆記內容審照舊把讀不到當成沒有翻轉,見 r3 回歸釘 ④
+        check("④歷史那一批讀失敗:回 None(判不了),不回只有起點的序列",
+              f(".", "BASE", "TIP", "docs/kg-knowledge", p, strict=True) is None, "")
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: (calls.append(kw) or [b"---\nstatus: pass\n---\n" for _ in specs])
+        import time as _t
+        f(".", "BASE", "TIP", "docs/kg-knowledge", p, deadline=_t.monotonic() + 30)
+        check("⑤狀態歷史的批次讀接上剩下的預算", calls and all("timeout" in kw and kw["timeout"] <= 30 for kw in calls), str(calls))
+    finally:
+        g_.update(saved)
+    # ⑥ ⑦
+    T = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n",
+         "Verification/V.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/P]]\"\n  - \"[[P]]\"\n---\n# V\n"}
+    e = m.Env.from_texts(Vp, T)
+    check("⑥同一份計劃兩種寫法:照樣算 c3", [x["kind"] for x in m._drift_state_findings(e)] == ["c3"], "")
+    T = {"Projects/P.md": "---\ntype: project\nstatus: doing\n---\n# P\n", "Issues/P.md": "---\ntype: issue\nstatus: open\n---\n# I\n",
+         "Verification/G.md": "---\ntype: verification\nstatus: pending\nguards:\n  - Systems/X\nplan_refs:\n  - \"[[P]]\"\n---\n# G\n"}
+    e = m.Env.from_texts(Vp, T)
+    check("⑦猜不準那一項不列守衛紀錄", not m._drift_plan_followups(e, "Projects/P.md", "done"), "")
+    # ⑧ ⑩
+    fone = m._drift_exam_one
+    g2 = fone.__globals__
+    saved = {k: g2[k] for k in ("_lens_full_sha", "_drift_vault_rel", "_drift_check_core", "_drift_tree_env")}
+    plan = "---\ntype: project\nstatus: doing\n---\n# P\n[[Issues/I]]\n"
+    issue = "---\ntype: issue\nstatus: open\n---\n# I\n\n第 7 行講等計劃做完\n"
+    seen = []
+    try:
+        g2["_lens_full_sha"] = lambda root, ref: {"x": "C", "x^": "P"}.get(ref)
+        g2["_drift_vault_rel"] = lambda root, w: "docs/new-knowledge" if w == "C" else "docs/old-knowledge"
+        g2["_drift_check_core"] = lambda *a_, **k: ([], [{"kind": "c2", "path": "Issues/I.md", "line": 3, "text": "status: open"}], [])
+
+        def _tree(root, w, v, override=None, timeout=60):
+            seen.append(v)
+            base = {"Projects/P.md": plan, "Issues/I.md": issue} if v == "docs/old-knowledge" else {}
+            return m.Env.from_texts(pathlib.Path(v), {**base, **(override or {})})
+        g2["_drift_tree_env"] = _tree
+        q = {"exam_event": "status_replay", "note": "Issues/I.md", "line": 7, "invalidating_commits": ["x"],
+             "status_targets": ["Projects/P"]}
+        res = fone(".", "docs/new-knowledge", q, "C")
+        check("⑧status_replay 用上一版自己的圖譜位置", "docs/old-knowledge" in seen and res[0] == "點到", f"{seen} {res}")
+        check("⑩讓這題點到的那筆,不同時算成誤報", res[2] == 0, str(res))
+    finally:
+        g2.update(saved)
+    # ⑨
+    root = _nh_repo()
+    (root / "docs" / "kg-knowledge" / "Verification" / "Bad.md").write_bytes(b"---\ntype: verification\nstatus: pass\n---\n\xff\n")
+    _nh_commit(root, "bad")
+    r = run(root / "docs" / "kg-knowledge", "drift", "scan", "--at", "HEAD")
+    check("⑨scan 列出解不開的筆記(判不了)", "判不了" in r.stdout + r.stderr and "Bad.md" in r.stdout + r.stderr, r.stdout + r.stderr)
+    # ⑪
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Projects/Done_計劃.md", "type: project\nstatus: done", body="# D\n")
+    write(v, "Issues/I.md", "type: issue\nstatus: open", body="# I\n[[Projects/Done_計劃]]\n")
+    run(v, "drift", "ack", "Issues/I", "3", "--kind", "c2", "--reason", "確定照留的理由")
+    rd = run(v, "doctor")
+    check("⑪只剩已表態:Z 段不開(全靜默)", "[Z]" not in rd.stdout, rd.stdout[-600:])
+
+
+def t_drift_code_review_r3_regressions():
+    """存量漂移守衛代碼審 r3 的回歸釘(第三輪換形狀:比對改用既有的 INV_TAG_RE 與 invariant_test_refs;
+    筆記內容審的行為退回原本,只讓存量漂移那條路嚴格)。
+
+    ①正式行綁好幾支測試、其中一支就是這支:認得 ②行尾帶 [src:]/[git:] 證據指針:認得 ③做到一半又多綁一支:照樣補完
+    ④筆記內容審:某份計劃的歷史讀失敗,不拖累其他新寫的行(照舊只少那份完成審)
+    ⑤存量漂移那條路:改名對照讀失敗算判不了 ⑥預算:過期之後最多再跑一次 git 呼叫
+    ⑦scan 不寫治理帳 ⑧plan_refs .md 與不帶 .md 混寫照算 c3、再加一條解不出的就不算
+    ⑨樹上解不開的筆記跟磁碟讀檔失敗走同一個管道
+    """
+    print("t_drift_code_review_r3_regressions")
+    import pathlib, time as _t
+    m = _load_lumos_inproc()
+    Vp = pathlib.Path("docs/kg-knowledge")
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_a,t_refund]", "---"]
+    check("①綁好幾支、其中一支就是這支:認得", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund") is not None, "")
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund] [src:committed] [git:abcd123]", "---"]
+    check("②行尾帶 [src:]/[git:]:認得", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund") is not None, "")
+    # ③ 做到一半又多綁一支
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃", "--phase", "P1",
+        "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
+    pay = v / "Systems" / "Pay.md"
+    import re as _re
+    pay.write_text(_re.sub(r"  KEY:★INVARIANT-PLANNED★ 大額退費要人工核可.*",
+                           "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund,t_extra]", pay.read_text(encoding="utf-8")),
+                   encoding="utf-8")
+    g = list((v / "Verification").glob("*.md"))[0]
+    r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+    check("③做到一半又多綁一支:照樣只補守衛紀錄", r.returncode == 0 and "status: pass" in g.read_text(encoding="utf-8"),
+          r.stdout + r.stderr)
+    # ④ 筆記內容審不被拖累
+    f = m._notes_status_flipped
+    g_ = f.__globals__
+    saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs")}
+    p = "docs/kg-knowledge/Projects/P.md"
+    a = "a" * 40
+    try:
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else
+                                             (p + "\0").encode() if "log" in args else b"")
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: None
+        blob = b"---\ntype: project\nstatus: done\n---\n"
+        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: blob, lambda ty, st: ty == "project" and st == "done",
+                lambda x, y: x != "done" and y == "done")
+        check("④筆記內容審(不嚴格):批次讀失敗照舊不算翻轉,不整支回 None", got == [], str(got))
+        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: blob, lambda ty, st: ty == "project" and st == "done",
+                lambda x, y: x != "done" and y == "done", strict=True)
+        check("④存量漂移(嚴格):批次讀失敗算判不了", got is None, str(got))
+        # ⑤ 改名對照讀失敗
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: [b"---\nstatus: pass\n---\n" for _ in specs]
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else
+                                             None if "--name-status" in args else b"")
+        check("⑤嚴格:改名對照讀失敗算判不了", m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p, strict=True) is None, "")
+        # ⑥ 預算
+        calls = []
+
+        def slow(root, *args):
+            calls.append(_t.monotonic())
+            _t.sleep(0.2)
+            return (a + "\0\n" + p + "\0").encode() if "--follow" in args else b""
+        g_["_ns_git"] = slow
+        dl = _t.monotonic() + 0.05
+        m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p, deadline=dl, strict=True)
+        check("⑥預算過了之後最多再開始一次 git 呼叫", sum(1 for c in calls if c > dl) <= 1, str([round(c - dl, 2) for c in calls]))
+        calls.clear()
+        m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p, deadline=_t.monotonic() - 1, strict=True)
+        check("⑥預算早就過了:一次 git 呼叫都不開始", calls == [], str(calls))
+    finally:
+        g_.update(saved)
+    # ⑦ scan 不寫帳
+    root = _nh_repo()
+    (root / "docs" / "kg-knowledge" / "Verification" / "Bad.md").write_bytes(b"---\ntype: verification\nstatus: pass\n---\n\xff\n")
+    _nh_commit(root, "bad")
+    gov = root / "docs" / ".governance-log.jsonl"
+    r = run(root / "docs" / "kg-knowledge", "drift", "scan", "--at", "HEAD")
+    check("⑦scan 照列判不了、但不寫治理帳", "判不了" in r.stdout and not gov.exists(), r.stdout + (gov.read_text(encoding="utf-8") if gov.exists() else ""))
+    r = run(root / "docs" / "kg-knowledge", "drift", "scan")
+    check("⑨磁碟讀檔失敗也列成判不了(同一個管道)", "判不了" in r.stdout and "Bad.md" in r.stdout, r.stdout)
+    # ⑧ c3 寫法
+    base = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n"}
+    T = dict(base, **{"Verification/V.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/P.md]]\"\n"
+                                           "  - \"[[Projects/P]]\"\n---\n# V\n"})
+    e = m.Env.from_texts(Vp, T)
+    check("⑧.md 與不帶 .md 混寫:照算 c3", [x["kind"] for x in m._drift_state_findings(e)] == ["c3"], "")
+    T = dict(base, **{"Verification/V.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/P.md]]\"\n"
+                                           "  - \"[[Projects/P]]\"\n  - \"[[Projects/Ghost]]\"\n---\n# V\n"})
+    e = m.Env.from_texts(Vp, T)
+    check("⑧再加一條解不出的:不算(講不準就不列)", not [x for x in m._drift_state_findings(e) if x["kind"] == "c3"], "")
+    # ⑩ doctor 開頭的開關提醒:沒寫設定也沒接線不唸(預設 warn 是過渡);自己寫了 warn/off 就唸
+    root = _nh_repo()
+    r0 = run(root / "docs" / "kg-knowledge", "doctor")
+    check("⑩沒寫設定、沒接線:不唸開關", "存量漂移檢查是" not in r0.stdout, r0.stdout[:400])
+    root = _nh_repo(cfg={"drift_check": {"gate": "off"}})
+    r1 = run(root / "docs" / "kg-knowledge", "doctor")
+    check("⑩自己寫了 off:唸出來", "存量漂移檢查是 off" in r1.stdout, r1.stdout[:400])
+
+
+def t_drift_code_review_r4_regressions():
+    """存量漂移守衛代碼審 r4 的回歸釘。
+
+    ①筆記內容審(不嚴格):一篇的 git log --follow 失敗只丟那一篇,別篇照算 ②樹的批次讀逾時扣掉列路徑花掉的時間
+    ③測試名只認完全相同,不猜平台前綴 ④開關「有沒有自己寫」從 _drift_config 同一次解析來,格式寫錯也算寫了
+    ⑤嚴格:歷史裡有一版解不開就判不了 ⑥空連結不算有落點 ⑦嚴格:頂端那一版逐篇讀失敗判不了
+    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時,提醒講明是預設值
+    """
+    print("t_drift_code_review_r4_regressions")
+    import pathlib, time as _t
+    m = _load_lumos_inproc()
+    Vp = pathlib.Path("docs/kg-knowledge")
+    f = m._notes_status_flipped
+    g_ = f.__globals__
+    saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs", "_nodehome_list")}
+    a, b = "a" * 40, "b" * 40
+    p1, p2 = "docs/kg-knowledge/Projects/P1.md", "docs/kg-knowledge/Projects/P2.md"
+    done = b"---\ntype: project\nstatus: done\n---\n"
+    doing = b"---\ntype: project\nstatus: doing\n---\n"
+    try:
+        def git1(root, *args):
+            if "--follow" in args:
+                return None if args[-1] == p1 else (a + "\0\n" + p2 + "\0").encode()
+            if "--name-status" in args:
+                return b""
+            return (p1 + "\0" + p2 + "\0").encode()
+        g_["_ns_git"] = git1
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: [doing if s.startswith("BASE") else done for s in specs]
+        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: done, lambda ty, st: ty == "project" and st == "done",
+                lambda x, y: x != "done" and y == "done")
+        check("①不嚴格:P1 的歷史讀失敗只丟 P1、P2 照算", got == [p2], str(got))
+        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: done, lambda ty, st: ty == "project" and st == "done",
+                lambda x, y: x != "done" and y == "done", strict=True)
+        check("①嚴格:同一情況判不了", got is None, str(got))
+        # ⑤ 歷史裡一版解不開
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p1 + "\0" + b + "\0\n" + p1 + "\0").encode() if "--follow" in args else b"")
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: ([b"---\nstatus: pass\n---\n", bytes([255])] if len(specs) == 2
+                                                               else [b"---\nstatus: pending\n---\n"])
+        check("⑤嚴格:歷史裡有一版解不開就判不了",
+              m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p1, strict=True) is None, "")
+        # ⑦ 頂端那一版逐篇讀失敗
+        g_["_ns_git"] = lambda root, *args: (p1 + "\0").encode() if "log" in args and "--follow" not in args else b""
+        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: None, lambda ty, st: True, lambda x, y: True, strict=True)
+        check("⑦嚴格:頂端那一版讀失敗判不了", got is None, str(got))
+        # ② 樹的批次讀逾時
+        seen = {}
+
+        def slow_list(root, where):
+            _t.sleep(0.5)
+            return ({"docs/kg-knowledge/A.md": "100644"}, ["docs/kg-knowledge/A.md"])
+        g_["_nodehome_list"] = slow_list
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: (seen.setdefault("t", kw.get("timeout")) and [b"---\n---\n"])
+        m._drift_tree_env(".", "TIP", "docs/kg-knowledge", deadline=_t.monotonic() + 3)
+        check("②樹的批次讀逾時扣掉列路徑已花的時間", seen.get("t") is not None and seen["t"] <= 2.6, str(seen))
+    finally:
+        g_.update(saved)
+    # ③
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:oops:refund_test]", "---"]
+    check("③平台前綴不猜:不算綁了這支", m._guard_formal_line(ls, 3, "大額退費要人工核可", "refund_test") is None, "")
+    # ④
+    check("④格式寫錯也算自己寫了開關", m._drift_config(b'{"drift_check": "block"}')[2] is True, "")
+    check("④沒寫就不算", m._drift_config(b'{"note_audit": {"gate": "warn"}}')[2] is False, "")
+    # ⑥
+    T = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n",
+         "Verification/V.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/P]]\"\n  - \"[[ ]]\"\n---\n# V\n"}
+    e = m.Env.from_texts(Vp, T)
+    check("⑥空連結不算有落點:不列 c3", not [x for x in m._drift_state_findings(e) if x["kind"] == "c3"], "")
+    # ⑧
+    fr = m._drift_exam_replay
+    g2 = fr.__globals__
+    sv = g2["_drift_tree_env"]
+    try:
+        g2["_drift_tree_env"] = lambda root, w, v, override=None, **k: m.Env.from_texts(
+            pathlib.Path(v), dict(override or {}), unreadable=[] if override else ["Projects/壞.md"])
+        got = fr(".", "PAR", "docs/kg-knowledge", ["[[Projects/壞]]"])
+        # r5 起碰到讀不出來的計劃回 "unreadable"(那題記成略過,見 r5 回歸釘 ④);這裡只釘「不崩」
+        check("⑧考試重放碰到讀不出來的計劃:不崩", isinstance(got, set) or got == "unreadable", str(got))
+    except Exception as ex:           # noqa: BLE001 — 崩了就記紅
+        check("⑧考試重放碰到讀不出來的計劃:不崩", False, repr(ex))
+    finally:
+        g2["_drift_tree_env"] = sv
+    # ⑨
+    root = _nh_repo()
+    _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+    _nh_commit(root, "wired")
+    r = run(root / "docs" / "kg-knowledge", "doctor")
+    check("⑨已接線、沒寫設定:提醒講明是預設值", "存量漂移檢查是 warn" in r.stdout and "預設" in r.stdout, r.stdout[:500])
+
+
+def t_drift_code_review_r5_regressions():
+    """存量漂移守衛代碼審 r5 的回歸釘。
+
+    ①嚴格:起點那一版解不開也判不了 ②多平台專案:正式行綁 [test:ios:t_x](ios 有定義)算綁了 t_x,settle 只補紀錄;
+    前綴沒定義的照樣不猜 ③doctor 開關提醒:設定檔寫壞、drift_check 空物件、gate 寫 null 都算自己寫了,說明照實講
+    ④考試重放碰到讀不出來的計劃:記成略過,不記成漏
+    """
+    print("t_drift_code_review_r5_regressions")
+    import pathlib, json as _j
+    m = _load_lumos_inproc()
+    f = m._note_status_seq
+    g_ = f.__globals__
+    saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs")}
+    p = "docs/kg-knowledge/Verification/G.md"
+    a = "a" * 40
+    try:
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else b"")
+        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: ([b"---\nstatus: pass\n---\n"] if specs[0].startswith(a)
+                                                               else [b"---\nstatus: pending\n---\n\xff"])
+        check("①嚴格:起點那一版解不開判不了", f(".", "BASE", "TIP", "docs/kg-knowledge", p, strict=True) is None, "")
+        check("①不嚴格:照舊當成讀到的狀態(不整支判不了)", f(".", "BASE", "TIP", "docs/kg-knowledge", p) is not None, "")
+    finally:
+        g_.update(saved)
+    # ②
+    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:ios:t_refund]", "---"]
+    check("②ios 有定義:算綁了 t_refund", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund",
+                                                     plat=({"ios": {}, "android": {}}, "android")) is not None, "")
+    check("②前綴沒定義:不猜", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund",
+                                              plat=({"android": {}}, "android")) is None, "")
+    check("②單平台(不切前綴):不算", m._guard_formal_line(ls, 3, "大額退費要人工核可", "t_refund", plat=({}, "x")) is None, "")
+    # ③
+    for label, txt in (("設定檔寫壞", b'{"drift_check": {"gate": "block"},}'), ("drift_check 空物件", b'{"drift_check": {}}'),
+                       ("gate 寫 null", b'{"drift_check": {"gate": null}}')):
+        mode, warns, explicit = m._drift_config(txt)
+        check(f"③{label}:算自己寫了", explicit is True, str((mode, warns, explicit)))
+    root = _nh_repo()
+    _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text('{"drift_check": {"gate": "blokc"}}', encoding="utf-8")
+    _nh_commit(root, "wired")
+    r = run(root / "docs" / "kg-knowledge", "doctor")
+    check("③gate 拼錯:提醒講出寫錯的值", "blokc" in r.stdout, r.stdout[:600])
+    # ④
+    fone = m._drift_exam_one
+    g2 = fone.__globals__
+    sv = {k: g2[k] for k in ("_lens_full_sha", "_drift_vault_rel", "_drift_check_core", "_drift_tree_env")}
+    try:
+        g2["_lens_full_sha"] = lambda root, ref: {"x": "C", "x^": "P"}.get(ref)
+        g2["_drift_vault_rel"] = lambda root, w: "docs/kg-knowledge"
+        g2["_drift_check_core"] = lambda *a_, **k: ([], [], [])
+        g2["_drift_tree_env"] = lambda root, w, v, override=None, **k: m.Env.from_texts(
+            pathlib.Path(v), {"Issues/I.md": "---\ntype: issue\nstatus: open\n---\n# I\n", **(override or {})},
+            unreadable=["Projects/壞.md"])
+        q = {"exam_event": "status_replay", "note": "Issues/I.md", "line": 3, "invalidating_commits": ["x"],
+             "status_targets": ["Projects/壞"]}
+        res = fone(".", "docs/kg-knowledge", q, "C")
+        check("④讀不出來的計劃:記成略過", res[0].startswith("略過"), str(res))
+    finally:
+        g2.update(sv)
 
 
 if __name__ == "__main__":

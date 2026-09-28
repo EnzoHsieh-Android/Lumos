@@ -1,0 +1,627 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+index 3776ec43..4c3dcc34 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+@@ -50,21 +50,21 @@ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表
+ **「這行是不是 REVISIT」**(E5、第一層、第二層共用一支):去掉行首空白,再去掉一層列表或引用記號(`- ` `* ` `+ ` `1. ` `1) ` `> `),以 `REVISIT:` 開頭;表格行與圍欄內不算。`REVISIT:` 後面(去掉空白)若以 `[when-` 開頭,就連續吃掉條件標記與一個 `[by:…]`(中間可有空白),這行是**條件式回頭條件**;否則取到第一個空白為止的字串,用跟 E5 現在一樣的 `date.fromisoformat` 解析,成功是**日期式**,失敗是格式壞損(E5 照舊算壞行、第一層擋新寫的)。這支判定比 E5 現在多認 `+ ` `1. ` `1) ` `> ` 四種記號,E5 改用它之後範圍跟著變大;2026-09-28 工具鏈圖譜裡這四種開頭的 REVISIT 行是 0 條,不會一上線就多出一批壞行。
+ 
+ **「同一條」怎麼認**(判「這個條件是不是這次才成立」要用):先用 git 的改名偵測把終點的筆記路徑對回起點的路徑(借用清單⑧),再看起點那篇裡有沒有一行**條件標記一模一樣**(同樣的標記、同樣的順序,`[by:]` 與後面的待辦文字不算)的條件式回頭條件。有就是「同一條」,只改待辦文字、改期限都還是同一條;條件標記改了就是另一條。
+ 
+ **指令**:
+ - `lumos drift check --diff <起點>..<終點>`:推送前與 CI 的閘(閘名 `drift-check`)。有「要處理」的發現才回 1,只有「只列出」的回 0;參數錯回 2。範圍起點照 `_lens_push_base`,再截到上線點(推送前掛鉤裡出現標記 `drift check` 的第一個提交)。讀被推送頂端提交的樹(`_nodehome_reader`),不讀工作目錄。**只評估這次推送可能改變結果的行**(篩選單位是「行」,不是單一條件):一行裡任一條件落在下列情形,這一行就是候選——①`file`:路徑在範圍裡被新增、刪除或改名(改名的兩端都算);②`symbol`、`test` 帶路徑:那支檔在範圍裡有任何變動(改動、新增、刪除、改名);不帶路徑:名稱出現在範圍的改動行,或範圍裡有程式檔或測試檔被新增、刪除、改名(改名可能讓檔換了類別、名稱不在改動行裡)——這時所有不帶路徑的 `symbol`/`test` 行都當候選;③`status`:指到的筆記在範圍裡有任何變動(含新增、刪除、改名);④這次新寫或改了條件標記的行。候選行在起點與終點**各評估它的全部條件**(一行是「全部成立」)。不是候選的行,起點與終點結果一定一樣,不評估。範圍的改動只算一次(一次 `git diff --name-status -M` 加一次 `git diff -U0`),兩端的全部路徑各列一次,讀檔有快取——不逐條件各起一次 git。
+ - `lumos drift scan [--at <提交>] [--json] [--budget <秒>]`:對整份圖譜(**含 superseded 的筆記**)現況或某個提交的樹,跑甲的五種一致檢查與乙的全部條件評估,列出全部發現,已表態的標「已表態」另計。不擋、不寫帳。這是回退時清點條件式行、修復階段產清單用的。
+ - `lumos drift ack <節點> <行號> --kind probe|c1|c2|c3|c4|c5 --reason "<為什麼照留>"`:表態「這行照留」。用 `_jsonl_append_verified` 寫進 `governance/drift-acks.jsonl`(加進簿記豁免),每筆存:路徑、行的原文、種類、理由、日期、表態時的小標題與行號(只供人讀)。**對得上**的條件是「同一路徑、一字不差的原文、同一種類」——改小標題不失效;改了那一行或筆記改名就失效,失效時工具用「原文與種類相同」在表態檔裡找,找到就印出舊理由供照抄。理由少於 4 個字拒絕;每筆記一筆治理帳 `acked`。check 只認**被推送頂端提交裡**的表態檔(照第二層「判定檔要提交才算」),所以表態後印提交指令。scan 與 doctor 對已表態的行照列、標「已表態」。
+ - `lumos drift exam <考卷.json> --repo <被考的 repo> [--probes <改寫檔>]`:在被考 repo 的歷史上重放,算甲乙各自擋到、點到、漏、誤報(〈做法〉第 3 節)。考試模式不寫治理帳、不寫任何檔。
+ - doctor Z 段:**不評估條件**(不跑 `git grep`、`ls-tree`),只讀筆記:條件式回頭條件幾條、沒帶期限的幾條、寫錯的條件幾條、寫在不評估的地方的幾條,甲的五種一致檢查各幾筆與前幾筆;要看哪些條件已成立,跑 `lumos drift scan`。唯一的 git 呼叫是判斷「有沒有接線」時讀一次推送前掛鉤(`git show HEAD:<掛鉤>`,照筆記內容審那處的判法)。照 doctor 的全靜默慣例:全部是 0 就整段不印。每次推送多出的成本是讀一遍筆記加一次 `git show`。
+-- 開關:`.lumos/config.json` 的 `drift_check.gate` = block / warn / off,讀被推送頂端提交裡的設定;**設定檔沒寫時的預設值**寫在程式裡,照〈做法〉第 4 節第 4 點的門檻定——過門檻是 block,沒過是 warn(兩處講的是同一個值);單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(只認 1,記 `skipped-env`);淺層 clone 跳過並記帳(同兩層筆記閘)。gate 不是 block 時 doctor 印一行;接線後,專案 CI 沒呼叫 `drift check` 時 doctor 也印一行並給要貼的步驟(照筆記形狀擋與筆記內容審的 CI 提醒)。
++- 開關:`.lumos/config.json` 的 `drift_check.gate` = block / warn / off,讀被推送頂端提交裡的設定;**設定檔沒寫時的預設值**寫在程式裡,照〈做法〉第 4 節第 4 點的門檻定——過門檻是 block,沒過是 warn(兩處講的是同一個值);單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(只認 1,記 `skipped-env`);淺層 clone 跳過並記帳(同兩層筆記閘)。gate 不是 block、而且專案自己寫了開關或已經接線時 doctor 印一行(沒寫設定也沒接線時預設就是 warn,不唸;實作期代碼審 r3、r4 改);接線後,專案 CI 沒呼叫 `drift check` 時 doctor 也印一行並給要貼的步驟(照筆記形狀擋與筆記內容審的 CI 提醒)。
+ - 閘名 `drift-check` 登記進既有閘名單;事件種類:`blocked`、`warned`、`skipped-env`、`skipped`、`degraded`、`acked`。沒發現的放行不寫帳(同筆記形狀擋)。
+ - **判不了的時候**:git 單次沿用 `_lens_git` 的 20 秒逾時;check 總預算 60 秒。check 要評估的條件都跟這次推送有關、數量小,**判不了的(git 失敗、逾時、預算用完)算「要處理」**並印原因——判不了就放行,等於給了一條繞過的路;要推就單次略過(留帳)。scan 判不了的列成「判不了」、不擋、不寫帳(scan 不是閘;讀指令不寫帳是既有決定,實作期代碼審 r3 改)。
+ 
+ ### 1. 甲:狀態指令連帶處理(對應機制③,考卷 A4–A6、E1–E3)
+ 
+ 1. **`guard settle` 轉正時,把守衛紀錄裡 `guard plan` 寫的四種預告句改成歷史說法**(只動工具自己寫出的固定句型)。四種句型用**行首前綴**認(去掉摘要的縮排後,從行首比對;前綴照 `guard plan` 樣板的實際字元,含反引號),settle 與 c1 共用同一支比對函式:
+    - 摘要前綴 `TEST:還沒有測試在守這條` → 整行換成 `TEST:[<轉正日期>] 預告已轉正,合約改由 [[<家筆記>]] 的正式合約行守`(講「哪天發生了什麼」,不重複寫測試名——那是程式碼答得了的,筆記內容審會判成推得出);作者只改了日期或負責人,前綴照樣認得;
+    - 摘要前綴 `WHY:[`、而且同一行有 `]預告這條合約但還沒做:` → 行尾加 `(<轉正日期> 已轉正)`,行尾已經有「已轉正」就不再加;
+    - 正文前綴 `為什麼還不做:` → 換成 `預告當時為什麼還不做:`(新的前綴不以 `為什麼還不做:` 開頭,c1 不會再認);
+    - 正文前綴 ``做完之後跑 `lumos guard settle` 轉正``(樣板整句是 ``做完之後跑 `lumos guard settle` 轉正,不要手改狀態。``)→ 整行換成 `(<轉正日期> 已轉正)`。
+@@ -134,21 +134,21 @@ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表
+ - [S4] 當 guard settle 轉正,工具應用跟 c1 同一支行首前綴比對(含第四句的反引號)把守衛紀錄裡 guard plan 寫的四種預告句改成歷史說法(TEST 不寫測試名、WHY 已有後綴不重加)、其他行一字不動,status 與這些句子應同一次寫入;轉正後緊接的 drift check 不應被自己的 c1 擋;找不到固定句型時應跳過那一句並提醒、settle 照樣成功 [test:t_guard_settle_rewrites_planned_prose]
+ - [S5] 當 guard settle 發現家筆記已有同一條合約的正式行(行內有同一個 test 標記,其他標記不影響)而守衛紀錄仍是 pending,工具應只補完守衛紀錄那一步並成功;守衛紀錄已是 pass 時應印已轉正並回 0 [test:t_guard_settle_recovers_half_done]
+ - [S6] 當 lumos set 把計劃改成 done 或 superseded,工具應列出有連結的開著的 Issue(寫出連結方向)、跟 c3 同一個集合的 pending 驗證紀錄(plan_refs 指到它、沒有 guards 欄、其他 plan_refs 也都已收尾),每項附檢視指令;非計劃或其他狀態不應多印,改狀態本身應照舊成功 [test:t_set_plan_closed_lists_followups]
+ - [S7] 當 scan、check 或 doctor 做狀態一致檢查,工具應對 c1–c5 各自成立與不成立的情形判對、每筆回報所在行(c1 一句一筆);c3 不應列 plan_refs 為空、指到找不到或不是計劃的、或帶 guards 欄的;c4 不應把「乾淨工作樹」當成還沒提交,但同一句裡同時有「未提交」與「工作樹」時應成立 [test:t_drift_state_consistency_checks]
+ - [S8] 當推送範圍裡有守衛紀錄從 pending 改成 pass,drift check 應只對那一篇的 c1 發現擋;c2–c5 應只列出;範圍外早就不一致的不應擋、scan 應照列 [test:t_drift_check_state_events_in_range]
+ - [S9] 當筆記行帶條件標記,工具應照第 0 節文法解析,只認正文與摘要的可見行(不含圍欄、表格、行內程式碼),在指定提交的樹上對四種鍵判對(含路徑限定、status 的任一值、筆記不存在算不成立、Python 帶型別的模組層指定),一行多個條件全成立才算成立;check 應以行為篩選單位(改名讓路徑或檔的類別改變的也算候選),候選行兩端評估全部條件,終點成立而起點沒有同一條或同一條還不成立的算要處理(只改待辦文字仍是同一條、新寫而已成立的也擋),起點早就成立的不列;scan 應列成立的行、寫錯的條件與判不了的 [test:t_drift_when_probes_evaluate_and_trigger]
+ - [S10] 當提交或推送新寫了 REVISIT 行或條件標記,筆記形狀擋應用共用 REVISIT 判定(認得列表與引用記號),在第一個位置不是日期也不是條件標記、條件標記形狀不合文法、條件式沒帶 [by:] 期限、或條件寫在不評估的地方(開頭欄位裡 summary 以外的任何欄、表格行)時擋下;圍欄裡的行與舊行不應管 [test:t_note_shape_revisit_needs_date_or_probe]
+ - [S11] 當 doctor 跑 REVISIT 日期檢查,工具應不把條件式回頭條件算成格式壞損、把它的 [by:] 當日期判到期,沒有到期也沒有壞行時照舊整段不印 [test:t_doctor_revisit_skips_probe_lines]
+ - [S12] 當筆記內容審算待審行(含完成審),工具應用共用 REVISIT 判定排除條件式回頭條件、照舊送審日期式回頭條件 [test:t_note_audit_skips_conditional_revisit]
+ - [S13] 當執行 drift exam,工具應依考卷的 exam_event 與改寫檔,對 commit、status_replay、probe、current_state 四種考法算出擋到、點到、漏、誤報(commit 與 probe 分兩層,current_state 一個數)、噪音,status_replay 照 status_targets 改狀態,用 note_at_event 比對改名前的筆記,略過 mechanism1_experiment 並印出略過幾題、遇到不認得的考法回 2,不寫任何帳或檔,並輸出表格與 JSON [test:t_drift_exam_scores]
+-- [S14] 當執行 doctor,工具應開一段 Z,不評估條件、只讀筆記(唯一的 git 呼叫是讀一次推送前掛鉤判斷接線),印條件式回頭條件、沒帶期限的、寫錯的條件、寫在不評估的地方的條件、c1–c5 的筆數與前幾筆,全部是 0 時整段不印,gate 不是 block 時印一行,接線後專案 CI 沒呼叫 drift check 時照筆記內容審的慣例提醒 [test:t_doctor_drift_section]
++- [S14] 當執行 doctor,工具應開一段 Z,不評估條件、只讀筆記(唯一的 git 呼叫是讀一次推送前掛鉤判斷接線),印條件式回頭條件、沒帶期限的、寫錯的條件、寫在不評估的地方的條件、c1–c5 的筆數與前幾筆,全部是 0 時整段不印,gate 不是 block 而且自己寫了開關或已接線時印一行,接線後專案 CI 沒呼叫 drift check 時照筆記內容審的慣例提醒 [test:t_doctor_drift_section]
+ - [S15] 當乙做完,lumos set 應再列出因這次收尾而成立的 when-status 行,只做文字比對、不跑 git [test:t_set_plan_closed_lists_satisfied_status_probes]
+ - [S16] 當甲、乙各做完,編排者應各考一次、兩道做完再考總分,結果應寫進本計劃〈考試結果〉 [manual:三次考試各一列表格(擋到、點到、漏、誤報、噪音)加工具鏈最近 100 個提交的重放結果寫進本計劃;缺任一列不准進〈做法〉第 4 節]
+ - [S17] 當甲乙考完,編排者應掃工具鏈自己與 rtb 的圖譜,工具鏈的修復應單獨成一個提交並留 fixed.txt(每筆路徑、行號、原文、種類、處理),修前修後筆數與 rtb 回報的前後數字應寫進本計劃 [manual:本計劃〈修復結果〉有兩個圖譜各自的前後筆數;rtb 那份未回報就寫「未回報」與日期]
+ - [S18] 當接線,推送前掛鉤與工具鏈 CI 應呼叫 drift check 並排在 code-loop check 之後、全套測試之前,預設模式應照〈做法〉第 4 節第 4 點的三條門檻決定 [test:t_prepush_and_ci_wire_drift_check]
+ - [S19] 當 guard plan、guard settle、guard abandon 改同一篇家筆記,工具應讓每個指令從讀家筆記到寫完都拿著同一把寫入鎖,兩個指令交錯時後寫的不應蓋掉先寫的改動 [test:t_guard_commands_hold_vault_lock]
+ 
+ ## 回退
+ 
+ - **推送閘**:掛鉤與 CI 各拿掉一行即不擋;`drift scan`、doctor Z 段與 E5 對條件式的處理**留著**——已經照新寫法寫的條件式回頭條件才有地方被看見。要連評估一起拿掉,得先用 `lumos drift scan --json`(含 superseded 筆記)列出全部條件式行、改寫成日期式,否則 E5 退回舊版後會把它們算成格式壞損。
+ - **第一層的 REVISIT 規則**:第一層只有一個整體開關,沒有只關這一條的開關。單次誤擋用 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳);設 `note_shape.gate=warn` 會連既有的行號引用、現況沒寫來源、釘版本等規則一起變成只提醒,不是只撤這一條。這條規則本身判錯,就還原它那一處程式碼(不給單條開關:開關會讓同一篇筆記在不同專案有兩種結果)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index f26cfff2..53bdaf44 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -12,24 +12,24 @@ tags:
+   - status/doing
+   - scope/node-content
+ summary: |-
+   WHY:[2026-09-28 Projects/存量漂移防線_計劃]筆記形狀擋與筆記內容審只管新寫的句子;已經寫進去的句子因為別處狀態變了而過期,現有健檢一處都抓不到(rtb 抽查 33 處、20 處漂移)。這篇管「甲」:狀態改了連帶處理——五種狀態一致檢查、計劃收尾時列連帶待辦、推送時只擋「這次轉正、預告句還留著」
+   WHY:[2026-09-28 設計審 r1–r3]推送閘只擋 c1:只有它是工具自己寫的固定句型、判得準;c2–c5 連的是人寫的連結,連結有時只是參考,擋了會逼人亂結案,所以只列出
+   WHY:[2026-09-28 設計審 r2 外家席]check 判不了(git 失敗、逾時、預算用完)算要處理,跟筆記內容審相反(那邊判不了放行):判不了就放行等於給了一條繞過的路;真要推用單次略過,會留帳
+   RULE:[since:2026-09-28][retire:三條門檻考過、預設改成 block 並接進掛鉤與 CI 時撤掉這條]還沒接線,沒寫設定時預設 warn;預設改 block 要三條全過:考卷正例全對、工具鏈自己最近 100 個提交重放每筆要處理都判成真、每次要處理 ≤5(計劃〈做法〉第 4 節第 4 點)
+   PITFALL:[2026-09-28 實作翻紅檢查]考試的 status_replay 有兩條點到的路(記憶體重放連帶待辦、真實範圍的 check 列出 c2),真實提交本身就收尾計劃時兩條都會中,測試分不出重放有沒有做;另放一題「提交本身沒收尾、只有重放才抓得到」 [test:t_drift_exam_scores]
+   RULE:[since:2026-09-29][retire:閘的開關改成只認主線上已提交的設定、或改由伺服器端強制時撤掉]開關讀被推送頂端提交裡的 .lumos/config.json,推的人可以在同一個提交把 drift_check.gate 改成 off 放過自己(代碼審 r1 資安席);這道閘跟筆記內容審一樣只防疏忽、不防存心繞過,要擋存心繞過得把開關挪到推的人拿不到的地方
+   PITFALL:[2026-09-29 代碼審 r1–r3 併發席]新分支第一次推送找不到主線時從空樹算,原本對範圍裡碰過的每一篇逐提交讀狀態,實測 67 秒才判超過 60 秒預算;改成先從頂端的樹挑候選(終點是 pass 的守衛紀錄、已收尾的計劃)再逐提交讀,同一個情境 26 秒。預算在每一次 git 呼叫前都看,正在跑的那一次不打斷(一般呼叫最多 20 秒,批次讀以剩下的時間為上限),所以最壞比預算多一次呼叫的時間——r2 只在每篇之前看、r3 查到一篇裡還有兩次呼叫不看,兩輪說明都寫錯 [test:t_drift_code_review_r3_regressions]。重現:在工具鏈 repo 跑 `time python3 scripts/lumos drift check --diff 87d43a50..HEAD`(87d43a50 是全庫第一個提交)
+-  PITFALL:[2026-09-29 代碼審 r1–r3,正確性席、外家席、架構對齊席]認「家筆記已經是正式合約行」連續三輪被抓:剝掉全部 [鍵:值] 會把原文自帶的標籤剝掉、只認 test/audit/kill 又漏了 [src:]/[git:] 證據指針、用子字串比 [test:x] 對不上 [test:a,x] 這種多支綁定。第三輪改成跟 guard 家族同一套:剝標記用 INV_TAG_RE、測試名用 invariant_test_refs 拆清單比完整名,只看摘要。已有同一句的正式行但綁的測試裡沒有這支、或預告行重複兩條時,settle 擋下不猜 [test:t_drift_code_review_r1_regressions] [test:t_drift_code_review_r2_regressions] [test:t_drift_code_review_r3_regressions]
+-  WHY:[2026-09-29 代碼審 r3 併發席 blocker]逐提交讀狀態那段跟筆記內容審共用,「讀不到(批次讀失敗、改名對照失敗)算判不了」只給存量漂移這條路(strict);r2 曾經讓共用那段一律嚴格,結果筆記內容審一篇計劃的歷史讀失敗就整道放行、連別的新寫的行都不審。筆記內容審照舊把讀不到當成那篇沒有翻轉
++  PITFALL:[2026-09-29 代碼審 r1–r3,正確性席、外家席、架構對齊席]認「家筆記已經是正式合約行」連續三輪被抓:剝掉全部 [鍵:值] 會把原文自帶的標籤剝掉、只認 test/audit/kill 又漏了 [src:]/[git:] 證據指針、用子字串比 [test:x] 對不上 [test:a,x] 這種多支綁定。第三輪改成跟 guard 家族同一套:剝標記用 INV_TAG_RE、測試名用 invariant_test_refs 拆清單比完整名(帶平台前綴的綁定不猜,照 resolve_test_refs 的規矩;r4 架構對齊席),只看摘要。已有同一句的正式行但綁的測試裡沒有這支、或預告行重複兩條時,settle 擋下不猜 [test:t_drift_code_review_r1_regressions] [test:t_drift_code_review_r2_regressions] [test:t_drift_code_review_r3_regressions]
++  WHY:[2026-09-29 代碼審 r3 併發席 blocker]逐提交讀狀態那段跟筆記內容審共用,「讀不到(批次讀失敗、改名對照失敗)算判不了」只給存量漂移這條路(strict);r2 曾經讓共用那段一律嚴格,結果筆記內容審一篇計劃的歷史讀失敗就整道放行、連別的新寫的行都不審。筆記內容審照舊把讀不到當成那篇沒有翻轉(r4:一篇的 git log 失敗也只丟那一篇、別篇照算;原本整支回判不了、筆記內容審就整道放行,那是這次動之前就有的行為,代碼審 r4 併發席一起修掉) [test:t_drift_code_review_r4_regressions]
+   WHY:[2026-09-29 代碼審 r3 併發席、正確性席]drift scan 判不了的列出來但不寫治理帳:讀指令不寫帳是既有決定(見 [[Systems/lumos-cli-read]] 的 d1),計劃 [S2] 原本要記 degraded,改成跟決定一致
+-  TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section、t_drift_code_review_r1_regressions、t_drift_code_review_r2_regressions、t_drift_code_review_r3_regressions
++  TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section、t_drift_code_review_r1_regressions、t_drift_code_review_r2_regressions、t_drift_code_review_r3_regressions、t_drift_code_review_r4_regressions
+ related:
+   - "[[Projects/存量漂移防線_計劃]]"
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+   - "[[Systems/guard-kill]]"
+   - "[[Systems/筆記內容審]]"
+ ---
+ # 存量漂移守衛
+ 
+ 白話:句子寫進圖譜那天是對的,後來別處的狀態變了(合約轉正、計劃收尾、提交了),句子就過期了。這篇管的機制在「狀態改了」那一刻把連著的舊句子指出來。設計與取捨全在 [[Projects/存量漂移防線_計劃]],這裡只記程式碼看不出來的部分。
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 4527885c..5058d4de 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11814,21 +11814,23 @@ def _guard_formal_line(lines, e, claim, method=None):
+     只看摘要(代碼審 r1 外家席:其他開頭欄位裡的同一句會被誤認成正式行)。"""
+     want = INV_TAG_RE.sub("", claim).strip()
+     regs = _notelines_regions("\n".join(lines))
+     for i in range(1, e):
+         if i < len(regs) and regs[i] != "summary":
+             continue
+         m = INVARIANT_RE.match(lines[i].strip())
+         if not m or INV_TAG_RE.sub("", m.group(1)).strip() != want:
+             continue
+         refs = invariant_test_refs(m.group(1))
+-        if (bool(refs) if method is None else any(r == method or r.endswith(":" + method) for r in refs)):
++        # 只認完全相同的名字:settle 的 --test 是不帶平台的方法名,帶平台前綴的綁定不猜(代碼審 r4 架構對齊席,
++        # 照 resolve_test_refs「不猜,免得綁錯平台」;認不得就落到「綁的測試裡沒有這支」擋下並指路)
++        if (bool(refs) if method is None else method in refs):
+             return i
+     return None
+ 
+ 
+ def _guard_planned_idx(lines, e, claim):
+     """家筆記裡「剝掉 [watch:]/[due:] 之後完整文字等於這句合約」的預告行索引清單(0 條、1 條、好幾條由呼叫端判)。"""
+     want = (claim or "").strip()
+     out = []
+     for i in range(1, e):
+         m = PLANNED_RE.match(lines[i].strip())
+@@ -24493,114 +24495,145 @@ def _notes_status_flipped(repo_root, base_where, tip_where, vault_rel, reader, t
+                           strict=False):
+     """範圍裡有某個提交讓 status 發生 flip(前一版狀態, 後一版狀態) 的筆記 → [路徑];tip_ok(type, 終點 status) 先篩。
+     筆記內容審(計劃收尾)與存量漂移守衛(守衛紀錄 pending→pass)共用(存量漂移防線_計劃:不另寫一套逐提交讀狀態)。
+     only / deadline / strict 三個參數是存量漂移守衛加的,筆記內容審不帶、行為照舊:
+     only=只看這些路徑(呼叫端已經從頂端的樹篩好候選,省掉逐篇 git show;代碼審 r1 併發席:首推逐篇讀實測 67 秒);
+     deadline=每一次 git 呼叫前看一次,過了回 None;strict=讀不到(批次讀失敗、改名對照失敗)回 None 算判不了——
+     ★只有存量漂移那條路嚴格★(代碼審 r3 併發席 blocker:r2 讓共用這支一律嚴格,筆記內容審一篇計劃的歷史讀失敗,
+     就整道放行、連別的新寫的行都不審;筆記內容審照舊把讀不到當成那篇沒有翻轉,只少那份完成審)。"""
+     import time as _t
+ 
+-    def late():
++    def _late():
+         return deadline is not None and _t.monotonic() > deadline
+     # 候選=範圍裡任一個提交碰過的筆記,不是頭尾淨差異:收尾→改回→再收尾時頭尾一模一樣,淨差異看不到(S3)
+     rng0 = f"{base_where}..{tip_where}" if base_where else tip_where
+-    if late():
++    if _late():
+         return None
+     touched = _ns_git(repo_root, "log", "--format=", "--name-only", "-z", "-M", rng0, "--", vault_rel)
+     if touched is None:
+         return None
+     out = []
+     for p in sorted({x.strip("\n") for x in touched.decode("utf-8", errors="surrogateescape").split("\0")
+                      if x.strip("\n").endswith(".md")}):
+         if only is not None and nfc(p) not in only:
+             continue
+-        if late():
++        if _late():
+             return None
+-        ty, st = _note_audit_status_of(reader(p))
+-        if not tip_ok(ty, st):
+-            continue
+-        seq = _note_status_seq(repo_root, base_where, tip_where, vault_rel, p, deadline=deadline, strict=strict)
+-        if seq is None:
++        hit = _note_flipped_one(repo_root, base_where, tip_where, vault_rel, reader, tip_ok, flip, p, deadline, strict)
++        if hit is None:
+             return None
+-        if any(flip(a, b) for a, b in zip(seq, seq[1:])):
++        if hit:
+             out.append(p)
+     return out
+ 
+ 
++def _note_flipped_one(repo_root, base_where, tip_where, vault_rel, reader, tip_ok, flip, p, deadline, strict):
++    """一篇候選有沒有發生 flip → True/False;嚴格時讀不到回 None(判不了)。
++    不嚴格(筆記內容審)時這篇讀不到就當成沒有翻轉,別篇照算(代碼審 r4 併發席);
++    嚴格時頂端那一版讀不到也算判不了(代碼審 r4 正確性席)。"""
++    blob = reader(p)
++    if blob is None and strict:
++        return None
++    ty, st = _note_audit_status_of(blob)
++    if not tip_ok(ty, st):
++        return False
++    seq = _note_status_seq(repo_root, base_where, tip_where, vault_rel, p, deadline=deadline, strict=strict)
++    if seq is None:
++        return None if strict else False
++    return any(flip(a, b) for a, b in zip(seq, seq[1:]))
++
++
+ def _note_status_seq(repo_root, base_where, tip_where, vault_rel, p, deadline=None, strict=False):
+     """一篇筆記在範圍裡由舊到新的 status 序列(起點那一版開頭;改名跟著走)。git log 失敗回 None;
+-    strict 時批次讀失敗、改名對照失敗也回 None(不能當成沒有狀態翻轉,代碼審 r2、r3 外家席),不嚴格時照舊當成讀不到。
++    strict 時批次讀失敗、改名對照失敗、歷史裡有一版解不開也回 None(不能當成沒有狀態翻轉,代碼審 r2 到 r4 外家席),
++    不嚴格時照舊當成讀不到;呼叫端不嚴格時碰到 None 只丟這一篇。
+     deadline:每一次 git 呼叫前看一次,過了回 None;批次讀的逾時用剩下的時間。"""
+     import time as _t
+ 
+-    def late():
++    def _late():
+         return deadline is not None and _t.monotonic() > deadline
+ 
+     def _to():
+         return 60 if deadline is None else max(1, deadline - _t.monotonic())
+     rng = f"{base_where}..{tip_where}" if base_where else tip_where
+-    if late():
++    if _late():
+         return None
+     lg = _ns_git(repo_root, "log", "--follow", "--format=%H", "--name-only", "-z", rng, "--", p)
+     if lg is None:
+         return None
+     pairs = _git_log_sha_paths(lg)
+     specs = [f"{s}:{q}" for s, q in pairs]
+-    if specs and late():
++    if specs and _late():
++        return None
++    states = _note_history_states(repo_root, specs, _to(), strict)
++    if states is None:
+         return None
+-    blobs = _nodehome_cat_blobs(repo_root, specs, timeout=_to()) if specs else []
+-    if blobs is None:
+-        if strict:
+-            return None
+-        blobs = []
+-    states = [_note_audit_status_of(b)[1] for b in blobs]
+     base_state = None
+     if base_where:
+-        got = _note_base_status(repo_root, base_where, vault_rel, pairs, p, late, _to, strict)
++        got = _note_base_status(repo_root, base_where, vault_rel, pairs, p, _late, _to, strict)
+         if got is None:
+             return None
+         base_state = got[0]
+     return [base_state, *states[::-1]]          # 由舊到新
+ 
+ 
++def _note_history_states(repo_root, specs, timeout, strict):
++    """歷史各版(由新到舊)的 status 清單。批次讀失敗、或有一版解不開:嚴格回 None,不嚴格當成讀不到。"""
++    blobs = _nodehome_cat_blobs(repo_root, specs, timeout=timeout) if specs else []
++    if blobs is None:
++        if strict:
++            return None
++        blobs = []
++    if strict and any(b is not None and not _utf8_ok(b) for b in blobs):
++        return None
++    return [_note_audit_status_of(b)[1] for b in blobs]
++
++
++def _utf8_ok(b):
++    try:
++        b.decode("utf-8-sig")
++        return True
++    except UnicodeDecodeError:
++        return False
++
++
+ def _git_log_sha_paths(raw):
+     """git log -z --format=%H --name-only 的輸出 →[(sha, 那時的路徑)]。
+     格式是「sha\\0\\n路徑\\0」一筆接一筆(實測;換行黏在路徑前面)。"""
+     pairs, cur = [], None
+     for tok in raw.decode("utf-8", errors="surrogateescape").split("\0"):
+         tok = tok.strip("\n")
+         if not tok:
+             continue
+         if cur is None and _LENS_SHA_RE.fullmatch(tok):
+             cur = tok
+         elif cur is not None:
+             pairs.append((cur, tok))
+             cur = None
+     return pairs
+ 
+ 
+-def _note_base_status(repo_root, base_where, vault_rel, pairs, p, late, to, strict):
++def _note_base_status(repo_root, base_where, vault_rel, pairs, p, _late, to, strict):
+     """起點那一版的 status → (status,);過了預算,或 strict 時讀不到,回 None。
+     最舊那個碰到它的提交若是改名,git log 給的是新路徑;起點那時的路徑要對起點做改名偵測(代碼審 r1 正確性席:
+     已收尾的計劃只改名,原本讀不到起點狀態、被當成這次收尾)。strict 時改名對照讀失敗不能當成「起點沒有這篇」
+     (代碼審 r3 外家席:那會把 pending→pass 看成 無→pass,轉正事件漏擋)。"""
+     old = pairs[-1][1] if pairs else p
+     if pairs:
+-        if late():
++        if _late():
+             return None
+         rn = _ns_git(repo_root, "diff", "--name-status", "-z", "-M", base_where, pairs[-1][0], "--", vault_rel)
+         if rn is None and strict:
+             return None
+         if rn is not None:
+             old = _nodehome_name_status(rn, norm=False)[1].get(old, old)
+-    if late():
++    if _late():
+         return None
+     bb = _nodehome_cat_blobs(repo_root, [f"{base_where}:{old}"], timeout=to())
+     if bb is None:
+         return None if strict else (None,)
+     return (_note_audit_status_of(bb[0])[1],)
+ 
+ 
+ def _note_audit_items(repo_root, base_where, tip_where, vault_rel):
+     """這次要審的每一行 → (items, errs) 或 None。item={id, path, line, text, region, heading, done, context, ctx_fp}。
+     一般新寫的行借第一層的共用函式(推送前掛鉤的標記、不逐提交判);被收尾的計劃整篇進完成審(已翻案的決策不進)。"""
+@@ -25278,21 +25311,22 @@ def _drift_c3_hit(env, vrel, override=None, ti=None):
+     if n is None or _drift_str(n, "type") != "verification" or _drift_str(n, "status") != "pending":
+         return None
+     if GUARD_MARK_FIELD in n.fields:
+         return None                               # 守衛紀錄到期前本來就是 pending;欄位在就算(空的也算,外家席)
+     refs = [x for x in as_list(n.fields.get("plan_refs")) if x.strip()]
+     if not refs:
+         return None
+     ti = ti if ti is not None else build_typed_index(env)
+     # 每一項都要有落點:只要有一項落在解不出(ghosts)、猜不準(ambiguous)或不是連結(scalars),就不算(代碼審 r2、r3
+     # 正確性席:比「解出來幾項」跟「寫法幾種」兩個數字,.md 混寫會漏列、再加一條解不出的又會湊巧相等而誤列)
+-    if any(g[0] == vrel and g[2] == "plan_refs" for g in ti["ghosts"] + ti["ambiguous"]) \
++    if any(not link_target(x) for x in refs) \
++            or any(g[0] == vrel and g[2] == "plan_refs" for g in ti["ghosts"] + ti["ambiguous"]) \
+             or any(sc[0] == vrel and sc[1] == "plan_refs" for sc in ti["scalars"]):
+         return None
+     plans = sorted(set(ti["fwd"].get(vrel, {}).get("plan_refs", [])))
+     if not plans:
+         return None
+     for prel in plans:
+         pn = env.notes.get(prel)
+         if pn is None or _drift_str(pn, "type") != "project":
+             return None
+         if (override or {}).get(prel, _drift_str(pn, "status")) not in _DRIFT_CLOSED:
+@@ -25413,30 +25447,33 @@ def _drift_print_followups(env, rel, new_status):
+     if not items:
+         return
+     print(f"連帶待辦(這份計劃收尾了,下面 {len(items)} 篇連著它;只列出、不擋——連結有時只是參考,是不是該結案要人看):")
+     for kind, p, why in items:
+         print(f"  · {kind} {p[:-3]}({why})")
+         print(f"      看:lumos context {p[:-3]}")
+ 
+ 
+ # ── 在某個提交的樹上做檢查 ─────────────────────────────────────────────────────────
+ 
+-def _drift_tree_env(root, where, vault_rel, override=None, timeout=60):
++def _drift_tree_env(root, where, vault_rel, override=None, deadline=None):
+     """某個提交(where)的圖譜 → 記憶體裡的 Env;override={圖譜內路徑: 全文} 蓋過樹上的。git 失敗回 None。
+     解不開的筆記(不是 UTF-8)建成讀檔失敗的筆記(_note_unreadable)——check 碰到它們要算判不了,不能當不存在
+     (代碼審 r1 外家席:原本整篇跳過,轉正事件與 c1 一起消失,block 模式照樣放行)。"""
+     lst = _nodehome_list(root, where)
+     if lst is None:
+         return None
+     pre = vault_rel.rstrip("/") + "/"
+     paths = [p for p in lst[0] if p.startswith(pre) and p.endswith(".md")]
+-    blobs = _nodehome_cat_blobs(root, [f"{where}:{p}" for p in paths], timeout=max(1, timeout)) if paths else []
++    import time as _t
++    # 逾時用「列完路徑之後」剩下的時間(代碼審 r4 併發席:原本用進來前算好的值,沒扣掉列路徑花的時間)
++    left = 60 if deadline is None else max(1, deadline - _t.monotonic())
++    blobs = _nodehome_cat_blobs(root, [f"{where}:{p}" for p in paths], timeout=left) if paths else []
+     if blobs is None:
+         return None
+     texts, bad = {}, []
+     for p, b in zip(paths, blobs):
+         if b is None:
+             continue
+         try:
+             texts[p[len(pre):]] = b.decode("utf-8-sig")
+         except UnicodeDecodeError:
+             bad.append(p[len(pre):])
+@@ -25495,21 +25532,21 @@ def _drift_check_core(root, base, tip, vault_rel, override=None, deadline=None):
+     """drift check 的判定本體(計劃〈做法〉第 1 節第 5 點)→ (要處理, 只列出, 判不了的原因)。不印、不寫帳——
+     推送閘與考試共用。要處理:範圍裡轉正的守衛紀錄還留著預告句(c1);只列出:c2 到 c5 在範圍裡有對應事件的。
+     預算:先建頂端的樹(批次讀的逾時用剩下的預算)、再只對候選逐提交讀狀態;每一步開始前、每篇候選之前都看一次預算,
+     超過就算判不了。已經開始的那一次 git 呼叫不會被打斷(單次最多 20 秒,批次讀以剩下的預算為上限),
+     所以最壞會比預算多出一次呼叫的時間(代碼審 r2 併發席:第一版只在迴圈裡看,前面四次呼叫都不看預算)。"""
+     import time as _t
+ 
+     def _left():
+         return _DRIFT_BUDGET_SEC if deadline is None else deadline - _t.monotonic()
+     over = f"超過 {_DRIFT_BUDGET_SEC} 秒預算"
+-    tenv = _drift_tree_env(root, tip, vault_rel, override, timeout=_left())
++    tenv = _drift_tree_env(root, tip, vault_rel, override, deadline=deadline)
+     if tenv is None:
+         return [], [], [over if _left() <= 0 else "git 讀不出被推送頂端的筆記"]
+     if _left() <= 0:
+         return [], [], [over]
+     reader = _nodehome_reader(root, tip)
+     ev = _drift_range_events(root, base, tip, vault_rel, reader, tenv, deadline=deadline)
+     if ev is None:
+         return [], [], [over if _left() <= 0 else "git 算不出這次推送改了哪些筆記"]
+     unknown = [f"{p} 讀不出來(不是 UTF-8),狀態查不到" for p, n in sorted(tenv.notes.items())
+                if _note_unreadable(n) and p in ev["touched"]]
+@@ -25621,48 +25658,42 @@ def cmd_drift_ack(env, node, line, kind, reason):
+         return rc
+     _gate_event_or_warn(root, "drift-check", "acked", f"{rel}:{line} {kind}:{reason.strip()[:80]}")
+     print(f"✓ 表態記下了({token}):{rel} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]})")
+     print(f"推送前的檢查只認提交進去的表態檔:\n    git add {_DRIFT_ACKS} && git commit")
+     return 0
+ 
+ 
+ # ── 推送閘 ───────────────────────────────────────────────────────────────────────────
+ 
+ def _drift_config(text):
+-    """被檢查版本的 .lumos/config.json 內容 → (gate, warnings)。照 _note_audit_config 的讀法(每道閘各自一支,既有慣例)。"""
++    """被檢查版本的 .lumos/config.json 內容 → (gate, warnings, explicit)。照 _note_audit_config 的讀法(每道閘各自一支,
++    既有慣例);多回一個 explicit=專案有沒有自己寫 drift_check(寫壞了也算寫了)——doctor 的開關提醒要用,
++    從同一次解析來,不另開第二支讀同一個鍵(代碼審 r4 架構對齊席)。"""
+     import json as _j
+     if text is None:
+-        return _DRIFT_DEFAULT_GATE, []
++        return _DRIFT_DEFAULT_GATE, [], False
+     try:
+         cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
+     except (ValueError, UnicodeDecodeError):
+-        return _DRIFT_DEFAULT_GATE, [f".lumos/config.json 讀不成 JSON,存量漂移檢查照預設 {_DRIFT_DEFAULT_GATE}"]
++        return _DRIFT_DEFAULT_GATE, [f".lumos/config.json 讀不成 JSON,存量漂移檢查照預設 {_DRIFT_DEFAULT_GATE}"], False
+     dc = cfg.get("drift_check") if isinstance(cfg, dict) else None
+-    if dc is not None and not isinstance(dc, dict):
++    if dc is None:
++        return _DRIFT_DEFAULT_GATE, [], False
++    if not isinstance(dc, dict):
+         return _DRIFT_DEFAULT_GATE, ["設定檔的 drift_check 不是物件(要寫成 {\"drift_check\": {\"gate\": \"warn\"}}),"
+-                                     f"照預設 {_DRIFT_DEFAULT_GATE}"]
+-    g = dc.get("gate") if isinstance(dc, dict) else None
++                                     f"照預設 {_DRIFT_DEFAULT_GATE}"], True
++    g = dc.get("gate")
+     if g is None:
+-        return _DRIFT_DEFAULT_GATE, []
++        return _DRIFT_DEFAULT_GATE, [], False
+     if g not in _DRIFT_GATE_VALUES:
+-        return _DRIFT_DEFAULT_GATE, [f"drift_check.gate 只能是 block/warn/off,你寫的是 {g!r},照預設 {_DRIFT_DEFAULT_GATE}"]
+-    return g, []
+-
+-
+-def _drift_gate_explicit(text):
+-    """設定檔有沒有自己寫 drift_check.gate(不管寫什麼值)。"""
+-    import json as _j
+-    try:
+-        cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else (text or ""))
+-    except (ValueError, UnicodeDecodeError):
+-        return False
+-    return isinstance(cfg, dict) and isinstance(cfg.get("drift_check"), dict) and "gate" in cfg["drift_check"]
++        return _DRIFT_DEFAULT_GATE, [f"drift_check.gate 只能是 block/warn/off,你寫的是 {g!r},照預設 {_DRIFT_DEFAULT_GATE}"], True
++    return g, [], True
+ 
+ 
+ def _drift_print_findings(rows, stream, acks=None, alive=None):
+     for f in rows[:20]:
+         print(f"  [{f['kind']} {_DRIFT_KIND_NAMES[f['kind']]}] {f['path']}:{f['line']}  {f['text'][:60]}", file=stream)
+         print(f"      {f['why']}", file=stream)
+         old = _drift_old_reason(f, acks, alive) if acks else None
+         if old:
+             print(f"      (這一行以前表態過、後來改了或搬了,舊理由:{old[:80]})", file=stream)
+     if len(rows) > 20:
+@@ -25678,21 +25709,21 @@ def cmd_drift_check(repo=None, diff_range=None):
+         print("存量漂移檢查:這裡不是 git 專案,跳過", file=sys.stderr)
+         return 0
+     if os.environ.get("LUMOS_SKIP_DRIFT_CHECK") == "1":        # 只認 1
+         print("存量漂移檢查:LUMOS_SKIP_DRIFT_CHECK 設了,這次跳過(已記進治理帳;CI 照查)", file=sys.stderr)
+         _gate_event_or_warn(root, "drift-check", "skipped-env", "LUMOS_SKIP_DRIFT_CHECK")
+         return 0
+     base, tip, vault_rel = _note_audit_resolve(root, diff_range, "存量漂移檢查", gate="drift-check",
+                                                mark=_DRIFT_GOLIVE_MARK)
+     if tip is None or isinstance(tip, int):
+         return tip if isinstance(tip, int) else 0
+-    mode, warns = _drift_config(_nodehome_reader(root, tip)(".lumos/config.json"))
++    mode, warns, _explicit = _drift_config(_nodehome_reader(root, tip)(".lumos/config.json"))
+     for w in warns:
+         print(f"提醒:{w}", file=sys.stderr)
+     if mode == "off":
+         print("存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", file=sys.stderr)
+         return 0
+     must, listed, unknown = _drift_check_core(root, base, tip, vault_rel,
+                                               deadline=_t.monotonic() + _DRIFT_BUDGET_SEC)
+     acks = _drift_load_acks(root, tip)
+     must, _acked_m = _drift_split_acked(must, acks, vault_rel)
+     listed, _acked_l = _drift_split_acked(listed, acks, vault_rel)
+@@ -25794,41 +25825,42 @@ def _drift_doctor_lines(env):
+     for k in ("c1", "c2", "c3", "c4", "c5"):
+         rows = [f for f in left if f["kind"] == k]
+         nd = sum(1 for f in done if f["kind"] == k)
+         if rows:     # 只剩已表態的不開段(全靜默;代碼審 r2 正確性席:表態完那一段永遠不會安靜);全部清單看 drift scan
+             ex = ";".join(f"{f['path'][:-3]}:{f['line']}" for f in rows[:3])
+             out.append(f"[{k}] {_DRIFT_KIND_NAMES[k]} {len(rows)} 筆(例:{ex})" + (f";另 {nd} 筆已表態" if nd else ""))
+     return out
+ 
+ 
+ def _drift_gate_doctor_lines(repo_root):
+-    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):開關不是 block 就講(不管接線沒,設計 [S14]);
++    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):開關不是 block,而且專案自己寫了開關或已經接線時講
++    (沒寫設定也沒接線時預設就是 warn,每次都唸只是噪音;計劃 [S14] 已跟著改);
+     只收專案根:鄰居多收的圖譜位置與 ci 旗標是給它們的事後掃描用的,這支沒有事後掃描(代碼審 r3 架構對齊席:抄了參數不用是死參數)。
+     接線後(推送前掛鉤出現標記)專案 CI 沒呼叫 drift check 就給要貼的步驟。唯一的 git 呼叫是讀一次推送前掛鉤。"""
+     out = []
+     root = Path(repo_root)
+     cp = root / ".lumos" / "config.json"
+     txt = None
+     try:        # .lumos 資料夾本身是捷徑也不跟(照 _note_audit_doctor_lines;代碼審 r2 架構對齊席)
+         if cp.is_file() and not cp.is_symlink() and cp.resolve() == root.resolve() / ".lumos" / "config.json":
+             txt = cp.read_bytes()
+     except OSError:
+         txt = None
+-    mode, _w = _drift_config(txt)
++    mode, _w, explicit = _drift_config(txt)
+     hk = _lens_git(root, "show", f"HEAD:{_NOTELINES_PREPUSH}")
+     wired = hk is not None and hk.returncode == 0 and _DRIFT_GOLIVE_MARK in hk.stdout
+     # 開關不是 block 時講一聲——只在專案自己寫了開關、或已經接線時(代碼審 r1 外家席:關掉了要看得見);
+     # 還沒接線又沒寫設定時預設本來就是 warn,每個專案每次 doctor 都多一行只是噪音(代碼審 r3:那一行也破壞既有測試
+     # t_doctor_summary_admits_soft_reminders 的軟段計數)
+-    if mode != "block" and (wired or _drift_gate_explicit(txt)):
+-        out.append(f"這個專案的存量漂移檢查是 {mode}(.lumos/config.json 的 drift_check.gate)——"
+-                   "轉正後留著預告句的推送不會被擋")
++    if mode != "block" and (wired or explicit):
++        src = "(.lumos/config.json 的 drift_check.gate)" if explicit else "(沒寫設定,這是預設值)"
++        out.append(f"這個專案的存量漂移檢查是 {mode}{src}——轉正後留著預告句的推送不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+     if wired and ymls and "drift check" not in body:
+         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
+                    "\n    - run: python3 scripts/lumos drift check --diff \"${{ github.event.before || "
+                    "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"")
+     return out
+ 
+ 
+@@ -25884,22 +25916,23 @@ def _drift_exam_one(root, vault_rel, q, at_sha):
+ 
+ 
+ def _drift_exam_replay(root, par, vault_rel, targets):
+     """status_replay:取上一版的樹,在記憶體裡把 targets 每一份計劃改成 done,回 lumos set 會列的連帶待辦路徑集合。"""
+     tenv0 = _drift_tree_env(root, par, vault_rel)
+     if tenv0 is None:
+         return None
+     texts = {}
+     for t in targets:
+         prel = tenv0.resolve(link_target(t))
+-        if prel:
+-            texts[prel] = _drift_set_status_text(env_text(tenv0, prel), "done")
++        txt = env_text(tenv0, prel) if prel else None
++        if txt is not None:          # 讀不出來的計劃(不是 UTF-8)沒辦法在記憶體裡改狀態,跳過(代碼審 r4 正確性席)
++            texts[prel] = _drift_set_status_text(txt, "done")
+     tenv = _drift_tree_env(root, par, vault_rel, override=texts)
+     fu = set()
+     for prel in texts:
+         fu |= {p for _k, p, _w in _drift_plan_followups(tenv, prel, "done")}
+     return fu
+ 
+ 
+ def _drift_exam_others(findings, note, line, kind):
+     """考題那一行以外、算誤報的發現:排除題目那一行,以及同一篇同一種的兄弟句(c1 一句一筆,同一個轉正事件的
+     另外幾句預告句是真發現,不是亂抓);同一篇別種的、別篇的都算(代碼審 r1 外家席:原本同一篇全部排除,誤報被低估)。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 5fbcedfe..9f4b5b68 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -50817,12 +50817,100 @@ def t_drift_code_review_r3_regressions():
+     check("⑧再加一條解不出的:不算(講不準就不列)", not [x for x in m._drift_state_findings(e) if x["kind"] == "c3"], "")
+     # ⑩ doctor 開頭的開關提醒:沒寫設定也沒接線不唸(預設 warn 是過渡);自己寫了 warn/off 就唸
+     root = _nh_repo()
+     r0 = run(root / "docs" / "kg-knowledge", "doctor")
+     check("⑩沒寫設定、沒接線:不唸開關", "存量漂移檢查是" not in r0.stdout, r0.stdout[:400])
+     root = _nh_repo(cfg={"drift_check": {"gate": "off"}})
+     r1 = run(root / "docs" / "kg-knowledge", "doctor")
+     check("⑩自己寫了 off:唸出來", "存量漂移檢查是 off" in r1.stdout, r1.stdout[:400])
+ 
+ 
++def t_drift_code_review_r4_regressions():
++    """存量漂移守衛代碼審 r4 的回歸釘。
++
++    ①筆記內容審(不嚴格):一篇的 git log --follow 失敗只丟那一篇,別篇照算 ②樹的批次讀逾時扣掉列路徑花掉的時間
++    ③測試名只認完全相同,不猜平台前綴 ④開關「有沒有自己寫」從 _drift_config 同一次解析來,格式寫錯也算寫了
++    ⑤嚴格:歷史裡有一版解不開就判不了 ⑥空連結不算有落點 ⑦嚴格:頂端那一版逐篇讀失敗判不了
++    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時,提醒講明是預設值
++    """
++    print("t_drift_code_review_r4_regressions")
++    import pathlib, time as _t
++    m = _load_lumos_inproc()
++    Vp = pathlib.Path("docs/kg-knowledge")
++    f = m._notes_status_flipped
++    g_ = f.__globals__
++    saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs", "_nodehome_list")}
++    a, b = "a" * 40, "b" * 40
++    p1, p2 = "docs/kg-knowledge/Projects/P1.md", "docs/kg-knowledge/Projects/P2.md"
++    done = b"---\ntype: project\nstatus: done\n---\n"
++    doing = b"---\ntype: project\nstatus: doing\n---\n"
++    try:
++        def git1(root, *args):
++            if "--follow" in args:
++                return None if args[-1] == p1 else (a + "\0\n" + p2 + "\0").encode()
++            if "--name-status" in args:
++                return b""
++            return (p1 + "\0" + p2 + "\0").encode()
++        g_["_ns_git"] = git1
++        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: [doing if s.startswith("BASE") else done for s in specs]
++        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: done, lambda ty, st: ty == "project" and st == "done",
++                lambda x, y: x != "done" and y == "done")
++        check("①不嚴格:P1 的歷史讀失敗只丟 P1、P2 照算", got == [p2], str(got))
++        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: done, lambda ty, st: ty == "project" and st == "done",
++                lambda x, y: x != "done" and y == "done", strict=True)
++        check("①嚴格:同一情況判不了", got is None, str(got))
++        # ⑤ 歷史裡一版解不開
++        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p1 + "\0" + b + "\0\n" + p1 + "\0").encode() if "--follow" in args else b"")
++        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: ([b"---\nstatus: pass\n---\n", bytes([255])] if len(specs) == 2
++                                                               else [b"---\nstatus: pending\n---\n"])
++        check("⑤嚴格:歷史裡有一版解不開就判不了",
++              m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p1, strict=True) is None, "")
++        # ⑦ 頂端那一版逐篇讀失敗
++        g_["_ns_git"] = lambda root, *args: (p1 + "\0").encode() if "log" in args and "--follow" not in args else b""
++        got = f(".", "BASE", "TIP", "docs/kg-knowledge", lambda q: None, lambda ty, st: True, lambda x, y: True, strict=True)
++        check("⑦嚴格:頂端那一版讀失敗判不了", got is None, str(got))
++        # ② 樹的批次讀逾時
++        seen = {}
++
++        def slow_list(root, where):
++            _t.sleep(0.5)
++            return ({"docs/kg-knowledge/A.md": "100644"}, ["docs/kg-knowledge/A.md"])
++        g_["_nodehome_list"] = slow_list
++        g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: (seen.setdefault("t", kw.get("timeout")) and [b"---\n---\n"])
++        m._drift_tree_env(".", "TIP", "docs/kg-knowledge", deadline=_t.monotonic() + 3)
++        check("②樹的批次讀逾時扣掉列路徑已花的時間", seen.get("t") is not None and seen["t"] <= 2.6, str(seen))
++    finally:
++        g_.update(saved)
++    # ③
++    ls = ["---", "summary: |-", "  KEY:★INVARIANT★ 大額退費要人工核可 [test:oops:refund_test]", "---"]
++    check("③平台前綴不猜:不算綁了這支", m._guard_formal_line(ls, 3, "大額退費要人工核可", "refund_test") is None, "")
++    # ④
++    check("④格式寫錯也算自己寫了開關", m._drift_config(b'{"drift_check": "block"}')[2] is True, "")
++    check("④沒寫就不算", m._drift_config(b'{"note_audit": {"gate": "warn"}}')[2] is False, "")
++    # ⑥
++    T = {"Projects/P.md": "---\ntype: project\nstatus: done\n---\n# P\n",
++         "Verification/V.md": "---\ntype: verification\nstatus: pending\nplan_refs:\n  - \"[[Projects/P]]\"\n  - \"[[ ]]\"\n---\n# V\n"}
++    e = m.Env.from_texts(Vp, T)
++    check("⑥空連結不算有落點:不列 c3", not [x for x in m._drift_state_findings(e) if x["kind"] == "c3"], "")
++    # ⑧
++    fr = m._drift_exam_replay
++    g2 = fr.__globals__
++    sv = g2["_drift_tree_env"]
++    try:
++        g2["_drift_tree_env"] = lambda root, w, v, override=None, **k: m.Env.from_texts(
++            pathlib.Path(v), dict(override or {}), unreadable=[] if override else ["Projects/壞.md"])
++        got = fr(".", "PAR", "docs/kg-knowledge", ["[[Projects/壞]]"])
++        check("⑧考試重放碰到讀不出來的計劃:不崩", isinstance(got, set), str(got))
++    except Exception as ex:           # noqa: BLE001 — 崩了就記紅
++        check("⑧考試重放碰到讀不出來的計劃:不崩", False, repr(ex))
++    finally:
++        g2["_drift_tree_env"] = sv
++    # ⑨
++    root = _nh_repo()
++    _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
++    _nh_commit(root, "wired")
++    r = run(root / "docs" / "kg-knowledge", "doctor")
++    check("⑨已接線、沒寫設定:提醒講明是預設值", "存量漂移檢查是 warn" in r.stdout and "預設" in r.stdout, r.stdout[:500])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
