@@ -1,0 +1,847 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b9e7e275..44be0092 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -50777,23 +50777,24 @@ def t_guard_settle_rewrites_planned_prose():
+         "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "另一條")
+     g2 = [x for x in (vault / "Verification").glob("*.md") if "另一條" in x.stem][0]
+     g2.write_text(g2.read_text(encoding="utf-8").replace("TEST:還沒有測試在守這條", "TEST:作者自己改寫過"), encoding="utf-8")
+     r2 = run(vault, "guard", "settle", "Verification/" + g2.stem, "--test", "t_other")
+     check("⑥找不到句型:照樣成功並提醒那一句", r2.returncode == 0 and "找不到摘要的 TEST 預告句" in r2.stdout,
+           r2.stdout + r2.stderr)
+     check("⑥手改過的那句不動", "TEST:作者自己改寫過" in g2.read_text(encoding="utf-8"), g2.read_text(encoding="utf-8"))
+ 
+ 
+ def t_guard_settle_recovers_half_done():
+-    """[S5] 家筆記已經是正式行(其他標記不影響)而守衛紀錄還是 pending:只補第二步;已經 pass:印已轉正、回 0。
++    """[S5] 家筆記已經是正式行(其他標記不影響)而守衛紀錄還是 pending:只補第二步;已經 pass 而且預告句都改過了:印已轉正、回 0
++    (pass 還留著預告句時會補改,見 t_guard_settle_pass_completes_prose;存量漂移改法 [S3])。
+ 
+-    翻紅釘:拿掉 _guard_formal_line 那個分支 → ①紅(找不到預告行擋下);拿掉 status==pass 的早退 → ③紅。
++    翻紅釘:拿掉 _guard_formal_line 那個分支 → ①紅(找不到預告行擋下);拿掉 _guard_settle_pass 裡「沒有預告句就回 0」→ ③紅。
+     """
+     print("t_guard_settle_recovers_half_done")
+     v = mkvault()
+     write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
+     write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
+     _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃",
+         "--phase", "P1", "--due", "2099-12-31", "--why", "還沒定", "--owner", "enzo", "--name", "大額退費")
+     g = list((v / "Verification").glob("*.md"))[0]
+     pay = v / "Systems" / "Pay.md"
+     t = pay.read_text(encoding="utf-8")
+@@ -50802,21 +50803,21 @@ def t_guard_settle_recovers_half_done():
+                  "  KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund] [audit:opus/2026-09-20]", t)
+     pay.write_text(t2, encoding="utf-8")
+     check("①前置:家筆記已是正式行、守衛紀錄還是 pending", "★INVARIANT-PLANNED★" not in t2
+           and "status: pending" in g.read_text(encoding="utf-8"), t2)
+     r = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+     check("①做到一半:只補守衛紀錄、成功", r.returncode == 0 and "只補守衛紀錄" in r.stdout, r.stdout + r.stderr)
+     check("②守衛紀錄轉成 pass、預告句改寫", "status: pass" in g.read_text(encoding="utf-8")
+           and "還沒有測試在守" not in g.read_text(encoding="utf-8"), g.read_text(encoding="utf-8"))
+     check("②家筆記那行沒被再動", pay.read_text(encoding="utf-8") == t2, pay.read_text(encoding="utf-8"))
+     r2 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+-    check("③已經 pass:印已轉正、回 0", r2.returncode == 0 and "已轉正,不用再做" in r2.stdout, r2.stdout + r2.stderr)
++    check("③已經 pass、預告句都改過了:印已轉正、回 0", r2.returncode == 0 and "已轉正,不用再做" in r2.stdout, r2.stdout + r2.stderr)
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pass", "status: abandoned"), encoding="utf-8")
+     r3 = run(v, "guard", "settle", "Verification/" + g.stem, "--test", "t_refund")
+     check("④墓碑照舊擋", r3.returncode == 2, r3.stdout + r3.stderr)
+ 
+ 
+ def t_guard_commands_hold_vault_lock():
+     """[S19] guard plan/settle/abandon 讀家筆記時已經拿著寫入鎖(從讀到寫整段在鎖裡,另一個程序才蓋不掉)。
+ 
+     翻紅釘:把任一支的 `with _vault_write_lock` 拿掉 → 對應那條紅。
+     """
+@@ -53153,12 +53154,792 @@ def t_drift_code_review_yi_r5_regressions():
+     else:
+         print("  (沒驗到 C1:這台機器的 git 不支援 --object-format=sha256)")
+     # ── D 印出消毒 ──
+     buf = _io.StringIO()
+     m._drift_print_findings([{"kind": "probe", "path": "Systems/a\x1b[2K.md", "line": 3, "text": "REVISIT:\x1b]0;x\x07",
+                               "why": "因為\x1b[31m"}], buf)
+     check("D1 筆記路徑、原文、說明印到終端前換掉控制字元(資安 F1)", "\x1b" not in buf.getvalue() and "\x07" not in buf.getvalue(),
+           repr(buf.getvalue()))
+ 
+ 
++# ═══ 存量漂移改法(Projects/存量漂移改法_計劃):drift fix、settle 對 pass、E5 標記、結案列回頭條件、表態綁關係 ═══
++
++_DF_PAY = ("KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund]\nKEY:★INVARIANT★ 合約乙 [test:t_b]\n"
++           "KEY:★INVARIANT★ 合約丙 [test:t_c]\nKEY:★INVARIANT★ 合約丁 [test:t_d]\nKEY:★INVARIANT★ 合約戊 [test:t_e]\n"
++           "KEY:★INVARIANT★ 合約己 [test:t_f]\nKEY:★INVARIANT★ 合約庚 [test:t_g]")
++
++
++def _df_commit(root, msg="c", date=None):
++    """提交(可指定作者與提交者日期,c1 推轉正日期用)。"""
++    import subprocess as sp, os as _os
++    e = dict(_os.environ)
++    if date:
++        e["GIT_AUTHOR_DATE"] = e["GIT_COMMITTER_DATE"] = date + "T12:00:00"
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True, env=e)
++    sp.run(["git", "-C", str(root), "commit", "-qm", msg, "--no-verify"], capture_output=True, env=e)
++
++
++def _df_fix(vault, *args, env=None):
++    import subprocess as sp, os as _os
++    e = dict(_os.environ)
++    e.pop("LUMOS_DRIFT_FIX_FAULT", None)
++    if env:
++        e.update(env)
++    r = sp.run([sys.executable, GRAPHCTL, "--vault", str(vault), "drift", "fix", *args], capture_output=True, text=True, env=e)
++    return r.returncode, r.stdout + r.stderr
++
++
++def _df_rows(root, name="drift-fixes.jsonl"):
++    import json as _j
++    p = root / "governance" / name
++    return [_j.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.is_file() else []
++
++
++def _df_find(vault, kind, path):
++    fs = _dr_scan(vault)
++    return [f for f in fs if f["kind"] == kind and f["path"] == path] if isinstance(fs, list) else fs
++
++
++def _df_repo():
++    """存量漂移改法的測試專案:_dr_repo + 家筆記 Pay 有好幾條綁了測試的正式合約行 + 已收尾的計劃 Done_計劃。"""
++    root = _dr_repo()
++    _nh_node(root, "Pay", summary=_DF_PAY)
++    _nh_node(root, "Done_計劃", typ="project", folder="Projects", resp=None, status="done", summary="KEY:d")
++    _df_commit(root, "df base", "2026-08-01")
++    return root
++
++
++def t_drift_fix_refuses_wrong_kind():
++    """[S1] drift fix 指定的行不是那一種、參數與種類不合、--kind 不是 c1–c5、同名好幾篇、沒被追蹤、有不是工具留下的改動、
++    帶 BOM 或 CRLF → 回 2、不寫任何檔;drift fix 走自己的分派,不被當成 ack。
++
++    翻紅釘:_drift_fix_load 拿掉 _drift_current_finding 的判定 → ②紅(c3 的改法會套上去);_drift_fix_args_err 拿掉
++    「不收」那段 → ③紅;_drift_fix_target 改回 env.find → ⑤紅(取第一篇);乾淨檢查拿掉 → ⑥⑦紅;
++    main 的 drift 分派改回「不是 scan 就當 ack」→ ⑨紅(寫出表態檔)。
++    """
++    print("t_drift_fix_refuses_wrong_kind")
++    root = _df_repo()
++    v = root / _DR_VAULT
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/Done_計劃]]\n")
++    (v / "Verification" / "G.md").write_text(_dr_guard_text("pass"), encoding="utf-8")
++    _nh_file(root, f"{_DR_VAULT}/Systems/Dup.md", "---\ntype: issue\nstatus: open\n---\n# D\n[[Projects/Done_計劃]]\n")
++    _nh_file(root, f"{_DR_VAULT}/Issues/Dup.md", "---\ntype: issue\nstatus: open\n---\n# D\n[[Projects/Done_計劃]]\n")
++    (v / "Issues" / "Bom.md").write_bytes(b"\xef\xbb\xbf---\ntype: issue\nstatus: open\n---\n# B\n[[Projects/Done_\xe8\xa8\x88\xe5\x8a\x83]]\n")
++    (v / "Issues" / "Crlf.md").write_bytes("---\r\ntype: issue\r\nstatus: open\r\n---\r\n# C\r\n[[Projects/Done_計劃]]\r\n".encode("utf-8"))
++    _df_commit(root, "cases")
++    fs = _dr_scan(v)
++    check("①前置:I 第 3 行是 c2、G 有 c1、BOM 與 CRLF 那兩篇也被列成 c2", isinstance(fs, list)
++          and ("Issues/I.md", 3) in [(f["path"], f["line"]) for f in fs if f["kind"] == "c2"]
++          and any(f["kind"] == "c1" and f["path"] == "Verification/G.md" for f in fs)
++          and {"Issues/Bom.md", "Issues/Crlf.md"} <= {f["path"] for f in fs if f["kind"] == "c2"}, str(fs)[:500])
++    before = _nh_git(root, "status", "--porcelain").stdout
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c3", "--status", "pass")
++    check("②那一行不是這一種(c2 那行指定 c3):回 2、說明現在不是", rc == 2 and "現在不是 c3" in out, out)
++    rc, out = _df_fix(v, "Verification/G", "20", "--kind", "c1", "--status", "pass")
++    check("③參數與種類不合(c1 帶 --status):回 2", rc == 2 and "不收 --status" in out, out)
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "probe")
++    check("④--kind probe:回 2、指到把待辦做掉或 drift ack", rc == 2 and "drift ack" in out and "沒有工具改法" in out, out)
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c9")
++    check("④--kind 不是 c1–c5:回 2", rc == 2 and "c1/c2/c3/c4/c5" in out, out)
++    rc, out = _df_fix(v, "Dup", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了")
++    check("⑤節點同名好幾篇:回 2、要完整路徑(不猜第一篇)", rc == 2 and "同名筆記有 2 篇" in out, out)
++    _nh_file(root, f"{_DR_VAULT}/Issues/New.md", "---\ntype: issue\nstatus: open\n---\n# N\n[[Projects/Done_計劃]]\n")
++    check("⑥前置:New 沒被追蹤、但確實是 c2", "Issues/New.md" in _nh_git(root, "status", "--porcelain", "-uall").stdout
++          and _df_find(v, "c2", "Issues/New.md"), "")
++    rc, out = _df_fix(v, "Issues/New", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了")
++    check("⑥沒被追蹤:回 2(改壞了退不回來)", rc == 2 and "沒被 git 追蹤" in out, out)
++    (v / "Issues" / "New.md").unlink()
++    ip = v / "Issues" / "I.md"
++    ip.write_text(ip.read_text(encoding="utf-8") + "\n別人寫到一半\n", encoding="utf-8")
++    check("⑦前置:I 有別人的未提交改動", " M " in _nh_git(root, "status", "--porcelain").stdout, "")
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了")
++    check("⑦有不是工具自己留下的未提交改動:回 2、別人的改動還在", rc == 2 and "未提交的改動" in out
++          and "別人寫到一半" in ip.read_text(encoding="utf-8"), out)
++    _nh_git(root, "checkout", "--", f"{_DR_VAULT}/Issues/I.md")
++    for name in ("Bom", "Crlf"):
++        raw = (v / "Issues" / f"{name}.md").read_bytes()
++        rc, out = _df_fix(v, f"Issues/{name}", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了")
++        check(f"⑧{name}:回 2、講明原因、檔案一個位元組都沒動", rc == 2 and {"Bom": "BOM", "Crlf": "CRLF"}[name] in out
++              and (v / "Issues" / f"{name}.md").read_bytes() == raw, out)
++        rc, out = _df_fix(v, f"Issues/{name}", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了",
++                          "--dry-run")
++        check(f"⑧{name}:--dry-run 也回 2(預覽跟實寫一致)", rc == 2, out)
++    check("②–⑧全部擋下後:工作目錄跟擋之前一樣、沒寫表態檔與修復帳",
++          _nh_git(root, "status", "--porcelain").stdout == before
++          and not (root / "governance" / "drift-acks.jsonl").exists() and not (root / "governance" / "drift-fixes.jsonl").exists(),
++          _nh_git(root, "status", "--porcelain").stdout)
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "已經修好了", "--dry-run")
++    check("⑨drift fix 走自己的分派:dry-run 印預覽、不寫表態檔", rc == 0 and "預覽" in out
++          and not (root / "governance" / "drift-acks.jsonl").exists(), out)
++
++
++def t_drift_fix_c1_rewrites_with_commit_date():
++    """[S2] c1 修已 pass 的守衛紀錄:改寫四種預告句,日期依序取 --date、那篇已寫的轉正日期、守衛紀錄第一次變成 pass 的提交
++    日期(那一筆若也是檔案第一次出現就不算);推不出、shallow、已寫的兩個日期不同時擋下、不用今天;家節點沒有綁測試的正式行擋下;
++    下一個非空行是手補的「已轉正」時刪掉 settle 句那一行、不疊。
++
++    翻紅釘:_guard_pass_commit_date 改成拿今天 → ②紅;拿掉「那一筆也是第一次出現」→ ⑦紅;_guard_settled_date 先查 git 再看
++    已寫日期 → ⑤紅;拿掉兩處日期不同的檢查 → ⑥紅;_guard_pass_home 拿掉 → ⑧紅(家節點沒有正式行也改);
++    _guard_settle_rewrite 的 settle-del 拿掉 → ⑨紅(疊出兩行已轉正);shallow 檢查拿掉 → ⑩紅。
++    """
++    print("t_drift_fix_c1_rewrites_with_commit_date")
++    import hashlib, subprocess as sp, tempfile as _tf, datetime
++    today = datetime.date.today().isoformat()
++    root = _df_repo()
++    v = root / _DR_VAULT
++    V = v / "Verification"
++    specs = {"G": "大額退費要人工核可", "G2": "合約乙", "G3": "合約丙", "G4": "合約丁", "G6": "沒轉正的合約", "G7": "合約己"}
++    for name, claim in specs.items():
++        (V / f"{name}.md").write_text(_dr_guard_text("pending", claim=claim), encoding="utf-8")
++    _df_commit(root, "plan", "2026-09-01")
++    for name in specs:
++        t = (V / f"{name}.md").read_text(encoding="utf-8").replace("status: pending", "status: pass").replace(
++            "status/pending", "status/pass")
++        if name == "G3":
++            t = t.replace("還沒定案\n  TEST", "還沒定案(2026-09-15 已轉正)\n  TEST")
++        if name == "G4":
++            t = t.replace("還沒定案\n  TEST", "還沒定案(2026-09-15 已轉正)\n  TEST").replace(
++                "不要手改狀態。\n", "不要手改狀態。\n\n2026-09-16 已轉正:手補的\n")
++        if name == "G7":
++            t = t.replace("不要手改狀態。\n", "不要手改狀態。\n\n2026-09-18 已轉正:人手補的說明\n")
++        (V / f"{name}.md").write_text(t, encoding="utf-8")
++    _df_commit(root, "舊版 settle 轉正", "2026-09-20")
++    (V / "G5.md").write_text(_dr_guard_text("pass", claim="合約戊"), encoding="utf-8")
++    _df_commit(root, "整批匯入", "2026-09-22")
++    fs = _dr_scan(v)
++    g1 = sorted(f["line"] for f in fs if f["kind"] == "c1" and f["path"] == "Verification/G.md")
++    check("①前置:G 有四筆 c1、轉正那次提交的日期是 2026-09-20", len(g1) == 4 and "2026-09-20" in _nh_git(
++        root, "log", "--format=%as", "--", f"{_DR_VAULT}/Verification/G.md").stdout, str(g1))
++    rc, out = _df_fix(v, "Verification/G", str(g1[0]), "--kind", "c1")
++    t = (V / "G.md").read_text(encoding="utf-8")
++    check("②沒給日期:用守衛紀錄第一次變成 pass 的提交日期(不是今天)", rc == 0
++          and "TEST:[2026-09-20] 預告已轉正,合約改由 [[Systems/Pay]] 的正式合約行守" in t
++          and "還沒定案(2026-09-20 已轉正)" in t and "\n預告當時為什麼還不做:" in t and "\n(2026-09-20 已轉正)\n" in t
++          and (today == "2026-09-20" or today not in t), out + t)
++    check("②c1 整篇消失", not _df_find(v, "c1", "Verification/G.md"), "")
++    rows = _df_rows(root)
++    check("③修復帳一筆:種類、路徑、改後指紋等於磁碟", len(rows) == 1 and rows[0]["kind"] == "c1"
++          and rows[0]["path"] == f"{_DR_VAULT}/Verification/G.md"
++          and rows[0]["after_sha256"] == hashlib.sha256((V / "G.md").read_bytes()).hexdigest() and rows[0]["changed"], str(rows))
++    ln = lambda n: str(min(f["line"] for f in _df_find(v, "c1", f"Verification/{n}.md")))
++    rc, out = _df_fix(v, "Verification/G2", ln("G2"), "--kind", "c1", "--date", "2026-09-05")
++    check("④--date 優先", rc == 0 and "TEST:[2026-09-05]" in (V / "G2.md").read_text(encoding="utf-8"), out)
++    rc, out = _df_fix(v, "Verification/G3", ln("G3"), "--kind", "c1")
++    check("⑤那篇已寫的轉正日期(WHY 行尾)優先於提交日期", rc == 0 and "TEST:[2026-09-15]" in (V / "G3.md").read_text(encoding="utf-8"),
++          out)
++    raw4 = (V / "G4.md").read_bytes()
++    rc, out = _df_fix(v, "Verification/G4", ln("G4"), "--kind", "c1")
++    check("⑥已寫的兩個日期不同:回 2、不寫", rc == 2 and "不一致" in out and (V / "G4.md").read_bytes() == raw4, out)
++    raw5 = (V / "G5.md").read_bytes()
++    rc, out = _df_fix(v, "Verification/G5", ln("G5"), "--kind", "c1")
++    check("⑦第一次是 pass 的那筆也是檔案第一次出現(匯入):回 2、要 --date", rc == 2 and "第一次出現" in out
++          and (V / "G5.md").read_bytes() == raw5, out)
++    rc, out = _df_fix(v, "Verification/G5", ln("G5"), "--kind", "c1", "--date", "2026-09-10")
++    check("⑦給了 --date 就改", rc == 0 and "TEST:[2026-09-10]" in (V / "G5.md").read_text(encoding="utf-8"), out)
++    raw6 = (V / "G6.md").read_bytes()
++    rc, out = _df_fix(v, "Verification/G6", ln("G6"), "--kind", "c1", "--date", "2026-09-10")
++    check("⑧家節點沒有綁測試的正式行:回 2、講兩條出路", rc == 2 and "pending" in out and "drift ack" in out
++          and (V / "G6.md").read_bytes() == raw6, out)
++    rc, out = _df_fix(v, "Verification/G7", ln("G7"), "--kind", "c1")
++    t7 = (V / "G7.md").read_text(encoding="utf-8")
++    check("⑨下一個非空行是手補的已轉正:刪掉 settle 句、不疊一行,日期取手補那天", rc == 0 and "做完之後跑" not in t7
++          and t7.count("已轉正:人手補的說明") == 1 and "\n(2026-09-18 已轉正)\n" not in t7 and "TEST:[2026-09-18]" in t7
++          and "預告當時為什麼還不做:下游介面還沒定案\n\n2026-09-18 已轉正" in t7, out + t7)
++    # ⑩ shallow:淺複製的 repo 查不到完整歷史
++    (V / "G8.md").write_text(_dr_guard_text("pending", claim="合約庚"), encoding="utf-8")
++    _df_commit(root, "g8 plan", "2026-09-01")
++    t8 = (V / "G8.md").read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass")
++    (V / "G8.md").write_text(t8, encoding="utf-8")
++    _df_commit(root, "g8 pass", "2026-09-21")
++    sh = Path(_tf.mkdtemp(prefix="gctl-shallow-")) / "r"
++    sp.run(["git", "clone", "-q", "--depth", "1", "file://" + str(root), str(sh)], capture_output=True)
++    sv = sh / _DR_VAULT
++    check("⑩前置:淺複製成功、G8 有 c1", (sh / ".git" / "shallow").exists() and _df_find(sv, "c1", "Verification/G8.md"), "")
++    rc, out = _df_fix(sv, "Verification/G8", str(min(f["line"] for f in _df_find(sv, "c1", "Verification/G8.md"))), "--kind", "c1")
++    check("⑩shallow:回 2、要 --date", rc == 2 and "shallow" in out and "--date" in out, out)
++
++
++def t_guard_settle_pass_completes_prose():
++    """[S3] guard settle 遇到 pass 但還留著預告句:用 guard 區段同一支補改、不需要 --test、接受 --date;沒有預告句照舊回 0 印已轉正;
++    前提不符回 2;pending 沒給 --test 或給了 --date 擋下。pending 轉正遇到手補的已轉正段也刪 settle 句(同一支)。
++
++    翻紅釘:_guard_settle_pass 改回一律「已轉正,不用再做」→ ①紅;--test 改回必填 → ①紅(argparse 擋);
++    pending 分支拿掉 --date 檢查 → ④紅;_guard_pass_home 拿掉 → ③紅;pending 轉正的 _guard_settle_rewrite 拿掉 settle-del → ⑥紅。
++    """
++    print("t_guard_settle_pass_completes_prose")
++    import datetime
++    today = datetime.date.today().isoformat()
++    root = _df_repo()
++    v = root / _DR_VAULT
++    V = v / "Verification"
++    (V / "P1.md").write_text(_dr_guard_text("pass"), encoding="utf-8")
++    (V / "P2.md").write_text(_dr_guard_text("pass", prose=False), encoding="utf-8")
++    (V / "P3.md").write_text(_dr_guard_text("pass", claim="沒轉正的合約"), encoding="utf-8")
++    (V / "P5.md").write_text(_dr_guard_text("pending", claim="合約乙"), encoding="utf-8")
++    _df_commit(root, "plan", "2026-09-01")
++    t5 = (V / "P5.md").read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass")
++    (V / "P5.md").write_text(t5, encoding="utf-8")
++    _df_commit(root, "old settle", "2026-09-19")
++    check("①前置:P1 是 pass 而且有 c1", _df_find(v, "c1", "Verification/P1.md"), "")
++    r = run(v, "guard", "settle", "Verification/P1", "--date", "2026-09-12")
++    t1 = (V / "P1.md").read_text(encoding="utf-8")
++    check("①pass 還有預告句:不用 --test、照 --date 補改、成功訊息不印 [test:]", r.returncode == 0
++          and "TEST:[2026-09-12]" in t1 and "做完之後跑" not in t1 and "[test:" not in r.stdout, r.stdout + r.stderr + t1)
++    check("①補改後 c1 消失", not _df_find(v, "c1", "Verification/P1.md"), "")
++    r = run(v, "guard", "settle", "Verification/P2")
++    check("②pass 沒有預告句:照舊回 0 印已轉正", r.returncode == 0 and "已轉正,不用再做" in r.stdout, r.stdout + r.stderr)
++    raw3 = (V / "P3.md").read_bytes()
++    r = run(v, "guard", "settle", "Verification/P3", "--date", "2026-09-12")
++    check("③前提不符(家節點沒有正式行):回 2、講兩條出路、不寫", r.returncode == 2 and "pending" in r.stderr
++          and "drift ack" in r.stderr and (V / "P3.md").read_bytes() == raw3, r.stdout + r.stderr)
++    _gp(v, "guard", "plan", "Systems/Pay", "新預告的合約", "--plan", "Projects/退款_計劃", "--phase", "P1", "--due", "2099-12-31",
++        "--why", "還沒定", "--owner", "enzo", "--name", "新預告")
++    g4 = [x for x in V.glob("*.md") if "新預告" in x.stem][0]
++    raw4 = g4.read_bytes()
++    r = run(v, "guard", "settle", "Verification/" + g4.stem)
++    check("④pending 沒給 --test:回 2", r.returncode == 2 and "--test" in r.stderr and g4.read_bytes() == raw4, r.stdout + r.stderr)
++    r = run(v, "guard", "settle", "Verification/" + g4.stem, "--test", "t_new", "--date", "2026-09-12")
++    check("④pending 給了 --date:回 2", r.returncode == 2 and "--date" in r.stderr and g4.read_bytes() == raw4, r.stdout + r.stderr)
++    r = run(v, "guard", "settle", "Verification/P5")
++    check("⑤沒給 --date:推出守衛紀錄變成 pass 那次提交的日期", r.returncode == 0
++          and "TEST:[2026-09-19]" in (V / "P5.md").read_text(encoding="utf-8"), r.stdout + r.stderr)
++    g4.write_text(g4.read_text(encoding="utf-8").replace("不要手改狀態。\n", "不要手改狀態。\n\n2026-09-18 已轉正:人手補的\n"),
++                  encoding="utf-8")
++    check("⑥前置:pending 那篇 settle 句後面有手補段", "2026-09-18 已轉正:人手補的" in g4.read_text(encoding="utf-8")
++          and "做完之後跑" in g4.read_text(encoding="utf-8"), "")
++    r = run(v, "guard", "settle", "Verification/" + g4.stem, "--test", "t_new")
++    t4 = g4.read_text(encoding="utf-8")
++    check("⑥pending 轉正也走同一支:刪掉 settle 句、不疊一行「(今天 已轉正)」", r.returncode == 0 and "做完之後跑" not in t4
++          and f"\n({today} 已轉正)\n" not in t4 and t4.count("已轉正:人手補的") == 1, r.stdout + r.stderr + t4)
++
++
++def t_drift_fix_c3_sets_status_and_note():
++    """[S4] c3:只收驗證紀錄扣掉 pending 的合法值;改 status 並同步標籤、正文最後加一行依狀態措辭的說明;--by 找不到或猜不準擋下,
++    寫進去的是完整路徑的連結;正文最後停在沒閉合的圍欄擋下;原本的正文不改。
++
++    翻紅釘:_DRIFT_C3_STATUSES 放進 pending → ②紅;_drift_fix_by 改成取第一篇 → ③紅;措辭不分狀態 → ⑥紅;
++    _drift_append_note 拿掉圍欄檢查 → ⑦紅;加行位置改成直接接在檔尾 → ④「隔一個空行、原正文不動」紅。
++    """
++    print("t_drift_fix_c3_sets_status_and_note")
++    import datetime
++    today = datetime.date.today().isoformat()
++    root = _df_repo()
++    v = root / _DR_VAULT
++    V = v / "Verification"
++    ref = 'plan_refs:\n  - "[[Projects/Done_計劃]]"\ntags:\n  - type/verification\n  - status/pending'
++    body = "# V\n\n原本的正文第一段。\n\n原本的第二段。\n\n\n"
++    write(v, "Verification/V.md", "type: verification\nstatus: pending\n" + ref, body=body)
++    write(v, "Verification/V2.md", "type: verification\nstatus: pending\n" + ref, body="# V2\n內容\n")
++    write(v, "Verification/V3.md", "type: verification\nstatus: pending\n" + ref, body="# V3\n```\n沒關的圍欄\n")
++    write(v, "Verification/V4.md", "type: verification\nstatus: pending\n" + ref, body="")
++    _nh_file(root, f"{_DR_VAULT}/Systems/Dup.md", "---\ntype: system\n---\n# D\n")
++    _nh_file(root, f"{_DR_VAULT}/Issues/Dup.md", "---\ntype: issue\nstatus: open\n---\n# D\n")
++    _df_commit(root, "c3 cases")
++    check("①前置:V 第 3 行是 c3", [f["line"] for f in _df_find(v, "c3", "Verification/V.md")] == [3], "")
++    raw = (V / "V.md").read_bytes()
++    for bad in ("pending", "done"):
++        rc, out = _df_fix(v, "Verification/V", "3", "--kind", "c3", "--status", bad)
++        check(f"②--status {bad} 不合法:回 2、列出合法值", rc == 2 and "abandoned/pass/stale/superseded" in out, out)
++    for by, why in (("Dup", "同名好幾篇"), ("不存在的", "找不到")):
++        rc, out = _df_fix(v, "Verification/V", "3", "--kind", "c3", "--status", "pass", "--by", by)
++        check(f"③--by {by}:{why} → 回 2", rc == 2 and why in out, out)
++    check("②③擋下都沒動檔", (V / "V.md").read_bytes() == raw, "")
++    rc, out = _df_fix(v, "Verification/V", "3", "--kind", "c3", "--status", "pass", "--by", "Done_計劃")
++    t = (V / "V.md").read_text(encoding="utf-8")
++    want = f"{today} 狀態改為 pass(存量漂移 c3),由 [[Projects/Done_計劃]] 解決"
++    check("④status、標籤改成 pass;短名解成完整路徑的連結(不加反引號)", rc == 0 and "status: pass" in t and "status/pass" in t
++          and "status/pending" not in t and f"[[Projects/Done_計劃]]" in t and "`[[" not in t, out + t)
++    check("④加在正文最後一個非空行之後、隔一個空行,檔尾一個換行;原本的正文一字不動",
++          t.endswith("原本的第二段。\n\n" + want + "\n") and "# V\n\n原本的正文第一段。\n\n原本的第二段。\n" in t, repr(t[-200:]))
++    check("④c3 消失", not _df_find(v, "c3", "Verification/V.md"), "")
++    rc, out = _df_fix(v, "Verification/V2", "3", "--kind", "c3", "--status", "stale", "--by", "Systems/Pay")
++    t2 = (V / "V2.md").read_text(encoding="utf-8")
++    check("⑥stale 的措辭是「參考」", rc == 0 and f"{today} 狀態改為 stale(存量漂移 c3),參考 [[Systems/Pay]]" in t2, out + t2)
++    raw3 = (V / "V3.md").read_bytes()
++    rc, out = _df_fix(v, "Verification/V3", "3", "--kind", "c3", "--status", "abandoned")
++    check("⑦正文最後停在沒閉合的圍欄:回 2、不寫", rc == 2 and "圍欄" in out and (V / "V3.md").read_bytes() == raw3, out)
++    rc, out = _df_fix(v, "Verification/V4", "3", "--kind", "c3", "--status", "superseded")
++    t4 = (V / "V4.md").read_text(encoding="utf-8")
++    check("⑧正文是空的:放在開頭欄位結束那行之後", rc == 0 and t4.endswith(f"---\n{today} 狀態改為 superseded(存量漂移 c3)\n"),
++          out + repr(t4[-120:]))
++
++
++def t_drift_fix_c4_evidence_then_replace():
++    """[S5] c4 不帶改寫參數只列證據與範本、不寫檔;帶 --old/--new:--old 要含那三個詞、在 valid_under 的值裡剛好一次才換,只換那一段,
++    其他一字不動、項數不變、被換的那一整項不再含那三個詞;--new 含換行、那三個詞或結構字元擋下;同一欄兩項都含時一項一項修。
++
++    翻紅釘:_drift_c4_text_err 拿掉「--old 要含」→ ③紅;_drift_valid_under_hits 改成全文找 → ④「欄位名不算」紅;
++    拿掉剛好一次 → ④紅;拿掉結構字元檢查 → ⑤紅;乾淨檢查不認修復帳的指紋 → ⑦紅(第二項修不了)。
++    """
++    print("t_drift_fix_c4_evidence_then_replace")
++    root = _df_repo()
++    v = root / _DR_VAULT
++    E = v / "Verification" / "E.md"
++    (root / "governance" / "review-reports" / "code-done").mkdir(parents=True)
++    (root / "governance" / "review-reports" / "code-done" / "r1.md").write_text("x\n", encoding="utf-8")
++    E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交、未過代碼審);全套測試\n"
++                 "  - 另一項 還沒提交 的前提\n  - 釘在提交 abc 的乾淨工作樹\nplan_refs:\n  - \"[[Projects/Done_計劃]]\"\n---\n# E\n",
++                 encoding="utf-8")
++    (v / "Verification" / "E2.md").write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 甲(未提交)\n  - 乙(未提交)\n"
++                                              "---\n# E2\n", encoding="utf-8")
++    (v / "Verification" / "E3.md").write_text("---\ntype: verification\nstatus: pass\nvalid_under: 本工作樹(未提交)\n---\n# E3\n",
++                                              encoding="utf-8")
++    _df_commit(root, "c4 cases")
++    first = _nh_git(root, "log", "--diff-filter=A", "--format=%H", "--", f"{_DR_VAULT}/Verification/E.md").stdout.split()[-1]
++    fs = _df_find(v, "c4", "Verification/E.md")
++    check("①前置:E 的 c4 指到第 5 行", [f["line"] for f in fs] == [5], str(fs))
++    raw = E.read_bytes()
++    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
++    tpl = f"提交 {first[:12]};代碼審見 governance/review-reports/code-done"
++    check("②不帶參數:列第一次提交、卷證目錄、範本,回 0、不寫檔不寫帳", rc == 0 and first[:12] in out
++          and "governance/review-reports/code-done" in out and tpl in out and E.read_bytes() == raw and not _df_rows(root), out)
++    for args, why in ((("--old", "全套測試", "--new", "x"), "要含"), (("--old", "未提交"), "一起給"),
++                      (("--old", " ", "--new", "x"), "空字串")):
++        rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4", *args)
++        check(f"③{args}:回 2({why})", rc == 2 and why in out, out)
++    rc, out = _df_fix(v, "Verification/E3", "4", "--kind", "c4", "--old", "valid_under: 本工作樹(未提交)", "--new", "x")
++    check("④連欄位名一起給:欄位名不算,出現 0 次、回 2", rc == 2 and "出現 0 次" in out, out)
++    rc, out = _df_fix(v, "Verification/E3", "4", "--kind", "c4", "--old", "valid_under", "--new", "x")
++    check("④--old 只給欄位名(不含那三個詞):回 2", rc == 2 and "要含" in out, out)
++    rc, out = _df_fix(v, "Verification/E2", "5", "--kind", "c4", "--old", "(未提交)", "--new", "(已提交)")
++    check("④出現好幾次:回 2、列出那幾行", rc == 2 and "出現 2 次" in out and "第 5 行" in out and "第 6 行" in out, out)
++    for bad in ("a: b", "[x]", "- x", "含未提交", "x\ny", "#註解", "a \"b"):
++        rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4", "--old", "(未提交、未過代碼審)", "--new", bad)
++        check(f"⑤--new {bad!r}:回 2", rc == 2, out)
++    check("③–⑤擋下都沒動檔", E.read_bytes() == raw, "")
++    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4", "--old", "本工作樹(未提交、未過代碼審)", "--new", tpl)
++    after = E.read_text(encoding="utf-8")
++    exp = raw.decode("utf-8").replace("本工作樹(未提交、未過代碼審)", tpl)
++    check("⑥只換那一段,其他一字不動", rc == 0 and after == exp, out + after)
++    rows = _df_rows(root)
++    check("⑥修復帳記 template_used: true", len(rows) == 1 and rows[0]["template_used"] is True and rows[0]["kind"] == "c4", str(rows))
++    fs = _df_find(v, "c4", "Verification/E.md")
++    check("⑦同一欄第二項還含:發現移到第 6 行", [f["line"] for f in fs] == [6], str(fs))
++    rc, out = _df_fix(v, "Verification/E", "6", "--kind", "c4", "--old", "還沒提交 的前提", "--new", "已在 main 的前提")
++    rows = _df_rows(root)
++    check("⑦改動全是工具自己留下的:第二項照樣能修,序號遞增、template_used false", rc == 0 and len(rows) == 2
++          and [r["seq"] for r in rows] == [1, 2] and rows[1]["template_used"] is False, out + str(rows))
++    check("⑦兩項修完 c4 消失", not _df_find(v, "c4", "Verification/E.md"), "")
++
++
++def t_doctor_revisit_marks_closed_issues():
++    """[S6] doctor E5 列出到期回頭條件時,來源是狀態為 Issue 結案值的 Issue,那一行標「這篇 Issue 已結案」,照樣列、照樣計數;
++    其他類型、Issue 用了非結案值時不標;E5 與結案列出用同一支判定(_revisit_lines)。
++
++    翻紅釘:拿掉 E5 的 _closed5 → ①紅;_closed5 不看類型 → ②計劃那行紅;改成看 QUERY_CLOSED_STATUSES 以外的字 → ②紅;
++    E5 改回自己的逐行迴圈、不走 _revisit_lines → ③紅。
++    """
++    print("t_doctor_revisit_marks_closed_issues")
++    import contextlib, io
++    v = mkvault()
++    (v / "Issues").mkdir()
++    write(v, "Issues/已結案甲.md", "type: issue\nstatus: done", body="# 甲\nREVISIT:2020-01-01 最老的一條\n")
++    write(v, "Issues/還開著乙.md", "type: issue\nstatus: open", body="# 乙\nREVISIT:2020-01-02 開著的\n")
++    write(v, "Projects/收尾丙_計劃.md", "type: project\nstatus: done", body="# 丙\nREVISIT:2020-01-03 計劃留的撤除條件\n")
++    write(v, "Issues/怪值丁.md", "type: issue\nstatus: fixed", body="# 丁\nREVISIT:2020-01-04 非結案值\n")
++    r = run(v, "doctor", "--verbose")
++    e5 = r.stdout.split("[E5]")[1].split("\n[")[0] if "[E5]" in r.stdout else ""
++    row = lambda s: next((x for x in e5.split("\n") if s in x), "")
++    check("①已結案的 Issue:那一行標「這篇 Issue 已結案」,照樣列", "(這篇 Issue 已結案)" in row("最老的一條"), e5)
++    check("②開著的 Issue、已收尾的計劃、非結案值的 Issue 不標", row("開著的") and "已結案" not in row("開著的")
++          and row("計劃留的撤除條件") and "已結案" not in row("計劃留的撤除條件")
++          and row("非結案值") and "已結案" not in row("非結案值"), e5)
++    check("②照樣計數(四件都算)", "4 件回訪到期" in r.stdout, e5)
++    m = _load_lumos_inproc()
++    seen = []
++    orig = m._revisit_lines
++
++    def spy(text):
++        seen.append(text)
++        return orig(text)
++    m._revisit_lines = spy
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            m.run_doctor(m.Env(v), False, False)
++        n_doc = len(seen)
++        buf = io.StringIO()
++        with contextlib.redirect_stdout(buf):
++            m._issue_close_revisits(m.Env(v), "Issues/已結案甲.md", "done")
++    finally:
++        m._revisit_lines = orig
++    check("③E5 與結案列出用同一支判定(_revisit_lines)", n_doc >= 4 and len(seen) == n_doc + 1 and "最老的一條" in buf.getvalue(),
++          f"{n_doc} {len(seen)} {buf.getvalue()}")
++
++
++def t_set_issue_closed_lists_revisits():
++    """[S7] lumos set 或 drift fix --kind c2 --close 把 Issue 改成結案值:列出它全部的回頭條件行(程式碼區與行內程式碼裡的不算),
++    不擋不改;行號用寫完之後的內容算。
++
++    翻紅釘:拿掉 main 裡 set 之後的 _issue_close_revisits → ①紅;只列到期的 → ①未來那條紅;不剝程式碼區 → ②紅;
++    不看類型 → ③紅;c2 --close 不呼叫 → ④紅;行號用改之前的內容算 → ④行號紅。
++    """
++    print("t_set_issue_closed_lists_revisits")
++    v = mkvault()
++    (v / "Issues").mkdir()
++    body = ("# I\nREVISIT:2099-01-01 未來的\n- REVISIT:2020-01-01 過期的\n```\nREVISIT:2020-01-01 碼區裡的\n```\n"
++            "`REVISIT:2020-01-01 行內程式碼`\nREVISIT:[when-file:src/x.py][by:2099-01-01] 條件式\n")
++    write(v, "Issues/I.md", "type: issue\nstatus: open", body=body)
++    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\nREVISIT:2099-01-01 計劃的\n")
++    raw = (v / "Issues" / "I.md").read_text(encoding="utf-8")
++    r = run(v, "set", "Issues/I", "status", "doing")
++    check("①前置:改成非結案值不列", r.returncode == 0 and "回頭條件" not in r.stdout, r.stdout)
++    r = run(v, "set", "Issues/I", "status", "done")
++    lines = (v / "Issues" / "I.md").read_text(encoding="utf-8").split("\n")
++    want = [i + 1 for i, l in enumerate(lines) if ("未來的" in l or "過期的" in l or "條件式" in l)]
++    check("①改成結案值:列出全部回頭條件(含未到期、條件式),行號對", r.returncode == 0 and "還留著 3 行回頭條件" in r.stdout
++          and all(f"Issues/I.md:{n}" in r.stdout for n in want), r.stdout)
++    check("②程式碼區與行內程式碼裡的不算", "碼區裡的" not in r.stdout and "行內程式碼" not in r.stdout, r.stdout)
++    check("①不擋不改:除了 status 其他一字不動", (v / "Issues" / "I.md").read_text(encoding="utf-8")
++          == raw.replace("status: open", "status: done"), "")
++    r = run(v, "set", "Projects/P", "status", "done")
++    check("③不是 Issue 不列", r.returncode == 0 and "還留著" not in r.stdout, r.stdout)
++    root = _df_repo()
++    dv = root / _DR_VAULT
++    _nh_file(root, f"{_DR_VAULT}/Issues/C.md", "---\ntype: issue\nstatus: open\n---\n# C\n第一段 [[Projects/Done_計劃]]\n"
++             "REVISIT:2099-01-01 結案後要改的\n")
++    _df_commit(root, "c")
++    rc, out = _df_fix(dv, "Issues/C", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "修好了,提交 abc")
++    cl = (dv / "Issues" / "C.md").read_text(encoding="utf-8").split("\n")
++    n = next(i + 1 for i, l in enumerate(cl) if "結案後要改的" in l)
++    check("④drift fix c2 --close 也列,行號是加了橫幅之後的", rc == 0 and f"Issues/C.md:{n}" in out and n == 10, out)
++
++
++def t_drift_ack_binds_related_plans():
++    """[S8] c2/c3 表態確認那一行當下是那一種發現,記當時的已收尾計劃清單與遞增序號;比對只看記了清單的、取序號最大的那幾筆,
++    全部涵蓋現在的清單才算;沒記清單的舊表態不再算數;同一篇行號移位不影響。
++
++    翻紅釘:cmd_drift_ack 拿掉 c2/c3 的 _drift_current_finding → ①紅;_drift_split_acked 對 c2 改回任一筆對得上 → ③⑤紅;
++    同號改成任一筆涵蓋就算 → ⑥紅;不檢查 related 是字串清單 → ⑦紅;比對綁行號 → ⑧紅。
++    """
++    print("t_drift_ack_binds_related_plans")
++    import json as _j
++    root = _df_repo()
++    v = root / _DR_VAULT
++    _nh_node(root, "Two_計劃", typ="project", folder="Projects", resp=None, status="doing", summary="KEY:t")
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/Done_計劃]] [[Projects/Two_計劃]]\n")
++    for n in ("I2", "I3", "I4"):
++        _nh_file(root, f"{_DR_VAULT}/Issues/{n}.md", f"---\ntype: issue\nstatus: open\n---\n# {n}\n[[Projects/Done_計劃]]\n")
++    write(v, "Verification/V.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/Done_計劃]]"', body="# V\n")
++    _df_commit(root, "c")
++    acks = root / "governance" / "drift-acks.jsonl"
++    r = run(v, "drift", "ack", "Issues/I", "1", "--kind", "c2", "--reason", "還在排查中照留")
++    check("①那一行當下不是 c2:回 2、不寫", r.returncode == 2 and "現在不是 c2" in r.stderr and not acks.exists(), r.stdout + r.stderr)
++    r = run(v, "drift", "ack", "Issues/I", "3", "--kind", "c2", "--reason", "還在排查中照留")
++    rows = _df_rows(root, "drift-acks.jsonl")
++    check("②記下當時的已收尾計劃與序號", r.returncode == 0 and rows[-1]["related"] == ["Projects/Done_計劃.md"]
++          and rows[-1]["seq"] == 1, str(rows))
++    ack = lambda p, k="c2": [f["acked"] for f in (_j.loads(run(v, "drift", "scan", "--json").stdout)["findings"])
++                             if f["path"] == p and f["kind"] == k]
++    check("②scan 算已表態", ack("Issues/I.md") == [True], "")
++    two = v / "Projects" / "Two_計劃.md"
++    two.write_text(two.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++    check("③多了新的收尾計劃:重新列出", ack("Issues/I.md") == [False], "")
++    r = run(v, "drift", "scan")
++    check("③說明以前表態過、現在多了哪篇、最近一次理由", "這篇以前表態過" in r.stdout and "現在多了 Projects/Two_計劃" in r.stdout
++          and "還在排查中照留" in r.stdout, r.stdout)
++    run(v, "drift", "ack", "Issues/I", "3", "--kind", "c2", "--reason", "兩份都收尾了照留")
++    rows = _df_rows(root, "drift-acks.jsonl")
++    check("④重新表態:序號遞增、清單兩篇、算已表態", rows[-1]["seq"] == 2 and len(rows[-1]["related"]) == 2
++          and ack("Issues/I.md") == [True], str(rows[-1]))
++    base = {"path": f"{_DR_VAULT}/Issues/I2.md", "text": "status: open", "kind": "c2", "reason": "舊版表態"}
++    with open(acks, "a", encoding="utf-8") as fh:
++        fh.write(_j.dumps(dict(base, id="DACK-old1"), ensure_ascii=False) + "\n")
++        fh.write(_j.dumps(dict(base, id="DACK-s1", path=f"{_DR_VAULT}/Issues/I3.md", seq=9,
++                               related=["Projects/Done_計劃.md"]), ensure_ascii=False) + "\n")
++        fh.write(_j.dumps(dict(base, id="DACK-s2", path=f"{_DR_VAULT}/Issues/I3.md", seq=9, related=[]), ensure_ascii=False) + "\n")
++        fh.write(_j.dumps(dict(base, id="DACK-b1", path=f"{_DR_VAULT}/Issues/I4.md", seq=1,
++                               related=["Projects/Done_計劃.md"]), ensure_ascii=False) + "\n")
++        fh.write(_j.dumps(dict(base, id="DACK-b2", path=f"{_DR_VAULT}/Issues/I4.md", seq=10,
++                               related="Projects/Done_計劃.md"), ensure_ascii=False) + "\n")
++    check("⑤沒記清單的舊表態不再算數", ack("Issues/I2.md") == [False], "")
++    check("⑥同號兩筆、有一筆沒涵蓋:保守,重新列出", ack("Issues/I3.md") == [False], "")
++    check("⑦序號最大那筆的 related 不是字串清單:當成沒涵蓋", ack("Issues/I4.md") == [False], "")
++    ip = v / "Issues" / "I.md"
++    ip.write_text(ip.read_text(encoding="utf-8").replace("---\ntype: issue\n", "---\ntype: issue\naliases: []\nowner: enzo\n"),
++                  encoding="utf-8")
++    fs = [f for f in _j.loads(run(v, "drift", "scan", "--json").stdout)["findings"] if f["path"] == "Issues/I.md"]
++    check("⑧同一篇上面插兩行:發現的行號變了、表態照樣對得上", [f["line"] for f in fs] == [5] and [f["acked"] for f in fs] == [True],
++          str(fs))
++    r = run(v, "drift", "ack", "Verification/V", "3", "--kind", "c3", "--reason", "驗證還沒做照留")
++    rows = _df_rows(root, "drift-acks.jsonl")
++    check("⑨c3 表態也記清單", r.returncode == 0 and rows[-1]["kind"] == "c3" and rows[-1]["related"] == ["Projects/Done_計劃.md"]
++          and ack("Verification/V.md", "c3") == [True], str(rows[-1]))
++    (v / "Verification" / "G.md").write_text(_dr_guard_text("pass"), encoding="utf-8")
++    ln = min(f["line"] for f in _df_find(v, "c1", "Verification/G.md"))
++    r = run(v, "drift", "ack", "Verification/G", str(ln), "--kind", "c1", "--reason", "歷史紀錄照留")
++    rows = _df_rows(root, "drift-acks.jsonl")
++    check("⑩其他種類照舊(不記清單)、也記序號", r.returncode == 0 and "related" not in rows[-1]
++          and rows[-1]["seq"] == max(x.get("seq", 0) for x in rows[:-1]) + 1, str(rows[-1]))
++
++
++def t_drift_fix_dry_run_lock_and_ledger():
++    """[S9] fix 在鎖內比指紋才寫、寫完確認磁碟內容等於算出的內容且已處理才寫修復帳;驗證失敗或帳寫不進去回 2 指到 git、不自動還原;
++    --dry-run 不拿鎖、不寫檔不寫帳但做完判定;修復帳在簿記檔名單、帳檔或 repo 內上層目錄是符號連結時擋下;自由文字過不了形狀擋時擋下。
++
++    翻紅釘:_drift_fix_write 拿掉指紋比對 → ③紅(蓋掉別人的改動);atomic_write_verify 移到鎖外 → ②紅;
++    驗證失敗時自動還原 → ④「筆記留著改動」紅;dry-run 也拿鎖 → ①紅;_BOOKKEEPING_FILES 拿掉帳檔 → ⑦紅;
++    _drift_ledger_path_err 拿掉逐層連結檢查 → ⑧紅;拿掉 _drift_fix_shape_err → ⑨紅。
++    """
++    print("t_drift_fix_dry_run_lock_and_ledger")
++    import contextlib, io, hashlib, os as _os, tempfile as _tf
++    root = _df_repo()
++    v = root / _DR_VAULT
++    ref = 'plan_refs:\n  - "[[Projects/Done_計劃]]"'
++    for n in ("V", "W", "X"):
++        write(v, f"Verification/{n}.md", "type: verification\nstatus: pending\n" + ref, body=f"# {n}\n")
++    _nh_file(root, "scripts/app.py", "".join(f"x{i} = {i}\n" for i in range(30)))
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/Done_計劃]]\n")
++    _df_commit(root, "c")
++    m = _load_lumos_inproc()
++    O = lambda **k: dict({"dry_run": False, "date": None, "close": False, "keep": False, "status": None, "reason": None,
++                          "by": None, "old": None, "new": None}, **k)
++    V = v / "Verification" / "V.md"
++    raw = V.read_bytes()
++    locks = []
++    orig_lock = m._vault_write_lock
++    m._vault_write_lock = lambda vault: (locks.append(1), orig_lock(vault))[1]
++    try:
++        out = io.StringIO()
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
++            rc = m.cmd_drift_fix(m.Env(v), "Verification/V", 3, "c3", O(dry_run=True, status="pass"))
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc_bad = m.cmd_drift_fix(m.Env(v), "Verification/V", 1, "c3", O(dry_run=True, status="pass"))
++    finally:
++        m._vault_write_lock = orig_lock
++    check("①--dry-run:印改前改後、回 0、不拿鎖、不寫檔不寫帳", rc == 0 and "- 第 3 行:status: pending" in out.getvalue()
++          and "狀態改為 pass" in out.getvalue() and not locks and V.read_bytes() == raw and not _df_rows(root), out.getvalue())
++    check("①--dry-run 也做判定(那一行不是 c3 回 2)", rc_bad == 2, "")
++    held = []
++    orig_w = m.atomic_write_verify
++
++    def spy_w(path, *a, **k):
++        held.append(bool(m._VAULT_LOCK_HELD))
++        return orig_w(path, *a, **k)
++    m.atomic_write_verify = spy_w
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = m.cmd_drift_fix(m.Env(v), "Verification/V", 3, "c3", O(status="pass"))
++    finally:
++        m.atomic_write_verify = orig_w
++    check("②寫入時拿著鎖", rc == 0 and held == [True], f"{rc} {held}")
++    rows = _df_rows(root)
++    check("②修復帳一筆:DFIX- 編號、序號、repo 相對路徑、改前行號、插入行記 null、改後指紋等於磁碟",
++          len(rows) == 1 and rows[0]["id"].startswith("DFIX-") and rows[0]["seq"] == 1
++          and rows[0]["path"] == f"{_DR_VAULT}/Verification/V.md" and rows[0]["line"] == 3
++          and {"line": 3, "before": "status: pending", "after": "status: pass"} in rows[0]["changed"]
++          and any(c["line"] is None and c["before"] is None and "狀態改為 pass" in (c["after"] or "") for c in rows[0]["changed"])
++          and rows[0]["after_sha256"] == hashlib.sha256(V.read_bytes()).hexdigest(), str(rows))
++    W = v / "Verification" / "W.md"
++    orig_sh = m._drift_fix_shape_err
++
++    def meddle(root_, texts):
++        W.write_text(W.read_text(encoding="utf-8") + "別的會談剛寫的\n", encoding="utf-8")
++        return orig_sh(root_, texts)
++    m._drift_fix_shape_err = meddle
++    err = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
++            rc = m.cmd_drift_fix(m.Env(v), "Verification/W", 3, "c3", O(status="pass"))
++    finally:
++        m._drift_fix_shape_err = orig_sh
++    check("③判定之後那一篇被改過:鎖內比指紋不符、回 2、不蓋掉對方", rc == 2 and "被改過" in err.getvalue()
++          and "別的會談剛寫的" in W.read_text(encoding="utf-8") and "status: pending" in W.read_text(encoding="utf-8"), err.getvalue())
++    _nh_git(root, "checkout", "--", f"{_DR_VAULT}/Verification/W.md")
++    rc, out = _df_fix(v, "Verification/W", "3", "--kind", "c3", "--status", "pass", env={"LUMOS_DRIFT_FIX_FAULT": "verify"})
++    check("④驗證失敗:回 2、指到 git checkout、不自動還原、不寫帳", rc == 2 and "git checkout --" in out
++          and "status: pass" in W.read_text(encoding="utf-8") and len(_df_rows(root)) == 1, out)
++    rc, out = _df_fix(v, "Verification/W", "3", "--kind", "c3", "--status", "pass")
++    check("④照指示還原前:工具不在不乾淨的筆記上動手", rc == 2 and "未提交" in out, out)
++    _nh_git(root, "checkout", "--", f"{_DR_VAULT}/Verification/W.md")
++    rc, out = _df_fix(v, "Verification/W", "3", "--kind", "c3", "--status", "pass", env={"LUMOS_DRIFT_FIX_FAULT": "ledger"})
++    check("⑤帳寫不進去:回 2、筆記已改好、帳沒多", rc == 2 and "修復帳沒記到" in out and "status: pass" in W.read_text(encoding="utf-8")
++          and len(_df_rows(root)) == 1, out)
++    _nh_git(root, "checkout", "--", f"{_DR_VAULT}/Verification/W.md")
++    rc, out = _df_fix(v, "Verification/W", "3", "--kind", "c3", "--status", "pass", env={"LUMOS_DRIFT_FIX_FAULT": "bogus"})
++    check("⑥故障注入只認 verify|ledger:其他值照常成功、提示跟筆記一起提交", rc == 0 and len(_df_rows(root)) == 2
++          and "git add governance/drift-fixes.jsonl" in out, out)
++    check("⑦修復帳在簿記檔名單裡", "governance/drift-fixes.jsonl" in m._BOOKKEEPING_FILES, "")
++    fx = root / "governance" / "drift-fixes.jsonl"
++    outside = Path(_tf.mkdtemp(prefix="gctl-outside-")) / "x.jsonl"
++    outside.write_text("", encoding="utf-8")
++    keep = fx.read_bytes()
++    fx.unlink()
++    _os.symlink(outside, fx)
++    rc, out = _df_fix(v, "Verification/X", "3", "--kind", "c3", "--status", "pass")
++    check("⑧帳檔是符號連結:回 2、外面的檔沒被寫", rc == 2 and "符號連結" in out and outside.read_text(encoding="utf-8") == "", out)
++    fx.unlink()
++    fx.write_bytes(keep)
++    real = Path(_tf.mkdtemp(prefix="gctl-realdir-"))
++    _os.symlink(real, root / "govlink")
++    check("⑧repo 內上層目錄是符號連結也擋", "符號連結" in (m._drift_ledger_path_err(root, "govlink/a.jsonl") or ""), "")
++    _os.link(fx, root / "hard.jsonl")
++    check("⑧帳檔有別的硬連結也擋", "硬連結" in (m._drift_ledger_path_err(root, "governance/drift-fixes.jsonl") or ""), "")
++    (root / "hard.jsonl").unlink()
++    (root / "govlink").unlink()
++    _nh_git(root, "checkout", "--", f"{_DR_VAULT}/Verification/X.md")
++    ip = v / "Issues" / "I.md"
++    iraw = ip.read_bytes()
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "修好了,見 scripts/app.py:12")
++    check("⑨自由文字過不了筆記形狀擋(程式行號引用):回 2、不寫", rc == 2 and "筆記形狀擋" in out and ip.read_bytes() == iraw, out)
++
++
++def t_drift_hints_point_to_fix():
++    """[S10] drift check 擋下與只列出、drift scan、doctor Z 段、計劃收尾列出 c1–c5 時,訊息由同一支函式產生、指到 lumos drift fix
++    (c1 每篇一條),不再教人手改。
++
++    翻紅釘:check 擋下改回「把預告句手改」→ ①紅;scan 不印改法 → ②紅;Z 段、計劃收尾的連帶待辦不呼叫 _drift_fix_hint →
++    ③④紅;任一處自己寫死指令文字 → ⑤同一支那格紅。
++    """
++    print("t_drift_hints_point_to_fix")
++    import contextlib, io
++    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
++    v = root / _DR_VAULT
++    _nh_node(root, "Pay", summary=_DF_PAY)
++    (v / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\n---\n# I\n[[Projects/退款_計劃]]\n")
++    write(v, "Verification/V.md", 'type: verification\nstatus: pending\nplan_refs:\n  - "[[Projects/退款_計劃]]"', body="# V\n")
++    _nh_commit(root, "base")
++    base = _na_head(root)
++    g = v / "Verification" / "G.md"
++    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
++                 encoding="utf-8")
++    r = run(v, "set", "Projects/退款_計劃", "status", "done")
++    check("④計劃收尾的連帶待辦:c3 那一項給 drift fix 指令", "lumos drift fix Verification/V 3 --kind c3 --status <" in r.stdout,
++          r.stdout)
++    _nh_commit(root, "轉正、收尾")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("①check 擋下:c1 一篇一條 drift fix 指令、不再教人手改", rc == 1
++          and out.count("lumos drift fix Verification/G ") == 1 and "--kind c1" in out and "把預告句手改" not in out, out)
++    check("①check 只列出的那條路也指到 drift fix(c2 兩條)", "lumos drift fix Issues/I 3 --kind c2 --close" in out
++          and "lumos drift fix Issues/I 3 --kind c2 --keep" in out, out)
++    r = run(v, "drift", "scan")
++    check("②scan:每篇印一次、c3 帶 --status 佔位、c2 印兩條", r.stdout.count("lumos drift fix Verification/G ") == 1
++          and "lumos drift fix Verification/V 3 --kind c3 --status <" in r.stdout
++          and "--kind c2 --close" in r.stdout and "--kind c2 --keep" in r.stdout, r.stdout)
++    rd = run(v, "doctor")
++    z = rd.stdout.split("[Z]")[1] if "[Z]" in rd.stdout else ""
++    check("③doctor Z 段指到 drift fix", "lumos drift fix" in z, z[:600])
++    m = _load_lumos_inproc()
++    orig = m._drift_fix_hint
++    m._drift_fix_hint = lambda k, p, ln: [f"HINT-{k}"]
++    try:
++        so, se = io.StringIO(), io.StringIO()
++        with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
++            m.cmd_drift_scan(m.Env(v))
++            zl = m._drift_doctor_lines(m.Env(v))
++            m.cmd_drift_check(repo=str(root), diff_range=f"{base}..HEAD")
++            p = v / "Projects" / "退款_計劃.md"
++            p.write_text(p.read_text(encoding="utf-8").replace("status: done", "status: doing"), encoding="utf-8")
++            m._drift_print_followups(m.Env(v), "Projects/退款_計劃.md", "done")
++    finally:
++        m._drift_fix_hint = orig
++    check("⑤同一支函式產生:scan、Z 段、check、計劃收尾都用 _drift_fix_hint", "HINT-c1" in so.getvalue()
++          and any("HINT-c1" in x for x in zl) and "HINT-c1" in se.getvalue() and "HINT-c2" in se.getvalue()
++          and so.getvalue().count("HINT-c3") >= 2, so.getvalue()[-800:] + se.getvalue()[-400:] + str(zl))
++
++
++def t_drift_fix_c2_close_or_keep():
++    """[S11] c2 --close 只收 Issue 的結案值、改 status、正文標題之後加結案橫幅(已有就不加)並列回頭條件;--keep 等同帶清單的 c2 表態;
++    兩者都沒給或都給、--reason 超過一行或不在 4 到 200 字時擋下。
++
++    翻紅釘:結案值改用 QUERY_CLOSED_STATUSES → ①「pass」那格紅;_drift_close_banner 改成加在檔尾 → ②位置紅;
++    拿掉「已有橫幅不加」→ ③紅;--keep 改成也做乾淨檢查 → ④有改動時紅;--keep 不記 related → ④紅。
++    """
++    print("t_drift_fix_c2_close_or_keep")
++    import datetime
++    today = datetime.date.today().isoformat()
++    root = _df_repo()
++    v = root / _DR_VAULT
++    I = v / "Issues" / "I.md"
++    _nh_file(root, f"{_DR_VAULT}/Issues/I.md", "---\ntype: issue\nstatus: open\ntags:\n  - type/issue\n  - status/open\n---\n"
++             "# I\n第一段排查紀錄 [[Projects/Done_計劃]]\n")
++    _nh_file(root, f"{_DR_VAULT}/Issues/B.md", "---\ntype: issue\nstatus: doing\n---\n# B\n\n> 已結案(2026-09-01,done):舊的橫幅。\n\n"
++             "[[Projects/Done_計劃]]\n")
++    _nh_file(root, f"{_DR_VAULT}/Issues/K.md", "---\ntype: issue\nstatus: open\n---\n# K\n[[Projects/Done_計劃]]\n")
++    _df_commit(root, "c2 cases")
++    check("①前置:I 第 3 行是 c2", [f["line"] for f in _df_find(v, "c2", "Issues/I.md")] == [3], "")
++    raw = I.read_bytes()
++    bad = [((), "二擇一"), (("--close", "--keep", "--status", "done", "--reason", "修好了喔"), "二擇一"),
++           (("--close", "--reason", "修好了喔"), "結案值"), (("--close", "--status", "open", "--reason", "修好了喔"), "結案值"),
++           (("--close", "--status", "pass", "--reason", "修好了喔"), "結案值"), (("--close", "--status", "done", "--reason", "短"), "4 到 200"),
++           (("--close", "--status", "done", "--reason", "字" * 201), "4 到 200"),
++           (("--close", "--status", "done", "--reason", "第一行\n第二行"), "一行"), (("--keep", "--reason", "還沒好喔", "--status", "done"), "不收")]
++    for args, why in bad:
++        rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c2", *args)
++        check(f"①{args[:3]}…:回 2({why})", rc == 2 and why in out, out)
++    check("①擋下都沒動檔", I.read_bytes() == raw, "")
++    rc, out = _df_fix(v, "Issues/I", "3", "--kind", "c2", "--close", "--status", "resolved", "--reason", "修好了,提交 abc123 的測試 t_x")
++    t = I.read_text(encoding="utf-8")
++    check("②status 改成 resolved、標籤同步", rc == 0 and "status: resolved" in t and "status/resolved" in t and "status/open" not in t,
++          out + t)
++    check("②結案橫幅在標題之後、第一段之前", f"# I\n\n> 已結案({today},resolved):修好了,提交 abc123 的測試 t_x。"
++          "以下是當時的排查紀錄,不是現況。\n\n第一段排查紀錄" in t, t)
++    check("②c2 消失", not _df_find(v, "c2", "Issues/I.md"), "")
++    braw = (v / "Issues" / "B.md").read_text(encoding="utf-8")
++    rc, out = _df_fix(v, "Issues/B", "3", "--kind", "c2", "--close", "--status", "done", "--reason", "這次真的修好了")
++    tb = (v / "Issues" / "B.md").read_text(encoding="utf-8")
++    check("③第一段已經是已結案橫幅:不再加、訊息講出來", rc == 0 and tb.count("已結案(") == 1 and "沒再加" in out
++          and tb == braw.replace("status: doing", "status: done"), out + tb)
++    K = v / "Issues" / "K.md"
++    K.write_text(K.read_text(encoding="utf-8") + "未提交的筆記\n", encoding="utf-8")
++    kraw = K.read_bytes()
++    rc, out = _df_fix(v, "Issues/K", "3", "--kind", "c2", "--keep", "--reason", "還沒解決,等上游")
++    rows = _df_rows(root, "drift-acks.jsonl")
++    check("④--keep 等同帶清單的 c2 表態:不做乾淨檢查、不改筆記、不寫修復帳", rc == 0 and K.read_bytes() == kraw
++          and rows and rows[-1]["kind"] == "c2" and rows[-1]["related"] == ["Projects/Done_計劃.md"]
++          and not any(x["path"].endswith("Issues/K.md") for x in _df_rows(root)), out + str(rows))
++
++
++def t_drift_fix_c5_completes_settle():
++    """[S12] c5:從家節點正式行讀出測試名、只改守衛紀錄轉成 pass(跟 settle 第二步同一支算內容),不需要人給 --test;
++    家節點還留著重複預告行時擋下。
++
++    翻紅釘:c5 不走 _guard_settle_record_lines → ④紅;測試名改成要人給 → ②「取第一支」紅;拿掉家節點預告行的檢查 → ③紅;
++    c5 順手改了家節點 → ②「家節點沒動」紅。
++    """
++    print("t_drift_fix_c5_completes_settle")
++    import datetime
++    today = datetime.date.today().isoformat()
++    root = _df_repo()
++    v = root / _DR_VAULT
++    V = v / "Verification"
++    _nh_node(root, "Pay", summary="KEY:★INVARIANT★ 大額退費要人工核可 [test:t_refund,t_extra]\n"
++             "KEY:★INVARIANT★ 合約乙 [test:t_b]\nKEY:★INVARIANT-PLANNED★ 合約乙 [watch:Verification/G2] [due:2099-12-31]")
++    (V / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    (V / "G2.md").write_text(_dr_guard_text("pending", claim="合約乙"), encoding="utf-8")
++    _df_commit(root, "c5 cases")
++    pay = (v / "Systems" / "Pay.md").read_bytes()
++    fs = _df_find(v, "c5", "Verification/G.md")
++    check("①前置:G 是 c5(家節點已是正式行、守衛紀錄還 pending)", len(fs) == 1, str(fs))
++    rc, out = _df_fix(v, "Verification/G", str(fs[0]["line"]), "--kind", "c5", "--status", "pass")
++    check("①c5 不收參數", rc == 2 and "不收" in out, out)
++    m = _load_lumos_inproc()
++    calls = []
++    orig = m._guard_settle_record_lines
++    m._guard_settle_record_lines = lambda *a, **k: (calls.append(a), orig(*a, **k))[1]
++    try:
++        import contextlib, io
++        buf = io.StringIO()
++        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
++            rc = m.cmd_drift_fix(m.Env(v), "Verification/G", fs[0]["line"], "c5",
++                                 {"dry_run": False, "date": None, "close": False, "keep": False, "status": None,
++                                  "reason": None, "by": None, "old": None, "new": None})
++    finally:
++        m._guard_settle_record_lines = orig
++    t = (V / "G.md").read_text(encoding="utf-8")
++    check("②轉成 pass、標籤同步、預告句改成歷史說法(日期今天)", rc == 0 and "status: pass" in t and "status/pass" in t
++          and f"TEST:[{today}] 預告已轉正" in t and "做完之後跑" not in t, buf.getvalue() + t)
++    check("②測試名從家節點正式行讀、好幾支取第一支並寫出來;家節點沒動", "t_refund" in buf.getvalue() and "取第一支" in buf.getvalue()
++          and (v / "Systems" / "Pay.md").read_bytes() == pay, buf.getvalue())
++    rows = _df_rows(root)
++    check("②修復帳記下用了哪一支測試", rows and rows[-1]["kind"] == "c5" and rows[-1]["test"] == "t_refund", str(rows))
++    check("②c5、c1 都消失", not _df_find(v, "c5", "Verification/G.md") and not _df_find(v, "c1", "Verification/G.md"), "")
++    fs2 = _df_find(v, "c5", "Verification/G2.md")
++    raw2 = (V / "G2.md").read_bytes()
++    rc, out = _df_fix(v, "Verification/G2", str(fs2[0]["line"]) if fs2 else "3", "--kind", "c5")
++    check("③家節點同時有預告行與正式行:回 2、說先手動刪預告行", fs2 and rc == 2 and "先手動刪掉預告行" in out
++          and (V / "G2.md").read_bytes() == raw2 and (v / "Systems" / "Pay.md").read_bytes() == pay, out)
++    check("④跟 settle 第二步同一支算內容(_guard_settle_record_lines)", len(calls) == 1, str(len(calls)))
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

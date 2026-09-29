@@ -10,6 +10,7 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  WHY:[2026-09-30 [[Projects/存量漂移改法_計劃]] 代碼審 r3、r4]find 把 ./ 開頭當明確路徑:剝掉 ./ 後只認那一篇,找不到就回找不到、不退回用檔名猜——drift 的提示對 - 開頭的節點印成 ./-x(不然被當成選項),退回猜會讓 lumos set ./z 改到 A/z 那一篇 [test:t_drift_fix_review_r4_edges]
   RULE:[since:2026-09-25][confirmed:2026-09-25][retire:note_lint.gate 在所有消費專案都打開且連續 8 週零擋下 → 改回只在 CI 跑;或擋下的一半以上事後是誤擋 → 預設改回只提醒]★筆記欄位新規則擋不擋看專案開關 note_lint.gate★(on/warn/off,沒設=warn;設定檔壞掉、捷徑檔、note_lint 不是物件=當沒設並警告;值看不懂=當 on)——新規則:四類筆記 status 必填(空白也算沒填)、日期年-月-日且是真日期(含決策 decided/ended)、決策 valid 有寫只能 true/false(不分大小寫、沒寫不算錯)、about_code 每項要是磁碟上的檔且不在圖譜資料夾、type project 的「_計劃」在 created ≥ 2026-09-12 時要有 lands_in 且每項是 Systems/<名> 純字串(不要求已存在)。★開關只管新規則;lint 原有錯誤規則照舊擋提交★。判定抽成 `_lint_collect`(原有)與 `_lint_new_rules`(新增),`lumos lint` 與健檢 L 段都呼叫它們。單源 [[Projects/筆記欄位關卡補齊_計劃]] [test:t_note_lint_gate_default_warns] [test:t_note_lint_gate_does_not_relax_existing_rules] [test:t_lint_status_required]
   PITFALL:[2026-09-25 代碼審 r1 正確性席、邊界席、外家兩席]三個坑:①★開關要從跟每支檔有家同一個 repo 根讀(_vault_repo_root,往上找 .git)★——初版用另一支找根,圖譜就在 repo 根、巢狀專案、monorepo 深層三種擺法都讀錯、開關一律當 warn;②★健檢改成整個圖譜跑 lint 之後,一篇 type 寫成清單的筆記會讓整個健檢丟例外★——lint 補防呆、L 段逐篇包住,順手修了總索引那段拿 type 查集合的同一個舊坑;③★日期寫成空字串會繞過日期規則與既有建立日切點★,寫了卻空一律報錯——頂層日期與決策 decided/ended 共用 `_note_date_problem` 一支判斷(代碼審 r2 五席:初修只補了頂層三個,同構的決策日期沒跟上)。設定檔整份不是物件也要警告。重現:`type:` 寫成兩行清單跑 lumos doctor [test:t_note_lint_gate_repo_root_layouts] [test:t_doctor_note_lint_survives_malformed_note] [test:t_lint_empty_date_is_error] [test:t_note_lint_config_not_object_warns]
   KEY:[2026-09-25 筆記欄位關卡補齊]★健檢 L 段擴充:每篇跑 lint 錯誤等級規則(原有+新增),整個擴充部分照開關★——原有規則以前只在提交前對改到的那篇查,--no-verify 一次就推得上去;第一次改成整個圖譜跑,所以原有規則在推送前也照開關,消費專案更新當下不會被舊筆記硬擋(設計審 r3 外家席)。不讀碰到清單(預告合約那段的 --touched-from 擋法不受影響)。本 repo 開關 on,558 篇零違規,健檢多花約 0.1 秒 [test:t_doctor_note_lint_gate_on_blocks] [test:t_doctor_note_lint_ignores_touched_list] [test:t_repo_graph_passes_note_lint]
@@ -40,6 +41,7 @@ summary: |-
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions;stale 不經它——2026-08-24 審計訂正)｜status_of(links/map/stale 標狀態)
   KEY:stale --candidate 無 --match 直接 rc2 拒絕(反直覺限制:即使給了 --candidate 沒帶 --match 也拒,避免列全 vault 變噪音);--candidate --match <詞> 才有效
   TEST:scripts/test_lumos.py(t_-prefixed Python 回歸,非 doctor Check T 認的 C# xunit)
+  WHY:[2026-09-29 Projects/存量漂移改法_計劃]doctor E5 的到期清單裡,來源是已結案 Issue 的那一行標「這篇 Issue 已結案」,照樣列、照樣計數;只標 Issue——已收尾的計劃常刻意留著撤除用的回頭條件,標了反而讓人以為可以刪
 related:
   - "[[Systems/lumos-cli-write]]"
   - "[[Systems/lumos-cli-lifecycle]]"

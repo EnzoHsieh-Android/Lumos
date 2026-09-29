@@ -37,6 +37,7 @@ summary: |-
   KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]安裝入口(install.sh、get.sh、get.ps1、install-hooks.sh、install-graph-toolchain.sh)只負責找一支任何版本的 python 把 lumos 叫起來,找 3.14 交給 lumos 開頭的檢查([[Systems/python直譯器選擇]]);原本寫死 python3,只裝了 python3.14 的機器進不去。get.ps1 與 Windows 的 lumos.cmd 用「真的執行成功」挑,因為商店替身 python.exe 找得到卻跑不起來
   WHY:[2026-09-29 代碼審 r1 外家席]安裝入口與 git 掛鉤內嵌的那段第一步先認 LUMOS_PYTHON(設了而且能執行就用它叫 lumos):找不到時的說明叫人設它,第一步不認的話,只把 3.14 裝在自訂位置的人照說明設了仍被擋在門外
+  WHY:[2026-09-29 Projects/存量漂移改法_計劃]簿記名單多一個修復帳 governance/drift-fixes.jsonl(跟表態檔一樣是人對發現的處理紀錄,不是程式改動);舊版 lumos 的名單裡沒有它,只改帳檔的提交在舊版會被當成程式改動、推送前跑全套——修復帳本來就跟筆記一起提交,影響只是多跑測試
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
     id: d1
