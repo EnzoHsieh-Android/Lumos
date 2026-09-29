@@ -51620,8 +51620,10 @@ def t_python_resolver_order_and_floor():
         env = _py314_fake_env(tmp / "a", {"python3.14": "old", "python3.15": "good", "python3": "good"})
         _os.environ.update(env)
         path, tried = m._py_resolve()
-        check("②找到第一個合格的就停,回它印出的絕對路徑", path == _os.path.realpath(sys.executable) or path == sys.executable,
-              f"{path} {tried}")
+        # 候選是指到本機 3.14 的符號連結;它回報的 sys.executable 在 macOS 會解到真實路徑、在 Linux 就是連結本身(CI 實測),
+        # 兩邊都解開再比
+        check("②找到第一個合格的就停,回它印出的絕對路徑", bool(path) and _os.path.isabs(path)
+              and _os.path.realpath(path) == _os.path.realpath(sys.executable), f"{path} {tried}")
         check("②跳過的舊版有寫出版本、合格之後的不再試", tried[0][0] == "python3.14" and "3.9.6" in tried[0][1]
               and not any(d == "python3" for d, _w in tried), str(tried))
         _os.environ["LUMOS_PYTHON"] = "bin/python3.15"

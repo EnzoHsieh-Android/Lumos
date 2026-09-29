@@ -23,6 +23,7 @@ summary: |-
   PITFALL:[2026-09-29 代碼審 r1 核心席與資安席]doctor 探查掛鉤直譯器時,若只看命令裡有沒有 hooks/,會把別的工具的掛鉤(shell 條件式、bash 包一層、直接寫腳本)的第一個字拿去跑 `-c <探針>`——誤報重跑 lumos install 修不掉,還真的執行了別人的腳本;只認「第二段是 lumos 自家掛鉤檔、放在這一家 lumos 裝的目錄(兩家分開精確比對,不用後綴)、第一段像 python」的命令;測試拿合併程式真的寫出的兩家設定餵,安裝端改命令形狀就會紅 [test:t_doctor_flags_stale_hook_python]
   PITFALL:[2026-09-29 代碼審 r1 核心席]lumos update 在同一個行程裡先拉新來源再複製,執行的是拉新之前就載進記憶體的舊程式——新版才加的更新期提示,第一個專案一定印不出來;要讓人知道的事改在失敗現場講(CI 裡找不到 3.14 的說明自帶 setup-python 那一行) [test:t_update_prints_python314_notice_and_slim_strips_floor]
   PITFALL:[2026-09-29 代碼審 r1 資安席]Windows 找指令會先看目前目錄,git 掛鉤的目前目錄是 repo 根:用裸指令名探直譯器,陌生 repo 放一支 python3.14.exe 就會被執行;一律先解析成絕對路徑、落在目前目錄本身的不收、PATH 相對路徑項找到的不收(r2:擋整棵子樹的話,目前目錄是家目錄或磁碟根時正常安裝也消失;r3:位置只解析所在目錄那一層,整條解析會讓 repo 根指進子目錄的符號連結逃過比對) [test:t_python_resolver_order_and_floor]
+  PITFALL:[2026-09-29 推上主線後 CI 紅]經符號連結啟動的 Python 回報的 sys.executable,在 macOS(Homebrew)會解到真實路徑、在 Linux 就是連結本身;測試或程式要比「是不是同一支直譯器」,兩邊都先 realpath 再比,只在本機跑綠不代表 CI 綠 [test:t_python_resolver_order_and_floor]
   TEST:t_python_resolver_order_and_floor、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
 related:
   - "[[Projects/最低Python版本改3.14_計劃]]"

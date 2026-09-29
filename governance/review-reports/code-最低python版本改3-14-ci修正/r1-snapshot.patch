@@ -1,0 +1,57 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+index fe62c3c3..d4499a36 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
++++ b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+@@ -16,20 +16,21 @@ summary: |-
+   WHY:[2026-09-29 設計審 r2,外家否決席與邊界席]找 3.14 只有 lumos 裡這一份,git 掛鉤與安裝腳本只內嵌「找任何版本的 python 把 lumos 叫起來」:第一版讓掛鉤 source 一支共用 shell 檔,舊版的更新程式在啟動時已把要複製的檔案清單讀進記憶體,更新時複製了改過的掛鉤卻漏掉它不認得的新檔,第一次升級必定半套、提交被擋;被 source 進 set -euo pipefail 的腳本還會無聲結束、Git Bash 的路徑帶 \r
+   WHY:[2026-09-29 設計審 r1 正確性席]開頭檢查放在最前面那幾行標準庫 import 之後、所有定義之前,只在主程式身分且版本低於 3.14 時觸發:3.9 在定義當下就會對 `def f(x: int | None)` 丟 TypeError,放在檔尾的 __main__ 段就跑不到;被測試用 import 載入時不能觸發
+   WHY:[2026-09-29 設計審 r2,五席各自報到]LUMOS_PYTHON 只在版本不夠時才用來找 3.14,不讓一支已經是 3.14 的 lumos 重跑:指到 pyenv shim 或自寫包裝時,包裝啟動的真正路徑與設定的路徑永遠不同,會無限重跑
+   WHY:[2026-09-29 設計審 r2 正確性席]LUMOS_PYTHON_SEARCH_DIRS 換掉固定位置清單,是測試接縫:維護者的 Mac 上 /opt/homebrew/bin/python3.14 一定存在,不換掉就造不出「找不到 3.14」的情境
+   RULE:[since:2026-09-29][retire:工具改成用 uv tool / pipx 這類有 requires-python 的方式發佈,或把 scripts/lumos 拆成只做檢查的小入口加本體時][confirmed:2026-09-29]scripts/lumos、scripts/merge-claude-settings.py、scripts/hooks/claude 底下的 .py 必須一直能被 Python 3.9 解析:Python 要先解析完整支檔才跑第一行,舊版啟動時要能跑到開頭的版本檢查才講得出「需要 3.14」;CI 用釘版本的 ruff 以 py39 查語法錯誤 [test:t_lumos_parses_under_old_grammar]
+   PITFALL:[2026-09-29 實作自測]macOS 的 /usr/bin/python3 是一層轉接,真正在跑的是開發工具底下那支,sys.executable 與 /usr/bin/python3 不同;比對「是不是同一支直譯器」要用它自己回報的 sys.executable,不能用啟動時的路徑 [test:t_lumos_old_python_reexec_or_explain]
+   PITFALL:[2026-09-29 存量漂移防線乙代碼審 r3 外家席、r4 正確性席]3.9 的 ast.parse 在單一邏輯行約 21.6 萬字元的負號串、約 16 萬層的 elif 鏈就 SIGSEGV,接不到例外;重現:`/usr/bin/python3 -c "import ast; ast.parse('-'*500000+'1')"`,回傳碼 139
+   PITFALL:[2026-09-29 代碼審 r1 核心席與資安席]doctor 探查掛鉤直譯器時,若只看命令裡有沒有 hooks/,會把別的工具的掛鉤(shell 條件式、bash 包一層、直接寫腳本)的第一個字拿去跑 `-c <探針>`——誤報重跑 lumos install 修不掉,還真的執行了別人的腳本;只認「第二段是 lumos 自家掛鉤檔、放在這一家 lumos 裝的目錄(兩家分開精確比對,不用後綴)、第一段像 python」的命令;測試拿合併程式真的寫出的兩家設定餵,安裝端改命令形狀就會紅 [test:t_doctor_flags_stale_hook_python]
+   PITFALL:[2026-09-29 代碼審 r1 核心席]lumos update 在同一個行程裡先拉新來源再複製,執行的是拉新之前就載進記憶體的舊程式——新版才加的更新期提示,第一個專案一定印不出來;要讓人知道的事改在失敗現場講(CI 裡找不到 3.14 的說明自帶 setup-python 那一行) [test:t_update_prints_python314_notice_and_slim_strips_floor]
+   PITFALL:[2026-09-29 代碼審 r1 資安席]Windows 找指令會先看目前目錄,git 掛鉤的目前目錄是 repo 根:用裸指令名探直譯器,陌生 repo 放一支 python3.14.exe 就會被執行;一律先解析成絕對路徑、落在目前目錄本身的不收、PATH 相對路徑項找到的不收(r2:擋整棵子樹的話,目前目錄是家目錄或磁碟根時正常安裝也消失;r3:位置只解析所在目錄那一層,整條解析會讓 repo 根指進子目錄的符號連結逃過比對) [test:t_python_resolver_order_and_floor]
++  PITFALL:[2026-09-29 推上主線後 CI 紅]經符號連結啟動的 Python 回報的 sys.executable,在 macOS(Homebrew)會解到真實路徑、在 Linux 就是連結本身;測試或程式要比「是不是同一支直譯器」,兩邊都先 realpath 再比,只在本機跑綠不代表 CI 綠 [test:t_python_resolver_order_and_floor]
+   TEST:t_python_resolver_order_and_floor、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
+ related:
+   - "[[Projects/最低Python版本改3.14_計劃]]"
+   - "[[Issues/蘋果內建Python3.9跑全套仍紅]]"
+   - "[[Systems/lumos-cli-lifecycle]]"
+   - "[[Systems/codex-harness]]"
+   - "[[Systems/bound-tests-gate]]"
+ ---
+ # python直譯器選擇
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c9f8fea7..b7857e6e 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -51613,22 +51613,24 @@ def t_python_resolver_order_and_floor():
+         _os.environ["LUMOS_PYTHON_SEARCH_DIRS"] = str(tmp / "fixed")
+         (tmp / "fixed").mkdir()
+         names = [d for d, _a in m._py_candidates()]
+         want = ["python3.14", "python3.15", "python3.16", str(tmp / "fixed" / "python3.14"), str(tmp / "fixed" / "python3.15"),
+                 str(tmp / "fixed" / "python3.16"), str(tmp / "fixed" / "python3")]
+         check("①候選順序:版本號名稱 → 固定位置(可換) → uv → python3、python 最後",
+               names[:7] == want and names[-3:] == ["uv python find", "python3", "python"], str(names))
+         env = _py314_fake_env(tmp / "a", {"python3.14": "old", "python3.15": "good", "python3": "good"})
+         _os.environ.update(env)
+         path, tried = m._py_resolve()
+-        check("②找到第一個合格的就停,回它印出的絕對路徑", path == _os.path.realpath(sys.executable) or path == sys.executable,
+-              f"{path} {tried}")
++        # 候選是指到本機 3.14 的符號連結;它回報的 sys.executable 在 macOS 會解到真實路徑、在 Linux 就是連結本身(CI 實測),
++        # 兩邊都解開再比
++        check("②找到第一個合格的就停,回它印出的絕對路徑", bool(path) and _os.path.isabs(path)
++              and _os.path.realpath(path) == _os.path.realpath(sys.executable), f"{path} {tried}")
+         check("②跳過的舊版有寫出版本、合格之後的不再試", tried[0][0] == "python3.14" and "3.9.6" in tried[0][1]
+               and not any(d == "python3" for d, _w in tried), str(tried))
+         _os.environ["LUMOS_PYTHON"] = "bin/python3.15"
+         path, tried = m._py_resolve()
+         check("③LUMOS_PYTHON 不是絕對路徑:停下報錯,不往下找", path is None and len(tried) == 1 and "絕對路徑" in tried[0][1], str(tried))
+         _os.environ["LUMOS_PYTHON"] = str(tmp / "a" / "bin" / "python3.14")
+         path, tried = m._py_resolve()
+         check("④LUMOS_PYTHON 指到舊版:停下報錯,不往下找", path is None and len(tried) == 1, str(tried))
+         _os.environ.pop("LUMOS_PYTHON")
+         env = _py314_fake_env(tmp / "b", {"python3": "old"})
