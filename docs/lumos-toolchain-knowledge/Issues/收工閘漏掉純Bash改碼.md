@@ -1,13 +1,13 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-09-07
 updated: 2026-09-07
 aliases: []
 about_code: []
 tags:
   - type/issue
-  - status/open
+  - status/done
   - scope/guards-gates
 summary: |-
   FLAG:TECHNICAL
@@ -39,4 +39,4 @@ summary: |-
 - 不裁修法;修法在 v4 計劃裡跟入口一起設計,v4 若停案本 Issue 獨立處理。
 - 沒量「該擋卻沒擋」的實際比例。
 
-REVISIT:2026-10-07 若 v4 停案,本 Issue 獨立處理(修法方向見摘要)
+結案(2026-09-29,存量漂移健檢 c2 判讀):摘要裡的修法已落地——提交 3aa20280「收工提醒不再漏掉用指令改的檔」把收工檢查改成問版本控制取改到的檔,測試 t_sync_nudge_lists_shell_written_files 釘著。原本這裡的回頭條件(若 v4 停案獨立處理)不再需要。
