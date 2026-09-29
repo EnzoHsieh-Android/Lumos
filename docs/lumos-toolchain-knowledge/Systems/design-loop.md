@@ -78,6 +78,7 @@ summary: |-
   TEST:Component A 原語有 test_lumos.py 覆蓋;B 是 skill 非 code,以 design-loop 自跑收斂為驗證
   VERIFY:[[Verification/2026-06-19_design-loop]]
   WHY:[2026-09-29 [[Projects/代碼審資料狀態鏡頭_計劃]]]範本 §3 代碼審派工詞第 1 點再擴一次(承 d6 的帶例子問句):加資料狀態五問,邊界填空範例拿掉時區改由時間子題固定問;§7 平行 panel 加分流句(五問只留給正確性席)
+  WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]範本 §3 代碼審派工詞加第 5 點角色鏡頭與 `LUMOS-ROLE-CARDS: on` 標記行,卡片內容不複製進範本(範本不知道改到哪一邊,只能由程式看改動決定);§7 分流句比照資料狀態五問,標記只留給正確性席,§7.6/§7.8 不放(有守衛測試)
 decisions:
   - content: 收斂判準 K=2(連 2 輪 caught 且 severity∈{clean,minor}),寫進 spec 本體與 loop_status --need 預設;漏抓(missed)仍是一筆 record、仍算進 cap,判決不採信但不消失
     id: d1

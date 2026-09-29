@@ -20,6 +20,7 @@ verified_by:
   - "[[Verification/2026-09-11_代碼審資安席落地]]"
   - "[[Verification/2026-09-11_全報vs抑噪試點]]"
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
+  - "[[Verification/2026-09-29_前端卡小實驗]]"
 summary: |-
   PITFALL:[2026-09-28 筆記形狀擋全零修正的代碼審通才席]code-loop check --diff 的起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open 不擋;現在先照筆記形狀擋與每支檔有家共用的判法換成真的起點(頂端落後或等於主線頂端就沒有新東西;找不到主線時照它原本拿到空樹的做法、不截上線點);工具鏈 CI 的代碼審那步也改成原樣交前一版 [test:t_push_base_zero_or_missing]
   PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則。★「code 開頭卻不是 code-」這種看不出是哪一種審查的,照最嚴的當代碼審★——代碼審 r1 說這會誤擋 codestage 這類真的設計審,r2 說同檔三處既有呼叫點對這個灰色地帶一律從嚴、就是為了擋「取個 codeX 的編號就繞過」;兩輪方向相反,照既有慣例裁從嚴,而 r1 真正的傷(訊息硬說它是代碼審、誤導人去找不存在的凍結 patch)改用既有那幾處的說法老實講來解。從嚴的代價:走新處置閘的設計審本來也要帶這兩個所以沒差;★舊的 panel 型設計審從沒要求過★(codestage 那九筆就是),目前打不到只是因為更早那條「審查席一定要附 --report」先擋了,以後動那條規則或開補記舊帳的旁路時要重新想 [test:t_code_loop_record_requires_provenance_from_first_row]
@@ -49,6 +50,8 @@ summary: |-
   TEST:t_pitfalls_spec(9)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;當時 374 passed(★全量數字已漂,以 CI 為準★)
   VERIFY:[[2026-07-04_pitfalls-code-loop]]
   WHY:[2026-09-29 [[Projects/代碼審資料狀態鏡頭_計劃]]]代碼審派工詞正確性鏡頭加 DDIA 資料狀態五問(新舊互讀/寫一半/衍生資料/時間/不可逆),冪等與併發擴寫同次讀兩次與對外送出重試;只寫進審查員鏡頭、不做推送前表態閘——推送前表態版經設計審 r1 撤案(會在 60–85% 推送上亮、放大無圖譜死結),小實驗只量到鏡頭形式多抓一次已知 bug([[Projects/代碼審鏡頭對照DDIA_調研]]);多席時五問只留給正確性席(靠編排者照做);範本內容由 t_data_state_lens_in_code_template 等三支測試釘住
+  WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]代碼審正確性席派工詞加 `LUMOS-ROLE-CARDS: on` 時,依改到前端或後端附角色鏡頭卡(前端 6 題、後端 2 題,題號 fe-/be- 不得改:撤除條件靠它計數);判定建立在既有題組鍵上不另造分類,宣告讀起點版本(被審分支不能自己關卡);推送前分級只在人讀輸出多一行角色統計、不進 JSON。只接 Claude 通道,Codex 領席每席同一份文字做不到只給正確性席(d4)
+  PITFALL:[2026-09-29 代碼審角色鏡頭 r1 正確性席與外家席各自重現]角色段放在「參考資料」框外(框外=審查員照做的指令區),壞宣告的警告若回填專案寫的 role/path 值,被審專案就能往指令區塞字;警告只准寫第幾條與固定原因 [test:t_review_role_warning_never_echoes_config_values]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1

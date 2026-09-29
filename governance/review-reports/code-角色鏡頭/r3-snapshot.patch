@@ -1,0 +1,458 @@
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index dced1938..fd26c68a 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "245922dd8ef58c3c05e2bcece19e43f59e2de399ec8e378036c4910d5a19849c",
++    "scripts/test_lumos.py": "4de03fd23e2ea8de8687cd6acb2dbd63c96fa76b9514968687ac2076896674e9",
+     "scripts/test_autonomous_loop.py": "a9bff38eeb3a521bbf731874b3c59d3cc540f0d0c4a6af3cf7a7a4288a697e78",
+     "scripts/hooks/pre-commit": "1e5e6645dff0c31e774a0761430f96e14e45dcca9d311d4086f80e5fc8208cfe",
+     "scripts/hooks/pre-push": "b09a2357a90f27782bd0ca616c6f90af699f41e62e9237293c7d143713c431ff",
+     "scripts/hooks/post-commit": "754a88db17add2493587bc51e5891b8f810342d10bbddf6f7d97d6c05d3b9651",
+-    "scripts/hooks/claude/dispatch-lens-hook.py": "23d9293e7ccd8f38bd1609475a412ecab88a85ecf9b54f9f6c5e898855e5574f",
++    "scripts/hooks/claude/dispatch-lens-hook.py": "41ccdb9911800508f2ae0964919335ccf9b5b8750eb167caf8364848ebb92e97",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "16851237e0b3cecdb867e9b2dd36cc71e0f4e5c4a01cb155510d3f46df7f3e00",
+     "scripts/hooks/claude/check-graph-sync.py": "b01ec12ca4514b6f6f6904194cc2d6b747f8fca919c6a5dea9bb571c3a4974de",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-09-29T16:17:59+08:00",
+-  "note": "代碼審 r1 折入:掛鉤在新掛鉤配舊 lumos 時拿掉旗標重叫一次;測試總檔加 8 支 r1 折入的回歸測試(先紅後綠),既有測試未改"
++  "approved_at": "2026-09-29T16:35:23+08:00",
++  "note": "代碼審 r2 折入:掛鉤重叫前記一行除錯;測試總檔加 3 支 r2 回歸測試(先紅後綠)並拿掉一行空測,既有測試未改"
+ }
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index acf4d69a..6b2344e6 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -334,20 +334,21 @@ def main() -> int:
+     if rng and wants_role_cards(prompt):
+         argv.append("--role-cards")
+     try:
+         r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
+     except (subprocess.TimeoutExpired, OSError):
+         r = None
+     if r is not None and r.returncode == 2 and not (r.stdout or "").strip() and "--role-cards" in argv:
+         # 新掛鉤配舊 lumos:舊版不認 --role-cards 會回 rc2 空輸出,不重叫的話連圖譜段都丟(代碼審 r1 外家 F2)。
+         # 掛鉤是複製進使用者目錄的,兩邊版本錯開是常態;拿掉旗標重叫一次,舊版照附圖譜段。
+         argv = [a for a in argv if a != "--role-cards"]
++        _debug("lumos 不認 --role-cards(rc2、沒輸出),多半是舊版;拿掉旗標重叫一次")
+         try:
+             r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
+         except (subprocess.TimeoutExpired, OSError):
+             r = None
+     if r is None or r.returncode == 5:
+         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
+         what = rng or spec
+         # 兩條路的機制不同,說明也要不同(r2 通才席:共用那句對設計審是假話)
+         _note = (TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng
+                  else SPEC_TIMEOUT_NOTE.format(what=what))
+diff --git a/scripts/lumos b/scripts/lumos
+index 39bba6b4..2334cd5d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20463,28 +20463,30 @@ def _node_flavor(file_rel, repo_root, reader=None):
+     ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。
+     ★最近那份 package.json 讀得到卻解析不了 → None★(容許開頭的 BOM;2026-09-29 角色鏡頭設計審 r1 邊界席:
+     原本當成沒有依賴、判成 node,前端專案的 package.json 多一個逗號就拿到後端題)。
+     reader:給了就改讀「某個版本」的 package.json(repo 相對路徑 → 文字或 None);沒給就讀工作樹(同一條往上找的路)。"""
+     if reader is None:
+         reader = lambda rel: _node_pkg_text(repo_root, rel)   # noqa: E731 — 同一條找法,只換讀取來源
+     return _node_flavor_at(file_rel, reader)
+ 
+ 
+ def _node_pkg_text(repo_root, rel):
+-    """工作樹裡某個相對路徑的 package.json 文字;沒有或讀不了回 None。同一個 repo 同一份檔只讀一次(_NODE_FLAVOR_CACHE)。"""
++    """工作樹裡某個相對路徑的 package.json 文字;沒有這個檔回 None。同一個 repo 同一份檔只讀一次(_NODE_FLAVOR_CACHE)。
++    ★檔在但讀不了(權限、非 UTF-8)回空字串★=「在但解析不了」→ 判不出;回 None 會被當成沒有、往上找到父層改判
++    (代碼審 r2 正確性席:UTF-16 的前端 package.json 被判成根層的後端)。非 UTF-8 照 git 版的讀法換字元,解析自然失敗。"""
+     key = str(Path(repo_root) / rel)
+     if key not in _NODE_FLAVOR_CACHE:
++        p = Path(key)
+         try:
+-            p = Path(key)
+-            _NODE_FLAVOR_CACHE[key] = p.read_text(encoding="utf-8") if p.is_file() else None
+-        except (OSError, UnicodeDecodeError):
+-            _NODE_FLAVOR_CACHE[key] = None
++            _NODE_FLAVOR_CACHE[key] = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else None
++        except OSError:
++            _NODE_FLAVOR_CACHE[key] = ""
+     return _NODE_FLAVOR_CACHE[key]
+ 
+ 
+ def _node_flavor_of(txt):
+     """一份 package.json 的文字 → "vue" / "node";解析不了(容許開頭的 BOM)回 None。"""
+     import json
+     try:
+         data = json.loads(txt.lstrip("\ufeff"))
+     except (ValueError, RecursionError):   # 超深巢狀丟的是 RecursionError(代碼審 r1 正確性 F3)
+         return None
+@@ -20554,21 +20556,21 @@ _ROLE_MOBILE_EXTS = {"kt", "java", "swift", "dart"}
+ _ROLE_UI_IMPORT = {
+     "kt": re.compile(r"^\s*import\s+(?:androidx\.compose|android\.widget|android\.view|androidx\.recyclerview|androidx\.fragment|androidx\.activity|androidx\.appcompat)\.", re.M),
+     "swift": re.compile(r"^\s*import\s+SwiftUI\b", re.M),
+     "dart": re.compile(r"""^\s*import\s+['"]package:flutter/(?:material|widgets|cupertino)\.dart['"]""", re.M),
+ }
+ _ROLE_UI_IMPORT["java"] = _ROLE_UI_IMPORT["kt"]
+ _ROLE_ANDROID_IMPORT = re.compile(r"^\s*import\s+(?:android|androidx)\.", re.M)
+ _ROLE_UIKIT_IMPORT = re.compile(r"^\s*import\s+UIKit\b", re.M)
+ _ROLE_UIKIT_SUBCLASS = re.compile(r"\bclass\s+\w+\s*:[^{\n]*\bUI\w*(?:ViewController|View)\b")
+ _ROLE_READ_CAP = 300     # 最多讀幾支檔的內容(數檔,不數往上找 package.json 的候選);超過的只看副檔名(手機檔判不出)
+-_ROLE_MAX_BYTES = 512 * 1024   # 單支檔超過這個大小不讀內容(判不出);只讀得到的也只看開頭這麼多
++_ROLE_MAX_BYTES = 512 * 1024   # 單支檔超過這個大小不讀內容(判不出);上限交給批次讀取那一層守
+ _ROLE_BUDGET = 3.0       # 角色計算自己最多幾秒
+ _ROLE_BUDGET_FLOOR = 1.0  # 期限很短時角色至少拿這麼多(消費專案光算工具檔清單就要半秒,代碼審 r1 正確性 F2)
+ 
+ 
+ def _role_budget(deadline):
+     """派工時角色計算能用幾秒:最多 _ROLE_BUDGET、至少 _ROLE_BUDGET_FLOOR,平常取期限的三分之一。"""
+     if not deadline or deadline <= 0:
+         return _ROLE_BUDGET
+     return min(_ROLE_BUDGET, max(_ROLE_BUDGET_FLOOR, deadline / 3))
+ 
+@@ -20655,29 +20657,27 @@ def _review_roles(root, base, head, budget=_ROLE_BUDGET):
+     import time as _t
+     t0 = _t.monotonic()
+     cfg = _json_at_ref(root, base, ".lumos/config.json")
+     _cfg_there = cfg is None and _lens_git(root, "cat-file", "-e", f"{base}:.lumos/config.json")
+     rules, warnings = _review_roles_config(cfg, unreadable=bool(_cfg_there and _cfg_there.returncode == 0))
+     files = _review_role_changed_files(root, base, head)
+     if files is None:
+         return None
+     want, capped = _review_role_wanted(files, rules)
+     blobs, timed_out = {}, False
+-    if want and budget - (_t.monotonic() - t0) > 0.2:
+-        want = _review_role_small_enough(root, want)
+     left = budget - (_t.monotonic() - t0)
+     if want and left > 0.2:
+-        got = _nodehome_cat_blobs(root, want, timeout=left)
++        got = _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=left)
+         if got is None:
+             timed_out = True
+         else:
+-            blobs = {k: (v[:_ROLE_MAX_BYTES].decode("utf-8", "replace") if v is not None else None) for k, v in zip(want, got)}
++            blobs = {k: (v.decode("utf-8", "replace") if v is not None else None) for k, v in zip(want, got)}
+     elif want:
+         timed_out = True
+     roles = {}
+     for p, ref in files:
+         content = blobs.get(f"{ref}:{p}")
+         roles[p] = _review_role_for(p, root, rules, reader=lambda rel, _r=ref: blobs.get(f"{_r}:{rel}"), content=content)
+     counts = {"frontend": sum(1 for v in roles.values() if v == "frontend"),
+               "backend": sum(1 for v in roles.values() if v == "backend"),
+               "unknown": sum(1 for v in roles.values() if v is None)}
+     return {"roles": roles, "counts": counts, "warnings": warnings, "capped": capped, "timed_out": timed_out}
+@@ -20703,40 +20703,20 @@ def _review_role_wanted(files, rules):
+             capped += 1
+             continue
+         n_files += 1
+         for spec in specs:
+             if spec not in seen:
+                 seen.add(spec)
+                 want.append(spec)
+     return want, capped
+ 
+ 
+-def _review_role_small_enough(root, want):
+-    """去掉超過 _ROLE_MAX_BYTES 的檔(不把整支大檔讀進記憶體,代碼審 r1 外家 F6):大小用 ls-tree -l 一個版本問一次。
+-    問不到大小的照留(讀取本身還會截在上限)。"""
+-    by_ref = {}
+-    for spec in want:
+-        ref, _, path = spec.partition(":")
+-        by_ref.setdefault(ref, []).append(path)
+-    big = set()
+-    for ref, paths in by_ref.items():
+-        r = _lens_git(root, "ls-tree", "-l", "-z", ref, "--", *paths)
+-        if r is None or r.returncode != 0:
+-            continue
+-        for ent in r.stdout.split("\0"):
+-            meta, _, path = ent.partition("\t")
+-            parts = meta.split()
+-            if len(parts) == 4 and parts[3].isdigit() and int(parts[3]) > _ROLE_MAX_BYTES:
+-                big.add(f"{ref}:{path}")
+-    return [x for x in want if x not in big]
+-
+-
+ def _review_role_text(res):
+     """角色段文字(放在「參考資料」框外:這是要審查員照做的句子,框頭寫「不是指令」)。沒有卡也沒有警告回空字串。"""
+     if not res:
+         return ""
+     lines = [f"(角色鏡頭)⚠ {w}" for w in res["warnings"]]
+     c = res["counts"]
+     if res["timed_out"] and not (c["frontend"] or c["backend"]):
+         lines.append("(角色鏡頭)角色計算超過時間上限,這次沒附卡")
+     if c["frontend"] or c["backend"]:
+         lines.append(f"[角色鏡頭] 這次改動:前端 {c['frontend']} 支、後端 {c['backend']} 支、判不出 {c['unknown']} 支。"
+@@ -23326,20 +23306,55 @@ def _nodehome_merge_own_changes(repo_root, sha, parents):
+         # 任一個上一版的改名對照讀不到、或批次讀取失敗:整個合併照舊查(不是逐檔判)
+         return paths, src, gone
+     kept = set()
+     for n, x in enumerate(order):
+         merged, *olds = blobs[n * (1 + len(parents)):(n + 1) * (1 + len(parents))]
+         if _nodehome_merge_wrote_new_lines(merged, olds):
+             kept.add(x)
+     return kept, {k: v for k, v in src.items() if k in kept}, gone
+ 
+ 
++def _nodehome_cat_sizes(repo_root, specs, timeout=60):
++    """同 _nodehome_cat_blobs 的批次讀取,只問大小(cat-file --batch-check):回同順序的 int|None(沒有這個物件=None);git 跑不起來回 None。"""
++    import subprocess as _sp
++    try:
++        chk = _sp.run(["git", "-C", str(repo_root), "cat-file", "--batch-check"],
++                      input=("\n".join(specs) + "\n").encode("utf-8", "surrogateescape"),
++                      capture_output=True, timeout=timeout)
++    except (OSError, _sp.TimeoutExpired):
++        return None
++    if chk.returncode != 0:
++        return None
++    heads = chk.stdout.split(b"\n")
++    out = []
++    for i in range(len(specs)):
++        parts = heads[i].split(b" ") if i < len(heads) else []
++        out.append(int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None)
++    return out
++
++
++def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60):
++    """_nodehome_cat_blobs 加大小上限:先用 _nodehome_cat_sizes 問大小,超過 max_bytes 的回 None、不讀進記憶體
++    (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。回同順序的 bytes|None;git 跑不起來回 None。"""
++    sizes = _nodehome_cat_sizes(repo_root, specs, timeout)
++    if sizes is None:
++        return None
++    ok = [i for i, n in enumerate(sizes) if n is not None and n <= max_bytes]
++    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=timeout) if ok else []
++    if got is None:
++        return None
++    res = [None] * len(specs)
++    for i, v in zip(ok, got):
++        res[i] = v
++    return res
++
++
+ def _nodehome_cat_blobs(repo_root, specs, timeout=60):
+     """一次讀很多個「版本:路徑」的內容,回同順序的 bytes|None(那個版本沒有這支檔就是 None);git 跑不起來回 None。
+ 
+     ★為什麼不照鄰居逐支 git show★(代碼審 r1 通才席量代價):成本在開 git 行程本身——200 支衝突檔的合併,
+     每支三次讀取就是 600 個行程,實測 13.5 秒;用 git 內建的批次讀取(cat-file --batch)一個行程讀完。
+     原始內容照讀、不經任何轉換程式。路徑裡有換行時批次讀取表達不了,整批當判不了。"""
+     import subprocess as _sp
+     if not specs:
+         return []
+     if any("\n" in s_ for s_ in specs):
+@@ -27685,27 +27700,29 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+             for c in _cands[:6]:   # 比照上面對照檔清單的 [:6](r1 通才 G7)
+                 print(f"    可能撞:{c['file']} 新增的 {'/'.join(c['patterns'])} 在對照的 {len(c['siblings'])} 個檔裡都沒出現(這是 {c['question']} 那題的做法)"
+                       "——沿用既有或改用新做法都用 tension 表態,審查席會查兩邊")
+             if len(_cands) > 6:
+                 print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
+             if arch.get("candidates_truncated"):
+                 print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
+         print(f"tier: {data['tier']}" + (f"({data['tier_reason']})" if data.get("tier_reason") else ""))
+         # 角色鏡頭統計(Projects/代碼審前後端角色鏡頭_計劃):只給人看、不進 JSON、不是檢核題,不改變分級
+         _rs, _re_ = _diff_range_ends(repo_root, diff_range)
+-        try:   # 同派工那邊:角色是附加提示,出錯就不印這行,不拖垮分級輸出
++        try:   # 同派工那邊:角色是附加提示(寬接是刻意的),出錯就不印這行,不拖垮分級輸出
+             _rr = _review_roles(repo_root, _rs, _re_) if (_rs and _re_) else None
+-        except Exception:
++        except Exception as e:
+             _rr = None
++            print(f"提醒:角色統計算不出來({e.__class__.__name__}),這次不印角色行", file=sys.stderr)
+         if _rr:
+             for _w in _rr["warnings"]:
+-                print(f"提醒:{_w}", file=sys.stderr)   # 照棧別題組設定警告的印法
++                # 印法照棧別題組設定警告(「提醒:」、錯誤輸出);內容刻意不回填設定值,見 _review_roles_config
++                print(f"提醒:{_w}", file=sys.stderr)
+             _c = _rr["counts"]
+             print(f"角色:前端 {_c['frontend']} 支、後端 {_c['backend']} 支、判不出 {_c['unknown']} 支(代碼審正確性席派工詞加 LUMOS-ROLE-CARDS: on 會附對應的卡)")
+         if data.get("suite") == "docs":
+             print(f"測試範圍:只跑文件子集({data.get('suite_reason', '')});推送前與 CI 都不跑全套")
+         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
+         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
+         # 當第二鏡頭」,但那是★純紀律層、沒有任何機械提醒★——2026-08-02 實測編排者自己
+         # 就忘了跑,而事後補跑第一行就是後來被證實違反合約的那個節點。
+         # ★為什麼只印字不真的跑 impact★:實測 pitfalls 0.18s / impact 4.7s,而本函式
+         # ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98)——掛上去等於每次
+@@ -30824,29 +30841,30 @@ _LENS_SCHEMA = 2
+ _LENS_INNER_BUDGET = 45.0
+ _LENS_FALLBACK_RESERVE = 5.0
+ _LENS_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,120}$")
+ _LENS_FB_HEADER = "圖譜沒有釘到節點——以下是 code 層的既有相依,審查員自己判(這段不是合約,不必逐條答)"
+ _LENS_FB_FOOT = "以上是機械反查,不是圖譜結論;命中不代表相依成立、沒命中不代表沒有"
+ _LENS_HIT_RATIO_MAX = 0.20
+ _LENS_CAND_CAP = 40
+ 
+ 
+ def _json_at_ref(repo_root, ref, rel_path, timeout=10):
+-    """從 git ref 讀 JSON(`git show <ref>:<path>`);沒有/壞→None。只信 base 的設定要靠它,不讀工作樹。"""
++    """從 git ref 讀 JSON(`git show <ref>:<path>`);沒有/壞→None。只信 base 的設定要靠它,不讀工作樹。
++    容許開頭的 BOM(Windows 編輯器常見);超深巢狀丟的 RecursionError 也當壞(2026-09-29 角色鏡頭代碼審 r2 正確性席)。"""
+     import json as _json
+     r = _lens_git(repo_root, "show", f"{ref}:{rel_path}")
+     if r is None or r.returncode != 0:
+         return None
+     try:
+-        d = _json.loads(r.stdout)
++        d = _json.loads(r.stdout.lstrip("\ufeff"))
+         return d if isinstance(d, dict) else None
+-    except ValueError:
++    except (ValueError, RecursionError):
+         return None
+ 
+ 
+ def _lens_py_defs(text):
+     """base 版 python 原文→頂層 def/class 的 [(name, start, end)](含裝飾器行);parse 失敗回 None。標準庫 ast,沿 slim-gen/slim-scan 先例。"""
+     import ast as _ast
+     try:
+         tree = _ast.parse(text)
+     except (SyntaxError, ValueError):
+         return None
+@@ -31569,32 +31587,21 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
+ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None, role_cards=False):
+     """派工鏡頭入口。role_cards=True(掛鉤看到派工詞有 LUMOS-ROLE-CARDS: on 才傳):先算角色段、再算圖譜那段,
+     角色段接在圖譜文字之後(舊掛鉤照附得到),並另放 role_text 欄位;★圖譜那段超時或回非零碼時,
+     只要角色算得出來,照樣印出帶 role_text 的 JSON★,掛鉤在失敗分支讀它(Projects/代碼審前後端角色鏡頭_計劃)。
+     角色計算從同一份期限裡先扣:最多 _ROLE_BUDGET 秒、且不超過期限的五分之一。"""
+     if not role_cards:
+         return _dispatch_lens_graph(diff_range, repo, as_json, no_cache, cap, max_lines, deadline)
+     import json as _json
+     import io, contextlib, time as _time
+     _t0 = _time.monotonic()
+-    role_text = ""
+-    parts = _lens_range_ok(diff_range)
+-    r = _lens_git(Path(repo) if repo else Path.cwd(), "rev-parse", "--show-toplevel") if parts else None
+-    if r is not None and r.returncode == 0 and r.stdout.strip():
+-        root = Path(r.stdout.strip())
+-        b, h = _lens_full_sha(root, parts[0]), _lens_full_sha(root, parts[1])
+-        if b and h:
+-            # ★角色是附加提示,出任何錯都當沒有角色,不准拖垮圖譜那段★(代碼審 r1 正確性 F3)——這裡寬接是刻意的
+-            try:
+-                role_text = _review_role_text(_review_roles(root, b, h, budget=_role_budget(deadline)))
+-            except Exception:
+-                role_text = ""
++    role_text = _dispatch_lens_role_text(diff_range, repo, deadline)
+     if deadline and deadline > 0:
+         deadline = max(0.5, deadline - (_time.monotonic() - _t0))
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf):
+         rc = _dispatch_lens_graph(diff_range, repo, as_json, no_cache, cap, max_lines, deadline)
+     out = buf.getvalue()
+     if not role_text:
+         sys.stdout.write(out)
+         return rc
+     if not as_json:
+@@ -31607,20 +31614,38 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+         data = None
+     if not isinstance(data, dict):
+         data = {}
+     if rc == 0:
+         data["text"] = (data["text"] + "\n\n" if data.get("text") else "") + role_text
+     data["role_text"] = role_text
+     print(_json.dumps(data, ensure_ascii=False))
+     return rc
+ 
+ 
++def _dispatch_lens_role_text(diff_range, repo, deadline):
++    """派工鏡頭的角色段文字;範圍或 repo 解析不到回空字串(讓圖譜那段照常回它自己的錯誤碼)。"""
++    parts = _lens_range_ok(diff_range)
++    r = _lens_git(Path(repo) if repo else Path.cwd(), "rev-parse", "--show-toplevel") if parts else None
++    if r is None or r.returncode != 0 or not r.stdout.strip():
++        return ""
++    root = Path(r.stdout.strip())
++    b, h = _lens_full_sha(root, parts[0]), _lens_full_sha(root, parts[1])
++    if not (b and h):
++        return ""
++    # ★角色是附加提示,出任何錯都當沒有角色,不准拖垮圖譜那段★(代碼審 r1 正確性 F3)——這裡寬接是刻意的
++    try:
++        return _review_role_text(_review_roles(root, b, h, budget=_role_budget(deadline)))
++    except Exception as e:
++        print(f"提醒:角色鏡頭算不出來({e.__class__.__name__}),這次不附卡;圖譜那段照常", file=sys.stderr)
++        return ""
++
++
+ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
+     """派工鏡頭的圖譜那段(原 cmd_dispatch_lens 本體;快取、背景暖機、Codex 武裝都只存這段,不含角色段)。"""
+     import json as _json
+     import io, contextlib, time as _time
+     _t0 = _time.monotonic()   # v1.2:hook 內層 45 秒是總帳,備援段預算=45−已耗−保留
+     parts = _lens_range_ok(diff_range)
+     if parts is None:
+         print("擋下:範圍要長成 <base>..<head>(恰好一個 ..、兩端都有、不能是 ... 或 - 開頭)", file=sys.stderr)
+         return 2
+     base_ref, head_ref = parts
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 64fa8423..626bef84 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -36537,28 +36537,66 @@ def t_review_role_skips_huge_blobs():
+     w("app/Big.kt", "import androidx.compose.runtime.Composable\n" + "// pad\n" * 100)
+     head = c("head")
+     res = m._review_roles(d, base, head, budget=30)
+     check("小檔照判前端、超過上限的大檔判不出", res["roles"].get("app/Small.kt") == "frontend" and res["roles"].get("app/Big.kt") is None, str(res))
+ 
+ 
+ def t_review_role_errors_never_break_dispatch_or_pitfalls():
+     """[代碼審 r1 正確性 F3] 角色是附加提示:超深巢狀的 package.json 不丟例外;角色計算真的出錯時,派工鏡頭與推送前分級照常。"""
+     m = _load_lumos_inproc()
+     check("超深巢狀 package.json → 判不出,不丟例外", m._node_flavor_of("[" * 200000) is None, "")
+-    check("超深巢狀設定 → 當成讀不懂、有警告", m._review_roles_config(None, unreadable=True)[1] != [], "")
+     d, g, w, c = _role_git_repo()
+     w("package.json", "{}"); w("a.ts", "export const a = 1\n"); base = c("base")
+     w("package.json", "[" * 200000); w("a.ts", "export const a = 2\n"); c("head")
+     r = run(d, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(d))
+     check("推送前分級照常印完、沒有 traceback", r.returncode == 0 and "Traceback" not in r.stderr and "tier:" in r.stdout, r.stderr[-300:])
+ 
+ 
++def t_review_role_config_bom_and_deep_json_at_base():
++    """[代碼審 r2 正確性 F1/F3] 起點版本的設定檔帶 BOM 照常用;超深巢狀當成讀不懂、有警告、不丟例外。"""
++    m = _load_lumos_inproc()
++    d, g, w, c = _role_git_repo()
++    (d / ".lumos").mkdir()
++    (d / ".lumos" / "config.json").write_text('﻿{"review_roles": [{"path": "api/*", "role": "frontend"}]}', encoding="utf-8")
++    base = c("base"); w("api/a.py", "x = 1\n"); head = c("head")
++    res = m._review_roles(d, base, head)
++    check("BOM 設定照常生效、沒有警告", res["warnings"] == [] and res["roles"].get("api/a.py") == "frontend", str(res))
++    (d / ".lumos" / "config.json").write_text("[" * 200000, encoding="utf-8"); base2 = c("deep"); w("api/b.py", "y = 1\n"); head2 = c("head2")
++    try:
++        res2 = m._review_roles(d, base2, head2)
++        ok = len(res2["warnings"]) == 1 and res2["roles"].get("api/b.py") == "backend"
++    except RecursionError:
++        res2, ok = "RecursionError", False
++    check("超深巢狀設定 → 讀不懂警告、宣告不用、不丟例外", ok, str(res2)[:300])
++
++
++def t_node_flavor_unreadable_nearest_package_json_is_none():
++    """[代碼審 r2 正確性 F2] 最近那份 package.json 讀不了(UTF-16、權限)時判不出,不往上找父層改判。"""
++    m = _load_lumos_inproc()
++    d = Path(tempfile.mkdtemp(prefix="gctl-pkj16-"))
++    (d / "package.json").write_text('{"dependencies": {"express": "4"}}', encoding="utf-8")
++    (d / "pkg").mkdir(); (d / "pkg" / "package.json").write_bytes('{"dependencies": {"vue": "3"}}'.encode("utf-16"))
++    m._NODE_FLAVOR_CACHE.clear()
++    check("工作樹:最近那份是 UTF-16 → 判不出(不是往上判成 node)", m._node_flavor("pkg/a.ts", str(d)) is None, str(m._node_flavor("pkg/a.ts", str(d))))
++
++
++def t_cat_blobs_max_bytes_skips_big_objects():
++    """[代碼審 r2 架構對齊 F1] 大小上限放在既有的批次讀取那一層:超過上限的物件回 None,不讀進記憶體。"""
++    m = _load_lumos_inproc()
++    d, g, w, c = _role_git_repo()
++    w("s.txt", "small\n"); w("b.txt", "x" * 5000); h = c("c")
++    got = m._nodehome_cat_blobs_capped(d, [f"{h}:s.txt", f"{h}:b.txt", f"{h}:nope.txt"], 1000)
++    check("小的讀到、大的回 None、不存在的回 None", got is not None and got[0] == b"small\n" and got[1] is None and got[2] is None, str(got)[:200])
++    got2 = m._nodehome_cat_blobs(d, [f"{h}:s.txt", f"{h}:b.txt"])
++    check("不給上限時照舊全讀", got2 is not None and got2[1] == b"x" * 5000, "")
++
++
+ def t_scenario_probe_per_scenario_max_turns():
+     """第二輪審視六修 d6:每題可自帶 max_turns(s15 要先查再建,18 步不夠);壞值退預設。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     path = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+     spec = importlib.util.spec_from_file_location("sp_mt", path, loader=SourceFileLoader("sp_mt", path)); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+     check("probe max_turns: 題目帶 30 → 30;沒帶 → 預設;壞值/0 → 預設", mod._scenario_max_turns({"max_turns": 30}, 18) == 30 and mod._scenario_max_turns({}, 18) == 18 and mod._scenario_max_turns({"max_turns": "x"}, 18) == 18 and mod._scenario_max_turns({"max_turns": 0}, 18) == 18, "")
+     import json as _j
+     rows = [_j.loads(l) for l in open(Path(GRAPHCTL).resolve().parent.parent / "governance" / "scenarios" / "commands.jsonl", encoding="utf-8") if l.strip()]
+     s15 = [r for r in rows if r["id"] == "s15-new-verification"]
