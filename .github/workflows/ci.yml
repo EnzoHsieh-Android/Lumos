@@ -146,6 +146,36 @@ jobs:
             fi
             exit "$rc"
           }
+      - name: drift check (存量漂移檢查;--no-verify 後盾)
+        # 已經寫進圖譜的句子因為這次推送改了狀態而過期(轉正了還留著預告句…;Projects/存量漂移防線_計劃 [S1][S18])。
+        # 起點:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF"(Actions 內建),由 lumos 算
+        # ——跟主線(origin 的預設分支優先、跳過就是這次推的那條)的分岔點與 before 取比較新的;推 main 本身時主線候選都被跳過,
+        # 用 before。原本在這裡用 shell 補(before 找不到就改用頂端的父提交),合過主線與新分支一次帶多個提交時算錯(代碼審 r2)。
+        # 主線候選是 checkout(fetch-depth: 0)抓下來的 origin/*,這步不依賴前面 note-shape 那步的 fetch。
+        # actions/checkout 不建 refs/remotes/origin/HEAD:沒有就照 GitHub 給的預設分支補上(預設分支不叫 main/master 時,
+        # 不補的話主線候選裡沒有它,git-flow/trunk 的專案會把預設分支上別人的轉正算進來;代碼審 r3 外家否決席、正確性席)。
+        # 模式照被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=warn):warn 只印、回 0,CI 不紅;block 有要處理回 1,
+        # 印擋下原因、CI 紅;其他非零(參數錯、工具出錯)照原碼讓 CI 紅——工具出錯時寧可紅,跟上面 code-loop gate、note-shape 兩步同一個慣例
+        # (推送前掛鉤對其他非零是放行並講一句「這次沒檢查」——128 以上是被訊號中斷,停下不放行;兩邊刻意不同:CI 是最後一道後盾)。
+        # 排在 code-loop gate 之後;全套測試在這步前面(既有安排,沒搬),跟防線計劃 [S18] 字面不同,理由寫在 Systems/存量漂移守衛。
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
+          if [ -n "$DEFAULT_BRANCH" ] && ! git rev-parse -q --verify refs/remotes/origin/HEAD >/dev/null && git rev-parse -q --verify "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
+            git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT_BRANCH"
+          fi
+          python scripts/lumos drift check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo . || {
+            rc=$?
+            if [ "$rc" -eq 1 ]; then
+              echo "::error::drift check 擋下(每一筆與 lumos drift fix 修法在上面):這次推送讓筆記跟狀態對不上——本機推送前被繞過(--no-verify)或用了 LUMOS_SKIP_DRIFT_CHECK 單次略過;照上面的指令改掉或 lumos drift ack 表態後重推,或把專案的 drift_check.gate 設成 warn"
+              exit 1
+            fi
+            exit "$rc"
+          }
       - name: Anchor verify (baseline 缺失必紅)
         run: |
           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }

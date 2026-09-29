@@ -51160,6 +51160,871 @@ def t_drift_check_state_events_in_range():
     check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
 
 
+def _dr_hook_fakes(root):
+    """推送前掛鉤的測試現場:假 lumos(記下每次被叫的參數;drift 子命令轉給真的 lumos)、假全套測試(跑了記一筆 SUITE)。
+    放在工作目錄、不提交——drift check 讀的是被推送頂端提交的樹,跟它們無關;所以要在最後一個提交之後才放。
+    FAKE_DRIFT_RC=<n>:drift 不轉給真的,印舊版工具那句「擋下:沒有 drift 這個指令」回 n;FAKE_DRIFT_SIG=1:drift 被 SIGTERM 殺掉;
+    FAKE_SIG_CMD=<子命令>:那個子命令(home、note-shape、spec-gate、code-loop…)被 SIGTERM 殺掉。"""
+    import os as _os
+    real = Path(GRAPHCTL).resolve()
+    log = root / "argv.log"
+    (root / "scripts" / "lumos").write_text(
+        "#!/usr/bin/env python3\nimport sys, json, pathlib, os, subprocess, signal\n"
+        f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "if c == 'python-path':\n    print(sys.executable); sys.exit(0)\n"
+        "if c == 'drift' and os.environ.get('FAKE_DRIFT_SIG'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
+        "if c and c == os.environ.get('FAKE_SIG_CMD'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
+        "if c == 'drift' and os.environ.get('FAKE_DRIFT_RC'):\n"
+        "    print('擋下:沒有「drift」這個指令。', file=sys.stderr); sys.exit(int(os.environ['FAKE_DRIFT_RC']))\n"
+        f"if c == 'drift':\n    sys.exit(subprocess.run([sys.executable, {str(real)!r}, *sys.argv[1:]]).returncode)\n"
+        "if c == 'impact' and '--json' in sys.argv:\n"
+        "    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
+        "elif c == 'pitfalls' and '--json' in sys.argv:\n"
+        "    print(json.dumps({'tier': 'standard'}))\n"
+        "sys.exit(0)\n", encoding="utf-8")
+    _os.chmod(root / "scripts" / "lumos", 0o755)
+    (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "test_lumos.py").write_text(
+        f"import pathlib\npathlib.Path({str(log)!r}).open('a').write('SUITE\\n')\nprint('1 passed, 0 failed')\n",
+        encoding="utf-8")
+    return log
+
+
+def _dr_hook_run(root, stdin, args=(), hook=None, **env):
+    """真的跑工具鏈的推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。args 是 git 給掛鉤的參數(遠端名、網址);
+    hook 給了就跑那一支(測試造的改動版),不給跑工具鏈自己的。"""
+    import subprocess as sp, os as _os
+    hook = hook or Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+    log = root / "argv.log"
+    log.unlink(missing_ok=True)
+    e = dict(_os.environ, GIT_DIR=str(root / ".git"), LUMOS_TEST_SHARDS="1")
+    for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG", "FAKE_SIG_CMD"):
+        e.pop(k, None)
+    e.update(env)
+    r = sp.run(["bash", str(hook), *args], cwd=str(root), input=stdin, capture_output=True, text=True, env=e, timeout=300)
+    lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return r.returncode, lines, r.stdout + r.stderr
+
+
+def t_prepush_gates_stop_on_signal():
+    """推送前掛鉤裡「rc1 擋、其他非零放行」的閘(每支檔有家、筆記形狀擋、雙向門放行 spec-gate、code-loop check、
+    存量漂移檢查)被訊號殺掉(回傳碼 128 以上,多半是 Ctrl-C)→ 印「<閘名>被中斷(rc=…),推送停下,後面的檢查不跑。」、
+    exit 那個回傳碼、不跑全套(推送閘接漂移檢查代碼審 r2 架構對齊席 F3:原本只有漂移那道會停)。
+    先證明現場:把掛鉤裡那幾行停下拿掉(等同舊掛鉤),同一個被殺掉的閘會被當成放行、照跑全套、rc0。
+
+    翻紅釘:拿掉任一道閘後面的 pp_stop_if_signaled → 那一道紅;pp_stop_if_signaled 門檻改成 >128 以外的值(例如只認 130)→ 全紅。
+    """
+    print("t_prepush_gates_stop_on_signal")
+    import re
+    _need_src("scripts/hooks/pre-push")
+    root = _dr_repo()
+    base = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:b")
+    _nh_commit(root, "c")
+    head = _na_head(root)
+    _dr_hook_fakes(root)
+    stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
+    gates = (("home", "每支檔有家檢查"), ("note-shape", "筆記形狀擋"), ("spec-gate", "雙向門放行檢查(spec-gate)"),
+             ("code-loop", "code-loop check"), ("drift", "存量漂移檢查"))
+    txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    old_txt, n = re.subn(r"^[ \t]*pp_stop_if_signaled \"\$[a-z]+_rc\".*\n", "", txt, flags=re.M)
+    # 五道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照
+    check("前置:掛鉤裡五道閘各有一行 pp_stop_if_signaled", n == 5, str(n))
+    old_hook = Path(tempfile.mkdtemp(prefix="gctl-oldhook-")) / "pre-push"
+    old_hook.write_text(old_txt, encoding="utf-8")
+    rc, lines, out = _dr_hook_run(root, stdin)
+    check("前置:沒人被殺掉時整支掛鉤放行、跑到全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-400:]}")
+    for cmd, name in gates:
+        rc, lines, out = _dr_hook_run(root, stdin, hook=old_hook, FAKE_SIG_CMD=cmd)
+        called = any(ln.startswith(cmd) for ln in lines)
+        check(f"前置({cmd}):拿掉停下的掛鉤(等同舊掛鉤)被殺掉的閘當成放行、照跑全套", called and rc == 0 and "SUITE" in lines,
+              f"rc={rc} {lines} {out[-300:]}")
+        rc, lines, out = _dr_hook_run(root, stdin, FAKE_SIG_CMD=cmd)
+        check(f"{cmd}被訊號殺掉(rc≥128)→ 掛鉤停下、回那個回傳碼、不跑全套、講明是哪道被中斷",
+              rc >= 128 and "SUITE" not in lines and f"{name}被中斷(rc={rc}),推送停下,後面的檢查不跑。" in out,
+              f"rc={rc} {lines} {out[-300:]}")
+
+
+def _dr_settle(root, name="G"):
+    """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+    g = root / _DR_VAULT / "Verification" / f"{name}.md"
+    g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                 encoding="utf-8")
+
+
+def t_prepush_and_ci_wire_drift_check():
+    """[S18] 推送前掛鉤每個 ref 在 code-loop check 之後、全套測試之前跑 drift check;block 有要處理 → 擋、不跑全套;
+    warn(含沒寫設定的預設)只印、照推;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
+    drift check 回其他非零(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講一句「這次沒檢查」再放行;被訊號殺掉 → 掛鉤停下、不跑全套。
+    工具鏈 CI 在 code-loop gate 之後有一步 drift check:回 0 不紅、回 1 印擋下原因並紅、其他非零照原碼紅(工具出錯時寧可紅,
+    跟同檔 code-loop gate、note-shape 兩步同一個慣例);before 原樣交(空的換成 40 個 0),帶 --push-remote origin
+    --pushed-ref "$GITHUB_REF",起點由 lumos 算(各種形狀在 t_ci_drift_start_shapes)。
+
+    真的跑那支掛鉤:假 lumos 記下每次被叫的參數,drift 子命令轉給真的 lumos,在一個「守衛紀錄這次轉正、預告句還留著」
+    的專案上判(c1 要處理)。假全套測試跑起來記一筆 SUITE,拿三者在記錄裡的先後判順序。各種 ref 形狀的起點在
+    t_prepush_drift_range_ref_shapes。
+
+    翻紅釘:掛鉤裡 drift check 那段搬到全套測試後面 → ①⑤紅;rc1 不擋 → ①紅;128 以上不停 → ⑨紅;CI 那步拿掉 → ⑦紅;
+    CI 那步把 rc 吞掉 → ⑧紅;CI 不帶推送參數 → ⑧起點紅。
+    """
+    print("t_prepush_and_ci_wire_drift_check")
+    import subprocess as sp, os as _os, json as _j, textwrap as _tw, re
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+    _need_src("scripts/hooks/pre-push", ".github/workflows/ci.yml")
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    vault = root / _DR_VAULT
+    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_commit(root, "base")
+    base = _na_head(root)
+    _dr_settle(root)
+    _nh_commit(root, "舊版 settle 的轉正,預告句還留著")
+    _dr_hook_fakes(root)
+
+    def pp(**env):
+        return _dr_hook_run(root, f"refs/heads/main {_na_head(root)} refs/heads/main {base}\n", **env)
+
+    def at(lines, head):
+        return next((i for i, l in enumerate(lines) if l.startswith(head)), -1)
+
+    def order_ok(lines):
+        cl, dr, su = at(lines, "code-loop check"), at(lines, "drift check"), at(lines, "SUITE")
+        return 0 <= cl < dr < su, f"code-loop={cl} drift={dr} suite={su}"
+
+    rc, lines, out = pp()
+    dr_line = lines[at(lines, "drift check")] if at(lines, "drift check") >= 0 else ""
+    check("①block:轉正了還留著預告句 → 推送擋下、全套測試沒跑", rc == 1 and at(lines, "SUITE") < 0
+          and 0 <= at(lines, "code-loop check") < at(lines, "drift check"), f"rc={rc} {lines} {out[-600:]}")
+    check("②擋下時印出每筆的 lumos drift fix 修法與逃生路", "lumos drift fix" in out and "drift_check.gate" in out
+          and "LUMOS_SKIP_DRIFT_CHECK=1" in out, out[-800:])
+    check("③沒有遠端、找不到主線:範圍原樣交 remote_sha..local_sha(帶遠端 ref 名),lumos 講一聲、用遠端舊值",
+          f"--diff {base}..{_na_head(root)}" in dr_line and "--pushed-ref refs/heads/main" in dr_line
+          and "找不到主線" in out and "用遠端舊值" in out, dr_line + out[-400:])
+    rc, lines, out = pp(LUMOS_SKIP_DRIFT_CHECK="1")
+    ok, why = order_ok(lines)
+    check("④LUMOS_SKIP_DRIFT_CHECK=1:放行,照跑全套", rc == 0 and ok, f"rc={rc} {why} {out[-400:]}")
+    rc, lines, out = pp(FAKE_DRIFT_RC="2")
+    ok, why = order_ok(lines)
+    check("⑨drift check 回 2(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講明這次沒檢查、放行、照跑全套",
+          rc == 0 and ok and "漂移檢查沒能跑完" in out and "推送沒有被擋" in out, f"rc={rc} {why} {out[-400:]}")
+    rc, lines, out = pp(FAKE_DRIFT_SIG="1")
+    check("⑨drift check 被訊號殺掉(rc≥128)→ 掛鉤停下、不放行、不跑全套",
+          rc != 0 and at(lines, "SUITE") < 0 and "被中斷" in out, f"rc={rc} {lines[-3:]} {out[-400:]}")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "warn"}}), encoding="utf-8")
+    _nh_commit(root, "warn")
+    rc, lines, out = pp()
+    ok, why = order_ok(lines)
+    check("⑤warn:只印不擋,順序是 code-loop check → drift check → 全套測試", rc == 0 and ok
+          and "提醒(drift_check.gate=warn" in out, f"rc={rc} {why} {out[-600:]}")
+    check("⑤warn 也印 lumos drift fix 修法", "lumos drift fix" in out, out[-600:])
+    (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
+    _nh_commit(root, "沒寫 drift_check")
+    rc, lines, out = pp()
+    check("⑥沒寫設定 = 預設 warn,不擋", rc == 0 and "提醒(drift_check.gate=warn" in out and at(lines, "SUITE") >= 0,
+          f"rc={rc} {out[-400:]}")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "off"}}), encoding="utf-8")
+    _nh_commit(root, "off")
+    rc, lines, out = pp()
+    check("⑥off:放行、不判(lumos 讀到 off 就跳過)", rc == 0 and "關掉" in out and "lumos drift fix" not in out
+          and at(lines, "SUITE") >= 0, f"rc={rc} {out[-400:]}")
+    hook_txt = hook.read_text(encoding="utf-8")
+    check("⑥掛鉤裡有上線標記那一行(lumos 從它第一次出現的提交截範圍起點)", "\n# lumos drift check\n" in hook_txt, "")
+
+    # CI:push 事件、before..sha;回 1 印擋下原因並紅,其他非零照原碼紅
+    ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    cl_at, dr_at = ci.find("code-loop check --diff"), ci.find("drift check --diff")
+    steps = re.split(r"\n(?=      - )", ci)
+    step = next((s for s in steps if "drift check --diff" in s), "")
+    check("⑦CI 有 drift check 那一步,排在 code-loop gate 之後,只在 push 事件跑、範圍 before..sha",
+          0 <= cl_at < dr_at and "if: github.event_name == 'push'" in step and 'drift check --diff "$BEFORE..$SHA"' in step
+          and "BEFORE: ${{ github.event.before }}" in step and "SHA: ${{ github.sha }}" in step, step[:600])
+    m = re.search(r"\n        run: \|\n((?:          .*\n?|\s*\n)+)", step)
+    body = _tw.dedent(m.group(1)) if m else ""
+    # 在一個真的 git 專案裡跑那一步(起點補法要問 git),python 換成假的:記下參數、回指定的碼
+    cr = Path(tempfile.mkdtemp(prefix="gctl-ci-drift-repo-"))
+    sp.run(["git", "init", "-q", str(cr)], capture_output=True)
+    shas = []
+    for i in range(3):
+        (cr / f"f{i}.txt").write_text(str(i), encoding="utf-8")
+        sp.run(["git", "-C", str(cr), "add", "-A"], capture_output=True)
+        sp.run(["git", "-C", str(cr), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"c{i}", "--no-verify"],
+               capture_output=True)
+        shas.append(sp.run(["git", "-C", str(cr), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+    fb = Path(tempfile.mkdtemp(prefix="gctl-ci-drift-"))
+    (fb / "python").write_text("#!/bin/bash\necho \"python $*\" > \"$FAKE_LOG\"\nexit \"$FAKE_RC\"\n", encoding="utf-8")
+    _os.chmod(fb / "python", 0o755)
+
+    def ci_run(before, sha, frc="0"):
+        (fb / "log").unlink(missing_ok=True)
+        e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", FAKE_RC=frc, FAKE_LOG=str(fb / "log"),
+                 BEFORE=before, SHA=sha, GITHUB_REF="refs/heads/main")
+        e.pop("GIT_DIR", None)
+        r = sp.run(["bash", "-e", "-c", body], cwd=str(cr), capture_output=True, text=True, env=e, timeout=30)
+        called = (fb / "log").read_text(encoding="utf-8") if (fb / "log").exists() else ""
+        return r.returncode, called, r.stdout + r.stderr
+
+    got = {frc: ci_run(shas[0], shas[2], frc)[0] for frc in ("0", "1", "2", "7")}
+    check("⑧CI 那步:warn(回 0)不讓 CI 紅、block 擋下(回 1)讓 CI 紅、其他非零照原碼紅",
+          bool(body) and got == {"0": 0, "1": 1, "2": 2, "7": 7}, f"{got} {body[:300]}")
+    push = "--push-remote origin --pushed-ref refs/heads/main --repo ."
+    for label, before, want in (("找得到", shas[0], shas[0]), ("空的", "", "0" * 40), ("40 個 0", "0" * 40, "0" * 40),
+                                ("本機找不到", "de" * 20, "de" * 20)):
+        _rc, called, out = ci_run(before, shas[2])
+        check(f"⑧CI 起點:before {label} → 原樣交(空的換成 40 個 0),帶遠端名與這次推的 ref,起點交給 lumos 算",
+              f"drift check --diff {want}..{shas[2]} {push}" in called, called + out[-300:])
+
+
+def _dr_yaml_tail_ok(text):
+    """健檢範本貼進 workflow 能不能被解析的替代斷言(標準庫沒有 YAML 解析器):`run: |` 那段 shell 之後的每一行
+    都是空行或縮排後以 # 開頭(YAML 註解)。→ (是否合格, 第一個不合格的行)。"""
+    ls = text.split("\n")
+    i = next((k for k, x in enumerate(ls) if x.strip() == "run: |"), None)
+    if i is None:
+        return False, "(找不到 run: |)"
+    k = i + 1
+    while k < len(ls) and ls[k].startswith("        "):
+        k += 1
+    for x in ls[k:]:
+        if x.strip() and not (x[:1] == " " and x.lstrip().startswith("#")):
+            return False, x
+    return True, ""
+
+
+def _dr_ci_call_lines(text):
+    """CI 那段 shell 從補 before 那一行到 drift check 那一行(含中間補 origin/HEAD 那段),去掉 python 直譯器名與
+    CI 那邊接的 `|| {`——ci.yml 與健檢範本比對逐字相同用。"""
+    ls = [x.strip() for x in text.split("\n")]
+    i = next((k for k, x in enumerate(ls) if x.startswith('[ -n "$BEFORE" ]')), None)
+    j = next((k for k, x in enumerate(ls) if "scripts/lumos drift check" in x), None)
+    if i is None or j is None or j < i:
+        return ""
+    dr = ls[j][ls[j].find("scripts/lumos"):].split(" || {")[0]
+    return "\n".join([*ls[i:j], dr])
+
+
+def t_doctor_drift_ci_template_start_fallback():
+    """doctor 給消費專案貼的 CI 步驟(已接線、CI 沒呼叫 drift check 時唸):before 原樣交(空的換成 40 個 0),
+    帶 --push-remote origin --pushed-ref "$GITHUB_REF",起點由 lumos 算;回傳碼照原樣(0 綠、1 紅、其他非零也紅)。
+    呼叫那兩行跟工具鏈自己的 ci.yml 逐字相同(python 與 python3 之別除外),並在一個真的 git 專案裡跑一次。
+    說明(含 Python 3.14 那句)寫成縮排對齊步驟的 YAML 註解,整段貼進 workflow 的 steps 底下能被解析(代碼審 r2 外家否決席 F1)。
+    各種推送形狀的起點對不對在 t_ci_drift_start_shapes(真的 lumos)。
+
+    翻紅釘:範本改回 shell 補起點、或不帶推送參數 → ②③紅;說明改回不帶 # 的文字 → ⑤紅。
+    """
+    print("t_doctor_drift_ci_template_start_fallback")
+    import subprocess as sp, os as _os, textwrap as _tw
+    m = _load_lumos_inproc()
+    root = _dr_repo()
+    _nh_file(root, ".github/workflows/ci.yml", "name: CI\non: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n"
+             "      - run: echo hi\n")
+    lines = m._drift_gate_doctor_lines(root)
+    hint = next((l for l in lines if "沒呼叫 `lumos drift check`" in l), "")
+    check("①前置:已接線、CI 沒呼叫 drift check → doctor 唸並給要貼的步驟", bool(hint), str(lines))
+    body_lines, grab = [], False
+    for ln in hint.split("\n"):
+        if ln.strip() == "run: |":
+            grab = True
+            continue
+        if grab:
+            if not ln.startswith("        "):
+                break
+            body_lines.append(ln)
+    body = _tw.dedent("\n".join(body_lines)) + "\n"
+
+    call = _dr_ci_call_lines
+    ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml")
+    if ci.is_file():
+        import re as _re
+        step = next((x for x in _re.split(r"\n(?=      - )", ci.read_text(encoding="utf-8")) if "drift check --diff" in x), "")
+        mm = _re.search(r"\n        run: \|\n((?:          .*\n?|\s*\n)+)", step)
+        ci_body = _tw.dedent(mm.group(1)) if mm else ""
+        check("②範本的呼叫跟工具鏈 ci.yml 那步逐字相同(直譯器名除外),都帶推送參數、補 origin/HEAD、沒有 shell 補起點",
+              bool(call(body)) and call(body) == call(ci_body) and '--push-remote origin --pushed-ref "$GITHUB_REF"' in call(body)
+              and 'git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT_BRANCH"' in call(body)
+              and "SHA^1" not in body and "SHA^1" not in ci_body, call(body) + "\n----\n" + call(ci_body))
+        check("②兩邊都從 Actions 帶預設分支進來", "DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in step
+              and "DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in hint, step[:400])
+    cr = Path(tempfile.mkdtemp(prefix="gctl-drift-tpl-repo-"))
+    sp.run(["git", "init", "-q", str(cr)], capture_output=True)
+    shas = []
+    for i in range(2):
+        (cr / f"f{i}.txt").write_text(str(i), encoding="utf-8")
+        sp.run(["git", "-C", str(cr), "add", "-A"], capture_output=True)
+        sp.run(["git", "-C", str(cr), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"c{i}", "--no-verify"],
+               capture_output=True)
+        shas.append(sp.run(["git", "-C", str(cr), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+    fb = Path(tempfile.mkdtemp(prefix="gctl-drift-tpl-"))
+    (fb / "python3").write_text("#!/bin/bash\necho \"python3 $*\" > \"$FAKE_LOG\"\nexit \"$FAKE_RC\"\n", encoding="utf-8")
+    _os.chmod(fb / "python3", 0o755)
+
+    def run_step(before, sha, frc="0"):
+        (fb / "log").unlink(missing_ok=True)
+        e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", FAKE_RC=frc, FAKE_LOG=str(fb / "log"),
+                 BEFORE=before, SHA=sha, GITHUB_REF="refs/heads/feat")
+        e.pop("GIT_DIR", None)
+        r = sp.run(["bash", "-e", "-c", body], cwd=str(cr), capture_output=True, text=True, env=e, timeout=30)
+        called = (fb / "log").read_text(encoding="utf-8") if (fb / "log").exists() else ""
+        return r.returncode, called, r.stdout + r.stderr
+
+    ok = True
+    detail = []
+    for before, want in (("", "0" * 40), ("0" * 40, "0" * 40), ("de" * 20, "de" * 20), (shas[0], shas[0])):
+        _rc, called, _out = run_step(before, shas[1])
+        good = f"drift check --diff {want}..{shas[1]} --push-remote origin --pushed-ref refs/heads/feat --repo ." in called
+        ok = ok and good
+        detail.append(f"{before[:6] or '空'}→{called.strip()[:120]} {good}")
+    check("③範本真的跑:before 原樣交(空的換成 40 個 0),帶遠端名 origin 與這次推的 ref", ok, "\n".join(detail))
+    got = {frc: run_step(shas[0], shas[1], frc)[0] for frc in ("0", "1", "2")}
+    check("④回傳碼照原樣:0 綠、1 紅、其他非零也紅,說明裡照實寫", got == {"0": 0, "1": 1, "2": 2}
+          and "1 是 block 模式擋下" in hint and "其他非零" in hint, str(got))
+    old_tail = ("\n    - name: x\n      run: |\n        echo x\n"
+                "  (checkout 要設 fetch-depth: 0。回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;"
+                + m._CI_PY314_NOTE)
+    check("⑤前置:舊範本那種不帶 # 的說明文字,這條斷言會判不合格", not _dr_yaml_tail_ok(old_tail)[0], old_tail)
+    good, bad = _dr_yaml_tail_ok(hint)
+    check("⑤範本步驟之後每一行都是空行或縮排後的 # 註解(貼進 workflow 是合法 YAML),含 Python 3.14 那句",
+          good and "3.14" in hint[hint.find("run: |"):], bad)
+
+
+def _dr_push_repo(branch="main", remote="origin", guards=("G",)):
+    """推送起點測試的現場:block 模式的漂移專案 + 一個裸遠端;每篇守衛紀錄 pending,M0 推上去並設 upstream。
+    回 (root, bare, g)。遠端的 HEAD 不設(actions/checkout 也不設),要的測試自己設。"""
+    import subprocess as sp
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    g = lambda *a: _nh_git(root, *a)
+    g("branch", "-M", branch)
+    bare = Path(tempfile.mkdtemp(prefix="gctl-dr-remote-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    g("remote", "add", remote, str(bare))
+    for n in guards:
+        (root / _DR_VAULT / "Verification" / f"{n}.md").write_text(_dr_guard_text("pending", claim=f"{n} 這條合約"),
+                                                                   encoding="utf-8")
+    _nh_commit(root, "M0")
+    g("push", "-q", "--no-verify", "-u", remote, branch)
+    return root, bare, g
+
+
+def _dr_hook_start(root, stdin, args):
+    """跑推送前掛鉤(drift 轉給真的 lumos)→ (rc, drift check 那次呼叫的參數, lumos 印的起點說明, 輸出)。"""
+    rc, lines, out = _dr_hook_run(root, stdin, args)
+    dl = next((ln for ln in lines if ln.startswith("drift check")), "")
+    ex = next((ln for ln in out.splitlines() if ln.startswith("存量漂移檢查:起點——")), "")
+    return rc, dl, ex, out
+
+
+def t_prepush_drift_range_ref_shapes():
+    """[S18] 推送前掛鉤把 遠端舊值..本地頂端 原樣交給 drift check,連同遠端名與遠端 ref 名;起點由 lumos 的 _push_range_start 算
+    (推送閘接漂移檢查代碼審 r2:原本掛鉤自己用 bash 算一份,跟 CI、工具端成三份)。功能分支合過主線、重定基底後 force push、
+    新分支首推、主分支沒設 upstream,都不把主線上別人的轉正算成這次的;自己分支(或 tag)裡的轉正照擋;一般增量推送用遠端舊值;
+    推主線本身時主線候選都是被推的那條、跳過,用遠端舊值,舊值..頂端裡的轉正照擋;主線找不到講一聲、從空樹算。
+
+    每一種先證明現場成立:同一段原樣範圍直接交給 lumos(不帶推送參數)會擋(rc1),才看掛鉤放行。
+
+    翻紅釘:分岔那種情況改用遠端舊值 → ②③紅;增量推送也改用分岔點 → ④紅;
+    掛鉤不帶 --push-remote/--pushed-ref → ②③⑤⑥紅(退回共用起點判法)。
+    """
+    print("t_prepush_drift_range_ref_shapes")
+    _need_src("scripts/hooks/pre-push")
+    z = "0" * 40
+    root, bare, g = _dr_push_repo(guards=("G", "G2", "G3", "G4"))
+    m0 = _na_head(root)
+    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    g("checkout", "-q", "-b", "inc")
+    _dr_settle(root, "G4")
+    _nh_commit(root, "inc: 上次已經推過的轉正(當時 warn 或單次略過)")
+    i1 = _na_head(root)
+    _nh_file(root, "notes/i.txt", "i\n")
+    _nh_commit(root, "inc: 這次新加的無關改動")
+    i2 = _na_head(root)
+    g("checkout", "-q", "main")
+    g("checkout", "-q", "-b", "feat")
+    _nh_file(root, "notes/a.txt", "a\n")
+    _nh_commit(root, "feat: 無關的改動")
+    f1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "main")
+    _dr_settle(root, "G")
+    _nh_commit(root, "M1:別人在主線上舊版 settle,預告句留著")
+    m1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "main")
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "--no-verify", "main")
+    f2 = _na_head(root)
+    g("checkout", "-q", "-b", "feat_rb", f1)
+    g("rebase", "-q", "main")
+    f1r = _na_head(root)
+    g("checkout", "-q", "-b", "newb", "main")
+    _nh_file(root, "notes/b.txt", "b\n")
+    _nh_commit(root, "newb: 無關的改動")
+    nb = _na_head(root)
+    g("checkout", "-q", "-b", "own", "main")
+    _dr_settle(root, "G2")
+    _nh_commit(root, "own: 自己轉正,預告句留著")
+    own = _na_head(root)
+    g("tag", "v-own", own)
+    g("checkout", "-q", "main")
+    _dr_settle(root, "G3")
+    _nh_commit(root, "M2:主線本身要推的轉正,預告句留著(還沒推)")
+    m2 = _na_head(root)
+    _dr_hook_fakes(root)
+
+    def direct(rng):
+        return _dr(root, "check", "--diff", rng)[0]
+
+    def hook(stdin, args=("origin", str(bare))):
+        return _dr_hook_start(root, stdin, args)
+
+    check("①前置:主線上別人那次轉正是真的發現(M0..M1 直接交給 lumos 會擋)", direct(f"{m0}..{m1}") == 1, "")
+    check("②前置:合過主線,原樣的 遠端舊值..本地新值 直接交給 lumos 會擋", direct(f"{f1}..{f2}") == 1, "")
+    rc, dl, ex, out = hook(f"refs/heads/feat {f2} refs/heads/feat {f1}\n")
+    check("②掛鉤原樣交 遠端舊值..本地頂端,帶遠端名與遠端 ref 名",
+          f"--diff {f1}..{f2} --push-remote origin --pushed-ref refs/heads/feat" in dl, dl)
+    check("②合過主線再推:lumos 從分岔點(主線頂端)算,不擋", rc == 0 and m1[:12] in ex and "分岔" in ex,
+          f"rc={rc} {ex} {out[-500:]}")
+    check("③前置:重定基底,原樣範圍直接交給 lumos 會擋", direct(f"{f1}..{f1r}") == 1, "")
+    rc, dl, ex, out = hook(f"refs/heads/feat {f1r} refs/heads/feat {f1}\n")
+    check("③重定基底後 force push:從分岔點算,不擋", rc == 0 and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+    rc, dl, ex, out = hook(f"refs/heads/feat {f1} refs/heads/feat {m0}\n")
+    check("④一般增量推送(每個合併基底都是遠端舊值的祖先):照用遠端舊值", rc == 0 and "一般增量" in ex and m0[:12] in ex,
+          f"rc={rc} {ex}")
+    check("④前置:增量推送的分岔點(M0)到頂端之間有上次已推的轉正(直接交給 lumos 會擋)", direct(f"{m0}..{i2}") == 1, "")
+    rc, dl, ex, out = hook(f"refs/heads/inc {i2} refs/heads/inc {i1}\n")
+    check("④一般增量推送只看這次新加的:從遠端舊值算,不把上次已推的再算一次", rc == 0 and "一般增量" in ex and i1[:12] in ex,
+          f"rc={rc} {ex} {out[-400:]}")
+    rc, dl, ex, out = hook(f"refs/heads/own {own} refs/heads/own {m1}\n")
+    check("④一般增量推送裡自己的轉正照擋", rc == 1 and "一般增量" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-400:]}")
+    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+    check("⑤新分支首推(全 0):從分岔點算,不擋", rc == 0 and "新分支首推" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+    rc, dl, ex, out = hook(f"refs/heads/own {own} refs/heads/own {z}\n")
+    check("⑤反面:新分支自己帶進來的轉正照擋(不是一律放行)", rc == 1 and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+    rc, dl, ex, out = hook(f"refs/tags/v-own {own} refs/tags/v-own {z}\n")
+    check("⑤tag 也查:tag 指到的提交帶進來的轉正照擋(tag 不跳過任何主線候選)",
+          rc == 1 and "--pushed-ref refs/tags/v-own" in dl and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+    check("⑤b前置:主線本身這次要推的範圍有轉正(M1..M2 直接交給 lumos 會擋)", direct(f"{m1}..{m2}") == 1, "")
+    rc, dl, ex, out = hook(f"refs/heads/main {m2} refs/heads/main {m1}\n")
+    check("⑤b推主線本身(main@{upstream} 還是舊值):主線候選都是被推的那條、跳過,用遠端舊值,轉正照擋",
+          rc == 1 and "找不到主線" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+    g("branch", "--unset-upstream", "main")
+    check("⑥前置:沒設 upstream 時,新分支的原樣範圍直接交給 lumos 會擋(它退回從空樹算)", direct(f"{z}..{nb}") == 1, "")
+    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+    check("⑥沒設 upstream:用這次推送的遠端的預設分支(origin/HEAD),不擋", rc == 0 and "origin/HEAD" in ex and m1[:12] in ex,
+          f"rc={rc} {ex} {out[-500:]}")
+    g("symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+    check("⑥遠端也沒有 HEAD:改用 origin/main,不擋", rc == 0 and "origin/main" in ex and m1[:12] in ex,
+          f"rc={rc} {ex} {out[-500:]}")
+    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n", args=())
+    check("⑦主線都找不到(沒給遠端名、main 沒 upstream):印一行說明,從空樹算", "找不到主線" in ex and "空樹" in ex
+          and f"--diff {z}..{nb}" in dl, f"rc={rc} {dl} {ex} {out[-500:]}")
+
+
+def t_prepush_drift_start_mainline_shapes():
+    """推送起點找主線的形狀(推送閘接漂移檢查代碼審 r2 正確性席 F2、F3,邊界席 F1;r3 正確性席 F1、F2):
+    ①git-flow:遠端 HEAD 指 develop、本地 main 的 upstream 過期,功能分支合過 develop 再推 → 從 develop 算,不擋;
+    ②主線叫 trunk、本地留著過期的 master upstream → 從 trunk 算,不擋;
+    ③交叉合併(兩個合併基底)兩種提交先後都不擋——要每一個基底都是遠端舊值的祖先才用舊值;
+    ④fork:本地 main 追正本(upstream/main)、推到自己的 fork(origin),同步 fork 的 main → 正本的 main 不是「被推的那條」,
+      頂端已在它上面、沒有新東西;
+    ⑤fork:fork 的遠端 HEAD 指到沒同步的 main,新功能分支從正本最新開、首推到 fork → 取最近的分岔點(正本的 main),不擋。
+    主線不再照順序取第一個找得到的候選,所有候選一起算分岔點、取離頂端最近的。
+    每一種先證明原樣範圍(或過期主線算出的範圍)直接交給 lumos 會擋。
+
+    翻紅釘:改回照順序取第一個候選 → ⑤紅;跳過只比分支短名(不比遠端)→ ④紅;合併基底只看 git 挑的第一個 → ③紅。
+    """
+    print("t_prepush_drift_start_mainline_shapes")
+    _need_src("scripts/hooks/pre-push")
+    z = "0" * 40
+    # ① git-flow
+    root, bare, g = _dr_push_repo()
+    m0 = _na_head(root)
+    g("checkout", "-q", "-b", "develop")
+    g("push", "-q", "--no-verify", "-u", "origin", "develop")
+    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+    g("checkout", "-q", "-b", "feat")
+    _nh_file(root, "notes/a.txt", "a\n")
+    _nh_commit(root, "feat 無關")
+    f1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "develop")
+    _dr_settle(root, "G")
+    _nh_commit(root, "D1 別人在 develop 轉正")
+    d1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "develop")
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "--no-verify", "develop")
+    f2 = _na_head(root)
+    _dr_hook_fakes(root)
+    stale = _nh_git(root, "rev-parse", "main@{upstream}").stdout.strip()
+    check("①前置:本地 main 的 upstream 過期(停在 M0),原樣範圍 F1..F2 直接交給 lumos 會擋",
+          stale == m0 and _dr(root, "check", "--diff", f"{f1}..{f2}")[0] == 1, stale)
+    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat {f2} refs/heads/feat {f1}\n", ("origin", str(bare)))
+    check("①git-flow:用遠端宣告的預設分支(develop),從 D1 算,不擋", rc == 0 and "origin/HEAD" in ex and d1[:12] in ex,
+          f"rc={rc} {ex} {out[-500:]}")
+    # ② trunk + 過期的 master upstream(遠端叫 fork)
+    root, bare, g = _dr_push_repo(branch="master", remote="fork")
+    m0 = _na_head(root)
+    g("checkout", "-q", "-b", "trunk")
+    _dr_settle(root, "G")
+    _nh_commit(root, "T1 別人在 trunk 轉正")
+    t1 = _na_head(root)
+    g("push", "-q", "--no-verify", "fork", "trunk")
+    g("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/trunk")
+    g("checkout", "-q", "-b", "feat2")
+    _nh_file(root, "notes/b.txt", "b\n")
+    _nh_commit(root, "feat2 無關")
+    n = _na_head(root)
+    g("checkout", "-q", "master")
+    _dr_hook_fakes(root)
+    stale = _nh_git(root, "rev-parse", "master@{upstream}").stdout.strip()
+    check("②前置:master 的 upstream 過期(停在 M0),從它算的範圍直接交給 lumos 會擋",
+          stale == m0 and _dr(root, "check", "--diff", f"{m0}..{n}")[0] == 1, stale)
+    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat2 {n} refs/heads/feat2 {z}\n", ("fork", str(bare)))
+    check("②主線叫 trunk:用遠端 HEAD(fork/trunk),從 T1 算,不擋", rc == 0 and "fork/HEAD" in ex and t1[:12] in ex,
+          f"rc={rc} {ex} {out[-500:]}")
+    # ③ 交叉合併
+    for order in ("主線先合", "分支先合"):
+        root, bare, g = _dr_push_repo()
+        g("checkout", "-q", "-b", "feat")
+        _nh_file(root, "notes/a.txt", "a\n")
+        _nh_commit(root, "feat 無關")
+        f1 = _na_head(root)
+        g("push", "-q", "--no-verify", "origin", "feat")
+        g("checkout", "-q", "main")
+        _dr_settle(root, "G")
+        _nh_commit(root, "M1 別人轉正")
+        m1 = _na_head(root)
+        # 主線把 feat(F1)合進去、feat 把 M1 合進來——兩邊互合,F1 與 M1 都是合併基底;先後兩種都跑
+        merges = [("main", f1), ("feat", m1)] if order == "主線先合" else [("feat", m1), ("main", f1)]
+        for br, other in merges:
+            g("checkout", "-q", br)
+            g("merge", "-q", "--no-ff", "--no-edit", "--no-verify", other)
+        g("checkout", "-q", "main")
+        g("push", "-q", "--no-verify", "origin", "main")
+        g("checkout", "-q", "feat")
+        f2 = _na_head(root)
+        bases = _nh_git(root, "merge-base", "--all", f2, "origin/main").stdout.split()
+        _dr_hook_fakes(root)
+        check(f"③前置({order}):兩個合併基底(F1 與 M1),原樣範圍直接交給 lumos 會擋",
+              sorted(bases) == sorted([f1, m1]) and _dr(root, "check", "--diff", f"{f1}..{f2}")[0] == 1, str(bases))
+        rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat {f2} refs/heads/feat {f1}\n", ("origin", str(bare)))
+        check(f"③交叉合併({order}):從不是遠端舊值祖先的那個基底(M1)算,不擋", rc == 0 and m1[:12] in ex,
+              f"rc={rc} {ex} {out[-500:]}")
+    # ④⑤ fork:origin 是自己的 fork(main 停在 M0),upstream 是正本;本地 main 追正本
+    import subprocess as sp
+    root, bare, g = _dr_push_repo()
+    m0 = _na_head(root)
+    canon = Path(tempfile.mkdtemp(prefix="gctl-dr-canon-")) / "c.git"
+    sp.run(["git", "init", "-q", "--bare", str(canon)], capture_output=True)
+    g("remote", "add", "upstream", str(canon))
+    g("push", "-q", "--no-verify", "-u", "upstream", "main")
+    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    _dr_settle(root, "G")
+    _nh_commit(root, "U1 別人在正本上轉正")
+    u1 = _na_head(root)
+    g("push", "-q", "--no-verify", "upstream", "main")
+    g("checkout", "-q", "-b", "feat")
+    _nh_file(root, "notes/f.txt", "f\n")
+    _nh_commit(root, "feat 無關")
+    fe = _na_head(root)
+    g("checkout", "-q", "main")
+    _dr_hook_fakes(root)
+    check("④前置:fork 的 main 停在 M0、本地 main 追正本(U1),原樣範圍 M0..U1 直接交給 lumos 會擋",
+          _nh_git(root, "rev-parse", "main@{upstream}").stdout.strip() == u1 and _dr(root, "check", "--diff", f"{m0}..{u1}")[0] == 1, "")
+    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/main {u1} refs/heads/main {m0}\n", ("origin", str(bare)))
+    check("④同步 fork 的 main(git push origin main):正本的 main 不是被推的那條,頂端已在它上面——沒有新東西,不擋",
+          rc == 0 and "沒有新東西" in ex, f"rc={rc} {ex} {out[-500:]}")
+    check("⑤前置:從 fork 的遠端 HEAD(M0)算的範圍 M0..F 直接交給 lumos 會擋", _dr(root, "check", "--diff", f"{m0}..{fe}")[0] == 1, "")
+    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat {fe} refs/heads/feat {'0' * 40}\n", ("origin", str(bare)))
+    check("⑤新功能分支首推到 fork:取最近的分岔點(正本的 U1),不擋", rc == 0 and u1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+
+
+# 推送閘接漂移檢查代碼審 r2 以前,CI 與健檢範本在 shell 裡補起點的寫法(只留著給測試證明現場:同一個輸入舊寫法會算錯)
+_DR_OLD_CI_FALLBACK = (
+    'if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then\n'
+    '  BEFORE="$(git rev-parse -q --verify "$SHA^1^{commit}" 2>/dev/null || git hash-object -t tree /dev/null)"\n'
+    'fi\n'
+    'python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --repo .\n')
+
+
+def _dr_ci_bodies():
+    """工具鏈 ci.yml 的 drift check 那步、健檢給消費專案的範本,兩段 run 的內容 → [(名稱, shell)]。"""
+    import re, textwrap as _tw
+    out = []
+    ci = Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+    if ci.is_file():
+        step = next((x for x in re.split(r"\n(?=      - )", ci.read_text(encoding="utf-8")) if "drift check --diff" in x), "")
+        mm = re.search(r"\n        run: \|\n((?:          .*\n?|\s*\n)+)", step)
+        out.append(("ci.yml", _tw.dedent(mm.group(1)) if mm else ""))
+    tpl, grab = [], False
+    for ln in _load_lumos_inproc()._DRIFT_CI_STEP.split("\n"):
+        if ln.strip() == "run: |":
+            grab = True
+            continue
+        if grab:
+            if not ln.startswith("        "):
+                break
+            tpl.append(ln)
+    out.append(("範本", _tw.dedent("\n".join(tpl)) + "\n"))
+    return out
+
+
+def _dr_ci_run(root, body, before, sha, ref, default_branch="main"):
+    """在 root 裡真的跑一段 CI shell:python/python3 換成轉給真 lumos 的殼 → (rc, 輸出)。
+    default_branch 是 Actions 給的 github.event.repository.default_branch(DEFAULT_BRANCH)。"""
+    import subprocess as sp, os as _os
+    fb = Path(tempfile.mkdtemp(prefix="gctl-dr-ci-py-"))
+    for nm in ("python", "python3"):
+        (fb / nm).write_text(f"#!/bin/bash\nshift\nexec {sys.executable} {Path(GRAPHCTL).resolve()} \"$@\"\n", encoding="utf-8")
+        _os.chmod(fb / nm, 0o755)
+    e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", BEFORE=before, SHA=sha, GITHUB_REF=ref,
+             DEFAULT_BRANCH=default_branch)
+    for k in ("GIT_DIR", "LUMOS_SKIP_DRIFT_CHECK"):
+        e.pop(k, None)
+    r = sp.run(["bash", "-e", "-c", body], cwd=str(root), capture_output=True, text=True, env=e, timeout=180)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _dr_actions_checkout(bare, branch):
+    """照 actions/checkout(fetch-depth: 0)的指令序列造 CI 工作目錄:git init、remote add、帶明確 refspec 的 fetch、
+    checkout -B。★不建 refs/remotes/origin/HEAD★(actions/checkout #2219);較新的 git 若自己補了就刪掉,還原 Actions 的樣子。"""
+    import subprocess as sp
+    wd = Path(tempfile.mkdtemp(prefix="gctl-dr-actions-"))
+
+    def g(*a):
+        return sp.run(["git", "-C", str(wd), *a], capture_output=True, text=True)
+    g("init", "-q")
+    for k, v in (("user.email", "t@t.t"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        g("config", k, v)
+    g("remote", "add", "origin", str(bare))
+    g("fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*")
+    g("checkout", "-q", "--force", "-B", branch, f"refs/remotes/origin/{branch}")
+    g("symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+    return wd, g
+
+
+def t_ci_drift_default_branch_shapes():
+    """CI 裡沒有 origin/HEAD(actions/checkout 不建)、預設分支不叫 main/master 時(推送閘接漂移檢查代碼審 r3 外家否決席 F1、
+    正確性席 F3):ci.yml 那步與健檢範本照 Actions 給的預設分支(DEFAULT_BRANCH)補上 origin/HEAD 再交給 lumos——
+    ①git-flow(預設分支 develop):功能分支合過 develop 再推、新分支首推,都不把 develop 上別人的轉正算進來;
+    ②預設分支叫 trunk、沒有 main/master:新分支首推不從空樹算。
+    工作目錄照 actions/checkout 的指令序列造,測試不自己補 origin/HEAD;每一種先證明不補(DEFAULT_BRANCH 空的)會擋。
+
+    翻紅釘:拿掉 ci.yml/範本裡補 origin/HEAD 那段 → ①②紅。
+    """
+    print("t_ci_drift_default_branch_shapes")
+    import subprocess as sp
+    _need_src(".github/workflows/ci.yml")
+    z = "0" * 40
+    bodies = _dr_ci_bodies()
+    # ① git-flow
+    root, bare, g = _dr_push_repo()
+    sp.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD", "refs/heads/develop"], capture_output=True)
+    g("checkout", "-q", "-b", "develop")
+    g("push", "-q", "--no-verify", "-u", "origin", "develop")
+    g("checkout", "-q", "-b", "feat")
+    _nh_file(root, "notes/a.txt", "a\n")
+    _nh_commit(root, "feat 無關")
+    f1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "develop")
+    _dr_settle(root, "G")
+    _nh_commit(root, "D1 別人在 develop 轉正")
+    d1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "develop")
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "--no-verify", "develop")
+    f2 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "-b", "nb", "develop")
+    _nh_file(root, "notes/n.txt", "n\n")
+    _nh_commit(root, "nb 無關")
+    nb = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "nb")
+    for name, body in bodies:
+        for label, br, before, sha in (("合過 develop 再推", "feat", f1, f2), ("新分支首推", "nb", z, nb)):
+            wd, wg = _dr_actions_checkout(bare, br)
+            has_head = wg("rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD").returncode == 0
+            rc0, out0 = _dr_ci_run(wd, body, before, sha, f"refs/heads/{br}", default_branch="")
+            check(f"①前置({name},{label}):Actions 樣子的工作目錄沒有 origin/HEAD,不補就把 develop 上別人的轉正算進來(擋)",
+                  not has_head and rc0 == 1, f"head={has_head} rc={rc0} {out0[-300:]}")
+            wd, wg = _dr_actions_checkout(bare, br)
+            rc, out = _dr_ci_run(wd, body, before, sha, f"refs/heads/{br}", default_branch="develop")
+            check(f"①{name}:git-flow {label},照預設分支補上 origin/HEAD,從 D1 算,不擋",
+                  rc == 0 and d1[:12] in out, f"rc={rc} {out[-400:]}")
+    # ② trunk
+    root, bare, g = _dr_push_repo(branch="trunk")
+    sp.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD", "refs/heads/trunk"], capture_output=True)
+    _dr_settle(root, "G")
+    _nh_commit(root, "T1 別人在 trunk 轉正")
+    t1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "trunk")
+    g("checkout", "-q", "-b", "nb")
+    _nh_file(root, "notes/n.txt", "n\n")
+    _nh_commit(root, "nb 無關")
+    nb = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "nb")
+    for name, body in bodies:
+        wd, wg = _dr_actions_checkout(bare, "nb")
+        rc0, out0 = _dr_ci_run(wd, body, z, nb, "refs/heads/nb", default_branch="")
+        check(f"②前置({name}):沒有 origin/HEAD、沒有 main/master,不補就從空樹算、把 trunk 上別人的轉正算進來(擋)",
+              rc0 == 1 and "空樹" in out0, f"rc={rc0} {out0[-300:]}")
+        wd, wg = _dr_actions_checkout(bare, "nb")
+        rc, out = _dr_ci_run(wd, body, z, nb, "refs/heads/nb", default_branch="trunk")
+        check(f"②{name}:預設分支叫 trunk,補上 origin/HEAD 後從 T1 算,不擋", rc == 0 and t1[:12] in out, f"rc={rc} {out[-400:]}")
+
+
+def t_drift_check_push_start_edges():
+    """推送起點的兩個邊(推送閘接漂移檢查代碼審 r3):
+    ①--push-remote 與 --pushed-ref 只給一個 → 回 2 並說明(外家 finder F1:只給遠端名時不知道推的是哪條,
+      推主線本身會被判成「頂端已在主線」整步跳過);
+    ②舊值或主線候選的 git 查詢本身失敗(逾時、跑不起來)→ 照「判不了」處理:block 擋、warn 印,不退成「只查最後一個提交」
+      (併發回滾席 F1)。先證明注入的失敗真的打到那一次查詢,而且範圍裡較早的提交有要處理的轉正。
+
+    翻紅釘:只給一個也放行 → ①紅;查詢失敗當成找不到(退回父提交)→ ②紅。
+    """
+    print("t_drift_check_push_start_edges")
+    import contextlib, io, json as _j
+    m = _load_lumos_inproc()
+    root, _bare, g = _dr_push_repo(guards=("G",))
+    head = _na_head(root)
+    for extra in (("--push-remote", "origin"), ("--pushed-ref", "refs/heads/main")):
+        rc, out = _dr(root, "check", "--diff", f"{head}..{head}", *extra)
+        check(f"①只給 {extra[0]} → 回 2,說明兩個要一起給", rc == 2 and "要一起給" in out, f"rc={rc} {out[-300:]}")
+    # ② 沒有可用主線(推主線本身,候選都是被推的那條),舊值在本機;轉正在舊值之後的第一個提交、頂端無關
+    g("checkout", "-q", "main")
+    c2 = _na_head(root)
+    _dr_settle(root, "G")
+    _nh_commit(root, "c3 轉正,預告句留著")
+    c3 = _na_head(root)
+    _nh_file(root, "notes/c4.txt", "c4\n")
+    _nh_commit(root, "c4 無關")
+    c4 = _na_head(root)
+    orig = m._lens_git
+    fail_on = {"rev": ""}
+
+    def fake(repo_root, *args, **kw):
+        if fail_on["rev"] and args[:1] == ("rev-parse",) and any(a == fail_on["rev"] for a in args):
+            return None
+        return orig(repo_root, *args, **kw)
+
+    def run_check(rev):
+        fail_on["rev"] = rev
+        err = io.StringIO()
+        m._lens_git = fake
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = m.cmd_drift_check(repo=str(root), diff_range=f"{c2}..{c4}", push_remote="origin", pushed_ref="refs/heads/main")
+        finally:
+            m._lens_git = orig
+            fail_on["rev"] = ""
+        return rc, err.getvalue()
+
+    check("②前置:c3 的轉正在範圍裡(c2..c4 會擋),只看最後一個提交(c3..c4)就漏掉",
+          _dr(root, "check", "--diff", f"{c2}..{c4}")[0] == 1 and _dr(root, "check", "--diff", f"{c3}..{c4}")[0] == 0, "")
+    fail_on["rev"] = f"{c2}^{{commit}}"
+    hit = fake(root, "rev-parse", "--verify", "-q", f"{c2}^{{commit}}")
+    fail_on["rev"] = ""
+    real = fake(root, "rev-parse", "--verify", "-q", f"{c2}^{{commit}}")
+    check("②前置:注入的失敗打到查舊值那一次(回 None=逾時或跑不起來),不注入時查得到",
+          hit is None and real is not None and real.stdout.strip() == c2, str(hit))
+    rc, err = run_check(f"{c2}^{{commit}}")
+    check("②查舊值時 git 逾時 → 判不了、block 擋(不退成只查最後一個提交)", rc == 1 and "判不了" in err and "起點算不出來" in err,
+          f"rc={rc} {err[-400:]}")
+    rc, err = run_check("refs/remotes/origin/HEAD^{commit}")
+    check("②查主線候選時 git 逾時 → 判不了、block 擋", rc == 1 and "判不了" in err and "主線候選" in err, f"rc={rc} {err[-400:]}")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "warn"}}), encoding="utf-8")
+    _nh_commit(root, "warn")
+    c5 = _na_head(root)
+    fail_on["rev"] = f"{c2}^{{commit}}"
+    err = io.StringIO()
+    m._lens_git = fake
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{c2}..{c5}", push_remote="origin", pushed_ref="refs/heads/main")
+    finally:
+        m._lens_git = orig
+        fail_on["rev"] = ""
+    check("②warn 模式:判不了照印、不擋", rc == 0 and "判不了" in err.getvalue(), f"rc={rc} {err.getvalue()[-300:]}")
+
+
+def t_ci_drift_start_shapes():
+    """CI 那步與健檢範本(兩段 shell 真的跑、lumos 是真的)的起點(推送閘接漂移檢查代碼審 r2 正確性席 F1、外家否決席 F2、
+    邊界席 F2、架構席 F2):before 原樣交、帶 --push-remote origin --pushed-ref $GITHUB_REF,由 lumos 算——
+    ①功能分支合過主線再推,before 找得到 → 不把主線上別人的轉正算進來;②新分支首推、頂端是合主線的合併提交 → 不擋;
+    ③新分支首推一次帶多個提交、轉正在第一個 → 擋;④推主線本身(origin/main 已等於頂端)→ 候選都是被推的那條、跳過,
+    用 before,轉正照擋、不會變成「沒有新東西」;⑤before 找不到、主線也找不到 → 退到頂端的父提交(沒有父從空樹),說明照實講。
+    ①②③各先證明舊的 shell 補法在同一個輸入會算錯。
+
+    翻紅釘:CI/範本改回 shell 補法 → ①②③紅;拿掉「跳過被推的那條」→ ④紅。
+    """
+    print("t_ci_drift_start_shapes")
+    _need_src(".github/workflows/ci.yml")
+    z = "0" * 40
+    root, _bare, g = _dr_push_repo(guards=("G", "G2", "G3"))
+    g("checkout", "-q", "-b", "feat")
+    _nh_file(root, "notes/a.txt", "a\n")
+    _nh_commit(root, "feat 無關")
+    f1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "main")
+    _dr_settle(root, "G")
+    _nh_commit(root, "M1 別人轉正")
+    m1 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "main")
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "--no-verify", "main")
+    f2 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "feat")
+    g("checkout", "-q", "-b", "x", "main")
+    _dr_settle(root, "G2")
+    _nh_commit(root, "X1 自己轉正,預告句留著")
+    _nh_file(root, "notes/x.txt", "x\n")
+    _nh_commit(root, "X2 無關")
+    x2 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "x")
+    g("checkout", "-q", "main")
+    bodies = _dr_ci_bodies()
+    check("前置:ci.yml 與範本兩段都抽得出來,而且都帶推送參數", len(bodies) == 2 and all(
+        '--push-remote origin --pushed-ref "$GITHUB_REF"' in b for _n, b in bodies), str(bodies))
+    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, f1, f2, "refs/heads/feat")[0]
+    check("①前置:舊的 shell 補法在「合過主線、before 找得到」會擋", old == 1, f"rc={old}")
+    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, z, f2, "refs/heads/feat")[0]
+    check("②前置:舊的 shell 補法在「新分支首推、頂端是合主線的合併提交」會擋", old == 1, f"rc={old}")
+    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, z, x2, "refs/heads/x")[0]
+    check("③前置:舊的 shell 補法在「新分支首推多個提交、轉正在第一個」放行(只查最後一個提交)", old == 0, f"rc={old}")
+    for name, body in bodies:
+        rc, out = _dr_ci_run(root, body, f1, f2, "refs/heads/feat")
+        check(f"①{name}:合過主線再推,從分岔點 M1 算,不擋", rc == 0 and m1[:12] in out, f"rc={rc} {out[-500:]}")
+        rc, out = _dr_ci_run(root, body, z, f2, "refs/heads/feat")
+        check(f"②{name}:新分支首推、頂端是合主線的合併提交,不擋", rc == 0 and m1[:12] in out, f"rc={rc} {out[-500:]}")
+        rc, out = _dr_ci_run(root, body, "", x2, "refs/heads/x")
+        check(f"③{name}:新分支首推(before 空的)一次帶多個提交、轉正在第一個 → 擋", rc == 1 and m1[:12] in out,
+              f"rc={rc} {out[-500:]}")
+    _dr_settle(root, "G3")
+    _nh_commit(root, "M2 主線本身的轉正")
+    m2 = _na_head(root)
+    g("push", "-q", "--no-verify", "origin", "main")
+    check("④前置:origin/main 已等於頂端,而且 M1..M2 有轉正(直接交給 lumos 會擋)",
+          _nh_git(root, "rev-parse", "origin/main").stdout.strip() == m2 and _dr(root, "check", "--diff", f"{m1}..{m2}")[0] == 1, "")
+    for name, body in bodies:
+        rc, out = _dr_ci_run(root, body, m1, m2, "refs/heads/main")
+        check(f"④{name}:推主線本身,用 before,轉正照擋(不會變成「沒有新東西」)", rc == 1 and "沒有新東西" not in out,
+              f"rc={rc} {out[-500:]}")
+    m = _load_lumos_inproc()
+    empty = m._EMPTY_TREE_SHA
+    first = _nh_git(root, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
+    s, why = m._push_range_start(root, "de" * 20, m2, "origin", "refs/heads/main")
+    check("⑤before 找不到、主線也找不到 → 頂端的第一個父提交,說明寫「只查最後一個提交」", s == m1 and "只查最後一個提交" in why,
+          f"{s} {why}")
+    s, why = m._push_range_start(root, "de" * 20, first, "origin", "refs/heads/main")
+    check("⑤頂端沒有父提交 → 空樹", s == empty and "空樹" in why, f"{s} {why}")
+    s, why = m._push_range_start(root, z, first, "origin", "refs/heads/main")
+    check("⑤全 0、主線找不到 → 空樹", s == empty and "空樹" in why, f"{s} {why}")
+    s, why = m._push_range_start(root, z, m1, "origin", "refs/heads/x")
+    check("⑤頂端已在主線上 → 沒有新東西(None)", s is None and "沒有新東西" in why, f"{s} {why}")
+
+
 def t_drift_unknown_blocks_check_not_scan():
     """[S2] check 判不了(git 算不出範圍事件)→ 算要處理、印原因(block 模式 rc1)。
 
@@ -52297,8 +53162,11 @@ def t_ci_runs_python314_and_old_syntax_check():
     check("②CI 裝釘版本的 ruff、以 py39 查三類檔的語法錯誤", "ruff==" in ci and "--target-version py39 --select E9" in ci
           and all(f in ci for f in ("scripts/lumos", "scripts/merge-claude-settings.py", "scripts/hooks/claude/*.py")), "")
     src = Path(GRAPHCTL).read_text(encoding="utf-8")
-    check("③doctor 三處 CI 步驟提示都接上「要在 3.14 上跑」", src.count("+ _CI_PY314_NOTE") == 3 and "3.14" in src[src.index("_CI_PY314_NOTE = "):][:200],
-          str(src.count("+ _CI_PY314_NOTE")))
+    # 存量漂移那處把這句寫成範本裡的 YAML 註解(推送閘接漂移檢查代碼審 r2 外家否決席:貼進 workflow 要能解析),不接共用那句
+    drift_tpl = src[src.index("_DRIFT_CI_STEP = "):][:1500]
+    check("③doctor 三處 CI 步驟提示都講明「要在 3.14 上跑」(兩處接共用那句、漂移那處寫在範本的註解裡)",
+          src.count("+ _CI_PY314_NOTE") == 2 and "3.14" in src[src.index("_CI_PY314_NOTE = "):][:200]
+          and '# 這一步要在 Python 3.14 上跑' in drift_tpl, str(src.count("+ _CI_PY314_NOTE")))
 
 
 def t_lumos_parses_under_old_grammar():

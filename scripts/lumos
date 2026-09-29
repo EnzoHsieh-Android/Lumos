@@ -25759,9 +25759,11 @@ def _note_audit_covered(cls):
     return cls in ("CONTEXT", "SKIP")
 
 
-def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=None):
+def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=None, push=None):
     """--diff 範圍 → (base_where, tip, vault_rel) 或 (None, rc, None)。起點照三道檢查共用的 _lens_push_base,
-    再截到上線點(推送前掛鉤的標記;預設是第二層的,存量漂移檢查傳自己的)。"""
+    再截到上線點(推送前掛鉤的標記;預設是第二層的,存量漂移檢查傳自己的)。
+    push=(遠端名, 遠端 ref) 時範圍的起點當成遠端舊值,改由 _push_range_start 算(存量漂移檢查的 --push-remote/--pushed-ref),
+    說明一定印一行。"""
     rg = _lens_range_ok(diff_range)
     if rg is None:
         print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有", file=sys.stderr)
@@ -25781,13 +25783,17 @@ def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=Non
         # 放行等於整道檢查沒跑(代碼審 r1 外家席),所以當參數錯
         print(f"擋下:範圍 {diff_range} 的終點在本機找不到——範圍寫錯了?", file=sys.stderr)
         return None, 2, None
-    base, why = _lens_push_base(root, a, tip)
+    base, why = _note_audit_start(root, a, tip, push)
     if why:
         print(f"{gate_word}:{why}", file=sys.stderr)
     if base is None:
         _gate_event_or_warn(root, gate, "skipped", why)
         return None, 0, None
-    base = _nodehome_clamp_base(root, base, tip, mark or _NOTE_AUDIT_GOLIVE_MARK, _NOTELINES_PREPUSH)
+    if base == _PUSH_START_UNKNOWN:
+        # 起點算不出來(git 查詢失敗):不截上線點、不查;回 (判不了, 說明) 給呼叫端照「判不了」處理(推送閘接漂移檢查代碼審 r3)
+        base = (_PUSH_START_UNKNOWN, why)
+    else:
+        base = _nodehome_clamp_base(root, base, tip, mark or _NOTE_AUDIT_GOLIVE_MARK, _NOTELINES_PREPUSH)
     lst = _nodehome_list(root, tip)
     if lst is None:
         return None, 0, None
@@ -25799,6 +25805,14 @@ def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=Non
     wv_rel = wv.resolve().relative_to(root.resolve()).as_posix() if wv is not None else None
     vault_rel = wv_rel if (wv_rel and wv_rel.startswith("docs/") and wv_rel.split("/", 1)[1] in vaults) else "docs/" + vaults[0]
     return (None if base == _EMPTY_TREE_SHA else base), tip, vault_rel
+
+
+def _note_audit_start(root, a, tip, push):
+    """起點:push=(遠端名, 遠端 ref) 走 _push_range_start(說明前面加「起點——」),沒有走共用的 _lens_push_base。"""
+    if push is None:
+        return _lens_push_base(root, a, tip)
+    base, why = _push_range_start(root, a, tip, push[0], push[1])
+    return base, f"起點——{why}"
 
 
 def _note_audit_root(repo):
@@ -28235,9 +28249,11 @@ def _drift_print_findings(rows, stream, acks=None, alive=None):
         print(f"  …還有 {len(rows) - 20} 筆", file=stream)
 
 
-def cmd_drift_check(repo=None, diff_range=None):
+def cmd_drift_check(repo=None, diff_range=None, push_remote=None, pushed_ref=None):
     """lumos drift check --diff A..B:推送前與 CI 的閘(閘名 drift-check)。有「要處理」的 rc1(warn 只印 rc0);
-    只有「只列出」的 rc0;參數錯 rc2;判不了的(git 失敗、逾時、預算用完)算要處理——放行等於一條繞過的路。"""
+    只有「只列出」的 rc0;參數錯 rc2;判不了的(git 失敗、逾時、預算用完)算要處理——放行等於一條繞過的路。
+    帶 --push-remote 與 --pushed-ref(推送前掛鉤與 CI 用,要一起給,只給一個回 2):A 當成遠端舊值,起點由
+    _push_range_start 算,git 查詢失敗算不出起點時照「判不了」處理;都沒帶照共用起點判法(_lens_push_base),行為不變。"""
     import time as _t
     root = _note_audit_root(repo)
     if root is None:
@@ -28247,8 +28263,13 @@ def cmd_drift_check(repo=None, diff_range=None):
         print("存量漂移檢查:LUMOS_SKIP_DRIFT_CHECK 設了,這次跳過(已記進治理帳;CI 照查)", file=sys.stderr)
         _gate_event_or_warn(root, "drift-check", "skipped-env", "LUMOS_SKIP_DRIFT_CHECK")
         return 0
+    if (push_remote is None) != (pushed_ref is None):
+        # 只給一個會算錯(r3 外家 finder:只給遠端名時不知道推的是哪條,推主線本身會被判成「頂端已在主線」整步跳過)
+        print("擋下:--push-remote 與 --pushed-ref 要一起給(推送前掛鉤與 CI 用;手動跑兩個都不給)", file=sys.stderr)
+        return 2
+    push = None if push_remote is None else (push_remote, pushed_ref)
     base, tip, vault_rel = _note_audit_resolve(root, diff_range, "存量漂移檢查", gate="drift-check",
-                                               mark=_DRIFT_GOLIVE_MARK)
+                                               mark=_DRIFT_GOLIVE_MARK, push=push)
     if tip is None or isinstance(tip, int):
         return tip if isinstance(tip, int) else 0
     mode, warns, _explicit = _drift_config(_nodehome_reader(root, tip)(".lumos/config.json"))
@@ -28257,8 +28278,11 @@ def cmd_drift_check(repo=None, diff_range=None):
     if mode == "off":
         print("存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", file=sys.stderr)
         return 0
-    must, listed, unknown = _drift_check_core(root, base, tip, vault_rel,
-                                              deadline=_t.monotonic() + _DRIFT_BUDGET_SEC)
+    if isinstance(base, tuple):       # 推送起點算不出來:判不了,算要處理(block 擋、warn 印)
+        must, listed, unknown = [], [], [f"推送範圍的起點算不出來({base[1]})"]
+    else:
+        must, listed, unknown = _drift_check_core(root, base, tip, vault_rel,
+                                                  deadline=_t.monotonic() + _DRIFT_BUDGET_SEC)
     acks = _drift_load_acks(root, tip)
     must, _acked_m = _drift_split_acked(must, acks, vault_rel)
     listed, _acked_l = _drift_split_acked(listed, acks, vault_rel)
@@ -28432,9 +28456,34 @@ def _drift_gate_doctor_lines(repo_root):
     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
     if wired and ymls and "drift check" not in body:
         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
-                   "\n    - run: python3 scripts/lumos drift check --diff \"${{ github.event.before || "
-                   "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"" + _CI_PY314_NOTE)
+                   + _DRIFT_CI_STEP)
     return out
+
+
+# doctor 給消費專案貼的 CI 步驟:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF",
+# 起點由 lumos 的 _push_range_start 算(推送閘接漂移檢查代碼審 r2:原本的 shell 補法在合過主線、新分支首推一次帶多個提交時算錯)。
+# 補 before、補 origin/HEAD、呼叫 drift check 那幾行跟工具鏈自己的 .github/workflows/ci.yml 那步逐字相同——只差直譯器名
+# (ci.yml 用 python、這裡用 python3)與 ci.yml 接在後面的回傳碼處理(t_doctor_drift_ci_template_start_fallback 比對並真的跑一次)。
+# ★說明寫成 YAML 註解、縮排對齊步驟★(代碼審 r2 外家否決席):整段貼進 workflow 的 steps 底下要能被解析;
+# Python 3.14 那句也寫成註解,不接共用的 _CI_PY314_NOTE(另兩處範本的同一個問題另開 Issue)。
+_DRIFT_CI_STEP = """
+    - name: drift check
+      if: github.event_name == 'push'
+      env:
+        BEFORE: ${{ github.event.before }}
+        SHA: ${{ github.sha }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
+        if [ -n "$DEFAULT_BRANCH" ] && ! git rev-parse -q --verify refs/remotes/origin/HEAD >/dev/null && git rev-parse -q --verify "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
+          git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT_BRANCH"
+        fi
+        python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo .
+    # checkout 要設 fetch-depth: 0。起點由 lumos 算:跟主線最近的分岔點與 before 取比較新的;
+    # checkout 不建 origin/HEAD,上面照 GitHub 給的預設分支補上,預設分支不叫 main/master 也找得到主線。
+    # 回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;
+    # 其他非零是工具出錯或參數錯,也會紅——工具出錯時寧可紅。
+    # 這一步要在 Python 3.14 上跑:actions/setup-python 的 python-version 設 "3.14";lumos 的最低版本是 3.14,舊版會回 2 並說明。"""
 
 
 # ── 考試 ─────────────────────────────────────────────────────────────────────────────
@@ -33046,7 +33095,10 @@ def _lens_push_base(repo_root, a, tip):
     跟筆記內容審只防疏忽同一條線,不在這道後盾要防的範圍(呼叫端回 None 時記一筆 skipped 帳,事後看得到)。
     ★不能直接回「範圍找不到、放行」★:照 doctor 給的 CI 步驟貼的消費專案,新分支首推會整批放過(2026-09-28 漏網
     ESC-61fc2d87);★也不能一律當空樹★:新分支開在主線頂端時會把主線上線後的舊帳當新增誤擋(同一件事的代碼審)。
-    明寫空樹的起點照原意(從空樹比)。筆記形狀擋與每支檔有家共用這支。"""
+    明寫空樹的起點照原意(從空樹比)。筆記形狀擋與每支檔有家共用這支。
+    ★推送前掛鉤與 CI 的存量漂移檢查不走這支★,走 _push_range_start(帶 --push-remote/--pushed-ref):這支在合過主線、
+    沒設 upstream、CI 已 fetch 時會算錯(推送閘接漂移檢查代碼審 r1 到 r3)。兩支並存到那三道驗過合過主線的形狀為止,
+    收斂路(驗過就改用 _push_range_start)記在 Issues/推送前其他閘的範圍在合過主線時會多算;改這支的規則時先看那支。"""
     if a == _EMPTY_TREE_SHA:
         return a, ""
     if not _ZERO_SHA_RE.fullmatch(a or ""):
@@ -33063,6 +33115,152 @@ def _lens_push_base(repo_root, a, tip):
         if mb is not None and mb.returncode == 0 and mb.stdout.strip():
             return mb.stdout.strip(), f"{why}:從跟主線({ml[0]})的分岔點算"
     return _EMPTY_TREE_SHA, f"{why}:找不到主線,從空樹算(截到上線點)"
+
+
+_PUSH_START_UNKNOWN = "判不了"      # _push_range_start 的起點:git 查詢本身失敗(跑不起來、逾時),不是「查了沒有」
+
+
+def _push_rev(repo_root, rev):
+    """rev 解成提交 → (sha 或 None, 查詢本身失敗了嗎)。git 跑不起來或逾時(_lens_git 回 None)算失敗——失敗不能當成
+    「沒有」(推送閘接漂移檢查代碼審 r3 併發回滾席);git 有跑完而回非 0 算查不到(`master@{upstream}` 在沒有 master 時回 128、
+    不存在的提交回 1,回傳碼分不出「沒有」與其他錯,所以只認跑不起來與逾時)。"""
+    r = _lens_git(repo_root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+    if r is None:
+        return None, True
+    if r.returncode == 0:
+        sha = r.stdout.strip()
+        return (sha, False) if _LENS_SHA_RE.match(sha) else (None, True)
+    return None, False
+
+
+def _push_mainline_full(repo_root, cand):
+    """主線候選實際指到的遠端追蹤 ref 全名(refs/remotes/<遠端>/<分支>)→ (全名或 None, 查詢失敗了嗎)。
+    遠端 HEAD 用 symbolic-ref 解;X@{upstream} 用 rev-parse --symbolic-full-name 解;其他候選本身就是全名。
+    git 跑不起來或逾時算失敗;有跑完而回非 0(遠端 HEAD 不是捷徑)算「判不出」、不跳過。"""
+    if cand.startswith("refs/remotes/") and not cand.endswith("/HEAD"):
+        return cand, False
+    args = ("symbolic-ref", "-q", cand) if cand.startswith("refs/remotes/") else ("rev-parse", "--symbolic-full-name", cand)
+    r = _lens_git(repo_root, *args)
+    if r is None:
+        return None, True
+    if r.returncode != 0:
+        return None, False
+    return (r.stdout.strip() or None), False
+
+
+def _push_mainlines(repo_root, remote, pushed_ref):
+    """推送的主線候選 → ([(候選名, sha)], 查詢失敗的說明或 "")。候選:refs/remotes/<遠端>/HEAD、main@{upstream}、
+    master@{upstream}、<遠端>/main、<遠端>/master(沒給遠端名跳過帶遠端的);找得到的全部回,不取第一個
+    (推送閘接漂移檢查代碼審 r3:照順序取第一個,git-flow 與 fork 兩頭顧不到,改由 _push_range_start 取最近的分岔點)。
+    ★跳過「就是這次被推的那條」★:候選指到的 refs/remotes/<遠端>/<分支> 跟 refs/remotes/<--push-remote>/<被推分支>
+    完全相同才跳過——遠端與分支都要比(r3 正確性席:只比分支短名時,推 fork 的 main 會把正本的 main 也跳過)。
+    跟 _mainline_ref(筆記形狀擋、每支檔有家、筆記內容審用的主線判法,只認 main/master 的 upstream)並存,理由與收斂路見
+    Issues/推送前其他閘的範圍在合過主線時會多算。"""
+    pushed = pushed_ref[len("refs/heads/"):] if (pushed_ref or "").startswith("refs/heads/") else None
+    target = f"refs/remotes/{remote}/{pushed}" if (remote and pushed) else None
+    cands = ([f"refs/remotes/{remote}/HEAD"] if remote else []) + ["main@{upstream}", "master@{upstream}"] \
+        + ([f"refs/remotes/{remote}/main", f"refs/remotes/{remote}/master"] if remote else [])
+    out = []
+    for cand in cands:
+        sha, failed = _push_rev(repo_root, cand)
+        if failed:
+            return [], f"查主線候選 {cand} 時 git 失敗或逾時"
+        if not sha:
+            continue
+        if target is not None:
+            full, failed = _push_mainline_full(repo_root, cand)
+            if failed:
+                return [], f"解主線候選 {cand} 指到哪條分支時 git 失敗或逾時"
+            if full == target:
+                continue
+        out.append((cand, sha))
+    return out, ""
+
+
+def _push_range_start(repo_root, old, tip, remote, pushed_ref):
+    """推送前掛鉤與 CI 的範圍起點 → (起點 sha、None 或 _PUSH_START_UNKNOWN, 說明)。None=頂端已在主線上、沒有新東西;
+    _PUSH_START_UNKNOWN=git 查詢本身失敗,呼叫端照「判不了」處理(算要處理)。
+    old 是遠端舊值(40/64 個 0=新分支首推;本機可能找不到=force push 蓋掉的舊頂端),remote 是推送的遠端名,
+    pushed_ref 是遠端那一側的 ref(refs/heads/X、refs/tags/Y)。
+    ★起點只在這裡算一處★(推送閘接漂移檢查代碼審 r2:掛鉤的 bash、CI 的 shell 補法、工具端各算一份,三份各有洞)。
+    跟 _lens_push_base(不帶 --push-remote/--pushed-ref 的共用起點判法,每支檔有家、筆記形狀擋、筆記內容審在用)並存:
+    那三道還沒驗證合過主線時會不會多算,收斂路(驗過就改用這支)記在 Issues/推送前其他閘的範圍在合過主線時會多算。
+    - 主線候選照 _push_mainlines 全部取;頂端在任一候選上(是它的祖先或相等)→ None。
+    - 分岔點:`git merge-base --all <頂端> <候選一> <候選二>…`——頂端跟「所有候選合起來」的最佳共同祖先,
+      也就是不是別的共同祖先的祖先、離頂端最近的那幾個;不靠候選順序(r3:git-flow 的 develop 比過期的 main 新、
+      fork 的正本 main 比 fork 自己的 main 新,固定順序兩頭顧不到)。
+    - 找不到主線(或跟主線沒有共同祖先):舊值找得到用舊值;全 0 從空樹算;舊值找不到退到頂端的第一個父提交
+      (沒有父提交從空樹),只查最後一個提交——說明照實講。
+    - 舊值找得到而且每一個分岔點都是舊值的祖先 → 用舊值(一般增量);否則在不是舊值祖先的分岔點裡取歷史最長的那個
+      (合過主線、重定基底、交叉合併)。舊值不在時同樣取歷史最長的分岔點。
+    - 舊值、主線候選、合併基底、父提交的 git 查詢本身失敗(跑不起來、逾時)→ _PUSH_START_UNKNOWN,不退成少查
+      (r3 併發回滾席:原本逾時被當成「找不到」,縮成只查最後一個提交)。"""
+    if old == _EMPTY_TREE_SHA:
+        return old, "起點是空樹,從空樹比"
+    zero = bool(_ZERO_SHA_RE.fullmatch(old or ""))
+    old_sha = None
+    if not zero:
+        old_sha, failed = _push_rev(repo_root, old)
+        if failed:
+            return _PUSH_START_UNKNOWN, "查遠端舊值時 git 失敗或逾時"
+    mls, err = _push_mainlines(repo_root, remote, pushed_ref)
+    if err:
+        return _PUSH_START_UNKNOWN, err
+    for name, sha in mls:
+        anc = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, sha)
+        if anc is not None and anc.returncode == 0:
+            return None, f"頂端已在主線({name})上——沒有新東西"
+    names = "、".join(n for n, _s in mls)
+    bases = []
+    if mls:
+        mb = _lens_git(repo_root, "merge-base", "--all", tip, *[s for _n, s in mls])
+        if mb is None:
+            return _PUSH_START_UNKNOWN, f"算頂端跟主線({names})的分岔點時 git 失敗或逾時"
+        bases = [b for b in mb.stdout.split() if _LENS_SHA_RE.match(b)]
+    if not bases:
+        why = f"跟主線({names})沒有共同祖先" if mls else \
+            "找不到主線(遠端預設分支、main/master 的 upstream、遠端 main/master 都沒有,或就是這次推的那條)"
+        return _push_no_mainline(repo_root, why, old_sha, zero, tip)
+    return _push_pick_base(repo_root, bases, old_sha, names, "新分支首推" if zero else "遠端舊值在本機找不到")
+
+
+def _push_no_mainline(repo_root, why, old_sha, zero, tip):
+    """找不到可用的主線:舊值找得到用舊值;全 0 從空樹算;舊值找不到退到頂端的第一個父提交(沒有父提交從空樹)。"""
+    if old_sha:
+        return old_sha, f"{why},用遠端舊值 {old_sha[:12]} 當起點"
+    if zero:
+        return _EMPTY_TREE_SHA, f"{why},新分支首推:從空樹算(截到上線點)"
+    par, failed = _push_rev(repo_root, f"{tip}^1")
+    if failed:
+        return _PUSH_START_UNKNOWN, f"{why},遠端舊值在本機找不到,查頂端的父提交時 git 失敗或逾時"
+    if par:
+        return par, f"{why},遠端舊值在本機找不到:從頂端的第一個父提交 {par[:12]} 算,只查最後一個提交"
+    return _EMPTY_TREE_SHA, f"{why},遠端舊值在本機找不到、頂端沒有父提交:從空樹算"
+
+
+def _push_pick_base(repo_root, bases, old_sha, names, what):
+    """分岔點(merge-base --all 的結果,彼此都不是祖先)→ (起點, 說明)。
+    舊值找得到而且每一個分岔點都是舊值的祖先(或相等)→ 用舊值;否則在不是舊值祖先的分岔點裡取歷史最長的
+    (rev-list --count 最大——彼此不是祖先時沒有「最近」的全序,取歷史最長的那個讓結果不隨 git 列出的順序變;同長取先列的)。
+    git 判不了(逾時)的分岔點當成不是舊值祖先——寧可多查自己上次推過的,也不把舊值之後主線合進來的算成這次的。"""
+    pool = bases
+    if old_sha:
+        pool = []
+        for b in bases:
+            r = _lens_git(repo_root, "merge-base", "--is-ancestor", b, old_sha)
+            if r is None or r.returncode != 0:
+                pool.append(b)
+        if not pool:
+            return old_sha, f"一般增量推送:從遠端舊值 {old_sha[:12]} 算"
+    best, best_n = pool[0], -1
+    if len(pool) > 1:
+        for b in pool:
+            r = _lens_git(repo_root, "rev-list", "--count", b)
+            n = int(r.stdout.strip()) if (r is not None and r.returncode == 0 and r.stdout.strip().isdigit()) else -1
+            if n > best_n:
+                best, best_n = b, n
+    lead = f"遠端舊值跟主線({names})分岔(合過主線或重定基底)" if old_sha else what
+    return best, f"{lead}:從跟主線({names})最近的分岔點 {best[:12]} 算"
 
 
 def _lens_git(repo_root, *args, quote=False, binary=False):
@@ -33090,7 +33288,9 @@ def _lens_full_sha(repo_root, rev):
 def _mainline_ref(repo_root, remote_only=False):
     """主線 tip:本地 main/master 的 upstream 優先(r3:remote 未必叫 origin),沒設 upstream 才用本地分支。
     回 (ref 名, sha) 或 None。remote_only=True 只認 upstream(筆記形狀擋:推主線時本地 main 就是要推的頂端,
-    拿它當「已在主線上」會把整批都排除掉)。"""
+    拿它當「已在主線上」會把整批都排除掉)。
+    存量漂移檢查的推送起點另用 _push_mainlines(遠端 HEAD、遠端 main/master 也算候選、跳過被推的那條、全部候選一起算分岔點);
+    兩套並存的理由與收斂路見 _lens_push_base 的說明。"""
     for cand in (("main@{upstream}", "master@{upstream}") if remote_only else ("main@{upstream}", "master@{upstream}", "main", "master")):
         sha = _lens_full_sha(repo_root, cand)
         if sha:
@@ -37573,6 +37773,10 @@ def main():
     drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;warn 模式只印)")
     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
     drc.add_argument("--repo", dest="dr_repo", default=None)
+    drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",
+                     help="推送前掛鉤與 CI 用(跟 --pushed-ref 一起給):--diff 的起點當成遠端舊值,改從跟主線最近的分岔點算")
+    drc.add_argument("--pushed-ref", dest="dr_pushed_ref", default=None, metavar="ref",
+                     help="這次推的遠端 ref(refs/heads/X;跟 --push-remote 一起給);找主線時跳過就是這條的候選")
     drs = drsub.add_parser("scan", help="健檢整份圖譜跟狀態對不上的地方(不擋、不寫帳)")
     drs.add_argument("--at", dest="dr_at", default=None, metavar="提交", help="看某個提交的圖譜(預設工作目錄)")
     drs.add_argument("--json", dest="dr_json", action="store_true")
@@ -37819,7 +38023,8 @@ def main():
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
         if args.drcmd == "check":
-            return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff)
+            return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
+                                   pushed_ref=args.dr_pushed_ref)
         if not args.dr_history and not args.dr_exam:
             print("擋下:lumos drift exam 要給考卷,或帶 --history N", file=sys.stderr)
             return 2
