@@ -49,7 +49,7 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
      --refuted-set <id=理由串|none> [--intake <rN-intake.md>] \
      --report <rN-席.md> --snapshot <rN-snapshot.md> --spec <計劃.md> --reviewed <sha256> --scope-lines <行數>
    ```
-   - light 分級不帶 `--round`(單人不分輪;帶了 `loop status --light` 會拒讀)。
+   - light 分級不帶 `--round`(單人不分輪;帶了 `loop status --light` 會拒讀),**也不記處置帳**:各席只記 severity/findings/report 留痕,不帶三個 set(處置帳必須綁輪次,不帶輪次會被擋);light 閘只判末筆 ≤minor,minor 的去向寫進計劃「審計修正紀錄」。出 major 照規則升級成 -std,處置帳在那邊記([[Issues/輕量設計審手冊叫人記處置帳但工具不收]])。
    - carrier 必帶 `--refuted-set`:編排者機械重現不到、沒折也沒放行的發現;none=這輪 0 條;非 none 要帶 --intake,每個 id 要在 intake 重現表**同一列**出現(整字比對+HIT/MISS/重現/採信,a1 不因 a10 命中)、理由 ≥4 字含實字、id 不得同時在 --findings-set。
    - 每個發現都要有去向(折掉、放行要理由、或列進 --refuted-set 講怎麼試的);blocker 只能折不能放行。順手每條標它在修什麼 `--finding-kind <id>=code|spec|process`(程式缺陷 / 被審文件缺陷 / 流程自己要求的文件;一個 id 一個旗標)——這是「流程自產工作量」唯一的量法。
    - **折了忘記記帳**(帳上沒這輪、但計劃筆記的審計修正紀錄有)→ 人工補記一筆再繼續,不然這輪等於沒發生。
