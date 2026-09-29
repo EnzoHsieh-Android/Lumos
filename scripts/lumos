@@ -12561,9 +12561,18 @@ _GUARD_PROSE_NAMES = {"test": "摘要的 TEST 預告句", "why": "摘要的 WHY 
                       "settle": "正文「做完之後跑 lumos guard settle 轉正」"}
 
 
-def _guard_settle_missing_say(rel, missing):
-    for k in missing or ():
-        print(f"提醒:{rel} 裡找不到{_GUARD_PROSE_NAMES[k]}(被手改過?),那一句沒改寫,要的話自己改成歷史說法")
+def _guard_settle_missing_say(rel, missing, say=True, one=False):
+    """找不到某種預告句時的說法 → [句子];say=True 順便印成提醒(settle),drift fix --kind c1 用 say=False 接進自己的結果訊息。
+    ★兩處同一支、同一種字樣★(漂移修法補強 第 3 節):找不到不一定是出錯——那一句可能已經是轉正後的說法,不再區分,由人自己看。
+    名稱直接用 _GUARD_PROSE_NAMES 的值(本身已含「預告句」等字,不再疊)。
+    one=True:好幾種都找不到時名稱用「、」接成一句、說明只接一次(c1 的結果訊息是一行,代碼審 r1 spec 對照席);只缺一種時跟逐句的一樣。"""
+    tail = "——可能已經是轉正後的說法(不用改),或被手改過(看一下)"
+    names = [_GUARD_PROSE_NAMES[k] for k in missing or ()]
+    out = ([f"找不到{'、'.join(names)}{tail}"] if names else []) if one else [f"找不到{n}{tail}" for n in names]
+    if say:
+        for x in out:
+            print(f"提醒:{rel} 裡{x}")
+    return out
 
 
 def _guard_settle_record(gpath, glines, ge, rel, home_rel, method):
@@ -14625,7 +14634,24 @@ def cmd_export_html(env, out_path, standalone=False):
 
 SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source", "about_code_stamp", "responsibility"}  # pitfall_* 2026-08-09 已知坑策展庫;about_code_stamp 2026-08-23(語意欄位基礎,計劃:固定席扇出降權)
 LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when", "core_refs", "about_code", "lands_in"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger);core_refs 2026-08-11(升格加指針/降格拆指針,兩向都要 T1;值是純路徑非 wikilink——lumos-core-knowledge skill 明令禁跨 vault wikilink)
-_SET_COND_SLOT = "<整項新內容>"   # drift fix --kind c4 印的 lumos set 指令裡,要人填的那一項
+# drift fix --kind c4 證據頁印的佔位字,整欄改 valid_under/revalidate_when 時原樣留著就擋(漂移修法補強 第 2 節):
+# 第一個是預填 lumos set 指令裡要人填的那一項;後兩個是範本句裡要人從清單挑的卷證目錄與查不到時的提交。
+# 證據頁的範本與預填指令都從這裡取字面。跟 _DRIFT_PLACEHOLDER_RE(擋 drift fix 的 --reason)用途不同,不合併。
+_SET_COND_SLOTS = ("<整項新內容>", "<卷證>", "<sha>")
+_SET_COND_SLOT = _SET_COND_SLOTS[0]
+# 佔位字的打錯變體(代碼審 r1 邊界席):全形角括號、括號內多空白、sha 大小寫。★只認兩邊都有角括號、中間只有佔位字本身★:
+# 第一版也擋少一邊角括號的(<卷證、sha>),代碼審第二輪四席重現「若卷證>20個就重驗」「輸出 git-sha> 時」這種正常內容被誤擋,
+# 拿掉;<卷證 目錄>、<sha 1>、<git-sha>、<SHA-1>、<sha256> 這種括號裡還有別的字的照收。
+def _set_cond_slot_variant_re(slot):
+    w = slot[1:-1]
+    word = f"(?i:{w})" if w.isascii() else w                       # sha 不分大小寫;中文字面照原樣
+    # 全形角括號寫成 \uff1c/\uff1e(ruff RUF001:字面的全形字元跟半形長得一樣,讀的人分不出)
+    return re.compile("[<\uff1c]" + r"\s*" + word + r"\s*" + "[>\uff1e]")
+
+
+_SET_COND_SLOT_VARIANTS = [(x, _set_cond_slot_variant_re(x)) for x in _SET_COND_SLOTS]
+_SET_COND_SLOT_HINT = {"<整項新內容>": "換成那一項改寫後的整句", "<卷證>": "換成從證據頁清單挑的卷證目錄",
+                       "<sha>": "換成真的提交編號"}
 COND_KEYS = ("valid_under", "revalidate_when")   # 驗收前提/回頭條件:set 整欄換掉(一個值=單行、多個=清單);spec=Projects/驗收前提欄位可改_計劃
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
@@ -15139,8 +15165,16 @@ def _set_conditions_locked(env, rel, key, values):
     ★為什麼整欄換、不走 append/remove★:這兩欄是散文、常提到連結;append/remove 判斷「同一項」看連結目標,
     兩條提到同一篇的不同條件會被當成重複。原本四種寫法(單行、清單、空的、多行區塊)並存,一律整段拿掉重寫。"""
     vals = [str(v).strip() for v in values]
-    if any(_SET_COND_SLOT in v for v in vals):
-        print(f"擋下:值裡還留著 {_SET_COND_SLOT}(drift fix 證據頁的佔位字)——換成那一項改寫後的整句,檔案沒動", file=sys.stderr)
+    left = [x for x in _SET_COND_SLOTS if any(x in v for v in vals)]
+    if left:
+        hint = _SET_COND_SLOT_HINT[left[0]] if len(left) == 1 else "逐個換成真的內容"
+        print(f"擋下:值裡還留著 {'、'.join(left)}(drift fix 證據頁的佔位字)——{hint},檔案沒動", file=sys.stderr)
+        return 2
+    near = [(x, mm.group(0)) for x, rx in _SET_COND_SLOT_VARIANTS for v in vals for mm in [rx.search(v)] if mm]
+    if near:
+        x, frag = near[0]
+        print(f"擋下:值裡的「{_esc_clean(frag, 40)}」像是 drift fix 證據頁的佔位字 {x} 沒換乾淨(全形角括號、括號裡多了空白或大小寫不同)"
+              f"——{_SET_COND_SLOT_HINT[x]},檔案沒動", file=sys.stderr)
         return 2
     if not vals or any(not v for v in vals):
         print(f"擋下:{key} 的每一條都不能是空的,檔案沒動(前提寫這個結論在什麼情況下才算數,回頭條件寫改到什麼該重驗)",
@@ -27670,7 +27704,7 @@ def _drift_fix_hint(kind, path, line):
         return [base + ' --close --status done --reason "<為什麼算解決,附提交或測試>"',
                 base + ' --keep --reason "<為什麼還沒解決>"']
     if kind == "c3":
-        return [base + " --status <" + "/".join(sorted(_DRIFT_C3_STATUSES)) + ">"]
+        return [base + " --status <" + "/".join(sorted(_DRIFT_C3_STATUSES)) + '> [--reason "…"]']
     if kind == "c4":
         return [base + "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)"]
     if kind == "probe":
@@ -27698,7 +27732,7 @@ def _drift_print_hints(rows, stream, head="改法:"):
 
 _DRIFT_C3_STATUSES = frozenset(_STATUS_ENUM["verification"] - {"pending"})
 _DRIFT_FIX_OPTS = ("date", "close", "keep", "status", "reason", "by")
-_DRIFT_FIX_ALLOWED = {"c1": {"date"}, "c2": {"close", "keep", "status", "reason"}, "c3": {"status", "by"},
+_DRIFT_FIX_ALLOWED = {"c1": {"date"}, "c2": {"close", "keep", "status", "reason"}, "c3": {"status", "by", "reason"},
                       "c4": set(), "c5": set()}
 
 
@@ -27730,7 +27764,8 @@ def _drift_fix_c2_args(o):
 def _drift_fix_c3_args(o):
     if o.get("status") not in _DRIFT_C3_STATUSES:
         return f"--kind c3 要帶 --status,值只能是 {'/'.join(sorted(_DRIFT_C3_STATUSES))}(驗證紀錄的合法狀態扣掉 pending)"
-    return None
+    # --reason 選填;長度與單行由 _drift_fix_args_err 的 _drift_fix_reason_ok 管,這裡只擋照抄提示的佔位字(同 c2)
+    return _drift_placeholder_err(o["reason"], "--reason") if o.get("reason") is not None else None
 
 
 _DRIFT_FIX_KIND_ARGS = {"c1": lambda o: None, "c2": _drift_fix_c2_args, "c3": _drift_fix_c3_args,
@@ -27858,11 +27893,11 @@ def _drift_fix_c1(cx):
     new, missing, day, err = _guard_pass_rewrite(cx["env2"], cx["root"], cx["repo_rel"], cx["lines"], cx["o"].get("date"))
     if err:
         return None, err
-    names = "、".join(_GUARD_PROSE_NAMES[k] for k in missing)
+    miss = "".join(";" + x for x in _guard_settle_missing_say(cx["rel"], missing, say=False, one=True))
     return {"new": new, "key": "status", "check": lambda f: str(f.get("status", "")) == "pass",
             "handled": _drift_no_kind("c1"), "extra": {}, "texts": [],
             "deps": _drift_deps(cx, [_guard_pass_home(cx["env2"], cx["lines"])[0]]),
-            "msg": "預告句改成歷史說法" + (f"(轉正日期 {day})" if day else "") + (f";找不到{names},沒改" if names else "")}, None
+            "msg": "預告句改成歷史說法" + (f"(轉正日期 {day})" if day else "") + miss}, None
 
 
 _DRIFT_BANNER_RE = re.compile(r"^[>\s#*✅★]*已結案[*★\s]*[(（:：]")
@@ -27939,6 +27974,8 @@ def _drift_fix_c3(cx):
     txt = f"{datetime.date.today().isoformat()} 狀態改為 {st}(存量漂移 c3)"
     if link:
         txt += f",由 [[{link}]] 解決" if st == "pass" else f",參考 [[{link}]]"
+    if o.get("reason") is not None:     # 三種寫法都一樣接在最後;理由裡的 [[連結]] 不驗存在(同 c2;漂移修法補強 第 4 節)
+        txt += f";理由:{o['reason'].strip()}"
     body, err = _drift_append_note(lines[fe + 1:], txt)
     if err:
         return None, err
@@ -27954,28 +27991,96 @@ def _drift_c4_key(s):
     return re.sub(r"[.\s]+", "-", s).lower()
 
 
-def _drift_c4_evidence(cx):
-    """c4 的證據與範本:那篇第一次被提交的提交、卷證目錄(名字比對猜的)、範本句。"""
-    root = cx["root"]
-    sha = None if _git_is_shallow(root) else _plan_first_commit(root, cx["repo_rel"], timeout=20)
-    first = "shallow,查不到最早提交" if _git_is_shallow(root) else (sha or "查不到")
+def _drift_c4_existing(rr):
+    """governance/review-reports/ 底下現在有的目錄 → 原名集合;讀不了回空。"""
+    try:
+        return {d.name for d in rr.iterdir() if d.is_dir()}
+    except OSError:
+        return set()
+
+
+def _drift_c4_same_commit(root, sha, existing):
+    """那個提交加進來或改名進來的卷證目錄 → 對應到的現存目錄名(磁碟上的實際名字,去重)清單;git 失敗、逾時或沒有提交回 None。
+    借專案規矩「程式、圖譜筆記、審查卷證放同一個提交」(漂移修法補強 第 1 節);列檔照每支檔有家那段的寫法。
+    ★印的一律是現在真的存在的那個目錄名,git 裡的名字只拿比對鍵(_drift_c4_dir_key:NFC 再 casefold)去對現存目錄★
+    (代碼審第二輪正確性、外家否決、邊界席;第三輪外家否決、邊界席補大小寫):macOS 上 git 存 NFC、磁碟上可能是 NFD,
+    不分大小寫的檔案系統上磁碟名也可能只差大小寫,印 git 的名字在這些情形是不存在的路徑,而且跟計劃名那份對不起來、
+    同一個目錄列兩行;比對鍵對到好幾個現存目錄(分正規化或分大小寫的檔案系統才會有)才每個都列。"""
+    raw = _nodehome_git(root, "show", "-z", "--name-only", "--diff-filter=AR", "--format=", sha) if sha else None
+    if raw is None:
+        return None
+    by_key = {}
+    for x in sorted(existing):
+        by_key.setdefault(_drift_c4_dir_key(x), []).append(x)
+    out = []
+    for p in _nodehome_split_z(raw):
+        parts = p.split("/")
+        d = parts[2] if len(parts) >= 4 and parts[:2] == ["governance", "review-reports"] else ""
+        out += [x for x in (by_key.get(_drift_c4_dir_key(d), []) if d else []) if x not in out]
+    return out
+
+
+def _drift_c4_dir_key(d):
+    """git 裡的卷證目錄名對現存目錄的比對鍵:NFC 再 casefold(分正規化、不分大小寫的檔案系統都對得上;只拿來比對,不拿來印)。"""
+    return nfc(d).casefold()
+
+
+def _drift_c4_dirs(cx, sha):
+    """卷證目錄兩種來源都列 → ([(目錄原名, 來源)] 排好序, 同提交清單或 None)。
+    排序:兩者 → code- 開頭(不分來源)→ 其他,同級照字母。兩種來源都是現存目錄名,一個目錄一行(見 _drift_c4_same_commit)。"""
+    rr = Path(cx["root"]) / "governance" / "review-reports"
+    existing = _drift_c4_existing(rr)
+    same = _drift_c4_same_commit(cx["root"], sha, existing)
     n = cx["env2"].notes.get(cx["rel"])
     keys = {_drift_c4_key(link_target(x).rsplit("/", 1)[-1]) for x in as_list(n.fields.get("plan_refs") if n else None)
             if link_target(x)}
-    rr = Path(root) / "governance" / "review-reports"
-    try:
-        dirs = sorted(d.name for d in rr.iterdir() if d.is_dir() and any(k and k in _drift_c4_key(d.name) for k in keys))
-    except OSError:
-        dirs = []
-    reports = [f"governance/review-reports/{d}" for d in dirs]
-    tpl = f"提交 {sha[:12] if sha else '<sha>'};代碼審見 {'、'.join(reports) or '<卷證>'}"
-    return {"first": first, "reports": reports, "template": tpl}
+    by_name = {d for d in existing if any(k and k in _drift_c4_key(d) for k in keys)}
+    src = {d: "兩者" if d in by_name else "同提交" for d in same or ()}
+    src.update({d: "計劃名" for d in by_name - set(src)})
+    rows = sorted(src.items(), key=lambda kv: (0 if kv[1] == "兩者" else 1 if kv[0].startswith("code-") else 2, kv[0]))
+    return rows, same
+
+
+def _drift_c4_evidence(cx):
+    """c4 的證據與範本:那篇第一次被提交的提交、卷證目錄(同提交與計劃名比對兩種來源都列、標來源)、範本句。
+    ★範本句的卷證一律是佔位字 <卷證>★(漂移修法補強 第 1 節;設計審 r2 後拿掉自動填):由人從清單挑,
+    整句照貼進 lumos set 會被第 2 節擋下。"""
+    root = cx["root"]
+    shallow = _git_is_shallow(root)
+    sha = None if shallow else _plan_first_commit(root, cx["repo_rel"], timeout=20)
+    first = "shallow,查不到最早提交" if shallow else (sha or "查不到")
+    rows, same = _drift_c4_dirs(cx, sha)
+    tpl = f"提交 {sha[:12] if sha else _SET_COND_SLOTS[2]};代碼審見 {_SET_COND_SLOTS[1]}"
+    return {"first": first, "reports": rows, "same": same, "template": tpl}
+
+
+def _drift_c4_show_name(d):
+    """卷證目錄名拿來印:非 UTF-8 位元組換替代字元(_nodehome_show),Unicode 格式字元(類別 Cf:方向控制、零寬)換成看得見的
+    \\uXXXX——整批匯入的目錄名帶 RLO 會讓終端上看到的順序跟實際字串不同(代碼審第二輪資安席)。只在這一處,不改共用的 _esc_clean。"""
+    import unicodedata
+    return "".join((f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}") if unicodedata.category(c) == "Cf" else c
+                   for c in _nodehome_show(d))
+
+
+def _drift_c4_print_dirs(ev):
+    print("  ②卷證目錄(從這裡挑一個填進範本的 <卷證>;兩者=同提交也對得上計劃名,同提交=這篇第一次提交時一起加進來的,"
+          "計劃名=用計劃名比對猜的,可能漏或多):")
+    if ev["same"] is None:
+        print("    同提交:查不到(git 失敗或沒有)")
+    elif len(ev["same"]) > 3:
+        print("    可能含別的計劃的卷證(整批匯入或壓成一個的提交)")
+    # 全部列出、不設上限(代碼審第三輪撤回第一輪加的 20 個上限與補充指令:三輪長出四個新缺陷;長清單罕見,
+    # 證據頁是人主動叫出來看的,多幾行不礙事)
+    for d, src in ev["reports"]:
+        print("    " + _esc_clean(f"governance/review-reports/{_drift_c4_show_name(d)}({src})", 300))
+    if not ev["reports"]:
+        print("    查不到")
 
 
 def _drift_c4_print(cx, ev):
     print(f"{_esc_clean(cx['rel'], 200)} 第 {cx['line']} 行(c4 前提寫「還沒提交」)的證據——只列出、不寫檔:")
     print(f"  ①這篇第一次被提交:{ev['first']}")
-    print(f"  ②卷證目錄(用計劃名比對猜的,可能漏或多):{_esc_clean('、'.join(ev['reports']), 300) or '查不到'}")
+    _drift_c4_print_dirs(ev)
     print(f"  ③範本句:{_esc_clean(ev['template'], 300)}")
     items = [str(x) for x in as_list(parse_frontmatter(cx["lines"][1:cx["fe"]])[0].get("valid_under"))]
     hit = [k for k, x in enumerate(items) if any(w in x for w in _DRIFT_UNCOMMITTED_WORDS)]
@@ -27986,6 +28091,7 @@ def _drift_c4_print(cx, ev):
     print(f"用 lumos set 整欄重寫:把 {_SET_COND_SLOT} 換成那一項改寫後的整句(原本其他內容要自己留著,範本句只是參考),"
           "其他各項照抄:")
     print(_esc_clean(f"    lumos set {_drift_sh(cx['rel'][:-3], node=True)} valid_under {args}", 2000))
+    print("用 lumos set 改完先提交,再對同一篇跑別的 drift fix(不然乾淨檢查會擋;別照它的提示 git checkout,那會洗掉 set 的修改)")
 
 
 def _drift_fix_c4(cx):
@@ -36941,7 +37047,7 @@ HELP_WHEN = {
     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出)。",
     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
     "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出。",
-    "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行、c4 換掉還沒提交的前提、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
+    "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
@@ -37804,7 +37910,8 @@ def main():
     drf.add_argument("--close", dest="dr_close", action="store_true", help="c2:Issue 解決了,結案")
     drf.add_argument("--keep", dest="dr_keep", action="store_true", help="c2:還沒解決,照留(等同帶清單的表態)")
     drf.add_argument("--status", dest="dr_status", default=None, help="c2 --close 的結案值;c3 要改成的狀態")
-    drf.add_argument("--reason", dest="dr_reason", default=None, help="c2:為什麼算解決/還沒解決(一行、4 到 200 字)")
+    drf.add_argument("--reason", dest="dr_reason", default=None,
+                     help="c2、c3:c2 為什麼算解決/還沒解決(必填);c3 為什麼改成這個狀態(選填)(一行、4 到 200 字)")
     drf.add_argument("--by", dest="dr_by", default=None, metavar="節點", help="c3:由哪篇解決或參考哪篇")
     dre = drsub.add_parser("exam", help="拿考卷在被考 repo 的歷史上重放(不寫帳、不寫檔)")
     dre.add_argument("dr_exam", metavar="考卷.json", nargs="?", default=None)

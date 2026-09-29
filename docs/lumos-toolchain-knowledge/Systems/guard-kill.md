@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-07-24
+updated: 2026-09-30
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
 tags:
@@ -14,7 +14,7 @@ summary: |-
   RULE:[since:2026-09-22][confirmed:2026-09-22][retire:連續兩季沒有任何專案用 guard plan,或誤擋多過真擋]合約可以「預告」:`lumos guard plan … --name <短名>` 一次寫好預告標記(`★INVARIANT-PLANNED★`,既有合約抓取撈不到它)與一個待完成的守衛驗證節點並雙向連好;查那篇功能節點時預告會另起一段印出來(還沒有測試在守、最遲哪天);逾期讓自檢出 issue(推送與 CI 靠它擋)、七天內先唸不擋、**到期當天不算過期**、**不准延期**;★本機推送只擋「這次改動碰到的」那幾條★(靠守衛節點→家節點→about_code 兩跳算交集;算不出來本機放行、CI 仍擋),別人的逾期會列出來但不擋你的推送;做完 `guard settle` 就地轉正,不做了 `guard abandon` 立墓碑(要先 `signoff --ref`)。★威脅模型是防忘記不防繞過★:改日期、改型別、刪節點檔都繞得過,刻意不補,寫在計劃的誠實界線。單源 [[Projects/必要合約清單_計劃]] [test:t_guard_plan_creates_marker_and_node]
   PITFALL:[2026-09-22 代碼審 r2 blocker]預告行是「合約文字 + 指令接在行尾的 `[watch:…] [due:…]`」,轉正與棄置要靠還原出原始合約文字才找得到那一行。★只能剝行尾那一對,不能把整行同樣字樣都剝掉★:合約文字自己寫到那兩個字樣時(這個 repo 滿篇都是方括號標籤寫法)就還原不出原文,那條預告從此轉不了正也棄置不掉、逾期還一直擋推送,只剩手改檔案一條路 [test:t_guard_claim_with_bracket_tags_still_settles]
   RULE:[since:2026-09-23][confirmed:2026-09-23][retire:有專案反映必填短名擋掉了正常流程(例如批次腳本登記大量預告)]★守衛節點的檔名要人給短名★:`--name` 必填、24 字內、只收中英數字底線連字號,檔名 = 日期_短名。原本拿合約原文前 40 字當檔名,斷在句子中間(rtb-production-agent-demo 回報)。舊規則截斷出來的檔名,自檢會在不擋的那一層點出來——判法是精確比對(檔名等於原文被截斷的樣子、而且原文真的比截斷長度長),手取的名字不會被點到。單源 [[Projects/必要合約清單_計劃]] 〈守衛節點的檔名〉 [test:t_guard_plan_requires_short_name]
-  FACT:[2026-09-22 以程式碼為準]規則只認「節點身上有 guards 欄位」的守衛節點,不看 status 字面值——手寫 `status: pending` 的人不該被拖進整套規則;判準跟著節點走,改名搬家都對得上。查:`grep -n 'GUARD_MARK_FIELD' scripts/lumos`
+  WHY:[2026-09-22 提交 eca5f218 合約預告]規則只認「節點身上有 guards 欄位」的守衛節點,不看 status 字面值——手寫 `status: pending` 的人不該被拖進整套規則;判準跟著節點走,改名搬家都對得上
   WHY:[2026-09-28 Projects/存量漂移防線_計劃]settle 轉正時把 guard plan 寫的四種預告句改成歷史說法(TEST 句改成哪天轉正、由家筆記的正式行守,不寫測試名;WHY 行尾加已轉正;正文兩句改寫),status、標籤與句子同一次寫入。原本轉正後守衛紀錄照樣寫著「還沒有測試在守」(rtb 考卷 A4–A6)。句型比對跟 [[Systems/存量漂移守衛]] 的 c1 共用同一支,從行首比、第四句含反引號
   PITFALL:[2026-09-28 設計審 r3 外家席]plan、settle、abandon 原本改家筆記都在寫入鎖外,兩個指令同時改同一篇家筆記,後寫的會用舊內容蓋掉先寫的(例:settle 蓋掉同時 plan 寫的預告行,留下 pending 守衛紀錄卻沒有預告行);現在三支各自從讀到寫整段拿鎖。settle 第一步做完、第二步失敗時重跑只補第二步,守衛紀錄已是 pass 就回 0 [test:t_guard_commands_hold_vault_lock] [test:t_guard_settle_recovers_half_done]
   KEY:★INVARIANT★ guard kill rc 優先序:survived→rc1、drifted/abort/error→rc2、弱證據(unattributed/timeout)不放行執行錯誤 [test:t_guard_kill_rc_precedence] [audit:sonnet/2026-07-29]
@@ -27,6 +27,7 @@ summary: |-
   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
   TEST:t_guard_kill(七態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]guard settle 對「已 pass 但預告句還在」補改句(以前一律回 0 印已轉正),前提不符回 2——把 settle 當重跑無害在腳本裡呼叫的地方會看到新的失敗;--test 只在待完成時要、--date 只給補改句用。轉正日期依序取 --date、那篇已寫的日期、守衛紀錄第一次變成 pass 的提交(那筆也是檔案第一次出現就不算、shallow 擋),★不拿今天充數★;不用 git log -S 合約文字:settle 是原地換行、出現次數不變,找不到轉正那次(設計審 r1 四席報到)
+  WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 3 節]settle 找不到某種預告句時的提醒改成「找不到<名稱>——可能已經是轉正後的說法(不用改),或被手改過(看一下)」:rtb 用 drift fix --kind c1 修時,已經手改成轉正說法的句子被講得像出錯。不區分兩種情形(前兩版要工具自己辨認轉正後的說法,設計審 r2 整類拿掉),由人看;drift fix c1 的結果訊息接同一支函式的同一句,不改判定與回傳值 [test:t_drift_fix_c1_missing_message]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"

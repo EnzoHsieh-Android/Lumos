@@ -54477,8 +54477,11 @@ def t_drift_fix_c4_evidence_then_replace():
     """[S5] c4 只列證據、範本與一條預填好的 lumos set 整欄指令,不寫檔、不做乾淨檢查、不寫修復帳;不收 --old/--new。
     ★c4 不自己寫開頭欄位★(Enzo 2026-09-30 裁,代碼審四輪:自己寫原始文字每輪都漏一種 YAML 形狀):改用既有的 lumos set 整欄重寫;
     指令裡要改的那項放佔位字,原封不動照貼會被 set 擋下;填好整句照貼就改好、c4 消失。
+    漂移修法補強(2026-09-30)後:範本句的卷證一律是 <卷證>(不自動填),卷證目錄列在清單裡、標來源(細節見
+    t_drift_c4_reports_from_first_commit)。
 
-    翻紅釘:證據頁不標要改的那項或指令各項跟讀到的不一致 → ②紅;c4 也做乾淨檢查 → ③紅;set 拿掉佔位字檢查 → ④紅。
+    翻紅釘:證據頁不標要改的那項或指令各項跟讀到的不一致 → ②紅;c4 也做乾淨檢查 → ③紅;set 拿掉佔位字檢查 → ④紅;
+    範本改回自動填卷證目錄 → ②範本紅。
     """
     print("t_drift_fix_c4_evidence_then_replace")
     import shlex as _shlex
@@ -54496,10 +54499,10 @@ def t_drift_fix_c4_evidence_then_replace():
     check("①前置:E 的 c4 指到第 5 行", [f["line"] for f in fs] == [5], str(fs))
     raw = E.read_bytes()
     rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
-    tpl = f"提交 {first[:12]};代碼審見 governance/review-reports/code-done"
+    tpl = f"提交 {first[:12]};代碼審見 <卷證>"
     cmd = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("lumos set ")]
-    check("②列第一次提交、卷證目錄、範本,回 0、不寫檔不寫帳", rc == 0 and first[:12] in out
-          and "governance/review-reports/code-done" in out and tpl in out and E.read_bytes() == raw and not _df_rows(root), out)
+    check("②列第一次提交、卷證目錄(標來源)、範本(卷證放佔位字),回 0、不寫檔不寫帳", rc == 0 and first[:12] in out
+          and "governance/review-reports/code-done(兩者)" in out and tpl in out and E.read_bytes() == raw and not _df_rows(root), out)
     check("②列出各項、標出要改的兩項", out.count("← 要改的這項") == 2 and "釘在提交 abc 的乾淨工作樹" in out, out)
     check("②預填的 lumos set 指令:要改的兩項放佔位字、其他照抄", cmd and _shlex.split(cmd[0]) == [
         "lumos", "set", "Verification/E", "valid_under", "<整項新內容>", "<整項新內容>", "釘在提交 abc 的乾淨工作樹"], str(cmd))
@@ -54513,9 +54516,448 @@ def t_drift_fix_c4_evidence_then_replace():
     r = run(v, *a[1:])
     check("④原封不動照貼:set 擋下佔位字、沒動檔", r.returncode == 2 and "<整項新內容>" in r.stderr and E.read_bytes() == raw,
           r.stdout + r.stderr)
-    r = run(v, "set", "Verification/E", "valid_under", tpl + ";全套測試", "已在 main 的前提", "釘在提交 abc 的乾淨工作樹")
+    filled = tpl.replace("<卷證>", "governance/review-reports/code-done") + ";全套測試"
+    r = run(v, "set", "Verification/E", "valid_under", filled, "已在 main 的前提", "釘在提交 abc 的乾淨工作樹")
     check("⑤填好整句照貼:改好、c4 消失", r.returncode == 0 and not _df_find(v, "c4", "Verification/E.md")
-          and tpl + ";全套測試" in E.read_text(encoding="utf-8"), r.stdout + r.stderr)
+          and filled in E.read_text(encoding="utf-8"), r.stdout + r.stderr)
+
+
+# ═══ 漂移修法補強(Projects/漂移修法補強_計劃):c4 卷證目錄兩種來源、set 擋範本佔位字、c1/settle 訊息、c3 理由、刪除守衛跳過工具自裝檔 ═══
+
+
+def t_drift_c4_reports_from_first_commit():
+    """[S1] c4 證據頁列卷證目錄:這篇第一次被提交的那個提交加進來(含改名進來)的 governance/review-reports/<目錄>,
+    跟計劃名比對到的都列出、標來源(兩者/同提交/計劃名),排序兩者 → code- 開頭 → 其他、同級照字母;只列現在還在的目錄;
+    同提交超過 3 個時先印「可能含別的計劃的卷證」;中文目錄名照原樣;範本句的卷證一律是 <卷證>;git 查不到時寫明。
+
+    翻紅釘:--diff-filter=AR 改成 A → ②moved-in 紅;拿掉「只留還存在的」→ ③gone 紅;範本改回自動填目錄 → ④紅;
+    排序改成只照字母 → ②順序紅;查不到時不寫明 → ⑤紅。
+    """
+    print("t_drift_c4_reports_from_first_commit")
+    root = _df_repo()
+    v = root / _DR_VAULT
+    RR = "governance/review-reports"
+    _nh_file(root, f"{RR}/done-old-plan/r1.md", "舊的\n")                  # 早一個提交就在:只有計劃名對得上
+    _nh_file(root, "tmp/moved.md", "要改名進卷證目錄的內容\n")
+    _df_commit(root, "earlier")
+    E = v / "Verification" / "E.md"
+    E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交);全套測試\nplan_refs:\n"
+                 "  - \"[[Projects/Done_計劃]]\"\n---\n# E\n", encoding="utf-8")
+    for d in ("code-done", "code-xyz", "zeta", "審查卷證甲", "gone", "aaa", "zz-done"):
+        _nh_file(root, f"{RR}/{d}/r1.md", f"{d} 的報告\n")
+    (root / RR / "moved-in").mkdir(parents=True)
+    _nh_git(root, "mv", "tmp/moved.md", f"{RR}/moved-in/r1.md")
+    _df_commit(root, "feature with reports")
+    first = _nh_git(root, "log", "--diff-filter=A", "--format=%H", "--", f"{_DR_VAULT}/Verification/E.md").stdout.split()[-1]
+    shown = _nh_git(root, "-c", "core.quotePath=false", "show", "--name-status", "--format=", first).stdout
+    check("①前置:E 第一次提交就是加卷證那一個;moved-in 是改名進來(R)、中文目錄同提交加進來",
+          f"{RR}/審查卷證甲/r1.md" in shown and any(ln.startswith("R") and f"{RR}/moved-in/r1.md" in ln for ln in shown.splitlines())
+          and [f["line"] for f in _df_find(v, "c4", "Verification/E.md")] == [5], shown)
+    import shutil as _sh
+    _sh.rmtree(root / RR / "gone")          # 同一個提交加進來、後來刪掉的目錄不列
+    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+    want = [f"{RR}/code-done(兩者)", f"{RR}/zz-done(兩者)", f"{RR}/code-xyz(同提交)", f"{RR}/aaa(同提交)",
+            f"{RR}/done-old-plan(計劃名)", f"{RR}/moved-in(同提交)", f"{RR}/zeta(同提交)", f"{RR}/審查卷證甲(同提交)"]
+    check("②兩種來源都列、標來源、排序兩者 → code- → 其他(同級照字母),改名進來的也算,中文目錄照原樣", rc == 0 and rows == want,
+          out)
+    check("③已經刪掉的目錄不列", "gone" not in out, out)
+    check("④範本句的卷證一律是 <卷證>(不自動填),提交照填", f"③範本句:提交 {first[:12]};代碼審見 <卷證>" in out, out)
+    check("④同提交超過 3 個:先印可能含別的計劃的卷證", "可能含別的計劃的卷證(整批匯入或壓成一個的提交)" in out
+          and out.index("可能含別的計劃的卷證") < out.index(want[0]), out)
+    check("④最後提醒先提交再跑別的 drift fix", "用 lumos set 改完先提交" in out.splitlines()[-1], out)
+    # ⑤git 查不到(這篇還沒提交):寫明查不到,計劃名那一份照列,範本的提交也放佔位字
+    E2 = v / "Verification" / "E2.md"
+    E2.write_text(E.read_text(encoding="utf-8"), encoding="utf-8")
+    check("⑤前置:E2 還沒提交、也是 c4", "E2.md" in _nh_git(root, "status", "--porcelain", "-uall").stdout
+          and [f["line"] for f in _df_find(v, "c4", "Verification/E2.md")] == [5], "")
+    rc, out = _df_fix(v, "Verification/E2", "5", "--kind", "c4")
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+    check("⑤git 查不到:寫明「同提交:查不到」,計劃名的照列,範本是 <sha> 與 <卷證>", rc == 0
+          and "同提交:查不到(git 失敗或沒有)" in out
+          and rows == [f"{RR}/code-done(計劃名)", f"{RR}/done-old-plan(計劃名)", f"{RR}/zz-done(計劃名)"]
+          and "③範本句:提交 <sha>;代碼審見 <卷證>" in out, out)
+
+
+def t_drift_c4_code_review_r1():
+    """[S1] 代碼審 r1(2026-09-30)折入:
+    - 同提交清單照目錄去重(一個卷證目錄通常有好幾支檔);剛好 3 個不印「可能含別的計劃的卷證」,超過才印(正確性 F1、spec 對照 F3)。
+    - 「code- 開頭排在其他前面」對計劃名來源也適用(spec 對照 F3)。
+    - ★NFC 只當比對鍵,印的是原名★:NFD 寫法的目錄照原樣印(外家否決 F2、正確性 F2、邊界 F2);第二輪起印的一律是磁碟上現存的名字
+      (t_drift_c4_code_review_r2)。
+    - 證據頁範本的佔位字(_SET_COND_SLOTS 後兩個)跟 --reason 那側的 _DRIFT_PLACEHOLDER_RE 認得的一致(架構對齊 F1)。
+    - drift fix 的一行說明寫現況:c3 可帶 --reason、c4 只列證據不寫檔(合約圖譜 F1)。
+
+    翻紅釘:拿掉去重 → ②紅;門檻 > 3 改 >= 3 或 > 0 → ②紅;code- 只算同提交來源 → ③紅;印 NFC 名 → ④紅;
+    同提交改回印 git 裡的名字 → ⑤紅;_DRIFT_PLACEHOLDER_RE 少認一個 → ⑥紅;說明改回舊句 → ⑦紅。
+    """
+    print("t_drift_c4_code_review_r1")
+    import os as _os, unicodedata as _ud
+    root = _df_repo()
+    v = root / _DR_VAULT
+    RR = "governance/review-reports"
+    nfd = "done-Café"
+    _nh_file(root, f"{RR}/code-old-done/r1.md", "舊的\n")      # 早一個提交:只有計劃名對得上、code- 開頭
+    _nh_file(root, f"{RR}/{nfd}/r1.md", "舊的\n")              # 早一個提交:只有計劃名對得上、NFD 寫法
+    _nh_file(root, f"{RR}/zz-other/r1.md", "無關\n")
+    _df_commit(root, "earlier")
+    E = v / "Verification" / "E.md"
+    E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交);全套測試\nplan_refs:\n"
+                 "  - \"[[Projects/Done_計劃]]\"\n---\n# E\n", encoding="utf-8")
+    for d in ("aaa", "bbb", "ccc"):
+        for f in ("r1.md", "r2.md", "snapshot.patch"):
+            _nh_file(root, f"{RR}/{d}/{f}", f"{d} {f}\n")
+    _df_commit(root, "feature with reports")
+    first = _nh_git(root, "log", "--diff-filter=A", "--format=%H", "--", f"{_DR_VAULT}/Verification/E.md").stdout.split()[-1]
+    shown = _nh_git(root, "show", "--name-only", "--format=", first).stdout
+    check("①前置:E 第一次提交加了 3 個卷證目錄、每個 3 支檔(9 支);NFD 目錄在磁碟上照 NFD 存著",
+          sum(1 for ln in shown.splitlines() if ln.startswith(f"{RR}/")) == 9
+          and nfd in _os.listdir(root / RR) and not _ud.is_normalized("NFC", nfd), shown)
+    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+    check("②同提交照目錄去重、剛好 3 個不印「可能含別的計劃的卷證」", rc == 0 and "可能含別的計劃的卷證" not in out
+          and sum(1 for r in rows if r.endswith("(同提交)")) == 3, out)
+    want = [f"{RR}/code-old-done(計劃名)", f"{RR}/aaa(同提交)", f"{RR}/bbb(同提交)", f"{RR}/ccc(同提交)", f"{RR}/{nfd}(計劃名)"]
+    check("③code- 開頭對計劃名來源也排在其他前面", rows == want, "\n".join(map(ascii, rows)))
+    check("④NFD 寫法的目錄照原名印(不換成 NFC)", f"{RR}/{nfd}(計劃名)" in rows
+          and f"{RR}/{_ud.normalize('NFC', nfd)}(計劃名)" not in rows, "\n".join(map(ascii, rows)))
+    m = _load_lumos_inproc()
+    a, b = "code-Café", "code-Café"
+    fake = "".join(f"{RR}/{x}/{f}\0" for x, f in ((a, "r1.md"), (b, "r1.md"), (b, "r2.md"), ("gone", "r1.md"))).encode()
+    orig = m._nodehome_git
+    m._nodehome_git = lambda _root, *_a: fake
+    try:
+        got = m._drift_c4_same_commit(str(root), "abc123", {b})
+    finally:
+        m._nodehome_git = orig
+    check("⑤同提交:git 回兩種 NFC 等價的名字、磁碟上只有一個 → 只列磁碟上那一個(代碼審第二輪改裁,見 t_drift_c4_code_review_r2);不在的不列",
+          got == [b], ascii(got))
+    check("⑥證據頁範本的佔位字(<卷證>、<sha>)--reason 那側也認得", all(m._drift_placeholder_err(s, "x")
+                                                                    for s in m._SET_COND_SLOTS[1:]), str(m._SET_COND_SLOTS))
+    h = m.HELP_WHEN["drift fix"]
+    check("⑦drift fix 的一行說明是現況:c3 可帶 --reason、c4 只列證據不寫檔", "--reason" in h and "c4 只列證據" in h
+          and "不寫檔" in h and "換掉還沒提交的前提" not in h, h)
+
+
+def t_drift_c4_code_review_r2():
+    """[S1] 代碼審第二輪折入:c4 證據頁印的一律是現在真的存在的那個目錄名(磁碟上的實際名字);git 裡的名字只拿 NFC 鍵
+    去對應現存目錄。一個現存目錄一行,兩種來源都有就標「兩者」;NFC 鍵對到多個現存目錄才每個都列(正確性 F2、外家否決 F3、
+    邊界 F1)。目錄名裡的 Unicode 格式字元(方向控制、零寬)換成看得見的 \\uXXXX(資安 F3,只在這一處)。
+
+    翻紅釘:同提交印 git 裡的名字 → ②⑤紅;兩種來源照原名對、不照現存目錄合併 → ②紅(macOS)、⑤紅;
+    格式字元不換 → ③紅;NFC 鍵只取一個現存目錄 → ⑥紅。
+    """
+    print("t_drift_c4_code_review_r2")
+    import os as _os, unicodedata as _ud
+    root = _df_repo()
+    v = root / _DR_VAULT
+    RR = "governance/review-reports"
+    nfd = "done-Café"
+    cf = "done-‮gnp​x"
+    E = v / "Verification" / "E.md"
+    E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交);全套測試\nplan_refs:\n"
+                 "  - \"[[Projects/Done_計劃]]\"\n---\n# E\n", encoding="utf-8")
+    for d in (nfd, cf, "zzz"):
+        _nh_file(root, f"{RR}/{d}/r1.md", "報告\n")
+    _df_commit(root, "feature with reports")
+    first = _nh_git(root, "log", "--diff-filter=A", "--format=%H", "--", f"{_DR_VAULT}/Verification/E.md").stdout.split()[-1]
+    check("①前置:NFD 目錄與含格式字元的目錄在磁碟上照原樣存著、跟 E 同一個提交加進來", nfd in _os.listdir(root / RR)
+          and cf in _os.listdir(root / RR) and not _ud.is_normalized("NFC", nfd)
+          and _nh_git(root, "show", "--name-only", "--format=", first).stdout.count(f"{RR}/") >= 3, "")
+    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+    names = [r[len(RR) + 1:r.rindex("(")] for r in rows]
+    shown_cf = "done-\\u202egnp\\u200bx"
+    check("②一個現存目錄一行:NFD 目錄兩種來源都有 → 一行「兩者」,印磁碟上的名字;每一條印出的路徑都精確存在(格式字元那條除外)",
+          rc == 0 and rows.count(f"{RR}/{nfd}(兩者)") == 1 and len(rows) == 3
+          and all(n in _os.listdir(root / RR) for n in names if n != shown_cf), "\n".join(map(ascii, rows)))
+    check("③目錄名裡的方向控制、零寬字元換成看得見的 \\uXXXX,原字元不進終端", f"{RR}/{shown_cf}(兩者)" in rows
+          and "‮" not in out and "​" not in out, "\n".join(map(ascii, rows)))
+    m = _load_lumos_inproc()
+    a, b = "code-Café", "code-Café"
+    orig = m._nodehome_git
+    try:
+        m._nodehome_git = lambda _root, *_a: "".join(f"{RR}/{x}/{f}\0" for x, f in
+                                                     ((a, "r1.md"), (b, "r1.md"), (b, "r2.md"), ("gone", "r1.md"))).encode()
+        got = m._drift_c4_same_commit(str(root), "abc123", {b})
+        m._nodehome_git = lambda _root, *_a: f"{RR}/{a}/r1.md\0".encode()
+        got2 = m._drift_c4_same_commit(str(root), "abc123", {a, b, "other"})
+    finally:
+        m._nodehome_git = orig
+    check("⑤git 裡是 NFC、磁碟上只有 NFD:列的是磁碟上那一個、只列一次;不在的不列", got == [b], ascii(got))
+    check("⑥NFC 鍵對到兩個現存目錄(分正規化的檔案系統):兩個都列", sorted(got2) == sorted([a, b]), ascii(got2))
+
+
+def t_drift_fix_c1_missing_tail_once():
+    """[S3] 代碼審 r1(spec 對照 F2)折入:c1 一次找不到好幾種預告句時,名稱用「、」接,說明尾巴只印一次;
+    settle 照舊逐句提醒(兩處仍走同一支 _guard_settle_missing_say)。
+
+    翻紅釘:c1 改回每個名稱各接一整句 → ②紅;合併句的字樣跟單句不同 → ①紅。
+    """
+    print("t_drift_fix_c1_missing_tail_once")
+    m = _load_lumos_inproc()
+    tail = "——可能已經是轉正後的說法(不用改),或被手改過(看一下)"
+    one = m._guard_settle_missing_say("X.md", ["test", "why"], say=False, one=True)
+    check("①合併成一句:名稱照 _GUARD_PROSE_NAMES 用「、」接、尾巴一次;只缺一種時跟 settle 那句一字不差",
+          one == [f"找不到摘要的 TEST 預告句、摘要的 WHY 預告句{tail}"]
+          and m._guard_settle_missing_say("X.md", ["test"], say=False, one=True)
+          == m._guard_settle_missing_say("X.md", ["test"], say=False)
+          and m._guard_settle_missing_say("X.md", [], say=False, one=True) == [], str(one))
+    root = _df_repo()
+    v = root / _DR_VAULT
+    V = v / "Verification"
+    (V / "C.md").write_text(_dr_guard_text("pass", claim="大額退費要人工核可")
+                            .replace("TEST:還沒有測試在守這條", "TEST:[2026-09-15] 預告已轉正,自己先改好的")
+                            .replace("WHY:[2026-09-01]預告這條合約但還沒做:", "WHY:[2026-09-15]已轉正,原因是:"), encoding="utf-8")
+    _df_commit(root, "cases", "2026-09-20")
+    c1 = _df_find(v, "c1", "Verification/C.md")
+    t = (V / "C.md").read_text(encoding="utf-8")
+    check("②前置:C 是 c1、TEST 與 WHY 預告句都已經不在", c1 and "TEST:還沒有測試" not in t and "預告這條合約但還沒做" not in t, str(c1))
+    rc, out = _df_fix(v, "Verification/C", str(min(f["line"] for f in c1)), "--kind", "c1", "--date", "2026-09-15")
+    check("②c1:兩種都找不到時,結果訊息只接一次說明尾巴、兩個名稱都點到", rc == 0 and out.count(tail) == 1
+          and "摘要的 TEST 預告句" in out and "摘要的 WHY 預告句" in out, out)
+
+
+def t_set_conditions_blocks_placeholder_variants():
+    """[S2] 代碼審 r1(邊界 F1)折入、第二輪改裁:lumos set 整欄改 valid_under/revalidate_when 時,佔位字的打錯變體也擋——
+    只擋兩邊都有角括號的:全形角括號(＜卷證＞)、括號內多空白(< 卷證 >)、sha 大小寫(<SHA>)。少一邊角括號的
+    (<卷證、卷證>20個、git-sha>)第二輪起不擋(外家否決 F2、正確性 F4、邊界 F4、資安 F2:正常內容被誤擋);
+    佔位字後面還接別的字的(<卷證 目錄>、<sha 1>、<git-sha>)、一般角括號文字(Map<K,V>、<SHA-1>、List<sha256>)照收。
+
+    翻紅釘:拿掉變體檢查 → ②紅;變體不要求閉括號 → ③紅;sha 不分大小寫拿掉 → ②<SHA> 紅;加回只剩閉括號那一支 → ③紅。
+    """
+    print("t_set_conditions_blocks_placeholder_variants")
+    v = mkvault()
+    write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 原本的前提\nrevalidate_when: 原本的回頭條件")
+    p = v / "Verification" / "V.md"
+    raw = p.read_bytes()
+    bad = (("代碼審見 ＜卷證＞", "<卷證>"), ("代碼審見 < 卷證 >", "<卷證>"), ("代碼審見 <卷證＞", "<卷證>"),
+           ("代碼審見 <\u3000卷證\u3000>", "<卷證>"), ("提交 <SHA>;代碼審見 x", "<sha>"), ("提交 <Sha >;x", "<sha>"),
+           ("提交 ＜sha＞", "<sha>"), ("改成 ＜整項新內容>", "<整項新內容>"), ("改成 < 整項新內容 >", "<整項新內容>"))
+    r0 = run(v, "set", "Verification/V", "valid_under", "好的一條")
+    check("①前置:同一篇正常的值寫得進去(擋下不是因為別的原因)", r0.returncode == 0, r0.stdout + r0.stderr)
+    write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 原本的前提\nrevalidate_when: 原本的回頭條件")
+    raw = p.read_bytes()
+    for key in ("valid_under", "revalidate_when"):
+        for val, slot in bad:
+            r = run(v, "set", "Verification/V", key, "好的一條", val)
+            check(f"②{key} 值 {val!r}:佔位字的變體 → 回 2、點名是哪個佔位字、檔案不動", r.returncode == 2
+                  and slot in r.stderr and "佔位字" in r.stderr and p.read_bytes() == raw, r.stdout + r.stderr)
+            p.write_bytes(raw)   # 沒擋住時還原,免得一條紅牽連後面每一條
+    ok = ("Map<K,V> 與 <src/lib> 照收;提交 <SHA-1> 與 List<sha256>、<shape>、<卷證目錄> 都不是佔位字;a < b 且 c > d;"
+          "代碼審見 governance/review-reports/code-x 的卷證;sha 值 > 3;commitsha> 這種黏在英文字後面的;"
+          "若卷證>20個就重驗;輸出 git-sha> 時重驗;提交 <git-sha> 之後;<卷證 目錄> 與 <sha 1>;a < sha;見 <卷證 那一段;<整項新內容")
+    r = run(v, "set", "Verification/V", "valid_under", ok)
+    check("③正文裡合法的角括號字樣照樣寫得進去", r.returncode == 0 and ok in p.read_text(encoding="utf-8"), r.stdout + r.stderr)
+
+
+def t_drift_c4_lists_all_dirs():
+    """[S1] 代碼審第三輪撤回第一輪加的「超過 20 個只列前 20 個 + 補充指令」:三輪長出四個新缺陷(指令少列加引號的目錄名、
+    沒照現存名稱與格式字元處理、數量說法對不上、散檔那條測不到);長清單罕見,證據頁是人主動叫出來看的——回到全部列出。
+
+    翻紅釘:加回上限 → ②紅;加回「另有 N 個」或補充指令 → ②紅。
+    """
+    print("t_drift_c4_lists_all_dirs")
+    root = _df_repo()
+    v = root / _DR_VAULT
+    RR = "governance/review-reports"
+    E = v / "Verification" / "E.md"
+    E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交);全套測試\nplan_refs:\n"
+                 "  - \"[[Projects/Done_計劃]]\"\n---\n# E\n", encoding="utf-8")
+    names = [f"bulk-{i:02d}" for i in range(23)]
+    for d in names:
+        _nh_file(root, f"{RR}/{d}/r1.md", f"{d}\n")
+    _df_commit(root, "bulk import")
+    check("①前置:E 第一次提交一起加了 23 個卷證目錄", len([d for d in (root / RR).iterdir() if d.is_dir()]) == 23
+          and [f["line"] for f in _df_find(v, "c4", "Verification/E.md")] == [5], "")
+    rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+    check("②23 個全部列出(照原本的排序)、沒有「另有 N 個」也沒有補充指令", rc == 0
+          and rows == [f"{RR}/{d}(同提交)" for d in names] and "另有" not in out and "git --literal-pathspecs" not in out, out)
+
+
+def t_drift_c4_code_review_r3():
+    """[S1] 代碼審第三輪折入:
+    - git 裡的目錄名對現存目錄的比對鍵是 NFC 再 casefold:不分大小寫的檔案系統上磁碟名只差大小寫也對得上,印磁碟上的名字;
+      鍵對到好幾個現存目錄(分大小寫的檔案系統)就都列(外家否決 F1、邊界 F2)。
+    - 補分支測試(spec 對照 F4):有提交但 git 讀不到 → 回 None、證據頁印「同提交:查不到(git 失敗或沒有)」;
+      git 成功但那個提交沒加卷證目錄 → 回空清單、不印那句。
+
+    翻紅釘:比對鍵拿掉 casefold → ①②紅;git 失敗改回空清單 → ③紅;空清單也印查不到 → ④紅。
+    """
+    print("t_drift_c4_code_review_r3")
+    import io, contextlib
+    m = _load_lumos_inproc()
+    RR = "governance/review-reports"
+    orig = m._nodehome_git
+    try:
+        m._nodehome_git = lambda _root, *_a: f"{RR}/Code-Review/r1.md\0".encode()
+        got = m._drift_c4_same_commit(".", "abc123", {"code-review", "other"})
+        m._nodehome_git = lambda _root, *_a: f"{RR}/CODE-FOO/r1.md\0".encode()
+        got2 = m._drift_c4_same_commit(".", "abc123", {"Code-Foo", "code-foo", "bar"})
+        m._nodehome_git = lambda _root, *_a: None
+        got3 = m._drift_c4_same_commit(".", "abc123", {"code-review"})
+        m._nodehome_git = lambda _root, *_a: b"src/x.py\0"
+        got4 = m._drift_c4_same_commit(".", "abc123", {"code-review"})
+    finally:
+        m._nodehome_git = orig
+    check("①git 裡是 Code-Review、磁碟上是 code-review:對得上,印磁碟上的名字", got == ["code-review"], str(got))
+    check("②鍵對到兩個現存目錄(分大小寫的檔案系統):兩個都列", sorted(got2) == ["Code-Foo", "code-foo"], str(got2))
+    outs = []
+    for same in (got3, got4):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            m._drift_c4_print_dirs({"reports": [], "same": same})
+        outs.append(buf.getvalue())
+    check("③有提交但 git 讀不到:回 None、證據頁寫「同提交:查不到(git 失敗或沒有)」", got3 is None
+          and "同提交:查不到(git 失敗或沒有)" in outs[0], str(got3) + outs[0])
+    check("④git 成功但那個提交沒加卷證目錄:回空清單、不印「同提交:查不到」", got4 == [] and "同提交:查不到" not in outs[1],
+          str(got4) + outs[1])
+
+
+def t_set_conditions_blocks_drift_placeholders():
+    """[S2] lumos set 整欄改 valid_under/revalidate_when,值裡有 <整項新內容>、<卷證> 或 <sha> 任一個 → 擋下、點名是哪一個、
+    檔案不動;其他輸入(空值、多行、合法的角括號字樣)的行為與訊息跟改前一樣。
+
+    翻紅釘:_SET_COND_SLOTS 改回只有 <整項新內容> → ②<卷證>、<sha> 紅;訊息不點名 → ②紅;<整項新內容> 的訊息改了 → ③紅。
+    """
+    print("t_set_conditions_blocks_drift_placeholders")
+    v = mkvault()
+    write(v, "Verification/V.md", "type: verification\nstatus: pass\nvalid_under: 原本的前提\nrevalidate_when: 原本的回頭條件")
+    p = v / "Verification" / "V.md"
+    raw = p.read_bytes()
+    m = _load_lumos_inproc()
+    check("①前置:三個佔位字都在同一份常數、預填指令用的是第一個", tuple(m._SET_COND_SLOTS) == ("<整項新內容>", "<卷證>", "<sha>")
+          and m._SET_COND_SLOT == "<整項新內容>", str(getattr(m, "_SET_COND_SLOTS", None)))
+    for key in ("valid_under", "revalidate_when"):
+        for slot in ("<整項新內容>", "<卷證>", "<sha>"):
+            r = run(v, "set", "Verification/V", key, "好的一條", f"提交 abc;代碼審見 {slot}")
+            check(f"②{key} 值裡留著 {slot}:回 2、點名、檔案不動", r.returncode == 2 and f"還留著 {slot}(" in r.stderr
+                  and p.read_bytes() == raw, r.stdout + r.stderr)
+    r = run(v, "set", "Verification/V", "valid_under", "<整項新內容>")
+    check("③<整項新內容> 的訊息跟改前一字不差", r.returncode == 2 and r.stderr.strip()
+          == "擋下:值裡還留著 <整項新內容>(drift fix 證據頁的佔位字)——換成那一項改寫後的整句,檔案沒動", r.stderr)
+    r = run(v, "set", "Verification/V", "valid_under", "提交 <sha>;代碼審見 <卷證>")
+    check("③兩個一起留著:兩個都點名", r.returncode == 2 and "還留著 <卷證>、<sha>(" in r.stderr and p.read_bytes() == raw, r.stderr)
+    r = run(v, "set", "Verification/V", "valid_under", "")
+    check("④空值:照舊擋、訊息不變", r.returncode == 2 and "的每一條都不能是空的" in r.stderr and p.read_bytes() == raw, r.stderr)
+    r = run(v, "set", "Verification/V", "valid_under", "第一行\n第二行")
+    check("④多行:照舊擋、訊息不變", r.returncode == 2 and "一條條件只能一行" in r.stderr and p.read_bytes() == raw, r.stderr)
+    r = run(v, "set", "Verification/V", "valid_under", "Map<K,V> 與 <src/lib> 照收;提交 <SHA-1> 大寫不是佔位字")
+    check("⑤合法的角括號字樣照收", r.returncode == 0 and "Map<K,V> 與 <src/lib>" in p.read_text(encoding="utf-8"),
+          r.stdout + r.stderr)
+
+
+def t_drift_fix_c1_missing_message():
+    """[S3] c1 與 guard settle 找不到某種預告句時,訊息講明「可能已經是轉正後的說法(不用改),或被手改過」;
+    兩處走同一支 _guard_settle_missing_say、字樣相同、名稱不疊字。
+
+    翻紅釘:c1 改回自己的「找不到…,沒改」→ ③紅;settle 改回舊提醒 → ②紅;字樣裡再疊一次「預告句」→ ①紅。
+    """
+    print("t_drift_fix_c1_missing_message")
+    m = _load_lumos_inproc()
+    tail = "——可能已經是轉正後的說法(不用改),或被手改過(看一下)"
+    say = m._guard_settle_missing_say("X.md", list(m._GUARD_PROSE_NAMES), say=False)
+    check("①每一種名稱:找不到<名稱>+同一句說明,名稱照 _GUARD_PROSE_NAMES、不疊字",
+          say == [f"找不到{n}{tail}" for n in m._GUARD_PROSE_NAMES.values()]
+          and not any("預告句預告句" in x or "預告句」預告句" in x for x in say), str(say))
+    want = f"找不到摘要的 TEST 預告句{tail}"
+    # ② settle:pending 轉正時 TEST 句被改過
+    root = _df_repo()
+    v = root / _DR_VAULT
+    V = v / "Verification"
+    (V / "S.md").write_text(_dr_guard_text("pending", claim="合約乙").replace(
+        "TEST:還沒有測試在守這條", "TEST:[2026-09-15] 預告已轉正,自己先改好的"), encoding="utf-8")
+    # ③ c1:已 pass、TEST 句早就是轉正後的說法,其他三句還在
+    (V / "C.md").write_text(_dr_guard_text("pass", claim="大額退費要人工核可").replace(
+        "TEST:還沒有測試在守這條", "TEST:[2026-09-15] 預告已轉正,自己先改好的"), encoding="utf-8")
+    _df_commit(root, "cases", "2026-09-20")
+    c1 = _df_find(v, "c1", "Verification/C.md")
+    check("②③前置:S 沒有 TEST 預告句、C 是 c1", "TEST:還沒有測試" not in (V / "S.md").read_text(encoding="utf-8") and c1, str(c1))
+    r = run(v, "guard", "settle", "Verification/S", "--test", "t_b")
+    check("②settle:提醒用同一句", r.returncode == 0 and f"提醒:Verification/S.md 裡{want}" in r.stdout, r.stdout + r.stderr)
+    rc, out = _df_fix(v, "Verification/C", str(min(f["line"] for f in c1)), "--kind", "c1", "--date", "2026-09-15")
+    check("③c1:結果訊息接同一句(不再是「找不到…,沒改」)", rc == 0 and f";{want}" in out and "沒改" not in out, out)
+
+
+def t_drift_fix_c3_reason():
+    """[S4] drift fix --kind c3 帶 --reason:補的那一行最後接「;理由:<去頭尾空白的理由>」,三種寫法(pass+--by、其他+--by、
+    沒 --by)都一樣;沒給照舊。理由的長度、單行、佔位字規則跟 c2 相同;改法提示帶 [--reason "…"]。
+
+    翻紅釘:_DRIFT_FIX_ALLOWED["c3"] 拿掉 reason → ②紅(不收 --reason);理由長度上限拿掉 → ③超過 200 字紅;_drift_fix_c3_args 拿掉佔位字檢查 → ③佔位字紅;
+    理由不去空白 → ②紅;只在其中一種寫法接 → ②另兩種紅。
+    """
+    print("t_drift_fix_c3_reason")
+    import datetime
+    today = datetime.date.today().isoformat()
+    root = _df_repo()
+    v = root / _DR_VAULT
+    V = v / "Verification"
+    ref = 'plan_refs:\n  - "[[Projects/Done_計劃]]"\ntags:\n  - type/verification\n  - status/pending'
+    for n in ("A", "B", "C", "D"):
+        write(v, f"Verification/{n}.md", "type: verification\nstatus: pending\n" + ref, body=f"# {n}\n內容\n")
+    _df_commit(root, "c3 reason cases")
+    check("①前置:四篇第 3 行都是 c3", all([f["line"] for f in _df_find(v, "c3", f"Verification/{n}.md")] == [3]
+                                       for n in "ABCD"), "")
+    raw = (V / "A.md").read_bytes()
+    for bad, why in (("abc", "4 到 200"), ("第一行\n第二行", "4 到 200"), ("<為什麼算解決,附提交或測試>", "佔位字"),
+                     ("見 <卷證> 那份", "佔位字"), ("長" * 201, "4 到 200")):
+        rc, out = _df_fix(v, "Verification/A", "3", "--kind", "c3", "--status", "pass", "--reason", bad)
+        check(f"③理由 {bad!r} 不合規:回 2({why})、不寫", rc == 2 and why in out and (V / "A.md").read_bytes() == raw, out)
+    cases = (("A", ["--status", "pass", "--by", "Done_計劃"], "pass", ",由 [[Projects/Done_計劃]] 解決"),
+             ("B", ["--status", "stale", "--by", "Systems/Pay"], "stale", ",參考 [[Systems/Pay]]"),
+             ("C", ["--status", "abandoned"], "abandoned", ""))
+    for n, args, st, mid in cases:
+        rc, out = _df_fix(v, f"Verification/{n}", "3", "--kind", "c3", *args, "--reason", "  主線上已驗過,見 [[不存在的筆記]]  ")
+        t = (V / f"{n}.md").read_text(encoding="utf-8")
+        check(f"②{n}({st}):行尾接「;理由:<去空白的理由>」、理由裡的連結不驗", rc == 0
+              and t.endswith(f"{today} 狀態改為 {st}(存量漂移 c3){mid};理由:主線上已驗過,見 [[不存在的筆記]]\n"), out + repr(t[-160:]))
+    rc, out = _df_fix(v, "Verification/D", "3", "--kind", "c3", "--status", "superseded")
+    check("④沒給理由照舊", rc == 0 and (V / "D.md").read_text(encoding="utf-8").endswith(
+        f"{today} 狀態改為 superseded(存量漂移 c3)\n"), out)
+    m = _load_lumos_inproc()
+    check("⑤改法提示帶 [--reason \"…\"]", m._drift_fix_hint("c3", "Verification/V.md", 3)[0].endswith('[--reason "…"]'),
+          m._drift_fix_hint("c3", "Verification/V.md", 3)[0])
+
+
+def t_delguard_scans_vendored_files_in_consumer():
+    """漂移修法補強 第 5 節已撤(代碼審第三輪,同一類第三次整類拿掉):刪除守衛不再跳過任何工具自裝檔——消費專案提交時
+    scripts/lumos 刪掉的名稱照抽,治理事件 note 不帶 vendored-skip=。原因與可能的正確判法見
+    Issues/刪除守衛在消費專案把工具更新刪掉的名稱當成專案的。
+
+    翻紅釘:cmd_delguard_check 又傳跳過集合(不管哪一種判法)→ ②紅;note 又帶 vendored-skip= → ③紅。
+    """
+    print("t_delguard_scans_vendored_files_in_consumer")
+    import subprocess as _sp, tempfile as _tf, json as _j
+    m = _load_lumos_inproc()
+    root = Path(_tf.mkdtemp(prefix="gctl-dgvend-"))
+    (root / "docs" / "x-knowledge" / "Systems").mkdir(parents=True)
+    (root / "docs" / "x-knowledge" / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 zzVendoredOnlyFn。\n",
+                                                                   encoding="utf-8")
+    body = "def zzVendoredOnlyFn():\n    return 1\n"
+    _nh_file(root, "scripts/lumos", body)
+    _nh_file(root, ".lumos/vendored.json", _j.dumps({"version": 1, "files": {"scripts/lumos": m._vendored_digest(body.encode())}}))
+    _nh_git(root, "init", "-q")
+    _nh_git(root, "add", "-A")
+    _nh_git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+    _nh_file(root, "scripts/lumos", "x = 1\n")                   # 像 lumos update:工具檔與安裝清單一起換成新版
+    _nh_file(root, ".lumos/vendored.json", _j.dumps({"version": 1, "files": {"scripts/lumos": m._vendored_digest(b"x = 1\n")}}))
+    _nh_git(root, "add", "-A")
+    diff = _nh_git(root, "diff", "--cached").stdout
+    check("①前置:消費專案(不是工具鏈本身)、這次提交從原封不動的 scripts/lumos 刪掉 zzVendoredOnlyFn",
+          "-def zzVendoredOnlyFn" in diff and not m._is_toolchain_repo(str(root)) and "scripts/lumos" in m._VENDORED_ALL, diff[:300])
+    r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"], cwd=str(root), capture_output=True, text=True,
+                timeout=120)
+    try:
+        out = _j.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        out = {}
+    toks = {t for h in out.get("hits", []) for t in h["tokens"]}
+    check("②工具檔刪掉的名稱照抽(不跳過工具自裝檔)", "zzVendoredOnlyFn" in toks, r.stdout + r.stderr)
+    log = root / "docs" / ".governance-log.jsonl"
+    rows = [_j.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()] if log.exists() else []
+    rows = [x for x in rows if x.get("gate") == "delguard"]
+    check("③治理事件 note 不帶 vendored-skip=", rows and "vendored-skip" not in rows[-1].get("note", ""), str(rows))
 
 
 def t_doctor_revisit_marks_closed_issues():
