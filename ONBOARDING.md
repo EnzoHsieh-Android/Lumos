@@ -18,6 +18,8 @@ python3 scripts/lumos bootstrap
 
 之後每 clone 一個新專案,同樣跑一次 `python3 scripts/lumos bootstrap` 即可(機器已設定好的部分會自動跳過)。
 
+> 這份文件裡的 `python3 scripts/lumos …`:`python3` 是舊版也能打,lumos 會自己改用 3.14 重跑;機器上沒有 `python3` 這個名字、只有 `python3.14`(例如只用 uv 裝的 Linux)就改打 `python3.14 scripts/lumos …`。
+
 > **專案還沒導入過 Lumos**(repo 裡沒有 `scripts/lumos`)?改走:
 > ```bash
 > cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
@@ -35,7 +37,7 @@ python3 scripts/lumos bootstrap
 | 需要 | 用途 | 沒有會怎樣 |
 |------|------|-----------|
 | `git` | 全部 | 無法運作 |
-| `python3` | lumos 指令與 hooks(純標準庫,不裝任何套件) | 無法運作 |
+| Python 3.14 以上(`python3.14` 或 `python3`) | lumos 指令與 hooks(純標準庫,不裝任何套件)。`python3` 指到舊版也沒關係,lumos 會自己找 3.14 重跑 | 提交與推送前的檢查會擋下並說明怎麼裝(`brew install python@3.14`、`uv python install 3.14`、Windows 用 python.org 安裝器或 `winget install Python.Python.3.14`) |
 | Claude Code | AI 才會自動載入方法論與提示 | 工具能跑,但 AI 不會自動照規矩走 |
 | Codex CLI(選用) | 讓審查裡有一個「換一家公司的 AI」——它專門唱反調 | 那一席換成同一家模型,結論要降級成「只從一家的角度看,沒發現問題」 |
 | 用量夠的訂閱方案(選用) | 審查一輪要派好幾個 AI,每個都把整份材料讀一次(一般 3 個、高風險 5 個,另外加一個看架構、一個換別家的) | 改成手動一輪一輪跑仍然可用,只是慢;其他功能不受影響 |

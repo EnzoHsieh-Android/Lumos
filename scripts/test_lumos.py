@@ -1663,10 +1663,12 @@ def t_stale_status_table():
 def t_hooks_python_fallback():
     import pathlib
     repo = pathlib.Path(GRAPHCTL).resolve().parent.parent
-    for h in ("post-commit", "pre-push"):
+    # 2026-09-29 最低 Python 3.14:不再寫死 python3||python,改內嵌「找任何版本的 python」段(先試 python3.14…、
+    # 固定位置,最後才 python3、python、py),逐字一致由 t_python_launcher_blocks_agree 守
+    for h in ("pre-commit", "post-commit", "pre-push"):
         t = (repo / "scripts" / "hooks" / h).read_text(encoding="utf-8")
-        check(f"{h}: 有 python3||python fallback",
-              "command -v python3 || command -v python" in t, "缺 fallback")
+        check(f"{h}: 有找任何版本 python 的內嵌段(含 python3、python 退路)",
+              "_lumos_any_python()" in t and "for _c in python3 python; do" in t, "缺內嵌段")
 
 
 # ── BUG-1: append dedup 前綴衝突 — X 不該因 X_v2 存在被誤判 ──
@@ -7720,16 +7722,18 @@ def t_windows_interpreter_pick_matches_slim():
     main = (root / "scripts" / "lumos").read_text(encoding="utf-8")
     m1 = _re.search(r'for cand in \(([^)]*)\):\s*\n\s*if shutil\.which\(cand\):', slim)
     check("精簡版那支的候選順序解析得到", bool(m1), slim[:400])
-    m2 = _re.search(r'py_cmd = next\(\(c for c in \(([^)]*)\) if _shutil\.which\(c\)\), "(\w+)"\)', main)
-    check("主線那段的候選順序解析得到", bool(m2), main[main.find('lumos.cmd'):][:400])
-    if m1 and m2:
-        check("★兩邊候選順序一樣★", m1.group(1) == m2.group(1),
-              "slim=%s main=%s" % (m1.group(1), m2.group(1)))
+    # 2026-09-29 最低 Python 改 3.14:主線多一個 py、而且要真的執行成功(商店替身找得到卻跑不起來);
+    # 精簡版不拉下限(Projects/最低Python版本改3.14_計劃〈範圍〉),所以比的是「主線去掉開頭的 py 後跟精簡版一樣」。
+    m = _load_lumos_inproc()
+    main_names = tuple(c[0] for c in m._WIN_LAUNCHERS)
+    check("主線的候選是 py、python3、python", main_names == ("py", "python3", "python"), str(main_names))
+    if m1:
+        slim_names = tuple(x.strip().strip("'\"") for x in m1.group(1).split(","))
+        check("★主線去掉 py 之後跟精簡版的候選順序一樣★", main_names[1:] == slim_names, "slim=%s main=%s" % (slim_names, main_names))
         tail = _re.search(r'return "(\w+)"', slim)
-        check("精簡版的退回值解析得到", bool(tail), "找不到 return 退回值")
-        if tail:
-            check("★兩邊「都找不到時退回什麼」一樣★", tail.group(1) == m2.group(2),
-                  "slim=%s main=%s" % (tail.group(1), m2.group(2)))
+        check("★兩邊「都找不到時退回什麼」一樣★", bool(tail) and tail.group(1) == "python"
+              and 'return "python"' in main[main.index("def _pick_windows_launcher"):][:2000], "")
+    m2 = True
     # ★get.ps1 也算第三份★(2026-09-07 代碼審 r1 通才席+外家席都判 blocking):
     # 它是 Windows 使用者的第一個入口,而它呼叫 lumos 那一行原本寫死 `python`——
     # 只有 python3.exe 的機器連 bootstrap 都進不去,而那正是同一批改動宣稱要救的機器。
@@ -7738,8 +7742,7 @@ def t_windows_interpreter_pick_matches_slim():
     check("get.ps1 有偵測直譯器的迴圈", bool(m3), ps[:300])
     if m3 and m2:
         got = tuple(x.strip().strip("'\"") for x in m3.group(1).split(","))
-        want = tuple(x.strip().strip("'\"") for x in m2.group(1).split(","))
-        check("★get.ps1 的候選順序也一樣★", got == want, "ps=%s main=%s" % (got, want))
+        check("★get.ps1 的候選順序跟主線一樣★", got == main_names, "ps=%s main=%s" % (got, main_names))
     bare = [ln for ln in ps.split("\n") if _re.search(r"(^|[^$\w])python\s+[\"$]", ln)]
     check("★get.ps1 不准直接叫 python(要用偵測到的那個)★", not bare, "還在寫死: %s" % bare[:3])
     print("  ✓ t_windows_interpreter_pick_matches_slim")
@@ -7878,10 +7881,14 @@ def t_get_sh_survives_truncated_stream():
     root = Path(GRAPHCTL).resolve().parent.parent
     sh = (root / "get.sh").read_text(encoding="utf-8")
     lines = sh.split("\n")
-    half = "\n".join(lines[:int(len(lines) * 0.7)])
+    # 截在「不認得的選項會印提醒」那行之後幾行、最後呼叫 main 之前:截斷點跟著內容走,不用固定比例
+    # (2026-09-29 開頭多了找 python 的共用段,固定截 70% 就截不到那段提醒,這條前提斷言翻紅)
+    at = next((i for i, ln in enumerate(lines) if "不認得" in ln), len(lines))
+    half = "\n".join(lines[:at + 3])
     # ★先確認現場走得到★:被截下來的前半段裡,必須真的含有「會印東西」的那段碼,
-    # 否則不管有沒有包裝都不會有輸出,這條測試就變成永遠綠的擺設。
+    # 否則不管有沒有包裝都不會有輸出,這條測試就變成永遠綠的擺設;而且不能含最後那行呼叫,不然就不算截斷。
     check("截斷的前半段確實含有會產生輸出的程式碼", "不認得" in half, half[-200:])
+    check("截斷的前半段不含最後呼叫 main 的那一行", not any(ln.startswith("main ") for ln in half.split("\n")), half[-200:])
     with _tf.TemporaryDirectory() as td:
         f = Path(td) / "half.sh"
         f.write_text(half, encoding="utf-8")
@@ -7915,8 +7922,10 @@ def t_windows_shim_does_not_hardcode_python():
     src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
     i = src.index('shim = bindir / "lumos.cmd"')
     seg = src[i:i + 900]
+    j = src.index("def _pick_windows_launcher")
+    pick = src[j:j + 2000]
     check("shim 的直譯器是安裝當下偵測來的,不是字面 python",
-          "which" in seg and "python3" in seg, seg[:300])
+          "_pick_windows_launcher()" in seg and "which" in pick and '"-c", "pass"' in pick, seg[:300])
     check("寫進 shim 的是偵測結果那個變數", _re.search(r"\{py_cmd\}", seg) is not None, seg[:300])
     print("  ✓ t_windows_shim_does_not_hardcode_python")
 
@@ -16764,6 +16773,7 @@ def t_codeloop_guard_prepush():
             "#!/usr/bin/env python3\n"
             "import sys\n"
             "args = sys.argv[1:]\n"
+            "if args[:1] == ['python-path']:\n    print(sys.executable); sys.exit(0)\n"   # 掛鉤先問 3.14 在哪
             "if 'code-loop' in args and 'check' in args:\n"
             "    sys.exit(2)\n"
             "sys.exit(0)\n"
@@ -16812,6 +16822,7 @@ def t_prepush_computes_impact_once():
             "import sys, json, pathlib\n"
             f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
             "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "if c == 'python-path':\n    print(sys.executable); sys.exit(0)\n"   # 掛鉤先問 3.14 在哪(最低 Python 3.14)
             "if c == 'impact' and '--json' in sys.argv:\n"
             "    print(json.dumps({'range': 'x', 'files': [], 'results': [],\n"
             "                      'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
@@ -32395,11 +32406,11 @@ def t_slim_update_injection():
     # 錨點非唯一→拒絕出貨(終審 s3:此守衛原零覆蓋;src 在字串常數裡多藏一個 def main():)
     (iso.parent / "slim" / "update_cmd.py").write_text("def _slim_update():\n    return 0\n", encoding="utf-8")
     dup = iso.parent / "dupmain.py"
-    dup.write_text(
-        Path(GRAPHCTL).read_text(encoding="utf-8").replace(
-            'if __name__ == "__main__":',
-            'DUP = """def main():\n"""\nif __name__ == "__main__":', 1),
-        encoding="utf-8")
+    # 塞在★最後一個★ if __name__ 前面(真正的主程式入口):第一個是開頭的最低 Python 版本檢查,生成器會把它整段剝掉,
+    # 塞在那裡的假錨點會跟著被剝,測不到「錨點非唯一」(2026-09-29 最低 Python 3.14)
+    _src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    _k = _src.rindex('if __name__ == "__main__":')
+    dup.write_text(_src[:_k] + 'DUP = """def main():\n"""\n' + _src[_k:], encoding="utf-8")
     r4 = subprocess.run([sys.executable, str(iso / "slim-gen.py"), "--src", str(dup),
                          "--outfile", str(iso.parent / "d2" / "scripts" / "lumos")],
                         capture_output=True, text=True)
@@ -35829,26 +35840,10 @@ def t_codex_s3_r1_fixes():
 
 
 def _toml_loads(text):
-    """解 TOML 給斷言用。tomllib 要 3.11,專案宣告支援 3.9:沒有就找本機另一支 3.11+ 的直譯器代解。
-    ★都找不到就判紅不跳過★——跳過通道只給「來源 repo 才有的東西」用,借它會把「沒驗到」混成那一類。"""
-    try:
-        import tomllib
-        return tomllib.loads(text)
-    except ModuleNotFoundError:
-        pass
-    import json as _j, subprocess as _sp, os as _os
-    code = "import sys,json,tomllib;print(json.dumps(tomllib.loads(sys.stdin.read())))"
-    cands = []
-    for alt in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"):
-        if _os.path.exists(alt) and alt not in cands:
-            cands.append(alt)
-    for py in cands:
-        r = _sp.run([py, "-c", code], input=text, capture_output=True, text=True, timeout=60)
-        if r.returncode == 0:
-            return _j.loads(r.stdout)
-        if "No module named 'tomllib'" not in r.stderr:
-            raise ValueError(f"{py} 解 TOML 失敗:{r.stderr[-300:]}")
-    raise RuntimeError("這台跑測試的 Python 沒有 tomllib(要 3.11+),常見安裝位置也找不到 3.11+ 的 python3 代解")
+    """解 TOML 給斷言用。最低 Python 是 3.14,tomllib(3.11 起)一定在(Projects/最低Python版本改3.14_計劃 做法第 10 點;
+    原本為 3.9 找另一支直譯器代解的分支拿掉了)。"""
+    import tomllib
+    return tomllib.loads(text)
 
 
 def t_codex_d6_agent_toml():
@@ -43974,6 +43969,7 @@ def t_prepush_runs_home_check():
         "#!/usr/bin/env python3\nimport sys, json, pathlib, os\n"
         f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
         "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "if c == 'python-path':\n    print(sys.executable); sys.exit(0)\n"   # 掛鉤先問 3.14 在哪(最低 Python 3.14)
         "if c == 'impact' and '--json' in sys.argv:\n"
         "    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
         "elif c == 'pitfalls' and '--json' in sys.argv:\n"
@@ -51575,6 +51571,775 @@ def t_drift_code_review_r5_regressions():
         check("④讀不出來的計劃:記成略過", res[0].startswith("略過"), str(res))
     finally:
         g2.update(sv)
+
+
+def _py314_fake_env(tmp, entries, extra=None):
+    """造一個只看得到 tmp/bin 的環境:entries={名字: "good"|"old"|"sleep"|"fail"}。
+    good = 指到跑這支測試的 3.14 直譯器;old = 印舊版號回 1 的假直譯器;sleep = 卡住;fail = 一執行就失敗。"""
+    import os as _os
+    b = tmp / "bin"
+    b.mkdir(parents=True, exist_ok=True)
+    for name, kind in entries.items():
+        p = b / name
+        if kind == "good":
+            _os.symlink(sys.executable, p)
+            continue
+        body = {"old": "echo 'OLD 3.9.6'\nexit 1\n", "sleep": "exec /bin/sleep 30\n", "fail": "exit 9\n"}[kind]
+        p.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        p.chmod(0o755)
+    env = {"PATH": str(b) + _os.pathsep + "/bin" + _os.pathsep + "/usr/bin" if extra == "sys" else str(b),
+           "HOME": str(tmp), "LUMOS_PYTHON_SEARCH_DIRS": str(tmp / "nowhere")}
+    return env
+
+
+def t_python_resolver_order_and_floor():
+    """[S1] 找 3.14:固定順序、找到就停、只收實際印出 ≥3.14 的、改用它印的絕對路徑;LUMOS_PYTHON 有設就只認它
+    (不是絕對路徑或不合格都停下報錯);uv 帶 --no-python-downloads;LUMOS_PYTHON_SEARCH_DIRS 換掉固定位置;
+    驗法隔開標準輸入、單一候選有逾時(Projects/最低Python版本改3.14_計劃 做法第 1 點)。
+
+    翻紅釘:順序改掉 → ①紅;找到不停 → ②紅;LUMOS_PYTHON 不合格往下找 → ③④紅;uv 沒帶旗標 → ⑤紅;
+    逾時拿掉 → ⑥卡住;python-path 不經 LUMOS_PYTHON → ⑦紅;說明丟掉不存在的候選 → ⑤紅;Windows 收目前目錄的檔 → ⑤b紅;
+    擋整棵子樹或收相對路徑項 → ⑤c紅;uv 逾時說成找不到 → ⑤d紅;uv 出錯說成找不到 → ⑤e紅;
+    位置用解析後的路徑比 → ⑤f紅。
+    """
+    print("t_python_resolver_order_and_floor")
+    import os as _os, tempfile as _tf, time as _time, subprocess as _sp
+    m = _load_lumos_inproc()
+    saved = dict(_os.environ)
+    tmp = Path(_tf.mkdtemp(prefix="gctl-py314-"))
+    try:
+        for k in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON"):
+            _os.environ.pop(k, None)
+        _os.environ["LUMOS_PYTHON_SEARCH_DIRS"] = str(tmp / "fixed")
+        (tmp / "fixed").mkdir()
+        names = [d for d, _a in m._py_candidates()]
+        want = ["python3.14", "python3.15", "python3.16", str(tmp / "fixed" / "python3.14"), str(tmp / "fixed" / "python3.15"),
+                str(tmp / "fixed" / "python3.16"), str(tmp / "fixed" / "python3")]
+        check("①候選順序:版本號名稱 → 固定位置(可換) → uv → python3、python 最後",
+              names[:7] == want and names[-3:] == ["uv python find", "python3", "python"], str(names))
+        env = _py314_fake_env(tmp / "a", {"python3.14": "old", "python3.15": "good", "python3": "good"})
+        _os.environ.update(env)
+        path, tried = m._py_resolve()
+        check("②找到第一個合格的就停,回它印出的絕對路徑", path == _os.path.realpath(sys.executable) or path == sys.executable,
+              f"{path} {tried}")
+        check("②跳過的舊版有寫出版本、合格之後的不再試", tried[0][0] == "python3.14" and "3.9.6" in tried[0][1]
+              and not any(d == "python3" for d, _w in tried), str(tried))
+        _os.environ["LUMOS_PYTHON"] = "bin/python3.15"
+        path, tried = m._py_resolve()
+        check("③LUMOS_PYTHON 不是絕對路徑:停下報錯,不往下找", path is None and len(tried) == 1 and "絕對路徑" in tried[0][1], str(tried))
+        _os.environ["LUMOS_PYTHON"] = str(tmp / "a" / "bin" / "python3.14")
+        path, tried = m._py_resolve()
+        check("④LUMOS_PYTHON 指到舊版:停下報錯,不往下找", path is None and len(tried) == 1, str(tried))
+        _os.environ.pop("LUMOS_PYTHON")
+        env = _py314_fake_env(tmp / "b", {"python3": "old"})
+        uvlog = tmp / "b" / "uv-args"
+        (tmp / "b" / "bin" / "uv").write_text("#!/bin/sh\necho \"$@\" > %s\n"
+                                              "echo 'error: No interpreter found for Python >=3.14 in managed installations or search path' >&2\n"
+                                              "exit 2\n" % uvlog, encoding="utf-8")
+        (tmp / "b" / "bin" / "uv").chmod(0o755)
+        _os.environ.update(env)
+        path, tried = m._py_resolve()
+        args = uvlog.read_text(encoding="utf-8") if uvlog.exists() else ""
+        check("⑤uv 探測帶 --system --no-python-downloads,找不到算這格不合格", path is None and "--no-python-downloads" in args
+              and "--system" in args, args + str(tried))
+        msg = m._py_floor_message(tried)
+        check("⑤找不到時說明列出每個候選的結果:存在但不合格的逐條、不存在的併成一行、uv 在但找不到另列",
+              "python3:版本 3.9.6" in msg and "uv python find:uv 找不到 3.14" in msg
+              and "不存在或沒有這個指令:python3.14、python3.15、python3.16" in msg, msg)
+        cb = tmp / "cwdbin"
+        cb.mkdir()
+        (cb / "python3.14").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (cb / "python3.14").chmod(0o755)
+        _os.environ["PATH"] = str(cb)
+        here = _os.getcwd()
+        _os.chdir(cb)
+        try:
+            plain = m._py_which("python3.14")
+            real_name = m.os.name
+            m.os.name = "nt"
+            try:
+                win = m._py_which("python3.14")
+            finally:
+                m.os.name = real_name
+        finally:
+            _os.chdir(here)
+        check("⑤b Windows 上落在目前目錄裡的同名檔不收(陌生 repo 放一支 python3.14.exe 不會被執行);其他平台照常找到",
+              plain is not None and _os.path.isabs(plain) and win is None, f"plain={plain} win={win}")
+        _os.chdir(tmp)
+        try:
+            m.os.name = "nt"
+            try:
+                parent_ok = m._py_which("python3.14")
+            finally:
+                m.os.name = real_name
+            _os.environ["PATH"] = "cwdbin"
+            rel = m._py_which("python3.14")
+        finally:
+            _os.chdir(here)
+        check("⑤c 目前目錄是安裝位置的上層(家目錄、磁碟根)時照常收;PATH 裡的相對路徑項找到的不收",
+              parent_ok is not None and rel is None, f"parent_ok={parent_ok} rel={rel}")
+        env = _py314_fake_env(tmp / "u", {"python3": "old", "uv": "sleep"})
+        _os.environ.update(env)
+        orig_to = m._PY_PROBE_TIMEOUT
+        m._PY_PROBE_TIMEOUT = 1
+        try:
+            path, tried = m._py_resolve()
+        finally:
+            m._PY_PROBE_TIMEOUT = orig_to
+        check("⑤d uv 卡住:記成逾時,不說成「uv 找不到 3.14」", dict(tried).get("uv python find", "").startswith("逾時"), str(tried))
+        env = _py314_fake_env(tmp / "e", {"python3": "old"})
+        # 照真的 uv 0.11 在壞 uv.toml 旁邊印的形狀:檔名在第一行、原因在最後一行
+        lines = ["error: Failed to parse: `uv.toml`", "  Caused by: TOML parse error at line 1, column 7", "  |",
+                 "1 | garbage[[", "  |       ^", "key with no value, expected `=`"]
+        (tmp / "e" / "bin" / "uv").write_text("#!/bin/sh\n" + "".join("echo '%s' >&2\n" % x for x in lines) + "exit 2\n",
+                                              encoding="utf-8")
+        (tmp / "e" / "bin" / "uv").chmod(0o755)
+        _os.environ.update(env)
+        path, tried = m._py_resolve()
+        why = dict(tried).get("uv python find", "")
+        check("⑤e uv 自己出錯(設定檔壞掉)跟沒找到回傳碼一樣是 2:記成執行失敗並帶它的錯誤訊息", why.startswith("執行失敗")
+              and "uv.toml" in why and "expected" in why, str(tried))
+        sub = cb / "tools"
+        sub.mkdir()
+        (sub / "evil").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (sub / "evil").chmod(0o755)
+        (cb / "python3.14").unlink()
+        _os.symlink(sub / "evil", cb / "python3.14")
+        _os.environ["PATH"] = str(cb)
+        _os.chdir(cb)
+        try:
+            m.os.name = "nt"
+            try:
+                linked = m._py_which("python3.14")
+            finally:
+                m.os.name = real_name
+        finally:
+            _os.chdir(here)
+        check("⑤f 目前目錄裡的符號連結指進子目錄:照樣不收(看檔案放在哪,不看連結指到哪)", linked is None, str(linked))
+        env = _py314_fake_env(tmp / "c", {"python3.14": "sleep", "python3.15": "good"})
+        _os.environ.update(env)
+        orig = m._PY_PROBE_TIMEOUT
+        m._PY_PROBE_TIMEOUT = 1
+        t0 = _time.monotonic()
+        try:
+            path, tried = m._py_resolve()
+        finally:
+            m._PY_PROBE_TIMEOUT = orig
+        check("⑥卡住的候選逾時算不合格,接著試下一個", path is not None and "逾時" in tried[0][1] and _time.monotonic() - t0 < 10,
+              f"{tried} {_time.monotonic() - t0:.1f}s")
+    finally:
+        _os.environ.clear()
+        _os.environ.update(saved)
+    base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON")}
+    r = _sp.run([sys.executable, GRAPHCTL, "python-path"], capture_output=True, text=True, env=base)
+    check("⑦python-path:已經是 3.14 時印自己的絕對路徑", r.returncode == 0 and r.stdout.strip() == sys.executable,
+          r.stdout + r.stderr[-200:])
+    old = tmp / "d"
+    _py314_fake_env(old, {"python3": "old"})
+    r = _sp.run([sys.executable, GRAPHCTL, "python-path"], capture_output=True, text=True,
+                env=dict(base, LUMOS_PYTHON=str(old / "bin" / "python3")))
+    check("⑦python-path:LUMOS_PYTHON 不合格就回 2 印說明,不改用自己", r.returncode == 2 and "LUMOS_PYTHON" in r.stderr
+          and "Traceback" not in r.stderr, r.stdout + r.stderr[-300:])
+
+
+def _py314_old_interpreter():
+    """找一支真的 3.14 以前的直譯器(macOS 的 /usr/bin/python3 通常是 3.9);找不到回 None。"""
+    import subprocess as _sp, os as _os
+    for alt in ("/usr/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3.9", "/usr/bin/python3.12"):
+        if not _os.path.exists(alt):
+            continue
+        r = _sp.run([alt, "-c", "import sys;print(sys.version_info >= (3, 14))"], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip() == "False":
+            return alt
+    return None
+
+
+def t_lumos_old_python_reexec_or_explain():
+    """[S2] lumos 被 3.14 以前的 Python 以主程式身分啟動:找到 3.14 就改用它跑同一組參數、回它的回傳碼;找不到印說明回 2、
+    不印追蹤;LUMOS_REEXEC_PYTHON 等於自己又仍是舊版就報錯;子孫繼承到別的值照常重跑;版本夠時不因 LUMOS_PYTHON 重跑;
+    被 import 不觸發。找不到真的舊版直譯器時明說沒驗到,不默默算綠。
+
+    翻紅釘:檢查拿掉 → ①紅(舊版照跑);找不到時丟例外 → ②紅;防重跑變數不比路徑 → ④紅;被 import 也觸發 → ⑤紅。
+    """
+    print("t_lumos_old_python_reexec_or_explain")
+    import os as _os, tempfile as _tf, subprocess as _sp
+    old = _py314_old_interpreter()
+    base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON")}
+    r = _sp.run([sys.executable, GRAPHCTL, "--version"], capture_output=True, text=True,
+                env=dict(base, LUMOS_PYTHON="/nonexistent/python3"))
+    check("③版本已是 3.14:不因 LUMOS_PYTHON 找或重跑", r.returncode == 0 and "LUMOS_PYTHON" not in r.stderr, r.stderr[-200:])
+    if old is None:
+        print("  (沒驗到:這台機器找不到 3.14 以前的直譯器,①②④⑤ 這幾格沒有真的在舊版上跑)")
+        return
+    tmp = Path(_tf.mkdtemp(prefix="gctl-py314r-"))
+    good = _py314_fake_env(tmp / "g", {"python3.14": "good"})
+    r = _sp.run([old, GRAPHCTL, "python-path"], capture_output=True, text=True, env=dict(base, **good), timeout=120)
+    check("①舊版啟動:找到 3.14 就改用它跑同一組參數(python-path 印出的是 3.14 那支)",
+          r.returncode == 0 and _os.path.realpath(r.stdout.strip()) == _os.path.realpath(sys.executable),
+          r.stdout[-200:] + r.stderr[-300:])
+    none = _py314_fake_env(tmp / "n", {"python3": "old"})
+    r = _sp.run([old, GRAPHCTL, "--version"], capture_output=True, text=True, env=dict(base, **none), timeout=120)
+    check("②舊版啟動、找不到 3.14:印說明(需要版本、現在版本、找過的候選、安裝指令)回 2,不印追蹤",
+          r.returncode == 2 and "需要 Python 3.14" in r.stderr and "找過的候選" in r.stderr and "brew install python@3.14" in r.stderr
+          and "Traceback" not in r.stderr, r.stderr[-400:])
+    # macOS 的 /usr/bin/python3 是一層轉接,真正在跑的是開發工具底下那支;要用它自己回報的 sys.executable 比
+    real_old = _sp.run([old, "-c", "import sys;print(sys.executable)"], capture_output=True, text=True).stdout.strip()
+    r = _sp.run([old, GRAPHCTL, "--version"], capture_output=True, text=True, timeout=120,
+                env=dict(base, **good, LUMOS_REEXEC_PYTHON=real_old))
+    check("④LUMOS_REEXEC_PYTHON 等於自己又仍是舊版:直接報錯", r.returncode == 2 and "重跑" in r.stderr, r.stderr[-300:])
+    r = _sp.run([old, GRAPHCTL, "python-path"], capture_output=True, text=True, timeout=120,
+                env=dict(base, **good, LUMOS_REEXEC_PYTHON="/some/other/python3.14"))
+    check("④子孫繼承到別的值:照常重跑", r.returncode == 0
+          and _os.path.realpath(r.stdout.strip()) == _os.path.realpath(sys.executable), r.stdout + r.stderr[-300:])
+    r = _sp.run([old, "-c", "import runpy,sys; runpy.run_path(sys.argv[1], run_name='lm'); print('LOADED')", GRAPHCTL],
+                capture_output=True, text=True, env=dict(base, **none), timeout=120)
+    check("⑤被 import 載入時不觸發檢查", r.returncode == 0 and "LOADED" in r.stdout, r.stderr[-300:])
+
+
+def _py314_sysbin(tmp, keep_python=False):
+    """把 /usr/bin 與 /bin 的工具逐一連結進 tmp/sysbin,略過名字是 python 開頭的(keep_python=True 就不略過)。
+    掛鉤要用的 git、sed、tail… 都在,python 卻看不到——造「這台機器沒有 python」。"""
+    import os as _os
+    d = tmp / ("sysbin-py" if keep_python else "sysbin")
+    d.mkdir(parents=True, exist_ok=True)
+    for base in ("/usr/bin", "/bin"):
+        if not _os.path.isdir(base):
+            continue
+        for name in _os.listdir(base):
+            if (not keep_python and name.startswith("py")) or (d / name).exists():
+                continue
+            src = _os.path.join(base, name)
+            if _os.path.isfile(src) and _os.access(src, _os.X_OK):
+                _os.symlink(src, d / name)
+    return d
+
+
+def _py314_hook_repo(tmp, with_lumos=True):
+    import subprocess as _sp, shutil as _sh
+    root = tmp / "repo"
+    _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(root), "config", "user.email", "t@t"], capture_output=True)
+    _sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    (root / "docs" / "x-knowledge").mkdir(parents=True)
+    (root / "docs" / "x-knowledge" / "notes.txt").write_text("x\n", encoding="utf-8")
+    if with_lumos:
+        (root / "scripts").mkdir()
+        _sh.copy2(GRAPHCTL, root / "scripts" / "lumos")
+    _sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(root), "commit", "-qm", "base", "--no-verify"], capture_output=True)   # 先有一版:掛鉤只看這次改的
+    (root / "docs" / "x-knowledge" / "staged.txt").write_text("y\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    return root
+
+
+def t_hooks_block_without_python314():
+    """[S3] pre-commit/pre-push 確定要叫 lumos、卻找不到 3.14(只找得到舊版或完全沒 python)→ 擋下印說明,不退回舊版;
+    沒有 scripts/lumos、staged 為空照舊放行;post-commit 在只有 python3.14 的機器照樣寫跳過帳;
+    內嵌段在 set -euo pipefail 下不中途結束(Projects/最低Python版本改3.14_計劃 做法第 3 點)。
+
+    翻紅釘:Gate PY 拿掉 → ①紅(會退回舊版跑或整段跳過);pre-push 改回沒 3.14 放行 → ③紅;
+    post-commit 清單少 python3.14 → ⑤紅;launcher 在 set -e 下直接失敗 → ⑥紅;launcher 不認 LUMOS_PYTHON → ⑦紅;
+    只看能不能執行、不驗絕對路徑與是不是 python → ⑦b紅;不驗 python-path 回的路徑 → ①b紅;
+    略過 LUMOS_PYTHON 改用別支時不講 → ⑦c紅;
+    驗 3.14 時要求整段輸出等於記號 → ②b紅。
+    """
+    print("t_hooks_block_without_python314")
+    import os as _os, tempfile as _tf, subprocess as _sp
+    if not hasattr(_os, "setsid"):
+        raise _SrcOnly("非 POSIX,這段沒驗到")
+    hooks = Path(GRAPHCTL).resolve().parent / "hooks"
+    tmp = Path(_tf.mkdtemp(prefix="gctl-py314h-"))
+    nopy = _py314_sysbin(tmp)
+    withpy = _py314_sysbin(tmp, keep_python=True)
+    good = tmp / "goodbin"
+    good.mkdir()
+    _os.symlink(sys.executable, good / "python3.14")
+    base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON", "GIT_DIR")}
+    base.update(HOME=str(tmp), LUMOS_PYTHON_SEARCH_DIRS=str(tmp / "nowhere"))
+
+    def hook(name, root, path, stdin="", **extra):
+        return _sp.run(["/bin/bash", str(hooks / name)], cwd=str(root), capture_output=True, text=True, input=stdin,
+                       env=dict(base, PATH=path, **extra), timeout=300)
+    old_py = any(n.startswith("python3") for n in _os.listdir(withpy))
+    root = _py314_hook_repo(tmp / "a")
+    if old_py:
+        r = hook("pre-commit", root, str(withpy))
+        check("①pre-commit 只找得到舊版 python:擋下印說明,不退回舊版", r.returncode == 1 and "要用 Python 3.14" in r.stderr
+              and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[-500:])
+    else:
+        print("  (沒驗到①:這台機器 /usr/bin 沒有 python3)")
+    r = hook("pre-commit", root, str(nopy))
+    check("①pre-commit 完全沒有 python:擋下並印安裝指令", r.returncode == 1 and "找不到任何 python" in r.stderr
+          and "brew install python@3.14" in r.stderr, r.stderr[-400:])
+    fake = tmp / "fakebin"
+    fake.mkdir()
+    (fake / "python3.14").write_text("#!/bin/sh\necho /usr/bin/true\n", encoding="utf-8")
+    (fake / "python3.14").chmod(0o755)
+    r = hook("pre-commit", root, str(fake) + _os.pathsep + str(nopy))
+    check("①b PATH 上的 python3.14 是假的、回一支 /usr/bin/true:不拿它跑閘,擋下並講明", r.returncode == 1
+          and "不是 3.14 以上的 python" in r.stderr, r.stderr[-400:])
+    r = hook("pre-commit", root, str(good) + _os.pathsep + str(nopy))
+    site = tmp / "site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text('print("site hello")\n', encoding="utf-8")
+    r2 = hook("pre-commit", root, str(good) + _os.pathsep + str(nopy), PYTHONPATH=str(site))
+    check("②b 直譯器啟動時多印一行(sitecustomize):掛鉤驗 3.14 只看最後一行,跟 lumos 的探針一致,不誤擋",
+          "不是 3.14 以上的 python" not in r2.stderr, r2.stderr[-400:])
+    check("②pre-commit 有 3.14:不因版本擋下", r.returncode == 0 and "要用 Python 3.14" not in r.stderr, r.stderr[-400:])
+    r = hook("pre-push", root, str(nopy))
+    check("③pre-push 有 lumos 卻找不到 3.14:擋下", r.returncode == 1 and "要用 Python 3.14" in r.stderr, r.stderr[-400:])
+    bare = _py314_hook_repo(tmp / "b", with_lumos=False)
+    r = hook("pre-commit", bare, str(nopy))
+    check("④沒有 scripts/lumos:pre-commit 照舊放行", r.returncode == 0, r.stderr[-300:])
+    r = hook("pre-push", bare, str(nopy))
+    check("④沒有 scripts/lumos:pre-push 照舊放行", r.returncode == 0 and "沒有 scripts/lumos" in r.stderr, r.stderr[-300:])
+    _sp.run(["git", "-C", str(bare), "reset", "-q"], capture_output=True)
+    r = hook("pre-commit", bare, str(nopy))
+    check("④staged 為空:照舊放行", r.returncode == 0, r.stderr[-300:])
+    pc = _py314_hook_repo(tmp / "c", with_lumos=False)
+    (pc / "app.py").write_text("x = 1\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(pc), "add", "app.py"], capture_output=True)
+    _sp.run(["git", "-C", str(pc), "commit", "-qm", "code only", "--no-verify"], capture_output=True)
+    r = hook("post-commit", pc, str(good) + _os.pathsep + str(nopy))
+    log = pc / "docs" / ".bypass-log.jsonl"
+    check("⑤post-commit 只有 python3.14 的機器:跳過帳照樣寫入", log.exists() and "code only" in log.read_text(encoding="utf-8"),
+          r.stderr[-300:])
+    src = (hooks / "pre-commit").read_text(encoding="utf-8")
+    blk = src[src.index("# ── python-launcher begin"):src.index("# ── python-launcher end ──")]
+    r = _sp.run(["/bin/bash", "-c", "set -euo pipefail\n" + blk + "\n_lumos_any_python || echo NONE\necho AFTER"],
+                capture_output=True, text=True, env=dict(base, PATH=str(nopy)))
+    check("⑥內嵌段在 set -euo pipefail、沒有 python 時不中途結束", "NONE" in r.stdout and "AFTER" in r.stdout,
+          r.stdout + r.stderr[-200:])
+    r = _sp.run(["/bin/bash", "-c", "set -euo pipefail\n" + blk + '\n_lumos_any_python && echo "EXE=$_LUMOS_ANY_EXE"'],
+                capture_output=True, text=True, env=dict(base, PATH=str(nopy), LUMOS_PYTHON=sys.executable))
+    check("⑦PATH 上沒有任何 python、只設了 LUMOS_PYTHON:第一步就用它(找不到時的說明叫人設它,不能不認)",
+          f"EXE={sys.executable}" in r.stdout, r.stdout + r.stderr[-200:])
+    r = _sp.run(["/bin/bash", "-c", "set -euo pipefail\n" + blk + '\n_lumos_any_python && echo "EXE=$_LUMOS_ANY_EXE"'],
+                capture_output=True, text=True, env=dict(base, PATH=str(good) + _os.pathsep + str(nopy), LUMOS_PYTHON="/usr/bin/true"))
+    check("⑦c LUMOS_PYTHON 不合格但找到別支:照樣用別支,並當場講原因與後果(之後的檢查會因這個值擋下)",
+          f"EXE={good / 'python3.14'}" in r.stdout and "LUMOS_PYTHON=/usr/bin/true" in r.stderr and "擋下" in r.stderr,
+          r.stdout + r.stderr[-300:])
+    for bad, why in (("/usr/bin/true", "不是 python"), ("scripts/lumos", "不是絕對路徑")):
+        r = _sp.run(["/bin/bash", "-c", "set -euo pipefail\n" + blk
+                     + '\nif _lumos_any_python; then echo "EXE=$_LUMOS_ANY_EXE"; else printf "%s\\n" "$_LUMOS_NO_PY_MSG"; fi'],
+                    capture_output=True, text=True, env=dict(base, PATH=str(nopy), LUMOS_PYTHON=bad))
+        check(f"⑦b LUMOS_PYTHON={bad}({why}):不收,找不到時的說明講出它被略過的原因",
+              "EXE=" not in r.stdout and f"LUMOS_PYTHON={bad}" in r.stdout and "找不到任何 python" in r.stdout,
+              r.stdout + r.stderr[-200:])
+
+
+def t_python_launcher_blocks_agree():
+    """三支 git 掛鉤與四支安裝腳本內嵌的「找任何 python」段逐字一致;pre-commit 與 pre-push 的「問 lumos 要 3.14」段一致;
+    shell 那份的版本號名稱、預設固定目錄、最後兩個名字,跟 lumos 內部清單(_py_candidates、_py_fixed_candidates)逐項相同
+    (Projects/最低Python版本改3.14_計劃 做法第 1、3、5 點)。
+    翻紅釘:改 lumos 的版本號名稱順序或固定目錄 → ⑧紅(代碼審 r1:第一版只互比 shell 七份,沒讀 lumos 那份)。"""
+    print("t_python_launcher_blocks_agree")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    files = ["scripts/hooks/pre-commit", "scripts/hooks/pre-push", "scripts/hooks/post-commit", "install.sh", "get.sh",
+             "scripts/install-hooks.sh", "scripts/install-graph-toolchain.sh"]
+
+    def block(rel, begin, end):
+        s = (repo / rel).read_text(encoding="utf-8")
+        return s[s.index(begin):s.index(end)] if begin in s and end in s else None
+    blks = {f: block(f, "# ── python-launcher begin", "# ── python-launcher end ──") for f in files}
+    check("七支腳本都有內嵌段", all(v is not None for v in blks.values()), str([f for f, v in blks.items() if v is None]))
+    ref = blks["scripts/hooks/pre-commit"]
+    check("七份內嵌段逐字一致", all(v == ref for v in blks.values() if v is not None),
+          str([f for f, v in blks.items() if v is not None and v != ref]))
+    r1 = block("scripts/hooks/pre-commit", "# ── python-314 begin", "# ── python-314 end ──")
+    r2 = block("scripts/hooks/pre-push", "# ── python-314 begin", "# ── python-314 end ──")
+    check("pre-commit 與 pre-push 的「問 lumos 要 3.14」段一致", r1 is not None and r1 == r2, "")
+    ref = ref or ""
+    order = [ref.find(t) for t in ("python3.14 python3.15 python3.16", "/opt/homebrew/bin", "python3 python", "command -v py ")]
+    check("內嵌段的順序:版本號名稱 → 固定位置 → python3、python → py", all(x >= 0 for x in order) and order == sorted(order),
+          str(order))
+    import os as _os, re as _re
+    m = _load_lumos_inproc()
+    saved = {k: _os.environ.get(k) for k in ("LUMOS_PYTHON_SEARCH_DIRS", "HOME")}
+    try:
+        _os.environ.pop("LUMOS_PYTHON_SEARCH_DIRS", None)
+        _os.environ["HOME"] = "/lumos-home"
+        cands = [d for d, _a in m._py_candidates()]
+        fixed = m._py_fixed_candidates()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    loops = _re.findall(r"for _c in ([^;]+); do", ref)
+    dflt = _re.search(r'_dirs="([^"]+)"\n  fi', ref)
+    sh_dirs = dflt.group(1).replace("${HOME:-/nonexistent}", "/lumos-home").split(":") if dflt else []
+    lm_names = cands[:3]
+    lm_dirs = [p.rsplit("/", 1)[0] for p in fixed[:3]]
+    lm_tail = [c for c in cands if "/" not in c and c not in lm_names and c != "uv python find"]
+    check("⑧shell 那份跟 lumos 內部清單逐項相同(版本號名稱、預設固定目錄、最後兩個名字)",
+          len(loops) >= 2 and loops[0].split() == lm_names and sh_dirs == lm_dirs
+          and loops[1].split() == lm_tail and all(p.endswith("/python3.14") for p in fixed[:3]),
+          f"sh={loops} {sh_dirs} lumos={lm_names} {lm_dirs} {lm_tail}")
+    for f in files:
+        s = (repo / f).read_text(encoding="utf-8")
+        check(f"{f} 不再寫死 python3 叫 lumos", "exec python3 " not in s and 'python3 "$LUMOS_HOME' not in s
+              and 'command -v python3 || command -v python' not in s, "")
+
+
+def t_hook_cmd_uses_running_python():
+    """[S5] 註冊 Claude/Codex 掛鉤時寫入正在執行的那支直譯器、POSIX 加引號(路徑含空白照樣可執行);
+    merge-claude-settings.py 被 3.14 以前的 Python 執行時改用 3.14 重跑自己,找不到報錯回 2、不寫設定
+    (Projects/最低Python版本改3.14_計劃 做法第 4 點)。
+    翻紅釘:改回 which("python3") → ①紅;引號拿掉 → ②紅;開頭檢查拿掉 → ③④紅。"""
+    print("t_hook_cmd_uses_running_python")
+    import os as _os, json as _j, shlex as _sx, tempfile as _tf, subprocess as _sp
+    merge = Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py"
+    base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON")}
+
+    def cmds(home):
+        f = Path(home) / ".claude" / "settings.json"
+        if not f.exists():
+            return []
+        d = _j.loads(f.read_text(encoding="utf-8"))
+        return [h["command"] for evs in d.get("hooks", {}).values() for e in evs for h in e.get("hooks", [])]
+    h1 = Path(_tf.mkdtemp(prefix="gctl-s5a-"))
+    r = _sp.run([sys.executable, str(merge)], capture_output=True, text=True, env=dict(base, HOME=str(h1)))
+    c = cmds(h1)
+    check("①寫入的是正在執行的那支直譯器", r.returncode == 0 and c and all(_sx.split(x)[0] == sys.executable for x in c),
+          (c[:1] if c else []) + [r.stderr[-200:]])
+    h2 = Path(_tf.mkdtemp(prefix="gctl-s5b-"))
+    # 符號連結會被 Homebrew 的 Python 解析成真實路徑;venv 會保留自己的路徑,拿它造「sys.executable 含空白」
+    venv = h2 / "my py" / "venv"
+    _sp.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], capture_output=True, check=True)
+    spaced = venv / "bin" / "python3"
+    r = _sp.run([str(spaced), str(merge)], capture_output=True, text=True, env=dict(base, HOME=str(h2)))
+    c = cmds(h2)
+    exe = _sx.split(c[0])[0] if c else ""
+    run = _sp.run(["/bin/sh", "-c", c[0].split(" \"")[0] + " -c 'print(456)'"], capture_output=True, text=True) if c else None
+    check("②路徑含空白:註冊的命令照樣可執行", " " in exe and run is not None and "456" in run.stdout,
+          (c[:1] if c else []) + [r.stderr[-200:]])
+    old = _py314_old_interpreter()
+    if old is None:
+        print("  (沒驗到③④:這台機器找不到 3.14 以前的直譯器)")
+        return
+    tmp = Path(_tf.mkdtemp(prefix="gctl-s5c-"))
+    good = _py314_fake_env(tmp / "g", {"python3.14": "good"})
+    h3 = tmp / "home3"
+    h3.mkdir()
+    r = _sp.run([old, str(merge)], capture_output=True, text=True, env=dict(dict(base, **good), HOME=str(h3)), timeout=180)
+    c = cmds(h3)
+    check("③舊版執行、找得到 3.14:改用 3.14 重跑,註冊寫成 3.14", r.returncode == 0 and c
+          and all(_os.path.realpath(_sx.split(x)[0]) == _os.path.realpath(sys.executable) for x in c), r.stderr[-300:])
+    none = _py314_fake_env(tmp / "n", {"python3": "old"})
+    h4 = tmp / "home4"
+    h4.mkdir()
+    r = _sp.run([old, str(merge)], capture_output=True, text=True, env=dict(dict(base, **none), HOME=str(h4)), timeout=180)
+    check("④舊版執行、找不到 3.14:回 2、不寫設定", r.returncode == 2 and not cmds(h4) and "沒寫任何設定" in r.stderr,
+          r.stderr[-300:])
+
+
+def t_installers_require_python314():
+    """[S4] 安裝入口在只有 python3.14、沒有任何 python 的機器;Windows 包裝挑「實際執行成功」的啟動指令
+    (Projects/最低Python版本改3.14_計劃 做法第 5 點)。
+    翻紅釘:安裝腳本改回寫死 python3 → ①紅;沒 python 時不印安裝指令 → ②紅;包裝改回只看名字 → ③紅。"""
+    print("t_installers_require_python314")
+    import os as _os, tempfile as _tf, subprocess as _sp
+    if not hasattr(_os, "setsid"):
+        raise _SrcOnly("非 POSIX,這段沒驗到")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    tmp = Path(_tf.mkdtemp(prefix="gctl-s4-"))
+    nopy = _py314_sysbin(tmp)
+    good = tmp / "goodbin"
+    good.mkdir()
+    _os.symlink(sys.executable, good / "python3.14")
+    base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON")}
+    base.update(HOME=str(tmp), LUMOS_PYTHON_SEARCH_DIRS=str(tmp / "nowhere"))
+    r = _sp.run(["/bin/bash", str(repo / "scripts" / "install-hooks.sh"), "--help"], capture_output=True, text=True,
+                env=dict(base, PATH=str(good) + _os.pathsep + str(nopy)), cwd=str(tmp), timeout=120)
+    check("①只有 python3.14 的機器:安裝入口照樣把 lumos 叫起來", r.returncode == 0 and "usage" in r.stdout.lower(),
+          r.stdout[-200:] + r.stderr[-300:])
+    for script in ("install.sh", "scripts/install-hooks.sh", "scripts/install-graph-toolchain.sh"):
+        r = _sp.run(["/bin/bash", str(repo / script)], capture_output=True, text=True, env=dict(base, PATH=str(nopy)),
+                    cwd=str(tmp), timeout=60)
+        check(f"②沒有任何 python:{script} 印安裝指令回 2、不替人裝", r.returncode == 2 and "brew install python@3.14" in r.stderr
+              and "winget install Python.Python.3.14" in r.stderr, r.stderr[-300:])
+    m = _load_lumos_inproc()
+    fb = tmp / "winbin"
+    fb.mkdir()
+    (fb / "py").write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")          # 啟動器壞掉
+    (fb / "python").write_text("#!/bin/sh\nexit 9009\n", encoding="utf-8")   # 商店替身:找得到、執行失敗
+    for f in ("py", "python"):
+        (fb / f).chmod(0o755)
+    _os.symlink(sys.executable, fb / "python3")
+    saved = _os.environ.get("PATH", "")
+    try:
+        _os.environ["PATH"] = str(fb)
+        got = m._pick_windows_launcher()
+        (fb / "python3").unlink()
+        got2 = m._pick_windows_launcher()
+    finally:
+        _os.environ["PATH"] = saved
+    check("③Windows 包裝:跳過跑不起來的 py 與商店替身,挑實際執行成功的", got == "python3", got)
+    check("③都跑不起來時退回 python", got2 == "python", got2)
+
+
+def t_test_run_cmd_uses_running_python():
+    """[S8] 讀 run_cmd 的三處(guard kill、合約測試閘本體、過濾探針)都經同一支代入函式;{python} 代入執行中的直譯器並依平台
+    加引號(路徑含空白照樣可執行);本 repo 的 run_cmd 用 {python}(Projects/最低Python版本改3.14_計劃 做法第 6 點)。
+    翻紅釘:某處改回自己 replace → ①紅;引號拿掉 → ②紅;config 改回 python3 → ③紅。"""
+    print("t_test_run_cmd_uses_running_python")
+    import os as _os, json as _j, tempfile as _tf, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    body = src[src.index("def _run_cmd_expand"):]
+    body = body[:body.index("\ndef ", 10)]
+    outside = src.replace(body, "")
+    check("①只有代入函式自己代換 {method};三處都呼叫它", '.replace("{method}"' not in outside
+          and outside.count("_run_cmd_expand(run_cmd") == 3, str(outside.count("_run_cmd_expand(run_cmd")))
+    m = _load_lumos_inproc()
+    tmp = Path(_tf.mkdtemp(prefix="gctl-s8-"))
+    venv = tmp / "my py" / "venv"
+    _sp.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], capture_output=True, check=True)
+    saved = m.sys.executable
+    try:
+        m.sys.executable = str(venv / "bin" / "python3")
+        cmd = m._run_cmd_expand("{python} -c 'import sys; print(sys.argv[1])' {method}", "t_x")
+    finally:
+        m.sys.executable = saved
+    r = _sp.run(cmd, shell=True, capture_output=True, text=True)
+    check("②直譯器路徑含空白:展開後照樣可執行,測試名照樣帶到", r.returncode == 0 and r.stdout.strip() == "t_x", cmd + r.stderr[-200:])
+    cfg = _j.loads((repo / ".lumos" / "config.json").read_text(encoding="utf-8"))
+    check("③本 repo 的測試指令用 {python},不吃 PATH 上的 python3",
+          str((cfg.get("test") or {}).get("run_cmd", "")).startswith("{python} "), str(cfg.get("test")))
+
+
+def t_ci_runs_python314_and_old_syntax_check():
+    """[S6] CI 在 3.14 上跑,並以釘版本的 ruff(py39)檢查三類必須 3.9 能解析的檔;doctor 印給消費專案的 CI 步驟提示講明要 3.14
+    (Projects/最低Python版本改3.14_計劃 做法第 7 點)。
+    翻紅釘:CI 版本改回 → ①紅;ruff 步驟拿掉或沒釘版本 → ②紅;提示拿掉 → ③紅。"""
+    print("t_ci_runs_python314_and_old_syntax_check")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    check("①CI 用 3.14", 'python-version: "3.14"' in ci, "")
+    check("②CI 裝釘版本的 ruff、以 py39 查三類檔的語法錯誤", "ruff==" in ci and "--target-version py39 --select E9" in ci
+          and all(f in ci for f in ("scripts/lumos", "scripts/merge-claude-settings.py", "scripts/hooks/claude/*.py")), "")
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    check("③doctor 三處 CI 步驟提示都接上「要在 3.14 上跑」", src.count("+ _CI_PY314_NOTE") == 3 and "3.14" in src[src.index("_CI_PY314_NOTE = "):][:200],
+          str(src.count("+ _CI_PY314_NOTE")))
+
+
+def t_lumos_parses_under_old_grammar():
+    """[S7] scripts/lumos、merge-claude-settings.py、scripts/hooks/claude/*.py 仍要能被 3.9 語法解析:ruff(py39)查語法錯誤、
+    先用一行 3.12 才合法的樣本證明 ruff 真的會報;找得到真的舊版直譯器就實際編譯;兩者都沒有就明說沒驗到。
+    另外守版本檢查之前的 import 只用 3.9 就有的模組(翻紅釘:檔頭加 import tomllib → 最後一格紅)。"""
+    print("t_lumos_parses_under_old_grammar")
+    import shutil as _sh, subprocess as _sp, tempfile as _tf, glob as _g
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    files = [str(repo / "scripts" / "lumos"), str(repo / "scripts" / "merge-claude-settings.py")] + \
+        sorted(_g.glob(str(repo / "scripts" / "hooks" / "claude" / "*.py")))
+    verified = False
+    ruff = _sh.which("ruff")
+    if ruff:
+        tmp = Path(_tf.mkdtemp(prefix="gctl-s7-"))
+        sample = tmp / "pep701.py"
+        sample.write_text('d = {"a": 1}\nx = f"{d["a"]}"\n', encoding="utf-8")
+        r0 = _sp.run([ruff, "check", "--isolated", "--target-version", "py39", "--select", "E9", str(sample)],
+                     capture_output=True, text=True)
+        check("ruff 對 3.12 才合法的 f-string 樣本真的會報(守衛不是空的)", r0.returncode != 0, r0.stdout[-200:])
+        r = _sp.run([ruff, "check", "--isolated", "--target-version", "py39", "--select", "E9", *files],
+                    capture_output=True, text=True)
+        check("ruff(py39):三類檔沒有 3.9 解析不了的語法", r.returncode == 0, r.stdout[-400:])
+        verified = True
+    old = _py314_old_interpreter()
+    if old:
+        ver = _sp.run([old, "-c", "import sys;print(sys.version_info[:2] < (3, 12))"], capture_output=True, text=True).stdout.strip()
+        r = _sp.run([old, "-c", "import sys\nfor f in sys.argv[1:]:\n    compile(open(f, encoding='utf-8').read(), f, 'exec')\nprint('OK')",
+                     *files], capture_output=True, text=True)
+        check("真的舊版直譯器編譯三類檔", r.returncode == 0 and "OK" in r.stdout, r.stderr[-400:])
+        verified = verified or ver == "True"
+    if not verified:
+        print("  (沒驗到:這台機器沒有 ruff、也沒有 3.12 以前的直譯器,3.9 能不能解析這一格沒有真的查)")
+    # 語法之外的另一半:版本檢查之前會執行到的 import 只准用 3.9 就有的標準庫模組。ruff 只查語法,
+    # 在檔頭多 import 一個 3.11 才有的 tomllib,ruff 照綠、3.9 啟動卻在印出「需要 3.14」之前就炸(代碼審 r1)。
+    # 要加新模組:確認 3.9 標準庫有它,再加進下面的清單。
+    import ast as _ast
+    ok39 = {"__future__", "argparse", "collections", "glob", "json", "os", "pathlib", "re", "shlex", "shutil", "subprocess",
+            "sys", "time", "unicodedata", "uuid"}
+    for rel, end in (("scripts/lumos", "# ── python-floor gate end ──"), ("scripts/merge-claude-settings.py", "    _py_floor_gate()")):
+        text = (repo / rel).read_text(encoding="utf-8")
+        head = text[:text.index(end) + len(end)] if end in text else None
+        mods = set()
+        if head is not None:
+            for n in _ast.walk(_ast.parse(head)):
+                if isinstance(n, _ast.Import):
+                    mods |= {a.name.split(".")[0] for a in n.names}
+                elif isinstance(n, _ast.ImportFrom):
+                    mods.add((n.module or "").split(".")[0])
+        check(f"{rel}:版本檢查之前只 import 3.9 就有的標準庫模組", head is not None and mods <= ok39,
+              f"找不到版本檢查的位置" if head is None else f"清單外:{sorted(mods - ok39)}")
+
+
+def t_doctor_flags_stale_hook_python():
+    """[S10] Claude/Codex 設定裡註冊的直譯器不存在或低於 3.14 → doctor 印軟提醒(不計 issues、--ci 不跑)叫人重跑安裝;
+    enforcement 的 python 列列出註冊的直譯器與結果(Projects/最低Python版本改3.14_計劃 做法第 9 點)。
+    只看 lumos 自己註冊的那幾條:別的工具的掛鉤不列、不執行(代碼審 r1:第一版把任何含 hooks/ 的命令都拿去跑 -c 探針)。
+    翻紅釘:Q 段拿掉 → ②紅;計進 issues → ③紅;enforcement 不讀註冊 → ⑤紅;不篩自家掛鉤 → ⑥紅;
+    正規式不收結尾 t 或不看目錄 → ⑦⑧紅;enforcement 多一個名單外的檔名 → ⑨紅;
+    Codex 那一家的目錄判斷拿掉、或合併程式改了命令形狀 → ⑩紅。"""
+    print("t_doctor_flags_stale_hook_python")
+    import os as _os, json as _j, tempfile as _tf, subprocess as _sp
+    m = _load_lumos_inproc()
+    tmp = Path(_tf.mkdtemp(prefix="gctl-s10-"))
+    old = tmp / "python3.9"
+    old.write_text("#!/bin/sh\necho 'OLD 3.9.6'\nexit 1\n", encoding="utf-8")
+    old.chmod(0o755)
+
+    def settings(home, exes):
+        d = home / ".claude"
+        d.mkdir(parents=True, exist_ok=True)
+        names = ("lumos-entry-hook.py", "impact-hook.py", "ci-status-hook.py")
+        hooks = {"SessionStart": [{"hooks": [{"type": "command", "command": f'{e} "${{HOME}}/.claude/hooks/{names[i]}"'}
+                                             for i, e in enumerate(exes)]}]}
+        (d / "settings.json").write_text(_j.dumps({"hooks": hooks}), encoding="utf-8")
+    bad = tmp / "bad"
+    settings(bad, ["/nonexistent/python3.14", str(old)])
+    fine = tmp / "fine"
+    settings(fine, [sys.executable])
+    seen, probs = m._hook_python_problems(bad)
+    check("①不存在的路徑與舊版都列成問題", len(probs) == 2 and any("不存在" in p for p in probs) and any("3.9.6" in p for p in probs),
+          str(probs))
+    check("①註冊的是 3.14 時沒有問題", m._hook_python_problems(fine)[1] == [], str(m._hook_python_problems(fine)))
+    v = mkvault()
+    base = {k: val for k, val in _os.environ.items() if k not in ("CODEX_HOME",)}
+    r_bad = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True,
+                    env=dict(base, HOME=str(bad)))
+    r_fine = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True,
+                     env=dict(base, HOME=str(fine)))
+    out = r_bad.stdout + r_bad.stderr
+    check("②doctor 印軟提醒叫人重跑安裝", "掛鉤註冊的直譯器不見了或低於 3.14" in out and "lumos install" in out, out[-500:])
+    import re as _re
+
+    def n_issues(r):
+        mm = _re.search(r"發現 (\d+) 個 issue|— (\d+) issues", r.stdout)
+        return int(mm.group(1) or mm.group(2)) if mm else None
+    check("③軟提醒不計 issues(收尾那行的問題數跟沒問題時一樣;doctor 不加 --strict 時回傳碼恆為 0,比回傳碼驗不到)",
+          n_issues(r_bad) is not None and n_issues(r_bad) == n_issues(r_fine), f"bad={n_issues(r_bad)} fine={n_issues(r_fine)}")
+    r_ci = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor", "--ci"], capture_output=True, text=True,
+                   env=dict(base, HOME=str(bad)))
+    check("④doctor --ci 不跑這段", "掛鉤註冊的直譯器不見了" not in r_ci.stdout + r_ci.stderr, "")
+    rows = m.enforcement_status(root=tmp, home=bad)
+    py = [x for x in rows if x["layer"] == "python"]
+    check("⑤enforcement 的 python 列列出註冊的直譯器與問題(狀態維持 active,不動既有的分母;提醒交給 doctor Q 段)",
+          py and py[0]["status"] == "active" and "/nonexistent/python3.14" in py[0]["detail"] and "重跑 lumos install" in py[0]["detail"],
+          str(py))
+    other = tmp / "other"
+    (other / ".claude" / "hooks").mkdir(parents=True)
+    side = tmp / "side-effect.log"
+    notify = other / ".claude" / "hooks" / "notify.sh"
+    notify.write_text(f'#!/bin/sh\necho "RAN $1" >> "{side}"\n', encoding="utf-8")
+    notify.chmod(0o755)
+    third = [str(notify), f'bash "{notify}"', 'if [ -f "$HOME/.orca/agent-hooks/x.sh" ]; then bash x; fi',
+             f'{notify} "${{HOME}}/.claude/hooks/lumos-entry-hook.py"']
+    (other / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": c} for c in third]}]}}), encoding="utf-8")
+    seen, probs = m._hook_python_problems(other)
+    check("⑥別的工具的掛鉤(直接寫腳本、bash 包一層、shell 條件式、第一段不是 python)不列、不執行",
+          seen == [] and probs == [] and not side.exists(), f"{seen} {probs} side={side.exists()}")
+    mix = tmp / "mix"
+    (mix / ".claude").mkdir(parents=True)
+    (mix / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": '/nonexistent/python3.14t "${HOME}/.claude/hooks/impact-hook.py"'},
+        {"type": "command", "command": '/nonexistent/python3.13 /opt/other/lumos-entry-hook.py'},
+        {"type": "command", "command": '/nonexistent/python3.12 /tmp/foreign/.claude/hooks/ci-status-hook.py'}]}]}}), encoding="utf-8")
+    seen, probs = m._hook_python_problems(mix)
+    check("⑦free-threaded 的 python3.14t 註冊也認得;⑧別的目錄(含別人家目錄底下的 .claude/hooks)裡同名的檔不算自家掛鉤",
+          [e for _f, e, _w in seen] == ["/nonexistent/python3.14t"], str(seen))
+    import re as _re2
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    body = src[src.index("def enforcement_status("):]
+    body = body[:body.index("\ndef ", 10)]
+    needles = set(_re2.findall(r'\("[\w-]+", "([\w.-]+\.py)"\)', body))
+    check("⑨enforcement 各列找的掛鉤檔名都在自家掛鉤名單裡(名單只有一份)",
+          len(needles) >= 5 and needles <= m._own_hook_scripts(), f"{sorted(needles)} vs {sorted(m._own_hook_scripts())}")
+    merge = Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py"
+    real = tmp / "real"
+    real.mkdir()
+    menv = dict(base, HOME=str(real), CODEX_HOME=str(real / ".codex"))
+    menv.pop("LUMOS_PYTHON", None)
+    rc = [_sp.run([sys.executable, str(merge), *t], capture_output=True, text=True, env=menv).returncode
+          for t in ([], ["--target", "codex"])]
+    saved_ch = _os.environ.pop("CODEX_HOME", None)
+    try:
+        seen, probs = m._hook_python_problems(real)
+    finally:
+        if saved_ch is not None:
+            _os.environ["CODEX_HOME"] = saved_ch
+    fams = {f for f, _e, _w in seen}
+    check("⑩拿合併程式真的寫出的兩家設定來餵:Claude 與 Codex 的註冊都認得、都判合格(安裝端改了命令形狀就會紅)",
+          rc == [0, 0] and fams == {"claude", "codex"} and probs == [] and all(w == "合格" for _f, _e, w in seen),
+          f"rc={rc} seen={seen} probs={probs}")
+
+
+def t_update_prints_python314_notice_and_slim_strips_floor():
+    """[S9] 新版 lumos 執行 update、消費專案的 pre-commit 還是舊的(沒有 python-path)→ 印一段升級注意,之後再更新不印;
+    CI 裡找不到 3.14 時,說明多一行 setup-python 怎麼設;精簡版生成器的產物不含開頭那三行版本檢查
+    (Projects/最低Python版本改3.14_計劃 做法第 8、10 點)。
+    ★前提講明★:①② 直接呼叫新版的 _vendor_toolchain,等於「執行 update 的已經是新程式」——同一台機器第二個專案起才是這樣。
+    第一個專案的 update 由拉新之前就載進記憶體的舊程式執行,印不出升級注意(代碼審 r1);那一段靠 ④:失敗現場自己講清楚。
+    翻紅釘:升級注意拿掉 → ①紅;不看舊 pre-commit 一律印 → ②紅;生成器不剝 → ③紅;CI 那行拿掉 → ④紅。"""
+    print("t_update_prints_python314_notice_and_slim_strips_floor")
+    import os as _os, io as _io, contextlib as _cl, tempfile as _tf, subprocess as _sp
+    tmp = Path(_tf.mkdtemp(prefix="gctl-s9-"))
+    src = tmp / "src"
+    (src / "scripts" / "hooks").mkdir(parents=True)
+    (src / "scripts" / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (src / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\n# 新版:問 lumos python-path\n", encoding="utf-8")
+    (src / "scripts" / "templates").mkdir()
+    (src / "scripts" / "templates" / "graph-discipline.md").write_text("紀律:{{KG}}", encoding="utf-8")
+    _sp.run(["git", "-C", str(src), "init", "-q"], capture_output=True)
+    root = tmp / "consumer"
+    (root / "scripts" / "hooks").mkdir(parents=True)
+    (root / "scripts" / "hooks" / "pre-commit").write_text("#!/bin/bash\nCC_PY=\"$(command -v python3)\"\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    saved = {k: _os.environ.get(k) for k in ("HOME", "LUMOS_HOME", "CODEX_HOME")}
+    outs = []
+    try:
+        _os.environ.update(HOME=str(tmp / "home"), LUMOS_HOME=str(src), CODEX_HOME=str(tmp / "home" / ".codex"))
+        (tmp / "home").mkdir()
+        for _ in range(2):
+            mod = _load_lumos_mod("lumos_s9")
+            buf = _io.StringIO()
+            with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+                mod._vendor_toolchain(src, root, "consumer", no_pull=True)
+            outs.append(buf.getvalue())
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    check("①從舊版更新上來:印升級注意(要 3.14、CI、LUMOS_PYTHON、重跑 install)", "升級注意" in outs[0] and "3.14" in outs[0]
+          and "LUMOS_PYTHON" in outs[0] and "lumos install" in outs[0], outs[0][-500:])
+    check("②已經是新版再更新:不印", "升級注意" not in outs[1], outs[1][-300:])
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    dist = tmp / "dist-lumos"
+    r = _sp.run([sys.executable, str(repo / "scripts" / "slim-gen.py"), "--outfile", str(dist)], capture_output=True, text=True)
+    body = dist.read_text(encoding="utf-8") if dist.exists() else ""
+    check("③精簡版產物不含開頭版本檢查的呼叫", r.returncode == 0 and bool(body)
+          and 'if __name__ == "__main__":\n    _py_floor_gate()' not in body, r.stderr[-300:])
+    m = _load_lumos_inproc()
+    saved = {k: _os.environ.get(k) for k in ("CI", "GITHUB_ACTIONS")}
+    try:
+        for k in saved:
+            _os.environ.pop(k, None)
+        local = m._py_floor_message([("python3", "版本 3.9.6,低於 3.14")])
+        _os.environ["GITHUB_ACTIONS"] = "true"
+        ci = m._py_floor_message([("python3", "版本 3.9.6,低於 3.14")])
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    check("④CI 裡找不到 3.14:說明多一行 setup-python 設 3.14;本機不印這行", "setup-python" in ci and '"3.14"' in ci
+          and "setup-python" not in local, ci[-300:])
 
 
 if __name__ == "__main__":

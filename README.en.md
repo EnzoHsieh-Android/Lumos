@@ -46,7 +46,11 @@ The toolkit combines a Markdown knowledge graph, a CLI, AI working instructions,
 
 ### 1. Check your environment
 
-You need **Git, Python 3.9+**, and Claude Code or Codex. Installation adds more than a CLI: it installs shared tools and skills, and project initialization adds a knowledge graph, AI instructions, and hooks. See [onboarding](ONBOARDING.md) for the scope of those changes.
+You need **Git, Python 3.14+**, and Claude Code or Codex. (The floor is 3.14 because macOS's built-in Python 3.9 crashes outright on deeply nested code. On macOS install it with `brew install python@3.14` or `uv python install 3.14`; if `python3` points to an older version, lumos finds 3.14 and re-runs itself, or explains what to install.)
+
+> **Projects already on an older Lumos**: after updating, commits and pushes are blocked on machines without 3.14 (with install instructions); set your CI's `actions/setup-python` to 3.14; once 3.14 is installed, run `lumos install` once so the Claude/Codex hooks use it too; this changes the Codex hook command lines, so open interactive codex once to re-approve them, or the Codex hooks silently stop running.
+
+ Installation adds more than a CLI: it installs shared tools and skills, and project initialization adds a knowledge graph, AI instructions, and hooks. See [onboarding](ONBOARDING.md) for the scope of those changes.
 
 ### 2. Run the installer
 
@@ -288,7 +292,7 @@ Most of Lumos does not care what your project is written in—the notes, dispatc
 
 **Languages not listed still work**—you just get none of those four things. The graph, the review loops, and the commit and push gates all behave the same; you fill in how your tests are found and pick your own linters.
 
-(Separately: running Lumos itself needs Python 3.9+. That is unrelated to what your project is written in.)
+(Separately: running Lumos itself needs Python 3.14+. That is unrelated to what your project is written in.)
 
 ## Scope
 

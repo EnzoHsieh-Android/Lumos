@@ -1,5 +1,5 @@
 name: CI
-# 獨立信任根(2026-07-29 Codex 外審 P0):本機 hooks 可繞(--no-verify/缺環境降級放行),
+# 獨立信任根(2026-07-29 Codex 外審 P0):本機 hooks 可繞(--no-verify;沒有 scripts/lumos 的 repo 降級放行),
 # 這裡是 push 後必跑的後盾——pre-push 提示裡的「CI 仍會抓」由本 workflow 兌現。
 on:
   push:
@@ -16,9 +16,16 @@ jobs:
           fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5)
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
       - name: Compile check
         run: python -m compileall -q scripts/lumos scripts/test_lumos.py
+      # 2026-09-29 [S7]:scripts/lumos 等三類檔必須 3.9 還能解析,舊版啟動時才跑得到開頭的版本檢查
+      # (Projects/最低Python版本改3.14_計劃 做法第 2、7 點)。這裡的 python 是 3.14,拿它編譯擋不到 3.12 才合法的
+      # f-string 寫法,所以裝釘死版本的 ruff、以 py39 為目標只查語法錯誤——ruff 只在 CI 當工具裝,不是工具鏈的依賴。
+      - name: 3.9 語法守衛
+        run: |
+          python -m pip install --quiet ruff==0.16.7
+          ruff check --isolated --target-version py39 --select E9 scripts/lumos scripts/merge-claude-settings.py scripts/hooks/claude/*.py
       - name: SyntaxWarning 歸零閘
         run: python -W error::SyntaxWarning -c "compile(open('scripts/lumos').read(),'lumos','exec'); compile(open('scripts/test_lumos.py').read(),'t','exec')"
       # 2026-09-12:全套在 CI 單行程跑要 25–30 分鐘,已經撞到 job 上限被砍(8a45751b)。

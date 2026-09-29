@@ -46,7 +46,11 @@ Lumos 把規則與檢查接進這個流程：未滿足條件時，AI 能收到�
 
 ### 1. 確認環境
 
-需要 **Git、Python 3.9+**，以及 Claude Code 或 Codex。安裝不只增加一個 CLI：也會安裝共用工具與 skills，並在初始化專案時加入知識圖譜、AI 指引與 hooks。若想先了解變更範圍，請看 [上手細節](ONBOARDING.md)。
+需要 **Git、Python 3.14+**，以及 Claude Code 或 Codex。（下限是 3.14：macOS 內建的 Python 3.9 碰到巢狀很深的程式會整個崩潰。macOS 用 `brew install python@3.14` 或 `uv python install 3.14` 安裝；`python3` 指到舊版也沒關係，lumos 會自己找 3.14 重跑，找不到會說明怎麼裝。）
+
+> **已經在用舊版的專案**：更新後，沒有 3.14 的機器提交與推送會被擋下並說明怎麼裝；專案 CI 要把 `actions/setup-python` 設成 3.14；裝好之後跑一次 `lumos install`，讓 Claude／Codex 的掛鉤也改用 3.14；Codex 的掛鉤指令因此改變，要再開一次互動 codex 審過，不然 Codex 掛鉤不會跑、也不報錯。
+
+安裝不只增加一個 CLI：也會安裝共用工具與 skills，並在初始化專案時加入知識圖譜、AI 指引與 hooks。若想先了解變更範圍，請看 [上手細節](ONBOARDING.md)。
 
 ### 2. 執行安裝
 

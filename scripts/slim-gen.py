@@ -299,6 +299,22 @@ def apply_edits(text, dels, inserts):
     return "".join(out)
 
 
+_FLOOR_GATE_BEGIN = "# ── python-floor gate begin"
+_FLOOR_GATE_END = "# ── python-floor gate end ──"
+
+
+def _strip_python_floor_gate(text):
+    """剝掉完整版開頭「版本低於 3.14 就改用 3.14 重跑」那三行:精簡版不拉下限(Projects/最低Python版本改3.14_計劃〈範圍〉)。
+    只有開頭沒有結尾就拒絕出貨,不猜要剝到哪。"""
+    b = text.find(_FLOOR_GATE_BEGIN)
+    if b < 0:
+        return text
+    e = text.find(_FLOOR_GATE_END, b)
+    if e < 0:
+        raise SystemExit("ERROR: python-floor gate 段只有開頭沒有結尾,拒絕出貨。")
+    return text[:b] + text[text.index("\n", e) + 1:]
+
+
 def main():
     ap = argparse.ArgumentParser()
     here = Path(__file__).resolve().parent
@@ -311,7 +327,7 @@ def main():
     a = ap.parse_args()
 
     keep = set(a.keep) if a.keep is not None else set(DEFAULT_KEEP)
-    text = Path(a.src).read_text(encoding="utf-8")
+    text = _strip_python_floor_gate(Path(a.src).read_text(encoding="utf-8"))
     tree, funcs, seen, drop = build(text, keep)
 
     # 移除清單真值:從『頂層』subparser 註冊掃出全部一級指令名,減去 keep(不硬編)。

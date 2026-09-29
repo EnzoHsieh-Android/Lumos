@@ -35,6 +35,7 @@ summary: |-
   DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_marker_doc_sync](L4 審計 2026-07-24 修:原指 t_reversibility_drift 不存在)
   TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_write/t_gov_query(無 reversibility 前綴)+ t_marker_doc_sync(文件漂移)+ t_gov_denoise(去噪)
   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
+  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]post-commit 寫跳過帳★不設 Python 版本下限★:沒有 3.14 的機器正是最常用 --no-verify 的機器,這筆帳不能因為下限寫不進去;它內嵌的「找任何版本 python」清單補上 python3.14,只裝了版本化指令的機器也寫得進去 [test:t_hooks_block_without_python314]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
     id: d1
@@ -62,6 +63,7 @@ decisions:
     valid: true
 about_code:
   - scripts/lumos
+  - scripts/hooks/post-commit
 aliases:
   - lumos gov
   - 治理帳彙整

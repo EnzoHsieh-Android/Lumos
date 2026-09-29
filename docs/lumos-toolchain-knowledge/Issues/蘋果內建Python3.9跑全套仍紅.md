@@ -1,6 +1,6 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-09-29
 updated: 2026-09-29
 aliases:
@@ -13,7 +13,7 @@ related:
   - "[[Projects/代碼審資料狀態鏡頭_計劃]]"
 tags:
   - type/issue
-  - status/open
+  - status/done
   - scope/loop-engineering
 summary: |-
   FLAG:TECHNICAL
@@ -42,4 +42,4 @@ summary: |-
 
 ## 回頭條件
 
-REVISIT:2026-10-29 跟 [[Systems/測試假綠形態]] 那條「CI 要不要加一格 3.9」一起決定:加的話這兩件必須先修;不加的話把 README 的最低版本說明改成實際驗過的版本。
+已結案(2026-09-29):Enzo 裁定工具最低 Python 改成 3.14([[Projects/最低Python版本改3.14_計劃]]),這兩件 3.9 專屬的問題不再需要修。結案依據是「3.14 跑過全套綠」,不是「原因已查清」——兩件的原因本篇自己標了沒驗,現在也沒查。

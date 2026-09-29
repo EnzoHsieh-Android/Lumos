@@ -1,0 +1,797 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 04142f45..ce68dffa 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -58,20 +58,180 @@ import os
+ import re
+ import uuid
+ import sys
+ import time
+ import unicodedata
+ from collections import defaultdict, deque, namedtuple
+ from pathlib import Path
+ 
+ _IS_WIN = os.name == "nt"
+ 
++# ── python-floor begin(最低 Python 3.14;精簡版生成器會剝掉這一段——見 Systems/python直譯器選擇)──
++# ★這一段與它之前的程式必須能被 Python 3.9 解析、執行★:Python 要先解析完整支檔才跑第一行,
++# 舊版啟動時要能跑到這裡才講得出「需要 3.14」(Projects/最低Python版本改3.14_計劃 做法第 2 點)。
++_PY_FLOOR = (3, 14)
++_PY_PROBE_TIMEOUT = 5          # 單一候選
++_PY_TOTAL_TIMEOUT = 15         # 整份清單
++_PY_PROBE = ("import sys\n"
++             "if sys.version_info >= (3, 14):\n    print('OK ' + sys.executable)\n"
++             "else:\n    print('OLD %d.%d.%d' % sys.version_info[:3]); sys.exit(1)")
++_PY_INSTALL_HINT = (
++    "安裝 3.14:\n"
++    "  macOS:  brew install python@3.14   或   uv python install 3.14\n"
++    "  Linux:  發行版的 python3.14 套件   或   uv python install 3.14\n"
++    "  Windows:python.org 的安裝器   或   winget install Python.Python.3.14\n"
++    "裝在別處就設 LUMOS_PYTHON=<那支 3.14 的絕對路徑>。\n"
++    "只有 python3.14、沒有 python3 這個名字的機器,全域 lumos 指令要 `uv python install 3.14 --default`\n"
++    "或自己加一個 python3 別名(它用 #!/usr/bin/env python3 啟動)。\n")
++
++
++def _py_fixed_candidates():
++    """固定位置候選 → [路徑]。LUMOS_PYTHON_SEARCH_DIRS 有設就只看那幾個目錄(測試接縫,也給特殊環境用),
++    否則是 Homebrew、/usr/local、~/.local/bin、uv 與 pyenv 自己的安裝目錄(路徑很短的環境靠這一段)。"""
++    import glob
++    over = os.environ.get("LUMOS_PYTHON_SEARCH_DIRS")
++    names = ("python.exe",) if os.name == "nt" else ("python3.14", "python3.15", "python3.16", "python3")
++    if over is not None:
++        return [os.path.join(d, n) for d in over.split(os.pathsep) if d for n in names]
++    home = os.path.expanduser("~")
++    if os.name == "nt":
++        base = os.environ.get("LOCALAPPDATA", "")
++        return sorted(glob.glob(os.path.join(base, "Programs", "Python", "Python31[4-9]", "python.exe"))) if base else []
++    out = ["/opt/homebrew/bin/python3.14", "/usr/local/bin/python3.14", os.path.join(home, ".local", "bin", "python3.14")]
++    out += sorted(glob.glob(os.path.join(home, ".local", "share", "uv", "python", "cpython-3.1[4-9]*", "bin", "python3")))
++    out += sorted(glob.glob(os.path.join(home, ".pyenv", "versions", "3.1[4-9]*", "bin", "python3")))
++    return out
++
++
++def _py_candidates():
++    """找 3.14 的候選順序 → [(說明, argv 前綴或 None=問 uv)](計劃做法第 1 點;python3、python 放最後)。"""
++    out = [(n, [n]) for n in ("python3.14", "python3.15", "python3.16")]
++    out += [(p, [p]) for p in _py_fixed_candidates()]
++    if os.name == "nt":
++        out.append(("py -3.14", ["py", "-3.14"]))
++    out.append(("uv python find", None))
++    out += [(n, [n]) for n in ("python3", "python")]
++    return out
++
++
++def _py_probe(argv, deadline):
++    """用這個候選跑一次版本檢查 → (≥3.14 的絕對路徑或 None, 結果說明)。標準輸入接空、有逾時。"""
++    import shutil
++    import subprocess
++    exe = argv[0]
++    if os.path.dirname(exe):
++        if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
++            return None, "不存在"
++    elif shutil.which(exe) is None:
++        return None, "沒有這個指令"
++    left = deadline - time.monotonic()
++    if left <= 0:
++        return None, "整份清單超過 %d 秒,沒試" % _PY_TOTAL_TIMEOUT
++    try:
++        r = subprocess.run([*argv, "-c", _PY_PROBE], stdin=subprocess.DEVNULL, capture_output=True,
++                           text=True, errors="replace", timeout=min(_PY_PROBE_TIMEOUT, left))
++    except subprocess.TimeoutExpired:
++        return None, "逾時(%s 秒沒回)" % _PY_PROBE_TIMEOUT
++    except OSError as e:
++        return None, "執行失敗(%s)" % e
++    out = (r.stdout or "").strip().splitlines()
++    last = out[-1] if out else ""
++    if r.returncode == 0 and last.startswith("OK ") and os.path.isabs(last[3:].strip()):
++        return last[3:].strip(), "合格"
++    if last.startswith("OLD "):
++        return None, "版本 %s,低於 3.14" % last[4:].strip()
++    return None, "執行失敗(回傳碼 %s,可能是 Windows 商店替身)" % r.returncode
++
++
++def _py_uv_find(deadline):
++    """問 uv 要一支 ≥3.14(不找虛擬環境、不准觸發下載)→ 它印的路徑或 None。"""
++    import shutil
++    import subprocess
++    if shutil.which("uv") is None:
++        return None
++    left = deadline - time.monotonic()
++    if left <= 0:
++        return None
++    try:
++        r = subprocess.run(["uv", "python", "find", "--system", "--no-python-downloads", ">=3.14"],
++                           stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
++                           timeout=min(_PY_PROBE_TIMEOUT, left))
++    except (subprocess.TimeoutExpired, OSError):
++        return None
++    path = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
++    return path[0] if path and os.path.isabs(path[0]) else None
++
++
++def _py_resolve():
++    """找一支 ≥3.14 的直譯器 → (絕對路徑或 None, [(候選, 結果)])。LUMOS_PYTHON 有設就只認它:
++    必須是絕對路徑、而且合格,否則停下,不往下找(明寫了要用哪一支的人,不該被默默換成別支)。找到一個就停。"""
++    deadline = time.monotonic() + _PY_TOTAL_TIMEOUT
++    pinned = os.environ.get("LUMOS_PYTHON", "")
++    if pinned:
++        if not os.path.isabs(pinned):
++            return None, [("LUMOS_PYTHON=" + pinned, "不是絕對路徑(掛鉤與手打時會解析到不同的檔,不收)")]
++        path, why = _py_probe([pinned], deadline)
++        return path, [("LUMOS_PYTHON=" + pinned, why)]
++    tried = []
++    for desc, argv in _py_candidates():
++        if argv is None:
++            found = _py_uv_find(deadline)
++            if found is None:
++                tried.append((desc, "沒有 uv,或 uv 找不到 3.14"))
++                continue
++            desc, argv = desc + " → " + found, [found]
++        path, why = _py_probe(argv, deadline)
++        if why not in ("不存在", "沒有這個指令"):
++            tried.append((desc, why))
++        if path:
++            return path, tried
++    return None, tried
++
++
++def _py_floor_message(tried, head="需要 Python 3.14 以上"):
++    lines = ["擋下:%s,現在是 %d.%d.%d(%s)。" % (head, *sys.version_info[:3], sys.executable)]
++    lines.append("找過的候選:" + ("" if tried else "沒有任何一個存在"))
++    lines += ["  %s:%s" % (d, w) for d, w in tried]
++    return "\n".join(lines) + "\n" + _PY_INSTALL_HINT
++
++
++def _py_floor_gate():
++    """lumos 以主程式身分被 3.14 以前的 Python 啟動 → 找 3.14 用它重跑同一組參數;找不到印說明回 2(做法第 2 點)。
++    版本夠就只清掉防重跑變數;LUMOS_PYTHON 不會讓一支已經是 3.14 的 lumos 重跑(指到包裝腳本時會無限重跑)。"""
++    if sys.version_info >= _PY_FLOOR:
++        os.environ.pop("LUMOS_REEXEC_PYTHON", None)   # 子孫行程不繼承
++        return
++    prev = os.environ.get("LUMOS_REEXEC_PYTHON")
++    if prev and os.path.realpath(prev) == os.path.realpath(sys.executable):
++        sys.stderr.write("擋下:已經用 %s 重跑過,它回報的版本仍是 %d.%d——那支不是真的 3.14(包裝腳本?)。\n"
++                         % (prev, *sys.version_info[:2]) + _PY_INSTALL_HINT)
++        sys.exit(2)
++    path, tried = _py_resolve()
++    if not path:
++        sys.stderr.write(_py_floor_message(tried))
++        sys.exit(2)
++    os.environ["LUMOS_REEXEC_PYTHON"] = path
++    argv = [path, os.path.abspath(__file__), *sys.argv[1:]]
++    sys.stdout.flush()
++    sys.stderr.flush()
++    if os.name == "nt":
++        import subprocess
++        sys.exit(subprocess.call(argv))           # Windows 的 execv 不真的取代行程,呼叫端拿不到回傳碼
++    os.execv(path, argv)
++
++
++# ── python-floor gate begin(精簡版生成器只剝這三行:精簡版不拉下限,上面的函式留著無害)──
++if __name__ == "__main__":
++    _py_floor_gate()
++# ── python-floor gate end ──
++# ── python-floor end ──
++
+ # ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
+ LUMOS_VERSION = "v1.0"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
+ # ★發布通道的分支名★(2026-09-07 #7 落地;設計出處 [[Projects/版本發布流程_計劃]] S5):
+ # main=開發線(可壞),release=對外線(只有 owner 快轉過去)。三個 clone 站一律先試這條,
+ # 分支還不存在時退回預設分支並印一行說明——冷啟動不能因此炸掉。
+ LUMOS_RELEASE_BRANCH = "release"
+ 
+ 
+ def _version_text():
+     """`lumos --version` 印的東西。
+@@ -195,20 +355,25 @@ def strip_quotes(s):
+ 
+ def _posix_norm(s):
+     """路徑比對鍵的共用正規化:反斜線轉斜線、去 ./ 與 a/../b(純字面,不查檔案);空的回空字串。
+     工具自裝檔判別、about_code 的比對、排序加分讀 about_code 共用這一個(2026-09-10 代碼審 r3 架構席/整合席:
+     原本三處各寫一份,排序那側只剝開頭的 ./,不解 ..)。"""
+     import posixpath
+     v = str(s).strip().replace("\\", "/")
+     return posixpath.normpath(v) if v else ""
+ 
+ 
++# doctor 印給消費專案的三處 CI 步驟提示共用這一句(Projects/最低Python版本改3.14_計劃 做法第 7 點):
++# GitHub 的 ubuntu 預設 python3 是 3.12,不裝 3.14 的話更新後 lumos 在 CI 回 2
++_CI_PY314_NOTE = ("\n  (這一步要在 Python 3.14 上跑:actions/setup-python 的 python-version 設 \"3.14\";"
++                  "lumos 的最低版本是 3.14,舊版會回 2 並說明)")
++
+ _SINGLE_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")   # 整個值恰好是一個連結(fullmatch 用;讀側索引與寫側判斷共用)
+ 
+ 
+ def _multi_link_value(s):
+     """清單欄位的一個值裡有兩個以上連結開頭——一項只能是一個連結或一個值。
+     讀的一側(parse_frontmatter 的 lint)與寫的一側(_list_scalar_value)共用這一個判斷(2026-09-10 代碼審 r3 架構席:
+     原本讀側只認 `]], [[` 與 `]],[[`,寫側看兩個以上 [[,`[[A]],  [[B]]` 讀側不吭聲、寫側卻擋)。
+     只用在清單欄位:散文欄位(例如 valid_under)講到兩個連結是正常的。"""
+     return str(s).count("[[") > 1
+ 
+@@ -2837,20 +3002,33 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         print()
+ 
+     # Check N: 版本 nudge(軟提醒,dev-machine advisory;不算 issue、不擋 CI)
+     if repo_root is not None:
+         _nudge = _version_nudge(repo_root)
+         if _nudge:
+             section("W", "工具鏈版本有沒有落後(提醒,不擋)")
+             warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
+             print()
+ 
++    # Check Q: Claude/Codex 掛鉤註冊的直譯器還在不在、夠不夠新(軟提醒,不計 issues;Projects/最低Python版本改3.14_計劃 [S10])。
++    # 不計 issues:doctor --ci 是推送前的硬擋,Homebrew 升版讓路徑消失不該擋住每個專案的推送;CI 上不跑(那裡沒有掛鉤註冊)。
++    if not ci:
++        try:
++            _hp = _hook_python_problems()[1]
++        except Exception:
++            _hp = []
++        if _hp:
++            section("Q", "Claude/Codex 掛鉤註冊的 Python(提醒,不擋)")
++            warn_soft(_hp, "掛鉤註冊的直譯器不見了或低於 3.14,那些掛鉤跑不起來或會先多一次重跑",
++                      "重跑 lumos install(會用目前這支 3.14 重寫兩家的設定)")
++            print()
++
+     # Check F: linter 宣告檔健康(lint接線收口 [S1]:SARIF 橋最後一哩——宣告了跑不動的
+     # 東西,審查就漏那些告警;有宣告才驗,無宣告一行跳過不擋。路徑解析走本函式既有的
+     # _vault_repo_root(git 感知;沿革:env.vault 直拼→假綠、doctor 區域 repo_root→standalone
+     # 消失、_repo_root_from_env→standalone 回 parent 與既有定義互斥——三坑都踩過,本行是
+     # 三次修正的終點。與 cmd_lint_check 的 _anchor_repo_root(cwd 錨)是兩入口語境刻意分工;
+     # lint-check 找不到 root 已改 rc2 響亮(code-batch2 r2 d-f2)。
+     if True:
+         _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
+         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
+         if not _lf["declared"]:
+@@ -12389,20 +12567,35 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+     try:
+         atomic_write_verify(path, new_lines, "[kill:recipes]", check)
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     print(f"✓ kill 配方寫入 {rel}(invariant『{invariant_substr[:24]}…』, test={test})")
+     print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
+     return 0
+ 
+ 
++def _run_cmd_expand(run_cmd, method=None):
++    """測試指令的佔位符換成實際值 → 字串。{python} = 執行中的這支 lumos 用的直譯器(依平台加引號,路徑含空白照樣可執行);
++    {method} = 測試名(照舊用 shell 引號)。讀 run_cmd 的三處(guard kill、合約測試閘本體、過濾探針)都經這一支
++    ——原本三處各自代換 {method},新佔位符漏補一處就會把字面 {python} 交給 shell(Projects/最低Python版本改3.14_計劃 做法第 6 點)。"""
++    import shlex as _shlex
++    import subprocess as _sp
++    cmd = str(run_cmd)
++    if "{python}" in cmd:
++        exe = sys.executable or "python3"
++        cmd = cmd.replace("{python}", _sp.list2cmdline([exe]) if _IS_WIN else _shlex.quote(exe))
++    if method is not None and "{method}" in cmd:
++        cmd = cmd.replace("{method}", _shlex.quote(method))
++    return cmd
++
++
+ def _kill_run(cmd, cwd, timeout, keep_re=None):
+     """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。
+ 
+     keep_re 直接轉給 _kill_cap:輸出超過上限而要截斷時,符合這個樣式的行不得被砍掉
+     (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。"""
+     import os
+     import signal
+     import subprocess
+     import tempfile
+     import time
+@@ -12494,21 +12687,20 @@ def _kill_attribute(out, method):
+     return True, "\n".join(lines[i:j + 1])[:200]
+ 
+ 
+ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                    as_json=False, keep_worktree=False):
+     """跑節點的 kill 配方:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅。
+     rc:全 killed(含 timed_out)=0;任一 survived=1;有 drifted/abort/error 而無 survived=2;
+     零配方/缺 run_cmd/config 壞=2。"""
+     import json
+     import os
+-    import shlex
+     import shutil
+     import subprocess
+     import tempfile
+     import datetime
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
+     path = env.vault / rel
+     recipes, err = _kill_read_recipes(path)
+@@ -12589,21 +12781,21 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+             wt_real = os.path.realpath(wt)
+             baselines = {}
+             for r in plist:
+                 method_full = r.get("test", "")
+                 method = method_full.split(":", 1)[1] if (":" in method_full and pdata.get("multiplatform")) else method_full
+                 method = method.strip("`")   # Kotlin 反引號名拆殼後進白名單
+                 if not _KILL_METHOD_OK_RE.fullmatch(method or ""):
+                     results.append({**r, "platform": plat, "verdict": "error",
+                                     "detail": f"test 名不合法(拒注入): {method!r}"})
+                     continue
+-                cmd = run_cmd.replace("{method}", shlex.quote(method)) if "{method}" in run_cmd else run_cmd
++                cmd = _run_cmd_expand(run_cmd, method)
+                 note_ws = "" if "{method}" in run_cmd else " whole-suite"
+                 if cmd not in baselines:
+                     b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, wt, max(600.0, floor))
+                     baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to)
+                 b_rc, b_tail, b_elapsed, b_to = baselines[cmd]
+                 if b_to or b_rc != 0:
+                     results.append({**r, "platform": plat, "verdict": "abort",
+                                     "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:]})
+                     continue
+                 # 套配方(路徑圍欄:雙邊 realpath)
+@@ -16360,20 +16552,43 @@ def _refuse_if_probe(action):
+     沙盒清掉後全域 skills 全變懸空連結。2026-09-02 實際炸過一次(八個 skill 斷)。
+     探針環境一律設 LUMOS_PROBE=1;這幾個會動全域機器狀態的指令在探針下直接拒絕。"""
+     import os
+     if os.environ.get("LUMOS_PROBE") == "1":
+         print(f"擋下:偵測到 LUMOS_PROBE=1(情境探針沙盒),拒絕執行「{action}」——"
+               f"這會把真的 ~/.claude 重連到臨時沙盒,沙盒一清就全斷。探針裡不該重裝工具鏈。", file=sys.stderr)
+         return True
+     return False
+ 
+ 
++# Windows 包裝的啟動指令候選(t_windows_interpreter_pick_matches_slim 盯著跟精簡版與 get.ps1 的順序一致)
++_WIN_LAUNCHERS = (("py", "-3"), ("python3",), ("python",))
++
++
++def _pick_windows_launcher():
++    """Windows 的 lumos.cmd 要寫哪個啟動指令 → 字串。依序試 py -3、python3、python,★實際執行成功才算★
++    (Windows 的商店替身 python.exe 找得到、執行卻失敗);都不行退回 python。仍然只寫指令名、不寫絕對路徑
++    (版本管理工具換 exe 是常態);版本交給 lumos 開頭的檢查(Projects/最低Python版本改3.14_計劃 做法第 5 點)。
++    精簡版只試 python3、python 而且只看名字在不在——完整版刻意多一個 py、而且要真的跑得起來,分岔是刻意的。"""
++    import shutil as _shutil
++    import subprocess as _sp
++    for cand in _WIN_LAUNCHERS:
++        if _shutil.which(cand[0]) is None:
++            continue
++        try:
++            r = _sp.run([*cand, "-c", "pass"], stdin=_sp.DEVNULL, capture_output=True, timeout=10)
++        except (OSError, _sp.TimeoutExpired):
++            continue
++        if r.returncode == 0:
++            return " ".join(cand)
++    return "python"
++
++
+ def cmd_install(force=False):
+     """全域 lumos + user-scope skills(機器層一鍵)。Unix=symlink、Win=.cmd shim。"""
+     import os
+     if _refuse_if_probe("install"):
+         return 2
+     src = Path(__file__).resolve()
+     bindir = Path.home() / ".local" / "bin"
+     bindir.mkdir(parents=True, exist_ok=True)
+     if _IS_WIN:
+         shim = bindir / "lumos.cmd"
+@@ -16383,22 +16598,21 @@ def cmd_install(force=False):
+         #  就是另打了一份——宣稱與事實不符)。真的不能呼叫:精簡版是獨立交付包,
+         # 這支被 vendor 進消費端專案時 slim/ 根本不在,import 必炸。所以照這個 repo
+         # 對 hook 那批的既有做法:複製一份、加一條測試盯住兩邊的候選順序與退回值一致
+         # (t_windows_interpreter_pick_matches_slim)。判斷本身借的是
+         # slim/install.py:_pick_windows_interpreter,那支的完整理由寫在它的說明裡:
+         # 只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 / 商店版)
+         # 上,安裝會用 python3 跑完並印「裝好了」,但 shim 寫死呼叫 python,
+         # 之後每次打 lumos 都是「'python' 不是可執行的命令」——裝完即壞,而且要等
+         # 使用者真的去用才發現。寫命令名稱不寫絕對路徑的理由見那支的說明
+         # (版本管理工具換 exe 是常態,絕對路徑撐不過升級)。
+-        import shutil as _shutil
+-        py_cmd = next((c for c in ("python3", "python") if _shutil.which(c)), "python")
++        py_cmd = _pick_windows_launcher()
+         shim.write_text(f'@echo off\r\n{py_cmd} "{src}" %*\r\n', encoding="utf-8")
+         print(f"✓ 安裝: {shim} → {py_cmd} {src}")
+     else:
+         dst = bindir / "lumos"
+         if dst.is_symlink() and dst.resolve() == src:
+             print(f"✓ 已安裝(symlink 正確): {dst} → {src}")
+         elif dst.exists() or dst.is_symlink():
+             if not force:
+                 cur = str(dst.resolve()) if dst.is_symlink() else "(一般檔案)"
+                 print(f"⚠ {dst} 已存在(→ {cur}),加 --force 覆寫", file=sys.stderr)
+@@ -17414,60 +17628,77 @@ def _pull_source_or_abort(src, allow_stale=False):
+     if allow_stale:
+         print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
+         return 0
+     print(f"擋下:工具鏈來源拉不到最新版(可能是網路不通、有本地改動擋住、或歷史分岔),先停。\n"
+           f"  不會拿可能過期的來源蓋掉你的專案——默默裝到舊版這個坑踩過兩次。\n"
+           f"  先去來源那邊處理:\n    cd {src} && git status && git pull --ff-only\n"
+           f"  確定就要用現在這份來源:重跑並加 --allow-stale", file=sys.stderr)
+     return None
+ 
+ 
++_PY314_UPGRADE_NOTICE = (
++    "\n升級注意:從這一版起 lumos 需要 Python 3.14(系統內建的 3.9 碰到深層巢狀的程式會整個崩潰)。\n"
++    "  · 沒有 3.14 的機器,提交與推送前的檢查會擋下並說明怎麼裝(brew install python@3.14 / uv python install 3.14 /\n"
++    "    winget install Python.Python.3.14)。\n"
++    "  · 專案 CI 要用 3.14:actions/setup-python 的 python-version 設 \"3.14\",不然 lumos 在 CI 會回 2。\n"
++    "  · 3.14 裝在別處就設 LUMOS_PYTHON=<那支 3.14 的絕對路徑>。\n"
++    "  · 裝好之後跑一次 lumos install,讓 Claude/Codex 掛鉤也改用 3.14。\n")
++
+ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+     """從 Lumos 來源 src vendor 工具組到專案 root(python 單一源 scaffold + hooks + 結尾自癒)。
+     回傳 0;來源無效回傳 None。圖譜資料受 _scaffold_project 的 skip 保護不被動。
+     cmd_update / cmd_init(--with-hooks) 共用。"""
+     import subprocess, shutil, filecmp
+     installer = src / "scripts" / "install-graph-toolchain.sh"  # 仍作來源有效性探針(薄殼亦在)
+     if not installer.exists():
+         print(f"擋下:找不到 Lumos 工具鏈的來源({src} 底下沒有安裝腳本)。\n"
+               f"  三種解法擇一:--source <路徑> 指定、設環境變數 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
+               file=sys.stderr)
+         return None
+     if not no_pull:
+         rc_p = _pull_source_or_abort(src, allow_stale)
+         if rc_p is None:
+             return None                      # fail-closed:一個檔都還沒動就退場
+     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
+     _scaffold_project(root, slug)
+     _init_additive_setup(root)     # 只加不覆寫;掛在這裡讓 `lumos update` 也能把設定骨架補給既有專案
+     _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
+     rc = 0
++    # 從還沒升級到最低 Python 3.14 的版本更新上來(舊的 pre-commit 還沒用 python-path)→ 複製完印一次升級注意
++    # (Projects/最低Python版本改3.14_計劃 做法第 8 點;判斷不必另存狀態)
++    _old_pc = root / "scripts" / "hooks" / "pre-commit"
++    try:
++        _py314_upgrade = _old_pc.is_file() and "python-path" not in _old_pc.read_text(encoding="utf-8", errors="replace")
++    except OSError:
++        _py314_upgrade = False
+     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
+     # ★只複製精確清單上的檔★(第三輪外家否決席:原本整個目錄照來源 rglob,來源裡沒進版控的檔也被裝進去,
+     # 可是跳過清單只列受版控的檔——裝進去的檔不在清單上,消費專案又把它當成自己的程式掃)。清單跟來源受版控的檔
+     # 是否一致,由 t_vendored_file_list_matches_what_install_ships 守
+     toolkit = list(_VENDORED_TOOLKIT) + list(_VENDORED_TREE_FILES)
+     healed = []
+     for rel in toolkit:
+         s, t = src / rel, root / rel
+         if not s.exists():
+             continue
+         if (not t.exists()) or not filecmp.cmp(s, t, shallow=False):
+             t.parent.mkdir(parents=True, exist_ok=True)
+             shutil.copy2(s, t)
+             if s.stat().st_mode & 0o111:
+                 t.chmod(t.stat().st_mode | 0o111)
+             healed.append(rel)
+     if healed:
+         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
+     else:
+         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
++    if _py314_upgrade and "scripts/hooks/pre-commit" in healed:
++        print(_PY314_UPGRADE_NOTICE)
+     # 記下工具檔的內容指紋:風險掃描與健檢只跳過「內容跟這裡一模一樣」的工具檔(r3 併發資源席)
+     _vendored_manifest_write(root)
+     # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
+     _reinject_all(root, slug)
+     # ★全域同步放在這裡★(2026-09-06 全 repo 審視 #5):要等上面的 copy2 自癒把 vendored hook
+     # 換成來源的新版之後才同步出去,否則 `lumos update` 會拿更新前的舊副本覆蓋全域 hooks。
+     _sync_global_from_project(root)
+     return rc
+ 
+ 
+@@ -19642,20 +19873,52 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
+         print(f"seat-check {Path(report).name}: 派工要查但報告沒碰 unreported {len(out['unreported'])}"
+               f" / 引句超出派工範圍 out_of_scope {len(out['out_of_scope'])}(派工材料 {len(materials)} 份;只觀測不擋)")
+         for mp in out["unreported"]:
+             print(f"  ⚠ unreported: {mp}(派工單說要查這份,報告裡一個字都沒提到)")
+         for q in out["out_of_scope"]:
+             print(f"  ⚠ out_of_scope: 「{q[:50]}」(這句引言不在派工的任何一份材料裡{';已記進出界帳' if ledger else ''})")
+         print("  (這項只觀測不擋:看的是報告有沒有照派工單走,不評審查角度;引 file:line 當證據一律算合法)")
+     return 0
+ 
+ 
++def _hook_python_problems(home=None):
++    """Claude/Codex 設定裡註冊的直譯器 → (看過的 [(家, 路徑, 結果)], 有問題的 [說明])。每支實際執行一次看版本(5 秒逾時)。
++    sys.executable 可能落在 uv、pyenv、venv、Homebrew 某個版本目錄底下,會隨它們更新或刪除而消失,原本沒有任何東西會發現
++    (Projects/最低Python版本改3.14_計劃 做法第 9 點)。讀不到設定檔 = 沒有註冊,不算問題。"""
++    import json as _json
++    import shlex as _shlex
++    home = Path(home) if home else Path.home()
++    seen, probs = [], []
++    for fam, f in (("claude", home / ".claude" / "settings.json"), ("codex", _codex_home(home) / "hooks.json")):
++        try:
++            d = _json.loads(f.read_text(encoding="utf-8"))
++        except (OSError, ValueError):
++            continue
++        exes = set()
++        for arr in (d.get("hooks") or {}).values():
++            for grp in arr if isinstance(arr, list) else []:
++                for hk in (grp.get("hooks") or []) if isinstance(grp, dict) else []:
++                    cmd = str((hk or {}).get("command") or "")
++                    if "hooks/" not in cmd:
++                        continue
++                    try:
++                        exes.add(_shlex.split(cmd)[0])
++                    except ValueError:
++                        continue
++        for exe in sorted(exes):
++            path, why = _py_probe([exe], time.monotonic() + _PY_PROBE_TIMEOUT)
++            seen.append((fam, exe, why))
++            if not path:
++                probs.append("%s 的掛鉤註冊的是 %s:%s" % (fam, exe, why))
++    return seen, probs
++
++
+ def enforcement_status(root=None, home=None):
+     """回各層防護「現在有沒有生效」的清單 [{layer, status, detail}](Projects/enforcement儀表板_計劃)。
+     純唯讀、每層各自 try 包住(一層測不出來不拖垮整份;fail-open 本身要能被觀測)。
+     status: active | inactive | degraded | unknown | registered-trust-unknown(只有 Codex hook 列會出:
+     已註冊、檔在,但要人在互動 codex 審過才跑、本機讀不到——不進 summary 分母)。root=repo 根、home=~/(測試可注入)。"""
+     import json as _json
+     if root:
+         root = Path(root)
+     else:
+         for cand in (Path.cwd(), *Path.cwd().parents):   # cwd 逐層向上找 .git(同 _anchor_repo_root 慣例)
+@@ -19826,23 +20089,26 @@ def enforcement_status(root=None, home=None):
+         hp = ""
+     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
+         try:
+             f = root / "scripts" / "hooks" / fn
+             ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
+             add(layer, "active" if ok else "inactive",
+                 f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+         except Exception as e:
+             add(layer, "unknown", str(e))
+ 
+-    # ⑥ python
++    # ⑥ python:跑 lumos 的這支,加上 Claude/Codex 設定裡註冊的直譯器(Projects/最低Python版本改3.14_計劃 [S10])
+     try:
+-        add("python", "active", sys.version.split()[0])
++        _seen, _probs = _hook_python_problems(home)
++        _reg = ";".join("%s 掛鉤 %s(%s)" % (f, e, w) for f, e, w in _seen)
++        add("python", "active",   # 狀態不因註冊的直譯器改變(不動既有的分母);有問題寫進說明,提醒交給 doctor Q 段
++            sys.version.split()[0] + (";" + _reg if _reg else "") + (";重跑 lumos install 修正" if _probs else ""))
+     except Exception as e:
+         add("python", "unknown", str(e))
+ 
+     # ⑦ vendored 版本——★r1 審:_version_nudge 回 None 有四種(無 CLAUDE.md/無版本戳/來源不可達/真最新),
+     # 原本全當 active 會讓「沒裝 lumos 的專案」假綠。改成先自查前提,分不清就 unknown,不假綠。★
+     try:
+         cm = root / "CLAUDE.md"
+         if not cm.exists():
+             add("vendored-cli", "unknown", "無 CLAUDE.md,無法判版本(非 lumos 專案?)")
+         else:
+@@ -24287,21 +24553,22 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+                    "沒寫來源的現況描述不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     if ymls:
+         # 跳過註解:整行被註解掉的那步不算有呼叫(第二層早就這樣判;代碼審 r3 通才席:兩句判法不一,中間漏唸)
+         body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+         step = ("\n    - run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+                 "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
+                 "python3 scripts/lumos note-shape --diff \"${{ github.event.before || '0000000000000000000000000000000000000000' }}..${{ github.sha }}\""
+                 "\n  (這步只在 push 事件跑(`if: github.event_name == 'push'`),pull_request 沒有前一版;checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了找得到主線:"
+-                "已在主線上的提交不重查,新分支首推(前一版是 40 個 0)或 force-push 後舊頂端找不到時,lumos 從跟主線的分岔點算)")
++                "已在主線上的提交不重查,新分支首推(前一版是 40 個 0)或 force-push 後舊頂端找不到時,lumos 從跟主線的分岔點算)"
++                + _CI_PY314_NOTE)
+         if "note-shape --diff" not in body:
+             out.append("專案 CI 沒呼叫 `lumos note-shape --diff`,`--no-verify` 推上去的筆記沒人擋——CI 貼這一步:" + step)
+         else:
+             shallow = _ci_jobs_calling_without_full_history(ymls, "note-shape --diff")
+             if shallow:
+                 out.append("專案 CI 呼叫了 note-shape,但那個工作項目沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過——"
+                            + _ci_jobs_list(shallow))
+     if ci:
+         # 推送前與 CI 已經用 note-shape --diff 查這次的範圍;事後掃描逐提交重算、會隨歷史線性變慢(代碼審 r1 單reviewer
+         # 量到 500 個提交 9 秒),不放在每次推送都跑的 --ci 路徑上
+@@ -25873,21 +26140,21 @@ def _drift_gate_doctor_lines(repo_root):
+     if mode != "block" and (wired or explicit):
+         src = (f"({cfg_warns[0]})" if cfg_warns else "(.lumos/config.json 的 drift_check)" if explicit
+                else "(沒寫設定,這是預設值)")
+         out.append(f"這個專案的存量漂移檢查是 {mode}{src}——轉正後留著預告句的推送不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+     if wired and ymls and "drift check" not in body:
+         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
+                    "\n    - run: python3 scripts/lumos drift check --diff \"${{ github.event.before || "
+-                   "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"")
++                   "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"" + _CI_PY314_NOTE)
+     return out
+ 
+ 
+ # ── 考試 ─────────────────────────────────────────────────────────────────────────────
+ 
+ def _drift_set_status_text(text, status):
+     """全文裡把 status 欄改掉(連同 status/* 標籤)——考試在記憶體裡重放 lumos set 用,不寫檔。"""
+     lines = text.split("\n")
+     e = _drift_fm_end(lines)
+     if not e:
+@@ -26284,21 +26551,21 @@ def _note_audit_doctor_lines(repo_root, vault, ci=False):
+     wired = hk is not None and hk.returncode == 0 and _NOTE_AUDIT_GOLIVE_MARK in hk.stdout
+     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+     shallow = _ci_jobs_calling_without_full_history(ymls, "note-audit check")
+     if shallow:
+         out.append("專案 CI 呼叫了 note-audit check,但那個工作項目沒抓完整歷史(fetch-depth: 0):淺層 clone 算不出範圍,每次都會跳過——"
+                    + _ci_jobs_list(shallow))
+     if ymls and wired:          # 還沒接線(推送前掛鉤裡沒有這道)就不唸 CI 沒呼叫——接線前這道本來就不擋
+         if "note-audit check" not in body:
+             out.append("專案 CI 沒呼叫 `lumos note-audit check`,`--no-verify` 推上去的筆記沒人審——CI 在 note-shape 那步後面加:"
+                        "\n    - run: python3 scripts/lumos note-audit check --diff \"${{ github.event.before || "
+-                       "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"")
++                       "'0000000000000000000000000000000000000000' }}..${{ github.sha }}\"" + _CI_PY314_NOTE)
+     if ci:
+         return out
+     ml = _mainline_ref(root, remote_only=True)
+     # 刪除次數從遠端頂端讀(計劃〈做法〉第 3 節第 9 點;代碼審 r1 正確性席:讀本機 HEAD 會把還沒推的實驗算進去)
+     dl = _lens_git(root, "log", "--diff-filter=D", "--format=%H", "--name-only", ml[1], "--", _NOTE_AUDIT_VERDICT_DIR) if ml else None
+     if dl is not None and dl.returncode == 0:
+         n = sum(1 for x in dl.stdout.splitlines() if x.startswith(_NOTE_AUDIT_VERDICT_DIR + "/"))
+         if n:
+             out.append(f"主線歷史裡判定檔被刪過 {n} 次(筆記內容審只防疏忽,刪判定檔屬存心繞過;這個數給 RETIRE-IF 看)")
+     gl = _nodehome_golive(root, ml[1], _NOTE_AUDIT_GOLIVE_MARK, _NOTELINES_PREPUSH) if ml else None
+@@ -32056,22 +32323,21 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
+         # 讀取端裸查檔案自己的 uid/權限——父目錄被換成指向別處的 symlink 時讀得到別人的判定,
+         # 而這份判定直接決定合約測試閘報不報綠。那正是 r1 兩席都點名「別再各自漂」的同一種漂移。
+         st = cache.stat()
+         if (_trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter")
+                 and st.st_uid == _os.getuid() and not (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))
+                 and _time.time() - st.st_mtime <= _FILTER_PROBE_TTL):
+             d = _j.loads(cache.read_text(encoding="utf-8"))
+             return bool(d["trustworthy"]), d.get("why", "")
+     except (OSError, ValueError, KeyError):
+         pass
+-    import shlex as _shlex
+-    probe_cmd = run_cmd.replace("{method}", _shlex.quote(_FILTER_PROBE_NAME))
++    probe_cmd = _run_cmd_expand(run_cmd, _FILTER_PROBE_NAME)
+     print("  (為了確認你的測試指令分不分得出「測試不存在」,現在多跑它一次、餵一個假的測試名;"
+           "結果會快取,不是每次推送都跑)", file=sys.stderr)
+     rc, tail, secs, to = _kill_run(probe_cmd, str(root), timeout)
+     if to:
+         ok, why = True, f"冒煙測試超時({int(secs)}s),不因此判它不可信"
+     elif rc == 0:
+         ok, why = False, ("這個測試指令對一個根本不存在的測試名也回成功——代表它的過濾條件沒有生效,"
+                           "閘拿它的退出碼當「測試跑過」會是假綠")
+     else:
+         ok, why = True, f"冒煙測試回 rc={rc},指令分得出找不到測試"
+@@ -32084,21 +32350,21 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
+         pass
+     return ok, why
+ 
+ 
+ def _run_bound_tests(repo_root, items, tails=None):
+     """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。
+     tails 給一個 dict 就順便填 (node, plat, method) → 輸出尾巴(規格閘拿去讀「篩到幾支」;不給不填,回傳形狀不變)。
+ 
+     verdict ∈ green / red / unproven。unproven=「指令回成功,但它自己的輸出裡看不到有跑過任何測試」
+     ——那不是紅(測試沒失敗),但也絕對不是綠。"""
+-    import shlex as _shlex, os as _os
++    import os as _os
+     try:
+         pdata = load_platforms(repo_root)
+     except ValueError as e:
+         return None, f"config platforms 壞: {e}"
+     plats = pdata["platforms"]
+     per_test = float(_os.environ.get("LUMOS_TEST_TIMEOUT", "180") or 0) or None   # 同 runner 變數;0=不限
+     results, seen = [], {}
+     for node, plat, method, status in items:
+         if status != "real":
+             results.append((node, plat, method, "red", {"dangling": "綁的測試在程式碼裡找不到(懸空)",
+@@ -32106,21 +32372,21 @@ def _run_bound_tests(repo_root, items, tails=None):
+                                                        "bad-name": "測試名不合法或平台前綴未定義"}[status], 0.0))
+             continue
+         pentry = plats.get(plat) or {}
+         run_cmd = pentry.get("run_cmd")
+         if not run_cmd:
+             # ★記成「沒跑」、繼續跑別的平台★(Issues/多平台設定下測試指令被默默略過,2026-09-11):
+             # 原本碰到第一支沒指令的就整批 return no-config——其他平台有指令的也不跑,連前面已判的懸空紅也被吞掉。
+             results.append((node, plat, method, "no-cmd", f"平台 {plat} 沒設測試指令", 0.0))
+             continue
+         whole = "{method}" not in run_cmd
+-        cmd = run_cmd if whole else run_cmd.replace("{method}", _shlex.quote(method))
++        cmd = _run_cmd_expand(run_cmd, None if whole else method)
+         root = str(pentry.get("root") or repo_root)
+         key = (root, cmd)
+         if key in seen:
+             rc, tail, secs, to = seen[key]
+         else:
+             timeout = max(_BOUND_TESTS_WHOLE_SUITE_TIMEOUT, per_test or 0) if whole else per_test
+             rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6,
+                                            keep_re=_ran_evidence_re(pentry.get("profile_name")))
+             seen[key] = (rc, tail, secs, to)
+         if tails is not None:
+@@ -34013,20 +34279,21 @@ HELP_WHEN = {
+     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+     "lint-waive": "新增告警閘擋下來的那條是誤報?帶指紋和理由放行,會留痕被統計。--list 看放行過什麼。",
+     "rule-check": "自寫規則每條都有會翻紅的樣本嗎。沒樣本的規則可能是死的。",
+     "rule-gap": "逃逸帳標了該抓卻還沒寫的規則,列成待辦。",
+     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "dart-sarif": "把 dart analyze 的 JSON 輸出轉成 SARIF,接進 lint 適配器;讀不懂就失敗、不吐空結果。",
+     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
++    "python-path": "git 掛鉤用來挑直譯器:印一支 Python 3.14 以上的絕對路徑;有設 LUMOS_PYTHON 就只認它,不合格回 2 並說明。",
+     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
+@@ -34061,20 +34328,34 @@ def _fill_help_when(parser, parent=""):
+     同名二層子指令(cochange check / code-loop check)先查「父 子」鍵再退回單名。"""
+     for act in parser._actions:
+         if isinstance(act, argparse._SubParsersAction):
+             for name, sp in act.choices.items():
+                 if not sp.description:
+                     when = HELP_WHEN.get(f"{parent} {name}".strip()) or HELP_WHEN.get(name)
+                     if when:
+                         sp.description = "什麼時候用:" + when
+                 _fill_help_when(sp, name)
+ 
++def cmd_python_path():
++    """lumos python-path:印一支 ≥3.14 直譯器的絕對路徑,git 掛鉤之後的呼叫都用它(Systems/python直譯器選擇)。
++    跑到這裡時自己已經是 3.14(舊版會先被開頭檢查改用 3.14 重跑);有設 LUMOS_PYTHON 就驗它、印它,不合格回 2。"""
++    if os.environ.get("LUMOS_PYTHON"):
++        path, tried = _py_resolve()
++        if not path:
++            sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
++            return 2
++        print(path)
++        return 0
++    print(sys.executable)
++    return 0
++
++
+ def main():
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
+@@ -34761,20 +35042,22 @@ def main():
+ 
+     p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
+     asub = p.add_subparsers(dest="anchor_cmd", required=True)
+     av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
+     av.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+     av.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON")
+     aa = asub.add_parser("approve", help="重算錨點 hash 寫回 baseline + governance-log 留痕(改錨點的合法路徑)")
+     aa.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+     aa.add_argument("--note", required=True, help="一句話理由(必填,進留痕)")
+ 
++    sub.add_parser("python-path", help="印一支 Python 3.14 以上的絕對路徑(git 掛鉤用;LUMOS_PYTHON 有設就只認它)")
++
+     p = sub.add_parser("enforcement", help="各層防護現在有沒有生效(唯讀匯總:hooks/pre-commit/pre-push/CI/anchor/版本)")
+     p.add_argument("--repo", dest="enf_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+     p.add_argument("--json", dest="enf_json", action="store_true", help="輸出 JSON")
+ 
+     p = sub.add_parser("quote-check", help="[T2 錨定檢查] 報告引句逐條對回凍結快照(vault-free;rc0 全 ok/rc1 有 miss/rc2 IO或零引句)")
+     p.add_argument("qc_report", metavar="報告.md")
+     p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
+     p.add_argument("--json", action="store_true", dest="qc_json")
+ 
+     p = sub.add_parser("link-candidates", help="[補鏈候選] code→節點連結缺失候選生成(唯讀恆 rc0/不寫檔;人裁後補引用;輸入壞損 rc2)")
+@@ -35048,20 +35331,22 @@ def main():
+         return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
+     if args.cmd == "severity-check":
+         return cmd_severity_check(args.sv_loop, args.sv_round, args.sv_auditor, repo=args.sv_repo)
+     if args.cmd == "link-candidates":
+         return cmd_link_candidates(code_file=args.lc_file, goldset=args.lc_goldset,
+                                    repo=args.lc_repo, as_json=args.lc_json)
+     if args.cmd == "anchor":
+         if args.anchor_cmd == "verify":
+             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
+         return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
++    if args.cmd == "python-path":
++        return cmd_python_path()
+     if args.cmd == "enforcement":
+         return cmd_enforcement(repo=args.enf_repo, as_json=args.enf_json)
+     if args.cmd == "lint-watch":
+         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
+     if args.cmd == "compose-metrics":
+         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+     if args.cmd == "cochange":
+         if args.cccmd == "rules":
+             return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
+                                       as_json=args.coch_json)

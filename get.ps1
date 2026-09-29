@@ -32,12 +32,23 @@ function Invoke-LumosGet {
   # Pick the interpreter at run time instead of hardcoding `python`. Machines that only have
   # python3.exe (some official installers, Microsoft Store builds) would otherwise fail right
   # here - before ever reaching the shim fix in `lumos install` that exists for exactly them.
+  # Each candidate must actually run (`-c pass`): the Microsoft Store stub python.exe is found on PATH
+  # but fails when executed. The version check (3.14+) is done by scripts/lumos itself, which re-runs
+  # itself with a 3.14 interpreter or explains what to install.
+  # No current-directory guard is needed here (unlike _py_which in scripts/lumos): PowerShell never runs a
+  # command from the current location unless it is path-qualified (.\python.exe), so Get-Command and & $cand
+  # only see PATH.
   $py = $null
-  foreach ($cand in @('python3', 'python')) {
-    if (Get-Command $cand -ErrorAction SilentlyContinue) { $py = $cand; break }
+  $pyArgs = @()
+  foreach ($cand in @('py', 'python3', 'python')) {
+    if (-not (Get-Command $cand -ErrorAction SilentlyContinue)) { continue }
+    $a = @()
+    if ($cand -eq 'py') { $a = @('-3') }
+    & $cand @a -c "pass" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $py = $cand; $pyArgs = $a; break }
   }
   if (-not $py) {
-    Write-Error "ERROR: neither python3 nor python found on PATH. Install Python 3.9+ and re-run." -ErrorAction Continue
+    Write-Error "ERROR: no working Python found (tried py -3, python3, python). Install Python 3.14 (python.org installer, or: winget install Python.Python.3.14) and re-run." -ErrorAction Continue
     return 2
   }
 
@@ -75,7 +86,7 @@ function Invoke-LumosGet {
   $env:LUMOS_HOME = $homeDir
   # `| Out-Host` is required: a function's `return` also emits every unconsumed output,
   # so without it the caller receives Object[] instead of Int32. (Same note as slim/get.ps1.)
-  & $py "$homeDir\scripts\lumos" bootstrap @pass | Out-Host
+  & $py @pyArgs "$homeDir\scripts\lumos" bootstrap @pass | Out-Host
   if ($LASTEXITCODE -ne 0) {
     Write-Error "ERROR: bootstrap failed with exit code $LASTEXITCODE." -ErrorAction Continue
     return $LASTEXITCODE

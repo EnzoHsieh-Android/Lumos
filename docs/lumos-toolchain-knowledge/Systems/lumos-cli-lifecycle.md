@@ -5,6 +5,7 @@ created: 2026-06-26
 updated: 2026-08-20
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
+responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
 tags:
   - type/system
   - status/done
@@ -34,6 +35,8 @@ summary: |-
   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
   KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
+  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]安裝入口(install.sh、get.sh、get.ps1、install-hooks.sh、install-graph-toolchain.sh)只負責找一支任何版本的 python 把 lumos 叫起來,找 3.14 交給 lumos 開頭的檢查([[Systems/python直譯器選擇]]);原本寫死 python3,只裝了 python3.14 的機器進不去。get.ps1 與 Windows 的 lumos.cmd 用「真的執行成功」挑,因為商店替身 python.exe 找得到卻跑不起來
+  WHY:[2026-09-29 代碼審 r1 外家席]安裝入口與 git 掛鉤內嵌的那段第一步先認 LUMOS_PYTHON(設了而且能執行就用它叫 lumos):找不到時的說明叫人設它,第一步不認的話,只把 3.14 裝在自訂位置的人照說明設了仍被擋在門外
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
     id: d1
@@ -93,6 +96,10 @@ about_code:
   - get.sh
   - scripts/lumos
   - scripts/merge-claude-settings.py
+  - install.sh
+  - get.ps1
+  - scripts/install-hooks.sh
+  - scripts/install-graph-toolchain.sh
 ---
 # lumos-cli-lifecycle
 

@@ -1,0 +1,567 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/蘋果內建Python3.9跑全套仍紅.md b/docs/lumos-toolchain-knowledge/Issues/蘋果內建Python3.9跑全套仍紅.md
+index 786c963e..e99b035c 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/蘋果內建Python3.9跑全套仍紅.md
++++ b/docs/lumos-toolchain-knowledge/Issues/蘋果內建Python3.9跑全套仍紅.md
+@@ -1,26 +1,26 @@
+ ---
+ type: issue
+-status: open
++status: done
+ created: 2026-09-29
+ updated: 2026-09-29
+ aliases:
+   - 3.9 推送被擋
+   - 系統 Python 跑測試
+ about_code:
+   - scripts/test_lumos.py
+ related:
+   - "[[Systems/測試假綠形態]]"
+   - "[[Projects/代碼審資料狀態鏡頭_計劃]]"
+ tags:
+   - type/issue
+-  - status/open
++  - status/done
+   - scope/loop-engineering
+ summary: |-
+   FLAG:TECHNICAL
+   PITFALL:[2026-09-29 推送代碼審資料狀態鏡頭,出處見 [[Projects/代碼審資料狀態鏡頭_計劃]]]路徑上先找到蘋果內建 3.9 的環境跑推送前全套,修掉三處 3.10+ 寫法之後仍剩兩件:①`t_handoff_hook_import_is_pure` 紅——蘋果內建 3.9 載入模組時自己往 Library/Caches/com.apple.python 寫編譯暫存,測試分不出是誰在寫;②`t_escape_review_r3_fixes` 塞的二十萬層巢狀行讓 3.9 的 Python 直接當掉(SIGSEGV,macOS 跳當機報告),測試本身判綠。重現:`PATH=/usr/bin:$PATH python3 scripts/test_lumos.py -k handoff_hook_import_is_pure`
+   DECISION:[2026-09-29 Enzo 選「改用新版 Python 跑推送前檢查」]那次推送讓 Homebrew 3.14 排在路徑前面照跑全套(7521 條斷言全綠),3.9 的兩件另開這篇,不為了推送硬修
+ ---
+ # 蘋果內建 Python 3.9 跑全套仍紅
+ 
+ 白話:專案宣告支援 Python 3.9,但用蘋果內建的 3.9 跑推送前的全套檢查,還有兩支測試過不去或會讓 Python 當掉。平常推送沒撞到,是因為路徑上先找到的是 Homebrew 的新版 Python。
+ 
+@@ -35,11 +35,11 @@ summary: |-
+ 
+ 1. **載入 hook 不准碰檔案系統那支測試紅。** 紅的內容是一個開檔動作,路徑落在假家目錄底下的 `Library/Caches/com.apple.python/…`。推測是蘋果內建 3.9 會把編譯暫存寫到使用者快取目錄(蘋果自己的設定),不是 hook 自己在寫;★這個推測沒驗★。
+ 2. **二十萬層巢狀那支測試讓 3.9 當掉。** 11:43–11:52 之間 macOS 記了 6 份 Python 當機報告,堆疊都是編譯字串時遞迴二十萬層撞到堆疊上限。其中 5 份的上層是 shell 或已結束的程序,1 份的上層是 Codex——★不是每一份都確定出自這次推送★;哪一段程式把那行帶進 Python 編譯器、為什麼 3.12 以上不會當,都沒查。
+ 
+ ## 為什麼沒當場修
+ 
+ 每修一處都要重核可指紋、重跑代碼審、再跑一次約 10 分鐘的全套;修掉三處之後又冒出兩處,看不出還有多少。人裁先推、這兩件另外處理。
+ 
+ ## 回頭條件
+ 
+-REVISIT:2026-10-29 跟 [[Systems/測試假綠形態]] 那條「CI 要不要加一格 3.9」一起決定:加的話這兩件必須先修;不加的話把 README 的最低版本說明改成實際驗過的版本。
++已結案(2026-09-29):Enzo 裁定工具最低 Python 改成 3.14([[Projects/最低Python版本改3.14_計劃]]),這兩件 3.9 專屬的問題不再需要修。結案依據是「3.14 跑過全套綠」,不是「原因已查清」——兩件的原因本篇自己標了沒驗,現在也沒查。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/全repo審視_計劃.md b/docs/lumos-toolchain-knowledge/Projects/全repo審視_計劃.md
+index d41e02c0..ea7dbd1f 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/全repo審視_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/全repo審視_計劃.md
+@@ -211,21 +211,21 @@ aliases:
+ 
+ 這一段跟上面一樣重要:每條都是「有人提過、查證後發現早就裁過或違反家規」。之後有人再提同樣的事,先讀這裡。
+ 
+ - 不要把「每支命令一筆」寫進 docs/.usage-log.jsonl(F08)——主 session 鏡頭利用率 r1 五席(62 條、11 blocker)否決過同一個機制:使用帳無 session、無時區,而且它被 git 追蹤、每回合都寫會讓合併衝突變常態,計劃正文明寫「★本案不動它★」;r2 架構席還補了一刀「那是另一本帳、另一種語意」
+ - 不要把 search 預設改成 top N 有聲截斷(F17)——07-11 就是這樣做的,同日被 code-loop panel 以 [major] 折回,d2 裁「預設輸出資訊零損失」;一句話層供糧計劃也明文把「search 輸出改版」列為已排除,動它要另案
+ - 不要把 testmap affected 接到 pre-push 去挑測試(F20)——testmap 自己的計劃〈範圍刀〉寫死「不掛 pre-push、不進 doctor」,08-22 實查結論更直接:粒度是檔案級,答案就是「跑 test_lumos.py」那個 10 分鐘的怪物,接上去等於沒接;要有價值得先做到函式級,那是新工作不是接線
+ - 不要把 --no-verify 繞過補記成治理帳事件(F23)——08-21 已經落地成另一種痕跡形態(CI 紅燈,ci-wait/.ci-log 收得到),當時的理由是「CI 無法回寫本機帳」;要重提得先推翻這句
+ - 不要用 gh api 去查 branch protection 補進 enforcement(F26)——計劃〈誠實界線〉明文「離線可跑優先,不接 gh API」,而 enforcement 現在已經掛進每個 SessionStart 入口 hook(3 秒預算,r1 才把 20 秒降下來),塞一個網路呼叫進入場路徑會拖慢也會在離線時變成假訊號
+ - 不要把設計審鏡頭改成從主線讀節點正文(F32)——design-loop 從第一天就明文「防誤不防惡」,設計審的處置結果沒有任何機械消費端(沒過不擋任何東西),在一個宣告不防惡的層疊防惡儀式,而且編排者=作者本來就能直接寫進派工詞
+ - 不要去改 t_ci_wait 那個 15 秒輪詢常數(F57)——實測 132 秒有 91% 是 --grace 預設 30 秒的睡眠,而 --grace 早就是 CLI 參數、同一支測試別的案例已經在用;改那行對耗時的貢獻不到 1%
+-- 不要為 Python ≥3.8 加 CI matrix 或啟動版本檢查(F65)——前提已死:HEAD 自己就用了 3.9 才有的 removeprefix/removesuffix,而且那兩處正是 CLAUDE.md 表格直接教的主線指令;要做的是先把宣告訂到與現況一致(見 quick win)
++- (2026-09-29 被 [[Projects/最低Python版本改3.14_計劃]] 翻掉:最低版本改成 3.14,加了啟動時的版本檢查,CI 改跑 3.14。)不要為 Python ≥3.8 加 CI matrix 或啟動版本檢查(F65)——前提已死:HEAD 自己就用了 3.9 才有的 removeprefix/removesuffix,而且那兩處正是 CLAUDE.md 表格直接教的主線指令;要做的是先把宣告訂到與現況一致(見 quick win)
+ - 不要為 SKILL.md 頭版加 7k bytes 硬上限(F76),也不要把日期與實測故事整批從頭版清掉(F77)——7k 在裁定當天就有三份破了(裁定者是在那個狀態下驗收的),而剪枝鐵則是「只准壓縮措辭與搬家,不得遺失任何規則」,日期常常承載語意(「自某日起改成 X」)
+ - 不要為 LINE token 改走 stdin 或檔案(F89)——pitfalls-code-loop d5 明文排除安全缺陷型鏡頭的對抗威脅模型(單人私有機、非對抗),同機沒有第二個人可以 ps
+ - 不要給自主迴圈加單輪或每週成本上限(F92)——自主迴圈修理計劃〈不做(邊界)〉明寫「不給 orchestrator 加 turn/成本上限」,那輪 $78 是正常跑滿六輪(6/6 canary caught、49 條折入);而 09-05 暫停派工已經是更強的替代
+ - 不要為治理帳做分檔歸檔或催 git gc(F97)——把 650 個歷史版本單獨打包實測只有 245KB(git 的 delta 壓縮已經解掉這題),loose object 也還沒到 gc.auto 的門檻;要裝的只有門檻觸發器(已收進主題 18)
+ - 不要把 tier 的四類 regex 做成消費專案可宣告的設定(F101)——機制陳述本身是錯的:PITFALL_CLASSES 不產出 tier,tier 來自另一張 diff 形態表,改那張表不會改變任何專案的風險分級
+ - 不要把 guard kill 排進每日治理(F102)——全圖只有一條 kill_recipes,「抽樣輪替」在 N=1 時就是每天跑同一條,證明的是這支程式今天還跑得動(工具煙測),不是合約的測試有牙;而且它的協議 08-14 已停用
+ - 不要為 status: doing 加老化守衛(F106)——撞新機制準入三問與 08-21 裁定,而且它引為重啟條件的那句「反方向沒實例」講的是另一件事(狀態表說已完成但節點還在 doing),至今仍未觸發;要接電就寫 REVISIT 行,那是既有機制
+ - 不要刪 canary second 與 loop canary-stats(F116)——d5 同一句話同時裁了「停用」與「不拆」:抽樣分權停用、工具封存不拆、歷史 caught/missed 帳唯讀可回放;skill 標 ⛔ 封存正是忠實執行,不是不一致
+ - 不要把治理帳改成只寫狀態轉換、不重寫同一批 warned(F117)——那些重複行正是 gov --nags 判「還在喊」的燃料(它比對 last_warned_ts 與 last_doctor_run_ts),改了那張空轉清單會靜默歸零,而空轉偵測是 REVISIT 升級鏈唯一的偵測器
+ - 不要拿 slim 的 26 支當 lumos --help 的「日常核心」(F121)——那 26 支的分界原則是「只想讀的新人」,impact 是被查證屬於日常維護、卻因為那個一次性交接情境刻意砍掉的;拿它當日常核心是把裁定的理由倒過來用
+@@ -424,21 +424,21 @@ aliases:
+ 2. **37 份外家席逐字稿出版控**(13MB,佔追蹤卷證四成,零消費端)。歷史不改寫,加 .gitignore 規則;結論檔(.md)照樣進版控。★「工作區保留」只對執行 `git rm --cached` 的那台機器成立★——其他機器 pull 到這個 commit 時,git 會照新的樹狀態把那些檔從工作目錄刪掉(代碼審 r1 通才席用乾淨 clone 實測)。要留就自己備份。之後收貨改用 `codex exec --output-last-message` 直接拿結論。
+ 3. **刪掉一處已拆旗標的教學**(`install.sh --copy` 2026-06-26 就拆了,現在會被靜默吞掉):上手指南那一行。★原本連 skill 參考與精簡版鏡像的第 12 條也刪了,是我判錯——那條講的是 Obsidian CLI「任何命令加 --copy 複製到剪貼簿」,跟安裝器的同名旗標是兩支不同工具;代碼審 r1 通才席查 git 歷史抓到,已還原(順帶消掉 11 跳 13 的編號斷層)。那個清單整體陳舊是另一件事,歸主題 #10★。
+ 4. **安裝器透傳旗標**:未知旗標現在會撞上 argparse 吐錯,不再被吃掉。
+ 5. **用量帳的退場條件接上電**:原本寫在 HTML 註解裡(「90 天內無人立案則退場」),到期掃描只認獨立的 REVISIT 行,等於沒寫;改成 REVISIT:2026-11-19 並寫明判準。
+ 6. **發布流程計劃補回頭條件** REVISIT:2026-10-05(2026-07-30 裁定至今五週零落地)。順手記下:status 要改只能改 todo,project 型沒有 deferred 這個值,寫下去會變成篩不到的狀態。
+ 7. **三張速查表的欄位錯位補齊**:動手前算波及那張真的錯位(四列只有兩欄,「結果怎麼讀」掉到別欄);設計審那張是 `--finding-kind id=code|spec|process` 的直槓沒跳脫把一列撐成五欄;代碼審那張三列缺最後一欄。
+ 8. **README 中英兩版的邊界句改寫**:原句說「技術棧 skill 不進這裡」,但 repo 裡就住著三份;改成「跨專案通用的慣例 skill 是工具鏈的一部分,專案自己的框架選型不進來」。★第一次改動時替換位置插進括號清單裡,句子讀不通,重寫過★。
+ 9. **快速上手補「裝好了嗎」**:README 兩個入口與上手指南各加一句 `lumos enforcement`,並說明它查的是「有沒有接上」不是「判得對不對」,以及 Codex 那幾行為什麼會停在「本機讀不到」。
+ 10. **推送前 hook 的耗時註解訂正**:「實測 ~32s」是 2026-07-07、183 支測試時代的數字,現在約 8 分鐘、3700+ 案例。
+ 11. **方法論三份文件接上入口**:之前從 README / 架構文 / 上手指南一條連結都到不了。★我原本寫的第三份檔名不存在,驗證連結目標時抓到,改成真的那份★。
+-12. **Python 版本宣告訂正 ≥3.8 → ≥3.9**:主程式自己就用了四處 3.9 才有的字串方法,而另一處註解還在為了 ≥3.8 刻意迴避 3.9 的 API。純事實訂正;要不要再往上調是另一件事,要人裁。
++12. (2026-09-29 已被 [[Projects/最低Python版本改3.14_計劃]] 取代:宣告改成 ≥3.14。)**Python 版本宣告訂正 ≥3.8 → ≥3.9**:主程式自己就用了四處 3.9 才有的字串方法,而另一處註解還在為了 ≥3.8 刻意迴避 3.9 的 API。純事實訂正;要不要再往上調是另一件事,要人裁。
+ 
+ 驗證:相關測試子集全綠(精簡版 9、指令索引 7、安裝 247、推送閘 18),兩篇動到的節點 lint 0 問題。
+ 
+ ## 第一批的代碼審(code-audit-quickwins r1,2026-09-06)
+ 
+ - **編制**:standard 三席——通才、架構對齊(皆 sonnet)、外家 Codex。11 條發現(1 major、10 minor)全折,零放行;處置閘 PASS。
+ - **兩條是我自己做錯,審查席抓到**:
+   - **用錯理由刪東西**:我把 skill 參考與精簡版鏡像裡「任何命令加 --copy 複製到剪貼簿」那條當成「安裝器已拆旗標」一起刪了。通才席查 git 歷史發現那是 Obsidian CLI 的同名旗標,兩支不同工具。已還原,順帶消掉刪除留下的 11 跳 13 編號斷層。
+   - **筆記寫了不成立的話**:我寫「工作區保留」,實際上 `git rm --cached` 只對執行的那台機器成立;其他機器 pull 到這個 commit 時 git 會照新樹把檔從工作目錄刪掉。通才席用乾淨 clone 實測。已改寫並註明。
+ - **只修一半的三條**:
+diff --git a/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md b/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md
+new file mode 100644
+index 00000000..927850c5
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md
+@@ -0,0 +1,131 @@
++---
++type: project
++status: doing
++created: 2026-09-29
++updated: 2026-09-29
++tags:
++  - type/project
++  - status/doing
++  - scope/platform
++lands_in:
++  - Systems/lumos-cli-lifecycle
++  - Systems/bound-tests-gate
++  - Systems/codex-harness
++  - Systems/python直譯器選擇
++  - Systems/reversibility-governance-ledger
++related:
++  - "[[Issues/蘋果內建Python3.9跑全套仍紅]]"
++  - "[[Projects/全repo審視_計劃]]"
++  - "[[Projects/存量漂移防線_計劃]]"
++  - "[[Systems/測試假綠形態]]"
++  - "[[Systems/筆記內容閘]]"
++---
++# 最低Python版本改3.14_計劃
++
++白話:工具鏈原本對外說「Python 3.9+ 就能用」,但沒有任何地方檢查版本,每個入口都拿路徑上第一個 `python3`——在 macOS 上常常就是蘋果內建的 3.9。3.9 碰到極深的巢狀運算式會讓解析器整個程序崩潰(不是丟例外)。這一篇把最低版本改成 3.14,並讓所有入口**找得到 3.14 就用、找不到就講清楚**,不再默默拿 3.9 去跑。
++
++依據:Enzo 2026-09-29 裁「工具最低版本改成 3.14」(存量漂移防線乙的代碼審連兩輪卡在 3.9 的 ast.parse 崩潰之後);同日裁定四項:①找不到 3.14 時 git 掛鉤擋下並講清楚怎麼裝 ②自動找 3.14、lumos 被舊版啟動時改用找到的 3.14 重跑 ③安裝器找不到時報錯附安裝指令、不替人裝 ④舊版相容寫法只清擋路的。這個裁定回答了 [[Issues/蘋果內建Python3.9跑全套仍紅]] 與 [[Systems/測試假綠形態]] 留的「CI 要不要加 3.9」,也翻掉 [[Projects/全repo審視_計劃]] F65「不加啟動時版本檢查」那一條(當時註明再拉高下限要人裁)。
++
++存量漂移防線乙因此先暫停:它的提交與第 4 輪卷證留在工具鏈 repo 的本機分支 `wip/存量漂移防線乙`(沒推),第 4 輪 10 條發現還沒處置;本計劃落地後回去收,屆時拿掉它為 3.9 加的事先篩選並重接到主線。
++
++PRIOR-ART: 世界上的做法是「宣告 + 安裝時擋」:套件用 `requires-python`,pip / uv 安裝時就拒絕;uv 的 `--python 3.14` 與 `uv python find`、pyenv 的 shims、Windows 的 `py -3.14` 啟動器負責「找對的直譯器」。本工具零依賴、不是 pip 套件、入口有 git 掛鉤與 Claude/Codex 掛鉤,借不到 requires-python 的擋法,所以自己做最小的一層:一份固定順序的候選清單、每個候選用 `sys.version_info` 驗一次;uv 只當候選之一(有裝才用),不當依賴。
++RETIRE-IF: 工具改成用 uv tool / pipx 這類有 requires-python 的方式發佈、由安裝器擋版本時,自製的找直譯器與啟動時重跑整套撤掉;或三個月內「找不到 3.14 被擋」的事件為 0 而且所有已知機器都已裝 3.14 時,改成只在安裝時檢查。
++
++## 範圍
++
++- 在範圍內:`scripts/lumos`、git 掛鉤 `scripts/hooks/pre-commit`、`pre-push`、`post-commit`(會被複製進消費專案)、Claude/Codex 掛鉤註冊 `scripts/merge-claude-settings.py`、安裝入口(`install.sh`、`get.sh`、`get.ps1`、`scripts/install-hooks.sh`、`scripts/install-graph-toolchain.sh`)與 Windows `lumos.cmd` 包裝、測試指令(`.lumos/config.json` 的 `run_cmd`)、CI、README 兩份與 ONBOARDING、doctor 印給消費專案的三處 CI 步驟提示、精簡版生成器 `scripts/slim-gen.py`(只為了剝掉開頭檢查)、測試裡擋路的 3.9 專用寫法。
++- 不在範圍內(Enzo 2026-09-29 確認):精簡版 `slim/**` 不拉下限。精簡版交付庫 2026-08-20 起已獨立(`slim/FROZEN.md`),本 repo 的 `slim/` 只剩測試與歷史;但產物由 `scripts/slim-gen.py` 從 `scripts/lumos` 衍生,所以生成器要剝掉第 2 點的開頭檢查,產物才不會要求 3.14。完整版 Windows 包裝會跟精簡版的候選順序分岔(完整版多一個 `py`),是刻意的。
++- 不在範圍內:其餘約 10 處為 3.8/3.9 寫的繞路寫法——無害,留著;`scripts/lumos` 本來就要維持 3.9 能解析(第 2 點),這些寫法剛好不衝突。
++- 不在範圍內:維護者的排程腳本(`governance/*.sh`)。其中呼叫 `scripts/lumos` 的會經第 2 點自己改用 3.14;直接用 `python3` 跑其他 Python 檔的(`retrieval_eval.py`、`scenario_probe.py` 等)照舊吃 PATH 上的 python3,不受本計劃約束。它們吞掉錯誤輸出(`|| true`),在沒有 3.14 的機器上會默默不做事;只跑在維護者裝了 3.14 的機器上,接受。
++
++## 做法
++
++1. **找 3.14 只有一份實作,在 `scripts/lumos` 裡**(Python;對外是子指令 `lumos python-path`,印出一支 ≥3.14 直譯器的絕對路徑,找不到印說明回 2)。候選順序:
++   ①`$LUMOS_PYTHON`——★有設就只認它★:必須是絕對路徑、指到一支 ≥3.14 的執行檔,否則停下報錯、不往下找(相對路徑在掛鉤與手打時會解析到不同的檔,所以直接拒收);空字串等於沒設 → ②`python3.14`、`python3.15`、`python3.16` → ③固定位置:`/opt/homebrew/bin/python3.14`、`/usr/local/bin/python3.14`、`~/.local/bin/python3.14`,以及 uv 與 pyenv 自己的安裝目錄(`~/.local/share/uv/python/cpython-3.1[4-9]*/bin/python3`、`~/.pyenv/versions/3.1[4-9]*/bin/python3`);Windows 是 `%LOCALAPPDATA%\Programs\Python\Python31[4-9]\python.exe`。從 Dock 啟動的 git 圖形用戶端、排程這類路徑很短的環境,以及 pyenv 把專案鎖在舊版的目錄,靠這一段找到 → ④Windows 的 `py -3.14` → ⑤`uv python find --system --no-python-downloads '>=3.14'`(不找虛擬環境、★不准觸發下載★;拿到它印的路徑,再用那個路徑照一般候選驗一次)→ ⑥`python3`、`python` 放最後(最常是舊版;沒裝開發工具的 macOS 執行 `/usr/bin/python3` 會跳出安裝對話框,排在後面,有 3.14 的機器就碰不到)。找到一個就停。
++   每個候選的驗法一樣:用它跑一段「版本 ≥ 3.14 就印出 `sys.executable`,否則回 1」,標準輸入接空、單一候選 5 秒逾時、整份清單最多 15 秒;★之後一律用它印出的絕對路徑★,不用候選的名字(`os.execv` 不會去 PATH 找名字,`py -3.14` 也不是一個路徑)。
++   ③的固定位置清單可以用 `LUMOS_PYTHON_SEARCH_DIRS`(以路徑分隔字元隔開的目錄)整份換掉——給測試造「這台機器找不到 3.14」(維護者的 Mac 上 `/opt/homebrew/bin/python3.14` 一定存在),也給特殊環境用;這類測試也要把開發者環境裡的 `LUMOS_PYTHON`、`LUMOS_REEXEC_PYTHON` 清掉;新系統筆記要記下它是測試接縫。
++   ★為什麼不讓 shell 自己找 3.14★(設計審 r1 架構對齊席、r2 外家席):第一版讓三支掛鉤 source 一支新的共用 shell 檔,結果①舊版的更新程式在啟動時已把「要複製哪些檔」讀進記憶體,更新時複製了改過的掛鉤、卻漏掉它不認得的新共用檔,第一次升級必定半套、提交被擋;②被 source 進 `set -euo pipefail` 的腳本時,一個探測失敗就讓整支腳本無聲結束;③Git Bash 印出的路徑帶 `\r`;④要登記進三張名單與錨點。改成 shell 只負責「找一支任何版本的 python 把 lumos 叫起來」,判斷版本全交給 lumos,這四件都不存在。
++2. **lumos 開頭先檢查版本**:緊接在檔案最前面那幾行標準庫 import 之後寫 `if __name__ == "__main__" and sys.version_info < (3, 14):`——被測試用 import 載入時不觸發;舊版只需要執行這幾行就到得了檢查(`def f(x: int | None)` 這種寫法在 3.9 定義當下就會丟 TypeError,所以檢查必須在所有定義之前)。不夠就照第 1 點找,找到就用它重跑:POSIX `os.execv(絕對路徑, [絕對路徑, __file__, *原參數])`;Windows 的 execv 不會真的取代行程、呼叫端拿不到回傳碼,改成子行程跑完用它的回傳碼結束。找不到就印「需要 Python 3.14 以上,現在是 X.Y(路徑);找過的候選與各自結果:…;安裝:…」並回 2,不印追蹤。★只有版本低於 3.14 才找、才重跑★——版本夠就直接跑,`LUMOS_PYTHON` 不會讓一支已經是 3.14 的 lumos 再重跑(否則 `LUMOS_PYTHON` 指到 pyenv shim 或自寫包裝時,包裝啟動的那支真正路徑跟設定的路徑永遠不同,會無限重跑)。
++   防重跑:重跑前設 `LUMOS_REEXEC_PYTHON=<目標絕對路徑>`;開頭檢查時,這個變數有值、等於自己的 `sys.executable`、版本卻還是舊的,就算重跑失敗、直接報錯;★通過檢查後立刻把它從環境拿掉★,lumos 之後叫起的子孫行程不會繼承到。舊版每次重跑要先花約 0.22 秒解析整支檔(系統 python3.9 實測),再加上找候選與 3.14 啟動。
++   `scripts/lumos` 因此★必須一直能被 3.9 解析★(Python 要先解析完整支檔才跑第一行)。同理必須 3.9 能解析的還有 `scripts/merge-claude-settings.py`(第 4 點)與 `scripts/hooks/claude/*.py`(設定還寫著舊直譯器的過渡期,它們跑在舊版上)。守法見 [S7]:`.lumos/lint.json` 的 ruff 目標版本維持 `py39`,不改成 py314(ruff 在 py39 下會把 3.12 才合法的 f-string 寫法報成語法錯誤;`ast.parse(feature_version=(3,9))` 放過這種寫法,實測)。
++3. **git 掛鉤**:三支掛鉤各自內嵌同一段「找一支任何版本的 python」:`python3.14`、`python3.15`、`python3.16` → 可執行的 `/opt/homebrew/bin/python3.14`、`/usr/local/bin/python3.14`、`$HOME/.local/bin/python3.14`(HOME 沒設就略過這一格)→ `python3`、`python` → Windows 的 Git Bash 再試 `py -3`。固定位置排在 `python3` 前面:從 Dock 啟動的 git 圖形用戶端 PATH 很短,不先試固定位置就會先執行 `/usr/bin/python3`,沒裝開發工具的 macOS 會跳出安裝對話框;Linux 上 3.14 只在 `~/.local/bin`、PATH 又短的機器,也靠這一格才不會被判成「連任何 python 都沒有」。這段是 lumos 內部清單(第 1 點)的子集,只負責把 lumos 叫起來,版本判斷仍交給 lumos。三支掛鉤與第 5 點四支安裝腳本一共七份,用漂移測試守一致——這是專案原本的做法(各掛鉤內嵌、靠測試對齊)。
++   `pre-commit`、`pre-push` 在「第一次需要叫 lumos」時才用找到的那支跑一次 `scripts/lumos python-path`,拿到的絕對路徑(去掉結尾 `\r`)用在這支掛鉤之後的所有呼叫。pre-commit 的順序照舊:圖譜不存在、staged 為空 → 放行;接著第一個用到 python 的是只提醒的 co-change 那道(排在會擋的 Gate 1–3 之前),`python-path` 失敗時★只提醒的幾道跳過並印一行★、不擋,不需要 python 的 Gate 1–3 照跑照擋,到第一道★會擋的★要 python 的閘才擋下;沒有 `scripts/lumos` 時照舊只跳過要 python 的那幾道。pre-push:標準輸入讀完之後、有 `scripts/lumos` 時。`python-path` 回非 0 時會擋的閘擋下(rc 1),原樣轉印 lumos 的說明——★不退回 3.9★;連任何 python 都找不到,掛鉤自己印安裝指令並擋下;找到的 python 一執行就失敗(Windows 商店替身),說明裡點名「找到的是 <路徑>,執行失敗,可能是商店替身」。現況「找不到任何 python 就印提醒放行、找到 3.9 就拿 3.9 跑」兩種都改掉。說明裡講明出口:設 `LUMOS_PYTHON`,真要提交只能 `git commit --no-verify`。這段只設變數、所有探測都用 `if` 包起來,在 `set -u`、`set -e` 下都不會中途結束。
++   `post-commit` 用同一段「任何版本」清單寫跳過帳,★不設下限★:它只負責把「這次用 --no-verify 跳過了」寫進跳過帳,用的是任何版本都跑得動的標準庫程式;沒有 3.14 的機器正是最常用 --no-verify 的機器,這筆帳不能寫不進去。清單補上 `python3.14`,只裝了版本化指令的機器也寫得進去。
++4. **Claude/Codex 掛鉤註冊**:`merge-claude-settings.py` 寫進設定檔的直譯器改成 `sys.executable`,POSIX 分支用 shell 引號包起來(原本只有 Windows 分支加引號,路徑含空白整條命令就壞)。它開頭也檢查版本:低於 3.14 就用 `[sys.executable, <同目錄的 lumos>, "python-path"]` 問出 3.14 的路徑、用它重跑自己;問不到就報錯回 2、不寫設定。這樣舊版的更新程式用舊直譯器叫新版的它,註冊照樣寫成 3.14。
++5. **安裝入口只負責把 lumos 叫起來**:`install.sh`、`get.sh`、`scripts/install-hooks.sh`、`scripts/install-graph-toolchain.sh` 各自內嵌同一段「任何版本」清單(跟第 3 點同一份,漂移測試一起守),找到就用它跑 `scripts/lumos …`,版本交給第 2 點;連任何 python 都找不到就印安裝指令(macOS:`brew install python@3.14` 或 `uv python install 3.14`;Linux:發行版套件或 uv;Windows:python.org 安裝器或 `winget install Python.Python.3.14`)回 2,不替人裝。`get.sh` 不再讀任何 repo 裡的檔,舊的安裝複本也照樣能把新版 lumos 叫起來。`get.ps1` 試 `py -3`、`python3`、`python`,★每個都真的執行一次(`-c pass`)才算找到★(Windows 的商店替身 `python.exe` 找得到、執行卻失敗)。Windows 的 `lumos.cmd` 包裝在安裝當下(這時已經跑在 3.14 上)同樣用「真的執行成功」挑:`py -3` 能跑就寫它,否則寫能跑的 `python3` 或 `python`,仍然只寫指令名、不寫死路徑;因此改 `t_windows_interpreter_pick_matches_slim`,改成「完整版比精簡版多一個 py、而且要執行成功」。
++6. **測試指令**:`.lumos/config.json` 的 `run_cmd` 改成 `{python} scripts/test_lumos.py -k {method}`。代入集中到一支函式,依平台加引號(POSIX 用 shell 引號;Windows 用 cmd 的雙引號規則),所有讀 `run_cmd` 的地方都改呼叫它——現在是三處各自 `.replace("{method}", …)`:guard kill、合約測試閘的過濾探針(也就是確認「測試指令分不分得出找不到測試」的那支冒煙測試)、合約測試閘本體(spec-gate 共用);測試用 grep 確認沒有地方再自己代換。原本吃 PATH 上的 `python3`,3.14 只以 `python3.14` 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。`scripts/test_lumos.py` 本身不加版本檢查(由 `{python}` 保證用對的直譯器;人手用舊版跑它,照舊得到舊版的錯誤)。pre-push 擋下時提示的 `python3 scripts/test_lumos.py …` 與 CLAUDE.md 的子集指令改寫成「用 3.14 跑」。
++7. **CI**:`python-version` 改成 `"3.14"`;既有的「SyntaxWarning 歸零」一道會在 3.14 上重跑,新警告一起清。另加一步:裝釘死版本的 ruff(`pip install ruff==<版本>`,只在 CI 當工具裝,不是工具鏈的依賴),以 py39 為目標、只查語法錯誤(`--select E9`),檢查第 2 點列的三類檔——CI 的 python 是 3.14,拿它編譯擋不到 3.12 的 f-string 寫法;原本的「編譯全部檔」一步用副檔名挑檔,從來沒編譯過沒有副檔名的 `scripts/lumos`。doctor 印給消費專案的三處 CI 步驟提示(筆記形狀擋、存量漂移檢查、筆記內容審)各加一句「這一步要在 Python 3.14 上跑(setup-python 設 3.14)」——lumos 沒有給消費專案的完整 CI 範本,只有這三處提示;GitHub 的 ubuntu 預設 python3 是 3.12,消費專案自己的 CI 更新後會回 2,這一項只能靠提示與升級注意,沒有偵測。
++8. **通知與文件**:README 與 README.en(安裝需求兩處、README.en 另一處「running Lumos itself needs Python 3.9+」)改成 3.14+,寫一句為什麼(系統內建 3.9 會崩潰)與升級注意;ONBOARDING 的前置需求表加版本,正文裡 `python3 scripts/lumos …` 的指令改寫成「用 3.14 跑」並註明只有 `python3.14` 的機器怎麼打;`get.ps1` 的錯誤訊息跟著改。`lumos update` 把掛鉤複製進消費專案時,更新前的 pre-commit 裡沒有 `python-path` 字樣(代表是從還沒升級的版本更新上來),就印一段升級注意(沒有 3.14 的機器提交會被擋、CI 要用 3.14、怎麼設 `LUMOS_PYTHON`)。不寫 CHANGELOG——它自己規定只記發版,由下次發版的人帶進去。隊友 `git pull` 拿到新掛鉤、沒跑過 update 的,第一次看到的就是擋下說明,所以擋下說明要自己講得清楚(第 3 點)。
++9. **偵測設定壞掉**:`lumos enforcement` 的 python 那一列改成列出 Claude/Codex 設定裡註冊的直譯器路徑與實際版本(用那個路徑執行一次);`lumos doctor` 多一段軟提醒(不計 issues,因為 `doctor --ci` 是推送前的硬擋,Homebrew 升版讓路徑消失不該擋住每個專案的推送;段落代號實作時照 doctor 既有代號挑一個沒用過的),在註冊的直譯器不存在或低於 3.14 時提醒「重跑 lumos install」。
++10. **清擋路的舊碼**:測試的 `_toml_loads` 代解分支改回直接 `import tomllib`。會讀、複製或直接跑掛鉤的測試,用 grep 對測試檔找 `hooks/pre-`、`pre-push`、`pre-commit`、`post-commit` 的引用列出清單逐支檢查(不能只靠 `-k hook`,名稱含 hook 的只有約 41 支);其中模擬「PATH 上沒有 python 就放行」的斷言反轉成擋下,`t_hooks_python_fallback` 改成斷言三支掛鉤與四支安裝腳本的內嵌清單一致。精簡版生成器把第 2 點那段(用固定的開始、結束註解框起來)剝掉,`t_slim_*` 跟著確認產物不要求 3.14。
++11. **收尾連帶**(不列進 lands_in):[[Issues/蘋果內建Python3.9跑全套仍紅]] 結案,依據寫「3.14 跑過全套綠」,不寫成「原因已查清」;它與 [[Systems/測試假綠形態]] 各有一條 `REVISIT:2026-10-29`,兩條都改寫成已由本計劃回答;[[Systems/筆記內容閘]] 那條 zip(strict=) 的 PITFALL 補一句下限已改、禁令為何保留(第 2 點);[[Projects/全repo審視_計劃]] F65 與 quick win 12(「Python 版本宣告訂成 ≥3.9」)各記一行被本計劃翻掉;掛鉤的既有家筆記([[Systems/每支檔有家]] 管 pre-commit、[[Systems/bound-tests-gate]] 管 pre-push)各加一行連到新系統筆記;存量漂移防線乙回來收尾時拿掉它為 3.9 加的事先篩選。
++12. **每支檔有家**:新開 `Systems/python直譯器選擇` 管「找 3.14」這件事(負責:候選清單、驗版本、`python-path`、開頭檢查與重跑、找不到時的說明、`LUMOS_PYTHON` 與 `LUMOS_PYTHON_SEARCH_DIRS`;不負責:各入口自己的業務邏輯)。原本沒有家的 `install.sh`、`get.ps1`、`scripts/install-hooks.sh`、`scripts/install-graph-toolchain.sh` 交給 [[Systems/lumos-cli-lifecycle]](它已經管 `get.sh`);`scripts/hooks/post-commit` 交給 [[Systems/reversibility-governance-ledger]](它寫的 `.bypass-log.jsonl` 是那篇彙整的六本帳之一)。
++13. **落地驗收**(寫成一篇驗證紀錄,plan_refs 連回本計劃):改到的既有錨點檔(三支掛鉤、測試總檔等)在工具鏈 repo 跑 `lumos anchor approve`;本機跑一次 `lumos install --force`,對 Claude 與 Codex 兩個部署位置的掛鉤檔各比一次 sha256,並確認設定檔裡寫的是加了引號的 3.14 絕對路徑——改 `merge-claude-settings.py` 不會自己重寫家目錄底下的設定。
++
++## 條款
++
++- [S1] 當 `lumos python-path` 或 lumos 開頭要找 Python,工具應照第 1 點的固定順序試候選,找到一個就停,只接受實際執行印出 ≥3.14 的那一個、並改用它印出的絕對路徑;`LUMOS_PYTHON` 有設但不是絕對路徑或不合格時應停下報錯,不往下找;uv 應帶 `--no-python-downloads`;設了 `LUMOS_PYTHON_SEARCH_DIRS` 時固定位置應只看它;驗法應隔開標準輸入並有單一與整份的逾時 [test:t_python_resolver_order_and_floor]
++- [S2] 當 lumos 以主程式身分被 3.14 以前的 Python 啟動,工具應在執行完開頭幾行 import 後就檢查,找到 ≥3.14 就用它的絕對路徑跑同一支檔同一組參數並回傳它的回傳碼;找不到應印出需要的版本、現在的版本與路徑、找過的候選與各自結果、安裝指令,回 2,不印追蹤;`LUMOS_REEXEC_PYTHON` 等於自己又仍是舊版時應直接報錯;通過檢查後應清掉這個變數,子孫行程被舊版叫起時應照常重跑;版本已是 3.14 時不應因 `LUMOS_PYTHON` 重跑;被 import 載入時不應觸發。測試應在找得到真的舊版直譯器時用它跑,找不到時應明說這一格沒驗到,並比對輸出內容而不只比回傳碼 [test:t_lumos_old_python_reexec_or_explain]
++- [S3] 當 pre-commit 或 pre-push 確定這次要叫 lumos、而 `lumos python-path` 找不到 ≥3.14(包括只找得到 3.9、或完全沒有 python),工具應擋下(rc 非 0)並印說明,不得改用較舊的 Python;圖譜不存在、staged 為空時應照舊放行,沒有 scripts/lumos 時應照舊只跳過要 python 的幾道;post-commit 應在只有 python3.14 的機器上照樣寫入跳過帳;掛鉤的內嵌段在 `set -euo pipefail` 下也不應中途結束 [test:t_hooks_block_without_python314]
++- [S4] 當安裝入口在只有 python3.14、只有 Windows 的 py 啟動器、或只有商店替身的機器上執行,工具應把 lumos 叫起來(再由 lumos 找 3.14)或印安裝指令回 2,不得自行安裝;Windows 包裝應寫入實際執行成功的啟動方式 [test:t_installers_require_python314]
++- [S5] 當註冊 Claude/Codex 掛鉤,工具應寫入目前執行的那一支直譯器的絕對路徑並加引號(路徑含空白時命令照樣可執行);merge-claude-settings.py 被 3.14 以前的 Python 執行時應改用 3.14 重跑自己,找不到時報錯回 2、不寫設定 [test:t_hook_cmd_uses_running_python]
++- [S6] 當 CI 執行,應在 3.14 上跑全套並以釘版本的 ruff(py39)檢查三類必須 3.9 能解析的檔;doctor 印給消費專案的三處 CI 步驟提示應講明要用 Python 3.14 [test:t_ci_runs_python314_and_old_syntax_check]
++- [S7] 當 scripts/lumos、scripts/merge-claude-settings.py 或 scripts/hooks/claude/*.py 被修改,它們仍應能被 3.9 語法解析:ruff 以 py39 為目標檢查語法錯誤,測試應附一行 3.12 才合法的樣本確認 ruff 真的會報;找得到真的 3.9 直譯器時應實際編譯一次;兩者都沒有時應明說沒驗到 [test:t_lumos_parses_under_old_grammar]
++- [S8] 當 guard kill、合約測試閘本體或過濾探針展開測試指令,應都經同一支代入函式,以執行中的 lumos 那一支直譯器代入 `{python}` 並依平台加引號(路徑含空白時照樣可執行) [test:t_test_run_cmd_uses_running_python]
++- [S9] 當 lumos update 從還沒升級的版本更新消費專案,應印一段升級注意;精簡版生成器的產物不應含開頭版本檢查 [test:t_update_prints_python314_notice_and_slim_strips_floor]
++- [S10] 當 Claude/Codex 設定裡註冊的直譯器不存在或低於 3.14,lumos doctor 應印軟提醒(不計 issues)叫人重跑安裝,lumos enforcement 應列出註冊的直譯器與版本 [test:t_doctor_flags_stale_hook_python]
++
++## 回退
++
++- **全部回退**:還原本計劃的提交(`.lumos/config.json` 的 `run_cmd` 必須跟 lumos 本體一起還原——舊版 lumos 不認得 `{python}`,會把它原樣交給 shell 得到 127)。再到每個已更新的消費專案用★全域或工具鏈來源那份★ lumos 跑 `lumos update`,把舊掛鉤複製回去(專案裡自帶的那份 lumos 已是新版,在只有 3.9 的機器上會回 2,用不了);有錨點基準線的消費專案接著跑 `lumos anchor approve --note "<回退原因>"`——掛鉤內容換回舊版,sha256 對不上基準線,推送前那道不可跳過的錨點檢查會擋。`lumos update` 會順手重寫整台機器的 Claude/Codex 設定(改回舊版的註冊寫法),這是機器全域的動作,同一台機器上還沒回退的其他消費專案共用同一份設定;舊版寫法照樣跑得動新舊掛鉤。
++- **主線已有後續提交時**:還原前用真的 3.9 實際跑一次(`/usr/bin/python3 scripts/lumos --version` 加一組子集測試),不能只編譯——`def f(x: int | None)`、`import tomllib` 這類寫法編譯得過、執行才壞;掛鉤是 shell,用 `bash -n` 查語法。存量漂移防線乙若已合併、拿掉了 3.9 事先篩選,要一起補回來,否則 3.9 的 ast.parse 崩潰原樣重現。圖譜:`Systems/python直譯器選擇` 標 superseded、四篇 lands_in 節點改寫過的段落改回;Issue 結案、兩條 REVISIT、F65 與 quick win 12 的收尾不跟著還原,另外補一篇說明「下限退回 3.9」並重開那篇 Issue。
++- **只回退「擋下」**:掛鉤在 `python-path` 失敗(找不到 3.14、`LUMOS_PYTHON` 不合格、找到的 python 執行失敗)時一律改成印提醒並跳過需要 lumos 的檢查——★是那幾道檢查不跑,不是改用 3.9 跑★;同時把 [S3] 與它的測試改成斷言放行,並經 `lumos update` 才到消費專案(有錨點基準線的要重簽)。後果要講明:只有 3.9 的機器上,掛鉤放行、但任何 lumos 指令照樣因第 2 點回 2,治理帳一筆都不會有;比本計劃之前(拿 3.9 跑檢查)還弱,兜底只剩 CI(3.14)。提醒文字要改成「找得到 Python X.Y,但需要 3.14,這次沒跑檢查」。
++- 以上每一種回退本身都是一次提交,照紀律要跟圖譜的對應改動放同一個提交。
++- 消費專案被擋時的暫時出口:裝 3.14,或設 `LUMOS_PYTHON` 指到一支 3.14 的絕對路徑。
++
++## 實務隱患
++
++- **守衛面(碰到)**:git 掛鉤從「沒 Python 就放行」改成「沒 3.14 就擋」,擋的條件變寬;錯的時候是誤擋。防法:固定位置涵蓋 Homebrew、uv、pyenv 的安裝目錄(圖形用戶端、排程這類路徑很短的環境、pyenv 鎖了舊版的目錄)、只在確定要叫 lumos 時才擋、擋下說明列出每個候選與它的結果、找 3.14 只有一份實作。
++- **對外送出(碰到)**:改的是對外發佈的安裝說明與安裝腳本,更新後的消費專案在沒裝 3.14 的機器上提交會被擋、CI 會回 2。防法:`lumos update` 印升級注意、README 寫升級注意、doctor 的 CI 步驟提示講明要 3.14、擋下說明附三種平台的安裝指令與 `LUMOS_PYTHON` 的用法;不自動安裝任何東西,uv 探測帶 `--no-python-downloads`。
++- **不可逆(碰到一半)**:程式碼還原提交就回去,但消費專案的掛鉤副本要逐一更新回去並重簽錨點,見〈回退〉。
++- **自我治理(碰到)**:改的是治理守衛自己——掛鉤擋不擋、合約測試閘用哪支直譯器跑。改壞的後果是全專案誤擋或整道檢查沒跑。防法:[S3] 與 [S8] 釘住擋下與測試指令、改到的錨點檔重簽、落地驗收比 sha256。
++- **效能**:掛鉤每次各找一次:shell 那段只是 `command -v`,之後一次 `python-path`(第一個候選就命中時約 0.1 秒內;要重跑時多約 0.3 秒,見第 2 點)。舊註冊(設定還寫著 3.9)在重跑安裝前每次呼叫 lumos 多一次重跑;第 9 點的提醒負責讓人去重跑。整份候選清單最壞 15 秒(每個候選都卡到逾時)。
++- 已排除:金流:這個工具不碰任何付款或計費。
++
++## 誠實界線
++
++- **舊版要能解析那三類檔**:[S7] 用 ruff(py39,釘版本、附必紅樣本)與真的 3.9 編譯守語法;機器上兩者都沒有時守不到,測試會明說沒驗到。開頭幾行 import 之後才出現的載入期問題不影響 scripts/lumos(檢查在它們之前),merge-claude-settings.py 的檢查放在它自己那幾行標準庫 import(os、sys、subprocess)之後、其餘程式之前,道理相同。
++- **全域 `lumos` 指令靠 `#!/usr/bin/env python3` 啟動**:完全沒有 `python3` 這個名字的機器(只用 uv 裝了 `python3.14` 的 Linux)上,打 `lumos` 在跑到第 2 點之前就失敗;git 掛鉤與安裝入口不受影響(內嵌清單含 `python3.14` 與固定位置)。
++- **掛鉤第一跳沒有逾時**:shell 那段只用 `command -v` 與「檔案可執行」挑,不執行候選;但接著用挑到的那支跑 `lumos python-path` 這一步沒有逾時(macOS 沒有內建 `timeout` 指令)。那支直譯器一啟動就卡住時,掛鉤跟著卡住;lumos 內部的候選驗證有逾時,不受影響。這種機器要 `uv python install 3.14 --default` 或自己加 `python3` 別名;擋下與安裝說明會提這一句。
++- **`--no-verify` 會留跳過帳、不會留閘的帳**:post-commit 照舊記下「這次跳過了」,但被擋的那幾道檢查本身沒有跑,也沒有它們的紀錄。
++- **設定檔裡的絕對路徑會過期**:uv、pyenv、venv、Homebrew 升版都可能讓它消失;第 9 點的提醒是事後偵測,不是事前防止。
++- **消費專案自己的 CI 沒有偵測**:它們的 workflow 用 3.12 時,更新後 CI 回 2;只能靠升級注意與 doctor 的 CI 步驟提示。
++REVISIT:2026-12-29 看這段期間有沒有「掛鉤誤擋」「消費專案 CI 因版本回 2」的回報;有的話補偵測(doctor 讀消費專案 workflow 的 setup-python 版本)
++
++## 實作時的決定(跟上面寫的不一樣或更細的地方)
++
++- **enforcement 的 python 列狀態不變**:維持 active,註冊的直譯器與問題寫在說明文字裡。原本想有問題就標 degraded,但既有測試與約定是「四支掛鉤、兩支 git 掛鉤、python、CI 共 8 列 active」,改狀態會動到分母;提醒改由 doctor 的 Q 段(軟提醒、不計 issues)負責。
++- **精簡版生成器只剝「呼叫版本檢查」那三行**:用 `python-floor gate begin/end` 兩行註解框起來。找 3.14 的函式本身留著——`lumos python-path` 與 doctor Q 段都用到它們,整段剝掉精簡版一跑到那些地方就會出錯。
++- **掛鉤與安裝腳本的內嵌清單也認 `LUMOS_PYTHON_SEARCH_DIRS`**(冒號分隔):內嵌清單自己也寫了固定位置,不能被換掉的話,維護者的 Mac 上造不出「找不到 3.14」的掛鉤測試。
++- **doctor 新段代號是 Q**:doctor 已有兩段都叫 N,Q 是還沒用過的字母。
++- **升級注意的觸發條件**:更新前消費專案的 pre-commit 裡沒有 `python-path` 字樣、而且這次真的把 pre-commit 換新了,才印。
++- **測試裡的假 lumos**:幾支掛鉤測試用假 lumos 記錄呼叫,現在掛鉤第一步會問 `python-path`,三個假 lumos 補上「印自己的直譯器路徑」這個回答;精簡版「錨點非唯一」那支測試原本把假錨點塞在第一個 `if __name__`,那一個現在是會被剝掉的版本檢查,改塞在最後一個(真正的主程式入口)。
++
++## 合約候選
++
++設計審過閘後列的「改了就壞」候選;候選不等於已標,實作與代碼審後照「不確定不標」走 guard scaffold → bind → audit。
++- git 掛鉤找不到 3.14 時,會擋的閘擋下、不改用較舊的 Python 跑([S3])。
++- lumos 開頭檢查只在主程式身分且版本低於 3.14 時觸發,被 import 不觸發;通過後清掉 `LUMOS_REEXEC_PYTHON`([S2])。
++- scripts/lumos、merge-claude-settings.py、Claude 掛鉤腳本維持 3.9 能解析([S7])。
++- 讀 `run_cmd` 的地方都經同一支代入函式([S8])。
++- post-commit 寫跳過帳不設版本下限([S3])。
++
++## 審計修正紀錄
++
++- r1(★這一段列的共用 shell 檔、git config lumos.python、`LUMOS_PYTHON` 在本體生效、perl 逾時,r2 已整類拿掉★;2026-09-29,7 席:正確性 opus;邊界、接手、併發、回滾、架構對齊 sonnet 5.5;外家否決 Codex;前置掃描已跑):51 條,去重後約 30 件,major 33 條(機器數各報告的 F 標題與 severity 行;最初手數成 52/28,已更正);全數錨定(架構對齊席一句「lands_in」不到 10 字不採信,那條改用其敘述)。卷證在 `governance/review-reports/最低python版本改3-14/r1-*`。
++  - 折入(全數):版本檢查搬到檔案最前面(正確性);scripts/lumos 維持 3.9 能解析、ruff 目標版本不改(正確性、接手,推翻原本第 6 點);候選清單加 git 設定與固定位置、`LUMOS_PYTHON` 有設就只認它、`py` 兩份都有、uv 帶 `--system --no-python-downloads`、一律用印出的絕對路徑、驗法隔開輸入並設逾時(邊界、正確性、接手、併發、外家);防重跑變數命名並在通過後清掉(併發、正確性、邊界、接手、架構對齊);掛鉤在確定要叫 lumos 時才擋、共用檔缺席另一段說明、找一次(邊界、正確性、接手、併發);post-commit 不設下限(正確性);註冊命令加引號(邊界、外家、正確性);安裝入口補齊候選並真的執行(邊界、正確性、外家、接手);測試指令 `{python}` 與測試總檔版本檢查(正確性);三張名單登記(接手、正確性、外家);四支沒家的檔交給 lumos-cli-lifecycle(外家);落地驗收比 sha256(外家);doctor 偵測過期路徑(回滾);消費專案通知與 CI 範例(接手);回退節重寫(回滾);CHANGELOG 前後矛盾(正確性、外家、接手);ONBOARDING 與筆記內容閘收尾(接手);lands_in 拿掉每支檔有家與測試假綠形態(架構對齊)。
++  - 鏡像核對(便宜席,材料含席報告目錄):51 條已處理 43、部分 8、未處理 0、相反 0;新矛盾 7。已補(★其中 git config、`LUMOS_PYTHON` 在本體生效、perl 逾時、共用檔四項 r2 已整類拿掉,見 r2 段★):`git config lumos.python` 由 init/update/install 寫入並進 [S1];get.sh 沒有共用檔改成叫人加 --pull、不退回 python3;`LUMOS_PYTHON` 值的語意與在 lumos 本體也有效;python3/python 挪到候選最後、找到即停;shell 有 perl 時用 alarm 設逾時;全域 lumos 的 shebang 與排程腳本默默失效寫進界線;新系統筆記列進 lands_in;[S6] 測試名改掉 py314 字樣、CI 加 ruff 守 [S7];post-commit 不 source 的說法統一;三份清單的比對與平台豁免寫明;白話段刪掉已被另一會談修掉的「測試總檔有 3.12 寫法」。
++- r2(2026-09-29,7 席全新,同編制;審 r1 折入後的整份):53 條,major 29 條(機器數;架構對齊席第一次交的報告沒有逐條標題,請它只改格式重交,內容不變);全數錨定。卷證在 `governance/review-reports/最低python版本改3-14/r2-*`。
++  - 結論:大部分 major 出在 r1 為了補洞新加的四樣東西(掛鉤共用 shell 檔、`git config lumos.python`、`LUMOS_PYTHON` 在本體也生效、perl 逾時),同一類問題連兩輪,換形狀、整類拿掉,不再逐條補:找 3.14 只留 lumos 裡的 Python 一份(新增 `lumos python-path`),shell 只負責找任何版本的 python 把 lumos 叫起來(外家 F1 舊版更新程式漏發新檔、邊界 F4 set -e、F5 Git Bash \r、正確性 F13、接手 F1 get.sh --pull、回滾 F1 錨點都因此不存在);`git config lumos.python` 拿掉,改由固定位置補 uv 與 pyenv 目錄(正確性 F4、併發 F2、邊界 F3 F8);`LUMOS_PYTHON` 只在版本不夠時生效、必須是絕對路徑(正確性 F1 F14、邊界 F1、併發 F1、接手 F2、外家 F2 的無限重跑)。
++  - 其餘折入:固定位置的測試接縫 `LUMOS_PYTHON_SEARCH_DIRS`(正確性 F2);`{python}` 的代入點是三處,不是四處(過濾探針就是那支冒煙測試;鏡像核對更正);Windows 包裝與 get.ps1 用「真的執行成功」挑(正確性 F5、邊界 F6、外家 F4);`{python}` 集中代入並依平台加引號、三個代入點(正確性 F6、架構對齊 F1、接手 F3、外家 F6);CI 範本不存在→改成 doctor 三處 CI 步驟提示(正確性 F7、接手 F11);3.9 能解析的守衛擴到 merge 與 Claude 掛鉤、ruff 釘版本附必紅樣本(正確性 F8、接手 F6、外家 F5);pre-commit 沒有 scripts/lumos 時的現況寫對(正確性 F9、接手 F4);uv 兩步驗與說明改寫(正確性 F10);CI 編譯步驟沒涵蓋 lumos(正確性 F11);重跑成本含 0.22 秒解析(正確性 F12、併發 F3);post-commit 清單補 python3.14(外家 F3);merge 被舊版叫起時改用 3.14 重跑(外家 F1 第 3 點);ONBOARDING 正文指令(外家 F7);doctor 段落定性為軟提醒並併入 enforcement(接手 F7);測試盤點改用 grep(接手 F8);範圍對排程腳本與精簡版的陳述更正、生成器剝掉開頭檢查(接手 F9 F10);升級注意的觸發條件與落地驗收寫成驗證紀錄(接手 F12 F13);回退補錨點重簽、update 會改全機設定、run_cmd 要跟本體一起退、3.9 要實跑不只編譯、圖譜節點處理、「只回退擋下」三條擋下路徑一起退(回滾 F1–F5);CI 裝 ruff 與新增做法的理由寫明(架構對齊 F2);掛鉤家筆記加連結(架構對齊 F3)。
++  - 鏡像核對(便宜席,材料含席報告目錄):53 條已處理 32、已處理(機制拿掉)18、部分 3、未處理 0、相反 0;新矛盾 6。已補:掛鉤與安裝入口的「任何版本」清單加固定位置並排在 python3 前(圖形用戶端短路徑跳對話框、Linux 只有 ~/.local/bin);pre-commit 在只提醒的閘遇到找不到 3.14 時跳過、會擋的閘才擋;代入點更正為三處;merge 的 import 順序說法統一;掛鉤第一跳沒逾時寫進界線;post-commit 交給 reversibility-governance-ledger;掛鉤家筆記點名;測試要清開發者環境的 LUMOS_PYTHON;回退本身要提交;r1 段標明已撤的機制。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index 089bf157..042be170 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -29,20 +29,22 @@ summary: |-
+   KEY:[2026-09-17 風險低放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(風險低計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 一律放行(fail-open)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
+   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
+   KEY:★2026-09-12 這道閘的核心保證被實際打穿過一次(Java 補棧代碼審 r1 資安席)★——閘驗的是「合約綁的名字有沒有出現在 discover_test_methods 掃出來的集合裡」,所以★掃描器認錯名字=閘直接失效★:當時 Java 的方法正則太鬆,一支「掛註解但不是 void 的誘餌方法」後面接一支完全沒掛註解的空方法,那支空方法就被收成真證據,健檢一聲不吭。教訓:新增任何語言的測試掃描時,除了「收得到真測試」還要有「收不到假測試」的斷言,兩邊都要 [test:t_java_profile_discovery]
+   DEP:[[Systems/pitfalls-code-loop]]
+   DEP:[[Systems/guard-kill]]
+   KEY:[2026-09-11 多平台缺指令,Issues/多平台設定下測試指令被默默略過]沒設 run_cmd 改成★逐平台★——有指令的平台照跑,沒指令的平台那幾支列成 not_run(平台點名);全部沒指令才 no-config;原本碰到第一支沒指令就整批 no-config,連前面已判的懸空紅都被吞掉(違反上一行合約「任一懸空 → 擋」的原意)。訊息改由 _no_run_cmd_reason 給:多平台點名平台,最上層還留著 test.run_cmd 就照 2026-07-10 並存優先序講明它不生效、要搬;code-loop check 與 bound-tests 兩條路共用 [test:t_bound_tests_multiplatform_missing_cmd]
+   KEY:[2026-09-12]CI 的全套測試改成切 4 片同時跑(`--shard i/4`,跟推送前掛鉤同一支旗標);單行程版本已經從 25–27 分鐘漲到撞 job 上限 30 分被砍(8a45751b 那次),不是測試紅、是跑不完。上限同時拉到 45 分留餘裕;任一片紅就整步紅,四片的尾端都會印出來
+   KEY:[2026-09-17]推送閘擋下時的逃逸自動記:code-loop check 回 rc1 那個分支多兩個 grep——「受波及合約的測試沒過」→ lumos loop escape --auto --stage push-gate;「tier=high 且」開頭的缺留痕句 → --stage push-gate-unreviewed(lumos 端查有風險低留痕才記);兩者都 || true,記帳失敗不能變成擋推送的第二個理由。單源:[[Projects/逃逸自動記_計劃]]
+   KEY:[2026-09-18]推送前與 CI 的全套測試,純文件改動只跑文件子集(Enzo 裁「像這種改動 CI 可以跳過吧」「判成 light 的也不用」):掛鉤每個 ref 讀 pitfalls 的 suite,全部 docs → 分片改帶 `--suite docs`(執行器挑「讀真 repo 根、而且讀 README/根目錄文件/assets/docs 底下非圖譜文件」的測試,連看它呼叫的本檔輔助函式一跳;2026-09-18 實推量到舊挑法 209 支四片跑 234 秒、跟全套一樣慢——假環境裡順手寫 CLAUDE.md 的重測試全被挑進來;收緊後 63/1021 支、四片 21 秒,測試釘 ≤10% 且不含 t_ci_wait/t_slim_gate;讀真圖譜的測試平常不算;★推送碰到圖譜筆記時★(pitfalls 的 suite_graph)加 `--graph` 把讀★真★圖譜(lumos 找到的那個目錄名,不是任何 -knowledge 字樣:假環境 x-knowledge 會把 34 支評測 fixture 帶回來)的 12 支加回——圖譜健檢只驗結構、驗不到檢索品質(代碼審 code-文件子集收緊 r1/r2 通才席),合計 75 支、四片 55 秒;掛鉤先讀檔探執行器認不認得 `--graph`,不認得退全套;先挑子集再切片);改到程式但 spec-gate --push-check 判 light ★且 pitfalls light_ok★ 的,文件子集之外再跑 `--suite keys --keys <affected_keys>`(原始碼整字提到改到的頂層函式/檔名的測試;一個關鍵字選中 >30% 就丟),兩組各自分片、真的同時跑(2026-09-18 實測前一版是一組跑完才跑下一組,註解卻寫平行);keys 每片都 rc3(沒對到)不擋、講明 CI 會跑全套當後盾,有紅照擋;其餘全套。CI 只認 docs(push 事件用 before..sha 問 lumos;首推/force-push 對不到起點/pull_request 一律全套)。純文件推送的自主迴圈測試(整支 68 秒)兩邊都只跑讀真 CLAUDE.md 那一條(`-k real_claude_md`,接線測試真跑確認選得到 1 支);★light 推送前也一樣★,除非 pitfalls 的 `autoloop_full` 為真:affected_keys 有任一個整字出現在那支測試的原始碼裡(它測自主迴圈模組、主程式常數、兩支探針腳本),或抽不出任何關鍵字(不知道改了什麼就整支跑);整字比對只有 lumos `_keys_mentioned` 一份,執行器 `--suite keys` 也用它(代碼審 code-light自主迴圈 r1)——2026-09-18 在隔離工作樹造真 light 情境實測 108 秒 → 40 秒。CI 對 light 照跑全套當後盾。執行器不認得 --suite(讀檔探旗標)就退全套。push-check 輸出用 tee 即時印(r1 併發席:先存檔再印人會以為卡住);暫存檔全收 _PP_TMP 掛 trap。★誠實界線★:文件子集是「原始碼字樣」挑的,不是真的追蹤誰讀了哪個檔——第一版單看字樣挑到 254 支跑 9 分半比全套分片還慢,現在 docs/、governance/ 要跟真 repo 根寫法同現才算
+   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]測試指令用 {python} 佔位符,由 lumos 代入自己那支直譯器並依平台加引號;原本吃 PATH 上的 python3,3.14 只以 python3.14 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。三處代入點(guard kill、合約測試閘本體、過濾探針)都經同一支函式 [test:t_test_run_cmd_uses_running_python]
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-push 有 scripts/lumos 卻找不到 Python 3.14 就擋下,不再像以前「找不到 python 就放行、找到 3.9 就拿 3.9 跑」;沒有 scripts/lumos 的 repo 照舊放行 [test:t_hooks_block_without_python314]
+ verified_by:
+   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
+   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
+ about_code:
+   - .github/workflows/ci.yml
+   - scripts/hooks/pre-push
+   - scripts/lumos
+ ---
+ # bound-tests-gate
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index 7589e346..c65a91e7 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -27,20 +27,21 @@ summary: |-
+   KEY:★Codex 當編排者★:loop next 首輪必帶 --orchestrator codex(家族相對化:外家=非編排者那家);派工訊息對 hook 是密文(multi-agent v2 設計,改不了),鏡頭改走 dispatch-lens --arm <range> --seats N → 子代理 SubagentStart 原子領席(TTL 10 分,首行「LUMOS-LENS range=… 第 k/N 席」)→ --disarm;審查席點名 lumos_reviewer(0.153.2 選得中、0.144.1 忽略;唯讀靠父代理 --sandbox read-only,TOML sandbox_mode 不擋)
+   KEY:★天生限制(工具補不了,誠實界線)★:①hook 要人按一次信任(綁 hooks.json 命令列,換檔內容不用重按;enforcement 對 Codex hook 只能報「已註冊」)②派工訊息密文③stderr 對 Codex 模型零訊號(只有 additionalContext/decision 兩通道)④codex exec 沒有 --max-turns,擋一次就是上限⑤同 repo 同窗口的無關子代理會搶 armed 席
+   KEY:★順帶修的老洞(2026-09-05)★:is_code_file 只認副檔名,本 repo 主程式 scripts/lumos 無副檔名 → Stop 提醒 2026-05 上線起對它從沒生效(兩家皆然);現在 repo 內、無副檔名、一般檔、首行是 #!也算程式碼(先判位置再開檔,FIFO 不開)
+   PITFALL:[2026-09-21]★拿 git worktree 當探針來源,三道隔離會全部寫進本體★——worktree 的 `.git` 是一行指回本體的檔,rsync 原樣複製後,沙盒裡的拔遠端與設 hooks 路徑都落在真 repo 上,防護層靜默失效(推不上去才會發現)。已加前提檢查:來源的 `.git` 是檔就停手。單源 [[Issues/探針以工作樹為來源會改到本體]] [test:t_probe_sandbox_refuses_worktree_source]
+   RULE:[since:2026-09-21][confirmed:2026-09-21][retire:連續兩季零腐爛,或誤報多過真報]跑探針之前先驗每題的目標還在不在,不在就整輪停手回 rc3(跟行為不及格分開),要照跑得明寫 `--allow-stale-targets`。兩層:題目裡提到的路徑要存在、`target` 欄位宣告的字串要找得到。★比對前先剝整行註解★:本 repo 移除東西時的慣例是留一句提到舊名字的註解,不剝的話那句註解會被當成「東西還在」——防線對原始事故本身失效(2026-09-21 審查席 blocker)。路徑判準是「每一段都要含字母」,所以版本對照 `0.144.1/0.153.2` 不會被誤當路徑,而沒有副檔名的推送前那支掛鉤([[Systems/bound-tests-gate]] 管的那支)與圖譜節點名抓得到。誠實界線:只擋得住整行註解,名字留在字串字面值或檔名裡仍會判成健在。驗一條 target 的邏輯拆在 `_check_one_target`,不是為了好看——合在一起會超過本專案的複雜度上限、被新增告警閘擋。[test:t_probe_detects_rotten_targets]
+   PITFALL:[2026-09-21]★探針題目會跟著程式碼腐爛,腐爛之後量到的東西跟題目想量的無關,而且看起來像規矩失效★——d01 叫 AI 改提交前那道閘([[Systems/每支檔有家]] 管的那支)裡的 sync_nudge,那段 2026-09-11 就移除了;AI 查了波及、讀了碼、發現前提不成立就停下來問,這是正確行為,卻因為「沒寫回圖譜」被判不及格。新舊定位各跑三次都 0/3,一度被誤判成定位改壞了寫回紀律。挑題目的條件:①目標現在真的存在 ②改了會影響行為 ③它的家有筆記在講它。重現:`python3 scripts/scenario_probe.py --scenarios governance/scenarios/discipline.jsonl --only d01-writeback-after-code --runs 3 --timeout 700`
+   FACT:[2026-09-21 以程式碼為準]SessionStart 進場提醒(`scripts/hooks/claude/lumos-entry-hook.py`)的開場句跟著紀律範本改定位改寫了:從「第一個工具呼叫是 lumos,不是 grep」改成「程式碼是現況的依據,圖譜補程式碼看不出的脈絡」。這句話同時硬編在八個入口檔,漏改任一處就會有兩套互斥的第一步,由 `scripts/test_lumos.py` 的 `t_entry_points_agree_with_code_first` 擋。★另有兩支既有測試把訊息文字寫死在斷言裡★(`t_entry_hook_index_and_lag`、`t_entry_hook_enforcement_failopen`):它們釘的是「核心提醒有沒有被吃掉」,所以改訊息時要一起改斷言裡那個指令名,現在釘的是 `lumos impact`。2026-09-21 就是漏跑這兩支、被推送前的全套閘擋下來才發現的。現值查:`grep -n 'msg = ' scripts/hooks/claude/lumos-entry-hook.py`
+   FACT:[2026-09-21 以程式碼為準]情境探針消融組要拔掉的那一節,邊界常數跟著紀律範本改定位一起改名了(原本抓「第一個工具呼叫是 lumos」那一節,現在抓「怎麼用」到「寫筆記時」之間);拔錯範圍會讓「不帶查詢指引」那組的前提失效,所以 `scripts/scenario_probe.py` 拔不到邊界時直接停手、不跑。現值查:`grep -n 'RULE_HEAD\|RULE_END' scripts/scenario_probe.py`
+   DEP:scripts/lumos(_codex_home/_sync_global_hooks/_install_codex_agent/dispatch-lens/loop next --orchestrator/enforcement Codex 列)/merge-claude-settings.py --target codex/scripts/hooks/claude/{check-graph-sync,impact-hook,dispatch-lens-hook,lumos-entry-hook}.py/scenario_probe.py --runner codex --stop-block/recount.py 讀 Codex 稿
+   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+     context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+     why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
+     decided: 2026-09-11
+     valid: true
+ ---
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index a2d04153..84d64203 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -1,17 +1,18 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+ updated: 2026-08-20
+ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
++responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
+ tags:
+   - type/system
+   - status/done
+   - risk/不可逆
+   - scope/platform
+ summary: |-
+   KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
+   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
+   KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);★bootstrap 跨兩層(2026-08-21 程式碼實證):機器層之外 step3 會動當前 repo 的 core.hooksPath/vault/CLAUDE.md(見下行四分流)★;專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
+   KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_vault_in 只看名稱防假陽性疊動作)→提示補齊不自動動｜無vault→_confirm_tty 確認(印完整路徑+預設N)y 才 cmd_init(--init 免確認;一律 force=False+no_pull=True,LUMOS_HOME env 傳導自訂 home)｜非git→只機器層。get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap;各步查 rc 失敗尾端彙報 rc1 不吞錯。與 teardown 成鏡像(bootstrap 不刪vault、teardown 不建vault,圖譜兩邊不碰)。設計 [[Projects/bootstrap一鍵對稱_計劃]]、驗證 [[Verification/2026-07-25_bootstrap一鍵對稱]]
+@@ -27,20 +28,21 @@ summary: |-
+   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
+   KEY:★2026-08-11 來源 pull 改 fail-closed★——有 remote 卻拉不到最新即中止,★中止點在寫任何檔之前(不留半套)★;政策收進 _pull_source_or_abort 單一函式,_vendor_toolchain(專案層)與 cmd_bootstrap(機器層)共用避免漂移。無 remote=離線 clone 不算失敗照跑(不誤擋手動複製/slim 安裝);逃生門 --allow-stale(update/init/bootstrap 三處齊備)。原行為只印警告續跑→消費端 mOrangePos 咬過兩次靜默降版 [test:t_vendor_pull_failure_aborts,t_vendor_no_remote_skips_pull,t_vendor_allow_stale_overrides_pull_failure,t_bootstrap_pull_failure_aborts]
+   KEY:★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl 等簿記檔恆髒,一律擋會天天卡住;要做需先分「簿記檔 vs 實質檔」白名單
+   KEY:來源 repo 自我保護——deinit 偵測 root==_lumos_src() 即 return 2;★update 自 2026-08-05 起**不再拒跑**,改走 reinject-only 分支(只刷 CLAUDE.md,通常 rc0;見本節點 2026-08-05 行)——本行原寫 update 也 return 2,屬同節點 KEY 行新舊未同步(2026-08-21 程式碼實證)★
+   KEY:★2026-09-12 多語言 repo 實撞★——_init_config_skeleton 的多平台分支原本只取檔數前三名(ranked[:3]),一個九種語言的 repo 只產出三個平台,其餘六種的測試從此掃不到;而掃不到的症狀不是報錯,是合約綁不上、閘靜默放行。改成偵測得到的語言全部列出來,骨架註解叫使用者刪掉不要的。★代價不對等★:多列一個平台=使用者刪一段設定,少列一個=那個語言的守衛整批不存在 [test:t_init_writes_config_skeleton]
+   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
+   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
+   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
+   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
+   KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]安裝入口(install.sh、get.sh、get.ps1、install-hooks.sh、install-graph-toolchain.sh)只負責找一支任何版本的 python 把 lumos 叫起來,找 3.14 交給 lumos 開頭的檢查([[Systems/python直譯器選擇]]);原本寫死 python3,只裝了 python3.14 的機器進不去。get.ps1 與 Windows 的 lumos.cmd 用「真的執行成功」挑,因為商店替身 python.exe 找得到卻跑不起來
+ decisions:
+   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
+     id: d1
+     context: 同事 onboarding 與多 repo 使用需要分清「一輩子裝一次的機器設定」與「每個 repo 各自要做的」;deinit 反安裝若誤碰機器共用項會傷到其他 repo
+     why_chosen: bootstrap 一鍵把機器層全裝(clone Lumos+全域+skills+repo hooks);init/deinit 對稱只在本 repo 增刪,deinit 明確不碰 ~/.claude,降低反安裝爆炸半徑
+     decided: 2026-06-26
+     valid: true
+   - content: 全域 lumos 與 skills 用 symlink/junction 指向來源 clone(非 copy),graph-discipline.md 則 per-project 注入
+     id: d2
+     context: 工具更新如何傳到夥伴機器;若全 copy 則每次更新都要重裝
+@@ -86,20 +88,24 @@ verified_by:
+   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+   - "[[Verification/2026-08-22_指令索引與情境探針]]"
+   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
+ about_code:
+   - get.sh
+   - scripts/lumos
+   - scripts/merge-claude-settings.py
++  - install.sh
++  - get.ps1
++  - scripts/install-hooks.sh
++  - scripts/install-graph-toolchain.sh
+ ---
+ # lumos-cli-lifecycle
+ 
+ `scripts/lumos` 的生命週期原語群:`install` / `uninstall` / `bootstrap` / `init` / `update` / `deinit`。管「Lumos 工具鏈如何裝上機器、裝進專案、更新、反安裝」。圖譜讀寫指令(`new`/`set`/`lint`/`doctor` 等)不在此節點。
+ 
+ ## 兩層分工(本節點核心心智模型)
+ | 層 | 指令 | 動到哪 | 頻率 |
+ |---|---|---|---|
+ | **機器層** | `install` / `uninstall` | `~/.local/bin/lumos`(全域指令)+ user-scope skills(`~/.claude/skills/`) | 每台機器一次 |
+ | **機器層(一鍵)** | `bootstrap` | 上面全部 + 自動 clone Lumos 源 + 該 repo hooks(`~/.claude/hooks/` + settings 註冊) | 同事 onboarding |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+new file mode 100644
+index 00000000..b5fd6901
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+@@ -0,0 +1,40 @@
++---
++type: system
++status: doing
++created: 2026-09-29
++updated: 2026-09-29
++responsibility: 負責找一支 Python 3.14 以上的直譯器:候選清單與順序、驗版本、lumos python-path、lumos 開頭的版本檢查與改用 3.14 重跑、找不到時的說明、LUMOS_PYTHON 與 LUMOS_PYTHON_SEARCH_DIRS;不負責 git 掛鉤與安裝腳本各自的業務邏輯(它們只內嵌一段找任何版本 python 的清單把 lumos 叫起來)
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/system
++  - status/doing
++  - scope/platform
++summary: |-
++  WHY:[2026-09-29 Projects/最低Python版本改3.14_計劃,Enzo 裁]工具最低 Python 改成 3.14:macOS 內建的 3.9 碰到巢狀很深的程式,ast.parse 會讓整個程序 SIGSEGV(不是丟例外),存量漂移防線乙為它補的事先篩選連兩輪被審出新洞;拉高下限讓這整類問題消失
++  WHY:[2026-09-29 設計審 r2,外家否決席與邊界席]找 3.14 只有 lumos 裡這一份,git 掛鉤與安裝腳本只內嵌「找任何版本的 python 把 lumos 叫起來」:第一版讓掛鉤 source 一支共用 shell 檔,舊版的更新程式在啟動時已把要複製的檔案清單讀進記憶體,更新時複製了改過的掛鉤卻漏掉它不認得的新檔,第一次升級必定半套、提交被擋;被 source 進 set -euo pipefail 的腳本還會無聲結束、Git Bash 的路徑帶 \r
++  WHY:[2026-09-29 設計審 r1 正確性席]開頭檢查放在最前面那幾行標準庫 import 之後、所有定義之前,只在主程式身分且版本低於 3.14 時觸發:3.9 在定義當下就會對 `def f(x: int | None)` 丟 TypeError,放在檔尾的 __main__ 段就跑不到;被測試用 import 載入時不能觸發
++  WHY:[2026-09-29 設計審 r2,五席各自報到]LUMOS_PYTHON 只在版本不夠時才用來找 3.14,不讓一支已經是 3.14 的 lumos 重跑:指到 pyenv shim 或自寫包裝時,包裝啟動的真正路徑與設定的路徑永遠不同,會無限重跑
++  WHY:[2026-09-29 設計審 r2 正確性席]LUMOS_PYTHON_SEARCH_DIRS 換掉固定位置清單,是測試接縫:維護者的 Mac 上 /opt/homebrew/bin/python3.14 一定存在,不換掉就造不出「找不到 3.14」的情境
++  RULE:[since:2026-09-29][retire:工具改成用 uv tool / pipx 這類有 requires-python 的方式發佈,或把 scripts/lumos 拆成只做檢查的小入口加本體時][confirmed:2026-09-29]scripts/lumos、scripts/merge-claude-settings.py、scripts/hooks/claude 底下的 .py 必須一直能被 Python 3.9 解析:Python 要先解析完整支檔才跑第一行,舊版啟動時要能跑到開頭的版本檢查才講得出「需要 3.14」;CI 用釘版本的 ruff 以 py39 查語法錯誤 [test:t_lumos_parses_under_old_grammar]
++  PITFALL:[2026-09-29 實作自測]macOS 的 /usr/bin/python3 是一層轉接,真正在跑的是開發工具底下那支,sys.executable 與 /usr/bin/python3 不同;比對「是不是同一支直譯器」要用它自己回報的 sys.executable,不能用啟動時的路徑 [test:t_lumos_old_python_reexec_or_explain]
++  PITFALL:[2026-09-29 存量漂移防線乙代碼審 r3 外家席、r4 正確性席]3.9 的 ast.parse 在單一邏輯行約 21.6 萬字元的負號串、約 16 萬層的 elif 鏈就 SIGSEGV,接不到例外;重現:`/usr/bin/python3 -c "import ast; ast.parse('-'*500000+'1')"`,回傳碼 139
++  TEST:t_python_resolver_order_and_floor、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
++related:
++  - "[[Projects/最低Python版本改3.14_計劃]]"
++  - "[[Issues/蘋果內建Python3.9跑全套仍紅]]"
++  - "[[Systems/lumos-cli-lifecycle]]"
++  - "[[Systems/codex-harness]]"
++  - "[[Systems/bound-tests-gate]]"
++---
++# python直譯器選擇
++
++白話:工具需要 Python 3.14 以上。這篇管「在一台機器上找到那支 3.14」這件事:lumos 被舊版 Python 叫起來時,自己找 3.14 重跑一次;git 掛鉤先問 lumos 要 3.14 的路徑,找不到就擋下並說明怎麼裝,不會拿舊版硬跑。設計與取捨全在 [[Projects/最低Python版本改3.14_計劃]],這裡只記程式碼看不出來的部分。
++
++## 幾個入口怎麼分工
++
++- lumos 本體:唯一一份「找 3.14」的清單與驗法,對外是 `lumos python-path`。
++- git 掛鉤與安裝腳本:各自內嵌同一段「找任何版本的 python」,只負責把 lumos 叫起來;版本判斷交給 lumos。這段在七支腳本裡逐字一致,由測試守著。掛鉤的家見 [[Systems/每支檔有家]](pre-commit)與 [[Systems/bound-tests-gate]](pre-push),安裝腳本的家見 [[Systems/lumos-cli-lifecycle]]。
++- Claude/Codex 掛鉤的註冊:寫進設定檔的是跑註冊那支程式的直譯器,見 [[Systems/codex-harness]]。
++- 精簡版:不拉下限。它的產物由生成器從主程式衍生,生成器會剝掉開頭呼叫版本檢查那三行。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+index 619cc010..dac2e486 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
++++ b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+@@ -28,20 +28,21 @@ summary: |-
+   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
+   KEY:gov 彙整多本帳(6 源 <!--lumos:count=6 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME) in=scripts/lumos-->:bypass/governance/signoff/kill/canary/ci,ci 條件載入;★原記 7 源含 rot-queue,2026-08-22 該 loader 拆除(寫帳的 verification-rot-check 8/21 已撤、本機無此檔,留著只是假名額)——Check N 當天就抓到數字漂,由另一個 session 順手修★),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內)——原記「皆 gitignore local-only」已不成立;**根因**=scaffold 把 ignore 清單寫在 vault 內、帳檔在上一層 `docs/`,從未生效(同日修,新專案起生效;本 repo 維持追蹤,見 [[Verification/2026-08-21_doctor-run事件落地]])★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
+   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
+   WHY:[2026-09-28 Projects/存量漂移防線_計劃]閘名單加 drift-check:存量漂移守衛的擋下、提醒、跳過、表態都記在這個閘名下;放行不寫帳(同筆記形狀擋),doctor Z 段也不寫——存量每天唸同一批會被週報升級成噪音
+   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
+   KEY:對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄)=canary 分帳尾加「折入 N 筆缺陷[severity 分佈]|依審計員」——折入=caught 輪辯方裁決後存活折入的真缺陷(測試綠後仍被抓,天生=測試漏掉的);長期趨零=整套對抗機關裝飾品該砍,這是驗證層對自己的驗證。missed 輪不計;findings 欄 M1(07-21)前舊輪誠實另計。首跑真帳:近 90 天折入 866 筆(blocker 404/major 403/minor 59)——機關非裝飾實證 [test:t_gov_adversarial_increment]
+   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
+   DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_marker_doc_sync](L4 審計 2026-07-24 修:原指 t_reversibility_drift 不存在)
+   TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_write/t_gov_query(無 reversibility 前綴)+ t_marker_doc_sync(文件漂移)+ t_gov_denoise(去噪)
+   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]post-commit 寫跳過帳★不設 Python 版本下限★:沒有 3.14 的機器正是最常用 --no-verify 的機器,這筆帳不能因為下限寫不進去;它內嵌的「找任何版本 python」清單補上 python3.14,只裝了版本化指令的機器也寫得進去 [test:t_hooks_block_without_python314]
+ decisions:
+   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
+     id: d1
+     context: design-loop R1-BLOCKER-1 / R2-BLOCKER-A — 若把可逆性塞進 extract_contracts,其 7 個 callsite(Check T、cmd_contracts、guard 家族、_html_model)語義被牽動,有靜默失效風險
+     why_chosen: 平行路讓 ★INVARIANT★/★DEBT★ 家族全維持原狀、零回歸;CHECKPOINT_RE/IRREVERSIBLE_RE 寫死對齊 INVARIANT_RE 形狀
+     decided: 2026-06-19
+     valid: true
+   - content: KEY 行 [rollback:](獨立 extractor 自剝 tag)與 decisions[].rollback(frontmatter 欄位)是兩個不同結構的機制,實作分清
+     id: d2
+     context: design-loop R2-BLOCKER-B — 原稿把二者混為一談;[rollback:] 是指針、decisions[].rollback 是實際回退內容,_rollback_resolved 要求指針指到 decisions 真有非空 rollback
+@@ -55,20 +56,21 @@ decisions:
+     decided: 2026-06-19
+     valid: true
+   - content: CHECKPOINT 類 warning 走新增 warn_soft()(印但不計 issues),不走會計 issues 的 warn()
+     id: d4
+     context: design-loop R3-MAJOR-3 — run_doctor 既有 warn() 一律 issues += len,任何 warn 在 --ci 下會 rc1,會誤擋只有 checkpoint 缺 rollback 的情況
+     why_chosen: Check R 只對 error 級(irreversible 缺實質回退、標錯型別)呼叫 warn(),對 checkpoint/懸空呼叫 warn_soft();回歸測 t_reversibility_doctor 斷言「只有 checkpoint 缺回退 → rc0」
+     decided: 2026-06-19
+     valid: true
+ about_code:
+   - scripts/lumos
++  - scripts/hooks/post-commit
+ aliases:
+   - lumos gov
+   - 治理帳彙整
+   - 六本帳來源
+   - signoff 簽核留痕
+ ---
+ # reversibility-governance-ledger
+ 
+ 治理日報點名的方法論兩盲點，一起補：四道把關只問「有沒有寫、真不真」，不問**改動能不能安全收回**（可逆性）；治理訊號散在多個 hook，無法**一次查某節點歷來被哪幾道閘攔過**（稽核軌跡）。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/slim-gen-生成器.md b/docs/lumos-toolchain-knowledge/Systems/slim-gen-生成器.md
+index ffe0c7fb..119422eb 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/slim-gen-生成器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/slim-gen-生成器.md
+@@ -13,39 +13,42 @@ summary: |-
+   KEY:★正解是行級手術,不是 ast.unparse★——語法樹無註解,`ast.unparse` 實測把 686 行事故脈絡註解全剝光、格式全重排,直接違背〈公開精簡版計劃〉「接手者改得動」的核心價值主張;唯一允許重排的例外是混合保留/移除的迴圈註冊小塊(2-3 行)
+   KEY:移除謂詞=「保留指令 dispatch 的 AST 可達性閉包之補集」,不是 `cmd_` 前綴字面比對(lint-watch 實作叫 `_lint_watch_mode`、保留的 doctor 叫 `run_doctor`,前綴法會誤判)
+   KEY:removed_cmds 真值來源=掃全部 subparser 註冊(Assign/Expr/迴圈三種形態)得到的指令全集減 DEFAULT_KEEP(26 支 <!--lumos:count=26 re=\b[a-z][a-z-]*\b(?=[^\"]*\"\"\"\.split\(\)) in=scripts/slim-gen.py-->;★原記 24,2026-08-11 已改(2026-08-21 程式碼實證)★),不硬編移除清單
+   KEY:產物自我驗證雙保險——① `ast.parse(new_text)` 失敗即 rc1 中止(行級刪除最容易刪出語法洞的地方)② `--emit-manifest` 印 `keep_funcs`/`drop_funcs`/`removed_cmds`/`kept_comment_lines` 供測試/人工核對
+   KEY:★迴圈註冊刪除須 top_var receiver 限定★(2026-07-31 審查揪出、已修復,不是「超出範圍」)——`_is_registration_loop` 原本只看 for 迴圈 body 有沒有 `X.add_parser(迴圈變數,...)`,完全沒查 receiver `X` 是不是頂層 subparsers 變數(`top_var`)。後果:一個被保留的指令,若用迴圈註冊「自己的」巢狀子指令(如 `osub = p2.add_subparsers(...)` 後 `for n,h in (...): osub.add_parser(n,help=h)`,receiver 是 `osub` 不是 `top_var`),整段迴圈會被誤判成頂層指令迴圈、拿巢狀子指令名去跟頂層 keep 名單比對(當然比不中)、整段砍空——即使外層指令本身在保留清單裡。審查用合成 fixture(`otherkeep` 巢狀註冊 `removeme`/`x2`)實地示範重現;現行 `scripts/lumos` 沒被咬到純屬巧合(全檔唯二匹配的巢狀迴圈——`links`/`backlinks`兩者皆保留不觸發混合刪除、`code-loop` 底下的 `pass`/`skip`/`check` 因 `code-loop` 本身就是移除指令整塊本來就要砍——潛伏缺陷不是已發生的錯誤)。修法:`_is_registration_loop(n, top_var=...)` 加 receiver 檢查,`collect_edits()` 與 `main()` 印診斷用的 `allc` 掃描兩處呼叫點都傳入 `top_var`(★兩邊是同一段未防護邏輯,不是各自獨立的問題★);連帶修正 `collect_edits()` 的 main.body 區塊追蹤——nested for 迴圈(receiver≠top_var)不再被無條件剝離去單獨處理,而是併入所在區塊(隨區塊留/隨區塊砍),否則「巢狀迴圈屬於已移除群組指令(如 code-loop)」的情況會反向退化成漏刪、產出 NameError。
+   KEY:★交付包組包清單漏了 get.sh/uninstall.sh★(2026-07-31 修復,離職交接演練中發現)——`main()` 尾段「組交付包」只複製 `install.sh`/`README.md`/`skills`,`slim/get.sh`(curl|bash 入口)與 `slim/uninstall.sh`(卸載腳本)沒被複製進 `dist/`;實測 `dist/` 只剩 `install.sh`/`README.md`/`scripts/lumos`,接手者拿到的包裡沒有一行安裝入口、也沒有卸載腳本,等於那些功能不存在。修法:組包清單加 `get.sh`/`uninstall.sh`,三支 `.sh`(install/get/uninstall)都補 `chmod 0o755`(原本只對 install.sh 補執行位元)。
+   KEY:★2026-07-31 Task 9 同型缺口預防性修復★——Task 9 把 CLAUDE.md 注入內容從腳本內嵌 heredoc 改成外部靜態範本 `slim/claude-block.md`(見 [[Systems/slim-install-安裝器]]),吸取上一條「漏了 get.sh/uninstall.sh」的教訓,新增檔案當下就同步把 `claude-block.md` 加進組包清單(`for item in (..., "claude-block.md", "skills")`),不是事後才補——`t_slim_gen_dist_ships_entrypoints` 的 expected 清單同步加了這一項
+   DEP:scripts/lumos(唯一輸入源)｜scripts/test_lumos.py t_slim_gen/t_slim_gen_loop_registration/t_slim_gen_nested_loop_registration/t_slim_gen_keeps_comments/t_slim_gen_dist_ships_entrypoints
+   TEST:25 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_compile 0 SyntaxWarning/dangling handler=0)+合成fixture(驗迴圈註冊真的被砍,現行白名單下無真實對象故必須合成)+巢狀迴圈合成fixture(`t_slim_gen_nested_loop_registration`,驗保留指令自己的巢狀註冊迴圈不被誤砍、頂層迴圈砍法不退化)+註解密度守衛(★產物註解密度不得低於原檔90%★,抓 ast.unparse 迴歸;哨兵 test_lumos.py 260→94 事故註解,2026-07-31 收尾時把原 brief 的 W4/百分比門檻哨兵換掉,見下方 DECISION)+交付包完整性守衛(`t_slim_gen_dist_ships_entrypoints`,斷言 dist/ 內 get.sh/uninstall.sh/install.sh/README.md/scripts/lumos/skills/lumos-project-notes/SKILL.md 皆存在、三支 .sh 皆有可執行位元)
+   KEY:★2026-08-01 補追加 Task 13——組包清單再擴充,與 [[Systems/slim-install-安裝器]]/[[Systems/slim-uninstall-一行卸載]] 同批,吸取 Task 6/Task 9 兩次「新增檔案沒同步進組包清單」教訓的第三次預防性修復★:`slim/install.sh`/`slim/uninstall.sh` 的邏輯搬進新的 `slim/install.py`/`slim/uninstall.py`(★真正的邏輯所在★,`.sh` 只是薄殼),另新增 `slim/install.ps1`/`slim/uninstall.ps1`/`slim/get.ps1`(Windows 入口)——`main()` 尾段組包清單的 `for item in (...)` 迴圈當下就同步加入這 5 個新檔,不是事後才補;`.py`/`.ps1` 不進「補 chmod 0o755」的迴圈(★.py 一律經薄殼 `python <path>` 呼叫、.ps1 執行權限由 Windows PowerShell 執行原則管,Unix mode bit 對它們無意義★,只有 `.sh` 三支需要可執行位元)。`t_slim_gen_dist_ships_entrypoints` 的 expected 清單同步擴充到 12 項並更新 docstring [test:t_slim_gen_dist_ships_entrypoints]。詳見 [[Verification/2026-08-01_slim-python移植]],報告 `.superpowers/sdd/公開精簡版_實作計畫/task-13-report.md`
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]完整版最低 Python 改成 3.14,主程式開頭多了「版本不夠就改用 3.14 重跑」;精簡版不拉下限,生成器(`scripts/slim-gen.py`)只剝掉用 python-floor gate begin/end 框起來的那三行呼叫,找 3.14 的函式留著(python-path 與 doctor 用得到,整段剝掉產物會在那些地方出錯)。只有開頭沒有結尾就拒絕出貨 [test:t_update_prints_python314_notice_and_slim_strips_floor]
+ verified_by:
+   - "[[Verification/2026-07-31_slim-gen生成器落地]]"
+   - "[[Verification/2026-07-31_公開精簡版交付]]"
+   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
+   - "[[Verification/2026-08-01_slim-python移植]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+ decisions:
+   - content: t_slim_gen_keeps_comments 的斷言二次修正:原哨兵 W4 位於 _link_or_copy(scripts/lumos:7238),只被 _install_skills 呼叫、後者只從 cmd_install/cmd_uninstall 可達——兩支都在移除清單,W4 被砍是正當汰換,是 brief 挑錯哨兵,不是生成器漏砍。改用 test_lumos.py 260→94 那條事故註解(出現兩處:module-level TEST_PROFILES dict 字面值 + 保留指令閉包內的 discover_test_methods(),兩處都保證留在產物中)。門檻同時從「保住 N% 註解」(N=60→50,前手依實測 55% 下修過一次)改成「產物註解密度不得低於原檔的 90%」。
+     id: d1
+     context: 任意保留率門檻無意義(砍多砍少都會動它),真正該鎖的是密度沒有下降——那才是行級手術相對 ast.unparse 的實質保證
+     why_chosen: 密度守衛照樣抓得住 ast.unparse 迴歸(密度歸零);實測(2026-07-31 當時)原檔 11999行/686行註解=5.7%,產物 6203行/379行註解=6.1%,未下降;★(2026-08-21 程式碼實證)重測:原檔 15047行/1078行=7.2%,產物 7461行/597行=8.0%,結論方向不變、數字已漂★
+     decided: 2026-07-31
+     valid: true
+   - content: 迴圈註冊刪除加 top_var receiver 限定:2026-07-31 審查(Task 5 複審)以合成 fixture 實地示範重現「保留指令巢狀自建註冊迴圈被誤砍空」——修 _is_registration_loop 加 receiver 檢查、collect_edits()與main()診斷用allc掃描兩處呼叫點統一傳入top_var,並修正collect_edits()的main.body區塊追蹤(nested迴圈併入所在區塊隨去留,不再無條件剝離單獨處理)。前一位實作者曾把此現象定調為「main()印診斷用allc掃描沒限定receiver、collect_edits()是安全的、純診斷雜訊、超出範圍」——經審查追碼確認兩邊是同一段未防護邏輯,那個定調錯誤,已不採用。
+     id: d2
+     context: 審查用合成fixture(otherkeep巢狀註冊removeme/x2)demonstrate:一個被保留的指令若用迴圈註冊自己的巢狀子指令,那段迴圈會被整個砍空,即使該指令本身在保留清單。現行scripts/lumos沒被咬到純屬巧合(links/backlinks都保留不觸發、code-loop底下pass/skip/check本來就該整塊砍),是潛伏缺陷不是已發生的錯誤。
+     why_chosen: receiver檢查是最小且對稱的修法——與_add_parser_name既有的top_var限定同一套設計語言;順帶修main.body區塊追蹤讓nested迴圈跟隨所屬群組指令去留,避免只修『不該砍』又反向破壞『該砍』(code-loop案例的NameError回歸,已用t_slim_gen_nested_loop_registration+既有真檔測試雙重鎖死)
+     decided: 2026-07-31
+     valid: true
++about_code:
++  - scripts/slim-gen.py
+ ---
+ # slim-gen-生成器
+ 
+ > ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+ >
+ > 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+ > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+ > 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+ >
+ > ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+diff --git a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+index 10b2be1c..59be5d06 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
++++ b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+@@ -31,20 +31,21 @@ summary: |-
+   KEY:提交前只讀提交索引、推送前只讀範圍兩端的提交(跟磁碟一樣的直接讀,不一樣的用既有 git show 包裝讀;起點那一側只讀有變動的節點、其餘跟終點共用);設定、工具自裝檔、圖譜位置也從同一個版本讀——工作目錄裡沒暫存的「關掉」關不掉檢查。2026-09-11 本工具鏈 65 篇:提交前 0.65 秒、推送前 10 個提交 0.81 秒 [test:t_nodehome_reads_index_not_worktree] [test:t_nodehome_diff_shares_unchanged_notes] [test:t_nodehome_config_and_vendored_from_snapshot]
+   KEY:推送前新分支的起點=不在任何遠端分支上的最早提交的上一個,不沿用空樹兜底;起點早於上線點(提交前掛鉤第一次有這道檢查的提交)就改從上線點算——上線前進來的是舊帳。推送前腳本裡另有一套範圍(給波及計算與風險掃描用,新分支從空樹掃)——兩套刻意不同:那套只提醒、寧可掃多;這道會擋,把整段歷史當新改動就是誤擋,別合併 [test:t_prepush_runs_home_check] [test:t_nodehome_diff_clamps_to_golive]
+   KEY:--diff 的範圍寫法用派工鏡頭那支判法(恰好兩個點、兩端都有);三個點、多段、缺一端都是用法錯誤 rc2——原本只切第一個「..」,三個點找不到就放行;--staged 與 --diff 同給也是 rc2(中文訊息,寫法同 loop status)[test:t_nodehome_check_cli_modes] [test:t_nodehome_cli_rejects_both_modes]
+   KEY:專案開關 node_home.gate:on/warn/off;不是 on 時健檢開頭講明;沒有單條逃生口,越界的唯一合法寫法是把檔加進那篇的 about_code(明文、審得到);健檢開頭直讀工作目錄的設定檔時,整條路徑有捷徑(設定檔本身或 .lumos 資料夾)就不跟過去讀(跟讀快照那條路一樣)[test:t_nodehome_gate_switch] [test:t_nodehome_config_disk_read_skips_symlink]
+   KEY:天花板:散文講另一支也有家的檔、家很多的檔(本工具鏈主程式有 31 篇,2026-09-12 機械數)寫進哪一個家,都驗不出來——落點靠規則五(計劃 lands_in、設計審看)。REVISIT:2026-10-11 人工抽查三個 POS 圖譜整理後一個月新增的 KEY 行,數有幾行在講那篇 about_code 以外的檔
+   KEY:★測試資料夾的豁免範圍會隨「測試棧對照表」長大★(2026-09-12 Java 補棧實例)——豁免不是寫死的清單,是從 TEST_PROFILES 推出來的;java-junit profile 一加進表裡,Java 寫的 androidTest 輔助檔就自動跟 Kotlin 同待遇、不再被要求有家。原本釘住「Java 輔助檔照舊要家」那條測試的理由是「對照表沒有 Java 棧」,前提變了期望值就要跟著變——★這是前提改變,不是守衛被放寬★ [test:t_nodehome_stack_test_dirs_not_required]
+   KEY:[2026-09-18]「需要有家的程式檔」判定(_nodehome_code_kind + 首行 #! 檢查,包成 _is_code_file)多了兩個消費者:小改動閘的擴散/落點(只算程式檔)與改動風險分級的 light(沒程式檔就 light)——判定改了要一起想這兩處(代碼審 r1 架構席:借用的要登記)
+   DEP:`scripts/lumos`(判定、指令、健檢三段)｜`scripts/hooks/pre-commit`(Gate H)｜`scripts/hooks/pre-push`(整段比)｜設計審出口的落點那一步看 [[Systems/design-loop]]｜合約條數提醒看 [[Systems/節點範圍與索引守衛]]｜改檔前推筆記把確認過的家當入口(翻了「只認反引號路徑」的舊裁定)見 [[Projects/推筆記認家_計劃]]
+   TEST:t_nodehome_* 42 支、t_doctor_nodehome_* 5 支(`python3 scripts/test_lumos.py -k nodehome`,2026-09-11 代碼審折完後機械數)+ t_precommit_runs_home_check、t_prepush_runs_home_check、t_new_system_with_code_and_responsibility、t_doctor_nodehome_*
+   PITFALL:[2026-09-28 筆記內容審代碼審 r2 兩席]推送範圍終點找不到原本放行(fail-open),等於範圍寫錯時整道沒跑;改成跟筆記形狀擋、筆記內容審一致回 rc2,全 0(刪分支)照跳過 [test:t_note_audit_code_review_r2_regressions]
++  WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-commit 找不到 Python 3.14 時,只提醒的閘(co-change、刪除傳播)跳過,會擋的閘(L、H、NS)在前面的 Gate PY 擋下,不退回舊版;找直譯器的做法見 [[Systems/python直譯器選擇]] [test:t_hooks_block_without_python314]
+ plan_refs:
+   - "[[Projects/每支檔有家_計劃]]"
+ verified_by:
+   - "[[Verification/2026-09-11_每支檔有家落地]]"
+   - "[[Verification/2026-09-12_推筆記認家落地]]"
+ decision_refs:
+   - "Projects/每支檔有家_計劃.md#d4"
+ ---
+ # 每支檔有家
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index 55839161..41e95360 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -574,11 +574,11 @@ Python 棧支援上線之後,同一行 `requests.post` 也觸發了兩題 Python
+ ★審查席會做 mutant、而我只做「拆掉再看紅不紅」——差別在它會先確認 mutant 真的改壞了東西。★
+ 這一節的存在就是為了把那個步驟變成清單,不靠記得。
+ 
+ ## 宣告支援 3.9,但測試只在 3.12 上跑過(2026-09-29)
+ 
+ CI 用 3.12 跑,平常推送的終端機路徑上先找到的又是 Homebrew 的新版 Python,所以兩邊都綠;
+ 換一個路徑上先找到系統內建 3.9 的環境一推,推送前的閘就紅了。**綠燈只證明「在新版上驗過」,
+ 不證明「在宣告的最低版本上驗過」**——這是環境版的「根本沒去驗」。
+ 
+ PITFALL:[2026-09-29 推送代碼審資料狀態鏡頭時被擋,出處見 [[Projects/代碼審資料狀態鏡頭_計劃]]]測試裡混進三處 3.9 沒有的寫法:f-string 大括號裡帶反斜線(3.12 才允許,`scripts/test_lumos.py` 整支在 3.9 下解析失敗,9 月 6 日起就這樣)、`tomllib`(3.11,改走 `_toml_loads`:沒有就找另一支 3.11+ 直譯器代解,找不到判紅不跳過)、`enterContext`(3.11,在 [[Systems/autonomous-iteration-loop]] 那支測試,改成跟同檔一樣用 with 包住整段)。重現:`/usr/bin/python3 -c "import ast;ast.parse(open('scripts/test_lumos.py',encoding='utf-8').read())"`;防回歸測試 [test:t_codex_d6_agent_toml]。★沒有機械守衛★:CI 沒有 3.9 那一格,下次有人寫進 3.10+ 的東西,照樣只有碰巧用 3.9 推送的人會撞到。
+-REVISIT:2026-10-29 決定 CI 要不要加一格 3.9(或只加一步「用 3.9 解析全部 .py」);若這一個月內又撞到一次同型,不等到期直接做。
++(2026-09-29 已由 [[Projects/最低Python版本改3.14_計劃]] 回答:最低版本改成 3.14,CI 跑 3.14;「3.9 能不能解析」只剩開頭檢查需要的三類檔,CI 用釘版本的 ruff 以 py39 查。原本這裡的回頭點撤掉。)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+index bc5d4950..f668aac4 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+@@ -24,21 +24,21 @@ summary: |-
+   PITFALL:[2026-09-27 代碼審 r2 通才、外家]釘版本別用檔名長相猜哪裡是提交(看 @ 後面有沒有點,會把 @v1.2.3、@origin/main 放過),要問「@ 左邊這段是不是存在的檔」;[src:] 豁免只給帶 regen 的筆記 summary,否則一般筆記能拿它夾帶行號 [test:t_note_shape_code_review_r2_regressions]
+   PITFALL:[2026-09-27 代碼審 r3 通才、外家各自抓到]新增行與「新程式檔喚醒舊引用」原本是兩條各自抽引用的路,r2 收窄 [src:] 豁免只改了一條,另一條誤擋;現在喚醒也走同一支逐行檢查,只篩出指向新程式檔的——要改判定規則只改那一支 [test:t_note_shape_code_review_r3_regressions]
+   PITFALL:[2026-09-27 驗收輪通才席]路徑 NFC 只能當比對用的鍵,拿去 git 查(cat-file、路徑篩選)要用原樣——git 逐位元組比對,macOS 磁碟不分正規化會讓測試假綠、Linux CI 才露餡;「寫的時候檢查在不在」看那個提交自己的掛鉤,不要用「是不是上線點的後代」代替 [test:t_note_shape_acceptance_regressions]
+   PITFALL:[2026-09-28 下游設計審抓到的漏網 ESC-61fc2d87]推送範圍的起點是 40 個 0(GitHub 新分支首推)或本機找不到(force-push 後的舊頂端)時,工具原本回「範圍找不到」放行;照 doctor 給的 CI 步驟貼的消費專案會整批放過。也不能一律當空樹:新分支開在主線頂端時會把主線上線後的舊帳當新增誤擋(修正的代碼審抓到)。現在跟每支檔有家、代碼審共用一支判法:頂端落後或等於主線頂端就沒有新東西(記一筆 skipped 帳),其他從跟主線的分岔點算。修正的第二輪曾改成「頂端等於主線頂端就從上線點起全查」想擋 force-push 改寫主線,第三輪查出它讓零提交新分支被主線舊帳誤擋、代碼審那道整庫當新增,而且 force-push 後再推一次照樣漏——「繞過本機掛鉤又 force-push 改寫主線」是存心繞過,不在範圍——範圍起點的特例要寫在工具裡,不能只寫在自己的 CI 腳本 [test:t_push_base_zero_or_missing]
+   PITFALL:[2026-09-27 代碼審 r1 兩席實測]git 預設把中文檔名印成帶引號的跳脫字串,解析不到路徑就整篇漏查;呼叫 git 一律關掉路徑引號 [test:t_note_shape_code_review_r1_regressions]
+   PITFALL:[2026-09-27 設計審 r3 正確性席實測]釘版本只查「提交物件存在」會被 git commit-tree 在本機捏造、從沒進過分支的提交繞過;要查在某個分支歷史上 [test:t_note_shape_pinned_ref_requires_real_sha_and_line]
+   PITFALL:[2026-09-27 設計審 r3 邊界席實測]淺層 clone 找不到上線點與上一個提交,範圍會退回空樹把整庫舊筆記當新增;偵測到淺層就不查並留帳,CI 要抓完整歷史 [test:t_note_lines_range_base_and_own_golive_clamp]
+   PITFALL:[2026-09-27 設計審 r3 邊界席]共用抽取器回給既有使用者一定要維持兩欄,每支檔有家三處用兩欄拆,多一欄當場出錯 [test:t_node_code_ref_tokens_defaults_unchanged_and_pin_parsed]
+   PITFALL:[2026-09-28 筆記內容審代碼審 r1 外家席]略過開關用「有值就略過」判,設成 0 想表示不略過也會整道跳過;LUMOS_SKIP_NOTE_SHAPE 改成只認 1,跟 LUMOS_SKIP_BOUND_TESTS 等鄰居一致 [test:t_note_audit_code_review_r1_regressions]
+   PITFALL:[2026-09-28 筆記內容審代碼審 r2 兩席]範圍終點找不到原本放行,等於範圍寫錯時整道沒跑;改成跟筆記內容審、每支檔有家一致回 rc2(全 0=刪分支照跳過)。doctor 看 CI 有沒有抓完整歷史要看呼叫那一步的同一個工作項目,整份設定裡有任一處 fetch-depth: 0 會被騙過;切工作項目要認行尾註解與加引號的名字(r3 兩席) [test:t_note_audit_code_review_r2_regressions,t_note_audit_code_review_r3_regressions]
+-  PITFALL:[2026-09-28 筆記內容審代碼審收尾,已記漏網]推送範圍那段用了 zip(..., strict=False),專案宣告支援的 Python 3.9 沒有這個參數,跑到就 TypeError;py_compile 抓不到(語法合法),要靜態掃。根因:ruff 沒設目標版本時當 3.10 以上,B905 要求 zip 寫 strict;.lumos/lint.json 已補 --target-version py39 [test:t_lumos_no_zip_strict_for_py39]
++  PITFALL:[2026-09-28 筆記內容審代碼審收尾,已記漏網]推送範圍那段用了 zip(..., strict=False),專案宣告支援的 Python 3.9 沒有這個參數,跑到就 TypeError;py_compile 抓不到(語法合法),要靜態掃。根因:ruff 沒設目標版本時當 3.10 以上,B905 要求 zip 寫 strict;.lumos/lint.json 已補 --target-version py39 [test:t_lumos_no_zip_strict_for_py39]。2026-09-29 最低版本改成 3.14 之後這條禁令照留:scripts/lumos 要維持 3.9 能解析(開頭的版本檢查才跑得到),ruff 目標版本也維持 py39([[Projects/最低Python版本改3.14_計劃]])
+ verified_by:
+   - "[[Verification/2026-09-27_筆記形狀擋落地]]"
+ ---
+ # 筆記內容閘
+ 
+ 白話:筆記裡只留程式碼推不出來的東西。這道閘在提交前與推送前,擋下兩種一看就知道是「程式碼推得出來、而且會過期」的新寫法:指向程式某一行的行號引用,以及沒寫出程式碼答不了之來源的現況描述(FACT/FLOW/DEP 摘要行)。舊筆記不回頭清,只看這次新寫的行。
+ 
+ 設計、條款、三輪設計審的處置見 [[Projects/筆記形狀擋_計劃]];問題來源與裁定見 [[Issues/筆記把程式現況寫進脈絡而漂移_rtb實測回饋]]。治理帳寫入沒上鎖的問題不在這裡處理,見 [[Issues/治理帳多個寫入者都沒上鎖]]。
+ 
+ 這篇管 `scripts/lumos` 裡的 note-shape 子指令(提交前 `--staged`、推送前與 CI `--diff`)、doctor 開頭那三行筆記形狀擋提醒,以及為它加的共用零件:共用抽取器的三個選項與釘版本解析、refcheck 對釘版本改用那個提交驗、摘要行前綴規則表的來源判定。範圍、上線點、合併的算法本身的家是 [[Systems/每支檔有家]]。另外管三處呼叫它的地方:`scripts/hooks/pre-commit` 裡的筆記形狀擋那一段、`scripts/hooks/pre-push` 裡推送範圍那一次呼叫、`.github/workflows/ci.yml` 的 note-shape 那一步(`--no-verify` 繞過時的後盾;這三支檔的其餘部分各有各的家)。

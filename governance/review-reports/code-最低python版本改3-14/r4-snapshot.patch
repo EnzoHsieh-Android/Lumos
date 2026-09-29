@@ -1,0 +1,596 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md b/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md
+index 647400af..39ddb2bd 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/最低Python版本改3.14_計劃.md
+@@ -90,36 +90,40 @@ RETIRE-IF: 工具改成用 uv tool / pipx 這類有 requires-python 的方式發
+ - **不可逆(碰到一半)**:程式碼還原提交就回去,但消費專案的掛鉤副本要逐一更新回去並重簽錨點,見〈回退〉。
+ - **自我治理(碰到)**:改的是治理守衛自己——掛鉤擋不擋、合約測試閘用哪支直譯器跑。改壞的後果是全專案誤擋或整道檢查沒跑。防法:[S3] 與 [S8] 釘住擋下與測試指令、改到的錨點檔重簽、落地驗收比 sha256。
+ - **效能**:掛鉤每次各找一次:shell 那段只是 `command -v`,之後一次 `python-path`(第一個候選就命中時約 0.1 秒內;要重跑時多約 0.3 秒,見第 2 點)。舊註冊(設定還寫著 3.9)在重跑安裝前每次呼叫 lumos 多一次重跑;第 9 點的提醒負責讓人去重跑。整份候選清單最壞 15 秒(每個候選都卡到逾時)。
+ - 已排除:金流:這個工具不碰任何付款或計費。
+ 
+ ## 誠實界線
+ 
+ - **舊版要能解析那三類檔**:[S7] 用 ruff(py39,釘版本、附必紅樣本)與真的 3.9 編譯守語法;機器上兩者都沒有時守不到,測試會明說沒驗到。開頭幾行 import 之後才出現的載入期問題不影響 scripts/lumos(檢查在它們之前),merge-claude-settings.py 的檢查放在它自己那幾行標準庫 import(os、sys、subprocess)之後、其餘程式之前,道理相同。
+ - **全域 `lumos` 指令靠 `#!/usr/bin/env python3` 啟動**:完全沒有 `python3` 這個名字的機器(只用 uv 裝了 `python3.14` 的 Linux)上,打 `lumos` 在跑到第 2 點之前就失敗;git 掛鉤與安裝入口不受影響(內嵌清單含 `python3.14` 與固定位置)。
+ - **掛鉤第一跳沒有逾時**:shell 那段只用 `command -v` 與「檔案可執行」挑,不執行候選;但接著用挑到的那支跑 `lumos python-path` 這一步沒有逾時(macOS 沒有內建 `timeout` 指令)。那支直譯器一啟動就卡住時,掛鉤跟著卡住;lumos 內部的候選驗證有逾時,不受影響。這種機器要 `uv python install 3.14 --default` 或自己加 `python3` 別名;擋下與安裝說明會提這一句。
++- **PATH 上的 python 本身仍被信任**:shell 那段找到的候選(`LUMOS_PYTHON` 以外)只看 `command -v`,不驗是不是 python;pre-commit/pre-push 會驗 `lumos python-path` 回的路徑真的是 3.14 python 才拿來跑閘,但安裝腳本與 post-commit 直接用找到的那支。PATH 上放假程式的人本來就控制了這台機器,改動前掛鉤拿 PATH 上的 `python3` 也一樣(代碼審 r3 外家席)。
+ - **`--no-verify` 會留跳過帳、不會留閘的帳**:post-commit 照舊記下「這次跳過了」,但被擋的那幾道檢查本身沒有跑,也沒有它們的紀錄。
+ - **設定檔裡的絕對路徑會過期**:uv、pyenv、venv、Homebrew 升版都可能讓它消失;第 9 點的提醒是事後偵測,不是事前防止。
+ - **消費專案自己的 CI 沒有偵測**:它們的 workflow 用 3.12 時,更新後 CI 回 2;靠 CI 裡回 2 的那段說明自己講怎麼設 setup-python、doctor 的 CI 步驟提示,與新版執行 update 時的升級注意。
+ - **第一個專案看不到升級注意**:全域 lumos 指到來源 clone,`lumos update` 先在同一個行程裡拉新來源再複製,執行的是拉新之前就載進記憶體的舊程式,印不出新版才加的升級注意(代碼審 r1);同一台機器第二個專案起才由新程式執行。所以 CI 那一段改成失敗現場自己講清楚,本機掛鉤擋下的訊息本來就附安裝指令。
+ REVISIT:2026-12-29 看這段期間有沒有「掛鉤誤擋」「消費專案 CI 因版本回 2」的回報;有的話補偵測(doctor 讀消費專案 workflow 的 setup-python 版本)
+ 
+ ## 實作時的決定(跟上面寫的不一樣或更細的地方)
+ 
+ - **enforcement 的 python 列狀態不變**:維持 active,註冊的直譯器與問題寫在說明文字裡。原本想有問題就標 degraded,但既有測試與約定是「四支掛鉤、兩支 git 掛鉤、python、CI 共 8 列 active」,改狀態會動到分母;提醒改由 doctor 的 Q 段(軟提醒、不計 issues)負責。
+ - **精簡版生成器只剝「呼叫版本檢查」那三行**:用 `python-floor gate begin/end` 兩行註解框起來。找 3.14 的函式本身留著——`lumos python-path` 與 doctor Q 段都用到它們,整段剝掉精簡版一跑到那些地方就會出錯。
+ - **掛鉤與安裝腳本的內嵌清單也認 `LUMOS_PYTHON_SEARCH_DIRS`**(冒號分隔):內嵌清單自己也寫了固定位置,不能被換掉的話,維護者的 Mac 上造不出「找不到 3.14」的掛鉤測試。
+ - **doctor 新段代號是 Q**:doctor 已有兩段都叫 N,Q 是還沒用過的字母。
+ - **升級注意的觸發條件**:更新前消費專案的 pre-commit 裡沒有 `python-path` 字樣、而且這次真的把 pre-commit 換新了,才印。只有新程式執行 update 時才走得到(見〈誠實界線〉第一個專案那條)。
+-- **doctor Q 段只看 lumos 自己註冊的掛鉤**(代碼審 r1、r2):命令的第二段是 lumos 自家掛鉤檔、放在 `~/.claude/hooks` 或 Codex 的 hooks 目錄、第一段看起來是 python(含 free-threaded 的 `python3.14t`),才拿去探版本;自家掛鉤檔名單只有一份,enforcement 各列找的檔名必須在裡面(測試守)。第一版把任何含 `hooks/` 的命令都拿第一個字跑 `-c <探針>`,在維護者自己的機器上把別的工具的掛鉤(shell 條件式、`bash` 包一層)列成問題,還真的執行了別人的腳本。
++- **doctor Q 段只看 lumos 自己註冊的掛鉤**(代碼審 r1、r2、r3):命令的第二段是 lumos 自家掛鉤檔、放在這一家 lumos 裝的那個目錄(Claude 認 `${HOME}/.claude/hooks` 與展開後的家目錄路徑,Codex 認 `CODEX_HOME/hooks`,兩家分開、精確比對,不用後綴——後綴會收進別人家目錄底下的 `.claude/hooks`)、第一段看起來是 python(含 free-threaded 的 `python3.14t`),才拿去探版本;自家掛鉤檔名單只有一份,enforcement 各列找的檔名必須在裡面(測試守)。第一版把任何含 `hooks/` 的命令都拿第一個字跑 `-c <探針>`,在維護者自己的機器上把別的工具的掛鉤(shell 條件式、`bash` 包一層)列成問題,還真的執行了別人的腳本。
+ - **shell 那段先認 `LUMOS_PYTHON`**(代碼審 r1、r2):只收絕對路徑、而且實際執行印得出記號的(真的是 python)才用它叫 lumos,版本夠不夠仍由 lumos 判;不合格就記下原因往下找,找不到任何 python 時說明第一行講它為什麼被略過。第一版只看能不能執行:設成 `/usr/bin/true` 時安裝腳本回 0 卻沒裝、post-commit 直接把程式交給它跑而漏寫跳過帳(r2 外家席)。找不到時的說明叫人設它,第一步不認等於給了一個用不了的出口。
+-- **目前目錄裡的同名檔不收**(代碼審 r1 資安席、r2 正確性席):Windows 找指令會先看目前目錄,掛鉤的目前目錄是 repo 根;找直譯器、問 uv、挑包裝啟動指令都改用絕對路徑執行,Windows 上落在目前目錄本身的不收、各平台 PATH 相對路徑項找到的不收。只擋目前目錄本身、不擋整棵子樹:第一版擋子樹,目前目錄是家目錄或磁碟根時正常裝在底下的直譯器也被當成不存在。包裝檔 `lumos.cmd` 裡照舊寫指令名(版本管理工具換 exe 是常態),那一層不在這次範圍:在陌生 repo 根打 `lumos`,cmd.exe 解析 `py`/`python` 仍會先看目前目錄,這個攻擊面在本計劃之前就存在。PowerShell 安裝入口不受影響(PowerShell 不執行目前目錄裡沒寫路徑的指令)。
++- **目前目錄裡的同名檔不收**(代碼審 r1 資安席、r2 正確性席):Windows 找指令會先看目前目錄,掛鉤的目前目錄是 repo 根;找直譯器、問 uv、挑包裝啟動指令都改用絕對路徑執行,Windows 上落在目前目錄本身的不收、各平台 PATH 相對路徑項找到的不收。只擋目前目錄本身、不擋整棵子樹:第一版擋子樹,目前目錄是家目錄或磁碟根時正常裝在底下的直譯器也被當成不存在。位置看檔案放在哪個目錄、只解析目錄那一層:第二版整條解析,repo 根放一個指進子目錄的符號連結就逃過比對(r3 外家席)。
++- **pre-commit/pre-push 驗 `python-path` 回的路徑**(代碼審 r3):要是絕對路徑、執行起來是 3.14 以上的 python 才拿它跑閘;叫 lumos 的那支是假的時,閘會全部假放行。
++- **uv 的結果分三種**(代碼審 r2、r3):逾時、執行失敗(帶回傳碼與它最後一行錯誤)、找不到 3.14。uv 沒找到跟自己出錯回傳碼都是 2,只能看錯誤訊息有沒有 `No interpreter found`。
++- **安裝腳本在 `LUMOS_PYTHON` 被略過、改用別支時當場講**(代碼審 r3):不然安裝安靜成功,下一次提交才因同一個值被擋。包裝檔 `lumos.cmd` 裡照舊寫指令名(版本管理工具換 exe 是常態),那一層不在這次範圍:在陌生 repo 根打 `lumos`,cmd.exe 解析 `py`/`python` 仍會先看目前目錄,這個攻擊面在本計劃之前就存在。PowerShell 安裝入口不受影響(PowerShell 不執行目前目錄裡沒寫路徑的指令)。
+ REVISIT:2026-12-29 決定 lumos.cmd 要不要改寫絕對路徑,或在包裝檔裡先設 NoDefaultCurrentDirectoryInExePath;順便看這段期間有沒有 Windows 使用者
+ - **只推刪除也擋**:推送前的錨點檢查不看這次推了哪些 ref、每次都叫 lumos,所以「確定要叫 lumos」恆成立。
+ - **版本檢查之前的 import 有清單**(代碼審 r1):ruff 只查語法,檔頭多 import 一個 3.11 才有的模組,3.9 啟動會在印出說明之前就炸;[S7] 的測試多一格,版本檢查之前只准 import 清單上的標準庫模組。
+ - **測試裡的假 lumos**:幾支掛鉤測試用假 lumos 記錄呼叫,現在掛鉤第一步會問 `python-path`,三個假 lumos 補上「印自己的直譯器路徑」這個回答;精簡版「錨點非唯一」那支測試原本把假錨點塞在第一個 `if __name__`,那一個現在是會被剝掉的版本檢查,改塞在最後一個(真正的主程式入口)。
+ 
+ ## 合約候選
+ 
+ 設計審過閘後列的「改了就壞」候選;候選不等於已標,實作與代碼審後照「不確定不標」走 guard scaffold → bind → audit。
+ - git 掛鉤找不到 3.14 時,會擋的閘擋下、不改用較舊的 Python 跑([S3])。
+ - lumos 開頭檢查只在主程式身分且版本低於 3.14 時觸發,被 import 不觸發;通過後清掉 `LUMOS_REEXEC_PYTHON`([S2])。
+@@ -133,10 +137,12 @@ REVISIT:2026-12-29 決定 lumos.cmd 要不要改寫絕對路徑,或在包裝檔
+   - 折入(全數):版本檢查搬到檔案最前面(正確性);scripts/lumos 維持 3.9 能解析、ruff 目標版本不改(正確性、接手,推翻原本第 6 點);候選清單加 git 設定與固定位置、`LUMOS_PYTHON` 有設就只認它、`py` 兩份都有、uv 帶 `--system --no-python-downloads`、一律用印出的絕對路徑、驗法隔開輸入並設逾時(邊界、正確性、接手、併發、外家);防重跑變數命名並在通過後清掉(併發、正確性、邊界、接手、架構對齊);掛鉤在確定要叫 lumos 時才擋、共用檔缺席另一段說明、找一次(邊界、正確性、接手、併發);post-commit 不設下限(正確性);註冊命令加引號(邊界、外家、正確性);安裝入口補齊候選並真的執行(邊界、正確性、外家、接手);測試指令 `{python}` 與測試總檔版本檢查(正確性);三張名單登記(接手、正確性、外家);四支沒家的檔交給 lumos-cli-lifecycle(外家);落地驗收比 sha256(外家);doctor 偵測過期路徑(回滾);消費專案通知與 CI 範例(接手);回退節重寫(回滾);CHANGELOG 前後矛盾(正確性、外家、接手);ONBOARDING 與筆記內容閘收尾(接手);lands_in 拿掉每支檔有家與測試假綠形態(架構對齊)。
+   - 鏡像核對(便宜席,材料含席報告目錄):51 條已處理 43、部分 8、未處理 0、相反 0;新矛盾 7。已補(★其中 git config、`LUMOS_PYTHON` 在本體生效、perl 逾時、共用檔四項 r2 已整類拿掉,見 r2 段★):`git config lumos.python` 由 init/update/install 寫入並進 [S1];get.sh 沒有共用檔改成叫人加 --pull、不退回 python3;`LUMOS_PYTHON` 值的語意與在 lumos 本體也有效;python3/python 挪到候選最後、找到即停;shell 有 perl 時用 alarm 設逾時;全域 lumos 的 shebang 與排程腳本默默失效寫進界線;新系統筆記列進 lands_in;[S6] 測試名改掉 py314 字樣、CI 加 ruff 守 [S7];post-commit 不 source 的說法統一;三份清單的比對與平台豁免寫明;白話段刪掉已被另一會談修掉的「測試總檔有 3.12 寫法」。
+ - r2(2026-09-29,7 席全新,同編制;審 r1 折入後的整份):53 條,major 29 條(機器數;架構對齊席第一次交的報告沒有逐條標題,請它只改格式重交,內容不變);全數錨定。卷證在 `governance/review-reports/最低python版本改3-14/r2-*`。
+   - 結論:大部分 major 出在 r1 為了補洞新加的四樣東西(掛鉤共用 shell 檔、`git config lumos.python`、`LUMOS_PYTHON` 在本體也生效、perl 逾時),同一類問題連兩輪,換形狀、整類拿掉,不再逐條補:找 3.14 只留 lumos 裡的 Python 一份(新增 `lumos python-path`),shell 只負責找任何版本的 python 把 lumos 叫起來(外家 F1 舊版更新程式漏發新檔、邊界 F4 set -e、F5 Git Bash \r、正確性 F13、接手 F1 get.sh --pull、回滾 F1 錨點都因此不存在);`git config lumos.python` 拿掉,改由固定位置補 uv 與 pyenv 目錄(正確性 F4、併發 F2、邊界 F3 F8);`LUMOS_PYTHON` 只在版本不夠時生效、必須是絕對路徑(正確性 F1 F14、邊界 F1、併發 F1、接手 F2、外家 F2 的無限重跑)。
+   - 其餘折入:固定位置的測試接縫 `LUMOS_PYTHON_SEARCH_DIRS`(正確性 F2);`{python}` 的代入點是三處,不是四處(過濾探針就是那支冒煙測試;鏡像核對更正);Windows 包裝與 get.ps1 用「真的執行成功」挑(正確性 F5、邊界 F6、外家 F4);`{python}` 集中代入並依平台加引號、三個代入點(正確性 F6、架構對齊 F1、接手 F3、外家 F6);CI 範本不存在→改成 doctor 三處 CI 步驟提示(正確性 F7、接手 F11);3.9 能解析的守衛擴到 merge 與 Claude 掛鉤、ruff 釘版本附必紅樣本(正確性 F8、接手 F6、外家 F5);pre-commit 沒有 scripts/lumos 時的現況寫對(正確性 F9、接手 F4);uv 兩步驗與說明改寫(正確性 F10);CI 編譯步驟沒涵蓋 lumos(正確性 F11);重跑成本含 0.22 秒解析(正確性 F12、併發 F3);post-commit 清單補 python3.14(外家 F3);merge 被舊版叫起時改用 3.14 重跑(外家 F1 第 3 點);ONBOARDING 正文指令(外家 F7);doctor 段落定性為軟提醒並併入 enforcement(接手 F7);測試盤點改用 grep(接手 F8);範圍對排程腳本與精簡版的陳述更正、生成器剝掉開頭檢查(接手 F9 F10);升級注意的觸發條件與落地驗收寫成驗證紀錄(接手 F12 F13);回退補錨點重簽、update 會改全機設定、run_cmd 要跟本體一起退、3.9 要實跑不只編譯、圖譜節點處理、「只回退擋下」三條擋下路徑一起退(回滾 F1–F5);CI 裝 ruff 與新增做法的理由寫明(架構對齊 F2);掛鉤家筆記加連結(架構對齊 F3)。
+   - 鏡像核對(便宜席,材料含席報告目錄):53 條已處理 32、已處理(機制拿掉)18、部分 3、未處理 0、相反 0;新矛盾 6。已補:掛鉤與安裝入口的「任何版本」清單加固定位置並排在 python3 前(圖形用戶端短路徑跳對話框、Linux 只有 ~/.local/bin);pre-commit 在只提醒的閘遇到找不到 3.14 時跳過、會擋的閘才擋;代入點更正為三處;merge 的 import 順序說法統一;掛鉤第一跳沒逾時寫進界線;post-commit 交給 reversibility-governance-ledger;掛鉤家筆記點名;測試要清開發者環境的 LUMOS_PYTHON;回退本身要提交;r1 段標明已撤的機制。
+ - 代碼審 r1(2026-09-29,5 席:兩席單 reviewer 分段審(核心 opus、掛鉤與安裝 sonnet 5.5)、架構對齊 sonnet、資安 sonnet、外家 Codex;凍結 patch 3384 行拆五份):13 條,blocking 4(機器數;各席總結句)。卷證在 `governance/review-reports/code-最低python版本改3-14/r1-*`。
+   - 折入(全數):doctor Q 段與 enforcement 只看 lumos 自家掛鉤(核心 F1、資安 F1);升級注意在第一個專案印不出→CI 裡的說明自己講、條款 [S9] 照實改寫(核心 F2);doctor 測試改比問題數(核心 F3);註解更正(核心 F4);找不到時列出每個候選(核心 F5、外家 F2);shell 第一步認 `LUMOS_PYTHON`(外家 F1);shell 與 lumos 兩份候選清單逐項比對(架構對齊 F1);版本檢查之前的 import 清單(掛鉤 F1);升級說明補 Codex 要重新信任(掛鉤 F2);只推刪除也擋的理由寫進掛鉤(掛鉤 F3);Windows 目前目錄的同名檔不收(資安 F2)。
+ - 代碼審 r2(2026-09-29,4 席全新:單 reviewer opus、架構對齊 sonnet、資安 sonnet、外家 Codex;只審 r1 修正差異 1047 行):9 條,blocking 1(機器數;各席總結句;資安席 clean)。卷證在 `governance/review-reports/code-最低python版本改3-14/r2-*`。
+   - 折入(全數):shell 第一步認 `LUMOS_PYTHON` 要驗絕對路徑與真的是 python、不合格講原因(外家 F1、正確性 F3);自家掛鉤篩選收 `python3.14t`、比對目錄(正確性 F1、外家 F2);目前目錄防護只擋目前目錄本身與 PATH 相對路徑項(正確性 F2);lumos.cmd 那層補回頭條件(正確性 F4);自家掛鉤名單只留一份、enforcement 的檔名由測試守在名單裡(架構對齊 F1);PowerShell 安裝入口不需要目前目錄防護的理由寫進腳本(架構對齊 F2);uv 逾時與執行失敗分開講(外家 F3)。
++- 代碼審 r3(2026-09-29,4 席全新,同編制;只審 r2 修正差異 939 行;上限最後一輪):8 條,blocking 3(機器數;各席總結句;資安席 clean)。卷證在 `governance/review-reports/code-最低python版本改3-14/r3-*`。第 3 輪仍有 major,停下來問人;Enzo 同日裁「修完再破例審一小輪」(只審這次修正差異)。
++  - 折入(全數):目前目錄判斷改看檔案所在目錄、不跟符號連結(外家 F2);pre-commit/pre-push 驗 python-path 回的路徑、PATH 上的 python 仍被信任寫進界線(外家 F1);doctor 掛鉤目錄兩家分開精確比對、測試拿合併程式真的寫出的兩家設定餵(架構對齊 F1、外家 F4);變數改名(架構對齊 F2);uv 出錯與找不到分開(單 reviewer F1、外家 F3);安裝腳本當場講 LUMOS_PYTHON 被略過(單 reviewer F2)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+index 4798d418..fe62c3c3 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
++++ b/docs/lumos-toolchain-knowledge/Systems/python直譯器選擇.md
+@@ -13,23 +13,23 @@ tags:
+   - scope/platform
+ summary: |-
+   WHY:[2026-09-29 Projects/最低Python版本改3.14_計劃,Enzo 裁]工具最低 Python 改成 3.14:macOS 內建的 3.9 碰到巢狀很深的程式,ast.parse 會讓整個程序 SIGSEGV(不是丟例外),存量漂移防線乙為它補的事先篩選連兩輪被審出新洞;拉高下限讓這整類問題消失
+   WHY:[2026-09-29 設計審 r2,外家否決席與邊界席]找 3.14 只有 lumos 裡這一份,git 掛鉤與安裝腳本只內嵌「找任何版本的 python 把 lumos 叫起來」:第一版讓掛鉤 source 一支共用 shell 檔,舊版的更新程式在啟動時已把要複製的檔案清單讀進記憶體,更新時複製了改過的掛鉤卻漏掉它不認得的新檔,第一次升級必定半套、提交被擋;被 source 進 set -euo pipefail 的腳本還會無聲結束、Git Bash 的路徑帶 \r
+   WHY:[2026-09-29 設計審 r1 正確性席]開頭檢查放在最前面那幾行標準庫 import 之後、所有定義之前,只在主程式身分且版本低於 3.14 時觸發:3.9 在定義當下就會對 `def f(x: int | None)` 丟 TypeError,放在檔尾的 __main__ 段就跑不到;被測試用 import 載入時不能觸發
+   WHY:[2026-09-29 設計審 r2,五席各自報到]LUMOS_PYTHON 只在版本不夠時才用來找 3.14,不讓一支已經是 3.14 的 lumos 重跑:指到 pyenv shim 或自寫包裝時,包裝啟動的真正路徑與設定的路徑永遠不同,會無限重跑
+   WHY:[2026-09-29 設計審 r2 正確性席]LUMOS_PYTHON_SEARCH_DIRS 換掉固定位置清單,是測試接縫:維護者的 Mac 上 /opt/homebrew/bin/python3.14 一定存在,不換掉就造不出「找不到 3.14」的情境
+   RULE:[since:2026-09-29][retire:工具改成用 uv tool / pipx 這類有 requires-python 的方式發佈,或把 scripts/lumos 拆成只做檢查的小入口加本體時][confirmed:2026-09-29]scripts/lumos、scripts/merge-claude-settings.py、scripts/hooks/claude 底下的 .py 必須一直能被 Python 3.9 解析:Python 要先解析完整支檔才跑第一行,舊版啟動時要能跑到開頭的版本檢查才講得出「需要 3.14」;CI 用釘版本的 ruff 以 py39 查語法錯誤 [test:t_lumos_parses_under_old_grammar]
+   PITFALL:[2026-09-29 實作自測]macOS 的 /usr/bin/python3 是一層轉接,真正在跑的是開發工具底下那支,sys.executable 與 /usr/bin/python3 不同;比對「是不是同一支直譯器」要用它自己回報的 sys.executable,不能用啟動時的路徑 [test:t_lumos_old_python_reexec_or_explain]
+   PITFALL:[2026-09-29 存量漂移防線乙代碼審 r3 外家席、r4 正確性席]3.9 的 ast.parse 在單一邏輯行約 21.6 萬字元的負號串、約 16 萬層的 elif 鏈就 SIGSEGV,接不到例外;重現:`/usr/bin/python3 -c "import ast; ast.parse('-'*500000+'1')"`,回傳碼 139
+-  PITFALL:[2026-09-29 代碼審 r1 核心席與資安席]doctor 探查掛鉤直譯器時,若只看命令裡有沒有 hooks/,會把別的工具的掛鉤(shell 條件式、bash 包一層、直接寫腳本)的第一個字拿去跑 `-c <探針>`——誤報重跑 lumos install 修不掉,還真的執行了別人的腳本;只認「第二段是 lumos 自家掛鉤檔、第一段像 python」的命令 [test:t_doctor_flags_stale_hook_python]
++  PITFALL:[2026-09-29 代碼審 r1 核心席與資安席]doctor 探查掛鉤直譯器時,若只看命令裡有沒有 hooks/,會把別的工具的掛鉤(shell 條件式、bash 包一層、直接寫腳本)的第一個字拿去跑 `-c <探針>`——誤報重跑 lumos install 修不掉,還真的執行了別人的腳本;只認「第二段是 lumos 自家掛鉤檔、放在這一家 lumos 裝的目錄(兩家分開精確比對,不用後綴)、第一段像 python」的命令;測試拿合併程式真的寫出的兩家設定餵,安裝端改命令形狀就會紅 [test:t_doctor_flags_stale_hook_python]
+   PITFALL:[2026-09-29 代碼審 r1 核心席]lumos update 在同一個行程裡先拉新來源再複製,執行的是拉新之前就載進記憶體的舊程式——新版才加的更新期提示,第一個專案一定印不出來;要讓人知道的事改在失敗現場講(CI 裡找不到 3.14 的說明自帶 setup-python 那一行) [test:t_update_prints_python314_notice_and_slim_strips_floor]
+-  PITFALL:[2026-09-29 代碼審 r1 資安席]Windows 找指令會先看目前目錄,git 掛鉤的目前目錄是 repo 根:用裸指令名探直譯器,陌生 repo 放一支 python3.14.exe 就會被執行;一律先解析成絕對路徑、落在目前目錄本身的不收、PATH 相對路徑項找到的不收(r2:擋整棵子樹的話,目前目錄是家目錄或磁碟根時正常安裝也消失) [test:t_python_resolver_order_and_floor]
++  PITFALL:[2026-09-29 代碼審 r1 資安席]Windows 找指令會先看目前目錄,git 掛鉤的目前目錄是 repo 根:用裸指令名探直譯器,陌生 repo 放一支 python3.14.exe 就會被執行;一律先解析成絕對路徑、落在目前目錄本身的不收、PATH 相對路徑項找到的不收(r2:擋整棵子樹的話,目前目錄是家目錄或磁碟根時正常安裝也消失;r3:位置只解析所在目錄那一層,整條解析會讓 repo 根指進子目錄的符號連結逃過比對) [test:t_python_resolver_order_and_floor]
+   TEST:t_python_resolver_order_and_floor、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
+ related:
+   - "[[Projects/最低Python版本改3.14_計劃]]"
+   - "[[Issues/蘋果內建Python3.9跑全套仍紅]]"
+   - "[[Systems/lumos-cli-lifecycle]]"
+   - "[[Systems/codex-harness]]"
+   - "[[Systems/bound-tests-gate]]"
+ ---
+ # python直譯器選擇
+ 
+diff --git a/get.sh b/get.sh
+index fdd0afd8..b8bbf4fb 100755
+--- a/get.sh
++++ b/get.sh
+@@ -83,17 +83,19 @@ main() {
+     # 用分支不用 tag,是因為 tag 會進 detached HEAD,之後 git pull / lumos update 全部靜默停住。
+     if ! git clone --branch "$LUMOS_BRANCH" "$LUMOS_URL" "$LUMOS_HOME" 2>/dev/null; then
+       echo "  提醒:抓不到 $LUMOS_BRANCH 這條對外線(分支還沒開、或名字改了),改用預設分支。" >&2
+       echo "  這代表你拿到的是開發線的內容,可能還沒發布過。" >&2
+       git clone "$LUMOS_URL" "$LUMOS_HOME"
+     fi
+   fi
+ 
+   # 其餘全交 bootstrap(機器層 install+skills、專案層四分流;set -e 保錯誤傳播)
+   _lumos_any_python || { printf '%s\n' "$_LUMOS_NO_PY_MSG" >&2; exit 2; }
++  # LUMOS_PYTHON 設了卻被略過、改用別支時現在就講:之後掛鉤問 lumos 會因同一個值擋下(代碼審 r3)
++  if [ -n "$_LUMOS_ANY_NOTE" ]; then printf '%s' "$_LUMOS_ANY_NOTE" >&2; fi
+   LUMOS_HOME="$LUMOS_HOME" "$_LUMOS_ANY_EXE" ${_LUMOS_ANY_ARG:+"$_LUMOS_ANY_ARG"} "$LUMOS_HOME/scripts/lumos" bootstrap ${ARGS[@]+"${ARGS[@]}"}
+ 
+   echo
+   echo "✓ 完成。最後一步:**重啟 Claude Code session**(hooks 在 session start 載入)"
+ }
+ 
+ main "$@"; exit
+diff --git a/install.sh b/install.sh
+index 08cf9deb..d766b292 100755
+--- a/install.sh
++++ b/install.sh
+@@ -42,11 +42,13 @@ _lumos_any_python() {
+   if command -v py >/dev/null 2>&1; then _LUMOS_ANY_EXE="$(command -v py)"; _LUMOS_ANY_ARG="-3"; return 0; fi
+   _LUMOS_NO_PY_MSG="$_LUMOS_ANY_NOTE$_LUMOS_NO_PY_BASE"
+   return 1
+ }
+ _LUMOS_NO_PY_BASE="找不到任何 python(試過 python3.14、python3.15、python3.16、固定位置、python3、python、py)。
+ 安裝 3.14:macOS 用 brew install python@3.14 或 uv python install 3.14;Linux 用發行版的 python3.14 套件或 uv;
+ Windows 用 python.org 的安裝器或 winget install Python.Python.3.14。裝在別處就設 LUMOS_PYTHON=<那支 3.14 的絕對路徑>。"
+ _LUMOS_NO_PY_MSG="$_LUMOS_NO_PY_BASE"
+ # ── python-launcher end ──
+ _lumos_any_python || { printf '%s\n' "$_LUMOS_NO_PY_MSG" >&2; exit 2; }
++# LUMOS_PYTHON 設了卻被略過、改用別支時現在就講:之後掛鉤問 lumos 會因同一個值擋下(代碼審 r3)
++if [ -n "$_LUMOS_ANY_NOTE" ]; then printf '%s' "$_LUMOS_ANY_NOTE" >&2; fi
+ exec "$_LUMOS_ANY_EXE" ${_LUMOS_ANY_ARG:+"$_LUMOS_ANY_ARG"} "$(cd "$(dirname "$0")" && pwd)/scripts/lumos" install --force "$@"
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 20ac13a5..5775d81e 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -94,21 +94,31 @@ Windows 用 python.org 的安裝器或 winget install Python.Python.3.14。裝
+ _LUMOS_NO_PY_MSG="$_LUMOS_NO_PY_BASE"
+ # ── python-launcher end ──
+ # ── python-314 begin(pre-commit 與 pre-push 內嵌同一段):用上面找到的 python 問 lumos 要一支 3.14 的絕對路徑,
+ # 之後這支掛鉤的呼叫都用它;找不到就讓會擋的閘擋下,★不退回舊版 Python 跑檢查★(Projects/最低Python版本改3.14_計劃 [S3])。
+ _lumos_py314() {
+   LUMOS_PY=""; _LUMOS_PY_ERR=""
+   if ! _lumos_any_python; then _LUMOS_PY_ERR="$_LUMOS_NO_PY_MSG"; return 1; fi
+   _out=""
+   if _out="$("$_LUMOS_ANY_EXE" ${_LUMOS_ANY_ARG:+"$_LUMOS_ANY_ARG"} "$REPO_ROOT/scripts/lumos" python-path 2>&1)"; then
+     LUMOS_PY="$(printf '%s\n' "$_out" | tail -n 1 | tr -d '\r')"
+-    if [ -n "$LUMOS_PY" ]; then return 0; fi
++    # 拿到的路徑要是絕對路徑、而且真的是 3.14 以上的 python 才用:後面每一道閘都由它跑,
++    # 叫 lumos 的那支是假的(PATH 上一支會印 /usr/bin/true 的 python3.14)時,閘會全部假放行(代碼審 r3 外家席)
++    case "$LUMOS_PY" in
++      /*|[A-Za-z]:[\\/]*)
++        if [ "$("$LUMOS_PY" -c 'import sys; print("LUMOS_PY314_OK" if sys.version_info >= (3, 14) else "OLD")' 2>/dev/null | tr -d '\r')" = "LUMOS_PY314_OK" ]; then
++          return 0
++        fi ;;
++    esac
++    _out="$_out
++(lumos python-path 回的 $LUMOS_PY 不是絕對路徑、或執行起來不是 3.14 以上的 python)"
++    LUMOS_PY=""
+   fi
+   _LUMOS_PY_ERR="$_out
+ (叫 lumos 用的是 $_LUMOS_ANY_EXE${_LUMOS_ANY_ARG:+ $_LUMOS_ANY_ARG};它一執行就失敗的話,可能是 Windows 商店替身)"
+   return 1
+ }
+ _lumos_block_no_py314() {
+   { echo ""; echo "擋下:這一道檢查要用 Python 3.14 跑 lumos,但找不到。"
+     printf '%s\n' "$_LUMOS_PY_ERR" | sed 's/^/   /'
+     echo "出口:裝 3.14,或設 LUMOS_PYTHON=<3.14 的絕對路徑>;真的要先過只能加 --no-verify(提交會記進跳過帳),不會改用舊版 Python 跑檢查。"
+     echo ""; } >&2
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index b912e99d..738e8318 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -116,21 +116,31 @@ Windows 用 python.org 的安裝器或 winget install Python.Python.3.14。裝
+ _LUMOS_NO_PY_MSG="$_LUMOS_NO_PY_BASE"
+ # ── python-launcher end ──
+ # ── python-314 begin(pre-commit 與 pre-push 內嵌同一段):用上面找到的 python 問 lumos 要一支 3.14 的絕對路徑,
+ # 之後這支掛鉤的呼叫都用它;找不到就讓會擋的閘擋下,★不退回舊版 Python 跑檢查★(Projects/最低Python版本改3.14_計劃 [S3])。
+ _lumos_py314() {
+   LUMOS_PY=""; _LUMOS_PY_ERR=""
+   if ! _lumos_any_python; then _LUMOS_PY_ERR="$_LUMOS_NO_PY_MSG"; return 1; fi
+   _out=""
+   if _out="$("$_LUMOS_ANY_EXE" ${_LUMOS_ANY_ARG:+"$_LUMOS_ANY_ARG"} "$REPO_ROOT/scripts/lumos" python-path 2>&1)"; then
+     LUMOS_PY="$(printf '%s\n' "$_out" | tail -n 1 | tr -d '\r')"
+-    if [ -n "$LUMOS_PY" ]; then return 0; fi
++    # 拿到的路徑要是絕對路徑、而且真的是 3.14 以上的 python 才用:後面每一道閘都由它跑,
++    # 叫 lumos 的那支是假的(PATH 上一支會印 /usr/bin/true 的 python3.14)時,閘會全部假放行(代碼審 r3 外家席)
++    case "$LUMOS_PY" in
++      /*|[A-Za-z]:[\\/]*)
++        if [ "$("$LUMOS_PY" -c 'import sys; print("LUMOS_PY314_OK" if sys.version_info >= (3, 14) else "OLD")' 2>/dev/null | tr -d '\r')" = "LUMOS_PY314_OK" ]; then
++          return 0
++        fi ;;
++    esac
++    _out="$_out
++(lumos python-path 回的 $LUMOS_PY 不是絕對路徑、或執行起來不是 3.14 以上的 python)"
++    LUMOS_PY=""
+   fi
+   _LUMOS_PY_ERR="$_out
+ (叫 lumos 用的是 $_LUMOS_ANY_EXE${_LUMOS_ANY_ARG:+ $_LUMOS_ANY_ARG};它一執行就失敗的話,可能是 Windows 商店替身)"
+   return 1
+ }
+ _lumos_block_no_py314() {
+   { echo ""; echo "擋下:這一道檢查要用 Python 3.14 跑 lumos,但找不到。"
+     printf '%s\n' "$_LUMOS_PY_ERR" | sed 's/^/   /'
+     echo "出口:裝 3.14,或設 LUMOS_PYTHON=<3.14 的絕對路徑>;真的要先過只能加 --no-verify(提交會記進跳過帳),不會改用舊版 Python 跑檢查。"
+     echo ""; } >&2
+diff --git a/scripts/install-graph-toolchain.sh b/scripts/install-graph-toolchain.sh
+index 99634276..4d3d03a3 100755
+--- a/scripts/install-graph-toolchain.sh
++++ b/scripts/install-graph-toolchain.sh
+@@ -43,20 +43,22 @@ _lumos_any_python() {
+   if command -v py >/dev/null 2>&1; then _LUMOS_ANY_EXE="$(command -v py)"; _LUMOS_ANY_ARG="-3"; return 0; fi
+   _LUMOS_NO_PY_MSG="$_LUMOS_ANY_NOTE$_LUMOS_NO_PY_BASE"
+   return 1
+ }
+ _LUMOS_NO_PY_BASE="找不到任何 python(試過 python3.14、python3.15、python3.16、固定位置、python3、python、py)。
+ 安裝 3.14:macOS 用 brew install python@3.14 或 uv python install 3.14;Linux 用發行版的 python3.14 套件或 uv;
+ Windows 用 python.org 的安裝器或 winget install Python.Python.3.14。裝在別處就設 LUMOS_PYTHON=<那支 3.14 的絕對路徑>。"
+ _LUMOS_NO_PY_MSG="$_LUMOS_NO_PY_BASE"
+ # ── python-launcher end ──
+ _lumos_any_python || { printf '%s\n' "$_LUMOS_NO_PY_MSG" >&2; exit 2; }
++# LUMOS_PYTHON 設了卻被略過、改用別支時現在就講:之後掛鉤問 lumos 會因同一個值擋下(代碼審 r3)
++if [ -n "$_LUMOS_ANY_NOTE" ]; then printf '%s' "$_LUMOS_ANY_NOTE" >&2; fi
+ TARGET=""; SLUG=""
+ while [[ $# -gt 0 ]]; do
+   case "$1" in
+     --target) TARGET="${2:-}"; shift 2 ;;
+     --slug)   SLUG="${2:-}"; shift 2 ;;
+     --no-hooks|--no-scaffold|--dry-run) shift ;;
+     *) shift ;;
+   esac
+ done
+ cd "${TARGET:-.}"
+diff --git a/scripts/install-hooks.sh b/scripts/install-hooks.sh
+index f189cc90..a73029fd 100755
+--- a/scripts/install-hooks.sh
++++ b/scripts/install-hooks.sh
+@@ -43,11 +43,13 @@ _lumos_any_python() {
+   if command -v py >/dev/null 2>&1; then _LUMOS_ANY_EXE="$(command -v py)"; _LUMOS_ANY_ARG="-3"; return 0; fi
+   _LUMOS_NO_PY_MSG="$_LUMOS_ANY_NOTE$_LUMOS_NO_PY_BASE"
+   return 1
+ }
+ _LUMOS_NO_PY_BASE="找不到任何 python(試過 python3.14、python3.15、python3.16、固定位置、python3、python、py)。
+ 安裝 3.14:macOS 用 brew install python@3.14 或 uv python install 3.14;Linux 用發行版的 python3.14 套件或 uv;
+ Windows 用 python.org 的安裝器或 winget install Python.Python.3.14。裝在別處就設 LUMOS_PYTHON=<那支 3.14 的絕對路徑>。"
+ _LUMOS_NO_PY_MSG="$_LUMOS_NO_PY_BASE"
+ # ── python-launcher end ──
+ _lumos_any_python || { printf '%s\n' "$_LUMOS_NO_PY_MSG" >&2; exit 2; }
++# LUMOS_PYTHON 設了卻被略過、改用別支時現在就講:之後掛鉤問 lumos 會因同一個值擋下(代碼審 r3)
++if [ -n "$_LUMOS_ANY_NOTE" ]; then printf '%s' "$_LUMOS_ANY_NOTE" >&2; fi
+ exec "$_LUMOS_ANY_EXE" ${_LUMOS_ANY_ARG:+"$_LUMOS_ANY_ARG"} "$HERE/lumos" init --force "$@"
+diff --git a/scripts/lumos b/scripts/lumos
+index c3640383..8ee57a02 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -110,28 +110,32 @@ def _py_candidates():
+         out.append(("py -3.14", ["py", "-3.14"]))
+     out.append(("uv python find", None))
+     out += [(n, [n]) for n in ("python3", "python")]
+     return out
+ 
+ 
+ def _py_which(name):
+     """指令名 → 絕對路徑或 None,之後一律用絕對路徑執行。兩種找到了也不收(代碼審 r1 資安席、r2 正確性席):
+     ①PATH 裡的相對路徑項(例如 `.`、`bin`)找到的——那是隨目前目錄變的,git 掛鉤的目前目錄是 repo 根;
+     ②★Windows 會先在目前目錄本身找★:找到的檔就在目前目錄裡(陌生 repo 放一支 python3.14.exe)。
+-    只擋目前目錄本身、不擋整棵子樹:目前目錄是家目錄或磁碟根時,正常裝在底下的直譯器不能因此消失。"""
++    只擋目前目錄本身、不擋整棵子樹:目前目錄是家目錄或磁碟根時,正常裝在底下的直譯器不能因此消失。
++    位置看檔案本身放在哪個目錄,不看它若是符號連結會指到哪:repo 根的連結指進子目錄,整條解析後就逃過比對(代碼審 r3 外家席)。
++    所以只解析「所在目錄」那一層(同一個目錄可能有兩種寫法,例如 macOS 的 /var 與 /private/var),檔案本身不解析。"""
+     import shutil
+     found = shutil.which(name)
+     if found is None or not os.path.isabs(found):
+         return None
+     if os.name == "nt":
+-        here = os.path.normcase(os.path.realpath(os.getcwd()))
+-        if os.path.normcase(os.path.dirname(os.path.realpath(found))) == here:
++        cwd = os.getcwd()
++        heres = {os.path.normcase(os.path.abspath(cwd)), os.path.normcase(os.path.realpath(cwd))}
++        where = os.path.dirname(os.path.abspath(found))
++        if {os.path.normcase(where), os.path.normcase(os.path.realpath(where))} & heres:
+             return None
+     return os.path.abspath(found)
+ 
+ 
+ def _py_probe(argv, deadline):
+     """用這個候選跑一次版本檢查 → (≥3.14 的絕對路徑或 None, 結果說明)。標準輸入接空、有逾時。"""
+     import subprocess
+     exe = argv[0]
+     if os.path.dirname(exe):
+         if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+@@ -174,21 +178,25 @@ def _py_uv_find(deadline):
+         r = subprocess.run([uv, "python", "find", "--system", "--no-python-downloads", ">=3.14"],
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
+                            timeout=min(_PY_PROBE_TIMEOUT, left))
+     except subprocess.TimeoutExpired:
+         return None, "逾時(%s 秒沒回)" % _PY_PROBE_TIMEOUT
+     except OSError as e:
+         return None, "執行失敗(%s)" % e
+     path = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
+     if path and os.path.isabs(path[0]):
+         return path[0], "合格"
+-    return None, "uv 找不到 3.14"
++    err = (r.stderr or "").strip().splitlines()
++    if r.returncode == 0 or (err and "No interpreter found" in err[-1]):
++        return None, "uv 找不到 3.14"
++    # uv 沒找到跟 uv 自己出錯回傳碼一樣(都是 2),只能看它說了什麼(代碼審 r3:repo 根的 uv.toml 壞掉也走到這裡)
++    return None, "執行失敗(回傳碼 %s%s)" % (r.returncode, ":" + err[-1][:160] if err else "")
+ 
+ 
+ def _py_resolve():
+     """找一支 ≥3.14 的直譯器 → (絕對路徑或 None, [(候選, 結果)])。LUMOS_PYTHON 有設就只認它:
+     必須是絕對路徑、而且合格,否則停下,不往下找(明寫了要用哪一支的人,不該被默默換成別支)。找到一個就停。"""
+     deadline = time.monotonic() + _PY_TOTAL_TIMEOUT
+     pinned = os.environ.get("LUMOS_PYTHON", "")
+     if pinned:
+         if not os.path.isabs(pinned):
+             return None, [("LUMOS_PYTHON=" + pinned, "不是絕對路徑(掛鉤與手打時會解析到不同的檔,不收)")]
+@@ -19919,43 +19927,46 @@ def _own_hook_scripts():
+ def _hook_python_problems(home=None):
+     """Claude/Codex 設定裡註冊的直譯器 → (看過的 [(家, 路徑, 結果)], 有問題的 [說明])。每支實際執行一次看版本(5 秒逾時)。
+     sys.executable 可能落在 uv、pyenv、venv、Homebrew 某個版本目錄底下,會隨它們更新或刪除而消失,原本沒有任何東西會發現
+     (Projects/最低Python版本改3.14_計劃 做法第 9 點)。讀不到設定檔 = 沒有註冊,不算問題。
+     ★只看 lumos 自己註冊的那幾條★(第二段是 lumos 自家掛鉤檔、第一段看起來是 python):設定檔裡也有別的工具的掛鉤,
+     拿它們的第一個字去跑 `-c <探針>` 會真的執行別人的腳本,而且重跑 lumos install 修不掉那種誤報(代碼審 r1)。"""
+     import json as _json
+     import shlex as _shlex
+     home = Path(home) if home else Path.home()
+     ours = _own_hook_scripts()
+-    codex_dir = str(_codex_home(home) / "hooks").replace("\\", "/").rstrip("/")
++    # 自家掛鉤放的目錄,照 merge-claude-settings.py 的 _hook_cmd 實際寫出的形狀(兩家分開,不用後綴比對:
++    # 別人家目錄底下的 .claude/hooks 也會對上;代碼審 r3 外家席)。t_doctor_flags_stale_hook_python ⑩ 拿合併程式真的寫出的設定餵
++    dirs = {"claude": {"${HOME}/.claude/hooks", "$HOME/.claude/hooks",
++                       str(home / ".claude" / "hooks").replace("\\", "/")},
++            "codex": {str(_codex_home(home) / "hooks").replace("\\", "/").rstrip("/")}}
+     seen, probs = [], []
+     for fam, f in (("claude", home / ".claude" / "settings.json"), ("codex", _codex_home(home) / "hooks.json")):
+         try:
+             d = _json.loads(f.read_text(encoding="utf-8"))
+         except (OSError, ValueError):
+             continue
+         exes = set()
+         for arr in (d.get("hooks") or {}).values():
+             for grp in arr if isinstance(arr, list) else []:
+                 for hk in (grp.get("hooks") or []) if isinstance(grp, dict) else []:
+                     cmd = str((hk or {}).get("command") or "")
+                     try:
+                         parts = _shlex.split(cmd)
+                     except ValueError:
+                         continue
+                     if len(parts) < 2:
+                         continue
+-                    script = parts[1].replace("\\", "/")
+-                    d, _, base = script.rpartition("/")
+-                    # 自家掛鉤 = 檔名是 lumos 的、而且放在 lumos 裝的那兩個目錄(r2 外家席:只比檔名,別家同名檔也會被認);
++                    hook_dir, _, base = parts[1].replace("\\", "/").rpartition("/")
++                    # 自家掛鉤 = 檔名是 lumos 的、而且放在這一家 lumos 裝的那個目錄(r2 外家席:只比檔名,別家同名檔也會被認);
+                     # 第一段像 python,含 free-threaded 的 python3.14t(r2 正確性席)
+-                    if (base in ours and (d.endswith("/.claude/hooks") or d == codex_dir)
++                    if (base in ours and hook_dir in dirs[fam]
+                             and re.match(r"(?i)py(thon[0-9.]*t?)?(\.exe)?$", parts[0].replace("\\", "/").rsplit("/", 1)[-1])):
+                         exes.add(parts[0])
+         for exe in sorted(exes):
+             path, why = _py_probe([exe], time.monotonic() + _PY_PROBE_TIMEOUT)
+             seen.append((fam, exe, why))
+             if not path:
+                 probs.append("%s 的掛鉤註冊的是 %s:%s" % (fam, exe, why))
+     return seen, probs
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e35c86fe..52b84fce 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -51104,21 +51104,22 @@ def _py314_fake_env(tmp, entries, extra=None):
+     return env
+ 
+ 
+ def t_python_resolver_order_and_floor():
+     """[S1] 找 3.14:固定順序、找到就停、只收實際印出 ≥3.14 的、改用它印的絕對路徑;LUMOS_PYTHON 有設就只認它
+     (不是絕對路徑或不合格都停下報錯);uv 帶 --no-python-downloads;LUMOS_PYTHON_SEARCH_DIRS 換掉固定位置;
+     驗法隔開標準輸入、單一候選有逾時(Projects/最低Python版本改3.14_計劃 做法第 1 點)。
+ 
+     翻紅釘:順序改掉 → ①紅;找到不停 → ②紅;LUMOS_PYTHON 不合格往下找 → ③④紅;uv 沒帶旗標 → ⑤紅;
+     逾時拿掉 → ⑥卡住;python-path 不經 LUMOS_PYTHON → ⑦紅;說明丟掉不存在的候選 → ⑤紅;Windows 收目前目錄的檔 → ⑤b紅;
+-    擋整棵子樹或收相對路徑項 → ⑤c紅;uv 逾時說成找不到 → ⑤d紅。
++    擋整棵子樹或收相對路徑項 → ⑤c紅;uv 逾時說成找不到 → ⑤d紅;uv 出錯說成找不到 → ⑤e紅;
++    位置用解析後的路徑比 → ⑤f紅。
+     """
+     print("t_python_resolver_order_and_floor")
+     import os as _os, tempfile as _tf, time as _time, subprocess as _sp
+     m = _load_lumos_inproc()
+     saved = dict(_os.environ)
+     tmp = Path(_tf.mkdtemp(prefix="gctl-py314-"))
+     try:
+         for k in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON"):
+             _os.environ.pop(k, None)
+         _os.environ["LUMOS_PYTHON_SEARCH_DIRS"] = str(tmp / "fixed")
+@@ -51137,21 +51138,23 @@ def t_python_resolver_order_and_floor():
+               and not any(d == "python3" for d, _w in tried), str(tried))
+         _os.environ["LUMOS_PYTHON"] = "bin/python3.15"
+         path, tried = m._py_resolve()
+         check("③LUMOS_PYTHON 不是絕對路徑:停下報錯,不往下找", path is None and len(tried) == 1 and "絕對路徑" in tried[0][1], str(tried))
+         _os.environ["LUMOS_PYTHON"] = str(tmp / "a" / "bin" / "python3.14")
+         path, tried = m._py_resolve()
+         check("④LUMOS_PYTHON 指到舊版:停下報錯,不往下找", path is None and len(tried) == 1, str(tried))
+         _os.environ.pop("LUMOS_PYTHON")
+         env = _py314_fake_env(tmp / "b", {"python3": "old"})
+         uvlog = tmp / "b" / "uv-args"
+-        (tmp / "b" / "bin" / "uv").write_text("#!/bin/sh\necho \"$@\" > %s\nexit 2\n" % uvlog, encoding="utf-8")
++        (tmp / "b" / "bin" / "uv").write_text("#!/bin/sh\necho \"$@\" > %s\n"
++                                              "echo 'error: No interpreter found for Python >=3.14 in managed installations or search path' >&2\n"
++                                              "exit 2\n" % uvlog, encoding="utf-8")
+         (tmp / "b" / "bin" / "uv").chmod(0o755)
+         _os.environ.update(env)
+         path, tried = m._py_resolve()
+         args = uvlog.read_text(encoding="utf-8") if uvlog.exists() else ""
+         check("⑤uv 探測帶 --system --no-python-downloads,找不到算這格不合格", path is None and "--no-python-downloads" in args
+               and "--system" in args, args + str(tried))
+         msg = m._py_floor_message(tried)
+         check("⑤找不到時說明列出每個候選的結果:存在但不合格的逐條、不存在的併成一行、uv 在但找不到另列",
+               "python3:版本 3.9.6" in msg and "uv python find:uv 找不到 3.14" in msg
+               and "不存在或沒有這個指令:python3.14、python3.15、python3.16" in msg, msg)
+@@ -51189,20 +51192,45 @@ def t_python_resolver_order_and_floor():
+               parent_ok is not None and rel is None, f"parent_ok={parent_ok} rel={rel}")
+         env = _py314_fake_env(tmp / "u", {"python3": "old", "uv": "sleep"})
+         _os.environ.update(env)
+         orig_to = m._PY_PROBE_TIMEOUT
+         m._PY_PROBE_TIMEOUT = 1
+         try:
+             path, tried = m._py_resolve()
+         finally:
+             m._PY_PROBE_TIMEOUT = orig_to
+         check("⑤d uv 卡住:記成逾時,不說成「uv 找不到 3.14」", dict(tried).get("uv python find", "").startswith("逾時"), str(tried))
++        env = _py314_fake_env(tmp / "e", {"python3": "old"})
++        (tmp / "e" / "bin" / "uv").write_text("#!/bin/sh\necho 'error: Failed to parse: uv.toml' >&2\nexit 2\n", encoding="utf-8")
++        (tmp / "e" / "bin" / "uv").chmod(0o755)
++        _os.environ.update(env)
++        path, tried = m._py_resolve()
++        why = dict(tried).get("uv python find", "")
++        check("⑤e uv 自己出錯(設定檔壞掉)跟沒找到回傳碼一樣是 2:記成執行失敗並帶它的錯誤訊息", why.startswith("執行失敗")
++              and "uv.toml" in why, str(tried))
++        sub = cb / "tools"
++        sub.mkdir()
++        (sub / "evil").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
++        (sub / "evil").chmod(0o755)
++        (cb / "python3.14").unlink()
++        _os.symlink(sub / "evil", cb / "python3.14")
++        _os.environ["PATH"] = str(cb)
++        _os.chdir(cb)
++        try:
++            m.os.name = "nt"
++            try:
++                linked = m._py_which("python3.14")
++            finally:
++                m.os.name = real_name
++        finally:
++            _os.chdir(here)
++        check("⑤f 目前目錄裡的符號連結指進子目錄:照樣不收(看檔案放在哪,不看連結指到哪)", linked is None, str(linked))
+         env = _py314_fake_env(tmp / "c", {"python3.14": "sleep", "python3.15": "good"})
+         _os.environ.update(env)
+         orig = m._PY_PROBE_TIMEOUT
+         m._PY_PROBE_TIMEOUT = 1
+         t0 = _time.monotonic()
+         try:
+             path, tried = m._py_resolve()
+         finally:
+             m._PY_PROBE_TIMEOUT = orig
+         check("⑥卡住的候選逾時算不合格,接著試下一個", path is not None and "逾時" in tried[0][1] and _time.monotonic() - t0 < 10,
+@@ -51312,21 +51340,21 @@ def _py314_hook_repo(tmp, with_lumos=True):
+     return root
+ 
+ 
+ def t_hooks_block_without_python314():
+     """[S3] pre-commit/pre-push 確定要叫 lumos、卻找不到 3.14(只找得到舊版或完全沒 python)→ 擋下印說明,不退回舊版;
+     沒有 scripts/lumos、staged 為空照舊放行;post-commit 在只有 python3.14 的機器照樣寫跳過帳;
+     內嵌段在 set -euo pipefail 下不中途結束(Projects/最低Python版本改3.14_計劃 做法第 3 點)。
+ 
+     翻紅釘:Gate PY 拿掉 → ①紅(會退回舊版跑或整段跳過);pre-push 改回沒 3.14 放行 → ③紅;
+     post-commit 清單少 python3.14 → ⑤紅;launcher 在 set -e 下直接失敗 → ⑥紅;launcher 不認 LUMOS_PYTHON → ⑦紅;
+-    只看能不能執行、不驗絕對路徑與是不是 python → ⑦b紅。
++    只看能不能執行、不驗絕對路徑與是不是 python → ⑦b紅;不驗 python-path 回的路徑 → ①b紅。
+     """
+     print("t_hooks_block_without_python314")
+     import os as _os, tempfile as _tf, subprocess as _sp
+     if not hasattr(_os, "setsid"):
+         raise _SrcOnly("非 POSIX,這段沒驗到")
+     hooks = Path(GRAPHCTL).resolve().parent / "hooks"
+     tmp = Path(_tf.mkdtemp(prefix="gctl-py314h-"))
+     nopy = _py314_sysbin(tmp)
+     withpy = _py314_sysbin(tmp, keep_python=True)
+     good = tmp / "goodbin"
+@@ -51342,20 +51370,27 @@ def t_hooks_block_without_python314():
+     root = _py314_hook_repo(tmp / "a")
+     if old_py:
+         r = hook("pre-commit", root, str(withpy))
+         check("①pre-commit 只找得到舊版 python:擋下印說明,不退回舊版", r.returncode == 1 and "要用 Python 3.14" in r.stderr
+               and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[-500:])
+     else:
+         print("  (沒驗到①:這台機器 /usr/bin 沒有 python3)")
+     r = hook("pre-commit", root, str(nopy))
+     check("①pre-commit 完全沒有 python:擋下並印安裝指令", r.returncode == 1 and "找不到任何 python" in r.stderr
+           and "brew install python@3.14" in r.stderr, r.stderr[-400:])
++    fake = tmp / "fakebin"
++    fake.mkdir()
++    (fake / "python3.14").write_text("#!/bin/sh\necho /usr/bin/true\n", encoding="utf-8")
++    (fake / "python3.14").chmod(0o755)
++    r = hook("pre-commit", root, str(fake) + _os.pathsep + str(nopy))
++    check("①b PATH 上的 python3.14 是假的、回一支 /usr/bin/true:不拿它跑閘,擋下並講明", r.returncode == 1
++          and "不是 3.14 以上的 python" in r.stderr, r.stderr[-400:])
+     r = hook("pre-commit", root, str(good) + _os.pathsep + str(nopy))
+     check("②pre-commit 有 3.14:不因版本擋下", r.returncode == 0 and "要用 Python 3.14" not in r.stderr, r.stderr[-400:])
+     r = hook("pre-push", root, str(nopy))
+     check("③pre-push 有 lumos 卻找不到 3.14:擋下", r.returncode == 1 and "要用 Python 3.14" in r.stderr, r.stderr[-400:])
+     bare = _py314_hook_repo(tmp / "b", with_lumos=False)
+     r = hook("pre-commit", bare, str(nopy))
+     check("④沒有 scripts/lumos:pre-commit 照舊放行", r.returncode == 0, r.stderr[-300:])
+     r = hook("pre-push", bare, str(nopy))
+     check("④沒有 scripts/lumos:pre-push 照舊放行", r.returncode == 0 and "沒有 scripts/lumos" in r.stderr, r.stderr[-300:])
+     _sp.run(["git", "-C", str(bare), "reset", "-q"], capture_output=True)
+@@ -51634,21 +51669,22 @@ def t_lumos_parses_under_old_grammar():
+                     mods.add((n.module or "").split(".")[0])
+         check(f"{rel}:版本檢查之前只 import 3.9 就有的標準庫模組", head is not None and mods <= ok39,
+               f"找不到版本檢查的位置" if head is None else f"清單外:{sorted(mods - ok39)}")
+ 
+ 
+ def t_doctor_flags_stale_hook_python():
+     """[S10] Claude/Codex 設定裡註冊的直譯器不存在或低於 3.14 → doctor 印軟提醒(不計 issues、--ci 不跑)叫人重跑安裝;
+     enforcement 的 python 列列出註冊的直譯器與結果(Projects/最低Python版本改3.14_計劃 做法第 9 點)。
+     只看 lumos 自己註冊的那幾條:別的工具的掛鉤不列、不執行(代碼審 r1:第一版把任何含 hooks/ 的命令都拿去跑 -c 探針)。
+     翻紅釘:Q 段拿掉 → ②紅;計進 issues → ③紅;enforcement 不讀註冊 → ⑤紅;不篩自家掛鉤 → ⑥紅;
+-    正規式不收結尾 t 或不看目錄 → ⑦⑧紅;enforcement 多一個名單外的檔名 → ⑨紅。"""
++    正規式不收結尾 t 或不看目錄 → ⑦⑧紅;enforcement 多一個名單外的檔名 → ⑨紅;
++    Codex 那一家的目錄判斷拿掉、或合併程式改了命令形狀 → ⑩紅。"""
+     print("t_doctor_flags_stale_hook_python")
+     import os as _os, json as _j, tempfile as _tf, subprocess as _sp
+     m = _load_lumos_inproc()
+     tmp = Path(_tf.mkdtemp(prefix="gctl-s10-"))
+     old = tmp / "python3.9"
+     old.write_text("#!/bin/sh\necho 'OLD 3.9.6'\nexit 1\n", encoding="utf-8")
+     old.chmod(0o755)
+ 
+     def settings(home, exes):
+         d = home / ".claude"
+@@ -51698,31 +51734,49 @@ def t_doctor_flags_stale_hook_python():
+              f'{notify} "${{HOME}}/.claude/hooks/lumos-entry-hook.py"']
+     (other / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [{"hooks": [
+         {"type": "command", "command": c} for c in third]}]}}), encoding="utf-8")
+     seen, probs = m._hook_python_problems(other)
+     check("⑥別的工具的掛鉤(直接寫腳本、bash 包一層、shell 條件式、第一段不是 python)不列、不執行",
+           seen == [] and probs == [] and not side.exists(), f"{seen} {probs} side={side.exists()}")
+     mix = tmp / "mix"
+     (mix / ".claude").mkdir(parents=True)
+     (mix / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [{"hooks": [
+         {"type": "command", "command": '/nonexistent/python3.14t "${HOME}/.claude/hooks/impact-hook.py"'},
+-        {"type": "command", "command": '/nonexistent/python3.13 /opt/other/lumos-entry-hook.py'}]}]}}), encoding="utf-8")
++        {"type": "command", "command": '/nonexistent/python3.13 /opt/other/lumos-entry-hook.py'},
++        {"type": "command", "command": '/nonexistent/python3.12 /tmp/foreign/.claude/hooks/ci-status-hook.py'}]}]}}), encoding="utf-8")
+     seen, probs = m._hook_python_problems(mix)
+-    check("⑦free-threaded 的 python3.14t 註冊也認得;⑧別的目錄裡同名的 lumos-entry-hook.py 不算自家掛鉤",
++    check("⑦free-threaded 的 python3.14t 註冊也認得;⑧別的目錄(含別人家目錄底下的 .claude/hooks)裡同名的檔不算自家掛鉤",
+           [e for _f, e, _w in seen] == ["/nonexistent/python3.14t"], str(seen))
+     import re as _re2
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
+     body = src[src.index("def enforcement_status("):]
+     body = body[:body.index("\ndef ", 10)]
+     needles = set(_re2.findall(r'\("[\w-]+", "([\w.-]+\.py)"\)', body))
+     check("⑨enforcement 各列找的掛鉤檔名都在自家掛鉤名單裡(名單只有一份)",
+           len(needles) >= 5 and needles <= m._own_hook_scripts(), f"{sorted(needles)} vs {sorted(m._own_hook_scripts())}")
++    merge = Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py"
++    real = tmp / "real"
++    real.mkdir()
++    menv = dict(base, HOME=str(real), CODEX_HOME=str(real / ".codex"))
++    menv.pop("LUMOS_PYTHON", None)
++    rc = [_sp.run([sys.executable, str(merge), *t], capture_output=True, text=True, env=menv).returncode
++          for t in ([], ["--target", "codex"])]
++    saved_ch = _os.environ.pop("CODEX_HOME", None)
++    try:
++        seen, probs = m._hook_python_problems(real)
++    finally:
++        if saved_ch is not None:
++            _os.environ["CODEX_HOME"] = saved_ch
++    fams = {f for f, _e, _w in seen}
++    check("⑩拿合併程式真的寫出的兩家設定來餵:Claude 與 Codex 的註冊都認得、都判合格(安裝端改了命令形狀就會紅)",
++          rc == [0, 0] and fams == {"claude", "codex"} and probs == [] and all(w == "合格" for _f, _e, w in seen),
++          f"rc={rc} seen={seen} probs={probs}")
+ 
+ 
+ def t_update_prints_python314_notice_and_slim_strips_floor():
+     """[S9] 新版 lumos 執行 update、消費專案的 pre-commit 還是舊的(沒有 python-path)→ 印一段升級注意,之後再更新不印;
+     CI 裡找不到 3.14 時,說明多一行 setup-python 怎麼設;精簡版生成器的產物不含開頭那三行版本檢查
+     (Projects/最低Python版本改3.14_計劃 做法第 8、10 點)。
+     ★前提講明★:①② 直接呼叫新版的 _vendor_toolchain,等於「執行 update 的已經是新程式」——同一台機器第二個專案起才是這樣。
+     第一個專案的 update 由拉新之前就載進記憶體的舊程式執行,印不出升級注意(代碼審 r1);那一段靠 ④:失敗現場自己講清楚。
+     翻紅釘:升級注意拿掉 → ①紅;不看舊 pre-commit 一律印 → ②紅;生成器不剝 → ③紅;CI 那行拿掉 → ④紅。"""
+     print("t_update_prints_python314_notice_and_slim_strips_floor")
