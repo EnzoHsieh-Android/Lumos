@@ -16,6 +16,8 @@ related:
   - "[[code側刪除傳播守衛_實作計畫]]"
   - "[[Systems/cochange-guard]]"
 summary: |-
+  PITFALL:[2026-09-30 [[Projects/舊句偵測實驗_計劃]] 實驗]大提交時 40 個被刪名稱的上限會被 64 位十六進位雜湊值吃光(rtb b2fc512 前 40 個裡約 30 個是雜湊),真的被刪的函式名排不進來;抽字時該排掉純十六進位的長字串。重現:那份實驗(見計劃〈實驗結果〉與它連到的報告)照原樣重放本守衛,在 b2fc512 只擋到 1 題
+REVISIT:2026-11-30 還沒排掉十六進位字串就攤給 Enzo 排
   FLOW:pre-commit Gate DG(Gate CC 旁)→`lumos delguard --staged`→S1 staged diff `-` 行抽被刪識別字(per-file 回收表/stopword/排除域路徑段+lockfile/.md 不抽)→單次 git grep --cached 判兩檔信心(全域消失=high/呼叫點殘存=low)→三件套 regex 掃 vault 指名「還在講它」的節點+原句(型別只排序不壓低,Systems 排前)→S2 純連結編輯(LINK_KEYS 子集)∧S1 命中=假同步嫌疑→S3 退場三問(stdout)
   KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0→★15.0s(2026-08-27:5.0 在本 vault 377 篇+大 diff 仍常超,一 session 降級多次;Enzo 指示優化)★
   KEY:advisory 恆 rc0——crash(`|| true`+except Exception)/timeout(python 內建 deadline,env LUMOS_DELGUARD_DEADLINE,預設 ★15.0s★)/git diff rc≠0 皆降級放行,降級訊息走 stdout;--json 含 tokens/hits/fake_sync/degraded
