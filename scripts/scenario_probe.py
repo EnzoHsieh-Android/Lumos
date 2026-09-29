@@ -84,6 +84,24 @@ def tool_calls_from_stream(lines):
     return calls
 
 
+# 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
+# 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
+GRADER_VERSION = "2026-09-29-code-first"
+
+
+def grade(sc, calls, final_text):
+    """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
+    儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
+    ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    answer_content_ok = None
+    if sc.get("answer_expect"):
+        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
+        answer_content_ok = not miss_a
+        if ok and not answer_content_ok:
+            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+    return ok, why, answer_content_ok
+
+
 def judge(calls, expect, forbid_before):
     """回 (passed, reason, first_hit_index)。
     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
@@ -426,6 +444,7 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
         env["LUMOS_STOP_BLOCK_OFF"] = "1"
     t0 = time.time()
     instrument_fail = None   # 超時 / 非零退出 = 儀器例外,這場不算分(code-codex-s3 r1 外家 #3:半途已印期望指令也不能判過)
+    truncated = False
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
         out, err = r.stdout, r.stderr[-400:]
@@ -433,7 +452,9 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
             instrument_fail = f"codex exec 退出碼 {r.returncode}"
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = "timeout"; instrument_fail = f"codex exec 超時 {timeout}s"
+        err = "timeout"
+        instrument_fail = f"codex exec 超時 {timeout}s"
+        truncated = True
     calls, final = tool_calls_from_codex_json(out.splitlines())
     thread_id = None
     for ln in out.splitlines():
@@ -444,20 +465,15 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
         if isinstance(ev, dict) and ev.get("type") == "thread.started":
             thread_id = ev.get("thread_id"); break
     trace = _codex_hook_trace(thread_id)
-    ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    ok, why, answer_content_ok = grade(sc, calls, final)
     if instrument_fail:
         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
-    answer_content_ok = None
-    if sc.get("answer_expect"):
-        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
-        answer_content_ok = not miss_a
-        if ok and not answer_content_ok:
-            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
             "answer": (final or "")[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
-            "answer_content_ok": answer_content_ok, "limit_hit": False, "result_subtype": "codex", "harness": "codex",
+            "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
+            "result_subtype": "codex", "harness": "codex",
             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
 
 
@@ -503,6 +519,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     if arm == "without":
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
     t0 = time.time()
+    timed_out = False
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
         out = r.stdout
@@ -510,9 +527,8 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         err = "timeout"
+        timed_out = True
     calls = tool_calls_from_stream(out.splitlines())
-    ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
-    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
     final = ""
     result_ev = {}
     for ln in out.splitlines():
@@ -526,17 +542,19 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
         if isinstance(ev, dict) and ev.get("type") == "result":
             final = ev.get("result") or ""
             result_ev = ev
+    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中。
     # ★r1 外家/正確性席:答案內容對不對 與 通過閘(敲對指令+答對)分開記★——
     # M4 若只看 passed,會把「答案對但先 grep」記成失敗,混淆「答案對不對」與「走對路徑沒有」。
-    answer_content_ok = None
-    if sc.get("answer_expect"):
-        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
-        answer_content_ok = not miss_a
-        if ok and not answer_content_ok:
-            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+    ok, why, answer_content_ok = grade(sc, calls, final)
     limit_hit = is_limit_hit(calls, final, result_ev)
+    # ★截斷不算分★(Projects/探針判準對齊程式碼為主_計劃 [S1]):撞回合上限或逾時,紀錄不完整,判過判不過都是猜;
+    # 以前記成「沒敲到期望指令」,9 月週抽四個失敗裡三個其實是這個。跟 Codex 執行器的逾時同一套處理。
+    truncated = (not limit_hit) and (timed_out or result_ev.get("subtype") == "error_max_turns")
     if limit_hit:
         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
+    elif truncated:
+        cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
+        ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
@@ -544,7 +562,51 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
             "answer": (final or "")[:1500],
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
-            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+            "limit_hit": limit_hit, "truncated": truncated,
+            "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+
+
+def summarize_results(results, arm="with"):
+    """一批結果 → 總結。分母只算有效場次(扣掉截斷、用量上限、其他儀器例外)。
+    ★有效不到一半時分母退回整批★:自主迴圈只在總結行 p≠n 時發通知,不退回的話整批被截斷會是 0/0、安靜顯示全過。
+    總結行第一行固定以「p/n 個情境 Claude 自己敲對了」開頭——governance/autonomous-loop.sh 的 run_probe 靠這個格式解析。"""
+    def is_instr(r):
+        return str(r.get("reason", "")).startswith("儀器例外")
+    total = len(results)
+    valid = [r for r in results if not is_instr(r)]
+    excl = [r for r in results if is_instr(r)]
+    n_trunc = sum(1 for r in excl if r.get("truncated"))
+    n_limit = sum(1 for r in excl if r.get("limit_hit") and not r.get("truncated"))
+    n_other = len(excl) - n_trunc - n_limit
+    inconclusive = total > 0 and len(valid) * 2 < total
+    p = sum(1 for r in valid if r.get("passed"))
+    n = total if inconclusive else len(valid)
+    per = {}
+    for r in results:
+        c = per.setdefault(r.get("id", "?"), [0, 0])
+        c[1] += 1
+        c[0] += 1 if r.get("truncated") else 0
+    mostly = [q for q, (t, k) in per.items() if k > 1 and t * 2 > k]
+    line = f"{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {arm})" if arm != "with" else "")
+    parts = [f"{name} {k}" for name, k in (("截斷", n_trunc), ("用量上限", n_limit), ("其他儀器例外", n_other)) if k]
+    if parts:
+        line += ";不算分:" + "、".join(parts)
+    if inconclusive:
+        line += f";★有效場次 {len(valid)}/{total} 不到一半,這批不能下結論(分母退回整批)★"
+    if mostly:
+        line += "\n截斷過半的題(題目或步數上限要檢查,不是 AI 沒照規矩): " + ", ".join(mostly)
+    return {"passed": p, "scored": n, "total": total, "inconclusive": inconclusive, "mostly_truncated": mostly,
+            "failed": [r.get("id") for r in valid if not r.get("passed")],
+            "excluded": [r.get("id") for r in excl], "line": line}
+
+
+def history_record(ts, seed, summary, arm="with", runs=1):
+    """週抽歷史一列:failed 只含有效場次沒過的題;被排除的另記;帶判準版本(換過判準的紀錄不可直接比)。"""
+    rec = {"ts": ts, "seed": seed, "passed": summary["passed"], "total": summary["scored"],
+           "failed": summary["failed"], "excluded": summary["excluded"], "grader": GRADER_VERSION}
+    if arm != "with" or runs > 1:
+        rec.update({"arm": arm, "runs": runs})
+    return rec
 
 
 def main():
@@ -667,10 +729,9 @@ def main():
             print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
             print("!" * 60, file=sys.stderr)
-        n = len(results); p = sum(1 for r in results if r["passed"])
-        lim = sum(1 for r in results if r.get("limit_hit"))
-        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {a.arm})" if a.arm != "with" else "")
-              + (f";其中 {lim} 場撞帳號用量上限沒真的跑,不算分" if lim else ""))
+        summ = summarize_results(results, a.arm)
+        p, n = summ["passed"], summ["scored"]
+        print("\n" + summ["line"])
         if a.runs > 1:
             per = {}
             for r in results:
@@ -680,14 +741,12 @@ def main():
             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
-                                               "arm": a.arm, "runs": a.runs,
+                                               "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+                                               "excluded": summ["excluded"], "inconclusive": summ["inconclusive"],
                                                "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
         if a.history:
             with open(a.history, "a", encoding="utf-8") as hf:
-                hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
-                                     "failed": [r["id"] for r in results if not r["passed"]],
-                                     **({"arm": a.arm, "runs": a.runs} if (a.arm != "with" or a.runs > 1) else {})},
-                                    ensure_ascii=False) + "\n")
+                hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs), ensure_ascii=False) + "\n")
         if not a.keep:
             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。

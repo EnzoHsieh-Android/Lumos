@@ -36598,6 +36598,148 @@ def t_scenario_probe_per_scenario_max_turns():
     check("probe max_turns: s15 題庫帶 max_turns 30", s15 and s15[0].get("max_turns") == 30, str(s15[0].get("max_turns") if s15 else None))
 
 
+def _load_probe_module(tag):
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+    spec = importlib.util.spec_from_file_location(tag, path, loader=SourceFileLoader(tag, path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _probe_scenarios_all():
+    import json as _j
+    d = Path(GRAPHCTL).resolve().parent.parent / "governance" / "scenarios"
+    rows = []
+    for f in sorted(d.glob("*.jsonl")):
+        if f.name == "history.jsonl":
+            continue
+        rows += [_j.loads(ln) for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return rows
+
+
+def t_probe_truncated_run_not_scored():
+    """探針判準對齊程式碼為主 [S1]:撞回合上限/逾時=截斷、不算分(官方 eval-audit:截斷不能算錯)。
+    ★前置斷言★:假事件流裡有一個「本來會判過」的 lumos 呼叫——確認截斷真的蓋掉判定,不是本來就判不過。"""
+    import json as _j, subprocess as _sp
+    mod = _load_probe_module("sp_trunc")
+    sc = {"id": "x1", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+
+    class R:
+        def __init__(self, out): self.stdout, self.stderr, self.returncode = out, "", 0
+
+    def fake_run_factory(result_ev):
+        def fake_run(cmd, **kw):
+            return R("\n".join(_j.dumps(e) for e in [tool, result_ev]))
+        return fake_run
+    real = mod.subprocess.run
+    try:
+        mod.subprocess.run = fake_run_factory({"type": "result", "subtype": "success", "result": "ok"})
+        base = mod.run_one(sc, Path("."), 18, 10, "")
+        mod.subprocess.run = fake_run_factory({"type": "result", "subtype": "error_max_turns", "result": ""})
+        mt = mod.run_one(sc, Path("."), 18, 10, "")
+
+        def raise_to(cmd, **kw):
+            raise _sp.TimeoutExpired(cmd, 10, output="\n".join([_j.dumps(tool)]))
+        mod.subprocess.run = raise_to
+        to = mod.run_one(sc, Path("."), 18, 10, "")
+        mod.subprocess.run = lambda cmd, **kw: R(_j.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "You've hit your usage limit"}))
+        lim = mod.run_one(sc, Path("."), 18, 10, "")
+        mod.subprocess.run = raise_to
+        cx = mod.run_one_codex(sc, Path("."), 10, "")
+    finally:
+        mod.subprocess.run = real
+    check("探針截斷 前置: 同一串呼叫、正常結束時會判過", base["passed"] is True and not base.get("truncated"), base["reason"])
+    check("探針截斷: 撞回合上限 → 截斷、不算過、理由以儀器例外開頭", mt["passed"] is False and mt.get("truncated") is True and mt["reason"].startswith("儀器例外"), (mt.get("truncated"), mt["reason"]))
+    check("探針截斷: 子程序逾時 → 同樣標截斷", to["passed"] is False and to.get("truncated") is True and to["reason"].startswith("儀器例外"), (to.get("truncated"), to["reason"]))
+    check("探針截斷: 用量上限照舊標用量上限、不標截斷", lim.get("limit_hit") is True and not lim.get("truncated") and "用量" in lim["reason"], (lim.get("limit_hit"), lim.get("truncated"), lim["reason"]))
+    check("探針截斷: Codex 執行器逾時也帶截斷欄位", cx.get("truncated") is True and cx["reason"].startswith("儀器例外"), (cx.get("truncated"), cx["reason"]))
+
+
+def _probe_res(qid, passed, reason="ok", truncated=False, limit=False):
+    return {"id": qid, "passed": passed, "reason": reason, "truncated": truncated, "limit_hit": limit}
+
+
+def t_probe_summary_excludes_instrument_runs():
+    """探針判準對齊程式碼為主 [S2]:分母只算有效場次;總結行格式要讓自主迴圈的 shell 解析照舊(pp=/ 前、tt=/ 後到空白)。"""
+    import re as _re
+    mod = _load_probe_module("sp_sum")
+    rs = [_probe_res("a", True), _probe_res("b", False, "沒敲到期望指令"), _probe_res("c", True),
+          _probe_res("d", False, "儀器例外: 撞到回合上限", truncated=True),
+          _probe_res("e", False, "儀器例外: 帳號用量/速率上限", limit=True), _probe_res("f", True)]
+    s = mod.summarize_results(rs)
+    line = s["line"]
+    pp = line.split("/")[0]
+    tt = _re.sub(r"^[0-9]+/([0-9]+) .*", r"\1", line.splitlines()[0])
+    check("探針總結: 6 場扣 2 場儀器例外 → 3/4", (s["passed"], s["scored"]) == (3, 4) and (pp, tt) == ("3", "4"), line)
+    check("探針總結: 總結行仍以「p/n 個情境 Claude 自己敲對了」開頭", _re.match(r"^\d+/\d+ 個情境 Claude 自己敲對了", line) is not None, line)
+    check("探針總結: 列出截斷與用量上限各幾場", "截斷 1" in line and "用量上限 1" in line, line)
+    h = mod.history_record("2026-10-05", "2026-W41", s)
+    check("探針歷史: failed 只含有效場次沒過的題、另記 excluded 與判準版本",
+          h["failed"] == ["b"] and sorted(h["excluded"]) == ["d", "e"] and h["passed"] == 3 and h["total"] == 4
+          and h.get("grader") == mod.GRADER_VERSION and mod.GRADER_VERSION, str(h))
+
+
+def t_probe_flags_truncation_heavy_batches():
+    """探針判準對齊程式碼為主 [S3]:同題截斷過半要點名;有效不到一半 → 分母退回整批、寫明不能下結論(自主迴圈靠 p≠n 發通知,不退回會 0/0 安靜全過)。"""
+    mod = _load_probe_module("sp_heavy")
+    rs = [_probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True),
+          _probe_res("q", True), _probe_res("r", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("r", True), _probe_res("s", True)]
+    s = mod.summarize_results(rs)
+    check("探針總結: q 三場截斷兩場 → 點名;r 兩場截斷一場(剛好一半)→ 不點名", s["mostly_truncated"] == ["q"] and "q" in s["line"], (s["mostly_truncated"], s["line"]))
+    check("探針總結: 有效 3/6 剛好一半 → 還算可下結論", not s["inconclusive"] and (s["passed"], s["scored"]) == (3, 3), s["line"])
+    all_t = [_probe_res(f"z{i}", False, "儀器例外: 撞到回合上限", truncated=True) for i in range(7)] + [_probe_res("ok", True)]
+    s2 = mod.summarize_results(all_t)
+    first = s2["line"].splitlines()[0]
+    check("探針總結: 8 場只有 1 場有效 → 分母退回 8、寫明不能下結論、p≠n", s2["inconclusive"] and (s2["passed"], s2["scored"]) == (1, 8) and first.startswith("1/8 ") and "不能下結論" in s2["line"], s2["line"])
+    s3 = mod.summarize_results([_probe_res("z", False, "儀器例外: 撞到回合上限", truncated=True)])
+    check("探針總結: 整批只有截斷 → 0/1,不會變成 0/0 安靜全過", s3["line"].startswith("0/1 ") and s3["inconclusive"], s3["line"])
+
+
+# 讀碼類禁令(紀律 2026-09-21 起第一步就是先讀程式碼,不能再判成違規);寫入與替代類禁令不在此列
+_PROBE_READ_BANS = {"Grep", "Glob", "Read", "\\bgrep\\b", "\\brg\\b", "\\bcat\\b", "\\bls\\b", "\\bfind\\b", "git log", "\\bgit (status|diff|log)\\b"}
+
+
+def t_probe_scenarios_allow_code_first():
+    """探針判準對齊程式碼為主 [S4]:題庫不再禁「先讀碼」;寫入/替代類禁令保留;期望的 lumos 指令不變。
+    ★行為斷言★:s04(為什麼停用 canary)先 Grep 再敲 lumos 要判過;s09 先 Edit 再 lumos set 仍判不過。"""
+    mod = _load_probe_module("sp_cf")
+    rows = _probe_scenarios_all()
+    by = {r["id"]: r for r in rows}
+    bad = [(r["id"], sorted(set(r.get("forbid_before", [])) & _PROBE_READ_BANS)) for r in rows if set(r.get("forbid_before", [])) & _PROBE_READ_BANS]
+    check("探針題庫: 沒有任何一題禁止先讀碼", not bad, str(bad)[:300])
+    kept = {"s09-writeback": "Edit", "s10-decision-add": "Edit", "s17-ci": "gh run", "v09-push-casual": "git push", "v12-rename-casual": "\\bmv\\b", "v02-just-do-it": "Edit", "s23-restore-existing": "Edit"}
+    miss = [k for k, v in kept.items() if v not in by.get(k, {}).get("forbid_before", [])]
+    check("探針題庫: 寫入與替代類禁令保留", not miss, str(miss))
+    lumos_q = [r["id"] for r in rows if r["id"] != "v04-where-used" and not any("lumos" in e for e in r["expect"])]
+    check("探針題庫: 除純程式碼題外,期望仍是敲 lumos(或紀律題的寫回動作)", set(lumos_q) <= {"a05-verify-before-negative", "d01-writeback-after-code", "d02-contract-change", "d03-negative-needs-agent", "d04-design-goes-to-graph", "d05-decision-writeback", "d06-verify-after-done"} | {r["id"] for r in rows if r.get("cat") == "discipline"}, str(lumos_q))
+    s04 = by["s04-decision"]
+    ok1, _, _ = mod.judge([("Grep", "canary docs/lumos-toolchain-knowledge"), ("Bash", "scripts/lumos search canary 停用")], s04["expect"], s04.get("forbid_before", []))
+    s09 = by["s09-writeback"]
+    ok2, _, _ = mod.judge([("Edit", "docs/lumos-toolchain-knowledge/Projects/x.md"), ("Bash", "scripts/lumos set x status done")], s09["expect"], s09.get("forbid_before", []))
+    check("探針判準: 為什麼題先 Grep 再查圖譜 → 過;寫回題先 Edit 再 lumos set → 不過", ok1 is True and ok2 is False, (ok1, ok2))
+
+
+def t_probe_code_question_regrade():
+    """探針判準對齊程式碼為主 [S5]:純程式碼題(v04)——2026-09-28 週抽那場先 grep、讀碼、答對、沒敲 lumos,新判準要判過;
+    只 grep 圖譜資料夾、沒讀程式碼的要判不過。呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
+    mod = _load_probe_module("sp_v04")
+    v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
+    real_calls = [("Grep", "_BOOKKEEPING_FILES"),
+                  ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; grep -n \"_BOOKKEEPING_FILES\\|_BOOKKEEPING_DIRS\" scripts/lumos | cut -c1-220; echo ---; sed -n 20250,20280p scripts/lumos"),
+                  ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; sed -n 5395,5402p scripts/lumos")]
+    real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
+    ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
+    check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
+    graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
+    ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
+    check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
+    ok3, why3, c3 = mod.grade(v04, real_calls, "我不知道")
+    check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j
