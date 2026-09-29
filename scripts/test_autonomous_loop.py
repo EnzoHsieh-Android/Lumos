@@ -1679,25 +1679,26 @@ class TestReplayWeekly(unittest.TestCase):
         """輪替抽樣本身的路徑:明講把升級全量的門檻壓到 1 秒(存量再便宜也不升級),才量得到抽 5 那條規則。"""
         for lid in ("a", "b", "c", "d", "e", "f", "g"):
             self._verdict(lid)
-        self.enterContext(mock.patch.object(self.m, "FULL_SWEEP_SECONDS", 1))
-        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")) as sp, \
-             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
-            out = self.m.run_weekly(self.repo)
-        # 首週:全部是「新凍結」→ 全跑
-        self.assertEqual(sorted(out["replayed"]), list("abcdefg"))
-        cur = self._cursor()
-        self.assertEqual(sorted(cur["seen"]), list("abcdefg"))
-        # 第二週:無新→輪替抽 5(sorted 前 5)
-        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
-             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
-            out2 = self.m.run_weekly(self.repo)
-        self.assertEqual(sorted(out2["replayed"]), list("abcde"))
-        # 第三週:剩 f g → 抽完即輪畢清空 done
-        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
-             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
-            out3 = self.m.run_weekly(self.repo)
-        self.assertEqual(sorted(out3["replayed"]), list("fg"))
-        self.assertEqual(self._cursor()["done"], [])   # 輪完一圈重來——機械兌現
+        # 不用 enterContext:那是 3.11 才有,專案宣告支援 3.9,系統內建 3.9 推送會卡在這裡
+        with mock.patch.object(self.m, "FULL_SWEEP_SECONDS", 1):
+            with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")) as sp, \
+                 mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+                out = self.m.run_weekly(self.repo)
+            # 首週:全部是「新凍結」→ 全跑
+            self.assertEqual(sorted(out["replayed"]), list("abcdefg"))
+            cur = self._cursor()
+            self.assertEqual(sorted(cur["seen"]), list("abcdefg"))
+            # 第二週:無新→輪替抽 5(sorted 前 5)
+            with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+                 mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+                out2 = self.m.run_weekly(self.repo)
+            self.assertEqual(sorted(out2["replayed"]), list("abcde"))
+            # 第三週:剩 f g → 抽完即輪畢清空 done
+            with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+                 mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+                out3 = self.m.run_weekly(self.repo)
+            self.assertEqual(sorted(out3["replayed"]), list("fg"))
+            self.assertEqual(self._cursor()["done"], [])   # 輪完一圈重來——機械兌現
 
     def test_red_vs_stale_classified(self):
         self._verdict("x"); self._verdict("y")

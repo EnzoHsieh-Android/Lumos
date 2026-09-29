@@ -35828,6 +35828,29 @@ def t_codex_s3_r1_fixes():
     check("s3-r1③: 非零退出碼不判通過", res["passed"] is False and "儀器例外" in res["reason"], str(res)[:200])
 
 
+def _toml_loads(text):
+    """解 TOML 給斷言用。tomllib 要 3.11,專案宣告支援 3.9:沒有就找本機另一支 3.11+ 的直譯器代解。
+    ★都找不到就判紅不跳過★——跳過通道只給「來源 repo 才有的東西」用,借它會把「沒驗到」混成那一類。"""
+    try:
+        import tomllib
+        return tomllib.loads(text)
+    except ModuleNotFoundError:
+        pass
+    import json as _j, subprocess as _sp, os as _os
+    code = "import sys,json,tomllib;print(json.dumps(tomllib.loads(sys.stdin.read())))"
+    cands = []
+    for alt in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"):
+        if _os.path.exists(alt) and alt not in cands:
+            cands.append(alt)
+    for py in cands:
+        r = _sp.run([py, "-c", code], input=text, capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            return _j.loads(r.stdout)
+        if "No module named 'tomllib'" not in r.stderr:
+            raise ValueError(f"{py} 解 TOML 失敗:{r.stderr[-300:]}")
+    raise RuntimeError("這台跑測試的 Python 沒有 tomllib(要 3.11+),常見安裝位置也找不到 3.11+ 的 python3 代解")
+
+
 def t_codex_d6_agent_toml():
     """d6:Codex 同步寫 CODEX_HOME/agents/lumos_reviewer.toml(帶標記;必填 name/description/developer_instructions);
     重跑 unchanged;外方同名檔不覆蓋;teardown 只收帶標記的;無 ~/.codex 不建。"""
@@ -35835,8 +35858,7 @@ def t_codex_d6_agent_toml():
     home = Path(tempfile.mkdtemp(prefix="gctl-d6-")); (home / ".codex").mkdir()
     r = _codex_run(home, "print(m._sync_global_hooks(repo,'codex'))")
     f = home / ".codex" / "agents" / "lumos_reviewer.toml"
-    import tomllib as _toml
-    parsed = _toml.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    parsed = _toml_loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     check("d6: codex 同步後 agents/lumos_reviewer.toml 在、tomllib 解得開、三個必填欄精確、帶標記", f.exists() and parsed.get("name") == "lumos_reviewer" and isinstance(parsed.get("description"), str) and "LUMOS" not in parsed.get("description", "x") and isinstance(parsed.get("developer_instructions"), str) and parsed.get("sandbox_mode") == "read-only" and "lumos-managed" in f.read_text(), r.stdout[-100:] + r.stderr[-200:])
     # 外家 r1 #1:agents 路徑是檔案 → 不炸、回可讀狀態
     (home / ".codex" / "agents2").write_text("x")
@@ -35868,9 +35890,9 @@ def t_codex_d6_agent_toml():
     base = ag / "lumos_reviewer.toml"; code = ag / "lumos_reviewer_code.toml"; mx = ag / "lumos_reviewer_max.toml"
     check("d6-三席: 三份 TOML 都寫出來了", base.exists() and code.exists() and mx.exists(),
           str(sorted(x.name for x in ag.glob('*.toml'))))
-    pb = _toml.loads(base.read_text(encoding="utf-8"))
-    pc = _toml.loads(code.read_text(encoding="utf-8"))
-    pm = _toml.loads(mx.read_text(encoding="utf-8"))
+    pb = _toml_loads(base.read_text(encoding="utf-8"))
+    pc = _toml_loads(code.read_text(encoding="utf-8"))
+    pm = _toml_loads(mx.read_text(encoding="utf-8"))
     # ★推理強度要配題目★:散文審給 medium(xhigh 慢到不想派=等於沒這道防線),程式碼審才給 xhigh
     # 2026-09-11 Enzo 裁:外家席額度常撞上限,三席一律降到 Sol;推理強度照舊
     check("d6-三席: 散文審席 = gpt-5.6-sol + medium",
@@ -36567,8 +36589,9 @@ def t_update_unions_bookkeeping_instead_of_blocking():
     r2 = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)],
                  cwd=str(proj), env=env, capture_output=True, text=True)
     led2 = (src / "docs" / ".usage-log.jsonl").read_text(encoding="utf-8")
+    n_dup = led2.count('{"ts":"DUP"}')   # 先算好:f-string 大括號裡帶反斜線要 3.12,3.9 整支檔會解析失敗
     check("update/來源髒帳: ★合法的重複帳列沒被去重吃掉★(遠端 1 + 本機 2 = 3 份)",
-          led2.count('{"ts":"DUP"}') == 3, f"實際 {led2.count('{\"ts\":\"DUP\"}')} 份;rc={r2.returncode}")
+          n_dup == 3, f"實際 {n_dup} 份;rc={r2.returncode}")
 
 
 

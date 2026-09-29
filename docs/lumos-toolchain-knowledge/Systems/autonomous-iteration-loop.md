@@ -112,6 +112,7 @@ about_code:
   - governance/autonomous_loop/gap_select.py
   - governance/daily-governance.sh
   - governance/autonomous_loop/replay_weekly.py
+  - scripts/test_autonomous_loop.py
 aliases:
   - daily-governance.sh
   - 自動迭代排程
