@@ -51020,7 +51020,9 @@ def t_drift_check_state_events_in_range():
 def t_drift_unknown_blocks_check_not_scan():
     """[S2] check 判不了(git 算不出範圍事件)→ 算要處理、印原因(block 模式 rc1)。
 
-    翻紅釘:判不了改成放行 → ①紅。(scan 那一半的「判不了」屬於乙的條件評估,乙做完補在同一支測試。)
+    乙那一半:條件指到的程式檔讀不出來 → check 擋、scan 列判不了且不寫帳。
+
+    翻紅釘:判不了改成放行 → ①②紅;scan 把判不了當不成立 → ③紅。
     """
     print("t_drift_unknown_blocks_check_not_scan")
     import contextlib, io
@@ -51038,6 +51040,35 @@ def t_drift_unknown_blocks_check_not_scan():
     finally:
         m._drift_range_events = orig
     check("①判不了:算要處理、rc1、印原因", rc == 1 and "判不了" in err.getvalue(), err.getvalue())
+    # 乙那一半(圖譜一致 F3:原本只測甲的路徑):讀不出條件指到的程式檔 → check 擋、scan 列判不了且不寫帳
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    base = _na_head(root)
+    _nh_file(root, "src/runner.py", "def start_up():\n    pass\n")
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:[when-symbol:src/runner.py::start_up][by:2099-12-31] 補測試")
+    _nh_commit(root, "c")
+    tip = _na_head(root)
+    orig_cat, orig_ev = m._nodehome_cat_blobs, m._gate_event_or_warn
+    events = []
+    # 讀程式檔改用內容編號(乙代碼審 r3),所以認的是 runner.py 的內容編號,不是路徑
+    runner = _nh_git(root, "rev-parse", "HEAD:src/runner.py").stdout.strip()
+    m._nodehome_cat_blobs = lambda r, specs, **k: None if any(x == runner or "runner.py" in x for x in specs) \
+        else orig_cat(r, specs, **k)
+    m._gate_event_or_warn = lambda *a, **k: events.append(a)
+    err, out = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{base}..HEAD")
+        n_check = len(events)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rs = m.cmd_drift_scan(m.Env(root / "docs" / "kg-knowledge"), at=tip, as_json=True)
+    finally:
+        m._nodehome_cat_blobs, m._gate_event_or_warn = orig_cat, orig_ev
+    check("②乙的條件判不了:check 算要處理、rc1、指到那一行", rc == 1 and "判不了" in err.getvalue()
+          and "Systems/Pay.md" in err.getvalue(), err.getvalue())
+    import json as _j
+    probs = [x["why"] for x in _j.loads(out.getvalue() or "{}").get("problems", [])]
+    check("③乙的條件判不了:scan 列成判不了、rc0、不寫帳", rs == 0 and any("判不了" in w for w in probs)
+          and len(events) == n_check, str(probs) + str(events))
 
 
 def t_drift_exam_scores():
@@ -52342,6 +52373,791 @@ def t_update_prints_python314_notice_and_slim_strips_floor():
                 _os.environ[k] = v
     check("④CI 裡找不到 3.14:說明多一行 setup-python 設 3.14;本機不印這行", "setup-python" in ci and '"3.14"' in ci
           and "setup-python" not in local, ci[-300:])
+
+
+# ═══ 存量漂移守衛 乙:條件式回頭條件 ═══
+
+def t_drift_when_probes_evaluate_and_trigger():
+    """[S9] 條件標記照文法解析、只認正文與摘要的可見行,四種鍵在指定提交的樹上判對(含路徑限定、status 任一值、
+    筆記不存在算不成立、Python 帶型別的模組層指定),一行全部成立才算成立;check 以行為篩選單位,終點成立而起點沒有同一條
+    或同一條還不成立的算要處理(只改待辦文字仍是同一條、新寫而已成立的也擋),起點早就成立的不列、跟條件無關的推送不擋。
+
+    翻紅釘:check 不看起點(每次都擋成立的)→ ⑦紅;「同一條」改成比整行文字 → ⑧紅;status 不拆 | → ③紅。
+    """
+    print("t_drift_when_probes_evaluate_and_trigger")
+    import pathlib
+    m = _load_lumos_inproc()
+    # ① 文法與可見行
+    txt = ("---\ntype: project\nstatus: doing\nvalid_under: 前提 [when-file:a.py]\nsummary: |-\n"
+           "  REVISIT:[when-file:src/a.py][by:2099-01-01] 摘要裡的\n---\n# X\n"
+           "- REVISIT:[when-symbol:src/a.py::Foo][when-status:Projects/P=doing|done][by:2099-01-01] 正文列表裡的\n"
+           "`REVISIT:[when-file:x.py][by:2099-01-01]` 行內程式碼裡的\n"
+           "| REVISIT:[when-file:t.py][by:2099-01-01] | 表格裡的 |\n"
+           "```\nREVISIT:[when-file:f.py][by:2099-01-01] 圍欄裡的\n```\n"
+           "REVISIT:[when-bogus:x][by:2099-01-01] 鍵寫錯\n"
+           "REVISIT:[when-file:ok.py] 沒帶期限\n")
+    rows, dead = m._probe_lines(txt)
+    got = [(no, pr["conds"], bool(pr["errs"]), pr["by"]) for no, _t, pr in rows]
+    check("①摘要與正文列表的條件式認得;行內程式碼、表格、圍欄裡的不算",
+          [g[0] for g in got] == [6, 9, 15, 16], str(got))
+    check("①解析出鍵與值、期限", got[1][1] == [("symbol", "src/a.py::Foo"), ("status", "Projects/P=doing|done")]
+          and got[1][3] == "2099-01-01", str(got[1]))
+    check("①不認得的鍵算寫錯;沒帶期限另外看得到", got[2][2] is True and got[3][3] is None, str(got[2:]))
+    check("①開頭欄位其他欄、表格行裡的條件標記列成不評估", sorted(d[0] for d in dead) == [4, 11], str(dead))
+    # ② ③ 四種鍵的判定
+    root = _nh_repo()
+    _nh_file(root, "src/a.py", "MAX: int = 3\nclass Foo:\n    async def bar(self):\n        pass\n")
+    _nh_file(root, "src/b.kt", "val quota = 1 // Quota\n")
+    _nh_file(root, "tests/test_a.py", "def test_ok():\n    assert True\n")
+    _nh_node(root, "P_計劃", typ="project", folder="Projects", resp=None, status="doing", summary="KEY:p")
+    _nh_commit(root, "tree")
+    tip = _na_head(root)
+    tenv = m._drift_tree_env(root, tip, "docs/kg-knowledge")
+    tr = m._drift_probe_tree(root, tip)
+    cases = [(("file", "src/a.py"), True), (("file", "src/none.py"), False),
+             (("symbol", "MAX"), True), (("symbol", "Foo"), True), (("symbol", "bar"), True),
+             (("symbol", "src/b.kt::quota"), True), (("symbol", "src/a.py::quota"), False), (("symbol", "Nope"), False),
+             (("test", "test_ok"), True), (("test", "tests/test_a.py::test_ok"), True), (("test", "MAX"), False),
+             (("status", "Projects/P_計劃=done|doing"), True), (("status", "P_計劃=done"), False),
+             (("status", "Projects/不存在=doing"), False)]
+    bad = [(c, m._drift_probe_one(tr, tenv, *c)) for c, want in cases if m._drift_probe_one(tr, tenv, *c) is not want]
+    check("②③四種鍵判對(路徑限定、Python 帶型別指定與方法、status 任一值、筆記不存在)", not bad, str(bad))
+    check("②一行多個條件全部成立才算成立", m._drift_probe_line(tr, tenv, (("file", "src/a.py"), ("symbol", "Nope"))) is False
+          and m._drift_probe_line(tr, tenv, (("file", "src/a.py"), ("symbol", "MAX"))) is True, "")
+    # ④–⑨ 推送判定
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    _nh_file(root, "src/other.py", "x = 1\n")
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:[when-file:src/runner.py][by:2099-12-31] 有啟動程式了要補測試")
+    _nh_commit(root, "base")
+    b0 = _na_head(root)
+    _nh_file(root, "src/other.py", "x = 2\n")
+    _nh_commit(root, "無關的改動")
+    rc, out = _dr(root, "check", "--diff", f"{b0}..HEAD")
+    check("④跟條件無關的推送:不擋", rc == 0 and "probe" not in out, out)
+    b1 = _na_head(root)
+    _nh_file(root, "src/runner.py", "def main():\n    pass\n")
+    _nh_commit(root, "加啟動程式")
+    rc, out = _dr(root, "check", "--diff", f"{b1}..HEAD")
+    check("⑤這次推送讓條件成立:擋、指到那一行", rc == 1 and "[probe" in out and "Systems/Pay.md" in out, out)
+    b2 = _na_head(root)
+    _nh_file(root, "src/runner.py", "def main():\n    return 1\n")
+    _nh_commit(root, "改啟動程式")
+    rc, out = _dr(root, "check", "--diff", f"{b2}..HEAD")
+    check("⑦起點早就成立:不列", rc == 0, out)
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:[when-file:src/runner.py][by:2099-12-31] 換個說法的待辦")
+    _nh_commit(root, "只改待辦文字")
+    rc, out = _dr(root, "check", "--diff", f"{b2}..HEAD")
+    check("⑧只改待辦文字仍是同一條、起點早就成立:不列", rc == 0, out)
+    b3 = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:[when-file:src/runner.py][by:2099-12-31] 換個說法的待辦\n"
+             "REVISIT:[when-file:src/other.py][by:2099-12-31] 新寫一條已經成立的")
+    _nh_commit(root, "新寫一條已成立的")
+    rc, out = _dr(root, "check", "--diff", f"{b3}..HEAD")
+    check("⑨新寫一條終點已經成立的條件式:擋", rc == 1 and "src/other.py" in out, out)
+
+
+def t_note_shape_revisit_needs_date_or_probe():
+    """[S10] 新寫的 REVISIT 行第一個位置不是日期也不是條件標記、條件標記寫錯、條件式沒帶 [by:]、條件寫在不評估的地方
+    (開頭欄位其他欄、表格行)時筆記形狀擋擋下;圍欄裡的與舊行不管。
+
+    翻紅釘:拿掉 _ns_revisit_violations 的呼叫 → ①–④紅;_notelines_new 不收 other → ④開頭欄位那條紅。
+    """
+    print("t_note_shape_revisit_needs_date_or_probe")
+    import subprocess as sp
+    root = _nh_repo()
+    _nh_node(root, "A", body="REVISIT:2099-01-01 舊的日期式")
+    _nh_commit(root, "base")
+    _nh_node(root, "A", extra="valid_under: 前提 [when-file:a.py]",
+             body="REVISIT:2099-01-01 舊的日期式\nREVISIT:下次再看\nREVISIT:[when-bogus:x][by:2099-01-01] 鍵寫錯\n"
+                  "REVISIT:[when-file:ok.py] 沒帶期限\n| REVISIT:[when-file:t.py][by:2099-01-01] | 表格 |\n"
+                  "```\nREVISIT:圍欄裡隨便寫\n```\nREVISIT:[when-file:good.py][by:2099-01-01] 合格的")
+    _nh_git(root, "add", "-A")
+    r = sp.run([sys.executable, GRAPHCTL, "note-shape", "--staged", "--repo", str(root)], capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    check("①開頭不是日期也不是條件:擋", "回頭條件格式不合" in out and "下次再看" in out, out)
+    check("②條件鍵寫錯:擋", "when-bogus" in out, out)
+    check("③沒帶期限:擋", "沒帶期限" in out, out)
+    check("④開頭欄位其他欄與表格裡的條件:擋", out.count("條件寫在不評估的地方") == 2, out)
+    check("⑤圍欄裡的、合格的、舊行:不擋", "圍欄裡隨便寫" not in out and "good.py" not in out and "舊的日期式" not in out, out)
+    check("⑥有違規 rc1", r.returncode == 1, out)
+
+
+def t_doctor_revisit_skips_probe_lines():
+    """[S11] doctor 的 E5 不把條件式回頭條件算成格式壞損、把它的 [by:] 當日期判到期;沒到期也沒壞行時照舊整段不印。
+
+    翻紅釘:E5 不認條件式 → ①紅(算成壞損);不看 [by:] → ②紅。
+    """
+    print("t_doctor_revisit_skips_probe_lines")
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: doing", body="# A\nREVISIT:[when-file:x.py][by:2099-01-01] 還沒到期\n")
+    r = run(v, "doctor")
+    check("①條件式不算壞損、沒到期:E5 整段不印", "[E5]" not in r.stdout, r.stdout[-600:])
+    write(v, "Systems/B.md", "type: system\nstatus: doing", body="# B\nREVISIT:[when-file:y.py][by:2020-01-01] 已經到期的\n")
+    r = run(v, "doctor")
+    check("②[by:] 到期照 E5 唸", "[E5]" in r.stdout and "已經到期的" in r.stdout and "壞損" not in r.stdout, r.stdout[-800:])
+
+
+def t_note_audit_skips_conditional_revisit():
+    """[S12] 筆記內容審算待審行時排除條件式回頭條件,日期式照審。
+
+    翻紅釘:拿掉 _note_audit_items 那段排除 → ①紅。
+    """
+    print("t_note_audit_skips_conditional_revisit")
+    m = _load_lumos_inproc()
+    root, base = _na_repo()
+    _na_body(root, ["REVISIT:[when-file:src/a.py][by:2099-01-01] 條件式的", "REVISIT:2099-01-01 現在沒有權限檢查,之後補"])
+    _nh_commit(root, "new")
+    got = m._note_audit_items(root, base, _na_head(root), _NA_VAULT)
+    texts = [it["text"] for it in got[0]] if got else []
+    check("①條件式回頭條件不送審", not any("條件式的" in t for t in texts), str(texts))
+    check("②日期式照審", any("現在沒有權限檢查" in t for t in texts), str(texts))
+
+
+def t_set_plan_closed_lists_satisfied_status_probes():
+    """[S15] lumos set 把計劃收尾時,另列 [when-status:<這份計劃>=…] 的 status 條件因此成立的回頭條件(只做文字比對);
+    同一行還有別的條件時註明另有條件。
+
+    翻紅釘:拿掉 _drift_plan_followups 的第③項 → ①紅。
+    """
+    print("t_set_plan_closed_lists_satisfied_status_probes")
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n")
+    write(v, "Issues/I.md", "type: issue\nstatus: open",
+          body="# I\nREVISIT:[when-status:Projects/P_計劃=done|superseded][by:2099-01-01] P 收尾了把這篇結案\n"
+               "REVISIT:[when-status:Projects/P_計劃=done][when-file:x.py][by:2099-01-01] 另有條件的\n"
+               "REVISIT:[when-status:Projects/P_計劃=superseded][by:2099-01-01] 只在翻案時\n")
+    r = run(v, "set", "Projects/P_計劃", "status", "done")
+    out = r.stdout
+    check("①status 條件因收尾成立的回頭條件列出", "第 6 行的 status 條件因這次收尾成立" in out, out)
+    check("②同一行另有條件:註明", "第 7 行" in out and "另有條件" in out, out)
+    check("③值不含新狀態的不列", "第 8 行" not in out, out)
+
+
+def t_drift_probe_scan_and_doctor():
+    """[S2][S14](乙的部分)scan 列出條件已成立的行、寫錯的條件、沒帶期限、指不到的筆記、寫在不評估的地方;
+    doctor Z 段印條件式的條數、沒帶期限與寫錯的條數,不跑條件評估。
+
+    翻紅釘:scan 不列 probe 發現 → ①紅;Z 段不算條件式 → ③紅。
+    """
+    print("t_drift_probe_scan_and_doctor")
+    import json as _j
+    root = _nh_repo()
+    _nh_file(root, "src/a.py", "x = 1\n")
+    _nh_node(root, "A", body="REVISIT:[when-file:src/a.py][by:2099-01-01] 已成立的\n"
+                             "REVISIT:[when-file:src/none.py][by:2099-01-01] 還沒成立的\n"
+                             "REVISIT:[when-status:Projects/不存在=done][by:2099-01-01] 指不到\n"
+                             "REVISIT:[when-file:src/b.py] 沒帶期限\n")
+    _nh_commit(root, "c")
+    vault = root / "docs" / "kg-knowledge"
+    r = run(vault, "drift", "scan", "--json")
+    d = _j.loads(r.stdout)
+    probe = [f for f in d["findings"] if f["kind"] == "probe"]
+    check("①成立的列成發現、沒成立的不列", [f["text"].split("] ", 1)[-1] for f in probe] == ["已成立的"], str(probe) + str(d.get("problems")))
+    whys = " ".join(x["why"] for x in d["problems"])
+    check("②指不到的筆記與沒帶期限列成問題", "找不到" in whys and "沒帶期限" in whys, whys)
+    rd = run(vault, "doctor")
+    check("③doctor Z 段印條件式條數與沒帶期限", "條件式回頭條件 4 條" in rd.stdout and "沒帶期限 1 條" in rd.stdout, rd.stdout[-800:])
+
+
+def t_drift_exam_probe_mode():
+    """[S13](乙的部分)probe 題照改寫檔把那一行在起點與終點兩版換掉,對 event_commit 跑 check,在要處理算擋到;
+    改寫檔沒有那一題記成略過。
+
+    翻紅釘:只換終點不換起點 → ①照樣擋到(起點沒有同一條也算新寫)——所以另釘 ②:event_commit 換成跟條件無關的提交要漏。
+    """
+    print("t_drift_exam_probe_mode")
+    import json as _j, subprocess as sp
+    root = _dr_repo()
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:2099-12-31 有啟動程式時補測試")
+    _nh_commit(root, "base")
+    _nh_file(root, "src/other.py", "x = 1\n")
+    _nh_commit(root, "無關")
+    unrelated = _na_head(root)
+    _nh_file(root, "src/runner.py", "def main():\n    pass\n")
+    _nh_commit(root, "加啟動程式")
+    ev = _na_head(root)
+    exam = [{"id": "B", "exam_event": "probe", "note": "Systems/Pay.md", "line": 18, "text": "REVISIT:2099-12-31 有啟動程式時補測試"},
+            {"id": "N", "exam_event": "probe", "note": "Systems/Pay.md", "line": 18, "text": "REVISIT:2099-12-31 有啟動程式時補測試"},
+            {"id": "X", "exam_event": "probe", "note": "Systems/Pay.md", "line": 18, "text": "x"}]
+    rw = "REVISIT:[when-file:src/runner.py][by:2099-12-31] 有啟動程式了補測試"
+    probes = [{"id": "B", "rewrite": rw, "event_commit": ev}, {"id": "N", "rewrite": rw, "event_commit": unrelated}]
+    (root / "exam.json").write_text(_j.dumps(exam, ensure_ascii=False), encoding="utf-8")
+    (root / "probes.json").write_text(_j.dumps(probes, ensure_ascii=False), encoding="utf-8")
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(root / "exam.json"), "--repo", str(root),
+                "--probes", str(root / "probes.json"), "--json"], capture_output=True, text=True)
+    try:
+        res = {x["id"]: x["result"] for x in _j.loads(r.stdout)["rows"]}
+    except (ValueError, KeyError):
+        res = {}
+    check("①事件提交讓條件成立:擋到", res.get("B") == "擋到", r.stdout + r.stderr)
+    check("②跟條件無關的提交:漏(不是每次都擋)", res.get("N") == "漏", str(res))
+    check("③改寫檔沒有這一題:略過", str(res.get("X", "")).startswith("略過"), str(res))
+
+
+def t_drift_code_review_yi_r1_regressions():
+    """乙代碼審 r1 折入的回歸釘(存量漂移防線,條件式回頭條件)。每條 check 名後面括號是對應的發現。
+
+    翻紅釘:corpus 只收有副檔名的 → A1、C1 紅;Python 定義改回逐行正則 → A3 紅;parse 不正規化路徑 → A4、C4 紅;
+    status 不看讀不讀得出 → A5 紅;帶路徑仍讀整批 → A6 紅;工作目錄模式改回讀 index → B1 紅;
+    status 放在列樹之後 → B3 紅;diff 不帶 --text → C2 紅;scan 的樹清單不記住 → C6 紅;
+    code_shape 不排 governance/ → C7 紅;set 第③項不看舊狀態 → D1 紅;E5 改回只剝單反引號 → D2 紅;
+    other 區不對淨差異 → D3 紅;改寫檔不驗文法 → D4 紅。
+    """
+    print("t_drift_code_review_yi_r1_regressions")
+    import contextlib, io, json as _j, time as _time, unicodedata as _ud, subprocess as sp
+    m = _load_lumos_inproc()
+    V = "docs/kg-knowledge"
+    by = "[by:2099-12-31]"
+    # ── A 在某一版上判條件 ──
+    root = _nh_repo()
+    _nh_file(root, "scripts/tool", "#!/usr/bin/env python3\ndef cmd_old():\n    pass\n")
+    _nh_file(root, "src/doc.py", 'DOC = """\ndef launch():\n    pass\n"""\n\n\ndef helper():\n'
+                                 '    """範例:\n    def ghost():\n        pass\n    """\n')
+    _nh_file(root, "src/café.py", "x = 1\n")
+    _nh_file(root, "src/plain.py", "def only_here():\n    pass\n")
+    _nh_file(root, "tests/test_a.py", "def test_ok():\n    pass\n")
+    _nh_file(root, "tests/test_b.py", "def test_other():\n    pass\n")
+    _nh_node(root, "P_計劃", typ="project", folder="Projects", resp=None, status="doing", summary="KEY:p")
+    _nh_commit(root, "tree")
+    tip = _na_head(root)
+    tenv = m._drift_tree_env(root, tip, V)
+    tr = m._drift_probe_tree(root, tip)
+
+    def one(k, v, t=tr, env=tenv):
+        return m._drift_probe_one(t, env, k, v)
+    got = (one("symbol", "scripts/tool::cmd_old"), one("symbol", "cmd_old"))
+    check("A1 沒副檔名、#! 開頭的 Python 檔:帶路徑與不帶路徑的 symbol 都找得到(正確性 F1)", got == (True, True), str(got))
+    got = (one("test", "src/plain.py::only_here"), one("symbol", "tests/test_a.py::test_ok"))
+    check("A2 帶路徑就讀那支檔,不看它算不算測試檔(正確性 F1 第 4 點)", got == (True, True), str(got))
+    got = (one("symbol", "launch"), one("symbol", "ghost"), one("symbol", "helper"), one("symbol", "DOC"))
+    check("A3 字串與 docstring 裡的 def 不算定義,真的定義照認(外家 F1、架構 F5)", got == (False, False, True, True), str(got))
+    conds = [m._probe_parse(f"[when-file:{p}]{by}")["conds"][0] for p in ("./src/plain.py", _ud.normalize("NFD", "src/café.py"))]
+    got = [one(k, v) for k, v in conds]
+    check("A4 ./ 開頭與 NFD 寫法的路徑解析時就正規化、照認(外家 F3、邊界 F1、正確性 F7)",
+          conds[0] == ("file", "src/plain.py") and got == [True, True], str(conds) + str(got))
+    uenv = m.Env.from_texts(root / V, {}, unreadable=["Projects/Q.md"])
+    check("A5 status 指到讀不出的筆記:判不了,不是不成立(外家 F2)", one("status", "Projects/Q=done", env=uenv) is None, "")
+    sizes, orig_cat = [], m._nodehome_cat_blobs
+    m._nodehome_cat_blobs = lambda r, specs, **k: (sizes.append(len(specs)), orig_cat(r, specs, **k))[1]
+    try:
+        r6 = m._drift_probe_one(m._drift_probe_tree(root, tip), tenv, "test", "tests/test_a.py::test_ok")
+    finally:
+        m._nodehome_cat_blobs = orig_cat
+    check("A6 帶路徑的條件只讀那一支檔(併發 F2)", r6 is True and sizes == [1], str(sizes))
+    check("A7 預算用完就不列樹、判不了(併發 F1)", m._drift_probe_tree(root, tip, deadline=_time.monotonic() - 1) is None, "")
+    # ── B scan ──
+    _nh_file(root, "src/untracked.py", "y = 1\n")
+    (root / "src/plain.py").unlink()
+    try:
+        td = m._drift_probe_tree(root, "disk")
+        got = (m._drift_probe_one(td, None, "file", "src/untracked.py"), m._drift_probe_one(td, None, "file", "src/plain.py"))
+    finally:
+        _nh_git(root, "checkout", "--", "src/plain.py")
+        (root / "src/untracked.py").unlink()
+    check("B1 工作目錄模式看磁碟:沒追蹤的檔算在、刪掉還沒 stage 的算不在(外家 F5)", got == (True, False), str(got))
+    vault = root / V
+    _nh_node(root, "Q", body=f"REVISIT:[when-symbol:Config::load]{by} 型別::方法寫法\n"
+                             f"REVISIT:[when-file:src/zzz.py]{by} 還沒成立")
+    r = run(vault, "drift", "scan", "--json", "--budget", "5")
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {"problems": [], "findings": []}
+    check("B2 scan 收 --budget(外家 F6)", r.returncode == 0, r.stdout + r.stderr)
+    whys = " ".join(x["why"] for x in d["problems"])
+    check("B4 symbol 路徑那段不像檔案路徑(型別::方法)列成問題(正確性 F7)", "Config" in whys and "不像" in whys, whys)
+    pr_tx = m.env_text(m.Env(vault), "Systems/Q.md")
+    _f, probs = m._drift_probe_scan(m.Env.from_texts(vault, {"Systems/Q.md": pr_tx}), None,
+                                    deadline=_time.monotonic() - 1)
+    check("B5 scan 預算用完:條件列成判不了(超過預算)(外家 F6)", any("預算" in p[3] for p in probs), str(probs))
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n")
+    write(v, "Issues/I.md", "type: issue\nstatus: open", body=f"# I\nREVISIT:[when-status:Projects/P_計劃=doing|done]{by} 開工了\n")
+    r = run(v, "drift", "scan", "--json")
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {"problems": [], "findings": []}
+    got = ([f["kind"] for f in d["findings"]], [x["why"] for x in d["problems"]])
+    check("B3 不是 git 專案:純 status 條件照判、不列判不了(正確性 F5)", got == (["probe"], []), str(got))
+    # ── C check ──
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    _nh_file(root, "scripts/tool", "#!/usr/bin/env python3\ndef cmd_old():\n    pass\n")
+    _nh_file(root, ".gitattributes", "src/gen.py -diff\n")
+    _nh_file(root, "src/gen.py", "x = 1\n")
+    _nh_node(root, "Pay", summary="FLOW:a",
+             body=f"REVISIT:[when-symbol:scripts/tool::cmd_new]{by} 帶路徑的\nREVISIT:[when-symbol:cmd_extra]{by} 不帶路徑的\n"
+                  f"REVISIT:[when-file:./src/runner.py]{by} 點斜線開頭的\nREVISIT:[when-symbol:Bar]{by} 標了負差異的")
+    _nh_commit(root, "base")
+    b0 = _na_head(root)
+    _nh_file(root, "scripts/tool", "#!/usr/bin/env python3\ndef cmd_old():\n    pass\n\n\ndef cmd_new():\n    pass\n\n\n"
+                                   "def cmd_extra():\n    pass\n")
+    _nh_file(root, "src/runner.py", "def main():\n    pass\n")
+    _nh_commit(root, "事件")
+    rc, out = _dr(root, "check", "--diff", f"{b0}..HEAD")
+    check("C1 沒副檔名的 Python 檔新增定義:帶路徑與不帶路徑的都擋(正確性 F1)",
+          rc == 1 and "帶路徑的" in out and "不帶路徑的" in out and "標了負差異的" not in out, out)
+    check("C3 條件式的要處理不印預告句的修法,給 --kind probe 的表態指令(正確性 F3)",
+          "預告句" not in out and "--kind probe" in out, out)
+    check("C4 ./ 開頭的路徑:候選與判定都對得上、擋(外家 F3)", "點斜線開頭的" in out, out)
+    tip = _na_head(root)
+    # 只改標了 -diff 的那支檔(沒有檔被新增或刪除,候選只能靠新增行裡找得到名稱)
+    _nh_file(root, "src/gen.py", "x = 1\n\n\nclass Bar:\n    pass\n")
+    _nh_commit(root, "只改負差異檔")
+    rc, out = _dr(root, "check", "--diff", f"{tip}..HEAD")
+    check("C2 程式檔標了 -diff 屬性:照樣看得到新增行、擋(正確性 F2)", rc == 1 and "標了負差異的" in out, out)
+    calls, orig_git, orig_ns = [], m._nodehome_git, m._ns_git
+    m._nodehome_git = lambda r, *a, **k: (calls.append(a), orig_git(r, *a, **k))[1]
+    m._ns_git = lambda r, *a, **k: (calls.append(a), orig_ns(r, *a, **k))[1]
+    try:
+        tenv = m._drift_tree_env(root, tip, V)
+        calls.clear()
+        m._drift_probe_check(root, b0, tip, V, tenv, deadline=_time.monotonic() + 60)
+        probe_calls = list(calls)
+        calls.clear()
+        m._drift_check_core(root, b0, tip, V, deadline=_time.monotonic() + 60)
+        core_calls = list(calls)
+    finally:
+        m._nodehome_git, m._ns_git = orig_git, orig_ns
+    ns = [a for a in probe_calls if "--name-status" in a]
+    check("C5 乙的範圍改動只算一次 name-status(改名對照不另起 git)(圖譜一致 F1、架構 F4)", len(ns) == 1, str(ns))
+    lt = [a[-1] for a in core_calls if a and a[0] == "ls-tree"]
+    check("C6 一次 check 裡同一棵樹只列一次(併發 F1)", len(lt) == len(set(lt)), str(lt))
+    b1 = _na_head(root)
+    _nh_file(root, "governance/eval/x.py", "def z():\n    pass\n")
+    _nh_commit(root, "治理資料夾的工具")
+    ch = m._drift_probe_changes(root, b1, _na_head(root))
+    check("C7 governance/ 底下新增程式檔不算程式檔形狀改變(圖譜一致 F4)", ch is not None and ch["code_shape"] is False, str(ch))
+    # ── D 其他 ──
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n")
+    write(v, "Issues/I.md", "type: issue\nstatus: open", body=f"# I\nREVISIT:[when-status:Projects/P_計劃=doing|done]{by} 開工了\n")
+    r = run(v, "set", "Projects/P_計劃", "status", "done")
+    check("D1 收尾前條件就已成立:不說成「因這次收尾成立」(正確性 F4、外家 F9)", "因這次收尾成立" not in r.stdout, r.stdout)
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: doing",
+          body="# A\n``REVISIT:[when-file:x.py][by:2020-01-01] 雙反引號範例``\n")
+    r = run(v, "doctor")
+    check("D2 E5 跟另外兩層一樣把雙反引號當範例(正確性 F6、外家 F8)", "雙反引號範例" not in r.stdout, r.stdout[-600:])
+    root = _nh_repo()
+    ln = f"REVISIT:[when-file:x.py]{by} 同一句"
+    _nh_node(root, "A", extra="valid_under: |-\n  " + ln)
+    _nh_commit(root, "base")
+    base = _na_head(root)
+    _nh_node(root, "A", extra="valid_under: |-\n  " + ln, body=ln)
+    _nh_commit(root, "正文新寫同一句")
+    tip = _na_head(root)
+    res = m._notelines_new(root, False, base, tip, V, reader=m._nodehome_reader(root, tip), mark="x", keep_other=True)
+    regs = [reg for _p, _t, rows in (res[0] if res else []) for _n, _l, reg in rows]
+    check("D3 推送範圍:開頭欄位裡同一句的舊行不算新行(外家 F4)", "other" not in regs and "body" in regs, str(regs))
+    root = _dr_repo()
+    (root / "p.json").write_text(_j.dumps([{"id": "A", "rewrite": "REVISIT:[when-file:a.py] 沒期限", "event_commit": "HEAD"}]),
+                                 encoding="utf-8")
+    (root / "e.json").write_text(_j.dumps([{"id": "A", "exam_event": "probe", "note": "Systems/Pay.md", "line": 1, "text": "x"}]),
+                                 encoding="utf-8")
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "exam", str(root / "e.json"), "--repo", str(root),
+                "--probes", str(root / "p.json")], capture_output=True, text=True)
+    check("D4 改寫檔的條件式不合文法(沒帶期限):擋下 rc2(外家 F7、正確性 F8)",
+          r.returncode == 2 and "期限" in r.stderr, r.stdout + r.stderr)
+    real = m._drift_exam_load_probes(str(Path(GRAPHCTL).resolve().parent.parent / "governance/eval/drift-exam/rtb-2026-09-28-probes.json"))
+    check("D5 正式改寫檔每一題都合文法(外家 F7)", isinstance(real, dict) and len(real) == 5, str(real)[:200])
+
+
+def t_drift_code_review_yi_r2_regressions():
+    """乙代碼審 r2 折入的回歸釘(存量漂移防線,條件式回頭條件修正差異)。每條 check 名後面括號是對應的發現。
+
+    翻紅釘:ast 只接 SyntaxError/ValueError → A1 紅;候選改回只看新增行 → B1、B2 紅;單一檔讀不到當成不成立 → C1 紅;
+    筆記讀不到當不存在 → C2 紅;不換 NFD 重讀 → C3 紅;反斜線不驗 → D1 紅;讀檔不去 BOM → E1、E2 紅;
+    工作目錄讀檔不看預算 → F1 紅;帶路徑的條件逐支讀 → F2 紅;提示把種類接成 c1|probe → G1 紅;
+    重放拿改完的圖譜算第③項 → G2 紅;--budget 收 inf → G3 紅;淨差異一律先算 → G4 紅;v1.2 當成檔案路徑 → G5 紅。
+    """
+    print("t_drift_code_review_yi_r2_regressions")
+    import contextlib, io, json as _j, time as _time, unicodedata as _ud, subprocess as sp
+    m = _load_lumos_inproc()
+    V = "docs/kg-knowledge"
+    by = "[by:2099-12-31]"
+    bom = "﻿"
+    # ── A 解析不了的大檔不讓整支當掉 ──
+    deep = "# cmd_new 只在註解\n" + "-" * 200000 + "1\n"
+    try:
+        got = m._drift_py_names(deep)
+        ok = True
+    except (MemoryError, RecursionError) as ex:       # noqa: F841
+        ok, got = False, repr(ex)
+    check("A1 巢狀太深解析不了:退回逐行比對,不丟例外(邊界 F1)", ok and got is None, str(got)[:80])
+    # ── B 判定放寬之後,候選篩選要跟上 ──
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    _nh_file(root, "src/api.py", "X = 1\n'''\ndef new_api():\n    return 1\n'''\n")
+    _nh_file(root, "bin/tool", "def max_x():\n    pass\n")
+    _nh_node(root, "Pay", summary="FLOW:a",
+             body=f"REVISIT:[when-symbol:new_api]{by} 刪掉三引號才出現的\nREVISIT:[when-symbol:max_x]{by} 加了井號驚嘆號才算的")
+    _nh_commit(root, "base")
+    b0 = _na_head(root)
+    _nh_file(root, "src/api.py", "X = 1\ndef new_api():\n    return 1\n")
+    _nh_commit(root, "只刪三引號")
+    rc, out = _dr(root, "check", "--diff", f"{b0}..HEAD")
+    check("B1 只刪掉包住定義的三引號:條件翻成立,擋(正確性 F1)", rc == 1 and "刪掉三引號才出現的" in out, out)
+    b1 = _na_head(root)
+    _nh_file(root, "bin/tool", "#!/usr/bin/env python3\ndef max_x():\n    pass\n")
+    _nh_commit(root, "只加井號驚嘆號")
+    rc, out = _dr(root, "check", "--diff", f"{b1}..HEAD")
+    check("B2 沒副檔名的檔只加上 #!:條件翻成立,擋(正確性 F1)", rc == 1 and "加了井號驚嘆號才算的" in out, out)
+    # ── C 讀不到的算判不了 ──
+    tip = _na_head(root)
+    tr = m._drift_probe_tree(root, tip)
+    orig_cat = m._nodehome_cat_blobs
+    m._nodehome_cat_blobs = lambda r, specs, **k: [None] * len(specs)
+    try:
+        c1 = m._drift_probe_one(tr, None, "symbol", "src/api.py::new_api")
+        tenv_bad = m._drift_tree_env(root, tip, V)
+    finally:
+        m._nodehome_cat_blobs = orig_cat
+    check("C1 樹上有這支檔、讀出來卻是空的:判不了,不是不成立(外家 F1)", c1 is None, repr(c1))
+    n = tenv_bad.notes.get("Systems/Pay.md") if tenv_bad is not None else None
+    check("C2 筆記讀出來是空的:建成讀不出的筆記,不當成不存在(外家 F1 第 2 點)",
+          n is not None and m._note_unreadable(n), str(tenv_bad and sorted(tenv_bad.notes))[:200])
+    nfd = _ud.normalize("NFD", "src/café.py")
+    r = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input="def cafe_fn():\n    pass\n",
+               capture_output=True, text=True)
+    blob = r.stdout.strip()
+    sp.run(["git", "-C", str(root), "-c", "core.precomposeunicode=false", "update-index", "--add", "--cacheinfo",
+            f"100644,{blob},{nfd}"], capture_output=True)
+    sp.run(["git", "-C", str(root), "-c", "core.precomposeunicode=false", "commit", "-qm", "NFD 檔名", "--no-verify"],
+           capture_output=True)
+    ls = _nh_git(root, "ls-tree", "-r", "--name-only", "-z", "HEAD").stdout
+    stored_nfd = nfd in ls.split("\0")
+    tr = m._drift_probe_tree(root, _na_head(root))
+    c3 = m._drift_probe_one(tr, None, "symbol", "src/café.py::cafe_fn")
+    check("C3 以 NFD 存進 git 的檔名:換寫法重讀、判得到(外家 F1 第 2 點)", stored_nfd and c3 is True,
+          f"stored_nfd={stored_nfd} got={c3!r}")
+    # ── D 反斜線 ..
+    errs = [m._probe_parse(f"[when-{v}]{by}")["errs"] for v in ("file:..\\x.py", "symbol:..\\a.py::f", "file:a/..")]
+    check("D1 反斜線寫的 ..、收成 . 的路徑:算寫錯(正確性 F2、邊界 F3)", all(errs), str(errs))
+    # ── E BOM ──
+    root = _nh_repo()
+    _nh_file(root, "src/b.py", bom + 'def real_b():\n    """範例:\n    def ghost_b():\n        pass\n    """\n')
+    (root / "scripts").mkdir(exist_ok=True)
+    (root / "scripts/runner").write_bytes((bom + "#!/usr/bin/env python3\ndef cmd_bom():\n    pass\n").encode("utf-8"))
+    _nh_commit(root, "bom")
+    tip = _na_head(root)
+    tr = m._drift_probe_tree(root, tip)
+    got = (m._drift_probe_one(tr, None, "symbol", "real_b"), m._drift_probe_one(tr, None, "symbol", "ghost_b"))
+    check("E1 帶 BOM 的 Python 檔照 ast 判:docstring 範例不算(正確性 F4)", got == (True, False), str(got))
+    check("E2 帶 BOM 的 #! 腳本進語料:不帶路徑照找得到(邊界 F2)",
+          m._drift_probe_one(tr, None, "symbol", "cmd_bom") is True, "")
+    # ── F 預算與讀檔次數 ──
+    td = m._drift_probe_tree(root, "disk", deadline=_time.monotonic() + 60)
+    td.deadline = _time.monotonic() - 1
+    check("F1 工作目錄模式讀檔也看預算:用完就判不了(併發 F1)", m._drift_probe_one(td, None, "symbol", "real_b") is None, "")
+    for i in range(4):
+        _nh_file(root, f"src/f{i}.py", f"def s{i}():\n    pass\n")
+    _nh_node(root, "Q", body="\n".join(f"REVISIT:[when-symbol:src/f{i}.py::s{i}]{by} 第 {i} 支" for i in range(4)))
+    _nh_commit(root, "四支")
+    tip = _na_head(root)
+    tenv = m._drift_tree_env(root, tip, V)
+    calls = []
+    m._nodehome_cat_blobs = lambda r, specs, **k: (calls.append(len(specs)), orig_cat(r, specs, **k))[1]
+    try:
+        found, _pr = m._drift_probe_scan(tenv, m._drift_probe_tree(root, tip))
+    finally:
+        m._nodehome_cat_blobs = orig_cat
+    check("F2 帶路徑的條件一批讀完,不是一支檔開一次 git(併發 F2)",
+          len([f for f in found if f["path"] == "Systems/Q.md"]) == 4 and calls == [4], str(calls))
+    # ── G 其他 ──
+    err = io.StringIO()
+    orig_ev = m._gate_event_or_warn
+    m._gate_event_or_warn = lambda *a, **k: None
+    try:
+        with contextlib.redirect_stderr(err):
+            m._drift_report_must(root, "warn", [{"kind": "c1", "path": "Verification/G.md", "line": 3, "text": "x", "why": "y"},
+                                               {"kind": "probe", "path": "Systems/Q.md", "line": 5, "text": "z", "why": "w"}], [], [])
+    finally:
+        m._gate_event_or_warn = orig_ev
+    e = err.getvalue()
+    check("G1 兩種發現都有:表態指令一種一行,不印成 c1|probe(正確性 F5、圖譜一致 F1、外家 F3)",
+          "c1|probe" not in e and "--kind c1 " in e and "--kind probe " in e, e)
+    root = _nh_repo()
+    _nh_node(root, "P", typ="project", folder="Projects", resp=None, status="doing", summary="KEY:p")
+    _nh_node(root, "N", typ="issue", folder="Issues", resp=None, status="open", summary="KEY:n",
+             body=f"REVISIT:[when-status:Projects/P=done]{by} P 收尾了就結案")
+    _nh_commit(root, "c")
+    fu = m._drift_exam_replay(root, _na_head(root), V, ["Projects/P"])
+    check("G2 考試重放跟 lumos set 一樣列第③項(正確性 F3)", isinstance(fu, set) and "Issues/N.md" in fu, str(fu))
+    vault = root / V
+    rcs = [run(vault, "drift", "scan", "--budget", b).returncode for b in ("inf", "nan")]
+    check("G3 --budget 收到 inf、nan:擋下 rc2,不丟例外(外家 F2)", rcs == [2, 2], str(rcs))
+    base = _na_head(root)
+    _nh_node(root, "N", typ="issue", folder="Issues", resp=None, status="open", summary="KEY:n",
+             body=f"REVISIT:[when-status:Projects/P=done]{by} P 收尾了就結案\n新的一句")
+    _nh_commit(root, "只改正文")
+    _nh_node(root, "N", typ="issue", folder="Issues", resp=None, status="open", summary="KEY:n",
+             body=f"REVISIT:[when-status:Projects/P=done]{by} P 收尾了就結案\n新的一句\n再一句")
+    _nh_commit(root, "再改正文")      # 兩個提交:逐提交那幾次 diff 的參數才不會跟淨差異撞在一起
+    tip = _na_head(root)
+    net_calls, orig_diff = [], m._ns_diff
+    m._ns_diff = lambda r, *a, **k: (net_calls.append(a) if a[:2] == (base, tip) else None, orig_diff(r, *a, **k))[1]
+    try:
+        m._notelines_new(root, False, base, tip, V, reader=m._nodehome_reader(root, tip), mark="x", keep_other=True)
+    finally:
+        m._ns_diff = orig_diff
+    check("G4 開頭欄位其他欄沒有新行時,不多算一次淨差異(併發 F3)", net_calls == [], str(net_calls))
+    fake = type("T", (), {"files": set()})()
+    got = (m._drift_probe_path_warn("symbol", "v1.2::x", fake), m._drift_probe_path_warn("symbol", "src/new.py::main", fake),
+           m._drift_probe_path_warn("symbol", "Makefile::build", fake) or "")
+    check("G5 v1.2::x 列成不像檔案路徑、還沒建的 src/new.py 不列、Makefile 提示可能是還沒建的根目錄檔(邊界 F4)",
+          got[0] is not None and got[1] is None and "還沒建" in got[2], str(got))
+
+
+def t_drift_code_review_yi_r3_regressions():
+    """乙代碼審 r3 折入的回歸釘(存量漂移防線,條件式回頭條件第二次修正差異)。每條 check 名後面括號是對應的發現。
+
+    翻紅釘:讀檔改回「版本:路徑」→ A1、A2、A3 紅;判不了不點名檔 → A4 紅;候選迴圈不看預算 → B1 紅;
+    名稱改回對全文跑正則 → B2 紅;候選遇到判不了就停 → B3 紅;拿掉接 MemoryError/RecursionError → C1 紅(3.12 以前的事先量測
+    已隨工具最低版本改 3.14 刪掉,C1 改驗 3.14 上的極端輸入);
+    版面改變不算形狀改變 → D1 紅;反斜線不先轉斜線 → D2 紅;check 拿存下的值重驗 → D3 紅;--budget 不設上限 → E1 紅;
+    副檔名規則改回字母數字 → E2 紅;候選判不了不記 → F1 紅;語料有讀不出的檔當成不成立 → F2 紅。
+    """
+    print("t_drift_code_review_yi_r3_regressions")
+    import subprocess as sp, time as _time
+    m = _load_lumos_inproc()
+    V = "docs/kg-knowledge"
+    by = "[by:2099-12-31]"
+
+    def _add_raw(root, raw_path, content):
+        """用 git 原樣路徑存一支檔(不經檔案系統,檔名寫法不被改)。"""
+        blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=content,
+                      capture_output=True, text=True).stdout.strip()
+        sp.run(["git", "-C", str(root), "-c", "core.precomposeunicode=false", "update-index", "--add", "--cacheinfo",
+                f"100644,{blob},{raw_path}"], capture_output=True)
+
+    # ── A 用內容編號讀:檔名寫法怪的照讀得到 ──
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    compat = "src/豈文.py"                                   # 相容表意字,NFC 與 NFD 都會把它換掉
+    mixed = "café/café.py"                             # 資料夾組合字、檔名分解字
+    _add_raw(root, compat, "def compat_fn():\n    pass\n")
+    _add_raw(root, mixed, "def mixed_fn():\n    pass\n")
+    _add_raw(root, "src/a\nb.py", "def nl_fn():\n    pass\n")
+    sp.run(["git", "-C", str(root), "commit", "-qm", "怪檔名", "--no-verify"], capture_output=True)
+    b0 = _na_head(root)
+    tr = m._drift_probe_tree(root, b0)
+    got = (tr.one("symbol", "compat_fn"), tr.one("symbol", m.nfc(mixed) + "::mixed_fn"), tr.one("symbol", "nl_fn"),
+           tr.one("symbol", "not_yet_written"))
+    check("A1 相容表意字檔名的檔:讀得到,不帶路徑的條件照判(正確性 F1)", got[0] is True and got[3] is False, str(got))
+    check("A2 資料夾與檔名寫法混用:帶路徑的條件讀得到(正確性 F1)", got[1] is True, str(got))
+    check("A3 檔名含換行的檔:不讓整批讀取失敗(邊界 F2)", got[2] is True, str(got))
+    _nh_node(root, "Pay", summary="FLOW:a", body=f"REVISIT:[when-symbol:not_yet_written]{by} 等它出現")
+    _nh_commit(root, "新寫一條還沒成立的")
+    rc, out = _dr(root, "check", "--diff", f"{b0}..HEAD")
+    check("A1 有怪檔名的專案:新寫還沒成立的條件不擋(正確性 F1)", rc == 0 and "判不了" not in out, out)
+    tb = m._drift_probe_tree(root, b0)
+    tb._text["src/壞.py"] = None
+    note = m._drift_bad_note(m._drift_row_unread([("symbol", "anything")], (), (tb,)))
+    check("A4 判不了時點名讀不出的檔(正確性 F1 第 4 點)", "src/壞.py" in note, note)
+    # ── B 候選迴圈 ──
+    pr = m._probe_parse(f"[when-symbol:foo]{by}")
+    lines = [("Systems/Pay.md", i, "x", pr) for i in range(1, 6)]
+    ch = {"renames": {}, "touched": set(), "code_shape": False, "code_touched": ["a.py"]}
+    todo, unk = m._drift_probe_candidates(lines, ch, V + "/", None, None, None, lambda: True)
+    check("B1 預算用完:每一行都記成超過預算,不再往下篩(併發 F1)",
+          todo == [] and len(unk) == 5 and all("超過預算" in u for u in unk), str(unk))
+    names = m._DriftNames(["x_1 " * 1500000])
+    t0 = _time.monotonic()
+    hits = [m._drift_probe_cond_candidate("symbol", f"missing_{i}", ch, V + "/", None, lambda _t: names) for i in range(300)]
+    el = _time.monotonic() - t0
+    check("B2 名稱查識別字集合:300 條不在 6MB 全文裡的名稱 1 秒內判完(併發 F1)", el < 1 and not any(hits), f"{el:.2f}s")
+    E = type("E", (), {"resolve": lambda s, x: "Projects/P.md"})
+    ch2 = {"touched": {"x.txt"}, "code_shape": False, "code_touched": ["bad.py"]}
+    got = m._drift_probe_is_candidate([("symbol", "foo"), ("file", "x.txt")], ch2, V + "/", E(), lambda _t: None)
+    check("B3 一條判不了、另一條確定受影響:算候選(外家 F2)", got is True, repr(got))
+    # ── C 極深的程式:3.14 的解析器丟接得住的例外,退回正則(工具最低版本改 3.14 後,原本 3.9 會 SIGSEGV 的事先量測已刪)──
+    deep = "# foo\n" + "-" * 300000 + "1\n"
+    elifs = "if a:\n    pass\n" + "elif a:\n    pass\n" * 170000
+    flat = "".join(f"def f{i}():\n    return {i}\n" for i in range(12000))
+    c1 = (m._drift_py_names(deep), m._drift_py_names(elifs))
+    got = m._drift_py_names(flat)
+    check("C1 極長的一行、極長的 elif 鏈:不崩潰、回 None 退回正則;一般大檔照解析(外家 F1、r4 正確性 F1)",
+          c1 == (None, None) and got is not None and "f11999" in got[0], f"{c1} {None if got is None else len(got[0])}")
+    # ── D 版面、路徑 ──
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    _nh_file(root, "Foo/Main.SWIFT", "x\n")
+    _nh_file(root, "FooTests/Helper.swift", "func makeFixture() {}\n")
+    _nh_node(root, "Pay", summary="FLOW:a", body=f"REVISIT:[when-symbol:makeFixture]{by} 輔助函式變成正式程式")
+    _nh_commit(root, "base")
+    b1 = _na_head(root)
+    _nh_git(root, "rm", "-q", "Foo/Main.SWIFT")
+    _nh_commit(root, "只刪一支不算程式檔的檔")
+    rc, out = _dr(root, "check", "--diff", f"{b1}..HEAD")
+    check("D1 刪一支檔讓別的檔從測試檔變程式檔:條件翻成立,擋(正確性 F2)", rc == 1 and "輔助函式變成正式程式" in out, out)
+    got = [m._probe_parse(f"[when-{v}]{by}") for v in ("file:a\\..\\x.py", "file:..\\x.py", "file:a/../x.py", "file:src\\a.py")]
+    check("D2 反斜線寫的 .. 段一律算寫錯,正常的反斜線路徑照收(正確性 F3)",
+          [g["bad"] for g in got] == [True, True, True, False] and got[3]["conds"] == [("file", "src/a.py")], str(got))
+    b2 = _na_head(root)
+    _add_raw(root, "a\\..\\x.py", "x\n")                    # 樹上真的有一支檔就叫 a\..\x.py
+    sp.run(["git", "-C", str(root), "commit", "-qm", "反斜線檔名", "--no-verify"], capture_output=True)
+    bad_pr = m._probe_parse(f"[when-file:a\\..\\x.py]{by}")
+    tenv = type("T", (), {})()
+    tenv.notes = {"Systems/Pay.md": None}
+    orig = m.env_text, m._probe_lines
+    m.env_text = lambda e, p: "tip" if e is tenv else "base"
+    m._probe_lines = lambda t: ([(3, "REVISIT", bad_pr)], []) if t == "tip" else ([], [])
+    try:
+        res = m._drift_probe_check(root, b2, _na_head(root), V, tenv)
+    finally:
+        m.env_text, m._probe_lines = orig
+    check("D3 寫錯的條件不評估:check 看解析的旗標,不拿存下的原文重驗(正確性 F3)",
+          bad_pr["bad"] and res == ([], [], []), str(res))
+    # ── E 參數與提示 ──
+    vault = root / V
+    r = run(vault, "drift", "scan", "--at", "HEAD", "--budget", "1e10")
+    check("E1 --budget 超過一天:擋下 rc2,不溢位(邊界 F1)", r.returncode == 2, (r.stdout + r.stderr)[-200:])
+    fake = type("T", (), {"files": set()})()
+    got = {v: m._drift_probe_path_warn("symbol", v, fake) is not None
+           for v in ("app.Config::load", "plugin.c++::load", "script.R::f", "v1.2::x", "src/new.py::main")}
+    check("E2 像不像檔名:app.Config、v1.2 列;.c++、.R、還沒建的 src/new.py 不列(邊界 F3、外家 F4)",
+          got == {"app.Config::load": True, "plugin.c++::load": False, "script.R::f": False, "v1.2::x": True,
+                  "src/new.py::main": False}, str(got))
+    # ── F 兩條判不了的路有測試守著 ──
+    stub = type("S", (), {"names_in": lambda s, paths, test: None, "bad_paths": lambda s: ["src/壞.py"],
+                          "unread_for": lambda s, k, v: ["src/壞.py"]})()
+    orig_old = m._drift_probe_old
+    m._drift_probe_old = lambda *a, **k: True
+    try:
+        todo, unk = m._drift_probe_candidates([("Systems/Pay.md", 7, "x", m._probe_parse(f"[when-symbol:foo]{by}"))],
+                                             ch, V + "/", None, None, stub, lambda: False)
+    finally:
+        m._drift_probe_old = orig_old
+    check("F1 候選判不了:記成判不了並點名那支檔,不當成不是候選(圖譜一致 F1)",
+          todo == [] and len(unk) == 1 and "src/壞.py" in unk[0], str(unk))
+    root = _nh_repo()
+    _nh_file(root, "src/a.py", "def here():\n    pass\n")
+    _nh_file(root, "src/b.py", "x = 1\n")
+    _nh_commit(root, "c")
+    tr = m._drift_probe_tree(root, _na_head(root))
+    orig_cat = m._nodehome_cat_blobs
+    m._nodehome_cat_blobs = lambda r, specs, **k: [None if i == 1 else orig_cat(r, [s], **k)[0] for i, s in enumerate(specs)]
+    try:
+        got = (tr.one("symbol", "here"), tr.one("symbol", "nothere"))
+    finally:
+        m._nodehome_cat_blobs = orig_cat
+    check("F2 語料有一支讀不出:找到定義照成立,找不到算判不了(圖譜一致 F1)", got == (True, None), str(got))
+
+
+def t_drift_code_review_yi_r4_regressions():
+    """乙代碼審 r4(上限後的破例輪)查出的洞:SHA-256 repo 記不到內容編號、一支讀不出就把另一支的確定命中降成判不了、
+    判不了時點名無關的檔、點名的檔名沒跳脫控制字元。3.9 崩潰那幾條隨最低版本改 3.14 整段拿掉(見 r3 回歸測試 C1)。
+    翻紅釘:只認 40 碼 → A1 紅;有一支讀不出就回 None → B1 紅;點名整棵樹 → C1 紅;不跳脫 → D1 紅。"""
+    print("t_drift_code_review_yi_r4_regressions")
+    import subprocess as sp, tempfile as _tf, unicodedata as _ud
+    m = _load_lumos_inproc()
+    # ── A SHA-256 物件格式的 repo:用內容編號讀 NFD 檔名的程式檔 ──
+    tmp = Path(_tf.mkdtemp(prefix="gctl-yi-r4-"))
+    root = tmp / "r256"
+    ok = sp.run(["git", "init", "-q", "--object-format=sha256", str(root)], capture_output=True).returncode == 0
+    if ok:
+        for kv in (("user.email", "t@t"), ("user.name", "t"), ("core.precomposeunicode", "false")):
+            sp.run(["git", "-C", str(root), "config", *kv], capture_output=True)
+        blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=b"def cafe_fn():\n    pass\n",
+                      capture_output=True).stdout.decode().strip()
+        nfd = _ud.normalize("NFD", "src/café.py")
+        sp.run(["git", "-C", str(root), "update-index", "--add", "--cacheinfo", f"100644,{blob},{nfd}"], capture_output=True)
+        sp.run(["git", "-C", str(root), "commit", "-qm", "c"], capture_output=True)
+        head = sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        m._DRIFT_LS_CACHE.clear()
+        m._DRIFT_OID_CACHE.clear()
+        t = m._drift_probe_tree(str(root), head, None)
+        got = (t.one("symbol", "cafe_fn"), t.one("symbol", "src/café.py::cafe_fn")) if t else None
+        check("A1 SHA-256 repo(64 碼提交編號)、git 裡存 NFD 檔名:帶路徑與不帶路徑的條件都判得出成立",
+              len(head) == 64 and got == (True, True), f"{len(head)} {got}")
+    else:
+        print("  (沒驗到 A1:這台機器的 git 不支援 --object-format=sha256)")
+    # ── B 一支讀不出、另一支確定命中 ──
+    t = m._DriftProbeTree(".", "tip", {"good.py", "bad.py"}, ({}, {}))
+    t._text = {"good.py": "def target():\n    pass\n", "bad.py": None}
+    ch = {"touched": {"good.py", "bad.py"}, "renames": {}, "code_shape": False, "code_touched": ["good.py", "bad.py"]}
+    names = lambda test: t.names_in(ch["code_touched"], test)  # noqa: E731
+    hit = m._drift_probe_is_candidate([("symbol", "target")], ch, "docs/kg-knowledge/", None, names)
+    miss = m._drift_probe_is_candidate([("symbol", "elsewhere")], ch, "docs/kg-knowledge/", None, names)
+    check("B1 讀得出的那支找到名稱:算候選;找不到而有檔讀不出:判不了(不是不成立)", hit is True and miss is None,
+          f"hit={hit} miss={miss}")
+    # ── C 判不了只點名這一行碰到的 ──
+    E = type("E", (), {"notes": {}, "resolve": lambda s, x: "Projects/壞.md"})
+    env = E()
+    env.notes = {"Projects/壞.md": object()}
+    real = m._note_unreadable
+    m._note_unreadable = lambda n: True
+    try:
+        st = m._drift_row_unread([("status", "[[Projects/壞]]=done")], (env,), (t,))
+    finally:
+        m._note_unreadable = real
+    sym = m._drift_row_unread([("symbol", "other.py::f")], (), (t,))
+    check("C1 status 判不了點名指到的那篇筆記、不點名無關的程式檔;帶路徑的只點名那一支",
+          st == ["Projects/壞.md"] and sym == [], f"st={st} sym={sym}")
+    # ── D 檔名裡的控制字元 ──
+    note = m._drift_bad_note(["src/a\x1b[2Kb.py"])
+    check("D1 點名的檔名先把控制字元換成空格才印", "\x1b" not in note and "src/a" in note, repr(note))
+
+
+def t_drift_code_review_yi_r5_regressions():
+    """乙代碼審 r5(上限後第二次破例輪)查出的洞:程式檔與測試檔的讀不出混在一起、帶標點的名稱每條掃全文耗光預算、
+    SHA-256 repo 的空樹、印到終端的筆記路徑與原文沒跳脫。
+    翻紅釘:names_in 不分類 → A1 紅;點名不分類 → A2 紅;帶標點的名稱不先查字詞 → B1 紅;空樹寫死 SHA-1 → C1 紅;
+    印出不消毒 → D1 紅。"""
+    print("t_drift_code_review_yi_r5_regressions")
+    import io as _io, pathlib as _pl, subprocess as sp, tempfile as _tf, time as _time, types as _types
+    m = _load_lumos_inproc()
+    # ── A 程式檔與測試檔分開算 ──
+    f = {"src/good.py", "tests/test_bad.py"}
+    t = m._DriftProbeTree(".", "tip", f, m._nodehome_layout(sorted(f)))
+    t._text = {"src/good.py": "def target(): pass\n", "tests/test_bad.py": None}
+    ch = {"touched": set(f), "renames": {}, "code_shape": False, "code_touched": sorted(f)}
+    cand = m._drift_probe_is_candidate([("symbol", "elsewhere")], ch, "docs/kg-knowledge/", None,
+                                       lambda test: t.names_in(ch["code_touched"], test))
+    check("A1 讀不出的是測試檔:symbol 條件的候選判定照常(不成立),跟正式判定一致(正確性 F1)",
+          cand is False and t.one("symbol", "elsewhere") is False, f"cand={cand}")
+    files = {"zz/a.py", *[f"tests/t{i}.py" for i in range(6)]}
+    tree = m._DriftProbeTree(".", "tip", files, m._nodehome_layout(sorted(files)))
+    tree._read = _types.MethodType(lambda self, paths: self._text.update({p: None for p in paths}) is None, tree)
+
+    def note(cond):
+        return "---\ntype: system\nstatus: doing\nsummary: x\n---\n" f"REVISIT:{cond}[by:2099-12-31] x\n"
+    env = m.Env.from_texts(_pl.Path("/unused"), {"Systems/A.md": note("[when-test:missing]"),
+                                                  "Systems/B.md": note("[when-symbol:missing]")})
+    _found, probs = m._drift_probe_scan(env, tree)
+    by = {p: w for p, _n, _t, w in probs}
+    check("A2 前一行讀過的測試檔不混進這一行的點名:symbol 那行只點名讀不出的程式檔(外家 F3)",
+          "zz/a.py" in by.get("Systems/B.md", "") and "tests/" not in by.get("Systems/B.md", "")
+          and "tests/t0.py" in by.get("Systems/A.md", ""), str(by))
+    # ── B 帶標點的名稱 ──
+    names = m._DriftNames(["x_1 " * 1500000])
+    t0 = _time.monotonic()
+    hits = [names.has(f"missing-{i}") for i in range(850)]
+    el = _time.monotonic() - t0
+    check("B1 帶標點的名稱先查字詞:850 條不在 6MB 全文裡的名稱 1 秒內判完(外家 F2)", el < 1 and not any(hits), f"{el:.2f}s")
+    check("B1 字詞都在時照樣對全文確認(整字)", m._DriftNames(["call foo-bar(x)"]).has("foo-bar")
+          and not m._DriftNames(["foo bar"]).has("foo-bar"), "")
+    # ── C SHA-256 repo 的空樹 ──
+    root = Path(_tf.mkdtemp(prefix="gctl-yi-r5-")) / "r"
+    if sp.run(["git", "init", "-q", "--object-format=sha256", str(root)], capture_output=True).returncode == 0:
+        (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+        sp.run(["git", "-C", str(root), "add", "a.py"], capture_output=True)
+        sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"], capture_output=True)
+        head = sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        m._DRIFT_EMPTY_TREE.clear()
+        et = m._drift_empty_tree(str(root))
+        chg = m._drift_probe_changes(str(root), None, head)
+        check("C1 SHA-256 repo 沒有起點(首推):用這個 repo 的空樹算改動,不是 SHA-1 那個(外家 F1、正確性 F4)",
+              len(et) == 64 and chg is not None and "a.py" in chg["touched"], f"{et} {chg}")
+    else:
+        print("  (沒驗到 C1:這台機器的 git 不支援 --object-format=sha256)")
+    # ── D 印出消毒 ──
+    buf = _io.StringIO()
+    m._drift_print_findings([{"kind": "probe", "path": "Systems/a\x1b[2K.md", "line": 3, "text": "REVISIT:\x1b]0;x\x07",
+                              "why": "因為\x1b[31m"}], buf)
+    check("D1 筆記路徑、原文、說明印到終端前換掉控制字元(資安 F1)", "\x1b" not in buf.getvalue() and "\x07" not in buf.getvalue(),
+          repr(buf.getvalue()))
 
 
 if __name__ == "__main__":
