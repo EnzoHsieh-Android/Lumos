@@ -71,7 +71,7 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
 ### 3 · 派乾淨 reviewer
 Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:程式碼審點 `lumos_reviewer_code`(sol+xhigh),tier=high 點 `lumos_reviewer_max`(sol+xhigh);散文審才用預設的 `lumos_reviewer`(sol+medium)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
 
-**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」
+**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來/同次計算讀兩次/對外送出重試會壞嗎;資料狀態:新舊互讀、寫一半、衍生資料、時間、不可逆;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(2026-09-29 補資料狀態五問,[[Projects/代碼審資料狀態鏡頭_計劃]];多席時只留給正確性席,見 templates.md §7)
 
 **抑噪紀律(逐字進 prompt)**:
 - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」

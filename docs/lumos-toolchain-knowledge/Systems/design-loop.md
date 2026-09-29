@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-26
+updated: 2026-09-29
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
@@ -31,6 +31,7 @@ verified_by:
   - "[[Verification/2026-09-03_派工攔截點實測]]"
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
   - "[[Verification/2026-09-11_skills健檢]]"
+  - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
 summary: |-
   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
@@ -76,6 +77,7 @@ summary: |-
   DEP:lumos canary record --loop/--severity｜lumos loop status --need(Component A 原語)｜skills/lumos-design-loop/SKILL.md
   TEST:Component A 原語有 test_lumos.py 覆蓋;B 是 skill 非 code,以 design-loop 自跑收斂為驗證
   VERIFY:[[Verification/2026-06-19_design-loop]]
+  WHY:[2026-09-29 [[Projects/代碼審資料狀態鏡頭_計劃]]]範本 §3 代碼審派工詞第 1 點再擴一次(承 d6 的帶例子問句):加資料狀態五問,邊界填空範例拿掉時區改由時間子題固定問;§7 平行 panel 加分流句(五問只留給正確性席)
 decisions:
   - content: 收斂判準 K=2(連 2 輪 caught 且 severity∈{clean,minor}),寫進 spec 本體與 loop_status --need 預設;漏抓(missed)仍是一筆 record、仍算進 cap,判決不採信但不消失
     id: d1

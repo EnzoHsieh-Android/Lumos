@@ -1,0 +1,252 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index bcf49c87..0159be72 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -40156,20 +40156,112 @@ def t_tension_doc_sync():
+     files = [repo / "skills" / "lumos-code-loop" / "SKILL.md", repo / "skills" / "lumos-code-loop" / "reference.md",
+              repo / "skills" / "lumos-design-loop" / "templates.md", repo / "skills" / "lumos-project-notes" / "commands" / "06-代碼審與推送.md",
+              kg / "Systems" / "棧別提問表態閘.md", kg / "Systems" / "效能檢核目錄.md", kg / "Systems" / "arch-alignment-lens.md",
+              kg / "Issues" / "架構對齊席與棧別檢核題可能相反.md", kg / "Projects" / "兩席相反時端出張力_計劃.md"]
+     if not all(p.exists() for p in files):
+         raise _SrcOnly("消費端沒有 skills/ 或來源圖譜(非來源 repo),這段沒驗到")
+     for p in files:
+         check(f"drift: tension 在 {p.name}", "tension" in p.read_text(encoding="utf-8"), f"{p} 沒提到 tension")
+ 
+ 
++# 代碼審派工詞第 1 點「正確性」的子題對照表(Projects/代碼審資料狀態鏡頭_計劃):標頭 → 那一行必須含的字樣。
++# 只驗標頭會被「留標頭、掏空內容」繞過(設計審 std r1 邊界席),所以每題釘至少一個必要字樣;逐字精修不擋。
++_DATA_STATE_NEW_HEADS = ("新舊互讀", "寫一半", "衍生資料", "時間", "不可逆")
++_CORRECTNESS_LENS_ITEMS = {
++    "邊界": ("空集合",), "資源": ("錯誤路徑和提早 return",), "例外與 None": ("丟例外或回 None",),
++    "冪等與併發": ("讀了兩次", "重複生效"),
++    "新舊互讀": ("舊程式讀新資料",), "寫一半": ("救得回",), "衍生資料": ("取哪一筆",),
++    "時間": ("具體時刻",), "不可逆": ("不該動",),
++}
++
++
++def _code_reviewer_prompt(templates_text):
++    """派工範本第 3 節的代碼審派工詞:「## 3. Code-loop reviewer」到下一個二級標題之間,第一個含「審查鏡頭」的 ``` 圍欄;找不到回 None。"""
++    import re as _re
++    m = _re.search(r"^## 3\. Code-loop reviewer.*?(?=^## )", templates_text, _re.M | _re.S)
++    if not m:
++        return None
++    for body in _re.findall(r"^```[^\n]*\n(.*?)^```", m.group(0), _re.M | _re.S):
++        if "審查鏡頭" in body:
++            return body
++    return None
++
++
++def _correctness_lens_missing(prompt):
++    """回傳第 1 點缺了哪幾題:標頭那行不在,或在但少了必要字樣;邊界那行帶「時區」也算缺(時間比較改由時間子題固定問)。"""
++    import re as _re
++    lines = {}
++    for ln in (prompt or "").splitlines():
++        mm = _re.match(r"\s*·\s*([^：:]+)[：:]", ln)
++        if mm:
++            lines.setdefault(mm.group(1).strip(), ln)
++    missing = []
++    for head, needs in _CORRECTNESS_LENS_ITEMS.items():
++        ln = lines.get(head)
++        if ln is None or not all(n in ln for n in needs) or (head == "邊界" and "時區" in ln):
++            missing.append(head)
++    return missing
++
++
++def t_data_state_lens_in_code_template():
++    """[資料狀態鏡頭 S1]範本第 3 節派工詞第 1 點:九個子題標頭都在、各含必要字樣、邊界行不再舉時區。
++    翻紅釘:刪掉任一新子題、或把冪等與併發改回原文 → 翻紅。"""
++    repo = Path(__file__).resolve().parent.parent
++    tpl = repo / "skills" / "lumos-design-loop" / "templates.md"
++    if not tpl.exists():
++        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
++    prompt = _code_reviewer_prompt(tpl.read_text(encoding="utf-8"))
++    check("①找得到第 3 節含審查鏡頭的派工詞圍欄", prompt is not None, "第 3 節沒有含「審查鏡頭」的 ``` 圍欄")
++    missing = _correctness_lens_missing(prompt)
++    check("②第 1 點九題齊全且各含必要字樣", missing == [], f"缺:{missing}")
++
++
++def t_data_state_lens_missing_item_named():
++    """[資料狀態鏡頭 S2]檢查函式對缺題的副本要點名:拿掉第一個新子題、拿掉最後一個新子題、冪等與併發留標頭刪掉讀兩次那一問。"""
++    full = "\n".join(f"   · {h}：" + "、".join(n) for h, n in _CORRECTNESS_LENS_ITEMS.items())
++    check("①完整副本不報缺", _correctness_lens_missing(full) == [], str(_correctness_lens_missing(full)))
++    first, last = _DATA_STATE_NEW_HEADS[0], _DATA_STATE_NEW_HEADS[-1]
++    def drop(h):
++        return "\n".join(ln for ln in full.splitlines() if f"· {h}：" not in ln)
++    check("②拿掉第一個新子題 → 點名它", _correctness_lens_missing(drop(first)) == [first], str(_correctness_lens_missing(drop(first))))
++    check("③拿掉最後一個新子題 → 點名它", _correctness_lens_missing(drop(last)) == [last], str(_correctness_lens_missing(drop(last))))
++    hollow = full.replace("讀了兩次", "")
++    check("④冪等與併發只留標頭 → 點名它", _correctness_lens_missing(hollow) == ["冪等與併發"], str(_correctness_lens_missing(hollow)))
++    check("⑤邊界行帶時區 → 點名邊界", _correctness_lens_missing(full.replace("空集合", "空集合、時區")) == ["邊界"], "邊界帶時區沒被點名")
++
++
++def t_data_state_lens_doc_sync():
++    """[資料狀態鏡頭 S3]鏡像三處:代碼審 reference 現行 refute framing 有五個新子題標頭;代碼審 skill 步驟 2 指到資料狀態;
++    範本 §7 平行 panel 節有「五個新子題只留給正確性席」的分流句;reference 歷史區那份 framing 不得被補上新子題(舊帳回放用原文)。"""
++    import re as _re
++    repo = Path(__file__).resolve().parent.parent
++    ref = repo / "skills" / "lumos-code-loop" / "reference.md"
++    skill = repo / "skills" / "lumos-code-loop" / "SKILL.md"
++    tpl = repo / "skills" / "lumos-design-loop" / "templates.md"
++    if not all(p.exists() for p in (ref, skill, tpl)):
++        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
++    rt = ref.read_text(encoding="utf-8")
++    cut = rt.find("## 歷史與停用")
++    check("①reference 有歷史區標題", cut > 0, "找不到「## 歷史與停用」")
++    current, history = rt[:cut], rt[cut:]
++    framing = next((ln for ln in current.splitlines() if ln.startswith("**refute framing**")), "")
++    check("②reference 現行 refute framing 五個新子題標頭齊全", framing and all(h in framing for h in _DATA_STATE_NEW_HEADS),
++          f"缺:{[h for h in _DATA_STATE_NEW_HEADS if h not in framing]}")
++    check("③reference 歷史區不含新子題標頭", not any(h in history for h in ("新舊互讀", "寫一半", "衍生資料")),
++          "歷史區被補上了新子題——那段只供回放舊帳,要保持原文")
++    step2 = next((ln for ln in skill.read_text(encoding="utf-8").splitlines() if ln.startswith("2. **派審查員**")), "")
++    check("④代碼審 skill 步驟 2 指到資料狀態", "資料狀態" in step2, "步驟 2 沒提資料狀態")
++    tt = tpl.read_text(encoding="utf-8")
++    m = _re.search(r"^## 7\. 平行 panel 派工.*?(?=^## |\Z)", tt, _re.M | _re.S)
++    check("⑤§7 平行 panel 節有分流句", bool(m) and "只留給正確性" in m.group(0), "§7 沒寫五個新子題只留給正確性席")
++
++
+ def t_init_writes_config_skeleton():
+     """[消費專案接入靜默失效 S1]init 產設定骨架:單語言依偵測、多語言走多平台格式、認不出寫說明;
+     骨架標示「推測」;既有設定不覆寫;★產出的必須是合法 JSON★(寫成帶 // 註解的檔會讓整份設定解析失敗)。
+     翻紅釘:把 SYMBOL_PROFILES 的 swift 條目拿掉(_stack_guess 反查自它)→ ①翻紅。"""
+     import json as _j
+     m = _load_lumos_inproc()
+     with tempfile.TemporaryDirectory() as d:
+         root = Path(d)
+         for n in range(4):
+             (root / f"F{n}.swift").write_text("import Foundation\n", encoding="utf-8")
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index ec179820..34a1b219 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -15,21 +15,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。
+-2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。
++2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。擋在問閘、不在 `code-loop pass`:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+    - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`;派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差/base 不在主線→靜默放行;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - 另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。
+    - **席報告格式**以 lumos-design-loop `templates.md` 的卷證規則為唯一來源,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(反引號必加,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。派工詞照範本寫,收貨就不需要臨場轉格式。
+    - 允許席位做 git 實驗時,派工詞寫明一律 `git -C <臨時目錄>`、不准在 repo 根跑 commit / reset / restore / checkout / stash。
+    派工單落 `rN-dispatch.json`。
+ 3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先存檔放著。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
+diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
+index 238c1926..c5a0dc9f 100644
+--- a/skills/lumos-code-loop/reference.md
++++ b/skills/lumos-code-loop/reference.md
+@@ -64,21 +64,21 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
+ → 見〈歷史與停用〉。
+ 
+ ### 2 · ~~植 bug canary~~ ⛔ 已停用(2026-08-14,見頁頂)
+ 本步驟與三道防污染自檢不再執行,直接進步驟 3。舊型別輪替表/生成硬化見 git 史與 design-loop reference §A(歷史帳判讀用)。reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**。
+ 
+ 
+ 
+ ### 3 · 派乾淨 reviewer
+ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:程式碼審點 `lumos_reviewer_code`(sol+xhigh),tier=high 點 `lumos_reviewer_max`(sol+xhigh);散文審才用預設的 `lumos_reviewer`(sol+medium)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
+ 
+-**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」
++**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來/同次計算讀兩次/對外送出重試會壞嗎;資料狀態:新舊互讀、寫一半、衍生資料、時間、不可逆;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(2026-09-29 補資料狀態五問,[[Projects/代碼審資料狀態鏡頭_計劃]];多席時只留給正確性席,見 templates.md §7)
+ 
+ **抑噪紀律(逐字進 prompt)**:
+ - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」
+ - 「不能指出具體受影響 file:line,就不准臆測『可能會壞別處』。」
+ - （不設 findings 硬上限——會藏真 finding、污染 G2 收斂信號。）
+ 
+ **席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述只寫到讀的人能重現問題為止、不准模稜兩可;★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
+ 
+ **圖譜鏡頭(★2026-08-29 改:每席都附、貼內容不給路徑★)**:派前跑 `lumos impact --diff <range>`,把**固定席**(帶硬合約或出過事故的節點)**逐條貼進每一席的派工詞**——不是給 manifest 路徑讓它自己讀(給路徑那條 2026-08-29 兩輪設計審否掉了,見 [[Projects/impact鏡頭機械化_計劃]])。派工詞寫「逐條判此 diff 破不破壞節點合約;固定席必答」(advisory 人判)。完整格式見 `../lumos-design-loop/templates.md` §3 鏡頭 3,含兩個填寫雷:①來源是 `governance/review-reports/**` 凍結快照 patch 的節點要剔掉(審計證物,裡面故意埋 bug)②「還有 N 篇」的 N 會少報。
+ 
+diff --git a/skills/lumos-design-loop/SKILL.md b/skills/lumos-design-loop/SKILL.md
+index f7879edd..eb0ac7b1 100644
+--- a/skills/lumos-design-loop/SKILL.md
++++ b/skills/lumos-design-loop/SKILL.md
+@@ -42,21 +42,21 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—
+    - 折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。
+    - 審計修正紀錄每輪固定兩行(新案適用、舊案不回溯)——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;blocking 數帳上無對應欄位,來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。
+    - `git commit`(本機提交;推之前跟實作壓成同一個功能提交,說明照紀律區塊〈提交與推送〉,[[Projects/提交推送規範_計劃]])。
+ 7. **記帳**(折完才記,指紋要是折入後的版本;記帳途中不動被審文件)。記帳型態:散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記;「每席各帶一筆 severity 帳」的 panel 型態只存在於舊迴圈帳面。carrier 選席:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)。
+    ```
+    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
+      --findings-set <id串> --folded-set <id串> --accepted-set <id串> --accept-reason <id=理由> \
+      --refuted-set <id=理由串|none> [--intake <rN-intake.md>] \
+      --report <rN-席.md> --snapshot <rN-snapshot.md> --spec <計劃.md> --reviewed <sha256> --scope-lines <行數>
+    ```
+-   - light 分級不帶 `--round`(單人不分輪;帶了 `loop status --light` 會拒讀)。
++   - light 分級不帶 `--round`(單人不分輪;帶了 `loop status --light` 會拒讀),**也不記處置帳**:各席只記 severity/findings/report 留痕,不帶三個 set(處置帳必須綁輪次,不帶輪次會被擋);light 閘只判末筆 ≤minor,minor 的去向寫進計劃「審計修正紀錄」。出 major 照規則升級成 -std,處置帳在那邊記([[Issues/輕量設計審手冊叫人記處置帳但工具不收]])。
+    - carrier 必帶 `--refuted-set`:編排者機械重現不到、沒折也沒放行的發現;none=這輪 0 條;非 none 要帶 --intake,每個 id 要在 intake 重現表**同一列**出現(整字比對+HIT/MISS/重現/採信,a1 不因 a10 命中)、理由 ≥4 字含實字、id 不得同時在 --findings-set。
+    - 每個發現都要有去向(折掉、放行要理由、或列進 --refuted-set 講怎麼試的);blocker 只能折不能放行。順手每條標它在修什麼 `--finding-kind <id>=code|spec|process`(程式缺陷 / 被審文件缺陷 / 流程自己要求的文件;一個 id 一個旗標)——這是「流程自產工作量」唯一的量法。
+    - **折了忘記記帳**(帳上沒這輪、但計劃筆記的審計修正紀錄有)→ 人工補記一筆再繼續,不然這輪等於沒發生。
+ 8. **問閘**:散文設計審新迴圈一律 `lumos loop status <編號> --disposal --spec <計劃.md> --repo <根>`——單輪全處置即收斂;**輪級規則:同輪任一席 severity=blocker,整輪 accepted 必須為空**(blocker 只能折)。panel 問法(`--gate --panel --min-seats 3`,連續兩輪乾淨)只給已定錨 panel 帳的舊迴圈;兩閘互斥,問錯會被擋下並指路。✅ 過 → 出迴圈;⛔ 沒過 → 訊息會講卡在哪一關,回第 1 步。問閘尾的「審查有沒有用」漏斗只是觀測(不進合取):席位報 N(機器數)→ 存活 M / 編排者重現不到 R(人填)→ 折 / 放行,外加「存活多於席位報」的 S=max(0,M+R−N)與這條迴圈累計逃逸;舊帳缺欄印 ?、任一 ? 就不算 S;不印比率、別自己算。spec 裡還有 `[NEEDS CLARIFICATION]` 視同 blocker。settle 結清模式的迴圈不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
+ 9. **凍結判定**:gate PASS、卷證 commit 後當場 `lumos loop replay <編號> --freeze --spec <計劃.md> --repo <根>` 把判定凍成標準答案(governance/replay/<編號>/verdict.json;週跑會回放抽查,漏凍的它會補+喊)。
+ 10. **過了之後**:自問「這份 spec 哪些行為是『改了就壞』級?」列成**合約候選**寫進計劃筆記——候選不等於已標,蓋章仍走 `guard scaffold → bind → audit` 和「不確定不標」鐵則;下游代碼審會驗候選有沒有兌現。
+     每條驗收條款(`[SN]` 那一行)寫 `[test:測試名]`,沒有測試可掛的寫 `[manual:一句怎麼驗]`——處置閘第五步會擋沒標的(只對首筆帳 2026-09-09 起的設計審迴圈;拿 .patch 當設計審審材也擋;`[manual:]` 要 ≥4 字且含實字(空的、全標點視同未標);反引號裡的內容整段不掃(範例)、只在行內引用裡出現的 `[SN]` 不算條款;loop 編號 code 開頭沒連字號的也當設計審)。條款寫成 `- [S1] …`/`### [S1] …`/`1. [S1] …`/`a. [S1] …`/`一、[S1] …`/表格列/`- [ ] [S1] …` 才算定義行,一行一條(後面的 `[SN]` 是引用)、同編號不得定義兩次、```/~~~ fence 裡、未閉合反引號之後的文字都不算(程式碼範例裡的標記不能當證據);反引號或 HTML 註解裡的 `[SN]` 會被當格式看不懂而擋;像清單項卻用了不認得的前綴會被當格式看不懂而擋。`lumos spec-trace <計劃>` 看哪條是哪一態(單源 [[Projects/條款綁測試算進度_計劃]])。
+ 
+ 設計審放行之後,在實作、代碼審、CI、正式環境或使用者手上抓到「其實設計期就該看出來」的洞,也是逃逸——當下就記:`lumos loop escape <編號> --stage <實作|code-loop|CI|prod|使用者回報> --severity <minor|major|blocker> --desc <一句> --sha <提交>`(佐證必附:`--sha <提交>` 或 `--defect-ref <Issue/報告>`,真的沒有就 `--missing-defect-ref "<為什麼沒有>"`;記錯了用 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>` 撤回(追加一筆、統計不算、清單標已撤回);各類別放行後漏了多少看 `lumos loop escape-stats`。)(逃逸帳 append-only 不進閘;歸因是人工判斷;`lumos gov --stats`「審查有沒有用」段與問閘尾都會印這條迴圈累計幾筆)。不記,審查系統的漏網率就永遠是 0——那不是成績,是沒人記。
+ 
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index a4843356..8f7db19a 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -122,24 +122,29 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}
+ {r2+ 加：這是第 N 輪審查（上一輪的 findings 已修進代碼，diff 尾端含 fix commit），
+ 修訂輪常見新洞是「fix 自己引入的問題」與「上輪沒人看的角落」。}
+ 
+ Diff 檔（git diff -U10，完整讀）：{工作副本路徑 /tmp/code-<topic>-rN.patch}
+ 變更主題：{一段話——這條分支做什麼、動了哪幾層}
+ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
+ 
+ 審查鏡頭：
+ 1. 正確性——逐 hunk，每個可疑處**挑一個具體輸入、把執行路徑走一遍**（別看變數名字用猜的；
+    借 Meta 半形式推理的免費半截，把「猜行為」換成「追一個案例」）：
+-   · 邊界：空集合／只有一個元素／最大值或溢位／{本案高風險形態，如日期窗口、off-by-one、時區}，這段扛得住嗎？
++   · 邊界：空集合／只有一個元素／最大值或溢位／{本案高風險形態，如日期窗口、off-by-one}，這段扛得住嗎？
+    · 資源：連線／鎖／交易，在錯誤路徑和提早 return 上確定釋放了嗎？
+    · 例外與 None：哪個呼叫會丟例外或回 None，這段接了嗎？
+-   · 冪等與併發：同一操作重跑、或兩個請求同時進來，會壞嗎？
++   · 冪等與併發：同一操作重跑、或兩個請求同時進來，會壞嗎？同一次計算讀了兩次、中間被別人改了，結果會不會拼自兩個時間點？對外送出或扣款的重試會不會重複生效、收端怎麼去重？
++   · 新舊互讀：新程式讀舊資料、舊程式讀新資料（新增的紀錄種類、欄位、格式），各會怎樣？
++   · 寫一半：寫到一半被中斷（例外、被 kill、磁碟滿），留下什麼狀態？下次讀認得出、救得回嗎？錯誤訊息教的救法真的救得回嗎？
++   · 衍生資料：它是真相來源還是算出來的（快取、索引、彙總、狀態提示）？同一件事有多筆紀錄（重跑、重試、撤回）時取哪一筆？
++   · 時間：時間戳與日期比大小、判過期時，拿一個具體時刻走一遍（例如台北凌晨 1 點＝UTC 的前一天）；時鐘倒退、兩台機器時間不一致呢？
++   · 不可逆：刪除、覆寫、截斷、搬移資料，會不會連帶動到不該動的？
+    每條 finding 講清「**哪個輸入、走到哪一行**會出錯」，不是只點名詞。
+    （風格好壞與架構一致性歸架構對齊席，不在這鏡頭。）
+ 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
+    的讀 question 欄逐條判「真隱患/誤報」（真隱患必答對應提問）；source:"lint:..."
+    的讀 message。manifest 命中位置是注意力導引，不是全部——散文外的 hunk 也要自己看。
+ 3. **圖譜鏡頭——這次改動牽連到的筆記**:
+ LUMOS-IMPACT: {base}..HEAD
+    派工時 hook 會在尾端附上固定席筆記(帶硬合約或出過事故的節點)。
+    逐條判:這份 diff 會不會破壞該節點宣稱的行為或合約?**固定席必答**(可分組摘要,
+    判「不影響」也要寫一句為什麼)。這些筆記記的是「為什麼這樣設計、哪裡不能碰、以前
+@@ -347,16 +352,17 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)
+ 
+ 輸出格式照 §7.7 C 與 §3 的卷證規則(`引句:「…」` 單獨一行、`file: \`路徑:行號\``、每條一行獨立 severity 與 blocking)。
+ 
+ ## 7. 平行 panel 派工(2026-07-09,≤3 輪壓縮;設計 loop三輪壓縮_計劃)
+ 
+ 取代 6 輪同族循序。一輪 = **同一則訊息內平行派 W 個審計員**(§1 模板,但差異化):
+ 
+ - **W 由 tier 定**：`difficulty.params(tier)['panel_width']`（standard=3 / high=5）。
+ - **多樣化軸**(「9 judge 2 票」:要獨立票不要數量):
+   1. **鏡頭各異**(席名=<鏡頭>-<模型>):正確性/邏輯、邊界可執行、整合知識同步、(W>3)資源併發、回滾。★每席另加「立場+預設姿態」與輸出格式硬性,見 §7.7(2026-08-29 A+C)★
++     ★代碼審多席:§3 第 1 點的資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)只留給正確性/邏輯席,其他席派工時從第 1 點刪掉這五問——不然每席都做同一份題,差異化被稀釋;standard 單席照單全收(2026-09-29,[[Projects/代碼審資料狀態鏡頭_計劃]];靠編排者照做,沒有機械擋)★
+   2. **≥1 跨家族**:一席走外家(預設 Codex,不可用時 Gemini 備援,Gemini 的 ≥major 不算否決票)——獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂)。
+ - **判讀(編排者一次跨 W 份做)**:①逐席過收貨三道(quote-check/refcheck/seat-check) ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
+ - **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板;kind 一律 `none`,2026-08-14 d5):
+   `lumos canary record none --loop <id> --round <rid> --auditor <鏡頭>-<模型> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
+ - **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 帳=兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none])＋min-seats∧G3;capture-recapture 殘餘=advisory 觀測不進合取(2026-08-14 降級);cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
+ - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。

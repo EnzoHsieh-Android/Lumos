@@ -40168,6 +40168,97 @@ def t_tension_doc_sync():
         check(f"drift: tension 在 {p.name}", "tension" in p.read_text(encoding="utf-8"), f"{p} 沒提到 tension")
 
 
+# 代碼審派工詞第 1 點「正確性」的子題對照表(Projects/代碼審資料狀態鏡頭_計劃):標頭 → 那一行必須含的字樣。
+# 只驗標頭會被「留標頭、掏空內容」繞過(設計審 std r1 邊界席),所以每題釘至少一個必要字樣;逐字精修不擋。
+_DATA_STATE_NEW_HEADS = ("新舊互讀", "寫一半", "衍生資料", "時間", "不可逆")
+_CORRECTNESS_LENS_ITEMS = {
+    "邊界": ("空集合",), "資源": ("錯誤路徑和提早 return",), "例外與 None": ("丟例外或回 None",),
+    "冪等與併發": ("讀了兩次", "重複生效"),
+    "新舊互讀": ("舊程式讀新資料",), "寫一半": ("救得回",), "衍生資料": ("取哪一筆",),
+    "時間": ("具體時刻",), "不可逆": ("不該動",),
+}
+
+
+def _code_reviewer_prompt(templates_text):
+    """派工範本第 3 節的代碼審派工詞:「## 3. Code-loop reviewer」到下一個二級標題之間,第一個含「審查鏡頭」的 ``` 圍欄;找不到回 None。"""
+    import re as _re
+    if "## 3. Code-loop reviewer" not in templates_text:
+        return None
+    sec = templates_text.split("## 3. Code-loop reviewer", 1)[-1].split("\n## ", 1)[0]
+    for body in _re.findall(r"```[a-z]*\n(.*?)```", sec, _re.S):
+        if "審查鏡頭" in body:
+            return body
+    return None
+
+
+def _correctness_lens_missing(prompt):
+    """回傳第 1 點缺了哪幾題:標頭那行不在,或在但少了必要字樣;邊界那行帶「時區」也算缺(時間比較改由時間子題固定問)。"""
+    import re as _re
+    lines = {}
+    for ln in (prompt or "").splitlines():
+        mm = _re.match(r"\s*·\s*([^：:]+)[：:]", ln)
+        if mm:
+            lines.setdefault(mm.group(1).strip(), ln)
+    missing = []
+    for head, needs in _CORRECTNESS_LENS_ITEMS.items():
+        ln = lines.get(head)
+        if ln is None or not all(n in ln for n in needs) or (head == "邊界" and "時區" in ln):
+            missing.append(head)
+    return missing
+
+
+def t_data_state_lens_in_code_template():
+    """[資料狀態鏡頭 S1]範本第 3 節派工詞第 1 點:九個子題標頭都在、各含必要字樣、邊界行不再舉時區。
+    翻紅釘:刪掉任一新子題、或把冪等與併發改回原文 → 翻紅。"""
+    repo = Path(__file__).resolve().parent.parent
+    tpl = repo / "skills" / "lumos-design-loop" / "templates.md"
+    if not tpl.exists():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
+    prompt = _code_reviewer_prompt(tpl.read_text(encoding="utf-8"))
+    check("①找得到第 3 節含審查鏡頭的派工詞圍欄", prompt is not None, "第 3 節沒有含「審查鏡頭」的 ``` 圍欄")
+    missing = _correctness_lens_missing(prompt)
+    check("②第 1 點九題齊全且各含必要字樣", missing == [], f"缺:{missing}")
+
+
+def t_data_state_lens_missing_item_named():
+    """[資料狀態鏡頭 S2]檢查函式對缺題的副本要點名:拿掉第一個新子題、拿掉最後一個新子題、冪等與併發留標頭刪掉讀兩次那一問。"""
+    full = "\n".join(f"   · {h}：" + "、".join(n) for h, n in _CORRECTNESS_LENS_ITEMS.items())
+    check("①完整副本不報缺", _correctness_lens_missing(full) == [], str(_correctness_lens_missing(full)))
+    first, last = _DATA_STATE_NEW_HEADS[0], _DATA_STATE_NEW_HEADS[-1]
+    def drop(h):
+        return "\n".join(ln for ln in full.splitlines() if f"· {h}：" not in ln)
+    check("②拿掉第一個新子題 → 點名它", _correctness_lens_missing(drop(first)) == [first], str(_correctness_lens_missing(drop(first))))
+    check("③拿掉最後一個新子題 → 點名它", _correctness_lens_missing(drop(last)) == [last], str(_correctness_lens_missing(drop(last))))
+    hollow = full.replace("讀了兩次", "")
+    check("④冪等與併發只留標頭 → 點名它", _correctness_lens_missing(hollow) == ["冪等與併發"], str(_correctness_lens_missing(hollow)))
+    check("⑤邊界行帶時區 → 點名邊界", _correctness_lens_missing(full.replace("空集合", "空集合、時區")) == ["邊界"], "邊界帶時區沒被點名")
+
+
+def t_data_state_lens_doc_sync():
+    """[資料狀態鏡頭 S3]鏡像三處:代碼審 reference 現行 refute framing 有五個新子題標頭;代碼審 skill 步驟 2 指到資料狀態;
+    範本 §7 平行 panel 節有「五個新子題只留給正確性席」的分流句;reference 歷史區那份 framing 不得被補上新子題(舊帳回放用原文)。"""
+    repo = Path(__file__).resolve().parent.parent
+    ref = repo / "skills" / "lumos-code-loop" / "reference.md"
+    skill = repo / "skills" / "lumos-code-loop" / "SKILL.md"
+    tpl = repo / "skills" / "lumos-design-loop" / "templates.md"
+    if not all(p.exists() for p in (ref, skill, tpl)):
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),這段沒驗到")
+    rt = ref.read_text(encoding="utf-8")
+    cut = rt.find("## 歷史與停用")
+    check("①reference 有歷史區標題", cut > 0, "找不到「## 歷史與停用」")
+    current, history = rt[:cut], rt[cut:]
+    framing = next((ln for ln in current.splitlines() if ln.startswith("**refute framing**")), "")
+    check("②reference 現行 refute framing 五個新子題標頭齊全", framing and all(h in framing for h in _DATA_STATE_NEW_HEADS),
+          f"缺:{[h for h in _DATA_STATE_NEW_HEADS if h not in framing]}")
+    check("③reference 歷史區不含新子題標頭", not any(h in history for h in ("新舊互讀", "寫一半", "衍生資料")),
+          "歷史區被補上了新子題——那段只供回放舊帳,要保持原文")
+    step2 = next((ln for ln in skill.read_text(encoding="utf-8").splitlines() if ln.startswith("2. **派審查員**")), "")
+    check("④代碼審 skill 步驟 2 指到資料狀態", "資料狀態" in step2, "步驟 2 沒提資料狀態")
+    tt = tpl.read_text(encoding="utf-8")
+    s7 = tt.split("## 7. 平行 panel 派工", 1)[-1].split("\n## ", 1)[0] if "## 7. 平行 panel 派工" in tt else ""
+    check("⑤§7 平行 panel 節有分流句", "只留給正確性" in s7, "§7 沒寫五個新子題只留給正確性席")
+
+
 def t_init_writes_config_skeleton():
     """[消費專案接入靜默失效 S1]init 產設定骨架:單語言依偵測、多語言走多平台格式、認不出寫說明;
     骨架標示「推測」;既有設定不覆寫;★產出的必須是合法 JSON★(寫成帶 // 註解的檔會讓整份設定解析失敗)。
