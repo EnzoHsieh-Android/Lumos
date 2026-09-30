@@ -1,0 +1,686 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 42b9b8a0..cd33c3c0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -54693,40 +54693,40 @@ def t_drift_c4_code_review_r2():
+ 
+     翻紅釘:同提交印 git 裡的名字 → ②⑤紅;兩種來源照原名對、不照現存目錄合併 → ②紅(macOS)、⑤紅;
+     格式字元不換 → ③紅;NFC 鍵只取一個現存目錄 → ⑥紅。
+     """
+     print("t_drift_c4_code_review_r2")
+     import os as _os, unicodedata as _ud
+     root = _df_repo()
+     v = root / _DR_VAULT
+     RR = "governance/review-reports"
+     nfd = "done-Café"
+-    cf = "done-‮gnp​x"
++    cf = "done-\u202egnp​x"
+     E = v / "Verification" / "E.md"
+     E.write_text("---\ntype: verification\nstatus: pass\nvalid_under:\n  - 本工作樹(未提交);全套測試\nplan_refs:\n"
+                  "  - \"[[Projects/Done_計劃]]\"\n---\n# E\n", encoding="utf-8")
+     for d in (nfd, cf, "zzz"):
+         _nh_file(root, f"{RR}/{d}/r1.md", "報告\n")
+     _df_commit(root, "feature with reports")
+     first = _nh_git(root, "log", "--diff-filter=A", "--format=%H", "--", f"{_DR_VAULT}/Verification/E.md").stdout.split()[-1]
+     check("①前置:NFD 目錄與含格式字元的目錄在磁碟上照原樣存著、跟 E 同一個提交加進來", nfd in _os.listdir(root / RR)
+           and cf in _os.listdir(root / RR) and not _ud.is_normalized("NFC", nfd)
+           and _nh_git(root, "show", "--name-only", "--format=", first).stdout.count(f"{RR}/") >= 3, "")
+     rc, out = _df_fix(v, "Verification/E", "5", "--kind", "c4")
+     rows = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(f"{RR}/")]
+     names = [r[len(RR) + 1:r.rindex("(")] for r in rows]
+     shown_cf = "done-\\u202egnp\\u200bx"
+     check("②一個現存目錄一行:NFD 目錄兩種來源都有 → 一行「兩者」,印磁碟上的名字;每一條印出的路徑都精確存在(格式字元那條除外)",
+           rc == 0 and rows.count(f"{RR}/{nfd}(兩者)") == 1 and len(rows) == 3
+           and all(n in _os.listdir(root / RR) for n in names if n != shown_cf), "\n".join(map(ascii, rows)))
+     check("③目錄名裡的方向控制、零寬字元換成看得見的 \\uXXXX,原字元不進終端", f"{RR}/{shown_cf}(兩者)" in rows
+-          and "‮" not in out and "​" not in out, "\n".join(map(ascii, rows)))
++          and "\u202e" not in out and "​" not in out, "\n".join(map(ascii, rows)))
+     m = _load_lumos_inproc()
+     a, b = "code-Café", "code-Café"
+     orig = m._nodehome_git
+     try:
+         m._nodehome_git = lambda _root, *_a: "".join(f"{RR}/{x}/{f}\0" for x, f in
+                                                      ((a, "r1.md"), (b, "r1.md"), (b, "r2.md"), ("gone", "r1.md"))).encode()
+         got = m._drift_c4_same_commit(str(root), "abc123", {b})
+         m._nodehome_git = lambda _root, *_a: f"{RR}/{a}/r1.md\0".encode()
+         got2 = m._drift_c4_same_commit(str(root), "abc123", {a, b, "other"})
+     finally:
+@@ -55812,21 +55812,21 @@ def _m1_events(root):
+         except ValueError:
+             continue
+         if d.get("check") == "old-sentence":
+             out.append(d)
+     return out
+ 
+ 
+ def _m1_res(state="done", cand=3, handle=(), listed=(), **kw):
+     r = {"state": state, "handle": list(handle), "listed": list(listed), "unparsable": [], "text_defs": [],
+          "bad_notes": 0, "bad_touched": 0, "code_files": 2, "other_files": 0, "candidates": cand, "too_long": 0,
+-         "parsed": 0, "cache_hits": 0, "gone": {}}
++         "parsed": 0, "cache_hits": 0, "gone": {}, "long_lines": 0, "error": None}
+     r.update(kw)
+     return r
+ 
+ 
+ def _m1_f(path, line, names, layer="handle", text=None):
+     return {"kind": "m1", "path": path, "line": line, "text": text or ("呼叫 " + " 與 ".join(names)),
+             "why": "消失的名稱:" + "、".join(f"`{n}`(原本在 src/a.py)" for n in names), "names": list(names), "layer": layer}
+ 
+ 
+ def _m1_report(res, mode, root=None, base="a" * 40, tip="b" * 40):
+@@ -55917,20 +55917,38 @@ def t_drift_m1_history_filters():
+     check("⑦含「呼叫」的句子不因此被放過", "gone_kappa" in got and "gone_mu" in got, str(got))
+     want = ("零命中", "已移除", "不存在", "查無", "已刪", "從未", "已退役", "移除", "無此", "原記", "舊名", "改名", "已改", "棄用",
+             "不使用", "廢棄", "停用", "未使用", "dead", "removed", "deleted", "no longer", "renamed", "deprecated", "unused",
+             "obsolete", "撤除", "撤掉", "拿掉", "原寫", "原本", "原先", "不再", "舊版", "舊的", "刪除", "刪掉", "取代", "搬到",
+             "搬去", "改為", "改叫", "改成", "曾", "前身", "撤", "刪", "拔掉", "去掉", "不帶", "沒有", "當時叫", "擴成", "改名為")
+     check("⑧字眼表逐字 54 個,不引用 NEG_LEXICONS", m._DRIFT_M1_HIST_WORDS == want and len(set(want)) == 54, "")
+     bad = [w for w in want if not m._drift_m1_clause_hist(f"x {w} gone_q", len(f"x {w} "))]
+     check("⑨54 個字眼逐項:跟名稱同一句就不列", not bad, str(bad))
+     check("⑨「呼叫」「叫」不是字眼", not m._drift_m1_clause_hist("呼叫 gone_q", 3) and not m._drift_m1_clause_hist("叫 gone_q", 2),
+           "")
++    # 代碼審 r1 spec 對照席 F5:六個範圍宣告字各一節;②從那行到節尾含子節;①節開頭撤除行含子節
++    r2 = _nh_repo()
++    words = ["下面", "以下", "本節", "這一節", "整篇", "之後"]
++    nm = [f"scope_{i}_x" for i in range(6)] + ["sub_two_x", "after_two_x", "sub_one_x", "after_one_x"]
++    _nh_file(r2, "src/a.py", "".join(f"def {n}():\n    pass\n" for n in nm))
++    parts = ["# A"]
++    for i, w in enumerate(words):
++        parts += [f"## 節{i}", "說明", f"> {w}都是歷史紀錄", f"呼叫 scope_{i}_x"]
++    parts += ["## 二", "說明", "> 以下是歷史紀錄", "### 子節", "呼叫 sub_two_x", "## 三", "呼叫 after_two_x",
++              "## 四", "(本節已作廢)", "### 子節", "呼叫 sub_one_x", "## 五", "呼叫 after_one_x"]
++    _m1_note(r2, "Systems/A.md", "\n".join(parts))
++    b2 = _m1_commit(r2, "base")
++    _nh_file(r2, "src/a.py", "z = 1\n")
++    t2 = _m1_commit(r2, "del")
++    res2 = _m1_check(r2, b2, t2)
++    got2 = {n for f in res2["handle"] + res2["listed"] for n in f["names"]}
++    check("⑩前置:10 個名稱都是候選", res2["state"] == "done" and res2["candidates"] == 10, str(res2["candidates"]))
++    check("⑩六個範圍宣告字都觸發②;②與①都含子節、到同層標題為止", got2 == {"after_two_x", "after_one_x"}, str(got2))
+ 
+ 
+ def t_drift_m1_layers_and_mode():
+     """[S3] 家筆記(起點或終點 about_code 列了改到的檔)或摘要 → 要處理,其他只列出;rc_m1 只看 old_sentence,
+     整支回 max(既有那段, rc_m1);兩個開關各自解析。
+ 
+     翻紅釘:rc_m1 看 gate → ②④紅;回傳改成只看 rc_core → ③紅;摘要行不進要處理 → ①紅;old_sentence 在 gate 壞值時一起退回 → ⑥紅。
+     """
+     print("t_drift_m1_layers_and_mode")
+     import json as _j
+@@ -55981,20 +55999,33 @@ def t_drift_m1_layers_and_mode():
+                                         b'{"drift_check": {"old_sentence": "on"}}', None, b"{bad")]
+     check("⑦只寫 old_sentence=block → gate 照它的預設 block、old_sentence block", got[0][0] == "block" and got[0][3] == "block", str(got[0]))
+     check("⑦gate 寫壞、old_sentence=block → gate 照預設加提醒,old_sentence 照樣 block", got[1][0] == "block"
+           and any("blcok" in w for w in got[1][1]) and got[1][3] == "block", str(got[1]))
+     check("⑦old_sentence 寫壞值 → warn 並提醒", got[2][3] == "warn"
+           and any("drift_check.old_sentence 只能是 block/warn/off,你寫的是 'on',照預設 warn" == w for w in got[2][1]), str(got[2]))
+     check("⑦沒設定檔、設定檔壞掉 → warn", got[3][3] == "warn" and got[4][3] == "warn", str(got[3:]))
+     check("⑦設定檔壞掉:gate 照它的預設 block、old_sentence 照它的預設 warn,兩句各講各的", got[4][0] == "block"
+           and any("讀不成 JSON" in w for w in got[4][1]) and "舊句檢查(drift_check.old_sentence)照預設 warn" in got[4][1],
+           str(got[4]))
++    # 代碼審 r1 spec 對照席 F1:同一個提交刪名稱、也把家筆記 about_code 裡那支檔拿掉 → 起點樹還列著,仍是家
++    r3 = _nh_repo()
++    _nh_file(r3, "src/two.py", "def gone_two_x():\n    pass\n")
++    _m1_note(r3, "Systems/Two.md", "# T\n呼叫 gone_two_x。", about=["src/two.py"])
++    b3 = _m1_commit(r3, "b")
++    _nh_file(r3, "src/two.py", "z = 1\n")
++    _m1_note(r3, "Systems/Two.md", "# T\n呼叫 gone_two_x。")
++    t3 = _m1_commit(r3, "t")
++    res3 = _m1_check(r3, b3, t3)
++    check("⑧前置:終點樹的 Two 已經沒列 src/two.py", "src/two.py" not in (r3 / _M1_VAULT / "Systems" / "Two.md").read_text(encoding="utf-8"),
++          "")
++    check("⑧只在起點樹當家也算家 → 要處理", [(f["path"], f["layer"]) for f in res3["handle"] + res3["listed"]]
++          == [("Systems/Two.md", "handle")], str(res3["handle"] + res3["listed"]))
+ 
+ 
+ def t_drift_m1_ack_binds_name():
+     """[S4] drift ack --kind m1 --name=… 記名稱清單;同路徑同原文所有 m1 表態的名稱聯集涵蓋一筆發現的名稱集合才算已表態;
+     沒 --name、空白、別種類帶 --name 回 2;照貼提示(名稱 --restore)換掉佔位字 rc 0,原樣帶佔位字 rc 2。
+ 
+     翻紅釘:只看最新一筆表態(照 c2/c3)→ ③紅;不寫 names → ②③紅;提示寫成 --name --restore → ⑦紅。
+     """
+     print("t_drift_m1_ack_binds_name")
+     import json as _j, shlex
+@@ -56037,20 +56068,33 @@ def t_drift_m1_ack_binds_name():
+     _m1_commit(root, "remove flag")
+     rc, out = _m1_run(root, f"{b0}..HEAD")
+     hint = next((ln.split("確定照留就 ", 1)[1] for ln in out.splitlines() if "--name=--restore" in ln), None)
+     check("⑦前置:提示印 --name=--restore(等號寫法)", hint is not None and "--kind m1" in hint, out[-1200:])
+     if hint:
+         args = shlex.split(hint)
+         r = run(vault, *args[1:])
+         check("⑦原樣照貼(帶佔位字)→ 被佔位字檢查擋成 rc 2", r.returncode == 2 and "佔位字" in r.stderr, r.stdout + r.stderr)
+         r = run(vault, *shlex.split(hint.replace("<為什麼照留>", "這句在講舊旗標的由來,照留"))[1:])
+         check("⑦換成實際理由後照貼 → rc 0", r.returncode == 0, r.stdout + r.stderr)
++    # 代碼審 r1 spec 對照席 F3:只列出層也走表態;表態檔的名稱排序去重
++    _m1_note(root, "Systems/Other.md", "# O\n也呼叫 beta_name_b 與 alpha_name_a。")
++    _m1_commit(root, "other")
++    rc, out = _m1_run(root, f"{b0}..HEAD")
++    olno = _m1_lno(root, "Systems/Other.md", "beta_name_b")
++    check("⑧前置:Other 那行在只列出層", f"Systems/Other.md:{olno}" in out and "只列出(舊句檢查" in out, out[-800:])
++    r = run(vault, "drift", "ack", "Systems/Other", str(olno), "--kind", "m1", "--name=beta_name_b", "--name=alpha_name_a",
++            "--name=beta_name_b", "--reason", "這篇是對照說明,照留")
++    last = _j.loads((root / "governance" / "drift-acks.jsonl").read_text(encoding="utf-8").splitlines()[-1])
++    check("⑧表態檔的名稱排序去重", r.returncode == 0 and last.get("names") == ["alpha_name_a", "beta_name_b"], str(last))
++    _m1_commit(root, "ack other")
++    rc, out = _m1_run(root, f"{b0}..HEAD")
++    check("⑧只列出層的已表態也不再列", f"Systems/Other.md:{olno}" not in out, out[-800:])
+ 
+ 
+ def _m1_cache_repo(n=30, extra=None):
+     """定義快取測試的專案:沒有沒副檔名的檔;src/m<k>.py 各定義兩個名稱,筆記提到其中一個。"""
+     root = _nh_repo()
+     for k in range(n):
+         _nh_file(root, f"src/m{k}.py", f"def fn_{k}_x():\n    pass\n\nname_{k}_x = 1\n")
+     for rel, txt in (extra or {}).items():
+         _nh_file(root, rel, txt)
+     _m1_note(root, "Systems/A.md", "# A\n" + "\n".join(f"用 fn_{k}_x" for k in range(n)))
+@@ -56325,23 +56369,33 @@ def t_drift_m1_events_and_budget():
+           and rows[0]["repo"] == str(Path(root).resolve()) and rows[0]["head_sha"] == tip and rows[0]["state"] == "done", str(rows))
+     # ⑧空樹起點
+     r_docs = _nh_repo()
+     _m1_note(r_docs, "Systems/A.md", "# A")
+     t_docs = _m1_commit(r_docs, "docs")
+     rd = _m1_check(r_docs, None, t_docs)
+     check("⑧空樹起點、終點沒有程式檔 → 不印不記", rd["state"] is None, str(rd))
+     rn = _m1_check(root, None, tip)
+     rc, out = _m1_report(rn, "block", root=root, base=None, tip=tip)
+     e = _m1_events(root)[-1]
+-    check("⑧空樹起點、有程式檔 → no-base、印那一行、rc 0、帳 skipped、base_sha 空字串、candidates null", rn["state"] == "no-base"
+-          and rc == 0 and "舊句檢查:這次沒有起點版可比,不判" in out and e["kind"] == "skipped" and e["state"] == "no-base"
++    check("⑧空樹起點、有程式檔 → no-base、印那一行、rc 0、帳 range-unavailable、base_sha 空字串、candidates null",
++          rn["state"] == "no-base" and rc == 0 and "舊句檢查:這次沒有起點版可比,不判" in out
++          and e["kind"] == "range-unavailable" and e["state"] == "no-base"
+           and e["base_sha"] == "" and e["candidates"] is None, f"{rn} {e}")
++    # 代碼審 r1 spec 對照席 F2:終點不是 HEAD(--diff A..B,B 後面還有提交)→ head_sha 是 B
++    _nh_file(root, "src/b.py", "y = 2\n")
++    xb = _m1_commit(root, "x")
++    _nh_file(root, "src/c.py", "w = 3\n")
++    head = _m1_commit(root, "after x")
++    check("⑨前置:終點不是 HEAD", xb != head, "")
++    _m1_run(root, f"{tip3}..{xb}")
++    e = _m1_events(root)[-1]
++    check("⑨帳的 head_sha 是被推送的終點,不是 HEAD", e["head_sha"] == xb and e["commit"] == xb[:7], str(e))
+ 
+ 
+ def t_drift_m1_hint_paste_safe():
+     """[S7] m1 的改法:每個名稱寫成過了 _drift_sh 的 --name=<名稱>,去重鍵帶名稱集合,不截在 300 字,超過 4000 字改印
+     「名稱太多,先改寫這一行」;名稱含分號、空白、$() 時照貼不會切參數或執行。
+ 
+     翻紅釘:名稱不過 _drift_sh → ②紅;去重鍵不帶名稱 → ③紅;截在 300 字 → ④紅。
+     """
+     print("t_drift_m1_hint_paste_safe")
+     import io, shlex, subprocess as _sp
+@@ -56435,21 +56489,21 @@ def t_drift_m1_paths_and_shape():
+     check("②刪 pkg_a/util.py、終點還有 pkg_b/util.py → 路徑算、檔名不算", "pkg_a/util.py" in gone and "util.py" not in gone, str(gone))
+     check("③刪 tools/run_all.sh、沒有別的同名檔 → 兩個都算", {"tools/run_all.sh", "run_all.sh"} <= gone, str(gone))
+     check("④改名在 --no-renames 下也算刪", {"tools/old_mover.py", "old_mover.py"} <= gone, str(gone))
+     ok = ["Result", "getUser", "old_name", "--restore", "a/b"]
+     no = ["main", "FOO", "lumos", "pre-push", "resolve"]
+     check("⑤形狀過濾(照參考實作 _shape_ok)", all(m._drift_m1_shape_ok(x) for x in ok) and not any(m._drift_m1_shape_ok(x) for x in no),
+           str([(x, m._drift_m1_shape_ok(x)) for x in ok + no]))
+ 
+ 
+ def t_drift_m1_whole_word():
+-    """[S10] 整字比對照參考實作 _mk_rx(ASCII 識別字邊界,中文緊貼算提到);名稱先篩不改結果;每 200 行看一次時間。
++    """[S10] 整字比對照參考實作 _mk_rx(ASCII 識別字邊界,中文緊貼算提到);名稱先篩不改結果;每一行都看時間(代碼審 r1 起;原本每 200 行)。
+ 
+     翻紅釘:邊界改成 \\b(含中文)→ ①「改了foo_bar函式」紅;先篩切詞含中文 → ③紅;逐篇才看時間 → ④紅。
+     """
+     print("t_drift_m1_whole_word")
+     m = _load_lumos_inproc()
+     rx = m._drift_m1_name_rx(["foo_bar", "--restore", "tools/匯出報表.py", "計算_總額", "get_user", "foo.py", "--dry-run",
+                               "run_all", "run_all.sh"])
+     def f(s):
+         return [x.group(0) for x in rx.finditer(s)]
+     check("①中文緊貼算提到", f("改了foo_bar函式") == ["foo_bar"] and f("加了--restore旗標") == ["--restore"]
+@@ -56485,49 +56539,50 @@ def t_drift_m1_whole_word():
+     orig_ret = m._drift_m1_retired
+     started = [False]
+ 
+     def ret(lines, *a):
+         started[0] = started[0] or len(lines) >= 1000      # 從那篇 1000 行的筆記開始數
+         return orig_ret(lines, *a)
+ 
+     def now():
+         if started[0]:
+             calls[0] += 1
+-        return 10 ** 9 if calls[0] > 3 else 0
++        return 10 ** 9 if calls[0] > 500 else 0
+     m._drift_m1_retired = ret
+     try:
+         r = _m1_check(root, base, tip2, now=now, deadline=100)
+     finally:
+         m._drift_m1_retired = orig_ret
+-    check("④同一篇每 200 行看一次時間:1000 行那篇掃到第 600 行時間到 → timeout,那篇前面已找到的留著", r["state"] == "timeout"
+-          and calls[0] == 4 and any(f_["path"] == "Systems/Long.md" for f_ in r["handle"] + r["listed"]), f"{r['state']} {calls[0]}")
++    check("④每一行都看時間:1000 行那篇掃到第 500 行時間到 → timeout,那篇前面已找到的留著", r["state"] == "timeout"
++          and calls[0] == 501 and any(f_["path"] == "Systems/Long.md" for f_ in r["handle"] + r["listed"]), f"{r['state']} {calls[0]}")
+ 
+ 
+ def t_drift_m1_no_base_and_unreadable():
+-    """[S11] 起點空樹 → 不判、印一行、rc_m1 0、帳 skipped/no-base;範圍改到的筆記讀不出 → unreadable、block 回 1;
++    """[S11] 起點空樹 → 不判、印一行、rc_m1 0、帳 range-unavailable/no-base(代碼審 r1 起不記 skipped);範圍改到的筆記讀不出 → unreadable、block 回 1;
+     沒改到的讀不出 → 只印「K 篇筆記讀不出沒掃」;開頭帶 BOM 的筆記照樣切得出開頭欄位(摘要行照算要處理)。
+ 
+     翻紅釘:空樹照判 → ①紅;沒改到的讀不出也算判不了 → ③紅;讀筆記不去 BOM → ④紅。
+     """
+     print("t_drift_m1_no_base_and_unreadable")
+     root = _nh_repo()
+     _nh_file(root, "src/a.py", "def gone_one_x():\n    pass\n\ndef gone_two_x():\n    pass\n")
+     _m1_note(root, "Systems/Plain.md", "# P\n呼叫 gone_one_x。")
+     _m1_note(root, "Systems/Old.md", "", raw=b"---\ntype: system\n---\n# \xff\xfe bad\n")
+     _m1_note(root, "Systems/Bom.md", "", raw="\ufeff---\ntype: system\nsummary: |-\n  KEY:用 gone_two_x\n---\n# B\n")
+     base = _m1_commit(root, "base")
+     rn = _m1_check(root, None, base)
+     rc, out = _m1_report(rn, "block", root=root, base=None, tip=base)
+     check("①空樹起點、有程式檔 → no-base、印那一行、rc_m1 0", rn["state"] == "no-base" and rc == 0
+           and "舊句檢查:這次沒有起點版可比,不判" in out, f"{rn} {out}")
+     e = _m1_events(root)[-1]
+-    check("①帳記 kind skipped、state no-base", e["kind"] == "skipped" and e["state"] == "no-base", str(e))
++    check("①帳記 kind range-unavailable(不是 skipped,gov 不算成被跳過)、state no-base",
++          e["kind"] == "range-unavailable" and e["state"] == "no-base", str(e))
+     _nh_file(root, "src/a.py", "x = 1\n")
+     t1 = _m1_commit(root, "del")
+     r = _m1_check(root, base, t1)
+     rc, out = _m1_report(r, "block", root=root, base=base, tip=t1)
+     lay = {(f["path"], f["layer"]) for f in r["handle"] + r["listed"]}
+     check("③前置:判完、Plain 只列出", r["state"] == "done" and ("Systems/Plain.md", "list") in lay, str(r))
+     check("③沒改到的讀不出 → 只印「1 篇筆記讀不出沒掃」、不影響 rc", r["bad_notes"] == 1 and "1 篇筆記讀不出沒掃" in out, out)
+     check("④開頭帶 BOM 的筆記照樣切得出開頭欄位:摘要行算要處理", ("Systems/Bom.md", "handle") in lay, str(lay))
+     check("④(rc 來自 BOM 那篇的要處理)", rc == 1, out)
+     _m1_note(root, "Systems/Touched.md", "", raw=b"---\ntype: system\n---\n# \xff new bad\n")
+@@ -56735,36 +56790,37 @@ def t_drift_m1_conclusion_lines():
+     cases = [("①done 候選 0", _m1_res(cand=0), "舊句檢查:這次改到 2 支程式檔,沒有名稱消失"),
+              ("②done 候選 3、兩層都 0", _m1_res(cand=3), "舊句檢查:這次消失 3 個名稱,筆記裡沒有還在講的"),
+              ("③done 候選 3、要處理 0、只列出 2", _m1_res(cand=3, listed=lst2),
+               "舊句檢查:這次推送消失了 3 個名稱,筆記裡還在講的——要處理 0 筆、只列出 2 筆"),
+              ("⑤no-base", _m1_res(state="no-base", cand=None), "舊句檢查:這次沒有起點版可比,不判")]
+     for label, res, want in cases:
+         for mode in ("warn", "block"):
+             rc, out = _m1_report(res, mode)
+             check(f"{label}({mode}):沒有開頭詞、rc 0", rc == 0 and out.split("\n")[0] == want, out)
+     rc, out = _m1_report(_m1_res(cand=0, text_defs=["src/big.py"], too_long=1), "warn")
+-    check("④另印「0 支剖不動、1 支用文字比對:<路徑>」與「1 個名稱太長沒列」", "0 支剖不動、1 支用文字比對:src/big.py" in out
+-          and "1 個名稱太長沒列" in out, out)
++    check("④另印「0 支剖不動、1 支用文字比對:<路徑>」與「1 個名稱太長或帶控制字元、頭尾空白,沒列」",
++          "0 支剖不動、1 支用文字比對:src/big.py" in out and "1 個名稱太長或帶控制字元、頭尾空白,沒列" in out, out)
+     unk = [("timeout", _m1_res(state="timeout", cand=None), "舊句檢查:這次沒跑完(時間到,30 秒)"),
+            ("git-failed", _m1_res(state="git-failed", cand=None), "舊句檢查:git 讀不出這次推送的範圍或內容,這次沒判"),
+            ("unreadable", _m1_res(state="unreadable", bad_touched=1), "舊句檢查:這次改到的筆記有 1 篇讀不出,這次沒判完")]
+     for st, res, want in unk:
+         rc, out = _m1_report(res, "block")
+         check(f"⑥{st}(block):擋下、接略過指令、rc 1", rc == 1 and out.split("\n")[0] == "擋下:" + want
+               and "LUMOS_SKIP_DRIFT_CHECK=1 git push" in out, out)
+         rc, out = _m1_report(res, "warn")
+         check(f"⑦{st}(warn):提醒、句尾不擋、不接略過指令、rc 0", rc == 0
+               and out.split("\n")[0] == "提醒:" + want + "(drift_check.old_sentence=warn,不擋)" and "LUMOS_SKIP" not in out, out)
+ 
+ 
+ def t_drift_m1_long_names():
+-    """[S18] 候選名稱去頭尾空白後超過 200 字或帶控制字元 → 不列、印「N 個名稱太長沒列」、帳 too_long;200 字照列、照提示表態 rc 0。
++    """[S18] 候選名稱超過 200 字或帶控制字元 → 不列、印「N 個名稱太長或帶控制字元、頭尾空白,沒列」、帳 too_long;
++    200 字照列、照提示表態 rc 0。
+ 
+     翻紅釘:拿掉長度上限 → ①紅;上限改成 199 → ②紅。
+     """
+     print("t_drift_m1_long_names")
+     import shlex
+     root = _nh_repo()
+     vault = root / _M1_VAULT
+     n200 = "a_" + "b" * 198
+     n201 = "c_" + "d" * 199
+     _nh_file(root, "src/a.py", f"def {n200}():\n    pass\n\ndef {n201}():\n    pass\n\ndef short_ok_x():\n    pass\n")
+@@ -56777,20 +56833,351 @@ def t_drift_m1_long_names():
+     tip = _m1_commit(root, "del")
+     r = _m1_check(root, base, tip)
+     rows = {f["line"]: f["names"] for f in r["handle"] + r["listed"]}
+     l1, l2 = _m1_lno(root, "Systems/A.md", n201), _m1_lno(root, "Systems/A.md", "呼叫 " + n200)
+     check("①前置:201 字的與帶 tab 的路徑都是消失的候選", n201 in r["gone"] and tabp in r["gone"], str(list(r["gone"])[:6]))
+     check("①201 字與帶控制字元的(路徑與檔名)不列、too_long 記 3", r["too_long"] == 3 and all(n201 not in v and tabp not in v for v in rows.values()),
+           str(r["too_long"]))
+     check("②同一行另有合格名稱時只列合格的", rows.get(l1) == ["short_ok_x"], str(rows))
+     check("②200 字的照列", rows.get(l2) == [n200], str(rows))
+     _rc, out = _m1_report(r, "warn", root=root, base=base, tip=tip)
+-    check("③結論行下面印「3 個名稱太長沒列」、帳 too_long 3", "3 個名稱太長沒列" in out and _m1_events(root)[-1]["too_long"] == 3, out)
++    check("③結論行下面印「3 個名稱太長或帶控制字元、頭尾空白,沒列」、帳 too_long 3",
++          "3 個名稱太長或帶控制字元、頭尾空白,沒列" in out and _m1_events(root)[-1]["too_long"] == 3, out)
+     hint = next((x.split("確定照留就 ", 1)[1] for x in out.splitlines() if f"--name={n200}" in x), None)
+     check("④前置:200 字名稱的表態提示有印", hint is not None, out[-600:])
+     if hint:
+         r2 = run(vault, *shlex.split(hint.replace("<為什麼照留>", "兩百字的名稱照留"))[1:])
+         check("④照提示表態 rc 0", r2.returncode == 0, r2.stdout + r2.stderr)
+ 
+ 
++
++# ═══ 舊句檢查 m1 代碼審 r1 折入(每支對一組發現;家 Systems/存量漂移守衛)═══
++
++def _m1_git_b(root, *args, stdin=None):
++    """git 呼叫,參數可以是位元組(造非 UTF-8 檔名用)。"""
++    import subprocess as sp
++    return sp.run([b"git", b"-C", str(root).encode(), *[a if isinstance(a, bytes) else a.encode() for a in args]],
++                  input=stdin, capture_output=True)
++
++
++def _m1_index_add(root, path_bytes, content_bytes):
++    """不經磁碟,直接把一支檔(檔名是任意位元組)放進索引。"""
++    oid = _m1_git_b(root, "hash-object", "-w", "--stdin", stdin=content_bytes).stdout.decode().strip()
++    _m1_git_b(root, "update-index", "--add", "--cacheinfo", b"100644," + oid.encode() + b"," + path_bytes)
++
++
++def t_drift_m1_review_r1_non_utf8_and_guard():
++    """代碼審 r1 正確性-F1:檔名不是 UTF-8 時寫帳與印出照 _nodehome_show 轉義、不丟例外(warn 回 0);
++    m1 裡任何沒預料到的例外兜底成判不了(state error):warn 回 0、block 回 1;連印出記帳都出錯時也只印一行。
++
++    翻紅釘:帳的路徑不轉義 → ①紅(UnicodeEncodeError、rc 1);拿掉兜底 → ③紅(例外丟出去)。
++    """
++    print("t_drift_m1_review_r1_non_utf8_and_guard")
++    import contextlib, io
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_file(root, "src/a.py", "def old_func_x():\n    pass\n")
++    _m1_note(root, "Systems/A.md", "# A\n只是說明")
++    _nh_git(root, "add", "-A")
++    _m1_index_add(root, b"legacy/se\xf1or.py", b"print 'py2 syntax'\n")
++    _m1_index_add(root, b"docs/kg-knowledge/Systems/se\xf1or.md",
++                  "---\ntype: system\n---\n# N\n呼叫 old_func_x。\n".encode())
++    _nh_git(root, "commit", "-qm", "base", "--no-verify")
++    base = _na_head(root)
++    _nh_file(root, "src/a.py", "x = 1\n")
++    _nh_git(root, "add", "src/a.py")
++    _nh_git(root, "commit", "-qm", "del", "--no-verify")
++    tip = _na_head(root)
++    ls = _m1_git_b(root, "ls-tree", "-r", "--name-only", "-z", tip).stdout
++    check("①前置:樹上真的有非 UTF-8 檔名的程式檔與筆記", b"se\xf1or.py" in ls and b"se\xf1or.md" in ls, str(ls[:300]))
++    rc, out = _m1_run(root, f"{base}..{tip}")
++    ev = _m1_events(root)
++    e = ev[-1] if ev else {}
++    check("①warn:不當掉、rc 0、記一筆帳", rc == 0 and "Traceback" not in out and len(ev) == 1 and e.get("state") == "done", out[-800:])
++    check("①帳裡非 UTF-8 的路徑照 _nodehome_show 換成替代字元(剖不動的終點檔、只列出那一行的筆記)",
++          "legacy/se�or.py" in (e.get("text_defs_paths") or [])
++          and any(r["path"] == "Systems/se�or.md" for r in (e.get("rows") or [])), str(e)[:600])
++    vault_rel = _M1_VAULT
++
++    def guarded(mode):
++        buf = io.StringIO()
++        with contextlib.redirect_stderr(buf), _M1Home():
++            rc_ = m._drift_m1_guarded(Path(root), mode, base, tip, vault_rel)
++        return rc_, buf.getvalue()
++    orig = m._drift_old_sentence_check
++    m._drift_old_sentence_check = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom-x"))
++    try:
++        n0 = len(_m1_events(root))
++        rc_w, out_w = guarded("warn")
++        e_w = _m1_events(root)[-1]
++        rc_b, out_b = guarded("block")
++    finally:
++        m._drift_old_sentence_check = orig
++    check("②判定丟例外:warn 印判不了、rc 0、帳 state error", rc_w == 0 and "工具內部出錯" in out_w and "boom-x" in out_w
++          and len(_m1_events(root)) == n0 + 2 and e_w["state"] == "error" and e_w["kind"] == "warned", out_w + str(e_w))
++    check("②block 照判不了的規矩擋、接略過指令", rc_b == 1 and "擋下:舊句檢查:工具內部出錯" in out_b
++          and "LUMOS_SKIP_DRIFT_CHECK=1 git push" in out_b, out_b)
++    orig_rep = m._drift_m1_report
++    m._drift_m1_report = lambda *a, **k: (_ for _ in ()).throw(ValueError("rep-x"))
++    try:
++        rc_w, out_w = guarded("warn")
++        rc_b, out_b = guarded("block")
++    finally:
++        m._drift_m1_report = orig_rep
++    check("③連印出記帳都出錯:只印一行,warn 0、block 1", rc_w == 0 and rc_b == 1 and "帳也沒記" in out_w, out_w)
++
++
++def t_drift_m1_review_r1_scan_budget():
++    """代碼審 r1 資安-F1、邊界-F1:3 萬個名稱加超長行、同一行大量命中,都在 m1 的時間上限內結束;超過單行上限的行不掃、
++    計數進結論行與帳;逐行只拿可能命中的名稱跑比對,結果跟整條正則相同;句內字眼的預先計算跟原本逐次算的相同。
++
++    翻紅釘:拿掉單行上限 → ①紅(時間爆掉或沒計數);逐行候選漏掉某類名稱 → ②紅;預先計算的切句位置偏一格 → ③紅。
++    """
++    print("t_drift_m1_review_r1_scan_budget")
++    import random, time as _t
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    names = [f"gen_func_{i:06d}" for i in range(30000)]
++    _nh_file(root, "src/gen.py", "".join(f"def {n}(): pass\n" for n in names))
++    _m1_note(root, "Systems/A.md", "# A", about=["src/gen.py"])
++    base = _m1_commit(root, "base")
++    (root / "src" / "gen.py").unlink()
++    dense = "現況 " + " ".join(names[i % 900] for i in range(1150))          # 單行 1 萬 9 千多字、同一行 1150 次命中
++    body = ["# A", "(已移除 " + " ".join(names) + ")", " ".join(f"abc{i}" for i in range(30000)), dense]
++    body += [f"呼叫 {n}" for n in names[:2000]]
++    _m1_note(root, "Systems/A.md", "\n".join(body), about=["src/gen.py"])
++    tip = _m1_commit(root, "del")
++    check("①前置:dense 那行在上限內、另兩行超過", len(dense) <= m._DRIFT_M1_LINE_MAX < len(body[1]), str(len(dense)))
++    t0 = _t.monotonic()
++    _rc, out = _m1_run(root, f"{base}..{tip}")
++    dt = _t.monotonic() - t0
++    e = (_m1_events(root) or [{}])[-1]
++    check("①3 萬個名稱加超長行:在 m1 的時間上限內結束、判完", dt < m._DRIFT_M1_BUDGET_SEC and e.get("state") == "done"
++          and e.get("candidates") == 30002, f"{dt:.1f}s {str(e)[:300]}")
++    check("①超過單行上限的行不掃、計數進結論行與帳", e.get("long_lines") == 2 and f"2 行超過 {m._DRIFT_M1_LINE_MAX} 字沒掃" in out,
++          out[:600])
++    check("①同一行大量命中照判(dense 那行列出、2000 行各一筆)", e.get("handle") == 2001, str(e.get("handle")))
++    rnd = random.Random(11)
++    pool = ["foo_bar", "foo_bar_x", "計算_總額", "tools/匯出報表.py", "run_all", "run_all.sh", "--restore", "--dry-run",
++            "Tool_x-v2", "a/b", "中文名", "x.py"]
++    toks = [*pool, "呼叫", " ", "(", ")", "。", "曾", "_", "-", "/", ".", "zz", "原本"]
++    bad = []
++    for _i in range(3000):
++        sub = rnd.sample(pool, rnd.randint(1, len(pool)))
++        ln = "".join(rnd.choice(toks) for _j in range(rnd.randint(1, 30)))
++        rx = m._drift_m1_name_rx(sub)
++        full = sorted({x.group(0) for x in rx.finditer(ln) if not m._drift_m1_clause_hist(ln, x.start())})
++        if m._drift_m1_line_hits(m._drift_m1_name_index(sub), ln) != full:
++            bad.append((sub, ln))
++    check("②逐行只拿可能命中的名稱:結果跟整條正則加逐次句內判定逐字相同(3000 組隨機)", not bad, str(bad[:3]))
++    alpha = [*"()（）。;；!?！？ab 曾x", "原本", "removed", "Removed"]
++    bad = []
++    for _i in range(3000):
++        ln = "".join(rnd.choice(alpha) for _j in range(rnd.randint(0, 40)))
++        cl = m._DriftM1Clauses(ln)
++        bad += [(ln, p) for p in range(len(ln) + 1) if cl.hist(p) != m._drift_m1_clause_hist(ln, p)]
++    check("③句內字眼的預先計算跟原本逐次算的逐位置相同", not bad, str(bad[:3]))
++
++
++def t_drift_m1_review_r1_shebang_either_side():
++    """代碼審 r1 外家否決-F1、外家 finder-F1、spec 對照-F4:沒副檔名的 Python 腳本拿掉 #! 或改成 shell,起點版的定義照樣抽;
++    起點版或終點版任一邊是 Python 就算 Python 檔;沒副檔名的 Python 檔端到端照判。
++
++    翻紅釘:分類只看終點首行 → ①②紅;不是 Python 的那一版照剖 → ③紅(shell 版剖不動、整支不抽)。
++    """
++    print("t_drift_m1_review_r1_shebang_either_side")
++    root = _nh_repo()
++    py = "#!/usr/bin/env python3\ndef {0}():\n    pass\n\ndef keep_{1}():\n    pass\n"
++    _nh_file(root, "scripts/tool", py.format("old_helper_x", "a"))
++    _nh_file(root, "scripts/tool2", py.format("old_helper_y", "b"))
++    _nh_file(root, "scripts/tool3", py.format("old_helper_z", "c"))
++    _m1_note(root, "Systems/A.md", "# A\n呼叫 old_helper_x\n呼叫 old_helper_y\n呼叫 old_helper_z\n呼叫 keep_c")
++    base = _m1_commit(root, "base")
++    _nh_file(root, "scripts/tool", "#!/bin/bash\necho old\n")
++    _nh_file(root, "scripts/tool2", "just some text now\n")
++    _nh_file(root, "scripts/tool3", "#!/usr/bin/env python3\ndef keep_c():\n    pass\n")
++    tip = _m1_commit(root, "reformat")
++    res = _m1_check(root, base, tip)
++    got = {n for f in res["handle"] + res["listed"] for n in f["names"]}
++    check("①前置:判完、三支沒副檔名的檔都算改到的程式檔", res["state"] == "done" and res["code_files"] == 3, str(res))
++    check("①Python 腳本改成 shell:起點版的定義照樣抽、消失的列出", "old_helper_x" in got, str(got))
++    check("②Python 腳本拿掉 #! 變成純文字:照樣抽、列出", "old_helper_y" in got, str(got))
++    check("③兩邊都是 Python 的沒副檔名檔端到端照判;還定義著的不列", "old_helper_z" in got and "keep_c" not in got
++          and not res["unparsable"], str(res["unparsable"]))
++
++
++def t_drift_m1_review_r1_name_canon():
++    """代碼審 r1 外家否決-F2、外家 finder-F2、邊界-F2、資安-F2:候選名稱與 --name 用同一支正規化;頭尾空白、U+2028/2029、
++    方向覆寫、非 UTF-8 的名稱不列(計入 too_long)也不收表態;照貼提示印的指令一定表態得掉那一行。
++
++    翻紅釘:候選端改回只擋控制字元 → ①②紅;表態端寫入前去空白 → ④紅。
++    """
++    print("t_drift_m1_review_r1_name_canon")
++    import shlex
++    m = _load_lumos_inproc()
++    bad_names = ["--trail ", " lead_x", "a\u2028b_x", "a\u2029b_x", "x\u202eb_y", "se\udcf1or.py", "", "a" * 201, "a\tb_x"]
++    check("①這些名稱正規化後不能用", all(m._drift_m1_name_canon(x) is None for x in bad_names),
++          str([x for x in bad_names if m._drift_m1_name_canon(x) is not None]))
++    check("①表態端用同一支:每個都 rc 2 那種錯誤、合格的收", all(m._drift_ack_names_err("m1", [x]) for x in bad_names)
++          and m._drift_ack_names_err("m1", ["ok_name_x", "--restore"]) is None, "")
++    root = _nh_repo(cfg={"drift_check": {"old_sentence": "block"}})
++    vault = root / _M1_VAULT
++    _nh_file(root, "src/x.py", "import argparse\np = argparse.ArgumentParser()\np.add_argument('--trail ')\n"
++             "p.add_argument('--old-flag')\n")
++    _nh_file(root, "src/line\u2028break.py", "z = 1\n")
++    _m1_note(root, "Systems/N.md", "# N\n用 --trail  與 --old-flag", about=["src/x.py"])
++    base = _m1_commit(root, "base")
++    _nh_file(root, "src/x.py", "x = 1\n")
++    (root / "src" / "line\u2028break.py").unlink()
++    _m1_commit(root, "del")
++    rc, out = _m1_run(root, f"{base}..HEAD")
++    e = _m1_events(root)[-1]
++    lno = _m1_lno(root, "Systems/N.md", "--old-flag")
++    check("②頭尾空白的旗標、帶 U+2028 的路徑與檔名不列、計入 too_long", e["too_long"] == 3 and "'--name=--trail '" not in out
++          and f"Systems/N.md:{lno}" in out and rc == 1, out[-1000:])
++    hint = next((x.split("確定照留就 ", 1)[1] for x in out.splitlines() if f"N {lno} --kind m1" in x), None)
++    check("③前置:提示只帶合格名稱", hint is not None and "--name=--old-flag" in hint and "trail" not in hint, str(hint))
++    if hint:
++        r = run(vault, *shlex.split(hint.replace("<為什麼照留>", "舊旗標的說明照留"))[1:])
++        _m1_commit(root, "ack")
++        rc, out = _m1_run(root, f"{base}..HEAD")
++        check("④照貼提示表態後,那一行不再列、block 放行", r.returncode == 0 and f"Systems/N.md:{lno}" not in out and rc == 0,
++              r.stderr + out[-600:])
++
++
++def t_drift_m1_review_r1_shared_parsers():
++    """代碼審 r1 架構對齊-F1:改到哪些檔用共用的 _nodehome_name_status 解析,不另手刻;行為照舊。
++
++    翻紅釘:改回手刻 split → ①紅。
++    """
++    print("t_drift_m1_review_r1_shared_parsers")
++    import inspect
++    m = _load_lumos_inproc()
++    src = inspect.getsource(m._drift_m1_changes)
++    check("①用共用解析、沒有手刻的 NUL 切分", "_nodehome_name_status(" in src and 'split(b"\\0")' not in src, src)
++    root = _nh_repo()
++    _nh_file(root, "src/a.py", "a_x = 1\n")
++    _nh_file(root, "src/b.py", "b_x = 1\n")
++    base = _m1_commit(root, "b")
++    _nh_file(root, "src/a.py", "a_x = 2\n")
++    (root / "src" / "b.py").unlink()
++    _nh_file(root, "src/c.py", "c_x = 1\n")
++    tip = _m1_commit(root, "t")
++    run_ = m._DriftM1Run(Path(root), base, tip, _M1_VAULT, 10 ** 12, lambda: 0)
++    check("②狀態與路徑照舊", m._drift_m1_changes(run_) == [("M", "src/a.py"), ("D", "src/b.py"), ("A", "src/c.py")],
++          str(run_.changes))
++
++
++def t_drift_m1_review_r1_ledger_kinds_and_umask():
++    """代碼審 r1 併發回滾-F1/F2/F3:umask 002 也建得起快取與留痕(新建的層 0700、別人不可寫照擋);沒有起點記 range-unavailable,
++    gov --stats 不算成被跳過;gov 去重把 check 欄算進去,同一次推送 c 類與 m1 兩筆都看得到。
++
++    翻紅釘:group 可寫也擋 → ①紅;no-base 記 skipped → ②紅;去重鍵不帶 check → ③紅。
++    """
++    print("t_drift_m1_review_r1_ledger_kinds_and_umask")
++    import json as _j, os as _o, stat as _st
++    m = _load_lumos_inproc()
++    h = Path(tempfile.mkdtemp())
++    old = _o.umask(0o002)
++    try:
++        with _M1Home(h):
++            d = m._drift_m1_cache_dir()
++            ok_miss = m._drift_m1_ledger_miss(h, "a" * 40, "done")
++        h2 = Path(tempfile.mkdtemp())
++        (h2 / ".cache").mkdir(mode=0o775)
++        _o.chmod(h2 / ".cache", 0o775)
++        with _M1Home(h2):
++            d2 = m._drift_m1_cache_dir()
++    finally:
++        _o.umask(old)
++    modes = [(h / ".cache" / x).stat().st_mode for x in ("", "lumos", "lumos/drift-defs")] if d else []
++    check("①umask 002:快取目錄建得起來、新建的層別人不可寫,留痕也寫得進去", d is not None and ok_miss
++          and all(not (x & _st.S_IWOTH) for x in modes), str([oct(x) for x in modes]))
++    check("①既有的 ~/.cache 是 0775 也照用", d2 is not None, "")
++    h3 = Path(tempfile.mkdtemp())
++    (h3 / ".cache").mkdir()
++    _o.chmod(h3 / ".cache", 0o777)
++    with _M1Home(h3):
++        check("①別人可寫(0777)照樣不信", m._drift_m1_cache_dir() is None, "")
++    root = _nh_repo()
++    vault = root / _M1_VAULT
++    _nh_file(root, "src/a.py", "def gone_x():\n    pass\n")
++    tip = _m1_commit(root, "b")
++    res = _m1_check(root, None, tip)
++    _m1_report(res, "warn", root=root, base=None, tip=tip)
++    e = _m1_events(root)[-1]
++    r = run(vault, "gov", "--stats")
++    check("②沒有起點記 range-unavailable;gov --stats 的「被跳過」不含 drift-check",
++          e["state"] == "no-base" and e["kind"] == "range-unavailable" and "被跳過" not in r.stdout, r.stdout[-600:])
++    log = root / "docs" / ".governance-log.jsonl"
++    ev = {"ts": "2026-09-30T09:00:00+08:00", "commit": "abc1234", "gate": "drift-check", "kind": "warned", "hard": False,
++          "nodes": ["Systems/A"], "note": "c類那筆", "detail": "c類那筆"}
++    with open(log, "a", encoding="utf-8") as fh:
++        fh.write(_j.dumps(ev, ensure_ascii=False) + "\n")
++        fh.write(_j.dumps(dict(ev, note="m1那筆", detail="m1那筆", check="old-sentence"), ensure_ascii=False) + "\n")
++    r = run(vault, "gov", "--full")
++    check("③同提交、同筆記、同 kind 的 c 類與 m1 兩筆,gov 去重後都在", "c類那筆" in r.stdout and "m1那筆" in r.stdout, r.stdout[-800:])
++
++
++def t_drift_m1_review_r1_spec_gaps():
++    """代碼審 r1 spec 對照-F4、F6 與合約圖譜-F1:〈做法〉寫了、原本沒有測試碰到的行為。
++
++    翻紅釘:other_files 那行不印 → ①紅;時間到不印「以下只是已找到的部分」→ ②紅;起點算不出來不判 git-failed → ③紅;
++    rows 的名稱不排序 → ④紅;略過時 m1 照跑 → ⑤紅;終點語料的大檔略過 → ⑥紅;快取寫不進去就當掉 → ⑦紅;
++    drift check --help 沒提 old_sentence → ⑧紅。
++    """
++    print("t_drift_m1_review_r1_spec_gaps")
++    import subprocess as _sp
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    _nh_file(root, "src/a.py", "def zeta_name_x():\n    pass\n\ndef alpha_name_x():\n    pass\n\ndef still_here_x():\n    pass\n")
++    _nh_file(root, "tools/run.sh", "#!/bin/bash\necho hi\n")
++    big = "def still_here_x():\n    pass\n" + "".join(f"def g_{i}(): pass\n" for i in range(240000))
++    _nh_file(root, "src/big.py", big)
++    _m1_note(root, "Systems/A.md", "# A\n呼叫 zeta_name_x 與 alpha_name_x 與 still_here_x")
++    base = _m1_commit(root, "base")
++    _nh_file(root, "src/a.py", "x = 1\n")
++    (root / "tools" / "run.sh").unlink()
++    tip = _m1_commit(root, "del")
++    res = _m1_check(root, base, tip)
++    rc, out = _m1_report(res, "warn", root=root, base=base, tip=tip)
++    check("①這次有 1 支非 Python 程式檔改動(只看路徑)", "這次有 1 支非 Python 程式檔改動(只看路徑)" in out, out)
++    check("⑥終點語料裡沒改到的大檔用文字抽,還定義著的不算消失", "still_here_x" not in res["gone"] and "zeta_name_x" in res["gone"]
++          and "src/big.py" in res["text_defs"], str(res["gone"]))
++    e = _m1_events(root)[-1]
++    check("④帳 rows 的名稱排序", e["rows"] and e["rows"][0]["names"] == ["alpha_name_x", "zeta_name_x"]
++          and m._drift_m1_rows([_m1_f("Systems/A.md", 3, ["zeta_q", "alpha_q"])], 1)[0]["names"] == ["alpha_q", "zeta_q"],
++          str(e.get("rows")))
++    part = _m1_res(state="timeout", cand=None, handle=[_m1_f("Systems/A.md", 3, ["foo_bar"])])
++    rc, out = _m1_report(part, "warn")
++    check("②時間到而有已找到的:印「以下只是已找到的部分」與那幾筆", "以下只是已找到的部分" in out and "Systems/A.md:3" in out, out)
++    r_t = _m1_check(root, ("unknown", "起點算不出來"), tip)
++    check("③推送起點算不出來 → git-failed、改到的程式檔數是 null", r_t["state"] == "git-failed" and r_t["code_files"] is None, str(r_t))
++    n0 = len(_m1_events(root))
++    rc, out = _m1_run(root, f"{base}..{tip}", env={"LUMOS_SKIP_DRIFT_CHECK": "1"})
++    check("⑤LUMOS_SKIP_DRIFT_CHECK=1:m1 不跑、不另記帳", rc == 0 and "舊句檢查" not in out and len(_m1_events(root)) == n0, out)
++    check("⑤drift fix --keep 走 cmd_drift_ack 寫 c2 時名稱是 None、不擋", m._drift_ack_names_err("c2", None) is None, "")
++    h = Path(tempfile.mkdtemp())
++    with _M1Home(h):
++        d = m._drift_m1_cache_dir()
++    orig_mk = tempfile.mkstemp
++
++    def no_space(*a, **k):
++        raise OSError(28, "No space left on device")
++    tempfile.mkstemp = no_space
++    try:
++        r_ro = _m1_check(root, base, tip, home=h)
++    finally:
++        tempfile.mkstemp = orig_mk
++    check("⑦快取寫不進去(磁碟滿):照常判完、沒有快取檔", r_ro["state"] == "done" and r_ro["parsed"] > 0 and not list(d.glob("*")),
++          f"{r_ro['state']} parsed={r_ro['parsed']} files={list(d.glob('*'))[:3]}")
++    (root / ".lumos").mkdir(exist_ok=True)
++    (root / ".lumos" / "config.json").write_text('{"drift_check": {"gate": "warn", "old_sentence": "block"}}', encoding="utf-8")
++    lines = m._drift_gate_doctor_lines(root)
++    check("⑧doctor 講開關那行多講 old_sentence 的值", any("舊句檢查(drift_check.old_sentence)是 block" in x for x in lines), str(lines))
++    r = _sp.run([sys.executable, GRAPHCTL, "drift", "check", "--help"], capture_output=True, text=True)
++    check("⑧drift check --help 講到舊句檢查與 old_sentence 開關", "舊句檢查" in r.stdout and "drift_check.old_sentence" in r.stdout,
++          r.stdout[:600])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
