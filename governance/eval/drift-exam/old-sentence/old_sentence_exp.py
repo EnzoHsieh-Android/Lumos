@@ -904,6 +904,214 @@ def cand_W(push, spec):
     return out
 
 
+# ───── W2 家族(新增名稱否定句;Projects/新增名稱否定句檢查_計劃):m1 的反方向 ─────
+# 推送範圍裡「起點沒有、終點新定義」的名稱(同 m1 的三類:def/class/指派、add_argument 旗標、程式檔路徑與檔名,
+# 同一個形狀過濾),筆記裡同一句同時出現該名稱與否定字眼的行。只量、不擋;不動 P 家族任何一支。
+NEG_ZH_W2 = ("沒有", "還沒", "尚未", "未", "不存在", "缺", "待補", "尚無")
+NEG_EN_W2 = ("not yet", "missing", "no", "lack", "lacks", "absent", "TODO", "TBD", "does not exist",
+             "doesn't exist", "not exist")
+NEG_RX_W2 = re.compile("|".join(
+    [re.escape(w) for w in sorted(NEG_ZH_W2, key=len, reverse=True)]
+    + [r"(?i:(?<![A-Za-z0-9_])" + re.escape(w) + r"(?![A-Za-z0-9_]))" for w in sorted(NEG_EN_W2, key=len, reverse=True)]))
+# 句內歷史字眼(W2h):P4r2/P4r3 的 54 個字眼,去掉本身就是否定字眼或含否定字眼的(沒有、不存在、未使用、從未…)
+HIST_W2 = tuple(w for w in dict.fromkeys(HIST_WORDS2)
+                if not any(z in w for z in NEG_ZH_W2) and w.lower() not in {e.lower() for e in NEG_EN_W2})
+HIST_RX_W2 = re.compile("|".join(
+    (r"(?<![A-Za-z0-9_])" + re.escape(w) + r"(?![A-Za-z0-9_])") if w.isascii() else re.escape(w)
+    for w in sorted(HIST_W2, key=len, reverse=True)))
+
+
+def _w2_clause(line, pos):
+    """同 _clause_has_hist 的「那一句」切法(括號內只看括號內、括號外先遮掉不含括號的括號對、再用句號分號切),
+    回 (那一句的文字, 那一句在 line 裡的起點)。遮掉的括號內容換成 \\0、長度不變,所以位置對得上。"""
+    depth_open = []
+    span = None
+    for i, ch in enumerate(line):
+        if ch in "(（":
+            depth_open.append(i)
+        elif ch in ")）" and depth_open:
+            a = depth_open.pop()
+            if a < pos < i and (span is None or a > span[0]):
+                span = (a, i)
+    if span is None and depth_open and depth_open[-1] < pos:
+        span = (depth_open[-1], len(line))
+    if span is not None:
+        seg, off = line[span[0] + 1:span[1]], span[0] + 1
+    else:
+        seg, off = re.sub(r"[(（][^()（）]*[)）]", lambda m: "\0" * len(m.group(0)), line), 0
+    rel = pos - off
+    cuts = [m.end() for m in re.finditer(r"[。;；!?！？]", seg) if m.end() <= rel]
+    a = cuts[-1] if cuts else 0
+    m2 = re.search(r"[。;；!?！？]", seg[rel:])
+    b = rel + m2.start() if m2 else len(seg)
+    return seg[a:b], off + a
+
+
+def _w2_neg_ok(line, m, near):
+    """名稱 m 所在那一句有沒有否定字眼(不算名稱本身那一段);near 是整數時,否定字眼要在名稱前後 near 字內。"""
+    clause, c0 = _w2_clause(line, m.start())
+    ns, ne = m.start() - c0, m.end() - c0
+    for g in NEG_RX_W2.finditer(clause):
+        if g.start() < ne and g.end() > ns:
+            continue
+        if near is None or max(0, g.start() - ne, ns - g.end()) <= near:
+            return True
+    return False
+
+
+def _w2_hist(line, m):
+    clause, c0 = _w2_clause(line, m.start())
+    ns, ne = m.start() - c0, m.end() - c0
+    return any(not (g.start() < ne and g.end() > ns) for g in HIST_RX_W2.finditer(clause))
+
+
+def _w2_base_defs(push):
+    """起點樹所有 Python 檔的定義與旗標聯集(tip_all_defs 的起點版;m1 判消失用終點語料,W2 判新增用起點語料)。"""
+    def f():
+        s = set()
+        for p, sha in push.repo.tree(push.base).items():
+            if push.ctx.code.kind(p, sha) == "py":
+                info = push.ctx.code.py(sha)
+                if info:
+                    s |= info["defs"] | info["flags"]
+        return s
+    return push.memo("w2basedefs", f)
+
+
+def _w2_new_paths(push, chg, new):
+    """這次新增的程式檔路徑;檔名只有起點樹任何位置都沒有同名檔才算新增(m1 _gone_paths 的反方向)。"""
+    base_bases = {p.rsplit("/", 1)[-1] for p in push.repo.tree(push.base)}
+    for st, _a, b, _k in chg:
+        if st == "A":
+            new.setdefault(b, set()).add(b)
+            bn = b.rsplit("/", 1)[-1]
+            if bn not in base_bases:
+                new.setdefault(bn, set()).add(b)
+
+
+def w2_appeared(push, shape=True):
+    """新增的名稱 → 終點所在的檔(集合)。定義名與旗標:改到的 Python 檔終點那版有、起點那版沒有,而且起點語料
+    所有 Python 檔都沒定義(從 a.py 搬到 b.py 不算);路徑:這次新增的程式檔(--no-renames,改名=刪+加)的路徑,
+    檔名只有起點樹任何位置都沒有同名檔才算。剖不動的那一版整支不算。"""
+    def f():
+        chg = push.code_changes(False)
+        new, unparsable = {}, []
+        basedefs = None
+        for st, a, b, k in chg:
+            if k != "py" or st == "D":
+                continue
+            tdefs, _ok = push.defs_of(push.tip, b)
+            bdefs, _ok = push.defs_of(push.base, a) if st != "A" else (set(), True)
+            if tdefs is None or bdefs is None:
+                unparsable.append(b)
+                continue
+            fresh = tdefs - bdefs
+            if fresh:
+                basedefs = basedefs if basedefs is not None else _w2_base_defs(push)
+                for n in fresh - basedefs:
+                    new.setdefault(n, set()).add(b)
+        _w2_new_paths(push, chg, new)
+        if shape:
+            new = {n: v for n, v in new.items() if _shape_ok(n)}
+        return new, unparsable
+    return push.memo(("w2new", shape), f)
+
+
+def cand_W2(push, spec):
+    """W2 家族:spec 欄位 near(None=同一句;整數=否定字眼在名稱前後幾字內)、old(只看這次沒新寫也沒改過的行)、
+    hist(那一句另有歷史字眼就不列)。撤除節照 P4r3(ret_full3);分層照 P4r3(任一改到程式檔的家或摘要=要處理)。"""
+    new, _unp = w2_appeared(push, spec.get("shape", True))
+    rx = _mk_rx(new.keys())
+    if not rx:
+        return []
+    notes = push.tip_notes()
+    newl = push.new_lines() if spec.get("old") else {}
+    homes = push.homes_any()
+    out = []
+    for rel, n in notes.items():
+        nl = newl.get(rel, set())
+        for lno, ln in n.scan_lines():
+            if n.ret_full3[lno] or lno in nl:
+                continue
+            toks = [m.group(0) for m in rx.finditer(ln)
+                    if _w2_neg_ok(ln, m, spec.get("near")) and not (spec.get("hist") and _w2_hist(ln, m))]
+            if toks:
+                lay = "handle" if (n.regs[lno - 1] == "summary" or rel in homes) else "list"
+                out.append((rel, lno, lay, sorted(set(toks))))
+    return out
+
+
+CJK_RUN_RE = re.compile(r"[一-鿿]{4,}")
+
+
+def _cjk4(txt):
+    out = set()
+    for m in CJK_RUN_RE.finditer(txt):
+        s = m.group(0)
+        out.update(s[i:i + 4] for i in range(len(s) - 3))
+    return out
+
+
+def _w2z_base_grams(push):
+    """起點樹所有程式檔(同 Code.kind 的範圍)出現過的中文四字片段聯集;依 blob 快取在 ctx 上。"""
+    cache = push.ctx.__dict__.setdefault("_w2z_blob", {})
+
+    def f():
+        s = set()
+        for p, sha in push.repo.tree(push.base).items():
+            if push.ctx.code.kind(p, sha):
+                if sha not in cache:
+                    cache[sha] = _cjk4(push.repo.blob(sha))
+                s |= cache[sha]
+        return s
+    return push.memo("w2zbase", f)
+
+
+def w2z_new_grams(push):
+    """這次改到的程式檔新增行裡的中文四字片段,起點樹任何程式檔都沒出現過的(新概念的中文說法,例:「比例上限」)。"""
+    def f():
+        paths = sorted({b for st, _a, b, _k in push.code_changes(False) if st != "D"})
+        if not paths:
+            return set()
+        raw = push.repo.git("diff", "--no-ext-diff", "-U0", "--no-color", "--no-renames", push.base, push.tip,
+                            "--", *paths)
+        added = set()
+        for ln in raw.splitlines():
+            if ln.startswith("+") and not ln.startswith("+++"):
+                added |= _cjk4(ln)
+        return added - _w2z_base_grams(push) if added else set()
+    return push.memo("w2znew", f)
+
+
+def cand_W2z(push, spec):
+    """探索用:名稱比對抓不到 A3/A7(句子裡沒有新名稱),試「新增程式的中文說法」對上否定句——
+    改到的程式檔新增行(註解、docstring、字串)裡起點程式沒出現過的中文四字片段,在這次沒新寫的筆記行裡、
+    跟否定字眼同一句而且在前後 near 字內。分層同 W2。"""
+    grams = w2z_new_grams(push)
+    if not grams:
+        return []
+    near = spec.get("near", 10)
+    notes = push.tip_notes()
+    newl = push.new_lines()
+    homes = push.homes_any()
+    out = []
+    for rel, n in notes.items():
+        nl = newl.get(rel, set())
+        for lno, ln in n.scan_lines():
+            if n.ret_full3[lno] or lno in nl or not NEG_RX_W2.search(ln):
+                continue
+            toks = set()
+            for g in NEG_RX_W2.finditer(ln):
+                clause, c0 = _w2_clause(ln, g.start())
+                gs, ge = g.start() - c0, g.end() - c0
+                win = clause[max(0, gs - near - 3):ge + near + 3]
+                toks |= _cjk4(win) & grams
+            if toks:
+                lay = "handle" if (n.regs[lno - 1] == "summary" or rel in homes) else "list"
+                out.append((rel, lno, lay, sorted(toks)))
+    return out
+
+
 def cand_V(push, spec):
     """改值的常數:家筆記(讀法乙)裡提到那個常數名的行,只列。"""
     notes = push.tip_notes()
@@ -1091,7 +1299,16 @@ CANDS = {
     "P6h": (cand_P, dict(BASE_P, dis="repo", ghost="all_hist", **_K), "P6 但懸空名限「歷史上曾定義過」"),
     "W": (cand_W, {}, "新增程式檔喚醒家裡的「尚未/還沒」句(只列)"),
     "V": (cand_V, {}, "改值的常數:家裡提到常數名的行"),
+    # W2 家族(新增名稱否定句檢查計劃的實驗;不進 run 的預設候選,要用 --cands 點名)
+    "W2": (cand_W2, {}, "新增名稱 + 同一句有否定字眼"),
+    "W2n": (cand_W2, {"near": 10}, "W2,否定字眼要在名稱前後 10 字內"),
+    "W2o": (cand_W2, {"old": True}, "W2,只看這次沒新寫也沒改過的行"),
+    "W2h": (cand_W2, {"hist": True}, "W2,那一句另有歷史字眼(原本、改成…)就不列"),
+    "W2on": (cand_W2, {"old": True, "near": 10}, "W2o + W2n"),
+    "W2onh": (cand_W2, {"old": True, "near": 10, "hist": True}, "W2o + W2n + W2h"),
+    "W2z": (cand_W2z, {"near": 10}, "探索:新增程式行裡起點沒有的中文四字片段 + 舊行否定字眼 10 字內"),
 }
+_OPT_IN = {"DGgit"} | {k for k in CANDS if k.startswith("W2")}
 
 
 def run_cand(ctx, name, base, tip, push=None):
@@ -1245,8 +1462,11 @@ def _run_tc(a, names, res):
 
 
 def cmd_run(a):
-    names = a.cands.split(",") if a.cands else [n for n in CANDS if n != "DGgit"]
+    names = a.cands.split(",") if a.cands else [n for n in CANDS if n not in _OPT_IN]
     m1, nd = load_exam()
+    if a.extra_exam:   # 例:--extra-exam A7(考卷裡不屬機制①、但要看某候選有沒有列到的題;照它的失效提交跑)
+        want = a.extra_exam.split(",")
+        m1 = m1 + [q for q in json.load(open(EXAM, encoding="utf-8")) if q["id"] in want and q not in m1]
     res = {"cands": {n: CANDS[n][2] for n in names}, "exam": {}, "rtb": {}, "tc": {}, "nd": {}, "meta": {}}
     ctx = Ctx(a.rtb, RTB_VAULT)
     _run_exam(ctx, names, m1, res)
@@ -1260,6 +1480,7 @@ def cmd_run(a):
 
 def report(res, names):
     m1ids = ["A1", "A2", "A3", "C1", "C2", "C3", "D1", "D2", "D3"]
+    m1ids += [i for i in (res["exam"][names[0]] if names and res["exam"].get(names[0]) else {}) if i not in m1ids]
     print("\n== 9 題(擋到=那一句在要處理層;只列=那一句只在只列出層;點到=同篇別句)==")
     print("cand  " + " ".join(f"{i:>4}" for i in m1ids) + "  擋到 列出")
     for nm in names:
@@ -1474,6 +1695,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--dump", action="store_true", default=True)
     ap.add_argument("--skip-sweep", action="store_true")
+    ap.add_argument("--extra-exam", default="")   # run:考卷裡額外照失效提交跑的題號(逗號分隔,例 A7)
     a = ap.parse_args()
     {"run": cmd_run, "time": cmd_time, "q6": cmd_q6, "show": cmd_show, "scan": cmd_scan, "revisit": cmd_revisit}[a.cmd](a)
 
