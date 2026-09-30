@@ -55,7 +55,7 @@ The message is for AI: its instructions require it to update the notes and retry
 3. **Every finding needs an outcome**: Fix it, explain why it will not be fixed, or disprove it with evidence. All findings must be addressed to pass.
 4. **Update the notes**: Record trade-offs and verification methods in the note responsible for that file, ready for the next change.
 
-The outer loop checks the process itself. Lumos's own repo saves a pass/fail verdict for every reviewed case with a design spec. Each week, the current judging code recomputes those verdicts from saved records, without another AI review. If there are too many cases, it rotates through a sample. A changed verdict means a later edit to the judging rules broke something and needs fixing.
+The outer loop checks the process itself; see "How the toolkit keeps improving (evals)" below.
 
 ## Connecting plans, features, and verification
 
@@ -109,6 +109,25 @@ Some sentences go stale easily: “there is no refund page yet” becomes wrong 
 **Third check: find outdated statements before pushing.** Deleted functions or renamed files still mentioned by their old names or paths only trigger warnings. Pushes are blocked if a rule's test exists but its note still says “test to be added,” a linked note was deleted, or a revisit condition is met. Code changes without note updates and broken note links always block; projects can set other blocking checks to warn instead.
 
 <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push; each check is labelled as a block or warning" width="760"></a></p>
+
+## How the toolkit keeps improving (evals)
+
+You cannot rely on gut feeling alone to tell whether a rule change broke something or the AI is following the rules. Lumos runs four evaluations (evals), each once a week:
+
+- **Review replay**: Reviewed cases store a pass/fail verdict. The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
+- **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
+- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own.
+- **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
+
+<p align="center">
+  <a href="assets/evals-overview-en.svg">
+    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests measured again the next week" width="760">
+  </a>
+</p>
+
+Results are recorded weekly, and regressions or failed checks alert a person. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+
+These evals run only in Lumos's own repo. They ensure regressions are visible, but do not guarantee that every change is an improvement.
 
 ## Install and limits
 

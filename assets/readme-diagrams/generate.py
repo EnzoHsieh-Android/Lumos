@@ -374,30 +374,38 @@ def writeback_scene(en):
     return title,513,b,"A change’s design decisions, review dispositions and verification results are written to relevant notes. A later session retrieves them; records are updated, rechecked or marked stale as needed."
 
 def evals_scene(en):
-    title="Evaluate the process, not just the patch." if en else "評測工作台：流程本身也要被檢查"
-    b=badge(36,122,"REVIEW REPLAY" if en else "審查回放","purple",en and 205 or 175)
-    b+=badge(36,314,"RETRIEVAL EVAL" if en else "查詢評測","blue",en and 205 or 175)
-    for y,t,s,c in [(174,"Review records" if en else "審查紀錄","Findings + dispositions" if en else "發現與處置","purple"),
-                    (366,"Labelled set" if en else "標註題目","Retrieval reference" if en else "查詢參照","blue")]:
-        b+=document(36,y,248,104,t,s,c)
-    b+=path("M284 225H319","purple",2)+arrow(326,225,"right","purple")
-    b+=path("M284 417H319","blue",2)+arrow(326,417,"right","blue")
-    b+=rect(329,174,241,296)
-    b+=text(350,211,"Compare" if en else "回放與比較",en and 25 or 24,weight=600)
-    b+=path("M349 235H550","#344b69",1)
-    b+=text(449,272,"Verdicts" if en else "判定有沒有改變？",en and 24 or 22,"purple","middle")
-    b+=rect(351,291,92,41,"#252b47","none",10)+rect(456,291,92,41,"#252b47","none",10)
-    b+=text(397,319,"Prior" if en else "舊案",20,"muted","middle")+text(502,319,"Replay" if en else "回放",20,"purple","middle")
-    b+=path("M349 350H550","#344b69",1)
-    b+=text(449,389,"Retrieval results" if en else "查詢結果怎麼變？",en and 22 or 22,"blue","middle")
-    b+=path("M355 419H414M355 432H393M463 419H541M463 432H523","blue",4)
-    b+=path("M570 322H603","coral",2.5)+arrow(611,322,"right","coral")
-    b+=rect(609,287,115,74,"#322d3b","#a67476",14)
-    b+=text(666,332,"Calibrate" if en else "校準",en and 22 or 27,"coral","middle",600)
-    b+=path("M669 361V410","coral",2)
-    b+=path("M669 410V498H160V484","coral",2,"8 7")+arrow(160,479,"up","coral")
-    b+=rect(270,484,331,34,"#101d30","none",8)+text(435,508,"Feed subsequent rounds" if en else "帶回後續流程，再留下新紀錄",en and 22 or 20,"coral","middle")
-    return title,548,b,"Two evaluation streams: replay review records to compare verdicts, and use human-labelled retrieval questions to compare results. Comparisons inform calibration. This conceptual workbench shows no measured scores or guaranteed improvement."
+    title = "The toolkit itself is checked every week" if en else "每週自動檢查這套工具本身"
+    b = rect(36, 122, 688, 290)
+    b += text(60, 160, "Scheduled in Lumos's own repo" if en else "在 Lumos 自己的 repo 排程執行", 18, "muted")
+    rows = [
+        (180, "Review replay" if en else "審查回放", "Recompute past verdicts; they should not change" if en else "用現在的判定程式重算舊案，結論應該不變", "purple"),
+        (236, "Retrieval exam" if en else "查詢考卷", "Labelled questions: are the right notes found?" if en else "人工標好的題目：查得到該看的筆記嗎？", "blue"),
+        (292, "Scenario probes" if en else "情境探針", "Plain requests: does the AI check notes itself?" if en else "用口語出題：AI 會不會自己去查筆記？", "green"),
+        (348, "Missed notes" if en else "推播漏網", "Did notes shown before edits miss relevant ones?" if en else "改檔前送上的筆記，有沒有漏掉該看的？", "gold"),
+    ]
+    for y, label, desc, color in rows:
+        b += chip(60, y, label, color, 160 if en else 130)
+        b += text(236 if en else 206, y + 25, desc, 18 if en else 19)
+    b += path("M380 414V446", "coral", 2) + arrow(380, 452, "down", "coral")
+    boxes = [
+        (36, "Record every week" if en else "每週留下紀錄"),
+        (280, "Alert on regressions" if en else "退步或沒過，通知人"),
+        (524, "Fix rules or add tests" if en else "修規則或補測試"),
+    ]
+    for x, label in boxes:
+        b += rect(x, 460, 200, 64, "#322d3b", "#a67476", 14)
+        b += text(x + 100, 499, label, 17 if en else 20, "coral", "middle", 600)
+    for x in (236, 480):
+        b += path(f"M{x} 492H{x + 36}", "coral", 2) + arrow(x + 43, 492, "right", "coral")
+    b += path("M624 524V566H20V266H28", "coral", 2, "8 7") + arrow(34, 266, "right", "coral")
+    b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
+    b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
+    desc = (
+        "Four checks run on a schedule in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+        if en else
+        "在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄，退步或沒過就通知人，修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+    )
+    return title, 650, b, desc
 
 def swiss_cheese_scene(en):
     title="Five imperfect layers. Fewer escapes." if en else "五層都有洞，但問題更難一路穿過"
