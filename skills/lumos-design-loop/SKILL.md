@@ -36,7 +36,7 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
 5. **判讀**:**席位給的「觀察」和「判準」要分開驗**:席位常常量到的現象對、但「該怎麼算才算過」講錯。照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(那通常對),再自己想一遍「什麼條件才算過」,不要把它的判準當結論。
    - severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。
    - **兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。
-   - 存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證;不給它審查員的結論。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票)去反駁,必須附 file:line 才能降級。
+   - 存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★2026-09-30 起預設同門★:另開一個 opus/sonnet 對話、不給審查員的結論;要另一家視角時才派外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證;不給它審查員的結論。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票)去反駁,必須附 file:line 才能降級。
 6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。
    - 若這輪是「被圖譜舊裁定擋下/縮案/停案」,裁定文字裡寫 `★圖譜攔截★站:開案前|首輪|第N輪;源:<節點名>`(飛輪攔截帳,週報 grep 用)。
    - 折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。

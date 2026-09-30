@@ -6150,7 +6150,8 @@ def t_disposal_roster_tail():
                  result_sha256=sha, reviewed_sha256=sha)]
     log.write_text("\n".join(_j.dumps(r) for r in rows) + "\n")
     r = run(vault, "loop", "status", "code-tail", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
-    check("tail: 異常輪印轉述行(外家 finder 缺)", "[roster]" in r.stdout and ("external_missing" in r.stdout or "單家族" in r.stdout), r.stdout[-400:])
+    # 2026-09-30 外家改條件席(預設不派)後,缺外家不再算異常;這個 fixture 只派一席,靠同門席不夠觸發
+    check("tail: 異常輪印轉述行(同門席不夠)", "[roster]" in r.stdout and "seat_shortfall" in r.stdout, r.stdout[-400:])
     check("tail: 異常留痕檔多一行", (ldir / "roster-alerts.log").exists(), str(list(ldir.iterdir())))
     check("tail: 摘要/診斷行被抑制(無「實派」字樣)", "實派" not in r.stdout, r.stdout[-300:])
     # __seqN(round-less)fixture:零 roster 行——★loop 目錄+快照必須存在★,
@@ -6193,8 +6194,9 @@ def t_disposal_roster_tail():
                   snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha)]
     log2.write_text("\n".join(_j.dumps(r) for r in rows4) + "\n")
     r4 = run(vault, "loop", "status", "code-xtier", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
-    check("tail: 跨輪 tier 用判定輪的 high 編制(fail-closed 轉述出現;s1-f1 純 CLI 重現修)",
-          "fail-closed" in r4.stdout and "external_missing" in r4.stdout, r4.stdout[-500:])
+    # high 的同門必派 6 席(五個找問題+架構對齊),standard 只有 2 席;看到 6 才證明用的是判定輪的 high 編制
+    check("tail: 跨輪 tier 用判定輪的 high 編制(同門應有 6 席;s1-f1 純 CLI 重現修)",
+          "seat_shortfall" in r4.stdout and "應有 6 席" in r4.stdout, r4.stdout[-500:])
     # d-f1 釘:判定輪自己沒記 tier → 不借別輪的,零 roster 行(沒編制可對照實安靜)
     ldir6 = vault.parent / "governance" / "review-reports" / "code-notier"
     ldir6.mkdir(parents=True)
@@ -32097,8 +32099,10 @@ def t_tier_roster_table():
               all(s["requirement"] in allowed_req for s in seats),
               str([s["requirement"] for s in seats]))
     ch = tbl[("code", "high")]["seats"]
-    check("roster: code/high 外家 finder 佔W+required-fail-closed",
-          any(s["family"] == "external" and s["occupies_w"] and s["requirement"] == "required-fail-closed" for s in ch), str(ch))
+    check("roster: code/high 外家席都是條件席、不佔W(2026-09-30 預設不派)",
+          [s for s in ch if s["family"] == "external"] and all(s["requirement"] == "conditional" and not s["occupies_w"] for s in ch if s["family"] == "external"), str(ch))
+    check("roster: 六種編制都沒有必派外家",
+          not any(s["family"] == "external" and s["requirement"] != "conditional" for k in tbl for s in tbl[k]["seats"]), "")
     check("roster: code/high spec-conformance conditional 不佔W",
           any(s["requirement"] == "conditional" and not s["occupies_w"] for s in ch), str(ch))
 
@@ -32134,8 +32138,9 @@ def t_loop_next_roster():
     d2 = _j.loads(r2.stdout.strip())
     s2 = d2["roster"]["seats"]
     # 2026-09-11 代碼審資安席 d6:code/high 多一席不佔人數的「資安」(required-gated),不佔 W 由 3 變 4
-    check("next-roster: code/high 席組成(5佔W 含外家 finder+4不佔W 含架構對齊與資安)",
-          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 4,
+    check("next-roster: code/high 席組成(5 席同門佔W+5 不佔W:兩席外家條件席、規格、架構對齊、資安)",
+          sum(1 for s in s2 if s["occupies_w"]) == 5 and all(s["family"] == "claude" for s in s2 if s["occupies_w"])
+          and sum(1 for s in s2 if not s["occupies_w"]) == 5,
           str(s2)[:300])
     # 查表 miss:code+light
     r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--orchestrator", "claude", "--json")
@@ -32180,8 +32185,9 @@ def t_loop_status_roster_check():
     check("status-roster: 同帶時尾端不重複(單家族/外缺行不因同帶翻倍)",
           r1.stdout.count("external_missing") <= max(1, r0.stdout.count("external_missing")), r1.stdout[:300])
     check("status-roster: 三形狀共解析 4 席(同門桶足,含架構對齊;d4 起印「同門[編排者]」)", "實派 4 席" in r1.stdout and "同門[claude] 4" in r1.stdout, r1.stdout[:600])
-    check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
-          "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
+    # 2026-09-30 外家改條件席(預設不派):缺外家不再印「單家族」,也不算 shortfall
+    check("status-roster: 外家是條件席,缺席不印單家族、不算 shortfall",
+          "單家族" not in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
     # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
     C = "code-obs"
     rec(C, "r1", "lens1-sonnet", tier="high")
@@ -32192,8 +32198,8 @@ def t_loop_status_roster_check():
     disp(C, "r1-dispatch-junk.json", {"whatever": 1})            # 合法 JSON 不符形狀→跳過
     (repo / "governance" / "review-reports" / C / "r1-dispatch-bad.json").write_text("{broken", encoding="utf-8")
     rc1 = run(vault, "loop", "status", C, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
-    check("status-roster: 外家桶空→external_missing(溢編總數夠也喊)", "external_missing" in rc1.stdout, rc1.stdout[:800])
-    check("status-roster: required-fail-closed 措辭(轉述不裁決)", "僅轉述編制對照,不裁決" in rc1.stdout, rc1.stdout[:800])
+    check("status-roster: 外家是條件席,外家桶空不喊 external_missing", "external_missing" not in rc1.stdout, rc1.stdout[:800])
+    check("status-roster: 沒有必派外家就不印 fail-closed 轉述", "此席編制為 fail-closed" not in rc1.stdout, rc1.stdout[:800])
     check("status-roster: conditional 席印條件行", "條件" in rc1.stdout, rc1.stdout[:800])
     # 兼任:同名外家佔 2 席
     C2 = "code-dual"
@@ -41846,14 +41852,15 @@ def t_roster_code_high_has_security_seat():
         r = run(vault, "loop", "next", f"code-secn-{orch}-{_M1U}", "--tier", "high", "--orchestrator", orch)
         check(f"roster:loop next({orch} 編排)印出資安席、派工要求是「必派(問閘會擋)」",
               "應派: 資安" in r.stdout and "必派(問閘會擋)" in r.stdout, r.stdout[:800])
-    # 席位對帳:同門 5 席+外家 2 席的 high 迴圈(生效日前合規的形狀),不因加了資安席冒出席數不夠
+    # 席位對帳:同門 6 席(五個找問題+架構對齊)的 high 迴圈,不因加了資安席冒出席數不夠
+    # (2026-09-30 外家改條件席、原外家 finder 名額由鏡頭5 補;之前的形狀是同門 5+外家 2)
     lid = f"code-secroster-{_M1U}"
-    names = ["鏡頭1-sonnet", "鏡頭2-sonnet", "鏡頭3-sonnet", "鏡頭4-sonnet", "架構對齊-sonnet", "外家finder-codex", "外家否決-codex"]
+    names = ["鏡頭1-sonnet", "鏡頭2-sonnet", "鏡頭3-sonnet", "鏡頭4-sonnet", "鏡頭5-sonnet", "架構對齊-sonnet"]
     for a in names:
         rec(lid, "r1", a, tier="high")
     disp(lid, "r1-dispatch.json", {"round": "r1", "seats": [{"auditor": a} for a in names]})
     r = run(vault, "loop", "status", lid, "--roster", "--repo", str(repo))
-    check("roster:舊形狀 high 迴圈(同門 5)不冒 seat_shortfall(資安席不進人數對帳)", "seat_shortfall" not in r.stdout,
+    check("roster:high 迴圈(同門 6)不冒 seat_shortfall(資安席不進人數對帳)", "seat_shortfall" not in r.stdout,
           r.stdout[-600:])
 
 

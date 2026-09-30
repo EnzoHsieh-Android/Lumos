@@ -39,7 +39,7 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
 4. **判讀與辯方**:**席位給的「觀察」和「判準」要分開驗**——席位常常量到的現象對、但「怎麼算才算過」講錯;照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(通常是對的),再自己想一遍什麼條件才算過,不把它的判準當結論。
    - severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。
-   - **high 缺外家辯方**(替補也湊不齊):不硬擋,但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席;問閘偵測到席位異常會自動轉述當輪(異常才印;外家未派只轉述編制對照、不裁決);全史核對用 `loop status --roster`。
+   - **外家席預設不派**(2026-09-30 使用者裁,省外家成本;編制表外家席=條件席):high 五個找問題席都用同門(鏡頭5 補原外家 finder 的名額),辯方也用同門;要另一家視角時(同門意見分歧、碰資安或不可逆操作)才加派外家 finder 或辯方。沒派外家時,收斂結論照實寫成「單家族視角下未發現」;問閘偵測到席位異常會自動轉述當輪(異常才印;外家未派只轉述編制對照、不裁決);全史核對用 `loop status --roster`。
    - diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點,那些綁定測試會被自動真跑:高風險走 `code-loop check`,紅/懸空/方法名不合法就擋;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了印出來、記帳、不擋(擋下去最可能的結果是人改走 `--no-verify`,零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。紅了要修測試:補一筆 `code-loop pass` 修不好一支紅掉的測試。
 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
 6. **記帳**:多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,帳本不能撤銷,只能換編號重記。

@@ -140,6 +140,12 @@ decisions:
     why_chosen: 數字上限與同一份範本「講清楚哪個輸入走到哪一行」的要求互相拉扯;抑噪靠逐字引句、refcheck、不准模稜兩可,不靠句數
     decided: 2026-09-25
     valid: true
+  - content: 外家席改成條件席、預設不派:編制表六組的外家 finder/否決席都從 required-fail-closed / note-if-absent 改成 conditional;code/high 原外家 finder 的名額由同門鏡頭5 補,寬度維持 5;設計審與代碼審的辯方預設同門,要另一家視角時才派 Codex。取代 2026-07-18 S5「辯方預設 Codex、high 雙外家席」。
+    id: d11
+    context: 外家(Codex)每次高風險審查都要派兩席,額度與成本是額外負擔;使用者不想之後都花這筆成本
+    why_chosen: 使用者裁定改成可選、預設不派,空出的找問題席由 Claude 補上(保持並行寬度與審查廣度);另一家視角留作需要時的選項。代價:收斂結論只代表同一家模型的視角,同門共同盲點的風險變高
+    decided: 2026-09-30
+    valid: true
 about_code:
   - scripts/lumos
 aliases:
