@@ -57587,5 +57587,512 @@ def t_drift_m1_review_r3_ledger_miss_short_write():
     check("①短寫:回 False", ok is False, str(ok))
 
 
+# ── 否定現況句提醒(Projects/否定現況句配回頭條件_計劃 [S1] 到 [S10])──
+_NEG_S1_CASES = (
+    ("getMetrics 尚未實作,是下一個增量", True),
+    ("TODO: 補測試", True),
+    ("not yet wired", True),
+    ("X is not implemented yet", True),
+    ("It isn't wired yet.", False),
+    ("目前沒有對應的節點管這支檔", True),
+    ("目前沒有前端頁面", True),
+    ("現在沒有時間戳欄位", True),
+    ("目前沒有任何一個節點管理時間", True),
+    ("這條目前沒有機械守衛,只能記得:派了評審就不要動圖譜", True),
+    ("A 還沒改成新格式", True),
+    ("還沒有測試,另外特別注意 X", True),
+    ("TODO-list 在右邊", False),
+    ("todo: 補", False),
+    ("還沒提交的帳本檔會列成一行", False),
+    ("消費專案還沒建圖譜時才拿得到卡", False),
+    ("「目前沒有/還沒」這種句型", False),
+    ("當時還沒有模型段", False),
+    ("不准還沒審就推", False),
+    ("未來再補", False),
+    ("沒有問題", False),
+    ("這不會擋", False),
+    ("RULE:[retire:改成 block 時撤掉]還沒接線", True),
+    ("1. RETIRE-IF:還沒有人用就撤", False),
+    ("「還沒」這種句型之外,功能還沒做", True),
+)
+
+
+def _neg_inproc(root, staged=True, diff_range=None, **patch):
+    """在同一個行程裡跑 cmd_note_shape(替身要換模組裡的函式,子行程注不進去)→ (rc, 輸出)。"""
+    import io, contextlib, os as _o
+    m = _load_lumos_inproc()
+    saved = {k: getattr(m, k) for k in patch}
+    env = _o.environ.pop("LUMOS_SKIP_NOTE_SHAPE", None)
+    buf = io.StringIO()
+    try:
+        for k, v in patch.items():
+            setattr(m, k, v)
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_note_shape(repo=str(root), staged=staged, diff_range=diff_range)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+        if env is not None:
+            _o.environ["LUMOS_SKIP_NOTE_SHAPE"] = env
+    return rc, buf.getvalue()
+
+
+def _neg_events(root, kind=None):
+    ev = [e for e in _ns_gov(root) if e.get("gate") == "note-shape"]
+    return [e for e in ev if kind is None or e.get("kind") == kind]
+
+
+def _neg_cfg(root, obj=None, raw=None):
+    import json as _j
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(raw if raw is not None else _j.dumps(obj), encoding="utf-8")
+
+
+_NEG_HEAD = "提醒:這次提交新寫了"
+
+
+def t_note_shape_negation_detect():
+    """[S1] 一行新寫的正文有窄表字眼時,_ns_negation_hits 照〈做法〉1 第 2 到 6 點判算不算(計劃列的例句逐句)。
+
+    翻紅釘:拿掉固定組合遮罩 → ⑤「目前沒有問題」「目前無法重現」紅;「時/前」改看視窗尾端 → ②「目前沒有任何一個節點管理時間」紅;
+    不遮行內欄位 → ②RULE:[retire:改成…] 那句、⑤[retire:還沒想好] 紅。
+    """
+    print("t_note_shape_negation_detect")
+    m = _load_lumos_inproc()
+    check("①前置:正式判定函式在", callable(getattr(m, "_ns_negation_hits", None)), "")
+    if not callable(getattr(m, "_ns_negation_hits", None)):
+        return
+    bad = [(s, w) for s, w in _NEG_S1_CASES if bool(m._ns_negation_hits(s)[1]) != w]
+    check("②計劃 S1 例句逐句判對", not bad, str(bad))
+    s = "「還沒」這種句型之外,功能還沒做"
+    vis, hits = m._ns_negation_hits(s)
+    check("③引號裡的不算,回的位置是後面那個「還沒」", [p for _t, p in hits] == [vis.rindex("還沒")], str(hits))
+    vis, hits = m._ns_negation_hits("  前面 `code 還沒` 後面功能還沒做")
+    more = (("目前沒有問題", False), ("目前無法重現", False), ("RULE:[since:2026-09-28][retire:還沒想好]照留", False))
+    bad = [(s, w) for s, w in more if bool(m._ns_negation_hits(s)[1]) != w]
+    check("⑤固定組合遮掉重疊的窄表字眼、行內欄位裡的字不算", not bad, str(bad))
+    check("④位置落在剝掉行內程式碼、去頭尾空白後的可見文字", vis == "前面  後面功能還沒做" and vis[hits[0][1]:].startswith("還沒"),
+          repr((vis, hits)))
+
+
+def t_note_shape_negation_scope():
+    """[S2] REVISIT 行(三種)、RETIRE-IF、三種工具樣板、圍欄、行內程式碼、decisions、開頭欄位其他欄不列;
+    舊行不列、摘要新行照列、行中夾 REVISIT: 照列;形狀判成 table/heading/prose。
+
+    翻紅釘:_ns_negation_hints 不濾區塊 → ②紅(decisions、其他欄被列);不濾圍欄 → ②紅;REVISIT 只排 cond/date → ②紅(壞格式被列)。
+    """
+    print("t_note_shape_negation_scope")
+    m = _load_lumos_inproc()
+    text = "\n".join([
+        "---", "type: system", "summary: |-", "  KEY:摘要裡還沒接線", "decisions:", "  - id: D1",
+        "    context: 決策裡還沒做", "other_field: 其他欄還沒做", "---", "# A",
+        "REVISIT:2026-12-31 日期式還沒做",
+        "REVISIT:[when-file:x.py][by:2026-12-31] 條件式還沒做",
+        "REVISIT:壞的格式還沒做",
+        "RETIRE-IF: 還沒有人用就撤",
+        "- TEST:還沒有測試在守這條 樣板一",
+        "- [S1]預告這條合約但還沒做:樣板二",
+        "為什麼還不做:樣板三還沒排",
+        "```", "圍欄裡還沒做", "```",
+        "行內 `還沒做` 的程式碼",
+        "中間夾著 REVISIT: 功能還沒做",
+        "| 前端 | 還沒做 |",
+        "## 前端頁面還沒做",
+        "正文功能還沒做",
+    ])
+    regs = m._notelines_regions(text)
+    rows = [(i, ln, regs[i - 1]) for i, ln in enumerate(text.split("\n"), 1) if ln.strip()]
+    check("①前置:區塊判得出 summary、decisions、other", {"summary", "decisions", "other"} <= set(regs), str(regs[:9]))
+    got = {(n, sh) for _p, n, _f, sh in m._ns_negation_hints("x.md", text, rows)}
+    want = {(4, "prose"), (22, "prose"), (23, "table"), (24, "heading"), (25, "prose")}
+    check("②只列摘要、行中夾 REVISIT、表格、標題、正文;形狀對", got == want, str(sorted(got)))
+    root = _ns_repo()
+    _ns_note(root, body="舊行功能還沒做")
+    _nh_commit(root, "old")
+    _ns_note(root, body="舊行功能還沒做\n新行功能還沒做", summary="KEY:x\nKEY:摘要功能還沒接線")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("③提交前:新行與摘要新行照列、rc0", rc == 0 and "新行功能還沒做" in out and "摘要功能還沒接線" in out, out[-800:])
+    check("④同一篇沒改到的舊行不列", "舊行功能還沒做" not in out, out[-800:])
+
+
+def t_note_shape_negation_pairing():
+    """[S3] 照建議改法把那一句搬成獨立一行回頭條件後不再提醒;否定句照留、旁邊另一行條件式照樣提醒。
+
+    翻紅釘:改成「前後 3 行內有條件式就算配了」→ ⑥紅;REVISIT 行本身不排除 → ②④⑤紅。
+    """
+    print("t_note_shape_negation_pairing")
+    root = _ns_repo()
+    cases = [
+        ("①正文多句長段:提醒", "A 做完了;前端頁面還沒做,下一個增量補。", "KEY:x", True),
+        ("②搬成條件式獨立一行:兩行都不提醒",
+         "A 做完了。\nREVISIT:[when-file:web/x.tsx][by:2026-12-31] 前端頁面還沒做", "KEY:x", False),
+        ("③摘要 RULE 行:提醒", "", "RULE:[since:2026-09-28][retire:x]還沒接線,沒寫設定時預設 warn", True),
+        ("④RULE 留前綴、搬出一行 when-status:都不提醒", "",
+         "RULE:[since:2026-09-28][retire:x]沒寫設定時預設 warn\n"
+         "REVISIT:[when-status:Projects/a_計劃=done|superseded][by:2026-12-31] 還沒接線", False),
+        ("⑤整行改成日期式:不提醒", "REVISIT:2026-12-31 前端頁面還沒做", "KEY:x", False),
+        ("⑥否定句照留、下一行另有條件式:照樣提醒",
+         "前端頁面還沒做\nREVISIT:[when-file:web/x.tsx][by:2026-12-31] 做了改寫上一行", "KEY:x", True),
+    ]
+    for label, body, summ, want in cases:
+        _ns_note(root, body=body, summary=summ)
+        _ns_stage(root)
+        rc, out = _ns(root)
+        check(f"{label}(rc0、沒有別的違規)", rc == 0 and ("程式碼推得出來的形狀" not in out), out[-600:])
+        check(f"{label}", (_NEG_HEAD in out) == want, out[-600:])
+        _ns_reset(root)
+
+
+def t_note_shape_negation_never_blocks():
+    """[S4] 只提醒:不進違規、不改 rc、只記 hinted;--diff 與 doctor 不算;off 不呼叫;設定壞照 warn;四種替身都不拖垮閘。
+
+    翻紅釘:只有提醒時不印(早退照舊)→ ①⑥⑦⑧等 11 項紅;只有提醒時走 warned → ①紅;設定的提醒每次都印(不看 seen)→ ⑬紅;
+    拿掉 _ns_negation_prepare 或 _ns_negation_collect 的例外防護 → ⑩或⑨的替身直接炸出測試。
+    """
+    print("t_note_shape_negation_never_blocks")
+    m = _load_lumos_inproc()
+    for gate in ("block", "warn"):
+        root = _ns_repo(cfg={"note_shape": {"gate": gate}})
+        _ns_note(root, body="前端頁面還沒做")
+        _ns_stage(root)
+        rc, out = _ns(root)
+        ev = _neg_events(root)
+        check(f"①gate={gate}:只有提醒 → 印、rc0、只記一筆 hinted",
+              rc == 0 and _NEG_HEAD in out and [e["kind"] for e in ev] == ["hinted"], out[-500:] + str(ev))
+    # ②同時有一條行號引用:rc1、順序、blocked 條數不含提醒
+    root = _ns_repo()
+    _ns_note(root, body="新寫 `src/a.py:5`\n前端頁面還沒做")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    ev = _neg_events(root)
+    idx = [out.find(x) for x in ("擋下", "內容還在工作目錄", _NEG_HEAD)]
+    check("②有違規:rc1;違規段 → 尾句 → 提醒段", rc == 1 and -1 not in idx and idx == sorted(idx), str(idx) + out[-800:])
+    check("②帳:blocked 在 hinted 前,blocked 條數不含提醒", [e["kind"] for e in ev] == ["blocked", "hinted"]
+          and "新違規 1 條" in ev[0]["note"], str(ev))
+    # ③--diff 與事後掃描不算、不印、不記
+    root = _ns_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, body="前端頁面還沒做")
+    _nh_commit(root, "neg")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    calls = []
+    orig_hints = m._ns_negation_hints
+
+    def _count(*a, **k):
+        calls.append(1)
+        return orig_hints(*a, **k)
+    rc, out = _neg_inproc(root, staged=False, diff_range=f"{base}..{tip}", _ns_negation_hints=_count)
+    check("③--diff:不呼叫、不印、不記", rc == 0 and not calls and _NEG_HEAD not in out and not _neg_events(root, "hinted"),
+          out[-400:])
+    res = m._note_shape_eval(root, False, base, tip, "docs/kg-knowledge")
+    check("③不傳 hints 時回傳照舊兩個值", isinstance(res, tuple) and len(res) == 2, str(res))
+    # ④negation=off:不呼叫、不印、不記
+    root = _ns_repo(cfg={"note_shape": {"negation": "off"}})
+    _ns_note(root, body="前端頁面還沒做")
+    _ns_stage(root)
+    calls.clear()
+    rc, out = _neg_inproc(root, _ns_negation_hints=_count)
+    check("④negation=off:_ns_negation_hints 不被呼叫、不印不記", rc == 0 and not calls and _NEG_HEAD not in out
+          and not _neg_events(root, "hinted"), out[-400:])
+    # ⑤gate=off:整道不跑
+    root = _ns_repo(cfg={"note_shape": {"gate": "off"}})
+    _ns_note(root, body="前端頁面還沒做")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑤gate=off:整道不跑", rc == 0 and _NEG_HEAD not in out and "gate=off" in out, out[-400:])
+    # ⑥到⑧設定值
+    for label, cfg, raw, warn_txt in (
+            ("⑥null 照 warn、不另印", {"note_shape": {"negation": None}}, None, None),
+            ("⑦block 看不懂", {"note_shape": {"negation": "block"}}, None, "看不懂"),
+            ("⑦false 看不懂", {"note_shape": {"negation": False}}, None, "看不懂"),
+            ("⑦\"OFF\" 看不懂", {"note_shape": {"negation": "OFF"}}, None, "看不懂"),
+            ("⑧壞 JSON 照預設 warn", None, "{壞掉", "否定現況句提醒照預設 warn")):
+        root = _ns_repo()
+        _neg_cfg(root, cfg, raw)
+        _ns_note(root, body="前端頁面還沒做")
+        _ns_stage(root)
+        rc, out = _ns(root)
+        ok = _NEG_HEAD in out and (warn_txt in out if warn_txt else ("看不懂" not in out and "照預設 warn" not in out))
+        check(f"{label}(照樣提醒)", ok and rc in (0, 1), out[-600:])
+    # ⑬設定寫錯的提醒只在這次提交有要判的新筆記行時印(代碼審 r1 正確性席 F3)
+    root = _ns_repo(cfg={"note_shape": {"negation": "OFF"}})
+    _nh_file(root, "src/a.py", "x1 = 2\n")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑬只改程式檔:不印看不懂", rc == 0 and "看不懂" not in out and _NEG_HEAD not in out, out[-400:])
+    _ns_reset(root)
+    _ns_note(root, extra="valid_under: 前提改了")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑬只改開頭欄位其他欄:不印看不懂", rc == 0 and "看不懂" not in out, out[-400:])
+    _ns_reset(root)
+    _ns_note(root, body="乾淨的一行")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑬改到正文(沒有提醒):照印看不懂", rc == 0 and "看不懂" in out and _NEG_HEAD not in out, out[-400:])
+    # ⑨到⑪三個替身丟例外:印「沒跑完」、不印提醒、不記 hinted、rc 跟沒有提醒時一樣
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    for label, name in (("⑨判定", "_ns_negation_hints"), ("⑩讀設定", "_note_shape_negation_config"),
+                        ("⑪組字樣", "_ns_negation_format")):
+        for with_viol, want_rc in ((False, 0), (True, 1)):
+            root = _ns_repo()
+            _ns_note(root, body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做")
+            _ns_stage(root)
+            rc, out = _neg_inproc(root, **{name: _boom})
+            check(f"{label}丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、不記 hinted",
+                  rc == want_rc and "否定現況句提醒這次沒跑完(RuntimeError)" in out and _NEG_HEAD not in out
+                  and not _neg_events(root, "hinted"), out[-500:])
+    # ⑫寫帳失敗:印 telemetry-write-failed、rc 不變
+    root = _ns_repo()
+    _ns_note(root, body="前端頁面還沒做")
+    _ns_stage(root)
+    rc, out = _neg_inproc(root, _gate_event=lambda *a, **k: False)
+    check("⑫_gate_event 回 False:印 telemetry-write-failed、rc0", rc == 0 and "telemetry-write-failed" in out
+          and _NEG_HEAD in out, out[-500:])
+
+
+def t_note_shape_negation_output():
+    """[S5] 12 行提醒全部印、按路徑行號排序、repo 相對完整路徑、長行片段兩端加「…」、行內程式碼剝掉、
+    表格加「(表格)」、有表格才印表格那一行、最後一行講這次之後不再提醒;不印「另有」。
+
+    翻紅釘:印出設上限 10 → ①紅;片段兩端不加… → ③紅;片段取原行 → ④紅;表格那行每次都印 → ⑦紅。
+    """
+    print("t_note_shape_negation_output")
+    m = _load_lumos_inproc()
+    root = _ns_repo()
+    long_line = "甲" * 80 + "還沒做" + "乙" * 40
+    code_line = "前面 `code 還沒` 後面功能還沒做"
+    b_lines = ["| 前端 | 還沒做 |", long_line, code_line] + [f"第{i}項功能還沒做" for i in range(4)]
+    _nh_node(root, "B", body="\n".join(b_lines))
+    _ns_note(root, body="\n".join(f"A 的第{i}項還沒做" for i in range(5)))
+    _ns_stage(root)
+    rc, out = _ns(root)
+    rows = [ln for ln in out.split("\n") if ln.startswith("  docs/")]
+    check("①前置與全部印:rc0、12 行", rc == 0 and len(rows) == 12, out[-1500:])
+    keys = [(r.split(":", 1)[0].strip(), int(r.split(":", 2)[1].split()[0])) for r in rows]
+    check("②按路徑、行號排序,路徑是 repo 相對完整路徑", keys == sorted(keys)
+          and all(k[0].startswith("docs/kg-knowledge/Systems/") for k in keys), str(keys))
+    want_long = "…" + long_line[60:120] + "…"
+    check("③長行:否定字眼前 20 字起取 60 字、兩端加…", any(r.endswith("  " + want_long) for r in rows), "\n".join(rows))
+    check("④行內程式碼:片段取自剝掉之後的可見文字", any(r.endswith("  前面  後面功能還沒做") for r in rows), "\n".join(rows))
+    check("⑤表格列句尾加(表格)", any(r.endswith("  | 前端 | 還沒做 |(表格)") for r in rows), "\n".join(rows))
+    check("⑥有表格才印表格那一行、最後一行講不再提醒、不印另有", "表格的格子與標題不能寫成回頭條件" in out
+          and "這次提交之後這幾行不會再提醒" in out.strip().split("\n")[-1] and "另有" not in out, out[-800:])
+    one = m._ns_negation_format([("docs/x.md", 3, "功能還沒做", "prose")], "warn")
+    check("⑦只有 1 行正文提醒:不印表格那一行", "表格的格子" not in one and "1 行" in one
+          and "(note_shape.negation=warn,不擋)" in one, one)
+
+
+def t_note_shape_negation_doctor_line():
+    """[S6] note_shape.negation=off 時 doctor 印一行(ci 也印);值看不懂時印看不懂;warn 或沒寫不印。
+
+    翻紅釘:那行只在 ci=False 時印(放到 if ci: return 之後)→ ②③紅;doctor 改回比對提醒字樣「看不懂」→ ⓪紅。
+    """
+    print("t_note_shape_negation_doctor_line")
+    m = _load_lumos_inproc()
+    off_line = "這個專案把否定現況句提醒關掉了(note_shape.negation=off)"
+    # 代碼審 r1 架構對齊席 F1:doctor 看結構化欄位,不比對提醒字樣——把字樣換掉也照唸
+    orig = m._note_shape_negation_parse
+    m._note_shape_negation_parse = lambda text: {"mode": "warn", "warns": ["無法辨識 X"], "bad_value": True}
+    try:
+        got = m._ns_negation_doctor_lines(b"{}")
+    finally:
+        m._note_shape_negation_parse = orig
+    check("⓪值不合法看旗標、不看字樣", len(got) == 1 and "無法辨識 X" in got[0], str(got))
+    for label, cfg, ci, want in (("①off", {"note_shape": {"negation": "off"}}, False, off_line),
+                                 ("②off、ci=True", {"note_shape": {"negation": "off"}}, True, off_line),
+                                 ("③\"OFF\" 看不懂", {"note_shape": {"negation": "OFF"}}, True, "看不懂"),
+                                 ("④warn 不印", {"note_shape": {"negation": "warn"}}, True, None),
+                                 ("⑤沒寫不印", {"note_shape": {"gate": "block"}}, True, None)):
+        root = _ns_repo(cfg=cfg)
+        lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=ci)
+        txt = "\n".join(lines)
+        ok = (want in txt) if want else ("negation" not in txt)
+        check(label, ok, txt)
+
+
+def t_graph_discipline_negation_revisit():
+    """[S7] 紀律範本鐵則 4 是計劃〈做法〉6 那一條(全形標點照範本慣例,比對時把全形標點換成半形)、LUMOS_VERSION 已 bump。
+    範本會 vendor 進消費專案,這支在消費端照跑;讀 skill 與本 repo 注入區塊的斷言在 t_graph_discipline_negation_revisit_source。
+
+    翻紅釘:範本改回原文 → ①②紅;版本沒 bump → ③紅。
+    """
+    print("t_graph_discipline_negation_revisit")
+    m = _load_lumos_inproc()
+    root = _repo_root_for_discipline()
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    want = ("4. **承認風險要附回頭看的條件**:寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 還沒有 X」這種會過期的話,把那一句本身搬成"
+            "獨立一行回頭條件、原行刪掉那一句;寫不出來就是該處理不該承認。帶日期的寫 `REVISIT:YYYY-MM-DD 一句要做什麼`"
+            "(doctor 到期會唸),綁事件的寫 `REVISIT:[when-file:路徑][by:YYYY-MM-DD] 一句要做什麼`(事件發生那次推送會被點名、"
+            "預設擋下;寫法見 lumos-project-notes skill)——純散文的回頭條件沒人會回頭。")
+    half = str.maketrans({"：": ":", "，": ",", "；": ";", "（": "(", "）": ")"})
+    rule4 = [ln for ln in tpl.split("\n") if ln.startswith("4. **承認風險")]
+    check("①前置:範本裡恰好一條鐵則 4", len(rule4) == 1, str(rule4))
+    check("②鐵則 4 逐字(標點全半形不計)、不含緊鄰原句", bool(rule4) and rule4[0].translate(half) == want
+          and "緊鄰原句" not in tpl, rule4[0] if rule4 else "")
+    old = subprocess.run(["git", "-C", str(root), "show", "e6213559:scripts/lumos"], capture_output=True, text=True)
+    if old.returncode == 0:
+        import re as _re
+        ov = _re.search(r'^LUMOS_VERSION = "([^"]+)"', old.stdout, _re.M)
+        check("③LUMOS_VERSION 跟改之前不同", ov is not None and ov.group(1) != m.LUMOS_VERSION, m.LUMOS_VERSION)
+    else:
+        check("③LUMOS_VERSION 跟改之前不同(拿不到改之前那版,只釘不是 v1.0)", m.LUMOS_VERSION != "v1.0", m.LUMOS_VERSION)
+
+
+def t_graph_discipline_negation_revisit_source():
+    """[S7] 來源 repo 專用:本 repo 的 CLAUDE.md 與 AGENTS.md 注入區塊跟範本一致;skill 主檔與寫回圖譜那頁照改。
+    skills/ 不會 vendor 進消費專案,消費端的 CLAUDE.md 注入的是它自己的 slug——所以掛 _need_src(代碼審 r1 外家否決席 F1)。
+
+    翻紅釘:不重注入 → ①紅;skill 改回舊寫法 → ②③紅;拿掉 _need_src → t_negation_hint_consumer_sim 紅。
+    """
+    print("t_graph_discipline_negation_revisit_source")
+    _need_src("skills/lumos-project-notes/SKILL.md", "skills/lumos-project-notes/commands/03-寫回圖譜.md",
+              "docs/lumos-toolchain-knowledge")
+    m = _load_lumos_inproc()
+    root = _repo_root_for_discipline()
+    body = m._expected_claude_body(root, "lumos-toolchain")
+    for t in ("CLAUDE.md", "AGENTS.md"):
+        st, span = m._extract_claude_block_span((root / t).read_text(encoding="utf-8"))
+        check(f"①{t} 注入區塊跟範本一致", st == "found" and span.body == body, st)
+    sk = (root / "skills" / "lumos-project-notes" / "SKILL.md").read_text(encoding="utf-8")
+    check("②skill 主檔:不含緊鄰原句、含新寫法", "緊鄰原句" not in sk and "把那一句本身搬成獨立一行回頭條件" in sk, "")
+    wb = (root / "skills" / "lumos-project-notes" / "commands" / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    check("③寫回圖譜那頁:兩句都在", "把會過期的那一句本身搬成獨立一行回頭條件" in wb and "when-symbol 只認 Python 定義" in wb, "")
+
+
+_NEG_MEASURE_REL = "governance/eval/negation-revisit/neg_revisit_measure.py"
+
+
+def t_note_shape_negation_lexicon_pinned():
+    """[S9] 正式工具的字眼表逐字釘;量測程式在 repo 裡時,兩邊常數逐一相同、同一批例句判定逐句相同;消費端沒有就跳過比對。
+
+    翻紅釘:正式工具的窄表少一個字 → ①②紅;規則字眼加回「別」→ ①②紅;判定跟量測程式分岔 → ③紅:修飾語視窗 9 字改 8 字
+    (「功能還沒做完整支援新版本的」)、規則字眼只看否定字眼前面(「還沒審不准推」)、拿掉「還沒」接「有」算講有沒有
+    (「還沒有對應的節點管這支檔」)、拿掉遇到停止字元就停(「功能還沒做 的部分另談」)、拿掉「的時候」(「目前沒有的時候先跳過」)。
+    """
+    print("t_note_shape_negation_lexicon_pinned")
+    m = _load_lumos_inproc()
+    want = {
+        "_NS_NEG_NARROW_ZH": ("還沒", "尚未", "仍未", "尚無", "暫無", "待補", "目前沒有", "現在沒有", "目前無", "目前還不",
+                              "現在還不", "未實作", "未上線", "未接", "未做", "未支援", "未完成", "未定義", "未補"),
+        "_NS_NEG_NARROW_EN_CS": ("TODO", "TBD", "Todo"),
+        "_NS_NEG_NARROW_EN_CI": ("not yet", "yet to"),
+        "_NS_NEG_NOT_LACK": ("未來", "有沒有", "未必", "無論", "無法", "並無", "沒問題", "沒有問題", "無誤", "無關", "無妨",
+                             "毫無", "無效", "無窮", "未知", "未曾", "未經", "no-verify", "no longer"),
+        "_NS_NEG_HIST": ("當時", "原本", "原先", "曾", "之前", "以前", "那時", "起初", "後來", "已補", "已修", "修掉",
+                         "改成", "改為", "已經有", "現在有了", "已上線", "已做完"),
+        "_NS_NEG_RULE": ("不准", "不要", "禁止", "不得", "勿", "一律不", "不應"),
+        "_NS_NEG_EXIST": ("目前沒有", "現在沒有", "尚無", "暫無", "目前無"),
+        "_NS_NEG_FIELD_KEYS": ("since", "retire", "until", "confirmed", "status", "applies", "test", "audit", "kill",
+                               "rollback", "guard", "src", "git", "manual", "by", "來源"),
+    }
+    sizes = {"_NS_NEG_NARROW_ZH": 19, "_NS_NEG_NARROW_EN_CS": 3, "_NS_NEG_NARROW_EN_CI": 2, "_NS_NEG_NOT_LACK": 19,
+             "_NS_NEG_HIST": 18, "_NS_NEG_RULE": 7, "_NS_NEG_EXIST": 5}
+    bad = [k for k, v in want.items() if getattr(m, k, None) != v]
+    check("①正式工具字眼表逐字(含個數)", not bad and all(len(set(want[k])) == n for k, n in sizes.items()), str(bad))
+    check("①行內欄位含 when-[a-z]+", "|when-[a-z]+):" in m._NS_NEG_FIELD_RE.pattern, m._NS_NEG_FIELD_RE.pattern)
+    mp = Path(GRAPHCTL).resolve().parent.parent / _NEG_MEASURE_REL
+    if not mp.is_file():
+        check("②③量測程式不在(消費端):跳過比對", True, "")
+        return
+    import importlib.machinery, importlib.util
+    loader = importlib.machinery.SourceFileLoader("_neg_measure_ref", str(mp))
+    spec = importlib.util.spec_from_loader("_neg_measure_ref", loader)
+    ref = importlib.util.module_from_spec(spec)
+    loader.exec_module(ref)
+    pairs = [("NARROW_ZH", "_NS_NEG_NARROW_ZH"), ("NARROW_V3_EN_CS", "_NS_NEG_NARROW_EN_CS"),
+             ("NARROW_V3_EN_CI", "_NS_NEG_NARROW_EN_CI"), ("NOT_LACK", "_NS_NEG_NOT_LACK"), ("HIST_MARK", "_NS_NEG_HIST"),
+             ("RULE_MARK_V3", "_NS_NEG_RULE"), ("EXIST_TOKENS", "_NS_NEG_EXIST"), ("TEMPLATE_V3", "_NS_NEG_TEMPLATES"),
+             ("QUOTE_PAIRS", "_NS_NEG_QUOTES"), ("MOD_BREAK", "_NS_NEG_MOD_BREAK"), ("MOD_STOP", "_NS_NEG_MOD_STOP")]
+    rx = [("FIELD_RX", "_NS_NEG_FIELD_RE"), ("RX_NARROW_V3", "_NS_NEG_NARROW_RE"), ("SEG_CUT_V3", "_NS_NEG_SEG_CUT_RE"),
+          ("RX_HIST_V3", "_NS_NEG_HIST_RE"), ("RX_RULE_V3", "_NS_NEG_RULE_RE"), ("RX_NOTLACK", "_NS_NEG_NOTLACK_RE")]
+    diff = [a for a, b in pairs if getattr(ref, a) != getattr(m, b)]
+    diff += [a for a, b in rx if (getattr(ref, a).pattern, getattr(ref, a).flags) != (getattr(m, b).pattern, getattr(m, b).flags)]
+    check("②量測程式在:兩邊常數與正則逐一相同", not diff, str(diff))
+
+    def _ref(line):
+        probe = m._strip_inline_markup(line)[0]
+        if not probe.strip() or m._revisit_split(probe)[0] is not None or ref.excluded_v3(probe, "body"):
+            return []
+        c = ref.classify_v3(probe)
+        return c["kept"] if c else []
+    extra = ("尚未實作的部分是 X", "使用者未接受條款", "資料庫還沒升級→結束代碼 3", "還沒量", "設計還沒做。當時還沒有模型段",
+             "★還沒查根因★——找的時候", "- 為什麼還不做:還沒排", "REVISIT:壞的還沒做", "TBD", "Todo 清單", "yet to land",
+             "no tests yet", "\"還沒\" 在引號裡", "『尚未』與功能尚未接", "之前還沒有,現在還沒有", "暫無的欄位",
+             "前端還沒做前就", "not   yet", "`還沒` 只在程式碼裡", "功能 TODO_x", "x-TODO", "改成 X;功能還沒做",
+             "這裡 (還沒做) 括號", "目前還不支援 Y", "未補的測試", "[來源:人工]還沒核可", "[when-file:x]還沒做",
+             "目前沒有問題", "目前無法重現", "RULE:[since:2026-09-28][retire:還沒想好]照留", "尚未經過審查",
+             # 代碼審 r1 正確性席 F1、F2:修飾語視窗第 9 字剛好是「的」、規則字眼在否定字眼後面、「還沒」接「有」、
+             # 遇到空白就停、「的時候」——各守一個判定分支
+             "功能還沒做完整支援新版本的", "還沒審不准推", "還沒有對應的節點管這支檔", "功能還沒做 的部分另談",
+             "目前沒有的時候先跳過")
+    split = [s for s in [c for c, _w in _NEG_S1_CASES] + list(extra)
+             if sorted({t for t, _p in m._ns_negation_hits(s)[1]}) != sorted(_ref(s))]
+    check("③同一批例句(含 S1 全部)判定逐句相同", not split, str(split))
+
+
+def t_note_shape_negation_ledger_event():
+    """[S10] 一次提交 12 行、分在 5 篇的提醒:hinted 只有一筆,extra 只有 check/lines/notes,沒有片段、行雜湊、路徑,
+    head_sha 是提交前的 HEAD。
+
+    翻紅釘:逐篇各記一筆 → ①紅;把片段寫進 note 或 nodes → ③紅。
+    """
+    print("t_note_shape_negation_ledger_event")
+    import json as _j
+    root = _ns_repo()
+    head = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    per = (4, 2, 2, 2, 2)
+    for k, n in enumerate(per):
+        _nh_node(root, f"N{k}", body="\n".join(f"第{k}篇第{i}項功能還沒做" for i in range(n)))
+    _ns_stage(root)
+    rc, out = _ns(root)
+    ev = _neg_events(root, "hinted")
+    check("①前置與一筆:rc0、12 行提醒只記一筆 hinted", rc == 0 and out.count("  docs/kg-knowledge/") == 12 and len(ev) == 1,
+          out[-400:] + str(ev))
+    if len(ev) != 1:
+        return
+    e = ev[0]
+    check("②extra 是 check/lines/notes", (e.get("check"), e.get("lines"), e.get("notes")) == ("negation", 12, 5), str(e))
+    raw = _j.dumps(e, ensure_ascii=False)
+    check("③沒有片段、行雜湊或路徑清單", e.get("nodes") == [] and "還沒做" not in raw and "Systems/" not in raw
+          and not ({"frags", "hashes", "paths", "lines_hash"} & set(e)), raw)
+    check("④head_sha 是提交前的 HEAD", e.get("head_sha") == head, str(e.get("head_sha")) + " vs " + head)
+
+
+def t_negation_hint_consumer_sim():
+    """代碼審 r1 外家否決席 F1:這次新加的測試照消費專案實際拿到的檔(_VENDORED_TOOLKIT 加 hooks、templates 兩夾,
+    沒有 skills/、沒有 docs/lumos-toolchain-knowledge、沒有量測程式)跑,要零 ✗、rc0;讀來源 repo 專用檔的那支記成 skip。
+
+    翻紅釘:skill 斷言沒掛 _need_src(拆回同一支)→ ①② 紅(FileNotFoundError)。
+    """
+    print("t_negation_hint_consumer_sim")
+    import shutil as _sh, os as _o
+    if _o.environ.get("LUMOS_NEG_CONSUMER_SIM") == "1":      # 模擬環境裡不再遞迴自己(零斷言分支照規矩 raise _SrcOnly,不直接 return)
+        raise _SrcOnly("模擬消費專案裡不遞迴跑自己")
+    m = _load_lumos_inproc()
+    src = Path(GRAPHCTL).resolve().parent.parent
+    root = Path(tempfile.mkdtemp(prefix="gctl-neg-consumer-"))
+    for rel in m._VENDORED_TOOLKIT:
+        if (src / rel).is_file():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            _sh.copy(src / rel, root / rel)
+    for d in m._VENDORED_TREE_DIRS:
+        if (src / d).is_dir():
+            _sh.copytree(src / d, root / d)
+    check("①前置:模擬環境有工具與範本、沒有 skill 與量測程式", (root / "scripts" / "test_lumos.py").is_file()
+          and (root / "scripts" / "templates" / "graph-discipline.md").is_file() and not (root / "skills").exists()
+          and not (root / _NEG_MEASURE_REL).exists(), str(root))
+    env = dict(_o.environ, LUMOS_NEG_CONSUMER_SIM="1")
+    for kw in ("graph_discipline_negation", "note_shape_negation"):
+        r = subprocess.run([sys.executable, str(root / "scripts" / "test_lumos.py"), "-k", kw], capture_output=True,
+                           text=True, env=env)
+        check(f"②消費端模擬 -k {kw}:rc0、零 ✗", r.returncode == 0 and "✗" not in r.stdout, (r.stdout + r.stderr)[-900:])
+        if kw == "graph_discipline_negation":
+            check("③讀 skill 的那支記成 skip,範本與版本那支照測", "skip t_graph_discipline_negation_revisit_source" in r.stdout
+                  and "鐵則 4 逐字" in r.stdout, r.stdout[-900:])
+
+
 if __name__ == "__main__":
     sys.exit(main())

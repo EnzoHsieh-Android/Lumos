@@ -267,7 +267,7 @@ if __name__ == "__main__":
 # ── python-floor end ──
 
 # ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
-LUMOS_VERSION = "v1.0"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
+LUMOS_VERSION = "v1.1"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
 # ★發布通道的分支名★(2026-09-07 #7 落地;設計出處 [[Projects/版本發布流程_計劃]] S5):
 # main=開發線(可壞),release=對外線(只有 owner 快轉過去)。三個 clone 站一律先試這條,
 # 分支還不存在時退回預設分支並印一行說明——冷啟動不能因此炸掉。
@@ -25219,8 +25219,234 @@ def _ns_became_code(repo_root, base_where, tip_where, reader_tip):
     return out
 
 
-def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None, max_count=None):
-    """算這次的違規 → (violations[(筆記路徑, 行號, 規則, 片段, 改法)], errors[訊息])。"""
+# ── 否定現況句提醒(Projects/否定現況句配回頭條件_計劃):只提醒、不擋、不進違規清單 ──
+# 筆記寫「這裡還沒有 X」,X 出現那天沒人會回來改這句;事後拿 X 的名字去找舊句找不到(寫的時候還沒有名字),
+# 所以在提交前提醒:把那一句搬成獨立一行回頭條件。判定照量測程式第三版(classify_v3 + excluded_v3)。
+# ★以下字眼表抄自 governance/eval/negation-revisit/neg_revisit_measure.py,改字先改量測程式、重跑報告★;
+# 不共用 NEG_LEXICONS(符號檢查用、專案可換)與 _DRIFT_M1_HIST_WORDS(含「沒有」,會把「目前沒有」整批吃掉);
+# 不讀專案設定的字眼。t_note_shape_negation_lexicon_pinned 逐字釘、並跟量測程式逐一比對。
+_NS_NEG_NARROW_ZH = ("還沒", "尚未", "仍未", "尚無", "暫無", "待補", "目前沒有", "現在沒有", "目前無", "目前還不",
+                     "現在還不", "未實作", "未上線", "未接", "未做", "未支援", "未完成", "未定義", "未補")
+_NS_NEG_NARROW_EN_CS = ("TODO", "TBD", "Todo")          # 分大小寫(todo: 不算)
+_NS_NEG_NARROW_EN_CI = ("not yet", "yet to")            # 不分大小寫
+_NS_NEG_NOT_LACK = ("未來", "有沒有", "未必", "無論", "無法", "並無", "沒問題", "沒有問題", "無誤", "無關", "無妨",
+                    "毫無", "無效", "無窮", "未知", "未曾", "未經", "no-verify", "no longer")
+_NS_NEG_HIST = ("當時", "原本", "原先", "曾", "之前", "以前", "那時", "起初", "後來", "已補", "已修", "修掉",
+                "改成", "改為", "已經有", "現在有了", "已上線", "已做完")
+_NS_NEG_RULE = ("不准", "不要", "禁止", "不得", "勿", "一律不", "不應")      # 不含「別」
+_NS_NEG_EXIST = ("目前沒有", "現在沒有", "尚無", "暫無", "目前無")          # 講「有沒有」的:後面接「的」不算修飾語
+_NS_NEG_FIELD_KEYS = ("since", "retire", "until", "confirmed", "status", "applies", "test", "audit", "kill", "rollback",
+                      "guard", "src", "git", "manual", "by", "來源")
+_NS_NEG_FIELD_RE = re.compile(r"\[(?:" + "|".join(re.escape(k) for k in _NS_NEG_FIELD_KEYS) + r"|when-[a-z]+):[^\]]*\]")
+_NS_NEG_TEMPLATES = ("TEST:還沒有測試在守這條", "]預告這條合約但還沒做:")   # 工具自己寫的預告樣板(歸 guard settle 與漂移甲 c1)
+_NS_NEG_QUOTES = (("「", "」"), ("『", "』"), ("“", "”"), ("\"", "\""))
+_NS_NEG_NOTLACK_RE = re.compile("|".join(
+    (r"(?<![A-Za-z0-9_-])" + re.escape(w) + r"(?![A-Za-z0-9_-])") if w.isascii() else re.escape(w)
+    for w in sorted(set(_NS_NEG_NOT_LACK), key=len, reverse=True)), re.I)
+# 縮寫 n't 那一支永遠比不到(n't 前面一定是字母,撞上前面的 (?<![A-Za-z]));照量測程式實際的行為留著,不認 isn't … yet
+_NS_NEG_NARROW_RE = re.compile("|".join(
+    [re.escape(w) for w in sorted(_NS_NEG_NARROW_ZH, key=len, reverse=True)]
+    + [r"(?<![A-Za-z0-9_-])" + re.escape(w) + r"(?![A-Za-z0-9_-])" for w in _NS_NEG_NARROW_EN_CS]
+    + [r"(?i:(?<![A-Za-z0-9_-])" + re.escape(w) + r"(?![A-Za-z0-9_-]))" for w in _NS_NEG_NARROW_EN_CI]
+    + [r"(?i:(?<![A-Za-z])(?:not|no|n't)(?![A-Za-z])[^.;,!?]{0,40}?(?<![A-Za-z])yet(?![A-Za-z]))"]))
+_NS_NEG_HIST_RE = re.compile("|".join(re.escape(w) for w in sorted(_NS_NEG_HIST, key=len, reverse=True)))
+_NS_NEG_RULE_RE = re.compile("|".join(re.escape(w) for w in sorted(_NS_NEG_RULE, key=len, reverse=True)))
+_NS_NEG_SEG_CUT_RE = re.compile(r"[。;；!?！？,，、:：()（）]|——|—|\.(?=\s|$)")
+_NS_NEG_MOD_BREAK = set(" \t,，、。;；:：!?！？()（）「」『』") | set("就才會要先再也都便即")
+_NS_NEG_MOD_STOP = set(",，、。;；:：()（）「」『』“”\"") | {" "}
+_NS_NEG_SNIP_BEFORE, _NS_NEG_SNIP_LEN = 20, 60
+_NS_NEG_MODES = ("warn", "off")                         # 擋不在這份計劃裡,不收 block
+
+
+def _ns_neg_quote_spans(s):
+    """同一行成對的引號範圍 → [(起, 迄)];不處理巢狀與跨行(量測程式 _quote_spans)。"""
+    spans = []
+    for a, b in _NS_NEG_QUOTES:
+        start = None
+        for i, ch in enumerate(s):
+            if start is None and ch == a:
+                start = i
+            elif start is not None and ch == b and i != start:
+                spans.append((start, i + 1))
+                start = None
+    return spans
+
+
+def _ns_neg_is_modifier(masked, m):
+    """否定字眼後面(不跨標點與空白、最多 9 字)有沒有接修飾語或條件子句的記號(量測程式 _is_modifier_v3)。"""
+    tok = m.group(0)
+    exist = tok in _NS_NEG_EXIST or (tok == "還沒" and masked[m.end():m.end() + 1] == "有")
+    for j in range(m.end(), min(len(masked), m.end() + 9)):
+        ch = masked[j]
+        if ch in _NS_NEG_MOD_STOP:
+            return False
+        if ch == "→" or masked[j:j + 3] == "的時候":
+            return True
+        if ch == "的" and not exist:
+            return True
+        if ch in "時前":
+            nxt = masked[j + 1:j + 2]          # 看整行的下一個字,不是視窗的尾端
+            if nxt == "" or nxt in _NS_NEG_MOD_BREAK:
+                return True
+    return False
+
+
+def _ns_neg_segment(s, pos):
+    """pos 所在的那一小段 → (起, 迄)。"""
+    a = 0
+    for m in _NS_NEG_SEG_CUT_RE.finditer(s):
+        if m.end() <= pos:
+            a = m.end()
+        elif m.start() > pos:
+            return a, m.start()
+    return a, len(s)
+
+
+def _ns_negation_hits(line):
+    """一行原文 → (可見文字, [(留下的窄表字眼, 在可見文字裡的位置)]);清單空=不算(計劃〈做法〉1 第 1 到 6 點)。
+    可見文字=剝掉行內程式碼(_strip_inline_markup,未閉合反引號之後截掉的不看)、去頭尾空白。區塊與圍欄是呼叫端的事。"""
+    probe = _strip_inline_markup(line)[0]
+    vis = probe.strip()
+    if not vis or _revisit_split(probe)[0] is not None:     # 空行、REVISIT 行(條件式、日期式、格式壞的)不看
+        return vis, []
+    bare = _REVISIT_MARK_RE.sub("", vis, count=1)
+    if any(x in vis for x in _NS_NEG_TEMPLATES) or bare.startswith("為什麼還不做:") or bare.startswith("RETIRE-IF:"):
+        return vis, []
+    s = _NS_NEG_FIELD_RE.sub(lambda m: "\0" * len(m.group(0)), probe)
+    masked = _NS_NEG_NOTLACK_RE.sub(lambda m: "\0" * len(m.group(0)), s)
+    nar = list(_NS_NEG_NARROW_RE.finditer(masked))
+    if not nar:
+        return vis, []
+    spans = _ns_neg_quote_spans(masked)
+    unq = list(masked)
+    for a, b in spans:
+        for k in range(a, b):
+            unq[k] = "\0"
+    unq = "".join(unq)
+    lead = len(probe) - len(probe.lstrip())
+    out = []
+    for m in nar:
+        if any(a <= m.start() < b for a, b in spans) or _ns_neg_is_modifier(masked, m):
+            continue
+        a, b = _ns_neg_segment(masked, m.start())
+        if _NS_NEG_RULE_RE.search(unq[a:b]) or _NS_NEG_HIST_RE.search(unq[a:m.start()]):
+            continue
+        out.append((m.group(0), m.start() - lead))
+    return vis, out
+
+
+def _ns_negation_snippet(vis, pos):
+    """可見文字 → 印出的片段:從否定字眼前 20 字起取 60 字,兩端有截掉就加「…」;整行不到 60 字整行印。"""
+    if len(vis) <= _NS_NEG_SNIP_LEN:
+        return vis
+    a = max(0, pos - _NS_NEG_SNIP_BEFORE)
+    b = a + _NS_NEG_SNIP_LEN
+    return ("…" if a > 0 else "") + vis[a:b] + ("…" if b < len(vis) else "")
+
+
+def _ns_negation_hints(path, text, rows):
+    """一篇的路徑、終點全文、_notelines_new(..., keep_other=True) 回的 rows → [(路徑, 行號, 片段, 形狀)]。
+    只看 body/summary 區塊、圍欄外的行;形狀:原文去掉行首空白後 | 開頭=table、# 開頭=heading、其他 prose。"""
+    vis_nos = {no for no, _l in _visible_lines(text.split("\n"))}
+    out = []
+    for i, ln, reg in rows:
+        if reg not in ("body", "summary") or i not in vis_nos:
+            continue
+        vis, hits = _ns_negation_hits(ln)
+        if not hits:
+            continue
+        t = ln.lstrip()
+        shape = "table" if t.startswith("|") else ("heading" if t.startswith("#") else "prose")
+        out.append((path, i, _ns_negation_snippet(vis, hits[0][1]), shape))
+    return out
+
+
+def _ns_negation_format(items, mode):
+    """提醒清單 → 要印的字串(計劃〈做法〉3 的字樣;全部印出,不設上限)。"""
+    items = sorted(items, key=lambda x: (x[0], x[1]))
+    tag = {"table": "(表格)", "heading": "(標題)"}
+    out = [f"提醒:這次提交新寫了 {len(items)} 行「還沒有/尚未…」的現況句,沒有寫成回頭條件行"
+           f"(note_shape.negation={mode},不擋)——那件事發生之後這句會過期、沒人回頭改:"]
+    for p, n, frag, shape in items:
+        out.append(f"  {p}:{n}  {frag}{tag.get(shape, '')}")
+    out += [
+        "改法:把那一句搬成獨立一行回頭條件,原行刪掉那一句;RULE/PITFALL/WHY 這類摘要行留著前綴,只搬出那一句。例:",
+        "  REVISIT:[when-file:web/src/pages/x.tsx][by:2026-12-31] 前端頁面還沒做,做了就改成現況說明",
+        "  條件怎麼選:跟那件東西直接綁的優先——它會在的檔 [when-file:路徑]、守它的測試 [when-test:測試名]、"
+        "Python 的函式或類別 [when-symbol:路徑::名稱](只認 Python 定義;其他語言只看名字有沒有出現,改用 when-file);"
+        "講的是一個流程或一份計劃,用 [when-status:Projects/名稱=done|superseded](節點不加 [[ ]]);"
+        "量測、外部、人工進度這種觀測類只能寫日期 REVISIT:YYYY-MM-DD …",
+        "  先確定那件事還沒發生:推送時條件已經成立,這次推送會被漂移檢查擋下;寫完可以跑 lumos drift scan 看有沒有已經成立的",
+    ]
+    if any(x[3] in ("table", "heading") for x in items):
+        out.append("  表格的格子與標題不能寫成回頭條件:把它改成不帶「還沒」的說法,回頭條件行寫在整張表或這一節標題之後")
+    out.append("程式碼查得到的現況就刪掉這句;講的是當時就寫成歷史說法;只是在提這些字眼,用引號或行內程式碼包起來。"
+               "這次提交之後這幾行不會再提醒。關掉這個提醒:.lumos/config.json 的 note_shape.negation 設成 off")
+    return "\n".join(out)
+
+
+def _note_shape_negation_parse(text):
+    """note_shape.negation(從被檢查的版本讀,輸入跟 _note_shape_config 同一份)→ {mode, warns, bad_value}。
+    沒寫或 null=warn 不另講;看不懂的值(block、false、"OFF"…)照 warn、講一句、bad_value=True;設定檔讀不了或 note_shape
+    不是物件照 warn 並另講一句(gate 那句講「照預設擋」,不另講會讓人以為提醒也擋;照 _drift_old_sentence_config 的先例)。
+    bad_value 是給 doctor 用的結構化欄位,doctor 不比對提醒字樣(代碼審 r1 架構對齊席,照 _drift_config_parts)。"""
+    def _r(mode, warns=(), bad_value=False):
+        return {"mode": mode, "warns": list(warns), "bad_value": bad_value}
+    if text is None:
+        return _r("warn")
+    raw = text.decode("utf-8-sig", errors="replace") if isinstance(text, (bytes, bytearray)) else str(text)
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        return _r("warn", [f".lumos/config.json 讀不了({e.__class__.__name__}),否定現況句提醒照預設 warn"])
+    ns = data.get("note_shape") if isinstance(data, dict) else None
+    if ns is None:
+        return _r("warn")
+    if not isinstance(ns, dict):
+        return _r("warn", ["設定檔的 note_shape 不是物件,否定現況句提醒照預設 warn"])
+    v = ns.get("negation")
+    if v is None:
+        return _r("warn")
+    if not isinstance(v, str) or v not in _NS_NEG_MODES:
+        return _r("warn", [f"note_shape.negation={json.dumps(v, ensure_ascii=False)} 看不懂(只認小寫 warn/off),照 warn"], True)
+    return _r(v)
+
+
+def _note_shape_negation_config(text):
+    """→ (warn|off, [提醒]);提交前用。不擴充 _note_shape_config:它有兩個以兩個值解包的呼叫端。"""
+    r = _note_shape_negation_parse(text)
+    return r["mode"], r["warns"]
+
+
+def _ns_negation_collect(hints, p, text, rows):
+    """_note_shape_eval 逐篇呼叫:hints 是 None 或已經失敗就不算;丟例外就清空 items、error 記例外類別名,這次提交不再算。"""
+    if hints is None or hints.get("error") is not None:
+        return
+    try:
+        hints["seen"] = hints.get("seen", 0) + sum(1 for _i, _l, r in rows if r in ("body", "summary"))
+        hints["items"].extend(_ns_negation_hints(p, text, rows))
+    except Exception as e:
+        hints["items"] = []
+        hints["error"] = e.__class__.__name__
+
+
+def _ns_negation_doctor_lines(cfg_text):
+    """doctor 的一行(計劃〈做法〉5):note_shape.negation 是 off 或寫了看不懂的值才講;warn、沒寫、設定檔壞都不講。"""
+    try:
+        r = _note_shape_negation_parse(cfg_text)
+    except Exception:
+        return []
+    if r["mode"] == "off":
+        return ["這個專案把否定現況句提醒關掉了(note_shape.negation=off)"]
+    return r["warns"][:1] if r["bad_value"] else []
+
+
+def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None, max_count=None,
+                     hints=None):
+    """算這次的違規 → (violations[(筆記路徑, 行號, 規則, 片段, 改法)], errors[訊息])。
+    hints:只有 cmd_note_shape 在 --staged、negation 不是 off 時傳 {"items": [], "error": None, "seen": 0};
+    逐篇多算一次否定現況句提醒放進 items(★不進 violations,回傳值照舊兩個★),seen=要判的正文與摘要新行數。
+    提醒丟例外就清空 items、error 記例外類別名、這次提交不再算(提醒失敗不能讓閘失敗)。"""
     reader = _nodehome_reader(repo_root, tip_where)
     lst = _nodehome_list(repo_root, tip_where)
     if lst is None:
@@ -25255,6 +25481,7 @@ def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclud
                     viol.append((p, i, rule, frag, fix))
             for rule, frag, fix in _ns_revisit_violations(ln, reg, i in vis):
                 viol.append((p, i, rule, frag, fix))
+        _ns_negation_collect(hints, p, text, rows)
     # 2) 新程式檔喚醒舊引用(筆記這次沒改也查;上線點版本裡就有的那行是舊帳,不算)
     became = _ns_became_code(repo_root, base_where if not staged else _lens_full_sha(repo_root, "HEAD"),
                              tip_where, reader)
@@ -25316,6 +25543,8 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
     if mode != "block":
         out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
                    "沒寫來源的現況描述不會被擋")
+    # 否定現況句提醒的子開關:放在 ci 返回之前,推送前與 CI 路徑每次都唸(照 drift_check.old_sentence 那行)
+    out += _ns_negation_doctor_lines(txt)
     wf = root / ".github" / "workflows"
     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
     if ymls:
@@ -25383,7 +25612,8 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None):
     不是 git、git 算不出來、淺層 clone、合併中、開關 off → 說一句、rc0(fail-open;推送前與 CI 會再跑)。
     ★設定與內容都從被檢查的版本讀★(提交前=提交索引、推送前=終點提交),工作目錄沒暫存的東西不算。
     有違規(擋下,或 warn 模式的提醒)與跳過才寫治理帳,沒違規的放行不寫——刻意跟每支檔有家每次都寫 passed 不同:
-    每次提交一筆沒資訊的行正是 rtb 回饋抱怨的帳本雜訊。"""
+    每次提交一筆沒資訊的行正是 rtb 回饋抱怨的帳本雜訊。例外:提交前另有否定現況句提醒(只提醒、不算違規、
+    不改 rc)時記一筆 hinted,只有幾行、幾篇兩個整數(Projects/否定現況句配回頭條件_計劃〈做法〉4)。"""
     root = Path(repo).resolve() if repo else None
     if root is None:
         r = _lens_git(".", "rev-parse", "--show-toplevel")
@@ -25444,19 +25674,72 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None):
     wv = _vault_in(root)
     wv_rel = wv.resolve().relative_to(root.resolve()).as_posix() if wv is not None else None
     vault_rel = wv_rel if (wv_rel and wv_rel.startswith("docs/") and wv_rel.split("/", 1)[1] in vaults) else "docs/" + vaults[0]
-    mode, warns = _note_shape_config(_nodehome_reader(root, tip_where)(".lumos/config.json"))
+    cfg_text = _nodehome_reader(root, tip_where)(".lumos/config.json")
+    mode, warns = _note_shape_config(cfg_text)
     for w in warns:
         print(f"提醒:{w}", file=sys.stderr)
     if mode == "off":
         print("筆記形狀擋:這個專案把這道檢查關掉了(note_shape.gate=off),跳過", file=sys.stderr)
         return 0
-    res = _note_shape_eval(root, staged, base_where, tip_where, vault_rel)
+    # 否定現況句提醒(Projects/否定現況句配回頭條件_計劃〈做法〉3):只在提交前算;讀開關在 eval 之前,off 就不傳 hints。
+    # 讀設定、判定、組字樣、印出、記帳全包在 try 裡——提醒失敗只印一句,rc 照既有判定(掛鉤對 rc1 會擋提交)
+    hints, neg_mode, neg_warns, neg_fail = _ns_negation_prepare(cfg_text) if staged else (None, "warn", [], None)
+    res = _note_shape_eval(root, staged, base_where, tip_where, vault_rel, hints=hints)
     if res is None:
         print("筆記形狀擋:git 算不出這次的改動,跳過(fail-open)", file=sys.stderr)
         return 0
     viol, errs = res
-    if not viol and not errs:
-        return 0
+    neg_items, neg_fail = _ns_negation_collected(hints, neg_warns, neg_fail)
+    rc = _note_shape_report(root, mode, mode_word, viol, errs) if (viol or errs) else 0
+    if neg_items or neg_fail:
+        _note_shape_negation_emit(root, neg_items, neg_mode, neg_fail)
+    return rc
+
+
+def _ns_negation_prepare(cfg_text):
+    """提交前讀 note_shape.negation → (hints 或 None, mode, 設定提醒, 失敗的例外類別名或 None);off 就不傳 hints。"""
+    try:
+        mode, warns = _note_shape_negation_config(cfg_text)
+    except Exception as e:
+        return None, "warn", [], e.__class__.__name__
+    return ({"items": [], "error": None, "seen": 0} if mode != "off" else None), mode, warns, None
+
+
+def _ns_negation_collected(hints, warns, fail):
+    """eval 之後 → (要印的提醒, 失敗的例外類別名或 None)。設定的提醒只在這次有要判的新筆記行時印,不是每次提交都印。"""
+    if hints is None:
+        return [], fail
+    fail = fail or hints.get("error")
+    if hints.get("seen"):
+        for w in warns:
+            print(f"提醒:{w}", file=sys.stderr)
+    return ([] if fail else hints["items"]), fail
+
+
+def _note_shape_negation_emit(root, items, mode, fail):
+    """印否定現況句提醒並記一筆 hinted 帳(只有幾行、幾篇兩個整數);任何一步出錯就丟掉這次全部提醒、只印一句。
+    ★不回傳、不改判定★:rc 由違規段決定。"""
+    msg = None
+    if not fail:
+        try:
+            msg = _ns_negation_format(items, mode)
+        except Exception as e:
+            fail = e.__class__.__name__
+    if fail:
+        print(f"提醒:否定現況句提醒這次沒跑完({fail}),不影響這道檢查的判定", file=sys.stderr)
+        return
+    try:
+        print(msg, file=sys.stderr)
+        n_lines, n_notes = len(items), len({x[0] for x in items})
+        _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:否定現況句提醒 {n_lines} 行、{n_notes} 篇",
+                            extra={"check": "negation", "lines": n_lines, "notes": n_notes})
+    except Exception as e:
+        print(f"提醒:否定現況句提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
+
+
+def _note_shape_report(root, mode, mode_word, viol, errs):
+    """有違規時印違規段、記 blocked 或 warned 帳 → rc(block 1、warn 0)。從 cmd_note_shape 拆出來,讓否定現況句
+    提醒段接在它後面印(違規段 → 尾句與帳 → 提醒段 → hinted 帳)。"""
     head = "擋下" if mode == "block" else "提醒(note_shape.gate=warn,不擋)"
     print(f"{head}:{mode_word}的筆記有新寫的、程式碼推得出來的形狀(筆記形狀擋)——", file=sys.stderr)
     for e in errs:
