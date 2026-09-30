@@ -94,8 +94,8 @@ aliases:
 硬擋的語義是「逼你寫下 undo 路徑」，**證明你寫了補償步驟，不證明補償跑得動、不證明與現行 schema 一致**（那是 validation，工具到不了）。「有 `[rollback:]`」≠「驗過能用」。措辭刻意與硬擋一致：硬擋的是「有沒有寫下實質 undo」，不是「undo 能不能跑」。
 
 ### `lumos gov` 唯讀彙整
-- 六來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci`）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
-- `cmd_gov` 讀帳用 `splitlines()` 切行,U+2028/U+2029 也會被切開;一行合法 JSON 但不是物件(切出來的 `[1]`、`[]`、`null`)跳過,不丟例外(2026-10-01 回頭重讀代碼審 r2 資安席:帳裡一筆帶 U+2028 的路徑就讓 gov 每次當掉;寫帳那側的路徑過濾在 [[Systems/筆記內容審]])。測試 `t_gov_skips_non_object_lines`。
+- 六來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci`）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）(2026-10-01 起每筆多 covers/recipe_id/head_sha/weak 四欄,gov 只取既有欄位;另一個讀者是寫表態算背書,見 [[Systems/guard-kill]])、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
+- `cmd_gov` 讀帳原本用 `splitlines()` 切行,U+2028/U+2029 也會被切開(2026-10-01 起改走帳檔共用的 `_drift_jsonl_parse`(位元組 errors=replace 解碼、只在換行切行),不再在這兩個字元切行,[[Projects/併發與效能表態要合約背書_計劃]]);一行合法 JSON 但不是物件(切出來的 `[1]`、`[]`、`null`)跳過,不丟例外(2026-10-01 回頭重讀代碼審 r2 資安席:帳裡一筆帶 U+2028 的路徑就讓 gov 每次當掉;寫帳那側的路徑過濾在 [[Systems/筆記內容審]])。測試 `t_gov_skips_non_object_lines`。
 - 物件行但 gov 用到的欄位型別不對(nodes 是 null、ts 是數字、當鍵用的 kind 或 commit 是陣列、findings 是字串…)也在同一處整行跳過(2026-10-01 回頭重讀代碼審 r3 資安席:原本只擋非物件行,這種行照樣讓 gov 當掉;治理帳在簿記白名單裡,直接提交一行進去不會讓代碼審留痕失效)。欄位與型別表是 `_GOV_FIELD_TYPES`,七本帳共用;當天對本 repo 八本帳十萬多筆物件逐筆驗過,沒有一筆被跳過,新舊版 `gov`、`--stats`、`--full` 的輸出逐位元組相同。mapper 新用到欄位時要一起補進表裡。測試 `t_gov_skips_bad_field_types`。逃逸帳(`_escape_rows_for`)與 hook 事件檔不走這支 load,沒在這次範圍。
 - dedup 在**讀時**做，key = `(commit, frozenset(nodes), gate, kind, token)`；`nodes` 寫入即 stem 化，讀時 stem 比對。
 - 預設 `--since 90`（單位：天）；★(2026-08-21 程式碼實證)帳檔已入 git 追蹤,非 gitignore★；**本機開發可見性工具，非合規物**（移除了原提案的歐盟 Art.12 合規宣稱）。

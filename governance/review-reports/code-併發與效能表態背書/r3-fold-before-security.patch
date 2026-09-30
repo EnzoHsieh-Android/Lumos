@@ -1,0 +1,73 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 0f92ddac..7f382aae 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4902,15 +4902,16 @@ def _git_commit_exists(repo_root, sha):
+         return r.returncode == 0
+     except OSError:
+         return False
+ 
+ 
+-def _git_is_shallow(repo_root):
++def _git_is_shallow(repo_root, timeout=None):
++    """timeout 給了就當 git 的上限,逾時照 subprocess 丟 TimeoutExpired 由呼叫端接(算破壞測試背書時傳剩餘預算)。"""
+     import subprocess
+     try:
+         r = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=str(repo_root),
+-                           capture_output=True, text=True, errors="replace")
++                           capture_output=True, text=True, errors="replace", timeout=timeout)
+         return r.returncode == 0 and r.stdout.strip() == "true"
+     except OSError:
+         return False
+ 
+ 
+@@ -7307,10 +7308,11 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+         if not p.exists():
+             return
+         loaded.append(name.lstrip(".").replace("-log.jsonl", "").replace(".jsonl", ""))
+         # 逐行容錯讀,用帳檔共用的 _drift_jsonl_parse(位元組 errors=replace 解碼、只在 \n 切行、壞行與非物件略過):
+         # 殘行停在半個中文字時整檔 read_text 會丟 UnicodeDecodeError 讓 gov 出錯;splitlines 會在 U+2028/U+2029 把一筆劈成兩段
++        # ★不走 _drift_jsonl_rows★(代碼審 r3 架構席):那支不跟符號連結,gov 一直跟;換過去會讓連結過來的帳悄悄讀成空的
+         try:
+             _raw = p.read_bytes()
+         except OSError:
+             return
+         for d in _drift_jsonl_parse(_raw):
+@@ -38120,14 +38122,15 @@ def _codeloop_record_valid_ex(repo_root, rec_sha, marker_sha, timeout=None):
+                       capture_output=True, text=True, errors="replace", cwd=str(repo_root), timeout=_to)
+         if anc.returncode not in (0, 1):
+             # ★git 回 1 才是「不是祖先」;其他非零是那個提交在這份 repo 裡根本找不到★(代碼審 r1 通才席):
+             # 寫錯的 sha、淺 clone、或物件被清掉。第一版把這種也講成「多半是壓過提交」,給了文不對題的重來指令。
+             # 判不了只限淺 clone(缺歷史時它可能正是祖先);完整歷史裡找不到的提交不可能是祖先,確定無效
+-            _shallow = _sp.run(["git", "rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
+-                               errors="replace", cwd=str(repo_root), timeout=_to).stdout.strip() == "true"
+-            return (False, (f"記錄 sha {rec_sha[:8]} 在這份 repo 裡找不到(寫錯、淺 clone、或已被清掉),"
+-                           "判不了是不是祖先——先確認那個提交還在,不在就照重來的步驟重記"), _shallow)
++            if _git_is_shallow(repo_root, timeout=_to):
++                return (False, (f"記錄 sha {rec_sha[:8]} 在這份 repo 裡找不到(寫錯、淺 clone、或已被清掉),"
++                               "判不了是不是祖先——先確認那個提交還在,不在就照重來的步驟重記"), True)
++            return (False, (f"記錄 sha {rec_sha[:8]} 在這份 repo 的完整歷史裡找不到(寫錯或已被清掉),"
++                           "不可能是目標的祖先——照重來的步驟重記"), False)
+         if anc.returncode != 0:
+             # ★講出最常見的原因與怎麼重來★(2026-09-22 rtb-production-agent-demo 回報):
+             # 把本機提交壓成一個、或 rebase 之後,內容可以一模一樣,原本記的那個提交卻不再是祖先。
+             # 只丟兩個 sha 的話,人看不出是自己剛做的壓提交造成的,也不知道要重跑哪兩個指令。
+             return (False, (f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先——多半是壓過提交或 rebase 改寫過歷史"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a09ecbad..704405d0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -59951,10 +59951,13 @@ def t_contract_backing_cases():
+         check("⑤版本判不了 → 整題 none", r["status"] == "none" and "逾時或出錯" in r["reason"], str(r))
+     finally:
+         m._codeloop_record_valid_ex = orig
+     r = one([_backing_row("f" * 40), _backing_row(A)])
+     check("⑤-1 完整歷史裡找不到的提交確定不是祖先:不連帶否決同題其他有效紀錄", r["status"] == "strong", str(r))
++    ok_f, why_f, unsure_f = m._codeloop_record_valid_ex(str(root), "f" * 40, B)
++    check("⑤-1b 完整歷史裡找不到:確定無效,說法不再講「判不了」", ok_f is False and unsure_f is False
++          and "判不了" not in why_f and "完整歷史" in why_f, why_f)
+     import subprocess as _sp2
+     sh = Path(tempfile.mkdtemp(prefix="gctl-backing-shallow-")) / "c"
+     _sp2.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
+     _sp2.run(["git", "-C", str(sh), "checkout", "-q", B], capture_output=True)
+     head_sh = _sp2.run(["git", "-C", str(sh), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()

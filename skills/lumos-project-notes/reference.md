@@ -527,9 +527,13 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
 `[test:]` 證保鑣存在、`[audit:]` 審保鑣合格——都沒真打一拳。高風險/金流合約建議補第三級：
 
 ```bash
-lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y --note "業務上壞了什麼"
+lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y --note "業務上壞了什麼" [--covers 題目id,…]
 lumos guard kill <node>   # 沙盒(worktree)真弄壞 → 綁定測試必翻紅;survived=稻草人 rc1
 ```
+- **`--covers`(2026-10-01,[[Projects/併發與效能表態要合約背書_計劃]])**:宣告這條壞法涵蓋哪幾題要背書的棧別檢核題(`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data`)。同一條配方(同筆記、同 invariant、同 file、同 old)已存在時,`--new` 相同、`--note/--platform/--test` 沒帶或跟既有相同 → 只把 covers 換成這次的清單;其他情況照舊擋。這幾題表態 satisfied 時,寫表態那一刻工具會在本機讀 kill-log 算背書:破壞測試那次的 HEAD 要對被表態的版本有效(同一版或只差簿記檔)、涵蓋這題的配方沒有任何一次 survived、而且至少有一次非弱的 killed(整套一起跑、flaky 平台、筆記沒提交就跑都算弱)。沒有背書只在推送前提醒一行,不擋。
+- **怎麼拿到背書(補救順序)**:寫次數或併發測試 → 在管那支檔的筆記寫一條 ★INVARIANT★(若還沒有)→ `lumos guard bind` 綁上測試 → `guard kill-add --covers <題目id>` → 把測試、程式、含配方的筆記一起提交(要壓提交就先壓)→ `guard kill`(環境失敗就修好環境在同一版上重跑)→ 重表態。
+- **併發測試怎麼寫才咬得住**:用同步起跑(barrier)讓請求同時撞進關鍵段;斷言最終狀態(成功幾次、餘額多少),不斷言花了多久;最穩是在讀與寫之間留一個測試專用的暫停點,強制製造交錯。配方拿掉鎖、交易、唯一鍵或冪等檢查。偶發才紅的測試破壞測試抓不準,別拿來背書。
+- **效能怎麼寫才咬得住**:斷言次數不斷言毫秒——查詢次數、對外呼叫次數、一次載入的筆數;資料量從 10 變 100 時次數不變。配方把批次改回逐筆。絕對延遲(p95 之類)不收當背書:寫成 `RULE:` 加 `FACT:[來源:生產]`,交給固定機器的效能 CI 或監控。
 - 壞法**從業務行為推導**（「驗章短路成恆真」），不從實作反轉；跑測試的指令由 `.lumos/config.json` 宣告（多平台 `platforms.<名>.run_cmd`、單平台 `test.run_cmd`，含 `{method}` 佔位）。
 - 七態（2026-07-29 oracle 品質包升級）：**`killed`＝強證據**（綁定測試名與失敗標記鄰近共現，且標記不落在名字串內）／**`killed_unattributed`＝弱證據**（紅了但歸因不到綁定測試，可能是編譯錯/環境掛，印警告建議 run_cmd 加 filter）／**`timed_out_weak`＝弱證據且不計 killed**（刻意變更：掛掉可能是環境非變異）／`survived`（稻草人）／`drifted`（配方漂移重寫）／`abort`（baseline 就紅）／`error`。
 - rc 優先序：survived→1；drifted/abort/error→2；**全部弱證據→1**（沒有任一條被證實咬住，不得以 rc0 報成功）；有強殺且無錯→0。摘要「咬得住」只配全強殺，混弱證據改印「強殺 X / 弱 Y」。留痕 docs/.kill-log.jsonl，`lumos gov` 可查。
@@ -587,7 +591,7 @@ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
 lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
 lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
 lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
-lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"]   # 宣告壞法配方(kill_recipes+[kill:recipes])
+lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--covers 題目id,…]   # 宣告壞法配方(kill_recipes+[kill:recipes])
 lumos guard kill <node> ["<KEY子字串>"] [--json]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
 ```
 
