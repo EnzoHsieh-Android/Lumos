@@ -110,25 +110,6 @@ Some sentences go stale easily: “there is no refund page yet” becomes wrong 
 
 <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push; each check is labelled as a block or warning" width="760"></a></p>
 
-**How much do the checks catch?** In another project using Lumos, we checked 20 confirmed stale passages: the tools caught 7 cases of existing drift (35%). Had the checks existed before the original pushes, they could have caught about 13.5, roughly two-thirds (one case was half covered and counts as half). Two kinds still slip through: a new feature whose note still says it does not exist (new sentences now get reminders, but old ones are not rescanned), and a changed value whose name stays the same. False-alarm measurement is not yet complete.
-
-**After detection**: `lumos drift fix` handles five kinds of status mismatch by type, such as a completed plan with a verification record still marked pending. For one type, it only lists evidence; a person must fill in the details. People must still rewrite outdated statements in notes.
-
-**Limits of the second check**: It sees whether notes changed, not whether they are correct. In the same project, we sampled 55 current-state statements; 54 could be assessed, and 22 were stale. The first check was added later to address what gets written. Correctness still depends on review and human judgment.
-
-<details>
-<summary>More: review data and skip records</summary>
-
-- **Do multiple reviewers help?** Across 85 multi-reviewer rounds on Lumos (2026-07 to 08), 531 of 822 problems (64.6%) were caught by only one reviewer: reviewers notice different things. This is descriptive data, not a measure of the effect of adding or removing a reviewer. The AI assigning reviews and collecting reports manually entered how many reviewers caught each problem.
-- **Were the findings real problems?** As of 2026-09-30, only 58 of 6,195 findings (0.9%) were judged to need no action—but AI made that judgment too.
-- **Were skipped checks justified?** The "change code, update notes" check was skipped 84 times in about 2,070 commits in Lumos's repo. Claude and Codex independently examined every skip. Both agreed that 8 changed behavior without recording why; 17 changed only tests. Most others were unfinished work on feature branches, with notes added later. [Per-skip judgments](governance/eval/readme-bypass-judge/)
-- **What about larger models?** Opus 5 scored 25/25 in all four groups above, unaffected by incorrect notes, but runs with notes took 2 to 5 times as long.
-- **Did notes help?** Another 80 runs (four questions, four groups, five runs per question per group) tested rules code cannot reveal. Only one question truly tested this: all 5 code-only runs failed; the three groups with notes got 8 of 15 correct. On the other three questions, all groups scored near perfect, showing no difference. With one synthetic project and questions I designed, this only suggests the approach helps.
-- **What it cannot stop**: Some auxiliary checks allow changes through if the checks themselves fail, so tool failures do not stall development. Commit-time skips are recorded. Skipping push checks with `--no-verify` leaves no local record; CI reruns them only on pushes to main or pull requests.
-- Raw records you can check: [blocks and passes](docs/.governance-log.jsonl), [skips](docs/.bypass-log.jsonl), [review reports](governance/review-reports/).
-
-</details>
-
 ## Install and limits
 
 You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project directory:
