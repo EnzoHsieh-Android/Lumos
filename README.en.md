@@ -13,17 +13,17 @@
 
 **When AI writes your code, have it record the reasoning too.**
 
-Lumos is built for natural-language development: you describe what you need, and the AI proposes and implements a solution, whatever the programming language. It is a harness for keeping AI development under control, using checks and records to address five problems: the black box, lost memory, stale notes, hard-to-verify results, and architecture that gets messier with every change. The goal is to let people stay on top of what the AI is doing without reading every diff line by line, so they can hand more development to AI and move several projects forward at once.
+Lumos is built for natural-language development: you describe what you need, and AI proposes and implements a solution, without being tied to one programming language. It adds a layer of control and records—a harness—to address five problems: opaque work, lost context, stale notes, hard-to-verify results, and increasingly messy architecture. The goal is to keep people in control without reading every diff line by line, so they can delegate more development to AI and advance several projects at once.
 
-For example, writing code through a conversation with AI is fast, but the trade-offs you discussed and the options you rejected stay in that one conversation. Return to it, and you can recover that context. But when someone changes the same file three months later, nobody remembers which conversation it was, and teammates or a different AI tool cannot access it. A rule like "an order must never be refunded twice" may show up in the code as a check, but the code cannot tell you why that check must never be removed. And when the AI says the tests passed, there is no way to check afterward which tests it ran.
+Coding through conversation is fast, but trade-offs and rejected options stay in that conversation. Reopen it, and the context is there. Three months later, when someone edits the same file, nobody remembers which conversation it was; teammates and other AI tools cannot see it either. Code may check that "an order must never be refunded twice" without explaining why the check must stay. AI says the tests passed, but afterward you cannot tell which ones it ran.
 
-Lumos keeps that context in the project. It works alongside Claude Code or Codex and requires the AI to record the reason for each code change, the rules it must preserve, and how the change was verified. These Markdown notes live alongside the code in the same repo and are versioned with it, so anyone, using any tool, can find them. At commit and push time, Git hooks check what can be checked automatically, such as whether the notes were updated. Think of it as combining ADRs (architecture decision records), CODEOWNERS, and pre-commit to check the AI's work. Beyond keeping records, Lumos brings each language's existing linters and community rule sets into the pre-push checks, blocking only warnings introduced by the current changes. It then assigns AI reviewers based on risk to examine changes from several angles and confirms that tests actually ran and can catch problems.
+Lumos keeps that context in the project. With Claude Code or Codex, it requires AI to record each code change's reasons, rules to preserve, and verification method in Markdown notes. Versioned alongside the code, the notes are available to anyone using any tool. At commit and push time, Git hooks check what can be automated, such as whether notes were updated. Think of ADRs (architecture decision records), CODEOWNERS, and pre-commit combined to check AI's work. For code quality, Lumos uses each language's existing linters and community rules, blocking only new warnings before a push. It assigns AI reviewers by risk to examine changes from several angles and confirms that tests ran and can catch problems.
 
-The toolset is small: a single-file Python command-line tool that uses only the standard library, a set of Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and the project notes.
+The toolset is small: a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes.
 
 ## What it looks like
 
-Suppose the AI changes the refund logic and commits without writing any notes. It receives this message (an excerpt of real output, translated from the tool's Chinese):
+If AI changes the refund logic and commits without writing notes, it receives this message (real output, excerpted and translated from Chinese):
 
 ```text
 $ git commit -m "feat: check whether an order was already refunded"
@@ -40,7 +40,7 @@ Pick one of two paths:
       Skipping is recorded; it is not a silent pass.
 ```
 
-That message is for the AI to read. Its working instructions require it to update the notes and commit again. If no note update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. Your role is mainly to make business trade-offs and decide whether to accept a given risk.
+The message is for AI: its instructions require it to update the notes and retry. If no update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. You mainly decide business trade-offs and whether to accept a risk.
 
 ## How it works
 
@@ -50,16 +50,16 @@ That message is for the AI to read. Its working instructions require it to updat
   </a>
 </p>
 
-1. **Read the code, add context**: The AI reads the code first. When it edits a file, the tool provides related notes with reasoning the code cannot reveal. If a note's description of behavior conflicts with the code, the code takes precedence. Questions the code cannot answer, such as deployment state or business constraints, require checking the source or asking a person.
+1. **Read the code, add context**: AI reads the code first. When it edits a file, the tool supplies related notes with reasons the code cannot reveal. For descriptions of code behavior, code takes precedence over conflicting notes. For deployment state, business constraints, and other questions code cannot answer, verify or ask a person.
 2. **Assign AI reviewers based on risk**: See "How code review works" below.
-3. **Every finding needs an outcome**: Fix the problem, explain why it will not be fixed, or show evidence that it is not a problem. Nothing passes until every finding has been addressed.
-4. **Update the notes**: Record the trade-offs and verification method in the note assigned to document that file, so the next person or AI working on it can find them.
+3. **Every finding needs an outcome**: Fix it, explain why it will not be fixed, or disprove it with evidence. All findings must be addressed to pass.
+4. **Update the notes**: Record trade-offs and verification methods in the note responsible for that file, ready for the next change.
 
-The outer loop checks the process itself. In Lumos's own repo, a pass/fail verdict is recorded for every case that has completed review and has a design spec. Each week, the judging code recomputes the verdict from the saved records (no new AI review) to confirm that each case still gets the same verdict. When there are too many to run in time, a rotating sample is used. If a verdict changes, a later change to the judging rules broke something and needs fixing.
+The outer loop checks the process itself. Lumos's own repo saves a pass/fail verdict for every reviewed case with a design spec. Each week, the current judging code recomputes those verdicts from saved records, without another AI review. If there are too many cases, it rotates through a sample. A changed verdict means a later edit to the judging rules broke something and needs fixing.
 
 ## Connecting plans, features, and verification
 
-The project's linked notes form a “graph,” and each note is a “node.” Notes cover plans, feature descriptions, verification records, and incidents. The fictional online shop below illustrates the sequence: plan checkout and payment integration, implement the features, then record the results of checkout end-to-end tests and duplicate-payment stress tests. Important rules are marked as protected, shown by gold rings, only after they are linked to verification records. If canceling an order fails to refund points, the incident is linked back to the affected checkout flow. A fix for the points refund is then planned and implemented, followed by a regression test for that refund.
+Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows the sequence: plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests. Important rules become protected (gold rings) only after linking to verification records. If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
 
 <p align="center">
   <a href="assets/graph-demo-en.svg">
@@ -75,11 +75,11 @@ The project's linked notes form a “graph,” and each note is a “node.” No
   </a>
 </p>
 
-- **Assess the risk first**: Before a push, the tool scans newly added code using fixed rules to find patterns that tend to cause problems.
-- **Then choose how many AI reviewers to assign**: Ordinary changes get one or two reviewers. High-risk changes get at least 7 per round, each examining one aspect: 5 look for problems, 1 checks consistency with the existing architecture, and 1 checks security. If a finalized design spec exists, 1 more checks the change against it.
-- **High-risk changes cannot be pushed until review is complete**: Before the push, the review outcome must be recorded as passed or skipped, with a written reason for skipping. Otherwise, the Git hook blocks the push.
+- **Assess risk first**: Before a push, fixed rules scan newly added code for patterns prone to problems.
+- **Choose how many AI reviewers to assign**: Ordinary changes get 1 to 2; high-risk changes get at least 7 per round: 5 look for problems, 1 checks architectural consistency, and 1 checks security. A finalized design spec adds 1 reviewer to check against it.
+- **High-risk changes need a review outcome to push**: Record a pass or a skip with a written reason before pushing; otherwise, the Git hook blocks the push.
 
-Review is only one layer. Risk classification, multiple AI reviewers, rules for allowing changes through, external rules (linters), and tests all have gaps. Combining these layers makes it harder for a problem to get through every check. This is the Swiss cheese model.
+Review is one layer. Risk classification, AI review, approval rules, external rules (linters), and tests each have gaps. Stacking them makes it harder for a problem to pass through them all: the Swiss cheese model.
 
 <p align="center">
   <a href="assets/swiss-cheese-en.svg">
@@ -89,53 +89,55 @@ Review is only one layer. Risk classification, multiple AI reviewers, rules for 
 
 ## Where humans come in
 
-By default, Lumos does not require a person to read every diff line by line. Multiple AIs and automated checks do that work, while people make the following judgment calls.
+By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
 
-- People decide on requirements, trade-offs, whether to accept risks, and irreversible operations.
-- A high-risk review runs for at most 3 rounds. If it still has not passed, the process stops and a person takes over; the AI does not declare a pass on its own. This is a working rule: the tool only warns when the limit is reached.
-- A person must sign off on whether a rule still fits the business and record that decision. Tests cannot establish this.
-- Each round's review reports and outcomes stay in the repo, where people can spot-check them at any time.
+- Requirements, trade-offs, risk acceptance, and irreversible operations.
+- High-risk review runs for at most 3 rounds. If it still has not passed, a person takes over; AI cannot declare a pass itself. This is a working rule—the tool only warns at the limit.
+- Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
+- Each round's review reports and outcomes stay in the repo for spot-checking at any time.
 
 ## How notes are kept from going stale (drift)
 
-When code changes but a note still describes the old behavior, it can mislead an AI that reads it. I deliberately planted incorrect notes in a synthetic project, and the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos therefore addresses the problem at three points: when writing notes, at commit time, and before a push.
+Notes that describe old code can mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos therefore checks at three points: writing notes, committing, and pushing.
 
-The first check starts with what goes into a note. Fields, defaults, and flows that can be read from the code should not be copied into notes; notes are for reasons the code cannot reveal. The tool can only catch two fixed patterns here: newly added code line references and current-state descriptions, such as deployment settings, that do not cite a source. Both are blocked at commit time. The rest still depends on working rules and review.
+**First check: write only what code cannot reveal.** Fields, defaults, and flows that the code already shows are not copied into notes. The tool blocks only two fixed patterns at commit time: new code line references and current-state descriptions (such as deployment settings) without a source. The rest relies on working rules and review.
 
-Some sentences are especially likely to go stale. Say a note reads “there is no refund page yet.” Once the refund page is built, the sentence is wrong, and nobody remembers to come back and fix it. When such a sentence is added, the tool suggests turning it into a one-line “revisit condition” that says when the sentence should be checked again, for example “when the refund page’s file appears.” If the writer follows that advice, the push that adds that file is blocked, and the pre-push check points at the sentence. It must be updated to describe the current state, or kept with a stated reason, before the push can go through. The suggestion itself does not block the commit.
+Some sentences go stale easily: “there is no refund page yet” becomes wrong once the page exists, but nobody returns to fix it. When such a sentence is added, the tool suggests a one-line “revisit condition” stating when to check again, such as “when the refund page's file appears.” If the writer follows that advice, the push adding that file is blocked and the check points to the sentence. Update it or give a reason to keep it before pushing. The suggestion itself does not block commits.
 
-At commit time, the second check makes sure notes are updated alongside the code. It blocks code changes that update no notes, as well as new source files with no note assigned to document them. Before a push, the third check looks for outdated statements in the notes. If a function was deleted or a file renamed but a note still mentions the old name or path, it only warns. The following cases block the push: a rule’s test is already in place but the note still says “test to be added”; a linked note has been deleted; or one of the revisit conditions described above has been met. Code changes without a note update and broken note links always block; projects can set the other blocking checks to warn instead.
+**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit.
+
+**Third check: find outdated statements before pushing.** Deleted functions or renamed files still mentioned by their old names or paths only trigger warnings. Pushes are blocked if a rule's test exists but its note still says “test to be added,” a linked note was deleted, or a revisit condition is met. Code changes without note updates and broken note links always block; projects can set other blocking checks to warn instead.
 
 <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push; each check is labelled as a block or warning" width="760"></a></p>
 
-How much do these checks catch? In another project using Lumos, we found 20 genuinely stale passages and checked each one with the tools. The checks caught 7 cases of existing drift (35%). Had these checks been in place before the original pushes, they could have caught about 13.5, or roughly two-thirds. One case was only half covered, so it counts as half. Some changes still slip through: a feature is added while a note still says it does not exist, or a value changes while its name stays the same. The first case now gets a reminder when such a sentence is newly written, but sentences already in the notes are not rescanned. We have not finished measuring how many findings are false alarms.
+**How much do the checks catch?** In another project using Lumos, we checked 20 confirmed stale passages: the tools caught 7 cases of existing drift (35%). Had the checks existed before the original pushes, they could have caught about 13.5, roughly two-thirds (one case was half covered and counts as half). Two kinds still slip through: a new feature whose note still says it does not exist (new sentences now get reminders, but old ones are not rescanned), and a changed value whose name stays the same. False-alarm measurement is not yet complete.
 
-Once problems are found, some can be fixed by the tool. `lumos drift fix` can handle five kinds of status mismatch, with the response depending on the type—for example, a completed plan whose verification record is still marked pending. For one of those types, it only lists the evidence; a person still has to fill in the details. A person must also rewrite outdated statements in the notes.
+**After detection**: `lumos drift fix` handles five kinds of status mismatch by type, such as a completed plan with a verification record still marked pending. For one type, it only lists evidence; a person must fill in the details. People must still rewrite outdated statements in notes.
 
-The second check has a straightforward limit: it can tell whether a note was updated, but not whether the updated content is correct. In that same project, we sampled 55 current-state statements; 54 could be assessed, and 22 of those were already stale. That is why the first check was added later, to address what gets written in the first place. Ensuring the notes are correct still depends on review and human judgment.
+**Limits of the second check**: It sees whether notes changed, not whether they are correct. In the same project, we sampled 55 current-state statements; 54 could be assessed, and 22 were stale. The first check was added later to address what gets written. Correctness still depends on review and human judgment.
 
 <details>
 <summary>More: review data and skip records</summary>
 
-- **Do multiple reviewers help?** In 85 multi-reviewer rounds on Lumos itself (2026-07 to 08), 531 of 822 problems (64.6%) were caught by only one reviewer, showing that different reviewers notice different problems. This is only descriptive data: it cannot predict the effect of adding or removing one reviewer. The number of reviewers who caught each problem was entered manually by the AI responsible for assigning reviews and collecting the reports.
-- **Were the findings real problems?** As of 2026-09-30, only 58 of 6,195 findings (0.9%) were judged not to need action. That judgment was also made by AI, though.
-- **Were skipped checks justified?** The "change code, update notes" check was skipped 84 times across about 2,070 commits in Lumos’s own repo. Claude and Codex each independently examined every skip. Both agreed that 8 changed behavior without recording why; 17 changed only test files. Most of the rest were commits made partway through work on a feature branch, with notes added later. [Per-skip judgments](governance/eval/readme-bypass-judge/)
-- **What about larger models?** Opus 5 scored 25/25 in all four groups of the experiment above and wasn't misled, but with notes each run took 2 to 5 times as long.
-- **Did notes actually help?** Another 80 runs (four questions, four groups, five runs each) tested rules the code can't reveal. Only one question actually required that: with code only, 0 of 5 runs were correct; the three groups with notes got 8 of 15. On the other three questions every group scored near perfect, so they showed no difference. The experiment used just one synthetic project with questions I designed, so the results are only an indication that the approach helps.
-- **What it cannot stop**: Some auxiliary checks let changes through when the checks themselves fail, so a tool failure does not stall development. Skipping checks at commit time is recorded. Skipping push checks with `--no-verify` leaves no local record; CI only reruns the checks on pushes to main or pull requests.
+- **Do multiple reviewers help?** Across 85 multi-reviewer rounds on Lumos (2026-07 to 08), 531 of 822 problems (64.6%) were caught by only one reviewer: reviewers notice different things. This is descriptive data, not a measure of the effect of adding or removing a reviewer. The AI assigning reviews and collecting reports manually entered how many reviewers caught each problem.
+- **Were the findings real problems?** As of 2026-09-30, only 58 of 6,195 findings (0.9%) were judged to need no action—but AI made that judgment too.
+- **Were skipped checks justified?** The "change code, update notes" check was skipped 84 times in about 2,070 commits in Lumos's repo. Claude and Codex independently examined every skip. Both agreed that 8 changed behavior without recording why; 17 changed only tests. Most others were unfinished work on feature branches, with notes added later. [Per-skip judgments](governance/eval/readme-bypass-judge/)
+- **What about larger models?** Opus 5 scored 25/25 in all four groups above, unaffected by incorrect notes, but runs with notes took 2 to 5 times as long.
+- **Did notes help?** Another 80 runs (four questions, four groups, five runs per question per group) tested rules code cannot reveal. Only one question truly tested this: all 5 code-only runs failed; the three groups with notes got 8 of 15 correct. On the other three questions, all groups scored near perfect, showing no difference. With one synthetic project and questions I designed, this only suggests the approach helps.
+- **What it cannot stop**: Some auxiliary checks allow changes through if the checks themselves fail, so tool failures do not stall development. Commit-time skips are recorded. Skipping push checks with `--no-verify` leaves no local record; CI reruns them only on pushes to main or pull requests.
 - Raw records you can check: [blocks and passes](docs/.governance-log.jsonl), [skips](docs/.bypass-log.jsonl), [review reports](governance/review-reports/).
 
 </details>
 
 ## Install and limits
 
-You need Git, Python 3.14+, and Claude Code or Codex. Run this from the project directory where you want to use Lumos:
+You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 ```
 
-When the script asks whether to initialize the current directory, confirm that it is the right one before entering `y`. After installation, restart the AI session and run `lumos enforcement` to confirm that all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese).
+When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to confirm all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese).
 
 <details>
 <summary>Projects already on an older Lumos: moving to Python 3.14</summary>
@@ -147,7 +149,7 @@ When the script asks whether to initialize the current directory, confirm that i
 
 </details>
 
-Lumos does not guarantee quality or security, and it does not replace engineering judgment. Notes can go stale, AI reviews can miss problems, and having a record does not mean its content is correct. Business trade-offs, irreversible operations, and whether to accept a risk still require a person’s decision.
+Lumos guarantees neither quality nor security and does not replace engineering judgment: notes can go stale, AI reviews can miss problems, and records do not prove correctness. People still decide business trade-offs, irreversible operations, and risk acceptance.
 
 Further reading: [Mental model](docs/mental-model.md) · [Taking over a project](docs/taking-over.md) · [Command reference](docs/command-reference.md) · [Architecture](ARCHITECTURE.md) · [SDD and Lumos](SDD-vs-Lumos.en.md) · [Methodology](docs/methodology/圖譜即合約.md) (Chinese)
 
