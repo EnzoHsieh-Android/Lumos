@@ -59,6 +59,14 @@ The reader of that message is the AI, not you. Its working instructions tell it 
 
 The outer loop checks the process itself: in Lumos's own repo, every case that completed review and has a design spec stores its pass/fail verdict; each week cases are re-run under the same version of the rules (sampled in rotation when there are too many to run in time) to confirm the same case still gets the same verdict. If a verdict changes, a rule change broke something and needs fixing.
 
+Notes link to each other. Below is an illustrative online shop: plans link to the features they produced and their verification records; when an incident happens, it leads back to a fix plan and a regression test.
+
+<p align="center">
+  <a href="assets/graph-demo-en.svg">
+    <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
+  </a>
+</p>
+
 ## How code review works
 
 <p align="center">
@@ -70,6 +78,14 @@ The outer loop checks the process itself: in Lumos's own repo, every case that c
 - **Rate the risk first**: before a push, the tool scans the newly added code with fixed rules for patterns that tend to cause trouble.
 - **Then decide how many AI reviewers**: one to three for ordinary changes; up to 9 per round for high-risk ones, each looking from one angle. Two of them are deliberately from another vendor's model (Codex when Claude is orchestrating), one to find problems and one to argue against the findings, because models from the same vendor tend to share blind spots.
 - **No push until high-risk review is done**: a high-risk push must leave a review outcome (passed, or skipped with a written reason), or the Git hook blocks it.
+
+Review is only one layer. Risk tiers, multiple AI reviewers, release rules, external rules (linters), and tests each have holes; stacked, it is harder for a problem to get through all of them (the Swiss cheese model).
+
+<p align="center">
+  <a href="assets/swiss-cheese-en.svg">
+    <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
+  </a>
+</p>
 
 **Where do humans come in?** By default Lumos doesn't require a person to read every diff line by line; that goes to several AIs and machine checks, and people handle the judgement calls below.
 
@@ -110,20 +126,8 @@ A project can switch most checks to warn-only.
 
 **Won't the AI just write a throwaway note?** It can: the "change code, touch notes" check only asks whether a note was touched. In that project, of 55 higher-risk current-state statements sampled, 22 of the 54 that could be judged were already stale; the third row above was added because of it. Whether the content is right still comes down to review and people.
 
-## Common questions
-
-**Isn't this over-engineering?** For a throwaway prototype or a small project nobody will take over, yes, and I wouldn't use it there. It is designed for long-lived projects that change hands between people or AI conversations and have rules that must not break (payments, permissions, data migrations).
-
-**What does it cost?** The commit check takes about 3 seconds each time (measured on a small demo project; method in [this plan note](docs/lumos-toolchain-knowledge/Projects/README面試官十分鐘_計劃.md), in Chinese); with notes the AI reads more, and in the experiment tokens were 1 to 3 times higher; a high-risk review opens several AI conversations.
-
-**Can the AI quietly edit the tests that check it?** The automatically run hooks and tests have content fingerprints (hashes); on a normal push a changed one is blocked until approved and recorded. `--no-verify` bypasses the local check, but CI verifies again on pushes to main or pull requests.
-
-**What did you do yourself?** This repo was developed through conversation: the requirements and design trade-offs are my decisions, and most of the code is written by AI (about 88% of commits are co-signed by Claude), which is why tests matter so much here: about 1,500 test functions, re-run by CI on pushes to main (docs-only changes run only the docs-related subset), shown by the badge at the top. The main program is a single file of about 40,000 lines, a deliberate postponement: the tamper-check fingerprints, the tests, and the copy installed into other projects are all tied to file paths, and with one maintainer the risk of splitting outweighed the benefit.
-
-**Has it been used on real projects?** I have used it for about two months on two production projects at work (a C#/.NET + Vue backend and a Kotlin Android app). A with-and-without comparison on a real project hasn't been done; that is the biggest gap so far.
-
 <details>
-<summary>More: review data, skip records, other diagrams</summary>
+<summary>More: review data and skip records</summary>
 
 - **Do multiple reviewers help?** In 85 multi-reviewer rounds on Lumos itself (2026-07 to 08), 531 of 822 problems (64.6%) were caught by only one reviewer, so reviewers see different things. It's only descriptive: it can't predict what one more or one fewer reviewer would change, and how many reviewers caught each problem was entered by hand by the AI that dispatches and collects the reviews.
 - **Were the findings real problems?** As of 2026-09-30, only 58 of 6,195 findings (0.9%) were judged not to need action. That judgement, though, was also made by AI.
@@ -132,18 +136,6 @@ A project can switch most checks to warn-only.
 - **Did notes actually help?** Another 80 runs tested rules the code can't reveal: with code only, 0 of 5 correct; with notes, 8 of 15. One synthetic project with questions I designed, so it supports the direction rather than settling it.
 - **What it can't stop**: some auxiliary checks let the change through if they fail themselves, so a tool failure doesn't stall development; skipping at commit time is recorded, but skipping the push checks with `--no-verify` leaves no local record, and CI only reruns them on pushes to main or pull requests.
 - Raw records you can check: [blocks and passes](docs/.governance-log.jsonl), [skips](docs/.bypass-log.jsonl), [review reports](governance/review-reports/).
-
-<p align="center">
-  <a href="assets/graph-demo-en.svg">
-    <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
-  </a>
-</p>
-
-<p align="center">
-  <a href="assets/swiss-cheese-en.svg">
-    <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
-  </a>
-</p>
 
 </details>
 
