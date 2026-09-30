@@ -13,15 +13,11 @@
 
 **When an AI writes your code, make it leave the "why" behind too.**
 
-Lumos is a development toolkit for Claude Code and Codex. You describe what you want in conversation, and the AI reads the code, changes it, runs the tests, and commits. Lumos asks the AI to write down, alongside each change, why it was made, which rules must not break, and how it was verified, and at Git commit and push time it checks the parts that can be checked mechanically, such as whether any note was touched.
+Having an AI write code through conversation is fast, but it doesn't remember anything for the project. The trade-offs you discussed and the options you rejected are gone the next time a conversation starts; a rule like "an order must never be refunded twice" can't be seen in the code; and when the AI says the tests passed, there's no way to check afterwards which ones ran.
 
-It is made of four parts: a single-file Python command-line tool (standard library only), a set of Git hooks, working instructions for the AI written into CLAUDE.md / AGENTS.md at install time, and a set of Markdown notes kept in the same repo as the code and linked to each other.
+Lumos fills that gap. It sits next to Claude Code or Codex and asks the AI, with every change, to write down why, which rules must not break, and how it was verified, as Markdown notes kept in the same repo as the code; at commit and push time, Git hooks check the parts that can be checked mechanically, such as whether the notes were updated. Think of it as ADRs (architecture decision records), CODEOWNERS and pre-commit wired together, except the one being checked is the AI.
 
-## Why it exists
-
-AI writes code quickly, but it does not remember anything on the project's behalf. The trade-offs discussed in one conversation, and the options that were rejected, are gone the next time a conversation starts. A rule like "an order must never be refunded twice" is invisible in code that only shows what happens today, not which behaviour is off-limits. And when the AI says the tests passed, there is no way to check afterwards which ones actually ran.
-
-Traditionally these gaps are filled by practices like ADRs (architecture decision records), CODEOWNERS, and pre-commit, plus human discipline. Lumos wires those ideas together, except that the one being checked is the AI: change code without touching any note and the commit is blocked; skipping has to be done explicitly, and it is recorded.
+The whole thing is small: a single-file Python command-line tool (standard library only), a set of Git hooks, working instructions written into CLAUDE.md / AGENTS.md, and the notes themselves.
 
 ## What it looks like
 
@@ -42,7 +38,7 @@ Pick one of two paths:
       Skipping is recorded; it is not a silent pass.
 ```
 
-The reader of that message is the AI, not you. Its working instructions tell it to add the note and commit again; if no note is really needed (say, a typo fix), it can skip, and the skip is recorded. You mainly step in for business trade-offs or decisions about accepting a risk.
+The reader of that message is the AI, not you. Its working instructions tell it to add the note and commit again; if no note is really needed (say, a typo fix) it can skip, and the skip is recorded. Your part is mainly business trade-offs, and whether to accept a given risk.
 
 ## How it works
 
@@ -71,12 +67,12 @@ Notes link to each other. Below is an illustrative online shop: plans link to th
 
 <p align="center">
   <a href="assets/risk-review-en.svg">
-    <img src="assets/risk-review-en.svg" alt="Review weight follows risk: new code is scanned with fixed rules; ordinary changes get one to three reviewers, high-risk changes up to nine per round including a second vendor's finder and refuter; every finding must be fixed, waived with a reason or disproved; a high-risk push needs a review outcome" width="760">
+    <img src="assets/risk-review-en.svg" alt="Review weight follows risk: new code is scanned with fixed rules; ordinary changes get one or two reviewers, high-risk changes at least seven per round, five problem-finders plus architecture and security; every finding must be fixed, waived with a reason or disproved; a high-risk push needs a review outcome" width="760">
   </a>
 </p>
 
 - **Rate the risk first**: before a push, the tool scans the newly added code with fixed rules for patterns that tend to cause trouble.
-- **Then decide how many AI reviewers**: one to three for ordinary changes; up to 9 per round for high-risk ones, each looking from one angle. Two of them are deliberately from another vendor's model (Codex when Claude is orchestrating), one to find problems and one to argue against the findings, because models from the same vendor tend to share blind spots.
+- **Then decide how many AI reviewers**: one or two for ordinary changes; at least 7 per round for high-risk ones, each looking from one angle: 5 look for problems, 1 checks consistency with the existing architecture, 1 checks security, plus 1 against the design spec when a finalized one exists.
 - **No push until high-risk review is done**: a high-risk push must leave a review outcome (passed, or skipped with a written reason), or the Git hook blocks it.
 
 Review is only one layer. Risk tiers, multiple AI reviewers, release rules, external rules (linters), and tests each have holes; stacked, it is harder for a problem to get through all of them (the Swiss cheese model).
@@ -94,11 +90,11 @@ Review is only one layer. Risk tiers, multiple AI reviewers, release rules, exte
 - Whether a rule still fits the business needs a person's sign-off, with a record; tests can't prove that.
 - Every round's review reports and outcomes stay in the repo for anyone to audit.
 
-**A real example.** The day the first small Vue project adopted Lumos (2026-09-10), the tool scanned the files it had installed as if they were the project's own code. The fix was rated high-risk: in round 1, 4 of 7 reviewers independently found the same hole; in round 3, Codex found the fix still had a hole; all 46 findings across four rounds were handled before the commit. Every round's [original review reports](governance/review-reports/code-工具自裝檔不算消費專案/) are in the repo (in Chinese).
+**A real example.** The day the first small Vue project adopted Lumos (2026-09-10), the tool scanned the files it had installed as if they were the project's own code. The fix was rated high-risk: in round 1, 4 of 7 reviewers independently found the same hole; in round 3, a reviewer found the fix still had a hole; all 46 findings across four rounds were handled before the commit. Every round's [original review reports](governance/review-reports/code-工具自裝檔不算消費專案/) are in the repo (in Chinese).
 
 <p align="center">
   <a href="assets/case-review-en.svg">
-    <img src="assets/case-review-en.svg" alt="Timeline of one real review: four rounds with 7, 4, 7 and 5 completed review reports found 12, 6, 17 and 11 issues; in round 1 four reviewers found the folder-matching hole, in round 3 Codex found the fix still had a hole, so it switched to content fingerprints; all 46 were handled before committing" width="760">
+    <img src="assets/case-review-en.svg" alt="Timeline of one real review: four rounds with 7, 4, 7 and 5 completed review reports found 12, 6, 17 and 11 issues; in round 1 four reviewers found the folder-matching hole, in round 3 the fix was found to still have a hole, so it switched to content fingerprints; all 46 were handled before committing" width="760">
   </a>
 </p>
 

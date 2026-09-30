@@ -130,13 +130,13 @@ def case_scene(en):
     b+=text(54,422,"R1 · Found by 4 reviewers" if en else "R1 · 4 位各自抓到",18,"green",weight=600)
     b+=text(54,452,"Folder matching let user code slip past." if en else "用目錄名判斷，使用者的程式也會被放過",16,"muted")
     b+=rect(388,392,336,86,"#13243a","#334c68",14)
-    b+=text(406,422,"R3 · Codex: the fix left a hole" if en else "R3 · Codex 指出修法又有洞",18,"purple",weight=600)
+    b+=text(406,422,"R3 · The fix still had a hole" if en else "R3 · 修法又被找出洞",18,"purple",weight=600)
     b+=text(406,452,"Same-named files still slipped by." if en else "同名的檔仍會被放過 → 改比內容指紋",16,"muted")
     b+=path("M204 478V500H556V478M380 500V512","line",2)+arrow(380,519,"down")
     b+=rect(36,527,688,64,"#15263d","#3b5a4f",14)
     b+=text(58,555,"All 46 handled, then committed (09-11)." if en else "46 條全部處理完才提交（09-11）",20,"green",weight=600)
     b+=text(58,580,"The note records what the fix can't stop, and when to check again." if en else "筆記寫下：這個修法防不了什麼、什麼時候回頭檢查",17,"muted")
-    return title,620,b,"Timeline of one real high-risk review in the Lumos repo: 7, 4, 7 and 5 completed review reports across four rounds found 12, 6, 17 and 11 issues. Round 1: four reviewers independently found that folder matching let user code escape. Round 3: Codex found the fix still let same-named files escape, so it switched to content fingerprints. All 46 were handled before the 2026-09-11 commit."
+    return title,620,b,"Timeline of one real high-risk review in the Lumos repo: 7, 4, 7 and 5 completed review reports across four rounds found 12, 6, 17 and 11 issues. Round 1: four reviewers independently found that folder matching let user code escape. Round 3: a reviewer found the fix still let same-named files escape, so it switched to content fingerprints. All 46 were handled before the 2026-09-11 commit."
 
 def first_scene(en):
     title="A conversation becomes a change." if en else "從一句需求，到有依據的改動"
@@ -294,19 +294,22 @@ def risk_review_scene(en):
     b+=path("M186 330H214","coral",2)+arrow(221,330,color="coral")
     b+=rect(222,166,344,58)
     b+=text(242,202,"Ordinary change" if en else "一般改動",19,"blue",weight=600)
-    b+=text(546,202,"1 to 3 reviewers" if en else "派 1 到 3 位審查",17,"muted","end")
+    b+=text(546,202,"1 to 2 reviewers" if en else "派 1 到 2 位審查",17,"muted","end")
     b+=rect(222,240,344,188,"url(#panel)","#6a4c56")
     b+=text(242,272,"High risk" if en else "高風險",19,"coral",weight=600)
-    b+=text(546,272,"up to 9 per round" if en else "每輪最多 9 位",17,"muted","end")
+    b+=text(546,272,"7+ per round" if en else "每輪至少 7 位",17,"muted","end")
     cells=[("Correctness" if en else "正確性","ink"),("Concurrency" if en else "併發與資源","ink"),("Edges & input" if en else "邊界與輸入","ink"),
            ("Rules & notes" if en else "規則與筆記","ink"),("Architecture" if en else "架構一致","purple"),("Security" if en else "資安","gold"),
-           ("Spec, if any" if en else "對照規格","muted"),("Other: find" if en else "另一家 找問題","coral"),("Other: refute" if en else "另一家 反駁","coral")]
+           ("Generalist" if en else "通才找問題","ink"),("Spec, if any" if en else "對照規格","muted")]
     for i,(label,c) in enumerate(cells):
-        x=236+(i%3)*108
+        # 最後一排不滿三格時置中,不讓右邊空一塊
+        last=(len(cells)-1)//3
+        pad=(3-(len(cells)-last*3))*54 if i//3==last else 0
+        x=236+(i%3)*108+pad
         y=288+(i//3)*40
         b+=rect(x,y,100,32,"#182a42","none" if c!="coral" else C["coral"],9,.8)
         b+=text(x+50,y+21,label,13 if en else 14,c,"middle",550)
-    b+=text(242,418,"Other = second vendor; Spec = only if finalized" if en else "另一家 = 換一家的模型   對照規格 = 有定稿規格才派",13,"muted")
+    b+=text(242,418,"Spec = only with a finalized design spec" if en else "對照規格 = 有定稿的設計規格才派",13,"muted")
     # Column C: every finding gets a disposition.
     b+=path("M566 196H578V297M566 330H578V297","line",2)+path("M578 297H584","line",2)+arrow(591,297)
     b+=badge(574,121,"OUTPUT" if en else "每條意見的去向","purple",150)
@@ -316,8 +319,8 @@ def risk_review_scene(en):
     # Bottom: the one mechanical rule plus the independence caveat.
     b+=rect(36,452,688,72,"#13243a","#334c68",14)
     b+=text(56,482,"High-risk push is blocked without a review outcome." if en else "高風險推送前必須留下審查結果：通過，或寫明理由的跳過。",18 if en else 19,weight=600)
-    b+=text(56,508,"Finders work blind; the refuter reads their reports last." if en else "找問題的彼此看不到報告；負責反駁的那位等報告收齊才看。",16,"muted")
-    return title,556,b,"A risk scan of new code sends ordinary changes to one to three reviewers and high-risk changes to up to nine per round: four general lenses, architecture, security, a spec check when a finalized spec exists, and two reviewers from a second vendor who find and refute. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome."
+    b+=text(56,508,"Finders don't see each other's reports; agreement isn't proof." if en else "找問題的審查彼此看不到報告，意見一致也不等於一定對。",16,"muted")
+    return title,556,b,"A risk scan of new code sends ordinary changes to one or two reviewers and high-risk changes to at least seven per round: five problem-finders, architecture and security, plus a spec check when a finalized spec exists. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome."
 
 def review_scene(en):
     title="Different checks. Shared evidence." if en else "從規則、判斷到行為，交叉看同一個改動"
