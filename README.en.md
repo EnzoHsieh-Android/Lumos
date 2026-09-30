@@ -13,9 +13,9 @@
 
 **When AI writes your code, have it record the reasoning too.**
 
-Writing code through a conversation with AI is fast, but the AI does not keep a record for the project. The trade-offs you discussed and the options you rejected are gone when you start a new conversation. A rule like "an order must never be refunded twice" cannot be seen in the code. And when the AI says the tests passed, there is no way to check afterward which tests it ran.
+Writing code through a conversation with AI is fast, but the trade-offs you discussed and the options you rejected stay in that one conversation. Resuming it brings them back, but when someone changes the same file three months later, nobody remembers which conversation it was, and teammates or a different AI tool cannot see it at all. A rule like "an order must never be refunded twice" cannot be seen in the code. And when the AI says the tests passed, there is no way to check afterward which tests it ran.
 
-Lumos fills that gap. It works alongside Claude Code or Codex and requires the AI to record the reason for each code change, the rules it must preserve, and how the change was verified. These Markdown notes live in the same repo as the code. At commit and push time, Git hooks check what can be checked automatically, such as whether the notes were updated. Think of it as ADRs (architecture decision records), CODEOWNERS, and pre-commit connected together, with the AI as the subject of the checks.
+Lumos fills that gap. It works alongside Claude Code or Codex and requires the AI to record the reason for each code change, the rules it must preserve, and how the change was verified. These Markdown notes live in the same repo as the code and go through version control with it, so anyone, using any tool, can find them. At commit and push time, Git hooks check what can be checked automatically, such as whether the notes were updated. Think of it as ADRs (architecture decision records), CODEOWNERS, and pre-commit connected together, with the AI as the subject of the checks.
 
 The toolset is small: a single-file Python command-line tool that uses only the standard library, a set of Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and the project notes.
 
