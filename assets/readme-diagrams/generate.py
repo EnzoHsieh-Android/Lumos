@@ -277,6 +277,48 @@ def dispatch_scene(en):
     b+=text(380,473,"Finders don't see one another's reports; agreement isn't proof." if en else "找問題的審查看不到彼此的報告；意見一致也不等於一定對。",22,"muted","middle")
     return title,505,b,"The same change, context, rules and evidence fan out to independent review perspectives, then findings are accounted for as adopted, rejected or needing follow-up. Seats are illustrative."
 
+def risk_review_scene(en):
+    title="Review weight follows risk" if en else "依風險決定審多重"
+    # Column A: what goes in and how risk is judged.
+    b=badge(36,121,"INPUT" if en else "輸入","green",110)
+    b+=rect(36,166,150,262)
+    b+=rect(37,167,4,260,C["green"],"none",2)
+    b+=text(56,204,"New code" if en else "新增的程式碼",20 if en else 21,"green",weight=600)
+    b+=text(56,240,"Scanned with" if en else "用固定規則",17,"muted")
+    b+=text(56,264,"fixed rules" if en else "掃高風險寫法",17,"muted")
+    b+=text(56,318,"e.g." if en else "例如：",15,"muted")
+    b+=text(56,342,"write w/o txn" if en else "寫入沒包交易",15)
+    b+=text(56,366,"HTTP, no timeout" if en else "HTTP 沒設逾時",15)
+    # Column B: two branches.
+    b+=path("M186 196H214","line",2)+arrow(221,196)
+    b+=path("M186 330H214","coral",2)+arrow(221,330,color="coral")
+    b+=rect(222,166,344,58)
+    b+=text(242,202,"Ordinary change" if en else "一般改動",19,"blue",weight=600)
+    b+=text(546,202,"1 to 3 reviewers" if en else "派 1 到 3 位審查",17,"muted","end")
+    b+=rect(222,240,344,188,"url(#panel)","#6a4c56")
+    b+=text(242,272,"High risk" if en else "高風險",19,"coral",weight=600)
+    b+=text(546,272,"up to 9 per round" if en else "每輪最多 9 位",17,"muted","end")
+    cells=[("Correctness" if en else "正確性","ink"),("Concurrency" if en else "併發與資源","ink"),("Edges & input" if en else "邊界與輸入","ink"),
+           ("Rules & notes" if en else "規則與筆記","ink"),("Architecture" if en else "架構一致","purple"),("Security" if en else "資安","gold"),
+           ("Spec, if any" if en else "對照規格","muted"),("Other: find" if en else "另一家 找問題","coral"),("Other: refute" if en else "另一家 反駁","coral")]
+    for i,(label,c) in enumerate(cells):
+        x=236+(i%3)*108
+        y=288+(i//3)*40
+        b+=rect(x,y,100,32,"#182a42","none" if c!="coral" else C["coral"],9,.8)
+        b+=text(x+50,y+21,label,13 if en else 14,c,"middle",550)
+    b+=text(242,418,"Other = second vendor; Spec = only if finalized" if en else "另一家 = 換一家的模型   對照規格 = 有定稿規格才派",13,"muted")
+    # Column C: every finding gets a disposition.
+    b+=path("M566 196H578V297M566 330H578V297","line",2)+path("M578 297H584","line",2)+arrow(591,297)
+    b+=badge(574,121,"OUTPUT" if en else "每條意見的去向","purple",150)
+    b+=rect(592,166,132,262)
+    for y,label,c in [(236,"Fixed" if en else "修掉","green"),(290,"Waived" if en else "附理由不修","gold"),(344,"Disproved" if en else "證明不成立","muted")]:
+        b+=circle(610,y-6,4,C[c])+text(622,y,label,18,c)
+    # Bottom: the one mechanical rule plus the independence caveat.
+    b+=rect(36,452,688,72,"#13243a","#334c68",14)
+    b+=text(56,482,"High-risk push is blocked without a review outcome." if en else "高風險推送前必須留下審查結果：通過，或寫明理由的跳過。",18 if en else 19,weight=600)
+    b+=text(56,508,"Finders work blind; the refuter reads their reports last." if en else "找問題的彼此看不到報告；負責反駁的那位等報告收齊才看。",16,"muted")
+    return title,556,b,"A risk scan of new code sends ordinary changes to one to three reviewers and high-risk changes to up to nine per round: four general lenses, architecture, security, a spec check when a finalized spec exists, and two reviewers from a second vendor who find and refute. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome."
+
 def review_scene(en):
     title="Different checks. Shared evidence." if en else "從規則、判斷到行為，交叉看同一個改動"
     b=rect(36,123,688,75,"#222a44","#655781",16)
@@ -383,6 +425,7 @@ SCENES={"map":("00 / THE SYSTEM",map_scene),
         "graph-demo":("01 / KNOWLEDGE",graph_scene),
         "case-review":("CASE / REAL REVIEW",case_scene),
         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
+        "risk-review":("02-03 / REVIEW BY RISK",risk_review_scene),
         "review-overview":("03 / REVIEW",review_scene),
         "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
         "writeback-overview":("04 / WRITE-BACK",writeback_scene),

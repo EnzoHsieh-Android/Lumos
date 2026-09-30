@@ -14,6 +14,7 @@ tags:
 summary: |-
   WHY:[2026-09-30 [[Projects/README面試官十分鐘_計劃]]]主圖站名改成跟 README 正文一致的白話(讀程式碼/分派審查/審查與處理/寫回筆記),箭頭標上交給下一步的東西——讀者扮面試官時一再扣「圖上的圖譜、派工、evals 看不懂」「四個方框看不出資料怎麼流」
   WHY:[2026-09-30 同上]新增案例時間線圖 case-review,把 README〈一個真實的例子〉那段四輪審查畫成一張;數字來自 governance/review-reports/code-工具自裝檔不算消費專案/ 的四份 intake(每輪 7/4/7/5 位、12/6/17/11 條)
+  WHY:[2026-09-30 [[Projects/README面試官十分鐘_計劃]] 第四輪]新增 risk-review 合併圖(依風險決定審多重),README 用它取代派工圖與審查圖;舊的兩張仍由產生器產出,別處若還引用不會斷
   PITFALL:[2026-09-30 本輪發現]2026-09-21 那次「說明改成程式碼為主」直接手改了 map-zh/en.svg,沒改產生器,之後 `--check` 一直是紅的;這次重畫主圖時才順手對齊。重現:`python3 assets/readme-diagrams/generate.py --check`
   PITFALL:[2026-09-30 本輪發現]用 qlmanage 把這批 SVG 轉 PNG 會截到動畫第一格(知識圖節點全空)而且裁成正方形;目視檢查改用無頭 Chrome 加 `--virtual-time-budget` 等動畫跑完再截。重現:`qlmanage -t -s 1400 -o /tmp assets/graph-demo-zh.svg` 後打開那張 PNG,節點是空的
 ---

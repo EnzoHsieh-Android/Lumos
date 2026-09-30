@@ -42,9 +42,9 @@ Pick one of two paths:
       Skipping is recorded; it is not a silent pass.
 ```
 
-The reader of that message is the AI, not you. Its working instructions tell it to add the note and commit again; if no note is really needed (say, a typo fix), it can skip, and the skip is recorded. You only step in for business trade-offs or decisions about accepting a risk.
+The reader of that message is the AI, not you. Its working instructions tell it to add the note and commit again; if no note is really needed (say, a typo fix), it can skip, and the skip is recorded. You mainly step in for business trade-offs or decisions about accepting a risk.
 
-## What a change goes through
+## How it works
 
 <p align="center">
   <a href="assets/map-en.svg">
@@ -52,99 +52,33 @@ The reader of that message is the AI, not you. Its working instructions tell it 
   </a>
 </p>
 
-**① Read the code, add context.** The AI reads the code first to understand how things are now; when it edits a source file, the tool usually also pushes the notes related to that file in front of it (sometimes it skips, for example if the tool itself fails). Notes only add what the code cannot show: why something was designed this way, what was tried and failed, which rules must never break. Anything the code itself can answer stays out of the notes, because a copy only goes stale before the code does; when the two disagree, the code wins.
+1. **Read the code, add context**: the AI reads the code first; when it edits a file, the tool pushes the related notes to it to add the reasons the code can't show. When a note's description of code behaviour disagrees with the code, the code wins; things the code can't answer, like deployment state or business constraints, have to be checked at the source or asked.
+2. **Dispatch AI reviewers by risk**: see the next section.
+3. **Every finding needs an outcome**: fixed, waived with a reason, or disproved with evidence; nothing passes until that's done.
+4. **Write back**: the trade-offs and how it was verified go into the note that owns the file, so the next change there can find them.
 
-**② Dispatch.** Before a push, the tool scans the newly added code with fixed matching rules for patterns that tend to cause trouble, such as database writes outside a transaction or HTTP calls without a timeout, and rates the risk from that. For ordinary changes the instructions call for just one or two reviewers; a high-risk change gets up to 9 AI conversations per round, each looking from one angle: 4 on general problems (correctness, concurrency and resources, edges and inputs, consistency with existing rules and notes), 1 on consistency with the existing architecture, 1 on security, 1 more against the design spec when a finalized one exists, and finally 2 deliberately given to another vendor's model (Codex when Claude is orchestrating), so they don't all share the same blind spots. The problem-finders don't see each other's reports; the other vendor's refuter waits until the reports are in and argues against the serious findings.
+The outer loop checks the process itself: in Lumos's own repo, every case that completed review and has a design spec stores its pass/fail verdict; each week cases are re-run under the same version of the rules (sampled in rotation when there are too many to run in time) to confirm the same case still gets the same verdict. If a verdict changes, a rule change broke something and needs fixing.
 
-**③ Review & resolve.** Every finding is recorded as accepted, rejected, or pending. At push time only high-risk changes are checked: they must first leave a review outcome, passed or skipped with a written reason; ordinary changes are not blocked for lacking a review record.
-
-**④ Write back.** When the work is done, the AI writes the trade-offs, the review outcome, and how it was verified back into the note that owns the file, so the next AI to touch this code can find them.
-
-The outer loop checks the process itself. In Lumos's own repo, cases that completed review and have a design spec are stored with their verdicts and re-run weekly under the same version of the verdict rules (sampling in rotation when there are many), to confirm the same input still gets the same result; when the verdict rules change version, old cases are marked stale and re-stored after a person confirms.
-
-It matters which parts are enforced and which are only asked for. Common things the Git hooks block include: a code change with no note touched at all, a new source file with no assigned note, a high-risk push with no review outcome, and new linter warnings introduced by this change (in projects with a linter configured), plus a few more such as note formatting and failing tests for affected rules. Whether the AI consulted the notes, and whether what it wrote back is any good, are instructions to the AI: the tool can confirm something was done, not whether it was done well. A project can also switch most checks to warn-only; tests, docs, third-party and generated files, and paths the project config excludes, don't need an owning note.
-
-<details>
-<summary>Details and diagrams for each step</summary>
-
-<a id="notes"></a>
-
-**Notes**
+## How code review works
 
 <p align="center">
-  <a href="assets/graph-demo-en.svg">
-    <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
+  <a href="assets/risk-review-en.svg">
+    <img src="assets/risk-review-en.svg" alt="Review weight follows risk: new code is scanned with fixed rules; ordinary changes get one to three reviewers, high-risk changes up to nine per round including a second vendor's finder and refuter; every finding must be fixed, waived with a reason or disproved; a high-risk push needs a review outcome" width="760">
   </a>
 </p>
 
-- When a note really must describe current state that isn't in source (deployment settings, actual database values, production observations), that line has to name its source; a newly written current-state line in a note's structured summary without one is blocked at commit.
-- When a note and the code disagree, the code wins by default; only sourced records such as decision and verification records can say the code is wrong.
-- An important rule can be tied to a test that checks it. Unlike an ordinary test, when related code changes the tool finds it automatically and runs it before the push: a failure blocks a high-risk push and is only a warning on a low-risk one.
+- **Rate the risk first**: before a push, the tool scans the newly added code with fixed rules for patterns that tend to cause trouble.
+- **Then decide how many AI reviewers**: one to three for ordinary changes; up to 9 per round for high-risk ones, each looking from one angle. Two of them are deliberately from another vendor's model (Codex when Claude is orchestrating), one to find problems and one to argue against the findings, because models from the same vendor tend to share blind spots.
+- **No push until high-risk review is done**: a high-risk push must leave a review outcome (passed, or skipped with a written reason), or the Git hook blocks it.
 
-<a id="dispatch"></a>
+**Where do humans come in?** By default Lumos doesn't require a person to read every diff line by line; that goes to several AIs and machine checks, and people handle the judgement calls below.
 
-**Dispatching the review**
+- Requirements, trade-offs, accepting a risk, and irreversible operations are decided by a person.
+- A high-risk review runs at most 3 rounds; if it still hasn't passed, it stops and goes to a person, and the AI doesn't declare it passed itself (this is a working rule; the tool only warns when the cap is reached).
+- Whether a rule still fits the business needs a person's sign-off, with a record; tests can't prove that.
+- Every round's review reports and outcomes stay in the repo for anyone to audit.
 
-<p align="center">
-  <a href="assets/dispatch-overview-en.svg">
-    <img src="assets/dispatch-overview-en.svg" alt="The same material goes to several independent AI reviewers with different angles; findings come back and each one's handling is recorded" width="760">
-  </a>
-</p>
-
-- Problem-finding reviewers are not given each other's reports, to reduce echoing; but the tool cannot control what an external AI conversation actually reads, and later rounds carry the previous round's outcomes.
-
-<a id="review"></a>
-
-**Review**
-
-<p align="center">
-  <a href="assets/review-overview-en.svg">
-    <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and AI reviewers, and tests" width="760">
-  </a>
-</p>
-
-- Risk is judged with regular expressions over the newly added lines: fast and language-agnostic, but it can misjudge.
-- Whenever a review is dispatched, at any risk level, it includes an "architecture consistency" reviewer: it uses existing code in the same layer as the standard and only flags "introducing a second way of doing something" and "calling across layers", not style.
-- Design plans are tiered too. The first question is "if this goes wrong, is rolling back to the previous version enough?" Plans touching money, outbound sends, irreversible data, or the checks themselves get a design review before any code is written; for the rest, every acceptance clause needs evidence, usually a test that fails now and passes once the work is done.
-- Linters only block warnings introduced by this change, so an older project isn't buried under its backlog when it adopts Lumos. Every layer has holes; stacked, it is harder for a problem to get through all of them (the Swiss cheese model).
-
-<p align="center">
-  <a href="assets/swiss-cheese-en.svg">
-    <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
-  </a>
-</p>
-
-<a id="write-back"></a>
-
-**Write-back**
-
-<p align="center">
-  <a href="assets/writeback-overview-en.svg">
-    <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="760">
-  </a>
-</p>
-
-- Explanations must go into the note that owns the file; writing them into a note that doesn't own it is blocked.
-
-<a id="evals"></a>
-
-**Checking the process itself**
-
-<p align="center">
-  <a href="assets/evals-overview-en.svg">
-    <img src="assets/evals-overview-en.svg" alt="Record each round, replay and compare results, then calibrate subsequent rounds" width="760">
-  </a>
-</p>
-
-- Only cases that completed review and have a design spec get their verdicts stored; they are re-run weekly under the same version of the verdict rules (sampling in rotation when there are many), to confirm results don't change; when the verdict rules change version, old cases are marked stale and re-stored after a person confirms.
-
-**What it can't stop**: some checks only look at what this change touched (for example the risk scan and new linter warnings); some auxiliary checks let the change through if they fail themselves, so a tool failure doesn't stall development; skipping the "change code, touch notes" check at commit time is recorded, but skipping the push checks with `--no-verify` leaves no local record, and CI only reruns them on pushes to main or pull requests.
-
-</details>
-
-## A real example
-
-On 2026-09-10, the first small Vue project to adopt Lumos ran into a problem on day one: the tool scanned the files it had installed into the project as if they were the project's own code, so the small project's very first push was rated high-risk. The change fixing this was itself rated high-risk, so it had to go through review.
+**A real example.** The day the first small Vue project adopted Lumos (2026-09-10), the tool scanned the files it had installed as if they were the project's own code. The fix was rated high-risk: in round 1, 4 of 7 reviewers independently found the same hole; in round 3, Codex found the fix still had a hole; all 46 findings across four rounds were handled before the commit. Every round's [original review reports](governance/review-reports/code-工具自裝檔不算消費專案/) are in the repo (in Chinese).
 
 <p align="center">
   <a href="assets/case-review-en.svg">
@@ -152,52 +86,66 @@ On 2026-09-10, the first small Vue project to adopt Lumos ran into a problem on 
   </a>
 </p>
 
-The first round opened 7 AI reviewers (the cap is 9; this time 5 Claude and 2 Codex), and 4 of them independently found the same most serious problem: the fix identified "the tool's files" by directory name, so a user's own code in the same directory would also be skipped and escape review entirely. In the third round, after that was fixed, Codex pointed out the new fix still had a hole, with reproduction steps. Its finding opened like this (translated excerpt):
+## How notes are kept from going stale (drift)
 
-```text
-### F20 Exact file name not proven to be installed; a same-named project hook escapes the high-risk scan
-severity: blocker
-```
+The biggest risk with notes is that they go stale: the code changes and the note still describes the old behaviour. Lumos handles this in two steps.
 
-In other words: any user code that happens to share a tool file's name would be mistaken for the tool's and skip the risk scan. So the fix changed to recording a content fingerprint of every tool file at install time (a hash computed from the file's content, which stops matching as soon as the content changes), and skipping a file only if its content matches. Across four rounds there were 46 findings, all dealt with before the commit (09-11).
+**Step one: store less that can go stale.** Current state that the code already shows (fields, defaults, flow) must not be copied into notes; current state that isn't in source, such as deployment settings or actual database values, must name its source. An experiment shows why: on a synthetic project with deliberately wrong notes, the smaller model (Haiku 4.5) dropped from 20/25 correct to 12/25; marking the wrong line "defer to the code" brought it back to 20/25.
 
-What went back into the notes was not just the fix but also what it cannot prevent: the fingerprint list lives in the project, so someone who edits it along with a tool file still gets through; it guards against accidents, not deliberate bypass. The note also sets a check-back date (2027-03-10): look for anyone having changed a tool file and the list together, and if so, compare against the toolchain source instead.
+**Step two: catch mismatches at commit and push time.**
 
-Every round's [original review reports](governance/review-reports/code-工具自裝檔不算消費專案/) and [that note](docs/lumos-toolchain-knowledge/Issues/健檢技術棧那段撞到多平台設定就整支中斷.md) are in the repo (in Chinese).
+| What it catches | Example | When | Blocks or warns |
+| --- | --- | --- | --- |
+| Code changed, no note touched | Refund logic changed, no note written | Commit | Blocks |
+| A source file with no owning note | A new file nobody's note is responsible for | Commit, push | Blocks |
+| Note content that tends to go stale | Code line numbers, or current state with no source | Commit, push, CI | Blocks |
+| A rule's check has taken effect, the note still says it's coming | The rule's test is bound and passing, the note still says "test to be added" | Push, CI | Blocks |
+| Code deleted or renamed, the note still uses the old name | Function renamed, note still names the old one | Commit, push, CI | Warns |
+| Broken note links | A linked note was deleted | Push, CI | Blocks |
+| Still citing a verification record that is no longer valid | The verification expired, the note still relies on it | Push, CI | Warns |
 
-## Does it help?
+A project can switch most checks to warn-only.
 
-**Wrong notes mislead the AI, so notes only hold what the code can't show.** In 2026-09 I ran a controlled experiment on a synthetic project, planting wrong notes on purpose, 25 runs per group:
+**How much does it catch?** In another project using Lumos, 20 real stale spots were re-run through the tools one by one: the tools catch 7 (35%) of the ones already sitting in the notes; had the push checks existed at the time, about 13.5 (about two-thirds; one was only half caught, so it counts as half) would have been caught. Four kinds slip through: code added a feature while an old line still says "there is no such feature"; a value changed but the name didn't; a check-back condition written as prose; something added and removed within the same push. How many catches are false alarms hasn't been fully measured.
 
-| Condition | Haiku 4.5 (Anthropic's smaller model) correct |
-| --- | --- |
-| Code only | 20/25 |
-| Code + wrong notes | 12/25 |
-| Same wrong notes, but "defer to the code" marked next to the wrong line | 20/25 |
-
-The larger Opus 5 scored 25/25 in all four groups and was not misled, but with notes each run took 2 to 5 times as long and used 1 to 3 times the tokens. Another batch of 80 runs tested "rules the code cannot reveal": on the question "large refunds need manual approval", the AI with code only got it right 0 out of 5 times, and the groups with notes 8 out of 15. The experiment used one synthetic project with questions I designed myself, so it supports the direction rather than settling it; but Lumos's current rule, "code first, notes second", was changed because of these results.
-
-**Different reviewers see different things.** In 85 multi-reviewer rounds on Lumos itself (2026-07 to 08), 531 of 822 distinct problems (64.6%) were reported by only one reviewer; the same problem is often caught by just one, which is why only high-risk changes get the full panel. This is a descriptive statistic (the number of reviewers that caught each problem was entered by hand, round by round, by the orchestrating AI) and can't be used to predict how much one more or one fewer reviewer would change. Were those problems real? As of 2026-09-30, of all 6,195 findings only 58 (0.9%) were judged not to need action; the rest were all taken up for handling. That judgement, though, was also made by AI, not by manual sampling.
-
-**When the check was skipped, was it justified?** The "change code, touch notes" check was skipped 84 times across about 2,070 commits in Lumos's own repo. I had Claude and Codex review every one independently: both agreed 8 of them changed behaviour without recording why; 17 only changed test files, which this check blocks by design but where skipping is reasonable; most of the rest were mid-way commits on a feature branch whose notes were added later on the same branch, and the two reviewers disagreed on whether that counts as justified. How often the check blocks wrongly can't be computed yet, because blocks that were not skipped were never logged.
-
-**Where it's used.** Besides Lumos itself (about 2,300 commits, about 1,400 test functions), I have used it for about two months on two production projects at work: a C#/.NET + Vue backend and a Kotlin Android app. A with-and-without comparison on a real project hasn't been done.
-
-Lumos's own numbers above can be checked: the [block and pass log](docs/.governance-log.jsonl), the [skip log](docs/.bypass-log.jsonl), [the two AIs' judgement of every skip](governance/eval/readme-bypass-judge/), and [every review round's reports](governance/review-reports/) are in the repo. Usage on the work projects is my own account.
+**Won't the AI just write a throwaway note?** It can: the "change code, touch notes" check only asks whether a note was touched. In that project, of 55 higher-risk current-state statements sampled, 22 of the 54 that could be judged were already stale; the third row above was added because of it. Whether the content is right still comes down to review and people.
 
 ## Common questions
 
-**Isn't this over-engineering?** For a throwaway prototype or a small project nobody will take over, yes, and I wouldn't use it there. It is designed for projects that live long, change hands between people or AI conversations, and have rules that must not break (payments, permissions, data migrations); review weight follows risk, and ordinary changes don't require a review to push.
+**Isn't this over-engineering?** For a throwaway prototype or a small project nobody will take over, yes, and I wouldn't use it there. It is designed for long-lived projects that change hands between people or AI conversations and have rules that must not break (payments, permissions, data migrations).
 
-**Won't the AI just write a throwaway note to get past the check?** It can: the "change code, touch notes" check only asks whether a note was touched. In another project using Lumos, I sampled 55 higher-risk current-state statements from the notes; of the 54 that could be judged, 22 were already out of date. That led to another check: a newly written current-state line in a note's structured summary must name its source, or it is blocked. That only catches fixed patterns; whether the content is right still depends on review and people.
+**What does it cost?** The commit check takes about 3 seconds each time (measured on a small demo project; method in [this plan note](docs/lumos-toolchain-knowledge/Projects/README面試官十分鐘_計劃.md), in Chinese); with notes the AI reads more, and in the experiment tokens were 1 to 3 times higher; a high-risk review opens several AI conversations.
 
-**AI writes it and AI reviews it: isn't that just grading its own homework?** That concern is valid. What I can do is mix two vendors' models in review, have one of them argue against the rest, and keep a record of every finding and how it was handled, so a person can check afterwards; the requirements and trade-offs are my decisions. But that is not the same as someone re-checking every review conclusion, and there is no real-project comparison yet showing the final code got better.
+**Can the AI quietly edit the tests that check it?** The automatically run hooks and tests have content fingerprints (hashes); on a normal push a changed one is blocked until approved and recorded. `--no-verify` bypasses the local check, but CI verifies again on pushes to main or pull requests.
 
-**Can the AI quietly edit the tests that check it?** The automatically run hooks and tests have content fingerprints; on a normal push, a changed one is blocked until the change is approved and recorded. `--no-verify` bypasses this local check, but CI verifies it again on pushes to main or pull requests; editing the fingerprints too still leaves a visible difference in the version history.
+**What did you do yourself?** This repo was developed through conversation: the requirements and design trade-offs are my decisions, and most of the code is written by AI (about 88% of commits are co-signed by Claude), which is why tests matter so much here: about 1,500 test functions, re-run by CI on pushes to main (docs-only changes run only the docs-related subset), shown by the badge at the top. The main program is a single file of about 40,000 lines, a deliberate postponement: the tamper-check fingerprints, the tests, and the copy installed into other projects are all tied to file paths, and with one maintainer the risk of splitting outweighed the benefit.
 
-**What does it cost?** The commit check takes about 3 seconds each time (measured on a small demo project; method in [this plan note](docs/lumos-toolchain-knowledge/Projects/README面試官十分鐘_計劃.md), in Chinese); with notes the AI reads more, and in the experiment tokens went up 1 to 3 times; a high-risk review opens several AI conversations, so cost grows with the number of reviewers and depends on the models used.
+**Has it been used on real projects?** I have used it for about two months on two production projects at work (a C#/.NET + Vue backend and a Kotlin Android app). A with-and-without comparison on a real project hasn't been done; that is the biggest gap so far.
 
-**What did you do yourself? Why is the main program one 38,000-line file?** This repo was itself developed through conversation: the requirements and design trade-offs are my decisions, most of the code is written by AI (about 88% of commits are co-signed by Claude). Precisely because most of the code is AI-written, tests matter more: there are about 1,400 test functions, CI reruns them on pushes to main (docs-only changes run only the docs-related subset), and the badge at the top shows the current state. The single file is a deliberate postponement: in 2026-07 an external review suggested splitting it into modules, but the tamper-check fingerprints, the tests, and the copy installed into other projects are all tied to file paths, and with one maintainer the risk of splitting outweighed the benefit. It waits for a second maintainer.
+<details>
+<summary>More: review data, skip records, other diagrams</summary>
+
+- **Do multiple reviewers help?** In 85 multi-reviewer rounds on Lumos itself (2026-07 to 08), 531 of 822 problems (64.6%) were caught by only one reviewer, so reviewers see different things. It's only descriptive: it can't predict what one more or one fewer reviewer would change, and how many reviewers caught each problem was entered by hand by the AI that dispatches and collects the reviews.
+- **Were the findings real problems?** As of 2026-09-30, only 58 of 6,195 findings (0.9%) were judged not to need action. That judgement, though, was also made by AI.
+- **Were skipped checks justified?** The "change code, touch notes" check was skipped 84 times across about 2,070 commits in Lumos's own repo. Claude and Codex each reviewed every one independently: both agreed 8 changed behaviour without recording why; 17 only changed test files; most of the rest were mid-way commits on a feature branch whose notes were added later. [Per-skip judgements](governance/eval/readme-bypass-judge/)
+- **What about larger models?** Opus 5 scored 25/25 in all four groups of the experiment above and wasn't misled, but with notes each run took 2 to 5 times as long.
+- **Did notes actually help?** Another 80 runs tested rules the code can't reveal: with code only, 0 of 5 correct; with notes, 8 of 15. One synthetic project with questions I designed, so it supports the direction rather than settling it.
+- **What it can't stop**: some auxiliary checks let the change through if they fail themselves, so a tool failure doesn't stall development; skipping at commit time is recorded, but skipping the push checks with `--no-verify` leaves no local record, and CI only reruns them on pushes to main or pull requests.
+- Raw records you can check: [blocks and passes](docs/.governance-log.jsonl), [skips](docs/.bypass-log.jsonl), [review reports](governance/review-reports/).
+
+<p align="center">
+  <a href="assets/graph-demo-en.svg">
+    <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
+  </a>
+</p>
+
+<p align="center">
+  <a href="assets/swiss-cheese-en.svg">
+    <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
+  </a>
+</p>
+
+</details>
 
 ## Install and limits
 
