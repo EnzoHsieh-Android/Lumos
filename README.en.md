@@ -94,16 +94,6 @@ By default, Lumos does not require a person to read every diff line by line. Mul
 - A person must sign off on whether a rule still fits the business and record that decision. Tests cannot establish this.
 - Each round's review reports and outcomes stay in the repo, where people can spot-check them at any time.
 
-## A real example
-
-Lumos copies its own code and hooks into users’ projects. Including those files in the risk scan caused a small project’s first push to be falsely rated high-risk. The first fix skipped the entire tool directory, but four reviewers independently noticed in round 1 that this would also skip user code stored there. The next fix matched exact filenames. In round 3, reviewers found that this still skipped user files with the same names and tool files that had been modified. The final fix records content fingerprints (hashes) at installation and skips a file only when its filename is on the list and its content matches. This prevents accidental omissions, but someone who also changes the list can deliberately bypass it. The [original review reports (in Chinese)](governance/review-reports/code-工具自裝檔不算消費專案/) are in the repo.
-
-<p align="center">
-  <a href="assets/case-review-en.svg">
-    <img src="assets/case-review-en.svg" alt="Skip the directory → Match filenames → Compare content: four round 1 reviewers independently caught skipped user code in the same directory; round 3 caught same-named user files and modified tool files. Only filenames and installation fingerprints that both match are exempt. Prevents accidents, not deliberate bypass. A human extended the three-round limit to four; round 4 fixes were not reviewed again. All 46 findings, including unrelated issues, were handled before committing" width="760">
-  </a>
-</p>
-
 ## How notes are kept from going stale (drift)
 
 When code changes but a note still describes the old behavior, it can mislead an AI that reads it. I deliberately planted incorrect notes in a synthetic project, and the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos therefore addresses the problem at three points: when writing notes, at commit time, and before a push.

@@ -443,7 +443,7 @@ def swiss_cheese_scene(en):
 
 def drift_scene(en):
     title = "From writing notes to pushing code" if en else "從寫下筆記到推送程式碼"
-    b = path("M57 147V576", "blue", 2)
+    b = path("M57 147V519", "blue", 2)
     stages = [
         (122, 200, "Writing notes" if en else "寫入時", "green"),
         (342, 132, "At commit" if en else "提交時", "blue"),
