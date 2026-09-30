@@ -26314,9 +26314,10 @@ _DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5")
 _DRIFT_BOUND_KINDS = ("c2", "c3")          # 表態要綁當時連著的已收尾計劃(related)與序號(seq)的種類
 _DRIFT_GOLIVE_MARK = "drift check"
 _DRIFT_GATE_VALUES = ("block", "warn", "off")
-# ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、工具鏈歷史重放不亂擋、噪音 ≤5)
-# 都過才改成 block;還沒考就是 warn。
-_DRIFT_DEFAULT_GATE = "warn"
+# ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、歷史重放不亂擋、噪音 ≤5)考過,
+# Enzo 2026-09-30 裁定改成 block(防線計劃的決策紀錄;乙的歷史重放那條仍是空測,已知並一起轉)。
+# 專案要先只提醒或關掉,在 .lumos/config.json 寫 drift_check.gate=warn|off;設定寫壞也照這個預設。
+_DRIFT_DEFAULT_GATE = "block"
 _DRIFT_BUDGET_SEC = 60
 
 
@@ -28542,8 +28543,9 @@ def _drift_doctor_lines(env):
 
 
 def _drift_gate_doctor_lines(repo_root):
-    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):開關不是 block,而且專案自己寫了開關或已經接線時講
-    (沒寫設定也沒接線時預設就是 warn,每次都唸只是噪音;計劃 [S14] 已跟著改);
+    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):專案自己寫了 warn/off 時講一聲(關掉了要看得見);
+    設定寫壞了(照預設 block)也講出寫錯的地方。沒寫設定就是預設 block,不唸(2026-09-30 預設從 warn 改成 block 前,
+    這裡還得在已接線、沒寫設定時唸「是預設的 warn」;計劃 [S14]);
     只收專案根:鄰居多收的圖譜位置與 ci 旗標是給它們的事後掃描用的,這支沒有事後掃描(代碼審 r3 架構對齊席:抄了參數不用是死參數)。
     接線後(推送前掛鉤出現標記)專案 CI 沒呼叫 drift check 就給要貼的步驟。唯一的 git 呼叫是讀一次推送前掛鉤。"""
     out = []
@@ -28558,13 +28560,13 @@ def _drift_gate_doctor_lines(repo_root):
     mode, cfg_warns, explicit = _drift_config(txt)
     hk = _lens_git(root, "show", f"HEAD:{_NOTELINES_PREPUSH}")
     wired = hk is not None and hk.returncode == 0 and _DRIFT_GOLIVE_MARK in hk.stdout
-    # 開關不是 block 時講一聲——只在專案自己寫了開關、或已經接線時(代碼審 r1 外家席:關掉了要看得見);
-    # 還沒接線又沒寫設定時預設本來就是 warn,每個專案每次 doctor 都多一行只是噪音(代碼審 r3:那一行也破壞既有測試
-    # t_doctor_summary_admits_soft_reminders 的軟段計數)
-    if mode != "block" and (wired or explicit):
-        src = (f"({cfg_warns[0]})" if cfg_warns else "(.lumos/config.json 的 drift_check)" if explicit
-               else "(沒寫設定,這是預設值)")
-        out.append(f"這個專案的存量漂移檢查是 {mode}{src}——轉正後留著預告句的推送不會被擋")
+    # 開關不是 block 時講一聲(代碼審 r1 外家席:關掉了要看得見)——預設是 block,所以只剩專案自己寫了 warn/off 這一種;
+    # 設定寫壞(拼錯、null、不是物件、JSON 壞)照預設 block,也講出寫錯的地方(代碼審 r5 正確性席:人明明寫了東西)。
+    # 沒寫設定不唸:每個專案每次 doctor 都多一行只是噪音(代碼審 r3:那一行也破壞 t_doctor_summary_admits_soft_reminders 的軟段計數)
+    if explicit and cfg_warns:
+        out.append(f"存量漂移檢查的設定沒讀懂({cfg_warns[0]})——轉正後留著預告句的推送會被擋")
+    elif explicit and mode != "block":
+        out.append(f"這個專案的存量漂移檢查是 {mode}(.lumos/config.json 的 drift_check)——轉正後留著預告句的推送不會被擋")
     wf = root / ".github" / "workflows"
     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
@@ -37884,7 +37886,7 @@ def main():
 
     dr_p = sub.add_parser("drift", help="存量漂移守衛:已經寫進去的句子因為別處狀態變了而過期;spec=Projects/存量漂移防線_計劃")
     drsub = dr_p.add_subparsers(dest="drcmd", required=True)
-    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;warn 模式只印)")
+    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;沒寫設定就是 block,.lumos/config.json 寫 drift_check.gate=warn 只印)")
     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
     drc.add_argument("--repo", dest="dr_repo", default=None)
     drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",

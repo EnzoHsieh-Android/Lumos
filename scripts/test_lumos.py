@@ -51160,6 +51160,42 @@ def t_drift_check_state_events_in_range():
     check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
 
 
+def t_drift_check_default_gate_blocks():
+    """沒寫設定時預設 block(Enzo 2026-09-30 裁定,三條門檻見 Projects/存量漂移防線_計劃〈做法〉第 4 節第 4 點):
+    專案沒寫 drift_check → 轉正後留著預告句的推送回 1、印「擋下」;寫了 warn 的照舊只印、回 0。
+    ①前置:同一個範圍寫 warn 時確實有一筆要處理(只印),證明後面的 rc1 是預設值造成的、不是場景本身壞了
+    ②整份設定沒有(沒有 .lumos/config.json)→ block ③設定檔在、沒寫 drift_check → block ④設定解析:三種「沒寫」都回 block
+
+    翻紅釘:_DRIFT_DEFAULT_GATE 改回 "warn" → ②③④紅。
+    """
+    print("t_drift_check_default_gate_blocks")
+    import json as _j
+    m = _load_lumos_inproc()
+    for label, txt in (("沒有設定檔", None), ("空物件", b"{}"), ("只寫別的閘", b'{"note_audit": {"gate": "warn"}}')):
+        mode, warns, explicit = m._drift_config(txt)
+        check(f"④{label}:預設 block、不算自己寫了", mode == "block" and warns == [] and explicit is False,
+              str((mode, warns, explicit)))
+    root = _dr_repo(cfg={"drift_check": {"gate": "warn"}})
+    vault = root / _DR_VAULT
+    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+    _nh_commit(root, "base")
+    base = _na_head(root)
+    _dr_settle(root)
+    _nh_commit(root, "舊版 settle 的轉正,預告句還留著")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("①前置:寫了 warn → 有要處理、只印、rc0", rc == 0 and "提醒(drift_check.gate=warn" in out
+          and "Verification/G.md" in out, out[-600:])
+    (root / ".lumos" / "config.json").unlink()
+    _nh_commit(root, "拿掉設定檔")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("②沒有設定檔 → 預設 block:擋下、rc1", rc == 1 and out.count("擋下") >= 1 and "提醒(drift_check.gate=warn" not in out
+          and "Verification/G.md" in out, out[-600:])
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_lint": {"gate": "on"}}), encoding="utf-8")
+    _nh_commit(root, "設定檔在、沒寫 drift_check")
+    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+    check("③設定檔在、沒寫 drift_check → 預設 block:擋下、rc1", rc == 1 and "擋下" in out, out[-600:])
+
+
 def _dr_hook_fakes(root):
     """推送前掛鉤的測試現場:假 lumos(記下每次被叫的參數;drift 子命令轉給真的 lumos)、假全套測試(跑了記一筆 SUITE)。
     放在工作目錄、不提交——drift check 讀的是被推送頂端提交的樹,跟它們無關;所以要在最後一個提交之後才放。
@@ -51255,7 +51291,7 @@ def _dr_settle(root, name="G"):
 
 def t_prepush_and_ci_wire_drift_check():
     """[S18] 推送前掛鉤每個 ref 在 code-loop check 之後、全套測試之前跑 drift check;block 有要處理 → 擋、不跑全套;
-    warn(含沒寫設定的預設)只印、照推;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
+    warn 只印、照推;沒寫設定是預設 block、擋;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
     drift check 回其他非零(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講一句「這次沒檢查」再放行;被訊號殺掉 → 掛鉤停下、不跑全套。
     工具鏈 CI 在 code-loop gate 之後有一步 drift check:回 0 不紅、回 1 印擋下原因並紅、其他非零照原碼紅(工具出錯時寧可紅,
     跟同檔 code-loop gate、note-shape 兩步同一個慣例);before 原樣交(空的換成 40 個 0),帶 --push-remote origin
@@ -51320,8 +51356,8 @@ def t_prepush_and_ci_wire_drift_check():
     (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
     _nh_commit(root, "沒寫 drift_check")
     rc, lines, out = pp()
-    check("⑥沒寫設定 = 預設 warn,不擋", rc == 0 and "提醒(drift_check.gate=warn" in out and at(lines, "SUITE") >= 0,
-          f"rc={rc} {out[-400:]}")
+    check("⑥沒寫設定 = 預設 block(2026-09-30 起):擋下、全套測試沒跑", rc == 1 and "提醒(drift_check.gate=warn" not in out
+          and at(lines, "SUITE") < 0, f"rc={rc} {out[-400:]}")
     (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "off"}}), encoding="utf-8")
     _nh_commit(root, "off")
     rc, lines, out = pp()
@@ -52468,7 +52504,7 @@ def t_drift_code_review_r4_regressions():
     ①筆記內容審(不嚴格):一篇的 git log --follow 失敗只丟那一篇,別篇照算 ②樹的批次讀逾時扣掉列路徑花掉的時間
     ③測試名只認完全相同,不猜平台前綴 ④開關「有沒有自己寫」從 _drift_config 同一次解析來,格式寫錯也算寫了
     ⑤嚴格:歷史裡有一版解不開就判不了 ⑥空連結不算有落點 ⑦嚴格:頂端那一版逐篇讀失敗判不了
-    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時,提醒講明是預設值
+    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時不唸(2026-09-30 起預設 block;原本唸「是預設的 warn」),自己寫了 warn 照唸
     """
     print("t_drift_code_review_r4_regressions")
     import pathlib, time as _t
@@ -52548,7 +52584,12 @@ def t_drift_code_review_r4_regressions():
     _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
     _nh_commit(root, "wired")
     r = run(root / "docs" / "kg-knowledge", "doctor")
-    check("⑨已接線、沒寫設定:提醒講明是預設值", "存量漂移檢查是 warn" in r.stdout and "預設" in r.stdout, r.stdout[:500])
+    check("⑨已接線、沒寫設定:預設 block,開關那行不唸", "存量漂移檢查是" not in r.stdout
+          and "存量漂移檢查的設定" not in r.stdout, r.stdout[:500])
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text('{"drift_check": {"gate": "warn"}}', encoding="utf-8")
+    r = run(root / "docs" / "kg-knowledge", "doctor")
+    check("⑨自己寫了 warn:照唸「是 warn」", "存量漂移檢查是 warn" in r.stdout, r.stdout[:500])
 
 
 def t_drift_code_review_r5_regressions():
