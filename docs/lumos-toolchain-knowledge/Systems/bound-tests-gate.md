@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-09-30
+updated: 2026-10-01
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -100,3 +100,7 @@ about_code:
 ## 鏡頭側呈現(2026-09-03 v1.1)
 
 `lumos dispatch-lens` 對每條 ★INVARIANT★ 合約行用同一個 `_classify_one` 標「綁定測試:有/懸空/偽證據」或「★裸合約★」,並在段尾固定寫「有=方法存在,不代表跑過或有殺傷力(閘只看 rc)」。鏡頭是參考、本閘是判決:鏡頭讀 base 版合約行、閘讀工作樹版節點,分支改了合約行時兩邊可能不同。單源 [[Projects/派工鏡頭注入_計劃]] v1.1 節。
+
+## 推送前掛鉤多一段只提醒的回頭重讀(2026-10-01)
+
+drift check 那段之後、test-layers 之前,多一段 `note-audit reread-check`(回頭重讀守檔筆記,[[Projects/守檔筆記對照改動_計劃]]〈做法〉4;判定歸 [[Systems/筆記內容審]],呼叫那段歸 [[Systems/存量漂移守衛]])。它跟上面「rc1 擋、其他非零放行」的五道不是同一種形狀:工具自己恆回 0,掛鉤只在回傳碼是 130(Ctrl-C)時交給 pp_stop_if_signaled 停下整支推送,其他非零(含記憶體不夠被系統砍掉的 128 以上)印一句照推——被外部砍掉不該擋一道只提醒的檢查。所以掛鉤裡 pp_stop_if_signaled 的呼叫從 5 行變 6 行,第 6 行前面先把回傳碼篩成「是 130 才是 130」(`t_prepush_gates_stop_on_signal` 數行數、`t_note_audit_reread_check_wired` 驗兩種訊號)。CI 那步 continue-on-error 並吞掉回傳碼,跟上面「CI 是最後一道後盾、工具出錯寧可紅」的慣例刻意不同:提醒不值得讓 CI 紅。

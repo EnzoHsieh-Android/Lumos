@@ -6,6 +6,14 @@
 還沒發版的變更寫在 commit 訊息與知識圖譜裡,**不進這份**——
 刻意不留常駐的「未發布」區塊,否則它會永遠是「最新一筆」,讓守衛每次推送都紅。
 
+## v1.2 — 2026-10-01
+
+推送前多一道只提醒、不擋的檢查,推送前掛鉤跟著改,所以升版,讓還沒更新的專案被提示跑 `lumos update`:
+- 新增「回頭重讀守檔筆記」:這次改到的程式檔的家、而且這次也被改過的筆記,推送前會被列出來,提醒派一位判定者看「哪幾行被這次改動弄得不成立了」。指令是 `lumos note-audit reread-prepare`(出項目檔)、`reread-record`(記紀錄到 `governance/reread-verdicts/`,要提交)、`reread-check`(推送前掛鉤與 CI 呼叫)。
+- **只提醒、不擋**:任何情況都放行;不想要的專案在 `.lumos/config.json` 寫 `{"note_reread": {"gate": "off"}}`,單次不跑用 `LUMOS_SKIP_REREAD_CHECK=1`。
+- 判定者:Claude 編排時是 sonnet(兩次實驗都用它量的);**Codex 編排時的準度沒量過**。
+- 紀錄檔屬於簿記,提交它不會讓代碼審留痕失效——但還沒更新的協作者沒有這一項豁免,別人提交的紀錄夾在他的留痕與推送之間時會被判留痕過時;請各專案先 `lumos update`(逃生是 `lumos code-loop pass --note` 重記一次)。
+
 ## v1.1 — 2026-09-30
 
 注入每個專案 CLAUDE.md 與 AGENTS.md 的紀律區塊改了一條,所以升版,讓還沒更新的專案被提示跑 `lumos update`:

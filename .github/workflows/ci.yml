@@ -176,6 +176,24 @@ jobs:
             fi
             exit "$rc"
           }
+      - name: note reread reminder (回頭重讀守檔筆記;只提醒、不擋)
+        # 這次改到的程式檔的家、而且這次也被改過的筆記,還沒對照過這一版程式的列出來(Projects/守檔筆記對照改動_計劃〈做法〉第 4 節、[S9])。
+        # 參數照上一步(before 原樣交、空的換成 40 個 0,帶 --push-remote origin --pushed-ref,補 refs/remotes/origin/HEAD 那段也照抄),
+        # 起點由 lumos 的 _push_range_start 算。★只提醒★:工具自己任何情況都回 0;這步另加 continue-on-error 與指令尾巴的 || true——
+        # 被 OOM 或逾時砍掉也吞掉,提醒不值得讓 CI 紅(刻意的)。這一步的指令與註解都不准出現筆記內容審的上線字串(它的閘名接一個空白再接檢查子指令),
+        # 筆記內容審與 doctor 靠那串判它接線了沒。
+        if: github.event_name == 'push'
+        continue-on-error: true
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
+          if [ -n "$DEFAULT_BRANCH" ] && ! git rev-parse -q --verify refs/remotes/origin/HEAD >/dev/null && git rev-parse -q --verify "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
+            git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT_BRANCH"
+          fi
+          python scripts/lumos note-audit reread-check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo . || true
       - name: Anchor verify (baseline 缺失必紅)
         run: |
           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
