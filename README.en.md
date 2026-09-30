@@ -100,29 +100,17 @@ Review is only one layer. Risk tiers, multiple AI reviewers, release rules, exte
 
 ## How notes are kept from going stale (drift)
 
-The biggest risk with notes is that they go stale: the code changes and the note still describes the old behaviour. An AI that reads a stale note gets misled. I ran an experiment: on a synthetic project with deliberately wrong notes, the smaller model (Haiku 4.5) dropped from 20/25 correct to 12/25.
+When code changes but a note still describes the old behaviour, an AI reading it can be led astray. I deliberately planted incorrect notes in a synthetic project, and the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos tackles this at three points: when writing notes, at commit, and before push.
 
-Lumos guards against this at three points:
+The first check starts with what goes into a note. Fields, defaults, and flows that can be read from the code shouldn't be copied into notes; notes are for reasons the code can't explain. The tool can only enforce two fixed patterns here: newly added code line references and current-state descriptions, such as deployment settings, that don't cite a source. Both are blocked at commit. The rest depends on the working rules and review.
 
-**1. Keep things that go stale out of the notes.** The rule: anything the code itself shows (fields, defaults, flow) doesn't get copied into notes; notes only hold the reasons the code can't show. The tool can block two fixed patterns of this: newly written code line numbers, and current-state descriptions with no source (for example deployment settings), which are blocked at commit. The rest relies on the working instructions and review.
+At commit, the second check asks whether the notes were maintained alongside the code. It blocks code changes that touch no notes, and new source files that have no note assigned to cover them. Before push, the third check looks for outdated references. If a function was deleted or a file renamed but a note still mentions the old name or path, it only warns. If a rule's test is already in place but the note still says “test to be added,” or a linked note has been deleted, it blocks the push. Code changes without a note update and broken note links always block; projects can set the other blocking checks to warn instead.
 
-**2. Change the code, touch the notes.** Changing code without touching any note, or adding a source file with no assigned note, is blocked at commit.
+<p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit, note maintenance checked at commit, and outdated references and broken links checked before push; each check is labelled as a block or warning" width="760"></a></p>
 
-**3. Before a push, scan the old sentences again.**
-- Some names or paths disappeared from the code (a deleted function, a renamed file) but a note still mentions them: warns.
-- A rule's test is already live, but the note still says "test to be added": blocks.
-- Another note it links to was deleted: blocks.
+How much does this catch? In another project using Lumos, we found 20 genuinely stale passages and ran each through the tools. The checks caught 7 cases of existing drift (35%). Had these checks been in place before the original pushes, they could have caught about 13.5, or roughly two-thirds. One case was only half covered, so it counts as half. Some changes still slip through: a feature is added while a note still says it doesn't exist, or a value changes while its name stays the same. We haven't finished measuring how many of the findings are false alarms.
 
-"Change code, touch notes" and "broken links" always block; a project can switch the others to warn-only.
-
-**How well does it work?** In another project using Lumos, 20 real stale spots were found and re-run through the tools one by one:
-
-- Of the ones already sitting in the notes, the tools catch 7 (35%).
-- Had the push checks existed at the time, about two-thirds would have been caught (13.5; one was only half caught, so it counts as half).
-- Examples of what slips through: code added a feature while an old line still says "there is no such feature"; a value changed but the name didn't.
-- How many catches are false alarms hasn't been fully measured.
-
-**It can't stop a lazy AI.** Check 2 only asks whether a note was touched, not whether it's right. In that project, 55 current-state statements were sampled; of the 54 that could be judged, 22 were already stale, which is why check 1 was added. Whether a note's content is right still comes down to review and people.
+The second check also has a straightforward limit: it can tell whether a note changed, but not whether the revised content is correct. In that same project, we sampled 55 current-state statements. Of the 54 we could assess, 22 were already stale. That is why the first check was added later, to address what gets written in the first place. Whether the notes are actually right still comes down to review and people.
 
 <details>
 <summary>More: review data and skip records</summary>
