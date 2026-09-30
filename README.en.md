@@ -55,7 +55,9 @@ The reader of that message is the AI, not you. Its working instructions tell it 
 
 The outer loop checks the process itself: in Lumos's own repo, every case that completed review and has a design spec stores its pass/fail verdict; each week cases are re-run under the same version of the rules (sampled in rotation when there are too many to run in time) to confirm the same case still gets the same verdict. If a verdict changes, a rule change broke something and needs fixing.
 
-Notes link to each other. Below is an illustrative online shop: plans link to the features they produced and their verification records; when an incident happens, it leads back to a fix plan and a regression test.
+### Connecting plans, features, and verification
+
+The project calls its linked notes a “graph” and each note a “node”: a plan, feature description, verification record, or incident. The fictional online shop below starts with checkout and payment integration plans, then adds the features and records checkout end-to-end tests and duplicate-payment stress tests; important rules are marked as protected, shown by gold rings, only after verification is linked. If cancelling an order fails to refund points, the incident links back to the affected checkout feature, leads to a points-refund fix plan and a checkout correction, and ends with a points-refund regression test.
 
 <p align="center">
   <a href="assets/graph-demo-en.svg">
@@ -90,11 +92,11 @@ Review is only one layer. Risk tiers, multiple AI reviewers, release rules, exte
 - Whether a rule still fits the business needs a person's sign-off, with a record; tests can't prove that.
 - Every round's review reports and outcomes stay in the repo for anyone to audit.
 
-**A real example.** The day the first small Vue project adopted Lumos (2026-09-10), the tool scanned the files it had installed as if they were the project's own code. The fix was rated high-risk: in round 1, 4 of 7 reviewers independently found the same hole; in round 3, a reviewer found the fix still had a hole; all 46 findings across four rounds were handled before the commit. Every round's [original review reports](governance/review-reports/code-工具自裝檔不算消費專案/) are in the repo (in Chinese).
+**A real example.** Lumos copies its own code and hooks into users’ projects. Scanning those files as project code caused a small project’s first push to be falsely rated high-risk. The first fix skipped the entire tool directory, but four reviewers independently noticed in round 1 that this would also skip user code stored there. Matching exact installed filenames instead still missed users’ same-named files and modified tool files, as round 3 revealed. The final fix records content fingerprints (hashes) at installation and skips a file only when both its filename and content match the list. This prevents accidental mistakes; someone who also changes the list can deliberately bypass it. [Original review reports (in Chinese)](governance/review-reports/code-工具自裝檔不算消費專案/).
 
 <p align="center">
   <a href="assets/case-review-en.svg">
-    <img src="assets/case-review-en.svg" alt="Timeline of one real review: four rounds with 7, 4, 7 and 5 completed review reports found 12, 6, 17 and 11 issues; in round 1 four reviewers found the folder-matching hole, in round 3 the fix was found to still have a hole, so it switched to content fingerprints; all 46 were handled before committing" width="760">
+    <img src="assets/case-review-en.svg" alt="Skip the directory → Match filenames → Compare content: four round 1 reviewers independently caught skipped user code in the same directory; round 3 caught same-named user files and modified tool files. Only filenames and installation fingerprints that both match are exempt. Prevents accidents, not deliberate bypass. A human extended the three-round limit to four; round 4 fixes were not reviewed again. All 46 findings, including unrelated issues, were handled before committing" width="760">
   </a>
 </p>
 

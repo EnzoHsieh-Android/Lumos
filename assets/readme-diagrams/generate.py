@@ -108,35 +108,53 @@ def map_scene(en):
     return title,620,b,"Four steps around each change: read the code and add context from notes, dispatch reviewers by risk, review and record every finding, write back. Each hand-off is labelled. An outer loop records each round and checks the process itself. Decorative paths animate; all labels remain visible."
 
 def case_scene(en):
-    title="A real review: four rounds, 46 findings" if en else "一次真實的審查：四輪、46 條"
-    b=badge(36,121,"2026-09-10 · CAUSE" if en else "2026-09-10 起因","coral",180)
-    b+=text(232,142,"The tool scanned its own installed files as project code." if en else "工具把自己裝進專案的檔，也當成專案程式碼來掃。",19,"muted")
-    rounds=[(36,"R1","7","12","3","green"),(212,"R2","4","6","0","blue"),
-            (388,"R3","7","17","2","purple"),(564,"R4","5","11","1","gold")]
-    top=182
-    base=318
-    for x,r,seats,found,blk,c in rounds:
-        b+=rect(x,top,160,190)
-        b+=text(x+18,top+34,r,22,c,weight=650)
-        b+=text(x+142,top+34,(seats+" reports") if en else (seats+" 份報告"),16,"muted","end")
-        h=int(found)*5
-        b+=rect(x+18,base-h,30,h,C[c],"none",5)
-        b+=text(x+58,base-4,found,36,c,weight=650)
-        # Unit offset follows the digit count so "6" and "17" both keep a gap.
-        b+=text(x+58+len(found)*22+6,base-6,"found" if en else "條",15 if en else 17,"muted")
-        b+=text(x+18,top+176,("blocker ×"+blk) if en else ("最嚴重等級 "+blk+" 條"),15,"coral" if blk!="0" else "muted")
-    b+=path("M196 277H212M372 277H388M548 277H564","line",2)
-    b+=rect(36,392,336,86,"#13243a","#334c68",14)
-    b+=text(54,422,"R1 · Found by 4 reviewers" if en else "R1 · 4 位各自抓到",18,"green",weight=600)
-    b+=text(54,452,"Folder matching let user code slip past." if en else "用目錄名判斷，使用者的程式也會被放過",16,"muted")
-    b+=rect(388,392,336,86,"#13243a","#334c68",14)
-    b+=text(406,422,"R3 · The fix still had a hole" if en else "R3 · 修法又被找出洞",18,"purple",weight=600)
-    b+=text(406,452,"Same-named files still slipped by." if en else "同名的檔仍會被放過 → 改比內容指紋",16,"muted")
-    b+=path("M204 478V500H556V478M380 500V512","line",2)+arrow(380,519,"down")
-    b+=rect(36,527,688,64,"#15263d","#3b5a4f",14)
-    b+=text(58,555,"All 46 handled, then committed (09-11)." if en else "46 條全部處理完才提交（09-11）",20,"green",weight=600)
-    b+=text(58,580,"The note records what the fix can't stop, and when to check again." if en else "筆記寫下：這個修法防不了什麼、什麼時候回頭檢查",17,"muted")
-    return title,620,b,"Timeline of one real high-risk review in the Lumos repo: 7, 4, 7 and 5 completed review reports across four rounds found 12, 6, 17 and 11 issues. Round 1: four reviewers independently found that folder matching let user code escape. Round 3: a reviewer found the fix still let same-named files escape, so it switched to content fingerprints. All 46 were handled before the 2026-09-11 commit."
+    title = "How review changed the fix" if en else "審查如何改變修法"
+    b = text(36, 136, "Installed tool files caused a false high-risk rating." if en else "工具掃到自己安裝的檔案、讓小專案首次推送被誤判高風險", 18, "muted")
+    widths = (210, 214, 216) if en else (202, 202, 236)
+    headings = ("Skip the directory", "Match filenames", "Compare content") if en else ("整個目錄免查", "只認檔名", "比對內容")
+    labels = ("Round 1 / 4 reviewers", "Round 3 / reviewers", "Result / fingerprints") if en else ("第 1 輪 / 4 位各自抓到", "第 3 輪 / 審查員抓到", "結果 / 內容指紋")
+    lines = (
+        ("User code in the same", "directory is skipped too."),
+        ("Same-named user files", "and modified tool files", "still escape checks."),
+        ("Record hashes at install.", "Skip only listed filenames", "with matching content.", "Changed files get checked."),
+    ) if en else (
+        ("同目錄的使用者程式", "也跟著逃過檢查"),
+        ("使用者自己的同名檔", "或改過的工具檔", "仍然會漏查"),
+        ("安裝時記下雜湊值", "檔名在清單上且內容相同", "才免查、改過就照掃"),
+    )
+    x = 36
+    for i, (width, heading, label, rows, color) in enumerate(zip(widths, headings, labels, lines, ("coral", "purple", "green"))):
+        b += rect(x, 164, width, 280)
+        b += text(x + 16, 193, f"0{i + 1}", 14, color, weight=650)
+        b += text(x + 16, 228, heading, 20 if en else 24, color, weight=600)
+        b += text(x + 16, 262, label, 14, color, weight=600)
+        for j, row in enumerate(rows):
+            b += text(x + 16, 299 + j * 25, row, 15 if en else 17, "muted")
+        if i == 2:
+            b += text(x + 16, 414, "Accidents, not abuse." if en else "防不小心、不防刻意繞過", 15 if en else 16, "green", weight=600)
+        if i < 2:
+            b += path(f"M{x + width + 3} 237H{x + width + 20}", color, 2)
+            b += arrow(x + width + 21, 237, "right", color)
+        x += width + 24
+    footer = (
+        "The list lives in the project. Editing it too can bypass the check.",
+        "At the three-round limit, a human approved round 4. Its fixes were not reviewed again.",
+        "All 46 findings were handled before committing; many concerned other issues,",
+        "including list-field writes and concurrency.",
+    ) if en else (
+        "指紋清單也放在專案裡、連清單一起改就能繞過。",
+        "跑滿 3 輪上限後、由人決定加開第 4 輪。第 4 輪的修正未再受審。",
+        "四輪 46 條意見全部處理後才提交、其中不少與此事無關、",
+        "例如清單欄位寫入與併發問題。",
+    )
+    for i, row in enumerate(footer):
+        b += text(36, 478 + i * 26, row, 15 if en else 17, "muted")
+    desc = (
+        "Three fixes linked by review findings. Round 1: four reviewers independently found that skipping the tool directory also skipped user code. Round 3: exact filenames still missed same-named user files and modified tool files. The final fix records hashes at installation and skips only listed filenames with identical content. The project-local list can itself be changed, so this prevents accidents, not deliberate bypass. A human approved round 4 after the three-round limit; its fixes were not reviewed again. All 46 findings, many unrelated, were handled before committing."
+        if en else
+        "三格因果圖。第 1 輪有 4 位審查員各自抓到整個目錄免查會漏掉使用者程式。第 3 輪抓到只認精確檔名仍漏掉使用者同名檔與改過的工具檔。最後在安裝時記下雜湊值、僅檔名在清單上且內容相同才免查。專案內的清單也能被改、防不小心、不防刻意繞過。跑滿 3 輪由人加開第 4 輪、其修正未再受審。四輪 46 條包含不少無關問題、全部處理後才提交。"
+    )
+    return title, 588, b, desc
 
 def first_scene(en):
     title="A conversation becomes a change." if en else "從一句需求，到有依據的改動"
