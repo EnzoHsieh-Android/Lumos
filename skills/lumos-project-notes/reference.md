@@ -592,7 +592,7 @@ lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名]
 lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
 lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
 lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--covers 題目id,…]   # 宣告壞法配方(kill_recipes+[kill:recipes])
-lumos guard kill-rm <node> --id <短身分>   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add;短身分看 kill-add 提醒或 doctor P2)
+lumos guard kill-rm <node> [--id <短身分>]   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add);不帶 --id 列出這篇每條的短身分
 lumos guard kill <node> ["<KEY子字串>"] [--json]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
 ```
 

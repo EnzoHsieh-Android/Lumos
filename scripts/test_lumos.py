@@ -60519,6 +60519,126 @@ def t_kill_recipe_check_fs_and_git():
     check("kill-add 驗原文時已經放掉寫入鎖", rc == 0 and held == [False], f"{rc} {held}")
 
 
+def t_guard_kill_rm_lists_ids():
+    """[S2] kill-rm 不帶 --id:唯讀列出那篇每條配方的短身分(前 12 字元,同 P2 與 kill-add 提醒)、合約片段、檔、原文開頭、
+    test、平台;格式壞的也列、不崩潰,身分可拿去 --id 移除;重複的合一行;沒配方印一句;控制字元不原樣印;
+    --id 給空字串照舊擋下 rc2。"""
+    m = _load_lumos_inproc()
+    node = "Systems/Limit.md"
+    long_old = "LIMIT = 5" + "x" * 40
+    good = _kr_recipe("prod.py", old=long_old)
+    esc = _kr_recipe("p\x1b[2K.py", old="A\nB")
+    nonobj = 7
+    missing = {"invariant": "上限恆為5", "file": "prod.py", "test": None, "old": 5}
+    dup = _kr_recipe("prod.py", old="def check")
+    recipes = [good, esc, nonobj, missing, dup, dict(dup)]
+    root, v = _mk_kill_env()
+    p = v / "Systems" / "Limit.md"
+    p.write_text(_kr_note(recipes), encoding="utf-8")
+    _kr_commit(root)
+    before = p.read_bytes()
+    r = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit")
+    out = r.stdout
+    rid = lambda e: m._kill_recipe_id(node, e)[:12]
+    check("①不帶 --id → rc0、筆記不變", r.returncode == 0 and p.read_bytes() == before, f"{r.returncode} {r.stderr}")
+    for label, e in (("一般", good), ("控制字元", esc), ("不是物件", nonobj), ("欄位型別錯", missing), ("重複", dup)):
+        check(f"②{label}的配方列出、帶短身分", sum(ln.startswith(rid(e)) for ln in out.splitlines()) == 1, out)
+    check("③原文先截 30 字再跳脫、截了加 …", f'原文 "{long_old[:30]}…"' in out, out)
+    check("③欄位缺或 null 印(缺)、不是字串印型別、平台沒寫印(預設)",
+          "test (缺)" in out and "原文 (不是字串:int)" in out and "平台 (預設)" in out, out)
+    check("③不是物件的印格式壞", "格式壞:" in out, out)
+    check("③重複的合成一行並註明會一起移除", "(同一條 ×2,移除會一起移掉)" in out, out)
+    check("③控制字元不原樣印出", "\x1b" not in out and "\\u001b" in out, repr(out))
+    check("③合約片段也列", '合約 "上限恆為5"' in out, out)
+    check("④最後一句給移除指令(節點可貼、短身分是佔位字)", "移除:lumos guard kill-rm Systems/Limit --id <短身分>" in out, out)
+    for label, e in (("不是物件", nonobj), ("欄位型別錯", missing)):
+        rr = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", rid(e))
+        check(f"⑤列出的{label}身分拿去 --id 移得掉", rr.returncode == 0, rr.stderr)
+    r2 = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", "")
+    check("⑥--id 給空字串照舊擋下 rc2", r2.returncode == 2 and "擋下" in r2.stderr, r2.stdout + r2.stderr)
+    root2, v2 = _mk_kill_env()
+    r3 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit")
+    check("⑦沒有配方 → 這篇沒有殺傷力配方、rc0", r3.returncode == 0 and "這篇沒有殺傷力配方" in r3.stdout, r3.stdout + r3.stderr)
+    r4 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Nope")
+    check("⑦找不到筆記 → 擋下 rc2", r4.returncode == 2, r4.stderr)
+    # ⑧配方欄位帶落單替身字元(手改筆記寫成 JSON 跳脫):算身分不崩潰,列得出來也移得掉
+    import json as _json
+    sur = _kr_recipe("prod.py", old="LIMIT\ud800")
+    blob = "".join(f"\\u{ord(c):04x}" if 0xD800 <= ord(c) <= 0xDFFF else c for c in _json.dumps([sur], ensure_ascii=False))
+    (v2 / "Systems" / "Limit.md").write_text(_kr_note(blob), encoding="utf-8")
+    _kr_commit(root2, "sur")
+    r5 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit")
+    sid = m._kill_recipe_id(node, sur)[:12]
+    check("⑧落單替身字元:列出不崩潰、帶短身分", r5.returncode == 0 and r5.stdout.startswith(sid), r5.stdout + r5.stderr[-300:])
+    r6 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit", "--id", sid)
+    check("⑧落單替身字元:拿短身分移得掉", r6.returncode == 0, r6.stderr[-300:])
+
+
+def t_guard_kill_prints_recipe_id():
+    """[S3] guard kill 人讀輸出每條結果在判定之後附 id=<短身分>,拿去 kill-rm --id 對得到那一條(缺 old 這類照常出結果的
+    格式壞配方也一樣);一條結果一行;--json 只有 JSON、各筆欄位跟改動前一樣(沒有 _rid)。"""
+    import json as _json
+    m = _load_lumos_inproc()
+    node = "Systems/Limit.md"
+    ok = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive")
+    noold = {"invariant": "上限恆為5", "test": "TestLimitFive", "file": "prod.py", "new": "X = 1", "note": ""}
+    forged = _kr_recipe("prod.py", old="def check", test="TestLimitFive", note="")
+    forged["invariant"] = "上限恆為5 id=deadbeefdead"
+    root, v = _mk_kill_env()
+    (v / "Systems" / "Limit.md").write_text(_kr_note([ok, noold, forged], inv_lines=[
+        "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive] [kill:recipes]"]), encoding="utf-8")
+    _kr_commit(root)
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit")
+    lines = [ln for ln in r.stdout.splitlines() if " id=" in ln]
+    check("①每條結果一行、都附 id=", len(lines) == 3, r.stdout)
+    for label, e in (("一般", ok), ("缺 old", noold), ("合約片段夾假 id", forged)):
+        want = m._kill_recipe_id(node, e)[:12]
+        hit = [ln for ln in lines if ln.split(" id=", 1)[1].startswith(want)]
+        check(f"②{label}:判定之後第一個 id= 就是它的短身分", len(hit) == 1, r.stdout)
+    rr = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", m._kill_recipe_id(node, noold)[:12])
+    check("③缺 old 那條的 id 拿去 kill-rm 移得掉", rr.returncode == 0, rr.stderr)
+    root, v = _mk_kill_env()
+    (v / "Systems" / "Limit.md").write_text(_kr_note([ok], inv_lines=[
+        "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive] [kill:recipes]"]), encoding="utf-8")
+    _kr_commit(root)
+    rj = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--json")
+    try:
+        data = _json.loads(rj.stdout)
+    except ValueError:
+        data = None
+    keys = set(data["results"][0]) if data and data.get("results") else set()
+    check("④--json 只有 JSON、結果沒有 _rid、既有 recipe_id 還在", data is not None and "_rid" not in keys
+          and "_logged" not in keys and "recipe_id" in keys and " id=" not in rj.stdout, rj.stdout[:400])
+
+
+def t_guard_kill_add_rejects_template_placeholder():
+    """[S4] kill-add 的 --old 或 --new 去掉前後空白(與一對外圍引號)後整個等於 kill-rm 範本的待填字樣 → 擋下 rc2、筆記不變;
+    只是含有這串字照常寫入(lumos 自己產生範本那行程式就含)。"""
+    base = ["guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py"]
+    for label, old, new in (("--new 是待填字樣", "LIMIT = 5", "<照新原文改寫的壞法>"),
+                            ("--old 是待填字樣(帶空白)", "  <照現在的程式填原文> ", "LIMIT = 9"),
+                            ("--new 帶外圍引號", "LIMIT = 5", "'<照新原文改寫的壞法>'")):
+        root, v = _mk_kill_env()
+        p = v / "Systems" / "Limit.md"
+        before = p.read_bytes()
+        r = _kr_lum(root, v, *base, "--old", old, "--new", new)
+        check(f"①{label} → 擋下 rc2、筆記不變", r.returncode == 2 and "待填" in r.stderr and p.read_bytes() == before,
+              f"{r.returncode} {r.stderr}")
+    root, v = _mk_kill_env()
+    (root / "tpl.py").write_text('X = "--new <照新原文改寫的壞法>"\n', encoding="utf-8")
+    _kr_commit(root, "tpl")
+    r = _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "tpl.py",
+                "--old", 'X = "--new <照新原文改寫的壞法>"', "--new", 'X = ""')
+    check("②只是含有待填字樣 → 照常寫入 rc0", r.returncode == 0, r.stdout + r.stderr)
+    # ③雙引號包住待填字樣的程式字串是合法原文(lumos 自己的常數就長這樣),不剝雙引號
+    root, v = _mk_kill_env()
+    (root / "ph.py").write_text('PH = "<照新原文改寫的壞法>"\n', encoding="utf-8")
+    _kr_commit(root, "ph")
+    r = _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "ph.py",
+                "--old", '"<照新原文改寫的壞法>"', "--new", '""')
+    check("③雙引號包住的待填字樣 → 照常寫入 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+
 def t_guard_kill_rm():
     """[S6] kill-rm 只移除短身分對到的那一條(或全是同一完整身分的重複時一起移除),原子寫入,移除前印完整內容與 kill-add 範本;
     格式壞的配方也移得掉;沒有配方對得到的 KEY 行拿掉 [kill:recipes]、還對得到的保留;
@@ -60570,6 +60690,13 @@ def t_guard_kill_rm():
     check("②只移除對到的那一條", r.returncode == 0 and ra not in left and len(left) == len(recipes) - 1, f"{r.stderr} {left}")
     check("②移除前印出那條完整內容(note、covers 都在)", "上限失守" in r.stdout and "java-concurrency" in r.stdout and "LIMIT = 5" in r.stdout, r.stdout)
     check("②印出可照填的 kill-add 範本", "lumos guard kill-add Systems/Limit" in r.stdout and "--covers java-concurrency" in r.stdout, r.stdout)
+    # [S1] 範本那一行的 --new 是待填字樣、不抄舊壞法;完整內容那一行照印舊壞法(只對範本那一行斷言)
+    tpl = [ln for ln in r.stdout.splitlines() if "照現在的程式改寫後重新宣告" in ln]
+    full = [ln for ln in r.stdout.splitlines() if ln.strip().startswith("{")]
+    check("②[S1] 範本的 --new 是待填字樣、不含舊壞法;完整內容仍有舊壞法",
+          len(tpl) == 1 and "XX_BROKEN = 1" not in tpl[0] and "--new '<照新原文改寫的壞法>'" in tpl[0]
+          and any("XX_BROKEN = 1" in ln for ln in full), r.stdout)
+    check("②下一步提醒 --new 也要照新原文改寫", "--new" in r.stdout.splitlines()[-1], r.stdout)
     check("②還有配方對得到第一條 KEY 行 → 標記保留", p.read_text(encoding="utf-8").count("[kill:recipes]") == 2, p.read_text(encoding="utf-8")[:600])
     check("②沒有留下暫存檔", not [x for x in p.parent.iterdir() if "tmp" in x.name], str(list(p.parent.iterdir())))
     check("②原子寫入:新檔換上去(inode 換了),不是原地改寫", p.stat().st_ino != ino, f"{ino} {p.stat().st_ino}")

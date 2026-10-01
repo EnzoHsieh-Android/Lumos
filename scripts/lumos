@@ -12914,7 +12914,9 @@ def _kill_recipe_key(node, invariant, file, old):
     用 json.dumps 序列化再雜湊:直接串接會讓 ("a","bc") 跟 ("ab","c") 撞在一起。"""
     import hashlib
     import json
-    return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False).encode("utf-8")).hexdigest()
+    # surrogatepass:欄位帶落單替身字元時不崩潰,其他配方的身分不變(Projects/殺傷力配方修補體驗_計劃)
+    return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False)
+                          .encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _kill_method_name(test, multiplatform):
@@ -12941,7 +12943,7 @@ def _kill_recipe_id(node, elem):
     if isinstance(elem, dict) and all(isinstance(elem.get(k), str) for k in ("invariant", "file", "old")):
         return _kill_recipe_key(node, elem["invariant"], elem["file"], elem["old"])
     return hashlib.sha256(json.dumps(["malformed", node, elem], ensure_ascii=False, sort_keys=True)
-                          .encode("utf-8")).hexdigest()
+                          .encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _kill_node_arg(rel):
@@ -13321,9 +13323,15 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
     同一條配方(`_kill_recipe_key` 相同)已存在時:有帶 covers、new 相同、note/platform/test 沒帶或跟既有相同
     → 只把 covers 換成這次的清單;其他情況照舊擋(Projects/併發與效能表態要合約背書_計劃)。
     寫入成功後(放掉寫入鎖)會驗這條配方的原文在程式裡是不是恰好一次,不是就在標準錯誤多印一行提醒
-    (Projects/殺傷力配方失配提醒_計劃)。"""
+    (Projects/殺傷力配方失配提醒_計劃)。--old 或 --new 整欄等於 kill-rm 範本的待填字樣就擋下(還沒填完、不是配方;
+    Projects/殺傷力配方修補體驗_計劃)。"""
     if old == new:
         print("擋下:要替換的舊字串和新字串一模一樣,這個突變配方等於沒改", file=sys.stderr)
+        return 2
+    if _kill_is_placeholder(old) or _kill_is_placeholder(new):
+        # 待填字樣原樣寫進去,guard kill 會把程式換成這串字、語法錯誤讓測試變紅,被判成殺得掉
+        # (Projects/殺傷力配方修補體驗_計劃 S4;只擋整欄等於,含有照寫)
+        print("擋下:範本的待填欄還沒填——--old 要填現在程式裡的原文、--new 要填照新原文改寫的壞法", file=sys.stderr)
         return 2
     covers_list = None
     if covers is not None:
@@ -13481,6 +13489,19 @@ def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, tes
     return 0
 
 
+_KILL_PH_OLD = "<照現在的程式填原文>"      # kill-rm 範本的兩個待填欄(kill-add 看到整欄等於它們就擋)
+_KILL_PH_NEW = "<照新原文改寫的壞法>"
+
+
+def _kill_is_placeholder(v):
+    """整欄(去掉前後空白與一對外圍單引號——範本用的就是單引號)等於範本的待填字樣;只是含有這串字的不算
+    (lumos 自己產生範本那行程式就含)。不剝雙引號:程式裡用雙引號包住待填字樣的字串是合法原文(代碼審第 1 輪)。"""
+    t = str(v).strip()
+    if len(t) >= 2 and t[0] == t[-1] == "'":
+        t = t[1:-1].strip()
+    return t in (_KILL_PH_OLD, _KILL_PH_NEW)
+
+
 def _kill_add_template(node_arg, r):
     """被移除的配方 → 一行照它改寫後重新宣告的 kill-add 範本(原文那一欄留給人照現在的程式填)。"""
     import shlex
@@ -13493,7 +13514,7 @@ def _kill_add_template(node_arg, r):
     def val(k, placeholder):
         return q(r[k]) if ok(r.get(k)) else placeholder
     parts = ["lumos guard kill-add", node_arg, val("invariant", "'<KEY 行片段>'"),
-             "--file", val("file", "'<檔>'"), "--old", "'<照現在的程式填原文>'", "--new", val("new", "'<壞法>'")]
+             "--file", val("file", "'<檔>'"), "--old", f"'{_KILL_PH_OLD}'", "--new", f"'{_KILL_PH_NEW}'"]
     for k in ("test", "platform", "note"):
         if isinstance(r.get(k), str) and r[k]:
             parts += [f"--{k}", q(r[k]) if ok(r[k]) else f"'<{k} 含控制字元,看上面的完整內容>'"]
@@ -13514,11 +13535,14 @@ def cmd_guard_kill_rm(env, node, rid):
     (配方身分含原文,不先移掉舊的就改不了)。rid=短身分(doctor P2 或 kill-add 提醒印的那串),至少 8 個十六進位字元。
     對到零條、或對到不同完整身分的多條 → 擋下 rc2;對到的全是同一完整身分(手改造成的重複)→ 一起移除。
     移除前把每一條的完整內容與 kill-add 範本印到標準輸出;剩下的配方都對不到的 KEY 行拿掉 [kill:recipes]。
-    kill-log 的舊紀錄不刪(歷史帳;背書計算本來就只認筆記現有的配方)。"""
+    kill-log 的舊紀錄不刪(歷史帳;背書計算本來就只認筆記現有的配方)。
+    rid 是 None(沒帶 --id)→ 唯讀列出這篇每條配方的短身分(不拿寫入鎖、不寫檔;Projects/殺傷力配方修補體驗_計劃)。"""
+    if rid is None:
+        return _guard_kill_rm_list(env, node)
     pre = str(rid or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{8,64}", pre):
-        print(f"擋下:--id 要給 8 到 64 個十六進位字元的配方短身分(收到 {rid!r});doctor --verbose 的 P2 段"
-              "與 kill-add 提醒的修法裡都有印,給太短容易移錯", file=sys.stderr)
+        print(f"擋下:--id 要給 8 到 64 個十六進位字元的配方短身分(收到 {rid!r});不帶 --id 跑一次會列出這篇每條的短身分,"
+              "doctor --verbose 的 P2 段與 kill-add 提醒的修法裡也有印,給太短容易移錯", file=sys.stderr)
         return 2
     rel = env.find(node)
     if rel is None:
@@ -13526,6 +13550,49 @@ def cmd_guard_kill_rm(env, node, rid):
         return 2
     with _vault_write_lock(env.vault):     # 讀—改—寫整段拿鎖(跟 kill-add 同一把)
         return _guard_kill_rm_locked(env, rel, pre)
+
+
+def _guard_kill_rm_list(env, node):
+    """kill-rm 沒帶 --id:唯讀列出這篇每條配方的短身分、合約片段、檔、原文開頭、test、平台(不拿鎖、不寫檔)。"""
+    import json
+    rel = env.find(node)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+        return 2
+    recipes, err = _kill_read_recipes(env.vault / rel)
+    if recipes is None:
+        print(f"擋下:{_kill_esc(err)}", file=sys.stderr)
+        return 2
+    if not recipes:
+        print("這篇沒有殺傷力配方")
+        return 0
+    rows = {}
+    for r in recipes:                              # 同一完整身分合成一行,各欄取第一條
+        rid = _kill_recipe_id(str(rel), r)
+        rows.setdefault(rid, [r, 0])[1] += 1
+    for rid, (r, n) in rows.items():
+        dup = f"  (同一條 ×{n},移除會一起移掉)" if n > 1 else ""
+        if not isinstance(r, dict):
+            body = json.dumps(r, ensure_ascii=False, sort_keys=True)
+            print(f"{rid[:12]}  格式壞:{_kill_show(body[:60])}{dup}")
+            continue
+        print(f"{rid[:12]}  合約 {_kill_list_cell(r, 'invariant', 30)}  檔 {_kill_list_cell(r, 'file')}"
+              f"  原文 {_kill_list_cell(r, 'old', 30)}  test {_kill_list_cell(r, 'test')}"
+              f"  平台 {_kill_list_cell(r, 'platform', empty='(預設)')}{dup}")
+    print(f"移除:lumos guard kill-rm {_kill_node_arg(rel)} --id <短身分>")
+    return 0
+
+
+def _kill_list_cell(r, k, cut=0, empty="(缺)"):
+    """列出的一欄:沒有或 null 印 empty(平台空字串也算沒寫);不是字串印型別;字串先截字(截了加 …)再跳脫。"""
+    v = r.get(k)
+    if v is None or (k == "platform" and v == ""):
+        return empty
+    if not isinstance(v, str):
+        return f"(不是字串:{type(v).__name__})"
+    if cut and len(v) > cut:
+        v = v[:cut] + "…"
+    return _kill_show(v)
 
 
 def _guard_kill_rm_locked(env, rel, pre):
@@ -13543,7 +13610,7 @@ def _guard_kill_rm_locked(env, rel, pre):
     ids = [_kill_recipe_id(str(rel), r) for r in recipes]
     hit = sorted({i for i in ids if i.startswith(pre)})
     if not hit:
-        print(f"擋下:{rel} 的配方裡沒有身分以 {pre} 開頭的(lumos doctor --verbose 的 P2 段逐條列出的配方,修法裡都有短身分)", file=sys.stderr)
+        print(f"擋下:{rel} 的配方裡沒有身分以 {pre} 開頭的(不帶 --id 跑一次會列出這篇每條的短身分)", file=sys.stderr)
         return 2
     if len(hit) > 1:
         print(f"擋下:{pre} 對到 {len(hit)} 條不同的配方,分不清要移哪一條;給長一點的身分:", file=sys.stderr)
@@ -13562,7 +13629,8 @@ def _guard_kill_rm_locked(env, rel, pre):
         return 2
     tail = f";{unmarked} 條 KEY 行已經沒有配方對得到,拿掉了 [kill:recipes] 標記" if unmarked else ""
     print(f"✓ 從 {rel} 移除了 {len(gone)} 條配方{tail}")
-    print("  下一步:照上面的範本填好原文 kill-add 改寫後的配方,把程式與筆記提交後跑 lumos guard kill 確認真的殺得掉")
+    print("  下一步:照上面的範本填好原文(--old)與照新原文改寫的壞法(--new)再 kill-add,"
+          "把程式與筆記提交後跑 lumos guard kill 確認真的殺得掉")
     return 0
 
 
@@ -13786,6 +13854,9 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                                          capture_output=True, text=True, errors="replace").stdout.strip())
     except OSError:
         node_dirty = False
+    # 每條配方先帶上 kill-rm 認得的短身分(用原配方算;Projects/殺傷力配方修補體驗_計劃):
+    # 後面 9 個組結果的地方 {**r, …} 自然帶上,人讀輸出印 id=,--json 前濾掉
+    recipes = [{**r, "_rid": _kill_recipe_id(str(rel), r)} if isinstance(r, dict) else r for r in recipes]
     # 依 platform 分組(每平台一個 worktree + baseline per test)
     groups = {}
     for r in recipes:
@@ -13952,7 +14023,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                                     ensure_ascii=False) + "\n")
     verdicts = [r["verdict"] for r in results]
     if as_json:
-        print(json.dumps({"results": [{k: v for k, v in r.items() if k != "_logged"}
+        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid")}
                                       for r in results]}, ensure_ascii=False))
     else:
         # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
@@ -13961,8 +14032,9 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 "timed_out_weak": "⚠", "survived": "✗",
                 "drifted": "⚠", "abort": "⚠", "error": "⚠"}
         for r in results:
-            print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} {r.get('invariant','')[:30]}"
-                  f" [{r.get('test','')}] {r.get('detail','')}")
+            # id= 放在人寫的欄位前面(test 名、說明可能夾換行偽造一個 id,偽造的只會出現在真的後面)
+            print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} id={str(r.get('_rid', ''))[:12]} "
+                  f"{str(r.get('invariant', ''))[:30]} [{r.get('test','')}] {r.get('detail','')}")
     if "survived" in verdicts:
         print("✗ 有配方 SURVIVED——綁定測試接不住宣告的壞法(稻草人證據),補強測試", file=sys.stderr)
         return 1
@@ -40235,7 +40307,7 @@ HELP_WHEN = {
     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
-    "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add。",
+    "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add;不帶 --id 跑一次列出這篇每條的短身分。",
     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
     "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次印紅綠(不擋)。",
     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
@@ -40732,8 +40804,8 @@ def main():
                           "同一條配方已存在時只更新它的 covers")
     gkr = gsub.add_parser("kill-rm", help="移除一條殺傷力配方(失配配方的修法:先移掉舊的、再照現在的程式 kill-add;同檔原子寫)")
     gkr.add_argument("node")
-    gkr.add_argument("--id", dest="gkr_id", required=True,
-                     help="配方短身分(doctor P2 段或 kill-add 提醒印的那串),至少 8 個十六進位字元")
+    gkr.add_argument("--id", dest="gkr_id", default=None,
+                     help="配方短身分(8 到 64 個十六進位字元);不帶就列出這篇每條配方的短身分(唯讀)")
     gk = gsub.add_parser("kill", help="跑殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅")
     gk.add_argument("node")
     gk.add_argument("invariant", nargs="?", help="限某合約(KEY 行子字串;預設全部配方)")
