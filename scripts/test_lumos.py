@@ -18960,6 +18960,8 @@ def t_template_keeps_absence_claim_guard():
 _NOTE_CONVENTION_FILES = (
     "skills/lumos-project-notes/SKILL.md",
     "skills/lumos-project-notes/commands/03-寫回圖譜.md",
+    # 2026-10-01 筆記格子第 0 步:reference.md 原本有兩張舊的前綴表(含 WHY/RULE 的舊寫法範例),改成指回範本
+    "skills/lumos-project-notes/reference.md",
 )
 
 
@@ -30259,7 +30261,8 @@ def t_symbol_vocab_single_source_and_reach():
 
 def t_slots_see_prefix_and_links():
     """[S14] Projects/筆記格子寫法與過期檢查_計劃:SEE 進摘要前綴表;算計劃連結的程式也讀 SEE 行。
-    翻紅釘:①從 SYMBOL_NAMES 拿掉 SEE → 第 1、2 條紅 ②_plan_system_links 只認 DEP: → 第 3 條紅"""
+    翻紅釘:①從 SYMBOL_NAMES 拿掉 SEE → 第 1、2 條紅 ②_plan_system_links 只認 DEP: → 第 3 條紅
+    ③_ns_check_line 拿掉 SEE 那段 → 「SEE 夾句子提交時擋」紅"""
     m = _load_lumos_inproc()
     check("SEE 在詞彙表裡", "SEE" in m.SYMBOL_NAMES, str(sorted(m.SYMBOL_NAMES)))
     R = m.SYMBOLISH_RE
@@ -30271,7 +30274,321 @@ def t_slots_see_prefix_and_links():
     n = m._note_from_text("Projects/x_計劃.md", text, 0)
     got = m._plan_system_links(n)
     check("★SEE 行的連結算進計劃連到的節點★", got == ["Systems/甲", "Systems/乙", "Systems/丙"], str(got))
+    # SEE 夾句子:提交時擋(不然換個前綴就繞過「現況描述要帶來源」;代碼審 code-筆記格子第0步 r1 正確性席 C6)
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nSEE:Redis 連線上限是 200")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("★SEE 夾句子提交時擋★", rc == 1 and "SEE 只放連結" in out, out[-400:])
+    _ns_reset(root)
+    _ns_note(root, summary="KEY:x\nSEE:見")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("SEE 只有分隔字沒有連結也擋(跟 lint 同一判準)", rc == 1 and "SEE 只放連結" in out, out[-400:])
+    _ns_reset(root)
+    _ns_note(root, summary="KEY:x\nSEE:[[Systems/甲]]、[[Systems/乙]]")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("SEE 只放連結照過", rc == 0 and "SEE 只放連結" not in out, out[-400:])
     print("  ✓ t_slots_see_prefix_and_links")
+
+
+def _slot_need_cell(prefixes, need, req, one_of, cond, enum):
+    """範本表「必有鍵」那一格 → 填進四個投影(三選一、條件式、全必有與列舉值)。"""
+    import re as _re
+    for part in need.split("；"):
+        if "三選一" in part:
+            one_of.update({pf: tuple(_re.findall(r"`\[([^:\]`]+):", part)) for pf in prefixes})
+        elif "另必有" in part:
+            m = _re.search(r"`\[([^:\]]+):([^\]]+)\]` 另必有 `\[([^:\]]+):", part)
+            cond.update((pf, m.group(1), m.group(2), m.group(3)) for pf in prefixes)
+        else:
+            for k, v in _re.findall(r"`\[([^:\]`]+):([^\]`]*)\]`", part):
+                for pf in prefixes:
+                    req.setdefault(pf, []).append(k)
+                if "|" in v:
+                    enum[k] = tuple(v.split("|"))
+
+
+def _slot_template_projection(root):
+    """紀律範本〈寫筆記時〉那張格子表 → 結構化投影(前綴 → 全必有、三選一、條件式、列舉值)。
+    範本的寫法約定:三選一寫成「`A`、`B`、`C` 三選一」,條件式寫成「`[X:值]` 另必有 `[Y:]`」,列舉寫成 `[鍵:a` 加反斜線直線再接 `b]`(表格裡的直線要跳脫)。"""
+    import re as _re
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    sec = tpl[tpl.index("### 寫筆記時"):tpl.index("### 鐵則")]
+    req, one_of, cond, enum, special = {}, {}, set(), {}, {}
+    rows = [ln for ln in sec.splitlines() if ln.startswith("| ") and not ln.startswith(("| 前綴", "|---"))]
+    for ln in rows:
+        cells = [c.strip() for c in _re.split(r"(?<!\\)\|", ln)[1:-1]]
+        prefixes = _re.findall(r"`([A-Z-]+):`", cells[0])
+        if prefixes == ["SEE"] or not prefixes:
+            special[prefixes[0] if prefixes else cells[0]] = cells[2]
+            continue
+        _slot_need_cell(prefixes, cells[2].replace("\\|", "|"), req, one_of, cond, enum)
+    return req, one_of, cond, enum, special
+
+
+def t_slots_single_table():
+    """[S11] Projects/筆記格子寫法與過期檢查_計劃:紀律範本那張格子表與程式裡的表一致(比結構化投影,不比 markdown);
+    新文法的行照新表唸、舊寫法的行照舊判準;RULE 六個鍵在新文法的行走新解析器;[防回歸:無 理由] 算有防回歸。
+    翻紅釘:①程式表或範本表任一邊改一個鍵 → 第 1~4 條紅 ②context_marker_warnings 拿掉新文法分流 → ⑤⑥紅
+    ③parse_rule_fields 拿掉 slot_is_new 那段 → ⑦紅(新文法 retire 值含 [[連結]] 會被截斷)"""
+    m = _load_lumos_inproc()
+    root = _repo_root_for_discipline()
+    req, one_of, cond, enum, special = _slot_template_projection(root)
+    check("① 全必有鍵:範本 = 程式", {k: tuple(v) for k, v in req.items()} == dict(m._SLOT_REQUIRED),
+          f"範本 {req} / 程式 {m._SLOT_REQUIRED}")
+    check("② 三選一:範本 = 程式", one_of == dict(m._SLOT_ONE_OF), f"範本 {one_of} / 程式 {m._SLOT_ONE_OF}")
+    check("③ 條件式必有:範本 = 程式", cond == set(m._SLOT_CONDITIONAL), f"範本 {cond} / 程式 {m._SLOT_CONDITIONAL}")
+    check("④ 列舉值:範本 = 程式", enum == dict(m._SLOT_ENUM), f"範本 {enum} / 程式 {m._SLOT_ENUM}")
+    check("④ SEE 列與作廢列都在範本", "[[連結]]" in special.get("SEE", "") and
+          any("[被取代:]" in v and "[status:superseded]" in v for v in special.values()), str(special))
+    import re as _re
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    sec = tpl[tpl.index("### 寫筆記時"):tpl.index("### 鐵則")]
+    _keys = set(_re.findall(r"`\[([^:\]`\[]+):", sec)) - {"被取代"} | {"被取代"}
+    check("④ 範本表與例子出現的每個鍵,程式都認得(白名單沒漏)", _keys <= set(m._SLOT_KEYS),
+          f"程式不認得:{sorted(_keys - set(m._SLOT_KEYS))}")
+    w = m.context_marker_warnings
+    check("⑤ 冒號後什麼都沒寫的骨架行 lint 不唸", w("WHY:\nRULE:\nFACT:\nPITFALL:\nSEE:") == [], str(w("WHY:\nRULE:")))
+    # ⑤ 新文法的行照新表唸
+    got = w("WHY:決定改逐行 [出處:2026-10-01 對話]\nPITFALL:會漏 [出處:a] [根因:b] [防回歸:無 純設定錯]\n"
+            "FLOW:a→b [來源:部署]")
+    check("⑤ 新文法 WHY 缺 [因:] 要唸,[防回歸:無 理由] 算有防回歸",
+          any("WHY" in x and "[因:]" in x for x in got) and not any("PITFALL" in x for x in got), str(got))
+    check("⑤ 只帶 [來源:] 的 FLOW 不算新文法、不被新表多唸(有新文法才有的鍵才算)",
+          not any("FLOW" in x for x in got), str(got))
+    # ⑥ 舊寫法的行:照舊判準、不因新表多唸
+    old = w("FLOW:a→b→c\nDEP:[[X]]\nFACT:上限 [來源:部署]\nWHY:[2026-09-21 Enzo 裁]改成程式碼為主\n"
+            "RULE:[since:2026-09-21][retire:等 [[Systems/新閘]] 上線就撤]舊限制")
+    check("⑥ 舊 FLOW/DEP/FACT/WHY 不被新表多唸", not any("筆記格子" in x for x in old), str(old))
+    check("⑥ 舊 RULE 的值被截斷照舊唸(舊行 lint 結果不變)", any("截斷" in x for x in old), str(old))
+    # ⑦ 新文法 RULE 走新解析器:值裡的 [[連結]] 讀完整
+    f = m.parse_rule_fields("限制 [依據:人] [since:2026-10-01] [retire:人裁] [until:2027-01-01] [被取代:無 x] "
+                            "[applies:看 [[Systems/甲]] 那段]")
+    check("⑦ 新文法 RULE 的欄位走新解析器,值含 [[連結]] 不截斷", f.get("applies") == "看 [[Systems/甲]] 那段", str(f))
+    print("  ✓ t_slots_single_table")
+
+
+def t_slots_field_parser():
+    """[S8] 欄位解析(第 0 步只給 lint 用;提交時的擋在第 1 步):成對方括號、反引號包值、可重複鍵、白名單外的方括號、
+    全形冒號、行內程式碼、日期格式與未來日期(只在 commit_time 查)、空前綴、撤除條件與作廢的值。
+    翻紅釘:①值的括號計層拿掉 → [[連結]] 那條紅 ②_SLOT_REPEATABLE 清空 → 兩個 [test:] 那條紅
+    ③commit_time 判斷拿掉 → 「推送時不查未來日期」那條紅 ④條件式/列舉/機器式/三選一/recheck/作廢/度量閘任一判斷拿掉 → 對應那條紅"""
+    import datetime as _dt
+    m = _load_lumos_inproc()
+    P, C = m.slot_parse, m.slot_check
+    p = P("取代 [被取代:[[Systems/新]]] [applies:app/[id]/page.tsx] a[0:3] 與 [RFC:9110]")
+    check("成對方括號整段讀進值", dict((k, v) for k, v, _e in p["fields"]) ==
+          {"被取代": "[[Systems/新]]", "applies": "app/[id]/page.tsx"}, str(p))
+    check("白名單外的方括號是正文", p["core"] == "取代 a[0:3] 與 [RFC:9110]", p["core"])
+    check("不成對方括號算寫錯", any("方括號要成對" in x for x in
+          C("PITFALL", 'x [出處:a] [根因:b] [repro:grep -c "\\[test:" f]')), "")
+    check("值用反引號包起來就不數括號", C("PITFALL", 'x [出處:a] [根因:b] [repro:`grep -c "\\[test:" f`]') == [], "")
+    check("可重複的鍵寫兩次照過", C("PITFALL", "x [出處:a] [根因:b] [test:t1] [test:t2]") == [], "")
+    check("其他鍵寫兩次算寫錯", any("寫了兩次" in x for x in C("WHY", "x [出處:a] [出處:b] [因:c]")), "")
+    check("全形冒號與冒號後空白也認得", C("WHY", "x [出處： 2026 對話] [因: y]") == [], "")
+    check("行內程式碼裡的方括號不算欄位", C("WHY", "提到 `[因:]` 的寫法 [出處:a] [因:b]") == [], "")
+    check("欄位寫在句子前面照樣認得", C("RULE", "[依據:人][since:2026-09-01][retire:人裁][until:2027-01-01]要人簽") == [], "")
+    check("冒號後什麼都沒寫的骨架行不查", C("FLOW", "") == [] and C("DEP", "  ") == [], "")
+    check("只有欄位沒有核心一句算缺", any("核心一句" in x for x in C("WHY", "[出處:a] [因:b]")), "")
+    check("日期不是 YYYY-MM-DD 算寫錯", any("YYYY-MM-DD" in x for x in
+          C("FACT", "x [來源:部署] [confirmed:20261001]")), "")
+    today = _dt.date(2026, 10, 1)
+    fut = "x [依據:人] [since:2026-10-03] [retire:人裁] [until:2027-01-01]"
+    check("提交時:晚於今天加一天算寫錯", any("晚於今天" in x for x in C("RULE", fut, today=today, commit_time=True)), "")
+    check("推送與 CI 不查未來日期(CI 跑在 UTC)", C("RULE", fut, today=today) == [], "")
+    check("提交時:明天的日期容忍(台灣凌晨)", C("RULE", fut.replace("10-03", "10-02"), today=today, commit_time=True) == [], "")
+    check("when-symbol 不帶路徑算寫錯", any("帶路徑" in x for x in
+          C("RULE", "x [依據:人] [since:2026-09-01] [retire:when-symbol:foo]")), "")
+    check("度量週數超過 8 算寫錯", any("1 到 8" in x for x in
+          C("RULE", "x [依據:人] [since:2026-09-01] [retire:度量 note-shape.blocked < 3 近26週]")), "")
+    check("度量寫對照過", C("RULE", "x [依據:人] [since:2026-09-01] [retire:度量 note-shape.blocked < 3 近8週]") == [], "")
+    check("[被取代:d3] 認不出是哪篇的", any("單寫 d3" in x for x in
+          C("WHY", "x [出處:a] [因:b] [status:superseded] [被取代:d3]")), "")
+    check("[被取代:節點#dN] 與 [被取代:無 理由] 照過",
+          C("WHY", "x [出處:a] [因:b] [status:superseded] [被取代:Projects/甲_計劃.md#d6]") == []
+          and C("WHY", "x [出處:a] [因:b] [status:superseded] [被取代:無 限制已消失]") == [], "")
+    # 值判斷逐項各一案(代碼審 code-筆記格子第0步 r1 正確性席 C4:原本這幾項拿掉都不會紅)
+    base = "x [依據:人] [since:2026-09-01] "
+    check("條件式:[retire:人裁] 沒有 [until:] 算缺", any("[until:]" in x for x in C("RULE", base + "[retire:人裁]")), "")
+    check("列舉值:[依據:] 不在可選值裡算寫錯", any("只收" in x for x in
+          C("RULE", "x [依據:老闆] [since:2026-09-01] [retire:人裁] [until:2027-01-01]")), "")
+    check("列舉值:[來源:] 不在可選值裡算寫錯", any("只收" in x for x in C("FACT", "x [來源:程式碼] [confirmed:2026-09-01]")), "")
+    check("散文撤除條件算寫錯", any("不是機器式" in x for x in C("RULE", base + "[retire:改用新閘之後撤]")), "")
+    check("PITFALL 三選一都沒有算缺", any("三選一" in x for x in C("PITFALL", "x [出處:a] [根因:b]")), "")
+    check("[recheck:] 寫不成週期要唸", any("recheck" in x for x in
+          C("FACT", "x [來源:部署] [confirmed:2026-09-01] [recheck:每月]")), "")
+    check("作廢沒寫 [被取代:] 要唸", any("[被取代:" in x for x in
+          C("WHY", "x [出處:a] [因:b] [status:superseded]")), "")
+    check("度量的閘不在已知閘清單算寫錯", any("已知閘" in x for x in
+          C("RULE", base + "[retire:度量 no-such-gate.blocked < 3 近8週]")), "")
+    _new = {k: m.slot_is_new(f"x [{k}:v]") for k in m._SLOT_NEW_ONLY}
+    check("每個新文法專屬鍵都讓一行算新文法", all(_new.values()) and len(_new) == 7, str(_new))
+    check("只有舊鍵的行不算新文法", not m.slot_is_new("x [since:2026-09-01] [retire:a] [來源:部署] [test:t]"), "")
+    check("SEE 只放連結與分隔字照過,夾句子算寫錯",
+          C("SEE", "[[A]]、[[B]]｜[[C]]") == [] and C("SEE", "[[A]] 是付款流程") != [], "")
+    print("  ✓ t_slots_field_parser")
+
+
+def t_rule_efficacy_wording_single():
+    """[S1] Projects/筆記標籤_過時判定與按需載入_計劃:紀律範本只有一種 RULE 效力的說法(三欄齊加半年內確認),
+    程式註解跟它一致。翻紅釘:把範本任一處改回「寫齊才有挑戰程式碼的效力」(不提 confirmed/半年)→ 紅。"""
+    root = _repo_root_for_discipline()
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    import re as _re
+    sents = [x for x in _re.split(r"[。\n]", tpl) if "挑戰程式碼的效力" in x]
+    bad = [x for x in sents if not ("[confirmed:]" in x and "半年" in x and "[since:]" in x and "[retire:]" in x)]
+    check("範本每一句講 RULE 效力的都是同一個說法(since/retire/confirmed 齊、半年內確認)",
+          sents and not bad, "\n".join(bad))
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    i = src.index("SINCE_REF_RE = ")
+    check("程式註解跟範本一致", "confirmed" in src[i - 1200:i] and "半年" in src[i - 1200:i], "")
+    print("  ✓ t_rule_efficacy_wording_single")
+
+
+def t_symbol_names_retire_if():
+    """[S2] Projects/筆記標籤_過時判定與按需載入_計劃:摘要前綴表認得 RETIRE-IF,寫進摘要不再被當成打錯字。
+    翻紅釘:從 SYMBOL_NAMES 拿掉 RETIRE-IF → 紅。"""
+    v = mkvault()
+    write(v, "Projects/甲_計劃.md", "type: project\nstatus: doing\nlands_in:\n  - Systems/X\nsummary: |-\n"
+          "  RETIRE-IF: 連續兩個月零觸發就撤\n", body="# 甲\n")
+    r = run(v, "lint", "Projects/甲_計劃")
+    check("RETIRE-IF 不被當成打錯字", "非標準符號行" not in r.stdout, r.stdout)
+    print("  ✓ t_symbol_names_retire_if")
+
+
+def t_rule_superseded_keep_with_replacement():
+    """[S5] Projects/筆記標籤_過時判定與按需載入_計劃:lint 對帶 [status:superseded] 的 RULE 唸「留著並寫 [被取代:]」,
+    不再唸「整行刪掉」;有 [被取代:] 時不唸。decision-add 印出全域編號(被取代要寫 節點路徑#dN)。
+    翻紅釘:superseded 訊息改回「整行刪掉」→ 第 1 條紅;rule_lifecycle_warnings 拿掉 `if not new` 分流 → 第 2 條紅。"""
+    m = _load_lumos_inproc()
+    a = m.rule_lifecycle_warnings("[since:2020-01-01][retire:改用新閘之後撤][status:superseded]舊限制")
+    check("作廢的 RULE 唸留著並寫 [被取代:]", any("[被取代:" in x for x in a) and not any("整行刪掉" in x for x in a), str(a))
+    b = m.rule_lifecycle_warnings("[since:2020-01-01][retire:改用新閘之後撤][status:superseded][被取代:無 不再需要]舊限制")
+    check("有 [被取代:] 就不唸", not any("superseded" in x for x in b), str(b))
+    v = mkvault()
+    write(v, "Systems/D.md", "type: system\nstatus: doing\nsummary: |-\n  WHY:x\n", body="# D\n")
+    r = run(v, "decision-add", "Systems/D", "改用新判法", "--decided", "2026-10-01")
+    check("decision-add 印出全域編號", "Systems/D.md#d1" in r.stdout, r.stdout + r.stderr)
+    print("  ✓ t_rule_superseded_keep_with_replacement")
+
+
+_TAG_HEAD = "提醒:這次提交新寫的摘要行有"
+
+
+def t_rule_lifecycle_warns_at_commit():
+    """[S3] Projects/筆記標籤_過時判定與按需載入_計劃:新寫的 RULE 缺 since 或 retire,提交時印提醒、回傳碼不變;
+    之前就在的舊 RULE 行不提醒。翻紅釘:_note_shape_eval 拿掉 _ns_tag_hints_collect 那行 → ①紅;_ns_rule_hints 不走 slot_check → ③紅。"""
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①新寫的 RULE 缺 since/retire:提交時提醒", _TAG_HEAD in out and "[since:" in out, out[-600:])
+    check("①只提醒:回傳碼不變(rc0)", rc == 0, out[-300:])
+    ev = [e for e in _neg_events(root, "hinted") if e.get("check") == "tag-hints"]
+    check("①記一筆 hinted(check=tag-hints、規則名、行數)", len(ev) == 1 and ev[0].get("rules") == ["W4"]
+          and ev[0].get("lines", 0) >= 1, str(ev))
+    _nh_commit(root, "old rule")
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可", body="正文多一行")
+    _ns_stage(root)
+    rc2, out2 = _ns(root)
+    check("②舊 RULE 行(之前就在)不提醒", _TAG_HEAD not in out2 and rc2 == 0, out2[-400:])
+    # ③範本教的新寫法也要唸(代碼審 code-筆記格子第0步 r1 正確性席 C1:原本新寫法缺鍵一個字都不唸)
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可 [依據:人]\n"
+                           "RULE:舊限制 [依據:人] [since:2026-09-01] [retire:人裁] [until:2027-01-01] [status:superseded]")
+    _ns_stage(root)
+    rc3, out3 = _ns(root)
+    check("③新寫法缺 since/retire:提交時提醒", _TAG_HEAD in out3 and "[since:]" in out3 and "[retire:]" in out3, out3[-600:])
+    check("③格子提醒的字樣跟 lint 同一個前綴", "筆記格子『RULE:』" in out3, out3[-600:])
+    check("③新寫法作廢沒寫 [被取代:]:提交時提醒", "[被取代:" in out3 and rc3 == 0, out3[-600:])
+    print("  ✓ t_rule_lifecycle_warns_at_commit")
+
+
+def t_note_tags_hints_switch():
+    """[S4] note_shape.tag_hints:off 不出提醒、doctor 講一句;壞值照 warn 並講一句;negation=off 時本案提醒照常。
+    翻紅釘:_ns_tag_hints_prepare 不看 off → ①紅;_ns_tag_hints_doctor_lines 不接進 doctor → ②紅。"""
+    m = _load_lumos_inproc()
+    root = _ns_repo(cfg={"note_shape": {"tag_hints": "off"}})
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①tag_hints=off:不出提醒", _TAG_HEAD not in out and rc == 0, out[-400:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("②off 時 doctor 講一句", any("tag_hints=off" in x for x in lines), str(lines))
+    root = _ns_repo(cfg={"note_shape": {"tag_hints": "block"}})
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("③壞值照 warn 並講一句", _TAG_HEAD in out and "看不懂" in out and rc == 0, out[-500:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("③壞值 doctor 也講一句", any("tag_hints" in x for x in lines), str(lines))
+    root = _ns_repo(cfg={"note_shape": {"negation": "off"}})
+    _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("④negation=off 時本案提醒照常", _TAG_HEAD in out, out[-400:])
+    print("  ✓ t_note_tags_hints_switch")
+
+
+def t_note_tags_hints_isolated():
+    """[S7] 本案的提醒出錯只印一句,不影響否定現況句提醒與回傳碼。
+    翻紅釘:拿掉 _ns_tag_hints_collect 的例外防護 → 替身直接炸出測試。"""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    for label, name in (("判定", "rule_lifecycle_warnings"), ("讀設定", "_note_shape_tag_hints_parse")):
+        for with_viol, want_rc in ((False, 0), (True, 1)):
+            root = _ns_repo()
+            _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可",
+                     body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做")
+            _ns_stage(root)
+            rc, out = _neg_inproc(root, **{name: _boom})
+            check(f"{label}丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、否定現況句提醒照常",
+                  rc == want_rc and "筆記前綴提醒這次沒跑完(RuntimeError)" in out and _TAG_HEAD not in out
+                  and _NEG_HEAD in out, out[-600:])
+    print("  ✓ t_note_tags_hints_isolated")
+
+
+def t_doctor_lists_stale_rules():
+    """[S6] doctor 列出有效 RULE 的 [until:] 過期、超過半年沒確認、沒寫 [confirmed:](舊行也列),不計入問題數;
+    superseded 的不列。翻紅釘:拿掉 superseded 那道跳過 → ③紅;warn_soft 改成算問題 → ④紅。"""
+    rules = ("  RULE:[since:2020-01-01][until:2020-06-30][retire:改用新閘之後撤][confirmed:2026-09-30]甲過期\n"
+             "  RULE:[since:2020-01-01][retire:改用新閘之後撤][confirmed:2020-02-01]乙太久沒確認\n"
+             "  RULE:[since:2020-01-01][retire:改用新閘之後撤]丙沒寫確認\n"
+             "  RULE:[since:2020-01-01][retire:改用新閘之後撤][status:superseded]丁已作廢\n")
+    v = mkvault()
+    write(v, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n" + rules, body="# R\n")
+    r = run(v, "doctor")
+    seg = r.stdout.split("[S16]")[1].split("\n[")[0] if "[S16]" in r.stdout else ""
+    check("①列出過期、太久沒確認、沒寫確認", "甲過期" in seg or "已過期" in seg, seg)
+    r_all = run(v, "doctor", "--verbose")
+    seg = r_all.stdout.split("[S16]")[1].split("\n[")[0] if "[S16]" in r_all.stdout else ""
+    check("②三條都在(verbose 全列)", all(x in seg for x in ("已過期", "天沒確認", "沒寫 [confirmed:]")), seg)
+    check("③superseded 的不列", "丁已作廢" not in seg, seg)
+    v2 = mkvault()
+    write(v2, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n  WHY:x [出處:a] [因:b]\n", body="# R\n")
+    r2 = run(v2, "doctor")
+    check("④不計入問題數(rc 跟沒有這些 RULE 時一樣)", r.returncode == r2.returncode, f"{r.returncode} vs {r2.returncode}")
+    # ⑤落治理帳、閘名登記(代碼審 code-筆記格子第0步 r2 正確性席:原本沒有測試釘住)
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    _i = src.index("_KNOWN_GATES = (")
+    check("⑤check-s16 有落治理帳、在已知閘名單裡", '"gate": "check-s16"' in src
+          and '"check-s16"' in src[_i:src.index(")", _i) + 1], "")
+    m = _load_lumos_inproc()
+    import datetime as _dt
+    f = m.parse_rule_fields("[since:2020-01-01][until:2020-06-30][retire:x][confirmed:2020-02-01]甲")
+    check("⑥_rule_stale_keys 判得出到期與太久沒確認", m._rule_stale_keys(f, _dt.date(2026, 10, 1)) == ["until", "confirmed"]
+          and m._rule_stale_keys(m.parse_rule_fields("[confirmed:2026-09-30]乙"), _dt.date(2026, 10, 1)) == [], "")
+    # ⑦一篇一筆事件:同一篇三條過期 RULE 只記一個節點(代碼審 code-筆記格子第0步 r3 正確性席)
+    notes = {"Systems/R.md": m._note_from_text("Systems/R.md", "---\ntype: system\nstatus: doing\nsummary: |-\n" + rules
+                                                + "---\n# R\n", 0),
+             "Systems/Q.md": m._note_from_text("Systems/Q.md", "---\ntype: system\nstatus: doing\nsummary: |-\n"
+                                                "  RULE:[since:2020-01-01][retire:x]戊沒寫確認\n---\n# Q\n", 0)}
+    lines, stems = m._doctor_stale_rules(notes, _dt.date(2026, 10, 1))
+    check("⑦列出四條(三條在 R、一條在 Q),作廢的不列", len(lines) == 4 and not any("丁" in x for x in lines), str(lines))
+    check("⑦記帳的節點一篇一個", stems == ["Q", "R"], str(stems))
+    print("  ✓ t_doctor_lists_stale_rules")
 
 
 def t_refresh_delta():
