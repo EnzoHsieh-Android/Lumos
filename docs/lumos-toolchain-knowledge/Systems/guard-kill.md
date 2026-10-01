@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-09-30
+updated: 2026-10-01
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
 tags:
@@ -31,12 +31,15 @@ summary: |-
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
   WHY:[2026-10-01 [[Projects/併發與效能表態要合約背書_計劃]]]kill-add 多 --covers(驗過的題目 id,只收標了 needs_backing 的題;同一條配方只多帶 covers 就只更新 covers);配方身分改由共用函式 _kill_recipe_key 判(同筆記、invariant、file、old 的 json 序列化雜湊)——kill-add 判重、kill-log 的 recipe_id、寫表態分組三處共用
   WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動任一成立);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
+  WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 本身一行不改,判斷函式重演它的走法 [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
+  PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"
   - "[[Systems/test-profile-multiplatform]]"
   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+  - "[[Projects/殺傷力配方失配提醒_計劃]]"
 aliases:
   - 殺傷力驗證
 decisions:
@@ -64,8 +67,40 @@ about_code:
 
 - `lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--platform P] [--note]`
 - `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree]`
+- `lumos guard kill-rm <node> --id <短身分>`:移除一條配方(短身分是共用身分函式算出的前 12 字元,kill-add 提醒與 doctor P2 逐條列出的修法裡都有;平台根找不到那種整個平台合併成一行的不附;給 8 到 64 個十六進位字元,從頭比對)。
+- kill-add 的 `--file` 從配方平台根**所在 repo 的最上層**算起(guard kill 在那個 repo 開工作樹,實際就是這樣算;平台根是子資料夾時要把子資料夾寫進路徑)。
 - rc（2026-07-29 七態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
 - `lumos gov` 第 5 支 load 撈 kill 留痕；guard list 顯示 `[kill✓]`。
+
+## 配方失配提醒(kill-add 提醒、doctor P2、kill-rm)
+
+設計與三輪審計見 [[Projects/殺傷力配方失配提醒_計劃]]。三處共用 `scripts/lumos` 的 `_kill_recipe_judge`(判一條)與 `_kill_recipe_id`(身分)。
+
+**規定正式路徑**(Enzo 2026-10-01 裁,代碼審第 4 輪後):配方的 `file` 必須是提交裡的正式路徑——`git ls-tree` 列出的寫法、一般檔(不是連結或子模組)、組合寫法、不以冒號開頭(git 還原時會當成特殊語法)、這條路徑與任一層上層不分大小寫與寫法後不跟提交裡別的路徑撞名(macOS 上檢出會互蓋、可能繞連結跑到 repo 外)、Windows 上不含反斜線或冒號。判成正式路徑後讀的是提交裡的內容(`git cat-file blob HEAD:<file>`),不讀工作目錄(代碼審第 5 輪資安席:讀工作目錄會被撞名繞到 .git 或 repo 外)。不是的一律判「不是提交裡的正式路徑」並請人改寫(提交裡有去掉 `./` 與多餘斜線、不分大小寫與寫法後相同的正式路徑就點名;含 `..` 的不建議),★不預測 guard kill 會怎樣★——前四輪代碼審一路模擬它怎麼解析怪路徑,每輪都被抓到修正自己引進的 major。
+
+**正式路徑時,判斷函式跟 guard kill 的對照**(兩邊不分家靠 `t_kill_recipe_check_matches_guard_kill`,一格一格真跑 guard kill):
+
+| 判斷函式的結果 | guard kill 跑到同一條 | 什麼情況 |
+|---|---|---|
+| ok | 套上壞法、還原得回去,照常判殺得掉或沒殺掉 | 原文恰好一次 |
+| hits | drifted「old 命中 N 次」 | 原文 0 次或好幾次 |
+| undecodable | 讀檔時程式出錯、回傳碼 1 | 讀不成 UTF-8 |
+| malformed | error「test 名不合法」或程式出錯 | 不是物件、platform 是清單或物件、test 轉成字串後過不了白名單、file 不是字串或含 NUL(平台與 test 都過了才判);old 不是字串(讀得到檔時)、old 或 new 沒寫、new 不是字串或含寫不成 UTF-8 的替身字元(原文恰好一次時) |
+| path | 不預測 | 不是提交裡的正式路徑 |
+
+**判的順序照 guard kill 走到哪一步**:分平台 → test 名白名單 → file 型別 → 正式路徑 → 讀檔 → 數原文 → 套壞法(new);欄位讀法也照它(old/file/test 沒寫當空字串、test 先轉字串)。
+
+判不了的:設定檔讀不了(壞 JSON、不是物件、`load_platforms` 丟例外)、平台不在設定裡、平台根找不到、不在 git repo 或提交讀不了——kill-add 印一行「沒驗原文」照舊寫入,P2 各自列出(平台根找不到每個平台只列一條)。設定檔讀不了時 P2 照樣逐條走,不用讀設定就判得出的格式不對照列。
+
+**kill-add**:判重之後、寫入成功並放掉鎖之後驗「這次實際寫進去的那一條」(只補 `--covers` 時驗既有那條、用它自己的平台);不是恰好一次就在標準錯誤多印恰好一行(含可直接貼的 kill-rm 修法),標準輸出與回傳碼不變。讀—改—寫整段拿筆記庫寫入鎖;驗原文(要跑 git,每支最多等 10 秒)放在寫入成功、鎖放掉之後(鎖 30 秒沒放會被別人接手)。
+
+**人寫的字怎麼印**:配方的檔名、平台、合約片段印進提醒前一律加引號、跳脫引號與控制字元(類別走共用的 `_PATH_SPECIAL_CATS`);設定檔來的字(平台根、讀不了的原因)、例外訊息、筆記路徑、kill-add 成功行的 test 名與舊 covers、Check T 那段的筆記路徑與平台名也跳脫;可以照貼的修法與 kill-rm 範本裡,帶控制字元的筆記名與欄位改印佔位字(引號擋得住 shell 斷字、擋不住終端把整行蓋掉)——筆記與設定可能來自不可信的提交(代碼審第 1、2 輪資安席)。
+
+**doctor P2**:放在 P 段之後,跳過的節點照 P 段(verification 型、superseded、stale)。用 warn_soft 印(回傳碼不變,一般與 `--strict` 一樣),預設每段最多 3 條、`--verbose`/`--ci` 全列;`--ci` 跑時記 `check-p2` 事件。每條、每篇、整段各自包例外保護。
+
+**kill-rm**:對到零條、對到不同完整身分的多條、短身分太短都擋下回 2;對到的全是同一完整身分(手改造成的重複)一起移除。移除前印每一條的完整內容與 kill-add 範本(原文留給人照現在的程式填);剩下的配方都對不到的 KEY 行拿掉 `[kill:recipes]`;寫後自驗用自己的一支(kill-add 那支遇到格式壞的元素會崩潰)。kill-log 舊紀錄不刪。
+
+**誠實界線**:只驗「原文還找得到、而且只有一處」,不驗套用壞法之後測試還會不會翻紅;讀的是提交(HEAD)裡的內容,跟 guard kill 的工作樹同一份(沒提交的改動不算、檢出時的 eol/smudge/LFS 轉換不涵蓋)——照提醒改寫後先提交,再跑 `lumos guard kill <節點>` 確認。
 
 ## 實作位置
 

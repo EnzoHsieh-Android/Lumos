@@ -21,6 +21,7 @@ summary: |-
   KEY:★COMBO★ 必寫在 invariant marker 之後(末尾);寫在前會讓 INVARIANT_RE 不匹配、整條 invariant 從 Check T/K 雙雙消失
   KEY:★COMBO★ 無 invariant marker = 已知盲區——純 ★COMBO★ 行進不了 extract_contracts、Check K 看不到、誤標靜默忽略(YAGNI 不另掃)
   KEY:本機制不重複 CI——CI 跑測試綠才部署是確定性錨點;Check K 只補「不提醒你漏寫組合情境」這道縫,是摩擦地板非神諭
+  PITFALL:[2026-10-01 殺傷力配方失配提醒代碼審,[[Projects/殺傷力配方失配提醒_計劃]]]設定檔內容讓 load_platforms 丟例外(兩個平台沒寫預設等)時,Check T 原本整支 doctor 崩潰;改成只跳過 test_ref 存在性檢查、收尾不印「都綁了」。同段「平台前綴未定義」「找不到」「不是測試方法」三行的筆記路徑、test 段、設定檔平台名一律跳脫控制字元(筆記與設定可能來自不可信的提交)[test:t_doctor_kill_recipe_drift]
   DEP:scripts/lumos cmd_doctor section("K")｜extract_contracts｜TEST_REF_RE｜_soft_list/warn_soft(沿用 Check S 模板)
   TEST:258 passed(macOS);t_check_k 4 案(綁1提醒/綁2不提醒/無COMBO靜默/F1逗號仍提醒)
   VERIFY:[[Verification/2026-06-23_check-t-sentinel]]

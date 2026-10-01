@@ -33,7 +33,7 @@
 | 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
 | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / drift scan·fix·ack(存量漂移:列出、用工具改掉、表態照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
 | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill / ci-wait / ci-status |
+| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill-rm·kill / ci-wait / ci-status |
 | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
 | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
 | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
