@@ -60853,6 +60853,200 @@ def t_kill_recipe_check_fs_and_git():
     check("kill-add 驗原文時已經放掉寫入鎖", rc == 0 and held == [False], f"{rc} {held}")
 
 
+def _kgk_run(root, v, *a):
+    """跑 lumos guard kill;清掉 PYTHONDONTWRITEBYTECODE(不清的話 Python 不寫編譯快取,原本的誤判重現不了)。"""
+    import subprocess as sp, os
+    e = dict(os.environ)
+    e.pop("PYTHONDONTWRITEBYTECODE", None)
+    e["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
+    return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "guard", "kill", *a], capture_output=True, text=True, cwd=root, env=e)
+
+
+def t_guard_kill_no_stale_build_cache():
+    """[S1][S2] guard kill 每次寫檔(套壞法、還原)前等到新的一秒:同一支 Python 檔兩條壞法改完一樣大,無害的第二條判 survived;
+    改完跟原檔一樣大的傷害壞法判 killed(不吃 baseline 的原檔快取);改 a 再改 b,第二次跑測試看到的 a(還原寫回的)與 b
+    的修改時間都晚於上一次跑測試結束(run_cmd 寫紀錄檔驗,不靠時序)。Projects/殺傷力驗證編譯快取誤判_計劃。"""
+    import json as _json
+    root, v = _mk_kill_env()
+    harmless = _kr_recipe("prod.py", old="def check(n):", new="def check(n): ", test="TestLimitFive")
+    killer = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([killer, harmless]), encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    res = _json.loads(r.stdout.strip().splitlines()[-1])["results"]
+    check("①[S1] 傷害壞法之後、改完一樣大的無害壞法 → survived(不沿用前一條的編譯結果)",
+          [x["verdict"] for x in res] == ["killed", "survived"], str([(x["verdict"], x.get("detail")) for x in res]))
+    root, v = _mk_kill_env()
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 6", test="TestLimitFive")]),
+                                            encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    res = _json.loads(r.stdout.strip().splitlines()[-1])["results"]
+    check("②[S1] 改完跟原檔一樣大的傷害壞法 → killed(不吃 baseline 的原檔快取)", res[0]["verdict"] == "killed", str(res))
+    # [S2] 改 a 再改 b,測試同時 import 兩支;run_cmd 每次跑把 a、b 的修改時間與開始、結束牆鐘寫進紀錄檔
+    root, v = _mk_kill_env()
+    log = root.parent / "mt.log"
+    (root / "a.py").write_text("A = 1\n", encoding="utf-8")
+    (root / "b.py").write_text("B = 1\n", encoding="utf-8")
+    (root / "test_guard.py").write_text(
+        "import os, time, a, b\n"
+        f"LOG = {str(log)!r}\n"
+        "t0 = time.time()\n"
+        "def TestLimitFive():\n    assert a.A == 1 and b.B == 1\n"
+        "TestLimitFive()\n"
+        "time.sleep(1.1)\n"   # 測試跑超過 1 秒:「跑完測試記下結束秒」少了就會讓下一次寫檔落在測試結束那一秒(代碼審第 1 輪測試席)
+        "open(LOG, 'a').write(f'{t0} {os.stat(\"a.py\").st_mtime} {os.stat(\"b.py\").st_mtime} {time.time()}\\n')\n",
+        encoding="utf-8")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("a.py", old="A = 1", new="A = 1  ", test="TestLimitFive"),
+                                                      _kr_recipe("b.py", old="B = 1", new="B = 1  ", test="TestLimitFive")]), encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    rows = [[float(x) for x in ln.split()] for ln in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+    ok = len(rows) == 3 and int(rows[2][1]) > int(rows[1][3]) and int(rows[2][2]) > int(rows[1][3]) \
+        and int(rows[1][1]) > int(rows[0][3])
+    check("③[S2] 每次寫檔(套壞法、還原)的修改時間所在的秒,都晚於上一次跑測試結束的秒(a 還原那一半也驗)", ok,
+          f"{rows} {r.stdout[-300:]} {r.stderr[-300:]}")
+    # ④配方的 file 是工作樹裡的連結:壞法寫進真檔,還原要還原真檔(原本只還原連結,真檔一直壞著,
+    #   同組後面無害的配方被判成強證據的 killed;代碼審第 3 輪正確性、資安席,改動前就有)
+    import os
+    root, v = _mk_kill_env()
+    (root / "other.py").write_text("X = 1\n", encoding="utf-8")
+    os.symlink("prod.py", root / "L.py")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("L.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive"),
+                                                      _kr_recipe("other.py", old="X = 1", new="X = 2", test="TestLimitFive")]),
+                                            encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    res = _json.loads(r.stdout.strip().splitlines()[-1])["results"]
+    check("④file 是連結 → 還原真檔,後面無害的配方判 survived", [x["verdict"] for x in res] == ["killed", "survived"],
+          str([(x["file"], x["verdict"], x.get("detail")) for x in res]))
+
+
+def t_guard_kill_no_future_mtime():
+    """[S3] 綁定測試斷言被改的檔修改時間不晚於現在時,傷不到合約的壞法判 survived(guard kill 不把修改時間設到未來)。"""
+    import json as _json
+    root, v = _mk_kill_env()
+    (root / "prod.py").write_text("LIMIT = 5\n# note\n\ndef check(n):\n    return n <= LIMIT\n", encoding="utf-8")
+    (root / "test_guard.py").write_text(
+        "import os, time, prod\n"
+        "def TestLimitFive():\n"
+        "    assert prod.check(5) and not prod.check(6)\n"
+        "    assert os.stat('prod.py').st_mtime <= time.time() + 0.5\n"
+        "TestLimitFive()\n", encoding="utf-8")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("prod.py", old="# note", new="# NOTE", test="TestLimitFive")]),
+                                            encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    res = _json.loads(r.stdout.strip().splitlines()[-1])["results"]
+    check("①[S3] 傷不到合約的壞法 → survived(修改時間沒被設到未來)", res[0]["verdict"] == "survived", str(res))
+
+
+def t_kill_after_write_retry_no_future():
+    """[S3][S4] 寫後確認的重試分支:讀回沒晚於上一次 → 等 1 秒、把修改時間碰成現在再讀回;錯開了回 True、記進 state;
+    怎樣都錯不開(上一次在遠未來)回 False;兩種都不把修改時間設到未來。"""
+    import time
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp())
+    f = d / "x.py"
+    f.write_text("x\n", encoding="utf-8")
+    w0 = int(f.stat().st_mtime)
+    st = {"w": w0, "r": 0}
+    t0 = time.time()
+    ok = m._kill_after_write(str(f), st)
+    check("①讀回跟上一次同一秒 → 等、碰成現在、錯開後回 True、記進 state", ok is True and st["w"] > w0
+          and int(f.stat().st_mtime) > int(t0) - 1 and f.stat().st_mtime <= time.time() + 0.5, f"{ok} {st} {f.stat().st_mtime} {t0}")
+    st2 = {"w": int(time.time()) + 100, "r": 0}
+    ok2 = m._kill_after_write(str(f), st2)
+    check("②上一次在遠未來 → 重試後回 False、修改時間沒被設到未來", ok2 is False and f.stat().st_mtime <= time.time() + 0.5,
+          f"{ok2} {f.stat().st_mtime}")
+
+
+def t_guard_kill_mtime_unsure_is_weak():
+    """[S4] 寫後確認一直失敗:標準錯誤整次只印一行提醒、照常跑完;--json 與 kill-log 的 weak 為 true、--json 沒有旁路欄。"""
+    import contextlib, io, json as _json
+    m = _load_lumos_inproc()
+    root, v = _mk_kill_env()
+    # 測試指令帶 {method}(不是整套一起跑),否則 weak 本來就是 true,驗不出「時間沒錯開」有沒有算進去
+    (root / ".lumos" / "config.json").write_text('{"test": {"run_cmd": "python3 test_guard.py {method}"}}', encoding="utf-8")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive"),
+                                                      _kr_recipe("prod.py", old="def check(n):", new="def check(n): ", test="TestLimitFive")]),
+                                            encoding="utf-8")
+    _kr_commit(root)
+    orig = m._kill_after_write
+    m._kill_after_write = lambda path, state: False
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            m.cmd_guard_kill(m.Env(v), "Systems/Limit", as_json=True)
+    finally:
+        m._kill_after_write = orig
+    res = _json.loads(out.getvalue().strip().splitlines()[-1])["results"]
+    check("①weak 為 true、--json 沒有旁路欄", len(res) == 2 and all(x.get("weak") is True and "_mtime_unsure" not in x for x in res),
+          str(res))
+    check("②標準錯誤整次只印一行提醒", err.getvalue().count("修改時間沒能跟上一次錯開") == 1, err.getvalue())
+    rows = _kill_log_rows_of(v)
+    check("③kill-log 也記成弱證據", rows and all(x.get("weak") is True for x in rows[-2:]), str(rows[-2:]))
+    # ④只有第一條「還原」那次沒錯開(改的是 a.py),之後兩條改的是 b.py:a.py 一直沒被成功重寫,
+    #   後面每一條的測試都可能 import 到它的舊快取,三條都記弱證據(代碼審第 1、2 輪正確性席)
+    root, v = _mk_kill_env()
+    (root / ".lumos" / "config.json").write_text('{"test": {"run_cmd": "python3 test_guard.py {method}"}}', encoding="utf-8")
+    (root / "a.py").write_text("A = 1\n", encoding="utf-8")
+    (root / "b.py").write_text("B = 1\nC = 2\n", encoding="utf-8")
+    (root / "test_guard.py").write_text("import a, b\ndef TestLimitFive():\n    assert a.A == 1\nTestLimitFive()\n", encoding="utf-8")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("a.py", old="A = 1", new="A = 2", test="TestLimitFive"),
+                                                      _kr_recipe("b.py", old="B = 1", new="B = 1 ", test="TestLimitFive"),
+                                                      _kr_recipe("b.py", old="C = 2", new="C = 2 ", test="TestLimitFive")]),
+                                            encoding="utf-8")
+    _kr_commit(root)
+    calls = []
+
+    def second_fails(path, state):
+        calls.append(path)
+        return orig(path, state) if len(calls) != 2 else False   # 呼叫順序:第一條寫、第一條還原、第二條寫、第二條還原
+    m._kill_after_write = second_fails
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            m.cmd_guard_kill(m.Env(v), "Systems/Limit", as_json=True)
+    finally:
+        m._kill_after_write = orig
+    res = _json.loads(out.getvalue().strip().splitlines()[-1])["results"]
+    check("④第一條還原沒錯開(a.py 之後沒被重寫)→ 三條都記弱證據", len(res) == 3 and all(x.get("weak") is True for x in res), str(res))
+
+    def run_with(recipes, fail_at):
+        root, v = _mk_kill_env()
+        (root / ".lumos" / "config.json").write_text('{"test": {"run_cmd": "python3 test_guard.py {method}"}}', encoding="utf-8")
+        (root / "a.py").write_text("A = 1\nA2 = 1\n", encoding="utf-8")
+        (root / "b.py").write_text("B = 1\n", encoding="utf-8")
+        (root / "test_guard.py").write_text("import a, b\ndef TestLimitFive():\n    assert a.A == 1\nTestLimitFive()\n", encoding="utf-8")
+        (v / "Systems" / "Limit.md").write_text(_kr_note(recipes), encoding="utf-8")
+        _kr_commit(root)
+        n = []
+
+        def fails(path, state):
+            n.append(path)
+            return orig(path, state) if len(n) != fail_at else False
+        m._kill_after_write = fails
+        o = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(o), contextlib.redirect_stderr(io.StringIO()):
+                m.cmd_guard_kill(m.Env(v), "Systems/Limit", as_json=True)
+        finally:
+            m._kill_after_write = orig
+        return _json.loads(o.getvalue().strip().splitlines()[-1])["results"]
+    # ⑤第一條還原沒錯開,第二條把同一支 a.py 重寫成功 → 清單移出,第二條不記弱證據
+    res = run_with([_kr_recipe("a.py", old="A = 1", new="A = 2", test="TestLimitFive"),
+                    _kr_recipe("a.py", old="A2 = 1", new="A2 = 1 ", test="TestLimitFive")], 2)
+    check("⑤同一支檔之後重寫成功 → 移出清單,那一條不記弱證據", [x.get("weak") for x in res] == [True, False], str(res))
+    # ⑥第一條還原沒錯開時,第二條用另一個測試指令、在那時跑了 baseline;a.py 之後重寫成功、清單清空,
+    #   第三條沿用那份 baseline 仍要記弱證據(代碼審第 3 輪正確性席)
+    res = run_with([_kr_recipe("a.py", old="A = 1", new="A = 2", test="TestLimitFive"),
+                    _kr_recipe("a.py", old="A2 = 1", new="A2 = 1 ", test="TestOther"),
+                    _kr_recipe("b.py", old="B = 1", new="B = 1 ", test="TestOther")], 2)
+    check("⑥沿用「還有檔沒錯開」時跑的 baseline → 記弱證據", len(res) == 3 and res[1].get("weak") is True and res[2].get("weak") is True,
+          str([(x["file"], x.get("test"), x["verdict"], x.get("weak")) for x in res]))
+
+
 def t_guard_kill_rm_lists_ids():
     """[S2] kill-rm 不帶 --id:唯讀列出那篇每條配方的短身分(前 12 字元,同 P2 與 kill-add 提醒)、合約片段、檔、原文開頭、
     test、平台;格式壞的也列、不崩潰,身分可拿去 --id 移除;重複的合一行;沒配方印一句;控制字元不原樣印;

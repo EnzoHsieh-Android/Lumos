@@ -30,7 +30,7 @@ summary: |-
   WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 3 節]settle 找不到某種預告句時的提醒改成「找不到<名稱>——可能已經是轉正後的說法(不用改),或被手改過(看一下)」:rtb 用 drift fix --kind c1 修時,已經手改成轉正說法的句子被講得像出錯。不區分兩種情形(前兩版要工具自己辨認轉正後的說法,設計審 r2 整類拿掉),由人看;drift fix c1 的結果訊息接同一支函式的同一句,不改判定與回傳值 [test:t_drift_fix_c1_missing_message]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
   WHY:[2026-10-01 [[Projects/併發與效能表態要合約背書_計劃]]]kill-add 多 --covers(驗過的題目 id,只收標了 needs_backing 的題;同一條配方只多帶 covers 就只更新 covers);配方身分改由共用函式 _kill_recipe_key 判(同筆記、invariant、file、old 的 json 序列化雜湊)——kill-add 判重、kill-log 的 recipe_id、寫表態分組三處共用
-  WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動任一成立);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
+  WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動、寫檔後修改時間沒能錯開任一成立;最後一項 2026-10-02 加,見 [[Projects/殺傷力驗證編譯快取誤判_計劃]]);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
   WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 本身一行不改,判斷函式重演它的走法 [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
   PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
 related:
@@ -69,8 +69,10 @@ about_code:
 - `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree]`
 - `lumos guard kill-rm <node> --id <短身分>`:移除一條配方(短身分是共用身分函式算出的前 12 字元,kill-add 提醒與 doctor P2 逐條列出的修法裡都有、guard kill 每條結果行 `id=` 也有;平台根找不到那種整個平台合併成一行的不附;給 8 到 64 個十六進位字元,從頭比對)。不帶 `--id` → 唯讀列出這篇每條配方的短身分、合約片段、檔、原文前 30 字、test、平台(原文對得上的也列;[[Projects/殺傷力配方修補體驗_計劃]])。
 - kill-add 的 `--file` 從配方平台根**所在 repo 的最上層**算起(guard kill 在那個 repo 開工作樹,實際就是這樣算;平台根是子資料夾時要把子資料夾寫進路徑)。
+- guard kill 每次寫檔(套壞法、還原)之前,等到跟同一組上一次寫檔、上一次跑測試結束都不同秒(最多等 3 秒),寫完讀回修改時間確認錯開(只到 2 秒的檔案系統會再碰一次,最多 3 次;還是不行就把那條結果記成弱證據、標準錯誤整次印一行)。理由:測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),同一秒寫出同大小的檔會沿用上一次的編譯結果,誤判雙向——無害壞法被判 killed、傷害壞法被判 survived。不把時間設到未來(綁定測試拿修改時間跟現在比時會造出新的假 killed)。代價每條配方多約 1.4–1.9 秒([[Projects/殺傷力驗證編譯快取誤判_計劃]])。還原沒錯開的檔在被成功重寫之前、以及在那期間跑出來的 baseline,同組後面沿用到的結果都記弱證據。
+- 還原(`git checkout`)用的是解開連結後實際被改的那支檔、照字面認路徑(`:(literal)`);原本用配方寫的字串,`file` 是連結時只還原連結本身、真檔一直壞著,同組後面的配方被判成強證據的 killed(2026-10-02 代碼審第 3 輪抓到,改動前就有)。
 - guard kill 人讀輸出每條結果行在判定之後附 `id=<短身分>`(放在人寫的合約片段與 test 名前面,偽造的 id 只會出現在真的後面);`--json` 不變(旁路欄 `_rid` 與 `_logged` 一起濾掉,既有 `recipe_id` 照舊)。
-- rc（2026-07-29 七態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
+- rc（2026-07-29 七態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**(這裡的弱證據指這兩種判定;`weak` 欄是另一件事,不影響 rc——修改時間沒錯開只讓 `weak` 為 true)（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
 - `lumos gov` 第 5 支 load 撈 kill 留痕；guard list 顯示 `[kill✓]`。
 
 ## 配方失配提醒(kill-add 提醒、doctor P2、kill-rm)

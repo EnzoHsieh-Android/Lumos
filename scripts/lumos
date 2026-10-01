@@ -14010,6 +14010,37 @@ def _kill_run(cmd, cwd, timeout, keep_re=None):
 _KILL_OUT_CAP = 256 * 1024
 
 
+def _kill_wait_new_second(state):
+    """guard kill 寫檔(套壞法、還原)之前:等到現在跟同一組上一次寫檔、上一次跑測試結束都不同秒,最多等 3 秒
+    (時鐘往回撥時不空轉)。測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),
+    同一秒寫出同大小的檔會沿用上一次的編譯結果(Projects/殺傷力驗證編譯快取誤判_計劃)。"""
+    deadline = time.time() + 3.0
+    while int(time.time()) <= max(state["w"], state["r"]) and time.time() < deadline:
+        time.sleep(0.05)
+
+
+def _kill_after_write(path, state):
+    """寫檔之後讀回修改時間:晚於上一次寫檔與上一次測試結束(取大者)就記進 state["w"]、回 True;
+    否則等 1 秒、把修改時間碰成現在(不設未來時間)再讀回,最多 3 次(只到 2 秒的檔案系統,例:FAT);都不行回 False。"""
+    floor = max(state["w"], state["r"])
+    for i in range(4):
+        try:
+            mt = int(os.stat(path).st_mtime)
+        except OSError:
+            return False
+        if mt > floor:
+            state["w"] = mt
+            return True
+        if i == 3:
+            return False
+        time.sleep(1.0)
+        try:
+            os.utime(path)
+        except OSError:
+            return False
+    return False
+
+
 def _kill_cap(txt, keep_re=None):
     """[S3 oracle品質包] 保留完整輸出供歸因(上限 256KB;超限取頭尾各半、對齊換行邊界
     並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。
@@ -14128,6 +14159,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     # 每條配方先帶上 kill-rm 認得的短身分(用原配方算;Projects/殺傷力配方修補體驗_計劃):
     # 後面 9 個組結果的地方 {**r, …} 自然帶上,人讀輸出印 id=,--json 前濾掉
     recipes = [{**r, "_rid": _kill_recipe_id(str(rel), r)} if isinstance(r, dict) else r for r in recipes]
+    mt_warned = [False]   # 修改時間沒錯開的提醒整次只印一次
     # 依 platform 分組(每平台一個 worktree + baseline per test)
     groups = {}
     for r in recipes:
@@ -14181,6 +14213,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             wt_ok = True
             wt_real = os.path.realpath(wt)
             baselines = {}
+            # 上一次寫檔讀回的秒、上一次跑測試結束的秒;unsure=還原後修改時間沒錯開、之後也還沒成功重寫的檔(編譯快取誤判_計劃)
+            mstate = {"w": 0, "r": 0, "unsure": set()}
             for r in plist:
                 method = _kill_method_name(r.get("test", ""), pdata.get("multiplatform"))   # 去平台前綴、Kotlin 反引號拆殼後進白名單
                 if not _KILL_METHOD_OK_RE.fullmatch(method or ""):
@@ -14191,8 +14225,10 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 note_ws = "" if "{method}" in run_cmd else " whole-suite"
                 if cmd not in baselines:
                     b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, wt, max(600.0, floor))
-                    baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to)
-                b_rc, b_tail, b_elapsed, b_to = baselines[cmd]
+                    mstate["r"] = int(time.time())   # 每個測試指令的 baseline 都記(夾在配方之間)
+                    # 跑 baseline 時還有還原沒錯開的檔:這份 baseline 可能吃到舊快取,之後沿用它的配方都記弱證據(代碼審第 3 輪正確性席)
+                    baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to, bool(mstate["unsure"]))
+                b_rc, b_tail, b_elapsed, b_to, b_unsure = baselines[cmd]
                 if b_to or b_rc != 0:
                     results.append({**r, "platform": plat, "verdict": "abort",
                                     "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:]})
@@ -14215,16 +14251,32 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                     results.append({**r, "platform": plat, "verdict": "drifted",
                                     "detail": f"old 命中 {cnt} 次(需恰 1——配方漂移,重寫)"})
                     continue
+                _kill_wait_new_second(mstate)
                 with open(target, "w", encoding="utf-8") as _tf:
                     _tf.write(src.replace(r["old"], r["new"], 1))
+                # 有還原沒錯開的檔還沒被成功重寫:之後每一條測試都可能 import 到它的舊快取,一律算進來(代碼審第 1、2 輪正確性席)
+                mt_ok = _kill_after_write(target, mstate)
+                if mt_ok:
+                    mstate["unsure"].discard(target)
+                mt_ok = mt_ok and not mstate["unsure"] and not b_unsure
                 m_timeout = max(b_elapsed * 5, floor)
                 m_rc, m_tail, _me, m_to = _kill_run(cmd, wt, m_timeout)
-                rv = subprocess.run(["git", "-C", wt, "checkout", "--", r.get("file", "")],
+                mstate["r"] = int(time.time())
+                # 還原前也要等:測試跑得快時,還原寫回的檔可能跟壞法同一秒、同大小,下一條改別的檔、測試卻 import 這支時會吃到壞法的快取
+                _kill_wait_new_second(mstate)
+                # 還原解開連結後實際被改的那支檔(照字面認路徑):原本用配方寫的字串,file 是連結時只還原連結本身、
+                # 真檔一直停在壞法,同組後面的配方被判成強證據的 killed(代碼審第 3 輪正確性、資安席;改動前就有)
+                rv = subprocess.run(["git", "-C", wt, "checkout", "--", ":(literal)" + os.path.relpath(target, wt_real)],
                                     capture_output=True)
                 if rv.returncode != 0:
                     results.append({**r, "platform": plat, "verdict": "error",
                                     "detail": "revert 失敗——後續同組配方作廢防污染"})
                     break   # 樹已髒,本組終止(worktree 在 finally 清)
+                if _kill_after_write(target, mstate):
+                    mstate["unsure"].discard(target)
+                else:
+                    mt_ok = False
+                    mstate["unsure"].add(target)   # 還原沒錯開:這支檔重寫成功之前,這一組後面每一條都記弱證據
                 attr_excerpt = ""
                 if m_to:
                     # [S3] timeout 降弱證據(不再計 killed):掛掉可能是環境非變異
@@ -14235,6 +14287,13 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 else:
                     verdict = "survived"
                 res = {**r, "platform": plat, "verdict": verdict}
+                if not mt_ok:
+                    # 修改時間沒能跟上一次錯開:可能吃到舊的編譯結果——弱證據(收尾重算 weak 時算進去,迴圈裡直接設會被蓋掉)
+                    res["_mtime_unsure"] = True
+                    if not mt_warned[0]:
+                        mt_warned[0] = True
+                        print("⚠ 有配方寫檔後修改時間沒能跟上一次錯開(檔案系統時間精度太粗或時鐘異常),結果可能吃到舊的編譯快取,"
+                              "這些結果記成弱證據", file=sys.stderr)
                 if attr_excerpt:
                     res["attr_excerpt"] = attr_excerpt
                 if verdict == "killed_unattributed":
@@ -14267,7 +14326,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             res.setdefault("head_sha", mk["head"])
             res["recipe_id"] = _kill_recipe_key(str(rel), res.get("invariant"), res.get("file"), res.get("old"))
             res["covers"] = [c for c in (res.get("covers") or []) if isinstance(c, str)]
-            res["weak"] = bool(mk["ws"] or mk["flaky"] or node_dirty)
+            res["weak"] = bool(mk["ws"] or mk["flaky"] or node_dirty or res.get("_mtime_unsure"))
     # 留痕(docs/.kill-log.jsonl,gov 第 5 支 load 撈)——迴圈外:add 失敗 continue 的 error 也要進帳
     if True:
         log = env.vault.parent / ".kill-log.jsonl"
@@ -14294,7 +14353,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                                     ensure_ascii=False) + "\n")
     verdicts = [r["verdict"] for r in results]
     if as_json:
-        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid")}
+        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid", "_mtime_unsure")}
                                       for r in results]}, ensure_ascii=False))
     else:
         # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
