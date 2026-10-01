@@ -30257,6 +30257,23 @@ def t_symbol_vocab_single_source_and_reach():
     print("  ✓ t_symbol_vocab_single_source_and_reach")
 
 
+def t_slots_see_prefix_and_links():
+    """[S14] Projects/筆記格子寫法與過期檢查_計劃:SEE 進摘要前綴表;算計劃連結的程式也讀 SEE 行。
+    翻紅釘:①從 SYMBOL_NAMES 拿掉 SEE → 第 1、2 條紅 ②_plan_system_links 只認 DEP: → 第 3 條紅"""
+    m = _load_lumos_inproc()
+    check("SEE 在詞彙表裡", "SEE" in m.SYMBOL_NAMES, str(sorted(m.SYMBOL_NAMES)))
+    R = m.SYMBOLISH_RE
+    check("SEE: 不被 lint 當成打錯字", R.match("SEE:[[Systems/a]]").group(1) in m.SYMBOL_NAMES, "")
+    text = ("---\ntype: project\nstatus: doing\nsummary: |-\n"
+            "  SEE:[[Systems/甲]]、[[Systems/乙|別名]]\n"
+            "  DEP:[[Systems/丙]]\n"
+            "  WHY:提到 [[Systems/丁]] 不算連到\n---\n# x\n")
+    n = m._note_from_text("Projects/x_計劃.md", text, 0)
+    got = m._plan_system_links(n)
+    check("★SEE 行的連結算進計劃連到的節點★", got == ["Systems/甲", "Systems/乙", "Systems/丙"], str(got))
+    print("  ✓ t_slots_see_prefix_and_links")
+
+
 def t_refresh_delta():
     """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
     _need_src("governance/eval")
