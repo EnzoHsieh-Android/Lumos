@@ -108,7 +108,9 @@ Some sentences go stale easily: “there is no refund page yet” becomes wrong 
 
 **Third check: find outdated statements before pushing.** Deleted functions or renamed files still mentioned by their old names or paths only trigger warnings. Pushes are blocked if a rule's test exists but its note still says “test to be added,” a linked note was deleted, or a revisit condition is met. Code changes without note updates and broken note links always block; projects can set other blocking checks to warn instead.
 
-<p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push; each check is labelled as a block or warning" width="760"></a></p>
+One more pre-push check only warns. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the tool reminds you to give the change and the whole note to AI, which points out the lines that are no longer true.
+
+<p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push, plus a reminder to have AI reread notes changed with the code; each check is labelled as a block or warning" width="760"></a></p>
 
 ## How the toolkit keeps improving (evals)
 
