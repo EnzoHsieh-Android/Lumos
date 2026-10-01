@@ -21,27 +21,6 @@ Lumos keeps that context in the project. With Claude Code or Codex, it requires 
 
 The toolset is small: a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes.
 
-## What it looks like
-
-If AI changes the refund logic and commits without writing notes, it receives this message (real output, excerpted and translated from Chinese):
-
-```text
-$ git commit -m "feat: check whether an order was already refunded"
-
-Blocked: this commit changes code, but not a single knowledge note was touched.
-…
-Code changed in this commit (1):
-   • src/payment.py
-…
-Pick one of two paths:
-   1. Update the notes that should change, add them to the commit, and commit again.
-   2. This really needs no note change (typo, formatting, comments, work in progress) → skip this check:
-        git commit --no-verify -m '<message>'
-      Skipping is recorded; it is not a silent pass.
-```
-
-The message is for AI: its instructions require it to update the notes and retry. If no update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. You mainly decide business trade-offs and whether to accept a risk.
-
 ## How it works
 
 <p align="center">
@@ -111,6 +90,27 @@ Some sentences go stale easily: “there is no refund page yet” becomes wrong 
 One more pre-push check only warns. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the tool reminds you to give the change and the whole note to AI, which points out the lines that are no longer true.
 
 <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences, note maintenance checked at commit, and outdated references, broken links and revisit conditions that have come true checked before push, plus a reminder to have AI reread notes changed with the code; each check is labelled as a block or warning" width="760"></a></p>
+
+## What it looks like
+
+Take the commit check as an example. If AI changes the refund logic and commits without writing notes, it receives this message (real output, excerpted and translated from Chinese):
+
+```text
+$ git commit -m "feat: check whether an order was already refunded"
+
+Blocked: this commit changes code, but not a single knowledge note was touched.
+…
+Code changed in this commit (1):
+   • src/payment.py
+…
+Pick one of two paths:
+   1. Update the notes that should change, add them to the commit, and commit again.
+   2. This really needs no note change (typo, formatting, comments, work in progress) → skip this check:
+        git commit --no-verify -m '<message>'
+      Skipping is recorded; it is not a silent pass.
+```
+
+The message is for AI: its instructions require it to update the notes and retry. If no update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. You mainly decide business trade-offs and whether to accept a risk.
 
 ## How the toolkit keeps improving (evals)
 
