@@ -30591,6 +30591,451 @@ def t_doctor_lists_stale_rules():
     print("  ✓ t_doctor_lists_stale_rules")
 
 
+_SLOT_HEAD = "筆記格子缺漏"
+
+
+def _slot_try(summary, root=None, args=("--staged", "--slots"), cfg=None):
+    """暫存一篇摘要是 summary 的筆記,跑 note-shape → (rc, 輸出, root)。"""
+    root = root or _ns_repo(cfg=cfg)
+    _ns_note(root, summary="KEY:x\n" + summary)
+    _ns_stage(root)
+    rc, out = _ns(root, *args)
+    return rc, out, root
+
+
+def t_slots_why_required():
+    """[S1] 新寫的 WHY 缺 [出處:] 或 [因:]、或只有欄位沒有核心一句,提交時擋並印範本;欄位寫在句子前面照樣認得;
+    骨架空行不擋。翻紅釘:cmd_note_shape 不把格子違規交給 _note_shape_report → ①紅。"""
+    rc, out, _r = _slot_try("WHY:改用逐行判定 [出處:2026-09-01 審查]")
+    check("①缺 [因:] 擋下並印範本", rc == 1 and _SLOT_HEAD in out and "[因:]" in out and "範本:WHY:改用逐行判定" in out, out[-700:])
+    rc, out, _r = _slot_try("WHY:[出處:a] [因:b]")
+    check("②只有欄位沒有核心一句擋下", rc == 1 and "核心一句" in out, out[-500:])
+    rc, out, _r = _slot_try("WHY:[出處:2026-09-01 審查][因:整篇判太粗]改用逐行判定")
+    check("③欄位寫在句子前面照樣過", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    rc, out, _r = _slot_try("WHY:\nRULE:\nFLOW:\nDEP:")
+    check("④骨架空行不擋", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    print("  ✓ t_slots_why_required")
+
+
+def t_slots_rule_required():
+    """[S2] 新寫的 RULE 缺依據/since、retire 不是機器式、人裁沒 until、when-* 值文法錯(含沒帶路徑)、度量越界,提交時擋。
+    翻紅釘:_ns_slot_line_problems 改成不呼叫 slot_check → 全紅。"""
+    ok = "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-file:src/a.py]"
+    rc, out, _r = _slot_try(ok)
+    check("①寫齊照過", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    for label, line, want in (
+            ("缺依據", "RULE:要人簽 [since:2026-09-01] [retire:人裁] [until:2027-01-01]", "[依據:]"),
+            ("散文撤除條件", "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:改用新閘之後撤]", "不是機器式"),
+            ("人裁沒 until", "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:人裁]", "[until:]"),
+            ("符號沒帶路徑", "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-symbol:foo]", "帶路徑"),
+            ("度量越界", "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:度量 note-shape.blocked < 3 近26週]", "1 到 8")):
+        rc, out, _r = _slot_try(line)
+        check(f"②{label}:擋下", rc == 1 and want in out, out[-500:])
+    print("  ✓ t_slots_rule_required")
+
+
+def t_slots_pitfall_required():
+    """[S3] 新寫的 PITFALL 缺出處、根因或防回歸(三選一),提交時擋。"""
+    rc, out, _r = _slot_try("PITFALL:空清單靜默成功 [出處:2026-09-30 事故] [根因:沒判空]")
+    check("①三選一都沒有擋下", rc == 1 and "三選一" in out, out[-500:])
+    rc, out, _r = _slot_try("PITFALL:空清單靜默成功 [出處:2026-09-30 事故] [根因:沒判空] [防回歸:無 純設定錯]")
+    check("②[防回歸:無 理由] 照過", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    print("  ✓ t_slots_pitfall_required")
+
+
+def t_slots_fact_required():
+    """[S4] FACT/FLOW/DEP 缺來源或 confirmed 擋;只放連結的新寫 DEP/FLOW 擋並提示改 SEE;SEE 夾字擋、只有連結與分隔字過。"""
+    rc, out, _r = _slot_try("FACT:上限 200 [來源:部署] [recheck:30天]")
+    check("①缺 [confirmed:] 擋下", rc == 1 and "[confirmed:]" in out, out[-500:])
+    rc, out, _r = _slot_try("DEP:[[Systems/甲]]")
+    check("②只放連結的新寫 DEP 擋下並提示 SEE", rc == 1 and "改寫成 SEE" in out, out[-500:])
+    rc, out, _r = _slot_try("SEE:[[Systems/甲]]、[[Systems/乙]]")
+    check("③SEE 只有連結與分隔字照過", rc == 0, out[-500:])
+    rc, out, _r = _slot_try("SEE:Redis 上限 200")
+    check("④SEE 夾字擋下", rc == 1, out[-500:])
+    print("  ✓ t_slots_fact_required")
+
+
+def t_slots_superseded_needs_replacement():
+    """[S5] 新寫或這次才加上 [status:superseded] 卻沒 [被取代:] 擋;[被取代:d3] 算寫錯;[被取代:無 理由] 過。
+    翻紅釘:_ns_slot_line_problems 拿掉「這次才加上作廢」那段 → ②紅(舊行豁免吃掉作廢)。"""
+    base = "WHY:改用逐行判定 [出處:2026-09-01 審查] [因:整篇判太粗]"
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\n" + base)
+    _nh_commit(root, "old why")
+    rc, out, _r = _slot_try(base + " [status:superseded]", root=root)
+    check("①舊行這次才加作廢、沒寫 [被取代:]:擋下", rc == 1 and "[被取代:" in out, out[-500:])
+    _ns_reset(root)
+    rc, out, _r = _slot_try(base + " [status:superseded] [被取代:d3]", root=root)
+    check("②[被取代:d3] 算寫錯", rc == 1 and "單寫 d3" in out, out[-500:])
+    _ns_reset(root)
+    rc, out, _r = _slot_try(base + " [status:superseded] [被取代:無 限制已消失]", root=root)
+    check("③[被取代:無 理由] 照過", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    print("  ✓ t_slots_superseded_needs_replacement")
+
+
+def t_slots_edited_old_line():
+    """[S6] 只改欄位的舊行不套必有鍵(提交對 HEAD、推送對起點;同次刪掉的別篇行也算);補連結算舊行;核心一句改了算新寫。
+    翻紅釘:_ns_slot_line_problems 拿掉 old_keys 判斷 → ①③④紅。"""
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nWHY:[2026-09-21 Enzo 裁]改成程式碼為主\nDEP:[[Systems/甲]]")
+    _nh_commit(root, "old lines")
+    rc, out, _r = _slot_try("WHY:[2026-09-21 Enzo 裁]改成程式碼為主 [applies:scripts/lumos]\nDEP:[[Systems/甲]]", root=root)
+    check("①舊 WHY 只補欄位不擋", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    _ns_reset(root)
+    rc, out, _r = _slot_try("WHY:[2026-09-21 Enzo 裁]改成程式碼為主,而且只寫脈絡\nDEP:[[Systems/甲]]", root=root)
+    check("②核心一句改了算新寫:擋下", rc == 1 and _SLOT_HEAD in out, out[-500:])
+    _ns_reset(root)
+    rc, out, _r = _slot_try("WHY:[2026-09-21 Enzo 裁]改成程式碼為主\nDEP:[[Systems/甲]]、[[Systems/乙]]", root=root)
+    check("③只放連結的舊 DEP 補一個連結算舊行", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    _ns_reset(root)
+    # ④跨篇搬移:A 刪掉、B 新寫同一句
+    _ns_note(root, summary="KEY:x\nDEP:[[Systems/甲]]")
+    _nh_node(root, "B", summary="KEY:y\nWHY:[2026-09-21 Enzo 裁]改成程式碼為主")
+    _ns_stage(root)
+    rc, out = _ns(root, "--staged", "--slots")
+    check("④同次提交從別篇搬來的舊行不擋", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    print("  ✓ t_slots_edited_old_line")
+
+
+def t_slots_own_golive():
+    """[S7] 掛鉤沒帶 --slots 提交時不跑;歷史裡找不到格子記號推送不跑;記號出現之前的提交不查、之後的查;
+    原本的筆記形狀規則照舊;掛鉤範本裡格子記號最多一次而且在呼叫行。
+    翻紅釘:推送時「上線前的提交不查」有兩道:violations 裡的上線後過濾、舊行收進「格子還沒上線的提交寫的行」;
+    兩道一起拿掉 → ③紅(只拿一道不會紅,另一道還擋著)。"""
+    rc, out, _r = _slot_try("WHY:缺格子的一句", args=("--staged",))
+    check("①沒帶 --slots:不跑格子", rc == 0 and _SLOT_HEAD not in out, out[-400:])
+    root = _ns_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, summary="KEY:x\nWHY:上線前寫的缺格子句")
+    _nh_commit(root, "before slots golive")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{base}..{tip}")
+    check("②歷史裡沒有格子記號:推送不跑格子", rc == 0 and _SLOT_HEAD not in out, out[-400:])
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" \"$REPO_ROOT/scripts/lumos\" note-shape --staged --slots --repo x\n")
+    _nh_commit(root, "slots golive")
+    _ns_note(root, summary="KEY:x\nWHY:上線前寫的缺格子句\nWHY:上線後新寫的缺格子句")
+    _nh_commit(root, "after slots golive")
+    tip2 = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{base}..{tip2}")
+    check("③記號之後新寫的查、之前寫的不查", rc == 1 and "上線後新寫" in out and "上線前寫的" not in out, out[-600:])
+    rc, out, _r = _slot_try("WHY:乾淨 [出處:a] [因:b]", args=("--staged", "--slots"))
+    _ns_note(_r, body="新寫 `src/a.py:5`", summary="KEY:x")
+    _ns_stage(_r)
+    rc, out = _ns(_r, "--staged", "--slots")
+    check("④原本的規則照舊(行號引用照擋)", rc == 1 and "程式行號引用" in out, out[-400:])
+    hook = (Path(GRAPHCTL).parent / "hooks" / "pre-commit").read_text(encoding="utf-8")
+    m = _load_lumos_inproc()
+    hits = [ln for ln in hook.splitlines() if m._SLOTS_GOLIVE_MARK in ln]
+    check("⑤掛鉤範本裡格子記號最多一次,而且不在註解", len(hits) <= 1 and all(not h.lstrip().startswith("#") for h in hits), str(hits))
+    print("  ✓ t_slots_own_golive")
+
+
+def t_slots_switch():
+    """[S9] 總開關 off 不查;總開關 warn 格子只提醒;總開關 block 照 slots;壞值照 block 並講一句;slots 不是 block 時 doctor 講一句。"""
+    m = _load_lumos_inproc()
+    bad = "WHY:缺格子的一句"
+    rc, out, _r = _slot_try(bad, cfg={"note_shape": {"gate": "off"}})
+    check("①gate=off:不查", rc == 0 and _SLOT_HEAD not in out, out[-400:])
+    rc, out, _r = _slot_try(bad, cfg={"note_shape": {"gate": "warn"}})
+    check("②gate=warn:只提醒", rc == 0 and _SLOT_HEAD in out and "不擋" in out, out[-400:])
+    rc, out, _r = _slot_try(bad, cfg={"note_shape": {"slots": "warn"}})
+    check("③slots=warn:只提醒", rc == 0 and _SLOT_HEAD in out, out[-400:])
+    rc, out, root = _slot_try(bad, cfg={"note_shape": {"slots": "off"}})
+    check("④slots=off:不查", rc == 0 and _SLOT_HEAD not in out, out[-400:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("④slots 不是 block:doctor 講一句", any("note_shape.slots" in x for x in lines), str(lines))
+    rc, out, root = _slot_try(bad, cfg={"note_shape": {"slots": "BLOCK"}})
+    check("⑤壞值照 block 並講一句", rc == 1 and "看不懂" in out, out[-400:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=False)
+    check("⑥掛鉤沒帶 --slots:完整 doctor 講格子規則沒在跑", any("沒帶 --slots" in x for x in lines), str(lines))
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("⑥--ci(推送前每次)不唸這句", not any("沒帶 --slots" in x for x in lines), str(lines))
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" lumos note-shape --staged --repo x --slots\n")
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("⑦--slots 沒緊接 --staged:doctor 講推送認不出上線點", any("沒緊接在 --staged 後面" in x for x in lines), str(lines))
+    print("  ✓ t_slots_switch")
+
+
+def _slot_golive_repo():
+    """格子已上線的測試專案:掛鉤帶 note-shape --staged --slots(推送路徑認得上線點)。→ (root, 上線提交)"""
+    root = _ns_repo()
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" \"$REPO_ROOT/scripts/lumos\" note-shape --staged --slots --repo x\n")
+    _nh_commit(root, "slots golive")
+    return root, _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def t_slots_push_old_lines():
+    """[S6] 推送路徑的舊行:上線前寫、上線後才補欄位的行不擋;有續行的舊條目搬家不擋;斷行重排不擋;
+    只放連結的舊 DEP 不讓全新的只放連結行跟著過;上線後新寫的缺格行改名照擋;超過 20 條印總數。
+    翻紅釘:_notelines_range_added 不收 pre2 → ①紅;_ns_deleted_summary_lines 不接續行、而且拿掉「第一個實體行對上也算」那道 → ②紅(兩道擋同一件事,只拿一道不紅);
+    _ns_text_key 把空白換成空格 → ③紅;_ns_is_old 不比連結集合 → ④⑪紅;_carry 不帶 by_path2 → ⑤紅;_ns_slots_violations 不回頭查續行所屬那條 → ⑦紅;_ns_text_key 把「和與及見」也去掉 → ⑩紅;範本不給 SEE → ⑪紅。"""
+    # ①上線前寫的舊行,上線後只補欄位,推送不擋(代碼審 code-筆記格子第1步 r1 正確性席、合約席)
+    root = _ns_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話")
+    _nh_commit(root, "before golive")
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" lumos note-shape --staged --slots --repo x\n")
+    _nh_commit(root, "slots golive")
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話 [出處:2026-09-01 審查]")
+    _nh_commit(root, "add field")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{base}..{tip}")
+    check("①上線前寫、上線後只補欄位:推送不擋", rc == 0 and _SLOT_HEAD not in out, out[-600:])
+    # ②有續行的舊條目搬到別篇(提交時)
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話很長\n  接續的第二行說明")
+    _nh_commit(root, "old multi-line")
+    _ns_note(root, summary="KEY:x")
+    _nh_node(root, "B", summary="KEY:y\nWHY:舊的一句話很長\n  接續的第二行說明")
+    _ns_stage(root)
+    rc, out = _ns(root, "--staged", "--slots")
+    check("②有續行的舊條目搬家不擋", rc == 0 and _SLOT_HEAD not in out, out[-600:])
+    # ③一行舊句斷成兩行
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:這是一個很長的舊句子還沒有格子")
+    _nh_commit(root, "old one line")
+    rc, out, _r = _slot_try("WHY:這是一個很長的\n  舊句子還沒有格子", root=root)
+    check("③斷行重排不算新寫", rc == 0 and _SLOT_HEAD not in out, out[-600:])
+    # ④舊版有只放連結的 DEP,全新連結的只放連結行照擋
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nDEP:[[Systems/甲]]")
+    _nh_commit(root, "old dep")
+    rc, out, _r = _slot_try("DEP:[[Systems/甲]]\nDEP:[[Systems/全新乙]]", root=root)
+    check("④全新的只放連結行不跟著舊行過", rc == 1 and "改寫成 SEE" in out, out[-600:])
+    # ⑤上線後新寫的缺格行,再改名,推送照擋
+    root, g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:上線後新寫的缺格子句")
+    _nh_commit(root, "bad line")
+    old = root / "docs" / "kg-knowledge" / "Systems" / "A.md"
+    _nh_git(root, "mv", str(old), str(old.with_name("A2.md")))
+    _nh_commit(root, "rename")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{g}..{tip}")
+    check("⑤上線後新寫的缺格行改名後推送照擋", rc == 1 and "上線後新寫" in out, out[-600:])
+    check("⑤推送被擋時講明是跟整段範圍的起點比(r2 通才席)", "推送時是跟整段範圍的起點比" in out, out[-600:])
+    # ⑦在舊的單行句後面接一段續行:新內容照查(r2 通才席:第一行對上就算舊行的放寬只給實體行來源)
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話")
+    _nh_commit(root, "old")
+    rc, out, _r = _slot_try("WHY:舊的一句話\n  後面新接的一大段沒有出處也沒有因", root=root)
+    check("⑦舊句後面接續行:擋", rc == 1 and _SLOT_HEAD in out, out[-500:])
+    # ⑧推送:上線前寫的多行條目,上線後在第一行補欄位,不擋(實體行來源比第一行)
+    root = _ns_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, summary="KEY:x\nWHY:長句的前半\n  長句的後半")
+    _nh_commit(root, "pre golive multi-line")
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" lumos note-shape --staged --slots --repo x\n")
+    _nh_commit(root, "slots golive")
+    _ns_note(root, summary="KEY:x\nWHY:長句的前半 [出處:2026-09-01 審查]\n  長句的後半")
+    _nh_commit(root, "add field")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{base}..{tip}")
+    check("⑧推送:上線前的多行條目只補欄位不擋", rc == 0 and _SLOT_HEAD not in out, out[-500:])
+    # ⑨帶別名的只放連結舊 DEP 只補欄位不擋(r2 邊界席)
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nDEP:[[Systems/甲|說明]]")
+    _nh_commit(root, "alias dep")
+    rc, out, _r = _slot_try("DEP:[[Systems/甲|說明]] [confirmed:2026-10-01]", root=root)
+    check("⑨帶別名的舊連結行只補欄位:格子不擋(帶別名的 DEP 要寫來源是既有的形狀規則,不在這裡驗)", _SLOT_HEAD not in out, out[-500:])
+    # ⑩比對鍵不讓不同的兩句撞在一起;⑪換連結算新寫、範本給 SEE
+    for label, old_line, new_line in (("⑩英文空白位置不同", "WHY:a bc", "WHY:ab c"),
+                                      ("⑩「和」是字不是分隔", "WHY:不能和平共處", "WHY:不能平共處")):
+        root, _g = _slot_golive_repo()
+        _ns_note(root, summary="KEY:x\n" + old_line)
+        _nh_commit(root, "old")
+        rc, out, _r = _slot_try(new_line, root=root)
+        check(f"{label}:算新寫", rc == 1 and _SLOT_HEAD in out, out[-400:])
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nDEP:[[Systems/甲]]")
+    _nh_commit(root, "old dep")
+    rc, out, _r = _slot_try("DEP:[[Systems/甲改名]]", root=root)
+    check("⑪只放連結的行換了連結算新寫,範本給 SEE", rc == 1 and "範本:SEE:[[Systems/甲改名]]" in out, out[-500:])
+    # ⑥超過 20 條只印 20 條加總數
+    rc, out, _r = _slot_try("\n".join(f"WHY:缺格子的第{i}句" for i in range(25)))
+    check("⑥超過 20 條印總數", rc == 1 and "另 5 行(共 25 行)" in out, out[-400:])
+    print("  ✓ t_slots_push_old_lines")
+
+
+def t_slots_fail_open_and_output_hygiene():
+    """起點版本批次讀失敗走 fail-open(不當成沒有舊版而誤擋);單次跳過與主流程用同一支選圖譜;合併中跳過不算格子;
+    擋下訊息裡的路徑清控制字元。(代碼審 code-筆記格子第1步 r2 合約席:這幾條修法原本沒有測試咬住)"""
+    import io, contextlib
+    m = _load_lumos_inproc()
+    # ①批次讀失敗:印跳過、不擋
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話")
+    _nh_commit(root, "old")
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話 [applies:x]")
+    _ns_stage(root)
+    orig = m._nodehome_cat_blobs
+    m._nodehome_cat_blobs = lambda *a, **k: None
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_note_shape(repo=str(root), staged=True, slots_flag=True)
+    finally:
+        m._nodehome_cat_blobs = orig
+    check("①起點版本讀不出:fail-open 不擋", rc == 0 and _SLOT_HEAD not in buf.getvalue() and "跳過" in buf.getvalue(), buf.getvalue()[-400:])
+    # ②單次跳過選圖譜走 _ns_vault_rel:它回 None 就不算格子
+    orig = m._ns_vault_rel
+    m._ns_vault_rel = lambda *a, **k: None
+    try:
+        check("②單次跳過選圖譜跟主流程同一支", m._ns_skip_slot_extra(root) is None, "")
+    finally:
+        m._ns_vault_rel = orig
+    check("②對照:正常時算得出", (m._ns_skip_slot_extra(root) or {}).get("check") == "slots", str(m._ns_skip_slot_extra(root)))
+    # ③合併中跳過不算格子
+    root, _g = _slot_golive_repo()
+    br = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "checkout", "-q", "-b", "side")
+    _ns_note(root, summary="KEY:x\nWHY:側枝的缺格子句")
+    _nh_commit(root, "side")
+    _nh_git(root, "checkout", "-q", br)
+    _nh_file(root, "README.md", "# r2\n")
+    _nh_commit(root, "main moves")
+    _nh_git(root, "merge", "--no-commit", "--no-ff", "side")
+    check("③合併中:單次跳過不算格子", m._ns_skip_slot_extra(root) is None, "")
+    # ④路徑清控制字元
+    out = m._ns_slots_format([("docs/x\x1b[31m.md", 3, "WHY", "x", [(("出處",), "缺 [出處:]")])], "block", "這次提交")
+    check("④擋下訊息的路徑清掉控制字元", "\x1b" not in out, repr(out[:200]))
+    print("  ✓ t_slots_fail_open_and_output_hygiene")
+
+
+def t_slots_old_line_edges():
+    """舊行比對的邊界(代碼審 code-筆記格子第1步 r3):文字相同、而且舊行的連結全在新行裡才算舊行——
+    只放連結的舊行後面接續行、別名裡多塞字、連結之間夾 and、文字行換連結目標、帶重音的英文空白,都算新寫;
+    tab 縮排的續行接得回去;推送時上線前的單行舊句後面接續行照查;SEE 範本不切斷連結;擋下訊息講明什麼算新寫。
+    翻紅釘:_ns_is_old 不比連結集合 → ①②③④紅;_NS_CJK 換回「任何非 ASCII」→ ⑤紅;_ns_indent 不展開 tab → ⑥紅;
+    _ns_entry_head 不看續行有沒有新寫 → ⑦紅;_ns_tpl_core 不看連結邊界 → ⑧紅。"""
+    m = _load_lumos_inproc()
+    for label, old_line, new_line in (
+            ("①只放連結的舊 DEP 後面接續行", "DEP:[[Systems/甲]]", "DEP:[[Systems/甲]]\n  後面新接的一大段沒有來源的敘述"),
+            ("②別名裡多塞一段字", "DEP:[[Systems/甲]]", "DEP:[[Systems/甲|門檻是 180 秒]]"),
+            ("③連結之間夾 and、連到別的節點", "DEP:[[Systems/x]] and [[Systems/y]]", "DEP:[[Systems/c]] and [[Systems/d]]"),
+            ("④文字行換連結目標", "WHY:依賴 [[Systems/a]] 的行為", "WHY:依賴 [[Systems/b]] 的行為"),
+            ("⑤帶重音的英文空白位置不同", "WHY:café au", "WHY:caféau")):
+        root, _g = _slot_golive_repo()
+        _ns_note(root, summary="KEY:x\n" + old_line)
+        _nh_commit(root, "old")
+        rc, out, _r = _slot_try(new_line, root=root)
+        check(f"{label}:算新寫(格子擋)", _SLOT_HEAD in out, out[-500:])
+    check("擋下訊息講明換或刪連結、改續行都算新寫", "換了或刪了連結" in out and "含續行" in out, out[-400:])
+    # ⑥tab 縮排的續行接得回去:欄位寫在續行不誤擋
+    root, _g = _slot_golive_repo()
+    rc, out, _r = _slot_try("WHY:新句\n\t[出處:2026-10-01 對話] [因:原因]", root=root)
+    check("⑥tab 縮排的續行接回去,欄位寫在續行照認", _SLOT_HEAD not in out, out[-400:])
+    logical = m._ns_summary_logical("---\ntype: system\nsummary: |-\n  WHY:新句\n\t[出處:a] [因:b]\n---\n# x\n")
+    check("⑥只用 tab 縮排(比前綴行的兩格空白窄)的續行也接得回去", m._ns_indent("\tx") == 4
+          and any("[出處:a]" in v for v in logical.values()), str(logical))
+    # ⑦推送:上線前寫的單行舊句,上線後在後面接續行,新內容照查
+    root = _ns_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話")
+    _nh_commit(root, "pre golive")
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n\"$PY\" lumos note-shape --staged --slots --repo x\n")
+    _nh_commit(root, "slots golive")
+    _ns_note(root, summary="KEY:x\nWHY:舊的一句話\n  後面新接的一大段沒有出處也沒有因")
+    _nh_commit(root, "append continuation")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _ns(root, "--diff", f"{base}..{tip}")
+    check("⑦推送:上線前的單行舊句後面接續行,照擋", rc == 1 and _SLOT_HEAD in out, out[-500:])
+    # ⑧SEE 範本截在連結邊界
+    core = "、".join(f"[[Systems/很長很長的節點名稱第{i}號]]" for i in range(8))
+    t = m._ns_tpl_core(core, True)
+    check("⑧SEE 範本截斷不切斷連結", t.endswith("]]…") and t.count("[[") == t.count("]]"), t)
+    print("  ✓ t_slots_old_line_edges")
+
+
+def t_slots_report_ledger_and_hygiene():
+    """擋下事件同時有形狀違規與格子缺漏時 check 記 shape+slots;擋下訊息裡舊違規的路徑、片段與錯誤都清控制字元。
+    翻紅釘:_ns_slot_extra 不看 mixed → ①紅;_note_shape_report 印 frag 或 errs 不過 _esc_clean → ②紅。"""
+    import io, contextlib
+    rc, out, root = _slot_try("WHY:缺格子的一句")
+    _ns_note(root, summary="KEY:x\nWHY:缺格子的一句", body="新寫 `src/a.py:5`")
+    _ns_stage(root)
+    rc, _out = _ns(root, "--staged", "--slots")
+    ev = _neg_events(root, "blocked")
+    check("①形狀違規加格子缺漏:check 記 shape+slots", rc == 1 and ev and ev[-1].get("check") == "shape+slots", str(ev[-1:]))
+    m = _load_lumos_inproc()
+    buf = io.StringIO()
+    root2 = _ns_repo()
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+        m._note_shape_report(root2, "block", "這次提交", [("d/a\x1b[2J.md", 3, "現況描述沒寫來源", "FACT:\x1b]0;x\x07上限", "改")],
+                             ["d/b\x1b[31m.md:這篇筆記不是 UTF-8 文字"])
+    check("②路徑、片段、錯誤訊息都清掉控制字元", "\x1b" not in buf.getvalue() and "\x07" not in buf.getvalue(), repr(buf.getvalue()[:300]))
+    print("  ✓ t_slots_report_ledger_and_hygiene")
+
+
+def t_slots_doctor_bypass_scan():
+    """doctor 事後掃描:格子上線後已推上遠端卻缺格子的新增行要列出(多半是 --no-verify 繞過)。
+    翻紅釘:_note_shape_doctor_lines 的 sv 改成 [] → 紅(代碼審 code-筆記格子第1步 r1 通才席:原本拿掉沒測試會紅)。"""
+    import subprocess as sp
+    root, _g = _slot_golive_repo()
+    _ns_note(root, summary="KEY:x\nWHY:繞過推上去的缺格子句")
+    _nh_commit(root, "bypass")
+    bare = Path(tempfile.mkdtemp(prefix="gctl-slot-doc-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    br = _nh_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _nh_git(root, "push", "-q", "--no-verify", "origin", br)
+    _nh_git(root, "fetch", "-q", "origin")
+    m = _load_lumos_inproc()
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=False)
+    check("已推上遠端卻有格子缺漏的新增行要列出", any("筆記格子缺漏的新增行" in x and "A.md" in x for x in lines), str(lines))
+    print("  ✓ t_slots_doctor_bypass_scan")
+
+
+def t_slots_exempt():
+    """[S10] 合約行、表外前綴、guard 預告句(含轉正後)不套格子。"""
+    rc, out, _r = _slot_try("KEY:★INVARIANT★ 自動型只派V [test:t_x]\nTEST:12/12 通過\nDECISION:[2026-09-01]改用逐行(valid)\n"
+                            "WHY:[2026-10-01]預告這條合約但還沒做:改用逐行\n"
+                            "WHY:[2026-10-01]預告這條合約但還沒做:改用整篇(2026-10-02 已轉正)")
+    check("合約行、其他前綴、guard 預告句都不擋", rc == 0 and _SLOT_HEAD not in out, out[-600:])
+    print("  ✓ t_slots_exempt")
+
+
+def t_slots_ledger_fields():
+    """[S15] 擋下事件帶 slots_lines/slots_missing、路徑在 nodes;提交時單次跳過也帶;跳過前算格子出錯照樣放行、只記不帶格子欄位的跳過。
+    翻紅釘:_note_shape_report 不帶 extra → ①紅;_ns_skip_slot_extra 拿掉例外防護 → ③替身炸出測試。"""
+    rc, out, root = _slot_try("WHY:缺格子的一句")
+    ev = _neg_events(root, "blocked")
+    check("①擋下事件帶格子欄位(check=slots)", ev and ev[-1].get("check") == "slots" and ev[-1].get("slots_lines") == 1
+          and ev[-1].get("slots_missing", {}).get("出處") == 1 and any("A" in n for n in ev[-1].get("nodes", [])), str(ev))
+    check("①只因格子擋時不印筆記形狀擋的收尾句", "推得出來的一寫進去就會過期" not in out, out[-500:])
+    rc, out, root = _slot_try("PITFALL:空清單靜默成功 [出處:a] [根因:b]")
+    ev = _neg_events(root, "blocked")
+    check("①三選一的缺漏也算進各格缺漏(結構化,不從字樣反推)",
+          ev and ev[-1].get("slots_missing", {}).get("test/repro/防回歸") == 1, str(ev))
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nWHY:缺格子的一句")
+    _ns_stage(root)
+    rc, _out = _ns(root, "--staged", "--slots", env={"LUMOS_SKIP_NOTE_SHAPE": "1"})
+    ev = _neg_events(root, "skipped-env")
+    check("②單次跳過(提交時、帶 --slots)也帶格子欄位", rc == 0 and ev and ev[-1].get("slots_lines") == 1, str(ev))
+    import os as _o
+    root = _ns_repo()
+    _ns_note(root, summary="KEY:x\nWHY:缺格子的一句")
+    _ns_stage(root)
+    _o.environ["LUMOS_SKIP_NOTE_SHAPE"] = "1"
+    try:
+        def _boom(*a, **k):
+            raise RuntimeError("boom")
+        m = _load_lumos_inproc()
+        orig = m._ns_slots_violations
+        m._ns_slots_violations = _boom
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_note_shape(repo=str(root), staged=True, slots_flag=True)
+    finally:
+        m._ns_slots_violations = orig
+        _o.environ.pop("LUMOS_SKIP_NOTE_SHAPE", None)
+    ev = _neg_events(root, "skipped-env")
+    check("③跳過前算格子出錯:照樣放行、跳過事件不帶格子欄位", rc == 0 and ev and "slots_lines" not in ev[-1], str(ev))
+    print("  ✓ t_slots_ledger_fields")
+
+
 def t_refresh_delta():
     """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
     _need_src("governance/eval")
