@@ -29805,12 +29805,14 @@ _DRIFT_OPEN_ISSUE = ("open", "doing")
 # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
 # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
 _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "m1")
+_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "m1", "retire")
 _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
-                     "c5": "轉正做了一半", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西"}
+                     "c5": "轉正做了一半", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
+                     "retire": "RULE 的撤除條件成立了"}
 # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
-_DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k != "m1")
+# retire(RULE 撤除條件,筆記格子第 2 步)的 scan 兜底在第 3 步才接,先不列
+_DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k not in ("m1", "retire"))
 _DRIFT_ACKS = "governance/drift-acks.jsonl"
 # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
 # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
@@ -30336,6 +30338,24 @@ def _probe_lines(text):
     return out, dead
 
 
+def _retire_lines(text):
+    """一篇筆記摘要裡 RULE 的機器式撤除條件 → (清單[(行號, 原文, 解析結果)], []),形狀同 _probe_lines,給同一個轉變判定用
+    (Projects/筆記格子寫法與過期檢查_計劃〈格子欄位的過期檢查〉第 2 步)。[retire:when-鍵:值] 改寫成回頭條件的 [when-鍵:值]
+    交給 _probe_parse(同一支正規化與值文法);已標 [status:superseded] 的行不抽(標作廢就是處理完了,下次推送不再擋);
+    一行寫了兩個 [retire:] 是寫錯(提交時擋),這裡不猜、不抽。續行接回(_ns_summary_logical)。"""
+    out = []
+    for no, line in _ns_summary_logical(text).items():
+        if not line.startswith("RULE:") or _ns_superseded(line[len("RULE:"):]):
+            continue
+        vals = [v for k, v, _e in slot_parse(line[len("RULE:"):])["fields"] if k == "retire"]
+        if len(vals) == 1 and vals[0].startswith("when-"):
+            # 原文給接回續行的整條;drift ack --kind retire 也記整條(_drift_ack_text),兩邊才對得上,
+            # 而且改了續行裡的條件舊表態就失效(代碼審 code-筆記格子第2步 r1 正確性席:原本 ack 只記實體行、永遠對不上;
+            # r2 正確性席:只比第一個實體行,續行條件不同的兩條會互相放行、改條件後舊表態照樣有效)
+            out.append((no, line, _probe_parse("[" + vals[0] + "]")))
+    return out, []
+
+
 def _drift_probe_code_path(p):
     """乙拿來判 symbol/test、算候選的檔:副檔名在清單裡或沒副檔名(要看 #!),不含 docs/、governance/。
     候選篩選(_drift_probe_changes)與語料(_DriftProbeTree.corpus)共用這一支(代碼審 r1 圖譜一致席:原本兩邊範圍不同;
@@ -30747,18 +30767,22 @@ def _drift_probe_cond_candidate(k, v, ch, vault_pre, tenv, tip_text):
     return True if names.has(name) else (None if names.partial else False)
 
 
-def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override_base=None):
+def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override_base=None, extract=None, kind="probe"):
     """乙的推送判定 → (要處理, 只列出, 判不了)。候選行(被這次推送影響、或這次新寫/改了條件標記的)在終點評估全部條件;
     終點成立,而起點沒有「同一條」(改名對回後,條件標記一模一樣)或同一條還不成立 → 要處理;起點早就成立 → 不列。
-    每一步開始前與每條候選之前都看預算(代碼審 r1 併發席:原本列樹、改名對照都不看)。"""
+    每一步開始前與每條候選之前都看預算(代碼審 r1 併發席:原本列樹、改名對照都不看)。
+    extract/kind:換一種抽條件的方式(筆記格子第 2 步:_retire_lines 抽 RULE 的 [retire:when-*],kind="retire"),
+    起點那一版也用同一支抽,轉變判定與預算規矩不變——不另寫第二套判定。"""
     import time as _t
+    extract = extract or _probe_lines
     pre = vault_rel.rstrip("/") + "/"
-    lines = [(p, no, tx, pr) for p in sorted(tenv.notes) for no, tx, pr in _probe_lines(env_text(tenv, p) or "")[0]]
+    lines = [(p, no, tx, pr) for p in sorted(tenv.notes) for no, tx, pr in extract(env_text(tenv, p) or "")[0]]
     # 條件本身寫錯的行不評估(第一層擋新寫的、scan 列成寫錯);只缺期限的照評估
     lines = [x for x in lines if x[3]["conds"] and not x[3]["bad"]]
     if not lines:
         return [], [], []
-    over = f"超過 {_DRIFT_BUDGET_SEC} 秒預算(條件式回頭條件)"
+    over = (f"超過 {_DRIFT_RETIRE_BUDGET_SEC} 秒預算(RULE 撤除條件)" if kind == "retire"
+            else f"超過 {_DRIFT_BUDGET_SEC} 秒預算(條件式回頭條件)")
 
     def _out():
         return deadline is not None and _t.monotonic() >= deadline
@@ -30772,7 +30796,8 @@ def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override
             trees[where] = _drift_probe_tree(root, where, deadline)
         return trees[where]
     ch = _drift_with_layout(ch, base, tip, _tree)
-    todo, unknown = _drift_probe_candidates(lines, ch, pre, tenv, benv, _tree(tip) if ch["code_touched"] else None, _out)
+    todo, unknown = _drift_probe_candidates(lines, ch, pre, tenv, benv, _tree(tip) if ch["code_touched"] else None, _out,
+                                            extract)
     if todo and not _out():
         _drift_probe_prefetch([c for x in todo for c in x[3]["conds"]], [_tree(w) for w in ((tip, base) if base else (tip,))])
     must = []
@@ -30783,7 +30808,7 @@ def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override
             unknown.append(f"{p}:{no} 的條件判不了(" + ("超過預算" if _out() else "git 讀不出程式檔或筆記"
                            + _drift_bad_note(_drift_row_unread(pr["conds"], (tenv, benv), (trees.get(tip), trees.get(base))))) + ")")
         elif verdict:
-            must.append({"kind": "probe", "path": p, "line": no, "text": tx, "related": [], "why": verdict})
+            must.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [], "why": verdict})
     return must, [], unknown
 
 
@@ -30807,7 +30832,7 @@ def _drift_probe_prefetch(conds, trees):
             t.prefetch(conds)
 
 
-def _drift_probe_candidates(lines, ch, pre, tenv, benv, tip_tree, out):
+def _drift_probe_candidates(lines, ch, pre, tenv, benv, tip_tree, out, extract=None):
     """候選行 → ([(路徑, 行號, 原文, 解析, 起點有沒有同一條)], 判不了[說明])。起點沒有同一條的(新寫或改了條件)一律是候選。
     tip_tree:終點的樹(不帶路徑的條件要看改到的程式檔全文時用,只建一次);out():預算用完了沒——每一行之前都看,
     用完了剩下的行記成超過預算(代碼審 r3 併發席:原本整段不看預算)。"""
@@ -30819,7 +30844,7 @@ def _drift_probe_candidates(lines, ch, pre, tenv, benv, tip_tree, out):
         if out():
             unknown.append(f"{p}:{no} 的條件判不了(超過預算)")
             continue
-        old = _drift_probe_old(p, pr, ch["renames"], benv, pre, base_lines)
+        old = _drift_probe_old(p, pr, ch["renames"], benv, pre, base_lines, extract)
         cand = _drift_probe_is_candidate(pr["conds"], ch, pre, tenv, _names) if old else True
         if cand is None:
             unknown.append(f"{p}:{no} 的條件判不了(" + ("超過預算" if out() else
@@ -30854,14 +30879,14 @@ def _drift_bad_note(paths):
     return (":" + "、".join(bad[:5]) + (f" 等 {len(bad)} 支" if len(bad) > 5 else "")) if bad else ""
 
 
-def _drift_probe_old(p, pr, renames, benv, pre, cache):
+def _drift_probe_old(p, pr, renames, benv, pre, cache, extract=None):
     """起點有沒有「同一條」:終點路徑照改名對回起點,再比條件標記 → True/False;沒有起點回 None。cache 存每篇起點的標記集合。"""
     if benv is None:
         return None
     bp = renames.get(pre + p, pre + p)
     bp = bp[len(pre):] if bp.startswith(pre) else p
     if bp not in cache:
-        cache[bp] = {tuple(x[2]["conds"]) for x in _probe_lines(env_text(benv, bp) or "")[0]}
+        cache[bp] = {tuple(x[2]["conds"]) for x in (extract or _probe_lines)(env_text(benv, bp) or "")[0]}
     return tuple(pr["conds"]) in cache[bp]
 
 
@@ -31143,6 +31168,15 @@ def _drift_ack_heading(lines, line):
     return ""
 
 
+def _drift_ack_text(text, lines, line, kind):
+    """表態記的原文:retire 記摘要條目接回續行的整條(同 _retire_lines 給判定的原文),其他種類記那一個實體行。"""
+    if kind == "retire":
+        whole = _ns_summary_logical(text).get(line)
+        if whole:
+            return whole
+    return lines[line - 1].strip()
+
+
 def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
     """lumos drift ack <節點> <行號> --kind … --reason "…":表態「這行照留」。
     c2、c3 先確認那一行當下真的是這一種發現,記下當時連著的已收尾計劃(related);每筆都記遞增序號 seq(存量漂移改法 [S8])。
@@ -31163,7 +31197,7 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
     root, vault_rel = _drift_vault_of(env)
     head = _drift_ack_heading(lines, line)
     token = "DACK-" + secrets.token_hex(4)
-    rec = {"id": token, "path": f"{vault_rel}/{rel}", "text": lines[line - 1].strip(), "kind": kind,
+    rec = {"id": token, "path": f"{vault_rel}/{rel}", "text": _drift_ack_text(text, lines, line, kind), "kind": kind,
            "reason": reason.strip(), "date": datetime.date.today().isoformat(), "heading": head, "line": line}
     if kind == "m1":
         rec["names"] = sorted(set(names))
@@ -31323,6 +31357,10 @@ def _drift_fix_hint(kind, path, line, names=None):
     if kind == "probe":
         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
                 f'lumos drift ack {node} {line} --kind probe --reason "<為什麼照留>"']
+    if kind == "retire":
+        return [f"撤除條件成立了:這條限制該撤——在 {node} 第 {line} 行加 [status:superseded] 並寫 [被取代:…]"
+                "(改看哪裡;限制自然消失就寫 無 <理由>),標了作廢的行下次推送不再抽;照留就 "
+                f'lumos drift ack {node} {line} --kind retire --reason "<為什麼照留>"']
     return [base]
 
 
@@ -31957,10 +31995,30 @@ def _drift_config(text):
 
 
 def _drift_config_parts(cfg, bad):
-    """兩個開關各自的解析結果(doctor 要分開講,不靠提醒文字拆;代碼審 r2 架構對齊席)。"""
+    """各開關各自的解析結果(doctor 要分開講,不靠提醒文字拆;代碼審 r2 架構對齊席)。"""
     gate, gw, explicit = _drift_gate_config(cfg, bad)
     osm, osw = _drift_old_sentence_config(cfg, bad)
-    return {"gate_mode": gate, "gate_warns": gw, "explicit": explicit, "old_sentence": osm, "os_warns": osw}
+    rtm, rtw = _drift_retire_config(cfg, bad, gate)
+    return {"gate_mode": gate, "gate_warns": gw, "explicit": explicit, "old_sentence": osm, "os_warns": osw,
+            "retire": rtm, "rt_warns": rtw}
+
+
+def _drift_retire_config(cfg, bad=False, gate="block"):
+    """drift_check.retire(RULE 撤除條件那段的子開關,筆記格子第 2 步)→ (block|warn|off, [提醒])。
+    沒寫照總開關 gate(專案設 gate=warn 只提醒的,升級後不會被新檢查擋;代碼審 code-筆記格子第2步 r1 正確性席);
+    壞值的提醒寫法同 drift_check.old_sentence(讀不成 JSON、drift_check 不是物件、值看不懂各講一句;r1 架構席)。
+    gate 是 off 時這段整個不跑(呼叫端判)。"""
+    if bad:
+        return gate, [f".lumos/config.json 讀不成 JSON,RULE 撤除條件(drift_check.retire)照總開關 {gate}"]
+    dc = cfg.get("drift_check") if isinstance(cfg, dict) else None
+    if isinstance(cfg, dict) and "drift_check" in cfg and not isinstance(dc, dict):
+        return gate, [f"drift_check 不是物件,RULE 撤除條件(drift_check.retire)照總開關 {gate}"]
+    v = dc.get("retire") if isinstance(dc, dict) else None
+    if v is None:
+        return gate, []
+    if v not in _DRIFT_GATE_VALUES:
+        return gate, [f"drift_check.retire 只能是 block/warn/off,你寫的是 {v!r},照總開關 {gate}"]
+    return v, []
 
 
 def _drift_config_text_parts(text):
@@ -32031,6 +32089,8 @@ def _drift_print_findings(rows, stream, acks=None, alive=None):
 def cmd_drift_check(repo=None, diff_range=None, push_remote=None, pushed_ref=None):
     """lumos drift check --diff A..B:推送前與 CI 的閘(閘名 drift-check)。有「要處理」的 rc1(warn 只印 rc0);
     只有「只列出」的 rc0;參數錯 rc2;判不了的(git 失敗、逾時、預算用完)算要處理——放行等於一條繞過的路。
+    ★唯一例外:RULE 撤除條件判不了只列出不擋★(Projects/筆記格子寫法與過期檢查_計劃 第 2 步:RULE 行長命又多,
+    判不了就擋會讓整批推送卡在跟這次改動無關的條件上;兜底在 drift scan)。
     帶 --push-remote 與 --pushed-ref(推送前掛鉤與 CI 用,要一起給,只給一個回 2):A 當成遠端舊值,起點由
     _push_range_start 算,git 查詢失敗算不出起點時照「判不了」處理;都沒帶照共用起點判法(_lens_push_base),行為不變。"""
     root = _note_audit_root(repo)
@@ -32050,14 +32110,83 @@ def cmd_drift_check(repo=None, diff_range=None, push_remote=None, pushed_ref=Non
                                                mark=_DRIFT_GOLIVE_MARK, push=push)
     if tip is None or isinstance(tip, int):
         return tip if isinstance(tip, int) else 0
-    mode, warns, _explicit, os_mode = _drift_config(_nodehome_reader(root, tip)(".lumos/config.json"))
-    for w in warns:
+    parts = _drift_config_text_parts(_nodehome_reader(root, tip)(".lumos/config.json"))     # 一次解析,各開關都從這裡拿
+    mode, os_mode = parts["gate_mode"], parts["old_sentence"]
+    rt_mode = parts["retire"] if mode != "off" else "off"
+    for w in parts["gate_warns"] + parts["os_warns"] + (parts["rt_warns"] if mode != "off" else []):
         print(f"提醒:{w}", file=sys.stderr)
-    # 兩個開關各管各的(Projects/舊句檢查_計劃〈做法〉3):c1 到 c5 與 probe 看 gate,舊句檢查 m1 看 old_sentence;回兩邊較大的
+    # 開關各管各的(Projects/舊句檢查_計劃〈做法〉3):c1 到 c5 與 probe 看 gate,舊句檢查 m1 看 old_sentence,
+    # RULE 撤除條件看 retire(gate 是 off 時也不跑);回較大的
     rc_core = _drift_check_c(root, mode, os_mode, base, tip, vault_rel)
+    if rt_mode != "off" and not isinstance(base, tuple):
+        rc_core = max(rc_core, _drift_retire_guarded(root, rt_mode, base, tip, vault_rel,
+                                                     time.monotonic() + _DRIFT_RETIRE_BUDGET_SEC))
     if os_mode == "off":
         return rc_core
     return max(rc_core, _drift_m1_guarded(root, os_mode, base, tip, vault_rel))
+
+
+# ── RULE 撤除條件(Projects/筆記格子寫法與過期檢查_計劃 第 2 步;家 [[Systems/存量漂移守衛]])──────────────────
+# 在既有核心判定之後另一支、自己一個 20 秒的截止時間(同舊句檢查的先例:不改考試與歷史重放的基準、不吃核心判定剩下的);
+# 判不了的只列出不擋(既有回頭條件判不了照舊擋)——RULE 行長命又多,判不了就擋會讓整批推送卡在跟這次改動無關的條件上。
+_DRIFT_RETIRE_BUDGET_SEC = 20
+_DRIFT_RETIRE_SHOW = 20
+
+
+def _drift_retire_guarded(root, mode, base, tip, vault_rel, deadline):
+    """跑撤除條件判定並印出、記帳 → rc(block 而且有成立的 1,其他 0)。任何例外兜底成一句、不擋。"""
+    try:
+        tenv = _drift_tree_env(root, tip, vault_rel, deadline=deadline)
+        if tenv is None:
+            must, unknown = [], ["git 讀不出被推送頂端的筆記(撤除條件)"]
+        else:
+            must, _l, unknown = _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=deadline,
+                                                   extract=_retire_lines, kind="retire")
+        return _drift_retire_report(root, mode, base, tip, vault_rel, must, unknown)
+    except Exception as ex:
+        print(f"存量漂移檢查:RULE 撤除條件這次沒跑完({type(ex).__name__}),不擋", file=sys.stderr)
+        try:        # 沒跑完也留一筆(r2 架構席:m1 的兜底照記帳);記帳本身再出錯就算了,不改判定
+            _drift_retire_ledger(root, "warned", f"RULE 撤除條件沒跑完({type(ex).__name__}),不擋", False, base, tip, [],
+                                 {"handle": 0, "listed": 0, "error": type(ex).__name__})
+        except Exception:
+            pass
+        return 0
+
+
+def _drift_retire_ledger(root, kind, note, hard, base, tip, nodes, extra):
+    """撤除條件的一筆帳(欄位詞同 m1:handle 要處理、listed 只列出;起點不是 sha 記空字串同 m1)。"""
+    _gate_event_or_warn(root, "drift-check", kind, note, hard=hard, head_sha=tip, nodes=nodes,
+                        extra={"check": "retire", **extra, "base_sha": base if isinstance(base, str) else ""})
+
+
+def _drift_retire_report(root, mode, base, tip, vault_rel, must, unknown):
+    """撤除條件成立的(要處理)與判不了的(只列出)分兩張表印,各最多 20 條加總數,控制字元清掉;有成立或判不了才記一筆帳(放行不寫,同 drift-check 閘其他判定;帶條數、頂端與起點)。"""
+    acks = _drift_load_acks(root, tip) if must else []
+    must, _acked = _drift_split_acked(must, acks, vault_rel)
+    if must or unknown:     # 放行不寫帳(drift-check 閘的既有規矩,見 reversibility-governance-ledger 那篇;r2 正確性席)
+        _drift_retire_ledger(root, ("blocked" if mode == "block" else "warned") if must else "warned",
+                             f"RULE 撤除條件成立 {len(must)} 條、判不了 {len(unknown)} 項(只列出)"
+                             + ("(warn 模式不擋)" if must and mode != "block" else ""),
+                             bool(must) and mode == "block", base, tip, sorted({f["path"][:-3] for f in must})[:20],
+                             {"handle": len(must), "listed": len(unknown)})
+    if unknown:
+        print(f"存量漂移檢查:RULE 撤除條件有 {len(unknown)} 項判不了(只列出,不擋):", file=sys.stderr)
+        for u in unknown[:_DRIFT_RETIRE_SHOW]:
+            print(f"  {_esc_clean(u, 300)}", file=sys.stderr)
+        if len(unknown) > _DRIFT_RETIRE_SHOW:
+            print(f"  …還有 {len(unknown) - _DRIFT_RETIRE_SHOW} 項", file=sys.stderr)
+    if not must:
+        return 0
+    head = "擋下" if mode == "block" else "提醒(drift_check.retire=warn,不擋)"
+    print(f"{head}:這次推送讓 {len(must)} 條 RULE 的撤除條件成立了(存量漂移檢查)——", file=sys.stderr)
+    _drift_print_findings(must, sys.stderr, acks)
+    _drift_print_hints(must, sys.stderr, "改法(每一筆一條指令):")
+    print("不改就留著並表態(--kind 照那一筆列的種類):", file=sys.stderr)     # 同 _drift_report_must 的固定段(r1 架構席)
+    print('    lumos drift ack <節點> <行號> --kind retire --reason "<為什麼照留>"', file=sys.stderr)
+    if mode == "block":
+        print("  要整個專案先只提醒,是把 .lumos/config.json 的 drift_check.retire 設成 warn(改 drift_check.gate 會連 c1 到 c5"
+              "與回頭條件一起關)", file=sys.stderr)
+    return 1 if mode == "block" else 0
 
 
 def _drift_check_c(root, mode, os_mode, base, tip, vault_rel):
@@ -33166,6 +33295,7 @@ def _drift_gate_doctor_lines(repo_root):
     elif explicit and mode != "block":
         out.append(f"這個專案的存量漂移檢查是 {mode}(.lumos/config.json 的 drift_check)——轉正後留著預告句的推送不會被擋")
     out += _drift_old_sentence_doctor_lines(parts)
+    out += _drift_retire_doctor_lines(parts)
     wf = root / ".github" / "workflows"
     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
@@ -33173,6 +33303,17 @@ def _drift_gate_doctor_lines(repo_root):
         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
                    + _DRIFT_CI_STEP)
     return out
+
+
+def _drift_retire_doctor_lines(parts):
+    """RULE 撤除條件開關(drift_check.retire)自己的一行:寫錯值(含設定檔壞掉)、或比總開關鬆(off、或 gate=block 時 warn)才講。"""
+    if parts["gate_mode"] == "off":
+        return []
+    if parts["rt_warns"]:
+        return [f"RULE 撤除條件的設定沒讀懂({parts['rt_warns'][0]})"]
+    if parts["retire"] == "off" or (parts["retire"] == "warn" and parts["gate_mode"] == "block"):
+        return [f"這個專案的 RULE 撤除條件是 {parts['retire']}(drift_check.retire)——撤除條件成立的推送不會被擋"]
+    return []
 
 
 def _drift_old_sentence_doctor_lines(parts):

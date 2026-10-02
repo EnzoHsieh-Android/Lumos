@@ -30968,6 +30968,199 @@ def t_slots_report_ledger_and_hygiene():
     print("  ✓ t_slots_report_ledger_and_hygiene")
 
 
+def _rt_push(root, summary_lines, files=(), msg="c"):
+    """在 Pay 的摘要寫這些行、加這些程式檔,提交 → 新的頂端。"""
+    _nh_node(root, "Pay", summary="\n".join(["FLOW:a", *summary_lines]))
+    for f in files:
+        _nh_file(root, f, "x = 1\n")
+    _nh_commit(root, msg)
+    return _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def t_slots_retire_when_push():
+    """[S12] 推送讓 RULE 的 [retire:when-*] 從不成立變成立要擋;起點早已成立的不擋;新寫時已成立擋;已作廢的行不抽;
+    判不了只列出不擋、最多 20 條;drift_check.retire 只關這一段;撤除條件的時間不吃回頭條件的。
+    翻紅釘:cmd_drift_check 不呼叫 _drift_retire_guarded → ①③紅;_retire_lines 不跳過作廢 → ④紅;
+    _drift_retire_report 把判不了也算擋 → ⑥紅;起點不用 _retire_lines 抽(_drift_probe_old 沒傳 extract)→ ②紅。"""
+    import io, contextlib
+    rule = "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-file:src/new.py]"
+    # ①從不成立變成立:擋
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("①推送讓撤除條件成立:擋", rc == 1 and "撤除條件成立" in out and "[status:superseded]" in out, out[-700:])
+    # ②起點早就成立的舊 RULE:不擋
+    root = _dr_repo()
+    _rt_push(root, [], files=("src/new.py",), msg="file first")
+    base = _rt_push(root, [rule], msg="rule after")
+    tip = _rt_push(root, [rule, "WHY:無關的一句 [出處:a] [因:b]"], msg="unrelated")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("②起點早已成立的舊 RULE:不擋", rc == 0 and "撤除條件成立" not in out, out[-500:])
+    # ③新寫時條件已經成立:擋
+    root = _dr_repo()
+    base = _rt_push(root, [], files=("src/new.py",), msg="file")
+    tip = _rt_push(root, [rule], msg="new rule already true")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("③新寫時條件已成立:擋", rc == 1 and "撤除條件成立" in out, out[-500:])
+    # ④已標作廢的行不抽
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule + " [status:superseded] [被取代:無 不再需要]"], files=("src/new.py",), msg="supersede")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("④已標作廢的行不抽", rc == 0 and "撤除條件成立" not in out, out[-500:])
+    # ⑤drift_check.retire 只關這一段;warn 只提醒
+    for val, want_rc, want in (("off", 0, False), ("warn", 0, True)):
+        root = _dr_repo(cfg={"drift_check": {"retire": val}})
+        base = _rt_push(root, [rule], msg="rule")
+        tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+        rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+        check(f"⑤retire={val}:rc{want_rc}" + ("、照樣提醒" if want else "、不跑"),
+              rc == want_rc and (("撤除條件成立" in out) == want), out[-500:])
+    # ⑥判不了只列出不擋、最多 20 條
+    m = _load_lumos_inproc()
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], msg="same")
+    orig = m._drift_probe_check
+    calls = []
+
+    def _fake(*a, **k):
+        calls.append(k.get("kind", "probe"))
+        if k.get("kind") == "retire":
+            return [], [], [f"Systems/Pay.md:{i} 的條件判不了(超過預算)" for i in range(25)]
+        return orig(*a, **k)
+    m._drift_probe_check = _fake
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{base}..{tip}")
+    finally:
+        m._drift_probe_check = orig
+    out = buf.getvalue()
+    check("⑥判不了只列出不擋、最多 20 條加總數", rc == 0 and "判不了(只列出,不擋)" in out and "還有 5 項" in out, out[-600:])
+    check("⑦撤除條件在回頭條件之後另跑一次(不吃它的時間)", calls == ["probe", "retire"], str(calls))
+    print("  ✓ t_slots_retire_when_push")
+
+
+def _rt_ack(root, line, reason="這條還在用照留"):
+    """對 Pay 第 line 行記一筆 retire 表態並提交 → 新的頂端。"""
+    import subprocess as sp
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "ack", "Systems/Pay", str(line), "--kind", "retire", "--reason", reason],
+               capture_output=True, text=True, cwd=str(root))
+    _nh_git(root, "add", "-A")
+    _nh_git(root, "commit", "-q", "-m", "ack")
+    return r.returncode, _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def _rt_line(root, text, nth=1):
+    """Pay 裡第 nth 個整行等於 text 的行號。"""
+    pay = root / "docs" / "kg-knowledge" / "Systems" / "Pay.md"
+    return [i for i, l in enumerate(pay.read_text().split("\n"), 1) if l.strip() == text][nth - 1]
+
+
+def _rt_events(root):
+    return [e for e in _ns_gov(root) if e.get("gate") == "drift-check" and e.get("check") == "retire"]
+
+
+def _rt_inproc(m, root, base, tip, **patch):
+    """行程內跑 cmd_drift_check,暫換模組常數 → (rc, 輸出)。"""
+    import io, contextlib
+    old = {k: getattr(m, k) for k in patch}
+    for k, v in patch.items():
+        setattr(m, k, v)
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_drift_check(repo=str(root), diff_range=f"{base}..{tip}")
+    finally:
+        for k, v in old.items():
+            setattr(m, k, v)
+    return rc, buf.getvalue()
+
+
+def t_slots_retire_followups():
+    """撤除條件第 2 步代碼審 r1、r2 的修正:欄位寫在續行的 RULE 表態記整條(改續行條件舊表態失效、續行不同的兩條不互相放行);
+    自己一個截止時間;沒寫 retire 照總開關;doctor 講比總開關鬆的設定;有事才記帳、放行不寫。
+    翻紅釘:_drift_ack_text 只記實體行 → ①b①c紅;_retire_lines 給實體行 → ①紅;_drift_retire_config 預設寫死 block → ③③b紅;
+    撤除條件改回吃核心剩下的時間 → ②b紅;_drift_gate_doctor_lines 不接 _drift_retire_doctor_lines → ④紅;
+    記帳改成每次都記 → ⑤紅;rt_mode 不看 gate=off → ③c紅;推送不印 rt_warns → ③b紅;逾時訊息不分 kind → ②c紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    head = "RULE:要人簽 [依據:人] [since:2026-09-01]"
+    ca, cb = "  [retire:when-file:src/a.py]", "  [retire:when-file:src/b.py]"
+    # ①欄位寫在續行:擋 → 表態整條 → 放行
+    root = _dr_repo()
+    base = _rt_push(root, [head, ca], msg="rule")
+    tip = _rt_push(root, [head, ca], files=("src/a.py",), msg="add file")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("①續行 RULE 先擋、帶表態段的指令", rc == 1 and head in out and "不改就留著並表態" in out
+          and "lumos drift ack <節點> <行號> --kind retire" in out, out[-700:])
+    arc, tip2 = _rt_ack(root, _rt_line(root, head))
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip2}")
+    check("①表態之後放行", arc == 0 and rc == 0 and "撤除條件成立" not in out, out[-500:])
+    # ①b表態後把續行條件改成另一個已成立的:舊表態失效、照擋
+    _nh_file(root, "src/c.py", "x = 1\n")
+    tip3 = _rt_push(root, [head, "  [retire:when-file:src/c.py]"], msg="change cond")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip3}")
+    check("①b改了續行條件,舊表態不算數", rc == 1 and "撤除條件成立" in out, out[-500:])
+    # ①c第一行相同、續行條件不同的兩條:表態一條,另一條照擋
+    root = _dr_repo()
+    base = _rt_push(root, [head, ca, head, cb], msg="rules")
+    tip = _rt_push(root, [head, ca, head, cb], files=("src/a.py", "src/b.py"), msg="add files")
+    _arc, tip2 = _rt_ack(root, _rt_line(root, head, 1))
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip2}")
+    check("①c表態一條,第一行相同的另一條照擋", rc == 1 and out.count("[retire RULE") == 1, out[-600:])
+    # ②預算用完:只列出不擋;②b核心用光時間,撤除條件照樣判得出(自己一個截止時間)
+    rule = head + " [retire:when-file:src/new.py]"
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+    rc, out = _rt_inproc(m, root, base, tip, _DRIFT_RETIRE_BUDGET_SEC=-1)
+    check("②預算用完只列出不擋", rc == 0 and "判不了(只列出,不擋)" in out and "撤除條件成立了" not in out, out[-600:])
+    _rc, out = _rt_inproc(m, root, base, tip, _DRIFT_BUDGET_SEC=-1)
+    check("②b核心用光時間,撤除條件照樣判出成立", "撤除條件成立了" in out, out[-600:])
+    # ②c逾時訊息寫撤除條件、不寫回頭條件
+    vr = "docs/kg-knowledge"
+    tenv = m._drift_tree_env(root, tip, vr)
+    _must, _l, unk = m._drift_probe_check(root, base, tip, vr, tenv, deadline=0, extract=m._retire_lines, kind="retire")
+    check("②c逾時訊息寫 RULE 撤除條件", unk and all("RULE 撤除條件" in u and "回頭條件" not in u for u in unk), str(unk))
+    # ③總開關 warn、retire 沒寫:跟著 warn;③b retire 寫壞:照總開關 warn、推送時印提醒;③c gate=off、retire=block:不跑
+    for cfg, want_rc, want_hit, want_warn, tag in (
+            ({"drift_check": {"gate": "warn"}}, 0, True, False, "③gate=warn、retire 沒寫:只提醒不擋"),
+            ({"drift_check": {"gate": "warn", "retire": "nope"}}, 0, True, True, "③b retire 寫壞:照總開關 warn、印提醒"),
+            ({"drift_check": {"gate": "off", "retire": "block"}}, 0, False, False, "③c gate=off:retire=block 也不跑")):
+        root = _dr_repo(cfg=cfg)
+        base = _rt_push(root, [rule], msg="rule")
+        tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+        rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+        check(tag, rc == want_rc and ("撤除條件成立" in out) == want_hit
+              and (("提醒:drift_check.retire" in out) == want_warn), out[-500:])
+    # ④doctor:比總開關鬆、寫錯值才講
+    for cfg, want in (({"drift_check": {"retire": "off"}}, "是 off"), ({"drift_check": {"retire": "warn"}}, "是 warn"),
+                      ({"drift_check": {"retire": "nope"}}, "沒讀懂"), ({"drift_check": {"gate": "warn", "retire": "warn"}}, None),
+                      ({"drift_check": {"gate": "off", "retire": "off"}}, None), ({}, None)):
+        d = Path(tempfile.mkdtemp(prefix="gctl-rt-doc-"))
+        (d / ".lumos").mkdir()
+        (d / ".lumos" / "config.json").write_text(_j.dumps(cfg))
+        hit = [x for x in m._drift_gate_doctor_lines(d) if "RULE 撤除條件" in x]
+        check(f"④doctor {cfg}:" + (f"講「{want}」" if want else "不講撤除條件"),
+              (want is None and not hit) or (want is not None and any(want in x for x in hit)), str(hit))
+    # ⑤放行不寫帳;成立時一筆、帶條數與頂端、起點
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule, "WHY:無關 [出處:a] [因:b]"], msg="same")
+    rc, _out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("⑤沒成立、沒判不了:不寫帳", rc == 0 and not _rt_events(root), str(_rt_events(root))[-300:])
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+    rc, _out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    ev = _rt_events(root)
+    check("⑤成立:一筆 blocked、帶 handle/listed、頂端與起點", rc == 1 and len(ev) == 1 and ev[0].get("kind") == "blocked"
+          and ev[0].get("handle") == 1 and ev[0].get("listed") == 0 and ev[0].get("head_sha") == tip
+          and ev[0].get("base_sha") == base, str(ev)[-500:])
+    print("  ✓ t_slots_retire_followups")
+
+
 def t_slots_doctor_bypass_scan():
     """doctor 事後掃描:格子上線後已推上遠端卻缺格子的新增行要列出(多半是 --no-verify 繞過)。
     翻紅釘:_note_shape_doctor_lines 的 sv 改成 [] → 紅(代碼審 code-筆記格子第1步 r1 通才席:原本拿掉沒測試會紅)。"""
