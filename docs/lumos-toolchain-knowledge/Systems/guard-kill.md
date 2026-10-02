@@ -32,7 +32,11 @@ summary: |-
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
   WHY:[2026-10-01 [[Projects/併發與效能表態要合約背書_計劃]]]kill-add 多 --covers(驗過的題目 id,只收標了 needs_backing 的題;同一條配方只多帶 covers 就只更新 covers);配方身分改由共用函式 _kill_recipe_key 判(同筆記、invariant、file、old 的 json 序列化雜湊)——kill-add 判重、kill-log 的 recipe_id、寫表態分組三處共用
   WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動、寫檔後修改時間沒能錯開任一成立;最後一項 2026-10-02 加,見 [[Projects/殺傷力驗證編譯快取誤判_計劃]]);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
-  WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 本身一行不改,判斷函式重演它的走法 [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
+  WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 的判法不改,判斷函式重演它的走法(2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]] 只給它加了挑配方與交回結果的選用參數) [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
+  WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]]]rtb 修配方時重加一條要跑整篇才知道殺不殺得掉,P2 也看不出「原文對得上卻殺不掉」。guard kill 加 --id(對整篇比對、規則跟 kill-rm 同一支,在合約片段過濾之前;對到格式壞的回 2 叫人先 kill-rm,判法跟 P2 同一支 _kill_recipe_judge,不讓人照列表抄短身分踩進既有的崩潰;代碼審 r1 抓到原本只擋不是物件、r2 抓到另寫一支判法跟 P2 結論不同);kill-add --try 寫完只跑那一條,回傳碼照 guard kill、★不看 weak★(筆記剛寫沒提交、weak 一定是 true,看它的話回傳碼分不出殺不殺得掉),另印背書不採信;doctor P2 另列最近一次真跑判 survived 的配方,閘名另開 check-p2s(照 check-s/check-s2 先例,kind 用 warned 治理帳的多日沒人理與折疊才算得到) [test:t_guard_kill_only_ids] [test:t_guard_kill_add_try] [test:t_doctor_p2_lists_survived]
+  WHY:[2026-10-02 同上 設計審 r1 正確性席]P2 的 survived 清單取每條配方「最近一筆」比 ts、不比檔內順序:本 repo 的 kill-log 進版控,多個會談各自追加再合併後檔內順序可能倒。跟合約背書刻意不同——背書判 survived 看這版任何一筆、跟順序無關;同 ts 取先出現的,跟背書取最新那筆同一個規則。ts 是當地時間不帶時區,guard kill 寫 ts 那句改成帶時區時一起改
+  PITFALL:[2026-10-02 同上 代碼審 r1–r3]guard kill --id 擋格式壞的配方,同一類問題連三輪:r1 只擋不是物件、r2 另寫一套判法跟 P2 結論不同、r3 改用 P2 判法但它在 file 不是正式寫法時停在 path、不看 old/new。第三次換形狀:guard kill 在當掉的兩步原地擋(數原文前、原文恰好一次之後,記 error「配方欄位格式不對」),第四輪(另開一輪)發現原地擋只抄了判法的一部分,改成判法與 guard kill 共用 _kill_old_issue/_kill_new_issue 兩支——同一個判斷只寫一次;落單替身字元那一類試過讓寫 kill-log 與印 --json 經 _kill_esc,上限輪發現壞字元會寫進進版控的帳、讓 lumos gov 當掉,撤回、整類留在 [[Issues/guard kill遇到格式壞的配方整支崩潰]];--id 只擋判法說的 malformed;對照測試把「配方欄位格式不對」也算 malformed ↔ error [test:t_guard_kill_only_ids] [test:t_kill_recipe_check_matches_guard_kill]
+  PITFALL:[2026-10-02 同上 設計審 r1 三席實測]「原文那段已列過的不重複列」原本收所有不是 ok 的配方,設定檔壞時每條都判「設定讀不了」→ survived 清單整段變空;只收真的逐條列出的狀態碼,cfg 與 noroot 不收 [test:t_doctor_p2_lists_survived]
   PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
@@ -66,8 +70,8 @@ about_code:
 
 ## CLI
 
-- `lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--platform P] [--note]`
-- `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree]`
+- `lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--platform P] [--note] [--covers 題目id,…] [--try]`:寫入成功時「下一步」印只跑這一條的 `guard kill --id`。`--try` 寫完(含只更新 covers)當場只跑這一條,回傳碼照 guard kill;試跑那筆一定是弱證據(筆記剛寫沒提交),另印一句合約背書不採信、提交後跑哪一行;試跑回 2(drifted/abort/error)時標準錯誤印「配方已寫進筆記,試跑沒跑成」,跟寫入失敗的「擋下」分得開。
+- `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree] [--id <短身分> …]`:`--id` 可重複,只跑對到的那幾條;比對規則跟 kill-rm 同一支(對整篇、8 碼以上前段、零條或多條擋),在合約片段過濾之前;對不到時標準錯誤列出這篇每條配方、結尾印「只跑某一條」;對到格式壞的配方(跟 P2 同一套判法:guard kill 會拒跑或程式出錯的那幾種)回 2 叫人先 kill-rm。
 - `lumos guard kill-rm <node> --id <短身分>`:移除一條配方(短身分是共用身分函式算出的前 12 字元,kill-add 提醒與 doctor P2 逐條列出的修法裡都有、guard kill 每條結果行 `id=` 也有;平台根找不到那種整個平台合併成一行的不附;給 8 到 64 個十六進位字元,從頭比對)。不帶 `--id` → 唯讀列出這篇每條配方的短身分、合約片段、檔、原文前 30 字、test、平台(原文對得上的也列;[[Projects/殺傷力配方修補體驗_計劃]])。
 - kill-add 的 `--file` 從配方平台根**所在 repo 的最上層**算起(guard kill 在那個 repo 開工作樹,實際就是這樣算;平台根是子資料夾時要把子資料夾寫進路徑)。
 - guard kill 每次寫檔(套壞法、還原)之前,等到跟同一組上一次寫檔、上一次跑測試結束都不同秒(最多等 3 秒),寫完讀回修改時間確認錯開(只到 2 秒的檔案系統會再碰一次,最多 3 次;還是不行就把那條結果記成弱證據、標準錯誤整次印一行)。理由:測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),同一秒寫出同大小的檔會沿用上一次的編譯結果,誤判雙向——無害壞法被判 killed、傷害壞法被判 survived。不把時間設到未來(綁定測試拿修改時間跟現在比時會造出新的假 killed)。代價每條配方多約 1.4–1.9 秒([[Projects/殺傷力驗證編譯快取誤判_計劃]])。還原沒錯開的檔在被成功重寫之前、以及在那期間跑出來的 baseline,同組後面沿用到的結果都記弱證據。
@@ -100,7 +104,9 @@ about_code:
 
 **人寫的字怎麼印**:配方的檔名、平台、合約片段印進提醒前一律加引號、跳脫引號與控制字元(類別走共用的 `_PATH_SPECIAL_CATS`);設定檔來的字(平台根、讀不了的原因)、例外訊息、筆記路徑、kill-add 成功行的 test 名與舊 covers、Check T 那段的筆記路徑與平台名也跳脫;可以照貼的修法與 kill-rm 範本裡,帶控制字元的筆記名與欄位改印佔位字(引號擋得住 shell 斷字、擋不住終端把整行蓋掉)——筆記與設定可能來自不可信的提交(代碼審第 1、2 輪資安席)。
 
-**doctor P2**:放在 P 段之後,跳過的節點照 P 段(verification 型、superseded、stale)。用 warn_soft 印(回傳碼不變,一般與 `--strict` 一樣),預設每段最多 3 條、`--verbose`/`--ci` 全列;`--ci` 跑時記 `check-p2` 事件。每條、每篇、整段各自包例外保護。
+**doctor P2**:放在 P 段之後,跳過的節點照 P 段(verification 型、superseded、stale),再多跳沒有配方的。用 warn_soft 印(回傳碼不變,一般與 `--strict` 一樣),預設每段最多 3 條、`--verbose`/`--ci` 全列;`--ci` 跑時記 `check-p2` 事件。每條、每篇、整段各自包例外保護。
+
+同一段第二個提醒(2026-10-02):殺傷力帳本裡現有配方最近一次真跑判 survived 的,列短身分(從筆記那條配方算)、合約前段、那次日期與版本、重跑與 kill-rm 兩個指令;原文那段已逐條列過的不重複列,設定檔讀不了時照列。行尾提示:那次證據弱、配方指的檔之後改過(單一檔 `diff --quiet`,檔名照字面、標準錯誤收掉,整段 20 秒上限)。綁定測試改過不觸發行尾那句(配方不記測試檔),所以標題寫「之後補強過測試的先重跑」。自己一個例外保護;`--ci` 記 `check-p2s`。帳本只在跑過 guard kill 的機器有。
 
 **kill-rm**:對到零條、對到不同完整身分的多條、短身分太短都擋下回 2;對到的全是同一完整身分(手改造成的重複)一起移除。移除前印每一條的完整內容與 kill-add 範本(`--old` 與 `--new` 都是待填字樣、不抄舊壞法——程式改過之後舊壞法常常也套不上,rtb 上線回饋;舊壞法在完整內容那一行對照);剩下的配方都對不到的 KEY 行拿掉 `[kill:recipes]`;寫後自驗用自己的一支(kill-add 那支遇到格式壞的元素會崩潰)。kill-log 舊紀錄不刪。
 
@@ -108,7 +114,7 @@ about_code:
 
 ## 實作位置
 
-`scripts/lumos`：`_kill_read_recipes`/`cmd_guard_kill_add`/`_kill_run`/`cmd_guard_kill` + INV_TAG_RE 擴 kill + KILL_REF_RE + gov/gitignore/cochange 三處同步。測試 `t_guard_kill`。
+`scripts/lumos`：`_kill_read_recipes`/`cmd_guard_kill_add`/`_kill_run`/`cmd_guard_kill` + INV_TAG_RE 擴 kill + KILL_REF_RE + gov/gitignore/cochange 三處同步。測試 `t_guard_kill`。挑配方 `_guard_kill_pick`(共用 `_kill_norm_prefix`、`_kill_match_prefix`、`_guard_kill_rm_rows`)、試跑 `_kill_add_try`、P2 第二個提醒 `_kill_p2_survived`/`_kill_log_latest`/`_kill_file_changed_since`、跳過規則 `_kill_note_skipped`。
 
 ## 相關模組
 

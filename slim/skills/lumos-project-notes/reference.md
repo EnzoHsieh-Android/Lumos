@@ -239,7 +239,7 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
 
 ```bash
 lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y --note "業務上壞了什麼"
-lumos guard kill <node>   # 沙盒(worktree)真弄壞 → 綁定測試必翻紅;survived=稻草人 rc1
+lumos guard kill <node> [--id <短身分>]   # 沙盒(worktree)真弄壞 → 綁定測試必翻紅;survived=稻草人 rc1;--id 只跑那一條
 ```
 - 壞法**從業務行為推導**（「驗章短路成恆真」），不從實作反轉；跑測試的指令由 `.lumos/config.json` 宣告（多平台 `platforms.<名>.run_cmd`、單平台 `test.run_cmd`，含 `{method}` 佔位）。
 - 七態（2026-07-29 oracle 品質包升級）：**`killed`＝強證據**（綁定測試名與失敗標記鄰近共現，且標記不落在名字串內）／**`killed_unattributed`＝弱證據**（紅了但歸因不到綁定測試，可能是編譯錯/環境掛，印警告建議 run_cmd 加 filter）／**`timed_out_weak`＝弱證據且不計 killed**（刻意變更：掛掉可能是環境非變異）／`survived`（稻草人）／`drifted`（配方漂移重寫）／`abort`（baseline 就紅）／`error`。
@@ -298,8 +298,8 @@ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
 lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
 lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
 lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
-lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"]   # 宣告壞法配方(kill_recipes+[kill:recipes])
-lumos guard kill <node> ["<KEY子字串>"] [--json]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
+lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--try]   # --try 寫完當場只跑這一條;宣告壞法配方(kill_recipes+[kill:recipes])
+lumos guard kill <node> ["<KEY子字串>"] [--json] [--id <短身分> …]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
 ```
 
 **改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。

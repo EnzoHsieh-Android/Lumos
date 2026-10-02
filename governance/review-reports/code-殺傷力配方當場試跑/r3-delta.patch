@@ -1,0 +1,313 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/殺傷力配方當場試跑_計劃.md b/docs/lumos-toolchain-knowledge/Projects/殺傷力配方當場試跑_計劃.md
+index 050a40f1..93fcafe7 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/殺傷力配方當場試跑_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/殺傷力配方當場試跑_計劃.md
+@@ -48,21 +48,21 @@ REVISIT:2026-10-15 跟 rtb 的殺傷力回報同一天:問 rtb 有沒有用 `--t
+ - P2 掃配方時的跳過規則(verification 型、status 是 superseded/stale、沒有 `kill_recipes` 欄)抽成 `_kill_note_skipped(note)`,P2 掃描、survived 清單、修正關卡提醒三處共用,行為不變。doctor P 段與其他段那幾份內嵌的「verification 型、superseded/stale」不動(它們不看 `kill_recipes` 欄,規則不同);`_kill_p2_scan` 那句「跳過的節點逐字照 P 段」註解改成「照 P 段、再多跳沒有配方的」。
+ - kill-rm 不帶 --id 時列表的逐行格式抽成 `_guard_kill_rm_rows(rel, recipes, dup_note)`(回文字行、不含結尾句;`dup_note` 是重複配方那行的註記)。`_guard_kill_rm_list` 照舊印到標準輸出、重複註記照舊「(同一條 ×n,移除會一起移掉)」、結尾照舊印「移除」;guard kill 找不到短身分時用同一個逐行格式、印到標準錯誤、重複註記改「(同一條 ×n,會一起跑)」、結尾改印「只跑某一條:lumos guard kill <節點> --id <短身分>」。
+ - kill-rm 的前段比對(8 碼以上十六進位、對到零條或多條擋)抽成 `_kill_match_prefixes(rel, recipes, prefixes)`(回對到的配方位置,或哪一個值、為什麼對不到),kill-rm 與 ① 共用;S1 的「整篇裡對到兩條」直接呼叫它測。
+ - `_lens_git` 多一個選用參數 `timeout`(預設照舊 20 秒),給 ③ 把單次 git 夾進剩餘時間。
+ 
+ ### ① `guard kill <節點> --id <短身分>`
+ 
+ - 新旗標 `--id`(可重複;argparse 的 dest 用 `gk_id`、`action="append"`,照這組子命令 `gk_`/`gkr_` 前綴的慣例)。
+ - `cmd_guard_kill` 新參數 `id_prefixes`(短身分清單,原樣傳入)。解析在函式裡、讀完整篇配方之後、合約片段過濾之前,**對整篇配方**比對(跟 kill-rm 同一份清單、同一個規則,所以同一個短身分在兩個指令裡的對到與否一致):
+   1. 每個值不是 8 碼以上十六進位、對到零條、或對到兩條以上不同完整身分 → 回 2,標準錯誤印是哪一個、為什麼,接著用共用逐行格式列出這篇每條配方。
+-  2. 對到的配方裡有格式壞的(不是物件、invariant/file/old/new 不是字串、platform 不是字串或 null——既有 Issue 的範圍)→ 回 2,印「第 N 條格式壞,先 lumos guard kill-rm <節點> --id <短身分> 再重加」,不往下跑(既有程式碰到格式壞的配方會當掉)。
++  2. 對到的配方裡有格式壞的(跟 doctor P2、kill-add 提醒同一套判法 `_kill_recipe_judge` 判 malformed:guard kill 會拒跑或程式出錯的那幾種,例如不是物件、file 或 old 不是字串)→ 回 2,印「第 N 條格式壞,先 lumos guard kill-rm <節點> --id <短身分> 再重加」,不往下跑(既有程式碰到格式壞的配方會當掉)。
+   3. 都對到 → 只留對到的那幾條(完整身分相同的重複配方一起留),再照舊套合約片段過濾。短身分對得到、但被合約片段濾光 → 走既有的「沒有任何突變配方可跑」擋下(回 2)。
+ - 新參數 `result_out`(呼叫端給一個空字典;照 `_loop_status_disposal` 的先例):跑完在蓋章迴圈補齊 `weak` 與 `recipe_id` 之後、第一個 `return` 之前,放 `result_out["rows"] = [{"recipe_id", "short", "verdict", "weak"}…]`;在那之前就回 2 的路徑(找不到 run_cmd 等)不放。兩個參數都不給時跟現在一模一樣。
+ 
+ ### ② `kill-add` 寫完後的試跑
+ 
+ - 新配方的短身分:鎖外拿 `warn_box` 裡那條配方(既有內容不改,放的就是這次寫進去、或只更新 covers 時指到的那條),直接算 `_kill_recipe_id(節點, 那條)[:12]`。
+ - 不帶 `--try`:寫入成功時,原本那行「下一步: lumos guard kill 跑殺傷力驗證」改成「下一步:只跑這一條 lumos guard kill <節點> --id <短身分>」(節點用 `_kill_node_arg` 的寫法)。只更新 covers 的那條路照舊。
+ - 帶 `--try`(dest 用 `gk_try`;`try` 是 Python 關鍵字):寫入成功(含只更新 covers)後,在鎖外、提醒印完之後呼叫 `cmd_guard_kill(env, node, id_prefixes=[完整身分], result_out={})`,結果照 guard kill 的人讀格式印。
+ - 回傳碼:寫入失敗照舊 2、不試跑。寫入成功時照 guard kill 的回傳碼——判定 killed 回 0;任一 survived、或全部只拿到 killed_unattributed / timed_out_weak 回 1;drifted、abort、error 回 2。**回傳碼不看 weak**:`--try` 時筆記一定還沒提交、weak 一定是 true,看 weak 的話回傳碼永遠分不出殺不殺得掉。
+ - 另印的提示(都印到標準錯誤):
+@@ -126,16 +126,18 @@ REVISIT:2026-10-15 跟 rtb 的殺傷力回報同一天:問 rtb 有沒有用 `--t
+ - 已排除:對外送出:只在本機跑測試與讀帳本,不連網
+ - 已排除:不可逆:只讀帳本與筆記、試跑在隔離工作樹;revert 回得去
+ - 守衛面:只多提醒與一個挑選旗標,不改任何閘的判定。
+ 
+ ## 實作紀錄
+ 
+ - 2026-10-02:四件照〈做法〉做完,條款 S1–S4 各綁一支測試(`t_guard_kill_only_ids` 9 格、`t_guard_kill_add_try` 7 格、`t_doctor_p2_lists_survived` 12 格、`t_fix_check_recipe_rerun_note` 5 格),`t_guard_kill_add_warns_drifted_recipe` 改成比對前去掉帶 `--id` 的那行。
+ - 跟凍結版字面不同的兩處(實作時發現,照實改正文):①「配方已寫進筆記,試跑沒跑成」原寫「標準錯誤第一行」——做不到:kill-add 的原文提醒與 guard kill 的「有未提交變更」都先印在標準錯誤;改成「標準錯誤有這一行」,分辨力一樣(寫入失敗的路徑不會印它)。②共用比對原寫一支 `_kill_match_prefixes(rel, recipes, prefixes)`,實作拆成 `_kill_norm_prefix`(整理與驗格式)、`_kill_match_prefix(ids, pre)`(一個前段對整篇)兩支給 kill-rm 與 guard kill 共用,guard kill 的挑配方另寫 `_guard_kill_pick`——kill-rm 原本三種擋下訊息各自不同,拆小才能一字不改。
+ - 推送前新增告警閘抓到兩條,照改不豁免:kill-add 放掉鎖之後那段(驗原文、試跑)搬成 `_kill_add_after_lock`,`cmd_guard_kill_add` 的複雜度回到 10;修正關卡提醒的清單接法改展開寫法。
+ - 代碼審 r1(2026-10-02,通才-opus、架構對齊-sonnet):4 條全折。①`--id` 擋格式壞只擋了「不是物件」,欄位型別錯(既有 Issue 自己的重現 `{"file": 5}`、`old: null`)照樣當掉、回 1 跟 survived 同碼 → 抽 `_kill_recipe_shape_bad`,範圍照 Issue;②修正關卡設定讀樹裡、配方讀工作目錄,基準不一 → 配方也讀樹裡;③試跑的提示補 kill-add 既有的「⚠ 提醒:」前綴;④最近一筆同 ts 改成取先出現的,跟背書同一個規則。每組先寫會紅的格子再修。效能:6 萬筆帳、301 條配方,survived 清單 1.3 秒、峰值 170 MB(多半是既有讀帳那支整份讀進來)。
++- 代碼審 r2(2026-10-02,通才-sonnet、架構對齊-sonnet,只看 r1 修正差異):3 條全折。r1 為了擋欄位型別錯另寫的格式判斷,跟 P2 那套對同一條結論不同(平台寫成數字、缺 invariant、原文對不上時 new 不是數字,guard kill 都不會當掉,卻被擋)→ 拿掉另寫的那支,改用 `_kill_recipe_judge` 判 malformed,兩處一定一致;修正關卡遇到知識庫不在 repo 裡改成留一行說明、不靜默。
++- 實地用(2026-10-02):修正關卡跑本計劃第一輪修正時,提醒了一條指著 `scripts/lumos` 的配方(Systems/canary-audit 那條);照它印的 `guard kill --id` 只跑那一條,10 秒、killed。這個 repo 幾乎每次改動都碰 `scripts/lumos`,所以這條提醒會常出現——回頭看撤除條件時算進去。
+ - 新增的兩處「接住所有例外」(doctor 的 survived 清單、修正關卡的重跑提醒)跟鄰段同一個寫法:只是提醒,算不出來不能讓整支指令中斷。
+ 
+ ## 審計修正紀錄
+ 
+ - 前掃(2026-10-02):四類都有命中,全部改進真檔;語意類的修改前→後記在 `governance/review-reports/殺傷力配方當場試跑/r1-intake.md`,其中 2 條動到做法(`--try` 要拿到逐條判定才分得出 survived 與全弱證據 → guard kill 多一個交回結果的選用參數;「之後程式改過」原本用代碼審留痕那套、只要有任何提交就算 → 改成只看配方指的那支檔)。
+ - r1(2026-10-02,4 席:正確性-opus、整合-sonnet、邊界-sonnet、架構對齊-sonnet):32 條(去重後 5 組 major)/blocking 7/全折,無放行、無駁回。重點:「已列出問題」原本收所有不是 ok 的,設定檔壞時 survived 清單整段變空(三席實測一致)→ 只收真的逐條列出的狀態碼;`--id` 解析位置前後不一 → 函式裡、對整篇、片段過濾之前,對到格式壞的回 2;`--try` 的「強證據」跟 weak 欄打架而 `--try` 一定弱 → 回傳碼只看判定、另印背書不採信;取最近一筆改比 `ts`(本 repo 帳進版控、合併後順序會倒);`t_guard_kill_add_warns_drifted_recipe` 會紅 → 比對前去掉 `--id` 那行;其餘照鄰居改命名、閘名、git 旗標、設定來源、文件清單。例:設定檔寫成 `{bad`、帳上一條 survived → 修前 survived 清單空、修後照列。席報告在 `governance/review-reports/殺傷力配方當場試跑/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index 87c825bc..b1dc5896 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -26,21 +26,21 @@ summary: |-
+   KEY:★DEBT★ hydration(未提交帶入)與lockfile v1砍(否決位裁);E2E maestro {method}不適用;冷build成本;submodule不init
+   KEY:★誠實界線[2026-07-23 日報吸收]★——殺傷率有天花板:「殺得掉」≠「殺得準」。研究(arXiv 2606.10417)實測突變殺傷率 7-9 成的測試仍漏一大片未真正驗到的行為,且很多「殺掉」是程式碰巧崩(rc≠0)、非斷言真的檢查了被改壞的行為。**對 lumos 兩重意義**:①guard-kill 的 survived(rc1)只證「綁定測試對這個壞法翻紅」,不證斷言指到被改的業務欄位——高風險合約可加一句「準殺」檢查(失敗測試斷言須提及被弄壞的欄位/行為,非只看 rc)②**打臉 2026-07-22 日報 inspiration「把 Check K 健康指標從『數測試』換成『殺傷率』」**(該 inspiration 未落地)——別把可鑽的『數量』換成另一個可鑽的『殺傷率』;真要換,健康指標得是『準殺』(斷言驗到規則),不是裸殺傷率。載重合約留「這條到底驗了哪些行為」比留一個殺傷率數字誠實
+   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
+   TEST:t_guard_kill(七態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]guard settle 對「已 pass 但預告句還在」補改句(以前一律回 0 印已轉正),前提不符回 2——把 settle 當重跑無害在腳本裡呼叫的地方會看到新的失敗;--test 只在待完成時要、--date 只給補改句用。轉正日期依序取 --date、那篇已寫的日期、守衛紀錄第一次變成 pass 的提交(那筆也是檔案第一次出現就不算、shallow 擋),★不拿今天充數★;不用 git log -S 合約文字:settle 是原地換行、出現次數不變,找不到轉正那次(設計審 r1 四席報到)
+   WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 3 節]settle 找不到某種預告句時的提醒改成「找不到<名稱>——可能已經是轉正後的說法(不用改),或被手改過(看一下)」:rtb 用 drift fix --kind c1 修時,已經手改成轉正說法的句子被講得像出錯。不區分兩種情形(前兩版要工具自己辨認轉正後的說法,設計審 r2 整類拿掉),由人看;drift fix c1 的結果訊息接同一支函式的同一句,不改判定與回傳值 [test:t_drift_fix_c1_missing_message]
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
+   WHY:[2026-10-01 [[Projects/併發與效能表態要合約背書_計劃]]]kill-add 多 --covers(驗過的題目 id,只收標了 needs_backing 的題;同一條配方只多帶 covers 就只更新 covers);配方身分改由共用函式 _kill_recipe_key 判(同筆記、invariant、file、old 的 json 序列化雜湊)——kill-add 判重、kill-log 的 recipe_id、寫表態分組三處共用
+   WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動、寫檔後修改時間沒能錯開任一成立;最後一項 2026-10-02 加,見 [[Projects/殺傷力驗證編譯快取誤判_計劃]]);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
+   WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 的判法不改,判斷函式重演它的走法(2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]] 只給它加了挑配方與交回結果的選用參數) [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
+-  WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]]]rtb 修配方時重加一條要跑整篇才知道殺不殺得掉,P2 也看不出「原文對得上卻殺不掉」。guard kill 加 --id(對整篇比對、規則跟 kill-rm 同一支,在合約片段過濾之前;對到格式壞的——範圍照既有 Issue,含欄位型別錯——回 2 叫人先 kill-rm,不讓人照列表抄短身分踩進既有的崩潰;代碼審 r1 抓到原本只擋不是物件的那種);kill-add --try 寫完只跑那一條,回傳碼照 guard kill、★不看 weak★(筆記剛寫沒提交、weak 一定是 true,看它的話回傳碼分不出殺不殺得掉),另印背書不採信;doctor P2 另列最近一次真跑判 survived 的配方,閘名另開 check-p2s(照 check-s/check-s2 先例,kind 用 warned 治理帳的多日沒人理與折疊才算得到) [test:t_guard_kill_only_ids] [test:t_guard_kill_add_try] [test:t_doctor_p2_lists_survived]
++  WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]]]rtb 修配方時重加一條要跑整篇才知道殺不殺得掉,P2 也看不出「原文對得上卻殺不掉」。guard kill 加 --id(對整篇比對、規則跟 kill-rm 同一支,在合約片段過濾之前;對到格式壞的回 2 叫人先 kill-rm,判法跟 P2 同一支 _kill_recipe_judge,不讓人照列表抄短身分踩進既有的崩潰;代碼審 r1 抓到原本只擋不是物件、r2 抓到另寫一支判法跟 P2 結論不同);kill-add --try 寫完只跑那一條,回傳碼照 guard kill、★不看 weak★(筆記剛寫沒提交、weak 一定是 true,看它的話回傳碼分不出殺不殺得掉),另印背書不採信;doctor P2 另列最近一次真跑判 survived 的配方,閘名另開 check-p2s(照 check-s/check-s2 先例,kind 用 warned 治理帳的多日沒人理與折疊才算得到) [test:t_guard_kill_only_ids] [test:t_guard_kill_add_try] [test:t_doctor_p2_lists_survived]
+   WHY:[2026-10-02 同上 設計審 r1 正確性席]P2 的 survived 清單取每條配方「最近一筆」比 ts、不比檔內順序:本 repo 的 kill-log 進版控,多個會談各自追加再合併後檔內順序可能倒。跟合約背書刻意不同——背書判 survived 看這版任何一筆、跟順序無關;同 ts 取先出現的,跟背書取最新那筆同一個規則。ts 是當地時間不帶時區,guard kill 寫 ts 那句改成帶時區時一起改
+   PITFALL:[2026-10-02 同上 設計審 r1 三席實測]「原文那段已列過的不重複列」原本收所有不是 ok 的配方,設定檔壞時每條都判「設定讀不了」→ survived 清單整段變空;只收真的逐條列出的狀態碼,cfg 與 noroot 不收 [test:t_doctor_p2_lists_survived]
+   PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
+ related:
+   - "[[Projects/guard殺傷力驗證_計劃]]"
+   - "[[Systems/check-t-sentinel]]"
+   - "[[Systems/test-profile-multiplatform]]"
+   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+   - "[[Projects/殺傷力配方失配提醒_計劃]]"
+@@ -63,21 +63,21 @@ about_code:
+ ---
+ # guard-kill（殺傷力驗證）
+ 
+ ## 概述
+ 
+ 合約鏈最後一哩：`★INVARIANT★→[test:]` 只證「保鑣存在」，`guard kill` 真的打一拳——隔離 worktree 裡故意弄壞被守護的行為，綁定測試必須翻紅；全綠＝稻草人證據（rc 1）。設計三輪 panel 收斂見 [[Projects/guard殺傷力驗證_計劃]]，golden 凍結 `governance/golden/guard-kill/`。
+ 
+ ## CLI
+ 
+ - `lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--platform P] [--note] [--covers 題目id,…] [--try]`:寫入成功時「下一步」印只跑這一條的 `guard kill --id`。`--try` 寫完(含只更新 covers)當場只跑這一條,回傳碼照 guard kill;試跑那筆一定是弱證據(筆記剛寫沒提交),另印一句合約背書不採信、提交後跑哪一行;試跑回 2(drifted/abort/error)時標準錯誤印「配方已寫進筆記,試跑沒跑成」,跟寫入失敗的「擋下」分得開。
+-- `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree] [--id <短身分> …]`:`--id` 可重複,只跑對到的那幾條;比對規則跟 kill-rm 同一支(對整篇、8 碼以上前段、零條或多條擋),在合約片段過濾之前;對不到時標準錯誤列出這篇每條配方、結尾印「只跑某一條」;對到格式壞的配方(不是物件、invariant/file/old/new 不是字串、platform 不是字串或 null)回 2 叫人先 kill-rm。
++- `lumos guard kill <node> ["<KEY子字串>"] [--platform P] [--json] [--keep-worktree] [--id <短身分> …]`:`--id` 可重複,只跑對到的那幾條;比對規則跟 kill-rm 同一支(對整篇、8 碼以上前段、零條或多條擋),在合約片段過濾之前;對不到時標準錯誤列出這篇每條配方、結尾印「只跑某一條」;對到格式壞的配方(跟 P2 同一套判法:guard kill 會拒跑或程式出錯的那幾種)回 2 叫人先 kill-rm。
+ - `lumos guard kill-rm <node> --id <短身分>`:移除一條配方(短身分是共用身分函式算出的前 12 字元,kill-add 提醒與 doctor P2 逐條列出的修法裡都有、guard kill 每條結果行 `id=` 也有;平台根找不到那種整個平台合併成一行的不附;給 8 到 64 個十六進位字元,從頭比對)。不帶 `--id` → 唯讀列出這篇每條配方的短身分、合約片段、檔、原文前 30 字、test、平台(原文對得上的也列;[[Projects/殺傷力配方修補體驗_計劃]])。
+ - kill-add 的 `--file` 從配方平台根**所在 repo 的最上層**算起(guard kill 在那個 repo 開工作樹,實際就是這樣算;平台根是子資料夾時要把子資料夾寫進路徑)。
+ - guard kill 每次寫檔(套壞法、還原)之前,等到跟同一組上一次寫檔、上一次跑測試結束都不同秒(最多等 3 秒),寫完讀回修改時間確認錯開(只到 2 秒的檔案系統會再碰一次,最多 3 次;還是不行就把那條結果記成弱證據、標準錯誤整次印一行)。理由:測試工具靠「修改時間到秒 + 大小」判斷要不要重編(Python 編譯快取、macOS 內建 make),同一秒寫出同大小的檔會沿用上一次的編譯結果,誤判雙向——無害壞法被判 killed、傷害壞法被判 survived。不把時間設到未來(綁定測試拿修改時間跟現在比時會造出新的假 killed)。代價每條配方多約 1.4–1.9 秒([[Projects/殺傷力驗證編譯快取誤判_計劃]])。還原沒錯開的檔在被成功重寫之前、以及在那期間跑出來的 baseline,同組後面沿用到的結果都記弱證據。
+ - 還原(`git checkout`)用的是解開連結後實際被改的那支檔、照字面認路徑(`:(literal)`);原本用配方寫的字串,`file` 是連結時只還原連結本身、真檔一直壞著,同組後面的配方被判成強證據的 killed(2026-10-02 代碼審第 3 輪抓到,改動前就有)。
+ - guard kill 人讀輸出每條結果行在判定之後附 `id=<短身分>`(放在人寫的合約片段與 test 名前面,偽造的 id 只會出現在真的後面);`--json` 不變(旁路欄 `_rid` 與 `_logged` 一起濾掉,既有 `recipe_id` 照舊)。
+ - rc（2026-07-29 七態後的優先序，`[test:t_guard_kill_rc_precedence]`）：任一 survived=1；drifted/abort/error 存在且無 survived=2；**全部只有弱證據（`killed_unattributed`／`timed_out_weak`）=1**(這裡的弱證據指這兩種判定;`weak` 欄是另一件事,不影響 rc——修改時間沒錯開只讓 `weak` 為 true)（不放行——弱證據不算接住）；有強證據 killed 且無錯誤=0。舊版「全 killed（含 timed_out）=0」已作廢：把逾時當殺掉是假強殺。
+ - `lumos gov` 第 5 支 load 撈 kill 留痕；guard list 顯示 `[kill✓]`。
+ 
+ ## 配方失配提醒(kill-add 提醒、doctor P2、kill-rm)
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 75cfd4ee..0a99a1b2 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11942,22 +11942,22 @@ def _fix_check_line(fc):
+ 
+ 
+ def _fix_recipe_rerun_notes(env, rr, tree, pdata, unpinned, changed):
+     """修正關卡:這次 base..修正後 改到的檔,有哪幾條殺傷力配方指著(Projects/殺傷力配方當場試跑_計劃 ④)。
+     平台用修正關卡自己讀的那份設定(樹裡、提交裡那份);平台不在設定或釘不住版本(根在樹外=別的 repo、子模組、
+     符號連結、沒進版控)的配方跳過——其餘平台根都在這個 repo 裡,配方的 file 跟改過的檔同一個基準(相對 repo 最上層)。
+     配方讀樹裡(提交裡)那份筆記,跟設定同一個基準;工作目錄沒提交的改動不算(代碼審 r1 架構對齊席)。
+     回提醒行(一條說明 + 每條配方一個重跑指令,最多 10 條)。"""
+     try:
+         vtree = tree / Path(os.path.realpath(str(env.vault))).relative_to(rr)
+-    except ValueError:      # 知識庫不在這個 repo 裡:配方的 file 對不到這裡改過的檔
+-        return []
++    except ValueError:      # 知識庫不在這個 repo 裡:配方的 file 對不到這裡改過的檔(代碼審 r2 架構對齊席:不靜默)
++        return ["知識庫不在這個 repo 裡,殺傷力配方的重跑提醒跳過"]
+     hits = []
+     for rel, n in sorted(env.notes.items()):
+         if _kill_note_skipped(n):
+             continue
+         for r in _kill_read_recipes(vtree / rel)[0] or []:
+             if not isinstance(r, dict) or not isinstance(r.get("file"), str):
+                 continue
+             plat = r.get("platform") or pdata["default_platform"]
+             if not isinstance(plat, str) or plat not in pdata["platforms"] or plat in unpinned:
+                 continue
+@@ -15038,21 +15038,21 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
+     path = env.vault / rel
+     recipes, err = _kill_read_recipes(path)
+     if recipes is None:
+         print(f"擋下:{err}", file=sys.stderr)
+         return 2
+     if id_prefixes:
+-        recipes = _guard_kill_pick(rel, recipes, id_prefixes)
++        recipes = _guard_kill_pick(rel, recipes, id_prefixes, _repo_root_from_env(env))
+         if recipes is None:
+             return 2
+     if invariant_substr:
+         recipes = [r for r in recipes if invariant_substr in r.get("invariant", "")]
+     if not recipes:
+         print("擋下:沒有任何突變配方可跑——先用 lumos kill-add 宣告,或檢查你給的片段對不對得到合約", file=sys.stderr)
+         return 2
+     repo_root = _repo_root_from_env(env)
+     try:
+         pdata = load_platforms(repo_root)
+@@ -15297,64 +15297,54 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+         _weak = verdicts.count("killed_unattributed") + verdicts.count("timed_out_weak")
+         if _weak:
+             print(f"強殺 {_strong} / 弱證據 {_weak}"
+                   f"(unattributed {verdicts.count('killed_unattributed')}"
+                   f" + timeout {verdicts.count('timed_out_weak')})——弱證據未歸因到綁定測試")
+         else:
+             print(f"✓ 全部 killed({len(verdicts)} 配方)——綁定測試咬得住")
+     return 0
+ 
+ 
+-def _guard_kill_pick(rel, recipes, prefixes):
++def _guard_kill_pick(rel, recipes, prefixes, repo_root):
+     """guard kill --id:每個短身分對整篇配方比對(跟 kill-rm 同一個規則),回對到的那幾條(完整身分相同的重複一起留)。
+     有一個值不合格式、對不到、或對到多條不同配方 → 標準錯誤講原因、列出這篇每條配方,回 None;
+-    對到的配方格式壞 → 講要先 kill-rm,回 None(後面的程式碰到它會當掉;設計審 r1 邊界席)。格式壞見 _kill_recipe_shape_bad。"""
++    對到的配方格式壞 → 講要先 kill-rm,回 None(後面的程式碰到它會當掉;設計審 r1 邊界席)。
++    格式壞跟 doctor P2、kill-add 提醒同一套判法(_kill_recipe_judge 判 malformed=guard kill 會拒跑或程式出錯;
++    代碼審 r2 架構對齊席:原本另寫一支判法,兩邊對同一條結論不同)。"""
+     ids = [_kill_recipe_id(str(rel), r) for r in recipes]
+     want = set()
+     for raw in prefixes:
+         pre = _kill_norm_prefix(raw)
+         if pre is None:
+             why = f"--id 要給 8 到 64 個十六進位字元的配方短身分(收到 {_kill_esc(repr(raw))})"
+         else:
+             full, hit = _kill_match_prefix(ids, pre)
+             if full is not None:
+                 want.add(full)
+                 continue
+             why = (f"{_kill_rel(rel)} 的配方裡沒有身分以 {pre} 開頭的" if not hit
+                    else f"{pre} 對到 {len(hit)} 條不同的配方,分不清要跑哪一條;給長一點的身分")
+         print(f"擋下:{why}。這篇的配方:", file=sys.stderr)
+         for ln in _guard_kill_rm_rows(rel, recipes, "會一起跑"):
+             print(f"  {ln}", file=sys.stderr)
+         print(f"只跑某一條:lumos guard kill {_kill_node_arg(rel)} --id <短身分>", file=sys.stderr)
+         return None
++    ctx = _kill_check_ctx(repo_root)
+     for i, (r, rid) in enumerate(zip(recipes, ids), 1):
+-        why = _kill_recipe_shape_bad(r) if rid in want else ""
+-        if why:
+-            print(f"擋下:第 {i} 條配方格式壞({why}),跑不了;先 lumos guard kill-rm {_kill_node_arg(rel)} --id {rid[:12]} 再重加",
++        res = _kill_recipe_judge(ctx, r) if rid in want else None
++        if res and res["status"] == "malformed":
++            print(f"擋下:第 {i} 條{res['detail']},跑不了;先 lumos guard kill-rm {_kill_node_arg(rel)} --id {rid[:12]} 再重加",
+                   file=sys.stderr)
+             return None
+     return [r for r, rid in zip(recipes, ids) if rid in want]
+ 
+ 
+-def _kill_recipe_shape_bad(r):
+-    """guard kill 碰到會當掉的配方形狀(Issues/guard kill遇到格式壞的配方整支崩潰 的範圍:元素不是物件、
+-    invariant/file/old/new 不是字串、platform 不是字串或 null)→ 回原因;好的回空字串。--id 挑到這種就擋(代碼審 r1 通才席)。"""
+-    if not isinstance(r, dict):
+-        return f"不是物件,是 {type(r).__name__}"
+-    for k in ("invariant", "file", "old", "new"):
+-        if not isinstance(r.get(k), str):
+-            return f"{k} 不是字串"
+-    if r.get("platform") is not None and not isinstance(r.get("platform"), str):
+-        return "platform 不是字串"
+-    return ""
+-
+-
+ def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
+     """把 [audit:模型/日期] 留痕寫回 ★INVARIANT★ KEY 行(寫後自驗)。
+     語意:這條鐵則的「合法性」(是不是真鐵則 / 綁的測試夠不夠格)已由一個
+     *無對話脈絡的獨立 agent* 判過並通過。工具只記留痕,不證明審計真的乾淨——
+     那靠 skill 的 maker/checker 誠實鐵則(別餵結論給審計者、提出者不得自評)。"""
+     import datetime
+     if date is None:
+         date = datetime.date.today().isoformat()
+     stamp = f"{model}/{date}"
+     rel = env.find(node)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b42af962..2dd152d9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -60856,45 +60856,57 @@ def t_guard_kill_only_ids():
+     check("⑤a 共用比對:前段對到兩條不同身分 → 判不出、兩條都回", full is None and hit == ["abcdef0011", "abcdef0022"], str(hit))
+     other = {"invariant": "另一條合約", "test": "TestLimitFive", "file": "prod.py", "old": "def check(n):", "new": "x"}
+     orig = m._kill_recipe_id
+     fake = {"LIMIT = 5": "abcdef0011" + "0" * 54, "def check(n):": "abcdef0022" + "0" * 54}
+     import contextlib as _cl
+     import io as _io
+     err = _io.StringIO()
+     try:
+         m._kill_recipe_id = lambda node, r: fake.get(r.get("old"), "f" * 64) if isinstance(r, dict) else "e" * 64
+         with _cl.redirect_stderr(err):
+-            got = m._guard_kill_pick("Systems/Limit.md", [recs[0], other], ["abcdef00"])
++            got = m._guard_kill_pick("Systems/Limit.md", [recs[0], other], ["abcdef00"], root)
+     finally:
+         m._kill_recipe_id = orig
+     check("⑤b 整篇對到兩條 → 擋下(在合約片段過濾之前比對:片段只留一條也一樣)",
+           got is None and "對到 2 條不同的配方" in err.getvalue(), err.getvalue())
+     # ⑥對到格式壞的那條:印 kill-rm、rc2、不當掉
+     root2, v2 = _mk_kill_env()
+     (v2 / "Systems" / "Limit.md").write_text(_kr_note(["just a string", _kr_recipe("prod.py")]), encoding="utf-8")
+     _kr_commit(root2, "bad recipe")
+     bad = m._kill_recipe_id("Systems/Limit.md", "just a string")[:12]
+     r = _kr_lum(root2, v2, "guard", "kill", "Systems/Limit", "--id", bad)
+     check("⑥對到格式壞的配方 → rc2、叫人先 kill-rm、沒有程式崩潰",
+-          r.returncode == 2 and "格式壞" in r.stderr and f"lumos guard kill-rm Systems/Limit --id {bad}" in r.stderr
++          r.returncode == 2 and "格式不對" in r.stderr and f"lumos guard kill-rm Systems/Limit --id {bad}" in r.stderr
+           and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
+     # ⑥b 物件但欄位型別錯(既有 Issue 的重現:file 是數字;old 是 null)也算格式壞(代碼審 r1 通才席)
+     for label, badrec in (("file 是數字", {"invariant": "上限恆為5", "test": "TestLimitFive", "file": 5, "old": "x", "new": "y"}),
+                           ("old 是 null", {"invariant": "上限恆為5", "test": "TestLimitFive", "file": "prod.py", "old": None, "new": "y"})):
+         root3, v3 = _mk_kill_env()
+         (v3 / "Systems" / "Limit.md").write_text(_kr_note([badrec, _kr_recipe("prod.py")]), encoding="utf-8")
+         _kr_commit(root3, "bad field")
+         bid = m._kill_recipe_id("Systems/Limit.md", badrec)[:12]
+         r = _kr_lum(root3, v3, "guard", "kill", "Systems/Limit", "--id", bid, "--json")
+         check(f"⑥b 對到欄位型別錯的配方({label})→ rc2、叫人先 kill-rm、不當掉、標準輸出不印半截",
+-              r.returncode == 2 and "格式壞" in r.stderr and f"--id {bid}" in r.stderr and "Traceback" not in r.stderr
++              r.returncode == 2 and "格式不對" in r.stderr and f"--id {bid}" in r.stderr and "Traceback" not in r.stderr
+               and r.stdout == "", f"rc={r.returncode} {r.stdout[:200]} {r.stderr[-500:]}")
++    # ⑥c 格式壞跟 P2 同一套判法(代碼審 r2 架構對齊席):guard kill 不會因它當掉的形狀不擋——平台寫成數字(會判平台不在設定)、
++    # 缺 invariant(跑得動)、原文對不上時 new 不是字串(會判 drifted,走不到套壞法)
++    for label, okrec in (("platform 是數字", _kr_recipe("prod.py", platform=5)),
++                         ("缺 invariant", {k: val for k, val in _kr_recipe("prod.py").items() if k != "invariant"}),
++                         ("原文對不上、new 是數字", _kr_recipe("prod.py", old="NOT_THERE", new=123))):
++        root4, v4 = _mk_kill_env()
++        (v4 / "Systems" / "Limit.md").write_text(_kr_note([okrec]), encoding="utf-8")
++        _kr_commit(root4, "odd but runnable")
++        oid = m._kill_recipe_id("Systems/Limit.md", okrec)[:12]
++        r = _kr_lum(root4, v4, "guard", "kill", "Systems/Limit", "--id", oid)
++        check(f"⑥c {label}:不擋成格式壞、照跑、不當掉", "格式不對" not in r.stderr and "Traceback" not in r.stderr
++              and f"id={oid}" in r.stdout, f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-400:]}")
+     r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "對不到的片段", "--id", s1)
+     check("⑦對到的那條被合約片段濾掉 → rc2、沒有任何突變配方可跑", r.returncode == 2 and "沒有任何突變配方可跑" in r.stderr, r.stderr)
+     r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--json")
+     check("⑧不給 --id 照舊全跑", r.returncode == 0 and olds(r) == ["LIMIT = 5", "return n <= LIMIT"], f"rc={r.returncode} {r.stdout}")
+ 
+ 
+ def t_guard_kill_add_try():
+     """[S2] kill-add 寫完後的試跑(Projects/殺傷力配方當場試跑_計劃 ②):不帶 --try 印只跑這一條的指令;
+     --try 殺得掉回 0 並講弱證據背書不採信;survived 回 1、印 kill-rm、配方留著;drifted/abort 回 2、
+     講「配方已寫進筆記,試跑沒跑成」並給 guard kill --id;寫入失敗照舊回 2 不試跑;只更新 covers 也試跑。"""
+@@ -61058,20 +61070,26 @@ def t_fix_check_recipe_rerun_note():
+           and f"lumos guard kill Systems/Lim --id {sid['hit']}" in r.stdout, f"rc={r.returncode} {r.stdout[-1200:]} {r.stderr[-300:]}")
+     check("②沒改到的檔(run.py)的配方不印", sid["miss"] not in r.stdout, r.stdout[-1200:])
+     check("③平台不在設定(ext)的配方不收", sid["ext"] not in r.stdout, r.stdout[-1200:])
+     # ③b 配方讀提交裡那份(跟關卡讀設定同一個基準):工作目錄把筆記改掉、沒提交,提醒照提交裡的配方
+     lim = v / "Systems" / "Lim.md"
+     committed = lim.read_text(encoding="utf-8")
+     lim.write_text(_kr_note([miss], inv_lines=["KEY: 殺傷力配方掛在這裡"]), encoding="utf-8")
+     r = _fc_check(root, v)
+     lim.write_text(committed, encoding="utf-8")
+     check("③b 工作目錄的筆記沒提交的改動不算:照提交裡的配方提醒", sid["hit"] in r.stdout, r.stdout[-1200:])
++    # ③c 知識庫不在這個 repo 裡:不靜默,留一行說明(代碼審 r2 架構對齊席)
++    import types as _ty
++    elsewhere = Path(tempfile.mkdtemp(prefix="gctl-fc-vault-"))
++    got = m._fix_recipe_rerun_notes(_ty.SimpleNamespace(vault=elsewhere, notes={}), root.resolve(), root.resolve(),
++                                    {"platforms": {}, "default_platform": ""}, {}, {"prod.py"})
++    check("③c 知識庫在 repo 外 → 一行說明、不靜默", len(got) == 1 and "知識庫不在" in got[0], str(got))
+     r = _fc_check(root, v, "--json")
+     try:
+         notes = _j.loads(r.stdout).get("notes") or []
+     except ValueError:
+         notes = []
+     check("④--json 的 notes 陣列也有", any(sid["hit"] in n for n in notes), r.stdout[-800:])
+     other = Path(tempfile.mkdtemp(prefix="gctl-fc-ext-"))
+     _fc_git(other, "init", "-q")
+     (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "test_profile": "python", "platforms": {
+         "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},

@@ -60872,6 +60872,340 @@ def t_guard_kill_add_covers_update():
     check("④沒帶 --covers 的重複 → 照舊擋下", r.returncode == 2 and "已經有了" in r.stderr, r.stderr)
 
 
+def t_guard_kill_only_ids():
+    """[S1] guard kill --id 只跑短身分對到的那幾條(Projects/殺傷力配方當場試跑_計劃 ①):一個只跑一條、兩個跑兩條;
+    對不到、不是十六進位、在整篇裡對到兩條不同配方 → rc2,標準錯誤列出每條短身分、結尾是「只跑某一條」;
+    合約片段濾完只剩一條也照擋;對到格式壞的配方 → rc2 給 kill-rm、不當掉;對到的被合約片段濾掉 → 沒有配方可跑;
+    不給 --id 照舊全跑。"""
+    import json as _json
+    m = _load_lumos_inproc()
+    root, v = _mk_kill_env()
+    base = ["guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py"]
+    _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    _kr_lum(root, v, *base, "--old", "return n <= LIMIT", "--new", "return n <= LIMIT + 100")
+    _kr_commit(root, "recipes")
+    recs = m._kill_read_recipes(v / "Systems" / "Limit.md")[0]
+    s1, s2 = (m._kill_recipe_id("Systems/Limit.md", r)[:12] for r in recs)
+
+    def olds(r):
+        try:
+            return sorted(x.get("old") for x in _json.loads(r.stdout)["results"])
+        except ValueError:
+            return None
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--id", s1, "--json")
+    check("①一個短身分只跑那一條", r.returncode == 0 and olds(r) == ["LIMIT = 5"], f"rc={r.returncode} {r.stdout} {r.stderr}")
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--id", s1, "--id", s2[:8], "--json")
+    check("②兩個(含 8 碼前段)只跑那兩條", r.returncode == 0 and olds(r) == ["LIMIT = 5", "return n <= LIMIT"],
+          f"rc={r.returncode} {r.stdout} {r.stderr}")
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--id", "deadbeef00")
+    check("③對不到 → rc2、標準錯誤列出每條短身分、結尾是只跑某一條(不是移除)",
+          r.returncode == 2 and s1 in r.stderr and s2 in r.stderr and "沒有身分以 deadbeef00 開頭" in r.stderr
+          and "只跑某一條:lumos guard kill Systems/Limit --id <短身分>" in r.stderr and "移除:" not in r.stderr
+          and r.stdout == "", f"rc={r.returncode} {r.stdout} {r.stderr}")
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--id", "xyz")
+    check("④不是十六進位 → rc2 並列出每條", r.returncode == 2 and "十六進位" in r.stderr and s1 in r.stderr, r.stderr)
+    # ⑤整篇對到兩條:身分隨機撞不出來,行程內把身分函式換成固定前段(跟 kill-rm 共用的比對那一步一起驗)
+    full, hit = m._kill_match_prefix(["abcdef0011", "abcdef0022", "99"], "abcdef00")
+    check("⑤a 共用比對:前段對到兩條不同身分 → 判不出、兩條都回", full is None and hit == ["abcdef0011", "abcdef0022"], str(hit))
+    other = {"invariant": "另一條合約", "test": "TestLimitFive", "file": "prod.py", "old": "def check(n):", "new": "x"}
+    orig = m._kill_recipe_id
+    fake = {"LIMIT = 5": "abcdef0011" + "0" * 54, "def check(n):": "abcdef0022" + "0" * 54}
+    import contextlib as _cl
+    import io as _io
+    err = _io.StringIO()
+    try:
+        m._kill_recipe_id = lambda node, r: fake.get(r.get("old"), "f" * 64) if isinstance(r, dict) else "e" * 64
+        with _cl.redirect_stderr(err):
+            got = m._guard_kill_pick("Systems/Limit.md", [recs[0], other], ["abcdef00"], m._kill_check_ctx(root))
+    finally:
+        m._kill_recipe_id = orig
+    check("⑤b 整篇對到兩條 → 擋下(在合約片段過濾之前比對:片段只留一條也一樣)",
+          got is None and "對到 2 條不同的配方" in err.getvalue(), err.getvalue())
+    # ⑥對到格式壞的那條:印 kill-rm、rc2、不當掉
+    root2, v2 = _mk_kill_env()
+    (v2 / "Systems" / "Limit.md").write_text(_kr_note(["just a string", _kr_recipe("prod.py")]), encoding="utf-8")
+    _kr_commit(root2, "bad recipe")
+    bad = m._kill_recipe_id("Systems/Limit.md", "just a string")[:12]
+    r = _kr_lum(root2, v2, "guard", "kill", "Systems/Limit", "--id", bad)
+    check("⑥對到格式壞的配方 → rc2、叫人先 kill-rm、沒有程式崩潰",
+          r.returncode == 2 and "格式不對" in r.stderr and f"lumos guard kill-rm Systems/Limit --id {bad}" in r.stderr
+          and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
+    # ⑥b 物件但欄位型別錯(既有 Issue 的重現:file 是數字;old 是 null)也算格式壞(代碼審 r1 通才席)
+    for label, badrec in (("file 是數字", {"invariant": "上限恆為5", "test": "TestLimitFive", "file": 5, "old": "x", "new": "y"}),
+                          ("old 是 null", {"invariant": "上限恆為5", "test": "TestLimitFive", "file": "prod.py", "old": None, "new": "y"})):
+        root3, v3 = _mk_kill_env()
+        (v3 / "Systems" / "Limit.md").write_text(_kr_note([badrec, _kr_recipe("prod.py")]), encoding="utf-8")
+        _kr_commit(root3, "bad field")
+        bid = m._kill_recipe_id("Systems/Limit.md", badrec)[:12]
+        r = _kr_lum(root3, v3, "guard", "kill", "Systems/Limit", "--id", bid, "--json")
+        check(f"⑥b 對到欄位型別錯的配方({label})→ rc2、叫人先 kill-rm、不當掉、標準輸出不印半截",
+              r.returncode == 2 and "格式不對" in r.stderr and f"--id {bid}" in r.stderr and "Traceback" not in r.stderr
+              and r.stdout == "", f"rc={r.returncode} {r.stdout[:200]} {r.stderr[-500:]}")
+    # ⑥c 格式壞跟 P2 同一套判法(代碼審 r2 架構對齊席):guard kill 不會因它當掉的形狀不擋——平台寫成數字(會判平台不在設定)、
+    # 缺 invariant(跑得動)、原文對不上時 new 不是字串(會判 drifted,走不到套壞法)
+    for label, okrec in (("platform 是數字", _kr_recipe("prod.py", platform=5)),
+                         ("缺 invariant", {k: val for k, val in _kr_recipe("prod.py").items() if k != "invariant"}),
+                         ("原文對不上、new 是數字", _kr_recipe("prod.py", old="NOT_THERE", new=123))):
+        root4, v4 = _mk_kill_env()
+        (v4 / "Systems" / "Limit.md").write_text(_kr_note([okrec]), encoding="utf-8")
+        _kr_commit(root4, "odd but runnable")
+        oid = m._kill_recipe_id("Systems/Limit.md", okrec)[:12]
+        r = _kr_lum(root4, v4, "guard", "kill", "Systems/Limit", "--id", oid)
+        check(f"⑥c {label}:不擋成格式壞、照跑、不當掉", "格式不對" not in r.stderr and "Traceback" not in r.stderr
+              and f"id={oid}" in r.stdout, f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-400:]}")
+    # ⑥d file 不是正式寫法(判法停在 path、不預測)時 old/new 型別錯:guard kill 在當掉的那兩步原地記成 error,
+    # 帶不帶 --id 都不當掉、--json 照樣恰一行(代碼審 r3 通才席;同類第三次,換形狀:擋在當掉的地方,不再補判法條件)
+    # 另開一輪(code-殺傷力配方當場試跑-r4)通才席:判法認定「套壞法時會當掉」的沒寫 old 而檔是空的也要擋
+    # (new 帶替身字元那種會被原地擋下,但印 --json 時照樣崩——替身字元整類留在既有 Issue,Enzo 2026-10-02 裁收手)
+    no_old = {k: val for k, val in _kr_recipe("./empty.py").items() if k != "old"}
+    for label, rec5 in (("./prod.py 加 old 是 null", {**_kr_recipe("prod.py"), "file": "./prod.py", "old": None}),
+                        ("./prod.py 加 new 是數字", {**_kr_recipe("prod.py"), "file": "./prod.py", "new": 123}),
+                        ("./empty.py 空檔加沒寫 old", no_old)):
+        for with_id in (True, False):
+            root5, v5 = _mk_kill_env()
+            (root5 / "empty.py").write_text("", encoding="utf-8")
+            (v5 / "Systems" / "Limit.md").write_text(_kr_note(_json.dumps([rec5])), encoding="utf-8")
+            _kr_commit(root5, "odd path")
+            args = ["--id", m._kill_recipe_id("Systems/Limit.md", rec5)[:12]] if with_id else []
+            r = _kr_lum(root5, v5, "guard", "kill", "Systems/Limit", *args, "--json")
+            try:
+                res = _json.loads(r.stdout)["results"]
+            except (ValueError, KeyError):
+                res = None
+            check(f"⑥d {label}({'帶' if with_id else '不帶'} --id):不當掉、rc2、--json 恰一行、那條記 error",
+                  r.returncode == 2 and "Traceback" not in r.stderr and res is not None and len(r.stdout.strip().splitlines()) == 1
+                  and [x.get("verdict") for x in res] == ["error"] and "格式不對" in res[0].get("detail", ""),
+                  f"rc={r.returncode} {r.stdout[:200]} {r.stderr[-300:]}")
+    # ⑥e invariant 不是字串的配方,帶合約片段跑不當掉(片段過濾只看字串的 invariant;代碼審 r3 通才席)
+    root6, v6 = _mk_kill_env()
+    rec6 = {**_kr_recipe("prod.py"), "invariant": 5}
+    (v6 / "Systems" / "Limit.md").write_text(_kr_note([rec6, _kr_recipe("prod.py", old="return n <= LIMIT")]), encoding="utf-8")
+    _kr_commit(root6, "inv int")
+    r = _kr_lum(root6, v6, "guard", "kill", "Systems/Limit", "上限恆為5", "--id", m._kill_recipe_id("Systems/Limit.md", rec6)[:12])
+    check("⑥e invariant 是數字、帶 --id 與合約片段 → 不當掉(被片段濾掉:沒有配方可跑)", r.returncode == 2
+          and "Traceback" not in r.stderr and "沒有任何突變配方可跑" in r.stderr, f"rc={r.returncode} {r.stderr[-400:]}")
+    # ⑥f 配方多寫的欄位型別怪(covers 是數字、detail 是數字)不當掉;invariant 是清單帶合約片段,行為跟修正前一樣照跑(r4 通才席)
+    for label, extra, args in (("covers 是數字", {"covers": 5}, []), ("detail 是數字", {"detail": 5}, []),
+                               ("invariant 是清單、帶合約片段", {"invariant": ["上限恆為5"]}, ["上限恆為5"])):
+        root7, v7 = _mk_kill_env()
+        (v7 / "Systems" / "Limit.md").write_text(_kr_note([{**_kr_recipe("prod.py", new="LIMIT = 99"), **extra}]), encoding="utf-8")
+        _kr_commit(root7, "odd extra")
+        r = _kr_lum(root7, v7, "guard", "kill", "Systems/Limit", *args, "--json")
+        check(f"⑥f {label}:不當掉、照跑(結果恰一筆)", "Traceback" not in r.stderr and "沒有任何突變配方可跑" not in r.stderr
+              and len(r.stdout.strip().splitlines()) == 1 and len(_json.loads(r.stdout or "{}").get("results") or []) == 1,
+              f"rc={r.returncode} {r.stdout[:200]} {r.stderr[-300:]}")
+    # ⑥g 挑配方的判法自己出錯:不擋、但印一行說明(r4 架構對齊席:兜底不靜默)
+    orig_j = m._kill_recipe_judge
+    err2 = _io.StringIO()
+    try:
+        def boom(ctx, r):
+            raise RuntimeError("壞了")
+        m._kill_recipe_judge = boom
+        with _cl.redirect_stderr(err2):
+            got2 = m._guard_kill_pick("Systems/Limit.md", [recs[0]], [s1], m._kill_check_ctx(root))
+    finally:
+        m._kill_recipe_judge = orig_j
+    check("⑥g 判法出錯 → 照跑那條、印一行判斷時出錯", got2 == [recs[0]] and "判斷時出錯" in err2.getvalue(), err2.getvalue())
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "對不到的片段", "--id", s1)
+    check("⑦對到的那條被合約片段濾掉 → rc2、沒有任何突變配方可跑", r.returncode == 2 and "沒有任何突變配方可跑" in r.stderr, r.stderr)
+    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--json")
+    check("⑧不給 --id 照舊全跑", r.returncode == 0 and olds(r) == ["LIMIT = 5", "return n <= LIMIT"], f"rc={r.returncode} {r.stdout}")
+
+
+def t_guard_kill_add_try():
+    """[S2] kill-add 寫完後的試跑(Projects/殺傷力配方當場試跑_計劃 ②):不帶 --try 印只跑這一條的指令;
+    --try 殺得掉回 0 並講弱證據背書不採信;survived 回 1、印 kill-rm、配方留著;drifted/abort 回 2、
+    講「配方已寫進筆記,試跑沒跑成」並給 guard kill --id;寫入失敗照舊回 2 不試跑;只更新 covers 也試跑。"""
+    import json as _json
+    m = _load_lumos_inproc()
+    base = ["guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py"]
+
+    def sid_of(v):
+        recs = m._kill_read_recipes(v / "Systems" / "Limit.md")[0] or []
+        return [m._kill_recipe_id("Systems/Limit.md", r)[:12] for r in recs]
+
+    def log_rows(v):
+        p = v.parent / ".kill-log.jsonl"
+        return [_json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
+    root, v = _mk_kill_env()
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    sid = sid_of(v)[0]
+    check("①不帶 --try:輸出含只跑這一條的指令、不試跑", r.returncode == 0
+          and f"lumos guard kill Systems/Limit --id {sid}" in r.stdout and "試跑" not in r.stdout and not log_rows(v),
+          r.stdout + r.stderr)
+    root, v = _mk_kill_env()
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--try")
+    rows = log_rows(v)
+    check("②--try 殺得掉 → rc0、印判定、講弱證據背書不採信(筆記沒提交,那筆 weak 是 true)",
+          r.returncode == 0 and "killed" in r.stdout and "⚠ 提醒:這次試跑是弱證據" in r.stderr
+          and len(rows) == 1 and rows[0]["verdict"] == "killed" and rows[0]["weak"] is True,
+          f"rc={r.returncode} {r.stdout} {r.stderr} {rows}")
+    root, v = _mk_attr_env("print('ok')\n")
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--try")
+    ids = sid_of(v)
+    check("③survived → rc1、印 kill-rm 指令、配方留在筆記", r.returncode == 1 and len(ids) == 1
+          and f"lumos guard kill-rm Systems/Limit --id {ids[0]}" in r.stderr and "⚠ 提醒:配方已寫進筆記" in r.stderr,
+          f"rc={r.returncode} {r.stderr}")
+    root, v = _mk_kill_env()
+    (root / "prod.py").write_text("LIMIT = 7\n\ndef check(n):\n    return n <= LIMIT\n", encoding="utf-8")   # 程式改了沒提交
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 7", "--new", "LIMIT = 99", "--try")
+    ids = sid_of(v)
+    check("④drifted → rc2、講配方已寫進筆記試跑沒跑成、給 guard kill --id、別重跑 kill-add",
+          r.returncode == 2 and "配方已寫進筆記,試跑沒跑成" in r.stderr and len(ids) == 1
+          and f"lumos guard kill Systems/Limit --id {ids[0]}" in r.stderr and "別重跑 kill-add" in r.stderr,
+          f"rc={r.returncode} {r.stderr}")
+    root, v = _mk_attr_env("import sys\nsys.exit(1)\n")   # baseline 就紅
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--try")
+    check("⑤abort(baseline 沒綠)→ rc2、講試跑沒跑成與 baseline 沒綠",
+          r.returncode == 2 and "試跑沒跑成" in r.stderr and "baseline 沒綠" in r.stderr, f"rc={r.returncode} {r.stderr}")
+    root, v = _mk_kill_env()
+    _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 0", "--try")
+    check("⑥寫入失敗(判重擋下)→ 照舊 rc2、不試跑", r.returncode == 2 and "已經有了" in r.stderr
+          and "試跑" not in r.stdout + r.stderr and not log_rows(v), f"rc={r.returncode} {r.stdout} {r.stderr}")
+    r = _kr_lum(root, v, *base, "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--covers", "java-concurrency", "--try")
+    rows = log_rows(v)
+    check("⑦只更新 covers 也試跑那一條", r.returncode == 0 and "只更新" in r.stdout and len(rows) == 1
+          and rows[0]["verdict"] == "killed", f"rc={r.returncode} {r.stdout} {r.stderr} {rows}")
+
+
+def t_doctor_p2_lists_survived():
+    """[S3] doctor P2 第二個提醒(Projects/殺傷力配方當場試跑_計劃 ③):殺傷力帳本裡現有配方最近一筆是 survived 的列出來
+    (短身分從筆記那條配方算、帶重跑與移除指令);最近一筆 killed 不列;ts 比檔內順序優先;對不回筆記的帳不列;
+    原文對不上已逐條列過的不重複列;設定檔讀不了照樣列;weak 與檔之後改過各加一句;只改別的檔(含萬用字元撞名)不加;
+    --ci 記 check-p2s。"""
+    import json as _json
+    m = _load_lumos_inproc()
+    root, v = _mk_kill_env()
+    A, B, C = _kr_recipe("prod.py"), _kr_recipe("prod.py", old="return n <= LIMIT"), _kr_recipe("prod.py", old="def check(n):")
+    E, F = _kr_recipe("prod.py", old="<= LIMIT"), _kr_recipe("prod.py", old="LIMIT = 42")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([A, B, C, E, F]), encoding="utf-8")
+    _kr_commit(root, "recipes")
+    head = _kr_git(root, "rev-parse", "HEAD").stdout.strip()
+    node = "Systems/Limit.md"
+    sid = {k: m._kill_recipe_id(node, r)[:12] for k, r in zip("ABCEF", (A, B, C, E, F))}
+
+    def row(rec, verdict, ts, weak=False, rid=None):
+        return {"ts": ts, "node": node, "commit": head[:8], "invariant": rec["invariant"], "test": rec["test"], "platform": "",
+                "verdict": verdict, "note": "", "flaky_risk": False, "tail": "", "covers": [],
+                "recipe_id": rid or m._kill_recipe_key(node, rec["invariant"], rec["file"], rec["old"]),
+                "head_sha": head, "weak": weak}
+    log = [row(A, "survived", "2026-10-01T10:00:00"),
+           row(B, "survived", "2026-10-01T09:00:00"), row(B, "killed", "2026-10-01T11:00:00"),
+           row(C, "survived", "2026-10-01T12:00:00"), row(C, "killed", "2026-10-01T08:00:00"),   # 檔內後面那筆比較早
+           row(E, "survived", "2026-10-01T10:00:00", weak=True),
+           row(F, "survived", "2026-10-01T10:00:00"),
+           row(E, "killed", "2026-10-01T10:00:00"),                                              # 同 ts:取先出現的(跟背書同)
+           row(A, "survived", "2026-10-01T10:00:00", rid="d" * 64)]                              # 對不回筆記
+    (v.parent / ".kill-log.jsonl").write_text("".join(_json.dumps(x, ensure_ascii=False) + "\n" for x in log), encoding="utf-8")
+
+    def sv_lines():
+        out = run(v, "doctor", "--verbose").stdout
+        return [ln for ln in out.splitlines() if "重跑:lumos guard kill" in ln], out
+    lines, out = sv_lines()
+
+    def line_of(k):
+        got = [ln for ln in lines if f"--id {sid[k]}" in ln]
+        return got[0] if len(got) == 1 else None
+    a = line_of("A")
+    check("①最近一筆 survived → 另一個提醒列出短身分、重跑與移除指令、日期與版本",
+          "最近一次真跑判 survived" in out and a is not None and f"lumos guard kill Systems/Limit --id {sid['A']}" in a
+          and f"lumos guard kill-rm Systems/Limit --id {sid['A']}" in a and "2026-10-01" in a and head[:8] in a
+          and "先重跑" not in a, out[-2500:])
+    check("②最近一筆 killed(更早有 survived)→ 不列", line_of("B") is None, "\n".join(lines))
+    check("③檔內後面那筆 ts 比較早 → 以 ts 為準(最近一筆是 survived)", line_of("C") is not None, "\n".join(lines))
+    check("④對不回筆記現有配方的帳 → 不列", not any("dddddddddddd" in ln for ln in lines) and len(lines) == 3, "\n".join(lines))
+    check("⑤原文對不上、已在原文那段列過 → 不重複列", line_of("F") is None and f"--id {sid['F']}" in out, out[-2500:])
+    check("⑥b 同一個 ts 的兩筆取先出現的那筆(跟合約背書同一個規則)", line_of("E") is not None, "\n".join(lines))
+    check("⑥那次 weak 是 true → 行尾帶證據弱", line_of("E") is not None and "(那次證據弱,先重跑)" in line_of("E"), "\n".join(lines))
+    (root / "other.py").write_text("X = 1\n", encoding="utf-8")
+    _kr_commit(root, "other file")
+    lines, out = sv_lines()
+    check("⑦只有別的檔改過 → 不帶「之後改過」", line_of("A") is not None and "之後改過" not in line_of("A"), "\n".join(lines))
+    (root / "prod.py").write_text((root / "prod.py").read_text(encoding="utf-8") + "# 註解\n", encoding="utf-8")
+    _kr_commit(root, "touch prod")
+    lines, out = sv_lines()
+    check("⑧配方指的檔之後改過 → 行尾帶「之後改過」", line_of("A") is not None and "(配方指的檔之後改過,先重跑)" in line_of("A"),
+          "\n".join(lines))
+    run(v, "doctor", "--ci")
+    gl = v.parent / ".governance-log.jsonl"
+    evs = [_json.loads(ln) for ln in gl.read_text(encoding="utf-8").splitlines() if ln.strip()] if gl.exists() else []
+    sv = [e for e in evs if e.get("gate") == "check-p2s"]
+    check("⑨--ci 記 check-p2s(warned、不硬擋、帶節點)", sv and all(e.get("kind") == "warned" and e.get("hard") is False
+          and e.get("nodes") == ["Limit"] for e in sv) and m._KNOWN_GATES.count("check-p2s") == 1, str(sv)[:400])
+    (root / ".lumos" / "config.json").write_text("{bad", encoding="utf-8")
+    lines, out = sv_lines()
+    check("⑩設定檔讀不了 → survived 照樣列(行尾加之後改過)", line_of("A") is not None and "之後改過" in line_of("A")
+          and line_of("C") is not None, out[-2500:])
+    # ⑪萬用字元:檔名含 [ ] 時,只改了被萬用字元對到的另一支不算改過(行程內直接判)
+    root3, _v3 = _mk_kill_env()
+    (root3 / "app" / "[id]").mkdir(parents=True)
+    (root3 / "app" / "i").mkdir()
+    (root3 / "app" / "[id]" / "page.py").write_text("X = 1\n", encoding="utf-8")
+    (root3 / "app" / "i" / "page.py").write_text("Y = 1\n", encoding="utf-8")
+    _kr_commit(root3, "pages")
+    h3 = _kr_git(root3, "rev-parse", "HEAD").stdout.strip()
+    (root3 / "app" / "i" / "page.py").write_text("Y = 2\n", encoding="utf-8")
+    _kr_commit(root3, "only i")
+    rec3 = _kr_recipe("app/[id]/page.py", old="X = 1")
+    ctx = m._kill_check_ctx(root3)
+    import time as _t
+    check("⑪只改了 app/i/page.py → app/[id]/page.py 不算改過",
+          m._kill_file_changed_since(ctx, rec3, h3, _t.monotonic() + 20, {}) is False)
+    (root3 / "app" / "[id]" / "page.py").write_text("X = 2\n", encoding="utf-8")
+    _kr_commit(root3, "id too")
+    check("⑪b 真的改了 app/[id]/page.py → 算改過", m._kill_file_changed_since(ctx, rec3, h3, _t.monotonic() + 20, {}) is True)
+
+
+def t_fix_check_recipe_rerun_note():
+    """[S4] 修正關卡提醒重跑殺傷力配方(Projects/殺傷力配方當場試跑_計劃 ④):base..修正後改到配方指著的檔 → 印說明與
+    guard kill --id 指令,過不過不受影響(--json 的 notes 也有);沒改到的檔不印;平台根在樹外(別的 repo)的不收。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    root, v, base, head = _fc_env()
+    hit, miss = _kr_recipe("prod.py", old="return min(n, 5)"), _kr_recipe("run.py", old="import")
+    ext = _kr_recipe("prod.py", old="def clamp(n):", platform="ext")
+    (v / "Systems" / "Lim.md").write_text(_kr_note([hit, miss, ext], inv_lines=["KEY: 殺傷力配方掛在這裡"]), encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "recipes")
+    sid = {k: m._kill_recipe_id("Systems/Lim.md", r)[:12] for k, r in (("hit", hit), ("miss", miss), ("ext", ext))}
+    _fc_ledger(root, v)
+    _fc_record(root, base, [_fc_group()])
+    r = _fc_check(root, v)
+    check("①改到配方指著的檔 → 印說明與重跑指令、過不過不受影響",
+          r.returncode == 0 and "這幾條殺傷力配方指著這次改過的檔" in r.stdout
+          and f"lumos guard kill Systems/Lim --id {sid['hit']}" in r.stdout, f"rc={r.returncode} {r.stdout[-1200:]} {r.stderr[-300:]}")
+    check("②沒改到的檔(run.py)的配方不印", sid["miss"] not in r.stdout, r.stdout[-1200:])
+    check("③平台不在設定(ext)的配方不收", sid["ext"] not in r.stdout, r.stdout[-1200:])
+    # ③b 配方讀提交裡那份(跟關卡讀設定同一個基準):工作目錄把筆記改掉、沒提交,提醒照提交裡的配方
+    lim = v / "Systems" / "Lim.md"
+    committed = lim.read_text(encoding="utf-8")
+    lim.write_text(_kr_note([miss], inv_lines=["KEY: 殺傷力配方掛在這裡"]), encoding="utf-8")
+    r = _fc_check(root, v)
+    lim.write_text(committed, encoding="utf-8")
+    check("③b 工作目錄的筆記沒提交的改動不算:照提交裡的配方提醒", sid["hit"] in r.stdout, r.stdout[-1200:])
+    # ③c 知識庫不在這個 repo 裡:不靜默,留一行說明(代碼審 r2 架構對齊席)
+    import types as _ty
+    elsewhere = Path(tempfile.mkdtemp(prefix="gctl-fc-vault-"))
+    got = m._fix_recipe_rerun_notes(_ty.SimpleNamespace(vault=elsewhere, notes={}), root.resolve(), root.resolve(),
+                                    {"platforms": {}, "default_platform": ""}, {}, {"prod.py"})
+    check("③c 知識庫在 repo 外 → 一行說明、不靜默", len(got) == 1 and "知識庫不在" in got[0], str(got))
+    r = _fc_check(root, v, "--json")
+    try:
+        notes = _j.loads(r.stdout).get("notes") or []
+    except ValueError:
+        notes = []
+    check("④--json 的 notes 陣列也有", any(sid["hit"] in n for n in notes), r.stdout[-800:])
+    other = Path(tempfile.mkdtemp(prefix="gctl-fc-ext-"))
+    _fc_git(other, "init", "-q")
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "test_profile": "python", "platforms": {
+        "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},
+        "ext": {"profile": "python", "root": str(other), "run_cmd": "python3 run.py -k {method}"}}}), encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "ext platform outside")
+    r = _fc_check(root, v)
+    check("⑤平台根在樹外(別的 repo)→ 不收;同 repo 的照收", sid["ext"] not in r.stdout and sid["hit"] in r.stdout,
+          f"rc={r.returncode} {r.stdout[-1200:]} {r.stderr[-300:]}")
+
+
 def t_kill_recipe_key_shared():
     """[S4] 配方身分雜湊:四個欄位任一不同就不同、串接不撞;kill-add 判重與改前三欄比對一致。"""
     m = _load_lumos_inproc()
@@ -61033,6 +61367,9 @@ def t_guard_kill_add_warns_drifted_recipe():
         root, v = _mk_kill_env()
         return root, v
 
+    def _no_id(out):
+        return "\n".join(ln for ln in out.splitlines() if "--id" not in ln)
+
     root, v = fresh()
     ok = _kr_lum(root, v, *base, "--file", "prod.py", "--old", "LIMIT = 5")
     check("①恰好一次 → rc0、不印提醒", ok.returncode == 0 and "提醒" not in ok.stderr, ok.stdout + ok.stderr)
@@ -61051,7 +61388,9 @@ def t_guard_kill_add_warns_drifted_recipe():
         r = _kr_lum(root, v, *base, *args)
         recs = m._kill_read_recipes(v / "Systems" / "Limit.md")[0] or []
         extra = [ln for ln in _kr_err_lines(r) if "提醒" in ln]
-        check(f"{label}:rc0、標準輸出跟對得上時逐字相同、照舊寫入", r.returncode == 0 and r.stdout == ok.stdout and len(recs) == 1,
+        # 「下一步」那行帶這條的短身分,各格配方不同(殺傷力配方當場試跑設計審 r1):比對前先拿掉那一行
+        check(f"{label}:rc0、標準輸出跟對得上時逐字相同(帶 --id 那行除外)、照舊寫入",
+              r.returncode == 0 and _no_id(r.stdout) == _no_id(ok.stdout) and len(recs) == 1,
               f"rc={r.returncode} {r.stdout!r} vs {ok.stdout!r} recs={recs}")
         check(f"{label}:標準錯誤恰好多一行且字面照狀態", len(_kr_err_lines(r)) == base_err + 1 and len(extra) == 1
               and all(w in extra[0] for w in want), r.stderr)
@@ -61375,7 +61714,7 @@ def _krc_match(label, status, r):
             "hits": verdict == "drifted",
             "path": True,
             "noplat": verdict == "error" and "不在 config" in detail,
-            "malformed": (verdict == "error" and "test 名不合法" in detail)
+            "malformed": (verdict == "error" and ("test 名不合法" in detail or "配方欄位格式不對" in detail))
             or (crashed and any(e in r.stderr for e in ("KeyError", "TypeError", "ValueError", "UnicodeEncodeError"))),
             "undecodable": crashed and "UnicodeDecodeError" in r.stderr}
     return want.get(status, False), verdict, detail
@@ -61383,7 +61722,7 @@ def _krc_match(label, status, r):
 
 def t_kill_recipe_check_matches_guard_kill():
     """[S5][S7] file 是提交裡的正式路徑時,新判斷函式跟真跑 `lumos guard kill` 一格一格對:ok ↔ 套用了壞法而且還原得回去、
-    hits ↔ drifted、malformed ↔ error(test 名不合法)或程式出錯、undecodable ↔ guard kill 讀檔出錯(rc1)、noplat ↔ error;
+    hits ↔ drifted、malformed ↔ error(test 名不合法、配方欄位格式不對)或程式出錯、undecodable ↔ guard kill 讀檔出錯(rc1)、noplat ↔ error;
     不是正式路徑(連結、`..`、絕對路徑、大小寫或 Unicode 寫法不同、冒號開頭、不在提交裡、資料夾、子模組…)一律判 path、不預測。
     每一格自己一個 repo 與筆記。順便釘 guard kill 既有的 drifted/開檔失敗/逃逸說明字面(S7)。"""
     import os
