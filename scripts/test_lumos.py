@@ -31161,6 +31161,309 @@ def t_slots_retire_followups():
     print("  ✓ t_slots_retire_followups")
 
 
+def t_slots_doctor_reminders():
+    """[S13] doctor 的格子過期提醒:[被取代:] 一跳(S17)、度量(S18)、FACT 確認週期(S19)提醒且不計入問題數;已作廢的行不提醒;
+    --ci 不跑一跳與度量;drift scan 列出撤除條件現在已成立、不列已作廢、已表態的不算要處理。
+    翻紅釘:_slot_replacement_dead 不查決策 valid → ①紅;_doctor_metric_lines 拿掉暖機那道 → ③紅、拿掉閘 off 那道 → ③紅;
+    _doctor_fact_recheck_lines 不跳過作廢 → ⑤紅;run_doctor 的 S17 不看 ci → ⑥紅;cmd_drift_scan 不跑 retire → ⑦紅。"""
+    import json as _j, datetime as _dt
+    m = _load_lumos_inproc()
+    # ①[被取代:] 一跳
+    v = mkvault()
+    write(v, "Systems/Live.md", "type: system\nstatus: doing\ndecisions:\n  - id: d1\n    content: 現行\n    valid: true\n"
+          "  - id: d2\n    content: 翻案了\n    valid: false\nsummary: |-\n  KEY:x", body="# L\n")
+    write(v, "Systems/Old.md", "type: system\nstatus: superseded\nsummary: |-\n  KEY:x", body="# O\n")
+    sup = " [status:superseded]"
+    write(v, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n"
+          f"  WHY:甲指不存在 [出處:a] [因:b]{sup} [被取代:[[Systems/Nope]]]\n"
+          f"  WHY:乙指作廢節點 [出處:a] [因:b]{sup} [被取代:[[Systems/Old]]]\n"
+          f"  WHY:丙指沒有的決策 [出處:a] [因:b]{sup} [被取代:Systems/Live.md#d9]\n"
+          f"  WHY:丁指翻案決策 [出處:a] [因:b]{sup} [被取代:Systems/Live#d2]\n"
+          f"  WHY:戊指現行決策 [出處:a] [因:b]{sup} [被取代:Systems/Live.md#d1]\n"
+          f"  WHY:己指現行節點 [出處:a] [因:b]{sup} [被取代:[[Systems/Live]]]\n"
+          f"  WHY:庚無接手 [出處:a] [因:b]{sup} [被取代:無 限制自然消失]", body="# R\n")
+    env = m.Env(v)
+    lines = m._doctor_replacement_lines(env)
+    txt = "\n".join(lines)
+    check("①指不存在、作廢節點、沒有的決策、翻案決策各列一條", len(lines) == 4 and "Nope" in txt and "Old" in txt
+          and "d9" in txt and "d2" in txt, txt)
+    check("①指現行決策、現行節點、無接手的不列", all(x not in txt for x in ("#d1]", "[[Systems/Live]]", "無 限制")), txt)
+    # ②S17 接進 doctor、不計入問題數;--ci 不跑
+    r = run(v, "doctor", "--verbose")
+    seg = r.stdout.split("[S17]")[1].split("\n[")[0] if "[S17]" in r.stdout else ""
+    check("②doctor S17 列出", "4 處 [被取代:]" in seg, seg[-400:])
+    v0 = mkvault()
+    write(v0, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n  WHY:x [出處:a] [因:b]", body="# R\n")
+    r0 = run(v0, "doctor")
+    check("②不計入問題數(rc 跟沒有這些行時一樣)", r.returncode == r0.returncode, f"{r.returncode} vs {r0.returncode}")
+    rc = run(v, "doctor", "--ci")
+    seg = rc.stdout.split("[S17]")[1].split("\n[")[0] if "[S17]" in rc.stdout else ""
+    check("⑥--ci 不跑 S17", "--ci 不跑" in seg and "處 [被取代:]" not in seg, seg[-300:])
+    # ③度量:成立才列;暖機、since 不滿、閘 off、作廢、不成立都不列
+    now = _dt.datetime(2026, 10, 2, 12, 0, tzinfo=_dt.timezone.utc)
+
+    def gl(vault, evs):
+        (vault.parent / ".governance-log.jsonl").write_text(
+            "".join(_j.dumps({"ts": t, "gate": g, "kind": k}) + "\n" for t, g, k in evs), encoding="utf-8")
+    old = [("2026-07-01T00:00:00+00:00", "note-shape", "blocked")]
+    recent = [(f"2026-09-{d:02d}T00:00:00+00:00", "note-shape", "blocked") for d in range(20, 26)]
+    rules = ("  RULE:甲該撤 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked >= 5 近4週]\n"
+             "  RULE:乙沒到 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked >= 50 近4週]\n"
+             "  RULE:丙太新 [依據:人] [since:2026-09-25] [retire:度量 note-shape.blocked >= 5 近4週]\n"
+             "  RULE:丁作廢 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked >= 5 近4週] [status:superseded] [被取代:無 x]\n")
+    v = mkvault()
+    write(v, "Systems/M.md", "type: system\nstatus: doing\nsummary: |-\n" + rules, body="# M\n")
+    gl(v, old + recent)
+    got = m._doctor_metric_lines(m.Env(v), v.parent, now=now)
+    check("③成立的列出(6 筆 >= 5),沒到、since 不滿 4 週、作廢的不列", len(got) == 1 and "甲該撤" in got[0] and "6 筆" in got[0],
+          str(got))
+    gl(v, recent)
+    check("③暖機:帳裡最舊一筆不早於 4 週前,不判", m._doctor_metric_lines(m.Env(v), v.parent, now=now) == [], "")
+    gl(v, old + recent)
+    (v.parent / ".lumos").mkdir(exist_ok=True)
+    (v.parent / ".lumos" / "config.json").write_text(_j.dumps({"note_shape": {"gate": "off"}}))
+    check("③閘目前是 off,不判", m._doctor_metric_lines(m.Env(v), v.parent, now=now) == [], "")
+    # ④⑤FACT 確認週期
+    facts = ("  FACT:甲逾期 [來源:生產] [confirmed:2026-08-01] [recheck:30天]\n"
+             "  FACT:乙照來源預設逾期 [來源:人工] [confirmed:2026-01-01]\n"
+             "  FLOW:丙還在週期內 [來源:部署] [confirmed:2026-09-20]\n"
+             "  FACT:丁沒寫確認 [來源:生產]\n"
+             "  FACT:戊作廢 [來源:生產] [confirmed:2020-01-01] [status:superseded] [被取代:無 x]\n"
+             "  DEP:己週期寫錯 [來源:外部] [confirmed:2026-09-30] [recheck:兩週]\n")
+    v = mkvault()
+    write(v, "Systems/F.md", "type: system\nstatus: doing\nsummary: |-\n" + facts, body="# F\n")
+    got = m._doctor_fact_recheck_lines(m.Env(v), _dt.date(2026, 10, 2))
+    txt = "\n".join(got)
+    check("④逾期(recheck 與來源預設)列出、週期內與沒寫確認的不列", "甲逾期" in txt and "乙照來源預設逾期" in txt
+          and "丙" not in txt and "丁" not in txt, txt)
+    check("④週期寫錯提醒一次、照來源預設", "[recheck:兩週] 寫不成週期" in txt and "90 天" in txt, txt)
+    check("⑤作廢的不判", "戊" not in txt, txt)
+    r = run(v, "doctor", "--ci")
+    check("④S19 在 --ci 也跑", "[S19]" in r.stdout and "條現況句超過確認週期" in r.stdout, r.stdout[-600:])
+    # ⑦drift scan 列出撤除條件現在已成立;已作廢不列;已表態的不算要處理
+    root = _dr_repo()
+    rule = "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-file:src/new.py]"
+    rule2 = "RULE:另一條 [依據:人] [since:2026-09-01] [retire:when-file:src/new.py]"
+    dead = rule.replace("要人簽", "已作廢") + " [status:superseded] [被取代:無 x]"
+    _rt_push(root, [rule, rule2, dead], files=("src/new.py",), msg="rules")
+    _arc, _tip = _rt_ack(root, _rt_line(root, rule2))
+    vault = root / "docs" / "kg-knowledge"
+    r = _dr_scan(vault)
+    fs = [f for f in r if isinstance(f, dict) and f.get("kind") == "retire"] if isinstance(r, list) else []
+    check("⑦scan 列出撤除條件已成立的 RULE,已作廢的不列", any("要人簽" in f["text"] and not f["acked"] for f in fs)
+          and not any("已作廢" in f["text"] for f in fs), str(fs)[-500:])
+    check("⑦已表態的標已表態", any("另一條" in f["text"] and f["acked"] for f in fs), str(fs)[-500:])
+    print("  ✓ t_slots_doctor_reminders")
+
+
+def t_slots_doctor_reminders_edges():
+    """筆記格子第 3 步代碼審 r1 折入的邊角:S17 只看作廢行、[[X#dN]] 也查決策;S18 重驗寫法(超大週數、拼錯閘名列成提醒、不崩)、
+    五種比較、naive 時間、出界時間只跳那一行、lint-new 關掉認得、--ci 不跑;S19 週與月;輸出清控制字元;檔尾截斷;S16 接回續行。
+    翻紅釘:_doctor_replacement_lines 不看作廢 → ①紅;_doctor_metric_lines 不重驗 → ②紅(崩);_metric_gate_off 取 gate 鍵 → ④紅;
+    _gov_metric_events 的 astimezone 拿出 try → ⑤紅;週改成 1 天 → ⑦紅;拿掉 _esc_clean → ⑧紅;_gov_tail_bytes 不丟頭一行 → ⑨紅;
+    S16 不接續行 → ⑩紅。"""
+    import json as _j, datetime as _dt
+    m = _load_lumos_inproc()
+    sup = " [status:superseded]"
+    # ①S17 只看作廢行;[[X#dN]] 也查決策
+    v = mkvault()
+    write(v, "Systems/Live.md", "type: system\nstatus: doing\ndecisions:\n  - id: d1\n    content: 現行\n    valid: true\n"
+          "  - id: d2\n    content: 翻案了\n    valid: false\nsummary: |-\n  KEY:x", body="# L\n")
+    write(v, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n"
+          "  WHY:說明 [被取代:] 這個鍵怎麼用 [出處:a] [因:b]\n"
+          "  WHY:舉例沒作廢 [被取代:[[Systems/Nope]]] 只是寫法示範 [出處:a] [因:b]\n"
+          f"  WHY:連結帶翻案決策 [出處:a] [因:b]{sup} [被取代:[[Systems/Live#d2]]]\n"
+          f"  WHY:連結帶現行決策 [出處:a] [因:b]{sup} [被取代:[[Systems/Live#d1|看這裡]]]", body="# R\n")
+    lines = m._doctor_replacement_lines(m.Env(v))
+    check("①沒標作廢的散文提到鍵名不列;[[X#d2]] 翻案列出、[[X#d1|別名]] 不列", len(lines) == 1 and "d2" in lines[0], str(lines))
+    # ②S18 重驗寫法:超大週數與拼錯閘名列成提醒、不崩;③五種比較
+    now = _dt.datetime(2026, 10, 2, 12, 0, tzinfo=_dt.timezone.utc)
+    v = mkvault()
+    rules = ("  RULE:甲超大 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked < 1 近99999999999週]\n"
+             "  RULE:乙拼錯 [依據:人] [since:2026-06-01] [retire:度量 nosuchgate.blocked == 0 近4週]\n"
+             "  RULE:丙小於等於 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked <= 6 近4週]\n"
+             "  RULE:丁等於 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked == 6 近4週]\n"
+             "  RULE:戊大於 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked > 6 近4週]\n"
+             "  RULE:己小於 [依據:人] [since:2026-06-01] [retire:度量 note-shape.blocked < 6 近4週]\n")
+    write(v, "Systems/M.md", "type: system\nstatus: doing\nsummary: |-\n" + rules, body="# M\n")
+    evs = ["2026-07-01T00:00:00+00:00"] + [f"2026-09-{d:02d}T00:00:00" for d in range(20, 26)]   # 近 6 筆不帶時區
+    bad = ['{"ts": "9999-12-31T23:59:59", "gate": "note-shape", "kind": "blocked"}', "not json"]
+    (v.parent / ".governance-log.jsonl").write_text(
+        "".join(_j.dumps({"ts": t, "gate": "note-shape", "kind": "blocked"}) + "\n" for t in evs) + "\n".join(bad) + "\n",
+        encoding="utf-8")
+    got = m._doctor_metric_lines(m.Env(v), v.parent, now=now)
+    txt = "\n".join(got)
+    check("②超大週數、拼錯閘名列成寫法不合、不崩", "甲超大" not in txt.split("寫法不合")[0] and txt.count("寫法不合") == 2, txt)
+    check("③<= 與 == 成立、> 與 < 不成立(6 筆)", "丙小於等於" in txt and "丁等於" in txt and "戊大於" not in txt
+          and "己小於" not in txt, txt)
+    check("⑤沒帶時區的照本機時間算進去、9999 年那筆只跳那一行", "6 筆" in txt, txt)
+    r = run(v, "doctor", "--verbose")
+    seg = r.stdout.split("[S18]")[1].split("\n[")[0] if "[S18]" in r.stdout else ""
+    check("②doctor 跑完 S18 不崩、列出寫法不合", "寫法不合" in seg and "Traceback" not in r.stdout + r.stderr, seg[-400:])
+    check("⑤帳增速那段遇到 9999 年那筆不整段跳過", "治理帳成長觀測跳過" not in r.stdout, r.stdout[-300:])
+    rc = run(v, "doctor", "--ci")
+    seg = rc.stdout.split("[S18]")[1].split("\n[")[0] if "[S18]" in rc.stdout else ""
+    check("⑥--ci 不跑 S18", "--ci 不跑" in seg and "寫法不合" not in seg, seg[-300:])
+    # ④lint-new 關掉認得
+    root = Path(tempfile.mkdtemp(prefix="gctl-mg-"))
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": {"gate": "off"}}))
+    check("④lint-new 關掉時判得出 off", m._metric_gate_off(root, "lint-new", m._doctor_cfg_bytes(root)) is True, "")
+    # ⑦S19 週與月
+    facts = ("  FACT:甲兩週逾期 [來源:生產] [confirmed:2026-09-15] [recheck:2週]\n"
+             "  FACT:乙一月未到 [來源:生產] [confirmed:2026-09-05] [recheck:1月]\n"
+             "  FACT:丙一月逾期 [來源:生產] [confirmed:2026-08-31] [recheck:1月]\n"
+             "  FACT:戊三週未到 [來源:生產] [confirmed:2026-09-15] [recheck:3週]\n"
+             "  FACT:丁控制字元\x1b[2J [來源:生產] [confirmed:2020-01-01]\n")
+    v = mkvault()
+    write(v, "Systems/F.md", "type: system\nstatus: doing\nsummary: |-\n" + facts, body="# F\n")
+    txt = "\n".join(m._doctor_fact_recheck_lines(m.Env(v), _dt.date(2026, 10, 2)))
+    check("⑦週=7 天、月=30 天", "甲兩週逾期" in txt and "乙一月未到" not in txt and "丙一月逾期" in txt
+          and "戊三週未到" not in txt, txt)
+    check("⑧印出前清控制字元", "\x1b" not in txt and "丁控制字元" in txt, repr(txt[-200:]))
+    # ⑨檔尾截斷丟掉切一半的頭一行
+    gp = Path(tempfile.mkdtemp(prefix="gctl-tail-")) / "g.jsonl"
+    gp.write_bytes(b'{"a": 1}\n{"b": 2}\n{"c": 3}\n')
+    raw, start = m._gov_tail_bytes(gp, cap=12)
+    check("⑨只讀檔尾、切一半的頭一行丟掉", start > 0 and raw == b'{"c": 3}\n', repr(raw))
+    # ⑩S16 接回續行:[confirmed:] 寫在續行的不算沒寫
+    notes = {"Systems/S.md": m._note_from_text("Systems/S.md", "---\ntype: system\nstatus: doing\nsummary: |-\n"
+                                                "  RULE:甲 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]\n"
+                                                "    [confirmed:2026-09-30]\n---\n# S\n", 0)}
+    lines, _st = m._doctor_stale_rules(notes, _dt.date(2026, 10, 2))
+    check("⑩S16 欄位寫在續行照讀到", lines == [], str(lines))
+    print("  ✓ t_slots_doctor_reminders_edges")
+
+
+def t_slots_doctor_reminders_r2():
+    """筆記格子第 3 步代碼審 r2 折入:單行 summary 也判(S16、S19)、S17 與 S18 也清控制字元、[[X#d2|別名]] 照查決策、
+    S18 算不出來 fail-open 不讓 doctor 中斷、讀設定檔捷徑不跟、lint-new 用已讀好的設定。
+    翻紅釘:_note_summary_entries 不補單行 → ①紅;S17 拿掉 _esc_clean → ②紅;別名不切 → ③紅;S18 拿掉 try → ④紅(doctor 中斷);
+    _doctor_cfg_bytes 拿掉捷徑檢查 → ⑤紅;_lint_new_config 不吃 text → ⑥紅。"""
+    import io, contextlib, os as _o, json as _j, datetime as _dt
+    m = _load_lumos_inproc()
+    # ①單行 summary(含引號)
+    notes = {"Systems/A.md": m._note_from_text("Systems/A.md", "---\ntype: system\nstatus: doing\n"
+                                                "summary: RULE:甲單行 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]\n---\n# A\n", 0),
+             "Systems/B.md": m._note_from_text("Systems/B.md", "---\ntype: system\nstatus: doing\n"
+                                                'summary: "RULE:乙引號 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]"\n---\n# B\n', 0)}
+    lines, _st = m._doctor_stale_rules(notes, _dt.date(2026, 10, 2))
+    check("①S16 單行 summary 照判(含引號)", len(lines) == 2 and any("甲單行" in x for x in lines)
+          and any("乙引號" in x for x in lines), str(lines))
+    v = mkvault()
+    write(v, "Systems/F.md", "type: system\nstatus: doing\nsummary: FACT:丙單行逾期 [來源:生產] [confirmed:2020-01-01]", body="# F\n")
+    got = m._doctor_fact_recheck_lines(m.Env(v), _dt.date(2026, 10, 2))
+    check("①S19 單行 summary 照判", len(got) == 1 and "丙單行逾期" in got[0] and ":4:" in got[0], str(got))
+    # ②S17、S18 清控制字元;③[[X#d2|別名]] 照查決策
+    v = mkvault()
+    write(v, "Systems/Live.md", "type: system\nstatus: doing\ndecisions:\n  - id: d2\n    content: 翻案了\n    valid: false\n"
+          "summary: |-\n  KEY:x", body="# L\n")
+    write(v, "Systems/R.md", "type: system\nstatus: doing\nsummary: |-\n"
+          "  WHY:甲 [出處:a] [因:b] [status:superseded] [被取代:[[Systems/No\x07pe]]]\n"
+          "  WHY:乙 [出處:a] [因:b] [status:superseded] [被取代:[[Systems/Live#d2|別名]]]\n"
+          "  RULE:丙\x1b]0;x\x07 [依據:人] [since:2026-01-01] [retire:度量 nosuch.blocked == 0 近4週]", body="# R\n")
+    env = m.Env(v)
+    l17 = m._doctor_replacement_lines(env)
+    check("②S17 清控制字元", any("Systems/No" in x for x in l17) and not any("\x07" in x for x in l17), repr(l17))
+    check("③[[X#d2|別名]] 照查決策、判翻案", any("d2" in x and "翻案" in x for x in l17), str(l17))
+    l18 = m._doctor_metric_lines(env, v.parent)
+    check("②S18 清控制字元", l18 and not any("\x1b" in x or "\x07" in x for x in l18), repr(l18))
+    # ④S18 算不出來:fail-open,doctor 照跑完
+    orig = m._doctor_metric_lines
+
+    def boom(*a, **k):
+        raise RuntimeError("壞了")
+    m._doctor_metric_lines = boom
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            m.run_doctor(env, False, False)
+    finally:
+        m._doctor_metric_lines = orig
+    out = buf.getvalue()
+    check("④S18 算不出來只講一句、doctor 跑到 S19 之後", "度量式撤除條件觀測跳過" in out and "[S19]" in out, out[-400:])
+    # ⑤讀設定檔:檔案或 .lumos 資料夾是捷徑都不跟
+    root = Path(tempfile.mkdtemp(prefix="gctl-cfg-"))
+    outside = Path(tempfile.mkdtemp(prefix="gctl-cfgout-")) / "c.json"
+    outside.write_text(_j.dumps({"lint_new": {"gate": "off"}}))
+    (root / ".lumos").mkdir()
+    _o.symlink(outside, root / ".lumos" / "config.json")
+    check("⑤config.json 是捷徑:不讀", m._doctor_cfg_bytes(root) is None, "")
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-cfg2-"))
+    (outside.parent / "config.json").write_text(_j.dumps({"lint_new": {"gate": "off"}}))
+    _o.symlink(outside.parent, root2 / ".lumos")
+    check("⑤.lumos 資料夾是捷徑:不讀", m._doctor_cfg_bytes(root2) is None, "")
+    # ⑥lint-new 用呼叫端讀好的設定(捷徑那份不讀,所以不算關)
+    check("⑥lint-new 吃已讀好的設定:捷徑指到的 off 不算", m._metric_gate_off(root, "lint-new", m._doctor_cfg_bytes(root)) is False, "")
+    check("⑥lint-new 吃已讀好的設定:給 off 就是 off",
+          m._lint_new_config(root, text=b'{"lint_new": {"gate": "off"}}', from_snapshot=True)["mode"] == "off", "")
+    print("  ✓ t_slots_doctor_reminders_r2")
+
+
+def t_slots_retire_issue_followups():
+    """撤除條件末輪遺留四項(Issues/撤除條件檢查末輪遺留四項):①續行行號下 --kind retire 擋下;②印出途中出錯不改判定、只記一筆;
+    ③判定途中出錯記一筆沒判(條數 null、帶 error);④只判不了時記 warned、成立擋下時 hard 與 nodes、起點不是字串記空字串。
+    翻紅釘:cmd_drift_ack 拿掉條目第一行檢查 → ①紅;_drift_retire_report 不包印出 → ②紅;兜底條數記 0 → ③紅。"""
+    m = _load_lumos_inproc()
+    head = "RULE:要人簽 [依據:人] [since:2026-09-01]"
+    # ①續行行號
+    root = _dr_repo()
+    _rt_push(root, [head, "  [retire:when-file:src/a.py]"], files=("src/a.py",), msg="rule")
+    import subprocess as sp
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "ack", "Systems/Pay", str(_rt_line(root, head) + 1), "--kind", "retire",
+                "--reason", "這條還在用照留"], capture_output=True, text=True, cwd=str(root))
+    check("①續行行號:擋下、講要用第一行", r.returncode == 2 and "不是摘要裡一條的第一行" in r.stderr, r.stderr[-300:])
+    arc, _t = _rt_ack(root, _rt_line(root, head))
+    check("①第一行照收", arc == 0, "")
+    rule = head + " [retire:when-file:src/new.py]"
+    # ②印出途中出錯:判定照舊(rc1)、只記一筆
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    rc, out = _rt_inproc(m, root, base, tip, _drift_print_findings=boom)
+    ev = _rt_events(root)
+    check("②印出出錯:照擋、講一句、只記一筆", rc == 1 and "印到一半出錯" in out and len(ev) == 1
+          and ev[0].get("kind") == "blocked", str(ev)[-300:] + out[-300:])
+    check("④成立擋下:hard、nodes、條數、起點", ev and ev[0].get("hard") is True and ev[0].get("nodes") == ["Systems/Pay"]
+          and ev[0].get("handle") == 1 and ev[0].get("listed") == 0 and ev[0].get("base_sha") == base, str(ev)[-400:])
+    # ②b記帳拋 OSError 以外的例外:不往外冒、判定照舊(代碼審 code-筆記格子第3步 r1 併發資源席)
+    rc, out = _rt_inproc(m, root, base, tip, _drift_retire_ledger=boom)
+    check("②b記帳出錯:照擋、講一句、不冒出去", rc == 1 and "這一筆帳沒寫進去" in out, out[-300:])
+    # ③判定途中出錯:不擋、記一筆沒判
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+    orig = m._drift_probe_check
+
+    def judge_boom(*a, **k):
+        if k.get("kind") == "retire":
+            raise RuntimeError("x")
+        return orig(*a, **k)
+    rc, out = _rt_inproc(m, root, base, tip, _drift_probe_check=judge_boom)
+    ev = _rt_events(root)
+    check("③判定出錯:不擋、記一筆條數 null 帶 error", rc == 0 and len(ev) == 1 and ev[0].get("handle") is None
+          and ev[0].get("listed") is None and ev[0].get("error") == "RuntimeError", str(ev)[-300:])
+    # ④只判不了:記 warned、不 hard
+    root = _dr_repo()
+    base = _rt_push(root, [rule], msg="rule")
+    tip = _rt_push(root, [rule], files=("src/new.py",), msg="add file")
+    rc, out = _rt_inproc(m, root, base, tip, _DRIFT_RETIRE_BUDGET_SEC=-1)
+    ev = _rt_events(root)
+    check("④只判不了:一筆 warned、handle 0、listed ≥1、不 hard", rc == 0 and len(ev) == 1 and ev[0].get("kind") == "warned"
+          and ev[0].get("handle") == 0 and ev[0].get("listed", 0) >= 1 and ev[0].get("hard") is False, str(ev)[-300:])
+    # ④起點不是字串記空字串
+    import io, contextlib
+    root = _dr_repo()
+    with contextlib.redirect_stderr(io.StringIO()):
+        m._drift_retire_ledger(root, "warned", "x", False, ("bad", "起點算不出來"), "abc", [], {"handle": 0, "listed": 1})
+    ev = _rt_events(root)
+    check("④起點不是字串記空字串", ev and ev[-1].get("base_sha") == "", str(ev)[-200:])
+    print("  ✓ t_slots_retire_issue_followups")
+
+
 def t_slots_doctor_bypass_scan():
     """doctor 事後掃描:格子上線後已推上遠端卻缺格子的新增行要列出(多半是 --no-verify 繞過)。
     翻紅釘:_note_shape_doctor_lines 的 sv 改成 [] → 紅(代碼審 code-筆記格子第1步 r1 通才席:原本拿掉沒測試會紅)。"""
