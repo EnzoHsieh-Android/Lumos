@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-10-01
+updated: 2026-10-02
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
 tags:
@@ -11,6 +11,7 @@ tags:
   - risk/守衛面
   - scope/guards-gates
 summary: |-
+  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]建、收隔離工作樹那段抽成共用的 `_isolated_worktree`(with 區塊,寫法照 _vault_write_lock;修正關卡也用);guard kill 照舊在平台根下 `git -C` 建樹、測試在樹的最上層跑、建樹失敗記 error 繼續下一個平台、--keep-worktree 的「現場保留」由 guard kill 自己印(--json 時印到標準錯誤),行為不變 [test:t_isolated_worktree_shared]
   RULE:[since:2026-09-22][confirmed:2026-09-22][retire:連續兩季沒有任何專案用 guard plan,或誤擋多過真擋]合約可以「預告」:`lumos guard plan … --name <短名>` 一次寫好預告標記(`★INVARIANT-PLANNED★`,既有合約抓取撈不到它)與一個待完成的守衛驗證節點並雙向連好;查那篇功能節點時預告會另起一段印出來(還沒有測試在守、最遲哪天);逾期讓自檢出 issue(推送與 CI 靠它擋)、七天內先唸不擋、**到期當天不算過期**、**不准延期**;★本機推送只擋「這次改動碰到的」那幾條★(靠守衛節點→家節點→about_code 兩跳算交集;算不出來本機放行、CI 仍擋),別人的逾期會列出來但不擋你的推送;做完 `guard settle` 就地轉正,不做了 `guard abandon` 立墓碑(要先 `signoff --ref`)。★威脅模型是防忘記不防繞過★:改日期、改型別、刪節點檔都繞得過,刻意不補,寫在計劃的誠實界線。單源 [[Projects/必要合約清單_計劃]] [test:t_guard_plan_creates_marker_and_node]
   PITFALL:[2026-09-22 代碼審 r2 blocker]預告行是「合約文字 + 指令接在行尾的 `[watch:…] [due:…]`」,轉正與棄置要靠還原出原始合約文字才找得到那一行。★只能剝行尾那一對,不能把整行同樣字樣都剝掉★:合約文字自己寫到那兩個字樣時(這個 repo 滿篇都是方括號標籤寫法)就還原不出原文,那條預告從此轉不了正也棄置不掉、逾期還一直擋推送,只剩手改檔案一條路 [test:t_guard_claim_with_bracket_tags_still_settles]
   RULE:[since:2026-09-23][confirmed:2026-09-23][retire:有專案反映必填短名擋掉了正常流程(例如批次腳本登記大量預告)]★守衛節點的檔名要人給短名★:`--name` 必填、24 字內、只收中英數字底線連字號,檔名 = 日期_短名。原本拿合約原文前 40 字當檔名,斷在句子中間(rtb-production-agent-demo 回報)。舊規則截斷出來的檔名,自檢會在不擋的那一層點出來——判法是精確比對(檔名等於原文被截斷的樣子、而且原文真的比截斷長度長),手取的名字不會被點到。單源 [[Projects/必要合約清單_計劃]] 〈守衛節點的檔名〉 [test:t_guard_plan_requires_short_name]

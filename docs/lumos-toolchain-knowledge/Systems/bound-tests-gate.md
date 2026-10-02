@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-10-01
+updated: 2026-10-02
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -14,6 +14,7 @@ tags:
   - status/done
   - scope/guards-gates
 summary: |-
+  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]「[test:] → resolve_test_refs → 白名單 → real/fake/dangling/bad-name」抽成 `_classify_test_refs`(修正關卡第 3 項也用),判定不變;修正關卡在自己建的隔離工作樹裡呼叫 `_bound_tests_check`(帳與測試快取落在樹裡、跟著刪)
   FLOW:pre-push→code-loop check→impact --diff 固定席→合約行 [test:] 解平台→classify 存在性→逐支 _kill_run→紅/懸空/不合法=BLOCKED
   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
   KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F];r1 代碼審把判準整條換掉):主力證據是★逐支看測試工具自己的輸出有沒有說「執行了 N 支(N≥1)」★(_RAN_EVIDENCE,只填實測過「跑 1 支」與「跑 0 支」兩種輸出的 profile:swift-xctest/csharp-xunit/node-jest/python);沒有樣式可比的 profile 才退回過濾能力冒煙測試(拿不存在的測試名跑一次看回不回 0)。任一支證不出來 → 狀態 unfilterable、不報綠,擋的路徑上跟紅一樣擋 [test:t_bound_tests_unproven_blocks_push]

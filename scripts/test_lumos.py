@@ -25169,7 +25169,8 @@ def t_docs_enumeration_drift():
     src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
 
     # ① 治理帳數:cmd_gov 實際 load() 幾支 vs 文件/docstring 宣稱
-    gov_body = src[src.index("def cmd_gov("):src.index("def cmd_gov(") + 6000]
+    _g0 = src.index("def cmd_gov(")
+    gov_body = src[_g0:src.index("\ndef ", _g0 + 1)]   # 整個函式(原本寫死 6000 字,讀端轉換多幾行就把第 6 個 load 擠出去;修正關卡第0步推送前全套抓到)
     n_sources = len(_re.findall(r"^\s*load\(", gov_body, _re.M))
     zh = "零一二三四五六七八九十"
     claimed = set(_re.findall(r"彙整([一二三四五六七八九十])帳", src))
@@ -62013,6 +62014,671 @@ def t_gov_stats_contract_backing():
     check("②背書分母 3(不計 carried 與沒有 backing 的舊記錄)、有背書 1、沒有背書 1、不適用類 1",
           line and "背書分母 3(有背書 1、做到了但沒有背書 1、不適用/待辦/張力 1)" in line[0], "\n".join(line) or r.stdout[-600:])
 
+
+
+def t_isolated_worktree_shared():
+    """[S11] 共用隔離工作樹函式(Projects/代碼審修正關卡第0步_計劃):guard kill 建樹失敗時記成 error、繼續下一個平台;
+    多平台時在平台根下 `git -C` 建樹、測試在樹的最上層跑(跟抽函式之前一樣);--keep-worktree 時現場留著、路徑印到標準錯誤(--json)。"""
+    import json as _json, os as _os, tempfile as _tf
+    root, v = _mk_kill_env()
+    (root / "sub").mkdir()
+    (root / "sub" / "keep.txt").write_text("x\n", encoding="utf-8")
+    nogit = Path(_tf.mkdtemp(prefix="gctl-nogit-"))
+    log = Path(_tf.mkdtemp(prefix="gctl-cwdlog-")) / "cwd.txt"
+    cfg = {"default_platform": "py", "platforms": {
+        "py": {"profile": "python", "root": "sub", "run_cmd": f"pwd >> {log}; python3 test_guard.py"},
+        "bad": {"profile": "python", "root": str(nogit), "run_cmd": "python3 test_guard.py"}}}
+    (root / ".lumos" / "config.json").write_text(_json.dumps(cfg), encoding="utf-8")
+    killer = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive")
+    bad = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 98", test="TestLimitFive", platform="bad")
+    (v / "Systems" / "Limit.md").write_text(_kr_note([bad, killer]), encoding="utf-8")
+    _kr_commit(root)
+    r = _kgk_run(root, v, "Systems/Limit", "--json")
+    res = _json.loads(r.stdout.strip().splitlines()[-1])["results"]
+    by = {x.get("platform"): x for x in res}
+    check("①建樹失敗的平台記成 error 並附 worktree add 失敗", by.get("bad", {}).get("verdict") == "error"
+          and "worktree add 失敗" in by.get("bad", {}).get("detail", ""), str(res)[:400])
+    check("②下一個平台照跑(killed)", by.get("py", {}).get("verdict") == "killed", str(res)[:400])
+    cwds = [ln.strip() for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.exists() else []
+    check("③多平台時測試在樹的最上層跑(不是平台根 sub)", bool(cwds) and all(Path(c).name == "wt" for c in cwds), str(cwds))
+    wts = [ln for ln in _kr_git(root, "worktree", "list").stdout.splitlines()[1:] if ln.strip()]
+    check("④跑完沒有殘留的工作樹", not wts, str(wts))
+    r = _kgk_run(root, v, "Systems/Limit", "--json", "--keep-worktree")
+    kept = [ln for ln in r.stderr.splitlines() if "現場保留" in ln]
+    check("⑤--keep-worktree:現場保留印在標準錯誤、每個平台一行", len(kept) == 2, r.stderr[-400:])
+    check("⑥--keep-worktree:--json 輸出最後一行仍是合法 JSON", r.stdout.strip().splitlines()[-1].startswith("{"), r.stdout[-200:])
+    paths = [ln.split("現場保留:", 1)[1].strip() for ln in kept]
+    check("⑦保留的那棵樹還在", any(Path(p).is_dir() for p in paths), str(paths))
+    # 修正關卡一開始清殘骸:系統暫存資料夾裡修正關卡前綴、超過一天的清掉;不到一天的、別的前綴的不動
+    import time as _t
+    tmpd = Path(_tf.mkdtemp(prefix="gctl-fcsweep-"))
+    old_fc, new_fc, old_kill = tmpd / "lumos-fixcheck-old", tmpd / "lumos-fixcheck-new", tmpd / "lumos-kill-old"
+    for dd in (old_fc, new_fc, old_kill):
+        (dd / "wt").mkdir(parents=True)
+    for dd in (old_fc, old_kill):
+        _os.utime(dd, (_t.time() - 3 * 86400, _t.time() - 3 * 86400))
+    froot, fv, fbase, _fh = _fc_env()
+    _fc_ledger(froot, fv)
+    _fc_record(froot, fbase, [_fc_group()])
+    r = _fc_check(froot, fv, env_extra={"TMPDIR": str(tmpd)})
+    check("⑧修正關卡清掉超過一天的同前綴殘骸", r.returncode == 0 and not old_fc.exists(), f"rc={r.returncode} {r.stderr[-200:]}")
+    check("⑨不到一天的、別的前綴的不動", new_fc.exists() and old_kill.exists(), "")
+
+
+
+def t_canary_regression_set():
+    """[S9] 載體席選填 --regression-set(這輪哪些發現是上一輪修補造成的;Projects/代碼審修正關卡第0步_計劃):
+    id 不在 --findings-set、沒帶 --findings-set、沒帶 --loop、迴圈第一輪帶非空、空字串或只有逗號 → rc2;
+    合法時落帳排過序去重,none(大小寫不拘)存空清單;沒帶就不寫這個鍵。"""
+    import json as _j, subprocess as _sp
+    root, v = _stats_fixture("gctl-rgs-", [])
+    _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    d = root / "docs"
+    rep = d / "rep.md"
+    rep.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: minor\n", encoding="utf-8")
+    snap = d / "snap.patch"
+    snap.write_text("diff\n", encoding="utf-8")
+
+    def rec(rnd, *extra, loop=("--loop", "rgs")):
+        return run(v, "canary", "record", "none", *loop, "--round", rnd, "--auditor", "s1-sonnet",
+                   "--severity", "major", "--findings", "2", "--report", str(rep), "--snapshot", str(snap), *extra)
+    car = ("--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none")
+
+    def last():
+        return [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+    r = rec("r1", *car, "--regression-set", "f1")
+    check("①第一輪帶非空清單 rc2", r.returncode == 2 and "第一輪" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+    r = rec("r1", *car, "--regression-set", "NONE")
+    check("②第一輪 none(大小寫不拘)照收、存空清單", r.returncode == 0 and last().get("regression_set") == [], f"rc={r.returncode} {r.stderr[:200]}")
+    r = rec("r2", *car)
+    check("③沒帶就不寫 regression_set 鍵", r.returncode == 0 and "regression_set" not in last(), str(last())[:200])
+    r = rec("r2", *car, "--regression-set", "f9")
+    check("④id 不在 --findings-set rc2", r.returncode == 2 and "findings-set" in r.stderr, r.stderr[:200])
+    r = rec("r2", "--regression-set", "f1")
+    check("⑤沒帶 --findings-set 的那筆帶了 rc2", r.returncode == 2 and "--findings-set" in r.stderr, r.stderr[:200])
+    for bad in ("", " , ", ","):
+        r = rec("r2", *car, "--regression-set", bad)
+        check(f"⑥空的 {bad!r} rc2", r.returncode == 2 and "空" in r.stderr, f"rc={r.returncode} {r.stderr[:160]}")
+    r = rec("r1", *car, "--regression-set", "f1", loop=())
+    check("⑦沒帶 --loop rc2", r.returncode == 2 and "--loop" in r.stderr, f"rc={r.returncode} {r.stderr[:160]}")
+    r = rec("r2", *car, "--regression-set", "f2, f1,f2")
+    check("⑧合法:落帳排過序去重", r.returncode == 0 and last().get("regression_set") == ["f1", "f2"], f"rc={r.returncode} {str(last())[:200]}")
+
+
+
+# ── 代碼審修正關卡第0步(Projects/代碼審修正關卡第0步_計劃)的測試夾具與條款測試 ──
+_FC_RUNNER = '''import importlib.util, os, sys
+name = sys.argv[sys.argv.index("-k") + 1]
+log = os.environ.get("FC_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(f"cwd={os.getcwd()} link={os.path.islink('node_modules')}\\n")
+spec = importlib.util.spec_from_file_location("tx", os.path.join("tests", "test_x.py"))
+m = importlib.util.module_from_spec(spec)
+sys.path.insert(0, os.getcwd())
+spec.loader.exec_module(m)
+sel = sorted(n for n in dir(m) if n.startswith("t_") and name in n)
+print(f"lumos 測試({sum(getattr(getattr(m, n), 'cases', 1) for n in sel)} 案例)")
+if not sel:
+    print(f"選中 0 個測試: {name}")
+    sys.exit(1)
+bad = 0
+for n in sel:
+    try:
+        getattr(m, n)()
+        print(f"ok {n}")
+    except Exception as e:
+        bad += 1
+        print(f"FAIL {n} {e!r}")
+print(f"{len(sel) - bad} passed, {bad} failed")
+sys.exit(1 if bad else 0)
+'''
+
+
+def _fc_git(root, *a):
+    import subprocess as sp
+    return sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+
+
+def _fc_env(prod_fix=True, tests_extra="", contract=False, base_files=None):
+    """合成 code- 迴圈:base 提交 clamp 沒上限;修正後提交加上上限 + 測試。回 (root, v, base, head)。"""
+    root = Path(tempfile.mkdtemp(prefix="gctl-fc-"))
+    _fc_git(root, "init", "-q"); _fc_git(root, "config", "user.email", "t@t.t"); _fc_git(root, "config", "user.name", "t")
+    (root / "run.py").write_text(_FC_RUNNER, encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "prod.py").write_text("def clamp(n):\n    return n\n", encoding="utf-8")
+    (root / "tests" / "test_x.py").write_text("import prod\n\ndef t_old_ok():\n    assert prod.clamp(1) == 1\n", encoding="utf-8")
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(
+        '{"test_profile": "python", "test": {"run_cmd": "python3 run.py -k {method}"}}', encoding="utf-8")
+    v = root / "docs" / "kg-knowledge"
+    (v / "Systems").mkdir(parents=True)
+    (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    if contract:
+        (v / "Systems" / "Clamp.md").write_text(
+            "---\ntype: system\nstatus: doing\nsummary: |-\n"
+            "  KEY:★INVARIANT★ clamp 上限恆為 5 [test:t_inv_cap] [audit:x/2026-10-02]\n  DEP:`prod.py`\n---\n# Clamp\n主邏輯在 `prod.py`。\n",
+            encoding="utf-8")
+    for _bf, _bt in (base_files or {}).items():
+        (root / _bf).write_text(_bt, encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "base")
+    base = _fc_git(root, "rev-parse", "HEAD").stdout.strip()
+    if prod_fix:
+        (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)\n", encoding="utf-8")
+    (root / "tests" / "test_x.py").write_text(
+        "import prod\n\ndef t_old_ok():\n    assert prod.clamp(1) == 1\n\n"
+        "def t_clamp_cap():\n    assert prod.clamp(9) == 5\n" + tests_extra, encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "fix")
+    head = _fc_git(root, "rev-parse", "HEAD").stdout.strip()
+    return root, v, base, head
+
+
+def _fc_lum(root, v, *a, env_extra=None):
+    import subprocess as sp, os
+    e = {k: val for k, val in os.environ.items() if not k.startswith("LUMOS_SKIP_")}   # 外面設的跳過變數不准滲進來(r1 通才B F3)
+    if env_extra:
+        e.update(env_extra)
+    return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a], capture_output=True, text=True, cwd=root, env=e)
+
+
+def _fc_ledger(root, v, loop="code-fx", rnd="r1", findings="f1", folded="f1", kinds=None, sevs=None, severity="major", extra=()):
+    """記一筆載體席(帶 --findings-set)。"""
+    d = root / "docs"
+    rep = d / f"rep-{rnd}.md"
+    ids = [x for x in findings.split(",") if x]
+    rep.write_text(f"severity: {severity}\n" + "".join(f"## {i}\nseverity: {severity}\n" for i in ids), encoding="utf-8")
+    snap = d / f"snap-{rnd}.patch"
+    snap.write_text("diff\n", encoding="utf-8")
+    args = ["canary", "record", "none", "--loop", loop, "--round", rnd, "--auditor", "s1-sonnet", "--severity", severity,
+            "--findings", str(len(ids)), "--report", str(rep), "--snapshot", str(snap), "--tier", "standard",
+            "--findings-set", findings, "--folded-set", folded, "--refuted-set", "none", *extra]
+    for k, val in (kinds or {}).items():
+        args += ["--finding-kind", f"{k}={val}"]
+    for k, val in (sevs or {}).items():
+        args += ["--finding-severity", f"{k}={val}"]
+    r = _fc_lum(root, v, *args)
+    assert r.returncode == 0, r.stderr
+    return r
+
+
+def _fc_record(root, base, groups, loop="code-fx", rnd="r1"):
+    import json as _j
+    d = root / "governance" / "review-reports" / loop
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{rnd}-fix.json"
+    p.write_text(_j.dumps({"base": base, "groups": groups}, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def _fc_group(gid="G1", cat="boundary", findings=("f1",), at="prod.py:clamp", tests=("t_clamp_cap",), **kw):
+    g = {"id": gid, "category": cat, "findings": list(findings),
+         "paths": [{"at": at, "status": "fixed", "tests": list(tests)}]}
+    g.update(kw)
+    return g
+
+
+def _fc_check(root, v, *extra, rnd="r1", loop="code-fx", env_extra=None):
+    return _fc_lum(root, v, "loop", "fix-check", loop, "--round", rnd, *extra, env_extra=env_extra)
+
+
+def _fc_events(root):
+    import json as _j
+    p = root / "docs" / ".governance-log.jsonl"
+    if not p.is_file():
+        return []
+    return [d for d in (_j.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()) if d.get("gate") == "fix-check"]
+
+
+def t_fix_check_record_complete():
+    """[S1] 紀錄完整:漏收折入的發現、類別不在清單、fixed 沒測試、unaffected 沒理由、函式段空或找不到、fixed 的檔沒改過
+    (含中文檔名)、at 是資料夾或含 ..、測試名含 ] 或 , 都回 1 並全部列出;fixed 的檔修正後已刪掉不驗函式段;
+    web:t_x 與中間有空白的測試名過得了格式檢查;spec/process 類的折入不用落在組裡。"""
+    root, v, base, head = _fc_env(base_files={"gone.py": "y = 1\n"})
+    (root / "中文.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "gone.py").unlink()
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "more + rm gone")
+    _fc_ledger(root, v, findings="f1,f2,f3", folded="f1,f2,f3", kinds={"f1": "code", "f2": "code", "f3": "spec"})
+    groups = [
+        _fc_group("G1", cat="weird", findings=["f1"]),
+        {"id": "G2", "category": "path", "findings": [], "paths": [
+            {"at": "prod.py:clamp", "status": "fixed", "tests": []},
+            {"at": "prod.py:nosuchfn", "status": "unaffected", "reason": ""},
+            {"at": "prod.py:", "status": "fixed", "tests": ["t_clamp_cap"]},
+            {"at": "run.py:sys", "status": "fixed", "tests": ["t_clamp_cap"]},
+            {"at": "tests:x", "status": "unaffected", "reason": "這是資料夾不是檔"},
+            {"at": "../prod.py:clamp", "status": "unaffected", "reason": "路徑爬出去"},
+            {"at": "prod.py:clamp", "status": "fixed", "tests": ["a]b", "a,b"]},
+            {"at": "gone.py:whatever", "status": "fixed", "tests": ["t_clamp_cap"]},
+            {"at": "中文.py:x", "status": "fixed", "tests": ["web:t_x", "t clamp"]},
+            {"at": "lnk.py:x", "status": "unaffected", "reason": "連結指到別的檔"},
+        ]},
+    ]
+    import os as _os
+    _os.symlink("中文.py", root / "lnk.py")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "link")
+    _fc_record(root, base, groups)
+    r = _fc_check(root, v)
+    out = r.stdout
+    check("①回 1", r.returncode == 1, f"rc={r.returncode} {r.stderr[-300:]}")
+    check("②漏收 f2 寫出 id", "發現 f2 折入了" in out, out[-1500:])
+    check("③spec 類 f3 不要求落在組裡", "發現 f3" not in out and "f3" in out, out[-1500:])
+    check("④類別不在清單", "'weird' 不在固定清單" in out, out[-1500:])
+    check("⑤fixed 沒測試", "fixed 至少要列一支測試" in out, out[-1500:])
+    check("⑥unaffected 沒理由", "unaffected 要寫理由" in out, out[-1500:])
+    check("⑦函式段空", "兩段都不能是空的" in out, out[-1500:])
+    check("⑧fixed 的檔沒改過", "run.py 在 base..修正後 沒有改動" in out, out[-1500:])
+    check("⑨at 是資料夾", "tests 在修正後的提交裡不是一般檔" in out, out[-1500:])
+    check("⑩含 ..", "不能含 .." in out, out[-1500:])
+    check("⑪測試名含 ] 與 ,", "'a]b'" in out and "'a,b'" in out, out[-1500:])
+    check("⑫找不到函式段", "找不到 'nosuchfn'" in out, out[-1500:])
+    check("⑬已刪掉的 fixed 檔不驗函式段", "gone.py" not in out, out[-1500:])
+    check("⑮at 是符號連結判不過", "lnk.py 在修正後的提交裡不是一般檔(link)" in out, out[-1500:])
+    check("⑭中文檔名認得改動、web:t_x 與空白名過格式", "中文.py 在 base..修正後 沒有改動" not in out
+          and "'web:t_x'" not in out and "'t clamp'" not in out, out[-1500:])
+
+
+def t_fix_check_bad_input():
+    """[S2] 回 2 不寫事件:非 code- 迴圈、輪次含 / 或 ..、紀錄不是合法 JSON 或超過上限、base 轉不成提交(含 -x)、
+    樹裡設定讀不懂(含 load_platforms 丟例外);平台釘不住只印說明、照常驗;主工作目錄有沒提交改動照常驗並列出;
+    樹裡的設定檔不被改寫。"""
+    import json as _j
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v)
+    _fc_ledger(root, v, loop="plain-loop")
+    rp = _fc_record(root, base, [_fc_group()])
+    r = _fc_check(root, v, loop="plain-loop")
+    check("①非 code- 迴圈 rc2", r.returncode == 2 and "code-" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+    for bad in ("r1/x", "..", "r1\x01"):
+        r = _fc_check(root, v, rnd=bad)
+        check(f"②輪次 {bad!r} rc2", r.returncode == 2, f"rc={r.returncode}")
+    r = _fc_check(root, v, loop="code-a/b")
+    check("②迴圈編號含 / rc2", r.returncode == 2, f"rc={r.returncode}")
+    for nul in ({"base": base + "\u0000x", "groups": [_fc_group()]}, {"base": base, "groups": [_fc_group(at="pro\u0000d.py:clamp")]}):
+        rp.write_text(_j.dumps(nul), encoding="utf-8")
+        r = _fc_check(root, v)
+        check("②紀錄含空字元 rc2(不是當掉)", r.returncode == 2 and "空字元" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+    rp.write_text('{"base": "' + base + '", "groups": [{"id": "G1", "category": "boundary", "findings": ["f1"], '
+                  '"paths": [{"at": "prod.py:clamp", "status": "fixed", "tests": ["t_\\ud800x"]}]}]}', encoding="utf-8")
+    r = _fc_check(root, v)
+    check("②紀錄含孤立代理字元 rc2(不是當掉)", r.returncode == 2 and "UTF-8" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+    rp.write_text("{not json", encoding="utf-8")
+    r = _fc_check(root, v)
+    check("③紀錄不是合法 JSON rc2", r.returncode == 2 and "讀不懂" in r.stderr, r.stderr[:200])
+    rp.write_text(_j.dumps({"base": base, "groups": [_fc_group(tests=[f"t{i}" for i in range(201)])]}), encoding="utf-8")
+    r = _fc_check(root, v)
+    check("④測試名超過上限 rc2", r.returncode == 2 and "上限" in r.stderr, r.stderr[:200])
+    for b in ("nosuchrev", "-x", ""):
+        _fc_record(root, b, [_fc_group()])
+        r = _fc_check(root, v)
+        check(f"⑤base {b!r} rc2", r.returncode == 2 and "轉不成" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+    check("⑥回 2 都不寫事件", not _fc_events(root), str(_fc_events(root))[:200])
+    ok_note = [_fc_group(cat="other", note="紀錄含 \\u0000 字樣時回 2")]
+    rp.write_text(_j.dumps({"base": base, "groups": ok_note}, ensure_ascii=False), encoding="utf-8")
+    r = _fc_check(root, v)
+    check("⑥b note 裡寫字面的反斜線 u0000 不算空字元", r.returncode != 2, f"rc={r.returncode} {r.stderr[-200:]}")
+    _fc_record(root, base, [_fc_group()])
+    cfg = root / ".lumos" / "config.json"
+    cfg.write_text('{"default_platform": "ios", "platforms": {"web": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"}}}', encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "bad cfg")
+    r = _fc_check(root, v)
+    check("⑦預設平台不在清單 → 樹裡設定讀不懂 rc2", r.returncode == 2 and "設定讀不懂" in r.stderr, f"rc={r.returncode} {r.stderr[:300]}")
+    cfg.write_text(_j.dumps({"default_platform": "py", "platforms": {
+        "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},
+        "mae": {"profile": "python", "root": ".maestro", "run_cmd": "true"}}}), encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "multi cfg")
+    (root / ".maestro").mkdir()
+    before = _fc_git(root, "show", "HEAD:.lumos/config.json").stdout
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty\n", encoding="utf-8")
+    r = _fc_check(root, v)
+    check("⑧沒進版控的平台只印「釘不住版本」、照常驗", r.returncode == 0 and "平台 mae 釘不住版本" in r.stdout, f"rc={r.returncode} {r.stdout[-600:]} {r.stderr[-300:]}")
+    check("⑨主工作目錄沒提交的改動照常驗並列出", "prod.py" in r.stdout and "沒提交的改動不算" in r.stdout, r.stdout[-600:])
+    check("⑩樹裡的設定檔不被改寫(提交裡那份沒變)", _fc_git(root, "show", "HEAD:.lumos/config.json").stdout == before, "")
+    # 絕對路徑的平台根(解析出來在主工作目錄、不在樹裡)、子模組當平台根:紀錄用到它們 → 第 3 項判「釘不住版本」
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)\n", encoding="utf-8")
+    sub_sha = _fc_git(root, "rev-parse", "HEAD").stdout.strip()
+    _fc_git(root, "update-index", "--add", "--cacheinfo", f"160000,{sub_sha},subm")
+    cfg.write_text(_j.dumps({"default_platform": "py", "platforms": {
+        "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},
+        "abs": {"profile": "python", "root": str(root), "run_cmd": "python3 run.py -k {method}"},
+        "sm": {"profile": "python", "root": "subm", "run_cmd": "python3 run.py -k {method}"}}}), encoding="utf-8")
+    _fc_git(root, "add", ".lumos/config.json"); _fc_git(root, "commit", "-qm", "abs+submodule")
+    _fc_record(root, base, [_fc_group(tests=["abs:t_clamp_cap", "sm:t_clamp_cap"])])
+    r = _fc_check(root, v)
+    check("⑪絕對路徑的平台根:釘不住版本,紀錄用到 → 第 3 項判不過", r.returncode == 1 and "平台 abs 釘不住版本:平台根在樹外" in r.stdout
+          and "abs:t_clamp_cap:平台 abs 釘不住版本" in r.stdout,
+          f"rc={r.returncode} {r.stdout[-800:]} {r.stderr[-200:]}")
+    check("⑫子模組當平台根:釘不住版本", "平台 sm 釘不住版本:平台根是子模組" in r.stdout, r.stdout[-800:])
+
+
+def t_fix_check_test_must_exist():
+    """[S3] 紀錄裡的測試名在樹的測試索引裡找不到(或只在原始碼文字裡出現)→ 回 1 並寫出名字。"""
+    root, v, base, head = _fc_env(tests_extra="\nNAME = 't_only_in_text'\n")
+    _fc_ledger(root, v)
+    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_nosuch", "t_only_in_text"])])
+    r = _fc_check(root, v)
+    check("①回 1", r.returncode == 1, f"rc={r.returncode} {r.stderr[-300:]}")
+    check("②寫出找不到的那支", "t_nosuch:在樹的測試索引裡找不到" in r.stdout, r.stdout[-800:])
+    check("③只在文字裡出現的也算不過", "t_only_in_text:在樹的測試索引裡找不到(只在原始碼文字裡出現)" in r.stdout, r.stdout[-800:])
+    check("④存在的那支不報", "t_clamp_cap:" not in r.stdout, r.stdout[-800:])
+
+
+def t_fix_check_listed_tests_green():
+    """[S4] 紀錄裡的測試在修正後是綠的:紅的回 1;子字串撞名(t_fcdemo vs t_fcdemo_strip)回 1 附「篩選匹配到」;
+    run_cmd 沒有 {method} 判不過;第 3 項不存在的不再送去跑;全綠時過;多平台(平台根是子資料夾)判法一樣;
+    跑完沒有殘留工作樹、主工作目錄除了治理帳之外不變。"""
+    import json as _j
+    extra = ("\ndef t_red_one():\n    assert prod.clamp(9) == 9\n"
+             "\ndef t_fcdemo():\n    assert True\n\ndef t_fcdemo_strip():\n    assert True\n"
+             "\ndef t_param_cap():\n    assert prod.clamp(9) == 5\n\nt_param_cap.cases = 3\n")
+    root, v, base, head = _fc_env(tests_extra=extra)
+    _fc_ledger(root, v)
+    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_red_one", "t_fcdemo", "t_nosuch"])])
+    st0 = _fc_git(root, "status", "--porcelain").stdout
+    r = _fc_check(root, v)
+    out = r.stdout
+    check("①回 1", r.returncode == 1, f"rc={r.returncode} {r.stderr[-300:]}")
+    check("②紅的寫出名字", "t_red_one:紅" in out, out[-1200:])
+    check("③撞名附篩選匹配到", "t_fcdemo:" in out and "篩選匹配到" in out, out[-1200:])
+    check("④綠的不報", "t_clamp_cap:" not in out, out[-1200:])
+    check("⑤第 3 項不存在的不再送去跑(只報一次)", out.count("t_nosuch") == 1, out[-1200:])
+    wts = [ln for ln in _fc_git(root, "worktree", "list").stdout.splitlines()[1:] if ln.strip()]
+    check("⑥沒有殘留工作樹", not wts, str(wts))
+    st1 = "\n".join(ln for ln in _fc_git(root, "status", "--porcelain").stdout.splitlines() if ".governance-log" not in ln)
+    st0 = "\n".join(ln for ln in st0.splitlines() if ".governance-log" not in ln)
+    check("⑦主工作目錄除了治理帳之外不變", st0 == st1, f"{st0!r} vs {st1!r}")
+    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_param_cap"])])
+    r = _fc_check(root, v)
+    check("⑧全綠時過(一支宣告、三個案例的參數化測試不算撞名)", r.returncode == 0 and "全部通過" in r.stdout, f"rc={r.returncode} {r.stdout[-600:]} {r.stderr[-300:]}")
+    cfg = root / ".lumos" / "config.json"
+    cfg.write_text('{"test_profile": "python", "test": {"run_cmd": "python3 run.py -k t_clamp_cap"}}', encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "nomethod")
+    r = _fc_check(root, v)
+    check("⑨run_cmd 沒有 {method} 判不過", r.returncode == 1 and "沒有 {method}" in r.stdout, r.stdout[-600:])
+    # 多平台:平台根是子資料夾 app
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-fc-mp-"))
+    _fc_git(root2, "init", "-q"); _fc_git(root2, "config", "user.email", "t@t.t"); _fc_git(root2, "config", "user.name", "t")
+    app = root2 / "app"
+    (app / "tests").mkdir(parents=True)
+    (app / "run.py").write_text(_FC_RUNNER, encoding="utf-8")
+    (app / "prod.py").write_text("def clamp(n):\n    return n\n", encoding="utf-8")
+    (app / "tests" / "test_x.py").write_text("import prod\n", encoding="utf-8")
+    (root2 / ".lumos").mkdir()
+    (root2 / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "app", "platforms": {
+        "app": {"profile": "python", "root": "app", "run_cmd": "python3 run.py -k {method}"}}}), encoding="utf-8")
+    v2 = root2 / "docs" / "kg-knowledge"
+    (v2 / "MOC").mkdir(parents=True); (v2 / "Systems").mkdir()
+    (v2 / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    _fc_git(root2, "add", "-A"); _fc_git(root2, "commit", "-qm", "base")
+    b2 = _fc_git(root2, "rev-parse", "HEAD").stdout.strip()
+    (app / "prod.py").write_text("def clamp(n):\n    return min(n, 5)\n", encoding="utf-8")
+    (app / "tests" / "test_x.py").write_text("import prod\n\ndef t_clamp_cap():\n    assert prod.clamp(9) == 5\n", encoding="utf-8")
+    _fc_git(root2, "add", "-A"); _fc_git(root2, "commit", "-qm", "fix")
+    _fc_ledger(root2, v2)
+    _fc_record(root2, b2, [_fc_group(at="app/prod.py:clamp", tests=["app:t_clamp_cap"])])
+    r = _fc_check(root2, v2)
+    check("⑩多平台(平台根是子資料夾)全綠時過", r.returncode == 0, f"rc={r.returncode} {r.stdout[-600:]} {r.stderr[-300:]}")
+
+
+def t_fix_check_bound_tests_green():
+    """[S5] 受波及合約測試:合約綁的測試在修正後是紅的 → 回 1 寫出名字;綠的過;LUMOS_SKIP_BOUND_TESTS=1 判不過;
+    回 no-config 判不過;有程式檔改名只印提醒、不因此判不過。"""
+    root, v, base, head = _fc_env(contract=True, tests_extra="\ndef t_inv_cap():\n    assert prod.clamp(9) == 4\n",
+                                  base_files={"util.py": "def helper():\n    return 1\n"})
+    _fc_ledger(root, v)
+    _fc_record(root, base, [_fc_group()])
+    r = _fc_check(root, v)
+    check("①合約測試紅 → 回 1 寫出名字", r.returncode == 1 and "[bound-tests]" in r.stdout and "t_inv_cap" in r.stdout,
+          f"rc={r.returncode} {r.stdout[-800:]} {r.stderr[-300:]}")
+    (root / "tests" / "test_x.py").write_text((root / "tests" / "test_x.py").read_text(encoding="utf-8").replace("== 4", "== 5"), encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "inv green")
+    _fc_git(root, "mv", "util.py", "util2.py"); _fc_git(root, "commit", "-qm", "rename util")
+    r = _fc_check(root, v)
+    check("②合約測試綠 → 過", r.returncode == 0, f"rc={r.returncode} {r.stdout[-800:]} {r.stderr[-300:]}")
+    check("③有程式檔改名只印提醒", "改名的檔" in r.stdout and "util.py" in r.stdout, r.stdout[-800:])
+    r = _fc_check(root, v, env_extra={"LUMOS_SKIP_BOUND_TESTS": "1"})
+    check("④LUMOS_SKIP_BOUND_TESTS=1 判不過", r.returncode == 1 and "合約測試被跳過" in r.stdout, r.stdout[-600:])
+    import json as _j
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "platforms": {
+        "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},
+        "doc": {"profile": "python", "root": "."}}}), encoding="utf-8")
+    cl = v / "Systems" / "Clamp.md"
+    cl.write_text(cl.read_text(encoding="utf-8").replace("[test:t_inv_cap]", "[test:t_inv_cap] [test:doc:t_inv_cap]"), encoding="utf-8")
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "doc platform without run_cmd")
+    r = _fc_check(root, v)
+    check("⑥合約測試閘回 green 但有平台沒設 run_cmd 沒跑 → 判不過", r.returncode == 1 and "沒設 run_cmd" in r.stdout, f"rc={r.returncode} {r.stdout[-600:]}")
+    (root / ".lumos" / "config.json").write_text('{"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}', encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "cfg no default")
+    r = _fc_check(root, v)
+    check("⑤設定壞(沒有預設平台)在先決條件就回 2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-300:]}")
+
+
+def t_fix_check_repeat_category_needs_why():
+    """[S6] 同類連兩輪:前一輪有同類別、這輪收了 major 的發現、沒寫 prior → 回 1;寫了(各 ≥10 字)過;
+    沒記個別嚴重度而這輪最高只到 minor → 不要求;兩組都是 other → 不要求。"""
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v, rnd="r1")
+    _fc_record(root, base, [_fc_group(cat="boundary")], rnd="r1")
+    _fc_ledger(root, v, rnd="r2", findings="g1", folded="g1", sevs={"g1": "major"})
+    _fc_record(root, base, [_fc_group(cat="boundary", findings=["g1"])], rnd="r2")
+    r = _fc_check(root, v, rnd="r2")
+    check("①同類連兩輪、major、沒寫 prior → 回 1", r.returncode == 1 and "[repeat]" in r.stdout, f"rc={r.returncode} {r.stdout[-600:]}")
+    _fc_record(root, base, [_fc_group(cat="boundary", findings=["g1"], prior={"why_failed": "太短", "new_approach": "也太短"})], rnd="r2")
+    r = _fc_check(root, v, rnd="r2")
+    check("①b prior 兩欄不到十個字 → 仍回 1", r.returncode == 1 and "[repeat]" in r.stdout, f"rc={r.returncode} {r.stdout[-400:]}")
+    _fc_record(root, base, [_fc_group(cat="boundary", findings=["g1"],
+                                      prior={"why_failed": "上次只修了文字輸出那條路沒顧到", "new_approach": "改成在共用出口統一處理所有路徑"})], rnd="r2")
+    r = _fc_check(root, v, rnd="r2")
+    check("②寫了 prior → 這項過", "[repeat]" not in r.stdout, r.stdout[-600:])
+    _fc_ledger(root, v, rnd="r3", findings="h1", folded="h1", severity="minor")
+    _fc_record(root, base, [_fc_group(cat="boundary", findings=["h1"])], rnd="r3")
+    r = _fc_check(root, v, rnd="r3")
+    check("③這輪最高只到 minor → 不要求", "[repeat]" not in r.stdout, r.stdout[-600:])
+    _fc_record(root, base, [_fc_group(cat="other", note="一次性的拼字錯誤", findings=["h1"])], rnd="r3")
+    _fc_ledger(root, v, rnd="r4", findings="k1", folded="k1", sevs={"k1": "major"})
+    _fc_record(root, base, [_fc_group(cat="other", note="另一件不相干的事", findings=["k1"])], rnd="r4")
+    r = _fc_check(root, v, rnd="r4")
+    check("④兩組都是 other → 不要求", "[repeat]" not in r.stdout, r.stdout[-600:])
+
+
+def t_fix_check_gov_event():
+    """[S7] 每次驗完恰好一筆 fix-check 事件(passed/warned、hard false、帶 loop/round/record_sha256/head_sha/secs/token);
+    同提交連跑兩次 gov 讀出兩筆;加了欄位型別後既有帳的筆數不變;LUMOS_SKIP_FIX_CHECK=1 回 0 記 skipped-env;
+    不用跑與回 2 不寫事件;寫不進帳時印「這次結果沒記到帳」。"""
+    import hashlib
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v)
+    rp = _fc_record(root, base, [_fc_group()])
+    r = _fc_check(root, v)
+    evs = _fc_events(root)
+    check("①過了寫一筆 passed", r.returncode == 0 and len(evs) == 1 and evs[0]["kind"] == "passed", f"rc={r.returncode} {evs}")
+    e = evs[-1] if evs else {}
+    check("②欄位齊", e.get("hard") is False and e.get("loop") == "code-fx" and e.get("round") == "r1"
+          and e.get("record_sha256") == hashlib.sha256(rp.read_bytes()).hexdigest() and e.get("head_sha") == head
+          and isinstance(e.get("secs"), (int, float)) and e.get("token"), str(e))
+    _fc_check(root, v)
+    g = _fc_lum(root, v, "gov", "--full", "--since", "9999")
+    n_fc = g.stdout.count("fix-check/passed")
+    check("③同提交連跑兩次 gov 讀出兩筆(去重鍵帶事件隨機碼)", n_fc == 2, f"{n_fc} {g.stdout[-500:]}")
+    r = _fc_check(root, v, env_extra={"LUMOS_SKIP_FIX_CHECK": "1"})
+    check("④LUMOS_SKIP_FIX_CHECK=1 回 0 記 skipped-env", r.returncode == 0 and _fc_events(root)[-1]["kind"] == "skipped-env", r.stdout[-300:])
+    _fc_record(root, base, [_fc_group(tests=["t_nosuch"])])
+    r = _fc_check(root, v)
+    check("⑤沒過寫 warned", r.returncode == 1 and _fc_events(root)[-1]["kind"] == "warned", f"rc={r.returncode}")
+    n = len(_fc_events(root))
+    _fc_ledger(root, v, rnd="r2", findings="s1", folded="s1", kinds={"s1": "spec"})
+    r = _fc_check(root, v, rnd="r2")
+    check("⑥不用跑(只有 spec 類折入)回 0、不寫事件", r.returncode == 0 and "不用跑" in r.stdout and len(_fc_events(root)) == n, r.stdout[-300:])
+    r = _fc_check(root, v, rnd="r9")
+    check("⑦回 2 不寫事件", r.returncode == 2 and len(_fc_events(root)) == n, f"rc={r.returncode}")
+    import importlib.util as _iu, importlib.machinery as _im, json as _jj
+    _ld = _im.SourceFileLoader("lumos_types_probe", GRAPHCTL)
+    _md = _iu.module_from_spec(_iu.spec_from_loader("lumos_types_probe", _ld)); _ld.exec_module(_md)
+    _new = ("record_sha256", "head_sha", "secs", "failed_items")
+    _old_types = {k: t for k, t in _md._GOV_FIELD_TYPES.items() if k not in _new}
+    _docs = Path(GRAPHCTL).resolve().parent.parent / "docs"
+    n_new = n_old = 0
+    for _f in (".governance-log.jsonl", ".canary-log.jsonl", ".signoff-log.jsonl", ".kill-log.jsonl", ".bypass-log.jsonl"):
+        _p = _docs / _f
+        if not _p.is_file():
+            continue
+        for _ln in _p.read_bytes().split(b"\n"):
+            try:
+                _d = _jj.loads(_ln)
+            except ValueError:
+                continue
+            if not isinstance(_d, dict):
+                continue
+            n_new += _md._gov_event_types_ok(_d)
+            n_old += all(not (k in _d and not isinstance(_d[k], t)) for k, t in _old_types.items()) and _md._gov_event_types_ok(dict((k, x) for k, x in _d.items() if k not in _new))
+    check("⑦b 加了新欄位型別之後,本 repo 各本帳型別對的行數不變", n_new == n_old and n_new > 0, f"new={n_new} old={n_old}")
+    gl = root / "docs" / ".governance-log.jsonl"
+    keep = gl.read_bytes()
+    gl.unlink(); gl.mkdir()
+    _fc_record(root, base, [_fc_group()])
+    r = _fc_check(root, v)
+    check("⑧寫不進帳時印「這次結果沒記到帳」", "這次結果沒記到帳" in r.stdout, r.stdout[-400:])
+    gl.rmdir(); gl.write_bytes(keep)
+
+
+def t_loop_next_fix_check_reminder():
+    """[S8] loop next 提醒:最新一輪有要修正紀錄的折入、沒有符合條件的 passed 事件 → 印提醒附指令(狀態與 rc 不變);
+    通過後不印;之後只提交審查帳不印;提交了程式、紀錄改過、事件是 warned 都印;skipped-env 改印「已跳過」;
+    --json 的 fix_check 三鍵;設計審迴圈不印;第 2 輪範本含 --regression-set、填 none 真跑成功。"""
+    import json as _j, shlex
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v)
+
+    def nxt(loop="code-fx"):
+        return _fc_lum(root, v, "loop", "next", loop, "--json")
+
+    def fcj(r):
+        return (_j.loads(r.stdout.strip().splitlines()[-1]) or {}).get("fix_check")
+    r = nxt()
+    fc = fcj(r)
+    check("①沒有修正紀錄 → needed 附 --record-template", fc and fc["status"] == "needed" and "--record-template" in fc["cmd"]
+          and set(fc) == {"status", "round", "cmd"}, str(fc))
+    rp = _fc_record(root, base, [_fc_group()])
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "record")
+    rt = _fc_lum(root, v, "loop", "next", "code-fx")
+    check("②還沒驗 → 文字模式印提醒與指令", "修正關卡" in rt.stdout and "lumos loop fix-check code-fx --round r1" in rt.stdout, rt.stdout[-500:])
+    base_rc = rt.returncode
+    _fc_check(root, v)
+    r = nxt(); check("③通過後 status=passed", fcj(r)["status"] == "passed", str(fcj(r)))
+    rt = _fc_lum(root, v, "loop", "next", "code-fx")
+    check("④通過後文字模式不印提醒、rc 不變", "修正關卡" not in rt.stdout and rt.returncode == base_rc, rt.stdout[-400:])
+    _fc_git(root, "add", "docs/.canary-log.jsonl", "docs/.governance-log.jsonl"); _fc_git(root, "commit", "-qm", "ledger")
+    r = nxt(); check("⑤之後只提交了帳本 → 仍 passed", fcj(r)["status"] == "passed", str(fcj(r)))
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # again\n", encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "more code")
+    r = nxt(); check("⑥之後提交了程式 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    _fc_check(root, v)
+    rp.write_text(rp.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    r = nxt(); check("⑦紀錄改過 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    _fc_record(root, base, [_fc_group(tests=["t_nosuch"])])
+    _fc_check(root, v)
+    r = nxt(); check("⑧最後一筆是 warned → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    _fc_record(root, base, [_fc_group()])
+    _fc_check(root, v)
+    gl = root / "docs" / ".governance-log.jsonl"
+    evl = [_j.loads(l) for l in gl.read_text(encoding="utf-8").splitlines() if l.strip()]
+    fake = dict([e for e in evl if e.get("gate") == "fix-check"][-1], head_sha=12345, token="fake")   # 型別不對(手寫帳)不能讓 loop next 當掉
+    with open(gl, "a", encoding="utf-8") as fh:
+        fh.write(_j.dumps(fake, ensure_ascii=False) + "\n")
+    r = nxt(); check("⑧b 最後一筆 passed 但 head_sha 型別不對 → needed(不當掉)", fcj(r)["status"] == "needed", str(fcj(r)))
+    _fc_check(root, v, env_extra={"LUMOS_SKIP_FIX_CHECK": "1"})
+    r = nxt(); check("⑨skipped-env → skipped", fcj(r)["status"] == "skipped", str(fcj(r)))
+    rt = _fc_lum(root, v, "loop", "next", "code-fx")
+    check("⑩文字模式印「已跳過」", "已跳過" in rt.stdout, rt.stdout[-300:])
+    _fc_ledger(root, v, loop="design-x")
+    r = nxt("design-x"); check("⑪設計審迴圈不出 fix_check", fcj(r) is None, r.stdout[-300:])
+    r = nxt()
+    dc = _j.loads(r.stdout.strip().splitlines()[-1]).get("disposal_cmd") or ""
+    check("⑫第 2 輪範本含 --regression-set", "--regression-set" in dc, dc)
+    filled = (dc.replace("<席>", "s2-sonnet").replace("<s>", "major").replace("<id串|none>", "none")
+              .replace("--findings-set <id串>", "--findings-set z1").replace("--folded-set <id串>", "--folded-set z1")
+              .replace("--accepted-set <id串>", "").replace("--accept-reason <id=理由>", "")
+              .replace("<席報告.md>", str(root / "docs" / "rep-r1.md")).replace("<凍結快照.md>", str(root / "docs" / "snap-r1.patch"))
+              .replace("--spec <計劃節點.md>", "").replace("--reviewed <sha256>", ""))
+    argv = shlex.split(filled)
+    rr = _fc_lum(root, v, *argv[1:])
+    check("⑬第 2 輪範本填 none 真跑成功", rr.returncode == 0, f"{filled}\n{rr.stderr[-300:]}")
+
+
+def t_fix_check_record_template():
+    """[S10] --record-template:骨架 JSON 印到標準輸出(base 取自派工單 base_commit、每條要修正紀錄的折入一組),
+    提示只在標準錯誤、不寫檔;派工單沒有或壞掉時 base 留空並在標準錯誤說明。"""
+    import json as _j
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v, findings="f1,f2,f3", folded="f1,f2,f3", kinds={"f1": "code", "f2": "code", "f3": "process"})
+    d = root / "governance" / "review-reports" / "code-fx"
+    d.mkdir(parents=True)
+    (d / "r1-dispatch.json").write_text(_j.dumps({"round": "r1", "base_commit": base}), encoding="utf-8")
+    st0 = _fc_git(root, "status", "--porcelain").stdout
+    r = _fc_check(root, v, "--record-template")
+    j = _j.loads(r.stdout)
+    check("①stdout 是骨架 JSON、base 帶入", r.returncode == 0 and j["base"] == base, r.stdout[:300])
+    check("②每條 code 類折入一組、process 類不列", [g["findings"] for g in j["groups"]] == [["f1"], ["f2"]], str(j["groups"]))
+    check("③提示在標準錯誤", "process" in r.stderr or "f3" in r.stderr, r.stderr[:300])
+    check("④不寫檔", _fc_git(root, "status", "--porcelain").stdout == st0 and not (d / "r1-fix.json").exists(), "")
+    (d / "r1-dispatch.json").write_text("{broken", encoding="utf-8")
+    r = _fc_check(root, v, "--record-template")
+    check("⑤派工單壞掉 → base 留空並說明", _j.loads(r.stdout)["base"] == "" and "base 留空" in r.stderr, r.stderr[:300])
+
+
+def t_fix_check_tree_setup():
+    """[S12] 設定檔沒進版控 → 複製進樹並說明;主工作目錄那份有沒提交改動 → 用提交裡那份並說明;
+    依賴資料夾預設連回主工作目錄,link_deps=false 時不連;主工作目錄不乾淨又連了依賴時印警告。
+    (規格閘三處與合約測試閘改用共用函式後字面不變,由既有 spec_gate/bound_tests 測試守。)"""
+    import json as _j
+    root, v, base, head = _fc_env()
+    _fc_ledger(root, v)
+    _fc_record(root, base, [_fc_group()])
+    (root / "node_modules").mkdir()
+    log = Path(tempfile.mkdtemp(prefix="gctl-fclog-")) / "log.txt"
+    env = {"FC_LOG": str(log)}
+    r = _fc_check(root, v, env_extra=env)
+    check("①預設連依賴資料夾(樹裡是連結)", r.returncode == 0 and "link=True" in log.read_text(encoding="utf-8"), f"{r.stdout[-400:]} {log.read_text(encoding='utf-8') if log.exists() else ''}")
+    cfg = root / ".lumos" / "config.json"
+    cfg.write_text(_j.dumps({"test_profile": "python", "test": {"run_cmd": "python3 run.py -k {method}"}, "fix_check": {"link_deps": False}}), encoding="utf-8")
+    _fc_git(root, "commit", "-qam", "nolink")
+    log.write_text("", encoding="utf-8")
+    r = _fc_check(root, v, env_extra=env)
+    check("②link_deps=false 時不連", "link=False" in log.read_text(encoding="utf-8") and "link=True" not in log.read_text(encoding="utf-8"), log.read_text(encoding="utf-8"))
+    cfg.write_text(_j.dumps({"test_profile": "python", "test": {"run_cmd": "python3 run.py -k {method}"}}), encoding="utf-8")
+    r = _fc_check(root, v)
+    check("③主工作目錄設定有沒提交改動 → 用提交裡那份並說明", "這次用提交裡那份設定" in r.stdout, r.stdout[-500:])
+    check("③b 提交裡那份不連依賴 → 主工作目錄不乾淨也不印「可能被載到」", "可能被樹裡的測試載到" not in r.stdout, r.stdout[-500:])
+    _fc_git(root, "commit", "-qam", "link back on")
+    r = _fc_check(root, v)
+    check("④a 主工作目錄乾淨又連了依賴 → 不印那句警告", "可能被樹裡的測試載到" not in r.stdout, r.stdout[-500:])
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty\n", encoding="utf-8")
+    r = _fc_check(root, v)
+    check("④主工作目錄不乾淨又連了依賴 → 警告", "可能被樹裡的測試載到" in r.stdout, r.stdout[-500:])
+    _fc_git(root, "checkout", "--", "prod.py")
+    with open(root / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"gate": "x", "kind": "y"}\n')
+    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "gov ledger tracked")
+    with open(root / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"gate": "x", "kind": "z"}\n')
+    r = _fc_check(root, v)
+    check("④c 只有簿記檔(治理帳)沒提交 → 不列成「沒提交的改動」", "沒提交的改動不算" not in r.stdout, r.stdout[-500:])
+    (root / "node_modules").rmdir()
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty again\n", encoding="utf-8")
+    r = _fc_check(root, v)
+    check("④d 主工作目錄沒有任何依賴資料夾 → 不印「可能被載到」(沒連到東西)", "可能被樹裡的測試載到" not in r.stdout
+          and "沒提交的改動不算" in r.stdout, r.stdout[-500:])
+    _fc_git(root, "checkout", "--", "prod.py")
+    (root / "venv").mkdir()
+    (root / "venv" / "marker.txt").write_text("tracked\n", encoding="utf-8")
+    _fc_git(root, "add", "venv/marker.txt"); _fc_git(root, "commit", "-qm", "venv tracked")
+    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty 3\n", encoding="utf-8")
+    r = _fc_check(root, v)
+    check("④e 依賴資料夾進了版控(樹裡本來就有、沒建連結)→ 不印「可能被載到」", "可能被樹裡的測試載到" not in r.stdout, r.stdout[-500:])
+    _fc_git(root, "checkout", "--", "prod.py")
+    _fc_git(root, "rm", "-q", "--cached", ".lumos/config.json"); _fc_git(root, "commit", "-qm", "untrack cfg")
+    r = _fc_check(root, v)
+    check("⑤設定檔沒進版控 → 複製進樹並說明、照常驗", r.returncode == 0 and "設定檔沒進版控" in r.stdout, f"rc={r.returncode} {r.stdout[-500:]} {r.stderr[-300:]}")
 
 if __name__ == "__main__":
     sys.exit(main())

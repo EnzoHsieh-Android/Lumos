@@ -1,0 +1,167 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 19fc52f5..77194575 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11591,21 +11591,21 @@ _FIX_SEV_RANK = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+ 
+ def _fix_check_config(repo_root):
+     """讀 .lumos/config.json 的 fix_check 區塊(同 _lint_new_config 的寫法:沒設定用預設,單一欄位讀不懂用預設並警告)。
+     回 {link_deps, warnings}。link_deps 預設 True:不連的話 Node 專案的 npx 會在樹裡自己上網抓測試工具(第 0 步第 2 輪)。"""
+     import json
+     cfg = {"link_deps": True, "warnings": []}
+     p = Path(repo_root) / ".lumos" / "config.json"
+     try:
+         raw = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+     except (OSError, ValueError, RecursionError) as e:
+-        cfg["warnings"].append(f"設定檔讀不懂({type(e).__name__}),fix_check 照預設")
++        cfg["warnings"].append(f"{p} 讀不懂({type(e).__name__}),fix_check 照預設")
+         return cfg
+     sec = raw.get("fix_check") if isinstance(raw, dict) else None
+     if not isinstance(sec, dict):
+         return cfg
+     if "link_deps" in sec:
+         if isinstance(sec["link_deps"], bool):
+             cfg["link_deps"] = sec["link_deps"]
+         else:
+             cfg["warnings"].append(f"fix_check.link_deps 要是 true/false,這裡是 {sec['link_deps']!r},照預設(連)")
+     return cfg
+@@ -11676,30 +11676,43 @@ def _fix_ls_tree(repo_root, rev, path):
+         return "link" if mode == "120000" else "blob" + mode
+     return typ
+ 
+ 
+ def _fix_load_record(path):
+     """讀修正紀錄:大小上限、合法 JSON、形狀。回 (紀錄, 錯誤)。"""
+     import json
+     try:
+         if path.stat().st_size > _FIX_CHECK_MAX_BYTES:
+             return None, f"修正紀錄超過 {_FIX_CHECK_MAX_BYTES // 1024}KB"
+-        raw = path.read_text(encoding="utf-8")
+-        if "\x00" in raw or "\\u0000" in raw:
+-            return None, "修正紀錄裡有空字元(\\u0000),路徑與版本都不能含它"
+-        rec = json.loads(raw)
++        rec = json.loads(path.read_text(encoding="utf-8"))
+     except FileNotFoundError:
+         return None, f"找不到修正紀錄 {path}(用 --record-template 產骨架)"
+     except (OSError, ValueError, RecursionError) as e:
+         return None, f"修正紀錄讀不懂({type(e).__name__}: {str(e)[:80]})"
+     if not isinstance(rec, dict) or not isinstance(rec.get("groups"), list) or not isinstance(rec.get("base", ""), str):
+         return None, "修正紀錄的形狀不對:頂層要是物件,有 base(字串)與 groups(陣列)"
++    # 解析之後逐一看每個字串:含空字元、或有轉不成 UTF-8 的孤立代理字元(JSON 合法,但拿去當路徑或參數會當掉)→ 輸入錯
++    # (代碼審 r1 通才A、r2 通才:第一版在原始文字裡找 \u0000 字樣,會誤擋 note 裡寫的字面反斜線)
++    stack = [rec]
++    while stack:
++        x = stack.pop()
++        if isinstance(x, dict):
++            stack.extend(x.keys()); stack.extend(x.values())
++        elif isinstance(x, list):
++            stack.extend(x)
++        elif isinstance(x, str):
++            if "\x00" in x:
++                return None, "修正紀錄裡有空字元,路徑、版本與測試名都不能含它"
++            try:
++                x.encode("utf-8")
++            except UnicodeEncodeError:
++                return None, "修正紀錄裡有轉不成 UTF-8 的字元(孤立代理字元)"
+     if len(rec["groups"]) > _FIX_CHECK_MAX_GROUPS or any(not isinstance(g, dict) for g in rec["groups"]):
+         return None, f"groups 要是物件陣列、最多 {_FIX_CHECK_MAX_GROUPS} 組"
+     n_tests = 0
+     for g in rec["groups"]:
+         if not isinstance(g.get("paths", []), list) or any(not isinstance(x, dict) for x in g.get("paths", [])):
+             return None, f"組 {g.get('id', '?')} 的 paths 要是物件陣列"
+         for x in g.get("paths", []):
+             if not isinstance(x.get("tests", []), list):
+                 return None, f"組 {g.get('id', '?')} 有條路徑的 tests 不是陣列"
+             n_tests += len(x.get("tests", []))
+@@ -12014,21 +12027,22 @@ def cmd_loop_fix_check(env, loop_id, round_id, repo=None, as_json=False, templat
+         if fcfg["link_deps"]:
+             _dep_roots = [Path(".")]
+             for name, pe in plats.items():
+                 if name in unpinned:
+                     continue
+                 rel = Path(os.path.realpath(str(pe.get("root") or tree))).relative_to(tree)
+                 if str(rel) != ".":
+                     _dep_roots.append(rel)
+             for rel in _dep_roots:
+                 _lint_link_deps(rr / rel, tree / rel)
+-            linked = any((rr / rel / dep).is_dir() for rel in _dep_roots for dep in _LINT_DEP_DIRS)
++            # 看樹裡實際建出的連結(依賴資料夾進了版控、或建不了連結時,主工作目錄有那個資料夾也不代表連到;代碼審 r2 通才 F3)
++            linked = any((tree / rel / dep).is_symlink() for rel in _dep_roots for dep in _LINT_DEP_DIRS)
+             if dirty_paths and linked:   # 真的連了什麼才講(這個 repo 一個依賴資料夾都沒有時不印)
+                 notes.append("依賴資料夾連回主工作目錄,上面那幾支沒提交的改動可能被樹裡的測試載到")
+         # 1 紀錄完整
+         for m in _fix_item_record(rec, need, {str(x) for x in (car.get("findings_set") or [])}, changed, head, tree):
+             fail("record", m)
+         # 2 同類連兩輪
+         for m in _fix_item_repeat(env, rr, rows, groups, round_id, rec, car):
+             fail("repeat", m)
+         # 3 測試存在
+         names = []
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index fd2eaf5a..d30ce47c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -62290,31 +62290,39 @@ def t_fix_check_bad_input():
+     check("①非 code- 迴圈 rc2", r.returncode == 2 and "code-" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+     for bad in ("r1/x", "..", "r1\x01"):
+         r = _fc_check(root, v, rnd=bad)
+         check(f"②輪次 {bad!r} rc2", r.returncode == 2, f"rc={r.returncode}")
+     r = _fc_check(root, v, loop="code-a/b")
+     check("②迴圈編號含 / rc2", r.returncode == 2, f"rc={r.returncode}")
+     for nul in ({"base": base + "\u0000x", "groups": [_fc_group()]}, {"base": base, "groups": [_fc_group(at="pro\u0000d.py:clamp")]}):
+         rp.write_text(_j.dumps(nul), encoding="utf-8")
+         r = _fc_check(root, v)
+         check("②紀錄含空字元 rc2(不是當掉)", r.returncode == 2 and "空字元" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
++    rp.write_text('{"base": "' + base + '", "groups": [{"id": "G1", "category": "boundary", "findings": ["f1"], '
++                  '"paths": [{"at": "prod.py:clamp", "status": "fixed", "tests": ["t_\\ud800x"]}]}]}', encoding="utf-8")
++    r = _fc_check(root, v)
++    check("②紀錄含孤立代理字元 rc2(不是當掉)", r.returncode == 2 and "UTF-8" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+     rp.write_text("{not json", encoding="utf-8")
+     r = _fc_check(root, v)
+     check("③紀錄不是合法 JSON rc2", r.returncode == 2 and "讀不懂" in r.stderr, r.stderr[:200])
+     rp.write_text(_j.dumps({"base": base, "groups": [_fc_group(tests=[f"t{i}" for i in range(201)])]}), encoding="utf-8")
+     r = _fc_check(root, v)
+     check("④測試名超過上限 rc2", r.returncode == 2 and "上限" in r.stderr, r.stderr[:200])
+     for b in ("nosuchrev", "-x", ""):
+         _fc_record(root, b, [_fc_group()])
+         r = _fc_check(root, v)
+         check(f"⑤base {b!r} rc2", r.returncode == 2 and "轉不成" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+     check("⑥回 2 都不寫事件", not _fc_events(root), str(_fc_events(root))[:200])
++    ok_note = [_fc_group(cat="other", note="紀錄含 \\u0000 字樣時回 2")]
++    rp.write_text(_j.dumps({"base": base, "groups": ok_note}, ensure_ascii=False), encoding="utf-8")
++    r = _fc_check(root, v)
++    check("⑥b note 裡寫字面的反斜線 u0000 不算空字元", r.returncode != 2, f"rc={r.returncode} {r.stderr[-200:]}")
+     _fc_record(root, base, [_fc_group()])
+     cfg = root / ".lumos" / "config.json"
+     cfg.write_text('{"default_platform": "ios", "platforms": {"web": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"}}}', encoding="utf-8")
+     _fc_git(root, "commit", "-qam", "bad cfg")
+     r = _fc_check(root, v)
+     check("⑦預設平台不在清單 → 樹裡設定讀不懂 rc2", r.returncode == 2 and "設定讀不懂" in r.stderr, f"rc={r.returncode} {r.stderr[:300]}")
+     cfg.write_text(_j.dumps({"default_platform": "py", "platforms": {
+         "py": {"profile": "python", "root": ".", "run_cmd": "python3 run.py -k {method}"},
+         "mae": {"profile": "python", "root": ".maestro", "run_cmd": "true"}}}), encoding="utf-8")
+     _fc_git(root, "commit", "-qam", "multi cfg")
+@@ -62653,16 +62661,23 @@ def t_fix_check_tree_setup():
+     with open(root / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as fh:
+         fh.write('{"gate": "x", "kind": "z"}\n')
+     r = _fc_check(root, v)
+     check("④c 只有簿記檔(治理帳)沒提交 → 不列成「沒提交的改動」", "沒提交的改動不算" not in r.stdout, r.stdout[-500:])
+     (root / "node_modules").rmdir()
+     (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty again\n", encoding="utf-8")
+     r = _fc_check(root, v)
+     check("④d 主工作目錄沒有任何依賴資料夾 → 不印「可能被載到」(沒連到東西)", "可能被樹裡的測試載到" not in r.stdout
+           and "沒提交的改動不算" in r.stdout, r.stdout[-500:])
+     _fc_git(root, "checkout", "--", "prod.py")
++    (root / "venv").mkdir()
++    (root / "venv" / "marker.txt").write_text("tracked\n", encoding="utf-8")
++    _fc_git(root, "add", "venv/marker.txt"); _fc_git(root, "commit", "-qm", "venv tracked")
++    (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # dirty 3\n", encoding="utf-8")
++    r = _fc_check(root, v)
++    check("④e 依賴資料夾進了版控(樹裡本來就有、沒建連結)→ 不印「可能被載到」", "可能被樹裡的測試載到" not in r.stdout, r.stdout[-500:])
++    _fc_git(root, "checkout", "--", "prod.py")
+     _fc_git(root, "rm", "-q", "--cached", ".lumos/config.json"); _fc_git(root, "commit", "-qm", "untrack cfg")
+     r = _fc_check(root, v)
+     check("⑤設定檔沒進版控 → 複製進樹並說明、照常驗", r.returncode == 0 and "設定檔沒進版控" in r.stdout, f"rc={r.returncode} {r.stdout[-500:]} {r.stderr[-300:]}")
+ 
+ if __name__ == "__main__":
+     sys.exit(main())

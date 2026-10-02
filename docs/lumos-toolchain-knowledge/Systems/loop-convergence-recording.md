@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-26
+updated: 2026-10-02
 self_audit: sonnet/2026-08-26
 about_code_stamp: claude/2026-08-30/be0e9557e400
 tags:
@@ -27,6 +27,7 @@ verified_by:
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-09_審查有沒有用記帳落地]]"
 summary: |-
+  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]loop next 對代碼審迴圈多一段修正關卡提醒(最新一輪有要修正紀錄的折入、沒有有效通過紀錄就印;只附加、不改 phase 與回傳碼,--json 多 fix_check 欄);代碼審第 2 輪起處置記帳範本多帶 --regression-set,而且 gate-pending 也給範本(第 2 輪起多半停在那裡) [test:t_loop_next_fix_check_reminder]
   WHY:[2026-09-26 [[Projects/逃逸帳對得起來_計劃]] d1]逃逸帳對得起來:①新列帶 `loop_kind`(code/design/plan,只看 loop 欄與審查紀錄、規格閘留痕不算,`_escape_loop_kind`);②手動記帳要 --sha 或 --defect-ref,沒有就 --missing-defect-ref 講理由(至少 4 字實字);手動記帳與撤回都上寫入鎖、共用符號連結檢查 `_escape_log_guard`;③`loop escape --withdraw <token> --reason --withdrawn-by` 追加撤回紀錄(撤回者自報不驗身分;token 在 --list 每列印出;token 重複不准撤),`_escape_rows_for` 永遠不回撤回紀錄、預設不回被撤的列,自動記的去重用 include_withdrawn(撤過的不會被同觸發補回),清單照列並標已撤回,rule-gap 保留自己找檔再套同一支判斷;④`loop escape-stats`:列上已記的 loop_kind 為準、sha 與 defect_ref 各自比對歸因;單位是迴圈、分母只認 converged 且審查帳有紀錄、下一站接住(實作/code-loop/push-gate*)另列、歸因不明只在分母母體內比、code 類標明只含手動逃逸 [test:t_escape_withdraw_validation] [test:t_escape_withdrawn_not_resurrected_by_auto] [test:t_escape_stats_rate_unit_is_loop] [test:t_escape_manual_requires_defect_ref]
   WHY:[2026-09-26 [[Projects/審查跑滿上限提示_計劃]] d1]多席迴圈輪數到分級上限、或各輪累計折入超過 20 條時,loop next 與處置閘都在輸出末尾印 `[cap-hint]` 段:每輪折入數(`_review_yield_round` 的折欄;空輪看各席 findings 全 0)、最高嚴重度、閘狀態與一條提示(換做法/可以停/由人裁/判不了)。只印不擋、不寫帳、回放不印,處置閘那邊印的時候任何例外都吞掉(代碼審 r1:帳上某輪欄位壞掉曾讓處置閘噴例外);light、循序單審、2026-08-26 以前的舊迴圈不印。理由:處置閘一輪全部處置完就過關,多跑的輪是過了閘之後自己再開的,問題在「沒人看得到走勢」而不在出口。分輪抽成 `_disposal_round_groups` 與處置閘共用 [test:t_cap_hint_not_declining_reshape] [test:t_loop_next_cap_hint_appended_without_changing_phase] [test:t_disposal_cap_hint_without_changing_verdict] [test:t_cap_hint_breaker_total_folded]
   PITFALL:[2026-09-26 代碼審 code-逃逸帳對得起來 r3]帳本一行合法但巢狀極深的 JSON 解析時丟遞迴過深錯誤(不是 ValueError),逃逸帳家族讀帳、共用寫完讀回自驗 `_jsonl_append_verified`、判門 `_door_for_loop` 都改成一起接;寫完讀回沒接會在已寫入後誤報沒記成功。rule-gap 讀帳時就把規則名與說明過 `_esc_clean`(帳是誰都能記的;★要在讀帳時清、不能在輸出時清★——輸出時才清,--json 會漏清,而且清完撞名的兩條規則在 JSON 裡會只剩一條,讀帳時清則次數合併、兩種輸出同一份;讀帳時★只清不截斷★,截斷會讓前段相同的長名字誤合併;小審 r1–r3 通才席)。其餘讀帳點見 [[Issues/帳本讀取沒接遞迴過深]] [test:t_escape_review_r3_fixes]

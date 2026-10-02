@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-26
+updated: 2026-10-02
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -17,6 +17,7 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
 summary: |-
+  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
   FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:decisions] → doctor Check R / lint 強制 → ③ findings 經 doctor(僅 --ci)append .governance-log.jsonl → lumos gov 唯讀彙整查詢
