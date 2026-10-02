@@ -37,6 +37,8 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 研究題:給一個任務,哪些節點該浮上來、排序對不對
 
 - [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
+- [[Systems/改檔前推播]] — 改檔前把牽連的筆記推到模型眼前的那支 hook:用哪個 repo 的圖譜查(worktree 裡的檔用那個 worktree)、冷卻窗。
+- [[Issues/worktree裡改檔推不出筆記]] — 已修:切進 worktree 後推播整個消失、沒提示;同寫法還有三支 hook 沒修。
 - [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
 - [[Projects/檢索訊號三件_計劃]] `[todo]` — 排隊中:別名欄只填 12% 但權重第二高、沒有真實查詢紀錄所以評測題庫是人編的、導覽樞紐標(被殺的 A3 是量法不是訊號)。
 - [[Projects/檢索核心重建_計劃]] `[todo]` — 排隊中,等評測尺修復。撈候選那一關換成標準函式庫的全文索引(零新依賴):0.7 秒→0.2 毫秒、多詞召回破口一併修、三條字面路徑共用同一份索引;另接三個標籤用途(風險類進注入、優先級進待辦排序、別名回填)。

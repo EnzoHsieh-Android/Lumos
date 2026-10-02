@@ -35976,6 +35976,59 @@ def t_impact_hook_main_ttl_wiring():
     check("main 接線 出口[lumos 不在]: rc0 且不留冷卻標記", rc == 0 and not m._ttl_marker_path(sid, str(d / "a.py")).exists())
 
 
+def t_impact_hook_repo_follows_worktree():
+    """session 切進 worktree 後,啟動目錄變數與 hook 行程的位置都還是主 repo(2026-10-02 實測)。
+    拿主 repo 去查 worktree 裡的檔會 0 筆、而且靜默——照規矩開 worktree 做事的 session 反而收不到推播。
+    修法:被改的檔若在「同一個 repo 的另一個 worktree」,--repo 換成那個 worktree;其餘情況照舊。"""
+    import importlib.util, io as _io, json as _j, os as _os, subprocess as _sp, tempfile as _tf
+    from importlib.machinery import SourceFileLoader
+    from unittest.mock import patch
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_wt", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_wt", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    base = Path(_tf.mkdtemp(prefix="hookwt-")).resolve()
+    git = lambda *a: _sp.run(["git", *a], capture_output=True, text=True, check=True)
+    main_repo, other = base / "main", base / "other"
+    for r in (main_repo, other):
+        r.mkdir(); git("init", "-q", str(r))
+        (r / "a.py").write_text("x=1\n", encoding="utf-8")
+        git("-C", str(r), "add", "a.py"); git("-C", str(r), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    wt = base / "wt"
+    git("-C", str(main_repo), "worktree", "add", "-q", "--detach", str(wt))
+    real_run = _sp.run
+
+    def repo_passed(file_path, git_ok=True):
+        seen = []
+        def runner(argv, *a, **k):
+            if argv and argv[0] == "git":
+                if not git_ok:
+                    raise _sp.TimeoutExpired("git", 3)
+                return real_run(argv, *a, **k)
+            seen.append(list(argv))
+            class R: returncode, stdout, stderr = 0, _j.dumps({"results": [], "stack_questions": [], "lane": []}), ""
+            return R()
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": file_path}, "cwd": str(main_repo),
+                   "session_id": "wt-" + _os.urandom(3).hex()}
+        with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.subprocess, "run", runner), \
+             patch.object(m, "_find_lumos_script", lambda: "/bin/true"), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(main_repo)}), \
+             patch.object(m.sys, "stdout", _io.StringIO()), patch.object(m.sys, "stderr", _io.StringIO()):
+            m.main()
+        calls = [c for c in seen if "--repo" in c]
+        return calls[0][calls[0].index("--repo") + 1] if calls else None
+
+    got = repo_passed(str(wt / "a.py"))
+    check("worktree 裡的檔:--repo 換成那個 worktree", got == str(wt), f"got={got}")
+    got = repo_passed(str(other / "a.py"))
+    check("不相干 repo 的檔:--repo 照舊是啟動目錄(不讀陌生 repo 的筆記)", got == str(main_repo), f"got={got}")
+    got = repo_passed(str(main_repo / "a.py"))
+    check("主 repo 自己的檔:--repo 照舊", got == str(main_repo), f"got={got}")
+    got = repo_passed("a.py")
+    check("相對路徑:--repo 照舊", got == str(main_repo), f"got={got}")
+    got = repo_passed(str(wt / "a.py"), git_ok=False)
+    check("git 查詢失敗(逾時):退回啟動目錄,不中斷推播", got == str(main_repo), f"got={got}")
+
+
 def t_lens_recount_classify():
     """code-loop r1 正確性/邊界席:recount.py 的 Bash 分類與 pinned 解析要有測試(重導向/sed -i/heredoc 就近/事故行/含空白路徑/同名 stem)。"""
     _need_src("governance/eval/lens-utilization/recount.py")   # 消費專案沒有 governance/eval/,test_lumos.py 卻會被裝進去(推播miss量測 S5)
