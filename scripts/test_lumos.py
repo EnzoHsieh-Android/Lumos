@@ -56116,7 +56116,9 @@ def t_note_audit_reread_prepare_codex_dispatch_stdin():
 
 def t_nodehome_side_deadline_reread_base_side():
     """代碼審 r2 通才席 F2:reread-check 的截止時間也傳給起點那一側的 _nodehome_side(起點那側只讀範圍裡有變動的筆記,
-    變動的篇數一多照樣會慢)。這裡頂端讀得快、起點每篇讀 0.2 秒、上限 0.5 秒、範圍裡改了 16 篇。
+    變動的篇數一多照樣會慢)。起點每篇讀 0.2 秒、範圍裡改了 16 篇;上限=先實測「走到起點那側第一次讀」花的時間 + 0.5 秒
+    (原本寫死 0.5 秒,假設頂端那側幾乎不花時間;2026-10-02 這台機器光走到起點就要 1 秒,起點一篇都沒讀到、每次紅,
+    見 [[Issues/起點時限測試寫死半秒隨機器快慢紅]])。
 
     翻紅釘:起點那行拿掉 deadline → 起點 16 篇全讀完才逾時 → 紅。"""
     print("t_nodehome_side_deadline_reread_base_side")
@@ -56137,6 +56139,25 @@ def t_nodehome_side_deadline_reread_base_side():
     g = m.cmd_note_audit_reread_check.__globals__
     real = g["_nodehome_reader"]
     reads = []
+    first = []
+
+    def probe_reader(r, where):
+        inner = real(r, where)
+
+        def rd(p):
+            if where == base and "/Systems/" in p and not first:
+                first.append(_t.monotonic() - t0)
+            return inner(p)
+        return rd
+    saved = {k: g[k] for k in ("_nodehome_reader", "_NOTE_REREAD_BUDGET_SEC")}
+    try:        # 先量這台機器走到起點那側第一次讀要多久(不慢讀、上限放寬)
+        g.update({"_nodehome_reader": probe_reader, "_NOTE_REREAD_BUDGET_SEC": 60})
+        t0 = _t.monotonic()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            m.cmd_note_audit_reread_check(repo=str(root), diff_range=f"{base}..{tip}")
+    finally:
+        g.update(saved)
+    budget = (first[0] if first else 0.0) + 0.5
 
     def slow_reader(r, where):
         inner = real(r, where)
@@ -56150,16 +56171,16 @@ def t_nodehome_side_deadline_reread_base_side():
     saved = {k: g[k] for k in ("_nodehome_reader", "_NOTE_REREAD_BUDGET_SEC")}
     so = io.StringIO()
     try:
-        g.update({"_nodehome_reader": slow_reader, "_NOTE_REREAD_BUDGET_SEC": 0.5})
+        g.update({"_nodehome_reader": slow_reader, "_NOTE_REREAD_BUDGET_SEC": budget})
         t0 = _t.monotonic()
         with contextlib.redirect_stdout(so), contextlib.redirect_stderr(io.StringIO()):
             rc = m.cmd_note_audit_reread_check(repo=str(root), diff_range=f"{base}..{tip}")
         spent = _t.monotonic() - t0
     finally:
         g.update(saved)
-    check("起點那側每篇讀 0.2 秒、上限 0.5 秒:印逾時、回 0,起點讀到上限就停(沒把 16 篇讀完)",
-          rc == 0 and "逾時" in so.getvalue() and 0 < len(reads) < 10 and spent < 2.5,
-          f"rc={rc} 起點讀了 {len(reads)} 篇、花 {spent:.1f} 秒\n{so.getvalue()}")
+    check("起點那側每篇讀 0.2 秒、上限=走到起點的實測時間+0.5 秒:印逾時、回 0,起點讀到上限就停(沒把 16 篇讀完)",
+          rc == 0 and "逾時" in so.getvalue() and 0 < len(reads) < 10 and spent < budget + 2.0,
+          f"rc={rc} 起點讀了 {len(reads)} 篇、花 {spent:.1f} 秒、上限 {budget:.1f} 秒\n{so.getvalue()}")
 
 
 def t_discipline_block_stamp_matches_version():
