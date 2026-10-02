@@ -27208,23 +27208,71 @@ def _notelines_regions(text):
     return out
 
 
-def _notelines_parse_added(raw):
-    """git diff -U0 輸出 → {新路徑: [(新行號, 行文字)]}。"""
-    out, path, n = {}, None, 0
+_NOTELINES_HUNK_RE = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _notelines_parse_hunks(raw):
+    """git diff -U0 輸出 → [{"a": 舊路徑原樣或 None, "b": 新路徑原樣或 None, "segs": [(舊行號, [被刪行], 新行號, [被加行])]}]。
+    ★照 @@ 的計數走★:在區塊裡只看計數、不看長相,計數吃完才回到檔頭狀態——內容行 `++ x` 在 diff 裡是 `+++ x`,
+    原本用 startswith("+++ ") 判檔頭,同檔後面的新行全漏查(Projects/舊行尾追加不算新寫_計劃〈做法〉1,設計審 r1 三席實測)。
+    空白開頭的上下文行計入兩邊行號,並把區塊切成幾個改動段(本機 diff.interHunkContext 會讓 -U0 夾進上下文行);
+    `\\ No newline` 不吃計數。路徑照現行:去掉 a/、b/ 與尾端 TAB;被 git 加引號的路徑與 /dev/null 給 None。"""
+    files, cur, seg = [], None, None
+    ro = rn = o = n = 0
     for ln in raw.decode("utf-8", errors="surrogateescape").split("\n"):
-        if ln.startswith("+++ "):
-            p = ln[4:].rstrip("\t")                # 含空白的檔名 git 會在檔頭尾端補一個 TAB
-            path = nfc(p[2:]) if p.startswith("b/") else None
+        if ro > 0 or rn > 0:
+            c = ln[:1]
+            if c == "\\":
+                continue
+            if c == "-" and ro > 0:
+                if seg is None:
+                    seg = (o, [], n, [])
+                    cur["segs"].append(seg)
+                seg[1].append(ln[1:])
+                o, ro = o + 1, ro - 1
+                continue
+            if c == "+" and rn > 0:
+                if seg is None:
+                    seg = (o, [], n, [])
+                    cur["segs"].append(seg)
+                seg[3].append(ln[1:])
+                n, rn = n + 1, rn - 1
+                continue
+            if c == " " and ro > 0 and rn > 0:
+                seg = None
+                o, n, ro, rn = o + 1, n + 1, ro - 1, rn - 1
+                continue
+            ro = rn = 0                                 # 計數對不上(壞輸出):離開區塊,這行照檔頭讀
+        seg = None
+        if ln.startswith("diff --git "):
+            cur = {"a": None, "b": None, "segs": []}
+            files.append(cur)
             continue
-        if ln.startswith("@@"):
-            m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
-            n = int(m.group(1)) if m else 0
+        if ln.startswith(("--- ", "+++ ")):
+            if cur is None:
+                cur = {"a": None, "b": None, "segs": []}
+                files.append(cur)
+            p_ = ln[4:].rstrip("\t")                   # 含空白的檔名 git 會在檔頭尾端補一個 TAB
+            want = "a/" if ln[0] == "-" else "b/"
+            cur["a" if ln[0] == "-" else "b"] = p_[2:] if p_.startswith(want) else None
             continue
-        if path is None or ln.startswith("---"):
+        if ln.startswith("@@") and cur is not None:
+            m = _NOTELINES_HUNK_RE.match(ln)
+            if m:
+                o, ro = int(m.group(1)), int(m.group(2) or 1)
+                n, rn = int(m.group(3)), int(m.group(4) or 1)
+    return files
+
+
+def _notelines_parse_added(raw):
+    """git diff -U0 輸出 → {新路徑: [(新行號, 行文字)]}。包 _notelines_parse_hunks(只交出被加的行),回傳形狀照舊。"""
+    out = {}
+    for f in _notelines_parse_hunks(raw):
+        if f["b"] is None:
             continue
-        if ln.startswith("+"):
-            out.setdefault(path, []).append((n, ln[1:]))
-            n += 1
+        p = nfc(f["b"])
+        for _o, _d, n, adds in f["segs"]:
+            out.setdefault(p, []).extend((n + i, t) for i, t in enumerate(adds))
     return out
 
 
@@ -27238,8 +27286,10 @@ def _ns_git(repo_root, *args):
 
 
 def _ns_diff(repo_root, *args):
+    """筆記閘取改動的共用 diff。★釘 --inter-hunk-context=0 與 --diff-algorithm=myers★:本機設了 diff.interHunkContext
+    會讓 -U0 夾進上下文行、diff.algorithm 會改區塊切法,本機與 CI 結果就不一樣(Projects/舊行尾追加不算新寫_計劃〈做法〉1)。"""
     return _ns_git(repo_root, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
-                   "--src-prefix=a/", "--dst-prefix=b/", *args)
+                   "--inter-hunk-context=0", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", *args)
 
 
 def _ns_mainline_refs(repo_root):

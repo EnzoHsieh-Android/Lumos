@@ -50152,6 +50152,66 @@ def _ns_gov(root):
     return [_j.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def t_notelines_parse_hunks():
+    """[S28][S29] 統一的區塊讀法照 @@ 計數走(Projects/舊行尾追加不算新寫_計劃〈做法〉1):內容行 `++ x`/`-- y` 照內容讀、
+    同檔後面的新行照收;兩個檔的 diff 第二個檔的檔頭不被讀成內容;上下文行計入行號、把區塊切成改動段;
+    `\\ No newline` 不吃計數。原本 `startswith("+++ ")` 判檔頭,`++ x` 之後同檔新行全漏查(設計審 r1 三席實測)。"""
+    print("t_notelines_parse_hunks")
+    m = _load_lumos_inproc()
+    raw = (b"diff --git a/n.md b/n.md\n--- a/n.md\n+++ b/n.md\n@@ -5,0 +6,2 @@\n+++ x\n+DEP:bad\n"
+           b"@@ -9 +11 @@ h\n--- y\n+z\n"
+           b"diff --git a/m.md b/m.md\n--- a/m.md\n+++ b/m.md\n@@ -2,3 +2,3 @@\n-old\n mid1\n mid2\n+new\n"
+           b"@@ -7 +7,2 @@\n-end\n\\ No newline at end of file\n+end\n+tail\n")
+    got = m._notelines_parse_added(raw)
+    check("①內容行 ++ x 照內容讀、後面那行照收", got.get("n.md") == [(6, "++ x"), (7, "DEP:bad"), (11, "z")], got)
+    check("②上下文行計入行號、第二個檔的檔頭沒被讀成內容、No newline 不吃計數",
+          got.get("m.md") == [(4, "new"), (7, "end"), (8, "tail")], got)
+    segs = {f["b"]: f["segs"] for f in m._notelines_parse_hunks(raw)}
+    check("③被刪的內容行 -- y 照內容讀", segs.get("n.md", [None, None])[1] == (9, ["-- y"], 11, ["z"]), segs.get("n.md"))
+    check("④上下文行把區塊切成兩段", segs.get("m.md", [])[:2] == [(2, ["old"], 2, []), (5, [], 4, ["new"])], segs.get("m.md"))
+    check("⑤沒有逗號的標頭計數是 1", segs.get("m.md", [None, None, None])[2] == (7, ["end"], 7, ["end", "tail"]), segs.get("m.md"))
+    # 端到端:提交前那份,`++ x` 之後的違規行照擋
+    root = _ns_repo()
+    _ns_note(root, body="++ x\n新寫 `src/a.py:5` 那一行")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑥提交前:內容行 ++ x 後面的程式行號引用照擋", rc == 1 and "src/a.py:5" in out, out[-500:])
+
+
+def t_notelines_parse_git_config():
+    """[S30] 本機設了 diff.interHunkContext 或 diff.algorithm,_ns_diff 的輸出跟沒設時一樣(釘 --inter-hunk-context=0
+    與 --diff-algorithm=myers);原本 interHunkContext 讓 -U0 夾進上下文行,舊讀法把新行行號算錯(設計審 r1 邊界席,編排者重現)。"""
+    print("t_notelines_parse_git_config")
+    import subprocess as sp
+    import tempfile
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="nlcfg-"))
+
+    def g(*a):
+        return sp.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=False)
+    g("init", "-q")
+    g("config", "user.email", "a@b"); g("config", "user.name", "a")
+    (d / "n.md").write_text("h\nDEP:舊句 scripts/x.py\nmid1\nmid2\nz\n", encoding="utf-8")
+    c_old = "#include <stdio.h>\n\nvoid f1()\n{\n    a();\n}\n\nint f2()\n{\n    b();\n}\n"
+    (d / "c.txt").write_text(c_old, encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "1")
+    (d / "n.md").write_text("h\nmid1\nmid2\nDEP:舊句 scripts/x.py 新增\nz\n", encoding="utf-8")
+    (d / "c.txt").write_text("#include <stdio.h>\n\nint f2()\n{\n    b();\n}\n\nvoid f1()\n{\n    a();\n}\n", encoding="utf-8")
+    g("config", "diff.interHunkContext", "3")
+    raw = m._ns_diff(d, "--", "n.md")
+    check("①設了 interHunkContext,_ns_diff 輸出沒有上下文行", raw is not None and not any(
+        l.startswith(b" ") for l in raw.split(b"\n")), raw)
+    check("②新行行號照實際位置(第 4 行)", m._notelines_parse_added(raw or b"").get("n.md") == [(4, "DEP:舊句 scripts/x.py 新增")],
+          m._notelines_parse_added(raw or b""))
+    g("config", "--unset", "diff.interHunkContext")
+    g("config", "diff.algorithm", "histogram")
+    want = g("diff", "-U0", "-M", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+             "--diff-algorithm=myers", "--", "c.txt").stdout.encode()
+    alt = g("diff", "-U0", "--src-prefix=a/", "--dst-prefix=b/", "--", "c.txt").stdout.encode()
+    check("③前提:這組輸入 histogram 跟 myers 切法不同", want != alt, "")
+    check("④設了 diff.algorithm=histogram,_ns_diff 仍照 myers 切", m._ns_diff(d, "--", "c.txt") == want, m._ns_diff(d, "--", "c.txt"))
+
+
 def t_note_shape_line_refs_existing_code_new_only():
     """[S1] 新增行裡指向真的存在的程式檔或測試檔的行號引用要擋(反引號、裸寫、#L、圍欄內、無副檔名 #! 主程式、
     唯一的單一檔名);指向不存在路徑或 .md 的不擋;沒改動的舊行不擋。"""
