@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-11
+updated: 2026-10-03
 self_audit: claude-fable/2026-08-24
 about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
@@ -10,6 +10,7 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  WHY:doctor 接在 S19 後多一段 S20:全庫每一篇照筆記測試綁定那五項判(指不到、作廢掛活測試、佔位字或空的、`[test-gone:]` 不對;判存在只做第①道),另列計劃條款仍掛 `[test:]` 而下一層寫了撤除的候選;不計入問題數、不寫治理帳,抽取與名稱切分跟 note-shape 同一套(_ns_test_ref_lines、_test_names_of) [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]〈做法〉10] [因:推送只擋碰到的筆記,沒碰到的舊帳要有地方看得到] [test:t_doctor_note_test_refs]
   WHY:doctor 多一段 S16 列出有效 RULE 的 [until:] 過期、半年沒確認、沒寫 [confirmed:],舊行也列、不計入問題數;過期判斷與 lint 的生命週期提醒共用 _rule_stale_keys,治理帳一篇記一筆 check-s16(判斷在 _doctor_stale_rules,測得到去重) [出處:2026-10-01 [[Projects/筆記標籤_過時判定與按需載入_計劃]] [S6]] [因:到期是時間的函數,只看新寫行的提醒送不到沒人碰的舊 RULE] [test:t_doctor_lists_stale_rules]
   WHY:doctor 接在 S16 後面多三段筆記格子的過期提醒,都不計入問題數、不寫治理帳:S16 到 S19 讀摘要條目共用 _note_summary_entries(續行接回、單行寫法的 summary 照判;S16 原本逐實體行判);S17 標了作廢的行,接手欄位指到的節點或決策不在、或也作廢了(只看一跳,決策引用用 _dref_norm 解析、判翻案照 E3);S18 RULE 的度量式撤除條件成立(先用提交時同一支 _slot_retire_err 重驗寫法,寫不合列成提醒;治理帳檔尾只讀一遍,跟帳增速那段共用 _gov_tail_bytes 與逐筆版 _drift_jsonl_iter;暖機、[since:] 不滿 N 週、閘目前 off 不判;整段包住,算不出來只講一句);S19 FACT/FLOW/DEP 的 [confirmed:] 超過 [recheck:] 或來源預設。S17、S18 在 --ci 不跑(要讀本機帳、只在完整 doctor),S19 照跑、條數照軟段既有上限;印出前清控制字元。這幾段 doctor 提醒讀 .lumos/config.json 統一走 _doctor_cfg_bytes(捷徑不跟;度量段的 lint-new 開關也用它讀好的那份,_lint_new_config 加 from_snapshot) [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 3 步 [S13]] [因:時間到期是時間的函數,只看新寫行的擋送不到沒人碰的舊行;這三種只提醒,記帳會變成每次重唸同一批的週報噪音] [test:t_slots_doctor_reminders] [test:t_slots_doctor_reminders_edges] [test:t_slots_doctor_reminders_r2]
   WHY:lint 對新文法的摘要行照筆記格子那張表唸,舊寫法的行照舊判準;RULE 六個鍵在新文法的行走 slot_parse,不留第二套切欄位規則 [出處:2026-10-01 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 0 步] [因:範本換成新寫法後只用舊判準會把合格的新寫法唸成錯,全部換新表又會對幾百行舊帳噴警告] [test:t_slots_single_table]
