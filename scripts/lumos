@@ -28975,6 +28975,11 @@ _NS_TR_PREFIX_RE = re.compile(r"^([^:：\s`\[\]]+)\s*[:：]\s*")
 _NS_TR_SUMMARY_KEY_RE = re.compile(r"summary\s*:\s*\S")
 _NS_TR_HAS_REF_RE = re.compile(r"\[\s*test(?:-gone)?\s*[:：]", re.I)
 _NS_TR_HEAD = "碰到的筆記裡有指不到真測試的綁定"
+# doctor S20 散文撤除候選的「裁定:」前綴——★只認緊貼的寫法★:裁定直接接冒號,或中間只夾一個括號(日期、說明)。
+# 代碼審 r1 到 r3 同一類三次:放寬成「裁定到冒號之間任意字」會把「裁定撤除這條,理由:改寫後…」當成改寫前綴挖掉,真撤除漏列
+_NS_TR_VERDICT_RE = re.compile(r"裁定\s*(?:[(（][^)）\n]{0,80}[)）])?\s*[:：]\s*")
+_NS_TR_KEEP_LEAD_RE = re.compile(r"^[\W_]*已?(?:改寫|改為|改成|保留|維持)")      # 裁定後(前面任何標點)接這些 → 那段在講改寫或保留
+_NS_TR_KEEP_WORD_RE = re.compile(r"(?<![不未無需])(?<!沒有)保留(?![字區期])")       # 「不、未、無需、沒有保留」與「保留字、區、期」不算保留
 
 
 def _note_shape_test_refs_parse(text):
@@ -29405,6 +29410,33 @@ def _ns_tr_format(trmode, trviol, mode_word):
     return "\n".join(lines)
 
 
+def _ns_tr_says_retire(ln):
+    """一行下一層說明是不是在講撤除:先把「裁定…:改寫/改為/改成/保留/維持…」那幾段(到下一個裁定或行尾)挖掉,
+    剩下的字照舊判——有「撤除」、沒有「保留」(rtb 清理循環第 2 輪回傳:改寫說明順帶提到撤除被誤列)。
+    ★只挖段、不整行跳過★:代碼審 r2 通才席——上一版有「裁定」就只看冒號後那段,「裁定撤除這條,理由:…」、
+    「撤除這條(使用者裁定,見 https://…)」這種真撤除會被漏掉,而這份候選是散文撤除唯一的網。"""
+    ms = list(_NS_TR_VERDICT_RE.finditer(ln))
+    drop = [(m.start(), ms[k + 1].start() if k + 1 < len(ms) else len(ln)) for k, m in enumerate(ms)
+            if _NS_TR_KEEP_LEAD_RE.match(ln[m.end():ms[k + 1].start() if k + 1 < len(ms) else len(ln)])]
+    rest, at = [], 0
+    for a, b in drop:
+        rest.append(ln[at:a])
+        at = b
+    rest = "".join(rest) + ln[at:]
+    return "撤除" in rest and not _NS_TR_KEEP_WORD_RE.search(rest)
+
+
+def _ns_tr_sub_says_retire(lines, no):
+    """條款定義行(第 no 行)的下一層子項(緊接在後、縮排比它深的連續行;遇到空行就停)有沒有一行在講撤除。"""
+    ind = len(lines[no - 1]) - len(lines[no - 1].lstrip())
+    for ln in lines[no:]:
+        if not ln.strip() or len(ln) - len(ln.lstrip()) <= ind:
+            return False
+        if _ns_tr_says_retire(ln):
+            return True
+    return False
+
+
 def _doctor_test_ref_lines(env, repo_root):
     """doctor S20:全庫每一篇照〈做法〉3 判(判存在只做第①道)→ {類別: [字串]};另列散文撤除候選。"""
     pidx = _platform_test_index(repo_root)
@@ -29420,16 +29452,11 @@ def _doctor_test_ref_lines(env, repo_root):
             cats[c].append(_esc_clean(f"{rel}:{no}  {why} {nm}".rstrip(), _DOCTOR_LINE_MAX))   # 整行清控制字元(通才席 F7,同 S19)
         lines = text.split("\n")
         for no, _reg, _pf, sp, kind, _span in _ns_test_ref_lines(rel, text):
-            if kind != "clause" or not any(x for x in _test_names_of(sp)[0]):
-                continue
-            ind = len(lines[no - 1]) - len(lines[no - 1].lstrip())
-            for ln in lines[no:]:
-                if not ln.strip() or len(ln) - len(ln.lstrip()) <= ind:
-                    break
-                if "撤除" in ln and "保留" not in ln:
-                    cats["prose"].append(_esc_clean(f"{rel}:{no}  條款仍掛 [test:],下一層寫了撤除", _DOCTOR_LINE_MAX))
-                    break
+            # 已標作廢的條款另由「作廢還掛活測試」那條管,這裡不重複列
+            if kind == "clause" and not _ns_tr_retired(sp) and any(_test_names_of(sp)[0]) and _ns_tr_sub_says_retire(lines, no):
+                cats["prose"].append(_esc_clean(f"{rel}:{no}  條款仍掛 [test:],下一層寫了撤除", _DOCTOR_LINE_MAX))
     return cats
+
 
 
 def cmd_note_shape(repo=None, staged=False, diff_range=None, slots_flag=False):

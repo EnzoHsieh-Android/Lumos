@@ -65713,5 +65713,47 @@ def t_doctor_s20_escape_and_memory_env():
     check("②記憶體 Env 也讀得到全文", any("test_dead_mem" in x for x in cats["dead"]), str(cats))
 
 
+
+def t_doctor_s20_prose_retire_by_verdict_verb():
+    """doctor S20 散文撤除候選看裁定之後的動作詞(rtb 清理循環第 2 輪回傳:「裁定：改寫：…撤除…」三條被誤列):
+    裁定後接改寫、保留、維持的不算;其他照舊(有撤除、沒保留);條款已標作廢的不列。
+    翻紅釘:_ns_tr_says_retire 改回只看有沒有「撤除」→ ①紅;只看第一個裁定 → ⑥紅;有裁定就只看冒號後 → ⑨紅;裁定前綴放寬成裁定到冒號之間任意字 → ⑬紅;不跳過已作廢的條款 → ④紅。"""
+    print("t_doctor_s20_prose_retire_by_verdict_verb")
+    m = _load_lumos_inproc()
+    root, _b = _tr_repo()
+    vault = root / "docs" / "kg-knowledge"
+    head = "---\ntype: project\nstatus: doing\nsummary: |-\n  WHY:計劃\n---\n# P\n"
+    cases = [("①裁定：改寫(說明裡提到撤除)", "- [S1] 當 x 時應 y [test:test_alive]\n  - 2026-09-26 代使用者裁定：改寫：舊守衛明確撤除,新行為照測", False),
+             ("②裁定：撤除", "- [S1] 當 x 時應 y [test:test_alive]\n  - 2026-09-26 代使用者裁定：撤除展示卡片與舊測試", True),
+             ("②半形冒號與括號日期", "- [S1] 當 x 時應 y [test:test_alive]\n  - 代使用者裁定(2026-09-26): 撤除這條", True),
+             ("②裁定後一句話講撤除", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:這條撤除了", True),
+             ("①裁定：保留", "- [S1] 當 x 時應 y [test:test_alive]\n  - 代使用者裁定：保留,只把舊說法撤除", False),
+             ("⑤裁定前綴很長(括號日期加理由)", "- [S1] 當 x 時應 y [test:test_alive]\n  - 代使用者裁定(2026-09-26,理由是展示批次改版之後原本的流程不再需要): 改寫:舊守衛撤除", False),
+             ("⑥同一行兩個裁定,第二個撤除", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:改寫 x;另裁定:撤除這條", True),
+             ("⑦裁定:改為", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:改為新行為,舊守衛撤除", False),
+             ("⑦裁定:引號包改寫", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:「改寫」舊守衛撤除", False),
+             ("⑧兩行說明,第二行才撤除", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:改寫 x\n  - 2026-09-30 再裁定:撤除這條", True),
+             ("⑧空行之後的說明不算下一層", "- [S1] 當 x 時應 y [test:test_alive]\n\n  - 這條撤除了", False),
+             ("⑨裁定與撤除之間沒有冒號", "- [S1] 當 x 時應 y [test:test_alive]\n  - 代使用者裁定撤除這條,理由:展示不再需要", True),
+             ("⑨撤除在裁定之前", "- [S1] 當 x 時應 y [test:test_alive]\n  - 撤除這條(使用者裁定,見 https://example.com/x)", True),
+             ("⑨裁定撤除後面有欄位冒號", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定撤除舊測試,改綁 [test:t_new]", True),
+             ("⑩不保留不算保留", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:撤除,不保留舊測試", True),
+             ("⑩已改寫", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:已改寫,舊守衛撤除", False),
+             ("⑩粗體改寫", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:**改寫** 舊守衛撤除", False),
+             ("⑪裁定:改成", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:改成新行為,舊守衛撤除", False),
+             ("⑪裁定:維持", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:維持原條款,舊測試撤除", False),
+             ("⑫只有空白字元的行也算斷開", "- [S1] 當 x 時應 y [test:test_alive]\n      \n  - 這條撤除了", False),
+             ("⑬裁定與冒號之間夾著撤除,冒號後是改寫兩字", "- [S1] 當 x 時應 y [test:test_alive]\n  - 代使用者裁定撤除這條,理由:改寫後的新測試已涵蓋", True),
+             ("⑭箭頭與方頭括號包改寫", "- [S1] 當 x 時應 y [test:test_alive]\n  - 裁定:→ 改寫 x,舊守衛撤除\n  - 裁定:【改寫】舊守衛撤除", False),
+             ("⑮未保留、沒有保留、無需保留都不算保留", "- [S1] 當 x 時應 y [test:test_alive]\n  - 這條撤除,未保留也沒有保留,無需保留", True),
+             ("③沒有裁定前綴:照舊", "- [S1] 當 x 時應 y [test:test_alive]\n  - 這條撤除了", True),
+             ("③沒有裁定前綴、寫保留", "- [S1] 當 x 時應 y [test:test_alive]\n  - 撤除一半,其餘保留", False),
+             ("④條款已標作廢(另由作廢掛活測試那條管)", "- [S1] 當 x 時應 y [test:test_alive] [status:superseded] [被取代:無 x]\n  - 代使用者裁定：撤除這條", False)]
+    for label, body, want in cases:
+        e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + body + "\n"})
+        got = m._doctor_test_ref_lines(e, root)["prose"]
+        check(f"{label}:{'列' if want else '不列'}", bool(got) == want, str(got))
+
+
 if __name__ == "__main__":
     sys.exit(main())
