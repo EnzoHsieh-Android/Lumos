@@ -18,7 +18,7 @@
   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
 """
-import argparse, json, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, ast, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,13 +86,107 @@ def tool_calls_from_stream(lines):
 
 # 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
 # 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
-GRADER_VERSION = "2026-10-03-instrument-samples"
+GRADER_VERSION = "2026-10-03-source-results"
 
 
-def grade(sc, calls, final_text):
+def source_evidence(lines, harness, token):
+    """只信成功工具的回傳；缺串流前提為 unknown，完整但沒讀到為 absent。"""
+    if not token:
+        return "unknown"
+    pending, unknown, complete = set(), False, False
+    eligible = {}
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except (ValueError, TypeError):
+            if str(line).lstrip().startswith("{"):
+                unknown = True
+            continue
+        if not isinstance(ev, dict):
+            unknown = True
+            continue
+        if harness == "codex":
+            if ev.get("type") == "turn.completed":
+                complete = True
+            item = ev.get("item")
+            if not isinstance(item, dict) or item.get("type") != "command_execution":
+                continue
+            ident = item.get("id")
+            if ev.get("type") in ("item.started", "item.updated"):
+                if isinstance(ident, str):
+                    pending.add(ident)
+                continue
+            if ev.get("type") != "item.completed":
+                continue
+            if isinstance(ident, str):
+                pending.discard(ident)
+            code, status = item.get("exit_code"), item.get("status")
+            if type(code) is not int or status not in ("completed", "failed"):
+                unknown = True
+            elif code == 0 and status == "completed":
+                output = item.get("aggregated_output")
+                if not isinstance(output, str):
+                    unknown = True
+                elif token in output:
+                    return "present"
+            continue
+        if ev.get("type") == "result":
+            complete = ev.get("subtype") == "success"
+        msg = ev.get("message")
+        blocks = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                unknown = True
+                continue
+            if ev.get("type") == "assistant" and block.get("type") == "tool_use":
+                ident = block.get("id")
+                if not isinstance(ident, str) or ident in eligible:
+                    unknown = True
+                    continue
+                eligible[ident] = block.get("name") in ("Read", "Grep", "Bash")
+                if eligible[ident]:
+                    pending.add(ident)
+            elif ev.get("type") == "user" and block.get("type") == "tool_result":
+                ident = block.get("tool_use_id")
+                if not isinstance(ident, str) or ident not in eligible:
+                    unknown = True
+                    continue
+                if not eligible[ident]:
+                    continue
+                if ident not in pending:
+                    unknown = True
+                    continue
+                pending.remove(ident)
+                error = block.get("is_error", False)
+                if type(error) is not bool:
+                    unknown = True
+                    continue
+                if error:
+                    continue
+                output = block.get("content")
+                if isinstance(output, list):
+                    if all(isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str) for b in output):
+                        output = "\n".join(b["text"] for b in output)
+                    else:
+                        output = None
+                if not isinstance(output, str):
+                    unknown = True
+                elif token in output:
+                    return "present"
+    return "unknown" if unknown or pending or not complete else "absent"
+
+
+def grade(sc, calls, final_text, source_state=None):
     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
-    ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    if sc.get("source_probe"):
+        # 讀碼題不再依命令regex猜檔案；其他題仍走原本的順序判準。
+        ok = source_state == "present"
+        why = "ok" if ok else ("未取得目標程式片段" if source_state == "absent" else "儀器例外: 缺少可判讀的原始讀碼結果")
+    else:
+        ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
     answer_content_ok = None
     if sc.get("answer_expect"):
         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
@@ -298,7 +392,73 @@ def _git_env():
     return env
 
 
-def make_sandbox(src, arm="with"):
+class SourceProbeCleanupError(RuntimeError):
+    """專用副本清不掉：不得以一般單題例外吞掉再續跑。"""
+
+
+def _prepare_source_probe(work, config, token):
+    """只在尚未提交的自有副本注入Python註解；不追連結，不改語法。"""
+    if not isinstance(config, dict):
+        raise ValueError("source_probe 必須是物件")
+    rel, prefix = config.get("path"), config.get("line_prefix")
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+        raise ValueError("source_probe 路徑必須在副本內")
+    if not isinstance(prefix, str) or not prefix or "\n" in prefix or "\r" in prefix:
+        raise ValueError("source_probe 缺目標行前綴")
+    root = Path(work).resolve(strict=True)
+    target = root
+    for part in Path(rel).parts:
+        target = target / part
+        if target.is_symlink():
+            raise ValueError("source_probe 不接受符號連結")
+    info = target.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("source_probe 只接受單連結普通檔案")
+    original = target.read_text(encoding="utf-8")
+    lines = original.splitlines(keepends=True)
+    hits = [i for i, line in enumerate(lines) if line.startswith(prefix)]
+    if len(hits) != 1:
+        raise ValueError("source_probe 目標行須恰有一個")
+    i = hits[0]
+    body = lines[i].rstrip("\r\n")
+    lines[i] = body + "  # " + token + lines[i][len(body):]
+    updated = "".join(lines)
+    if ast.dump(ast.parse(original), include_attributes=True) != ast.dump(ast.parse(updated), include_attributes=True):
+        raise ValueError("source_probe 注入改變語法")
+    target.write_text(updated, encoding="utf-8")
+
+
+def _redact_source_token(value, token):
+    if isinstance(value, str):
+        # 摘要可能在標記中途截斷，連該前綴的殘段一併遮罩。
+        return re.sub(r"LUMOS_READ_[0-9a-f]{0,32}", "[source-marker]", value) if token else value
+    if isinstance(value, dict):
+        return {k: _redact_source_token(v, token) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_source_token(v, token) for v in value)
+    return value
+
+
+def _remove_source_sandbox(work):
+    try:
+        shutil.rmtree(work.parent)
+    except OSError as e:
+        raise SourceProbeCleanupError("專用副本移除失敗；停止整批") from e
+
+
+def _run_source_attempt(sc, src, arm, runner):
+    token = "LUMOS_READ_" + secrets.token_hex(16)
+    work = make_sandbox(src, arm, source_probe=(sc["source_probe"], token))
+    try:
+        try:
+            return _redact_source_token(runner(work, token), token)
+        except Exception as e:
+            raise RuntimeError(_redact_source_token(str(e), token)) from e
+    finally:
+        _remove_source_sandbox(work)
+
+
+def make_sandbox(src, arm="with", source_probe=None):
     """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
     arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
     這樣情境之間的 git checkout -- . 不會把它復原。
@@ -334,6 +494,15 @@ def make_sandbox(src, arm="with"):
         )
     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
     work = tmp / "repo"
+    try:
+        _populate_sandbox(src, work, tmp, arm, genv, source_probe)
+    except BaseException:
+        _remove_source_sandbox(work)
+        raise
+    return work
+
+
+def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
     work.mkdir(parents=True)
     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
                     f"{src}/", f"{work}/"], check=True)
@@ -346,18 +515,24 @@ def make_sandbox(src, arm="with"):
     hooks.mkdir()
     (hooks / "pre-push").write_text("#!/bin/sh\necho '探針沙盒:禁止 push' >&2\nexit 1\n", encoding="utf-8")
     (hooks / "pre-push").chmod(0o755)
-    subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work))
+    subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work), env=genv, check=True)
     if arm == "without":
         cm = work / "CLAUDE.md"
         new, ok = strip_lumos_first_rule(cm.read_text(encoding="utf-8"))
         if not ok:
             raise RuntimeError("without 組:CLAUDE.md 找不到「第一個工具呼叫」小節的邊界,拔不乾淨,實驗無效,停手")
         cm.write_text(new, encoding="utf-8")
+    if source_probe is not None:
+        _prepare_source_probe(work, *source_probe)
+    # 標記必須在快照中，否則收工hook會把儀器註解當成模型改碼。
     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
     subprocess.run(["git", "add", "-A"], cwd=str(work), env=genv)
     subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
-                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work), env=genv)
-    return work
+                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work), env=genv, check=source_probe is not None)
+    if source_probe is not None:
+        clean = subprocess.run(["git", "status", "--porcelain"], cwd=str(work), env=genv, capture_output=True, text=True, check=True)
+        if clean.stdout.strip():
+            raise RuntimeError("source_probe 快照不乾淨，不啟動模型")
 
 
 def _validate_scenario(sc):
@@ -369,6 +544,8 @@ def _validate_scenario(sc):
         return f"題目 {sc.get('id')} 缺 prompt"
     if not sc.get("expect"):
         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+    if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
+        return "source_probe 必須有目標設定且不得混用順序禁令"
     return None
 
 
@@ -420,7 +597,7 @@ def _codex_hook_trace(thread_id):
     return {"hooks_fired": fired, "stop_block_seen": stop_seen}
 
 
-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False):
+def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None):
     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
@@ -437,7 +614,7 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
     if model:
         cmd += ["-m", model]
     cmd.append(sc["prompt"])
-    env = dict(os.environ); env["LUMOS_PROBE"] = "1"
+    env = _git_env(); env["LUMOS_PROBE"] = "1"
     if arm == "without":
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"
     if stop_block == "off":
@@ -465,13 +642,15 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
         if isinstance(ev, dict) and ev.get("type") == "thread.started":
             thread_id = ev.get("thread_id"); break
     trace = _codex_hook_trace(thread_id)
-    ok, why, answer_content_ok = grade(sc, calls, final)
+    evidence = source_evidence(out.splitlines(), "codex", source_token) if sc.get("source_probe") else None
+    ok, why, answer_content_ok = grade(sc, calls, final, evidence)
     if instrument_fail:
         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": (final or "")[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "answer": _redact_source_token(final or "", source_token)[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "source_evidence": evidence,
             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
             "result_subtype": "codex", "harness": "codex",
             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
@@ -487,7 +666,7 @@ def _scenario_max_turns(sc, default):
         return default
 
 
-def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
+def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None):
     max_turns = _scenario_max_turns(sc, max_turns)
     bad = _validate_scenario(sc)
     if bad:
@@ -510,7 +689,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
         cmd += ["--disallowedTools", "Agent"]
     if model:
         cmd += ["--model", model]
-    env = dict(os.environ)
+    env = _git_env()
     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
     # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
@@ -547,7 +726,8 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中。
     # ★r1 外家/正確性席:答案內容對不對 與 通過閘(敲對指令+答對)分開記★——
     # M4 若只看 passed,會把「答案對但先 grep」記成失敗,混淆「答案對不對」與「走對路徑沒有」。
-    ok, why, answer_content_ok = grade(sc, calls, final)
+    evidence = source_evidence(out.splitlines(), "claude", source_token) if sc.get("source_probe") else None
+    ok, why, answer_content_ok = grade(sc, calls, final, evidence)
     limit_hit = is_limit_hit(calls, final, result_ev)
     # ★截斷不算分★(Projects/探針判準對齊程式碼為主_計劃 [S1]):撞回合上限或逾時,紀錄不完整,判過判不過都是猜;
     # 以前記成「沒敲到期望指令」,9 月週抽四個失敗裡三個其實是這個。跟 Codex 執行器的逾時同一套處理。
@@ -563,7 +743,8 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": (final or "")[:1500],
+            "answer": _redact_source_token(final or "", source_token)[:1500],
+            "source_evidence": evidence,
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
             "limit_hit": limit_hit, "truncated": truncated,
@@ -695,19 +876,25 @@ def main():
           file=sys.stderr)
     results = []
     waited = 0
+    fatal = False
+    def run_at(workdir, token=None):
+        extra = {"source_token": token} if token is not None else {}
+        return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
+                else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
     try:
         for sc in scs:
             for k in range(1, a.runs + 1):
                 while True:
                     try:
-                        res = (run_one_codex(sc, work, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust) if a.runner == "codex"
-                               else run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm))
+                        res = (_run_source_attempt(sc, src, a.arm, run_at) if sc.get("source_probe") else run_at(work))
                     except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
+                        fatal = isinstance(e, SourceProbeCleanupError)
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
-                               "limit_hit": False, "result_subtype": None}
+                               "limit_hit": False, "result_subtype": None, "source_evidence": "unknown" if sc.get("source_probe") else None,
+                               "fatal": fatal}
                     if res.get("limit_hit") and waited < a.wait_on_limit:
                         print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
                         time.sleep(300); waited += 300
@@ -721,8 +908,13 @@ def main():
                 print(f"  {mark} {res['id']:22s}{tag} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
                 if not res["passed"]:
                     print(f"      {res['reason']}", flush=True)
-                subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
-                subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
+                if fatal:
+                    break
+                if not sc.get("source_probe"):
+                    subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work), env=_git_env())
+                    subprocess.run(["git", "clean", "-qfdx"], cwd=str(work), env=_git_env())   # -x:連 gitignore 的產出也清,情境之間不互染
+            if fatal:
+                break
     finally:
         bad = global_skills_health()
         if bad:
@@ -734,6 +926,9 @@ def main():
                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
             print("!" * 60, file=sys.stderr)
         summ = summarize_results(results, a.arm)
+        if fatal:
+            summ["inconclusive"] = True
+            summ["line"] = "儀器例外: 專用副本清理失敗，整批停止，不能下結論。 " + summ["line"]
         p, n = summ["passed"], summ["scored"]
         print("\n" + summ["line"])
         if a.runs > 1:
@@ -762,7 +957,7 @@ def main():
             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
             shutil.rmtree(work.parent, ignore_errors=True)
-    if bad:
+    if bad or fatal:
         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
     return 0 if p == n else 1
 

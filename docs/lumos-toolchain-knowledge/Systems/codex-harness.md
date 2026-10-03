@@ -41,6 +41,7 @@ summary: |-
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
+  - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -83,6 +84,10 @@ PITFALL: 首次修復穩定性試行重審 2db51cc4 時，讀 README 會冒充�
 WHY: 本次曾試把讀碼正則收窄到目標程式檔，但第二輪證明仍把搜尋路徑文字當讀碼，且誤傷先切目錄再讀檔；因此撤回這一候選，不把 shell 解析或工具結果關聯塞進同一修復。出處為該案 r2-correctness 與 r2-classification.json；下次處理讀碼判準，先依 [[Issues/探針讀碼證據不足]] 重估資料來源再實作。
 
 ## 回頭條件
+
+WHY: 第1案續辦改從成功工具回傳辨識目標片段，避免繼續解析shell字串；標記若加在既有快照後會被收工hook當作模型改碼，所以此題每次嘗試建立含標記的獨立乾淨副本，結束刪除。代價是多一次複製；只限此題，正式探針首次部署與runner格式升級時重驗耗時及截斷。出處 [[Projects/探針讀碼結果證據_計劃]] 的設計審M1及 [[Verification/2026-10-03_修復穩定性試行第1案續辦]]；目前候選待第3輪代碼審。
+
+PITFALL: 設計審B1重現建立副本後Git定位環境變數被runner重新繼承，cwd不保證隔離；沿用既有清洗函式延伸到runner與清理。防回歸 t_probe_source_probe_git_env 在兩個暫存repo驗證外側內容不變；清理失敗停批由 t_probe_source_probe_main 驗證。來源同續辦驗證，不把未跑真模型的fixture當生產觀測。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。

@@ -36723,8 +36723,8 @@ def t_probe_scenarios_allow_code_first():
 
 
 def t_probe_code_question_regrade():
-    """探針判準對齊程式碼為主 [S5]:純程式碼題(v04)——2026-09-28 週抽那場先 grep、讀碼、答對、沒敲 lumos,新判準要判過;
-    只 grep 圖譜資料夾、沒讀程式碼的要判不過。呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
+    """9/28歷史僅存呼叫摘要，沒有原始工具結果；不能替新尺補造正證據。
+    呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
     mod = _load_probe_module("sp_v04")
     v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
     real_calls = [("Grep", "_BOOKKEEPING_FILES"),
@@ -36732,7 +36732,7 @@ def t_probe_code_question_regrade():
                   ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; sed -n 5395,5402p scripts/lumos")]
     real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
     ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
-    check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
+    check("探針 v04: 9/28歷史摘要在新尺下證據不足，答案判分仍保留", ok is False and why.startswith("儀器例外") and content_ok is True, (why, content_ok))
     graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
     ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
     check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
@@ -36801,6 +36801,185 @@ def t_probe_repair_per_question_cli():
         check("probe repair C3 壞例: 整體及逐題都只算有效場", rc == 0 and "1/1 個情境" in mixed and "每題通過次數: q 1/1 (不算分 1)" in mixed, mixed)
         rc, empty = exercise([excluded, excluded])
         check("probe repair C3 壞例: 全被排除仍列題目並標數量", rc == 1 and "每題通過次數: q 0/0 (不算分 2)" in empty and "不能下結論" in empty, empty)
+
+
+def _source_probe_fixture(root):
+    """真正隔離 Git repo；內容取實際 lumos，所有模型呼叫由各測試 stub。"""
+    import subprocess
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts/lumos").write_bytes((Path(GRAPHCTL)).read_bytes())
+    (root / "README.md").write_text("scripts/lumos ledger\n", encoding="utf-8")
+    for args in [("init", "-q"), ("add", "-A"), ("-c", "user.name=test", "-c", "user.email=t@t", "commit", "-qm", "fixture")]:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                       env=_load_probe_module("sp_fixture")._git_env())
+    return {"id": "v04-where-used", "prompt": "常數用途?", "expect": ["^(?:Read|Grep):|.+"],
+            "answer_expect": ["帳"], "source_probe": {"path": "scripts/lumos", "line_prefix": "_BOOKKEEPING_FILES ="}}
+
+
+def _source_probe_events(harness, output, command="cat scripts/lumos", success=True):
+    if harness == "codex":
+        return [{"type": "item.completed", "item": {"id": "c", "type": "command_execution", "command": command,
+                "aggregated_output": output, "status": "completed" if success else "failed", "exit_code": 0 if success else 1}},
+                {"type": "item.completed", "item": {"type": "agent_message", "text": "帳本"}}, {"type": "turn.completed"}]
+    return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c", "name": "Bash", "input": {"command": command}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "c", "content": output, "is_error": not success}]}},
+            {"type": "result", "subtype": "success", "result": "帳本"}]
+
+
+def t_probe_source_probe_setup():
+    import ast, tempfile, subprocess, os
+    mod = _load_probe_module("sp_source_setup")
+    with tempfile.TemporaryDirectory(prefix="probe-source-test-") as td:
+        root = Path(td); sc = _source_probe_fixture(root / "source")
+        original = (root / "source/scripts/lumos").read_bytes()
+        tokens = []
+        for _ in range(2):
+            def runner(work, token):
+                tokens.append(token)
+                body = (work / "scripts/lumos").read_text()
+                clean = subprocess.run(["git", "status", "--porcelain"], cwd=work, env=mod._git_env(), capture_output=True, text=True)
+                check("source probe 乾淨基線不觸發code_entries", clean.returncode == 0 and not clean.stdout, clean.stdout)
+                check("source probe 標記注入且AST含位置不變", token in body and ast.dump(ast.parse(body), include_attributes=True) == ast.dump(ast.parse(original), include_attributes=True), "")
+                return {"path": str(work), "answer": token, "passed": True}
+            res = mod._run_source_attempt(sc, root / "source", "with", runner)
+            check("source probe 專用副本刪除/结果遮罩", not Path(res["path"]).exists() and tokens[-1] not in str(res), res)
+        check("source probe 每次新標記/本體不動", tokens[0] != tokens[1] and (root / "source/scripts/lumos").read_bytes() == original, "")
+        work = root / "unsafe"; (work / "scripts").mkdir(parents=True)
+        target = work / "scripts/lumos"; target.write_bytes(original)
+        configs = [{"path": "/tmp/lumos", "line_prefix": "x"}, {"path": "../source/scripts/lumos", "line_prefix": "x"},
+                   {"path": "scripts/lumos", "line_prefix": "missing"}, {"path": "scripts/lumos", "line_prefix": "def "}]
+        for conf in configs:
+            try: mod._prepare_source_probe(work, conf, "LUMOS_READ_" + "a" * 32); rejected = False
+            except (ValueError, OSError, SyntaxError): rejected = True
+            check("source probe 壞目標拒絕且不寫", rejected and target.read_bytes() == original, conf)
+        for kind in ["symlink", "hardlink", "parent"]:
+            target.unlink()
+            if kind == "symlink": target.symlink_to(root / "source/scripts/lumos")
+            elif kind == "hardlink": os.link(root / "source/scripts/lumos", target)
+            else:
+                target.parent.rmdir(); target.parent.symlink_to(root / "source/scripts", target_is_directory=True)
+            try: mod._prepare_source_probe(work, sc["source_probe"], "LUMOS_READ_" + "b" * 32); rejected = False
+            except (ValueError, OSError): rejected = True
+            check("source probe 拒絕" + kind, rejected and (root / "source/scripts/lumos").read_bytes() == original, "")
+
+
+def t_probe_source_probe_results():
+    import json
+    mod = _load_probe_module("sp_source_results"); token = "LUMOS_READ_" + "c" * 32
+    for harness in ["claude", "codex"]:
+        def state(events, tok=token): return mod.source_evidence([json.dumps(e) for e in events], harness, tok)
+        positive = _source_probe_events(harness, "code " + token)
+        check("source result 真成功 " + harness, state(positive) == "present", "")
+        check("source result 失敗不算讀到 " + harness, state(_source_probe_events(harness, token, success=False)) == "absent", "")
+        check("source result 命令中標記不算 " + harness, state(_source_probe_events(harness, "README", command="echo " + token)) == "absent", "")
+        check("source result 缺標記前提 " + harness, state(positive, None) == "unknown", "")
+        check("source result 缺結束/空歷史 " + harness, state([]) == "unknown", "")
+        check("source result 完整零呼叫是失敗 " + harness, state(positive[-1:]) == "absent", "")
+        if harness == "claude":
+            missing = [positive[0], positive[-1]]
+            orphan = [positive[1], positive[-1]]
+            blocks = _source_probe_events(harness, [{"type": "text", "text": token}])
+            check("source result Claude文字區塊", state(blocks) == "present", "")
+            glob = _source_probe_events(harness, token); glob[0]["message"]["content"][0]["name"] = "Glob"
+            check("source result Glob不算證據", state(glob) == "absent", "")
+        else:
+            missing = _source_probe_events(harness, token); del missing[0]["item"]["aggregated_output"]
+            orphan = [{"type": "item.completed", "item": {"type": "agent_message", "text": token}}, positive[-1]]
+        check("source result 缺已發呼叫結果 " + harness, state(missing) == "unknown", "")
+        check("source result 孤立結果或答案不得正證 " + harness, state(orphan) != "present", "")
+
+
+def t_probe_source_probe_runners():
+    import tempfile, subprocess, json, re
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_source_runners")
+    with tempfile.TemporaryDirectory(prefix="probe-source-run-") as td:
+        root = Path(td); sc = _source_probe_fixture(root)
+        token = "LUMOS_READ_" + "d" * 32
+        mod._prepare_source_probe(root, sc["source_probe"], token)
+        line = next(i for i, s in enumerate((root / "scripts/lumos").read_text().splitlines(), 1) if token in s)
+        commands = [("cat scripts/lumos", True), ("cd scripts && cat lumos", True),
+                    ("grep -n '_BOOKKEEPING_FILES\\|_BOOKKEEPING_DIRS' scripts/lumos | cut -c1-220", True),
+                    (f"sed -n '{line},{line+2}p' scripts/lumos", True), ("grep 'scripts/lumos' README.md", False),
+                    ("find . -type f | grep scripts/lumos", False), ("cat README.md", False)]
+        for command, expected in commands:
+            r = subprocess.run(["/bin/sh", "-c", command], cwd=root, capture_output=True, text=True, check=True)
+            for harness in ["claude", "codex"]:
+                events = _source_probe_events(harness, r.stdout, command)
+                out = "\n".join(json.dumps(e) for e in events)
+                with patch.object(mod.subprocess, "run", return_value=SimpleNamespace(stdout=out, stderr="", returncode=0)):
+                    res = (mod.run_one(sc, root, 6, 1, None, source_token=token) if harness == "claude" else mod.run_one_codex(sc, root, 1, None, source_token=token))
+                check("source runner " + harness + " " + command, res["passed"] is expected and not res["reason"].startswith("儀器例外"), res["reason"])
+        v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
+        check("source probe 真題庫已接線", v04.get("source_probe") == sc["source_probe"], v04)
+        ok, reason, content = mod.grade(v04, [("Bash", "cat README.md")], "帳本")
+        check("source probe 舊摘要不假裝通過", not ok and reason.startswith("儀器例外") and content, reason)
+
+
+def t_probe_source_probe_main():
+    import tempfile, json, contextlib, io
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_source_main")
+    with tempfile.TemporaryDirectory(prefix="probe-source-main-") as td:
+        root = Path(td); sc = _source_probe_fixture(root / "src")
+        q = root / "q.jsonl"; q.write_text(json.dumps(sc) + "\n")
+        for harness in ["claude", "codex"]:
+            for fatal in [False, True]:
+                out = root / "out.json"; attempts = []
+                runner_seen = []
+                def model(*args, **kwargs):
+                    runner_seen.append(kwargs.get("source_token"))
+                    r = _probe_res(sc["id"], len(attempts) > 1, "ok" if len(attempts) > 1 else "儀器例外: limit")
+                    r.update(first_tool=None, secs=0, source_evidence="absent", limit_hit=len(attempts) == 1)
+                    return r
+                def attempt(s, src, arm, runner):
+                    attempts.append(s["id"])
+                    result = runner(work, "LUMOS_READ_" + "e" * 32)
+                    if fatal: raise mod.SourceProbeCleanupError("remove failed")
+                    return result
+                work = root / "shared/repo"; work.mkdir(parents=True, exist_ok=True)
+                with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--runner", harness, "--runs", "2", "--wait-on-limit", "300", "--keep", "--out", str(out)]), \
+                     patch.object(mod, "make_sandbox", return_value=work), patch.object(mod, "check_scenario_targets", return_value=[]), \
+                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_run_source_attempt", side_effect=attempt), \
+                     patch.object(mod, "run_one", side_effect=model) as claude, patch.object(mod, "run_one_codex", side_effect=model) as codex, \
+                     patch.object(mod.subprocess, "run"), patch.object(mod.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = mod.main()
+                data = json.loads(out.read_text())
+                check("source main 重試/致命清理 " + harness + str(fatal), (rc == 3 and len(attempts) == 1 and data["inconclusive"]) if fatal else (rc == 0 and len(attempts) == 3), data)
+                check("source main 接到指定runner且傳標記 " + harness, len(runner_seen) == len(attempts) and all(runner_seen) and (claude.call_count == 0 if harness == "codex" else codex.call_count == 0), runner_seen)
+        # 真正的attempt helper清理異常必轉fatal；模型拋錯也仍清專用副本。
+        work = root / "disposable/repo"; work.mkdir(parents=True)
+        with patch.object(mod, "make_sandbox", return_value=work), patch.object(mod.shutil, "rmtree", side_effect=PermissionError("blocked")):
+            try: mod._run_source_attempt(sc, root / "src", "with", lambda w, t: {}); fatal_seen = False
+            except mod.SourceProbeCleanupError: fatal_seen = True
+        check("source attempt 清理失敗真的轉fatal", fatal_seen, "")
+        with patch.object(mod, "make_sandbox", return_value=work):
+            def raises(w, token): raise RuntimeError(token)
+            try: mod._run_source_attempt(sc, root / "src", "with", raises); raised = False
+            except RuntimeError as e: raised = "LUMOS_READ_" not in str(e)
+        check("source attempt 模型例外仍刪副本且錯誤不洩標記", raised and not work.exists(), "")
+
+
+def t_probe_source_probe_git_env():
+    import os, tempfile, subprocess, json
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_source_env")
+    with tempfile.TemporaryDirectory(prefix="probe-git-env-") as td:
+        root = Path(td); _source_probe_fixture(root / "outside"); _source_probe_fixture(root / "inside")
+        outside = root / "outside"; inside = root / "inside"
+        before = {p.relative_to(outside): p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+        seen = []
+        def run(cmd, **kw):
+            seen.append(kw["env"])
+            subprocess.check_call(["git", "config", "probe.test", "inside"], cwd=kw["cwd"], env=kw["env"])
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        with patch.dict(os.environ, {"GIT_DIR": str(outside / ".git"), "GIT_WORK_TREE": str(outside)}), patch.object(mod.subprocess, "run", side_effect=run):
+            sc = {"id": "x", "prompt": "x", "expect": ["cat"]}
+            mod.run_one(sc, inside, 1, 1, None); mod.run_one_codex(sc, inside, 1, None)
+        after = {p.relative_to(outside): p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+        check("source Git 環境不能把兩runner導去本體", before == after and all("GIT_DIR" not in e and "GIT_WORK_TREE" not in e for e in seen), "")
 
 
 def t_delguard_logs_ok_too():
