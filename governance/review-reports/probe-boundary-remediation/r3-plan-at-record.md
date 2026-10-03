@@ -17,7 +17,6 @@ related:
   - "[[Issues/探針共用沙盒清理失敗仍繼續評分]]"
   - "[[Issues/探針讀碼證據不足]]"
   - "[[Issues/代碼審next把新處置帳誤判舊panel]]"
-  - "[[Issues/探針健康檢查不可判資料仍被重用]]"
 ---
 # 探針隔離與清理收斂_計劃
 
@@ -75,5 +74,3 @@ r1（2026-10-04，五主席加一架構席）：內部原報告共15條、blocki
 實作代碼審首輪另在 `governance/review-reports/probe-boundary-remediation/` 保存凍結差異與四席報告，報10條、去重9組。兩組巢狀Git形狀（`.GIT` 與 bare repo）、父環境 `GIT_TRACE` 寫來源、未保留假身分、混合題序 `--keep` 留零份、重試時間漏逐場、故障注入測試漏清暫存，以及舊讀碼 helper 成第二套生命週期都已折回反例。修後 `probe_` 為243項通過、0失敗，仍待後輪審差異。編排者把首輪四席都誤記成處置載體，`loop status --disposal` 明確拒絕；兩本錯帳 `probe-boundary-remediation`（四席誤都掛處置）及 `probe-boundary-remediation-ledger2`（名稱未帶 code- 前綴，會被當設計審）保留作失敗操作紀錄；正式更正帳用 `code-probe-boundary-remediation`，仍引用同一首輪報告與凍結 hash，不重派首輪、不把它算新樣本或新增審查輪。這是記帳更正，非原試行 `code-repair-pilot-01` 的第五輪。
 
 第二輪代碼審在 730b06fe 凍結的 558 行修補差異中，正確性席報兩項 blocking、架構席 clean：主 Git 資料的 `worktrees/*/gitdir` 文字外指可讓模型把真 linked worktree 指回副本；`GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過副本假身分，單讀 `git config user.*` 的測試是假綠。新增 `t_probe_boundary_review2_linked_worktree` 與 `t_probe_boundary_review2_effective_identity`，前者前置證明真 linked 指標存在、後者驗快照與後續模型提交的實際作者；舊碼均翻紅，修法是拒絕主 Git `worktrees/` 資料、清洗模型及儀器共同環境。編排者另在非席位重現中發現全域 skills 健康檢查讀取拋錯會被當普通題失敗、繼續後題，最終檢查拋錯甚至寫不出 JSON；`t_probe_boundary_review2_health_unreadable` 紅綠後改成兩處都 fatal、停批或保留不可判紀錄。這三條不追加到原第1案四輪；第二輪與第三輪僅屬樣本外儀器修補。卷證在同一審查目錄的 `r2-*`；本案尚待第三輪檢查修補差異。
-
-第三輪凍結 730b06fe..cfe7a703 的235行修補差異後，三席報兩項新的 major blocking、架構席 clean。runner 在模型後拋錯會跳過當場 skills 健康檢查，仍先跑下一題；最終健康檢查拋錯雖 rc3 且 JSON 標 fatal/inconclusive，消融下游仍把兩場 `reason=ok` 的結果當有效樣本、`needed=0`。編排者於臨時 repo 逐項重現，`r3-reproduction.json` 可重算；r3 無折入或放行，`loop status --disposal` 顯示 FAIL，standard 三輪上限已到。後續問題見 [[Issues/探針健康檢查不可判資料仍被重用]]，目前停止修補與新輪審查，等待使用者裁決是否另授權明確範圍；原第1案四輪FAIL與本案三輪FAIL各自保留，不互相抵銷。此時不能啟動剩餘四個新工作樣本的探針量測，因量測儀器的有效性仍未過閘。
