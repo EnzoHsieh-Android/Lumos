@@ -56167,6 +56167,8 @@ def t_note_versions_stop_at_copy():
     _nh_commit(root, "複製成 B")
     cp = _na_head(root)
     bp = "docs/kg-knowledge/Projects/B_計劃.md"
+    pre = _nh_git(root, "log", "--follow", "--format=", "--name-status", "-1", "--", bp).stdout.strip()
+    check("前提:git 把 B 認成從 A 複製來(不然①②③走不到停在複製那一段)", pre.startswith("C"), pre)
     vs = m._note_versions(root, "HEAD", bp)
     check("①版本清單停在複製那一版", [s_ for s_, _q in vs] == [cp], vs)
     seq = m._note_status_seq(root, c1, "HEAD", "docs/kg-knowledge", bp, strict=True)
@@ -56179,6 +56181,31 @@ def t_note_versions_stop_at_copy():
     raw = (ha + "\0\n" + hb + "\0\nR087\0old.md\0new.md\0").encode()
     check("④沒有檔案列的提交(合併提交)跳過、不把下一個提交編號當路徑;改名取新路徑",
           m._git_log_sha_status_paths(raw) == [(hb, "new.md", "R")], m._git_log_sha_status_paths(raw))
+    # 代碼審 r2 正確性席 F1:本機設 log.showSignature=true 時,簽章提交的編號前面會夾 gpg 訊息。原本跳過對不上的片段、
+    # 沿用上一個提交編號,簽章提交的檔案列被記到別人名下,寫下那一版追錯
+    raw = (ha + "\0\nM\0a.md\0" + "gpg: Signature made\n" + hb + "\0\nM\0a.md\0").encode()
+    check("⑤認不得的片段整份判不了,不沿用上一個提交編號", m._git_log_sha_status_paths(raw) is None,
+          m._git_log_sha_status_paths(raw))
+    seen = []
+    orig_ns, orig_lens = m._ns_git, m._lens_git
+    m._ns_git = lambda r_, *a: (seen.append(a), orig_ns(r_, *a))[1]
+    m._lens_git = lambda r_, *a, **k: (seen.append(a), orig_lens(r_, *a, **k))[1]
+    try:
+        _nh_git(root, "config", "log.showSignature", "true")
+        m._note_versions(root, "HEAD", "docs/kg-knowledge/Projects/C_計劃.md")
+        d = m._git_commit_date(root, cp)
+    finally:
+        m._ns_git, m._lens_git = orig_ns, orig_lens
+    logs = [a for a in seen if a and a[0] in ("log", "show")]
+    check("⑥版本清單與取日期的 git 呼叫都關掉簽章顯示", {a[0] for a in logs} == {"log", "show"} and all("--no-show-signature" in a for a in logs), logs)
+    import re as _re
+    check("⑦取日期只回 YYYY-MM-DD", isinstance(d, str) and _re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) is not None, d)
+    m._lens_git = lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout="gpg: Signature made\n2026-10-03\n", stderr="")
+    try:
+        d = m._git_commit_date(root, cp)
+    finally:
+        m._lens_git = orig_lens
+    check("⑧輸出夾了別的東西就不給日期", d is None, d)
 
 
 def t_drift_born_unknown():
