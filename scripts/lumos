@@ -23421,6 +23421,35 @@ _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "�
 # ★形狀(2026-09-09 棧別提問表態閘 S2)★:每題 {id, q, when}——id 穩定代號(改措辭不改 id、改語意才換 id;表態與統計都以 id 為鍵),
 # q 原文,when 觸發 regex 清單(對「改動內容的行」剝字串、跳註解後不分大小寫比對,任一命中=適用;空 when/壞 regex 由
 # t_stack_question_triggers 釘)。舊消費者要的 {棧: [原文…]} 由下方 _STACK_PERF_QUESTIONS 派生,語意不變。
+# ── 外部回應碼(Projects/外部回應碼語意要有出處_計劃):共用形狀的單一來源是下面兩組「正規式字串」──
+# 題目表八題的 when/when_raw 直接放這兩組字串(由 _STACK_TRIGGERS 照現行 re.I 編譯);鏡頭另編譯同兩組字串(_EXTCODE_RX_*)。
+# ★不放已編譯物件進題目表★:_STACK_TRIGGERS 會再 re.compile(..., re.I),對已編譯物件帶旗標會載入即錯(設計審 r2 通才席)。
+# 每條開頭的 ^(?=.{0,2000}$) 讓超過 2000 字的行(壓縮檔、base64)直接不比;重複次數一律有上限,長行不會變慢(設計審 r1 邊界席實測 \w* 版 8 萬字 29 秒)。
+# 名稱片段:識別字恰好是 code/status/result,或以 resp|result|ret|return|err|error|status|response 接 code 結尾,或以 status 結尾
+# ——zipCode、countryCode、promoCode、return、error 都不算(設計審 r2 正確性席)。
+_EXTCODE_GUARD = r"^(?=.{0,2000}$)"
+_EXTCODE_NAME = (r"(?<![A-Za-z0-9_])(?:code|status|result"
+                 r"|[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error|status|response)_?code"
+                 r"|[A-Za-z0-9_]{0,30}status)(?![A-Za-z0-9_])")
+_EXTCODE_QNUM = r"[\"']\d{3,6}[\"']"
+# D 組:沒有引號的整數碼——剝字串後仍看得到,放題目表 when 欄(when 不能空)。不含單獨的 status/response 名稱(多半是 HTTP 狀態碼)。
+_EXTCODE_WHEN = (
+    _EXTCODE_GUARD + r".*?(?:(?<![A-Za-z0-9_])[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error)_?code"
+    r"|(?<![A-Za-z0-9_.])(?:resp|res|result|response)\.code)(?![A-Za-z0-9_])\s*(?:===?|!==?)\s*\d{3,6}(?![\d.])",
+)
+# A 比較(要名稱片段)、B 分支(case "2000" / 行首 "2000" ->)、C 集合(in ( [ { 開頭是引號數字,要名稱片段):要看字串,放 when_raw。
+_EXTCODE_WHEN_RAW = (
+    _EXTCODE_GUARD + r"(?=.*?" + _EXTCODE_NAME + r").*?(?:(?:===?|!==?)\s*" + _EXTCODE_QNUM + r"|" + _EXTCODE_QNUM
+    + r"\s*(?:===?|!==?)|\.equals\(\s*" + _EXTCODE_QNUM + r"|" + _EXTCODE_QNUM + r"\s*\.equals\()",
+    _EXTCODE_GUARD + r"(?:.*?\bcase\s+" + _EXTCODE_QNUM + r"|\s*" + _EXTCODE_QNUM + r"\s*(?:,\s*" + _EXTCODE_QNUM + r"\s*){0,10}->)",
+    _EXTCODE_GUARD + r"(?=.*?" + _EXTCODE_NAME + r").*?\bin\s*[\(\[\{]\s*" + _EXTCODE_QNUM,
+)
+_EXTCODE_Q = ("外部回應碼:這次改動拿外部系統(金流、第三方 API)回來的代碼做判斷。每個碼在官方文件裡的原文意思寫在哪篇筆記?"
+              "FACT 行要帶 [來源:外部],官方網址寫在 [查:] 欄(不要寫進來源標記)。沒有就先寫一篇,最好寫進改到那支檔的家;"
+              "特別確認『流程結束』這類碼是不是真的等於業務成功。")
+_EXTCODE_STACKS = ("kt", "cs", "vue", "swift", "node", "py", "java", "dart")   # sql 不呼叫外部 API,不加
+
+
 _STACK_QUESTION_SPECS = {
     "kt": [
         {"id": "kt-compose", "q": 'Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?副作用有沒有放在 LaunchedEffect/DisposableEffect 且 key 選對(讀了會變的輸入卻用 Unit 當 key=永不重跑;key 太寬=每次重組重跑;2026-09-08 補,KDS 18 處 LaunchedEffect 有 9 處 Unit key)?',
@@ -23573,7 +23602,13 @@ _STACK_QUESTION_SPECS = {
                   'sqflite', 'openDatabase', 'rawQuery', 'Hive\\.']},
     ],
 }
-_STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
+# 外部回應碼題(八棧各一):shape_only=只看形狀——不因「改動超過行數門檻就整組適用」而亮,也不進下面的舊語意整組清單
+for _stk in _EXTCODE_STACKS:
+    _STACK_QUESTION_SPECS[_stk].append({"id": f"{_stk}-extcode", "q": _EXTCODE_Q, "when": list(_EXTCODE_WHEN),
+                                        "when_raw": list(_EXTCODE_WHEN_RAW), "shape_only": True})
+_STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v if not _s.get("shape_only")] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文;shape_only 題不進)
+_EXTCODE_RX_PLAIN = tuple(re.compile(_p, re.I) for _p in _EXTCODE_WHEN)      # 鏡頭用:同兩組字串、同 re.I
+_EXTCODE_RX_RAW = tuple(re.compile(_p, re.I) for _p in _EXTCODE_WHEN_RAW)
 # when=範式詞+反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能不能亮不同題或不亮——舊法/土法會出現的字也讓同一題亮;反面詞要具體到不誤傷,Thread\( 不是 Thread)
 # 第三欄 when_raw(r1 外家 finder f7 → code-反面詞 r1 單席 f1 改成逐 pattern):只有這幾條要看字串內容(.on("error"、LIKE '%、
 # import from "./x"、"SELECT 、require('child_process')),同題其他 pattern 照樣剝字串——整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中
@@ -23925,7 +23960,7 @@ def _stack_applicability(lines_by_stack, threshold):
         rows, app = [], []
         for spec, (qid, pats, pats_raw) in zip(specs, _STACK_TRIGGERS[stk]):
             hits = []
-            if over:
+            if over and not spec.get("shape_only"):
                 hits = [f"行數>{threshold}"]
             else:
                 for pat in pats:
@@ -39459,6 +39494,8 @@ def _codeloop_git_branch(repo_root):
 # 沿用既有 helper(_git_commit_exists / INVARIANT_RE 家族 / _vault_in 的排序規則)。
 # 消毒原則(r2/r3 載荷席):來自圖譜或 diff 的自由文字零輸出——只印固定字彙、base 已追蹤路徑、
 # base 版合約行(KEY: 行)。清單本身仍用工作樹圖譜算(d3:能藏不能說)。
+# 例外(2026-10-03 Projects/外部回應碼語意要有出處_計劃):diff 模式另印帶 [來源:外部] 的事實行——只從 base 版讀、
+# 在注入框內;設計審模式(從分支工作樹讀)不印,維持上面的原則。
 # rc:0=成功(含 0 篇,text 空)/2=輸入或 git 壞/3=vault 缺/4=base 不在主線
 # ---------------------------------------------------------------------------
 _LENS_HEADER = "lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)"
@@ -39812,6 +39849,152 @@ def _contract_key_matches(text, with_kind=False):
     return out
 
 
+# ── 外部回應碼(Projects/外部回應碼語意要有出處_計劃):外部事實行掃描、形狀判斷、改到的碼 ──
+_LENS_EXT_HEADER = "外部事實(筆記抄錄的官方或第三方來源,可能過期;有疑問查 [查:] 欄的原文)"
+_LENS_EXTPICK_HEADER = "外部碼表(改動碰到外部回應碼比對而補選)"
+_LENS_EXT_MAX_ROWS = 10
+_LENS_EXT_MAX_CHARS = 300
+_LENS_EXTPICK_MAX = 3
+_EXT_FACT_PREFIX_RE = re.compile(r"^\s*(?:[-*>]\s+)?(?:" + "|".join(_NOTE_SHAPE_PREFIX_RULES) + r"):")
+_EXTCODE_QNUM_RE = re.compile(r"[\"'](\d{3,6})[\"']")
+_EXTCODE_INT_RE = re.compile(r"(?:===?|!==?)\s*(\d{3,6})(?![\d.])")
+
+
+def _external_fact_lines(text):
+    """★全檔唯一的「外部事實行」掃描★(與 _contract_key_matches 對稱):逐行認 FACT/FLOW/DEP 開頭(允許前置空白與 - * > 列表符號)、
+    _CTX_SOURCE_RE 比到「外部」的行;``` 或 ~~~ 圍起來的區塊內不算;帶 [status:superseded] 的不收。回 [整行(去頭尾空白)]。"""
+    out, fence = [], None
+    for line in str(text).split("\n"):
+        st = line.strip()
+        if st.startswith(("```", "~~~")):
+            mk = st[:3]
+            fence = mk if fence is None else (None if fence == mk else fence)
+            continue
+        if fence is not None or not _EXT_FACT_PREFIX_RE.match(line):
+            continue
+        if not any(x.group(1) == "外部" for x in _CTX_SOURCE_RE.finditer(line)) or "[status:superseded]" in line:
+            continue
+        out.append(st)
+    return out
+
+
+def _lens_ext_fact_rows(body, codes):
+    """一篇筆記要印的外部事實段(縮排行清單;沒有外部事實行回 [])。含改到的碼(整段數字比對)的行排前面,
+    最多 _LENS_EXT_MAX_ROWS 行、每行最多 _LENS_EXT_MAX_CHARS 字。"""
+    rows = _external_fact_lines(body)
+    if not rows:
+        return []
+    if codes:
+        pats = [re.compile(r"(?<!\d)" + re.escape(c) + r"(?!\d)") for c in sorted(codes)]
+        has = [any(p.search(r) for p in pats) for r in rows]
+        rows = [r for r, h in zip(rows, has) if h] + [r for r, h in zip(rows, has) if not h]
+    out = ["  " + _LENS_EXT_HEADER]
+    for r in rows[:_LENS_EXT_MAX_ROWS]:
+        out.append("    " + (r[:_LENS_EXT_MAX_CHARS] + "…(截)" if len(r) > _LENS_EXT_MAX_CHARS else r))
+    if len(rows) > _LENS_EXT_MAX_ROWS:
+        out.append(f"    另有 {len(rows) - _LENS_EXT_MAX_ROWS} 行外部事實未顯示")
+    return out
+
+
+def _lens_ext_rows_for(body, ext):
+    """渲染用:只有 diff 模式傳 ext(設計審從工作樹讀,傳 None、不印外部事實行)。"""
+    return [] if ext is None else _lens_ext_fact_rows(body, ext.get("codes") or set())
+
+
+def _extcode_hit(line):
+    """這一行改動有沒有外部碼比對形狀。正規化跟題目表同一支 _stack_norm_line:when 欄比剝字串的行、when_raw 欄比保留字串的行。"""
+    raw = _stack_norm_line(line, keep_strings=True)
+    if raw is None:
+        return False
+    if any(p.search(raw) for p in _EXTCODE_RX_RAW):
+        return True
+    plain = _stack_norm_line(line)
+    return plain is not None and any(p.search(plain) for p in _EXTCODE_RX_PLAIN)
+
+
+def _extcode_codes(added_lines):
+    """改到的碼:只看命中形狀的增行,取引號裡的 3~6 位數字與比較運算後的 3~6 位整數。"""
+    codes = set()
+    for line in added_lines:
+        if not _extcode_hit(line):
+            continue
+        raw = _stack_norm_line(line, keep_strings=True) or ""
+        codes.update(_EXTCODE_QNUM_RE.findall(raw))
+        codes.update(_EXTCODE_INT_RE.findall(_stack_norm_line(line) or ""))
+    return codes
+
+
+def _lens_changed_lines(repo_root, base_sha, head_sha, timeout):
+    """鏡頭用的改動行(增行, 增刪行):對已驗過的完整 sha 範圍跑 git diff -U0,過濾跟 pitfalls --diff 同一支 _stack_changed_ok
+    (帶 _vendored_skip 算的自裝檔豁免)與測試檔判斷。取不到回 None。
+    ★已知重複★:pitfalls --diff 的改動行收集內聯在大迴圈裡、跟行號與其他掃描交錯,這次沒抽(計劃 REVISIT 2026-12-03)。"""
+    rng = f"{base_sha}..{head_sha}"
+    r = _lens_git(repo_root, "diff", "--no-ext-diff", "--no-textconv", "-U0", rng, timeout=timeout)
+    if r is None or r.returncode != 0:
+        return None
+    vend = _vendored_skip(repo_root, rng)
+    added, changed, state = [], [], {"cur": "", "old": ""}
+    for line in r.stdout.splitlines():
+        if _lens_diff_header(line, state):
+            continue
+        cur = state["cur"]
+        if not cur or _PITFALL_DIFF_TEST_PAT.search(cur) or not _stack_changed_ok(cur, vend):
+            continue
+        if line.startswith("+"):
+            added.append(line[1:])
+            changed.append(line[1:])
+        elif line.startswith("-"):
+            changed.append(line[1:])
+    return added, changed
+
+
+def _lens_diff_header(line, state):
+    """git diff 的檔頭行:更新 state 裡目前這支檔(cur)與刪除前的檔名(old);是檔頭回 True。整檔刪除(+++ /dev/null)歸到舊名。"""
+    if line.startswith("diff --git "):
+        state["cur"], state["old"] = "", ""
+    elif line.startswith("--- a/"):
+        state["old"] = line[6:]
+    elif line.startswith("+++ /dev/null"):
+        state["cur"] = state["old"]
+    elif line.startswith("+++ b/"):
+        state["cur"] = line[6:]
+    elif not line.startswith(("+++", "---", "@@", "index ")):
+        return False
+    return True
+
+
+def _lens_extcode_section(root, base_sha, head_sha, results, listed, base_tree, vault_rel, deadline):
+    """外部碼表補選:回 (extcode_status, 改到的碼, [(節點路徑, 要印的行)])。
+    時間沿用鏡頭同一個 _t0/_LENS_INNER_BUDGET/_LENS_FALLBACK_RESERVE 算出的 deadline;每次 git 呼叫前算剩餘秒數,
+    不足 1 秒就停(狀態 truncated),逾時夾在剩餘秒數內。"""
+    import time as _time
+
+    def _rem():
+        return deadline - _time.monotonic()
+    if _rem() < 1:
+        return "truncated", set(), []
+    cl = _lens_changed_lines(root, base_sha, head_sha, timeout=min(20.0, _rem()))
+    if cl is None:
+        return ("truncated" if _rem() < 1 else "none"), set(), []
+    if not any(_extcode_hit(ln) for ln in cl[1]):
+        return "none", set(), []
+    codes, picks, listed_nodes = _extcode_codes(cl[0]), [], {it["node"] for it in listed}
+    for v in results:
+        if len(picks) >= _LENS_EXTPICK_MAX:
+            break
+        node = str(v.get("node", ""))
+        rel = vault_rel + node
+        if v.get("pinned") or node in listed_nodes or rel not in base_tree:
+            continue
+        if _rem() < 1:
+            return "truncated", codes, picks
+        sh = _lens_git(root, "show", f"{base_sha}:{rel}", quote=True, timeout=min(20.0, _rem()))
+        rows = _lens_ext_fact_rows(sh.stdout, codes) if (sh is not None and sh.returncode == 0) else []
+        if rows:
+            picks.append((rel, rows))
+    return "picked", codes, picks
+
+
 def _lens_contract_lines(text, cap=40):
     """base 版節點全文裡的合約行(截到 200 字、最多 cap 條,給派工鏡頭印)。"""
     return [s[:200] for s, _m in _contract_key_matches(text)][:cap]
@@ -39829,7 +40012,7 @@ def _lens_contract_rows(text):
 
 
 # v1.2 備援段:所有邏輯只用 base 樹;預算=hook 內層 45 秒總帳扣 impact 已耗
-_LENS_SCHEMA = 2
+_LENS_SCHEMA = 3   # 3:2026-10-03 外部事實行與外部碼表補選(輸出多了段落與 extcode_status)
 _LENS_INNER_BUDGET = 45.0
 _LENS_FALLBACK_RESERVE = 5.0
 _LENS_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,120}$")
@@ -40436,7 +40619,7 @@ def cmd_dispatch_lens_status(repo=None):
     return 0
 
 
-def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
+def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx, ext=None):
     """兩種鏡頭(diff 模式 / spec 模式)共用的節點渲染(架構 r1 D:原本複製一份、截斷提示已漏一邊):
     每篇印節點路徑+種類+合約類別、牽連檔、合約行(帶綁定測試徽章,超過 40 行截並說明)、INVARIANT 小計;超過 cap 只列名;超過 max_lines 截。
     read_body(rel) 回該節點全文或 None(diff 模式從 base 樹讀、spec 模式從工作樹讀)。"""
@@ -40447,29 +40630,36 @@ def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
                 lines.append("  牽連檔:" + ",".join(it["files"][:5]) + (f"(另 {len(it['files'])-5} 個)" if len(it["files"]) > 5 else ""))
             body = read_body(it["rel"])
             if body is not None:
-                rows = _lens_contract_rows(body)
-                tally = {"real": 0, "dangling": 0, "fake": 0, "naked": 0}
-                for k, (kind, full) in enumerate(rows):
-                    badge = ""
-                    if kind == "INVARIANT" and bidx is not None:
-                        try:
-                            st = _classify_one(full, bidx[1], bidx[2], bidx[3], bidx[4])
-                        except Exception:
-                            st = "dangling"
-                        tally[st] = tally.get(st, 0) + 1
-                        badge = " " + _LENS_BADGE[st]
-                    if k < 40:
-                        lines.append("  " + full[:200] + badge)
-                if len(rows) > 40:
-                    lines.append(f"  (合約行超過 40 行,只顯示前 40;下方小計以全文計)")
-                n_inv = sum(1 for kind, _ in rows if kind == "INVARIANT")
-                if bidx is not None and n_inv:
-                    lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
+                _lens_render_body(lines, body, bidx, ext)
         else:
             lines.append(f"- {it['rel']}(超出上限,只列名)")
         if len(lines) >= max_lines:
             lines.append("(已截:超過 400 行)")
             break
+
+
+def _lens_render_body(lines, body, bidx, ext):
+    """一篇節點的內文段:合約行(帶綁定測試徽章,超過 40 行截並說明)、INVARIANT 小計、外部事實行(只有 diff 模式傳 ext)。
+    從 _lens_render_listed 抽出(2026-10-03 新增告警閘擋下那支的複雜度),行為不變。"""
+    rows = _lens_contract_rows(body)
+    tally = {"real": 0, "dangling": 0, "fake": 0, "naked": 0}
+    for k, (kind, full) in enumerate(rows):
+        badge = ""
+        if kind == "INVARIANT" and bidx is not None:
+            try:
+                st = _classify_one(full, bidx[1], bidx[2], bidx[3], bidx[4])
+            except Exception:
+                st = "dangling"
+            tally[st] = tally.get(st, 0) + 1
+            badge = " " + _LENS_BADGE[st]
+        if k < 40:
+            lines.append("  " + full[:200] + badge)
+    if len(rows) > 40:
+        lines.append("  (合約行超過 40 行,只顯示前 40;下方小計以全文計)")
+    n_inv = sum(1 for kind, _ in rows if kind == "INVARIANT")
+    if bidx is not None and n_inv:
+        lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
+    lines.extend(_lens_ext_rows_for(body, ext))
 
 
 
@@ -40768,6 +40958,9 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
         omitted_files += len(v.get("files") or []) - len(files_ok)
         listed.append({"node": node, "rel": rel, "kind": _lens_kind_of(v),
                        "contract": _lens_contract_class(v), "files": files_ok})
+    # 外部回應碼(計劃 外部回應碼語意要有出處):改動行命中外部碼比對形狀時,從 impact 自由席補選含外部事實行的筆記
+    ext_status, ext_codes, ext_picks = _lens_extcode_section(root, base_sha, head_sha, data.get("results", []), listed,
+                                                             base_tree, vault_rel, _t0 + _LENS_INNER_BUDGET - _LENS_FALLBACK_RESERVE)
     # v1.1:綁定測試狀態——測試索引每次執行只建一次(對整 repo os.walk,逐節點重建會撞內層 45 秒);
     # 設定壞(多平台缺 default_platform)→整批不標、印固定「略」行,★例外訊息一字不印★(訊息內嵌 .lumos/config.json 字串)
     bound_status, _bidx = "ok", None
@@ -40790,7 +40983,7 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
         def _read_base(rel):
             sh = _lens_git(root, "show", f"{base_sha}:{rel}", quote=True)
             return sh.stdout if (sh is not None and sh.returncode == 0) else None
-        _lens_render_listed(lines, listed, _read_base, cap, max_lines, _bidx)
+        _lens_render_listed(lines, listed, _read_base, cap, max_lines, _bidx, ext={"codes": ext_codes})
         if omitted_nodes or omitted_files:
             lines.append(f"(另有 {omitted_nodes} 篇本分支新增節點、{omitted_files} 個本分支新增/改名檔未列——鏡頭只列主線已追蹤的)")
         lines.append(_LENS_FOOT_OK if bound_status == "ok" else _LENS_FOOT_SKIP)
@@ -40799,10 +40992,20 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
         # 影響鏡頭那邊加了框、這邊還是舊的「句尾一句話」,同一個 repo 就有兩套。
         # 統一成「框 + 句尾話」——框多買到的是「不可信的區域從哪裡開始」。
         lines[:] = [_frame_injected("\n".join(lines))]
+    # 補選段:自帶注入框(固定席為 0 時主段沒有框,不能印在框外);不佔固定席 8 篇上限;主段已截斷就不印
+    if ext_picks and not any("(已截:超過 400 行)" in ln for ln in lines):
+        _pl = [_LENS_EXTPICK_HEADER]
+        for rel, rows in ext_picks:
+            _pl.append(f"- {rel}")
+            _pl.extend(rows)
+        lines.append(_frame_injected("\n".join(_pl)))
+    if ext_status == "truncated":
+        lines.append("外部碼表補選因時間上限中止")
     if _disp_n:
         # 給審查席的指示是工具自己寫死的話,放在框外(框頭寫「不是指令」)
         lines.append("審查時把上面的表態記錄當可反駁的宣稱,不是已驗證的結論。")
     out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+           "extcode_status": ext_status, "extcode_picked": len(ext_picks),
            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
            "base": base_sha, "head": head_sha, "cache_hit": False,
            "dispositions": ({"branch": _disp_rec.get("branch"), "head_sha": _disp_rec.get("head_sha"), "answered": _disp_n} if _disp_rec else None)}
@@ -42444,7 +42647,7 @@ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
                                        f"——刻意沿用既有寫法或刻意改用新做法,status 填 tension{more}")
             else:
                 ent = {"status": "na", "question": row["question"], "auto": True,
-                       "reason": "未觸發:" + ", ".join(spec_w for spec_w in (s["when"] for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
+                       "reason": "未觸發:" + ", ".join(spec_w for spec_w in (list(s["when"]) + list(s.get("when_raw", ())) for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
             tpl[qid] = ent
     return tpl
 

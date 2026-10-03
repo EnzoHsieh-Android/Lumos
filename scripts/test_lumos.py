@@ -23282,7 +23282,7 @@ def t_python_stack_wiring():
     import json as _json
     import subprocess as _sp
     m = _load_lumos_inproc()
-    check("①py 題組五題", len(m._STACK_QUESTION_SPECS.get("py", [])) == 5, str(list(m._STACK_QUESTION_SPECS)))
+    check("①py 題組五題(不含 shape_only 的外部回應碼題,那題由 t_stack_question_triggers 的 id 集合釘)", len([s for s in m._STACK_QUESTION_SPECS.get("py", []) if not s.get("shape_only")]) == 5, str(list(m._STACK_QUESTION_SPECS)))
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
@@ -23452,7 +23452,7 @@ def t_dart_stack_wiring():
     import json as _json
     import subprocess as _sp
     m = _load_lumos_inproc()
-    check("①dart 題組六題", len(m._STACK_QUESTION_SPECS.get("dart", [])) == 6, str(list(m._STACK_QUESTION_SPECS)))
+    check("①dart 題組六題(不含 shape_only 的外部回應碼題,那題由 t_stack_question_triggers 的 id 集合釘)", len([s for s in m._STACK_QUESTION_SPECS.get("dart", []) if not s.get("shape_only")]) == 6, str(list(m._STACK_QUESTION_SPECS)))
     check("②慣例 skill 本體存在", (Path(GRAPHCTL).parent.parent / "skills" / "dart-idioms" / "SKILL.md").is_file(), "skills/dart-idioms/SKILL.md")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -23509,7 +23509,7 @@ def t_java_stack_wiring():
     import json as _json
     import subprocess as _sp
     m = _load_lumos_inproc()
-    check("①java 題組七題", len(m._STACK_QUESTION_SPECS.get("java", [])) == 7, str(list(m._STACK_QUESTION_SPECS)))
+    check("①java 題組七題(不含 shape_only 的外部回應碼題,那題由 t_stack_question_triggers 的 id 集合釘)", len([s for s in m._STACK_QUESTION_SPECS.get("java", []) if not s.get("shape_only")]) == 7, str(list(m._STACK_QUESTION_SPECS)))
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         g = lambda *a: _sp.run(["git", *a], cwd=td, capture_output=True, text=True)
@@ -36199,6 +36199,159 @@ def t_dispatch_lens_bound_status_noconfig():
     check("lens v1.1 fail-open: 整批不加格、印「略」行、bound_status=skipped-no-config", "[綁定測試:" not in text and "裸合約" not in text and "綁定測試狀態:略" in text and data.get("bound_status") == "skipped-no-config", f"{data.get('bound_status')}\n{text[:800]}")
     check("lens v1.1 fail-open: 例外訊息一個字都不印", "default_platform" not in text and "設定" not in text.replace("平台設定讀不到", ""), text[:800])
 
+
+# ── 外部回應碼語意要有出處(Projects/外部回應碼語意要有出處_計劃):共用形狀、外部事實行、補選、單一來源 ──
+_EXTCODE_FACTS_PAY = (
+    "  FACT:付款流程碼 1005 官方原文「Display generated QR, and wait for customer to scan / pay it.」 [來源:外部] [查:https://developer.2c2p.com/docs/response-code-payment-flow]\n"
+    "  FACT:付款流程碼 2000 官方原文「Transaction is completed, please do payment inquiry request for full payment information.」 [來源:外部] [查:https://developer.2c2p.com/docs/api-payment-response-frontend]\n"
+    "  FACT:正式環境商戶號是 702 開頭 [來源:部署]\n"
+    "  FACT:舊碼表說 0000 代表完成 [來源:外部] [status:superseded] [被取代:Systems/pay]\n")
+
+
+def _mk_lens_extcode_repo(hit=True, pinned=True):
+    """臨時 repo:main 上 src/pay.py、Systems/pay.md(正文反引號寫出 src/pay.py=直接相依;pinned=True 時帶 INVARIANT=固定席)、
+    Systems/碼表.md(只寫外部事實行、沒有合約=自由席候選);feat 改 pay.py,hit=True 時新增 `if code == "2000":`。"""
+    import subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="lensx-"))
+    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    (d / "src").mkdir(); (d / "src" / "pay.py").write_text("def pay(code):\n    return 1\n", encoding="utf-8")
+    v = d / "docs" / "t-knowledge"; (v / "Systems").mkdir(parents=True)
+    inv = "  KEY:★INVARIANT★ 沒收到錢不得關帳\n" if pinned else ""
+    (v / "Systems" / "pay.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n" + inv + _EXTCODE_FACTS_PAY + "---\n\n實作在 `src/pay.py`。\n\n"
+        "```\nFACT:圍欄裡的範例 9999 [來源:外部]\n```\n", encoding="utf-8")
+    (v / "Systems" / "碼表.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  FACT:查單 API 回應 respCode 0000 = Success [來源:外部] [查:https://developer.2c2p.com/docs/api-payment-inquiry-response-parameter]\n"
+        "---\n\n碼表給 `src/pay.py` 用。\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "main")
+    g("checkout", "-qb", "feat")
+    body = "def pay(code):\n    if code == \"2000\":\n        return 2\n    return 1\n" if hit else "def pay(code):\n    return 2\n"
+    (d / "src" / "pay.py").write_text(body, encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "feat")
+    return d, v
+
+
+def t_extcode_shapes():
+    """[外部回應碼 S1]共用形狀:A 比較(要名稱片段)、B 分支、C 集合、D 整數各有命中樣本;
+    沒名稱片段的引號數字、非數字碼、HTTP 風格、1~2 位碼、註解都不命中;8 萬字長行 0.5 秒內處理完。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    hits = ['if (code == "2000" || code == "0000") return Success',
+            'if repo.pnqrStatus(ctx) == "0000":',
+            'if ("0000".equals(resp.respCode)) {',
+            '    case "2000":',
+            '    "2000", "0000" -> close()',
+            'if result_code in ("0000", "2000"):',
+            'if (resp.code === 2000) {',
+            'if (resultCode != 1005) retry()']
+    misses = ['if (year == "2026") {',
+              'if (zipCode != "10001") return',
+              'if (countryCode == "TW") {',
+              'if (statusCode == 200) ok()',
+              'if (ret == 0) return',
+              '// if (code == "2000") 舊寫法',
+              'val total = price * qty']
+    bad_hit = [l for l in hits if not m._extcode_hit(l)]
+    bad_miss = [l for l in misses if m._extcode_hit(l)]
+    check("S1 命中樣本全部命中(A/B/C/D 四組)", not bad_hit, str(bad_hit))
+    check("S1 不命中樣本全部不命中(無名稱片段、非數字碼、HTTP 風格、1~2 位碼、註解)", not bad_miss, str(bad_miss))
+    long = "a" * 80000 + ' code == "2000"'
+    t0 = _t.monotonic(); r = m._extcode_hit(long); dt = _t.monotonic() - t0
+    check("S1 8 萬字長行 0.5 秒內處理完,且超過 2000 字的行不比對", dt < 0.5 and r is False, f"dt={dt:.3f} r={r}")
+    check("S1 改到的碼只取增行命中處的數字", m._extcode_codes(['if (code == "2000") timeout = 30000', 'if (resultCode != 1005) x()']) == {"2000", "1005"},
+          str(m._extcode_codes(['if (code == "2000") timeout = 30000', 'if (resultCode != 1005) x()'])))
+
+
+def t_lens_external_facts():
+    """[外部回應碼 S2]diff 模式鏡頭在合約行之後印外部事實行:其他來源、圍欄內、已作廢不印;含改到的碼的行排前面;
+    超過 10 行印「另有 N 行」、超過 300 字加截斷標記;設計審鏡頭不印。"""
+    import json as _json, io as _io, contextlib as _cl
+    m = _load_lumos_inproc()
+    d, v = _mk_lens_extcode_repo(hit=True)
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    check("S2 diff 模式:rc0、列出 pay.md、印外部事實標題", r.returncode == 0 and "Systems/pay.md" in text and m._LENS_EXT_HEADER in text, f"rc={r.returncode}\n{r.stderr[-300:]}\n{text[:600]}")
+    check("S2 其他來源、圍欄內、已作廢的行不印", "702 開頭" not in text and "9999" not in text and "舊碼表" not in text, text[:1200])
+    i2000, i1005 = text.find("2000 官方原文"), text.find("1005 官方原文")
+    check("S2 含改到的碼(2000)的行排在 1005 前面", 0 <= i2000 < i1005, f"i2000={i2000} i1005={i1005}")
+    rows = [f"  FACT:第 {k} 條外部事實 [來源:外部]" for k in range(12)] + ["  FACT:" + "很長" * 200 + " [來源:外部]"]
+    body = "---\nsummary: |-\n" + "\n".join(rows) + "\n---\n"
+    lines = []
+    m._lens_render_listed(lines, [{"rel": "x.md"}], lambda rel: body, 8, 400, None, ext={"codes": set()})
+    out = "\n".join(lines)
+    check("S2 每篇最多 10 行、超過印「另有 N 行外部事實未顯示」", out.count("條外部事實") == 10 and "另有 3 行外部事實未顯示" in out, out[:900])
+    lines2 = []
+    m._lens_render_listed(lines2, [{"rel": "x.md"}], lambda rel: "---\nsummary: |-\n  FACT:" + "很長" * 200 + " [來源:外部]\n---\n", 8, 400, None, ext={"codes": set()})
+    check("S2 超過 300 字加「…(截)」", "…(截)" in "\n".join(lines2), "\n".join(lines2)[:400])
+    plan = d / "p.md"; plan.write_text("# 計劃\n會改 src/pay.py。\n", encoding="utf-8")
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+        rc = m.cmd_dispatch_lens_spec(str(plan), repo=str(d), as_json=True)
+    ds = _json.loads(buf.getvalue().strip().splitlines()[-1])
+    check("S2 設計審鏡頭照列節點但不印外部事實行", rc == 0 and "Systems/pay.md" in ds.get("text", "") and m._LENS_EXT_HEADER not in ds.get("text", ""), ds.get("text", "")[:600])
+
+
+def t_lens_extcode_pick():
+    """[外部回應碼 S3]改動命中形狀時,固定席段之後另起一段(自帶注入框)補選自由席裡含外部事實行的筆記、最多 3 篇;
+    固定席為 0 時接在備援段之後;沒命中形狀不出現補選段;時間不足停止、狀態 truncated 且照常寫快取。"""
+    import json as _json, io as _io, contextlib as _cl
+    m = _load_lumos_inproc()
+    d, v = _mk_lens_extcode_repo(hit=True)
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    ip, ic = text.find(m._LENS_EXTPICK_HEADER), text.find("Systems/碼表.md")
+    check("S3 命中形狀:extcode_status=picked、補選段列出碼表筆記", data.get("extcode_status") == "picked" and 0 <= ip < ic, f"{data.get('extcode_status')}\n{text[:1500]}")
+    seg = text[ip:]
+    check("S3 補選段自帶注入框、在固定席段之後", text.find("Systems/pay.md") < ip and m._FRAME_CLOSE in seg and text.rfind(m._FRAME_OPEN, 0, ip) > text.find("Systems/pay.md"), text[:1500])
+    check("S3 補選段印碼表的外部事實行", "respCode 0000 = Success" in seg, seg[:600])
+    d2, v2 = _mk_lens_extcode_repo(hit=False)
+    r2 = run(v2, "dispatch-lens", "main..HEAD", "--repo", str(d2), "--json", "--no-cache")
+    data2 = _json.loads(r2.stdout.strip().splitlines()[-1]) if r2.stdout.strip() else {}
+    check("S3 沒命中形狀:extcode_status=none、沒有補選段", data2.get("extcode_status") == "none" and m._LENS_EXTPICK_HEADER not in data2.get("text", ""), f"{data2.get('extcode_status')}\n{data2.get('text','')[:400]}")
+    d3, v3 = _mk_lens_extcode_repo(hit=True, pinned=False)
+    r3 = run(v3, "dispatch-lens", "main..HEAD", "--repo", str(d3), "--json", "--no-cache")
+    data3 = _json.loads(r3.stdout.strip().splitlines()[-1]) if r3.stdout.strip() else {}
+    t3 = data3.get("text", "")
+    check("S3 固定席為 0:備援段照印、補選段接在其後且自帶框", data3.get("listed") == 0 and "圖譜沒有釘到節點" in t3 and t3.find("圖譜沒有釘到節點") < t3.find(m._LENS_EXTPICK_HEADER) and m._FRAME_OPEN in t3[t3.find("圖譜沒有釘到節點"):], t3[:1500])
+    old = m._LENS_INNER_BUDGET
+    try:
+        m._LENS_INNER_BUDGET = -100.0
+        buf = _io.StringIO()
+        with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+            rc = m._dispatch_lens_graph("main..HEAD", repo=str(d), as_json=True, no_cache=False)
+        dt = _json.loads(buf.getvalue().strip().splitlines()[-1])
+    finally:
+        m._LENS_INNER_BUDGET = old
+    import subprocess as _sp
+    base = _sp.run(["git", "-C", str(d), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
+    head = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    cached = m._lens_cache_read(m._lens_cache_path(Path(d), base, head))
+    check("S3 時間不足:extcode_status=truncated、印中止說明、照常寫快取", rc == 0 and dt.get("extcode_status") == "truncated" and "外部碼表補選因時間上限中止" in dt.get("text", "") and cached is not None and cached.get("extcode_status") == "truncated", f"rc={rc} {dt.get('extcode_status')} cached={None if cached is None else cached.get('extcode_status')}")
+
+
+def t_extcode_single_source():
+    """[外部回應碼 S4]八題的題目文字、when、when_raw 都是同一組常數;鏡頭編譯的是同兩組字串;
+    鏡頭取改動行用同一支過濾(_stack_changed_ok+_vendored_skip)與同一支正規化(_stack_norm_line)。"""
+    import inspect as _insp
+    m = _load_lumos_inproc()
+    stacks = ("kt", "cs", "vue", "swift", "node", "py", "java", "dart")
+    bad = []
+    for stk in stacks:
+        sp = [s for s in m._STACK_QUESTION_SPECS[stk] if s["id"] == f"{stk}-extcode"]
+        if not (len(sp) == 1 and sp[0]["q"] is m._EXTCODE_Q and list(sp[0]["when"]) == list(m._EXTCODE_WHEN)
+                and list(sp[0]["when_raw"]) == list(m._EXTCODE_WHEN_RAW) and sp[0].get("shape_only") is True):
+            bad.append(stk)
+    check("S4 八個棧的 extcode 題都引用同一組常數且帶 shape_only", not bad, str(bad))
+    check("S4 sql 沒有 extcode 題", not any(s["id"].endswith("-extcode") for s in m._STACK_QUESTION_SPECS["sql"]), "")
+    check("S4 鏡頭編譯的正規式就是同兩組字串", [p.pattern for p in m._EXTCODE_RX_PLAIN] == list(m._EXTCODE_WHEN) and [p.pattern for p in m._EXTCODE_RX_RAW] == list(m._EXTCODE_WHEN_RAW), "")
+    src = _insp.getsource(m._lens_changed_lines) + _insp.getsource(m._extcode_hit)
+    check("S4 鏡頭用同一支過濾與正規化", "_stack_changed_ok(" in src and "_vendored_skip(" in src and "_stack_norm_line(" in src, "")
+
+
 def t_impact_hook_shebang_and_ttl_mark():
     """主session鏡頭利用率_計劃 前置修正:①無副檔名檔靠 shebang 入樣(先解絕對路徑、安全讀首行、二進位/不存在不算)
     ②TTL 判定與寫標記拆開(mark=False 不寫;_ttl_mark 才寫)。"""
@@ -36447,7 +36600,7 @@ def t_lens_loaders_cfg_param_and_budget():
     c_disk, _ = m._cochange_load_config(d); c_cfg, _ = m._cochange_load_config(d, cfg={"min_support": 1})
     check("loader: _cochange_load_config 無 cfg 讀磁碟(5)、有 cfg 不讀磁碟且硬底線 2 照走", c_disk["min_support"] == 5 and c_cfg["min_support"] == 2, f"{c_disk['min_support']} {c_cfg['min_support']}")
     pl = m.load_platforms(d, cfg={"test_profile": "python"}); check("loader: load_platforms 吃 cfg", pl["default_platform"] and not pl["multiplatform"], str(pl)[:120])
-    k1 = m._lens_cache_path(d, "a" * 40, "b" * 40); check("cache: 鍵含 schema 版本(常數存在且進鍵)", getattr(m, "_LENS_SCHEMA", None) == 2 and "dispatch-lens" in str(k1), str(k1))
+    k1 = m._lens_cache_path(d, "a" * 40, "b" * 40); check("cache: 鍵含 schema 版本(常數存在且進鍵)", getattr(m, "_LENS_SCHEMA", None) == 3 and "dispatch-lens" in str(k1), str(k1))
     lines, status, meta = m._lens_fallback(d, "a" * 40, "b" * 40, [], set(), {}, _time.monotonic() - 1)
     check("budget: deadline 已過→skipped-timeout、印固定字串", status == "skipped-timeout" and any("預算不足" in l for l in lines), f"{status} {lines}")
     import inspect
@@ -41247,7 +41400,18 @@ def t_stack_question_triggers():
                        "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath",
                        "java-concurrency", "java-resources", "java-data", "java-external", "java-memory",
                        "java-collections", "java-android",
-                       "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform"}, str(sorted(ids)))
+                       "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform",
+                       # 外部回應碼(2026-10-03 Projects/外部回應碼語意要有出處_計劃):sql 以外八棧各一題
+                       "kt-extcode", "cs-extcode", "vue-extcode", "swift-extcode", "node-extcode", "py-extcode",
+                       "java-extcode", "dart-extcode"}, str(sorted(ids)))
+    # [外部回應碼 S5]命中樣本亮 extcode、不命中不亮;超過行數門檻不因門檻而亮;不進舊語意整組清單
+    _xa, _xm = m._stack_applicability({"py": ['if resp_code == "2000":']}, 300)
+    _xb, _xmb = m._stack_applicability({"py": ['if year == "2026":']}, 300)
+    _xc, _xmc = m._stack_applicability({"kt": ["val x = 1"] * 400}, 300)
+    _g = lambda mm, stk: {r["id"] for r in mm.get(stk, []) if r["applicable"]}
+    check("S5 命中樣本亮 py-extcode、不命中樣本不亮", "py-extcode" in _g(_xm, "py") and "py-extcode" not in _g(_xmb, "py"), f"{_g(_xm,'py')} {_g(_xmb,'py')}")
+    check("S5 超過行數門檻:其他題全表適用,kt-extcode 不因門檻而亮", "kt-extcode" not in _g(_xmc, "kt") and "kt-coroutines" in _g(_xmc, "kt"), str(_g(_xmc, "kt")))
+    check("S5 extcode 不進舊語意整組清單(_STACK_PERF_QUESTIONS)", all(m._EXTCODE_Q not in v for v in m._STACK_PERF_QUESTIONS.values()), "")
     import re as _re
     check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
     app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
@@ -41316,7 +41480,7 @@ def t_stack_question_triggers():
         r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
         data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
         check("⑤stack_questions 語意不變(kt 整組 7 題)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
-        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 7, str(data.get("stack_questions_applicable")))
+        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 8, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+extcode
         # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
         P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
         import subprocess as _sp
