@@ -2319,7 +2319,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         # 摘要與節點名過 _esc_clean(code-revisit r1 H-1:兩天前才在逃逸帳修過的控制碼穿透洞,勿三挖)
         _lines5 = [f"{d} {_esc_clean(sm, 60)}(逾 {ag} 天)← {_esc_clean(st, 40)}" + ("(這篇 Issue 已結案)" if cl else "")
                    for ag, d, sm, st, cl in _rv_due]
-        _head5 = (f"{len(_rv_due)} 件回訪到期(最老逾 {_rv_due[0][0]} 天)——到日子了,處理完把該行日期改下一次或刪行"
+        _head5 = (f"{len(_rv_due)} 件回訪到期(最老逾 {_rv_due[0][0]} 天)——到日子了,處理完把該行日期改下一次、刪掉,或在那一行加 [closed:日期 理由]"
                   if _rv_due else "")
         if _rv_bad:
             # 壞損數進 head 不進 lines(H-2:cap3 會把它吞進「另 N 條」隱形——head 恆可見)
@@ -6402,7 +6402,13 @@ def _excluded_line(line):
     if not m:
         return None
     cls, reason = m.group(1).strip("*_ "), m.group(2).strip().strip("*_ ").strip()   # 粗體寫法 `- **已排除:金流:** 理由` 的星號不進理由(全面實測抓到理由被記成「** 純本機…」)
-    return cls, reason, (cls in _DOOR_CLASS_ZH.values() and len(re.findall(r"[^\W_]", reason)) >= 4)
+    return cls, reason, (cls in _DOOR_CLASS_ZH.values() and _real_chars(reason) >= 4)
+
+
+def _real_chars(s):
+    """實字數:字母、數字或漢字(標點、空白、底線不算)。「已排除」行理由與回頭條件結案理由共用
+    (Projects/回頭條件寫法補齊_計劃〈做法〉2.2,設計審 r1 架構對齊席:不抄第二份)。"""
+    return len(re.findall(r"[^\W_]", s or ""))
 
 
 def _door_exclusions(text):
@@ -27948,29 +27954,49 @@ def _ns_check_line(repo_root, text, region, files, reader, top_dirs, by_name, re
 
 
 def _ns_revisit_violations(ln, reg, visible):
-    """新寫的一行回頭條件或條件標記合不合規矩(存量漂移防線 [S10])→ [(規則, 片段, 改法)]。
-    用跟 E5、第二層同一支 _revisit_split;圍欄裡的、行內程式碼裡的是範例,不管。"""
+    """新寫的一行回頭條件或條件標記合不合規矩(存量漂移防線 [S10];回頭條件寫法補齊〈做法〉1.2、2.5)→ [(規則, 片段, 改法)]。
+    用跟 E5、第二層同一支 _revisit_split(每個區塊都先算,開頭欄位清單項的行首形狀也認得);圍欄裡的、行內程式碼裡的是範例,不管。"""
     if not visible:
         return []
     probe = _strip_inline_markup(ln)[0]
     table = probe.lstrip().startswith("|")
+    kind, rest = _revisit_split(probe)
+    out, dead = [], False
     if reg in ("body", "summary") and not table:
-        kind, rest = _revisit_split(probe)
         if kind == "bad":
-            return [("回頭條件格式不合", ln.strip()[:60],
-                     "REVISIT: 後面第一個位置要是日期 YYYY-MM-DD,或條件標記加期限:REVISIT:[when-file:路徑][by:YYYY-MM-DD] 待辦")]
+            out.append(("回頭條件格式不合", ln.strip()[:60],
+                        "REVISIT: 後面第一個位置要是日期 YYYY-MM-DD,或條件標記加期限:REVISIT:[when-file:路徑][by:YYYY-MM-DD] 待辦"))
         if kind == "cond":
-            pr = _probe_parse(rest)
-            errs = list(pr["errs"])
-            if pr["conds"] and pr["by"] is None:
-                errs.append("沒帶期限 [by:YYYY-MM-DD](條件寫錯就永遠不會成立,期限到了至少會被唸)")
-            if errs:
-                return [("條件寫錯", ln.strip()[:60], ";".join(errs) + "——文法見 Projects/存量漂移防線_計劃〈做法〉第 0 節")]
+            out += _ns_revisit_cond_viol(ln, rest)
+        if kind in ("date", "cond"):
+            out += _ns_revisit_closed_viol(ln, probe)       # 結案文法跟日期與條件文法同範圍(代碼審 r1 架構對齊席)
+    elif _revisit_dead_place(probe, reg):
+        out.append(("條件寫在不評估的地方", ln.strip()[:60],
+                    "條件標記只在正文與摘要的 REVISIT 行生效;寫在表格或開頭欄位其他欄裡不會被判,移到 REVISIT 行"))
+        dead = True
+    if not dead and _revisit_misplaced(probe):
+        out.append(("回頭條件寫在句中", ln.strip()[:60], _REVISIT_MISPLACED_FIX))
+    return out
+
+
+def _ns_revisit_cond_viol(ln, rest):
+    """條件式回頭條件的寫法:條件寫錯、沒帶期限 → [(規則, 片段, 改法)]。"""
+    pr = _probe_parse(rest)
+    errs = list(pr["errs"])
+    if pr["conds"] and pr["by"] is None:
+        errs.append("沒帶期限 [by:YYYY-MM-DD](條件寫錯就永遠不會成立,期限到了至少會被唸)")
+    if not errs:
         return []
-    if _PROBE_ANY_RE.search(probe):
-        return [("條件寫在不評估的地方", ln.strip()[:60],
-                 "條件標記只在正文與摘要的 REVISIT 行生效;寫在表格或開頭欄位其他欄裡不會被判,移到 REVISIT 行")]
-    return []
+    return [("條件寫錯", ln.strip()[:60], ";".join(errs) + "——文法見 Projects/存量漂移防線_計劃〈做法〉第 0 節")]
+
+
+def _ns_revisit_closed_viol(ln, probe):
+    """REVISIT 行的結案標記寫錯 → [(規則, 片段, 改法)](回頭條件寫法補齊〈做法〉2.5)。"""
+    cl = _revisit_closed(probe)
+    if not cl["errs"]:
+        return []
+    return [("結案標記寫錯", ln.strip()[:60], ";".join(cl["errs"]) + "——寫法:在那一行加 [closed:YYYY-MM-DD 理由]"
+             "(建議放行尾,理由至少 4 個字、不放連結),一行一個")]
 
 
 def _ns_became_code(repo_root, base_where, tip_where, reader_tip):
@@ -29607,6 +29633,10 @@ def _note_shape_report(root, mode, mode_word, viol, errs, slot=None, tr=None):
     ex = _ns_slot_extra(sviol, mixed=bool(viol or errs)) if sviol else {}
     if trviol:
         ex = _ns_tr_extra_merged(ex, trmode, trviol, trinfo, shape=bool(viol or errs))
+    if viol:
+        # 規則別計數:撤除條件要數某一條規則擋了幾次(回頭條件寫法補齊〈做法〉2.8;欄名同放寬帳的 rules)
+        import collections
+        ex = dict(ex, rules=dict(collections.Counter(v[2] for v in viol)))
     kw = {"extra": ex} if ex else {}
     count = (f"新違規 {len(viol) + len(errs)} 條" + (f"、格子缺漏 {len(sviol)} 行" if sviol else "")
              + (f"、測試綁定 {len(trviol)} 條" if trviol else ""))
@@ -31726,10 +31756,16 @@ def _drift_check_core(root, base, tip, vault_rel, override=None, deadline=None, 
 #   REVISIT:[when-file:src/x/runner.py][by:2026-12-31] 補啟動環境不含金鑰的測試
 # 條件成立或到期,任一先到就該處理;推送讓條件從不成立變成立時擋。
 _REVISIT_MARK_RE = re.compile(r"^(?:[-*+][ \t]+|\d+[.)][ \t]+|>[ \t]*)")
-_PROBE_TOKEN_RE = re.compile(r"[ \t]*\[(when-[A-Za-z0-9_-]*|by):([^\]\n]*)\]")
+_PROBE_TOKEN_RE = re.compile(r"[ \t]*\[(when-[A-Za-z0-9_-]*|by|closed):([^\]\n]*)\]")
 _PROBE_ANY_RE = re.compile(r"\[when-[A-Za-z0-9_-]*:[^\]\n]*\]")
 _PROBE_KEYS = ("file", "symbol", "test", "status")
-_PROBE_LEAD_RE = re.compile(r"^(?:[ \t]*\[(?:when-[A-Za-z0-9_-]*|by):[^\]\n]*\])+")
+_PROBE_LEAD_RE = re.compile(r"^(?:[ \t]*\[(?:when-[A-Za-z0-9_-]*|by|closed):[^\]\n]*\])+")
+_REVISIT_CLOSED_RE = re.compile(r"\[closed:([^\]\n]*)\]")
+_REVISIT_ANY_RE = re.compile(r"REVISIT:[ \t]*(?:\d{4}-\d{2}-\d{2}|\[when-)")
+_REVISIT_QUOTES = {"「": "」", "『": "』", "“": "”"}
+_REVISIT_MISPLACED_FIX = ("回頭條件要獨立一行、行首寫 REVISIT:,冒號後直接接日期或條件標記;前面最多一層列表或引用記號(- 1. >),"
+                          "核取方塊、粗體、星號、刪除線都不行;一行只寫一條。要結案就在那一行加 [closed:日期 理由]。"
+                          "只是在提這個寫法就用行內程式碼或全形引號「」包起來")
 
 
 def _revisit_split(line):
@@ -31753,15 +31789,97 @@ def _revisit_split(line):
         return "bad", rest
 
 
+def _revisit_closed(probe):
+    """一行 REVISIT 的結案標記 → {"closed": 合格的那一段原文或 None, "errs": [原因]}(Projects/回頭條件寫法補齊_計劃〈做法〉2.2)。
+    掃整行可見文字裡全部 [closed:…](值切到第一個 ]):YYYY-MM-DD(形狀加 fromisoformat,緊湊寫法不收)、空白、理由至少 4 個實字;
+    一行兩個以上算錯。不比結案日期跟今天(本機與 CI 時區不同會誤擋,設計審 r1)。呼叫端負責「這行是 REVISIT 行」。"""
+    import datetime
+    ms = list(_REVISIT_CLOSED_RE.finditer(probe))
+    if not ms:
+        return {"closed": None, "errs": []}
+    if len(ms) > 1:
+        return {"closed": None, "errs": [f"一行只能有一個結案標記(這行有 {len(ms)} 個)"]}
+    val = ms[0].group(1).strip()
+    date, _sp, reason = val.partition(" ")
+    errs = []
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            raise ValueError
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        errs.append(f"結案日期 {date or '(空)'} 不是 YYYY-MM-DD")
+    if _real_chars(reason) < 4:
+        errs.append("結案理由至少 4 個字(字母、數字或漢字;行內程式碼不算)")
+    return {"closed": None if errs else ms[0].group(0), "errs": errs}
+
+
+def _revisit_misplaced(probe):
+    """一行可見文字(已剝行內程式碼)裡寫錯位置的回頭條件 → [位置…](空=沒有)。
+    每一處「REVISIT: 後面接 YYYY-MM-DD 或 [when-」都看:這行是 REVISIT 行時行首那一處是正牌的,不算;在一對引號裡面的
+    (全形「」『』“”,前面有開引號、到它之前還沒收、後面真的有收;半形 " 不認)是範例,不算(Projects/回頭條件寫法補齊_計劃〈做法〉1.1)。"""
+    hits = [m.start() for m in _REVISIT_ANY_RE.finditer(probe)]
+    if not hits:
+        return []
+    head = None
+    if _revisit_split(probe)[0] is not None:
+        s = probe.lstrip()
+        head = len(probe) - len(_REVISIT_MARK_RE.sub("", s, count=1))
+    inq = _revisit_quote_states(probe, hits)
+    return [i for i, q in zip(hits, inq) if i != head and not q]
+
+
+def _revisit_quote_states(probe, hits):
+    """每個位置(由小到大)在不在一對引號裡面 → [bool]:「」『』“” 看前面最後出現的是開還是收,而且後面要真的有對應的收引號
+    (沒收的落單引號不算)。半形 " 不認:它分不出開與收,落單的 5" 後面另有一對 "…" 時會把句中的回頭條件藏起來(代碼審 r1、r2
+    兩輪各補一種組合都還有洞,整類拿掉);英文引號的範例句用行內程式碼包起來。整行只掃一遍(一行四萬處原本要 40 秒)。"""
+    closer = {c: o for o, c in _REVISIT_QUOTES.items()}
+    last = {c: probe.rfind(c) for c in _REVISIT_QUOTES.values()}
+    open_, out, pos = dict.fromkeys(_REVISIT_QUOTES, False), [], 0
+    for i in hits:
+        for ch in probe[pos:i]:
+            if ch in open_:
+                open_[ch] = True
+            elif ch in closer:
+                open_[closer[ch]] = False
+        pos = i
+        out.append(any(v and last[_REVISIT_QUOTES[o]] > i for o, v in open_.items()))
+    return out
+
+
+def _revisit_dead_place(probe, reg):
+    """條件標記寫在不評估的地方:表格行或開頭欄位 summary 以外的欄,而且有條件標記。_probe_lines、第一層、Z 段的句中清單共用
+    (代碼審 r1 架構對齊席:原本三處各寫一份條件式)。"""
+    return (probe.lstrip().startswith("|") or reg not in ("body", "summary")) and bool(_PROBE_ANY_RE.search(probe))
+
+
+def _revisit_misplaced_lines(text):
+    """一篇筆記裡寫錯位置的回頭條件 → [(行號, 原文)];可見行(圍欄外、剝行內程式碼)逐行看,開頭欄位也算。只給 doctor Z 段用——
+    不併進 _probe_lines 的「寫在不評估的地方」(那份還有 Z 段既有那行與 drift scan 兩個讀者,設計審 r2)。"""
+    lines = text.split("\n")
+    regs = _notelines_regions(text)
+    out = []
+    for no, ln in _visible_lines(lines):
+        probe = _strip_inline_markup(ln)[0]
+        if _revisit_dead_place(probe, regs[no - 1]):
+            continue        # 已經算進 _probe_lines 的「寫在不評估的地方」,不重算(同第一層 _ns_revisit_violations 的不重報)
+        if _revisit_misplaced(probe):
+            out.append((no, ln.strip()))
+    return out
+
+
 def _revisit_lines(text):
     """一篇筆記的每一條回頭條件 → [(行號, 種類, 日期或 None, 摘要, 原文)];種類 date/cond/bad(同 _revisit_split)。
     剝程式碼區(_search_visible_lines)、餵剝過行內程式碼的那一版給 _revisit_split。doctor E5 與 set 把 Issue 結案時的列出
-    共用這一支(存量漂移改法 第 6 節);乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。"""
+    共用這一支(存量漂移改法 第 6 節);乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。
+    已寫合格結案標記的行不回(兩個呼叫端都要排除,不另加參數)。"""
     out = []
     for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
-        kind, rest = _revisit_split(_strip_inline_markup(raw)[0])
+        probe = _strip_inline_markup(raw)[0]
+        kind, rest = _revisit_split(probe)
         if kind is None:
             continue
+        if kind != "bad" and _revisit_closed(probe)["closed"]:
+            continue        # 合格結案的不回(E5 不唸、Issue 結案不列;回頭條件寫法補齊〈做法〉2.4)
         date, summ = None, ""
         if kind == "cond":
             date, summ = _probe_parse(rest)["by"], _PROBE_LEAD_RE.sub("", rest)
@@ -31784,7 +31902,7 @@ def _issue_close_revisits(env, rel, new_status):
     rows = _revisit_lines(text)
     if not rows:
         return
-    print(f"這篇 Issue 結案了,還留著 {len(rows)} 行回頭條件——要改成結案說明或刪掉(只列出、不擋):")
+    print(f"這篇 Issue 結案了,還留著 {len(rows)} 行回頭條件——要改成結案說明、刪掉,或在那一行加 [closed:日期 理由](只列出、不擋):")
     for no, _k, _d, _s, raw in rows:
         print(f"  · {_esc_clean(rel, 200)}:{no}  {_esc_clean(raw.strip(), 100)}")
 
@@ -31847,6 +31965,8 @@ def _probe_parse(rest):
             break
         pos = m.end()
         key, val = m.group(1), m.group(2).strip()
+        if key == "closed":
+            continue        # 結案標記只在這裡跳過(讓後面的 [by:] 照讀得到);驗與判在 _revisit_closed 一處
         if key == "by":
             if by is not None:
                 errs.append("期限寫了兩個")
@@ -31890,10 +32010,10 @@ def _probe_lines(text):
         table = probe.lstrip().startswith("|")
         if regs[i - 1] in ("body", "summary") and not table:
             kind, rest = _revisit_split(probe)
-            if kind == "cond":
-                out.append((i, ln.strip(), _probe_parse(rest)))
+            if kind == "cond" and not _revisit_closed(probe)["closed"]:
+                out.append((i, ln.strip(), _probe_parse(rest)))     # 合格結案的不抽(照 _retire_lines 跳過 superseded)
             continue
-        if _PROBE_ANY_RE.search(probe):
+        if _revisit_dead_place(probe, regs[i - 1]):
             dead.append((i, ln.strip(), "寫在表格行裡,不評估" if table else "寫在開頭欄位裡 summary 以外的欄,不評估"))
     return out, dead
 
@@ -32747,6 +32867,22 @@ def _drift_ack_text(text, lines, line, kind):
     return lines[line - 1].strip()
 
 
+def _drift_ack_line_err(rel, text, lines, line, kind):
+    """表態指到的那一行能不能表態 → 擋下的原因或 None。"""
+    if not (1 <= line <= len(lines)) or not lines[line - 1].strip():
+        return f"{rel} 沒有第 {line} 行,或那一行是空的"
+    if kind == "retire" and line not in _ns_summary_logical(text or ""):
+        # 判定給的原文是摘要條目接回續行的整條、行號是條目第一行;給續行或摘要區外的行號,記下的表態永遠對不上
+        # (撤除條件末輪遺留四項第 1 項:原本照記、回成功,下次推送照擋)
+        return (f"{rel} 第 {line} 行不是摘要裡一條的第一行——--kind retire 要給擋下訊息列的那個行號"
+                "(RULE 那一條的第一行,欄位寫在續行也一樣)")
+    probe = _strip_inline_markup(lines[line - 1])[0]
+    if kind == "probe" and _revisit_split(probe)[0] == "cond" and _revisit_closed(probe)["closed"]:
+        # 已結案的行不會被列成發現,這只擋手打錯行號;兩處各自靜音同一條會讓人搞不清是誰關的(回頭條件寫法補齊〈做法〉2.6)
+        return f"{rel} 第 {line} 行已經寫了結案標記,不用表態(要留著提醒就拿掉 [closed:…])"
+    return None
+
+
 def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
     """lumos drift ack <節點> <行號> --kind … --reason "…":表態「這行照留」。
     c2、c3 先確認那一行當下真的是這一種發現,記下當時連著的已收尾計劃(related);每筆都記遞增序號 seq(存量漂移改法 [S8])。
@@ -32761,14 +32897,9 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
         return _node_not_found(env, node, write_side=True)
     text = env_text(env, rel)
     lines = (text or "").split("\n")
-    if not (1 <= line <= len(lines)) or not lines[line - 1].strip():
-        print(f"擋下:{rel} 沒有第 {line} 行,或那一行是空的", file=sys.stderr)
-        return 2
-    if kind == "retire" and line not in _ns_summary_logical(text or ""):
-        # 判定給的原文是摘要條目接回續行的整條、行號是條目第一行;給續行或摘要區外的行號,記下的表態永遠對不上
-        # (撤除條件末輪遺留四項第 1 項:原本照記、回成功,下次推送照擋)
-        print(f"擋下:{rel} 第 {line} 行不是摘要裡一條的第一行——--kind retire 要給擋下訊息列的那個行號"
-              "(RULE 那一條的第一行,欄位寫在續行也一樣)", file=sys.stderr)
+    err = _drift_ack_line_err(rel, text, lines, line, kind)
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
         return 2
     root, vault_rel = _drift_vault_of(env)
     head = _drift_ack_heading(lines, line)
@@ -34837,16 +34968,26 @@ def _drift_doctor_lines(env):
     out = []
     # 乙:只讀筆記、不評估條件(要看哪些成立跑 drift scan)
     n_rows = n_noby = n_bad = n_dead = 0
+    mis = []
     for p in env.notes:
-        rows, dead = _probe_lines(env_text(env, p) or "")
+        txt = env_text(env, p) or ""
+        rows, dead = _probe_lines(txt)
         n_rows += len(rows)
         n_dead += len(dead)
         n_noby += sum(1 for _n, _t, pr in rows if pr["by"] is None)
         n_bad += sum(1 for _n, _t, pr in rows if pr["errs"])
+        mis += [(p, no) for no, _t in _revisit_misplaced_lines(txt)]
+    parts = []
     if n_rows or n_dead:
-        out.append(f"條件式回頭條件 {n_rows} 條(由 lumos drift scan 評估)"
-                   + (f";沒帶期限 {n_noby} 條" if n_noby else "") + (f";寫錯的 {n_bad} 條" if n_bad else "")
-                   + (f";寫在不評估的地方 {n_dead} 處" if n_dead else ""))
+        parts.append(f"條件式回頭條件 {n_rows} 條(由 lumos drift scan 評估)"
+                     + (f";沒帶期限 {n_noby} 條" if n_noby else "") + (f";寫錯的 {n_bad} 條" if n_bad else "")
+                     + (f";寫在不評估的地方 {n_dead} 處" if n_dead else ""))
+    if mis:
+        # 接在第一行、不另起一行:Z 段也受軟段 3 條上限,另起一行在 c1 到 c5 多時會被收掉(回頭條件寫法補齊〈做法〉1.3)
+        ex = ";".join(f"{_esc_clean(p[:-3], 80)}:{no}" for p, no in sorted(mis)[:3])
+        parts.append(f"寫在句中的 REVISIT {len(mis)} 行(例:{ex})——搬成獨立一行,要結案就在那一行加 [closed:日期 理由]")
+    if parts:
+        out.append(";".join(parts))
     for k in ("c1", "c2", "c3", "c4", "c5"):
         rows = [f for f in left if f["kind"] == k]
         nd = sum(1 for f in done if f["kind"] == k)

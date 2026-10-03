@@ -35874,7 +35874,7 @@ def t_doctor_revisit_reminder():
     r = run(v, "doctor")
     check("★E5 到期會唸:件數+逾天數+打卡指路★",
           "1 件回訪到期" in r.stdout and "逾 9 天" in r.stdout and "回頭看甲" in r.stdout
-          and "日期改下一次或刪行" in r.stdout, r.stdout[-800:])
+          and "日期改下一次、刪掉,或在那一行加 [closed:日期 理由]" in r.stdout, r.stdout[-800:])
     check("★紅釘②:壞日期=損毀計數印在 head(cap3 吞不掉;parse 不過永不到期)★",
           "1 行 REVISIT 日期格式壞損" in r.stdout
           and "壞損" in r.stdout.split("[E5]")[1].split("\n")[1], r.stdout[-800:])
@@ -55871,6 +55871,249 @@ def t_drift_when_probes_evaluate_and_trigger():
     _nh_commit(root, "新寫一條已成立的")
     rc, out = _dr(root, "check", "--diff", f"{b3}..HEAD")
     check("⑨新寫一條終點已經成立的條件式:擋", rc == 1 and "src/other.py" in out, out)
+
+
+def _rv_stage_shape(root):
+    """暫存全部、跑一次提交前的筆記形狀擋 → (rc, 輸出)。"""
+    import subprocess as sp
+    _nh_git(root, "add", "-A")
+    r = sp.run([sys.executable, GRAPHCTL, "note-shape", "--staged", "--repo", str(root)], capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def t_revisit_misplaced_blocks_new():
+    """[S1][S2][S4] 新寫的句中 REVISIT(句子後面、KEY: 前綴、星號、刪除線、核取方塊、表格列、開頭欄位欄名在前、
+    行首已是合法 REVISIT 後面再一條)提交時擋、報「回頭條件寫在句中」;獨立一行、開頭欄位清單項的行首形狀不報;
+    表格裡帶條件標記已報「條件寫在不評估的地方」的不重報;舊行尾補括號照報(整行層級不扣)。"""
+    print("t_revisit_misplaced_blocks_new")
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭")
+    _nh_commit(root, "base")
+    _nh_node(root, "A", body="開頭\nREVISIT:2026-10-05 獨立一行的")
+    rc, out = _rv_stage_shape(root)
+    check("①前提:獨立一行不擋", rc == 0 and "回頭條件寫在句中" not in out, out[-400:])
+    _nh_git(root, "reset", "-q")
+    cases = [("句子後面", "這裡承認風險。REVISIT:2026-10-05 回頭看", "body"),
+             ("星號", "★REVISIT:[when-file:a.py][by:2026-12-31] 回頭看★", "body"),
+             ("刪除線", "~~REVISIT:2026-10-05 不用了~~", "body"),
+             ("核取方塊", "- [ ] REVISIT:2026-10-05 回頭看", "body"),
+             ("表格列", "| 甲 | REVISIT:2026-10-05 回頭看 |", "body"),
+             ("一行兩條", "REVISIT:2026-10-05 先做 A;REVISIT:[when-file:a.py][by:2026-12-31] 再做 B", "body"),
+             ("KEY 前綴", "KEY:REVISIT:2026-10-05 回頭看", "summary"),
+             ("開頭欄位欄名在前", "why: 已知 REVISIT:2026-10-05 回頭看", "extra")]
+    for label, ln, where in cases:
+        kw = {"body": "開頭\n" + ln} if where == "body" else ({"summary": ln} if where == "summary" else {"extra": ln, "body": "開頭"})
+        _nh_node(root, "A", **kw)
+        rc, out = _rv_stage_shape(root)
+        check(f"②{label}:擋、報回頭條件寫在句中", rc == 1 and "回頭條件寫在句中" in out, (label, out[-500:]))
+        _nh_git(root, "reset", "-q")
+    _nh_node(root, "A", extra="followups:\n  - REVISIT:2026-10-05 x", body="開頭")
+    rc, out = _rv_stage_shape(root)
+    check("③開頭欄位清單項的行首形狀:不報句中", "回頭條件寫在句中" not in out, out[-500:])
+    _nh_git(root, "reset", "-q")
+    _nh_node(root, "A", body="開頭\n| REVISIT:[when-file:t.py][by:2099-01-01] | 表格 |")
+    rc, out = _rv_stage_shape(root)
+    check("④表格裡帶條件標記:只報條件寫在不評估的地方、不重報", out.count("條件寫在不評估的地方") == 1
+          and "回頭條件寫在句中" not in out, out[-500:])
+    _nh_git(root, "reset", "-q")
+    # S4:舊行就是句中 REVISIT,只在句尾補括號
+    old = "這裡承認風險 `src/a.py:3`。REVISIT:2026-10-05 回頭看"
+    root2 = _nh_repo()
+    _nh_node(root2, "B", body=old)
+    _nh_commit(root2, "old")
+    _nh_node(root2, "B", body=old + "(更正:2026-10-03 已改 [來源:人工])")
+    rc, out = _rv_stage_shape(root2)
+    check("⑤舊行尾補括號:行號引用照片段扣掉(配對成立)、句中 REVISIT 照報", rc == 1 and "回頭條件寫在句中" in out
+          and "程式行號引用" not in out, out[-500:])
+
+
+def t_revisit_misplaced_ignores_mentions():
+    """[S3] 只是提到這個字、行內程式碼裡、圍欄裡、在一對引號裡面的,不報。"""
+    print("t_revisit_misplaced_ignores_mentions")
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭")
+    _nh_commit(root, "base")
+    _nh_node(root, "A", body="開頭\n寫成 REVISIT 行就會被讀\n範例 `REVISIT:2026-01-01 x` 照寫\n```\n句子 REVISIT:2026-01-01 x\n```\n"
+                             "像「REVISIT:2027-01-01 x」這樣\n例如「例:REVISIT:2027-01-01 x」這樣\n他寫 “REVISIT:2027-01-01 x” 這樣")
+    rc, out = _rv_stage_shape(root)
+    check("①提到、行內程式碼、圍欄、引號裡:都不報", rc == 0 and "回頭條件寫在句中" not in out, out[-500:])
+    m = _load_lumos_inproc()
+    check("②前提:同一句拿掉引號就算句中", m._revisit_misplaced("例:REVISIT:2027-01-01 x") != [], "")
+
+
+def t_revisit_misplaced_review_r1():
+    """代碼審 r1:落單的引號(後面沒有收)不把後面的句中 REVISIT 算成範例;格式壞損的行同一行後面的句中 REVISIT 一次報完;
+    結案文法只在正文與摘要查(開頭欄位清單項寫錯的結案標記不報,跟日期與條件文法同範圍);Z 段說「行」。"""
+    print("t_revisit_misplaced_review_r1")
+    m = _load_lumos_inproc()
+    check("①落單的半形引號:後面的句中 REVISIT 照算", m._revisit_misplaced('長 5" 的管子。REVISIT:2026-10-05 x') != [], "")
+    check("②落單的開引號:後面的句中 REVISIT 照算", m._revisit_misplaced("「沒收的引號 REVISIT:2026-10-05 x") != [], "")
+    check("③前提:收好的全形引號裡照樣不算", m._revisit_misplaced("他寫 “REVISIT:2027-01-01 x” 這樣") == [], "")
+    check("③b 半形引號整類不認(分不出開收,代碼審 r2 兩席):落單 5 吋後面另有一對引號照算句中",
+          m._revisit_misplaced('長 5" 的管子。REVISIT:2026-10-05 x 他說 "好" 然後') != []
+          and m._revisit_misplaced('他寫 "REVISIT:2027-01-01 x" 這樣') != [], "")
+    v = m._ns_revisit_violations("REVISIT:2026-9-1 x;REVISIT:2026-10-05 y", "body", True)
+    check("④壞損行後面的句中 REVISIT 一次報完", {r for r, _f, _x in v} == {"回頭條件格式不合", "回頭條件寫在句中"}, v)
+    v = m._ns_revisit_violations("  - REVISIT:2026-10-05 x [closed:2026-13-45 好好好好]", "other", True)
+    check("⑤開頭欄位清單項的結案標記不查(同日期與條件文法的範圍)", v == [], v)
+    v = m._ns_revisit_violations("REVISIT:2026-10-05 x [closed:2026-13-45 好好好好]", "body", True)
+    check("⑥前提:正文照查", [r for r, _f, _x in v] == ["結案標記寫錯"], v)
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭\n承認。REVISIT:2026-10-05 a;REVISIT:2026-10-06 b")
+    _nh_commit(root, "x")
+    rd = run(root / "docs" / "kg-knowledge", "doctor")
+    check("⑦Z 段說「寫在句中的 REVISIT 1 行」", "寫在句中的 REVISIT 1 行" in rd.stdout, rd.stdout[-500:])
+
+
+def t_revisit_misplaced_linear():
+    """句中判定整行只掃一遍引號(代碼審前效能檢查:原本每一處都從行首重數,一行四萬處要 40 秒):十倍長的行耗時不到 30 倍,
+    取三次最快的壓掉機器抖動;前提:每一處都真的被判成句中。"""
+    print("t_revisit_misplaced_linear")
+    import time
+    m = _load_lumos_inproc()
+
+    def timed(n):
+        line = "文字「x」 REVISIT:2026-10-05 a " * n
+        t0 = time.perf_counter()
+        r = m._revisit_misplaced(line)
+        return time.perf_counter() - t0, len(r)
+    small, n1 = min(timed(2000) for _ in range(3))
+    big, n2 = min(timed(20000) for _ in range(3))
+    check("①前提:每一處都判成句中", n1 == 2000 and n2 == 20000, (n1, n2))
+    check("②十倍長的行耗時不到 30 倍", big < 30 * max(small, 1e-4), (small, big))
+
+
+def t_doctor_revisit_lists_misplaced():
+    """[S5] 存量的句中 REVISIT:doctor Z 段第一行帶「寫在句中的 REVISIT N 處」與前 3 筆、改法;既有「寫在不評估的地方」
+    的數不變;drift scan 的問題清單不變;什麼都沒有時 Z 段整段不印。"""
+    print("t_doctor_revisit_lists_misplaced")
+    import json as _j
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭")
+    _nh_commit(root, "base")
+    vault = root / "docs" / "kg-knowledge"
+    rd0 = run(vault, "doctor")
+    check("①前提:沒有任何回頭條件時 Z 段不印句中", "寫在句中的 REVISIT" not in rd0.stdout, rd0.stdout[-400:])
+    s0 = _j.loads(run(vault, "drift", "scan", "--json").stdout)
+    _nh_node(root, "A", body="開頭\n承認一件事。REVISIT:2026-10-05 回頭看\n| REVISIT:[when-file:t.py][by:2099-01-01] | 表格 |\n"
+                             "另一句 REVISIT:2026-11-01 也回頭")
+    _nh_commit(root, "存量")
+    rd = run(vault, "doctor")
+    z = [ln for ln in rd.stdout.split("\n") if "寫在句中的 REVISIT" in ln]
+    check("②Z 段帶句中 2 行與位置、改法", len(z) == 1 and "寫在句中的 REVISIT 2 行" in z[0] and "Systems/A:" in z[0]
+          and "[closed:日期 理由]" in z[0], rd.stdout[-800:])
+    check("③既有「寫在不評估的地方」只算表格那 1 處", "寫在不評估的地方 1 處" in rd.stdout, rd.stdout[-800:])
+    s1 = _j.loads(run(vault, "drift", "scan", "--json").stdout)
+    check("④drift scan 的問題清單只多表格那一筆、不多句中的", len(s1["problems"]) == len(s0["problems"]) + 1
+          and not any("句中" in x["why"] for x in s1["problems"]), s1["problems"])
+
+
+def t_revisit_closed_silences():
+    """[S6][S7] 合格的結案標記:日期式到期 E5 不唸、不算壞行(日期後第一個或行尾);寫錯的照唸;條件式已成立時推送判定與
+    drift scan 不列、夾在條件與 [by:] 中間 [by:] 照讀;同一個範圍裡拿掉結案標記會被點名「這次新寫…已經成立」。"""
+    print("t_revisit_closed_silences")
+    import datetime as _dt, json as _j
+    past = (_dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=5)).isoformat()
+    v = mkvault()
+    write(v, "Projects/結案甲_計劃.md", "type: project\ntags:\n  - type/project",
+          f"# 結案甲_計劃\nREVISIT:{past} 到期的沒結案\nREVISIT:{past} [closed:2026-10-03 已改用新閘道] 日期後第一個\n"
+          f"REVISIT:{past} 行尾結案 [closed:2026-10-03 已改用新閘道]\nREVISIT:{past} 寫錯的 [closed:2026-10-03 好]\n")
+    r = run(v, "doctor")
+    e5 = r.stdout.split("[E5]")[1].split("\n[")[0] if "[E5]" in r.stdout else ""
+    check("①合格結案的不唸、寫錯的照唸、沒結案的照唸", "2 件回訪到期" in e5 and "日期後第一個" not in e5 and "行尾結案" not in e5
+          and "寫錯的" in e5 and "到期的沒結案" in e5 and "壞損" not in e5, e5[:600])
+    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+    _nh_file(root, "src/other.py", "x = 1\n")
+    _nh_node(root, "Pay", summary="FLOW:a", body="開頭")
+    _nh_commit(root, "base")
+    b0 = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:a", body="開頭\nREVISIT:[when-file:src/other.py][closed:2026-10-03 已改用新閘道][by:2099-12-31] 夾在中間")
+    _nh_commit(root, "新寫已成立但結案")
+    rc, out = _dr(root, "check", "--diff", f"{b0}..HEAD")
+    check("②條件已成立、合格結案(夾在中間):推送不擋", rc == 0, out[-400:])
+    m = _load_lumos_inproc()
+    pr = m._probe_parse("[when-file:src/other.py][closed:2026-10-03 已改用新閘道][by:2099-12-31] 夾在中間")
+    check("③夾在中間時 [by:] 照讀得到", pr["by"] == "2099-12-31" and not pr["errs"], pr)
+    vault = root / "docs" / "kg-knowledge"
+    d = _j.loads(run(vault, "drift", "scan", "--json").stdout)
+    check("④drift scan 不列已結案的", not [f for f in d["findings"] if f["kind"] == "probe"], d["findings"])
+    b1 = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:a", body="開頭\nREVISIT:[when-file:src/other.py][by:2099-12-31] 夾在中間")
+    _nh_commit(root, "重新打開")
+    rc, out = _dr(root, "check", "--diff", f"{b1}..HEAD")
+    check("⑤拿掉結案標記(重新打開):被點名這次新寫已經成立", rc == 1 and "條件已經成立" in out, out[-400:])
+    rc0, out0 = _dr(root, "check", "--diff", f"{b0}..{b1}")
+    check("⑥對照:沒拿掉前同一段範圍不擋", rc0 == 0, out0[-300:])
+
+
+def t_revisit_closed_grammar():
+    """[S8][S11] 新寫的 REVISIT 行結案標記寫錯(日期壞、緊湊日期、理由不到 4 個實字、一行兩個)擋、報「結案標記寫錯」;
+    合格(日期後第一個、行尾)不擋;結案日期在未來不擋;緊貼 REVISIT: 當第一個東西報「回頭條件格式不合」;不是 REVISIT 行的
+    [closed: 不看;「已排除」行理由與結案理由用同一支實字計數。"""
+    print("t_revisit_closed_grammar")
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭")
+    _nh_commit(root, "base")
+    for label, ln, want in [("日期壞", "REVISIT:2026-10-05 x [closed:2026-13-45 已改用新閘道]", "結案標記寫錯"),
+                            ("緊湊日期", "REVISIT:2026-10-05 x [closed:20261003 已改用新閘道]", "結案標記寫錯"),
+                            ("理由不夠", "REVISIT:2026-10-05 x [closed:2026-10-03 好!!]", "結案標記寫錯"),
+                            ("一行兩個", "REVISIT:2026-10-05 [closed:2026-10-03 已改用新閘道] x [closed:2026-10-03 再寫一個理由]", "結案標記寫錯"),
+                            ("緊貼開頭", "REVISIT:[closed:2026-10-03 已改用新閘道] x", "回頭條件格式不合")]:
+        _nh_node(root, "A", body="開頭\n" + ln)
+        rc, out = _rv_stage_shape(root)
+        check(f"①{label}:擋、報{want}", rc == 1 and want in out, (label, out[-400:]))
+        _nh_git(root, "reset", "-q")
+    _nh_node(root, "A", body="開頭\nREVISIT:2026-10-05 [closed:2026-10-03 已改用新閘道] x\nREVISIT:2026-10-06 y [closed:2099-01-01 未來日期也收]\n"
+                             "REVISIT:[when-file:a.py][by:2099-12-31] z [closed:2026-10-03 已改用新閘道]\n一般句子 [closed: #123] 不看")
+    rc, out = _rv_stage_shape(root)
+    check("②合格(日期後第一個、行尾、條件式行尾)、未來日期、非 REVISIT 行:不擋", rc == 0, out[-500:])
+    m = _load_lumos_inproc()
+    check("③實字計數共用:「已排除」行照舊", m._excluded_line("已排除:金流:只讀筆記")[2] is True
+          and m._excluded_line("已排除:金流:a.b")[2] is False and m._real_chars("a,b c!d") == 4, "")
+    import inspect
+    check("④_excluded_line 呼叫共用的 _real_chars", "_real_chars(" in inspect.getsource(m._excluded_line), "")
+
+
+def t_revisit_closed_issue_listing():
+    """[S9][S10] Issue 改成結案值時列出的回頭條件不含已寫合格結案標記的那幾行,提示提到 [closed:日期 理由];
+    drift ack --kind probe 指到已結案的行拒絕。"""
+    print("t_revisit_closed_issue_listing")
+    v = mkvault()
+    (v / "Issues").mkdir()
+    write(v, "Issues/I.md", "type: issue\nstatus: open",
+          body="# I\nREVISIT:2099-01-01 還要回頭的\nREVISIT:2099-01-01 不用了 [closed:2026-10-03 已改用新閘道]\n")
+    r = run(v, "set", "Issues/I", "status", "done")
+    check("①只列沒結案的那一行、提示提到結案寫法", "還留著 1 行回頭條件" in r.stdout and "還要回頭的" in r.stdout
+          and "不用了" not in r.stdout and "[closed:日期 理由]" in r.stdout, r.stdout)
+    root = _nh_repo()
+    _nh_node(root, "A", body="REVISIT:[when-file:a.py][by:2099-12-31] 結案的 [closed:2026-10-03 已改用新閘道]\n"
+                             "REVISIT:[when-file:b.py][by:2099-12-31] 沒結案的")
+    _nh_commit(root, "c")
+    vault = root / "docs" / "kg-knowledge"
+    lines = (vault / "Systems" / "A.md").read_text(encoding="utf-8").split("\n")
+    n1 = next(i for i, ln in enumerate(lines, 1) if "結案的" in ln and "沒結案" not in ln)
+    n2 = next(i for i, ln in enumerate(lines, 1) if "沒結案的" in ln)
+    r = run(vault, "drift", "ack", "Systems/A", str(n1), "--kind", "probe", "--reason", "測試照留這一行")
+    check("②已結案的行:拒絕表態", r.returncode == 2 and "已經寫了結案標記" in (r.stdout + r.stderr), r.stdout + r.stderr)
+    r = run(vault, "drift", "ack", "Systems/A", str(n2), "--kind", "probe", "--reason", "測試照留這一行")
+    check("③前提:沒結案的行照常表態", r.returncode == 0, r.stdout + r.stderr)
+
+
+def t_note_shape_ledger_rules():
+    """[S12] 筆記形狀擋擋下的治理帳事件在 extra 帶 rules(按規則名各幾條),整行不超過 4 KB。"""
+    print("t_note_shape_ledger_rules")
+    import json as _j
+    root = _nh_repo()
+    _nh_node(root, "A", body="開頭")
+    _nh_commit(root, "base")
+    _nh_node(root, "A", body="開頭\n承認。REVISIT:2026-10-05 回頭看\n又一句。REVISIT:2026-10-06 回頭看\nREVISIT:2026-10-05 x [closed:2026-10-03 好]")
+    rc, _out = _rv_stage_shape(root)
+    gl = root / "docs" / ".governance-log.jsonl"
+    evs = [_j.loads(ln) for ln in gl.read_text(encoding="utf-8").splitlines() if ln.strip()] if gl.exists() else []
+    ev = [e for e in evs if e.get("gate") == "note-shape" and e.get("kind") == "blocked"]
+    e = ev[-1] if ev else {}
+    check("①擋下事件帶 rules 規則別計數", rc == 1 and e.get("rules") == {"回頭條件寫在句中": 2, "結案標記寫錯": 1}, e)
+    check("②整行不超過 4 KB", len((_j.dumps(e, ensure_ascii=False) + "\n").encode()) <= 4096, "")
 
 
 def t_note_shape_revisit_needs_date_or_probe():
