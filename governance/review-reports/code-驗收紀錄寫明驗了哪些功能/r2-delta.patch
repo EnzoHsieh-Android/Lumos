@@ -1,0 +1,388 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index e05f6fa3..82ce56b0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -797,21 +797,22 @@ def _verification_system_targets(env, rel, n):
+         return None
+     if "system_refs" not in n.fields:
+         got = set()
+         for t in n.targets:
+             d = env.resolve(t)
+             if d and d.startswith("Systems/"):
+                 got.add(d)
+         return False, got, []
+     if "system_refs" in n.block_keys:
+         return True, set(), [("system_refs: |", "區塊寫法讀不出清單——改成一項一行的 - \"[[Systems/X]]\"")]
+-    items = as_list(n.fields.get("system_refs"))
++    items = [x for x in as_list(n.fields.get("system_refs"))
++             if str(x).strip() not in ("", "null", "~") and not str(x).strip().startswith("#")]   # 這幾種是「什麼都沒寫」(代碼審 r1 通才席 F3)
+     got, bad = set(), []
+     for it in items:
+         dest, why = _system_ref_item(env, it)
+         if dest:
+             got.add(dest)
+         else:
+             bad.append((str(it).strip() or "(空字串)", why))
+     if not items:
+         bad.append(("system_refs", "讀不出任何一項——空的,或清單項沒縮排"))
+     return True, got, bad
+@@ -865,28 +866,27 @@ def build_typed_index(env):
+ # ═══════════════════════ doctor ═══════════════════════
+ 
+ def _stem_hit(stem, text):
+     """stem 是否在 text 中作為「整詞」出現。ASCII stem 用詞界(re.ASCII,避 api 命中 pos_api_auth);
+     CJK 無詞界 → 子字串比對,靠呼叫端的前綴抑制處理重疊(點數 vs 點數商城)。"""
+     if stem.isascii():
+         return re.search(r"\b" + re.escape(stem) + r"\b", text, re.ASCII) is not None
+     return stem in text
+ 
+ 
+-def _suggest_systems_for_orphan(env, rel, n):
++def _suggest_systems_for_orphan(env, rel, n, vt=None):
+     """為 orphan Verification 推薦『最可能該掛哪個 Systems』(非 auto-fix,供人確認)。
+     線索強度:本篇正文連向 Systems(3)> 經 plan_refs 計劃連到(2)> feature 提到 stem(1)。
+     回傳 [(sys_rel, score, reason), ...] 依 (score, stem 長度) 降序(同分時更具體的 stem 優先)。"""
+-    r = _verification_system_targets(env, rel, n)
+-    if r is not None and r[0]:      # 有宣告:只推它列的功能(Projects/驗收紀錄寫明驗了哪些功能_計劃〈做法〉4)
+-        return sorted(((s_, 3, "本篇 system_refs 宣告(verified_by 未同步 → 可 sync-verified-by)") for s_ in r[1]),
+-                      key=lambda x: -len(env.notes[x[0]].stem or ""))
++    r = vt if vt is not None else _verification_system_targets(env, rel, n)
++    if r is not None and r[0]:      # 有宣告:只推它列的功能,依路徑排、順序固定(Projects/驗收紀錄寫明驗了哪些功能_計劃〈做法〉4)
++        return [(s_, 3, "本篇 system_refs 宣告(verified_by 未同步 → 可 sync-verified-by)") for s_ in sorted(r[1])]
+     cands = {}   # sys_rel -> (score, reason)
+ 
+     def add(sys_rel, score, reason):
+         if sys_rel in env.notes and (sys_rel not in cands or score > cands[sys_rel][0]):
+             cands[sys_rel] = (score, reason)
+ 
+     for t in n.targets:                                  # 1) 本篇正文連向的 Systems
+         d = env.resolve(t)
+         if d and d.startswith("Systems/"):
+             add(d, 3, "本篇正文連向(verified_by 未同步 → 可 sync-verified-by)")
+@@ -1425,33 +1425,37 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     print()
+     issues = 0
+     gov_events = []          # 本輪 gate findings → governance-log(--ci 才寫)
+ 
+     def section(idx, title):
+         print(f"{C['B']}[{idx}]{C['X']} {title}")
+ 
+     def ok(msg):
+         print(f"  {C['G']}✓{C['X']} {msg}")
+ 
+-    def warn(lines, head, advice=None):
++    def warn(lines, head, advice=None, cap=None):
++        """cap:畫面最多印幾項(其餘一行「另 N 項」),問題數照實算全部——要封頂又要計數的段用它,不在呼叫端自己補差額。"""
+         nonlocal issues
+         # ★空清單也是一段提醒★:Check F 這種「沒有逐條、只有一句」的走 warn([]),issues 加 0,
+         # 只數 warn_soft 會漏掉它(2026-09-06 全 repo 審視:收尾行說 0 issues 蓋掉七段警告)
+         if not lines:
+             # 只有標題、沒有逐條的那種提醒(例如「這個 repo 沒接 linter」):它本身就是一條,
+             # 不然收尾行會出現「1 段、共 0 條」這種讀不通的話(r1 外家席)
+             _soft["segs"] += 1
+             _soft["lines"] += 1
+             _soft["heads"].append(head)
+         print(f"  {C['Y']}⚠{C['X']} {head}")
+-        for l in lines:
++        shown = list(lines) if cap is None else list(lines)[:cap]
++        for l in shown:
+             print(f"      • {l}")
++        if len(lines) > len(shown):
++            print(f"      … 另 {len(lines) - len(shown)} 項")
+         if advice:
+             print(f"  {C['B']}建議動作{C['X']}: {advice}")
+         issues += len(lines)
+ 
+     _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+     _SOFT_CAP = 3
+     # 收尾行要講「還有幾段提醒」——不改 rc、不改軟硬分級,只是別讓結論行比正文樂觀
+     _soft = {"segs": len(_top_soft), "lines": len(_top_soft), "heads": list(_top_soft)}
+ 
+     def warn_soft(lines, head, advice=None):
+@@ -1487,31 +1491,32 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     # 再被這裡唸=刀子咬尾巴;作廢=該遺忘無事可辦(stale/fail 不豁免:待重驗,orphan 提醒仍有用)。
+     orphans = [rel for rel in notes
+                if rel.startswith("Verification/") and incoming[rel] == 0
+                and _verification_status(env, rel) != "superseded"]
+     if not orphans:
+         ok("每份驗證紀錄都有被引用")
+     elif suggest:
+         print(f"  {C['Y']}⚠{C['X']} 發現 {len(orphans)} 個 Verification 沒任何 incoming link(附推薦掛載 Systems):")
+         for o in sorted(orphans):
+             print(f"      • {o}")
+-            sug = _suggest_systems_for_orphan(env, o, notes[o])
+-            _vt = _verification_system_targets(env, o, notes[o])
++            _vt = _verification_system_targets(env, o, notes[o])   # 只解析一次,傳進推薦(代碼審 r1 架構對齊席 F3)
+             if _vt is not None and _vt[0] and not _vt[1]:
+                 print("          ↳ (system_refs 全寫壞,先照 doctor 3/4 修)")
+                 continue
++            sug = _suggest_systems_for_orphan(env, o, notes[o], vt=_vt)
++            _cap = len(sug) if (_vt is not None and _vt[0]) else 3   # 宣告的全列:它們不是「較弱線索」
+             if not sug:
+                 print("          ↳ (feature/plan_refs/連結皆無線索 → 人工判斷)")
+-            for sys_rel, _sc, reason in sug[:3]:
++            for sys_rel, _sc, reason in sug[:_cap]:
+                 print(f"          ↳ 推薦 {sys_rel}  [{reason}]")
+-            if len(sug) > 3:
+-                print(f"          ↳ (另有 {len(sug) - 3} 個較弱線索略過)")
++            if len(sug) > _cap:
++                print(f"          ↳ (另有 {len(sug) - _cap} 個較弱線索略過)")
+         issues += len(orphans)
+         print(f"  {C['B']}建議動作{C['X']}: 確認後 `lumos append <Systems> verified_by \"[[<本篇>]]\"`"
+               ";若推薦理由是「本篇正文連向」(verified_by 漏寫)→ `lumos sync-verified-by` 可批次補。")
+     else:
+         warn(sorted(orphans), f"有 {len(orphans)} 份驗證紀錄沒被任何筆記引用(等於沒人找得到):",
+              "找到它驗證的 Systems 並補進 verified_by(`--suggest` 看推薦掛載目標)")
+     print()
+ 
+     # ── ★未閉合 frontmatter(2026-08-03 code-loop r4 抓到的既有 major)★ ──
+     # `split_frontmatter` 假設 frontmatter 成對:少一個收尾 `---` 就回 (None, 整份檔),
+@@ -1584,32 +1589,32 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+             missing.append(f"{sys_rel} 漏: {' | '.join(missed)}")
+     # 功能那側多掛:有宣告、沒寫壞項的紀錄沒列這個功能,功能卻掛著它(只提醒;只看 Systems,計劃掛 verified_by 是既有做法)
+     sr_extra = []
+     for sys_rel, sn in sorted(notes.items()):
+         if not sys_rel.startswith("Systems/"):
+             continue
+         for a in as_list(sn.fields.get("verified_by")):
+             vrel = resolve(link_target(a))
+             dec = sr_declared.get(vrel)
+             if dec and not dec[1] and sys_rel not in dec[0]:
+-                sr_extra.append(f"{sys_rel} 掛了 [[{vrel[:-3]}]],但那份的 system_refs 沒列它——"
+-                                f"改法:lumos remove {sys_rel[:-3]} verified_by \"{a}\",或把它補進那份的 system_refs")
++                # 照貼的改法照 _drift_sh 加引號(代碼審 r1 通才席 F1:登記裡藏 $(…) 照貼會執行、檔名有空白會失敗)
++                sr_extra.append(_esc_clean(f"{sys_rel} 掛了 [[{vrel[:-3]}]],但那份的 system_refs 沒列它——"
++                                           f"改法:lumos remove {_drift_sh(sys_rel[:-3])} verified_by {_drift_sh(a)}"
++                                           ",或把它補進那份的 system_refs", _DOCTOR_LINE_MAX))
+     if not (missing or sr_bad or sr_extra):
+         ok("每份驗證紀錄都掛到了它驗證的功能上")
+     if missing:
+         warn(missing, f"有 {len(missing)} 篇功能筆記沒反向登記它的驗證紀錄(verified_by 漏寫):",
+              "對每個 Systems 補上漏寫的 verified_by")
+-    if sr_bad:      # 照 4/4 對 plan_refs 斷鏈自己報的先例;畫面封頂 20 項,問題數照實算全部
+-        _shown = sr_bad[:20] + ([f"…另 {len(sr_bad) - 20} 項"] if len(sr_bad) > 20 else [])
+-        warn(_shown, f"有 {len(sr_bad)} 項 system_refs 寫壞了(驗收紀錄宣告了驗哪些功能,但這幾項讀不出來;不會默默當成沒驗):",
+-             "改法:每項一行、整項只寫一個指到功能筆記的 [[Systems/X]];寫了路徑的要跟檔案路徑完全一致")
+-        issues += len(sr_bad) - len(_shown)
++    if sr_bad:      # 照 4/4 對 plan_refs 斷鏈自己報的先例;畫面封頂 20 項(warn 的 cap),問題數照實算全部
++        warn(sr_bad, f"有 {len(sr_bad)} 項 system_refs 寫壞了(驗收紀錄宣告了驗哪些功能,但這幾項讀不出來;不會默默當成沒驗):",
++             "改法:每項一行、整項只寫一個指到功能筆記的 [[Systems/X]];寫了路徑的要跟檔案路徑完全一致", cap=20)
+     if sr_extra:
+         warn_soft(sr_extra, f"有 {len(sr_extra)} 篇功能筆記多掛了沒宣告它的驗收紀錄(不計入問題數):",
+                   "確認那份紀錄真的沒驗它就拿掉這條 verified_by;真的有驗就補進紀錄的 system_refs")
+     print()
+ 
+     section("4/4", "計劃結案之後又有新驗證,計劃本身有沒有跟著更新")
+     chain = []
+     for rel, n in notes.items():
+         if not rel.startswith("Verification/"):
+             continue
+@@ -16496,21 +16501,21 @@ def cmd_stale(env, match=None, candidate=False, legacy=False):
+                                + _conds(n.fields.get("revalidate_when"))) if match in c]
+             if hit:
+                 rows.append(f"{rel} [{status_of(env, rel) or 'no-status'}]{arch}")
+                 rows += [f"    ↳ {first_line(h, 90)}" for h in hit]
+         print("\n".join(rows) if rows else "無命中")
+         return 0
+     # bare 模式:風險加權排序([S2][S3] 中心性重驗排程_計劃;--legacy 保字母序=舊行為)
+     import datetime
+     import math
+     cands = [(rel, n) for rel, n in sorted(env.notes.items())
+-             if rel.startswith("Verification/") and status_of(env, rel) == "stale"]
++             if rel.startswith("Verification/") and _verification_status(env, rel) == "stale"]   # 不分大小寫,跟 doctor 同一支
+     if not cands:
+         print("無 status:stale 的驗證")
+         return 0
+     if legacy:
+         for rel, _n in cands:
+             arch = " [archived]" if "/Archive/" in rel else ""
+             print(f"{rel} [stale]{arch}")
+         return 0
+     pct = _hazen_percentile(_graph_pagerank(env))
+     idx = build_typed_index(env)
+@@ -44858,21 +44863,21 @@ def main():
+     p.add_argument("--format", choices=("mermaid", "dot", "html"), default="mermaid")
+     p.add_argument("--folders", nargs="+", default=["Systems", "Projects", "Issues", "MOC"])
+     p.add_argument("--output", default="graph.html", help="html 輸出檔(預設 graph.html)")
+     p.add_argument("--standalone", action="store_true", help="html 內聯 cytoscape/marked(去 CDN,離線/防火牆可開)")
+ 
+     # T1 寫側(行級手術,寫後自驗 atomic)
+     p = sub.add_parser("set", help="改純量欄位(status/updated/created/type);valid_under/revalidate_when 整欄換掉(可給多個值)")
+     p.add_argument("note")
+     p.add_argument("key")
+     p.add_argument("value", nargs="+")
+-    p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/related/tags)")
++    p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/system_refs/related/tags)")
+     p.add_argument("note")
+     p.add_argument("key")
+     p.add_argument("value")
+     p = sub.add_parser("drift-history",
+                        help="沿 git 歷史重放符號存在性,量這份圖譜有沒有 drift 規律(每份圖譜自己量)")
+     p.add_argument("--every", type=int, default=60, help="每 N 個圖譜 commit 取樣一次(預設 60)")
+     p.add_argument("--limit", type=int, default=0, help="只看最後 N 個取樣點(0=全部)")
+     p.add_argument("--json", action="store_true", dest="dh_json")
+     p = sub.add_parser("remove",
+                        help="list 欄位移除(append 逆操作;清死背書/降格後的 core_refs。不命中 rc=2);"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e8af3489..f791c730 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -66018,21 +66018,26 @@ def t_doctor_check3_system_refs_bad_entry():
+     翻紅釘:寫壞的項不報 → ①②紅;封頂時問題數照印出行數算 → ④紅。"""
+     import re
+     cases = [("空值", "system_refs:", "讀不出任何一項"),
+              ("空清單", "system_refs: []", "讀不出任何一項"),
+              ("多寫一句", 'system_refs:\n  - "[[Systems/A]] 主要"', "不是單一連結"),
+              ("純文字路徑", "system_refs:\n  - Systems/A", "不是單一連結"),
+              ("找不到", 'system_refs:\n  - "[[Systems/Nope]]"', "找不到這篇"),
+              ("路徑大小寫錯", 'system_refs:\n  - "[[systems/A]]"', "找不到這篇"),
+              ("不是功能筆記", 'system_refs:\n  - "[[Projects/P]]"', "不是功能筆記"),
+              ("空的項", 'system_refs:\n  - "[[#x]]"', "空的項"),
+-             ("區塊寫法", "system_refs: |-\n  [[Systems/A]]", "區塊寫法")]
++             ("區塊寫法", "system_refs: |-\n  [[Systems/A]]", "區塊寫法"),
++             ("清單項沒縮排", 'system_refs:\n- "[[Systems/A]]"', "讀不出任何一項"),
++             ("一行多個連結", 'system_refs: "[[Systems/A]], [[Systems/B]]"', "一行寫了多個連結"),
++             ("null", "system_refs: null", "讀不出任何一項"),
++             ("波浪號", "system_refs: ~", "讀不出任何一項"),
++             ("只有註解", "system_refs: # 待補", "讀不出任何一項")]
+     for label, fm, why in cases:
+         v = _sr_vault()
+         write(v, "Verification/V.md", f"type: verification\nstatus: pass\n{fm}", body="# V\n見 [[Systems/B]]\n")
+         sec = _sr_check3(v)
+         check(f"①{label}:列在寫壞了標題下", "system_refs 寫壞了" in sec and why in sec and "Systems/B.md 漏" not in sec, sec[-600:])
+     v = _sr_vault()
+     write(v, "Systems/A2.md", "type: system\nstatus: done", body="# A2\n")
+     write(v, "Projects/A2.md", "type: project\nstatus: doing", body="# A2\n")
+     write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[A2]]"', body="# V\n")
+     sec = _sr_check3(v)
+@@ -66083,21 +66088,21 @@ def t_doctor_check3_system_refs_extra_backlink():
+     """[S6] 功能掛了有宣告、沒寫壞項的紀錄,而那份沒列它 → 只提醒不計問題數;掛在計劃上、或紀錄有寫壞項時不唸。"""
+     import re
+     v = _sr_vault()
+     write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"', body="# V\n")
+     write(v, "Systems/A.md", 'type: system\nstatus: done\nverified_by:\n  - "[[Verification/V]]"', body="# A\n")
+     write(v, "Systems/B.md", 'type: system\nstatus: done\nverified_by:\n  - "[[Verification/V]]"', body="# B\n")
+     write(v, "Projects/P.md", 'type: project\nstatus: doing\nverified_by:\n  - "[[Verification/V]]"', body="# P\n")
+     r0 = run(v, "doctor")
+     sec = _sr_check3(v)
+     check("①B 多掛:只提醒、給 remove 改法;P 不唸", "多掛了沒宣告它的驗收紀錄" in sec and "Systems/B.md" in sec
+-          and 'lumos remove Systems/B verified_by "[[Verification/V]]"' in sec and "Projects/P.md" not in sec, sec[-800:])
++          and "lumos remove Systems/B verified_by '[[Verification/V]]'" in sec and "Projects/P.md" not in sec, sec[-800:])
+     write(v, "Systems/B.md", "type: system\nstatus: done", body="# B\n")
+     r1 = run(v, "doctor")
+     m0, m1 = re.search(r"(\d+) (?:個 )?issue", r0.stdout + r0.stderr), re.search(r"(\d+) (?:個 )?issue", r1.stdout + r1.stderr)
+     check("②多掛不計問題數", m0 and m1 and m0.group(1) == m1.group(1), f"{m0 and m0.group(0)} {m1 and m1.group(0)}")
+     write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"\n  - "[[Systems/Nope]]"', body="# V\n")
+     write(v, "Systems/B.md", 'type: system\nstatus: done\nverified_by:\n  - "[[Verification/V]]"', body="# B\n")
+     sec = _sr_check3(v)
+     check("③紀錄有寫壞項時不唸多掛", "多掛了沒宣告它的驗收紀錄" not in sec, sec[-600:])
+ 
+ 
+@@ -66125,22 +66130,23 @@ def t_new_verification_no_auto_system_refs():
+     check("②正文補的 B 照舊被要求反向登記", "Systems/B.md 漏" in sec, sec[-600:])
+     check("③建檔提示講 system_refs 與正文補了要自己同步", "system_refs" in r.stdout and "同步" in r.stdout, r.stdout)
+ 
+ 
+ def t_system_refs_registered_field():
+     """[S9] append/remove 可用、lint 不唸欄位名;remove 拿掉最後一項後回到從正文推。"""
+     v = _sr_vault()
+     write(v, "Verification/V.md", "type: verification\nstatus: pass", body="# V\n見 [[Systems/B]]\n")
+     r = run(v, "append", "Verification/V", "system_refs", "[[Systems/A]]")
+     check("①append 成功", r.returncode == 0 and "system_refs" in read(v / "Verification" / "V.md"), r.stdout + r.stderr)
+-    r = run(v, "lint", "Verification/V")
+-    check("②lint 不把它當打錯的欄位名", "system_refs" not in (r.stdout + r.stderr), r.stdout + r.stderr)
++    write(v, "Verification/L.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"', body="# L\n")
++    r = run(v, "lint", "Verification/L")
++    check("②lint 不把它當打錯的欄位名(直接寫進檔、不靠 append 成功)", "system_refs" not in (r.stdout + r.stderr), r.stdout + r.stderr)
+     sec = _sr_check3(v)
+     check("③宣告後指路的 B 不算漏", "Systems/B.md 漏" not in sec, sec[-600:])
+     r = run(v, "remove", "Verification/V", "system_refs", "[[Systems/A]]")
+     sec = _sr_check3(v)
+     check("④remove 拿掉最後一項後回到從正文推", r.returncode == 0 and "Systems/B.md 漏" in sec, (r.stdout + r.stderr)[-300:] + sec[-400:])
+ 
+ 
+ def t_verification_status_case_insensitive():
+     """[S10] stale/fail/superseded 不分大小寫、前後空白:3/4、E1、sync、孤兒清單照各自原本規則處理。"""
+     v = _sr_vault()
+@@ -66151,20 +66157,24 @@ def t_verification_status_case_insensitive():
+     check("②sync 跳過 Stale", "Systems/A.md" not in r.stdout, r.stdout)
+     write(v, "Systems/A.md", 'type: system\nstatus: done\nverified_by:\n  - "[[Verification/V]]"', body="# A\n")
+     r = run(v, "doctor")
+     o = r.stdout + r.stderr
+     check("③E1 認得 Stale 是失效背書", "失效背書" in o and "Systems/A.md" in o[o.find("[E1]"):], o[o.find("[E1]"):][:500])
+     v = _sr_vault()
+     write(v, "Verification/W.md", "type: verification\nstatus: Superseded", body="# W\n")
+     r = run(v, "doctor")
+     o = r.stdout + r.stderr
+     check("④孤兒清單豁免 Superseded", "Verification/W.md" not in o[o.find("[1/4]"):o.find("[1.5/4]")], o[o.find("[1/4]"):][:400])
++    v = _sr_vault()
++    write(v, "Verification/S.md", "type: verification\nstatus: Stale\ndate: 2026-01-01", body="# S\n")
++    r = run(v, "stale")
++    check("⑤lumos stale 清單也認得 Stale(代碼審 r1 架構對齊席 F1)", "Verification/S" in r.stdout and "無 status:stale" not in r.stdout, (r.stdout + r.stderr)[-400:])
+ 
+ 
+ def t_doctor_orphan_suggest_system_refs():
+     """[S11] 孤兒紀錄有宣告且有合格項 → 只推宣告的;全寫壞 → 不推薦、叫人先修;沒宣告 → 照原本。"""
+     v = _sr_vault()
+     write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"', body="# V\n見 [[Systems/B]]\n")
+     r = run(v, "doctor", "--suggest")
+     o = r.stdout + r.stderr
+     sec = o[o.find("[1/4]"):o.find("[1.5/4]")]
+     check("①只推宣告的 A、理由寫 system_refs", "推薦 Systems/A.md" in sec and "推薦 Systems/B.md" not in sec and "system_refs 宣告" in sec, sec)
+@@ -66173,12 +66183,56 @@ def t_doctor_orphan_suggest_system_refs():
+     o = r.stdout + r.stderr
+     sec = o[o.find("[1/4]"):o.find("[1.5/4]")]
+     check("②全寫壞:不推薦、叫人先修", "system_refs 全寫壞" in sec and "推薦 Systems/B.md" not in sec, sec)
+     write(v, "Verification/V.md", "type: verification\nstatus: pass", body="# V\n見 [[Systems/B]]\n")
+     r = run(v, "doctor", "--suggest")
+     o = r.stdout + r.stderr
+     sec = o[o.find("[1/4]"):o.find("[1.5/4]")]
+     check("③沒宣告:照原本推正文連到的 B", "推薦 Systems/B.md" in sec, sec)
+ 
+ 
++
++def t_doctor_check3_extra_hint_shell_quoted():
++    """代碼審 r1 通才席 F1:「多掛」提醒印的 lumos remove 改法要照 _drift_sh 加 shell 引號、清控制字元——
++    登記裡藏 $(…) 照貼不執行;功能檔名有空白照貼不失敗。翻紅釘:改法字串不加引號 → ①②紅。"""
++    import subprocess as sp
++    v = _sr_vault()
++    write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"', body="# V\n")
++    write(v, "Systems/My B.md", 'type: system\nstatus: done\nverified_by:\n  - "[[Verification/V|x$(touch PWNED)]]"', body="# B\n")
++    sec = _sr_check3(v)
++    line = next((l for l in sec.splitlines() if "lumos remove" in l), "")
++    cmd = line[line.find("lumos remove"):]
++    cmd = cmd[:cmd.find(",或把它補進")] if ",或把它補進" in cmd else cmd
++    work = Path(tempfile.mkdtemp(prefix="gctl-sr-q-"))
++    sp.run(["bash", "-c", "lumos() { printf '%s\\n' \"$@\" > args.txt; }; " + cmd], cwd=str(work), capture_output=True, text=True)
++    check("①藏 $(…) 的登記:照貼不會執行", not (work / "PWNED").exists() and cmd, cmd)
++    args = (work / "args.txt").read_text(encoding="utf-8").splitlines() if (work / "args.txt").exists() else []
++    check("②檔名有空白:照貼後是三個完整參數", args[:2] == ["remove", "Systems/My B"] and len(args) == 4, str(args))
++
++
++def t_doctor_orphan_suggest_declared_all():
++    """代碼審 r1 通才席 F2:孤兒紀錄宣告超過 3 項時全部列出、順序固定(不隨雜湊),不說成「較弱線索」。"""
++    v = _sr_vault()
++    for nm in ("C1", "C2", "C3", "C4", "C5"):
++        write(v, f"Systems/{nm}.md", "type: system\nstatus: done", body=f"# {nm}\n")
++    refs = "\n".join(f'  - "[[Systems/C{i}]]"' for i in (5, 3, 1, 4, 2))
++    write(v, "Verification/V.md", f"type: verification\nstatus: pass\nsystem_refs:\n{refs}", body="# V\n")
++    outs = set()
++    for seed in ("0", "1", "2", "3"):
++        r = sp_run_env(v, {"PYTHONHASHSEED": seed}, "doctor", "--suggest")
++        o = r.stdout + r.stderr
++        sec = o[o.find("[1/4]"):o.find("[1.5/4]")]
++        outs.add(tuple(l.strip() for l in sec.splitlines() if "↳" in l))
++    one = next(iter(outs))
++    check("①五項全列、不說較弱線索", sum("↳ 推薦" in l for l in one) == 5 and not any("較弱線索" in l for l in one), str(one))
++    check("②換雜湊種子順序不變", len(outs) == 1, str(outs))
++
++
++def sp_run_env(vault, extra_env, *args):
++    import subprocess as sp
++    e = dict(_os_k2.environ)
++    e.update(extra_env)
++    return sp.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args], capture_output=True, text=True, env=e)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

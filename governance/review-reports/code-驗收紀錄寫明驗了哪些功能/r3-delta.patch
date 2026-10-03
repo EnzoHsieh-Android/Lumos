@@ -1,0 +1,173 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 82ce56b0..eed529bb 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -765,22 +765,30 @@ def _typed_link_target(env, item):
+         cand = tt + ".md"
+         return ("ok", (cand, t)) if cand in env.notes else ("ghost", t)
+     cands = env.by_stem.get(tt.lower(), [])
+     if len(cands) == 1:
+         return "ok", (cands[0], t)
+     if not cands:
+         return "ghost", t
+     return "ambiguous", (t, sorted(cands))
+ 
+ 
++def _system_ref_blank(x):
++    """system_refs 一項是不是「什麼都沒寫」:空字串、null、~、只有註解(代碼審 r1 通才席 F3)。"""
++    x = str(x).strip()
++    return x in ("", "null", "~") or x.startswith("#")
++
++
+ def _system_ref_item(env, item):
+     """system_refs 的一項 → (Systems rel, None) 或 (None, 原因與改法);判法就是具名欄位的 _typed_link_target,只多「要落在 Systems」。"""
++    if _system_ref_blank(item):
++        return None, "空的項——拿掉,或寫成 [[Systems/X]]"
+     kind, val = _typed_link_target(env, item)
+     raw = str(item).strip()
+     if kind == "ok":
+         return (val[0], None) if val[0].startswith("Systems/") else (None, f"指到的 {val[0]} 不是功能筆記(Systems/)")
+     if kind == "skip":
+         return None, "空的項——拿掉,或寫成 [[Systems/X]]"
+     if kind == "scalar":
+         return None, ("一行寫了多個連結——拆成一項一行" if raw.count("[[") > 1
+                       else "不是單一連結(多寫了字、純文字路徑或括號不對)——整項只寫 [[Systems/X]]")
+     if kind == "ghost":
+@@ -797,22 +805,22 @@ def _verification_system_targets(env, rel, n):
+         return None
+     if "system_refs" not in n.fields:
+         got = set()
+         for t in n.targets:
+             d = env.resolve(t)
+             if d and d.startswith("Systems/"):
+                 got.add(d)
+         return False, got, []
+     if "system_refs" in n.block_keys:
+         return True, set(), [("system_refs: |", "區塊寫法讀不出清單——改成一項一行的 - \"[[Systems/X]]\"")]
+-    items = [x for x in as_list(n.fields.get("system_refs"))
+-             if str(x).strip() not in ("", "null", "~") and not str(x).strip().startswith("#")]   # 這幾種是「什麼都沒寫」(代碼審 r1 通才席 F3)
++    raw_items = as_list(n.fields.get("system_refs"))
++    items = raw_items if any(not _system_ref_blank(x) for x in raw_items) else []   # 全是空的才算「讀不出任何一項」;混在好項裡的照報空的項(r2 通才席)
+     got, bad = set(), []
+     for it in items:
+         dest, why = _system_ref_item(env, it)
+         if dest:
+             got.add(dest)
+         else:
+             bad.append((str(it).strip() or "(空字串)", why))
+     if not items:
+         bad.append(("system_refs", "讀不出任何一項——空的,或清單項沒縮排"))
+     return True, got, bad
+@@ -1437,25 +1445,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         nonlocal issues
+         # ★空清單也是一段提醒★:Check F 這種「沒有逐條、只有一句」的走 warn([]),issues 加 0,
+         # 只數 warn_soft 會漏掉它(2026-09-06 全 repo 審視:收尾行說 0 issues 蓋掉七段警告)
+         if not lines:
+             # 只有標題、沒有逐條的那種提醒(例如「這個 repo 沒接 linter」):它本身就是一條,
+             # 不然收尾行會出現「1 段、共 0 條」這種讀不通的話(r1 外家席)
+             _soft["segs"] += 1
+             _soft["lines"] += 1
+             _soft["heads"].append(head)
+         print(f"  {C['Y']}⚠{C['X']} {head}")
+-        shown = list(lines) if cap is None else list(lines)[:cap]
++        shown = list(lines) if (cap is None or _verbose) else list(lines)[:cap]   # --verbose/--ci 全列,同 warn_soft
+         for l in shown:
+             print(f"      • {l}")
+         if len(lines) > len(shown):
+-            print(f"      … 另 {len(lines) - len(shown)} 項")
++            print(f"      … 另 {len(lines) - len(shown)} 項(lumos doctor --verbose 看全部)")
+         if advice:
+             print(f"  {C['B']}建議動作{C['X']}: {advice}")
+         issues += len(lines)
+ 
+     _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+     _SOFT_CAP = 3
+     # 收尾行要講「還有幾段提醒」——不改 rc、不改軟硬分級,只是別讓結論行比正文樂觀
+     _soft = {"segs": len(_top_soft), "lines": len(_top_soft), "heads": list(_top_soft)}
+ 
+     def warn_soft(lines, head, advice=None):
+@@ -1590,23 +1598,24 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     # 功能那側多掛:有宣告、沒寫壞項的紀錄沒列這個功能,功能卻掛著它(只提醒;只看 Systems,計劃掛 verified_by 是既有做法)
+     sr_extra = []
+     for sys_rel, sn in sorted(notes.items()):
+         if not sys_rel.startswith("Systems/"):
+             continue
+         for a in as_list(sn.fields.get("verified_by")):
+             vrel = resolve(link_target(a))
+             dec = sr_declared.get(vrel)
+             if dec and not dec[1] and sys_rel not in dec[0]:
+                 # 照貼的改法照 _drift_sh 加引號(代碼審 r1 通才席 F1:登記裡藏 $(…) 照貼會執行、檔名有空白會失敗)
+-                sr_extra.append(_esc_clean(f"{sys_rel} 掛了 [[{vrel[:-3]}]],但那份的 system_refs 沒列它——"
+-                                           f"改法:lumos remove {_drift_sh(sys_rel[:-3])} verified_by {_drift_sh(a)}"
+-                                           ",或把它補進那份的 system_refs", _DOCTOR_LINE_MAX))
++                # 說明照行長上限清;照貼的指令只清控制字元、不截斷(代碼審 r2 通才席:長檔名會被截在引號中間,照貼卡在續行)
++                sr_extra.append(_esc_clean(f"{sys_rel} 掛了 [[{vrel[:-3]}]],但那份的 system_refs 沒列它——", _DOCTOR_LINE_MAX)
++                                + "改法:" + _esc_clean(f"lumos remove {_drift_sh(sys_rel[:-3])} verified_by {_drift_sh(a)}", 100000)
++                                + ",或把它補進那份的 system_refs")
+     if not (missing or sr_bad or sr_extra):
+         ok("每份驗證紀錄都掛到了它驗證的功能上")
+     if missing:
+         warn(missing, f"有 {len(missing)} 篇功能筆記沒反向登記它的驗證紀錄(verified_by 漏寫):",
+              "對每個 Systems 補上漏寫的 verified_by")
+     if sr_bad:      # 照 4/4 對 plan_refs 斷鏈自己報的先例;畫面封頂 20 項(warn 的 cap),問題數照實算全部
+         warn(sr_bad, f"有 {len(sr_bad)} 項 system_refs 寫壞了(驗收紀錄宣告了驗哪些功能,但這幾項讀不出來;不會默默當成沒驗):",
+              "改法:每項一行、整項只寫一個指到功能筆記的 [[Systems/X]];寫了路徑的要跟檔案路徑完全一致", cap=20)
+     if sr_extra:
+         warn_soft(sr_extra, f"有 {len(sr_extra)} 篇功能筆記多掛了沒宣告它的驗收紀錄(不計入問題數):",
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f791c730..1eeadfdc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -66227,12 +66227,52 @@ def t_doctor_orphan_suggest_declared_all():
+     check("②換雜湊種子順序不變", len(outs) == 1, str(outs))
+ 
+ 
+ def sp_run_env(vault, extra_env, *args):
+     import subprocess as sp
+     e = dict(_os_k2.environ)
+     e.update(extra_env)
+     return sp.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args], capture_output=True, text=True, env=e)
+ 
+ 
++
++def t_doctor_check3_long_name_hint_intact():
++    """代碼審 r2 通才席 F1:紀錄檔名很長時,「多掛」改法那行不被截斷——引號閉合、照貼後第 4 個參數等於登記原字面。"""
++    import subprocess as sp
++    v = _sr_vault()
++    long = "Verification/" + "長" * 140
++    write(v, long + ".md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"', body="# L\n")
++    reg = f"[[{long}]]"
++    write(v, "Systems/B.md", f'type: system\nstatus: done\nverified_by:\n  - "{reg}"', body="# B\n")
++    sec = _sr_check3(v)
++    line = next((l for l in sec.splitlines() if "lumos remove" in l), "")
++    cmd = line[line.find("lumos remove"):]
++    cmd = cmd[:cmd.find(",或把它補進")] if ",或把它補進" in cmd else cmd
++    work = Path(tempfile.mkdtemp(prefix="gctl-sr-l-"))
++    r = sp.run(["bash", "-c", "lumos() { printf '%s\\n' \"$@\" > args.txt; }; " + cmd], cwd=str(work), capture_output=True, text=True, timeout=10)
++    args = (work / "args.txt").read_text(encoding="utf-8").splitlines() if (work / "args.txt").exists() else []
++    check("①長檔名:改法完整、照貼後參數等於登記原字面", args == ["remove", "Systems/B", "verified_by", reg] and ",或把它補進" in line, f"{args[:3]} {line[-80:]}")
++
++
++def t_doctor_check3_bad_entry_cap_verbose_and_mixed_empty():
++    """代碼審 r2 兩席:封頂在 --verbose 時全列(跟 warn_soft 同規則、同結尾措辭);空項混在好項裡也要報空的項。"""
++    v = _sr_vault()
++    for i in range(25):
++        write(v, f"Projects/Q{i}.md", "type: project\nstatus: doing", body=f"# Q{i}\n")
++    refs = "\n".join(f'  - "[[Projects/Q{i}]]"' for i in range(25))
++    write(v, "Verification/V.md", f"type: verification\nstatus: pass\nsystem_refs:\n{refs}", body="# V\n")
++    r = run(v, "doctor", "--verbose")
++    o = r.stdout + r.stderr
++    sec = o[o.find("[3/4]"):o.find("[4/4]")]
++    check("①--verbose 全列 25 項", sec.count("[[Projects/Q") == 25, sec[-300:])
++    r = run(v, "doctor")
++    o = r.stdout + r.stderr
++    sec = o[o.find("[3/4]"):o.find("[4/4]")]
++    check("②預設封頂、結尾指路 --verbose", "另 5 項" in sec and "--verbose" in sec, sec[-300:])
++    v = _sr_vault()
++    write(v, "Verification/V.md", 'type: verification\nstatus: pass\nsystem_refs:\n  - "[[Systems/A]]"\n  - ""\n  - "#Systems/B"', body="# V\n")
++    sec = _sr_check3(v)
++    check("③空項混在好項裡也報空的項", "空的項" in sec, sec[-500:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

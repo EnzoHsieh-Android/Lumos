@@ -60,7 +60,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **lint 宣告健康檢查（宣告了跑不動的 linter 抓出來）** | `python3 scripts/lumos lint-check [--repo R] [--smoke]` — 靜態格式校驗+--smoke 真跑冒煙;rc 0健康/1有問題/2非JSON |
 | 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/rot/governance-log;本機可見性 |
 | **設計 spec 進實作前打磨**（對抗審計 loop 到收斂;canary 協議 2026-08-14 已停用） | 調用 **`lumos-design-loop`** skill;收斂閘=`lumos loop status <編號> --disposal --spec <計劃> --repo <根>`,旗標與其他原語見 `commands/05-設計審查迴圈.md` |
-| 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)；P2 殺傷力配方的原文還對不對得上程式(軟提醒,附 kill-rm 修法)） | `python3 scripts/lumos doctor [--ci]` |
+| 健康巡檢（orphans / unresolved / verified_by 同步(驗收紀錄寫了 system_refs 就只看它) / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)；P2 殺傷力配方的原文還對不對得上程式(軟提醒,附 kill-rm 修法)） | `python3 scripts/lumos doctor [--ci]` |
 | 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |
 | 全 vault 掃被推翻決策 | `python3 scripts/lumos decisions --superseded` |
 | 環境變更掃 valid_under / revalidate_when 命中 | `python3 scripts/lumos stale --match "<條件字串>"` |
@@ -94,7 +94,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | 操作 | 指令 | 說明 |
 |---|---|---|
 | 改純量 status/updated/created/type | `lumos set <note> <key> <value>` | 行級手術，構造性最小 diff（只改該行，其餘原樣）；日期 bare 不加引號 |
-| list 追加 verified_by/plan_refs/related/tags | `lumos append <note> <key> "[[x]]"` | 鐵則1 安全格式、自動 dedup |
+| list 追加 verified_by/plan_refs/system_refs/related/tags | `lumos append <note> <key> "[[x]]"` | 鐵則1 安全格式、自動 dedup |
 | 依模板建檔 | `lumos new <type> <name>` | system/verification/issue/project |
 | rename / 移檔（連結改寫） | `scripts/graph-rename.sh <舊> <新>` | 封印 wrapper（notesmd move），含 frontmatter 字串 |
 | 滾動歸檔老 Verification | `lumos archive [--days N] [--apply]` | 單遍移檔 + path 式入連結正規化成 basename；dry-run 預設；**活守衛護欄**：仍背書存活守衛(綁定測試在 code)的 Verification 不按年齡歸檔 |
@@ -795,7 +795,7 @@ verified_by:
 
 **Claude 的同步義務**（雙向同步，缺一不可）：
 
-1. **建立新 Verification 紀錄時** → **同時**把該 Verification 的 wikilink 加進**所有相關 Systems** 的 `verified_by`（Verification 的「## 相關模組」列了幾個 Systems，就要更新幾個）
+1. **建立新 Verification 紀錄時** → **同時**把該 Verification 的 wikilink 加進**所有相關 Systems** 的 `verified_by`（Verification 的「## 相關模組」列了幾個 Systems，就要更新幾個）；正文另有只是指路、沒驗的功能連結時，開頭欄位寫 `system_refs` 列真的驗了的（見下方 system_refs 欄位那節）
 2. **廢棄/刪除 Verification 時** → **同時**把對應 wikilink 從相關 Systems 的 `verified_by` 移除
 3. **改 Systems 筆記時的優先順序**：
    - 先讀 `verified_by`（一個 property:read 命令）
@@ -823,6 +823,21 @@ python3 scripts/lumos doctor    # 含「所有 Verification 都已掛進對應 S
 ```
 
 > 注意：歷史筆記的 `verified_by` 可能殘留字串型值（非 list）;lumos 讀取已內建正規化,obsidian eval fallback 才需自己 `Array.isArray(raw) ? raw.map(String) : ...`。
+
+### system_refs 欄位（Verification 驗了哪些功能，選填）
+
+**正文的每個 `[[Systems/X]]` 都會被當成「驗過 X」**（doctor 3/4 要求 X 反向登記 `verified_by`、`sync-verified-by` 會幫它補）。正文要放只是指路、沒驗的功能連結（例如更正括號「現況見 [[Systems/X]]」）時，在開頭欄位寫 `system_refs` 列出真的驗了的功能——有寫就只看它，正文連結不算：
+
+```yaml
+system_refs:
+  - "[[Systems/Billing]]"
+```
+
+- 只在作者主動寫時才生效；`lumos new verification --systems` 不會自動寫（自動寫了，事後正文補的功能就不再被檢查）。**寫了之後正文再補驗了的功能，要自己同步進 `system_refs`。**
+- 每項跟 `verified_by`、`plan_refs` 的具名連結同一套判法：整項只寫一個 `[[連結]]`；寫了路徑的要跟檔案路徑完全一致（大小寫也算），沒寫路徑的用檔名找、只收唯一一篇；要落在 `Systems/`。寫壞的任何形狀（空的、多寫一句、純文字路徑、找不到、同名多篇、不是功能筆記、區塊寫法）doctor 3/4 都列出來、算 issue，不會默默當成沒驗。
+- 加減用 `lumos append`／`lumos remove`；拿掉最後一項時鍵會一起消失，紀錄回到從正文推。
+- 功能的 `verified_by` 掛了某份有宣告的紀錄、而那份沒列這個功能時，doctor 3/4 只提醒（不計問題數）。
+- 一個功能都沒驗、正文卻有指路連結的紀錄，沒有宣告寫法——把指路連結寫成純文字。
 
 ### plan_refs 欄位（Verification → 計劃的意圖鏈）
 
@@ -947,7 +962,7 @@ python3 scripts/lumos context Systems/OrderService --brief
 - 寫 `valid_under` 不可只填「現在好用」這種廢話；要具體版本/規模/schema 數字
 - `revalidate_when` 從 `valid_under` 反推：每條 `valid_under` 對應一條「當條件 X 改變時」的 `revalidate_when`
 - 若使用者沒提供具體環境條件（版本/RPS/schema 版本）→ **主動詢問**，不可自行假設
-- **建立 Verification 後同步更新 Systems**：Verification 的「## 相關模組」列了幾個 Systems wikilink，就要更新幾個 Systems 的 `verified_by` 欄位（追加，不是覆蓋），雙向同步缺一不可
+- **建立 Verification 後同步更新 Systems**：Verification 的「## 相關模組」列了幾個 Systems wikilink，就要更新幾個 Systems 的 `verified_by` 欄位（追加，不是覆蓋），雙向同步缺一不可；寫了 `system_refs` 的紀錄只看它列的
 
 > 進場提示(2026-06-29 起):`lumos context` 讀節點時會在最上方自動顯示 `valid_under` 條件(>90 天未更新加紅標),並由 `lumos doctor` Check V 量全圖過期率——失效條件從「寫入時標記」變「進場主動提示」,不需 AI 自己去 `lumos stale` 查。
 
