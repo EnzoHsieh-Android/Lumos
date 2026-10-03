@@ -29991,13 +29991,17 @@ def _note_versions(repo_root, rng, p, first_parent=False):
     新開一篇跟舊篇很像的筆記會被認成從舊篇複製來、一路追進別篇的歷史——狀態序列會混進別篇的狀態翻轉、寫下時就成立會
     追到別篇寫下的那一版。複製那一版留著(這篇在那一版出現),再往前的丟掉。
     first_parent:只看第一父鏈(側分支的提交不出現,合併提交代表那一版;寫下時就成立那條路用,
-    Projects/回頭條件寫下時就成立_計劃〈做法〉2)。_note_status_seq 與 _drift_born_annotate 共用。"""
-    lg = _ns_git(repo_root, "log", "--follow", *(("--first-parent",) if first_parent else ()),
+    Projects/回頭條件寫下時就成立_計劃〈做法〉2)。_note_status_seq 與 _DriftBornHistory 共用(代碼審 r2 架構對齊席 Z1)。
+    ★關掉簽章顯示★(代碼審 r2 正確性席 F1):本機設 log.showSignature=true 時,簽章提交的編號前面會夾 gpg 訊息。"""
+    lg = _ns_git(repo_root, "log", "--no-show-signature", "--follow", *(("--first-parent",) if first_parent else ()),
                  "--format=%H", "--name-status", "-z", rng, "--", p)
     if lg is None:
         return None
+    rows = _git_log_sha_status_paths(lg)
+    if rows is None:
+        return None
     out = []
-    for sha, path, st in _git_log_sha_status_paths(lg):
+    for sha, path, st in rows:
         out.append((sha, path))
         if st == "C":
             break
@@ -30006,7 +30010,9 @@ def _note_versions(repo_root, rng, p, first_parent=False):
 
 def _git_log_sha_status_paths(raw):
     """git log -z --format=%H --name-status 的輸出 →[(sha, 那時的路徑, 變動種類的字母)]。改名(R)與複製(C)後面跟舊、新
-    兩個路徑,取新的;沒有檔案列的提交(不帶 --first-parent 時的合併提交)略過。格式是「sha\0\n種類\0路徑\0[路徑\0]」(實測)。"""
+    兩個路徑,取新的;沒有檔案列的提交(不帶 --first-parent 時的合併提交)略過。格式是「sha\0\n種類\0路徑\0[路徑\0]」(實測)。
+    ★對不上格式的片段整份回 None★(代碼審 r2 正確性席 F1):原本跳過它、沿用上一個提交編號,夾了別的輸出的提交
+    (例:gpg 簽章訊息)整個消失、它的檔案列記到上一個提交名下;跳過一樣會少一版,所以不猜。"""
     toks = [t.strip("\n") for t in raw.decode("utf-8", errors="surrogateescape").split("\0")]
     toks = [t for t in toks if t]
     out, cur, i = [], None, 0
@@ -30016,8 +30022,7 @@ def _git_log_sha_status_paths(raw):
             cur, i = t, i + 1
             continue
         if cur is None or not re.fullmatch(r"[A-Z]\d*", t):
-            i += 1                     # 對不上格式的片段跳過(不猜)
-            continue
+            return None
         n = 2 if t[0] in "RC" else 1
         if i + n < len(toks):
             out.append((cur, toks[i + n], t[0]))
@@ -33128,8 +33133,14 @@ def _drift_born_eval(ctx, sha, conds):
                                + _drift_bad_note(_drift_row_unread(conds, (env,), (tree,))))
     if not ok:
         return _drift_born_rec("false", commit=sha)
-    d = _lens_git(ctx["root"], "show", "-s", "--format=%cs", sha)
-    return _drift_born_rec("true", commit=sha, date=d.stdout.strip() if d is not None and d.returncode == 0 else None)
+    return _drift_born_rec("true", commit=sha, date=_git_commit_date(ctx["root"], sha))
+
+
+def _git_commit_date(root, sha):
+    """提交日期 YYYY-MM-DD 或 None。關掉簽章顯示、不是日期形狀就不給(代碼審 r2 正確性席 F1:gpg 訊息會夾進輸出)。"""
+    d = _lens_git(root, "show", "--no-show-signature", "-s", "--format=%cs", sha)
+    got = d.stdout.strip() if d is not None and d.returncode == 0 else ""
+    return got if re.fullmatch(r"\d{4}-\d{2}-\d{2}", got) else None
 
 
 def _drift_born_conds(tenv, f):

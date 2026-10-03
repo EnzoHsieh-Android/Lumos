@@ -14,6 +14,7 @@ tags:
   - status/done
   - scope/guards-gates
 summary: |-
+  WHY:CI 在 pull_request 事件多一步建出追蹤 origin/main 的本機 main(git branch --track main origin/main),讓 PR 跟推到 main 時是同一種環境 [出處:2026-10-03 第一個 PR(EnzoHsieh-Android/Lumos#1)CI 紅] [因:PR 取出的是不在分支上的合併提交、本機沒有 main,t_lens_timeout_keeps_warming_cache 與 t_codex_s1_lens_arm_claim 以 main@{upstream} 找主線而整支紅;容器重現:沒本機 main 紅、補上就綠] [不選:改兩支測試各自退回 origin/main(dispatch-lens 認主線的規則也要跟著改,範圍更大)]
   WHY:_classify_test_refs 多一個呼叫者:note-shape 的筆記測試綁定第①道,名稱逐一重包成 `[test:名]` 再交(同修正關卡),判 real 才算指得到 [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]] [因:判存在不另寫第二套] [test:t_note_shape_test_refs_touched_note]
   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]「`[test:]` → resolve_test_refs → 白名單 → real/fake/dangling/bad-name」抽成 `_classify_test_refs`(修正關卡第 3 項也用),判定不變;修正關卡在自己建的隔離工作樹裡呼叫 `_bound_tests_check`(帳與測試快取落在樹裡、跟著刪)
   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
