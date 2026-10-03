@@ -2,8 +2,8 @@
 type: issue
 status: open
 created: 2026-10-03
-updated: 2026-10-03
-self_audit: gpt-5.6-sol/2026-10-03
+updated: 2026-10-04
+self_audit: gpt-5.6-sol/2026-10-04
 aliases: []
 about_code:
   - scripts/scenario_probe.py
@@ -13,11 +13,12 @@ tags:
   - scope/evals
 summary: |-
   FLAG: TECHNICAL
-  PITFALL: Git設定注入與absolute gitfile會繞過副本隔離，修前後皆在臨時repo重現；來源與重現見 [[Verification/2026-10-03_修復穩定性試行第1案續辦]] 及本文。
-  WHY: 三輪用滿仍有阻擋缺口，未部署；先由使用者裁決後續範圍，入口為本Issue與試行計劃。出處 [[Verification/2026-10-03_修復穩定性試行第1案續辦]]。
+  PITFALL: 環境注入與頂層absolute gitfile已局部修補；local/worktree設定及巢狀Git仍可繞過副本隔離。兩版臨時repo重現見 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]] 與本文最新節。
+  WHY: 使用者曾授權一次第4輪；審查仍FAIL、未部署，下一次同案工作先界定修補與審查輪次。出處 [[Projects/代碼審修復穩定性試行_計劃]]。
 related:
   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
   - "[[Systems/codex-harness]]"
+  - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
 ---
 # 探針Git隔離的設定與絕對路徑缺口
 
@@ -44,3 +45,9 @@ R3-B1／資安 Finding 1：環境注入 remote 與 core.hooksPath 後，本機 p
 先裁決三輪上限後的修復範圍；重啟入口為本 Issue 與試行計劃。要求設定注入不能恢復有效 remote 或覆蓋防推 hook，兩 runner 都驗；任何副本 Git 寫入前驗副本 gitdir 確實隔離，拒絕絕對指回來源的反例，並驗普通 clone 的正常路徑。全部用臨時 repo 驗來源設定、檔案、HEAD 不變；通過授權範圍的審查後才可談部署。
 
 REVISIT:2026-11-03 隨五案試行回顧檢查本案未決隔離缺口與重啟裁決。
+
+## 2026-10-04 第四輪後仍開放
+
+以上是第3輪停手時的排查紀錄。使用者已明確授權修三缺口加唯一第4輪，局部修補與回歸測試完成，卻在同輪再見仍可繞過的合法Git資料形狀；最新證據見 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]、r4-intake.md及r4-parent-reproduction.json。來源與副本路徑的頂層檢查擋住先前絕對gitfile/commondir/符號連結反例；環境GIT_CONFIG注入也被清洗，但來源local include與worktree scope設定可讓副本保留有效remote並覆蓋防推勾子。正常子模組仍保留自己的remote，臨時副本子模組向本機bare新增ref；兩者在637989b1及8922c3c9都成立，屬舊漏看／本輪隔離邊界修補不完整，不是這一輪首次引入。資安席另指出絕對巢狀gitfile可能指回來源；該特定變體未實跑，不能冒稱已證。
+
+目前繞法：不執行真模型探針，不把此候選分支當成可安全推出的沙盒；測試只用臨時repo及本機bare。修好條件是建立副本後真正生效的remote為空、防推勾子有效，巢狀Git也不能寫出副本或推出；任何Git清理失敗應在啟動模型前停止。需要以local include、worktree config、正常子模組及頂層好例做相同修前後驗證，並檢查拒絕後來源byte-equal。第4輪處置閘FAIL且授權輪次用盡，後續同案工作先界定修補與審查輪次，不自動開r5。

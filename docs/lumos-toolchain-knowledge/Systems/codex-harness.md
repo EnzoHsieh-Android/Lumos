@@ -96,6 +96,8 @@ WHY: 2026-10-04 使用者授權例外續修三項缺口；Git只關閉父程序c
 
 PITFALL: 單驗副本gitdir仍可能漏掉共用資料、core.worktree或refs等中繼資料符號連結；本輪臨時fixture在補最後一道前確實改動外側refs。選擇在Git寫入前拒絕中繼資料符號連結，即使連結目標在副本內也拒絕；普通clone與安全相對gitfile保持可用。出處同例外續修驗證，重現及防回歸t_probe_repair4_copied_git_paths；若要支援這類連結，先從該測試與Issue重估，不能直接移除拒絕條件。
 
+PITFALL: 第四輪把副本頂層的綠測試誤擴成整棵Git樹安全會漏兩種配置：local include/worktree scope可恢復有效remote並蓋掉防推勾子，子模組仍有自己的remote及Git資料。另有共用沙盒清理失敗卻繼續下一題，以及Claude空ID工具回傳被當成功的反例。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]；成對重現r4-parent-reproduction.json及r4-boundary.md，後續防回歸入口為 [[Issues/探針Git隔離的設定與絕對路徑缺口]]、[[Issues/探針共用沙盒清理失敗仍繼續評分]] 與 [[Issues/探針讀碼證據不足]]。第4輪處置閘FAIL，不能把t_probe_repair4_*的局部綠燈當成放行。
+
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
