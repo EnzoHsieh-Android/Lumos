@@ -50190,17 +50190,19 @@ def t_notelines_parse_git_config():
     def g(*a):
         return sp.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=False)
     g("init", "-q")
-    g("config", "user.email", "a@b"); g("config", "user.name", "a")
+    g("config", "user.email", "a@b")
+    g("config", "user.name", "a")
     (d / "n.md").write_text("h\nDEP:舊句 scripts/x.py\nmid1\nmid2\nz\n", encoding="utf-8")
     c_old = "#include <stdio.h>\n\nvoid f1()\n{\n    a();\n}\n\nint f2()\n{\n    b();\n}\n"
     (d / "c.txt").write_text(c_old, encoding="utf-8")
-    g("add", "-A"); g("commit", "-qm", "1")
+    g("add", "-A")
+    g("commit", "-qm", "1")
     (d / "n.md").write_text("h\nmid1\nmid2\nDEP:舊句 scripts/x.py 新增\nz\n", encoding="utf-8")
     (d / "c.txt").write_text("#include <stdio.h>\n\nint f2()\n{\n    b();\n}\n\nvoid f1()\n{\n    a();\n}\n", encoding="utf-8")
     g("config", "diff.interHunkContext", "3")
     raw = m._ns_diff(d, "--", "n.md")
     check("①設了 interHunkContext,_ns_diff 輸出沒有上下文行", raw is not None and not any(
-        l.startswith(b" ") for l in raw.split(b"\n")), raw)
+        x.startswith(b" ") for x in raw.split(b"\n")), raw)
     check("②新行行號照實際位置(第 4 行)", m._notelines_parse_added(raw or b"").get("n.md") == [(4, "DEP:舊句 scripts/x.py 新增")],
           m._notelines_parse_added(raw or b""))
     g("config", "--unset", "diff.interHunkContext")
@@ -50210,6 +50212,797 @@ def t_notelines_parse_git_config():
     alt = g("diff", "-U0", "--src-prefix=a/", "--dst-prefix=b/", "--", "c.txt").stdout.encode()
     check("③前提:這組輸入 histogram 跟 myers 切法不同", want != alt, "")
     check("④設了 diff.algorithm=histogram,_ns_diff 仍照 myers 切", m._ns_diff(d, "--", "c.txt") == want, m._ns_diff(d, "--", "c.txt"))
+
+
+# ── 舊行尾補括號不算新寫(Projects/舊行尾追加不算新寫_計劃)────────────────────────────────────────────
+_TAIL_OLD = "DEP:付款走舊閘道 `src/b.txt` 還沒換掉"
+_TAIL_FIX = "(更正:2026-10-02 已換成新閘道,見 Systems/Pay [來源:人工])"
+_TAIL_FIX_NOSRC = "(更正:2026-10-02 已換成新閘道,見 Systems/Pay)"
+_TAIL_OLD_REF = "DEP:付款走舊閘道 `src/a.py:3` 還沒換掉"     # 帶一個行號引用:補帶來源的括號後,整行只剩舊行就有的那個引用可扣
+
+
+def _tail_repo(summary=_TAIL_OLD, body=""):
+    """補括號測試的專案:上線點之後提交一篇摘要有舊行的筆記(直接 git commit,不經掛鉤),當起點版本。"""
+    root = _ns_repo()
+    _ns_note(root, body=body, summary=summary)
+    _nh_commit(root, "old line")
+    return root
+
+
+def _tail_try(root, summary="KEY:x", body="", name="A", extra=""):
+    """補括號測試:寫一版、暫存、跑提交前那份 → (rc, 輸出),再還原工作目錄。"""
+    _ns_note(root, summary=summary, body=body, name=name, extra=extra)
+    _ns_stage(root)
+    rc, out = _ns(root)
+    _ns_reset(root)
+    return rc, out
+
+
+def t_ns_append_line_rules():
+    """[S47] 整行層級的規則一律不扣(代碼審 r2 通才席、正確性席;r3 六席):舊 SEE 行本來就夾句子、舊表格列本來就有不評估的
+    條件標記、舊回頭條件行本來就格式不合,句尾補的括號後照報;前置斷言(代碼審 r3 通才席、合約圖譜席):同一篇舊行另帶一個
+    行號引用時,那個引用照片段扣掉——證明配對真的成立、只是整行規則不扣。"""
+    print("t_ns_append_line_rules")
+    see = "SEE:[[Systems/Pay]] 付款說明在這裡 `src/a.py:3`"
+    root = _tail_repo(summary=see)
+    rc, out = _tail_try(root, summary=see + "(現況:線上已全量切換新閘道 [來源:人工])")
+    check("①前提:舊行就有的行號引用被扣(配對成立)", "程式行號引用" not in out, out[-500:])
+    check("①舊 SEE 行夾句子、補括號:SEE 只放連結照報", rc == 1 and "SEE 只放連結" in out, out[-500:])
+    row = "| 付款 | 舊閘道還在用 `src/a.py:3` [when-file:src/x.py] |"
+    root2 = _tail_repo(body=row)
+    rc, out = _tail_try(root2, body=row + "(另見 [when-file:src/y.py])")
+    check("②前提:配對成立(行號引用被扣)", "程式行號引用" not in out, out[-500:])
+    check("②舊表格列已有不評估的條件標記、補括號:照報", rc == 1 and "條件寫在不評估的地方" in out, out[-500:])
+    rev = "REVISIT:下次再看 `src/a.py:3` 那一段"
+    root3 = _tail_repo(body=rev)
+    rc, out = _tail_try(root3, body=rev + "(更正:2026-10-03 改看別處)")
+    check("③前提:配對成立(行號引用被扣)", "程式行號引用" not in out, out[-500:])
+    check("③舊回頭條件行格式不合、補括號:照報(要修整行)", rc == 1 and "回頭條件格式不合" in out, out[-500:])
+
+
+def t_ns_append_old_line():
+    """[S1][S16][S17] 起點版本裡帶行號引用的舊行只在句尾補一段帶 [來源:…] 的括號:配上、扣掉舊行就有的引用、不擋;
+    同一句改一個字(配不上)時那個引用照報——前置斷言,證明探針有效(代碼審 r2 合約圖譜席:原本靠「沒寫來源」探,那條永遠不扣、
+    配不配都一樣報,測試變假綠);括號沒帶來源照整行擋並提示;表格列補的括號裡寫了條件標記照報;補更正的 RULE 行前綴提醒照出。"""
+    print("t_ns_append_old_line")
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF.replace("付款", "付錢") + _TAIL_FIX)
+    check("①a 前提:改一個字配不上時,舊行就有的行號引用照報(探針有效)", rc == 1 and "a.py:3" in out, out[-500:])
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    check("①舊行只補帶來源的括號:配上、扣掉舊行就有的引用、不擋", rc == 0, out[-500:])
+    rootb = _tail_repo()
+    rc, out = _tail_try(rootb, summary=_TAIL_OLD + _TAIL_FIX_NOSRC)
+    check("①b 括號沒帶 [來源:…]:沒寫來源照整行擋,提示括號要帶來源(Enzo 2026-10-03 裁)", rc == 1 and "現況描述沒寫來源" in out
+          and "括號裡帶 [來源:…]" in out, out[-600:])
+    # 回頭條件只解析行首的標記,句子後面補的條件標記本來就不評估;補括號會新多出的回頭條件違規只有表格列裡的條件標記
+    row = "| 付款 | 舊閘道還在用 |"
+    root2 = _tail_repo(body=row)
+    rc, out = _tail_try(root2, body=row + "(另見 [when-file:src/x.py])")
+    check("③S16:表格列補的括號裡寫了條件標記照報", rc == 1 and "條件寫在不評估的地方" in out, out[-600:])
+    rule = "RULE:付款一律走新閘道,不准直連舊閘道"
+    root3 = _tail_repo(summary=rule)
+    _rc, out = _tail_try(root3, summary=rule + "(更正:2026-10-02 補了理由)")
+    check("④S17:補更正的 RULE 行前綴提醒照出", "RULE" in out and ("提醒" in out or "格子" in out), out[-600:])
+
+def t_ns_append_negation():
+    """[S2][S3][S4] 否定提醒只看補上的括號:舊句的「還沒」不再提醒;括號裡的「尚未」出一條、片段來自括號;
+    RETIRE-IF 開頭照今天不提醒。"""
+    print("t_ns_append_negation")
+    root = _tail_repo(body="付款這段還沒換掉,先照舊走。")
+    _ns_note(root, body="付款這段還沒換掉,先照舊走。(更正:已換成新閘道)")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("①舊句的還沒不再提醒", "還沒有/尚未" not in out, out[-600:])
+    _ns_note(root, body="付款這段還沒換掉,先照舊走。(更正:新閘道尚未上線)")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("②括號裡的尚未出一條、片段來自括號", "還沒有/尚未" in out and "新閘道尚未上線" in out and out.count("A.md:") == 1, out[-600:])
+    root2 = _tail_repo(body="RETIRE-IF: 還沒有人用就撤掉")
+    _ns_note(root2, body="RETIRE-IF: 還沒有人用就撤掉(更正:補日期)")
+    _ns_stage(root2)
+    _rc, out = _ns(root2)
+    check("③RETIRE-IF 開頭照今天不提醒", "還沒有/尚未" not in out, out[-600:])
+
+
+def t_ns_append_refs():
+    """[S5] 括號裡新出現的程式行號引用照擋、只報那一個;括號裡重複舊行已有的同一個引用不多報。"""
+    print("t_ns_append_refs")
+    old = "DEP:付款走舊閘道 `src/a.py:3` 還沒換掉"
+    root = _tail_repo(summary=old)
+    _ns_note(root, summary=old + "(更正:改看 `src/a.py:5` [來源:人工])")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①括號裡新的行號引用照擋、只報那一個", rc == 1 and "src/a.py:5" in out and "src/a.py:3" not in out
+          and "現況描述沒寫來源" not in out, out[-600:])
+    _ns_note(root, summary=old + "(更正:仍是 `src/a.py:3` [來源:人工])")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("②括號裡重複舊行已有的同一個引用:不多報", rc == 0, out[-600:])
+
+
+def t_ns_append_bypass():
+    """[S6][S7][S8] 舊行還在另寫「舊句加括號」、刪舊行在別的改動段寫、改過的舊行正上方插「舊句加括號」:都整行查——
+    舊行就有的行號引用照報;前置斷言:同一個專案正常補括號時那個引用被扣掉(不擋)。"""
+    print("t_ns_append_bypass")
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    check("①前提:同一個專案正常補括號時不擋", rc == 0, out[-500:])
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + "\nKEY:x\n" + _TAIL_OLD_REF + _TAIL_FIX)
+    check("②S6:舊行還在、另一處新寫舊句加括號:照整行查", rc == 1 and "a.py:3" in out, out[-600:])
+    rc, out = _tail_try(root, summary="KEY:x\nKEY:y\nKEY:z\n" + _TAIL_OLD_REF + _TAIL_FIX)
+    check("③S7:刪舊行、在別的改動段寫舊句加括號:照整行查", rc == 1 and "a.py:3" in out, out[-600:])
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + "(更正:使用 Redis 逾時 30 秒 [來源:人工])\n" + _TAIL_OLD_REF + " [來源:部署]")
+    check("④S8:改過的舊行正上方插舊句加括號:整行查", rc == 1 and "a.py:3" in out, out[-600:])
+
+def t_ns_append_edits():
+    """[S9] 舊行中間插字、改一個字、改前綴、縮排變了:照整行查(舊行就有的行號引用照報);前置斷言:正常補括號不擋。"""
+    print("t_ns_append_edits")
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    check("①前提:正常補括號不擋", rc == 0, out[-500:])
+    for label, new in (("中間插字", "DEP:付款走舊的閘道 `src/a.py:3` 還沒換掉" + _TAIL_FIX),
+                       ("改一個字", "DEP:付款走舊閘道 `src/a.py:3` 還沒換好" + _TAIL_FIX),
+                       ("改前綴", "FACT:付款走舊閘道 `src/a.py:3` 還沒換掉" + _TAIL_FIX),
+                       ("縮排變了", "  " + _TAIL_OLD_REF + _TAIL_FIX)):
+        rc, out = _tail_try(root, summary=new)
+        check(f"{label}:照整行查", rc == 1 and "a.py:3" in out, out[-600:])
+
+def t_ns_append_limits():
+    """[S10](正文行,靠行號引用分配上沒配上)舊行 7 個字不配、8 個字照配;括號 301 字不配、300 字照配;括號外夾字不配;新行超過 2000 字不配;
+    兩個括號群緊接、半形全形混用照配;括號裡行內程式碼有單邊括號不配。"""
+    print("t_ns_append_limits")
+    m = _load_lumos_inproc()
+    g = m._ns_paren_groups_only
+    check("①括號群判定", g("(a)") and g("(a) （b）") and g("(a)(b)") and g("(a）") and g("((巢)狀)")
+          and not g("(a) b (c)") and not g("x(a)") and not g("(a") and not g("a)") and not g(""), "")
+    ref = "說明 `src/a.py:3` 這一段的舊句子"
+    cases = [
+        ("舊行 7 個字", "a.py:13", "(更正)", False),
+        ("舊行 8 個字", "a.py:3 一", "(更正)", True),
+        ("括號 300 字", ref, "(" + "字" * 298 + ")", True),
+        ("括號 301 字", ref, "(" + "字" * 299 + ")", False),
+        ("括號外夾字", ref, "(更正) 逾時改 30 秒(見 X)", False),
+        ("新行超過 2000 字", ref + "x" * 1990, "(更正)", False),
+        ("兩群緊接", ref, "(更正)(見 X)", True),
+        ("半形配全形", ref, " (更正:見 X）", True),
+        ("行內程式碼單邊括號", ref, "(更正:見 `f(`)", False),
+    ]
+    for label, old, tail, want in cases:
+        root = _tail_repo(summary="KEY:x", body=old)
+        _ns_note(root, summary="KEY:x", body=old + tail)
+        _ns_stage(root)
+        rc, out = _ns(root)
+        check(f"{label}:{'照配' if want else '照整行查'}", (rc == 0) == want, out[-400:])
+
+
+def _tail_head(root):
+    return _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def _tail_relaxed(root):
+    return [e for e in _ns_gov(root) if e.get("gate") == "note-shape" and e.get("kind") == "relaxed"]
+
+
+def t_ns_append_context():
+    """[S12] 舊行在起點版本是別的區塊、在圍欄裡、或重建標記兩個版本不同:照整行查(舊行就有的行號引用照報);
+    每種情境都先證明同一個專案正常補括號不擋。"""
+    print("t_ns_append_context")
+    root = _tail_repo(summary="KEY:x", body=_TAIL_OLD_REF)
+    rc, out = _tail_try(root, summary="KEY:x", body=_TAIL_OLD_REF + _TAIL_FIX)
+    check("①a 前提:正文裡的舊行在正文補括號不擋", rc == 0, out[-500:])
+    rc, out = _tail_try(root, summary=_TAIL_OLD_REF + _TAIL_FIX, body="")
+    check("①舊行原本在正文、補括號後搬到摘要:照整行查", rc == 1 and "a.py:3" in out, out[-500:])
+    ref = "說明 `src/a.py:5` 那一行"
+    root = _tail_repo(summary="KEY:x", body="```\n" + ref + "\n```")
+    rc, out = _tail_try(root, summary="KEY:x", body="<!-- a -->\n" + ref + _TAIL_FIX + "\n<!-- b -->")
+    check("②舊行原本在圍欄裡、新行在圍欄外:照整行查", rc == 1 and "a.py:5" in out, out[-500:])
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    rc0, out0 = _tail_try(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX, extra="regen: true")
+    m = _load_lumos_inproc()
+    p = root / "docs" / "kg-knowledge" / "Systems" / "A.md"
+    check("③前提:這樣寫算重建標記;沒改重建標記時不擋", m._ns_is_regen(p.read_text(encoding="utf-8")) and rc0 == 0, out0[-300:])
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("④重建標記兩個版本不同:照整行查", rc == 1 and "a.py:3" in out, out[-500:])
+
+def t_ns_append_rename_binary():
+    """[S13] 那篇改名、或同一次改動裡有二進位檔與純改名的檔:照整行查(舊行就有的行號引用照報)、不出錯。"""
+    print("t_ns_append_rename_binary")
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    _nh_file(root, "docs/kg-knowledge/Systems/pic.bin", "x")
+    (root / "docs" / "kg-knowledge" / "Systems" / "pic.bin").write_bytes(b"\x00\x01\x02")
+    _nh_file(root, "docs/kg-knowledge/Systems/Same.md", "---\ntype: system\n---\n# Same\n純改名\n")
+    _nh_commit(root, "bin and same")
+    src = root / "docs" / "kg-knowledge" / "Systems" / "A.md"
+    txt = src.read_text(encoding="utf-8").replace(_TAIL_OLD_REF, _TAIL_OLD_REF + _TAIL_FIX)
+    src.unlink()
+    (root / "docs" / "kg-knowledge" / "Systems" / "A2.md").write_text(txt, encoding="utf-8")
+    (root / "docs" / "kg-knowledge" / "Systems" / "pic.bin").write_bytes(b"\x00\x09\x02\x07")
+    _nh_git(root, "mv", "docs/kg-knowledge/Systems/Same.md", "docs/kg-knowledge/Systems/Same2.md")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("改名的篇照整行查、二進位與純改名不出錯", rc == 1 and "a.py:3" in out and "Traceback" not in out, out[-600:])
+
+def t_ns_append_base_read():
+    """[S14][S15] 起點那一行對不上、起點版本大於上限、不是 UTF-8:只有那一篇照整行查,同一次的其他篇照配;NFD 檔名照配。
+    探針是舊行就有的行號引用、補的括號帶來源(代碼審 r2:原本用沒帶來源的括號,那條永遠照報、配不配都一樣)。"""
+    print("t_ns_append_base_read")
+    m = _load_lumos_inproc()
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF)
+    big = root / "docs" / "kg-knowledge" / "Systems" / "Big.md"
+    big.write_text("---\ntype: system\nsummary: |-\n  " + _TAIL_OLD_REF + "\n---\n# Big\n" + "長" * 180000 + "\n", encoding="utf-8")
+    bad = root / "docs" / "kg-knowledge" / "Systems" / "Bad.md"
+    bad.write_bytes(b"---\ntype: system\nsummary: |-\n  " + _TAIL_OLD_REF.encode() + b"\n---\n# Bad\n\xff\n")
+    _nh_commit(root, "more")
+    check("①前提:Big 大於上限", big.stat().st_size > m._NS_APPEND_BASE_MAX_BYTES, big.stat().st_size)
+    for p_ in (big,):
+        p_.write_text(p_.read_text(encoding="utf-8").replace(_TAIL_OLD_REF, _TAIL_OLD_REF + _TAIL_FIX), encoding="utf-8")
+    bad.write_bytes(b"---\ntype: system\nsummary: |-\n  " + (_TAIL_OLD_REF + _TAIL_FIX).encode() + b"\n---\n# Bad\nok\n")
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("②大於上限與不是 UTF-8 的篇照整行查(舊行就有的行號引用照報)", rc == 1 and "Big.md:" in out and "Bad.md:" in out and "a.py:3" in out, out[-800:])
+    check("③同一次的其他篇照配(B 不列)", "B.md" not in out, out[-800:])
+    # 起點那一行對不上:造一份 diff,被刪的行跟起點版本那行不同
+    # diff 裡被刪的行改成「舊句+第一段括號」:新行仍以它開頭、只多第二段括號,只有核對起點那一行才擋得下
+    _ns_reset(root)
+    head = _tail_head(root)
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF + "(甲)(乙)")
+    _ns_stage(root)
+    real = m._ns_diff
+    try:
+        m._ns_diff = lambda *a: real(*a).replace(("-  " + _TAIL_OLD_REF + "\n").encode(), ("-  " + _TAIL_OLD_REF + "(甲)\n").encode(), 1)
+        t, err = m._notelines_append_pairs(root, True, head, "index", "docs/kg-knowledge")
+    finally:
+        m._ns_diff = real
+    check("④起點那一行跟被刪的行對不上:不配", err is None and not t, (t, err))
+    t, err = m._notelines_append_pairs(root, True, head, "index", "docs/kg-knowledge")
+    check("⑤對照:沒動 diff 時照配", err is None and any(v for v in t.values()), (t, err))
+    # NFD 檔名
+    root = _ns_repo()
+    nfd = unicodedata.normalize("NFD", "Café")
+    _ns_note(root, name=nfd, summary=_TAIL_OLD_REF)
+    _nh_commit(root, "nfd")
+    _ns_note(root, name=nfd, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑥NFD 檔名只補括號:照配、不擋", rc == 0, out[-500:])
+
+
+def t_ns_append_eol():
+    """[S11] CRLF 的舊行、檔尾沒有換行的最後一行,只在句尾補括號照配(舊行就有的行號引用被扣);前置斷言:改一個字時照報。"""
+    print("t_ns_append_eol")
+    root = _ns_repo()
+    p = root / "docs" / "kg-knowledge" / "Systems" / "C.md"
+
+    def crlf(line):
+        return ("---\r\ntype: system\r\nsummary: |-\r\n  " + line + "\r\n---\r\n# C\r\n正文\r\n").encode()
+    p.write_bytes(crlf(_TAIL_OLD_REF))
+    _nh_commit(root, "crlf")
+    p.write_bytes(crlf(_TAIL_OLD_REF.replace("付款", "付錢") + _TAIL_FIX))
+    _ns_stage(root)
+    rc0, out0 = _ns(root)
+    p.write_bytes(crlf(_TAIL_OLD_REF + _TAIL_FIX))
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①CRLF:照配、不擋(前提:改一個字時照報)", rc0 == 1 and "a.py:3" in out0 and rc == 0, (out0[-300:], out[-300:]))
+    _nh_commit(root, "crlf2")
+    q = root / "docs" / "kg-knowledge" / "Systems" / "D.md"
+    q.write_bytes(("---\ntype: system\n---\n# D\n" + _TAIL_OLD_REF).encode())
+    _nh_commit(root, "noeol")
+    q.write_bytes(("---\ntype: system\n---\n# D\n" + _TAIL_OLD_REF + _TAIL_FIX).encode())
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("②檔尾沒有換行:照配、不擋", rc == 0, out[-500:])
+
+def t_ns_append_ledger():
+    """[S18][S19] 推送時有違規被減掉記一筆 relaxed、state done,帶條數、pairs、pairs_total,整行不超過 4 KB、被裁時帶
+    pairs_truncated;提交前、doctor、跳過逃生口不記。"""
+    print("t_ns_append_ledger")
+    import json as _j
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①提交前:不擋、不記 relaxed", rc == 0 and not _tail_relaxed(root), out[-400:])
+    rc, out = _ns(root, env={"LUMOS_SKIP_NOTE_SHAPE": "1"})
+    check("②跳過逃生口:不記 relaxed", not _tail_relaxed(root), out[-400:])
+    _nh_commit(root, "fix")
+    tip = _tail_head(root)
+    rc, out = _ns(root, "--diff", f"{base}..{tip}")
+    ev = _tail_relaxed(root)
+    check("③推送:不擋、記一筆 relaxed", rc == 0 and len(ev) == 1, (out[-400:], ev))
+    _ns(root, "--diff", f"{base}..{tip}", env={"LUMOS_SKIP_NOTE_SHAPE": "1"})
+    _tail_remote(root)
+    _load_lumos_inproc()._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge")
+    check("③b 推送時的跳過逃生口與 doctor 事後掃描:不另記 relaxed", len(_tail_relaxed(root)) == 1, _tail_relaxed(root))
+    e = ev[-1] if ev else {}
+    a_md = (root / "docs" / "kg-knowledge" / "Systems" / "A.md").read_text(encoding="utf-8").split("\n")
+    ln = next(i for i, x in enumerate(a_md, 1) if _TAIL_FIX in x)
+    check("④帶 state done、條數、pairs、pairs_total", e.get("state") == "done" and e.get("violations") == 1
+          and e.get("pairs") == [["docs/kg-knowledge/Systems/A.md", ln]] and e.get("pairs_total") == 1
+          and e.get("check") == "append-only" and e.get("head_sha") == tip, e)
+    # 很多篇都補括號:帳要裁到 4 KB 內
+    root = _ns_repo()
+    names = [f"一篇名稱很長的筆記拿來把帳撐過四千位元組{k:03d}" for k in range(80)]
+    for nm in names:
+        _ns_note(root, name=nm, summary=_TAIL_OLD_REF)
+    _nh_commit(root, "many")
+    base = _tail_head(root)
+    for nm in names:
+        _ns_note(root, name=nm, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "many fix")
+    rc, out = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+    ev = _tail_relaxed(root)
+    e = ev[-1] if ev else {}
+    line = (_j.dumps(e, ensure_ascii=False) + "\n").encode("utf-8")
+    check("⑤很多篇:整行不超過 4 KB、帶 pairs_truncated、pairs_total 是 80", rc == 0 and len(line) <= 4096
+          and e.get("pairs_truncated") is True and e.get("pairs_total") == 80, (len(line), {k: v for k, v in e.items() if k != "pairs"}))
+
+
+def t_ns_append_wake():
+    """[S20] 被放寬的行同時碰到新程式檔喚醒:照喚醒那一路報,而且不算進放寬帳的條數與 pairs。"""
+    print("t_ns_append_wake")
+    root = _ns_repo()
+    old = "DEP:新工具在 `src/new.py:3` 還沒接上"
+    _ns_note(root, summary=old)
+    _nh_commit(root, "old")
+    base = _tail_head(root)
+    _ns_note(root, summary=old + _TAIL_FIX)
+    _nh_file(root, "src/new.py", "a = 1\nb = 2\nc = 3\n")
+    _nh_commit(root, "becomes code")
+    rc, out = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+    check("①照喚醒那一路報", rc == 1 and "新程式檔喚醒" in out and "new.py:3" in out, out[-600:])
+    ev = _tail_relaxed(root)
+    a_md = (root / "docs" / "kg-knowledge" / "Systems" / "A.md").read_text(encoding="utf-8").split("\n")
+    ln = next(i for i, x in enumerate(a_md, 1) if _TAIL_FIX in x)
+    check("②被喚醒的行不算進放寬帳(條數與 pairs)", not any(["docs/kg-knowledge/Systems/A.md", ln] in (e.get("pairs") or []) for e in ev)
+          and not any(e.get("state") == "done" for e in ev), (ln, ev))
+
+
+def _tail_remote(root):
+    """給測試專案一個當主線的遠端(main 有 upstream)。"""
+    import subprocess as sp, tempfile as _tf
+    bare = Path(_tf.mkdtemp(prefix="tail-remote-"))
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_git(root, "branch", "-M", "main")
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "-u", "origin", "main")
+    return bare
+
+
+def t_ns_append_push_range():
+    """[S21][S22][S23][S38][S41] 推送範圍:範圍裡才寫的行再補括號整行查;起點版本裡的舊句只補括號照配(掛鉤與 CI 同一個
+    起點);從空樹算全不配、不記失敗帳;推上去後改寫或刪括號整行查、後面再補一段照配、reset --soft 重提照配、amend 改寫提交前
+    整行查;新分支首推掛鉤算法照配、40 個 0(CI 算法)整行查。"""
+    print("t_ns_append_push_range")
+    root = _tail_repo()
+    base = _tail_head(root)
+    _ns_note(root, name="B", summary="KEY:y")
+    _nh_commit(root, "x")
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF)
+    _nh_commit(root, "range wrote")
+    mid = _tail_head(root)
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "range append")
+    rc0, out0 = _ns(root, "--diff", f"{mid}..{_tail_head(root)}")
+    rc, out = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+    check("①S21:範圍裡才寫、後面又補括號:整行查(前提:起點換成寫完那次時照配)", rc0 == 0 and rc == 1 and "B.md:" in out
+          and "a.py:3" in out, (out0[-300:], out[-500:]))
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "append")
+    rc1, out1 = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+    check("②S22:起點版本裡的舊句只補括號:照配", rc1 == 0, out1[-500:])
+    rc, out = _ns(root, "--diff", f"{_EMPTY_TREE_SHA_T}..{_tail_head(root)}")
+    check("③S23:從空樹算:全不配、整行查(舊行就有的行號引用照報)、不記失敗帳", rc == 1 and "a.py:3" in out and not any(e.get("state") in ("git-failed", "error")
+                                                         for e in _tail_relaxed(root)), out[-500:])
+    # S38:推上去之後
+    pushed = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + "(更正:改寫過的說法 [來源:人工])")  # 不以推上去那行開頭:配不上就整行查
+    _nh_commit(root, "rewrite")
+    rc, out = _ns(root, "--diff", f"{pushed}..{_tail_head(root)}")
+    check("④S38:推上去後改寫括號:整行查", rc == 1 and "a.py:3" in out, out[-500:])
+    _nh_git(root, "reset", "-q", "--hard", pushed)
+    _ns_note(root, summary=_TAIL_OLD_REF + " [來源:人工]")
+    _nh_commit(root, "drop tail")
+    rc, out = _ns(root, "--diff", f"{pushed}..{_tail_head(root)}")
+    check("⑤S38:推上去後另開提交刪括號:舊句當新寫、整行查", rc == 1 and "a.py:3" in out, out[-500:])
+    _nh_git(root, "reset", "-q", "--hard", pushed)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX + "(再補:見 X)")
+    _nh_commit(root, "append more")
+    rc, out = _ns(root, "--diff", f"{pushed}..{_tail_head(root)}")
+    check("⑥S38:在原括號後面再補一段:照配", rc == 0, out[-500:])
+    _nh_git(root, "reset", "-q", "--soft", base)
+    _ns_note(root, summary=_TAIL_OLD_REF + "(更正:重提的說法 [來源:人工])")
+    _nh_commit(root, "recommit")
+    rc, out = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+    check("⑦S38:reset --soft 回範圍起點重提:照配", rc == 0, out[-500:])
+    _ns_note(root, summary=_TAIL_OLD_REF + "(更正:amend 想改的說法 [來源:人工])")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑧S38:amend 改寫括號(提交前起點已有舊括號):整行查", rc == 1 and "a.py:3" in out, out[-500:])
+    # S41:新分支首推
+    _ns_reset(root)
+    root = _ns_repo()
+    _tail_remote(root)
+    _nh_git(root, "checkout", "-q", "-b", "feat-f")
+    _ns_note(root, summary=_TAIL_OLD_REF)
+    _nh_commit(root, "f old")
+    _nh_git(root, "push", "-q", "origin", "feat-f")
+    f_tip = _tail_head(root)
+    _nh_git(root, "checkout", "-q", "-b", "feat-g")
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "g append")
+    g_tip = _tail_head(root)
+    rc_h, out_h = _ns(root, "--diff", f"{f_tip}..{g_tip}")
+    rc_c, out_c = _ns(root, "--diff", f"{'0' * 40}..{g_tip}")
+    check("⑨S41:掛鉤算法(第一個不在遠端的提交的上一版)照配", rc_h == 0, out_h[-500:])
+    check("⑩S41:40 個 0(CI 算法,從跟主線的分岔點)整行查——CI 只會更嚴", rc_c == 1 and "a.py:3" in out_c, out_c[-500:])
+
+
+_EMPTY_TREE_SHA_T = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def t_ns_append_cumulative():
+    """[S24] 同一行分兩個提交各補一段:合起來不超過上限,提交前與推送前都放行;超過時每個提交前各自放行、推送前整行查。"""
+    print("t_ns_append_cumulative")
+    for label, n1, n2, push_ok in (("合起來 200 字", 98, 98, True), ("合起來 350 字", 198, 148, False)):
+        old = "DEP:付款走舊閘道 `src/a.py:3` 還沒換掉"
+        root = _tail_repo(summary=old)
+        base = _tail_head(root)
+        t1 = "(" + "甲" * n1 + "[來源:人工])"
+        t2 = "(" + "乙" * n2 + "[來源:人工])"
+        _ns_note(root, summary=old + t1)
+        _ns_stage(root)
+        rc1, o1 = _ns(root)
+        _nh_commit(root, "a1")
+        _ns_note(root, summary=old + t1 + t2)
+        _ns_stage(root)
+        rc2, o2 = _ns(root)
+        _nh_commit(root, "a2")
+        rcp, op = _ns(root, "--diff", f"{base}..{_tail_head(root)}")
+        check(f"{label}:兩個提交前都放行", rc1 == 0 and rc2 == 0, (o1[-300:], o2[-300:]))
+        check(f"{label}:推送前{'放行' if push_ok else '整行查'}", (rcp == 0) == push_ok, op[-400:])
+
+
+def t_ns_append_doctor():
+    """[S25] 上線點之前就在的舊行在推送裡只在句尾補括號,doctor 事後掃描不唸;中間插字照唸。"""
+    print("t_ns_append_doctor")
+    m = _load_lumos_inproc()
+    root = _ns_repo(golive=False)
+    _ns_note(root, summary=_TAIL_OLD_REF)
+    _nh_commit(root, "before golive")
+    _nh_file(root, "scripts/hooks/pre-commit", "#!/bin/bash\n# " + _NS_HOOK_LINE + "\n")
+    _nh_commit(root, "golive")
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "append")
+    _tail_remote(root)
+    vault = root / "docs" / "kg-knowledge"
+    lines = m._note_shape_doctor_lines(root, vault)
+    check("①只補括號:doctor 不唸", not any("卻違反筆記形狀擋" in x for x in lines), lines)
+    _ns_note(root, summary="DEP:付款走舊的閘道 `src/a.py:3` 還沒換掉" + _TAIL_FIX)
+    _nh_commit(root, "insert")
+    _nh_git(root, "push", "-q", "origin", "main")
+    lines = m._note_shape_doctor_lines(root, vault)
+    check("②中間插字:doctor 照唸,訊息列出可能原因", any("卻違反筆記形狀擋" in x and "累積超過" in x for x in lines), lines)
+
+
+def t_ns_append_failure():
+    """[S26] 配對過程丟例外:第一層照今天整行判、不失敗,推送時記一筆 relaxed、state error、帶例外類別名;git 失敗記 git-failed。"""
+    print("t_ns_append_failure")
+    import io, contextlib
+    m = _load_lumos_inproc()
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "append")
+    tip = _tail_head(root)
+    real_c = m._ns_append_candidates
+
+    def boom(_raw):
+        raise ValueError("x")
+    buf = io.StringIO()
+    try:
+        m._ns_append_candidates = boom
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_note_shape(repo=str(root), diff_range=f"{base}..{tip}")
+    finally:
+        m._ns_append_candidates = real_c
+    ev = _tail_relaxed(root)
+    check("①例外:整行判(擋)、不失敗", rc == 1 and "a.py:3" in buf.getvalue(), buf.getvalue()[-400:])
+    check("②記 relaxed、state error、帶類別名", any(e.get("state") == "error" and e.get("error") == "ValueError" for e in ev), ev)
+    real_b = m._nodehome_cat_blobs_capped
+    buf = io.StringIO()
+    try:
+        m._nodehome_cat_blobs_capped = lambda *a, **k: None
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_note_shape(repo=str(root), diff_range=f"{base}..{tip}")
+    finally:
+        m._nodehome_cat_blobs_capped = real_b
+    ev = _tail_relaxed(root)
+    check("③git 失敗:記 state git-failed", any(e.get("state") == "git-failed" for e in ev), (ev, buf.getvalue()[-300:]))
+
+
+def t_ns_append_nfc_clash():
+    """代碼審 r1 資安席、正確性席:NFC 與 NFD 兩種寫法的同名筆記並存時,配對表以 NFC 當鍵會讓一篇的舊行去扣另一篇的新違規;
+    這種篇整組不配(偏嚴)。對照:只有一篇時照配。"""
+    print("t_ns_append_nfc_clash")
+    import subprocess as sp, unicodedata
+    m = _load_lumos_inproc()
+    root = _ns_repo()
+    _nh_git(root, "config", "core.precomposeunicode", "false")
+    nm = unicodedata.normalize("NFC", "Pé")
+    _ns_note(root, name=nm, summary=_TAIL_OLD_REF)
+    _nh_commit(root, "old")
+    _ns_note(root, name=nm, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_stage(root)
+    rc0, out0 = _ns(root)
+    check("①對照:只有一篇時只補括號照配、不擋", rc0 == 0, out0[-400:])
+    # 另一篇 NFD 寫法的同名筆記,同一行號寫一句全新的違規
+    src = (root / "docs" / "kg-knowledge" / "Systems" / f"{nm}.md").read_text(encoding="utf-8")
+    bad = src.replace(_TAIL_OLD_REF + _TAIL_FIX, "DEP:全新的一句 `src/a.py:5` [來源:人工]")
+    blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=bad.encode(), capture_output=True, check=False).stdout.decode().strip()
+    nfd = "docs/kg-knowledge/Systems/" + unicodedata.normalize("NFD", "Pé") + ".md"
+    sp.run(["git", "-C", str(root), "-c", "core.precomposeunicode=false", "update-index", "--add", "--cacheinfo",
+            f"100644,{blob},{nfd}"], capture_output=True, check=False)
+    ls = sp.run(["git", "-C", str(root), "-c", "core.quotePath=false", "ls-files", "--stage"], capture_output=True, check=False).stdout
+    check("②前提:兩種寫法的同名筆記都在暫存區", ls.count(b"P") >= 2 and nfd.encode() in ls, ls[-300:])
+    t, err = m._notelines_append_pairs(root, True, _nh_git(root, "rev-parse", "HEAD").stdout.strip(), "index", "docs/kg-knowledge")
+    check("③撞名的篇整組不配(不算失敗)", err is None and not t, (t, err))
+    rc, out = _ns(root)
+    check("④撞名時照整行查、擋", rc == 1, out[-400:])
+
+
+def t_ns_append_caps():
+    """[S43] 代碼審 r1 併發席、r2 通才席:候選篇數、候選對或要讀的位元組總和超過上限 → 這次全不配、回 "cap"(不算失敗);
+    第一次查表時印一句提醒(清舊筆記的人照提示做仍被擋、才看得出原因);推送時記一筆 state capped 的放寬帳。"""
+    print("t_ns_append_caps")
+    import contextlib, io
+    m = _load_lumos_inproc()
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF)
+    _nh_commit(root, "two")
+    head = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_note(root, name="B", summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _ns_stage(root)
+    t, err = m._notelines_append_pairs(root, True, head, "index", "docs/kg-knowledge")
+    check("①前提:沒超過上限時兩篇都配", err is None and len(t) == 2, (t, err))
+    for name, val in (("_NS_APPEND_MAX_FILES", 1), ("_NS_APPEND_MAX_PAIRS", 1), ("_NS_APPEND_MAX_TOTAL_BYTES", 10)):
+        real = getattr(m, name)
+        try:
+            setattr(m, name, val)
+            t, err = m._notelines_append_pairs(root, True, head, "index", "docs/kg-knowledge")
+            pr = m._NotelinesPairs(root, True, head, "index", "docs/kg-knowledge")
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                pr.table()
+                pr.table()
+        finally:
+            setattr(m, name, real)
+        check(f"②{name} 超過:全不配、回 cap、不算失敗、提醒只印一次", err == "cap" and not t and pr.capped and not pr.failed
+              and buf.getvalue().count("候選太多") == 1, (t, err, buf.getvalue()))
+    gov = root / "docs" / ".governance-log.jsonl"
+    before = len(_tail_relaxed(root))
+    m._ns_relaxed_record(root, head, "tipsha", {"capped": True, "by_line": {}})
+    ev = _tail_relaxed(root)[before:]
+    check("③推送時候選超過上限:記一筆 state capped", gov.exists() and len(ev) == 1 and ev[0].get("state") == "capped"
+          and ev[0].get("check") == "append-only", ev)
+
+
+def t_ns_append_ledger_dedupe():
+    """[S48] 放寬帳不去重(代碼審 r3 四席:只認路徑行號的去重會吞掉別條分支在同一行補的不同括號、被裁掉的列認不得、
+    每次推送都讀帳):同一次推送範圍重疊時每條分支各記一筆、各帶自己的 head_sha;兩條分支在同一行補不同括號都記;
+    沒有放寬時不讀治理帳。"""
+    print("t_ns_append_ledger_dedupe")
+    m = _load_lumos_inproc()
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _nh_git(root, "checkout", "-q", "-b", "b1")
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "b1 fix")
+    t1 = _tail_head(root)
+    _nh_git(root, "checkout", "-q", "-b", "b2", base)
+    _ns_note(root, summary=_TAIL_OLD_REF + "(更正:另一條分支的說法 [來源:人工])")
+    _nh_commit(root, "b2 fix")
+    t2 = _tail_head(root)
+
+    def done():
+        return [e for e in _tail_relaxed(root) if e.get("state") == "done"]
+    env = {"LUMOS_PUSH_ATTEMPT": "att-1"}
+    _ns(root, "--diff", f"{base}..{t1}", env=env)
+    _ns(root, "--diff", f"{base}..{t2}", env=env)
+    ev = done()
+    check("①同一次推送、兩條分支在同一行補不同括號:兩筆都記、各帶自己的 head_sha",
+          len(ev) == 2 and {e.get("head_sha") for e in ev} == {t1, t2}, ev)
+    _ns(root, "--diff", f"{base}..{t1}", env=env)
+    check("②同一個範圍再跑一次:照記(寧可多記不少記,統計時照推送編號、路徑、行號去重)", len(done()) == 3, done())
+    # 沒有放寬時不讀治理帳
+    _ns_note(root, name="C", summary="KEY:不相干")
+    _nh_commit(root, "plain")
+    calls = [0]
+    real = m._gov_tail_bytes
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    m._gov_tail_bytes = counted
+    try:
+        m._ns_relaxed_record(root, t2, _tail_head(root), {"count": 0, "rules": {}, "pairs": [], "error": None, "capped": False})
+    finally:
+        m._gov_tail_bytes = real
+    check("③沒有放寬時不讀治理帳、不記", calls[0] == 0 and len(done()) == 3, (calls[0], done()))
+
+
+def t_ns_nfc_clash_errs():
+    """[S49] 代碼審 r2 資安席、邊界席:被檢查版本裡同一篇筆記的檔名有 NFC 與 NFD 兩種寫法並存、而且有新寫的行 →
+    形狀擋與內容審都擋下說清楚(新行以 NFC 當鍵會把兩篇併成一篇、另一篇整篇漏查);只有一種寫法時不擋。"""
+    print("t_ns_nfc_clash_errs")
+    import unicodedata
+    m = _load_lumos_inproc()
+    nfc_name, nfd_name = "Systems/" + unicodedata.normalize("NFC", "café") + ".md", "Systems/" + unicodedata.normalize("NFD", "café") + ".md"
+    v = "docs/kg-knowledge"
+    nn = unicodedata.normalize("NFC", f"{v}/{nfd_name}")      # _nodehome_list 的「所有路徑」逐筆 NFC 化、不去重
+    errs = m._ns_nfc_clash_errs([nn, nn, f"{v}/Systems/A.md"], v, [f"{v}/{nfd_name}"])
+    check("①兩種寫法並存、有新行:擋並說清楚", len(errs) == 1 and "兩種 Unicode 寫法" in errs[0], errs)
+    check("②兩種寫法並存、但這次沒新行:不擋", m._ns_nfc_clash_errs([nn, nn], v, [f"{v}/Systems/A.md"]) == [], "")
+    check("③只有一種寫法:不擋", m._ns_nfc_clash_errs([nn, f"{v}/Systems/A.md"], v, [f"{v}/{nfc_name}"]) == [], "")
+    root = _ns_repo()
+    # 直接寫進暫存區(macOS 的檔案系統把兩種寫法當同一個檔,寫工作目錄做不出並存)
+    import subprocess as sp
+    for form, body in (("NFC", "---\ntype: system\n---\n# c\n"), ("NFD", "---\ntype: system\n---\n# c\nDEP:舊的 `src/a.py:3`\n")):
+        sha = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=body.encode(), capture_output=True).stdout.decode().strip()
+        _nh_git(root, "-c", "core.precomposeunicode=false", "update-index", "--add", "--cacheinfo", f"100644,{sha},{v}/Systems/" + unicodedata.normalize(form, "café") + ".md")
+    lst = m._nodehome_list(root, "index")
+    check("④前提:暫存區真的有兩種寫法(所有路徑清單裡同名兩筆)", lst is not None and lst[1].count(nn) == 2, lst and lst[1])
+    rc, out = _ns(root)
+    check("⑤端到端:形狀擋 rc1 並印兩種寫法", rc == 1 and "兩種 Unicode 寫法" in out, out[-500:])
+    base = _tail_head(root)
+    _nh_git(root, "commit", "-q", "-m", "clash")
+    res = m._note_audit_items(root, base, _tail_head(root), v)
+    check("⑥內容審同一支:送審清單帶這條錯誤", res is not None and any("兩種 Unicode 寫法" in e for e in res[1]), res and res[1])
+
+
+def t_ns_append_capped_end_to_end():
+    """[S43] 推送時候選真的超過上限 → _NotelinesPairs.capped → _ns_relaxed_settle → 記一筆 state capped(代碼審 r3 三席:
+    原本只有手餵 _ns_relaxed_record 的單元測試,拿掉中間接線照綠);前置斷言:沒超過上限時記 done、不記 capped。"""
+    print("t_ns_append_capped_end_to_end")
+    import contextlib, io
+    m = _load_lumos_inproc()
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "fix")
+    rng = f"{base}..{_tail_head(root)}"
+
+    def run():
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = m.cmd_note_shape(str(root), diff_range=rng)
+        return rc, buf.getvalue()
+    rc0, out0 = run()
+    st0 = [e.get("state") for e in _tail_relaxed(root)]
+    check("①前提:沒超過上限時配上、記 done、不記 capped", rc0 == 0 and "done" in st0 and "capped" not in st0, (st0, out0[-300:]))
+    real = m._NS_APPEND_MAX_PAIRS
+    try:
+        m._NS_APPEND_MAX_PAIRS = 0
+        rc, out = run()
+    finally:
+        m._NS_APPEND_MAX_PAIRS = real
+    st = [e.get("state") for e in _tail_relaxed(root)][len(st0):]
+    check("②超過上限:整行查(舊行就有的引用照報)、印提醒、記一筆 capped", rc == 1 and "a.py:3" in out and "候選太多" in out
+          and st.count("capped") == 1 and "done" not in st, (st, out[-400:]))
+
+
+def t_ns_deleted_lines_diff_flags():
+    """讀被刪摘要行與取改動區塊用同一組切法旗標(代碼審 r2 架構對齊席折入、r3 兩席:拿掉旗標測試照綠——讀法照計數走,
+    切法差異在行為上量不出來,所以釘參數):兩支都帶 --inter-hunk-context=0 與 --diff-algorithm=myers。"""
+    print("t_ns_deleted_lines_diff_flags")
+    m = _load_lumos_inproc()
+    root = _ns_repo()
+    _ns_note(root, summary="RULE:舊規則 [since:2026-01-01] [retire:人裁]")
+    _nh_commit(root, "old")
+    _ns_note(root, summary="KEY:x")
+    _ns_stage(root)
+    seen = []
+    real = m._ns_git
+
+    def spy(repo_root, *args, **kw):
+        seen.append(args)
+        return real(repo_root, *args, **kw)
+    m._ns_git = spy
+    try:
+        dl = m._ns_deleted_summary_lines(root, "--cached", "--", "docs/kg-knowledge")
+        m._ns_diff(root, "--cached", "HEAD", "--", "docs/kg-knowledge")
+    finally:
+        m._ns_git = real
+    diffs = [a for a in seen if a and a[0] == "diff"]
+    check("①前提:兩支都真的呼叫了 git diff、讀到被刪的行", len(diffs) >= 2 and dl and any("舊規則" in x for x in dl), (diffs, dl))
+    check("②每一次都帶兩個切法旗標", all("--inter-hunk-context=0" in a and "--diff-algorithm=myers" in a for a in diffs), diffs)
+
+
+def t_gate_event_fit_bisect():
+    """代碼審 r1 四席:共用 4 KB 裁法改二分,留下的筆數跟逐筆從尾端丟一樣、兩萬筆只組幾十次事件;nodes_cap 只在清單丟光仍超過時截。"""
+    print("t_gate_event_fit_bisect")
+    import json as _j
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gfit-"))
+
+    def naive(n):
+        ex = {"check": "x", "rows": [["docs/kg-knowledge/Systems/某一篇筆記.md", i] for i in range(n)]}
+        rows = ex["rows"]
+        while rows and len((_j.dumps(m._gate_event_build(root, "g", "k", "n", extra=ex), ensure_ascii=False) + "\n").encode()) > 4096:
+            rows.pop()
+            ex["rows_truncated"] = True             # 舊寫法(_drift_m1_fit 改版前)逐筆丟、旗標也算在長度裡
+        return len(rows)
+    same = True
+    for n in (0, 1, 50, 80, 81, 200, 1000):
+        ex = {"check": "x", "rows": [["docs/kg-knowledge/Systems/某一篇筆記.md", i] for i in range(n)]}
+        m._gate_event_fit(root, "g", "k", "n", ex, "rows")
+        same = same and len(ex["rows"]) == naive(n) and (("rows_truncated" in ex) == (naive(n) < n))
+    check("①留下的筆數與旗標跟逐筆丟一樣", same, "")
+    ex = {"check": "x", "pairs": [["docs/kg-knowledge/Systems/某一篇筆記.md", i] for i in range(20000)]}
+    real, calls = m._gate_event_build, [0]
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    m._gate_event_build = counted
+    try:
+        m._gate_event_fit(root, "g", "k", "n", ex, "pairs")
+    finally:
+        m._gate_event_build = real
+    line = (_j.dumps(m._gate_event_build(root, "g", "k", "n", extra=ex), ensure_ascii=False) + "\n").encode()
+    # 數組事件的次數、不量秒數(代碼審 r2 通才席:牆上時鐘的門檻在忙的機器上會誤紅);二分約 log2(20000)≈15 次,逐筆丟要上萬次
+    check("②兩萬筆:組事件不超過 40 次、整行不超過 4 KB、帶旗標", calls[0] <= 40 and len(line) <= 4096
+          and ex.get("pairs_truncated") is True, (calls[0], len(line)))
+    ex = {"check": "x" * 5000}
+    nodes = m._gate_event_fit(root, "g", "k", "n", ex, "rows", nodes=[f"n{i}" for i in range(30)], nodes_cap=20)
+    check("③清單本來沒有、仍超過:nodes 截到 20 並記旗標", len(nodes) == 20 and ex.get("rows_truncated") is True, (len(nodes), ex.keys()))
+
+
+def t_ns_append_r1_minor_folds():
+    """代碼審 r1 原本放行、後來照「有 major 的輪不准放行」折掉的三條:①讀法是線性的(單一改動段十萬行對一萬行不到 30 倍);
+    ②讀被刪摘要行改走共用讀法,內容是 -- x 的被刪行照讀、續行照接;③同一次推送(同一個推送編號)重跑照記(r3 改成不去重)。"""
+    print("t_ns_append_r1_minor_folds")
+    import time
+    m = _load_lumos_inproc()
+    n = 100000
+    def timed(k):
+        r = ("diff --git a/d/n.md b/d/n.md\n--- a/d/n.md\n+++ b/d/n.md\n" + f"@@ -1,{k} +1,{k} @@\n"
+             + "".join(f"-舊的一行內容 {i}\n" for i in range(k)) + "".join(f"+新的一行內容 {i}(更正)\n" for i in range(k))).encode()
+        t0 = time.perf_counter()
+        g = m._notelines_parse_added(r)
+        return time.perf_counter() - t0, g
+    small, _g = min(timed(n // 10) for _ in range(3))
+    big, got = min(timed(n) for _ in range(3))
+    # 比相對倍數、不比秒數(代碼審 r2 通才席):十倍的輸入線性約十倍,平方會到百倍;取三次最快的壓掉機器抖動
+    check("①單一改動段十萬行:耗時對一萬行不到 30 倍(線性)、行數對", big < 30 * max(small, 1e-4) and len(got.get("d/n.md", [])) == n,
+          (small, big, len(got.get("d/n.md", []))))
+    root = _ns_repo()
+    _ns_note(root, summary="RULE:舊規則一 [since:2026-01-01] [retire:人裁]\n  -- 續行開頭是兩個減號的那一行\nRULE:舊規則二 [since:2026-01-01] [retire:人裁]")
+    _nh_commit(root, "old")
+    _ns_note(root, summary="KEY:x")
+    _ns_stage(root)
+    dl = m._ns_deleted_summary_lines(root, "--cached", "--", "docs/kg-knowledge")
+    check("②被刪摘要行照讀、-- 開頭的續行接回去", dl is not None and any("舊規則一" in x and "續行開頭是兩個減號" in x for x in dl)
+          and any("舊規則二" in x for x in dl), dl)
+    root = _tail_repo(summary=_TAIL_OLD_REF)
+    base = _tail_head(root)
+    _ns_note(root, summary=_TAIL_OLD_REF + _TAIL_FIX)
+    _nh_commit(root, "fix")
+    tip = _tail_head(root)
+    env = {"LUMOS_PUSH_ATTEMPT": "attempt-xyz"}
+    _ns(root, "--diff", f"{base}..{tip}", env=env)
+    _ns(root, "--diff", f"{base}..{tip}", env=env)
+    n1 = len(_tail_relaxed(root))
+    # r3 改成不去重(代碼審 r3 四席,見 t_ns_append_ledger_dedupe):同一個推送編號重跑也照記,寧可多記不少記
+    check("③同一個推送編號重跑:照記(不去重)", n1 == 2, n1)
 
 
 def t_note_shape_line_refs_existing_code_new_only():
@@ -50424,7 +51217,8 @@ def t_note_lines_scope_rename_and_non_utf8():
 
 
 def t_note_shape_block_message_and_fail_open():
-    """[S7] 擋下印檔、行、規則、改法與「內容還在工作目錄」;不改筆記與暫存區;只有擋下寫事件、放行不寫;
+    """[S7] 擋下印檔、行、規則、改法與「內容還在工作目錄」;不改筆記與暫存區;只有擋下寫事件、放行不寫(推送時舊行尾補括號
+    減掉違規另記 relaxed 是例外,見 t_ns_append_ledger);
     不是 git 時放行並說一句。"""
     print("t_note_shape_block_message_and_fail_open")
     root = _ns_repo()
@@ -51469,7 +52263,8 @@ def t_note_audit_record_provenance_trust_direction():
     three = [(rows["推得出的行"], "CODE", "`src/a.py:3`"), (rows["一半的行"], "MIXED", "`src/a.py:4`"), (rows["脈絡的行"], "CONTEXT")]
     tmp = Path(tempfile.mkdtemp(prefix="gctl-na-rep-"))
     old_ver = tmp / "old-version-list.md"
-    old_ver.write_text(fs[0].read_text(encoding="utf-8").replace("派工詞版本: 1\n", "派工詞版本: 0\n"), encoding="utf-8")
+    v = _load_lumos_inproc()._NOTE_AUDIT_PROMPT_VERSION       # 用目前版本減一造舊版清單,升版不必改這裡(舊行尾追加不算新寫 [S35])
+    old_ver.write_text(fs[0].read_text(encoding="utf-8").replace(f"派工詞版本: {v}\n", f"派工詞版本: {v - 1}\n"), encoding="utf-8")
     cases = [("缺開頭四行", fs[0], dict(head=False)), ("provider 不等於清單的編排者", fs[0], dict(provider="codex")),
              ("prepared 不等於清單指紋", fs[0], dict(prepared="0" * 16)), ("清單的派工詞版本不是目前版本", old_ver, {})]
     for label, lf, kw in cases:
@@ -55293,6 +56088,241 @@ def t_note_audit_reread_prepare_prompt_verbatim():
                  .replace("{{PROMPT_VERSION}}", str(m._NOTE_AUDIT_PROMPT_VERSION)))
     check("⑤筆記內容審的派工詞輸出逐字不變(改走共用的範本載入與填字)", m._note_audit_prompt(root) == legacy(root), "")
 
+
+_TAIL2_OLD = "說明付款這段走的是舊閘道的那一句"
+_TAIL2_FIX = "(更正:2026-10-02 已換成新閘道)"
+
+
+def _tail2_repo():
+    """第二層的補括號專案:上線點(含推送前掛鉤標記)之後提交一行舊句,當起點版本。回 (根, 起點)。"""
+    root, _b = _na_repo()
+    _na_body(root, [_TAIL2_OLD, "不動的一行"])
+    _nh_commit(root, "old")
+    return root, _na_head(root)
+
+
+def t_note_audit_append_marks():
+    """[S31] 第二層送審的行是舊行尾補括號:清單印出舊句與只判句尾兩行、標頭帶尾;沒配對的新行照今天的樣子。"""
+    print("t_note_audit_append_marks")
+    root, base = _tail2_repo()
+    _na_body(root, [_TAIL2_OLD + _TAIL2_FIX, "不動的一行", "另外新寫的一行"])
+    _nh_commit(root, "append")
+    _rc, _out, files = _na_prepare(root, f"{base}..{_na_head(root)}")
+    t = "".join(f.read_text(encoding="utf-8") for f in files)
+    check("①舊句與只判句尾兩行", f"舊句(起點版本已有,不在這次判的範圍): {_TAIL2_OLD}\n" in t
+          and f"只判這次補在句尾的: {_TAIL2_FIX}\n" in t, t[-800:])
+    check("②標頭帶尾", " | 尾 " in t, t[-800:])
+    blk = t.split(">>> 另外新寫的一行")[1].split("~~~~")[0] if ">>> 另外新寫的一行" in t else ""
+    check("③沒配對的新行照今天的樣子(不印兩行)", ">>> 另外新寫的一行" in t and "只判這次補在句尾的" not in blk, blk)
+    root2, base2 = _na_repo()
+    p2 = root2 / "docs" / "kg-knowledge" / "Systems" / "C.md"
+    p2.write_bytes(("---\r\ntype: system\r\n---\r\n# C\r\n" + _TAIL2_OLD + "\r\n").encode())
+    _nh_commit(root2, "crlf")
+    base2 = _na_head(root2)
+    p2.write_bytes(("---\r\ntype: system\r\n---\r\n# C\r\n" + _TAIL2_OLD + _TAIL2_FIX + "\r\n").encode())
+    _nh_commit(root2, "crlf append")
+    _rc2, _o2, f2 = _na_prepare(root2, f"{base2}..{_na_head(root2)}")
+    t2 = "".join(f.read_bytes().decode("utf-8") for f in f2)
+    check("⑤CRLF 筆記:清單的舊句與追加段都照原樣留 CR", f"不在這次判的範圍): {_TAIL2_OLD}\r\n" in t2
+          and f"只判這次補在句尾的: {_TAIL2_FIX}\r\n" in t2, t2[-600:])
+    check("④版本是目前的派工詞版本", f"派工詞版本: {_load_lumos_inproc()._NOTE_AUDIT_PROMPT_VERSION}\n" in t, "")
+
+
+def t_note_audit_append_failure():
+    """[S27] 配對過程丟例外:第二層照今天整行送審、不失敗。"""
+    print("t_note_audit_append_failure")
+    m = _load_lumos_inproc()
+    root, base = _tail2_repo()
+    _na_body(root, [_TAIL2_OLD + _TAIL2_FIX, "不動的一行"])
+    _nh_commit(root, "append")
+    ok = m._note_audit_items(root, base, _na_head(root), "docs/kg-knowledge")
+    check("①前提:不炸時這行會標追加段", ok is not None and any(it.get("appended") for it in ok[0]), ok)
+    real = m._ns_append_candidates
+
+    def boom(_raw):
+        raise ValueError("x")
+    try:
+        m._ns_append_candidates = boom
+        got = m._note_audit_items(root, base, _na_head(root), "docs/kg-knowledge")
+    finally:
+        m._ns_append_candidates = real
+    items = got[0] if got else []
+    check("例外:照整行送審(沒有追加段)、不失敗", got is not None and items and not any(it.get("appended") for it in items), got)
+
+
+def t_note_audit_append_scope():
+    """[S32][S33][S34][S40] 同編號一處補括號、一處整行新寫:都不標;只判尾巴的判定只涵蓋配到同一句舊句的項目;整行判定涵蓋
+    帶追加段的;同編號下有尾巴的 CODE 判定時 skip 擋;record 結尾清單跟 check 同一個算法;doctor 不比範圍(CONTEXT 不唸、CODE 照唸);
+    判定檔 tail 不是字串整份當壞。"""
+    print("t_note_audit_append_scope")
+    import json as _j
+    m = _load_lumos_inproc()
+    # S32
+    root, base = _tail2_repo()
+    _na_body(root, [_TAIL2_OLD + _TAIL2_FIX, "不動的一行", _TAIL2_OLD + _TAIL2_FIX])
+    _nh_commit(root, "dup")
+    items = m._note_audit_items(root, base, _na_head(root), "docs/kg-knowledge")[0]
+    dup = [it for it in items if it["text"] == _TAIL2_OLD + _TAIL2_FIX]
+    check("①S32:同編號兩處一處補括號一處整行新寫:都不標", len(dup) == 2 and len({it["id"] for it in dup}) == 1
+          and not any(it.get("appended") for it in dup), dup)
+    # S33:涵蓋規則
+
+    def V(rows, kind="判定"):
+        return {"kind": kind, "rows": rows}
+    sc = m._note_audit_fold_scoped({"a": V([{"id": "X", "class": "CONTEXT", "tail": "h1"}]),
+                                    "b": V([{"id": "Y", "class": "CONTEXT"}]),
+                                    "c": V([{"id": "Z", "class": "CODE", "tail": "h3"}]),
+                                    "d": V([{"id": "Z", "class": "SKIP"}], "略過")})
+    cf = m._note_audit_class_for
+    check("②S33:尾巴判定涵蓋同一句舊句的項目", cf(sc, {"id": "X", "tail": "h1"}) == "CONTEXT", "")
+    check("③S33:尾巴判定不涵蓋整行送審、也不涵蓋配到別句舊句的", cf(sc, {"id": "X"}) is None and cf(sc, {"id": "X", "tail": "h2"}) is None, "")
+    check("④S33:整行判定涵蓋帶追加段的項目", cf(sc, {"id": "Y", "tail": "h9"}) == "CONTEXT", "")
+    check("⑤S33:不比範圍的那支同編號各範圍取最重", m._note_audit_fold({"c": V([{"id": "Z", "class": "CODE", "tail": "h3"}]),
+                                                              "e": V([{"id": "Z", "class": "CONTEXT"}])}).get("Z") == "CODE", "")
+    # S33 端到端:尾巴判 CODE 後 skip 擋、尾巴判 CONTEXT 後 check 過、record 結尾不列
+    root, base = _tail2_repo()
+    _na_body(root, [_TAIL2_OLD + _TAIL2_FIX, "不動的一行"])
+    _nh_commit(root, "append")
+    rng = f"{base}..{_na_head(root)}"
+    rc, out, files = _na_prepare(root, rng)
+    rows = _na_rows(files[0])
+    rid = next(i for i, t in rows if t == _TAIL2_OLD + _TAIL2_FIX)
+    rep = _na_report(Path(tempfile.mkdtemp()) / "r.md", files[0], [(rid, "CODE", "src/a.py:1")])
+    rc, out = _na_record(root, rng, files[0], rep)
+    vs = [_j.loads(p.read_text(encoding="utf-8")) for p in (root / "governance" / "note-verdicts").glob("*.json")]
+    check("⑥record:清單帶尾的那行,判定列寫 tail", any(r.get("id") == rid and r.get("tail") for v in vs for r in v["rows"]), vs)
+    rc, out = _na(root, "skip", "--diff", rng, "--note", "測試略過這幾行")
+    vs2 = [_j.loads(p.read_text(encoding="utf-8")) for p in (root / "governance" / "note-verdicts").glob("*.json")]
+    check("⑦S33:同編號下有尾巴的 CODE 判定,skip 擋、不寫略過", "不能略過" in out
+          and not any(v.get("kind") == "略過" and any(r["id"] == rid for r in v["rows"]) for v in vs2), out[-400:])
+    for p in (root / "governance" / "note-verdicts").glob("*.json"):
+        p.unlink()
+    rc, out, files = _na_prepare(root, rng)
+    rows = _na_rows(files[0])
+    rep = _na_report(Path(tempfile.mkdtemp()) / "r.md", files[0], [(i, "CONTEXT") for i, _t in rows])
+    rc, out = _na_record(root, rng, files[0], rep)
+    check("⑧S33:record 結尾的還沒涵蓋清單不列尾巴判 CONTEXT 的那行", "還沒被涵蓋" not in out, out[-400:])
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "verdicts")
+    rc, out = _na(root, "check", "--diff", f"{base}..{_na_head(root)}")
+    check("⑨S33:check 認尾巴判定、過", rc == 0, out[-400:])
+    # S34:doctor 不比範圍——上線點之後才寫的舊句,doctor 從上線點掃配不到,但判定照算
+    _tail_remote(root)
+    a_md = (root / "docs" / "kg-knowledge" / "Systems" / "A.md").read_text(encoding="utf-8").split("\n")
+    where = "A.md:%d" % next(i for i, x in enumerate(a_md, 1) if x == _TAIL2_OLD + _TAIL2_FIX)
+    lines = m._note_audit_doctor_lines(root, root / "docs" / "kg-knowledge")
+    check("⑩S34:尾巴判 CONTEXT,doctor 起點配不到也算涵蓋、不唸那一行",
+          not any("沒被筆記內容審涵蓋" in x and where in x for x in lines), (where, lines))
+    for p in (root / "governance" / "note-verdicts").glob("*.json"):
+        d = _j.loads(p.read_text(encoding="utf-8"))
+        for r in d["rows"]:
+            if r["id"] == rid:
+                r["class"], r["evidence"] = "CODE", "src/a.py:1"
+        p.write_text(_j.dumps(d, ensure_ascii=False), encoding="utf-8")
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "make code")
+    _nh_git(root, "push", "-q", "origin", "main")
+    lines = m._note_audit_doctor_lines(root, root / "docs" / "kg-knowledge")
+    check("⑪S34:尾巴判 CODE,doctor 照唸那一行", any("沒被筆記內容審涵蓋" in x and where in x for x in lines), (where, lines))
+    # S40
+    bad = {"kind": "判定", "rows": [{"id": "X", "class": "CONTEXT", "tail": 123}]}
+    check("⑫S40:tail 不是 16 碼十六進位(數字、空字串、亂字),整份判定檔當壞", m._note_audit_parse_verdict(_j.dumps(bad)) is None
+          and m._note_audit_parse_verdict(_j.dumps({"kind": "判定", "rows": [{"id": "X", "class": "CONTEXT", "tail": ""}]})) is None
+          and m._note_audit_parse_verdict(_j.dumps({"kind": "判定", "rows": [{"id": "X", "class": "CONTEXT", "tail": "ab"}]})) is None
+          and m._note_audit_parse_verdict(_j.dumps({"kind": "判定", "rows": [{"id": "X", "class": "CONTEXT", "tail": "0123456789abcdef"}]})) is not None, "")
+
+
+def t_note_audit_append_scope_more():
+    """代碼審 r1:同編號兩處配到不同的舊句都不標;申訴不分範圍換掉同編號的尾巴判定;範圍配不到時 check 印「只判過句尾」、
+    skip 能略過(跟 check 同一個算法);規則名分組表的每個名字都真的出現在產生它的函式裡(漂移守衛)。"""
+    print("t_note_audit_append_scope_more")
+    import inspect
+    m = _load_lumos_inproc()
+
+    class P:
+        failed, error = False, None
+
+        def __init__(self, t):
+            self.t = t
+
+        def table(self):
+            return self.t
+    items = [{"id": "X", "path": "a.md", "line": 1, "text": "舊句(甲)(乙)", "done": False},
+             {"id": "X", "path": "a.md", "line": 5, "text": "舊句(甲)(乙)", "done": False}]
+    m._note_audit_mark_appended(items, P({"a.md": {1: "舊句", 5: "舊句(甲)"}}))
+    check("①S32:同編號兩處配到不同的舊句:都不標", not any(it.get("tail") for it in items), items)
+    sc = m._note_audit_fold_scoped({"v1.json": {"kind": "判定", "rows": [{"id": "X", "class": "CONTEXT", "tail": "0123456789abcdef"}]},
+                                    "a1.json": {"kind": "申訴", "disputes": "v1.json", "rows": [{"id": "X", "class": "CODE"}]}})
+    check("②整行申訴(不帶句尾)換掉同編號的尾巴判定", m._note_audit_class_for(sc, {"id": "X", "tail": "0123456789abcdef"}) == "CODE", sc)
+    src = inspect.getsource(m._ns_check_line)
+    check("③可扣規則表的每個名字都出現在產生它的函式裡(改名時表會漏)", all(f'"{r}"' in src for r in m._NS_FRAG_KEY_RULES),
+          [r for r in m._NS_FRAG_KEY_RULES if f'"{r}"' not in src])
+    # 範圍配不到時:check 印只判過句尾、skip 能略過
+    root, base = _tail2_repo()
+    _na_body(root, [_TAIL2_OLD + _TAIL2_FIX, "不動的一行"])
+    _nh_commit(root, "append")
+    rng = f"{base}..{_na_head(root)}"
+    _rc, _out, files = _na_prepare(root, rng)
+    rows = _na_rows(files[0])
+    rep = _na_report(Path(tempfile.mkdtemp()) / "r.md", files[0], [(i, "CONTEXT") for i, _t in rows])
+    _na_record(root, rng, files[0], rep)
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "verdicts")
+    wide = f"{_EMPTY_TREE_SHA_T}..{_na_head(root)}"
+    rc, out = _na(root, "check", "--diff", wide)
+    check("④範圍配不到:check 擋並印「只判過句尾」", rc == 1 and "只判過句尾" in out, out[-500:])
+    rc, out = _na(root, "skip", "--diff", wide, "--note", "測試範圍配不到時略過")
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "skip")
+    rc2, out2 = _na(root, "check", "--diff", f"{_EMPTY_TREE_SHA_T}..{_na_head(root)}")
+    check("⑤skip 能略過那幾行(跟 check 同一個算法),之後 check 過", rc2 == 0, (out[-300:], out2[-300:]))
+
+
+def t_note_audit_dispute_scope():
+    """[S50] 代碼審 r2 正確性席、資安席:整行的申訴換掉同編號的每一種範圍;只判句尾的申訴只換同一個句尾的判定,
+    不會把同編號的整行 CODE 蓋成 CONTEXT;同一句尾整行與句尾申訴都有就取最重。顯示用語分「沒判過/只判過句尾/判過的是別的句尾」。"""
+    print("t_note_audit_dispute_scope")
+    m = _load_lumos_inproc()
+    h1, h2 = "0123456789abcdef", "fedcba9876543210"
+    def V(rows):
+        return {"kind": "判定", "rows": rows}
+
+    def A(rows):
+        return {"kind": "申訴", "disputes": "v1.json", "rows": rows}
+    cf = m._note_audit_class_for
+    sc = m._note_audit_fold_scoped({"v1.json": V([{"id": "X", "class": "CODE"}, {"id": "X", "class": "CODE", "tail": h1}]),
+                                    "a1.json": A([{"id": "X", "class": "CONTEXT", "tail": h1}])})
+    check("①句尾申訴不蓋整行 CODE", cf(sc, {"id": "X"}) == "CODE", sc)
+    check("②句尾申訴換掉同一個句尾的判定,但整行判定仍涵蓋它、取最重", sc[0].get(("X", h1)) == "CONTEXT"
+          and cf(sc, {"id": "X", "tail": h1}) == "CODE", sc)
+    sc = m._note_audit_fold_scoped({"v1.json": V([{"id": "X", "class": "CODE", "tail": h1}, {"id": "X", "class": "CODE", "tail": h2}]),
+                                    "a1.json": A([{"id": "X", "class": "CONTEXT", "tail": h1}])})
+    check("③句尾申訴只換同一個句尾:別的句尾不動", sc[0].get(("X", h1)) == "CONTEXT" and sc[0].get(("X", h2)) == "CODE", sc)
+    sc = m._note_audit_fold_scoped({"v1.json": V([{"id": "X", "class": "CODE"}, {"id": "X", "class": "CODE", "tail": h1}]),
+                                    "a1.json": A([{"id": "X", "class": "CONTEXT"}])})
+    check("④整行申訴換掉每一種範圍", sc[0].get(("X", None)) == "CONTEXT" and sc[0].get(("X", h1)) == "CONTEXT", sc)
+    sc = m._note_audit_fold_scoped({"v1.json": V([{"id": "X", "class": "CONTEXT", "tail": h1}]),
+                                    "a1.json": A([{"id": "X", "class": "CONTEXT"}]),
+                                    "a2.json": A([{"id": "X", "class": "MIXED", "tail": h1}])})
+    check("⑤同一句尾整行與句尾申訴都有:取最重", sc[0].get(("X", h1)) == "MIXED", sc)
+    sc = m._note_audit_fold_scoped({"v1.json": V([{"id": "X", "class": "CONTEXT", "tail": h1}])})
+    sh = m._note_audit_show_class
+    check("⑥顯示:沒判過/只判過句尾/判過的是別的句尾", sh(sc, {"id": "Y"}) == "沒判過" and sh(sc, {"id": "X"}) == "只判過句尾,這次整行送審"
+          and sh(sc, {"id": "X", "tail": h2}) == "判過的是別的句尾" and sh(sc, {"id": "X", "tail": h1}) == "CONTEXT", "")
+
+
+def t_note_audit_judge_template_pinned():
+    """[S37] 判定者派工詞範本的內容雜湊與 _NOTE_AUDIT_PROMPT_VERSION 一起釘住:範本改了而版本常數沒改 → 這條紅。
+    改範本的人要升版號、照 Systems/筆記內容審 的 RULE 重跑判定者驗收、結果記進計劃,再把這裡的雜湊與版本一起改
+    (照 t_note_audit_reread_template_pinned;Projects/舊行尾追加不算新寫_計劃〈做法〉4)。"""
+    print("t_note_audit_judge_template_pinned")
+    import hashlib
+    m = _load_lumos_inproc()
+    p = Path(GRAPHCTL).resolve().parent / "templates" / "note-audit-judge.md"
+    h = hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() if p.is_file() else None
+    check("範本雜湊與版本常數一起釘住(改範本要升版、重跑判定者驗收再改這裡)",
+          (m._NOTE_AUDIT_PROMPT_VERSION, h) == (2, "416758fba6195791098cdacebcdebe61185aede608541608d6b376aad551125e"),
+          f"版本 {m._NOTE_AUDIT_PROMPT_VERSION}、雜湊 {h}")
 
 def t_note_audit_reread_template_pinned():
     """[S4] 範本內容雜湊與版本常數一起釘住:範本改了而 _NOTE_REREAD_PROMPT_VERSION 沒改 → 這條紅。

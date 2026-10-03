@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-02
+updated: 2026-10-03
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -17,6 +17,7 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
 summary: |-
+  WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
@@ -29,7 +30,7 @@ summary: |-
   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
   KEY:gov 彙整多本帳(6 源 <!--lumos:count=6 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME) in=scripts/lumos-->:bypass/governance/signoff/kill/canary/ci,ci 條件載入;★原記 7 源含 rot-queue,2026-08-22 該 loader 拆除(寫帳的 verification-rot-check 8/21 已撤、本機無此檔,留著只是假名額)——Check N 當天就抓到數字漂,由另一個 session 順手修★),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內)——原記「皆 gitignore local-only」已不成立;**根因**=scaffold 把 ignore 清單寫在 vault 內、帳檔在上一層 `docs/`,從未生效(同日修,新專案起生效;本 repo 維持追蹤,見 [[Verification/2026-08-21_doctor-run事件落地]])★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
-  WHY:[2026-09-28 Projects/存量漂移防線_計劃]閘名單加 drift-check:存量漂移守衛的擋下、提醒、跳過、表態都記在這個閘名下;放行不寫帳(同筆記形狀擋),doctor Z 段也不寫——存量每天唸同一批會被週報升級成噪音
+  WHY:[2026-09-28 Projects/存量漂移防線_計劃]閘名單加 drift-check:存量漂移守衛的擋下、提醒、跳過、表態都記在這個閘名下;放行不寫帳(同筆記形狀擋;筆記形狀擋 2026-10-03 起推送時舊行尾補括號減掉違規另記 relaxed,見 [[Projects/舊行尾追加不算新寫_計劃]]),doctor Z 段也不寫——存量每天唸同一批會被週報升級成噪音
   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
   KEY:對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄)=canary 分帳尾加「折入 N 筆缺陷[severity 分佈]|依審計員」——折入=caught 輪辯方裁決後存活折入的真缺陷(測試綠後仍被抓,天生=測試漏掉的);長期趨零=整套對抗機關裝飾品該砍,這是驗證層對自己的驗證。missed 輪不計;findings 欄 M1(07-21)前舊輪誠實另計。首跑真帳:近 90 天折入 866 筆(blocker 404/major 403/minor 59)——機關非裝飾實證 [test:t_gov_adversarial_increment]
   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
