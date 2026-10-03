@@ -36982,6 +36982,142 @@ def t_probe_source_probe_git_env():
         check("source Git 環境不能把兩runner導去本體", before == after and all("GIT_DIR" not in e and "GIT_WORK_TREE" not in e for e in seen), "")
 
 
+def t_probe_repair4_incomplete_ids():
+    import json
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_r4_ids")
+    token = "LUMOS_READ_" + "f" * 32
+    sc = next(row for row in _probe_scenarios_all() if row["id"] == "v04-where-used")
+    for event_type in ("item.started", "item.updated"):
+        for ident in (None, "", 7):
+            item = {"type": "command_execution", "command": "cat scripts/lumos"}
+            if ident is not None:
+                item["id"] = ident
+            events = [{"type": event_type, "item": item}, {"type": "turn.completed"}]
+            output = "\n".join(json.dumps(e) for e in events)
+            with patch.object(mod.subprocess, "run", return_value=SimpleNamespace(stdout=output, stderr="", returncode=0)):
+                result = mod.run_one_codex(sc, Path("."), 1, None, source_token=token)
+            summary = mod.summarize_results([result])
+            mixed = mod.summarize_results([result, _probe_res("control", True)])
+            check("r4 缺/壞ID排除 " + event_type + repr(ident), result["source_evidence"] == "unknown" and summary["excluded"] == [sc["id"]] and not summary["failed"] and summary["inconclusive"] and mixed["scored"] == 1, result)
+            positive = events + _source_probe_events("codex", token)
+            check("r4 已有正證據不受其他壞呼叫影響", mod.source_evidence([json.dumps(e) for e in positive], "codex", token) == "present", "")
+    completed = _source_probe_events("codex", "not the target")
+    check("r4 完整有效未讀仍計失敗", mod.source_evidence([json.dumps(e) for e in completed], "codex", token) == "absent", "")
+
+
+def t_probe_repair4_git_config():
+    import os, tempfile, subprocess, shutil
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_r4_config")
+    real_run = subprocess.run
+    with tempfile.TemporaryDirectory(prefix="probe-r4-config-") as td:
+        root = Path(td)
+        _source_probe_fixture(root / "src")
+        bare = root / "remote.git"
+        real_run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+        empty_hooks = root / "empty-hooks"
+        empty_hooks.mkdir()
+        conf = root / "injected.config"
+        conf.write_text(f'[remote "escape"]\n\turl = {bare}\n[core]\n\thooksPath = {empty_hooks}\n')
+        variants = [
+            {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "remote.escape.url", "GIT_CONFIG_VALUE_0": str(bare), "GIT_CONFIG_KEY_1": "core.hooksPath", "GIT_CONFIG_VALUE_1": str(empty_hooks)},
+            {"GIT_CONFIG_PARAMETERS": f"'remote.escape.url={bare}' 'core.hooksPath={empty_hooks}'"},
+            {"GIT_CONFIG_GLOBAL": str(conf)}, {"GIT_CONFIG_SYSTEM": str(conf), "GIT_CONFIG_NOSYSTEM": "0"},
+        ]
+        work = mod.make_sandbox(root / "src")
+        try:
+            for variant in variants:
+                seen = []
+                def runner(cmd, _seen=seen, **kw):
+                    env = kw["env"]
+                    remotes = real_run(["git", "-C", str(work), "remote"], env=env, capture_output=True, text=True)
+                    hooks = real_run(["git", "-C", str(work), "config", "--get", "core.hooksPath"], env=env, capture_output=True, text=True)
+                    push = real_run(["git", "-C", str(work), "push", "--dry-run", str(bare), "HEAD:refs/heads/probe"], env=env, capture_output=True, text=True)
+                    _seen.append((remotes, hooks, push, env))
+                    return SimpleNamespace(stdout="", stderr="", returncode=0)
+                with patch.dict(os.environ, variant), patch.object(mod.subprocess, "run", side_effect=runner):
+                    sc = {"id": "x", "prompt": "x", "expect": ["cat"]}
+                    mod.run_one(sc, work, 1, 1, None)
+                    mod.run_one_codex(sc, work, 1, None)
+                check("r4 Git設定注入兩runner均隔離 " + next(iter(variant)), len(seen) == 2 and all(not r.stdout.strip() and h.stdout.strip() == str(work.parent / "hooks") and p.returncode != 0 and "探針沙盒:禁止 push" in p.stderr for r, h, p, e in seen), [(r.stdout, h.stdout, p.returncode) for r, h, p, e in seen])
+                check("r4 保持非Git環境PATH", all(e.get("PATH") == os.environ.get("PATH") for r, h, p, e in seen), "")
+            refs = real_run(["git", "-C", str(bare), "for-each-ref"], capture_output=True, text=True, check=True)
+            check("r4 dry-run沒有寫入bare", not refs.stdout, refs.stdout)
+        finally:
+            shutil.rmtree(work.parent)
+
+
+def _probe_repair4_bytes(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def _probe_repair4_path_fixture(src, shape, root, git):
+    import shutil
+    if shape in ("relative", "absolute", "symlink"):
+        (src / ".git").rename(src / ".hidden-git")
+        if shape == "symlink":
+            (src / ".git").symlink_to(src / ".hidden-git", target_is_directory=True)
+        else:
+            target = ".hidden-git" if shape == "relative" else str(src / ".hidden-git")
+            (src / ".git").write_text("gitdir: " + target + "\n")
+        (src / ".gitignore").write_text(".hidden-git/\n.git\n")
+    elif shape == "worktree-config":
+        git("config", "core.worktree", str(src))
+    elif shape == "common-external":
+        common = root / "external-common"
+        shutil.copytree(src / ".git", common)
+        (src / ".git/commondir").write_text(str(common) + "\n")
+        return common
+    elif shape == "refs-symlink":
+        common = root / "external-refs"
+        (src / ".git/refs").rename(common)
+        (src / ".git/refs").symlink_to(common, target_is_directory=True)
+        (src / "README.md").write_text("snapshot must commit a real change\n")
+        return common
+    return None
+
+
+def t_probe_repair4_copied_git_paths():
+    import tempfile, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_r4_gitpaths")
+    with tempfile.TemporaryDirectory(prefix="probe-r4-paths-") as td:
+        root = Path(td)
+        for shape in ("plain", "relative", "absolute", "symlink", "worktree-config", "common-external", "refs-symlink"):
+            src = root / shape
+            _source_probe_fixture(src)
+            def git(*args, _src=src):
+                return subprocess.run(["git", "-C", str(_src), *args], env=mod._git_env(), text=True, capture_output=True, check=True).stdout.strip()
+            git("remote", "add", "sentinel", str(root / "local-only.git"))
+            common = _probe_repair4_path_fixture(src, shape, root, git)
+            common_before = _probe_repair4_bytes(common) if common else None
+            check("r4 現場來源Git目錄在來源內 " + shape, Path(git("rev-parse", "--absolute-git-dir")).resolve().is_relative_to(src.resolve()), "")
+            before = _probe_repair4_bytes(src)
+            disposable = root / ("copy-" + shape)
+            disposable.mkdir()
+            rejected = False
+            work = None
+            try:
+                with patch.object(mod.tempfile, "mkdtemp", return_value=str(disposable)):
+                    work = mod.make_sandbox(src)
+            except RuntimeError:
+                rejected = True
+            after = _probe_repair4_bytes(src)
+            safe = shape in ("plain", "relative")
+            check("r4 副本Git落點判定 " + shape, rejected is not safe, rejected)
+            check("r4 來源byte-equal " + shape, before == after, sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k)))
+            if common is not None:
+                common_after = _probe_repair4_bytes(common)
+                check("r4 共用Git資料不受副本影響", common_before == common_after, "")
+            if rejected:
+                check("r4 拒絕後副本已清理 " + shape, not disposable.exists(), str(disposable))
+            if work is not None:
+                shutil.rmtree(work.parent)
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j

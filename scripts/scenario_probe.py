@@ -113,8 +113,10 @@ def source_evidence(lines, harness, token):
                 continue
             ident = item.get("id")
             if ev.get("type") in ("item.started", "item.updated"):
-                if isinstance(ident, str):
+                if isinstance(ident, str) and ident:
                     pending.add(ident)
+                else:
+                    unknown = True
                 continue
             if ev.get("type") != "item.completed":
                 continue
@@ -385,10 +387,13 @@ def check_scenario_targets(scenarios, repo):
 def _git_env():
     """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
     指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
-    env = dict(os.environ)
+    # command-scope config可覆蓋副本的remote/hooksPath；只拔定位變數不夠。
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG")}
     for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         env.pop(k, None)
+    # 不改HOME或真設定檔；探針Git只讀副本自己的設定。
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     return env
 
 
@@ -502,10 +507,37 @@ def make_sandbox(src, arm="with", source_probe=None):
     return work
 
 
+def _check_git_metadata_links(gitdirs):
+    """Git目錄在副本內仍不夠：refs/objects等符號連結會把寫入導回來源。"""
+    for gitdir in gitdirs:
+        for parent, dirs, files in os.walk(gitdir):
+            if any((Path(parent) / name).is_symlink() for name in dirs + files):
+                raise RuntimeError("副本Git資料含符號連結，未執行隔離寫入")
+
+
+def _check_copied_git_paths(work, genv):
+    """複製可能保留絕對gitfile、commondir或core.worktree；Git寫入前重驗。"""
+    probe = subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "--path-format=absolute",
+         "--git-dir", "--git-common-dir", "--show-toplevel"],
+        capture_output=True, text=True, env=genv,
+    )
+    paths = probe.stdout.splitlines()
+    if probe.returncode != 0 or len(paths) != 3:
+        raise RuntimeError("副本Git實際路徑無法確認，未執行隔離寫入")
+    gitdir, common, toplevel = (Path(p).resolve() for p in paths)
+    root = work.resolve()
+    if (gitdir == root or not gitdir.is_relative_to(root)
+            or common == root or not common.is_relative_to(root) or toplevel != root):
+        raise RuntimeError("副本Git目錄或工作樹指向副本外，未執行隔離寫入")
+    _check_git_metadata_links({gitdir, common})
+
+
 def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
     work.mkdir(parents=True)
     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
                     f"{src}/", f"{work}/"], check=True)
+    _check_copied_git_paths(work, genv)
     # ① 拔 remote
     r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True, env=genv)
     for name in r.stdout.split():

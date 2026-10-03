@@ -42,6 +42,7 @@ verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
+  - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -90,6 +91,10 @@ WHY: 第1案續辦改從成功工具回傳辨識目標片段，避免繼續解�
 PITFALL: 設計審B1重現建立副本後Git定位環境變數被runner重新繼承，cwd不保證隔離；沿用既有清洗函式延伸到runner與清理。防回歸 t_probe_source_probe_git_env 在兩個暫存repo驗證外側內容不變；清理失敗停批由 t_probe_source_probe_main 驗證。來源同續辦驗證，不把未跑真模型的fixture當生產觀測。
 
 PITFALL: 第三輪證明上項測試只覆蓋兩種定位環境，不能保證 Git 設定注入與 absolute gitfile 的隔離；出處及可重現步驟見 [[Issues/探針Git隔離的設定與絕對路徑缺口]]。讀碼證據仍有缺 ID 事件計分的反例，見 [[Issues/探針讀碼證據不足]]；兩項 Issue 都是下次重啟的必讀入口，現有綠測試不構成放行證據。
+
+WHY: 2026-10-04 使用者授權例外續修三項缺口；Git只關閉父程序command/global/system設定來源，保留HOME與非Git環境，避免改變被測CLI的skills/hooks來源。代價是不再採用使用者全域Git偏好；來源設定不寫入，副本local設定仍使用。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]，防回歸t_probe_repair4_git_config；未來改Git設定來源時從該驗證入口重驗。
+
+PITFALL: 單驗副本gitdir仍可能漏掉共用資料、core.worktree或refs等中繼資料符號連結；本輪臨時fixture在補最後一道前確實改動外側refs。選擇在Git寫入前拒絕中繼資料符號連結，即使連結目標在副本內也拒絕；普通clone與安全相對gitfile保持可用。出處同例外續修驗證，重現及防回歸t_probe_repair4_copied_git_paths；若要支援這類連結，先從該測試與Issue重估，不能直接移除拒絕條件。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
