@@ -54702,7 +54702,7 @@ def t_drift_code_review_r2_regressions():
     a = "a" * 40
     calls = []
     try:
-        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else b"")
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\nM\0" + p + "\0").encode() if "--follow" in args else b"")
         # 只讓「歷史那一批」讀失敗、起點那一版讀得到(兩批都失敗時起點那道會先接住,分不出這一處有沒有修)
         g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: (None if specs[0].startswith(a) else
                                                                 [b"---\nstatus: pending\n---\n" for _ in specs])
@@ -54804,7 +54804,7 @@ def t_drift_code_review_r3_regressions():
     p = "docs/kg-knowledge/Projects/P.md"
     a = "a" * 40
     try:
-        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\nM\0" + p + "\0").encode() if "--follow" in args else
                                              (p + "\0").encode() if "log" in args else b"")
         g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: None
         blob = b"---\ntype: project\nstatus: done\n---\n"
@@ -54816,7 +54816,7 @@ def t_drift_code_review_r3_regressions():
         check("④存量漂移(嚴格):批次讀失敗算判不了", got is None, str(got))
         # ⑤ 改名對照讀失敗
         g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: [b"---\nstatus: pass\n---\n" for _ in specs]
-        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\nM\0" + p + "\0").encode() if "--follow" in args else
                                              None if "--name-status" in args else b"")
         check("⑤嚴格:改名對照讀失敗算判不了", m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p, strict=True) is None, "")
         # ⑥ 預算
@@ -54825,7 +54825,7 @@ def t_drift_code_review_r3_regressions():
         def slow(root, *args):
             calls.append(_t.monotonic())
             _t.sleep(0.2)
-            return (a + "\0\n" + p + "\0").encode() if "--follow" in args else b""
+            return (a + "\0\nM\0" + p + "\0").encode() if "--follow" in args else b""
         g_["_ns_git"] = slow
         dl = _t.monotonic() + 0.05
         m._note_status_seq(".", "BASE", "TIP", "docs/kg-knowledge", p, deadline=dl, strict=True)
@@ -54885,7 +54885,7 @@ def t_drift_code_review_r4_regressions():
     try:
         def git1(root, *args):
             if "--follow" in args:
-                return None if args[-1] == p1 else (a + "\0\n" + p2 + "\0").encode()
+                return None if args[-1] == p1 else (a + "\0\nM\0" + p2 + "\0").encode()
             if "--name-status" in args:
                 return b""
             return (p1 + "\0" + p2 + "\0").encode()
@@ -54898,7 +54898,7 @@ def t_drift_code_review_r4_regressions():
                 lambda x, y: x != "done" and y == "done", strict=True)
         check("①嚴格:同一情況判不了", got is None, str(got))
         # ⑤ 歷史裡一版解不開
-        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p1 + "\0" + b + "\0\n" + p1 + "\0").encode() if "--follow" in args else b"")
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\nM\0" + p1 + "\0" + b + "\0\nM\0" + p1 + "\0").encode() if "--follow" in args else b"")
         g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: ([b"---\nstatus: pass\n---\n", bytes([255])] if len(specs) == 2
                                                                else [b"---\nstatus: pending\n---\n"])
         check("⑤嚴格:歷史裡有一版解不開就判不了",
@@ -54973,7 +54973,7 @@ def t_drift_code_review_r5_regressions():
     p = "docs/kg-knowledge/Verification/G.md"
     a = "a" * 40
     try:
-        g_["_ns_git"] = lambda root, *args: ((a + "\0\n" + p + "\0").encode() if "--follow" in args else b"")
+        g_["_ns_git"] = lambda root, *args: ((a + "\0\nM\0" + p + "\0").encode() if "--follow" in args else b"")
         g_["_nodehome_cat_blobs"] = lambda root, specs, **kw: ([b"---\nstatus: pass\n---\n"] if specs[0].startswith(a)
                                                                else [b"---\nstatus: pending\n---\n\xff"])
         check("①嚴格:起點那一版解不開判不了", f(".", "BASE", "TIP", "docs/kg-knowledge", p, strict=True) is None, "")
@@ -56017,6 +56017,265 @@ def t_drift_when_gone_review_r2():
         m._nodehome_cat_blobs_capped = real
     check("④git 模式:超過上限與讀不出分開講", "超過" in tr.gone_why.get("src/big.py::time.time()", "") and "讀不出" not in tr.gone_why.get("src/big.py::time.time()", "")
           and tr2.gone_why.get("src/a.py::time.time()", "") == "讀不出", (tr.gone_why, tr2.gone_why))
+
+
+def _born_scan(root, *extra):
+    """drift scan --json → ({(路徑, 原文裡的條件片段): born}, 文字輸出);born 沒有就是 None。"""
+    import json as _j, subprocess as sp
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "scan", "--json", *extra], capture_output=True, text=True, cwd=str(root))
+    try:
+        fs = _j.loads(r.stdout)["findings"]
+    except (ValueError, KeyError):
+        return {("錯", "", r.stdout + r.stderr): None}, ""
+    got = {}
+    for f in fs:
+        if f["kind"] in ("probe", "retire"):
+            got[(f["path"], f["kind"], f["text"])] = f.get("born")
+    t = sp.run([sys.executable, GRAPHCTL, "drift", "scan", *extra], capture_output=True, text=True, cwd=str(root))
+    return got, t.stdout + t.stderr
+
+
+def _born_of(got, path, needle, kind="probe"):
+    for (p, k, t), b in got.items():
+        if p == path and k == kind and needle in t:
+            return b
+    return "沒找到"
+
+
+def t_drift_born_true_scan():
+    """[S1] 寫下那一版條件就已成立的回頭條件:scan 文字在那一條底下印「寫下時就已成立」與寫下那一版的短編號、--json 的
+    born.state=true、born.commit=寫下那一版;已表態的照印;寫下時不成立後來才成立的是 false、不印;RULE 撤除條件照同一套標。
+
+    翻紅釘:在終點判(不往回找)→ 後來才成立的那條也變 true;已表態的不印 → ④紅。"""
+    print("t_drift_born_true_scan")
+    root = _dr_repo()
+    _nh_file(root, "src/other.py", "x = 1\n")
+    _nh_commit(root, "程式")
+    _nh_node(root, "Pay", summary="FLOW:a\nRULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-file:src/other.py]",
+             body="REVISIT:[when-file:src/other.py][by:2099-12-31] 生來就成立的\n"
+                  "REVISIT:[when-file:src/runner.py][by:2099-12-31] 後來才成立的")
+    _nh_commit(root, "寫下")
+    w1 = _na_head(root)
+    _nh_file(root, "src/runner.py", "def main():\n    pass\n")
+    _nh_commit(root, "加啟動程式")
+    got, txt = _born_scan(root)
+    b = _born_of(got, "Systems/Pay.md", "生來就成立")
+    check("①生來就成立:state=true、commit=寫下那一版", isinstance(b, dict) and b.get("state") == "true"
+          and b.get("commit") == w1 and b.get("date"), (b, got))
+    b2 = _born_of(got, "Systems/Pay.md", "後來才成立")
+    check("②後來才成立:state=false", isinstance(b2, dict) and b2.get("state") == "false", (b2, got))
+    br = _born_of(got, "Systems/Pay.md", "要人簽", kind="retire")
+    check("③RULE 撤除條件照同一套標", isinstance(br, dict) and br.get("state") == "true" and br.get("commit") == w1, (br, got))
+    check("①文字輸出印「寫下時就已成立」與短編號,只印兩條(回頭條件、撤除條件)",
+          txt.count("寫下時就已成立") == 2 and w1[:7] in txt, txt[-1500:])
+    check("①訊息只講查到的:從那一版起連續出現,不講「第一次出現」(代碼審 r1 正確性席 F2)",
+          f"{w1[:7]}" in txt and "起連續出現在這篇" in txt and "第一次出現" not in txt, txt[-1500:])
+    import subprocess as sp
+    line = next(i for i, ln in enumerate((root / "docs/kg-knowledge/Systems/Pay.md").read_text(encoding="utf-8").split("\n"), 1)
+                if "生來就成立" in ln)
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "ack", "Systems/Pay", str(line), "--kind", "probe", "--reason", "照留觀察中"],
+               capture_output=True, text=True, cwd=str(root))
+    _nh_commit(root, "表態")
+    got, txt = _born_scan(root)
+    seg = txt[txt.find("生來就成立"):]
+    check("④已表態的照印那一行", r.returncode == 0 and "(已表態)" in seg.split("\n")[0]
+          and "寫下時就已成立" in "\n".join(seg.split("\n")[1:3]), (r.stdout + r.stderr, txt[-1500:]))
+    check("④前提:JSON 照標 true", (_born_of(got, "Systems/Pay.md", "生來就成立") or {}).get("state") == "true", got)
+
+
+def t_drift_born_identity():
+    """[S2] 同一條的認法:只改待辦文字、搬位置、筆記改名仍追到最早那一版;改了條件從改的那一版算;刪掉再寫回從寫回那一版算;
+    側分支寫、合併進主線以合併那一版算。
+
+    翻紅釘:用整行文字認同一條 → ①紅;不加 --first-parent → ④拿到側分支的提交。"""
+    print("t_drift_born_identity")
+    root = _dr_repo()
+    _nh_file(root, "src/a.py", "x = 1\n")
+    _nh_file(root, "src/b.py", "x = 1\n")
+    _nh_commit(root, "程式")
+    _nh_node(root, "Pay", summary="FLOW:a", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 原本的待辦")
+    _nh_node(root, "Q", summary="FLOW:q", body="REVISIT:[when-file:src/a.py][by:2099-12-31] q 的待辦")
+    _nh_node(root, "R", summary="FLOW:r", body="REVISIT:[when-file:src/b.py][by:2099-12-31] r 的待辦")
+    _nh_commit(root, "寫下")
+    w1 = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:a", body="新加的段落\n\n另一段\nREVISIT:[when-file:src/a.py][by:2099-12-31] 改過的待辦文字")
+    _nh_node(root, "Q", summary="FLOW:q", body="REVISIT:[when-file:src/b.py][by:2099-12-31] q 的待辦")
+    _nh_node(root, "R", summary="FLOW:r", body="r 刪掉了")
+    _nh_commit(root, "改文字、改條件、刪掉")
+    w2 = _na_head(root)
+    _nh_git(root, "mv", "docs/kg-knowledge/Systems/Pay.md", "docs/kg-knowledge/Systems/Pay2.md")
+    _nh_node(root, "R", summary="FLOW:r", body="REVISIT:[when-file:src/b.py][by:2099-12-31] r 寫回來")
+    _nh_commit(root, "改名、寫回")
+    w3 = _na_head(root)
+    _nh_git(root, "checkout", "-q", "-b", "side")
+    _nh_node(root, "S", summary="FLOW:s", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 側分支寫的")
+    _nh_commit(root, "側分支")
+    side = _na_head(root)
+    _nh_git(root, "checkout", "-q", "-")
+    _nh_file(root, "src/c.py", "y = 2\n")
+    _nh_commit(root, "主線另一個改動")
+    _nh_git(root, "merge", "-q", "--no-ff", "--no-edit", "side")
+    mg = _na_head(root)
+    src = (root / "docs/kg-knowledge/Systems/Pay2.md").read_text(encoding="utf-8")
+    (root / "docs/kg-knowledge/Systems/T.md").write_text(src.replace("# Pay", "# T"), encoding="utf-8")
+    _nh_commit(root, "複製一篇")
+    cp = _na_head(root)
+    check("⑤前提:git 把 T 認成從 Pay2 複製來的", "C" in _nh_git(root, "log", "--follow", "--format=", "--name-status", "-1", "--",
+          "docs/kg-knowledge/Systems/T.md").stdout[:2], "")
+    got, _txt = _born_scan(root)
+    b = _born_of(got, "Systems/Pay2.md", "改過的待辦文字")
+    check("①只改待辦文字、搬位置、改名:追到最早那一版", isinstance(b, dict) and b.get("commit") == w1, (b, w1, got))
+    b = _born_of(got, "Systems/Q.md", "q 的待辦")
+    check("②改了條件:從改的那一版算", isinstance(b, dict) and b.get("commit") == w2, (b, w2))
+    b = _born_of(got, "Systems/R.md", "r 寫回來")
+    check("③刪掉再寫回:從寫回那一版算", isinstance(b, dict) and b.get("commit") == w3, (b, w3))
+    b = _born_of(got, "Systems/S.md", "側分支寫的")
+    check("④側分支寫、合併進主線:以合併那一版算", isinstance(b, dict) and b.get("commit") == mg and mg != side, (b, mg, side))
+    b = _born_of(got, "Systems/T.md", "改過的待辦文字")
+    check("⑤從別篇複製來的:以複製那一版算、不追進來源那篇", isinstance(b, dict) and b.get("commit") == cp, (b, cp, w1))
+    # ⑥ 改壞(解析不到)再修好:這一世從修好那一版算(代碼審 r1 正確性席 F2;訊息只講「從那一版起連續出現」)
+    _nh_node(root, "G", summary="FLOW:g", body="REVISIT:[when-file:src/z.py][by:2099-12-31] 中間壞過")
+    _nh_commit(root, "寫下(z.py 不在)")
+    _nh_node(root, "G", summary="FLOW:g", body="REVISIT [when-file:src/z.py][by:2099-12-31] 中間壞過")
+    _nh_file(root, "src/z.py", "z = 1\n")
+    _nh_commit(root, "改壞、加 z.py")
+    _nh_node(root, "G", summary="FLOW:g", body="REVISIT:[when-file:src/z.py][by:2099-12-31] 中間壞過")
+    _nh_commit(root, "修好")
+    fix = _na_head(root)
+    got, _txt = _born_scan(root)
+    b = _born_of(got, "Systems/G.md", "中間壞過")
+    check("⑥改壞再修好:這一世從修好那一版算", isinstance(b, dict) and b.get("commit") == fix and b.get("state") == "true", (b, fix))
+
+
+def t_note_versions_stop_at_copy():
+    """[S5] 共用的版本清單停在複製:git log --follow 也跟複製(關不掉),新開一篇跟舊篇很像的筆記原本會一路追進舊篇的歷史——
+    狀態序列混進舊篇的狀態翻轉(doing→done 被當成新篇在範圍裡收尾)。改名照跟。
+
+    翻紅釘:_note_versions 不停在 C → ①②紅。"""
+    print("t_note_versions_stop_at_copy")
+    m = _load_lumos_inproc()
+    root = _nh_repo()
+    _nh_node(root, "A_計劃", typ="project", folder="Projects", resp=None, status="doing", summary="KEY:一樣的摘要",
+             body="很長的一樣內容\n" * 20)
+    _nh_commit(root, "A doing")
+    c1 = _na_head(root)
+    _nh_node(root, "A_計劃", typ="project", folder="Projects", resp=None, status="done", summary="KEY:一樣的摘要",
+             body="很長的一樣內容\n" * 20)
+    _nh_commit(root, "A done")
+    src = (root / "docs/kg-knowledge/Projects/A_計劃.md").read_text(encoding="utf-8")
+    (root / "docs/kg-knowledge/Projects/B_計劃.md").write_text(src.replace("# A_計劃", "# B_計劃"), encoding="utf-8")
+    _nh_commit(root, "複製成 B")
+    cp = _na_head(root)
+    bp = "docs/kg-knowledge/Projects/B_計劃.md"
+    vs = m._note_versions(root, "HEAD", bp)
+    check("①版本清單停在複製那一版", [s_ for s_, _q in vs] == [cp], vs)
+    seq = m._note_status_seq(root, c1, "HEAD", "docs/kg-knowledge", bp, strict=True)
+    check("②狀態序列不混進來源那篇的翻轉", seq == [None, "done"], seq)
+    _nh_git(root, "mv", bp, "docs/kg-knowledge/Projects/C_計劃.md")
+    _nh_commit(root, "改名成 C")
+    vs = m._note_versions(root, "HEAD", "docs/kg-knowledge/Projects/C_計劃.md")
+    check("③改名照跟、跟到複製那一版為止", [s_ for s_, _q in vs][1:] == [cp] and len(vs) == 2, vs)
+    ha, hb = "a" * 40, "b" * 40
+    raw = (ha + "\0\n" + hb + "\0\nR087\0old.md\0new.md\0").encode()
+    check("④沒有檔案列的提交(合併提交)跳過、不把下一個提交編號當路徑;改名取新路徑",
+          m._git_log_sha_status_paths(raw) == [(hb, "new.md", "R")], m._git_log_sha_status_paths(raw))
+
+
+def t_drift_born_unknown():
+    """[S3] 判不了一律 state=unknown、why 講原因、文字只印一行彙總:同篇兩行同條件、走到的某一版不是 UTF-8、淺層 clone、
+    partial clone、工作目錄裡還沒提交的行、超過 6 個不同提交;不是 git 專案照樣判不了、scan 照常列其他發現。"""
+    print("t_drift_born_unknown")
+    import subprocess as sp, shutil
+    root = _dr_repo()
+    _nh_file(root, "src/a.py", "x = 1\n")
+    _nh_commit(root, "程式")
+    _nh_node(root, "Dup", summary="FLOW:d", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 一\n"
+                                                 "REVISIT:[when-file:src/a.py][by:2099-12-31] 二")
+    p = root / "docs/kg-knowledge/Systems/Bad.md"
+    _nh_node(root, "Bad", summary="FLOW:b", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 壞版本\n")
+    p.write_bytes(p.read_bytes() + b"\xff\xfe big5 \xa7\xda\n")
+    _nh_commit(root, "寫下(Bad 那一版不是 UTF-8)")
+    _nh_node(root, "Bad", summary="FLOW:b", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 壞版本\n修好編碼")
+    _nh_commit(root, "修好編碼")
+    _nh_node(root, "New", summary="FLOW:n", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 還沒提交")
+    got, txt = _born_scan(root)
+    for path, needle, word in (("Systems/Dup.md", "一", "不只一行"), ("Systems/Bad.md", "壞版本", "UTF-8"),
+                               ("Systems/New.md", "還沒提交", "還沒提交")):
+        b = _born_of(got, path, needle)
+        check(f"①判不了:{path} why 講出「{word}」", isinstance(b, dict) and b.get("state") == "unknown"
+              and word in (b.get("why") or ""), (b, got))
+    check("①文字輸出只印一行彙總、不逐條印", txt.count("查不出寫下時成不成立") == 1 and "寫下時就已成立" not in txt, txt[-1500:])
+    (root / "docs/kg-knowledge/Systems/New.md").unlink()
+    # 代碼審 r1 正確性席 F1:已提交一行、工作目錄加同條件第二行(未提交)——原本兩行都被標成寫下時就已成立
+    _nh_node(root, "W", summary="FLOW:w", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 已提交的")
+    _nh_commit(root, "W 寫下")
+    _nh_node(root, "W", summary="FLOW:w", body="REVISIT:[when-file:src/a.py][by:2099-12-31] 已提交的\n"
+             "REVISIT:[when-file:src/a.py][by:2099-12-31] 工作目錄多一行")
+    got, _txt = _born_scan(root)
+    bs = [_born_of(got, "Systems/W.md", w) for w in ("已提交的", "工作目錄多一行")]
+    check("①工作目錄裡同組條件兩行:兩行都判不了「不只一行」", all(isinstance(b, dict) and b.get("state") == "unknown"
+          and "不只一行" in (b.get("why") or "") for b in bs), bs)
+    _nh_git(root, "checkout", "--", "docs/kg-knowledge/Systems/W.md")
+    sh = Path(tempfile.mkdtemp(prefix="gctl-born-shallow-")) / "c"
+    sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
+    got, txt = _born_scan(sh)
+    b = _born_of(got, "Systems/Bad.md", "壞版本")
+    check("②淺層 clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "淺層" in (b.get("why") or ""), (b, got))
+    _nh_git(root, "config", "extensions.partialClone", "origin")
+    got, _txt = _born_scan(root)
+    b = _born_of(got, "Systems/Bad.md", "壞版本")
+    check("③partial clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
+    _nh_git(root, "config", "--unset", "extensions.partialClone")
+    for i in range(7):
+        _nh_node(root, f"N{i}", summary="FLOW:n", body=f"REVISIT:[when-file:src/a.py][by:2099-12-31] 第 {i} 條")
+        _nh_commit(root, f"第 {i} 條")
+    got, _txt = _born_scan(root)
+    bs = [_born_of(got, f"Systems/N{i}.md", f"第 {i} 條") for i in range(7)]
+    over = [b for b in bs if isinstance(b, dict) and b.get("state") == "unknown" and "上限" in (b.get("why") or "")]
+    check("④超過 6 個不同提交:多的判不了「超過上限」", len(over) >= 1 and all(isinstance(b, dict) for b in bs), bs)
+    ng = Path(tempfile.mkdtemp(prefix="gctl-born-nogit-"))
+    shutil.copytree(root / "docs", ng / "docs")
+    _nh_node(ng, "St", summary="FLOW:s", body="REVISIT:[when-status:Projects/退款_計劃=doing][by:2099-12-31] 不是 git 專案")
+    got, txt = _born_scan(ng)
+    b = _born_of(got, "Systems/St.md", "不是 git 專案")
+    check("⑤不是 git 專案:判不了、scan 照常列", isinstance(b, dict) and b.get("state") == "unknown", (b, got, txt[-600:]))
+
+
+def t_drift_born_reads_stop_at_boundary():
+    """[S4] 一篇筆記歷史很長、這一世只在最近幾版:版本讀取碰到邊界就停,不讀完整段歷史(一次 32 版)。
+
+    翻紅釘:一次讀完全部版本 → 讀到的版本數 = 歷史長度(80 以上)。"""
+    print("t_drift_born_reads_stop_at_boundary")
+    m = _load_lumos_inproc()
+    root = _dr_repo()
+    _nh_file(root, "src/a.py", "x = 1\n")
+    for i in range(80):
+        _nh_node(root, "Pay", summary="FLOW:a", body=f"第 {i} 版")
+        _nh_commit(root, f"v{i}")
+    _nh_node(root, "Pay", summary="FLOW:a", body="第 80 版\nREVISIT:[when-file:src/a.py][by:2099-12-31] 最近才寫")
+    _nh_commit(root, "寫下")
+    w = _na_head(root)
+    _nh_node(root, "Pay", summary="FLOW:a", body="第 81 版\nREVISIT:[when-file:src/a.py][by:2099-12-31] 最近才寫")
+    _nh_commit(root, "再改")
+    head = _na_head(root)
+    tenv = m._drift_tree_env(root, head, "docs/kg-knowledge")
+    line = next(no for no, _t, _pr in m._probe_lines(m.env_text(tenv, "Systems/Pay.md"))[0])
+    f = {"kind": "probe", "path": "Systems/Pay.md", "line": line, "text": "REVISIT:[when-file:src/a.py][by:2099-12-31] 最近才寫",
+         "related": [], "why": "x"}
+    real, seen = m._nodehome_cat_blobs, []
+
+    def spy(repo_root, specs, timeout=60):
+        seen.extend(s for s in specs if s.endswith(":docs/kg-knowledge/Systems/Pay.md"))
+        return real(repo_root, specs, timeout=timeout)
+    m._nodehome_cat_blobs = spy
+    try:
+        m._drift_born_annotate(root, head, "docs/kg-knowledge", tenv, [f])
+    finally:
+        m._nodehome_cat_blobs = real
+    check("①找對寫下那一版", (f.get("born") or {}).get("commit") == w, f.get("born"))
+    check("①讀到的版本數不超過一段(32)", 0 < len(seen) <= 32, len(seen))
+    check("②上限跟列樹快取連動:留兩格給終點(代碼審 r1 架構對齊席 Z4)",
+          m._DRIFT_BORN_MAX_COMMITS == m._DRIFT_LS_CACHE_MAX - 2, getattr(m, "_DRIFT_LS_CACHE_MAX", None))
 
 
 def t_drift_when_probes_evaluate_and_trigger():
