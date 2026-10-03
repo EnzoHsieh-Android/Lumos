@@ -87,6 +87,7 @@ def tool_calls_from_stream(lines):
 # 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
 # 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
 GRADER_VERSION = "2026-10-03-source-results"
+SANDBOX_VERSION = "2026-10-04-frozen-copy-config-reset"
 
 
 def source_evidence(lines, harness, token):
@@ -144,7 +145,7 @@ def source_evidence(lines, harness, token):
                 continue
             if ev.get("type") == "assistant" and block.get("type") == "tool_use":
                 ident = block.get("id")
-                if not isinstance(ident, str) or ident in eligible:
+                if not isinstance(ident, str) or not ident or ident in eligible:
                     unknown = True
                     continue
                 eligible[ident] = block.get("name") in ("Read", "Grep", "Bash")
@@ -152,7 +153,7 @@ def source_evidence(lines, harness, token):
                     pending.add(ident)
             elif ev.get("type") == "user" and block.get("type") == "tool_result":
                 ident = block.get("tool_use_id")
-                if not isinstance(ident, str) or ident not in eligible:
+                if not isinstance(ident, str) or not ident or ident not in eligible:
                     unknown = True
                     continue
                 if not eligible[ident]:
@@ -464,20 +465,17 @@ def _run_source_attempt(sc, src, arm, runner):
 
 
 def make_sandbox(src, arm="with", source_probe=None):
-    """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
+    """複製工作樹到臨時目錄，拒絕外指路徑並重建副本 Git 設定。回副本路徑。
     arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
-    這樣情境之間的 git checkout -- . 不會把它復原。
+    後續逐場副本從這份已處理的基線複製。
 
     2026-08-23 事故:守衛題 a05 的情境是「沒有我就開工做」,被測 AI 真的改了計劃檔並 push——
     臨時副本是 rsync 來的,.git/config 裡的 remote 跟著複製,push 就直接推到真遠端,
     主幹多了一筆 author=probe@local 的「probe snapshot」(已覆蓋)。
-    隔離不只是「動到的只是副本」,還要「副本推不出去」。三道:
-      ① 拔掉所有 remote(沒有目標就沒得推)
-      ② pre-push hook 寫死 exit 1(就算被測 AI 自己加回 remote 也擋;hooksPath 指向副本內的專用目錄)
-      ③ 假身分 probe@local 維持——即使前兩道都失效,GitHub 上也認得出這不是人
+    意外 push 的防線為空 remote 與副本專用 pre-push hook；這不封鎖模型主動指定 URL 或其他網路工具。
     """
     # ★隔離的前提:副本要有自己的 git 目錄★(2026-09-21,Issues/探針以工作樹為來源會改到本體)
-    # 下面三道隔離(拔 remote / 設 hooksPath / 裝 pre-push)都靠「git 指令落在副本上」才成立。
+    # 副本設定重建及 pre-push hook 都靠「git 指令落在副本上」才成立。
     # 前提不成立時它們會反過來寫進本體:真遠端被拔光、真 hooksPath 被指到臨時目錄,
     # 所有防護層靜默失效,而且要等到 push 失敗才有人發現。
     # ★用正面條件判,不列舉壞形狀★(審查席:第一版只擋「.git 是檔」,漏了 symlink 與 GIT_DIR):
@@ -531,23 +529,95 @@ def _check_copied_git_paths(work, genv):
             or common == root or not common.is_relative_to(root) or toplevel != root):
         raise RuntimeError("副本Git目錄或工作樹指向副本外，未執行隔離寫入")
     _check_git_metadata_links({gitdir, common})
+    return gitdir, common
+
+
+def _check_worktree_entries(work, gitdir, common):
+    """副本不接受另一套Git資料或指到副本外的工作樹連結。"""
+    root = work.resolve()
+    metadata = {gitdir, common}
+    if (work / ".git").is_symlink():
+        raise RuntimeError("副本頂層Git連結未隔離")
+    if (gitdir / "modules").exists() or (common / "modules").exists():
+        raise RuntimeError("副本含子模組Git資料，未執行隔離寫入")
+    for parent, dirs, files in os.walk(work, followlinks=False):
+        here = Path(parent)
+        for name in dirs + files:
+            path = here / name
+            if path in metadata:
+                continue
+            if name == ".git" or name == ".gitmodules":
+                if path != work / ".git":
+                    raise RuntimeError("副本含巢狀Git或子模組，未執行隔離寫入")
+            if path.is_symlink():
+                try:
+                    target = path.resolve(strict=True)
+                except (OSError, RuntimeError) as e:
+                    raise RuntimeError("副本工作樹連結無法安全解析") from e
+                if not target.is_relative_to(root):
+                    raise RuntimeError("副本工作樹連結指向副本外，未啟動模型")
+        dirs[:] = [name for name in dirs if here / name not in metadata]
+
+
+def _reset_copied_git_config(work, gitdir, common, hooks, genv):
+    """只保留讀取既有物件所需的格式；不執行複製來的Git動作設定。"""
+    config = common / "config"
+    ext = subprocess.run(
+        ["git", "config", "--file", str(config), "--no-includes", "--null",
+         "--get-regexp", r"^extensions\."], capture_output=True, env=genv,
+    )
+    if ext.returncode not in (0, 1):
+        raise RuntimeError("副本Git擴充格式無法確認，未執行隔離寫入")
+    keys = {row.partition(b"\n")[0].decode("ascii", "replace")
+            for row in ext.stdout.split(b"\0") if row}
+    if keys - {"extensions.worktreeconfig", "extensions.objectformat"}:
+        raise RuntimeError("副本Git使用未支援的擴充格式，未執行隔離寫入")
+    obj = subprocess.run(["git", "-C", str(work), "rev-parse", "--show-object-format=storage"],
+                         capture_output=True, text=True, env=genv)
+    if obj.returncode != 0 or obj.stdout.strip() not in ("sha1", "sha256"):
+        raise RuntimeError("副本Git物件格式無法確認，未執行隔離寫入")
+    fmt = obj.stdout.strip()
+    body = ("[core]\n"
+            f"\trepositoryformatversion = {1 if fmt == 'sha256' else 0}\n"
+            "\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n")
+    if fmt == "sha256":
+        body += "[extensions]\n\tobjectformat = sha256\n"
+    temporary = config.with_name("config.probe-new")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.replace(config)
+    worktree_config = gitdir / "config.worktree"
+    if worktree_config.exists():
+        worktree_config.unlink()
+    subprocess.run(["git", "config", "--file", str(config), "core.hooksPath", str(hooks)],
+                   env=genv, check=True)
+    remote = subprocess.run(["git", "remote"], cwd=str(work), env=genv,
+                            capture_output=True, text=True, check=True)
+    effective_hook = subprocess.run(["git", "config", "--get", "core.hooksPath"],
+                                    cwd=str(work), env=genv, capture_output=True, text=True, check=True)
+    if remote.stdout.strip() or effective_hook.stdout.strip() != str(hooks):
+        raise RuntimeError("副本有效遠端或防推勾子不符合隔離條件")
+
+
+def _check_gitlinks(work, genv):
+    tracked = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=str(work),
+                             env=genv, capture_output=True, check=True)
+    if any(row.startswith(b"160000 ") for row in tracked.stdout.split(b"\0")):
+        raise RuntimeError("副本索引含子模組gitlink，未啟動模型")
 
 
 def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
     work.mkdir(parents=True)
     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
                     f"{src}/", f"{work}/"], check=True)
-    _check_copied_git_paths(work, genv)
-    # ① 拔 remote
-    r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True, env=genv)
-    for name in r.stdout.split():
-        subprocess.run(["git", "remote", "remove", name], cwd=str(work), env=genv)
-    # ② 副本專用 hooks 目錄:pre-push 硬擋;其餘 hook 不存在=不跑(取代原本指向 /dev/null 的做法)
+    gitdir, common = _check_copied_git_paths(work, genv)
+    _check_worktree_entries(work, gitdir, common)
+    # 副本專用 hooks 目錄:pre-push 硬擋；其他 hook 不存在。
     hooks = tmp / "hooks"
     hooks.mkdir()
     (hooks / "pre-push").write_text("#!/bin/sh\necho '探針沙盒:禁止 push' >&2\nexit 1\n", encoding="utf-8")
     (hooks / "pre-push").chmod(0o755)
-    subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work), env=genv, check=True)
+    _reset_copied_git_config(work, gitdir, common, hooks, genv)
+    _check_gitlinks(work, genv)
     if arm == "without":
         cm = work / "CLAUDE.md"
         new, ok = strip_lumos_first_rule(cm.read_text(encoding="utf-8"))
@@ -558,13 +628,16 @@ def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
         _prepare_source_probe(work, *source_probe)
     # 標記必須在快照中，否則收工hook會把儀器註解當成模型改碼。
     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
-    subprocess.run(["git", "add", "-A"], cwd=str(work), env=genv)
-    subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
-                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work), env=genv, check=source_probe is not None)
-    if source_probe is not None:
-        clean = subprocess.run(["git", "status", "--porcelain"], cwd=str(work), env=genv, capture_output=True, text=True, check=True)
-        if clean.stdout.strip():
-            raise RuntimeError("source_probe 快照不乾淨，不啟動模型")
+    subprocess.run(["git", "add", "-A"], cwd=str(work), env=genv, check=True)
+    commit = subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
+                             "commit", "-qm", "probe snapshot", "--no-verify"],
+                            cwd=str(work), env=genv, capture_output=True, text=True)
+    if commit.returncode not in (0, 1):
+        raise RuntimeError("副本快照提交失敗，不啟動模型")
+    clean = subprocess.run(["git", "status", "--porcelain"], cwd=str(work), env=genv,
+                           capture_output=True, text=True, check=True)
+    if clean.stdout.strip():
+        raise RuntimeError("副本快照不乾淨，不啟動模型")
 
 
 def _validate_scenario(sc):
@@ -812,15 +885,20 @@ def summarize_results(results, arm="with"):
         line += f";★有效場次 {len(valid)}/{total} 不到一半,這批不能下結論(分母退回整批)★"
     if mostly:
         line += "\n截斷過半的題(題目或步數上限要檢查,不是 AI 沒照規矩): " + ", ".join(mostly)
-    return {"passed": p, "scored": n, "total": total, "inconclusive": inconclusive, "mostly_truncated": mostly,
+    return {"passed": p, "scored": n, "total": total, "valid_total": len(valid),
+            "inconclusive": inconclusive, "mostly_truncated": mostly,
             "failed": [r.get("id") for r in valid if not r.get("passed")],
             "excluded": [r.get("id") for r in excl], "line": line}
 
 
-def history_record(ts, seed, summary, arm="with", runs=1):
+def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, model_secs=0.0, fatal=False):
     """週抽歷史一列:failed 只含有效場次沒過的題;被排除的另記;帶判準版本(換過判準的紀錄不可直接比)。"""
     rec = {"ts": ts, "seed": seed, "passed": summary["passed"], "total": summary["scored"],
-           "failed": summary["failed"], "excluded": summary["excluded"], "grader": GRADER_VERSION}
+           "valid_total": summary.get("valid_total", summary["scored"]),
+           "failed": summary["failed"], "excluded": summary["excluded"],
+           "inconclusive": summary.get("inconclusive", False), "fatal": fatal,
+           "grader": GRADER_VERSION, "sandbox_version": SANDBOX_VERSION,
+           "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3)}
     if arm != "with" or runs > 1:
         rec.update({"arm": arm, "runs": runs})
     return rec
@@ -902,31 +980,98 @@ def main():
         print("  真的要照跑(例如就是要量腐爛時的行為):--allow-stale-targets", file=sys.stderr)
         if not a.allow_stale_targets:
             return 3
-    work = make_sandbox(src, a.arm)
+    baseline = None
+    sandbox_secs = 0.0
+    model_secs = 0.0
+    setup_error = None
+    setup_started = time.monotonic()
+    try:
+        baseline = make_sandbox(src, a.arm)
+    except Exception as e:
+        setup_error = f"批次基線建立失敗: {type(e).__name__}: {e}"
+    sandbox_secs += time.monotonic() - setup_started
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
-    print(f"探的是: {src}\n臨時副本: {work}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
-          file=sys.stderr)
+    if baseline is not None:
+        print(f"探的是: {src}\n凍結基線: {baseline}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+              file=sys.stderr)
     results = []
     waited = 0
-    fatal = False
+    fatal = setup_error is not None
+    fatal_reason = setup_error
+    retained = None
     def run_at(workdir, token=None):
         extra = {"source_token": token} if token is not None else {}
         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
     try:
-        for sc in scs:
+        for sc_idx, sc in enumerate(scs if baseline is not None else []):
             for k in range(1, a.runs + 1):
                 while True:
+                    work = None
+                    token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
+                    res = None
+                    attempt_fatal = False
+                    attempt_sandbox_secs = 0.0
+                    attempt_model_secs = 0.0
+                    setup_started = time.monotonic()
                     try:
-                        res = (_run_source_attempt(sc, src, a.arm, run_at) if sc.get("source_probe") else run_at(work))
-                    except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
-                        fatal = isinstance(e, SourceProbeCleanupError)
+                        # baseline 已套用 arm；每場從它複製，不能讓前場或來源的後續修改滲入。
+                        work = make_sandbox(baseline, "with", source_probe=(sc["source_probe"], token) if token else None)
+                        setup_elapsed = time.monotonic() - setup_started
+                        sandbox_secs += setup_elapsed
+                        attempt_sandbox_secs += setup_elapsed
+                        model_started = time.monotonic()
+                        try:
+                            res = _redact_source_token(run_at(work, token), token)
+                        finally:
+                            attempt_model_secs = time.monotonic() - model_started
+                            model_secs += attempt_model_secs
+                        health = global_skills_health()
+                        if health:
+                            raise RuntimeError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                    except Exception as e:
+                        if work is None or isinstance(e, SourceProbeCleanupError) or str(e).startswith("全域 skills 健康檢查失敗"):
+                            attempt_fatal = True
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
-                               "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
+                               "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
                                "limit_hit": False, "result_subtype": None, "source_evidence": "unknown" if sc.get("source_probe") else None,
-                               "fatal": fatal}
+                               "fatal": attempt_fatal}
+                    finally:
+                        # 讀碼標記的現場永不保留；普通題只保留最後一場通過隔離驗收的副本。
+                        final_attempt = sc_idx == len(scs) - 1 and k == a.runs
+                        retain = bool(a.keep and final_attempt and not token and not attempt_fatal
+                                      and res is not None and not res.get("limit_hit") and work is not None)
+                        if work is not None:
+                            cleanup_started = time.monotonic()
+                            try:
+                                if retain:
+                                    retained = work
+                                else:
+                                    _remove_source_sandbox(work)
+                            except SourceProbeCleanupError as e:
+                                attempt_fatal = True
+                                retained = None
+                                res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                                       "reason": f"儀器例外: {e}", "first_tool": None,
+                                       "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                                       "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                                       "limit_hit": False, "result_subtype": None,
+                                       "source_evidence": "unknown" if token else None, "fatal": True}
+                            finally:
+                                cleanup_elapsed = time.monotonic() - cleanup_started
+                                sandbox_secs += cleanup_elapsed
+                                attempt_sandbox_secs += cleanup_elapsed
+                        if work is None:
+                            setup_elapsed = time.monotonic() - setup_started
+                            sandbox_secs += setup_elapsed
+                            attempt_sandbox_secs += setup_elapsed
+                    res["sandbox_secs"] = round(attempt_sandbox_secs, 3)
+                    res["model_secs"] = round(attempt_model_secs, 3)
+                    if attempt_fatal:
+                        fatal = True
+                        fatal_reason = res["reason"]
                     if res.get("limit_hit") and waited < a.wait_on_limit:
                         print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
                         time.sleep(300); waited += 300
@@ -942,12 +1087,18 @@ def main():
                     print(f"      {res['reason']}", flush=True)
                 if fatal:
                     break
-                if not sc.get("source_probe"):
-                    subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work), env=_git_env())
-                    subprocess.run(["git", "clean", "-qfdx"], cwd=str(work), env=_git_env())   # -x:連 gitignore 的產出也清,情境之間不互染
             if fatal:
                 break
     finally:
+        if baseline is not None:
+            cleanup_started = time.monotonic()
+            try:
+                _remove_source_sandbox(baseline)
+            except SourceProbeCleanupError as e:
+                fatal = True
+                fatal_reason = f"批次基線清理失敗: {e}"
+            finally:
+                sandbox_secs += time.monotonic() - cleanup_started
         bad = global_skills_health()
         if bad:
             print("\n" + "!" * 60, file=sys.stderr)
@@ -958,9 +1109,10 @@ def main():
                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
             print("!" * 60, file=sys.stderr)
         summ = summarize_results(results, a.arm)
-        if fatal:
+        if fatal or bad:
             summ["inconclusive"] = True
-            summ["line"] = "儀器例外: 專用副本清理失敗，整批停止，不能下結論。 " + summ["line"]
+            reason = fatal_reason or "全域 skills 健康檢查失敗"
+            summ["line"] = (reason if reason.startswith("儀器例外:") else "儀器例外: " + reason) + "；整批不能下結論。 " + summ["line"]
         p, n = summ["passed"], summ["scored"]
         print("\n" + summ["line"])
         if a.runs > 1:
@@ -980,15 +1132,17 @@ def main():
             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
                                                "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
-                                               "excluded": summ["excluded"], "inconclusive": summ["inconclusive"],
+                                               "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+                                               "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+                                               "sandbox_version": SANDBOX_VERSION,
+                                               "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
                                                "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
         if a.history:
             with open(a.history, "a", encoding="utf-8") as hf:
-                hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs), ensure_ascii=False) + "\n")
-        if not a.keep:
-            # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
-            # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
-            shutil.rmtree(work.parent, ignore_errors=True)
+                hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
+                                                   sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
+        if retained is not None:
+            print(f"保留最後副本: {retained}", file=sys.stderr)
     if bad or fatal:
         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
     return 0 if p == n else 1

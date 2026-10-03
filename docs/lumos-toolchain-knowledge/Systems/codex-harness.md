@@ -43,6 +43,7 @@ verified_by:
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
   - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
+  - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -97,6 +98,10 @@ WHY: 2026-10-04 使用者授權例外續修三項缺口；Git只關閉父程序c
 PITFALL: 單驗副本gitdir仍可能漏掉共用資料、core.worktree或refs等中繼資料符號連結；本輪臨時fixture在補最後一道前確實改動外側refs。選擇在Git寫入前拒絕中繼資料符號連結，即使連結目標在副本內也拒絕；普通clone與安全相對gitfile保持可用。出處同例外續修驗證，重現及防回歸t_probe_repair4_copied_git_paths；若要支援這類連結，先從該測試與Issue重估，不能直接移除拒絕條件。
 
 PITFALL: 第四輪把副本頂層的綠測試誤擴成整棵Git樹安全會漏兩種配置：local include/worktree scope可恢復有效remote並蓋掉防推勾子，子模組仍有自己的remote及Git資料。另有共用沙盒清理失敗卻繼續下一題，以及Claude空ID工具回傳被當成功的反例。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]；成對重現r4-parent-reproduction.json及r4-boundary.md，後續防回歸入口為 [[Issues/探針Git隔離的設定與絕對路徑缺口]]、[[Issues/探針共用沙盒清理失敗仍繼續評分]] 與 [[Issues/探針讀碼證據不足]]。第4輪處置閘FAIL，不能把t_probe_repair4_*的局部綠燈當成放行。
+
+WHY: 2026-10-04 另開 [[Projects/探針隔離與清理收斂_計劃]] 處理第4輪的四組阻擋行為，不改寫原案四輪FAIL。保留可見Git歷史，但將繼承設定改為封閉重建、批次凍結後每場複製；這比單次清遠端或共用副本清理更容易界定失敗。代價是副本建立時間與磁碟用量增加；每週探針的 `sandbox_secs` 與 `model_secs` 是重評入口。證據見 [[Verification/2026-10-04_探針隔離與清理收斂]]。
+
+PITFALL: 探針的Git hook僅擋意外push，不是網路隔離；模型若主動指定URL、停hook或用其他網路工具仍可能外送。外指符號連結與巢狀Git也不能用「頂層副本安全」推論安全，故本案採前置拒絕。重現入口與回歸測試為 [[Projects/探針隔離與清理收斂_計劃]] S1–S3 的 `t_probe_boundary_nested_git`、`t_probe_boundary_worktree_links`、`t_probe_boundary_git_config`；正式模型題目若要求HOME或網路操作，先依 [[Issues/探針沙盒改動真全域機器狀態]] 重驗外層隔離。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。

@@ -36777,19 +36777,16 @@ def t_probe_repair_per_question_cli():
     from unittest.mock import patch
     mod = _load_probe_module("sp_repair_cli")
     with tempfile.TemporaryDirectory(prefix="probe-repair-") as td:
-        root = Path(td); (root / ".git").mkdir()
-        work = root / "sandbox" / "repo"; work.mkdir(parents=True)
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
         questions = root / "questions.jsonl"
         questions.write_text(_j.dumps({"id": "q", "prompt": "p", "expect": ["lumos search"]}) + "\n", encoding="utf-8")
         def exercise(rows):
             results = [dict(r, first_tool=None, secs=0) for r in rows]
             out = io.StringIO()
-            with patch.object(mod.sys, "argv", ["probe", "--repo", str(root), "--scenarios", str(questions), "--runs", "2", "--keep"]), \
-                 patch.object(mod, "make_sandbox", return_value=work), \
+            with patch.object(mod.sys, "argv", ["probe", "--repo", str(src), "--scenarios", str(questions), "--runs", "2"]), \
                  patch.object(mod, "check_scenario_targets", return_value=[]), \
                  patch.object(mod, "global_skills_health", return_value=[]), \
                  patch.object(mod, "run_one", side_effect=results) as runner, \
-                 patch.object(mod.subprocess, "run"), \
                  contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                 rc = mod.main()
             check("probe repair C3 前置: main 跑完兩場且輸出逐題統計", runner.call_count == 2 and "每題通過次數:" in out.getvalue(), out.getvalue())
@@ -36926,28 +36923,28 @@ def t_probe_source_probe_main():
         q = root / "q.jsonl"; q.write_text(json.dumps(sc) + "\n")
         for harness in ["claude", "codex"]:
             for fatal in [False, True]:
-                out = root / "out.json"; attempts = []
+                out = root / "out.json"; cleanup_calls = []
                 runner_seen = []
+                real_remove = mod._remove_source_sandbox
                 def model(*args, **kwargs):
                     runner_seen.append(kwargs.get("source_token"))
-                    r = _probe_res(sc["id"], len(attempts) > 1, "ok" if len(attempts) > 1 else "儀器例外: limit")
-                    r.update(first_tool=None, secs=0, source_evidence="absent", limit_hit=len(attempts) == 1)
+                    r = _probe_res(sc["id"], len(runner_seen) > 1, "ok" if len(runner_seen) > 1 else "儀器例外: limit")
+                    r.update(first_tool=None, secs=0, source_evidence="absent", limit_hit=len(runner_seen) == 1)
                     return r
-                def attempt(s, src, arm, runner):
-                    attempts.append(s["id"])
-                    result = runner(work, "LUMOS_READ_" + "e" * 32)
-                    if fatal: raise mod.SourceProbeCleanupError("remove failed")
-                    return result
-                work = root / "shared/repo"; work.mkdir(parents=True, exist_ok=True)
+                def remove(work):
+                    cleanup_calls.append(work)
+                    if fatal and len(cleanup_calls) == 1:
+                        raise mod.SourceProbeCleanupError("remove failed")
+                    real_remove(work)
                 with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--runner", harness, "--runs", "2", "--wait-on-limit", "300", "--keep", "--out", str(out)]), \
-                     patch.object(mod, "make_sandbox", return_value=work), patch.object(mod, "check_scenario_targets", return_value=[]), \
-                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_run_source_attempt", side_effect=attempt), \
+                     patch.object(mod, "check_scenario_targets", return_value=[]), \
+                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_remove_source_sandbox", side_effect=remove), \
                      patch.object(mod, "run_one", side_effect=model) as claude, patch.object(mod, "run_one_codex", side_effect=model) as codex, \
-                     patch.object(mod.subprocess, "run"), patch.object(mod.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                     patch.object(mod.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     rc = mod.main()
                 data = json.loads(out.read_text())
-                check("source main 重試/致命清理 " + harness + str(fatal), (rc == 3 and len(attempts) == 1 and data["inconclusive"]) if fatal else (rc == 0 and len(attempts) == 3), data)
-                check("source main 接到指定runner且傳標記 " + harness, len(runner_seen) == len(attempts) and all(runner_seen) and (claude.call_count == 0 if harness == "codex" else codex.call_count == 0), runner_seen)
+                check("source main 重試/致命清理 " + harness + str(fatal), (rc == 3 and len(runner_seen) == 1 and data["inconclusive"]) if fatal else (rc == 0 and len(runner_seen) == 3), data)
+                check("source main 接到指定runner且傳標記 " + harness, all(runner_seen) and (claude.call_count == 0 if harness == "codex" else codex.call_count == 0), runner_seen)
         # 真正的attempt helper清理異常必轉fatal；模型拋錯也仍清專用副本。
         work = root / "disposable/repo"; work.mkdir(parents=True)
         with patch.object(mod, "make_sandbox", return_value=work), patch.object(mod.shutil, "rmtree", side_effect=PermissionError("blocked")):
@@ -37116,6 +37113,216 @@ def t_probe_repair4_copied_git_paths():
                 check("r4 拒絕後副本已清理 " + shape, not disposable.exists(), str(disposable))
             if work is not None:
                 shutil.rmtree(work.parent)
+
+
+def _probe_boundary_repo(root):
+    """小型真 Git 來源；所有推送測試只碰同一暫存根的 bare。"""
+    import subprocess
+    root.mkdir(parents=True)
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), *args], check=True,
+                              capture_output=True, text=True)
+    git("init", "-q", "-b", "main")
+    (root / "base.txt").write_text("clean\n", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    return git
+
+
+def t_probe_boundary_git_config():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_config")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-git-") as td:
+        root = Path(td); src = root / "src"; git = _probe_boundary_repo(src)
+        bare = root / "bare.git"; empty = root / "empty-hooks"; empty.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        include = root / "branch.config"
+        include.write_text(f'[remote "escape"]\n\turl = {bare}\n[core]\n\thooksPath = {empty}\n')
+        git("branch", "escape")
+        git("config", "includeIf.onbranch:escape.path", str(include))
+        marker = root / "filter-marker"
+        git("config", "filter.escape.clean", f"sh -c 'printf hit > {marker}; cat'")
+        (src / ".gitattributes").write_text("*.txt filter=escape\n")
+        (src / "dirty.txt").write_text("payload\n")
+        before = _probe_repair4_bytes(src)
+        work = mod.make_sandbox(src)
+        try:
+            check("邊界現場:來源確有條件設定與clean filter", bool(git("config", "--get", "includeIf.onbranch:escape.path").stdout.strip()) and bool(git("config", "--get", "filter.escape.clean").stdout.strip()), "")
+            check("Git filter 不得在建立副本時執行", not marker.exists(), "filter 寫出副本外")
+            subprocess.run(["git", "-C", str(work), "checkout", "-q", "escape"], env=mod._git_env(), check=True)
+            remotes = subprocess.run(["git", "-C", str(work), "remote"], env=mod._git_env(), capture_output=True, text=True, check=True)
+            hooks = subprocess.run(["git", "-C", str(work), "config", "--get", "core.hooksPath"], env=mod._git_env(), capture_output=True, text=True, check=True)
+            check("切分支後仍無繼承remote/hook覆寫", not remotes.stdout.strip() and hooks.stdout.strip() == str(work.parent / "hooks"), (remotes.stdout, hooks.stdout))
+            push = subprocess.run(["git", "-C", str(work), "push", "--dry-run", str(bare), "HEAD:refs/heads/probe"], env=mod._git_env(), capture_output=True, text=True)
+            check("本機bare dry-run仍被pre-push擋", push.returncode != 0 and "探針沙盒:禁止 push" in push.stderr, push.stderr[-160:])
+        finally:
+            shutil.rmtree(work.parent)
+        check("設定隔離來源byte不變", before == _probe_repair4_bytes(src), "")
+
+
+def t_probe_boundary_worktree_links():
+    import tempfile, shutil
+    mod = _load_probe_module("sp_boundary_links")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-link-") as td:
+        root = Path(td); src = root / "src"; git = _probe_boundary_repo(src)
+        target = src / "base.txt"
+        (src / "escape-link").symlink_to(target)
+        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "link")
+        before = target.read_bytes(); rejected = False; work = None
+        try: work = mod.make_sandbox(src)
+        except RuntimeError: rejected = True
+        check("前置:連結確實指回來源", (src / "escape-link").resolve() == target.resolve(), "")
+        check("外指工作樹連結建立副本即拒絕", rejected, str(work))
+        check("拒絕時來源未被寫動", target.read_bytes() == before, target.read_text())
+        if work is not None: shutil.rmtree(work.parent)
+        (src / "escape-link").unlink()
+        (src / "inside-link").symlink_to("base.txt")
+        work = mod.make_sandbox(src)
+        try: check("內指工作樹連結好例", (work / "inside-link").resolve() == (work / "base.txt").resolve(), "")
+        finally: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_nested_git():
+    import tempfile, shutil
+    mod = _load_probe_module("sp_boundary_nested")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-nested-") as td:
+        root = Path(td)
+        for shape in ("nested", "gitmodules"):
+            src = root / shape; _probe_boundary_repo(src)
+            if shape == "nested":
+                nested = src / "lib"; _probe_boundary_repo(nested)
+            else:
+                (src / ".gitmodules").write_text('[submodule "lib"]\n\tpath = lib\n\turl = ../lib\n')
+            before = _probe_repair4_bytes(src)
+            rejected = False; work = None
+            try: work = mod.make_sandbox(src)
+            except RuntimeError: rejected = True
+            check("巢狀Git前置成立 " + shape, (src / "lib/.git").exists() if shape == "nested" else (src / ".gitmodules").exists(), "")
+            check("巢狀Git或未初始化子模組拒絕 " + shape, rejected, str(work))
+            check("拒絕時來源byte相同 " + shape, before == _probe_repair4_bytes(src), "")
+            if work is not None: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_claude_ids():
+    import json
+    mod = _load_probe_module("sp_boundary_ids")
+    token = "LUMOS_READ_" + "b" * 32
+    for ident in ("", None):
+        call = {"type": "tool_use", "name": "Bash", "input": {"command": "cat x"}}
+        result = {"type": "tool_result", "content": token, "is_error": False}
+        if ident is not None: call["id"] = result["tool_use_id"] = ident
+        events = [{"type": "assistant", "message": {"content": [call]}},
+                  {"type": "user", "message": {"content": [result]}},
+                  {"type": "result", "subtype": "success", "result": "ok"}]
+        check("Claude空/缺ID不能配成正證據 " + repr(ident),
+              mod.source_evidence([json.dumps(e) for e in events], "claude", token) == "unknown", "")
+        good = events + _source_probe_events("claude", token)
+        check("另有真證據仍優先 " + repr(ident),
+              mod.source_evidence([json.dumps(e) for e in good], "claude", token) == "present", "")
+
+
+def t_probe_boundary_attempt_isolation():
+    import tempfile, json, io, contextlib, shutil, subprocess
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_attempt")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-attempt-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        scenarios = root / "q.jsonl"
+        scenarios.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                      for s in ("a", "b")) + "\n")
+        out = root / "out.json"; seen = []
+        def runner(sc, work, *_args, **_kwargs):
+            seen.append((work, (work / "base.txt").read_text(),
+                         (work / "poison.txt").exists(),
+                         subprocess.run(["git", "-C", str(work), "config", "--get", "probe.poison"],
+                                        capture_output=True, text=True).stdout.strip()))
+            if len(seen) == 1:
+                (src / "base.txt").write_text("changed outside batch\n")
+                (work / "base.txt").write_text("changed in first attempt\n")
+                (work / "poison.txt").write_text("poison\n")
+                subprocess.run(["git", "-C", str(work), "config", "probe.poison", "yes"], check=True)
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": None}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(scenarios),
+                "--runner", "claude", "--out", str(out), "--keep"]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("逐場副本前置:兩runner確實呼叫", len(seen) == 2, seen)
+        if len(seen) == 2:
+            check("逐場副本彼此不同且來源變動不改批次基線",
+                  seen[0][0] != seen[1][0] and seen[1][1] == "clean\n" and not seen[1][2] and seen[1][3] == "", seen)
+            check("keep只留最後一份有效副本", not seen[0][0].exists() and seen[1][0].exists(), seen)
+            if seen[0][0].exists() and seen[0][0] != seen[1][0]: shutil.rmtree(seen[0][0].parent)
+            if seen[1][0].exists(): shutil.rmtree(seen[1][0].parent)
+        check("逐場批次結果仍有效且帶版號成本", rc == 0 and data["passed"] == 2
+              and data.get("sandbox_version") == mod.SANDBOX_VERSION
+              and data.get("sandbox_secs", 0) > 0 and data.get("valid_total") == 2
+              and all("sandbox_secs" in r and "model_secs" in r for r in data["results"]), data)
+
+
+def t_probe_boundary_cleanup_failure():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_cleanup")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-cleanup-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        scenarios = root / "q.jsonl"
+        scenarios.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                      for s in ("a", "b")) + "\n")
+        out = root / "out.json"; history = root / "history.jsonl"; calls = []
+        real_remove = mod._remove_source_sandbox
+        def remove(work):
+            calls.append(work)
+            if len(calls) == 1:
+                raise mod.SourceProbeCleanupError("forced cleanup failure")
+            real_remove(work)
+        def runner(sc, *_args, **_kwargs):
+            runner.calls.append(sc["id"])
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": None}
+        runner.calls = []
+        argv = ["probe", "--repo", str(src), "--scenarios", str(scenarios),
+                "--runner", "claude", "--out", str(out), "--history", str(history)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "_remove_source_sandbox", side_effect=remove), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); hist = json.loads(history.read_text().splitlines()[-1])
+        check("普通題清理失敗確實觸發而後題未跑", calls and runner.calls == ["a"], (calls, runner.calls))
+        check("清理失敗整批退出3且不算有效分數", rc == 3 and data["inconclusive"] and data.get("valid_total") == 0 and data["excluded"] == ["a"], data)
+        check("不確定與fatal寫入歷史", hist.get("inconclusive") is True and hist.get("fatal") is True, hist)
+
+
+def t_probe_boundary_history_version():
+    mod = _load_probe_module("sp_boundary_version")
+    summ = {"passed": 1, "scored": 1, "failed": [], "excluded": [], "inconclusive": False}
+    row = mod.history_record("now", "seed", summ)
+    check("歷史保留沙盒版號與成本", bool(row.get("sandbox_version")) and "sandbox_secs" in row and "model_secs" in row, row)
+
+
+def t_probe_boundary_setup_failure():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_setup_fail")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-setup-fail-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; calls = []
+        def make(*args, **kwargs):
+            calls.append(args[0])
+            raise RuntimeError("setup blocked")
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]), \
+             patch.object(mod, "make_sandbox", side_effect=make), \
+             patch.object(mod, "run_one") as runner, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("基線建立失敗沒有模型呼叫", rc == 3 and calls == [src.resolve()] and runner.call_count == 0, (calls, data))
+        check("基線建立失敗留不可判紀錄", data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
 
 
 def t_delguard_logs_ok_too():
