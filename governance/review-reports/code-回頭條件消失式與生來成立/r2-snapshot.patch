@@ -1,0 +1,390 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/回頭條件消失式與生來成立_計劃.md b/docs/lumos-toolchain-knowledge/Projects/回頭條件消失式與生來成立_計劃.md
+index ee1b11e7..c05d1d47 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/回頭條件消失式與生來成立_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/回頭條件消失式與生來成立_計劃.md
+@@ -23,22 +23,22 @@ summary: |-
+ 白話:回頭條件的條件鍵(`when-file`、`when-symbol`、`when-test`、`when-status`)全是「等某樣東西出現」,沒辦法寫「等某支檔或某段程式不再出現就回頭」。這份計劃加一個條件鍵 `when-gone`。
+ 
+ 原本這份也要做第 11 項「寫下時就已成立」(drift scan 對現在成立的條件往回查寫下那一版);設計審三輪每輪都在「往回查歷史」那塊挖出結構問題、而且每次修完又帶出新錯,2026-10-03 Enzo 裁縮案:這份只做 `when-gone`,第 11 項拆到 [[Projects/回頭條件寫下時就成立_計劃]],改用既有的單篇歷史走訪重新設計。檔名保留(卷證與帳本綁著這個編號)。
+ 
+ 依據:
+ - 消費專案清漂移回傳(2026-10-02,第 6 項,去識別):「等某支檔不再直接讀系統時間就回頭」——when-file、when-symbol、when-test 只能等東西出現。建議 `[when-gone:路徑::樣式]`。
+ - 2026-10-03 乾淨查證員核對現況(唯讀,[[Projects/回頭條件寫法補齊_計劃]] 依據同一次):條件鍵只有四個、全是正向判定;推送時已經會擋「這次新寫(或改了條件)的回頭條件,條件已經成立」(既有測試 `t_drift_when_probes_evaluate_and_trigger` ⑨)。
+ - 條件文法、評估與推送判定在 [[Projects/存量漂移防線_計劃]]〈做法〉第 0、2 節;家在 [[Systems/存量漂移守衛]]。
+ 
+ PRIOR-ART: 最小解在工具這一層(條件評估本來就在 lumos 的推送判定與 scan 裡)。世界上最接近「等東西消失」的是 feature flag 平台的清理提醒(旗標在程式碼裡已經沒有引用就提示移除)與 Ruby todo_or_die 的條件式到期;都是「某個符號或文字不在了就觸發」,本案照這個形狀,只認明寫的路徑與字面字串,不做樣式或正則(條件要讀得懂、判得穩)。
+-RETIRE-IF: 上線兩個月後 `when-gone` 零使用(用 `lumos drift scan --json` 數回頭條件與 RULE 撤除條件裡實際解析出的 `gone` 條件,不數文件裡的範例——設計審 r3 正確性席:原稿數 `[when-gone:` 字串,本計劃與手冊自己的範例就數不到零),拿掉這個鍵。
+-REVISIT:2026-12-03 用 `lumos drift scan --json` 數兩邊圖譜解析出的 `gone` 條件幾條,照 RETIRE-IF 判
++RETIRE-IF: 上線兩個月後 `when-gone` 零使用(用一次性腳本對兩邊圖譜跑 `_probe_lines` 與 `_retire_lines`,數解析出的 `gone` 條件——含還在等的;不數文件裡的範例——設計審 r3 正確性席:原稿數 `[when-gone:` 字串,本計劃與手冊自己的範例就數不到零;代碼審 r1 正確性席:`drift scan --json` 只列已成立與判不了的,還在等的數不到),拿掉這個鍵。
++REVISIT:2026-12-03 用一次性腳本對兩邊圖譜跑 `_probe_lines` 與 `_retire_lines` 數解析出的 `gone` 條件幾條,照 RETIRE-IF 判
+ 
+ ## 範圍
+ 
+ - **做**:第 6 項(條件鍵 `when-gone`)。
+ - **拆出**:第 11 項(寫下時就已成立)——[[Projects/回頭條件寫下時就成立_計劃]]。
+ - **不做**:樣式、正則、萬用字元的消失條件——只認路徑與字面字串。
+ 
+ ## 做法
+ 
+ 1. **寫法**:`[when-gone:<路徑>]`——樹上找不到這個路徑就成立;`[when-gone:<路徑>::<字串>]`——找不到這個路徑、或那支檔裡不再出現這段字就成立。
+@@ -49,21 +49,21 @@ REVISIT:2026-12-03 用 `lumos drift scan --json` 數兩邊圖譜解析出的 `go
+    例:`REVISIT:[when-gone:src/instrumented.py::time.time()][by:2027-01-31] 不再直接讀系統時間了,把註解裡的警告拿掉`。
+ 2. **拆值與讀鍵的地方逐一列出**(以 2026-10-03 的程式為準,函式名):
+    - `_drift_cond_split(v, k)` 加鍵參數:`gone` 切第一個 `::`、沒有 `::` 回 (路徑, 空字串);其他鍵照舊切最後一個。下面所有拆值都呼叫它,不另寫切法(設計審 r3 架構對齊席)。
+    - **值的正規化與驗證收成一支 `_probe_check_value(k, val)`** → (正規化後的值, 錯誤或 None):先用 `_drift_cond_split` 切、只對路徑那段做反斜線轉斜線(既有 `_probe_parse` 對 file/symbol/test 是整串轉,`gone` 的字串不能轉)、驗、再驗一次正規化後的(既有「先驗、正規化、再驗」的順序,擋 `a\..\x.py` 與 `..\x` 這種繞過);`_probe_parse` 與 `_slot_retire_err` 都改呼叫它——RULE 撤除條件現在不轉反斜線、`[retire:when-gone:..\x]` 會被放過,兩條路的要求要一致(設計審 r3 正確性席、邊界席、通才席、架構對齊席);`_probe_value_err`、`_probe_norm_value` 變成它的內部步驟,`gone` 的分支在 `_probe_gone_err` 與 `_probe_norm_value` 的 `gone` 分支,兩者都經 `_drift_cond_split(v, "gone")`。
+    - `_probe_named_err`:只給 symbol/test,不動。
+    - `_DriftProbeTree.prefetch`、`unread_for`、`one`:帶字串的 `gone` 跟帶路徑的 symbol 一樣預讀、點名、判。
+    - `_drift_probe_cond_candidate`:見第 4 點。
+    - `_drift_row_unread`:帶字串的 `gone` 點名那支檔。
+    - `_drift_probe_path_warn`:`gone` 不提示(找不到是它的正常成立狀態)。
+    - `_slot_retire_err`:`gone` 不必另外要求 `::`(它本來就帶路徑),值驗證走 `_probe_check_value`。
+-   - 反引號:共用解析器拿到的是剝過反引號的文字,所以另寫一支 `_probe_gone_backtick_err(raw)` 看**原文**(原文裡 `[when-gone:` 或 `[retire:when-gone:` 開始、到同一個標記的 `]` 之間有反引號就報「條件寫錯」),筆記形狀擋的回頭條件檢查(`_ns_revisit_violations`)與格子撤除條件檢查(`_slot_retire_err` 的呼叫端)都呼叫它(設計審 r3 架構對齊席:原稿兩個呼叫端各寫一份)。
++   - 反引號:共用解析器拿到的是剝過反引號的文字,所以另寫一支 `_probe_gone_backtick_err(raw)` 看**原文**(原文裡 `[when-gone:` 或 `[retire:when-gone:` 開始、找得到同一個標記的 `]` 才算標記、之間有反引號就報「條件寫錯」;說明文字裡提到 `when-gone:` 不算——代碼審 r1 正確性席;不放進值驗證 `_probe_check_value`,因為那裡拿到的值已經剝過反引號,代碼審 r1 架構對齊席問過)。字串裡也不能有 `[`(標記在第一個 `]` 結束,後面會被默默截掉;代碼審 r1 正確性席),筆記形狀擋的回頭條件檢查(`_ns_revisit_violations`)與格子撤除條件檢查(`_slot_retire_err` 的呼叫端)都呼叫它(設計審 r3 架構對齊席:原稿兩個呼叫端各寫一份)。
+ 3. **評估**(`_DriftProbeTree.one` 多一個分支):
+    - **「在」怎麼算**:那一版的樹上這個路徑是一般檔、連結檔或子模組,或它是資料夾(樹上有以 `路徑/` 開頭的條目),都算在;全都沒有才算消失。`_DriftProbeTree` 建樹時多存一份「全部條目」(既有的 `files` 只放一般檔,不動它的意思)。
+    - **帶字串**:路徑在、但不是一般檔 → 判不了;是一般檔就另讀原始位元組(既有的 `_read` 讀完會用替代字元解碼成文字,誤讀的內容也會「找不到字串」),`_DriftProbeTree` 加一份位元組快取、走同一次批次讀,單檔上限照既有讀檔上限(超過判不了)。內容含 NUL、是 Git LFS 指標檔(開頭 `version https://git-lfs.github.com/spec/`)、或不能用嚴格 UTF-8(`utf-8-sig`)解碼(Big5 這類沒有 NUL 的舊編碼)→ 判不了;能解碼就在文字裡找字串,找不到 → 成立。
+    - **判不了要講對原因**:`_DriftProbeTree` 記下每個 `gone` 條件判不了的原因(不是一般檔、含 NUL、LFS、不是 UTF-8、超過上限、讀不出),scan 與推送判定的「判不了」訊息照這個原因寫,不沿用「git 讀不出程式檔或筆記」那句固定字(設計審 r3 邊界席、通才席)。
+    - **工作目錄模式**(`drift scan` 不帶 `--at`):清單照既有的工作目錄讀法,sparse-checkout 沒拉下來的檔、還沒暫存的刪除、被 gitignore 的檔都算消失;NFD 檔名照既有列檔的正規化(天花板 5)。
+    - `_drift_probe_one`、`_drift_probe_line` 不動(新鍵走同一支)。
+ 4. **推送判定**:`_drift_probe_cond_candidate` 對 `when-gone` 看路徑在不在這次推送改到的檔裡,或是以它為前綴的資料夾裡有檔被改到;其餘轉變判定照舊。寫下時就已成立的(字串拼錯、檔名寫錯、全形冒號、被 gitignore 的檔——永遠不會在樹上),推送時照既有規矩被點名「這次新寫(或改了條件)的回頭條件,條件已經成立」。**只有這一種**(新寫或改了條件、起點沒有同一條)而且路徑在終點版本就找不到時,點名訊息後面多一句「路徑在這一版就找不到——打錯字、全形符號,或是被 gitignore 的檔?」;這次推送刪掉檔讓條件成立的(起點有同一條)不加這句——刪檔是 `when-gone` 最主要的合法觸發(設計審 r3 正確性席、通才席)。這句加在 `_drift_probe_check` 拿到判定結果之後(判定函式 `_drift_probe_judge` 不認得任何條件鍵,不讓它認得 `gone`;設計審 r3 架構對齊席)。檔被改名或搬家時,舊路徑消失、條件成立,推送會點名(天花板 3)。
+ 5. **列舉鍵的地方由同一張表產生或逐一同步**:`_PROBE_KEYS` 加 `gone`;程式裡的兩句訊息(`_probe_value_err` 的「只有 file、symbol、test、status」、`_slot_retire_err` 的「只收 when-file/…」)從 `_PROBE_KEYS` 組字;筆記形狀擋否定現況句提醒裡「條件怎麼選」那段補一句 `when-gone`。文件裡列鍵的地方逐一改:`skills/lumos-project-notes/commands/03-寫回圖譜.md`(「四種鍵」改寫成不寫死數目的說法)、`skills/lumos-project-notes/reference.md`(撤除條件事件那句)、注入消費專案紀律區塊的範本 `scripts/templates/graph-discipline.md`(RULE 撤除條件機器式那句;範本沒有版本戳,版本由注入當下插值)。範本改了之後在本 repo 跑 `lumos update` 重新注入 `CLAUDE.md` 與 `AGENTS.md` 的紀律區塊(doctor Check D 會守兩邊一致;設計審 r3 通才席、邊界席)。`skills/lumos-project-notes/SKILL.md` 沒有列鍵,不動(r2 稿誤列)。漂移守衛測試掃這兩句程式訊息、提醒那段、上面三份文件,都要提到 `_PROBE_KEYS` 的每個鍵。
+ 
+ ## 說明與同步
+@@ -94,23 +94,24 @@ REVISIT:2026-12-03 用 `lumos drift scan --json` 數兩邊圖譜解析出的 `go
+ 
+ ## 回退
+ 
+ 還原本案的單一功能提交,再照還原後的範本跑一次 `lumos update`(〈實務隱患〉回滾)。設定與帳本格式沒變。
+ 
+ ## 天花板
+ 
+ 1. 提交時不評估條件:新寫的已成立條件要到推送才被點名。
+ 2. 判不了的都靠推送「判不了算要處理」兜底:Big5 這類舊編碼的程式檔,帶字串的 `when-gone` 永遠判不了、每次碰到那支檔的推送都會被點名。
+ 3. `when-gone` 只認字面字串與原路徑:改寫成同義寫法、或檔改名搬家,都算「不再出現」,條件會提早成立——推送時會被點名,作者挑字串時要挑會真的消失的那段。
+-4. 字串不能含 `]`、換行、反引號;路徑不能含 `::`。
++4. 字串不能含 `[`、`]`、換行、反引號;路徑不能含 `::`。
+ 5. 工作目錄模式的 scan 照工作目錄看「在不在」:sparse-checkout 沒拉下來的檔、還沒暫存的刪除、被 gitignore 的檔都算消失;要看提交的狀態用 `--at`。
+ 
+ ## 審計修正紀錄
+ - r1(2026-10-03,3 席+架構對齊):30 條/blocking 8(席報告總結句:正確性 4、邊界 3、通才 1、架構對齊 0;架構對齊席報 5 條 minor)/「寫下時」用 `git log -S` 找第一次出現的文字會找錯提交(四席)→ 改成沿筆記歷史逐版找同一條(條件標記一樣)這一世的開頭;「不在樹上」把資料夾、連結檔、子模組判成已消失(三席)→ 這些都算在,帶字串要一般檔;讀不準(NUL、LFS、讀不出)一律判不了;反斜線只正規化路徑、字串不准反引號;不另開拆值函式,`_drift_cond_split` 依鍵切;列舉鍵的訊息由同一張表產生並加守衛測試;淺層講法統一;git 逾時受預算約束;`born` 欄形狀統一;先例引用更正;落點補筆記內容閘。卷證 `governance/review-reports/回頭條件消失式與生來成立/`。
+   - 例:`REVISIT:[when-file:src/a.py][by:2026-12-31] 舊說法` 在 a.py 還沒有時寫下,後來 a.py 出現、作者把待辦文字改成新說法 → 原稿 `-S` 找到改字那一版、a.py 已在、誤標「寫下時就已成立」;現在認條件標記,找到最早那一版、那時不成立、不標。
+   - 例:`[when-gone:src/lib]`(src/lib 是資料夾)→ 原稿寫下當下就成立;現在資料夾算在、不成立。
+ - r2(2026-10-03,3 席+架構對齊,看 r1 修訂稿):32 條/blocking 6(正確性 2、邊界 3、通才 1)/「讀位元組」建在會先解碼的 `_read` 上、Big5 這類檔誤判成已消失(三席)→ 另存位元組快取、嚴格 UTF-8 才比;往回查碰到合併提交順序交錯(兩席實跑)→ 只沿主幹;往回某一版讀不出、同一篇兩行條件一樣、partial clone 會去網路抓 → 一律判不了;「全部呼叫同一支拆值」不是現況(三席)→ 逐一列出十處要改的函式;git 呼叫改走 `_lens_git` 帶逾時與字面路徑、原樣路徑;反引號檢查放在看原文的呼叫端;撤除條件與 REVISIT 寫法要求一致;列鍵文件補範本與 reference;路徑找不到的點名多一句提示;資源上限 20 條、判完就丟;標記拿掉「從沒提醒過」;呈現照 `_drift_prev_ack_line`。卷證同目錄。
+   - 例:Big5 程式檔、`[when-gone:legacy.c::時間]` → r1 稿用解碼後的文字比、字串變亂碼找不到、寫下當下就成立擋推送;現在不是嚴格 UTF-8、判不了(推送判不了算要處理,點名時講原因)。
++- 代碼審 r1(2026-10-03,standard,正確性+架構對齊):10 條/major 2/反引號檢查把說明文字裡的 `when-gone:` 也當標記、誤擋手冊教的寫法(正確性席重現)→ 只看找得到結尾 `]` 的真標記;git 模式讀原始位元組沒有事前大小上限、30 MB 與 200 MB 實測整份駐留(兩席)→ 改走 `_nodehome_cat_blobs_capped`;另折字串含 `[` 報錯、工作目錄模式每支檔看預算、「是不是資料夾」與 when-file 提示共用 `is_dir`、拆值函式的鍵參數改必填、RETIRE-IF 計數改數得到還在等的、讀不出與超過上限與工作目錄模式補測試。卷證 `governance/review-reports/code-回頭條件消失式與生來成立/`。
+ - 實作(2026-10-03):反向驗證抓到兩支測試沒咬到——候選篩選拿掉 gone 分支照綠(刪資料夾算程式形狀改變、一般分支本來就全當候選),改用非程式檔與素材資料夾的刪除;列鍵訊息三句串在一起檢查、其中一句仍提到 gone,改成逐句。工作目錄模式讀原始位元組前先看檔案大小,超過上限不讀進記憶體。本 repo 的 CLAUDE.md、AGENTS.md 紀律區塊照新範本重注入(只差撤除條件那一句)。
+ - r3(2026-10-03,3 席+架構對齊,末輪):42 條/blocking 15(通才 6、邊界 5、正確性 3、架構對齊 1 major 加 1 blocking)/第 11 項「往回查歷史」三輪都挖出結構問題、而且 r2 折入的段落自帶錯誤(「原樣路徑」那份不存在、讀版本的函式分不出三種讀不到、已表態的列在輸出結構裡印不出補充行、歷史裡複製出第二行會追錯);架構對齊席 major:程式裡已有單篇逐版往回讀的 `_note_status_seq`,原稿另寫一支走訪器。到上限後 Enzo 裁「縮案:先做 when-gone」——第 11 項連同它在三輪的發現拆到 [[Projects/回頭條件寫下時就成立_計劃]](改用既有走訪重新設計);本篇折入 `when-gone` 那一半:值的正規化與驗證收成 `_probe_check_value`(兩條路一致、擋 `a\..\x.py` 與撤除條件的 `..\x`)、「路徑找不到」那句只給新寫的、加在判定之後、判不了講對原因、反引號原文檢查一支共用、文件清單改正(SKILL.md 沒列鍵、範本改了要重注入)、字串去頭尾空白、RETIRE-IF 改數解析出的條件。卷證同目錄。
+   - 例:`[retire:when-gone:..\x.py]` → r2 稿撤除條件那條路不轉反斜線、放行;現在兩條路走同一支 `_probe_check_value`、擋下。
+   - 例:推送刪掉 `src/a.py` 讓 `[when-gone:src/a.py]` 成立 → r2 稿會附「路徑在這一版就找不到——打錯字?」;現在只有新寫的才附。
+diff --git a/scripts/lumos b/scripts/lumos
+index 486663a3..79765ab7 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -31947,31 +31947,36 @@ def _probe_norm_value(k, v):
+     return v
+ 
+ 
+ def _probe_gone_err(v):
+     """when-gone 的值:<路徑> 或 <路徑>::<字串>(從第一個 :: 切);路徑規矩同 file,帶了 :: 就要有字串。"""
+     path, text = _drift_cond_split(v, "gone")
+     if _probe_bad_path(path):
+         return f"when-gone 的路徑 {path} 不合法(不能空、不准 / 開頭、不准 .. 段)"
+     if "::" in v and not text:
+         return "when-gone 的字串是空的(帶了 :: 就要寫字串)"
++    if "[" in text:
++        return "when-gone 的字串不能含方括號(標記在第一個 ] 結束,後面會被截掉);挑那段程式裡不含方括號的部分"
+     return None
+ 
+ 
+ def _probe_gone_backtick_err(s):
+     """原文裡 when-gone 那個標記(到同一個標記的 ] 為止)含反引號 → 錯誤說明或 None。回頭條件行的共用解析器拿到的是剝過
+     行內程式碼的文字,反引號那段會被拿掉、實際比對的不是作者寫的那串,所以看原文;REVISIT 行(筆記形狀擋)與 RULE 撤除
+     條件(格子)兩個呼叫端共用(Projects/回頭條件消失式與生來成立_計劃〈做法〉2)。"""
+-    for m in re.finditer(r"when-gone:", s or ""):
+-        end = s.find("]", m.end())
+-        if "`" in s[m.end():len(s) if end < 0 else end]:
+-            return "when-gone 的字串不能含反引號(會被當成行內程式碼剝掉);挑那段程式裡不含反引號的部分"
++    s = s or ""
++    if s.startswith("when-gone:"):          # 撤除條件的值(格子解析出來的,不帶方括號)
++        segs = [s[len("when-gone:"):]]
++    else:                                   # 回頭條件行原文:只看真正的 [when-gone: 標記、到同一個標記的 ] 為止
++        segs = [s[m.end():s.find("]", m.end())] for m in re.finditer(r"\[(?:retire:)?when-gone:", s) if s.find("]", m.end()) >= 0]
++    if any("`" in seg for seg in segs):
++        return "when-gone 的字串不能含反引號(會被當成行內程式碼剝掉);挑那段程式裡不含反引號的部分"
+     return None
+ 
+ 
+ def _probe_check_value(k, val):
+     """一個條件標記的值 → (存下來的值, 錯誤說明或 None)。回頭條件解析與 RULE 撤除條件共用(設計審 r3:撤除條件那條路原本
+     不轉反斜線,`..\\x` 會被放過)。順序照既有:反斜線先轉斜線再驗(只轉路徑那段——gone 的字串原樣)、正規化、正規化之後再驗一次。"""
+     if k in ("file", "symbol", "test"):
+         first = val.replace("\\", "/")
+     elif k == "gone":
+         path, text = _drift_cond_split(val, "gone")
+@@ -32229,21 +32234,21 @@ def _drift_decode(b):
+ 
+ def _drift_cat(root, where, paths, timeout):
+     """批次讀那個提交裡的這幾支檔,回同順序的 bytes|None;git 跑不起來回 None。★用列檔時記下的內容編號讀★,
+     不用「版本:路徑」:樹清單把路徑轉成 NFC 了,git 裡存的可能是 NFD、兩種混用、或相容表意字(NFC 與 NFD 都會把它換掉),
+     用路徑讀永遠讀不到;路徑含換行時批次讀也整批失敗(代碼審 r2 外家席、r3 正確性席、邊界席;r2 的 NFD 重讀補不到混用
+     與相容表意字,還多開一次行程、沿用整段逾時——r3 併發席、外家席、架構對齊席)。查不到編號的才退回用路徑讀。"""
+     oids = _drift_oids(root, where)
+     return _nodehome_cat_blobs(root, [oids.get(p) or f"{where}:{p}" for p in paths], timeout=timeout)
+ 
+ 
+-def _drift_cond_split(v, k=None):
++def _drift_cond_split(v, k):
+     """條件的值 → (路徑或空字串, 名稱或字串)。判定、預讀、候選篩選、判不了的點名、值的驗證與正規化共用這一支
+     (代碼審 r5 架構對齊席:原本四處各自 rsplit,點名的範圍跟判定的範圍連三輪對不上)。
+     symbol/test 從最後一個 :: 切(沒有 :: 就只有名稱);gone 從第一個 :: 切(字串裡可以有 ::,沒有 :: 就只有路徑;
+     Projects/回頭條件消失式與生來成立_計劃〈做法〉2)。"""
+     if k == "gone":
+         path, _sep, text = v.partition("::")
+         return path.strip(), text.strip()
+     path, name = (v.rsplit("::", 1) if "::" in v else ("", v))
+     return path.strip(), name.strip()
+ 
+@@ -32341,44 +32346,52 @@ class _DriftProbeTree:
+ 
+     def prefetch(self, conds):
+         """帶路徑的 symbol/test 條件指到的檔,一個行程讀完;帶字串的 when-gone 讀原始位元組;讀不了不管,輪到那條時再判。"""
+         paths = {_drift_cond_split(v, k)[0] for k, v in conds if k in ("symbol", "test")} - {""}
+         self._read(sorted(p for p in paths if p in self.files))
+         raw = {_drift_cond_split(v, k)[0] for k, v in conds if k == "gone" and _drift_cond_split(v, k)[1]}
+         self._read_raw(sorted(p for p in raw if p in self.files))
+ 
+     def present(self, path):
+         """when-gone 的「在」:一般檔、連結檔、子模組,或它是資料夾(有以 path/ 開頭的條目)。"""
+-        if path in self.entries:
+-            return True
++        return path in self.entries or self.is_dir(path)
++
++    def is_dir(self, path):
++        """樹上有以 path/ 開頭的條目。when-gone 的「在」與 when-file「指到資料夾」的提示共用(代碼審 r1 架構對齊席)。"""
+         if self._dirs is None:
+             self._dirs = {q.rsplit("/", i)[0] for q in self.entries for i in range(1, q.count("/") + 1)}
+-        return path in self._dirs
++        return path.rstrip("/") in self._dirs
+ 
+     def _read_raw(self, paths):
+         """原始位元組(不解碼)讀進 _raw;讀不了(git 失敗、預算用完)回 False,單支讀不出記成 None。"""
+         todo = [p for p in paths if p not in self._raw]
+         if not todo:
+             return True
+         if self._over():
+             return False
+         if self.where == "disk":
+             for p in todo:
++                if self._over():
++                    return False
+                 try:
+                     f = Path(self.root) / p
+                     # 先看大小:超過上限不讀進記憶體(只記「太大」)
+                     self._raw[p] = _DRIFT_RAW_TOO_BIG if f.stat().st_size > _DRIFT_GONE_MAX_BYTES else f.read_bytes()
+                 except OSError:
+                     self._raw[p] = None
+             return True
+         left = 60 if self.deadline is None else max(1, self.deadline - self._t.monotonic())
+-        blobs = _drift_cat(self.root, self.where, todo, left)
++        # 帶上限的批次讀(先問大小、超過的不讀進記憶體;代碼審 r1 架構對齊席、正確性席:原本整份讀進來才判太大,
++        # 200 MB 的檔駐留約 1.1 GB);用列檔時記下的內容編號讀(同 _drift_cat 的理由)。超過上限與讀不出都回 None
++        oids = _drift_oids(self.root, self.where)
++        blobs = _nodehome_cat_blobs_capped(self.root, [oids.get(p) or f"{self.where}:{p}" for p in todo],
++                                           _DRIFT_GONE_MAX_BYTES, timeout=left)
+         if blobs is None:
+             return False
+         self._raw.update(zip(todo, blobs))
+         return True
+ 
+     def gone(self, v):
+         """when-gone 一個條件 → True / False / None(判不了;原因記在 gone_why[v])。"""
+         path, text = _drift_cond_split(v, "gone")
+         if not self.present(path):
+             return True
+@@ -32411,21 +32424,21 @@ class _DriftProbeTree:
+         """讀過、樹上有、內容讀不出的檔。"""
+         return [p for p, t in self._text.items() if t is None]
+ 
+     def unread_for(self, k, v):
+         """這一個 symbol/test 條件判定時依賴、而且讀不出來的檔:帶路徑的看那一支,不帶路徑的看同一類(程式或測試)語料。
+         跟 one() 用同一支拆條件、同一個分類(代碼審 r5 架構對齊席、外家席:原本點名用整棵樹累積的讀不出清單,
+         前一行讀過的測試檔會混進這一行的說明)。when-gone 判不了的點名那支檔、括號裡講原因。"""
+         if k == "gone":
+             why = self.gone_why.get(v)
+             return [f"{_drift_cond_split(v, k)[0]}({why})"] if why else []
+-        path, _name = _drift_cond_split(v)
++        path, _name = _drift_cond_split(v, k)
+         if path:
+             return [path] if path in self._text and self._text[path] is None else []
+         test = k == "test"
+         return [p for p in self.bad_paths() if _drift_probe_code_path(p) and _nodehome_is_test(p, self.layout) == test]
+ 
+     def corpus(self, test):
+         """程式檔(test=False)或測試檔的路徑清單;讀不了回 None。沒副檔名的要開頭是 #! 才算(跟每支檔有家共用
+         _head_is_shebang;代碼審 r2 架構對齊席)。讀不出來的檔記在 _unread,沒找到定義時整條算判不了。"""
+         if test not in self._corpus:
+             paths = sorted(p for p in self.files if _drift_probe_code_path(p) and _nodehome_is_test(p, self.layout) == test)
+@@ -32449,21 +32462,21 @@ class _DriftProbeTree:
+             return bool(_drift_py_def_re(name, test).search(txt))
+         return name in names[0] or (not test and (name in names[1] or name in names[2]))
+ 
+     def one(self, k, v):
+         """file/symbol/test/gone 一個條件 → True / False / None(判不了)。"""
+         if k == "file":
+             return v in self.files
+         if k == "gone":
+             return self.gone(v)
+         test = k == "test"
+-        path, name = _drift_cond_split(v)
++        path, name = _drift_cond_split(v, k)
+         if path:
+             if path not in self.files:
+                 return False
+             if not self._read([path]) or self._text[path] is None:
+                 return None
+             return self._defines(path, name, test)
+         items = self.corpus(test)
+         if items is None:
+             return None
+         if any(self._defines(p, name, test) for p in items):
+@@ -32473,21 +32486,21 @@ class _DriftProbeTree:
+ 
+ _DRIFT_GONE_MAX_BYTES = 2 * 1048576     # 帶字串的 when-gone 讀的那支檔超過這麼大就判不了
+ _DRIFT_LFS_HEAD = b"version https://git-lfs.github.com/spec/"
+ _DRIFT_RAW_TOO_BIG = object()
+ 
+ 
+ def _drift_gone_text(b):
+     """帶字串的 when-gone 讀到的位元組 → (文字, None) 或 (None, 判不了的原因)。讀不準的一律判不了:誤讀成亂碼也會「找不到
+     字串」、讓條件提早成立(設計審 r1、r2 正確性席、邊界席:Big5 這類沒有 NUL 的舊編碼實跑誤判)。"""
+     if b is None:
+-        return None, "讀不出"
++        return None, f"讀不出或超過 {_DRIFT_GONE_MAX_BYTES // 1048576} MB"
+     if b is _DRIFT_RAW_TOO_BIG or len(b) > _DRIFT_GONE_MAX_BYTES:
+         return None, f"超過 {_DRIFT_GONE_MAX_BYTES // 1048576} MB"
+     if b"\0" in b:
+         return None, "含 NUL(二進位檔或 UTF-16)"
+     if b.startswith(_DRIFT_LFS_HEAD):
+         return None, "是 Git LFS 指標檔"
+     try:
+         return b.decode("utf-8-sig"), None
+     except UnicodeDecodeError:
+         return None, "不是 UTF-8"
+@@ -32560,21 +32573,21 @@ def _drift_probe_is_candidate(conds, ch, vault_pre, tenv, tip_text):
+ def _drift_probe_cond_candidate(k, v, ch, vault_pre, tenv, tip_text):
+     """一個條件會不會被這次推送改變結果 → True / False / None(判不了)。"""
+     if k == "file":
+         return v in ch["touched"]
+     if k == "status":
+         rel = _drift_status_target(tenv, v)[0]
+         return rel is None or (vault_pre + rel) in ch["touched"]
+     if k == "gone":
+         path = _drift_cond_split(v, k)[0]
+         return path in ch["touched"] or any(t.startswith(path + "/") for t in ch["touched"])
+-    path, name = _drift_cond_split(v)
++    path, name = _drift_cond_split(v, k)
+     if path:
+         return path in ch["touched"]
+     if ch["code_shape"]:
+         return True
+     if not ch["code_touched"]:
+         return False
+     names = tip_text(k == "test")
+     if names is None:
+         return None
+     return True if names.has(name) else (None if names.partial else False)
+@@ -32776,22 +32789,21 @@ def _drift_probe_row_problems(pr, nenv, tree, need_by=True):
+     """一行條件式的寫法問題 → [原因]:寫錯的條件、沒帶期限、指到的筆記找不到、file 指到資料夾、symbol/test 的路徑不像檔案路徑。
+     need_by=False 給 RULE 撤除條件:它沒有期限這回事,不唸「沒帶期限」。"""
+     bad = list(pr["errs"])
+     if need_by and pr["by"] is None and "沒有條件標記" not in bad:
+         bad.append("沒帶期限 [by:YYYY-MM-DD]")
+     if pr["bad"]:
+         return bad      # 條件本身寫錯:錯誤已在 errs 裡,不再拿寫錯的值算別的提示
+     for k, v in pr["conds"]:
+         if k == "status" and nenv.resolve(link_target(v.partition("=")[0].strip())) is None:
+             bad.append(f"when-status 指的筆記 {v.partition('=')[0].strip()} 找不到(改名或刪了?)")
+-        if k == "file" and tree is not None and v not in tree.files \
+-                and any(f.startswith(v.rstrip("/") + "/") for f in tree.files):
++        if k == "file" and tree is not None and v not in tree.files and tree.is_dir(v):
+             bad.append(f"when-file 指到資料夾 {v}(要指一支檔)")
+         w = _drift_probe_path_warn(k, v, tree)
+         if w:
+             bad.append(w)
+     return bad
+ 
+ 
+ def _drift_probe_scan(nenv, tree, deadline=None, extract=None, kind="probe"):
+     """scan 的乙部分 → (成立的行[發現], 問題[(路徑, 行號, 原文, 原因)])。問題:寫錯的條件、沒帶期限、指到的筆記找不到、
+     file 指到資料夾、symbol/test 的路徑不像檔案路徑、寫在不評估的地方、判不了(分 git 讀不出與超過預算)。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6574ba6e..c3a3ab48 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -55928,20 +55928,66 @@ def t_drift_when_gone_retire():
+     check("③標記內反引號:報錯", "反引號" in (m._slot_retire_err("when-gone:a.py::`t()`") or ""), "")
+     rule = "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-gone:src/old.py]"
+     root = _dr_repo()
+     base = _rt_push(root, [rule], files=("src/old.py",), msg="rule")
+     _nh_git(root, "rm", "-q", "src/old.py")
+     _nh_commit(root, "刪檔")
+     rc, out = _dr(root, "check", "--diff", f"{base}..{_na_head(root)}")
+     check("④推送刪掉那支檔:點名撤除條件成立", rc == 1 and "撤除條件成立" in out, out[-500:])
+ 
+ 
++def t_drift_when_gone_review_r1():
++    """代碼審 r1:反引號檢查只看真正的 [when-gone: 標記(說明文字提到 when-gone: 後面有行內程式碼不算);字串含 [ 報錯(會被
++    第一個 ] 截斷);帶字串的大檔不整份讀進記憶體(git 與工作目錄兩種模式);讀不出判不了;工作目錄模式照樣判;預算用完判不了。"""
++    print("t_drift_when_gone_review_r1")
++    import time as _time
++    m = _load_lumos_inproc()
++    ok = "REVISIT:[when-file:src/a.py][by:2099-01-01] 寫法見 when-gone: 用 `[when-gone:路徑]` 那種"
++    check("①說明文字提到 when-gone: 後面有行內程式碼:不報", m._ns_revisit_violations(ok, "body", True) == [], m._ns_revisit_violations(ok, "body", True))
++    check("①前提:真正的標記內有反引號照報", m._ns_revisit_violations("REVISIT:[when-gone:a.py::`t`][by:2099-01-01] x", "body", True) != [], "")
++    check("②字串含 [ 報錯(REVISIT 與撤除條件)", m._probe_check_value("gone", "a.py::x[1")[1] is not None
++          and m._slot_retire_err("when-gone:a.py::x[1") is not None, "")
++    root = _nh_repo()
++    big = b"time.time()\n" + b"x" * (3 * 1048576)
++    (root / "src").mkdir(parents=True, exist_ok=True)
++    (root / "src" / "big.py").write_bytes(big)
++    _nh_file(root, "src/a.py", "now = time.time()\n")
++    _nh_commit(root, "big")
++    tip = _na_head(root)
++    for where in (tip, "disk"):
++        tr = m._drift_probe_tree(root, where)
++        got = tr.one("gone", "src/big.py::time.time()")
++        held = tr._raw.get("src/big.py")
++        check(f"③大檔({where[:6]}):判不了、沒整份讀進記憶體", got is None and not (isinstance(held, bytes) and len(held) > 2 * 1048576)
++              and "MB" in tr.gone_why.get("src/big.py::time.time()", ""), (where, got, type(held), tr.gone_why))
++    tr = m._drift_probe_tree(root, "disk")
++    check("④工作目錄模式照樣判", tr.one("gone", "src/a.py::time.time()") is False and tr.one("gone", "src/a.py::nope") is True, "")
++    tr = m._drift_probe_tree(root, tip)
++    real = m._nodehome_cat_blobs_capped
++    m._nodehome_cat_blobs_capped = lambda *a, **k: [None] * len(a[1])
++    try:
++        got = tr.one("gone", "src/a.py::time.time()")
++    finally:
++        m._nodehome_cat_blobs_capped = real
++    check("⑤讀不出:判不了、記原因", got is None and "讀不出" in tr.gone_why.get("src/a.py::time.time()", ""), (got, tr.gone_why))
++    tr = m._drift_probe_tree(root, "disk")
++    tr.deadline = _time.monotonic() - 1
++    check("⑥預算用完(工作目錄模式):判不了", tr.one("gone", "src/a.py::time.time()") is None, "")
++    # ⑦when-file 指到資料夾的提示改用 is_dir(跟 when-gone 的「在」共用)後照舊:既有提示原本沒有測試守
++    tr = m._drift_probe_tree(root, tip)
++    pr = m._probe_parse("[when-file:src][by:2099-01-01] x")
++    probs = m._drift_probe_row_problems(pr, m._drift_tree_env(root, tip, "docs/kg-knowledge"), tr)
++    pr2 = m._probe_parse("[when-file:src/a.py][by:2099-01-01] x")
++    probs2 = m._drift_probe_row_problems(pr2, m._drift_tree_env(root, tip, "docs/kg-knowledge"), tr)
++    check("⑦when-file 指到資料夾照提示、指到檔不提示", any("指到資料夾" in x for x in probs) and not any("資料夾" in x for x in probs2), (probs, probs2))
++
++
+ def t_drift_when_probes_evaluate_and_trigger():
+     """[S9] 條件標記照文法解析、只認正文與摘要的可見行,四種鍵在指定提交的樹上判對(含路徑限定、status 任一值、
+     筆記不存在算不成立、Python 帶型別的模組層指定),一行全部成立才算成立;check 以行為篩選單位,終點成立而起點沒有同一條
+     或同一條還不成立的算要處理(只改待辦文字仍是同一條、新寫而已成立的也擋),起點早就成立的不列、跟條件無關的推送不擋。
+ 
+     翻紅釘:check 不看起點(每次都擋成立的)→ ⑦紅;「同一條」改成比整行文字 → ⑧紅;status 不拆 | → ③紅。
+     """
+     print("t_drift_when_probes_evaluate_and_trigger")
+     import pathlib
+     m = _load_lumos_inproc()
