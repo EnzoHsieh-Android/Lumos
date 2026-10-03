@@ -86,7 +86,7 @@ def tool_calls_from_stream(lines):
 
 # 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
 # 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
-GRADER_VERSION = "2026-09-29-code-first"
+GRADER_VERSION = "2026-10-03-instrument-samples"
 
 
 def grade(sc, calls, final_text):
@@ -520,10 +520,12 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
     t0 = time.time()
     timed_out = False
+    returncode = 0
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
         out = r.stdout
         err = r.stderr[-400:]
+        returncode = r.returncode
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         err = "timeout"
@@ -555,6 +557,8 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     elif truncated:
         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+    elif returncode != 0:
+        ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
@@ -735,8 +739,15 @@ def main():
         if a.runs > 1:
             per = {}
             for r in results:
-                per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
-            print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
+                counts = per.setdefault(r["id"], [0, 0, 0])
+                if str(r.get("reason", "")).startswith("儀器例外"):
+                    counts[2] += 1
+                else:
+                    counts[1] += 1
+                    counts[0] += 1 if r["passed"] else 0
+            print("每題通過次數: " + "  ".join(
+                f"{i} {c}/{t}" + (f" (不算分 {e})" if e else "")
+                for i, (c, t, e) in per.items()))
         if a.out:
             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。

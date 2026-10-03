@@ -40,6 +40,7 @@ summary: |-
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+  - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -74,6 +75,12 @@ decisions:
 - 落地四階段 S0–S3 與裁定 d1–d6:[[Projects/Codex完全支援_計劃]];驗證 [[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]、[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]、[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]、[[Verification/2026-09-04_Codex完全支援S3量測驗收]]。
 - 行為精修(擋停一次、範本通用句、shebang):[[Projects/Codex行為精修_計劃]];驗證 [[Verification/2026-09-05_Codex行為精修f02後測]]。
 - 收工檢查本體:[[Systems/graph-sync-coverage]];安裝生命週期:[[Systems/lumos-cli-lifecycle]];設計/代碼迴圈的 Codex 席位規則:[[Systems/design-loop]]、[[Systems/pitfalls-code-loop]]、[[Systems/cross-family-audit]]。
+
+## 探針修復的歷史脈絡（2026-10-03）
+
+PITFALL: 首次修復穩定性試行重審 2db51cc4 時，讀 README 會冒充讀碼、Claude 非零退出混入有效樣本、逐題與整體分母不一致；前者來自判準放寬，退出碼缺口原已存在，分母矛盾在新增排除規則後暴露。出處 [[Verification/2026-10-03_修復穩定性試行第1案]]；後兩項防回歸測試 t_probe_repair_nonzero_exit、t_probe_repair_per_question_cli；讀碼問題尚未修好，重現與重啟條件見 [[Issues/探針讀碼證據不足]]。
+
+WHY: 本次曾試把讀碼正則收窄到目標程式檔，但第二輪證明仍把搜尋路徑文字當讀碼，且誤傷先切目錄再讀檔；因此撤回這一候選，不把 shell 解析或工具結果關聯塞進同一修復。出處為該案 r2-correctness 與 r2-classification.json；下次處理讀碼判準，先依 [[Issues/探針讀碼證據不足]] 重估資料來源再實作。
 
 ## 回頭條件
 

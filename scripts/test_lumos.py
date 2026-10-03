@@ -36740,6 +36740,69 @@ def t_probe_code_question_regrade():
     check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
 
 
+def t_probe_repair_nonzero_exit():
+    """修復試行 C2: 相同有效工具流,退出碼改為非零不得判過;正常失敗仍計分。"""
+    import json as _j
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_repair_exit")
+    sc = {"id": "q", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+    class R:
+        def __init__(self, code, events):
+            self.returncode, self.stderr = code, "cli crashed" if code else ""
+            self.stdout = "\n".join(_j.dumps(e) for e in events)
+    def run(code, events):
+        with patch.object(mod.subprocess, "run", return_value=R(code, events)) as mock:
+            result = mod.run_one(sc, Path("."), 18, 10, "")
+        check("probe repair C2 前置: Claude adapter 確實跑 subprocess", mock.call_count == 1 and mock.call_args.args[0][0] == "claude", mock.call_args)
+        return result
+    success = {"type": "result", "subtype": "success", "result": "ok"}
+    good = run(0, [tool, success])
+    ordinary_fail = run(0, [success])
+    check("probe repair C2 好例: 正常完成照題判分", good["passed"] and not ordinary_fail["passed"] and not ordinary_fail["reason"].startswith("儀器例外"), (good, ordinary_fail))
+    for events in [[], [tool, success]]:
+        bad = run(7, events)
+        check("probe repair C2 壞例: 非零退出不算分", not bad["passed"] and bad["reason"].startswith("儀器例外") and not bad["truncated"] and not bad["limit_hit"], bad)
+        summary = mod.summarize_results([good, ordinary_fail, bad])
+        check("probe repair C2 壞例: 摘要與歷史排除 CLI 故障", summary["scored"] == 2 and summary["passed"] == 1 and len(summary["failed"]) == 1 and len(summary["excluded"]) == 1, summary)
+    for ev, key in [({"type": "result", "subtype": "error_max_turns"}, "truncated"),
+                    ({"type": "result", "subtype": "error_max_turns", "is_error": True, "result": "You've hit your usage limit"}, "limit_hit")]:
+        res = run(1, [ev] if key == "limit_hit" else [tool, ev])
+        check("probe repair C2 好例: 非零退出仍保留 " + key, res[key] and not res["passed"] and (key != "limit_hit" or not res["truncated"]), res)
+
+
+def t_probe_repair_per_question_cli():
+    """修復試行 C3: 真 main 輸出與歷史口徑一致;mock 所有子程序以免碰真機/外部模型。"""
+    import contextlib, io, json as _j, tempfile
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_repair_cli")
+    with tempfile.TemporaryDirectory(prefix="probe-repair-") as td:
+        root = Path(td); (root / ".git").mkdir()
+        work = root / "sandbox" / "repo"; work.mkdir(parents=True)
+        questions = root / "questions.jsonl"
+        questions.write_text(_j.dumps({"id": "q", "prompt": "p", "expect": ["lumos search"]}) + "\n", encoding="utf-8")
+        def exercise(rows):
+            results = [dict(r, first_tool=None, secs=0) for r in rows]
+            out = io.StringIO()
+            with patch.object(mod.sys, "argv", ["probe", "--repo", str(root), "--scenarios", str(questions), "--runs", "2", "--keep"]), \
+                 patch.object(mod, "make_sandbox", return_value=work), \
+                 patch.object(mod, "check_scenario_targets", return_value=[]), \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 patch.object(mod, "run_one", side_effect=results) as runner, \
+                 patch.object(mod.subprocess, "run"), \
+                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                rc = mod.main()
+            check("probe repair C3 前置: main 跑完兩場且輸出逐題統計", runner.call_count == 2 and "每題通過次數:" in out.getvalue(), out.getvalue())
+            return rc, out.getvalue()
+        rc, good = exercise([_probe_res("q", True), _probe_res("q", False, "沒敲到期望指令")])
+        check("probe repair C3 好例: 有效失敗仍在分母", rc == 1 and "每題通過次數: q 1/2" in good, good)
+        excluded = _probe_res("q", False, "儀器例外: 截斷", truncated=True)
+        rc, mixed = exercise([_probe_res("q", True), excluded])
+        check("probe repair C3 壞例: 整體及逐題都只算有效場", rc == 0 and "1/1 個情境" in mixed and "每題通過次數: q 1/1 (不算分 1)" in mixed, mixed)
+        rc, empty = exercise([excluded, excluded])
+        check("probe repair C3 壞例: 全被排除仍列題目並標數量", rc == 1 and "每題通過次數: q 0/0 (不算分 2)" in empty and "不能下結論" in empty, empty)
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j
