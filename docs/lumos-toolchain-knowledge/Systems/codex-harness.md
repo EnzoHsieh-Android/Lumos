@@ -105,6 +105,8 @@ PITFALL: 探針的Git hook僅擋意外push，不是網路隔離；模型若主�
 
 PITFALL: 本案實作首輪證明「找 `.git`」漏掉大小寫變體與 bare repo，且 `GIT_TRACE` 可讓儀器自己的 Git 呼叫把 log 寫進來源；白名單設定若漏 `user.*`，模型提交還會退用本機身分。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及其 `probe-boundary-remediation/r1-*` 卷證；回歸測試 `t_probe_boundary_review1_git_shapes`、`t_probe_boundary_review1_trace_identity`。下次調整 `_git_env` 或 `_check_worktree_entries` 時重跑兩測試及 `probe_`，不能只看頂層 remote/hook 空值。
 
+PITFALL: 第二輪代碼審在凍結版 730b06fe 證出主 Git 資料的 `worktrees/*/gitdir` 文字外指不受符號連結檢查保護，模型可把真 linked worktree 的 `.git` 改指向臨時副本；同輪證出 `GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過 local 假身分，`git config user.*` 綠燈不能證明實際提交作者。另由編排者重現健康檢查讀取失敗被誤當普通題失敗。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及 `probe-boundary-remediation/r2-*`；防回歸 `t_probe_boundary_review2_linked_worktree`、`t_probe_boundary_review2_effective_identity`、`t_probe_boundary_review2_health_unreadable`。下次改 Git 副本、runner 環境或 skills 健康檢查時以這三項重驗。
+
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。

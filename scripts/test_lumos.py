@@ -37424,6 +37424,86 @@ def t_probe_boundary_review1_keep_retry():
               and retried[0].get("model_secs", 0) >= 0.01, data)
 
 
+def t_probe_boundary_review2_linked_worktree():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_r2_worktree")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-worktree-") as td:
+        root = Path(td); src = root / "src"; linked = root / "linked"
+        _probe_boundary_repo(src)
+        subprocess.run(["git", "-C", str(src), "worktree", "add", "-q", "-b", "linked", str(linked)], check=True)
+        pointer = linked / ".git"; before = pointer.read_bytes(); work = None
+        check("r2 現場確有外指linked worktree", (src / ".git/worktrees").is_dir()
+              and str(src / ".git/worktrees") in before.decode(), before)
+        try:
+            work = mod.make_sandbox(src); rejected = False
+        except RuntimeError:
+            rejected = True
+        finally:
+            if work is not None: shutil.rmtree(work.parent)
+        check("r2 有linked worktree的來源在副本建立前拒絕", rejected, str(work))
+        check("r2 拒絕不改真linked指標", pointer.read_bytes() == before, pointer.read_bytes())
+
+
+def t_probe_boundary_review2_effective_identity():
+    import tempfile, os, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r2_identity")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-identity-") as td:
+        src = Path(td) / "src"; _probe_boundary_repo(src)
+        (src / "pending.txt").write_text("snapshot change\n")
+        real = {"GIT_AUTHOR_NAME": "REAL PERSON", "GIT_AUTHOR_EMAIL": "real@example.test",
+                "GIT_COMMITTER_NAME": "REAL PERSON", "GIT_COMMITTER_EMAIL": "real@example.test"}
+        work = None
+        with patch.dict(os.environ, real):
+            check("r2 身分覆蓋現場成立", os.environ["GIT_AUTHOR_NAME"] == "REAL PERSON", "")
+            try:
+                work = mod.make_sandbox(src)
+                def ident():
+                    return subprocess.run(["git", "log", "-1", "--format=%an <%ae>|%cn <%ce>"], cwd=work,
+                                          env=mod._git_env(), capture_output=True, text=True, check=True).stdout.strip()
+                check("r2 副本快照實際提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
+                (work / "model.txt").write_text("model change\n")
+                subprocess.run(["git", "add", "-A"], cwd=work, env=mod._git_env(), check=True)
+                subprocess.run(["git", "commit", "-qm", "model"], cwd=work, env=mod._git_env(), check=True)
+                check("r2 模型後續提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
+            finally:
+                if work is not None: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_review2_health_unreadable():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r2_health")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-health-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        out = root / "out.json"; calls = []
+        def runner(sc, *_args, **_kwargs):
+            calls.append(sc["id"])
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[OSError("health unreadable"), [], []]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("r2 健康檢查讀不到即停批且標fatal", rc == 3 and calls == ["a"]
+              and data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
+        out.unlink(); calls.clear()
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final health unreadable")]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                rc = mod.main(); threw = False
+            except OSError:
+                rc = None; threw = True
+        data = json.loads(out.read_text()) if out.exists() else {}
+        check("r2 最終健康檢查讀不到仍寫不可判紀錄", not threw and rc == 3
+              and data.get("fatal") and data.get("inconclusive") and len(data.get("results", [])) == 2,
+              (threw, rc, data))
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j

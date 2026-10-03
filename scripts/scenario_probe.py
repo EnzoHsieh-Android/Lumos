@@ -389,9 +389,9 @@ def _git_env():
     """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
     指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
     # command-scope config可覆蓋副本的remote/hooksPath；只拔定位變數不夠。
-    # GIT_TRACE/GIT_TRACE2* 可直接指定寫入檔；保留會讓我們自己的 Git 命令改到來源。
+    # GIT_TRACE/GIT_TRACE2* 可直接指定寫入檔；AUTHOR/COMMITTER 會蓋過副本假身分。
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("GIT_CONFIG", "GIT_TRACE"))}
+           if not k.startswith(("GIT_CONFIG", "GIT_TRACE", "GIT_AUTHOR_", "GIT_COMMITTER_"))}
     for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         env.pop(k, None)
@@ -402,6 +402,10 @@ def _git_env():
 
 class SourceProbeCleanupError(RuntimeError):
     """專用副本清不掉：不得以一般單題例外吞掉再續跑。"""
+
+
+class ProbeHealthError(RuntimeError):
+    """全域 skills 無法驗健康或已損壞：整批不能再跑。"""
 
 
 def _prepare_source_probe(work, config, token):
@@ -530,6 +534,8 @@ def _check_worktree_entries(work, gitdir, common):
         raise RuntimeError("副本頂層Git連結未隔離")
     if (gitdir / "modules").exists() or (common / "modules").exists():
         raise RuntimeError("副本含子模組Git資料，未執行隔離寫入")
+    if (gitdir / "worktrees").exists() or (common / "worktrees").exists():
+        raise RuntimeError("副本含指向其他工作樹的Git資料，未執行隔離寫入")
     for parent, dirs, files in os.walk(root, followlinks=False):
         here = Path(parent)
         # bare repo 沒有 .git 入口，可能以任意名稱藏在工作樹；不可讓它帶自己的 remote/hook。
@@ -1022,11 +1028,14 @@ def main():
                         finally:
                             attempt_model_secs = time.monotonic() - model_started
                             model_secs += attempt_model_secs
-                        health = global_skills_health()
+                        try:
+                            health = global_skills_health()
+                        except Exception as e:
+                            raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
                         if health:
-                            raise RuntimeError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                            raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
                     except Exception as e:
-                        if work is None or isinstance(e, SourceProbeCleanupError) or str(e).startswith("全域 skills 健康檢查失敗"):
+                        if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError)):
                             attempt_fatal = True
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
@@ -1110,7 +1119,13 @@ def main():
                 fatal_reason = f"批次基線清理失敗: {e}"
             finally:
                 sandbox_secs += time.monotonic() - cleanup_started
-        bad = global_skills_health()
+        try:
+            bad = global_skills_health()
+        except Exception as e:
+            bad = []
+            fatal = True
+            health_reason = f"全域 skills 最終健康檢查無法完成: {type(e).__name__}"
+            fatal_reason = f"{fatal_reason}；{health_reason}" if fatal_reason else health_reason
         if bad:
             print("\n" + "!" * 60, file=sys.stderr)
             print(f"✗ 事故:全域 ~/.claude/skills 有 {len(bad)} 個連結被動到(懸空或指進沙盒):", file=sys.stderr)
