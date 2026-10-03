@@ -103,6 +103,8 @@ WHY: 2026-10-04 另開 [[Projects/探針隔離與清理收斂_計劃]] 處理第
 
 PITFALL: 探針的Git hook僅擋意外push，不是網路隔離；模型若主動指定URL、停hook或用其他網路工具仍可能外送。外指符號連結與巢狀Git也不能用「頂層副本安全」推論安全，故本案採前置拒絕。重現入口與回歸測試為 [[Projects/探針隔離與清理收斂_計劃]] S1–S3 的 `t_probe_boundary_nested_git`、`t_probe_boundary_worktree_links`、`t_probe_boundary_git_config`；正式模型題目若要求HOME或網路操作，先依 [[Issues/探針沙盒改動真全域機器狀態]] 重驗外層隔離。
 
+PITFALL: 本案實作首輪證明「找 `.git`」漏掉大小寫變體與 bare repo，且 `GIT_TRACE` 可讓儀器自己的 Git 呼叫把 log 寫進來源；白名單設定若漏 `user.*`，模型提交還會退用本機身分。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及其 `probe-boundary-remediation/r1-*` 卷證；回歸測試 `t_probe_boundary_review1_git_shapes`、`t_probe_boundary_review1_trace_identity`。下次調整 `_git_env` 或 `_check_worktree_entries` 時重跑兩測試及 `probe_`，不能只看頂層 remote/hook 空值。
+
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。

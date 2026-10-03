@@ -36838,7 +36838,12 @@ def t_probe_source_probe_setup():
                 check("source probe 乾淨基線不觸發code_entries", clean.returncode == 0 and not clean.stdout, clean.stdout)
                 check("source probe 標記注入且AST含位置不變", token in body and ast.dump(ast.parse(body), include_attributes=True) == ast.dump(ast.parse(original), include_attributes=True), "")
                 return {"path": str(work), "answer": token, "passed": True}
-            res = mod._run_source_attempt(sc, root / "source", "with", runner)
+            token = "LUMOS_READ_" + __import__("secrets").token_hex(16)
+            work = mod.make_sandbox(root / "source", "with", source_probe=(sc["source_probe"], token))
+            try:
+                res = mod._redact_source_token(runner(work, token), token)
+            finally:
+                mod._remove_sandbox(work)
             check("source probe 專用副本刪除/结果遮罩", not Path(res["path"]).exists() and tokens[-1] not in str(res), res)
         check("source probe 每次新標記/本體不動", tokens[0] != tokens[1] and (root / "source/scripts/lumos").read_bytes() == original, "")
         work = root / "unsafe"; (work / "scripts").mkdir(parents=True)
@@ -36925,7 +36930,7 @@ def t_probe_source_probe_main():
             for fatal in [False, True]:
                 out = root / "out.json"; cleanup_calls = []
                 runner_seen = []
-                real_remove = mod._remove_source_sandbox
+                real_remove = mod._remove_sandbox
                 def model(*args, **kwargs):
                     runner_seen.append(kwargs.get("source_token"))
                     r = _probe_res(sc["id"], len(runner_seen) > 1, "ok" if len(runner_seen) > 1 else "儀器例外: limit")
@@ -36938,24 +36943,25 @@ def t_probe_source_probe_main():
                     real_remove(work)
                 with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--runner", harness, "--runs", "2", "--wait-on-limit", "300", "--keep", "--out", str(out)]), \
                      patch.object(mod, "check_scenario_targets", return_value=[]), \
-                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_remove_source_sandbox", side_effect=remove), \
+                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_remove_sandbox", side_effect=remove), \
                      patch.object(mod, "run_one", side_effect=model) as claude, patch.object(mod, "run_one_codex", side_effect=model) as codex, \
                      patch.object(mod.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     rc = mod.main()
                 data = json.loads(out.read_text())
                 check("source main 重試/致命清理 " + harness + str(fatal), (rc == 3 and len(runner_seen) == 1 and data["inconclusive"]) if fatal else (rc == 0 and len(runner_seen) == 3), data)
                 check("source main 接到指定runner且傳標記 " + harness, all(runner_seen) and (claude.call_count == 0 if harness == "codex" else codex.call_count == 0), runner_seen)
-        # 真正的attempt helper清理異常必轉fatal；模型拋錯也仍清專用副本。
-        work = root / "disposable/repo"; work.mkdir(parents=True)
-        with patch.object(mod, "make_sandbox", return_value=work), patch.object(mod.shutil, "rmtree", side_effect=PermissionError("blocked")):
-            try: mod._run_source_attempt(sc, root / "src", "with", lambda w, t: {}); fatal_seen = False
-            except mod.SourceProbeCleanupError: fatal_seen = True
-        check("source attempt 清理失敗真的轉fatal", fatal_seen, "")
-        with patch.object(mod, "make_sandbox", return_value=work):
-            def raises(w, token): raise RuntimeError(token)
-            try: mod._run_source_attempt(sc, root / "src", "with", raises); raised = False
-            except RuntimeError as e: raised = "LUMOS_READ_" not in str(e)
-        check("source attempt 模型例外仍刪副本且錯誤不洩標記", raised and not work.exists(), "")
+                if fatal and cleanup_calls:
+                    real_remove(cleanup_calls[0])   # 故障注入在刪除前拋錯，測試自行清掉殘留副本
+        token = "LUMOS_READ_" + "e" * 32
+        def raises(*_args, **_kwargs): raise RuntimeError(token)
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--out", str(out)]), \
+             patch.object(mod, "check_scenario_targets", return_value=[]), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             patch.object(mod, "run_one", side_effect=raises), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        body = out.read_text()
+        check("source main 模型例外遮罩標記", rc == 1 and token not in body and "[source-marker]" in body, body[-200:])
 
 
 def t_probe_source_probe_git_env():
@@ -37273,7 +37279,7 @@ def t_probe_boundary_cleanup_failure():
         scenarios.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
                                       for s in ("a", "b")) + "\n")
         out = root / "out.json"; history = root / "history.jsonl"; calls = []
-        real_remove = mod._remove_source_sandbox
+        real_remove = mod._remove_sandbox
         def remove(work):
             calls.append(work)
             if len(calls) == 1:
@@ -37287,7 +37293,7 @@ def t_probe_boundary_cleanup_failure():
         argv = ["probe", "--repo", str(src), "--scenarios", str(scenarios),
                 "--runner", "claude", "--out", str(out), "--history", str(history)]
         with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
-             patch.object(mod, "_remove_source_sandbox", side_effect=remove), \
+             patch.object(mod, "_remove_sandbox", side_effect=remove), \
              patch.object(mod, "global_skills_health", return_value=[]), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             rc = mod.main()
@@ -37295,6 +37301,8 @@ def t_probe_boundary_cleanup_failure():
         check("普通題清理失敗確實觸發而後題未跑", calls and runner.calls == ["a"], (calls, runner.calls))
         check("清理失敗整批退出3且不算有效分數", rc == 3 and data["inconclusive"] and data.get("valid_total") == 0 and data["excluded"] == ["a"], data)
         check("不確定與fatal寫入歷史", hist.get("inconclusive") is True and hist.get("fatal") is True, hist)
+        if calls:
+            real_remove(calls[0])   # 故障注入在刪除前拋錯，測試自行清掉殘留副本
 
 
 def t_probe_boundary_history_version():
@@ -37323,6 +37331,97 @@ def t_probe_boundary_setup_failure():
         data = json.loads(out.read_text())
         check("基線建立失敗沒有模型呼叫", rc == 3 and calls == [src.resolve()] and runner.call_count == 0, (calls, data))
         check("基線建立失敗留不可判紀錄", data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
+
+
+def t_probe_boundary_review1_git_shapes():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_r1_shapes")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-shapes-") as td:
+        root = Path(td)
+        for kind in ("case", "bare"):
+            src = root / kind; _probe_boundary_repo(src)
+            nested = src / "nested"; nested.mkdir()
+            if kind == "case":
+                subprocess.run(["git", "init", "-q", str(nested)], check=True)
+                (nested / "inner.txt").write_text("inner\n")
+                subprocess.run(["git", "-C", str(nested), "add", "-A"], check=True)
+                subprocess.run(["git", "-C", str(nested), "-c", "user.name=t", "-c", "user.email=t@t",
+                                "commit", "-qm", "inner"], check=True)
+                (nested / ".git").rename(nested / ".GIT")
+                check("r1 大小寫現場有.GIT", (nested / ".GIT").exists(), "")
+            else:
+                shutil.rmtree(nested)
+                subprocess.run(["git", "init", "-q", "--bare", str(nested)], check=True)
+                check("r1 bare現場有HEAD/objects/refs", (nested / "HEAD").is_file()
+                      and (nested / "objects").is_dir() and (nested / "refs").is_dir(), "")
+            try:
+                work = mod.make_sandbox(src); rejected = False
+            except RuntimeError:
+                work = None; rejected = True
+            if work is not None: shutil.rmtree(work.parent)
+            check("r1 巢狀Git必拒絕 " + kind, rejected, str(nested))
+
+
+def t_probe_boundary_review1_trace_identity():
+    import tempfile, os, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r1_env")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-env-") as td:
+        src = Path(td) / "src"; _probe_boundary_repo(src)
+        marker = src / "trace.txt"; marker.write_text("ORIGINAL\n")
+        before = marker.read_bytes(); work = None
+        with patch.dict(os.environ, {"GIT_TRACE": str(marker)}):
+            try: work = mod.make_sandbox(src)
+            finally: pass
+        check("r1 GIT_TRACE不改來源byte", marker.read_bytes() == before, str(len(marker.read_bytes())))
+        if work is not None:
+            name = subprocess.run(["git", "config", "--get", "user.name"], cwd=work,
+                                  env=mod._git_env(), capture_output=True, text=True).stdout.strip()
+            email = subprocess.run(["git", "config", "--get", "user.email"], cwd=work,
+                                   env=mod._git_env(), capture_output=True, text=True).stdout.strip()
+            check("r1 副本模型提交使用假身分", (name, email) == ("probe", "probe@local"), (name, email))
+            shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_review1_keep_retry():
+    import tempfile, json, io, contextlib, shutil, threading
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r1_keep")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-keep-") as td:
+        root = Path(td); source = root / "src"; source_sc = _source_probe_fixture(source)
+        ordinary = {"id": "ordinary", "prompt": "q", "expect": ["Bash"]}
+        q = root / "q.jsonl"; q.write_text(json.dumps(ordinary) + "\n" + json.dumps(source_sc) + "\n")
+        out = root / "out.json"; paths = []
+        def runner(sc, work, *_args, **_kwargs):
+            paths.append((sc["id"], work))
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": "absent" if sc.get("source_probe") else None}
+        err = io.StringIO()
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(source), "--scenarios", str(q), "--keep", "--out", str(out)]), \
+             patch.object(mod, "run_one", side_effect=runner), patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = mod.main()
+        check("r1 keep普通題排在讀碼題前仍留下", rc == 0 and len(paths) == 2
+              and paths[0][1].exists() and not paths[1][1].exists()
+              and str(paths[0][1]) in err.getvalue(), (paths, err.getvalue()[-150:]))
+        if paths and paths[0][1].exists(): shutil.rmtree(paths[0][1].parent)
+
+        q.write_text(json.dumps(ordinary) + "\n")
+        calls = []
+        def limit_runner(sc, work, *_args, **_kwargs):
+            calls.append(work)
+            threading.Event().wait(0.02)
+            return {**_probe_res(sc["id"], len(calls) > 1, "ok" if len(calls) > 1 else "儀器例外: limit"),
+                    "first_tool": None, "secs": 0, "limit_hit": len(calls) == 1, "source_evidence": None}
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(source), "--scenarios", str(q),
+                                            "--wait-on-limit", "300", "--out", str(out)]), \
+             patch.object(mod, "run_one", side_effect=limit_runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); retried = data["results"][0].get("retry_attempts", [])
+        check("r1 用量重試的逐場成本仍入結果", rc == 0 and len(calls) == 2 and len(retried) == 1
+              and retried[0].get("model_secs", 0) >= 0.01, data)
 
 
 def t_delguard_logs_ok_too():

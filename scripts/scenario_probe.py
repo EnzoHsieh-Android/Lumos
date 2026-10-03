@@ -389,7 +389,9 @@ def _git_env():
     """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
     指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
     # command-scope config可覆蓋副本的remote/hooksPath；只拔定位變數不夠。
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG")}
+    # GIT_TRACE/GIT_TRACE2* 可直接指定寫入檔；保留會讓我們自己的 Git 命令改到來源。
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("GIT_CONFIG", "GIT_TRACE"))}
     for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         env.pop(k, None)
@@ -445,23 +447,11 @@ def _redact_source_token(value, token):
     return value
 
 
-def _remove_source_sandbox(work):
+def _remove_sandbox(work):
     try:
         shutil.rmtree(work.parent)
     except OSError as e:
         raise SourceProbeCleanupError("專用副本移除失敗；停止整批") from e
-
-
-def _run_source_attempt(sc, src, arm, runner):
-    token = "LUMOS_READ_" + secrets.token_hex(16)
-    work = make_sandbox(src, arm, source_probe=(sc["source_probe"], token))
-    try:
-        try:
-            return _redact_source_token(runner(work, token), token)
-        except Exception as e:
-            raise RuntimeError(_redact_source_token(str(e), token)) from e
-    finally:
-        _remove_source_sandbox(work)
 
 
 def make_sandbox(src, arm="with", source_probe=None):
@@ -500,7 +490,7 @@ def make_sandbox(src, arm="with", source_probe=None):
     try:
         _populate_sandbox(src, work, tmp, arm, genv, source_probe)
     except BaseException:
-        _remove_source_sandbox(work)
+        _remove_sandbox(work)
         raise
     return work
 
@@ -536,18 +526,22 @@ def _check_worktree_entries(work, gitdir, common):
     """副本不接受另一套Git資料或指到副本外的工作樹連結。"""
     root = work.resolve()
     metadata = {gitdir, common}
-    if (work / ".git").is_symlink():
+    if (root / ".git").is_symlink():
         raise RuntimeError("副本頂層Git連結未隔離")
     if (gitdir / "modules").exists() or (common / "modules").exists():
         raise RuntimeError("副本含子模組Git資料，未執行隔離寫入")
-    for parent, dirs, files in os.walk(work, followlinks=False):
+    for parent, dirs, files in os.walk(root, followlinks=False):
         here = Path(parent)
+        # bare repo 沒有 .git 入口，可能以任意名稱藏在工作樹；不可讓它帶自己的 remote/hook。
+        if here != root and (here / "HEAD").is_file() and (here / "config").is_file() \
+                and (here / "objects").is_dir() and (here / "refs").is_dir():
+            raise RuntimeError("副本含巢狀bare Git資料，未執行隔離寫入")
         for name in dirs + files:
             path = here / name
             if path in metadata:
                 continue
-            if name == ".git" or name == ".gitmodules":
-                if path != work / ".git":
+            if name.casefold() in (".git", ".gitmodules"):
+                if path != root / ".git":
                     raise RuntimeError("副本含巢狀Git或子模組，未執行隔離寫入")
             if path.is_symlink():
                 try:
@@ -579,7 +573,8 @@ def _reset_copied_git_config(work, gitdir, common, hooks, genv):
     fmt = obj.stdout.strip()
     body = ("[core]\n"
             f"\trepositoryformatversion = {1 if fmt == 'sha256' else 0}\n"
-            "\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n")
+            "\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n"
+            "[user]\n\tname = probe\n\temail = probe@local\n")
     if fmt == "sha256":
         body += "[extensions]\n\tobjectformat = sha256\n"
     temporary = config.with_name("config.probe-new")
@@ -921,7 +916,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
-    ap.add_argument("--keep", action="store_true", help="保留臨時副本")
+    ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
     ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
     ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
@@ -1004,8 +999,9 @@ def main():
         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
     try:
-        for sc_idx, sc in enumerate(scs if baseline is not None else []):
+        for sc in scs if baseline is not None else []:
             for k in range(1, a.runs + 1):
+                retried = []
                 while True:
                     work = None
                     token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
@@ -1040,19 +1036,29 @@ def main():
                                "fatal": attempt_fatal}
                     finally:
                         # 讀碼標記的現場永不保留；普通題只保留最後一場通過隔離驗收的副本。
-                        final_attempt = sc_idx == len(scs) - 1 and k == a.runs
-                        retain = bool(a.keep and final_attempt and not token and not attempt_fatal
+                        retain = bool(a.keep and not token and not attempt_fatal
                                       and res is not None and not res.get("limit_hit") and work is not None)
                         if work is not None:
                             cleanup_started = time.monotonic()
                             try:
                                 if retain:
+                                    if retained is not None:
+                                        previous = retained
+                                        retained = None
+                                        _remove_sandbox(previous)
                                     retained = work
                                 else:
-                                    _remove_source_sandbox(work)
+                                    _remove_sandbox(work)
                             except SourceProbeCleanupError as e:
                                 attempt_fatal = True
-                                retained = None
+                                if retain:
+                                    retained = None
+                                # 若移除上一份保留副本失敗，這份新副本也不能留下。
+                                if retain:
+                                    try:
+                                        _remove_sandbox(work)
+                                    except SourceProbeCleanupError:
+                                        pass
                                 res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                        "reason": f"儀器例外: {e}", "first_tool": None,
                                        "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
@@ -1073,10 +1079,15 @@ def main():
                         fatal = True
                         fatal_reason = res["reason"]
                     if res.get("limit_hit") and waited < a.wait_on_limit:
+                        retried.append({"reason": res.get("reason"),
+                                        "sandbox_secs": res["sandbox_secs"],
+                                        "model_secs": res["model_secs"]})
                         print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
                         time.sleep(300); waited += 300
                         continue
                     break
+                if retried:
+                    res["retry_attempts"] = retried
                 res["run"] = k
                 results.append(res)
                 mark = "✓" if res["passed"] else "✗"
@@ -1093,7 +1104,7 @@ def main():
         if baseline is not None:
             cleanup_started = time.monotonic()
             try:
-                _remove_source_sandbox(baseline)
+                _remove_sandbox(baseline)
             except SourceProbeCleanupError as e:
                 fatal = True
                 fatal_reason = f"批次基線清理失敗: {e}"
