@@ -39670,7 +39670,7 @@ def t_hook_event_write_failure_is_announced():
         _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
         rt = root / "governance" / "runtime"; rt.mkdir(parents=True)
         log = rt / "hook-events.jsonl"; log.write_text("", encoding="utf-8")
-        _os.chmod(log, 0o444)
+        _break_for_write(log)
         probe = root / "p.py"
         probe.write_text(
             "import sys\n"
@@ -39682,7 +39682,6 @@ def t_hook_event_write_failure_is_announced():
         check("★寫不進去要在 stderr 明講★", "telemetry-write-failed" in r.stderr, r.stderr[-300:])
         check("★但 hook 自己的工作不受影響(rc 照舊)★", r.returncode == 0, str(r.returncode))
         check("★訊息要講明本業不受影響★", "不受影響" in r.stderr, r.stderr[-200:])
-        _os.chmod(log, 0o644)
     finally:
         _sh.rmtree(root, ignore_errors=True)
     print("  ✓ t_hook_event_write_failure_is_announced")
@@ -40007,6 +40006,17 @@ def t_gate_blocked_writes_hard_ledger_row():
     print("  ✓ t_gate_blocked_writes_hard_ledger_row")
 
 
+def _break_for_write(path):
+    """讓 path 寫不進去,root 身分也一樣:把檔換成同名資料夾。
+    只改權限(chmod 0o444)在 root 下不生效——root 照寫不誤,「寫不進去」的現場根本造不出來,測試就假紅。
+    開檔追加碰到資料夾一定丟 OSError(IsADirectoryError),跟磁碟滿、權限錯走同一條例外路。"""
+    import os as _os
+    p = Path(path)
+    if p.exists() and not p.is_dir():
+        _os.remove(p)
+    p.mkdir(parents=True, exist_ok=True)
+
+
 def t_gate_ledger_write_failure_does_not_change_verdict():
     """★記帳失敗不得改寫閘的判定★(2026-09-08 #19 S7,r1 外家否決席)。
 
@@ -40023,7 +40033,7 @@ def t_gate_ledger_write_failure_does_not_change_verdict():
     root = _gate_ledger_sandbox()
     try:
         log = root / "docs" / ".governance-log.jsonl"
-        _os.chmod(log, 0o444)          # 帳檔寫不進去
+        _break_for_write(log)          # 帳檔寫不進去
         r = _sp.run([sys.executable, str(lumos), "anchor", "verify", "--repo", str(root)],
                     capture_output=True, text=True, cwd=str(root), timeout=180)
         check("★帳寫不進去,該擋的還是要擋★(不能因為觀測壞了就放行)",
@@ -40032,7 +40042,6 @@ def t_gate_ledger_write_failure_does_not_change_verdict():
               "telemetry-write-failed" in r.stderr, r.stderr[-400:])
         check("★訊息要講明判定不受影響★(免得人以為被擋是記帳造成的)",
               "判定不受影響" in r.stderr, r.stderr[-300:])
-        _os.chmod(log, 0o644)
     finally:
         _sh.rmtree(root, ignore_errors=True)
     print("  ✓ t_gate_ledger_write_failure_does_not_change_verdict")
