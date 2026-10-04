@@ -1,0 +1,715 @@
+diff --git a/docs/command-reference.md b/docs/command-reference.md
+index 05dfecc6..d750bdfe 100644
+--- a/docs/command-reference.md
++++ b/docs/command-reference.md
+@@ -105,17 +105,18 @@ Use `lumos ci-wait` rather than `gh run list` — the result has to land in the
+ 
+ ---
+ 
+ ## Install and uninstall: one for one
+ 
+ ```bash
+ lumos bootstrap   # install everything     ↔  lumos teardown   # remove everything
+ lumos install     # machine layer only     ↔  lumos uninstall
+ lumos init        # project layer only     ↔  lumos deinit [--keep-graph] [--dry-run]
+ lumos update      # refresh the toolkit inside this project
++lumos update --dry-run   # preview which rule files and toolkit files would change (no pull, no writes)
+ ```
+ 
+ **Which layer to remove:** the whole machine at once is `teardown`; just this repo is `deinit`; just the global command is `uninstall`.
+ 
+ **Your notes always survive.** `teardown` never touches note files; `deinit` confirms interactively by default and takes `--dry-run` for a rehearsal.
+ 
+ **Updating**: the manual the AI reads and the global command are symlinks — `git pull` in the Lumos directory and they're live immediately. The toolkit inside a given project updates with `lumos update` there; your note data is never touched.
+diff --git a/docs/指令參考.md b/docs/指令參考.md
+index b71d7dca..a967490b 100644
+--- a/docs/指令參考.md
++++ b/docs/指令參考.md
+@@ -105,17 +105,18 @@ CI 狀態用 `lumos ci-wait`，不要用 `gh run list`——結果要進治理
+ 
+ ---
+ 
+ ## 裝與卸：一一對稱
+ 
+ ```bash
+ lumos bootstrap   # 一鍵全裝        ↔  lumos teardown   # 一鍵全拆
+ lumos install     # 只裝機器層      ↔  lumos uninstall
+ lumos init        # 只建專案層      ↔  lumos deinit [--keep-graph] [--dry-run]
+ lumos update      # 刷新本專案內的工具組
++lumos update --dry-run   # 先預覽會改哪些規範檔與工具檔(不拉來源、不改動)
+ ```
+ 
+ **拆哪一層記這句：** 整台機器一次拆＝`teardown`；只拆這個 repo＝`deinit`；只移全域指令＝`uninstall`。
+ 
+ **筆記永遠保留。** `teardown` 不碰筆記檔案；`deinit` 預設互動確認，可以 `--dry-run` 先預演。
+ 
+ **更新**：給 AI 看的手冊和全域指令，對 Lumos 目錄 `git pull` 就即時生效（那是捷徑連結）；某個專案裡的工具組，在那個專案跑 `lumos update`——筆記資料不會被動到。
+diff --git a/scripts/lumos b/scripts/lumos
+index 4b846aa1..2594da74 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20301,105 +20301,108 @@ def _reinject_all(root: Path, slug: str, quiet=False):
+                 own = [l for l in head if "LUMOS:GRAPH-DISCIPLINE" not in l][:8]
+                 print(f"  ★{t} 原本就有內容,看一眼它跟紀律區塊有沒有互相打架(機器判不了語意):")
+                 for l in own:
+                     print(f"    | {l[:100]}")
+         elif ri.status == "sentinel_broken":
+             print(f"  ⚠ {t} sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
+         # unchanged / no_template → 靜默
+     return out
+ 
+ 
+-def _reinject_claude_block(root: Path, slug: str, target: str = "CLAUDE.md") -> "ReInjectResult":
+-    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 target(預設 CLAUDE.md;
+-    Codex 的 AGENTS.md / AGENTS.override.md 走同一段,d1)。
+-
+-    status ∈ created|updated|unchanged|appended|sentinel_broken|no_template。
+-    diff:僅 updated 帶 difflib.unified_diff 字串,其餘 None。
+-    讀入時正規化 CRLF→LF 並去 BOM;寫入一律 _write_lf(強制 LF / 無 BOM)。
+-    """
++def _reinject_compute(root: Path, target: str, body):
++    """算出紀律區塊注入後 target 的新整檔內容,不寫檔(update --dry-run 與真的注入共用同一段算法;
++    Projects/update預覽規範檔變更_計劃〈做法〉2)。body=None 表示沒有範本。
++    回 dict:status ∈ created|updated|unchanged|appended|sentinel_broken|no_template;
++    new_text(要寫回的整檔,只有 created/updated/appended 有)、diff(只有 updated 有,區塊的 unified diff)、
++    block(要寫入的整段區塊)、normalized(原檔有 BOM 或 CRLF/CR、寫回會整檔正規化)、version_only(只差 START 行)。
++    讀不了(不是 UTF-8、是資料夾、沒權限)照舊往外丟例外——真的注入維持原行為,預覽那端自己接。"""
+     import difflib
+-
+-    # 1. 範本 + body(共用 _expected_claude_body 確保 Check D 比對算法一致)
+-    body = _expected_claude_body(root, slug)
++    out = {"status": None, "new_text": None, "diff": None, "block": None, "normalized": False, "version_only": False}
+     if body is None:
+-        return ReInjectResult("no_template", None)
+-
+-    # 3. 組 block(START 行帶當前版本戳,機械插值——版本在 body 外,不影響 Check D 比對)
++        out["status"] = "no_template"
++        return out
++    # 組 block(START 行帶當前版本戳,機械插值——版本在 body 外,不影響 Check D 比對)
+     start_line = _START_TEMPLATE.format(version=LUMOS_VERSION)
+     block = start_line + "\n" + body + "\n" + _CLAUDE_END
+-
+-    # 4. 讀目標檔(去 BOM + CRLF 正規化;★整檔都會被正規化,不只區塊★)
++    out["block"] = block
++    # 讀目標檔(去 BOM + CRLF 正規化;★整檔都會被正規化,不只區塊★)
+     cm = root / target
+-    if cm.exists():
+-        raw = cm.read_bytes()
+-        # 去 UTF-8 BOM
+-        if raw.startswith(b"\xef\xbb\xbf"):
+-            raw = raw[3:]
+-        claude_text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+-    else:
+-        claude_text = None
+-
+-    # 5. 三態分派
+-    if claude_text is None:
++    if not cm.exists():
+         # 目標不存在 → created(檔頭依目標名;r2 整合 F11:曾寫死 "# CLAUDE.md")
+-        _write_lf(cm, f"# {target}\n\n" + block + "\n")
+-        return ReInjectResult("created", None)
+-
++        out["status"], out["new_text"] = "created", f"# {target}\n\n" + block + "\n"
++        return out
++    raw = cm.read_bytes()
++    out["normalized"] = raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw
++    if raw.startswith(b"\xef\xbb\xbf"):
++        raw = raw[3:]
++    claude_text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+     state, span = _extract_claude_block_span(claude_text)
+-
+     if state == "broken":
+-        return ReInjectResult("sentinel_broken", None)
+-
++        out["status"] = "sentinel_broken"
++        return out
+     if state == "absent":
+         # 有檔但無 sentinel → appended。CLAUDE.md 沿舊行為接檔尾;
+         # AGENTS 檔插檔首(第一個 # 標題行之後;沒有標題行→檔案最前)——Codex 把整鏈 AGENTS 檔串起來
+         # 只吃 32 KiB、超過靜默截斷,靠前一點少被砍(d1;r2 邊界 N5 定 fallback)。
+         if target == "CLAUDE.md":
+             new_text = claude_text.rstrip() + "\n\n" + block + "\n"
+         else:
+             lines = claude_text.split("\n")
+             idx = next((i for i, l in enumerate(lines) if l.startswith("#")), None)
+             if idx is None:
+                 new_text = block + "\n\n" + claude_text.lstrip("\n")
+             else:
+                 new_text = "\n".join(lines[:idx + 1]) + "\n\n" + block + "\n\n" + "\n".join(lines[idx + 1:]).lstrip("\n")
+             new_text = new_text.rstrip() + "\n"
+-        _write_lf(cm, new_text)
+-        return ReInjectResult("appended", None)
+-
++        out["status"], out["new_text"] = "appended", new_text
++        return out
+     # state == "found": splice body + 同步刷新 START 行(版本戳落在存量戶的唯一路徑——
+     # 只換 body 會讓 updated 路徑永遠拿不到版本戳,標籤機制對存量安裝戶形同虛設。
+     # START 行在管理區塊「內」,★INVARIANT★ 只保護 sentinel 之外,刷新它不違約)。
+     old_body = span.body
+     new_body = body
+     si = claude_text.find(_CLAUDE_START_PREFIX)
+     sl_begin = claude_text.rfind("\n", 0, si) + 1
+     sl_end = claude_text.find("\n", si)
+     old_start_line = claude_text[sl_begin:sl_end] if sl_end != -1 else claude_text[sl_begin:]
+-
+     if old_body == new_body and old_start_line == start_line:
+-        return ReInjectResult("unchanged", None)
+-
++        out["status"] = "unchanged"
++        return out
+     # 有差 → 先換 body(高位移),再換 START 行(低位移,原始位移仍有效);兩 splice 之間
+     # 的原始空白行區逐字保留。
+     new_text = claude_text[:span.body_start] + new_body + claude_text[span.body_end:]
+     if sl_end != -1 and old_start_line != start_line:
+         new_text = new_text[:sl_begin] + start_line + new_text[sl_end:]
+-    _write_lf(cm, new_text)
+-
+-    diff = "".join(difflib.unified_diff(
++    out["status"], out["new_text"] = "updated", new_text
++    out["version_only"] = old_body == new_body
++    out["diff"] = "".join(difflib.unified_diff(
+         (old_start_line + "\n" + old_body).splitlines(keepends=True),
+         (start_line + "\n" + new_body).splitlines(keepends=True),
+         fromfile="old block",
+         tofile="new block",
+     ))
+-    return ReInjectResult("updated", diff)
++    return out
++
++
++def _reinject_claude_block(root: Path, slug: str, target: str = "CLAUDE.md") -> "ReInjectResult":
++    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 target(預設 CLAUDE.md;
++    Codex 的 AGENTS.md / AGENTS.override.md 走同一段,d1)。算法在 _reinject_compute(update --dry-run 共用),這裡只負責寫回。
++
++    status ∈ created|updated|unchanged|appended|sentinel_broken|no_template。
++    diff:僅 updated 帶 difflib.unified_diff 字串,其餘 None。
++    讀入時正規化 CRLF→LF 並去 BOM;寫入一律 _write_lf(強制 LF / 無 BOM)。
++    """
++    # 範本 + body(共用 _expected_claude_body 確保 Check D 比對算法一致)
++    c = _reinject_compute(root, target, _expected_claude_body(root, slug))
++    if c["new_text"] is not None:
++        _write_lf(root / target, c["new_text"])
++    return ReInjectResult(c["status"], c["diff"])
+ 
+ 
+ def _deinit_strip_claude(root: Path) -> bool:
+     """剝 CLAUDE.md 與 Codex 指示檔(AGENTS.md / AGENTS.override.md)的 LUMOS:GRAPH-DISCIPLINE 區塊;
+     其餘內容/整個檔都留。目標清單與注入端同一份(r1 整合 F1)。任一檔有剝到 → True;都無 → False。"""
+     hit = False
+     # ★掃三個候選檔,不只當前目標★:先注入 AGENTS.md、後來才加 override,目標會變,舊檔區塊要一起剝(r1 外家 #3)
+     for t in ("CLAUDE.md", "AGENTS.md", "AGENTS.override.md"):
+         cm = root / t
+         if not cm.exists():
+@@ -20849,86 +20852,197 @@ _PY314_UPGRADE_NOTICE = (
+ def _py314_upgrade_pending(root):
+     """消費專案還沒升級到最低 Python 3.14 的版本(舊的 pre-commit 還沒用 python-path)→ True;複製完要印一次升級注意
+     (Projects/最低Python版本改3.14_計劃 做法第 8 點;判斷不必另存狀態)。只有新版程式執行 update 時走得到這裡。"""
+     old_pc = Path(root) / "scripts" / "hooks" / "pre-commit"
+     try:
+         return old_pc.is_file() and "python-path" not in old_pc.read_text(encoding="utf-8", errors="replace")
+     except OSError:
+         return False
+ 
+ 
++def _toolchain_src_ok(src):
++    """工具來源有效嗎(以安裝腳本當探針,薄殼亦在);無效時印擋下訊息。套用與 update --dry-run 共用。"""
++    if (Path(src) / "scripts" / "install-graph-toolchain.sh").exists():
++        return True
++    print(f"擋下:找不到 Lumos 工具鏈的來源({src} 底下沒有安裝腳本)。\n"
++          f"  三種解法擇一:--source <路徑> 指定、設環境變數 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
++          file=sys.stderr)
++    return False
++
++
++def _vendored_pending(src, root):
++    """工具清單上「來源有、專案沒有或內容不同(逐位元組)」的檔 → 相對路徑清單。
++    套用時的結尾自癒與 update --dry-run 共用這一支(Projects/update預覽規範檔變更_計劃〈做法〉4;設計審 r1 架構對齊席)。"""
++    import filecmp
++    out = []
++    for rel in list(_VENDORED_TOOLKIT) + list(_VENDORED_TREE_FILES):
++        s, t = src / rel, root / rel
++        if not s.exists():
++            continue
++        if (not t.exists()) or not filecmp.cmp(s, t, shallow=False):
++            out.append(rel)
++    return out
++
++
++def _update_rule_plan(src, root, slug):
++    """update 會怎麼改每個紀律區塊目標檔 → {target: _reinject_compute 的結果}(不寫檔)。
++    範本取法照套用時的順序:來源有範本就用來源的(套用時會先複製進專案),來源沒有就用專案裡那份(套用時跳過不複製)。
++    讀不了的目標檔:status=unreadable、reason=原因。"""
++    tpl_root = src if (Path(src) / "scripts" / "templates" / "graph-discipline.md").exists() else root
++    body = _expected_claude_body(Path(tpl_root), slug)
++    out = {}
++    for t in _reinject_targets(root):
++        try:
++            out[t] = _reinject_compute(root, t, body)
++        except (UnicodeDecodeError, OSError) as e:
++            out[t] = {"status": "unreadable", "reason": "不是 UTF-8" if isinstance(e, UnicodeDecodeError)
++                      else e.__class__.__name__, "new_text": None}
++    return out
++
++
++def _preview_rule_target(t, it, source_repo):
++    """印一個紀律區塊目標檔的預覽 → (回傳碼影響 0/2, 會不會改)。分法見 _update_preview。"""
++    st = it["status"]
++    if st == "unchanged":
++        print(f"    {t}:不變")
++        return 0, False
++    if st == "no_template":
++        print(f"    {t}:沒有紀律範本,不會改")
++        return (2 if source_repo else 0), False
++    if st == "sentinel_broken":
++        print(f"    ⚠ {t}:區塊標記壞掉,套用時不會自動改,請手動檢查")
++        return (2 if source_repo else 0), False      # 回傳碼照真跑:來源 repo 自身遇到會回 2,消費專案不擋
++    if st == "unreadable":
++        print(f"    ⚠ {t}:讀不了({it['reason']}),套用時會出錯——先把它改成 UTF-8 一般檔案")
++        return 2, False
++    if st == "updated" and it["version_only"]:
++        print(f"    {t}:只更新版本號")
++        shown = [ln for ln in it["diff"].splitlines()[2:] if ln.startswith(("-", "+")) and _CLAUDE_START_PREFIX in ln]
++    elif st == "updated":
++        print(f"    {t}:會更新,區塊差異如下")
++        shown = it["diff"].splitlines()
++    else:
++        where = "" if st == "created" else ("(位置:檔尾)" if t == "CLAUDE.md" else "(位置:第一個 # 標題行之後,沒有標題行就是檔首)")
++        print(f"    {'會新建' if st == 'created' else '會接上'} {t}{where},寫入:")
++        shown = [f"| {ln}" for ln in it["block"].splitlines()]
++    for ln in shown:
++        print(f"      {ln}")
++    if it.get("normalized"):
++        print(f"      另外:{t} 原本有 BOM 或 CRLF 換行,套用時整檔會統一成 LF 換行、去掉 BOM(不只區塊)")
++    return 0, True
++
++
++def _preview_vendored(src, root):
++    """印工具檔清單與套用時還會做的其餘動作(_update_preview 的後半)。"""
++    import shlex as _shlex
++    pend = _vendored_pending(src, root)
++    print(f"  工具檔({len(pend)} 支會換新或新增;只差換行也算,套用時會整檔換掉):")
++    for rel in pend:
++        print(f"    {'會換新' if (root / rel).exists() else '會新增'}: {rel}")
++    if "scripts/hooks/pre-commit" in pend and _py314_upgrade_pending(root):
++        print(_PY314_UPGRADE_NOTICE)
++    print("  套用時還會做(這裡不細算):")
++    print("    專案裡:補設定骨架與 governance/.gitignore、補 docs/.gitignore 的本機帳兩行、寫 .lumos/vendored.json、"
++          "設定 git config core.hooksPath")
++    print("    ★專案外★:同步全域 hooks 到 ~/.claude/(會影響這台機器上其他專案的 Claude Code hooks)")
++    q = _shlex.quote(str(Path(src).resolve()))
++    print(f"  要套用就跑:lumos update --source {q} --no-pull")
++    print(f"  想先預覽最新版:git -C {q} pull --ff-only,再跑一次 lumos update --dry-run")
++
++
++def _update_preview(src, root, slug, source_repo=False):
++    """`lumos update --dry-run`:用目前這份工具來源預覽會改什麼,專案、工具來源與家目錄一個檔都不動、不拉來源
++    (Projects/update預覽規範檔變更_計劃)。回傳碼 = 同樣條件下真的套用會回的碼;讀不了的目標檔回 2。"""
++    print("lumos update --dry-run(僅預演,不改動):")
++    print(f"  專案: {root}")
++    try:
++        sha = _sp_run_text(["git", "-C", str(src), "rev-parse", "--short", "HEAD"])
++    except OSError:                          # 沒有 git 指令:當成不是 git 來源,不讓預覽崩潰
++        sha = ""
++    print(f"  工具來源: {src}({sha or '不是 git 來源'};預覽不拉來源,用的就是這一版)")
++    print("  規範檔(紀律區塊):")
++    rc, changed = 0, False
++    for t, it in _update_rule_plan(src, root, slug).items():
++        r, c = _preview_rule_target(t, it, source_repo)
++        rc, changed = max(rc, r), changed or c
++    if not changed and rc == 0:
++        print("    這次 update 不會改規範檔")
++    if source_repo:
++        print("  (工具來源 repo 自身:套用時只刷新紀律區塊)")
++        print("  要套用就跑:lumos update")
++        return rc
++    _preview_vendored(src, root)
++    return rc
++
++
+ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+     """從 Lumos 來源 src vendor 工具組到專案 root(python 單一源 scaffold + hooks + 結尾自癒)。
+     回傳 0;來源無效回傳 None。圖譜資料受 _scaffold_project 的 skip 保護不被動。
+     cmd_update / cmd_init(--with-hooks) 共用。"""
+-    import subprocess, shutil, filecmp
+-    installer = src / "scripts" / "install-graph-toolchain.sh"  # 仍作來源有效性探針(薄殼亦在)
+-    if not installer.exists():
+-        print(f"擋下:找不到 Lumos 工具鏈的來源({src} 底下沒有安裝腳本)。\n"
+-              f"  三種解法擇一:--source <路徑> 指定、設環境變數 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
+-              file=sys.stderr)
++    import shutil
++    if not _toolchain_src_ok(src):
+         return None
+     if not no_pull:
+         rc_p = _pull_source_or_abort(src, allow_stale)
+         if rc_p is None:
+             return None                      # fail-closed:一個檔都還沒動就退場
+     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
+     _scaffold_project(root, slug)
+     _init_additive_setup(root)     # 只加不覆寫;掛在這裡讓 `lumos update` 也能把設定骨架補給既有專案
+     _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
+     rc = 0
+     _py314_upgrade = _py314_upgrade_pending(root)
+     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
+     # ★只複製精確清單上的檔★(第三輪外家否決席:原本整個目錄照來源 rglob,來源裡沒進版控的檔也被裝進去,
+     # 可是跳過清單只列受版控的檔——裝進去的檔不在清單上,消費專案又把它當成自己的程式掃)。清單跟來源受版控的檔
+     # 是否一致,由 t_vendored_file_list_matches_what_install_ships 守
+-    toolkit = list(_VENDORED_TOOLKIT) + list(_VENDORED_TREE_FILES)
+     healed = []
+-    for rel in toolkit:
++    for rel in _vendored_pending(src, root):
+         s, t = src / rel, root / rel
+-        if not s.exists():
+-            continue
+-        if (not t.exists()) or not filecmp.cmp(s, t, shallow=False):
+-            t.parent.mkdir(parents=True, exist_ok=True)
+-            shutil.copy2(s, t)
+-            if s.stat().st_mode & 0o111:
+-                t.chmod(t.stat().st_mode | 0o111)
+-            healed.append(rel)
++        t.parent.mkdir(parents=True, exist_ok=True)
++        shutil.copy2(s, t)
++        if s.stat().st_mode & 0o111:
++            t.chmod(t.stat().st_mode | 0o111)
++        healed.append(rel)
+     if healed:
+         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
+     else:
+         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
+     if _py314_upgrade and "scripts/hooks/pre-commit" in healed:
+         print(_PY314_UPGRADE_NOTICE)
+     # 記下工具檔的內容指紋:風險掃描與健檢只跳過「內容跟這裡一模一樣」的工具檔(r3 併發資源席)
+     _vendored_manifest_write(root)
+     # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
+     _reinject_all(root, slug)
+     # ★全域同步放在這裡★(2026-09-06 全 repo 審視 #5):要等上面的 copy2 自癒把 vendored hook
+     # 換成來源的新版之後才同步出去,否則 `lumos update` 會拿更新前的舊副本覆蓋全域 hooks。
+     _sync_global_from_project(root)
+     return rc
+ 
+ 
+-def cmd_update(source=None, no_pull=False, allow_stale=False):
++def cmd_update(source=None, no_pull=False, allow_stale=False, dry_run=False):
+     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+     if _refuse_if_probe("update"):
+         return 2
+     src = _lumos_src(source)
+     vault = find_vault(Path.cwd())
+     if vault is None:
+         # ★三條路同一套說法、同一個退出碼★(2026-09-07 全 repo 審視 #9)
+         return _no_vault_msg()
+     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
+     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
++    if dry_run:   # 預覽一律不拉來源、不寫任何檔(Projects/update預覽規範檔變更_計劃〈做法〉1)
++        if root.resolve() != src.resolve() and not _toolchain_src_ok(src):
++            return 2
++        return _update_preview(src, root, slug, source_repo=root.resolve() == src.resolve())
+     if root.resolve() == src.resolve():
+         # 來源 repo 自身:範本本地即最新,無 pull/vendor 之需——reinject-only
+         # (2026-08-05 實戰缺口修:改完範本後來源 repo 自己的 CLAUDE.md 原本無路可刷)
+         res = _reinject_all(root, slug, quiet=True)
+         ri = res["CLAUDE.md"]
+         print(f"lumos update — 來源 repo 自身:只刷新紀律區塊({', '.join(f'{k}:{v.status}' for k, v in res.items())})")
+         return 0 if all(v.status in ("updated", "unchanged", "created", "appended") for v in res.values()) else 2
+     print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
+     rc = _vendor_toolchain(src, root, slug, no_pull=no_pull, allow_stale=allow_stale)
+     return 2 if rc is None else rc
+@@ -45169,21 +45283,21 @@ HELP_WHEN = {
+     "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
+     "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
+     "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
+     "decision-reindex": "舊筆記的決策沒編號,補上 dN。--all 全部。",
+     "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
+     "decision-add": "在某篇記一條決策,回編號。",
+     "decision-amend": "改一條還沒推上去的決策的某個文字欄(已推上去的要用 decision-supersede 翻案)。",
+     "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
+     "uninstall": "移除全域 lumos 指令。",
+     "archive": "把老的驗證紀錄歸檔。先 dry-run 再 --apply。",
+-    "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊)。",
++    "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊);先看會改什麼加 --dry-run。",
+     "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
+     "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
+     "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+     "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+     "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
+     "report-normalize": "席報告收進來、記帳之前:看嚴重度寫法有沒有照規定(檔首檔級行、每條一行獨立 severity),--write 只搬格式不改內容。",
+     "prose-lint": "spec 動筆後的白話健檢:掃中文模糊措辭,只提醒不擋(設計審排乾步驟用)。",
+     "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
+@@ -45832,20 +45946,22 @@ def main():
+     p.add_argument("--force", action="store_true", help="覆寫既有")
+     sub.add_parser("uninstall", help="移除 ~/.local/bin/lumos symlink")
+     p = sub.add_parser("archive", help="滾動歸檔老 Verification(單遍,移檔+path連結正規化)")
+     p.add_argument("--days", type=int, default=180)
+     p.add_argument("--apply", action="store_true", help="真執行(預設 dry-run)")
+     p = sub.add_parser("update", help="從 Lumos 唯一源更新本專案 vendored 工具組")
+     p.add_argument("--source", help="Lumos 來源 repo 路徑(預設 $LUMOS_HOME 或 ~/harness/lumos-toolchain)")
+     p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
+     p.add_argument("--allow-stale", action="store_true",
+                    help="來源拉不到最新時仍沿用現有(預設中止,防靜默降版)")
++    p.add_argument("--dry-run", action="store_true",
++                   help="用目前的工具來源預覽會改哪些規範檔與工具檔;不拉來源、不改動任何檔")
+     p = sub.add_parser("bootstrap", help="一鍵裝好一切(clone Lumos+skills+全域+專案層自動接線;新 repo 經確認 auto-init)")
+     p.add_argument("--init", action="store_true", dest="auto_init",
+                    help="無 vault 的 repo 免確認直接 init 建圖譜(CI/非互動用;不映射 init --force)")
+     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
+     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
+     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
+     p.add_argument("--allow-stale", action="store_true",
+                    help="--pull 拉不到最新時仍沿用現有 clone(預設中止,防靜默降版)")
+     p = sub.add_parser("init", help="在當前 repo 初始化圖譜(建資料夾+.gitignore,預設並裝 pre-commit/pre-push 閘)")
+     p.add_argument("--name", help="vault slug(預設 = repo 資料夾名小寫)")
+@@ -46211,21 +46327,21 @@ def main():
+ 
+     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
+     if args.cmd == "install":
+         return cmd_install(force=args.force)
+     if args.cmd == "uninstall":
+         return cmd_uninstall()
+     if args.cmd == "teardown":
+         return cmd_teardown(yes=args.yes, source=args.source)
+     if args.cmd == "update":
+         return cmd_update(source=args.source, no_pull=args.no_pull,
+-                          allow_stale=args.allow_stale)
++                          allow_stale=args.allow_stale, dry_run=args.dry_run)
+     if args.cmd == "bootstrap":
+         return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull,
+                              init=args.auto_init, allow_stale=args.allow_stale)
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8be7425d..02415c4b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -39176,20 +39176,180 @@ def t_update_syncs_global_from_fresh_not_stale():
+     glob_hook = home / ".claude" / "hooks" / "check-graph-sync.py"
+     check("update: 全域 hook 有被同步出來", glob_hook.is_file(), r.stdout[-200:] + r.stderr[-200:])
+     if glob_hook.is_file():
+         got, want, stale = glob_hook.read_bytes(), (src / hook_rel).read_bytes(), b"OLD-STALE-COPY\n"
+         check("update: ★全域 hook == 來源的新版★(不是更新前的舊副本)", got == want, f"len={len(got)} want={len(want)}")
+         check("update: 全域 hook 不是那份舊副本", got != stale, "")
+     check("update: 專案 vendored hook 也被自癒成新版",
+           (proj / hook_rel).read_bytes() == (src / hook_rel).read_bytes(), "")
+ 
+ 
++def _upd_dry_fixture(old_agents=None):
++    """update --dry-run 測試共用:臨時工具來源(新範本、新 hook、本 repo 的 scripts/lumos)、
++    消費專案(舊區塊、舊 hook)、隔離的家目錄。回 (src, proj, home, env, mod)。
++    old_agents:None=沒有 AGENTS.md;字串=AGENTS.md 原內容(沒有區塊)。"""
++    import os, subprocess as _sp, shutil
++    from pathlib import Path as _P
++    repo = _P(GRAPHCTL).resolve().parent.parent
++    base = _P(tempfile.mkdtemp(prefix="gctl-upd-dry-"))
++    src, proj, home = base / "src", base / "proj", base / "home"
++    for d in (src / "scripts" / "hooks" / "claude", src / "scripts" / "templates", proj / "scripts" / "hooks" / "claude",
++              proj / "docs" / "p-knowledge" / "Systems", proj / "docs" / "p-knowledge" / "MOC", home):
++        d.mkdir(parents=True, exist_ok=True)
++    for f in ("lumos", "install-graph-toolchain.sh"):
++        shutil.copy2(repo / "scripts" / f, src / "scripts" / f)
++    hook_rel = "scripts/hooks/claude/check-graph-sync.py"
++    shutil.copy2(repo / hook_rel, src / hook_rel)
++    (src / "scripts" / "templates" / "graph-discipline.md").write_text("新版紀律:{{KG}}\n第二行\n", encoding="utf-8")
++    _sp.run(["git", "init", "-q", "."], cwd=str(src))
++    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=str(src))
++    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "src"], cwd=str(src))
++    (proj / "docs" / "p-knowledge" / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
++    (proj / hook_rel).write_text("OLD-HOOK\n", encoding="utf-8")
++    shutil.copy2(repo / "scripts" / "lumos", proj / "scripts" / "lumos")
++    mod = _load_lumos()
++    old_block = mod._CLAUDE_START_PREFIX + " -->\n舊版紀律:docs/p-knowledge/\n" + mod._CLAUDE_END
++    (proj / "CLAUDE.md").write_text("# CLAUDE.md\n\n使用者規則\n\n" + old_block + "\n", encoding="utf-8")
++    if old_agents is not None:
++        (proj / "AGENTS.md").write_text(old_agents, encoding="utf-8")
++    _sp.run(["git", "init", "-q", "."], cwd=str(proj))
++    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
++    env.pop("CODEX_HOME", None)
++    env.pop("LUMOS_HOME", None)
++    return src, proj, home, env, mod
++
++
++def _upd_tree(d, skip_git=True):
++    """目錄底下 {相對路徑: 位元組}(不跟捷徑;skip_git 時略過 .git/)。"""
++    out = {}
++    for p in sorted(Path(d).rglob("*")):
++        rel = p.relative_to(d).as_posix()
++        if skip_git and (rel == ".git" or rel.startswith(".git/")):
++            continue
++        if p.is_file() and not p.is_symlink():
++            out[rel] = p.read_bytes()
++    return out
++
++
++def _upd_run(proj, env, *args):
++    import subprocess as _sp
++    return _sp.run([sys.executable, "scripts/lumos", "update", *args], cwd=str(proj), env=env,
++                   capture_output=True, text=True)
++
++
++def t_update_dry_run_writes_nothing():
++    """[update預覽規範檔變更 S1] update --dry-run:專案(不含 .git)、core.hooksPath、家目錄、工具來源提交編號全都不變。"""
++    import subprocess as _sp
++    src, proj, home, env, _m = _upd_dry_fixture()
++    before = (_upd_tree(proj), _upd_tree(home, skip_git=False),
++              _sp.run(["git", "-C", str(proj), "config", "core.hooksPath"], capture_output=True, text=True).stdout,
++              _sp.run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True, text=True).stdout)
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    after = (_upd_tree(proj), _upd_tree(home, skip_git=False),
++             _sp.run(["git", "-C", str(proj), "config", "core.hooksPath"], capture_output=True, text=True).stdout,
++             _sp.run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True, text=True).stdout)
++    check("①前置:預覽跑完 rc0", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
++    check("①★專案檔案集合與位元組都不變(不新建 .lumos/vendored.json、docs/.gitignore)★", before[0] == after[0],
++          str(sorted(set(after[0]) ^ set(before[0])))[:300])
++    check("①hooks 路徑設定不變", before[2] == after[2], f"{before[2]!r} → {after[2]!r}")
++    check("①★家目錄一個檔都不變(沒有同步全域 hooks)★", before[1] == after[1], str(sorted(after[1]))[:200])
++    check("①工具來源提交編號不變(不拉)", before[3] == after[3], "")
++    check("①開頭沿用既有預覽格式", "lumos update --dry-run(僅預演,不改動):" in r.stdout, r.stdout[:200])
++
++
++def t_update_dry_run_rule_diff_matches_apply():
++    """[update預覽規範檔變更 S2] 預覽算出的每個目標檔新內容,跟照它印的指令真的套用後位元組一模一樣;
++    會更新、會新建、會接上三種都驗;會更新的檔印完整區塊差異。"""
++    for label, agents in (("新建 AGENTS.md", None), ("接上既有 AGENTS.md", "# AGENTS\n\n我的規則\n")):
++        src, proj, home, env, m = _upd_dry_fixture(old_agents=agents)
++        plan = m._update_rule_plan(src, proj, "p")
++        r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++        check(f"②[{label}] 前置:預覽 rc0", r.returncode == 0, r.stderr[-300:])
++        r2 = _upd_run(proj, env, "--source", str(src), "--no-pull")
++        check(f"②[{label}] 前置:真的套用 rc0", r2.returncode == 0, r2.stderr[-300:])
++        for t, it in plan.items():
++            got = (proj / t).read_bytes() if (proj / t).exists() else None
++            want = it["new_text"].encode("utf-8") if it.get("new_text") is not None else None
++            check(f"②[{label}] ★{t} 預覽算的新內容 == 套用後的位元組★", got == want,
++                  f"status={it.get('status')} got={got[:120] if got else got!r} want={want[:120] if want else want!r}")
++        check(f"②[{label}] 會更新的 CLAUDE.md 印出完整區塊差異", "+新版紀律:docs/p-knowledge/" in r.stdout and "+第二行" in r.stdout
++              and "-舊版紀律:docs/p-knowledge/" in r.stdout, r.stdout[:600])
++        if agents is None:
++            check("②會新建時印出要寫入的內容", "會新建 AGENTS.md" in r.stdout and "新版紀律:docs/p-knowledge/" in r.stdout, r.stdout[:600])
++        else:
++            check("②會接上時印出位置與內容", "會接上 AGENTS.md" in r.stdout and "第一個 # 標題行之後" in r.stdout, r.stdout[:600])
++
++
++def t_update_dry_run_lists_vendored_changes():
++    """[update預覽規範檔變更 S3] 預覽列出的工具檔 == 接著真跑時「結尾自癒」補的檔。"""
++    import re as _re
++    src, proj, home, env, _m = _upd_dry_fixture()
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    listed = set(_re.findall(r"^\s+(?:會換新|會新增):\s*(\S+)$", r.stdout, _re.M))
++    r2 = _upd_run(proj, env, "--source", str(src), "--no-pull")
++    m = _re.search(r"結尾自癒:補齊 installer 漏的 \d+ 檔 → (.+)$", r2.stdout, _re.M)
++    healed = set(x.strip() for x in m.group(1).split(",")) if m else set()
++    check("③前置:預覽列出至少一支工具檔", bool(listed), r.stdout[:600])
++    check("③★預覽清單 == 真跑自癒清單★", listed == healed, f"listed={sorted(listed)} healed={sorted(healed)}")
++
++
++def t_update_dry_run_no_rule_change():
++    """[update預覽規範檔變更 S4] 全部不變 → 「這次 update 不會改規範檔」;只差版本號 → 「只更新版本號」。"""
++    src, proj, home, env, m = _upd_dry_fixture(old_agents=None)
++    _upd_run(proj, env, "--source", str(src), "--no-pull")
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    check("④套用過後再預覽:不會改規範檔", "這次 update 不會改規範檔" in r.stdout, r.stdout[:600])
++    cm = proj / "CLAUDE.md"
++    txt = cm.read_text(encoding="utf-8")
++    start = m._START_TEMPLATE.format(version=m.LUMOS_VERSION)
++    cm.write_text(txt.replace(start, m._START_TEMPLATE.format(version="0.0.0-old")), encoding="utf-8")
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    check("④只差版本號:標「只更新版本號」,不說不會改", "只更新版本號" in r.stdout and "這次 update 不會改規範檔" not in r.stdout,
++          r.stdout[:600])
++
++
++def t_update_dry_run_source_repo():
++    """[update預覽規範檔變更 S5] 在工具來源 repo 自身預覽:只預覽紀律區塊、不寫檔;標記壞掉回 2(跟真的套用一致)。"""
++    import shutil
++    src, proj, home, env, m = _upd_dry_fixture()
++    (src / "docs" / "s-knowledge" / "MOC").mkdir(parents=True)
++    (src / "docs" / "s-knowledge" / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
++    (src / "CLAUDE.md").write_text("# CLAUDE.md\n\n舊規則\n", encoding="utf-8")
++    before = {t: (src / t).read_bytes() for t in ("CLAUDE.md",)}
++    import subprocess as _sp
++    r = _sp.run([sys.executable, "scripts/lumos", "update", "--dry-run", "--source", str(src)], cwd=str(src), env=env,
++                capture_output=True, text=True)
++    check("⑤來源 repo 預覽 rc0", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
++    check("⑤只預覽紀律區塊(沒有工具檔清單)", "會接上 CLAUDE.md" in r.stdout and "工具檔" not in r.stdout, r.stdout[:600])
++    check("⑤★CLAUDE.md 不變、沒新建 AGENTS.md★", (src / "CLAUDE.md").read_bytes() == before["CLAUDE.md"]
++          and not (src / "AGENTS.md").exists(), "")
++    (src / "CLAUDE.md").write_text("# CLAUDE.md\n\n" + m._CLAUDE_START_PREFIX + " -->\n半壞\n", encoding="utf-8")
++    r = _sp.run([sys.executable, "scripts/lumos", "update", "--dry-run", "--source", str(src)], cwd=str(src), env=env,
++                capture_output=True, text=True)
++    r_apply = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)], cwd=str(src), env=env,
++                      capture_output=True, text=True)
++    check("⑤★標記壞掉:預覽回 2,跟真的套用一致★", r.returncode == 2 and r_apply.returncode == 2,
++          f"preview={r.returncode} apply={r_apply.returncode} {r.stdout[-200:]}")
++
++
++def t_update_dry_run_edges():
++    """[update預覽規範檔變更 S6] 目標檔不是 UTF-8:印「讀不了」、回 2、不崩潰;結尾套用指令帶 --source 絕對路徑與 --no-pull。"""
++    src, proj, home, env, _m = _upd_dry_fixture()
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    check("⑥★結尾的套用指令帶 --source 絕對路徑與 --no-pull★",
++          f"--source {src.resolve()}" in r.stdout and "--no-pull" in r.stdout.split("套用")[-1], r.stdout[-400:])
++    (proj / "CLAUDE.md").write_bytes("# CLAUDE\n\n".encode("utf-8") + "繁體".encode("big5"))
++    r = _upd_run(proj, env, "--dry-run", "--source", str(src))
++    check("⑥★非 UTF-8:印讀不了、回 2、不崩潰★", r.returncode == 2 and "讀不了" in r.stdout and "Traceback" not in r.stderr,
++          f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
++
++
+ def t_update_unions_bookkeeping_instead_of_blocking():
+     """來源 clone 只髒了工具自己寫的 append-only 帳時,update 不該被擋,也不該弄壞帳本。
+ 
+     出身(2026-09-06 全 repo 審視 #5):唯讀的 `lumos show`/`context` 就會 append
+     docs/.usage-log.jsonl,而那本帳是版控的。只要有人在來源 clone 裡查過一次圖譜,之後這台
+     機器所有專案的 update 都被 fail-closed 擋住,逃生門寫在錯誤訊息最後一行沒人讀得到。
+ 
+     ★第一版用 stash/pop,實測會在帳本裡留下 <<<<<<< 衝突標記——比原本擋住更糟★。
+     改成聯集合併:本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
+     這裡驗三件:pull 有成功、兩邊的行都在、檔案裡沒有衝突標記。
+diff --git a/skills/lumos-project-notes/commands/07-安裝維運.md b/skills/lumos-project-notes/commands/07-安裝維運.md
+index aefcacfb..fdada548 100644
+--- a/skills/lumos-project-notes/commands/07-安裝維運.md
++++ b/skills/lumos-project-notes/commands/07-安裝維運.md
+@@ -1,11 +1,11 @@
+ # 07 安裝維運(人工操作;Claude 除非被要求,不主動跑)
+ 
+ | 情境 | 指令 | 備註 |
+ |---|---|---|
+ | 新機器第一次裝 | `lumos bootstrap`(或 `~/harness/lumos-toolchain/install.sh`) | 裝全域 CLI + skills + 專案接線 |
+ | 新專案要用圖譜 | `lumos init` | 建資料夾、.gitignore、pre-commit/pre-push |
+ | 只裝全域指令 | `lumos install [--force]` / 移除 `lumos uninstall` | symlink 到 ~/.local/bin |
+-| 專案裡的工具組舊了 | `lumos update [--allow-stale]` | 從唯一來源更新;來源拉不到最新會先停。★工具組與 CLAUDE.md、AGENTS.md 的紀律區塊要同一次提交、一起推★:只推工具不推紀律區塊,推送前健康檢查的 [D] 會把「紀律區塊跟範本不同步」算成問題擋下(rtb 2026-10-01 更新 v1.2 時遇到) |
++| 專案裡的工具組舊了 | `lumos update [--allow-stale]`;規範檔要先給人看才能改的專案先跑 `lumos update --dry-run` | 從唯一來源更新;來源拉不到最新會先停。★工具組與 CLAUDE.md、AGENTS.md 的紀律區塊要同一次提交、一起推★:只推工具不推紀律區塊,推送前健康檢查的 [D] 會把「紀律區塊跟範本不同步」算成問題擋下(rtb 2026-10-01 更新 v1.2 時遇到) |
+ | 「這台機器的 lumos 用哪支 Python?提交為什麼說找不到 3.14?」 | `lumos python-path` | 印一支 Python 3.14 以上的絕對路徑(git 掛鉤就是用它挑直譯器);找不到印說明與安裝指令回 2。舊版 `python3` 叫它也行,會自己改用 3.14;`LUMOS_PYTHON` 有設就只認它 |
+ | 專案不用了 | `lumos deinit`(只拆專案層) / `lumos teardown`(連機器全域一起拆,圖譜保留) | 非互動要加 --yes |
+ | 把 sqlfluff / stylelint / dart analyze 輸出接進 lint 適配器 | `sqlfluff … --format json \| lumos sqlfluff-sarif`;`stylelint … --formatter json \| lumos stylelint-sarif`;`dart analyze --format=json … \| lumos dart-sarif`(讀不懂 rc2、不吐空結果) | 轉 SARIF |
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index fcf7b3d7..4f25d2d0 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -104,21 +104,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ - T1 寫入一律**寫 tmp → 自驗(值正確+無新指紋) → atomic rename**，失敗原檔不動；BOM/CRLF 檔拒寫
+ - **decisions 翻盤/新增** → `lumos decision-supersede` / `decision-add`（surgical 巢狀;**非 ruamel**——ruamel round-trip 會 reflow、破壞最小 diff）
+ - **白名單外的 frontmatter 寫入**（`summary` block 改某行、`alternatives_considered` 子清單編輯）→ lumos 目前無對應,走下節 obsidian `processFrontMatter` eval 或手動 Edit
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+-| 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull]` | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
++| 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull] [--dry-run]`(`--dry-run`:用目前的工具來源先印會改哪些規範檔與工具檔,不拉、不改動;照它結尾印的指令套用同一份) | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+ > **子命令全覽（80 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
