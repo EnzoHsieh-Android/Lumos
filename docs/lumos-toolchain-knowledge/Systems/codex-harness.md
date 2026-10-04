@@ -107,7 +107,7 @@ PITFALL: 本案實作首輪證明「找 `.git`」漏掉大小寫變體與 bare r
 
 PITFALL: 第二輪代碼審在凍結版 730b06fe 證出主 Git 資料的 `worktrees/*/gitdir` 文字外指不受符號連結檢查保護，模型可把真 linked worktree 的 `.git` 改指向臨時副本；同輪證出 `GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過 local 假身分，`git config user.*` 綠燈不能證明實際提交作者。另由編排者重現健康檢查讀取失敗被誤當普通題失敗。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及 `probe-boundary-remediation/r2-*`；防回歸 `t_probe_boundary_review2_linked_worktree`、`t_probe_boundary_review2_effective_identity`、`t_probe_boundary_review2_health_unreadable`。下次改 Git 副本、runner 環境或 skills 健康檢查時以這三項重驗。
 
-PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；目前沒有防回歸測試，代碼審第三輪 FAIL，不能拿251項綠燈放行。使用者裁決續修後，以 Issue 的臨時 repo 重現及實際 `load_results`／`needed`／`merge` 作紅綠入口，再審修補差異。
+PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；第三輪 FAIL 保留。使用者已例外授權 r4，新增 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 在舊碼翻紅、修後轉綠，仍須以新席與處置閘判定，不以254項綠測試代替審查。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
