@@ -37614,20 +37614,48 @@ def t_probe_boundary_review4_partial_output_stops_batch():
                                                   / "governance/eval/ablation_lumos_first.py")
     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
     with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-partial-") as td:
-        for shape in ("missing", "partial", "valid"):
+        for shape in ("missing", "partial", "schema_missing", "schema_bad", "valid"):
             outdir = Path(td) / shape; outdir.mkdir(); stop = threading.Event()
             def run(cmd, **_kwargs):
                 out = Path(cmd[cmd.index("--out") + 1])
                 if shape == "partial":
                     out.write_text('{"results": [')
-                elif shape == "valid":
-                    out.write_text(json.dumps({"arm": "with", "results": [
-                        {"id": "a", "passed": False, "reason": "ordinary failure"}]}))
+                elif shape in ("schema_missing", "schema_bad", "valid"):
+                    data = {"arm": "with", "results": [{"id": "a", "passed": False,
+                                                          "reason": "ordinary failure"}]}
+                    if shape == "valid":
+                        data.update({"fatal": False, "inconclusive": False, "skills_health_bad": []})
+                    elif shape == "schema_bad":
+                        data.update({"fatal": "", "inconclusive": "", "skills_health_bad": 0})
+                    out.write_text(json.dumps(data))
                 return type("Done", (), {"returncode": 1})()
             with patch.object(ablation.subprocess, "run", side_effect=run):
                 status = ablation.run_job("with", "a", 1, [], 1, 1, outdir, 0, stop=stop)[2]
             check("r4 缺檔半檔停批但有效失敗可續 " + shape,
                   stop.is_set() is (shape != "valid"), (shape, status, stop.is_set()))
+
+
+def t_probe_boundary_review4_missing_output_main():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_missing_main", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-missing-main-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+        outdir = root / "out"
+        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        calls = []
+        def run(cmd, **_kwargs):
+            calls.append(cmd)
+            return type("Done", (), {"returncode": 1, "stdout": "stub"})()
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("r4 live缺檔要讓頂層與summary一起失效", len(calls) == 2 and rc == 3
+              and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
 
 
 def t_delguard_logs_ok_too():

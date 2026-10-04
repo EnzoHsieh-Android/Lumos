@@ -179,8 +179,12 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
     unreadable = False
     try:
         d = json.loads(out.read_text(encoding="utf-8"))
+        if not isinstance(d, dict):
+            raise ValueError("invalid probe output")
         rows = d["results"]
-        if not isinstance(d, dict) or not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows):
+        if (not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows)
+                or type(d.get("fatal")) is not bool or type(d.get("inconclusive")) is not bool
+                or not isinstance(d.get("skills_health_bad"), list)):
             raise ValueError("invalid probe output")
         got = sum(1 for x in rows if is_valid(x))
         lim = sum(1 for x in rows if x.get("limit_hit"))
@@ -318,6 +322,7 @@ def main():
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
     poisoned = collect_skills_health(out_dir)
+    live_failed = False
     if not a.merge_only and not poisoned:
         by_arm = load_results(out_dir)
         jobs = []
@@ -338,10 +343,13 @@ def main():
             for f in futs:
                 arm, qid, st = f.result()
                 print(f"  {arm} {qid}: {st}", flush=True)
+        live_failed = stop.is_set()
     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
     # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
     poisoned = collect_skills_health(out_dir)
+    if live_failed and not poisoned:
+        poisoned = [("本次派工", ["探針程序失效且沒有可採信的結果檔"])]
     s = merge(out_dir, ids, a.runs)
     s["skills_health_poisoned"] = poisoned
     if poisoned:

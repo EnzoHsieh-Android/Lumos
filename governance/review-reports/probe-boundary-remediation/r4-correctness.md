@@ -1,8 +1,10 @@
+severity: clean
 # r4 正確性席原報告
 
 凍結快照 SHA-256：`aba46af10824bc3bf4f9f1a49ed81c8971be92012aba4d63da5541e4f9b5eb42`。
 
-severity: clean；blocking: 否。
+severity: clean
+blocking: 否。
 
 `scripts/scenario_probe.py`：已讀，無 finding。
 

@@ -1,10 +1,12 @@
+severity: major
 # r4 邊界席原報告
 
 凍結快照 SHA-256：`aba46af10824bc3bf4f9f1a49ed81c8971be92012aba4d63da5541e4f9b5eb42`。
 
 Finding 1：舊 schema 的事故檔仍會抵掉缺場並進統計。r4 只用新頂層 `fatal` 排除整檔；真實舊格式只有 `skills_health_bad`，或只有 `inconclusive` 加逐場 `fatal`。前者仍被 `load_results` 收入，後者甚至不會被 `collect_skills_health` 標記。
 
-severity: major；blocking: 是。
+severity: major
+blocking: 是。
 
 引句：「整批 fatal 的檔案即使逐場 reason=ok 也不可計分或抵掉缺場。」
 
@@ -14,7 +16,8 @@ file: `governance/eval/ablation_lumos_first.py:91`、`governance/eval/ablation_l
 
 Finding 2：已有 fatal 檔時，補跑先啟動，失效掃描後執行。`load_results` 排掉 fatal 後讓 `needed` 產生工作，但 `collect_skills_health` 要等 executor 全部完成才呼叫，因此已知健康或清理不可判的輸出目錄仍會先跑模型。
 
-severity: major；blocking: 是。
+severity: major
+blocking: 是。
 
 引句：「這裡不管走不走 merge_only 都掃 out_dir 一次。」
 
@@ -24,7 +27,8 @@ file: `governance/eval/ablation_lumos_first.py:301`、`governance/eval/ablation_
 
 Finding 3：`run_job` 對缺檔、部分 JSON 或異常退出碼不會停批；未知健康狀態下仍放行後續工作。它只對 rc=3 或成功解析出的旗標設 `stop`，而 producer 若在最終健康檢查或寫檔前非預期崩潰，會是 rc=1／訊號退出並留下缺檔或半檔。
 
-severity: major；blocking: 是。
+severity: major
+blocking: 是。
 
 引句：「探針回 3 或結果檔標了 skills 事故:設停止旗標,其餘 worker 與後續工作不再派」
 
