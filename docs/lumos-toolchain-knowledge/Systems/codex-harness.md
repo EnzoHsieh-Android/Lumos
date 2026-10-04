@@ -40,6 +40,7 @@ summary: |-
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -47,8 +48,14 @@ decisions:
     why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
     decided: 2026-09-11
     valid: true
+related:
+  - "[[Projects/過期鎖安全接手_計劃]]"
 ---
 # codex-harness
+
+## 2026-10-05 派工鏡頭鎖的狀態告知
+
+[[Projects/過期鎖安全接手_計劃]] 停止按時間偷派工鎖；原因是鎖記啟動者 PID，背景工作可在啟動者退出後繼續。鏡頭因此要把「超過舊門檻而無快取，鎖狀態未知」與「鎖檔根本建不起來」分開，hook 亦須保留這個區別，否則只修底層會讓審查席仍看到一般超時訊息。`t_lens_stale_lock_reports_uncertainty` 由鏡頭一路驗到 hook；正常背景暖快取沿用 `t_lens_timeout_keeps_warming_cache`。殘留鎖不能只憑鎖內 PID 已消失就刪，人工復原需另查相關背景工作。
 
 > 白話:lumos 原本的「防護」全掛在 Claude Code 上——進場提醒、改檔前推波及、派審查員附鏡頭、收工點名沒補的筆記。這篇講的是同一套東西怎麼接到 OpenAI 的 Codex CLI 上、哪些地方兩家行為刻意不同、哪些是 Codex 平台補不了的限制。程式碼只告訴你現在長怎樣;為什麼這樣接、哪裡踩過雷,看這裡和下面兩份計劃。
 

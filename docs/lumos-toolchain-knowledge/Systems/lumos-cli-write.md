@@ -14,6 +14,7 @@ related:
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Systems/check-u-overgeneralization]]"
   - "[[Projects/工具分類_計劃]]"
+  - "[[Projects/過期鎖安全接手_計劃]]"
 summary: |-
   WHY:[2026-09-30 [[Projects/存量漂移改法_計劃]] 代碼審 r4]set 整欄改 valid_under/revalidate_when 時,值裡還留著 <整項新內容> 就擋、檔案不動——那是 drift fix --kind c4 證據頁預填指令裡要人填的那一項,原封不動照貼會把佔位字寫進驗收前提 [test:t_drift_fix_c4_evidence_then_replace]
   WHY:[2026-09-26 驗收前提欄位可改,另一個對話回報、Enzo 裁「好」]`set` 收 valid_under/revalidate_when,整欄換掉(一個值=單行、多個值=一行一項清單,原本單行/清單/空的/多行區塊都拿乾淨);另列 COND_KEYS、不併進 SCALAR_KEYS(那份白名單的數量有漂移守衛在數,且這兩欄本質可以是清單)。不給 append/remove:這兩欄是散文常提連結,append/remove 用連結目標判「同一項」會把提到同一篇的不同條件當重複。其他欄位給兩個值照擋。★引號改白名單、全寫入指令共用★(代碼審 r1 兩席:原本只列「要加引號的」,本工具自己讀自己永遠對得上,標準 YAML/Obsidian 讀卻會把「空白+#」後面當註解切掉、把雙引號裡的反斜線當跳脫):`_yaml_plain_ok` 只放行確定兩邊讀法一樣的值,其餘由 `_yaml_quote` 加引號——沒反斜線沒雙引號用雙引號、否則單引號、兩種都不行就擋;fmt_scalar、fmt_list_item 與決策文字欄位(`_fmt_decision_value`,r2 架構席抓到的第三套手刻判準)都改走它,所以 set 其他欄位、append、decision-add/supersede 一併修到;白名單另擋標準 YAML 會讀成日期、十六/八/二進位、六十進位、無限大的寫法(r2 通才席)。副作用:signoff 寫的日期現在加引號(本工具讀起來一樣,Obsidian 改讀成字串);DATE_KEYS 照舊刻意不加引號、不經這裡 [test:t_set_condition_fields_standard_yaml_safe] [test:t_decision_add_standard_yaml_safe] [test:t_set_condition_fields_replace_any_shape] [test:t_set_condition_fields_multi_values] [test:t_set_condition_fields_reject_bad_values] [test:t_set_other_keys_single_value_only] [test:t_set_condition_fields_keep_other_lines]
@@ -76,10 +77,15 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
 about_code:
   - scripts/lumos
 ---
 # lumos-cli-write
+
+## 2026-10-05 寫入鎖的安全邊界
+
+[[Issues/過期鎖接手可能雙持]] 的跨程序交錯證明「先看 mtime 再按路徑 rename」可把別人剛建的新鎖搬走。[[Projects/過期鎖安全接手_計劃]] 決定停止自動接手，理由是派工鏡頭共用此原語，鎖內的啟動者 PID 不能證明背景工作已停；只加 PID 檢查會把同一類雙持帶回來。正常獨佔建立時要處理短寫與建檔錯誤，否則停止自動接手反而會使半成品鎖永久阻斷。防回歸測試為 `t_excl_lock_stale_takeover_is_single_owner`、`t_excl_lock_creation_failure_cleans_own_file`、`t_vault_stale_lock_fails_with_path`。這是同版程序的保證；混用舊版前須先停舊進程，不能宣稱跨版本安全。
 
 `scripts/lumos` 的**專案層圖譜寫入原語**(7 個子指令)—— 對知識圖譜 frontmatter 的唯一安全寫入路徑。直接手改 frontmatter / obsidian `property:set` 會繞過寫後自驗與格式鐵則(實測 `property:set` 塞多 wikilink 會長出亂碼 ghost 節點)。
 

@@ -2071,7 +2071,7 @@ def t_concurrent_append_same_note():
     r4 = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "append", "F", "tags", "z"],
                 capture_output=True, text=True, env={**_os2.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)})
     check("④鎖的資料夾建不起來也照寫、而且講一聲", r4.returncode == 0 and "- z" in read(p2) and "鎖" in r4.stderr, r4.stderr[-300:])
-    # ⑤ 鎖是跟專案既有的同一套(建鎖檔+過期接手),不是另一套機制(第四輪架構席)
+    # ⑤ 鎖是跟專案既有的同一套(獨佔建鎖檔;過期不再自動接手),不是另一套機制(第四輪架構席)
     import inspect as _insp
     src_lock = _insp.getsource(m._vault_write_lock)
     check("⑤寫入鎖用專案既有的鎖檔做法(_excl_lock_try),沒有另開 flock/msvcrt", "_excl_lock_try" in src_lock
@@ -16304,8 +16304,9 @@ def t_lens_timeout_keeps_warming_cache():
         raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
 
     def sha(ref):
-        r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
-        return r.stdout.strip()
+        r = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", ref + "^{commit}"],
+                    capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
 
     # ★怎麼讓它一定超時,又不必挑一個「算很久」的範圍★(2026-09-07 CI 紅了一次之後改)
     # 舊寫法是「挑 HEAD~12 這種算不完 1.5 秒的範圍」。問題是**那個範圍的成本會隨著
@@ -54369,6 +54370,301 @@ def t_drift_fix_c5_completes_settle():
     check("③家節點同時有預告行與正式行:回 2、說先手動刪預告行", fs2 and rc == 2 and "先手動刪掉預告行" in out
           and (V / "G2.md").read_bytes() == raw2 and (v / "Systems" / "Pay.md").read_bytes() == pay, out)
     check("④跟 settle 第二步同一支算內容(_guard_settle_record_lines)", len(calls) == 1, str(len(calls)))
+
+
+def t_excl_lock_stale_takeover_is_single_owner():
+    """S1: 在兩個真程序間釘住舊版 stat→rename 的 ABA 交錯。"""
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+    import json as _json
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        lock = root / "race.lock"
+        lock.write_text("99999999\n0", encoding="utf-8")
+        old = _time.time() - 1200
+        _os.utime(lock, (old, old))
+        ready, go = root / "ready", root / "go"
+        code = '''import importlib.util, json, os, sys, time
+from pathlib import Path
+from importlib.machinery import SourceFileLoader
+src, lock, ready, go = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("lock_child", str(src), loader=SourceFileLoader("lock_child", str(src)))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+stat = Path.stat
+def paused(self, *args, **kwargs):
+    value = stat(self, *args, **kwargs)
+    if self == lock:
+        ready.write_text("ready")
+        for _ in range(500):
+            if go.exists():
+                break
+            time.sleep(.01)
+        else:
+            raise TimeoutError("parent did not release stat")
+    return value
+Path.stat = paused
+print(json.dumps({"pid": os.getpid(), "acquired": m._excl_lock_try(lock, 900)}))
+'''
+        child = _sp.Popen([sys.executable, "-c", code, GRAPHCTL, str(lock), str(ready), str(go)],
+                          stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        try:
+            reached = False
+            for _ in range(500):
+                if ready.exists():
+                    reached = True
+                    break
+                if child.poll() is not None:
+                    break
+                _time.sleep(.01)
+            parent_acquired = m._excl_lock_try(lock, 900)
+            go.write_text("go")
+            out, err = child.communicate(timeout=8)
+        finally:
+            go.write_text("go")
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=8)
+        check("過期鎖 S1 前置:舊碼到達 stat 間隙或新碼直接拒絕", reached or child.returncode == 0,
+              f"rc={child.returncode} err={err}")
+        result = _json.loads(out) if child.returncode == 0 else {}
+        check("過期鎖 S1 前置:競爭者是不同 PID", result.get("pid") not in (None, _os.getpid()), str(result))
+        check("過期鎖 S1:交錯不得讓兩人同時取得", not (parent_acquired is True and result.get("acquired") is True),
+              f"parent={parent_acquired} child={result} err={err}")
+
+
+def t_excl_lock_existing_is_not_stolen():
+    """S2: 無法證明持有者已停時，不按年齡或 PID 偷鎖。"""
+    import os as _os
+    import time as _time
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        old = _time.time() - 1200
+        for name, pid in (("live", _os.getpid()), ("dead", 99999999)):
+            lock = root / f"{name}.lock"
+            value = f"{pid}\n0"
+            lock.write_text(value, encoding="utf-8")
+            _os.utime(lock, (old, old))
+            got = m._excl_lock_try(lock, 900)
+            check(f"過期鎖 S2:{name} PID 的舊鎖保留", got is False and lock.read_text(encoding="utf-8") == value,
+                  f"got={got} content={lock.read_text(encoding='utf-8')!r}")
+        target = root / "target"
+        target.write_text("untouched", encoding="utf-8")
+        link = root / "link.lock"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            if _os.name != "nt":
+                raise
+        else:
+            got = m._excl_lock_try(link, 900)
+            check("過期鎖 S2:符號連結與目標均不動", got is False and link.is_symlink() and target.read_text() == "untouched", str(got))
+        fresh = root / "fresh.lock"
+        first, second = m._excl_lock_try(fresh, 900), m._excl_lock_try(fresh, 900)
+        check("過期鎖 S2:正常獨佔建檔", first is True and second is False, f"{first=} {second=}")
+
+
+def t_excl_lock_creation_failure_cleans_own_file():
+    """S3: 短寫補齊，寫失敗只清自己新建的半成品。"""
+    import os as _os
+
+    m = _load_lumos_module()
+    real_write = _os.write
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        short = root / "short.lock"
+
+        def one_byte(fd, data):
+            return real_write(fd, data[:1])
+
+        m.os.write = one_byte
+        try:
+            got = m._excl_lock_try(short, 900)
+        finally:
+            m.os.write = real_write
+        content = short.read_text(encoding="utf-8") if short.exists() else ""
+        check("過期鎖 S3:短寫不得宣稱已寫完", got is True and content.startswith(str(_os.getpid()) + "\n"),
+              f"got={got} content={content!r}")
+
+        failed = root / "failed.lock"
+
+        def no_space(fd, data):
+            raise OSError(28, "injected full disk")
+
+        m.os.write = no_space
+        raised = False
+        try:
+            m._excl_lock_try(failed, 900)
+        except OSError:
+            raised = True
+        finally:
+            m.os.write = real_write
+        check("過期鎖 S3:寫失敗回真錯誤且不留自己空鎖", raised and not failed.exists(),
+              f"raised={raised} exists={failed.exists()}")
+
+        replaced = root / "replaced.lock"
+
+        def other_owner(fd, data):
+            replaced.unlink()
+            replaced.write_text("OTHER", encoding="utf-8")
+            raise OSError(28, "injected replacement")
+
+        m.os.write = other_owner
+        try:
+            try:
+                m._excl_lock_try(replaced, 900)
+            except OSError:
+                pass
+        finally:
+            m.os.write = real_write
+        check("過期鎖 S3:失敗清理不刪他人換入的鎖", replaced.read_text(encoding="utf-8") == "OTHER",
+              replaced.read_text(encoding="utf-8"))
+
+        denied = root / "denied.lock"
+        real_open = _os.open
+
+        def deny(path, flags, mode=0o777, **kwargs):
+            if str(path) == str(denied):
+                raise PermissionError(13, "injected permission denied")
+            return real_open(path, flags, mode, **kwargs)
+
+        m.os.open = deny
+        raised = False
+        try:
+            m._excl_lock_try(denied, 900)
+        except PermissionError:
+            raised = True
+        finally:
+            m.os.open = real_open
+        check("過期鎖 S3:無權限與鎖已存在分開報", raised and not denied.exists(), str(raised))
+
+
+def t_vault_stale_lock_fails_with_path():
+    """S3: 殘留鎖不能讓筆記庫無限等待，也要說出可查核的位置。"""
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        home, vault = root / "home", root / "vault"
+        home.mkdir()
+        vault.mkdir()
+        old_home = _os.environ.get("HOME")
+        real_monotonic = _time.monotonic
+        _os.environ["HOME"] = str(home)
+        try:
+            lock, _ = m._vault_lock_where(vault)
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text("99999999\n0", encoding="utf-8")
+            old = _time.time() - 1200
+            _os.utime(lock, (old, old))
+            ticks = iter((0, 61))
+            _time.monotonic = lambda: next(ticks, 61)
+            try:
+                with m._vault_write_lock(vault):
+                    pass
+                message = ""
+            except RuntimeError as exc:
+                message = str(exc)
+            finally:
+                _time.monotonic = real_monotonic
+            check("過期鎖 S3 前置:筆記庫入口真的走到等待上限", "60 秒" in message, message)
+            check("過期鎖 S3:指出鎖位置與人工查核", str(lock) in message and "確認" in message,
+                  message)
+            content = lock.read_text(encoding="utf-8") if lock.exists() else "<鎖已被移除>"
+            check("過期鎖 S3:拒絕寫入且原鎖保留", content == "99999999\n0", content)
+            started = _time.monotonic()
+            with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")):
+                try:
+                    with m._vault_write_lock(vault):
+                        pass
+                    permission_message = ""
+                except RuntimeError as exc:
+                    permission_message = str(exc)
+            check("過期鎖 S4:建鎖失敗立即回真錯誤", "無法建立" in permission_message
+                  and str(lock) in permission_message and _time.monotonic() - started < 2,
+                  permission_message)
+        finally:
+            if old_home is None:
+                _os.environ.pop("HOME", None)
+            else:
+                _os.environ["HOME"] = old_home
+
+
+def t_lens_stale_lock_reports_uncertainty():
+    """S4: 舊派工鎖不能自動偷，也不能假稱背景工作一定仍活著。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        cache = root / "cache.json"
+        lock = root / "cache.json.warming"
+        lock.write_text("99999999\n0", encoding="utf-8")
+        old = _time.time() - m._LENS_LOCK_STALE_SEC - 10
+        _os.utime(lock, (old, old))
+        out = _io.StringIO()
+        with _mock.patch("subprocess.Popen") as spawn, _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
+        result = _json.loads(out.getvalue())
+        check("過期鎖 S4 前置:確實走到派工鏡頭超時", rc == 5 and result.get("timed_out") is True,
+              out.getvalue())
+        check("過期鎖 S4:舊鎖不啟動第二支", spawn.call_count == 0 and lock.read_text() == "99999999\n0",
+              f"spawn={spawn.call_count} lock={lock.read_text() if lock.exists() else 'missing'}")
+        check("過期鎖 S4:超時只報狀態未知", result.get("lock_uncertain") is True and result.get("still_warming") is not True,
+              out.getvalue())
+
+        hook = _load_hook_mod("stale_lens_hook", "dispatch-lens-hook.py")
+        response = type("Response", (), {"returncode": 5, "stdout": _json.dumps(result), "stderr": ""})()
+        payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
+        rendered = _io.StringIO()
+        with _mock.patch.object(hook.subprocess, "run", return_value=response), \
+                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
+                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
+                _ctx.redirect_stdout(rendered):
+            hook_rc = hook.main()
+        check("過期鎖 S4:派工 hook 傳達需查鎖", hook_rc == 0 and "狀態未知" in rendered.getvalue() and "檢查鎖" in rendered.getvalue(),
+              rendered.getvalue())
+
+        error_output = _io.StringIO()
+        with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")), \
+                _ctx.redirect_stdout(error_output):
+            try:
+                error_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
+            except PermissionError:
+                error_rc = None
+        try:
+            error_data = _json.loads(error_output.getvalue())
+        except ValueError:
+            error_data = {}
+        check("過期鎖 S5:建鎖錯誤有獨立 rc 與鎖位置", error_rc == 2 and error_data.get("lock_error") is True
+              and error_data.get("lock_path") == str(lock), f"rc={error_rc} data={error_data}")
+
+        error_response = type("Response", (), {"returncode": 2,
+                              "stdout": _json.dumps({"lock_error": True, "lock_path": str(lock), "range": "a..b"}),
+                              "stderr": ""})()
+        rendered = _io.StringIO()
+        with _mock.patch.object(hook.subprocess, "run", return_value=error_response), \
+                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
+                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
+                _ctx.redirect_stdout(rendered):
+            hook_rc = hook.main()
+        check("過期鎖 S5:派工 hook 傳達建鎖失敗", hook_rc == 0 and "鎖無法建立" in rendered.getvalue()
+              and str(lock) in rendered.getvalue(), rendered.getvalue())
 
 
 if __name__ == "__main__":
