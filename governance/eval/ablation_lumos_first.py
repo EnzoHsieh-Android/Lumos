@@ -4,24 +4,53 @@
 
 做法(2026-09-02 第二版):工作單位=(組別, 題),每題需要幾場就叫探針跑幾場(`--only <題> --runs <缺幾場>`),
 輸出一檔一次嘗試、永不覆蓋;重跑時先數每題已有的**有效**場次(排除撞用量上限/儀器例外),只補缺的。
-第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗——所以現在預設 2 路、
-探針帶 --wait-on-limit 撞到就等重置再補同一場。
+第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗。
+現在只准單路派工，探針帶 --wait-on-limit 撞到就等重置再補同一場；並行需先驗證在途取消。
 
 四個尺(讀法預註冊在計劃筆記,這裡只算數不解讀):
   M1 通過率(期望指令在禁做動作之前)  M2 整場有沒有敲過 lumos
   M3 首次敲 lumos 的步數中位(只算有敲的場)  M4 答案題(id 以 a 開頭)正確率
 
 用法:
-  governance/eval/ablation_lumos_first.py [--runs 3] [--workers 2] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
+  governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
 """
-import argparse, datetime, json, statistics, subprocess, sys, time
-from concurrent.futures import ThreadPoolExecutor
+import argparse, datetime, errno, fcntl, hashlib, json, os, stat, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "scripts" / "scenario_probe.py"
 DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
 ARMS = ["with", "without"]
+
+
+def _atomic_write_bytes(path, data):
+    """同目錄暫存後取代目標；不跟隨既有目標符號連結。"""
+    mode = None
+    try:
+        old = path.lstat()
+        if stat.S_ISREG(old.st_mode):
+            mode = stat.S_IMODE(old.st_mode) & 0o666
+    except FileNotFoundError:
+        pass
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".",
+                                         delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(data)
+            if mode is not None:
+                os.fchmod(tmp.fileno(), mode)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _atomic_write_text(path, content):
+    _atomic_write_bytes(path, content.encode("utf-8"))
+
 
 # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
 # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
@@ -157,14 +186,12 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
     if stop is not None and stop.is_set():
         return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
     if max_per_window and runs_in_window(out_dir) >= max_per_window:
-        # 事前上限(SWE-agent per-instance / bmad per-story 的窗口版):這個五小時窗口已經跑滿,不再開新工作;
-        # 之後重跑 runner 會逐題補缺。比「撞到再等」省一次撞牆,也不會把 Enzo 的互動配額吃光。
-        # ★r1 併發席:這道是 TOCTOU(多 worker 平行可同時放行、超額到 workers×n)——刻意接受:它只是禮貌性軟上限,
-        #   真正的帳號硬上限由 --wait-on-limit 接住,超額有界(預設 workers=2),不會做出錯的判分。★
+        # 五小時窗口滿就留待下次補缺；本批只准單路派工，避免並行 TOCTOU 多開模型。
         return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
-    stamp = time.strftime("%H%M%S")
-    out = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.json"
-    log = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.log"
+    stamp = f"{time.strftime('%H%M%S')}-{time.time_ns()}"
+    qid_key = hashlib.sha256(qid.encode("utf-8")).hexdigest()[:16]
+    out = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.json"
+    log = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.log"
     cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
            "--only", qid, "--runs", str(n), "--arm", arm, "--out", str(out),
            "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
@@ -174,7 +201,33 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
     with open(log, "w", encoding="utf-8") as lf:
         lf.write("$ " + " ".join(cmd) + "\n")
         lf.flush()
-        r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+        try:
+            r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            lf.write(f"探針子程序例外 {type(exc).__name__}: {exc}\n")
+            lf.flush()
+            try:
+                prior_result = out.read_bytes()
+            except OSError as read_exc:
+                prior_result = None
+                if not isinstance(read_exc, FileNotFoundError):
+                    lf.write(f"舊結果無法讀取 {type(read_exc).__name__}: {read_exc}\n")
+                    lf.flush()
+            tombstone = {"arm": arm, "qid": qid, "results": [], "fatal": True,
+                         "inconclusive": True, "skills_health_bad": [],
+                         "failure_type": type(exc).__name__, "log_path": str(log),
+                         "retry_policy": "archive-fatal-then-rerun"}
+            # 先以單次原子取代釘住事故，再歸檔舊資料；歸檔中斷不能讓下次重跑吃回成功外觀。
+            _atomic_write_text(out, json.dumps(tombstone, ensure_ascii=False))
+            if prior_result is not None:
+                try:
+                    _atomic_write_bytes(out.with_suffix(".failed"), prior_result)
+                except OSError as archive_exc:
+                    lf.write(f"舊結果歸檔失敗 {type(archive_exc).__name__}: {archive_exc}\n")
+                    lf.flush()
+            if stop is not None:
+                stop.set()
+            return (arm, qid, f"★探針批次失效★ {type(exc).__name__}——停止派工，檢查 {log}")
     bad_health = False
     unreadable = False
     try:
@@ -292,26 +345,7 @@ def render_md(s, meta):
     return "\n".join(lines) + "\n"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--questions", default=",".join(DEFAULT_Q))
-    ap.add_argument("--runs", type=int, default=3)
-    ap.add_argument("--workers", type=int, default=2, help="平行路數;瓶頸是帳號用量上限不是機器,多開沒用")
-    ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
-    ap.add_argument("--max-per-window", type=int, default=50,
-                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
-    ap.add_argument("--timeout", type=int, default=600)
-    ap.add_argument("--max-turns", type=int, default=18)
-    ap.add_argument("--model", default="")
-    ap.add_argument("--out-dir", default="")
-    ap.add_argument("--arms", default=",".join(ARMS))
-    ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
-    a = ap.parse_args()
-    files = a.questions.split(",")
-    ids = load_ids(files)
-    date = datetime.date.today().isoformat()
-    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _run_locked_batch(a, files, ids, date, out_dir):
     try:
         ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
     except Exception:
@@ -319,7 +353,7 @@ def main():
     meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
             "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
             "started": datetime.datetime.now().isoformat(timespec="seconds")}
-    (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    _atomic_write_text(out_dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
     poisoned = collect_skills_health(out_dir)
     live_failed = False
@@ -333,16 +367,15 @@ def main():
                     jobs.append((arm, qid, n))
         total = sum(n for _, _, n in jobs)
         print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
-              f"{len(jobs)} 個工作,{a.workers} 路平行,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
+              f"{len(jobs)} 個工作,單路派工,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
         import threading
-        stop = threading.Event()          # 任一工作偵測到全域 skills 事故就 set,其餘工作看到就不派(r1 併發席 F1)
-        with ThreadPoolExecutor(max_workers=a.workers) as ex:
-            futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model,
-                              a.max_per_window, stop)
-                    for arm, qid, n in jobs]
-            for f in futs:
-                arm, qid, st = f.result()
-                print(f"  {arm} {qid}: {st}", flush=True)
+        stop = threading.Event()
+        for arm, qid, n in jobs:
+            if stop.is_set():
+                break
+            _, _, st = run_job(arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit,
+                               a.model, a.max_per_window, stop)
+            print(f"  {arm} {qid}: {st}", flush=True)
         live_failed = stop.is_set()
     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
@@ -358,11 +391,55 @@ def main():
         print("  檢查結果檔與探針日誌；若 skills 連結損壞，在真 repo 執行 python3 scripts/lumos install --force。")
         print("  summary 仍產出，但失效檔不參與統計，並已標 skills_health_poisoned。")
         print("!" * 60)
-    (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
+    _atomic_write_text(out_dir / "summary.json", json.dumps(s, ensure_ascii=False, indent=1))
     md = render_md(s, meta)
-    (out_dir / "summary.md").write_text(md, encoding="utf-8")
+    _atomic_write_text(out_dir / "summary.md", md)
     print("\n" + md)
     return 3 if poisoned else 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--questions", default=",".join(DEFAULT_Q))
+    ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="live 探針只准 1 路；恢復並行前須驗證事故時可取消在途模型")
+    ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
+    ap.add_argument("--max-per-window", type=int, default=50,
+                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
+    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--max-turns", type=int, default=18)
+    ap.add_argument("--model", default="")
+    ap.add_argument("--out-dir", default="")
+    ap.add_argument("--arms", default=",".join(ARMS))
+    ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
+    a = ap.parse_args()
+    if not a.merge_only and a.workers != 1:
+        ap.error("live 探針目前只准 --workers 1；--merge-only 保留舊參數相容")
+    files = a.questions.split(",")
+    ids = load_ids(files)
+    date = datetime.date.today().isoformat()
+    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # 同一輸出目錄的另一個 CLI 可能已在跑模型；其 stop 旗標不會跨進程共享。
+    lock_fd = os.open(out_dir, os.O_RDONLY | os.O_DIRECTORY)
+    legacy_fd = None
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # 過渡期舊版只鎖這支檔；同時取得可擋仍在跑的舊批次。
+            legacy_fd = os.open(out_dir / ".ablation.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(legacy_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.ELOOP):
+                raise
+            print(f"✗ 探針批次鎖不可用或另一批次正在使用 {out_dir}；本次未改寫結果或摘要。", file=sys.stderr)
+            return 3
+        return _run_locked_batch(a, files, ids, date, out_dir)
+    finally:
+        if legacy_fd is not None:
+            os.close(legacy_fd)
+        os.close(lock_fd)
 
 
 if __name__ == "__main__":

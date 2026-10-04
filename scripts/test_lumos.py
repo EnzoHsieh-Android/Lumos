@@ -37772,7 +37772,7 @@ def t_probe_boundary_postreview_serial_dispatch():
 
 
 def t_probe_boundary_postreview_cross_process_lock():
-    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl
+    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl, os
     from unittest.mock import patch
     spec = importlib.util.spec_from_file_location("ablation_process_lock", Path(__file__).resolve().parents[1]
                                                   / "governance/eval/ablation_lumos_first.py")
@@ -37786,7 +37786,12 @@ def t_probe_boundary_postreview_cross_process_lock():
         def hold_lock():
             with open(outdir / ".ablation.lock", "a+") as f:
                 fcntl.flock(f, fcntl.LOCK_EX)
-                ready.set(); release.wait(10)
+                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                    ready.set(); release.wait(10)
+                finally:
+                    os.close(dir_fd)
         child = multiprocessing.get_context("fork").Process(target=hold_lock)
         child.start()
         try:
@@ -37806,6 +37811,189 @@ def t_probe_boundary_postreview_cross_process_lock():
             release.set(); child.join(5)
             if child.is_alive():
                 child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_lockfile_replacement():
+    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl, os
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_lock_replacement", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-lock-replacement-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                    (outdir / ".ablation.lock").unlink()
+                    ready.set(); release.wait(10)
+                finally:
+                    os.close(dir_fd)
+        child = multiprocessing.get_context("fork").Process(target=hold_lock); child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+                    "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("鎖檔被移除後第二批仍不得進入", held and rc == 3 and batch.call_count == 0,
+                  (held, rc, batch.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_legacy_lock_interop():
+    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_legacy_lock", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-legacy-lock-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_legacy_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                ready.set(); release.wait(10)
+        child = multiprocessing.get_context("fork").Process(target=hold_legacy_lock); child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+                    "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("舊版批次只持鎖檔時新版仍拒絕進入", held and rc == 3 and batch.call_count == 0,
+                  (held, rc, batch.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_cli_entry_and_modes():
+    import tempfile, subprocess, stat, json
+    script = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
+    with tempfile.TemporaryDirectory(prefix="probe-cli-entry-") as td:
+        root = Path(td); q = root / "q.jsonl"
+        q.write_text('{"id":"a","prompt":"a"}\n')
+        outdir = root / "out"; outdir.mkdir()
+        for name in ("meta.json", "summary.json", "summary.md"):
+            path = outdir / name; path.write_text("old"); path.chmod(0o640)
+        cmd = [sys.executable, str(script), "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        summary = json.loads((outdir / "summary.json").read_text()) if done.returncode == 0 else {}
+        check("真 CLI 入口須能純合併並產出摘要", done.returncode == 0
+              and summary.get("expected_ids") == ["a"],
+              (done.returncode, done.stderr[-400:]))
+        check("原子取代仍保留既有普通摘要權限", done.returncode == 0
+              and all(stat.S_IMODE((outdir / name).stat().st_mode) == 0o640
+                      for name in ("meta.json", "summary.json", "summary.md")),
+              {name: oct(stat.S_IMODE((outdir / name).stat().st_mode))
+               for name in ("meta.json", "summary.json", "summary.md")})
+
+
+def t_probe_boundary_postreview_symlink_outputs():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_symlink_outputs", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-symlink-outputs-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        victims = {}
+        for name in ("meta.json", "summary.json", "summary.md"):
+            victim = root / (name + ".victim"); victim.write_text("KEEP-ME")
+            (outdir / name).symlink_to(victim); victims[name] = victim
+        argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        check("摘要落檔不得跟隨既有符號連結到目錄外", rc == 0
+              and all(v.read_text() == "KEEP-ME" for v in victims.values())
+              and all(not (outdir / name).is_symlink() for name in victims)
+              and isinstance(json.loads((outdir / "summary.json").read_text()), dict),
+              (rc, {k: v.read_text()[:40] for k, v in victims.items()}))
+
+
+def t_probe_boundary_postreview_long_qid():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_long_qid", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-long-qid-") as td:
+        root = Path(td); qid = "q" * 220; q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": qid, "prompt": "a"}) + "\n")
+        outdir = root / "out"
+        argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+                "--out-dir", str(outdir)]
+        def run(cmd, **_kwargs):
+            if cmd == ["claude", "--version"]:
+                return type("Version", (), {"stdout": "stub"})()
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": qid, "passed": True, "reason": "ok"}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Done", (), {"returncode": 0})()
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                rc = ablation.main()
+            except OSError:
+                rc = None
+        check("長題號不使結果檔名超長且仍能寫摘要", rc == 0
+              and (outdir / "summary.json").exists() and len(list(outdir.glob("with-q-*.json"))) == 1,
+              (rc, list(outdir.iterdir())))
+
+
+def t_probe_boundary_postreview_archive_interrupt():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_archive_interrupt", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-archive-interrupt-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def run(cmd, **_kwargs):
+            out = Path(cmd[cmd.index("--out") + 1])
+            out.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                       "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            raise ablation.subprocess.TimeoutExpired("probe", 1)
+        old_replace = Path.replace
+        def interrupt_archive(path, target):
+            if str(target).endswith(".failed"):
+                raise KeyboardInterrupt()
+            return old_replace(path, target)
+        old_atomic = getattr(ablation, "_atomic_write_bytes", None)
+        def interrupt_atomic_archive(path, data):
+            if str(path).endswith(".failed"):
+                raise KeyboardInterrupt()
+            return old_atomic(path, data)
+        with patch.object(ablation.subprocess, "run", side_effect=run), \
+             patch.object(Path, "replace", interrupt_archive), \
+             patch.object(ablation, "_atomic_write_bytes", side_effect=interrupt_atomic_archive, create=True):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except KeyboardInterrupt:
+                pass
+        # 新碼會先透過 _atomic_write_text 寫 fatal，才呼叫 _atomic_write_bytes 歸檔；
+        # 舊碼會在 Path.replace 原結果時中斷。兩版都在歸檔處故障。
+        check("歸檔被中斷也須留下掃描得到的致命嘗試", bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              list(outdir.iterdir()))
 
 
 def t_delguard_logs_ok_too():
