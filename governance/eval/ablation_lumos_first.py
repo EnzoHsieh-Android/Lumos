@@ -74,6 +74,19 @@ def is_valid(r):
     return not r.get("limit_hit") and not str(r.get("reason", "")).startswith("儀器例外")
 
 
+def invalid_batch_evidence(d):
+    """新舊探針輸出的整批失效訊號；普通低有效場數的 inconclusive 不等於事故。"""
+    bad = d.get("skills_health_bad")
+    if bad:
+        return bad if isinstance(bad, list) else ["skills 健康欄位異常"]
+    rows = d.get("results")
+    if not isinstance(rows, list):
+        return ["結果檔缺少逐場資料，健康狀態不可判"]
+    if d.get("fatal") or any(isinstance(r, dict) and r.get("fatal") for r in rows):
+        return ["探針整批 fatal；健康或清理結果不可判"]
+    return []
+
+
 def load_results(out_dir):
     """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
     ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。
@@ -88,7 +101,7 @@ def load_results(out_dir):
             continue
         if not isinstance(d, dict):
             continue
-        if d.get("fatal"):
+        if invalid_batch_evidence(d):
             continue
         arm = d.get("arm") or p.name.split("-")[0]
         rows = d.get("results")
@@ -98,8 +111,8 @@ def load_results(out_dir):
 
 
 def collect_skills_health(out_dir):
-    """掃探針輸出的壞連結與 fatal 批次，回 [(檔名, [失效原因…])]。
-    健康檢查本身拋錯時 skills_health_bad 是空；fatal 仍須讓重讀者看見。"""
+    """掃探針輸出的整批失效訊號，回 [(檔名, [失效原因…])]。
+    健康檢查拋錯時壞連結欄是空；舊檔也可能只在逐場列上標 fatal。"""
     hits = []
     for p in sorted(Path(out_dir).glob("*.json")):
         if p.name in ("summary.json", "meta.json"):
@@ -107,13 +120,14 @@ def collect_skills_health(out_dir):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
+            hits.append((p.name, ["結果檔無法讀取，健康狀態不可判"]))
             continue
-        if isinstance(d, dict):
-            bad = d.get("skills_health_bad")
-            if bad:
-                hits.append((p.name, bad))
-            elif d.get("fatal"):
-                hits.append((p.name, ["探針整批 fatal；健康或清理結果不可判"]))
+        if not isinstance(d, dict):
+            hits.append((p.name, ["結果檔格式錯誤，健康狀態不可判"]))
+            continue
+        evidence = invalid_batch_evidence(d)
+        if evidence:
+            hits.append((p.name, evidence))
     return hits
 
 
@@ -162,15 +176,20 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
         lf.flush()
         r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
     bad_health = False
+    unreadable = False
     try:
         d = json.loads(out.read_text(encoding="utf-8"))
-        got = sum(1 for x in d.get("results", []) if is_valid(x))
-        lim = sum(1 for x in d.get("results", []) if x.get("limit_hit"))
-        bad_health = bool(d.get("skills_health_bad") or d.get("fatal"))
+        rows = d["results"]
+        if not isinstance(d, dict) or not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows):
+            raise ValueError("invalid probe output")
+        got = sum(1 for x in rows if is_valid(x))
+        lim = sum(1 for x in rows if x.get("limit_hit"))
+        bad_health = bool(invalid_batch_evidence(d))
     except Exception:
         got, lim = 0, 0
-    if r.returncode == 3 or bad_health:
-        # 探針回 3 或結果檔標了 skills 事故:設停止旗標,其餘 worker 與後續工作不再派(r1 併發席 F1)
+        unreadable = True
+    if r.returncode not in (0, 1) or bad_health or unreadable:
+        # 探針退出異常、結果檔不可讀或整批失效都設停止旗標，後續不再派工。
         if stop is not None:
             stop.set()
         return (arm, qid, f"★探針批次失效★ rc={r.returncode}——停止派工，檢查結果檔與探針日誌")
@@ -297,7 +316,9 @@ def main():
             "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
             "started": datetime.datetime.now().isoformat(timespec="seconds")}
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-    if not a.merge_only:
+    # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
+    poisoned = collect_skills_health(out_dir)
+    if not a.merge_only and not poisoned:
         by_arm = load_results(out_dir)
         jobs = []
         for qid in ids:                       # 逐題、兩組交錯:中途被殺兩組進度也對稱
@@ -333,7 +354,7 @@ def main():
     md = render_md(s, meta)
     (out_dir / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
-    return 0
+    return 3 if poisoned else 0
 
 
 if __name__ == "__main__":

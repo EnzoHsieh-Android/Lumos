@@ -37561,6 +37561,75 @@ def t_probe_boundary_review4_fatal_batch_not_reused():
               (loaded["with"], merged["arms"]["with"], poisoned))
 
 
+def t_probe_boundary_review4_legacy_poison_not_reused():
+    import tempfile, json, importlib.util
+    spec = importlib.util.spec_from_file_location("ablation_r4_legacy", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-legacy-") as td:
+        for name, extras in (("skills", {"skills_health_bad": [["broken", "/tmp/broken"]]}),
+                             ("rowfatal", {"inconclusive": True, "skills_health_bad": []})):
+            outdir = Path(td) / name; outdir.mkdir()
+            rows = [{"id": "a", "passed": True, "reason": "ok", "calls": [], "n_calls": 0}]
+            if name == "rowfatal":
+                rows.append({"id": "b", "passed": False, "reason": "儀器例外: cleanup", "fatal": True})
+            (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": rows, **extras}))
+            loaded = ablation.load_results(outdir)
+            merged = ablation.merge(outdir, ["a"], 1)
+            poisoned = ablation.collect_skills_health(outdir)
+            check("r4 舊schema事故檔排除 " + name, not loaded["with"]
+                  and ablation.needed(loaded, "with", "a", 1) == 1
+                  and merged["arms"]["with"]["n"] == 0 and bool(poisoned),
+                  (loaded["with"], merged["arms"]["with"], poisoned))
+
+
+def t_probe_boundary_review4_existing_poison_stops_dispatch():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_preflight", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-preflight-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+        outdir = root / "out"; outdir.mkdir()
+        (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "fatal": True,
+            "inconclusive": True, "results": [{"id": "a", "passed": True, "reason": "ok"}]}))
+        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation, "run_job", side_effect=lambda arm, qid, n, *_args: (arm, qid, "stub")) as runner, \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("r4 舊失效檔在補跑前就阻止新模型", runner.call_count == 0 and rc == 3
+              and summary["arms"]["with"]["n"] == 0 and summary["skills_health_poisoned"],
+              (runner.call_count, rc, summary))
+
+
+def t_probe_boundary_review4_partial_output_stops_batch():
+    import tempfile, json, threading, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_partial", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-partial-") as td:
+        for shape in ("missing", "partial", "valid"):
+            outdir = Path(td) / shape; outdir.mkdir(); stop = threading.Event()
+            def run(cmd, **_kwargs):
+                out = Path(cmd[cmd.index("--out") + 1])
+                if shape == "partial":
+                    out.write_text('{"results": [')
+                elif shape == "valid":
+                    out.write_text(json.dumps({"arm": "with", "results": [
+                        {"id": "a", "passed": False, "reason": "ordinary failure"}]}))
+                return type("Done", (), {"returncode": 1})()
+            with patch.object(ablation.subprocess, "run", side_effect=run):
+                status = ablation.run_job("with", "a", 1, [], 1, 1, outdir, 0, stop=stop)[2]
+            check("r4 缺檔半檔停批但有效失敗可續 " + shape,
+                  stop.is_set() is (shape != "valid"), (shape, status, stop.is_set()))
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j
