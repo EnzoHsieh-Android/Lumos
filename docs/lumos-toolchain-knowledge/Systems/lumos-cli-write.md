@@ -78,6 +78,7 @@ verified_by:
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
 about_code:
   - scripts/lumos
 ---

@@ -41,6 +41,7 @@ summary: |-
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1

@@ -54695,5 +54695,295 @@ def t_lens_stale_lock_reports_uncertainty():
               mark.call_count == 1 and mark.call_args.args[0] == "error", str(mark.call_args_list))
 
 
+def t_lens_warmer_cache_hit_releases_owned_lock():
+    """背景程序即使一進場就讀到快取，也要釋放派工端交給它的鎖。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+
+        out = _io.StringIO()
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value={"text": "cached"}), \
+                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+        result = _json.loads(out.getvalue())
+        check("背景快取命中前置:確實走到快取早退", rc == 0 and result.get("cache_hit") is True,
+              out.getvalue())
+        check("背景快取命中:清掉本次受託的鎖", not lock.exists(), str(lock))
+
+
+def t_lens_warmer_ref_move_keeps_lock_identity():
+    """符號 ref 移動後仍傳固定 SHA；同 PID 不同範圍及錯誤身份不得被清。"""
+    import os as _os
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    stable = "a" * 40 + ".." + "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        own = cache_dir / ("a" * 64 + ".json.warming")
+        other = cache_dir / ("b" * 64 + ".json.warming")
+        own.write_text("123\n0", encoding="utf-8")
+        other.write_text("123\n0", encoding="utf-8")
+        env = {"LUMOS_LENS_LOCK_OWNER": "123", "LUMOS_LENS_LOCK_NAME": own.name}
+
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0), \
+                _mock.patch.dict(_os.environ, env):
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: ""}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:一般呼叫不清鎖", own.exists(), str(own))
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "999"}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:PID 不符不清鎖", own.exists(), str(own))
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1"}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:同 PID 另一範圍不被清", not own.exists() and other.exists(),
+                  f"own={own.exists()} other={other.exists()}")
+
+        with _mock.patch("subprocess.Popen") as spawn, \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
+            rc = m._lens_wait_or_warm(home, own.with_suffix(""), "main~1..moving-ref", home,
+                                      True, 0, warm_range=stable)
+        argv = spawn.call_args.args[0] if spawn.call_args else []
+        child_env = spawn.call_args.kwargs.get("env", {}) if spawn.call_args else {}
+        check("鎖身份:派工後 ref 可移動但子程序使用固定 SHA 與原鎖名稱",
+              rc == 5 and len(argv) > 3 and argv[3] == stable and
+              child_env.get("LUMOS_LENS_LOCK_NAME") == own.with_suffix("").name + ".warming",
+              f"argv={argv} lock={child_env.get('LUMOS_LENS_LOCK_NAME')}")
+
+        import subprocess as _sp
+        base_sha, head_sha = stable.split("..")
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(home) + "\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"main~1": base_sha, "moving-ref": head_sha}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head_sha)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_wait_or_warm", return_value=5) as wait:
+            parent_rc = m.cmd_dispatch_lens("main~1..moving-ref", repo=str(home), deadline=1)
+        check("鎖身份:真正派工入口把已解析 SHA 交給背景等待段",
+              parent_rc == 5 and wait.call_args.kwargs.get("warm_range") == stable,
+              str(wait.call_args))
+
+
+def t_lens_cache_read_without_getuid():
+    """快取讀取沿用私有目錄的平台分支，POSIX 仍檢查擁有者與權限。"""
+    import json as _json
+    import os as _os
+    import types as _types
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cache.json"
+        p.write_text(_json.dumps({"text": "cached"}), encoding="utf-8")
+        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
+        with _mock.patch.object(m, "os", without_uid):
+            got = m._lens_cache_read(p)
+        check("Windows 分支:沒有 getuid 仍可讀合法快取", got == {"text": "cached"}, str(got))
+        if hasattr(_os, "getuid"):
+            with _mock.patch.object(m.os, "getuid", return_value=_os.getuid() + 1):
+                foreign = m._lens_cache_read(p)
+            p.chmod(0o666)
+            writable = m._lens_cache_read(p)
+            check("POSIX 分支:不信非自己擁有或他人可寫的快取",
+                  foreign is None and writable is None, f"foreign={foreign} writable={writable}")
+
+
+def t_lens_warmer_cache_ttl_retries():
+    """早退清鎖後，過期快取不能阻止下一次暖機取得同名鎖。"""
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        cpath = cache_dir / ("c" * 64 + ".json")
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name}
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.dict(_os.environ, env), \
+                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0):
+            m.cmd_dispatch_lens("a..b")
+        cpath.write_text('{"text":"old"}', encoding="utf-8")
+        old = _time.time() - 1300
+        _os.utime(cpath, (old, old))
+        with _mock.patch("subprocess.Popen") as spawn, \
+                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
+            rc = m._lens_wait_or_warm(home, cpath, "a..b", home, True, 0)
+        check("過期快取:舊鎖已清、下一次可取得鎖並派暖機",
+              rc == 5 and lock.exists() and spawn.call_count == 1,
+              f"rc={rc} lock={lock.exists()} spawn={spawn.call_count}")
+
+
+def t_lens_warmer_error_exit_releases_owned_lock():
+    """impact、JSON、base 樹失敗與未預期例外，都保留原錯誤並釋放背景鎖。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+
+        for case, expected in (("impact", 7), ("json", 2), ("base-tree", 2), ("exception", RuntimeError)):
+            lock.write_text("123\n0", encoding="utf-8")
+
+            def git(_root, *args, **_kw):
+                if args[:2] == ("rev-parse", "--show-toplevel"):
+                    return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+                if args and args[0] == "ls-tree":
+                    return _sp.CompletedProcess(args, 1, "", "")
+                return _sp.CompletedProcess(args, 0, "", "")
+
+            def impact(*_args, _case=case, **_kw):
+                if _case == "impact":
+                    return 7
+                if _case == "exception":
+                    raise RuntimeError("injected")
+                if _case == "base-tree":
+                    print(_json.dumps({"results": [], "files": []}))
+                return 0
+
+            out = _io.StringIO()
+            with _mock.patch.object(Path, "home", return_value=home), \
+                    _mock.patch.object(m, "_lens_git", side_effect=git), \
+                    _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                    _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                    _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                    _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                    _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                    _mock.patch.object(m, "cmd_impact_diff", side_effect=impact), \
+                    _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+                try:
+                    rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+                except RuntimeError:
+                    rc = RuntimeError
+            check(f"錯誤出口 {case}:原返回或例外保留且受託鎖已清",
+                  rc == expected and not lock.exists(), f"rc={rc} lock={lock.exists()}")
+
+
+def t_lens_warmer_cleanup_runs_once():
+    """清掉舊鎖後若同版新工作立即取得同名鎖，舊背景不可再清第二次。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+            if args and args[0] == "ls-tree":
+                return _sp.CompletedProcess(args, 0,
+                    "100644 blob abc\tdocs/lumos-toolchain-knowledge/MOC/index.md\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+
+        original_unlink = Path.unlink
+        removed = []
+        def replace_after_first_release(path, *args, **kwargs):
+            result = original_unlink(path, *args, **kwargs)
+            if path == lock:
+                removed.append(1)
+                if len(removed) == 1:
+                    lock.write_text("123\nnew", encoding="utf-8")
+            return result
+
+        out = _io.StringIO()
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(Path, "unlink", new=replace_after_first_release), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_write"), \
+                _mock.patch.object(m, "_lens_fallback", return_value=([], "none", {})), \
+                _mock.patch.object(m, "_platform_test_index", return_value=None), \
+                _mock.patch.object(m, "cmd_impact_diff", side_effect=lambda *_a, **_kw: (print(_json.dumps({"results": [], "files": []})) or 0)), \
+                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+        check("單一清理點:新同名鎖在第一次釋放後換入並存活",
+              rc == 0 and removed == [1] and lock.exists() and lock.read_text(encoding="utf-8") == "123\nnew",
+              f"rc={rc} removed={removed} lock={lock.exists()} output={out.getvalue()[:100]}")
+
+
 if __name__ == "__main__":
     sys.exit(main())
