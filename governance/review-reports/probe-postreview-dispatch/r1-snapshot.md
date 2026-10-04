@@ -39,7 +39,7 @@ Git 副本保留來源已有歷史及現行 `rsync` 複製範圍內的檔案內�
 
 設定隔離不再用逐項 `git remote remove`，因為來源 include 和切分支能讓已移除的值重新出現。白名單重建後讀有效 `git remote`、`core.hooksPath` 與設定來源，只有 remote 空、hook 等於本次專用目錄且沒有副本外來源設定才准啟動模型；驗收失敗刪副本、報儀器錯誤，不當模型失敗。此邊界只涵蓋繼承的 Git 設定及意外 `git push`，不宣稱封住模型主動指定 URL、停用 hook 或以其他網路工具外送；若題目要求對外送出，沿 [[Issues/探針沙盒能推到真遠端]] 的重驗入口，先取得外層隔離再跑。
 
-批次先建立一份凍結基線，只讓後續 `make_sandbox` 從它複製；來源在批次中改動不會改變同題重試的輸入。所有題目及重試改用各自副本，跑完在 `finally` 刪除；不再靠共用副本的 `checkout`/`clean` 回復。普通題與讀碼題由 `main` 共用同一套 attempt 生命週期及 `_remove_sandbox` 清理；舊讀碼專用 `_run_source_attempt` 刪除，讀碼標記僅作選配輸入，`SourceProbeCleanupError` 仍表示 fatal 清理錯誤。刪除回傳失敗為 fatal 儀器錯誤：當次不算有效分數、整批 inconclusive、退出碼 3、後續 runner 零呼叫；`--history` 及 JSON 同時保存 `inconclusive`、`fatal` 與有效分母。`--keep` 只保留最後一個已成功驗收的普通題嘗試副本並印其路徑，其他副本仍清理；讀碼題含一次性秘密標記，沿既有合約永不保留；建立失敗的副本一律刪除，凍結基線一律刪除。這裡的「一般單題模型例外仍可記錄後續跑」只指 `scenario_probe` 內題目模型作答失敗；不涵蓋消融外層子程序啟動失敗或逾時，後兩者照 S8 停批。
+批次先建立一份凍結基線，只讓後續 `make_sandbox` 從它複製；來源在批次中改動不會改變同題重試的輸入。所有題目及重試改用各自副本，跑完在 `finally` 刪除；不再靠共用副本的 `checkout`/`clean` 回復。普通題與讀碼題由 `main` 共用同一套 attempt 生命週期及 `_remove_sandbox` 清理；舊讀碼專用 `_run_source_attempt` 刪除，讀碼標記僅作選配輸入，`SourceProbeCleanupError` 仍表示 fatal 清理錯誤。刪除回傳失敗為 fatal 儀器錯誤：當次不算有效分數、整批 inconclusive、退出碼 3、後續 runner 零呼叫；`--history` 及 JSON 同時保存 `inconclusive`、`fatal` 與有效分母。`--keep` 只保留最後一個已成功驗收的普通題嘗試副本並印其路徑，其他副本仍清理；讀碼題含一次性秘密標記，沿既有合約永不保留；建立失敗的副本一律刪除，凍結基線一律刪除。一般單題模型例外仍可記錄後續跑，沿用現有語意。
 
 逐次副本只承諾 repo 檔案互不污染，Claude 真 HOME/skills 仍沿既有 runner；每次後執行現有全域 skills 健康檢查，檢出損壞立即停批、整批 inconclusive。無法由此證明其他全域檔案不受模型影響；下一次正式真模型探針若題目要求寫 HOME 或網路，需先取得外層隔離，重驗入口同 [[Issues/探針沙盒改動真全域機器狀態]]。模型 `--timeout` 僅限 runner 執行，副本建立與刪除卡住未在本次解決；若每週執行出現 setup/cleanup 卡住，入口為該次排程超時記錄，另補外層 watchdog，不能把那批算有效。
 
@@ -90,16 +90,11 @@ r1（2026-10-04，五主席加一架構席）：內部原報告共15條、blocki
 
 ## 第四輪後的派工邊界補強
 
-PRIOR-ART: Python 官方文件確認 `subprocess.run` 啟動可拋 `OSError`，但本呼叫未設定 outer timeout，故 `TimeoutExpired` 只作注入防回歸，不冒稱現行會逾時；`ThreadPoolExecutor` 即使用 `cancel_futures` 也不取消已執行的工作（https://docs.python.org/3/library/subprocess.html；https://docs.python.org/3/library/concurrent.futures.html）。比較可取消子程序與每次一個工作的派工：前者需跨程序取消、清理與結果協定；此輪採後者，先確保單次 CLI 執行事故後沒有第二個由本次啟動的模型在途，並用同一輸出目錄的跨進程鎖阻止另一個 CLI 同時派工。Python `fcntl.flock(LOCK_EX|LOCK_NB)` 可作本機互斥，取不到鎖明確退出；同檔案系統 `os.replace` 可原子替換失敗紀錄（https://docs.python.org/3/library/fcntl.html；https://docs.python.org/3/library/os.html#os.replace）。零新增相依。
+PRIOR-ART: Python 官方文件確認 `subprocess.run` 啟動可拋 `OSError`，但本呼叫未設定 outer timeout，故 `TimeoutExpired` 只作注入防回歸，不冒稱現行會逾時；`ThreadPoolExecutor` 即使用 `cancel_futures` 也不取消已執行的工作（https://docs.python.org/3/library/subprocess.html；https://docs.python.org/3/library/concurrent.futures.html）。比較可取消子程序與每次一個工作的派工：前者需跨程序取消、清理與結果協定；此輪採後者，先確保同一消融批次內事故後沒有第二個由本批次啟動的模型在途，`--workers 2` 明確拒絕而不暗中降速。零新增相依。
 
-RETIRE-IF: 若已用兩工作競速故障注入證明可取消 runner 在任一工作報事故後能結束所有在途子程序，且後續模型動作為零、summary 仍標失效，才恢復多路派工；入口是下次要求提高 `--workers` 吞吐量或修改 `run_job` 的子程序生命週期。跨進程鎖只有在外層提供同輸出目錄的可驗證獨占租約時才能撤，入口為批次編排器變更；撤除前保留同等反例。
+RETIRE-IF: 若已用兩工作競速故障注入證明可取消 runner 在任一工作報事故後能結束所有在途子程序，且後續模型動作為零、summary 仍標失效，才恢復多路派工；入口是下次要求提高 `--workers` 吞吐量或修改 `run_job` 的子程序生命週期。撤除單路限制前保留同等反例。
 
-- [S8] 當探針子程序啟動丟 `OSError`，或將來加 outer timeout 後丟 `TimeoutExpired`，整批應停止下一題、留下失效 summary 並退出 3；每次失敗要留下不能被下次 summary 覆蓋的 fatal 逐題紀錄，若已寫出看似有效的結果要先隔離原檔再以 fatal 紀錄取代，使下次補跑／純合併在人工處置前仍辨認事故。紀錄需含例外類型、arm、qid、log 路徑與「先歸檔 fatal 紀錄再重跑」處置；未清洗的例外訊息只寫本次 log，不把它、完整命令或秘密放進 summary。[test: t_probe_boundary_postreview_launch_exception_summary]
-- [S9] 當任一工作將批次停止旗標設為 true（探針異常退出、失效或結果不可判），派工器應阻止後續工作進入 `run_job`；live 派工在建立輸出目錄或改寫 meta/summary 前僅接受 `--workers == 1`，省略參數時預設 1，0／負數／大於 1 明確拒絕並更新 usage/help。純 `--merge-only` 不派模型，保留原參數相容。[test: t_probe_boundary_postreview_serial_dispatch]
-- [S10] 當兩個 CLI 指向同一輸出目錄時，只准先取得本機獨占鎖者派工或合併；另一個應在改寫 meta/summary 前退出 3、不覆蓋既有結果；第一個正常或異常退出後鎖可釋放。[test: t_probe_boundary_postreview_cross_process_lock]
+- [S8] 當探針子程序啟動丟 `OSError`，或將來加 outer timeout 後丟 `TimeoutExpired`，整批應停止下一題、留下失效 summary 並退出 3；不能讓例外略過批次收尾。[test: t_probe_boundary_postreview_launch_exception_summary]
+- [S9] 當任一工作將批次停止旗標設為 true（探針異常退出、失效或結果不可判），後續工作不得進入 `run_job`；缺可取消 runner 時 `--workers > 1` 應在模型派工前明確拒絕，預設僅開一路。[test: t_probe_boundary_postreview_serial_dispatch]
 
-回退：若此補強出現誤擋，保留逐題 fatal 紀錄、失效摘要與上述紅燈反例；可以調整 CLI 文案，但 live 預設仍為 1，不得重開並行模型派工，直到 S9 的競速反例以可取消 runner 通過。若鎖取得失敗，不得以忽略鎖來恢復服務；先確認另一個進程是否仍持有並保留其結果。真模型批次前再查 [[Issues/探針批次停止後的剩餘工作與落檔邊界]] 的落檔觸發條件。
-
-設計審 r1（2026-10-04，五席加架構對齊）：九條原 finding 去重為跨進程互斥、失敗嘗試持久紀錄、CLI 範圍與預設、最小診斷四組；blocking 五條均折入 S8–S10，minor 四條隨同折入，無接受風險。首輪報告與前掃見 `governance/review-reports/probe-postreview-dispatch/r1-*`。下一步先讓新增反例翻紅，再實作；正式處置閘與凍結回放尚待卷證留帳。
-
-處置閘已 PASS；其後獨立鏡像核對發現 S9 漏明寫「拒絕前不建立目錄」、S8 漏診斷訊息/處置、CLI usage/help 及舊段模型例外適用範圍，已依原席 finding 補回；`r1-plan-at-record.md` 保存留帳當下的原文，不事後改寫帳面雜湊。這是審後文字修整，後續仍以新增測試與代碼審查驗最終行為。
+回退：若此補強出現誤擋，保留失效摘要與上述紅燈反例；可以恢復舊 CLI 顯示，但不得重開並行模型派工，直到 S9 的競速反例以可取消 runner 通過。真模型批次前再查 [[Issues/探針批次停止後的剩餘工作與落檔邊界]] 的落檔觸發條件。

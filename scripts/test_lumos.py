@@ -37658,6 +37658,156 @@ def t_probe_boundary_review4_missing_output_main():
               and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
 
 
+def t_probe_boundary_postreview_launch_exception_summary():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_launch_failure", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    for failure in (FileNotFoundError("probe interpreter missing"),
+                    ablation.subprocess.TimeoutExpired("probe", 1)):
+        with tempfile.TemporaryDirectory(prefix="probe-launch-failure-") as td:
+            root = Path(td); q = root / "q.jsonl"
+            q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+            outdir = root / "out"; launched = []
+            argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+                    "--arms", "with", "--out-dir", str(outdir)]
+            def run(cmd, **_kwargs):
+                if cmd == ["claude", "--version"]:
+                    return type("Version", (), {"stdout": "stub"})()
+                launched.append(cmd)
+                if isinstance(failure, ablation.subprocess.TimeoutExpired):
+                    Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                        "arm": "with", "results": [{"id": "a", "passed": True, "reason": "ok"}],
+                        "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+                raise failure
+            rc = None
+            with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    rc = ablation.main()
+                except type(failure):
+                    pass
+            summary = json.loads((outdir / "summary.json").read_text()) if (outdir / "summary.json").exists() else {}
+            attempts = list(outdir.glob("with-q-*.json"))
+            attempt = json.loads(attempts[0].read_text()) if len(attempts) == 1 else {}
+            check("探針啟動例外須留失效摘要並停下一題 " + type(failure).__name__,
+                  len(launched) == 1 and rc == 3 and bool(summary.get("skills_health_poisoned"))
+                  and attempt.get("fatal") is True and attempt.get("results") == []
+                  and attempt.get("failure_type") == type(failure).__name__
+                  and attempt.get("arm") == "with" and attempt.get("qid") == "a"
+                  and attempt.get("log_path") and attempt.get("retry_policy") == "archive-fatal-then-rerun"
+                  and "cmd" not in attempt and "failure_message" not in attempt,
+                  (type(failure).__name__, len(launched), rc, summary, attempt))
+            with patch.object(ablation.sys, "argv", argv + ["--merge-only"]), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                merge_rc = ablation.main()
+            merged = json.loads((outdir / "summary.json").read_text())
+            check("失敗嘗試在下次純合併仍不可採信 " + type(failure).__name__,
+                  merge_rc == 3 and bool(merged["skills_health_poisoned"])
+                  and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+                  (merge_rc, merged))
+
+
+def t_probe_boundary_postreview_serial_dispatch():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_serial", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-serial-dispatch-") as td:
+        root = Path(td); q = root / "q.jsonl"
+        q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+        outdir = root / "out"; calls = []
+        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        def runner(arm, qid, n, files, timeout, max_turns, output, wait_on_limit, model, max_per_window, stop):
+            calls.append(qid)
+            stop.set()
+            return (arm, qid, "stub failure")
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation, "run_job", side_effect=runner), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("事故後不得再啟動下一個工作", calls == ["a"] and rc == 3
+              and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
+    with tempfile.TemporaryDirectory(prefix="probe-parallel-reject-") as td:
+        q = Path(td) / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        for value in ("0", "-1", "2"):
+            outdir = Path(td) / ("out-" + value)
+            argv = ["ablation", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
+            rejected = False
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    ablation.main()
+                except (SystemExit, ValueError) as exc:
+                    rejected = isinstance(exc, SystemExit) and exc.code == 2
+            check("live 派工拒絕無效 workers 且不改寫目錄 " + value,
+                  rejected and runner.call_count == 0 and not outdir.exists(),
+                  (value, rejected, runner.call_count, outdir.exists()))
+        outdir = Path(td) / "merge"; argv = ["ablation", "--questions", str(q),
+            "--workers", "2", "--merge-only", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+             contextlib.redirect_stdout(io.StringIO()):
+            merge_rc = ablation.main()
+        check("純合併不因 workers 舊參數誤擋", merge_rc == 0 and runner.call_count == 0,
+              (merge_rc, runner.call_count))
+        default_out = Path(td) / "default"
+        default_argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+                        "--out-dir", str(default_out)]
+        with patch.object(ablation.sys, "argv", default_argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             patch.object(ablation, "run_job", return_value=("with", "a", "stub")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            ablation.main()
+        meta = json.loads((default_out / "meta.json").read_text())
+        check("省略 workers 時預設單路", meta["workers"] == 1, meta)
+
+
+def t_probe_boundary_postreview_cross_process_lock():
+    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_process_lock", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-process-lock-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        old_meta = b'{"old":"meta"}'; old_summary = b'{"old":"summary"}'
+        (outdir / "meta.json").write_bytes(old_meta); (outdir / "summary.json").write_bytes(old_summary)
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                ready.set(); release.wait(10)
+        child = multiprocessing.get_context("fork").Process(target=hold_lock)
+        child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--questions", str(q), "--workers", "1", "--arms", "with",
+                    "--runs", "1", "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("另一進程持有批次鎖時拒絕派工且不覆寫舊摘要", held and rc == 3
+                  and runner.call_count == 0 and (outdir / "meta.json").read_bytes() == old_meta
+                  and (outdir / "summary.json").read_bytes() == old_summary,
+                  (held, rc, runner.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j
