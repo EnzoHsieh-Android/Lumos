@@ -54636,6 +54636,20 @@ def t_lens_stale_lock_reports_uncertainty():
               cached_rc == 0 and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
               f"rc={cached_rc} lock={lock.read_text() if lock.exists() else 'missing'}")
 
+        lock.unlink()
+        replacement = {"acquired": False}
+        def cache_after_failed_spawn(_path):
+            replacement["acquired"] = m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC)
+            return {"text": "ready"}
+        switched = _io.StringIO()
+        with _mock.patch("subprocess.Popen", side_effect=OSError("spawn failed")), \
+                _mock.patch.object(m, "_lens_cache_read", side_effect=cache_after_failed_spawn), \
+                _ctx.redirect_stdout(switched):
+            switched_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
+        check("過期鎖 S5:啟動失敗後新持有者的鎖不能被舊等待端刪除",
+              switched_rc == 0 and replacement["acquired"] is True and lock.exists(),
+              f"rc={switched_rc} acquired={replacement['acquired']} lock={lock.exists()}")
+
         hook = _load_hook_mod("stale_lens_hook", "dispatch-lens-hook.py")
         response = type("Response", (), {"returncode": 5, "stdout": _json.dumps(result), "stderr": ""})()
         payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}

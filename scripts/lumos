@@ -33880,7 +33880,7 @@ def _excl_lock_try(lock, stale_sec):
         raise
 
 
-def _lens_lock_timeout(lock, diff_range, as_json):
+def _lens_report_lock_timeout(lock, diff_range, as_json):
     """鎖可能是背景工作，也可能是殘留；超時只回可查證的狀態。"""
     import json as _j2, time as _t
     try:
@@ -33966,18 +33966,14 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     while _t.monotonic() < end:
         got = _lens_cache_read(cpath)
         if got is not None:
-            # 已存在的鎖可能屬於別人；快取命中不代表我能替持有者刪鎖。
-            if not already:
-                try:
-                    lock.unlink()
-                except OSError:
-                    pass
+            # 等待端只讀快取:即使起初搶到鎖,啟動失敗後也可能被別人換入新鎖。
+            # 正常背景工作會核對啟動者再清自己的鎖;等待端不能按舊取得狀態刪路徑。
             got["cache_hit"] = True
             print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
             return 0
         _t.sleep(0.1)
     # ★非 JSON 模式也要講人話★:第一版只印空行,手動敲時完全不知下一步。
-    return _lens_lock_timeout(lock, diff_range, as_json)
+    return _lens_report_lock_timeout(lock, diff_range, as_json)
 
 
 def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None, role_cards=False):
