@@ -24531,6 +24531,43 @@ def t_loop_next_disposal_cmd_actually_runs():
           f"rc={rg.returncode} {rg.stderr[:200]}")
 
 
+def t_loop_next_spec_uses_disposal_gate_for_new_loops():
+    """loop next 帶 --spec 時代問的閘:2026-08-25 之後開的新編號問處置閘,不走已退役的 panel 閘
+    (Issues/loop-next帶spec誤走退役panel閘:原本照 lumos-code-loop 手冊第 1 步帶 --spec 必被「panel 閘僅供舊迴圈回放」擋 rc2);
+    舊編號(退役日之前定錨)照舊走 panel 閘回放。"""
+    import json as _j
+    import os as _os
+    v = mkvault()
+    spec = v / "Projects" / "nxspec.md"
+    spec.write_text("nx spec\n規則甲:這是一段足夠長的內容當引句。\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    rpt = v / "Projects" / "nxrpt.md"
+    rpt.write_text("severity: minor\n## F1 甲\nseverity: minor\n引句：「規則甲:這是一段足夠長的內容當引句。」\n", encoding="utf-8")
+    lid = f"nx-{_M1U}"
+    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "正確性-s", "--severity", "minor",
+        "--findings", "1", "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none",
+        "--report", str(rpt), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
+        "--tier", "standard", "--orchestrator", "claude", "--scope-lines", "10", expect_rc=0)
+    # 測試總檔開頭把退役日凍在 9999(所有編號都算舊迴圈),這個 bug 因此一直沒被全套抓到;新迴圈要自己把退役日拉到過去
+    env_new = dict(_os.environ, LUMOS_PANEL_RETIRE_CUTOFF="2000-01-01")
+    r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "next", lid, "--spec", str(spec),
+                        "--repo", str(v.parent), "--json"], capture_output=True, text=True, env=env_new)
+    check("★新編號帶 --spec 不被退役的 panel 閘擋(rc0、沒有 panel 閘字樣)★",
+          r.returncode == 0 and "panel 閘" not in r.stderr, f"rc={r.returncode} {r.stderr[:300]} OUT={r.stdout[:300]}")
+    d = _j.loads(r.stdout) if r.returncode == 0 else {}
+    check("★處置閘判過 → phase=converged★", d.get("phase") == "converged", str(d)[:300])
+    rpt.write_text("severity: major\n## F1 甲\nseverity: major\n引句：「規則甲:這是一段足夠長的內容當引句。」\n", encoding="utf-8")
+    for _ in range(2):   # 報告改得比帳面高 → 處置閘會想記一筆席位異常;loop next 是唯讀指針,不准落檔
+        subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "next", lid, "--spec", str(spec),
+                        "--repo", str(v.parent), "--json"], capture_output=True, text=True, env=env_new)
+    logs = list(Path(v.parent).rglob("roster-alerts.log"))
+    check("★loop next 代問處置閘是唯讀:跑兩次也不寫席位異常紀錄★", not logs, str(logs))
+    r2 = run(v, "loop", "next", lid, "--spec", str(spec), "--repo", str(v.parent), "--json")   # 總檔預設:舊迴圈
+    d2 = _j.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+    check("舊編號(退役日之前)照舊走 panel 閘回放:不拿處置閘當收斂依據", r2.returncode != 2
+          and d2.get("phase") != "converged", f"rc={r2.returncode} {str(d2)[:200]} {r2.stderr[:200]}")
+
+
 def t_disposal_loop_requires_provenance():
     """[T6 收緊](plan:design-loop重設計_實作計畫 T6)
 

@@ -11447,7 +11447,7 @@ def cmd_loop_escape_stats(env, as_json=False):
     return 0
 
 
-def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False):
+def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False, readonly=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -11535,7 +11535,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
-                                     bad_linenos=bad_linenos, env=env, roster=roster, repo=repo)
+                                     bad_linenos=bad_linenos, env=env, roster=roster, repo=repo, readonly=readonly)
     if not panel and n_round > 0:
         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
@@ -13220,15 +13220,26 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"
                                              "(帳上也沒記這個迴圈在審什麼,要自己找)"})
     # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
+    # ★新迴圈問處置閘,不問 panel 閘★(Issues/loop-next帶spec誤走退役panel閘):panel 閘 2026-08-25 退役後
+    # 只供舊迴圈回放,新編號問它一定 rc2——lumos-code-loop 手冊第 1 步教的 `loop next … --spec` 因此照做必擋。
+    # 判法與 panel 閘自己拒判的那支同一支(_panel_retired_for),兩邊不會對「新舊」有不同意見。
+    disposal = panel_fmt and not light and _panel_retired_for(rounds)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-        rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
-                             spec=spec, repo=repo, panel=(panel_fmt and not light),
-                             light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+        if disposal:   # 處置閘是獨立的一套,不收 need/min-seats(那是 panel 閘的參數)
+            # readonly:loop next 是唯讀指針,代問不准順手寫席位異常紀錄,重跑才不會灌水(代碼審 r1 正確性席)
+            rc = cmd_loop_status(env, loop_id, spec=spec, repo=repo, disposal=True, readonly=True)
+        else:
+            rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
+                                 spec=spec, repo=repo, panel=(panel_fmt and not light),
+                                 light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
     if rc == 2:
         sys.stderr.write(buf.getvalue())
         return 2
     if rc == 0:
+        if disposal:
+            _loop_gov_mark(env, loop_id, "converged", "loop next 判處置閘通過")
+            return emit("converged", {"gate_basis": "處置閘通過(每個發現都折入或附理由放行、留痕可重算、引句錨定)"})
         _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
         return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
     # ③ cap(資訊充分且未 PASS)
