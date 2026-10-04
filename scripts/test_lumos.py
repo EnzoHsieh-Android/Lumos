@@ -16288,6 +16288,25 @@ def t_hook_inner_timeout_always_below_outer():
 
 
 
+def _lens_smallest_commit(repo, ref, depth=30):
+    """ref 最近 depth 個非合併、而且有父提交的提交裡,改動行數最少的那個(同分取較新的);沒有回 ""。
+    二進位檔的增減在 numstat 是「-」,當 0 算。"""
+    import subprocess as _sp
+    r = _sp.run(["git", "-C", str(repo), "log", "--no-merges", f"-n{depth}", "--numstat",
+                 "--format=@%H %P", ref], capture_output=True, text=True)
+    best, best_n, cur, n = "", None, "", 0
+    for line in r.stdout.splitlines() + ["@"]:
+        if line.startswith("@"):
+            if cur and (best_n is None or n < best_n):
+                best, best_n = cur, n
+            parts = line[1:].split()
+            cur, n = (parts[0] if len(parts) >= 2 else ""), 0
+        elif line.strip():
+            added, deleted = (line.split("\t") + ["", ""])[:2]
+            n += sum(int(x) for x in (added, deleted) if x.isdigit())
+    return best
+
+
 def t_lens_timeout_keeps_warming_cache():
     """★鏡頭超時不殺子行程,讓它跑完把快取寫好——而且這段邏輯住在 lumos 不住 hook★
     (2026-09-07 全 repo 審視 #14;代碼審 r1 架構席把它從 hook 搬進 lumos)。
@@ -16334,8 +16353,12 @@ def t_lens_timeout_keeps_warming_cache():
             break
     if ml is None:
         raise _SrcOnly("這個 clone 找不到主線分支(main/master),測不到這條路")
-    base = sha(ml + "~1")
-    head = sha(ml)
+    # ★不能直接拿主線 tip 與 tip~1★(2026-10-04 CI 假紅):PR 用一般合併併進去時 tip 是合併提交,
+    # tip~1 是合併前的主線,兩端之間隔著整個 PR(那次 6279 行),背景算不完 60 秒的等待就判紅
+    # ——又回到「拿範圍大小當開關」。改成在主線最近 30 個非合併提交裡挑改動最小的那個 X,
+    # 範圍取 X~1..X:兩端都是主線 tip 的祖先(鏡頭只問祖先關係),範圍又一定只有一個提交。
+    head = _lens_smallest_commit(repo, ml)
+    base = sha(head + "~1") if head else ""
     if not base or not head:
         raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
     # ★快取位置要跟 lumos 算得一模一樣★(2026-09-14 推送前全套測試假紅):本機有這個分支的
