@@ -42,6 +42,8 @@ verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+  - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+  - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -92,3 +94,19 @@ related:
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
+
+## 2026-10-05 背景啟動錯誤的派工提示
+
+[[Projects/背景啟動失敗即時回報_計劃]] 對同步啟動失敗新增獨立於逾時與建鎖錯誤的提示，是因為三者要求不同的人工處置；尤其不能讓事件帳把明確的啟動失敗算成 timeout 或成功。提示只說「本次背景未啟動」，同名鎖可能已被另一工作接手；原始例外不進派工詞，角色卡仍可附上。t_dispatch_lens_hook_spawn_error_notice 與 t_lens_stale_lock_reports_uncertainty 分別驗新舊分類。
+
+安裝邊界：hook 以複製檔安裝，全域 lumos 可指向較新的來源。舊 hook 對新 CLI 的 spawn_error 無對應分流，可能只附角色卡且不記事件；因此實際安裝的前案 S6 必須核對兩者成對更新，未做該驗證前不能聲稱使用者環境已修好。
+
+
+## 2026-10-05 整段審查抓出的快取與期限邊界
+
+PITFALL:整段代碼審 r1 的正確性席以無 `getuid` 故障注入證明：只檢快取檔 owner 的平台分支，會讓外部目錄連結中的文字進入派工詞。讀取端必須先沿用私有目錄的路徑信任判準，並拒絕檔案連結與非文字結果；來源見 `governance/review-reports/code-過期鎖收斂修復/r1-single-reviewer.md`，防回歸 `t_lens_cache_read_rejects_untrusted_path_without_getuid`。這是審查中實際重現的缺口，不把局部綠燈當整體可信。
+
+PITFALL:同席的期限末注入證明：最後一次輪詢後、期限前快取已完成且鎖已清，若直接分類逾時會誤記 lock_uncertain 並叫人檢查已不存在的鎖。來源同上；防回歸 `t_lens_deadline_final_cache_read`。期限到點仍須最後讀一次結果，然後才判鎖狀態。
+
+
+PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻仍沿該目錄建立暖機鎖，會在外部目標留下無法由背景工作清除的鎖，後續呼叫反覆逾時。整段審查 r2 正確性席已在無 `getuid` 故障注入重現首、次呼叫皆 rc5 且只啟動一次；來源 `governance/review-reports/code-過期鎖收斂修復/r2-single-reviewer.md`。防回歸 `t_lens_untrusted_cache_never_creates_external_lock` 驗拒絕外部路徑與零新背景程序，`t_lens_trusted_cache_still_spawns_warmer` 驗合法私有目錄仍能暖機；兩面要一起守。

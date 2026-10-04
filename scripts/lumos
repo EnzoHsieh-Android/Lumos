@@ -18877,7 +18877,8 @@ def _confirm_tty(prompt):
     except ValueError:
         timeout = 30.0
     try:
-        fd = os.open(tty_path, os.O_RDWR)
+        # session leader 開測試 pty 時不可把它收作控制終端；關閉 master 否則會送 SIGHUP。
+        fd = os.open(tty_path, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
     except OSError:
         return None
     try:
@@ -33133,15 +33134,20 @@ def _lens_cache_path(repo_root, base_sha, head_sha, extra=""):
 
 
 def _lens_cache_read(path, ttl_sec=1200):
-    """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
+    """只讀私有快取目錄的普通檔；POSIX 加驗 owner/權限，並限制 TTL 與結果形狀。"""
     import json as _json, stat as _stat, time as _time
     try:
+        if not _trusted_private_dir(path.parent, ".cache", "lumos", "dispatch-lens") or path.is_symlink():
+            return None
         st = path.stat()
+        if not _stat.S_ISREG(st.st_mode):
+            return None
         if hasattr(os, "getuid") and (st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))):
             return None
         if _time.time() - st.st_mtime > ttl_sec:
             return None
-        return _json.loads(path.read_text(encoding="utf-8"))
+        got = _json.loads(path.read_text(encoding="utf-8"))
+        return got if isinstance(got, dict) and isinstance(got.get("text"), str) else None
     except (OSError, ValueError):
         return None
 
@@ -33836,7 +33842,13 @@ _LENS_WARM_ENV = "LUMOS_LENS_WARMING"
 _LENS_LOCK_STALE_SEC = 900
 
 
-def _excl_lock_try(lock, stale_sec):
+def _excl_lock_record_identity(identity_out, identity):
+    """把建鎖時 fstat 的身份交給需要安全清理的呼叫端。"""
+    if identity_out is not None:
+        identity_out[:] = [identity]
+
+
+def _excl_lock_try(lock, stale_sec, identity_out=None):
     """獨佔建鎖檔:取得回 True,鎖已存在回 False,其他建檔錯誤向外拋。
 
     筆記庫與派工鏡頭共用。舊版按 mtime 判過期後 rename 的接手會發生 ABA:
@@ -33862,6 +33874,7 @@ def _excl_lock_try(lock, stale_sec):
             data = data[n:]
         closed = True                  # close 若報錯,不得重試不確定是否已關的 fd
         os.close(fd)
+        _excl_lock_record_identity(identity_out, identity)  # 同一個 fd,不事後按路徑猜
         return True
     except OSError:
         if not closed:
@@ -33903,8 +33916,8 @@ def _lens_report_lock_timeout(lock, diff_range, as_json):
     return 5
 
 
-def _lens_spawn_warmer(lock, diff_range, repo):
-    """鎖由本次取得時啟動背景計算；啟動失敗只清本次取得的鎖。"""
+def _lens_spawn_warmer(lock, diff_range, repo, owned_identity):
+    """回 (啟動失敗,清鎖失敗);只清建鎖當下那一個 inode。"""
     import subprocess as _sp
     argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
             "--json"] + (["--repo", str(repo)] if repo else [])
@@ -33920,9 +33933,60 @@ def _lens_spawn_warmer(lock, diff_range, repo):
         _sp.Popen(argv, env=env, **kw)
     except OSError:
         try:
-            lock.unlink()
+            now = lock.lstat()
+            if (now.st_dev, now.st_ino) == owned_identity:
+                lock.unlink()
+        except FileNotFoundError:
+            pass  # 本次鎖已被移除,不碰後來取得同名路徑的持有者。
         except OSError:
-            pass
+            return True, True
+        return True, False
+    return False, False
+
+
+def _lens_emit_cache_hit(got, as_json):
+    import json as _j2
+    got["cache_hit"] = True
+    print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
+
+
+def _lens_report_spawn_error(lock, diff_range, as_json, cleanup_error):
+    """只報本次啟動失敗；同名鎖可能仍在或由別人接手。"""
+    import json as _j2
+    if as_json:
+        row = {"spawn_error": True, "lock_path": str(lock), "range": diff_range}
+        if cleanup_error:
+            row["lock_cleanup_error"] = True
+        print(_j2.dumps(row, ensure_ascii=False))
+    else:
+        print(f"本次背景未啟動({diff_range});請檢查鎖 {lock}。"
+              "同名鎖可能仍在或已由其他工作持有,不能直接刪。")
+        if cleanup_error:
+            print("本次鎖清理失敗;請檢查鎖位置與檔案權限。")
+    return 2
+
+
+def _lens_warm_dir_ready(cpath):
+    """建立鎖前驗同一私有快取目錄；不可信時不沿路徑建立背景鎖。"""
+    return (_mkdir_trusted_under_home(".cache", "lumos", "dispatch-lens")
+            and _trusted_private_dir(cpath.parent, ".cache", "lumos", "dispatch-lens"))
+
+
+def _lens_take_warm_lock(cpath, lock, diff_range, as_json, owned_identity):
+    """回是否已有鎖；建鎖失敗時回 None 並報錯。"""
+    import json as _j2
+    try:
+        # 讀端拒絕的目錄不能由等待端繼續建鎖，否則會在外部連結目標留鎖。
+        if not _lens_warm_dir_ready(cpath):
+            raise PermissionError("派工快取目錄不可信")
+        return not _excl_lock_try(lock, _LENS_LOCK_STALE_SEC, identity_out=owned_identity)
+    except OSError as exc:
+        if as_json:
+            print(_j2.dumps({"lock_error": True, "lock_path": str(lock), "range": diff_range,
+                             "reason": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"鎖無法建立({lock}):{exc}。請檢查鎖位置與檔案權限。")
+        return None
 
 
 def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline, warm_range=None):
@@ -33938,28 +34002,27 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline, warm_ra
     ★同範圍只讓一個在算★:用一個帶行程編號的鎖檔,已經有人在算就不再派第二個
     (並行派工時 N 席同時進來,不加這道會派出 N 個算同一件事的行程)。
     """
-    import time as _t, json as _j2
+    import time as _t
 
     # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
     # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
     lock = cpath.with_name(cpath.name + ".warming")
 
-    def _take_lock():
-        """搶到鎖回 True(該由我派工),已存在回 False(工作可能仍在算或鎖已殘留)。"""
-        return _excl_lock_try(lock, _LENS_LOCK_STALE_SEC)
-
-    try:
-        already = not _take_lock()
-    except OSError as exc:
-        if as_json:
-            print(_j2.dumps({"lock_error": True, "lock_path": str(lock), "range": diff_range,
-                             "reason": str(exc)}, ensure_ascii=False))
-        else:
-            print(f"鎖無法建立({lock}):{exc}。請檢查鎖位置與檔案權限。")
+    owned_identity = []
+    already = _lens_take_warm_lock(cpath, lock, diff_range, as_json, owned_identity)
+    if already is None:
         return 2
 
     if not already:
-        _lens_spawn_warmer(lock, warm_range or diff_range, repo)
+        spawn_error, cleanup_error = _lens_spawn_warmer(
+            lock, warm_range or diff_range, repo, owned_identity[0])
+        if spawn_error:
+            if not cleanup_error:
+                got = _lens_cache_read(cpath)
+                if got is not None:
+                    _lens_emit_cache_hit(got, as_json)
+                    return 0
+            return _lens_report_spawn_error(lock, diff_range, as_json, cleanup_error)
 
     # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
     # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
@@ -33969,10 +34032,14 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline, warm_ra
         if got is not None:
             # 等待端只讀快取:即使起初搶到鎖,啟動失敗後也可能被別人換入新鎖。
             # 正常背景工作會核對啟動者再清自己的鎖;等待端不能按舊取得狀態刪路徑。
-            got["cache_hit"] = True
-            print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
+            _lens_emit_cache_hit(got, as_json)
             return 0
         _t.sleep(0.1)
+    # 最後一次睡眠期間若已產出快取，先採用結果，才分類鎖的逾時狀態。
+    got = _lens_cache_read(cpath)
+    if got is not None:
+        _lens_emit_cache_hit(got, as_json)
+        return 0
     # ★非 JSON 模式也要講人話★:第一版只印空行,手動敲時完全不知下一步。
     return _lens_report_lock_timeout(lock, diff_range, as_json)
 

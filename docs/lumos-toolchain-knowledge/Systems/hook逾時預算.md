@@ -28,6 +28,7 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+  - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
 ---
 # hook逾時預算
 

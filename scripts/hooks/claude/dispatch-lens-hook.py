@@ -10,7 +10,7 @@ Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<he
 ②subprocess 叫 `lumos dispatch-lens` ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理);
 lumos 失敗時回傳裡若有角色段(role_text)照附。
 其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
-永不 deny、永不改 permissionDecision;失敗一律放行。★2026-09-05 起超時不再靜默★:附一行固定超時句進派工詞(Codex 走 additionalContext);其他失敗仍靜默(LUMOS_HOOK_DEBUG=1 才印 stderr)。
+永不 deny、永不改 permissionDecision;失敗一律放行。超時、建鎖錯誤與本次背景啟動失敗各附固定說明並記事件；其他失敗仍可在 LUMOS_HOOK_DEBUG=1 看 stderr。
 本檔在 ANCHOR_FILES 內:改它要 `lumos anchor approve --note`。
 """
 from __future__ import annotations
@@ -43,6 +43,9 @@ LOCK_UNCERTAIN_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what});�
                        "照派工詞審查即可。")
 LOCK_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;鎖無法建立({lock}),"
                    "請檢查鎖位置與檔案權限。照派工詞審查即可。")
+SPAWN_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;本次背景未啟動。"
+                    "同名鎖可能仍在或已由其他工作持有,請檢查鎖 {lock}。"
+                    "照派工詞審查即可。")
 
 # ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
 # 超時說明原本在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
@@ -360,6 +363,19 @@ def main() -> int:
         except (ValueError, IndexError):
             pass
     lock_path = str(lock_status.get("lock_path", ""))[:300].replace("\n", " ").replace("\r", " ")
+    if lock_status.get("spawn_error") is True:
+        _role = _role_text(r)
+        _emit_updated(tool_input, prompt, SPAWN_ERROR_NOTE.format(lock=lock_path)
+                      + ("\n\n" + _role if _role else ""))
+        _debug("lumos dispatch-lens 本次背景未啟動,已附錯誤說明")
+        try:
+            import sys as _s2, pathlib as _p2
+            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
+            from _hookevent import mark as _mark
+            _mark("error", "lumos dispatch-lens 本次背景未啟動,附了說明行")
+        except Exception:
+            pass
+        return 0
     if lock_status.get("lock_error") is True:
         _role = _role_text(r)
         _emit_updated(tool_input, prompt, LOCK_ERROR_NOTE.format(lock=lock_path)
