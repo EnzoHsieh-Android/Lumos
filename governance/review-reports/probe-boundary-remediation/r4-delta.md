@@ -1,3 +1,4 @@
+severity: major
 # r4 全新差異席原報告
 
 快照核對：`r4-postfix-snapshot.patch` SHA256 `945b76e6d22855514f5bd90dfcff1ff4531d66fbabfb1a26cf361978fb6a0d76`，369行，均相符。
