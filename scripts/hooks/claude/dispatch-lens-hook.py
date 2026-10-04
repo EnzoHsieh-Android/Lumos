@@ -365,6 +365,13 @@ def main() -> int:
         _emit_updated(tool_input, prompt, LOCK_ERROR_NOTE.format(lock=lock_path)
                       + ("\n\n" + _role if _role else ""))
         _debug("lumos dispatch-lens 鎖無法建立,已附錯誤說明")
+        try:
+            import sys as _s2, pathlib as _p2
+            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
+            from _hookevent import mark as _mark
+            _mark("error", "lumos dispatch-lens 鎖無法建立,附了說明行")
+        except Exception:
+            pass
         return 0
     if r is None or r.returncode == 5:
         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。

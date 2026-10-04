@@ -54432,8 +54432,10 @@ print(json.dumps({"pid": os.getpid(), "acquired": m._excl_lock_try(lock, 900)}))
               f"rc={child.returncode} err={err}")
         result = _json.loads(out) if child.returncode == 0 else {}
         check("過期鎖 S1 前置:競爭者是不同 PID", result.get("pid") not in (None, _os.getpid()), str(result))
-        check("過期鎖 S1:交錯不得讓兩人同時取得", not (parent_acquired is True and result.get("acquired") is True),
-              f"parent={parent_acquired} child={result} err={err}")
+        check("過期鎖 S1:兩程序都拒絕接手且舊鎖不變",
+              parent_acquired is False and result.get("acquired") is False
+              and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
+              f"parent={parent_acquired} child={result} lock={lock.read_text() if lock.exists() else 'missing'} err={err}")
 
 
 def t_excl_lock_existing_is_not_stolen():
@@ -54626,6 +54628,14 @@ def t_lens_stale_lock_reports_uncertainty():
         check("過期鎖 S4:超時只報狀態未知", result.get("lock_uncertain") is True and result.get("still_warming") is not True,
               out.getvalue())
 
+        cached = _io.StringIO()
+        with _mock.patch.object(m, "_lens_cache_read", return_value={"text": "ready"}), \
+                _ctx.redirect_stdout(cached):
+            cached_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
+        check("過期鎖 S5:非持有者見快取也不能刪別人的鎖",
+              cached_rc == 0 and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
+              f"rc={cached_rc} lock={lock.read_text() if lock.exists() else 'missing'}")
+
         hook = _load_hook_mod("stale_lens_hook", "dispatch-lens-hook.py")
         response = type("Response", (), {"returncode": 5, "stdout": _json.dumps(result), "stderr": ""})()
         payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
@@ -54657,14 +54667,18 @@ def t_lens_stale_lock_reports_uncertainty():
                               "stdout": _json.dumps({"lock_error": True, "lock_path": str(lock), "range": "a..b"}),
                               "stderr": ""})()
         rendered = _io.StringIO()
+        mark = _mock.Mock()
         with _mock.patch.object(hook.subprocess, "run", return_value=error_response), \
                 _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
                 _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+                _mock.patch.dict(sys.modules, {"_hookevent": type("Event", (), {"mark": mark})}), \
                 _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
                 _ctx.redirect_stdout(rendered):
             hook_rc = hook.main()
         check("過期鎖 S5:派工 hook 傳達建鎖失敗", hook_rc == 0 and "鎖無法建立" in rendered.getvalue()
               and str(lock) in rendered.getvalue(), rendered.getvalue())
+        check("過期鎖 S5:吞下建鎖失敗後事件帳不可記成成功",
+              mark.call_count == 1 and mark.call_args.args[0] == "error", str(mark.call_args_list))
 
 
 if __name__ == "__main__":

@@ -33880,6 +33880,50 @@ def _excl_lock_try(lock, stale_sec):
         raise
 
 
+def _lens_lock_timeout(lock, diff_range, as_json):
+    """鎖可能是背景工作，也可能是殘留；超時只回可查證的狀態。"""
+    import json as _j2, time as _t
+    try:
+        uncertain = _t.time() - lock.stat().st_mtime >= _LENS_LOCK_STALE_SEC
+    except OSError:
+        uncertain = True
+    if as_json:
+        row = {"timed_out": True, "still_warming": not uncertain, "range": diff_range}
+        if uncertain:
+            row.update({"lock_uncertain": True, "lock_path": str(lock)})
+        print(_j2.dumps(row, ensure_ascii=False))
+    elif uncertain:
+        print(f"這次沒算完({diff_range});鎖狀態未知,請檢查鎖 {lock}。")
+        print("  鎖內 PID 是啟動者,不能只憑它已結束就刪鎖;先確認相關背景工作也已停止。")
+    else:
+        print(f"這次沒算完({diff_range});背景工作可能仍在算,稍後可再試快取。")
+        print("  為什麼在意:若背景工作已停,舊鎖需要人工確認後復原。")
+        print("  想拿結果就再敲一次:")
+        print(f"      lumos dispatch-lens {diff_range}")
+    return 5
+
+
+def _lens_spawn_warmer(lock, diff_range, repo):
+    """鎖由本次取得時啟動背景計算；啟動失敗只清本次取得的鎖。"""
+    import subprocess as _sp
+    argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
+            "--json"] + (["--repo", str(repo)] if repo else [])
+    kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
+    if hasattr(os, "setsid"):
+        kw["start_new_session"] = True
+    env = dict(os.environ)
+    env[_LENS_WARM_ENV] = "1"
+    env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())
+    env["LUMOS_LENS_DISP_KEY"] = getattr(cmd_dispatch_lens, "_disp_key", "")
+    try:
+        _sp.Popen(argv, env=env, **kw)
+    except OSError:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
 def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
 
@@ -33893,7 +33937,7 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     ★同範圍只讓一個在算★:用一個帶行程編號的鎖檔,已經有人在算就不再派第二個
     (並行派工時 N 席同時進來,不加這道會派出 N 個算同一件事的行程)。
     """
-    import subprocess as _sp, time as _t, json as _j2
+    import time as _t, json as _j2
 
     # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
     # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
@@ -33914,22 +33958,7 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
         return 2
 
     if not already:
-        argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
-                "--json"] + (["--repo", str(repo)] if repo else [])
-        kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
-        if hasattr(os, "setsid"):
-            kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
-        env = dict(os.environ)
-        env[_LENS_WARM_ENV] = "1"
-        env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())   # 背景那支據此只刪自己這把鎖
-        env["LUMOS_LENS_DISP_KEY"] = getattr(cmd_dispatch_lens, "_disp_key", "")   # 同一把快取 key(r1 併發席 f7)
-        try:
-            _sp.Popen(argv, env=env, **kw)
-        except OSError:
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+        _lens_spawn_warmer(lock, diff_range, repo)
 
     # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
     # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
@@ -33937,34 +33966,18 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     while _t.monotonic() < end:
         got = _lens_cache_read(cpath)
         if got is not None:
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+            # 已存在的鎖可能屬於別人；快取命中不代表我能替持有者刪鎖。
+            if not already:
+                try:
+                    lock.unlink()
+                except OSError:
+                    pass
             got["cache_hit"] = True
             print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
             return 0
         _t.sleep(0.1)
-    # 到時間了:鎖可能屬於背景工作,也可能是殘留;過舊時尤其不能說一定仍在算。
-    # ★非 JSON 模式也要講人話★:第一版只印一個空行,手動敲時完全不知下一步。
-    try:
-        uncertain = _t.time() - lock.stat().st_mtime >= _LENS_LOCK_STALE_SEC
-    except OSError:
-        uncertain = True
-    if as_json:
-        row = {"timed_out": True, "still_warming": not uncertain, "range": diff_range}
-        if uncertain:
-            row.update({"lock_uncertain": True, "lock_path": str(lock)})
-        print(_j2.dumps(row, ensure_ascii=False))
-    elif uncertain:
-        print(f"這次沒算完({diff_range});鎖狀態未知,請檢查鎖 {lock}。")
-        print("  鎖內 PID 是啟動者,不能只憑它已結束就刪鎖;先確認相關背景工作也已停止。")
-    else:
-        print(f"這次沒算完({diff_range});背景工作可能仍在算,稍後可再試快取。")
-        print("  為什麼在意:若背景工作已停,舊鎖需要人工確認後復原。")
-        print("  想拿結果就再敲一次:")
-        print(f"      lumos dispatch-lens {diff_range}")
-    return 5
+    # ★非 JSON 模式也要講人話★:第一版只印空行,手動敲時完全不知下一步。
+    return _lens_lock_timeout(lock, diff_range, as_json)
 
 
 def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None, role_cards=False):
