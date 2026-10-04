@@ -76,7 +76,8 @@ def is_valid(r):
 
 def load_results(out_dir):
     """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
-    ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。"""
+    ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。
+    整批 fatal 的檔案即使逐場 reason=ok 也不可計分或抵掉缺場。"""
     by_arm = {a: [] for a in ARMS}
     for p in sorted(Path(out_dir).glob("*.json")):
         if p.name in ("summary.json", "meta.json"):
@@ -87,6 +88,8 @@ def load_results(out_dir):
             continue
         if not isinstance(d, dict):
             continue
+        if d.get("fatal"):
+            continue
         arm = d.get("arm") or p.name.split("-")[0]
         rows = d.get("results")
         if arm in by_arm and isinstance(rows, list):
@@ -95,8 +98,8 @@ def load_results(out_dir):
 
 
 def collect_skills_health(out_dir):
-    """掃探針輸出裡的 skills_health_bad 欄,回 [(檔名, [壞連結…])](空=乾淨)。
-    ★r1 併發席:健康檢查不能只印 log——跑批讀這個,非空就停整批,免得一場沙盒事故靜默污染後續所有場次。"""
+    """掃探針輸出的壞連結與 fatal 批次，回 [(檔名, [失效原因…])]。
+    健康檢查本身拋錯時 skills_health_bad 是空；fatal 仍須讓重讀者看見。"""
     hits = []
     for p in sorted(Path(out_dir).glob("*.json")):
         if p.name in ("summary.json", "meta.json"):
@@ -105,8 +108,12 @@ def collect_skills_health(out_dir):
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if isinstance(d, dict) and d.get("skills_health_bad"):
-            hits.append((p.name, d["skills_health_bad"]))
+        if isinstance(d, dict):
+            bad = d.get("skills_health_bad")
+            if bad:
+                hits.append((p.name, bad))
+            elif d.get("fatal"):
+                hits.append((p.name, ["探針整批 fatal；健康或清理結果不可判"]))
     return hits
 
 
@@ -159,14 +166,14 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
         d = json.loads(out.read_text(encoding="utf-8"))
         got = sum(1 for x in d.get("results", []) if is_valid(x))
         lim = sum(1 for x in d.get("results", []) if x.get("limit_hit"))
-        bad_health = bool(d.get("skills_health_bad"))
+        bad_health = bool(d.get("skills_health_bad") or d.get("fatal"))
     except Exception:
         got, lim = 0, 0
     if r.returncode == 3 or bad_health:
         # 探針回 3 或結果檔標了 skills 事故:設停止旗標,其餘 worker 與後續工作不再派(r1 併發席 F1)
         if stop is not None:
             stop.set()
-        return (arm, qid, f"★全域 skills 事故★ rc={r.returncode}——停止派工,先在真 repo 跑 lumos install --force")
+        return (arm, qid, f"★探針批次失效★ rc={r.returncode}——停止派工，檢查結果檔與探針日誌")
     return (arm, qid, f"rc={r.returncode} 有效 {got}/{n} 撞上限 {lim} {round(time.time() - t0)}s")
 
 
@@ -318,9 +325,9 @@ def main():
     s["skills_health_poisoned"] = poisoned
     if poisoned:
         print("\n" + "!" * 60)
-        print(f"✗ 偵測到全域 ~/.claude/skills 事故({len(poisoned)} 個結果檔標了受污染)——本次資料不可採信。", flush=True)
-        print("  先修再重跑:\n    python3 scripts/lumos install --force")
-        print("  見 Issues/探針沙盒改動真全域機器狀態。summary 仍產出但已標 skills_health_poisoned。")
+        print(f"✗ 偵測到 {len(poisoned)} 個探針失效結果檔——本次資料不可採信。", flush=True)
+        print("  檢查結果檔與探針日誌；若 skills 連結損壞，在真 repo 執行 python3 scripts/lumos install --force。")
+        print("  summary 仍產出，但失效檔不參與統計，並已標 skills_health_poisoned。")
         print("!" * 60)
     (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
     md = render_md(s, meta)

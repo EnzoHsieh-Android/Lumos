@@ -37504,6 +37504,63 @@ def t_probe_boundary_review2_health_unreadable():
               (threw, rc, data))
 
 
+def t_probe_boundary_review4_runner_error_checks_health():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r4_runner")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-runner-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        out = root / "out.json"; events = []
+        def runner(sc, *_args, **_kwargs):
+            events.append("run:" + sc["id"])
+            raise RuntimeError("model output failed")
+        def health():
+            events.append("health")
+            if len(events) == 2:
+                return [("damaged", "/tmp/broken")]
+            return []
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=health), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("r4 runner拋錯也先查健康再決定後題", events[:2] == ["run:a", "health"]
+              and "run:b" not in events and rc == 3 and data["fatal"] and data["inconclusive"],
+              (events, rc, data))
+
+
+def t_probe_boundary_review4_fatal_batch_not_reused():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r4_final")
+    spec = importlib.util.spec_from_file_location("ablation_r4", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-final-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        outdir = root / "out"; outdir.mkdir(); out = outdir / "with-q-a-1.json"
+        def runner(sc, *_args, **_kwargs):
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final unreadable")]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); loaded = ablation.load_results(outdir)
+        merged = ablation.merge(outdir, ["a", "b"], 1)
+        poisoned = ablation.collect_skills_health(outdir)
+        check("r4 現場兩場成功但最終健康不可判", rc == 3 and data["fatal"] and data["inconclusive"]
+              and len(data["results"]) == 2 and all(r["reason"] == "ok" for r in data["results"]), data)
+        check("r4 下游不得重用致命批次", not loaded["with"] and ablation.needed(loaded, "with", "a", 1) == 1
+              and merged["arms"]["with"]["n"] == 0 and bool(poisoned),
+              (loaded["with"], merged["arms"]["with"], poisoned))
+
+
 def t_delguard_logs_ok_too():
     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
     import subprocess as _sp, os, tempfile as _tf, json as _j

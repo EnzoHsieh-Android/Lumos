@@ -1028,12 +1028,13 @@ def main():
                         finally:
                             attempt_model_secs = time.monotonic() - model_started
                             model_secs += attempt_model_secs
-                        try:
-                            health = global_skills_health()
-                        except Exception as e:
-                            raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
-                        if health:
-                            raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                            # runner/解析器拋錯也可能已改到真 HOME；下一場前仍須驗健康。
+                            try:
+                                health = global_skills_health()
+                            except Exception as e:
+                                raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
+                            if health:
+                                raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
                     except Exception as e:
                         if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError)):
                             attempt_fatal = True
