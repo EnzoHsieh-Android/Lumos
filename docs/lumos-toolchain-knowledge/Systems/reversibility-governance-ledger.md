@@ -17,6 +17,8 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
 summary: |-
+  PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
+  WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
   WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
@@ -27,8 +29,8 @@ summary: |-
   KEY:checkpoint 標記缺回退只 warn_soft(印但不計 issues)→ doctor --ci 仍 rc0;新增 warn_soft 因既有 warn 會 issues+=1 在 --ci 下誤擋[test:t_reversibility_doctor]
   KEY:可逆性標記僅限 type=system;標在 Issue/Verification → error 標錯型別;type 缺失/非字串不崩不誤報
   KEY:[rollback:]/[guard:] v1 唯一支援形式 = decisions,語義=本節點 decisions[] 有 ≥1 條非空 rollback/guard 內容;其他 ref 值視為未解析
-  KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
-  KEY:gov 彙整多本帳(6 源 <!--lumos:count=6 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME) in=scripts/lumos-->:bypass/governance/signoff/kill/canary/ci,ci 條件載入;★原記 7 源含 rot-queue,2026-08-22 該 loader 拆除(寫帳的 verification-rot-check 8/21 已撤、本機無此檔,留著只是假名額)——Check N 當天就抓到數字漂,由另一個 session 順手修★),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內)——原記「皆 gitignore local-only」已不成立;**根因**=scaffold 把 ignore 清單寫在 vault 內、帳檔在上一層 `docs/`,從未生效(同日修,新專案起生效;本 repo 維持追蹤,見 [[Verification/2026-08-21_doctor-run事件落地]])★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
+  KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);來源見下一行(本數以 count 標記為準);dedup 在讀時做
+  KEY:gov 彙整多本帳(7 源 <!--lumos:count=7 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME|GOV_LOG_NAME|GOV_LOCAL_LOG_NAME) in=scripts/lumos-->:bypass/governance/governance-local/signoff/kill/canary/ci,ci 與 governance-local 檔不在就跳過;★原記 7 源含 rot-queue,2026-08-22 該 loader 拆除(寫帳的 verification-rot-check 8/21 已撤、本機無此檔,留著只是假名額)——Check N 當天就抓到數字漂,由另一個 session 順手修★),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內)——原記「皆 gitignore local-only」已不成立;**根因**=scaffold 把 ignore 清單寫在 vault 內、帳檔在上一層 `docs/`,從未生效(同日修,新專案起生效;本 repo 維持追蹤,見 [[Verification/2026-08-21_doctor-run事件落地]])★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
   WHY:[2026-09-28 Projects/存量漂移防線_計劃]閘名單加 drift-check:存量漂移守衛的擋下、提醒、跳過、表態都記在這個閘名下;放行不寫帳(同筆記形狀擋;筆記形狀擋 2026-10-03 起推送時舊行尾補括號減掉違規另記 relaxed,見 [[Projects/舊行尾追加不算新寫_計劃]]),doctor Z 段也不寫——存量每天唸同一批會被週報升級成噪音
   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
@@ -70,6 +72,8 @@ aliases:
   - lumos gov
   - 治理帳彙整
   - 六本帳來源
+  - 七本帳來源
+  - 治理帳本機帳
   - signoff 簽核留痕
 ---
 # reversibility-governance-ledger
@@ -80,7 +84,7 @@ aliases:
 
 ## 是什麼
 - **功能 ①（Check R）**：在 Systems 節點 summary 的 KEY 行用 `★IRREVERSIBLE★`/`★CHECKPOINT★` 標記不可逆/難救動作，逼作者在動手前寫下 undo 路徑（`[rollback:decisions]`）或事前防護（`[guard:decisions]`）。doctor 與 lint 強制。
-- **功能 ②（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。gov 寫路徑（doctor `--ci` append `.governance-log.jsonl`）是本功能的子機制，非獨立功能。
+- **功能 ②（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。gov 寫路徑（各閘經 `_gate_event` 寫帳；例行觀察寫 `.governance-local.jsonl`、其餘寫 `.governance-log.jsonl`）是本功能的子機制，非獨立功能。
 
 ## 關鍵機制
 ### Check R 標記與強制
@@ -96,7 +100,7 @@ aliases:
 硬擋的語義是「逼你寫下 undo 路徑」，**證明你寫了補償步驟，不證明補償跑得動、不證明與現行 schema 一致**（那是 validation，工具到不了）。「有 `[rollback:]`」≠「驗過能用」。措辭刻意與硬擋一致：硬擋的是「有沒有寫下實質 undo」，不是「undo 能不能跑」。
 
 ### `lumos gov` 唯讀彙整
-- 六來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci`）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）(2026-10-01 起每筆多 covers/recipe_id/head_sha/weak 四欄,gov 只取既有欄位;另一個讀者是寫表態算背書,見 [[Systems/guard-kill]])、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
+- 七來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.governance-log.jsonl`（主動決定：代碼審留痕、表態、修正關卡、核可等，進版控）、`.governance-local.jsonl`（自動檢查跑出的例行觀察，不進版控；2026-10-04 分流，見 [[Projects/治理帳例行紀錄分流_計劃]]）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）(2026-10-01 起每筆多 covers/recipe_id/head_sha/weak 四欄,gov 只取既有欄位;另一個讀者是寫表態算背書,見 [[Systems/guard-kill]])、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
 - `cmd_gov` 讀帳原本用 `splitlines()` 切行,U+2028/U+2029 也會被切開(2026-10-01 起改走帳檔共用的 `_drift_jsonl_parse`(位元組 errors=replace 解碼、只在換行切行),不再在這兩個字元切行,[[Projects/併發與效能表態要合約背書_計劃]]);一行合法 JSON 但不是物件(切出來的 `[1]`、`[]`、`null`)跳過,不丟例外(2026-10-01 回頭重讀代碼審 r2 資安席:帳裡一筆帶 U+2028 的路徑就讓 gov 每次當掉;寫帳那側的路徑過濾在 [[Systems/筆記內容審]])。測試 `t_gov_skips_non_object_lines`。
 - 物件行但 gov 用到的欄位型別不對(nodes 是 null、ts 是數字、當鍵用的 kind 或 commit 是陣列、findings 是字串…)也在同一處整行跳過(2026-10-01 回頭重讀代碼審 r3 資安席:原本只擋非物件行,這種行照樣讓 gov 當掉;治理帳在簿記白名單裡,直接提交一行進去不會讓代碼審留痕失效)。欄位與型別表是 `_GOV_FIELD_TYPES`,七本帳共用;當天對本 repo 八本帳十萬多筆物件逐筆驗過,沒有一筆被跳過,新舊版 `gov`、`--stats`、`--full` 的輸出逐位元組相同。mapper 新用到欄位時要一起補進表裡。測試 `t_gov_skips_bad_field_types`。逃逸帳(`_escape_rows_for`)與 hook 事件檔不走這支 load,沒在這次範圍。
 - dedup 在**讀時**做，key = `(commit, frozenset(nodes), gate, kind, token)`；`nodes` 寫入即 stem 化，讀時 stem 比對。
