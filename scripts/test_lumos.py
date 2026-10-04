@@ -56268,6 +56268,247 @@ def t_drift_born_unknown():
     check("⑤不是 git 專案:判不了、scan 照常列", isinstance(b, dict) and b.get("state") == "unknown", (b, got, txt[-600:]))
 
 
+_CT_PY = (
+    "from enum import Enum, auto\n"
+    "STATES = (\"a\", \"b\", \"c\")\n"
+    "KINDS = [\"x\", \"y\"]\n"
+    "SETS = {\"p\", \"q\", \"p\"}\n"
+    "D = {\"k1\": 1, \"k2\": 2}\n"
+    "FS = frozenset({\"a\", \"b\", \"c\", \"d\"})\n"
+    "class Color(Enum):\n"
+    "    RED = auto()\n"
+    "    GREEN = auto()\n"
+    "    BLUE = auto()\n"
+)
+
+
+def _ct_repo(body, files=None, summary="KEY:x"):
+    """數量標記的測試專案:_dr_repo + src/st.py(各種具名集合)+ 一篇 Cnt 筆記;回 (root, vault)。"""
+    root = _dr_repo()
+    _nh_file(root, "src/st.py", _CT_PY)
+    for rel, txt in (files or {}).items():
+        _nh_file(root, rel, txt)
+    _nh_node(root, "Cnt", body=body, summary=summary)
+    _nh_commit(root, "count")
+    return root, root / "docs" / "kg-knowledge"
+
+
+def _ct_scan(vault, *extra):
+    import json as _j
+    r = run(vault, "drift", "scan", "--json", *extra)
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        return None, r.stdout + r.stderr
+    return d, None
+
+
+def _ct_line(vault, needle):
+    """Cnt 筆記裡含 needle 那一行的行號(1 起算)。"""
+    lines = (vault / "Systems" / "Cnt.md").read_text(encoding="utf-8").split("\n")
+    return next(i for i, ln in enumerate(lines, 1) if needle in ln)
+
+
+def t_count_tag_scan():
+    """[S1] [count:路徑::名稱=N] 指到元組、清單、集合、字典、frozenset(…)、列舉類別:數字對不上 drift scan 列 kind=count
+    (帶 claimed/actual),吻合的不列;工作目錄與 --at 都判得出。
+
+    翻紅釘:scan 不跑數量標記 → ①紅;集合不去重 → ①紅(SETS 會變成 3≠2);列舉數成 0 → ①紅。"""
+    print("t_count_tag_scan")
+    body = ("有 3 種狀態 [count:src/st.py::STATES=3]\n"
+            "有 5 種類型 [count:src/st.py::KINDS=5]\n"
+            "集合 2 個 [count:src/st.py::SETS=2]\n"
+            "字典 3 個鍵 [count:src/st.py::D=3]\n"
+            "凍結 4 個 [count:src/st.py::FS=4]\n"
+            "顏色 2 種 [count:src/st.py::Color=2]\n")
+    root, vault = _ct_repo(body)
+    for extra in ((), ("--at", "HEAD")):
+        d, err = _ct_scan(vault, *extra)
+        got = sorted((f["text"].split(" [")[0], f["count"]["claimed"], f["count"]["actual"])
+                     for f in (d or {}).get("findings", []) if f["kind"] == "count")
+        want = [("字典 3 個鍵", 3, 2), ("有 5 種類型", 5, 2), ("顏色 2 種", 2, 3)]
+        check(f"①對不上的列成 count、吻合的不列({'工作目錄' if not extra else '--at'})", got == want, str(got) + str(err or ""))
+    t = run(vault, "drift", "scan").stdout
+    check("②文字輸出有 [count] 那一段與寫幾、現在幾", "[count]" in t and "寫 5、現在是 2" in t, t[-1200:])
+
+
+def t_count_tag_unknown():
+    """[S2] 判不了的一律列成問題、講原因,不列成對不上:名稱找不到、指派不只一次、不是字面值集合、含展開、非常數成員、
+    列舉別名、不是 Python、檔不在、檔案解不開、沒帶路徑、數字寫錯。
+
+    翻紅釘:找不到名稱當成 0 → 列成對不上,①紅。"""
+    print("t_count_tag_unknown")
+    u = ("from enum import Enum\n"
+         "X = (1,)\nX = (1, 2)\n"
+         "Y = make()\n"
+         "Z = (*STATES, 3)\n"
+         "W = {a, b}\n"
+         "class E(Enum):\n    A = 1\n    B = 1\n"
+         "from enum import Flag\n"
+         "class F(Flag):\n    A = 1\n    B = 2\n    C = 3\n"
+         "class P(Enum):\n    _priv = 1\n    X = 2\n"
+         "class G(Enum):\n    _ignore_ = ['tmp']\n    tmp = 5\n    Q = 1\n"
+         "M = {'a'}\nM |= {'b'}\n"
+         "L = ['a']\nL.append('b')\n"
+         "import enum\n"
+         "class MA(enum.Enum):\n    A = B = 1\n"
+         "class TA(enum.Enum):\n    A, B = 1, 2\n"
+         "class IB(enum.Enum):\n    A = 1\n    if True:\n        B = 2\n"
+         "class AD(enum.IntEnum):\n    A = enum.auto()\n    B = 1\n"
+         "R1 = (1, 2, 3)\ntry:\n    import nonexistent\nexcept ImportError:\n    R1 = (1,)\n"
+         "R2 = (1, 2, 3)\ndef reload():\n    global R2\n    R2 = (1,)\n"
+         "R3 = (1, 2, 3)\nR3, R9 = (1,), 2\n"
+         "R4 = (1, 2, 3)\ndel R4\n"
+         "R5 = [1, 2, 3]\nR5.__iadd__([4])\n"
+         "V1 = (1, 2, 3)\ndef fv(a=(V1 := (1,))):\n    pass\n"
+         "V2 = (1, 2, 3)\nclass CV((V2 := object)):\n    pass\n"
+         "V3 = (1, 2, 3)\nmatch (7,):\n    case [V3]:\n        pass\n"
+         "V4 = (1, 2, 3)\ntry:\n    raise ValueError\nexcept ValueError as V4:\n    pass\n")
+    cases = [("[count:src/u.py::NOPE=1]", "找不到"), ("[count:src/u.py::X=2]", "不只一次"),
+             ("[count:src/u.py::Y=1]", "不是字面值"), ("[count:src/u.py::Z=3]", "展開"),
+             ("[count:src/u.py::W=2]", "不是常數"), ("[count:src/u.py::E=2]", "別名"),
+             ("[count:src/a.js::K=1]", "Python"), ("[count:src/missing.py::K=1]", "不在"),
+             ("[count:src/bad.py::K=1]", "解不開"), ("[count:K=1]", "路徑"), ("[count:src/u.py::X=abc]", "整數"),
+             # 代碼審 code-數量標記檢查 r1 正確性席 F1、F4、F5:Flag 組合值、底線開頭的成員、_ignore_、定義後又被改過、數字太長
+             ("[count:src/u.py::F=2]", "Flag"), ("[count:src/u.py::P=2]", "底線"), ("[count:src/u.py::G=1]", "_ignore_"),
+             ("[count:src/u.py::M=2]", "改過"), ("[count:src/u.py::L=2]", "改過"),
+             ("[count:src/u.py::X=" + "9" * 5000 + "]", "整數"),
+             # 代碼審 code-數量標記檢查-2 r2 正確性席 F1–F3:列舉本體看不懂的語句、auto() 與明寫值混用、名稱在別處被重新綁定
+             ("[count:src/u.py::MA=1]", "看不懂"), ("[count:src/u.py::TA=2]", "看不懂"), ("[count:src/u.py::IB=2]", "看不懂"),
+             ("[count:src/u.py::AD=1]", "auto"), ("[count:src/u.py::R1=1]", "改過"), ("[count:src/u.py::R2=1]", "改過"),
+             ("[count:src/u.py::R3=1]", "改過"), ("[count:src/u.py::R4=3]", "改過"), ("[count:src/u.py::R5=4]", "改過"),
+             # 代碼審 code-數量標記檢查-2 r3 正確性席 F2、F3:函式預設值與類別基底裡的海象、match 捕捉、except as 也會重新綁定
+             ("[count:src/u.py::V1=1]", "改過"), ("[count:src/u.py::V2=3]", "改過"), ("[count:src/u.py::V3=3]", "改過"),
+             ("[count:src/u.py::V4=3]", "改過"),
+             # code-數量標記檢查-3 r1 正確性席 F2:星號 import 可能蓋掉名稱,名稱卻不出現
+             ("[count:src/s.py::S=2]", "改過")]
+    body = "".join(f"第{i}條 {tag}\n" for i, (tag, _w) in enumerate(cases))
+    root, vault = _ct_repo(body, files={"src/u.py": u, "src/a.js": "const K = [1];\n", "src/bad.py": "def (:\n",
+                                        "src/s.py": "S = (1, 2)\nfrom os import *\n"})
+    d, err = _ct_scan(vault)
+    found = [f for f in (d or {}).get("findings", []) if f["kind"] == "count"]
+    check("①判不了的一條都不列成對不上", d is not None and not found, str(found) + str(err or ""))
+    probs = (d or {}).get("problems", [])
+    for i, (tag, word) in enumerate(cases):
+        hit = [p["why"] for p in probs if p["text"].startswith(f"第{i}條 ")]
+        check(f"②{tag} 列成問題、原因講「{word}」", len(hit) == 1 and word in hit[0], str(hit))
+
+
+def t_inline_visible_single_source():
+    """_strip_inline_markup 重構後跟舊公式逐字一樣(含原文本來就有的 NUL),位置不動版本拿掉被遮的字後也一樣
+    (代碼審 code-數量標記檢查-2 r3 架構對齊席 Z1 抽出唯一本體;code-數量標記檢查-3 r1 正確性席 F1:原本用 NUL 當遮罩,
+    原文的 NUL 也被刪)。
+
+    翻紅釘:改回用 NUL 遮罩再整串刪 NUL → ②紅;兩邊任一支自己算 → ①或③紅。"""
+    print("t_inline_visible_single_source")
+    import random
+    m = _load_lumos_inproc()
+
+    def old(line):
+        t = m.INLINE_CODE_RE.sub("", m._DOUBLE_BACKTICK_RE.sub("", line))
+        return (t.split("`", 1)[0], True) if "`" in t else (t, False)
+    rnd = random.Random(20261004)
+    alpha = ["`", "``", "```", "a", "5", " ", "[count:x.py::K=5]", "\n", "\0"]
+    bad, dbl, unclosed = [], 0, 0
+    for _ in range(20000):
+        ln = "".join(rnd.choice(alpha) for _ in range(rnd.randint(0, 12)))
+        dbl += "``" in ln
+        unclosed += old(ln)[1]
+        mask = m._inline_visible_mask(ln)
+        if m._strip_inline_markup(ln) != old(ln) or len(mask) != len(ln):
+            bad.append(ln)
+    check("前提:隨機樣本裡雙反引號與未閉合反引號都夠多", dbl > 1000 and unclosed > 1000, (dbl, unclosed))
+    check("①重構後跟舊公式逐字一樣、遮罩版長度不變", not bad, [repr(b) for b in bad[:3]])
+    check("②原文本來就有的 NUL 照留", m._strip_inline_markup("[test:a\0b]") == ("[test:a\0b]", False))
+    check("③遮罩版只遮行內程式碼", m._inline_visible_mask("a `b` c") == "a \0\0\0 c")
+
+
+def t_count_tag_places():
+    """[S3] 圍欄與行內程式碼裡的標籤不評估;表格行照評估;已標 [status:superseded] 的摘要行不評估。
+
+    翻紅釘:不剝行內程式碼 → 多一筆,①紅;跳過表格行 → 少一筆,①紅。"""
+    print("t_count_tag_places")
+    body = ("```\n範例 [count:src/st.py::KINDS=9]\n```\n"
+            "行內 `[count:src/st.py::KINDS=9]` 不算\n"
+            "| 欄 | 表格裡 [count:src/st.py::KINDS=9] |\n")
+    summary = "KEY:舊的 [count:src/st.py::KINDS=9] [status:superseded] [被取代:無 測試]"
+    root, vault = _ct_repo(body, summary=summary)
+    d, err = _ct_scan(vault)
+    got = [f["text"] for f in (d or {}).get("findings", []) if f["kind"] == "count"]
+    check("①只有表格行那一筆", len(got) == 1 and got[0].startswith("| 欄 |"), str(got) + str(err or ""))
+
+
+def t_count_tag_doctor():
+    """[S4] doctor 存量漂移段列數量標記總數與寫錯的處數;不評估數字、不影響結束碼。
+
+    翻紅釘:Z 段不數標籤 → ①紅;doctor 去評估數字 → ③紅(會印「對不上」)。"""
+    print("t_count_tag_doctor")
+    root, vault = _ct_repo("無標籤\n")
+    rc0 = run(vault, "doctor").returncode
+    (vault / "Systems" / "Cnt.md").write_text(
+        (vault / "Systems" / "Cnt.md").read_text(encoding="utf-8")
+        + "有 5 種 [count:src/st.py::KINDS=5]\n寫錯 [count:K=1]\n", encoding="utf-8")
+    rd = run(vault, "doctor")
+    check("①Z 段列數量標記總數與寫錯的", "數量標記 2 處" in rd.stdout and "寫錯的 1 處" in rd.stdout, rd.stdout[-1500:])
+    check("②不影響結束碼", rd.returncode == rc0, (rc0, rd.returncode))
+    check("③doctor 不評估數字", "寫 5、現在是 2" not in rd.stdout, rd.stdout[-600:])
+
+
+def t_count_tag_fix():
+    """[S5] drift fix --kind count 把標籤與句子裡恰好一個的舊數字改成現值、記修復帳;句子裡的舊數字找不到或不只一個擋下不寫;
+    已吻合回報不用改;drift ack --kind count 讓那一筆列在已表態。
+
+    翻紅釘:只改標籤不改句子 → ①紅;句子有兩個舊數字也照改 → ③紅。"""
+    print("t_count_tag_fix")
+    body = ("有 5 種類型 [count:src/st.py::KINDS=5]\n"
+            "共 5 項另有 5 個 [count:src/st.py::STATES=5]\n"
+            "沒有數字的句子 [count:src/st.py::D=5]\n"
+            "已經對 3 種 [count:src/st.py::FS=4]\n"
+            "對的 4 個 [count:src/st.py::FS=4]\n"
+            "空白版 5 種 [count:src/st.py::KINDS = 5]\n"
+            "前導零 5 種 [count:src/st.py::KINDS=05]\n"
+            "見 F5 說明有5種 [count:src/st.py::KINDS=5] 範例 `[count:src/st.py::KINDS=5]`\n"
+            "2026-10-04 起共十種 [count:src/st.py::STATES=10]\n"
+            "共 ``5`` 種 [count:src/st.py::FS=5]\n"
+            "夾程式碼 5 種 [count:src/st.py::KINDS``x``=5]\n")
+    root, vault = _ct_repo(body)
+    p = vault / "Systems" / "Cnt.md"
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "有 5 種類型")), "--kind", "count")
+    txt = p.read_text(encoding="utf-8")
+    check("①標籤與句子裡的數字一起改成現值", rc == 0 and "有 2 種類型 [count:src/st.py::KINDS=2]" in txt, out + txt[-400:])
+    rows = _df_rows(root)
+    check("②記修復帳 kind=count", rows and rows[-1].get("kind") == "count", str(rows[-1:]))
+    before = p.read_bytes()
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "共 5 項")), "--kind", "count")
+    check("③句子裡舊數字不只一個 → 擋下不寫", rc == 2 and p.read_bytes() == before and "不只一個" in out, out)
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "沒有數字的句子")), "--kind", "count")
+    check("④句子裡找不到舊數字 → 擋下不寫", rc == 2 and p.read_bytes() == before and "找不到" in out, out)
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "對的 4 個")), "--kind", "count")
+    check("⑤已吻合 → 回報不用改、不寫", rc != 0 and p.read_bytes() == before and "不用改" in out, out)
+    ln = _ct_line(vault, "共 5 項")
+    r = run(vault, "drift", "ack", "Systems/Cnt", str(ln), "--kind", "count", "--reason", "這句講的是另一件事")
+    d, err = _ct_scan(vault)
+    acked = [f for f in (d or {}).get("findings", []) if f["kind"] == "count" and f["line"] == ln]
+    check("⑥表態後那一筆列在已表態", r.returncode == 0 and acked and acked[0]["acked"] is True, r.stdout + r.stderr + str(acked))
+    # 代碼審 code-數量標記檢查 r1 正確性席 F2:標籤寫成 = 5、=05 時原本只改了句子、標籤沒動,寫進去才在驗證時擋下
+    for needle, want in (("空白版", "空白版 2 種 [count:src/st.py::KINDS=2]"), ("前導零", "前導零 2 種 [count:src/st.py::KINDS=2]")):
+        rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, needle)), "--kind", "count")
+        check(f"⑦{needle}的標籤照樣改到、整行一致", rc == 0 and want in p.read_text(encoding="utf-8"), out)
+    # F3:句子裡的 F5 是識別碼不是數量;行內程式碼裡的範例標籤不能跟著改
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "見 F5")), "--kind", "count")
+    line = p.read_text(encoding="utf-8").split("\n")[_ct_line(vault, "見 F5") - 1]
+    check("⑧識別碼 F5 與行內程式碼裡的範例不動", rc == 0 and line == "見 F5 說明有2種 [count:src/st.py::KINDS=2] 範例 `[count:src/st.py::KINDS=5]`", out + line)
+    # 代碼審 code-數量標記檢查-2 r2 正確性席 F4、F5:日期裡的數字、雙反引號裡看不見的數字都不是句子數字 → 找不到、擋下不寫
+    for needle in ("2026-10-04 起", "共 ``5`` 種"):
+        before = p.read_bytes()
+        rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, needle)), "--kind", "count")
+        check(f"⑨{needle}:句子裡沒有看得見的舊數字 → 擋下不寫", rc == 2 and p.read_bytes() == before and "找不到" in out, out)
+    # r3 正確性席 F1:標籤裡夾行內程式碼,原本把遮罩字元寫進筆記
+    before = p.read_bytes()
+    rc, out = _df_fix(vault, "Systems/Cnt", str(_ct_line(vault, "夾程式碼")), "--kind", "count")
+    check("⑩標籤裡夾行內程式碼 → 擋下不寫、不寫進遮罩字元", rc == 2 and p.read_bytes() == before and b"\x00" not in p.read_bytes(), out)
+
+
 def t_drift_born_reads_stop_at_boundary():
     """[S4] 一篇筆記歷史很長、這一世只在最近幾版:版本讀取碰到邊界就停,不讀完整段歷史(一次 32 版)。
 
