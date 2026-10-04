@@ -370,11 +370,48 @@ def _strip_inline_markup(line):
     (條款綁定 -b r2 架構席:三條規則散在 clause_bindings 裡就是第二份)。
     剝:雙反引號 span、單反引號 span(INLINE_CODE_RE);★未閉合的反引號之後一律不信★(程式碼範例裡的 [test:]/[manual:] 不能當證據,寧可少認)。
     ★不碰 HTML 註解★:-b r3 兩席證明「偵測註解」本身就是洞(先關再開、註解正則不認反引號邊界),註解裡的 [SN] 一律走「認不得→擋」。
+    ★判定本體在 _inline_hidden★(2026-10-04 抽出,這支與位置不動的 _inline_visible_mask 都從它導出;別在別處再寫一份)。
     回 (看得見的文字, 有沒有因未閉合反引號截掉東西)。search 的 probe 刻意只用 INLINE_CODE_RE 不走這裡:搜尋寧可多看見,截掉=靜默看不見(2026-08-03 那個坑)。"""
-    s = INLINE_CODE_RE.sub("", _DOUBLE_BACKTICK_RE.sub("", line))
-    if "`" in s:
-        return s.split("`", 1)[0], True
-    return s, False
+    hidden, cut = _inline_hidden(line)
+    keep, at = [], 0
+    for a, b in hidden:
+        keep.append(line[at:a])
+        at = b
+    return "".join(keep) + line[at:], cut
+
+
+def _inline_visible_mask(line):
+    """_strip_inline_markup 的位置不動版本:看不見的字換成 \\0、長度跟原行一樣。要知道看得見的字在原行哪個位置的呼叫端
+    (數量標記的 drift fix)用這支,其餘照用 _strip_inline_markup。"""
+    return _inline_blank(line, _inline_hidden(line)[0])
+
+
+def _inline_blank(line, spans):
+    """把這幾段換成 \\0(位置不動)。"""
+    out = list(line)
+    for a, b in spans:
+        out[a:b] = "\0" * (b - a)
+    return "".join(out)
+
+
+def _inline_hidden(line):
+    """行內可見判定的★唯一本體★ → (看不見的區段[(起, 迄)] 由左到右、不重疊, 有沒有因未閉合反引號截掉東西):
+    雙反引號 span、單反引號 span、未閉合反引號之後。_strip_inline_markup 與 _inline_visible_mask 都從這裡導出
+    (代碼審 code-數量標記檢查-2 r3 架構對齊席 Z1:原本數量標記另寫一份)。回區段不回遮罩字串:拿某個字元當遮罩,原文本來
+    就有那個字元就分不清(code-數量標記檢查-3 r1 正確性席 F1:原文的 NUL 被當成遮掉的字刪掉)。找單反引號 span 前先把
+    雙反引號那幾段換成非反引號字元,效果同舊版先刪掉(兩條正規式都不跨換行;替換字元不是反引號,不會湊出新 span)。"""
+    spans = [m.span() for m in _DOUBLE_BACKTICK_RE.finditer(line)]
+    spans += [m.span() for m in INLINE_CODE_RE.finditer(_inline_blank(line, spans))]
+    i = _inline_blank(line, spans).find("`")
+    if i >= 0:
+        spans.append((i, len(line)))
+    merged = []
+    for a, b in sorted(spans):        # 單反引號 span 可能包住整段雙反引號 span,合併成一段
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged, i >= 0
 WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 TOP_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
@@ -31589,11 +31626,11 @@ _DRIFT_OPEN_ISSUE = ("open", "doing")
 # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
 # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
 _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "m1", "retire")
+_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "m1", "retire", "count")
 _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
                      "c5": "轉正做了一半", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
-                     "retire": "RULE 的撤除條件成立了"}
+                     "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上"}
 # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
 # m1 要推送範圍才判得了,scan 不列;retire(RULE 撤除條件)筆記格子第 3 步起列,是推送那次漏掉的兜底
 _DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k != "m1")
@@ -31601,7 +31638,10 @@ _DRIFT_ACKS = "governance/drift-acks.jsonl"
 # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
 # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
 _DRIFT_FIXES = "governance/drift-fixes.jsonl"
-_DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5")
+_DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "count")
+# 要讀程式檔才判得出「現在還是不是這一種發現」的種類:不走 _drift_current_finding(它只看筆記狀態),由各自的計算函式判
+# (代碼審 code-數量標記檢查 r1 架構對齊席 Z3:原本是載入函式裡的種類字串特例)
+_DRIFT_FIX_SELF_JUDGED = ("count",)
 _DRIFT_BOUND_KINDS = ("c2", "c3")          # 表態要綁當時連著的已收尾計劃(related)與序號(seq)的種類
 _DRIFT_GOLIVE_MARK = "drift check"
 _DRIFT_GATE_VALUES = ("block", "warn", "off")
@@ -32546,8 +32586,7 @@ class _DriftProbeTree:
 
     def prefetch(self, conds):
         """帶路徑的 symbol/test 條件指到的檔,一個行程讀完;帶字串的 when-gone 讀原始位元組;讀不了不管,輪到那條時再判。"""
-        paths = {_drift_cond_split(v, k)[0] for k, v in conds if k in ("symbol", "test")} - {""}
-        self._read(sorted(p for p in paths if p in self.files))
+        self.prefetch_paths({_drift_cond_split(v, k)[0] for k, v in conds if k in ("symbol", "test")} - {""})
         raw = {_drift_cond_split(v, k)[0] for k, v in conds if k == "gone" and _drift_cond_split(v, k)[1]}
         self._read_raw(sorted(p for p in raw if p in self.files))
 
@@ -32687,6 +32726,16 @@ class _DriftProbeTree:
         if any(self._defines(p, name, test) for p in items):
             return True
         return None if self._unread[test] else False
+
+    def prefetch_paths(self, paths):
+        """這幾支檔一批讀進來(樹上沒有的略過);讀不了不管,輪到那支時 text_of 回 None。數量標記用,同 prefetch 的理由。"""
+        self._read(sorted(p for p in paths if p in self.files))
+
+    def text_of(self, path):
+        """一支樹上有的檔的文字;不在樹上、讀不了(預算、git)或讀不出回 None。數量標記用(Projects/數量標記檢查_計劃)。"""
+        if path not in self.files or not self._read([path]):
+            return None
+        return self._text.get(path)
 
 
 _DRIFT_GONE_MAX_BYTES = 2 * 1048576     # 帶字串的 when-gone 讀的那支檔超過這麼大就判不了
@@ -33040,6 +33089,277 @@ def _drift_probe_scan(nenv, tree, deadline=None, extract=None, kind="probe"):
                 found.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [],
                               "why": "撤除條件已經成立,這條限制該撤了" if kind == "retire" else
                               "條件已經成立,該處理了" + (f"(期限 {pr['by']})" if pr["by"] else "")})
+    return found, probs
+
+
+# ── 數量標記 [count:路徑::名稱=N](Projects/數量標記檢查_計劃):筆記寫「有 N 種」並掛標籤指名一個 Python 具名集合,
+#    drift scan 用語法樹數那個集合的成員,對不上列成 count;doctor Z 段只數標籤不評估(同回頭條件);drift fix 改成現值。
+_COUNT_TAG_RE = re.compile(r"\[count:([^\]]*)\]")
+_COUNT_SUPERSEDED_RE = re.compile(r"\[status:\s*superseded\s*\]")
+_COUNT_ENUM_BASES = frozenset(("Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"))
+_COUNT_WRAP_CALLS = {"frozenset": True, "set": True, "tuple": False, "list": False}   # 包一層字面值的呼叫 → 要不要去重
+
+
+_COUNT_NUM_RE = re.compile(r"[0-9]{1,9}")     # 九位數以內:超長的數字轉整數會丟例外、整個 scan 停掉(代碼審 r1 正確性席 F4)
+
+
+def _count_parse(v):
+    """標籤的值 → {"path", "name", "n", "errs"},形狀同 _probe_parse(errs 是清單,空的就是寫對了)。數字從最後一個 = 切;
+    路徑與名稱照 symbol 條件從最後一個 :: 切(_drift_cond_split,同一支)。寫錯的 n 是 None。"""
+    left, eq, num = v.rpartition("=")
+    path, name = _drift_cond_split(left, "symbol") if eq else ("", "")
+    errs = []
+    if not eq or not _COUNT_NUM_RE.fullmatch(num.strip()):
+        errs.append("寫錯了:要寫成 [count:路徑::名稱=N],N 是九位數以內的非負整數")
+    elif not path:
+        errs.append("寫錯了:要帶路徑([count:路徑::名稱=N])")
+    elif not name:
+        errs.append("寫錯了:少了名稱([count:路徑::名稱=N])")
+    return {"path": path, "name": name, "n": None if errs else int(num.strip()), "errs": errs}
+
+
+def _count_lines(text):
+    """一篇筆記的數量標記 → [(行號, 原文, 解析結果)],一個標籤一筆。只認看得見的正文與摘要(圍欄、行內程式碼、
+    開頭欄位裡 summary 以外的欄不算,同 _probe_lines);表格行照算(數量句常寫在表格裡,這個寫法沒有 |);
+    標了 [status:superseded] 的行不算(作廢就是處理完了)。"""
+    lines = text.split("\n")
+    regs = _notelines_regions(text)
+    vis = {no for no, _ln in _visible_lines(lines)}
+    out = []
+    for i, ln in enumerate(lines, 1):
+        if i not in vis or regs[i - 1] not in ("body", "summary"):
+            continue
+        seen = _strip_inline_markup(ln)[0]
+        if _COUNT_SUPERSEDED_RE.search(seen):
+            continue
+        out += [(i, ln.strip(), _count_parse(m.group(1))) for m in _COUNT_TAG_RE.finditer(seen)]
+    return out
+
+
+def _count_members(v, dedupe=False):
+    """字面值集合的成員數 → (數, None) 或 (None, 判不了的原因)。集合、字典、frozenset/set(…) 照 Python 去重,
+    成員都要是常數才去得了重;元組、清單、tuple/list(…) 直接數。"""
+    import ast
+    if (isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id in _COUNT_WRAP_CALLS
+            and len(v.args) == 1 and not v.keywords):
+        return _count_members(v.args[0], dedupe or _COUNT_WRAP_CALLS[v.func.id])
+    if isinstance(v, (ast.Tuple, ast.List, ast.Set)):
+        elts, dedupe = v.elts, dedupe or isinstance(v, ast.Set)
+    elif isinstance(v, ast.Dict):
+        if any(k is None for k in v.keys):
+            return None, "字典裡有展開(**),數不準"
+        elts, dedupe = v.keys, True
+    else:
+        return None, "不是字面值集合(元組、清單、集合、字典,或包一層 frozenset/set/tuple/list),數不準"
+    if any(isinstance(e, ast.Starred) for e in elts):
+        return None, "裡面有展開(*),數不準"
+    if not dedupe:
+        return len(elts), None
+    if not all(isinstance(e, ast.Constant) for e in elts):
+        return None, "集合或字典的成員不是常數,去重後有幾個數不準"
+    try:
+        return len({e.value for e in elts}), None
+    except TypeError:
+        return None, "集合或字典的成員不能比較是否重複,數不準"
+
+
+def _count_enum(c):
+    """列舉類別的成員數 → (數, None) 或 (None, 原因)。成員=本體裡單一名稱的指派;值要是常數或 auto(),常數重複就是別名
+    (Python 不算成員),判不了。Python 對成員的特例一律判不了、不自己模擬(代碼審 r1 正確性席 F1):底線開頭的名稱
+    (_x_ 與 __x__ 不是成員,_x 是,__x 看版本)、_ignore_、Flag 的組合值(不是 2 的次方就是別名)。"""
+    import ast
+    bases = {b.id if isinstance(b, ast.Name) else b.attr if isinstance(b, ast.Attribute) else "" for b in c.bases}
+    if not bases & _COUNT_ENUM_BASES:
+        return None, f"{c.name} 是類別但不是列舉(基底要是 {'/'.join(sorted(_COUNT_ENUM_BASES))})"
+    flag = bool(bases & {"Flag", "IntFlag"})
+    consts, autos, n = [], 0, 0
+    for st in c.body:
+        kind, val = _count_enum_member(c.name, st, flag)
+        if kind == "why":
+            return None, val
+        if kind == "const":
+            consts.append(val)
+        autos += kind == "auto"
+        n += kind != "skip"
+    if autos and consts:
+        # auto() 的值接在前一個值後面,跟明寫的值撞了就是別名(r2 正確性席 F2);不模擬 auto 的算法
+        return None, f"{c.name} 混用 auto() 與明寫的值,可能撞成別名,數不準"
+    if len(set(consts)) != len(consts):
+        return None, f"{c.name} 有成員的值重複(別名不算成員),數不準"
+    return n, None
+
+
+def _count_enum_member(cname, st, flag):
+    """列舉本體的一個語句 → ("skip", None) 不是成員(方法、pass、說明字串)/("const", 值)/("auto", None)/("why", 判不了的原因)。"""
+    import ast
+    if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Pass)) or (
+            isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
+        return "skip", None
+    tgt = st.targets[0] if isinstance(st, ast.Assign) and len(st.targets) == 1 else getattr(st, "target", None)
+    if not isinstance(st, (ast.Assign, ast.AnnAssign)) or not isinstance(tgt, ast.Name) or st.value is None:
+        # 看不懂的語句一律判不了,不略過(代碼審 code-數量標記檢查-2 r2 正確性席 F1:A = B = 1、A, B = 1, 2、
+        # if 區塊裡的成員原本被略過、數成 0 或 1)
+        return "why", f"{cname} 本體有看不懂的語句(第 {st.lineno} 行;多重指派、拆包或區塊裡的成員),數不準"
+    if tgt.id.startswith("_"):
+        return "why", f"{cname} 有底線開頭的名稱({tgt.id}),是不是成員看 Python 的特例,數不準"
+    val = st.value
+    if isinstance(val, ast.Constant):
+        if flag and not _count_flag_bit(val.value):
+            return "why", f"{cname} 是 Flag,{tgt.id} 的值不是單一位元(組合值是別名),數不準"
+        return "const", val.value
+    if isinstance(val, ast.Call) and not val.args and getattr(val.func, "id", getattr(val.func, "attr", None)) == "auto":
+        return "auto", None
+    return "why", f"{cname} 有成員的值不是常數或 auto(),數不準"
+
+
+def _count_flag_bit(v):
+    """Flag 成員的常數值是不是單一位元(正的 2 的次方)。"""
+    return type(v) is int and v > 0 and v & (v - 1) == 0
+
+
+# 只讀的方法:呼叫這些以外的方法一律當成可能改了內容(白名單,不列會改的那些——r2 正確性席 F3:X.__iadd__ 這類漏網)
+_COUNT_READ_METHODS = frozenset(("count", "index", "copy", "keys", "values", "items", "get", "union", "intersection",
+                                 "difference", "symmetric_difference", "issubset", "issuperset", "isdisjoint"))
+
+
+def _count_changed(tree, name):
+    """那個名稱在定義之外有沒有被改過或重新綁定 → True 就數不準(數的是定義當下)。
+    ★不列「哪些寫法會綁定」,改列「哪些出現方式不算綁定」★(代碼審 code-數量標記檢查-2 r2、r3 正確性席:列綁定寫法連漏兩輪——
+    try 區塊、global、拆包、del,接著是函式預設值與類別基底裡的海象、match 捕捉、except as):整支檔裡這個名稱的每一次出現,
+    除了單純讀取(讀取的 Name)、屬性名稱(x.名稱)、關鍵字參數名(f(名稱=…))、字串常數、import 的模組路徑以外,都算一次綁定;
+    超過定義本身那一次就判不了。函式與類別裡同名的區域變數也算(寧可判不了)。另外對它的下標賦值或刪除、呼叫只讀以外的方法
+    也判不了(內容被改)。定義本身也算一次出現(指派的 Name 或 class 的名字)。"""
+    import ast
+    seen = 0
+    for nd in ast.walk(tree):
+        bound = _count_bindings_in(nd, name)
+        if bound is None:
+            return True
+        seen += bound
+        if seen > 1 or _count_content_changed(nd, name):
+            return True
+    return False
+
+
+def _count_bindings_in(nd, name):
+    """一個節點自己(不含子節點)讓這個名稱出現幾次綁定;星號 import(可能蓋掉、名稱卻不出現)回 None。"""
+    import ast
+    if isinstance(nd, (ast.Constant, ast.Attribute, ast.keyword)):
+        return 0
+    if isinstance(nd, ast.Name):
+        return int(nd.id == name and not isinstance(nd.ctx, ast.Load))
+    if isinstance(nd, ast.alias):
+        if nd.name == "*":      # code-數量標記檢查-3 r1 正確性席 F2
+            return None
+        return int((nd.asname or nd.name.split(".")[0]) == name)
+    # ImportFrom 的模組路徑、MatchClass 的屬性名稱不是綁定
+    return sum(int(val == name or (isinstance(val, list) and name in val))
+               for field, val in ast.iter_fields(nd) if field not in ("module", "kwd_attrs"))
+
+
+def _count_content_changed(nd, name):
+    """這個節點有沒有改那個名稱的內容:對它的下標賦值或刪除、呼叫只讀以外的方法。"""
+    import ast
+    if (isinstance(nd, ast.Subscript) and isinstance(nd.ctx, (ast.Store, ast.Del))
+            and isinstance(nd.value, ast.Name) and nd.value.id == name):
+        return True
+    return (isinstance(nd, ast.Call) and isinstance(nd.func, ast.Attribute) and nd.func.attr not in _COUNT_READ_METHODS
+            and isinstance(nd.func.value, ast.Name) and nd.func.value.id == name)
+
+
+def _count_eval(src, name):
+    """Python 原始碼裡模組最上層那個名稱的成員數 → (數, None) 或 (None, 判不了的原因)。名稱只認模組最上層恰好一次的
+    指派或類別;找不到、不只一次都判不了(名稱改了該人看,不當成 0)。"""
+    import ast
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):      # MemoryError:同 _drift_py_names 的理由(巢狀很深的合法檔)
+        return None, "這支檔解不開(語法錯、巢狀太深,或用了比執行 lumos 的 Python 更新的語法)"
+    hits = []
+    for st in tree.body:
+        if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in st.targets):
+            hits.append(st.value)
+        elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name) and st.target.id == name and st.value:
+            hits.append(st.value)
+        elif isinstance(st, ast.ClassDef) and st.name == name:
+            hits.append(st)
+    if not hits:
+        return None, f"找不到模組最上層的 {name}(名稱可能改了)"
+    if len(hits) > 1:
+        return None, f"{name} 在模組最上層定義了不只一次,數不準"
+    if _count_changed(tree, name):
+        return None, f"{name} 定義之後又被改過或重新綁定(指派、拆包、刪除、global、import、呼叫會改內容的方法或下標賦值),數不準"
+    return _count_enum(hits[0]) if isinstance(hits[0], ast.ClassDef) else _count_members(hits[0])
+
+
+def _count_actual(tree, pr, memo):
+    """一個標籤在這一版(tree)的現值 → (數, None) 或 (None, 原因)。memo 記同一支檔的解析結果(同一篇、同一次 scan 共用)。"""
+    if tree is None:
+        return None, "判不了(git 列不出這一版的檔案)"
+    path = pr["path"]
+    if path not in tree.files:
+        return None, f"{path} 不在這一版(路徑可能改了)"
+    key = (path, pr["name"])
+    if key not in memo:
+        txt = tree.text_of(path)
+        if txt is None:
+            memo[key] = (None, f"判不了({path} 讀不出,或超過預算)")
+        elif not _drift_probe_is_py(path, txt):
+            memo[key] = (None, f"{path} 不是 Python,只數得了 Python 的具名集合")
+        else:
+            memo[key] = _count_eval(txt, pr["name"])
+    return memo[key]
+
+
+def _count_rewrite(line, old, new):
+    """一行的數量標記改成 =new,句子裡(方括號欄位與行內程式碼以外)恰好一個獨立的 old 也改成 new
+    → (新的一行, None) 或 (None, 擋下的原因)。中文數字、「十來個」不猜。
+    ★標籤整個重寫成 [count:路徑::名稱=new]★:原本只替換 =old],標籤寫成 = 5、=05 就比不到,句子改了標籤沒改,
+    寫進去才被驗證擋下(代碼審 r1 正確性席 F2)。★數字前後不能是英數字或底線★:F3、r3 這種識別碼裡的數字不算(F3);
+    行內程式碼裡的範例標籤不動(只改看得見的那一個)。"""
+    seen = _inline_visible_mask(line)                         # 行內程式碼遮掉(同 _strip_inline_markup 的判定,位置不動)
+    prose = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), seen)   # 方括號欄位也遮掉,只剩句子
+    hits = list(re.finditer(rf"(?<![0-9A-Za-z_./:\-]){old}(?![0-9A-Za-z_./:\-])", prose))
+    if not hits:
+        return None, f"句子裡找不到舊數字 {old}(寫成中文數字或別的說法),手動改這一行"
+    if len(hits) > 1:
+        return None, f"句子裡舊數字 {old} 不只一個,分不出是哪一個,手動改這一行"
+    tags = list(_COUNT_TAG_RE.finditer(seen))
+    if len(tags) != 1:
+        return None, f"這一行看得見的數量標記不是恰好一個(有 {len(tags)} 個),手動改這一行"
+    t, m = tags[0], hits[0]
+    if "\0" in t.group(0):
+        # 標籤裡夾著行內程式碼:看得見的標籤跟原文對不上,不猜(代碼審 code-數量標記檢查-2 r3 正確性席 F1:原本把遮罩字元寫進筆記)
+        return None, "數量標記裡夾著行內程式碼,手動改這一行"
+    left = line[t.start(1):t.end(1)].rpartition("=")[0].strip()
+    edits = sorted([(m.span(), str(new)), (t.span(), f"[count:{left}={new}]")], reverse=True)
+    for (a, b), txt in edits:
+        line = line[:a] + txt + line[b:]
+    return line, None
+
+
+def _drift_count_scan(nenv, tree, deadline=None):
+    """scan 的數量標記 → (對不上的[發現], 問題[(路徑, 行號, 原文, 原因)])。程式檔從 tree 讀(工作目錄或 --at 那一版,
+    跟回頭條件同一棵樹、同一個總預算);寫錯與判不了列成問題,不列成對不上。"""
+    import time as _t
+    rows = [(p, no, tx, pr) for p in sorted(nenv.notes) for no, tx, pr in _count_lines(env_text(nenv, p) or "")]
+    if tree is not None and rows:          # 指到的檔一批讀完(同 _drift_probe_prefetch 的理由)
+        tree.prefetch_paths({pr["path"] for *_x, pr in rows if not pr["errs"]})
+    found, probs, memo = [], [], {}
+    for p, no, tx, pr in rows:
+        if pr["errs"]:
+            probs.append((p, no, tx, "數量標記" + pr["errs"][0]))
+            continue
+        if deadline is not None and _t.monotonic() >= deadline:
+            probs.append((p, no, tx, "數量標記判不了(超過預算)"))
+            continue
+        actual, why = _count_actual(tree, pr, memo)
+        if why:
+            probs.append((p, no, tx, "數量標記" + why))
+        elif actual != pr["n"]:
+            found.append({"kind": "count", "path": p, "line": no, "text": tx, "related": [],
+                          "why": f"數量對不上:寫 {pr['n']}、現在是 {actual}({pr['path']}::{pr['name']})",
+                          "count": {"claimed": pr["n"], "actual": actual}})
     return found, probs
 
 
@@ -33646,7 +33966,7 @@ def _drift_print_hints(rows, stream, head="改法:"):
 _DRIFT_C3_STATUSES = frozenset(_STATUS_ENUM["verification"] - {"pending"})
 _DRIFT_FIX_OPTS = ("date", "close", "keep", "status", "reason", "by")
 _DRIFT_FIX_ALLOWED = {"c1": {"date"}, "c2": {"close", "keep", "status", "reason"}, "c3": {"status", "by", "reason"},
-                      "c4": set(), "c5": set()}
+                      "c4": set(), "c5": set(), "count": set()}
 
 
 def _drift_one_line(t):
@@ -33682,7 +34002,7 @@ def _drift_fix_c3_args(o):
 
 
 _DRIFT_FIX_KIND_ARGS = {"c1": lambda o: None, "c2": _drift_fix_c2_args, "c3": _drift_fix_c3_args,
-                        "c4": lambda o: None, "c5": lambda o: None}
+                        "c4": lambda o: None, "c5": lambda o: None, "count": lambda o: None}
 
 
 def _drift_fix_args_err(kind, o):
@@ -33764,6 +34084,8 @@ def _drift_fix_load(env, rel, line, kind, o):
         if err:
             return None, err
     cx["env2"] = Env(env.vault)
+    if kind in _DRIFT_FIX_SELF_JUDGED:
+        return cx, None
     cx["f"], err = _drift_current_finding(cx["env2"], rel, line, kind)
     return (None, err) if err else (cx, None)
 
@@ -34060,8 +34382,36 @@ def _drift_fix_c5(cx):
             "msg": f"守衛紀錄轉為 pass、預告句改成歷史說法;用家節點正式行綁的測試 {names[0]}{more}"}, None
 
 
+def _drift_fix_count(cx):
+    """count:那一行恰好一個數量標記、現在對不上 → 標籤與句子裡的數字一起改成現值(Projects/數量標記檢查_計劃〈做法〉6)。
+    現值從工作目錄的程式檔數(同 drift scan 工作目錄模式)。"""
+    line, lines = cx["line"], cx["lines"]
+    tags = [pr for no, _t, pr in _count_lines("\n".join(lines)) if no == line]
+    if len(tags) != 1:
+        return None, f"{cx['rel']} 第 {line} 行不是恰好一個數量標記(有 {len(tags)} 個),手動改"
+    pr = tags[0]
+    if pr["errs"]:
+        return None, "數量標記" + pr["errs"][0]
+    actual, why = _count_actual(_drift_probe_tree(cx["root"], "disk"), pr, {})
+    if why:
+        return None, "數量標記" + why
+    if actual == pr["n"]:
+        return None, f"{cx['rel']} 第 {line} 行的數字已經對得上({actual}),不用改"
+    new_line, err = _count_rewrite(lines[line - 1], pr["n"], actual)
+    if err:
+        return None, err
+    # 寫之前先把改好的那一行重抽一次,標籤真的變成現值才寫(寫進去才驗會留下改一半的筆記;代碼審 r1 正確性席 F2)
+    if [q["n"] for _n, _t, q in _count_lines(new_line)] != [actual]:
+        return None, f"改完的那一行重讀不是 {actual},沒寫;手動改這一行"
+    new = [*lines[:line - 1], new_line, *lines[line:]]
+    return {"new": new, "key": "body", "check": lambda _f: True,
+            "handled": lambda _fs, txt: any(no == line and q["n"] == actual for no, _t, q in _count_lines(txt)),
+            "extra": {"claimed": pr["n"], "actual": actual}, "texts": [],
+            "msg": f"數量 {pr['n']} 改成 {actual}(標籤與句子)"}, None
+
+
 _DRIFT_FIX_COMPUTE = {"c1": _drift_fix_c1, "c2": _drift_fix_c2, "c3": _drift_fix_c3, "c4": _drift_fix_c4,
-                      "c5": _drift_fix_c5}
+                      "c5": _drift_fix_c5, "count": _drift_fix_count}
 
 
 def _drift_fix_shape_err(root, texts):
@@ -35466,6 +35816,9 @@ def cmd_drift_scan(env, at=None, as_json=False, budget=None):
     pfound, probs = pfound + rfound, probs + rprobs
     # 現在成立的條件往回找寫下那一版、在那一版判同一組條件(Projects/回頭條件寫下時就成立_計劃);同一個總預算
     _drift_born_annotate(root, sha or "disk", vault_rel, tenv, pfound, deadline)
+    # 數量標記(Projects/數量標記檢查_計劃):同一棵樹、同一個總預算,排在寫下時就成立之後(它只看回頭條件與撤除條件)
+    cfound, cprobs = _drift_count_scan(tenv, ptree, deadline)
+    pfound, probs = pfound + cfound, probs + cprobs
     left, done = _drift_split_acked(_drift_state_findings(tenv) + pfound, _drift_load_acks(root, sha), vault_rel)
     # 解不開的筆記列成「判不了」(代碼審 r2 外家席:原本修復清單會靜默漏掉它們)。★不寫治理帳★(代碼審 r3 併發席、
     # 正確性席:讀指令不寫帳是既有決定 Systems/lumos-cli-read d1,計劃 [S2] 原本要記 degraded,改跟決定一致)
@@ -35501,7 +35854,7 @@ def _drift_scan_print(at, left, done, bad, probs=()):
             _drift_print_hints([f for f, acked in rows if not acked], sys.stdout, "  改法:")
     _drift_born_summary(list(left) + list(done))
     if probs:
-        print(f"[回頭條件與撤除條件的問題] {len(probs)} 處(寫錯、沒帶期限、指不到、寫在不評估的地方、判不了):")
+        print(f"[回頭條件、撤除條件與數量標記的問題] {len(probs)} 處(寫錯、沒帶期限、指不到、寫在不評估的地方、判不了):")
         for p, n, t, w in probs:
             print(f"  {_esc_clean(p)}:{n}  {_esc_clean(t, 70)}")
             print(f"      {_esc_clean(w, 1000)}")
@@ -35532,9 +35885,10 @@ def _drift_doctor_lines(env):
     out = []
     # 乙:只讀筆記、不評估條件(要看哪些成立跑 drift scan)
     n_rows = n_noby = n_bad = n_dead = 0
-    mis = []
+    mis, cnt = [], []
     for p in env.notes:
         txt = env_text(env, p) or ""
+        cnt += [pr for _n, _t, pr in _count_lines(txt)]     # 數量標記同樣只數不評估(Projects/數量標記檢查_計劃〈做法〉4)
         rows, dead = _probe_lines(txt)
         n_rows += len(rows)
         n_dead += len(dead)
@@ -35550,6 +35904,9 @@ def _drift_doctor_lines(env):
         # 接在第一行、不另起一行:Z 段也受軟段 3 條上限,另起一行在 c1 到 c5 多時會被收掉(回頭條件寫法補齊〈做法〉1.3)
         ex = ";".join(f"{_esc_clean(p[:-3], 80)}:{no}" for p, no in sorted(mis)[:3])
         parts.append(f"寫在句中的 REVISIT {len(mis)} 行(例:{ex})——搬成獨立一行,要結案就在那一行加 [closed:日期 理由]")
+    if cnt:
+        n_cbad = sum(1 for pr in cnt if pr["errs"])
+        parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
     if parts:
         out.append(";".join(parts))
     for k in ("c1", "c2", "c3", "c4", "c5"):
@@ -45497,10 +45854,10 @@ def main():
     dra.add_argument("--reason", dest="dr_reason", required=True)
     dra.add_argument("--name", dest="dr_names", action="append", default=None, metavar="名稱",
                      help="--kind m1 用(可重複):這一行照留的是哪幾個消失的名稱;一律寫成 --name=<名稱>(名稱以 -- 開頭時才不會被當成選項)")
-    drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c5;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
+    drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c5、count;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
     drf.add_argument("dr_node", metavar="節點")
     drf.add_argument("dr_line", metavar="行號", type=int)
-    drf.add_argument("--kind", dest="dr_kind", required=True, help="c1/c2/c3/c4/c5(照 drift scan 那一筆列的種類)")
+    drf.add_argument("--kind", dest="dr_kind", required=True, help="c1/c2/c3/c4/c5/count(照 drift scan 那一筆列的種類)")
     drf.add_argument("--dry-run", dest="dr_dry", action="store_true", help="只印改前改後,不寫筆記、不寫帳")
     drf.add_argument("--date", dest="dr_date", default=None, metavar="YYYY-MM-DD", help="c1:轉正日期(推不出來時要給)")
     drf.add_argument("--close", dest="dr_close", action="store_true", help="c2:Issue 解決了,結案")
