@@ -34,7 +34,7 @@ summary: |-
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
   KEY:[2026-09-07 loop list]新讀原語 `lumos loop list`——先看有哪些審查編號還開著(next/status/verify-progress 全都強制要 loop_id,卻沒有入口能先拿到編號;缺口出自 [[Projects/執行DAG_調研]])。★關門訊號取治理帳本來就會落的放行事件★(design-loop converged/cap-reached/rewrite + code-loop passed/skipped,nodes 帶編號),不新增任何要人維護的狀態;開著=沒關門事件或關門後又記新輪次。★誠實界線印在輸出裡★:關門事件慣例 2026-08-22 才開始,更早的迴圈天生沒這筆,工具只說「帳面沒看到關門事件」不說「沒做完」。唯讀恆 rc0;`--stale` 看空轉候選、`--exclude <前綴>` 排掉自主迴圈每日場次(不寫死前綴)、`--now YYYY-MM-DD` 指定今天(重算/測試用,壞值擋下 rc2)。★時間一律走 UTC 正規化再比(`_loop_ts_key`/`_loop_ts_newer`)★——兩本帳今天全寫 +08:00(數過 1101/26443 筆),直接比字串剛好會對但那是巧合;換一台機器寫 UTC 就會**靜默**把開著判成關了。解不動或沒帶時區才退回字串比對(舊帳相容),★沒帶時區一律不猜★。驗證見 [[Verification/2026-09-07_loop-list開著的迴圈]]
   KEY:[2026-08-16 query 結構化查詢]新讀原語 `query`——WHERE over 標籤家族(--tag 可重複=AND/--no-tag/--active 排收案態/--contract 沿 extract_contracts/--linked 1-hop 鄰域/--json);旗標 AND 疊加不發明查詢語言(borrow zk list);預設排除 superseded 對齊 search 真遺忘+--include-superseded 逃生;bare 無條件 rc2(對齊 stale --candidate);緣起=標籤收編後「欄位只有顯示沒有篩選」,Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]] [test:t_query_tag_and,t_query_no_tag_and_active,t_query_contract_uses_real_parser,t_query_linked_scope,t_query_forget_superseded,t_query_bare_rc2,t_query_json]
-  KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
+  KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail/superseded 驗證→死背書;superseded=真遺忘第二刀 2026-07-26,同刀:Check3 skip 集+sync-verified-by 過濾+orphan 豁免四位一致)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 query(標籤家族 WHERE)/contracts/decisions/stale 而非 search
@@ -55,7 +55,7 @@ related:
   - "[[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]]"
   - "[[Projects/圖譜結構化查詢_計劃]]"
 decisions:
-  - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
+  - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
     id: d1
     context: 直接手改 frontmatter 會繞過寫後自驗與鐵則防護(YAML 格式爆、ghost 節點、裸合約),且讀指令若兼寫會讓「查脈絡」帶副作用
     why_chosen: 讀路徑不動圖譜內容才能放心當入口反覆掃(best-effort 事件帳/治理帳不在此限,2026-07-21 措辭修真);寫路徑集中過 atomic 自驗閘,任一步敗則 tmp 丟棄原檔不動,保證圖譜永遠可解析
@@ -114,7 +114,7 @@ about_code:
 源起:CLI 核心非日報觸發(read 原語是 lumos 工具鏈的地基能力,非某日報 gap/inspiration 衍生的單一功能)。
 
 ## 共同地基
-所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-log 事件帳(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
+所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-local,不進版控)(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
 
 ## 14 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**
@@ -137,7 +137,7 @@ about_code:
   - `stats`(`cmd_stats`):各資料夾節點數 + total。
 
 ## 關鍵設計
-- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
+- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
 - **doctor vs lint 分工**:doctor 全圖權威(跨節點 + [test:] 存在性);`lint <節點>` 單檔 node-local 快檢,predicts pre-push 會不會擋。寫節點當下 lint,收尾 doctor。
 - **lint 另有一項軟提醒:開頭欄位的鍵打錯會被唸出來**(2026-09-06 全 repo 審視 #16)。出身:鍵打錯(例如把 `valid_under` 打成 `valid_unde`)以前是**所有檢查靜默略過**——那個欄位等於沒寫,而它可能正是承載回頭條件或驗證關聯的欄位。現在會指出哪個鍵不認得,並在只差一個字元時給出近名候選。
   - ★只算 warning 不升 error★:工具對未知欄位的立場是前向相容(消費專案與跨專案核心庫各有自己的欄位),升成 error 會讓別人的圖譜每次 lint 都被嘮叨。

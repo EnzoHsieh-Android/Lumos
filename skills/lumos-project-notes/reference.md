@@ -58,7 +58,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **單檔快檢（寫完一個節點立刻自驗標籤/格式，比 doctor 快）** | `python3 scripts/lumos lint <筆記名>` — type/summary/★ 格式/裸合約/未審/ghost trap;node-local 不掃 repo |
 | **測試層軟提醒（diff 命中宣告棧→提醒該跑的測試層）** | `python3 scripts/lumos test-layers --diff <range> [--json]` — 恆 rc0 advisory;讀 .lumos/test-layers.json,無宣告靜默 |
 | **lint 宣告健康檢查（宣告了跑不動的 linter 抓出來）** | `python3 scripts/lumos lint-check [--repo R] [--smoke]` — 靜態格式校驗+--smoke 真跑冒煙;rc 0健康/1有問題/2非JSON |
-| 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/rot/governance-log;本機可見性 |
+| 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/governance-log/governance-local(例行觀察,不進版控)/canary/kill/signoff/ci;本機可見性 |
 | **設計 spec 進實作前打磨**（對抗審計 loop 到收斂;canary 協議 2026-08-14 已停用） | 調用 **`lumos-design-loop`** skill;收斂閘=`lumos loop status <編號> --disposal --spec <計劃> --repo <根>`,旗標與其他原語見 `commands/05-設計審查迴圈.md` |
 | 健康巡檢（orphans / unresolved / verified_by 同步(驗收紀錄寫了 system_refs 就只看它) / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)；P2 殺傷力配方的原文還對不對得上程式(軟提醒,附 kill-rm 修法)） | `python3 scripts/lumos doctor [--ci]` |
 | 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |

@@ -1307,6 +1307,141 @@ def _gate_event_build(repo_root, gate, kind, note, *, hard=False, head_sha=None,
     return ev
 
 
+# ── 治理帳例行紀錄分流(Projects/治理帳例行紀錄分流_計劃)──
+# 「檢查自動跑出來的觀察」改寫進被忽略的本機帳,讓例行的提交、推送、查筆記之後版控檔一個位元組都不動;
+# 主動決定、擋人、略過、繞道、自動放行的紀錄照舊進版控帳(CI 與別台機器只讀得到那本)。
+# ★白名單★:只有下面明列的「閘名+種類」、而且 hard 恰好是 False 的事件才進本機帳;
+# 新增的閘或種類沒加進來就照舊進版控帳——分錯只會偏吵,不會偏丟(設計審 r2 四席指出黑名單會漏)。
+# ★code-loop、fix-check、design-loop 永遠不准出現在這裡★:判定類讀者只讀版控帳,讀不到就擋推或判錯迴圈狀態。
+GOV_LOG_NAME = ".governance-log.jsonl"          # 版控帳(新碼用;舊碼的字面值照留)
+GOV_LOCAL_LOG_NAME = ".governance-local.jsonl"
+USAGE_LOCAL_LOG_NAME = ".usage-local.jsonl"
+_LOCAL_LOG_IGNORE_LINES = (GOV_LOCAL_LOG_NAME, USAGE_LOCAL_LOG_NAME)
+_GOV_LOCAL_PAIRS = frozenset(
+    [("doctor-run", "ran"), ("ledger-growth", "fast"),
+     ("nodehome-check", "passed"), ("drift-check", "passed"),
+     ("note-shape", "hinted"), ("delguard", "ok"), ("spec-gate", "spec-gate-run")]
+    + [("daily-wrapper", k) for k in ("unreadable", "stale", "step-failed", "watchdog-absent", "watchdog-stale")]
+    + [("note-reread", k) for k in ("reminded", "covered", "none")]
+    # doctor 各段真的會寫 warned 的 check-* 閘(照 run_doctor 的寫入點逐一列,不用前綴比對;
+    # check-j 只寫 shallow-skip 與擋人,不列)
+    + [(g, "warned") for g in ("check-cascade", "check-e1", "check-e2", "check-e3", "check-k",
+                              "check-lint-decl", "check-p2", "check-p2s", "check-r", "check-revisit",
+                              "check-s", "check-s2", "check-s3", "check-s4", "check-s5", "check-s6",
+                              "check-s7", "check-s8", "check-s9", "check-s10", "check-s11", "check-s16")])
+
+
+def _docs_ledger_path(docs_dir, name):
+    """docs 層帳檔(版控帳與本機帳都放這一層)的路徑。"""
+    return Path(docs_dir) / name
+
+
+def _regular_own_fd(path, flags, mode=0o666):
+    """開檔 → 檔案代號;開不了、不是一般檔案、不是自己的檔就回 None(代號已關)。
+    帶 O_NOFOLLOW(不跟捷徑)、O_NONBLOCK(沒有讀者的管線直接失敗,不卡住)——同 _drift_m1_ledger_miss 那段的寫法
+    (代碼審 code-gov-ledger-split-2 r2 架構對齊席:原本另抄一份還少了擁有者檢查)。"""
+    import stat as _stat
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(str(path), flags, mode)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if _stat.S_ISREG(st.st_mode) and not (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def _local_ledger_append(path, text):
+    """往本機帳追加一段文字 → 寫成回 True。三支寫入器共用。開檔時就擋捷徑、管線、別人的檔(不先檢查再開;
+    2 r1 併發席),單次 os.write 並核對長度,短寫(磁碟滿)不算寫成(同 _ledger_append;2 r2 併發、邊界席)。"""
+    fd = _regular_own_fd(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    if fd is None:
+        return False
+    try:
+        data = text.encode("utf-8")
+        return os.write(fd, data) == len(data)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _gov_ts(ts):
+    """治理帳的 ts 欄 → 帶時區的時間;沒帶時區當本機時間;不是字串、不是 ISO、轉時區出界回 None。
+    度量段與兩本合讀共用(代碼審 code-gov-ledger-split r1 架構對齊席:原本兩處各寫一份、接的例外還不一樣)。"""
+    import datetime as _dt
+    if not isinstance(ts, str):
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(ts)
+        t = t.astimezone() if t.tzinfo is None else t
+        t.timestamp()          # 排序要用;出界的這裡就擋掉,呼叫端不必再包一層
+        return t
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _gov_ledger_rows_by_time(docs_dir):
+    """版控帳與本機帳的物件行,依時間排序(統計類讀者用;判定類讀者只讀版控帳,不走這支)。
+    ★整份讀★:呼叫端要的是「每份計劃最近一次」這類全歷史問題,只讀檔尾會讓舊計劃從清單消失(代碼審 r2 正確性、整合席);
+    要排序所以整份轉成清單是必要代價,本機帳超過 5 MB 時 doctor 會提醒。
+    切行與壞行同帳檔共用的 _drift_jsonl_iter(只在 \\n 切行、壞行只跳那一行);只讀最終指向一般檔案的帳
+    (跟捷徑讀,同 cmd_gov;特殊裝置檔、管線不讀,免得讀不到底——代碼審 r2 併發席)。
+    排序鍵:_gov_ts;解析不了的排最前;時間相同保留讀入順序(版控帳在前)。"""
+    rows = []
+    for name in (GOV_LOG_NAME, GOV_LOCAL_LOG_NAME):
+        p = _docs_ledger_path(docs_dir, name)
+        try:
+            if not p.is_file():
+                continue
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        rows.extend(_drift_jsonl_iter(raw))
+
+    def key(d):
+        t = _gov_ts(d.get("ts"))
+        return (1, t.timestamp()) if t is not None else (0, 0.0)
+    return sorted(rows, key=key)
+
+
+def _local_ledger_doctor_msgs(docs_dir, mb_cap):
+    """doctor 對兩本本機帳的軟提醒行:超過大小上限;已被版控追蹤;或在 git 工作目錄裡存在、沒被追蹤、也沒被忽略
+    (`git check-ignore -q` 回 1)。check-ignore 回其他值(不在 git 裡、出錯)就不提醒。git 走既有的 _lens_git(逾時與吞錯同鄰居)。"""
+    msgs = []
+    for name in _LOCAL_LOG_IGNORE_LINES:
+        p = _docs_ledger_path(docs_dir, name)
+        if not p.is_file():
+            continue
+        mb = p.stat().st_size / 1048576.0
+        if mb > mb_cap:
+            msgs.append(f"{name} {mb:.1f} MB,超過 {mb_cap} MB")
+        r_tr = _lens_git(docs_dir, "ls-files", "--error-unmatch", "--", name, timeout=10)
+        r_ig = _lens_git(docs_dir, "check-ignore", "-q", "--", name, timeout=10)
+        if r_tr is None or r_ig is None:
+            continue
+        tracked, ign = r_tr.returncode == 0, r_ig.returncode
+        if tracked:     # 忽略規則對已追蹤的檔無效,每次例行寫入都弄髒工作目錄(代碼審 r1 邊界、整合席)
+            msgs.append(f"{name} 已被版控追蹤,忽略規則對它無效;git rm --cached 它(檔案留在本機)")
+        elif ign == 1:
+            msgs.append(f"{name} 沒被 .gitignore 忽略,會以未追蹤檔出現")
+    return msgs
+
+
+def _gov_routes_local(ev):
+    """這筆治理帳事件要不要寫進本機帳。兩支寫入器共用這一支判定,不各抄一份。
+    欄位缺、型別不對一律回 False(進版控帳)。"""
+    gate, kind = ev.get("gate"), ev.get("kind")
+    if not isinstance(gate, str) or not isinstance(kind, str):
+        return False
+    return ev.get("hard") is False and (gate, kind) in _GOV_LOCAL_PAIRS
+
+
 def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
                 ref=None, nodes=None, extra=None):
     """擋人(或放行/被跳過)的那一刻,由★做判定的那一方★落一筆治理帳(#19 S1)。
@@ -1354,9 +1489,15 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
               file=sys.stderr)
         return False
     ev = _gate_event_build(repo_root, gate, kind, note, hard=hard, head_sha=head_sha, ref=ref, nodes=nodes, extra=extra)
+    # 例行觀察寫本機帳,其餘照舊寫版控帳(_gov_routes_local);寫不進去回 False 的約定兩本一樣
+    local = _gov_routes_local(ev)
+    path = _docs_ledger_path(docs, GOV_LOCAL_LOG_NAME if local else GOV_LOG_NAME)
+    line = _json.dumps(ev, ensure_ascii=False) + "\n"
+    if local:
+        return _local_ledger_append(path, line)
     try:
-        with open(docs / ".governance-log.jsonl", "a", encoding="utf-8") as f:
-            f.write(_json.dumps(ev, ensure_ascii=False) + "\n")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
         return True
     except OSError:
         return False
@@ -1423,13 +1564,23 @@ def _append_governance_log(vault, events):
     if not commit:
         return
     ts = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-    path = vault.parent / ".governance-log.jsonl"
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            for e in events:
-                f.write(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
+    # 逐筆分流(同一批可能兩種都有);★兩本各自開檔、各自吞錯★——本機帳寫不進去不得連累要進版控帳的事件
+    tracked, local = [], []
+    for e in events:
+        (local if _gov_routes_local(e) else tracked).append(e)
+    for path, batch in ((_docs_ledger_path(vault.parent, GOV_LOG_NAME), tracked),
+                        (_docs_ledger_path(vault.parent, GOV_LOCAL_LOG_NAME), local)):
+        if not batch:
+            continue
+        text = "".join(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n" for e in batch)
+        if batch is local:
+            _local_ledger_append(path, text)
+            continue
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(text)
+        except OSError:
+            pass
 
 
 def _read_touched_list(path):
@@ -2293,6 +2444,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                    if _window_ok else f"治理帳 {_mb:.1f} MB;只讀得到最近一段,成長率這次不比")
     except Exception as _e:
         ok(f"治理帳成長觀測跳過(fail-open:{_e})")
+    # 本機帳(治理帳例行紀錄分流_計劃〈做法〉5、6):只看大小,不看成長倍數;沒被忽略就提示跑 lumos update
+    try:
+        _local_msgs = _local_ledger_doctor_msgs(env.vault.parent, _LEDGER_MB_CAP)
+        if _local_msgs:
+            warn_soft(_local_msgs, "本機帳(例行紀錄,不進版控)要留意:",
+                      "沒被忽略的:帳在 docs/ 的跑一次 lumos update 補忽略規則(它說補不了的照它印的兩行手動加),"
+                      "其他佈局在帳檔同一層的 .gitignore 加上檔名(工具來源 repo 自己看根目錄的 .gitignore,update 不會補);"
+                      "被追蹤的照提示 git rm --cached;太大的可以直接刪,只影響本機統計(度量式撤除條件會重新暖機)")
+    except Exception as _e:
+        ok(f"本機帳觀測跳過(fail-open:{_e})")
     print()
 
     # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
@@ -2866,16 +3027,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         else:
             ok(f"有條款的計劃比例 {_with}/{len(_new)}(分母=首筆帳晚於 {_SPEC_GATE_SINCE[:10]} 的設計迴圈;RETIRE-IF ① 看它降不降)")
         _latest = {}
-        _gl = env.vault.parent / ".governance-log.jsonl"
-        if _gl.exists():
-            for _ln in _gl.read_text(encoding="utf-8", errors="replace").splitlines():
-                try:
-                    _d = json.loads(_ln)
-                except ValueError:
-                    continue
-                if isinstance(_d, dict) and _d.get("kind") == "spec-gate-run":
-                    for _nd in _d.get("nodes") or []:
-                        _latest[str(_nd)] = _d.get("note", "")
+        # 兩本合起來、依時間排序後「後寫者勝」(spec-gate-run 是例行觀察,分流後寫在本機帳;舊的留在版控帳)
+        for _d in _gov_ledger_rows_by_time(env.vault.parent):
+            if _d.get("kind") == "spec-gate-run":
+                for _nd in _d.get("nodes") or []:
+                    _latest[str(_nd)] = _d.get("note", "")
         if _latest:
             _rows = []
             for _nd, _note in sorted(_latest.items()):
@@ -3695,6 +3851,8 @@ _GOV_TAIL_CAP = 24 * 1048576
 def _gov_tail_bytes(path, cap=_GOV_TAIL_CAP):
     """治理帳只讀檔尾 cap 位元組 → (位元組, 從第幾個位元組讀起;0=整份讀到)。切一半的頭一行丟掉。
     帳自己在加速膨脹,用 O(全部歷史) 的讀法會讓成本跟著膨脹一起長(doctor 帳增速那段原本的寫法,抽出來給度量共用)。"""
+    if not Path(path).is_file():     # 特殊裝置檔、管線、資料夾:stat 大小是 0 卻讀不到底(代碼審 code-gov-ledger-split r2 併發席)
+        raise OSError(f"不是一般檔案:{path}")   # 丟錯不回空:回空會被呼叫端當成「整份讀到、零筆」往下比(r3 正確性席)
     sz = Path(path).stat().st_size
     start = max(0, sz - cap)
     with open(path, "rb") as fh:
@@ -3819,25 +3977,22 @@ def _metric_gate_off(root, gate, cfg_text):
     return False
 
 
-def _gov_metric_events(path):
-    """治理帳檔尾 → ([(閘, 種類, 時間)], 讀到的最舊一筆時間或 None)。時間不是 ISO、或轉時區出界的那一筆略過
+def _gov_metric_events(path, now=None):
+    """治理帳檔尾 → ([(閘, 種類, 時間)], 暖機起點或 None)。暖機起點=不晚於 now 的時間裡第二早的那個(至少兩筆才有):
+    單獨一筆寫壞的時間——太早(時鐘歸零的 1970)或太晚(2099)、在帳首或帳中——都不能讓暖機護欄失效或永遠卡住
+    (代碼審 r2 邊界席、r3 正確性與邊界席、2 r1 回滾席;取最小值怕太早、取第一筆怕帳首壞、不排除未來會被 2099 卡住)。
+    代價:整本帳只有一筆舊紀錄時不判(計劃〈天花板〉)。時間不是 ISO、或轉時區出界的那一筆略過
     (一行壞帳只跳那一行;代碼審 r1 邊界席:原本 astimezone 在 try 外,9999 年那種值整段崩)。沒帶時區的當本機時間。"""
-    import datetime as _dt
+    import heapq as _hq
     raw, _start = _gov_tail_bytes(path)
-    evs, oldest = [], None
+    evs = []
     for d in _drift_jsonl_iter(raw):
-        ts = d.get("ts")
-        if not isinstance(ts, str):
-            continue
-        try:
-            t = _dt.datetime.fromisoformat(ts)
-            if t.tzinfo is None:
-                t = t.astimezone()
-        except (ValueError, OverflowError):
+        t = _gov_ts(d.get("ts"))
+        if t is None:
             continue
         evs.append((d.get("gate"), d.get("kind"), t))
-        oldest = t if oldest is None or t < oldest else oldest
-    return evs, oldest
+    two = _hq.nsmallest(2, (t for _g, _k, t in evs if now is None or t <= now))
+    return evs, (two[1] if len(two) == 2 else None)
 
 
 def _metric_rows(env):
@@ -3858,23 +4013,33 @@ def _metric_rows(env):
 
 def _doctor_metric_lines(env, root, now=None):
     """doctor S18:有效 RULE 的 [retire:度量 <閘>.<種類> <比較> <整數> 近<N>週] 成立了 → 要列的行。
-    治理帳檔尾只讀一遍、所有度量共用;不判:讀到的最舊一筆不早於 N 週前(暖機或檔尾被截)、[since:] 不滿 N 週、閘目前是 off。
+    兩本帳檔尾各讀一遍、所有度量共用;不判:這個閘+種類寫進的那一本(_GOV_LOCAL_PAIRS 的看本機帳,其餘看版控帳)暖機起點不早於 N 週前
+    (暖機、檔尾被截、本機帳不在)、[since:] 不滿 N 週、閘目前是 off。暖機起點見 _gov_metric_events。
     數的是整個閘的事件數(帳不記是哪條 RULE 觸發的)。完整 doctor 才跑(呼叫端判 --ci)。
     ★先照提交時同一支 _slot_retire_err 重驗寫法★:舊筆記、跳過提交檢查進來的不一定合法(代碼審 r1 邊界席:
     近 99999999999 週讓 timedelta 溢位、整個 doctor 崩;閘名拼錯會被當成零筆而「成立」),寫不合的列成提醒、不判。"""
     import datetime as _dt
     out, ok_rows = _metric_rows(env)
-    gl = env.vault.parent / ".governance-log.jsonl"      # 同 doctor 其他讀治理帳的段落
-    if not ok_rows or not gl.is_file():
+    gl = _docs_ledger_path(env.vault.parent, GOV_LOG_NAME)
+    gll = _docs_ledger_path(env.vault.parent, GOV_LOCAL_LOG_NAME)   # 本機帳(例行觀察)
+    if not ok_rows or not (gl.is_file() or gll.is_file()):
         return out
-    evs, oldest = _gov_metric_events(gl)
-    cfg_text = _doctor_cfg_bytes(root)
     now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
+    evs, oldest = _gov_metric_events(gl, now) if gl.is_file() else ([], None)
+    # ★事件兩本合起來數;暖機護欄看「這個閘+種類現在寫進哪一本」★(治理帳例行紀錄分流_計劃〈做法〉6):
+    # 走本機帳的組合看本機帳的暖機起點——本機帳不在(新 clone、CI、被刪)或不滿 N 週就不判。
+    # 原本一律看版控帳,版控帳夠舊就放行,本機帳不在時那類事件數成 0 筆、誤報「該撤」(代碼審 r1 正確性席實跑)。
+    oldest_local = None
+    if gll.is_file():
+        evs_l, oldest_local = _gov_metric_events(gll, now)
+        evs = evs + evs_l
+    cfg_text = _doctor_cfg_bytes(root)
     for rel, no, sp, m in ok_rows:
         gate, kind, op, thr, weeks = m.group(1), m.group(2), m.group(3), int(m.group(4)), int(m.group(5))
         cutoff = now - _dt.timedelta(weeks=weeks)
         since = _rule_date((_slot_vals(sp, "since") or [""])[0])
-        if oldest is None or oldest > cutoff or since is None or since > cutoff.date() \
+        first = oldest_local if (gate, kind) in _GOV_LOCAL_PAIRS else oldest
+        if first is None or first > cutoff or since is None or since > cutoff.date() \
                 or _metric_gate_off(root, gate, cfg_text):
             continue
         cnt = sum(1 for g, k, t in evs if g == gate and k == kind and t >= cutoff)
@@ -8120,7 +8285,7 @@ def _gov_event_types_ok(d):
 
 
 def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
-    """唯讀彙整六帳(bypass/governance/canary/kill/signoff/ci;rot-queue 2026-08-22 拆出)→ 治理事件時間軸。
+    """唯讀彙整七帳(bypass/governance/governance-local/canary/kill/signoff/ci;rot-queue 2026-08-22 拆出)→ 治理事件時間軸。
     本機開發可見性工具(非合規物)。L2 無 node → 對 Systems 為部分視圖。
     去噪(2026-07-25,呈現層——帳本身不動):同日同類 advisory(軟/warned/無 detail,如 Check S
     每次 doctor 全名單重喊)跨 commit 折疊 ×N、同群 >6 節點收單行摘要;--full 回完整逐筆。"""
@@ -8136,7 +8301,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
 
     def load(name, mapper):
         p = docs / name
-        if not p.exists():
+        if not p.is_file():      # 跟捷徑讀,但只讀一般檔案(特殊裝置檔、管線讀不到底;代碼審 code-gov-ledger-split r2 併發席)
             return
         loaded.append(name.lstrip(".").replace("-log.jsonl", "").replace(".jsonl", ""))
         # 逐行容錯讀,用帳檔共用的 _drift_jsonl_parse(位元組 errors=replace 解碼、只在 \n 切行、壞行與非物件略過):
@@ -8158,7 +8323,9 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
     load(".bypass-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": "L2", "kind": "bypassed", "hard": False, "nodes": [], "detail": d.get("subject", "")})
     # .rot-queue.jsonl(L3)2026-08-22 拆出:寫帳的 verification-rot-check 8/21 已撤,本機也沒有這個檔;留 loader 只是假名額。
-    load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+    def _gov_row(d):
+        # 治理帳一筆 → 統計列。版控帳與本機帳(例行觀察,治理帳例行紀錄分流_計劃)欄位一樣,共用這一支
+        return {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", ""),
          # 審查有沒有用記帳(2026-09-09):記帳被寫側擋下(canary/blocked)每次各算一筆——同一個 commit 連撞三次
@@ -8180,7 +8347,9 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          # 每支檔有家(2026-09-11 [S27]):擋下事件的(檔,節點)配對——回頭條件要拿它列出「被逼出來的 about_code」
          "pairs": d.get("pairs") if d.get("gate") == "nodehome-check" else None,
          # 舊句檢查 m1 的事件帶 check(2026-09-30):同一次推送 drift-check 的 c 類與 m1 各一筆,去重時要分得開
-         "check": d.get("check")})
+         "check": d.get("check")}
+    load(GOV_LOG_NAME, _gov_row)
+    load(GOV_LOCAL_LOG_NAME, _gov_row)   # 本機帳:檔不在就跳過(同 .ci-log)
     # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
     load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": "signoff", "kind": "signed", "hard": False,
@@ -16180,13 +16349,14 @@ def _reco_fused(env, seed, top=8, min_score=0.20, depth=2):
 
 def _usage_log(env, rel, cmd):
     """A2 事件帳種子(節點靜態先驗_調研):記「節點真的被查閱採用」的 append 帳。
-    先累語料不進分數;未來 frecency=查詢時現算(Firefox 教訓:不存時變分數)。best-effort 靜默。"""
+    先累語料不進分數;未來 frecency=查詢時現算(Firefox 教訓:不存時變分數)。best-effort 靜默。
+    ★寫被忽略的本機帳 .usage-local.jsonl★(Projects/治理帳例行紀錄分流_計劃):唯讀的 show/context 不再弄髒版控檔;
+    舊的 .usage-log.jsonl 原地凍結、不再寫——不停止追蹤,別台機器 pull 時才不會被刪檔或中止。"""
     try:
         import datetime as _dt
-        p = env.vault.parent / ".usage-log.jsonl"
-        with open(p, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
-                                 "node": rel, "cmd": cmd}, ensure_ascii=False) + "\n")
+        p = _docs_ledger_path(env.vault.parent, USAGE_LOCAL_LOG_NAME)
+        _local_ledger_append(p, json.dumps({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                                            "node": rel, "cmd": cmd}, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
@@ -20551,6 +20721,8 @@ def _pull_source_or_abort(src, allow_stale=False):
         return 0
     # ★來源「只髒了工具自己寫的帳」不該擋人★(2026-09-06 全 repo 審視 #5)
     # 症狀:唯讀的 `lumos show`/`context` 就會 append docs/.usage-log.jsonl,而那本帳是版控的。
+    # (2026-10-04 起使用紀錄與例行治理觀察改寫不進版控的 .usage-local / .governance-local,
+    #  這條路弄髒的機會變少;舊帳與主動決定仍會被寫,聯集合併照留。)
     # 只要有人在來源 clone 裡查過一次圖譜,之後這台機器所有專案的 update / bootstrap --pull
     # 全部被 fail-closed 擋住;逃生門寫在錯誤訊息最後一行,沒人會讀到那裡。
     #
@@ -20877,8 +21049,10 @@ def _scaffold_project(root: Path, slug: str):
     _write_lf(kg.parent / ".gitignore",
               "# 本機流水帳(不進版控);★治理帳 .governance-log.jsonl 刻意不在這裡★——\n"
               "# CI 靠它讀代碼審留痕與棧別提問表態,忽略掉那條路就斷了。\n"
+              "# 自動檢查的例行觀察另寫 .governance-local.jsonl,那本才忽略。\n"
               ".bypass-log.jsonl\n.rot-queue.jsonl\n.canary-log.jsonl\n"
-              ".kill-log.jsonl\n.signoff-log.jsonl\n.usage-log.jsonl\n.ci-log.jsonl\n")
+              ".kill-log.jsonl\n.signoff-log.jsonl\n.usage-log.jsonl\n.ci-log.jsonl\n"
+              + "".join(f"{n}\n" for n in _LOCAL_LOG_IGNORE_LINES))
     print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
 
 
@@ -20906,7 +21080,91 @@ def _init_additive_setup(root: Path):
                   "code-loop/\n"
                   "runtime/\n")
         print(f"  ✓ 本機留痕的忽略設定 {gov_ignore}")
+    _ensure_docs_gitignore(root / "docs")
     _init_config_skeleton(root)
+
+
+def _ensure_docs_gitignore(docs_dir):
+    """既有 vault 補本機帳的忽略規則(Projects/治理帳例行紀錄分流_計劃〈做法〉5)。只加不改。
+    - docs/ 不存在:什麼都不做(不建資料夾——獨立 vault 佈局建了反而改變「有沒有 docs/」的判斷)。
+    - docs/.gitignore 不存在:獨佔建一份★只放本機帳那兩行★(不套新建 vault 的整份清單,那會把另外幾本進版控的帳也忽略掉)。
+    - 存在:逐行比對,行尾換行與空白去掉後整行相等才算有(行首空白不去,跟 git 一樣);缺的接在尾端追加、
+      沿用原檔的換行符號,檔尾沒換行先補一個。★追加不替換★(代碼審 r2):替換會拆開捷徑或硬連結、
+      蓋掉使用者剛存的編輯、被砍時留暫存檔。★不拿鎖★(r3 併發席:鎖檔建不起來時空等 60 秒);
+      兩個程序剛好同時補可能補出重複行,對 git 無害、下次比對已有就不再補(使用者 2026-10-04 裁)。
+      讀、看檔尾、追加都用同一個檔案代號(開檔不跟捷徑、不等管線,開到再確認是一般檔案;
+      code-gov-ledger-split-2 r1 併發席:分開開檔時,中間被改會讓追加的字黏到使用者最後一行)。
+    - 不動的情況:是捷徑(git 不跟捷徑讀 .gitignore)、不是一般檔案、不是 UTF-8、寫不進去、或缺行但是硬連結——
+      ★印出原因與要手動加的兩行★(r3 回滾、整合席);硬連結已經有兩行就安靜放過(2 r1 正確性、整合席)。
+    寫入失敗一律回 [] 不往外丟(2 r1 邊界席:init/update 會中止)。回傳實際補上的行(測試與訊息用)。"""
+    import os as _os
+    docs_dir = Path(docs_dir)
+    if not docs_dir.is_dir():
+        return []
+    gi = docs_dir / ".gitignore"
+    nofollow = getattr(_os, "O_NOFOLLOW", 0) | getattr(_os, "O_NONBLOCK", 0)
+
+    def _manual(why):
+        print(f"  ⚠ {gi} {why},沒有自動補本機帳的忽略規則;請自己在 git 實際讀的那份忽略設定加上:\n"
+              + "".join(f"      {n}\n" for n in _LOCAL_LOG_IGNORE_LINES), end="")
+        return []
+    if gi.is_symlink():
+        return _manual("是捷徑(git 不跟捷徑讀 .gitignore)")
+    if not gi.exists():
+        body = ("# 本機流水帳(不進版控;lumos init 補的)\n"
+                + "".join(f"{n}\n" for n in _LOCAL_LOG_IGNORE_LINES)).encode("utf-8")
+        try:
+            fd = _os.open(str(gi), _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL | nofollow, 0o666)
+        except FileExistsError:
+            fd = None                                # 同時有人建好了:照「已存在」那條路走
+        except OSError as e:
+            return _manual(f"建不起來({e.__class__.__name__})")
+        if fd is not None:
+            try:
+                with _os.fdopen(fd, "wb") as f:
+                    f.write(body)
+            except OSError as e:
+                return _manual(f"寫不進去({e.__class__.__name__})")
+            print(f"  ✓ 本機帳的忽略設定 {gi}")
+            return list(_LOCAL_LOG_IGNORE_LINES)
+    rfd = _regular_own_fd(gi, _os.O_RDONLY)        # 先唯讀讀內容:唯讀檔、已齊全的不必開成可寫(2 r2 正確性等四席)
+    if rfd is None:
+        return _manual("開不了,或不是自己的一般檔案")
+    try:
+        with _os.fdopen(rfd, "rb") as f:
+            raw = f.read()
+            nlink = _os.fstat(f.fileno()).st_nlink
+    except OSError as e:
+        return _manual(f"讀不了({e.__class__.__name__})")
+    try:
+        have = {ln.rstrip() for ln in raw.decode("utf-8").splitlines()}
+    except UnicodeDecodeError:
+        return _manual("不是 UTF-8")
+    missing = [n for n in _LOCAL_LOG_IGNORE_LINES if n not in have]
+    if not missing:
+        return []
+    if nlink > 1:
+        return _manual("是硬連結(追加會改到另一個名字的檔)")
+    nl = b"\r\n" if b"\r\n" in raw else b"\n"
+    wfd = _regular_own_fd(gi, _os.O_RDWR | _os.O_APPEND)
+    if wfd is None:
+        return _manual("寫不進去(唯讀或被換掉了)")
+    try:
+        size = _os.fstat(wfd).st_size                 # 讀完之後別人又寫了:看「現在」的檔尾,不看讀到的
+        if size:
+            _os.lseek(wfd, size - 1, _os.SEEK_SET)    # 帶 O_APPEND:寫入一律到檔尾,不受這裡定位影響
+            tail = _os.read(wfd, 1)
+        else:
+            tail = b"\n"
+        data = (b"" if tail == b"\n" else nl) + b"".join(n.encode("utf-8") + nl for n in missing)
+        if _os.write(wfd, data) != len(data):        # 短寫(磁碟滿)不算補上(同 _ledger_append;2 r2 併發、邊界席)
+            return _manual("沒寫完整(磁碟可能滿了)")
+    except OSError as e:
+        return _manual(f"寫不進去({e.__class__.__name__})")
+    finally:
+        _os.close(wfd)
+    print(f"  ✓ 本機帳的忽略設定補上 {len(missing)} 行 → {gi}")
+    return missing
 
 
 # 副檔名 → (test_profile, symbol_profile, 一句人話)。給 init 猜這個 repo 是什麼棧用。
@@ -24191,6 +24449,8 @@ def _strip_string_literals(code):
 # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
 # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
 _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                      # 本機帳(被忽略)萬一被 git add -A 提交,也只是簿記、不讓代碼審留痕失效(治理帳例行紀錄分流_計劃)
+                      "docs/" + GOV_LOCAL_LOG_NAME, "docs/" + USAGE_LOCAL_LOG_NAME,
                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
                       "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
                       "docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",
@@ -36523,6 +36783,7 @@ _COCHANGE_DEFAULT_EXCLUDE = [
     "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl", "docs/.ci-log.jsonl",
     "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
     "docs/.signoff-log.jsonl", "docs/.usage-log.jsonl",
+    "docs/" + GOV_LOCAL_LOG_NAME, "docs/" + USAGE_LOCAL_LOG_NAME,
     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
     "**/Migrations/**", "**/*.g.cs", "**/*.Designer.cs",
 ]
