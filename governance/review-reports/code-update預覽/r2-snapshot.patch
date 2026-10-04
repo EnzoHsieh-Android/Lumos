@@ -1,0 +1,68 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 2594da74..fe0a2777 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20375,8 +20375,9 @@ def _reinject_compute(root: Path, target: str, body):
+     out["status"], out["new_text"] = "updated", new_text
+     out["version_only"] = old_body == new_body
+     out["diff"] = "".join(difflib.unified_diff(
+-        (old_start_line + "\n" + old_body).splitlines(keepends=True),
+-        (start_line + "\n" + new_body).splitlines(keepends=True),
++        # 兩邊都補結尾換行:difflib 不幫最後一行補換行,不補時「刪掉的最後一行」會跟「新加的第一行」黏成一行
++        (old_start_line + "\n" + old_body + "\n").splitlines(keepends=True),
++        (start_line + "\n" + new_body + "\n").splitlines(keepends=True),
+         fromfile="old block",
+         tofile="new block",
+     ))
+@@ -20893,7 +20894,7 @@ def _update_rule_plan(src, root, slug):
+     for t in _reinject_targets(root):
+         try:
+             out[t] = _reinject_compute(root, t, body)
+-        except (UnicodeDecodeError, OSError) as e:
++        except (UnicodeDecodeError, OSError) as e:   # 只接「這支檔讀不了」;不學 deinit 寬接 Exception,程式錯誤照樣往外丟,不被藏成讀不了
+             out[t] = {"status": "unreadable", "reason": "不是 UTF-8" if isinstance(e, UnicodeDecodeError)
+                       else e.__class__.__name__, "new_text": None}
+     return out
+@@ -20933,7 +20934,6 @@ def _preview_rule_target(t, it, source_repo):
+ 
+ def _preview_vendored(src, root):
+     """印工具檔清單與套用時還會做的其餘動作(_update_preview 的後半)。"""
+-    import shlex as _shlex
+     pend = _vendored_pending(src, root)
+     print(f"  工具檔({len(pend)} 支會換新或新增;只差換行也算,套用時會整檔換掉):")
+     for rel in pend:
+@@ -20944,7 +20944,7 @@ def _preview_vendored(src, root):
+     print("    專案裡:補設定骨架與 governance/.gitignore、補 docs/.gitignore 的本機帳兩行、寫 .lumos/vendored.json、"
+           "設定 git config core.hooksPath")
+     print("    ★專案外★:同步全域 hooks 到 ~/.claude/(會影響這台機器上其他專案的 Claude Code hooks)")
+-    q = _shlex.quote(str(Path(src).resolve()))
++    q = _sh_quote(str(Path(src).resolve()))
+     print(f"  要套用就跑:lumos update --source {q} --no-pull")
+     print(f"  想先預覽最新版:git -C {q} pull --ff-only,再跑一次 lumos update --dry-run")
+ 
+@@ -20953,7 +20953,7 @@ def _update_preview(src, root, slug, source_repo=False):
+     """`lumos update --dry-run`:用目前這份工具來源預覽會改什麼,專案、工具來源與家目錄一個檔都不動、不拉來源
+     (Projects/update預覽規範檔變更_計劃)。回傳碼 = 同樣條件下真的套用會回的碼;讀不了的目標檔回 2。"""
+     print("lumos update --dry-run(僅預演,不改動):")
+-    print(f"  專案: {root}")
++    print(f"  root: {root}")
+     try:
+         sha = _sp_run_text(["git", "-C", str(src), "rev-parse", "--short", "HEAD"])
+     except OSError:                          # 沒有 git 指令:當成不是 git 來源,不讓預覽崩潰
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 02415c4b..e8a26677 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -39271,8 +39271,10 @@ def t_update_dry_run_rule_diff_matches_apply():
+             want = it["new_text"].encode("utf-8") if it.get("new_text") is not None else None
+             check(f"②[{label}] ★{t} 預覽算的新內容 == 套用後的位元組★", got == want,
+                   f"status={it.get('status')} got={got[:120] if got else got!r} want={want[:120] if want else want!r}")
+-        check(f"②[{label}] 會更新的 CLAUDE.md 印出完整區塊差異", "+新版紀律:docs/p-knowledge/" in r.stdout and "+第二行" in r.stdout
+-              and "-舊版紀律:docs/p-knowledge/" in r.stdout, r.stdout[:600])
++        lines = [ln.strip() for ln in r.stdout.splitlines()]
++        check(f"②[{label}] ★會更新的 CLAUDE.md 印出完整區塊差異,刪與加各自一行(不黏在一起)★",
++              "-舊版紀律:docs/p-knowledge/" in lines and "+新版紀律:docs/p-knowledge/" in lines and "+第二行" in lines,
++              r.stdout[:600])
+         if agents is None:
+             check("②會新建時印出要寫入的內容", "會新建 AGENTS.md" in r.stdout and "新版紀律:docs/p-knowledge/" in r.stdout, r.stdout[:600])
+         else:
