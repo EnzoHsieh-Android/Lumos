@@ -68005,6 +68005,49 @@ def t_excl_lock_creation_failure_cleans_own_file():
         check("過期鎖 S3:失敗清理不刪他人換入的鎖", replaced.read_text(encoding="utf-8") == "OTHER",
               replaced.read_text(encoding="utf-8"))
 
+        partial = root / "partial.lock"
+        calls = {"n": 0}
+
+        def short_then_fail(fd, data):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return real_write(fd, data[:1])
+            raise OSError(28, "injected full disk after short write")
+
+        m.os.write = short_then_fail
+        try:
+            try:
+                m._excl_lock_try(partial, 900)
+            except OSError:
+                pass
+        finally:
+            m.os.write = real_write
+        check("過期鎖 S3:短寫一個位元組後失敗,自己的半成品鎖也清掉(代碼審 code-鎖身份含內容 r1 正確性席)",
+              not partial.exists(), f"exists={partial.exists()}")
+
+        empty_swap = root / "empty-swap.lock"
+        real_close = _os.close
+
+        def fail_write(fd, data):
+            raise OSError(28, "injected full disk")
+
+        def close_then_swap(fd):
+            real_close(fd)
+            if empty_swap.exists():
+                empty_swap.unlink()
+            empty_swap.write_bytes(b"")        # 別人在我關檔後換入、還沒寫的空鎖;Linux 常拿到同一個 inode
+
+        m.os.write, m.os.close = fail_write, close_then_swap
+        try:
+            try:
+                m._excl_lock_try(empty_swap, 900)
+            except OSError:
+                pass
+        finally:
+            m.os.write, m.os.close = real_write, real_close
+        check("過期鎖 S3:關檔後別人換入的空鎖不刪(空內容不能當成自己的前綴;代碼審 code-鎖身份含內容 r1 正確性席)",
+              empty_swap.exists(), f"exists={empty_swap.exists()}")
+
         denied = root / "denied.lock"
         real_open = _os.open
 
@@ -68701,6 +68744,24 @@ def t_lens_spawn_failure_preserves_replacement_lock():
         check("換鎖 S4:啟動失敗不刪別人的新鎖",
               rc == 2 and data.get("spawn_error") is True and lock.exists(),
               f"rc={rc} data={data} lock={lock.exists()}")
+
+
+def t_lens_spawn_failure_unreadable_lock_reports_cleanup_error():
+    """啟動失敗後讀不到自己的鎖(權限、IO 錯):要回報清鎖失敗,不能當成「已不是我的」靜默留鎖。
+
+    翻紅釘:_excl_lock_is_mine 把讀檔錯誤吞成 False → 清鎖失敗那格紅(代碼審 code-鎖身份含內容 r1 正確性席、架構對齊席)。"""
+    print("t_lens_spawn_failure_unreadable_lock_reports_cleanup_error")
+    from unittest import mock as _mock
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        lock = Path(d) / "cache.json.warming"
+        owned = []
+        check("前置:建得到鎖", m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC, identity_out=owned) is True, "")
+        with _mock.patch("subprocess.Popen", side_effect=OSError("injected spawn failure")), \
+                _mock.patch.object(type(lock), "read_bytes", side_effect=PermissionError(13, "injected")):
+            spawn_error, cleanup_error = m._lens_spawn_warmer(lock, "a..b", None, owned[0])
+        check("讀不到自己的鎖:回報啟動失敗而且清鎖失敗", spawn_error is True and cleanup_error is True,
+              f"spawn_error={spawn_error} cleanup_error={cleanup_error}")
 
 
 def t_dispatch_lens_hook_spawn_error_notice():

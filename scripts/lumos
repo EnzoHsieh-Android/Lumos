@@ -42457,6 +42457,50 @@ def _excl_lock_record_identity(identity_out, identity):
         identity_out[:] = [identity]
 
 
+def _excl_lock_is_mine(lock, identity):
+    """路徑上的鎖還是不是建鎖時那一把(建鎖時已寫完整份內容):裝置、inode 一樣,而且內容是當時寫的那份
+    (含隨機識別碼)。只比 inode 不夠:Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode 編號,
+    別人剛換入的新鎖會被認成自己的而刪掉(GitHub CI 上必紅,macOS 的 APFS 不馬上重用所以本機綠)。
+    鎖已不在回 False;其他讀不到的錯誤往外丟,讓呼叫端回報「清鎖失敗」,不當成乾淨(代碼審 code-鎖身份含內容 r1)。"""
+    dev, ino, data = identity
+    try:
+        now = lock.lstat()
+        if (now.st_dev, now.st_ino) != (dev, ino):
+            return False
+        return lock.read_bytes() == data
+    except FileNotFoundError:
+        return False
+
+
+def _excl_lock_path_is_fd(lock, fd):
+    """路徑上的檔是不是這個還開著的 fd 那一個:fd 開著時 inode 不會被重用,比裝置與 inode 就夠,不必比內容。"""
+    try:
+        now, own = lock.lstat(), os.fstat(fd)
+    except OSError:
+        return False
+    return (now.st_dev, now.st_ino) == (own.st_dev, own.st_ino)
+
+
+def _excl_lock_cleanup_failed(lock, fd, identity):
+    """建鎖寫到一半出錯時清掉自己的半成品;檔名已被換成別人的就不碰(正常競爭者不會刪半成品)。
+    fd 還開著(不是 None):趁開著比(inode 不會被重用),確定是自己的才刪,再關檔——關檔後才比,
+    別人換入的空鎖會拿到同一個 inode、內容又是空的,分不出來(代碼審 code-鎖身份含內容 r1 正確性席)。
+    fd 已關(關檔本身報錯):內容已整份寫完,照內容比。"""
+    try:
+        if fd is not None:
+            if _excl_lock_path_is_fd(lock, fd):
+                lock.unlink()
+        elif identity is not None and _excl_lock_is_mine(lock, identity):
+            lock.unlink()
+    except OSError:
+        pass
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def _excl_lock_try(lock, stale_sec, identity_out=None):
     """獨佔建鎖檔:取得回 True,鎖已存在回 False,其他建檔錯誤向外拋。
 
@@ -42470,12 +42514,15 @@ def _excl_lock_try(lock, stale_sec, identity_out=None):
         fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
         return False
+    import secrets as _sec
     identity = None
     closed = False
     try:
         own = os.fstat(fd)
-        identity = (own.st_dev, own.st_ino)
-        data = f"{os.getpid()}\n{_t.time():.0f}".encode()
+        # 第三行是隨機識別碼:inode 會被重用,身份要連內容一起比(_excl_lock_is_mine);讀第一行 PID 的地方不受影響
+        full = f"{os.getpid()}\n{_t.time():.0f}\n{_sec.token_hex(8)}".encode()
+        identity = (own.st_dev, own.st_ino, full)
+        data = full
         while data:
             n = os.write(fd, data)
             if n <= 0:
@@ -42486,19 +42533,7 @@ def _excl_lock_try(lock, stale_sec, identity_out=None):
         _excl_lock_record_identity(identity_out, identity)  # 同一個 fd,不事後按路徑猜
         return True
     except OSError:
-        if not closed:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        # 正常競爭者不會刪半成品;若檔名已被換成別人的,不能清掉對方。
-        if identity is not None:
-            try:
-                now = lock.lstat()
-                if (now.st_dev, now.st_ino) == identity:
-                    lock.unlink()
-            except OSError:
-                pass
+        _excl_lock_cleanup_failed(lock, None if closed else fd, identity)
         raise
 
 
@@ -42542,13 +42577,13 @@ def _lens_spawn_warmer(lock, diff_range, repo, owned_identity):
         _sp.Popen(argv, env=env, **kw)
     except OSError:
         try:
-            now = lock.lstat()
-            if (now.st_dev, now.st_ino) == owned_identity:
-                lock.unlink()
+            if not _excl_lock_is_mine(lock, owned_identity):
+                return True, False  # 本次鎖已被移除或換成別人的,不碰後來取得同名路徑的持有者。
+            lock.unlink()
         except FileNotFoundError:
-            pass  # 本次鎖已被移除,不碰後來取得同名路徑的持有者。
+            pass
         except OSError:
-            return True, True
+            return True, True       # 讀不到或刪不掉:回報清鎖失敗,不當成乾淨
         return True, False
     return False, False
 
