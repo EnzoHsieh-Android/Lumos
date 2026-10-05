@@ -4142,34 +4142,76 @@ _SLOT_METRIC_RE = re.compile(r"度量\s+([A-Za-z0-9_-]+)\.([a-z-]+)\s*(<=|>=|==|
 _SLOT_METRIC_MAX_WEEKS = 8     # 治理帳只讀檔尾 24MB,照現在寫入量約裝得下兩個月
 
 
-def slot_parse(rest):
-    """前綴冒號後面的字 → {"fields": [(鍵, 值, 錯誤或 None)], "core": 核心一句}。
-    只有白名單鍵才算欄位(鍵名英文不分大小寫、冒號收全形、冒號後空白不算);值數方括號層數,成對的照收;
-    值裡的反引號段照字面不數括號;成對反引號(行內程式碼)裡的方括號不算欄位,不成對的反引號到行尾都當正文。
-    核心一句=去掉所有欄位後剩下的字(空白壓成一格)。"""
-    fields, core, i, n = [], [], 0, len(rest)
+def _slot_scan(rest):
+    """一行 → 逐段吐 (種類, 起, 訖, 鍵, 值, 錯誤):種類 "text" 是正文片段(鍵、值、錯誤為 None),"field" 是一個欄位
+    (起訖含方括號;值去頭尾空白)。掃描規則只有這一份,slot_parse 與 _slot_strip_keys 共用(只換測試綁定不算寫說明_計劃
+    〈做法〉1;設計審 r1 架構對齊席:別另寫第二套掃描器)。值沒收尾 → 那個欄位吐到行尾、帶錯誤,之後不再吐。"""
+    i, n, t0 = 0, len(rest), 0
     while i < n:
         c = rest[i]
         if c == "`":
             j = rest.find("`", i + 1)
             if j == -1:
-                core.append(rest[i:])
                 break
-            core.append(rest[i:j + 1])
             i = j + 1
             continue
         m = _SLOT_KEY_RE.match(rest, i) if c == "[" else None
         if m and m.group(1).lower() in _SLOT_CANON:
+            if t0 < i:
+                yield ("text", t0, i, None, None, None)
             key, j = _SLOT_CANON[m.group(1).lower()], _slot_value_end(rest, m.end())
             if j >= n:
-                fields.append((key, rest[m.end():].strip(), "值裡的方括號要成對,或把值用反引號包起來"))
-                break
-            fields.append((key, rest[m.end():j].strip(), None))
-            i = j + 1
+                yield ("field", i, n, key, rest[m.end():].strip(), "值裡的方括號要成對,或把值用反引號包起來")
+                return
+            yield ("field", i, j + 1, key, rest[m.end():j].strip(), None)
+            i = t0 = j + 1
             continue
-        core.append(c)
         i += 1
+    if t0 < n:
+        yield ("text", t0, n, None, None, None)
+
+
+def slot_parse(rest):
+    """前綴冒號後面的字 → {"fields": [(鍵, 值, 錯誤或 None)], "core": 核心一句}。
+    只有白名單鍵才算欄位(鍵名英文不分大小寫、冒號收全形、冒號後空白不算);值數方括號層數,成對的照收;
+    值裡的反引號段照字面不數括號;成對反引號(行內程式碼)裡的方括號不算欄位,不成對的反引號到行尾都當正文。
+    核心一句=去掉所有欄位後剩下的字(空白壓成一格)。掃描走 _slot_scan。"""
+    fields, core = [], []
+    for kind, a, b, key, val, err in _slot_scan(rest):
+        if kind == "text":
+            core.append(rest[a:b])
+        else:
+            fields.append((key, val, err))
     return {"fields": fields, "core": " ".join("".join(core).split())}
+
+
+_SLOT_STRIP_WS = " \t\u3000"
+
+
+def _slot_strip_keys(line, keys, keep=None):
+    """一行 → (拿掉指定鍵的欄位後的那一行, 拿掉的欄位 [(鍵, 值)])。邊界判法同 slot_parse(走 _slot_scan);keep(值) 回真的欄位、
+    值沒收尾的欄位都原樣照留。空白:欄位前面有正文、後面不是緊接著字(空白、標點、行尾),就連前面的空白(半形、tab、全形)一起拿掉;
+    欄位前面只有縮排或什麼都沒有,改拿掉後面緊接的空白(縮排照留)——「a [k:v] b」「a [k:v]。」「[k:v] b」「  [k:v] b」拿掉後跟沒寫過
+    那個欄位的同一行一樣。前面有空白、後面緊接著字(英數或中文,「a [k:v]b」)時前面的空白照留,不把原本沒有的空白當成沒變
+    (代碼審 r3 邊界席;標點那半是驗收審正確性席、邊界席)。其他字原樣不動。"""
+    out, removed, eat = [], [], False
+    for kind, a, b, key, val, err in _slot_scan(line):
+        piece = line[a:b]
+        if kind == "field" and key in keys and err is None and not (keep and keep(val)):
+            head = "".join(out)
+            if head.strip():
+                if b >= len(line) or not line[b].isalnum():
+                    out = [head.rstrip(_SLOT_STRIP_WS)]
+            else:
+                eat = True
+            removed.append((key, val))
+            continue
+        if eat:
+            piece = piece.lstrip(_SLOT_STRIP_WS)
+            eat = not piece
+        out.append(piece)
+    return "".join(out), removed
+
 
 
 def _slot_value_end(rest, j):
@@ -26836,8 +26878,98 @@ def _nodehome_reader(repo_root, where):
     return read
 
 
+# 測試綁定標記的值要「像測試名」才拿掉(只換測試綁定不算寫說明_計劃〈範圍〉):中文說明、跨行句子藏不進去
+_NODEHOME_TEST_TAG_VALUE_RE = re.compile(r"[A-Za-z0-9_.:/#@,()\[\]'> -]+")
+_NODEHOME_TEST_TAG_VALUE_MAX = 200
+_NODEHOME_COMMIT_RE = re.compile(r"[0-9a-f]{7,40}")
+# 新出現的 [test:] 名稱要是單一識別字(可帶平台前綴)才核對:判定只比對最後一段,「一句說明.真測試名」「不存在的類別.真測試名」
+# 都會被判存在,所以帶點號、::、#、空白的名稱一律不豁免(代碼審 r3 資安席、通才席、判定路徑席)
+_NODEHOME_TAG_NAME_RE = re.compile(r"(?:[A-Za-z0-9_-]+:)?[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _nodehome_test_tag_value_ok(v):
+    """[test:]/[test-gone:] 的值像不像測試名:去頭尾空白後不空、至多 200 字、只有英數與少數符號;
+    整段包在一對反引號裡(Kotlin 反引號測試名)時,反引號裡面套同一組字元。"""
+    v = (v or "").strip()
+    if not v or len(v) > _NODEHOME_TEST_TAG_VALUE_MAX:
+        return False
+    if len(v) >= 2 and v[0] == v[-1] == "`" and v.count("`") == 2:
+        v = v[1:-1].strip()
+    if not v or _NODEHOME_TEST_TAG_VALUE_RE.fullmatch(v) is None:
+        return False
+    # [test-gone:名稱@提交]:@ 後面只認提交編號——不然「@1a2b3c4 後面接一句說明」會連說明一起被當成綁定拿掉(代碼審 r3)
+    return all(_NODEHOME_COMMIT_RE.fullmatch(x.split("@", 1)[1].strip()) for x in _NS_TR_SPLIT_RE.split(v) if "@" in x)
+
+
+def _nodehome_strip_test_tags(text):
+    """判「只換了測試綁定」用 → (拿掉綁定後的文字, 拿掉的綁定 {(test|test-gone, 名稱)})。逐行拿掉值像測試名的
+    [test:]/[test-gone:](邊界同 slot_parse,空白規則見 _slot_strip_keys);程式碼圍欄裡的行原樣留。拿掉後只剩清單符號
+    或空白的行整行不算(核取方塊行不算在內——勾選狀態是內容,代碼審 r3 邊界席),它前後都是空行時多出來的那個空行也不算(單獨成行的綁定夾在空行之間,加或刪都不留痕跡)。
+    每行去尾端空白,跟 sig 同一個比法。名稱照 _test_names_of 的切法(逗號切開、去反引號、test-gone 去 @提交)。"""
+    lines = text.split("\n")
+    vis = {no for no, _ln in _visible_lines(lines)}
+    out, names, dropped = [], set(), False
+    for no, line in enumerate(lines, 1):
+        line = line.rstrip()
+        if no in vis:
+            line, rm = _slot_strip_keys(line, ("test", "test-gone"), keep=lambda v: not _nodehome_test_tag_value_ok(v))
+            for key, val in rm:
+                names |= {(key, nm) for nm in _test_names_of({"fields": [(key, val, None)]}, key)[0]}
+            line = line.rstrip()
+            if rm and (not line.strip() or (_NOTELINES_BARE_LIST_RE.match(line) and "[" not in line)):
+                dropped = True
+                continue
+            if dropped and not line and out and not out[-1]:
+                dropped = False
+                continue
+        dropped = False
+        out.append(line)
+    return "\n".join(out), frozenset(names)
+
+
+def _nodehome_tag_only_change(b, n, judge):
+    """b→n 兩版節點只差測試綁定(sig_t 一樣),而且這次★新出現★的綁定都站得住 → True:新的 [test:] 名稱要指得到真測試
+    (judge(名稱) 回 yes;judge 是 None 或判不了一律不算),新的 [test-gone:] 名稱要跟上一版的某個 [test:] 整串一致(只認「測試刪了、
+    改標成已刪」)。拿掉綁定不必核對——刪資訊不是寫說明。不靠別的檢查補洞(代碼審 r2:筆記測試綁定要存在對 test-gone、合約行、
+    跳過與降級時都不核對名字,一句英文說明會兩道都過)。"""
+    if b is None or b["sig_t"] != n["sig_t"]:
+        return False
+    # test-gone 要跟上一版的 [test:] 整串一致——不去平台前綴:前綴不核對,去掉它就能用「一串連字號英文:舊名」夾帶說明
+    # (代碼審 r3fix 通才席);前綴寫法不同的照算內容(多擋)
+    old_tests = {nm for k, nm in b["tag_names"] if k == "test"}
+    for k, nm in sorted(n["tag_names"] - b["tag_names"]):
+        if k == "test-gone":
+            if nm not in old_tests:
+                return False
+            continue
+        if not _NODEHOME_TAG_NAME_RE.fullmatch(nm):
+            return False
+        j = judge() if judge else None
+        try:
+            if j is None or j(nm)[0] != "yes":
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _nodehome_tag_judge(repo_root, tip):
+    """「這個測試名指不指得到真測試」→ judge(名稱) 或 None(判不了就不給,呼叫端當不豁免)。跟筆記測試綁定要存在共用
+    _NsTrJudge(提交時 tip=None 只查測試索引;推送時再到終點版本找)。推送時目前簽出的不是終點、工作目錄有沒提交的
+    測試或設定改動(_ns_tr_guard),測試索引對不上被推的版本 → None。"""
+    try:
+        pidx = _platform_test_index(repo_root)
+        if tip and _ns_tr_guard(repo_root, tip, pidx[0]):
+            return None
+        return _ns_tr_judge(repo_root, tip, pidx)[0]
+    except Exception as e:
+        # 同筆記測試綁定要存在那道(_ns_test_refs_collected)的寫法:印一句、照不豁免走(代碼審 r3 架構對齊席)
+        print(f"提醒:每支檔有家這次沒核對測試名({e.__class__.__name__}),只換測試綁定的筆記照舊算寫了說明", file=sys.stderr)
+        return None
+
+
 def _nodehome_parse_note(raw):
-    """節點原文 → {type, status, about[], resp, sig, text}。sig=(摘要, 解析後的決策, 正文)——[S12] 內容有變
+    """節點原文 → {type, status, about[], resp, sig, text}。sig=(摘要, 解析後的決策, 正文)、sig_t=同上但拿掉測試綁定、tag_names=拿掉的綁定——[S12] 內容有變
     逐欄比對用;★不沿用只算正文的那支雜湊★:摘要與決策都在開頭欄位裡,節點長大主要就長在摘要。"""
     text = raw.decode("utf-8-sig", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
     fm_lines, body = split_frontmatter(text)
@@ -26852,14 +26984,18 @@ def _nodehome_parse_note(raw):
             dec = "\n".join(l.rstrip() for l in fm_lines if l.startswith(("decisions:", "  ")))
     summ = fields.get("summary")
     summ = summ if isinstance(summ, str) else ""
+    (st_s, tn_s), (st_b, tn_b) = _nodehome_strip_test_tags(summ), _nodehome_strip_test_tags(body)
     return {"type": str(fields.get("type", "")).strip(),
             "status": str(fields.get("status", "")).strip(),
             "about": [str(x) for x in as_list(fields.get("about_code")) if str(x).strip()],
             "resp": fields.get("responsibility") if isinstance(fields.get("responsibility"), str) else None,
             # [S11] 從程式重建的章:蓋了章就代表這篇是還原出來的,那它更要說清楚自己管哪些檔
             "regen": fields.get("regen").strip() if isinstance(fields.get("regen"), str) else "",
-            "sig": ("\n".join(l.rstrip() for l in summ.splitlines()).strip(), dec,
-                    "\n".join(l.rstrip() for l in body.splitlines()).strip()),
+            "sig": ("\n".join(ln.rstrip() for ln in summ.splitlines()).strip(), dec,
+                    "\n".join(ln.rstrip() for ln in body.splitlines()).strip()),
+            # 同上,但摘要與正文先拿掉測試綁定;tag_names=拿掉的綁定。_nodehome_tag_only_change 用(只換測試綁定不算寫說明_計劃)
+            "sig_t": (st_s.strip(), dec, st_b.strip()),
+            "tag_names": tn_s | tn_b,
             "text": text}
 
 
@@ -27217,7 +27353,7 @@ def _nodehome_commit_groups(repo_root, base, tip):
     return out
 
 
-def _nodehome_mark_note_content(repo_root, groups, vault_rel):
+def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
     """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
     計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
     {這個提交之後的路徑: {type, status, own}},判定那層只在同一個提交裡比「管的檔」跟「改的程式」,不必跨提交追名字
@@ -27236,7 +27372,7 @@ def _nodehome_mark_note_content(repo_root, groups, vault_rel):
             n = _nodehome_parse_note(new) if new is not None else None
             olds = [b(g["src"].get(p, p)) for b in befores]
             olds = [_nodehome_parse_note(o) for o in olds if o is not None]
-            if n is not None and any(o["sig"] == n["sig"] for o in olds):
+            if n is not None and any(o["sig"] == n["sig"] or _nodehome_tag_only_change(o, n, tag_judge) for o in olds):
                 continue                                    # 跟上一版一樣(只補簿記;合併時照搬某一邊也算):不算這個提交寫回
             own, statuses = set(), set()
             for x in [n] + olds:
@@ -27279,7 +27415,7 @@ def _nodehome_clamp_base(repo_root, base, tip, mark=None, hook=_NOTELINES_PRECOM
     return gl if (r is not None and r.returncode == 0 and base != gl) else base
 
 
-def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None):
+def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None, tag_judge=None):
     """規則一到四的判定。回 dict:blocks=[(類別, 項目)]、reminders=[(類別, 項目)]、pairs=[(檔, 節點)]。
     B=之前、N=之後;changes=_nodehome_changes 的結果。groups=範圍裡每個提交各自改了哪些路徑(推送前用;
     規則三只看「同一個提交裡也改了程式」的節點——純整理節點的提交跟改程式的提交一起推,不會被混在一起誤擋)。
@@ -27332,7 +27468,8 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
             continue
         edited.add(rel)
         route_src[rel] = src_rel
-        if (b is None or b["sig"] != n["sig"]) and n["status"] in _NODEHOME_HOME_STATUSES:
+        if ((b is None or b["sig"] != n["sig"]) and not _nodehome_tag_only_change(b, n, tag_judge)
+                and n["status"] in _NODEHOME_HOME_STATUSES):
             content_changed.append(rel)
         # [S9] 規則二:這篇之後比之前多出來的別人的檔(新節點=全部都算新)
         foreign_now = refs_now(rel) - ownN.get(rel, set())
@@ -27736,8 +27873,16 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
         print("每支檔有家:git 讀不到檔案清單,跳過(fail-open)", file=sys.stderr)
         return 0
     skip = frozenset() if _is_toolchain_repo(root) else _vendored_state(root, "" if staged else tip_where)[0]
-    groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel)
-    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups)
+    _tj = []
+
+    def tag_judge():
+        """測試名判定,第一次真的需要(某篇只差測試綁定)才建——建索引要掃測試檔。"""
+        if not _tj:
+            _tj.append(_nodehome_tag_judge(root, None if staged else tip_where))
+        return _tj[0]
+    groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
+                                                                 tag_judge=tag_judge)
+    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge)
     homesN, _own = _nodehome_homes(root, N)
     lines = _nodehome_render(res, homesN, N, cfg, mode_word)
     blocked = bool(res["blocks"])

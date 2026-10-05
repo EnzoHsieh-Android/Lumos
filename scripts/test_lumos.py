@@ -46992,6 +46992,310 @@ def t_nodehome_diff_route_per_commit():
     check("②同一個提交裡改程式又寫進不是家的節點 → 照擋", rc == 1 and "Systems/B" in out, out[-600:])
 
 
+_NH_TAG_TESTS = ("old", "new", "keep", "drop", "more", "y", "more2", "more3", "head", "fw", "between", "line",
+                 "ex", "ex2", "fence", "fence2", "in_", "in2", "alive")
+
+
+def _nh_tag_repo(extra_tests=()):
+    """只換測試綁定那組的測試專案:python 測試棧,tests/test_b.py 有 test_<名> 這些真測試(綁定要指得到真測試才算只換綁定)。"""
+    root = _nh_repo({"test_profile": "python"})
+    _nh_file(root, "tests/test_b.py", "".join(f"def test_{n}():\n    pass\n\n\n" for n in _NH_TAG_TESTS + tuple(extra_tests)))
+    _nh_file(root, "src/a.py")
+    _nh_file(root, "src/b.py")
+    _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。")
+    return root
+
+
+def t_nodehome_test_tag_only_edit_is_not_write_back():
+    """[只換測試綁定不算寫說明 S1][S3] 同一個提交改了程式、另一篇只換測試綁定(新出現的名稱指得到真測試)→ 不算寫說明,
+    寫回落點與「有寫回時改動檔要有家」都不擋。
+    出身:rtb 2026-10-03 改測試名後,另一篇筆記只把 [test:] 換成新名就被擋,測試檔當不了家、沒有合法出口(rtb 第三輪提案 D2)。
+    翻紅釘:內容比對不拿掉綁定 → ①②③⑨紅;新名稱不核對真測試 → ④⑥紅;test-gone 不核對上一版綁過 → ⑤紅。"""
+    print("t_nodehome_test_tag_only_edit_is_not_write_back")
+    root = _nh_tag_repo()
+    _nh_node(root, "B", about=["src/b.py"], summary="KEY:b 的規則 [test:test_old] [test:test_keep]",
+             body="實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test:test_drop]")
+    _nh_commit(root, "init")
+
+    def edit_b(summary, body):
+        _nh_file(root, "src/a.py", "x = 2\n")
+        _nh_node(root, "B", about=["src/b.py"], summary=summary, body=body)
+        _nh_git(root, "add", "-A")
+        return _nh_check(root)
+
+    def reset():
+        _nh_git(root, "reset", "-q")
+        _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
+        _nh_git(root, "clean", "-fdq")
+
+    rc, out = edit_b("KEY:b 的規則 [test:test_new] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_new]\n- [S2] 另一條 [test:test_drop]")
+    check("①B 只把 [test:test_old] 換成真測試 test_new(摘要與正文)→ rc0", rc == 0, out[-800:])
+    reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep] [test:test_more, test_more2]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old] [ Test ：test_y ]\n- [S2] 另一條")
+    check("②多加綁定(逗號清單、大寫鍵與全形冒號)、刪掉一個綁定 → rc0", rc == 0, out[-800:])
+    reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test-gone:test_drop@1a2b3c4]")
+    check("③上一版綁著的 [test:x] 改成 [test-gone:x@提交] → rc0", rc == 0, out[-800:])
+    reset()
+    for val in ("a now retries three times then logs", "test_not_there", "`a long english test name`"):
+        rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                         f"實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old] [test:{val}]\n- [S2] 另一條 [test:test_drop]")
+        check(f"④新加的綁定指不到真測試({val})→ rc1、點名 B", rc == 1 and "Systems/B" in out, out[-800:])
+        reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old] [test-gone:a now retries three times]\n- [S2] 另一條 [test:test_drop]")
+    check("⑤新寫的 [test-gone:] 不是上一版綁過的名稱(一句英文)→ rc1", rc == 1 and "Systems/B" in out, out[-800:])
+    reset()
+    # 代碼審 r3:判定只比最後一段,「說明.真測試名」會被判存在;新名稱只收識別字形狀
+    for val in ("From now on the retry count is three.test_new", "NoSuchClass.test_new", "Cls::test_new", "Cls#test_new"):
+        rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                         f"實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old] [test:{val}]\n- [S2] 另一條 [test:test_drop]")
+        check(f"⑤b 新名稱不是識別字形狀({val})→ rc1", rc == 1 and "Systems/B" in out, out[-800:])
+        reset()
+    # 代碼審 r3:test-gone 的 @ 後面要是提交編號,不是就整個標記算內容
+    for val in ("test_drop@1a2b3c4 now every order needs manager approval", "test_drop@zzzzzzz"):
+        rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                         f"實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test-gone:{val}]")
+        check(f"⑤c test-gone 的 @ 後面不是提交編號({val[:24]})→ rc1", rc == 1 and "Systems/B" in out, out[-800:])
+        reset()
+    for val in ("Every-order-now-needs-manager-approval:test_drop@1a2b3c4", "python:test_drop@1a2b3c4"):
+        rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                         f"實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test-gone:{val}]")
+        check(f"⑤d test-gone 的名稱跟上一版綁的不是整串一致(前綴 {val.split(':')[0][:20]})→ rc1(前綴不核對就能夾帶說明)",
+              rc == 1 and "Systems/B" in out, out[-800:])
+        reset()
+    for val in ("test_drop@1A2B3C4", "test_new@1a2b3c4"):
+        key = "test-gone" if "drop" in val else "test"
+        rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                         f"實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [{key}:{val}]")
+        check(f"⑤e @ 規則({key}:{val})→ rc1(只認小寫十六進位、一般綁定不帶 @)", rc == 1 and "Systems/B" in out, out[-800:])
+        reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_new] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 1 [test:test_new]\n- [S2] 另一條 [test:test_drop]")
+    check("⑥換綁定同時改了一個散文字 → rc1、點名 B", rc == 1 and "Systems/B" in out, out[-800:])
+    reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:a 的新行為是回傳二]\n- [S2] 另一條 [test:test_drop]")
+    check("⑦綁定的值是中文(藏說明)→ rc1", rc == 1 and "Systems/B" in out, out[-800:])
+    reset()
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old] [test:]\n- [S2] 另一條 [test:test_drop]")
+    check("⑧空的綁定標記不算綁定 → rc1", rc == 1 and "Systems/B" in out, out[-800:])
+    reset()
+    # rtb 原情境:同一個提交把測試改名、B 換成新名(新名在這次提交的測試檔裡)
+    _nh_file(root, "tests/test_b.py", (root / "tests" / "test_b.py").read_text(encoding="utf-8").replace("def test_old(", "def test_renamed("))
+    rc, out = edit_b("KEY:b 的規則 [test:test_renamed] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_renamed]\n- [S2] 另一條 [test:test_drop]")
+    check("⑨同一個提交測試改名、B 換成新名 → rc0", rc == 0, out[-800:])
+    reset()
+    # [S3] 改到一支原本就沒家的舊檔:B 只換綁定 → 只提醒沒家,不報「有寫回時每支改動檔都要有家」
+    _nh_file(root, "ui/old.py", "y = 1\n")
+    _nh_commit(root, "舊的沒家檔")
+    _nh_file(root, "ui/old.py", "y = 2\n")
+    rc, out = edit_b("KEY:b 的規則 [test:test_new] [test:test_keep]",
+                     "實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_new]\n- [S2] 另一條 [test:test_drop]")
+    check("⑩改到沒家舊檔+B 只換綁定 → rc0(只提醒)", rc == 0 and "ui/old.py" in out, out[-800:])
+    reset()
+    _nh_node(root, "B", about=["src/b.py"], summary="KEY:b 的規則 [test:test_old] [test:test_keep]",
+             body="實作在 `src/b.py`,綁定寫成 `[test:test_old]`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test:test_drop]")
+    _nh_commit(root, "加一行舉例")
+    _nh_file(root, "ui/old.py", "y = 1\n")
+    _nh_commit(root, "舊檔還原")
+    rc, out = edit_b("KEY:b 的規則 [test:test_old] [test:test_keep]",
+                     "實作在 `src/b.py`,綁定寫成 `[test:test_new]`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test:test_drop]")
+    check("⑪改的是行內程式碼裡舉例的標記 → rc1", rc == 1 and "Systems/B" in out, out[-800:])
+
+
+def t_nodehome_test_tag_strip_edges():
+    """[只換測試綁定不算寫說明 S4] 拿掉綁定的極端寫法:逐行、跟 slot_parse 同一套邊界判法(設計審 r1 三席);
+    空白不壓平,只照 _slot_strip_keys 的規則拿掉標記旁的空白(代碼審 r2 邊界席、正確性席)。
+    翻紅釘:整段跨行掃 → ①②紅;不數方括號層數 → ④紅;不收「只剩清單符號」的行 → ⑤紅;整行壓空白 → ⑬⑭紅。"""
+    print("t_nodehome_test_tag_strip_edges")
+    root = _nh_tag_repo()
+    base_body = ("實作在 `src/b.py`。\n先前提過 ` 這個字元\n舉例寫 `[test:test_ex]` 的格式\n"
+                 "```\n[test:test_fence]\n\n\nx = 1\n```\n- 條款 [不選:放寬 [test:test_in_] 的豁免]\n- [test:test_line]\n"
+                 "- [S1] 參數化 [test:test_x[case-1]]\n    縮排的程式碼 a = 1\n- 第一層\n  - 第二層")
+    _nh_node(root, "B", about=["src/b.py"], body=base_body)
+    _nh_commit(root, "init")
+
+    def try_body(body):
+        _nh_file(root, "src/a.py", "x = 2\n")
+        _nh_node(root, "B", about=["src/b.py"], body=body)
+        _nh_git(root, "add", "-A")
+        rc, out = _nh_check(root)
+        _nh_git(root, "reset", "-q")
+        _nh_git(root, "checkout", "-q", "HEAD", "--", ".")
+        return rc, out
+
+    rc, out = try_body(base_body + "\n[test:This module now retries\nthree times before failing\nand logs each attempt]")
+    check("①跨三行的假標記 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("`[test:test_ex]`", "`[test:test_ex2]`"))
+    check("②前一行落單反引號、下一行行內程式碼裡的舉例被改 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("[test:test_fence]", "[test:test_fence2]"))
+    check("③程式碼圍欄裡的標記被改 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("[test:test_in_]", "[test:test_in2]"))
+    check("④寫在別的欄位值裡的標記被改 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("\n- [test:test_line]", "") + "\n* [test:test_more]\n1. [test:test_more2] [test:test_more3]")
+    check("⑤單獨成行的綁定(清單符號加標記)刪一行、加兩行 → rc0", rc == 0, out[-600:])
+    rc, out = try_body(base_body.replace("test_x[case-1]", "test_x[case-2]"))
+    check("⑥pytest 參數化名稱(方括號,核對不了真測試)換名 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body + " [test:   ]")
+    check("⑦只有空白的值 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body + " [test:`中文的測試說明`]")
+    check("⑧反引號裡是中文 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body + " [test:" + "a" * 201 + "]")
+    check("⑨值超過 200 字 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body + "\n說明 [test:test_unclosed 這裡沒收尾")
+    check("⑩方括號沒收尾的假標記 → rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    for label, new in (("行首", base_body.replace("先前提過", "[test:test_head] 先前提過")),
+                       ("前面是全形空白", base_body.replace("的格式", "的格式\u3000[test:test_fw]")),
+                       ("前面是 tab", base_body.replace("的格式", "的格式\t[test:test_fw]")),
+                       ("在縮排後面", base_body.replace("    縮排的程式碼", "    [test:test_more] 縮排的程式碼")),
+                       ("後面緊接句號", base_body.replace("實作在 `src/b.py`。", "實作在 `src/b.py` [test:test_more]。")),
+                       ("後面緊接全形逗號", base_body.replace("- 第一層", "- 第一 [test:test_more],層").replace("- 第一 [test:test_more],層", "- 第一 [test:test_more]，層"))):
+        if label == "後面緊接全形逗號":
+            _nh_node(root, "B", about=["src/b.py"], body=base_body.replace("- 第一層", "- 第一，層"))
+            _nh_commit(root, "改一個標點")
+        rc, out = try_body(new)
+        check(f"⑫標記{label} → rc0", rc == 0, out[-600:])
+        if label == "後面緊接全形逗號":
+            _nh_node(root, "B", about=["src/b.py"], body=base_body)
+            _nh_commit(root, "還原標點")
+    rc, out = try_body(base_body.replace("先前提過", "先前 [test:test_head]提過"))
+    check("⑫b 標記插在兩個字中間(前有空白、後緊接字)→ rc1(不吞原本沒有的空白)", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("- 第一層", "- [ ] [test:test_more]\n- 第一層"))
+    _nh_node(root, "B", about=["src/b.py"], body=base_body.replace("- 第一層", "- [ ] [test:test_more]\n- 第一層"))
+    _nh_commit(root, "加一個核取方塊")
+    rc, out = try_body(base_body.replace("- 第一層", "- [x] [test:test_more]\n- 第一層"))
+    check("⑫c 核取方塊只剩綁定、從未勾改成勾 → rc1(勾選狀態算內容)", rc == 1 and "Systems/B" in out, out[-600:])
+    _nh_node(root, "B", about=["src/b.py"], body=base_body)
+    _nh_commit(root, "拿掉核取方塊")
+    rc, out = try_body(base_body.replace("    縮排的程式碼 a = 1", "        縮排的程式碼 a = 1"))
+    check("⑬只改縮排(縮排程式碼)→ rc1(空白不壓平)", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("\n\n\nx = 1", "\n\nx = 1"))
+    check("⑭圍欄裡少一個空行 → rc1(圍欄裡原樣)", rc == 1 and "Systems/B" in out, out[-600:])
+    rc, out = try_body(base_body.replace("\n", "\r\n"))
+    check("⑮整篇換成 CRLF → rc0(行尾空白跟 sig 一樣去掉,不新增誤擋)", rc == 0, out[-600:])
+    base2 = base_body + "\n\n- [test:test_between]\n\n結尾一行"
+    _nh_node(root, "B", about=["src/b.py"], body=base2)
+    _nh_commit(root, "空行夾住的標記行")
+    rc, out = try_body(base_body + "\n\n結尾一行")
+    check("⑪空行夾住的單獨標記行整行刪掉 → rc0(只差空行)", rc == 0, out[-600:])
+
+
+def _slot_parse_reference(rest, m):
+    """slot_parse 抽成共用掃描之前的實作原樣(2026-10-05,只換測試綁定不算寫說明_計劃 [S5] 的對照組)。
+    把舊實作抄一份當對照組在本檔是第一次(代碼審 r1 架構對齊席):重構要證明「輸出逐字不變」,只有舊實作本身能當標準答案;
+    之後 slot_parse 的語意要刻意改時,這支跟著刪掉、改寫成新語意的斷言,不要回頭改這份抄本去配合。"""
+    fields, core, i, n = [], [], 0, len(rest)
+    while i < n:
+        c = rest[i]
+        if c == "`":
+            j = rest.find("`", i + 1)
+            if j == -1:
+                core.append(rest[i:])
+                break
+            core.append(rest[i:j + 1])
+            i = j + 1
+            continue
+        mm = m._SLOT_KEY_RE.match(rest, i) if c == "[" else None
+        if mm and mm.group(1).lower() in m._SLOT_CANON:
+            key, j = m._SLOT_CANON[mm.group(1).lower()], m._slot_value_end(rest, mm.end())
+            if j >= n:
+                fields.append((key, rest[mm.end():].strip(), "值裡的方括號要成對,或把值用反引號包起來"))
+                break
+            fields.append((key, rest[mm.end():j].strip(), None))
+            i = j + 1
+            continue
+        core.append(c)
+        i += 1
+    return {"fields": fields, "core": " ".join("".join(core).split())}
+
+
+def t_slot_parse_unchanged_after_scan_refactor():
+    """[只換測試綁定不算寫說明 S5] slot_parse 改走共用掃描後,對本 repo 圖譜每一行的輸出跟改之前逐字一樣;另加幾行刁鑽寫法。
+    翻紅釘:共用掃描對未收尾的值、落單反引號處理不同 → 紅。"""
+    print("t_slot_parse_unchanged_after_scan_refactor")
+    m = _load_lumos_inproc()
+    kb = Path(GRAPHCTL).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge"
+    lines = ["KEY:a [test:x] `[test:y]` [不選:b [test:z] c] [since:2026-01-01", "x ` [test:q]", "[TEST：t] [ test : u ]",
+             "[test:`a ] b`] tail", "", "[[連結]] [test:test_x[case-1]] [出處:[[X]]]"]
+    for f in sorted(kb.rglob("*.md")):
+        lines.extend(f.read_text(encoding="utf-8", errors="replace").split("\n"))
+    bad = [ln for ln in lines if m.slot_parse(ln) != _slot_parse_reference(ln, m)]
+    check(f"全 repo 筆記 {len(lines)} 行的 slot_parse 輸出跟改之前一樣", not bad, repr(bad[:3]))
+    keys = tuple(m._SLOT_CANON.values())
+    bad2 = [ln for ln in lines if all(e is None for _k, _v, e in m.slot_parse(ln)["fields"])
+            and "".join(m._slot_strip_keys(ln, keys)[0].split()) != "".join(m.slot_parse(ln)["core"].split())]
+    check("_slot_strip_keys 拿掉全部鍵後去掉空白 = slot_parse 的核心一句去掉空白(兩支走同一套掃描,邊界判法一致)",
+          not bad2, repr(bad2[:3]))
+
+
+def t_nodehome_tag_only_new_names_must_be_real_tests():
+    """[只換測試綁定不算寫說明 S6] 新出現的綁定要指得到真測試才算只換綁定——不靠「筆記測試綁定要存在」那道補洞
+    (代碼審 r2:那道對 test-gone、合約行不核對名字,跳過與降級時也不核對)。推送前逐提交也一樣;
+    推送時目前簽出的不是終點(測試索引對不上被推的版本)就不豁免。
+    翻紅釘:改回只比 sig_t → ①②③紅;不看 _ns_tr_guard → ⑤紅。"""
+    print("t_nodehome_tag_only_new_names_must_be_real_tests")
+    root = _nh_tag_repo()
+    _nh_node(root, "B", about=["src/b.py"], summary="KEY:★INVARIANT★ b 不變 [test:test_alive]", body="實作在 `src/b.py`。")
+    _nh_commit(root, "init")
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    def switch(branch, at):
+        # 每次檢查都會寫治理帳;不清掉的話下一次切分支會失敗、留在原分支上疊提交(寫這支時踩到)
+        _nh_git(root, "reset", "-q", "--hard")
+        _nh_git(root, "clean", "-fdq")
+        r = _nh_git(root, "checkout", "-q", "-B", branch, at)
+        assert r.returncode == 0, r.stderr
+
+    for i, extra in enumerate(("[test:a now retries three times then logs]", "[test-gone:a now retries three times]",
+                               "[test-gone:a now retries@abc1234]")):
+        switch(f"t{i}", base)
+        _nh_file(root, "src/a.py", f"x = {i + 2}\n")
+        _nh_node(root, "B", about=["src/b.py"], summary=f"KEY:★INVARIANT★ b 不變 [test:test_alive] {extra}", body="實作在 `src/b.py`。")
+        _nh_commit(root, "改 a、把說明包成綁定藏進 B 的合約行")
+        rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+        check(f"{'①②③'[i]}推送前:合約行新寫 {extra} → rc1、點名 B", rc == 1 and "Systems/B" in out, out[-600:])
+    switch("ok", base)
+    _nh_file(root, "src/a.py", "x = 9\n")
+    _nh_node(root, "B", about=["src/b.py"], summary="KEY:★INVARIANT★ b 不變 [test:test_alive] [test:test_keep]", body="實作在 `src/b.py`。")
+    _nh_commit(root, "改 a、B 只加一個真測試綁定")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("④推送前:新綁定是真測試 → rc0", rc == 0, out[-600:])
+    _nh_file(root, "tests/test_b.py", (root / "tests" / "test_b.py").read_text(encoding="utf-8") + "\n# 沒提交的改動\n")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("④b 推送時已追蹤的測試檔有沒提交的改動(測試索引對不上被推的版本)→ 不豁免、rc1", rc == 1 and "Systems/B" in out, out[-600:])
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_git(root, "reset", "-q", "--hard")
+    _nh_git(root, "clean", "-fdq")
+    _nh_git(root, "checkout", "-q", base)
+    rc, out = _nh_check(root, "--diff", f"{base}..{tip}")
+    check("⑤推送的不是目前簽出的版本(測試索引對不上)→ 不豁免、rc1", rc == 1 and "Systems/B" in out, out[-600:])
+
+
+def t_nodehome_diff_test_tag_only_edit_is_not_write_back():
+    """[只換測試綁定不算寫說明 S2] 推送前逐提交:同一個提交改程式、另一篇只換測試綁定 → rc0;改了散文照擋。
+    翻紅釘:推送前逐提交的內容比對不拿掉綁定標記 → ①紅。"""
+    print("t_nodehome_diff_test_tag_only_edit_is_not_write_back")
+    root = _nh_tag_repo()
+    _nh_node(root, "B", about=["src/b.py"], body="實作在 `src/b.py`。[test:test_old]")
+    _nh_commit(root, "init")
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_file(root, "src/a.py", "x = 2\n")
+    _nh_node(root, "B", about=["src/b.py"], body="實作在 `src/b.py`。[test:test_new]")
+    _nh_commit(root, "改程式、B 只換綁定")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("①推送前:同一個提交改程式、B 只換綁定 → rc0", rc == 0, out[-800:])
+    _nh_file(root, "src/a.py", "x = 3\n")
+    _nh_node(root, "B", about=["src/b.py"], body="實作在 `src/b.py`,a 也改了。[test:test_new]")
+    _nh_commit(root, "改程式、B 寫散文")
+    rc, out = _nh_check(root, "--diff", f"{base}..HEAD")
+    check("②推送前:同一個提交改程式、B 改散文 → rc1", rc == 1 and "Systems/B" in out, out[-800:])
+
+
 def t_nodehome_merge_auto_combined_not_blocked():
     """兩條分支各自改同一篇筆記的不同段、同一支程式的不同行,合併時 git 自動合在一起——推送前不該擋。
 
