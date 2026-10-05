@@ -48,6 +48,7 @@ verified_by:
   - "[[Verification/2026-09-16_收斂候選規則的篩選量測]]"
   - "[[Verification/2026-09-16_收斂候選實作後的前後對照]]"
   - "[[Verification/2026-09-16_別名欄對檢索的實際貢獻]]"
+  - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
@@ -85,3 +86,22 @@ about_code:
 - **★處置(2026-08-03 結案)★**:待辦已認領。今日跑出的數與 2026-07-20 那次**逐項相同**(整體 +58.1%、held +99.6%、必看 19/30、gate 7/7 PASS)——★兩次獨立重跑一致,代表尺本身穩定可重現,當初對不上的只有「+106.8%」與「24/30」這兩個被沿用進句子、卻不對應任何一次實跑的數★。已把三處統一到本組凍結值,code 版本 `8680ac1` 記入`governance/eval/retrieval-eval-history.jsonl`。
 - ★保留的誠實邊界★:語料雖釘 snapshot,**排序程式碼會動**(A1 型別先驗等),故凍結值只對 `eval_head` 那版有效;日後重跑若不同,先 `checkout eval_head` 對照再判是漂移還是回歸。2026-07-11 源頭的 57.6/104.7 今日仍不完全重現,ranked 側可用 A1 解釋,**legacy 基線同時飄(0.5317→0.5411)至今未查明,維持掛著**。
 - goldset 生成器 `governance/eval/build_goldset.py`：30 search（分層:繁中短詞/identifier/縮寫/單漢字）+20 edit（真 git 案例）；候選池=legacy∪ranked 去識別洗牌（sha256+salt 可重現）；標註表 retrieval-labeling-sheet.md（留白=0 省力制）。人標完解析回 goldset → retrieval_eval 跑 gate。
+
+## 審查附件作影響輸入的事故（2026-10-06）
+
+WHY:[2026-10-06 附件種子獨立驗收]既有版曾把已追蹤的凍結 patch、派工文字與 replay 當 code 片段，造成歷史事故被當本次變動；沿原有簿記分類隔離，保持真正程式、刪檔與相鄰目錄控制。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:歷史片段誤作本次種子，但簿記目錄仍有真正程式例外] [test:t_impact_diff_review_artifacts] [test:t_impact_diff_bookkeeping_code_controls]。目錄排除須保留既有程式例外，以 Git 提交／索引模式為準，刪檔讀舊模式；無副檔名先讀凍結物件首行；未知或超出既有上限時保留，已知普通卷證排除。附件仍追蹤，不靠刪證據加速，也不對單次 timing 宣稱審查輪數下降。
+
+WHY:候選路徑也要沿Git的NUL與無損口徑，且跨簿記改名不可讓終點附件遮住舊程式刪除 [出處:審查附件不作程式影響種子設計審r1] [因:特殊路徑與跨邊界真Git反例均漏種子、家及事故] [test:t_impact_diff_special_paths,t_impact_diff_bookkeeping_boundary_rename]
+
+WHY:[2026-10-06 特殊路徑消費者核對]精確候選列舉與同步核對共用同一份 NUL 解碼清單，避免分類已無損但同步核對仍拆行／剝引號，或混用 bytes/str 而報錯。[出處:審查附件不作程式影響種子/r1-special-home-adjudication.md] [因:單一來源降低修復引入的回歸] 防回歸：t_impact_diff_special_paths 同時驗同步入口及含 tab 的圖譜節點；有效家的前置使用已登記且單檔可確認的家，換行 basename 的既有確認限制不在本次扩充範圍。
+
+WHY:[2026-10-06 特殊檔名驗收裁決]「家仍必推」的控制先登記 about_code，再以單檔查詢證明家確實有效；沒有登記的節點不能拿來證分類弄丟家。保留原換行 basename 的精確種子與事故斷言，另加換行目錄／唯一裸檔名和 tab 完整路徑兩個有效家。[出處:審查附件不作程式影響種子/r1-special-home-adjudication.md] [因:測試前置必須在正式入口可成立，避免以擴充全域 parser 掩蓋錯誤測試判準] 防回歸：t_impact_diff_special_paths。
+
+WHY:[2026-10-06 整合後靜態檢查]新增期限分支令分類函式超出既有複雜度上限，將 raw 讀取與截止期失敗語意集中為 _impact_diff_raw；不放寬上限、不變更逾時保守保留判準。[出處:code-review-artifact-impact-inputs/r2-integrated-lint-new.json] [因:避免分類與子行程成本控制混在同一函式形成後續修復熱點] 防回歸：t_review_role_bookkeeping_remaining_budget 與 impact_diff 子集。
+
+WHY:分類補強的控制分別驗特殊真路徑、跨簿記改名、整批內容上限與剩餘時間傳遞，不能以既有普通小樣本綠燈取代 [出處:審查附件不作程式影響種子設計審r1] [因:六席去重四類缺口，四組控制修前4過11敗] [test:t_impact_diff_special_paths,t_impact_diff_bookkeeping_boundary_rename,t_impact_diff_head_batch_total_cap,t_review_role_bookkeeping_remaining_budget]
+
+WHY:[2026-10-06 第三輪跨簿記改名補償]保守保留未知種子，不代表已確認新側是程式；若把兩者混成同一個 True，會吞掉舊側的後端角色。共用原分類入口以選填 unknown_is_code 區分這兩個問題，同時覆蓋固定帳檔；已確認新程式仍只計新側，避免一律補舊側造成重複計數。[出處:code-review-artifact-impact-inputs/r3-correctness.md、r3-architecture.md 的 R3-COR-1] [因:同一分類來源的兩個消費者必須保住舊角色證據，且不能把未知當證明] 防回歸：t_review_role_bookkeeping_rename_uncertainty 的固定／未知／已確認程式及 backend=1 控制。
+
+WHY:[2026-10-06 非 UTF-8 真 Git 邊界]無損檔名的替身字元需要在機器 JSON 沿標準 encoder escaping；人讀呈現沿既有 _nodehome_show。顯示替字不回寫索引值，避免資料交接成功碼配上不可讀 UTF 位元組。[出處:code-review-artifact-impact-inputs/r3-parent-nonutf8-output.json、r3-orchestrator-utf8.md] [因:讀入無損還要驗輸出與接收端可逆] 防回歸：t_impact_diff_nonutf8_json，同驗預設／嚴格 stdout、位元組可逆、事故及兩個人讀入口。Python 官方 [JSON encoder](https://docs.python.org/3/library/json.html) 提供 escaping 判準，[os 檔案系統編碼](https://docs.python.org/3/library/os.html#os.fsdecode) 提供本工具的位元組轉換口徑；官方資料不替實際反例背書。
+REVISIT:2026-10-13 若加入非 Python JSON 消費者，驗孤立替身字元的處理與原路徑可逆口徑；不能直接假設跨語言處理一致。
