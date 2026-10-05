@@ -13,7 +13,7 @@ summary: |-
   FLAG:DECISION
   KEY:maker≠checker 是整套驗證的地基,而跨家族審查席已連續缺席數週:Codex 帳號不支援可用模型、Gemini pro 免費額度 limit=0、flash 逾時
   KEY:2026-08-20 gov-stats 案三輪 panel 九席全為 claude 家族;處置是在文件加一句「收斂宣稱要講小」,★缺席未被當成 blocker 處理★
-  DECISION:[2026-08-20]立案,未處置——需裁「地基缺席時 loop 還能不能算數」
+  DECISION:[2026-08-22]結案:不硬擋,外家席缺席時收斂結論降級、留痕、roster 轉述(Enzo 成本考量裁定;2026-08-20 立案時待裁「地基缺席時 loop 還能不能算數」)
 decisions:
   - content: Enzo 2026-08-22 裁:不硬擋(成本考量)。處置=外家席已恢復(Gemini flash,scripts/external-seat.sh);high 缺外家時收斂結論降級成「單家族視角下未發現」並留痕,roster 轉述;skill 文字同步改。
     id: d1

@@ -2625,7 +2625,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         # 條件式回頭條件不算壞損,它的 [by:] 期限照日期式判到期;沒帶期限的由 doctor Z 段計數
         # ★已結案的 Issue 標出來★(存量漂移改法 [S6]):照樣列、照樣計數,只在那一行後面加註;只標 Issue——
         # 已收尾的計劃常刻意留著撤除用的回頭條件,標「已結案」反而讓人以為可以刪
-        _closed5 = (_drift_str(_n5, "type") == "issue" and _drift_str(_n5, "status") in _ISSUE_CLOSED_STATUSES)
+        # 作廢的筆記(任何類型)也標(結案連帶掃描 第 6 點);已收尾(done)的計劃不標
+        _closed5 = ("(這篇已作廢)" if _drift_str(_n5, "status") == "superseded"
+                    else "(這篇 Issue 已結案)" if (_drift_str(_n5, "type") == "issue"
+                                                  and _drift_str(_n5, "status") in _ISSUE_CLOSED_STATUSES) else "")
         for _no5, _kind5, _datev, _sumv, _raw5 in _revisit_lines(_txt5):
             if _kind5 == "bad":
                 _rv_bad += 1
@@ -2643,8 +2646,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         section("E5", "回訪到期(當初承認風險時許的「回頭看」)")
         _rv_due.sort(reverse=True)   # 最老優先
         # 摘要與節點名過 _esc_clean(code-revisit r1 H-1:兩天前才在逃逸帳修過的控制碼穿透洞,勿三挖)
-        _lines5 = [f"{d} {_esc_clean(sm, 60)}(逾 {ag} 天)← {_esc_clean(st, 40)}" + ("(這篇 Issue 已結案)" if cl else "")
-                   for ag, d, sm, st, cl in _rv_due]
+        _lines5 = [f"{d} {_esc_clean(sm, 60)}(逾 {ag} 天)← {_esc_clean(st, 40)}{cl}" for ag, d, sm, st, cl in _rv_due]
         _head5 = (f"{len(_rv_due)} 件回訪到期(最老逾 {_rv_due[0][0]} 天)——到日子了,處理完把該行日期改下一次、刪掉,或在那一行加 [closed:日期 理由]"
                   if _rv_due else "")
         if _rv_bad:
@@ -32008,13 +32010,20 @@ def _note_reread_check(root, diff_range, push_remote, pushed_ref):
 # ═══════════════════════════════════════════════════════════════════════════════════
 _DRIFT_CLOSED = ("done", "superseded")
 _DRIFT_OPEN_ISSUE = ("open", "doing")
+# c6 與結案連帶列出(Projects/結案連帶掃描_計劃):「已收尾」不分類型;待定詞只收明確表示還沒定的詞——
+# 「待辦」「TODO」不收(試算時「連鎖待辦單」這類名詞造成大量誤報);同一子句以 。、半形與全形分號、—— 切
+_DRIFT_SETTLED = frozenset(_DRIFT_CLOSED) | _ISSUE_CLOSED_STATUSES      # 計劃的收尾值加 Issue 的結案值,不另寫一份
+_DRIFT_PENDING_WORDS = ("待裁定", "尚未裁定", "未裁定", "未裁", "待決定", "尚未決定", "還沒決定", "還沒做", "尚未實作",
+                        "還沒實作", "還沒修", "未處置", "排隊中", "還在排隊", "[todo]")
+_DRIFT_CLAUSE_SPLIT_RE = re.compile(r"[。;；]|——")
+_DRIFT_SETTLED_MARK_RE = re.compile(r"[(（]已裁定[:：]")
 # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
 # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
 _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "m1", "retire", "count")
+_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "m1", "retire", "count")
 _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
-                     "c5": "轉正做了一半", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
+                     "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
                      "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上"}
 # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
 # m1 要推送範圍才判得了,scan 不列;retire(RULE 撤除條件)筆記格子第 3 步起列,是推送那次漏掉的兜底
@@ -32023,11 +32032,12 @@ _DRIFT_ACKS = "governance/drift-acks.jsonl"
 # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
 # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
 _DRIFT_FIXES = "governance/drift-fixes.jsonl"
-_DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "count")
+_DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "c6", "count")
 # 要讀程式檔才判得出「現在還是不是這一種發現」的種類:不走 _drift_current_finding(它只看筆記狀態),由各自的計算函式判
 # (代碼審 code-數量標記檢查 r1 架構對齊席 Z3:原本是載入函式裡的種類字串特例)
-_DRIFT_FIX_SELF_JUDGED = ("count",)
-_DRIFT_BOUND_KINDS = ("c2", "c3")          # 表態要綁當時連著的已收尾計劃(related)與序號(seq)的種類
+# c6 也自己判:加決策、翻決策之後被連的那篇狀態沒變,不是 c6 發現,但那一句一樣要補已裁定括號
+_DRIFT_FIX_SELF_JUDGED = ("count", "c6")
+_DRIFT_BOUND_KINDS = ("c2", "c3", "c6")    # 表態要綁當時連著的已收尾筆記(related)與序號(seq)的種類
 _DRIFT_GOLIVE_MARK = "drift check"
 _DRIFT_GATE_VALUES = ("block", "warn", "off")
 # ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、歷史重放不亂擋、噪音 ≤5)考過,
@@ -32137,6 +32147,8 @@ def _drift_state_findings(env, only=None):
             out += _drift_guard_findings(env, rel, n, st)
         elif ty == "issue" and st in _DRIFT_OPEN_ISSUE:
             out += _drift_c2(env, rel)
+        if st not in _DRIFT_SETTLED:              # 已收尾的筆記是歷史紀錄,裡面的待定句不算
+            out += _drift_c6(env, rel)
         if ty == "verification":
             plans = _drift_c3_hit(env, rel, ti=ti)
             if plans:
@@ -32165,6 +32177,149 @@ def _drift_c2(env, rel):
     names = {"out": "Issue 連到計劃", "in": "計劃連到 Issue", "both": "互相連"}
     return [{"kind": "c2", "path": rel, "line": ln, "text": _drift_line_text(text, ln), "related": [p for p, _d in plans],
              "why": "連著已收尾的計劃:" + "、".join(f"{p[:-3]}({names[d]})" for p, d in plans[:3])}]
+
+
+def _drift_pending_lines(text):
+    """可能寫著待定句的行 → [(行號, 原文, 區塊)]:summary 欄位那幾行(區塊 summary)+ 正文程式碼圍欄外的行(區塊 body)。
+    行內程式碼不剝(首頁索引的 `[todo]` 就寫在行內程式碼裡);summary 以外的開頭欄位不看。"""
+    lines = text.split("\n")
+    e = _drift_fm_end(lines)
+    out, in_sum = [], False
+    for i in range(1, e):
+        ln = lines[i]
+        if ln and not ln[0].isspace():
+            in_sum = ln.startswith("summary:")
+            if in_sum and ln[len("summary:"):].strip()[:1] not in ("", "|", ">", "#"):
+                out.append((i + 1, ln, "summary"))        # 單行值:值就在這一行(代碼審 r1 正確性席)
+            continue
+        if in_sum:
+            out.append((i + 1, ln, "summary"))
+    off = e + 1 if e else 0
+    out += [(off + no, ln, "body") for no, ln in _visible_lines(lines[off:])]
+    return out
+
+
+_DRIFT_MASK = "\0"
+_DRIFT_OPEN_PARENS, _DRIFT_CLOSE_PARENS = "(（", ")）"
+
+
+def _drift_mask_settled(line):
+    """已裁定括號整塊換成等長的佔位字 → 遮好的行(位置不變)。切子句、找待定詞與連結都在遮好的行上做,括號裡的分號、
+    ——、待定詞、連結都不算(結論常寫「先做A；還沒做B」;代碼審 r2 正確性席)。配對算巢狀(結論常帶「(該案裁定 d2)」),
+    沒收尾就遮到行尾。"""
+    out, pos = list(line), 0
+    for m in _DRIFT_SETTLED_MARK_RE.finditer(line):
+        if m.start() < pos:
+            continue
+        depth, j = 0, m.start()
+        while j < len(line):
+            depth += (line[j] in _DRIFT_OPEN_PARENS) - (line[j] in _DRIFT_CLOSE_PARENS)
+            j += 1
+            if depth == 0:
+                break
+        out[m.start():j] = _DRIFT_MASK * (j - m.start())
+        pos = j
+    return "".join(out)
+
+
+_DRIFT_QUOTE_RE = re.compile(r"「[^」\n]*」|『[^』\n]*』|“[^”\n]*”")
+_DRIFT_QUOTED = "\x01"
+
+
+def _drift_mask_quotes(line):
+    """全形引號裡的字換成等長佔位字:專案慣例「只是在提某個詞就用全形引號包起來」,引號裡的待定詞與連結不算
+    (上線自用時,存量漂移守衛那篇說明 c6 抓「待裁定」這類詞的句子被當成待定句)。行內程式碼不遮:索引頁拿它寫狀態標籤。"""
+    return _DRIFT_QUOTE_RE.sub(lambda m: _DRIFT_QUOTED * len(m.group(0)), line)
+
+
+def _drift_pending_clause(cl):
+    """這個子句(遮好的)算不算待定:有待定詞、而且還沒補已裁定括號(括號補在子句結尾,同一行別的子句照判;代碼審 r1 正確性席)。"""
+    return any(w in cl for w in _DRIFT_PENDING_WORDS) and _DRIFT_MASK not in cl
+
+
+def _drift_pending_clauses(line):
+    """一行的待定子句 → [(起點, 終點, 遮好的子句)];終點是下一個切點之前,最後一個子句到去掉尾端空白為止。"""
+    masked = _drift_mask_quotes(_drift_mask_settled(line))
+    out, start = [], 0
+    for m in [*_DRIFT_CLAUSE_SPLIT_RE.finditer(masked), None]:
+        end = m.start() if m else len(masked.rstrip())
+        if _drift_pending_clause(masked[start:end]):
+            out.append((start, end, masked[start:end]))
+        if m:
+            start = m.end()
+    return out
+
+
+def _drift_pending_links(env, line):
+    """一行裡跟待定詞落在同一子句的連結 → 解出來的圖譜內路徑(去重、照出現順序);已補已裁定括號的子句不算。"""
+    if "[[" not in line:
+        return []
+    out = []
+    for _s, _e, cl in _drift_pending_clauses(line):
+        for m in WIKILINK_RE.finditer(cl):
+            t = env.resolve(link_target(m.group(1)))
+            if t and t not in out:
+                out.append(t)
+    return out
+
+
+def _drift_target_clause_ends(env, line, target):
+    """連到 target 的待定子句結尾位置(括號要補在哪)→ [位置];同一行可能不只一個。"""
+    return [end for _s, end, cl in _drift_pending_clauses(line)
+            if any(env.resolve(link_target(x.group(1))) == target for x in WIKILINK_RE.finditer(cl))]
+
+
+def _drift_c6(env, rel):
+    """c6:一行在同一子句裡寫了待定詞、又連到已收尾的筆記 → 一行一筆,related 是那一行命中的已收尾目標(排序)。"""
+    text = env_text(env, rel)
+    if not text or "[[" not in text:
+        return []
+    out = []
+    for no, ln, _reg in _drift_pending_lines(text):
+        hit = sorted(t for t in _drift_pending_links(env, ln)
+                     if t != rel and _drift_str(env.notes.get(t), "status") in _DRIFT_SETTLED)
+        if hit:
+            out.append({"kind": "c6", "path": rel, "line": no, "text": _drift_line_text(text, no), "related": hit,
+                        "why": "連到已收尾的筆記、同一句還寫待定:" + "、".join(p[:-3] for p in hit[:3])})
+    return out
+
+
+def _drift_backrefs(env, rel):
+    """圖譜裡連到 rel、同一子句還寫待定的行 → [(路徑, 行號, 原文, 那一行待定子句連到的篇數)];不要求 rel 已收尾
+    (加決策、翻決策不改狀態)。已收尾的來源筆記與 rel 自己不看。"""
+    out = []
+    for p in sorted(env.notes):
+        if p == rel or _drift_str(env.notes.get(p), "status") in _DRIFT_SETTLED:
+            continue
+        text = env_text(env, p)
+        if not text or "[[" not in text:
+            continue
+        for no, ln, _reg in _drift_pending_lines(text):
+            links = _drift_pending_links(env, ln)
+            if rel in links:
+                out.append((p, no, ln, len(links)))
+    return out
+
+
+def _drift_print_backrefs(vault, rel):
+    """結案、作廢、加決策、翻決策成功之後:列出連到這篇、同一句還寫待定的行與 c6 修法範本。只印、不擋、不改回傳碼:
+    寫入已經完成,重建圖譜出錯只在 stderr 講一句(四個呼叫處同一種 fail-open;代碼審 r1 架構對齊席)。
+    從磁碟重建圖譜(呼叫端的 env 是寫入之前載入的)。"""
+    try:
+        env2 = Env(vault)
+        rows = _drift_backrefs(env2, rel)
+    except (OSError, ValueError, RuntimeError, UnicodeDecodeError) as e:
+        print(f"(列出連到這篇還寫待定的句子失敗,剛才的寫入照樣完成了:{e})", file=sys.stderr)
+        return
+    if not rows:
+        return
+    print(f"連到這篇、同一句還寫待定的有 {len(rows)} 行(只列出、不擋;確定有結論了就補已裁定括號):")
+    for p, no, ln, n in rows[:20]:
+        print(f"  · {_esc_clean(p, 200)}:{no}  {_esc_clean(ln.strip(), 100)}")
+        hint = _drift_fix_hint("c6", p, no)[0]
+        print(f"      改:{_esc_clean(hint + (' --by ' + _drift_sh(rel[:-3], node=True) if n > 1 else ''), 400)}")
+    if len(rows) > 20:
+        print(f"  …還有 {len(rows) - 20} 行(lumos drift scan 看全部)")
 
 
 def _drift_guard_findings(env, rel, n, st):
@@ -32508,22 +32663,45 @@ def _revisit_lines(text):
     return out
 
 
-def _issue_close_revisits(env, rel, new_status):
-    """lumos set <Issue> status <結案值>、drift fix --kind c2 --close 之後:列出這篇★全部★回頭條件(不只到期的),
-    提示結案了要改成結案說明或刪掉。只印、不擋、不改;行號用寫完之後從磁碟重讀的內容算(存量漂移改法 [S7])。"""
-    n = env.notes.get(rel)
-    if _drift_str(n, "type") != "issue" or str(new_status).strip() not in _ISSUE_CLOSED_STATUSES:
+def _closing_revisits(env, rel, new_status):
+    """lumos set 或 drift fix --kind c2 --close 把 Issue 改成結案值、或把任何筆記改成 superseded 之後:列出這篇★全部★
+    沒結案的回頭條件(不只到期的)。只印、不擋、不改;行號用寫完之後從磁碟重讀的
+    內容算(存量漂移改法 [S7]、結案連帶掃描 第 6 點)。計劃改成 done 不列:已收尾的計劃常刻意留撤除用的回頭條件。"""
+    st = str(new_status).strip()
+    issue_closed = _drift_str(env.notes.get(rel), "type") == "issue" and st in _ISSUE_CLOSED_STATUSES
+    if not issue_closed and st != "superseded":
         return
     try:
         text = _phys_path(env.vault, rel).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return
     rows = _revisit_lines(text)
-    if not rows:
+    if rows:
+        if st == "superseded":
+            print(f"這篇作廢了,還留著 {len(rows)} 行回頭條件——要搬到取代它的那篇、改成結案說明,"
+                  "或在那一行加 [closed:日期 理由](只列出、不擋):")
+        else:
+            print(f"這篇 Issue 結案了,還留著 {len(rows)} 行回頭條件——要改成結案說明、刪掉,"
+                  "或在那一行加 [closed:日期 理由](只列出、不擋):")
+        for no, _k, _d, _s, raw in rows:
+            print(f"  · {_esc_clean(rel, 200)}:{no}  {_esc_clean(raw.strip(), 100)}")
+
+
+def _closing_pending_decisions(env, rel, new_status):
+    """lumos set 把 Issue 改成結案值之後:列出摘要裡還寫待定的 DECISION: 行(結案連帶掃描 第 6 點)。只印、不擋、不改;
+    drift fix --kind c2 --close 在寫入前就擋了,不呼叫這支。"""
+    if _drift_str(env.notes.get(rel), "type") != "issue" or str(new_status).strip() not in _ISSUE_CLOSED_STATUSES:
         return
-    print(f"這篇 Issue 結案了,還留著 {len(rows)} 行回頭條件——要改成結案說明、刪掉,或在那一行加 [closed:日期 理由](只列出、不擋):")
-    for no, _k, _d, _s, raw in rows:
-        print(f"  · {_esc_clean(rel, 200)}:{no}  {_esc_clean(raw.strip(), 100)}")
+    try:
+        lines = _phys_path(env.vault, rel).read_text(encoding="utf-8-sig").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return
+    pend = _drift_pending_decisions(lines, _drift_fm_end(lines))
+    if pend:
+        print(f"摘要還有 {len(pend)} 行決策行寫著待定——結案了就換成結論(只列出、不擋;"
+              "用 lumos drift fix --kind c2 --close 結案時會擋):")
+        for no, ln in pend:
+            print(f"  · {_esc_clean(rel, 200)}:{no}  {_esc_clean(ln.strip(), 100)}")
 
 
 def _probe_value_err(k, v):
@@ -34309,6 +34487,8 @@ def _drift_fix_hint(kind, path, line, names=None):
         return [base + " --status <" + "/".join(sorted(_DRIFT_C3_STATUSES)) + '> [--reason "…"]']
     if kind == "c4":
         return [base + "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)"]
+    if kind == "c6":
+        return [base + ' --settled "<結論>"']
     if kind == "probe":
         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
                 f'lumos drift ack {node} {line} --kind probe --reason "<為什麼照留>"']
@@ -34349,9 +34529,13 @@ def _drift_print_hints(rows, stream, head="改法:"):
 
 
 _DRIFT_C3_STATUSES = frozenset(_STATUS_ENUM["verification"] - {"pending"})
-_DRIFT_FIX_OPTS = ("date", "close", "keep", "status", "reason", "by")
-_DRIFT_FIX_ALLOWED = {"c1": {"date"}, "c2": {"close", "keep", "status", "reason"}, "c3": {"status", "by", "reason"},
-                      "c4": set(), "c5": set(), "count": set()}
+_DRIFT_FIX_OPTS = ("date", "close", "keep", "status", "reason", "by", "settled", "decision", "keep_revisits")
+_DRIFT_FIX_ALLOWED = {"c1": {"date"}, "c2": {"close", "keep", "status", "reason", "decision", "keep_revisits"},
+                      "c3": {"status", "by", "reason"}, "c4": set(), "c5": set(), "c6": {"settled", "by", "date"},
+                      "count": set()}
+# 自由文字參數的旗標名(錯誤訊息用;keep_revisits 在命令列是 --keep-revisits)
+_DRIFT_FIX_TEXT_OPTS = {"reason": "--reason", "settled": "--settled", "decision": "--decision",
+                        "keep_revisits": "--keep-revisits"}
 
 
 def _drift_one_line(t):
@@ -34373,6 +34557,8 @@ def _drift_fix_c2_args(o):
     if _drift_placeholder_err(o["reason"], "--reason"):
         return _drift_placeholder_err(o["reason"], "--reason")
     if o.get("keep"):
+        if o.get("decision") is not None or o.get("keep_revisits") is not None:
+            return "--keep 不收 --decision、--keep-revisits(那兩個是結案用的)"
         return "--keep 不收 --status" if o.get("status") is not None else None
     if o.get("status") not in _ISSUE_CLOSED_STATUSES:
         return f"--close 的 --status 只能是 Issue 的結案值:{'/'.join(sorted(_ISSUE_CLOSED_STATUSES))}"
@@ -34386,8 +34572,26 @@ def _drift_fix_c3_args(o):
     return _drift_placeholder_err(o["reason"], "--reason") if o.get("reason") is not None else None
 
 
+def _drift_parens_balanced(t):
+    """半形全形括號混著數,成對而且沒有先收尾 → True;規則跟 _drift_mask_settled 的配對一樣,結論補進去之後遮得剛好。"""
+    depth = 0
+    for c in t:
+        depth += (c in _DRIFT_OPEN_PARENS) - (c in _DRIFT_CLOSE_PARENS)
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def _drift_fix_c6_args(o):
+    if o.get("settled") is None:
+        return '--kind c6 要帶 --settled "<結論>"(一行、4 到 200 字)'
+    if not _drift_parens_balanced(o["settled"]):
+        return "--settled 的括號要成對(補進去的已裁定括號靠配對判斷到哪裡為止)"
+    return None
+
+
 _DRIFT_FIX_KIND_ARGS = {"c1": lambda o: None, "c2": _drift_fix_c2_args, "c3": _drift_fix_c3_args,
-                        "c4": lambda o: None, "c5": lambda o: None, "count": lambda o: None}
+                        "c4": lambda o: None, "c5": lambda o: None, "c6": _drift_fix_c6_args, "count": lambda o: None}
 
 
 def _drift_fix_args_err(kind, o):
@@ -34404,8 +34608,13 @@ def _drift_fix_args_err(kind, o):
         _d, err = _guard_date_arg(o["date"])
         if err:
             return err
-    if o.get("reason") is not None and not _drift_fix_reason_ok(o["reason"]):
-        return "--reason 要一行、4 到 200 字"
+    for k, flag in _DRIFT_FIX_TEXT_OPTS.items():
+        if o.get(k) is None:
+            continue
+        if not _drift_fix_reason_ok(o[k]):
+            return f"{flag} 要一行、4 到 200 字"
+        if k != "reason" and _drift_placeholder_err(o[k], flag):      # --reason 的佔位字由各種類自己擋(c3 選填)
+            return _drift_placeholder_err(o[k], flag)
     return _DRIFT_FIX_KIND_ARGS[kind](o)
 
 
@@ -34542,17 +34751,70 @@ def _drift_close_banner(body, banner):
     return [*body[:start], "", banner, "", *body[start:]], False
 
 
-def _drift_fix_c2(cx):
-    """c2 --close:status 改成 Issue 的結案值、正文標題之後加結案橫幅(專案的 Issue 寫法:第一段就寫已結案)。"""
+_DRIFT_DECISION_RE = re.compile(r"^(\s*)DECISION:(.*)$")
+
+
+def _drift_pending_decisions(lines, fe):
+    """開頭欄位裡含待定詞的 DECISION: 行 → [(行號, 原文)](結案時摘要還寫「未裁」;Projects/結案連帶掃描_計劃 第 5 點)。"""
+    return [(i + 1, lines[i]) for i in range(1, fe)
+            if (m := _DRIFT_DECISION_RE.match(lines[i])) and any(w in m.group(2) for w in _DRIFT_PENDING_WORDS)]
+
+
+def _drift_close_gates(cx):
+    """c2 --close 寫入前的兩道擋(待定決策行、沒結案的回頭條件)→ (換過決策行的 lines, 錯誤)。
+    學 todocheck 在關單那一刻擋:結案之後才列出,現況就是沒人改(Projects/結案連帶掃描_計劃 第 5 點)。"""
     import datetime
-    o, lines, fe = cx["o"], cx["lines"], cx["fe"]
+    o, lines, fe = cx["o"], list(cx["lines"]), cx["fe"]
+    pend = _drift_pending_decisions(lines, fe)
+    say = "\n".join(f"    · 第 {no} 行:{_esc_clean(ln.strip(), 150)}" for no, ln in pend)
+    if pend and o.get("decision") is None:
+        return None, (f"摘要的決策行還寫待定,結案前先換掉:\n{say}\n"
+                      '  加 --decision "<結論>"(會換成「DECISION:[今天] <結論>」),或先手改那一行')
+    if o.get("decision") is not None:
+        if not pend:
+            return None, "這篇摘要沒有還寫待定的決策行,不用 --decision"
+        if len(pend) > 1:
+            return None, f"摘要有 {len(pend)} 行決策行還寫待定,一次只換一行——先手改到剩一行:\n{say}"
+        if any(w in o["decision"] for w in _DRIFT_PENDING_WORDS):
+            return None, "--decision 的新句還寫待定,換了等於沒換——寫成結論(代碼審 r1 正確性席)"
+        no = pend[0][0]
+        lead = _DRIFT_DECISION_RE.match(lines[no - 1]).group(1)
+        lines[no - 1] = f"{lead}DECISION:[{datetime.date.today().isoformat()}] {o['decision'].strip()}"
+    live = _revisit_lines("\n".join(lines))
+    if live and o.get("keep_revisits") is None:
+        rows = "\n".join(f"    · 第 {no} 行:{_esc_clean(raw.strip(), 150)}" for no, _k, _d, _s, raw in live)
+        return None, (f"還有 {len(live)} 行回頭條件沒處理,結案前先逐行處理:\n{rows}\n"
+                      "  在那一行加 [closed:日期 理由];確定結案後還要回頭量的,"
+                      '加 --keep-revisits "<為什麼留著>" 照常結案(理由與行號記進修復帳)')
+    if o.get("keep_revisits") is not None and not live:
+        return None, "這篇沒有還沒結案的回頭條件,不用 --keep-revisits"
+    return lines, None
+
+
+def _drift_fix_c2(cx):
+    """c2 --close:status 改成 Issue 的結案值、正文標題之後加結案橫幅(專案的 Issue 寫法:第一段就寫已結案)。
+    寫之前先過兩道擋(_drift_close_gates)。"""
+    import datetime
+    o, fe = cx["o"], cx["fe"]
+    lines, err = _drift_close_gates(cx)
+    if err:
+        return None, err
     fm, ok = _drift_fm_status(lines, fe, o["status"])
     banner = (f"> 已結案({datetime.date.today().isoformat()},{o['status']}):{o['reason'].strip().rstrip('。')}。"
               "以下是當時的排查紀錄,不是現況。")
     body, had = _drift_close_banner(lines[fe + 1:], banner)
-    return {"new": lines[:1] + fm + [lines[fe]] + body, "key": "status", "check": ok, "handled": _drift_no_kind("c2"),
-            "extra": {}, "texts": [] if had else [(banner, "body")],
-            "msg": f"status 改成 {o['status']}" + (";第一段已經是已結案橫幅,沒再加" if had else ",正文加了結案橫幅")}, None
+    new = lines[:1] + fm + [lines[fe]] + body
+    extra, kept = {}, []
+    if o.get("keep_revisits") is not None:          # 擋的那一關保證這時有活的回頭條件;行號用加了橫幅之後的內容算
+        kept = [no for no, *_r in _revisit_lines("\n".join(new))]
+        extra["keep_revisits"] = {"reason": o["keep_revisits"].strip(), "lines": kept}
+    texts = [] if had else [(banner, "body")]
+    if o.get("decision") is not None:
+        texts.append((o["decision"].strip(), "summary"))
+    return {"new": new, "key": "status", "check": ok, "handled": _drift_no_kind("c2"), "extra": extra, "texts": texts,
+            "msg": f"status 改成 {o['status']}" + (";第一段已經是已結案橫幅,沒再加" if had else ",正文加了結案橫幅")
+                   + (";摘要的決策行換成結論" if o.get("decision") is not None else "")
+                   + (f";留下 {len(kept)} 行回頭條件(理由記進修復帳)" if kept else "")}, None
 
 
 def _drift_fix_by(env, by):
@@ -34795,8 +35057,58 @@ def _drift_fix_count(cx):
             "msg": f"數量 {pr['n']} 改成 {actual}(標籤與句子)"}, None
 
 
+def _drift_c6_target(env2, cands, by):
+    """這一行待定子句連到的候選 → (要補的目標去 .md, 錯誤):給了 --by 要在候選裡;沒給只准剛好一篇。"""
+    say = "、".join(c[:-3] for c in cands)
+    if by:
+        target, err = _drift_fix_by(env2, by)
+        if err:
+            return None, err
+        return (target, None) if target + ".md" in cands else (None, f"--by {by} 不在這一行的待定子句裡(候選:{say})")
+    if len(cands) > 1:
+        return None, f"待定子句連到 {len(cands)} 篇({say}),用 --by 指定是哪一篇"
+    return cands[0][:-3], None
+
+
+def _drift_fix_c6(cx):
+    """c6:待定子句結尾補「(已裁定:日期 結論,見 [[目標]])」(Projects/結案連帶掃描_計劃 第 3 點)。
+    自己判:那一行要有待定子句而且裡面有連結;不要求目標已收尾(加決策、翻決策之後目標狀態沒變)。"""
+    import datetime
+    o, line, lines, env2 = cx["o"], cx["line"], cx["lines"], cx["env2"]
+    where = {no: reg for no, _ln, reg in _drift_pending_lines("\n".join(lines))}
+    if line not in where:
+        return None, f"{cx['rel']} 第 {line} 行不在正文或 summary 裡(其他開頭欄位、程式碼圍欄裡的不改),手動改"
+    src = lines[line - 1]
+    if src.lstrip().startswith("|"):
+        return None, f"{cx['rel']} 第 {line} 行是表格行,行尾加括號會弄壞表格;手動改"
+    if where[line] == "summary" and src.startswith("summary:"):
+        return None, (f"{cx['rel']} 第 {line} 行是寫成單行的 summary(值可能帶引號,括號補進去會弄壞開頭欄位);手動改"
+                      "(代碼審 r2 正確性席)")
+    cands = [t for t in _drift_pending_links(env2, src) if t != cx["rel"]]
+    if not cands:
+        return None, (f"{cx['rel']} 第 {line} 行沒有還沒補已裁定括號的待定子句(待定詞跟連結在同一子句),不是 c6")
+    target, err = _drift_c6_target(env2, cands, o.get("by"))
+    if err:
+        return None, err
+    ends = _drift_target_clause_ends(env2, src, target + ".md")
+    if len(ends) > 1:
+        return None, (f"{cx['rel']} 第 {line} 行有 {len(ends)} 個待定子句都連到 {target},一次補不完;手動改"
+                      "(代碼審 r2 正確性席)")
+    if src[:ends[0]].count("`") % 2:
+        return None, (f"{cx['rel']} 第 {line} 行要補括號的位置落在行內程式碼裡(切點在反引號中間),補進去連結就失效;手動改"
+                      "(代碼審 r3 正確性席)")
+    day = o.get("date") or datetime.date.today().isoformat()
+    add = f"(已裁定:{day} {o['settled'].strip()},見 [[{target}]])"
+    new = [*lines[:line - 1], src[:ends[0]] + add + src[ends[0]:], *lines[line:]]
+    # 處理到的判準看這個目標:同一行別的待定子句(連到別篇)照樣是 c6,不算沒處理到(代碼審 r1 正確性席)
+    return {"new": new, "key": "body", "check": lambda _f: True,
+            "handled": lambda _fs, txt: target + ".md" not in _drift_pending_links(env2, txt.split("\n")[line - 1]),
+            "extra": {"target": target + ".md", "settled": o["settled"].strip()}, "texts": [(add, where[line])],
+            "msg": f"待定子句結尾補了已裁定括號(見 {target})"}, None
+
+
 _DRIFT_FIX_COMPUTE = {"c1": _drift_fix_c1, "c2": _drift_fix_c2, "c3": _drift_fix_c3, "c4": _drift_fix_c4,
-                      "c5": _drift_fix_c5, "count": _drift_fix_count}
+                      "c5": _drift_fix_c5, "c6": _drift_fix_c6, "count": _drift_fix_count}
 
 
 def _drift_fix_shape_err(root, texts):
@@ -34962,7 +35274,8 @@ def cmd_drift_fix(env, node, line, kind, o):
         return 2
     print(f"✓ drift fix {kind}:{_esc_clean(rel, 200)} 第 {line} 行——{res['msg']}")
     if kind == "c2":
-        _issue_close_revisits(env, rel, o["status"])
+        _closing_revisits(env, rel, o["status"])
+        _drift_print_backrefs(env.vault, rel)
     print(f"修復帳要跟筆記一起提交:\n    {_drift_git_hint(cx, 'add ' + _DRIFT_FIXES)} && git commit")
     return 0
 
@@ -36294,7 +36607,7 @@ def _drift_doctor_lines(env):
         parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
     if parts:
         out.append(";".join(parts))
-    for k in ("c1", "c2", "c3", "c4", "c5"):
+    for k in ("c1", "c2", "c3", "c4", "c5", "c6"):
         rows = [f for f in left if f["kind"] == k]
         nd = sum(1 for f in done if f["kind"] == k)
         if rows:     # 只剩已表態的不開段(全靜默;代碼審 r2 正確性席:表態完那一段永遠不會安靜);全部清單看 drift scan
@@ -46242,10 +46555,10 @@ def main():
     dra.add_argument("--reason", dest="dr_reason", required=True)
     dra.add_argument("--name", dest="dr_names", action="append", default=None, metavar="名稱",
                      help="--kind m1 用(可重複):這一行照留的是哪幾個消失的名稱;一律寫成 --name=<名稱>(名稱以 -- 開頭時才不會被當成選項)")
-    drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c5、count;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
+    drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c6、count;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
     drf.add_argument("dr_node", metavar="節點")
     drf.add_argument("dr_line", metavar="行號", type=int)
-    drf.add_argument("--kind", dest="dr_kind", required=True, help="c1/c2/c3/c4/c5/count(照 drift scan 那一筆列的種類)")
+    drf.add_argument("--kind", dest="dr_kind", required=True, help="c1/c2/c3/c4/c5/c6/count(照 drift scan 那一筆列的種類)")
     drf.add_argument("--dry-run", dest="dr_dry", action="store_true", help="只印改前改後,不寫筆記、不寫帳")
     drf.add_argument("--date", dest="dr_date", default=None, metavar="YYYY-MM-DD", help="c1:轉正日期(推不出來時要給)")
     drf.add_argument("--close", dest="dr_close", action="store_true", help="c2:Issue 解決了,結案")
@@ -46253,7 +46566,14 @@ def main():
     drf.add_argument("--status", dest="dr_status", default=None, help="c2 --close 的結案值;c3 要改成的狀態")
     drf.add_argument("--reason", dest="dr_reason", default=None,
                      help="c2、c3:c2 為什麼算解決/還沒解決(必填);c3 為什麼改成這個狀態(選填)(一行、4 到 200 字)")
-    drf.add_argument("--by", dest="dr_by", default=None, metavar="節點", help="c3:由哪篇解決或參考哪篇")
+    drf.add_argument("--by", dest="dr_by", default=None, metavar="節點",
+                     help="c3:由哪篇解決或參考哪篇;c6:待定子句連到好幾篇時指定是哪一篇")
+    drf.add_argument("--settled", dest="dr_settled", default=None, metavar="結論",
+                     help="c6:行尾補「(已裁定:日期 結論,見 [[…]])」的結論(一行、4 到 200 字)")
+    drf.add_argument("--decision", dest="dr_decision", default=None, metavar="結論",
+                     help="c2 --close:摘要還寫待定的那一行 DECISION: 換成「[今天] 結論」")
+    drf.add_argument("--keep-revisits", dest="dr_keep_revisits", default=None, metavar="理由",
+                     help="c2 --close:還有沒結案的回頭條件、確定結案後還要回頭量時照常結案,理由記進修復帳")
     dre = drsub.add_parser("exam", help="拿考卷在被考 repo 的歷史上重放(不寫帳、不寫檔)")
     dre.add_argument("dr_exam", metavar="考卷.json", nargs="?", default=None)
     dre.add_argument("--repo", dest="dr_repo", required=True)
@@ -46773,7 +47093,8 @@ def main():
             return cmd_drift_fix(env, args.dr_node, args.dr_line, args.dr_kind,
                                  {"dry_run": args.dr_dry, "date": args.dr_date, "close": args.dr_close,
                                   "keep": args.dr_keep, "status": args.dr_status, "reason": args.dr_reason,
-                                  "by": args.dr_by})
+                                  "by": args.dr_by, "settled": args.dr_settled, "decision": args.dr_decision,
+                                  "keep_revisits": args.dr_keep_revisits})
         print(f"擋下:不認得的 drift 子命令 {args.drcmd}", file=sys.stderr)
         return 2
     if args.cmd in ("set", "append", "remove"):
@@ -46787,8 +47108,11 @@ def main():
                     # 計劃收尾時列連帶待辦(存量漂移防線 [S6]):只多印、不擋、不寫;env 是改之前載入的,連結沒變
                     _v = args.value[0] if isinstance(args.value, list) and len(args.value) == 1 else args.value
                     _drift_print_followups(env, rel, str(_v).strip())
-                    # Issue 改成結案值:列出它還留著的回頭條件(存量漂移改法 [S7];同一個位置,不塞進計劃連帶待辦)
-                    _issue_close_revisits(env, rel, str(_v).strip())
+                    # Issue 改成結案值、任何筆記改成作廢:列出它還留著的回頭條件(存量漂移改法 [S7]、結案連帶掃描 第 6 點)
+                    _closing_revisits(env, rel, str(_v).strip())
+                    _closing_pending_decisions(env, rel, str(_v).strip())
+                    if str(_v).strip() in _DRIFT_SETTLED:      # 連到這篇還寫待定的句子(結案連帶掃描 第 4 點)
+                        _drift_print_backrefs(env.vault, rel)
                 return rc
             if args.cmd == "remove":
                 return cmd_remove(env, rel, args.key, args.value)
@@ -46909,9 +47233,12 @@ def main():
                             print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
                     except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾
                         print(f"CASCADE-ERROR {_e}", file=sys.stderr)
+                    _drift_print_backrefs(env.vault, rel)
                 return rc
             rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
                                                 context=args.context, why=args.why)
+            if rc == 0:
+                _drift_print_backrefs(env.vault, rel)
             return rc
         except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
             # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
