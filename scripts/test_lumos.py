@@ -32928,7 +32928,9 @@ SKIPPED_NAMES = []   # r1 代碼審折入:跳過只記總數的話,「換掉哪�
 # ★不要為了遷就最慢那支把全域上限拉高★——那會讓真的卡死也要等到那個上限才被打斷,
 # 等於把偵測能力送掉。實測(2026-08-22 本機):t_ci_wait 132.3s、次慢 25.8s,
 # 所以全域 180s 對「一般測試」有 7x 餘裕,只有 t_ci_wait 需要單獨放寬。
-TIMEOUT_OVERRIDE = {"t_ci_wait": 450}          # 132.3s → 餘裕 3.4x
+TIMEOUT_OVERRIDE = {"t_ci_wait": 450,          # 132.3s → 餘裕 3.4x
+                    # 本機約 105s;CI 機器慢約一倍,PR #7、#8 都在 CI 超過 180s 被砍(斷言全過),連重跑也紅
+                    "t_prepush_docs_and_light_run_subset": 360}
 
 
 class TestTimeout(Exception):
