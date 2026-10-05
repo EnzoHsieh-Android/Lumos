@@ -63728,8 +63728,10 @@ def t_drift_m1_review_r3_long_lines_narrowed():
           in out, out[-600:])
     _m1_note(root, "Systems/B.md", "# B\n呼叫 `old_func_x` 做事。" + " " * 20000)
     _m1_commit(root, "related long")
+    before = _m1_events(root)
     rc, out = _m1_run(root, f"{base}..HEAD")
-    e = _m1_events(root)[-1]
+    # 不取 [-1]:第一次放行記本機帳、這次擋下記版控帳,同一秒寫的兩筆依時間合併後版控帳在前,[-1] 會拿到上一次的放行
+    e = _gov_since(_m1_events(root), before)[-1]
     blno = _m1_lno(root, "Systems/B.md", "old_func_x")
     check("③行內有消失的名稱:照判不了擋、帳 long_lines 1、印位置", rc == 1 and e["kind"] == "blocked" and e["long_lines"] == 1
           and e["long_lines_other"] == 1 and f"(行裡有這次消失的名稱、算判不了):Systems/B.md:{blno}" in out, out[-900:])
