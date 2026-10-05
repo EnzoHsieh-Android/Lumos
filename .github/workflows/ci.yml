@@ -203,3 +203,54 @@ jobs:
         run: |
           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
           python scripts/lumos anchor verify
+  # 實驗用(Projects/CI加速_計劃〈做法〉0):量全套測試拆給多台機器時最慢那份要多久,量完關掉不合併
+  exp8:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: PR 事件補上本機 main
+        if: github.event_name == 'pull_request'
+        run: git branch --track main origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: 一台一份
+        run: |
+          nproc
+          time python scripts/test_lumos.py --shard "${{ matrix.shard }}/8" > /tmp/s.log 2>&1 || { tail -40 /tmp/s.log; exit 1; }
+          tail -5 /tmp/s.log
+  exp4x2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        half: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: PR 事件補上本機 main
+        if: github.event_name == 'pull_request'
+        run: git branch --track main origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: 一台兩份
+        run: |
+          nproc
+          a=$(( ${{ matrix.half }} * 2 - 1 )); b=$(( ${{ matrix.half }} * 2 ))
+          start=$(date +%s); rc=0
+          python scripts/test_lumos.py --shard "$a/8" > /tmp/a.log 2>&1 & pa=$!
+          python scripts/test_lumos.py --shard "$b/8" > /tmp/b.log 2>&1 & pb=$!
+          wait $pa || rc=1; wait $pb || rc=1
+          echo "兩份共 $(( $(date +%s) - start )) 秒"
+          tail -5 /tmp/a.log; tail -5 /tmp/b.log
+          [ $rc = 0 ] || { tail -40 /tmp/a.log; tail -40 /tmp/b.log; exit 1; }
