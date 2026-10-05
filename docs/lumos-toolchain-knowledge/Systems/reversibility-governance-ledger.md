@@ -16,6 +16,8 @@ verified_by:
   - "[[Verification/2026-07-10_合約鏈補強234]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+  - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
 summary: |-
   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
   WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
@@ -75,6 +77,8 @@ aliases:
   - 七本帳來源
   - 治理帳本機帳
   - signoff 簽核留痕
+related:
+  - "[[Projects/過期鎖安全接手_計劃]]"
 ---
 # reversibility-governance-ledger
 
@@ -83,6 +87,8 @@ aliases:
 源起：日報 2026-06-19（reversibility + audit-trail 兩軸，點名為 lumos 方法論盲點）。
 
 ## 是什麼
+PITFALL:2026-10-04 [[Issues/過期鎖接手可能雙持]] 與 [[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]：治理帳多寫者方案若直接沿用 `_excl_lock_try`，過期判斷與按路徑換名的間隙可讓兩程序同時持鎖；重現順序與輸出見 Issue。再次啟動 [[Projects/code-loop治理帳寫讀契約_計劃]] 前，先用 Issue「什麼算修好」的確定性交錯測試驗鎖，再驗四個寫者同鎖，不得拿歷史「換名原子」敘述當已通過的證據。
+2026-10-05 訂正：[[Projects/過期鎖安全接手_計劃]] 已以跨程序紅燈釘住這個 ABA，改採既有鎖不自動接手；這只處理共享鎖地基，不代表 [[Projects/code-loop治理帳寫讀契約_計劃]] 的其他設計缺口已通過。治理帳續案仍需逐一處理原設計審發現並驗四個寫者同鎖；新舊工具混用時舊版仍能偷新版鎖，進場條件見鎖計劃。
 - **功能 ①（Check R）**：在 Systems 節點 summary 的 KEY 行用 `★IRREVERSIBLE★`/`★CHECKPOINT★` 標記不可逆/難救動作，逼作者在動手前寫下 undo 路徑（`[rollback:decisions]`）或事前防護（`[guard:decisions]`）。doctor 與 lint 強制。
 - **功能 ②（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。gov 寫路徑（各閘經 `_gate_event` 寫帳；例行觀察寫 `.governance-local.jsonl`、其餘寫 `.governance-log.jsonl`）是本功能的子機制，非獨立功能。
 

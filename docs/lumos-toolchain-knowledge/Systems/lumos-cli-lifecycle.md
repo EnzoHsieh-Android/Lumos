@@ -95,6 +95,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
+  - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
 about_code:
   - get.sh
   - scripts/lumos
@@ -134,6 +135,7 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - **hooks 安裝**(`_install_hooks_py`):①`git config core.hooksPath scripts/hooks` ②Claude hooks `.py` copy 進 `~/.claude/hooks/`(個別檔不用 junction,因 `mklink /J` 只連目錄)③`merge-claude-settings.py` 用 resolved python 註冊 settings。
 
 ## 已知限制 / 雷
+- PITFALL: 2026-10-05 推送前全套測試實跑發現，session leader 在 `_confirm_tty` 的第二階開啟測試用 PTY slave 時若未帶 `O_NOCTTY`，關閉 master 會讓測試程序收到 SIGHUP（rc 129），而非測例正常結案。`python3 scripts/test_lumos.py -k confirm_tty_unit` 修前停在「prompt 有寫進 tty」，修後 6 passed、0 failed；POSIX `open()` 對 `O_NOCTTY` 的定義是避免取得控制終端（https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html）。若之後更動終端開啟旗標，重跑此單例與全套分片。
 - `bootstrap` 不加 `--pull`,既有 clone 會跳過更新 → 直接 `git pull` 來源 clone 最乾脆。
 - `_link_or_copy` fallback 到 copytree 後就失去「pull 即更新」(該機器無法建連結時)。
 - bootstrap/init 裝完 hooks 需**重啟 Claude Code session** 才載入 L1/L3 hooks。
