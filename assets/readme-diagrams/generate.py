@@ -451,18 +451,18 @@ def swiss_cheese_scene(en):
 
 def drift_scene(en):
     title = "From writing notes to pushing code" if en else "從寫下筆記到推送程式碼"
-    b = path("M57 147V519", "blue", 2)
+    b = path("M57 147V550", "blue", 2)
     stages = [
-        (122, 200, "Writing notes" if en else "寫入時", "green"),
-        (342, 132, "At commit" if en else "提交時", "blue"),
-        (494, 242, "Before push" if en else "推送前", "purple"),
+        (122, 231, "Writing notes" if en else "寫入時", "green"),
+        (373, 132, "At commit" if en else "提交時", "blue"),
+        (525, 359, "Before push" if en else "推送前", "purple"),
     ]
     for number, (y, height, label, color) in enumerate(stages, 1):
         b += circle(57, y + 25, 20, "#14243a", C[color])
         b += text(57, y + 32, str(number), 20, color, "middle", 600)
         b += rect(94, y, 630, height)
         b += text(114, y + 32, label, 23, color, weight=600)
-    for y in (332, 484):
+    for y in (363, 515):
         b += arrow(57, y, "down", "blue")
 
     b += text(114, 185, "Keep reasons the code can't explain." if en else "只記程式碼看不出來的理由", 17)
@@ -471,29 +471,34 @@ def drift_scene(en):
     b += badge(542 if en else 584, 219, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
     b += text(114, 272, "'No refund page yet': suggest a revisit condition" if en else "新寫「還沒有退款頁面」這類句子：建議改成回頭條件", 16)
     b += badge(566 if en else 584, 250, "Warn only" if en else "只提醒", "gold", 138 if en else 120)
-    b += text(114, 303, "Other content needs rules and review." if en else "其餘內容靠守則和審查", 16, "muted")
+    b += text(114, 303, "Revisit condition mid-sentence or in a table" if en else "回頭條件寫在句子中間或表格裡", 16)
+    b += badge(542 if en else 584, 281, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
+    b += text(114, 334, "Other content needs rules and review." if en else "其餘內容靠守則和審查", 16, "muted")
 
     rows = [
-        (403, "Code changed, no notes touched" if en else "改了程式、一篇筆記都沒動", "Always block" if en else "一定擋下", "coral"),
-        (442, "New source file, no assigned note" if en else "新增程式檔、沒指定負責的筆記", "Block" if en else "擋下", "coral"),
-        (555, "Note still cites a removed name or path" if en else "名稱或路徑消失、筆記還在提", "Warn only" if en else "只提醒", "gold"),
-        (594, "Test exists, note says 'test to be added'" if en else "測試已上線、筆記還說之後補測試", "Block" if en else "擋下", "coral"),
-        (633, "Linked note was deleted" if en else "連到的另一篇筆記已被刪除", "Always block" if en else "一定擋下", "coral"),
-        (672, "Revisit condition met (refund page now exists)" if en else "回頭條件成立了（退款頁面做出來了）", "Block" if en else "擋下", "coral"),
-        (711, "Code and its note changed: AI rereads the note" if en else "程式和管它的筆記一起改：請 AI 重讀整篇舊句", "Warn only" if en else "只提醒", "gold"),
+        (434, "Code changed, no notes touched" if en else "改了程式、一篇筆記都沒動", "Always block" if en else "一定擋下", "coral"),
+        (473, "New source file, no assigned note" if en else "新增程式檔、沒指定負責的筆記", "Block" if en else "擋下", "coral"),
+        (586, "Note still cites a removed name or path" if en else "名稱或路徑消失、筆記還在提", "Warn only" if en else "只提醒", "gold"),
+        (625, "Test exists, note says 'test to be added'" if en else "測試已上線、筆記還說之後補測試", "Block" if en else "擋下", "coral"),
+        (664, "Linked note was deleted" if en else "連到的另一篇筆記已被刪除", "Always block" if en else "一定擋下", "coral"),
+        (703, "Revisit condition met (refund page now exists)" if en else "回頭條件成立了（退款頁面做出來了）", "Block" if en else "擋下", "coral"),
+        (742, "A rule's retire condition is met" if en else "規則寫的撤除條件成立了", "Block" if en else "擋下", "coral"),
+        (781, "Bound test not found (projects can block)" if en else "綁的測試名稱找不到（專案可設成擋）", "Warn only" if en else "只提醒", "gold"),
+        (820, "Links a closed note, still says 'pending'" if en else "連到已收尾的筆記、同一句還寫待定", "Warn only" if en else "只提醒", "gold"),
+        (859, "Code and its note changed: AI rereads the note" if en else "程式和管它的筆記一起改：請 AI 重讀整篇舊句", "Warn only" if en else "只提醒", "gold"),
     ]
     for y, label, status, color in rows:
         b += text(114, y, label, 16)
         b += badge(566 if en else 584, y - 22, status, color, 138 if en else 120)
 
-    b += text(94, 768, "Other blocks can be set to warn by the project." if en else "除了兩項一定擋下的檢查、其餘可由專案改成提醒", 16, "muted")
-    b += text(94, 795, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
+    b += text(94, 916, "Other blocks can be set to warn by the project." if en else "除了兩項一定擋下的檢查、其餘可由專案改成提醒", 16, "muted")
+    b += text(94, 943, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
     desc = (
-        "Three checkpoints from writing to push. Writing rules block new code line references and unsourced state descriptions at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, removed names or paths still in notes only warn, a note changed together with the code it manages gets a reminder to have AI reread the whole note for lines the change made untrue, while outdated promises to add existing tests, deleted note links and revisit conditions that have come true block. Missing note updates and broken links always block. Other blocks can be set to warn. Content accuracy needs review and people."
+        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, removed names or paths still in notes, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, a note changed together with the code it manages gets a reminder to have AI reread the whole note for lines the change made untrue, while outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block. Missing note updates and broken links always block. Other blocks can be set to warn. Content accuracy needs review and people."
         if en else
-        "從寫入到推送的三道關卡。新增程式行號及沒註明來源的現況描述在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、消失的名稱或路徑只提醒、程式和管它的筆記同一次都改了時提醒交給 AI 重讀整篇找出不成立的舊句、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立則擋下。改程式沒動筆記和連結斷掉一定擋、其餘可改成提醒。內容正確性仍靠審查和人。"
+        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、消失的名稱或路徑、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒、程式和管它的筆記同一次都改了時提醒交給 AI 重讀整篇找出不成立的舊句、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下。改程式沒動筆記和連結斷掉一定擋、其餘可改成提醒。內容正確性仍靠審查和人。"
     )
-    return title, 826, b, desc
+    return title, 974, b, desc
 
 
 SCENES={"map":("00 / THE SYSTEM",map_scene),
