@@ -71538,5 +71538,82 @@ def t_enforcement_ledger_row_symlinks():
     check("r3 事件帳上層是連結:判 unknown", row(root2)["status"] == "unknown", str(row(root2)))
 
 
+def t_ledger_plugin_files_valid():
+    """S9:repo 內的外掛檔——市集檔與外掛描述檔是合法 JSON、市集 source 是 ./ 開頭且指到存在的外掛資料夾、
+    外掛只往事件帳資料夾寫、寫的 .gitignore 內容跟 _note_audit_work_dir 相同、不用會改變行為的介面。"""
+    import json as _j
+    import re as _re
+    _need_src(".claude-plugin/marketplace.json", "mods/claude/lumos-ledger")   # 消費專案沒有外掛檔,記成 skip
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    check("S9 市集名是 lumos-toolchain", mk.get("name") == "lumos-toolchain", str(mk.get("name")))
+    plugins = [p for p in mk.get("plugins", []) if p.get("name") == "lumos-ledger"]
+    check("S9 市集只列 lumos-ledger 一個外掛", len(mk.get("plugins", [])) == 1 and len(plugins) == 1, str(mk.get("plugins")))
+    src = plugins[0].get("source", "") if plugins else ""
+    check("S9 source 是 ./ 開頭的相對路徑", isinstance(src, str) and src.startswith("./"), repr(src))
+    pdir = (repo / src).resolve()
+    check("S9 source 指到存在的外掛資料夾(含外掛描述檔)", (pdir / ".claude-plugin" / "plugin.json").is_file(), str(pdir))
+    pj = _j.loads((pdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    check("S9 外掛描述檔名稱是 lumos-ledger", pj.get("name") == "lumos-ledger", str(pj))
+    hooks = _j.loads((pdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    check("S9 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
+    code = (pdir / "hooks" / "register.ts").read_text(encoding="utf-8")
+    m = _re.search(r"EVENTS_REL = '([^']+)'", code)
+    check("S9 事件帳路徑是 governance/runtime/events", bool(m) and m.group(1) == "governance/runtime/events",
+          m.group(1) if m else "找不到 EVENTS_REL")
+    writes = _re.findall(r"io\.write\(`([^`]*)`", code)
+    check("S9 每一處寫檔都在 ${dir} 底下(dir = 主 checkout/EVENTS_REL)",
+          bool(writes) and all(w.startswith("${dir}/") for w in writes), str(writes))
+    check("S9 dir 由主 checkout 與 EVENTS_REL 組成", "const dir = `${s.v.main}/${EVENTS_REL}`" in code, "")
+    check("S9 寫之前逐層檢查不是連結", "if (!(await pathSafe(s.v.main, session))) {" in code, "")
+    check("S9 $.fs.write 只出現在注入的 io 裡一次", code.count("$.fs.write(") == 1, str(code.count("$.fs.write(")))
+    gi = _re.search(r"io\.write\(`\$\{dir\}/\.gitignore`, '([^']*)'\)", code)
+    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    want = _re.search(r'_write_lf\(d / "\.gitignore", "([^"]*)"\)', lumos_src)
+    check("S9 寫的 .gitignore 內容跟 _note_audit_work_dir 相同",
+          bool(gi and want) and gi.group(1).encode().decode("unicode_escape") == want.group(1).encode().decode("unicode_escape"),
+          f"{gi.group(1) if gi else None!r} vs {want.group(1) if want else None!r}")
+    banned = [("回傳拒絕", r"\bdeny\s*:"), ("改寫事件後交下去", r"next\(\{"),
+              ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'")]
+    for what, pat in banned:
+        check(f"S9 不用會改變行為的介面:{what}", not _re.search(pat, code), pat)
+
+
+def t_ledger_rules_match_reader():
+    """外掛(TypeScript)與讀取端(Python)各寫一份的三條規則,用同一份案例檔 mods/claude/lumos-ledger/hooks/rules-fixture.ts 對齊
+    (代碼審:規則重寫兩份又沒有守衛,一邊改了另一邊不會被擋)。外掛那邊由 ledger.test.ts 跑同一批案例。"""
+    import json as _j
+    import os
+    from unittest import mock
+    _need_src("mods/claude/lumos-ledger/hooks/rules-fixture.ts")
+    m = _load_lumos_inproc()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    txt = (repo / "mods/claude/lumos-ledger/hooks/rules-fixture.ts").read_text(encoding="utf-8")
+    rules = _j.loads(txt.split("export const RULES = ", 1)[1])
+    for s in rules["session"]["ok"]:
+        check(f"會談編號 {s!r} 讀取端收", bool(m._EVENTS_SESSION_RE.fullmatch(s)), "")
+    for s in rules["session"]["bad"]:
+        check(f"會談編號 {s!r} 讀取端不收", not m._EVENTS_SESSION_RE.fullmatch(s), "")
+    for c in rules["vault"]:
+        base = Path(tempfile.mkdtemp(prefix="gctl-rules-vault-"))
+        for d in c["dirs"]:
+            (base / d).mkdir(parents=True, exist_ok=True)
+        for link, target in (c.get("links") or {}).items():
+            (base / link).parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(base / target, base / link)
+        check(f"圖譜判定 {c} 讀取端一致", (m._vault_in(base) is not None) == c["want"], str(m._vault_in(base)))
+    for c in rules["main"]:
+        base = Path(tempfile.mkdtemp(prefix="gctl-rules-main-"))
+        top = base / c["top"].lstrip("/")
+        top.mkdir(parents=True, exist_ok=True)
+        common = base / c["common"].lstrip("/")
+        common.mkdir(parents=True, exist_ok=True)
+        fake = subprocess.CompletedProcess([], 0, stdout=str(common) + "\n", stderr="")
+        with mock.patch.object(m, "_lens_git", lambda *a, **k: fake):
+            got = m._events_root(top)
+        want = base / c["want"].lstrip("/")
+        check(f"主 checkout 判定 {c} 讀取端一致", Path(got).resolve() == want.resolve(), f"{got} != {want}")
+
+
 if __name__ == "__main__":
     sys.exit(main())

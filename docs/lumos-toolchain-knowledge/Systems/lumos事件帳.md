@@ -7,6 +7,12 @@ responsibility: 負責 Lumos 事件帳:Claude Code 的 lumos-ledger 外掛把回
 aliases: []
 about_code:
   - scripts/lumos
+  - mods/claude/lumos-ledger/hooks/register.ts
+  - mods/claude/lumos-ledger/hooks/ledger.test.ts
+  - mods/claude/lumos-ledger/hooks/hooks.json
+  - mods/claude/lumos-ledger/.claude-plugin/plugin.json
+  - .claude-plugin/marketplace.json
+  - mods/claude/lumos-ledger/hooks/rules-fixture.ts
 tags:
   - type/system
   - status/doing
@@ -19,25 +25,32 @@ summary: |-
   FACT:[來源:外部][2026-10-05 Claude Code 2.1.289 隔離設定目錄實測]claude plugin marketplace list --json 每筆是 name、source(本機資料夾為 directory)、path;claude plugin list --json 每筆有 id、enabled、readFromFolder——readFromFolder 證實資料夾型市集直接讀來源資料夾本身、不讀安裝拷貝。外掛安裝與移除照這兩個格式判斷
   PITFALL:[2026-10-05 設計審 r2 正確性席與接手席獨立抓到]外掛移除若掛在 _teardown_global_claude,測試會綠但真的 lumos uninstall 與 lumos teardown 都不會移除——那支只是給測試用的相容包裝,沒有任何指令呼叫它;現在掛在 cmd_uninstall 開頭的探針拒絕之後,測試用子行程跑真指令 [test:t_teardown_removes_ledger_plugin]
   PITFALL:[2026-10-05 代碼審 r1 正確性席與邊界席獨立抓到]claude 的列表指令吐 null 或物件時,迭代它會丟 TypeError,把整個 lumos install 與 uninstall 帶倒(uninstall 停在半拆)。現在 _claude_json 只收「物件組成的清單」,其他一律當失敗 [test:t_ledger_plugin_bad_json_and_races]
+  PITFALL:[2026-10-06 mod 段實作]外掛測試第一版跟程式一起寫、沒先看紅,改壞驗證時九個關鍵機制有四個拿掉照樣綠(假時鐘不動加隨機字串遞增遮住了塊名遞增、事件全在寫檔前送完測不到「寫到一半有新事件」、先寫再看緩衝看不出不累積、一行死碼);補了遞減隨機字串、可暫停的假寫檔、不寫直接看緩衝三種測法 [重現指令:claude plugin test mods/claude/lumos-ledger]
   PITFALL:[2026-10-05 實作]enforcement 加一列會同時動到兩支釘數字的既有測試(總列數 23→24、unknown 列數 11→12);設計審只列到第一支 [test:t_enforcement_never_raises_on_missing] [test:t_enforcement_summary_excludes_unknown]
   RULE:[since:2026-10-05][retire:事件帳不再由可被強制提交進 repo 的檔案提供,或改成只出 JSON 不出文字][confirmed:2026-10-05]印到終端的事件帳內容一律過 _esc_clean 加 _PATH_SPECIAL_CATS(控制、格式含雙向覆寫與零寬、行段分隔、孤立代理),--json 一律 ASCII 跳脫,不另寫第三套消毒——塊檔可能被人強制提交,雙向覆寫能把工具名顯示成別的樣子,孤立代理字元印到 UTF-8 終端會直接丟編碼錯誤。讀進來時就把關:巢狀超過 32 層或單行超過 64KB 算壞行、塊檔超過 16MB 略過並計數——約 7 萬到 11 萬層的巢狀讀得進來、印的時候才爆(代碼審 r3),只擋解析端會漏掉這段;每個欄位各自清理截斷,狀態標記接在最後 [test:t_events_reader_hostile_lines] [test:t_events_r3_hostile_output]
   RULE:[since:2026-10-05][retire:清理改由寫入端自己做,或事件帳搬出 repo][confirmed:2026-10-05]lumos events --prune 只收 1 到 36500 的半形整數(下限 1 同時就是「最近 24 小時動過的會談不刪」的唯一保護,開放 --days 0 會刪到正在寫的會談);事件帳路徑從 repo 根往下每層都不能是連結(讀取也過這道,不然會讀到 repo 外);在 worktree 裡跑時那個 worktree 必須真的登記在主 checkout 的 .git/worktrees 裡(gitdir 是相對路徑時照 gitdir 檔所在目錄解讀,壞項目略過不連累別的)——.git 檔可以被改成指到別的 repo,不驗就會刪到別人的事件帳 [test:t_events_prune_hardening] [test:t_events_prune_edge_cases] [test:t_events_r3_path_trust]
-  TEST:t_events_reader_merges_chunks、t_events_reader_no_ledger、t_events_reader_from_worktree、t_events_reader_edge_lines、t_events_reader_hostile_lines、t_events_session_name_and_repo_validation、t_events_prune_only_old_sessions、t_events_prune_edge_cases、t_events_prune_hardening、t_enforcement_ledger_row、t_enforcement_ledger_row_git_hang、t_runner_isolates_claude_plugin、t_install_registers_ledger_plugin、t_teardown_removes_ledger_plugin、t_ledger_plugin_bad_json_and_races、t_ledger_plugin_messages_and_bootstrap、t_ledger_plugin_teardown_scope_and_messages、t_events_r3_hostile_output、t_events_r3_path_trust、t_events_r3_honest_messages、t_enforcement_ledger_row_symlinks(python3.14 scripts/test_lumos.py -k events / -k ledger / -k runner_isolates)
+  TEST:t_events_reader_merges_chunks、t_events_reader_no_ledger、t_events_reader_from_worktree、t_events_reader_edge_lines、t_events_reader_hostile_lines、t_events_session_name_and_repo_validation、t_events_prune_only_old_sessions、t_events_prune_edge_cases、t_events_prune_hardening、t_enforcement_ledger_row、t_enforcement_ledger_row_git_hang、t_runner_isolates_claude_plugin、t_install_registers_ledger_plugin、t_teardown_removes_ledger_plugin、t_ledger_plugin_bad_json_and_races、t_ledger_plugin_messages_and_bootstrap、t_ledger_plugin_teardown_scope_and_messages、t_ledger_plugin_files_valid、t_ledger_rules_match_reader、t_events_r3_hostile_output、t_events_r3_path_trust、t_events_r3_honest_messages、t_enforcement_ledger_row_symlinks(python3.14 scripts/test_lumos.py -k events / -k ledger / -k runner_isolates)
 related:
   - "[[Projects/Lumos事件帳_計劃]]"
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Systems/lumos-cli-read]]"
 verified_by:
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+  - "[[Verification/2026-10-06_事件帳mod段實作]]"
 ---
 # lumos事件帳
 
 > 白話:Claude Code 裝了 lumos-ledger 外掛之後,每場會談做了什麼(回合開始結束、每次工具呼叫成不成功、派了哪些子代理、實際用哪個模型)會寫成一份事件帳,放在主 checkout 的 governance/runtime/events/<會談編號>/ 底下,不進版控。`lumos events` 讀它,`lumos events --prune --days N` 清舊的,`lumos enforcement` 的 claude-event-ledger 那一列看它最近有沒有在寫。設計、條款與兩輪設計審在 [[Projects/Lumos事件帳_計劃]];前提實驗在 [[Verification/2026-10-05_Claude-mod能力實測]]。
 
-## 現況(2026-10-05)
+## 現況(2026-10-06)
 
-- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離已上(Python 段);寫入端的 mod 與市集檔還沒寫(mod 段),所以現在 `lumos install` 走到外掛那一步會印「來源 repo 沒有市集檔」並略過。
+- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。
+- 外掛的寫法:核心邏輯在 `register.ts` 的 `createLedger`(緩衝、塊名、串行寫入、位置判定),讀寫檔與跑 git 由外面注入,所以 `ledger.test.ts` 能用假的讀寫測並行與重新載入;引擎掛鉤只收事件交給核心。
+- 會談編號、圖譜判定、主 checkout 判定這三條規則在外掛(TypeScript)與讀取端(Python)各寫一份;兩邊共用 `mods/claude/lumos-ledger/hooks/rules-fixture.ts` 的案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它,一邊改了規則另一邊會紅。外掛環境只能匯入程式模組(不能匯入 JSON),所以案例檔是 `.ts`、內容寫成純 JSON,Python 端切出 `RULES = ` 後面那段用 json.loads 讀。
+- 外掛緩衝只以會談為鍵,每筆帶收到時的 cwd;寫的時候照到達順序把連續寫到同一處的合成一塊,寫前逐層確認事件帳路徑沒有符號連結。
+- 外掛的驗證器要求引擎介面 `$` 只能傳給檔案頂層宣告的函式;包在註冊函式裡的內部函式收 `$` 會被拒載(`claude plugin validate` 會擋)。
 - 外掛裝與移除的流程與狀態用詞(ok / absent / no-source / failed)的細節在 [[Systems/lumos-cli-lifecycle]];`lumos events` 指令的用法在 [[Systems/lumos-cli-read]]。
+- 外掛自己的測試要在本機跑:`claude plugin test mods/claude/lumos-ledger`(CI 沒有 Claude)。
 
 ## 誠實界線
 

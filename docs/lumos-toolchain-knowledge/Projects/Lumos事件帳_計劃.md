@@ -67,10 +67,10 @@ REVISIT:2026-12-05 量 RETIRE-IF ①,並重跑一次 [[Verification/2026-10-05_C
 | ev | 來自哪個 mod 事件 | 額外欄位 |
 |---|---|---|
 | `turn_start` | `turn.start`(只有主會談會觸發;引擎不為子代理觸發它) | `turn`(回合編號)、`origin`:這一回合的提示是誰送的,取主會談(`agentId` 為空)最近一筆 `door` 為 `prompt` 的 `session.append` 的 `origin.kind`(實測看過 `unclassified`、`task-notification`);`prompt_len` |
-| `turn_end` | `turn.complete`(主會談與子代理都會觸發) | `turn`、`reason`:`answer` / `aborted` / `refusal` / `error` |
-| `tool` | `tool.call`(等工具跑完) | `tool`、`ok`(`isError` 不是 true 且沒被拒)、`denied`、`paths`(工具輸入裡的 `file_path`、`path`、`notebook_path`,有才記)、`cmd`(Bash 指令前 500 字) |
+| `turn_end` | `turn.complete`(主會談與子代理都會觸發) | 主會談帶 `turn`(這個行程裡數的回合數,熱重載或 resume 後從 1 重算),子代理帶 `turn_id`(引擎給的回合編號字串);`reason`:`answer` / `aborted` / `refusal` / `error` |
+| `tool` | `tool.call`(等工具跑完;工具中途丟錯——例如被中斷——也記一筆,`ok` 為 false 並帶 `interrupted`) | `tool`、`ok`(`isError` 不是 true 且沒被拒)、`denied`、`paths`(工具輸入裡的 `file_path`、`path`、`notebook_path`,有才記)、`cmd`(Bash 指令前 500 字) |
 | `spawn` | `agent.spawn` | `agent_type`、`model`(引擎解析後的實際模型)、`child`(被派出子代理的編號,取自 `next(e)` 結果的 `agentId`)、`denied`;這一筆的 `agent` 是發起派工的那一方 |
-| `ledger_error` | mod 自己 | `what`:上一次寫塊失敗的原因 |
+| `ledger_error` | mod 自己 | `what`:上一次寫塊失敗的第一個原因,或「暫時判不了寫入位置」;`lost`:累計丟了幾筆 |
 
 回合歸屬:工具事件沒有回合編號(引擎不給),讀取端這樣框:主會談的工具事件屬於前一筆 `turn_start` 到下一筆 `turn_end` 之間;子代理沒有 `turn_start`,它的工具事件屬於「它自己的上一筆 `turn_end` 之後(沒有上一筆就從它自己的第一筆事件起算,不依賴 `spawn` 的先後——`spawn` 要等子代理啟動後才記,可能晚於子代理的第一筆工具事件)、到下一筆 `turn_end`」。主會談 `turn_start` 的 `origin` 取「這一回合開始前」最近一筆 prompt 列:2026-10-05 實測 prompt 列都比 `turn.start` 早到([[Verification/2026-10-05_Claude-mod能力實測]] 的事件帳);晚到的情況沒觀察到,讀取端看到 `origin` 缺就印空,不猜。子代理只有結束不是缺頭,不當成錯誤。
 
@@ -78,11 +78,11 @@ REVISIT:2026-12-05 量 RETIRE-IF ①,並重跑一次 [[Verification/2026-10-05_C
 
 ### 2. 寫入
 
-- 狀態全部以會談編號為鍵(`/clear` 與 resume 會在同一個行程裡換會談編號,不觸發 `session.start`)。每筆事件在 hook 收到的當下就 `await $.session.id()` 與 `await $.session.cwd()`,放進以「會談編號 + 收到時的 cwd」為鍵的緩衝;寫塊時資料夾名與位置判定都用緩衝自己的鍵,不在寫入當下重取——所以排隊中的舊事件不會因為 `/clear` 或 `/cd` 寫進新會談的資料夾或新的 repo。`session.end` 用事件自己的 `sessionId` 找緩衝。
-- 塊檔名:`<毫秒時間 13 位>-<隨機 8 個十六進位字元>.jsonl`;毫秒時間在取走緩衝的同一個同步步驟裡決定,取 `max(現在, 上一塊的時間 + 1)`,同一個行程裡嚴格遞增(時鐘倒退或同一毫秒也不會排錯);不同行程靠隨機字串避免撞名。每次都是新名字,任何情況(熱重載、行程重啟、resume、並行)都不會覆蓋舊塊;讀取端依檔名排序。不靠記憶體裡的序號。
+- 狀態全部以會談編號為鍵(`/clear` 與 resume 會在同一個行程裡換會談編號,不觸發 `session.start`)。每筆事件在 hook 收到的當下就 `await $.session.id()` 與 `await $.session.cwd()`,放進該會談的緩衝,每筆帶自己收到時的 cwd;寫塊時位置判定用每筆自己的 cwd,不在寫入當下重取——所以排隊中的舊事件不會因為 `/clear` 或 `/cd` 寫進新會談的資料夾或新的 repo。`session.end` 用事件自己的 `sessionId` 找緩衝。(代碼審 code-lumos事件帳mod r1 改:原本以「會談編號 + cwd」為鍵分桶,Bash 一 `cd` 就把同一回合拆成兩桶、各寫一塊,讀取端照檔名讀出來順序錯亂。)
+- 塊檔名:`<毫秒時間 13 位>-<隨機 8 個十六進位字元>.jsonl`;毫秒時間在取走緩衝的同一個同步步驟裡決定,取 `max(現在, 上一塊的時間 + 1, 這個會談資料夾既有最大塊時間 + 1)`——同一個行程裡嚴格遞增,新載入的實例(熱重載、resume)第一次寫某個會談前先讀那個資料夾的塊名當下限,時鐘倒退也排在舊塊之後;不同行程靠隨機字串避免撞名。每次都是新名字,任何情況都不會覆蓋舊塊;讀取端依檔名排序。
 - 每筆事件先放進該會談的記憶體緩衝。寫塊時先同步取走整個緩衝(換成空的)再開始非同步寫,寫入中進來的事件留在新緩衝;所有寫塊排成一條串行佇列,一次只寫一個。觸發時機:`turn_end`、緩衝滿 50 筆、`session.end`;輪到寫的時候緩衝是空的就什麼都不做(不建資料夾、不寫空塊)。
 - `session.end`:只處理事件自己 `sessionId` 的緩衝;把「排隊等前面的塊、解位置、寫塊」整段跟 `next.budget.remainingMs` 的八成賽跑(結束整條鏈約只有 1.5 秒),時間到就放棄,然後呼叫 `next(e)`。判定沒有快取時不跑 git(3 秒等不起),那塊直接放棄。之後丟掉這個會談的緩衝與狀態;位置判定表只留最近 20 個 cwd。這樣多次 `/clear` 的長行程不會累積。
-- 順序:寫塊時先查這個緩衝鍵裡那個 cwd 的判定(見下一點),判定是「寫到某處」才同步取走緩衝;判定是「這裡不記」就清空該會談的緩衝;判定是「暫時失敗」就緩衝原封不動。不先取再放回。
+- 順序:寫塊時先判緩衝裡每個 cwd 的位置(見下一點),再同步取走「到第一筆判定是暫時失敗的事件為止」那一段:判定是「這裡不記」的事件丟掉、其餘照到達順序把連續寫到同一個主 checkout 的合成一塊;暫時失敗那一筆起的事件原封不動留著,順序不亂。寫之前從主 checkout 往下逐層確認 `governance`、`runtime`、`events`、會談資料夾都不是符號連結,有一層是就不寫(讀取端 `_events_path_safe` 同一條)。不先取再放回。
 - 寫的位置:每次寫塊前用 `$.process.run(["git","rev-parse","--path-format=absolute","--show-toplevel","--git-common-dir"], { timeoutMs: 3000 })`,cwd 用 `$.session.cwd()`。主 checkout 頂層 = `--git-common-dir` 的上一層(它是名叫 `.git` 的資料夾時),否則用 `--show-toplevel`;兩者不同就表示在 worktree 裡,事件帶 `worktree`。所有寫檔路徑都用這個頂層組成絕對路徑。git 呼叫的環境加 `LC_ALL=C`(錯誤訊息不被翻譯)。判定以 cwd 為鍵快取,三種結果:①「寫到某處」:git 成功且那個主 checkout 有圖譜;②「這裡不記」:錯誤輸出含 `not a git repository`,或 git 成功但主 checkout 沒有圖譜——該會談的緩衝清空;之後每筆事件進來時先比對它收到時的 cwd,那個 cwd 的判定是「這裡不記」就直接丟、不進緩衝,所以不會累積,也不會每筆重跑 git 或 `$.fs.list`;換到別的 cwd 就照那個 cwd 判,不是整場永久停收;「寫到某處」與「這裡不記」兩種判定 10 分鐘後失效重判(同一個 cwd 中途跑了 `lumos init` 或刪了圖譜也會跟上);③「暫時失敗」:其他非零碼、逾時、輸出解析不了——不快取成定論,緩衝留著,同一個 cwd 5 分鐘內不重試 git;緩衝超過 500 筆就丟最舊的,記下丟了幾筆,第一次寫成功時在那一塊開頭補一筆 `ledger_error`。
 - 圖譜判定跟 lumos 的 `_vault_in` 同三種:`docs/*-knowledge/`、`docs/knowledge/`、或頂層就是獨立 vault(有 `MOC/` 且有 `Systems/` 或 `Verification/`)。用 `$.fs.list` 判資料夾(`kind` 為 `dir`)。
 - 寫塊前若 `governance/runtime/events/.gitignore` 不存在,先寫一個內容只有 `*` 加換行的檔(跟 `_note_audit_work_dir` 寫的內容相同)。
@@ -157,6 +157,7 @@ REVISIT:2026-11-05 看本 repo 事件帳資料夾大小與會談數,決定要不
 - 寫失敗補的 `ledger_error` 本身也可能寫不進去(例如磁碟滿),那時事件帳裡沒有任何痕跡。
 - 永久性的 git 失敗(例如 `dubious ownership`、在裸 repo 裡)會被當成暫時失敗:每 5 分鐘重試、一直不記,也因為從沒寫成功過而沒有 `ledger_error` 痕跡;`claude -p` 短場次碰到一次暫時失敗,整場沒有事件。
 REVISIT:2026-12-05 一併看 `lumos events` 列出的會談數跟實際開過的 Claude 會談數差多少,差很多再加分類。
+- 照到達順序寫的代價:某個 cwd 一直判不了位置(例如 `cd` 進一個 git 回 dubious ownership 的目錄),它之後的事件全部排在它後面不寫,堵到緩衝滿 500 筆才靠丟最舊的解開;會談結束時還堵著的事件直接放棄,而且沒有地方寫 `ledger_error`(會談結束只用已快取的判定,等不起 git)。
 - git 子模組裡的會談,頂層是子模組;子模組通常沒有圖譜,在子模組裡的期間不寫(換到別的 cwd 照常判)。
 - 只用 slim 安裝的人沒有事件帳(slim 不裝 Claude 外掛)。
 - `cmd` 記 Bash 指令前 500 字,可能含秘密;跟本機逐字稿同一等級的暴露面,放在自帶忽略檔的資料夾。若被強制加進版控會外洩——沒有機械擋。
@@ -168,13 +169,15 @@ REVISIT:2026-12-05 一併查 `git ls-files governance/runtime` 在本 repo 與 c
 ## 實作進度
 
 - 2026-10-05 Python 段完成:S4–S8、S10–S12 測試先行全綠,驗收在 [[Verification/2026-10-05_事件帳Python段實作]];現況寫進 [[Systems/lumos事件帳]]、[[Systems/lumos-cli-lifecycle]]、[[Systems/lumos-cli-read]];`enforcement_status` 沒有家另立 [[Issues/enforcement_status沒有家]]。
-- 待做 mod 段:S1–S3、S9、S13(mod 檔、市集檔、mod 自己的測試、真會談驗收)。在那之前 `lumos install` 走到外掛那步會印「來源 repo 沒有市集檔」並略過。
+- 2026-10-06 mod 段完成:外掛、市集檔、外掛自己的測試(S13)、S9 測試;S1–S3 用 `claude -p` 真會談驗收,互動模式、中途 /cd、熱重載三項還沒真機驗(回頭條件在驗收紀錄),驗收在 [[Verification/2026-10-06_事件帳mod段實作]]。
 
 ## 審計修正紀錄
 
 - 代碼審 code-lumos事件帳 r1(2026-10-05,4 鏡頭席+架構對齊+資安,外家兩席依 Enzo 指示缺席):28 條/blocking 4/claude 列表吐 null 讓 install、uninstall 崩、bootstrap 沒傳來源、另寫 repo 根解析三件 major,全數折入並各補先紅測試。卷證 `governance/review-reports/code-lumos事件帳/`。
 - 代碼審 r2(同編制):26 條/blocking 4/讀取端遇極深巢狀、孤立代理字元會崩、清理函式另起爐灶且漏雙向覆寫三件 major,全數折入:讀取接住遞迴錯誤、消毒改用既有 `_esc_clean` 加 `_PATH_SPECIAL_CATS`、`--json` 一律 ASCII、塊檔不跟連結、天數只收半形數字、清理先驗 worktree 真屬於主 checkout、主 checkout 解析 3 秒逾時、移除只動使用者範圍且各步獨立、`--source` 傳到、救援訊息照實、競態稍等再查。
 - 代碼審 r3(同編制,末輪):約 20 條(去重後一族 major+13 條 minor)/blocking 1/深巢狀「讀得進來、印的時候才爆」的區間(約 7 萬到 11 萬層)讓文字與 `--json` 輸出崩——正確性席與邊界席從兩個出口獨立抓到,是 r2 同一族沒掃完(r2 只擋解析端)。★跑滿三輪,Enzo 2026-10-05 裁「全修、不開第四輪」★。依根因四組折入:①讀取端把關——深度 32、單行 64KB、塊檔 16MB,欄位各自清理、狀態標記不被截;②路徑信任——讀取也過上層連結檢查、印出的路徑先清控制字元、gitdir 相對路徑照所在目錄解讀且壞項目略過、`--repo` 子目錄當成那個 repo;③訊息照實——掃描失敗不說刪了一部分、等待有總預算且逾時也稍等再查、卸載只給沒做成的那步、來源沒附外掛時不叫人跑 install;④筆記——S6 S7 S8 與做法段跟上程式、規則綁對測試、24 小時保護與 3 秒逾時寫進系統筆記。各組先紅測試、九個守衛逐一改壞都翻紅。席報告 `r3-*-r3-sonnet.md`。
+- 代碼審 code-lumos事件帳mod r1(2026-10-06,standard:通才席+架構對齊席,外家席依 Enzo 指示不派):13 條/blocking 5/通才席用 `claude -p` 重現兩件 major:Bash `cd` 讓同一回合事件被拆成亂序的兩塊、`governance` 是符號連結時事件寫到 repo 外;架構席指出圖譜判定、主 checkout 判定、會談編號三條規則在 TypeScript 重寫一份卻沒有守衛。依根因五組折入:①順序——緩衝只以會談為鍵、照到達順序合段、新實例讀既有塊名當下限;②路徑——寫前逐層檢查連結、圖譜判定跟著連結走;③兩種語言同一條規則——新增 `rules-fixture.ts` 共用案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它;④出錯看得見——寫失敗記丟了幾筆、工具被中斷也記、收事件不等寫入佇列;⑤欄位——子代理的回合改用 `turn_id`。各組先紅測試,九個機制改壞都翻紅;兩件 major 用真會談重跑確認修好。卷證 `governance/review-reports/code-lumos事件帳mod/`。
+- 代碼審 code-lumos事件帳mod r2(2026-10-06,修正差異一席):4 條/blocking 0/前輪五件會擋的都驗收已修(含 3 場 claude -p);4 條 minor 修 3 條:判定等待期間溢位會靜默丟一筆(沒查過判定的事件改成留著)、懸空連結與最後一層 .gitignore 沒檢查(改用列上一層看它自己是不是連結,跟讀取端一樣不跟連結)、遇到連結時清掉之前的錯誤紀錄(改成保留並計入丟失),各補先紅測試、改壞翻紅;第 4 條「一個判不了的 cwd 堵住後面」是照順序寫的取捨,寫進誠實界線。
 
 - r1(2026-10-05,3 席+架構對齊席,外家否決席依 Enzo 指示缺席):33 條/blocking 18/寫入端的並行與序號、寫入位置、安裝來源、enforcement 與測試隔離是主要的洞,全數折入。席報告在 `governance/review-reports/lumos事件帳/`。
   - 依根因十組折入:①回合歸屬——子代理不觸發 `turn.start`、工具事件沒有回合編號,改成只有主會談記 `turn_start`、讀取端用前後框出回合(正確性小項、邊界 F1、接手 F1);②並行寫入與覆寫——塊檔改「時間加隨機字串」唯一檔名、先同步取走緩衝、串行佇列(正確性 F1 F2、邊界 F2 F6、接手 F3);③寫入位置——絕對路徑、寫到主 checkout、失敗不快取、圖譜判定對齊 `_vault_in`、cwd 為鍵(邊界 F3 F4 F5、接手 F4);④enforcement 與測試——不呼叫任何外部指令、只看資料夾時間、單列 `claude-event-ledger`、既有 23 列測試改 24、測試執行器設 `LUMOS_SKIP_CLAUDE_PLUGIN` 並清 `CLAUDE_CONFIG_DIR`(新增 S10)(正確性 F5 F6、接手 F6、架構 F2);⑤安裝來源——用 `_lumos_src()`、同名不同來源先移除再加、接進 `_sync_global_hooks`、找指令用 `_py_which`、bootstrap 的錯誤描述更正、新版靠重新載入不靠 update(正確性 F3 F4、邊界 F9、接手 F7 F9、架構 F3);⑥移除與回退——先判有沒有裝、`--scope user`、teardown 確認清單、回退分兩步(接手 F8、正確性小項);⑦欄位——`origin.kind`、`session.append` 依 `door` 篩、`spawn` 記 `child`、`notebook_path`(邊界 F7 F8、接手 F2、正確性小項);⑧保留——`lumos events --prune` 與只看資料夾層、REVISIT(邊界 F10、正確性 F7、架構 F1 的保留半);⑨會談結束——先寫再 `next`、用事件自己的 `sessionId`(接手 F5、邊界 F2 場景 C、正確性小項);⑩落點與慣例——enforcement 列改進 `Systems/hook信任邊界`、`ev` 取代 `kind` 避免與 hook 事件帳同名異義、讀取指令三段式與回傳碼、`.gitignore` 內容同 `_note_audit_work_dir`、登記處、slim 與子模組界線、新頂層資料夾不進三份名單(架構 F1 F4 F5 F6、接手 F10)。
