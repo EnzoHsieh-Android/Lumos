@@ -19,6 +19,7 @@ verified_by:
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
 summary: |-
+  PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
   WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
   WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]

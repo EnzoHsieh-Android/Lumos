@@ -1,0 +1,119 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 62701e6c..cb2b6a18 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -42450,60 +42450,77 @@ _LENS_WARM_ENV = "LUMOS_LENS_WARMING"
+ # REVISIT:2026-12-07 若出現實際算超過 900 秒的範圍,重驗提醒門檻與背景工作身份；不可只看啟動者 PID
+ _LENS_LOCK_STALE_SEC = 900
+ 
+ 
+ def _excl_lock_record_identity(identity_out, identity):
+     """把建鎖時 fstat 的身份交給需要安全清理的呼叫端。"""
+     if identity_out is not None:
+         identity_out[:] = [identity]
+ 
+ 
++def _excl_lock_is_mine(lock, identity, partial=False):
++    """路徑上的鎖還是不是建鎖時那一把:裝置、inode 一樣,而且內容是當時寫的那份(含隨機識別碼)。
++    只比 inode 不夠:Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode 編號,別人剛換入的新鎖
++    會被認成自己的而刪掉(GitHub CI 上必紅,macOS 的 APFS 不馬上重用所以本機綠)。partial=True 給寫到一半
++    出錯的那條路:內容是當時要寫的開頭一段也算。讀不到回 False(寧可留鎖,不刪別人的)。"""
++    dev, ino, data = identity
++    try:
++        now = lock.lstat()
++        if (now.st_dev, now.st_ino) != (dev, ino):
++            return False
++        got = lock.read_bytes()
++    except OSError:
++        return False
++    return got == data or (partial and data.startswith(got))
++
++
+ def _excl_lock_try(lock, stale_sec, identity_out=None):
+     """獨佔建鎖檔:取得回 True,鎖已存在回 False,其他建檔錯誤向外拋。
+ 
+     筆記庫與派工鏡頭共用。舊版按 mtime 判過期後 rename 的接手會發生 ABA:
+     後到者可搬走前到者的新鎖,兩者都回 True。更不能依鎖內 PID 接手:
+     派工鏡頭記的是短命啟動者 PID,背景工作可能仍活著。因此不自動接手既有鎖。
+     stale_sec 留作既有呼叫介面相容;兩個呼叫端可自行用其門檻作診斷,不得用來偷鎖。"""
+     import time as _t
+     lock.parent.mkdir(parents=True, exist_ok=True)
+     try:
+         fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+     except FileExistsError:
+         return False
++    import secrets as _sec
+     identity = None
+     closed = False
+     try:
+         own = os.fstat(fd)
+-        identity = (own.st_dev, own.st_ino)
+-        data = f"{os.getpid()}\n{_t.time():.0f}".encode()
++        # 第三行是隨機識別碼:inode 會被重用,身份要連內容一起比(_excl_lock_is_mine);讀第一行 PID 的地方不受影響
++        full = f"{os.getpid()}\n{_t.time():.0f}\n{_sec.token_hex(8)}".encode()
++        identity = (own.st_dev, own.st_ino, full)
++        data = full
+         while data:
+             n = os.write(fd, data)
+             if n <= 0:
+                 raise OSError("寫入鎖檔時沒有前進")
+             data = data[n:]
+         closed = True                  # close 若報錯,不得重試不確定是否已關的 fd
+         os.close(fd)
+         _excl_lock_record_identity(identity_out, identity)  # 同一個 fd,不事後按路徑猜
+         return True
+     except OSError:
+         if not closed:
+             try:
+                 os.close(fd)
+             except OSError:
+                 pass
+         # 正常競爭者不會刪半成品;若檔名已被換成別人的,不能清掉對方。
+-        if identity is not None:
++        if identity is not None and _excl_lock_is_mine(lock, identity, partial=True):
+             try:
+-                now = lock.lstat()
+-                if (now.st_dev, now.st_ino) == identity:
+-                    lock.unlink()
++                lock.unlink()
+             except OSError:
+                 pass
+         raise
+ 
+ 
+ def _lens_report_lock_timeout(lock, diff_range, as_json):
+     """鎖可能是背景工作，也可能是殘留；超時只回可查證的狀態。"""
+     import json as _j2, time as _t
+     try:
+         uncertain = _t.time() - lock.stat().st_mtime >= _LENS_LOCK_STALE_SEC
+@@ -42534,26 +42551,26 @@ def _lens_spawn_warmer(lock, diff_range, repo, owned_identity):
+     if hasattr(os, "setsid"):
+         kw["start_new_session"] = True
+     env = dict(os.environ)
+     env[_LENS_WARM_ENV] = "1"
+     env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())
+     env["LUMOS_LENS_LOCK_NAME"] = lock.name
+     env["LUMOS_LENS_DISP_KEY"] = getattr(cmd_dispatch_lens, "_disp_key", "")
+     try:
+         _sp.Popen(argv, env=env, **kw)
+     except OSError:
++        if not _excl_lock_is_mine(lock, owned_identity):
++            return True, False  # 本次鎖已被移除或換成別人的,不碰後來取得同名路徑的持有者。
+         try:
+-            now = lock.lstat()
+-            if (now.st_dev, now.st_ino) == owned_identity:
+-                lock.unlink()
++            lock.unlink()
+         except FileNotFoundError:
+-            pass  # 本次鎖已被移除,不碰後來取得同名路徑的持有者。
++            pass
+         except OSError:
+             return True, True
+         return True, False
+     return False, False
+ 
+ 
+ def _lens_emit_cache_hit(got, as_json):
+     import json as _j2
+     got["cache_hit"] = True
+     print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
