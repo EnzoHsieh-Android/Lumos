@@ -6,16 +6,25 @@ on:
     branches: [main]
   pull_request:
 
+# 2026-10-06 拆成三個工作(Projects/CI加速_計劃):全套在 CI 一台機器切 4 片已跑到 32–38.5 分、逼近 45 分上限——
+#   prep(編譯類檢查、決定範圍、純文件子集)→ shards(全套分給多台同時跑)與 gates(後盾)同時跑。
+#   工作之間不共用機器:每個工作各自 checkout(完整歷史)、補本機 main、裝 Python。
+permissions:
+  contents: read
 jobs:
-  test:
+  prep:
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # 2026-09-12:全套單行程跑到 30 分被砍(前幾次 25–27 分,一路逼近上限);切片後約 10 分,上限留餘裕
+    timeout-minutes: 15
+    outputs:
+      suite: ${{ steps.suite.outputs.suite }}
+      graph: ${{ steps.suite.outputs.graph }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5)
+          fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5);全套與範圍判定也要歷史
       # PR 事件取出的是不在任何分支上的合併提交,本機只有 origin/main、沒有 main;找主線的測試(main@{upstream})
-      # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)
+      # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)。
+      # 工作之間不共用機器,每個工作都要自己補(Projects/CI加速_計劃)
       - name: PR 事件補上本機 main
         if: github.event_name == 'pull_request'
         run: git branch --track main origin/main
@@ -57,21 +66,57 @@ jobs:
           echo "suite=$suite" >> "$GITHUB_OUTPUT"
           echo "graph=$graph" >> "$GITHUB_OUTPUT"
           echo "測試範圍:$suite($why)"
-      - name: Full test suite (切 4 片同時跑;純文件推送只跑文件子集)
+      - name: 純文件推送的文件子集
+        if: steps.suite.outputs.suite == 'docs'
         env:
-          SUITE: ${{ steps.suite.outputs.suite }}
           GRAPH: ${{ steps.suite.outputs.graph }}
         run: |
           set -u
+          extra="--suite docs"; echo "純文件推送:只跑文件子集(--suite docs),不跑全套"
+          if [ "$GRAPH" = graph ]; then extra="$extra --graph"; echo "含圖譜筆記:加跑讀真圖譜的測試(--graph)"; fi
           rc=0
-          extra=""
-          if [ "$SUITE" = docs ]; then extra="--suite docs"; echo "純文件推送:只跑文件子集(--suite docs),不跑全套"; fi
-          if [ "$SUITE" = docs ] && [ "$GRAPH" = graph ]; then extra="$extra --graph"; echo "含圖譜筆記:加跑讀真圖譜的測試(--graph)"; fi
           for i in 1 2 3 4; do
             python scripts/test_lumos.py --shard "$i/4" $extra > "/tmp/shard-$i.log" 2>&1 &
           done
           for job in $(jobs -p); do wait "$job" || rc=1; done
-          for i in 1 2 3 4; do
+          for i in 1 2 3 4; do echo "===== 第 $i 片 ====="; tail -25 "/tmp/shard-$i.log"; done
+          exit $rc
+  shards:
+    needs: prep
+    if: needs.prep.outputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 每台跑幾份、共幾份:Projects/CI加速_計劃〈做法〉0 量出來的(一台同時跑兩份不會變慢,瓶頸是每份的量);改台數時兩處一起改,t_ci_yml_matrix_and_gates_shape 守 1..N 各一次
+        shards: ["1 2", "3 4", "5 6", "7 8", "9 10", "11 12", "13 14", "15 16"]
+    env:
+      SHARD_TOTAL: "16"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5);全套與範圍判定也要歷史
+      # PR 事件取出的是不在任何分支上的合併提交,本機只有 origin/main、沒有 main;找主線的測試(main@{upstream})
+      # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)。
+      # 工作之間不共用機器,每個工作都要自己補(Projects/CI加速_計劃)
+      - name: PR 事件補上本機 main
+        if: github.event_name == 'pull_request'
+        run: git branch --track main origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
+      - name: 全套的這幾份(${{ matrix.shards }} / 共 ${{ env.SHARD_TOTAL }} 份)
+        env:
+          MY_SHARDS: ${{ matrix.shards }}
+        run: |
+          set -u
+          rc=0
+          for i in $MY_SHARDS; do
+            python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL" > "/tmp/shard-$i.log" 2>&1 &
+          done
+          for job in $(jobs -p); do wait "$job" || rc=1; done
+          for i in $MY_SHARDS; do
             echo "===== 第 $i 片 ====="
             # 紅的時候先把失敗那幾行撈出來——tail 只看得到尾巴,而紅的那支通常在中間,
             # 以前紅了要靠猜是哪一支(2026-09-15 實際踩到:CI 紅、本機全綠、查不出名字)
@@ -94,13 +139,30 @@ jobs:
             tail -25 "/tmp/shard-$i.log"
           done
           exit $rc
+  gates:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5);全套與範圍判定也要歷史
+      # PR 事件取出的是不在任何分支上的合併提交,本機只有 origin/main、沒有 main;找主線的測試(main@{upstream})
+      # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)。
+      # 工作之間不共用機器,每個工作都要自己補(Projects/CI加速_計劃)
+      - name: PR 事件補上本機 main
+        if: github.event_name == 'pull_request'
+        run: git branch --track main origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
       # 2026-08-29 接線:這支的 106 個測試先前沒有任何自動路徑在跑(CI 與 pre-push 都只跑
       # test_lumos.py),而它是 autonomous_loop 十個模組中九個的唯一覆蓋,且早已在 anchor
       # 基準線裡被防竄改守著——綠紅沒人看,卻有人守。
       - name: 自主迴圈測試
         # 純文件推送只跑讀真 CLAUDE.md 的那一條(144 支裡只有它讀 repo 的文件;整支 63 秒)——跟推送前掛鉤同一條規則
         env:
-          SUITE: ${{ steps.suite.outputs.suite }}
+          SUITE: ${{ needs.prep.outputs.suite }}
         run: |
           extra=""
           if [ "$SUITE" = docs ]; then extra="-k real_claude_md"; fi
@@ -113,7 +175,7 @@ jobs:
         # rc1=高風險 diff 無 pass/skip 留痕 → CI 紅(可見的痕跡;ci-wait/ci-log 會收到)。
         if: github.event_name == 'push'
         env:
-          LUMOS_SKIP_BOUND_TESTS: "1"   # 受波及合約測試在本機 pre-push 真跑;CI 已跑全套當後盾,不重跑
+          LUMOS_SKIP_BOUND_TESTS: "1"   # 受波及合約測試在本機 pre-push 真跑;CI 的全套在 shards 工作同時跑當後盾,這裡不重跑
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
           BRANCH: ${{ github.ref_name }}
@@ -162,7 +224,8 @@ jobs:
         # 模式照被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=block,2026-09-30 起):warn 只印、回 0,CI 不紅;block 有要處理回 1,
         # 印擋下原因、CI 紅;其他非零(參數錯、工具出錯)照原碼讓 CI 紅——工具出錯時寧可紅,跟上面 code-loop gate、note-shape 兩步同一個慣例
         # (推送前掛鉤對其他非零是放行並講一句「這次沒檢查」——128 以上是被訊號中斷,停下不放行;兩邊刻意不同:CI 是最後一道後盾)。
-        # 排在 code-loop gate 之後;全套測試在這步前面(既有安排,沒搬),跟防線計劃 [S18] 字面不同,理由寫在 Systems/存量漂移守衛。
+        # 排在 code-loop gate 之後;2026-10-06 起全套測試在另一個工作(shards)同時跑、沒有先後(Projects/CI加速_計劃),
+        # 跟防線計劃 [S18]「全套在前」字面不同,理由寫在 Systems/bound-tests-gate 的 CI 拆工作那行 WHY。
         if: github.event_name == 'push'
         env:
           BEFORE: ${{ github.event.before }}
