@@ -24405,42 +24405,58 @@ def _review_role_for(file_rel, repo_root, rules=(), reader=None, content=None):
     return "backend" if key in _ROLE_BACK_KEYS else None
 
 
-def _review_role_changed_files(root, base, head):
+def _review_role_changed_files(root, base, head, deadline=None):
     """角色鏡頭的改動檔清單:[(路徑, 讀內容用的版本)]。派工角色段與推送前分級那一行共用這一支。
-    改名算新路徑;刪除的檔照樣算、讀起點版本。剔除測試檔(_PITFALL_DIFF_TEST_PAT)、消費專案裡原封不動的工具檔
+    一般改名算新路徑；跨到被排除的簿記終點另保留舊程式、讀起點版本。
+    刪除的檔照樣算、讀起點版本。剔除測試檔(_PITFALL_DIFF_TEST_PAT)、消費專案裡原封不動的工具檔
     (_vendored_skip)、文件與帳檔(_impact_diff_seed_ok)。git 跑不起來回 None。"""
     r = _lens_git(root, "diff", "--no-ext-diff", "--name-status", "-M", "-z", base, head)
     if r is None or r.returncode != 0:
         return None
     toks = r.stdout.split("\0")
     skip = _vendored_skip(root, f"{base}..{head}")
-    out, i = [], 0
+    out, renamed, i = [], [], 0
     while i < len(toks) and toks[i]:
         st = toks[i]
         if st[:1] in ("R", "C"):
+            if st[:1] == "R":
+                renamed.append((toks[i + 1], toks[i + 2]))
             path, ref, i = toks[i + 2], head, i + 3
         else:
             path, ref, i = toks[i + 1], (base if st[:1] == "D" else head), i + 2
-        if _PITFALL_DIFF_TEST_PAT.search(path) or not _impact_diff_seed_ok(path) or path in skip:
-            continue
         out.append((path, ref))
-    return out
+    modes = _impact_diff_modes(root, [path for path, _ref in out] + [old for old, _new in renamed],
+                               base, head, deadline=deadline)
+    if modes is None:
+        return None
+    # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+    out += [(old, base) for old, new in renamed
+            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
+            and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+            and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+    return [(path, ref) for path, ref in out
+            if not _PITFALL_DIFF_TEST_PAT.search(path)
+            and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
 
 
 def _review_roles(root, base, head, budget=_ROLE_BUDGET):
     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
     import time as _t
+    if budget <= 0:
+        return {"roles": {}, "counts": {"frontend": 0, "backend": 0, "unknown": 0},
+                "warnings": [], "capped": 0, "timed_out": True}
     t0 = _t.monotonic()
     cfg = _json_at_ref(root, base, ".lumos/config.json")
     _cfg_there = cfg is None and _lens_git(root, "cat-file", "-e", f"{base}:.lumos/config.json")
     rules, warnings = _review_roles_config(cfg, unreadable=bool(_cfg_there and _cfg_there.returncode == 0))
-    files = _review_role_changed_files(root, base, head)
+    files = _review_role_changed_files(root, base, head, deadline=t0 + budget)
     if files is None:
         return None
     want, capped = _review_role_wanted(files, rules)
-    blobs, timed_out = {}, False
+    blobs = {}
     left = budget - (_t.monotonic() - t0)
+    timed_out = left <= 0
     if want and left > 0.2:
         got = _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=left)
         if got is None:
@@ -27227,14 +27243,30 @@ def _nodehome_cat_sizes(repo_root, specs, timeout=60):
     return out
 
 
-def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60):
+def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60, max_total_bytes=None, deadline=None):
     """_nodehome_cat_blobs 加大小上限:先用 _nodehome_cat_sizes 問大小,超過 max_bytes 的回 None、不讀進記憶體
-    (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。回同順序的 bytes|None;git 跑不起來回 None。"""
-    sizes = _nodehome_cat_sizes(repo_root, specs, timeout)
+    (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。
+    max_total_bytes 選填，限制整批宣告內容大小；deadline 選填，大小／內容兩趟共用剩餘時間。
+    未指定時保留既有逐物件上限與每趟 timeout 語意。回同順序 bytes|None；失敗或截止期耗盡回 None。"""
+    import time as _t
+    def left():
+        return timeout if deadline is None else min(timeout, deadline - _t.monotonic())
+    remaining = left()
+    if remaining <= 0:
+        return None
+    sizes = _nodehome_cat_sizes(repo_root, specs, remaining)
     if sizes is None:
         return None
-    ok = [i for i, n in enumerate(sizes) if n is not None and n <= max_bytes]
-    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=timeout) if ok else []
+    ok, total = [], 0
+    for i, n in enumerate(sizes):
+        if n is None or n > max_bytes or (max_total_bytes is not None and total + n > max_total_bytes):
+            continue
+        ok.append(i)
+        total += n
+    remaining = left()
+    if remaining <= 0:
+        return None
+    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=remaining) if ok else []
     if got is None:
         return None
     res = [None] * len(specs)
@@ -41154,16 +41186,77 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
 _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
 
 
-def _impact_diff_seed_ok(f):
+def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=True):
     """--diff 種子過濾:只收 code 檔。剔除圖譜/凍結快照/帳檔(.jsonl)/文檔(.md)/
-    governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。"""
+    簿記分類沿用 _BOOKKEEPING_FILES/_BOOKKEEPING_DIRS,卷證不是程式;
+    governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。
+    unknown_is_code 預設保留未知；僅改名補償用 False 判「新側已確認是程式」，不把未知當確認。"""
     if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP):
         return False
+    # 固定帳檔仍排除；目錄內的程式例外先成立，不再被文檔副檔名二次排掉。
+    if f in _BOOKKEEPING_FILES:
+        return False
+    if f.startswith(_BOOKKEEPING_DIRS):
+        kind = _nodehome_code_kind(f)
+        if file_mode == "100755" or kind == "ext":
+            return True
+        if kind == "shebang?":
+            if shebang is None:
+                return unknown_is_code  # 選種子時保留未知；改名補舊側時未知不是新程式的證明。
+            return shebang is not False
+        return file_mode is None and unknown_is_code
     if f.endswith((".jsonl", ".md")):
         return False
     if f.endswith(".json") and f.startswith("governance/"):
         return False
     return True
+
+
+def _impact_diff_raw(repo_root, diff_args, deadline):
+    """分類的 raw 讀取；截止期耗盡回空資料保留未知，其他失敗回 None。"""
+    import time as _t
+    args = ("diff", "--no-ext-diff", "--no-textconv", "--raw", "--no-renames", "--no-abbrev", "-z", *diff_args)
+    if deadline is None:
+        raw = _nodehome_git(repo_root, *args)
+    else:
+        left = min(_disp_git_timeout(), deadline - _t.monotonic())
+        if left <= 0:
+            return b""  # 未知模式，不把它當附件排除。
+        r = _lens_git(repo_root, *args, binary=True, timeout=left)
+        raw = r.stdout if r is not None and r.returncode == 0 else None
+        if raw is None and _t.monotonic() >= deadline:
+            return b""
+    return raw
+
+
+def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
+    """簿記來源取凍結模式與首行；普通來源不多查 Git。刪檔取舊物件。"""
+    if not any(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS) for f in files):
+        return {}
+    import time as _t
+    raw = _impact_diff_raw(repo_root, diff_args, deadline)
+    changes = _codeloop_raw_changes(raw) if raw is not None else None
+    if changes is None:
+        return None
+    out, ask = {}, []
+    for f, (old, new, old_oid, new_oid) in changes.items():
+        mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
+        out[f] = (mode, None)
+        if (f.startswith(_BOOKKEEPING_DIRS) and mode != "100755"
+                and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
+                and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
+            ask.append((f, oid))
+    if ask:
+        left = _disp_git_timeout() if deadline is None else min(_disp_git_timeout(), deadline - _t.monotonic())
+        if left <= 0:
+            return out
+        heads = _nodehome_cat_blobs_capped(repo_root, [oid for _f, oid in ask],
+                                          _CODELOOP_BOOKKEEPING_HEAD_CAP, timeout=left,
+                                          max_total_bytes=_CODELOOP_BOOKKEEPING_HEAD_CAP, deadline=deadline)
+        if heads is not None:
+            for (f, _oid), head in zip(ask, heads):
+                out[f] = (out[f][0], None if head is None else _head_is_shebang(head, lenient=True))
+    return out
 
 
 def _impact_payload_read(path):
@@ -41244,16 +41337,20 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     if repo_root is None or not (repo_root / ".git").exists():
         print("擋下:找不到 git 專案,用 --repo 指定", file=sys.stderr)
         return 2
-    # core.quotePath=false:CJK 檔名不轉義加引號(否則 startswith/endswith 過濾全失效,r2 panel major)
+    # NUL 分隔且無損解碼，特殊檔名不能被引號化／拆行；改名兩側與 raw 判法一致。
     r = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
-                 "diff", "--name-only", diff_range], capture_output=True, text=True, errors="replace")
+                 "diff", "--name-only", "--no-renames", "-z", diff_range], capture_output=True)
     if r.returncode != 0:
-        print(f"擋下:git 算不出差異: {r.stderr.strip()[:200]}", file=sys.stderr)
+        print(f"擋下:git 算不出差異: {r.stderr.decode('utf-8', 'replace').strip()[:200]}", file=sys.stderr)
+        return 2
+    candidates = [os.fsdecode(f) for f in r.stdout.split(b"\0") if f]
+    modes = _impact_diff_modes(repo_root, candidates, diff_range)
+    if modes is None:
+        print("擋下:git 算不出差異檔案模式", file=sys.stderr)
         return 2
     files = []
-    for f in r.stdout.splitlines():
-        f = f.strip()
-        if not _impact_diff_seed_ok(f):
+    for f in candidates:
+        if not _impact_diff_seed_ok(f, *modes.get(f, (None, None))):
             continue
         # 已刪檔不跳過:反查靠「節點 body 引用該路徑」而非檔案存在——
         # 刪除/改名正是合約節點最該被推到審計員眼前的時刻(r1 codex major)
@@ -41339,8 +41436,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         touched = set()
         if _vault_name:
             _prefix = f"docs/{_vault_name}/"
-            for f2 in r.stdout.splitlines():
-                f2 = f2.strip().strip('"')
+            for f2 in candidates:
                 if f2.startswith(_prefix) and f2.endswith(".md"):
                     touched.add(f2[len(_prefix):])
         missing = [v for v in (pins + free) if v["node"] not in touched]
@@ -41354,7 +41450,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
                            "meta": {"files": len(files), "pinned": len(pins),
                                     "free_kept": len(free),
                                     "free_total": sum(1 for v in merged.values() if not v["pinned"]),
-                                    "per_file": per_file_meta}}, ensure_ascii=False))
+                                    "per_file": per_file_meta}}, ensure_ascii=True))
         return 0
     if sync_only and sync is not None:
         _print_sync_nudge(sync, diff_range)
@@ -41365,7 +41461,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         hm = "★家★" if v.get("home") else ""            # 推筆記認家 [S8]:這篇管其中某幾支檔
         ct = f" ★{v['contract']}★" if v.get("contract") else ""
         pin = " [固定]" if v["pinned"] else ""
-        print(f"  {v['score']:5.2f} {' '.join(x for x in (hm, mk) if x)} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
+        print(f"  {v['score']:5.2f} {' '.join(x for x in (hm, mk) if x)} {v['node']}{ct}{pin}  ←{','.join(_nodehome_show(f) for f in v['files'][:3])}")
     if not merged:
         print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
     if sync is not None:
@@ -41386,7 +41482,7 @@ def _print_sync_nudge(sync, diff_range, cap=8):
           else "  提醒:下面這些筆記可能受影響,這批沒動(自由席,可信度較低,人判):")
     for v in miss[:cap]:
         mark = "⚠必看" if v["pinned"] else "  "
-        print(f"  {mark} {v['node']}  ←{','.join(v['files'][:2])}")
+        print(f"  {mark} {v['node']}  ←{','.join(_nodehome_show(f) for f in v['files'][:2])}")
     if len(miss) > cap:
         print(f"  … 還有 {len(miss) - cap} 篇(lumos impact --diff {diff_range} --sync-check --json 看全部)")
     print("  確定不受影響就略過;受影響的現在補。這裡只提醒不擋。")
@@ -44388,8 +44484,8 @@ def _codeloop_record_valid_ex(repo_root, rec_sha, marker_sha, timeout=None):
     return (False, f"記錄 sha {rec_sha[:8]} 之後動了代碼(非純簿記增量)", False)
 
 
-def _codeloop_raw_modes(out):
-    """git diff --raw -z(不偵測改名)的輸出 → {路徑: (記錄那版的模式, 目標那版的模式)};模式是 "100644" 這種字串,
+def _codeloop_raw_changes(out):
+    """git diff --raw -z(不偵測改名)的輸出 → {路徑: (舊模式, 新模式, 舊物件, 新物件)};模式是 "100644" 這種字串,
     那一版沒有這支檔是 "000000"。格式對不上回 None(呼叫端當判不了)。路徑用無損解碼。"""
     parts = out.split(b"\0")
     res, i = {}, 0
@@ -44400,9 +44496,15 @@ def _codeloop_raw_modes(out):
         fields = meta[1:].split(b" ")
         if len(fields) < 5 or not parts[i + 1]:
             return None
-        res[os.fsdecode(parts[i + 1])] = (fields[0].decode("ascii", "replace"), fields[1].decode("ascii", "replace"))
+        res[os.fsdecode(parts[i + 1])] = tuple(v.decode("ascii", "replace") for v in fields[:4])
         i += 2
     return res
+
+
+def _codeloop_raw_modes(out):
+    """既有留痕消費者只取模式；模式與首行消費者共用同一個 raw 解析器。"""
+    changes = _codeloop_raw_changes(out)
+    return None if changes is None else {f: row[:2] for f, row in changes.items()}
 
 
 # 留痕有效性讀簿記資料夾裡沒副檔名那幾支的首行時,單支的大小上限(回頭重讀代碼審 r3 架構對齊席 F2:走帶上限的批次讀取)。
