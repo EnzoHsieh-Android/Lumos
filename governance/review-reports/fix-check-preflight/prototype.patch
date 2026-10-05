@@ -1,0 +1,45 @@
+--- scripts/lumos
++++ temporary-prototype
+@@ -12828,11 +12828,14 @@
+         for it in ok_items:
+             if "{method}" not in str((plats.get(it[1]) or {}).get("run_cmd") or ""):
+                 fail("tests-green", f"{it[2]}:平台 {it[1]} 的 run_cmd 沒有 {{method}},只能整套跑、證不了這一支是綠的")
+             else:
+                 runnable.append(it)
+-        if runnable:
++        preflight_failed = bool(items_fail)
++        if preflight_failed:
++            notes.append("前置檢查失敗:修正測試與受波及合約測試未執行;修好紀錄後重跑")
++        if runnable and not preflight_failed:
+             rows4, rerr = _spec_gate_judge_items(tree, runnable, lambda pl: (plats.get(pl) or {}).get("profile_name"), loose_for)
+             if rows4 is None:
+                 fail("tests-green", f"測試跑不起來:{rerr}")
+             else:
+                 for _n, _p, m, v, why, detail in rows4:
+@@ -12862,16 +12865,21 @@
+         if renamed:
+             notes.append("改名的檔,舊路徑牽連的合約沒算到(impact --diff 的既有洞):" + "、".join(renamed[:5]))
+         for name, why in sorted(unpinned.items()):
+             if why.startswith("平台根在樹外"):
+                 notes.append(f"平台 {name} 的合約測試會在樹外跑,結果沒釘住版本")
+-        try:
+-            bt = _bound_tests_check(tree, f"{base}..{head}")
+-        except Exception as e:
+-            bt = {"status": "error", "reason": f"{type(e).__name__}: {str(e)[:100]}"}
++        if preflight_failed:
++            bt = {"status": "preflight-not-run"}
++        else:
++            try:
++                bt = _bound_tests_check(tree, f"{base}..{head}")
++            except Exception as e:
++                bt = {"status": "error", "reason": f"{type(e).__name__}: {str(e)[:100]}"}
+         st5 = bt.get("status")
+-        if st5 in ("green", "no-pins", "no-bound", "no-vault"):
++        if preflight_failed:
++            pass
++        elif st5 in ("green", "no-pins", "no-bound", "no-vault"):
+             if st5 != "green":
+                 notes.append(f"受波及合約測試:{st5}(沒有牽連合約)")
+             if bt.get("not_run"):
+                 fail("bound-tests", "有平台沒設 run_cmd、它的合約測試沒跑:" + "、".join(bt["not_run"][:5]))
+         elif st5 == "skipped":

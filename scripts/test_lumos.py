@@ -67321,7 +67321,7 @@ def t_fix_check_listed_tests_green():
              "\ndef t_param_cap():\n    assert prod.clamp(9) == 5\n\nt_param_cap.cases = 3\n")
     root, v, base, head = _fc_env(tests_extra=extra)
     _fc_ledger(root, v)
-    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_red_one", "t_fcdemo", "t_nosuch"])])
+    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_red_one", "t_fcdemo"])])
     st0 = _fc_git(root, "status", "--porcelain").stdout
     r = _fc_check(root, v)
     out = r.stdout
@@ -67329,7 +67329,10 @@ def t_fix_check_listed_tests_green():
     check("②紅的寫出名字", "t_red_one:紅" in out, out[-1200:])
     check("③撞名附篩選匹配到", "t_fcdemo:" in out and "篩選匹配到" in out, out[-1200:])
     check("④綠的不報", "t_clamp_cap:" not in out, out[-1200:])
-    check("⑤第 3 項不存在的不再送去跑(只報一次)", out.count("t_nosuch") == 1, out[-1200:])
+    _fc_record(root, base, [_fc_group(tests=["t_clamp_cap", "t_nosuch"])])
+    missing = _fc_check(root, v)
+    check("⑤第 3 項不存在先回報、不啟動其餘測試", missing.returncode == 1
+          and missing.stdout.count("t_nosuch") == 1 and "未執行" in missing.stdout, missing.stdout[-1200:])
     wts = [ln for ln in _fc_git(root, "worktree", "list").stdout.splitlines()[1:] if ln.strip()]
     check("⑥沒有殘留工作樹", not wts, str(wts))
     st1 = "\n".join(ln for ln in _fc_git(root, "status", "--porcelain").stdout.splitlines() if ".governance-log" not in ln)
@@ -69579,6 +69582,123 @@ def t_lens_no_cache_bypasses_warmer():
               rc == 0 and warm_call.call_count == 0 and spawn.call_count == 0
               and not list(root.rglob("*.warming")),
               f"rc={rc} warm={warm_call.call_count} spawn={spawn.call_count}")
+
+
+def _fc_preflight_probe(case):
+    """真實 CLI、隔離工作樹與 runner 日誌；不從摘要文字猜是否執行。"""
+    import json as _j
+    extra = "\ndef t_inv_cap():\n    assert " + ("False" if case == "bound-red" else "prod.clamp(9) == 5") + "\n"
+    extra += "\ndef t_expected_failure():\n    assert False\n"
+    root, vault, base, _head = _fc_env(contract=True, tests_extra=extra,
+        base_files={"run.py": _FC_RUNNER.replace("cwd={os.getcwd()} link=", "method={name} cwd={os.getcwd()} link=")})
+    if case == "command":
+        cp = root / ".lumos" / "config.json"
+        cfg = _j.loads(cp.read_text())
+        cfg["test"]["run_cmd"] = "python3 run.py -k t_clamp_cap"
+        cp.write_text(_j.dumps(cfg))
+        _fc_git(root, "add", ".lumos/config.json")
+        _fc_git(root, "commit", "-qm", "fixture without method placeholder")
+    _fc_ledger(root, vault)
+    rnd = "r1"
+    group = _fc_group()
+    if case == "repeat":
+        _fc_record(root, base, [group])
+        _fc_ledger(root, vault, rnd="r2", findings="g1", folded="g1", sevs={"g1": "major"})
+        rnd, group = "r2", _fc_group(findings=["g1"])
+    elif case == "record":
+        group = _fc_group(cat="invalid-category")
+    elif case == "mixed":
+        group = _fc_group(cat="invalid-category", tests=["t_clamp_cap", "t_missing_method"])
+    elif case == "missing":
+        group = _fc_group(tests=["t_missing_method"])
+    elif case == "test-red":
+        group = _fc_group(tests=["t_expected_failure"])
+    _fc_record(root, base, [group], rnd=rnd)
+    log = root / "runner-executions.txt"
+    result = _fc_check(root, vault, "--json", rnd=rnd, env_extra={"FC_LOG": str(log)})
+    data = _j.loads(result.stdout.strip().splitlines()[-1])
+    executed = log.read_text().splitlines() if log.exists() else []
+    launches = len(executed)
+    methods = [line.split()[0].removeprefix("method=") for line in executed]
+    events = _fc_events(root)
+    check(f"前置 {case}:恰好一筆事件", len(events) == 1, str(events))
+    check(f"前置 {case}:隔離工作樹已清理",
+          _fc_git(root, "worktree", "list", "--porcelain").stdout.count("worktree ") == 1)
+    return result, data, launches, events, methods, (root, vault)
+
+
+def _fc_preflight_assert_stopped(case, expected):
+    result, data, launches, events, _methods, _context = _fc_preflight_probe(case)
+    check(f"前置 {case}:保持回 1 與失敗", result.returncode == 1 and data["passed"] is False, result.stdout)
+    check(f"前置 {case}:收齊便宜錯誤", set(data["failed"]) == set(expected), str(data["failed"]))
+    check(f"前置 {case}:零測試 runner 啟動", launches == 0, str(launches))
+    check(f"前置 {case}:明示未執行而非通過",
+          any("修正測試" in n and "合約測試" in n and "未執行" in n and "重跑" in n for n in data["notes"]), str(data["notes"]))
+    check(f"前置 {case}:事件只記 warned", len(events) == 1 and events[0]["kind"] == "warned", str(events))
+
+
+def t_fix_check_preflight_record_stops_runners():
+    """[S1] 混合靜態錯誤收齊後失敗，不能先執行有效方法與合約。"""
+    _fc_preflight_assert_stopped("record", ("record",))
+    _fc_preflight_assert_stopped("mixed", ("record", "tests-exist"))
+
+
+def t_fix_check_preflight_repeat_stops_runners():
+    """[S2] 同類 major 缺原因說明時，先停而非跑完才回報。"""
+    _fc_preflight_assert_stopped("repeat", ("repeat",))
+
+
+def t_fix_check_preflight_missing_stops_runners():
+    """[S3] 方法不存在不能繼續啟動合約 runner。"""
+    _fc_preflight_assert_stopped("missing", ("tests-exist",))
+
+
+def t_fix_check_preflight_command_stops_runners():
+    """[S4] 命令無方法占位符是配置錯誤，零執行且仍失敗。"""
+    _fc_preflight_assert_stopped("command", ("tests-green",))
+
+
+def t_fix_check_preflight_valid_still_runs():
+    """[S5] 前置全過仍跑兩段；真紅不能被順序優化隱藏。"""
+    for case, expected in (("valid", ()), ("test-red", ("tests-green",)), ("bound-red", ("bound-tests",))):
+        result, data, launches, events, methods, _context = _fc_preflight_probe(case)
+        check(f"有效 {case}:兩段 runner 都啟動", launches == 2, str(launches))
+        wanted = ["t_expected_failure" if case == "test-red" else "t_clamp_cap", "t_inv_cap"]
+        check(f"有效 {case}:兩段各執行自己的方法", methods == wanted, str(methods))
+        check(f"有效 {case}:保持綠紅判定", result.returncode == bool(expected)
+              and data["passed"] is (not expected) and set(data["failed"]) == set(expected), str(data))
+        check(f"有效 {case}:事件保持原判定", len(events) == 1
+              and events[0]["kind"] == ("warned" if expected else "passed"), str(events))
+        check(f"有效 {case}:沒有未執行提示", not any("前置檢查失敗" in n for n in data["notes"]), str(data["notes"]))
+
+
+def t_fix_check_preflight_not_run_is_durable():
+    """[S6] 同一失敗種類也能區分未執行；歷史列保持未知且壞型別不消費。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _j
+    from unittest import mock as _mock
+    m = _load_lumos_module()
+    for case, wanted in (("record", ["tests-green", "bound-tests"]), ("valid", [])):
+        _result, data, _launches, events, _methods, (root, vault) = _fc_preflight_probe(case)
+        check(f"留痕 {case}:JSON 明示兩段狀態", data.get("not_run_items") == wanted, str(data))
+        check(f"留痕 {case}:治理事件同樣持久保存", len(events) == 1
+              and events[0].get("not_run_items") == wanted, str(events))
+        legacy = dict(events[0])
+        legacy.pop("not_run_items", None)
+        legacy["token"] += "-legacy"
+        broken = dict(events[0], not_run_items="wrong-type", token=events[0]["token"] + "-bad")
+        lp = root / "docs" / ".governance-log.jsonl"
+        with lp.open("a") as fh:
+            fh.write(_j.dumps(legacy) + "\n" + _j.dumps(broken) + "\n")
+        with _mock.patch.object(m, "_render_gov_stats") as render, _ctx.redirect_stdout(_io.StringIO()):
+            rc = m.cmd_gov(m.Env(vault), stats=True)
+        rows = render.call_args.args[0] if render.called else []
+        projected = [r for r in rows if r.get("gate") == "fix-check"]
+        check(f"留痕 {case}:舊列可讀、壞型別列略過", rc == 0 and len(projected) == 2, str(projected))
+        values = {r.get("token"): r.get("not_run_items") for r in projected}
+        check(f"留痕 {case}:mapper 保留新欄位而舊欄未知",
+              values.get(events[0]["token"]) == wanted and values.get(legacy["token"]) is None, str(values))
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -49,6 +49,7 @@ verified_by:
   - "[[Verification/2026-09-16_收斂候選實作後的前後對照]]"
   - "[[Verification/2026-09-16_別名欄對檢索的實際貢獻]]"
   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
+  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
