@@ -2071,7 +2071,7 @@ def t_concurrent_append_same_note():
     r4 = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "append", "F", "tags", "z"],
                 capture_output=True, text=True, env={**_os2.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)})
     check("④鎖的資料夾建不起來也照寫、而且講一聲", r4.returncode == 0 and "- z" in read(p2) and "鎖" in r4.stderr, r4.stderr[-300:])
-    # ⑤ 鎖是跟專案既有的同一套(建鎖檔+過期接手),不是另一套機制(第四輪架構席)
+    # ⑤ 鎖是跟專案既有的同一套(獨佔建鎖檔;過期不再自動接手),不是另一套機制(第四輪架構席)
     import inspect as _insp
     src_lock = _insp.getsource(m._vault_write_lock)
     check("⑤寫入鎖用專案既有的鎖檔做法(_excl_lock_try),沒有另開 flock/msvcrt", "_excl_lock_try" in src_lock
@@ -16825,8 +16825,9 @@ def t_lens_timeout_keeps_warming_cache():
         raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
 
     def sha(ref):
-        r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
-        return r.stdout.strip()
+        r = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", ref + "^{commit}"],
+                    capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
 
     # ★怎麼讓它一定超時,又不必挑一個「算很久」的範圍★(2026-09-07 CI 紅了一次之後改)
     # 舊寫法是「挑 HEAD~12 這種算不完 1.5 秒的範圍」。問題是**那個範圍的成本會隨著
@@ -40335,14 +40336,14 @@ def t_hook_swallowed_timeout_is_not_recorded_as_ok():
         # 真的那支 hook 有沒有在它吞逾時的地方講一聲
         # ★搜尋窗要對準真的那一條吞逾時路徑★:第一版用第一個 `except (subprocess.TimeoutExpired`
         # 當起點,而檔裡不只一處,窗口落在別的地方,報了一個假的紅。
-        # 改成:先確認那個 mark 呼叫存在,再確認它跟「附了超時說明行」那句在同一段。
+        # 改成:先確認那個 mark 呼叫存在,再確認它跟「已附對應說明行」那句在同一段。
         dl = (hookdir / "dispatch-lens-hook.py").read_text(encoding="utf-8")
         check("★派工鏡頭那支要有 mark(\"timeout\") 的呼叫★",
               '_mark("timeout"' in dl, "找不到 mark 呼叫")
         if '_mark("timeout"' in dl:
             i_m = dl.index('_mark("timeout"')
-            check("★而且要落在「附了超時說明行」那一段裡★(不是隨便放一處)",
-                  "超時說明行" in dl[max(0, i_m - 900):i_m + 300], dl[max(0, i_m-400):i_m+200])
+            check("★而且要落在「已附對應說明行」那一段裡★(不是隨便放一處)",
+                  "已附對應說明行" in dl[max(0, i_m - 900):i_m + 300], dl[max(0, i_m-400):i_m+200])
     finally:
         _sh.rmtree(root, ignore_errors=True)
     print("  ✓ t_hook_swallowed_timeout_is_not_recorded_as_ok")
@@ -67849,6 +67850,934 @@ def t_doctor_check3_bad_entry_cap_verbose_and_mixed_empty():
     sec = _sr_check3(v)
     check("③空項混在好項裡也報空的項", "空的項" in sec, sec[-500:])
 
+def t_excl_lock_stale_takeover_is_single_owner():
+    """S1: 在兩個真程序間釘住舊版 stat→rename 的 ABA 交錯。"""
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+    import json as _json
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        lock = root / "race.lock"
+        lock.write_text("99999999\n0", encoding="utf-8")
+        old = _time.time() - 1200
+        _os.utime(lock, (old, old))
+        ready, go = root / "ready", root / "go"
+        code = '''import importlib.util, json, os, sys, time
+from pathlib import Path
+from importlib.machinery import SourceFileLoader
+src, lock, ready, go = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("lock_child", str(src), loader=SourceFileLoader("lock_child", str(src)))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+stat = Path.stat
+def paused(self, *args, **kwargs):
+    value = stat(self, *args, **kwargs)
+    if self == lock:
+        ready.write_text("ready")
+        for _ in range(500):
+            if go.exists():
+                break
+            time.sleep(.01)
+        else:
+            raise TimeoutError("parent did not release stat")
+    return value
+Path.stat = paused
+print(json.dumps({"pid": os.getpid(), "acquired": m._excl_lock_try(lock, 900)}))
+'''
+        child = _sp.Popen([sys.executable, "-c", code, GRAPHCTL, str(lock), str(ready), str(go)],
+                          stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        try:
+            reached = False
+            for _ in range(500):
+                if ready.exists():
+                    reached = True
+                    break
+                if child.poll() is not None:
+                    break
+                _time.sleep(.01)
+            parent_acquired = m._excl_lock_try(lock, 900)
+            go.write_text("go")
+            out, err = child.communicate(timeout=8)
+        finally:
+            go.write_text("go")
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=8)
+        check("過期鎖 S1 前置:舊碼到達 stat 間隙或新碼直接拒絕", reached or child.returncode == 0,
+              f"rc={child.returncode} err={err}")
+        result = _json.loads(out) if child.returncode == 0 else {}
+        check("過期鎖 S1 前置:競爭者是不同 PID", result.get("pid") not in (None, _os.getpid()), str(result))
+        check("過期鎖 S1:兩程序都拒絕接手且舊鎖不變",
+              parent_acquired is False and result.get("acquired") is False
+              and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
+              f"parent={parent_acquired} child={result} lock={lock.read_text() if lock.exists() else 'missing'} err={err}")
+
+
+def t_excl_lock_existing_is_not_stolen():
+    """S2: 無法證明持有者已停時，不按年齡或 PID 偷鎖。"""
+    import os as _os
+    import time as _time
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        old = _time.time() - 1200
+        for name, pid in (("live", _os.getpid()), ("dead", 99999999)):
+            lock = root / f"{name}.lock"
+            value = f"{pid}\n0"
+            lock.write_text(value, encoding="utf-8")
+            _os.utime(lock, (old, old))
+            got = m._excl_lock_try(lock, 900)
+            check(f"過期鎖 S2:{name} PID 的舊鎖保留", got is False and lock.read_text(encoding="utf-8") == value,
+                  f"got={got} content={lock.read_text(encoding='utf-8')!r}")
+        target = root / "target"
+        target.write_text("untouched", encoding="utf-8")
+        link = root / "link.lock"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            if _os.name != "nt":
+                raise
+        else:
+            got = m._excl_lock_try(link, 900)
+            check("過期鎖 S2:符號連結與目標均不動", got is False and link.is_symlink() and target.read_text() == "untouched", str(got))
+        fresh = root / "fresh.lock"
+        first, second = m._excl_lock_try(fresh, 900), m._excl_lock_try(fresh, 900)
+        check("過期鎖 S2:正常獨佔建檔", first is True and second is False, f"{first=} {second=}")
+
+
+def t_excl_lock_creation_failure_cleans_own_file():
+    """S3: 短寫補齊，寫失敗只清自己新建的半成品。"""
+    import os as _os
+
+    m = _load_lumos_module()
+    real_write = _os.write
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        short = root / "short.lock"
+
+        def one_byte(fd, data):
+            return real_write(fd, data[:1])
+
+        m.os.write = one_byte
+        try:
+            got = m._excl_lock_try(short, 900)
+        finally:
+            m.os.write = real_write
+        content = short.read_text(encoding="utf-8") if short.exists() else ""
+        check("過期鎖 S3:短寫不得宣稱已寫完", got is True and content.startswith(str(_os.getpid()) + "\n"),
+              f"got={got} content={content!r}")
+
+        failed = root / "failed.lock"
+
+        def no_space(fd, data):
+            raise OSError(28, "injected full disk")
+
+        m.os.write = no_space
+        raised = False
+        try:
+            m._excl_lock_try(failed, 900)
+        except OSError:
+            raised = True
+        finally:
+            m.os.write = real_write
+        check("過期鎖 S3:寫失敗回真錯誤且不留自己空鎖", raised and not failed.exists(),
+              f"raised={raised} exists={failed.exists()}")
+
+        replaced = root / "replaced.lock"
+
+        def other_owner(fd, data):
+            replaced.unlink()
+            replaced.write_text("OTHER", encoding="utf-8")
+            raise OSError(28, "injected replacement")
+
+        m.os.write = other_owner
+        try:
+            try:
+                m._excl_lock_try(replaced, 900)
+            except OSError:
+                pass
+        finally:
+            m.os.write = real_write
+        check("過期鎖 S3:失敗清理不刪他人換入的鎖", replaced.read_text(encoding="utf-8") == "OTHER",
+              replaced.read_text(encoding="utf-8"))
+
+        denied = root / "denied.lock"
+        real_open = _os.open
+
+        def deny(path, flags, mode=0o777, **kwargs):
+            if str(path) == str(denied):
+                raise PermissionError(13, "injected permission denied")
+            return real_open(path, flags, mode, **kwargs)
+
+        m.os.open = deny
+        raised = False
+        try:
+            m._excl_lock_try(denied, 900)
+        except PermissionError:
+            raised = True
+        finally:
+            m.os.open = real_open
+        check("過期鎖 S3:無權限與鎖已存在分開報", raised and not denied.exists(), str(raised))
+
+
+def t_vault_stale_lock_fails_with_path():
+    """S3: 殘留鎖不能讓筆記庫無限等待，也要說出可查核的位置。"""
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        home, vault = root / "home", root / "vault"
+        home.mkdir()
+        vault.mkdir()
+        old_home = _os.environ.get("HOME")
+        real_monotonic = _time.monotonic
+        _os.environ["HOME"] = str(home)
+        try:
+            lock, _ = m._vault_lock_where(vault)
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text("99999999\n0", encoding="utf-8")
+            old = _time.time() - 1200
+            _os.utime(lock, (old, old))
+            ticks = iter((0, 61))
+            _time.monotonic = lambda: next(ticks, 61)
+            try:
+                with m._vault_write_lock(vault):
+                    pass
+                message = ""
+            except RuntimeError as exc:
+                message = str(exc)
+            finally:
+                _time.monotonic = real_monotonic
+            check("過期鎖 S3 前置:筆記庫入口真的走到等待上限", "60 秒" in message, message)
+            check("過期鎖 S3:指出鎖位置與人工查核", str(lock) in message and "確認" in message,
+                  message)
+            content = lock.read_text(encoding="utf-8") if lock.exists() else "<鎖已被移除>"
+            check("過期鎖 S3:拒絕寫入且原鎖保留", content == "99999999\n0", content)
+            started = _time.monotonic()
+            with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")):
+                try:
+                    with m._vault_write_lock(vault):
+                        pass
+                    permission_message = ""
+                except RuntimeError as exc:
+                    permission_message = str(exc)
+            check("過期鎖 S4:建鎖失敗立即回真錯誤", "無法建立" in permission_message
+                  and str(lock) in permission_message and _time.monotonic() - started < 2,
+                  permission_message)
+        finally:
+            if old_home is None:
+                _os.environ.pop("HOME", None)
+            else:
+                _os.environ["HOME"] = old_home
+
+
+def t_lens_stale_lock_reports_uncertainty():
+    """S4: 舊派工鎖不能自動偷，也不能假稱背景工作一定仍活著。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        cache = root / "cache.json"
+        lock = root / "cache.json.warming"
+        lock.write_text("99999999\n0", encoding="utf-8")
+        old = _time.time() - m._LENS_LOCK_STALE_SEC - 10
+        _os.utime(lock, (old, old))
+        out = _io.StringIO()
+        with _mock.patch("subprocess.Popen") as spawn, _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
+        result = _json.loads(out.getvalue())
+        check("過期鎖 S4 前置:確實走到派工鏡頭超時", rc == 5 and result.get("timed_out") is True,
+              out.getvalue())
+        check("過期鎖 S4:舊鎖不啟動第二支", spawn.call_count == 0 and lock.read_text() == "99999999\n0",
+              f"spawn={spawn.call_count} lock={lock.read_text() if lock.exists() else 'missing'}")
+        check("過期鎖 S4:超時只報狀態未知", result.get("lock_uncertain") is True and result.get("still_warming") is not True,
+              out.getvalue())
+
+        cached = _io.StringIO()
+        with _mock.patch.object(m, "_lens_cache_read", return_value={"text": "ready"}), \
+                _ctx.redirect_stdout(cached):
+            cached_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
+        check("過期鎖 S5:非持有者見快取也不能刪別人的鎖",
+              cached_rc == 0 and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
+              f"rc={cached_rc} lock={lock.read_text() if lock.exists() else 'missing'}")
+
+        lock.unlink()
+        replacement = {"acquired": False}
+        def cache_after_failed_spawn(_path):
+            replacement["acquired"] = m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC)
+            return {"text": "ready"}
+        switched = _io.StringIO()
+        with _mock.patch("subprocess.Popen", side_effect=OSError("spawn failed")), \
+                _mock.patch.object(m, "_lens_cache_read", side_effect=cache_after_failed_spawn), \
+                _ctx.redirect_stdout(switched):
+            switched_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
+        check("過期鎖 S5:啟動失敗後新持有者的鎖不能被舊等待端刪除",
+              switched_rc == 0 and replacement["acquired"] is True and lock.exists(),
+              f"rc={switched_rc} acquired={replacement['acquired']} lock={lock.exists()}")
+
+        hook = _load_hook_mod("stale_lens_hook", "dispatch-lens-hook.py")
+        response = type("Response", (), {"returncode": 5, "stdout": _json.dumps(result), "stderr": ""})()
+        payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
+        rendered = _io.StringIO()
+        with _mock.patch.object(hook.subprocess, "run", return_value=response), \
+                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
+                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
+                _ctx.redirect_stdout(rendered):
+            hook_rc = hook.main()
+        check("過期鎖 S4:派工 hook 傳達需查鎖", hook_rc == 0 and "狀態未知" in rendered.getvalue() and "檢查鎖" in rendered.getvalue(),
+              rendered.getvalue())
+
+        error_output = _io.StringIO()
+        with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")), \
+                _ctx.redirect_stdout(error_output):
+            try:
+                error_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
+            except PermissionError:
+                error_rc = None
+        try:
+            error_data = _json.loads(error_output.getvalue())
+        except ValueError:
+            error_data = {}
+        check("過期鎖 S5:建鎖錯誤有獨立 rc 與鎖位置", error_rc == 2 and error_data.get("lock_error") is True
+              and error_data.get("lock_path") == str(lock), f"rc={error_rc} data={error_data}")
+
+        error_response = type("Response", (), {"returncode": 2,
+                              "stdout": _json.dumps({"lock_error": True, "lock_path": str(lock), "range": "a..b"}),
+                              "stderr": ""})()
+        rendered = _io.StringIO()
+        mark = _mock.Mock()
+        with _mock.patch.object(hook.subprocess, "run", return_value=error_response), \
+                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
+                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+                _mock.patch.dict(sys.modules, {"_hookevent": type("Event", (), {"mark": mark})}), \
+                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
+                _ctx.redirect_stdout(rendered):
+            hook_rc = hook.main()
+        check("過期鎖 S5:派工 hook 傳達建鎖失敗", hook_rc == 0 and "鎖無法建立" in rendered.getvalue()
+              and str(lock) in rendered.getvalue(), rendered.getvalue())
+        check("過期鎖 S5:吞下建鎖失敗後事件帳不可記成成功",
+              mark.call_count == 1 and mark.call_args.args[0] == "error", str(mark.call_args_list))
+
+
+def t_lens_warmer_cache_hit_releases_owned_lock():
+    """背景程序即使一進場就讀到快取，也要釋放派工端交給它的鎖。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+
+        out = _io.StringIO()
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value={"text": "cached"}), \
+                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+        result = _json.loads(out.getvalue())
+        check("背景快取命中前置:確實走到快取早退", rc == 0 and result.get("cache_hit") is True,
+              out.getvalue())
+        check("背景快取命中:清掉本次受託的鎖", not lock.exists(), str(lock))
+
+
+def t_lens_warmer_ref_move_keeps_lock_identity():
+    """符號 ref 移動後仍傳固定 SHA；同 PID 不同範圍及錯誤身份不得被清。"""
+    import os as _os
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    stable = "a" * 40 + ".." + "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        own = cache_dir / ("a" * 64 + ".json.warming")
+        other = cache_dir / ("b" * 64 + ".json.warming")
+        own.write_text("123\n0", encoding="utf-8")
+        other.write_text("123\n0", encoding="utf-8")
+        env = {"LUMOS_LENS_LOCK_OWNER": "123", "LUMOS_LENS_LOCK_NAME": own.name}
+
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0), \
+                _mock.patch.dict(_os.environ, env):
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: ""}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:一般呼叫不清鎖", own.exists(), str(own))
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "999"}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:PID 不符不清鎖", own.exists(), str(own))
+            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1"}):
+                m.cmd_dispatch_lens("a..b")
+            check("鎖身份:同 PID 另一範圍不被清", not own.exists() and other.exists(),
+                  f"own={own.exists()} other={other.exists()}")
+
+        with _mock.patch("subprocess.Popen") as spawn, \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
+            rc = m._lens_wait_or_warm(home, own.with_suffix(""), "main~1..moving-ref", home,
+                                      True, 0, warm_range=stable)
+        argv = spawn.call_args.args[0] if spawn.call_args else []
+        child_env = spawn.call_args.kwargs.get("env", {}) if spawn.call_args else {}
+        check("鎖身份:派工後 ref 可移動但子程序使用固定 SHA 與原鎖名稱",
+              rc == 5 and len(argv) > 3 and argv[3] == stable and
+              child_env.get("LUMOS_LENS_LOCK_NAME") == own.with_suffix("").name + ".warming",
+              f"argv={argv} lock={child_env.get('LUMOS_LENS_LOCK_NAME')}")
+
+        import subprocess as _sp
+        base_sha, head_sha = stable.split("..")
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(home) + "\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"main~1": base_sha, "moving-ref": head_sha}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head_sha)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_wait_or_warm", return_value=5) as wait:
+            parent_rc = m.cmd_dispatch_lens("main~1..moving-ref", repo=str(home), deadline=1)
+        check("鎖身份:真正派工入口把已解析 SHA 交給背景等待段",
+              parent_rc == 5 and wait.call_args.kwargs.get("warm_range") == stable,
+              str(wait.call_args))
+
+
+def t_lens_cache_read_without_getuid():
+    """快取讀取沿用私有目錄的平台分支，POSIX 仍檢查擁有者與權限。"""
+    import json as _json
+    import os as _os
+    import types as _types
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        p = cache_dir / "cache.json"
+        p.write_text(_json.dumps({"text": "cached"}), encoding="utf-8")
+        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "os", without_uid):
+            got = m._lens_cache_read(p)
+        check("Windows 分支:沒有 getuid 仍可讀合法快取", got == {"text": "cached"}, str(got))
+        with _mock.patch.object(Path, "home", return_value=home):
+            if hasattr(_os, "getuid"):
+                with _mock.patch.object(m.os, "getuid", return_value=_os.getuid() + 1):
+                    foreign = m._lens_cache_read(p)
+                p.chmod(0o666)
+                writable = m._lens_cache_read(p)
+                check("POSIX 分支:不信非自己擁有或他人可寫的快取",
+                      foreign is None and writable is None, f"foreign={foreign} writable={writable}")
+
+
+
+def t_lens_cache_read_rejects_untrusted_path_without_getuid():
+    """沒有 getuid 時，連結到私有快取外的目錄或檔案也不能進派工詞。"""
+    import json as _json
+    import os as _os
+    import types as _types
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        home, shared = root / "home", root / "shared"
+        home.mkdir()
+        shared.mkdir()
+        parent = home / ".cache" / "lumos"
+        parent.mkdir(parents=True)
+        cache_dir = parent / "dispatch-lens"
+        cache_dir.symlink_to(shared, target_is_directory=True)
+        attack = cache_dir / "attack.json"
+        attack.write_text(_json.dumps({"text": "ATTACKER-CONTROLLED"}), encoding="utf-8")
+        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "os", without_uid):
+            trusted = m._trusted_private_dir(cache_dir, ".cache", "lumos", "dispatch-lens")
+            got = m._lens_cache_read(attack)
+        check("無 getuid 快取前置:外部連結目錄本身不可信", trusted is False,
+              f"trusted={trusted} path={attack}")
+        check("無 getuid 快取:不讀外部連結目錄的任意派工文字", got is None, str(got))
+
+        cache_dir.unlink()
+        cache_dir.mkdir(mode=0o700)
+        linked_file = cache_dir / "linked.json"
+        linked_file.symlink_to(shared / "attack.json")
+        malformed = cache_dir / "malformed.json"
+        malformed.write_text(_json.dumps({"text": 42}), encoding="utf-8")
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "os", without_uid):
+            linked = m._lens_cache_read(linked_file)
+            invalid = m._lens_cache_read(malformed)
+        check("無 getuid 快取:檔案連結也不讀", linked is None, str(linked))
+        check("無 getuid 快取:不把非文字 JSON 當派工內容", invalid is None, str(invalid))
+
+
+
+def t_lens_untrusted_cache_never_creates_external_lock():
+    """讀取端拒絕外部連結時，背景等待端也不能沿該路徑建鎖。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import types as _types
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        home, shared = root / "home", root / "shared"
+        (home / ".cache" / "lumos").mkdir(parents=True)
+        shared.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.symlink_to(shared, target_is_directory=True)
+        cpath = cache_dir / ("a" * 64 + ".json")
+        outside_lock = shared / (cpath.name + ".warming")
+        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
+        out = _io.StringIO()
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(m, "os", without_uid), \
+                _mock.patch("subprocess.Popen") as spawn, _ctx.redirect_stdout(out):
+            trusted = m._trusted_private_dir(cache_dir, ".cache", "lumos", "dispatch-lens")
+            rc1 = m._lens_wait_or_warm(root, cpath, "a..b", root, True, 0)
+            rc2 = m._lens_wait_or_warm(root, cpath, "a..b", root, True, 0)
+        lines = [_json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        check("外部連結鎖前置:派工快取目錄被信任判準拒絕",
+              trusted is False, f"trusted={trusted}")
+        check("外部連結鎖:不建外部鎖、不啟動無法落快取的暖機",
+              rc1 == rc2 == 2 and spawn.call_count == 0 and not outside_lock.exists()
+              and len(lines) == 2 and all(row.get("lock_error") is True for row in lines),
+              f"rc={rc1},{rc2} spawn={spawn.call_count} lock={outside_lock.exists()} out={lines}")
+
+
+
+def t_lens_trusted_cache_still_spawns_warmer():
+    """合法私有目錄仍能建立暖機鎖，避免安全檢查把正常暖機關掉。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cpath = cache_dir / ("a" * 64 + ".json")
+        lock = cache_dir / (cpath.name + ".warming")
+        out = _io.StringIO()
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch("subprocess.Popen") as spawn, _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(home, cpath, "a..b", home, True, 0)
+        data = _json.loads(out.getvalue())
+        check("私有目錄正向:仍可建鎖並啟動一次背景工作",
+              rc == 5 and spawn.call_count == 1 and lock.exists()
+              and data.get("timed_out") is True and not data.get("lock_error"),
+              f"rc={rc} spawn={spawn.call_count} lock={lock.exists()} data={data}")
+
+
+def t_lens_deadline_final_cache_read():
+    """最後一次輪詢後、期限前已寫好的快取應優先於逾時分類。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        cache = root / "cache.json"
+        lock = cache.with_name(cache.name + ".warming")
+        lock.write_text("existing", encoding="utf-8")
+        state = {"written": False}
+        def finish_during_sleep(_seconds):
+            state["written"] = True
+            lock.unlink()
+        out = _io.StringIO()
+        with _mock.patch("time.monotonic", side_effect=[0.0, 0.0, 2.0]), \
+                _mock.patch("time.sleep", side_effect=finish_during_sleep), \
+                _mock.patch.object(m, "_lens_cache_read",
+                    side_effect=lambda _path: {"text": "ready"} if state["written"] else None), \
+                _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 1)
+        data = _json.loads(out.getvalue())
+        check("期限末前置:背景在最後一次睡眠期間完成並清鎖",
+              state["written"] and not lock.exists(), str(data))
+        check("期限末:讀到已完成快取就不誤報鎖狀態未知",
+              rc == 0 and data.get("text") == "ready" and not data.get("timed_out"),
+              f"rc={rc} data={data}")
+
+
+def t_lens_warmer_cache_ttl_retries():
+    """早退清鎖後，過期快取不能阻止下一次暖機取得同名鎖。"""
+    import os as _os
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        cpath = cache_dir / ("c" * 64 + ".json")
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name}
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.dict(_os.environ, env), \
+                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0):
+            m.cmd_dispatch_lens("a..b")
+        cpath.write_text('{"text":"old"}', encoding="utf-8")
+        old = _time.time() - 1300
+        _os.utime(cpath, (old, old))
+        with _mock.patch("subprocess.Popen") as spawn, \
+                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
+            rc = m._lens_wait_or_warm(home, cpath, "a..b", home, True, 0)
+        check("過期快取:舊鎖已清、下一次可取得鎖並派暖機",
+              rc == 5 and lock.exists() and spawn.call_count == 1,
+              f"rc={rc} lock={lock.exists()} spawn={spawn.call_count}")
+
+
+def t_lens_warmer_error_exit_releases_owned_lock():
+    """impact、JSON、base 樹失敗與未預期例外，都保留原錯誤並釋放背景鎖。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+
+        for case, expected in (("impact", 7), ("json", 2), ("base-tree", 2), ("exception", RuntimeError)):
+            lock.write_text("123\n0", encoding="utf-8")
+
+            def git(_root, *args, **_kw):
+                if args[:2] == ("rev-parse", "--show-toplevel"):
+                    return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+                if args and args[0] == "ls-tree":
+                    return _sp.CompletedProcess(args, 1, "", "")
+                return _sp.CompletedProcess(args, 0, "", "")
+
+            def impact(*_args, _case=case, **_kw):
+                if _case == "impact":
+                    return 7
+                if _case == "exception":
+                    raise RuntimeError("injected")
+                if _case == "base-tree":
+                    print(_json.dumps({"results": [], "files": []}))
+                return 0
+
+            out = _io.StringIO()
+            with _mock.patch.object(Path, "home", return_value=home), \
+                    _mock.patch.object(m, "_lens_git", side_effect=git), \
+                    _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                    _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                    _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                    _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                    _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                    _mock.patch.object(m, "cmd_impact_diff", side_effect=impact), \
+                    _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+                try:
+                    rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+                except RuntimeError:
+                    rc = RuntimeError
+            check(f"錯誤出口 {case}:原返回或例外保留且受託鎖已清",
+                  rc == expected and not lock.exists(), f"rc={rc} lock={lock.exists()}")
+
+
+def t_lens_warmer_cleanup_runs_once():
+    """清掉舊鎖後若同版新工作立即取得同名鎖，舊背景不可再清第二次。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    base, head = "a" * 40, "b" * 40
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        repo = home / "repo"
+        repo.mkdir()
+        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
+        cache_dir.mkdir(parents=True, mode=0o700)
+        cache_dir.chmod(0o700)
+        with _mock.patch.object(Path, "home", return_value=home):
+            cpath = m._lens_cache_path(repo, base, head)
+        lock = cpath.with_name(cpath.name + ".warming")
+        lock.write_text("123\n0", encoding="utf-8")
+        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
+               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
+
+        def git(_root, *args, **_kw):
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
+            if args and args[0] == "ls-tree":
+                return _sp.CompletedProcess(args, 0,
+                    "100644 blob abc\tdocs/lumos-toolchain-knowledge/MOC/index.md\n", "")
+            return _sp.CompletedProcess(args, 0, "", "")
+
+        original_unlink = Path.unlink
+        removed = []
+        def replace_after_first_release(path, *args, **kwargs):
+            result = original_unlink(path, *args, **kwargs)
+            if path == lock:
+                removed.append(1)
+                if len(removed) == 1:
+                    lock.write_text("123\nnew", encoding="utf-8")
+            return result
+
+        out = _io.StringIO()
+        with _mock.patch.object(Path, "home", return_value=home), \
+                _mock.patch.object(Path, "unlink", new=replace_after_first_release), \
+                _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
+                _mock.patch.object(m, "_lens_cache_write"), \
+                _mock.patch.object(m, "_lens_fallback", return_value=([], "none", {})), \
+                _mock.patch.object(m, "_platform_test_index", return_value=None), \
+                _mock.patch.object(m, "cmd_impact_diff", side_effect=lambda *_a, **_kw: (print(_json.dumps({"results": [], "files": []})) or 0)), \
+                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
+            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
+        check("單一清理點:新同名鎖在第一次釋放後換入並存活",
+              rc == 0 and removed == [1] and lock.exists() and lock.read_text(encoding="utf-8") == "123\nnew",
+              f"rc={rc} removed={removed} lock={lock.exists()} output={out.getvalue()[:100]}")
+
+
+
+def t_lens_spawn_failure_reports_error():
+    """建子程序失敗要即時分流；清鎖再失敗不能被可用快取掩蓋。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import time as _time
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    with tempfile.TemporaryDirectory() as d:
+        root, cache = Path(d), Path(d) / "cache.json"
+        lock = Path(str(cache) + ".warming")
+        out = _io.StringIO()
+        started = _time.monotonic()
+        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")) as spawn, \
+                _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .4)
+        data = _json.loads(out.getvalue())
+        check("啟動失敗前置:確實取得鎖且呼叫 Popen", spawn.call_count == 1 and not lock.exists() and rc in (2, 5),
+              f"rc={rc} lock={lock.exists()}")
+        check("啟動失敗 S1:立即獨立錯誤而非逾時",
+              rc == 2 and data.get("spawn_error") is True and data.get("lock_path") == str(lock)
+              and data.get("range") == "a..b" and not data.get("timed_out")
+              and _time.monotonic() - started < .35, f"rc={rc} data={data}")
+        manual = _io.StringIO()
+        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")), \
+                _ctx.redirect_stdout(manual):
+            manual_rc = m._lens_wait_or_warm(root, cache, "a..b", root, False, 0)
+        check("啟動失敗 S1:人工模式有固定診斷且不洩漏例外",
+              manual_rc == 2 and "本次背景未啟動" in manual.getvalue()
+              and str(lock) in manual.getvalue() and "SECRET" not in manual.getvalue(),
+              f"rc={manual_rc} out={manual.getvalue()}")
+        real_unlink = Path.unlink
+        cleanup = {"attempted": False}
+        def deny_own_lock(path, *args, **kwargs):
+            if path == lock:
+                cleanup["attempted"] = True
+                raise PermissionError("injected cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+        blocked = _io.StringIO()
+        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")) as blocked_spawn, \
+                _mock.patch.object(Path, "unlink", deny_own_lock), \
+                _mock.patch.object(m, "_lens_cache_read", return_value={"text": "ready"}) as ready_cache, \
+                _ctx.redirect_stdout(blocked):
+            blocked_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
+        blocked_data = _json.loads(blocked.getvalue())
+        check("啟動失敗 S1 前置:清鎖被拒且可用快取已注入",
+              blocked_spawn.call_count == 1 and cleanup["attempted"] and lock.exists()
+              and ready_cache.return_value == {"text": "ready"},
+              f"rc={blocked_rc} data={blocked_data} lock={lock.exists()}")
+        check("啟動失敗 S1:殘鎖風險優先於快取命中",
+              blocked_rc == 2 and blocked_data.get("spawn_error") is True
+              and blocked_data.get("lock_cleanup_error") is True and lock.exists(),
+              f"rc={blocked_rc} data={blocked_data}")
+
+
+def t_lens_spawn_failure_preserves_replacement_lock():
+    """Popen 尚未拋回前路徑被別人換鎖時，清理不可刪替代持有者。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    # 此單元測試用任意暫存路徑；私有目錄入口另由專門回歸與真背景整合驗。
+    m._lens_warm_dir_ready = lambda _cpath: True
+    with tempfile.TemporaryDirectory() as d:
+        root, cache = Path(d), Path(d) / "cache.json"
+        lock = Path(str(cache) + ".warming")
+        state = {"acquired": False}
+        def replace_then_fail(*args, **kwargs):
+            lock.unlink()
+            state["acquired"] = m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC)
+            raise OSError("injected spawn failure")
+        out = _io.StringIO()
+        with _mock.patch("subprocess.Popen", side_effect=replace_then_fail), \
+                _ctx.redirect_stdout(out):
+            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
+        data = _json.loads(out.getvalue())
+        check("換鎖 S4 前置:確實在 Popen 裡換入新持有者",
+              state["acquired"] is True, str(state))
+        check("換鎖 S4:啟動失敗不刪別人的新鎖",
+              rc == 2 and data.get("spawn_error") is True and lock.exists(),
+              f"rc={rc} data={data} lock={lock.exists()}")
+
+
+def t_dispatch_lens_hook_spawn_error_notice():
+    """hook 把本次啟動失敗說成錯誤，保留角色卡且不傳原始例外。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    from unittest import mock as _mock
+
+    hook = _load_hook_mod("spawn_error_lens_hook", "dispatch-lens-hook.py")
+    payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
+    result = {"spawn_error": True, "lock_path": "/tmp/lock\nbad-line", "range": "a..b",
+              "reason": "SECRET raw exception", "role_text": "ROLE-CARD"}
+    response = type("Response", (), {"returncode": 2, "stdout": _json.dumps(result), "stderr": ""})()
+    rendered, mark = _io.StringIO(), _mock.Mock()
+    with tempfile.TemporaryDirectory() as d, \
+            _mock.patch.object(hook.subprocess, "run", return_value=response), \
+            _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
+            _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
+            _mock.patch.dict(sys.modules, {"_hookevent": type("Event", (), {"mark": mark})}), \
+            _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": d}), \
+            _ctx.redirect_stdout(rendered):
+        hook_rc = hook.main()
+    output = rendered.getvalue()
+    check("啟動失敗 S2 前置:hook 真的讀到 rc2 JSON",
+          hook_rc == 0 and response.returncode == 2 and result["spawn_error"] is True,
+          f"rc={hook_rc}")
+    check("啟動失敗 S2/S5:固定提示、角色卡與消毒鎖位置",
+          "本次背景未啟動" in output and "ROLE-CARD" in output
+          and "/tmp/lock bad-line" in output and "SECRET" not in output,
+          output)
+    check("啟動失敗 S2/S5:記事件 error 而非 timeout",
+          mark.call_count == 1 and mark.call_args.args[0] == "error",
+          str(mark.call_args_list))
+
+
+def t_lens_no_cache_bypasses_warmer():
+    """停用開關生效後，即使帶 deadline 也走同步計算。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _json
+    import os as _os
+    from unittest import mock as _mock
+
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        base, head = "a" * 40, "b" * 40
+        def git(_root, *args, **kwargs):
+            stdout = str(root) if args[:2] == ("rev-parse", "--show-toplevel") else (
+                "100644 blob c\tdocs/t-knowledge/MOC/index.md\n" if args[:2] == ("ls-tree", "-r") else "")
+            return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+        def impact(*args, **kwargs):
+            print(_json.dumps({"results": [], "files": []}))
+            return 0
+        out = _io.StringIO()
+        with _mock.patch.object(m, "_lens_git", side_effect=git), \
+                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
+                _mock.patch.object(m, "_lens_full_sha", side_effect=[base, head]), \
+                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
+                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
+                _mock.patch.object(m, "_codeloop_git_branch", return_value="branch"), \
+                _mock.patch.object(m, "cmd_impact_diff", side_effect=impact) as impact_call, \
+                _mock.patch.object(m, "_lens_fallback", return_value=([], "none", {})), \
+                _mock.patch.object(m, "_platform_test_index", return_value=None), \
+                _mock.patch.object(m, "_lens_wait_or_warm") as warm_call, \
+                _mock.patch("subprocess.Popen") as spawn, \
+                _mock.patch.dict(_os.environ, {"LUMOS_DISPATCH_LENS_NO_CACHE": "1", "HOME": d}), \
+                _ctx.redirect_stdout(out):
+            rc = m.cmd_dispatch_lens("base..head", repo=str(root), as_json=True, deadline=1)
+        check("回退 S6 前置:同步 impact 真有被呼叫", impact_call.call_count == 1,
+              f"rc={rc} impact={impact_call.call_count} out={out.getvalue()[:100]}")
+        check("回退 S6:不啟動暖機或留下新鎖",
+              rc == 0 and warm_call.call_count == 0 and spawn.call_count == 0
+              and not list(root.rglob("*.warming")),
+              f"rc={rc} warm={warm_call.call_count} spawn={spawn.call_count}")
 
 if __name__ == "__main__":
     sys.exit(main())

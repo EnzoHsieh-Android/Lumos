@@ -14,6 +14,7 @@ related:
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Systems/check-u-overgeneralization]]"
   - "[[Projects/工具分類_計劃]]"
+  - "[[Projects/過期鎖安全接手_計劃]]"
 summary: |-
   WHY:decision-add、decision-supersede 成功之後,列出別篇連到這篇、同一子句還寫待定的行與 c6 補括號指令;只印、失敗只在 stderr 講一句,決策已寫入、回傳碼不變(同 cascade 的 fail-open);supersede 的列出排在 cascade 之後,stdout 第一行照舊 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:翻案或補上決策之後,別篇寫「待裁定」的句子沒人提醒] [不選:要求被連的那篇已收尾才列(加決策不改狀態,會永遠列不到)] [test:t_settle_backrefs_listed_after_close_and_decisions]
   WHY:驗收紀錄的開頭欄位 system_refs 進 LIST_KEYS(append/remove 可用、lint 認得);new verification --systems 照舊只對功能加 verified_by、不自動寫 system_refs;sync-verified-by 改用 doctor 3/4 同一支判「驗了誰」(有 system_refs 就只看它,寫壞的項不補、在「無漏寫」之前先印一行指到 3/4) [出處:2026-10-03 [[Projects/驗收紀錄寫明驗了哪些功能_計劃]]] [因:正文的指路連結被當成驗過、推送被擋(rtb 清理循環第 1 輪第 2 項);自動寫會讓作者事後在正文補的功能不再被檢查(設計審 r3)] [test:t_sync_verified_by_system_refs] [test:t_new_verification_no_auto_system_refs] [test:t_system_refs_registered_field]
@@ -79,10 +80,16 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
 about_code:
   - scripts/lumos
 ---
 # lumos-cli-write
+
+## 2026-10-05 寫入鎖的安全邊界
+
+[[Issues/過期鎖接手可能雙持]] 的跨程序交錯證明「先看 mtime 再按路徑 rename」可把別人剛建的新鎖搬走。[[Projects/過期鎖安全接手_計劃]] 決定停止自動接手，理由是派工鏡頭共用此原語，鎖內的啟動者 PID 不能證明背景工作已停；只加 PID 檢查會把同一類雙持帶回來。正常獨佔建立時要處理短寫與建檔錯誤，否則停止自動接手反而會使半成品鎖永久阻斷。防回歸測試為 `t_excl_lock_stale_takeover_is_single_owner`、`t_excl_lock_creation_failure_cleans_own_file`、`t_vault_stale_lock_fails_with_path`。這是同版程序的保證；混用舊版前須先停舊進程，不能宣稱跨版本安全。
 
 `scripts/lumos` 的**專案層圖譜寫入原語**(7 個子指令)—— 對知識圖譜 frontmatter 的唯一安全寫入路徑。直接手改 frontmatter / obsidian `property:set` 會繞過寫後自驗與格式鐵則(實測 `property:set` 塞多 wikilink 會長出亂碼 ghost 節點)。
 
