@@ -96,6 +96,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
+  - "[[Verification/2026-10-05_事件帳Python段實作]]"
 about_code:
   - get.sh
   - scripts/lumos
@@ -150,3 +151,10 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
 - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
 - 分發機制脈絡:user-memory `lumos-update-distribution`。
+
+## Claude 事件帳外掛的安裝與移除(2026-10-05,[[Projects/Lumos事件帳_計劃]])
+
+- **裝**:`_sync_global_hooks(src, "claude")` 在合併器之前呼叫一次 `_sync_claude_plugin()`(只留這一個呼叫點;它不讀 settings.json,合併器失敗提前返回也不受影響)。bootstrap 起安裝子行程時把 `LUMOS_HOME` 傳進去,子行程的 `_lumos_src()` 才會指到這次的來源(代碼審 r1 合約席抓到原本沒傳)。來源先解成絕對真實路徑再交給 claude。所以 `lumos install`、`update`、`bootstrap`、`init`、vendor 都會確保外掛在。市集來源一律 `_lumos_src()`,不用執行中這支 lumos 的位置:資料夾型市集是直接讀來源資料夾,登記成會被刪的 worktree 外掛就會失效。同名市集指向別的本機路徑 → 先移除再加(兩邊正規化後比);同名但不是本機資料夾(使用者自己加的)→ 不動、回 failed。add 或 install 回錯時再查一次清單,已經是想要的狀態就算成功(另一支 install 同時跑先做完了);移除舊市集後加新的失敗,訊息教重跑 `lumos install --force`。只算使用者範圍裝的那份(專案範圍那份只在那個專案生效)。claude 的列表輸出不是「物件組成的清單」一律當失敗、不丟例外。
+- **狀態**:外掛步驟自己回 ok / absent(找不到 claude 或測試開關)/ no-source(來源 repo 沒有市集檔)/ failed,自己印一行(`_plugin_sync_msg`),★不併進 `_sync_global_hooks` 的回傳字串★——`cmd_install` 只認 merge-failed、`_sync_global_claude` 用等於 ok 判斷,混進新值會誤判。所以外掛失敗不改 `lumos install` 的回傳碼。那一行會出現在呼叫端印的「全域 hooks 已同步」之前,刻意不為順序改四個呼叫端。
+- **移除**:`cmd_uninstall` 開頭的探針拒絕之後呼叫 `_teardown_claude_plugin()`;`lumos teardown` 第三步就是 `cmd_uninstall`,兩個指令都會移除、都受探針保護。外掛有列出就移除;市集存在且來源是我們的就以 `--scope user` 移除(外掛沒列出也要);兩者都沒有或找不到 claude 時安靜略過;成功印出移掉了什麼;失敗印兩個手動指令。teardown 的確認清單有列出外掛與市集。只移除使用者範圍那份(`--scope user`;專案範圍那份不是我們裝的,不帶範圍 uninstall 還會失敗);外掛那步失敗也照樣處理市集;`cmd_uninstall(source)` 收 `teardown --source` 傳下來的來源(代碼審 r2)。安裝端 add 或 install 回錯時最多再等三次、每次一秒再查(另一支 install 可能還在寫);來源不是預設位置或有設 `LUMOS_HOME` 時會印出登記的來源路徑;救援訊息依哪一步失敗照實說。★不要掛在 `_teardown_global_claude`★(那是只有測試呼叫的相容包裝)也不要掛在 `_teardown_global_hooks`(設定檔壞掉時會提前返回)——設計審第二輪兩席獨立抓到。
+- **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`。事件帳本身見 [[Systems/lumos事件帳]]。

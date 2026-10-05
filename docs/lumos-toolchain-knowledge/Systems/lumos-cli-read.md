@@ -104,6 +104,7 @@ verified_by:
   - "[[Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活]]"
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-07_handoff接手視圖]]"
+  - "[[Verification/2026-10-05_事件帳Python段實作]]"
 about_code:
   - scripts/lumos
 ---
@@ -198,3 +199,11 @@ about_code:
 ### 說明段:不再手抄清單
 
 手抄那份停在 10 個、實際 66 個,而且 argparse 會再印一遍(畫面上兩份)。**改法不是把清單補齊**——補齊的隔天又會過期。清單的單一來源交給 argparse 自己印,說明段只留定位與入口三步,**刻意不寫「共幾個」**(寫了就是另一個會過期的數字)。守衛盯的是「手抄清單不准長回來」。
+
+## lumos events(2026-10-05,[[Projects/Lumos事件帳_計劃]])
+
+- 唯讀讀 Claude 的 lumos-ledger 外掛寫的事件帳:沒給 `--session` 列最近 10 個會談(只依會談資料夾修改時間排序、只讀前 10 個的塊檔),給了就逐筆印;`--json` 給機器讀。塊檔依檔名排序、塊內照行序,壞行與版本不是 1 的行各自計數後略過。
+- 找事件帳一律先解主 checkout(`_events_root`:git-common-dir 是 `.git` 資料夾就取上一層,失敗退回原根),所以在 worktree 裡跑讀的是主 checkout 那份。
+- 回傳碼:沒有事件帳回 0(三段式印可能原因);`--session` 給不存在的編號回 2。`--session` 只收單層名稱(英數開頭,後面英數與 `._-`),空字串、`..`、斜線、絕對路徑、符號連結一律回 2 不讀;`--repo` 不是目錄回 2(沿用 `_anchor_repo_root`,不誤報成沒有事件帳)。只認 `\n` 斷行(JSON 字串裡的 U+2028 不算);版本只認整數 1;tool 缺 `ok` 印 ?、不算失敗;印到終端前消毒(代碼審 r2 改用既有的 `_esc_clean` 加 `_PATH_SPECIAL_CATS`,連雙向覆寫、零寬、孤立代理字元一起處理);`--json` 一律 ASCII 跳脫;解析失敗或巢狀過深都算壞行;塊檔是連結不讀;擋下訊息印到標準錯誤。規矩與綁定測試在 [[Systems/lumos事件帳]]。
+- 讀進來時就把關(代碼審 r3):巢狀太深、單行太長算壞行,塊檔太大略過並計數;事件帳上層是連結時讀也不讀、回 2;`--repo` 給子目錄時當成那個 repo。上限數字與理由在 [[Systems/lumos事件帳]]。
+- `--prune --days N` 例外會刪檔(N 是 1 到 36500 的半形整數,否則回 2 不刪;下限 1 就是最近 24 小時不刪的保護;另驗路徑與 worktree 登記),它的規矩寫在 [[Systems/lumos事件帳]]。測試:`t_events_reader_merges_chunks`、`t_events_reader_no_ledger`、`t_events_reader_from_worktree`、`t_events_prune_only_old_sessions`、`t_events_prune_edge_cases`、`t_events_prune_hardening`、`t_events_r3_hostile_output`、`t_events_r3_path_trust`。

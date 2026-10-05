@@ -34091,8 +34091,9 @@ def t_enforcement_summary_excludes_unknown():
     # 一律 unknown(不適用,不是壞;入口 hook 才不會對沒裝 Codex 的機器每 session 唸)
     codex_layers = ["agents-md", "codex-agent", "codex-cli", "codex-sessionstart-ci-status-hook", "codex-subagentstart-dispatch-lens-hook", "codex-session-entry-hook",
                     "codex-stop-graph-sync-hook", "codex-pretooluse-impact-hook", "codex-skills"]
-    check("enforcement: unknown 恰=vendored+遠端+Codex 不適用八列", unknown_layers == sorted(["required-status-check", "vendored-cli"] + codex_layers), str(unknown_layers))
-    check("enforcement: n_unknown 恰 11", n_unknown == 11, f"{n_unknown}")
+    # 2026-10-05 Lumos事件帳:fixture 沒有事件帳資料夾 → claude-event-ledger 也是 unknown(沒裝外掛不算壞)
+    check("enforcement: unknown 恰=vendored+遠端+Codex 不適用八列+事件帳", unknown_layers == sorted(["required-status-check", "vendored-cli", "claude-event-ledger"] + codex_layers), str(unknown_layers))
+    check("enforcement: n_unknown 恰 12", n_unknown == 12, f"{n_unknown}")
     check("enforcement: 四 hook+pre-commit+pre-push+python+ci 共 8 active", n_active == 8, f"active={n_active} rows={[(r['layer'],r['status']) for r in rows]}")
     check("enforcement: total = 非unknown列數", n_total == len(rows) - n_unknown, f"total={n_total} rows={len(rows)}")
 
@@ -34104,7 +34105,7 @@ def t_enforcement_never_raises_on_missing():
     rows = m.enforcement_status(root=bad, home=bad)
     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
-    check("enforcement: 缺目錄不炸、回恰 23 列(d6 加 codex-agent;09-14 加記憶過期清掃)", isinstance(rows, list) and len(rows) == 23, f"{len(rows)}: {[r['layer'] for r in rows]}")
+    check("enforcement: 缺目錄不炸、回恰 24 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger)", isinstance(rows, list) and len(rows) == 24, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
 def _isolate_environment():
@@ -34155,6 +34156,10 @@ def _isolate_environment():
     os.environ["USERPROFILE"] = str(home)
     # CODEX_HOME 若在開發機上設過,會繞過假家目錄直接打到真的 ~/.codex
     os.environ.pop("CODEX_HOME", None)
+    # 2026-10-05 Lumos事件帳 S10:同一個理由——CLAUDE_CONFIG_DIR 會繞過假家目錄打到真的 Claude 設定;
+    # 再加一道開關,讓 install / uninstall 的外掛步驟在測試裡整段略過(要測外掛的那幾支自己取消、放假的 claude)
+    os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    os.environ["LUMOS_SKIP_CLAUDE_PLUGIN"] = "1"
     # ★LUMOS_HOME 不是使用者家目錄,是「lumos 來源 repo 在哪」★——一開始我把它也設成假家目錄,
     #   結果有支測試找不到來源就跳過了(跑得到變跑不到=覆蓋悄悄少掉,是比 skip 數字才發現)。
     #   它的預設值是 ~/harness/lumos-toolchain,家目錄一換成假的那條路就斷了。
@@ -70598,6 +70603,939 @@ def t_refcheck_physical_fixture_isolated():
             check("來源 fixture:使用者hook與簽章均未執行", not marker.exists())
             check("來源 fixture:父程序的設定不改寫", os.environ["GIT_CONFIG_GLOBAL"] == str(config))
         check("來源 fixture:只提交指定來源", subprocess.check_output(["git", "-C", str(root), "ls-tree", "--name-only", "-r", head], text=True, timeout=8).strip() == "src/sample.py")
+
+
+# ── Lumos 事件帳(Projects/Lumos事件帳_計劃):讀取端 ─────────────────────────
+
+def _events_write_chunk(root, session, name, lines):
+    d = Path(root) / "governance" / "runtime" / "events" / session
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text("".join(l + "\n" for l in lines), encoding="utf-8")
+    return d
+
+
+def _events_ev(ev, ts, agent=None, **kw):
+    import json as _j
+    d = {"v": 1, "ts": ts, "session": "S1", "agent": agent, "worktree": None, "ev": ev}
+    d.update(kw)
+    return _j.dumps(d, ensure_ascii=False)
+
+
+def t_events_reader_merges_chunks():
+    """S4:依檔名排序合併,壞行與版本不是 1 的行略過並分別計數;子代理只有 turn_end 不算錯。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    root = _mk_repo_with_graph()
+    # 故意先建檔名較大的那塊:排序要看檔名,不是建立順序
+    _events_write_chunk(root, "S1", "1791200000002-bbbbbbbb.jsonl", [
+        _events_ev("tool", "2026-10-05T10:00:02+08:00", agent="A1", tool="Bash", ok=True),
+        _events_ev("turn_end", "2026-10-05T10:00:03+08:00", agent="A1", turn="t2", reason="answer"),
+        _j.dumps({"v": 2, "ev": "tool"}),
+    ])
+    _events_write_chunk(root, "S1", "1791200000001-aaaaaaaa.jsonl", [
+        _events_ev("turn_start", "2026-10-05T10:00:00+08:00", turn="t1", origin="unclassified"),
+        "{這行壞掉",
+        _events_ev("tool", "2026-10-05T10:00:01+08:00", tool="Edit", ok=False),
+    ])
+    r = m._events_read(root, "S1")
+    evs = [e["ev"] for e in r["events"]]
+    check("S4 依檔名排序合併(先 aaaa 塊再 bbbb 塊)", evs == ["turn_start", "tool", "tool", "turn_end"], str(evs))
+    check("S4 壞行略過並計數", r["bad"] == 1, str(r))
+    check("S4 版本不是 1 的行略過並分開計數", r["unknown_version"] == 1, str(r))
+    out = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", "S1", "--json"],
+                         cwd=root, capture_output=True, check=False, text=True)
+    check("S4 lumos events --session --json 回 0", out.returncode == 0, out.stderr[-400:])
+    j = _j.loads(out.stdout) if out.returncode == 0 else {}
+    check("S4 JSON 帶同樣的事件數與兩個計數",
+          len(j.get("events", [])) == 4 and j.get("bad") == 1 and j.get("unknown_version") == 1, out.stdout[-400:])
+    txt = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", "S1"],
+                         cwd=root, capture_output=True, check=False, text=True)
+    check("S4 文字輸出印出略過的兩種計數", txt.returncode == 0 and "壞行 1" in txt.stdout and "版本不認得 1" in txt.stdout,
+          txt.stdout[-400:])
+    check("S4 子代理只有 turn_end 照常列出(帶它的子代理編號)", "[A1] turn_end" in txt.stdout, txt.stdout[-400:])
+
+
+def t_events_reader_no_ledger():
+    """S5:沒有事件帳回 0 並三段式印原因;--session 給不存在的編號回 2。"""
+    root = _mk_repo_with_graph()
+    r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=root, capture_output=True, check=False, text=True)
+    check("S5 沒有事件帳回 0", r.returncode == 0, r.stderr[-300:])
+    check("S5 印「沒有事件帳」", "沒有事件帳" in r.stdout, r.stdout)
+    check("S5 列出可能原因(mod 沒裝、不是 Claude 會談、沒有圖譜)",
+          all(k in r.stdout for k in ("lumos-ledger", "Claude", "圖譜")), r.stdout)
+    r2 = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", "不存在的編號"],
+                        cwd=root, capture_output=True, check=False, text=True)
+    check("S5 --session 給不存在的編號回 2", r2.returncode == 2, f"rc={r2.returncode} {r2.stdout}{r2.stderr}")
+
+
+def t_events_reader_from_worktree():
+    """S12:在 worktree 裡跑 lumos events,讀的是主 checkout 的事件帳。"""
+    import json as _j
+    root = _mk_repo_with_graph()
+    _events_write_chunk(root, "S9", "1791200000001-aaaaaaaa.jsonl", [
+        _events_ev("turn_end", "2026-10-05T10:00:00+08:00", turn="t1", reason="answer", session="S9"),
+    ])
+    wt = Path(tempfile.mkdtemp(prefix="gctl-events-wt-")) / "wt"
+    a = subprocess.run(["git", "-C", str(root), "worktree", "add", "-q", str(wt)], capture_output=True, check=False, text=True)
+    check("★前置★ worktree 建得起來", a.returncode == 0 and wt.is_dir(), a.stderr)
+    check("★前置★ worktree 自己沒有事件帳", not (wt / "governance" / "runtime" / "events").exists())
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--json"], cwd=wt, capture_output=True, check=False, text=True)
+    check("S12 worktree 裡跑回 0", r.returncode == 0, r.stderr[-300:])
+    sess = [s.get("session") for s in (_j.loads(r.stdout).get("sessions", []) if r.returncode == 0 else [])]
+    check("S12 列得出主 checkout 的會談", "S9" in sess, r.stdout[-300:])
+
+
+
+def t_events_prune_only_old_sessions():
+    """S11:只刪早於 N 天且 24 小時內沒動過的會談資料夾;不跟符號連結;N 不合法回 2 不刪。"""
+    import os as _os
+    import time as _t
+    root = _mk_repo_with_graph()
+    old = _events_write_chunk(root, "OLD", "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+    mid = _events_write_chunk(root, "MID", "1.jsonl", [_events_ev("turn_end", "2026-10-01T00:00:00+08:00")])
+    new = _events_write_chunk(root, "NEW", "1.jsonl", [_events_ev("turn_end", "2026-10-05T00:00:00+08:00")])
+    now = _t.time()
+    for d, age_days in ((old, 60), (mid, 3)):
+        for p in [d] + list(d.iterdir()):
+            _os.utime(p, (now - age_days * 86400, now - age_days * 86400))
+    outside = Path(tempfile.mkdtemp(prefix="gctl-events-outside-"))
+    (outside / "keep.txt").write_text("x", encoding="utf-8")
+    _os.utime(outside, (now - 90 * 86400, now - 90 * 86400))
+    link = new.parent / "LINK"
+    _os.symlink(outside, link)
+    _os.utime(link, (now - 90 * 86400, now - 90 * 86400), follow_symlinks=False)
+
+    for bad in ("0", "-1", "1.5", "abc"):
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", bad],
+                           cwd=root, capture_output=True, check=False, text=True)
+        check(f"S11 --days {bad} 回 2", r.returncode == 2, f"rc={r.returncode} {r.stdout}{r.stderr}")
+    check("S11 不合法的天數什麼都沒刪", old.is_dir() and mid.is_dir() and new.is_dir())
+
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "30"],
+                       cwd=root, capture_output=True, check=False, text=True)
+    check("S11 --days 30 回 0", r.returncode == 0, r.stderr[-300:])
+    check("S11 60 天前的會談被刪", not old.exists())
+    check("S11 3 天前的會談留著(不到 30 天)", mid.is_dir())
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "1"],
+                       cwd=root, capture_output=True, check=False, text=True)
+    check("S11 --days 1:3 天前的會談被刪", not mid.exists(), r.stdout)
+    check("S11 --days 1:24 小時內動過的會談一律不刪", new.is_dir(), r.stdout)
+    check("S11 不跟符號連結:連結指到的資料夾與內容都還在", (outside / "keep.txt").exists())
+    check("S11 印刪了幾個", "刪" in r.stdout, r.stdout)
+
+
+
+def t_enforcement_ledger_row():
+    """S8:enforcement 多一列 claude-event-ledger,只看事件帳資料夾時間,三值、不呼叫任何外部指令。"""
+    import os as _os
+    import time as _t
+    m = _load_lumos_inproc()
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-ledger-home-"))
+    fakebin = Path(tempfile.mkdtemp(prefix="gctl-enf-ledger-bin-"))
+    marker = fakebin / "called"
+    (fakebin / "claude").write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n", encoding="utf-8")
+    (fakebin / "claude").chmod(0o755)
+    from unittest import mock
+    patcher = mock.patch.dict(_os.environ, {"PATH": str(fakebin) + _os.pathsep + _os.environ.get("PATH", "")})
+    patcher.start()
+
+    def row(root):
+        rs = [r for r in m.enforcement_status(root=root, home=home) if r["layer"] == "claude-event-ledger"]
+        return rs[0] if len(rs) == 1 else {"status": f"列數={len(rs)}"}
+    try:
+        root = _mk_repo_with_graph()
+        r0 = row(root)
+        check("S8 沒有事件帳資料夾 → unknown", r0["status"] == "unknown", str(r0))
+        check("S8 說明寫明只有 Claude Code 會寫", "Claude" in r0.get("detail", "") and "Codex" in r0.get("detail", ""), str(r0))
+        d = _events_write_chunk(root, "S1", "1.jsonl", [_events_ev("turn_end", "2026-09-01T00:00:00+08:00")])
+        now = _t.time()
+        for p in (d, d / "1.jsonl"):
+            _os.utime(p, (now - 10 * 86400, now - 10 * 86400))
+        r1 = row(root)
+        check("S8 資料夾在但 7 天內沒有 → stale", r1["status"] == "stale", str(r1))
+        _events_write_chunk(root, "S2", "1.jsonl", [_events_ev("turn_end", "2026-10-05T00:00:00+08:00")])
+        r2 = row(root)
+        check("S8 近 7 天有會談 → active", r2["status"] == "active", str(r2))
+        wt = Path(tempfile.mkdtemp(prefix="gctl-enf-ledger-wt-")) / "wt"
+        subprocess.run(["git", "-C", str(root), "worktree", "add", "-q", str(wt)], capture_output=True, check=False)
+        r3 = row(wt)
+        check("S8 在 worktree 裡查,讀主 checkout 的事件帳 → active", r3["status"] == "active", str(r3))
+        seen = {row(x)["status"] for x in (root, wt, _mk_repo_with_graph())}
+        check("S8 這一列不出現 inactive / degraded", not (seen & {"inactive", "degraded"}), str(seen))
+        check("S8 整個 enforcement 計算沒有呼叫 claude 指令", not marker.exists())
+    finally:
+        patcher.stop()
+
+
+
+def t_runner_isolates_claude_plugin():
+    """S10:測試執行器建拋棄式家目錄時,同時關掉外掛指令並清掉 CLAUDE_CONFIG_DIR,
+    使既有的 install / uninstall 測試不會碰到真的 claude 與使用者的設定。"""
+    import os as _os
+    check("S10 LUMOS_SKIP_CLAUDE_PLUGIN=1", _os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1",
+          str(_os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN")))
+    check("S10 CLAUDE_CONFIG_DIR 已清掉", "CLAUDE_CONFIG_DIR" not in _os.environ,
+          str(_os.environ.get("CLAUDE_CONFIG_DIR")))
+
+
+
+_FAKE_CLAUDE = r"""#!/usr/bin/env python3
+# 假的 claude:只認外掛相關子指令,狀態存在 FAKE_CLAUDE_STATE,每次呼叫記一行到 FAKE_CLAUDE_LOG。
+# 輸出格式照 2026-10-05 真 claude 2.1.289 的 `plugin marketplace list --json` / `plugin list --json` 實測。
+import json, os, sys
+st_p, log_p = os.environ["FAKE_CLAUDE_STATE"], os.environ["FAKE_CLAUDE_LOG"]
+a = sys.argv[1:]
+with open(log_p, "a") as f:
+    f.write(" ".join(a) + "\n")
+st = json.load(open(st_p)) if os.path.exists(st_p) else {"markets": [], "plugins": []}
+fail = os.environ.get("FAKE_CLAUDE_FAIL", "")
+raw = os.environ.get("FAKE_CLAUDE_RAW")          # 列表類指令改吐這串(壞 JSON 用)
+late = os.environ.get("FAKE_CLAUDE_APPLY_THEN_FAIL", "")
+delayed = os.environ.get("FAKE_CLAUDE_APPLY_DELAYED", "")
+def save():
+    json.dump(st, open(st_p, "w"))
+if a[:3] == ["plugin", "marketplace", "list"]:
+    print(raw if raw is not None else json.dumps(st["markets"])); sys.exit(0)
+if a[:2] == ["plugin", "list"]:
+    print(raw if raw is not None else json.dumps(st["plugins"])); sys.exit(0)
+sub = a[2] if a[1] == "marketplace" else a[1]
+if fail and fail == sub:
+    print("boom: " + sub, file=sys.stderr); sys.exit(1)
+if a[:3] == ["plugin", "marketplace", "add"] and delayed == "add":
+    import subprocess
+    src = a[3]; name = json.load(open(os.path.join(src, ".claude-plugin", "marketplace.json")))["name"]
+    entry = json.dumps({"name": name, "source": "directory", "path": src})
+    subprocess.Popen([sys.executable, "-c", "import json,sys,time;time.sleep(1);p=sys.argv[1];"
+                      "st=json.load(open(p)) if __import__('os').path.exists(p) else {'markets':[],'plugins':[]};"
+                      "st['markets'].append(json.loads(sys.argv[2]));json.dump(st,open(p,'w'))", st_p, entry])
+    print("locked by another process", file=sys.stderr); sys.exit(1)
+if a[:3] == ["plugin", "marketplace", "add"]:
+    src = a[3]; name = json.load(open(os.path.join(src, ".claude-plugin", "marketplace.json")))["name"]
+    st["markets"].append({"name": name, "source": "directory", "path": src}); save()
+    if late == "add":
+        print("already exists", file=sys.stderr); sys.exit(1)
+    sys.exit(0)
+if a[:3] == ["plugin", "marketplace", "remove"]:
+    st["markets"] = [m for m in st["markets"] if m["name"] != a[3]]; save(); sys.exit(0)
+if a[:2] == ["plugin", "install"]:
+    st["plugins"].append({"id": a[2], "enabled": True, "scope": "user"}); save()
+    if late == "install":
+        print("already installed", file=sys.stderr); sys.exit(1)
+    sys.exit(0)
+if a[:2] == ["plugin", "uninstall"]:
+    scope = a[a.index("--scope") + 1] if "--scope" in a else "user"
+    hit = [p for p in st["plugins"] if p["id"] == a[2] and p.get("scope", "user") == scope]
+    if not hit and any(p["id"] == a[2] for p in st["plugins"]):
+        print(f"Plugin {a[2]} is installed in project scope, not {scope}.", file=sys.stderr); sys.exit(1)
+    st["plugins"] = [p for p in st["plugins"] if not (p["id"] == a[2] and p.get("scope", "user") == scope)]; save(); sys.exit(0)
+print("unknown " + " ".join(a), file=sys.stderr); sys.exit(2)
+"""
+
+
+def _fake_claude_env(state=None, with_claude=True):
+    """回 (env 增量, state 路徑, log 路徑, 來源 repo)。來源 repo 帶市集檔;state 給定就先寫進去。"""
+    import json as _j
+    import os
+    base = Path(tempfile.mkdtemp(prefix="gctl-fake-claude-"))
+    bin_d, src = base / "bin", base / "src"
+    bin_d.mkdir(); (src / ".claude-plugin").mkdir(parents=True)
+    (src / ".claude-plugin" / "marketplace.json").write_text(
+        _j.dumps({"name": "lumos-toolchain", "owner": {"name": "t"},
+                  "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"}]}), encoding="utf-8")
+    if with_claude:
+        (bin_d / "claude").write_text(_FAKE_CLAUDE, encoding="utf-8"); (bin_d / "claude").chmod(0o755)
+    st, log = base / "state.json", base / "calls.log"
+    log.write_text("", encoding="utf-8")
+    if state is not None:
+        st.write_text(_j.dumps(state), encoding="utf-8")
+    env = {"PATH": str(bin_d) + os.pathsep + os.environ.get("PATH", ""), "LUMOS_HOME": str(src),
+           "FAKE_CLAUDE_STATE": str(st), "FAKE_CLAUDE_LOG": str(log)}
+    return env, st, log, src
+
+
+def _with_env(env, fn, drop=("LUMOS_SKIP_CLAUDE_PLUGIN",)):
+    """跟本檔其他測試同一種換環境變數寫法(unittest.mock.patch.dict,離開時整份還原)。"""
+    import os
+    from unittest import mock
+    with mock.patch.dict(os.environ, env):
+        for k in drop:
+            os.environ.pop(k, None)
+        return fn()
+
+
+def t_install_registers_ledger_plugin():
+    """S6:以 _lumos_src() 為市集來源;不存在就加、本機路徑不同先移除再加、已列出不再裝;
+    非本機來源不動回 failed;失敗不改 install 回傳碼;沒 claude 回 absent、來源沒市集檔回 no-source。"""
+    import json as _j
+    import os
+    m = _load_lumos_inproc()
+    calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+    # ① 什麼都沒有 → 加市集、裝外掛
+    env, st, log, src = _fake_claude_env()
+    r = _with_env(env, m._sync_claude_plugin)
+    c = calls(log)
+    check("S6① 回 ok", r == "ok", r)
+    check("S6① 以 _lumos_src() 為來源加市集(--scope user)",
+          any(l.startswith("plugin marketplace add " + str(src.resolve())) and "--scope user" in l for l in c), str(c))
+    check("S6① 安裝外掛(--scope user)", "plugin install lumos-ledger@lumos-toolchain --scope user" in c, str(c))
+    # ② 已經一樣 → 只查詢、不加不裝
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src) + "/"}],
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
+    r = _with_env(env, m._sync_claude_plugin)
+    c = calls(log)
+    check("S6② 已裝好 → ok 且不呼叫 add / install(路徑多一個結尾斜線也算一樣)",
+          r == "ok" and not any(" add " in f" {l} " or l.startswith("plugin install") for l in c), str(c))
+    # ③ 同名市集指向別的本機路徑 → 先移除再加
+    env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "directory",
+                                                              "path": "/tmp/old-worktree"}], "plugins": []})
+    r = _with_env(env, m._sync_claude_plugin)
+    c = calls(log)
+    ia = next((i for i, l in enumerate(c) if l.startswith("plugin marketplace remove lumos-toolchain")), -1)
+    ib = next((i for i, l in enumerate(c) if l.startswith("plugin marketplace add")), -1)
+    check("S6③ 來源不同 → 先 remove(--scope user)再 add", 0 <= ia < ib and "--scope user" in c[ia], str(c))
+    # ④ 同名市集不是本機路徑 → 不動,回 failed
+    env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "github",
+                                                              "repo": "someone/lumos"}], "plugins": []})
+    r = _with_env(env, m._sync_claude_plugin)
+    c = calls(log)
+    check("S6④ 非本機來源 → 不 remove 不 add、回 failed",
+          r == "failed" and not any("remove" in l or " add " in f" {l} " for l in c), f"{r} {c}")
+    # ⑤ 沒有 claude → absent;來源沒市集檔 → no-source
+    env, st, log, src = _fake_claude_env(with_claude=False)
+    env["PATH"] = str(Path(env["PATH"].split(os.pathsep)[0]))
+    check("S6⑤ 找不到 claude → absent", _with_env(env, m._sync_claude_plugin) == "absent")
+    env, st, log, src = _fake_claude_env()
+    (src / ".claude-plugin" / "marketplace.json").unlink()
+    check("S6⑤ 來源沒有市集檔 → no-source", _with_env(env, m._sync_claude_plugin) == "no-source")
+    # ⑥ 整條 install:安裝外掛失敗 → 回傳碼不變、stderr 一行、真的有試過安裝
+    env, st, log, src = _fake_claude_env()
+    full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env); full["FAKE_CLAUDE_FAIL"] = "install"
+    ok_env = dict(full); ok_env.pop("FAKE_CLAUDE_FAIL")
+    base_rc = subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], env=dict(os.environ), capture_output=True, check=False, text=True).returncode
+    r = subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], env=full, capture_output=True, check=False, text=True)
+    c = calls(log)
+    check("S6⑥ install 經過 _sync_global_hooks 走到外掛段(有呼叫 plugin install)",
+          any(l.startswith("plugin install") for l in c), str(c))
+    check("S6⑥ 外掛失敗不改 install 回傳碼", r.returncode == base_rc, f"rc={r.returncode} base={base_rc} {r.stderr[-300:]}")
+    check("S6⑥ 失敗印到標準錯誤", "lumos-ledger" in r.stderr, r.stderr[-300:])
+    # ⑦ 開關打開 → 整段略過、一個 claude 都不叫
+    env, st, log, src = _fake_claude_env()
+    _with_env(dict(env, LUMOS_SKIP_CLAUDE_PLUGIN="1"), m._sync_claude_plugin, drop=())
+    check("S6⑦ LUMOS_SKIP_CLAUDE_PLUGIN=1 → 不呼叫 claude", calls(log) == [], str(calls(log)))
+
+
+def t_teardown_removes_ledger_plugin():
+    """S7:實際跑 `lumos uninstall`(子行程):外掛有列出就移除、市集是我們的就 --scope user 移除(外掛沒列也要);
+    兩者都沒有不印失敗;失敗附兩個手動指令;LUMOS_PROBE 時整個被擋、不叫 claude。"""
+    import os
+    def run(env, extra=None):
+        full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env); full.update(extra or {})
+        return subprocess.run([sys.executable, GRAPHCTL, "uninstall"], env=full, capture_output=True, check=False, text=True)
+    calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+    def ours(src, plugin=True):
+        return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src)}],
+                "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}] if plugin else []}
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+    r = run(env); c = calls(log)
+    check("S7① 有外掛 → plugin uninstall(只動使用者範圍)", "plugin uninstall lumos-ledger@lumos-toolchain --scope user" in c, str(c))
+    check("S7① 市集是我們的 → marketplace remove --scope user",
+          "plugin marketplace remove lumos-toolchain --scope user" in c, str(c))
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps(ours(src, plugin=False)), encoding="utf-8")
+    r = run(env); c = calls(log)
+    check("S7② 外掛已被手動移除、市集還在 → 仍移除市集",
+          "plugin marketplace remove lumos-toolchain --scope user" in c and not any(l.startswith("plugin uninstall") for l in c), str(c))
+    env, st, log, src = _fake_claude_env()
+    r = run(env)
+    check("S7③ 兩者都沒有 → 不印失敗", "失敗" not in r.stdout + r.stderr, r.stdout + r.stderr)
+    env, st, log, src = _fake_claude_env(with_claude=False)
+    env["PATH"] = str(Path(env["PATH"].split(os.pathsep)[0]))
+    r = run(env)
+    check("S7③ 找不到 claude → 不印失敗", "失敗" not in r.stdout + r.stderr, r.stdout + r.stderr)
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+    r = run(env, {"FAKE_CLAUDE_FAIL": "uninstall"})
+    check("S7④ 失敗時只附還沒做成那步的手動指令(外掛那步失敗、市集已移除)",
+          "claude plugin uninstall lumos-ledger@lumos-toolchain" in r.stderr
+          and "claude plugin marketplace remove" not in r.stderr, r.stderr[-400:])
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+    r = run(env, {"FAKE_CLAUDE_RAW": "null"})
+    check("S7④ 兩步都失敗時附兩個手動指令",
+          "claude plugin uninstall lumos-ledger@lumos-toolchain" in r.stderr
+          and "claude plugin marketplace remove lumos-toolchain --scope user" in r.stderr, r.stderr[-400:])
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+    r = run(env, {"LUMOS_PROBE": "1"})
+    check("S7⑤ LUMOS_PROBE → 整個被擋(rc 2)且不呼叫 claude", r.returncode == 2 and calls(log) == [], f"rc={r.returncode} {calls(log)}")
+
+
+
+def t_ledger_plugin_bad_json_and_races():
+    """代碼審 r1(正確性 F1、邊界 F1、併發 F2 F3、合約 F5、資安 F4):claude 吐壞 JSON 不得讓 install / uninstall 崩;
+    另一支先做完導致 add/install 回錯時以最終狀態為準;移除舊市集後加新的失敗要教怎麼救;
+    專案範圍裝過不算使用者層裝好;LUMOS_HOME 是相對路徑時傳給 claude 的是絕對路徑。"""
+    import json as _j
+    import os
+    m = _load_lumos_inproc()
+    calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+    for raw in ("null", "{}", "42", "", "[1, 2]"):
+        env, st, log, src = _fake_claude_env()
+        env["FAKE_CLAUDE_RAW"] = raw
+        try:
+            r = _with_env(env, m._sync_claude_plugin)
+        except Exception as e:  # noqa: BLE001 —— 測的就是「不得丟例外」
+            r = f"EXC {type(e).__name__}"
+        check(f"壞 JSON {raw!r}:安裝步驟回 failed、不丟例外", r == "failed", r)
+        try:
+            r2 = _with_env(env, m._teardown_claude_plugin)
+        except Exception as e:  # noqa: BLE001
+            r2 = f"EXC {type(e).__name__}"
+        check(f"壞 JSON {raw!r}:移除步驟回 failed、不丟例外", r2 == "failed", r2)
+    # 整條 uninstall:claude 吐 null 也要把其餘東西拆完
+    env, st, log, src = _fake_claude_env()
+    home = Path(tempfile.mkdtemp(prefix="gctl-ledger-home-"))
+    (home / ".local" / "bin").mkdir(parents=True)
+    os.symlink(GRAPHCTL, home / ".local" / "bin" / "lumos")
+    full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env)
+    full.update(FAKE_CLAUDE_RAW="null", HOME=str(home))
+    r = subprocess.run([sys.executable, GRAPHCTL, "uninstall"], env=full, capture_output=True, text=True, check=False)
+    check("uninstall 遇壞 JSON 不吐 Traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+    check("uninstall 遇壞 JSON 仍拆掉全域指令連結", not (home / ".local" / "bin" / "lumos").exists(), r.stdout[-300:])
+    # 另一支 install 先加了市集:add 回錯但市集已在 → 以最終狀態為準
+    env, st, log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_APPLY_THEN_FAIL"] = "add"
+    check("同時安裝:add 回錯但市集已在 → ok", _with_env(env, m._sync_claude_plugin) == "ok", calls(log))
+    env, st, log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_APPLY_THEN_FAIL"] = "install"
+    check("同時安裝:install 回錯但外掛已在 → ok", _with_env(env, m._sync_claude_plugin) == "ok", calls(log))
+    # 先移除舊市集、再加新的失敗 → 教怎麼救
+    import contextlib
+    import io
+    env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "directory",
+                                                              "path": "/tmp/old-wt"}], "plugins": []})
+    env["FAKE_CLAUDE_FAIL"] = "add"
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        r = _with_env(env, m._sync_claude_plugin)
+    check("舊市集已移除、新的沒加上 → 訊息教重跑 lumos install --force",
+          r == "failed" and "lumos install --force" in err.getvalue(), err.getvalue())
+    # 專案範圍裝過 → 仍要裝使用者層
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src)}],
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "project"}]}),
+                  encoding="utf-8")
+    _with_env(env, m._sync_claude_plugin)
+    check("只有專案範圍那份 → 仍裝使用者層", "plugin install lumos-ledger@lumos-toolchain --scope user" in calls(log), calls(log))
+    # LUMOS_HOME 是相對路徑 → 傳給 claude 的是絕對路徑
+    env, st, log, src = _fake_claude_env()
+    rel = os.path.relpath(src, Path.cwd())
+    env["LUMOS_HOME"] = rel
+    _with_env(env, m._sync_claude_plugin)
+    adds = [l for l in calls(log) if l.startswith("plugin marketplace add ")]
+    check("相對路徑的 LUMOS_HOME → add 收到的是絕對路徑",
+          len(adds) == 1 and adds[0].split()[3].startswith("/"), str(adds))
+
+
+def t_ledger_plugin_messages_and_bootstrap():
+    """代碼審 r1(合約 F1 F2、架構 F4):bootstrap --lumos-home 要傳進安裝子行程;teardown 確認清單列外掛;
+    開關略過時移除端也印一行;uninstall 成功要說移掉了什麼。"""
+    import os
+    import shutil
+    m = _load_lumos_inproc()
+    # bootstrap:來源是自訂路徑的完整 clone(含 scripts/lumos 與市集檔)
+    env, st, log, src = _fake_claude_env()
+    (src / "scripts").mkdir()
+    shutil.copy2(GRAPHCTL, src / "scripts" / "lumos")
+    home = Path(tempfile.mkdtemp(prefix="gctl-bs-home-"))
+    cwd = Path(tempfile.mkdtemp(prefix="gctl-bs-cwd-"))
+    full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env)
+    full.pop("LUMOS_HOME", None); full["HOME"] = str(home)
+    r = subprocess.run([sys.executable, GRAPHCTL, "bootstrap", "--lumos-home", str(src)], cwd=cwd, env=full,
+                       capture_output=True, text=True, check=False)
+    adds = [l for l in (log.read_text(encoding="utf-8").splitlines() if log.exists() else []) if "marketplace add" in l]
+    check("bootstrap --lumos-home:外掛以那個來源加市集", any(str(src) in l for l in adds), f"{adds} {r.stdout[-300:]}")
+    # teardown 確認清單
+    src_txt = Path(GRAPHCTL).read_text(encoding="utf-8")
+    i = src_txt.find("def cmd_teardown")
+    check("teardown 確認清單提到 Claude 外掛 lumos-ledger", "lumos-ledger" in src_txt[i:i + 4000], "")
+    # 開關打開時移除端也印一行;uninstall 成功說移掉了什麼
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        _with_env({"LUMOS_SKIP_CLAUDE_PLUGIN": "1"}, m._teardown_claude_plugin, drop=())
+    check("開關打開:移除端印一行說略過", "略過" in out.getvalue(), out.getvalue())
+    env, st, log, src = _fake_claude_env()
+    st.write_text(__import__("json").dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src)}],
+                                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
+                  encoding="utf-8")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        _with_env(env, m._teardown_claude_plugin)
+    check("移除成功:印出移掉了外掛與市集", "lumos-ledger" in out.getvalue() and "移除" in out.getvalue(), out.getvalue())
+
+
+def t_events_session_name_and_repo_validation():
+    """代碼審 r1(邊界 F2、資安 F2、合約 F4、架構 F1):--session 只收單層名稱;空字串、跳出、絕對路徑、
+    符號連結一律回 2 不讀;--repo 不是目錄回 2。"""
+    import os
+    root = _mk_repo_with_graph()
+    outside = Path(tempfile.mkdtemp(prefix="gctl-events-outside-"))
+    (outside / "a.jsonl").write_text(_events_ev("turn_end", "2026-10-05T00:00:00+08:00") + "\n", encoding="utf-8")
+    base = root / "governance" / "runtime" / "events"
+    base.mkdir(parents=True)
+    os.symlink(outside, base / "LNK")
+    for bad in ("", "../../../x", str(outside), "a/b", "..", ".", "LNK"):
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", bad, "--json"], cwd=root,
+                           capture_output=True, text=True, check=False)
+        check(f"--session {bad!r} 回 2", r.returncode == 2, f"rc={r.returncode} {r.stdout[-200:]}")
+        check(f"--session {bad!r} 沒讀到外面的事件", "turn_end" not in r.stdout, r.stdout[-200:])
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--repo", str(root / "沒有這個資料夾")],
+                       capture_output=True, text=True, check=False)
+    check("--repo 不是目錄回 2(不誤報成沒有事件帳)", r.returncode == 2 and "沒有事件帳" not in r.stdout,
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+
+def t_events_reader_edge_lines():
+    """代碼審 r1(正確性 F2 F3、邊界 F3、資安 F1):JSON 字串裡的 U+2028 不算斷行;v 只認整數 1;
+    tool 缺 ok 不當失敗(逐筆與列表一致);印出前剝掉控制字元。"""
+    import json as _j
+    root = _mk_repo_with_graph()
+    _events_write_chunk(root, "S1", "1.jsonl", [
+        _events_ev("tool", "2026-10-05T10:00:00+08:00", tool="Bash", ok=False, cmd="echo a\u2028b\u0085c"),
+        _j.dumps({"v": True, "ev": "tool", "tool": "B"}),
+        _j.dumps({"v": 1.0, "ev": "tool", "tool": "C"}),
+        _j.dumps({"v": "1", "ev": "tool", "tool": "D"}),
+        _events_ev("tool", "2026-10-05T10:00:01+08:00", tool="NoOk"),
+        _events_ev("tool", "2026-10-05T10:00:02+08:00", tool="\x1b]0;pwned\x07Evil", ok=True),
+    ])
+    m = _load_lumos_inproc()
+    r = m._events_read(root, "S1")
+    check("U+2028/U+0085 在 JSON 字串裡不算斷行(那筆失敗事件留著、不算壞行)",
+          r["bad"] == 0 and any(e.get("tool") == "Bash" for e in r["events"]), str(r)[:300])
+    check("v 是 true / 1.0 / \"1\" 都算版本不認得", r["unknown_version"] == 3, str(r["unknown_version"]))
+    txt = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", "S1"], cwd=root,
+                         capture_output=True, text=True, check=False).stdout
+    line = next((l for l in txt.splitlines() if "NoOk" in l), "")
+    check("tool 缺 ok:逐筆不標失敗", "✗" not in line, line)
+    lst = _j.loads(subprocess.run([sys.executable, GRAPHCTL, "events", "--json"], cwd=root,
+                                  capture_output=True, text=True, check=False).stdout)
+    check("列表的失敗數只算 ok 是 false 的(1 筆)", lst["sessions"][0]["failed"] == 1, str(lst))
+    check("文字輸出剝掉控制字元(沒有 ESC / BEL)", "\x1b" not in txt and "\x07" not in txt, repr(txt[-200:]))
+
+
+def t_events_prune_edge_cases():
+    """代碼審 r1(正確性 F4、合約 F7、併發 F1、架構 F3、資安 F3):天數超大或超過上限回 2 不噴 Traceback;
+    刪某個會談失敗時跳過它繼續處理其他的;事件帳路徑的上層是符號連結時整個不刪。"""
+    import os
+    import time as _t
+    root = _mk_repo_with_graph()
+    for bad in ("9" * 400, "36501"):
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", bad], cwd=root,
+                           capture_output=True, text=True, check=False)
+        check(f"--days {bad[:8]}…(長 {len(bad)})回 2 不噴 Traceback", r.returncode == 2 and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stderr[-200:]}")
+    now = _t.time()
+    a = _events_write_chunk(root, "A", "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+    b = _events_write_chunk(root, "B", "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+    locked = a / "locked"
+    locked.mkdir()
+    (locked / "x").write_text("x", encoding="utf-8")
+    for p in (a, b, a / "1.jsonl", b / "1.jsonl", locked):
+        os.utime(p, (now - 90 * 86400, now - 90 * 86400))
+    locked.chmod(0o500)
+    try:
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "30"], cwd=root,
+                           capture_output=True, text=True, check=False)
+    finally:
+        locked.chmod(0o700)
+    check("刪 A 失敗不中斷:B 照樣被刪", not b.exists(), r.stdout + r.stderr[-200:])
+    check("刪 A 失敗不噴 Traceback、有說哪個沒刪掉", "Traceback" not in r.stderr and "A" in r.stdout + r.stderr,
+          r.stdout + r.stderr[-200:])
+    # 上層是符號連結:governance/runtime 指到 repo 外
+    root2 = _mk_repo_with_graph()
+    elsewhere = Path(tempfile.mkdtemp(prefix="gctl-events-elsewhere-"))
+    old = elsewhere / "events" / "OLD"
+    old.mkdir(parents=True)
+    (old / "1.jsonl").write_text("{}\n", encoding="utf-8")
+    os.utime(old, (now - 90 * 86400, now - 90 * 86400))
+    os.utime(old / "1.jsonl", (now - 90 * 86400, now - 90 * 86400))
+    (root2 / "governance").mkdir(exist_ok=True)
+    os.symlink(elsewhere, root2 / "governance" / "runtime")
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "1"], cwd=root2,
+                       capture_output=True, text=True, check=False)
+    check("事件帳路徑上層是符號連結 → 不刪 repo 外的東西", old.exists(), r.stdout + r.stderr[-200:])
+
+
+
+def t_events_reader_hostile_lines():
+    """代碼審 r2(正確性 F1、邊界 F1 F2 F3 F5 F6、資安 F1 F4、架構 F1):極深巢狀、孤立代理字元、ok 不是布林、
+    雙向覆寫與零寬字元、塊檔是連結、--json 的 8 位元控制字元——讀取端一律不崩、不跟連結、印出與 JSON 都安全。"""
+    import json as _j
+    import os
+    root = _mk_repo_with_graph()
+    d = _events_write_chunk(root, "S1", "1.jsonl", [
+        _events_ev("tool", "2026-10-05T10:00:00+08:00", tool="Good", ok=True),
+        "[" * 200000 + "]" * 200000,
+        '{"v":1,"ts":"\\ud800","ev":"tool","tool":"\\ud800x","ok":true}',
+        _j.dumps({"v": 1, "ts": "t", "ev": "tool", "tool": "Lst", "ok": [1]}),
+        _j.dumps({"v": 1, "ts": "t", "ev": "tool", "tool": "\u202eevil\u200b\u2066\u2028x", "ok": True}),
+        _j.dumps({"v": 1, "ts": "t", "ev": "tool", "tool": "c1\u009b31m", "ok": True}),
+    ])
+    _events_write_chunk(root, "S2", "1.jsonl", [_events_ev("turn_end", "2026-10-05T10:00:00+08:00")])
+    outside = Path(tempfile.mkdtemp(prefix="gctl-events-out-")) / "o.jsonl"
+    outside.write_text(_j.dumps({"v": 1, "ts": "OUTSIDE", "ev": "turn_end"}) + "\n", encoding="utf-8")
+    os.symlink(outside, d / "2.jsonl")
+    runs = {k: subprocess.run([sys.executable, GRAPHCTL, "events"] + a, cwd=root, capture_output=True, check=False)
+            for k, a in (("one", ["--session", "S1"]), ("one_json", ["--session", "S1", "--json"]),
+                         ("list", []), ("list_json", ["--json"]))}
+    for k, r in runs.items():
+        check(f"{k}:不噴 Traceback、回 0", r.returncode == 0 and b"Traceback" not in r.stderr, r.stderr[-300:])
+    one = runs["one"].stdout.decode("utf-8", "replace")
+    check("極深巢狀那行算壞行(其他事件照讀)", "Good" in one and "壞行 1" in one, one[:300])
+    check("ok 是列表:印 ?、不崩", any("Lst" in l and l.rstrip().endswith("?") for l in one.splitlines()), one[-400:])
+    for ch, name in (("\u202e", "雙向覆寫"), ("\u200b", "零寬"), ("\u2066", "雙向隔離"), ("\u2028", "行分隔"), ("\u009b", "8 位元 CSI")):
+        check(f"文字輸出不含{name}字元", ch not in one, repr(one[-200:]))
+    check("塊檔是符號連結:不跟、不讀到外面", "OUTSIDE" not in one, one[-200:])
+    for k in ("one_json", "list_json"):
+        raw = runs[k].stdout
+        check(f"{k}:JSON 輸出全是 ASCII(控制與特殊字元一律跳脫)", all(b < 128 for b in raw), repr(raw[:120]))
+    lst = runs["list"].stdout.decode("utf-8", "replace")
+    check("列表照樣列出另一個正常的會談 S2", "S2" in lst, lst[-300:])
+
+
+def t_events_prune_hardening():
+    """代碼審 r2(正確性 F2、邊界 F4、合約 F1、資安 F2、併發 F1、架構 F2):上標/全形/帶號天數回 2 不崩;
+    .git 檔被改成指到別的 repo 時拒刪;擋下訊息印到標準錯誤;刪不乾淨時說清楚已刪了一部分。"""
+    import os
+    import time as _t
+    root = _mk_repo_with_graph()
+    for bad in ("²", "①", "１２", "+5", "05", "-0"):
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", bad], cwd=root,
+                           capture_output=True, text=True, check=False)
+        check(f"--days {bad!r} 回 2 不噴 Traceback", r.returncode == 2 and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stderr[-200:]}")
+        check(f"--days {bad!r} 的擋下訊息印在標準錯誤", "擋下" in r.stderr and "擋下" not in r.stdout, r.stdout + r.stderr)
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--session", ".."], cwd=root,
+                       capture_output=True, text=True, check=False)
+    check("--session 擋下訊息印在標準錯誤", r.returncode == 2 and "擋下" in r.stderr, r.stdout + r.stderr)
+    # .git 檔被竄改:看起來像 worktree,實際指到另一個 repo
+    victim = _mk_repo_with_graph()
+    now = _t.time()
+    v_old = _events_write_chunk(victim, "OLD", "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+    for p in (v_old, v_old / "1.jsonl"):
+        os.utime(p, (now - 90 * 86400, now - 90 * 86400))
+    fake_wt = Path(tempfile.mkdtemp(prefix="gctl-fake-wt-"))
+    (victim / ".git" / "worktrees" / "x").mkdir(parents=True)
+    (victim / ".git" / "worktrees" / "x" / "commondir").write_text("../..\n", encoding="utf-8")
+    (victim / ".git" / "worktrees" / "x" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (victim / ".git" / "worktrees" / "x" / "gitdir").write_text(str(Path(tempfile.mkdtemp()) / ".git") + "\n", encoding="utf-8")
+    (fake_wt / ".git").write_text(f"gitdir: {victim / '.git' / 'worktrees' / 'x'}\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "1"], cwd=fake_wt,
+                       capture_output=True, text=True, check=False)
+    check("竄改過的 .git 指到別的 repo → 不刪那個 repo 的事件帳", v_old.exists(), r.stdout + r.stderr[-300:])
+    # 刪不乾淨要說清楚
+    a = _events_write_chunk(root, "A", "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+    locked = a / "locked"
+    locked.mkdir()
+    (locked / "x").write_text("x", encoding="utf-8")
+    for p in (a, a / "1.jsonl", locked):
+        os.utime(p, (now - 90 * 86400, now - 90 * 86400))
+    locked.chmod(0o500)
+    try:
+        r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "30"], cwd=root,
+                           capture_output=True, text=True, check=False)
+    finally:
+        locked.chmod(0o700)
+    check("刪不乾淨時明講只刪了一部分", "部分" in r.stdout + r.stderr and "A" in r.stdout + r.stderr, r.stdout + r.stderr)
+
+
+def t_enforcement_ledger_row_git_hang():
+    """代碼審 r2(併發 F2、合約 F3、正確性 F5):解主 checkout 的 git 卡住時,enforcement 整份要在幾秒內回來,
+    不能拖過開場 hook 的預算。"""
+    import os
+    import time as _t
+    from unittest import mock
+    m = _load_lumos_inproc()
+    root = _mk_repo_with_graph()
+    real_git = __import__("shutil").which("git")
+    fakebin = Path(tempfile.mkdtemp(prefix="gctl-slow-git-"))
+    (fakebin / "git").write_text(
+        "#!/bin/sh\ncase \"$*\" in *git-common-dir*) sleep 15;; esac\nexec " + real_git + " \"$@\"\n", encoding="utf-8")
+    (fakebin / "git").chmod(0o755)
+    with mock.patch.dict(os.environ, {"PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", "")}):
+        t0 = _t.time()
+        rows = m.enforcement_status(root=root, home=Path(tempfile.mkdtemp()))
+        took = _t.time() - t0
+    row = [r for r in rows if r["layer"] == "claude-event-ledger"]
+    check("git 卡住時 enforcement 在 6 秒內回來", took < 6, f"{took:.1f}s")
+    check("那一列照樣有值(退回原根判斷)", len(row) == 1 and row[0]["status"] in ("unknown", "stale", "active"), str(row))
+
+
+def t_ledger_plugin_teardown_scope_and_messages():
+    """代碼審 r2(邊界 F7、合約 F2、正確性 F3 F4、併發 F3、資安 F3):移除只動使用者範圍那份、外掛移除失敗也照樣清市集;
+    teardown 的 --source 要傳到;救援訊息照實說是哪一步失敗;同時安裝時稍等再查;來源不是預設位置時印出來。"""
+    import contextlib
+    import io
+    import json as _j
+    import os
+    m = _load_lumos_inproc()
+    calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+    def run(env, fn, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r = _with_env(env, lambda: fn(**kw))
+        return r, out.getvalue(), err.getvalue()
+    # 只有專案範圍那份:不叫 uninstall、不印失敗,市集照清
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "project"}]}),
+                  encoding="utf-8")
+    r, out, err = run(env, m._teardown_claude_plugin)
+    c = calls(log)
+    check("只有專案範圍那份:不呼叫 plugin uninstall", not any(l.startswith("plugin uninstall") for l in c), str(c))
+    check("只有專案範圍那份:市集照樣移除、不印失敗",
+          "plugin marketplace remove lumos-toolchain --scope user" in c and "失敗" not in err, f"{c} {err}")
+    # 外掛移除失敗:市集照樣處理
+    env, st, log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_FAIL"] = "uninstall"
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
+                  encoding="utf-8")
+    r, out, err = run(env, m._teardown_claude_plugin)
+    check("外掛移除失敗:市集照樣移除", "plugin marketplace remove lumos-toolchain --scope user" in calls(log), str(calls(log)))
+    # uninstall 帶 source:不設 LUMOS_HOME 也找得到是我們的市集
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                            "plugins": []}), encoding="utf-8")
+    env2 = dict(env); env2.pop("LUMOS_HOME")
+    def call_uninstall():
+        os.environ.pop("LUMOS_HOME", None)
+        return m._teardown_claude_plugin(source=str(src))
+    _with_env(env2, call_uninstall)
+    check("帶 source:沒有 LUMOS_HOME 也移除得到我們的市集", "plugin marketplace remove lumos-toolchain --scope user" in calls(log),
+          str(calls(log)))
+    import inspect
+    check("cmd_uninstall 收 source 並交給外掛移除", "source" in inspect.signature(m.cmd_uninstall).parameters, "")
+    src_txt = Path(GRAPHCTL).read_text(encoding="utf-8")
+    i = src_txt.find("def cmd_teardown")
+    check("cmd_teardown 把 source 傳給 cmd_uninstall", "cmd_uninstall(source=source)" in src_txt[i:i + 6000], "")
+    # 救援訊息照實:新市集已加上、外掛沒裝上
+    env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "directory",
+                                                              "path": "/tmp/old-wt"}], "plugins": []})
+    env["FAKE_CLAUDE_FAIL"] = "install"
+    r, out, err = run(env, m._sync_claude_plugin)
+    check("新市集已加上、外掛沒裝上:訊息不說新的沒加上", r == "failed" and "新的沒加上" not in err and "lumos install --force" in err, err)
+    # 同時安裝:另一支一秒後才完成
+    env, st, log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_APPLY_DELAYED"] = "add"
+    r, out, err = run(env, m._sync_claude_plugin)
+    check("另一支稍後才完成:稍等再查後算成功", r == "ok", f"{r} {err}")
+    # 來源不是預設位置:印出來
+    env, st, log, src = _fake_claude_env()
+    r, out, err = run(env, m._sync_claude_plugin)
+    check("來源不是 ~/harness/lumos-toolchain:印出登記的來源路徑", str(src.resolve()) in out + err, out + err)
+
+
+def t_events_r3_hostile_output():
+    """代碼審 r3(正確性 F1、邊界 F1 F2 F3):讀得進來卻印不出的深巢狀、超長欄位切掉 ✓/✗、超大檔——
+    讀進來時就把關(太深、太長的行算壞行,太大的塊檔略過並計數),每個欄位各自清理截斷,狀態標記一定印得出來。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    root = _mk_repo_with_graph()
+    deep = lambda n: "[" * n + "]" * n
+    _events_write_chunk(root, "S1", "1.jsonl", [
+        _events_ev("tool", "2026-10-05T10:00:00+08:00", tool="Good", ok=True),
+        '{"v":1,"ev":"turn_end","ts":' + deep(80000) + '}',
+        '{"v":1,"ev":"tool","tool":' + deep(80000) + ',"ok":false}',
+        '{"v":1,"ev":"tool","x":' + deep(116190) + '}',
+        '{"v":1,"ev":"tool","tool":"t","ok":true,"x":' + deep(100) + '}',
+        _j.dumps({"v": 1, "ts": "t", "ev": "tool", "tool": "A" * 3000, "ok": False}),
+    ])
+    runs = {k: subprocess.run([sys.executable, GRAPHCTL, "events"] + a, cwd=root, capture_output=True, check=False)
+            for k, a in (("one", ["--session", "S1"]), ("one_json", ["--session", "S1", "--json"]),
+                         ("list", []), ("list_json", ["--json"]))}
+    for k, r in runs.items():
+        check(f"r3 {k}:深巢狀落在讀得進、印不出的區間也不噴 Traceback、回 0",
+              r.returncode == 0 and b"Traceback" not in r.stderr, r.stderr[-300:])
+    one = runs["one"].stdout.decode("utf-8", "replace")
+    check("r3 太深的四行(含 100 層)都算壞行,正常那筆照讀", "Good" in one and "壞行 4" in one, one[:300])
+    long_line = [l for l in one.splitlines() if "AAAA" in l]
+    check("r3 超長工具名:截斷後狀態標記 ✗ 照樣在行尾", len(long_line) == 1 and long_line[0].rstrip().endswith("✗"),
+          repr(long_line[:1])[-80:])
+    # 超大塊檔:略過、計數,不整檔讀進記憶體
+    d = _events_write_chunk(root, "S3", "1.jsonl", [_events_ev("turn_end", "t")])
+    (d / "2.jsonl").write_text(_events_ev("turn_end", "BIG") + "\n" + "x" * 2048 + "\n", encoding="utf-8")
+    old = m._EVENTS_MAX_FILE
+    m._EVENTS_MAX_FILE = 1024
+    try:
+        r = m._events_read(root, "S3")
+    finally:
+        m._EVENTS_MAX_FILE = old
+    check("r3 超過大小上限的塊檔略過並計數", r.get("too_big") == 1 and len(r["events"]) == 1, str({k: v for k, v in r.items() if k != "events"}))
+    old = m._EVENTS_MAX_LINE
+    m._EVENTS_MAX_LINE = 200
+    try:
+        r = m._events_read(root, "S1")
+    finally:
+        m._EVENTS_MAX_LINE = old
+    check("r3 超過單行長度上限的行算壞行", r["bad"] >= 5, str(r["bad"]))
+
+
+def t_events_r3_path_trust():
+    """代碼審 r3(邊界 F4 F5 F6、正確性 F2 F3、資安 F1 F2):讀取端也要過「上層不能是連結」;路徑印出前先清控制字元;
+    worktree 的 gitdir 是相對路徑或有壞位元組時照樣判得出;--repo 給子目錄時當成那個 repo;登記過的真 worktree 清得到。"""
+    import os
+    import time as _t
+    # 讀取端:governance/runtime 是指到 repo 外的連結 → 擋下,不讀外面
+    root = _mk_repo_with_graph()
+    out = Path(tempfile.mkdtemp(prefix="gctl-events-outside-")) / "runtime"
+    _events_write_chunk(out.parent, "OUTS", "1.jsonl", [_events_ev("tool", "OUTSIDE-REPO", tool="leak", ok=True)])
+    (out.parent / "governance" / "runtime").rename(out)
+    (root / "governance").mkdir(exist_ok=True)
+    os.symlink(out, root / "governance" / "runtime")
+    for a in ([], ["--session", "OUTS"], ["--json"], ["--session", "OUTS", "--json"]):
+        r = subprocess.run([sys.executable, GRAPHCTL, "events"] + a, cwd=root, capture_output=True, text=True, check=False)
+        check(f"r3 上層是連結:events {' '.join(a)} 擋下回 2、不印外面的內容",
+              r.returncode == 2 and "OUTSIDE" not in r.stdout and "擋下" in r.stderr, f"rc={r.returncode} {r.stdout[-200:]}")
+    # 路徑帶控制字元:沒有事件帳的訊息不原樣印出
+    evil = Path(tempfile.mkdtemp(prefix="gctl-evil-")) / "r\x1b]0;pwn\x07x"
+    evil.mkdir()
+    subprocess.run(["git", "init", "-q", str(evil)], capture_output=True, check=False)
+    r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=evil, capture_output=True, check=False)
+    check("r3 路徑帶 ESC 與 BEL:沒有事件帳的訊息不含控制字元", b"\x1b" not in r.stdout and b"\x07" not in r.stdout, repr(r.stdout[:200]))
+    # 真 worktree:絕對路徑、相對路徑、旁邊有壞項目,都清得到主 checkout 的舊會談
+    main = _mk_repo_with_graph()
+    subprocess.run(["git", "-C", str(main), "commit", "-q", "--allow-empty", "-m", "x"], capture_output=True, check=False)
+    wt = Path(tempfile.mkdtemp(prefix="gctl-r3-wt-")) / "wt"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], capture_output=True, check=False)
+    gfile = next((main / ".git" / "worktrees").glob("*/gitdir"))
+    now = _t.time()
+    def old_session(name):
+        d = _events_write_chunk(main, name, "1.jsonl", [_events_ev("turn_end", "2026-08-01T00:00:00+08:00")])
+        for p in (d, d / "1.jsonl"):
+            os.utime(p, (now - 90 * 86400, now - 90 * 86400))
+        return d
+    def prune(cwd, extra=()):
+        return subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "30", *extra], cwd=cwd,
+                              capture_output=True, text=True, check=False)
+    d1 = old_session("ABS")
+    r = prune(wt)
+    check("r3 登記過的真 worktree(絕對路徑):清得到主 checkout 的舊會談", r.returncode == 0 and not d1.exists(), r.stdout + r.stderr)
+    gfile.write_text(os.path.relpath(wt / ".git", gfile.parent) + "\n", encoding="utf-8")
+    d2 = old_session("REL")
+    r = prune(wt)
+    check("r3 gitdir 是相對路徑(照 gitdir 檔所在目錄解讀):照樣清得到", r.returncode == 0 and not d2.exists(), r.stdout + r.stderr)
+    bad = main / ".git" / "worktrees" / "zz-bad"
+    bad.mkdir()
+    (bad / "gitdir").write_bytes(b"\xff\xfe/x\x00y\n")
+    d3 = old_session("BAD")
+    r = prune(wt)
+    check("r3 旁邊有壞位元組或 NUL 的 gitdir:不噴 Traceback、照樣清得到",
+          r.returncode == 0 and "Traceback" not in r.stderr and not d3.exists(), r.stdout + r.stderr[-300:])
+    # --repo 給子目錄
+    (main / "docs").mkdir(exist_ok=True)
+    d4 = old_session("SUB")
+    r = prune(Path(tempfile.mkdtemp()), ("--repo", str(main / "docs")))
+    check("r3 --repo 給 repo 裡的子目錄:當成那個 repo、照樣清", r.returncode == 0 and not d4.exists(), r.stdout + r.stderr)
+
+
+def t_events_r3_honest_messages():
+    """代碼審 r3(併發 F1 F2 F3、合約 F5):還沒開始刪就失敗不說「刪了一部分」;安裝等待有總預算、逾時也稍等再查;
+    卸載做一半時只給還沒做的那步指令;來源還沒附外掛時,沒有事件帳的提示不叫人去跑 install。"""
+    import contextlib
+    import io
+    import json as _j
+    import os
+    import pathlib
+    import time as _t
+    from unittest import mock
+    m = _load_lumos_inproc()
+    # prune 掃描階段失敗:資料夾原封不動,不標成「刪了一部分」
+    base = Path(tempfile.mkdtemp(prefix="gctl-r3-prune-"))
+    a = base / "A"
+    a.mkdir()
+    for n in ("1.jsonl", "2.jsonl"):
+        (a / n).write_text("{}\n", encoding="utf-8")
+    now = _t.time()
+    for p in (a, a / "1.jsonl", a / "2.jsonl"):
+        os.utime(p, (now - 90 * 86400, now - 90 * 86400))
+    real_stat = pathlib.Path.stat
+    def flaky(self, *aa, **kw):
+        if self.name == "2.jsonl":
+            raise FileNotFoundError(str(self))
+        return real_stat(self, *aa, **kw)
+    with mock.patch.object(pathlib.Path, "stat", flaky):
+        removed, failed = m._events_prune(base, 30)
+    check("r3 掃描時檔案剛被改名:沒刪、也不說刪了一部分", removed == [] and failed == [("A", False)]
+          and (a / "1.jsonl").exists(), f"{removed} {failed}")
+    # 等待有總預算:每次查很慢時,不會照次數一直等
+    n = {"c": 0}
+    def slow():
+        n["c"] += 1
+        _t.sleep(0.5)
+        return False
+    t0 = _t.time()
+    m._ledger_wait(slow, tries=10, pause=0.05, budget=1.0)
+    check("r3 _ledger_wait 有總預算:查得慢時提早收手", n["c"] <= 3 and _t.time() - t0 < 2.5, f"{n['c']} 次")
+    # add 逾時(可能已寫入):照樣稍等再查
+    def run(env, fn, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r = _with_env(env, lambda: fn(**kw))
+        return r, out.getvalue(), err.getvalue()
+    env, st, log, src = _fake_claude_env()
+    real_do = m._claude_do
+    def do(claude, args):
+        if args[:3] == ["plugin", "marketplace", "add"]:
+            real_do(claude, args)
+            raise subprocess.TimeoutExpired(args, 30)
+        return real_do(claude, args)
+    with mock.patch.object(m, "_claude_do", do), mock.patch.object(m, "_ledger_wait",
+                                                                    lambda check, **kw: check()):
+        r, out, err = run(env, m._sync_claude_plugin)
+    check("r3 市集 add 逾時但其實寫進去了:稍等再查後算成功", r == "ok", f"{r} {err}")
+    # 卸載做一半:只給還沒做的那步
+    env, st, _log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_FAIL"] = "uninstall"
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
+                  encoding="utf-8")
+    r, _out, err = run(env, m._teardown_claude_plugin)
+    check("r3 外掛移除失敗、市集已移除:手動指令只給外掛那條",
+          "plugin uninstall lumos-ledger@lumos-toolchain" in err and "marketplace remove" not in err, err)
+    # 沒有事件帳:來源還沒附外掛 → 不叫人跑 install;附了才叫
+    root = _mk_repo_with_graph()
+    nosrc = Path(tempfile.mkdtemp(prefix="gctl-r3-nosrc-"))
+    e = dict(os.environ, LUMOS_HOME=str(nosrc))
+    r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=root, capture_output=True, text=True, check=False, env=e)
+    check("r3 來源沒有市集檔:提示講外掛還沒附,不叫人跑 lumos install", "lumos install" not in r.stdout and "還沒" in r.stdout, r.stdout)
+    e = dict(os.environ, LUMOS_HOME=str(src))
+    r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=root, capture_output=True, text=True, check=False, env=e)
+    check("r3 來源有市集檔:提示照舊叫人跑 lumos install", "lumos install" in r.stdout, r.stdout)
+
+
+def t_enforcement_ledger_row_symlinks():
+    """代碼審 r3(合約 F2):enforcement 那列不把連結的會談資料夾當成有寫入;事件帳上層是連結時判 unknown。"""
+    import os
+    m = _load_lumos_inproc()
+    home = Path(tempfile.mkdtemp(prefix="gctl-r3-enf-home-"))
+    row = lambda root: next(r for r in m.enforcement_status(root=root, home=home) if r["layer"] == "claude-event-ledger")
+    root = _mk_repo_with_graph()
+    base = root / "governance" / "runtime" / "events"
+    base.mkdir(parents=True)
+    fresh = Path(tempfile.mkdtemp(prefix="gctl-r3-fresh-"))
+    os.symlink(fresh, base / "LINK")
+    check("r3 只有一個連結的會談資料夾(時間是新的):不算 active", row(root)["status"] != "active", str(row(root)))
+    root2 = _mk_repo_with_graph()
+    out = Path(tempfile.mkdtemp(prefix="gctl-r3-out-"))
+    _events_write_chunk(out, "S1", "1.jsonl", [_events_ev("turn_end", "t")])
+    (root2 / "governance").mkdir(exist_ok=True)
+    os.symlink(out / "governance" / "runtime", root2 / "governance" / "runtime")
+    check("r3 事件帳上層是連結:判 unknown", row(root2)["status"] == "unknown", str(row(root2)))
 
 
 if __name__ == "__main__":
