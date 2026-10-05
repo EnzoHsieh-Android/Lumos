@@ -56584,6 +56584,88 @@ def t_test_run_cmd_uses_running_python():
           str((cfg.get("test") or {}).get("run_cmd", "")).startswith("{python} "), str(cfg.get("test")))
 
 
+# 拆成多個工作之前(2026-10-06,CI加速_計劃 [S1])後盾每一步 run/if/continue-on-error/env 的指紋——拆分只准搬家、不准改指令
+# (env 裡讀前一步輸出的 steps.suite.outputs 換成 needs.prep.outputs 是唯一准許的改動,比對前換回來;行尾註解不算)
+_DR_CI_GATE_STEP_FP = {
+    "自主迴圈測試": "70b4cb1b0437f13e",
+    "Graph doctor (strict)": "2dedc7be727156cd",
+    "code-loop gate (push 後盾;體檢 #5)": "60f8a6e29a02b58f",
+    "note-shape gate (筆記形狀擋;--no-verify 後盾)": "6e82ad401c1f6fa6",
+    "drift check (存量漂移檢查;--no-verify 後盾)": "f6f6bc3db304d1e7",
+    "note reread reminder (回頭重讀守檔筆記;只提醒、不擋)": "e72639490ed32108",
+    "Anchor verify (baseline 缺失必紅)": "53dc952f8a95ec57",
+}
+
+
+def _dr_ci_step_fp(block):
+    """一個步驟 → run、if、continue-on-error、env 四種行的指紋(縮排照 ci.yml:步驟 6 格、鍵 8 格、內容 10 格)。"""
+    import re as _re
+    import hashlib as _h
+    keep, inrun, inenv = [], False, False
+    for ln in block.split("\n"):
+        if _re.match(r"^        (if|continue-on-error):", ln):
+            keep.append(ln)
+            inrun = inenv = False
+            continue
+        if _re.match(r"^        env:\s*$", ln):
+            keep.append(ln)
+            inrun, inenv = False, True
+            continue
+        if _re.match(r"^        run:", ln):
+            keep.append(ln)
+            inrun, inenv = True, False
+            continue
+        if inenv and _re.match(r"^          \S", ln) and not ln.strip().startswith("#"):
+            keep.append(_re.sub(r"\s+#.*$", "", ln).replace("needs.prep.outputs.", "steps.suite.outputs."))
+            continue
+        if inrun and (ln.startswith("          ") or not ln.strip()):
+            keep.append(ln)
+            continue
+        if _re.match(r"^        \S", ln):
+            inrun = inenv = False
+    return _h.sha256("\n".join(keep).rstrip().encode()).hexdigest()[:16]
+
+
+def t_ci_yml_matrix_and_gates_shape():
+    """[CI加速 S1] CI 拆成 prep/shards/gates:全套在 matrix 工作、份數編號 1..N 各一次、fail-fast 關、只在 suite=full 跑;
+    後盾七步全在 gates、指令與環境變數跟拆分前逐字相同、順序相同;三個工作都抓完整歷史、都有逾時上限。
+    翻紅釘:漏搬一道後盾、改了後盾指令或環境變數、漏一份或重複一份、拿掉 fetch-depth 或 timeout → 紅。"""
+    print("t_ci_yml_matrix_and_gates_shape")
+    import re as _re
+    _need_src(".github/workflows/ci.yml")
+    ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    body = ci[ci.index("\njobs:\n") + len("\njobs:\n"):]
+    parts = _re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", body)
+    jobs = {parts[k]: parts[k + 1] for k in range(1, len(parts) - 1, 2)}
+    check("①三個工作 prep、shards、gates 都在", {"prep", "shards", "gates"} <= set(jobs), str(sorted(jobs)))
+    # 不共用 scripts/lumos 的 _ci_has_full_history:它不認「fetch-depth: 0  # 行尾註解」(本檔 ci.yml 就是這樣寫),
+    # 另立 Issues/CI完整歷史判斷不認行尾註解 追蹤(代碼審 code-ci-speedup r1 架構對齊席)
+    for name in ("prep", "shards", "gates"):
+        b = jobs.get(name, "")
+        check(f"②{name} 抓完整歷史、有逾時上限",
+              _re.search(r"(?m)^ +fetch-depth: 0\b", b) is not None and _re.search(r"(?m)^    timeout-minutes: \d+", b) is not None, name)
+    sh = jobs.get("shards", "")
+    m = _re.search(r"(?m)^ +shards: \[(.*)\]\s*$", sh)
+    total = _re.search(r'(?m)^ +SHARD_TOTAL: "?(\d+)"?\s*$', sh)
+    nums = sorted(int(x) for g in _re.findall(r'"([0-9 ]+)"', m.group(1)) for x in g.split()) if m else []
+    n = int(total.group(1)) if total else -1
+    check("③matrix 清單的份數編號合起來剛好是 1..N 各一次", n > 1 and nums == list(range(1, n + 1)), f"N={n} nums={nums}")
+    check("④fail-fast 關掉、只在 suite=full 跑、需要 prep",
+          "fail-fast: false" in sh and "needs.prep.outputs.suite == 'full'" in sh and _re.search(r"(?m)^    needs: \[?prep", sh) is not None, "")
+    check("④b 每台用 --shard 跑自己那幾份、總份數取 SHARD_TOTAL", '--shard "$i/$SHARD_TOTAL"' in sh, "")
+    gb = jobs.get("gates", "")
+    blocks = _re.split(r"\n(?=      - )", gb)
+    order = []
+    for name, fp in _DR_CI_GATE_STEP_FP.items():
+        hit = [b for b in blocks if b.startswith(f"      - name: {name}")]
+        check(f"⑤後盾「{name}」在 gates 且指令跟拆分前逐字相同", len(hit) == 1 and _dr_ci_step_fp(hit[0]) == fp,
+              _dr_ci_step_fp(hit[0]) if hit else "不在 gates")
+        order.append(gb.find(f"      - name: {name}"))
+    check("⑥後盾順序跟拆分前一樣", all(x >= 0 for x in order) and order == sorted(order), str(order))
+    for name in _DR_CI_GATE_STEP_FP:
+        check(f"⑦「{name}」只出現在 gates(沒有兩份)", ci.count(f"      - name: {name}") == 1, "")
+
+
 def t_ci_runs_python314_and_old_syntax_check():
     """[S6] CI 在 3.14 上跑,並以釘版本的 ruff(py39)檢查三類必須 3.9 能解析的檔;doctor 印給消費專案的 CI 步驟提示講明要 3.14
     (Projects/最低Python版本改3.14_計劃 做法第 7 點)。
