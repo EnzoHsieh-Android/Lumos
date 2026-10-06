@@ -33,6 +33,7 @@ verified_by:
   - "[[Verification/2026-09-11_skills健檢]]"
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
   - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
+  - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
 summary: |-
   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
@@ -208,3 +209,9 @@ aliases:
 - 衍生:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`(自主迭代 loop 跨輪 headless 跑 design-loop)。
 
 WHY:席位對帳先把派工單的資料形態與路徑編碼錯誤分開，避免 traceback 被誤當成審查內容越界；合法材料仍只觀測，脈絡寫回本節點既有收貨三道範圍，不擴張圖譜 read 原語責任 [出處:2026-10-06 seat-input-validation 設計審 r1、真CLI反例與原S1規格] [因:排除錯材料引起的錯誤診斷，保留既有觀測分工]
+## 同一入口的測試不一定同名（2026-10-06）
+
+PITFALL: 改canary載體入口後，只跑名稱含canary的測試，會漏掉透過共用helper或讀側場景進入同一入口的fix_check、panel退場及disposal讀側測試；本案原子集222/2、首次未完成分片2與4、重啟分片7與11的原紅收據為出處。相關子集規劃需核對圖譜合約、共用helper及讀寫兩側；測試名稱不能當成覆蓋全部的證據。重現與防回歸入口：`t_fix_check_record_template`、`t_fix_check_recipe_rerun_note`、`t_disposal_gate_r1_panel_hardening`、`t_panel_probe_retired`；本次仍保留原有判準，沒有為了入口提早拒收而移除讀側舊帳防線。
+REVISIT:2026-10-20 在載體入口後續十份真實修補收據，核對首審前選測試是否仍漏同族；若既有testmap穩定涵蓋全部案例，撤掉人工補列，不新造第二套測試映射。
+
+WHY: 本案記帳入口及處置閘的現行說明落在本節點；停用的注意力探針仍留於 [[Systems/canary-audit]]，不因本次改善重啟協議。來源為本案推送home閘與canary-audit的既有停用決策；本篇管轄 `scripts/lumos` 的處置記帳讀寫。

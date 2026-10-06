@@ -1,0 +1,24 @@
+--- original/scripts/test_lumos.py
++++ prototype/scripts/test_lumos.py
+@@ -25263,11 +25263,20 @@
+     # ── ⑤ 非 UTF-8 報告:FAIL 但不得 traceback ──
+     lid5 = f"h8e-{_M1U}"
+     rptBin = d / "h8bin.md"
+-    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")   # 首行合法宣告=過寫側;其餘 bytes 仍非 UTF-8,讀側行為不變
++    rptBin.write_text(rptA.read_text(encoding="utf-8"), encoding="utf-8")
+     run(v, "canary", "record", "caught", "--loop", lid5, "--round", "r1", "--auditor", "s1",
+         "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
+         "--report", str(rptBin), "--snapshot", str(snap),
+         "--spec", str(spec), "--reviewed", h, expect_rc=0)
++    valid = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    check("★前置★ UTF-8 壞帳注入前本輪讀側 rc0", valid.returncode == 0, valid.stdout[-300:] + valid.stderr[-200:])
++    # 現行寫側拒收非法編碼；歷史壞帳用既有 helper 構造，保留讀側編碼防線。
++    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")
++    _ledger_patch_last(ledger, lid5, report_path=rptBin)
++    bad_rows = [_j.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines()
++                if l.strip() and _j.loads(l).get("loop") == lid5]
++    check("★前置★ 壞報告與帳面 hash 一致，讀側確實驗編碼", len(bad_rows) == 1
++          and bad_rows[0]["report_sha256"] == _sha256_of(rptBin), str(bad_rows)[-200:])
+     r7 = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+     check("★非 UTF-8 報告:讀側 FAIL(rc1/2)且無 traceback★",
+           r7.returncode in (1, 2) and "Traceback" not in r7.stderr,

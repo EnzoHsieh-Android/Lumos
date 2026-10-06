@@ -9511,6 +9511,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
               "沒有席位的處置帳無從對帳", file=sys.stderr)
         return 2
+    _validated_sha = {}
     if loop and auditor and outcome is None:
         # 觸發=審查席帳列(loop+auditor;結局帳 --outcome 除外)。★不要求 round★——light/循序
         # 舊制形狀本來就無輪次且合法;繞道由「處置帳必綁輪次」+讀側 round-less 處置帳拒判關死。
@@ -9520,8 +9521,15 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                   "不附報告的審查帳事後無從重驗;報告還沒落檔就先存檔再記(2026-08-26 起的新規矩)", file=sys.stderr)
             return 2
         try:
-            _rtext = Path(report).read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
+            if findings_set is not None:
+                import hashlib
+                _rbytes = Path(report).read_bytes()
+                _rtext = _rbytes.decode("utf-8")
+                _validated_sha["--report"] = hashlib.sha256(_rbytes).hexdigest()
+                del _rbytes
+            else:
+                _rtext = Path(report).read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeDecodeError) as e:
             print(f"擋下:--report 指的檔案讀不到: {e}", file=sys.stderr)
             return 2
         _decl = _report_severities(_rtext)
@@ -9565,9 +9573,17 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         if findings_set is not None and snapshot:
             _qrows = None
             try:
-                _qrows = _quote_rows(_rtext, Path(snapshot).read_text(encoding="utf-8"))
+                _sbytes = Path(snapshot).read_bytes()
+                _qrows = _quote_rows(_rtext, _sbytes.decode("utf-8"))
+                _validated_sha["--snapshot"] = hashlib.sha256(_sbytes).hexdigest()
+                del _sbytes
             except OSError:
                 _qrows = None   # 快照讀不到:下面的 --snapshot 存在性檢查會擋,這裡不重複報
+            else:
+                if _qrows is None:
+                    print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
+                    print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
+                    return 2
             if _qrows:
                 _qmiss = [r for r in _qrows if not r["ok"]]
                 if _qmiss:
@@ -9589,6 +9605,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             _h = _sha256_file(_p)
         except OSError as e:
             print(f"擋下:{_flag} 指的檔案讀不到: {e}", file=sys.stderr)
+            return 2
+        if _flag in _validated_sha and _h != _validated_sha[_flag]:
+            print(f"擋下:{_flag} 材料在驗證後發生變動；尚未寫入 canary 帳，請凍結材料後重驗。", file=sys.stderr)
             return 2
         import os as _os
         if _os.path.getsize(_p) == 0:
