@@ -1,0 +1,631 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -32918,6 +32932,283 @@
+     print("  ✓ t_drift_ack_routed_tracked_state")
+ 
+ 
++# ── 改摘要單行的指令(Projects/改摘要單行的指令_計劃)─────────────────────────────────────────────
++def _sl_vault(summary):
++    """一篇 Systems/Pay,摘要給定 → (root, vault, 筆記路徑)。"""
++    root = _nh_repo()
++    p = _nh_node(root, "Pay", summary=summary)
++    _nh_commit(root, "init")
++    return root, root / "docs" / "kg-knowledge", p
++
++
++def _sl_summary(p):
++    lines = p.read_text(encoding="utf-8").split("\n")
++    i = next(k for k, ln in enumerate(lines) if ln.startswith("summary:"))
++    out = []
++    for ln in lines[i + 1:]:
++        if ln.startswith("  "):
++            out.append(ln[2:])
++        else:
++            break
++    return out
++
++
++def _sl_today():
++    import datetime as _dt
++    return _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()
++
++
++def t_summary_line_replace():
++    """[改摘要單行 S1] 舊片段恰好出現一次 → 換成新片段、updated 改今天、印改前改後、其他行不動。
++    翻紅釘:不改 updated → ②紅;換了第一個以外的行 → ①紅。"""
++    print("t_summary_line_replace")
++    _root, v, p = _sl_vault("WHY:用 A 方案 [出處:x] [因:y]\nKEY:第二條不動\nWHY:另一條 [出處:z] [因:w]")
++    before = p.read_text(encoding="utf-8")
++    r = run(v, "summary-line", "Systems/Pay", "用 A 方案", "改用 B 方案")
++    s = _sl_summary(p)
++    check("①換掉那一段、其他行不動", r.returncode == 0 and s == ["WHY:改用 B 方案 [出處:x] [因:y]", "KEY:第二條不動",
++                                                          "WHY:另一條 [出處:z] [因:w]"], (r.stdout + r.stderr, s))
++    check("②updated 改成今天", f"updated: {_sl_today()}" in p.read_text(encoding="utf-8"), p.read_text(encoding="utf-8")[:300])
++    check("③印改前改後", "WHY:用 A 方案" in r.stdout and "WHY:改用 B 方案" in r.stdout, r.stdout)
++    body_old = before.split("\n---\n", 1)[1]
++    # ⑤新的那一行剛好跟另一行一模一樣:自驗照算對(代碼審 r1 正確性席 F4)
++    _root2, v2, p2 = _sl_vault("KEY:甲\nKEY:乙")
++    r2 = run(v2, "summary-line", "Systems/Pay", "乙", "甲")
++    check("⑤新行跟另一行一樣:照改", r2.returncode == 0 and _sl_summary(p2) == ["KEY:甲", "KEY:甲"], (r2.stdout + r2.stderr, _sl_summary(p2)))
++    check("④正文一字不動", p.read_text(encoding="utf-8").split("\n---\n", 1)[1] == body_old, "")
++    print("  ✓ t_summary_line_replace")
++
++
++def t_summary_line_ambiguous():
++    """[改摘要單行 S2] 舊片段出現兩行以上或同一行兩次 → rc2 不寫、列候選行號與前 40 字;--nth 2 改第二個出現處。
++    翻紅釘:對到多個時改第一個 → ①紅;--nth 數錯 → ③紅。"""
++    print("t_summary_line_ambiguous")
++    _root, v, p = _sl_vault("RULE:甲 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]\n"
++                           "RULE:乙 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]")
++    before = p.read_text(encoding="utf-8")
++    r = run(v, "summary-line", "Systems/Pay", "[依據:人]", "[依據:外部]")
++    out = r.stdout + r.stderr
++    check("①對到兩行:rc2、檔不動、列出兩個候選", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++          and "RULE:甲" in out and "RULE:乙" in out and "--nth" in out, out)
++    _root, v, p = _sl_vault("KEY:同一行 xx 兩次 xx")
++    before = p.read_text(encoding="utf-8")
++    r = run(v, "summary-line", "Systems/Pay", "xx", "yy")
++    check("②同一行出現兩次:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/Pay", "xx", "yy", "--nth", "2")
++    check("③--nth 2:換第二個出現處", r.returncode == 0 and _sl_summary(p) == ["KEY:同一行 xx 兩次 yy"], (r.stdout + r.stderr, _sl_summary(p)))
++    r = run(v, "summary-line", "Systems/Pay", "yy", "zz", "--nth", "3")
++    check("④--nth 超出範圍:rc2", r.returncode == 2, r.stdout + r.stderr)
++    print("  ✓ t_summary_line_ambiguous")
++
++
++def t_summary_line_rejects():
++    """[改摘要單行 S3] 找不到、舊片段空或含換行、新片段含換行、節點不存在 → rc2 不寫。翻紅釘:不擋空的舊片段 → ①-④紅。"""
++    print("t_summary_line_rejects")
++    _root, v, p = _sl_vault("KEY:一條 [x]\nKEY:另一條")
++    before = p.read_text(encoding="utf-8")
++    for args, why, say in ((("找不到的字", "新"), "找不到", "摘要裡找不到"), (("", "新"), "舊片段空", "不能是空的"),
++                           (("一條\nKEY", "新"), "舊片段含換行", "不能含換行"), (("一條", "新\n行"), "新片段含換行", "不能含換行")):
++        r = run(v, "summary-line", "Systems/Pay", *args)
++        check(f"①-④{why}:rc2、檔不動、講原因", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++              and say in r.stdout + r.stderr, r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/不存在", "a", "b")
++    check("⑤節點不存在:rc2、講找不到那篇(共用的近名候選訊息)", r.returncode == 2
++          and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr, r.stdout + r.stderr)
++    for bad in ("\r", "\x85", "\u2028", "\x0b"):
++        r = run(v, "summary-line", "Systems/Pay", "一條", f"新{bad}行")
++        check(f"⑥新片段含換行類字元 {bad!r}:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++              and "不能含換行" in r.stdout + r.stderr, r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/Pay", "一條", "一條")
++    check("⑦新舊片段相同:rc2、講沒有要改的", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++          and "沒有要改的" in r.stdout + r.stderr, r.stdout + r.stderr)
++    print("  ✓ t_summary_line_rejects")
++
++
++def t_summary_line_continuation():
++    """[改摘要單行 S5] 目標行屬於跨多個實體行的條目(第一行或續行)→ rc2、檔不動、講不支援續行。翻紅釘:不擋續行 → ①紅。"""
++    print("t_summary_line_continuation")
++    _root, v, p = _sl_vault("RULE:要人簽 [依據:人] [since:2026-09-01]\n  [retire:when-file:src/a.py]\nKEY:別條")
++    before = p.read_text(encoding="utf-8")
++    for frag in ("要人簽", "src/a.py"):
++        r = run(v, "summary-line", "Systems/Pay", frag, "改")
++        check(f"①續行條目({frag}):rc2、檔不動、講續行", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++              and "續行" in r.stdout + r.stderr, r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/Pay", "KEY:別條", "KEY:別條改過")
++    check("②同一篇單行的條目照改", r.returncode == 0 and "KEY:別條改過" in _sl_summary(p), r.stdout + r.stderr)
++    print("  ✓ t_summary_line_continuation")
++
++
++def t_summary_line_delete():
++    """[改摘要單行 S4] 換完只剩空白 → 拿掉那一行;摘要因此變空 → rc2 不寫。翻紅釘:留下空行 → ①紅。"""
++    print("t_summary_line_delete")
++    _root, v, p = _sl_vault("KEY:留著\nKEY:要刪的這一條")
++    r = run(v, "summary-line", "Systems/Pay", "KEY:要刪的這一條", "")
++    check("①整行刪光:拿掉那一行", r.returncode == 0 and _sl_summary(p) == ["KEY:留著"], (r.stdout + r.stderr, _sl_summary(p)))
++    before = p.read_text(encoding="utf-8")
++    r = run(v, "summary-line", "Systems/Pay", "KEY:留著", "")
++    check("②刪完摘要會空:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
++    print("  ✓ t_summary_line_delete")
++
++
++def t_summary_line_verify():
++    """[改摘要單行 S6] 寫入自驗失敗 → rc2、原檔不動;--dry-run 只印不寫;成功後提示 lint 那一篇。
++    翻紅釘:不走 atomic_write_verify(直接寫)→ ①紅。"""
++    print("t_summary_line_verify")
++    import io, contextlib
++    m = _load_lumos_inproc()
++    _root, v, p = _sl_vault("KEY:正常的一條\nKEY:別條")
++    before = p.read_text(encoding="utf-8")
++    orig = m.atomic_write_verify
++
++    def _boom(*a, **k):
++        raise RuntimeError("測試:自驗失敗")
++    m.atomic_write_verify = _boom
++    buf = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
++            rc = m.cmd_summary_line(m.Env(v), "Systems/Pay", "正常的一條", "改過的一條")
++    finally:
++        m.atomic_write_verify = orig
++    check("①寫入自驗失敗:rc2、原檔不動", rc == 2 and p.read_text(encoding="utf-8") == before, buf.getvalue())
++    r = run(v, "summary-line", "Systems/Pay", "正常的一條", "改過的一條", "--dry-run")
++    check("②--dry-run:印改後、檔不動", r.returncode == 0 and "改過的一條" in r.stdout and p.read_text(encoding="utf-8") == before,
++          r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/Pay", "正常的一條", "改過的一條")
++    check("③成功後提示 lint 那一篇", r.returncode == 0 and "lumos lint Systems/Pay" in r.stdout, r.stdout)
++    print("  ✓ t_summary_line_verify")
++
++
++# ── 筆記 updated 落後:健檢列出加一鍵修(Projects/提交時自動更新筆記日期_計劃)────────────────────────
++def _us_today():
++    import datetime as _dt
++    return _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()
++
++
++def _us_repo():
++    """兩篇筆記都寫 updated 2026-09-11、今天提交(→ 落後);一篇沒有 updated 欄。→ (root, vault)。"""
++    root = _nh_repo()
++    _nh_node(root, "Pay", summary="KEY:a")
++    _nh_node(root, "Ship", summary="KEY:b")
++    nou = root / "docs" / "kg-knowledge" / "Systems" / "NoDate.md"
++    nou.write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:c\n---\n# NoDate\n", encoding="utf-8")
++    _nh_commit(root, "init")
++    return root, root / "docs" / "kg-knowledge"
++
++
++def _us_updated(vault, rel):
++    import re as _re
++    m = _re.search(r"^updated: (\S+)$", (vault / rel).read_text(encoding="utf-8"), _re.M)
++    return m.group(1) if m else None
++
++
++def t_doctor_updated_stale():
++    """[updated 落後 S1] updated 早於 git 上最後一次提交日期 → doctor 印筆數與那幾篇、附 lumos updated-sync --stale;
++    都沒落後 → 不印。翻紅釘:doctor 不接 _updated_stale_notes → ①紅。"""
++    print("t_doctor_updated_stale")
++    root, v = _us_repo()
++    r = run(v, "doctor")
++    out = r.stdout + r.stderr
++    check("①兩篇落後:印筆數、例子、指令", "updated 落後" in out and "2 篇" in out and "Systems/Pay" in out
++          and "lumos updated-sync --stale" in out, out[-1200:])
++    for n in ("Pay", "Ship"):
++        p = v / "Systems" / f"{n}.md"
++        p.write_text(p.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {_us_today()}"), encoding="utf-8")
++    _nh_commit(root, "bump")
++    r = run(v, "doctor")
++    check("②都改成今天後:不印", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-800:])
++    # ③淺複製(只有最近一個提交):日期表全變同一天、判不準 → 不印(代碼審 r1 正確性席 F1)
++    import subprocess as _sp
++    root, v = _us_repo()
++    (root / "README.md").write_text("x\n")
++    _nh_commit(root, "later")
++    sh = Path(tempfile.mkdtemp(prefix="gctl-us-shallow-")) / "c"
++    _sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
++    r = run(sh / "docs" / "kg-knowledge", "doctor")
++    check("③淺複製:不印 updated 落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
++    r = run(sh / "docs" / "kg-knowledge", "updated-sync", "--stale", "--dry-run")
++    check("③淺複製:--stale 沒有要改的", "會改" not in r.stdout, r.stdout + r.stderr)
++    # ④只落後一天(跨午夜才提交):不算(代碼審 r1 正確性席 F3)
++    import datetime as _dt, os as _os
++    root, v = _us_repo()
++    y = (_dt.date.fromisoformat(_us_today()) - _dt.timedelta(days=1)).isoformat()
++    for n in ("Pay", "Ship"):
++        q = v / "Systems" / f"{n}.md"
++        q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {y}"), encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    _sp.run(["git", "-C", str(root), "commit", "-qm", "y"], capture_output=True, env=dict(_os.environ, GIT_COMMITTER_DATE=f"{_us_today()}T12:00:00"))
++    r = run(v, "doctor")
++    check("④updated 只比 git 日期早一天:不算落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
++    print("  ✓ t_doctor_updated_stale")
++
++
++def t_updated_sync_stale():
++    """[updated 落後 S2] updated-sync --stale → 落後的每篇改成今天、其他欄位與正文不動;沒有 updated 欄的不加;已是今天的跳過。
++    翻紅釘:改成 git 日期而非今天 → ①紅;沒有 updated 也加 → ③紅。"""
++    print("t_updated_sync_stale")
++    _root, v = _us_repo()
++    before = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
++    r = run(v, "updated-sync", "--stale")
++    check("①兩篇改成今天", r.returncode == 0 and _us_updated(v, "Systems/Pay.md") == _us_today()
++          and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
++    after = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
++    check("②只動 updated 那一行", [ln for ln in before.split("\n") if not ln.startswith("updated:")]
++          == [ln for ln in after.split("\n") if not ln.startswith("updated:")], after[:300])
++    check("③沒有 updated 欄的不加(--stale 本來就不挑它)", _us_updated(v, "Systems/NoDate.md") is None,
++          (v / "Systems" / "NoDate.md").read_text())
++    r = run(v, "updated-sync", "Systems/NoDate")
++    check("③b直接指定沒有 updated 欄的那篇:跳過、不加", r.returncode == 0 and "沒有 updated 欄或是空的" in r.stdout
++          and _us_updated(v, "Systems/NoDate.md") is None, r.stdout + r.stderr)
++    r = run(v, "updated-sync", "--stale")
++    check("④再跑一次(都已是今天、但還沒提交):照樣改成今天、不報錯", r.returncode == 0, r.stdout + r.stderr)
++    print("  ✓ t_updated_sync_stale")
++
++
++def t_updated_sync_nodes():
++    """[updated 落後 S3] 指定節點只改那一篇;找不到的走近名候選、rc 非 0、其他照改;--dry-run 只印不寫。
++    翻紅釘:找不到就整批停 → ②紅;--dry-run 照寫 → ③紅。"""
++    print("t_updated_sync_nodes")
++    _root, v = _us_repo()
++    r = run(v, "updated-sync", "Systems/Pay")
++    check("①只改指定那篇", r.returncode == 0 and _us_updated(v, "Systems/Pay.md") == _us_today()
++          and _us_updated(v, "Systems/Ship.md") == "2026-09-11", r.stdout + r.stderr)
++    r = run(v, "updated-sync", "Systems/不存在", "Systems/Ship")
++    check("②找不到的走近名候選、rc 非 0、其他照改", r.returncode != 0 and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr
++          and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
++    _root, v = _us_repo()
++    r = run(v, "updated-sync", "--stale", "--dry-run")
++    check("③--dry-run:印會改哪幾篇、不寫", r.returncode == 0 and "Systems/Pay" in r.stdout
++          and _us_updated(v, "Systems/Pay.md") == "2026-09-11", r.stdout + r.stderr)
++    r = run(v, "updated-sync")
++    check("④沒給節點也沒給 --stale:rc2", r.returncode == 2, r.stdout + r.stderr)
++    # ⑤一篇寫入時丟例外:其他照改、rc 非 0(代碼審 r2 回歸席 F1)
++    m = _load_lumos_inproc()
++    import io, contextlib
++    _root2, v2 = _us_repo()
++    orig = m.cmd_set
++
++    def _boom(env, rel, key, value):
++        if rel.endswith("Pay.md"):
++            raise RuntimeError("測試:寫入失敗")
++        return orig(env, rel, key, value)
++    m.cmd_set = _boom
++    buf = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
++            rc = m.cmd_updated_sync(m.Env(v2), ["Systems/Pay", "Systems/Ship"])
++    finally:
++        m.cmd_set = orig
++    check("⑤一篇丟例外:其他照改、rc 非 0、講原因", rc != 0 and _us_updated(v2, "Systems/Ship.md") == _us_today()
++          and "測試:寫入失敗" in buf.getvalue(), buf.getvalue())
++    # ⑥updated 是不存在的日期:當成落後列出(代碼審 r2 回歸席 F2)
++    _root3, v3 = _us_repo()
++    q = v3 / "Systems" / "Pay.md"
++    q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", "updated: 2026-02-30"), encoding="utf-8")
++    _nh_commit(_root3, "bad date")
++    r = run(v3, "updated-sync", "--stale", "--dry-run")
++    check("⑥updated 是不存在的日期:列成要改", "會改 Systems/Pay" in r.stdout, r.stdout + r.stderr)
++    print("  ✓ t_updated_sync_nodes")
++
++
+ def _rt_events(root):
+     return [e for e in _ns_gov(root) if e.get("gate") == "drift-check" and e.get("check") == "retire"]
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -36819,6 +37110,39 @@
+     check("S6 文字不得寫「建議再一輪」", "建議再一輪" not in txt and "由人裁" in txt, txt)
+ 
+ 
++@_cap_real_cutoff
++def t_cap_hint_at_cap_shows_cap_decision():
++    """審查跑滿回顧〈三〉3、S19:代碼審 major 全折後處置閘就過、loop next 不走 cap-reached,所以 [cap-hint] 到上限時要帶「人裁:」那行。
++    那行的內容只由 _cap_retro_next_lines 決定(治理帳壞、已有人裁、回顧狀態都在那裡判);_cap_hint_lines 只決定要不要叫人記
++    (ask):到上限而提示不是「可以停」,或 loop next 判到 cap-reached;沒給 env 判不了就不印。"""
++    m = _load_lumos()
++    calls = []
++
++    def fake(env, loop_id, repo=None, ask=True):
++        calls.append(ask)
++        return ["ASK " + loop_id] if ask else []
++    saved = m._cap_retro_next_lines
++    m._cap_retro_next_lines = fake
++    try:
++        for hint_rows, phase, want in [([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])], None, True),     # 由人裁
++                                       ([(3, "major", [3]), (2, "major", [2]), (3, "major", [3])], None, True),     # 換做法
++                                       ([(5, "major", [5]), (3, "major", [3]), (1, "minor", [1])], None, False),    # 可以停
++                                       ([(5, "major", [5]), (3, "major", [3]), (1, "minor", [1])], "cap-reached", True)]:
++            h = m._cap_hint(_cap_rows(hint_rows))
++            txt = "\n".join(m._cap_hint_lines(h, loop_id="code-x y", env=object(), phase=phase))
++            check(f"到上限提示 {h and h['hint']}/{phase} 叫人記人裁={want}", ("人裁:ASK code-x y" in txt) == want, txt)
++        h = m._cap_hint(_cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])]))
++        calls.clear()
++        txt = "\n".join(m._cap_hint_lines(h, loop_id="code-x y"))
++        check("沒給 env:判不了,不印人裁那行也不呼叫", "人裁:" not in txt and not calls, txt)
++        h = m._cap_hint(_cap_rows([(21, "major", [21])]))
++        calls.clear()
++        m._cap_hint_lines(h, loop_id="code-x y", env=object())
++        check("沒到上限(只有熔斷):不呼叫", not calls, repr(calls))
++    finally:
++        m._cap_retro_next_lines = saved
++
++
+ @_cap_real_cutoff
+ def t_cap_hint_vacuous_round_counts_zero():
+     """[S7] 沒彙總帳而各席 findings 全 0 → 折 0;有人報了條數卻沒彙總帳 → 沒記處置、判不了。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -48766,6 +49090,57 @@
+               all(g["route_tests"] == {"scripts/test_checks.py"} for g in marked))
+         check(f"清單快取/{commits}:存活版本有界且返回釋放",
+               peak[0] <= 3 and not alive, f"peak={peak[0]},alive={len(alive)},calls={count[0]}")
++        check(f"清單快取/{commits}:線性相鄰版本只讀一次",
++              count[0] == commits + 1, f"calls={count[0]},expected={commits + 1}")
++
++
++def t_nodehome_optional_test_index_changed():
++    """檢查期間暫存區已撤回的測試不能繼續當寫回證據;穩定索引及工作樹變更對照保持。"""
++    import json
++    for opt in (False, True):
++        for mode in ("index-change", "stable", "worktree-only"):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check.py", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            _nh_file(root, "tests/check.py", "x = 2\n")
++            home.write_text(home.read_text() + "\nWHY: synthetic staged evidence case.\n")
++            _nh_git(root, "add", ".")
++            before = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
++            check(f"索引證據/{opt}/{mode}:現場三項一起staged",
++                  {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(before))
++            shim = ("import runpy,sys,json,subprocess\nfrom pathlib import Path\n"
++                    f"namespace=runpy.run_path({GRAPHCTL!r});g=namespace['main'].__globals__\n"
++                    "original=g['_nodehome_route_tests'];fired=[]\n"
++                    "def route(root,*args,**kwargs):\n"
++                    "    if not fired:\n"
++                    f"        mode={mode!r}\n"
++                    "        if mode=='index-change':\n"
++                    "            permissions,kind,oid,path=subprocess.check_output(['git','ls-tree','HEAD','tests/check.py'],cwd=root,text=True).split()\n"
++                    "            subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
++                    "        elif mode=='worktree-only':\n"
++                    "            (Path(root)/'tests/check.py').write_text('x = 99\\n')\n"
++                    "        paths=subprocess.check_output(['git','diff','--cached','--name-only'],cwd=root,text=True).splitlines()\n"
++                    "        fired.append({'mode':mode,'test_staged':'tests/check.py' in paths})\n"
++                    "    return original(root,*args,**kwargs)\n"
++                    "g['_nodehome_route_tests']=route\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=namespace['main']();print('INDEX-EVIDENCE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], text=True, capture_output=True)
++            marker = next((line.split("INDEX-EVIDENCE:", 1)[1] for line in q.stderr.splitlines()
++                           if line.startswith("INDEX-EVIDENCE:")), "[]")
++            fired = json.loads(marker)
++            check(f"索引證據/{opt}/{mode}:注入確實發生且暫存區現場符合模式",
++                  len(fired) == 1 and fired[0] == {"mode": mode, "test_staged": mode != "index-change"}, q.stderr)
++            correct = (q.returncode == 1 and "Systems/TestHome" in q.stderr
++                       and "不是任何一支改動檔的家" in q.stderr) if mode == "index-change" else q.returncode == 0
++            check(f"索引證據/{opt}/{mode}:只拒收已撤回的測試證據", correct, q.stdout + q.stderr)
++            after = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
++            check(f"索引證據/{opt}/{mode}:檢查未改寫暫存區",
++                  ("tests/check.py" in after) == (mode != "index-change"), str(after))
+ 
+ 
+ def t_nodehome_test_tag_only_edit_is_not_write_back():
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -63248,6 +63623,27 @@
+     check("③來源本身已收尾的不列", _df_find(v, "c6", "Projects/Old_計劃.md") == [], "")
+ 
+ 
++
++def t_drift_c6_ignores_link_title_words():
++    """[c6 不看連結標題 S1] 連到標題含待定詞(「還沒做」)的已收尾筆記、連結外沒寫待定詞 → 不列;連結外寫了 → 照列;
++    別名裡的待定詞也不算(2026-10-06 rtb 盤點 1-1 的兩條誤報)。翻紅釘:判待定詞不遮連結 → ①③紅。"""
++    print("t_drift_c6_ignores_link_title_words")
++    root = _df_repo()
++    v = root / _DR_VAULT
++    _nh_file(root, f"{_DR_VAULT}/Issues/收據還沒做.md", "---\ntype: issue\nstatus: resolved\n---\n# 收據還沒做\n不做了\n")
++    live = _nh_file(root, f"{_DR_VAULT}/Projects/Moc_計劃.md",
++                    "---\ntype: project\nstatus: doing\n---\n# Moc\n"
++                    "寅 收據不做、已結案,見 [[Issues/收據還沒做]]\n"
++                    "卯 收據這邊還沒做,見 [[Issues/收據還沒做]]\n"
++                    "辰 見 [[Issues/收據還沒做|那件還沒做的事]]\n")
++    _df_commit(root, "c6 link title")
++    fs = _df_find(v, "c6", "Projects/Moc_計劃.md")
++    got = sorted(f["line"] for f in fs) if isinstance(fs, list) else fs
++    check("①連結標題裡的「還沒做」不算:寅不列", isinstance(got, list) and _c6_ln(live, "寅 ") not in got, str(fs))
++    check("②連結外真的寫了「還沒做」:卯照列", isinstance(got, list) and _c6_ln(live, "卯 ") in got, str(fs))
++    check("③別名裡的「還沒做」也不算:辰不列", isinstance(got, list) and _c6_ln(live, "辰 ") not in got, str(fs))
++
++
+ def t_drift_fix_c6_appends_settled_bracket():
+     """[S2] drift fix --kind c6 --settled:待定子句結尾補「(已裁定:日期 結論,見 [[目標]])」、那行不再被列、修復帳 kind=c6;
+     兩個連結沒給 --by 回 2;表格行、沒有待定子句的行回 2;擋下都不寫檔。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -67187,6 +67583,9 @@
+     (root / ".lumos" / "config.json").write_text(_json.dumps({"default_platform": "a", "platforms": {
+         "a": {"root": ".", "profile": "python", "run_cmd": "python3 test_guard.py"},
+         "b": {"root": "other", "profile": "python", "run_cmd": "python3 test_guard.py"}}}), encoding="utf-8")
++    # 合約清單綁平台 b 那支:這格只驗原文提醒,不讓「測試不在合約清單」那個提醒(平台不同)混進來
++    _lp = v / "Systems" / "Limit.md"
++    _lp.write_text(_lp.read_text(encoding="utf-8").replace("[test:TestLimitFive]", "[test:b:TestLimitFive]"), encoding="utf-8")
+     _kr_commit(root, "mp")
+     r = _kr_lum(root, v, *base, "--file", "prod.py", "--old", "MAGIC = 1", "--platform", "b")
+     check("⑨a 指定平台 b、原文在 b 恰好一次 → 不提醒", r.returncode == 0 and "提醒" not in r.stderr, r.stderr)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -67257,6 +67656,186 @@
+           and not any(c in err.getvalue() for c in "\x1b\x9b"), repr(err.getvalue()))
+ 
+ 
++# ── 殺傷力配方綁的測試要在合約清單(Projects/殺傷力配方綁的測試要在合約清單_計劃)──
++
++_KB_MULTI_CFG = ('{"test": {"run_cmd": "python3 test_guard.py"}, "default_platform": "py", "platforms": '
++                 '{"py": {"profile": "python", "root": "."}, "ios": {"profile": "swift-xctest", "root": "."}}}')
++
++
++def _kb_env(inv_line=None, cfg=None):
++    """殺傷力測試環境,換掉合約行(與設定檔)後提交。"""
++    root, v = _mk_kill_env()
++    if inv_line is not None:
++        p = v / "Systems" / "Limit.md"
++        p.write_text(p.read_text(encoding="utf-8").replace(
++            "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]", inv_line), encoding="utf-8")
++    if cfg is not None:
++        (root / ".lumos" / "config.json").write_text(cfg, encoding="utf-8")
++    _kr_commit(root, "setup")
++    return root, v
++
++
++def _kb_add(root, v, *extra, old="LIMIT = 5"):
++    return _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py",
++                   "--old", old, "--new", "LIMIT = 99", *extra)
++
++
++def _kb_lines(r):
++    """kill-add 標準錯誤裡跟「測試清單」有關的提醒行(原文失配那行不算)。"""
++    return [ln for ln in _kr_err_lines(r) if ln.startswith("⚠ 提醒:") and "測試清單" in ln]
++
++
++def t_kill_add_warns_test_not_bound():
++    """[綁的測試要在合約清單 S1] kill-add 寫入的那條配方,測試不在合約行的 [test:] 清單上 → 照常寫入、rc0、stderr 一行提醒;
++    清單空講還沒綁;在清單上(前綴有無、反引號、前綴後空白、單平台含冒號)不提醒;清單寫別的平台前綴而沒帶 --test/--platform
++    → 講平台不同;未定義平台前綴 → 一行沒比對;與原文失配同時成立 → 兩行、先失配;只更新 covers → 比既有那條。
++    翻紅釘:不比 → ②紅;單平台傳整張平台表 → ④紅;不去反引號 → ⑥紅;平台不同照講不在清單 → ⑦紅。"""
++    print("t_kill_add_warns_test_not_bound")
++    m = _load_lumos_inproc()
++    root, v = _kb_env()
++    r = _kb_add(root, v, "--test", "TestLimitFive")
++    check("①在清單上 → rc0、不提醒", r.returncode == 0 and not _kb_lines(r), r.stdout + r.stderr)
++    root, v = _kb_env()
++    r = _kb_add(root, v, "--test", "TestOther")
++    ln = _kb_lines(r)
++    recs = m._kill_read_recipes(v / "Systems" / "Limit.md")[0] or []
++    check("②不在清單上 → rc0、照寫、一行提醒(測試名、清單、bind 指令)", r.returncode == 0 and len(recs) == 1 and len(ln) == 1
++          and "TestOther" in ln[0] and "TestLimitFive" in ln[0]
++          and "lumos guard bind Systems/Limit '上限恆為5' TestOther" in ln[0], r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒")
++    r = _kb_add(root, v, "--test", "TestOther")
++    ln = _kb_lines(r)
++    check("③清單空 → 講還沒綁任何測試", r.returncode == 0 and len(ln) == 1 and "還沒綁任何測試" in ln[0], r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:t_a:b]")
++    r = _kb_add(root, v)
++    check("④單平台、清單含冒號、不帶 --test → 不提醒(不切冒號)", r.returncode == 0 and not _kb_lines(r), r.stderr)
++    for label, inv, test in (("⑤a 清單有預設前綴、配方沒有", "[test:py:TestLimitFive]", "TestLimitFive"),
++                             ("⑤b 清單沒前綴、配方有預設前綴", "[test:TestLimitFive]", "py:TestLimitFive"),
++                             ("⑥a Kotlin 反引號", "[test:`foo bar`]", "`foo bar`"),
++                             ("⑥b 前綴後帶空白", "[test:py: Baz]", "py: Baz")):
++        root, v = _kb_env(f"KEY:★INVARIANT★ 上限恆為5,超過必拒 {inv}", _KB_MULTI_CFG)
++        r = _kb_add(root, v, "--test", test)
++        check(f"{label} → 不提醒", r.returncode == 0 and not _kb_lines(r), r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:ios:Foo]", _KB_MULTI_CFG)
++    r = _kb_add(root, v)
++    ln = _kb_lines(r)
++    check("⑦清單寫 ios、不帶 --test/--platform → 講平台不同、叫 --platform ios 重新 kill-add", r.returncode == 0 and len(ln) == 1
++          and "平台" in ln[0] and "--platform ios" in ln[0] and "guard bind" not in ln[0], r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:zz:Foo]", _KB_MULTI_CFG)
++    r = _kb_add(root, v, "--test", "Foo")
++    ln = _kb_lines(r)
++    check("⑧未定義平台前綴 → 一行沒比對、rc0", r.returncode == 0 and len(ln) == 1 and "沒比對" in ln[0], r.stderr)
++    root, v = _kb_env()
++    r = _kb_add(root, v, "--test", "TestOther", old="LIMIT = 42")
++    warns = [x for x in _kr_err_lines(r) if x.startswith("⚠ 提醒:")]
++    check("⑨與原文失配同時成立 → 兩行、先失配後未綁", r.returncode == 0 and len(warns) == 2
++          and "測試清單" not in warns[0] and "TestOther" in warns[1], r.stderr)
++    root, v = _kb_env()
++    _kb_add(root, v, "--test", "TestOther")
++    r = _kb_add(root, v, "--covers", "java-concurrency")
++    ln = _kb_lines(r)
++    check("⑩只更新 covers(不帶 --test)→ 比既有那條、照樣提醒", r.returncode == 0 and len(ln) == 1 and "TestOther" in ln[0], r.stderr)
++    root, v = _kb_env()
++    r = _kb_add(root, v, "--test", "`foo bar`")
++    ln = _kb_lines(r)
++    check("⑪方法名不是識別字 → 不給 bind 指令、講綁不了", len(ln) == 1 and "綁不了" in ln[0] and "lumos guard bind Systems" not in ln[0],
++          r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TA, TB, TC, TD, TE]")
++    r = _kb_add(root, v, "--test", "TZ")
++    ln = _kb_lines(r)
++    check("⑫清單多於 3 支 → 只列前 3 支加總數", len(ln) == 1 and "TC" in ln[0] and "TD" not in ln[0] and "5 支" in ln[0], r.stderr)
++    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]", _KB_MULTI_CFG)
++    r = _kb_add(root, v, "--test", "Foo", "--platform", "ios")
++    ln = _kb_lines(r)
++    check("⑬非預設平台不在清單 → 印 ios:Foo、bind 指令帶 --platform ios", len(ln) == 1 and "ios:Foo" in ln[0]
++          and "'上限恆為5' Foo --platform ios" in ln[0], r.stderr)
++    # ⑭貼進指令的字一律走同一支(代碼審 r1 正確性席:平台名來自設定檔鍵,原樣接進指令,照貼會執行任意指令)
++    bad, esc = "x;touch PWNED;#", "e\x1b[2K"
++    pd = {"multiplatform": True, "default_platform": "py", "platforms": {"py": {}, bad: {}, esc: {}, "-p": {}}}
++    for label, rec, line in (("unbound 平台名", {"invariant": "上限", "test": "Foo", "platform": bad}, "KEY:★INVARIANT★ 上限 [test:Bar]"),
++                             ("平台不同", {"invariant": "上限", "test": "Foo"}, f"KEY:★INVARIANT★ 上限 [test:{bad}:Foo]")):
++        msg = m._kill_binding_msg("Systems/L.md", rec, m._kill_test_binding(rec, line, pd), pd)
++        check(f"⑭{label}含 shell 字元 → 指令裡加引號", msg and "--platform 'x;touch PWNED;#'" in msg
++              and "--platform x;" not in msg, msg)
++    for label, rec, line in (("unbound 平台名", {"invariant": "上限", "test": "Foo", "platform": esc}, "KEY:★INVARIANT★ 上限 [test:Bar]"),
++                             ("平台不同", {"invariant": "上限", "test": "Foo"}, f"KEY:★INVARIANT★ 上限 [test:{esc}:Foo]"),
++                             ("合約片段", {"invariant": "上\x1b限", "test": "Foo"}, "KEY:★INVARIANT★ 上\x1b限 [test:Bar]"),
++                             # 代碼審 r2 正確性席:減號開頭會被當成選項,照貼失敗
++                             ("合約片段減號開頭", {"invariant": "-x", "test": "Foo"}, "KEY:★INVARIANT★ -x 上限 [test:Bar]"),
++                             ("平台名減號開頭", {"invariant": "上限", "test": "Foo", "platform": "-p"}, "KEY:★INVARIANT★ 上限 [test:Bar]")):
++        msg = m._kill_binding_msg("Systems/L.md", rec, m._kill_test_binding(rec, line, pd), pd)
++        check(f"⑮{label} → 不原樣印、不給可貼的指令", msg and "\x1b" not in msg and "lumos guard bind Systems" not in msg
++              and "再帶 --platform" not in msg and "不印可貼的指令" in msg, repr(msg))
++    print("  ✓ t_kill_add_warns_test_not_bound")
++
++
++def t_doctor_kill_test_not_bound():
++    """[綁的測試要在合約清單 S2] doctor P2 段第三個提醒:配方的測試不在對應合約行清單 → 列出;都在 → 不列;一篇兩條合約各對各;
++    對不回合約行、欄位壞的配方不列也不拖累其他條;設定檔讀不了整則不出現;非識別字不給 bind 指令;平台不同另講;
++    --ci 記 check-p2t warned 到本機帳(不進版控帳)。翻紅釘:不分篇各對各 → ③紅;整則一個保護 → ④紅;沒登本機帳分流 → ⑧紅。"""
++    print("t_doctor_kill_test_not_bound")
++    m = _load_lumos_inproc()
++    head = "殺傷力配方驗的測試不在合約的測試清單上"
++
++    def third(out):
++        i = out.find("[P2]")
++        j = out.find("\n[", i + 1)
++        s = out[i:j if j > 0 else len(out)] if i >= 0 else ""
++        k = s.find(head)
++        return s[k:] if k >= 0 else ""
++
++    root, v = _mk_kill_env()
++    two_inv = ["KEY:★INVARIANT★ 甲合約恆成立 [test:TA] [kill:recipes]", "KEY:★INVARIANT★ 乙合約恆成立 [test:TB] [kill:recipes]"]
++    notes = {
++        "Bound": _kr_note([_kr_recipe("prod.py")]),
++        "Unb": _kr_note([_kr_recipe("prod.py", test="TestOther")]),
++        "Two": _kr_note([_kr_recipe("prod.py", invariant="甲合約", test="TA"),
++                         _kr_recipe("prod.py", invariant="乙合約", test="TA", old="LIMIT")], inv_lines=two_inv),
++        "Odd": _kr_note([_kr_recipe("prod.py", invariant="不存在的片段", test="Z1"), _kr_recipe("prod.py", invariant="", test="Z2"),
++                         _kr_recipe("prod.py", invariant=5, test="Z3"), 3, _kr_recipe("prod.py", platform=["a"], test="Z4"),
++                         _kr_recipe("prod.py", test="TestOther2", old="LIMIT")]),
++        "Bt": _kr_note([_kr_recipe("prod.py", test="`foo bar`")]),
++    }
++    for n, t in notes.items():
++        (v / "Systems" / f"{n}.md").write_text(t, encoding="utf-8")
++    _kr_commit(root, "recipes")
++    r = run(v, "doctor", "--verbose")
++    s = third(r.stdout)
++    check("①不在清單上的列出(節點、測試、bind 指令)", "Unb" in s and "TestOther" in s
++          and "lumos guard bind Systems/Unb '上限恆為5' TestOther" in s, r.stdout[-2500:])
++    check("②在清單上的不列", "Systems/Bound" not in s, s)
++    check("③一篇兩條合約各對各:乙合約那條列、甲合約那條不列", "乙合約" in s and "甲合約" not in s, s)
++    check("④對不回合約行、欄位壞的不列,同篇好的照列", "TestOther2" in s and not any(z in s for z in ("Z1", "Z2", "Z3", "Z4")), s)
++    check("⑤非識別字 → 講綁不了、不給 bind 指令", "foo bar" in s and "綁不了" in s and "guard bind Systems/Bt" not in s, s)
++    check("⑥回傳碼不受影響(只提醒)", r.returncode == 0, r.stdout[-800:])
++    run(v, "doctor", "--ci")
++    evs = [e for e in _gov_events_all(v.parent) if e.get("gate") == "check-p2t"]
++    versioned = (v.parent / ".governance-log.jsonl")
++    vtxt = versioned.read_text(encoding="utf-8") if versioned.exists() else ""
++    check("⑦--ci 記 check-p2t(warned、不硬擋、帶節點)", evs and all(e.get("kind") == "warned" and e.get("hard") is False for e in evs)
++          and {"Unb", "Two", "Odd", "Bt"} <= {x for e in evs for x in e.get("nodes") or []}
++          and m._KNOWN_GATES.count("check-p2t") == 1, str(evs)[:400])
++    check("⑧寫在本機帳、不進版控帳", "check-p2t" not in vtxt and ("check-p2t", "warned") in m._GOV_LOCAL_PAIRS, vtxt[-400:])
++    (root / ".lumos" / "config.json").write_text("{bad", encoding="utf-8")
++    r = run(v, "doctor", "--verbose")
++    check("⑨設定檔讀不了 → 整則不出現", head not in r.stdout, r.stdout[-1500:])
++    for n in ("Unb", "Two", "Odd", "Bt"):
++        (v / "Systems" / f"{n}.md").unlink()
++    (root / ".lumos" / "config.json").write_text('{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
++    _kr_commit(root, "only bound")
++    r = run(v, "doctor", "--verbose")
++    check("⑩都在清單上 → 不出現", head not in r.stdout, r.stdout[-1500:])
++    root, v = _kb_env(None, _KB_MULTI_CFG)
++    (v / "Systems" / "Ios.md").write_text(_kr_note([_kr_recipe("prod.py", test="ios:Foo")],
++                                                   inv_lines=["KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:ios:Foo] [kill:recipes]"]),
++                                          encoding="utf-8")
++    _kr_commit(root, "ios")
++    r = run(v, "doctor", "--verbose")
++    s = third(r.stdout)
++    check("⑪平台不同 → 列出並叫 --platform ios", "Ios" in s and "--platform ios" in s, r.stdout[-1500:])
++    print("  ✓ t_doctor_kill_test_not_bound")
++
++
+ def t_doctor_kill_recipe_drift():
+     """[S3][S4] doctor P2 段逐條列失配/讀不到/非 UTF-8/跑出 repo/格式不對/平台不在設定/整欄解析不了(好壞混在同一篇也一樣),
+     含次數或原因與 kill-rm 修法;--ci 記 check-p2;一般與 --strict 回傳碼不受影響;verification/superseded/stale 不列。

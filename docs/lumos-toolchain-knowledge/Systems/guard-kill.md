@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-10-06
+updated: 2026-10-07
 self_audit: gpt-5.6-sol/2026-10-07
 about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
 tags:
@@ -24,7 +24,7 @@ summary: |-
   KEY:宣告式壞法(人寫,從業務行為推導非實作反轉;繞開等價變異不可判定)｜run_cmd由config宣告(platforms.X.run_cmd/legacy test.run_cmd,{method}佔位+shlex.quote+killpg)｜**七態**(2026-07-29 oracle品質包升級,取代舊六態):killed(強證據,歸因到綁定測試)/killed_unattributed(紅了但歸不到該測試)/timed_out_weak(**不再計為 killed**,舊版歸 killed 是假強殺)/survived(稻草人rc1)/drifted/abort/error
   KEY:baseline前置(cargo-mutants)防假殺;timeout=baseline×5下限20s(LUMOS_KILL_TIMEOUT_FLOOR可覆寫);worktree只隔離原始碼不隔離DB(hermetic警語);HEAD基準(dirty大聲警告)
   KEY:★DEBT★ hydration(未提交帶入)與lockfile v1砍(否決位裁);E2E maestro {method}不適用;冷build成本;submodule不init
-  KEY:★誠實界線[2026-07-23 日報吸收]★——殺傷率有天花板:「殺得掉」≠「殺得準」。研究(arXiv 2606.10417)實測突變殺傷率 7-9 成的測試仍漏一大片未真正驗到的行為,且很多「殺掉」是程式碰巧崩(rc≠0)、非斷言真的檢查了被改壞的行為。**對 lumos 兩重意義**:①guard-kill 的 survived(rc1)只證「綁定測試對這個壞法翻紅」,不證斷言指到被改的業務欄位——高風險合約可加一句「準殺」檢查(失敗測試斷言須提及被弄壞的欄位/行為,非只看 rc)②**打臉 2026-07-22 日報 inspiration「把 Check K 健康指標從『數測試』換成『殺傷率』」**(該 inspiration 未落地)——別把可鑽的『數量』換成另一個可鑽的『殺傷率』;真要換,健康指標得是『準殺』(斷言驗到規則),不是裸殺傷率。載重合約留「這條到底驗了哪些行為」比留一個殺傷率數字誠實
+  KEY:★誠實界線[2026-07-23 日報吸收]★——殺傷率有天花板:「殺得掉」≠「殺得準」。研究(arXiv 2606.10417)實測突變殺傷率 7-9 成的測試仍漏一大片未真正驗到的行為,且很多「殺掉」是程式碰巧崩(rc≠0)、非斷言真的檢查了被改壞的行為。**對 lumos 兩重意義**:①guard-kill 判 killed 只證「綁定測試對這個壞法翻紅」,不證斷言指到被改的業務欄位——高風險合約可加一句「準殺」檢查(失敗測試斷言須提及被弄壞的欄位/行為,非只看 rc)②**打臉 2026-07-22 日報 inspiration「把 Check K 健康指標從『數測試』換成『殺傷率』」**(該 inspiration 未落地)——別把可鑽的『數量』換成另一個可鑽的『殺傷率』;真要換,健康指標得是『準殺』(斷言驗到規則),不是裸殺傷率。載重合約留「這條到底驗了哪些行為」比留一個殺傷率數字誠實
   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
   TEST:t_guard_kill(七態+M1/M2殺手測試)+t_guard_kill_attribution+t_guard_kill_rc_precedence+t_guard_kill_json_purity+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]guard settle 對「已 pass 但預告句還在」補改句(以前一律回 0 印已轉正),前提不符回 2——把 settle 當重跑無害在腳本裡呼叫的地方會看到新的失敗;--test 只在待完成時要、--date 只給補改句用。轉正日期依序取 --date、那篇已寫的日期、守衛紀錄第一次變成 pass 的提交(那筆也是檔案第一次出現就不算、shallow 擋),★不拿今天充數★;不用 git log -S 合約文字:settle 是原地換行、出現次數不變,找不到轉正那次(設計審 r1 四席報到)
@@ -52,10 +52,18 @@ decisions:
   - content: 拿掉 2026-07-10 那份已 stale 的驗證背書(態數升級後前提不成立,E1 連喊 24 天 207 次沒人理——機制空轉週報首批)。目前 guard kill 沒有有效驗證紀錄;重驗要在有 kill 配方的消費端專案跑一輪,排進下一批。
     id: d1
     decided: 2026-08-22
-    valid: true
+    valid: false
+    superseded_by: Systems/guard-kill.md#d3
+    ended: 2026-10-07
   - content: 歸因需要測試輸出把「失敗標記」和「測試名」放同一行或 5 行內:test_lumos.py 的 runner 在每支失敗測試後印「✗ FAILED <名>(N 條斷言)」。2026-08-22 第一次真跑 kill(canary-audit 落盤自驗配方)判 killed_unattributed 就是因為這個。
     id: d2
     decided: 2026-08-22
+    valid: true
+  - content: 保留移除2026-07-10失效背書的決定，不再用零有效統稱。2026-08-22首次真跑只保留當時單配方的歷史觀測，未記產品提交，不能作當前版本背書；產品驗證按已記固定版本與案例解讀，2026-10-07固定fd0d2526的一條killed、weak:false配方限該版本與案例。doctor與kill-add的33項子集另列，不代答全部guard kill或全部合約。
+    id: d3
+    context: 舊d1同時記了移除失效背書與當時零有效狀態；後續真跑紀錄已加入，後半句仍valid會誤導新session。可保留舊零聲稱或改按限定案例解讀。
+    why_chosen: 保留原棄舊背書的理由，改由限定版本與案例的驗證紀錄承接；單一成功不外推全部守衛。
+    decided: 2026-10-07
     valid: true
 verified_by:
   - "[[Verification/2026-08-22_guard-kill首次真跑]]"

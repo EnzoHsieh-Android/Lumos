@@ -1,0 +1,1067 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15210,11 +16479,17 @@
+     驗原文要跑好幾支 git,放到鎖外(代碼審第 3 輪正確性席:每支上限 10 秒,加起來會超過鎖 30 秒的過期時間)。"""
+     if rc != 0 or not warn_box:
+         return rc
+-    for rec in warn_box:
+-        _kill_add_warn(env, rel, rec)
++    try:
++        ctx = _kill_check_ctx(_repo_root_from_env(env))
++    except Exception:
++        ctx = None
++    # 兩個提醒各至多一行:先原文失配、後測試不在清單(都在 --try 試跑之前)
++    for rec, line in warn_box:
++        _kill_add_warn(env, rel, rec, ctx)
++        _kill_add_warn_binding(rel, rec, line, ctx)
+     if not try_run:
+         return rc
+-    return _kill_add_try(env, node, rel, _kill_recipe_id(str(rel), warn_box[0]))
++    return _kill_add_try(env, node, rel, _kill_recipe_id(str(rel), warn_box[0][0]))
+ 
+ 
+ def _kill_add_try(env, node, rel, full):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15249,8 +16524,8 @@
+ 
+ def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, test_arg,
+                            platform, note, covers_list, warn_box):
+-    """cmd_guard_kill_add 拿著寫入鎖之後的那一段:讀筆記、判重、原子寫入。這次實際要寫進去的那一條放進 warn_box,
+-    由呼叫端在鎖外驗原文、印提醒。"""
++    """cmd_guard_kill_add 拿著寫入鎖之後的那一段:讀筆記、判重、原子寫入。這次實際要寫進去的那一條與它的合約行
++    以 (配方, 合約行) 放進 warn_box,由呼叫端在鎖外驗原文、比測試清單、印提醒。"""
+     import json
+     path = env.vault / rel
+     try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15259,13 +16534,10 @@
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     # 定位 KEY 行(去標記後比對,避免子字串誤中標記文字)
+-    target_idx = None
+-    for i in range(1, e):
+-        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
+-            if target_idx is not None:
+-                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
+-                return 2
+-            target_idx = i
++    target_idx, why = _kill_find_contract(lines, 1, e, invariant_substr)
++    if why == "many":
++        print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
++        return 2
+     if target_idx is None:
+         print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
+         return 2
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15310,7 +16582,7 @@
+               f"先用 lumos guard kill-rm {_kill_node_arg(rel)} --id {key[:12]} 拿掉舊的那條{tip}", file=sys.stderr)
+         return 2
+     # 判重之後:這次實際要寫進去的那一條交給呼叫端在鎖外驗原文(只提醒、照舊寫入——「宣告不擋、跑時擋」)
+-    warn_box.append(recipe)
++    warn_box.append((recipe, line))   # 合約行一起帶出:鎖外比測試清單用寫入當下這份
+     if updated is None:
+         recipes.append(recipe)
+     blob = json.dumps(recipes, ensure_ascii=False)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -16160,14 +17432,11 @@
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+-    target_idx = None
+-    for i in range(1, e):
+-        # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容)
+-        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
+-            if target_idx is not None:
+-                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
+-                return 2
+-            target_idx = i
++    # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容);跟 kill-add 共用同一支定位
++    target_idx, why = _kill_find_contract(lines, 1, e, invariant_substr)
++    if why == "many":
++        print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
++        return 2
+     if target_idx is None:
+         print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
+         return 2
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18020,11 +19289,191 @@
+     return _cm()
+ 
+ 
++def _updated_stale_notes(env, repo_root):
++    """開頭 updated(YYYY-MM-DD)早於 git 上那一篇最後一次提交日期的筆記 → [(圖譜內路徑, updated, git 日期)],照路徑排序。
++    git 不可用(不是 repo、失敗)時 git_last_change_dates 回空表,這裡就回 []。doctor 的 U 段與 updated-sync --stale 共用。
++    ★淺複製不判★:只有最近幾個提交時,每篇的 git 日期都變成同一天,會誤列大批、勸人蓋掉真日期(代碼審 r1 正確性席 F1)。
++    ★早一天以內不算★:今天跑 updated-sync、隔天才提交時,git 日期比 updated 晚一天,不該再被列(代碼審 r1 正確性席 F3)。"""
++    import datetime as _dt
++    if not repo_root or _git_is_shallow(repo_root):
++        return []
++    dates = git_last_change_dates(repo_root, env.vault)
++    out = []
++    for rel, n in sorted(env.notes.items()):
++        if _note_unreadable(n):
++            continue
++        u, g = _drift_str(n, "updated"), dates.get(rel)
++        if not (g and re.fullmatch(r"\d{4}-\d{2}-\d{2}", u)):
++            continue
++        try:
++            lag = (_dt.date.fromisoformat(g) - _dt.date.fromisoformat(u)).days
++        except ValueError:      # 形狀像日期但不存在(2026-02-30):當成落後列出,一鍵修會改成今天(代碼審 r2 回歸席 F2)
++            lag = 2
++        if lag > 1:
++            out.append((rel, u, g))
++    return out
++
++
++def _updated_sync_one(env, rel, today, dry_run):
++    """updated-sync 處理一篇 → rc:沒有 updated(或空)、已是今天就跳過;--dry-run 只印;寫入失敗講原因回 2,不影響其他篇
++    (代碼審 r2 回歸席 F1)。"""
++    u = _drift_str(env.notes.get(rel), "updated")
++    if not u:
++        print(f"跳過 {rel[:-3]}:開頭沒有 updated 欄或是空的(不加)")
++        return 0
++    if u == today:
++        print(f"跳過 {rel[:-3]}:updated 已是今天")
++        return 0
++    if dry_run:
++        print(f"會改 {rel[:-3]}:updated {u} → {today}")
++        return 0
++    try:
++        return cmd_set(env, rel, "updated", today)
++    except (ValueError, RuntimeError) as ex:
++        print(f"擋下 {rel[:-3]}:{ex}", file=sys.stderr)
++        return 2
++
++
++def cmd_updated_sync(env, nodes, stale=False, dry_run=False):
++    """lumos updated-sync <節點>… | --stale [--dry-run]:把筆記開頭的 updated 改成今天(Projects/提交時自動更新筆記日期_計劃)。
++    --stale 取 doctor U 段列的那幾篇;寫入一篇一篇走 cmd_set(鎖、自驗、原子寫入);找不到的節點給近名候選、其他照改、
++    最後 rc 非 0;沒有 updated 欄的不加;已是今天的跳過。"""
++    import datetime as _dt
++    if not nodes and not stale:
++        print("擋下:給要改的節點名,或加 --stale 改 doctor 列出的全部", file=sys.stderr)
++        return 2
++    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
++    rels, rc = [], 0
++    if stale:
++        rels += [r for r, _u, _g in _updated_stale_notes(env, _vault_repo_root(env))]
++    for nd in nodes:
++        rel = env.find(nd)
++        if rel is None:
++            rc = max(rc, _node_not_found(env, nd, write_side=True))
++            continue
++        rels.append(rel)
++    for rel in dict.fromkeys(rels):
++        rc = max(rc, _updated_sync_one(env, rel, today, dry_run))
++    if not rels and not rc:
++        print("沒有要改的筆記")
++    return rc
++
++
+ def cmd_set(env, rel, key, value):
+     with _vault_write_lock(env.vault):
+         return _cmd_set_locked(env, rel, key, value)
+ 
+ 
++def cmd_summary_line(env, node, old, new, nth=None, dry_run=False):
++    """lumos summary-line <節點> "<舊片段>" "<新片段>":摘要裡唯一含舊片段的那一處換成新片段(Projects/改摘要單行的指令_計劃)。
++    定位照 guard bind 的「片段比對、對到多個就擋」;多個時列候選、--nth 指定第幾個出現處;續行條目不支援;
++    換完只剩空白就拿掉那一行(摘要不得因此變空);寫入照 atomic_write_verify,同一次把 updated 改成今天。"""
++    new = new or ""
++    # 換行類字元一律擋(splitlines 認得的全部:\r、\x0b、\x0c、\x1c-\x1e、\x85、\u2028、\u2029;代碼審 r1 正確性席 F1)
++    if not old or len((old + "x").splitlines()) > 1 or len((new + "x").splitlines()) > 1:
++        print("擋下:舊片段不能是空的,舊片段與新片段都不能含換行", file=sys.stderr)
++        return 2
++    if old == new:
++        print("擋下:舊片段跟新片段一樣,沒有要改的", file=sys.stderr)
++        return 2
++    rel = env.find(node)
++    if rel is None:
++        return _node_not_found(env, node, write_side=True)
++    with _vault_write_lock(env.vault):
++        return _summary_line_locked(env, rel, old, new, nth, dry_run)
++
++
++def _summary_line_hits(lines, regs, old):
++    """摘要區裡舊片段的每一個出現處 → [(0 起的行號, 行內位置)],照由上而下、由左而右。"""
++    hits = []
++    for i, (ln, rg) in enumerate(zip(lines, regs)):
++        if rg != "summary":
++            continue
++        k = ln.find(old)
++        while k >= 0:
++            hits.append((i, k))
++            k = ln.find(old, k + 1)
++    return hits
++
++
++def _summary_line_pick_err(rel, lines, hits, old, nth):
++    """要改哪一個出現處判不出來 → 擋下訊息(多行);判得出來回 None。對到多處時列候選(行號、前 40 字)。"""
++    if not hits:
++        return f"擋下:{rel} 的摘要裡找不到「{_esc_clean(old, 80)}」"
++    if nth is None and len(hits) > 1:
++        rows = [f"  {n}. 第 {i + 1} 行  {_esc_clean(lines[i].strip(), 40)}" for n, (i, _k) in enumerate(hits, 1)]
++        return "\n".join([f"擋下:「{_esc_clean(old, 80)}」在 {rel} 的摘要裡出現 {len(hits)} 處,分不清要改哪一個:", *rows,
++                          "給更長、更精確的片段,或加 --nth <第幾個>(照上面的編號)"])
++    if nth is not None and not (1 <= nth <= len(hits)):
++        return f"擋下:--nth 要在 1 到 {len(hits)} 之間"
++    return None
++
++
++def _summary_line_rebuild(lines, i, new_line, e, today):
++    """第 i 行換成 new_line(None=拿掉那一行),開頭欄位的 updated 換成 today(沒有就不加)→ 新的行陣列。"""
++    out = lines[:i] + ([] if new_line is None else [new_line]) + lines[i + 1:]
++    for j in range(1, e - (1 if new_line is None else 0)):
++        if re.match(r"^updated:\s", out[j]):
++            out[j] = f"updated: {today}"
++            break
++    return out
++
++
++def _summary_line_locked(env, rel, old, new, nth, dry_run):
++    import datetime as _dt
++    path = env.vault / rel
++    try:
++        lines, _s, e = load_raw_for_edit(path)
++    except (ValueError, RuntimeError) as ex:
++        print(f"擋下:{ex}", file=sys.stderr)
++        return 2
++    text = "\n".join(lines)
++    regs = _notelines_regions(text)
++    hits = _summary_line_hits(lines, regs, old)
++    err = _summary_line_pick_err(rel, lines, hits, old, nth)
++    if err:
++        print(err, file=sys.stderr)
++        return 2
++    i, k = hits[(nth or 1) - 1]
++    cont = {}       # {續行行號: 所屬那條的行號}(1 起)
++    _ns_summary_logical(text, cont)
++    if (i + 1) in cont or (i + 1) in set(cont.values()):
++        print(f"擋下:{rel} 第 {i + 1} 行屬於一條拆成多行(續行)的摘要條目,這個指令不支援續行,請手改", file=sys.stderr)
++        return 2
++    old_line = lines[i]
++    new_line = old_line[:k] + new + old_line[k + len(old):]
++    delete = not new_line.strip()
++    if delete and not any(rg == "summary" and ln.strip() and not ln.lstrip().startswith("summary:")
++                          for j, (ln, rg) in enumerate(zip(lines, regs)) if j != i):
++        print(f"擋下:刪掉這一行之後 {rel} 的摘要就空了,摘要不能是空的", file=sys.stderr)
++        return 2
++    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
++    new_lines = _summary_line_rebuild(lines, i, None if delete else new_line, e, today)
++    print(f"改前:{_esc_clean(old_line.strip(), 300)}")
++    print("改後:" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
++    if dry_run:
++        print("(--dry-run:只印,沒寫)")
++        return 0
++    target = old_line.strip() if delete else new_line.strip()
++    before_n = sum(1 for ln in lines[1:e] if ln.strip() == target)
++
++    def check(fields):
++        """改後摘要裡:換行的話新行比原本多一行,刪行的話舊行比原本少一行。"""
++        summ = fields.get("summary")
++        if not isinstance(summ, str):
++            return False
++        n = sum(1 for ln in summ.split("\n") if ln.strip() == target)
++        return n == before_n - 1 if delete else n == before_n + 1
++
++    try:
++        atomic_write_verify(path, new_lines, "summary", check)
++    except (ValueError, RuntimeError) as ex:
++        print(f"擋下:{ex}", file=sys.stderr)
++        return 2
++    print(f"✓ 改好了 {rel}(updated 改成 {today});接著跑 lumos lint {rel[:-3]} 看這一篇")
++    return 0
++
++
+ def _cmd_set_locked(env, rel, key, value):
+     if key in COND_KEYS:
+         return _set_conditions_locked(env, rel, key, value if isinstance(value, list) else [value])
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20034,7 +21483,7 @@
+             return 2
+         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
+         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
+-              "Claude 外掛 lumos-ledger 與市集 lumos-toolchain)。")
++              "Claude 外掛 lumos-ledger、lumos-context 與市集 lumos-toolchain)。")
+         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
+         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
+         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21918,20 +23367,20 @@
+     return gone
+ 
+ 
+-# ── Claude 事件帳外掛(Projects/Lumos事件帳_計劃 做法第 4 節)─────────────────────
++# ── Claude 外掛:事件帳與交棒脈絡(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點)────
+ # 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
+ # readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
+-_LEDGER_MARKET = "lumos-toolchain"
+-_LEDGER_PLUGIN = "lumos-ledger@lumos-toolchain"
+-_LEDGER_MANUAL = (f"claude plugin uninstall {_LEDGER_PLUGIN} --scope user",
+-                  f"claude plugin marketplace remove {_LEDGER_MARKET} --scope user")
++# 新增外掛不必先跑 marketplace update:資料夾型市集 install 時直接讀市集檔(2026-10-06 隔離設定資料夾實測)。
++_LUMOS_MARKET = "lumos-toolchain"
++_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain")
++_PLUGIN_RANK = {"ok": 0, "absent": 1, "no-source": 2, "failed": 3}   # 回傳值取最差的一支
+ 
+ 
+-def _claude_json(claude, args):
++def _claude_json(claude, args, timeout=30):
+     """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
+     代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
+     import json as _j
+-    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
++    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=timeout)
+     if r.returncode != 0:
+         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
+     data = _j.loads(r.stdout) if r.stdout.strip() else None
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21953,23 +23402,30 @@
+     return norm(a) == norm(b)
+ 
+ 
+-def _plugin_sync_msg(state: str, detail: str = "") -> str:
+-    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。"""
++def _plugin_sync_msg(state: str, detail: str = "", pid: str = "") -> str:
++    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。pid 空 = 整段(市集或找不到 claude)。"""
++    who = f"Claude 外掛 {pid}" if pid else "Claude 外掛"
+     if state == "ok":
+-        return f"  ✓ Claude 事件帳外掛 {_LEDGER_PLUGIN} 已就位"
++        return f"  ✓ {who} 已就位"
+     if state == "absent":
+-        return f"  (略過 Claude 事件帳外掛:{detail or '找不到 claude 指令'})"
++        return f"  (略過 {who}:{detail or '找不到 claude 指令'})"
+     if state == "no-source":
+-        return f"  (略過 Claude 事件帳外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{detail})"
+-    return f"  ⚠ Claude 事件帳外掛 {_LEDGER_PLUGIN} 沒裝好:{detail}"
++        where = "的 .claude-plugin/marketplace.json 沒有列出它" if pid else "沒有 .claude-plugin/marketplace.json"
++        return f"  (略過 {who}:lumos 來源 repo {where}——{detail})"
++    return f"  ⚠ {who} 沒裝好:{detail}"
+ 
+ 
+-def _ledger_market(claude):
++def _lumos_plugin_market(claude):
+     return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
+-                 if x.get("name") == _LEDGER_MARKET), None)
++                 if x.get("name") == _LUMOS_MARKET), None)
++
+ 
++def _lumos_market_is_ours(mk, src):
++    """市集登記是不是我們的:本機資料夾、而且路徑就是 src(安裝、移除、手動指令三處共用)。"""
++    return bool(mk and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src))
+ 
+-def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
++
++def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
+     """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
+     總共超過 budget 秒就不再開新的一次(每次查本身可能要等 claude 很久;代碼審 r3)。"""
+     import time as _t
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21986,14 +23442,28 @@
+     return False
+ 
+ 
+-def _ledger_user_plugin(claude):
++def _lumos_plugin_user(claude, pid, timeout=30):
+     """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
+-    return any(x.get("id") == _LEDGER_PLUGIN and x.get("scope", "user") == "user"
+-               for x in _claude_json(claude, ["plugin", "list", "--json"]))
++    return any(x.get("id") == pid and x.get("scope", "user") == "user"
++               for x in _claude_json(claude, ["plugin", "list", "--json"], timeout=timeout))
++
++
++def _lumos_plugin_listed(src):
++    """來源 repo 市集檔列了哪些外掛(id 形如 名稱@市集);讀不到回空集合。"""
++    import json as _j
++    try:
++        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8-sig"))
++    except (OSError, ValueError):
++        return set()
++    plugins = mk.get("plugins") if isinstance(mk, dict) else None
++    if not isinstance(plugins, list):            # null、數字、物件都當沒列(代碼審 r1)
++        return set()
++    return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in plugins if isinstance(p, dict) and isinstance(p.get("name"), str)}
+ 
+ 
+ def _sync_claude_plugin(source=None) -> str:
+-    """確保 lumos-ledger 外掛裝好。回 ok / absent / no-source / failed;自己印訊息(成功與略過到 stdout、失敗到 stderr)。"""
++    """確保外掛清單的每一支都裝好。回最差的一支:ok / absent / no-source / failed;
++    自己印訊息(成功與略過到 stdout、失敗到 stderr),各支分開印。"""
+     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+         print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
+         return "absent"
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22006,96 +23476,133 @@
+         print(_plugin_sync_msg("no-source", str(src)))
+         return "no-source"
+     if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
+-        print(f"  (Claude 事件帳外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
++        print(f"  (Claude 外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+     step = {"removed_old": False, "added": False}
+     try:
+-        if not _ledger_ensure_market(claude, src, step):
+-            print(_plugin_sync_msg("failed", f"已有同名市集 {_LEDGER_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
++        if not _lumos_plugin_ensure_market(claude, src, step):
++            print(_plugin_sync_msg("failed", f"已有同名市集 {_LUMOS_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+                   file=sys.stderr)
+             return "failed"
+         step["added"] = True
+-        _ledger_ensure_plugin(claude)
+     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        print(_plugin_sync_msg("failed", f"{e}{_ledger_fail_hint(step)}"), file=sys.stderr)
++        print(_plugin_sync_msg("failed", f"{e}{_lumos_plugin_fail_hint(step)}"), file=sys.stderr)
+         return "failed"
+-    print(_plugin_sync_msg("ok"))
+-    return "ok"
++    listed = _lumos_plugin_listed(src)
++    worst = "ok"
++    for pid in _LUMOS_PLUGINS:                # 各支獨立:一支失敗不影響下一支
++        if pid not in listed:
++            state = "no-source"
++            print(_plugin_sync_msg(state, str(src), pid))
++        else:
++            try:
++                _lumos_plugin_ensure(claude, pid)
++                state = "ok"
++                print(_plugin_sync_msg(state, "", pid))
++            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++                state = "failed"
++                print(_plugin_sync_msg(state, f"{e}{_lumos_plugin_fail_hint(step)}", pid), file=sys.stderr)
++        worst = max(worst, state, key=_PLUGIN_RANK.__getitem__)
++    return worst
+ 
+ 
+-def _ledger_ensure_market(claude, src, step):
++def _lumos_plugin_ensure_market(claude, src, step):
+     """市集登記成 src 這個本機資料夾。同名市集不是本機資料夾 → 回 False(不動它);
+     本機路徑不同 → 先移除再加。失敗丟例外,step 記到哪一步。"""
+-    mk = _ledger_market(claude)
++    mk = _lumos_plugin_market(claude)
+     if mk is not None and not (mk.get("source") == "directory" and mk.get("path")):
+         return False
+     if mk is not None and not _same_local_path(mk["path"], src):
+-        _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
++        _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
+         step["removed_old"], mk = True, None
+     if mk is None:
+         def ours():
+-            now = _ledger_market(claude)
+-            return bool(now and now.get("source") == "directory" and _same_local_path(now.get("path", ""), src))
++            now = _lumos_plugin_market(claude)
++            return _lumos_market_is_ours(now, src)
+         try:
+             _claude_do(claude, ["plugin", "marketplace", "add", str(src), "--scope", "user"])
+         except (RuntimeError, subprocess.TimeoutExpired):   # 另一支同時跑先加好了、或逾時但其實寫進去了:以最終狀態為準
+-            if not _ledger_wait(ours):
++            if not _lumos_plugin_wait(ours):
+                 raise
+     return True
+ 
+ 
+-def _ledger_ensure_plugin(claude):
+-    """使用者範圍裝上外掛;另一支同時在裝時以最終狀態為準。"""
+-    if _ledger_user_plugin(claude):
++def _lumos_plugin_ensure(claude, pid):
++    """使用者範圍裝上這支外掛,裝完以列表確認真的在;另一支同時在裝時以最終狀態為準。"""
++    if _lumos_plugin_user(claude, pid):
+         return
+     try:
+-        _claude_do(claude, ["plugin", "install", _LEDGER_PLUGIN, "--scope", "user"])
++        _claude_do(claude, ["plugin", "install", pid, "--scope", "user"])
+     except (RuntimeError, subprocess.TimeoutExpired):
+-        if not _ledger_wait(lambda: _ledger_user_plugin(claude)):
++        if not _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid)):
+             raise
++        return
++    try:                                     # 第一次查詢撞到另一支同時在寫也交給等待重查(代碼審 r1)
++        seen = _lumos_plugin_user(claude, pid, timeout=10)   # 短逾時:claude 卡住時不拖太久(代碼審 r2)
++    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++        seen = False
++    if not (seen or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
++        raise RuntimeError("install 回成功但外掛列表裡沒有它")
+ 
+ 
+-def _ledger_fail_hint(step):
++def _lumos_plugin_fail_hint(step):
+     """同步外掛失敗時照實說做到哪一步。"""
+     if step["removed_old"] and not step["added"]:
+-        return ";舊的市集登記已移除、新的沒加上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
++        return ";舊的市集登記已移除、新的沒加上,外掛暫時都沒生效——修好原因後重跑 lumos install --force"
+     if step["added"]:
+-        return ";市集已登記、外掛沒裝上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
++        return ";市集已登記、這支外掛沒裝上,它暫時沒生效——修好原因後重跑 lumos install --force"
+     return ";修好原因後重跑 lumos install --force"
+ 
+ 
+ def _teardown_claude_plugin(source=None) -> str:
+-    """移除 lumos-ledger 外掛與我們的市集。沒有 claude、兩者都沒有就安靜略過;成功說移掉了什麼;失敗附兩個手動指令。"""
++    """移除外掛清單的每一支與我們的市集。沒有 claude、全都沒有就安靜略過;成功說移掉了什麼。
++    外掛逐支獨立移除;全部成功才移除市集,任一支失敗就保留市集,手動補做只列失敗的那幾支加市集。"""
+     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+-        print("  (略過移除 Claude 事件帳外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
++        print("  (略過移除 Claude 外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
+         return "absent"
+     claude = _py_which("claude")
+     if not claude:
+         return "absent"
+     src = _lumos_src(source).resolve()
+-    gone, errors, todo = [], [], []
+-    try:                                     # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+-        if _ledger_user_plugin(claude):
+-            _claude_do(claude, ["plugin", "uninstall", _LEDGER_PLUGIN, "--scope", "user"])
+-            gone.append(f"外掛 {_LEDGER_PLUGIN}")
+-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        errors.append(str(e))
+-        todo.append(_LEDGER_MANUAL[0])
+-    try:                                     # 外掛那步失敗也照樣處理市集(各步獨立)
+-        mk = _ledger_market(claude)
+-        if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
+-            _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+-            gone.append(f"市集 {_LEDGER_MARKET}")
+-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        errors.append(str(e))
+-        todo.append(_LEDGER_MANUAL[1])
++    gone, errors, todo, notes = [], [], [], []
++    market_cmd = f"claude plugin marketplace remove {_LUMOS_MARKET} --scope user"
++    for pid in _LUMOS_PLUGINS:               # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
++        try:
++            if _lumos_plugin_user(claude, pid):
++                _claude_do(claude, ["plugin", "uninstall", pid, "--scope", "user"])
++                gone.append(f"外掛 {pid}")
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++            errors.append(str(e))
++            todo.append(f"claude plugin uninstall {pid} --scope user")
++    if errors:                               # 有外掛沒移掉:保留市集(移掉市集會讓那支外掛變成找不到來源的孤兒)
++        try:                                 # 確定不是我們的市集就不叫人移除(代碼審 r1);判不出來照列、附一句先確認
++            mk = _lumos_plugin_market(claude)
++            ours = _lumos_market_is_ours(mk, src)
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++            ours = None
++        if ours:
++            todo.append(market_cmd)
++        elif ours is None:                   # 說明另起一行:zsh 互動模式不把行尾 # 當註解,整行貼上會變成多餘參數(代碼審 r2)
++            notes.append(f"市集 {_LUMOS_MARKET} 判不出是不是我們的:先跑 claude plugin marketplace list 確認來源是 lumos 的資料夾,是才跑最後一行")
++            todo.append(market_cmd)
++    else:
++        try:
++            mk = _lumos_plugin_market(claude)
++            if _lumos_market_is_ours(mk, src):
++                _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
++                gone.append(f"市集 {_LUMOS_MARKET}")
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++            errors.append(str(e))
++            todo.append(market_cmd)
+     if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
+         done = f"(已移除:{'與'.join(gone)})" if gone else ""
+-        print(f"  ⚠ Claude 事件帳外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
++        print(f"  ⚠ Claude 外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
++        for n in notes:
++            print(f"  ({n})", file=sys.stderr)
+         for c in todo:
+             print(f"    {c}", file=sys.stderr)
+         return "failed"
+     if gone:
+-        print(f"  ✓ 已移除 Claude 事件帳的{'與'.join(gone)}")
++        print(f"  ✓ 已移除 Claude 的{'與'.join(gone)}")
+     return "ok"
+ 
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22962,14 +24469,16 @@
+     return "ok"
+ 
+ 
+-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None):
++def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None, retro_skip=False):
+     """[T4] 處置閘(design-loop重設計 三):七步合取,全部讀側可重算(原本寫「四條合取」,2026-09-08 加⑤、2026-09-11 加⑥⑦後過期)——
+     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
+     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
+     ④quote-check 對 carrier 的帳面 snapshot 全 ok
+     ⑤條款綁定(設計審計劃每條 [SN] 要標 [test:]/[manual:];代碼審 skip,見 _disposal_clause_step)
+     ⑥資安席(定錨 high 的代碼審,required-gated 席出席+留痕+涵蓋最後一版;見 _disposal_security_step)
+-    ⑦落點(設計審計劃要寫明 lands_in;代碼審 skip,見 _disposal_landing_step)。
++    ⑦落點(設計審計劃要寫明 lands_in;代碼審 skip,見 _disposal_landing_step)
++    ⑧跑滿回顧(有人裁紀錄又有卷證資料夾的迴圈要合格回顧;回放、凍結任一趟印 —,見 _disposal_retro_step;
++      retro_skip=凍結第一趟多帶的參數,它跟 loop next 一樣用唯讀模式呼叫,不能只靠唯讀旗標區分)。
+     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
+     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
+     round-id 非連續重現 rc2(reuse panel 守衛;原 OrderedDict 首現序拿錯輪)。
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22997,6 +24506,8 @@
+         print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
+         return 1
+     rid, latest = next(reversed(groups.items()))
++    # 第八步要的「卷證資料夾在不在」在觀測尾巴之前先看:roster 尾端遇到異常會建這個資料夾,不能讓它把沒有資料夾的迴圈變成要回顧
++    _retro_dir_pre = _retro_has_dossier(root, loop_id, rounds) if root is not None else None
+ 
+     def _prov_path(p):
+         pp = Path(p)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -23253,23 +24764,28 @@
+         return 2
+     if _ld == "fail":
+         fails.append("落點")
++    # ── ⑧ 跑滿回顧(Projects/審查跑滿回顧_計劃〈三〉2):有人裁紀錄的迴圈要合格回顧;回放、凍結任一趟印 —、不讀回顧檔。
++    _rt = _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=spec_sha_override,
++                               retro_skip=retro_skip, dir_exists=_retro_dir_pre)
++    if _rt == "fail":
++        fails.append("跑滿回顧")
+     if result_out is not None:
+         result_out["rid"] = rid
+         result_out["fails"] = list(fails)
+     if fails:
+-        print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
++        _disposal_fail_banner(loop_id, rid, fails)
+         if not readonly:   # 跑滿上限提示:只印不擋、回放與凍結不印(審查跑滿上限提示_計劃 S2/S3)
+-            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)})
++            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)}, loop_id=loop_id, env=env, repo=root)
+         return 1
+     # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
+-    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld)) if st == "ok")
++    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld), ("跑滿回顧", _rt)) if st == "ok")
+     if vacuous and carrier is None:
+         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算{_extra};引句無可驗不宣稱)")
+     else:
+         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定{_extra})")
+     if not readonly:
+         _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+-        _cap_hint_print(rounds, gate={"passed": True, "fails": []})   # 審查跑滿上限提示_計劃 S2
++        _cap_hint_print(rounds, gate={"passed": True, "fails": []}, loop_id=loop_id, env=env, repo=root)   # 審查跑滿上限提示_計劃 S2
+     return 0
+ 
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -26546,7 +28062,7 @@
+     cutoff = _time.time() - days * 86400
+     n = 0
+     try:
+-        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
++        for line in _ledger_lines(p.read_text(encoding="utf-8", errors="replace")):
+             line = line.strip()
+             if not line.startswith("{") or "lint-new" not in line:
+                 continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -27951,6 +29467,29 @@
+     return eligible
+ 
+ 
++def _nodehome_group_route_tests(repo_root, group, notes, route_cache, cfg, skip):
++    """讀取層收集同提交測試證據;共享最近兩版完整清單,讀不到就撤回額外證據。"""
++    candidates = {p for info in notes.values() for p in group["paths"] & info["own"]}
++    routes = set()
++    if not candidates:
++        return routes
++    for sha in [*group["parents"], group["sha"]]:
++        if sha in route_cache:
++            cached = route_cache.pop(sha)
++        else:
++            if len(route_cache) >= 2:
++                route_cache.pop(next(iter(route_cache)))
++            cached = (_nodehome_list(repo_root, sha), {}, _nodehome_reader(repo_root, sha, from_git=True))
++        route_cache[sha] = cached
++        lst, shebang, read = cached
++        if lst is None:
++            return set()
++        files, all_paths = lst
++        routes.update(_nodehome_route_tests(
++            repo_root, files, all_paths, candidates, sha, cfg, skip, reader=read, shebang=shebang))
++    return routes
++
++
+ def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None, route_cfg=None, route_skip=frozenset()):
+     """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
+     計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -27982,26 +29521,7 @@
+             notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
+         g["content_notes"] = notes
+         if route_cfg is not None:
+-            g["route_tests"] = set()
+-            candidates = set()
+-            for info in notes.values():
+-                candidates.update(g["paths"] & info["own"])
+-            if candidates:
+-                for sha in [*g["parents"], g["sha"]]:
+-                    if sha in route_cache:
+-                        cached = route_cache.pop(sha)
+-                    else:
+-                        if len(route_cache) >= 2:
+-                            route_cache.pop(next(iter(route_cache)))
+-                        cached = (_nodehome_list(repo_root, sha), {}, _nodehome_reader(repo_root, sha, from_git=True))
+-                    route_cache[sha] = cached                # 命中也挪到最後,只保留最近兩版
+-                    lst, shebang, read = cached
+-                    if lst is None:
+-                        g["route_tests"].clear()             # 未讀到不能當合法證據,沿原路由拒收
+-                        break
+-                    files, all_paths = lst
+-                    g["route_tests"].update(_nodehome_route_tests(
+-                        repo_root, files, all_paths, candidates, sha, route_cfg, route_skip, reader=read, shebang=shebang))
++            g["route_tests"] = _nodehome_group_route_tests(repo_root, g, notes, route_cache, route_cfg, route_skip)
+     return groups
+ 
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -28435,6 +29955,7 @@
+             return 0
+         head = _lens_full_sha(root, "HEAD")
+         base_where, tip_where, mode_word = head, "index", "這次提交"
++        index_before = _nodehome_git(root, "ls-files", "-s", "-z")
+         changes = _nodehome_changes(root, head, "index")
+     else:
+         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -28517,6 +30038,9 @@
+             staged_route_tests.update(_nodehome_route_tests(
+                 root, side.files, side.all_paths, candidates, side.where, cfg, skip,
+                 reader=_nodehome_reader(root, side.where, from_git=True)))
++        if staged_route_tests and (index_before is None or _nodehome_git(root, "ls-files", "-s", "-z") != index_before):
++            staged_route_tests.clear()                     # 觀察到索引變動時撤回借用證據,不改既有正式程式退路
++            print("提醒:暫存區在檢查期間變動或讀不到,額外測試寫回證據不採信;請重新檢查。", file=sys.stderr)
+     res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge,
+                              staged_route_tests=staged_route_tests)
+     homesN, _own = _nodehome_homes(root, N)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -33054,8 +34578,11 @@
+ 
+ 
+ def _drift_pending_clause(cl):
+-    """這個子句(遮好的)算不算待定:有待定詞、而且還沒補已裁定括號(括號補在子句結尾,同一行別的子句照判;代碼審 r1 正確性席)。"""
+-    return any(w in cl for w in _DRIFT_PENDING_WORDS) and _DRIFT_MASK not in cl
++    """這個子句(遮好的)算不算待定:有待定詞、而且還沒補已裁定括號(括號補在子句結尾,同一行別的子句照判;代碼審 r1 正確性席)。
++    ★找待定詞前先遮掉 [[…]] 連結(含別名)★:連到標題寫「…還沒做」的已結案 Issue,不代表這句在說還沒做
++    (2026-10-06 rtb 盤點兩條誤報,Projects/c6不看連結標題裡的待定詞_計劃);找連結的那一步照用原文。"""
++    bare = WIKILINK_RE.sub(lambda m: _DRIFT_QUOTED * len(m.group(0)), cl)
++    return any(w in bare for w in _DRIFT_PENDING_WORDS) and _DRIFT_MASK not in cl
+ 
+ 
+ def _drift_pending_clauses(line):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -35312,7 +36839,8 @@
+ def _drift_ledger_path_err(root, rel):
+     """帳檔寫入前的路徑檢查 → 錯誤或 None:從 repo 根往下到帳檔的每一層都不是符號連結(repo 根以上不管)、
+     解析後的真實路徑在 repo 根底下(這兩條走共用的 _repo_path_unsafe,跟筆記內容審的資料夾守衛同一份)、
+-    帳檔已存在時硬連結數是 1。檢查後到寫入前的時間差不處理(存量漂移改法〈誠實界線〉)。"""
++    帳檔已存在時是一般檔(不是管線、資料夾、裝置檔:往管線追加會卡住)而且硬連結數是 1。檢查後到寫入前的時間差不處理(存量漂移改法〈誠實界線〉)。
++    ★跑滿回顧一族讀寫治理帳前也用這一支★(代碼審 code-審查跑滿回顧 r3:讀端不跟捷徑、寫端跟捷徑,人裁寫得進去讀不到),讀寫同一條規則。"""
+     fp = Path(root) / rel
+     try:
+         bad = _repo_path_unsafe(root, rel)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -35320,6 +36848,8 @@
+             return f"{bad[1]} 是符號連結——帳檔與它在 repo 裡的上層目錄都要是一般的檔案與目錄,不往裡寫"
+         if bad:
+             return f"{fp} 解析後不在 repo 底下,不往裡寫"
++        if fp.exists() and not fp.is_file():
++            return f"{fp} 不是一般檔(管線、資料夾或裝置檔),不往裡寫"
+         if fp.exists() and fp.stat().st_nlink != 1:
+             return f"{fp} 有別的硬連結指著同一個檔,不往裡寫"
+     except OSError as ex:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -35340,13 +36870,9 @@
+     err = err or _drift_ledger_path_err(root, rel)
+     if err is None:
+         try:
+-            if fp.is_file() and fp.stat().st_size > 0:
+-                with open(fp, "rb") as fh:
+-                    fh.seek(-1, 2)
+-                    tail = fh.read(1)
+-                if tail != b"\n":
+-                    with open(fp, "a", encoding="utf-8") as fh:
+-                        fh.write("\n")
++            if _ledger_tail_needs_newline(fp):   # 帳尾檢查共用治理帳寫入器那一支(代碼審 code-審查跑滿回顧 r2 架構對齊席)
++                with open(fp, "a", encoding="utf-8") as fh:
++                    fh.write("\n")
+         except OSError as ex:
+             err = f"補不了檔尾換行:{ex}"
+     if err:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40875,7 +42401,9 @@
+         return _GIT_DATES_CACHE[key]
+     out = {}
+     try:
+-        rel_vault = os.path.relpath(str(vault), str(repo_root))
++        # 兩邊都先解析成實體路徑:根目錄常經 rev-parse 解析過(macOS 暫存目錄 /var → /private/var),圖譜路徑沒有時
++        # 相對路徑會變成 ../../…,整張表靜默變空(Projects/提交時自動更新筆記日期_計劃 實作時第一次有呼叫者才踩到)
++        rel_vault = os.path.relpath(str(Path(vault).resolve()), str(Path(repo_root).resolve()))
+         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotepath=false",
+                             "log", "--name-only", "--format=@%cs", "--", rel_vault],
+                            capture_output=True, text=True, errors="replace", timeout=30)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -44229,7 +45757,7 @@
+         return None
+     last = None
+     try:
+-        for line in path.read_text(encoding="utf-8").splitlines():
++        for line in _ledger_lines(path.read_text(encoding="utf-8")):
+             line = line.strip()
+             if not line or '"code-loop"' not in line:
+                 continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -45205,7 +46733,7 @@
+         return None
+     last = None
+     try:
+-        for line in path.read_text(encoding="utf-8").splitlines():
++        for line in _ledger_lines(path.read_text(encoding="utf-8")):
+             if '"dispositions"' not in line:
+                 continue
+             try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -46831,6 +48359,8 @@
+     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
+     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
++    "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
++    "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
+     "ci-status": "只看上次 CI 結果,不打網路。",
+     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
+     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -47213,6 +48743,28 @@
+                     help="略過編號以此開頭的迴圈(可重複;例:--exclude auto- 排掉自主迴圈的每日場次)")
+     ll.add_argument("--json", dest="ll_json", action="store_true")
+     ll.add_argument("--now", dest="ll_now", metavar="YYYY-MM-DD", help="指定「今天」是哪一天(重算/測試用;預設系統日期)")
++    lcd = lsub.add_parser("cap-decision", help="跑滿上限時記人裁:破例再開一輪(extra-round)或接受剩下的風險(accept-risk);寫治理帳",
++                          description="什麼時候用:多席審查迴圈跑到分級上限還沒過,人裁決定破例再開一輪、或不開而接受剩下的風險時,當場記一筆。"
++                                      "有人裁紀錄(又有卷證資料夾)的迴圈,繼續之前要先寫跑滿回顧(lumos loop retro)。只收多席、2026-08-26 後開、非 light、帳上輪數已到上限的迴圈。")
++    lcd.add_argument("cd_loop_id", metavar="loop_id")
++    lcd.add_argument("--decision", dest="cd_decision", required=True, choices=("extra-round", "accept-risk"))
++    lcd.add_argument("--note", dest="cd_note", required=True, help="人裁的理由,至少 10 字")
++    lcd.add_argument("--repo", dest="cd_repo", help="repo root(預設向上找 .git)")
++    lrt = lsub.add_parser("retro", help="跑滿回顧:--template 產骨架、--check 驗、--record 驗過才記、--skip --note 記跳過",
++                          description="什麼時候用:記了人裁紀錄(lumos loop cap-decision)之後、繼續之前。回顧檔放 governance/review-reports/<編號>/cap-retro.json,"
++                                      "由沒參與這個迴圈的乾淨代理起草歸族、編排者補怎麼避免與行動項;--record 把指紋記進治理帳,之後改檔要重記。")
++    lrt.add_argument("rt_loop_id", metavar="loop_id")
++    lrt.add_argument("--template", dest="rt_template", action="store_true", help="骨架 JSON 印到標準輸出(rounds 依最新人裁紀錄填好)")
++    lrt.add_argument("--write", dest="rt_write", action="store_true", help="跟 --template 一起用:回顧檔不存在時直接建出來;已存在回 2、不動檔(別用 > 重導向,會先清空已寫好的回顧)")
++    lrt.add_argument("--check", dest="rt_check", action="store_true", help="驗回顧檔:合格 0、不合格 1")
++    lrt.add_argument("--record", dest="rt_record", action="store_true", help="驗過才把回顧記進治理帳(帶指紋)")
++    lrt.add_argument("--skip", dest="rt_skip", action="store_true", help="人裁決定不寫回顧:要帶 --note;只對最新一筆人裁紀錄有效")
++    lrt.add_argument("--note", dest="rt_note", help="--skip 的理由,至少 10 字")
++    lrt.add_argument("--repo", dest="rt_repo", help="repo root(預設向上找 .git)")
++    lrs = lsub.add_parser("retro-stats", help="跑滿回顧彙整(單位是迴圈):人裁數、回顧狀態、族別、行動項;唯讀",
++                          description="什麼時候用:想知道審查跑滿上限多半是哪一族問題、回顧寫了沒、行動項有沒有落地。狀態跟處置閘第八步同一支判定。唯讀。")
++    lrs.add_argument("--json", dest="rs_json", action="store_true")
++    lrs.add_argument("--repo", dest="rs_repo", help="repo root(預設向上找 .git)")
+     les = lsub.add_parser("escape-stats", help="逃逸率依類別(分級×範圍類;單位是迴圈,撤回的不算);唯讀",
+                           description="什麼時候用:想知道哪一類審查(設計審或代碼審 × 分級 × 範圍類)放行之後最常漏到下游。單位是迴圈:放行了幾條、之後漏了幾條;下一站接住的、歸因不明的、沒放行的另列。一個類別放行少於 20 條會標樣本太小。唯讀。")
+     les.add_argument("--json", dest="es_json", action="store_true")
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -47396,6 +48948,16 @@
+     p.add_argument("note")
+     p.add_argument("key")
+     p.add_argument("value", nargs="+")
++    p = sub.add_parser("summary-line", help="改摘要裡的一行:唯一含舊片段的那一處換成新片段(新片段給空字串就是刪掉那段)")
++    p.add_argument("note")
++    p.add_argument("old", metavar="舊片段")
++    p.add_argument("new", metavar="新片段")
++    p.add_argument("--nth", dest="sl_nth", type=int, default=None, help="舊片段出現好幾處時,改第幾個(照擋下訊息列的編號)")
++    p.add_argument("--dry-run", dest="sl_dry", action="store_true", help="只印改前改後,不寫")
++    p = sub.add_parser("updated-sync", help="把筆記開頭的 updated 改成今天:給節點名,或 --stale 改 doctor 列出落後的全部")
++    p.add_argument("nodes", nargs="*", metavar="節點")
++    p.add_argument("--stale", dest="us_stale", action="store_true", help="改 doctor 列出 updated 落後 git 最後改動的全部")
++    p.add_argument("--dry-run", dest="us_dry", action="store_true", help="只印會改哪幾篇,不寫")
+     p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/system_refs/related/tags)")
+     p.add_argument("note")
+     p.add_argument("key")
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48214,6 +49776,14 @@
+             return cmd_loop_canary_stats(env, args.loop_id)
+         if args.lcmd == "escape-stats":
+             return cmd_loop_escape_stats(env, as_json=args.es_json)
++        if args.lcmd == "cap-decision":
++            return cmd_loop_cap_decision(env, args.cd_loop_id, args.cd_decision, args.cd_note, repo=args.cd_repo)
++        if args.lcmd == "retro":
++            return cmd_loop_retro(env, args.rt_loop_id, template=args.rt_template, check=args.rt_check,
++                                  record=args.rt_record, skip=args.rt_skip, note=args.rt_note, repo=args.rt_repo,
++                                  write=args.rt_write)
++        if args.lcmd == "retro-stats":
++            return cmd_loop_retro_stats(env, as_json=args.rs_json, repo=args.rs_repo)
+         if args.lcmd == "status":
+             return cmd_loop_status(env, args.loop_id, args.need,
+                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48334,6 +49904,14 @@
+                                   "keep_revisits": args.dr_keep_revisits})
+         print(f"擋下:不認得的 drift 子命令 {args.drcmd}", file=sys.stderr)
+         return 2
++    if args.cmd == "summary-line":
++        return cmd_summary_line(env, args.note, args.old, args.new, nth=args.sl_nth, dry_run=args.sl_dry)
++    if args.cmd == "updated-sync":
++        try:            # 同 set/append/remove:寫入原語丟的 ValueError/RuntimeError 轉成擋下訊息、rc2,不印堆疊
++            return cmd_updated_sync(env, args.nodes, stale=args.us_stale, dry_run=args.us_dry)
++        except (ValueError, RuntimeError) as ex:
++            print(f"擋下:{ex}", file=sys.stderr)
++            return 2
+     if args.cmd in ("set", "append", "remove"):
+         rel = env.find(args.note)
+         if rel is None:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -6740,9 +6740,21 @@
+ def t_gov_split_pairs_drift():
+     """[治理帳例行紀錄分流 S6] 本機名單的閘名都在 _KNOWN_GATES、每個「閘名+種類」在程式裡有寫入點,
+     判定類讀者讀的三個閘不在名單上。"""
++    import ast as _ast
+     import re as _re
+     m = _load_lumos()
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    # 寫入函式變長不等於寫入點消失；只查真正的完整函式，不借鄰居或註解的字串。
++    home_writer = next(n for n in _ast.parse(src).body
++                       if isinstance(n, _ast.FunctionDef) and n.name == "cmd_home_check")
++    home_kinds = {target.id: {c.value for c in _ast.walk(n.value) if isinstance(c, _ast.Constant)}
++                  for n in _ast.walk(home_writer) if isinstance(n, _ast.Assign)
++                  for target in n.targets if isinstance(target, _ast.Name)}
++    home_writes = [n for n in _ast.walk(home_writer)
++                   if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)
++                   and n.func.id.startswith("_gate_event") and len(n.args) >= 3
++                   and isinstance(n.args[1], _ast.Constant) and n.args[1].value == "nodehome-check"
++                   and isinstance(n.args[2], _ast.Name)]
+     pairs = sorted(m._GOV_LOCAL_PAIRS)
+     check("①前置:名單非空", len(pairs) >= 10, str(pairs))
+     unknown = [g for g, _k in pairs if g not in m._KNOWN_GATES]
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -6754,7 +6766,8 @@
+         call = _re.search(r'_gate_event\w*\([^()\n]*"' + _re.escape(g) + r'", *"' + _re.escape(k) + '"', src) is not None
+         dyn = {"nodehome-check": "_home_check", "drift-check": "def _drift_m1_ledger", "delguard": "_delguard_log_result(gr,",
+                "daily-wrapper": '"daily-wrapper"', "note-reread": '"note-reread"'}.get(g)
+-        near = dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)])
++        near = any(k in home_kinds.get(n.args[2].id, set()) for n in home_writes) if g == "nodehome-check" else (
++            dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)]))
+         if not (lit or call or near):
+             no_writer.append((g, k))
+     check("③每個「閘名+種類」在程式裡有寫入點", not no_writer, str(no_writer))
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -26027,7 +26040,7 @@
+             if quote_fault:
+                 shim = ("import runpy, sys\n"
+                         f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
+-                        "def quote_rows(*args):\n    raise RuntimeError('snapshot-quote-parser-fault')\n"
++                        f"def quote_rows(*args):\n    raise {quote_fault if isinstance(quote_fault, str) else 'RuntimeError'}('snapshot-quote-parser-fault')\n"
+                         "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
+                         "sys.exit(namespace['main']())\n")
+                 return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b84526fa..504fc9a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -26076,12 +26089,13 @@
+               fault.stdout + fault.stderr)
+         check(f"快照編碼 opt={opt}:非編碼故障不追加成功帳",
+               ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
+-        fault = carrier("quote-parser-fault", quote_fault=True)
+-        check(f"快照編碼 opt={opt}:引句解析故障仍為原RuntimeError",
+-              fault.returncode == 1 and "RuntimeError: snapshot-quote-parser-fault" in fault.stderr,
+-              fault.stdout + fault.stderr)
+-        check(f"快照編碼 opt={opt}:引句解析故障不追加成功帳",
+-              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        for error in ("RuntimeError", "OSError"):
++            fault = carrier(f"quote-parser-{error}", quote_fault=error)
++            check(f"快照編碼 opt={opt}:引句解析故障仍為原{error}",
++                  fault.returncode == 1 and f"{error}: snapshot-quote-parser-fault" in fault.stderr,
++                  fault.stdout + fault.stderr)
++            check(f"快照編碼 opt={opt}:引句解析{error}不追加成功帳",
++                  ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
+         clean = root / "clean.md"
+         clean.write_text("severity: clean\n本席沒有發現。\n", encoding="utf-8")
+         snap.write_bytes(b"\xff\xfe")
