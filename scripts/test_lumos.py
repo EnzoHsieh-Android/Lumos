@@ -32238,6 +32238,321 @@ def _rt_line(root, text, nth=1):
     return [i for i, l in enumerate(pay.read_text().split("\n"), 1) if l.strip() == text][nth - 1]
 
 
+# ── 照留表態要有期限或去處(Projects/照留表態要有期限或去處_計劃)──────────────────────────────────────────
+_RA_PROBE = "REVISIT:[when-file:src/new.py][by:2099-01-01] 補跨行程搶同鍵的測試"
+
+
+def _ra_today():
+    """跟工具同一個算法的本機日期(lumos 各處寫 datetime.now(timezone.utc).astimezone().date())。"""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).astimezone().date()
+
+
+def _ra_repo(issue_status="open"):
+    """漂移測試專案 + 一篇 Issue(預設開著);src/new.py 先在 → Pay 寫 _RA_PROBE 時條件就成立。回 (root, 起點)。"""
+    root = _dr_repo()
+    _nh_node(root, "排程", typ="issue", folder="Issues", status=issue_status, resp=None, summary="KEY:i")
+    base = _rt_push(root, [], files=("src/new.py",), msg="file first")
+    return root, base
+
+
+def _ra_ack(root, line, kind="probe", tracked=None, reason="還沒補,先照留", commit=True, node="Systems/Pay"):
+    """對 node(預設 Pay)第 line 行照留(可帶 --tracked-in)→ (rc, 輸出, 頂端)。"""
+    import subprocess as sp
+    args = [sys.executable, GRAPHCTL, "drift", "ack", node, str(line), "--kind", kind, "--reason", reason]
+    if tracked is not None:
+        args += ["--tracked-in", tracked]
+    r = sp.run(args, capture_output=True, text=True, cwd=str(root))
+    if commit:
+        _nh_git(root, "add", "-A")
+        _nh_git(root, "commit", "-q", "-m", "ack", "--allow-empty")
+    return r.returncode, r.stdout + r.stderr, _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def _ra_rows(root):
+    import json as _j
+    fp = root / "governance" / "drift-acks.jsonl"
+    return [_j.loads(ln) for ln in fp.read_text(encoding="utf-8").splitlines() if ln.strip()] if fp.is_file() else []
+
+
+def _ra_write_rows(root, rows, extra_lines=()):
+    import json as _j
+    fp = root / "governance" / "drift-acks.jsonl"
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text("".join(_j.dumps(r, ensure_ascii=False) + "\n" for r in rows) + "".join(x + "\n" for x in extra_lines),
+                  encoding="utf-8")
+
+
+def t_drift_ack_routed_fields():
+    """[照留表態 S1] probe 照留沒帶 --tracked-in 記 until=表態日+30、不記 tracked_in;帶了指到開著的 Issue 記 tracked_in、不記 until。
+    翻紅釘:cmd_drift_ack 不寫 until → ①紅;不收 --tracked-in → ②紅。"""
+    print("t_drift_ack_routed_fields")
+    import datetime as _dt
+    root, _b = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    line = _rt_line(root, _RA_PROBE)
+    rc, out, _t = _ra_ack(root, line)
+    row = (_ra_rows(root) or [{}])[-1]
+    want = (_ra_today() + _dt.timedelta(days=30)).isoformat()
+    check("①沒帶 --tracked-in:記 until=今天+30、不記 tracked_in", rc == 0 and row.get("until") == want
+          and "tracked_in" not in row, (rc, out[-300:], row))
+    check("①成功訊息講到哪天", want in out, out[-300:])
+    rc, out, _t = _ra_ack(root, line, tracked="Issues/排程")
+    row = (_ra_rows(root) or [{}])[-1]
+    check("②帶 --tracked-in 開著的 Issue:記 tracked_in(repo 相對路徑)、不記 until",
+          rc == 0 and row.get("tracked_in") == "docs/kg-knowledge/Issues/排程.md" and "until" not in row, (rc, out[-300:], row))
+    check("②成功訊息講綁哪篇", "Issues/排程" in out, out[-300:])
+    print("  ✓ t_drift_ack_routed_fields")
+
+
+def t_drift_ack_routed_rejects():
+    """[照留表態 S2] --tracked-in 指到不存在、已收尾的 Issue、驗證紀錄、Systems 節點、沒有狀態欄的筆記、那一行所在的同一篇 → rc2 不寫;
+    --kind c2 帶 --tracked-in → rc2。翻紅釘:拿掉 _drift_route_open 的判斷 → ②③④紅;拿掉同一篇檢查 → ⑦紅;拿掉計劃收尾判斷 → ⑥紅。"""
+    print("t_drift_ack_routed_rejects")
+    root, _b = _ra_repo()
+    _nh_node(root, "結了", typ="issue", folder="Issues", status="resolved", resp=None, summary="KEY:i")
+    _nh_node(root, "做完_計劃", typ="project", folder="Projects", status="done", resp=None, summary="KEY:p")
+    _nh_node(root, "驗過", typ="verification", folder="Verification", status="pass", resp=None, summary="KEY:v")
+    _nh_node(root, "別的系統", summary="FLOW:b")
+    nost = root / "docs" / "kg-knowledge" / "Projects" / "沒狀態.md"
+    nost.write_text("---\ntype: project\nsummary: |-\n  KEY:x\n---\n# 沒狀態\n", encoding="utf-8")
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    line = _rt_line(root, _RA_PROBE)
+    n0 = len(_ra_rows(root))
+    for i, (tr, why) in enumerate((("Issues/不存在", "不存在"), ("Issues/結了", "已收尾的 Issue"), ("Verification/驗過", "驗證紀錄"),
+                                    ("Systems/別的系統", "Systems 節點"), ("Projects/沒狀態", "沒有狀態欄"),
+                                    ("Projects/做完_計劃", "已收尾的計劃")), 1):
+        rc, out, _t = _ra_ack(root, line, tracked=tr, commit=False)
+        check(f"{'①②③④⑤⑥'[i - 1]}--tracked-in 指到{why}:rc2 不寫", rc == 2 and len(_ra_rows(root)) == n0, (rc, out[-300:]))
+    # ⑦同一篇:回頭條件寫在一篇開著的計劃裡、又綁那篇自己(開著,只有「同一篇」這條會擋)
+    _nh_node(root, "退款_計劃", typ="project", folder="Projects", resp=None, summary="KEY:p\n" + _RA_PROBE)
+    _nh_commit(root, "probe in plan")
+    pl = root / "docs" / "kg-knowledge" / "Projects" / "退款_計劃.md"
+    pline = next(i for i, ln in enumerate(pl.read_text(encoding="utf-8").split("\n"), 1) if ln.strip() == _RA_PROBE)
+    rc, out, _t = _ra_ack(root, pline, tracked="Projects/退款_計劃", commit=False, node="Projects/退款_計劃")
+    check("⑦--tracked-in 指到那一行所在的同一篇(開著的計劃):rc2 不寫", rc == 2 and len(_ra_rows(root)) == n0
+          and "同一篇" in out, (rc, out[-300:]))
+    rc, out, _t = _ra_ack(root, line, kind="c2", tracked="Issues/排程", commit=False)
+    check("⑧--kind c2 帶 --tracked-in:rc2", rc == 2 and len(_ra_rows(root)) == n0, (rc, out[-300:]))
+    print("  ✓ t_drift_ack_routed_rejects")
+
+
+def t_drift_ack_live_rules():
+    """[照留表態 S3] _drift_ack_live:過期、綁的收尾或不在、tracked_in 不是非空字串、until 不是 YYYY-MM-DD → 失效原因;
+    期限當天、綁的開著 → 空字串;型別錯誤不丟例外。翻紅釘:期限比較改成 >= → ②紅;拿掉 until 形狀檢查 → ④紅。"""
+    print("t_drift_ack_live_rules")
+    import datetime as _dt
+    m = _load_lumos_inproc()
+    d = _dt.date(2026, 10, 10)
+    states = {"docs/kg-knowledge/Issues/開.md": ("issue", "open"), "docs/kg-knowledge/Issues/結.md": ("issue", "resolved"),
+              "docs/kg-knowledge/Projects/計.md": ("project", "todo"), "docs/kg-knowledge/Verification/驗.md": ("verification", "pass")}
+    ns = states.get
+
+    def live(**a):
+        return m._drift_ack_live(dict({"kind": "probe", "path": "p", "text": "t"}, **a), d, ns)
+    check("①期限還沒到:活著", live(until="2026-10-11") == "", live(until="2026-10-11"))
+    check("②期限當天:活著;隔天:失效且講期限", live(until="2026-10-10") == "" and "2026-10-09" in live(until="2026-10-09"),
+          (live(until="2026-10-10"), live(until="2026-10-09")))
+    check("③綁開著的 Issue 或 todo 計劃:活著", live(tracked_in="docs/kg-knowledge/Issues/開.md") == ""
+          and live(tracked_in="docs/kg-knowledge/Projects/計.md") == "", "")
+    for v, why in (("docs/kg-knowledge/Issues/結.md", "收尾"), ("docs/kg-knowledge/Issues/沒有.md", "不在"),
+                   ("docs/kg-knowledge/Verification/驗.md", "驗證紀錄")):
+        check(f"③綁{why}:失效", live(tracked_in=v) != "", live(tracked_in=v))
+    for bad in (None, 20261105, "20261105", "2026-1-5", "2026-10-10T00:00", ["2026-10-11"], ""):
+        try:
+            got = live(until=bad)
+        except Exception as ex:      # 這條就是在驗不丟例外
+            got = ex
+        check(f"④until={bad!r}:回失效原因、不丟例外", isinstance(got, str) and got != "", repr(got))
+    for bad in ("", 3, ["x"], None):
+        try:
+            got = live(tracked_in=bad)
+        except Exception as ex:      # 同上
+            got = ex
+        check(f"⑤tracked_in={bad!r}:回失效原因、不丟例外", isinstance(got, str) and got != "", repr(got))
+    print("  ✓ t_drift_ack_live_rules")
+
+
+def t_drift_ack_routed_expiry():
+    """[照留表態 S4] drift scan:失效的 probe 照留那一行列回要處理並印舊理由與失效原因;同一行三種照留混雜、任一筆活著就算已表態;
+    表態檔有一行壞 JSON 照常判其他筆。翻紅釘:cmd_drift_scan 不傳 as_of → ①紅;多筆取最後一筆判 → ②紅。"""
+    print("t_drift_ack_routed_expiry")
+    import datetime as _dt
+    root, _b = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    line = _rt_line(root, _RA_PROBE)
+    _ra_ack(root, line, reason="跨行程測試還沒補")
+    rows = _ra_rows(root)
+    past = (_ra_today() - _dt.timedelta(days=1)).isoformat()
+    rows[-1]["until"] = past
+    _ra_write_rows(root, rows)
+    _nh_commit(root, "expire")
+    vault = root / "docs" / "kg-knowledge"
+    fs = _dr_scan(vault)
+    mine = [f for f in fs if isinstance(f, dict) and f.get("kind") == "probe"] if isinstance(fs, list) else fs
+    check("①過期的照留:那一行回到要處理", isinstance(mine, list) and any(not f["acked"] for f in mine), str(mine)[-400:])
+    txt = run(vault, "drift", "scan")
+    out = txt.stdout + txt.stderr
+    check("①印舊理由與失效原因、教 --tracked-in", "跨行程測試還沒補" in out and past in out and "--tracked-in" in out, out[-900:])
+    future = (_ra_today() + _dt.timedelta(days=5)).isoformat()
+    legacy = {k: v for k, v in rows[-1].items() if k not in ("until", "tracked_in")}
+    tracked_dead = dict(rows[-1], until=None, tracked_in="docs/kg-knowledge/Issues/不存在.md")
+    tracked_dead.pop("until")
+    for combo, want, why in (([rows[-1], dict(rows[-1], until=future)], True, "一筆過期一筆有效"),
+                             ([tracked_dead, dict(rows[-1], until=future), legacy], True, "綁不在、有期限、舊表態三種混雜"),
+                             ([rows[-1], tracked_dead], False, "全部失效")):
+        _ra_write_rows(root, combo, extra_lines=("{壞掉的一行",))
+        _nh_commit(root, "mix")
+        fs = _dr_scan(vault)
+        mine = [f for f in fs if isinstance(f, dict) and f.get("kind") == "probe"] if isinstance(fs, list) else []
+        check(f"②{why}:{'已表態' if want else '要處理'}(壞 JSON 那行略過)", mine and all(f["acked"] == want for f in mine),
+              str(fs)[-400:])
+    print("  ✓ t_drift_ack_routed_expiry")
+
+
+def t_drift_ack_routed_legacy():
+    """[照留表態 S5] 沒有 until 也沒有 tracked_in 的舊照留以 _DRIFT_ACK_LEGACY_UNTIL 為期限:當天有效、隔天失效。
+    翻紅釘:舊表態分支回空字串(永久有效)→ ②紅。"""
+    print("t_drift_ack_routed_legacy")
+    import datetime as _dt
+    m = _load_lumos_inproc()
+    lim = _dt.date.fromisoformat(m._DRIFT_ACK_LEGACY_UNTIL)
+    a = {"kind": "probe", "path": "p", "text": "t", "reason": "舊的", "date": "2026-09-30"}
+    check("①期限當天:有效", m._drift_ack_live(a, lim, lambda p: None) == "", m._drift_ack_live(a, lim, lambda p: None))
+    got = m._drift_ack_live(a, lim + _dt.timedelta(days=1), lambda p: None)
+    check("②隔天:失效並講期限", got != "" and m._DRIFT_ACK_LEGACY_UNTIL in got, got)
+    check("③retire 同一套", m._drift_ack_live(dict(a, kind="retire"), lim + _dt.timedelta(days=1), lambda p: None) != "", "")
+    print("  ✓ t_drift_ack_routed_legacy")
+
+
+def t_drift_check_born_needs_routed_ack():
+    """[照留表態 S6] 有起點的推送新寫一條寫下時就已成立的回頭條件,同一次補了沒綁去處的照留 → 照擋並教 --tracked-in;
+    照留帶 tracked_in → 放行,那篇在被推送版本裡已收尾也放行(推送不看開不開)。RULE 撤除條件同一套。
+    翻紅釘:born_now 不標 → ①紅;推送路徑判開不開 → ③紅。"""
+    print("t_drift_check_born_needs_routed_ack")
+    root, base = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe already true")
+    rc0, _o, tip = _ra_ack(root, _rt_line(root, _RA_PROBE))
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("①新寫就成立 + 裸照留:照擋並教 --tracked-in", rc0 == 0 and rc == 1 and "--tracked-in" in out, out[-900:])
+    root, base = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe already true")
+    rc0, _o, tip = _ra_ack(root, _rt_line(root, _RA_PROBE), tracked="Issues/排程")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("②新寫就成立 + 綁去處的照留:放行", rc0 == 0 and rc == 0, out[-700:])
+    _nh_node(root, "排程", typ="issue", folder="Issues", status="resolved", resp=None, summary="KEY:i")
+    tip2 = _rt_push(root, [_RA_PROBE], msg="close issue")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip2}")
+    check("③綁的那篇在被推送版本裡已收尾:推送照放行(開不開交給 scan)", rc == 0, out[-700:])
+    rule = "RULE:要人簽 [依據:人] [since:2026-09-01] [retire:when-file:src/new.py]"
+    root, base = _ra_repo()
+    _rt_push(root, [rule], msg="rule already true")
+    rc0, _o, tip = _ra_ack(root, _rt_line(root, rule), kind="retire")
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("④RULE 撤除條件新寫就成立 + 裸照留:照擋", rc0 == 0 and rc == 1 and "--tracked-in" in out, out[-900:])
+    print("  ✓ t_drift_check_born_needs_routed_ack")
+
+
+def t_drift_check_routed_no_date():
+    """[照留表態 S7] 推送讓既有回頭條件成立、照留沒綁去處 → 照舊放行,連期限已過也放行(推送不看日期);
+    找不到主線的新分支首推截到上線點算起點,上線點之後新寫就已成立的行配裸照留 → 照擋(同有起點);
+    單元層 born_now 為假的發現配裸照留 → 已表態。翻紅釘:推送路徑套用期限 → ①紅;old is None 也標 born_now → ③紅。"""
+    print("t_drift_check_routed_no_date")
+    import datetime as _dt
+    root = _dr_repo()
+    _nh_node(root, "排程", typ="issue", folder="Issues", status="open", resp=None, summary="KEY:i")
+    base = _rt_push(root, [_RA_PROBE], msg="probe not yet true")
+    _rt_push(root, [_RA_PROBE], files=("src/new.py",), msg="file makes it true")
+    _ra_ack(root, _rt_line(root, _RA_PROBE))
+    rows = _ra_rows(root)
+    rows[-1]["until"] = (_ra_today() - _dt.timedelta(days=60)).isoformat()
+    _ra_write_rows(root, rows)
+    _nh_commit(root, "expired 60 days ago")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _dr(root, "check", "--diff", f"{base}..{tip}")
+    check("①這次推送讓既有條件成立 + 裸照留(期限已過 60 天):放行", rc == 0, out[-700:])
+    root, _b = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    _rc, _o, tip = _ra_ack(root, _rt_line(root, _RA_PROBE))
+    rc, out = _dr(root, "check", "--diff", f"{'0' * 40}..{tip}", "--push-remote", "origin", "--pushed-ref", "refs/heads/feat")
+    check("②找不到主線的首推(截到上線點):上線點之後新寫就成立 + 裸照留照擋", rc == 1 and "--tracked-in" in out, out[-700:])
+    m = _load_lumos_inproc()
+    f = {"kind": "probe", "path": "Systems/Pay.md", "line": 3, "text": "t", "born_now": False}
+    a = {"kind": "probe", "path": "docs/kg-knowledge/Systems/Pay.md", "text": "t", "reason": "照留中", "until": "2000-01-01"}
+    left, done = m._drift_split_acked([f], [a], "docs/kg-knowledge")
+    check("③不是新寫就成立(含沒有起點)的發現:推送時裸照留照算(期限已過也算)", done == [f] and not left, (left, done))
+    # ④沒有起點(base=None)時 _drift_probe_check 不標 born_now;有起點的同一行標(代碼審 r1 正確性席 F3:原本只驗分堆)
+    tenv = m._drift_tree_env(str(root), tip, "docs/kg-knowledge")
+    nob = m._drift_probe_check(str(root), None, tip, "docs/kg-knowledge", tenv)[0]
+    hasb = m._drift_probe_check(str(root), _b, tip, "docs/kg-knowledge", tenv)[0]
+    check("④沒有起點:不標 born_now;有起點的新寫:標", nob and not any(x.get("born_now") for x in nob)
+          and hasb and all(x.get("born_now") for x in hasb), (nob, hasb))
+    print("  ✓ t_drift_check_routed_no_date")
+
+
+def t_drift_doctor_dead_acks():
+    """[照留表態 S8] probe/retire 照留已失效而那一行還在 → doctor 印一行筆數與前幾筆、提示 drift scan;沒有就不印。
+    翻紅釘:_drift_doctor_lines 不呼叫 _drift_ack_live → ①紅。"""
+    print("t_drift_doctor_dead_acks")
+    import datetime as _dt
+    root, _b = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    _ra_ack(root, _rt_line(root, _RA_PROBE))
+    vault = root / "docs" / "kg-knowledge"
+    r = run(vault, "doctor")
+    check("②都還有效:不印", "照留已失效" not in (r.stdout + r.stderr), (r.stdout + r.stderr)[-500:])
+    rows = _ra_rows(root)
+    rows[-1]["until"] = (_ra_today() - _dt.timedelta(days=1)).isoformat()
+    _ra_write_rows(root, rows)
+    r = run(vault, "doctor")
+    out = r.stdout + r.stderr
+    check("①有一筆失效、那一行還在:印筆數、那一篇、提示 drift scan", "照留已失效 1 筆" in out and "Systems/Pay" in out
+          and "drift scan" in out, out[-800:])
+    # ③欄位寫在續行的 RULE:retire 照留記接回續行的整條,doctor 也要認得(代碼審 r1 正確性席 F2、架構對齊席 F1)
+    head = "RULE:要人簽 [依據:人] [since:2026-09-01]"
+    root, _b = _ra_repo()
+    _rt_push(root, [head, "  [retire:when-file:src/new.py]"], msg="rule")
+    _ra_ack(root, _rt_line(root, head), kind="retire")
+    rows = _ra_rows(root)
+    rows[-1]["until"] = (_ra_today() - _dt.timedelta(days=1)).isoformat()
+    _ra_write_rows(root, rows)
+    out = (lambda r: r.stdout + r.stderr)(run(root / "docs" / "kg-knowledge", "doctor"))
+    check("③續行 RULE 的 retire 照留過期:doctor 照列", "照留已失效 1 筆" in out, out[-800:])
+    print("  ✓ t_drift_doctor_dead_acks")
+
+
+def t_drift_ack_routed_tracked_state():
+    """[照留表態 S4 補] 綁去處的照留:那篇開著 → drift scan 算已表態、doctor 不列;那篇收尾 → scan 列回要處理並講已收尾、
+    doctor 列;那篇刪掉 → 講不在了(代碼審 r1 正確性席 F1:_drift_note_state 改成永遠回 None 原本測試照綠)。
+    翻紅釘:_drift_note_state 永遠回 None → ①紅;_drift_route_open 一律 True → ②紅。"""
+    print("t_drift_ack_routed_tracked_state")
+    root, _b = _ra_repo()
+    _rt_push(root, [_RA_PROBE], msg="probe")
+    _ra_ack(root, _rt_line(root, _RA_PROBE), tracked="Issues/排程", reason="排進排程那篇")
+    vault = root / "docs" / "kg-knowledge"
+
+    def probe_acked():
+        fs = _dr_scan(vault)
+        mine = [f for f in fs if isinstance(f, dict) and f.get("kind") == "probe"] if isinstance(fs, list) else []
+        return [f["acked"] for f in mine], fs
+
+    got, fs = probe_acked()
+    doc = (lambda r: r.stdout + r.stderr)(run(vault, "doctor"))
+    check("①綁的 Issue 開著:scan 算已表態、doctor 不列", got == [True] and "照留已失效" not in doc, (str(fs)[-300:], doc[-300:]))
+    _nh_node(root, "排程", typ="issue", folder="Issues", status="resolved", resp=None, summary="KEY:i")
+    _nh_commit(root, "close")
+    got, fs = probe_acked()
+    txt = (lambda r: r.stdout + r.stderr)(run(vault, "drift", "scan"))
+    doc = (lambda r: r.stdout + r.stderr)(run(vault, "doctor"))
+    check("②綁的 Issue 收尾:scan 列回要處理、講已收尾與舊理由;doctor 列", got == [False] and "已收尾" in txt
+          and "排進排程那篇" in txt and "照留已失效 1 筆" in doc, (txt[-600:], doc[-400:]))
+    (vault / "Issues" / "排程.md").unlink()
+    _nh_commit(root, "delete")
+    txt = (lambda r: r.stdout + r.stderr)(run(vault, "drift", "scan"))
+    check("③綁的 Issue 刪掉:講不在了", "不在了" in txt, txt[-600:])
+    print("  ✓ t_drift_ack_routed_tracked_state")
+
+
 def _rt_events(root):
     return [e for e in _ns_gov(root) if e.get("gate") == "drift-check" and e.get("check") == "retire"]
 
