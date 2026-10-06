@@ -57,7 +57,7 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句> --sha <提交>`(佐證必附:`--sha <提交>` 或 `--defect-ref <Issue/報告>`,真的沒有就 `--missing-defect-ref "<為什麼沒有>"`;記錯了用 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>` 撤回(追加一筆、統計不算、清單標已撤回);各類別放行後漏了多少看 `lumos loop escape-stats`。)(逃逸帳=審查系統的漏網紀錄,append-only 不進閘;`lumos gov --stats`「審查有沒有用」段印累計筆數與最重等級)。
 
 ## 停手與護欄
-- 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。(多席帶輪次的迴圈;循序單審、light、舊迴圈不記)人裁結果先記 `cap-decision`,繼續之前先寫跑滿回顧:`lumos loop cap-decision <編號> --decision extra-round|accept-risk --note "<理由>"`;再 `lumos loop retro <編號> --template --write`(只在回顧檔不存在時建;別用 `>` 重導向,會先清空已寫好的回顧),派沒參與這個迴圈的乾淨代理起草(派工詞 `templates.md` §9),編排者補 `avoid`、`changes`、`completed_by`,`--check` 過了 `--record`(回顧過期就改好現有回顧檔再 `--record`,不重產骨架);人裁決定不寫就 `--skip --note "<理由>"`(沒記就再開一輪,`canary record` 會擋;處置閘第八步也會判不過;單源 [[Projects/審查跑滿回顧_計劃]])。
+- 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。(多席帶輪次的迴圈;循序單審、light、舊迴圈不記)人裁結果先記 `cap-decision`,繼續之前先寫跑滿回顧:`lumos loop cap-decision <編號> --decision extra-round|accept-risk --note "<理由>"`;再 `lumos loop retro <編號> --template --write`(只在回顧檔不存在時建;別用 `>` 重導向,會先清空已寫好的回顧),派沒參與這個迴圈的乾淨代理起草(派工詞 `templates.md` §9;回顧分類也沿該節核對修補因果、保留未知),編排者補 `avoid`、`changes`、`completed_by`,`--check` 過了 `--record`(回顧過期就改好現有回顧檔再 `--record`,不重產骨架);人裁決定不寫就 `--skip --note "<理由>"`(沒記就再開一輪,`canary record` 會擋;處置閘第八步也會判不過;單源 [[Projects/審查跑滿回顧_計劃]])。
 - 每輪初讀派全新 agent;續談只准問該席自己講過的話(headless 才可用)。
 - 收斂判準是處置閘:一輪裡每個發現都折掉或附理由放行即過(high 與多席也是);舊制 panel「連兩輪乾淨」只供回放舊帳。要改這些語意得走設計迴圈,不偷偷改。
 - gate / 守衛類 code 建議開 feature branch 再推。

@@ -32,6 +32,8 @@ summary: |-
   PITFALL:[2026-10-06 代碼審 r4 架構、通才、正確性、邊界、合約席]治理帳壞時 `_cap_retro_scan` 曾塞一筆假編號「(治理帳)」進迴圈清單,retro-stats 把它算成一個記了人裁的迴圈(totals.loops 被灌 1、人裁 ? 1)。改成回 (清單, 治理帳壞原因):retro-stats 另外報「治理帳讀不了」(--json 多 gov_error 欄)、doctor I2 另列一行,都不算進迴圈數 [test:t_cap_retro_r4_gov_bad_not_a_loop]
   PITFALL:[2026-10-06 代碼審 r4 併發、邊界席]治理帳是一般檔但讀不動(權限)時也判 gov-bad,出口原本只叫人「換回一般檔」,照做不會好。`_cap_retro_fix_cmd` 的 gov-bad 分支先看路徑規則過了、檔在、讀不動 → 改講權限 [test:t_cap_retro_r4_gov_unreadable_hint]
   PITFALL:[2026-10-06 代碼審 r4 資安席]帳上的輪次編號(canary record --round 不擋控制字元,版控的審查帳也能植入)在 [cap-hint] 每輪那行與處置閘 FAIL 橫幅原樣印到終端;印出前都過 _esc_clean [test:t_cap_retro_r4_round_id_escaped]
+verified_by:
+  - "[[Verification/2026-10-07_跑滿回顧因果證據銜接驗證]]"
 ---
 # loop-retro
 
