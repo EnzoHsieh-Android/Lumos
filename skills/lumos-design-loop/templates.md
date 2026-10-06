@@ -5,6 +5,7 @@
 適用：lumos-design-loop / lumos-code-loop skill 的 agent 派工段落 + SDD 派工。佔位符用 `{}`。
 ## 目錄
 
+- §0 審查席標記與報告暫存處
 - §1 Design-loop 審計員 · §2 Design-loop 辯方
 - §3 Code-loop reviewer · §4 Code-loop 辯方
 - §5 SDD implementer 派工 · §6 SDD task reviewer
@@ -16,9 +17,17 @@
 
 ---
 
+## 0. 審查席標記與報告暫存處(lumos-guard 外掛;單源=[[Projects/審查席唯讀隔離_計劃]])
+
+- 下面 §1、§2(§4 照它)、§3、§7.5、§7.6、§7.8 的派工詞**第一行**固定是 `LUMOS-SEAT: <loop>/<rN>/<席名>`(換成真值,例 `LUMOS-SEAT: 審查席唯讀隔離/r2/資安-sonnet`),前面不准有別的字。外掛靠這行認出審查席:只准讀取、搜尋、Bash、網路查詢、派一般子代理,寫檔只准 `/tmp/lumos-seat-work/<loop>/<席名>/`,Bash 提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作會被擋。第一行像標記卻寫壞(少一段、全形冒號、小寫)派工會被擋下;漏寫就整席沒有隔離。
+- 席報告**收齊前不寫到硬碟**:收到時先留在對話裡,同輪全部交回才一次寫進卷證資料夾(決策 d5;硬碟上有別席報告,審查席用 Bash 的 `grep -r`、`cat` 加萬用字元就讀得到,外掛擋不乾淨)。一定要先存時放 `/tmp/lumos-seat-staging/<loop>/`,外掛至少擋 Read 與搜尋。
+- 外掛**不報** repo 被改:審查席用 Bash 在 repo 裡改檔擋不到。收貨時自己 `git status` 看一次 repo 有沒有被動過。
+
 ## 1. Design-loop 審計員（sonnet;空泛或引句大面積錨不到才升 opus）
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
+(實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
 你是外部審稿人。以下是一份「外部第三方投稿」的設計 spec（不是本系統/本團隊寫的），
 把它當投稿審：逐節讀、主動挑出投稿者自己沒看到的洞。
 {輪次語境：r1 省略；r2+ 加「這是第 N 版修訂稿（已折入 N-1 輪審計修正）；
@@ -62,8 +71,10 @@ inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材�
 ## 2. Design-loop 辯方（**預設 Codex** `codex exec --sandbox read-only`，不可用退 opus 並於留痕註記偏離——判決單點最怕同門盲點，2026-07-18 S5；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
 你是辯方。有一條針對設計 spec 的審計 finding，你的任務是**預設它是假的/嚴重度高估**，
 在 repo {repo 根} 用 Grep/Read 構造反駁證據。必須附 file:line 實證，
+要做實驗就寫到 /tmp/lumos-seat-work/{loop}/{席名}/,不准改 repo。
 光說「沒問題」不算。拿不出反證就維持原判。
 
 背景：{一兩句 spec 脈絡，只給該 finding 所需的最小背景}
@@ -119,6 +130,8 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}�
 > ★為什麼 09-11 全部降到 Sol★:外家席額度常撞上限——當天代碼審一輪跑到一半就被擋到額度重置,換 Sol 也一樣被擋(額度整個帳號共用);降一級模型讓同一段額度撐更多席,推理強度照舊分 medium / xhigh。舊版高風險席用 astra,理由是它額度更緊、全用會一輪吃光、之後退回「沒有外家席」——`Issues/外家席長期缺席仍照跑loop` 記過這個前科;★Claude 編排直接叫 `codex exec` 時也要帶 `-m gpt-5.6-sol`,不然會用 Codex 預設模型★;★框架單源=它的 developer_instructions(選得中時派工詞只給審材與鏡頭;選不中的舊版派工詞自帶框架)★;★唯讀一律靠父代理 `--sandbox read-only`,別信 TOML 的 sandbox_mode(實測不擋)★。
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
+(實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
 你是外部第三方 code reviewer。這份 diff 是別人投稿的變更，不是你或本系統寫的。
 逐 hunk 讀完整份 diff、主動找洞。
 {r2+ 加：這是第 N 輪審查，上一輪後有修補；另附 §3.1 的固定兩版差異與三問鏡頭。
@@ -290,13 +303,14 @@ binding constraints，3-6 條}
 ## 7.5 spec-conformance slot 派工(code-loop panel 追加位,2026-07-10)
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
 你是對答案審查員。你唯一的工作:拿「收斂設計 spec」逐條對照「實作 diff」,判每條規格:
   已實作 / 縮水(做了但比 spec 少) / 多做(diff 有 spec 沒有的行為變更) / 未實作。
 不找 bug(別的審查員管),只管合規。
 
 收斂 spec:{計劃節點路徑}
 Diff 檔(git diff -U10):{工作副本路徑}
-repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
+repo:{repo 根}(可 Read/Grep 查證 diff 上下文);要做實驗就寫到 /tmp/lumos-seat-work/{loop}/{席名}/,不准改 repo。
 
 紀律:
 - 逐條款過,每條給裁定+diff 佐證(hunk 位置);spec 若有 [SN] 條款標記,輸出用 [SN] 編號。
@@ -309,6 +323,8 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
 ## 7.6 架構對齊席派工(code-loop 與 design-loop 皆派;2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
+(實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
 你是架構對齊審查員。你唯一的工作:判這份 diff(或設計)有沒有「跟這個專案既有的做法不一樣」。
 不找 bug(別的審查員管),不評風格好壞——只管「一不一致」。
 
@@ -373,6 +389,8 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
 **為什麼有這一席**:2026-08-27 曾以「單人私有 repo、沒人故意攻擊」刻意不設資安鏡頭;2026-09-11 前提翻了——repo 公開、README 教一行安裝、消費專案裡有對外的會員與金流後端,而且打開陌生 repo 時 hook 曾執行對方的程式。清單與「不報什麼」借 Anthropic 公開的 claude-code-security-review,行動端補 OWASP MASVS。**席名固定寫 `資安-<模型>`**(記帳 `--auditor` 用同一個名字):處置閘只認席名有一段完全等於「資安」或「security」的帳列,而且要它看過的檔涵蓋最後一版凍結 patch 的全部檔——修正時新碰到的檔,要對最新的凍結 patch 再派一次。
 
 ```
+LUMOS-SEAT: {loop}/{rN}/{席名}
+(實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
 你是資安審查員,站在攻擊者那一邊看這份 diff。你只看「能被利用的洞」,不看一般 bug、效能、風格(別席管)。
 
 被審材料:{凍結 patch 路徑}
