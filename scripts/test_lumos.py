@@ -6740,9 +6740,21 @@ def t_gov_split_ignore_rule():
 def t_gov_split_pairs_drift():
     """[治理帳例行紀錄分流 S6] 本機名單的閘名都在 _KNOWN_GATES、每個「閘名+種類」在程式裡有寫入點,
     判定類讀者讀的三個閘不在名單上。"""
+    import ast as _ast
     import re as _re
     m = _load_lumos()
     src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    # 寫入函式變長不等於寫入點消失；只查真正的完整函式，不借鄰居或註解的字串。
+    home_writer = next(n for n in _ast.parse(src).body
+                       if isinstance(n, _ast.FunctionDef) and n.name == "cmd_home_check")
+    home_kinds = {target.id: {c.value for c in _ast.walk(n.value) if isinstance(c, _ast.Constant)}
+                  for n in _ast.walk(home_writer) if isinstance(n, _ast.Assign)
+                  for target in n.targets if isinstance(target, _ast.Name)}
+    home_writes = [n for n in _ast.walk(home_writer)
+                   if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)
+                   and n.func.id.startswith("_gate_event") and len(n.args) >= 3
+                   and isinstance(n.args[1], _ast.Constant) and n.args[1].value == "nodehome-check"
+                   and isinstance(n.args[2], _ast.Name)]
     pairs = sorted(m._GOV_LOCAL_PAIRS)
     check("①前置:名單非空", len(pairs) >= 10, str(pairs))
     unknown = [g for g, _k in pairs if g not in m._KNOWN_GATES]
@@ -6754,7 +6766,8 @@ def t_gov_split_pairs_drift():
         call = _re.search(r'_gate_event\w*\([^()\n]*"' + _re.escape(g) + r'", *"' + _re.escape(k) + '"', src) is not None
         dyn = {"nodehome-check": "_home_check", "drift-check": "def _drift_m1_ledger", "delguard": "_delguard_log_result(gr,",
                "daily-wrapper": '"daily-wrapper"', "note-reread": '"note-reread"'}.get(g)
-        near = dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)])
+        near = any(k in home_kinds.get(n.args[2].id, set()) for n in home_writes) if g == "nodehome-check" else (
+            dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)]))
         if not (lit or call or near):
             no_writer.append((g, k))
     check("③每個「閘名+種類」在程式裡有寫入點", not no_writer, str(no_writer))
@@ -74623,4 +74636,3 @@ def t_ledger_rules_match_reader():
 
 if __name__ == "__main__":
     sys.exit(main())
-
