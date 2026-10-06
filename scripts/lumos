@@ -1326,7 +1326,7 @@ _GOV_LOCAL_PAIRS = frozenset(
     # doctor 各段真的會寫 warned 的 check-* 閘(照 run_doctor 的寫入點逐一列,不用前綴比對;
     # check-j 只寫 shallow-skip 與擋人,不列)
     + [(g, "warned") for g in ("check-cascade", "check-e1", "check-e2", "check-e3", "check-k",
-                              "check-lint-decl", "check-p2", "check-p2s", "check-r", "check-revisit",
+                              "check-lint-decl", "check-p2", "check-p2s", "check-p2t", "check-r", "check-revisit",
                               "check-s", "check-s2", "check-s3", "check-s4", "check-s5", "check-s6",
                               "check-s7", "check-s8", "check-s9", "check-s10", "check-s11", "check-s16")])
 
@@ -3474,6 +3474,8 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                     gov_events.append({"gate": "check-p2s", "kind": "warned", "hard": False, "nodes": [_stem]})
         except Exception as _e:
             warn_soft([], f"survived 清單算不出來({_e.__class__.__name__}: {_e}),先跳過")
+        # 第三個提醒:配方驗的測試不在合約的測試清單上(Projects/殺傷力配方綁的測試要在合約清單_計劃)
+        _doctor_p2_unbound(env.vault, notes, _p2, gov_events, warn_soft)
     print()
 
     # ── Check N:可重算數字宣稱(存查詢不存答案;成因 F「寫死易漂的值」)──
@@ -8102,7 +8104,10 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 # 2026-10-02 殺傷力配方最近一次真跑判 survived(doctor P2 第二個提醒,只提醒不擋;Projects/殺傷力配方當場試跑_計劃)
                 "check-p2s",
                 # 2026-10-05 審查跑滿回顧:人裁紀錄、回顧已記、跳過(Projects/審查跑滿回顧_計劃;不在 design-loop/code-loop 底下,不影響 loop list 關門判定)
-                "loop-retro")
+                "loop-retro",
+                # 2026-10-06 殺傷力配方驗的測試不在合約的測試清單上(doctor P2 第三個提醒,只提醒不擋;
+                # Projects/殺傷力配方綁的測試要在合約清單_計劃)
+                "check-p2t")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -16087,12 +16092,169 @@ def _kill_fix_hint(rel, elem):
     return f"lumos guard kill-rm {_kill_node_arg(rel)} --id {_kill_recipe_id(str(rel), elem)[:12]}"
 
 
-def _kill_add_warn(env, rel, recipe):
+# ── 殺傷力配方綁的測試要在合約清單(Projects/殺傷力配方綁的測試要在合約清單_計劃,設計審 r1 六席)──
+# 合約清單是推送前會真跑的綁定測試;配方驗的是清單外的另一支時,殺傷力證明的不是推送閘守的那支。只提醒不擋。
+# 比的是 guard kill 實際的跑法:配方 (platform 欄或預設平台, _kill_method_name);清單照既有閘法(單平台傳空平台表不切冒號)。
+
+def _kill_norm_method(name):
+    """方法名正規化:去前後空白、去 Kotlin 反引號、再去空白——合約清單與配方兩側都過這一支(兩側原本拆殼方式不同)。"""
+    return str(name).strip().strip("`").strip()
+
+
+def _kill_find_contract(lines, start, end, substr):
+    """lines[start:end] 裡去標記後內容含 substr 的合約 KEY 行。回 (索引, None) 或 (None, "none"|"many")。
+    kill-add、guard audit 定位與 doctor 對回合約行共用這一支,不另寫第二套。guard bind 例外:它只去 [test:] 標記
+    (TEST_REF_RE)再比,判法本來就跟這裡不同,併過來會改它的行為(代碼審 r2 架構對齊席點出,範圍外不動)。"""
+    hit = None
+    for i in range(start, end):
+        if INVARIANT_RE.match(lines[i].strip()) and substr in INV_TAG_RE.sub("", lines[i]):
+            if hit is not None:
+                return None, "many"
+            hit = i
+    return (hit, None) if hit is not None else (None, "none")
+
+
+def _kill_test_binding(recipe, line, pdata):
+    """配方綁的測試跟合約行的 [test:] 清單比。回 dict,kind 是 ok / unbound(帶 plat、method、listed)/
+    platform(方法名在清單上、平台不同,帶 plat、method、want)/ noprefix(清單有未定義的平台前綴,帶 detail)/
+    skip(比不了:設定讀不了、配方平台不在設定、測試名不合法、欄位型別壞——前兩個提醒已經講過,這裡不重複)。"""
+    if not pdata or not isinstance(recipe, dict):
+        return {"kind": "skip"}
+    mp = bool(pdata.get("multiplatform"))
+    plats, dflt = pdata.get("platforms") or {}, pdata.get("default_platform")
+    try:
+        listed = [(p, _kill_norm_method(n)) for p, n in resolve_test_refs(line, plats if mp else {}, dflt)]
+    except ValueError as ex:
+        return {"kind": "noprefix", "detail": str(ex)}
+    test, rp = recipe.get("test"), recipe.get("platform")
+    if not isinstance(test, str) or (rp is not None and not isinstance(rp, str)):
+        return {"kind": "skip"}
+    method = _kill_norm_method(_kill_method_name(test, mp))
+    plat = (rp or dflt) if mp else dflt
+    if not _KILL_METHOD_OK_RE.fullmatch(method) or (mp and plat not in plats):
+        return {"kind": "skip"}
+    if (plat, method) in listed:
+        return {"kind": "ok"}
+    want = sorted({p for p, n in listed if n == method})
+    if want:
+        return {"kind": "platform", "plat": plat, "method": method, "want": want[0]}
+    return {"kind": "unbound", "plat": plat, "method": method, "listed": listed}
+
+
+def _kill_cmd_arg(s):
+    """修法指令裡要貼的字(合約片段、平台名——來自筆記或設定檔鍵,都可能不可信):含控制字元或以減號開頭回 None
+    (不印可貼的指令;減號開頭照貼會被當成選項,代碼審 r2),否則 shell 引號包好。★貼進指令的字一律走這一支★
+    (代碼審 r1 正確性席:平台名原樣接進指令,照貼會執行任意指令)。跟 _kill_node_arg 印佔位字不同:節點名是指令
+    必要的那一格、佔位字讓人知道要填哪裡;這裡的字不能安全貼上時整條指令不印,改成文字說明。"""
+    s = str(s)
+    return None if _path_special_chars(s) or s.startswith("-") else _sh_quote(s)
+
+
+def _kill_binding_msg(rel, recipe, b, pdata):
+    """比對結果 → 一句提醒(不含「⚠ 提醒:」);ok 與 skip 回 None。修法由 (平台, 方法) 產生,貼進指令的字走 _kill_cmd_arg。"""
+    k = b["kind"]
+    if k == "noprefix":
+        return f"合約的 [test:] 有未定義的平台前綴,沒比對測試清單({_kill_esc(b['detail'])})"
+    if k not in ("platform", "unbound"):
+        return None
+    dflt = pdata.get("default_platform")
+
+    def show(p, n):
+        n = n if IDENT_RE.match(n) else _kill_show(n)
+        return f"{_kill_esc(p)}:{n}" if pdata.get("multiplatform") and p != dflt else n
+    na, meth = _kill_node_arg(rel), b["method"]
+    unsafe = "(合約片段或平台名含控制字元或以減號開頭,不印可貼的指令)"
+    if k == "platform":
+        want = _kill_cmd_arg(b["want"])
+        how = (f"先 lumos guard kill-rm {na} --id {_kill_recipe_id(str(rel), recipe)[:12]},再帶 --platform {want} 重新 kill-add"
+               if want else f"kill-rm 後改用合約綁的平台重新 kill-add{unsafe}")
+        return f"配方會在 {_kill_esc(b['plat'])} 平台跑 {show(b['plat'], meth)},合約的測試清單綁的是 {_kill_esc(b['want'])} 平台;{how}"
+    inv = _kill_cmd_arg(recipe.get("invariant") or "")
+    plat = _kill_cmd_arg(b["plat"]) if pdata.get("multiplatform") and b["plat"] != dflt else ""
+    if not IDENT_RE.match(meth):
+        fix = "這種名字 guard bind 綁不了,改把配方的測試換成清單上那支(kill-rm 後重新 kill-add)"
+    elif inv is None or plat is None:
+        fix = f"要讓推送閘也守它就手動 guard bind{unsafe};或 kill-rm 後改用清單上那支重新 kill-add"
+    else:
+        fix = (f"要讓推送閘也守它:lumos guard bind {na} {inv} {meth}{f' --platform {plat}' if plat else ''}"
+               "(綁上後這條合約有多支測試,之後 kill-add 不帶 --test 會要你指明);或 kill-rm 後改用清單上那支重新 kill-add")
+    listed = b["listed"]
+    if not listed:
+        return f"這條合約的測試清單是空的(還沒綁任何測試),配方驗的 {show(b['plat'], meth)} 推送閘不會跑;{fix}"
+    shown = "、".join(show(p, n) for p, n in listed[:3]) + (f" 等 {len(listed)} 支" if len(listed) > 3 else "")
+    return f"配方驗的 {show(b['plat'], meth)} 不在合約的測試清單上(推送前跑的是 {shown});{fix}"
+
+
+def _kill_add_warn_binding(rel, recipe, line, ctx):
+    """kill-add 鎖外第二個提醒:這次寫進去的那條配方的測試不在合約行的 [test:] 清單上 → 標準錯誤印一行(只提醒、照舊寫入)。
+    合約行用鎖內讀到的那份(以寫入當下為準,不重讀筆記)。出了沒預料的錯也只印一行。"""
+    try:
+        pdata = (ctx or {}).get("pdata")
+        msg = _kill_binding_msg(rel, recipe, _kill_test_binding(recipe, line, pdata), pdata or {})
+    except Exception as ex:
+        msg = f"比對測試清單時出錯({ex.__class__.__name__}: {_kill_esc(ex)}),沒比對"
+    if msg:
+        print(f"⚠ 提醒:{msg}", file=sys.stderr)
+
+
+def _kill_p2_unbound(vault, notes, p2):
+    """doctor P2 第三個提醒的計算:每條配方用 _kill_find_contract 對回合約行,測試不在那行清單上(或平台不同)的列出。
+    共用 P2 掃描讀好的設定;P2 沒算出來或設定檔讀不了 → 回 []。對不回合約行的不管(guard kill 跑到會自己擋)。
+    每篇、每條各自例外保護,一條壞配方不吞掉其他條。回 [(節點 stem 清單, 一行文字)]。"""
+    ctx = (p2 or {}).get("ctx")
+    pdata = ctx.get("pdata") if ctx and not ctx.get("cfg_err") else None
+    if not pdata:
+        return []
+    out = []
+    for rel, n in sorted(notes.items()):
+        if _kill_note_skipped(n):
+            continue
+        try:
+            recipes, _err = _kill_read_recipes(vault / rel)
+            lines, _, e = load_raw_for_edit(vault / rel)
+        except Exception:
+            continue
+        for r in recipes or []:
+            try:
+                inv = r.get("invariant") if isinstance(r, dict) else None
+                if not isinstance(inv, str) or not inv.strip():
+                    continue
+                idx, _why = _kill_find_contract(lines, 1, e, inv)
+                if idx is None:
+                    continue
+                b = _kill_test_binding(r, lines[idx], pdata)
+                if b["kind"] not in ("unbound", "platform"):
+                    continue
+                head = INV_TAG_RE.sub("", INVARIANT_RE.match(lines[idx].strip()).group(1)).strip()[:30]
+                out.append(([n.stem], f"{_kill_rel(rel)} {_kill_show(head)} → {_kill_binding_msg(rel, r, b, pdata)}"))
+            except Exception:
+                continue
+    return out
+
+
+def _doctor_p2_unbound(vault, notes, p2, gov_events, warn_soft):
+    """doctor P2 第三個提醒的印出與落帳:配方驗的測試不在合約的測試清單上——殺傷力證明的不是推送閘跑的那支。
+    共用 P2 掃描讀好的設定;自己一個例外保護,逐篇逐條保護在 _kill_p2_unbound 裡(抽出來是為了不讓 run_doctor 再變複雜;
+    warn_soft 是 run_doctor 裡的區域函式,由它傳進來)。"""
+    try:
+        ub = _kill_p2_unbound(vault, notes, p2)
+        if ub:
+            warn_soft([t for _st, t in ub],
+                      f"有 {len(ub)} 條殺傷力配方驗的測試不在合約的測試清單上(殺傷力證明的不是推送閘跑的那支;不擋):",
+                      "照每條的修法綁上或改配方;清單外的那支是不是刻意更細的測試由人判")
+            for stem in sorted({x for _st, _t in ub for x in _st}):
+                gov_events.append({"gate": "check-p2t", "kind": "warned", "hard": False, "nodes": [stem]})
+    except Exception as e:
+        warn_soft([], f"測試清單比對算不出來({e.__class__.__name__}: {e}),先跳過")
+
+
+def _kill_add_warn(env, rel, recipe, ctx=None):
     """kill-add 寫入成功、放掉寫入鎖之後:這次實際寫進去的那一條原文不是恰好一次,就在標準錯誤印恰好一行提醒。
+    ctx:呼叫端已建好的判定狀態(跟測試清單那個提醒共用,設定只讀一次)。
     ★只提醒、照舊寫入★(保留「宣告不擋、跑時擋」:既有測試刻意用 kill-add 宣告失配或逃逸的配方來測 guard kill);
     標準輸出與回傳碼不變。判斷自己出了沒預料的錯也只印一行、照舊寫入(不能比現在退步成崩潰不寫入)。"""
     try:
-        res = _kill_recipe_judge(_kill_check_ctx(_repo_root_from_env(env)), recipe)
+        res = _kill_recipe_judge(ctx or _kill_check_ctx(_repo_root_from_env(env)), recipe)
         st, f = res["status"], res["file"]
         if st == "ok":
             return
@@ -16317,11 +16479,17 @@ def _kill_add_after_lock(env, node, rel, rc, warn_box, try_run):
     驗原文要跑好幾支 git,放到鎖外(代碼審第 3 輪正確性席:每支上限 10 秒,加起來會超過鎖 30 秒的過期時間)。"""
     if rc != 0 or not warn_box:
         return rc
-    for rec in warn_box:
-        _kill_add_warn(env, rel, rec)
+    try:
+        ctx = _kill_check_ctx(_repo_root_from_env(env))
+    except Exception:
+        ctx = None
+    # 兩個提醒各至多一行:先原文失配、後測試不在清單(都在 --try 試跑之前)
+    for rec, line in warn_box:
+        _kill_add_warn(env, rel, rec, ctx)
+        _kill_add_warn_binding(rel, rec, line, ctx)
     if not try_run:
         return rc
-    return _kill_add_try(env, node, rel, _kill_recipe_id(str(rel), warn_box[0]))
+    return _kill_add_try(env, node, rel, _kill_recipe_id(str(rel), warn_box[0][0]))
 
 
 def _kill_add_try(env, node, rel, full):
@@ -16356,8 +16524,8 @@ def _kill_add_try(env, node, rel, full):
 
 def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, test_arg,
                            platform, note, covers_list, warn_box):
-    """cmd_guard_kill_add 拿著寫入鎖之後的那一段:讀筆記、判重、原子寫入。這次實際要寫進去的那一條放進 warn_box,
-    由呼叫端在鎖外驗原文、印提醒。"""
+    """cmd_guard_kill_add 拿著寫入鎖之後的那一段:讀筆記、判重、原子寫入。這次實際要寫進去的那一條與它的合約行
+    以 (配方, 合約行) 放進 warn_box,由呼叫端在鎖外驗原文、比測試清單、印提醒。"""
     import json
     path = env.vault / rel
     try:
@@ -16366,13 +16534,10 @@ def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, tes
         print(f"擋下:{ex}", file=sys.stderr)
         return 2
     # 定位 KEY 行(去標記後比對,避免子字串誤中標記文字)
-    target_idx = None
-    for i in range(1, e):
-        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
-            if target_idx is not None:
-                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
-                return 2
-            target_idx = i
+    target_idx, why = _kill_find_contract(lines, 1, e, invariant_substr)
+    if why == "many":
+        print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
+        return 2
     if target_idx is None:
         print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
         return 2
@@ -16417,7 +16582,7 @@ def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, tes
               f"先用 lumos guard kill-rm {_kill_node_arg(rel)} --id {key[:12]} 拿掉舊的那條{tip}", file=sys.stderr)
         return 2
     # 判重之後:這次實際要寫進去的那一條交給呼叫端在鎖外驗原文(只提醒、照舊寫入——「宣告不擋、跑時擋」)
-    warn_box.append(recipe)
+    warn_box.append((recipe, line))   # 合約行一起帶出:鎖外比測試清單用寫入當下這份
     if updated is None:
         recipes.append(recipe)
     blob = json.dumps(recipes, ensure_ascii=False)
@@ -17267,14 +17432,11 @@ def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
     except (ValueError, RuntimeError) as ex:
         print(f"擋下:{ex}", file=sys.stderr)
         return 2
-    target_idx = None
-    for i in range(1, e):
-        # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容)
-        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
-            if target_idx is not None:
-                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
-                return 2
-            target_idx = i
+    # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容);跟 kill-add 共用同一支定位
+    target_idx, why = _kill_find_contract(lines, 1, e, invariant_substr)
+    if why == "many":
+        print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
+        return 2
     if target_idx is None:
         print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
         return 2
