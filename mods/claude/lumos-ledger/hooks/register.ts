@@ -316,13 +316,21 @@ async function onTurnEnd(st: State, $: any, e: any) {
   } catch { /* 同上 */ }
 }
 
+export function spawnFields(e: any, r: any): { agent: string | null; extra: Record<string, unknown> } {
+  return {
+    agent: e?.parentAgentId ?? null, // 發起方;主迴圈派的沒有(型別檔 AgentSpawnInput)
+    extra: {
+      agent_type: e?.subagentType ?? null,
+      model: r?.model ?? null,
+      child: r?.agentId ?? null,
+      denied: typeof r?.deny === 'string',
+    },
+  }
+}
+
 async function onSpawn(st: State, $: any, e: any, r: any) {
-  await record(st, $, e.agentId, 'spawn', {
-    agent_type: e.subagentType ?? null,
-    model: r?.model ?? null,
-    child: r?.agentId ?? null,
-    denied: typeof r?.deny === 'string',
-  })
+  const f = spawnFields(e, r)
+  await record(st, $, f.agent, 'spawn', f.extra)
 }
 
 // 會談結束:整條鏈共用一個很短的時間上限,只用它的八成;判定沒有快取的塊直接放棄

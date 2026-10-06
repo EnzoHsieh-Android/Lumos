@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, toolExtra, vaultIn, type Io } from './register'
+import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnFields, toolExtra, vaultIn, type Io } from './register'
 import { RULES } from './rules-fixture'
 
 // S13:並行、重新載入、/clear;另驗位置判定、寫入失敗與暫時失敗(Projects/Lumos事件帳_計劃 做法第 2 節)。
@@ -335,6 +335,15 @@ describe('lumos-ledger 出錯看得見', () => {
       { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9' })
     expect(toolExtra({ tool: 'Read', file_path: '/a' }, { isError: true }, false)).toEqual(
       { tool: 'Read', ok: false, denied: false, paths: ['/a'] })
+  })
+
+  test('S12 子代理派孫代理:spawn 事件的 agent 欄是發起的子代理(parentAgentId),不是空的', () => {
+    const child = spawnFields({ parentAgentId: 'sub-1', subagentType: 'general-purpose' }, { model: 'm', agentId: 'grand-1' })
+    expect(child.agent).toBe('sub-1')
+    expect(child.extra.child).toBe('grand-1')
+    const top = spawnFields({ subagentType: 'Explore' }, { deny: 'no' })
+    expect(top.agent).toBe(null)
+    expect(top.extra.denied).toBe(true)
   })
 
   test('空緩衝不寫空塊', async () => {
