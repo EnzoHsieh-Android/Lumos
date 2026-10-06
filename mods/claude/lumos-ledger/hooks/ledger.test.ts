@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnFields, toolExtra, vaultIn, type Io } from './register'
+import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnEvent, spawnFields, toolExtra, vaultIn, type Io } from './register'
 import { RULES } from './rules-fixture'
 
 // S13:並行、重新載入、/clear;另驗位置判定、寫入失敗與暫時失敗(Projects/Lumos事件帳_計劃 做法第 2 節)。
@@ -344,6 +344,11 @@ describe('lumos-ledger 出錯看得見', () => {
     const top = spawnFields({ subagentType: 'Explore' }, { deny: 'no' })
     expect(top.agent).toBe(null)
     expect(top.extra.denied).toBe(true)
+  })
+
+  test('S12 交給 record 的整組參數:發起方是 parentAgentId,不是子代理自己的 agentId', () => {
+    expect(spawnEvent({ parentAgentId: 'sub-1', agentId: 'wrong' }, { agentId: 'grand-1' }))
+      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false }])
   })
 
   test('空緩衝不寫空塊', async () => {

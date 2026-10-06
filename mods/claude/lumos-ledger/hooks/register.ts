@@ -328,9 +328,21 @@ export function spawnFields(e: any, r: any): { agent: string | null; extra: Reco
   }
 }
 
-async function onSpawn(st: State, $: any, e: any, r: any) {
+// record 要的整組參數(發起方、事件名、欄位)由純函式一次給齊,接線那行只原樣轉交、沒有欄位可以選錯
+// (代碼審 r1:原本測試只測 spawnFields,把接線改回 e.agentId 照綠)
+export function spawnEvent(e: any, r: any): [string | null, string, Record<string, unknown>] {
   const f = spawnFields(e, r)
-  await record(st, $, f.agent, 'spawn', f.extra)
+  return [f.agent, 'spawn', f.extra]
+}
+
+// 只收一整組參數;這裡拿不到原始事件 e,接線那行只能把 spawnEvent 算出的整組原樣交過來(代碼審 r2:
+// 拆成三個變數再傳,發起方那格照樣能接錯)
+async function recordEvent(st: State, $: any, ev: [string | null, string, Record<string, unknown>]) {
+  await record(st, $, ev[0], ev[1], ev[2])
+}
+
+async function onSpawn(st: State, $: any, e: any, r: any) {
+  await recordEvent(st, $, spawnEvent(e, r))
 }
 
 // 會談結束:整條鏈共用一個很短的時間上限,只用它的八成;判定沒有快取的塊直接放棄

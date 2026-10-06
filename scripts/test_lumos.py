@@ -73142,7 +73142,8 @@ def _fake_claude_env(state=None, with_claude=True):
     (src / ".claude-plugin" / "marketplace.json").write_text(
         _j.dumps({"name": "lumos-toolchain", "owner": {"name": "t"},
                   "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"},
-                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"}]}), encoding="utf-8")
+                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"},
+                              {"name": "lumos-guard", "source": "./mods/claude/lumos-guard"}]}), encoding="utf-8")
     if with_claude:
         (bin_d / "claude").write_text(_FAKE_CLAUDE, encoding="utf-8"); (bin_d / "claude").chmod(0o755)
     st, log = base / "state.json", base / "calls.log"
@@ -73183,7 +73184,8 @@ def t_install_registers_ledger_plugin():
     env, st, log, src = _fake_claude_env()
     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src) + "/"}],
                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True},
-                                        {"id": "lumos-context@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
+                                        {"id": "lumos-context@lumos-toolchain", "enabled": True},
+                                          {"id": "lumos-guard@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
     r = _with_env(env, m._sync_claude_plugin)
     c = calls(log)
     check("S6② 已裝好 → ok 且不呼叫 add / install(路徑多一個結尾斜線也算一樣)",
@@ -73880,6 +73882,8 @@ def t_ledger_plugin_files_valid():
     check("S9 寫的 .gitignore 內容跟 _note_audit_work_dir 相同",
           bool(gi and want) and gi.group(1).encode().decode("unicode_escape") == want.group(1).encode().decode("unicode_escape"),
           f"{gi.group(1) if gi else None!r} vs {want.group(1) if want else None!r}")
+    check("S12 派工那筆用引擎給的事件與結果算(接線改壞時純函式測試照綠;代碼審 r3)",
+          "await recordEvent(st, $, spawnEvent(e, r))" in code and "const r = await next(e)\n    await onSpawn(st, $, e, r)" in code, "")
     banned = [("回傳拒絕", r"\bdeny\s*:"), ("改寫事件後交下去", r"next\(\{"),
               ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'")]
     for what, pat in banned:
@@ -73887,7 +73891,7 @@ def t_ledger_plugin_files_valid():
 
 
 def t_install_registers_context_plugin():
-    """Claude-mod第二批 S4:外掛清單兩支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
+    """Claude-mod第二批 S4:外掛清單每支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
     市集只在全部外掛移除成功後才移除,任一支失敗保留市集;來源市集檔沒列的那支略過。"""
     import contextlib
     import io
@@ -73900,14 +73904,14 @@ def t_install_registers_context_plugin():
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             r = _with_env(env, fn)
         return r, out.getvalue(), err.getvalue()
-    check("S4 外掛清單是事件帳與交棒脈絡兩支",
-          tuple(m._LUMOS_PLUGINS) == ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain"), str(m._LUMOS_PLUGINS))
+    check("S4 外掛清單含事件帳與交棒脈絡,事件帳排第一",
+          m._LUMOS_PLUGINS[0] == "lumos-ledger@lumos-toolchain" and "lumos-context@lumos-toolchain" in m._LUMOS_PLUGINS, str(m._LUMOS_PLUGINS))
     env, st, log, src = _fake_claude_env()
     r, out, err = run(env, m._sync_claude_plugin)
     c = calls(log)
-    check("S4 兩支都以 --scope user 裝上、回 ok",
+    check("S4 每支都以 --scope user 裝上、回 ok",
           r == "ok" and all(f"plugin install {p} --scope user" in c for p in m._LUMOS_PLUGINS), f"{r} {c}")
-    check("S4 兩支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
+    check("S4 每支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
     # 一支裝失敗:另一支照裝、回 failed、失敗那支印到標準錯誤
     env, st, log, src = _fake_claude_env()
     env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
@@ -73940,8 +73944,8 @@ def t_install_registers_context_plugin():
     c = calls(log)
     rm = [i for i, ln in enumerate(c) if ln.startswith("plugin uninstall")]
     mi = next((i for i, ln in enumerate(c) if ln.startswith("plugin marketplace remove")), -1)
-    check("S4 移除:兩支都移除、市集在它們之後只移除一次",
-          r == "ok" and len(rm) == 2 and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
+    check("S4 移除:每支都移除、市集在它們之後只移除一次",
+          r == "ok" and len(rm) == len(m._LUMOS_PLUGINS) and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
     # 移除時一支失敗:另一支照移、市集保留、手動指令只列失敗那支加市集
     env, st, log, src = _fake_claude_env()
     st.write_text(_j.dumps(both(src)), encoding="utf-8")
@@ -73954,6 +73958,121 @@ def t_install_registers_context_plugin():
     check("S4 手動指令只列失敗那支加市集",
           "claude plugin uninstall lumos-context@lumos-toolchain" in err and "claude plugin uninstall lumos-ledger" not in err
           and "claude plugin marketplace remove lumos-toolchain" in err, err)
+
+
+def t_install_registers_guard_plugin():
+    """審查席唯讀隔離 S9:外掛清單含 lumos-guard,install 會裝上、uninstall 會移除(逐支邏輯本身由
+    t_install_registers_context_plugin 與 t_lumos_plugin_install_edge_cases 管)。"""
+    import contextlib
+    import io
+    import json as _j
+    m = _load_lumos_inproc()
+    gid = "lumos-guard@lumos-toolchain"
+    check("S9 外掛清單含審查席隔離", gid in m._LUMOS_PLUGINS, str(m._LUMOS_PLUGINS))
+    def run(env, fn):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r = _with_env(env, fn)
+        return r, out.getvalue(), err.getvalue()
+    env, st, log, src = _fake_claude_env()
+    r, out, _err = run(env, m._sync_claude_plugin)
+    c = log.read_text(encoding="utf-8").splitlines()
+    check("S9 install 裝上審查席隔離外掛", r == "ok" and f"plugin install {gid} --scope user" in c and f"{gid} 已就位" in out, f"{r} {c}")
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                            "plugins": [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]}), encoding="utf-8")
+    r, _out, _err = run(env, m._teardown_claude_plugin)
+    c = log.read_text(encoding="utf-8").splitlines()
+    check("S9 uninstall 移除審查席隔離外掛", r == "ok" and f"plugin uninstall {gid} --scope user" in c, str(c))
+
+
+def t_guard_plugin_files_valid():
+    """審查席唯讀隔離 S10:lumos-guard 的描述檔與 hooks.json 合法;市集列出的外掛恰好是外掛清單那幾支;
+    外掛原始碼不改寫輸入或結果、不跑外部指令。"""
+    import json as _j
+    import re as _re
+    _need_src(".claude-plugin/marketplace.json", "mods/claude/lumos-guard")   # 消費專案沒有外掛檔,記成 skip
+    m = _load_lumos_inproc()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    names = sorted(f"{p.get('name')}@{mk.get('name')}" for p in mk.get("plugins", []))
+    check("S10 市集列出的外掛恰好是外掛清單那幾支", names == sorted(m._LUMOS_PLUGINS), f"{names} vs {m._LUMOS_PLUGINS}")
+    for p in mk.get("plugins", []):
+        src = p.get("source", "")
+        pdir = (repo / src).resolve()
+        check(f"S10 {p.get('name')} 的 source 是 ./ 開頭、指到含描述檔的資料夾",
+              isinstance(src, str) and src.startswith("./") and (pdir / ".claude-plugin" / "plugin.json").is_file(), repr(src))
+    gdir = repo / "mods" / "claude" / "lumos-guard"
+    pj = _j.loads((gdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    check("S10 描述檔名稱是 lumos-guard", pj.get("name") == "lumos-guard", str(pj))
+    hooks = _j.loads((gdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    check("S10 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
+    code = (gdir / "hooks" / "register.ts").read_text(encoding="utf-8")
+    banned = [("跑外部指令", r"\$\.process\."), ("改寫事件後交下去", r"next\(\{"), ("寫檔", r"\$\.fs\.(write|append|remove|mkdir)"),
+              ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'"),
+              ("動回合結果", r"'turn\.complete'"), ("附加對話列", r"\$\.session\.append"),
+              ("改寫事件欄位", r"\be\??\.[A-Za-z_]\w*\s*(=(?!=)|\+=|-=|\|\|=|&&=|\?\?=)"),
+              ("用中括號改寫事件欄位", r"\be\[[^\]]*\]\s*=(?!=)"), ("合併進事件", r"Object\.assign\(\s*e\b"),
+              ("刪事件欄位", r"\bdelete\s+e[.\[]"), ("把 e 換成別的物件", r"(?<![.\w])e\s*=(?!=)"),
+              ("把 e 以外的東西交下去", r"next\((?!\s*e\s*\))")]
+    for what, pat in banned:
+        check(f"S10 不用:{what}", not _re.search(pat, code), pat)
+    # 代碼審 r3、r4:接線改成一律放行時純函式測試照綠,掛上去的那幾行(含出錯時的 .catch)要原樣釘住;
+    # 先拿掉註解再比,寫在註解或死碼裡的同一串字不算(行為由 guard.test.ts 的「接線」那組測)
+    live = _re.sub(r"(?m)^\s*//.*$", "", _re.sub(r"/\*.*?\*/", "", code, flags=_re.S))
+    reg = live[live.find("export const register"):]
+    for what, want in [("派工", "  on('agent.spawn', async ($, e, next) => onSpawn(st, $, e, next))\n    .catch(($, e, next) => next(e))"),
+                       ("工具呼叫", "  on('tool.call', async ($, e, next) => onTool(st, $, e, next))\n    .catch(($, e, next) => onCallFailed(e, next, seatishOf(st, e)))"),
+                       ("會談結束", "  on('session.end', async ($, e, next) => {\n    await onEnd(st, e)\n    return next(e)\n  })")]:
+        check(f"S10 {what}的掛鉤只轉交給受測的函式(含出錯時)", reg.count(want) == 1, want)
+    check("S10 每個事件只掛一次", all(reg.count(f"on('{ev}'") == 1 for ev in ("agent.spawn", "tool.call", "session.end")), "")
+    check("S10 只掛派工、工具呼叫、會談結束三個事件(拿掉註解後)",
+          sorted(set(_re.findall(r"on\('([a-z.]+)'", live))) == ["agent.spawn", "session.end", "tool.call"],
+          str(_re.findall(r"on\('([a-z.]+)'", code)))
+    # 能擋人的掛鉤都要掛 .catch:沒掛的話掛鉤自己出錯時引擎直接跳過它,等於放行(Claude Code 2.1.290 起 validate 會列出)。
+    # CI 沒有 claude 指令,這一段只在本機有 claude 時查
+    import shutil as _sh
+    claude = _sh.which("claude")
+    if claude:
+        r = subprocess.run([claude, "plugin", "validate", str(gdir), "--json"], capture_output=True, text=True,
+                           errors="replace", check=False, timeout=60)
+        try:
+            gh = [g for c in _j.loads(r.stdout).get("contents", []) for g in c.get("gatingHooks") or []]
+        except ValueError:
+            gh = None
+        check("S10 claude plugin validate:能擋人的掛鉤是 agent.spawn 與 tool.call,都掛了 .catch",
+              gh is not None and sorted(g.get("hook") for g in gh) == ["agent.spawn", "tool.call"]
+              and all(g.get("hasCatch") is True for g in gh), r.stdout[-600:] if gh is None else str(gh))
+
+
+def t_seat_templates_carry_marker():
+    """審查席唯讀隔離 S11:派工範本 §1、§2、§3、§7.5、§7.6、§7.8 的派工詞第一行是合格的 LUMOS-SEAT 標記、
+    實驗目錄指到席位工作資料夾;編排者須知寫明席報告暫存處與收貨時自己看 repo。"""
+    import re as _re
+    _need_src("skills/lumos-design-loop/templates.md")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    L = (repo / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8").split("\n")
+    # 標記格式從外掛原始碼讀,不另抄一份(代碼審 r3)
+    guard_src = (repo / "mods" / "claude" / "lumos-guard" / "hooks" / "register.ts").read_text(encoding="utf-8")
+    mre = _re.search(r"^const SEAT_RE = /(.+)/$", guard_src, _re.M)
+    check("S11 從外掛原始碼抽得到 SEAT_RE", bool(mre), "")
+    seat_re = _re.compile(mre.group(1) if mre else r"(?!)")
+    for head in ("## 1. Design-loop 審計員", "## 2. Design-loop 辯方", "## 3. Code-loop reviewer", "## 7.5 spec-conformance slot",
+                 "## 7.6 架構對齊席派工", "## 7.8 資安席派工"):
+        i = next((k for k, ln in enumerate(L) if ln.startswith(head)), -1)
+        j = next((k for k in range(i + 1, len(L)) if L[k].startswith("```")), -1) if i >= 0 else -1
+        first = next((ln.strip() for ln in L[j + 1:] if ln.strip()), "") if j >= 0 else ""
+        m = seat_re.match(first)
+        check(f"S11 {head} 派工詞第一行是合格的 LUMOS-SEAT", bool(m) and len(m.group(1).split("/")) == 3, first)
+        end = next((k for k in range(j + 1, len(L)) if L[k].startswith("```")), len(L)) if j >= 0 else 0
+        check(f"S11 {head} 派工詞把實驗目錄指到席位工作資料夾", "/tmp/lumos-seat-work/" in "\n".join(L[j:end]), "")
+    body = "\n".join(L)
+    check("S11 編排者須知寫明席報告收齊前不寫到硬碟", "收齊前不寫到硬碟" in body, "")
+    check("S11 編排者須知寫明收貨時自己看 repo", "git status" in body and "不報" in body, "")
+    for rel in ("skills/lumos-design-loop/SKILL.md", "skills/lumos-code-loop/SKILL.md",
+                "skills/lumos-design-loop/reference.md", "skills/lumos-code-loop/reference.md"):
+        txt = (repo / rel).read_text(encoding="utf-8")
+        check(f"S11 {rel} 不再寫「先存檔放著」(決策 d5 收齊前不落地)", "先存檔放著" not in txt, "")
 
 
 def t_lumos_plugin_install_edge_cases():
@@ -74008,6 +74127,7 @@ def t_lumos_plugin_install_edge_cases():
     r, err = teardown_err(lambda src: {"markets": [], "plugins": plugs}, {"FAKE_CLAUDE_RAW": "null"})
     cmds = [ln.strip() for ln in err.splitlines() if ln.strip().startswith("claude plugin")]
     check("手動指令行不帶 # 註解", bool(cmds) and not any("#" in c for c in cmds), err)
+    check("判不出市集是不是我們的:另起一行提醒先確認來源再刪", "判不出是不是我們的" in err and "marketplace list" in err, err)
     # ⑦ 裝完確認那次查詢用 10 秒逾時(claude 卡住時不拖太久)
     tims = []
     def user2(_c, _pid, timeout=30):
