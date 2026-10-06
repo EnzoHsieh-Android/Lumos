@@ -49231,6 +49231,32 @@ def t_nodehome_optional_test_tree_capture_failure():
             check(label + ":索引內容不變", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
 
 
+def t_nodehome_optional_test_captured_owner_isolation():
+    """另一篇真的測試家不能替途中偽造的本篇about_code背書。"""
+    original = _nh_node
+    added = []
+
+    def node(root, name, *args, **kwargs):
+        if name == "TestHome" and kwargs.get("about") == []:
+            original(root, "OtherHome", about=["tests/check.py"], body="actual other owner unchanged")
+            added.append(root)
+        return original(root, name, *args, **kwargs)
+
+    namespace = globals()
+    namespace["_nh_node"] = node
+    try:
+        t_nodehome_optional_test_input_snapshots()
+    finally:
+        namespace["_nh_node"] = original
+    check("另一個測試家:普通/-O宣告案例各確實新增", len(added) == 2, str(added))
+    for root in added:
+        old = _nh_git(root, "show", "HEAD:docs/kg-knowledge/Systems/OtherHome.md")
+        staged = _nh_git(root, "show", ":docs/kg-knowledge/Systems/OtherHome.md")
+        check("另一個測試家:起點與索引合法宣告保持原樣",
+              old.returncode == staged.returncode == 0 and old.stdout == staged.stdout
+              and "tests/check.py" in staged.stdout, old.stdout + staged.stdout)
+
+
 def t_nodehome_optional_test_input_snapshots():
     """額外測試證據的設定、歸屬與檔案模式皆不能借用途中改動又還原的索引。"""
     import json
