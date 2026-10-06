@@ -1,0 +1,33 @@
+def t_nodehome_optional_test_tree_capture_failure():
+    """捕獲索引樹失敗時，不借額外測試；正式程式自己的寫回退路保持。"""
+    import json
+    for opt in (False, True):
+        for test_home_writeback in (False, True):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            production = _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            _nh_file(root, "tests/check.py", "x = 2\n")
+            target = home if test_home_writeback else production
+            target.write_text(target.read_text() + "\nWHY: synthetic snapshot failure control.\n")
+            _nh_git(root, "add", ".")
+            label = f"索引捕獲失敗/{opt}/{test_home_writeback}"
+            check(label + ":合法測試確實在索引", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
+            shim = ("import runpy,sys,json\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_git'];fired=[]\n"
+                    "def git(root,*args,**kwargs):\n"
+                    "    if args==('write-tree',):fired.append(list(args));return None\n"
+                    "    return original(root,*args,**kwargs)\n"
+                    "g['_nodehome_git']=git\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('CAPTURE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[8:] for line in q.stderr.splitlines() if line.startswith("CAPTURE:")), "[]")
+            check(label + ":捕獲失敗確實注入", json.loads(marker) == [["write-tree"]], q.stderr)
+            expected = (q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr) if test_home_writeback else q.returncode == 0
+            check(label + ":只撤回額外測試、不改正式程式退路", expected, q.stdout + q.stderr)
+            check(label + ":索引內容不變", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
+

@@ -1,0 +1,67 @@
+def t_nodehome_optional_test_input_snapshots():
+    """額外測試證據的設定、歸屬與檔案模式皆不能借用途中改動又還原的索引。"""
+    import json
+    for opt in (False, True):
+        for mode in ("config", "declaration", "file-mode"):
+            cfg = {"node_home": {"mode": "on", "ignore": ["tests/check.py"]}} if mode == "config" else None
+            root = _nh_repo(cfg)
+            _nh_file(root, "src/a.py", "x = 0\n")
+            test = _nh_file(root, "tests/check.py", "x = 0\n")
+            if mode == "file-mode":
+                test.unlink(); test.symlink_to("../src/a.py")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=[] if mode == "declaration" else ["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            if mode == "file-mode":
+                test.unlink(); test.symlink_to("../src/a.py.changed")
+            else:
+                _nh_file(root, "tests/check.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: synthetic captured input case.\n")
+            _nh_git(root, "add", ".")
+            target = ".lumos/config.json" if mode == "config" else "docs/kg-knowledge/Systems/TestHome.md"
+            if mode == "config":
+                replacement = '{"node_home":{"mode":"on","ignore":[]}}'
+                (root / target).write_text(replacement)   # 迫使既有 reader 走索引而非相同工作樹捷徑
+            elif mode == "declaration":
+                replacement = home.read_text().replace("about_code: []", "about_code:\n  - tests/check.py")
+                home.write_text(replacement)
+            else:
+                replacement = ""
+            label = f"索引輸入快照/{opt}/{mode}"
+            staged = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
+            check(label + ":程式與測試及家一起staged", {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(staged))
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;fired=[];counts=[];mode={mode!r};target={target!r};replacement={replacement.encode()!r}\n"
+                    "def mutate(root,read):\n"
+                    "    before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "    path='tests/check.py' if mode=='file-mode' else target\n"
+                    "    entry=subprocess.check_output(['git','ls-files','-s',path],cwd=root,text=True).split()\n"
+                    "    oid=entry[1] if mode=='file-mode' else subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=replacement).decode().strip()\n"
+                    "    permissions='100644' if mode=='file-mode' else entry[0]\n"
+                    "    subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
+                    "    try:out=read()\n"
+                    "    finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],path],cwd=root,check=True)\n"
+                    "    after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "    seen=(out[0].get(path)=='100644') if mode=='file-mode' else out==replacement\n"
+                    "    fired.append({'restored':before==after,'seen_transient':seen});return out\n"
+                    "original_reader=g['_nodehome_reader'];original_list=g['_nodehome_list']\n"
+                    "def factory(root,where,*a,**kw):\n"
+                    "    read=original_reader(root,where,*a,**kw)\n"
+                    "    def wrapped(p):\n"
+                    "        if mode!='file-mode' and where=='index' and p==target and not fired:return mutate(root,lambda:read(p))\n"
+                    "        return read(p)\n"
+                    "    return wrapped\n"
+                    "def listing(root,where,*a,**kw):\n"
+                    "    if where=='index':counts.append(where)\n"
+                    "    if mode=='file-mode' and where=='index' and len(counts)==2 and not fired:return mutate(root,lambda:original_list(root,where,*a,**kw))\n"
+                    "    return original_list(root,where,*a,**kw)\n"
+                    "g['_nodehome_reader']=factory;g['_nodehome_list']=listing\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('SNAPSHOT:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[9:] for line in q.stderr.splitlines() if line.startswith("SNAPSHOT:")), "[]")
+            check(label + ":真實索引輸入已變動並還原", json.loads(marker) == [{"restored": True, "seen_transient": True}], q.stderr)
+            check(label + ":不採信暫時輸入而誤放路由",
+                  q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stdout + q.stderr)
+

@@ -48991,7 +48991,7 @@ g["_nodehome_reader"]=factory;rc=ns["main"]();print("RACE:"+json.dumps(fired),fi
                 home.write_text(home.read_text() + "\nWHY: synthetic race reproduction.\n")
                 _nh_git(root, "add", "-A")
                 if staged:
-                    where, mode = "index", ["--staged"]
+                    where, mode = _nh_git(root, "write-tree").stdout.strip(), ["--staged"]
                 else:
                     _nh_commit(root, "mixed writeback")
                     where = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
@@ -49146,6 +49146,157 @@ def t_nodehome_optional_test_index_changed():
             after = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
             check(f"索引證據/{opt}/{mode}:檢查未改寫暫存區",
                   ("tests/check.py" in after) == (mode != "index-change"), str(after))
+
+
+def t_nodehome_optional_test_index_aba():
+    """索引讀取途中改動再還原，也只能採信捕獲的版本；普通/-O保留合法及非法路由。"""
+    import json
+    for opt in (False, True):
+        for valid, inject in ((False, False), (False, True), (True, True)):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check"], body="test context")
+            _nh_commit(root, "baseline")
+            seed = "#!/usr/bin/env python3\nx = 2\n" if valid else "x = 2\n"
+            _nh_file(root, "tests/check", seed)
+            _nh_file(root, "src/a.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: synthetic staged ABA reproduction.\n")
+            _nh_git(root, "add", ".")
+            label = f"索引ABA/{opt}/{valid}/{inject}"
+            check(label + ":原始索引種子成立", _nh_git(root, "show", ":tests/check").stdout == seed)
+            transient = "x = 99\n" if valid else "#!/usr/bin/env python3\nx = 99\n"
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_route_tests'];fired=[]\n"
+                    "def route(root,*args,**kwargs):\n"
+                    f"    if {inject!r} and not fired:\n"
+                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check'],cwd=root,text=True).split()\n"
+                    f"        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input={transient.encode()!r}).decode().strip()\n"
+                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check'],cwd=root,check=True)\n"
+                    "        changed=subprocess.check_output(['git','show',':tests/check'],cwd=root,text=True)\n"
+                    "        try:result=original(root,*args,**kwargs)\n"
+                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check'],cwd=root,check=True)\n"
+                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        fired.append({'restored':before==after,'transient':changed,'borrowed':'tests/check' in result});return result\n"
+                    "    return original(root,*args,**kwargs)\n"
+                    "g['_nodehome_route_tests']=route\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('ABA:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[4:] for line in q.stderr.splitlines() if line.startswith("ABA:")), "[]")
+            events = json.loads(marker)
+            check(label + ":真實索引注入及還原成立",
+                  len(events) == (1 if inject else 0) and (not inject or
+                  (events[0]["restored"] is True and events[0]["transient"] == transient)), q.stderr)
+            check(label + ":只借原始版本的測試證據", not inject or
+                  (len(events) == 1 and events[0]["borrowed"] is valid), q.stderr)
+            check(label + ":只依原始版本判斷",
+                  q.returncode == (0 if valid else 1) and (valid or ("Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr)), q.stdout + q.stderr)
+            check(label + ":檢查後索引內容不變", _nh_git(root, "show", ":tests/check").stdout == seed)
+
+
+def t_nodehome_optional_test_tree_capture_failure():
+    """捕獲索引樹失敗時，不借額外測試；正式程式自己的寫回退路保持。"""
+    import json
+    for opt in (False, True):
+        for test_home_writeback in (False, True):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            production = _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            _nh_file(root, "tests/check.py", "x = 2\n")
+            target = home if test_home_writeback else production
+            target.write_text(target.read_text() + "\nWHY: synthetic snapshot failure control.\n")
+            _nh_git(root, "add", ".")
+            label = f"索引捕獲失敗/{opt}/{test_home_writeback}"
+            check(label + ":合法測試確實在索引", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
+            shim = ("import runpy,sys,json\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_git'];fired=[]\n"
+                    "def git(root,*args,**kwargs):\n"
+                    "    if args==('write-tree',):fired.append(list(args));return None\n"
+                    "    return original(root,*args,**kwargs)\n"
+                    "g['_nodehome_git']=git\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('CAPTURE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[8:] for line in q.stderr.splitlines() if line.startswith("CAPTURE:")), "[]")
+            check(label + ":捕獲失敗確實注入", json.loads(marker) == [["write-tree"]], q.stderr)
+            expected = (q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr) if test_home_writeback else q.returncode == 0
+            check(label + ":只撤回額外測試、不改正式程式退路", expected, q.stdout + q.stderr)
+            check(label + ":索引內容不變", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
+
+
+def t_nodehome_optional_test_input_snapshots():
+    """額外測試證據的設定、歸屬與檔案模式皆不能借用途中改動又還原的索引。"""
+    import json
+    for opt in (False, True):
+        for mode in ("config", "declaration", "file-mode"):
+            cfg = {"node_home": {"mode": "on", "ignore": ["tests/check.py"]}} if mode == "config" else None
+            root = _nh_repo(cfg)
+            _nh_file(root, "src/a.py", "x = 0\n")
+            test = _nh_file(root, "tests/check.py", "x = 0\n")
+            if mode == "file-mode":
+                test.unlink(); test.symlink_to("../src/a.py")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=[] if mode == "declaration" else ["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            if mode == "file-mode":
+                test.unlink(); test.symlink_to("../src/a.py.changed")
+            else:
+                _nh_file(root, "tests/check.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: synthetic captured input case.\n")
+            _nh_git(root, "add", ".")
+            target = ".lumos/config.json" if mode == "config" else "docs/kg-knowledge/Systems/TestHome.md"
+            if mode == "config":
+                replacement = '{"node_home":{"mode":"on","ignore":[]}}'
+                (root / target).write_text(replacement)   # 迫使既有 reader 走索引而非相同工作樹捷徑
+            elif mode == "declaration":
+                replacement = home.read_text().replace("about_code: []", "about_code:\n  - tests/check.py")
+                home.write_text(replacement)
+            else:
+                replacement = ""
+            label = f"索引輸入快照/{opt}/{mode}"
+            staged = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
+            check(label + ":程式與測試及家一起staged", {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(staged))
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;fired=[];counts=[];mode={mode!r};target={target!r};replacement={replacement.encode()!r}\n"
+                    "def mutate(root,read):\n"
+                    "    before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "    path='tests/check.py' if mode=='file-mode' else target\n"
+                    "    entry=subprocess.check_output(['git','ls-files','-s',path],cwd=root,text=True).split()\n"
+                    "    oid=entry[1] if mode=='file-mode' else subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=replacement).decode().strip()\n"
+                    "    permissions='100644' if mode=='file-mode' else entry[0]\n"
+                    "    subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
+                    "    try:out=read()\n"
+                    "    finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],path],cwd=root,check=True)\n"
+                    "    after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "    seen=(out[0].get(path)=='100644') if mode=='file-mode' else out==replacement\n"
+                    "    fired.append({'restored':before==after,'seen_transient':seen});return out\n"
+                    "original_reader=g['_nodehome_reader'];original_list=g['_nodehome_list']\n"
+                    "def factory(root,where,*a,**kw):\n"
+                    "    read=original_reader(root,where,*a,**kw)\n"
+                    "    def wrapped(p):\n"
+                    "        if mode!='file-mode' and where=='index' and p==target and not fired:return mutate(root,lambda:read(p))\n"
+                    "        return read(p)\n"
+                    "    return wrapped\n"
+                    "def listing(root,where,*a,**kw):\n"
+                    "    if where=='index':counts.append(where)\n"
+                    "    if mode=='file-mode' and where=='index' and len(counts)==2 and not fired:return mutate(root,lambda:original_list(root,where,*a,**kw))\n"
+                    "    return original_list(root,where,*a,**kw)\n"
+                    "g['_nodehome_reader']=factory;g['_nodehome_list']=listing\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('SNAPSHOT:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[9:] for line in q.stderr.splitlines() if line.startswith("SNAPSHOT:")), "[]")
+            check(label + ":真實索引輸入已變動並還原", json.loads(marker) == [{"restored": True, "seen_transient": True}], q.stderr)
+            check(label + ":不採信暫時輸入而誤放路由",
+                  q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stdout + q.stderr)
 
 
 def t_nodehome_test_tag_only_edit_is_not_write_back():

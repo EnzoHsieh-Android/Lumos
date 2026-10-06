@@ -29467,6 +29467,35 @@ def _nodehome_route_tests(repo_root, files, all_paths, candidates, where, cfg, s
     return eligible
 
 
+def _nodehome_staged_route_tests(repo_root, B, N, changed_paths, tree, vault_rel):
+    """額外測試路由只讀捕獲樹及既有起點;不改正式檢查、安家或測試名判定。"""
+    listing = _nodehome_list(repo_root, tree)
+    if listing is None:
+        return set()
+    files, all_paths = listing
+    layouts = (_nodehome_layout(B.all_paths), _nodehome_layout(all_paths))
+    old = {_nodehome_key(value) for note in B.notes.values() for value in note["about"]}
+    live = {_nodehome_key(value) for note in N.notes.values() for value in note["about"]}
+    possible = {p for p in changed_paths & (old | live) if any(_nodehome_is_test(p, view) for view in layouts)}
+    notes = [rel for rel, note in N.notes.items() if possible & {_nodehome_key(x) for x in note["about"]}]
+    blobs = _nodehome_cat_blobs(repo_root, [f"{tree}:{vault_rel}/{rel}" for rel in notes])
+    if blobs is None:
+        return set()
+    captured = {_nodehome_key(value) for raw in blobs if raw is not None
+                for value in _nodehome_parse_note(raw)["about"]}
+    candidates = possible & (old | captured)
+    read = _nodehome_reader(repo_root, tree, from_git=True)
+    config = read(".lumos/config.json")
+    if config is None and ".lumos/config.json" in all_paths:
+        return set()
+    cfg = _nodehome_config(repo_root, config, from_snapshot=True)
+    skip = frozenset() if _is_toolchain_repo(repo_root) else _vendored_state(repo_root, tree)[0]
+    routes = _nodehome_route_tests(repo_root, files, all_paths, candidates, tree, cfg, skip, reader=read)
+    routes.update(_nodehome_route_tests(repo_root, B.files, B.all_paths, candidates, B.where, cfg, skip,
+                                       reader=_nodehome_reader(repo_root, B.where, from_git=True)))
+    return routes
+
+
 def _nodehome_group_route_tests(repo_root, group, notes, route_cache, cfg, skip):
     """讀取層收集同提交測試證據;共享最近兩版完整清單,讀不到就撤回額外證據。"""
     candidates = {p for info in notes.values() for p in group["paths"] & info["own"]}
@@ -29955,7 +29984,8 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
             return 0
         head = _lens_full_sha(root, "HEAD")
         base_where, tip_where, mode_word = head, "index", "這次提交"
-        index_before = _nodehome_git(root, "ls-files", "-s", "-z")
+        index_before = _nodehome_git(root, "write-tree")
+        index_tree = index_before.decode("ascii").strip() if index_before else None
         changes = _nodehome_changes(root, head, "index")
     else:
         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
@@ -30026,20 +30056,10 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
     groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
                                                                  tag_judge=tag_judge, route_cfg=cfg, route_skip=skip)
     staged_route_tests = set()
-    if staged:
-        candidates = set()
-        for side in (N, B):
-            for note in side.notes.values():
-                for value in note["about"]:
-                    key = _nodehome_key(value)
-                    if key in changed_paths:
-                        candidates.add(key)
-        for side in (N, B):
-            staged_route_tests.update(_nodehome_route_tests(
-                root, side.files, side.all_paths, candidates, side.where, cfg, skip,
-                reader=_nodehome_reader(root, side.where, from_git=True)))
-        if staged_route_tests and (index_before is None or _nodehome_git(root, "ls-files", "-s", "-z") != index_before):
-            staged_route_tests.clear()                     # 觀察到索引變動時撤回借用證據,不改既有正式程式退路
+    if staged and index_tree:
+        staged_route_tests = _nodehome_staged_route_tests(root, B, N, changed_paths, index_tree, vault_rel)
+        if staged_route_tests and _nodehome_git(root, "write-tree") != index_before:
+            staged_route_tests.clear()                     # 只撤回額外證據;正式裁判與 fail-open 政策維持
             print("提醒:暫存區在檢查期間變動或讀不到,額外測試寫回證據不採信;請重新檢查。", file=sys.stderr)
     res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge,
                              staged_route_tests=staged_route_tests)
