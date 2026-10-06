@@ -69700,5 +69700,138 @@ def t_fix_check_preflight_not_run_is_durable():
         check(f"留痕 {case}:mapper 保留新欄位而舊欄未知",
               values.get(events[0]["token"]) == wanted and values.get(legacy["token"]) is None, str(values))
 
+
+
+def _physical_ref_fixture(root, text):
+    """真實 Git 來源；所有變動只在呼叫者的臨時目錄。"""
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "sample.py").write_bytes(text.encode("utf-8"))
+    commands = (("init", "-q"), ("add", "src/sample.py"),
+                ("-c", "user.name=Reference fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-qm", "reference source"))
+    import os
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+    hooks = root / ".fixture-hooks"
+    hooks.mkdir()
+    git = ["git", "-c", "core.hooksPath=" + str(hooks), "-c", "commit.gpgSign=false", "-C", str(root)]
+    for args in commands:
+        subprocess.run([*git, *args], check=True, capture_output=True, env=env, timeout=8)
+    return subprocess.check_output([*git, "rev-parse", "HEAD"], text=True, env=env, timeout=8).strip()
+
+
+def t_refcheck_physical_unicode():
+    """[S1] 非來源換行的八種分隔符不得製造錯引文或不存在的第三行。"""
+    m = _load_lumos_module()
+    for sep in ("\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+        with tempfile.TemporaryDirectory(prefix="gctl-ref-physical-") as d:
+            root = Path(d)
+            first, last = f"text = '{sep}'", "value = 1"
+            text = first + "\n" + last + "\n"
+            compile(text, "sample.py", "exec")
+            head = _physical_ref_fixture(root, text)
+            check(f"來源 {sep!r}:前置有效 Python 且僅兩個 LF", text.count("\n") == 2)
+            for pin in (None, head):
+                label = f"來源 {sep!r} {pin or 'worktree'}"
+                check(label + ":第二行引文正確", m._validate_repo_ref(root, "src/sample.py", "2", at_sha=pin) == ("ok", last))
+                check(label + ":第三行超界", m._validate_repo_ref(root, "src/sample.py", "3", at_sha=pin) == ("line_out_of_range", ""))
+                check(label + ":合法範圍保留首尾", m._validate_repo_ref(root, "src/sample.py", "1-2", at_sha=pin) == ("ok", first + "\n…\n" + last))
+                check(label + ":跨到第三行超界", m._validate_repo_ref(root, "src/sample.py", "1-3", at_sha=pin) == ("line_out_of_range", ""))
+
+
+def t_refcheck_physical_cli():
+    """[S2] 真實 CLI 的普通及釘版引用均拒絕 phantom 座標，合法引用保持綠。"""
+    import json as _j
+    with tempfile.TemporaryDirectory(prefix="gctl-ref-cli-") as d:
+        root = Path(d)
+        head = _physical_ref_fixture(root, "text = '\u2028'\nvalue = 1\n")
+        spec = root / "report.md"
+        for pin in ("", "@" + head):
+            for line, expected_rc, expected_status in (("2", 0, "ok"), ("3", 1, "line_out_of_range")):
+                spec.write_text(f"file: `src/sample.py{pin}:{line}`\n", encoding="utf-8")
+                result = run(root, "refcheck", str(spec), "--repo", str(root), "--json")
+                data = _j.loads(result.stdout)
+                check(f"CLI {pin or 'worktree'}:{line}:返回碼", result.returncode == expected_rc, result.stdout + result.stderr)
+                claims = data["claims"]
+                check(f"CLI {pin or 'worktree'}:{line}:狀態與統計", len(claims) == 1 and claims[0]["status"] == expected_status
+                      and data["out_of_range"] == expected_rc, str(data))
+                if line == "2":
+                    check(f"CLI {pin or 'worktree'}:合法引文", claims[0]["excerpt"] == "value = 1", str(claims))
+
+
+def t_refcheck_physical_dispositions():
+    """[S3] 真實表態路徑證據消費端跟共用引用入口一致。"""
+    m = _load_lumos_module()
+    with tempfile.TemporaryDirectory(prefix="gctl-ref-disp-") as d:
+        root = Path(d)
+        head = _physical_ref_fixture(root, "text = '\u2029'\nvalue = 1\n")
+        check("表態前置:合法第二行通過", m._dispositions_check_path_line(root, head, "src/sample.py:2") == (True, ""))
+        ok, reason = m._dispositions_check_path_line(root, head, "src/sample.py:3")
+        check("表態第三行:拒絕並說明超界", ok is False and "行號超出" in reason, reason)
+
+
+def t_refcheck_physical_legacy():
+    """[S4] 保留文字讀取層、空行、末尾、BOM、無行號與目錄的原本邊界。"""
+    m = _load_lumos_module()
+    cases = (("空檔", "", []), ("空行", "\n", [""]),
+             ("末尾空白行", "a = 1\n\n", ["a = 1", ""]),
+             ("中間空白行", "a = 1\n\nb = 2\n", ["a = 1", "", "b = 2"]),
+             ("沒有末尾換行", "a = 1", ["a = 1"]),
+             ("常見雙字元換行", "a = 1\r\nb = 2\r\n", ["a = 1", "b = 2"]),
+             ("原有單字元正規化", "a = 1\rb = 2\r", ["a = 1", "b = 2"]),
+             ("BOM", "\ufeffa = 1\nb = 2\n", ["a = 1", "b = 2"]))
+    for label, text, expected in cases:
+        with tempfile.TemporaryDirectory(prefix="gctl-ref-legacy-") as d:
+            root = Path(d)
+            head = _physical_ref_fixture(root, text)
+            for pin in (None, head):
+                lines = expected[:]
+                if label == "BOM" and pin:
+                    lines[0] = "\ufeff" + lines[0]  # 釘版讀法既有行為；不額外改解碼政策。
+                if label == "中間空白行":
+                    check(f"邊界 {label} {pin}:第二行確為空白", m._validate_repo_ref(root, "src/sample.py", "2", at_sha=pin) == ("ok", ""))
+                if lines:
+                    check(f"邊界 {label} {pin}:最後一行", m._validate_repo_ref(root, "src/sample.py", str(len(lines)), at_sha=pin) == ("ok", lines[-1]))
+                check(f"邊界 {label} {pin}:下一行超界", m._validate_repo_ref(root, "src/sample.py", str(len(lines) + 1), at_sha=pin) == ("line_out_of_range", ""))
+                check(f"邊界 {label} {pin}:反向範圍", m._validate_repo_ref(root, "src/sample.py", "2-1", at_sha=pin) == ("line_out_of_range", ""))
+                check(f"邊界 {label} {pin}:缺檔", m._validate_repo_ref(root, "src/missing.py", "1", at_sha=pin)[0] == "missing")
+                check(f"邊界 {label} {pin}:目錄不改語義", m._validate_repo_ref(root, "src", "999", at_sha=pin)
+                      == (("line_out_of_range", "") if pin else ("ok", "")))
+                check(f"邊界 {label} {pin}:無行號不改語義", m._validate_repo_ref(root, "src/sample.py", "", at_sha=pin) == ("ok", ""))
+
+
+def t_refcheck_physical_fixture_isolated():
+    """[S5] 臨時來源提交不受使用者 hooks、簽章與 Git 環境注入影響。"""
+    import os
+    import shlex
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="gctl-ref-fixture-control-") as d:
+        parent = Path(d)
+        hooks = parent / "user-hooks"
+        hooks.mkdir()
+        marker = parent / "user-setting-ran"
+        hook = hooks / "pre-commit"
+        hook.write_text("#!/bin/sh\nprintf hook > " + shlex.quote(str(marker)) + "\n")
+        hook.chmod(0o755)
+        signer = parent / "signer"
+        signer.write_text("#!/bin/sh\nprintf signer > " + shlex.quote(str(marker)) + "\nexit 31\n")
+        signer.chmod(0o755)
+        config = parent / "user.gitconfig"
+        config.write_text(f"[core]\n hooksPath = {hooks}\n[commit]\n gpgSign = true\n[gpg]\n program = {signer}\n")
+        root = parent / "source"
+        root.mkdir()
+        poisoned = {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1"}
+        with patch.dict(os.environ, poisoned):
+            try:
+                head = _physical_ref_fixture(root, "a = 1\nb = 2\n")
+            except subprocess.CalledProcessError as e:
+                check("來源 fixture:不應被使用者簽章或hook阻擋", False, str(e))
+                return
+            check("來源 fixture:確實完成來源提交", len(head) == 40 and (root / ".git").is_dir())
+            check("來源 fixture:使用者hook與簽章均未執行", not marker.exists())
+            check("來源 fixture:父程序的設定不改寫", os.environ["GIT_CONFIG_GLOBAL"] == str(config))
+        check("來源 fixture:只提交指定來源", subprocess.check_output(["git", "-C", str(root), "ls-tree", "--name-only", "-r", head], text=True, timeout=8).strip() == "src/sample.py")
+
+
 if __name__ == "__main__":
     sys.exit(main())

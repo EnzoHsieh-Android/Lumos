@@ -24,6 +24,7 @@ verified_by:
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+  - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
 summary: |-
   PITFALL:[2026-09-28 筆記形狀擋全零修正的代碼審通才席]code-loop check --diff 的起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open 不擋;現在先照筆記形狀擋與每支檔有家共用的判法換成真的起點(頂端落後或等於主線頂端就沒有新東西;找不到主線時照它原本拿到空樹的做法、不截上線點);工具鏈 CI 的代碼審那步也改成原樣交前一版 [test:t_push_base_zero_or_missing]
   PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則。★「code 開頭卻不是 code-」這種看不出是哪一種審查的,照最嚴的當代碼審★——代碼審 r1 說這會誤擋 codestage 這類真的設計審,r2 說同檔三處既有呼叫點對這個灰色地帶一律從嚴、就是為了擋「取個 codeX 的編號就繞過」;兩輪方向相反,照既有慣例裁從嚴,而 r1 真正的傷(訊息硬說它是代碼審、誤導人去找不存在的凍結 patch)改用既有那幾處的說法老實講來解。從嚴的代價:走新處置閘的設計審本來也要帶這兩個所以沒差;★舊的 panel 型設計審從沒要求過★(codestage 那九筆就是),目前打不到只是因為更早那條「審查席一定要附 --report」先擋了,以後動那條規則或開補記舊帳的旁路時要重新想 [test:t_code_loop_record_requires_provenance_from_first_row]
@@ -169,3 +170,5 @@ WHY:[2026-10-06 零角色預算先做讀取反例]budget=0 的真時間斷言曾
 WHY:角色新增簿記查詢承接剩餘預算，不再自開固定timeout；一般角色改名仍取新路徑，只有被終點附件排除遮住的舊程式要保留 [出處:審查附件不作程式影響種子設計審r1] [因:小幅正預算會被新增查詢穿透，跨簿記改名也曾令角色輸入全空] [test:t_review_role_bookkeeping_remaining_budget,t_impact_diff_bookkeeping_boundary_rename]
 
 WHY:[2026-10-06 第三輪角色統計補強]固定帳檔與未知首行終點也需要舊側角色證據；只對確定排除的目錄補償，不能兌現完整跨簿記改名承諾。採同一分類入口的「已確認」口徑，不另建簿記表、不改一般改名只取新側。[出處:code-review-artifact-impact-inputs/r3-correctness.md、r3-architecture.md] [因:避免角色消費者與影響分析消費者分岔，降低同類修復再次漏邊界] 防回歸：t_review_role_bookkeeping_rename_uncertainty，含三種真 R100、超限／逾期未知與角色不重複計數。
+
+WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存在的第三行在不同證據閘得到相反結果；本次只修座標計數，不把存在性檢查升格為語意正確性 [出處:source-coordinates 最小重現、r1設計審與countercontrol] 防回歸：t_refcheck_physical_dispositions。 [因:避免表態證據與引用檢查對同一來源座標矛盾]

@@ -23864,6 +23864,15 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
     token 消毒(code-review blocker 修):空/絕對路徑/含 .. 一律 missing——top_dirs 過濾
     被拆掉時它隱含的安全性(空值/絕對/traversal 天然進不了 top_dirs)必須在此顯式補回,
     否則 [src: ]/[src:/etc/passwd]/[src:../..] 會 resolve 到 repo 外真實存在的路徑而判 ok。"""
+    def source_lines(text):
+        # 讀取層已正規化 CR/CRLF；其他 splitlines 分隔符仍是來源字元。
+        if text is None:
+            return None
+        lines = text.split("\n")
+        if lines[-1] == "":
+            lines.pop()  # 只移除末尾換行哨兵；空檔與真實空白行分開。
+        return lines
+
     token = token.strip()
     from pathlib import PurePosixPath, PureWindowsPath
     if (not token
@@ -23878,7 +23887,7 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
         if not line:
             return "ok", ""
         txt = _git_tree_text(repo_root, at_sha, token)
-        file_lines = txt.splitlines() if txt is not None else None
+        file_lines = source_lines(txt)
         if "-" in line:
             lo, hi = (int(x) for x in line.split("-", 1))
         else:
@@ -23896,7 +23905,7 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
     else:
         lo = hi = int(line)
     try:
-        file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        file_lines = source_lines(target.read_text(encoding="utf-8-sig", errors="replace"))
     except OSError:
         file_lines = None
     if file_lines is None or lo < 1 or hi < lo or lo > len(file_lines) or hi > len(file_lines):
