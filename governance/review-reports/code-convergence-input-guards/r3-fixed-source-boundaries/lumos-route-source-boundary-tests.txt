@@ -1,0 +1,73 @@
+def t_nodehome_optional_test_fixed_change_set():
+    """捕獲樹後短暫出現的測試變動不能借為寫回證據；真正測試變動仍可用。"""
+    import json
+    for opt in (False, True):
+        for changed in (False, True):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            if changed:
+                _nh_file(root, "tests/check.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: fixed change-set control.\n")
+            _nh_git(root, "add", ".")
+            label = f"固定變更集合/{opt}/{changed}"
+            seed = "x = 2\n" if changed else "x = 0\n"
+            check(label + ":原始測試變動符合模式",
+                  ("tests/check.py" in _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()) == changed)
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_changes'];fired=[]\n"
+                    "def changes(root,base,tip):\n"
+                    "    if tip=='index' and not fired:\n"
+                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check.py'],cwd=root,text=True).split()\n"
+                    "        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=b'x = 99\\n').decode().strip()\n"
+                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check.py'],cwd=root,check=True)\n"
+                    "        try:result=original(root,base,tip)\n"
+                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check.py'],cwd=root,check=True)\n"
+                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        fired.append({'restored':before==after,'transient_listed':any('tests/check.py' in (old,new) for _,old,new in result)});return result\n"
+                    "    return original(root,base,tip)\n"
+                    "g['_nodehome_changes']=changes\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('FIXED-CHANGES:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[len("FIXED-CHANGES:"):] for line in q.stderr.splitlines()
+                           if line.startswith("FIXED-CHANGES:")), "[]")
+            check(label + ":真實變動已注入且還原",
+                  json.loads(marker) == [{"restored": True, "transient_listed": True}], q.stderr)
+            check(label + ":只借捕獲樹的真實變動",
+                  q.returncode == (0 if changed else 1) and (changed or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
+            check(label + ":測試索引未被改寫", _nh_git(root, "show", ":tests/check.py").stdout == seed)
+
+
+def t_nodehome_optional_test_each_source_config():
+    """刪除的測試按起點自己的設定分類，不用終點設定把兩份非法來源拼成合法。"""
+    import json
+    for opt in (False, True):
+        for old_ignored, new_ignored in ((True, False), (False, True), (True, True)):
+            root = _nh_repo({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if old_ignored else []}})
+            _nh_file(root, "src/a.py", "x = 0\n")
+            test = _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            test.unlink()
+            (root / ".lumos/config.json").write_text(json.dumps({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if new_ignored else []}}))
+            home.write_text(home.read_text() + "\nWHY: independent source config control.\n")
+            _nh_git(root, "add", ".")
+            label = f"各版設定/{opt}/{old_ignored}/{new_ignored}"
+            check(label + ":刪除現場成立", "D\ttests/check.py" in _nh_git(root, "diff", "--cached", "--name-status").stdout)
+            check(label + ":起終設定確實不同或同為忽略",
+                  json.loads(_nh_git(root, "show", "HEAD:.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if old_ignored else [])
+                  and json.loads(_nh_git(root, "show", ":.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if new_ignored else []))
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
+                                "home", "check", "--staged", "--repo", str(root)], capture_output=True, text=True)
+            check(label + ":各版各自合法後才聯集",
+                  q.returncode == (1 if old_ignored else 0) and (not old_ignored or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
+
+

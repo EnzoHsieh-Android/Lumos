@@ -29469,16 +29469,21 @@ def _nodehome_route_tests(repo_root, files, all_paths, candidates, where, cfg, s
 
 def _nodehome_staged_route_tests(repo_root, B, N, changed_paths, tree, vault_rel):
     """額外測試路由只讀捕獲樹及既有起點;不改正式檢查、安家或測試名判定。"""
+    changes = _nodehome_changes(repo_root, B.where, tree)
     listing = _nodehome_list(repo_root, tree)
-    if listing is None:
+    if changes is None or listing is None:
         return set()
+    changed_paths = {p for _c, old_path, new_path in changes for p in (old_path, new_path) if p}
     files, all_paths = listing
     layouts = (_nodehome_layout(B.all_paths), _nodehome_layout(all_paths))
     old = {_nodehome_key(value) for note in B.notes.values() for value in note["about"]}
     live = {_nodehome_key(value) for note in N.notes.values() for value in note["about"]}
     possible = {p for p in changed_paths & (old | live) if any(_nodehome_is_test(p, view) for view in layouts)}
     notes = [rel for rel, note in N.notes.items() if possible & {_nodehome_key(x) for x in note["about"]}]
-    blobs = _nodehome_cat_blobs(repo_root, [f"{tree}:{vault_rel}/{rel}" for rel in notes])
+    import time as _t
+    blobs = _nodehome_cat_blobs_capped(repo_root, [f"{tree}:{vault_rel}/{rel}" for rel in notes],
+                                      256 * 1024, timeout=5, max_total_bytes=8 * 1024 * 1024,
+                                      deadline=_t.monotonic() + 5)
     if blobs is None:
         return set()
     captured_by_note = {rel: {_nodehome_key(value) for value in _nodehome_parse_note(raw)["about"]}
@@ -29498,8 +29503,13 @@ def _nodehome_staged_route_tests(repo_root, B, N, changed_paths, tree, vault_rel
     cfg = _nodehome_config(repo_root, config, from_snapshot=True)
     skip = frozenset() if _is_toolchain_repo(repo_root) else _vendored_state(repo_root, tree)[0]
     routes = _nodehome_route_tests(repo_root, files, all_paths, candidates, tree, cfg, skip, reader=read)
-    routes.update(_nodehome_route_tests(repo_root, B.files, B.all_paths, candidates, B.where, cfg, skip,
-                                       reader=_nodehome_reader(repo_root, B.where, from_git=True)))
+    old_read = _nodehome_reader(repo_root, B.where, from_git=True)
+    old_config = old_read(".lumos/config.json")
+    if old_config is not None or ".lumos/config.json" not in B.all_paths:
+        old_cfg = _nodehome_config(repo_root, old_config, from_snapshot=True)
+        old_skip = frozenset() if B.where is None or _is_toolchain_repo(repo_root) else _vendored_state(repo_root, B.where)[0]
+        routes.update(_nodehome_route_tests(repo_root, B.files, B.all_paths, candidates, B.where, old_cfg, old_skip,
+                                           reader=old_read))
     return routes
 
 

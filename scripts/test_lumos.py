@@ -49325,6 +49325,138 @@ def t_nodehome_optional_test_input_snapshots():
                   q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stdout + q.stderr)
 
 
+def t_nodehome_optional_test_fixed_change_set():
+    """捕獲樹後短暫出現的測試變動不能借為寫回證據；真正測試變動仍可用。"""
+    import json
+    for opt in (False, True):
+        for changed in (False, True):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            if changed:
+                _nh_file(root, "tests/check.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: fixed change-set control.\n")
+            _nh_git(root, "add", ".")
+            label = f"固定變更集合/{opt}/{changed}"
+            seed = "x = 2\n" if changed else "x = 0\n"
+            check(label + ":原始測試變動符合模式",
+                  ("tests/check.py" in _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()) == changed)
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_changes'];fired=[]\n"
+                    "def changes(root,base,tip):\n"
+                    "    if tip=='index' and not fired:\n"
+                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check.py'],cwd=root,text=True).split()\n"
+                    "        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=b'x = 99\\n').decode().strip()\n"
+                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check.py'],cwd=root,check=True)\n"
+                    "        try:result=original(root,base,tip)\n"
+                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check.py'],cwd=root,check=True)\n"
+                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        fired.append({'restored':before==after,'transient_listed':any('tests/check.py' in (old,new) for _,old,new in result)});return result\n"
+                    "    return original(root,base,tip)\n"
+                    "g['_nodehome_changes']=changes\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('FIXED-CHANGES:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[len("FIXED-CHANGES:"):] for line in q.stderr.splitlines()
+                           if line.startswith("FIXED-CHANGES:")), "[]")
+            check(label + ":真實變動已注入且還原",
+                  json.loads(marker) == [{"restored": True, "transient_listed": True}], q.stderr)
+            check(label + ":只借捕獲樹的真實變動",
+                  q.returncode == (0 if changed else 1) and (changed or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
+            check(label + ":測試索引未被改寫", _nh_git(root, "show", ":tests/check.py").stdout == seed)
+
+
+def t_nodehome_optional_test_each_source_config():
+    """刪除的測試按起點自己的設定分類，不用終點設定把兩份非法來源拼成合法。"""
+    import json
+    for opt in (False, True):
+        for old_ignored, new_ignored in ((True, False), (False, True), (True, True)):
+            root = _nh_repo({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if old_ignored else []}})
+            _nh_file(root, "src/a.py", "x = 0\n")
+            test = _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            test.unlink()
+            (root / ".lumos/config.json").write_text(json.dumps({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if new_ignored else []}}))
+            home.write_text(home.read_text() + "\nWHY: independent source config control.\n")
+            _nh_git(root, "add", ".")
+            label = f"各版設定/{opt}/{old_ignored}/{new_ignored}"
+            check(label + ":刪除現場成立", "D\ttests/check.py" in _nh_git(root, "diff", "--cached", "--name-status").stdout)
+            check(label + ":起終設定確實不同或同為忽略",
+                  json.loads(_nh_git(root, "show", "HEAD:.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if old_ignored else [])
+                  and json.loads(_nh_git(root, "show", ":.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if new_ignored else []))
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
+                                "home", "check", "--staged", "--repo", str(root)], capture_output=True, text=True)
+            check(label + ":各版各自合法後才聯集",
+                  q.returncode == (1 if old_ignored else 0) and (not old_ignored or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
+
+
+def t_nodehome_optional_test_declaration_read_limits():
+    """補助路由的筆記重讀有單筆、整批與共用截止；超限只撤回新宣告證據。"""
+    import json
+    for opt in (False, True):
+        for mode in ("normal", "single", "total", "deadline"):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            homes = [_nh_node(root, "TestHome", about=[], body="test context")]
+            if mode == "total":
+                homes.extend(_nh_node(root, f"Other{i}", about=[], body="test context") for i in range(44))
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            _nh_file(root, "tests/check.py", "x = 2\n")
+            pad = "x" * (300 * 1024 if mode == "single" else 200 * 1024 if mode == "total" else 0)
+            for home in homes:
+                home.write_text(home.read_text().replace("about_code: []", "about_code:\n  - tests/check.py")
+                                + "\nWHY: captured declaration limit control.\n" + pad)
+            _nh_git(root, "add", ".")
+            label = f"宣告讀取上限/{opt}/{mode}"
+            check(label + ":新增宣告確實入索引",
+                  "  - tests/check.py" in _nh_git(root, "show", ":docs/kg-knowledge/Systems/TestHome.md").stdout)
+            shim = ("import runpy,sys,json,time\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_cat_blobs_capped'];events=[]\n"
+                    "def capped(root,specs,max_bytes,timeout=60,max_total_bytes=None,deadline=None):\n"
+                    "    relevant=any(s.endswith('/Systems/TestHome.md') for s in specs)\n"
+                    "    if not relevant:return original(root,specs,max_bytes,timeout=timeout,max_total_bytes=max_total_bytes,deadline=deadline)\n"
+                    "    old_sizes=g['_nodehome_cat_sizes'];old_clock=time.monotonic;shift=[0];fired=[]\n"
+                    "    def sizes(*args,**kwargs):\n"
+                    "        out=old_sizes(*args,**kwargs)\n"
+                    f"        if {mode!r}=='deadline':shift[0]=10;fired.append(True)\n"
+                    "        return out\n"
+                    "    remaining=None if deadline is None else deadline-old_clock()\n"
+                    "    try:\n"
+                    "        g['_nodehome_cat_sizes']=sizes;time.monotonic=lambda:old_clock()+shift[0]\n"
+                    "        out=original(root,specs,max_bytes,timeout=timeout,max_total_bytes=max_total_bytes,deadline=deadline)\n"
+                    "    finally:g['_nodehome_cat_sizes']=old_sizes;time.monotonic=old_clock\n"
+                    "    events.append({'per_file':max_bytes,'total':max_total_bytes,'remaining':remaining,'expired':bool(fired),'read_count':0 if out is None else sum(x is not None for x in out)});return out\n"
+                    "g['_nodehome_cat_blobs_capped']=capped\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('ROUTE-LIMITS:'+json.dumps(events),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[len("ROUTE-LIMITS:"):] for line in q.stderr.splitlines()
+                           if line.startswith("ROUTE-LIMITS:")), "[]")
+            events = json.loads(marker)
+            check(label + ":批次上限及共用截止實際接上",
+                  len(events) == 1 and 0 < events[0]["per_file"] <= 256 * 1024
+                  and 0 < (events[0]["total"] or 0) <= 8 * 1024 * 1024
+                  and 0 < (events[0]["remaining"] or 0) <= 5, q.stderr)
+            check(label + ":截止或大小上限確實生效", len(events) == 1 and
+                  ((mode == "deadline" and events[0]["expired"] and events[0]["read_count"] == 0)
+                   or (mode == "single" and events[0]["read_count"] == 0)
+                   or (mode == "total" and 0 < events[0]["read_count"] < len(homes))
+                   or (mode == "normal" and events[0]["read_count"] == 1)), q.stderr)
+            check(label + ":只借完整可信的宣告證據",
+                  q.returncode == (0 if mode == "normal" else 1) and (mode == "normal" or "不是任何一支改動檔的家" in q.stderr), q.stdout + q.stderr)
+
+
 def t_nodehome_test_tag_only_edit_is_not_write_back():
     """[只換測試綁定不算寫說明 S1][S3] 同一個提交改了程式、另一篇只換測試綁定(新出現的名稱指得到真測試)→ 不算寫說明,
     寫回落點與「有寫回時改動檔要有家」都不擋。

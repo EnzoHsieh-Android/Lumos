@@ -1,0 +1,94 @@
+severity: major
+
+## Findings
+
+### design3-resources-F1
+
+severity: major  
+blocking: 是
+
+引句:「squash/rebase或遠端遷移當次先完成相同冷還原，前置不足即停止沿用封存證據。」
+
+「完成冷還原」沒有保存前置提交閉包。現行增量 bundle 明確不是自足封存，必須依賴 `c4f2b0cf...`；計劃指定的取回入口又只是可改寫的遠端 `main`。若 rebase、強制改寫或遷移後舊閉包消失，當次在暫存目錄成功還原不會讓日後仍可取回，S3 的來源留存目標會失效。
+
+修補驗收：事件發生前須把前置閉包保存到受保護且持久的 ref，或產生包含前置閉包的自足 bundle；再從空物件庫、無 alternates、只靠交付物重建指定 commit/tree/blob。不能只重跑遠端 clone 後即放行。
+
+佐證 file:
+
+- `/tmp/lumos-seat-materials/repair-evidence-integration-r3/plans.md:81`
+- `governance/review-reports/code-convergence-input-guards/r3-validation/reviewed-957-incremental-cold.json:63`
+- `governance/review-reports/code-convergence-input-guards/r3-validation/remote-prerequisite-cold.json:127`
+
+### design3-resources-F2
+
+severity: major  
+blocking: 是
+
+引句:「只批次读取候選測試的安家筆記，沿用現有批次blob讀取器，不逐篇Git show整個圖譜。」
+
+新增路徑確實用了批次讀取，但直接呼叫無上限的 `_nodehome_cat_blobs`：所有候選筆記會先聚合成完整 stdout，再切成多份 bytes；沒有單檔上限、總量上限或 deadline。程式中已存在提供這三種防護的 `_nodehome_cat_blobs_capped`，本路徑卻未使用。大量或巨大的候選 Systems 筆記可能使提交前守衛產生不受控記憶體與時間成本；「批次」本身不是資源界線。
+
+修補驗收：設計須明定單檔、整批位元組與總時間上限，以及超限／逾時時只撤回額外證據的保守退路；實作改走 capped 讀取器，並加入多筆記總量超限、單筆超限及 deadline 的普通／最佳化測試。
+
+佐證 file:
+
+- `/tmp/lumos-seat-materials/repair-evidence-integration-r3/plans.md:61`
+- `scripts/lumos:29312`
+- `scripts/lumos:29481`
+
+### design3-resources-F3
+
+severity: minor  
+blocking: 否
+
+引句:「只改三份已有家的技能來源：詳細做法放共用範本§3.1」
+
+「三份技能來源」「共用範本」「代碼審手冊」「速查」在計劃內未定義成路徑。repo 內可搜尋推定為下列三處，但實作者與手動驗收者仍須自行猜測，回退所稱「兩處指路」也無法直接枚舉。
+
+建議明列：
+
+- `skills/lumos-design-loop/templates.md`
+- `skills/lumos-code-loop/SKILL.md`
+- `skills/lumos-project-notes/commands/06-代碼審與推送.md`
+
+佐證 file:
+
+- `/tmp/lumos-seat-materials/repair-evidence-integration-r3/plans.md:114`
+- `skills/lumos-design-loop/templates.md:190`
+- `skills/lumos-code-loop/SKILL.md:45`
+- `skills/lumos-project-notes/commands/06-代碼審與推送.md:101`
+
+## 專用鏡頭
+
+- 資源：有 blocking，見 F2。樹數量有界，但 blob 總量與時間沒有界線。
+- 併發：已讀無新增 finding。捕獲樹供額外路由使用，尾端樹不同時撤證；正式 index 路徑未原子化也有明示邊界。
+- 成本：有 blocking，見 F2。批次減少程序數，仍未控制總記憶體與最壞執行時間。
+
+## 三類風險
+
+- 來源取回：blocking，見 F1；現有 bundle 雜湊與收據相符，但仍依賴可消失的遠端前置閉包。
+- 版本綁定：已讀無 finding。計劃明確區分 `95735eff...` 舊審材與最後功能 HEAD，並要求最後版本重新綁定。當前工作樹 `scripts/lumos` 指紋已不是計劃所列 `da19...`，因此最終重綁仍是必要驗收，不能沿用舊結果。
+- 回退：已讀無新增 finding。回退範圍、保留既有 fixture、預期重新翻紅與治理閘均有交代；但回退後重放仍受 F1 的來源可取回性約束。
+
+## 固定合約
+
+實際查詢五個相關 Systems 節點後，只有 `Systems/測試假綠形態` 登記一條固定合約：修 bug 的還原翻紅釘必須配「現場確實走到被測分支」的前置斷言。計劃列出的 ABA、捕獲失敗與輸入快照測試均要求先驗證注入／還原成立，未發現違反。其餘四個相關 Systems 節點沒有登記固定合約。
+
+## 已讀無 finding 的計劃
+
+- 根因修復與行為保留配對：除 F3 的落點未定義外，因果與未判定界線一致。
+- 修復與重構分段驗證：版本重綁及不可分離處理一致。
+- 同類提醒與根因歸因分開：分類、根因與修補因果沒有互相代填。
+- 跑滿回顧沿用修補因果證據：`retro-stats --repo` 指令及旗標存在，unknown/other 邊界可執行。
+- 主整合計劃：除 F1、F2 外，六個指定測試函式、所有 wikilink 與卷證路徑均存在。
+
+## 閱讀量與未驗範圍
+
+實際完整讀取：`plans.md` 348 行、`CLAUDE.md` 101 行、兩份技能 173 行；另定點讀取約 1,400 行 CLI、測試、help、來源收據與引用搜尋結果，總量約 2,000 行。
+
+未驗範圍：
+
+- 指定 Git 專用目錄 `/tmp/lumos-seat-work/修補驗證與來源留存整合/resources/` 不存在，因此未執行任何 Git 命令，也未做本輪獨立 bundle restore。
+- 因測試會在臨時 repo 內執行 Git、違反本席 Git 路徑限制，六個測試只核對存在與測試內容，未實跑。
+- 未讀任何前輪席報告、dispatch 內容或作者修補因果結論。
+- 外部 GitHub 目前是否仍可取得前置閉包，本輪未重新連網驗證；只確認既有冷還原收據及 bundle 指紋。
