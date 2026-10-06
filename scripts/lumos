@@ -2674,6 +2674,19 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                   advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"(回頭條件、撤除條件可加 --tracked-in <Issue 或計劃>)")
         print()
 
+    # Check U: 筆記開頭的 updated 落後 git 上最後一次改動(Projects/提交時自動更新筆記日期_計劃):只提醒、不擋,
+    #   附一鍵修的指令;git 不可用就不印。不寫治理帳(同 Z 段:存量每天唸同一批不升級成噪音)。
+    try:
+        _us = _updated_stale_notes(env, _vault_repo_root(env))
+    except Exception:            # 體檢的提醒段不因這段壞掉而整支中斷
+        _us = []
+    if _us:
+        section("U", "筆記開頭的 updated 落後 git 上最後一次改動")
+        _ex = "、".join(r[:-3] for r, _u, _g in _us[:3])
+        warn_soft([f"updated 落後 git 最後改動的筆記 {len(_us)} 篇(例:{_ex})"], "只列出、不擋",
+                  advice="lumos updated-sync --stale 一次改成今天(先看就加 --dry-run)")
+        print()
+
     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
     #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
     #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
@@ -18014,6 +18027,76 @@ def _vault_write_lock(vault):
             except OSError:
                 pass
     return _cm()
+
+
+def _updated_stale_notes(env, repo_root):
+    """開頭 updated(YYYY-MM-DD)早於 git 上那一篇最後一次提交日期的筆記 → [(圖譜內路徑, updated, git 日期)],照路徑排序。
+    git 不可用(不是 repo、失敗)時 git_last_change_dates 回空表,這裡就回 []。doctor 的 U 段與 updated-sync --stale 共用。
+    ★淺複製不判★:只有最近幾個提交時,每篇的 git 日期都變成同一天,會誤列大批、勸人蓋掉真日期(代碼審 r1 正確性席 F1)。
+    ★早一天以內不算★:今天跑 updated-sync、隔天才提交時,git 日期比 updated 晚一天,不該再被列(代碼審 r1 正確性席 F3)。"""
+    import datetime as _dt
+    if not repo_root or _git_is_shallow(repo_root):
+        return []
+    dates = git_last_change_dates(repo_root, env.vault)
+    out = []
+    for rel, n in sorted(env.notes.items()):
+        if _note_unreadable(n):
+            continue
+        u, g = _drift_str(n, "updated"), dates.get(rel)
+        if not (g and re.fullmatch(r"\d{4}-\d{2}-\d{2}", u)):
+            continue
+        try:
+            lag = (_dt.date.fromisoformat(g) - _dt.date.fromisoformat(u)).days
+        except ValueError:      # 形狀像日期但不存在(2026-02-30):當成落後列出,一鍵修會改成今天(代碼審 r2 回歸席 F2)
+            lag = 2
+        if lag > 1:
+            out.append((rel, u, g))
+    return out
+
+
+def _updated_sync_one(env, rel, today, dry_run):
+    """updated-sync 處理一篇 → rc:沒有 updated(或空)、已是今天就跳過;--dry-run 只印;寫入失敗講原因回 2,不影響其他篇
+    (代碼審 r2 回歸席 F1)。"""
+    u = _drift_str(env.notes.get(rel), "updated")
+    if not u:
+        print(f"跳過 {rel[:-3]}:開頭沒有 updated 欄或是空的(不加)")
+        return 0
+    if u == today:
+        print(f"跳過 {rel[:-3]}:updated 已是今天")
+        return 0
+    if dry_run:
+        print(f"會改 {rel[:-3]}:updated {u} → {today}")
+        return 0
+    try:
+        return cmd_set(env, rel, "updated", today)
+    except (ValueError, RuntimeError) as ex:
+        print(f"擋下 {rel[:-3]}:{ex}", file=sys.stderr)
+        return 2
+
+
+def cmd_updated_sync(env, nodes, stale=False, dry_run=False):
+    """lumos updated-sync <節點>… | --stale [--dry-run]:把筆記開頭的 updated 改成今天(Projects/提交時自動更新筆記日期_計劃)。
+    --stale 取 doctor U 段列的那幾篇;寫入一篇一篇走 cmd_set(鎖、自驗、原子寫入);找不到的節點給近名候選、其他照改、
+    最後 rc 非 0;沒有 updated 欄的不加;已是今天的跳過。"""
+    import datetime as _dt
+    if not nodes and not stale:
+        print("擋下:給要改的節點名,或加 --stale 改 doctor 列出的全部", file=sys.stderr)
+        return 2
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
+    rels, rc = [], 0
+    if stale:
+        rels += [r for r, _u, _g in _updated_stale_notes(env, _vault_repo_root(env))]
+    for nd in nodes:
+        rel = env.find(nd)
+        if rel is None:
+            rc = max(rc, _node_not_found(env, nd, write_side=True))
+            continue
+        rels.append(rel)
+    for rel in dict.fromkeys(rels):
+        rc = max(rc, _updated_sync_one(env, rel, today, dry_run))
+    if not rels and not rc:
+        print("沒有要改的筆記")
+    return rc
 
 
 def cmd_set(env, rel, key, value):
@@ -40924,7 +41007,9 @@ def git_last_change_dates(repo_root, vault):
         return _GIT_DATES_CACHE[key]
     out = {}
     try:
-        rel_vault = os.path.relpath(str(vault), str(repo_root))
+        # 兩邊都先解析成實體路徑:根目錄常經 rev-parse 解析過(macOS 暫存目錄 /var → /private/var),圖譜路徑沒有時
+        # 相對路徑會變成 ../../…,整張表靜默變空(Projects/提交時自動更新筆記日期_計劃 實作時第一次有呼叫者才踩到)
+        rel_vault = os.path.relpath(str(Path(vault).resolve()), str(Path(repo_root).resolve()))
         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotepath=false",
                             "log", "--name-only", "--format=@%cs", "--", rel_vault],
                            capture_output=True, text=True, errors="replace", timeout=30)
@@ -46881,6 +46966,7 @@ HELP_WHEN = {
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
     "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
+    "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
     "ci-status": "只看上次 CI 結果,不打網路。",
     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
@@ -47452,6 +47538,10 @@ def main():
     p.add_argument("new", metavar="新片段")
     p.add_argument("--nth", dest="sl_nth", type=int, default=None, help="舊片段出現好幾處時,改第幾個(照擋下訊息列的編號)")
     p.add_argument("--dry-run", dest="sl_dry", action="store_true", help="只印改前改後,不寫")
+    p = sub.add_parser("updated-sync", help="把筆記開頭的 updated 改成今天:給節點名,或 --stale 改 doctor 列出落後的全部")
+    p.add_argument("nodes", nargs="*", metavar="節點")
+    p.add_argument("--stale", dest="us_stale", action="store_true", help="改 doctor 列出 updated 落後 git 最後改動的全部")
+    p.add_argument("--dry-run", dest="us_dry", action="store_true", help="只印會改哪幾篇,不寫")
     p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/system_refs/related/tags)")
     p.add_argument("note")
     p.add_argument("key")
@@ -48392,6 +48482,12 @@ def main():
         return 2
     if args.cmd == "summary-line":
         return cmd_summary_line(env, args.note, args.old, args.new, nth=args.sl_nth, dry_run=args.sl_dry)
+    if args.cmd == "updated-sync":
+        try:            # 同 set/append/remove:寫入原語丟的 ValueError/RuntimeError 轉成擋下訊息、rc2,不印堆疊
+            return cmd_updated_sync(env, args.nodes, stale=args.us_stale, dry_run=args.us_dry)
+        except (ValueError, RuntimeError) as ex:
+            print(f"擋下:{ex}", file=sys.stderr)
+            return 2
     if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
