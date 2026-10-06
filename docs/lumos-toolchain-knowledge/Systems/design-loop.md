@@ -36,6 +36,8 @@ verified_by:
   - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
   - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
   - "[[Verification/2026-10-06_負數發現計數拒收驗證]]"
+  - "[[Verification/2026-10-06_負數計數拒收主線CI]]"
+  - "[[Verification/2026-10-06_快照拒收入口驗證]]"
 summary: |-
   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
@@ -224,3 +226,14 @@ PITFALL:數量參數以整數轉換不等於有效數量；前案固定來源的
 REVISIT:2026-10-20 在canary寫入與本案卷證入口查十份真實收據，區分輸入錯誤與修復回歸；共用數量守衛若接管全部入口，撤掉局部分支。
 
 WHY:負數數量在報告驗證前拒收，沿用現有非負成本欄的stderr/rc2形狀，沒有另造解析器；出處 [[Projects/負數發現計數在追加前拒收_計劃]] 的六席首輪及resources-F1順序折入。成功canary帳不追加，治理拒收telemetry按原約定；實驗紅燈仍原樣留存，驗證結果另立紀錄，不把輸入錯誤當修補回歸。
+
+## 載體快照編碼的獨立輸入契約（2026-10-06）
+
+PITFALL: 前案有效UTF8範圍之外的快照解碼例外會被當成程式故障，雖不追加錯帳，仍需另定可修正的拒收訊息。出處 [[Projects/載體快照非法編碼受控拒收_計劃]] 的雙来源最小對照、前案preflight探針與 [[Issues/主程式讀取路徑漏接UnicodeDecodeError]]；防回歸入口 t_canary_carrier_invalid_snapshot_encoding，初版34條20/14原紅各綁SHA。本段為實作前紀錄：當時只驗證候選、尚未修改生產；後續狀態須讀該計劃的最新收貨與Verification。
+WHY: 沿用既有quote-check及報告入口的特定解碼錯誤處理，維持strict與原bytes指紋；不把replace後文字當證據、不擴成全repo掃除或改非載體政策。出處同計劃的官方Python文檔及獨立唯讀既有方案查證。
+REVISIT:2026-10-20 依[[Projects/載體快照非法編碼受控拒收_計劃]]「真實收據入口與限制」人工JSON格式，從本案卷證real-input-receipts入口核對十份編碼/I/O拒收與配對恢復紀錄；測試及注入不计數，未新增自動收集器，不足十份就記實際數，再判斷是否較少重記。
+
+PITFALL:[2026-10-06 快照拒收設計R1 logic-F1]驗句讀取遇一次性I/O失敗後若只清空結果，稍後rawhash讀取恢復會把未驗材料追加，處置閘才quote FAIL而需重記。來源本案R1原報與非法UTF8/不錨對照；防回歸t_canary_carrier_snapshot_io_recovery_rejected，普通/-O首筆及已有帳控制；未知解析RuntimeError另由t_canary_carrier_invalid_snapshot_encoding控制，不用廣捕捉掩蓋。
+
+
+PITFALL:2026-10-06 R2故障注入把_quote_rows改為OSError，會被快照讀取try誤報成材料讀不到；原報major，辯方判minor診斷錯誤，原報保持。只讓read/decode留在try，parser在外呼叫；成功帳不可因未知parser例外追加。出處：R2 alignment-F1、state-defender及parser48/2→50/0；防回歸t_canary_carrier_invalid_snapshot_encoding同時保留RuntimeError與OSError普通/-O控制。

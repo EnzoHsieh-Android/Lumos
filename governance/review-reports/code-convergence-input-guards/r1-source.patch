@@ -1,0 +1,524 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index b68f1e7a..9578f09e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9573,22 +9573,26 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         # 寫進只進不出的帳本,撤不掉、只能換編號重記整輪——**把同一道檢查往前挪到寫帳之前,
+         # 代價從「整輪重記」降成「換一席再敲一次」**。只驗載體席(帶處置清單那筆),
+         # 其餘席的引句本來就允許錨不到(不採信而已,不擋)。
+         if findings_set is not None and snapshot:
+             _qrows = None
+             try:
+                 _sbytes = Path(snapshot).read_bytes()
+                 _qrows = _quote_rows(_rtext, _sbytes.decode("utf-8"))
+                 _validated_sha["--snapshot"] = hashlib.sha256(_sbytes).hexdigest()
+                 del _sbytes
+-            except OSError:
+-                _qrows = None   # 快照讀不到:下面的 --snapshot 存在性檢查會擋,這裡不重複報
++            except UnicodeDecodeError as e:
++                print(f"擋下:--snapshot 不是有效 UTF-8: {e}", file=sys.stderr)
++                return 2
++            except OSError as e:
++                print(f"擋下:--snapshot 指的檔案讀不到: {e}", file=sys.stderr)
++                return 2
+             else:
+                 if _qrows is None:
+                     print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
+                     print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
+                     return 2
+             if _qrows:
+                 _qmiss = [r for r in _qrows if not r["ok"]]
+                 if _qmiss:
+                     print(f"擋下:這一席要當全輪的帳本載體(帶了處置清單),但它的 {len(_qrows)} 句引言裡"
+                           f"有 {len(_qmiss)} 句在凍結快照裡找不到原文。", file=sys.stderr)
+@@ -27095,32 +27099,33 @@ def _nodehome_side(repo_root, where, vault_rel, share=None, changed=None, deadli
+                 s.notes[rel] = share.notes[rel]
+                 continue
+             if deadline is not None and time.monotonic() > deadline:
+                 return None
+             raw = s._reader(p)
+             if raw is not None:
+                 s.notes[rel] = _nodehome_parse_note(raw)
+     return s
+ 
+ 
+-def _nodehome_required(repo_root, side, cfg, vendored_skip):
+-    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。"""
++def _nodehome_required(repo_root, side, cfg, vendored_skip, include_tests=False):
++    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。
++    include_tests=True僅供寫回路由證據;預設免測試安家及其餘排除保持。"""
+     import fnmatch
+     req, bad_names = set(), set()
+     layout = _nodehome_layout(side.all_paths)   # 測試資料夾要旁邊的程式目標有同一種檔
+     for p in side.files:
+         kind = _nodehome_code_kind(p)
+         if kind is None:
+             continue
+         if any(fnmatch.fnmatch(p, g) for g in _NODEHOME_EXCLUDE_GLOBS):
+             continue
+-        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or _nodehome_is_test(p, layout):
++        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or (not include_tests and _nodehome_is_test(p, layout)):
+             continue
+         if kind == "shebang?":
+             if p in side.shebang:
+                 ok = side.shebang[p]
+             elif side.share is not None and p not in side.changed and p in side.share.shebang:
+                 ok = side.shebang[p] = side.share.shebang[p]
+             else:
+                 head = side._reader(p)
+                 ok = side.shebang[p] = _head_is_shebang(head)
+             if not ok:
+@@ -27434,27 +27439,28 @@ def _nodehome_commit_groups(repo_root, base, tip):
+                     if r is None:
+                         return None
+                     per.append(_nodehome_name_status(r))
+                 paths = set.intersection(*(x[0] for x in per))
+                 src = {k: v for k, v in per[0][1].items() if k in paths}
+                 gone = set.intersection(*(x[2] for x in per))
+         out.append({"sha": sha, "parents": parents, "paths": paths, "src": src, "gone": gone})
+     return out
+ 
+ 
+-def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
++def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None, route_cfg=None, route_skip=frozenset()):
+     """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
+     計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
+     {這個提交之後的路徑: {type, status, own}},判定那層只在同一個提交裡比「管的檔」跟「改的程式」,不必跨提交追名字
+     (合併進來的平行分支、一次推送改名好幾次都不影響——代碼審 r2 單reviewer)。這個提交裡改名的,拿改名前的路徑去
+     上一個提交讀;這個提交才新開的算有變;讀不到一律當有變,照原本那樣查。"""
+     pre = vault_rel + "/Systems/"
++    route_cache = {}                                         # 本次呼叫按版本共用清單與shebang,不重建Systems筆記
+     for g in groups or ():
+         after = _nodehome_reader(repo_root, g["sha"])
+         # 上一版用「這個提交的第幾個上一版」讀(sha^1、sha^2):跟起點那一側的讀取分開算,不跟它搶共用
+         befores = [_nodehome_reader(repo_root, f"{g['sha']}^{i + 1}") for i in range(len(g["parents"]))]
+         notes = {}
+         for p in g["paths"]:
+             if not (p.startswith(pre) and p.endswith(".md")) or p in g["gone"]:
+                 continue
+             new = after(p)
+             n = _nodehome_parse_note(new) if new is not None else None
+@@ -27463,20 +27469,42 @@ def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
+             if n is not None and any(o["sig"] == n["sig"] or _nodehome_tag_only_change(o, n, tag_judge) for o in olds):
+                 continue                                    # 跟上一版一樣(只補簿記;合併時照搬某一邊也算):不算這個提交寫回
+             own, statuses = set(), set()
+             for x in [n] + olds:
+                 if x is not None:
+                     own |= {k for k in (_nodehome_key(v) for v in x["about"]) if k}
+                     statuses.add(x["status"])
+             # 狀態看這個提交前後兩版(代碼審 r3 單reviewer:只看之後的,「這個提交降成 planned 順便寫、下一個再升回來」就繞過了)
+             notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
+         g["content_notes"] = notes
++        if route_cfg is not None:
++            g["route_tests"] = set()
++            candidates = g["paths"] & {p for info in notes.values() for p in info["own"]}
++            if candidates:
++                for sha, reader in [(g["sha"], after), *zip(g["parents"], befores)]:
++                    if sha not in route_cache:
++                        route_cache[sha] = (_nodehome_list(repo_root, sha), {}, reader)
++                    lst, shebang, read = route_cache[sha]
++                    if lst is None:
++                        g["route_tests"].clear()             # 未讀到不能當合法證據,沿原路由拒收
++                        break
++                    files, all_paths = lst
++                    layout = _nodehome_layout(all_paths)
++                    tests = {p: files[p] for p in candidates if p in files and _nodehome_is_test(p, layout)}
++                    if not tests:
++                        continue
++                    side = _NodehomeSide()
++                    side.files, side.all_paths, side.notes = tests, all_paths, {}
++                    side.where, side._reader, side.shebang = sha, read, shebang
++                    side.share, side.changed = None, set()
++                    eligible, _bad = _nodehome_required(repo_root, side, route_cfg, route_skip, include_tests=True)
++                    g["route_tests"].update(eligible)
+     return groups
+ 
+ 
+ _NOTELINES_PRECOMMIT = "scripts/hooks/pre-commit"
+ _NOTELINES_PREPUSH = "scripts/hooks/pre-push"
+ 
+ 
+ def _nodehome_golive(repo_root, tip, mark=None, hook=_NOTELINES_PRECOMMIT):
+     """[S39] 這個 repo 裡「提交前掛鉤第一次包含這道檢查」的那個提交(tip 的歷史裡最早那一個);沒有回 None。
+     mark=要找的標記字串,預設是每支檔有家自己的;筆記形狀擋傳它自己的(Projects/筆記形狀擋_計劃 [S4])。"""
+@@ -27596,49 +27624,55 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel,
+                 pairs.append((f, rel))
+     # [S3][S34] 新增的程式檔之後沒有家
+     for f in sorted(code_added):
+         if not homesN.get(f):
+             blocks.append(("new-homeless", f))
+     # [S4] 原本有家的檔這次變沒家(stale 照樣是家,所以例行標過期不會觸發)
+     for f in sorted(reqN & reqB):
+         if homesB.get(f) and not homesN.get(f):
+             blocks.append(("home-removed", (f, homesB[f])))
+     if code_touched:
++        routeN, routeB = set(), set()
++        if groups is None or any(not g.get("sha") for g in groups):
++            routeN, _ = _nodehome_required(repo_root, N, cfg, vendored_skip, include_tests=True)
++            routeB, _ = _nodehome_required(repo_root, B, cfg, vendored_skip, include_tests=True)
+         cc = set(content_changed)
+         if groups is None:                                  # 提交前:整批就是一個提交(內容有沒有變已經是這個提交的)
+             groups = [{"sha": None, "paths": {p for _c, o, n in changes for p in (o, n) if p}, "src": {}}]
+         routed, wb_files, wb_notes = {}, set(), set()
+         per_commit = {}                                     # 推送前:{那個提交裡的節點名: 寫回卻不是家的那幾支改動檔}
+         for g in groups:
+             g_paths = g["paths"]
+             g_code = {p for p in g_paths if p in reqN or p in reqB}
+             if not g_code:
+                 continue                                    # 純整理節點的提交:規則三不管 [S11]
++            g_route_code = g_code | g.get("route_tests", set()) if g["sha"] else (
++                g_paths & (routeN | routeB))
+             if g["sha"] and "content_notes" in g:
+                 # ★推送前:判定在那個提交自己裡面做★——那篇的內容是不是在這個提交改的(只補簿記不算)、它在這個提交前後管的檔
+                 # 跟這個提交改的程式對不對得上;不跨提交追名字(2026-09-11 平板 POS 第一次真推送踩到的誤擋、代碼審兩輪抓到的改名與合併)
+                 for p, info in g["content_notes"].items():
+                     rel = p[len(vpre):]
+                     # 能當家:這個提交前後任一版是,或推送終點那一版是(擋「先降格、在規劃中時寫、再升回來」三步走)
+                     tip_home = rel in N.notes and N.notes[rel]["status"] in _NODEHOME_HOME_STATUSES
+                     if info["type"] != "system" or not (info["statuses"] & set(_NODEHOME_HOME_STATUSES) or tip_home):
+                         continue
+                     wb_files |= g_code
+                     wb_notes.add(rel)
+-                    if not (info["own"] & g_code):
+-                        per_commit.setdefault(rel, set()).update(g_code)
++                    if not (info["own"] & g_route_code):
++                        per_commit.setdefault(rel, set()).update(g_route_code)
+                 continue
+             # 提交前(整批就是一個提交)或讀取層沒算到:碰到就算,家看起點與終點兩版
+             g_notes = {rel for rel in content_changed
+                        if (vpre + rel) in g_paths or (vpre + route_src.get(rel, rel)) in g_paths}
+             for rel in g_notes:
+-                routed.setdefault(rel, set()).update(g_code)
++                routed.setdefault(rel, set()).update(g_route_code)
+             if g_notes:
+                 wb_files |= g_code
+                 wb_notes |= g_notes
+         # [S13] 寫進去的節點要是同一個提交裡某支改動(含刪掉)的檔的家——刪掉的檔看它刪之前的家
+         for rel in content_changed:
+             if rel not in routed:
+                 continue
+             mine = ownN.get(rel, set()) | ownB.get(route_src.get(rel, rel), set())
+             if not (mine & routed[rel]):
+                 blocks.append(("route", (rel, sorted(routed[rel]))))
+@@ -27962,21 +27996,21 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
+         return 0
+     skip = frozenset() if _is_toolchain_repo(root) else _vendored_state(root, "" if staged else tip_where)[0]
+     _tj = []
+ 
+     def tag_judge():
+         """測試名判定,第一次真的需要(某篇只差測試綁定)才建——建索引要掃測試檔。"""
+         if not _tj:
+             _tj.append(_nodehome_tag_judge(root, None if staged else tip_where))
+         return _tj[0]
+     groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
+-                                                                 tag_judge=tag_judge)
++                                                                 tag_judge=tag_judge, route_cfg=cfg, route_skip=skip)
+     res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge)
+     homesN, _own = _nodehome_homes(root, N)
+     lines = _nodehome_render(res, homesN, N, cfg, mode_word)
+     blocked = bool(res["blocks"])
+     if blocked and cfg["mode"] == "warn":
+         lines = [l.replace("擋下:", "提醒(node_home.gate=warn,不擋):", 1) for l in lines]
+     for l in lines:
+         print(l, file=sys.stderr)
+     # 治理帳:nodes 只放程式檔路徑(統計語意表這麼宣告);沒有程式檔的違規(負責範圍)把節點另放 notes
+     files, notes_ = set(), set()
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 348aed86..9eff4660 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25790,20 +25790,186 @@ def t_canary_carrier_quote_positive_controls():
+             check(f"載體全錨/{optimized}/{fid}/{count_args} 成功", r.returncode == 0,
+                   f"rc={r.returncode} {r.stderr[-200:]}")
+             rows = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()
+             last = _j.loads(rows[-1])
+             check(f"載體全錨/{optimized}/{fid} 前置：確實解析審查報告", last.get("reported") == 1,
+                   str(last)[-200:])
+             check(f"載體全錨/{optimized}/{fid} ID 保留原意", last.get("findings_set") == fid.split(",")
+                   and last.get("folded_set") == fid.split(","), str(last)[-200:])
+ 
+ 
++def t_canary_carrier_invalid_snapshot_encoding():
++    """載體快照解碼錯誤須受控拒收，合法與非載體控制不改寫證據。"""
++    import json as _j
++    text = "這是可以核對的凍結材料原文而且字數足夠"
++    for opt in (False, True):
++        v = mkvault()
++        root = v.parent
++        snap = root / "snapshot.patch"
++        report = root / "quoted.md"
++        report.write_text("severity: minor\n## F1\nseverity: minor\nblocking: 否\n"
++                          + "引句:「" + text + "」\n", encoding="utf-8")
++        ledger = root / ".canary-log.jsonl"
++        def carrier(label, non_encoding_fault=False, quote_fault=False):
++            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
++                "--loop", f"code-snapshot-{opt}-{label}", "--round", "r1", "--auditor", "通才-codex",
++                "--severity", "minor", "--findings", "1", "--tier", "standard", "--report", str(report),
++                "--snapshot", str(snap), "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
++            prefix = [sys.executable, *(["-O"] if opt else [])]
++            if non_encoding_fault:
++                shim = ("import runpy, sys\nfrom pathlib import Path\n"
++                        "original = Path.read_bytes\n"
++                        "def read_bytes(path):\n"
++                        f"    if path == Path({str(snap)!r}):\n"
++                        "        raise RuntimeError('snapshot-non-encoding-fault')\n"
++                        "    return original(path)\n"
++                        "Path.read_bytes = read_bytes\n"
++                        f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
++                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++            if quote_fault:
++                shim = ("import runpy, sys\n"
++                        f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
++                        "def quote_rows(*args):\n    raise RuntimeError('snapshot-quote-parser-fault')\n"
++                        "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
++                        "sys.exit(namespace['main']())\n")
++                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++            return subprocess.run([*prefix, *args], capture_output=True, text=True)
++        snap.write_bytes(b"\xff\xfe")
++        first = carrier("first-bad")
++        check(f"快照編碼 opt={opt}:首筆rc2指出snapshot編碼",
++              first.returncode == 2 and "--snapshot" in first.stderr and "UTF" in first.stderr,
++              first.stdout + first.stderr)
++        check(f"快照編碼 opt={opt}:首筆不建帳且無成功訊息",
++              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        seed = carrier("valid-seed")
++        check(f"快照編碼 opt={opt}:全錨合法種子確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:種子確實解析報告且存同份指紋",
++              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        bads = (b"\xff\xfe", (text + "\n").encode("utf-8") + b"\xff",
++                (text + "\n").encode("utf-8") + b"\xe4\xb8")
++        for i, badbytes in enumerate(bads):
++            snap.write_bytes(badbytes)
++            before = ledger.read_bytes()
++            bad = carrier(f"bad-{i}")
++            check(f"快照編碼 opt={opt} case={i}:rc2與欄位診斷",
++                  bad.returncode == 2 and "--snapshot" in bad.stderr and "UTF" in bad.stderr,
++                  bad.stdout + bad.stderr)
++            check(f"快照編碼 opt={opt} case={i}:無traceback或成功訊息",
++                  "Traceback" not in bad.stderr and "✓" not in bad.stdout, bad.stdout + bad.stderr)
++            check(f"快照編碼 opt={opt} case={i}:成功帳逐位元不變",
++                  ledger.read_bytes() == before, bad.stdout + bad.stderr)
++        snap.write_bytes((text + "\r\n").encode("utf-8"))
++        good = carrier("valid-crlf")
++        check(f"快照編碼 opt={opt}:CRLF合法對照成功",
++              good.returncode == 0, good.stdout + good.stderr)
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:CRLF仍記同份原始bytes指紋",
++              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        before = ledger.read_bytes()
++        fault = carrier("non-encoding-fault", non_encoding_fault=True)
++        check(f"快照編碼 opt={opt}:非編碼故障仍為原RuntimeError",
++              fault.returncode == 1 and "RuntimeError: snapshot-non-encoding-fault" in fault.stderr,
++              fault.stdout + fault.stderr)
++        check(f"快照編碼 opt={opt}:非編碼故障不追加成功帳",
++              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        fault = carrier("quote-parser-fault", quote_fault=True)
++        check(f"快照編碼 opt={opt}:引句解析故障仍為原RuntimeError",
++              fault.returncode == 1 and "RuntimeError: snapshot-quote-parser-fault" in fault.stderr,
++              fault.stdout + fault.stderr)
++        check(f"快照編碼 opt={opt}:引句解析故障不追加成功帳",
++              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        clean = root / "clean.md"
++        clean.write_text("severity: clean\n本席沒有發現。\n", encoding="utf-8")
++        snap.write_bytes(b"\xff\xfe")
++        legacy = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
++            "--vault", str(v), "canary", "record", "none", "--loop", f"code-noncarrier-{opt}",
++            "--round", "r1", "--auditor", "通才-codex", "--severity", "clean", "--findings", "0",
++            "--tier", "standard", "--report", str(clean), "--snapshot", str(snap)],
++            capture_output=True, text=True)
++        check(f"快照編碼 opt={opt}:非載體原政策仍成功",
++              legacy.returncode == 0, legacy.stdout + legacy.stderr)
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:非載體保存壞編碼原bytes指紋",
++              row.get("reported") == 0 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        snap.unlink()
++        before = ledger.read_bytes()
++        missing = carrier("missing-snapshot")
++        check(f"快照編碼 opt={opt}:缺檔沿用IO診斷而非編碼",
++              missing.returncode == 2 and "--snapshot" in missing.stderr and "UTF" not in missing.stderr,
++              missing.stdout + missing.stderr)
++        check(f"快照編碼 opt={opt}:缺檔無traceback且帳不變",
++              "Traceback" not in missing.stderr and ledger.read_bytes() == before and "✓" not in missing.stdout,
++              missing.stdout + missing.stderr)
++
++def t_canary_carrier_snapshot_io_recovery_rejected():
++    """驗句讀取失敗不能由稍後可讀的 raw hash 代替，成功帳保持不變。"""
++    for optimized in (False, True):
++        v = mkvault()
++        root = v.parent
++        text = "這是凍結材料裡可以核對的一整段原始文字"
++        snap = root / "snapshot.patch"
++        report = root / "report.md"
++        report.write_text("severity: minor\n## F1\nseverity: minor\n引句:「" + text + "」\n", encoding="utf-8")
++        ledger = root / ".canary-log.jsonl"
++        def call(label, transient=True):
++            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
++                    "--loop", f"code-snapshot-io-{optimized}-{label}", "--round", "r1",
++                    "--auditor", "通才-codex", "--severity", "minor", "--findings", "1",
++                    "--tier", "standard", "--report", str(report), "--snapshot", str(snap),
++                    "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
++            prefix = [sys.executable, *(["-O"] if optimized else [])]
++            if not transient:
++                return subprocess.run([*prefix, *args], capture_output=True, text=True)
++            shim = ("import runpy, sys\nfrom pathlib import Path\noriginal = Path.read_bytes\nseen = []\n"
++                    "def read_bytes(path):\n"
++                    f"    if path == Path({str(snap)!r}) and not seen:\n"
++                    "        seen.append(1)\n        raise OSError('transient-snapshot-read')\n"
++                    "    return original(path)\nPath.read_bytes = read_bytes\n"
++                    f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
++            return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        first = call("first")
++        check(f"快照IO/{optimized}:首次暫時失敗當場拒收並定位IO",
++              first.returncode == 2 and "--snapshot" in first.stderr
++              and "transient-snapshot-read" in first.stderr and "UTF" not in first.stderr,
++              first.stdout + first.stderr)
++        check(f"快照IO/{optimized}:首次不建成功帳",
++              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
++        seed = call("valid-seed", transient=False)
++        check(f"快照IO/{optimized}:正常讀取合法材料確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        for label, data in (("valid", (text + "\n").encode("utf-8")),
++                            ("invalid-encoding", b"\xff\xfe"),
++                            ("unmatched", "這份材料沒有報告所引用的那一段原文。\n".encode("utf-8"))):
++            snap.write_bytes(data)
++            before = ledger.read_bytes()
++            result = call(label)
++            check(f"快照IO/{optimized}/{label}:暫時失敗當場rc2不誤診",
++                  result.returncode == 2 and "--snapshot" in result.stderr
++                  and "transient-snapshot-read" in result.stderr and "UTF" not in result.stderr,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:無traceback或成功訊息",
++                  "Traceback" not in result.stderr and "✓" not in result.stdout,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:成功帳逐位元不變",
++                  ledger.read_bytes() == before, result.stdout + result.stderr)
++
++
++
+ def t_canary_carrier_invalid_report_encoding():
+     """載體報告不能以替換字元掩蓋非法 UTF-8，寫側與讀側要驗同一份資料。"""
+     import json as _j
+     for optimized in (False, True):
+         v = mkvault()
+         snap = v / "Projects" / "snapshot.patch"
+         snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+         report = v / "Projects" / "report.md"
+         good = ("severity: minor\n## F1\nseverity: minor\n"
+                 "引句:「這是凍結材料裡可以核對的一整段文字」\n").encode("utf-8")
+@@ -47803,20 +47969,107 @@ _NH_TAG_TESTS = ("old", "new", "keep", "drop", "more", "y", "more2", "more3", "h
+ def _nh_tag_repo(extra_tests=()):
+     """只換測試綁定那組的測試專案:python 測試棧,tests/test_b.py 有 test_<名> 這些真測試(綁定要指得到真測試才算只換綁定)。"""
+     root = _nh_repo({"test_profile": "python"})
+     _nh_file(root, "tests/test_b.py", "".join(f"def test_{n}():\n    pass\n\n\n" for n in _NH_TAG_TESTS + tuple(extra_tests)))
+     _nh_file(root, "src/a.py")
+     _nh_file(root, "src/b.py")
+     _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。")
+     return root
+ 
+ 
++def t_nodehome_optional_test_home_writeback():
++    """已宣告的測試家可接同次寫回；不把測試免安家改成全部強制安家。"""
++    import subprocess as _sp, os as _os
++    cases = (("mixed", 0), ("test-only", 0), ("untouched-test", 1),
++             ("unowned-test", 0), ("ignored-test", 1), ("symlink-test", 1),
++             ("deleted-test", 0), ("renamed-test", 0), ("json-home", 1),
++             ("new-homeless", 1), ("diff-mixed", 0), ("diff-split", 1),
++             ("pure-test-other-home", 0), ("diff-middle-delete", 0),
++             ("diff-middle-rename", 0), ("diff-double-rename", 0),
++             ("shebang-index-positive", 0), ("shebang-index-negative", 1))
++    for optimized in (False, True):
++        for case, expected in cases:
++            root = _nh_repo({"node_home": {"ignore": ["scripts/test_checks.py"]}}
++                            if case == "ignored-test" else None)
++            _nh_file(root, "src/a.py")
++            test_path = "tests/check" if case.startswith("shebang-index-") else "scripts/test_checks.py"
++            test = _nh_file(root, test_path)
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home_path = "src/fixture.json" if case == "json-home" else test_path
++            if case == "json-home":
++                _nh_file(root, home_path, "{}\n")
++            if case == "symlink-test":
++                target = _nh_file(root, "fixture.txt", "test data\n")
++                test.unlink()
++                _os.symlink(target, test)
++            home = None if case == "unowned-test" else _nh_node(
++                root, "TestHome", about=[home_path], body="test context")
++            _nh_commit(root, "baseline")
++            base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++            if case not in ("untouched-test", "symlink-test", "json-home"):
++                if case == "deleted-test":
++                    test.unlink()
++                elif case == "renamed-test":
++                    new_test = root / "scripts/test_renamed.py"
++                    test.rename(new_test)
++                else:
++                    _nh_file(root, test_path, "#!/usr/bin/env python3\nx = 2\n"
++                             if case == "shebang-index-positive" else "x = 2\n")
++            if case == "diff-split":
++                _nh_commit(root, "test change only")
++            if case not in ("test-only", "pure-test-other-home"):
++                _nh_file(root, "src/a.py", "x = 2\n")
++            if case == "new-homeless":
++                _nh_file(root, "src/new.py", "x = 2\n")
++            if case == "json-home":
++                _nh_file(root, home_path, '{"changed": true}\n')
++            if home is None or case == "pure-test-other-home":
++                home = root / "docs/kg-knowledge/Systems/Production.md"
++            if case in ("diff-middle-delete", "diff-middle-rename"):
++                test = _nh_file(root, "scripts/test_temp.py", "x = 2\n")
++            elif case == "diff-double-rename":
++                middle = root / "scripts/test_mid.py"
++                test.rename(middle)
++                test = middle
++            text = home.read_text(encoding="utf-8")
++            if case == "renamed-test":
++                text = text.replace("scripts/test_checks.py", "scripts/test_renamed.py")
++            if case in ("diff-middle-delete", "diff-middle-rename"):
++                text = text.replace("scripts/test_checks.py", "scripts/test_temp.py")
++            elif case == "diff-double-rename":
++                text = text.replace("scripts/test_checks.py", "scripts/test_mid.py")
++            home.write_text(text + "\nWHY:This test guards an independently reproduced failure.\n", encoding="utf-8")
++            _nh_git(root, "add", "-A")
++            if case.startswith("shebang-index-"):
++                _nh_file(root, test_path, "x = 3\n" if case == "shebang-index-positive"
++                         else "#!/usr/bin/env python3\nx = 3\n")
++            mode = ["--staged"]
++            if case.startswith("diff-"):
++                _nh_commit(root, "production and graph change")
++                if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                    if case == "diff-middle-delete":
++                        test.unlink()
++                    else:
++                        final = root / "scripts/test_final.py"
++                        previous = test.relative_to(root).as_posix()
++                        test.rename(final)
++                        home.write_text(home.read_text().replace(previous, "scripts/test_final.py"))
++                    _nh_commit(root, "remove intermediate test path")
++                tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++                mode = ["--diff", base + ".." + tip]
++            result = _sp.run([sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
++                              "home", "check", *mode, "--repo", str(root)],
++                             capture_output=True, text=True)
++            check(f"測試家寫回/{optimized}/{case}:預期rc{expected}",
++                  result.returncode == expected, result.stdout + result.stderr)
++
++
+ def t_nodehome_test_tag_only_edit_is_not_write_back():
+     """[只換測試綁定不算寫說明 S1][S3] 同一個提交改了程式、另一篇只換測試綁定(新出現的名稱指得到真測試)→ 不算寫說明,
+     寫回落點與「有寫回時改動檔要有家」都不擋。
+     出身:rtb 2026-10-03 改測試名後,另一篇筆記只把 [test:] 換成新名就被擋,測試檔當不了家、沒有合法出口(rtb 第三輪提案 D2)。
+     翻紅釘:內容比對不拿掉綁定 → ①②③⑨紅;新名稱不核對真測試 → ④⑥紅;test-gone 不核對上一版綁過 → ⑤紅。"""
+     print("t_nodehome_test_tag_only_edit_is_not_write_back")
+     root = _nh_tag_repo()
+     _nh_node(root, "B", about=["src/b.py"], summary="KEY:b 的規則 [test:test_old] [test:test_keep]",
+              body="實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test:test_drop]")
+     _nh_commit(root, "init")

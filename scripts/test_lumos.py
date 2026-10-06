@@ -25996,6 +25996,173 @@ def t_canary_carrier_quote_positive_controls():
                   and last.get("folded_set") == fid.split(","), str(last)[-200:])
 
 
+def t_canary_carrier_invalid_snapshot_encoding():
+    """載體快照解碼錯誤須受控拒收，合法與非載體控制不改寫證據。"""
+    import json as _j
+    text = "這是可以核對的凍結材料原文而且字數足夠"
+    for opt in (False, True):
+        v = mkvault()
+        root = v.parent
+        snap = root / "snapshot.patch"
+        report = root / "quoted.md"
+        report.write_text("severity: minor\n## F1\nseverity: minor\nblocking: 否\n"
+                          + "引句:「" + text + "」\n", encoding="utf-8")
+        ledger = root / ".canary-log.jsonl"
+        def carrier(label, non_encoding_fault=False, quote_fault=False):
+            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
+                "--loop", f"code-snapshot-{opt}-{label}", "--round", "r1", "--auditor", "通才-codex",
+                "--severity", "minor", "--findings", "1", "--tier", "standard", "--report", str(report),
+                "--snapshot", str(snap), "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
+            prefix = [sys.executable, *(["-O"] if opt else [])]
+            if non_encoding_fault:
+                shim = ("import runpy, sys\nfrom pathlib import Path\n"
+                        "original = Path.read_bytes\n"
+                        "def read_bytes(path):\n"
+                        f"    if path == Path({str(snap)!r}):\n"
+                        "        raise RuntimeError('snapshot-non-encoding-fault')\n"
+                        "    return original(path)\n"
+                        "Path.read_bytes = read_bytes\n"
+                        f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
+                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
+            if quote_fault:
+                shim = ("import runpy, sys\n"
+                        f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
+                        f"def quote_rows(*args):\n    raise {quote_fault if isinstance(quote_fault, str) else 'RuntimeError'}('snapshot-quote-parser-fault')\n"
+                        "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
+                        "sys.exit(namespace['main']())\n")
+                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
+            return subprocess.run([*prefix, *args], capture_output=True, text=True)
+        snap.write_bytes(b"\xff\xfe")
+        first = carrier("first-bad")
+        check(f"快照編碼 opt={opt}:首筆rc2指出snapshot編碼",
+              first.returncode == 2 and "--snapshot" in first.stderr and "UTF" in first.stderr,
+              first.stdout + first.stderr)
+        check(f"快照編碼 opt={opt}:首筆不建帳且無成功訊息",
+              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
+        snap.write_bytes((text + "\n").encode("utf-8"))
+        seed = carrier("valid-seed")
+        check(f"快照編碼 opt={opt}:全錨合法種子確實落帳",
+              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
+        if seed.returncode != 0 or not ledger.exists():
+            continue
+        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+        check(f"快照編碼 opt={opt}:種子確實解析報告且存同份指紋",
+              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
+        bads = (b"\xff\xfe", (text + "\n").encode("utf-8") + b"\xff",
+                (text + "\n").encode("utf-8") + b"\xe4\xb8")
+        for i, badbytes in enumerate(bads):
+            snap.write_bytes(badbytes)
+            before = ledger.read_bytes()
+            bad = carrier(f"bad-{i}")
+            check(f"快照編碼 opt={opt} case={i}:rc2與欄位診斷",
+                  bad.returncode == 2 and "--snapshot" in bad.stderr and "UTF" in bad.stderr,
+                  bad.stdout + bad.stderr)
+            check(f"快照編碼 opt={opt} case={i}:無traceback或成功訊息",
+                  "Traceback" not in bad.stderr and "✓" not in bad.stdout, bad.stdout + bad.stderr)
+            check(f"快照編碼 opt={opt} case={i}:成功帳逐位元不變",
+                  ledger.read_bytes() == before, bad.stdout + bad.stderr)
+        snap.write_bytes((text + "\r\n").encode("utf-8"))
+        good = carrier("valid-crlf")
+        check(f"快照編碼 opt={opt}:CRLF合法對照成功",
+              good.returncode == 0, good.stdout + good.stderr)
+        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+        check(f"快照編碼 opt={opt}:CRLF仍記同份原始bytes指紋",
+              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
+        snap.write_bytes((text + "\n").encode("utf-8"))
+        before = ledger.read_bytes()
+        fault = carrier("non-encoding-fault", non_encoding_fault=True)
+        check(f"快照編碼 opt={opt}:非編碼故障仍為原RuntimeError",
+              fault.returncode == 1 and "RuntimeError: snapshot-non-encoding-fault" in fault.stderr,
+              fault.stdout + fault.stderr)
+        check(f"快照編碼 opt={opt}:非編碼故障不追加成功帳",
+              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
+        for error in ("RuntimeError", "OSError"):
+            fault = carrier(f"quote-parser-{error}", quote_fault=error)
+            check(f"快照編碼 opt={opt}:引句解析故障仍為原{error}",
+                  fault.returncode == 1 and f"{error}: snapshot-quote-parser-fault" in fault.stderr,
+                  fault.stdout + fault.stderr)
+            check(f"快照編碼 opt={opt}:引句解析{error}不追加成功帳",
+                  ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
+        clean = root / "clean.md"
+        clean.write_text("severity: clean\n本席沒有發現。\n", encoding="utf-8")
+        snap.write_bytes(b"\xff\xfe")
+        legacy = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
+            "--vault", str(v), "canary", "record", "none", "--loop", f"code-noncarrier-{opt}",
+            "--round", "r1", "--auditor", "通才-codex", "--severity", "clean", "--findings", "0",
+            "--tier", "standard", "--report", str(clean), "--snapshot", str(snap)],
+            capture_output=True, text=True)
+        check(f"快照編碼 opt={opt}:非載體原政策仍成功",
+              legacy.returncode == 0, legacy.stdout + legacy.stderr)
+        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+        check(f"快照編碼 opt={opt}:非載體保存壞編碼原bytes指紋",
+              row.get("reported") == 0 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
+        snap.unlink()
+        before = ledger.read_bytes()
+        missing = carrier("missing-snapshot")
+        check(f"快照編碼 opt={opt}:缺檔沿用IO診斷而非編碼",
+              missing.returncode == 2 and "--snapshot" in missing.stderr and "UTF" not in missing.stderr,
+              missing.stdout + missing.stderr)
+        check(f"快照編碼 opt={opt}:缺檔無traceback且帳不變",
+              "Traceback" not in missing.stderr and ledger.read_bytes() == before and "✓" not in missing.stdout,
+              missing.stdout + missing.stderr)
+
+def t_canary_carrier_snapshot_io_recovery_rejected():
+    """驗句讀取失敗不能由稍後可讀的 raw hash 代替，成功帳保持不變。"""
+    for optimized in (False, True):
+        v = mkvault()
+        root = v.parent
+        text = "這是凍結材料裡可以核對的一整段原始文字"
+        snap = root / "snapshot.patch"
+        report = root / "report.md"
+        report.write_text("severity: minor\n## F1\nseverity: minor\n引句:「" + text + "」\n", encoding="utf-8")
+        ledger = root / ".canary-log.jsonl"
+        def call(label, transient=True):
+            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
+                    "--loop", f"code-snapshot-io-{optimized}-{label}", "--round", "r1",
+                    "--auditor", "通才-codex", "--severity", "minor", "--findings", "1",
+                    "--tier", "standard", "--report", str(report), "--snapshot", str(snap),
+                    "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
+            prefix = [sys.executable, *(["-O"] if optimized else [])]
+            if not transient:
+                return subprocess.run([*prefix, *args], capture_output=True, text=True)
+            shim = ("import runpy, sys\nfrom pathlib import Path\noriginal = Path.read_bytes\nseen = []\n"
+                    "def read_bytes(path):\n"
+                    f"    if path == Path({str(snap)!r}) and not seen:\n"
+                    "        seen.append(1)\n        raise OSError('transient-snapshot-read')\n"
+                    "    return original(path)\nPath.read_bytes = read_bytes\n"
+                    f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
+            return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
+        snap.write_bytes((text + "\n").encode("utf-8"))
+        first = call("first")
+        check(f"快照IO/{optimized}:首次暫時失敗當場拒收並定位IO",
+              first.returncode == 2 and "--snapshot" in first.stderr
+              and "transient-snapshot-read" in first.stderr and "UTF" not in first.stderr,
+              first.stdout + first.stderr)
+        check(f"快照IO/{optimized}:首次不建成功帳",
+              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
+        seed = call("valid-seed", transient=False)
+        check(f"快照IO/{optimized}:正常讀取合法材料確實落帳",
+              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
+        if seed.returncode != 0 or not ledger.exists():
+            continue
+        for label, data in (("valid", (text + "\n").encode("utf-8")),
+                            ("invalid-encoding", b"\xff\xfe"),
+                            ("unmatched", "這份材料沒有報告所引用的那一段原文。\n".encode("utf-8"))):
+            snap.write_bytes(data)
+            before = ledger.read_bytes()
+            result = call(label)
+            check(f"快照IO/{optimized}/{label}:暫時失敗當場rc2不誤診",
+                  result.returncode == 2 and "--snapshot" in result.stderr
+                  and "transient-snapshot-read" in result.stderr and "UTF" not in result.stderr,
+                  result.stdout + result.stderr)
+            check(f"快照IO/{optimized}/{label}:無traceback或成功訊息",
+                  "Traceback" not in result.stderr and "✓" not in result.stdout,
+                  result.stdout + result.stderr)
+            check(f"快照IO/{optimized}/{label}:成功帳逐位元不變",
+                  ledger.read_bytes() == before, result.stdout + result.stderr)
+
+
+
 def t_canary_carrier_invalid_report_encoding():
     """載體報告不能以替換字元掩蓋非法 UTF-8，寫側與讀側要驗同一份資料。"""
     import json as _j
