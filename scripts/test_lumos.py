@@ -67079,6 +67079,9 @@ def t_guard_kill_add_warns_drifted_recipe():
     (root / ".lumos" / "config.json").write_text(_json.dumps({"default_platform": "a", "platforms": {
         "a": {"root": ".", "profile": "python", "run_cmd": "python3 test_guard.py"},
         "b": {"root": "other", "profile": "python", "run_cmd": "python3 test_guard.py"}}}), encoding="utf-8")
+    # 合約清單綁平台 b 那支:這格只驗原文提醒,不讓「測試不在合約清單」那個提醒(平台不同)混進來
+    _lp = v / "Systems" / "Limit.md"
+    _lp.write_text(_lp.read_text(encoding="utf-8").replace("[test:TestLimitFive]", "[test:b:TestLimitFive]"), encoding="utf-8")
     _kr_commit(root, "mp")
     r = _kr_lum(root, v, *base, "--file", "prod.py", "--old", "MAGIC = 1", "--platform", "b")
     check("⑨a 指定平台 b、原文在 b 恰好一次 → 不提醒", r.returncode == 0 and "提醒" not in r.stderr, r.stderr)
@@ -67147,6 +67150,186 @@ def t_guard_kill_add_warns_drifted_recipe():
     check("⑮判斷出錯 → rc0 照舊寫入、恰好一行「判斷時出錯…沒驗原文」",
           rc == 0 and len(recs) == 1 and len(lines) == 1 and "判斷時出錯" in lines[0] and "沒驗原文" in lines[0]
           and not any(c in err.getvalue() for c in "\x1b\x9b"), repr(err.getvalue()))
+
+
+# ── 殺傷力配方綁的測試要在合約清單(Projects/殺傷力配方綁的測試要在合約清單_計劃)──
+
+_KB_MULTI_CFG = ('{"test": {"run_cmd": "python3 test_guard.py"}, "default_platform": "py", "platforms": '
+                 '{"py": {"profile": "python", "root": "."}, "ios": {"profile": "swift-xctest", "root": "."}}}')
+
+
+def _kb_env(inv_line=None, cfg=None):
+    """殺傷力測試環境,換掉合約行(與設定檔)後提交。"""
+    root, v = _mk_kill_env()
+    if inv_line is not None:
+        p = v / "Systems" / "Limit.md"
+        p.write_text(p.read_text(encoding="utf-8").replace(
+            "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]", inv_line), encoding="utf-8")
+    if cfg is not None:
+        (root / ".lumos" / "config.json").write_text(cfg, encoding="utf-8")
+    _kr_commit(root, "setup")
+    return root, v
+
+
+def _kb_add(root, v, *extra, old="LIMIT = 5"):
+    return _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py",
+                   "--old", old, "--new", "LIMIT = 99", *extra)
+
+
+def _kb_lines(r):
+    """kill-add 標準錯誤裡跟「測試清單」有關的提醒行(原文失配那行不算)。"""
+    return [ln for ln in _kr_err_lines(r) if ln.startswith("⚠ 提醒:") and "測試清單" in ln]
+
+
+def t_kill_add_warns_test_not_bound():
+    """[綁的測試要在合約清單 S1] kill-add 寫入的那條配方,測試不在合約行的 [test:] 清單上 → 照常寫入、rc0、stderr 一行提醒;
+    清單空講還沒綁;在清單上(前綴有無、反引號、前綴後空白、單平台含冒號)不提醒;清單寫別的平台前綴而沒帶 --test/--platform
+    → 講平台不同;未定義平台前綴 → 一行沒比對;與原文失配同時成立 → 兩行、先失配;只更新 covers → 比既有那條。
+    翻紅釘:不比 → ②紅;單平台傳整張平台表 → ④紅;不去反引號 → ⑥紅;平台不同照講不在清單 → ⑦紅。"""
+    print("t_kill_add_warns_test_not_bound")
+    m = _load_lumos_inproc()
+    root, v = _kb_env()
+    r = _kb_add(root, v, "--test", "TestLimitFive")
+    check("①在清單上 → rc0、不提醒", r.returncode == 0 and not _kb_lines(r), r.stdout + r.stderr)
+    root, v = _kb_env()
+    r = _kb_add(root, v, "--test", "TestOther")
+    ln = _kb_lines(r)
+    recs = m._kill_read_recipes(v / "Systems" / "Limit.md")[0] or []
+    check("②不在清單上 → rc0、照寫、一行提醒(測試名、清單、bind 指令)", r.returncode == 0 and len(recs) == 1 and len(ln) == 1
+          and "TestOther" in ln[0] and "TestLimitFive" in ln[0]
+          and "lumos guard bind Systems/Limit '上限恆為5' TestOther" in ln[0], r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒")
+    r = _kb_add(root, v, "--test", "TestOther")
+    ln = _kb_lines(r)
+    check("③清單空 → 講還沒綁任何測試", r.returncode == 0 and len(ln) == 1 and "還沒綁任何測試" in ln[0], r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:t_a:b]")
+    r = _kb_add(root, v)
+    check("④單平台、清單含冒號、不帶 --test → 不提醒(不切冒號)", r.returncode == 0 and not _kb_lines(r), r.stderr)
+    for label, inv, test in (("⑤a 清單有預設前綴、配方沒有", "[test:py:TestLimitFive]", "TestLimitFive"),
+                             ("⑤b 清單沒前綴、配方有預設前綴", "[test:TestLimitFive]", "py:TestLimitFive"),
+                             ("⑥a Kotlin 反引號", "[test:`foo bar`]", "`foo bar`"),
+                             ("⑥b 前綴後帶空白", "[test:py: Baz]", "py: Baz")):
+        root, v = _kb_env(f"KEY:★INVARIANT★ 上限恆為5,超過必拒 {inv}", _KB_MULTI_CFG)
+        r = _kb_add(root, v, "--test", test)
+        check(f"{label} → 不提醒", r.returncode == 0 and not _kb_lines(r), r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:ios:Foo]", _KB_MULTI_CFG)
+    r = _kb_add(root, v)
+    ln = _kb_lines(r)
+    check("⑦清單寫 ios、不帶 --test/--platform → 講平台不同、叫 --platform ios 重新 kill-add", r.returncode == 0 and len(ln) == 1
+          and "平台" in ln[0] and "--platform ios" in ln[0] and "guard bind" not in ln[0], r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:zz:Foo]", _KB_MULTI_CFG)
+    r = _kb_add(root, v, "--test", "Foo")
+    ln = _kb_lines(r)
+    check("⑧未定義平台前綴 → 一行沒比對、rc0", r.returncode == 0 and len(ln) == 1 and "沒比對" in ln[0], r.stderr)
+    root, v = _kb_env()
+    r = _kb_add(root, v, "--test", "TestOther", old="LIMIT = 42")
+    warns = [x for x in _kr_err_lines(r) if x.startswith("⚠ 提醒:")]
+    check("⑨與原文失配同時成立 → 兩行、先失配後未綁", r.returncode == 0 and len(warns) == 2
+          and "測試清單" not in warns[0] and "TestOther" in warns[1], r.stderr)
+    root, v = _kb_env()
+    _kb_add(root, v, "--test", "TestOther")
+    r = _kb_add(root, v, "--covers", "java-concurrency")
+    ln = _kb_lines(r)
+    check("⑩只更新 covers(不帶 --test)→ 比既有那條、照樣提醒", r.returncode == 0 and len(ln) == 1 and "TestOther" in ln[0], r.stderr)
+    root, v = _kb_env()
+    r = _kb_add(root, v, "--test", "`foo bar`")
+    ln = _kb_lines(r)
+    check("⑪方法名不是識別字 → 不給 bind 指令、講綁不了", len(ln) == 1 and "綁不了" in ln[0] and "lumos guard bind Systems" not in ln[0],
+          r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TA, TB, TC, TD, TE]")
+    r = _kb_add(root, v, "--test", "TZ")
+    ln = _kb_lines(r)
+    check("⑫清單多於 3 支 → 只列前 3 支加總數", len(ln) == 1 and "TC" in ln[0] and "TD" not in ln[0] and "5 支" in ln[0], r.stderr)
+    root, v = _kb_env("KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]", _KB_MULTI_CFG)
+    r = _kb_add(root, v, "--test", "Foo", "--platform", "ios")
+    ln = _kb_lines(r)
+    check("⑬非預設平台不在清單 → 印 ios:Foo、bind 指令帶 --platform ios", len(ln) == 1 and "ios:Foo" in ln[0]
+          and "'上限恆為5' Foo --platform ios" in ln[0], r.stderr)
+    # ⑭貼進指令的字一律走同一支(代碼審 r1 正確性席:平台名來自設定檔鍵,原樣接進指令,照貼會執行任意指令)
+    bad, esc = "x;touch PWNED;#", "e\x1b[2K"
+    pd = {"multiplatform": True, "default_platform": "py", "platforms": {"py": {}, bad: {}, esc: {}, "-p": {}}}
+    for label, rec, line in (("unbound 平台名", {"invariant": "上限", "test": "Foo", "platform": bad}, "KEY:★INVARIANT★ 上限 [test:Bar]"),
+                             ("平台不同", {"invariant": "上限", "test": "Foo"}, f"KEY:★INVARIANT★ 上限 [test:{bad}:Foo]")):
+        msg = m._kill_binding_msg("Systems/L.md", rec, m._kill_test_binding(rec, line, pd), pd)
+        check(f"⑭{label}含 shell 字元 → 指令裡加引號", msg and "--platform 'x;touch PWNED;#'" in msg
+              and "--platform x;" not in msg, msg)
+    for label, rec, line in (("unbound 平台名", {"invariant": "上限", "test": "Foo", "platform": esc}, "KEY:★INVARIANT★ 上限 [test:Bar]"),
+                             ("平台不同", {"invariant": "上限", "test": "Foo"}, f"KEY:★INVARIANT★ 上限 [test:{esc}:Foo]"),
+                             ("合約片段", {"invariant": "上\x1b限", "test": "Foo"}, "KEY:★INVARIANT★ 上\x1b限 [test:Bar]"),
+                             # 代碼審 r2 正確性席:減號開頭會被當成選項,照貼失敗
+                             ("合約片段減號開頭", {"invariant": "-x", "test": "Foo"}, "KEY:★INVARIANT★ -x 上限 [test:Bar]"),
+                             ("平台名減號開頭", {"invariant": "上限", "test": "Foo", "platform": "-p"}, "KEY:★INVARIANT★ 上限 [test:Bar]")):
+        msg = m._kill_binding_msg("Systems/L.md", rec, m._kill_test_binding(rec, line, pd), pd)
+        check(f"⑮{label} → 不原樣印、不給可貼的指令", msg and "\x1b" not in msg and "lumos guard bind Systems" not in msg
+              and "再帶 --platform" not in msg and "不印可貼的指令" in msg, repr(msg))
+    print("  ✓ t_kill_add_warns_test_not_bound")
+
+
+def t_doctor_kill_test_not_bound():
+    """[綁的測試要在合約清單 S2] doctor P2 段第三個提醒:配方的測試不在對應合約行清單 → 列出;都在 → 不列;一篇兩條合約各對各;
+    對不回合約行、欄位壞的配方不列也不拖累其他條;設定檔讀不了整則不出現;非識別字不給 bind 指令;平台不同另講;
+    --ci 記 check-p2t warned 到本機帳(不進版控帳)。翻紅釘:不分篇各對各 → ③紅;整則一個保護 → ④紅;沒登本機帳分流 → ⑧紅。"""
+    print("t_doctor_kill_test_not_bound")
+    m = _load_lumos_inproc()
+    head = "殺傷力配方驗的測試不在合約的測試清單上"
+
+    def third(out):
+        i = out.find("[P2]")
+        j = out.find("\n[", i + 1)
+        s = out[i:j if j > 0 else len(out)] if i >= 0 else ""
+        k = s.find(head)
+        return s[k:] if k >= 0 else ""
+
+    root, v = _mk_kill_env()
+    two_inv = ["KEY:★INVARIANT★ 甲合約恆成立 [test:TA] [kill:recipes]", "KEY:★INVARIANT★ 乙合約恆成立 [test:TB] [kill:recipes]"]
+    notes = {
+        "Bound": _kr_note([_kr_recipe("prod.py")]),
+        "Unb": _kr_note([_kr_recipe("prod.py", test="TestOther")]),
+        "Two": _kr_note([_kr_recipe("prod.py", invariant="甲合約", test="TA"),
+                         _kr_recipe("prod.py", invariant="乙合約", test="TA", old="LIMIT")], inv_lines=two_inv),
+        "Odd": _kr_note([_kr_recipe("prod.py", invariant="不存在的片段", test="Z1"), _kr_recipe("prod.py", invariant="", test="Z2"),
+                         _kr_recipe("prod.py", invariant=5, test="Z3"), 3, _kr_recipe("prod.py", platform=["a"], test="Z4"),
+                         _kr_recipe("prod.py", test="TestOther2", old="LIMIT")]),
+        "Bt": _kr_note([_kr_recipe("prod.py", test="`foo bar`")]),
+    }
+    for n, t in notes.items():
+        (v / "Systems" / f"{n}.md").write_text(t, encoding="utf-8")
+    _kr_commit(root, "recipes")
+    r = run(v, "doctor", "--verbose")
+    s = third(r.stdout)
+    check("①不在清單上的列出(節點、測試、bind 指令)", "Unb" in s and "TestOther" in s
+          and "lumos guard bind Systems/Unb '上限恆為5' TestOther" in s, r.stdout[-2500:])
+    check("②在清單上的不列", "Systems/Bound" not in s, s)
+    check("③一篇兩條合約各對各:乙合約那條列、甲合約那條不列", "乙合約" in s and "甲合約" not in s, s)
+    check("④對不回合約行、欄位壞的不列,同篇好的照列", "TestOther2" in s and not any(z in s for z in ("Z1", "Z2", "Z3", "Z4")), s)
+    check("⑤非識別字 → 講綁不了、不給 bind 指令", "foo bar" in s and "綁不了" in s and "guard bind Systems/Bt" not in s, s)
+    check("⑥回傳碼不受影響(只提醒)", r.returncode == 0, r.stdout[-800:])
+    run(v, "doctor", "--ci")
+    evs = [e for e in _gov_events_all(v.parent) if e.get("gate") == "check-p2t"]
+    versioned = (v.parent / ".governance-log.jsonl")
+    vtxt = versioned.read_text(encoding="utf-8") if versioned.exists() else ""
+    check("⑦--ci 記 check-p2t(warned、不硬擋、帶節點)", evs and all(e.get("kind") == "warned" and e.get("hard") is False for e in evs)
+          and {"Unb", "Two", "Odd", "Bt"} <= {x for e in evs for x in e.get("nodes") or []}
+          and m._KNOWN_GATES.count("check-p2t") == 1, str(evs)[:400])
+    check("⑧寫在本機帳、不進版控帳", "check-p2t" not in vtxt and ("check-p2t", "warned") in m._GOV_LOCAL_PAIRS, vtxt[-400:])
+    (root / ".lumos" / "config.json").write_text("{bad", encoding="utf-8")
+    r = run(v, "doctor", "--verbose")
+    check("⑨設定檔讀不了 → 整則不出現", head not in r.stdout, r.stdout[-1500:])
+    for n in ("Unb", "Two", "Odd", "Bt"):
+        (v / "Systems" / f"{n}.md").unlink()
+    (root / ".lumos" / "config.json").write_text('{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+    _kr_commit(root, "only bound")
+    r = run(v, "doctor", "--verbose")
+    check("⑩都在清單上 → 不出現", head not in r.stdout, r.stdout[-1500:])
+    root, v = _kb_env(None, _KB_MULTI_CFG)
+    (v / "Systems" / "Ios.md").write_text(_kr_note([_kr_recipe("prod.py", test="ios:Foo")],
+                                                   inv_lines=["KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:ios:Foo] [kill:recipes]"]),
+                                          encoding="utf-8")
+    _kr_commit(root, "ios")
+    r = run(v, "doctor", "--verbose")
+    s = third(r.stdout)
+    check("⑪平台不同 → 列出並叫 --platform ios", "Ios" in s and "--platform ios" in s, r.stdout[-1500:])
+    print("  ✓ t_doctor_kill_test_not_bound")
 
 
 def t_doctor_kill_recipe_drift():
