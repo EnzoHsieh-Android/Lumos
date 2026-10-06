@@ -20223,7 +20223,7 @@ def cmd_teardown(yes=False, source=None):
             return 2
         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
-              "Claude 外掛 lumos-ledger 與市集 lumos-toolchain)。")
+              "Claude 外掛 lumos-ledger、lumos-context 與市集 lumos-toolchain)。")
         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
@@ -22107,20 +22107,20 @@ def _remove_codex_agent(home=None) -> list:
     return gone
 
 
-# ── Claude 事件帳外掛(Projects/Lumos事件帳_計劃 做法第 4 節)─────────────────────
+# ── Claude 外掛:事件帳與交棒脈絡(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點)────
 # 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
 # readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
-_LEDGER_MARKET = "lumos-toolchain"
-_LEDGER_PLUGIN = "lumos-ledger@lumos-toolchain"
-_LEDGER_MANUAL = (f"claude plugin uninstall {_LEDGER_PLUGIN} --scope user",
-                  f"claude plugin marketplace remove {_LEDGER_MARKET} --scope user")
+# 新增外掛不必先跑 marketplace update:資料夾型市集 install 時直接讀市集檔(2026-10-06 隔離設定資料夾實測)。
+_LUMOS_MARKET = "lumos-toolchain"
+_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain")
+_PLUGIN_RANK = {"ok": 0, "absent": 1, "no-source": 2, "failed": 3}   # 回傳值取最差的一支
 
 
-def _claude_json(claude, args):
+def _claude_json(claude, args, timeout=30):
     """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
     代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
     import json as _j
-    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
+    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
     data = _j.loads(r.stdout) if r.stdout.strip() else None
@@ -22142,23 +22142,30 @@ def _same_local_path(a, b):
     return norm(a) == norm(b)
 
 
-def _plugin_sync_msg(state: str, detail: str = "") -> str:
-    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。"""
+def _plugin_sync_msg(state: str, detail: str = "", pid: str = "") -> str:
+    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。pid 空 = 整段(市集或找不到 claude)。"""
+    who = f"Claude 外掛 {pid}" if pid else "Claude 外掛"
     if state == "ok":
-        return f"  ✓ Claude 事件帳外掛 {_LEDGER_PLUGIN} 已就位"
+        return f"  ✓ {who} 已就位"
     if state == "absent":
-        return f"  (略過 Claude 事件帳外掛:{detail or '找不到 claude 指令'})"
+        return f"  (略過 {who}:{detail or '找不到 claude 指令'})"
     if state == "no-source":
-        return f"  (略過 Claude 事件帳外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{detail})"
-    return f"  ⚠ Claude 事件帳外掛 {_LEDGER_PLUGIN} 沒裝好:{detail}"
+        where = "的 .claude-plugin/marketplace.json 沒有列出它" if pid else "沒有 .claude-plugin/marketplace.json"
+        return f"  (略過 {who}:lumos 來源 repo {where}——{detail})"
+    return f"  ⚠ {who} 沒裝好:{detail}"
 
 
-def _ledger_market(claude):
+def _lumos_plugin_market(claude):
     return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
-                 if x.get("name") == _LEDGER_MARKET), None)
+                 if x.get("name") == _LUMOS_MARKET), None)
 
 
-def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
+def _lumos_market_is_ours(mk, src):
+    """市集登記是不是我們的:本機資料夾、而且路徑就是 src(安裝、移除、手動指令三處共用)。"""
+    return bool(mk and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src))
+
+
+def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
     """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
     總共超過 budget 秒就不再開新的一次(每次查本身可能要等 claude 很久;代碼審 r3)。"""
     import time as _t
@@ -22175,14 +22182,28 @@ def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
     return False
 
 
-def _ledger_user_plugin(claude):
+def _lumos_plugin_user(claude, pid, timeout=30):
     """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
-    return any(x.get("id") == _LEDGER_PLUGIN and x.get("scope", "user") == "user"
-               for x in _claude_json(claude, ["plugin", "list", "--json"]))
+    return any(x.get("id") == pid and x.get("scope", "user") == "user"
+               for x in _claude_json(claude, ["plugin", "list", "--json"], timeout=timeout))
+
+
+def _lumos_plugin_listed(src):
+    """來源 repo 市集檔列了哪些外掛(id 形如 名稱@市集);讀不到回空集合。"""
+    import json as _j
+    try:
+        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return set()
+    plugins = mk.get("plugins") if isinstance(mk, dict) else None
+    if not isinstance(plugins, list):            # null、數字、物件都當沒列(代碼審 r1)
+        return set()
+    return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in plugins if isinstance(p, dict) and isinstance(p.get("name"), str)}
 
 
 def _sync_claude_plugin(source=None) -> str:
-    """確保 lumos-ledger 外掛裝好。回 ok / absent / no-source / failed;自己印訊息(成功與略過到 stdout、失敗到 stderr)。"""
+    """確保外掛清單的每一支都裝好。回最差的一支:ok / absent / no-source / failed;
+    自己印訊息(成功與略過到 stdout、失敗到 stderr),各支分開印。"""
     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
         print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
         return "absent"
@@ -22195,96 +22216,133 @@ def _sync_claude_plugin(source=None) -> str:
         print(_plugin_sync_msg("no-source", str(src)))
         return "no-source"
     if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
-        print(f"  (Claude 事件帳外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+        print(f"  (Claude 外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
     step = {"removed_old": False, "added": False}
     try:
-        if not _ledger_ensure_market(claude, src, step):
-            print(_plugin_sync_msg("failed", f"已有同名市集 {_LEDGER_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+        if not _lumos_plugin_ensure_market(claude, src, step):
+            print(_plugin_sync_msg("failed", f"已有同名市集 {_LUMOS_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
                   file=sys.stderr)
             return "failed"
         step["added"] = True
-        _ledger_ensure_plugin(claude)
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        print(_plugin_sync_msg("failed", f"{e}{_ledger_fail_hint(step)}"), file=sys.stderr)
+        print(_plugin_sync_msg("failed", f"{e}{_lumos_plugin_fail_hint(step)}"), file=sys.stderr)
         return "failed"
-    print(_plugin_sync_msg("ok"))
-    return "ok"
+    listed = _lumos_plugin_listed(src)
+    worst = "ok"
+    for pid in _LUMOS_PLUGINS:                # 各支獨立:一支失敗不影響下一支
+        if pid not in listed:
+            state = "no-source"
+            print(_plugin_sync_msg(state, str(src), pid))
+        else:
+            try:
+                _lumos_plugin_ensure(claude, pid)
+                state = "ok"
+                print(_plugin_sync_msg(state, "", pid))
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+                state = "failed"
+                print(_plugin_sync_msg(state, f"{e}{_lumos_plugin_fail_hint(step)}", pid), file=sys.stderr)
+        worst = max(worst, state, key=_PLUGIN_RANK.__getitem__)
+    return worst
 
 
-def _ledger_ensure_market(claude, src, step):
+def _lumos_plugin_ensure_market(claude, src, step):
     """市集登記成 src 這個本機資料夾。同名市集不是本機資料夾 → 回 False(不動它);
     本機路徑不同 → 先移除再加。失敗丟例外,step 記到哪一步。"""
-    mk = _ledger_market(claude)
+    mk = _lumos_plugin_market(claude)
     if mk is not None and not (mk.get("source") == "directory" and mk.get("path")):
         return False
     if mk is not None and not _same_local_path(mk["path"], src):
-        _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+        _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
         step["removed_old"], mk = True, None
     if mk is None:
         def ours():
-            now = _ledger_market(claude)
-            return bool(now and now.get("source") == "directory" and _same_local_path(now.get("path", ""), src))
+            now = _lumos_plugin_market(claude)
+            return _lumos_market_is_ours(now, src)
         try:
             _claude_do(claude, ["plugin", "marketplace", "add", str(src), "--scope", "user"])
         except (RuntimeError, subprocess.TimeoutExpired):   # 另一支同時跑先加好了、或逾時但其實寫進去了:以最終狀態為準
-            if not _ledger_wait(ours):
+            if not _lumos_plugin_wait(ours):
                 raise
     return True
 
 
-def _ledger_ensure_plugin(claude):
-    """使用者範圍裝上外掛;另一支同時在裝時以最終狀態為準。"""
-    if _ledger_user_plugin(claude):
+def _lumos_plugin_ensure(claude, pid):
+    """使用者範圍裝上這支外掛,裝完以列表確認真的在;另一支同時在裝時以最終狀態為準。"""
+    if _lumos_plugin_user(claude, pid):
         return
     try:
-        _claude_do(claude, ["plugin", "install", _LEDGER_PLUGIN, "--scope", "user"])
+        _claude_do(claude, ["plugin", "install", pid, "--scope", "user"])
     except (RuntimeError, subprocess.TimeoutExpired):
-        if not _ledger_wait(lambda: _ledger_user_plugin(claude)):
+        if not _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid)):
             raise
+        return
+    try:                                     # 第一次查詢撞到另一支同時在寫也交給等待重查(代碼審 r1)
+        seen = _lumos_plugin_user(claude, pid, timeout=10)   # 短逾時:claude 卡住時不拖太久(代碼審 r2)
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+        seen = False
+    if not (seen or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
+        raise RuntimeError("install 回成功但外掛列表裡沒有它")
 
 
-def _ledger_fail_hint(step):
+def _lumos_plugin_fail_hint(step):
     """同步外掛失敗時照實說做到哪一步。"""
     if step["removed_old"] and not step["added"]:
-        return ";舊的市集登記已移除、新的沒加上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+        return ";舊的市集登記已移除、新的沒加上,外掛暫時都沒生效——修好原因後重跑 lumos install --force"
     if step["added"]:
-        return ";市集已登記、外掛沒裝上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+        return ";市集已登記、這支外掛沒裝上,它暫時沒生效——修好原因後重跑 lumos install --force"
     return ";修好原因後重跑 lumos install --force"
 
 
 def _teardown_claude_plugin(source=None) -> str:
-    """移除 lumos-ledger 外掛與我們的市集。沒有 claude、兩者都沒有就安靜略過;成功說移掉了什麼;失敗附兩個手動指令。"""
+    """移除外掛清單的每一支與我們的市集。沒有 claude、全都沒有就安靜略過;成功說移掉了什麼。
+    外掛逐支獨立移除;全部成功才移除市集,任一支失敗就保留市集,手動補做只列失敗的那幾支加市集。"""
     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
-        print("  (略過移除 Claude 事件帳外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
+        print("  (略過移除 Claude 外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
         return "absent"
     claude = _py_which("claude")
     if not claude:
         return "absent"
     src = _lumos_src(source).resolve()
-    gone, errors, todo = [], [], []
-    try:                                     # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
-        if _ledger_user_plugin(claude):
-            _claude_do(claude, ["plugin", "uninstall", _LEDGER_PLUGIN, "--scope", "user"])
-            gone.append(f"外掛 {_LEDGER_PLUGIN}")
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        errors.append(str(e))
-        todo.append(_LEDGER_MANUAL[0])
-    try:                                     # 外掛那步失敗也照樣處理市集(各步獨立)
-        mk = _ledger_market(claude)
-        if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
-            _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
-            gone.append(f"市集 {_LEDGER_MARKET}")
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        errors.append(str(e))
-        todo.append(_LEDGER_MANUAL[1])
+    gone, errors, todo, notes = [], [], [], []
+    market_cmd = f"claude plugin marketplace remove {_LUMOS_MARKET} --scope user"
+    for pid in _LUMOS_PLUGINS:               # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+        try:
+            if _lumos_plugin_user(claude, pid):
+                _claude_do(claude, ["plugin", "uninstall", pid, "--scope", "user"])
+                gone.append(f"外掛 {pid}")
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+            errors.append(str(e))
+            todo.append(f"claude plugin uninstall {pid} --scope user")
+    if errors:                               # 有外掛沒移掉:保留市集(移掉市集會讓那支外掛變成找不到來源的孤兒)
+        try:                                 # 確定不是我們的市集就不叫人移除(代碼審 r1);判不出來照列、附一句先確認
+            mk = _lumos_plugin_market(claude)
+            ours = _lumos_market_is_ours(mk, src)
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+            ours = None
+        if ours:
+            todo.append(market_cmd)
+        elif ours is None:                   # 說明另起一行:zsh 互動模式不把行尾 # 當註解,整行貼上會變成多餘參數(代碼審 r2)
+            notes.append(f"市集 {_LUMOS_MARKET} 判不出是不是我們的:先跑 claude plugin marketplace list 確認來源是 lumos 的資料夾,是才跑最後一行")
+            todo.append(market_cmd)
+    else:
+        try:
+            mk = _lumos_plugin_market(claude)
+            if _lumos_market_is_ours(mk, src):
+                _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
+                gone.append(f"市集 {_LUMOS_MARKET}")
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+            errors.append(str(e))
+            todo.append(market_cmd)
     if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
         done = f"(已移除:{'與'.join(gone)})" if gone else ""
-        print(f"  ⚠ Claude 事件帳外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
+        print(f"  ⚠ Claude 外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
+        for n in notes:
+            print(f"  ({n})", file=sys.stderr)
         for c in todo:
             print(f"    {c}", file=sys.stderr)
         return "failed"
     if gone:
-        print(f"  ✓ 已移除 Claude 事件帳的{'與'.join(gone)}")
+        print(f"  ✓ 已移除 Claude 的{'與'.join(gone)}")
     return "ok"
 
 
