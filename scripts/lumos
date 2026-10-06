@@ -31066,6 +31066,11 @@ _NS_TAG_MODES = ("warn", "off")
 
 def _note_shape_tag_hints_parse(text):
     """note_shape.tag_hints → {mode, warns, bad_value};寫法同 _note_shape_negation_parse(看不懂照 warn 並講一句)。"""
+    return _note_shape_mode_parse(text, "tag_hints", "筆記前綴提醒")
+
+
+def _note_shape_mode_parse(text, key, label):
+    """note_shape.<key>(warn|off 的提醒開關)→ {mode, warns, bad_value};前綴提醒與結案摘要提醒共用。"""
     def _r(mode, warns=(), bad_value=False):
         return {"mode": mode, "warns": list(warns), "bad_value": bad_value}
     if text is None:
@@ -31074,17 +31079,17 @@ def _note_shape_tag_hints_parse(text):
     try:
         data = json.loads(raw)
     except Exception as e:
-        return _r("warn", [f".lumos/config.json 讀不了({e.__class__.__name__}),筆記前綴提醒照預設 warn"])
+        return _r("warn", [f".lumos/config.json 讀不了({e.__class__.__name__}),{label}照預設 warn"])
     ns = data.get("note_shape") if isinstance(data, dict) else None
     if ns is None:
         return _r("warn")
     if not isinstance(ns, dict):
-        return _r("warn", ["設定檔的 note_shape 不是物件,筆記前綴提醒照預設 warn"])
-    v = ns.get("tag_hints")
+        return _r("warn", [f"設定檔的 note_shape 不是物件,{label}照預設 warn"])
+    v = ns.get(key)
     if v is None:
         return _r("warn")
     if not isinstance(v, str) or v not in _NS_TAG_MODES:
-        return _r("warn", [f"note_shape.tag_hints={json.dumps(v, ensure_ascii=False)} 看不懂(只認小寫 warn/off),照 warn"], True)
+        return _r("warn", [f"note_shape.{key}={json.dumps(v, ensure_ascii=False)} 看不懂(只認小寫 warn/off),照 warn"], True)
     return _r(v)
 
 
@@ -31152,6 +31157,17 @@ def _ns_tag_hints_emit(root, items, fail):
                                    "notes": len({x[0] for x in items})})
     except Exception as e:
         print(f"提醒:筆記前綴提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
+
+
+def _ns_close_summary_doctor_lines(cfg_text):
+    """doctor 的一行:note_shape.close_summary 是 off 或寫了看不懂的值才講(照前綴提醒的先例)。"""
+    try:
+        r = _note_shape_mode_parse(cfg_text, "close_summary", "結案摘要提醒")
+    except Exception:
+        return []
+    if r["mode"] == "off":
+        return ["這個專案把結案摘要提醒關掉了(note_shape.close_summary=off)"]
+    return r["warns"][:1] if r["bad_value"] else []
 
 
 def _ns_tag_hints_doctor_lines(cfg_text):
@@ -31699,6 +31715,7 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
     # 否定現況句提醒的子開關:放在 ci 返回之前,推送前與 CI 路徑每次都唸(照 drift_check.old_sentence 那行)
     out += _ns_negation_doctor_lines(txt)
     out += _ns_tag_hints_doctor_lines(txt)
+    out += _ns_close_summary_doctor_lines(txt)
     out += _ns_slots_doctor_lines(root, mode, txt, ci)
     wf = root / ".github" / "workflows"
     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
@@ -32365,7 +32382,95 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None, slots_flag=False):
         _note_shape_negation_emit(root, neg_items, neg_mode, neg_fail)
     tag_items, tag_fail = _ns_tag_hints_collected(tags, tag_warns, tag_fail)
     _ns_tag_hints_emit(root, tag_items, tag_fail)
+    _ns_close_summary_emit(root, *_ns_close_summary_collect(root, staged, base_where, vault_rel, cfg_text))
     return rc
+
+
+_NS_CLOSE_SUMMARY_CAP = 5           # 一篇最多列幾行摘要
+_NS_CLOSE_SUMMARY_MAX_NOTES = 50    # 一次提交最多看幾篇(狀態行有動的才看;超過的不看、講一句)
+
+
+def _ns_close_summary_candidates(root, vault_rel):
+    """這次暫存、狀態那一行有動的筆記 → [(上一版路徑, 這一版路徑)](修改與改名;新建的不算);git 失敗回 None。"""
+    r = _lens_git(root, "diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=MR", "-G", "^status:",
+                  "--", vault_rel, binary=True)
+    if r is None or r.returncode != 0:
+        return None
+    parts, out, i = [os.fsdecode(x) for x in r.stdout.split(b"\0")], [], 0
+    while i < len(parts) and parts[i]:
+        tag = parts[i]
+        if tag.startswith("R"):
+            old, new, i = parts[i + 1], parts[i + 2], i + 3
+        else:
+            old = new = parts[i + 1]
+            i += 2
+        if new.endswith(".md"):
+            out.append((old, new))
+    return out
+
+
+def _ns_close_summary_collect(root, staged, base_where, vault_rel, cfg_text):
+    """提交前收「結案了、摘要沒跟著改」的筆記 → (items, 略過的篇數, 失敗原因或 None);items=[(相對圖譜的路徑, 摘要行)]。
+    只看狀態行有動的、一次批次讀新舊兩版(代碼審 r1:原本每篇兩次 git show,400 篇 78 秒);判定交給存量漂移那層的
+    _drift_close_summary_untouched。開關 note_shape.close_summary=off 就不收。"""
+    if not (staged and base_where):
+        return [], 0, None
+    try:
+        cfg = _note_shape_mode_parse(cfg_text, "close_summary", "結案摘要提醒")
+        for w in cfg["warns"]:
+            print(f"提醒:{w}", file=sys.stderr)
+        if cfg["mode"] == "off":
+            return [], 0, None
+        cands = _ns_close_summary_candidates(root, vault_rel)
+        if cands is None:
+            return [], 0, "git"
+        bad = [c for c in cands if "\n" in c[0] or "\n" in c[1]]     # 批次讀表達不了換行路徑:挑掉、算進沒看的篇數
+        cands = [c for c in cands if c not in bad]
+        skipped = max(0, len(cands) - _NS_CLOSE_SUMMARY_MAX_NOTES) + len(bad)
+        cands = cands[:_NS_CLOSE_SUMMARY_MAX_NOTES]
+        blobs = _nodehome_cat_blobs(root, [f"{base_where}:{o}" for o, _n in cands] + [f":{n}" for _o, n in cands])
+        if blobs is None:
+            return [], 0, "git"
+        items = []
+        for k, (_o, new) in enumerate(cands):
+            ob, nb = blobs[k], blobs[len(cands) + k]
+            if ob is None or nb is None:
+                continue
+            hit = _drift_close_summary_untouched(ob.decode("utf-8-sig", errors="replace"),
+                                                 nb.decode("utf-8-sig", errors="replace"))
+            if hit:
+                items.append((new[len(vault_rel) + 1:] if new.startswith(vault_rel + "/") else new, hit))
+        return items, skipped, None
+    except Exception as e:
+        return [], 0, e.__class__.__name__
+
+
+def _ns_close_summary_emit(root, items, skipped, fail):
+    """印「結案了、摘要沒跟著改」的提醒並記一筆 hinted 帳(check=close-summary);★只提醒,不改 rc、出錯只印一句★。
+    不靠待定詞表——rtb 的「等某階段一起做」不在表裡,只能靠結案那一刻抓(Projects/結案時摘要跟正文只改一邊_計劃 [S1])。"""
+    if fail:
+        print(f"提醒:結案時摘要的對照這次沒做成({fail}),不影響這道檢查的判定", file=sys.stderr)
+        return
+    if not items:
+        return
+    try:
+        out = [f"提醒:這次提交把 {len(items)} 篇筆記改成收尾狀態,摘要沒跟著改(只提醒、不擋)——摘要是現況,結案前寫的那幾行還成立嗎:"]
+        for rel, summ in items:
+            out.append(f"  {_esc_clean(rel[:-3] if rel.endswith('.md') else rel, 200)}")
+            for ln, pending in summ[:_NS_CLOSE_SUMMARY_CAP]:
+                out.append(f"    {_esc_clean(ln.strip(), 160)}" + ("  ← 還寫待定" if pending else ""))
+            if len(summ) > _NS_CLOSE_SUMMARY_CAP:
+                out.append(f"    …另 {len(summ) - _NS_CLOSE_SUMMARY_CAP} 行")
+        if skipped:
+            out.append(f"  (這次狀態有動的筆記超過 {_NS_CLOSE_SUMMARY_MAX_NOTES} 篇,另 {skipped} 篇沒看)")
+        out.append('  改一行:lumos summary-line <節點> "<要換掉的片段>" "<結案後的說法>"')
+        out.append("關掉這個提醒:.lumos/config.json 的 note_shape.close_summary 設成 off")
+        print("\n".join(out), file=sys.stderr)
+        _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:結案摘要沒跟著改 {len(items)} 篇",
+                            extra={"check": "close-summary", "rules": ["close-summary"],
+                                   "lines": sum(len(x) for _r, x in items), "notes": len(items), "skipped": skipped})
+    except Exception as e:
+        print(f"提醒:結案時摘要的對照這次沒做成({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
 
 
 def _ns_relaxed_record(root, base_where, tip_where, relaxed):
@@ -34263,10 +34368,11 @@ _DRIFT_SETTLED_MARK_RE = re.compile(r"[(（]已裁定[:：]")
 # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
 # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
 _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "m1", "retire", "count")
+_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "m1", "retire", "count")
 _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
-                     "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
+                     "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定",
+                     "c7": "自己已收尾、摘要還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
                      "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上"}
 # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
 # m1 要推送範圍才判得了,scan 不列;retire(RULE 撤除條件)筆記格子第 3 步起列,是推送那次漏掉的兜底
@@ -34424,6 +34530,8 @@ def _drift_state_findings(env, only=None):
             out += _drift_c2(env, rel)
         if st not in _DRIFT_SETTLED:              # 已收尾的筆記是歷史紀錄,裡面的待定句不算
             out += _drift_c6(env, rel)
+        else:                                     # ……但摘要是「現況」,收尾了還寫待定就是沒跟著改(c7)
+            out += _drift_c7(env, rel)
         if ty == "verification":
             plans = _drift_c3_hit(env, rel, ti=ti)
             if plans:
@@ -34560,6 +34668,52 @@ def _drift_c6(env, rel):
             out.append({"kind": "c6", "path": rel, "line": no, "text": _drift_line_text(text, no), "related": hit,
                         "why": "連到已收尾的筆記、同一句還寫待定:" + "、".join(p[:-3] for p in hit[:3])})
     return out
+
+
+def _drift_c7(env, rel):
+    """c7:已收尾的筆記,摘要裡有一行(不分前綴)寫著待定 → 一行一筆(Projects/結案時摘要跟正文只改一邊_計劃)。
+    遮罩規則照 c6:已裁定括號、全形引號、雙括號連結裡的字不算。正文不看(歷史紀錄)。"""
+    text = env_text(env, rel)
+    if not text:
+        return []
+    return [{"kind": "c7", "path": rel, "line": no, "text": _drift_line_text(text, no), "related": [],
+             "why": "筆記已收尾,摘要這一行還寫待定——換成結論,或補已裁定括號"}
+            for no, ln, reg in _drift_pending_lines(text) if reg == "summary" and _drift_summary_is_current(ln)]
+
+
+# 摘要裡記「當時」的前綴:WHY 是決策紀錄、PITFALL 是事故紀錄,寫的本來就是當時的情況,收尾後照留(代碼審 r1 正確性席:
+# 本 repo 自掃 4 筆有 2 筆是這種)
+_DRIFT_SUMMARY_HISTORY_PREFIXES = ("WHY:", "PITFALL:")
+
+
+def _drift_summary_is_current(line):
+    """這行摘要算現況、而且寫著待定(c7 與結案摘要提醒共用)。"""
+    return not line.strip().startswith(_DRIFT_SUMMARY_HISTORY_PREFIXES) and bool(_drift_pending_clauses(line))
+
+
+def _drift_note_status(text):
+    """筆記全文 → 開頭欄位 status(照 parse_frontmatter 的讀法,它已經剝掉引號);讀不到回 None。"""
+    lines = text.split("\n")
+    e = _drift_fm_end(lines)
+    if not e:
+        return None
+    v = parse_frontmatter(lines[1:e])[0].get("status")
+    return v.strip() if isinstance(v, str) else None
+
+
+def _drift_close_summary_untouched(old_text, new_text):
+    """結案那一刻的判定(Projects/結案時摘要跟正文只改一邊_計劃 [S1]):給同一篇筆記的上一版與這一版全文,
+    狀態從不是收尾值改成收尾值、摘要行逐字沒變 → [(摘要行, 這行是不是還寫待定)](還寫待定的排前面);否則 None。
+    ★提交前的筆記形狀檢查只呼叫這一支★:收尾值、摘要切法、待定判定都在這層、跟 c7 同一套(單行摘要、沒前綴的行照算;
+    代碼審 r2 正確性、架構對齊席)。"""
+    def _summ(text):
+        return [ln for _no, ln, reg in _drift_pending_lines(text) if reg == "summary"]
+    new_summary = _summ(new_text)
+    if (not new_summary or _drift_note_status(new_text) not in _DRIFT_SETTLED
+            or _drift_note_status(old_text) in _DRIFT_SETTLED or _summ(old_text) != new_summary):
+        return None
+    rows = [(ln, _drift_summary_is_current(ln)) for ln in new_summary]
+    return sorted(rows, key=lambda r: not r[1])
 
 
 def _drift_backrefs(env, rel):
@@ -36868,6 +37022,8 @@ def _drift_fix_hint(kind, path, line, names=None):
         return [base + "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)"]
     if kind == "c6":
         return [base + ' --settled "<結論>"']
+    if kind == "c7":
+        return [f'lumos summary-line {node} "<這一行要換掉的片段>" "<結案後的說法>"(或在這一行補「(已裁定:日期 結論)」)']
     if kind == "probe":
         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
                 f'lumos drift ack {node} {line} --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
@@ -36975,11 +37131,19 @@ _DRIFT_FIX_KIND_ARGS = {"c1": lambda o: None, "c2": _drift_fix_c2_args, "c3": _d
                         "c4": lambda o: None, "c5": lambda o: None, "c6": _drift_fix_c6_args, "count": lambda o: None}
 
 
+# 沒有 drift fix 改法的種類 → 該怎麼改的說明
+_DRIFT_NO_FIX = {
+    "probe": ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
+              "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\""),
+    "c7": ("--kind c7 沒有 drift fix 改法:用 lumos summary-line <節點> \"<要換掉的片段>\" \"<結案後的說法>\" 改那一行,"
+           "或在那一行補「(已裁定:日期 結論)」"),
+}
+
+
 def _drift_fix_args_err(kind, o):
     """--kind 與參數的組合合不合 → 錯誤或 None(存量漂移改法 第 1 節的組合表)。"""
-    if kind == "probe":
-        return ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
-                "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\"")
+    if kind in _DRIFT_NO_FIX:
+        return _DRIFT_NO_FIX[kind]
     if kind not in _DRIFT_FIX_KINDS:
         return f"--kind 只能是 {'/'.join(_DRIFT_FIX_KINDS)}"
     extra = {k for k in _DRIFT_FIX_OPTS if o.get(k) not in (None, False)} - _DRIFT_FIX_ALLOWED[kind]
@@ -38998,7 +39162,7 @@ def _drift_doctor_lines(env):
         parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
     if parts:
         out.append(";".join(parts))
-    for k in ("c1", "c2", "c3", "c4", "c5", "c6"):
+    for k in ("c1", "c2", "c3", "c4", "c5", "c6", "c7"):
         rows = [f for f in left if f["kind"] == k]
         nd = sum(1 for f in done if f["kind"] == k)
         if rows:     # 只剩已表態的不開段(全靜默;代碼審 r2 正確性席:表態完那一段永遠不會安靜);全部清單看 drift scan

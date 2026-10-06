@@ -1,0 +1,705 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index 22f1a754..c075f73f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -1,16 +1,16 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-28
+-updated: 2026-10-03
+-responsibility: 負責 lumos drift 家族(check、scan、fix、ack、exam)、六種狀態一致檢查(含 c6 連到已收尾筆記還寫待定)、推送時的舊句檢查(m1)與它的定義快取、修復帳與表態檔、計劃收尾的連帶待辦、結案作廢與加決策翻決策之後列出連到那篇還寫待定的句子、drift fix --close 的兩道擋與 doctor Z 段,以及推送前掛鉤與 CI 裡呼叫 drift check 的那一段、緊接在後呼叫 note-audit reread-check(回頭重讀提醒)的那一段;不負責新寫句子的形狀(筆記內容閘)、判定者怎麼判(筆記內容審)、reread-check 本身判什麼(筆記內容審)、guard settle 本身與改句、轉正日期推導(guard-kill)、掛鉤與 CI 其他閘的順序(bound-tests-gate)
++updated: 2026-10-07
++responsibility: 負責 lumos drift 家族(check、scan、fix、ack、exam)、七種狀態一致檢查(含 c6 連到已收尾筆記還寫待定、c7 自己已收尾摘要還寫待定)、推送時的舊句檢查(m1)與它的定義快取、修復帳與表態檔、計劃收尾的連帶待辦、結案作廢與加決策翻決策之後列出連到那篇還寫待定的句子、drift fix --close 的兩道擋與 doctor Z 段,以及推送前掛鉤與 CI 裡呼叫 drift check 的那一段、緊接在後呼叫 note-audit reread-check(回頭重讀提醒)的那一段;不負責新寫句子的形狀(筆記內容閘)、判定者怎麼判(筆記內容審)、reread-check 本身判什麼(筆記內容審)、guard settle 本身與改句、轉正日期推導(guard-kill)、掛鉤與 CI 其他閘的順序(bound-tests-gate)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/hooks/pre-push
+   - .github/workflows/ci.yml
+   - governance/eval/drift-exam/old-sentence/old_sentence_exp.py
+   - governance/eval/stale-ref/banner.py
+   - governance/eval/stale-ref/breakdown.py
+   - governance/eval/stale-ref/dossier.py
+   - governance/eval/stale-ref/recall.py
+@@ -22,20 +22,21 @@ about_code:
+   - governance/eval/old-names/mktsv.py
+   - governance/eval/old-names/oldnames_ref.py
+   - governance/eval/old-names/recall.py
+   - governance/eval/old-names/sample.py
+   - governance/eval/old-names/validate_vs_m1.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/node-content
+ summary: |-
++  WHY:[2026-10-07 [[Projects/結案時摘要跟正文只改一邊_計劃]]]新增 c7「自己已收尾、摘要還寫待定」只列出不擋,修法指 lumos summary-line;提交前另提醒「狀態改成收尾值、摘要沒動」 [出處:rtb 漂移盤點 1-2 兩篇已結案 Issue 摘要還寫尚未裁定、等某階段一起做] [因:既有只在 drift fix --close 擋待定決策行,手動改狀態與舊帳沒人看] [不選:比摘要與正文的共同條款編號(兩個實例都沒有)] [test:t_drift_c7_settled_summary_pending] [test:t_note_shape_close_summary_untouched]
+   WHY:c6 判子句有沒有待定詞前先把 [[…]] 連結(含別名)遮掉,找連結照用原文——連到標題寫「…還沒做」的已結案 Issue 不代表這句在待定 [出處:2026-10-06 [[Projects/c6不看連結標題裡的待定詞_計劃]];rtb 盤點兩條誤報] [因:原本拿含連結文字的子句比對待定詞] [test:t_drift_c6_ignores_link_title_words]
+   WHY:`lumos push-range` 把 _push_range_start 的起點印成一行範圍給推送前掛鉤用:推分支的新分支首推時,會擋或決定擋不擋的那幾步(波及計算、分級、雙向門放行、code-loop check、逃逸記帳、給 doctor 的觸及清單)改用它;頂端已在主線印頂端..頂端,判不了或起點是空樹印這個 repo 自己的空樹(SHA-256 也對)。掛鉤只在遠端舊值全零而且是 refs/heads/* 時呼叫,舊值找不到、推標籤、一般增量照舊;指令不存在或失敗退回空樹、被訊號殺掉停下 [出處:2026-10-06 [[Projects/新分支首推會擋的閘改用真起點_計劃]];rtb 回報新分支首推被 715 條新增告警誤擋] [因:掛鉤對新 ref 拿空樹當起點,整個 repo 被當成新改動;起點只在 _push_range_start 算一處,不在掛鉤另算] [不選:舊值找不到也走它(找不到主線時只查最後一個提交,比空樹鬆)] [test:t_push_range_cli] [test:t_prepush_new_branch_block_range]
+   WHY:新增 c6「沒收尾的筆記在同一子句裡寫了待定詞、又連到已收尾的筆記」:只列出不擋推送,修法 drift fix --kind c6 --settled 在待定子句結尾補「(已裁定:日期 結論,見 [[…]])」;set 收尾、drift fix c2 --close、decision-add、decision-supersede 之後當場列出連到那篇還寫待定的行 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:rtb 第三輪 29 筆「修了又壞」大多是一篇結案了、別篇還寫「等它」「待裁定」] [不選:待定詞收「待辦、TODO」(試算時名詞造成大量誤報);只在下指令當下列一次(之後再寫的抓不到)] [test:t_drift_c6_detects_pending_clause_to_settled_note] [test:t_drift_fix_c6_appends_settled_bracket] [test:t_settle_backrefs_listed_after_close_and_decisions]
+   WHY:drift fix --kind c2 --close 在寫入前擋兩件事:摘要 DECISION: 行還寫待定(要 --decision 換句)、還有沒結案的回頭條件(要逐行 [closed:] 或 --keep-revisits 寫理由,理由與行號記進修復帳);lumos set 結 Issue 維持只列出 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:結案後才列出,現況就是沒人改;工具鏈自己有 3 篇已結案 Issue 的決策行還寫未處置] [不選:連 set 一起擋(set 是通用欄位寫入,擋了會卡住別的用途)] [test:t_drift_close_requires_decision_for_pending_line] [test:t_drift_close_blocks_live_revisits]
+   WHY:數量標記 `[count:路徑::名稱=N]` 由 drift scan 評估(新種類 count,同一棵樹、同一個總預算):用標準庫 ast 數 Python 模組最上層恰好一次的字面值集合(元組、清單、集合、字典、包一層 frozenset/set/tuple/list)與列舉成員,集合類照 Python 去重;找不到名稱、定義不只一次、非字面值、展開、非常數成員、列舉別名、列舉底線名稱與 _ignore_、Flag 組合值、列舉本體看不懂的語句、auto() 混明寫值、定義後被改過或被重新綁定(名稱在讀取、屬性名、關鍵字參數名、字串常數、import 模組路徑以外的每次出現都算綁定)、非 Python 一律判不了列成問題,不當成 0(看不懂就判不了,不略過、不模擬 Python 的列舉特例);doctor Z 段只數標籤不評估(同回頭條件,Z 段不讀程式檔);drift fix --kind count 標籤整個重寫、句子裡恰好一個前後不是英數字的舊數字一起改,寫之前先重抽確認 [出處:2026-10-04 [[Projects/數量標記檢查_計劃]]] [因:rtb 第三輪有一處數量從寫下就錯、沒有任何檢查在評] [不選:在 doctor N 段評估(第二條評估路徑、碰守衛面);推送擋(依賴欄位那份的待解問題大多是推送擋才有)] [test:t_count_tag_scan] [test:t_count_tag_fix]
+   PITFALL:本機設 log.showSignature=true 時,簽章提交的編號前面夾 gpg 訊息,版本清單解析原本跳過認不得的片段、沿用上一個提交編號,簽章提交整個消失,寫下時不成立的條件被說成「寫下時就已成立」,日期欄也夾進 gpg 訊息 [出處:2026-10-03 代碼審 code-回頭條件寫下時就成立 r2 正確性席] [根因:git 輸出受本機設定影響,解析不認得時用猜的] [修法:版本清單與取日期都帶 --no-show-signature;解析碰到認不得的片段整份判不了;日期不是 YYYY-MM-DD 就不給] [test:t_note_versions_stop_at_copy]
+   WHY:drift scan 對現在成立的回頭條件與撤除條件往回找寫下那一版(主線第一父鏈、條件組一模一樣、走過的每一版恰好一行、停在複製),在那一版判同一組條件,成立就標「寫下時就已成立」、已表態的照標;不用 blame(以文字行認同一條,改了待辦文字就算新寫,跟推送判定的「同一條」對不上);每一步不確定就判不了(標錯比漏標糟),一次最多在 6 個提交判 [出處:2026-10-03 [[Projects/回頭條件寫下時就成立_計劃]]] [因:表態後只剩「已表態」一行,生來就成立的舊條件看不出來] [test:t_drift_born_true_scan]
+   WHY:舊句檢查帳的 4 KB 裁法改呼叫共用的 _gate_event_fit(跟筆記形狀擋的放寬帳共用;家在 [[Systems/reversibility-governance-ledger]]),節點清單的截斷上限由這邊傳入,行為不變 [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:筆記形狀擋的放寬帳要同一種 4 KB 裁法,另寫一份就是第二種做法] [test:t_drift_m1_events_and_budget]
+   WHY:推送時多抽 RULE 摘要行的 [retire:when-*](_retire_lines,已作廢的不抽),沿用回頭條件同一個轉變判定、起點也用同一支抽;在核心判定之後另跑一支、自己一個 20 秒截止時間(不吃核心剩下的),判不了只列出不擋,子開關 drift_check.retire 沒寫照總開關;表態(drift ack --kind retire)記接回續行的整條,改了續行裡的條件舊表態就失效;記帳同閘其他判定放行不寫 [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 2 步] [因:RULE 行長命又多,判不了就擋會讓推送卡在跟這次改動無關的條件上;另寫判定會跟回頭條件各自漂] [test:t_slots_retire_when_push] [test:t_slots_retire_followups]
+   WHY:回頭條件(probe)與 RULE 撤除條件(retire)成立後的照留要嘛 `--tracked-in` 綁一篇開著的 Issue 或計劃(tracked_in,那篇收尾就失效),要嘛記 30 天期限(until);舊表態兩個都沒有,到 _DRIFT_ACK_LEGACY_UNTIL 為止。期限與開不開只在 drift scan 與 doctor(多一行已失效筆數)算,推送檢查不看日期也不看開不開,只對有起點、這次新寫就已成立的要求綁了去處 [出處:2026-10-06 [[Projects/照留表態要有期限或去處_計劃]];rtb 第三輪提案 B1、B2] [因:照留沒期限等於永久消音,新寫就成立的補一筆照留就能過;推送看日期或看別篇狀態會讓同一個提交今天綠明天紅、分支在合併前因別處收尾而變紅] [test:t_drift_check_born_needs_routed_ack] [test:t_drift_ack_live_rules]
+@@ -91,24 +92,26 @@ summary: |-
+ related:
+   - "[[Projects/存量漂移防線_計劃]]"
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+   - "[[Systems/guard-kill]]"
+   - "[[Systems/筆記內容審]]"
+ ---
+ # 存量漂移守衛
+ 
+ 白話:句子寫進圖譜那天是對的,後來別處的狀態變了(合約轉正、計劃收尾、提交了),句子就過期了。這篇管的機制在「狀態改了」那一刻把連著的舊句子指出來。設計與取捨全在 [[Projects/存量漂移防線_計劃]],這裡只記程式碼看不出來的部分。
+ 
+-## 六種狀態一致檢查
++## 七種狀態一致檢查
+ 
+ scan、check、doctor Z 共用同一支檢查,也能跑在任一個提交的樹上(考試與推送檢查用)。種類與「只列出/會擋」的分法見計劃〈做法〉第 1 節第 4、5 點;轉正預告句的比對跟 [[Systems/guard-kill]] 的 settle 改寫共用同一支,兩邊不能各寫一份——各寫一份時,settle 改完的句子可能又被認成預告,轉正後的推送被自己擋。
+ 
++c7(2026-10-07,[[Projects/結案時摘要跟正文只改一邊_計劃]]):已收尾的筆記,摘要裡有一行寫著待定詞就列——c6 只看沒收尾的筆記(已收尾的正文是歷史紀錄),但摘要是現況,收尾了還寫待定就是結案時沒跟著改。遮罩照 c6(已裁定括號、全形引號、雙括號連結不算);WHY 與 PITFALL 行是當時的決策與事故紀錄,不算(代碼審 r1:本 repo 自掃 4 筆有 2 筆是這種);推送時跟 c2–c6 一樣只列出;沒有 drift fix 路徑,修法指 `lumos summary-line`。同一案在提交前的筆記形狀檢查多一則提醒:這次把狀態改成收尾值、摘要一行都沒動就列出摘要行(不靠詞表),見 [[Systems/筆記內容閘]]。
++
+ ## 條件式回頭條件(乙)
+ 
+ 回頭條件可以寫成機器判得了的條件加期限,例如 `REVISIT:[when-file:<路徑>][by:<日期>] 待辦`,文法與判定規則在 [[Projects/存量漂移防線_計劃]]〈做法〉第 0、2 節。「這行是不是 REVISIT」全庫只有一支判定(doctor E5、筆記形狀擋、筆記內容審都用它),三處餵給它的也是同一版文字(剝掉行內程式碼,含雙反引號);各處自己判、或餵的東西不同,同一行會在一處算條件式、另一處算壞損或根本看不見(乙代碼審 r1:E5 原本只剝單反引號,雙反引號裡的範例在 E5 被唸到期、另兩層看不到)。推送時擋的是「這次推送讓條件從不成立變成立」;「同一條」只看條件標記,只改待辦文字或期限還是同一條,改了條件標記就是新寫的,新寫而已經成立的一樣擋。
+ 
+ ## 跟設計稿不一樣的兩處(實作時決定)
+ 
+ - **考試的「誤報」不算同一篇同一種的兄弟句**:c1 一句一筆,一篇守衛紀錄有四句預告句,題目只考 TEST 那句,另外三句是同一個轉正事件的真發現,算成誤報會把「抓得對」算成「亂抓」。同一篇別種的發現、別篇的發現照算(代碼審 r1 外家席:第一版把同一篇全部排除,誤報被低估)。
+ - **doctor 的閘提醒放在開頭、發現放在 Z 段**:設計把兩者都寫在 Z 段。開關不是 block、CI 沒呼叫這兩行照筆記形狀擋與筆記內容審的位置放在 doctor 開頭(代碼審 r1 架構對齊席:同一種閘提醒不該有兩種呈現);c1–c5 的筆數是筆記內容的發現,跟 E5 一樣放 Z 段;某一種只剩已表態的不開段(全靜默,完整清單看 drift scan)——設計寫的是「照列、標已表態」,那是 scan 的做法,doctor 照列會讓表態完那一段永遠不安靜(代碼審 r2 正確性席)。開關提醒只在專案自己寫了開關、或已經接線時才印(代碼審 r1 外家席:關掉了要看得見;第一版只看接線,r2 改成一律印,r3 發現沒寫設定時預設就是 warn,每個專案每次 doctor 都多一行、也破壞既有軟段計數測試,收成現在這樣)。2026-09-30 預設改成 block 之後,不是 block 只剩專案自己寫了 warn/off,「沒寫設定、已接線時唸是預設的 warn」那一支拿掉;設定寫壞(拼錯、null、不是物件、JSON 壞)照預設 block,照樣講出寫錯的地方。
+ 
+ - **乙的 symbol/test 語料比設計寬一點**(乙代碼審 r1 正確性席):設計寫「副檔名清單裡的程式檔」,實作另收沒副檔名、開頭是 `#!` 的檔(主程式 scripts/lumos 就是這種);帶路徑的條件直接讀那支檔,不管它算程式檔還是測試檔——作者明寫了哪支檔,工具不該再用分類把它排掉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+index e03e976f..5402a3ec 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-27
+-updated: 2026-10-05
++updated: 2026-10-07
+ responsibility: 管筆記內容的機械擋:提交前與推送前擋新寫的程式行號引用、沒寫來源的現況描述(note-shape),以及兩層共用的「範圍裡新寫、終點還在的筆記行」抽取與行判定(區塊、小標題、結構行、內容編號);另管提交前只提醒不擋的否定現況句提醒與它的量測程式;不管程式檔歸屬(那是每支檔有家)、不管推送前判定者怎麼判(那是筆記內容審)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/hooks/pre-commit
+   - scripts/hooks/pre-push
+   - .github/workflows/ci.yml
+   - governance/eval/negation-revisit/neg_revisit_measure.py
+ tags:
+   - type/system
+@@ -56,10 +56,14 @@ verified_by:
+ 
+ 設計、條款、三輪設計審的處置見 [[Projects/筆記形狀擋_計劃]];問題來源與裁定見 [[Issues/筆記把程式現況寫進脈絡而漂移_rtb實測回饋]]。治理帳寫入沒上鎖的問題不在這裡處理,見 [[Issues/治理帳多個寫入者都沒上鎖]]。
+ 
+ 這篇管 `scripts/lumos` 裡的 note-shape 子指令(提交前 `--staged`、推送前與 CI `--diff`)、doctor 開頭那幾行筆記形狀擋提醒(開關、CI 接線、事後掃描,含格子那幾行),以及為它加的共用零件:共用抽取器的三個選項與釘版本解析、refcheck 對釘版本改用那個提交驗、摘要行前綴規則表的來源判定。範圍、上線點、合併的算法本身的家是 [[Systems/每支檔有家]]。另外管三處呼叫它的地方:`scripts/hooks/pre-commit` 裡的筆記形狀擋那一段、`scripts/hooks/pre-push` 裡推送範圍那一次呼叫、`.github/workflows/ci.yml` 的 note-shape 那一步(`--no-verify` 繞過時的後盾;這三支檔的其餘部分各有各的家)。
+ 
+ 怎麼放行:行號改寫成「哪支檔的哪個函式」、寫測試名,或釘版本 `路徑@<至少 12 位提交編號>:行號`;現況描述刪掉,或只寫程式碼答不了的並帶 `[來源:部署|資料庫|生產|外部|人工]`。誤擋單次用 `LUMOS_SKIP_NOTE_SHAPE=1`(會留帳);整個專案先只提醒,把 `.lumos/config.json` 的 `note_shape.gate` 設成 warn。
+ 
+ 另管否定現況句提醒([[Projects/否定現況句配回頭條件_計劃]]):提交前(`--staged`)對新寫的正文與摘要行判「還沒有/尚未…」這類會過期的現況句,印一段提醒,教人把那一句搬成獨立一行回頭條件;只提醒、不擋、不算違規,推送前、CI 與 doctor 事後掃描都不算。子開關是 `.lumos/config.json` 的 `note_shape.negation`(warn/off,預設 warn),關掉時 doctor 唸一行。判定照量測程式 `governance/eval/negation-revisit/neg_revisit_measure.py` 的第三版,字眼表抄自它;上線前在工具鏈 300 個、rtb 182 個提交重跑過,兩邊逐行相同。上線第 8 週由人用量測程式重產被提醒的行、抽樣判準度,不到三成就撤掉(那篇計劃的 RETIRE-IF)。
+ 
+ REVISIT:2026-11-27 照計劃的 RETIRE-IF 量三個數:被擋後繞過的比例、上線後新增行的抽樣、零觸發;同一天在 rtb 重做一次漂移抽樣
++
++## 結案時摘要沒跟著改的提醒(2026-10-07)
++
++提交前(只在 `--staged`)多一則只提醒、不改回傳碼的檢查:這次暫存的筆記裡,開頭 `status` 從不是收尾值改成收尾值(存量漂移守衛的收尾值集合)、摘要內容跟上一版逐字相同,就列出那篇的摘要行(最多 5 行,含待定詞的排前面、標「還寫待定」)與 `lumos summary-line` 形狀;新建的筆記不算,改名同時結案的照算。只看這次狀態那一行有動的筆記(`git diff --cached -G ^status:`)、最多 50 篇,新舊兩版一次批次讀(第一版每篇兩次 git,400 篇 78 秒,改後 2.4 秒);判定交給存量漂移那層的一支入口 `_drift_close_summary_untouched(上一版全文, 這一版全文)`——收尾值、摘要切法(跟 c7 同一套,單行摘要與沒前綴的行照算)、待定判定、WHY 與 PITFALL 不算現況,都只在那層寫一份,這邊不碰存量漂移的其他函式。記一筆 note-shape hinted(check=close-summary);關掉用 `note_shape.close_summary=off`,關掉或值寫錯時 doctor 開頭講一句,值寫錯提交時也講。路徑含換行的筆記批次讀表達不了,挑掉算進沒看的篇數。不靠待定詞表——rtb 那篇「等某階段一起做」不在表裡,只能靠結案那一刻抓。出錯只印一句。單源 [[Projects/結案時摘要跟正文只改一邊_計劃]];已結案舊帳由 [[Systems/存量漂移守衛]] 的 c7 列。
+diff --git a/scripts/lumos b/scripts/lumos
+index 36efa9cc..4938b238 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -31059,39 +31059,44 @@ def _ns_negation_doctor_lines(cfg_text):
+ 
+ # ★筆記前綴的結構性提醒★(Projects/筆記標籤_過時判定與按需載入_計劃〈結構性提醒〉第 0 步:W4 RULE 生命週期)
+ # 自成一套,照否定現況句提醒的路但不共用它的容器與開關:子開關 note_shape.tag_hints(warn 預設 / off),
+ # 只在提交前算、不進違規清單、不改回傳碼;出錯只印一句,不影響否定現況句提醒與判定(計劃 [S4][S7])。
+ # 判定沿用既有 rule_lifecycle_warnings,不另寫;只看這次新寫的摘要 RULE 行(上線點之前的舊行不提醒)。
+ _NS_TAG_MODES = ("warn", "off")
+ 
+ 
+ def _note_shape_tag_hints_parse(text):
+     """note_shape.tag_hints → {mode, warns, bad_value};寫法同 _note_shape_negation_parse(看不懂照 warn 並講一句)。"""
++    return _note_shape_mode_parse(text, "tag_hints", "筆記前綴提醒")
++
++
++def _note_shape_mode_parse(text, key, label):
++    """note_shape.<key>(warn|off 的提醒開關)→ {mode, warns, bad_value};前綴提醒與結案摘要提醒共用。"""
+     def _r(mode, warns=(), bad_value=False):
+         return {"mode": mode, "warns": list(warns), "bad_value": bad_value}
+     if text is None:
+         return _r("warn")
+     raw = text.decode("utf-8-sig", errors="replace") if isinstance(text, (bytes, bytearray)) else str(text)
+     try:
+         data = json.loads(raw)
+     except Exception as e:
+-        return _r("warn", [f".lumos/config.json 讀不了({e.__class__.__name__}),筆記前綴提醒照預設 warn"])
++        return _r("warn", [f".lumos/config.json 讀不了({e.__class__.__name__}),{label}照預設 warn"])
+     ns = data.get("note_shape") if isinstance(data, dict) else None
+     if ns is None:
+         return _r("warn")
+     if not isinstance(ns, dict):
+-        return _r("warn", ["設定檔的 note_shape 不是物件,筆記前綴提醒照預設 warn"])
+-    v = ns.get("tag_hints")
++        return _r("warn", [f"設定檔的 note_shape 不是物件,{label}照預設 warn"])
++    v = ns.get(key)
+     if v is None:
+         return _r("warn")
+     if not isinstance(v, str) or v not in _NS_TAG_MODES:
+-        return _r("warn", [f"note_shape.tag_hints={json.dumps(v, ensure_ascii=False)} 看不懂(只認小寫 warn/off),照 warn"], True)
++        return _r("warn", [f"note_shape.{key}={json.dumps(v, ensure_ascii=False)} 看不懂(只認小寫 warn/off),照 warn"], True)
+     return _r(v)
+ 
+ 
+ def _ns_tag_hints_prepare(cfg_text):
+     """提交前讀 note_shape.tag_hints → (容器或 None, 設定提醒, 失敗的例外類別名或 None);off 就不給容器。"""
+     try:
+         r = _note_shape_tag_hints_parse(cfg_text)
+     except Exception as e:
+         return None, [], e.__class__.__name__
+     return ({"items": [], "error": None, "seen": 0} if r["mode"] != "off" else None), r["warns"], None
+@@ -31147,20 +31152,31 @@ def _ns_tag_hints_emit(root, items, fail):
+         out.append("關掉這個提醒:.lumos/config.json 的 note_shape.tag_hints 設成 off")
+         print("\n".join(out), file=sys.stderr)
+         rules = sorted({r for _p, _n, r, _w in items})
+         _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:筆記前綴提醒 {len(items)} 處",
+                             extra={"check": "tag-hints", "rules": rules, "lines": len(items),
+                                    "notes": len({x[0] for x in items})})
+     except Exception as e:
+         print(f"提醒:筆記前綴提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
+ 
+ 
++def _ns_close_summary_doctor_lines(cfg_text):
++    """doctor 的一行:note_shape.close_summary 是 off 或寫了看不懂的值才講(照前綴提醒的先例)。"""
++    try:
++        r = _note_shape_mode_parse(cfg_text, "close_summary", "結案摘要提醒")
++    except Exception:
++        return []
++    if r["mode"] == "off":
++        return ["這個專案把結案摘要提醒關掉了(note_shape.close_summary=off)"]
++    return r["warns"][:1] if r["bad_value"] else []
++
++
+ def _ns_tag_hints_doctor_lines(cfg_text):
+     """doctor 的一行:note_shape.tag_hints 是 off 或寫了看不懂的值才講(照否定現況句的先例)。"""
+     try:
+         r = _note_shape_tag_hints_parse(cfg_text)
+     except Exception:
+         return []
+     if r["mode"] == "off":
+         return ["這個專案把筆記前綴提醒關掉了(note_shape.tag_hints=off)"]
+     return r["warns"][:1] if r["bad_value"] else []
+ 
+@@ -31692,20 +31708,21 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
+     out = []
+     root = Path(repo_root)
+     txt = _doctor_cfg_bytes(root)
+     mode, _w = _note_shape_config(txt)
+     if mode != "block":
+         out.append(f"這個專案把「筆記形狀擋」設成 {mode}(.lumos/config.json 的 note_shape.gate)——新寫的程式行號引用、"
+                    "沒寫來源的現況描述不會被擋")
+     # 否定現況句提醒的子開關:放在 ci 返回之前,推送前與 CI 路徑每次都唸(照 drift_check.old_sentence 那行)
+     out += _ns_negation_doctor_lines(txt)
+     out += _ns_tag_hints_doctor_lines(txt)
++    out += _ns_close_summary_doctor_lines(txt)
+     out += _ns_slots_doctor_lines(root, mode, txt, ci)
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     if ymls:
+         # 跳過註解:整行被註解掉的那步不算有呼叫(第二層早就這樣判;代碼審 r3 通才席:兩句判法不一,中間漏唸)
+         body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+         step = ("\n    - run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' && "
+                 "(git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true) && "
+                 "python3 scripts/lumos note-shape --diff \"${{ github.event.before || '0000000000000000000000000000000000000000' }}..${{ github.sha }}\""
+                 "\n  (這步只在 push 事件跑(`if: github.event_name == 'push'`),pull_request 沒有前一版;checkout 要設 fetch-depth: 0;主分支叫 master 就把 main 換掉;建本地 main 是為了找得到主線:"
+@@ -32358,23 +32375,111 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None, slots_flag=False):
+     trmode, trviol, trinfo = _ns_test_refs_collected(root, staged, None if staged else tip_where, cfg_text, mode,
+                                                      box.get("notes") or [])
+     neg_items, neg_fail = _ns_negation_collected(hints, neg_warns, neg_fail)
+     rc = (_note_shape_report(root, mode, mode_word, viol, errs, slot=(smode, sviol), tr=(trmode, trviol, trinfo))
+           if (viol or errs or sviol or trviol) else 0)
+     _ns_relaxed_record(root, base_where, tip_where, relaxed)
+     if neg_items or neg_fail:
+         _note_shape_negation_emit(root, neg_items, neg_mode, neg_fail)
+     tag_items, tag_fail = _ns_tag_hints_collected(tags, tag_warns, tag_fail)
+     _ns_tag_hints_emit(root, tag_items, tag_fail)
++    _ns_close_summary_emit(root, *_ns_close_summary_collect(root, staged, base_where, vault_rel, cfg_text))
+     return rc
+ 
+ 
++_NS_CLOSE_SUMMARY_CAP = 5           # 一篇最多列幾行摘要
++_NS_CLOSE_SUMMARY_MAX_NOTES = 50    # 一次提交最多看幾篇(狀態行有動的才看;超過的不看、講一句)
++
++
++def _ns_close_summary_candidates(root, vault_rel):
++    """這次暫存、狀態那一行有動的筆記 → [(上一版路徑, 這一版路徑)](修改與改名;新建的不算);git 失敗回 None。"""
++    r = _lens_git(root, "diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=MR", "-G", "^status:",
++                  "--", vault_rel, binary=True)
++    if r is None or r.returncode != 0:
++        return None
++    parts, out, i = [os.fsdecode(x) for x in r.stdout.split(b"\0")], [], 0
++    while i < len(parts) and parts[i]:
++        tag = parts[i]
++        if tag.startswith("R"):
++            old, new, i = parts[i + 1], parts[i + 2], i + 3
++        else:
++            old = new = parts[i + 1]
++            i += 2
++        if new.endswith(".md"):
++            out.append((old, new))
++    return out
++
++
++def _ns_close_summary_collect(root, staged, base_where, vault_rel, cfg_text):
++    """提交前收「結案了、摘要沒跟著改」的筆記 → (items, 略過的篇數, 失敗原因或 None);items=[(相對圖譜的路徑, 摘要行)]。
++    只看狀態行有動的、一次批次讀新舊兩版(代碼審 r1:原本每篇兩次 git show,400 篇 78 秒);判定交給存量漂移那層的
++    _drift_close_summary_untouched。開關 note_shape.close_summary=off 就不收。"""
++    if not (staged and base_where):
++        return [], 0, None
++    try:
++        cfg = _note_shape_mode_parse(cfg_text, "close_summary", "結案摘要提醒")
++        for w in cfg["warns"]:
++            print(f"提醒:{w}", file=sys.stderr)
++        if cfg["mode"] == "off":
++            return [], 0, None
++        cands = _ns_close_summary_candidates(root, vault_rel)
++        if cands is None:
++            return [], 0, "git"
++        bad = [c for c in cands if "\n" in c[0] or "\n" in c[1]]     # 批次讀表達不了換行路徑:挑掉、算進沒看的篇數
++        cands = [c for c in cands if c not in bad]
++        skipped = max(0, len(cands) - _NS_CLOSE_SUMMARY_MAX_NOTES) + len(bad)
++        cands = cands[:_NS_CLOSE_SUMMARY_MAX_NOTES]
++        blobs = _nodehome_cat_blobs(root, [f"{base_where}:{o}" for o, _n in cands] + [f":{n}" for _o, n in cands])
++        if blobs is None:
++            return [], 0, "git"
++        items = []
++        for k, (_o, new) in enumerate(cands):
++            ob, nb = blobs[k], blobs[len(cands) + k]
++            if ob is None or nb is None:
++                continue
++            hit = _drift_close_summary_untouched(ob.decode("utf-8-sig", errors="replace"),
++                                                 nb.decode("utf-8-sig", errors="replace"))
++            if hit:
++                items.append((new[len(vault_rel) + 1:] if new.startswith(vault_rel + "/") else new, hit))
++        return items, skipped, None
++    except Exception as e:
++        return [], 0, e.__class__.__name__
++
++
++def _ns_close_summary_emit(root, items, skipped, fail):
++    """印「結案了、摘要沒跟著改」的提醒並記一筆 hinted 帳(check=close-summary);★只提醒,不改 rc、出錯只印一句★。
++    不靠待定詞表——rtb 的「等某階段一起做」不在表裡,只能靠結案那一刻抓(Projects/結案時摘要跟正文只改一邊_計劃 [S1])。"""
++    if fail:
++        print(f"提醒:結案時摘要的對照這次沒做成({fail}),不影響這道檢查的判定", file=sys.stderr)
++        return
++    if not items:
++        return
++    try:
++        out = [f"提醒:這次提交把 {len(items)} 篇筆記改成收尾狀態,摘要沒跟著改(只提醒、不擋)——摘要是現況,結案前寫的那幾行還成立嗎:"]
++        for rel, summ in items:
++            out.append(f"  {_esc_clean(rel[:-3] if rel.endswith('.md') else rel, 200)}")
++            for ln, pending in summ[:_NS_CLOSE_SUMMARY_CAP]:
++                out.append(f"    {_esc_clean(ln.strip(), 160)}" + ("  ← 還寫待定" if pending else ""))
++            if len(summ) > _NS_CLOSE_SUMMARY_CAP:
++                out.append(f"    …另 {len(summ) - _NS_CLOSE_SUMMARY_CAP} 行")
++        if skipped:
++            out.append(f"  (這次狀態有動的筆記超過 {_NS_CLOSE_SUMMARY_MAX_NOTES} 篇,另 {skipped} 篇沒看)")
++        out.append('  改一行:lumos summary-line <節點> "<要換掉的片段>" "<結案後的說法>"')
++        out.append("關掉這個提醒:.lumos/config.json 的 note_shape.close_summary 設成 off")
++        print("\n".join(out), file=sys.stderr)
++        _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:結案摘要沒跟著改 {len(items)} 篇",
++                            extra={"check": "close-summary", "rules": ["close-summary"],
++                                   "lines": sum(len(x) for _r, x in items), "notes": len(items), "skipped": skipped})
++    except Exception as e:
++        print(f"提醒:結案時摘要的對照這次沒做成({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
++
++
+ def _ns_relaxed_record(root, base_where, tip_where, relaxed):
+     """推送時的放寬帳(Projects/舊行尾追加不算新寫_計劃〈做法〉5):有違規因舊行尾補括號被減掉記 state done;配對失敗而
+     這次本來有違規記 git-failed 或 error;候選超過總量上限記 capped。這是「沒違規的放行不寫帳」的第三個例外。
+     ★不去重★:一次推好幾條分支、範圍重疊時掛鉤逐分支呼叫,同一行會各記一筆(各帶自己的 head_sha 與同一個 attempt_id),
+     統計時照(attempt_id, 路徑, 行號)去重——r1、r2 兩版去重各自出洞(記號檔壞內容與非原子;只認路徑行號會吞掉別條分支、
+     pairs 被裁掉的列認不得、每次推送都讀帳),代碼審 r3 整類拿掉,寧可多記不少記。
+     ★不回傳、不改判定★:出錯只印一句。relaxed 是 None(提交前)或空的就不記。"""
+     if not relaxed:
+         return
+     try:
+@@ -34256,24 +34361,25 @@ _DRIFT_OPEN_ISSUE = ("open", "doing")
+ # c6 與結案連帶列出(Projects/結案連帶掃描_計劃):「已收尾」不分類型;待定詞只收明確表示還沒定的詞——
+ # 「待辦」「TODO」不收(試算時「連鎖待辦單」這類名詞造成大量誤報);同一子句以 。、半形與全形分號、—— 切
+ _DRIFT_SETTLED = frozenset(_DRIFT_CLOSED) | _ISSUE_CLOSED_STATUSES      # 計劃的收尾值加 Issue 的結案值,不另寫一份
+ _DRIFT_PENDING_WORDS = ("待裁定", "尚未裁定", "未裁定", "未裁", "待決定", "尚未決定", "還沒決定", "還沒做", "尚未實作",
+                         "還沒實作", "還沒修", "未處置", "排隊中", "還在排隊", "[todo]")
+ _DRIFT_CLAUSE_SPLIT_RE = re.compile(r"[。;；]|——")
+ _DRIFT_SETTLED_MARK_RE = re.compile(r"[(（]已裁定[:：]")
+ # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
+ # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
+ _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
+-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "m1", "retire", "count")
++_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "m1", "retire", "count")
+ _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
+                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
+-                     "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
++                     "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定",
++                     "c7": "自己已收尾、摘要還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
+                      "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上"}
+ # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
+ # m1 要推送範圍才判得了,scan 不列;retire(RULE 撤除條件)筆記格子第 3 步起列,是推送那次漏掉的兜底
+ _DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k != "m1")
+ _DRIFT_ACKS = "governance/drift-acks.jsonl"
+ # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
+ # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
+ _DRIFT_FIXES = "governance/drift-fixes.jsonl"
+ _DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "c6", "count")
+ # 要讀程式檔才判得出「現在還是不是這一種發現」的種類:不走 _drift_current_finding(它只看筆記狀態),由各自的計算函式判
+@@ -34417,20 +34523,22 @@ def _drift_state_findings(env, only=None):
+     for rel, n in sorted(env.notes.items()):
+         if only is not None and rel not in only:
+             continue
+         ty, st = _drift_str(n, "type"), _drift_str(n, "status")
+         if ty == "verification" and GUARD_MARK_FIELD in n.fields:
+             out += _drift_guard_findings(env, rel, n, st)
+         elif ty == "issue" and st in _DRIFT_OPEN_ISSUE:
+             out += _drift_c2(env, rel)
+         if st not in _DRIFT_SETTLED:              # 已收尾的筆記是歷史紀錄,裡面的待定句不算
+             out += _drift_c6(env, rel)
++        else:                                     # ……但摘要是「現況」,收尾了還寫待定就是沒跟著改(c7)
++            out += _drift_c7(env, rel)
+         if ty == "verification":
+             plans = _drift_c3_hit(env, rel, ti=ti)
+             if plans:
+                 text = env_text(env, rel) or ""
+                 ln = _drift_field_line(text, "status")
+                 out.append({"kind": "c3", "path": rel, "line": ln, "text": _drift_line_text(text, ln), "related": plans,
+                             "why": "plan_refs 指的計劃都已收尾:" + "、".join(p[:-3] for p in plans[:3])})
+         vu = n.fields.get("valid_under")
+         vtxt = " ".join(as_list(vu)) if vu else ""
+         if vtxt and any(w in vtxt for w in _DRIFT_UNCOMMITTED_WORDS):
+@@ -34555,20 +34663,66 @@ def _drift_c6(env, rel):
+     out = []
+     for no, ln, _reg in _drift_pending_lines(text):
+         hit = sorted(t for t in _drift_pending_links(env, ln)
+                      if t != rel and _drift_str(env.notes.get(t), "status") in _DRIFT_SETTLED)
+         if hit:
+             out.append({"kind": "c6", "path": rel, "line": no, "text": _drift_line_text(text, no), "related": hit,
+                         "why": "連到已收尾的筆記、同一句還寫待定:" + "、".join(p[:-3] for p in hit[:3])})
+     return out
+ 
+ 
++def _drift_c7(env, rel):
++    """c7:已收尾的筆記,摘要裡有一行(不分前綴)寫著待定 → 一行一筆(Projects/結案時摘要跟正文只改一邊_計劃)。
++    遮罩規則照 c6:已裁定括號、全形引號、雙括號連結裡的字不算。正文不看(歷史紀錄)。"""
++    text = env_text(env, rel)
++    if not text:
++        return []
++    return [{"kind": "c7", "path": rel, "line": no, "text": _drift_line_text(text, no), "related": [],
++             "why": "筆記已收尾,摘要這一行還寫待定——換成結論,或補已裁定括號"}
++            for no, ln, reg in _drift_pending_lines(text) if reg == "summary" and _drift_summary_is_current(ln)]
++
++
++# 摘要裡記「當時」的前綴:WHY 是決策紀錄、PITFALL 是事故紀錄,寫的本來就是當時的情況,收尾後照留(代碼審 r1 正確性席:
++# 本 repo 自掃 4 筆有 2 筆是這種)
++_DRIFT_SUMMARY_HISTORY_PREFIXES = ("WHY:", "PITFALL:")
++
++
++def _drift_summary_is_current(line):
++    """這行摘要算現況、而且寫著待定(c7 與結案摘要提醒共用)。"""
++    return not line.strip().startswith(_DRIFT_SUMMARY_HISTORY_PREFIXES) and bool(_drift_pending_clauses(line))
++
++
++def _drift_note_status(text):
++    """筆記全文 → 開頭欄位 status(照 parse_frontmatter 的讀法,它已經剝掉引號);讀不到回 None。"""
++    lines = text.split("\n")
++    e = _drift_fm_end(lines)
++    if not e:
++        return None
++    v = parse_frontmatter(lines[1:e])[0].get("status")
++    return v.strip() if isinstance(v, str) else None
++
++
++def _drift_close_summary_untouched(old_text, new_text):
++    """結案那一刻的判定(Projects/結案時摘要跟正文只改一邊_計劃 [S1]):給同一篇筆記的上一版與這一版全文,
++    狀態從不是收尾值改成收尾值、摘要行逐字沒變 → [(摘要行, 這行是不是還寫待定)](還寫待定的排前面);否則 None。
++    ★提交前的筆記形狀檢查只呼叫這一支★:收尾值、摘要切法、待定判定都在這層、跟 c7 同一套(單行摘要、沒前綴的行照算;
++    代碼審 r2 正確性、架構對齊席)。"""
++    def _summ(text):
++        return [ln for _no, ln, reg in _drift_pending_lines(text) if reg == "summary"]
++    new_summary = _summ(new_text)
++    if (not new_summary or _drift_note_status(new_text) not in _DRIFT_SETTLED
++            or _drift_note_status(old_text) in _DRIFT_SETTLED or _summ(old_text) != new_summary):
++        return None
++    rows = [(ln, _drift_summary_is_current(ln)) for ln in new_summary]
++    return sorted(rows, key=lambda r: not r[1])
++
++
+ def _drift_backrefs(env, rel):
+     """圖譜裡連到 rel、同一子句還寫待定的行 → [(路徑, 行號, 原文, 那一行待定子句連到的篇數)];不要求 rel 已收尾
+     (加決策、翻決策不改狀態)。已收尾的來源筆記與 rel 自己不看。"""
+     out = []
+     for p in sorted(env.notes):
+         if p == rel or _drift_str(env.notes.get(p), "status") in _DRIFT_SETTLED:
+             continue
+         text = env_text(env, p)
+         if not text or "[[" not in text:
+             continue
+@@ -36861,20 +37015,22 @@ def _drift_fix_hint(kind, path, line, names=None):
+     base = f"lumos drift fix {node} {line} --kind {kind}"
+     if kind == "c2":
+         return [base + ' --close --status done --reason "<為什麼算解決,附提交或測試>"',
+                 base + ' --keep --reason "<為什麼還沒解決>"']
+     if kind == "c3":
+         return [base + " --status <" + "/".join(sorted(_DRIFT_C3_STATUSES)) + '> [--reason "…"]']
+     if kind == "c4":
+         return [base + "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)"]
+     if kind == "c6":
+         return [base + ' --settled "<結論>"']
++    if kind == "c7":
++        return [f'lumos summary-line {node} "<這一行要換掉的片段>" "<結案後的說法>"(或在這一行補「(已裁定:日期 結論)」)']
+     if kind == "probe":
+         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
+                 f'lumos drift ack {node} {line} --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                 "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
+     if kind == "retire":
+         return [f"撤除條件成立了:這條限制該撤——在 {node} 第 {line} 行加 [status:superseded] 並寫 [被取代:…]"
+                 "(改看哪裡;限制自然消失就寫 無 <理由>),標了作廢的行下次推送不再抽;照留就 "
+                 f'lumos drift ack {node} {line} --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                 "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
+     return [base]
+@@ -36968,25 +37124,33 @@ def _drift_fix_c6_args(o):
+         return '--kind c6 要帶 --settled "<結論>"(一行、4 到 200 字)'
+     if not _drift_parens_balanced(o["settled"]):
+         return "--settled 的括號要成對(補進去的已裁定括號靠配對判斷到哪裡為止)"
+     return None
+ 
+ 
+ _DRIFT_FIX_KIND_ARGS = {"c1": lambda o: None, "c2": _drift_fix_c2_args, "c3": _drift_fix_c3_args,
+                         "c4": lambda o: None, "c5": lambda o: None, "c6": _drift_fix_c6_args, "count": lambda o: None}
+ 
+ 
++# 沒有 drift fix 改法的種類 → 該怎麼改的說明
++_DRIFT_NO_FIX = {
++    "probe": ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
++              "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\""),
++    "c7": ("--kind c7 沒有 drift fix 改法:用 lumos summary-line <節點> \"<要換掉的片段>\" \"<結案後的說法>\" 改那一行,"
++           "或在那一行補「(已裁定:日期 結論)」"),
++}
++
++
+ def _drift_fix_args_err(kind, o):
+     """--kind 與參數的組合合不合 → 錯誤或 None(存量漂移改法 第 1 節的組合表)。"""
+-    if kind == "probe":
+-        return ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
+-                "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\"")
++    if kind in _DRIFT_NO_FIX:
++        return _DRIFT_NO_FIX[kind]
+     if kind not in _DRIFT_FIX_KINDS:
+         return f"--kind 只能是 {'/'.join(_DRIFT_FIX_KINDS)}"
+     extra = {k for k in _DRIFT_FIX_OPTS if o.get(k) not in (None, False)} - _DRIFT_FIX_ALLOWED[kind]
+     if extra:
+         return f"--kind {kind} 不收 " + "、".join("--" + x for x in sorted(extra))
+     if o.get("date") is not None:
+         _d, err = _guard_date_arg(o["date"])
+         if err:
+             return err
+     for k, flag in _DRIFT_FIX_TEXT_OPTS.items():
+@@ -38991,21 +39155,21 @@ def _drift_doctor_lines(env):
+     dead = _drift_dead_ack_rows(env, root, vault_rel)
+     if dead:
+         ex = ";".join(f"{_esc_clean(p[:-3], 80)}({_esc_clean(w, 60)})" for p, w in dead[:3])
+         parts.append(f"回頭條件與撤除條件的照留已失效 {len(dead)} 筆(例:{ex})——跑 lumos drift scan 看;還沒做就重新照留並用 "
+                      "--tracked-in 綁排進的那篇")
+     if cnt:
+         n_cbad = sum(1 for pr in cnt if pr["errs"])
+         parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
+     if parts:
+         out.append(";".join(parts))
+-    for k in ("c1", "c2", "c3", "c4", "c5", "c6"):
++    for k in ("c1", "c2", "c3", "c4", "c5", "c6", "c7"):
+         rows = [f for f in left if f["kind"] == k]
+         nd = sum(1 for f in done if f["kind"] == k)
+         if rows:     # 只剩已表態的不開段(全靜默;代碼審 r2 正確性席:表態完那一段永遠不會安靜);全部清單看 drift scan
+             ex = ";".join(f"{f['path'][:-3]}:{f['line']}" for f in rows[:3])
+             out.append(f"[{k}] {_DRIFT_KIND_NAMES[k]} {len(rows)} 筆(例:{ex})" + (f";另 {nd} 筆已表態" if nd else "")
+                        + ";改法例:" + _drift_fix_hint(k, rows[0]["path"], rows[0]["line"])[0])
+     return out
+ 
+ 
+ def _drift_dead_ack_rows(env, root, vault_rel):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f0429c8d..21a65bfd 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -65965,20 +65965,144 @@ def _neg_events(root, kind=None):
+ 
+ def _neg_cfg(root, obj=None, raw=None):
+     import json as _j
+     (root / ".lumos").mkdir(exist_ok=True)
+     (root / ".lumos" / "config.json").write_text(raw if raw is not None else _j.dumps(obj), encoding="utf-8")
+ 
+ 
+ _NEG_HEAD = "提醒:這次提交新寫了"
+ 
+ 
++# ── 結案時摘要跟正文只改一邊(Projects/結案時摘要跟正文只改一邊_計劃)──
++
++def _c3_issue(root, name, status, summary_lines, body="正文。\n"):
++    p = root / "docs" / "kg-knowledge" / "Issues" / f"{name}.md"
++    p.parent.mkdir(parents=True, exist_ok=True)
++    fm = f"---\ntype: issue\nstatus: {status}\nsummary: |-\n" + "".join(f"  {ln}\n" for ln in summary_lines) + "---\n"
++    p.write_text(fm + f"# {name}\n\n" + body, encoding="utf-8")
++    return p
++
++
++def t_note_shape_close_summary_untouched():
++    """[摘要只改一邊 S1] 一次提交把筆記狀態改成收尾值、摘要逐字沒變 → 提交前的筆記形狀檢查印提醒、列出摘要行(含待定詞的排前面)
++    與 lumos summary-line 形狀,rc 不變;摘要有改、狀態沒改成收尾值、新建的筆記 → 不印。
++    翻紅釘:不比摘要 → ③紅;新建的也提醒 → ⑤紅;含待定詞不排前面 → ②紅。"""
++    print("t_note_shape_close_summary_untouched")
++    root = _ns_repo()
++    lines = ["KEY:2026-09-25 圖譜健檢發現", "DECISION:尚未裁定要補做還是撤掉"]
++    _c3_issue(root, "Receipt", "open", lines)
++    _c3_issue(root, "Other", "open", ["KEY:別的事"])
++    _nh_commit(root, "issues")
++    rc0, _out0 = _ns(root)
++    _c3_issue(root, "Receipt", "resolved", lines, body="> 已結案:撤掉。\n\n正文。\n")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("①狀態改成收尾值、摘要沒動 → 印提醒、rc 不變", rc == rc0 == 0 and "摘要沒跟著改" in out and "Issues/Receipt" in out
++          and "lumos summary-line" in out, out[-1500:])
++    seg = out[out.find("摘要沒跟著改"):]
++    check("②含待定詞的那行排在前面", "尚未裁定" in seg and seg.find("尚未裁定") < seg.find("圖譜健檢發現"), seg[:600])
++    _ns_reset(root)
++    _c3_issue(root, "Receipt", "resolved", ["KEY:2026-09-25 圖譜健檢發現", "DECISION:2026-10-03 裁定撤掉"])
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("③摘要也改了 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
++    _ns_reset(root)
++    _c3_issue(root, "Other", "doing", ["KEY:別的事"], body="改正文。\n")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("④狀態沒改成收尾值 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
++    _ns_reset(root)
++    _c3_issue(root, "Fresh", "resolved", ["DECISION:尚未裁定"])
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑤新建的筆記 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
++    _ns_reset(root)
++    p = _c3_issue(root, "Other", "open", ["KEY:別的事"])
++    p.write_text(p.read_text(encoding="utf-8").replace("status: open", 'status: "resolved"'), encoding="utf-8")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑥狀態值帶引號也認得是收尾值", "摘要沒跟著改" in out and "Issues/Other" in out, out[-800:])
++    _ns_reset(root)
++    _nh_git(root, "mv", "docs/kg-knowledge/Issues/Other.md", "docs/kg-knowledge/Issues/Other2.md")
++    p = root / "docs" / "kg-knowledge" / "Issues" / "Other2.md"
++    p.write_text(p.read_text(encoding="utf-8").replace("status: open", "status: resolved"), encoding="utf-8")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑦改名同時結案 → 照樣提醒", "摘要沒跟著改" in out and "Issues/Other2" in out, out[-800:])
++    gov = [e for e in _ns_gov(root) if e.get("kind") == "hinted" and (e.get("extra") or e).get("check") == "close-summary"]
++    check("⑧記一筆 note-shape hinted(check=close-summary)", bool(gov), str(_ns_gov(root)[-3:])[:600])
++    _ns_reset(root)
++    cfgp = root / ".lumos" / "config.json"
++    import json as _j
++    cfg = _j.loads(cfgp.read_text(encoding="utf-8")) if cfgp.exists() else {}
++    cfg.setdefault("note_shape", {})["close_summary"] = "off"
++    cfgp.parent.mkdir(exist_ok=True)
++    cfgp.write_text(_j.dumps(cfg), encoding="utf-8")
++    _c3_issue(root, "Other", "resolved", ["KEY:別的事"])
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑨note_shape.close_summary=off → 不印", "摘要沒跟著改" not in out, out[-800:])
++    m = _load_lumos_inproc()
++    dl = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge")
++    check("⑩開關關掉 → doctor 那一行講", any("close_summary=off" in x for x in dl), str(dl)[:600])
++    _ns_reset(root)
++    cfg["note_shape"]["close_summary"] = "OFF"
++    cfgp.parent.mkdir(exist_ok=True)
++    cfgp.write_text(_j.dumps(cfg), encoding="utf-8")
++    _nh_commit(root, "bad cfg")
++    _c3_issue(root, "Other", "resolved", ["KEY:別的事"])
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑪開關值寫錯 → 照 warn 提醒、並講一句看不懂", "摘要沒跟著改" in out and "close_summary" in out and "看不懂" in out,
++          out[-1000:])
++    _ns_reset(root)
++    one = root / "docs" / "kg-knowledge" / "Issues" / "One.md"
++    one.write_text("---\ntype: issue\nstatus: open\nsummary: KEY:尚未裁定\n---\n# One\n", encoding="utf-8")
++    _nh_commit(root, "one")
++    one.write_text(one.read_text(encoding="utf-8").replace("status: open", "status: resolved"), encoding="utf-8")
++    _ns_stage(root)
++    rc, out = _ns(root)
++    check("⑫單行摘要的筆記結案、摘要沒動 → 照樣提醒(跟 c7 同一套摘要切法)", "Issues/One" in out and "摘要沒跟著改" in out, out[-800:])
++    print("  ✓ t_note_shape_close_summary_untouched")
++
++
++def t_drift_c7_settled_summary_pending():
++    """[摘要只改一邊 S2] 已收尾的筆記摘要有一行含待定詞 → 存量漂移列一筆 c7(那一行、修法指 lumos summary-line);
++    有已裁定括號、待定詞只在雙括號連結裡、或筆記沒收尾 → 不列。
++    翻紅釘:不看狀態 → ④紅;不遮已裁定括號 → ②紅;不遮連結 → ③紅。"""
++    print("t_drift_c7_settled_summary_pending")
++    m = _load_lumos_inproc()
++    root = _ns_repo()
++    _c3_issue(root, "Closed", "resolved", ["KEY:發現經過", "DECISION:尚未裁定要補做還是撤掉"])
++    _c3_issue(root, "Settled", "resolved", ["DECISION:原本尚未裁定(已裁定:2026-10-03 撤掉)"])
++    _c3_issue(root, "Linked", "resolved", ["KEY:見 [[Issues/某篇還沒做]]"])
++    _c3_issue(root, "Open", "open", ["DECISION:尚未裁定"])
++    env = m.Env(root / "docs" / "kg-knowledge")
++    c7 = [f for f in m._drift_state_findings(env) if f["kind"] == "c7"]
++    paths = {f["path"] for f in c7}
++    hit = [f for f in c7 if f["path"] == "Issues/Closed.md"]
++    check("①已收尾、摘要那行含待定詞 → 列一筆 c7(那一行)", len(hit) == 1 and "尚未裁定" in hit[0]["text"]
++          and "summary-line" in m._drift_fix_hint("c7", hit[0]["path"], hit[0]["line"])[0], str(c7))
++    check("②有已裁定括號 → 不列", "Issues/Settled.md" not in paths, str(c7))
++    check("③待定詞只在雙括號連結裡 → 不列", "Issues/Linked.md" not in paths, str(c7))
++    check("④沒收尾 → 不列", "Issues/Open.md" not in paths, str(c7))
++    check("⑤種類表有 c7 的名字", "c7" in m._DRIFT_KINDS and "c7" in m._DRIFT_KIND_NAMES, "")
++    _c3_issue(root, "Why", "resolved", ["WHY:當時還沒做所以先放著 [出處:x] [因:y]", "PITFALL:尚未裁定前會誤判 [出處:x] [根因:y] [test:t_x]"])
++    env = m.Env(root / "docs" / "kg-knowledge")
++    c7b = [f for f in m._drift_state_findings(env) if f["kind"] == "c7" and f["path"] == "Issues/Why.md"]
++    check("⑥WHY、PITFALL 行是決策與事故紀錄,不列", not c7b, str(c7b))
++    r = run(root / "docs" / "kg-knowledge", "drift", "fix", "Issues/Closed", "2", "--kind", "c7")
++    check("⑦drift fix --kind c7 → 指向 lumos summary-line", r.returncode != 0 and "summary-line" in r.stdout + r.stderr,
++          r.stdout + r.stderr)
++    print("  ✓ t_drift_c7_settled_summary_pending")
++
++
+ def t_note_shape_negation_detect():
+     """[S1] 一行新寫的正文有窄表字眼時,_ns_negation_hits 照〈做法〉1 第 2 到 6 點判算不算(計劃列的例句逐句)。
+ 
+     翻紅釘:拿掉固定組合遮罩 → ⑤「目前沒有問題」「目前無法重現」紅;「時/前」改看視窗尾端 → ②「目前沒有任何一個節點管理時間」紅;
+     不遮行內欄位 → ②RULE:[retire:改成…] 那句、⑤[retire:還沒想好] 紅。
+     """
+     print("t_note_shape_negation_detect")
+     m = _load_lumos_inproc()
+     check("①前置:正式判定函式在", callable(getattr(m, "_ns_negation_hits", None)), "")
+     if not callable(getattr(m, "_ns_negation_hits", None)):
+diff --git a/skills/lumos-project-notes/commands/04-自檢與健康.md b/skills/lumos-project-notes/commands/04-自檢與健康.md
+index 86f565ae..1d9876d7 100644
+--- a/skills/lumos-project-notes/commands/04-自檢與健康.md
++++ b/skills/lumos-project-notes/commands/04-自檢與健康.md
+@@ -1,21 +1,21 @@
+ # 04 自檢與健康(寫完要確認、收工要體檢)
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「剛寫完一篇,有沒有寫壞?」 | `lumos lint <節點>` | 0 問題=過;error 不修提交會被擋,warning 建議順手補 | pre-commit 的 Gate L 會擋 |
+ | 「整個圖譜健不健康?」(收工必跑) | `lumos doctor [--verbose] [--ci]` | 上半是硬檢查(紅=要修),下半是提醒;`--verbose` 看全部軟提醒 | pre-push 跑 `--ci`,紅就推不上去 |
+ | 「doctor 說 updated 落後 git 最後改動」 | `lumos updated-sync --stale`(先看加 `--dry-run`) | 把列出的每篇 updated 改成今天,改完跟其他改動一起提交;正在設計審的計劃審完再跑(會改整檔指紋) | 日期一直落後,看不出哪篇最近動過 |
+ | 「我改了環境/流程,哪些驗證該重驗?」 | `lumos stale --candidate --match <關鍵字>`;已過期清單 `lumos stale` | 列出寫了「改到這個就該重驗」的驗證紀錄 | 拿失效驗證當依據 |
+ | 「這篇/這段時間被哪幾道閘攔過?」 | `lumos gov [<節點>] [--since N]`;純數字 `lumos gov --stats` | 時間軸;stats 表每道閘一行,「從沒出現」不代表沒用 | — |
+ | 「筆記點名的符號在 code 裡早就不存在了嗎?歷史上有這種漂移嗎?」 | `lumos drift-history` | 各取樣點的幽靈符號 | — |
+-| 「已經寫進去的句子,有沒有因為別處狀態變了而過期?」 | `lumos drift scan [--at <提交>] [--json]` | 六種狀態一致檢查(c1–c6;c6=沒收尾的筆記在同一子句裡寫了待定詞——待裁定、還沒做、排隊中、`[todo]` 這類——又連到已收尾的筆記)、條件式回頭條件(probe)、RULE 撤除條件現在已成立的(retire,已作廢的不列)、數量標記 `[count:路徑::名稱=N]` 跟程式對不上的(count;只數 Python 模組最上層的字面值集合與列舉,數不準的列在問題裡講原因;程式組出來的集合或非 Python 改用 doctor N 段的 `<!--lumos:count=N re=… in=…-->` 正規式數量)全列,已表態的照列標「已表態」;現在成立的回頭條件與撤除條件底下若印「寫下時就已成立」,表示這組條件從那一版起連續出現在這篇、那一版條件就已經成立,這段期間沒在等任何事(已表態的也照印);查不出寫下時成不成立的不逐條印,最後彙總一行「另有 N 條查不出…」;`--json` 的 probe 與 retire 發現多一欄 `born`(`state` 為 true/false/unknown,另有 `commit`、`date`、`why`);每篇後面附那一種的 `lumos drift fix` 指令 | 轉正、收尾、提交之後的舊句子沒人發現 |
++| 「已經寫進去的句子,有沒有因為別處狀態變了而過期?」 | `lumos drift scan [--at <提交>] [--json]` | 七種狀態一致檢查(c1–c7;c6=沒收尾的筆記在同一子句裡寫了待定詞——待裁定、還沒做、排隊中、`[todo]` 這類——又連到已收尾的筆記;c7=已收尾的筆記摘要還寫待定詞,改法 `lumos summary-line`)、條件式回頭條件(probe)、RULE 撤除條件現在已成立的(retire,已作廢的不列)、數量標記 `[count:路徑::名稱=N]` 跟程式對不上的(count;只數 Python 模組最上層的字面值集合與列舉,數不準的列在問題裡講原因;程式組出來的集合或非 Python 改用 doctor N 段的 `<!--lumos:count=N re=… in=…-->` 正規式數量)全列,已表態的照列標「已表態」;現在成立的回頭條件與撤除條件底下若印「寫下時就已成立」,表示這組條件從那一版起連續出現在這篇、那一版條件就已經成立,這段期間沒在等任何事(已表態的也照印);查不出寫下時成不成立的不逐條印,最後彙總一行「另有 N 條查不出…」;`--json` 的 probe 與 retire 發現多一欄 `born`(`state` 為 true/false/unknown,另有 `commit`、`date`、`why`);每篇後面附那一種的 `lumos drift fix` 指令 | 轉正、收尾、提交之後的舊句子沒人發現 |
+ | 「照清單把一筆過期的句子改掉」 | `lumos drift fix <節點> <行號> --kind <c1..c6 或 count> [--dry-run]`;count 把標籤與句子裡恰好一個舊數字改成現值(句子裡找不到或不只一個就擋下、請手改),c1 可加 `--date`、c2 `--close --status <結案值> --reason "…"` 或 `--keep --reason "…"`(結案時摘要的 DECISION: 行還寫待定會擋下,加 `--decision "<結論>"` 換成「[今天] 結論」;還有沒結案的回頭條件也擋下,逐行加 `[closed:日期 理由]`,或確定結案後還要回頭量的加 `--keep-revisits "<理由>"` 照常結案)、c6 `--settled "<結論>" [--by <節點>] [--date YYYY-MM-DD]`(在待定子句結尾補「(已裁定:日期 結論,見 [[…]])」;待定子句連到好幾篇時要 `--by`;表格行請手改)、c3 `--status <值> [--by <節點>] [--reason "…"]`(`--reason` 選填,接在補的那一行最後;要新版工具,消費專案先 `lumos update`)、c4 只列證據(這篇第一次被提交的提交、卷證目錄——同一個提交加進來的與計劃名比對到的都列、標來源)、範本句與一條預填好的 `lumos set <節點> valid_under …`(把 `<整項新內容>` 換成改寫後的整句、範本句的 `<卷證>` 換成從清單挑的目錄再貼;c4 不自己寫檔、不進修復帳,set 改完先提交再對同一篇跑別的 drift fix)、c5 不帶參數 | 那篇要在版控裡而且乾淨(或只有工具自己的改動);改完寫修復帳 `governance/drift-fixes.jsonl`,跟筆記一起提交;驗證失敗照訊息 `git checkout --` 還原,工具不自動還原 | 手改容易漏句、改錯日期 |
+ | 「程式改了(函式、類別、旗標、程式檔被刪或改名),筆記還在講舊名稱嗎?」 | 推送時自動跑;手動 `lumos drift check --diff <起點>..<終點>`(舊句檢查 m1,跟 c1–c5 同一支指令) | 結論行一行(「這次推送消失了 N 個名稱,筆記裡還在講的——要處理 A 筆、只列出 B 筆」或「沒有名稱消失」、「沒跑完」…);要處理=這次改到的程式檔的家筆記或摘要行,其他只列出;每筆後面印改法:改成歷史說法或刪掉,照留就貼那條 `drift ack … --kind m1 --name=…`。開關 `.lumos/config.json` 的 `drift_check.old_sentence`(block/warn/off,沒寫是 warn),跟 `drift_check.gate` 各管各的:gate=off 時照樣跑,要完全關得多寫 `"old_sentence": "off"`;只看 Python 的定義名與旗標,其他語言只看被刪的路徑;`drift scan`、doctor、考試都不跑它 | 刪掉或改名的東西,筆記還叫人去找 |
+ | 「這一行確定照留」 | 表態前先看 `lumos drift scan` 有沒有在那條底下印「寫下時就已成立」:被標了就改成真的會發生的條件或刪掉;真的排進某篇了才照留,並用 `--tracked-in <Issue 或計劃>` 綁那篇(推送時這次新寫就已成立的只認綁了去處的照留;表態後標記照印,不會因表態消失);回頭條件與撤除條件的照留沒綁去處 30 天後失效、綁的那篇收尾也失效,drift scan 與 doctor 會重新列;`lumos drift ack <節點> <行號> --kind <種類> --reason "…"`;RULE 撤除條件(retire)的行號給擋下訊息列的那個(那一條的第一行,欄位寫在續行也一樣,給續行會被擋);舊句檢查(m1)要再帶觸發的名稱,一個名稱一個 `--name=<名稱>`(一律等號寫法,旗標名稱像 `--name=--restore` 才不會被當成選項;直接貼 check 印的那條,把 `<為什麼照留>` 換成真理由) | 表態要提交才算;回頭條件與撤除條件的照留記期限或綁的那篇;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;m1 記名稱清單,同一行分幾次表態的名稱會合起來算,之後同一行又有新名稱消失就重新列出 | 推送閘每次都唸同一筆 |
+ | 「一份文件前後寫的數字/設定對不對得上?」 | `lumos fold-check <md>` | value-drift=前後不一致;reverse-omission=只寫一邊 | — |
+ | 「文件裡引的 檔案:行號 還對嗎?」 | `lumos refcheck <md> [--repo …]` | ok/missing/out_of_range | 引用過期沒人知道 |
+ | 「.lumos/lint.json 宣告的 linter 真的跑得動嗎?」 | `lumos lint-check [--smoke]` | 宣告了跑不動會紅 | — |
+ | 「專案依賴版本落後了嗎?」 | `lumos lint-watch` | 對比 registry 最新版 | — |
+ | 「Compose 可組合指標退步了嗎?」 | `lumos compose-metrics` | 對 baseline 比 | — |
+ | 「測試檔/hook 有沒有被動過?」 | `lumos anchor verify`;刻意改了就 `lumos anchor approve --note "<理由>"` | 不符 rc1 | pre-push 擋 |
+ | 「現在到底有幾層防護真的生效?」 | `lumos enforcement` | 各層 active/inactive/degraded/unknown + N/M | 唯讀,不擋 |
