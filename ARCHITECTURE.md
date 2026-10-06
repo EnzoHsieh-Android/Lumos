@@ -105,11 +105,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (80 個頂層命令)
+## 3. CLI 子命令家族 (81 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 80 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 81 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]
@@ -121,7 +121,7 @@ flowchart TB
     ROOT --> CI["CI 回流觀測"]
     ROOT --> LIFE["安裝 / 生命週期"]
 
-    READ --> R["context · show · contracts · search · query · about-code<br/>links · backlinks · map · export<br/>decisions · decision-refs · stale · recent · stats · drift-history"]
+    READ --> R["context · show · contracts · search · query · about-code<br/>links · backlinks · map · export<br/>decisions · decision-refs · stale · recent · stats · drift-history · events"]
     HEALTH --> H["doctor · lint · lint-watch · lint-check · prose-lint<br/>self-audit · sync-verified-by · gov · enforcement<br/>spec-trace · signoff · rel-cascade · test-layers · link-candidates"]
     CI --> C["ci-wait · ci-status<br/>(觀測非強制:擋不了 push/merge)"]
     WRITE --> W["set · append · remove · new · archive<br/>decision-add · decision-supersede · decision-reindex"]
@@ -139,7 +139,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,C,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 80 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 81 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
 ## 4. 筆記不腐爛,靠的是五段接力
 

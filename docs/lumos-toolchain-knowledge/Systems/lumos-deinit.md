@@ -50,7 +50,7 @@ about_code:
 
 ## 定位
 - `lumos deinit` = 專案層:拆本 repo 的 pre-commit 閘(`core.hooksPath`)、vendored 工具組、`CLAUDE.md` 的 `LUMOS:GRAPH-DISCIPLINE` 注入區塊、(預設)知識圖譜 vault。
-- `lumos uninstall` = 機器層(既有):全域 `~/.local/bin/lumos`、user-scope skills。
+- `lumos uninstall` = 機器層(既有):全域 `~/.local/bin/lumos`、user-scope skills;2026-10-05 起另外移除使用者範圍的 Claude 事件帳外掛與我們登記的市集(規矩見 [[Systems/lumos事件帳]])。
 - deinit **不碰機器共用項**(`~/.claude/hooks/*.py`、`~/.claude/settings.json`)。
 
 ## 指令介面
