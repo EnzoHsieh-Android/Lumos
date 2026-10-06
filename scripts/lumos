@@ -18021,6 +18021,116 @@ def cmd_set(env, rel, key, value):
         return _cmd_set_locked(env, rel, key, value)
 
 
+def cmd_summary_line(env, node, old, new, nth=None, dry_run=False):
+    """lumos summary-line <節點> "<舊片段>" "<新片段>":摘要裡唯一含舊片段的那一處換成新片段(Projects/改摘要單行的指令_計劃)。
+    定位照 guard bind 的「片段比對、對到多個就擋」;多個時列候選、--nth 指定第幾個出現處;續行條目不支援;
+    換完只剩空白就拿掉那一行(摘要不得因此變空);寫入照 atomic_write_verify,同一次把 updated 改成今天。"""
+    new = new or ""
+    # 換行類字元一律擋(splitlines 認得的全部:\r、\x0b、\x0c、\x1c-\x1e、\x85、\u2028、\u2029;代碼審 r1 正確性席 F1)
+    if not old or len((old + "x").splitlines()) > 1 or len((new + "x").splitlines()) > 1:
+        print("擋下:舊片段不能是空的,舊片段與新片段都不能含換行", file=sys.stderr)
+        return 2
+    if old == new:
+        print("擋下:舊片段跟新片段一樣,沒有要改的", file=sys.stderr)
+        return 2
+    rel = env.find(node)
+    if rel is None:
+        return _node_not_found(env, node, write_side=True)
+    with _vault_write_lock(env.vault):
+        return _summary_line_locked(env, rel, old, new, nth, dry_run)
+
+
+def _summary_line_hits(lines, regs, old):
+    """摘要區裡舊片段的每一個出現處 → [(0 起的行號, 行內位置)],照由上而下、由左而右。"""
+    hits = []
+    for i, (ln, rg) in enumerate(zip(lines, regs)):
+        if rg != "summary":
+            continue
+        k = ln.find(old)
+        while k >= 0:
+            hits.append((i, k))
+            k = ln.find(old, k + 1)
+    return hits
+
+
+def _summary_line_pick_err(rel, lines, hits, old, nth):
+    """要改哪一個出現處判不出來 → 擋下訊息(多行);判得出來回 None。對到多處時列候選(行號、前 40 字)。"""
+    if not hits:
+        return f"擋下:{rel} 的摘要裡找不到「{_esc_clean(old, 80)}」"
+    if nth is None and len(hits) > 1:
+        rows = [f"  {n}. 第 {i + 1} 行  {_esc_clean(lines[i].strip(), 40)}" for n, (i, _k) in enumerate(hits, 1)]
+        return "\n".join([f"擋下:「{_esc_clean(old, 80)}」在 {rel} 的摘要裡出現 {len(hits)} 處,分不清要改哪一個:", *rows,
+                          "給更長、更精確的片段,或加 --nth <第幾個>(照上面的編號)"])
+    if nth is not None and not (1 <= nth <= len(hits)):
+        return f"擋下:--nth 要在 1 到 {len(hits)} 之間"
+    return None
+
+
+def _summary_line_rebuild(lines, i, new_line, e, today):
+    """第 i 行換成 new_line(None=拿掉那一行),開頭欄位的 updated 換成 today(沒有就不加)→ 新的行陣列。"""
+    out = lines[:i] + ([] if new_line is None else [new_line]) + lines[i + 1:]
+    for j in range(1, e - (1 if new_line is None else 0)):
+        if re.match(r"^updated:\s", out[j]):
+            out[j] = f"updated: {today}"
+            break
+    return out
+
+
+def _summary_line_locked(env, rel, old, new, nth, dry_run):
+    import datetime as _dt
+    path = env.vault / rel
+    try:
+        lines, _s, e = load_raw_for_edit(path)
+    except (ValueError, RuntimeError) as ex:
+        print(f"擋下:{ex}", file=sys.stderr)
+        return 2
+    text = "\n".join(lines)
+    regs = _notelines_regions(text)
+    hits = _summary_line_hits(lines, regs, old)
+    err = _summary_line_pick_err(rel, lines, hits, old, nth)
+    if err:
+        print(err, file=sys.stderr)
+        return 2
+    i, k = hits[(nth or 1) - 1]
+    cont = {}       # {續行行號: 所屬那條的行號}(1 起)
+    _ns_summary_logical(text, cont)
+    if (i + 1) in cont or (i + 1) in set(cont.values()):
+        print(f"擋下:{rel} 第 {i + 1} 行屬於一條拆成多行(續行)的摘要條目,這個指令不支援續行,請手改", file=sys.stderr)
+        return 2
+    old_line = lines[i]
+    new_line = old_line[:k] + new + old_line[k + len(old):]
+    delete = not new_line.strip()
+    if delete and not any(rg == "summary" and ln.strip() and not ln.lstrip().startswith("summary:")
+                          for j, (ln, rg) in enumerate(zip(lines, regs)) if j != i):
+        print(f"擋下:刪掉這一行之後 {rel} 的摘要就空了,摘要不能是空的", file=sys.stderr)
+        return 2
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
+    new_lines = _summary_line_rebuild(lines, i, None if delete else new_line, e, today)
+    print(f"改前:{_esc_clean(old_line.strip(), 300)}")
+    print("改後:" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
+    if dry_run:
+        print("(--dry-run:只印,沒寫)")
+        return 0
+    target = old_line.strip() if delete else new_line.strip()
+    before_n = sum(1 for ln in lines[1:e] if ln.strip() == target)
+
+    def check(fields):
+        """改後摘要裡:換行的話新行比原本多一行,刪行的話舊行比原本少一行。"""
+        summ = fields.get("summary")
+        if not isinstance(summ, str):
+            return False
+        n = sum(1 for ln in summ.split("\n") if ln.strip() == target)
+        return n == before_n - 1 if delete else n == before_n + 1
+
+    try:
+        atomic_write_verify(path, new_lines, "summary", check)
+    except (ValueError, RuntimeError) as ex:
+        print(f"擋下:{ex}", file=sys.stderr)
+        return 2
+    print(f"✓ 改好了 {rel}(updated 改成 {today});接著跑 lumos lint {rel[:-3]} 看這一篇")
+    return 0
+
+
 def _cmd_set_locked(env, rel, key, value):
     if key in COND_KEYS:
         return _set_conditions_locked(env, rel, key, value if isinstance(value, list) else [value])
@@ -46770,6 +46880,7 @@ HELP_WHEN = {
     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
+    "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
     "ci-status": "只看上次 CI 結果,不打網路。",
     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
@@ -47335,6 +47446,12 @@ def main():
     p.add_argument("note")
     p.add_argument("key")
     p.add_argument("value", nargs="+")
+    p = sub.add_parser("summary-line", help="改摘要裡的一行:唯一含舊片段的那一處換成新片段(新片段給空字串就是刪掉那段)")
+    p.add_argument("note")
+    p.add_argument("old", metavar="舊片段")
+    p.add_argument("new", metavar="新片段")
+    p.add_argument("--nth", dest="sl_nth", type=int, default=None, help="舊片段出現好幾處時,改第幾個(照擋下訊息列的編號)")
+    p.add_argument("--dry-run", dest="sl_dry", action="store_true", help="只印改前改後,不寫")
     p = sub.add_parser("append", help="list 欄位追加(verified_by/plan_refs/system_refs/related/tags)")
     p.add_argument("note")
     p.add_argument("key")
@@ -48273,6 +48390,8 @@ def main():
                                   "keep_revisits": args.dr_keep_revisits})
         print(f"擋下:不認得的 drift 子命令 {args.drcmd}", file=sys.stderr)
         return 2
+    if args.cmd == "summary-line":
+        return cmd_summary_line(env, args.note, args.old, args.new, nth=args.sl_nth, dry_run=args.sl_dry)
     if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
