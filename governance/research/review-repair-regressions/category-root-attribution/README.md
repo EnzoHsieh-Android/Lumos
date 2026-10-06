@@ -1,0 +1,7 @@
+# 同類提醒與歸因
+
+七個固定案例，前兩個的編號與位置關係不同但同類重大均觸發；不同類、other、minor不觸發；兩個完整prior敘述可通過本項。這只證現有helper按粗分類提醒且兩欄的字串檢查相容，不證根因相同、不同或已修復，也不證完整關卡通過。
+
+實際輸出見experiment.json；重放從replay-driver.md抽出Python，指向同一CLI版本，在私有目錄執行。driver SHA256: e8095583b0a7c1c7ad3a2a87ae4b867030534b10b95b2d3b7154c5ae3a744388。
+
+實際CLI SHA256: 32a00947790a97dbd2c110b94816db4e05d52502b5c82c6bb87de3d0363fd120。
