@@ -40161,7 +40161,12 @@ def t_dispatch_lens_role_cards_opt_in():
     w2("notes.txt", "x\n"); c2("unknown only")
     r = run(d2 / "docs" / "t-knowledge", "dispatch-lens", "main..HEAD", "--repo", str(d2), "--json", "--no-cache", "--role-cards")
     dd = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
-    check("S9: 全部判不出 → 一張都不附", "role_text" not in dd and "[角色鏡頭]" not in dd.get("text", ""), str(dd)[:300])
+    card_output = dd.get("text", "") + "\n" + dd.get("role_text", "")
+    card_ids = [q["id"] for cards in _load_lumos_inproc()._ROLE_CARDS.values() for q in cards]
+    check("S9: 判不出或逾時 → 有效回應且一張卡都不附",
+          r.returncode == 0 and isinstance(dd.get("text"), str) and bool(dd["text"])
+          and "[角色鏡頭]" not in card_output and not any(q in card_output for q in card_ids),
+          f"rc={r.returncode} {str(dd)[:300]}")
     d3, g3, w3, c3 = _role_lens_repo()
     g3("checkout", "-q", "main"); w3(".lumos/config.json", '{"review_roles": "oops"}'); c3("bad decl")
     g3("checkout", "-q", "feat"); g3("rebase", "-q", "main"); w3("notes.txt", "x\n"); c3("unknown only")
