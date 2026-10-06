@@ -1018,7 +1018,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     def _load_rows():
         raw, parsed = [], []
         try:
-            for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
                 if not line.strip():
                     continue
                 try:
@@ -1056,7 +1056,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         # 凍結若對活檔算 G3,回放(對凍結 sha 算)就恆報假邏輯漂移(凍結/回放兩側輸入必須同構)。
         out = {}
         rc = _loop_status_disposal(parsed, loop_id, spec, 0, root, env=env, repo=repo,
-                                   readonly=True, result_out=out)
+                                   readonly=True, result_out=out, retro_skip=True)   # 第八步(跑滿回顧)凍結不判
         if rc == 2:
             print("擋下:這個 loop 的帳形狀進不了 d5 處置判定(多半是 panel 舊制多席各自帳)——"
                   "舊制語意重算用 lumos loop status <id> --gate --panel;golden 回放只涵蓋 d5", file=sys.stderr)
@@ -1070,7 +1070,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
                                 if r.get("round") == rid and r.get("result_sha256")), None)
         out = {}
         rc = _loop_status_disposal(parsed, loop_id, None, 0, root, env=env, repo=repo,
-                                   readonly=True, spec_sha_override=spec_sha_frozen, result_out=out)
+                                   readonly=True, spec_sha_override=spec_sha_frozen, result_out=out, retro_skip=True)
         try:
             if spec_sha_frozen and _sha256_file(spec) != spec_sha_frozen:
                 print("  (提示:spec 檔已在收斂後被編輯——常態;閉包凍的是窗末指紋,回放不受影響)")
@@ -1219,7 +1219,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
             out = {}
             rc = _loop_status_disposal(rows, loop_id, None, 0, root, env=env, repo=repo,
                                        readonly=True, spec_sha_override=g.get("spec_sha"),
-                                       result_out=out)
+                                       result_out=out, retro_skip=True)
             want = g.get("verdict") or {}
             if rc == 2:
                 red.append("邏輯漂移:凍結輸入現在連判定都進不了(當時判得了)——讀側行為變了")
@@ -1252,7 +1252,7 @@ def cmd_loop_rewrite(env, loop_id, successor, note):
         # (successor=lf-a 誤中 successor=lf-a2;clf r1 主審 F1 實驗重現),偽造連續重寫警告。
         _pat = _re.compile(r"successor=" + _re.escape(loop_id.strip()) + r"(;|$)")
         if gl.exists():
-            for line in gl.read_text(encoding="utf-8").splitlines():
+            for line in _ledger_lines(gl.read_text(encoding="utf-8")):
                 try:
                     o = _j.loads(line)
                 except ValueError:
@@ -1336,19 +1336,22 @@ def _docs_ledger_path(docs_dir, name):
     return Path(docs_dir) / name
 
 
-def _regular_own_fd(path, flags, mode=0o666):
+def _regular_own_fd(path, flags, mode=0o666, require_owner=True, follow=False):
     """開檔 → 檔案代號;開不了、不是一般檔案、不是自己的檔就回 None(代號已關)。
+    require_owner=False 只讀不寫的讀者用(回顧檔、帳尾檢查):共用機器或 CI 用別的帳號 checkout 時,檔不是自己的也要讀得到(代碼審 code-審查跑滿回顧 r1/r2)。
     帶 O_NOFOLLOW(不跟捷徑)、O_NONBLOCK(沒有讀者的管線直接失敗,不卡住)——同 _drift_m1_ledger_miss 那段的寫法
-    (代碼審 code-gov-ledger-split-2 r2 架構對齊席:原本另抄一份還少了擁有者檢查)。"""
+    (代碼審 code-gov-ledger-split-2 r2 架構對齊席:原本另抄一份還少了擁有者檢查)。
+    follow=True 不帶 O_NOFOLLOW、跟隨捷徑(仍非阻塞、仍開檔後判一般檔):只給帳尾檢查用——它要看的是寫入器「實際會追加的那個檔」,
+    而版控治理帳的寫入器(open(path, "a"))跟隨捷徑(代碼審 code-審查跑滿回顧 r3 合約、邊界席)。"""
     import stat as _stat
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags |= (0 if follow else getattr(os, "O_NOFOLLOW", 0)) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(str(path), flags, mode)
-    except OSError:
+    except (OSError, ValueError):
         return None
     try:
         st = os.fstat(fd)
-        if _stat.S_ISREG(st.st_mode) and not (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+        if _stat.S_ISREG(st.st_mode) and not (require_owner and hasattr(os, "getuid") and st.st_uid != os.getuid()):
             return fd
     except OSError:
         pass
@@ -1365,7 +1368,7 @@ def _local_ledger_append(path, text):
     try:
         data = text.encode("utf-8")
         return os.write(fd, data) == len(data)
-    except OSError:
+    except (OSError, UnicodeEncodeError):
         return False
     finally:
         os.close(fd)
@@ -1493,14 +1496,38 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
     local = _gov_routes_local(ev)
     path = _docs_ledger_path(docs, GOV_LOCAL_LOG_NAME if local else GOV_LOG_NAME)
     line = _json.dumps(ev, ensure_ascii=False) + "\n"
+    if _ledger_tail_needs_newline(path):
+        line = "\n" + line
     if local:
         return _local_ledger_append(path, line)
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
         return True
+    except (OSError, UnicodeEncodeError):   # 帶不能編碼的字串(孤立代理字元)也算寫不進去,不丟堆疊(r2 併發、邊界席)
+        return False
+
+
+def _ledger_tail_needs_newline(path):
+    """帳檔非空而且最後一個位元組不是換行(上一次寫一半)→ True。追加前先補一個換行,新事件才不會黏在半行後面、整行被讀側丟掉
+    (代碼審 code-審查跑滿回顧 r1 併發席)。★帳尾檢查只有這一支★:_gate_event、_append_governance_log 與 _drift_ledger_append 呼叫它(r2 架構對齊席);★不是所有追加寫入器★——code-loop 的 _codeloop_gov_log、_codeloop_dispositions_gov_log 與審查帳的 _jsonl_append_verified 還沒接(r4 併發席,本分支沒改,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口)。
+    開檔走 _regular_own_fd(一次開檔、管線不卡住、開檔後才判一般檔;不先 stat 再 open,r2 併發席);不是一般檔或讀不到 → False(不碰)。
+    ★跟隨捷徑(follow=True)★:版控治理帳的寫入器跟隨捷徑追加,帳尾要看同一個檔,不然捷徑帳缺換行時新事件照樣黏行(r3 合約、邊界席);
+    不跟隨捷徑的寫入器(_local_ledger_append 開檔就擋捷徑、_drift_ledger_append 先過 _drift_ledger_path_err)遇到捷徑本來就不寫,跟不跟隨不影響它們。
+    讀最後一個位元組用 os.lseek + os.read(os.pread 只有 Unix 有,r3 邊界席)。"""
+    fd = _regular_own_fd(path, os.O_RDONLY, require_owner=False, follow=True)
+    if fd is None:
+        return False
+    try:
+        size = os.fstat(fd).st_size
+        if size <= 0:
+            return False
+        os.lseek(fd, size - 1, os.SEEK_SET)
+        return os.read(fd, 1) != b"\n"
     except OSError:
         return False
+    finally:
+        os.close(fd)
 
 
 def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None):
@@ -1572,15 +1599,36 @@ def _append_governance_log(vault, events):
                         (_docs_ledger_path(vault.parent, GOV_LOCAL_LOG_NAME), local)):
         if not batch:
             continue
-        text = "".join(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n" for e in batch)
-        if batch is local:
-            _local_ledger_append(path, text)
+        # ★逐筆組、只略過不能編碼的那筆★(帶孤立代理字元):整批組成一個字串再寫,一筆壞就整批靜默丟光,
+        # 同一批要進版控帳的 hard 事件也跟著不見(代碼審 code-審查跑滿回顧 r4 邊界席);略過與寫不進去都在 stderr 講一句(比照 _gate_event_or_warn)
+        lines, skipped = [], 0
+        for e in batch:
+            ln = json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n"
+            try:
+                ln.encode("utf-8")
+            except UnicodeEncodeError:
+                skipped += 1
+                continue
+            lines.append(ln)
+        if skipped:
+            print(f"  ⚠ telemetry-write-failed:有 {skipped} 筆治理帳事件帶不能編碼的字元,略過那幾筆;同一批其他 {len(lines)} 筆照寫",
+                  file=sys.stderr)
+        if not lines:
             continue
-        try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(text)
-        except OSError:
-            pass
+        text = "".join(lines)
+        if _ledger_tail_needs_newline(path):
+            text = "\n" + text
+        if batch is local:
+            ok = _local_ledger_append(path, text)
+        else:
+            try:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(text)
+                ok = True
+            except OSError:
+                ok = False
+        if not ok:
+            print(f"  ⚠ telemetry-write-failed:{len(lines)} 筆治理帳事件寫不進 {path.name}(判定不受影響,照原樣執行)", file=sys.stderr)
 
 
 def _read_touched_list(path):
@@ -2252,7 +2300,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             try:
                 _clog = _repo_root / "docs" / ".canary-log.jsonl"
                 import json as _j
-                _rows = [_j.loads(_l) for _l in _clog.read_text(encoding="utf-8").splitlines() if _l.strip()]
+                _rows = [_j.loads(_l) for _l in _ledger_lines(_clog.read_text(encoding="utf-8")) if _l.strip()]
                 for _d in _absent:
                     if any(_row.get("loop") == _d and _row.get("severity") == "blocker" for _row in _rows):
                         _blk.append(_d)
@@ -2275,6 +2323,37 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                           "首輪前掃(design-loop 步驟 2 第四類)跑完把宣告行 preflight-4: ran 寫進 rN-intake.md")
     except Exception as _e:
         ok(f"前掃留痕觀測跳過(fail-open:{_e})")
+    print()
+
+    section("I2", "審查跑滿上限、記了人裁之後,跑滿回顧有沒有寫(提醒,不擋)")
+    # Projects/審查跑滿回顧_計劃〈四〉:判定用同一支 _cap_retro_status;每個迴圈各自判,壞了只標那一個;只提醒、不計入 issues
+    try:
+        _rr_i2 = _vault_repo_root(env)
+        _rows_i2 = []
+        _scan_i2, _gerr_i2 = _cap_retro_scan(env, _rr_i2)
+        if _gerr_i2:   # 治理帳讀不了:列不出哪些迴圈記了人裁,另外報一行(不當成一個迴圈;代碼審 r4)
+            _rows_i2.append(f"治理帳讀不了,列不出哪些迴圈記了人裁:{_esc_clean(_gerr_i2, 200)} → "
+                            f"{_cap_retro_fix_cmd(_rr_i2, None, 'gov-bad')}")
+        for _lp_i2, _st_i2 in _scan_i2:
+            try:   # 每個迴圈各自組字;一個壞了只標它(計劃 S9;代碼審 r1 邊界席:孤立代理字元曾讓整段炸掉)
+                _nm_i2 = _esc_clean(_lp_i2, 60)
+                if _st_i2.get("error"):
+                    _rows_i2.append(f"{_nm_i2}:判不了({_esc_clean(_st_i2['error'], 80)}),略過這一個")
+                elif _st_i2.get("applies") and _st_i2.get("state") in ("none", "stale"):
+                    _why_i2 = f"({_esc_clean(_st_i2['problems'][0], 80)})" if _st_i2.get("problems") else ""
+                    _rows_i2.append(f"{_nm_i2}:回顧{_RETRO_STATE_LABEL[_st_i2['state']]}{_why_i2} → "
+                                    f"{_cap_retro_fix_cmd(_rr_i2, _lp_i2, _st_i2['state'])}")
+            except Exception as _e_i2:
+                _rows_i2.append(f"{_esc_clean(_lp_i2, 60)}:判不了({_e_i2.__class__.__name__}),略過這一個")
+        if _gerr_i2 and len(_rows_i2) == 1:
+            warn_soft(_rows_i2, "治理帳讀不了,判不了跑滿回顧(不計入問題數):", "照上面那行的出口修好治理帳再跑 doctor")
+        elif _rows_i2:
+            warn_soft(_rows_i2, f"{len(_rows_i2)} 個迴圈記了人裁,但跑滿回顧沒有或過期(不計入問題數):",
+                      "派沒參與該迴圈的乾淨代理起草,--check 過了 --record;人裁決定不寫就 lumos loop retro <編號> --skip --note \"<理由>\"")
+        else:
+            ok("記了人裁的迴圈都有合格的跑滿回顧(或還沒有人裁紀錄)")
+    except Exception as _e:
+        warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
     print()
 
     section("A1", "每天自動跑的那支治理腳本,最近有沒有跑完(提醒,不擋)")
@@ -3017,7 +3096,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         _first = {}
         _cl = env.vault.parent / ".canary-log.jsonl"
         if _cl.exists():
-            for _ln in _cl.read_text(encoding="utf-8", errors="replace").splitlines():
+            for _ln in _ledger_lines(_cl.read_text(encoding="utf-8", errors="replace")):
                 try:
                     _d = json.loads(_ln)
                 except ValueError:
@@ -7233,7 +7312,7 @@ def _loop_first_ts_key(env, loop_id):
     ledger = env.vault.parent / ".canary-log.jsonl"
     best = None
     if ledger.exists():
-        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+        for ln in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
             if not ln.strip():
                 continue
             try:
@@ -7537,7 +7616,7 @@ def _spec_gate_latest_records(env):
     latest = {}
     if not path.exists():
         return latest
-    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for ln in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
         if not ln.strip():
             continue
         try:
@@ -8021,7 +8100,9 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 # 2026-10-01 殺傷力配方的原文還對不對得上程式(doctor P2,只提醒不擋;Projects/殺傷力配方失配提醒_計劃)
                 "check-p2",
                 # 2026-10-02 殺傷力配方最近一次真跑判 survived(doctor P2 第二個提醒,只提醒不擋;Projects/殺傷力配方當場試跑_計劃)
-                "check-p2s")
+                "check-p2s",
+                # 2026-10-05 審查跑滿回顧:人裁紀錄、回顧已記、跳過(Projects/審查跑滿回顧_計劃;不在 design-loop/code-loop 底下,不影響 loop list 關門判定)
+                "loop-retro")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -8944,28 +9025,34 @@ def _cap_hint_advice(out_rounds):
     return "human-decides"
 
 
-def _cap_hint_print(rows, gate=None):
+def _cap_hint_print(rows, gate=None, loop_id=None, env=None, repo=None):
     """處置閘印跑滿上限提示:任何例外都吞掉、什麼都不印,不得影響判定與退出碼(代碼審 r1:帳上某輪欄位壞掉會讓處置閘噴例外)。"""
     try:
-        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate)):
+        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate), loop_id=loop_id, env=env, repo=repo):
             print(_ln)
     except Exception:
         pass
 
 
-def _cap_hint_lines(h):
-    """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。"""
+def _cap_hint_lines(h, loop_id=None, env=None, repo=None, phase=None):
+    """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。
+    到上限時多印「人裁:」那幾行(審查跑滿回顧〈三〉3、S19):代碼審的處置閘在 major 全折後就判過,
+    loop next 走 converged、不會走到 cap-reached,人裁的入口只剩這一段(2026-10-06 第一次實用時發現)。
+    ★記人裁的提示只有一處決定:_cap_retro_next_lines★(治理帳壞不叫人記、已有人裁改印回顧狀態、範圍外不印;
+    代碼審 code-審查跑滿回顧 r4 架構、通才、正確性、合約席:這裡原本自己組一份,loop next 到 cap-reached 印兩次,
+    治理帳壞或已記人裁時還叫人去記)。這裡只決定要不要叫人記(ask):到上限而提示不是「可以停」,或 loop next 判到 cap-reached
+    (閘問過了沒過,停在上限)。沒給 env(判不了治理帳)就不印這段。帳上的輪次與分級印出前過 _esc_clean(r4 資安席)。"""
     if not h:
         return []
     P = "  "   # 標籤只印在段首一行,後面縮排(跟處置閘各段的輸出慣例一樣)
     lines = []
     if h["at_cap"]:
-        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
+        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {_esc_clean(h['tier'], 40)} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
     else:
         lines.append("[cap-hint] " + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
     for x in h["rounds"]:
         f = "這輪沒記處置" if not x["recorded"] else f"折 {x['folded']} 條"
-        lines.append(P + f"  {x['round']}:{f},最高 {x['max_severity'] or '?'}")
+        lines.append(P + f"  {_esc_clean(x['round'], 80)}:{f},最高 {x['max_severity'] or '?'}")
     g = h.get("gate_status")
     if g is None:
         gate_txt = "過了沒要帶 --spec 問處置閘(lumos loop status <編號> --disposal --spec <材料> --repo <根>)"
@@ -8981,6 +9068,10 @@ def _cap_hint_lines(h):
         "human-decides": "有進展(折入在降),但還有 major 以上而且已到上限:要不要破例再一輪,由人裁",
     }[h["hint"]]
     lines.append(P + "提示:" + msg)   # 一律印:熔斷觸發但判不了時也要講判不了(設計 S8「並列」)
+    if h["at_cap"] and env is not None and loop_id:
+        ask = h["hint"] != "can-stop" or phase == "cap-reached"
+        for _ln in _cap_retro_next_lines(env, loop_id, repo, ask=ask):
+            lines.append(P + "人裁:" + _ln)
     if h.get("breaker"):
         b = h["breaker"]
         lines.append(P + f"熔斷:各輪累計折入已經 {b['total']} 條(超過 {_CAP_HINT_BREAKER}),建議拆小改動"
@@ -9124,7 +9215,7 @@ def cmd_severity_check(loop_id, round_id, auditor, repo="."):
         print(f"擋下:找不到帳本 {ledger}(--repo 要指 repo 根)", file=sys.stderr)
         return 2
     hit = None
-    for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
         if not line.strip():
             continue
         try:
@@ -9203,6 +9294,15 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             print(f"擋下:輪次編號不能用 __ 開頭(工具內部保留這個字首),換一個: {round_id!r}", file=sys.stderr)
             return 2
         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
+        # 審查跑滿回顧〈三〉1:人裁之後再記新一輪——要記的列輪次不在帳上而且這個迴圈要回顧時才讀治理帳;沒有人裁紀錄的迴圈放行(行為不變)
+        if loop:
+            _crb = _cap_retro_record_block(env, loop, round_id)
+            if _crb:
+                if _crb[0] != "cap-gov-bad":   # 治理帳本身不能碰(捷徑、管線…)時不往裡寫擋下事件(代碼審 code-審查跑滿回顧 r3 資安席)
+                    _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked", f"{_crb[0]} loop={loop} id={uuid.uuid4().hex[:8]}", hard=True)
+                for _ln in _crb[1]:
+                    print(_ln, file=sys.stderr)
+                return 2
     if capture_counts:
         try:
             rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
@@ -9678,7 +9778,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             # [r1 終審修] 逐行容錯:壞行只跳該行——原整包 try 被 any() 短路順序玩死
             # (壞行排在定錨行前→先炸→整包 fail-open,T6 強制被繞過;4 席重疊 finding)。
             # 殘餘天花板:定錨行★自己★損毀仍偵測不到(讀側 disposal 閘壞行 rc2 兜底)。
-            for _l in path.read_text(encoding="utf-8").splitlines():
+            for _l in _ledger_lines(path.read_text(encoding="utf-8")):
                 if not _l.strip():
                     continue
                 try:
@@ -10456,7 +10556,7 @@ def _loop_close_stamps(env, known_loops=()):
         return stamps, bad
     # 長的編號先比,免得 code-audit-batch4 吃掉 code-audit-batch4b 的 detail
     ordered = sorted((l for l in known_loops if l), key=len, reverse=True)
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
         line = line.strip()
         if not line:
             continue
@@ -10501,7 +10601,7 @@ def cmd_loop_list(env, days=14, show_all=False, stale_only=False, as_json=False,
     per = {}
     bad = 0
     if path.exists():
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
             line = line.strip()
             if not line:
                 continue
@@ -10661,7 +10761,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
         else:
             o["badtype"] += 1
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _ledger_lines(path.read_text(encoding="utf-8")):
             line = line.strip()
             if not line:
                 continue
@@ -10733,7 +10833,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
     typed = {}
     n_attr = n_note = n_unknown = 0
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _ledger_lines(path.read_text(encoding="utf-8")):
             try:
                 d = json.loads(line)
             except ValueError:
@@ -10784,7 +10884,7 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
     rounds = []
     try:
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in _ledger_lines(path.read_text(encoding="utf-8")):
                 line = line.strip()
                 if not line:
                     continue
@@ -10957,8 +11057,15 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
 def _esc_clean(v, limit=200):
     """逃逸帳顯示消毒(code-escape r1 B-1/B-2):控制字元(含換行/ESC)換空格——
     --list 的「一行一筆」是攔截/逃逸週報 grep 的載重合約,使用者可控的 desc 不得打穿;
-    ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。"""
-    out = "".join(ch if ch >= " " and not ("\x7f" <= ch <= "\x9f") else " " for ch in str(v))   # 含 8 位元 C1 控制碼(r2 資安席)
+    ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。
+    ★為什麼不用共用的 _PATH_SPECIAL_CATS 類別組★(代碼審 code-審查跑滿回顧 r3 架構對齊席):這支是「換成空格」的有損清洗、而且是全域顯示函式,
+    類別 Cf 整類換掉會把零寬連字(ZWJ)組成的表情、零寬非連字、軟連字號、BOM 拆壞;Zl/Zp(U+2028/2029)終端不當換行、不清。
+    要「無損、看得見」的跳脫(JSON 骨架、設定檔字樣)用 _PATH_SPECIAL_CATS 那組(_json_text_escaped、_kill_esc),兩種用途不併。"""
+    # 只清會被終端執行或改變顯示方向的字元:C0/DEL/C1(含 ESC 開頭的控制序列、OSC、8 位元 CSI)、雙向覆寫與隔離字元
+    # (U+202A–U+202E、U+2066–U+2069);另外孤立代理字元換掉——不換的話印到終端或 json.dumps(ensure_ascii=False) 會整支炸掉
+    # (代碼審 code-審查跑滿回顧 r2)。★零寬連字(ZWJ)、零寬非連字、軟連字號、BOM 照留★:全域函式,組合表情符號不能被拆開。
+    out = "".join(" " if (ch < " " or "\x7f" <= ch <= "\x9f" or "\u202a" <= ch <= "\u202e" or "\u2066" <= ch <= "\u2069"
+                          or "\ud800" <= ch <= "\udfff") else ch for ch in str(v))
     return out if len(out) <= limit else out[:limit] + "…"
 
 
@@ -11024,7 +11131,7 @@ def _door_for_loop(env, loop_id):
     door = "unknown"
     if not path.exists():
         return door
-    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for ln in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
         if not ln.strip():
             continue
         try:
@@ -11045,7 +11152,7 @@ def _auto_escape(env, stage, severity, desc, loops, sha, source, extra=None):
     ledger = env.vault.parent / ".canary-log.jsonl"
     known = set()
     if ledger.exists():
-        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+        for ln in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
             if not ln.strip():
                 continue
             try:
@@ -11277,7 +11384,7 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
     known, led_bad, review_ids = set(), 0, set()   # 審查帳只掃一次:編號存在與否、哪些是審查紀錄(r2 併發席)
     if ledger.exists():
         import json as _je2
-        for ln in ledger.read_text(encoding="utf-8").splitlines():
+        for ln in _ledger_lines(ledger.read_text(encoding="utf-8")):
             if not ln.strip():
                 continue
             try:
@@ -11381,7 +11488,7 @@ def _escape_review_rows_by_loop(env):
     """審查帳裡的審查紀錄,依迴圈編號(NFC)分組;規格閘留痕不算。"""
     by_loop = {}
     try:
-        for ln in (env.vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
+        for ln in _ledger_lines((env.vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8", errors="replace")):
             try:
                 d = json.loads(ln)
             except (ValueError, RecursionError):
@@ -11398,7 +11505,7 @@ def _escape_released_loops(env, review_ids):
     nodes 帶編號;有任何一筆 converged 就算),而且審查帳有它的審查紀錄。"""
     released = set()
     try:
-        for ln in (env.vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
+        for ln in _ledger_lines((env.vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8", errors="replace")):
             try:
                 d = json.loads(ln)
             except (ValueError, RecursionError):
@@ -11585,7 +11692,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     bad_linenos = []   # disposal rc2 訊息用:壞行可一分鐘定位修復(r2 三席異議的降噪配套)
     try:
         if path.exists():
-            for _ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for _ln, line in enumerate(_ledger_lines(path.read_text(encoding="utf-8")), 1):
                 line = line.strip()
                 if not line:
                     continue
@@ -11600,6 +11707,12 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     except OSError as e:
         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
+    except UnicodeDecodeError as e:
+        # 審查跑滿回顧 S17:有人裁紀錄的迴圈帳壞 → 第八步 ✗、不丟堆疊;沒有人裁紀錄的迴圈照原樣(re-raise,行為不變)
+        if disposal and _disposal_retro_ledger_bad(env, loop_id, Path(repo).resolve() if repo else _vault_repo_root(env),
+                                                   f"審查帳不是 UTF-8(第 {e.start} 個位元組讀不動)"):
+            return 1
+        raise
 
     if roster:
         # [派工編制資料化] advisory 觀測——恆在各模式分支 early-return 之前印,rc 完全不動
@@ -11620,6 +11733,11 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
+        # 審查跑滿回顧 S17:某列輪次不是字串時分輪會丟堆疊;有人裁紀錄的迴圈改成第八步 ✗,沒有的照原樣往下走
+        _bad_rid = next((r.get("round") for r in rounds if "round" in r and not isinstance(r.get("round"), str)), _RETRO_NO_BAD)
+        if _bad_rid is not _RETRO_NO_BAD and _disposal_retro_ledger_bad(
+                env, loop_id, _dsp_root, f"審查帳有一列輪次不是字串({_esc_clean(repr(_bad_rid), 40)})"):
+            return 1
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
                                      bad_linenos=bad_linenos, env=env, roster=roster, repo=repo, readonly=readonly)
     if not panel and n_round > 0:
@@ -11888,29 +12006,83 @@ LOOP_ORCHESTRATORS = ("claude", "codex")
 _ROSTER_CODEX_KEYS = ("codex", "gpt")     # 編排者是 Codex 時,這幾個字眼=同門
 
 
-def _loop_records(env, loop_id, strict=False):
-    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。單一讀法——cmd_loop_next 與 record 定錨檢查共用
-    (code-codex-s2 r1 架構席:兩份逐行相同的讀帳迴圈會各自漂)。strict=True 時檔讀不到就丟 OSError 給呼叫端印。"""
+_LEDGER_LINE_RE = re.compile(r"\r\n|\n|\r")
+_LEDGER_LINE_RE_B = re.compile(rb"\r\n|\n|\r")
+
+
+def _ledger_lines(text):
+    """帳檔切行的唯一規則:只認 \\r\\n、\\n、\\r。不用 splitlines(它還認 U+2028/U+2029/U+0085,寫入端
+    json.dumps(ensure_ascii=False) 不跳脫這三個,一列會被劈開丟掉);也不只認 \\n(整本 \\r 行尾會被當成一行丟掉)。
+    審查帳(.canary-log.jsonl)與治理帳(.governance-log.jsonl)原本用 splitlines 的讀者都改走這一支(代碼審 code-審查跑滿回顧 r1/r2 接了三處,
+    r3 架構對齊席指出其餘讀者還在 splitlines、同一列在不同讀者眼中行數不同,r3 把那 20 處換掉;t_cap_retro_r3_ledger_lines_everywhere 掃原始碼守著)。
+    ★不是兩本帳所有讀者★:_drift_jsonl_iter 這一系(lumos gov 載入器、_gov_ledger_rows_by_time、doctor 增速與度量段)與 _fix_check_events
+    仍只在 \\n 切行(r4 四席,本分支沒改,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口)。"""
+    return (_LEDGER_LINE_RE_B if isinstance(text, bytes) else _LEDGER_LINE_RE).split(text)
+
+
+def _canary_ledger_scan(env):
+    """審查帳單一讀法的核心(loop next、canary record 定錨檢查、跑滿回顧一族共用)。回 (by_loop, bad_by_loop, decode_exc)。
+    by_loop:編號 → 該編號的列(濾掉規格閘留痕);bad_by_loop:編號 → 「某列輪次不是字串」的說明;decode_exc:整本不是 UTF-8 時的例外。
+    ★切行用 _ledger_lines★(只認 \\r\\n、\\n、\\r):寫入端 json.dumps(ensure_ascii=False) 不跳脫 U+2028/U+2029/U+0085,splitlines 會把含它們的一列劈成兩半、
+    整列當壞行丟掉、輪數少算(代碼審 code-審查跑滿回顧 r1 正確性、邊界席;r2 起認 \\r 行尾)。壞行與不是物件的行跳過。檔讀不到 → OSError 往上丟。"""
     import json as _json
     path = env.vault.parent / ".canary-log.jsonl"
-    out = []
+    by, bad = {}, {}
+    if not path.exists():
+        return by, bad, None
+    raw = path.read_bytes()
     try:
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = _json.loads(line)
-                except ValueError:
-                    continue
-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
-                    out.append(d)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return by, bad, e
+    for line in _ledger_lines(text):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = _json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(d, dict) or d.get("kind") == "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
+            continue
+        lp = d.get("loop")
+        if not isinstance(lp, str):
+            continue
+        by.setdefault(lp, []).append(d)
+        if "round" in d and not isinstance(d["round"], str) and lp not in bad:
+            bad[lp] = f"審查帳 {_esc_clean(lp, 60)} 有一列輪次不是字串({_esc_clean(repr(d['round']), 40)})"
+    return by, bad, None
+
+
+def _loop_records(env, loop_id, strict=False):
+    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。單一讀法——cmd_loop_next 與 record 定錨檢查共用
+    (code-codex-s2 r1 架構席:兩份逐行相同的讀帳迴圈會各自漂)。strict=True 時檔讀不到就丟 OSError 給呼叫端印。
+    整本不是 UTF-8 時照舊丟 UnicodeDecodeError(既有呼叫端行為不變);要不丟例外、拿帳壞原因的用 _loop_records_checked。"""
+    try:
+        by, _bad, exc = _canary_ledger_scan(env)
     except OSError:
         if strict:
             raise
-        return out
-    return out
+        return []
+    if exc is not None:
+        raise exc
+    return by.get(loop_id, [])
+
+
+def _loop_records_checked(env, loop_id, scan=None):
+    """同 _loop_records 那一套讀法,但帳壞不丟例外:回 (列, 帳壞原因或 None)。帳壞=讀不到、整本不是 UTF-8、這個編號某列輪次不是字串。
+    scan=_canary_ledger_scan 的結果(統計一次讀完共用)。跑滿回顧一族用它(計劃〈實務隱患〉帳壞:新路徑不讓解碼錯誤冒成堆疊)。"""
+    if scan is None:
+        if env is None:
+            return [], "沒有審查帳可對"
+        try:
+            scan = _canary_ledger_scan(env)
+        except OSError as e:
+            return [], f"審查帳讀不到({e.__class__.__name__})"
+    by, bad, exc = scan
+    if exc is not None:
+        return [], f"審查帳不是 UTF-8(第 {exc.start} 個位元組讀不動)"
+    return by.get(loop_id, []), bad.get(loop_id)
 
 
 def _loop_orchestrators(rounds):
@@ -12431,10 +12603,12 @@ def _fix_ls_tree(repo_root, rev, path):
     return typ
 
 
-def _fix_bad_strings(obj):
+def _fix_bad_strings(obj, nul=True):
     """解析之後逐一看每個字串(鍵也看;迭代不遞迴,深巢狀不爆):含空字元、或有轉不成 UTF-8 的孤立代理字元
     (JSON 合法,但拿去當路徑或參數會當掉)→ 回原因;都沒有回 ""。代碼審 r1 通才A、r2 通才:第一版在原始文字裡找
-    \u0000 字樣,會誤擋 note 裡寫的字面反斜線。"""
+    \u0000 字樣,會誤擋 note 裡寫的字面反斜線。
+    nul=False 不查空字元、只查能不能編碼成 UTF-8:跑滿回顧一族進檔、進帳前用(回顧檔、骨架、--note、輪次;空字元在那裡不是錯,
+    原本另寫一支 _retro_utf8_bad,代碼審 code-審查跑滿回顧 r3 架構對齊席指出是第二套,收回來)。"""
     stack = [obj]
     while stack:
         x = stack.pop()
@@ -12444,7 +12618,7 @@ def _fix_bad_strings(obj):
         elif isinstance(x, list):
             stack.extend(x)
         elif isinstance(x, str):
-            if "\x00" in x:
+            if nul and "\x00" in x:
                 return "修正紀錄裡有空字元,路徑、版本與測試名都不能含它"
             try:
                 x.encode("utf-8")
@@ -12955,6 +13129,923 @@ def cmd_loop_fix_check(env, loop_id, round_id, repo=None, as_json=False, templat
     return 0 if passed else 1
 
 
+# ───────────── 審查跑滿回顧(Projects/審查跑滿回顧_計劃)─────────────
+# 多席審查迴圈到分級上限時,人裁用 `loop cap-decision` 記一筆(破例再開一輪或接受風險);有人裁紀錄、而且有卷證資料夾的迴圈,
+# 要先留一份固定格式的回顧(或記跳過)才能繼續:canary record 記新一輪、處置閘第八步、loop next 到 cap-reached、doctor、retro-stats
+# ★五個呼叫端共用 _cap_retro_status 一支判定★(計劃〈名詞〉合格回顧;任何一處自己另判就會口徑分岔)。
+# 讀治理帳直接讀原始 jsonl、檔內順序、壞行跳過——不經 gov 的載入器(它以提交與種類去重、保留第一筆,同一提交上兩次 --record 會折成舊的那筆)。
+_RETRO_FAMILIES = ("same-family-unswept", "fix-induced", "scope-too-big", "spec-unclear",
+                   "seat-noise", "bar-moved", "hostile-surface", "other")
+_RETRO_TARGETS = ("rule", "tool", "dispatch", "skill", "none")
+_RETRO_DECISIONS = ("extra-round", "accept-risk")
+_RETRO_MAX_BYTES = 256 * 1024
+_RETRO_FILE = "cap-retro.json"
+_RETRO_STATE_LABEL = {"recorded": "已記回顧", "skipped": "已跳過", "stale": "過期", "none": "沒有", "gov-bad": "判不了(治理帳壞)"}
+_RETRO_NO_BAD = object()   # 「沒有壞輪次」的哨兵(輪次值本身可能是 None)
+
+
+def _retro_id_bad(loop_id):
+    """回顧相關指令的編號檢查:既有 _FIX_ID_BAD_RE(/、\\、控制字元、DEL、..),另擋空字串、只有空白、「.」。回原因或空字串。"""
+    if not isinstance(loop_id, str) or not loop_id.strip():
+        return "編號是空的或只有空白"
+    if loop_id.strip() == ".":
+        return "編號不能是「.」"
+    if _fix_bad_strings(loop_id, nul=False):
+        return "編號含不能編碼成 UTF-8 的字元"
+    if _FIX_ID_BAD_RE.search(loop_id):
+        return f"編號 {_esc_clean(loop_id, 60)!r} 含路徑字元或控制字元(/、\\、..、控制字元)"
+    return ""
+
+
+def _retro_root(env, repo=None):
+    return Path(repo).resolve() if repo else _vault_repo_root(env)
+
+
+def _retro_dir(root, loop_id):
+    return Path(root) / "governance" / "review-reports" / str(loop_id)
+
+
+def _retro_has_dossier(root, loop_id, rows):
+    """「有卷證資料夾」= 資料夾存在,而且裡面真的有這個編號帳上某一列的席報告(正規化後在資料夾底下、檔存在)。
+    ★只看資料夾在不在不夠★:處置閘的 roster 尾端遇到席位異常會自己 mkdir 這個資料夾(既有副作用),
+    沒有卷證的暫存迴圈問過一次閘就會被誤判成要回顧(實作期發現,計劃〈一〉補寫)。"""
+    d = _retro_dir(root, loop_id)
+    try:
+        if not d.is_dir():
+            return False
+    except (OSError, ValueError):
+        return False
+    prefix = os.path.normpath(str(Path("governance") / "review-reports" / str(loop_id))) + os.sep
+    for r in rows or []:
+        rp = r.get("report_path") if isinstance(r, dict) else None
+        if not isinstance(rp, str) or not rp.strip():
+            continue
+        try:
+            n = _retro_norm_path(rp, root)
+            if n.startswith(prefix) and (Path(root) / n).is_file():
+                return True
+        except (OSError, ValueError):
+            continue          # 帳上路徑打不開(含 NUL 等):當作不是卷證,不丟堆疊
+
+    return False
+
+
+def _retro_dossier_seen(root, loop_id, rows, err):
+    """帳讀得動 → 照 _retro_has_dossier;帳讀不動(err)時拿不到席報告清單,退回只看資料夾在不在(寧擋不放:S17 帳壞要 fail-closed)。"""
+    if err:
+        return _retro_dir(root, loop_id).is_dir()
+    return _retro_has_dossier(root, loop_id, rows)
+
+
+def _retro_path(root, loop_id):
+    return _retro_dir(root, loop_id) / _RETRO_FILE
+
+
+def _retro_rel(root, p):
+    try:
+        return str(Path(p).relative_to(Path(root)))
+    except ValueError:
+        return str(p)
+
+
+def _retro_ledger_rounds(rows):
+    """帳上輪次:相異輪次 id 依第一次出現的順序(跟 loop next 同一套,集合計數)。"""
+    out, seen = [], set()
+    for r in rows:
+        rid = r.get("round")
+        if isinstance(rid, str) and rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+    return out
+
+
+def _retro_gov_path_err(root):
+    """跑滿回顧一族讀寫治理帳前的路徑檢查 → 給人看的原因或 None。★讀寫同一條規則★:走既有帳檔寫入前檢查 _drift_ledger_path_err
+    (repo 根往下任一層是符號連結、解析後不在 repo 裡、不是一般檔、有別的硬連結 = 帳壞)。讀端遇到就 fail-closed(_cap_retro_status 的 gov-bad),
+    寫端(cap-decision、--record、--skip)回 2 不寫——不往捷徑目標追加,捷徑指到 repo 外時也不會寫到外面
+    (代碼審 code-審查跑滿回顧 r3 合約、併發、資安、邊界四席:r2 把讀端改成不跟捷徑,寫端照舊跟,人裁寫得進去、閘讀不到)。"""
+    err = _drift_ledger_path_err(root, f"docs/{GOV_LOG_NAME}")
+    if not err:
+        return None
+    return _esc_clean("治理帳 docs/" + GOV_LOG_NAME + " 讀寫都不碰:" + err.replace(str(Path(root)) + os.sep, ""), 300)
+
+
+def _retro_gov_events(root, loop_id=None):
+    """治理帳裡 gate=loop-retro 的事件 → (事件清單, 帳壞原因或 None)。帳不存在 = ([], None);路徑不合 _retro_gov_path_err 或讀不動 = ([], 原因),
+    呼叫端要當成帳壞(fail-closed),★不得當成沒有人裁紀錄★。
+    檔內順序;壞行(不是 UTF-8、不是 JSON、不是物件)跳過;loop_id 給了就以結構化欄位 loop 逐字比對。
+    ★只讀版控帳(docs/.governance-log.jsonl)是對的★:_gate_event 只把 _GOV_LOCAL_PAIRS 白名單裡、hard=False 的「閘名+種類」分流到本機帳,
+    loop-retro 三種都不在白名單,永遠寫版控帳(t_cap_retro_gate_registered_and_close_unaffected 釘著);哪天把它加進白名單,這裡要跟著讀兩本。
+    ★不共用 _gov_ledger_rows_by_time★:那支把兩本帳合起來依時間排序(給度量用),這裡要的是版控帳的檔內順序(「最新一筆人裁之後」靠它),
+    依時間排會讓同一秒的人裁與回顧前後顛倒。開檔照既有守衛只讀一般檔(走 _retro_read_bytes → _regular_own_fd,管線不卡住);切行用 _ledger_lines。"""
+    import json as _j
+    gerr = _retro_gov_path_err(root)
+    if gerr:
+        return [], gerr
+    gp = Path(root) / "docs" / GOV_LOG_NAME
+    if not os.path.lexists(gp):
+        return [], None
+    raw, rerr = _retro_read_bytes(gp, limit=None)
+    if raw is None:
+        return [], _esc_clean(f"治理帳 docs/{GOV_LOG_NAME} {rerr}", 300)
+    out = []
+    for ln in _ledger_lines(raw):
+        if b"loop-retro" not in ln:
+            continue
+        try:
+            d = _j.loads(ln.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            continue
+        if not isinstance(d, dict) or d.get("gate") != "loop-retro":
+            continue
+        if loop_id is not None and d.get("loop") != loop_id:
+            continue
+        out.append(d)
+    return out, None
+
+
+def _retro_is_decision(e):
+    return (e.get("kind") == "cap-decision" and e.get("decision") in _RETRO_DECISIONS
+            and isinstance(e.get("rounds"), list))
+
+
+def _retro_norm_path(p, root):
+    """證據與帳上 report_path 比對前的正規化:repo 內的絕對路徑轉成 repo 相對,再 normpath(去 ./、重複斜線、..)。
+    ★為什麼不共用處置閘的 _prov_path★:那支是「把帳上路徑解析成要打開的檔」(相對路徑接到 repo 根,絕對路徑原樣),
+    這支是「兩邊寫法不同的路徑比對前要長得一樣」(回顧檔手寫的 ./a//b、repo 內絕對路徑,要跟帳上的相對寫法相等)——
+    方向相反,硬併會讓其中一邊多做或少做正規化。含 NUL 等打不開的路徑不解析,只做字面 normpath(不丟堆疊)。"""
+    s = str(p).strip()
+    if os.path.isabs(s):
+        rr = Path(root)
+        cands = [Path(os.path.normpath(s))]
+        try:
+            cands.append(Path(s).resolve())
+        except (OSError, ValueError, RuntimeError):
+            pass
+        for cand in cands:
+            try:
+                s = str(cand.relative_to(rr))
+                break
+            except ValueError:
+                continue
+        else:
+            s = os.path.normpath(s)
+    return os.path.normpath(s)
+
+
+def _retro_read_bytes(p, limit=_RETRO_MAX_BYTES):
+    """讀跑滿回顧一族要讀的檔(回顧檔、治理帳)的位元組,只讀一次。回 (位元組, 錯誤或 None)。
+    開檔走既有 _regular_own_fd(不跟捷徑、管線不卡住、開檔後判一般檔),require_owner=False:別的帳號 checkout 的檔也讀得到。
+    limit=None 不設上限(治理帳);回顧檔上限 256KB。驗與算指紋都用這一份(--record 先驗後算若各讀一次,中間被換掉會記到沒驗過的內容)。"""
+    fd = _regular_own_fd(p, os.O_RDONLY, require_owner=False)
+    if fd is None:
+        return None, "讀不到(不存在、是資料夾、捷徑或管線,或打不開)"
+    try:
+        chunks, n = [], 0
+        while limit is None or n <= limit:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            chunks.append(b)
+            n += len(b)
+    except OSError as e:
+        return None, f"讀不到({e.__class__.__name__})"
+    finally:
+        os.close(fd)
+    raw = b"".join(chunks)
+    if limit is not None and len(raw) > limit:
+        return None, f"超過 256KB(至少 {len(raw)} 位元組)"
+    return raw, None
+
+
+def _retro_path_unsafe(root, loop_id):
+    """回顧檔落點安不安全(讀端、寫端、提示共用一個答案)→ None、"dossier"(卷證資料夾或它的上層是符號連結、或解析後不在 repo 裡)、
+    "file"(回顧檔本身是符號連結)。逐層判走共用的 _repo_path_unsafe,不另寫 realpath/startswith(代碼審 code-審查跑滿回顧 r3 架構對齊席:
+    自寫版只看資料夾本身,上層是捷徑就放行,寫端建到別處、讀端讀這裡)。"""
+    rel = Path("governance") / "review-reports" / str(loop_id) / _RETRO_FILE
+    try:
+        bad = _repo_path_unsafe(root, rel)
+    except (OSError, ValueError):
+        return "dossier"
+    if not bad:
+        return None
+    return "file" if bad[0] == "symlink" and bad[1] == _retro_path(root, loop_id) else "dossier"
+
+
+_RETRO_DOSSIER_UNSAFE = "所在的卷證資料夾(或它的上層)是符號連結、或解析後不在 repo 裡——工具不在那裡讀寫回顧檔"
+
+
+def _retro_read_file(root, loop_id):
+    """讀回顧檔 → (位元組, 錯誤或 None)。落點先過 _retro_path_unsafe(跟 --template --write 同一個答案),再走 _retro_read_bytes。"""
+    if _retro_path_unsafe(root, loop_id) == "dossier":
+        return None, _RETRO_DOSSIER_UNSAFE
+    return _retro_read_bytes(_retro_path(root, loop_id))
+
+
+def _retro_parse(raw):
+    """回顧檔位元組 → (物件, None) 或 (None, 原因)。--check 與下一步提示共用這一份判法(提示要知道檔是不是壞到該刪掉重建)。"""
+    import json as _j
+    if len(raw) > _RETRO_MAX_BYTES:
+        return None, f"超過 256KB({len(raw)} 位元組)"
+    if not raw.strip():
+        return None, "是空檔(多半是建檔中途被中斷)"
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        return None, f"不是 UTF-8(第 {e.start} 個位元組讀不動)"
+    try:
+        data = _j.loads(text)
+    except (ValueError, RecursionError) as e:
+        return None, f"不是合法 JSON({e.__class__.__name__})"
+    if not isinstance(data, dict):
+        return None, f"的根不是物件(要是 {{…}},現在是 {type(data).__name__})"
+    return data, None
+
+
+def _json_text_escaped(obj, indent=2):
+    """json.dumps(ensure_ascii=False) 的文字,再把共用 _PATH_SPECIAL_CATS 類別的字元(C0/C1、雙向覆寫與零寬、行段分隔、孤立代理字元)
+    換成 JSON 的 \\uXXXX(超出 BMP 的用代理對)——讀回來值不變,印到終端或 cat 檔都不會被當成控制序列執行。
+    中文照原樣(不用 ensure_ascii=True:骨架要給人與起草代理讀)。結構用的換行(indent)保留:字串裡的 C0 json.dumps 本來就跳脫,
+    原樣的 \\n 只會是排版。★為什麼不用 _kill_esc★:它把換行也跳脫(排版會壞),超出 BMP 的字寫成 \\u 加五位數,不是合法 JSON 跳脫。
+    跑滿回顧 --template 的標準輸出與 --write 建的檔共用(代碼審 code-審查跑滿回顧 r3 資安席)。"""
+    import json as _j
+    text = _j.dumps(obj, ensure_ascii=False, indent=indent)
+    return "".join(_j.dumps(ch)[1:-1] if ch != "\n" and unicodedata.category(ch) in _PATH_SPECIAL_CATS else ch for ch in text)
+
+
+def _retro_cmd(loop_id, tail):
+    """印給人照貼的 lumos loop retro 指令的唯一組法:編號先 shlex.quote,整行再過 _esc_clean(帳上編號含控制字元也不會打穿終端)。"""
+    import shlex as _shlex
+    return _esc_clean(f"lumos loop retro {_shlex.quote(str(loop_id))} {tail}".rstrip(), 400)
+
+
+def _retro_qpath(root, p):
+    import shlex as _shlex
+    return _esc_clean(_shlex.quote(_retro_rel(root, p)), 300)
+
+
+def _retro_text_ok(v, n):
+    return isinstance(v, str) and len(v.strip()) >= n
+
+
+def _cap_retro_check(root, loop_id, decision, rows, rows_err, raw=None):
+    """驗回顧檔(--check 與合格回顧判定共用)。回 (問題清單, 解析後的物件或 None)。壞檔一律判不合格並講原因,不丟堆疊。
+    raw=呼叫端已讀好的位元組(--record 與合格判定拿同一份算指紋);沒給就自己讀(_retro_read_bytes)。"""
+    p = _retro_path(root, loop_id)
+    rel = _retro_qpath(root, p)
+    if raw is None:
+        raw, rerr = _retro_read_file(root, loop_id)
+        if rerr:
+            return [f"回顧檔{rerr}:{rel} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"], None
+    data, perr = _retro_parse(raw)
+    if perr:
+        return [f"回顧檔{perr} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"], None
+    if _fix_bad_strings(data, nul=False):
+        return ["回顧檔有字串含孤立代理字元(\\ud800 這類,不是合法文字),型別不合格"], None
+    probs = []
+
+    def bad(field, why):
+        probs.append(f"{field}: {why}")
+
+    v = data.get("version")
+    if not (isinstance(v, int) and not isinstance(v, bool) and v == 1):
+        bad("version", f"要是 1,現在是 {_esc_clean(repr(v), 40)}")
+    if data.get("loop") != loop_id:
+        bad("loop", f"要等於指令給的編號 {loop_id!r},現在是 {_esc_clean(repr(data.get('loop')), 60)}")
+    want = [x for x in (decision.get("rounds") or []) if isinstance(x, str)]
+    rnds = data.get("rounds")
+    rset = set()
+    if not (isinstance(rnds, list) and all(isinstance(x, str) for x in rnds)):
+        bad("rounds", "要是字串清單")
+    else:
+        rset = set(rnds)
+        if rnds != want:
+            bad("rounds", f"要等於最新一筆人裁紀錄的輪次 {want}(順序也要一致),現在是 {_esc_clean(rnds, 120)}")
+    auditors = {r["auditor"].strip() for r in rows if isinstance(r.get("auditor"), str) and r["auditor"].strip()}
+    db, cb = data.get("drafted_by"), data.get("completed_by")
+    if not _retro_text_ok(db, 1):
+        bad("drafted_by", "要填起草的代理名稱(非空字串)")
+    if not _retro_text_ok(cb, 1):
+        bad("completed_by", "要填補完的人或編排者(非空字串)")
+    if _retro_text_ok(db, 1) and _retro_text_ok(cb, 1) and db.strip() == cb.strip():
+        bad("drafted_by", "不得等於 completed_by(起草與補完要是不同的人)")
+    if _retro_text_ok(db, 1) and db.strip() in auditors:
+        bad("drafted_by", f"{_esc_clean(db, 60)!r} 是這個迴圈的審查席;起草者要是沒參與這個迴圈的乾淨代理")
+    if rows_err:
+        bad("evidence", f"{rows_err},驗不了證據與起草者")
+    reports = set()
+    for r in rows:
+        rp = r.get("report_path")
+        if isinstance(rp, str) and rp.strip():
+            reports.add(_retro_norm_path(rp, root))
+    fams = data.get("families")
+    if not isinstance(fams, list) or not fams:
+        bad("families", "要是至少一項的清單")
+    else:
+        for i, f in enumerate(fams, 1):
+            tag = f"families[{i}]"
+            if not isinstance(f, dict):
+                bad(tag, "要是物件 {family, rounds, evidence, note}")
+                continue
+            fam = f.get("family")
+            if fam not in _RETRO_FAMILIES:
+                bad(f"{tag}.family", f"{_esc_clean(repr(fam), 40)} 不在固定清單({'、'.join(_RETRO_FAMILIES)})")
+            note = f.get("note")
+            if note is not None and not isinstance(note, str):
+                bad(f"{tag}.note", "要是字串")
+            if fam == "other" and not _retro_text_ok(note, 10):
+                bad(f"{tag}.note", "family 是 other 時要附 note 至少 10 字")
+            fr = f.get("rounds")
+            if not (isinstance(fr, list) and fr and all(isinstance(x, str) for x in fr)):
+                bad(f"{tag}.rounds", "要是至少一項的字串清單")
+            else:
+                out = [x for x in fr if x not in rset]
+                if out:
+                    bad(f"{tag}.rounds", f"{_esc_clean(out, 120)} 不在回顧的 rounds 裡")
+            ev = f.get("evidence")
+            if not (isinstance(ev, list) and ev and all(isinstance(x, str) and x.strip() for x in ev)):
+                bad(f"{tag}.evidence", "要是至少一條的席報告路徑清單")
+            elif not rows_err:
+                for x in ev:
+                    nx = _retro_norm_path(x, root)
+                    if nx not in reports:
+                        bad(f"{tag}.evidence", f"{_esc_clean(x, 100)!r} 不是這個編號帳上任何一列的席報告(report_path)")
+                    elif not (Path(nx) if os.path.isabs(nx) else Path(root) / nx).is_file():
+                        bad(f"{tag}.evidence", f"{_esc_clean(x, 100)!r} 是帳上的報告,但檔案現在不存在")
+    for key, n, what in (("why_cap", 20, "為什麼跑滿"), ("avoid", 20, "當初怎樣做能少跑一輪")):
+        if not _retro_text_ok(data.get(key), n):
+            bad(key, f"要是至少 {n} 字的字串({what})")
+    chs = data.get("changes")
+    if not isinstance(chs, list) or not chs:
+        bad("changes", "要是至少一項的清單")
+    else:
+        for i, ch in enumerate(chs, 1):
+            tag = f"changes[{i}]"
+            if not isinstance(ch, dict):
+                bad(tag, "要是物件 {target, ref, change}")
+                continue
+            tg = ch.get("target")
+            if tg not in _RETRO_TARGETS:
+                bad(f"{tag}.target", f"{_esc_clean(repr(tg), 40)} 不在固定清單({'、'.join(_RETRO_TARGETS)})")
+            elif tg == "none":
+                if not _retro_text_ok(ch.get("reason"), 10):
+                    bad(f"{tag}.reason", "target 是 none 時要附 reason 至少 10 字")
+            else:
+                if not _retro_text_ok(ch.get("ref"), 1):
+                    bad(f"{tag}.ref", "要寫改哪裡(非空字串)")
+                if not _retro_text_ok(ch.get("change"), 10):
+                    bad(f"{tag}.change", "要寫改什麼,至少 10 字")
+    return probs, (None if probs else data)
+
+
+def _cap_retro_status(env, loop_id, root, events=None, rows=None, rows_err=None, dir_exists=None, gov_err=None):
+    """★合格回顧的唯一判定★(處置閘第八步、canary record、loop next、doctor、retro-stats 全部呼叫這一支)。
+    取這個編號最新一筆人裁紀錄 D(治理帳檔內順序),再取 D 之後最新一筆 recorded 或 skipped 事件 E:
+    skipped → 已跳過;recorded → 回顧檔現在的 sha256 等於 E.retro_sha256 而且通過檢查(rounds 等於 D.rounds)→ 已記回顧,否則過期;沒有 E → 沒有。
+    回 dict:applies(有人裁紀錄而且卷證資料夾存在)、reason(不適用時 no-decision/no-dir)、decision(D)、
+    state(recorded/skipped/stale/none/gov-bad)、problems(過期或帳壞的原因)、data(已記回顧時的回顧內容)。
+    ★治理帳壞(gov_err)fail-closed★:讀不到人裁紀錄不等於沒有;只要這個迴圈「可能有」人裁紀錄(審查帳讀得動時:在 cap-decision 的範圍、
+    帳上輪數已到上限——不到上限記不了人裁;審查帳也讀不動時一律算可能有)而且有卷證,就判 state=gov-bad(decision 是 None)、要回顧(代碼審 r3)。"""
+    if events is None:
+        events, gov_err = _retro_gov_events(root, loop_id)
+    res = {"applies": False, "reason": "no-decision", "decision": None, "state": None, "problems": [], "data": None}
+    if gov_err:
+        if rows is None:
+            rows, rows_err = _loop_records_checked(env, loop_id)
+        if not rows_err:
+            scope = _cap_hint_scope(rows)
+            if scope is None or len(_retro_ledger_rounds(rows)) < scope[1]:
+                return res
+        if not (dir_exists if dir_exists is not None else _retro_dossier_seen(root, loop_id, rows, rows_err)):
+            res["reason"] = "no-dir"
+            return res
+        res.update(applies=True, reason=None, state="gov-bad", problems=[gov_err])
+        return res
+    evs = [e for e in events if e.get("loop") == loop_id]
+    di = None
+    for i, e in enumerate(evs):
+        if _retro_is_decision(e):
+            di = i
+    if di is None:
+        return res
+    dec = evs[di]
+    res["decision"] = dec
+    if dir_exists is None:
+        _rows, _err = (rows, rows_err) if rows is not None else _loop_records_checked(env, loop_id)
+        dir_exists = _retro_dossier_seen(root, loop_id, _rows, _err)
+    exists = dir_exists
+    if not exists:
+        res["reason"] = "no-dir"
+        return res
+    res["applies"], res["reason"] = True, None
+    last = None
+    for e in evs[di + 1:]:
+        if e.get("kind") in ("recorded", "skipped"):
+            last = e
+    if last is None:
+        res["state"] = "none"
+        return res
+    if last.get("kind") == "skipped":
+        res["state"] = "skipped"
+        return res
+    import hashlib as _hl
+    raw, _rerr = _retro_read_file(root, loop_id)
+    cur = _hl.sha256(raw).hexdigest() if raw is not None else None
+    if cur is None or cur != last.get("retro_sha256"):
+        res["state"] = "stale"
+        res["problems"] = (["回顧檔現在讀不到、不是一般檔或超過 256KB(記過之後被移走、刪掉、換掉或改大)"] if cur is None
+                           else ["回顧檔在 --record 之後被改過(指紋對不上),改完要重新 --record"])
+        return res
+    if rows is None:
+        rows, rows_err = _loop_records_checked(env, loop_id)
+    probs, data = _cap_retro_check(root, loop_id, dec, rows, rows_err, raw=raw)
+    if probs:
+        res["state"], res["problems"] = "stale", ["回顧檔指紋相符但不再通過檢查:" + ";".join(probs[:3])]
+    else:
+        res["state"], res["data"] = "recorded", data
+    return res
+
+
+def _cap_retro_fix_cmd(root, loop_id, state):
+    """★回顧不合格時該叫人做什麼,只由這一支決定★(處置閘、canary 擋下、loop next、doctor、retro-stats、--check、--template --write 都呼叫它)。
+    ★每種狀態都給走得通的指令,照做之後不會回到同一句★(代碼審 code-審查跑滿回顧 r2 通才、正確性、邊界席;r3 合約、通才、正確性、邊界、併發席):
+    | 狀態 | 提示 |
+    | 治理帳壞(gov-bad) | 把治理帳換回 repo 裡的一般檔(--skip 也寫不進去,不給);是一般檔而讀不動 → 改回讀寫權限 |
+    | 卷證資料夾或上層是捷徑、跑出 repo | 換成一般資料夾,或人裁決定不寫 --skip(--template --write 會被拒,不給) |
+    | 回顧檔不在(含記過之後被刪) | --template --write(只在檔不存在時建) |
+    | 回顧檔位置是資料夾、捷徑、管線 | 移除該路徑後 --template --write |
+    | 一般檔但讀不動、超過 256KB、空檔、建一半、不是 JSON 物件 | 刪除或改名該檔後 --template --write(不叫人跑 --check:它只會再說一次讀不動) |
+    | 讀得動的 JSON 物件、過期 | 改好現有回顧檔,--check 過了再 --record |
+    | 讀得動的 JSON 物件、還沒記 | --check(不合格照它逐條列的改),過了再 --record |
+    ★不印 `--template > 檔`★:照貼會先把已寫好的回顧截斷清空(代碼審 r1 四席)。"""
+    import stat as _stat
+    if state == "gov-bad":
+        gp = Path(root) / "docs" / GOV_LOG_NAME
+        # 路徑規則過了(一般檔、一個硬連結、不是捷徑)卻讀不動 → 多半是權限,換檔沒用(代碼審 code-審查跑滿回顧 r4 併發、邊界席)
+        if _retro_gov_path_err(root) is None and os.path.lexists(gp) and not os.access(gp, os.R_OK):
+            return (f"治理帳 docs/{GOV_LOG_NAME} 是一般檔但目前帳號讀不動(權限不足):把讀寫權限改回來"
+                    f"(例如 chmod u+rw docs/{GOV_LOG_NAME},或換回檔案擁有者的帳號)再重跑——權限修好之前跳過也寫不進去")
+        return (f"把治理帳 docs/{GOV_LOG_NAME} 換回 repo 裡的一般檔(不是符號連結、管線、資料夾,也沒有別的硬連結;"
+                f"對照 git 上一版:git diff HEAD -- docs/{GOV_LOG_NAME})再重跑——帳修好之前跳過也寫不進去")
+    p = _retro_path(root, loop_id)
+    q = _retro_qpath(root, p)
+    tw = _retro_cmd(loop_id, "--template --write")
+    chk_rec = f"{_retro_cmd(loop_id, '--check')} 過了再 {_retro_cmd(loop_id, '--record')}"
+    if _retro_path_unsafe(root, loop_id) == "dossier":
+        return (f"卷證資料夾 {_retro_qpath(root, _retro_dir(root, loop_id))}(或它的上層)是符號連結、或解析後不在 repo 裡,"
+                f"工具不在那裡讀寫回顧檔:把它換成 repo 裡的一般資料夾再重跑;或人裁決定不寫:{_retro_cmd(loop_id, '--skip --note')} \"<理由>\"")
+    try:
+        st = os.lstat(p)
+    except (OSError, ValueError):
+        st = None
+    if st is None:
+        return tw if state != "stale" else f"回顧檔不在了(記過之後被移走或刪掉):{tw} 重建,{chk_rec}"
+    if not _stat.S_ISREG(st.st_mode):
+        return f"回顧檔位置 {q} 是資料夾、捷徑或其他特殊檔,移除該路徑後再 {tw}"
+    raw, why = _retro_read_bytes(p)
+    if raw is not None:
+        _data, why = _retro_parse(raw)
+    if why:
+        return f"回顧檔 {q} {why}:刪除或改名該檔後再 {tw}"
+    if state == "stale":
+        return f"改好現有回顧檔 {q}(或刪掉後 {tw} 重建),{chk_rec}"
+    return f"回顧檔已在、還沒記:{chk_rec}"
+
+
+def _cap_retro_scan(env, root):
+    """有人裁紀錄的迴圈逐個判(retro-stats 與 doctor 共用):治理帳與審查帳各讀一次;一個迴圈判壞了只標它,不中斷。
+    回 ([(編號, 判定 dict)], 治理帳壞原因或 None);判壞的那個 dict 只有 error 與 decision。
+    ★治理帳壞時回 ([], 原因)★:列不出有哪些迴圈記了人裁,呼叫端要另外報「治理帳讀不了」(不當成零個、也不當成一個迴圈)——
+    r3 曾塞一筆假編號「(治理帳)」進清單,retro-stats 的迴圈數被灌 1(代碼審 code-審查跑滿回顧 r4 架構、通才、正確性、邊界、合約席)。"""
+    events, gerr = _retro_gov_events(root)
+    if gerr:
+        return [], gerr
+    order, seen, per = [], set(), {}
+    for e in events:
+        lp = e.get("loop")
+        if not isinstance(lp, str):
+            continue
+        per.setdefault(lp, []).append(e)
+        if _retro_is_decision(e) and lp not in seen:
+            seen.add(lp)
+            order.append(lp)
+    try:
+        cache = _canary_ledger_scan(env) if env is not None else None
+    except OSError:
+        cache = None          # 每個迴圈各自再讀一次,讀不到就各自標帳壞
+    out = []
+    for lp in order:
+        try:
+            rows, err = _loop_records_checked(env, lp, scan=cache)
+            out.append((lp, _cap_retro_status(env, lp, root, events=per[lp], rows=rows, rows_err=err)))
+        except Exception as e:   # 一個迴圈判壞了只標它(計劃 S9)
+            d = next((x for x in reversed(per[lp]) if _retro_is_decision(x)), {})
+            out.append((lp, {"error": f"{e.__class__.__name__}: {e}", "decision": d, "applies": True, "state": None, "problems": []}))
+    return out, None
+
+
+def _cap_retro_record_block(env, loop_id, round_id):
+    """canary record 的擋點(計劃〈三〉1):要記的列是新的一輪(輪次 id 不在帳上)而且這個迴圈要回顧時才讀治理帳。
+    回 None=放行;否則 (原因碼, 要印到 stderr 的幾行)。沒有人裁紀錄的迴圈一律放行(行為與現狀相同)。"""
+    import shlex as _shlex
+    root = _vault_repo_root(env)
+    rows, err = _loop_records_checked(env, loop_id)
+    if err is None and round_id in _retro_ledger_rounds(rows):
+        return None          # 同一輪第二席以後:只讀審查帳就知道,不碰治理帳
+    st = _cap_retro_status(env, loop_id, root, rows=rows, rows_err=err)
+    if not st["applies"]:
+        return None
+    if st["state"] == "gov-bad":   # 原因碼 cap-gov-bad:呼叫端不把這筆擋下寫進治理帳(帳本身就是不能碰的那個)
+        return ("cap-gov-bad", [
+            f"擋下:{_esc_clean(loop_id, 60)} 帳上已到上限、有卷證,但{st['problems'][0]}——判不了有沒有人裁紀錄,所以先不記。",
+            f"  出口:{_cap_retro_fix_cmd(root, loop_id, 'gov-bad')}"])
+    q = _esc_clean(_shlex.quote(loop_id), 200)
+    dec = st["decision"].get("decision")
+    skip_cmd = _retro_cmd(loop_id, '--skip --note "<理由>"')
+    if err:
+        if dec == "extra-round" and st["state"] == "skipped":
+            return None
+        exit_ = (f"修好審查帳再記;或人裁決定不寫回顧:{skip_cmd}" if dec == "extra-round" else
+                 f"修好審查帳再記;或人裁改記破例再開一輪(lumos loop cap-decision {q} --decision extra-round --note \"<理由>\")"
+                 "再決定寫回顧或跳過——最新人裁是接受風險時,跳過回顧解不了這個擋下")
+        return ("cap-ledger-bad", [
+            f"擋下:{_esc_clean(loop_id, 60)} 有人裁紀錄,但{err}——判不了這一列是不是人裁之後的新一輪,所以先不記。",
+            "  帳壞在哪:上面那句;對照 git 上一版找出壞列(git diff HEAD -- docs/.canary-log.jsonl)。",
+            f"  出口:{exit_}"])
+    if dec == "accept-risk":
+        return ("cap-accept-risk", [
+            f"擋下:{_esc_clean(loop_id, 60)} 到上限後人裁記的是接受風險(accept-risk),不是再開一輪。",
+            ("  要再開一輪,先改記人裁:"
+             f"lumos loop cap-decision {q} --decision extra-round --note \"<理由>\"(跳過回顧解不了這個擋下)")])
+    if st["state"] in ("recorded", "skipped"):
+        return None
+    lines = [(f"擋下:{_esc_clean(loop_id, 60)} 到上限後人裁記了破例再開一輪,但這筆人裁之後的跑滿回顧"
+              f"{_RETRO_STATE_LABEL.get(st['state'], '?')}——繼續之前要先留一份回顧。")]
+    lines.append("  為什麼:回顧把這幾輪的問題歸族、寫下下次怎麼少跑一輪;再開一輪之後就沒人回頭寫了。"
+                 + (f"過期原因:{_esc_clean(';'.join(st['problems'][:3]), 400)}" if st["problems"] else ""))
+    lines.append(f"  怎麼做:{_cap_retro_fix_cmd(root, loop_id, st['state'])}(起草派沒參與這個迴圈的乾淨代理);"
+                 f"人裁決定不寫:{skip_cmd}")
+    return ("cap-retro-missing", lines)
+
+
+def _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=None, retro_skip=False, dir_exists=None):
+    """處置閘第八步「跑滿回顧」:回 "fail"/"ok"/"skip"(形狀照落點那一步)。
+    skip:凍結/回放任一趟(spec_sha_override 或凍結第一趟多帶的 retro_skip;不讀回顧檔)、沒有人裁紀錄、沒有卷證資料夾。
+    fail:要回顧的迴圈回顧沒有或過期。"""
+    if spec_sha_override is not None or retro_skip:
+        print("[disposal] 跑滿回顧: —(凍結/回放模式:以問閘當下的判定為準,不讀回顧檔)")
+        return "skip"
+    if root is None:
+        root = _vault_repo_root(env) if env is not None else None
+    if root is None:
+        print("[disposal] 跑滿回顧: —(找不到 repo 根,讀不到治理帳)")
+        return "skip"
+    try:
+        err = next((f"審查帳有一列輪次不是字串({_esc_clean(repr(r.get('round')), 40)})"
+                    for r in rounds if "round" in r and not isinstance(r.get("round"), str)), None)
+        st = _cap_retro_status(env, loop_id, root, rows=rounds, rows_err=err, dir_exists=dir_exists)
+    except Exception as e:   # 新步驟自己壞掉不放行,也不丟堆疊
+        print(f"[disposal] 跑滿回顧: ✗ — 判不了({e.__class__.__name__}: {e})")
+        return "fail"
+    if not st["applies"]:
+        why = "沒有人裁紀錄,不需要回顧" if st["reason"] == "no-decision" else "這個迴圈沒有卷證資料夾,不需要回顧"
+        print(f"[disposal] 跑滿回顧: —({why})")
+        return "skip"
+    if st["state"] == "gov-bad":
+        print(f"[disposal] 跑滿回顧: ✗ — 判不了:{st['problems'][0]}(讀不到人裁紀錄不等於沒有,先不放行)")
+        print(f"    {_cap_retro_fix_cmd(root, loop_id, 'gov-bad')}")
+        return "fail"
+    dec = st["decision"].get("decision")
+    label = _RETRO_STATE_LABEL.get(st["state"], "?")
+    if st["state"] in ("recorded", "skipped"):
+        print(f"[disposal] 跑滿回顧: ✓ — {label}(綁最新一筆人裁紀錄 {dec})")
+        return "ok"
+    if st["state"] == "none":
+        print(f"[disposal] 跑滿回顧: ✗ — 人裁記了 {dec},這筆人裁之後沒有已記的回顧或跳過(人裁之後要繼續,先留跑滿回顧或記跳過)")
+    else:
+        print(f"[disposal] 跑滿回顧: ✗ — 回顧過期:{_esc_clean(';'.join(st['problems'][:3]), 400)}")
+    print(f"    {_cap_retro_fix_cmd(root, loop_id, st['state'])}")
+    print(f"    (人裁決定不寫:{_retro_cmd(loop_id, '--skip --note')} \"<理由>\")")
+    return "fail"
+
+
+def _disposal_retro_ledger_bad(env, loop_id, root, why):
+    """處置閘讀審查帳時帳壞(不是 UTF-8、某列輪次不是字串):這個迴圈要回顧 → 印第八步 ✗ 與 FAIL,回 True;
+    否則回 False,呼叫端照原樣往下走(沒有人裁紀錄的迴圈行為不變,計劃 S17)。"""
+    try:
+        st = _cap_retro_status(env, loop_id, root, rows=[], rows_err=why)
+    except Exception:
+        return False
+    if not st["applies"]:
+        return False
+    print(f"[disposal] 跑滿回顧: ✗ — {why};這個迴圈有人裁紀錄,帳壞了判不了,先不放行")
+    print("    對照 git 上一版找出壞列:git diff HEAD -- docs/.canary-log.jsonl"
+          f"(要繼續記新一輪的出口:{_retro_cmd(loop_id, '--skip --note')} \"<理由>\")")
+    _disposal_fail_banner(loop_id, None, ["跑滿回顧"])
+    return True
+
+
+def _disposal_fail_banner(loop_id, rid, fails):
+    """處置閘 FAIL 橫幅的唯一印處(正常判完與帳壞提前收尾兩條路共用;rid=None 表示帳壞、分不出判定輪)。"""
+    where = _esc_clean(loop_id, 200) + (f" 輪 {_esc_clean(rid, 80)}" if rid is not None else "")   # 帳上字串印到終端前先清(r4 資安席)
+    print(f"⛔ DISPOSAL GATE FAIL ({where}: {'/'.join(fails)})")
+
+
+def _cap_retro_next_lines(env, loop_id, repo=None, ask=True):
+    """★到上限時「人裁」該印什麼的唯一決定處★(計劃〈三〉3、S19;[cap-hint] 的「人裁:」那段與 loop next --json 的 cap_retro 都用它):
+    治理帳壞 → 只講判不了與出口,★不叫人記人裁★(cap-decision 遇到壞帳回 2,代碼審 r4 通才、正確性席);
+    還沒有人裁 → ask 為真才印記人裁指令;已有人裁 → 不再叫人記,印回顧狀態(不合格印出口、合格印回顧已記;r4 合約席)。
+    cap-decision 不收的迴圈(循序單審、light、舊迴圈、審查帳壞)不印——照做會回 2(代碼審 r1 合約席)。"""
+    import shlex as _shlex
+    q = _shlex.quote(loop_id)
+    lines = []
+    try:
+        rows, err = _loop_records_checked(env, loop_id)
+        if err or _cap_hint_scope(rows) is None:
+            return lines
+        root = _retro_root(env, repo)
+        st = _cap_retro_status(env, loop_id, root, rows=rows, rows_err=err)
+        if st["state"] == "gov-bad":
+            lines.append(f"判不了有沒有人裁紀錄:{st['problems'][0]} → {_cap_retro_fix_cmd(root, loop_id, 'gov-bad')}")
+            return lines
+        if st["decision"] is None:
+            if ask:
+                lines.append(_esc_clean(f"要破例再開一輪或接受剩下的風險,先記人裁:lumos loop cap-decision {q} "
+                                        "--decision extra-round|accept-risk --note \"<理由>\"", 400))
+            return lines
+        dec = st["decision"].get("decision")
+        if not st["applies"]:
+            lines.append(f"已有人裁紀錄({dec});這個迴圈沒有卷證資料夾,不需要回顧")
+        elif st["state"] in ("recorded", "skipped"):
+            lines.append(f"回顧已記({_RETRO_STATE_LABEL[st['state']]},綁最新一筆人裁紀錄 {dec})")
+        else:
+            lines.append(f"已有人裁紀錄({dec}),回顧{_RETRO_STATE_LABEL.get(st['state'], '?')}——繼續之前先寫跑滿回顧:"
+                         f"{_cap_retro_fix_cmd(root, loop_id, st['state'])}")
+    except Exception:
+        pass
+    return lines
+
+
+def cmd_loop_cap_decision(env, loop_id, decision, note, repo=None):
+    """記人裁紀錄(計劃〈二〉):多席迴圈到分級上限時,人裁破例再開一輪(extra-round)或接受剩下的風險(accept-risk)。
+    前提:_cap_hint_scope 範圍內(每列帶輪次、2026-08-26 後開、非 light)且帳上輪數 ≥ 上限;不符回 2 不寫帳。寫不進去回 1。"""
+    why = _retro_id_bad(loop_id)
+    if why:
+        print(f"擋下:{why}", file=sys.stderr)
+        return 2
+    if decision not in _RETRO_DECISIONS:
+        print(f"擋下:--decision 只能是 {'/'.join(_RETRO_DECISIONS)}", file=sys.stderr)
+        return 2
+    if not _retro_text_ok(note, 10):
+        print("擋下:--note 要寫人裁的理由,至少 10 字(為什麼破例再開一輪、或為什麼接受剩下的風險)", file=sys.stderr)
+        return 2
+    if _fix_bad_strings(note, nul=False):
+        print("擋下:--note 含不能編碼成 UTF-8 的字元(多半是終端送進非 UTF-8 位元組),改成正常文字再記;沒有寫帳", file=sys.stderr)
+        return 2
+    rows, err = _loop_records_checked(env, loop_id)
+    if err:
+        print(f"擋下:{err}——讀不動就判不了輪數;先修好審查帳", file=sys.stderr)
+        return 2
+    scope = _cap_hint_scope(rows)
+    if scope is None:
+        print(f"擋下:{_esc_clean(loop_id, 60)} 不在人裁紀錄的範圍——只收多席(每一列帶輪次)、2026-08-26 後開、分級不是 light 的迴圈"
+              "(light、循序單審、舊迴圈不記)", file=sys.stderr)
+        return 2
+    tier, cap = scope
+    rounds = _retro_ledger_rounds(rows)
+    if _fix_bad_strings(rounds, nul=False):
+        print(f"擋下:{_esc_clean(loop_id, 60)} 帳上輪次 id 含不能編碼成 UTF-8 的字元(孤立代理字元,帳被手改過?)——修好審查帳再記;沒有寫帳",
+              file=sys.stderr)
+        return 2
+    if len(rounds) < cap:
+        print(f"擋下:{_esc_clean(loop_id, 60)} 帳上只跑了 {len(rounds)} 輪,還沒到 {tier} 的上限 {cap} 輪——到上限才記人裁", file=sys.stderr)
+        return 2
+    root = _retro_root(env, repo)
+    gerr = _retro_gov_path_err(root)
+    if gerr:
+        print(f"擋下:{gerr};沒有寫帳", file=sys.stderr)
+        return 2
+    ok = _gate_event(root, "loop-retro", "cap-decision", note.strip(), hard=False,
+                     extra={"loop": loop_id, "decision": decision, "rounds": rounds, "tier": tier, "cap": cap})
+    if ok is not True:
+        print(f"沒記到:人裁紀錄寫不進治理帳({_retro_rel(root, Path(root) / 'docs' / GOV_LOG_NAME)};"
+              "帳檔唯讀、不存在或沒有 docs/)——這次人裁沒有留痕,修好再記一次", file=sys.stderr)
+        return 1
+    print(f"✓ 已記人裁:{_esc_clean(loop_id, 60)} {decision}(帳上輪次 {_esc_clean(', '.join(rounds), 300)})")
+    if not _retro_dossier_seen(root, loop_id, *_loop_records_checked(env, loop_id)):
+        print("  這個迴圈沒有卷證資料夾(或資料夾裡沒有帳上的席報告),不需要回顧")
+    else:
+        print("  繼續之前先寫跑滿回顧(派沒參與這個迴圈的乾淨代理起草):")
+        print(f"    {_cap_retro_fix_cmd(root, loop_id, 'none')}")
+    return 0
+
+
+def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip=False, note=None, repo=None, write=False):
+    """跑滿回顧(計劃〈二〉):--template 印骨架、--check 驗、--record 驗過才記、--skip --note 記跳過。不代建卷證資料夾。"""
+    if sum(bool(x) for x in (template, check, record, skip)) != 1:
+        print("擋下:--template / --check / --record / --skip 要挑一個", file=sys.stderr)
+        return 2
+    if write and not template:
+        print("擋下:--write 只能跟 --template 一起用", file=sys.stderr)
+        return 2
+    why = _retro_id_bad(loop_id)
+    if why:
+        print(f"擋下:{why}", file=sys.stderr)
+        return 2
+    if skip and not _retro_text_ok(note, 10):
+        print("擋下:--skip 要帶 --note 寫為什麼不寫回顧,至少 10 字", file=sys.stderr)
+        return 2
+    if skip and _fix_bad_strings(note, nul=False):
+        print("擋下:--note 含不能編碼成 UTF-8 的字元(多半是終端送進非 UTF-8 位元組),改成正常文字再記;沒有寫帳", file=sys.stderr)
+        return 2
+    root = _retro_root(env, repo)
+    events, gerr = _retro_gov_events(root, loop_id)
+    if gerr:   # 讀寫同一條規則:治理帳不合規則時 --template/--check/--record/--skip 都不做(讀不到人裁不等於沒有)
+        print(f"擋下:{gerr};沒有寫檔、沒有寫帳", file=sys.stderr)
+        return 2
+    dec = next((e for e in reversed(events) if _retro_is_decision(e)), None)
+    if dec is None:
+        print(f"擋下:{_esc_clean(loop_id, 60)} 沒有人裁紀錄——要先記人裁:"
+              "lumos loop cap-decision <編號> --decision extra-round|accept-risk --note \"<理由>\"", file=sys.stderr)
+        return 2
+    if not _retro_dossier_seen(root, loop_id, *_loop_records_checked(env, loop_id)):
+        print(f"擋下:{_esc_clean(loop_id, 60)} 沒有卷證資料夾或裡面沒有帳上的席報告({_retro_rel(root, _retro_dir(root, loop_id))}),不需要回顧;"
+              "工具不代建資料夾", file=sys.stderr)
+        return 2
+    rounds = [x for x in dec.get("rounds") or [] if isinstance(x, str)]
+    if _fix_bad_strings(rounds, nul=False):
+        print(f"擋下:{_esc_clean(loop_id, 60)} 最新人裁紀錄的輪次含不能編碼成 UTF-8 的字元(治理帳被手改過?)——修好帳再來;沒有寫檔、沒有寫帳",
+              file=sys.stderr)
+        return 2
+    p = _retro_path(root, loop_id)
+    rel = _retro_rel(root, p)
+    qrel = _retro_qpath(root, p)
+    if template:
+        rows, err = _loop_records_checked(env, loop_id)
+        ctx = None
+        if not err:
+            try:
+                groups, gerr = _disposal_round_groups(rows)
+                if not gerr and groups is not None:
+                    ctx = {"rounds": [_cap_hint_round(rid, rr) for rid, rr in groups.items()],
+                           "reports": [{"round": r.get("round"), "auditor": r.get("auditor"), "report_path": r.get("report_path")}
+                                       for r in rows if r.get("report_path")]}
+            except Exception:
+                ctx = None
+        if _fix_bad_strings(ctx, nul=False):
+            ctx = None      # 帳上欄位有不能編碼的字串(孤立代理字元)→ context 印 null(規格 S11;代碼審 r2 邊界席)
+        skel = {"version": 1, "loop": loop_id, "rounds": rounds, "drafted_by": "", "completed_by": "",
+                "families": [{"family": "", "rounds": [], "evidence": [], "note": ""}],
+                "why_cap": "", "avoid": "", "changes": [{"target": "", "ref": "", "change": ""}],
+                "context": ctx}
+        text = _json_text_escaped(skel) + "\n"     # 帳上帶來的字串(C1、雙向字元)以 \uXXXX 跳脫,值不變(代碼審 r3 資安席)
+        data = text.encode("utf-8")      # 先編碼成功才碰檔(編號與輪次前面已驗過能編碼;context 不能編碼已換成 null)
+        if write:
+            # ① 落點逐層不是捷徑、解析後在 repo 根底下:走共用的 _retro_path_unsafe → _repo_path_unsafe,讀端同一個答案
+            # (代碼審 r2 資安席:資料夾是捷徑時 O_NOFOLLOW 只管最後一段,會在 repo 外建檔;r3 架構對齊席:上層是捷徑也要擋、不另寫一套)
+            if _retro_path_unsafe(root, loop_id) == "dossier":
+                print(f"擋下:回顧檔 {qrel} {_RETRO_DOSSIER_UNSAFE}。{_cap_retro_fix_cmd(root, loop_id, 'none')}", file=sys.stderr)
+                return 2
+            # ② 只在回顧檔不存在時建:O_EXCL 一次開檔,已存在(含捷徑、管線)就不碰——已寫好的回顧不能被骨架蓋掉(代碼審 r1)
+            try:
+                fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+            except FileExistsError:
+                print(f"擋下:回顧檔已經存在({qrel}),不覆寫。{_cap_retro_fix_cmd(root, loop_id, 'none')}", file=sys.stderr)
+                return 2
+            except (OSError, ValueError) as e:
+                print(f"擋下:回顧檔建不起來({e.__class__.__name__}):{qrel}", file=sys.stderr)
+                return 2
+            try:
+                ok_w = os.write(fd, data) == len(data)
+            except OSError:
+                ok_w = False
+            finally:
+                os.close(fd)
+            if not ok_w:
+                try:
+                    os.unlink(str(p))   # 自己剛建的半截檔收掉,不留殘檔擋住下一次
+                except OSError:
+                    pass
+                print(f"擋下:回顧檔沒寫完整({qrel}),已收掉剛建的檔;修好磁碟再 {_retro_cmd(loop_id, '--template --write')}", file=sys.stderr)
+                return 2
+            print(f"✓ 已建回顧檔骨架:{qrel}")
+        else:
+            sys.stdout.write(text)
+        print(f"[retro] 寫到 {qrel}(context 唯讀、驗證不看);family 從 {', '.join(_RETRO_FAMILIES)} 挑,"
+              f"changes.target 從 {', '.join(_RETRO_TARGETS)} 挑", file=sys.stderr)
+        print("[retro] 起草派給沒參與這個迴圈的乾淨代理(派工詞見 skills/lumos-design-loop/templates.md),"
+              "編排者補 avoid 與 changes、填 completed_by", file=sys.stderr)
+        print(f"[retro] 下一步:{_retro_cmd(loop_id, '--check')},過了再 {_retro_cmd(loop_id, '--record')}", file=sys.stderr)
+        return 0
+    if skip:
+        ok = _gate_event(root, "loop-retro", "skipped", note.strip(), hard=False,
+                         extra={"loop": loop_id, "rounds": rounds})
+        if ok is not True:
+            print("沒記到:跳過寫不進治理帳(帳檔唯讀、不存在或沒有 docs/)——這次跳過沒有留痕,修好再記一次", file=sys.stderr)
+            return 1
+        print(f"✓ 已記跳過:{_esc_clean(loop_id, 60)}(只對最新一筆人裁紀錄 {dec.get('decision')} 有效;之後再記人裁要重新回顧或跳過)")
+        return 0
+    rows, err = _loop_records_checked(env, loop_id)
+    raw, rerr = _retro_read_file(root, loop_id)
+    if rerr:
+        probs = [f"回顧檔{rerr}:{qrel} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"]
+    else:
+        probs, _data = _cap_retro_check(root, loop_id, dec, rows, err, raw=raw)
+    if probs:
+        print(f"✗ 回顧不合格({qrel}):")
+        for x in probs:
+            print(f"  ✗ {_esc_clean(x, 600)}")
+        return 1
+    if check:
+        print(f"✓ 回顧合格({qrel});下一步 {_retro_cmd(loop_id, '--record')}")
+        return 0
+    import hashlib as _hl
+    sha = _hl.sha256(raw).hexdigest()      # 跟驗的是同一份位元組
+    ok = _gate_event(root, "loop-retro", "recorded", f"loop={loop_id}", hard=False,
+                     extra={"loop": loop_id, "path": rel, "retro_sha256": sha, "rounds": rounds})
+    if ok is not True:
+        print("沒記到:回顧寫不進治理帳(帳檔唯讀、不存在或沒有 docs/)——回顧檔在,但閘看不到這次 --record,修好再記一次", file=sys.stderr)
+        return 1
+    print(f"✓ 已記回顧:{_esc_clean(loop_id, 60)}(指紋 {sha[:12]};之後改了檔要重新 --record)")
+    return 0
+
+
+def cmd_loop_retro_stats(env, as_json=False, repo=None):
+    """唯讀:跑滿回顧以迴圈為單位彙整(計劃〈二〉retro-stats):人裁數、狀態、族別、行動項。狀態全部由 _cap_retro_status 給。"""
+    import json as _j
+    root = _retro_root(env, repo)
+    totals = {"loops": 0, "by_decision": {}, "by_tier": {}, "recorded": 0, "skipped": 0, "stale": 0, "none": 0,
+              "not_applicable": 0, "error": 0}
+    names = {k: [] for k in ("recorded", "skipped", "stale", "none", "not_applicable", "error")}
+    loops, fams, actions = [], {}, []
+    scan, gov_err = _cap_retro_scan(env, root)
+    gov_err = _esc_clean(gov_err, 400) if gov_err else None
+    for lp, st in scan:
+        # 每個迴圈各自組;壞的只標那一個(計劃 S9;代碼審 r1 邊界席)。印到終端與 JSON 的字串都先過 _esc_clean(含孤立代理字元)
+        try:
+            d = st.get("decision") or {}
+            dec, tier = _esc_clean(d.get("decision") or "?", 60), _esc_clean(d.get("tier") or "?", 60)
+            key = "error" if st.get("error") else ("not_applicable" if not st.get("applies") else st.get("state"))
+            ent = {"loop": _esc_clean(lp, 200), "decision": dec, "tier": tier, "state": key,
+                   "problems": [_esc_clean(x, 400) for x in (st.get("problems") or ([st["error"]] if st.get("error") else []))]}
+            if key in ("none", "stale"):
+                ent["cmd"] = _cap_retro_fix_cmd(root, lp, key)
+            fam_add, act_add = [], []
+            data = st.get("data") if key == "recorded" else None
+            if data:
+                for f in data.get("families") or []:
+                    fam_add.append(_esc_clean(f["family"], 60))
+                for ch in data.get("changes") or []:
+                    act_add.append({"loop": _esc_clean(lp, 200), "target": _esc_clean(ch.get("target"), 60), "ref": _esc_clean(ch.get("ref") or "", 400),
+                                    "change": _esc_clean(ch.get("change") or ch.get("reason") or "", 400)})
+        except Exception as e:
+            dec, tier, key = "?", "?", "error"
+            ent = {"loop": _esc_clean(lp, 200), "decision": dec, "tier": tier, "state": key, "problems": [f"判不了({e.__class__.__name__})"]}
+            fam_add, act_add = [], []
+        totals["loops"] += 1
+        totals["by_decision"][dec] = totals["by_decision"].get(dec, 0) + 1
+        totals["by_tier"][tier] = totals["by_tier"].get(tier, 0) + 1
+        totals[key] += 1
+        names[key].append(ent)
+        loops.append(ent)
+        for fname in fam_add:
+            fe = fams.setdefault(fname, {"count": 0, "loops": [], "by_tier": {}})
+            if ent["loop"] not in fe["loops"]:
+                fe["loops"].append(ent["loop"])
+                fe["count"] += 1
+                fe["by_tier"].setdefault(tier, []).append(ent["loop"])
+        actions.extend(act_add)
+    # 治理帳讀不了另外報(gov_error),迴圈數不灌假列(代碼審 r4)
+    out = {"totals": totals, "names": names, "loops": loops, "families": fams, "actions": actions, "gov_error": gov_err}
+    if as_json:
+        print(_j.dumps(out, ensure_ascii=False))
+        return 0
+    def c(v):
+        return _esc_clean(v, 80)
+    if gov_err:
+        print(f"[retro-stats] 治理帳讀不了,列不出哪些迴圈記了人裁:{gov_err}")
+        print(f"  → {_cap_retro_fix_cmd(root, None, 'gov-bad')}")
+        return 0
+    print(f"[retro-stats] 有人裁紀錄的迴圈 {totals['loops']} 個(人裁:"
+          + ("、".join(f"{c(k)} {v}" for k, v in sorted(totals["by_decision"].items())) or "—") + ";分級:"
+          + ("、".join(f"{c(k)} {v}" for k, v in sorted(totals["by_tier"].items())) or "—") + ")")
+    print(f"  已記回顧 {totals['recorded']}、已跳過 {totals['skipped']}、過期 {totals['stale']}、沒有 {totals['none']}、"
+          f"不適用(沒有卷證資料夾){totals['not_applicable']}" + (f"、判不了 {totals['error']}" if totals["error"] else ""))
+    for key, label in (("none", "沒有"), ("stale", "過期"), ("skipped", "已跳過"), ("recorded", "已記回顧"),
+                       ("not_applicable", "不適用"), ("error", "判不了")):
+        for e in names[key]:
+            tail = (f"({c(';'.join(e['problems'][:2]))})" if e["problems"] else "") + (f" → {_esc_clean(e['cmd'], 400)}" if e.get("cmd") else "")
+            print(f"  {label}:{c(e['loop'])} [{c(e['tier'])}/{c(e['decision'])}]{tail}")
+    print("族別(以已記回顧的迴圈計):" if fams else "族別:還沒有已記回顧的迴圈")
+    for name, fe in sorted(fams.items(), key=lambda kv: (-kv[1]["count"], kv[0])):
+        bt = ";".join(f"{c(t)}: {', '.join(c(x) for x in ls)}" for t, ls in sorted(fe["by_tier"].items()))
+        print(f"  {c(name)} {fe['count']} 個迴圈:{', '.join(c(x) for x in fe['loops'])}({bt})")
+    print(f"行動項({len(actions)} 條;回頭對照有沒有對應提交):" if actions else "行動項:0 條")
+    for a in actions:
+        print(f"  [{c(a['loop'])}] {c(a['target'])} {c(a['ref'])} — {c(a['change'])}")
+    return 0
+
+
 def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None, orchestrator=None):
     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
@@ -13275,7 +14366,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             for _ln in (_fix_check_line(_fc) if _fc else []):   # 印在跑滿上限提示之前(修正關卡第0步)
                 print(_ln)
             # 跑滿上限提示放最後(審查跑滿上限提示_計劃 S1):文字輸出是逐欄挑著印的,這段要自己印
-            for _ln in _cap_hint_lines(_ch):
+            # 「人裁:」那段在這裡印(只印一次;cap-reached 的 cap_retro 只進 --json,文字不另印——代碼審 r4)
+            for _ln in _cap_hint_lines(_ch, loop_id=loop_id, env=env, repo=repo, phase=phase):
                 print(_ln)
         return 0 if phase == "converged" else 1
 
@@ -13342,7 +14434,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     # ③ cap(資訊充分且未 PASS)
     if rounds_count >= cap:
         _loop_gov_mark(env, loop_id, "cap-reached", f"cap={cap} tier={eff_tier}")
-        return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去"})
+        return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去",
+                                    "cap_retro": _cap_retro_next_lines(env, loop_id, repo)})   # 審查跑滿回顧〈三〉3:只附加,階段與退出碼不變
     # ④ plant-canary
     return emit("plant-canary")
 
@@ -20228,7 +21321,7 @@ def cmd_teardown(yes=False, source=None):
             return 2
         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
-              "Claude 外掛 lumos-ledger 與市集 lumos-toolchain)。")
+              "Claude 外掛 lumos-ledger、lumos-context 與市集 lumos-toolchain)。")
         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
@@ -22112,20 +23205,20 @@ def _remove_codex_agent(home=None) -> list:
     return gone
 
 
-# ── Claude 事件帳外掛(Projects/Lumos事件帳_計劃 做法第 4 節)─────────────────────
+# ── Claude 外掛:事件帳與交棒脈絡(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點)────
 # 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
 # readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
-_LEDGER_MARKET = "lumos-toolchain"
-_LEDGER_PLUGIN = "lumos-ledger@lumos-toolchain"
-_LEDGER_MANUAL = (f"claude plugin uninstall {_LEDGER_PLUGIN} --scope user",
-                  f"claude plugin marketplace remove {_LEDGER_MARKET} --scope user")
+# 新增外掛不必先跑 marketplace update:資料夾型市集 install 時直接讀市集檔(2026-10-06 隔離設定資料夾實測)。
+_LUMOS_MARKET = "lumos-toolchain"
+_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain")
+_PLUGIN_RANK = {"ok": 0, "absent": 1, "no-source": 2, "failed": 3}   # 回傳值取最差的一支
 
 
-def _claude_json(claude, args):
+def _claude_json(claude, args, timeout=30):
     """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
     代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
     import json as _j
-    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
+    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
     data = _j.loads(r.stdout) if r.stdout.strip() else None
@@ -22147,23 +23240,30 @@ def _same_local_path(a, b):
     return norm(a) == norm(b)
 
 
-def _plugin_sync_msg(state: str, detail: str = "") -> str:
-    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。"""
+def _plugin_sync_msg(state: str, detail: str = "", pid: str = "") -> str:
+    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。pid 空 = 整段(市集或找不到 claude)。"""
+    who = f"Claude 外掛 {pid}" if pid else "Claude 外掛"
     if state == "ok":
-        return f"  ✓ Claude 事件帳外掛 {_LEDGER_PLUGIN} 已就位"
+        return f"  ✓ {who} 已就位"
     if state == "absent":
-        return f"  (略過 Claude 事件帳外掛:{detail or '找不到 claude 指令'})"
+        return f"  (略過 {who}:{detail or '找不到 claude 指令'})"
     if state == "no-source":
-        return f"  (略過 Claude 事件帳外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{detail})"
-    return f"  ⚠ Claude 事件帳外掛 {_LEDGER_PLUGIN} 沒裝好:{detail}"
+        where = "的 .claude-plugin/marketplace.json 沒有列出它" if pid else "沒有 .claude-plugin/marketplace.json"
+        return f"  (略過 {who}:lumos 來源 repo {where}——{detail})"
+    return f"  ⚠ {who} 沒裝好:{detail}"
 
 
-def _ledger_market(claude):
+def _lumos_plugin_market(claude):
     return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
-                 if x.get("name") == _LEDGER_MARKET), None)
+                 if x.get("name") == _LUMOS_MARKET), None)
 
 
-def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
+def _lumos_market_is_ours(mk, src):
+    """市集登記是不是我們的:本機資料夾、而且路徑就是 src(安裝、移除、手動指令三處共用)。"""
+    return bool(mk and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src))
+
+
+def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
     """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
     總共超過 budget 秒就不再開新的一次(每次查本身可能要等 claude 很久;代碼審 r3)。"""
     import time as _t
@@ -22180,14 +23280,28 @@ def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
     return False
 
 
-def _ledger_user_plugin(claude):
+def _lumos_plugin_user(claude, pid, timeout=30):
     """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
-    return any(x.get("id") == _LEDGER_PLUGIN and x.get("scope", "user") == "user"
-               for x in _claude_json(claude, ["plugin", "list", "--json"]))
+    return any(x.get("id") == pid and x.get("scope", "user") == "user"
+               for x in _claude_json(claude, ["plugin", "list", "--json"], timeout=timeout))
+
+
+def _lumos_plugin_listed(src):
+    """來源 repo 市集檔列了哪些外掛(id 形如 名稱@市集);讀不到回空集合。"""
+    import json as _j
+    try:
+        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return set()
+    plugins = mk.get("plugins") if isinstance(mk, dict) else None
+    if not isinstance(plugins, list):            # null、數字、物件都當沒列(代碼審 r1)
+        return set()
+    return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in plugins if isinstance(p, dict) and isinstance(p.get("name"), str)}
 
 
 def _sync_claude_plugin(source=None) -> str:
-    """確保 lumos-ledger 外掛裝好。回 ok / absent / no-source / failed;自己印訊息(成功與略過到 stdout、失敗到 stderr)。"""
+    """確保外掛清單的每一支都裝好。回最差的一支:ok / absent / no-source / failed;
+    自己印訊息(成功與略過到 stdout、失敗到 stderr),各支分開印。"""
     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
         print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
         return "absent"
@@ -22200,96 +23314,133 @@ def _sync_claude_plugin(source=None) -> str:
         print(_plugin_sync_msg("no-source", str(src)))
         return "no-source"
     if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
-        print(f"  (Claude 事件帳外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+        print(f"  (Claude 外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
     step = {"removed_old": False, "added": False}
     try:
-        if not _ledger_ensure_market(claude, src, step):
-            print(_plugin_sync_msg("failed", f"已有同名市集 {_LEDGER_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+        if not _lumos_plugin_ensure_market(claude, src, step):
+            print(_plugin_sync_msg("failed", f"已有同名市集 {_LUMOS_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
                   file=sys.stderr)
             return "failed"
         step["added"] = True
-        _ledger_ensure_plugin(claude)
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        print(_plugin_sync_msg("failed", f"{e}{_ledger_fail_hint(step)}"), file=sys.stderr)
+        print(_plugin_sync_msg("failed", f"{e}{_lumos_plugin_fail_hint(step)}"), file=sys.stderr)
         return "failed"
-    print(_plugin_sync_msg("ok"))
-    return "ok"
+    listed = _lumos_plugin_listed(src)
+    worst = "ok"
+    for pid in _LUMOS_PLUGINS:                # 各支獨立:一支失敗不影響下一支
+        if pid not in listed:
+            state = "no-source"
+            print(_plugin_sync_msg(state, str(src), pid))
+        else:
+            try:
+                _lumos_plugin_ensure(claude, pid)
+                state = "ok"
+                print(_plugin_sync_msg(state, "", pid))
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+                state = "failed"
+                print(_plugin_sync_msg(state, f"{e}{_lumos_plugin_fail_hint(step)}", pid), file=sys.stderr)
+        worst = max(worst, state, key=_PLUGIN_RANK.__getitem__)
+    return worst
 
 
-def _ledger_ensure_market(claude, src, step):
+def _lumos_plugin_ensure_market(claude, src, step):
     """市集登記成 src 這個本機資料夾。同名市集不是本機資料夾 → 回 False(不動它);
     本機路徑不同 → 先移除再加。失敗丟例外,step 記到哪一步。"""
-    mk = _ledger_market(claude)
+    mk = _lumos_plugin_market(claude)
     if mk is not None and not (mk.get("source") == "directory" and mk.get("path")):
         return False
     if mk is not None and not _same_local_path(mk["path"], src):
-        _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+        _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
         step["removed_old"], mk = True, None
     if mk is None:
         def ours():
-            now = _ledger_market(claude)
-            return bool(now and now.get("source") == "directory" and _same_local_path(now.get("path", ""), src))
+            now = _lumos_plugin_market(claude)
+            return _lumos_market_is_ours(now, src)
         try:
             _claude_do(claude, ["plugin", "marketplace", "add", str(src), "--scope", "user"])
         except (RuntimeError, subprocess.TimeoutExpired):   # 另一支同時跑先加好了、或逾時但其實寫進去了:以最終狀態為準
-            if not _ledger_wait(ours):
+            if not _lumos_plugin_wait(ours):
                 raise
     return True
 
 
-def _ledger_ensure_plugin(claude):
-    """使用者範圍裝上外掛;另一支同時在裝時以最終狀態為準。"""
-    if _ledger_user_plugin(claude):
+def _lumos_plugin_ensure(claude, pid):
+    """使用者範圍裝上這支外掛,裝完以列表確認真的在;另一支同時在裝時以最終狀態為準。"""
+    if _lumos_plugin_user(claude, pid):
         return
     try:
-        _claude_do(claude, ["plugin", "install", _LEDGER_PLUGIN, "--scope", "user"])
+        _claude_do(claude, ["plugin", "install", pid, "--scope", "user"])
     except (RuntimeError, subprocess.TimeoutExpired):
-        if not _ledger_wait(lambda: _ledger_user_plugin(claude)):
+        if not _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid)):
             raise
+        return
+    try:                                     # 第一次查詢撞到另一支同時在寫也交給等待重查(代碼審 r1)
+        seen = _lumos_plugin_user(claude, pid, timeout=10)   # 短逾時:claude 卡住時不拖太久(代碼審 r2)
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+        seen = False
+    if not (seen or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
+        raise RuntimeError("install 回成功但外掛列表裡沒有它")
 
 
-def _ledger_fail_hint(step):
+def _lumos_plugin_fail_hint(step):
     """同步外掛失敗時照實說做到哪一步。"""
     if step["removed_old"] and not step["added"]:
-        return ";舊的市集登記已移除、新的沒加上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+        return ";舊的市集登記已移除、新的沒加上,外掛暫時都沒生效——修好原因後重跑 lumos install --force"
     if step["added"]:
-        return ";市集已登記、外掛沒裝上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+        return ";市集已登記、這支外掛沒裝上,它暫時沒生效——修好原因後重跑 lumos install --force"
     return ";修好原因後重跑 lumos install --force"
 
 
 def _teardown_claude_plugin(source=None) -> str:
-    """移除 lumos-ledger 外掛與我們的市集。沒有 claude、兩者都沒有就安靜略過;成功說移掉了什麼;失敗附兩個手動指令。"""
+    """移除外掛清單的每一支與我們的市集。沒有 claude、全都沒有就安靜略過;成功說移掉了什麼。
+    外掛逐支獨立移除;全部成功才移除市集,任一支失敗就保留市集,手動補做只列失敗的那幾支加市集。"""
     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
-        print("  (略過移除 Claude 事件帳外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
+        print("  (略過移除 Claude 外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
         return "absent"
     claude = _py_which("claude")
     if not claude:
         return "absent"
     src = _lumos_src(source).resolve()
-    gone, errors, todo = [], [], []
-    try:                                     # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
-        if _ledger_user_plugin(claude):
-            _claude_do(claude, ["plugin", "uninstall", _LEDGER_PLUGIN, "--scope", "user"])
-            gone.append(f"外掛 {_LEDGER_PLUGIN}")
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        errors.append(str(e))
-        todo.append(_LEDGER_MANUAL[0])
-    try:                                     # 外掛那步失敗也照樣處理市集(各步獨立)
-        mk = _ledger_market(claude)
-        if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
-            _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
-            gone.append(f"市集 {_LEDGER_MARKET}")
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        errors.append(str(e))
-        todo.append(_LEDGER_MANUAL[1])
+    gone, errors, todo, notes = [], [], [], []
+    market_cmd = f"claude plugin marketplace remove {_LUMOS_MARKET} --scope user"
+    for pid in _LUMOS_PLUGINS:               # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+        try:
+            if _lumos_plugin_user(claude, pid):
+                _claude_do(claude, ["plugin", "uninstall", pid, "--scope", "user"])
+                gone.append(f"外掛 {pid}")
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+            errors.append(str(e))
+            todo.append(f"claude plugin uninstall {pid} --scope user")
+    if errors:                               # 有外掛沒移掉:保留市集(移掉市集會讓那支外掛變成找不到來源的孤兒)
+        try:                                 # 確定不是我們的市集就不叫人移除(代碼審 r1);判不出來照列、附一句先確認
+            mk = _lumos_plugin_market(claude)
+            ours = _lumos_market_is_ours(mk, src)
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+            ours = None
+        if ours:
+            todo.append(market_cmd)
+        elif ours is None:                   # 說明另起一行:zsh 互動模式不把行尾 # 當註解,整行貼上會變成多餘參數(代碼審 r2)
+            notes.append(f"市集 {_LUMOS_MARKET} 判不出是不是我們的:先跑 claude plugin marketplace list 確認來源是 lumos 的資料夾,是才跑最後一行")
+            todo.append(market_cmd)
+    else:
+        try:
+            mk = _lumos_plugin_market(claude)
+            if _lumos_market_is_ours(mk, src):
+                _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
+                gone.append(f"市集 {_LUMOS_MARKET}")
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+            errors.append(str(e))
+            todo.append(market_cmd)
     if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
         done = f"(已移除:{'與'.join(gone)})" if gone else ""
-        print(f"  ⚠ Claude 事件帳外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
+        print(f"  ⚠ Claude 外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
+        for n in notes:
+            print(f"  ({n})", file=sys.stderr)
         for c in todo:
             print(f"    {c}", file=sys.stderr)
         return "failed"
     if gone:
-        print(f"  ✓ 已移除 Claude 事件帳的{'與'.join(gone)}")
+        print(f"  ✓ 已移除 Claude 的{'與'.join(gone)}")
     return "ok"
 
 
@@ -23156,14 +24307,16 @@ def _disposal_landing_step(rows, spec, root, env, loop_id="", spec_sha_override=
     return "ok"
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None, retro_skip=False):
     """[T4] 處置閘(design-loop重設計 三):七步合取,全部讀側可重算(原本寫「四條合取」,2026-09-08 加⑤、2026-09-11 加⑥⑦後過期)——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
     ④quote-check 對 carrier 的帳面 snapshot 全 ok
     ⑤條款綁定(設計審計劃每條 [SN] 要標 [test:]/[manual:];代碼審 skip,見 _disposal_clause_step)
     ⑥資安席(定錨 high 的代碼審,required-gated 席出席+留痕+涵蓋最後一版;見 _disposal_security_step)
-    ⑦落點(設計審計劃要寫明 lands_in;代碼審 skip,見 _disposal_landing_step)。
+    ⑦落點(設計審計劃要寫明 lands_in;代碼審 skip,見 _disposal_landing_step)
+    ⑧跑滿回顧(有人裁紀錄又有卷證資料夾的迴圈要合格回顧;回放、凍結任一趟印 —,見 _disposal_retro_step;
+      retro_skip=凍結第一趟多帶的參數,它跟 loop next 一樣用唯讀模式呼叫,不能只靠唯讀旗標區分)。
     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
     round-id 非連續重現 rc2(reuse panel 守衛;原 OrderedDict 首現序拿錯輪)。
@@ -23191,6 +24344,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
         return 1
     rid, latest = next(reversed(groups.items()))
+    # 第八步要的「卷證資料夾在不在」在觀測尾巴之前先看:roster 尾端遇到異常會建這個資料夾,不能讓它把沒有資料夾的迴圈變成要回顧
+    _retro_dir_pre = _retro_has_dossier(root, loop_id, rounds) if root is not None else None
 
     def _prov_path(p):
         pp = Path(p)
@@ -23447,23 +24602,28 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         return 2
     if _ld == "fail":
         fails.append("落點")
+    # ── ⑧ 跑滿回顧(Projects/審查跑滿回顧_計劃〈三〉2):有人裁紀錄的迴圈要合格回顧;回放、凍結任一趟印 —、不讀回顧檔。
+    _rt = _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=spec_sha_override,
+                               retro_skip=retro_skip, dir_exists=_retro_dir_pre)
+    if _rt == "fail":
+        fails.append("跑滿回顧")
     if result_out is not None:
         result_out["rid"] = rid
         result_out["fails"] = list(fails)
     if fails:
-        print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        _disposal_fail_banner(loop_id, rid, fails)
         if not readonly:   # 跑滿上限提示:只印不擋、回放與凍結不印(審查跑滿上限提示_計劃 S2/S3)
-            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)})
+            _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)}, loop_id=loop_id, env=env, repo=root)
         return 1
     # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
-    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld)) if st == "ok")
+    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld), ("跑滿回顧", _rt)) if st == "ok")
     if vacuous and carrier is None:
         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算{_extra};引句無可驗不宣稱)")
     else:
         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定{_extra})")
     if not readonly:
         _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
-        _cap_hint_print(rounds, gate={"passed": True, "fails": []})   # 審查跑滿上限提示_計劃 S2
+        _cap_hint_print(rounds, gate={"passed": True, "fails": []}, loop_id=loop_id, env=env, repo=root)   # 審查跑滿上限提示_計劃 S2
     return 0
 
 
@@ -26740,7 +27900,7 @@ def _lint_new_autopass_count(repo_root, days=30):
     cutoff = _time.time() - days * 86400
     n = 0
     try:
-        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in _ledger_lines(p.read_text(encoding="utf-8", errors="replace")):
             line = line.strip()
             if not line.startswith("{") or "lint-new" not in line:
                 continue
@@ -35517,7 +36677,8 @@ def _drift_next_seq(root, rel):
 def _drift_ledger_path_err(root, rel):
     """帳檔寫入前的路徑檢查 → 錯誤或 None:從 repo 根往下到帳檔的每一層都不是符號連結(repo 根以上不管)、
     解析後的真實路徑在 repo 根底下(這兩條走共用的 _repo_path_unsafe,跟筆記內容審的資料夾守衛同一份)、
-    帳檔已存在時硬連結數是 1。檢查後到寫入前的時間差不處理(存量漂移改法〈誠實界線〉)。"""
+    帳檔已存在時是一般檔(不是管線、資料夾、裝置檔:往管線追加會卡住)而且硬連結數是 1。檢查後到寫入前的時間差不處理(存量漂移改法〈誠實界線〉)。
+    ★跑滿回顧一族讀寫治理帳前也用這一支★(代碼審 code-審查跑滿回顧 r3:讀端不跟捷徑、寫端跟捷徑,人裁寫得進去讀不到),讀寫同一條規則。"""
     fp = Path(root) / rel
     try:
         bad = _repo_path_unsafe(root, rel)
@@ -35525,6 +36686,8 @@ def _drift_ledger_path_err(root, rel):
             return f"{bad[1]} 是符號連結——帳檔與它在 repo 裡的上層目錄都要是一般的檔案與目錄,不往裡寫"
         if bad:
             return f"{fp} 解析後不在 repo 底下,不往裡寫"
+        if fp.exists() and not fp.is_file():
+            return f"{fp} 不是一般檔(管線、資料夾或裝置檔),不往裡寫"
         if fp.exists() and fp.stat().st_nlink != 1:
             return f"{fp} 有別的硬連結指著同一個檔,不往裡寫"
     except OSError as ex:
@@ -35545,13 +36708,9 @@ def _drift_ledger_append(root, rel, rec):
     err = err or _drift_ledger_path_err(root, rel)
     if err is None:
         try:
-            if fp.is_file() and fp.stat().st_size > 0:
-                with open(fp, "rb") as fh:
-                    fh.seek(-1, 2)
-                    tail = fh.read(1)
-                if tail != b"\n":
-                    with open(fp, "a", encoding="utf-8") as fh:
-                        fh.write("\n")
+            if _ledger_tail_needs_newline(fp):   # 帳尾檢查共用治理帳寫入器那一支(代碼審 code-審查跑滿回顧 r2 架構對齊席)
+                with open(fp, "a", encoding="utf-8") as fh:
+                    fh.write("\n")
         except OSError as ex:
             err = f"補不了檔尾換行:{ex}"
     if err:
@@ -44436,7 +45595,7 @@ def _codeloop_read_from_ledger(repo_root, branch):
         return None
     last = None
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _ledger_lines(path.read_text(encoding="utf-8")):
             line = line.strip()
             if not line or '"code-loop"' not in line:
                 continue
@@ -45412,7 +46571,7 @@ def _codeloop_read_dispositions(repo_root, branch, marker_only=False):
         return None
     last = None
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _ledger_lines(path.read_text(encoding="utf-8")):
             if '"dispositions"' not in line:
                 continue
             try:
@@ -47422,6 +48581,28 @@ def main():
                     help="略過編號以此開頭的迴圈(可重複;例:--exclude auto- 排掉自主迴圈的每日場次)")
     ll.add_argument("--json", dest="ll_json", action="store_true")
     ll.add_argument("--now", dest="ll_now", metavar="YYYY-MM-DD", help="指定「今天」是哪一天(重算/測試用;預設系統日期)")
+    lcd = lsub.add_parser("cap-decision", help="跑滿上限時記人裁:破例再開一輪(extra-round)或接受剩下的風險(accept-risk);寫治理帳",
+                          description="什麼時候用:多席審查迴圈跑到分級上限還沒過,人裁決定破例再開一輪、或不開而接受剩下的風險時,當場記一筆。"
+                                      "有人裁紀錄(又有卷證資料夾)的迴圈,繼續之前要先寫跑滿回顧(lumos loop retro)。只收多席、2026-08-26 後開、非 light、帳上輪數已到上限的迴圈。")
+    lcd.add_argument("cd_loop_id", metavar="loop_id")
+    lcd.add_argument("--decision", dest="cd_decision", required=True, choices=("extra-round", "accept-risk"))
+    lcd.add_argument("--note", dest="cd_note", required=True, help="人裁的理由,至少 10 字")
+    lcd.add_argument("--repo", dest="cd_repo", help="repo root(預設向上找 .git)")
+    lrt = lsub.add_parser("retro", help="跑滿回顧:--template 產骨架、--check 驗、--record 驗過才記、--skip --note 記跳過",
+                          description="什麼時候用:記了人裁紀錄(lumos loop cap-decision)之後、繼續之前。回顧檔放 governance/review-reports/<編號>/cap-retro.json,"
+                                      "由沒參與這個迴圈的乾淨代理起草歸族、編排者補怎麼避免與行動項;--record 把指紋記進治理帳,之後改檔要重記。")
+    lrt.add_argument("rt_loop_id", metavar="loop_id")
+    lrt.add_argument("--template", dest="rt_template", action="store_true", help="骨架 JSON 印到標準輸出(rounds 依最新人裁紀錄填好)")
+    lrt.add_argument("--write", dest="rt_write", action="store_true", help="跟 --template 一起用:回顧檔不存在時直接建出來;已存在回 2、不動檔(別用 > 重導向,會先清空已寫好的回顧)")
+    lrt.add_argument("--check", dest="rt_check", action="store_true", help="驗回顧檔:合格 0、不合格 1")
+    lrt.add_argument("--record", dest="rt_record", action="store_true", help="驗過才把回顧記進治理帳(帶指紋)")
+    lrt.add_argument("--skip", dest="rt_skip", action="store_true", help="人裁決定不寫回顧:要帶 --note;只對最新一筆人裁紀錄有效")
+    lrt.add_argument("--note", dest="rt_note", help="--skip 的理由,至少 10 字")
+    lrt.add_argument("--repo", dest="rt_repo", help="repo root(預設向上找 .git)")
+    lrs = lsub.add_parser("retro-stats", help="跑滿回顧彙整(單位是迴圈):人裁數、回顧狀態、族別、行動項;唯讀",
+                          description="什麼時候用:想知道審查跑滿上限多半是哪一族問題、回顧寫了沒、行動項有沒有落地。狀態跟處置閘第八步同一支判定。唯讀。")
+    lrs.add_argument("--json", dest="rs_json", action="store_true")
+    lrs.add_argument("--repo", dest="rs_repo", help="repo root(預設向上找 .git)")
     les = lsub.add_parser("escape-stats", help="逃逸率依類別(分級×範圍類;單位是迴圈,撤回的不算);唯讀",
                           description="什麼時候用:想知道哪一類審查(設計審或代碼審 × 分級 × 範圍類)放行之後最常漏到下游。單位是迴圈:放行了幾條、之後漏了幾條;下一站接住的、歸因不明的、沒放行的另列。一個類別放行少於 20 條會標樣本太小。唯讀。")
     les.add_argument("--json", dest="es_json", action="store_true")
@@ -48433,6 +49614,14 @@ def main():
             return cmd_loop_canary_stats(env, args.loop_id)
         if args.lcmd == "escape-stats":
             return cmd_loop_escape_stats(env, as_json=args.es_json)
+        if args.lcmd == "cap-decision":
+            return cmd_loop_cap_decision(env, args.cd_loop_id, args.cd_decision, args.cd_note, repo=args.cd_repo)
+        if args.lcmd == "retro":
+            return cmd_loop_retro(env, args.rt_loop_id, template=args.rt_template, check=args.rt_check,
+                                  record=args.rt_record, skip=args.rt_skip, note=args.rt_note, repo=args.rt_repo,
+                                  write=args.rt_write)
+        if args.lcmd == "retro-stats":
+            return cmd_loop_retro_stats(env, as_json=args.rs_json, repo=args.rs_repo)
         if args.lcmd == "status":
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,

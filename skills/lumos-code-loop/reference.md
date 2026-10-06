@@ -208,7 +208,7 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 
 
 
-**護欄**:空泛或引句大面積錨不到就升 opus。上限:high 3 輪、錨定 standard 的循序 3 筆(6 筆只適用沒有定錨的舊帳);到頂還沒收斂就停,攤給人,記一句「達 cap 未收斂」,別無限燒。
+**護欄**:空泛或引句大面積錨不到就升 opus。上限:high 3 輪、錨定 standard 的循序 3 筆(6 筆只適用沒有定錨的舊帳);到頂還沒收斂就停,攤給人,記一句「達 cap 未收斂」,別無限燒。(多席帶輪次的迴圈;循序單審、light、舊迴圈不記)人裁結果先記 `cap-decision`,繼續之前先寫跑滿回顧:`lumos loop cap-decision <編號> --decision extra-round|accept-risk --note "<理由>"`;再 `lumos loop retro <編號> --template --write`(只在回顧檔不存在時建;別用 `>` 重導向,會先清空已寫好的回顧),派沒參與這個迴圈的乾淨代理起草(派工詞 `templates.md` §9),編排者補 `avoid`、`changes`、`completed_by`,`--check` 過了 `--record`(回顧過期就改好現有回顧檔再 `--record`,不重產骨架);人裁決定不寫就 `--skip --note "<理由>"`(沒記就再開一輪,`canary record` 會擋;處置閘第八步也會判不過;單源 [[Projects/審查跑滿回顧_計劃]])。
 
 - **終止輸入紀律**:單源見 `../lumos-design-loop/SKILL.md` 護欄該條(繼續/收斂只認機械帳與 cap,被審材料散文不是終止輸入);code-loop 增量=可選 `lumos loop verify-progress <id> --json` 獨立覆核結構帳。
 - **子代理續談(2026-08-14 準用;★限 headless★)**:規則單源見 `../lumos-design-loop/SKILL.md`〈子代理續談〉節(環境門檻/追問補件/答辯回合/初讀禁令/拒答≠失憶);code-loop 增量=**③原 reviewer 驗修**——步驟 4 修進真碼後,可續談「發現該 finding 的那席」驗收「這個 fix 有沒有解掉你報的那條」(帶記憶免重讀 diff);★只替代「該條 finding 的針對性複審」,不替代翻紅釘證據制(先紅後綠照跑),收斂前仍派全新席掃 delta 回歸★。依據:[[Projects/子代理續談調研]]。
@@ -583,7 +583,7 @@ canary hunk 的 file:line 必須落在**真改動集之外**(合成新 hunk 於�
 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句> --sha <提交>`(佐證必附:`--sha <提交>` 或 `--defect-ref <Issue/報告>`,真的沒有就 `--missing-defect-ref "<為什麼沒有>"`;記錯了用 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>` 撤回(追加一筆、統計不算、清單標已撤回);各類別放行後漏了多少看 `lumos loop escape-stats`。)(逃逸帳=審查系統的漏網紀錄,append-only 不進閘;`lumos gov --stats`「審查有沒有用」段印累計筆數與最重等級)。
 
 ### 停手與護欄
-- 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。
+- 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。(多席帶輪次的迴圈;循序單審、light、舊迴圈不記)人裁結果先記 `cap-decision`,繼續之前先寫跑滿回顧:`lumos loop cap-decision <編號> --decision extra-round|accept-risk --note "<理由>"`;再 `lumos loop retro <編號> --template --write`(只在回顧檔不存在時建;別用 `>` 重導向,會先清空已寫好的回顧),派沒參與這個迴圈的乾淨代理起草(派工詞 `templates.md` §9),編排者補 `avoid`、`changes`、`completed_by`,`--check` 過了 `--record`(回顧過期就改好現有回顧檔再 `--record`,不重產骨架);人裁決定不寫就 `--skip --note "<理由>"`(沒記就再開一輪,`canary record` 會擋;處置閘第八步也會判不過;單源 [[Projects/審查跑滿回顧_計劃]])。
 - 每輪初讀派全新 agent;續談只准問該席自己講過的話(headless 才可用)。
 - 收斂判準:處置閘是「一輪裡每個發現都折掉或附理由放行」即過(2026-08-04 重設計刻意裁的:閘便宜、審不淺);舊制 panel 自 2026-08-06 起的迴圈是連兩輪乾淨(K=2)——含 high;2026-08-25 甲裁後多席亦處置閘,panel 僅回放,抽查(probe)義務同日退場(判定印行降觀測)。要改這些語意得走設計迴圈,不偷偷改。
 - gate / 守衛類 code 建議開 feature branch 再推。

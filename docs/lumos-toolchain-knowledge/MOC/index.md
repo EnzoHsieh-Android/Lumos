@@ -57,6 +57,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 - [[Systems/finding-refute]] — 辯方 refute:對 ≥major finding 派獨立 opus 強制 file:line 反證才降(防假陽性,對稱 canary)。
 - [[Systems/judge-severity-gate]] — 讓 judge 覆蓋 severity 維度,堵「收斂門檻沒覆蓋處偷工」。
 - [[Systems/loop-convergence-recording]] — `canary record --loop/--severity` + `loop status --need` 算收斂、可機械終止多輪。
+- [[Systems/loop-retro]] — 審查跑滿上限的人裁紀錄、跑滿回顧(歸族、怎麼少跑一輪、行動項)與跨迴圈彙整;有人裁紀錄的迴圈沒合格回顧,記新一輪與處置閘第八步會擋。
 - [[Systems/lumos-refcheck]]
 - [[Systems/pitfalls-code-loop]]
 - [[Systems/risk-tiered-review]]

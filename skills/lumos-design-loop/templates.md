@@ -10,6 +10,7 @@
 - §5 SDD implementer 派工 · §6 SDD task reviewer
 - 編排者判讀規則
 - §7.5 spec-conformance slot · §7.6 架構對齊席 · §7.7 席位立場與輸出格式 · §7.8 資安席 · §7 平行 panel 派工
+- §9 跑滿回顧起草(設計審與代碼審共用)
 
 **分工**:§1-2 供 `lumos-design-loop`、§3-4 供 `lumos-code-loop`(該 skill 以 `../lumos-design-loop/templates.md` 引用本檔)、§5-6 供 design-loop 收斂後的 subagent-driven TDD 派工。派工以本檔為準;SKILL.md 內嵌 framing 是摘要,漂移時以本檔為權威。
 
@@ -418,3 +419,33 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
   `lumos canary record none --loop <id> --round <rid> --auditor <鏡頭>-<模型> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
 - **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 帳=兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none])＋min-seats∧G3;capture-recapture 殘餘=advisory 觀測不進合取(2026-08-14 降級);cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。
+
+## 9. 跑滿回顧起草(設計審與代碼審共用;2026-10-05 Enzo 裁 d2,單源=[[Projects/審查跑滿回顧_計劃]])
+
+什麼時候派:迴圈到分級上限、人裁記了 `lumos loop cap-decision` 之後,繼續之前。派一個**沒參與這個迴圈的乾淨代理**(不是任何一席審查員,`--check` 會擋 `drafted_by` 等於帳上席名)。
+
+編排者派工前須知(不貼進派工詞):
+- 先 `lumos loop retro <編號> --template --write`(只在回顧檔不存在時建;別用 `>` 重導向,會先清空已寫好的回顧) 產骨架;骨架的 `context` 欄有每輪折入數與帳上所有席報告路徑,派工詞要列的報告照它抄。
+- ★派工詞只給材料,不給你的看法★:不貼你對「為什麼跑滿」的判斷、不貼你想改的規則、不預填 `avoid` 與 `changes`、不貼審計修正紀錄的散文結論。編排者容易替自己的修法找理由、把責任推給審查員,這就是要另派人起草的原因。
+- 代理交回後,你補 `avoid`、`changes`、`completed_by`,跑 `lumos loop retro <編號> --check`,過了 `--record`。
+
+```
+你是事後回顧的起草者。你沒參與這個審查迴圈,只讀卷證、不讀任何人的結論。
+迴圈:{編號},帳上輪次:{rounds}(以骨架為準)。
+回顧檔骨架:{repo}/governance/review-reports/{編號}/cap-retro.json(只改下面列的欄位,其他欄位不要動)
+材料(只讀這些):
+- 各輪席報告:{逐行列出 context.reports 裡的 report_path}
+- 各輪收貨紀錄:{governance/review-reports/{編號}/rN-intake.md,有幾份列幾份}
+- 被審材料的凍結快照:{各輪 snapshot 路徑}
+
+要做的事:
+1. 把每輪的問題歸成「族」:同一個根因或同一類疏漏算一族。族名只能從這八個挑:
+   same-family-unswept(同族沒一次掃完)、fix-induced(修補本身帶出新問題)、scope-too-big(改動範圍太大)、
+   spec-unclear(規格或設計寫不清)、seat-noise(審查員誤判或判準錯)、bar-moved(判準或規則中途改變)、
+   hostile-surface(本來就多邊界、縮不掉的領域)、other(都不像才用,note 要寫至少 10 字說明是什麼)。
+2. 每族填 families[] 一項:family、rounds(這族出現在哪幾輪,只能填帳上輪次)、evidence(至少一條,填上面列的席報告路徑原字串,不要自己改寫路徑、不要指到條號)、note。
+3. why_cap:為什麼跑到上限,至少 20 字,只根據報告與收貨紀錄寫,講「問題怎麼來的」,不寫是哪一席或哪個人的錯(無責回顧)。
+4. drafted_by 填你自己的代理名稱。
+不要填:avoid、changes、completed_by(那是編排者的事)。
+交回:改好的 cap-retro.json 全文,外加一段 100 字內的說明:哪一族你最不確定、為什麼。
+```
