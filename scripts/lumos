@@ -45788,38 +45788,53 @@ def _codeloop_read_from_ledger(repo_root, branch):
     退而讀 tracked 的 docs/.governance-log.jsonl:取該分支最後一筆 gate=code-loop 事件,
     還原成 marker 同形 dict(status/head_sha/note)。沒有就回 None。
     2026-08-22 實紅:CI 後盾 #5 上線後第一筆 tier=high 推送因 marker 不在 checkout 而假紅。"""
-    import json
     path = Path(repo_root) / "docs" / ".governance-log.jsonl"
     if not path.exists():
         return None
     last = None
     try:
-        for line in _ledger_lines(path.read_text(encoding="utf-8")):
-            line = line.strip()
-            if not line or '"code-loop"' not in line:
-                continue
-            # ★只有 pass/skip 才是留痕★(2026-09-08 #19 代碼審 r1 之後補的防禦):
-            # 同一個 gate 底下現在還有 blocked / skipped-env / fail-open 這些事件,
-            # 它們絕不能被當成「審過了」的憑證。上面撤掉 branch 別名已經擋住一次,
-            # 這裡是第二道——★別讓「哪些 kind 算留痕」這件事只靠欄位有沒有寫★。
-            if ('"passed"' not in line) and ('"skipped"' not in line):
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            # ★kind 也要對★(表態閘 2026-09-09):dispositions 事件的內容可能含 "passed" 字樣,子字串預篩擋不住;
-            # 兩種 kind 各自重建(_codeloop_read_dispositions 讀另一種),互不擠掉。
-            if ev.get("kind") not in ("passed", "skipped"):
-                continue
-            if ev.get("gate") == "code-loop" and ev.get("branch") == branch and ev.get("head_sha"):
+        for ev in _codeloop_ledger_events(path.read_text(encoding="utf-8"), _CODELOOP_MARK_KINDS):
+            if ev.get("branch") == branch:
                 last = ev
     except OSError:
         return None
-    if last is None:
-        return None
-    return {"status": last.get("kind"), "head_sha": last.get("head_sha"),
-            "note": last.get("detail"), "ts": last.get("ts"), "_source": "ledger"}
+    return None if last is None else _codeloop_mark_from_event(last)
+
+
+# ★只有 pass/skip 才是留痕★(2026-09-08 #19 代碼審 r1 之後補的防禦):同一個 gate 底下還有 blocked / skipped-env /
+# fail-open 這些事件,絕不能被當成「審過了」的憑證;★kind 也要對★(表態閘 2026-09-09):dispositions 事件的內容
+# 可能含 "passed" 字樣,子字串預篩擋不住。兩種 kind 各自重建,互不擠掉。
+_CODELOOP_MARK_KINDS = ("passed", "skipped")
+
+
+def _codeloop_ledger_events(text, kinds):
+    """治理帳全文 → 依行序逐筆產出 gate=code-loop、kind 在 kinds 裡、有 head_sha 的事件。
+    讀「目標分支最後一筆」與合併提交「合進來那一側」兩條路共用這一支,哪些事件算數只寫一次。"""
+    import json
+    marks = tuple(f'"{k}"' for k in kinds)
+    for line in _ledger_lines(text):
+        line = line.strip()
+        if not line or '"code-loop"' not in line or not any(k in line for k in marks):
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if (isinstance(ev, dict) and ev.get("gate") == "code-loop" and ev.get("kind") in kinds
+                and isinstance(ev.get("head_sha"), str) and ev.get("head_sha")):
+            yield ev
+
+
+def _codeloop_mark_from_event(ev):
+    """治理帳的 pass/skip 事件 → 跟 marker 檔同形的 dict。"""
+    return {"status": ev.get("kind"), "head_sha": ev.get("head_sha"),
+            "note": ev.get("detail"), "ts": ev.get("ts"), "_source": "ledger"}
+
+
+def _codeloop_disp_from_event(ev):
+    """治理帳的 dispositions 事件 → 表態紀錄 dict。"""
+    return {"head_sha": ev["head_sha"], "branch": ev.get("branch"), "ts": ev.get("ts"),
+            "dispositions": ev.get("dispositions") or {}, "_source": "ledger"}
 
 
 def _porcelain_z_paths(out):
@@ -46770,22 +46785,165 @@ def _codeloop_read_dispositions(repo_root, branch, marker_only=False):
         return None
     last = None
     try:
-        for line in _ledger_lines(path.read_text(encoding="utf-8")):
-            if '"dispositions"' not in line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if ev.get("gate") == "code-loop" and ev.get("kind") == "dispositions" and ev.get("branch") == branch and ev.get("head_sha"):
+        for ev in _codeloop_ledger_events(path.read_text(encoding="utf-8"), ("dispositions",)):
+            if ev.get("branch") == branch:
                 last = ev
     except OSError:
         return None
-    if last is None:
-        return None
-    return {"head_sha": last["head_sha"], "branch": branch, "ts": last.get("ts"),
-            "dispositions": last.get("dispositions") or {}, "_source": "ledger"}
+    return None if last is None else _codeloop_disp_from_event(last)
 
+
+# ── 合併進主線認合進來那側的留痕(Projects/合併進主線認合進來那側的留痕_計劃,設計審三輪)──
+# 主線的推送檢查只讀 branch=main 的紀錄;合併請求的留痕記在它自己的分支,高風險合併請求一合進主線就判「留痕過時」(PR #28)。
+# 遇到合併提交時改認「合進來那一側」的紀錄,條件全部成立才認(每一條都是設計審實測打穿過的洞):
+#   第一個母=推送範圍原始起點(擋未審分支擺第一個母的假合併)、第一個母是第二個母的祖先而且合併結果只差簿記檔
+#   (擋挑舊版檔退掉主線修補、改名藏刪檔)、紀錄從第二個母那棵樹的帳本讀(擋合併提交手寫假紀錄)、
+#   紀錄那個提交要包含第一個母(擋還原提交借主線舊紀錄)。★這是放寬,任何判不了一律不認★(跟表態閘超時放行相反)。
+_MERGE_SIDE_WINDOW = 20      # 合進來那側往回走第一母鏈幾個提交當索引
+
+
+def _merge_side_left(deadline):
+    """這一段剩下的秒數(git 逾時用它);用完回 None。"""
+    import time as _t
+    left = deadline - _t.monotonic()
+    return left if left > 0 else None
+
+
+def _merge_side_start(repo_root, marker_sha, raw_range):
+    """原始推送範圍 → (起點完整 sha, None);不適用(沒有範圍、全零或空樹起點——新分支首推)回 (None, None),
+    呼叫端不必講理由;起點找不到或終點不是目標回 (None, 為什麼)。"""
+    rg = _lens_range_ok(raw_range) if raw_range else None
+    if rg is None:
+        return None, None
+    a, b = rg
+    if a == _EMPTY_TREE_SHA or _ZERO_SHA_RE.fullmatch(a):
+        return None, None
+    start, end = _lens_full_sha(repo_root, a), _lens_full_sha(repo_root, b)
+    if start is None or end != marker_sha:
+        return None, "推送範圍起點找不到、或終點不是這次的目標版本,不認合進來那一側"
+    return start, None
+
+
+def _merge_side_parents(repo_root, marker_sha, deadline):
+    """目標版本的母 → ([母…], None) 或 (None, 為什麼)。"""
+    left = _merge_side_left(deadline)
+    r = _lens_git(repo_root, "rev-list", "--parents", "-n", "1", marker_sha, timeout=left) if left else None
+    if r is None or r.returncode != 0:
+        return None, "讀不到目標版本的母(git 出錯或時間不夠判不完)"
+    return r.stdout.split()[1:], None
+
+
+def _merge_side_caught_up(repo_root, p1, p2, deadline):
+    """第一個母是不是第二個母的祖先(合進來那一側合併前跟上主線)→ 是回 None,否則回為什麼。"""
+    left = _merge_side_left(deadline)
+    r = _lens_git(repo_root, "merge-base", "--is-ancestor", p1, p2, timeout=left) if left else None
+    if r is None or r.returncode not in (0, 1):
+        return "判不了合進來那一側有沒有跟上主線(git 出錯或時間不夠判不完)"
+    if r.returncode != 0:
+        return f"合進來那一側 {p2[:8]} 合併前沒跟上主線 {p1[:8]}——先在分支合主線、重記留痕再合"
+    return None
+
+
+def _codeloop_merge_side(repo_root, marker_sha, raw_range, deadline):
+    """目標版本是「可以認合進來那一側」的合併提交 → ((第一個母, 第二個母), None);否則 (None, 為什麼不認)。
+    為什麼是 None 代表不適用(不是兩個母的合併提交、沒有範圍、新分支首推)——一般推送被擋時不多一句雜訊(代碼審 r1 整合、正確性席)。
+    raw_range:呼叫端原樣傳進來的範圍(改寫全零起點之前);推送前掛鉤對新分支首推已先改寫過,這條路上起點條件形同
+    認了分岔點,安全性靠後面的祖先、只差簿記檔與紀錄要包含第一個母三條,不靠起點。"""
+    start, why = _merge_side_start(repo_root, marker_sha, raw_range)
+    if start is None:
+        return None, why
+    parents, why = _merge_side_parents(repo_root, marker_sha, deadline)
+    if parents is None:
+        return None, why
+    if len(parents) != 2:
+        return None, None
+    p1, p2 = parents
+    if p1 != start:
+        return None, f"合併提交的第一個母 {p1[:8]} 不是推送範圍起點 {start[:8]}(主線那側不是推送前的現況),不認合進來那一側"
+    if _git_is_shallow(repo_root, timeout=_merge_side_left(deadline) or 0.01):
+        return None, "這份 repo 是淺 clone,歷史不全,判不了合進來那一側"
+    why = _merge_side_caught_up(repo_root, p1, p2, deadline)
+    if why:
+        return None, why
+    left = _merge_side_left(deadline)
+    if left is None:
+        return None, "時間不夠判不完合併結果是不是只差簿記檔"
+    ok, why, unsure = _codeloop_record_valid_ex(repo_root, p2, marker_sha, timeout=left)
+    if unsure:
+        return None, f"判不了合併結果跟合進來那一側 {p2[:8]} 是不是只差簿記檔,不認:{why}"
+    if not ok:
+        return None, f"合併結果跟合進來那一側 {p2[:8]} 不只差簿記檔(合併時動過程式),不認:{why}"
+    return (p1, p2), None
+
+
+def _merge_side_ledger(repo_root, p2, deadline, cache):
+    """第二個母那棵樹的治理帳全文(合併提交本身加的帳本行不算);同一次判定只讀一次(約 19 MB)。回 (全文, None) 或 (None, 為什麼)。"""
+    if cache.get("ledger") is not None:
+        return cache["ledger"], None
+    left = _merge_side_left(deadline)
+    r = _lens_git(repo_root, "show", f"{p2}:docs/.governance-log.jsonl", binary=True, timeout=left) if left else None
+    if r is None or r.returncode != 0:
+        return None, "合進來那一側沒有治理帳(或讀不到、時間不夠判不完)"
+    cache["ledger"] = r.stdout.decode("utf-8", "replace")
+    return cache["ledger"], None
+
+
+def _codeloop_merge_side_record(repo_root, p1, p2, kinds, deadline, cache=None):
+    """在第二個母那棵樹的治理帳裡,找 head_sha 落在第二個母往回第一母鏈 _MERGE_SIDE_WINDOW 個提交內、紀錄那個提交
+    包含第一個母、而且對第二個母有效的事件(不看分支名)。回 (事件, None) 或 (None, 為什麼找不到)。"""
+    cache = {} if cache is None else cache
+    left = _merge_side_left(deadline)
+    r = _lens_git(repo_root, "rev-list", "--first-parent", "-n", str(_MERGE_SIDE_WINDOW), p2, timeout=left) if left else None
+    if r is None or r.returncode != 0:
+        return None, "列不出合進來那一側的提交(git 出錯或時間不夠判不完)"
+    window = set(r.stdout.split())
+    text, why = _merge_side_ledger(repo_root, p2, deadline, cache)
+    if text is None:
+        return None, why
+    cands = [ev for ev in _codeloop_ledger_events(text, kinds) if ev["head_sha"] in window]
+    for ev in reversed(cands):
+        rec = ev["head_sha"]
+        left = _merge_side_left(deadline)
+        a = _lens_git(repo_root, "merge-base", "--is-ancestor", p1, rec, timeout=left) if left else None
+        if a is None:
+            return None, "時間不夠判不完合進來那一側的紀錄"
+        if a.returncode != 0:
+            continue    # 紀錄審的版本不包含現在的主線(主線舊紀錄、或分支跟上主線前的紀錄)
+        left = _merge_side_left(deadline)
+        if left is None:
+            return None, "時間不夠判不完合進來那一側的紀錄"
+        ok, _why, _unsure = _codeloop_record_valid_ex(repo_root, rec, p2, timeout=left)
+        if ok:
+            return ev, None
+    return None, f"合進來那一側 {p2[:8]} 沒有包含主線頂端、而且之後只動簿記檔的紀錄"
+
+
+def _codeloop_merge_side_lookup(repo_root, marker_sha, raw_range, kinds, cache):
+    """審查與表態兩關共用:回 (事件, None) 或 (None, 為什麼不認;不適用時為 None)。
+    ★每次呼叫自己一個 _DISP_BUDGET 期限★(代碼審 r1 併發、整合、架構、回滾四席:共用一個期限時前一關吃光,後一關一律多擋);
+    合併提交的判斷與帳本全文在同一次判定裡只算一次(cache)。★任何例外都收成判不了、不認★(代碼審 r1 三席實測:
+    淺 clone 判斷逾時原本往外丟,表態那關被外層當成放行)——這是放寬,判不了就不放。"""
+    import time as _t
+    try:
+        deadline = _t.monotonic() + _DISP_BUDGET
+        if "side" not in cache:
+            cache["side"] = _codeloop_merge_side(repo_root, marker_sha, raw_range, deadline)
+        side, why = cache["side"]
+        if side is None:
+            return None, why
+        return _codeloop_merge_side_record(repo_root, side[0], side[1], kinds, deadline, cache)
+    except Exception as ex:
+        return None, f"判不了合進來那一側({ex.__class__.__name__}),不認"
+
+
+def _codeloop_merge_side_pass(repo_root, marker_sha, raw_range, cache, tier):
+    """審查那關:認到合進來那一側的 pass/skip 就回放行 dict;認不到回 (None, 為什麼或 None)。"""
+    ev, why = _codeloop_merge_side_lookup(repo_root, marker_sha, raw_range, _CODELOOP_MARK_KINDS, cache)
+    if ev is None:
+        return None, why
+    return {"blocked": False, "tier": tier,
+            "reason": (f"有效留痕(合併提交:合進來那一側的留痕({_esc_clean(ev['kind'], 20)}@{ev['head_sha'][:8]},"
+                       f"分支 {_esc_clean(ev.get('branch'), 80)}))")}, None
 
 def _codeloop_record_valid(repo_root, rec_sha, marker_sha):
     """留痕座標有效性(pass/skip 與表態共用同一套):同 sha;或 rec_sha 是 marker_sha 的祖先且中間只動簿記檔
@@ -47022,7 +47180,24 @@ def _dispositions_check_issue(repo_root, at_sha, issue):
     return (st in ("open", "doing")), ("" if st in ("open", "doing") else f"{hits[0].name} 的 status 是 {st or '空'},todo 只准連 open/doing")
 
 
-def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None):
+def _disp_record_for(repo_root, marker_sha, marker_branch, merge_side, deadline=None):
+    """表態紀錄 → (紀錄或 None, 有效嗎, 為什麼, 延後過的期限)。目標分支沒有或過期、而且是合併提交時,認合進來那一側的表態
+    (Projects/合併進主線認合進來那側的留痕_計劃;沒有與過期兩個擋下點都接)。合併提交那段自己有期限,
+    花掉的時間加回逐題核對的期限,不吃它的預算(代碼審 r1 併發席)。"""
+    import time as _t
+    rec = _codeloop_read_dispositions(repo_root, marker_branch)
+    ok, why = (False, "") if rec is None else _codeloop_record_valid(repo_root, str(rec.get("head_sha") or ""), marker_sha)
+    if ok or merge_side is None:
+        return rec, ok, why, deadline
+    t0 = _t.monotonic()
+    ev, mwhy = merge_side()
+    deadline = None if deadline is None else deadline + (_t.monotonic() - t0)
+    if ev is not None:
+        return _codeloop_disp_from_event(ev), True, "", deadline
+    return rec, False, ";".join(x for x in (why, mwhy) if x), deadline
+
+
+def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None, merge_side=None):
     """表態閘判定(S5):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。回 dict{blocked, gate, applicable, checked, problems[]}。
     超過 deadline 時停下來、回 blocked=False 並標 over_budget(呼叫端走 fail-open 進治理帳)。"""
     import time as _time
@@ -47033,12 +47208,12 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
            "checked": 0, "problems": [], "warnings": list(cfg["warnings"]), "tensions": []}
     if not app or cfg["mode"] == "off" or (cfg["mode"] == "high-only" and tier != "high"):
         return out
-    rec = _codeloop_read_dispositions(repo_root, marker_branch)
+    rec, ok, why, deadline = _disp_record_for(repo_root, marker_sha, marker_branch, merge_side, deadline)
     if rec is None:
-        out["problems"].append(f"分支 {marker_branch!r} 還沒有表態記錄(推 HEAD:別名 時表態要帶 --branch {marker_branch},查的是遠端目的分支;checkout 不在被推的版本時再帶 --at-sha {marker_sha[:12]})")
+        out["problems"].append(f"分支 {marker_branch!r} 還沒有表態記錄(推 HEAD:別名 時表態要帶 --branch {marker_branch},查的是遠端目的分支;checkout 不在被推的版本時再帶 --at-sha {marker_sha[:12]})"
+                               + (f";{why}" if why else ""))
         out["blocked"] = True
         return out
-    ok, why = _codeloop_record_valid(repo_root, str(rec.get("head_sha") or ""), marker_sha)
     if not ok:
         out["problems"].append(f"表態記錄過期:{why}——改了碼要重表態(樣板加 --carry 帶舊答案)")
         out["blocked"] = True
@@ -47211,6 +47386,8 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     _codeloop_guard_verdict.last_lint_new = None
     marker_sha = at_sha or _codeloop_git_head(repo_root)
     marker_branch = branch or _codeloop_git_branch(repo_root)
+    raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
+    merge_cache = {}
     if not marker_sha:
         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
@@ -47321,7 +47498,9 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         import time as _time
         # at_sha 沒給(本機直接叫 check)→ 用 HEAD 當 at_sha,錨點一樣對樹驗(未提交的改動不算證據;r3 邊界席 B5)
         dv = _dispositions_verdict(repo_root, disp_data, marker_sha, marker_branch, marker_sha, tier,
-                                   deadline=_time.monotonic() + _DISP_BUDGET)
+                                   deadline=_time.monotonic() + _DISP_BUDGET,
+                                   merge_side=lambda: _codeloop_merge_side_lookup(repo_root, marker_sha, raw_range,
+                                                                                  ("dispositions",), merge_cache))
         dv["range"] = disp_range
         if dv.get("over_budget") and not dv.get("blocked"):
             _gate_failopen(repo_root, "code-loop", f"表態核對超過 {_DISP_BUDGET:.0f} 秒預算且尚未查出問題,這次放行")
@@ -47389,15 +47568,23 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                       f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)")
         else:
             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
-        if _codeloop_marker_skipped(repo_root, reason, marker_sha):
-            return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
-        return {"blocked": True, "reason": reason, "tier": tier, "reason_kind": "review"}
+        return _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason)
 
     # 5. 無留痕
-    _r5 = "tier=high 且無留痕(尚未跑 code-loop pass/skip)"
-    if _codeloop_marker_skipped(repo_root, _r5, marker_sha):
+    return _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier,
+                                  "tier=high 且無留痕(尚未跑 code-loop pass/skip)")
+
+
+def _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason):
+    """高風險、目標分支沒有有效留痕時的收尾(沒有紀錄與紀錄無效兩條路共用):合併提交認得到合進來那一側的留痕就放行;
+    否則把為什麼沒認接在原因後面,再看 env 跳過,最後擋下。"""
+    ok_v, why = _codeloop_merge_side_pass(repo_root, marker_sha, raw_range, merge_cache, tier)
+    if ok_v:
+        return ok_v
+    reason = f"{reason};{why}" if why else reason
+    if _codeloop_marker_skipped(repo_root, reason, marker_sha):
         return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
-    return {"blocked": True, "reason": _r5, "tier": tier, "reason_kind": "review"}
+    return {"blocked": True, "reason": reason, "tier": tier, "reason_kind": "review"}
 
 
 def _codeloop_marker_skipped(repo_root, reason, head_sha):

@@ -16154,6 +16154,318 @@ def _add_commit(d, filename="bump.txt", content="x\n"):
                    capture_output=True, text=True).stdout.strip()
 
 
+# ── 合併進主線認合進來那側的留痕(Projects/合併進主線認合進來那側的留痕_計劃)──
+
+def _mp_git(d, *a):
+    import subprocess as _sp
+    r = _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _mp_commit_all(d, msg):
+    _mp_git(d, "add", "-A")
+    _mp_git(d, "commit", "-qm", msg)
+    return _mp_git(d, "rev-parse", "HEAD")
+
+
+def _mp_feature(d, answer=True, review=True):
+    """主線 init → 分支 feat/codeloop-guard-test 加高風險程式(表態、pass 照真實流程記在分支上)→ 帳本提交 P。
+    回 (主線頂端, P)。answer=False 不答效能題;review=False 不記 pass。"""
+    import subprocess as _sp
+    if answer:
+        _make_high_tier_repo(d)
+    else:
+        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t.t"), ("config", "user.name", "t")):
+            _sp.run(["git", *args], cwd=d, capture_output=True, text=True)
+        (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+        _mp_commit_all(d, "init")
+        _mp_git(d, "checkout", "-q", "-b", "feat/codeloop-guard-test")
+        (Path(d) / "app.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n", encoding="utf-8")
+        _mp_commit_all(d, "add high tier code")
+        (Path(d) / "docs" / "demo-knowledge" / "Systems").mkdir(parents=True, exist_ok=True)
+    if review:
+        run_lumos(["code-loop", "pass", "--note", "審過了", "--repo", d])
+    p = _mp_commit_all(d, "chore(lumos): 記錄代碼審通過")
+    return _mp_git(d, "rev-parse", "main"), p
+
+
+def _mp_merge(d, msg="Merge feat"):
+    """切回主線、--no-ff 合進 feat → 回合併提交。"""
+    _mp_git(d, "checkout", "-q", "main")
+    _mp_git(d, "merge", "-q", "--no-ff", "-m", msg, "feat/codeloop-guard-test")
+    return _mp_git(d, "rev-parse", "HEAD")
+
+
+def _mp_check(d, start, target):
+    import json as _j, subprocess as _sp
+    r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--diff", f"{start}..{target}",
+                 "--at-sha", target, "--branch", "main", "--repo", d], capture_output=True, text=True)
+    try:
+        v = _j.loads(r.stdout)
+    except Exception:
+        v = {}
+    return r.returncode, v, r.stdout + r.stderr
+
+
+def t_codeloop_check_merge_side_pass():
+    """[合併留痕 S1] 合併請求合進主線(第一個母=推送範圍原始起點、合進來那側已含主線、合併結果只差簿記檔)→ 認合進來那側的
+    pass(記在分支名下);目標分支有過期紀錄也一樣。手改合併結果、本機多了沒推的提交、未審分支擺第一個母、分支沒跟上主線、
+    還原提交借主線舊紀錄、沒有紀錄、紀錄後又改程式、紀錄只在合併提交新加的帳本行 → 照舊擋並講哪個條件不成立。
+    翻紅釘:不認合進來那側 → ①紅;不查第一個母=起點 → ④紅;不查紀錄要含第一個母 → ⑥紅;帳本讀工作樹 → ⑨紅。"""
+    print("t_codeloop_check_merge_side_pass")
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, base, m)
+        check("①乾淨合併、合進來那側有 pass → 放行並寫明認的是合進來那側", rc == 0 and v.get("blocked") is False
+              and "合進來那一側" in (v.get("reason") or ""), out[-1500:])
+        # ②主線名下有一筆過期紀錄(marker 檔在工作樹)→ 一樣放行
+        import json as _j
+        mk = Path(d) / "governance" / "code-loop" / "main.json"
+        mk.parent.mkdir(parents=True, exist_ok=True)
+        mk.write_text(_j.dumps({"status": "skipped", "head_sha": base, "note": "舊的主線紀錄"}), encoding="utf-8")
+        rc, v, out = _mp_check(d, base, m)
+        check("②目標分支有過期紀錄 → 一樣放行", rc == 0 and "合進來那一側" in (v.get("reason") or ""), out[-1500:])
+        # ③手改合併結果
+        (Path(d) / "app.py").write_text((Path(d) / "app.py").read_text(encoding="utf-8") + "requests.post('http://evil')\n",
+                                        encoding="utf-8")
+        _mp_git(d, "commit", "-q", "-a", "--amend", "--no-edit")
+        m2 = _mp_git(d, "rev-parse", "HEAD")
+        rc, v, out = _mp_check(d, base, m2)
+        check("③合併時手改過 → 照舊擋、講合併結果跟合進來那側不同(先擋在表態或審查哪一關都可以)", rc == 1
+              and "合併結果跟合進來那一側" in out, out[-1500:])
+    print("  ✓ t_codeloop_check_merge_side_pass")
+
+
+def t_codeloop_check_merge_side_reject_shape():
+    """[合併留痕 S1] 合併的形狀不對 → 照舊擋並講是哪個條件:未審分支擺第一個母(第一個母不是推送範圍起點)、
+    分支沒跟上主線。翻紅釘:不查第一個母=起點 → ④紅;不查跟上主線 → ⑤紅。"""
+    print("t_codeloop_check_merge_side_reject_shape")
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        _mp_git(d, "checkout", "-q", "-b", "evil", "main")
+        (Path(d) / "evil.py").write_text("import requests\nrequests.post('http://evil')\n", encoding="utf-8")
+        _mp_commit_all(d, "未審的改動")
+        _mp_git(d, "merge", "-q", "--no-ff", "-m", "fake", "feat/codeloop-guard-test")
+        m = _mp_git(d, "rev-parse", "HEAD")
+        rc, v, out = _mp_check(d, base, m)
+        check("④未審分支擺第一個母(第一個母不是推送範圍起點)→ 照舊擋、講起點", rc == 1
+              and "起點" in (v.get("reason") or "") + out, out[-1500:])
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        _mp_git(d, "checkout", "-q", "main")
+        (Path(d) / "other.txt").write_text("main 後來的提交\n", encoding="utf-8")
+        newbase = _mp_commit_all(d, "主線前進")
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, newbase, m)
+        check("⑤分支沒跟上主線 → 照舊擋、講沒跟上", rc == 1 and "跟上" in (v.get("reason") or "") + out, out[-1500:])
+    print("  ✓ t_codeloop_check_merge_side_reject_shape")
+
+
+def t_codeloop_check_merge_side_reject_record():
+    """[合併留痕 S1] 紀錄不對 → 照舊擋:還原提交借主線舊紀錄(記在別的分支名下)、合進來那側沒有紀錄、紀錄只在合併提交新加的
+    帳本行、紀錄之後又改過程式。翻紅釘:不查紀錄要含第一個母 → ⑥紅;帳本讀工作樹 → ⑨紅。"""
+    print("t_codeloop_check_merge_side_reject_record")
+    with tempfile.TemporaryDirectory() as d:
+        # ⑥還原提交借主線舊紀錄:主線 G0(高風險、主線名下 pass)→ G1 修補 → 分支從 G1 把 app.py 退回 G0 的版本
+        base, _p = _mp_feature(d)
+        g0 = _mp_merge(d, "Merge G0")
+        # 舊紀錄記在別的分支名下(主線名下的紀錄走既有那條路,不是本案要驗的):在 g0 開一支分支記 pass/表態,
+        # 帳本那幾行再提交到主線(像別的合併請求帶進來的帳本行)
+        _mp_git(d, "checkout", "-q", "-b", "old-review", g0)
+        _answer_stack_questions(d, f"{base}..{g0}")
+        run_lumos(["code-loop", "pass", "--note", "G0 審過", "--repo", d])
+        _mp_git(d, "stash", "-q", "--include-untracked")
+        _mp_git(d, "checkout", "-q", "main")
+        _mp_git(d, "stash", "pop", "-q")
+        _mp_commit_all(d, "chore(lumos): 記錄代碼審通過")
+        (Path(d) / "app.py").write_text("import requests\ndef f():\n    requests.post('https://x', timeout=5)  # 修補\n",
+                                        encoding="utf-8")
+        g1 = _mp_commit_all(d, "修補")
+        _mp_git(d, "checkout", "-q", "-B", "feat/codeloop-guard-test", g1)
+        _mp_git(d, "checkout", "-q", g0, "--", "app.py")
+        _mp_commit_all(d, "把修補退掉")
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, g1, m)
+        check("⑥還原提交把內容退回主線舊版、只有主線舊紀錄 → 照舊擋", rc == 1 and v.get("blocked") is True
+              and "合進來那一側(" not in (v.get("reason") or ""),
+              out[-1500:])
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d, review=False)
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, base, m)
+        check("⑦合進來那側沒有紀錄 → 照舊擋", rc == 1 and v.get("reason_kind") == "review", out[-1500:])
+        # ⑨紀錄只在合併提交新加的帳本行:在合併提交裡手寫一筆指向合進來那側頂端的 pass
+        import json as _j
+        led = Path(d) / "docs" / ".governance-log.jsonl"
+        led.parent.mkdir(parents=True, exist_ok=True)
+        with led.open("a", encoding="utf-8") as fh:
+            fh.write(_j.dumps({"ts": "2026-10-07T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "hard": False,
+                               "nodes": [], "detail": "手寫", "branch": "feat/codeloop-guard-test", "head_sha": _p}) + "\n")
+        _mp_git(d, "add", "-A")
+        _mp_git(d, "commit", "-q", "--amend", "--no-edit")
+        m2 = _mp_git(d, "rev-parse", "HEAD")
+        rc, v, out = _mp_check(d, base, m2)
+        check("⑨紀錄只在合併提交新加的帳本行 → 不算數、照舊擋", rc == 1 and v.get("reason_kind") == "review", out[-1500:])
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        _mp_git(d, "checkout", "-q", "feat/codeloop-guard-test")
+        (Path(d) / "app.py").write_text("import requests\ndef f():\n    requests.post('http://y')\n", encoding="utf-8")
+        _mp_commit_all(d, "審完又改程式")
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, base, m)
+        check("⑧紀錄之後又改過程式 → 照舊擋", rc == 1 and v.get("blocked") is True
+              and "合進來那一側(" not in (v.get("reason") or ""), out[-1500:])
+    print("  ✓ t_codeloop_check_merge_side_reject_record")
+
+
+def _mpe_repo(d):
+    """不跑 pitfalls 的小 repo:主線 init(含帳本)→ 分支 f 改程式並在帳本記 pass → 合進主線(--no-ff)。
+    回 (主線舊頂端, 合進來那側頂端, 合併提交)。"""
+    import json as _j
+    for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t.t"), ("config", "user.name", "t")):
+        _mp_git(d, *args)
+    (Path(d) / "docs").mkdir()
+    (Path(d) / "a.py").write_text("A = 1\n", encoding="utf-8")
+    (Path(d) / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
+    base = _mp_commit_all(d, "init")
+    _mp_git(d, "checkout", "-q", "-b", "f")
+    (Path(d) / "a.py").write_text("A = 2\n", encoding="utf-8")
+    c = _mp_commit_all(d, "改程式")
+    with (Path(d) / "docs" / ".governance-log.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(_j.dumps({"gate": "code-loop", "kind": "skipped", "branch": "f\x1b[2Kx", "head_sha": c}) + "\n")
+    p = _mp_commit_all(d, "記帳")
+    _mp_git(d, "checkout", "-q", "main")
+    _mp_git(d, "merge", "-q", "--no-ff", "-m", "merge", "f")
+    return base, p, _mp_git(d, "rev-parse", "HEAD")
+
+
+def t_codeloop_merge_side_edges():
+    """[合併留痕 S1][S2] 合併提交認合進來那側的邊界(直接呼叫判定,不跑 pitfalls):skip 紀錄照認、分支名的控制字元不原樣印;
+    起點全零或不是合併提交 → 不認也不講理由(不給一般推送加雜訊);三個母不認;合併時刪檔不認;中文簿記檔的差異照算簿記;
+    淺 clone 判斷逾時 → 收成判不了、不丟例外;主線本機多了沒推過的提交再合 → 不認;目標分支有過期表態 → 改認合進來那側。
+    翻紅釘:不接淺 clone 逾時 → ⑥紅;不照算中文簿記 → ⑤紅;一般推送也講理由 → ②紅。"""
+    print("t_codeloop_merge_side_edges")
+    import subprocess as _sp
+    m = _load_lumos_inproc()
+
+    def look(d, rng, tip, kinds=("passed", "skipped")):
+        return m._codeloop_merge_side_lookup(d, tip, rng, kinds, {})
+    with tempfile.TemporaryDirectory() as d:
+        base, p, mc = _mpe_repo(d)
+        ev, why = look(d, f"{base}..{mc}", mc)
+        check("①skip 紀錄照認", ev is not None and ev["kind"] == "skipped", why)
+        v, _w = m._codeloop_merge_side_pass(d, mc, f"{base}..{mc}", {}, "high")
+        check("①b 放行訊息裡分支名的控制字元不原樣印", v and "\x1b" not in v["reason"], repr(v))
+        ev, why = look(d, f"{'0' * 40}..{mc}", mc)
+        check("②起點全零 → 不認、不講理由", ev is None and why is None, why)
+        ev, why = look(d, f"{base}..{p}", p)
+        check("②b 不是合併提交 → 不認、不講理由", ev is None and why is None, why)
+        # ⑤中文簿記檔:合併提交多一支 governance/review-reports/中文/報告.md → 照算簿記、照認
+        rp = Path(d) / "governance" / "review-reports" / "中文" / "報告.md"
+        rp.parent.mkdir(parents=True)
+        rp.write_text("x\n", encoding="utf-8")
+        _mp_git(d, "add", "-A")
+        _mp_git(d, "commit", "-q", "--amend", "--no-edit")
+        mc2 = _mp_git(d, "rev-parse", "HEAD")
+        ev, why = look(d, f"{base}..{mc2}", mc2)
+        check("⑤中文簿記檔的差異照算簿記 → 照認", ev is not None, why)
+        # ⑥淺 clone 判斷逾時 → 收成判不了
+        orig = m._git_is_shallow
+        def _boom(*a, **k):
+            raise _sp.TimeoutExpired("git", 1)
+        m._git_is_shallow = _boom
+        try:
+            ev, why = look(d, f"{base}..{mc2}", mc2)
+            check("⑥淺 clone 判斷逾時 → 不認、講判不了、不丟例外", ev is None and why and "判不了" in why, why)
+        except Exception as ex:
+            check("⑥淺 clone 判斷逾時 → 不認、講判不了、不丟例外", False, repr(ex))
+        finally:
+            m._git_is_shallow = orig
+        # ④合併時刪檔 → 不認
+        (Path(d) / "a.py").unlink()
+        _mp_git(d, "add", "-A")
+        _mp_git(d, "commit", "-q", "--amend", "--no-edit")
+        mc3 = _mp_git(d, "rev-parse", "HEAD")
+        ev, why = look(d, f"{base}..{mc3}", mc3)
+        check("④合併時刪檔 → 不認、講合併結果", ev is None and "合併結果" in (why or ""), why)
+    with tempfile.TemporaryDirectory() as d:
+        base, p, mc = _mpe_repo(d)
+        # ③三個母(章魚合併)
+        _mp_git(d, "reset", "-q", "--hard", base)
+        _mp_git(d, "checkout", "-q", "-b", "g", base)
+        (Path(d) / "b.txt").write_text("b\n", encoding="utf-8")
+        _mp_commit_all(d, "g")
+        _mp_git(d, "checkout", "-q", "main")
+        _mp_git(d, "merge", "-q", "--no-ff", "-m", "octo", "f", "g")
+        mo = _mp_git(d, "rev-parse", "HEAD")
+        ev, why = look(d, f"{base}..{mo}", mo)
+        check("③三個母 → 不認", ev is None and len(_mp_git(d, "rev-list", "--parents", "-n", "1", mo).split()) == 4, why)
+    with tempfile.TemporaryDirectory() as d:
+        # ⑦主線本機多了沒推過的提交 U,分支從 U 拉出、合回來 → 第一個母 U 不是推送範圍起點
+        base, p, mc = _mpe_repo(d)
+        _mp_git(d, "reset", "-q", "--hard", base)
+        (Path(d) / "u.py").write_text("U = 1\n", encoding="utf-8")
+        u = _mp_commit_all(d, "沒推過的提交")
+        _mp_git(d, "checkout", "-q", "-B", "f", u)
+        (Path(d) / "a.py").write_text("A = 3\n", encoding="utf-8")
+        _mp_commit_all(d, "改程式")
+        _mp_git(d, "checkout", "-q", "main")
+        _mp_git(d, "merge", "-q", "--no-ff", "-m", "merge", "f")
+        mu = _mp_git(d, "rev-parse", "HEAD")
+        ev, why = look(d, f"{base}..{mu}", mu)
+        check("⑦主線本機多了沒推過的提交再合 → 不認、講起點", ev is None and "起點" in (why or ""), why)
+    with tempfile.TemporaryDirectory() as d:
+        # ⑧目標分支有一筆過期表態 → 改認合進來那側的表態
+        import json as _j
+        base, p, mc = _mpe_repo(d)
+        led = Path(d) / "docs" / ".governance-log.jsonl"
+        _mp_git(d, "checkout", "-q", "f")
+        _mp_git(d, "merge", "-q", "main")          # 照真實流程:分支先跟上主線,再表態
+        tip = _mp_git(d, "rev-parse", "HEAD")
+        with led.open("a", encoding="utf-8") as fh:
+            fh.write(_j.dumps({"gate": "code-loop", "kind": "dispositions", "branch": "f", "head_sha": tip,
+                               "dispositions": {"q": {"status": "na"}}}) + "\n")
+        _mp_commit_all(d, "表態")
+        _mp_git(d, "checkout", "-q", "main")
+        _mp_git(d, "merge", "-q", "--no-ff", "-m", "merge2", "f")
+        md = _mp_git(d, "rev-parse", "HEAD")
+        mk = Path(d) / "governance" / "code-loop" / "main.dispositions.json"
+        mk.parent.mkdir(parents=True, exist_ok=True)
+        mk.write_text(_j.dumps({"head_sha": base, "dispositions": {}}), encoding="utf-8")
+        rec, ok, why, _dl = m._disp_record_for(d, md, "main",
+                                               lambda: m._codeloop_merge_side_lookup(d, md, f"{mc}..{md}", ("dispositions",), {}))
+        check("⑧目標分支有過期表態 → 改認合進來那側的表態", ok and rec and rec.get("dispositions") == {"q": {"status": "na"}}, why)
+    print("  ✓ t_codeloop_merge_side_edges")
+
+
+def t_codeloop_check_merge_side_dispositions():
+    """[合併留痕 S2] 有適用效能題時,表態那關也認合進來那側的表態:有 → 放行(主線沒有表態);合進來那側沒表態、
+    或第一個母不是推送範圍起點 → 照舊擋在表態那關。翻紅釘:表態那關不接合進來那側 → ①紅。"""
+    print("t_codeloop_check_merge_side_dispositions")
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, base, m)
+        check("①合進來那側有表態、主線沒有 → 表態那關放行(沒被擋在表態)", v.get("reason_kind") != "dispositions" and rc == 0,
+              out[-1500:])
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d, answer=False)
+        m = _mp_merge(d)
+        rc, v, out = _mp_check(d, base, m)
+        check("②合進來那側沒表態 → 擋在表態那關", rc == 1 and v.get("reason_kind") == "dispositions", out[-1500:])
+    with tempfile.TemporaryDirectory() as d:
+        base, _p = _mp_feature(d)
+        _mp_git(d, "checkout", "-q", "-b", "evil", "main")
+        (Path(d) / "evil.py").write_text("import requests\nrequests.post('http://evil')\n", encoding="utf-8")
+        _mp_commit_all(d, "未審的改動")
+        _mp_git(d, "merge", "-q", "--no-ff", "-m", "fake", "feat/codeloop-guard-test")
+        m = _mp_git(d, "rev-parse", "HEAD")
+        rc, v, out = _mp_check(d, base, m)
+        check("③第一個母不是推送範圍起點 → 擋在表態那關", rc == 1 and v.get("reason_kind") == "dispositions", out[-1500:])
+    print("  ✓ t_codeloop_check_merge_side_dispositions")
+
+
 def t_codeloop_guard_verdict():
     """_codeloop_guard_verdict 判定式:5 情境。"""
     import subprocess as _sp
