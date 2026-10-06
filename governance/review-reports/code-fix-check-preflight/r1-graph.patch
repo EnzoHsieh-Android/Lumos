@@ -1,0 +1,347 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/修正關卡先驗便宜條件_計劃.md b/docs/lumos-toolchain-knowledge/Projects/修正關卡先驗便宜條件_計劃.md
+new file mode 100644
+index 00000000..ff79932b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/修正關卡先驗便宜條件_計劃.md
+@@ -0,0 +1,59 @@
++---
++type: project
++status: doing
++created: 2026-10-06
++updated: 2026-10-06
++tags:
++  - type/project
++  - status/doing
++  - scope/loop-engineering
++  - risk/守衛面
++lands_in:
++  - Systems/代碼審修正關卡
++  - Systems/測試假綠形態
++  - Systems/reversibility-governance-ledger
++---
++# 修正關卡先驗便宜條件_計劃
++
++白話：先看報修單填對沒有，再開機器驗修復。讓便宜錯誤早回報，把等待時間留給有效修正。
++
++## 原因與實驗
++
++WHY:先收齊便宜的輸入錯誤再跑測試，縮短修補回饋等待而保留通過標準 [出處:2026-10-06 使用者要求持續改善代碼審收斂性] [因:附件修復的兩次修正紀錄輸入錯誤各等待約四分鐘]
++
++實驗卷證在 governance/review-reports/fix-check-preflight/。四種便宜錯誤均回 1，卻仍啟動一至兩個測試 runner；暫存原型讓它們零啟動且仍失敗，有效綠紀錄照常兩次啟動。有效真紅修正測試與真紅合約仍判紅。草稿反向夾具曾把沒有改過的檔標為 fixed，因此不算有效紀錄；原始結果保留，由 manifest 排除，正確控制另存 countercontrol-valid-red.json。合成控制只證明順序，不證明真實審查輪數下降。
++
++PRIOR-ART: 借用分階段先快後慢的既有做法，最小改動在既有 fix-check 編排，重用紀錄、測試解析與治理事件，無新依賴。Fowler 的 staged build 先快測試後慢測試（https://martinfowler.com/articles/continuousIntegration.html）；pytest 區分名稱表達式與精確收集識別（https://docs.pytest.org/en/stable/how-to/usage.html），所以本次不對任意 runner 自建名稱碰撞規則。
++RETIRE-IF: 累積十次有便宜錯誤的 fix-check，提前失敗仍啟動測試 runner，或修正後有效紀錄不再跑合約，撤回這次順序改動；保留失敗事件，以測試及治理帳裁定。
++REVISIT:2026-10-20 核對十次便宜錯誤的耗時、失敗項與未執行提示，以及修好紀錄後的合約結果；樣本不足延後量測，不宣稱輪數下降。
++
++## 核心裁定
++
++沿用 [[Systems/代碼審修正關卡]] 的提醒與記帳分工；測試背書依 [[Systems/測試假綠形態]] 的現場成立與防假綠脈絡，不修改該節點合約。
++
++只調整既有 cmd_loop_fix_check 的執行順序，仍在釘住 HEAD 的隔離工作樹解析。先完整收齊 record、repeat、tests-exist，以及 run_cmd 缺少方法占位符的錯誤。任一存在時，修正測試與受波及合約測試均未執行；輸出兩段未執行與修好紀錄後重跑提示，仍回 1、passed=false，沿用一筆 warned 事件，不記 passed 或成功快取。
++
++沿用 [[Systems/reversibility-governance-ledger]] 的既有事件入口，JSON 與治理事件新增可選清單 not_run_items：前置失敗為 tests-green、bound-tests，有效紀錄為空；舊事件缺欄保持未知，不能推成已執行。gov 共用型別檢查與 mapper 保留此欄，錯型別列沿用既有略過規則。不新增事件種類、不改 loop next 的 passed 判法。
++
++前置全過照常跑兩段測試，修正測試紅仍跑合約收齊診斷，不把動態紅混成前置錯誤。原本回 2 的不可讀輸入、建樹失敗與顯式整道跳過路徑不改。仍由原本 context manager 清理，不提早 return 漏掉事件或清理。短名實際選中多支仍由既有跑測試判法處理。
++
++## 驗收條款
++
++- [S1] 當紀錄類別不合法時，應回 1、收齊 record 錯誤、零啟動測試 runner 且記一筆 warned 事件。[test:t_fix_check_preflight_record_stops_runners]
++- [S2] 當連續兩輪同類 major 缺少 prior 時，應回 1、列出 repeat 錯誤且零啟動測試 runner。[test:t_fix_check_preflight_repeat_stops_runners]
++- [S3] 當紀錄指向不存在的方法時，應回 1、列出 tests-exist 錯誤且零啟動測試 runner。[test:t_fix_check_preflight_missing_stops_runners]
++- [S4] 當平台命令沒有方法占位符時，應回 1、保留 tests-green 配置錯誤且零啟動測試 runner。[test:t_fix_check_preflight_command_stops_runners]
++- [S5] 當前置條件全過時，應照常跑修正與合約測試，綠才通過，任一真紅應回 1 且不得略過另一段。[test:t_fix_check_preflight_valid_still_runs]
++
++- [S6] 當前置失敗或前置全過時，JSON 與治理事件應保存未執行階段清單，gov 應保留新欄、容忍舊列缺欄為未知並略過壞型別列。[test:t_fix_check_preflight_not_run_is_durable]
++
++## 實務隱患
++
++- 守衛面：提早失敗減少當次動態診斷，必須明示未執行，失敗事件不能當通過；修好紀錄再重跑。
++- 版本與並行：沿用隔離樹、HEAD、紀錄指紋、平台根判法與依賴連結策略。
++- 資源與例外：沿用清理與事件入口，不新增背景程序，有效紀錄的逾時與中斷策略不改。
++- 已排除金流、外部送出、不可逆部署：只重排本機驗證，無業務外部動作。Windows 與外層 pytest 歸屬不在本次範圍。
++
++## 回退
++
++撤回本功能提交即恢復原本前置錯誤仍跑測試的順序。治理帳只追加，不刪事件；新測試隨功能撤回，計劃標 superseded。通過條件、處置閘、正式三輪上限與其他合約驗證不改。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index bcb3c33f..cdeaf8be 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -16,20 +16,21 @@ verified_by:
+   - "[[Verification/2026-07-10_合約鏈補強234]]"
+   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
+   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-09-11_代碼審資安席落地]]"
+   - "[[Verification/2026-09-11_全報vs抑噪試點]]"
+   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
+   - "[[Verification/2026-09-29_前端卡小實驗]]"
+   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
++  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+ summary: |-
+   PITFALL:[2026-09-28 筆記形狀擋全零修正的代碼審通才席]code-loop check --diff 的起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open 不擋;現在先照筆記形狀擋與每支檔有家共用的判法換成真的起點(頂端落後或等於主線頂端就沒有新東西;找不到主線時照它原本拿到空樹的做法、不截上線點);工具鏈 CI 的代碼審那步也改成原樣交前一版 [test:t_push_base_zero_or_missing]
+   PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則。★「code 開頭卻不是 code-」這種看不出是哪一種審查的,照最嚴的當代碼審★——代碼審 r1 說這會誤擋 codestage 這類真的設計審,r2 說同檔三處既有呼叫點對這個灰色地帶一律從嚴、就是為了擋「取個 codeX 的編號就繞過」;兩輪方向相反,照既有慣例裁從嚴,而 r1 真正的傷(訊息硬說它是代碼審、誤導人去找不存在的凍結 patch)改用既有那幾處的說法老實講來解。從嚴的代價:走新處置閘的設計審本來也要帶這兩個所以沒差;★舊的 panel 型設計審從沒要求過★(codestage 那九筆就是),目前打不到只是因為更早那條「審查席一定要附 --report」先擋了,以後動那條規則或開補記舊帳的旁路時要重新想 [test:t_code_loop_record_requires_provenance_from_first_row]
+   PITFALL:[2026-09-22 同上]★把本機提交壓成一個或 rebase 之後,表態與審查留痕都會失效,內容沒變也一樣★:兩者都只認「同一個提交、或是它的祖先且中間只動簿記檔」,壓過之後原本記的提交不再是祖先。原本擋下訊息只丟兩個 sha,看不出是自己剛壓的提交造成的;現在訊息會點出這個原因並給重來的兩條指令。順序上要先壓、再表態與留痕 [test:t_codeloop_record_invalid_after_squash_says_why]
+   KEY:[代碼審 r1 折入 2026-09-16]★對不齊就不算分級,範圍原本訂太寬★——當初的理由是「真正擋新帶進來的告警的是推送前那道閘」,而那道閘★不跑★沒有帶檔清單佔位符的宣告(把它降級成只報不擋)。那種宣告如果分級這邊也放掉就兩邊都漏。現在每條發現會記下它是哪種宣告報的,降級只套在推送閘真的接得住的那種 [test:t_pitfalls_lint_gets_the_changed_files]
+   KEY:[linter 那隻手 2026-09-16]算風險有兩隻手:自己的規則、和專案宣告的 linter。★linter 那隻手在 2026-09-16 之前從來沒真的檢查過任何一行★——指令裡「要檢查哪些檔」的佔位符沒被換成真檔名,原樣送給工具,工具回報「找不到檔」;而那條錯誤自己被當成一條發現、把分級撐成最高級。修法:換佔位符走共用那支、執行入口對沒換掉的佔位符 fail-closed(記成「這條沒跑」不是「乾淨」)、棧別辨識改用會看第一行 shebang 的那支(主程式沒有副檔名,在此之前對整道檢查隱形)。★修完量到的副作用與處置★:linter 真的讀檔之後,對不齊座標時(工作目錄不乾淨、或審比目前版本舊的範圍)會把改到的檔裡所有舊有問題全收進來——本 repo 實測 1446 條、分級必定最高級;對齊時只有 3 條且都落在新增行上。★對不齊時 linter 的發現照樣列出來但不參與分級★:分級問的是「這次改動有多危險」,對不齊時分不出哪條是這次帶進來的;真正擋「新帶進來的告警」的是推送前那道閘(比對兩份快照,跟對齊無關)。出身見 [[Issues/風險掃描的linter那隻手沒送檔進去]] [test:t_pitfalls_lint_gets_the_changed_files]
+   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/三道防污染/判定/missed 懲罰全停;輪記帳改 `canary record none`;panel 輪有效=記帳席≥2(Landmark r5「單席 caught<2 白跑」型不再發生);repro triage 觸發改「可疑席(引句錨不到/通用回應)」;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
+   KEY:[2026-08-05]UI 層驗收慣例(MCP 接驗證層,Enzo 靈感;立慣例不綁案)——test-layers 宣告 layer 含「UI 驗收」的棧被 diff 命中時,終審驗收=agent 以 Playwright MCP(乾淨瀏覽器)/claude-in-chrome(真登入態)真開頁執行驗收條款,截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/ 由 Verification 引用(哲學同 quote-check:證據可重放非口頭);起不了環境=明記未驗+原因不得靜默跳;Landmark .lumos/test-layers.json 已宣告 vue/html/js→UI 驗收、cs→dotnet test;首用=下一個天然帶 UI 面的工作(RSNO 暫緩,人裁);★Android 通道(2026-08-11,[[Projects/Android側UI測試綁圖譜工作流_計劃]])★=maestro MCP list_devices→inspect_screen→run,與 Playwright/chrome 並列;★前置:只准對「已標可自動且測試門店已確認」的 flow 自動跑★(否則會在真裝置真後端開真單),未達條件的 flow 一律僅手動、終審走 lumos code-loop skip --note 留痕;★截圖基準通道(2026-09-10,[[Projects/截圖基準驗收流程_計劃]])★=專案 .maestro/ 有 visual-check.sh 的畫面,終審跑 `.maestro/visual-check.sh <畫面> <證據目錄>` 代替「開頁看一眼」,退出 1 照抄它印的「相符率/門檻/diff 路徑」那行回報;agent 不動基準圖、不降門檻;沒有基準圖的畫面照舊
+   KEY:[2026-08-05]pitfalls --diff 排除 governance/review-reports/ 路徑——歸檔證物(席報告/canary 快照 .patch)★故意★含 bug,當代碼掃=push 被自己的留痕擋下(C 慣例落地首推實錄);排除不外溢(收緊釘:同內容在該路徑外照掃) [test:t_pitfalls_diff_skips_review_report_artifacts]
+   KEY:[2026-08-11]同型第二例——簿記帳也排除(_BOOKKEEPING_FILES/_DIR:治理帳/usage-log/ci-log/anchor-baseline/code-loop 留痕)。★自我餵食迴圈★:治理帳裡記的 skip 理由本身在描述「命中 open(...)」→掃自己的紀錄再次命中→再 skip→再寫一行理由進治理帳,實測誤觸發 9 次(3978732、837bbff 等皆此形態)。白名單與 code-loop 留痕失效豁免★共用同一組常數★(原本 code-loop 端寫成區域變數,兩處會漂移) [test:t_pitfalls_diff_skips_bookkeeping_ledgers]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/retrieval-ranking.md b/docs/lumos-toolchain-knowledge/Systems/retrieval-ranking.md
+index a77e2a62..a54a33b3 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/retrieval-ranking.md
++++ b/docs/lumos-toolchain-knowledge/Systems/retrieval-ranking.md
+@@ -42,20 +42,21 @@ verified_by:
+   - "[[Verification/2026-08-24_about_code讀側四項落地]]"
+   - "[[Verification/2026-08-24_固定席降噪A層落地]]"
+   - "[[Verification/2026-08-26_評測尺翻案落地]]"
+   - "[[Verification/2026-09-12_推筆記認家落地]]"
+   - "[[Verification/2026-09-15_多詞題在主題庫量不到]]"
+   - "[[Verification/2026-09-15_放寬拆詞觸發的前提被實測推翻]]"
+   - "[[Verification/2026-09-16_收斂候選規則的篩選量測]]"
+   - "[[Verification/2026-09-16_收斂候選實作後的前後對照]]"
+   - "[[Verification/2026-09-16_別名欄對檢索的實際貢獻]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
++  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+ aliases:
+   - 檢索排序與關聯推薦
+ about_code:
+   - scripts/lumos
+   - governance/eval/retrieval_eval.py
+ ---
+ # retrieval-ranking（檢索排序與關聯推薦 v1）
+ 
+ 設計三輪 panel（Codex 跨家族否決席全勤、5/5 canary 零漏——史上首例）收斂於 [[Projects/檢索優化_計劃]]，golden 凍結 governance/golden/retrieval/。雙盲合併（Claude×GPT-5.6）八處分歧裁定見計劃節點。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+index 97e3839b..4561c44f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
++++ b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+@@ -1,30 +1,31 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+-updated: 2026-10-03
++updated: 2026-10-06
+ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/guards-gates
+ verified_by:
+   - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
+   - "[[Verification/2026-07-10_審計loop研究硬化]]"
+   - "[[Verification/2026-07-10_合約鏈補強234]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
+   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
++  - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
+ summary: |-
+   PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
+   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
+   WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
+   WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
+   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
+   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
+   FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:decisions] → doctor Check R / lint 強制 → ③ findings 經 doctor(僅 --ci)append .governance-log.jsonl → lumos gov 唯讀彙整查詢
+   KEY:可逆性走平行函式 extract_reversibility,完全不碰 extract_contracts 的 7 個 callsite(invariant 合約家族零靜默失效)[test:t_reversibility_doctor]
+@@ -123,10 +124,12 @@ PITFALL:2026-10-04 [[Issues/過期鎖接手可能雙持]] 與 [[Verification/202
+ ## 已知限制
+ - `gov <node>` 對 L2/Systems 為部分視圖（見上）。
+ - `[rollback:]`/`[guard:]` v1 無寫入指令（手寫進 KEY 行），對比 `guard bind` 寫 `[test:]` 的不對稱明確接受，留 v2。
+ - 工具天花板：證明「有寫」≠ 證明「能跑」。
+ 
+ ## 相關
+ - 設計稿：`docs/design/2026-06-19-reversibility-and-governance-ledger.md`（design-loop 四輪 CONVERGED）。
+ - 實作計畫：`docs/design/2026-06-19-reversibility-and-governance-ledger-plan.md`（6 任務 TDD）。
+ - 後續擴充計畫：`docs/superpowers/plans/2026-06-24-check-r-guard.md`（[guard:] 兩軌）、`docs/superpowers/plans/2026-06-25-doctor-irreversible-hint.md`（Check H）。
+ - 實作落點：`scripts/lumos` `run_doctor`(Check R/H)、`cmd_lint`、`cmd_gov`、`extract_reversibility`/`_rollback_resolved`/`_guard_resolved`、`CHECKPOINT_RE`/`IRREVERSIBLE_RE`/`ROLLBACK_REF_RE`/`GUARD_REF_RE`。
++
++WHY:未執行階段另行留痕，不能從失敗項清單推測哪段跑過 [出處:Projects/修正關卡先驗便宜條件_計劃 設計審 integration-F1] [因:同一 consumer HEAD 與紀錄的兩種執行路徑產生相同失敗事件] [test:t_fix_check_preflight_not_run_is_durable]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md b/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
+index 23cd77ed..cff419b2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
++++ b/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
+@@ -1,33 +1,35 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-02
+-updated: 2026-10-02
++updated: 2026-10-06
+ responsibility: 負責 lumos loop fix-check(代碼審派下一輪前驗修正紀錄、紀錄裡的測試在修正後是綠的、受波及合約測試全綠)與 loop next 的修正關卡提醒;不負責先紅(修之前要紅)、不擋派工、不改處置閘
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/system
+   - status/doing
+   - scope/loop-engineering
+ summary: |-
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]只驗「修正後是綠的」,不驗「修之前會紅」:完整設計(Projects/代碼審修正關卡_計劃)的先紅判法跑滿三輪設計審仍有 17 條 major(拿掉修正後程式本身壞掉也算紅、子字串篩選頂替、路徑猜測試檔都出事),Enzo 裁拆小;弱測試照樣過關是接受的代價
+   WHY:[2026-10-02 第0步設計審 r1–r3]整次對開跑當下的 HEAD 建一棵隔離工作樹跑(並行會談改檔不影響);設定讀樹裡那份、不改寫它(r3 實測改寫會穿過符號連結改到樹外真檔);依賴資料夾預設連回主工作目錄(r2:不連時 Node 的 npx 會在樹裡上網抓測試工具)
+   WHY:[2026-10-02 第0步設計審 r2]測試名格式只在解析前擋 `]`、`,`,拆出平台之後方法名才過白名單(整串先過會把 `web:t_x` 的冒號擋掉,Kotlin 反引號名靠白名單收空白)
+   PITFALL:[2026-10-02 第0步實作]代碼審第 2 輪起 loop next 多半停在 gate-pending(沒帶 --spec),原本只在 plant-canary 給的處置記帳範本就永遠拿不到,--regression-set 看不到;改成代碼審第 2 輪起 gate-pending 也給 [test:t_loop_next_fix_check_reminder]
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]載體席選填 `--regression-set`(這輪哪些發現是上一輪修補造成的;none=判過沒有):由編排者標、辯方不推翻;不併進 --finding-kind(那欄量流程自產工作量,混進去會弄壞那個量);只當撤除條件的輔助指標 [test:t_canary_regression_set]
+   WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]] ④]修正改到殺傷力配方指著的檔時,提醒段多印「這幾條配方指著這次改過的檔」與每條的 `guard kill --id`(最多 10 條):原文可能對不上或殺不掉了。平台用關卡自己讀的那份樹裡設定(不另讀主工作目錄那份,同一個指令平台根只有一個來源),配方也讀樹裡的筆記(代碼審 r1 架構對齊席);平台不在設定或釘不住版本(根在樹外=別的 repo、子模組、連結、沒進版控)的配方不收。只印、不影響過不過、不寫事件欄位 [test:t_fix_check_recipe_rerun_note]
+   SEE:[[Systems/guard-kill]]、[[Systems/規格閘]]、[[Systems/bound-tests-gate]]、[[Systems/loop-convergence-recording]]、[[Systems/finding-refute]]
+   TEST:t_fix_check_record_complete、t_fix_check_bad_input、t_fix_check_test_must_exist、t_fix_check_listed_tests_green、t_fix_check_bound_tests_green、t_fix_check_repeat_category_needs_why、t_fix_check_gov_event、t_loop_next_fix_check_reminder、t_canary_regression_set、t_fix_check_record_template、t_isolated_worktree_shared、t_fix_check_tree_setup
+   REVISIT:2026-10-20 數 fix-check 跑了幾次、擋了幾次、擋在哪一項、耗時;通過的輪下一輪仍被標成上一輪修補造成的有幾條,決定先紅要不要做(Projects/代碼審修正關卡第0步_計劃)
++verified_by:
++  - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
+ ---
+ # 代碼審修正關卡
+ 
+ 白話:代碼審一輪修完、派下一輪之前,先讓工具驗一次編排者的修正紀錄——每個折入的發現有沒有歸到一組根因、每條修了的路徑有沒有測試守著、那些測試在修好的版本裡真的存在而且是綠的、受波及的合約測試全綠。只提醒不擋。設計與取捨單源在 [[Projects/代碼審修正關卡第0步_計劃]];還沒做的「修之前會紅」在 [[Projects/代碼審修正關卡_計劃]]。
+ 
+ ## 怎麼用
+ 
+ - 修完先提交,寫修正紀錄 `governance/review-reports/<迴圈編號>/<輪>-fix.json`;骨架:
+   `lumos loop fix-check <迴圈編號> --round <輪> --record-template > governance/review-reports/<迴圈編號>/<輪>-fix.json`
+   (`base` 從派工單的 `base_commit` 帶入;派工單在手冊第 2 步寫時記 `git rev-parse HEAD`)。
+@@ -42,10 +44,12 @@ summary: |-
+ 2. 同類連兩輪(前一輪同類別、這輪 ≥major → 要寫 `prior`;`other` 不算同類)。
+ 3. 測試存在(跟推送前合約測試閘同一支解析)。
+ 4. 紀錄裡的測試在修正後是綠的(跟規格閘同一支判法:篩選選到好幾支不同的測試、被跳過、一支都沒跑到都不算綠)。
+ 5. 受波及合約測試全綠(推送前那道閘在樹裡跑;有程式檔改名只提醒——`impact --diff` 的既有洞)。
+ 
+ ## 共用出去的零件
+ 
+ - 隔離工作樹:跟 [[Systems/guard-kill]] 共用;修正關卡會在開頭清掉同前綴、超過一天的殘骸,guard kill 不清。
+ - 一批測試逐支判:跟 [[Systems/規格閘]] 的三處共用。
+ - 測試名解析成平台與方法、判在不在索引裡:跟 [[Systems/bound-tests-gate]] 共用。
++
++WHY:先完整收齊便宜錯誤，再啟動昂貴測試，保留真紅判定與重跑責任 [出處:Projects/修正關卡先驗便宜條件_計劃 設計審與機械反例] [因:不合法紀錄仍等待合約跑完，拖慢修補回饋] [test:t_fix_check_preflight_record_stops_runners,t_fix_check_preflight_valid_still_runs]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+index e0a4777e..0a17746f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
++++ b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+@@ -39,20 +39,21 @@ summary: |-
+   DEP:`scripts/lumos`(判定、指令、健檢三段)｜`scripts/hooks/pre-commit`(Gate H)｜`scripts/hooks/pre-push`(整段比)｜設計審出口的落點那一步看 [[Systems/design-loop]]｜合約條數提醒看 [[Systems/節點範圍與索引守衛]]｜改檔前推筆記把確認過的家當入口(翻了「只認反引號路徑」的舊裁定)見 [[Projects/推筆記認家_計劃]]
+   TEST:t_nodehome_* 61 支、t_doctor_nodehome_* 5 支(2026-10-05 機械數 `grep -c '^def t_nodehome_'`;原記 42 與 5 是 2026-09-11 的數;`python3 scripts/test_lumos.py -k nodehome`,2026-09-11 代碼審折完後機械數)+ t_precommit_runs_home_check、t_prepush_runs_home_check、t_new_system_with_code_and_responsibility、t_doctor_nodehome_*
+   PITFALL:[2026-09-28 筆記內容審代碼審 r2 兩席]推送範圍終點找不到原本放行(fail-open),等於範圍寫錯時整道沒跑;改成跟筆記形狀擋、筆記內容審一致回 rc2,全 0(刪分支)照跳過 [test:t_note_audit_code_review_r2_regressions]
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-commit 找不到 Python 3.14 時,只提醒的閘(co-change、刪除傳播)跳過,會擋的閘(L、H、NS)在前面的 Gate PY 擋下,不退回舊版;找直譯器的做法見 [[Systems/python直譯器選擇]] [test:t_hooks_block_without_python314]
+ plan_refs:
+   - "[[Projects/每支檔有家_計劃]]"
+ verified_by:
+   - "[[Verification/2026-09-11_每支檔有家落地]]"
+   - "[[Verification/2026-09-12_推筆記認家落地]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
++  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+ decision_refs:
+   - "Projects/每支檔有家_計劃.md#d4"
+ ---
+ # 每支檔有家
+ 
+ > 白話：每支程式檔都要有一篇「管它的」節點；節點只准寫自己管的檔；程式改了，說明寫進改到那支檔的那一篇。新加的違規在提交前、推送前當場擋，舊帳交給健檢提醒。
+ 
+ ## 同一個位置的鄰居:筆記形狀擋(2026-09-27)
+ 
+ 提交前與推送前掛鉤在這道檢查的緊後面,多呼叫一次 `lumos note-shape`(同一段範圍、同樣只認 rc1 為擋;兩道被中斷、回傳碼 128 以上時掛鉤停下,不當成放行)。它借了這道的新分支起點算法、上線點截斷與合併處理——上線點與合併的兩支函式加了參數、拆出一支,這道自己的行為不變(預設值就是原本的)。它管的是筆記內容的形狀,不是檔案歸屬,細節見 [[Systems/筆記內容閘]]。改這道的範圍、上線點或合併判法時,記得那邊共用同一套。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index 5d45b858..0b186722 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -35,20 +35,22 @@ summary: |-
+   TEST:清單本身不可測(它是判讀用的分類法);上方那條硬合約由 t_slim_uninstall_manifest_parent_cleanup_is_best_effort 與 t_deinit_vendored_unlink_failure_does_not_abort 的「★前置★ 現場成立」斷言示範並守住
+ verified_by:
+   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
+   - "[[Verification/2026-08-03_Windows回歸測試三缺陷]]"
+   - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
++  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
++  - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
+ about_code:
+   - scripts/test_lumos.py
+ aliases:
+   - 翻紅釘
+   - 現場成立前置斷言
+   - 斷言只問會不會擋不問為什麼
+   - 假紅不一定是真的
+ ---
+ # 測試假綠形態（「測試存在，但沒在驗它宣稱要驗的」）
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證.md
+new file mode 100644
+index 00000000..b79a0c0c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證.md
+@@ -0,0 +1,30 @@
++---
++type: verification
++status: pending
++date: 2026-10-06
++valid_under: 只對本功能固定程式雜湊與版本的測試、治理事件及代碼審材料有效；不得外推真實收斂輪數
++revalidate_when: 前置判定、未執行欄位、治理事件 mapper 或測試 runner 設定改变時重驗；新版推送須重新確認CI
++tags:
++  - type/verification
++  - status/pending
++  - scope/loop-engineering
++plan_refs:
++  - "[[Projects/修正關卡先驗便宜條件_計劃]]"
++system_refs:
++  - "[[Systems/代碼審修正關卡]]"
++  - "[[Systems/reversibility-governance-ledger]]"
++  - "[[Systems/測試假綠形態]]"
++---
++# 修正關卡便宜錯誤先回報驗證
++
++目前為待完成驗收，已有局部證據，不宣稱已推送或實際收斂輪數下降。
++
++VERIFY:新增六支測試已取得 68 個通過斷言，原有相關子集 174 個斷言全綠；未執行留痕單支 12 個斷言包含在上述子集，不能重複加總。
++
++- 基線：純不合法類別、缺少原因說明、方法不存在及命令配置錯誤都仍啟動測試，原始失敗保留。
++- 設計審：第一輪六席報兩項重大發現，皆有機械反例，已折入，處置閘通過並凍結；不是零發現輪。
++- 防假綠：純 record 與混合錯誤分開；日誌辨識修正與合約的實際方法；有效紀錄的真紅仍跑另一段並判紅。
++- 留痕相容：治理 mapper 保留未執行清單，舊列缺欄保持未知，壞型別列略過；原一筆 warned/pass 語義不變。
++- 舊子集初跑 172 過、2 紅：原案例把不存在方法與真紅混在一起。拆開各自驗證後 174 過、0 紅，未刪除真紅或撞名檢查；初跑原始輸出保留。
++
++卷證集中在 governance/review-reports/fix-check-preflight/。新增告警閘 clean、無新增告警及無新增豁免；全圖 doctor 0 issues 的提醒屬整圖，不是本功能新增缺陷清單。推送前完整測試及正式代碼審，完成後以實際結果更新本篇。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查附件影響修復主線CI.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查附件影響修復主線CI.md
+new file mode 100644
+index 00000000..883b0d1b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查附件影響修復主線CI.md
+@@ -0,0 +1,31 @@
++---
++type: verification
++status: pass
++date: 2026-10-06
++valid_under: "僅適用 GitHub main 合併提交 74d9d1c842131d82222f0f304ae33d15c012d8b3；PR #15 與 main 的 CI 皆由 lumos ci-wait 得到 verdict green；不是實際收斂輪數量測"
++revalidate_when: 對新主線版本宣稱 CI 已通過時，以新 SHA 重跑 ci-wait；本次歷史驗收不得外推未驗版本
++tags:
++  - type/verification
++  - status/pass
++  - scope/loop-engineering
++plan_refs:
++  - "[[Projects/審查附件不作程式影響種子_計劃]]"
++system_refs:
++  - "[[Systems/retrieval-ranking]]"
++  - "[[Systems/pitfalls-code-loop]]"
++  - "[[Systems/每支檔有家]]"
++  - "[[Systems/測試假綠形態]]"
++---
++# 審查附件影響修復主線 CI 驗收
++
++本次驗收對象是 PR #15 合併後的固定版本，結果為通過；不代表真實審查輪數已下降。
++
++FACT:GitHub PR #15 已合併，PR 與合併提交的 CI 均由 lumos ci-wait 收到 verdict green [來源:外部] [confirmed:2026-10-06]
++
++- PR：https://github.com/EnzoHsieh-Android/Lumos/pull/15
++- PR CI：https://github.com/EnzoHsieh-Android/Lumos/actions/runs/37383496375
++- main CI：https://github.com/EnzoHsieh-Android/Lumos/actions/runs/37384603977
++- 合併版本：74d9d1c842131d82222f0f304ae33d15c012d8b3。
++- 拉回遠端 main 後，比對兩支程式檔雜湊均與本機完整測試及正式三輪修正關卡驗過的程式內容相同。原始 CI 判定與雜湊核對放在 governance/review-reports/code-review-artifact-impact-inputs/main-delivery-ci.json。
++
++本次驗的是既有附件修復的交付版本；下一項修正關卡前置檢查優化的測試紅綠，不能套用本篇通過結果。分支保留追蹤，原使用者工作目錄的未提交改動未修改。

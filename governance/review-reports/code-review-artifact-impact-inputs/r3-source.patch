@@ -1,0 +1,708 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 347f50cf..55c0345f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -24398,56 +24398,71 @@ def _review_role_for(file_rel, repo_root, rules=(), reader=None, content=None):
+             return "frontend"
+         if ext == "java" and not _ROLE_ANDROID_IMPORT.search(content):
+             return "backend"    # Java 後端服務常見;Android 純 Java 資料類也會落在這裡(已知限制,出路是宣告)
+         return None
+     key = _stack_key_for_file(file_rel, repo_root, reader=reader)
+     if key == "vue":
+         return "frontend"
+     return "backend" if key in _ROLE_BACK_KEYS else None
+ 
+ 
+-def _review_role_changed_files(root, base, head):
++def _review_role_changed_files(root, base, head, deadline=None):
+     """角色鏡頭的改動檔清單:[(路徑, 讀內容用的版本)]。派工角色段與推送前分級那一行共用這一支。
+-    改名算新路徑;刪除的檔照樣算、讀起點版本。剔除測試檔(_PITFALL_DIFF_TEST_PAT)、消費專案裡原封不動的工具檔
++    一般改名算新路徑；跨到被排除的簿記終點另保留舊程式、讀起點版本。
++    刪除的檔照樣算、讀起點版本。剔除測試檔(_PITFALL_DIFF_TEST_PAT)、消費專案裡原封不動的工具檔
+     (_vendored_skip)、文件與帳檔(_impact_diff_seed_ok)。git 跑不起來回 None。"""
+     r = _lens_git(root, "diff", "--no-ext-diff", "--name-status", "-M", "-z", base, head)
+     if r is None or r.returncode != 0:
+         return None
+     toks = r.stdout.split("\0")
+     skip = _vendored_skip(root, f"{base}..{head}")
+-    out, i = [], 0
++    out, renamed, i = [], [], 0
+     while i < len(toks) and toks[i]:
+         st = toks[i]
+         if st[:1] in ("R", "C"):
++            if st[:1] == "R":
++                renamed.append((toks[i + 1], toks[i + 2]))
+             path, ref, i = toks[i + 2], head, i + 3
+         else:
+             path, ref, i = toks[i + 1], (base if st[:1] == "D" else head), i + 2
+-        if _PITFALL_DIFF_TEST_PAT.search(path) or not _impact_diff_seed_ok(path) or path in skip:
+-            continue
+         out.append((path, ref))
+-    return out
++    modes = _impact_diff_modes(root, [path for path, _ref in out] + [old for old, _new in renamed],
++                               base, head, deadline=deadline)
++    if modes is None:
++        return None
++    # 一般改名仍取新路徑；只有簿記終點被排除時，不能把舊程式刪除一起藏掉。
++    out += [(old, base) for old, new in renamed if new.startswith(_BOOKKEEPING_DIRS)
++            and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)))
++            and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
++    return [(path, ref) for path, ref in out
++            if not _PITFALL_DIFF_TEST_PAT.search(path)
++            and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+ def _review_roles(root, base, head, budget=_ROLE_BUDGET):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+     import time as _t
++    if budget <= 0:
++        return {"roles": {}, "counts": {"frontend": 0, "backend": 0, "unknown": 0},
++                "warnings": [], "capped": 0, "timed_out": True}
+     t0 = _t.monotonic()
+     cfg = _json_at_ref(root, base, ".lumos/config.json")
+     _cfg_there = cfg is None and _lens_git(root, "cat-file", "-e", f"{base}:.lumos/config.json")
+     rules, warnings = _review_roles_config(cfg, unreadable=bool(_cfg_there and _cfg_there.returncode == 0))
+-    files = _review_role_changed_files(root, base, head)
++    files = _review_role_changed_files(root, base, head, deadline=t0 + budget)
+     if files is None:
+         return None
+     want, capped = _review_role_wanted(files, rules)
+-    blobs, timed_out = {}, False
++    blobs = {}
+     left = budget - (_t.monotonic() - t0)
++    timed_out = left <= 0
+     if want and left > 0.2:
+         got = _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=left)
+         if got is None:
+             timed_out = True
+         else:
+             blobs = {k: (v.decode("utf-8", "replace") if v is not None else None) for k, v in zip(want, got)}
+     elif want:
+         timed_out = True
+     roles = {}
+     for p, ref in files:
+@@ -27220,28 +27235,44 @@ def _nodehome_cat_sizes(repo_root, specs, timeout=60):
+     if chk.returncode != 0:
+         return None
+     heads = chk.stdout.split(b"\n")
+     out = []
+     for i in range(len(specs)):
+         parts = heads[i].split(b" ") if i < len(heads) else []
+         out.append(int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None)
+     return out
+ 
+ 
+-def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60):
++def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60, max_total_bytes=None, deadline=None):
+     """_nodehome_cat_blobs 加大小上限:先用 _nodehome_cat_sizes 問大小,超過 max_bytes 的回 None、不讀進記憶體
+-    (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。回同順序的 bytes|None;git 跑不起來回 None。"""
+-    sizes = _nodehome_cat_sizes(repo_root, specs, timeout)
++    (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。
++    max_total_bytes 選填，限制整批宣告內容大小；deadline 選填，大小／內容兩趟共用剩餘時間。
++    未指定時保留既有逐物件上限與每趟 timeout 語意。回同順序 bytes|None；失敗或截止期耗盡回 None。"""
++    import time as _t
++    def left():
++        return timeout if deadline is None else min(timeout, deadline - _t.monotonic())
++    remaining = left()
++    if remaining <= 0:
++        return None
++    sizes = _nodehome_cat_sizes(repo_root, specs, remaining)
+     if sizes is None:
+         return None
+-    ok = [i for i, n in enumerate(sizes) if n is not None and n <= max_bytes]
+-    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=timeout) if ok else []
++    ok, total = [], 0
++    for i, n in enumerate(sizes):
++        if n is None or n > max_bytes or (max_total_bytes is not None and total + n > max_total_bytes):
++            continue
++        ok.append(i)
++        total += n
++    remaining = left()
++    if remaining <= 0:
++        return None
++    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=remaining) if ok else []
+     if got is None:
+         return None
+     res = [None] * len(specs)
+     for i, v in zip(ok, got):
+         res[i] = v
+     return res
+ 
+ 
+ def _nodehome_cat_blobs(repo_root, specs, timeout=60):
+     """一次讀很多個「版本:路徑」的內容,回同順序的 bytes|None(那個版本沒有這支檔就是 None);git 跑不起來回 None。
+@@ -41147,32 +41178,90 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+             for x in all_incidents:
+                 contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+                 print(f"  {x['node']}{contract_tag}  (trigger: {x['matched_by']})")
+ 
+     return 0
+ 
+ 
+ _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
+ 
+ 
+-def _impact_diff_seed_ok(f):
++def _impact_diff_seed_ok(f, file_mode=None, shebang=None):
+     """--diff 種子過濾:只收 code 檔。剔除圖譜/凍結快照/帳檔(.jsonl)/文檔(.md)/
++    簿記分類沿用 _BOOKKEEPING_FILES/_BOOKKEEPING_DIRS,卷證不是程式;
+     governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。"""
+     if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP):
+         return False
++    # 固定帳檔仍排除；目錄內的程式例外先成立，不再被文檔副檔名二次排掉。
++    if f in _BOOKKEEPING_FILES:
++        return False
++    if f.startswith(_BOOKKEEPING_DIRS):
++        kind = _nodehome_code_kind(f)
++        if file_mode == "100755" or kind == "ext":
++            return True
++        if kind == "shebang?":
++            return shebang is not False  # 超過上限／讀不到時沿既有保守判法。
++        return file_mode is None
+     if f.endswith((".jsonl", ".md")):
+         return False
+     if f.endswith(".json") and f.startswith("governance/"):
+         return False
+     return True
+ 
+ 
++def _impact_diff_raw(repo_root, diff_args, deadline):
++    """分類的 raw 讀取；截止期耗盡回空資料保留未知，其他失敗回 None。"""
++    import time as _t
++    args = ("diff", "--no-ext-diff", "--no-textconv", "--raw", "--no-renames", "--no-abbrev", "-z", *diff_args)
++    if deadline is None:
++        raw = _nodehome_git(repo_root, *args)
++    else:
++        left = min(_disp_git_timeout(), deadline - _t.monotonic())
++        if left <= 0:
++            return b""  # 未知模式，不把它當附件排除。
++        r = _lens_git(repo_root, *args, binary=True, timeout=left)
++        raw = r.stdout if r is not None and r.returncode == 0 else None
++        if raw is None and _t.monotonic() >= deadline:
++            return b""
++    return raw
++
++
++def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
++    """簿記來源取凍結模式與首行；普通來源不多查 Git。刪檔取舊物件。"""
++    if not any(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS) for f in files):
++        return {}
++    import time as _t
++    raw = _impact_diff_raw(repo_root, diff_args, deadline)
++    changes = _codeloop_raw_changes(raw) if raw is not None else None
++    if changes is None:
++        return None
++    out, ask = {}, []
++    for f, (old, new, old_oid, new_oid) in changes.items():
++        mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
++        out[f] = (mode, None)
++        if (f.startswith(_BOOKKEEPING_DIRS) and mode != "100755"
++                and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
++                and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
++            ask.append((f, oid))
++    if ask:
++        left = _disp_git_timeout() if deadline is None else min(_disp_git_timeout(), deadline - _t.monotonic())
++        if left <= 0:
++            return out
++        heads = _nodehome_cat_blobs_capped(repo_root, [oid for _f, oid in ask],
++                                          _CODELOOP_BOOKKEEPING_HEAD_CAP, timeout=left,
++                                          max_total_bytes=_CODELOOP_BOOKKEEPING_HEAD_CAP, deadline=deadline)
++        if heads is not None:
++            for (f, _oid), head in zip(ask, heads):
++                out[f] = (out[f][0], True if head is None else _head_is_shebang(head, lenient=True))
++    return out
++
++
+ def _impact_payload_read(path):
+     """讀一份已經算好的波及結果(pre-push 每次推送只算一次,兩個消費者共用同一份)。
+ 
+     ★為什麼要有這支★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):
+     推送關卡本來就對每個 ref 跑一次完整的波及計算(同步點名用)。合約測試閘要的是
+     同一份東西裡「帶合約而且綁了測試」的那幾篇——★再算一次就是把一次推送算兩次★,
+     而那正是這一案 r1 拿來否決原設計的那個成本(那條裁定後來被查出已作廢,
+     但「不要算兩次」本身仍然是對的)。
+ 
+     ★失敗要隔離★:讀不到就回 None,呼叫端各自決定怎麼降級——
+@@ -41237,30 +41326,34 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+         return 2
+     repo_root = Path(repo) if repo else None
+     if repo_root is None:
+         for cand in (Path.cwd(), *Path.cwd().parents):
+             if (cand / ".git").exists():
+                 repo_root = cand
+                 break
+     if repo_root is None or not (repo_root / ".git").exists():
+         print("擋下:找不到 git 專案,用 --repo 指定", file=sys.stderr)
+         return 2
+-    # core.quotePath=false:CJK 檔名不轉義加引號(否則 startswith/endswith 過濾全失效,r2 panel major)
++    # NUL 分隔且無損解碼，特殊檔名不能被引號化／拆行；改名兩側與 raw 判法一致。
+     r = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+-                 "diff", "--name-only", diff_range], capture_output=True, text=True, errors="replace")
++                 "diff", "--name-only", "--no-renames", "-z", diff_range], capture_output=True)
+     if r.returncode != 0:
+-        print(f"擋下:git 算不出差異: {r.stderr.strip()[:200]}", file=sys.stderr)
++        print(f"擋下:git 算不出差異: {r.stderr.decode('utf-8', 'replace').strip()[:200]}", file=sys.stderr)
++        return 2
++    candidates = [os.fsdecode(f) for f in r.stdout.split(b"\0") if f]
++    modes = _impact_diff_modes(repo_root, candidates, diff_range)
++    if modes is None:
++        print("擋下:git 算不出差異檔案模式", file=sys.stderr)
+         return 2
+     files = []
+-    for f in r.stdout.splitlines():
+-        f = f.strip()
+-        if not _impact_diff_seed_ok(f):
++    for f in candidates:
++        if not _impact_diff_seed_ok(f, *modes.get(f, (None, None))):
+             continue
+         # 已刪檔不跳過:反查靠「節點 body 引用該路徑」而非檔案存在——
+         # 刪除/改名正是合約節點最該被推到審計員眼前的時刻(r1 codex major)
+         files.append(f)
+     merged = {}          # node -> entry(跨檔取最高分;pinned 任一檔 pinned 即 pinned)
+     per_file_meta = []
+     import io, contextlib
+     _vault = _vault_in(repo_root)
+     # ★沒有圖譜就直接說,不要印「0 篇」裝作查過了★(2026-09-07 全 repo 審視 #9)
+     #
+@@ -41332,22 +41425,21 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+     free = sorted([v for v in merged.values() if not v["pinned"]],
+                   key=lambda v: (-v["score"], v["node"]))[:int(top)]
+     # 落成位置閉環(sync-check):預期受影響節點 ∩ 分支實際動過的圖譜節點——
+     # 「這功能被改了,它的節點卻沒動」= 受影響未同步清單(advisory,人判;固定席可信度高、自由席≈P@8 .70)
+     sync = None
+     if sync_check:
+         _vault_name = _vault.name if _vault is not None else None
+         touched = set()
+         if _vault_name:
+             _prefix = f"docs/{_vault_name}/"
+-            for f2 in r.stdout.splitlines():
+-                f2 = f2.strip().strip('"')
++            for f2 in candidates:
+                 if f2.startswith(_prefix) and f2.endswith(".md"):
+                     touched.add(f2[len(_prefix):])
+         missing = [v for v in (pins + free) if v["node"] not in touched]
+         sync = {"touched_nodes": sorted(touched),
+                 "missing": [{"node": v["node"], "pinned": v["pinned"],
+                              "score": v["score"], "files": v["files"]} for v in missing]}
+     if as_json:
+         print(_json.dumps({"range": diff_range, "files": files,
+                            "results": pins + free,
+                            **({"sync": sync} if sync is not None else {}),
+@@ -44381,37 +44473,43 @@ def _codeloop_record_valid_ex(repo_root, rec_sha, marker_sha, timeout=None):
+         _code = _codeloop_bookkeeping_code(repo_root, rec_sha, marker_sha,
+                                            {f: m_ for f, m_ in modes.items() if f not in _BOOKKEEPING_FILES},
+                                            timeout=_to, unknown=None)
+         if _code is None:
+             return (False, f"讀不到簿記資料夾裡檔案的內容,判不了 {rec_sha[:8]} 之後是不是純簿記增量", True)
+         if not _code:
+             return (True, f"祖先 {rec_sha[:8]}+簿記豁免(其後 {len(files)} 檔皆簿記)", False)
+     return (False, f"記錄 sha {rec_sha[:8]} 之後動了代碼(非純簿記增量)", False)
+ 
+ 
+-def _codeloop_raw_modes(out):
+-    """git diff --raw -z(不偵測改名)的輸出 → {路徑: (記錄那版的模式, 目標那版的模式)};模式是 "100644" 這種字串,
++def _codeloop_raw_changes(out):
++    """git diff --raw -z(不偵測改名)的輸出 → {路徑: (舊模式, 新模式, 舊物件, 新物件)};模式是 "100644" 這種字串,
+     那一版沒有這支檔是 "000000"。格式對不上回 None(呼叫端當判不了)。路徑用無損解碼。"""
+     parts = out.split(b"\0")
+     res, i = {}, 0
+     while i < len(parts) and parts[i]:
+         meta = parts[i]
+         if i + 1 >= len(parts) or not meta.startswith(b":"):
+             return None
+         fields = meta[1:].split(b" ")
+         if len(fields) < 5 or not parts[i + 1]:
+             return None
+-        res[os.fsdecode(parts[i + 1])] = (fields[0].decode("ascii", "replace"), fields[1].decode("ascii", "replace"))
++        res[os.fsdecode(parts[i + 1])] = tuple(v.decode("ascii", "replace") for v in fields[:4])
+         i += 2
+     return res
+ 
+ 
++def _codeloop_raw_modes(out):
++    """既有留痕消費者只取模式；模式與首行消費者共用同一個 raw 解析器。"""
++    changes = _codeloop_raw_changes(out)
++    return None if changes is None else {f: row[:2] for f, row in changes.items()}
++
++
+ # 留痕有效性讀簿記資料夾裡沒副檔名那幾支的首行時,單支的大小上限(回頭重讀代碼審 r3 架構對齊席 F2:走帶上限的批次讀取)。
+ # 超過上限讀不到 → 判不了 → 保守當程式檔(留痕失效)。2026-10-01 本 repo 簿記資料夾裡沒副檔名的只有 .weekly-stamp(9 位元組)
+ # 與 .rotation-cursor(約 5.6 KB、每輪加一行),離上限很遠。
+ _CODELOOP_BOOKKEEPING_HEAD_CAP = 1024 * 1024
+ 
+ 
+ def _codeloop_bookkeeping_code(repo_root, rec_sha, marker_sha, files, timeout=None, unknown=True):
+     """簿記資料夾底下這幾支裡有沒有程式檔(有就不算簿記)。files={路徑: (記錄那版模式, 目標那版模式)}(_codeloop_raw_modes)。
+     判的是目標提交 marker_sha 裡那一版;那一版刪掉了(模式 000000)就判記錄 rec_sha 那一版。任一條成立就算程式檔:
+     ①那一版的模式是可執行(100755),有沒有副檔名、有沒有寫 #! 都算(回頭重讀代碼審 r3 資安席 F2:沒有可用 #! 的
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e2a0b087..5ac939f1 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23027,20 +23027,268 @@ def t_impact_ranked():
+     check("incidents-only 只有事故", all(x.get("kind") == "incident" for x in di["results"]),
+           str(di)[:200])
+     # 磁碟檔無 SQL → legacy(無 prospective)不觸發該事故
+     r = lum("impact", "--file", "src/svc.py", "--json")
+     d2 = json.loads(r.stdout.strip().splitlines()[-1])
+     check("無 prospective 時磁碟無 SQL 不誤觸發", not any("SQL" in x["node"] for x in d2["incidents"]),
+           str(d2["incidents"]))
+     shutil.rmtree(root, ignore_errors=True)
+ 
+ 
++def t_impact_diff_review_artifacts():
++    """歷史審查附件不當程式種子；混合差異仍保留真程式、已刪檔與相鄰目錄。"""
++    import json, shutil
++    root = _nh_repo()
++    try:
++        _nh_file(root, 'src/current.py')
++        _nh_file(root, 'src/deleted.py', 'legacy_deleted = 17\n')
++        _nh_node(root, 'Current', about=['src/current.py'], body='實作在 `src/current.py`。')
++        _nh_node(root, 'Deleted', about=['src/deleted.py'], body='實作在 `src/deleted.py`。')
++        _nh_node(root, 'Historical', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:ARCHIVED_ONLY', body='歷史片段的事故。')
++        _nh_node(root, 'Actual', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:REAL_TOUCH', body='實際程式的事故。')
++        _nh_commit(root, 'base')
++        _nh_file(root, 'governance/review-reports/case/snapshot.patch', '+ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/review-reports/case/派工.txt', 'ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/replay/case/verdict.patch', '+ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/code-loop/case/example.diff', '+ARCHIVED_ONLY = True\n')
++        _nh_file(root, 'governance/review-reports/case/report', 'ARCHIVED_ONLY\n')
++        _nh_commit(root, 'artifacts')
++        _nh_file(root, 'governance/review-reports/case/report', '#!/bin/sh\necho working-only\n')
++        def impact(span):
++            r = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', span,
++                                '--repo', str(root), '--json'], capture_output=True, text=True)
++            check('附件測試的 impact 指令成功', r.returncode == 0, r.stderr)
++            return json.loads(r.stdout)
++        archive = impact('HEAD~1..HEAD')
++        check('只有審查附件時種子為空', archive['files'] == [], str(archive['files']))
++        check('歷史片段不能觸發事故', not archive['results'], str(archive['results'])[:300])
++        _nh_file(root, 'governance/review-reports/case/report', 'ARCHIVED_ONLY\n')
++        _nh_file(root, 'src/current.py', 'REAL_TOUCH = True\n')
++        _nh_git(root, 'rm', '-q', 'src/deleted.py')
++        _nh_file(root, 'governance/review-reports-other/worker.py', 'adjacent_worker = 29\n')
++        _nh_commit(root, 'mixed')
++        mixed = impact('HEAD~2..HEAD')
++        check('混合差異僅保留真程式與相鄰目錄', set(mixed['files']) ==
++              {'src/current.py', 'src/deleted.py', 'governance/review-reports-other/worker.py'},
++              str(mixed['files']))
++        pinned = {x['node'] for x in mixed['results'] if x.get('pinned')}
++        check('真程式的家仍必推', 'Systems/Current.md' in pinned, str(pinned))
++        check('已刪程式的家仍必推', 'Systems/Deleted.md' in pinned, str(pinned))
++        check('真程式事故仍必推', 'Issues/Actual.md' in pinned, str(pinned))
++        check('混合差異排除歷史事故', 'Issues/Historical.md' not in pinned, str(pinned))
++        tracked = _nh_git(root, 'ls-files', 'governance/review-reports').stdout.splitlines()
++        check('審查附件仍留在版本紀錄', len(tracked) == 3, str(tracked))
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++
++def t_impact_diff_special_paths():
++    """真 Git 特殊檔名不能被引號化成假種子；家與事故仍可查到。"""
++    import json, shutil
++    root = _nh_repo()
++    paths = ['governance/review-reports/case/run\nscript.py',
++             'governance/review-reports/case/tab\ttool.py',
++             'governance/review-reports/case/dir\nname/tool.py']
++    try:
++        _nh_file(root, 'src/anchor.py')
++        for i, path in enumerate(paths):
++            # 換行 basename 的既有確認格式不成立；只驗精確 seed／事故，不擴全域 parser。
++            body_ref = 'tool.py' if i == 2 else path
++            note = _nh_node(root, 'Special' + str(i), about=[path] if i == 1 else (),
++                            body='實作在 `' + body_ref + '`。')
++            if i == 2:
++                # 既有 literal block 能無損登記換行目錄；唯一裸檔名提供獨立確認。
++                text = note.read_text()
++                literal = 'about_code: |-\n' + ''.join('  ' + line + '\n' for line in path.split('\n'))
++                note.write_text(text.replace('about_code: []\n', literal))
++        _nh_node(root, 'SpecialIncident', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:SPECIAL_REAL_TOUCH', body='真正修改的事故。')
++        _nh_commit(root, 'base')
++        for path in paths:
++            _nh_file(root, path, 'SPECIAL_REAL_TOUCH = 1\n')
++        _nh_file(root, 'governance/review-reports/case/report.patch', 'archive\n')
++        _nh_node(root, 'Changed\tNode', about=[paths[1]], body='實作在 `' + paths[1] + '`。')
++        _nh_commit(root, 'changed')
++        for i in (1, 2):
++            single = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--file', paths[i],
++                                     '--repo', str(root), '--ranked', '--json'], capture_output=True, text=True)
++            one = json.loads(single.stdout) if single.returncode == 0 else {}
++            check('特殊路徑有效家前置' + str(i), single.returncode == 0 and any(
++                x['node'] == 'Systems/Special' + str(i) + '.md' and x.get('pinned')
++                for x in one.get('results', [])), single.stderr + str(one))
++        r = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', 'HEAD~1..HEAD',
++                            '--repo', str(root), '--json'], capture_output=True, text=True)
++        check('特殊路徑真 CLI 成功', r.returncode == 0, r.stderr)
++        data = json.loads(r.stdout)
++        check('特殊程式種子保留精確路徑且普通附件排除', set(data['files']) == set(paths), str(data['files']))
++        pins = {x['node'] for x in data['results'] if x.get('pinned')}
++        check('特殊路徑的家仍必推', {'Systems/Special1.md', 'Systems/Special2.md'} <= pins, str(pins))
++        check('特殊路徑的事故仍必推', 'Issues/SpecialIncident.md' in pins, str(pins))
++        sync_run = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', 'HEAD~1..HEAD',
++                                  '--repo', str(root), '--sync-check', '--json'], capture_output=True, text=True)
++        sync_data = json.loads(sync_run.stdout) if sync_run.returncode == 0 else {}
++        check('特殊路徑同步核對成功並保留精確節點', sync_run.returncode == 0
++              and 'Systems/Changed\tNode.md' in sync_data.get('sync', {}).get('touched_nodes', []),
++              sync_run.stderr + str(sync_data.get('sync')))
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++def t_impact_diff_bookkeeping_boundary_rename():
++    """跨簿記邊界改名且去掉執行模式，舊程式刪除仍保留；一般改名不改語意。"""
++    import json, shutil
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    old, new = 'src/tool.py', 'governance/review-reports/case/report.txt'
++    try:
++        _nh_file(root, 'src/anchor.py')  # 不冒稱順便修復舊頂層目錄全部消失的既有 Issue。
++        _nh_file(root, old, 'RENAME_REAL_TOUCH = 1\n').chmod(0o755)
++        _nh_node(root, 'Renamed', about=[old], body='實作在 `' + old + '`。')
++        _nh_node(root, 'RenameIncident', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:RENAME_REAL_TOUCH', body='真正修改的事故。')
++        _nh_commit(root, 'base'); base = _nh_git(root, 'rev-parse', 'HEAD').stdout.strip()
++        (root / new).parent.mkdir(parents=True, exist_ok=True)
++        _nh_git(root, 'mv', old, new); (root / new).chmod(0o644)
++        _nh_commit(root, 'rename'); head = _nh_git(root, 'rev-parse', 'HEAD').stdout.strip()
++        detected = _nh_git(root, 'diff', '--name-status', '-M', base, head).stdout
++        check('改名控制確實被 Git 判成 R 且終點不可執行', detected.startswith('R')
++              and not ((root / new).stat().st_mode & 0o111), detected)
++        r = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', base + '..' + head,
++                            '--repo', str(root), '--json'], capture_output=True, text=True)
++        check('跨簿記改名真 CLI 成功', r.returncode == 0, r.stderr)
++        data = json.loads(r.stdout)
++        check('跨簿記改名保留舊程式種子而排除新附件', data['files'] == [old], str(data['files']))
++        pins = {x['node'] for x in data['results'] if x.get('pinned')}
++        check('跨簿記改名舊家與事故仍必推', {'Systems/Renamed.md', 'Issues/RenameIncident.md'} <= pins, str(pins))
++        files = dict(m._review_role_changed_files(root, base, head))
++        check('角色輸入保留被附件排除遮住的舊程式刪除', files.get(old) == base and new not in files, str(files))
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++def t_impact_diff_head_batch_total_cap():
++    """多支各自小於單檔上限的首行物件，也不能無限制讀進整批內容。"""
++    from unittest.mock import patch
++    m = _load_lumos(); cap = m._CODELOOP_BOOKKEEPING_HEAD_CAP
++    paths = ['governance/review-reports/case/plain' + str(i) for i in range(4)]
++    raw = b''.join((f':100644 100644 {"a" * 40} {str(i + 1) * 40} M\0' + path + '\0').encode()
++                   for i, path in enumerate(paths))
++    reads = []
++    def read(root, specs, timeout=60):
++        reads.append(list(specs)); return [b'ordinary\n'] * len(specs)
++    with patch.object(m, '_nodehome_git', lambda *a, **kw: raw), \
++            patch.object(m, '_nodehome_cat_sizes', lambda root, specs, timeout: [cap // 2] * len(specs)), \
++            patch.object(m, '_nodehome_cat_blobs', read):
++        modes = m._impact_diff_modes(Path('/tmp'), paths, 'base', 'head')
++        check('新分類讀取整批宣告大小不超過既有上限', sum(len(x) for x in reads) * (cap // 2) <= cap, str(reads))
++        check('超出整批上限的未知項仍保守保留', any(m._impact_diff_seed_ok(path, *modes[path]) for path in paths), str(modes))
++        reads.clear()
++        with patch.object(m, '_ROLE_READ_CAP', 2), \
++                patch.object(m, '_nodehome_cat_sizes', lambda root, specs, timeout: [1] * len(specs)):
++            modes = m._impact_diff_modes(Path('/tmp'), paths, 'base', 'head')
++        check('極小物件也受既有讀取數上限約束', sum(len(x) for x in reads) <= 2, str(reads))
++        check('超過讀取數上限也保守保留', any(m._impact_diff_seed_ok(path, *modes[path]) for path in paths), str(modes))
++        reads.clear()
++        old = m._nodehome_cat_blobs_capped(Path('/tmp'), ['x'] * 4, cap)
++        check('既有未指定整批上限的消費者語意保持', len(old) == 4 and len(reads[0]) == 4, str(reads))
++
++
++def t_review_role_bookkeeping_remaining_budget():
++    """新增簿記分類不能另開固定逾時；小幅正預算耗完須停止首行並明示超時。"""
++    import time as _t
++    from unittest.mock import patch
++    from types import SimpleNamespace
++    m = _load_lumos(); clock, raw_timeouts, heads = [10.0], [], []
++    path = 'governance/review-reports/case/plain'
++    raw = (f':100644 100644 {"a" * 40} {"b" * 40} M\0' + path + '\0').encode()
++    def git(*args, **kw):
++        if '--raw' in args:
++            raw_timeouts.append(kw.get('timeout', 20)); clock[0] += 0.2
++            return SimpleNamespace(returncode=0, stdout=raw)
++        return SimpleNamespace(returncode=0, stdout='M\0' + path + '\0')
++    def read_heads(*args, **kw):
++        heads.append(kw); return [b'ordinary\n']
++    with patch.object(_t, 'monotonic', lambda: clock[0]), \
++            patch.object(m, '_json_at_ref', lambda *a: {}), \
++            patch.object(m, '_vendored_skip', lambda *a: set()), \
++            patch.object(m, '_lens_git', git), \
++            patch.object(m, '_nodehome_cat_blobs_capped', read_heads):
++        res = m._review_roles(Path('/tmp'), 'base', 'head', budget=0.1)
++    check('簿記 raw 查詢承接剩餘角色預算', bool(raw_timeouts) and 0 < raw_timeouts[0] <= 0.100001, str(raw_timeouts))
++    check('分類預算耗盡不再讀首行', not heads, str(heads))
++    check('沒有內容候選也誠實回超時', isinstance(res, dict) and res['timed_out'], str(res))
++
++
++def t_impact_diff_bookkeeping_code_controls():
++    """簿記裡的程式仍是程式：副檔名、可執行、無副檔名、刪檔與凍結模式。"""
++    import json, shutil
++    lm = _load_lumos_inproc()
++    root = _nh_repo()
++    paths = ['governance/review-reports/case/tool.py',
++             'governance/code-loop/case/run.sh',
++             'governance/replay/case/run.txt',
++             'governance/note-verdicts/case/run',
++             'governance/reread-verdicts/case/program.patch',
++             'governance/review-reports/case/program.md',
++             'governance/code-loop/case/program.json',
++             'governance/replay/case/program.jsonl']
++    deleted = 'governance/replay/case/deleted.txt'
++    archive = 'governance/review-reports/case/report.patch'
++    try:
++        _nh_file(root, 'src/anchor.py', 'anchor = 1\n')
++        for i, path in enumerate(paths + [deleted]):
++            _nh_node(root, 'Code' + str(i), about=[path], body='實作在 `' + path + '`。')
++        _nh_file(root, deleted, '#!/bin/sh\necho deleted-program\n')
++        (root / deleted).chmod(0o755)
++        _nh_commit(root, 'base')
++        base = _nh_git(root, 'rev-parse', 'HEAD').stdout.strip()
++        for i, path in enumerate(paths):
++            _nh_file(root, path, 'value = 1\n' if path.endswith('.py') else '#!/bin/sh\necho code-' + str(i) + '\n')
++            if path.endswith(('.txt', '.patch', '.md', '.json', '.jsonl')):
++                (root / path).chmod(0o755)
++        _nh_file(root, archive, '+ARCHIVED_ONLY\n')
++        _nh_git(root, 'rm', '-q', deleted)
++        _nh_commit(root, 'code inside bookkeeping')
++        head = _nh_git(root, 'rev-parse', 'HEAD').stdout.strip()
++        check('文字副檔名的程式確實可執行', subprocess.run([str(root / paths[2])], capture_output=True).returncode == 0)
++        check('patch 副檔名的程式確實可執行', subprocess.run([str(root / paths[4])], capture_output=True).returncode == 0)
++        for path in paths[5:]:
++            check('文件副檔名也確實執行程式 ' + path, subprocess.run([str(root / path)], capture_output=True).returncode == 0)
++        def impact(span):
++            r = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', span,
++                                '--repo', str(root), '--json'], capture_output=True, text=True)
++            check('程式例外的 impact 真入口成功', r.returncode == 0, r.stderr)
++            return json.loads(r.stdout)
++        (root / archive).chmod(0o755)
++        data = impact(base + '..' + head)
++        check('凍結差異保留所有程式及已刪可執行檔', set(data['files']) == set(paths + [deleted]), str(data['files']))
++        pins = {x['node'] for x in data['results'] if x.get('pinned')}
++        for i in range(len(paths) + 1):
++            check('簿記內程式的家仍必推' + str(i), 'Systems/Code' + str(i) + '.md' in pins, str(pins))
++        check('工作目錄的 mode 不污染凍結附件判定', archive not in data['files'], str(data['files']))
++        roles = lm._review_role_changed_files(root, base, head)
++        check('角色清單保留簿記內程式', roles is not None and set(p for p, _ref in roles) == set(paths + [deleted]), str(roles))
++        check('角色清單的已刪檔仍讀起點', roles is not None and (deleted, base) in roles, str(roles))
++        (root / archive).chmod(0o644)
++        _nh_file(root, paths[2], '#!/bin/sh\necho changed-index-program\n')
++        (root / paths[2]).chmod(0o755)
++        _nh_git(root, 'add', paths[2])
++        (root / paths[2]).chmod(0o644)
++        staged = impact('staged')
++        check('staged 讀索引程式模式而非工作目錄', staged['files'] == [paths[2]], str(staged['files']))
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
+ def t_impact_diff():
+     """impact --diff(code-loop 橋接):聚合整段 diff 的 ranked impact 成受影響功能面 manifest。"""
+     import subprocess as sp, json, shutil
+     root = Path(tempfile.mkdtemp(prefix="gctl-impd-"))
+     def g(*a):
+         sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+     v = root / "docs" / "z-knowledge"
+     (v / "Systems").mkdir(parents=True); (v / "Issues").mkdir(); (v / "MOC").mkdir()
+     (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+@@ -38286,21 +38534,22 @@ def t_review_role_changed_files_population():
+     w("api/Old.py", "x = 1\n"); w(vend, "print('tool')\n")
+     w(m._VENDORED_MANIFEST, _j.dumps({"files": {vend: m._vendored_digest(b"print('tool')\n")}}))
+     base = c("base")
+     g("rm", "-rq", "web"); g("mv", "api/Old.py", "api/New.py")
+     w("api/test_new.py", "def test_x(): pass\n"); w("README.md", "x\n"); w("api/svc.py", "y = 2\n")
+     head = c("head")
+     files = dict(m._review_role_changed_files(d, base, head))
+     check("S7: 測試檔、.md 被剔除", "api/test_new.py" not in files and "README.md" not in files, str(files))
+     check("S7: 改名算新路徑", "api/New.py" in files and "api/Old.py" not in files, str(files))
+     check("S7: 刪除的檔照樣算、讀起點版本", files.get("web/src/old.ts") == base, str(files))
+-    res = m._review_roles(d, base, head)
++    # 此案驗凍結內容，給真 Git 充足預算；期限降級由 file_cap_and_budget 案驗。
++    res = m._review_roles(d, base, head, budget=30)
+     check("S7: 刪除的 .ts 連 package.json 一起刪,照樣從起點讀到 vue → 前端",
+           res["roles"].get("web/src/old.ts") == "frontend", str(res))
+     # 消費專案跑 lumos update:工具檔換新內容、指紋清單同步換新 → 它在範圍內、而且在終點原封不動 → 要剔掉
+     w(vend, "print('tool v2')\n")
+     w(m._VENDORED_MANIFEST, _j.dumps({"files": {vend: m._vendored_digest(b"print('tool v2')\n")}}))
+     w("api/svc.py", "y = 3\n"); head2 = c("update tool")
+     changed = g("diff", "--name-only", head, head2).stdout.split()
+     files2 = dict(m._review_role_changed_files(d, head, head2))
+     check("S7: 消費專案更新進來、原封不動的工具檔在範圍內但被剔除", vend in changed and vend not in files2 and "api/svc.py" in files2, str((changed, files2)))
+     w(vend, "print('hacked')\n"); head3 = c("edit tool")
+@@ -38313,21 +38562,22 @@ def t_review_role_reads_head_content_base_config():
+     import json as _j
+     m = _load_lumos_inproc()
+     d, g, w, c = _role_git_repo()
+     w("pkg/package.json", '{"dependencies": {"vue": "3"}}'); w("pkg/a.ts", "export const a = 1\n")
+     w(".lumos/config.json", _j.dumps({"review_roles": [{"path": "srv/*", "role": "backend"}]}))
+     base = c("base")
+     w("pkg/a.ts", "export const a = 2\n"); w("srv/x.tsx", "export const X = 1\n")
+     w(".lumos/config.json", _j.dumps({"review_roles": [{"path": "srv/*", "role": "none"}, {"path": "pkg/*", "role": "none"}]}))
+     head = c("head")
+     (d / "pkg" / "package.json").write_text('{"dependencies": {"fastify": "5"}}', encoding="utf-8")   # 工作樹不同、沒提交
+-    res = m._review_roles(d, base, head)
++    # 此案驗凍結內容，給真 Git 充足預算；期限降級由 file_cap_and_budget 案驗。
++    res = m._review_roles(d, base, head, budget=30)
+     check("S8: 依終點提交的 package.json(vue)判前端,不理工作樹(fastify)", res["roles"].get("pkg/a.ts") == "frontend", str(res))
+     check("S8: 被審分支把宣告改成 none 不算數,照起點的 srv/* → backend", res["roles"].get("srv/x.tsx") == "backend", str(res))
+ 
+ 
+ def _role_lens_repo(with_vault=True):
+     """給派工鏡頭跑的 repo:main 上有(或沒有)圖譜,feat 分支改一支前端 .vue 與一支後端 .py。"""
+     d, g, w, c = _role_git_repo()
+     w("src/api.py", "def f():\n    return 1\n")
+     if with_vault:
+         w("docs/t-knowledge/Systems/api.md", "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:api\n---\n\n管 `src/api.py`。\n")
+@@ -38408,31 +38658,47 @@ def t_dispatch_lens_role_cards_survive_graph_failure():
+                    "tool_input": {"prompt": "審查。\nLUMOS-IMPACT: main..HEAD\nLUMOS-ROLE-CARDS: on\n"}}
+         with patch.object(hm.subprocess, "run", lambda *a, **k: R()), patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(hm.sys, "stdout", out):
+             hm.main()
+         o = out.getvalue()
+         ok = "fe-race" in o and "updatedInput" in o
+         if rc_ == 5:
+             ok = ok and "鏡頭計算超時" in o and o.find("鏡頭計算超時") < o.find("fe-race")
+         check(f"S10: 掛鉤在「{name}」分支照附角色卡" + ("(在超時說明之後)" if rc_ == 5 else ""), ok, o[:300])
+ 
+ 
++def t_review_role_zero_budget_no_git():
++    """沒有角色時間預算就不能先做 Git 讀取，否則零預算仍會拖住鏡頭。"""
++    from unittest.mock import patch
++    m = _load_lumos()
++    called = []
++    def record(*args, **kwargs):
++        called.append(args)
++        return None
++    with patch.object(m, '_lens_git', record), patch.object(m, '_review_role_changed_files', record):
++        res = m._review_roles(Path('/nonexistent'), 'base', 'head', budget=0)
++    check('零預算不啟動 Git 或選檔', not called, str(called))
++    check('零預算仍回可呈現的超時結果', isinstance(res, dict) and res['timed_out']
++          and res['counts']['frontend'] == 0 and res['counts']['backend'] == 0, str(res))
++
++
+ def t_review_role_file_cap_and_budget():
+     """[S11] 超過讀取上限:後面的只看副檔名並印說明;時間預算用完:不讀內容、照樣回。"""
+     import time as _t
+     m = _load_lumos()   # 獨立載入,改上限不影響其他測試
+     d, g, w, c = _role_git_repo()
+     w("keep.txt", "x\n"); base = c("base")
+     for i in range(3):
+         w(f"app/S{i}.kt", "import androidx.compose.runtime.Composable\n")
+     head = c("kt")
+     m._ROLE_READ_CAP = 2
+-    res = m._review_roles(d, base, head)
++    # 此段驗讀取數上限，給真 Git 足夠時間；下段仍驗零預算的真時間上限。
++    res = m._review_roles(d, base, head, budget=30)
+     check("S11: 超過上限 → capped=1、多出的那支判不出、說明行在", res["capped"] == 1 and res["counts"]["frontend"] == 2
+           and "超過上限" in m._review_role_text(res), str(res))
+     t0 = _t.monotonic()
+     res = m._review_roles(d, base, head, budget=0.0)
+     check("S11: 預算 0 秒 → 不讀內容、標超時、立即回", res["timed_out"] and res["counts"]["frontend"] == 0 and _t.monotonic() - t0 < 3.0, str(res))
+ 
+ 
+ def _role_cards_missing(cards, tpl, skill):
+     """守衛:卡片單源與範本、skill 的指路處少了什麼,回清單(空=齊全)。"""
+     miss = []

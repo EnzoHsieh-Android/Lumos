@@ -1,0 +1,127 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\347\225\260\345\270\270\346\264\276\345\267\245\345\226\256\345\233\236\345\240\261\350\274\270\345\205\245\351\214\257\350\252\244_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\347\225\260\345\270\270\346\264\276\345\267\245\345\226\256\345\233\236\345\240\261\350\274\270\345\205\245\351\214\257\350\252\244_\350\250\210\345\212\203.md"
+index b050a7d4..947e5a3d 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\347\225\260\345\270\270\346\264\276\345\267\245\345\226\256\345\233\236\345\240\261\350\274\270\345\205\245\351\214\257\350\252\244_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\347\225\260\345\270\270\346\264\276\345\267\245\345\226\256\345\233\236\345\240\261\350\274\270\345\205\245\351\214\257\350\252\244_\350\250\210\345\212\203.md"
+@@ -9,7 +9,7 @@ tags:
+   - scope/loop-engineering
+   - risk/守衛面
+ lands_in:
+-  - Systems/lumos-cli-read
++  - Systems/design-loop
+ ---
+ # 異常派工單回報輸入錯誤_計劃
+ 
+@@ -31,7 +31,7 @@ RETIRE-IF:CLI 共用讀取入口提供同等物件與 materials 路徑清單驗
+ 
+ ## 核心裁定
+ 
+-1. 在 .get 與 Path 前驗 JSON 頂層必須是 dict；只接受缺省／null／清單型 materials，每項必須是非空且不含 NUL 的字串。以具體欄位的 ValueError 進既有 rc2 分支，不捕獲所有例外。
++1. 在 .get 與 Path 前驗 JSON 頂層必須是 dict；只接受缺省／null／清單型 materials，每項必須是非空、不含 NUL、可由目前檔案系統編碼的字串。沿用 os.fsencode 與目前平台的編碼及錯誤處理器，UnicodeEncodeError 轉為具體索引的 ValueError；不把 surrogateescape 的可編碼路徑一律拒絕。以具體欄位的 ValueError 進既有 rc2 分支，不捕獲所有例外。
+ 2. 缺省、null 與 [] 保留 vacuous rc0；未知欄位以及 round、seat、lens 的既有輸出不收窄。合法材料漏報／越界仍 rc0，JSON 與帳本欄位不變。
+ 3. 全部資料形態驗完才讀材料或寫越界帳；不改報告、派工單、主線來源或使用者配置。
+ 4. 不做多席派工包自動選席，不驗材料業務語意，不把文字提及當實際閱讀證明，不讓觀測結果變成推送閘。
+@@ -39,14 +39,14 @@ RETIRE-IF:CLI 共用讀取入口提供同等物件與 materials 路徑清單驗
+ ## 驗收條款
+ 
+ - [S1] 當派工單解析成非物件或 materials 不是缺省、null、清單時，席位對帳應回 rc2、輸出輸入診斷且不輸出 traceback 或觀測 JSON。[test:t_s1_seat_check_bad_dispatch]
+-- [S2] 當 materials 含非字串、空字串、NUL 字串或有效路徑後跟錯項時，席位對帳應在寫越界帳前回 rc2；普通與 -O CLI 保持一致。[test:t_s1_seat_check_bad_dispatch,t_s1_seat_check_preflight_order]
++- [S2] 當 materials 含非字串、空字串、NUL 字串、不可由目前檔案系統編碼的字串或有效路徑後跟錯項時，席位對帳應在寫越界帳前回 rc2；普通與 -O CLI 保持一致。[test:t_s1_seat_check_bad_dispatch,t_s1_seat_check_preflight_order]
+ - [S3] 當 materials 缺省、null 或空清單時，席位對帳應保持 rc0 與 vacuous；中文含空白的有效路徑仍能錨定引句。[test:t_s1_seat_check_valid_dispatch]
+ - [S4] 當合法材料清單的報告漏提材料或引句出界時，席位對帳應保持 rc0，並依既有格式記錄越界帳，不新增阻擋語意。[test:t_s1_seat_check_valid_dispatch]
+ 
+ ## 實務隱患
+ 
+ - 守衛面：錯形態不能當有效空清單豁免。普通與 -O 都真跑，不用 assert 當正式輸入驗證。Python 官方 -O 說明：https://docs.python.org/3/using/cmdline.html#cmdoption-O
+-- 相容性：明確保留缺省／null 空材料；不限制未知欄位、元資料與有效路徑內容，不增相對路徑基底推斷或多席包拆解。
++- 相容性：明確保留缺省／null 空材料；不限制未知欄位、元資料與可編碼的有效路徑內容，不增相對路徑基底推斷或多席包拆解。
+ - 已排除:金流:只讀審查材料，不操作帳務。
+ - 已排除:對外送出:不發送外部訊息。
+ - 已排除:不可逆:錯輸入在既有越界帳 append 前回錯，不涉及資料遷移。
+@@ -60,8 +60,18 @@ REVISIT:2026-10-20 抽查十次實際收貨，統計 malformed 派工單與格
+ 
+ ## 審計修正紀錄
+ 
++r1(2026-10-06，六席):5 條／blocking 3／兩席獨立命中不可編碼路徑，折成 encoding-F1；落點兩條折成 landing-F1；重複 JSON 名稱的觀察成立，但乾淨辯方依原 S1 與解析後形態條款給 evidence 反證，判準不成立；原報告等級保留。
++原始六席報告、凍結快照、派工材料與反證保存在 governance/review-reports/seat-input-validation/。
++
++- encoding-F1（logic-F2、integration-F1）：真 CLI 對 JSON 路徑字串高／低孤立 surrogate 都回1與 UnicodeEncodeError。補 os.fsencode 的純編碼預檢與對應 rc2 索引診斷、普通／最佳化及讀序背書，不改合法觀測。
++- PRIOR-ART:Python 官方 os.fsencode 採用檔案系統編碼與錯誤處理器，直接借既有標準函式庫；不自建 Unicode 禁字元表。https://docs.python.org/3/library/os.html#os.fsencode
++- landing-F1（resources-F1、architecture-F4）：原落點只管十四個圖譜讀取原語；改寫回已有收貨三道與 seat-check 脈絡的 [[Systems/design-loop]]，維持原責任分工。
++
+ 前掃提出 PF1、PF2 的語意背書問題，核心裁定原文保留，交正式席覆核。原始報告保存在 preflight-raw.md，不改等級或引句。
+ 
+ - PF1：原測試只查「擋下:」，不足以證明欄位診斷；補 dispatch／materials／materials[項次] 明確預期。泛稱 bad dispatch 不算通過。
+ - PF2：原測試只查帳本未寫，不足以證明首份材料尚未讀；補直接執行真 cmd_seat_check AST、用標準函式庫觀測 read_text 的普通與最佳化對照。以有效首項跟錯形態尾項證明讀到派工單、未讀材料；不用會阻塞的命名管道。
+ - 這些是既有裁定的測試背書修正，生產函式仍待正式設計審放行才修改。正式席可推翻前掃判準。
++
++- logic-F1：重複名稱以 Python 原解析結果判讀，合法空清單按 S3 豁免；本案不新增原始 JSON 名稱唯一合約。觀察 HIT、必修判準 MISS，乾淨辯方附原 S1、S3 及真函式證據，原 major 報告保留。
++- 第一份雙問題核對報告有 minor／blocking true 矛盾，整份未採用，原檔保留；第二份只核對重複名稱的新鮮唯讀辯方報告協議正確，作為上述裁定的反證來源。沒有另開正式審查輪次或洗掉原帳。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 364ea899..c4969a07 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -34014,9 +34014,11 @@ def t_s1_seat_check_bad_dispatch():
+     cases += [({"materials": [x]}, "materials[0]")
+               for x in [None, False, 1, [], {}, "", "nul\x00path"]]
+     cases += [({"materials": [str(material), {}]}, "materials[1]")]
++    cases += [({"materials": ["\ud800"]}, "materials[0]"),
++              ({"materials": [str(material), "\udc00"]}, "materials[1]")]
+     for i, (value, field) in enumerate(cases):
+         dispatch = d / "dispatch.json"
+-        dispatch.write_text(_j.dumps(value, ensure_ascii=False), encoding="utf-8")
++        dispatch.write_text(_j.dumps(value, ensure_ascii=True), encoding="utf-8")
+         check(f"JSON 已成功解析且保留現場形態 {i}", _j.loads(dispatch.read_text()) == value
+               and report.is_file() and material.is_file())
+         for optimized in (False, True):
+@@ -34081,28 +34083,30 @@ def t_s1_seat_check_preflight_order():
+     dispatch.write_text(_j.dumps({"materials": [str(material), {}]}), encoding="utf-8")
+     tree = _ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
+     fn = next(n for n in tree.body if isinstance(n, _ast.FunctionDef) and n.name == "cmd_seat_check")
+-    check("現場直接取真入口且首項是有效材料、尾項是壞形態",
+-          isinstance(fn, _ast.FunctionDef) and material.is_file()
+-          and _j.loads(dispatch.read_text())["materials"][1] == {})
+     original_read = Path.read_text
+-    for optimized in (0, 1):
+-        reads = []
+-        def observed_read(path, *args, **kwargs):
+-            reads.append(path)
+-            return original_read(path, *args, **kwargs)
+-        env = {"Path": Path, "sys": sys, "_quote_norm": lambda text: text,
+-               "_quote_rows": lambda *_: []}
+-        exec(compile(_ast.Module(body=[fn], type_ignores=[]), GRAPHCTL, "exec", optimize=optimized), env)
+-        stderr, stdout = _io.StringIO(), _io.StringIO()
+-        with patch.object(Path, "read_text", observed_read), redirect_stderr(stderr), redirect_stdout(stdout):
+-            try:
+-                rc = env["cmd_seat_check"](str(report), str(dispatch), as_json=True)
+-            except (TypeError, AttributeError) as error:
+-                rc = "uncaught " + type(error).__name__
+-        check(f"optimized={optimized} 確實讀到派工單後回 rc2", dispatch in reads and rc == 2, str(rc))
+-        check(f"optimized={optimized} 尾端壞項前未讀首項材料", material not in reads, str(reads))
+-        check(f"optimized={optimized} 索引診斷且無觀測輸出",
+-              "materials[1]" in stderr.getvalue() and not stdout.getvalue(), stderr.getvalue()[-200:])
++    for tail in ({}, "\ud800"):
++        dispatch.write_text(_j.dumps({"materials": [str(material), tail]}), encoding="utf-8")
++        check("現場直接取真入口且首項有效、尾項是錯形態或不可編碼字串",
++              isinstance(fn, _ast.FunctionDef) and material.is_file()
++              and _j.loads(dispatch.read_text())["materials"][1] == tail)
++        for optimized in (0, 1):
++            reads = []
++            def observed_read(path, *args, **kwargs):
++                reads.append(path)
++                return original_read(path, *args, **kwargs)
++            env = {"Path": Path, "sys": sys, "os": _os_mod, "_quote_norm": lambda text: text,
++                   "_quote_rows": lambda *_: []}
++            exec(compile(_ast.Module(body=[fn], type_ignores=[]), GRAPHCTL, "exec", optimize=optimized), env)
++            stderr, stdout = _io.StringIO(), _io.StringIO()
++            with patch.object(Path, "read_text", observed_read), redirect_stderr(stderr), redirect_stdout(stdout):
++                try:
++                    rc = env["cmd_seat_check"](str(report), str(dispatch), as_json=True)
++                except (TypeError, AttributeError, UnicodeEncodeError) as error:
++                    rc = "uncaught " + type(error).__name__
++            check(f"optimized={optimized} 確實讀到派工單後回 rc2", dispatch in reads and rc == 2, str(rc))
++            check(f"optimized={optimized} 尾端壞項前未讀首項材料", material not in reads, str(reads))
++            check(f"optimized={optimized} 索引診斷且無觀測輸出",
++                  "materials[1]" in stderr.getvalue() and not stdout.getvalue(), stderr.getvalue()[-200:])
+ 
+ 
+ 

@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-29
+updated: 2026-10-06
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
@@ -32,6 +32,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
   - "[[Verification/2026-09-11_skills健檢]]"
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
+  - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
 summary: |-
   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
@@ -41,7 +42,7 @@ summary: |-
   KEY:[2026-09-09 審查有沒有用記帳]收貨線多一道機械閘:席報告沒正規化(檔首檔級 severity 行、每條 finding 恰一行獨立宣告)記帳 rc2 並在治理帳留 canary/blocked;`lumos report-normalize` 只搬格式(vault-free);載體必帶 --refuted-set(intake 整字驗、圍欄不算);問閘尾一行「席位報 N(機器數)→存活/重現不到→折/放行」觀測不進合取;單源 [[Projects/審查有沒有用記帳_計劃]]
   KEY:[2026-09-17 Enzo 裁]架構對齊席每個分級都派(_TIER_ROSTER 六組合:design/code × light/standard/high):code/light 以前沒編制、skill 寫可跳,現在=只派架構對齊一席(算人數);design/light 多一席架構對齊(不算人數)。理由:小改動也不能脫離原有架構亂加 [test:t_tier_roster_table] [test:t_loop_next_roster]
   KEY:[2026-09-17 風險低放行]處置閘第五步呼叫 _clause_check 時 door=None(=風險高語意:收 manual、要回退節);風險低的加嚴只在規格閘那一路(plan_risk=low);風險低計劃不會進處置閘(不派審),進來了也照風險高判——判定不會比規格閘鬆
-  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 [test:]/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 `[test:]`/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
   KEY:[2026-09-08 條款綁定]為什麼加在閘不是 skill 散文:接手席/架構席/簡化席三席獨立查證「設計審出口寫一句流程規則」零約束,跟 spec-trace 33 篇 15 篇零認領同型;閘是設計審往下走的唯一入口(進度從提交推導 d9)。漏洞:整份不寫 [SN] 可繞過 → REVISIT:2026-11-08 那次連「過審計劃有 [SN] 的比例」一起量
   KEY:處置閘第六步「落點」(2026-09-11,[[Projects/每支檔有家_計劃]] [S21]):設計審的計劃(Projects 底下、type: project)要有 lands_in(現況落在哪幾篇、或新開哪一篇,每項 Systems/<名>),空的或格式不對不得 PASS;首筆帳在 2026-09-12T00:00+08:00 之後的迴圈才看、不回溯,形狀照第五步;派工鏡頭(LUMOS-SPEC)附上落點每篇的現況(掛幾份計劃、幾行 KEY、幾條合約、管幾支檔),架構對齊席多第四問「落點合不合理」——節點長成一篇包全部,是因為落點從來沒被審過 [test:t_disposal_gate_requires_landing] [test:t_design_dispatch_shows_landing_sizes]
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
@@ -205,3 +206,5 @@ aliases:
 - 設計稿(辯方 refute 後續):`docs/design/` finding-refute(3 輪自動收斂)。
 - 實作落點:`skills/lumos-design-loop/SKILL.md`(B);`scripts/lumos` `cmd_canary` + `cmd_loop_status`(A 原語)。
 - 衍生:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`(自主迭代 loop 跨輪 headless 跑 design-loop)。
+
+WHY:席位對帳先把派工單的資料形態與路徑編碼錯誤分開，避免 traceback 被誤當成審查內容越界；合法材料仍只觀測，脈絡寫回本節點既有收貨三道範圍，不擴張圖譜 read 原語責任 [出處:2026-10-06 seat-input-validation 設計審 r1、真CLI反例與原S1規格] [因:排除錯材料引起的錯誤診斷，保留既有觀測分工]

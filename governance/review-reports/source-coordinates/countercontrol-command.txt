@@ -1,0 +1,14 @@
+import pathlib,ast,subprocess,tempfile,json,importlib.machinery,importlib.util,sys
+r=pathlib.Path('/tmp/lumos-review-source-coordinates');d=r/'governance/review-reports/source-coordinates';loader=importlib.machinery.SourceFileLoader('coordinate_control',str(r/'scripts/lumos'));sp=importlib.util.spec_from_loader(loader.name,loader);m=importlib.util.module_from_spec(sp);loader.exec_module(m);fixed=m._validate_repo_ref;baseline=subprocess.check_output(['git','show','48c7d58ed673ffb7b04f1002672e335366d5b9f3:scripts/lumos'],cwd=r,text=True);old=next(n for n in ast.parse(baseline).body if isinstance(n,ast.FunctionDef) and n.name=='_validate_repo_ref');tmpns=dict(m.__dict__);exec(compile(ast.Module(body=[old],type_ignores=[]),'baseline-helper','exec'),tmpns);original=tmpns['_validate_repo_ref']
+tree=ast.parse((r/'scripts/test_lumos.py').read_text());defs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and (n.name in ('run','_physical_ref_fixture') or n.name.startswith('t_refcheck_physical_'))];results=[]
+with tempfile.TemporaryDirectory(prefix='lumos-coordinate-original-control-') as td:
+ mutant=pathlib.Path(td)/'lumos';mutant.write_text(baseline)
+ for label,validator,cli in [('fixed',fixed,str(r/'scripts/lumos')),('original-splitlines',original,str(mutant))]:
+  rows=[]
+  def check(name,ok,detail=''):rows.append({'name':name,'passed':bool(ok),'detail':str(detail) if not ok else ''})
+  m._validate_repo_ref=validator;ns={'Path':pathlib.Path,'subprocess':subprocess,'tempfile':tempfile,'sys':sys,'GRAPHCTL':cli,'_load_lumos_module':lambda:m,'check':check};exec(compile(ast.Module(body=defs,type_ignores=[]),'actual-test-ast','exec'),ns)
+  for fn in defs:
+   if fn.name.startswith('t_refcheck_physical_'):ns[fn.name]()
+  results.append({'case':label,'passed':sum(x['passed'] for x in rows),'failed':sum(not x['passed'] for x in rows),'assertions':len(rows),'failed_names':[x['name'] for x in rows if not x['passed']]})
+m._validate_repo_ref=fixed
+(d/'countercontrol.json').write_text(json.dumps({'method':'execute actual five test-function ASTs with original/fixed shared validator; CLI uses temporary original full source from main48; no live source mutation','cases':results},ensure_ascii=False,indent=2)+'\n');print([(x['case'],x['passed'],x['failed']) for x in results]);assert results[0]['failed']==0 and results[1]['failed']>0

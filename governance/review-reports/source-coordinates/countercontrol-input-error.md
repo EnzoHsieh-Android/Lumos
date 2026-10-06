@@ -1,0 +1,1 @@
+隔離反向控制第一次抽取實際測試AST時漏帶CLI使用的run helper，NameError停止，未產生通過卷證。補帶實際run helper再重跑，不改產品、測試斷言或原始紅燈。

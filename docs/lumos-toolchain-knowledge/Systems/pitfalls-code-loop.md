@@ -22,6 +22,11 @@ verified_by:
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
   - "[[Verification/2026-09-29_前端卡小實驗]]"
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
+  - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
+  - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+  - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
+  - "[[Verification/2026-10-06_引用座標修復主線CI]]"
+  - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
 summary: |-
   PITFALL:[2026-09-28 筆記形狀擋全零修正的代碼審通才席]code-loop check --diff 的起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open 不擋;現在先照筆記形狀擋與每支檔有家共用的判法換成真的起點(頂端落後或等於主線頂端就沒有新東西;找不到主線時照它原本拿到空樹的做法、不截上線點);工具鏈 CI 的代碼審那步也改成原樣交前一版 [test:t_push_base_zero_or_missing]
   PITFALL:[2026-09-22 rtb-production-agent-demo 回報]★代碼審記帳漏帶凍結快照,原本要到問處置閘才爆★:既有規則只在「這條迴圈已經有一筆帶發現清單」之後才強制留痕,而代碼審的慣例是先記非載體席、再記載體席,第一席記帳時還沒定錨,漏帶 --snapshot 會安靜通過,之後以「資安席留痕對不上」這種看不出原因的訊息擋下,帳本又不能撤銷,只能整輪換編號重記。現在代碼審從第一筆起就寫側當場擋,訊息直接講缺哪個;設計審照舊用定錨規則。★「code 開頭卻不是 code-」這種看不出是哪一種審查的,照最嚴的當代碼審★——代碼審 r1 說這會誤擋 codestage 這類真的設計審,r2 說同檔三處既有呼叫點對這個灰色地帶一律從嚴、就是為了擋「取個 codeX 的編號就繞過」;兩輪方向相反,照既有慣例裁從嚴,而 r1 真正的傷(訊息硬說它是代碼審、誤導人去找不存在的凍結 patch)改用既有那幾處的說法老實講來解。從嚴的代價:走新處置閘的設計審本來也要帶這兩個所以沒差;★舊的 panel 型設計審從沒要求過★(codestage 那九筆就是),目前打不到只是因為更早那條「審查席一定要附 --report」先擋了,以後動那條規則或開補記舊帳的旁路時要重新想 [test:t_code_loop_record_requires_provenance_from_first_row]
@@ -157,3 +162,15 @@ AI 開發仰賴模型自決實作方式、只需通過最終驗證,但實作選�
 - **關得掉**：環境變數 `LUMOS_SKIP_LINT_NEW` 整道關；設定檔 `.lumos/config.json` 的 `lint_new` 區塊有三態（擋／只報告／關閉）與各項門檻。**設定不可以放 `.lumos/lint.json`**——那個檔的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證。
 - **自動放行要被數**：健檢會唸「最近 30 天自動放行幾次、放行清單幾條」。自動放行是已知的繞道向量（把工具移掉或弄慢就能過），沒有人去數就等於沒有守衛。
 - **誠實邊界**：它防疏忽不防惡意；整批重新縮排的提交會產生一批假新增（刻意選誤報不選漏擋）；零真專案實證。
+
+WHY:[2026-10-06 附件種子第二輪]模式與首行必須同出凍結版本；共用 raw 解析器提供模式及物件，舊留痕消費者仍只取原模式對，避免影響分析另建解析器漂移。既有簿記程式例外測試子集已驗 5 案例25條全綠，不代表整個分支放行。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:只共享目錄或副檔名仍有跨層分類不一致] [test:t_code_loop_bookkeeping_exec_mode_and_bom] [test:t_code_loop_bookkeeping_shebang_script_not_exempt]
+
+WHY:[2026-10-06 角色功能驗收時間控制]凍結內容正確性不應同時承諾機器負載下三秒必讀完；兩個真 Git 功能案例顯式給30秒測試預算，正式3秒與期限降級仍由原專門案例驗。原斷言不改，不用自動重試掩盖紅燈。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:可控3.1秒觀測使原內容案例必紅、充足測試預算使原內容斷言全綠] [test:t_review_role_changed_files_population] [test:t_review_role_reads_head_content_base_config] [test:t_review_role_file_cap_and_budget]
+
+WHY:[2026-10-06 零角色預算先做讀取反例]budget=0 的真時間斷言曾紅，禁止 Git／選檔的探針也先0過2敗；沒有時間可用應先回超時空結果，不先耗設定與 metadata 查詢。此修復保留原零預算三秒斷言，沒有放寬正式預設時間。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:耗盡預算後才檢查讓派工仍做無用讀取] [test:t_review_role_zero_budget_no_git] [test:t_review_role_file_cap_and_budget]
+
+WHY:角色新增簿記查詢承接剩餘預算，不再自開固定timeout；一般角色改名仍取新路徑，只有被終點附件排除遮住的舊程式要保留 [出處:審查附件不作程式影響種子設計審r1] [因:小幅正預算會被新增查詢穿透，跨簿記改名也曾令角色輸入全空] [test:t_review_role_bookkeeping_remaining_budget,t_impact_diff_bookkeeping_boundary_rename]
+
+WHY:[2026-10-06 第三輪角色統計補強]固定帳檔與未知首行終點也需要舊側角色證據；只對確定排除的目錄補償，不能兌現完整跨簿記改名承諾。採同一分類入口的「已確認」口徑，不另建簿記表、不改一般改名只取新側。[出處:code-review-artifact-impact-inputs/r3-correctness.md、r3-architecture.md] [因:避免角色消費者與影響分析消費者分岔，降低同類修復再次漏邊界] 防回歸：t_review_role_bookkeeping_rename_uncertainty，含三種真 R100、超限／逾期未知與角色不重複計數。
+
+WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存在的第三行在不同證據閘得到相反結果；本次只修座標計數，不把存在性檢查升格為語意正確性 [出處:source-coordinates 最小重現、r1設計審與countercontrol] 防回歸：t_refcheck_physical_dispositions。 [因:避免表態證據與引用檢查對同一來源座標矛盾]

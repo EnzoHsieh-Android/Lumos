@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-03
+updated: 2026-10-06
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -18,6 +18,8 @@ verified_by:
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
+  - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
 summary: |-
   PITFALL:治理帳檔尾缺換行(磁碟滿寫一半、編輯器刪掉檔尾換行)時,下一筆追加會黏在半行後面,讀側把黏壞的整行當壞行丟掉——寫的一方回成功、事件卻等於沒記 [出處:2026-10-06 代碼審 code-審查跑滿回顧 r1 併發席實跑:人裁紀錄黏行後三個擋點全部失效] [根因:追加前不看檔尾] [修法:`_gate_event`、`_append_governance_log` 與 `_drift_ledger_append` 追加前都呼叫同一支 `_ledger_tail_needs_newline`(安全開檔讀檔尾),檔非空且最後不是換行就先補一個;帳尾檢查跟隨捷徑(版控帳寫入器跟隨捷徑追加,要看同一個檔;r3 合約、邊界席),讀最後一個位元組用 os.lseek + os.read(os.pread 只有 Unix 有,r3 邊界席);`_append_governance_log` 遇到不能編碼的字串不丟堆疊(r3 正確性、邊界席),而且逐筆組、只略過不能編碼的那筆,同一批其他事件照寫,略過與寫不進去都在 stderr 講一句(r4 邊界席:原本整批組成一個字串,一筆壞就整批靜默丟光);code-loop 的 `_codeloop_gov_log`、`_codeloop_dispositions_gov_log` 與審查帳寫入器 `_jsonl_append_verified` 沒接帳尾檢查與編碼例外,見 [[Issues/治理帳與審查帳其他讀寫函式的硬化缺口]]] [test:t_cap_retro_gov_tail_newline] [test:t_cap_retro_r3_writers_portable] [test:t_cap_retro_r3_gov_ledger_rule] [test:t_cap_retro_r4_gov_batch_skips_bad]
   PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
@@ -131,3 +133,5 @@ PITFALL:2026-10-04 [[Issues/過期鎖接手可能雙持]] 與 [[Verification/202
 - 實作計畫：`docs/design/2026-06-19-reversibility-and-governance-ledger-plan.md`（6 任務 TDD）。
 - 後續擴充計畫：`docs/superpowers/plans/2026-06-24-check-r-guard.md`（[guard:] 兩軌）、`docs/superpowers/plans/2026-06-25-doctor-irreversible-hint.md`（Check H）。
 - 實作落點：`scripts/lumos` `run_doctor`(Check R/H)、`cmd_lint`、`cmd_gov`、`extract_reversibility`/`_rollback_resolved`/`_guard_resolved`、`CHECKPOINT_RE`/`IRREVERSIBLE_RE`/`ROLLBACK_REF_RE`/`GUARD_REF_RE`。
+
+WHY:未執行階段另行留痕，不能從失敗項清單推測哪段跑過 [出處:Projects/修正關卡先驗便宜條件_計劃 設計審 integration-F1] [因:同一 consumer HEAD 與紀錄的兩種執行路徑產生相同失敗事件] [test:t_fix_check_preflight_not_run_is_durable]

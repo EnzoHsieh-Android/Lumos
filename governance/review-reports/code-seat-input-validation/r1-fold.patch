@@ -1,0 +1,72 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/異常派工單回報輸入錯誤_計劃.md b/docs/lumos-toolchain-knowledge/Projects/異常派工單回報輸入錯誤_計劃.md
+index 947e5a3d..8e3b2034 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/異常派工單回報輸入錯誤_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/異常派工單回報輸入錯誤_計劃.md
+@@ -58,20 +58,8 @@ REVISIT:2026-10-20 抽查十次實際收貨，統計 malformed 派工單與格
+ 
+ 回退本功能提交即恢復原讀取，保留原始重現與紅綠卷證。沒有資料遷移、全域設定或新背景工作。
+ 
+-## 審計修正紀錄
++## 設計依據與卷證指標
+ 
+-r1(2026-10-06，六席):5 條／blocking 3／兩席獨立命中不可編碼路徑，折成 encoding-F1；落點兩條折成 landing-F1；重複 JSON 名稱的觀察成立，但乾淨辯方依原 S1 與解析後形態條款給 evidence 反證，判準不成立；原報告等級保留。
+-原始六席報告、凍結快照、派工材料與反證保存在 governance/review-reports/seat-input-validation/。
++採用目前檔案系統編碼與錯誤處理器的原因：可還原為合法檔名字節的 surrogateescape 路徑必須保留；直接借用標準函式庫，不自建 Unicode 禁字元表。Python 官方依據：https://docs.python.org/3/library/os.html#os.fsencode
+ 
+-- encoding-F1（logic-F2、integration-F1）：真 CLI 對 JSON 路徑字串高／低孤立 surrogate 都回1與 UnicodeEncodeError。補 os.fsencode 的純編碼預檢與對應 rc2 索引診斷、普通／最佳化及讀序背書，不改合法觀測。
+-- PRIOR-ART:Python 官方 os.fsencode 採用檔案系統編碼與錯誤處理器，直接借既有標準函式庫；不自建 Unicode 禁字元表。https://docs.python.org/3/library/os.html#os.fsencode
+-- landing-F1（resources-F1、architecture-F4）：原落點只管十四個圖譜讀取原語；改寫回已有收貨三道與 seat-check 脈絡的 [[Systems/design-loop]]，維持原責任分工。
+-
+-前掃提出 PF1、PF2 的語意背書問題，核心裁定原文保留，交正式席覆核。原始報告保存在 preflight-raw.md，不改等級或引句。
+-
+-- PF1：原測試只查「擋下:」，不足以證明欄位診斷；補 dispatch／materials／materials[項次] 明確預期。泛稱 bad dispatch 不算通過。
+-- PF2：原測試只查帳本未寫，不足以證明首份材料尚未讀；補直接執行真 cmd_seat_check AST、用標準函式庫觀測 read_text 的普通與最佳化對照。以有效首項跟錯形態尾項證明讀到派工單、未讀材料；不用會阻塞的命名管道。
+-- 這些是既有裁定的測試背書修正，生產函式仍待正式設計審放行才修改。正式席可推翻前掃判準。
+-
+-- logic-F1：重複名稱以 Python 原解析結果判讀，合法空清單按 S3 豁免；本案不新增原始 JSON 名稱唯一合約。觀察 HIT、必修判準 MISS，乾淨辯方附原 S1、S3 及真函式證據，原 major 報告保留。
+-- 第一份雙問題核對報告有 minor／blocking true 矛盾，整份未採用，原檔保留；第二份只核對重複名稱的新鮮唯讀辯方報告協議正確，作為上述裁定的反證來源。沒有另開正式審查輪次或洗掉原帳。
++現場反例、測試敏感度對照、設計審原始報告與處置依據保存在 governance/review-reports/seat-input-validation/；代碼審原始報告與修正前後對照保存在 governance/review-reports/code-seat-input-validation/。這些是歷史卷證指標；交付驗證看本計劃連結的 Verification。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1e1b1300..e3ce159c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -34070,6 +34070,39 @@ def t_s1_seat_check_valid_dispatch():
+ 
+ 
+ 
++def t_s1_seat_check_surrogateescape_dispatch():
++    """可編碼 surrogateescape 路徑依舊只觀測；材料缺失不升成輸入錯誤。"""
++    print("t_s1_seat_check_surrogateescape_dispatch")
++    import json as _j
++    v = mkvault()
++    d = v.parent / "seat-surrogateescape"
++    d.mkdir()
++    name = _os_mod.fsdecode(b"material-\x80.md")
++    material = d / name
++    present = d / "present.md"
++    present.write_text("這句合法引用確實來自實際存在的材料。\n", encoding="utf-8")
++    # macOS APFS 不一定准許非 UTF-8 檔名字節；材料缺失本來就只觀測。
++    check("現場路徑可編碼、另一份材料存在且測試路徑缺失",
++          "\udc80" in name and _os_mod.fsencode(name) == b"material-\x80.md"
++          and present.is_file() and not material.exists())
++    report, dispatch = d / "report.md", d / "dispatch.json"
++    report.write_text("present.md\n引句:「這句合法引用確實來自實際存在的材料」。\n", encoding="utf-8")
++    dispatch.write_text(_j.dumps({"materials": [str(present), str(material)]}, ensure_ascii=True), encoding="utf-8")
++    child_env = dict(_os_mod.environ, PYTHONIOENCODING="utf-8:surrogateescape")
++    for optimized in (False, True):
++        args = [sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
++                "--vault", str(v), "seat-check", str(report), "--dispatch", str(dispatch), "--json"]
++        # JSON 輸出的路徑可能帶原始檔名字節；二進位收貨再採同樣的 surrogateescape 還原。
++        result = subprocess.run(args, capture_output=True, env=child_env, timeout=15)
++        stdout = result.stdout.decode("utf-8", errors="surrogateescape")
++        out = _j.loads(stdout) if result.returncode == 0 else {}
++        check(f"可編碼 surrogateescape optimized={optimized} 保持合法觀測",
++              result.returncode == 0 and out.get("vacuous") is False, repr(result.stderr[-180:]))
++        check(f"可編碼 surrogateescape optimized={optimized} 真實材料錨定",
++              out.get("unreported") == [str(material)] and out.get("out_of_scope") == [], repr(stdout[-180:]))
++
++
++
+ def t_s1_seat_check_preflight_order():
+     """真 cmd_seat_check 在尾端壞項前不可讀第一份材料；用可觀測讀取取代 FIFO。"""
+     print("t_s1_seat_check_preflight_order")
