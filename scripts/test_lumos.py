@@ -67102,6 +67102,130 @@ def _neg_cfg(root, obj=None, raw=None):
 _NEG_HEAD = "提醒:這次提交新寫了"
 
 
+# ── 結案時摘要跟正文只改一邊(Projects/結案時摘要跟正文只改一邊_計劃)──
+
+def _c3_issue(root, name, status, summary_lines, body="正文。\n"):
+    p = root / "docs" / "kg-knowledge" / "Issues" / f"{name}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fm = f"---\ntype: issue\nstatus: {status}\nsummary: |-\n" + "".join(f"  {ln}\n" for ln in summary_lines) + "---\n"
+    p.write_text(fm + f"# {name}\n\n" + body, encoding="utf-8")
+    return p
+
+
+def t_note_shape_close_summary_untouched():
+    """[摘要只改一邊 S1] 一次提交把筆記狀態改成收尾值、摘要逐字沒變 → 提交前的筆記形狀檢查印提醒、列出摘要行(含待定詞的排前面)
+    與 lumos summary-line 形狀,rc 不變;摘要有改、狀態沒改成收尾值、新建的筆記 → 不印。
+    翻紅釘:不比摘要 → ③紅;新建的也提醒 → ⑤紅;含待定詞不排前面 → ②紅。"""
+    print("t_note_shape_close_summary_untouched")
+    root = _ns_repo()
+    lines = ["KEY:2026-09-25 圖譜健檢發現", "DECISION:尚未裁定要補做還是撤掉"]
+    _c3_issue(root, "Receipt", "open", lines)
+    _c3_issue(root, "Other", "open", ["KEY:別的事"])
+    _nh_commit(root, "issues")
+    rc0, _out0 = _ns(root)
+    _c3_issue(root, "Receipt", "resolved", lines, body="> 已結案:撤掉。\n\n正文。\n")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①狀態改成收尾值、摘要沒動 → 印提醒、rc 不變", rc == rc0 == 0 and "摘要沒跟著改" in out and "Issues/Receipt" in out
+          and "lumos summary-line" in out, out[-1500:])
+    seg = out[out.find("摘要沒跟著改"):]
+    check("②含待定詞的那行排在前面", "尚未裁定" in seg and seg.find("尚未裁定") < seg.find("圖譜健檢發現"), seg[:600])
+    _ns_reset(root)
+    _c3_issue(root, "Receipt", "resolved", ["KEY:2026-09-25 圖譜健檢發現", "DECISION:2026-10-03 裁定撤掉"])
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("③摘要也改了 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
+    _ns_reset(root)
+    _c3_issue(root, "Other", "doing", ["KEY:別的事"], body="改正文。\n")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("④狀態沒改成收尾值 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
+    _ns_reset(root)
+    _c3_issue(root, "Fresh", "resolved", ["DECISION:尚未裁定"])
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑤新建的筆記 → 不印", rc == 0 and "摘要沒跟著改" not in out, out[-800:])
+    _ns_reset(root)
+    p = _c3_issue(root, "Other", "open", ["KEY:別的事"])
+    p.write_text(p.read_text(encoding="utf-8").replace("status: open", 'status: "resolved"'), encoding="utf-8")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑥狀態值帶引號也認得是收尾值", "摘要沒跟著改" in out and "Issues/Other" in out, out[-800:])
+    _ns_reset(root)
+    _nh_git(root, "mv", "docs/kg-knowledge/Issues/Other.md", "docs/kg-knowledge/Issues/Other2.md")
+    p = root / "docs" / "kg-knowledge" / "Issues" / "Other2.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: open", "status: resolved"), encoding="utf-8")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑦改名同時結案 → 照樣提醒", "摘要沒跟著改" in out and "Issues/Other2" in out, out[-800:])
+    gov = [e for e in _ns_gov(root) if e.get("kind") == "hinted" and (e.get("extra") or e).get("check") == "close-summary"]
+    check("⑧記一筆 note-shape hinted(check=close-summary)", bool(gov), str(_ns_gov(root)[-3:])[:600])
+    _ns_reset(root)
+    cfgp = root / ".lumos" / "config.json"
+    import json as _j
+    cfg = _j.loads(cfgp.read_text(encoding="utf-8")) if cfgp.exists() else {}
+    cfg.setdefault("note_shape", {})["close_summary"] = "off"
+    cfgp.parent.mkdir(exist_ok=True)
+    cfgp.write_text(_j.dumps(cfg), encoding="utf-8")
+    _c3_issue(root, "Other", "resolved", ["KEY:別的事"])
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑨note_shape.close_summary=off → 不印", "摘要沒跟著改" not in out, out[-800:])
+    m = _load_lumos_inproc()
+    dl = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge")
+    check("⑩開關關掉 → doctor 那一行講", any("close_summary=off" in x for x in dl), str(dl)[:600])
+    _ns_reset(root)
+    cfg["note_shape"]["close_summary"] = "OFF"
+    cfgp.parent.mkdir(exist_ok=True)
+    cfgp.write_text(_j.dumps(cfg), encoding="utf-8")
+    _nh_commit(root, "bad cfg")
+    _c3_issue(root, "Other", "resolved", ["KEY:別的事"])
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑪開關值寫錯 → 照 warn 提醒、並講一句看不懂", "摘要沒跟著改" in out and "close_summary" in out and "看不懂" in out,
+          out[-1000:])
+    _ns_reset(root)
+    one = root / "docs" / "kg-knowledge" / "Issues" / "One.md"
+    one.write_text("---\ntype: issue\nstatus: open\nsummary: KEY:尚未裁定\n---\n# One\n", encoding="utf-8")
+    _nh_commit(root, "one")
+    one.write_text(one.read_text(encoding="utf-8").replace("status: open", "status: resolved"), encoding="utf-8")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("⑫單行摘要的筆記結案、摘要沒動 → 照樣提醒(跟 c7 同一套摘要切法)", "Issues/One" in out and "摘要沒跟著改" in out, out[-800:])
+    print("  ✓ t_note_shape_close_summary_untouched")
+
+
+def t_drift_c7_settled_summary_pending():
+    """[摘要只改一邊 S2] 已收尾的筆記摘要有一行含待定詞 → 存量漂移列一筆 c7(那一行、修法指 lumos summary-line);
+    有已裁定括號、待定詞只在雙括號連結裡、或筆記沒收尾 → 不列。
+    翻紅釘:不看狀態 → ④紅;不遮已裁定括號 → ②紅;不遮連結 → ③紅。"""
+    print("t_drift_c7_settled_summary_pending")
+    m = _load_lumos_inproc()
+    root = _ns_repo()
+    _c3_issue(root, "Closed", "resolved", ["KEY:發現經過", "DECISION:尚未裁定要補做還是撤掉"])
+    _c3_issue(root, "Settled", "resolved", ["DECISION:原本尚未裁定(已裁定:2026-10-03 撤掉)"])
+    _c3_issue(root, "Linked", "resolved", ["KEY:見 [[Issues/某篇還沒做]]"])
+    _c3_issue(root, "Open", "open", ["DECISION:尚未裁定"])
+    env = m.Env(root / "docs" / "kg-knowledge")
+    c7 = [f for f in m._drift_state_findings(env) if f["kind"] == "c7"]
+    paths = {f["path"] for f in c7}
+    hit = [f for f in c7 if f["path"] == "Issues/Closed.md"]
+    check("①已收尾、摘要那行含待定詞 → 列一筆 c7(那一行)", len(hit) == 1 and "尚未裁定" in hit[0]["text"]
+          and "summary-line" in m._drift_fix_hint("c7", hit[0]["path"], hit[0]["line"])[0], str(c7))
+    check("②有已裁定括號 → 不列", "Issues/Settled.md" not in paths, str(c7))
+    check("③待定詞只在雙括號連結裡 → 不列", "Issues/Linked.md" not in paths, str(c7))
+    check("④沒收尾 → 不列", "Issues/Open.md" not in paths, str(c7))
+    check("⑤種類表有 c7 的名字", "c7" in m._DRIFT_KINDS and "c7" in m._DRIFT_KIND_NAMES, "")
+    _c3_issue(root, "Why", "resolved", ["WHY:當時還沒做所以先放著 [出處:x] [因:y]", "PITFALL:尚未裁定前會誤判 [出處:x] [根因:y] [test:t_x]"])
+    env = m.Env(root / "docs" / "kg-knowledge")
+    c7b = [f for f in m._drift_state_findings(env) if f["kind"] == "c7" and f["path"] == "Issues/Why.md"]
+    check("⑥WHY、PITFALL 行是決策與事故紀錄,不列", not c7b, str(c7b))
+    r = run(root / "docs" / "kg-knowledge", "drift", "fix", "Issues/Closed", "2", "--kind", "c7")
+    check("⑦drift fix --kind c7 → 指向 lumos summary-line", r.returncode != 0 and "summary-line" in r.stdout + r.stderr,
+          r.stdout + r.stderr)
+    print("  ✓ t_drift_c7_settled_summary_pending")
+
+
 def t_note_shape_negation_detect():
     """[S1] 一行新寫的正文有窄表字眼時,_ns_negation_hits 照〈做法〉1 第 2 到 6 點判算不算(計劃列的例句逐句)。
 
