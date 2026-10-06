@@ -44,7 +44,7 @@ verified_by:
 
 ## 現況(2026-10-06)
 
-- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。
+- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。市集檔 2026-10-06 起多列一支 [[Systems/lumos-context]],市集列的外掛要恰好等於安裝端的外掛清單。
 - 外掛的寫法:核心邏輯在 `register.ts` 的 `createLedger`(緩衝、塊名、串行寫入、位置判定),讀寫檔與跑 git 由外面注入,所以 `ledger.test.ts` 能用假的讀寫測並行與重新載入;引擎掛鉤只收事件交給核心。
 - 會談編號、圖譜判定、主 checkout 判定這三條規則在外掛(TypeScript)與讀取端(Python)各寫一份;兩邊共用 `mods/claude/lumos-ledger/hooks/rules-fixture.ts` 的案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它,一邊改了規則另一邊會紅。外掛環境只能匯入程式模組(不能匯入 JSON),所以案例檔是 `.ts`、內容寫成純 JSON,Python 端切出 `RULES = ` 後面那段用 json.loads 讀。
 - 外掛緩衝只以會談為鍵,每筆帶收到時的 cwd;寫的時候照到達順序把連續寫到同一處的合成一塊,寫前逐層確認事件帳路徑沒有符號連結。
