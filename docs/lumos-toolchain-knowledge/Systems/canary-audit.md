@@ -24,11 +24,13 @@ verified_by:
   - "[[Verification/2026-08-26_建了沒人跑退場批落地]]"
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
   - "[[Verification/2026-09-05_skill-doctor成本基線]]"
+  - "[[Verification/2026-10-06_載體記帳前拒收驗證]]"
+  - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
 summary: |-
   KEY:★協議已停用(2026-08-14,Enzo 裁,d5)★植入/判定/抽樣分權/漏抓懲罰全停——caught/missed 譯不出「認真」且無下游消費=空轉;煙霧偵測角色被 quote-check 引句錨定機械蓋掉;record 加 kind=none 當純處置帳載體(五處閘謂詞納 none,t_loop_panel_none_kind 釘住);工具封存不拆、歷史帳唯讀;重啟條件=能分「真醒/演醒」的探針出現;D 案(型別輪替攢 15 筆)隨停用作廢(其前提跨期統計已被 d4 否決)
   KEY:[2026-08-05 D 前置,Enzo 裁]record 加 --canary-type/--probe 選配欄(不給不寫鍵)+canary-stats 型別×探針×caught 表——植入型別與探針結果★結構化★取代散文 note(散文帳不可重算,攢十輪也是考古材料);★D 案(型別輪替表數據驅動)開工條件=帶型別記錄攢滿 15 筆★(帳面可數,同 A 案防浮動條款款式);skill 派工/記帳模板同步帶兩欄 [test:t_canary_type_probe_fields]
   KEY:⛔[2026-08-26 效度自檢兩件退場(建了沒人跑批次裁定)]校準器/SNR 腳本已刪——輸入源(caught/missed 植入)隨 canary 協議 08-14 停用永久斷供,帳分別 1 筆/0 筆;calibration-log.jsonl 歷史帳保留;復活=植入協議翻案時從 git 史撿回⛔
-  KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答案印考卷背面,同輪 slot 仍不重複)[test:t_s2_loop_next_random_type_draw] ②canary-stats 型別來源如實分層 attr/note/unknown+覆蓋率即時計算(D 案 15 筆條件只認 attr)[test:t_s2_canary_stats_type_coverage] ③前瞻層 SNR=governance/eval/canary_snr.py(跨席分辨力÷同席重跑雜訊;重跑<3/分母=0→不裁決非高訊號;swap-candidate 恆人裁)[test:t_s2_snr_synthetic]——★canary-log 非 SNR 合法輸入(無同題重跑配對鍵,母體錯置)★,真 SNR 接 calibration 固定題矩陣
+  KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答案印考卷背面,同輪 slot 仍不重複)[test:t_s2_loop_next_random_type_draw] ②canary-stats 型別來源如實分層 attr/note/unknown+覆蓋率即時計算(D 案 15 筆條件只認 attr)[test:t_s2_canary_stats_type_coverage] ③前瞻層 SNR=governance/eval/canary_snr.py(跨席分辨力÷同席重跑雜訊;重跑<3/分母=0→不裁決非高訊號;swap-candidate 恆人裁)[test-gone:t_s2_snr_synthetic]——★canary-log 非 SNR 合法輸入(無同題重跑配對鍵,母體錯置)★,真 SNR 接 calibration 固定題矩陣
   KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29] [kill:recipes]
   KEY:[2026-08-04 d4,design-loop 限定]canary 在 design-loop ★降級為觀測★(不再一票否決:missed 不作廢該席 findings、不擋收斂;disposal 閘不消費 caught/missed)——判定強制留痕(--report/--snapshot,定錨後 rc2 強制)、進跨輪累積帳;離線校準歸 governance/eval/canary_calibration.py(fault seeding 文獻本職)。★code-loop 排除已於 2026-08-08 撤銷(Enzo 具名推翻防浮動條款,見 decisions[] 末條+[[Projects/驗證層去模型化_計劃]])★。脈絡=[[Projects/design-loop重設計]]+[[Projects/canary注意力檢查失效]]
   KEY:★INVARIANT★ second(第二判者)紀錄純 telemetry,永不影響 loop status 的 gate 輸出與 rc [test:t_canary_second] [audit:sonnet/2026-07-29]
@@ -174,3 +176,12 @@ capture-recapture 帳與 fail-closed 分級，且與**可攜性**直接衝突：
 硬性要求第二家廠商 CLI ＝ 給零依賴工具鏈加外部依賴、讓沒有的人開箱即壞。
 故採**能力宣告制**：沒有外家 → loop 照跑、note 留「單家族」、收斂措辭降級為
 「單家族視角下未發現」。★沒有跨家族不是「不准收斂」，而是「收斂的宣稱要更小」★。
+
+## 載體錯帳前移拒收的理由（2026-10-06）
+
+WHY: 處置帳只進不出；過去零引句載體會先成功記帳，再由讀側拒判，迫使整輪重記。本次把相同判準移到追加前，並補報告解碼與材料版本背書；來源 [[Projects/載體零引句在記帳前拒收_計劃]] 的正式六席設計審、三項折入及 r1-intake。
+
+PITFALL: 載體報告尾端非法 UTF-8 可被替換字元掩蓋；引句驗證後、指紋讀取前換檔也可能把未驗過的新版本寫成已驗證。採信重現分別是本案 r1-report-encoding-probe 與 r1-material-race-probe；防回歸測試 `t_canary_carrier_invalid_report_encoding`、`t_canary_carrier_evidence_changes_before_hash`，測試普通及最佳化兩種執行。
+
+成功後材料仍依凍結規律保存，由既有讀側重驗；本次不是跨程序鎖或所有時間點的原子保證。
+REVISIT:2026-10-20 由 canary 載體寫入入口核對十份實際審查收據，重驗錯帳是否仍可寫入與誤傷；合成控制只能證明本案機械判準，不能證明真實審查輪數已降低。

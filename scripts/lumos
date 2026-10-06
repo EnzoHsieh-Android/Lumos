@@ -2750,7 +2750,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     if _zl:
         section("Z", "存量漂移(已經寫進去的句子,跟別處的狀態對不上了)")
         warn_soft(_zl, f"{len(_zl)} 項要看(只列出、不擋;某一行確定照留就表態)",
-                  advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"")
+                  advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"(回頭條件、撤除條件可加 --tracked-in <Issue 或計劃>)")
         print()
 
     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
@@ -9299,6 +9299,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     if severity:
         rec["severity"] = severity
     if findings is not None:
+        if findings < 0:
+            print(f"擋下:--findings 只能填 0 或正整數,你給的是 {findings}", file=sys.stderr)
+            return 2
         rec["findings"] = findings
     if clusters is not None:   # 空字串也進解析器 → rc2(帶旗標即須有效內容,勿被 falsy 吞)
         parsed, err = _parse_clusters(clusters)
@@ -9611,6 +9614,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
               "沒有席位的處置帳無從對帳", file=sys.stderr)
         return 2
+    _validated_sha = {}
     if loop and auditor and outcome is None:
         # 觸發=審查席帳列(loop+auditor;結局帳 --outcome 除外)。★不要求 round★——light/循序
         # 舊制形狀本來就無輪次且合法;繞道由「處置帳必綁輪次」+讀側 round-less 處置帳拒判關死。
@@ -9620,8 +9624,15 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                   "不附報告的審查帳事後無從重驗;報告還沒落檔就先存檔再記(2026-08-26 起的新規矩)", file=sys.stderr)
             return 2
         try:
-            _rtext = Path(report).read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
+            if findings_set is not None:
+                import hashlib
+                _rbytes = Path(report).read_bytes()
+                _rtext = _rbytes.decode("utf-8")
+                _validated_sha["--report"] = hashlib.sha256(_rbytes).hexdigest()
+                del _rbytes
+            else:
+                _rtext = Path(report).read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeDecodeError) as e:
             print(f"擋下:--report 指的檔案讀不到: {e}", file=sys.stderr)
             return 2
         _decl = _report_severities(_rtext)
@@ -9665,9 +9676,17 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         if findings_set is not None and snapshot:
             _qrows = None
             try:
-                _qrows = _quote_rows(_rtext, Path(snapshot).read_text(encoding="utf-8"))
+                _sbytes = Path(snapshot).read_bytes()
+                _qrows = _quote_rows(_rtext, _sbytes.decode("utf-8"))
+                _validated_sha["--snapshot"] = hashlib.sha256(_sbytes).hexdigest()
+                del _sbytes
             except OSError:
                 _qrows = None   # 快照讀不到:下面的 --snapshot 存在性檢查會擋,這裡不重複報
+            else:
+                if _qrows is None:
+                    print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
+                    print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
+                    return 2
             if _qrows:
                 _qmiss = [r for r in _qrows if not r["ok"]]
                 if _qmiss:
@@ -9689,6 +9708,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             _h = _sha256_file(_p)
         except OSError as e:
             print(f"擋下:{_flag} 指的檔案讀不到: {e}", file=sys.stderr)
+            return 2
+        if _flag in _validated_sha and _h != _validated_sha[_flag]:
+            print(f"擋下:{_flag} 材料在驗證後發生變動；尚未寫入 canary 帳，請凍結材料後重驗。", file=sys.stderr)
             return 2
         import os as _os
         if _os.path.getsize(_p) == 0:
@@ -20988,11 +21010,12 @@ def cmd_install(force=False):
     return 0
 
 
-def cmd_uninstall():
+def cmd_uninstall(source=None):
     """對稱移除 cmd_install 裝的東西:全域指令(Unix symlink / Win lumos.cmd)+ user-scope skills。"""
     import os, shutil
     if _refuse_if_probe("uninstall"):
         return 2
+    _teardown_claude_plugin(source)          # teardown 第三步也經過這裡(Projects/Lumos事件帳_計劃)
     removed = []
     bindir = Path.home() / ".local" / "bin"
     for name in ("lumos.cmd", "lumos"):          # Win shim + Unix symlink
@@ -21099,7 +21122,8 @@ def cmd_teardown(yes=False, source=None):
             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不拆。確定要拆就加 --yes", file=sys.stderr)
             return 2
         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
-        print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks)。")
+        print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
+              "Claude 外掛 lumos-ledger 與市集 lumos-toolchain)。")
         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
@@ -21124,7 +21148,7 @@ def cmd_teardown(yes=False, source=None):
     print("② 拆專案層(deinit,保留圖譜)…")
     rc_deinit = cmd_deinit(keep_graph=True, yes=True, source=source)
     print("③ 拆機器 CLI/skills(uninstall)…")
-    rc_uninstall = cmd_uninstall()
+    rc_uninstall = cmd_uninstall(source=source)
     print(f"✓ teardown 完成(deinit rc={rc_deinit} / uninstall rc={rc_uninstall};圖譜保留)。"
           "  重裝:bootstrap 或 install + init。")
     return 0
@@ -22867,6 +22891,9 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
         stale = chooks / f
         if stale.exists() or stale.is_symlink():
             stale.unlink()
+    if harness == "claude":                # 事件帳外掛(Projects/Lumos事件帳_計劃):自己的狀態與訊息,★不併進這支的回傳字串★
+        _sync_claude_plugin()             # (cmd_install 只認 merge-failed、_sync_global_claude 用 == "ok" 判);放在合併器之前:
+                                           # 它不讀 settings.json,設定檔壞掉提前返回時也要跑,只留這一個呼叫點
     merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
     if merge.exists():
         args = [sys.executable, str(merge)] + (["--target", "codex"] if harness == "codex" else [])
@@ -22978,6 +23005,187 @@ def _remove_codex_agent(home=None) -> list:
         except OSError:
             pass
     return gone
+
+
+# ── Claude 事件帳外掛(Projects/Lumos事件帳_計劃 做法第 4 節)─────────────────────
+# 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
+# readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
+_LEDGER_MARKET = "lumos-toolchain"
+_LEDGER_PLUGIN = "lumos-ledger@lumos-toolchain"
+_LEDGER_MANUAL = (f"claude plugin uninstall {_LEDGER_PLUGIN} --scope user",
+                  f"claude plugin marketplace remove {_LEDGER_MARKET} --scope user")
+
+
+def _claude_json(claude, args):
+    """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
+    代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
+    import json as _j
+    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
+    data = _j.loads(r.stdout) if r.stdout.strip() else None
+    if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+        raise RuntimeError(f"{' '.join(args[:3])} 的輸出格式認不得")
+    return data
+
+
+def _claude_do(claude, args):
+    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip()
+        raise RuntimeError(f"{' '.join(args[:3])}:{msg.splitlines()[0] if msg else 'rc=' + str(r.returncode)}")
+
+
+def _same_local_path(a, b):
+    def norm(p):
+        return os.path.realpath(os.path.expanduser(str(p).rstrip("/") or "/"))
+    return norm(a) == norm(b)
+
+
+def _plugin_sync_msg(state: str, detail: str = "") -> str:
+    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。"""
+    if state == "ok":
+        return f"  ✓ Claude 事件帳外掛 {_LEDGER_PLUGIN} 已就位"
+    if state == "absent":
+        return f"  (略過 Claude 事件帳外掛:{detail or '找不到 claude 指令'})"
+    if state == "no-source":
+        return f"  (略過 Claude 事件帳外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{detail})"
+    return f"  ⚠ Claude 事件帳外掛 {_LEDGER_PLUGIN} 沒裝好:{detail}"
+
+
+def _ledger_market(claude):
+    return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
+                 if x.get("name") == _LEDGER_MARKET), None)
+
+
+def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
+    """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
+    總共超過 budget 秒就不再開新的一次(每次查本身可能要等 claude 很久;代碼審 r3)。"""
+    import time as _t
+    deadline = _t.monotonic() + budget
+    for _ in range(tries):
+        if _t.monotonic() + pause > deadline:
+            break
+        _t.sleep(pause)
+        try:
+            if check():
+                return True
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+            pass
+    return False
+
+
+def _ledger_user_plugin(claude):
+    """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
+    return any(x.get("id") == _LEDGER_PLUGIN and x.get("scope", "user") == "user"
+               for x in _claude_json(claude, ["plugin", "list", "--json"]))
+
+
+def _sync_claude_plugin(source=None) -> str:
+    """確保 lumos-ledger 外掛裝好。回 ok / absent / no-source / failed;自己印訊息(成功與略過到 stdout、失敗到 stderr)。"""
+    if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+        print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
+        return "absent"
+    claude = _py_which("claude")
+    if not claude:
+        print(_plugin_sync_msg("absent"))
+        return "absent"
+    src = _lumos_src(source).resolve()      # 相對路徑的 LUMOS_HOME 不能原樣交給 claude(它會照自己的目前目錄解讀)
+    if not (src / ".claude-plugin" / "marketplace.json").is_file():
+        print(_plugin_sync_msg("no-source", str(src)))
+        return "no-source"
+    if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
+        print(f"  (Claude 事件帳外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+    step = {"removed_old": False, "added": False}
+    try:
+        if not _ledger_ensure_market(claude, src, step):
+            print(_plugin_sync_msg("failed", f"已有同名市集 {_LEDGER_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+                  file=sys.stderr)
+            return "failed"
+        step["added"] = True
+        _ledger_ensure_plugin(claude)
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+        print(_plugin_sync_msg("failed", f"{e}{_ledger_fail_hint(step)}"), file=sys.stderr)
+        return "failed"
+    print(_plugin_sync_msg("ok"))
+    return "ok"
+
+
+def _ledger_ensure_market(claude, src, step):
+    """市集登記成 src 這個本機資料夾。同名市集不是本機資料夾 → 回 False(不動它);
+    本機路徑不同 → 先移除再加。失敗丟例外,step 記到哪一步。"""
+    mk = _ledger_market(claude)
+    if mk is not None and not (mk.get("source") == "directory" and mk.get("path")):
+        return False
+    if mk is not None and not _same_local_path(mk["path"], src):
+        _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+        step["removed_old"], mk = True, None
+    if mk is None:
+        def ours():
+            now = _ledger_market(claude)
+            return bool(now and now.get("source") == "directory" and _same_local_path(now.get("path", ""), src))
+        try:
+            _claude_do(claude, ["plugin", "marketplace", "add", str(src), "--scope", "user"])
+        except (RuntimeError, subprocess.TimeoutExpired):   # 另一支同時跑先加好了、或逾時但其實寫進去了:以最終狀態為準
+            if not _ledger_wait(ours):
+                raise
+    return True
+
+
+def _ledger_ensure_plugin(claude):
+    """使用者範圍裝上外掛;另一支同時在裝時以最終狀態為準。"""
+    if _ledger_user_plugin(claude):
+        return
+    try:
+        _claude_do(claude, ["plugin", "install", _LEDGER_PLUGIN, "--scope", "user"])
+    except (RuntimeError, subprocess.TimeoutExpired):
+        if not _ledger_wait(lambda: _ledger_user_plugin(claude)):
+            raise
+
+
+def _ledger_fail_hint(step):
+    """同步外掛失敗時照實說做到哪一步。"""
+    if step["removed_old"] and not step["added"]:
+        return ";舊的市集登記已移除、新的沒加上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+    if step["added"]:
+        return ";市集已登記、外掛沒裝上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
+    return ";修好原因後重跑 lumos install --force"
+
+
+def _teardown_claude_plugin(source=None) -> str:
+    """移除 lumos-ledger 外掛與我們的市集。沒有 claude、兩者都沒有就安靜略過;成功說移掉了什麼;失敗附兩個手動指令。"""
+    if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+        print("  (略過移除 Claude 事件帳外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
+        return "absent"
+    claude = _py_which("claude")
+    if not claude:
+        return "absent"
+    src = _lumos_src(source).resolve()
+    gone, errors, todo = [], [], []
+    try:                                     # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+        if _ledger_user_plugin(claude):
+            _claude_do(claude, ["plugin", "uninstall", _LEDGER_PLUGIN, "--scope", "user"])
+            gone.append(f"外掛 {_LEDGER_PLUGIN}")
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+        errors.append(str(e))
+        todo.append(_LEDGER_MANUAL[0])
+    try:                                     # 外掛那步失敗也照樣處理市集(各步獨立)
+        mk = _ledger_market(claude)
+        if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
+            _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+            gone.append(f"市集 {_LEDGER_MARKET}")
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+        errors.append(str(e))
+        todo.append(_LEDGER_MANUAL[1])
+    if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
+        done = f"(已移除:{'與'.join(gone)})" if gone else ""
+        print(f"  ⚠ Claude 事件帳外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
+        for c in todo:
+            print(f"    {c}", file=sys.stderr)
+        return "failed"
+    if gone:
+        print(f"  ✓ 已移除 Claude 事件帳的{'與'.join(gone)}")
+    return "ok"
 
 
 def _sync_msg(harness: str, state: str) -> str:
@@ -23191,7 +23399,8 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
     failures = []
     rc2 = subprocess.run([sys.executable, str(home / "scripts" / "lumos"),
-                          "install", "--force"]).returncode
+                          "install", "--force"],      # 子行程的 _lumos_src() 要指到這次的來源(Projects/Lumos事件帳_計劃)
+                         env=dict(os.environ, LUMOS_HOME=str(home))).returncode
     if rc2 != 0:                                  # std F8:不吞錯
         print(f"  提醒:重新安裝(install --force)失敗,回傳碼 {rc2}", file=sys.stderr)
         failures.append("install")
@@ -24525,6 +24734,285 @@ def _hook_python_problems(home=None):
     return seen, probs
 
 
+# ── Lumos 事件帳(Projects/Lumos事件帳_計劃):讀取端 ──────────────────────
+# 寫入端是 Claude Code 的 mod(mods/claude/lumos-ledger),每個會談一個資料夾、每次寫一個新塊檔;
+# 這裡只讀。事件帳跟 hook-events.jsonl 是兩本帳:那本記「lumos 的 hook 自己有沒有跑」,這本記「AI 做了什麼」。
+_EVENTS_REL = Path("governance") / "runtime" / "events"
+
+
+def _events_root(root):
+    """事件帳一律寫在主 checkout:在 worktree 裡跑也要讀主 checkout 那份。
+    git-common-dir 是名叫 .git 的資料夾時取上一層;git 失敗、逾時、找不到都退回 root。"""
+    root = Path(root)
+    # 3 秒:enforcement 每次開場都跑,git 卡住時只讓這一列退回原根,不能拖垮整份(代碼審 r2)
+    r = _lens_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", timeout=3)   # 失敗/逾時回 None
+    if r is not None and r.returncode == 0:
+        common = Path(r.stdout.strip())
+        if common.name == ".git" and common.parent.is_dir():
+            return common.parent
+    return root
+
+
+_EVENTS_SESSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_EVENTS_DAYS_RE = re.compile(r"[0-9]{1,5}")   # 只認 ASCII 數字:str.isdigit() 對上標、全形、圈號也回真,int() 卻接不住
+_EVENTS_MAX_DAYS = 36500
+# 讀進來時就把關(代碼審 r3):太深的巢狀讀得進來、印的時候才爆(約 7 萬到 11 萬層),所以深度、單行長度、
+# 塊檔大小都在讀取端擋掉,後面所有輸出路徑(文字、--json、列表)就碰不到它。寫入端的事件只有一兩層。
+_EVENTS_MAX_DEPTH = 32
+_EVENTS_MAX_LINE = 64 * 1024
+_EVENTS_MAX_FILE = 16 * 1024 * 1024
+
+
+def _events_clean(text, limit=2000):
+    """印到終端前消毒,沿用既有兩道(不另寫第三套):_esc_clean 把控制字元(含 ESC、C1)換空格,
+    再把 _PATH_SPECIAL_CATS 那幾類(控制、格式含雙向覆寫與零寬、行與段分隔、孤立代理)換空格——
+    事件帳內容可能被人強制提交進 repo;孤立代理字元印到 UTF-8 終端還會直接丟編碼錯誤(代碼審 r2)。"""
+    return "".join(" " if unicodedata.category(ch) in _PATH_SPECIAL_CATS else ch for ch in _esc_clean(str(text), limit))
+
+
+def _events_depth_ok(obj, limit):
+    """巢狀深度不超過 limit(迭代算,不用遞迴——要量的正是會把遞迴吃光的東西)。"""
+    stack = [(obj, 1)]
+    while stack:
+        o, dep = stack.pop()
+        if dep > limit:
+            return False
+        if isinstance(o, dict):
+            stack.extend((v, dep + 1) for v in o.values())
+        elif isinstance(o, list):
+            stack.extend((v, dep + 1) for v in o)
+    return True
+
+
+def _events_read(root, session, base=None):
+    """讀一個會談的事件:塊檔依檔名排序、塊內照行序;壞行與版本不是 1 的行各自計數後略過。
+    只認 \n 斷行:JSON 字串裡可能有 U+2028 / U+0085,splitlines() 會在那裡切斷、把一筆事件變兩行壞行。"""
+    d = (base if base is not None else _events_root(root) / _EVENTS_REL) / session
+    out = {"events": [], "bad": 0, "unknown_version": 0, "too_big": 0}
+    if not d.is_dir() or d.is_symlink():
+        return out
+    for f in sorted(p for p in d.glob("*.jsonl") if p.is_file() and not p.is_symlink()):   # 不跟連結(與 prune 一致)
+        try:
+            if f.stat().st_size > _EVENTS_MAX_FILE:   # 不整檔讀進記憶體
+                out["too_big"] += 1
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:                     # 讀的同時被 prune 刪掉
+            continue
+        for line in text.split("\n"):
+            if line.strip():
+                _events_take_line(line, out)
+    return out
+
+
+def _events_take_line(line, out):
+    """一行事件判成三種之一放進 out:壞行、版本不認得、事件。"""
+    import json as _j
+    if len(line) > _EVENTS_MAX_LINE:
+        out["bad"] += 1
+        return
+    try:
+        ev = _j.loads(line)
+    except (ValueError, RecursionError):   # 極深巢狀的一行會把解析器的遞迴吃光
+        out["bad"] += 1
+        return
+    # 太深的:解析得過、印的時候才爆的那段深度(代碼審 r3)
+    if not _events_depth_ok(ev, _EVENTS_MAX_DEPTH) or not isinstance(ev, dict):
+        out["bad"] += 1
+    elif type(ev.get("v")) is not int or ev.get("v") != 1:   # true 與 1.0 在 Python 都等於 1
+        out["unknown_version"] += 1
+    else:
+        out["events"].append(ev)
+
+
+def _events_sessions(root, limit=10):
+    """最近的會談:只看會談資料夾的修改時間排序,只讀前 limit 個的塊檔。"""
+    base = _events_root(root) / _EVENTS_REL
+    if not base.is_dir():
+        return []
+    def mtime(p):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0
+    dirs = [p for p in base.iterdir() if p.is_dir() and not p.is_symlink()]
+    dirs.sort(key=mtime, reverse=True)
+    rows = []
+    for p in dirs[:limit]:
+        r = _events_read(root, p.name, base=base)
+        evs = r["events"]
+        rows.append({"session": p.name,
+                     "last": evs[-1].get("ts") if evs else None,
+                     "turns": sum(1 for e in evs if e.get("ev") == "turn_end"),
+                     "tools": sum(1 for e in evs if e.get("ev") == "tool"),
+                     "failed": sum(1 for e in evs if e.get("ev") == "tool" and e.get("ok") is False)})
+    return rows
+
+
+def _events_prune(base, days):
+    """刪掉早於 days 天的會談資料夾(看資料夾與裡面塊檔最新的修改時間)。呼叫端保證 days >= 1,
+    所以最近 24 小時內動過的會談(正在寫的)天然落在保留範圍,不另設一道判斷;
+    符號連結不跟也不刪;只動 base 的直接子資料夾。回刪掉的會談編號。
+    為什麼不像 _note_audit_work_dir 在寫入端自動清:寫入端是 mod,mod 的檔案介面沒有刪除功能。"""
+    import shutil
+    import time as _t
+    now = _t.time()
+    cutoff = now - days * 86400
+    removed, failed = [], []
+    if not base.is_dir() or base.is_symlink():
+        return removed, failed
+    for d in sorted(base.iterdir()):
+        if d.is_symlink() or not d.is_dir():
+            continue
+        try:                                # 寫入端同時在寫:檔案可能剛出現或剛被改名
+            newest = max([d.stat().st_mtime] + [f.stat().st_mtime for f in d.iterdir() if not f.is_symlink()])
+        except OSError:                     # 還沒開始刪:原封不動,不算「刪了一部分」(代碼審 r3)
+            failed.append((d.name, False))
+            continue
+        if newest >= cutoff:
+            continue
+        try:
+            shutil.rmtree(d)
+            removed.append(d.name)
+        except OSError:
+            failed.append((d.name, d.exists() and any(True for _ in _safe_iterdir(d))))
+    return removed, failed
+
+
+def _safe_iterdir(d):
+    try:
+        yield from d.iterdir()
+    except OSError:
+        return
+
+
+def _events_main_trusted(root, main_root):
+    """root 是主 checkout 本身,或主 checkout 真的登記過的 worktree(它的 .git/worktrees/*/gitdir 指回 root/.git)
+    才算可信——.git 檔可以被人改成指到別的 repo,不驗就會把清理導到別人的事件帳(代碼審 r2 資安席)。"""
+    root, main_root = Path(root).resolve(), Path(main_root).resolve()
+    if root == main_root:
+        return True
+    for g in _safe_iterdir(main_root / ".git" / "worktrees"):
+        try:                                 # 一個壞項目(非 UTF-8、NUL、讀不到)不連累別的(代碼審 r3)
+            p = Path((g / "gitdir").read_text(encoding="utf-8").strip())
+            # 新版 git 可以寫相對路徑:照 gitdir 檔所在目錄解讀,不是照目前目錄
+            if (p if p.is_absolute() else g / p).resolve() == root / ".git":
+                return True
+        except (OSError, ValueError):        # UnicodeDecodeError 是 ValueError 的子類
+            continue
+    return False
+
+
+def _events_path_safe(root, base):
+    """事件帳路徑從 repo 根往下每一層都不能是符號連結:陌生 repo 可以把 governance 或 runtime 做成連結,
+    把清理導到 repo 外的資料夾。"""
+    p = Path(root)
+    for part in _EVENTS_REL.parts:
+        p = p / part
+        if p.is_symlink():
+            return False
+    return Path(base).resolve().is_relative_to(Path(root).resolve())
+
+
+def cmd_events(repo=None, session=None, as_json=False, prune=False, days="30"):
+    """列最近的會談,或印一個會談的事件(唯讀);--prune 例外,會刪舊會談資料夾。"""
+    root = _anchor_repo_root(repo)
+    if root is None:
+        return 2
+    # --repo 給 repo 裡的子目錄時,當成那個 repo(往上找 .git,同不帶 --repo 的找法;代碼審 r3)
+    root = next((c for c in (root.resolve(), *root.resolve().parents) if (c / ".git").exists()), root)
+    main_root = _events_root(root)
+    base = main_root / _EVENTS_REL
+    if not _events_path_safe(main_root, base):   # 讀與刪同一道:上層連結會把讀取導到 repo 外(代碼審 r3)
+        print(f"擋下:事件帳路徑 {_events_clean(base)} 上層有符號連結;不讀也不刪。", file=sys.stderr)
+        print("為什麼在意:陌生 repo 可以把 governance 或 runtime 做成連結,把別處的資料帶進這裡。先看是哪一層:",
+              file=sys.stderr)
+        print(f"  ls -la {_events_clean(main_root / 'governance')}", file=sys.stderr)
+        return 2
+    if prune:
+        return _events_cmd_prune(root, main_root, base, days)
+    if session is not None:
+        return _events_cmd_session(root, base, session, as_json)
+    return _events_cmd_list(root, main_root, base, as_json)
+
+
+def _events_cmd_prune(root, main_root, base, days):
+    """lumos events --prune:刪舊會談資料夾(這個指令唯一會刪檔的分支)。"""
+    txt = str(days).strip()
+    n = int(txt) if _EVENTS_DAYS_RE.fullmatch(txt) else 0
+    if not 1 <= n <= _EVENTS_MAX_DAYS or str(n) != txt:
+        print(f"擋下:--days 要是 1 到 {_EVENTS_MAX_DAYS} 的整數(只收半形數字、不帶正負號與前導零),"
+              f"收到 {_events_clean(days)[:40]!r};什麼都沒刪。", file=sys.stderr)
+        print("為什麼在意:天數不合法時寧可不動,免得一次刪光。例如保留 30 天:", file=sys.stderr)
+        print("  lumos events --prune --days 30", file=sys.stderr)
+        return 2
+    if not _events_main_trusted(root, main_root):
+        print(f"擋下:事件帳路徑 {_events_clean(base)} 不可信(.git 指到的主 checkout "
+              "沒登記過這個 worktree);什麼都沒刪。", file=sys.stderr)
+        print("為什麼在意:清理會整個刪掉資料夾,路徑被導走就會刪到別的地方。確認路徑後手動處理:", file=sys.stderr)
+        print(f"  ls -la {_events_clean(main_root / 'governance')}", file=sys.stderr)
+        return 2
+    removed, failed = _events_prune(base, n)
+    print(f"刪了 {len(removed)} 個超過 {n} 天的會談資料夾(最近 24 小時內動過的一律保留)。")
+    for name, partial in failed:
+        print(f"  ⚠ {_events_clean(name)} " + ("沒刪乾淨(已刪了一部分,剩下的檔案還在)" if partial
+                                              else "沒動(檔案正在變動或讀不到,下次再清)")
+              + ":權限不足或正在寫入", file=sys.stderr)
+    return 0
+
+
+def _events_cmd_session(root, base, session, as_json):
+    """lumos events --session:逐筆印一個會談。"""
+    import json as _j
+    d = base / session
+    if not _EVENTS_SESSION_RE.fullmatch(session) or d.is_symlink() or not d.is_dir():
+        print(f"擋下:找不到會談 {_events_clean(session)[:80]!r} 的事件帳(編號只收單層名稱,不收路徑、空字串或連結)。",
+              file=sys.stderr)
+        print("為什麼在意:編號打錯,或那場會談沒有寫事件帳。先列出有哪些會談:", file=sys.stderr)
+        print("  lumos events", file=sys.stderr)
+        return 2
+    r = _events_read(root, session, base=base)
+    if as_json:
+        print(_j.dumps(dict(r, session=session)))   # ensure_ascii:控制、格式、孤立代理字元一律跳脫
+        return 0
+    print(f"會談 {session}:{len(r['events'])} 筆事件(略過:壞行 {r['bad']}、版本不認得 {r['unknown_version']}"
+          + (f"、超過大小上限的塊檔 {r['too_big']}" if r["too_big"] else "") + ")")
+    for e in r["events"]:
+        who = f"[{_events_clean(e['agent'], 80)}] " if e.get("agent") else ""
+        detail = e.get("tool") or e.get("reason") or e.get("origin") or e.get("agent_type") or ""
+        okv = e.get("ok")
+        ok = "" if e.get("ev") != "tool" else (" ✓" if okv is True else " ✗" if okv is False else " ?")
+        # 每個欄位各自清理截斷,狀態標記接在最後、不被截掉(代碼審 r3)
+        print(f"  {_events_clean(e.get('ts', '?'), 80)}  {who}{_events_clean(e.get('ev'), 40)}  "
+              f"{_events_clean(detail, 500)}{ok}")
+    return 0
+
+
+def _events_cmd_list(root, main_root, base, as_json):
+    """lumos events:列最近的會談。"""
+    import json as _j
+    rows = _events_sessions(root)
+    if as_json:
+        print(_j.dumps({"root": str(main_root), "sessions": rows}))
+        return 0
+    if not rows:
+        print(f"沒有事件帳:{_events_clean(base)} 不存在或是空的。")
+        why = ("為什麼在意:事件帳由 Claude Code 的 lumos-ledger 外掛寫;可能原因是外掛沒裝、"
+               "這不是 Claude 會談(Codex 不寫)、或這個 repo 沒有圖譜。")
+        if not (_lumos_src(None).expanduser() / ".claude-plugin" / "marketplace.json").is_file():
+            # 寫入端外掛還沒隨這份 lumos 附上時,install 會略過那步,叫人去跑只會白跑(代碼審 r3)
+            print(why + "你裝的這份 lumos 還沒附這個外掛(安裝時會略過這一步),等更新到有附外掛的版本:")
+            print("  lumos update")
+            return 0
+        print(why + "要裝外掛:")
+        print("  lumos install")
+        return 0
+    print(f"最近 {len(rows)} 個會談(事件帳在 {_events_clean(base)}):")
+    for r in rows:
+        print(_events_clean(f"  {r['session']}  最後 {r['last'] or '?'}  回合 {r['turns']}  工具 {r['tools']}  失敗 {r['failed']}"))
+    return 0
+
+
 def enforcement_status(root=None, home=None):
     """回各層防護「現在有沒有生效」的清單 [{layer, status, detail}](Projects/enforcement儀表板_計劃)。
     純唯讀、每層各自 try 包住(一層測不出來不拖垮整份;fail-open 本身要能被觀測)。
@@ -24768,6 +25256,27 @@ def enforcement_status(root=None, home=None):
                 f"{len(data.get('anchors', {}))} 個錨點" + (f",{bad} 個不符" if bad else "全符"))
     except Exception as e:
         add("anchor-baseline", "unknown", str(e))
+
+    # ⑪ Claude 事件帳(Projects/Lumos事件帳_計劃):只看主 checkout 的事件帳資料夾修改時間,不呼叫任何外部指令。
+    # 狀態只用 active / stale / unknown——開場提醒只點名 inactive、degraded,用錯會讓沒裝外掛的人每次開場都被唸。
+    _ledger_note = "只有 Claude Code 的 lumos-ledger 外掛會寫;Codex 沒有對應"
+    try:
+        _mr = _events_root(root)
+        base = _mr / _EVENTS_REL
+        if not _events_path_safe(_mr, base):     # 上層是連結:時間是別處的,不算數(代碼審 r3)
+            add("claude-event-ledger", "unknown", f"事件帳路徑上層有符號連結,不採計({_ledger_note})")
+        elif not base.is_dir():
+            add("claude-event-ledger", "unknown", f"沒有事件帳資料夾({_ledger_note})")
+        else:
+            import time as _t
+            recent = _t.time() - _HOOK_LIVENESS_WINDOW_DAYS * 86400
+            mtimes = [p.stat().st_mtime for p in base.iterdir() if p.is_dir() and not p.is_symlink()]
+            if any(t >= recent for t in mtimes):
+                add("claude-event-ledger", "active", f"近 {_HOOK_LIVENESS_WINDOW_DAYS} 天有會談寫入({_ledger_note})")
+            else:
+                add("claude-event-ledger", "stale", f"近 {_HOOK_LIVENESS_WINDOW_DAYS} 天沒有會談寫入({_ledger_note})")
+    except Exception as e:
+        add("claude-event-ledger", "unknown", f"{e}({_ledger_note})")
 
     # ⑩ 遠端 GitHub 設定:本機測不到,誠實留 unknown(要真查需接 gh API,零依賴+離線優先故不做)
     add("required-status-check", "unknown", "GitHub required check / branch protection 本機測不到")
@@ -33359,6 +33868,13 @@ _DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "c6", "count")
 # c6 也自己判:加決策、翻決策之後被連的那篇狀態沒變,不是 c6 發現,但那一句一樣要補已裁定括號
 _DRIFT_FIX_SELF_JUDGED = ("count", "c6")
 _DRIFT_BOUND_KINDS = ("c2", "c3", "c6")    # 表態要綁當時連著的已收尾筆記(related)與序號(seq)的種類
+# 照留要有期限或去處(Projects/照留表態要有期限或去處_計劃):回頭條件與 RULE 撤除條件成立後的照留,要嘛綁一篇還開著的
+# Issue 或計劃(tracked_in,那篇收尾就失效),要嘛記 30 天的期限(until)。期限與開不開只在 drift scan 與 doctor 算;
+# 推送檢查不看日期、也不看那篇開不開(同一個推送範圍任何時候重跑結果一樣),只對「這次新寫就已成立」的要求綁了去處
+_DRIFT_EXPIRING_KINDS = ("probe", "retire")
+_DRIFT_ACK_DAYS = 30
+# 舊表態(兩個欄位都沒有)的期限:合併進主線那天 + 30 天(Enzo 2026-10-06 裁「舊表態從上線日起算 30 天」)
+_DRIFT_ACK_LEGACY_UNTIL = "2026-11-05"
 _DRIFT_GOLIVE_MARK = "drift check"
 _DRIFT_GATE_VALUES = ("block", "warn", "off")
 # ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、歷史重放不亂擋、噪音 ≤5)考過,
@@ -33371,6 +33887,31 @@ _DRIFT_BUDGET_SEC = 60
 def _drift_str(n, key):
     v = n.fields.get(key, "") if n is not None else ""
     return v.strip() if isinstance(v, str) else ""
+
+
+def _drift_route_open(typ, status):
+    """照留綁的去處算不算還開著:Issue 看 _DRIFT_OPEN_ISSUE,計劃看狀態表扣掉收尾值(todo、doing);其他類型一律不算。
+    表態時與 drift scan、doctor 判活共用(Projects/照留表態要有期限或去處_計劃〈做法〉2)。"""
+    if typ == "issue":
+        return status in _DRIFT_OPEN_ISSUE
+    if typ == "project":
+        return status in _STATUS_ENUM["project"] and status not in _DRIFT_CLOSED
+    return False
+
+
+def _drift_note_state(env, vault_rel):
+    """drift scan、doctor 判照留綁的那篇開不開用:repo 相對路徑 → (type, status);不在圖譜資料夾、沒有那篇、讀不出回 None。
+    用呼叫端手上的圖譜物件,不另讀檔(參數名不叫 status_of:會蓋住同名的全域函式)。"""
+    pre = vault_rel.rstrip("/") + "/"
+
+    def _state(path):
+        if not isinstance(path, str) or not nfc(path).startswith(pre):
+            return None
+        n = env.notes.get(nfc(path)[len(pre):])
+        if n is None or _note_unreadable(n):
+            return None
+        return _drift_str(n, "type"), _drift_str(n, "status")
+    return _state
 
 
 def _drift_fm_end(lines):
@@ -34772,7 +35313,7 @@ def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override
             unknown.append(f"{p}:{no} 的條件判不了(" + ("超過預算" if _out() else "讀不出或讀不準的程式檔或筆記"
                            + _drift_bad_note(_drift_row_unread(pr["conds"], (tenv, benv), (trees.get(tip), trees.get(base))))) + ")")
         elif verdict:
-            must.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [],
+            must.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [], "born_now": old is False,
                          "why": verdict + _drift_gone_typo_hint(pr, old, _tree(tip))})
     return must, [], unknown
 
@@ -35471,29 +36012,31 @@ def _drift_ack_key(path, text, kind):
     return (nfc(str(path)), str(text).strip(), kind)
 
 
-def _drift_split_acked(findings, acks, vault_rel):
+def _drift_split_acked(findings, acks, vault_rel, as_of=None, note_state=None):
     """→ (沒表態的, 已表態的)。對得上=同一路徑、一字不差的原文、同一種類(改小標題不失效)。
     ★c2、c3 另外要綁當時的關係★(存量漂移改法 [S8]):只看記了 related 的表態,取 seq 最大的那幾筆(同號全算),
     全部都涵蓋現在的已收尾計劃清單才算已表態;沒記 related 的舊表態、seq 不是正整數的(手改壞了)都不算數
     (不然會永久豁免之後才收尾的計劃;壞序號原本被當成 0 號照樣生效,代碼審 r1 外家席)。
     沒涵蓋但以前表態過的,沒表態那一邊的發現多帶 prev_ack(最近一次當時連著哪幾篇、理由),印的時候講出來。
-    ★m1 另一條分支★(_drift_m1_split_acked;m1 不放進 _DRIFT_BOUND_KINDS):同路徑同原文所有 m1 表態的名稱取聯集。"""
+    ★m1 另一條分支★(_drift_m1_split_acked;m1 不放進 _DRIFT_BOUND_KINDS):同路徑同原文所有 m1 表態的名稱取聯集。
+    ★probe、retire 另一條分支★(_drift_expiring_acked;Projects/照留表態要有期限或去處_計劃):as_of/note_state 只有
+    drift scan 傳(判期限與綁的那篇開不開);推送檢查不傳,只對 born_now 要求綁了去處。"""
     if any(f["kind"] == "m1" for f in findings):
         l1, d1 = _drift_m1_split_acked([f for f in findings if f["kind"] == "m1"], acks, vault_rel)
-        l2, d2 = _drift_split_acked([f for f in findings if f["kind"] != "m1"], acks, vault_rel)
+        l2, d2 = _drift_split_acked([f for f in findings if f["kind"] != "m1"], acks, vault_rel, as_of, note_state)
         return l2 + l1, d2 + d1
-    keys, bound = set(), {}
-    for a in acks:
-        k = _drift_ack_key(a["path"], a.get("text", ""), a["kind"])
-        if a["kind"] in _DRIFT_BOUND_KINDS:
-            if "related" in a and _drift_seq_ok(a):
-                bound.setdefault(k, []).append(a)
-        else:
-            keys.add(k)
+    keys, bound, expiring = _drift_ack_buckets(acks)
     pre = vault_rel.rstrip("/") + "/"
     left, done = [], []
     for f in findings:
         k = _drift_ack_key(pre + f["path"], f["text"], f["kind"])
+        if f["kind"] in _DRIFT_EXPIRING_KINDS:
+            ok, pa = _drift_expiring_acked(f, expiring.get(k, []), as_of, note_state)
+            if ok:
+                done.append(f)
+            else:
+                left.append(dict(f, prev_ack=pa) if pa else f)
+            continue
         if f["kind"] not in _DRIFT_BOUND_KINDS:
             (done if k in keys else left).append(f)
             continue
@@ -35506,6 +36049,21 @@ def _drift_split_acked(findings, acks, vault_rel):
         else:
             left.append(f)
     return left, done
+
+
+def _drift_ack_buckets(acks):
+    """表態分三堆:一般種類的鍵集合、c2/c3/c6(記了 related 而且序號合法的)與 probe/retire 各自 {鍵: [表態]}。"""
+    keys, bound, expiring = set(), {}, {}
+    for a in acks:
+        k = _drift_ack_key(a["path"], a.get("text", ""), a["kind"])
+        if a["kind"] in _DRIFT_BOUND_KINDS:
+            if "related" in a and _drift_seq_ok(a):
+                bound.setdefault(k, []).append(a)
+        elif a["kind"] in _DRIFT_EXPIRING_KINDS:
+            expiring.setdefault(k, []).append(a)
+        else:
+            keys.add(k)
+    return keys, bound, expiring
 
 
 def _drift_m1_split_acked(findings, acks, vault_rel):
@@ -35544,6 +36102,55 @@ def _drift_bound_latest(rows):
     return [a for a in rows if _drift_ack_seq(a) == top]
 
 
+def _drift_ack_tracked(a):
+    t = a.get("tracked_in")
+    return isinstance(t, str) and bool(t.strip())
+
+
+def _drift_ack_live(a, as_of, note_state):
+    """probe/retire 照留在 as_of 那天還算不算數 → 失效原因(還算數回空字串)。綁了去處看那篇開不開,沒綁看期限
+    (until;舊表態兩個欄位都沒有,用 _DRIFT_ACK_LEGACY_UNTIL);期限當天還算。只收 10 個字元的 YYYY-MM-DD;
+    任何型別不對都回失效原因,不丟例外。不看表態日 date(手改表態檔本來就能改任何欄位)。"""
+    import datetime as _dt
+    if "tracked_in" in a:
+        if not _drift_ack_tracked(a):
+            return "綁的節點寫壞了"
+        t = a["tracked_in"]
+        st = note_state(t)
+        name = t.rsplit("/", 1)[-1][:-3] if t.endswith(".md") else t
+        if st is None:
+            return f"綁的 {name} 不在了或讀不出"
+        if not _drift_route_open(*st):
+            return f"綁的 {name} 已收尾或不是 Issue/計劃({st[0] or '沒有類型'}/{st[1] or '沒有狀態'})"
+        return ""
+    until = a["until"] if "until" in a else _DRIFT_ACK_LEGACY_UNTIL
+    if not (isinstance(until, str) and len(until) == 10 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", until)):
+        return "期限寫壞了"
+    try:
+        lim = _dt.date.fromisoformat(until)
+    except ValueError:
+        return "期限寫壞了"
+    return f"已過期限 {until}" if as_of > lim else ""
+
+
+def _drift_expiring_acked(f, rows, as_of, note_state):
+    """probe/retire 的一筆發現對上同鍵的照留 rows → (算已表態?, prev_ack 或 None)。
+    as_of 是 None(推送檢查):不看期限、不看開不開;只有 born_now(有起點、這次新寫就已成立)要有一筆綁了去處。
+    有 as_of(drift scan):任何一筆還算數就算已表態(兩個工作樹各自追加後合併也一樣)。
+    沒算上的帶 prev_ack={reason, dead}:取哪一筆照 _drift_bound_latest(沒有 seq 的取檔內最後一筆)。"""
+    if not rows:
+        return False, None
+    last = _drift_bound_latest(rows)[-1]
+    if as_of is None:
+        if not f.get("born_now") or any(_drift_ack_tracked(a) for a in rows):
+            return True, None
+        return False, {"reason": last.get("reason"), "dead": "這次新寫就已成立,照留要綁去處(--tracked-in)"}
+    dead = [_drift_ack_live(a, as_of, note_state) for a in rows]
+    if any(d == "" for d in dead):
+        return True, None
+    return False, {"reason": last.get("reason"), "dead": dead[next(i for i, a in enumerate(rows) if a is last)]}
+
+
 def _drift_related_ok(a):
     """related 要是字串清單;手改壞了當成沒涵蓋。"""
     r = a.get("related")
@@ -35555,6 +36162,9 @@ def _drift_prev_ack_line(f):
     pa = f.get("prev_ack")
     if not pa:
         return None
+    if "dead" in pa:     # probe/retire 的照留失效了(照留表態要有期限或去處_計劃〈做法〉6):不讀 related
+        return (f"以前照留過(理由:{str(pa.get('reason') or '')[:80]}),{pa['dead']};還沒做就 lumos drift ack "
+                f"{f['path'][:-3]} {f['line']} --kind {f['kind']} --tracked-in <排進的那篇 Issue 或計劃> --reason \"…\"")
     old = [str(x) for x in pa["related"]] if isinstance(pa.get("related"), list) else []
     more = [x for x in f.get("related", []) if nfc(str(x)) not in {nfc(y) for y in old}]
     return (f"這篇以前表態過(最近一次當時連著 {'、'.join(x[:-3] for x in old) or '(清單壞了)'}),"
@@ -35573,9 +36183,11 @@ def _drift_old_reason(f, acks, alive=None):
     return None
 
 
-def _drift_ack_args_err(kind, reason, names=None):
+def _drift_ack_args_err(kind, reason, names=None, tracked_in=None):
     if kind not in _DRIFT_KINDS:
         return f"--kind 只能是 {'/'.join(_DRIFT_KINDS)}"
+    if tracked_in is not None and kind not in _DRIFT_EXPIRING_KINDS:
+        return f"--tracked-in 只給 --kind {'/'.join(_DRIFT_EXPIRING_KINDS)} 用"
     nerr = _drift_ack_names_err(kind, names)
     if nerr:
         return nerr
@@ -35630,12 +36242,14 @@ def _drift_ack_line_err(rel, text, lines, line, kind):
     return None
 
 
-def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
+def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None, tracked_in=None):
     """lumos drift ack <節點> <行號> --kind … --reason "…":表態「這行照留」。
     c2、c3 先確認那一行當下真的是這一種發現,記下當時連著的已收尾計劃(related);每筆都記遞增序號 seq(存量漂移改法 [S8])。
-    m1 記名稱清單 names(排序去重);不驗那一行現在真的是 m1(判定要推送範圍,ack 只有一棵樹)。"""
+    m1 記名稱清單 names(排序去重);不驗那一行現在真的是 m1(判定要推送範圍,ack 只有一棵樹)。
+    probe、retire 帶 tracked_in 記綁的那篇(要開著的 Issue 或計劃、不能是同一篇),不帶記 until=今天+30 天
+    (Projects/照留表態要有期限或去處_計劃〈做法〉3)。"""
     import datetime, secrets
-    err = _drift_ack_args_err(kind, reason, names)
+    err = _drift_ack_args_err(kind, reason, names, tracked_in)
     if err:
         print(f"擋下:{err}", file=sys.stderr)
         return 2
@@ -35655,6 +36269,10 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
            "reason": reason.strip(), "date": datetime.date.today().isoformat(), "heading": head, "line": line}
     if kind == "m1":
         rec["names"] = sorted(set(names))
+    route, err = _drift_ack_route(env, rel, kind, tracked_in, rec, vault_rel)
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
+        return 2
     if kind in _DRIFT_BOUND_KINDS:
         # 鎖外新建圖譜物件重判(縮短占鎖時間;過期已不再自動接手)
         f, err = _drift_current_finding(Env(env.vault), rel, line, kind)
@@ -35665,7 +36283,8 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
     if dry_run:     # drift fix --kind c2 --keep --dry-run:判定做完、不拿鎖不寫(代碼審 r1 六席同報:原本照樣寫表態)
         print(f"預覽(沒寫):會記一筆表態——{_esc_clean(rel, 200)} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]}),"
               f"理由:{_esc_clean(reason.strip(), 200)}"
-              + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else ""))
+              + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else "")
+              + _esc_clean(route, 300))
         return 0
     # 表態檔跟筆記庫其他寫入者排同一把鎖(代碼審 r1 併發席;跟治理帳其他寫入者沒共用鎖的整體問題在 Issue 那篇);
     # 序號在鎖內取現有最大加 1
@@ -35676,9 +36295,33 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
         return rc
     _gate_event_or_warn(root, "drift-check", "acked", f"{rel}:{line} {kind}:{reason.strip()[:80]}")
     print(f"✓ 表態記下了({token}):{_esc_clean(rel, 200)} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]})"
-          + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else ""))
+          + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else "")
+          + _esc_clean(route, 300))
     print(f"推送前的檢查只認提交進去的表態檔:\n    git add {_DRIFT_ACKS} && git commit")
     return 0
+
+
+def _drift_ack_route(env, rel, kind, tracked_in, rec, vault_rel):
+    """probe/retire 照留的去處:帶 tracked_in 驗那篇(找得到、不是同一篇、開著的 Issue 或計劃)後記 tracked_in,
+    不帶記 until=今天+30 天;其他種類不動 → (成功訊息的尾巴, 擋下原因或 None)。照留表態要有期限或去處_計劃〈做法〉3。"""
+    import datetime as _dt
+    if kind not in _DRIFT_EXPIRING_KINDS:
+        return "", None
+    if tracked_in is None:      # 期限從表態日算(同一筆紀錄只取一次日期)
+        rec["until"] = (_dt.date.fromisoformat(rec["date"]) + _dt.timedelta(days=_DRIFT_ACK_DAYS)).isoformat()
+        return (f";期限到 {rec['until']},過了 drift scan 與 doctor 會重新列(要排進某篇就改用 --tracked-in;"
+                "這次新寫就已成立的,推送只認綁了去處的)"), None
+    trel = env.find(tracked_in)
+    if trel is None:
+        return "", f"--tracked-in 找不到 {_esc_clean(tracked_in, 200)} 這篇"
+    if nfc(trel) == nfc(rel):
+        return "", "--tracked-in 不能綁那一行所在的同一篇——要綁真的排進這件事的 Issue 或計劃"
+    typ, st = _drift_note_state(env, vault_rel)(f"{vault_rel}/{nfc(trel)}") or ("", "")
+    if not _drift_route_open(typ, st):
+        return "", (f"--tracked-in 要指一篇還開著的 Issue(open/doing)或計劃(todo/doing);{_esc_clean(trel[:-3], 200)} "
+                    f"是 {typ or '沒有類型'}/{st or '沒有狀態'}")
+    rec["tracked_in"] = f"{vault_rel}/{nfc(trel)}"
+    return f";綁 {trel[:-3]},那篇收尾照留就失效", None
 
 
 def _drift_current_finding(env2, rel, line, kind):
@@ -35811,11 +36454,13 @@ def _drift_fix_hint(kind, path, line, names=None):
         return [base + ' --settled "<結論>"']
     if kind == "probe":
         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
-                f'lumos drift ack {node} {line} --kind probe --reason "<為什麼照留>"']
+                f'lumos drift ack {node} {line} --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
     if kind == "retire":
         return [f"撤除條件成立了:這條限制該撤——在 {node} 第 {line} 行加 [status:superseded] 並寫 [被取代:…]"
                 "(改看哪裡;限制自然消失就寫 無 <理由>),標了作廢的行下次推送不再抽;照留就 "
-                f'lumos drift ack {node} {line} --kind retire --reason "<為什麼照留>"']
+                f'lumos drift ack {node} {line} --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
     return [base]
 
 
@@ -35918,7 +36563,7 @@ def _drift_fix_args_err(kind, o):
     """--kind 與參數的組合合不合 → 錯誤或 None(存量漂移改法 第 1 節的組合表)。"""
     if kind == "probe":
         return ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
-                "照留就 lumos drift ack <節點> <行號> --kind probe --reason \"<為什麼照留>\"")
+                "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\"")
     if kind not in _DRIFT_FIX_KINDS:
         return f"--kind 只能是 {'/'.join(_DRIFT_FIX_KINDS)}"
     extra = {k for k in _DRIFT_FIX_OPTS if o.get(k) not in (None, False)} - _DRIFT_FIX_ALLOWED[kind]
@@ -36820,7 +37465,7 @@ def _drift_retire_print(mode, must, unknown, acks):
     _drift_print_findings(must, sys.stderr, acks)
     _drift_print_hints(must, sys.stderr, "改法(每一筆一條指令):")
     print("不改就留著並表態(--kind 照那一筆列的種類):", file=sys.stderr)     # 同 _drift_report_must 的固定段(r1 架構席)
-    print('    lumos drift ack <節點> <行號> --kind retire --reason "<為什麼照留>"', file=sys.stderr)
+    print('    lumos drift ack <節點> <行號> --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"', file=sys.stderr)
     if mode == "block":
         print("  要整個專案先只提醒,是把 .lumos/config.json 的 drift_check.retire 設成 warn(改 drift_check.gate 會連 c1 到 c5"
               "與回頭條件一起關)", file=sys.stderr)
@@ -36869,7 +37514,8 @@ def _drift_report_must(root, mode, must, unknown, acks, alive=None):
         # 一種一行(代碼審 r2 正確性席、圖譜一致席、外家席:原本兩種都有時印成 --kind c1|probe,照貼 shell 會當成管線)
         print("不改就留著並表態(--kind 照那一筆列的種類):", file=sys.stderr)
         for k in sorted(kinds):
-            print(f"    lumos drift ack <節點> <行號> --kind {k} --reason \"<為什麼照留>\"", file=sys.stderr)
+            print(f"    lumos drift ack <節點> <行號> --kind {k}"
+                  + (" --tracked-in <排進的那篇 Issue 或計劃>" if k in _DRIFT_EXPIRING_KINDS else "") + " --reason \"<為什麼照留>\"", file=sys.stderr)
     note = f"要處理 {len(must)} 筆" + (f",判不了:{';'.join(unknown)}" if unknown else "")
     if mode == "block":
         _gate_event_or_warn(root, "drift-check", "blocked", note, hard=True,
@@ -37837,7 +38483,11 @@ def cmd_drift_scan(env, at=None, as_json=False, budget=None):
     # 數量標記(Projects/數量標記檢查_計劃):同一棵樹、同一個總預算,排在寫下時就成立之後(它只看回頭條件與撤除條件)
     cfound, cprobs = _drift_count_scan(tenv, ptree, deadline)
     pfound, probs = pfound + cfound, probs + cprobs
-    left, done = _drift_split_acked(_drift_state_findings(tenv) + pfound, _drift_load_acks(root, sha), vault_rel)
+    import datetime as _dt
+    # probe/retire 的照留在這裡才判期限與綁的那篇開不開(照留表態要有期限或去處_計劃〈做法〉6;推送檢查不判)
+    left, done = _drift_split_acked(_drift_state_findings(tenv) + pfound, _drift_load_acks(root, sha), vault_rel,
+                                    as_of=_dt.datetime.now(_dt.timezone.utc).astimezone().date(),   # 本機日期
+                                    note_state=_drift_note_state(tenv, vault_rel))
     # 解不開的筆記列成「判不了」(代碼審 r2 外家席:原本修復清單會靜默漏掉它們)。★不寫治理帳★(代碼審 r3 併發席、
     # 正確性席:讀指令不寫帳是既有決定 Systems/lumos-cli-read d1,計劃 [S2] 原本要記 degraded,改跟決定一致)
     bad = sorted(r for r, n in tenv.notes.items() if _note_unreadable(n))
@@ -37922,6 +38572,11 @@ def _drift_doctor_lines(env):
         # 接在第一行、不另起一行:Z 段也受軟段 3 條上限,另起一行在 c1 到 c5 多時會被收掉(回頭條件寫法補齊〈做法〉1.3)
         ex = ";".join(f"{_esc_clean(p[:-3], 80)}:{no}" for p, no in sorted(mis)[:3])
         parts.append(f"寫在句中的 REVISIT {len(mis)} 行(例:{ex})——搬成獨立一行,要結案就在那一行加 [closed:日期 理由]")
+    dead = _drift_dead_ack_rows(env, root, vault_rel)
+    if dead:
+        ex = ";".join(f"{_esc_clean(p[:-3], 80)}({_esc_clean(w, 60)})" for p, w in dead[:3])
+        parts.append(f"回頭條件與撤除條件的照留已失效 {len(dead)} 筆(例:{ex})——跑 lumos drift scan 看;還沒做就重新照留並用 "
+                     "--tracked-in 綁排進的那篇")
     if cnt:
         n_cbad = sum(1 for pr in cnt if pr["errs"])
         parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
@@ -37934,6 +38589,31 @@ def _drift_doctor_lines(env):
             ex = ";".join(f"{f['path'][:-3]}:{f['line']}" for f in rows[:3])
             out.append(f"[{k}] {_DRIFT_KIND_NAMES[k]} {len(rows)} 筆(例:{ex})" + (f";另 {nd} 筆已表態" if nd else "")
                        + ";改法例:" + _drift_fix_hint(k, rows[0]["path"], rows[0]["line"])[0])
+    return out
+
+
+def _drift_dead_ack_rows(env, root, vault_rel):
+    """doctor 用:probe/retire 照留裡已失效、而且那一行原文還在那篇的 → [(圖譜內路徑, 失效原因)]。不評估條件、不跑 git;
+    同一個鍵有任何一筆還算數就不算(同 drift scan)。照留表態要有期限或去處_計劃〈做法〉8。"""
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()   # 本機日期
+    state, pre = _drift_note_state(env, vault_rel), vault_rel.rstrip("/") + "/"
+    groups = {}
+    for a in _drift_load_acks(root):
+        if a["kind"] in _DRIFT_EXPIRING_KINDS:
+            groups.setdefault(_drift_ack_key(a["path"], a.get("text", ""), a["kind"]), []).append(a)
+    out = []
+    for (path, text, _k), rows in sorted(groups.items()):
+        rel = path[len(pre):] if path.startswith(pre) else None
+        if rel is None or rel not in env.notes or not text:
+            continue
+        body = env_text(env, rel) or ""
+        # 跟 _drift_ack_text 同一個口徑:retire 記摘要條目接回續行的整條,其他種類記實體行(代碼審 r1 正確性席 F2)
+        if text not in {ln.strip() for ln in body.split("\n")} | set(_ns_summary_logical(body).values()):
+            continue
+        why = [_drift_ack_live(a, today, state) for a in rows]
+        if all(why):
+            out.append((rel, why[-1]))
     return out
 
 
@@ -42816,6 +43496,33 @@ def _push_range_start(repo_root, old, tip, remote, pushed_ref):
     return _push_pick_base(repo_root, bases, old_sha, names, "新分支首推" if zero else "遠端舊值在本機找不到")
 
 
+def cmd_push_range(repo, diff_range, push_remote, pushed_ref):
+    """lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>:印 _push_range_start 算出的範圍一行,
+    給推送前掛鉤在新分支首推時用(Projects/新分支首推會擋的閘改用真起點_計劃)。頂端已在主線 → `頂端..頂端`;判不了或起點是空樹 →
+    這個 repo 自己的空樹(SHA-256 的 repo 也對)`..頂端`(寧可多擋);其他 `起點..頂端`。說明印 stderr。唯讀、不寫治理帳。
+    參數錯、少帶推送參數(值可以是空字串)、不在 git 專案 → rc2。"""
+    if push_remote is None or pushed_ref is None:
+        print("擋下:--push-remote 與 --pushed-ref 都要給(值可以是空字串)", file=sys.stderr)
+        return 2
+    root = _note_audit_root(repo)
+    if root is None:
+        print("擋下:這裡不是 git 專案", file=sys.stderr)
+        return 2
+    rg = _lens_range_ok(diff_range or "")
+    tip = _lens_full_sha(root, rg[1]) if rg else None
+    if tip is None:
+        print("擋下:--diff 要寫成 <遠端舊值>..<頂端>,頂端要是這個 repo 裡的提交", file=sys.stderr)
+        return 2
+    base, why = _push_range_start(root, rg[0], tip, push_remote, pushed_ref)
+    if base is None:
+        base = tip
+    elif base == _PUSH_START_UNKNOWN or base == _EMPTY_TREE_SHA:
+        base = _drift_empty_tree(root)
+    print(f"起點——{why}", file=sys.stderr)
+    print(f"{base}..{tip}")
+    return 0
+
+
 def _push_no_mainline(repo_root, why, old_sha, zero, tip):
     """找不到可用的主線:舊值找得到用舊值;全 0 從空樹算;舊值找不到退到頂端的第一個父提交(沒有父提交從空樹)。"""
     if old_sha:
@@ -47163,7 +47870,9 @@ HELP_WHEN = {
     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+    "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
     "ci-status": "只看上次 CI 結果,不打網路。",
+    "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
     "build": "挖掘檔案↔測試的關係,存成地圖。",
     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
@@ -47200,7 +47909,7 @@ HELP_WHEN = {
     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出);同一次也跑舊句檢查 m1:"
                    "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫是 warn 只提醒,block 才擋)。",
     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
-    "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出。",
+    "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
@@ -47937,6 +48646,17 @@ def main():
     cw.add_argument("--sha", dest="cw_sha", default=None)
     cw.add_argument("--branch", dest="cw_branch", default=None)
     cw.add_argument("--json", dest="cw_json", action="store_true")
+    evp = sub.add_parser("events", help="[事件帳] 讀 Claude 會談的事件帳(lumos-ledger 外掛寫的):列最近會談或印一場")
+    evp.add_argument("--session", dest="ev_session", default=None)
+    evp.add_argument("--repo", dest="ev_repo", default=None)
+    evp.add_argument("--json", dest="ev_json", action="store_true")
+    evp.add_argument("--prune", dest="ev_prune", action="store_true", help="刪舊會談資料夾(會刪檔)")
+    evp.add_argument("--days", dest="ev_days", default="30")
+    prg = sub.add_parser("push-range", help="推送前掛鉤用:印這次推送真正的新改動範圍(跟主線的分岔點..頂端)")
+    prg.add_argument("--diff", dest="prg_diff", required=True, metavar="舊值..頂端")
+    prg.add_argument("--push-remote", dest="prg_remote", default=None, metavar="遠端名")
+    prg.add_argument("--pushed-ref", dest="prg_ref", default=None, metavar="遠端ref")
+    prg.add_argument("--repo", dest="prg_repo", default=None)
     cs = sub.add_parser("ci-status", help="[CI回流閉環] 唯讀查最後一次 CI 結果(不打網路)")
     cs.add_argument("--repo-dir", dest="cs_repo", default=None)
     cs.add_argument("--json", dest="cs_json", action="store_true")
@@ -48123,6 +48843,8 @@ def main():
     dra.add_argument("dr_line", metavar="行號", type=int)
     dra.add_argument("--kind", dest="dr_kind", required=True, choices=_DRIFT_KINDS)
     dra.add_argument("--reason", dest="dr_reason", required=True)
+    dra.add_argument("--tracked-in", dest="dr_tracked", default=None, metavar="節點",
+                     help="--kind probe/retire 用:這件事排進哪一篇開著的 Issue 或計劃;那篇收尾照留就失效。不帶就 30 天後失效")
     dra.add_argument("--name", dest="dr_names", action="append", default=None, metavar="名稱",
                      help="--kind m1 用(可重複):這一行照留的是哪幾個消失的名稱;一律寫成 --name=<名稱>(名稱以 -- 開頭時才不會被當成選項)")
     drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c6、count;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
@@ -48335,6 +49057,9 @@ def main():
         return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
     if args.cmd == "python-path":
         return cmd_python_path()
+    if args.cmd == "events":
+        return cmd_events(repo=args.ev_repo, session=args.ev_session, as_json=args.ev_json,
+                          prune=args.ev_prune, days=args.ev_days)
     if args.cmd == "enforcement":
         return cmd_enforcement(repo=args.enf_repo, as_json=args.enf_json)
     if args.cmd == "lint-watch":
@@ -48376,6 +49101,9 @@ def main():
             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
                                                push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref)
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+    if args.cmd == "push-range":
+        return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
+                              pushed_ref=args.prg_ref)
     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
         if args.drcmd == "check":
             return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
@@ -48666,7 +49394,8 @@ def main():
         if args.drcmd == "scan":
             return cmd_drift_scan(env, at=args.dr_at, as_json=args.dr_json, budget=args.dr_budget)
         if args.drcmd == "ack":
-            return cmd_drift_ack(env, args.dr_node, args.dr_line, args.dr_kind, args.dr_reason, names=args.dr_names)
+            return cmd_drift_ack(env, args.dr_node, args.dr_line, args.dr_kind, args.dr_reason, names=args.dr_names,
+                                 tracked_in=args.dr_tracked)
         if args.drcmd == "fix":
             return cmd_drift_fix(env, args.dr_node, args.dr_line, args.dr_kind,
                                  {"dry_run": args.dr_dry, "date": args.dr_date, "close": args.dr_close,

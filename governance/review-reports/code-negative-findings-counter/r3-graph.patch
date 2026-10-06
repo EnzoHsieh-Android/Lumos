@@ -1,0 +1,300 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/負數發現計數在追加前拒收_計劃.md b/docs/lumos-toolchain-knowledge/Projects/負數發現計數在追加前拒收_計劃.md
+new file mode 100644
+index 00000000..46fb8946
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/負數發現計數在追加前拒收_計劃.md
+@@ -0,0 +1,65 @@
++---
++type: project
++status: doing
++created: 2026-10-06
++updated: 2026-10-06
++tags:
++  - type/project
++  - status/doing
++  - scope/loop-engineering
++lands_in:
++  - Systems/design-loop
++---
++# 負數發現計數在追加前拒收_計劃
++
++
++## 問題與最小解
++
++把發現數量填成負數，記帳入口仍回成功；兩席零發現報告的對照中，數量0可過處置閘，數量-1則先寫進不可撤回的追加帳、再被閘當成「有發現但無處置帳」拒絕。出處為negative-findings-counter卷證的實際CLI、兩種輸入及完整stdout/ledger。本案解的是輸入錯誤造成的重記，不能拿它證明修復回歸率或真實審查輪數已降低。
++
++最小修復沿用cmd_canary對tokens、wallclock_min、scope_lines的非負檢查形狀，只在findings顯式給負數時、既有欄位分支內且任何報告驗證與canary追加之前回rc2。保留省略、0與正整數；不把全輪findings-set長度等同單席findings，不保留none為特殊ID，不改舊帳讀側、不改輪數上限、不解Windows。
++
++PRIOR-ART: Python官方argparse文件的type章節區分型別轉換與後續驗證；int能轉負數，不等同數量有效。官方error方法對非法參數回2。既有cmd_canary成本欄已用下游非負檢查，借相同形狀、不增依賴或另造解析器。來源 https://docs.python.org/3/library/argparse.html#type 與 https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser.error ，2026-10-06實讀。
++RETIRE-IF: 既有共用數量驗證器能覆蓋cmd_canary所有CLI與直接入口、在追加前拒收負數並保持省略/0/正數控制時，刪本地重複分支、由同一組測試守共用驗證器。
++REVISIT:2026-10-20 在canary寫入及本案卷證入口核對十份實際使用收據，區分「輸入錯誤拒收」與「修復造成的新缺陷」，不以合成案例冒稱審查輪數改善。
++
++## 驗收
++
++- [S1] 當發現數量為負數，記帳器應回rc2、指出--findings與負值，不追加成功canary帳列、不印成功訊息；已有帳逐位元不變、未有帳不建立帳本，普通及最佳化皆成立；即使報告格式也錯，應先診斷負數。 [test:t_canary_negative_findings_rejected]
++- [S2] 當發現數量省略或為0及正整數，記帳器應保持原成功行為及欄位省略/值，不新增集合數量等式；有效零發現兩席應仍通過處置閘。 [test:t_canary_negative_findings_rejected] [test:t_canary_findings] [test:t_canary_carrier_quote_positive_controls]
++- [S3] 當載體證據不完整或驗後換檔，記帳器應保持前案的提前拒收（PR20與main完整CI已綠）；正規零發現輪與合法引句控制不受數量檢查影響。 [test:t_canary_carrier_zero_quote_rejected] [test:t_canary_carrier_invalid_report_encoding] [test:t_canary_carrier_evidence_changes_before_hash]
++
++## 最小實驗與紅燈
++
++未改生產碼前，實际CLI合法0兩席record都rc0、gate rc0；負數-1兩席record仍rc0、gate rc1，hash同份材料且合法對照可過，非其他閘代打。正式新測試普通及最佳化首版共14通過/16失敗/0略過；擴充首筆負數不建帳控制後，另留正式紅燈收據：合法控制全部通過，負數拒收與帳本不變都翻紅。原紅、來源sha及命令保存，後續綠燈不得覆蓋原收據。
++
++## 回退
++
++只回退本案負數入口檢查，保留主線既有引句/編碼/換檔防線及全部原帳；退回後負數重記風險恢復，需重新跑同一組紅綠與合法控制，不刪歷史資料、不修改已追加的canary列。實作前紀錄：當時生產入口尚未動，先過規格閘及必要設計審。本案現已實作三行負數拒收，相關472條與條款3/相依4均綠；完整分片、代碼終審及本案CI另待實際收據。
++
++
++## 實務隱患
++
++已排除:金流:僅本機審查數量欄位，不計算金額或發送款項。
++已排除:對外送出:只驗參數並追加既有本機帳，本案拒收不發網路請求。
++已排除:不可逆:不改帳格式或既有列，拒收不追加；回退程式不需收回已送資料，既有錯帳仍不清除。
++守衛面:本案正是追加前數值邊界，不能排除；六席正式設計審已PASS後才實作，現於完整測試與代碼終審階段。
++併發:拒收分支只讀已解析整數，不寫共享狀態，不新增鎖；合法寫入仍沿用既有追加流程。
++效能與資源:常數比較、一次stderr診斷，不新增檔案開啟、背景工作、依賴或第二套解析器。
++回退:保留前案的UTF8、引句與驗後換檔防線；本案撤回只恢復負數舊風險，不能刪帳洗掉它。
++
++擴充首筆負數不建帳後，正式紅燈14通過/20失敗/0略過；本機來源生產84d013c為前案PR20版本，前案PR及main CI已通過。新案推送以交付後主線為基底並重驗控制，不把候選版本當已部署主線。
++
++前掃PF1量到S2少綁真正驗兩席空輪的測試，語意HIT；恢復引用既有的新測試方法，沒有改核心裁定或測試。該方法整體紅包含負數檢查失敗，合法空輪控制本身已綠，不把條款紅誤稱合法路徑紅。前案PR20完整SHA 1a042f1efffb4999c6ad3fba6e3665766518fc95實際CI green/success，已合併main 8292a1d8f7aa15a4b05a78f86ae28d85be7db579；main CI也已實際查證green/success，來源釘定驗證另篇保存。
++
++
++## 審計修正紀錄
++
++r1(2026-10-06,六席):1條/blocking 0；resources-F1折入檢查先後次序及canary帳範圍，五席乾淨，不改數量域核心裁定。
++卷證：governance/review-reports/negative-findings-counter/；保留全席原報及機械收貨。
++
++resources-F1觀察HIT：現行負數配格式不正規化報告，會先出report-not-normalized、寫治理blocked事件，且沒有成功canary追加。其「治理拒收事件也不得寫」的強判準不採：既有程式明定被擋要留痕，拒收事件不是成功處置帳。折入的是把負數分支明定在報告驗證之前，給負數診斷及canary不追加的真正測試；治理拒收telemetry保持既有約定，沒有全治理帳零副作用的新規則。
++
++截至本輪收齊後，前案PR20及main8292a1的完整CI都由lumos ci-wait查到green/success，交付三版來源同源，見 [[Verification/2026-10-06_載體拒收修復主線CI]]。凍結r1-snapshot記的是派工時mainCI待驗狀態，原樣保存；後續不把已完成驗證當成仍待決。
++
++折入phase控制後、未改生產CLI的正式紅燈16通過/22失敗/0略過（38條）；新增的雙錯輸入，canary不追加控制已綠、負數優先診斷仍紅。三份歷史紅14/16、14/20、16/22皆保留，不能視為同一測試版本。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/載體零引句在記帳前拒收_計劃.md b/docs/lumos-toolchain-knowledge/Projects/載體零引句在記帳前拒收_計劃.md
+index a79ac665..23b674bf 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/載體零引句在記帳前拒收_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/載體零引句在記帳前拒收_計劃.md
+@@ -1,18 +1,19 @@
+ ---
+ type: project
+-status: doing
++status: done
+ created: 2026-10-06
+ updated: 2026-10-06
++self_audit: gpt-5.6-sol/2026-10-06
+ tags:
+   - type/project
+-  - status/doing
++  - status/done
+   - scope/loop-engineering
+   - risk/守衛面
+ lands_in:
+   - Systems/canary-audit
+   - Systems/design-loop
+ ---
+ # 載體零引句在記帳前拒收_計劃
+ 
+ ## 問題與範圍
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/canary-audit.md b/docs/lumos-toolchain-knowledge/Systems/canary-audit.md
+index 1c35c610..a1963b10 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/canary-audit.md
++++ b/docs/lumos-toolchain-knowledge/Systems/canary-audit.md
+@@ -18,20 +18,21 @@ verified_by:
+   - "[[Verification/2026-08-04_design-loop處置閘終審硬化]]"
+   - "[[Verification/2026-08-06_驗證層自證三件S1S3落地]]"
+   - "[[Verification/2026-08-08_canary型別描述報表]]"
+   - "[[Verification/2026-08-08_驗證層去模型化落地]]"
+   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-26_建了沒人跑退場批落地]]"
+   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+   - "[[Verification/2026-09-05_skill-doctor成本基線]]"
+   - "[[Verification/2026-10-06_載體記帳前拒收驗證]]"
++  - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
+ summary: |-
+   KEY:★協議已停用(2026-08-14,Enzo 裁,d5)★植入/判定/抽樣分權/漏抓懲罰全停——caught/missed 譯不出「認真」且無下游消費=空轉;煙霧偵測角色被 quote-check 引句錨定機械蓋掉;record 加 kind=none 當純處置帳載體(五處閘謂詞納 none,t_loop_panel_none_kind 釘住);工具封存不拆、歷史帳唯讀;重啟條件=能分「真醒/演醒」的探針出現;D 案(型別輪替攢 15 筆)隨停用作廢(其前提跨期統計已被 d4 否決)
+   KEY:[2026-08-05 D 前置,Enzo 裁]record 加 --canary-type/--probe 選配欄(不給不寫鍵)+canary-stats 型別×探針×caught 表——植入型別與探針結果★結構化★取代散文 note(散文帳不可重算,攢十輪也是考古材料);★D 案(型別輪替表數據驅動)開工條件=帶型別記錄攢滿 15 筆★(帳面可數,同 A 案防浮動條款款式);skill 派工/記帳模板同步帶兩欄 [test:t_canary_type_probe_fields]
+   KEY:⛔[2026-08-26 效度自檢兩件退場(建了沒人跑批次裁定)]校準器/SNR 腳本已刪——輸入源(caught/missed 植入)隨 canary 協議 08-14 停用永久斷供,帳分別 1 筆/0 筆;calibration-log.jsonl 歷史帳保留;復活=植入協議翻案時從 git 史撿回⛔
+   KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答案印考卷背面,同輪 slot 仍不重複)[test:t_s2_loop_next_random_type_draw] ②canary-stats 型別來源如實分層 attr/note/unknown+覆蓋率即時計算(D 案 15 筆條件只認 attr)[test:t_s2_canary_stats_type_coverage] ③前瞻層 SNR=governance/eval/canary_snr.py(跨席分辨力÷同席重跑雜訊;重跑<3/分母=0→不裁決非高訊號;swap-candidate 恆人裁)[test-gone:t_s2_snr_synthetic]——★canary-log 非 SNR 合法輸入(無同題重跑配對鍵,母體錯置)★,真 SNR 接 calibration 固定題矩陣
+   KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29] [kill:recipes]
+   KEY:[2026-08-04 d4,design-loop 限定]canary 在 design-loop ★降級為觀測★(不再一票否決:missed 不作廢該席 findings、不擋收斂;disposal 閘不消費 caught/missed)——判定強制留痕(--report/--snapshot,定錨後 rc2 強制)、進跨輪累積帳;離線校準歸 governance/eval/canary_calibration.py(fault seeding 文獻本職)。★code-loop 排除已於 2026-08-08 撤銷(Enzo 具名推翻防浮動條款,見 decisions[] 末條+[[Projects/驗證層去模型化_計劃]])★。脈絡=[[Projects/design-loop重設計]]+[[Projects/canary注意力檢查失效]]
+   KEY:★INVARIANT★ second(第二判者)紀錄純 telemetry,永不影響 loop status 的 gate 輸出與 rc [test:t_canary_second] [audit:sonnet/2026-07-29]
+   KEY:[2026-07-10]折入錨點污染型事故:編排者用工作副本(含canary)的字串當折入anchor→對真檔靜默落空(replace無assert)——防範:anchor一律取真檔原文+assert;fold-check未來方向補「紀錄宣稱vs正文存在」核對
+   KEY:[2026-07-10]生成硬化三條進 skill——載重錨定/haiku 難度探針(FLAWS)/事故反轉(IBIR);missed-rate 升一級指標(lumos gov 分帳);見[[Projects/canary生成硬化_計劃]]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/design-loop.md b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+index 5a81c85e..70b3da69 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/design-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+@@ -27,20 +27,22 @@ verified_by:
+   - "[[Verification/2026-08-25_迴圈摩擦兩修落地]]"
+   - "[[Verification/2026-08-26_新舊制同料對照_v0]]"
+   - "[[Verification/2026-08-30_intake守衛T1-T4落地]]"
+   - "[[Verification/2026-09-03_席間覆蓋率離線量測]]"
+   - "[[Verification/2026-09-03_派工攔截點實測]]"
+   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+   - "[[Verification/2026-09-11_skills健檢]]"
+   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
+   - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
+   - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
++  - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
++  - "[[Verification/2026-10-06_負數發現計數拒收驗證]]"
+ summary: |-
+   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
+   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
+   KEY:[代碼審 r2 折入 2026-09-16]★收尾圍欄改嚴,改得比題目寬★——題目是「不得帶語言標記」,第一版寫成「後面不得有任何東西」,結果★打錯一個字、多敲一鍵,後面到檔尾所有內容(含合約行)就無聲隱形★,正是這支函式自己警告過的最危險模式換個門長出來。改成兩段式:先照 CommonMark 讀,規格讀出「有圍欄一直沒關到檔尾」才整份退回寬鬆讀法。★取捨要講清楚★:同一份文件同時有巢狀範例和沒關到的圍欄時會退回寬鬆、巢狀那題擋不住——那等於回到改動前的行為,不算退步,而且真有沒關到的圍欄本來就該先修那個。影響面重量:跟改動前比 537 篇仍只有 1 篇會變 [test:t_closing_fence_must_not_carry_a_language_tag]
+   KEY:[代碼審 r1 折入 2026-09-16]★收尾圍欄不准帶語言標記★——改用共用那支之後冒出反向誤判,根因在★共用那支自己★:判「這行關不關得掉圍欄」只看同字元、長度夠,沒看後面還有沒有東西,而 CommonMark 規定收尾圍欄不得帶標記。於是巢狀範例裡的 ```python / ~~~python 會把外層圍欄關掉,範例裡的樣板文字變成看得見。修在共用那支身上,★改嚴之前先量影響面★:對圖譜 537 篇逐篇比對「看得見哪些行」,只有 1 篇會變(一篇 markdown 範例裡包了 yaml 區塊),而且那篇改嚴才是對的 [test:t_closing_fence_must_not_carry_a_language_tag]
+   KEY:[前掃宣告行改走共用剝圍欄 2026-09-16]判斷 intake 檔有沒有那行前掃宣告時,原本自己寫了一個反引號圍欄的正則,★而專案裡那支「全檔唯一的圍欄判定」的說明白紙黑字寫著「所有人都必須走這裡」★(自己寫的正則假設圍欄一定成對、標記一定在第 0 欄)。實測兩種形狀兩邊答案相反:①外層四個反引號、內層三個反引號 ②波浪號圍欄——兩種都讓「把樣板原樣貼進圍欄裡」被算成真的跑過前掃,正是那支判定自己宣稱要防的「模板照抄即偽造」。★只影響觀測數字不擋任何閘★(處置閘印它、體檢滾動窗數它,兩邊都只觀測),但那個數字本來就是拿來看「前掃有沒有真的在跑」的。 [test:t_intake_declaration_uses_shared_fence_stripping]
+   KEY:[2026-09-09 審查有沒有用記帳]收貨線多一道機械閘:席報告沒正規化(檔首檔級 severity 行、每條 finding 恰一行獨立宣告)記帳 rc2 並在治理帳留 canary/blocked;`lumos report-normalize` 只搬格式(vault-free);載體必帶 --refuted-set(intake 整字驗、圍欄不算);問閘尾一行「席位報 N(機器數)→存活/重現不到→折/放行」觀測不進合取;單源 [[Projects/審查有沒有用記帳_計劃]]
+   KEY:[2026-09-17 Enzo 裁]架構對齊席每個分級都派(_TIER_ROSTER 六組合:design/code × light/standard/high):code/light 以前沒編制、skill 寫可跳,現在=只派架構對齊一席(算人數);design/light 多一席架構對齊(不算人數)。理由:小改動也不能脫離原有架構亂加 [test:t_tier_roster_table] [test:t_loop_next_roster]
+   KEY:[2026-09-17 風險低放行]處置閘第五步呼叫 _clause_check 時 door=None(=風險高語意:收 manual、要回退節);風險低的加嚴只在規格閘那一路(plan_risk=low);風險低計劃不會進處置閘(不派審),進來了也照風險高判——判定不會比規格閘鬆
+   KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 `[test:]`/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+@@ -208,10 +210,17 @@ aliases:
+ - 實作落點:`skills/lumos-design-loop/SKILL.md`(B);`scripts/lumos` `cmd_canary` + `cmd_loop_status`(A 原語)。
+ - 衍生:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`(自主迭代 loop 跨輪 headless 跑 design-loop)。
+ 
+ WHY:席位對帳先把派工單的資料形態與路徑編碼錯誤分開，避免 traceback 被誤當成審查內容越界；合法材料仍只觀測，脈絡寫回本節點既有收貨三道範圍，不擴張圖譜 read 原語責任 [出處:2026-10-06 seat-input-validation 設計審 r1、真CLI反例與原S1規格] [因:排除錯材料引起的錯誤診斷，保留既有觀測分工]
+ ## 同一入口的測試不一定同名（2026-10-06）
+ 
+ PITFALL: 改canary載體入口後，只跑名稱含canary的測試，會漏掉透過共用helper或讀側場景進入同一入口的fix_check、panel退場及disposal讀側測試；本案原子集222/2、首次未完成分片2與4、重啟分片7與11的原紅收據為出處。相關子集規劃需核對圖譜合約、共用helper及讀寫兩側；測試名稱不能當成覆蓋全部的證據。重現與防回歸入口：`t_fix_check_record_template`、`t_fix_check_recipe_rerun_note`、`t_disposal_gate_r1_panel_hardening`、`t_panel_probe_retired`；本次仍保留原有判準，沒有為了入口提早拒收而移除讀側舊帳防線。
+ REVISIT:2026-10-20 在載體入口後續十份真實修補收據，核對首審前選測試是否仍漏同族；若既有testmap穩定涵蓋全部案例，撤掉人工補列，不新造第二套測試映射。
+ 
+ WHY: 本案記帳入口及處置閘的現行說明落在本節點；停用的注意力探針仍留於 [[Systems/canary-audit]]，不因本次改善重啟協議。來源為本案推送home閘與canary-audit的既有停用決策；本篇管轄 `scripts/lumos` 的處置記帳讀寫。
++
++## 負數計數的追加前重驗（2026-10-06）
++
++PITFALL:數量參數以整數轉換不等於有效數量；前案固定來源的真實CLI把-1成功追加後，處置閘再判有發現卻無處置帳，合法0的同材兩席則通過。出處為 [[Projects/負數發現計數在追加前拒收_計劃]] 的最小對照卷證；歷史重現入口 `t_canary_negative_findings_rejected` 的34條版本（測試SHA2cefe1f7、red-source-bind-final收據）在未修CLI84d013c時14通過/20失敗，包含種子帳逐位元不變及首筆不建帳。設計順序折入後擴成38條（測試SHAcc6d8390、red-after-order-fold收據），同未修CLI為16通過/22失敗；兩份原紅各綁自身測試版本，不覆寫成同一數字。目前新CLI52c9c4d7的472條相關綠燈另見 [[Verification/2026-10-06_負數發現計數拒收驗證]]，完整分片與本案CI待實際結果，不宣稱真實審查輪數下降。
++REVISIT:2026-10-20 在canary寫入與本案卷證入口查十份真實收據，區分輸入錯誤與修復回歸；共用數量守衛若接管全部入口，撤掉局部分支。
++
++WHY:負數數量在報告驗證前拒收，沿用現有非負成本欄的stderr/rc2形狀，沒有另造解析器；出處 [[Projects/負數發現計數在追加前拒收_計劃]] 的六席首輪及resources-F1順序折入。成功canary帳不追加，治理拒收telemetry按原約定；實驗紅燈仍原樣留存，驗證結果另立紀錄，不把輸入錯誤當修補回歸。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index ad171dd0..4183adfe 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -43,20 +43,22 @@ verified_by:
+   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
+   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+   - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
+   - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
+   - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
+   - "[[Verification/2026-10-06_引用座標修復主線CI]]"
+   - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
+   - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
+   - "[[Verification/2026-10-06_載體記帳前拒收驗證]]"
++  - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
++  - "[[Verification/2026-10-06_負數發現計數拒收驗證]]"
+ about_code:
+   - scripts/test_lumos.py
+ aliases:
+   - 翻紅釘
+   - 現場成立前置斷言
+   - 斷言只問會不會擋不問為什麼
+   - 假紅不一定是真的
+ ---
+ # 測試假綠形態（「測試存在，但沒在驗它宣稱要驗的」）
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_負數發現計數拒收驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_負數發現計數拒收驗證.md
+new file mode 100644
+index 00000000..6381ff5b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_負數發現計數拒收驗證.md
+@@ -0,0 +1,25 @@
++---
++type: verification
++status: pass
++date: 2026-10-06
++valid_under: 只證固定CLI52c9c4d7/test cc6d8390的472條相關斷言（新38及前案85含在canary269）；完整測試、代碼終審及PR/main CI尚待本案實際驗證，不借用前案F的CI。
++revalidate_when: cmd_canary數量/報告/追加順序、引句與換檔或關聯測試變更時重驗；2026-10-20由canary入口與卷證查十份實際收據，區分輸入拒收與修補回歸。
++tags:
++  - type/verification
++  - status/pass
++  - scope/loop-engineering
++plan_refs:
++  - "[[Projects/負數發現計數在追加前拒收_計劃]]"
++system_refs:
++  - "[[Systems/design-loop]]"
++  - "[[Systems/測試假綠形態]]"
++---
++# 2026-10-06_負數發現計數拒收驗證
++
++
++原碼34條14/20；正式設計順序折入後38條16/22；新碼相關canary269/0，其中新38全部綠且前案85保持，fix_check174/0、讀側舊帳13/0、panel退場7/0、零發現處置9/0，共472/0/0。三份原紅14/16、14/20、16/22分開保存，不把它們說成同一測試版本；一輪六席設計審一條minor folded、鏡像clean，沒有新數量框架或讀側改動。
++
++首次設計處置閘已PASS但前掃宣告尾巴不符既有fullmatch，原警告及已釘SHA的intake都保留；另加唯一精確宣告與真實140.68秒前掃來源，第二次唯讀問閘確認✓，沒有重記任何席或重置迴圈。
++
++Windows排除，合成數量對照不證明實際審查輪數下降；本篇scope不包含原未修數量入口的完整CI。前案正式交付另見 [[Verification/2026-10-06_載體拒收修復主線CI]]。
++REVISIT:2026-10-20 在canary寫入及本案卷證核對十份真實收據，不把非法輸入與修補回歸混在一起量。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體拒收修復主線CI.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體拒收修復主線CI.md
+new file mode 100644
+index 00000000..f7640b8b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體拒收修復主線CI.md
+@@ -0,0 +1,32 @@
++---
++type: verification
++status: pass
++date: 2026-10-06
++valid_under: 只證正式功能9f2419c6、帳本1a042f1e、main8292a1d8及其同源CI；不包含下一項負數計數修復、不聲稱真實審查輪數下降。
++revalidate_when: cmd_canary載體、報告解碼、引句讀寫、來源bundle與凍結回放或CI流程變更時重驗；2026-10-20依本案入口查十份真實收據。
++self_audit: gpt-5.6-sol/2026-10-06
++tags:
++  - type/verification
++  - status/pass
++  - scope/loop-engineering
++plan_refs:
++  - "[[Projects/載體零引句在記帳前拒收_計劃]]"
++system_refs:
++  - "[[Systems/design-loop]]"
++  - "[[Systems/canary-audit]]"
++  - "[[Systems/測試假綠形態]]"
++---
++# 2026-10-06_載體拒收修復主線CI
++
++
++正式交付：PR20 https://github.com/EnzoHsieh-Android/Lumos/pull/20 ，2026-10-06合併main。功能9f2419c6bdcdedd0e6b7236b26d856fef8fbc975；留痕帳本1a042f1efffb4999c6ad3fba6e3665766518fc95；main8292a1d8f7aa15a4b05a78f86ae28d85be7db579。
++
++PR CI37417455011與main CI37418391389均由lumos ci-wait實際完整SHA查到green/success；不是rc0、timeout或沒有run的替代宣稱。main另有上游CI計劃文件更新，三個交付版本的CLI及測試逐位元同源，完整來源與執行連結見main-delivery-ci.json。
++
++四項新測試原碼35/50、新碼85/0；原固定完整10767/2紅保留，兩個舊夾具保留原斷言後精準20/0、完整受影響分片1282/0/0。整合主線三方法19/0，非本案生產變動。最終正式來源的PR與main完整CI已綠，不能反寫原歷史收據成零失敗。
++
++六席設計審第一輪三項折入；代碼審standard三輪：第一輪規格優先序假陽性依使用者AGENTS v1.0駁回，第二與第三輪零發現；沒另開第四輪或洗掉原報。最終推送閘全部rc0、合約59支綠、12錨點一致、無新增告警、680篇0issues及346條提醒。home與note-shape原紅已保留，歸屬移到現行節點、退場測試改test-gone；沒有繞閘或重啟已停用探針。
++
++乾淨複本匯入6份來源bundle，設計與代碼兩份凍結判定重播一致；分支fix/review-carrier-quote-preflight保留。Windows排除。此處只確認入口防錯與交付，不證明實際審查輪數下降。
++
++REVISIT:2026-10-20 在canary入口及本案卷證核對十份真實載體收據，量是否仍因證據錯誤整輪重記，分開輸入錯誤與修復回歸。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體記帳前拒收驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體記帳前拒收驗證.md
+index 7b610408..d662a797 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體記帳前拒收驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_載體記帳前拒收驗證.md
+@@ -1,16 +1,17 @@
+ ---
+ type: verification
+ status: pass
+ date: 2026-10-06
+-valid_under: 四項新增85條與LF/CRLF對照、三輪終審、受影響完整分片1282條通過；原完整10767/2與修正重驗分開留存。整合上游後的PR及main CI待真實完整SHA查證，不宣稱實際輪數降低。
++valid_under: 正式功能9f2419c6、帳本1a042f1e、main8292a1d8同源交付且PR/main完整CI綠；原10767/2及修正重驗分開保存，下一項負數計數不在此次驗證範圍。
+ revalidate_when: cmd_canary、quote_rows、載體留痕讀寫或凍結規律變更時重驗；2026-10-20核對實際收據，不以合成測試宣稱審查輪数降低。
++self_audit: gpt-5.6-sol/2026-10-06
+ tags:
+   - type/verification
+   - status/pass
+   - scope/loop-engineering
+ plan_refs:
+   - "[[Projects/載體零引句在記帳前拒收_計劃]]"
+ system_refs:
+   - "[[Systems/canary-audit]]"
+   - "[[Systems/測試假綠形態]]"
+ ---
+@@ -32,10 +33,12 @@ REVISIT:2026-10-20 核對十份實際載體審查收據，入口為canary寫入
+ 
+ 原固定版本全套收齊16分片：10767 pass/2 fail/0 skip，來源指紋保持；原紅是上述兩項舊夾具。隔離checkout正式harness精準重驗13/0與7/0，全部原檢查保留，新增壞帳的成功前提與指紋一致性，散文對照要求真rc0。受影響完整分片7與11正在重驗，其餘1970函式和全域AST不變，生產程式位元組相同；這是分開有來源的驗證，不能改寫原始完整結果為零失敗。
+ 
+ 第三輪兩個全新唯讀席均clean、零發現，處置閘PASS，到三輪上限後不另開輪。兩個完整分片實際重驗627/0與655/0，共1282/0/0；來源指紋在執行期間不變。原10767/2完整紅保留，不能改寫。整合主線PR18：只新增或替換三支鏡頭測試函式，與上游AST逐項相同；F生產碼及其他函式不變，兩份追加帳序皆保存。整合證據與後續重驗存於carrier-quote-preflight卷證，新的完整PR/main CI尚待查證。
+ 
+ 整合主線三支鏡頭方法正式重驗全部通過，收據保存於upstream-rechecks；測試範圍守衛、固定範圍arm/claim與既有修正控制均保留。三輪審材原版本與整合版本不同，upstream-integration-proof證明僅上游三函式變更、生產內容相同，不冒稱第三輪重新審過整合版本。
+ 
+ 推送前圖譜閘首跑home及note-shape各一紅：測試說明節點只管測試檔、閘的程式集合不包含測試；舊canary-audit綁定的SNR測試已於2026-08-26退場，測試檔有對應退場註記。前者把本案同族選測pitfall移到已管處置讀寫的design-loop，保留測試節點驗證反鏈；後者改test-gone標記，不捏造替代測試、不重啟探針。這些是圖譜歸屬與歷史標記訂正，未改生產碼或測試；首跑閘紅收據完整保存。
+ 
+ 推送閘合約59支全部通過（本次實跑208.8秒），12錨點一致、無新增告警，設計及代碼兩份凍結回放一致；乾淨複本成功匯入6份來源bundle並重算兩份判定。圖譜訂正後doctor為680篇、0 issues、346條提醒，提醒不是阻擋且本案不做全圖譜清帳。原home/note-shape紅保存；最終提交版本另跑推送閘，不拿歷史紅的總收據宣稱全綠。
++
++交付待驗已於2026-10-06關閉：PR20合併main8292a1d8且兩端完整CI green/success，來源版本及scope見 [[Verification/2026-10-06_載體拒收修復主線CI]]。前文是按驗證時序保留的舊階段，不能解讀成目前仍未終審或CI未完成；10/20真實使用回訪繼續有效，不因CI綠而宣稱輪數已下降。
