@@ -2671,7 +2671,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     if _zl:
         section("Z", "存量漂移(已經寫進去的句子,跟別處的狀態對不上了)")
         warn_soft(_zl, f"{len(_zl)} 項要看(只列出、不擋;某一行確定照留就表態)",
-                  advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"")
+                  advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"(回頭條件、撤除條件可加 --tracked-in <Issue 或計劃>)")
         print()
 
     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
@@ -32279,6 +32279,13 @@ _DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5", "c6", "count")
 # c6 也自己判:加決策、翻決策之後被連的那篇狀態沒變,不是 c6 發現,但那一句一樣要補已裁定括號
 _DRIFT_FIX_SELF_JUDGED = ("count", "c6")
 _DRIFT_BOUND_KINDS = ("c2", "c3", "c6")    # 表態要綁當時連著的已收尾筆記(related)與序號(seq)的種類
+# 照留要有期限或去處(Projects/照留表態要有期限或去處_計劃):回頭條件與 RULE 撤除條件成立後的照留,要嘛綁一篇還開著的
+# Issue 或計劃(tracked_in,那篇收尾就失效),要嘛記 30 天的期限(until)。期限與開不開只在 drift scan 與 doctor 算;
+# 推送檢查不看日期、也不看那篇開不開(同一個推送範圍任何時候重跑結果一樣),只對「這次新寫就已成立」的要求綁了去處
+_DRIFT_EXPIRING_KINDS = ("probe", "retire")
+_DRIFT_ACK_DAYS = 30
+# 舊表態(兩個欄位都沒有)的期限:合併進主線那天 + 30 天(Enzo 2026-10-06 裁「舊表態從上線日起算 30 天」)
+_DRIFT_ACK_LEGACY_UNTIL = "2026-11-05"
 _DRIFT_GOLIVE_MARK = "drift check"
 _DRIFT_GATE_VALUES = ("block", "warn", "off")
 # ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、歷史重放不亂擋、噪音 ≤5)考過,
@@ -32291,6 +32298,31 @@ _DRIFT_BUDGET_SEC = 60
 def _drift_str(n, key):
     v = n.fields.get(key, "") if n is not None else ""
     return v.strip() if isinstance(v, str) else ""
+
+
+def _drift_route_open(typ, status):
+    """照留綁的去處算不算還開著:Issue 看 _DRIFT_OPEN_ISSUE,計劃看狀態表扣掉收尾值(todo、doing);其他類型一律不算。
+    表態時與 drift scan、doctor 判活共用(Projects/照留表態要有期限或去處_計劃〈做法〉2)。"""
+    if typ == "issue":
+        return status in _DRIFT_OPEN_ISSUE
+    if typ == "project":
+        return status in _STATUS_ENUM["project"] and status not in _DRIFT_CLOSED
+    return False
+
+
+def _drift_note_state(env, vault_rel):
+    """drift scan、doctor 判照留綁的那篇開不開用:repo 相對路徑 → (type, status);不在圖譜資料夾、沒有那篇、讀不出回 None。
+    用呼叫端手上的圖譜物件,不另讀檔(參數名不叫 status_of:會蓋住同名的全域函式)。"""
+    pre = vault_rel.rstrip("/") + "/"
+
+    def _state(path):
+        if not isinstance(path, str) or not nfc(path).startswith(pre):
+            return None
+        n = env.notes.get(nfc(path)[len(pre):])
+        if n is None or _note_unreadable(n):
+            return None
+        return _drift_str(n, "type"), _drift_str(n, "status")
+    return _state
 
 
 def _drift_fm_end(lines):
@@ -33692,7 +33724,7 @@ def _drift_probe_check(root, base, tip, vault_rel, tenv, deadline=None, override
             unknown.append(f"{p}:{no} 的條件判不了(" + ("超過預算" if _out() else "讀不出或讀不準的程式檔或筆記"
                            + _drift_bad_note(_drift_row_unread(pr["conds"], (tenv, benv), (trees.get(tip), trees.get(base))))) + ")")
         elif verdict:
-            must.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [],
+            must.append({"kind": kind, "path": p, "line": no, "text": tx, "related": [], "born_now": old is False,
                          "why": verdict + _drift_gone_typo_hint(pr, old, _tree(tip))})
     return must, [], unknown
 
@@ -34391,29 +34423,31 @@ def _drift_ack_key(path, text, kind):
     return (nfc(str(path)), str(text).strip(), kind)
 
 
-def _drift_split_acked(findings, acks, vault_rel):
+def _drift_split_acked(findings, acks, vault_rel, as_of=None, note_state=None):
     """→ (沒表態的, 已表態的)。對得上=同一路徑、一字不差的原文、同一種類(改小標題不失效)。
     ★c2、c3 另外要綁當時的關係★(存量漂移改法 [S8]):只看記了 related 的表態,取 seq 最大的那幾筆(同號全算),
     全部都涵蓋現在的已收尾計劃清單才算已表態;沒記 related 的舊表態、seq 不是正整數的(手改壞了)都不算數
     (不然會永久豁免之後才收尾的計劃;壞序號原本被當成 0 號照樣生效,代碼審 r1 外家席)。
     沒涵蓋但以前表態過的,沒表態那一邊的發現多帶 prev_ack(最近一次當時連著哪幾篇、理由),印的時候講出來。
-    ★m1 另一條分支★(_drift_m1_split_acked;m1 不放進 _DRIFT_BOUND_KINDS):同路徑同原文所有 m1 表態的名稱取聯集。"""
+    ★m1 另一條分支★(_drift_m1_split_acked;m1 不放進 _DRIFT_BOUND_KINDS):同路徑同原文所有 m1 表態的名稱取聯集。
+    ★probe、retire 另一條分支★(_drift_expiring_acked;Projects/照留表態要有期限或去處_計劃):as_of/note_state 只有
+    drift scan 傳(判期限與綁的那篇開不開);推送檢查不傳,只對 born_now 要求綁了去處。"""
     if any(f["kind"] == "m1" for f in findings):
         l1, d1 = _drift_m1_split_acked([f for f in findings if f["kind"] == "m1"], acks, vault_rel)
-        l2, d2 = _drift_split_acked([f for f in findings if f["kind"] != "m1"], acks, vault_rel)
+        l2, d2 = _drift_split_acked([f for f in findings if f["kind"] != "m1"], acks, vault_rel, as_of, note_state)
         return l2 + l1, d2 + d1
-    keys, bound = set(), {}
-    for a in acks:
-        k = _drift_ack_key(a["path"], a.get("text", ""), a["kind"])
-        if a["kind"] in _DRIFT_BOUND_KINDS:
-            if "related" in a and _drift_seq_ok(a):
-                bound.setdefault(k, []).append(a)
-        else:
-            keys.add(k)
+    keys, bound, expiring = _drift_ack_buckets(acks)
     pre = vault_rel.rstrip("/") + "/"
     left, done = [], []
     for f in findings:
         k = _drift_ack_key(pre + f["path"], f["text"], f["kind"])
+        if f["kind"] in _DRIFT_EXPIRING_KINDS:
+            ok, pa = _drift_expiring_acked(f, expiring.get(k, []), as_of, note_state)
+            if ok:
+                done.append(f)
+            else:
+                left.append(dict(f, prev_ack=pa) if pa else f)
+            continue
         if f["kind"] not in _DRIFT_BOUND_KINDS:
             (done if k in keys else left).append(f)
             continue
@@ -34426,6 +34460,21 @@ def _drift_split_acked(findings, acks, vault_rel):
         else:
             left.append(f)
     return left, done
+
+
+def _drift_ack_buckets(acks):
+    """表態分三堆:一般種類的鍵集合、c2/c3/c6(記了 related 而且序號合法的)與 probe/retire 各自 {鍵: [表態]}。"""
+    keys, bound, expiring = set(), {}, {}
+    for a in acks:
+        k = _drift_ack_key(a["path"], a.get("text", ""), a["kind"])
+        if a["kind"] in _DRIFT_BOUND_KINDS:
+            if "related" in a and _drift_seq_ok(a):
+                bound.setdefault(k, []).append(a)
+        elif a["kind"] in _DRIFT_EXPIRING_KINDS:
+            expiring.setdefault(k, []).append(a)
+        else:
+            keys.add(k)
+    return keys, bound, expiring
 
 
 def _drift_m1_split_acked(findings, acks, vault_rel):
@@ -34464,6 +34513,55 @@ def _drift_bound_latest(rows):
     return [a for a in rows if _drift_ack_seq(a) == top]
 
 
+def _drift_ack_tracked(a):
+    t = a.get("tracked_in")
+    return isinstance(t, str) and bool(t.strip())
+
+
+def _drift_ack_live(a, as_of, note_state):
+    """probe/retire 照留在 as_of 那天還算不算數 → 失效原因(還算數回空字串)。綁了去處看那篇開不開,沒綁看期限
+    (until;舊表態兩個欄位都沒有,用 _DRIFT_ACK_LEGACY_UNTIL);期限當天還算。只收 10 個字元的 YYYY-MM-DD;
+    任何型別不對都回失效原因,不丟例外。不看表態日 date(手改表態檔本來就能改任何欄位)。"""
+    import datetime as _dt
+    if "tracked_in" in a:
+        if not _drift_ack_tracked(a):
+            return "綁的節點寫壞了"
+        t = a["tracked_in"]
+        st = note_state(t)
+        name = t.rsplit("/", 1)[-1][:-3] if t.endswith(".md") else t
+        if st is None:
+            return f"綁的 {name} 不在了或讀不出"
+        if not _drift_route_open(*st):
+            return f"綁的 {name} 已收尾或不是 Issue/計劃({st[0] or '沒有類型'}/{st[1] or '沒有狀態'})"
+        return ""
+    until = a["until"] if "until" in a else _DRIFT_ACK_LEGACY_UNTIL
+    if not (isinstance(until, str) and len(until) == 10 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", until)):
+        return "期限寫壞了"
+    try:
+        lim = _dt.date.fromisoformat(until)
+    except ValueError:
+        return "期限寫壞了"
+    return f"已過期限 {until}" if as_of > lim else ""
+
+
+def _drift_expiring_acked(f, rows, as_of, note_state):
+    """probe/retire 的一筆發現對上同鍵的照留 rows → (算已表態?, prev_ack 或 None)。
+    as_of 是 None(推送檢查):不看期限、不看開不開;只有 born_now(有起點、這次新寫就已成立)要有一筆綁了去處。
+    有 as_of(drift scan):任何一筆還算數就算已表態(兩個工作樹各自追加後合併也一樣)。
+    沒算上的帶 prev_ack={reason, dead}:取哪一筆照 _drift_bound_latest(沒有 seq 的取檔內最後一筆)。"""
+    if not rows:
+        return False, None
+    last = _drift_bound_latest(rows)[-1]
+    if as_of is None:
+        if not f.get("born_now") or any(_drift_ack_tracked(a) for a in rows):
+            return True, None
+        return False, {"reason": last.get("reason"), "dead": "這次新寫就已成立,照留要綁去處(--tracked-in)"}
+    dead = [_drift_ack_live(a, as_of, note_state) for a in rows]
+    if any(d == "" for d in dead):
+        return True, None
+    return False, {"reason": last.get("reason"), "dead": dead[next(i for i, a in enumerate(rows) if a is last)]}
+
+
 def _drift_related_ok(a):
     """related 要是字串清單;手改壞了當成沒涵蓋。"""
     r = a.get("related")
@@ -34475,6 +34573,9 @@ def _drift_prev_ack_line(f):
     pa = f.get("prev_ack")
     if not pa:
         return None
+    if "dead" in pa:     # probe/retire 的照留失效了(照留表態要有期限或去處_計劃〈做法〉6):不讀 related
+        return (f"以前照留過(理由:{str(pa.get('reason') or '')[:80]}),{pa['dead']};還沒做就 lumos drift ack "
+                f"{f['path'][:-3]} {f['line']} --kind {f['kind']} --tracked-in <排進的那篇 Issue 或計劃> --reason \"…\"")
     old = [str(x) for x in pa["related"]] if isinstance(pa.get("related"), list) else []
     more = [x for x in f.get("related", []) if nfc(str(x)) not in {nfc(y) for y in old}]
     return (f"這篇以前表態過(最近一次當時連著 {'、'.join(x[:-3] for x in old) or '(清單壞了)'}),"
@@ -34493,9 +34594,11 @@ def _drift_old_reason(f, acks, alive=None):
     return None
 
 
-def _drift_ack_args_err(kind, reason, names=None):
+def _drift_ack_args_err(kind, reason, names=None, tracked_in=None):
     if kind not in _DRIFT_KINDS:
         return f"--kind 只能是 {'/'.join(_DRIFT_KINDS)}"
+    if tracked_in is not None and kind not in _DRIFT_EXPIRING_KINDS:
+        return f"--tracked-in 只給 --kind {'/'.join(_DRIFT_EXPIRING_KINDS)} 用"
     nerr = _drift_ack_names_err(kind, names)
     if nerr:
         return nerr
@@ -34550,12 +34653,14 @@ def _drift_ack_line_err(rel, text, lines, line, kind):
     return None
 
 
-def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
+def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None, tracked_in=None):
     """lumos drift ack <節點> <行號> --kind … --reason "…":表態「這行照留」。
     c2、c3 先確認那一行當下真的是這一種發現,記下當時連著的已收尾計劃(related);每筆都記遞增序號 seq(存量漂移改法 [S8])。
-    m1 記名稱清單 names(排序去重);不驗那一行現在真的是 m1(判定要推送範圍,ack 只有一棵樹)。"""
+    m1 記名稱清單 names(排序去重);不驗那一行現在真的是 m1(判定要推送範圍,ack 只有一棵樹)。
+    probe、retire 帶 tracked_in 記綁的那篇(要開著的 Issue 或計劃、不能是同一篇),不帶記 until=今天+30 天
+    (Projects/照留表態要有期限或去處_計劃〈做法〉3)。"""
     import datetime, secrets
-    err = _drift_ack_args_err(kind, reason, names)
+    err = _drift_ack_args_err(kind, reason, names, tracked_in)
     if err:
         print(f"擋下:{err}", file=sys.stderr)
         return 2
@@ -34575,6 +34680,10 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
            "reason": reason.strip(), "date": datetime.date.today().isoformat(), "heading": head, "line": line}
     if kind == "m1":
         rec["names"] = sorted(set(names))
+    route, err = _drift_ack_route(env, rel, kind, tracked_in, rec, vault_rel)
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
+        return 2
     if kind in _DRIFT_BOUND_KINDS:
         # 鎖外新建圖譜物件重判(縮短占鎖時間;過期已不再自動接手)
         f, err = _drift_current_finding(Env(env.vault), rel, line, kind)
@@ -34585,7 +34694,8 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
     if dry_run:     # drift fix --kind c2 --keep --dry-run:判定做完、不拿鎖不寫(代碼審 r1 六席同報:原本照樣寫表態)
         print(f"預覽(沒寫):會記一筆表態——{_esc_clean(rel, 200)} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]}),"
               f"理由:{_esc_clean(reason.strip(), 200)}"
-              + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else ""))
+              + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else "")
+              + _esc_clean(route, 300))
         return 0
     # 表態檔跟筆記庫其他寫入者排同一把鎖(代碼審 r1 併發席;跟治理帳其他寫入者沒共用鎖的整體問題在 Issue 那篇);
     # 序號在鎖內取現有最大加 1
@@ -34596,9 +34706,33 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None):
         return rc
     _gate_event_or_warn(root, "drift-check", "acked", f"{rel}:{line} {kind}:{reason.strip()[:80]}")
     print(f"✓ 表態記下了({token}):{_esc_clean(rel, 200)} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]})"
-          + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else ""))
+          + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else "")
+          + _esc_clean(route, 300))
     print(f"推送前的檢查只認提交進去的表態檔:\n    git add {_DRIFT_ACKS} && git commit")
     return 0
+
+
+def _drift_ack_route(env, rel, kind, tracked_in, rec, vault_rel):
+    """probe/retire 照留的去處:帶 tracked_in 驗那篇(找得到、不是同一篇、開著的 Issue 或計劃)後記 tracked_in,
+    不帶記 until=今天+30 天;其他種類不動 → (成功訊息的尾巴, 擋下原因或 None)。照留表態要有期限或去處_計劃〈做法〉3。"""
+    import datetime as _dt
+    if kind not in _DRIFT_EXPIRING_KINDS:
+        return "", None
+    if tracked_in is None:      # 期限從表態日算(同一筆紀錄只取一次日期)
+        rec["until"] = (_dt.date.fromisoformat(rec["date"]) + _dt.timedelta(days=_DRIFT_ACK_DAYS)).isoformat()
+        return (f";期限到 {rec['until']},過了 drift scan 與 doctor 會重新列(要排進某篇就改用 --tracked-in;"
+                "這次新寫就已成立的,推送只認綁了去處的)"), None
+    trel = env.find(tracked_in)
+    if trel is None:
+        return "", f"--tracked-in 找不到 {_esc_clean(tracked_in, 200)} 這篇"
+    if nfc(trel) == nfc(rel):
+        return "", "--tracked-in 不能綁那一行所在的同一篇——要綁真的排進這件事的 Issue 或計劃"
+    typ, st = _drift_note_state(env, vault_rel)(f"{vault_rel}/{nfc(trel)}") or ("", "")
+    if not _drift_route_open(typ, st):
+        return "", (f"--tracked-in 要指一篇還開著的 Issue(open/doing)或計劃(todo/doing);{_esc_clean(trel[:-3], 200)} "
+                    f"是 {typ or '沒有類型'}/{st or '沒有狀態'}")
+    rec["tracked_in"] = f"{vault_rel}/{nfc(trel)}"
+    return f";綁 {trel[:-3]},那篇收尾照留就失效", None
 
 
 def _drift_current_finding(env2, rel, line, kind):
@@ -34732,11 +34866,13 @@ def _drift_fix_hint(kind, path, line, names=None):
         return [base + ' --settled "<結論>"']
     if kind == "probe":
         return [f"條件成立了:把待辦做掉後刪掉 {node} 第 {line} 行或改寫成歷史說法;照留就 "
-                f'lumos drift ack {node} {line} --kind probe --reason "<為什麼照留>"']
+                f'lumos drift ack {node} {line} --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
     if kind == "retire":
         return [f"撤除條件成立了:這條限制該撤——在 {node} 第 {line} 行加 [status:superseded] 並寫 [被取代:…]"
                 "(改看哪裡;限制自然消失就寫 無 <理由>),標了作廢的行下次推送不再抽;照留就 "
-                f'lumos drift ack {node} {line} --kind retire --reason "<為什麼照留>"']
+                f'lumos drift ack {node} {line} --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
+                "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
     return [base]
 
 
@@ -34839,7 +34975,7 @@ def _drift_fix_args_err(kind, o):
     """--kind 與參數的組合合不合 → 錯誤或 None(存量漂移改法 第 1 節的組合表)。"""
     if kind == "probe":
         return ("--kind probe 沒有工具改法:條件成立了就把待辦做掉,再刪掉那一行或改寫成歷史說法;"
-                "照留就 lumos drift ack <節點> <行號> --kind probe --reason \"<為什麼照留>\"")
+                "照留就 lumos drift ack <節點> <行號> --kind probe --tracked-in <排進的那篇 Issue 或計劃> --reason \"<為什麼照留>\"")
     if kind not in _DRIFT_FIX_KINDS:
         return f"--kind 只能是 {'/'.join(_DRIFT_FIX_KINDS)}"
     extra = {k for k in _DRIFT_FIX_OPTS if o.get(k) not in (None, False)} - _DRIFT_FIX_ALLOWED[kind]
@@ -35741,7 +35877,7 @@ def _drift_retire_print(mode, must, unknown, acks):
     _drift_print_findings(must, sys.stderr, acks)
     _drift_print_hints(must, sys.stderr, "改法(每一筆一條指令):")
     print("不改就留著並表態(--kind 照那一筆列的種類):", file=sys.stderr)     # 同 _drift_report_must 的固定段(r1 架構席)
-    print('    lumos drift ack <節點> <行號> --kind retire --reason "<為什麼照留>"', file=sys.stderr)
+    print('    lumos drift ack <節點> <行號> --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"', file=sys.stderr)
     if mode == "block":
         print("  要整個專案先只提醒,是把 .lumos/config.json 的 drift_check.retire 設成 warn(改 drift_check.gate 會連 c1 到 c5"
               "與回頭條件一起關)", file=sys.stderr)
@@ -35790,7 +35926,8 @@ def _drift_report_must(root, mode, must, unknown, acks, alive=None):
         # 一種一行(代碼審 r2 正確性席、圖譜一致席、外家席:原本兩種都有時印成 --kind c1|probe,照貼 shell 會當成管線)
         print("不改就留著並表態(--kind 照那一筆列的種類):", file=sys.stderr)
         for k in sorted(kinds):
-            print(f"    lumos drift ack <節點> <行號> --kind {k} --reason \"<為什麼照留>\"", file=sys.stderr)
+            print(f"    lumos drift ack <節點> <行號> --kind {k}"
+                  + (" --tracked-in <排進的那篇 Issue 或計劃>" if k in _DRIFT_EXPIRING_KINDS else "") + " --reason \"<為什麼照留>\"", file=sys.stderr)
     note = f"要處理 {len(must)} 筆" + (f",判不了:{';'.join(unknown)}" if unknown else "")
     if mode == "block":
         _gate_event_or_warn(root, "drift-check", "blocked", note, hard=True,
@@ -36758,7 +36895,11 @@ def cmd_drift_scan(env, at=None, as_json=False, budget=None):
     # 數量標記(Projects/數量標記檢查_計劃):同一棵樹、同一個總預算,排在寫下時就成立之後(它只看回頭條件與撤除條件)
     cfound, cprobs = _drift_count_scan(tenv, ptree, deadline)
     pfound, probs = pfound + cfound, probs + cprobs
-    left, done = _drift_split_acked(_drift_state_findings(tenv) + pfound, _drift_load_acks(root, sha), vault_rel)
+    import datetime as _dt
+    # probe/retire 的照留在這裡才判期限與綁的那篇開不開(照留表態要有期限或去處_計劃〈做法〉6;推送檢查不判)
+    left, done = _drift_split_acked(_drift_state_findings(tenv) + pfound, _drift_load_acks(root, sha), vault_rel,
+                                    as_of=_dt.datetime.now(_dt.timezone.utc).astimezone().date(),   # 本機日期
+                                    note_state=_drift_note_state(tenv, vault_rel))
     # 解不開的筆記列成「判不了」(代碼審 r2 外家席:原本修復清單會靜默漏掉它們)。★不寫治理帳★(代碼審 r3 併發席、
     # 正確性席:讀指令不寫帳是既有決定 Systems/lumos-cli-read d1,計劃 [S2] 原本要記 degraded,改跟決定一致)
     bad = sorted(r for r, n in tenv.notes.items() if _note_unreadable(n))
@@ -36843,6 +36984,11 @@ def _drift_doctor_lines(env):
         # 接在第一行、不另起一行:Z 段也受軟段 3 條上限,另起一行在 c1 到 c5 多時會被收掉(回頭條件寫法補齊〈做法〉1.3)
         ex = ";".join(f"{_esc_clean(p[:-3], 80)}:{no}" for p, no in sorted(mis)[:3])
         parts.append(f"寫在句中的 REVISIT {len(mis)} 行(例:{ex})——搬成獨立一行,要結案就在那一行加 [closed:日期 理由]")
+    dead = _drift_dead_ack_rows(env, root, vault_rel)
+    if dead:
+        ex = ";".join(f"{_esc_clean(p[:-3], 80)}({_esc_clean(w, 60)})" for p, w in dead[:3])
+        parts.append(f"回頭條件與撤除條件的照留已失效 {len(dead)} 筆(例:{ex})——跑 lumos drift scan 看;還沒做就重新照留並用 "
+                     "--tracked-in 綁排進的那篇")
     if cnt:
         n_cbad = sum(1 for pr in cnt if pr["errs"])
         parts.append(f"數量標記 {len(cnt)} 處(由 lumos drift scan 評估)" + (f";寫錯的 {n_cbad} 處" if n_cbad else ""))
@@ -36855,6 +37001,31 @@ def _drift_doctor_lines(env):
             ex = ";".join(f"{f['path'][:-3]}:{f['line']}" for f in rows[:3])
             out.append(f"[{k}] {_DRIFT_KIND_NAMES[k]} {len(rows)} 筆(例:{ex})" + (f";另 {nd} 筆已表態" if nd else "")
                        + ";改法例:" + _drift_fix_hint(k, rows[0]["path"], rows[0]["line"])[0])
+    return out
+
+
+def _drift_dead_ack_rows(env, root, vault_rel):
+    """doctor 用:probe/retire 照留裡已失效、而且那一行原文還在那篇的 → [(圖譜內路徑, 失效原因)]。不評估條件、不跑 git;
+    同一個鍵有任何一筆還算數就不算(同 drift scan)。照留表態要有期限或去處_計劃〈做法〉8。"""
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()   # 本機日期
+    state, pre = _drift_note_state(env, vault_rel), vault_rel.rstrip("/") + "/"
+    groups = {}
+    for a in _drift_load_acks(root):
+        if a["kind"] in _DRIFT_EXPIRING_KINDS:
+            groups.setdefault(_drift_ack_key(a["path"], a.get("text", ""), a["kind"]), []).append(a)
+    out = []
+    for (path, text, _k), rows in sorted(groups.items()):
+        rel = path[len(pre):] if path.startswith(pre) else None
+        if rel is None or rel not in env.notes or not text:
+            continue
+        body = env_text(env, rel) or ""
+        # 跟 _drift_ack_text 同一個口徑:retire 記摘要條目接回續行的整條,其他種類記實體行(代碼審 r1 正確性席 F2)
+        if text not in {ln.strip() for ln in body.split("\n")} | set(_ns_summary_logical(body).values()):
+            continue
+        why = [_drift_ack_live(a, today, state) for a in rows]
+        if all(why):
+            out.append((rel, why[-1]))
     return out
 
 
@@ -46121,7 +46292,7 @@ HELP_WHEN = {
     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出);同一次也跑舊句檢查 m1:"
                    "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫是 warn 只提醒,block 才擋)。",
     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
-    "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出。",
+    "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
@@ -47022,6 +47193,8 @@ def main():
     dra.add_argument("dr_line", metavar="行號", type=int)
     dra.add_argument("--kind", dest="dr_kind", required=True, choices=_DRIFT_KINDS)
     dra.add_argument("--reason", dest="dr_reason", required=True)
+    dra.add_argument("--tracked-in", dest="dr_tracked", default=None, metavar="節點",
+                     help="--kind probe/retire 用:這件事排進哪一篇開著的 Issue 或計劃;那篇收尾照留就失效。不帶就 30 天後失效")
     dra.add_argument("--name", dest="dr_names", action="append", default=None, metavar="名稱",
                      help="--kind m1 用(可重複):這一行照留的是哪幾個消失的名稱;一律寫成 --name=<名稱>(名稱以 -- 開頭時才不會被當成選項)")
     drf = drsub.add_parser("fix", help="用工具改掉一筆發現(c1 到 c6、count;要改之前那篇要在版控裡而且乾淨;每改一筆記修復帳)")
@@ -47557,7 +47730,8 @@ def main():
         if args.drcmd == "scan":
             return cmd_drift_scan(env, at=args.dr_at, as_json=args.dr_json, budget=args.dr_budget)
         if args.drcmd == "ack":
-            return cmd_drift_ack(env, args.dr_node, args.dr_line, args.dr_kind, args.dr_reason, names=args.dr_names)
+            return cmd_drift_ack(env, args.dr_node, args.dr_line, args.dr_kind, args.dr_reason, names=args.dr_names,
+                                 tracked_in=args.dr_tracked)
         if args.drcmd == "fix":
             return cmd_drift_fix(env, args.dr_node, args.dr_line, args.dr_kind,
                                  {"dry_run": args.dr_dry, "date": args.dr_date, "close": args.dr_close,
