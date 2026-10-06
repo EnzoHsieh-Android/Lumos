@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-03
+updated: 2026-10-06
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -18,6 +18,7 @@ verified_by:
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
 summary: |-
   PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
@@ -130,3 +131,5 @@ PITFALL:2026-10-04 [[Issues/過期鎖接手可能雙持]] 與 [[Verification/202
 - 實作計畫：`docs/design/2026-06-19-reversibility-and-governance-ledger-plan.md`（6 任務 TDD）。
 - 後續擴充計畫：`docs/superpowers/plans/2026-06-24-check-r-guard.md`（[guard:] 兩軌）、`docs/superpowers/plans/2026-06-25-doctor-irreversible-hint.md`（Check H）。
 - 實作落點：`scripts/lumos` `run_doctor`(Check R/H)、`cmd_lint`、`cmd_gov`、`extract_reversibility`/`_rollback_resolved`/`_guard_resolved`、`CHECKPOINT_RE`/`IRREVERSIBLE_RE`/`ROLLBACK_REF_RE`/`GUARD_REF_RE`。
+
+WHY:未執行階段另行留痕，不能從失敗項清單推測哪段跑過 [出處:Projects/修正關卡先驗便宜條件_計劃 設計審 integration-F1] [因:同一 consumer HEAD 與紀錄的兩種執行路徑產生相同失敗事件] [test:t_fix_check_preflight_not_run_is_durable]
