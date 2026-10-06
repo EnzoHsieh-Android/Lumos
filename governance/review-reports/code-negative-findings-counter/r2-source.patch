@@ -1,0 +1,132 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index dd4afd07..b68f1e7a 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9192,20 +9192,23 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
+     if capture_counts:
+         try:
+             rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
+         except ValueError:
+             print(f"擋下:--capture-counts 要用逗號分隔的整數(像 2,1,1),你給的是 {capture_counts!r}", file=sys.stderr)
+             return 2
+     if severity:
+         rec["severity"] = severity
+     if findings is not None:
++        if findings < 0:
++            print(f"擋下:--findings 只能填 0 或正整數,你給的是 {findings}", file=sys.stderr)
++            return 2
+         rec["findings"] = findings
+     if clusters is not None:   # 空字串也進解析器 → rc2(帶旗標即須有效內容,勿被 falsy 吞)
+         parsed, err = _parse_clusters(clusters)
+         if err:
+             print(f"擋下:--clusters 分組設定寫錯了——{err}", file=sys.stderr)
+             return 2
+         rec["clusters"] = parsed   # dict{名:狀態},同 capture_counts 寫側轉型慣例
+     # ── M1包 #3 雙 hash 鏈(loop機械脊椎M1包_計劃):--spec/--reviewed 必須同現 ──
+     if (spec is None) != (reviewed is None):
+         print("擋下:--spec(被審文件)和 --reviewed(它的內容指紋)要一起給、或都不給,你只給了一個;--reviewed 填派工當下那份文件的 sha256",
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 65f073cd..348aed86 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -267,20 +267,99 @@ def t_canary_findings():
+         "--findings", "3", expect_rc=0)
+     run(vault, "canary", "record", "caught", "--loop", "cf", "--severity", "clean", expect_rc=0)
+     lines = [_json.loads(l) for l in
+              (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()]
+     check("findings: --findings 3 寫入", lines[0].get("findings") == 3, str(lines[0]))
+     check("findings: 不給則鍵不存在", "findings" not in lines[1], str(lines[1]))
+     r = run(vault, "canary", "record", "caught", "--loop", "cf", "--findings", "abc")
+     check("findings: 非整數 rc!=0", r.returncode != 0, f"rc={r.returncode}")
+ 
+ 
++
++def t_canary_negative_findings_rejected():
++    """發現數量錯寫成負數，不能把無法判定的帳追加進去。"""
++    import json as _j
++    for opt in (False, True):
++        v = mkvault()
++        root = v.parent
++        report = root / "clean-count.md"
++        report.write_text("severity: clean\n\n合法的零發現報告。\n", encoding="utf-8")
++        snap = root / "count-spec.patch"
++        snap.write_text("這是零發現輪的固定審查材料。\n", encoding="utf-8")
++        h = _sha256_of(snap)
++        def call(*args):
++            return subprocess.run([sys.executable, *(["-O"] if opt else []),
++                                   GRAPHCTL, "--vault", str(v), *args],
++                                  capture_output=True, text=True)
++        ledger = root / ".canary-log.jsonl"
++        first_bad = call("canary", "record", "none", "--findings", "-100")
++        check(f"未有帳負數 opt={opt}:rc2指出數量",
++              first_bad.returncode == 2 and "--findings" in first_bad.stderr and "-100" in first_bad.stderr,
++              first_bad.stdout + first_bad.stderr)
++        check(f"未有帳負數 opt={opt}:不建立帳本且無成功訊息",
++              not ledger.exists() and "✓" not in first_bad.stdout, first_bad.stdout)
++        seed = call("canary", "record", "none", "--findings", "0")
++        check(f"負數現場 opt={opt}:合法種子確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        for kind in ("none", "caught", "missed"):
++            before = ledger.read_bytes()
++            bad = call("canary", "record", kind, "--findings", "-1")
++            check(f"負數拒收 opt={opt} kind={kind}:rc2與參數診斷",
++                  bad.returncode == 2 and "--findings" in bad.stderr and "-1" in bad.stderr,
++                  bad.stdout + bad.stderr)
++            check(f"負數拒收 opt={opt} kind={kind}:帳本逐位元不變且無成功訊息",
++                  ledger.read_bytes() == before and "✓" not in bad.stdout, bad.stdout)
++        before = ledger.read_bytes()
++        bad = call("canary", "record", "none", "--loop", "code-negative-count",
++                   "--round", "r1", "--auditor", "通才-codex", "--severity", "clean",
++                   "--findings", "-2", "--tier", "standard", "--report", str(report),
++                   "--snapshot", str(snap), "--spec", str(snap), "--reviewed", h)
++        check(f"負數審查席 opt={opt}:有效留痕仍須rc2診斷負值",
++              bad.returncode == 2 and "--findings" in bad.stderr and "-2" in bad.stderr,
++              bad.stdout + bad.stderr)
++        check(f"負數審查席 opt={opt}:帳本逐位元不變",
++              ledger.read_bytes() == before, bad.stdout)
++        malformed = root / "malformed-count.md"
++        malformed.write_text("# misplaced header\nseverity: clean\n", encoding="utf-8")
++        before = ledger.read_bytes()
++        bad = call("canary", "record", "none", "--loop", "code-negative-order",
++                   "--round", "r1", "--auditor", "通才-codex", "--severity", "clean",
++                   "--findings", "-1", "--tier", "standard", "--report", str(malformed),
++                   "--snapshot", str(snap), "--spec", str(snap), "--reviewed", h)
++        check(f"負數先驗 opt={opt}:即使報告格式錯仍診斷數量",
++              bad.returncode == 2 and "--findings" in bad.stderr and "-1" in bad.stderr,
++              bad.stdout + bad.stderr)
++        check(f"負數先驗 opt={opt}:canary帳本不追加",
++              ledger.read_bytes() == before and "✓" not in bad.stdout, bad.stdout)
++        for val in (None, 0, 2):
++            args = ["canary", "record", "none"]
++            if val is not None:
++                args += ["--findings", str(val)]
++            good = call(*args)
++            row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++            check(f"合法數量 opt={opt} value={val}:成功且欄位保留原樣",
++                  good.returncode == 0 and (("findings" not in row) if val is None else row.get("findings") == val),
++                  good.stdout + good.stderr)
++        for auditor in ("通才-codex", "架構對齊-codex"):
++            good = call("canary", "record", "none", "--loop", "code-legal-count",
++                        "--round", "r1", "--auditor", auditor, "--severity", "clean",
++                        "--findings", "0", "--tier", "standard", "--report", str(report),
++                        "--snapshot", str(snap), "--spec", str(snap), "--reviewed", h)
++            check(f"合法空輪 opt={opt} auditor={auditor}:記帳成功",
++                  good.returncode == 0, good.stdout + good.stderr)
++        gate = call("loop", "status", "code-legal-count", "--disposal", "--spec", str(snap), "--repo", str(root))
++        check(f"合法空輪 opt={opt}:實際處置閘通過",
++              gate.returncode == 0 and "DISPOSAL GATE PASS" in gate.stdout, gate.stdout + gate.stderr)
++
++
+ def t_loop_gate():
+     vault, repo, spec_ok, spec_bad = _mk_gate_fixture()
+ 
+     def rec(loop, sev, f=None, kind="caught"):
+         # M1包 帶 --spec 問 gate=聲明要驗(hash 窗 fail-closed)——本組 gate() 恆帶 --spec,
+         # 故 rec 統一帶常數 hash 對(spec_ok 不變→鏈恆一致),保住各案原意(G1/G2 算術)。
+         h = _sha256_of(spec_ok)
+         args = ["canary", "record", kind, "--loop", loop, "--severity", sev,
+                 "--spec", str(spec_ok), "--reviewed", h]
+         if f is not None:
