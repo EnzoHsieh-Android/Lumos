@@ -1,0 +1,1408 @@
+diff --git a/.claude-plugin/marketplace.json b/.claude-plugin/marketplace.json
+index 203ec431..9cf2471a 100644
+--- a/.claude-plugin/marketplace.json
++++ b/.claude-plugin/marketplace.json
+@@ -1,7 +1,8 @@
+ {
+   "name": "lumos-toolchain",
+   "owner": { "name": "lumos" },
+   "plugins": [
+-    { "name": "lumos-ledger", "source": "./mods/claude/lumos-ledger", "description": "Lumos 事件帳:只觀察,不擋、不改、不注入" }
++    { "name": "lumos-ledger", "source": "./mods/claude/lumos-ledger", "description": "Lumos 事件帳:只觀察,不擋、不改、不注入" },
++    { "name": "lumos-context", "source": "./mods/claude/lumos-context", "description": "Lumos 交棒脈絡:壓縮前叫摘要保住交棒狀態,把會談編號交給 lumos" }
+   ]
+ }
+diff --git a/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md b/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md
+new file mode 100644
+index 00000000..a220bfbb
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md
+@@ -0,0 +1,38 @@
++---
++type: issue
++status: open
++created: 2026-10-06
++updated: 2026-10-06
++aliases: []
++about_code: []
++tags:
++  - type/issue
++  - status/open
++  - scope/agent-dag
++summary: |-
++  FLAG:
++  DECISION:
++  KEY:
++---
++# 會談編號環境變數接續後停在舊值
++
++白話:Claude Code 的 Bash 裡其實讀得到 `CLAUDE_CODE_SESSION_ID`,舊筆記寫「拿不到會談編號、沒有環境變數」已經過時;但這個變數在會談接續後會停在接續前的舊編號,直接拿來用會對錯會談。
++
++## 症狀
++
++- [[Projects/進度從提交推導_計劃]] 記「普通 CLI 拿不到 session_id(無環境變數)」,跟 [[Projects/接手視圖_計劃]] 用 `CLAUDE_CODE_SESSION_ID` 排掉自己的記載互相矛盾。
++- 2026-10-06 本會談實測:Bash 環境有 `CLAUDE_CODE_SESSION_ID`,值是會談一開始的編號;會談接續後工作資料夾已換成新編號,環境變數沒跟著換。
++
++## 根因
++
++沒查清。2026-10-06 實測([[Verification/2026-10-06_會談編號外掛實測]]):`CLAUDE_CODE_SESSION_ID` 是 `claude` 另外塞給 Bash 的,新開的會談與 `claude -p --resume` 都給對;本會談是對話壓縮後接續、換成新編號,給的仍是接續前的編號。外掛讀不到這一份(它只看得到 `claude` 啟動時繼承的環境),所以不能靠外掛配對來修。
++
++## 現在怎麼繞
++
++`lumos handoff` 照用(拿來排掉自己,舊值在同一場會談裡仍成立);[[Projects/Claude-mod第二批_計劃]] 原本的外掛配對做法實測不成立、沒做。
++
++REVISIT:2026-11-06 找「當下」會談編號的可靠來源(例如比對程式編號),找到就改這段繞法
++
++## 什麼條件算修好
++
++lumos 需要會談編號的地方在對話壓縮後接續、`/clear` 後讀到的是新編號,而且在會談裡再開的子會談讀到的是子會談自己的。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Claude-mod第二批_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Claude-mod第二批_計劃.md
+new file mode 100644
+index 00000000..07aebcc4
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Claude-mod第二批_計劃.md
+@@ -0,0 +1,90 @@
++---
++type: project
++status: doing
++created: 2026-10-06
++updated: 2026-10-06
++tags:
++  - type/project
++  - status/doing
++  - scope/agent-dag
++lands_in:
++  - Systems/lumos-context
++  - Systems/lumos-cli-lifecycle
++  - Systems/lumos事件帳
++decisions:
++  - content: 第二批 mod 做一項:壓縮前叫摘要保住交棒狀態,放新外掛 lumos-context,不放只觀察的事件帳。範圍三度縮小:設計審第一輪後 Enzo 2026-10-06 裁拿掉 Bash 改檔前推筆記(改觸發條件弄壞 Codex 轉換與舊安裝、列舉寫檔形狀違反「列舉補不完」既有決策、不是 mod 能力),開場標出驗證不過的記憶另開題(拿不到會談編號、要翻記憶清掃唯讀守衛、標記文字有注入疑慮);第二輪後 Enzo 裁核對審查員讀檔另開題(事件帳沒記搜尋條件與工作目錄,一次沒帶路徑的搜尋就讓整個 repo 算讀過);會談編號交給 lumos 實作前實測不成立(外掛讀不到交給 Bash 的官方編號),依計劃寫好的規則停下。更早考慮過:lumos 自己派代理(推送前的擋已逼編排者跑審查,Enzo 裁拿掉);壓縮後重新注入規矩(開場 hook 壓縮後本來就會再跑)。代價:改模型看到的摘要指示;mod 介面是搶先版,改版可能壞。
++    id: d1
++    decided: 2026-10-06
++    valid: true
++  - content: "核對審查員引用的程式檔有沒有真的讀過:事件帳 spawn 事件記席位標記,seat-check 從事件帳核對 file: 引用——推翻派工鏡頭注入計劃開案決策裡的「不驗」,也部分推翻 seat-check 自己「repo 查證的 file: 引用一律合法」的設計(只對圖譜以外的檔、而且帳完整時才判);仍不量成效、不記派工詞有沒有鏡頭附加段。考慮過:①維持不驗(席位憑印象引用目前只靠人工抓);②連成效一起量(派工鏡頭計劃 2026-09-03 四份計劃死在想證明清單有用);③連引句與圖譜筆記一起核(引句要先找所在檔、筆記常由派工自動附上,事件帳都看不到,誤報多)。Enzo 2026-10-06 裁做縮小版。代價:只提醒不擋;沒帶路徑的搜尋算整個 repo 讀過,放行偏寬,另印條數。"
++    id: d2
++    decided: 2026-10-06
++    valid: false
++    superseded_by: d1
++    ended: 2026-10-06
++  - content: 記憶清掃 hook 改成每次把結果寫進 lumos 自己的快取資料夾(按會談編號分檔),外掛讀它在記憶索引行首加標記——部分翻案記憶清掃 2026-09-14 的「唯讀」設計:當年三輪 blocker 全落在寫進記憶檔(路徑穿越、符號連結、硬連結、檢查到寫入的時間差、撤章刪欄位),這次寫的路徑由 lumos 自己組、不從記憶內容推、不碰記憶資料夾,先寫暫存再原子換名。考慮過:①外掛在 TS 重做一份清掃(兩套判準會漂);②外掛用 $.process.run 直接叫 Python(等於每次載入多跑一次清掃);③不做標記、只靠開場那段文字(就是現況)。編排者 2026-10-06 提案,交設計審檢視。代價:多一個寫檔點,要守住只寫快取資料夾。
++    id: d3
++    decided: 2026-10-06
++    valid: false
++    superseded_by: "#d1"
++    ended: 2026-10-06
++  - content: lumos 取會談編號改由一支取值函式從兩個來源配對決定:外掛設的 LUMOS_SESSION_ID 只在 CLAUDE_CODE_SESSION_ID 等於外掛同時記下的 LUMOS_SESSION_BASE 時才採用,否則用官方編號;lumos 裡所有取會談編號的地方都走這一支(目前只有 handoff)。這是專案第一個「官方變數加外掛變數」的來源,刻意引入:官方編號接續與 /clear 後停在舊值,單一來源沒有辦法給對的值。考慮過:①只讀官方編號(現況,接續後排除錯逐字稿);②只讀外掛變數(會談裡再開的 claude -p 子會談繼承外層的值,讀到別人的編號);③外掛寫小檔、lumos 讀檔(多一個寫檔點與清理,第一輪審查已否決)。設計審第二輪架構對齊席點名後記下。代價:外掛沒裝或 BASE 讀不到時靜默退回官方編號,行為與現況相同。
++    id: d4
++    decided: 2026-10-06
++    valid: false
++    superseded_by: d1
++    ended: 2026-10-06
++---
++# Claude-mod第二批_計劃
++
++白話:Claude Code 的 mod(外掛裡的函式掛鉤)能做到幾件設定檔 hook 做不到的事。這批做一件:壓縮對話前叫摘要保住交棒狀態。第一支 mod(事件帳 [[Systems/lumos事件帳]])只觀察;這件會改摘要指示,所以另開一支 `lumos-context`,不放進只觀察的事件帳外掛。設計審兩輪後縮小範圍(見決策 d1);會談編號那項實作前實測不成立,依計劃停下(見不做)。
++
++PRIOR-ART: 最小解在 Claude Code 的外掛函式掛鉤。官方設定檔 hook 2026-10-06 核對原文:壓縮前那支只能讀到摘要指示、改不了(只能整個擋),壓縮後那支只能旁觀。外掛寫法、市集、測試沿用事件帳(核心邏輯可注入、`claude plugin test`、條款以測試標題開頭綁、Python 端掃外掛原始碼的結構測試)。安裝端的外掛清單不另寫:原樣搬審查席隔離分支已過兩輪代碼審的那一段。
++
++RETIRE-IF: ①上線兩個月內 Enzo 仍得在壓縮後重講交棒狀態——摘要器不照指示做,第 1 項撤掉;②官方 hook 開始支援壓縮前改指示——第 1 項改走官方。
++
++## 範圍
++
++- **做**:
++  1. **壓縮前保住交棒狀態**:新外掛 `lumos-context` 掛 `session.compact`,四種觸發(manual、auto、plugin、precompute)都在既有摘要指示後面附一段固定要求:逐字保留使用者在對話裡下的裁定與指示、目前在做的任務與步驟、還在跑或剛交回的背景代理、還沒提交或還沒推的改動、待回覆的問題。用詞不帶 lumos 專用名詞,因為外掛裝在使用者層、所有專案都會生效。附加段第一行是固定標記行 `[lumos-context 交棒要求 v1]`,指示裡已有這一行就不重附。子代理(輸入帶 `agentId`)附精簡版:保留它的任務與已得結論。
++- **不做**:
++  - 會談編號交給 lumos:2026-10-06 實作前實測(見 [[Verification/2026-10-06_會談編號外掛實測]]),外掛讀到的官方編號是 `claude` 這支程式啟動時繼承來的環境,不是它交給 Bash 的那份——從終端機直接開的會談外掛讀到空值,配對的前提不存在。照做法要點寫好的規則整項停下,不走別的備案;要做得重新設計(例如改用程式編號比對),另開題。
++  - 核對審查員引用的檔有沒有真的讀過:設計審兩輪都冒重大發現,根本問題是事件帳沒記搜尋條件與工作目錄,一次沒帶路徑的搜尋就讓整個 repo 都算讀過,檢查幾乎列不出東西。另開題,先讓事件帳多記這兩樣再做。
++  - Bash 改檔前推筆記:改觸發條件會弄壞 Codex 那邊的轉換與舊安裝;列舉寫檔形狀違反「列舉補不完」的既有決策;它也不是 mod 能力。
++  - 開場標出驗證不過的記憶:拿不到會談編號、要翻記憶清掃的唯讀守衛、標記文字有注入疑慮。另開題。
++  - `lumos enforcement` 加外掛有沒有裝的那一列:事件帳筆記有一條近期確認過的 RULE,不准那一列叫外部指令;看不看得到沒裝,另開題。
++  - lumos 自己派代理(2026-10-06 本會談列的 mod 候選清單第 7 項,沒進任何計劃節點;Enzo 裁拿掉)。
++  - 壓縮後重新注入規矩:lumos 三支開場 hook 沒設觸發條件,照官方文件壓縮後會再跑(未實測)。
++- REVISIT:2026-11-06 決定「核對審查員讀檔」「開場標出驗證不過的記憶」「會談編號交給 lumos」要不要各開一篇計劃
++
++落點:新開 `Systems/lumos-context`(管新外掛);其餘落在 [[Systems/lumos-cli-lifecycle]](外掛清單)、[[Systems/lumos事件帳]](市集檔多一支外掛)。
++
++## 做法要點
++
++- 第 1 項的附加段固定一份文字放在外掛裡,不呼叫外部指令;原本就有指示(使用者打 `/compact <文字>`)時接在後面,不覆蓋。precompute 算的是當下的對話,真正壓縮時可能已過時——這是引擎行為,附加段只管要求,不保證新鮮。「已有標記行」用整行比對(去頭尾空白後整行相等);原指示不空時先接一個空行再附,空字串、純空白或沒有指示時直接附。子代理精簡版的標記行另一句 `[lumos-context 交棒要求 v1 精簡]`,兩種各判各的。
++- 外掛清單:原樣搬審查席隔離分支安裝端那一段(完整 id 清單 `_LUMOS_PLUGINS`、取最差狀態、teardown 確認清單與手動指令跟著清單)與它改好的市集測試,再把 `lumos-context` 加進清單與 `.claude-plugin/marketplace.json`。這段先上主線;隔離分支之後接上時,改用這邊的符號、只加自己那一支。
++- 新外掛裝不裝得上:審查席隔離分支 2026-10-06 已在隔離設定資料夾實測,資料夾型市集安裝時直接讀市集檔,不必先更新市集快照。
++
++## 條款
++
++外掛行為的條款綁在 `mods/claude/lumos-context/hooks/context.test.ts`,測試標題以條款編號開頭,用 `claude plugin test mods/claude/lumos-context` 在本機跑。
++
++- [S1] 當對話壓縮(`session.compact`,四種觸發)時,外掛應在摘要指示後附上以固定標記行開頭的交棒要求段;原本有指示時接在後面、原文不變 [manual:claude plugin test mods/claude/lumos-context 的 S1 測試全綠]
++- [S2] 當摘要指示裡已有交棒要求的固定標記行時,外掛應不再附 [manual:claude plugin test mods/claude/lumos-context 的 S2 測試全綠]
++- [S3] 當壓縮的是子代理(輸入帶 `agentId`),外掛應附精簡版 [manual:claude plugin test mods/claude/lumos-context 的 S3 測試全綠]
++- [S4] 當 `lumos install` 與 `uninstall` 執行,外掛清單裡的每支(含 `lumos-context`)應各自裝上與移除 [test:t_install_registers_context_plugin]
++- [S5] 當 Python 端檢查外掛檔,市集檔應恰好列出外掛清單裡的每一支、每支資料夾都有 `hooks/hooks.json` [test:t_plugin_market_matches_list]
++- [S6] 當 Python 端掃 `lumos-context` 的原始碼,應沒有環境變數、網路、寫檔與執行外部程式的呼叫,只掛壓縮一個事件 [test:t_context_plugin_files_valid]
++
++## 回退
++
++- 外掛:從外掛清單與市集檔拿掉 `lumos-context`,已裝的機器手動跑一次 `claude plugin uninstall lumos-context@lumos-toolchain`。
++- Python 改動(外掛清單)`git revert` 那段即可。
++
++## 實務隱患
++
++- 已排除:金流:不碰付款
++- 已排除:對外送出:外掛不呼叫網路(S6 掃原始碼釘住)
++- 已排除:不可逆:外掛只附加摘要指示文字,不寫檔;已經壓縮進對話的摘要不會因拿掉外掛還原,但那只是一段文字,不影響之後的行為
++- 守衛面:不擋任何東西
++- 效能:只在壓縮時跑一次,算一段固定文字
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index f91a7281..fe2cbd7f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -150,11 +150,12 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
+ - 圖譜寫指令群(`new`/`set`/`rename` 等):[[Systems/lumos-cli-write]]。
+ - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
+ - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
+ - 分發機制脈絡:user-memory `lumos-update-distribution`。
+ 
+ ## Claude 事件帳外掛的安裝與移除(2026-10-05,[[Projects/Lumos事件帳_計劃]])
+ 
+ - **裝**:`_sync_global_hooks(src, "claude")` 在合併器之前呼叫一次 `_sync_claude_plugin()`(只留這一個呼叫點;它不讀 settings.json,合併器失敗提前返回也不受影響)。bootstrap 起安裝子行程時把 `LUMOS_HOME` 傳進去,子行程的 `_lumos_src()` 才會指到這次的來源(代碼審 r1 合約席抓到原本沒傳)。來源先解成絕對真實路徑再交給 claude。所以 `lumos install`、`update`、`bootstrap`、`init`、vendor 都會確保外掛在。市集來源一律 `_lumos_src()`,不用執行中這支 lumos 的位置:資料夾型市集是直接讀來源資料夾,登記成會被刪的 worktree 外掛就會失效。同名市集指向別的本機路徑 → 先移除再加(兩邊正規化後比);同名但不是本機資料夾(使用者自己加的)→ 不動、回 failed。add 或 install 回錯時再查一次清單,已經是想要的狀態就算成功(另一支 install 同時跑先做完了);移除舊市集後加新的失敗,訊息教重跑 `lumos install --force`。只算使用者範圍裝的那份(專案範圍那份只在那個專案生效)。claude 的列表輸出不是「物件組成的清單」一律當失敗、不丟例外。
+ - **狀態**:外掛步驟自己回 ok / absent(找不到 claude 或測試開關)/ no-source(來源 repo 沒有市集檔)/ failed,自己印一行(`_plugin_sync_msg`),★不併進 `_sync_global_hooks` 的回傳字串★——`cmd_install` 只認 merge-failed、`_sync_global_claude` 用等於 ok 判斷,混進新值會誤判。所以外掛失敗不改 `lumos install` 的回傳碼。那一行會出現在呼叫端印的「全域 hooks 已同步」之前,刻意不為順序改四個呼叫端。
+ - **移除**:`cmd_uninstall` 開頭的探針拒絕之後呼叫 `_teardown_claude_plugin()`;`lumos teardown` 第三步就是 `cmd_uninstall`,兩個指令都會移除、都受探針保護。外掛有列出就移除;市集存在且來源是我們的就以 `--scope user` 移除(外掛沒列出也要);兩者都沒有或找不到 claude 時安靜略過;成功印出移掉了什麼;失敗印兩個手動指令。teardown 的確認清單有列出外掛與市集。只移除使用者範圍那份(`--scope user`;專案範圍那份不是我們裝的,不帶範圍 uninstall 還會失敗);外掛那步失敗也照樣處理市集;`cmd_uninstall(source)` 收 `teardown --source` 傳下來的來源(代碼審 r2)。安裝端 add 或 install 回錯時最多再等三次、每次一秒再查(另一支 install 可能還在寫);來源不是預設位置或有設 `LUMOS_HOME` 時會印出登記的來源路徑;救援訊息依哪一步失敗照實說。★不要掛在 `_teardown_global_claude`★(那是只有測試呼叫的相容包裝)也不要掛在 `_teardown_global_hooks`(設定檔壞掉時會提前返回)——設計審第二輪兩席獨立抓到。
++- **外掛清單**(2026-10-06,[[Projects/Claude-mod第二批_計劃]]):外掛不再是單一常數,改成完整 id 清單 `_LUMOS_PLUGINS`(事件帳、交棒脈絡兩支),寫法原樣搬自審查席唯讀隔離分支、那邊過了兩輪代碼審。裝:各支獨立,一支失敗不影響下一支、各印一行,回傳取最差的一支;來源市集檔沒列的那支回 no-source、不硬裝。移除:各支各自移,★全部外掛都移除成功才移市集★,任一支失敗就保留市集、手動指令只列失敗那支加市集。資料夾型市集安裝時直接讀市集檔,新增一支不必先更新市集快照(審查席隔離分支 2026-10-06 隔離設定資料夾實測)。測試:`t_install_registers_context_plugin`、`t_lumos_plugin_install_edge_cases`;市集與清單一致:`t_plugin_market_matches_list`。
+ - **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`。事件帳本身見 [[Systems/lumos事件帳]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-context.md b/docs/lumos-toolchain-knowledge/Systems/lumos-context.md
+new file mode 100644
+index 00000000..0947b4a1
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-context.md
+@@ -0,0 +1,32 @@
++---
++type: system
++status: doing
++created: 2026-10-06
++updated: 2026-10-06
++responsibility: Claude 外掛 lumos-context:對話壓縮前在摘要指示後附交棒要求段。不負責:安裝與移除(lumos-cli-lifecycle)、市集檔(lumos事件帳)、壓縮後重新注入規矩(開場 hook)、會談編號(實測不成立,另開題)
++aliases: []
++about_code:
++  - mods/claude/lumos-context/hooks/register.ts
++  - mods/claude/lumos-context/hooks/context.test.ts
++  - mods/claude/lumos-context/hooks/hooks.json
++  - mods/claude/lumos-context/.claude-plugin/plugin.json
++  - mods/claude/lumos-context/tsconfig.json
++tags:
++  - type/system
++  - status/doing
++  - scope/agent-dag
++summary: |-
++  WHY:壓縮前改摘要指示用外掛做,不用官方 PreCompact hook [出處:2026-10-06 核對官方 hook 文件] [因:PreCompact 只能讀指示、整個擋,改不了] [不選:壓縮後重新注入規矩——開場 hook 壓縮後本來就會再跑]
++  WHY:附加段用詞不帶 lumos 專用名詞 [出處:Claude-mod第二批 設計審第二輪] [因:外掛裝在使用者層,所有專案的壓縮都會附]
++  WHY:不做會談編號交給 lumos [出處:2026-10-06 實測] [因:外掛只看得到 claude 啟動時繼承的環境,看不到交給 Bash 的官方編號]
++verified_by:
++  - "[[Verification/2026-10-06_會談編號外掛實測]]"
++---
++# lumos-context
++
++白話:對話快滿、要壓縮成摘要之前,這支外掛在給摘要器的指示後面多附一段固定要求,叫它逐字留住使用者的裁定、目前做到哪、還在跑的背景代理、沒提交的改動、待回覆的問題。子代理壓縮時附精簡版。
++
++- 附加段第一行是固定標記行,指示裡已有那一行(整行相等)就不重附;使用者 `/compact <文字>` 的原文一字不改,接在後面。
++- 掛鉤自己出錯時照原樣交下去,不影響壓縮。
++- 檔:`hooks/register.ts` 是掛鉤與附加段文字,`hooks/context.test.ts` 綁條款 S1–S3 的測試(`claude plugin test` 跑),`hooks/hooks.json` 只載入 register.ts,`.claude-plugin/plugin.json` 是外掛描述檔,`tsconfig.json` 沿用引擎給的型別設定。
++- 決策與範圍:[[Projects/Claude-mod第二批_計劃]];會談編號那項為什麼沒做:[[Verification/2026-10-06_會談編號外掛實測]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+index 9187e88d..a4440c3b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+@@ -37,21 +37,21 @@ related:
+ verified_by:
+   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+   - "[[Verification/2026-10-06_事件帳mod段實作]]"
+ ---
+ # lumos事件帳
+ 
+ > 白話:Claude Code 裝了 lumos-ledger 外掛之後,每場會談做了什麼(回合開始結束、每次工具呼叫成不成功、派了哪些子代理、實際用哪個模型)會寫成一份事件帳,放在主 checkout 的 governance/runtime/events/<會談編號>/ 底下,不進版控。`lumos events` 讀它,`lumos events --prune --days N` 清舊的,`lumos enforcement` 的 claude-event-ledger 那一列看它最近有沒有在寫。設計、條款與兩輪設計審在 [[Projects/Lumos事件帳_計劃]];前提實驗在 [[Verification/2026-10-05_Claude-mod能力實測]]。
+ 
+ ## 現況(2026-10-06)
+ 
+-- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。
++- 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。市集檔 2026-10-06 起多列一支 [[Systems/lumos-context]],市集列的外掛要恰好等於安裝端的外掛清單。
+ - 外掛的寫法:核心邏輯在 `register.ts` 的 `createLedger`(緩衝、塊名、串行寫入、位置判定),讀寫檔與跑 git 由外面注入,所以 `ledger.test.ts` 能用假的讀寫測並行與重新載入;引擎掛鉤只收事件交給核心。
+ - 會談編號、圖譜判定、主 checkout 判定這三條規則在外掛(TypeScript)與讀取端(Python)各寫一份;兩邊共用 `mods/claude/lumos-ledger/hooks/rules-fixture.ts` 的案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它,一邊改了規則另一邊會紅。外掛環境只能匯入程式模組(不能匯入 JSON),所以案例檔是 `.ts`、內容寫成純 JSON,Python 端切出 `RULES = ` 後面那段用 json.loads 讀。
+ - 外掛緩衝只以會談為鍵,每筆帶收到時的 cwd;寫的時候照到達順序把連續寫到同一處的合成一塊,寫前逐層確認事件帳路徑沒有符號連結。
+ - 外掛的驗證器要求引擎介面 `$` 只能傳給檔案頂層宣告的函式;包在註冊函式裡的內部函式收 `$` 會被拒載(`claude plugin validate` 會擋)。
+ - 外掛裝與移除的流程與狀態用詞(ok / absent / no-source / failed)的細節在 [[Systems/lumos-cli-lifecycle]];`lumos events` 指令的用法在 [[Systems/lumos-cli-read]]。
+ - 外掛自己的測試要在本機跑:`claude plugin test mods/claude/lumos-ledger`(CI 沒有 Claude)。
+ 
+ ## 誠實界線
+ 
+ - 只有 Claude Code 會寫;Codex 沒有同等事件。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md
+new file mode 100644
+index 00000000..67f77bf5
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md
+@@ -0,0 +1,35 @@
++---
++type: verification
++status: pass
++date: 2026-10-06
++valid_under:
++revalidate_when:
++tags:
++  - type/verification
++  - status/pass
++  - scope/agent-dag
++plan_refs:
++  - "[[Projects/Claude-mod第二批_計劃]]"
++---
++# 2026-10-06_會談編號外掛實測
++
++白話:想讓外掛每回合把「當下的會談編號」交給 lumos,並記下自己看到的官方編號做配對。實作前先實測三種情況,結論是外掛看到的官方編號跟 Bash 看到的不是同一份,配對的前提不存在,這項停下。
++
++## 怎麼測
++
++在一場 Claude Code 會談的 Bash 裡,用 `claude -p --plugin-dir <lumos-context 資料夾>` 開子會談,叫它在 Bash 印出 `LUMOS_SESSION_ID`、`LUMOS_SESSION_BASE`、`CLAUDE_CODE_SESSION_ID` 三個值,同時記下 `claude -p` 回報的會談編號。當時外掛的回合開始掛鉤:讀 `CLAUDE_CODE_SESSION_ID` 當 BASE、讀 `$.session.id()` 當 ID,兩個都設進環境。
++
++## 結果
++
++| 情況 | Bash 看到的官方編號 | 外掛記下的 BASE | 外掛設的 ID |
++|---|---|---|---|
++| 會談裡再開 `claude -p` | 子會談自己的(對) | 外層會談的舊編號 | 子會談自己的(對) |
++| 同上再 `--resume` 接續 | 跟接續前同一個(`-p` 接續不換編號) | 外層會談的舊編號 | 同左 |
++| 把環境裡的官方編號拿掉再開(模擬從終端機直接開) | 子會談自己的(對) | 空 | 空(BASE 空就兩個都不設) |
++
++- 外掛的 `$.env.get` 讀的是 `claude` 這支程式啟動時繼承來的環境;Bash 的官方編號是 `claude` 另外塞給子程式的,外掛看不到。
++- 所以從終端機直接開的會談,外掛讀到空值,整項等於沒做;會談裡再開的子會談,BASE 是外層的編號。
++- `claude -p --resume` 接續不換編號,重現不了「接續後停在舊值」;本會談自己就是例子(對話壓縮後接續,環境裡的官方編號仍是接續前的),要另外找方法重現。
++
++依計劃寫好的規則(任一步不過就整項停下,不走別的備案),這項不做。要做得重新設計,例如改比對程式編號,另開題。
++
+diff --git a/mods/claude/lumos-context/.claude-plugin/plugin.json b/mods/claude/lumos-context/.claude-plugin/plugin.json
+new file mode 100644
+index 00000000..6da9331e
+--- /dev/null
++++ b/mods/claude/lumos-context/.claude-plugin/plugin.json
+@@ -0,0 +1,5 @@
++{
++  "name": "lumos-context",
++  "version": "0.1.0",
++  "description": "Lumos 交棒脈絡:壓縮前叫摘要保住交棒狀態,把當下的會談編號交給 lumos"
++}
+diff --git a/mods/claude/lumos-context/hooks/context.test.ts b/mods/claude/lumos-context/hooks/context.test.ts
+new file mode 100644
+index 00000000..a27a8f1e
+--- /dev/null
++++ b/mods/claude/lumos-context/hooks/context.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, test } from 'claude-code/testing'
++import { HANDOFF_MAIN, HANDOFF_SUB, MARK_MAIN, MARK_SUB, withHandoff } from './register'
++
++// 條款綁在測試標題開頭(Projects/Claude-mod第二批_計劃 條款節)。
++
++describe('壓縮前附交棒要求', () => {
++  test('S1 沒有指示時直接附主會談版', () => {
++    expect(withHandoff(undefined, false)).toBe(HANDOFF_MAIN)
++    expect(withHandoff('', false)).toBe(HANDOFF_MAIN)
++    expect(withHandoff('  \n ', false)).toBe(HANDOFF_MAIN)
++  })
++
++  test('S1 原本有指示時接在後面,原文一字不改', () => {
++    const orig = '只保留第三節的討論\n  縮排也要留著'
++    const out = withHandoff(orig, false)
++    expect(out.startsWith(orig + '\n\n')).toBe(true)
++    expect(out.endsWith(HANDOFF_MAIN)).toBe(true)
++  })
++
++  test('S1 附加段第一行是固定標記行', () => {
++    expect(HANDOFF_MAIN.split('\n')[0]).toBe(MARK_MAIN)
++    expect(HANDOFF_SUB.split('\n')[0]).toBe(MARK_SUB)
++  })
++
++  test('S2 已有標記行就不再附', () => {
++    const once = withHandoff('先前的指示', false)
++    expect(withHandoff(once, false)).toBe(once)
++    expect(withHandoff(`  ${MARK_MAIN}  \n其他`, false)).toBe(`  ${MARK_MAIN}  \n其他`)
++  })
++
++  test('S2 句中提到標記不算已附', () => {
++    const orig = `請別刪掉 ${MARK_MAIN} 這幾個字`
++    expect(withHandoff(orig, false)).toBe(`${orig}\n\n${HANDOFF_MAIN}`)
++  })
++
++  test('S3 子代理附精簡版,兩種標記各判各的', () => {
++    expect(withHandoff(undefined, true)).toBe(HANDOFF_SUB)
++    const parent = withHandoff('父會談帶下來的指示', false)
++    expect(withHandoff(parent, true)).toBe(`${parent}\n\n${HANDOFF_SUB}`)
++    const sub = withHandoff(undefined, true)
++    expect(withHandoff(sub, true)).toBe(sub)
++  })
++})
+diff --git a/mods/claude/lumos-context/hooks/hooks.json b/mods/claude/lumos-context/hooks/hooks.json
+new file mode 100644
+index 00000000..5fcba7ce
+--- /dev/null
++++ b/mods/claude/lumos-context/hooks/hooks.json
+@@ -0,0 +1 @@
++{ "modules": ["./register.ts"] }
+diff --git a/mods/claude/lumos-context/hooks/register.ts b/mods/claude/lumos-context/hooks/register.ts
+new file mode 100644
+index 00000000..96277d01
+--- /dev/null
++++ b/mods/claude/lumos-context/hooks/register.ts
+@@ -0,0 +1,43 @@
++import type { Register } from 'claude-code'
++
++// lumos-context:壓縮前叫摘要保住交棒狀態(Projects/Claude-mod第二批_計劃)。
++// 外掛裝在使用者層、所有專案都會生效,所以附加段的用詞不帶 lumos 專用名詞。
++// 不寫檔、不呼叫網路或外部程式、不設環境變數;只改摘要指示。
++
++export const MARK_MAIN = '[lumos-context 交棒要求 v1]'
++export const MARK_SUB = '[lumos-context 交棒要求 v1 精簡]'
++
++export const HANDOFF_MAIN = [
++  MARK_MAIN,
++  '摘要必須逐字保留下列內容,不要改寫或省略:',
++  '- 使用者在對話裡下的裁定與指示(原話)',
++  '- 目前在做的任務、做到哪一步、下一步是什麼',
++  '- 還在跑或剛交回的背景代理,各自負責什麼、結果放在哪',
++  '- 還沒提交或還沒推的改動(哪些檔、在哪個分支或工作目錄)',
++  '- 還在等使用者回覆的問題',
++].join('\n')
++
++export const HANDOFF_SUB = [
++  MARK_SUB,
++  '摘要必須保留:這個子代理被交代的任務原文、到目前為止得到的結論與證據位置。',
++].join('\n')
++
++// 去頭尾空白後整行相等才算已附過;句中引用標記不算
++export function hasMark(text: string, mark: string): boolean {
++  return text.split('\n').some(line => line.trim() === mark)
++}
++
++// 原指示不空時先接一個空行再附;空字串、純空白或沒有指示時直接附
++export function withHandoff(instructions: string | undefined, isSub: boolean): string {
++  const mark = isSub ? MARK_SUB : MARK_MAIN
++  const block = isSub ? HANDOFF_SUB : HANDOFF_MAIN
++  const orig = instructions ?? ''
++  if (hasMark(orig, mark)) return orig
++  return orig.trim() === '' ? block : `${orig}\n\n${block}`
++}
++
++export const register: Register = on => {
++  // 自己算壞了就照原樣交下去,不影響壓縮;.catch 裡的 next 不會重跑,壓縮已做完就交回原本的結果
++  on('session.compact', async ($, e, next) => next({ ...e, instructions: withHandoff(e.instructions, typeof e.agentId === 'string') }))
++    .catch(($, e, next) => next(e))
++}
+diff --git a/mods/claude/lumos-context/tsconfig.json b/mods/claude/lumos-context/tsconfig.json
+new file mode 100644
+index 00000000..8681ec01
+--- /dev/null
++++ b/mods/claude/lumos-context/tsconfig.json
+@@ -0,0 +1,3 @@
++{
++  "extends": "./.claude-plugin/types/tsconfig.json"
++}
+diff --git a/scripts/lumos b/scripts/lumos
+index ac7443ff..c859735d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20023,21 +20023,21 @@ def cmd_teardown(yes=False, source=None):
+         print("  (若 PATH 還沒吃到,先重開一個終端;或直接用來源那份:"
+               f"  python {src / 'scripts' / 'lumos'} teardown)", file=sys.stderr)
+         return 2
+     # 確認——★拒絕/取消前零 mutation★(std F13)
+     if not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不拆。確定要拆就加 --yes", file=sys.stderr)
+             return 2
+         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
+         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
+-              "Claude 外掛 lumos-ledger 與市集 lumos-toolchain)。")
++              "Claude 外掛 lumos-ledger、lumos-context 與市集 lumos-toolchain)。")
+         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
+         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
+         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
+         print("  (只拆當前 repo——別的 repo 與 bootstrap 來源 clone 不動。)")
+         try:
+             ans = input("確定? [y/N] ").strip().lower()
+         except EOFError:
+             # isatty() 在某些終端/Windows 回 True 但 stdin 其實 EOF → 讀不到確認。
+             # 對齊 cmd_deinit 與 _confirm_tty 的既有硬化(同一現場,Windows 真機踩過):
+             # 破壞性操作安全預設=拒絕(rc2,同上面非互動分支),不是往下做。
+@@ -21907,34 +21907,34 @@ def _remove_codex_agent(home=None) -> list:
+     for nm, _ in _CODEX_SEATS:
+         f = d / f"{nm}.toml"
+         try:
+             if f.exists() and _CODEX_AGENT_MARK in f.read_text(encoding="utf-8", errors="replace"):
+                 f.unlink(); gone.append(f"agents/{nm}.toml")
+         except OSError:
+             pass
+     return gone
+ 
+ 
+-# ── Claude 事件帳外掛(Projects/Lumos事件帳_計劃 做法第 4 節)─────────────────────
++# ── Claude 外掛:事件帳與交棒脈絡(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點)────
+ # 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
+ # readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
+-_LEDGER_MARKET = "lumos-toolchain"
+-_LEDGER_PLUGIN = "lumos-ledger@lumos-toolchain"
+-_LEDGER_MANUAL = (f"claude plugin uninstall {_LEDGER_PLUGIN} --scope user",
+-                  f"claude plugin marketplace remove {_LEDGER_MARKET} --scope user")
++# 新增外掛不必先跑 marketplace update:資料夾型市集 install 時直接讀市集檔(2026-10-06 隔離設定資料夾實測)。
++_LUMOS_MARKET = "lumos-toolchain"
++_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain")
++_PLUGIN_RANK = {"ok": 0, "absent": 1, "no-source": 2, "failed": 3}   # 回傳值取最差的一支
+ 
+ 
+-def _claude_json(claude, args):
++def _claude_json(claude, args, timeout=30):
+     """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
+     代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
+     import json as _j
+-    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
++    r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=timeout)
+     if r.returncode != 0:
+         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
+     data = _j.loads(r.stdout) if r.stdout.strip() else None
+     if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+         raise RuntimeError(f"{' '.join(args[:3])} 的輸出格式認不得")
+     return data
+ 
+ 
+ def _claude_do(claude, args):
+     r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=30)
+@@ -21942,163 +21942,221 @@ def _claude_do(claude, args):
+         msg = (r.stderr or r.stdout).strip()
+         raise RuntimeError(f"{' '.join(args[:3])}:{msg.splitlines()[0] if msg else 'rc=' + str(r.returncode)}")
+ 
+ 
+ def _same_local_path(a, b):
+     def norm(p):
+         return os.path.realpath(os.path.expanduser(str(p).rstrip("/") or "/"))
+     return norm(a) == norm(b)
+ 
+ 
+-def _plugin_sync_msg(state: str, detail: str = "") -> str:
+-    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。"""
++def _plugin_sync_msg(state: str, detail: str = "", pid: str = "") -> str:
++    """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。pid 空 = 整段(市集或找不到 claude)。"""
++    who = f"Claude 外掛 {pid}" if pid else "Claude 外掛"
+     if state == "ok":
+-        return f"  ✓ Claude 事件帳外掛 {_LEDGER_PLUGIN} 已就位"
++        return f"  ✓ {who} 已就位"
+     if state == "absent":
+-        return f"  (略過 Claude 事件帳外掛:{detail or '找不到 claude 指令'})"
++        return f"  (略過{who}:{detail or '找不到 claude 指令'})"
+     if state == "no-source":
+-        return f"  (略過 Claude 事件帳外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{detail})"
+-    return f"  ⚠ Claude 事件帳外掛 {_LEDGER_PLUGIN} 沒裝好:{detail}"
++        where = "的 .claude-plugin/marketplace.json 沒有列出它" if pid else "沒有 .claude-plugin/marketplace.json"
++        return f"  (略過{who}:lumos 來源 repo {where}——{detail})"
++    return f"  ⚠ {who} 沒裝好:{detail}"
+ 
+ 
+-def _ledger_market(claude):
++def _lumos_plugin_market(claude):
+     return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
+-                 if x.get("name") == _LEDGER_MARKET), None)
++                 if x.get("name") == _LUMOS_MARKET), None)
++
++
++def _lumos_market_is_ours(mk, src):
++    """市集登記是不是我們的:本機資料夾、而且路徑就是 src(安裝、移除、手動指令三處共用)。"""
++    return bool(mk and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src))
+ 
+ 
+-def _ledger_wait(check, tries=3, pause=1.0, budget=10.0):
++def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
+     """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
+     總共超過 budget 秒就不再開新的一次(每次查本身可能要等 claude 很久;代碼審 r3)。"""
+     import time as _t
+     deadline = _t.monotonic() + budget
+     for _ in range(tries):
+         if _t.monotonic() + pause > deadline:
+             break
+         _t.sleep(pause)
+         try:
+             if check():
+                 return True
+         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+             pass
+     return False
+ 
+ 
+-def _ledger_user_plugin(claude):
++def _lumos_plugin_user(claude, pid, timeout=30):
+     """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
+-    return any(x.get("id") == _LEDGER_PLUGIN and x.get("scope", "user") == "user"
+-               for x in _claude_json(claude, ["plugin", "list", "--json"]))
++    return any(x.get("id") == pid and x.get("scope", "user") == "user"
++               for x in _claude_json(claude, ["plugin", "list", "--json"], timeout=timeout))
++
++
++def _lumos_plugin_listed(src):
++    """來源 repo 市集檔列了哪些外掛(id 形如 名稱@市集);讀不到回空集合。"""
++    import json as _j
++    try:
++        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8-sig"))
++    except (OSError, ValueError):
++        return set()
++    plugins = mk.get("plugins") if isinstance(mk, dict) else None
++    if not isinstance(plugins, list):            # null、數字、物件都當沒列(代碼審 r1)
++        return set()
++    return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in plugins if isinstance(p, dict) and isinstance(p.get("name"), str)}
+ 
+ 
+ def _sync_claude_plugin(source=None) -> str:
+-    """確保 lumos-ledger 外掛裝好。回 ok / absent / no-source / failed;自己印訊息(成功與略過到 stdout、失敗到 stderr)。"""
++    """確保外掛清單的每一支都裝好。回最差的一支:ok / absent / no-source / failed;
++    自己印訊息(成功與略過到 stdout、失敗到 stderr),各支分開印。"""
+     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+         print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
+         return "absent"
+     claude = _py_which("claude")
+     if not claude:
+         print(_plugin_sync_msg("absent"))
+         return "absent"
+     src = _lumos_src(source).resolve()      # 相對路徑的 LUMOS_HOME 不能原樣交給 claude(它會照自己的目前目錄解讀)
+     if not (src / ".claude-plugin" / "marketplace.json").is_file():
+         print(_plugin_sync_msg("no-source", str(src)))
+         return "no-source"
+     if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
+-        print(f"  (Claude 事件帳外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
++        print(f"  (Claude 外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+     step = {"removed_old": False, "added": False}
+     try:
+-        if not _ledger_ensure_market(claude, src, step):
+-            print(_plugin_sync_msg("failed", f"已有同名市集 {_LEDGER_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
++        if not _lumos_plugin_ensure_market(claude, src, step):
++            print(_plugin_sync_msg("failed", f"已有同名市集 {_LUMOS_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+                   file=sys.stderr)
+             return "failed"
+         step["added"] = True
+-        _ledger_ensure_plugin(claude)
+     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        print(_plugin_sync_msg("failed", f"{e}{_ledger_fail_hint(step)}"), file=sys.stderr)
++        print(_plugin_sync_msg("failed", f"{e}{_lumos_plugin_fail_hint(step)}"), file=sys.stderr)
+         return "failed"
+-    print(_plugin_sync_msg("ok"))
+-    return "ok"
++    listed = _lumos_plugin_listed(src)
++    worst = "ok"
++    for pid in _LUMOS_PLUGINS:                # 各支獨立:一支失敗不影響下一支
++        if pid not in listed:
++            state = "no-source"
++            print(_plugin_sync_msg(state, str(src), pid))
++        else:
++            try:
++                _lumos_plugin_ensure(claude, pid)
++                state = "ok"
++                print(_plugin_sync_msg(state, "", pid))
++            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++                state = "failed"
++                print(_plugin_sync_msg(state, f"{e}{_lumos_plugin_fail_hint(step)}", pid), file=sys.stderr)
++        worst = max(worst, state, key=_PLUGIN_RANK.__getitem__)
++    return worst
+ 
+ 
+-def _ledger_ensure_market(claude, src, step):
++def _lumos_plugin_ensure_market(claude, src, step):
+     """市集登記成 src 這個本機資料夾。同名市集不是本機資料夾 → 回 False(不動它);
+     本機路徑不同 → 先移除再加。失敗丟例外,step 記到哪一步。"""
+-    mk = _ledger_market(claude)
++    mk = _lumos_plugin_market(claude)
+     if mk is not None and not (mk.get("source") == "directory" and mk.get("path")):
+         return False
+     if mk is not None and not _same_local_path(mk["path"], src):
+-        _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
++        _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
+         step["removed_old"], mk = True, None
+     if mk is None:
+         def ours():
+-            now = _ledger_market(claude)
+-            return bool(now and now.get("source") == "directory" and _same_local_path(now.get("path", ""), src))
++            now = _lumos_plugin_market(claude)
++            return _lumos_market_is_ours(now, src)
+         try:
+             _claude_do(claude, ["plugin", "marketplace", "add", str(src), "--scope", "user"])
+         except (RuntimeError, subprocess.TimeoutExpired):   # 另一支同時跑先加好了、或逾時但其實寫進去了:以最終狀態為準
+-            if not _ledger_wait(ours):
++            if not _lumos_plugin_wait(ours):
+                 raise
+     return True
+ 
+ 
+-def _ledger_ensure_plugin(claude):
+-    """使用者範圍裝上外掛;另一支同時在裝時以最終狀態為準。"""
+-    if _ledger_user_plugin(claude):
++def _lumos_plugin_ensure(claude, pid):
++    """使用者範圍裝上這支外掛,裝完以列表確認真的在;另一支同時在裝時以最終狀態為準。"""
++    if _lumos_plugin_user(claude, pid):
+         return
+     try:
+-        _claude_do(claude, ["plugin", "install", _LEDGER_PLUGIN, "--scope", "user"])
++        _claude_do(claude, ["plugin", "install", pid, "--scope", "user"])
+     except (RuntimeError, subprocess.TimeoutExpired):
+-        if not _ledger_wait(lambda: _ledger_user_plugin(claude)):
++        if not _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid)):
+             raise
++        return
++    try:                                     # 第一次查詢撞到另一支同時在寫也交給等待重查(代碼審 r1)
++        seen = _lumos_plugin_user(claude, pid, timeout=10)   # 短逾時:claude 卡住時不拖太久(代碼審 r2)
++    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++        seen = False
++    if not (seen or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
++        raise RuntimeError("install 回成功但外掛列表裡沒有它")
+ 
+ 
+-def _ledger_fail_hint(step):
++def _lumos_plugin_fail_hint(step):
+     """同步外掛失敗時照實說做到哪一步。"""
+     if step["removed_old"] and not step["added"]:
+-        return ";舊的市集登記已移除、新的沒加上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
++        return ";舊的市集登記已移除、新的沒加上,外掛暫時都沒生效——修好原因後重跑 lumos install --force"
+     if step["added"]:
+-        return ";市集已登記、外掛沒裝上,事件帳暫時停寫——修好原因後重跑 lumos install --force"
++        return ";市集已登記、這支外掛沒裝上,它暫時沒生效——修好原因後重跑 lumos install --force"
+     return ";修好原因後重跑 lumos install --force"
+ 
+ 
+ def _teardown_claude_plugin(source=None) -> str:
+-    """移除 lumos-ledger 外掛與我們的市集。沒有 claude、兩者都沒有就安靜略過;成功說移掉了什麼;失敗附兩個手動指令。"""
++    """移除外掛清單的每一支與我們的市集。沒有 claude、全都沒有就安靜略過;成功說移掉了什麼。
++    外掛逐支獨立移除;全部成功才移除市集,任一支失敗就保留市集,手動補做只列失敗的那幾支加市集。"""
+     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+-        print("  (略過移除 Claude 事件帳外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
++        print("  (略過移除 Claude 外掛:LUMOS_SKIP_CLAUDE_PLUGIN=1)")
+         return "absent"
+     claude = _py_which("claude")
+     if not claude:
+         return "absent"
+     src = _lumos_src(source).resolve()
+-    gone, errors, todo = [], [], []
+-    try:                                     # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+-        if _ledger_user_plugin(claude):
+-            _claude_do(claude, ["plugin", "uninstall", _LEDGER_PLUGIN, "--scope", "user"])
+-            gone.append(f"外掛 {_LEDGER_PLUGIN}")
+-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        errors.append(str(e))
+-        todo.append(_LEDGER_MANUAL[0])
+-    try:                                     # 外掛那步失敗也照樣處理市集(各步獨立)
+-        mk = _ledger_market(claude)
+-        if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
+-            _claude_do(claude, ["plugin", "marketplace", "remove", _LEDGER_MARKET, "--scope", "user"])
+-            gone.append(f"市集 {_LEDGER_MARKET}")
+-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+-        errors.append(str(e))
+-        todo.append(_LEDGER_MANUAL[1])
++    gone, errors, todo, notes = [], [], [], []
++    market_cmd = f"claude plugin marketplace remove {_LUMOS_MARKET} --scope user"
++    for pid in _LUMOS_PLUGINS:               # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
++        try:
++            if _lumos_plugin_user(claude, pid):
++                _claude_do(claude, ["plugin", "uninstall", pid, "--scope", "user"])
++                gone.append(f"外掛 {pid}")
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++            errors.append(str(e))
++            todo.append(f"claude plugin uninstall {pid} --scope user")
++    if errors:                               # 有外掛沒移掉:保留市集(移掉市集會讓那支外掛變成找不到來源的孤兒)
++        try:                                 # 確定不是我們的市集就不叫人移除(代碼審 r1);判不出來照列、附一句先確認
++            mk = _lumos_plugin_market(claude)
++            ours = _lumos_market_is_ours(mk, src)
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++            ours = None
++        if ours:
++            todo.append(market_cmd)
++        elif ours is None:                   # 說明另起一行:zsh 互動模式不把行尾 # 當註解,整行貼上會變成多餘參數(代碼審 r2)
++            notes.append(f"市集 {_LUMOS_MARKET} 判不出是不是我們的:先跑 claude plugin marketplace list 確認來源是 lumos 的資料夾,是才跑最後一行")
++            todo.append(market_cmd)
++    else:
++        try:
++            mk = _lumos_plugin_market(claude)
++            if _lumos_market_is_ours(mk, src):
++                _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
++                gone.append(f"市集 {_LUMOS_MARKET}")
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
++            errors.append(str(e))
++            todo.append(market_cmd)
+     if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
+         done = f"(已移除:{'與'.join(gone)})" if gone else ""
+-        print(f"  ⚠ Claude 事件帳外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
++        print(f"  ⚠ Claude 外掛移除沒做完{done}:{_events_clean('; '.join(errors))}。手動補做:", file=sys.stderr)
++        for n in notes:
++            print(f"  ({n})", file=sys.stderr)
+         for c in todo:
+             print(f"    {c}", file=sys.stderr)
+         return "failed"
+     if gone:
+-        print(f"  ✓ 已移除 Claude 事件帳的{'與'.join(gone)}")
++        print(f"  ✓ 已移除 Claude 的{'與'.join(gone)}")
+     return "ok"
+ 
+ 
+ def _sync_msg(harness: str, state: str) -> str:
+     """三態→給人看的一行(成功講改了什麼;失敗講原因與下一步)。"""
+     hdir, sfile = _HARNESS_HOME[harness]
+     name = "Claude" if harness == "claude" else "Codex"
+     if state == "ok":
+         tail = ";★Codex 的 hook 要你開一次互動 codex 審過(Hooks need review 畫面或 /hooks)才會跑;信任綁的是 hooks.json 裡那條命令列——lumos 更新 hook 檔內容不用重審,命令列變了才要;exec 不會問★" if harness == "codex" else "(含清撤除的舊註冊)"
+         return f"  ✓ 全域 {name} hooks/{sfile} 已同步{tail}"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b4d6db21..d439155b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -2400,23 +2400,23 @@ def t_set_condition_fields_standard_yaml_safe():
+     r = run(v, "set", "V", "valid_under", "#it's \\ 要加引號又兩種都有")
+     check("S6 要加引號、有單引號又有反斜線 → 擋下、檔案不變", r.returncode != 0 and read(p) == before, r.stderr)
+     run(v, "append", "V", "related", "註記 #1", expect_rc=0)
+     check("S6 append 走同一支:空白+# 也加引號", '\n  - "註記 #1"\n' in read(p), read(p))
+ 
+ 
+ def t_decision_add_standard_yaml_safe():
+     """[S7] 決策內容也走同一套白名單與加引號規則(2026-09-26 代碼審 r2 架構席:原本是第三套手刻判準)。"""
+     v, p = _vault_with_decisions()
+     r = run(v, "decision-add", "X", "結尾是冒號:", "--decided", "2026-06-13")
+-    check("S7 決策內容結尾裸冒號 → 加引號(標準 YAML 否則報錯)", r.returncode == 0 and '- content: "結尾是冒號:"' in read(p), r.stderr + read(p))
++    check("S4 決策內容結尾裸冒號 → 加引號(標準 YAML 否則報錯)", r.returncode == 0 and '- content: "結尾是冒號:"' in read(p), r.stderr + read(p))
+     r = run(v, "decision-add", "X", '含冒號: 又有 "雙引號"', "--decided", "2026-06-13")
+-    check("S7 決策內容含「: 」又有雙引號 → 改單引號寫得進去",
++    check("S4 決策內容含「: 」又有雙引號 → 改單引號寫得進去",
+           r.returncode == 0 and "- content: '含冒號: 又有 \"雙引號\"'" in read(p), r.stderr + read(p))
+ 
+ 
+ def t_set_other_keys_single_value_only():
+     """[S4] 其他欄位給兩個值 → 擋下、檔案不變;只給一個值照舊。"""
+     v = mkvault()
+     p = write(v, "Systems/S.md", "type: system\nstatus: doing")
+     before = read(p)
+     r = run(v, "set", "S", "status", "done", "doing")
+     check("S4 其他欄位給兩個值 → 擋下", r.returncode != 0, r.stdout + r.stderr)
+@@ -2712,64 +2712,64 @@ def t_doctor_s7_overloaded_note():
+     def _keys(n):
+         return "\n".join(
+             f"  KEY:★INVARIANT★ 規則{i} [test:t_x{i}]" for i in range(n))
+     v = mkvault()
+     # 正例:12 條合約(超過預設門檻 10)
+     write(v, "Systems/太多.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(12), body="# 太多\n")
+     # 反例:3 條(不該唸)
+     write(v, "Systems/剛好.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(3), body="# 剛好\n")
+     r = run(v, "doctor")
+     _s7 = _section_of(r.stdout, "S7")
+-    check("S7 唸合約太多的那篇", "太多" in _s7 and "12 條合約" in _s7, _s7)
+-    check("S7 不誤報條數正常的", "剛好" not in _s7, _s7)
+-    check("S7 是提醒不擋(rc 0)", r.returncode == 0, r.stdout)
++    check("S4 唸合約太多的那篇", "太多" in _s7 and "12 條合約" in _s7, _s7)
++    check("S4 不誤報條數正常的", "剛好" not in _s7, _s7)
++    check("S4 是提醒不擋(rc 0)", r.returncode == 0, r.stdout)
+ 
+     # 門檻可調:設成 20 之後 12 條就不該唸
+     import json as _json, pathlib as _pl
+     # _lumos_config_near_vault 找的是 vault 的上一層(專案根)底下的 .lumos/
+     _cfgdir = _pl.Path(v).parent / ".lumos"
+     _cfgdir.mkdir(exist_ok=True)
+     (_cfgdir / "config.json").write_text(
+         _json.dumps({"node_scope": {"max_contracts": 20}}), encoding="utf-8")
+     _s7b = _section_of(run(v, "doctor").stdout, "S7")
+-    check("S7 門檻可在專案設定調高", "太多" not in _s7b, _s7b)
++    check("S4 門檻可在專案設定調高", "太多" not in _s7b, _s7b)
+ 
+     # 壞值退回預設並出聲
+     (_cfgdir / "config.json").write_text(
+         _json.dumps({"node_scope": {"max_contracts": "十"}}), encoding="utf-8")
+     _s7c = _section_of(run(v, "doctor").stdout, "S7")
+-    check("S7 壞門檻退回預設並出聲", "看不懂" in _s7c and "太多" in _s7c, _s7c)
++    check("S4 壞門檻退回預設並出聲", "看不懂" in _s7c and "太多" in _s7c, _s7c)
+ 
+     # ★bool 要被擋★(代碼審 r1 正確性席 major):Python 裡 bool 是 int 的子類,
+     # isinstance(True, int) 為真、True < 1 為假——兩段防呆都放行,門檻悄悄變成 1,
+     # 每篇有合約的節點都會被誤判。true/false 還會行為不對稱(false 擋得住)。
+     # ★門檻是「達到就唸」不是「超過才唸」★(代碼審 r1 測試席 f4):
+     # 原本兩個 fixture 是 12 條與 3 條,都離門檻很遠——實測把 >= 改成 >,
+     # 五條斷言照樣全過。這裡造一篇★剛好等於門檻★的來釘住邊界。
+     (_cfgdir / "config.json").write_text(
+         _json.dumps({"node_scope": {"max_contracts": 5}}), encoding="utf-8")
+     write(v, "Systems/剛好卡在門檻.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(5),
+           body="# 剛好卡在門檻\n")
+     _s7e = _section_of(run(v, "doctor").stdout, "S7")
+-    check("S7 剛好等於門檻就要唸(>= 不是 >)", "剛好卡在門檻" in _s7e, _s7e)
++    check("S4 剛好等於門檻就要唸(>= 不是 >)", "剛好卡在門檻" in _s7e, _s7e)
+     # 門檻減一的那篇仍不唸
+     write(v, "Systems/差一條.md", "type: system\nstatus: done\nsummary: |-\n" + _keys(4),
+           body="# 差一條\n")
+     _s7f = _section_of(run(v, "doctor").stdout, "S7")
+-    check("S7 差一條不唸", "差一條" not in _s7f, _s7f)
++    check("S4 差一條不唸", "差一條" not in _s7f, _s7f)
+ 
+     for _bad in (True, False):
+         (_cfgdir / "config.json").write_text(
+             _json.dumps({"node_scope": {"max_contracts": _bad}}), encoding="utf-8")
+         _s7d = _section_of(run(v, "doctor").stdout, "S7")
+-        check(f"S7 擋住 bool 門檻({_bad})", "看不懂" in _s7d, _s7d)
+-        check(f"S7 bool 時不誤報條數正常的({_bad})", "剛好" not in _s7d, _s7d)
++        check(f"S4 擋住 bool 門檻({_bad})", "看不懂" in _s7d, _s7d)
++        check(f"S4 bool 時不誤報條數正常的({_bad})", "剛好" not in _s7d, _s7d)
+ 
+ 
+ def t_check_e1_dead_endorsement():
+     v = mkvault()
+     # 正例1:背書指向 stale 驗證 → E1 必抓
+     write(v, "Systems/Dead.md", "type: system\nstatus: done\nverified_by:\n  - \"[[VStale]]\"", body="# Dead\n")
+     write(v, "Verification/VStale.md", "type: verification\nstatus: stale\ndate: 2026-01-01", body="# VStale\n")
+     # 正例2:背書指向 fail 驗證 → E1 必抓
+     write(v, "Systems/Failing.md", "type: system\nstatus: done\nverified_by:\n  - \"[[VFail]]\"", body="# Failing\n")
+     write(v, "Verification/VFail.md", "type: verification\nstatus: fail\ndate: 2026-01-01", body="# VFail\n")
+@@ -36114,22 +36114,22 @@ def t_escape_stats_rate_unit_is_loop():
+     check("S6 cap-reached 不算放行", c and c["released"] == 1, repr(c))
+ 
+ 
+ def t_escape_stats_next_stage_and_unknown_stage():
+     """[S7] 實作、code-loop、push-gate 開頭 → 下一站接住;不認得的站名算漏網並另列。"""
+     v = _mk_escape_fixture(review=[("甲", "standard"), ("乙", "standard")], converged=["甲", "乙"],
+                 escapes=[_esc_row("甲", stage="code-loop", token="E1", sha="a"), _esc_row("甲", stage="push-gate-unreviewed", token="E2", sha="b"),
+                          _esc_row("乙", stage="消費專案真推送", token="E3", sha="c")])
+     st = _esc_stats(v)
+     c = _esc_cat(st, "design")
+-    check("S7 下一站接住另列、不算漏網", c["next_stage"] == 2 and c["leaked"] == 1, repr(c))
+-    check("S7 不認得的站名另列", st["totals"]["unknown_stage"] == 1, repr(st["totals"]))
++    check("S4 下一站接住另列、不算漏網", c["next_stage"] == 2 and c["leaked"] == 1, repr(c))
++    check("S4 不認得的站名另列", st["totals"]["unknown_stage"] == 1, repr(st["totals"]))
+ 
+ 
+ def t_escape_stats_unattributed_and_unreleased_buckets():
+     """[S8] 同佐證對到兩個以上放行迴圈 → 歸因不明;沒放行迴圈的逃逸另列;兩者都不進分子。"""
+     v = _mk_escape_fixture(review=[("甲", "standard"), ("乙", "standard"), ("丙", "standard")], converged=["甲", "乙"],
+                 escapes=[_esc_row("甲", token="E1", sha="same"), _esc_row("乙", token="E2", sha="same"), _esc_row("丙", token="E3", sha="z")])
+     st = _esc_stats(v)
+     c = _esc_cat(st, "design")
+     check("S8 歸因不明不進分子", c["leaked"] == 0 and st["totals"]["unattributed"] == 2, repr(st))
+     check("S8 未放行迴圈的逃逸另列", st["totals"]["unreleased"] == 1, repr(st["totals"]))
+@@ -36451,24 +36451,24 @@ def t_cap_hint_declining_major_human_decides():
+     h = m._cap_hint(rows)
+     check("S6 在降仍有 major → 由人裁", h is not None and h["hint"] == "human-decides", repr(h))
+     txt = "\n".join(m._cap_hint_lines(h))
+     check("S6 文字不得寫「建議再一輪」", "建議再一輪" not in txt and "由人裁" in txt, txt)
+ 
+ 
+ @_cap_real_cutoff
+ def t_cap_hint_vacuous_round_counts_zero():
+     """[S7] 沒彙總帳而各席 findings 全 0 → 折 0;有人報了條數卻沒彙總帳 → 沒記處置、判不了。"""
+     h = _cap_hint_of(_cap_rows([(4, "major", [4]), (2, "major", [2]), (None, "clean", [0, 0])]))
+-    check("S7 空輪算折 0", h is not None and [r["folded"] for r in h["rounds"]] == [4, 2, 0], repr(h))
+-    check("S7 空輪算有記處置", h is not None and h["rounds"][-1]["recorded"] is True, repr(h))
++    check("S4 空輪算折 0", h is not None and [r["folded"] for r in h["rounds"]] == [4, 2, 0], repr(h))
++    check("S4 空輪算有記處置", h is not None and h["rounds"][-1]["recorded"] is True, repr(h))
+     h2 = _cap_hint_of(_cap_rows([(4, "major", [4]), (2, "major", [2]), (None, "major", [3, 0])]))
+-    check("S7 有報沒處置 → 判不了", h2 is not None and h2["hint"] == "unknown" and h2["rounds"][-1]["recorded"] is False, repr(h2))
++    check("S4 有報沒處置 → 判不了", h2 is not None and h2["hint"] == "unknown" and h2["rounds"][-1]["recorded"] is False, repr(h2))
+ 
+ 
+ @_cap_real_cutoff
+ def t_cap_hint_breaker_total_folded():
+     """[S8] 累計折入 > 20 → 印拆小;不論輪數;沒記處置的輪不加進累計並註明。"""
+     m = _load_lumos()
+     h = m._cap_hint(_cap_rows([(21, "major", [21])]))
+     check("S8 只有一輪但累計 21 → 熔斷", h is not None and h["breaker"] and h["breaker"]["total"] == 21, repr(h))
+     check("S8 只有一輪 → 提示判不了、熔斷並列", h is not None and h["hint"] == "unknown", repr(h))
+     _t = "\n".join(m._cap_hint_lines(h))
+@@ -49686,32 +49686,32 @@ def t_lint_gate_modes():
+     cfg = m._lint_new_config(root)
+     check("S13 不合法的值退回預設並唸出來", cfg["mode"] == "block" and cfg["budget_sec"] == 300 and len(cfg["warnings"]) == 2,
+           str(cfg))
+ 
+ 
+ def t_lint_waive():
+     """[S7] 放行要寫理由、綁指紋、寫進會進版控的檔;讀改寫要上鎖。"""
+     m = _lng_module()
+     root, _git = _lng_repo()
+     ok, err = m._lint_waivers_add(root, "abc123", "R", "a.py", "測試理由", "tester")
+-    check("S7 放行寫得進去", ok is True and err is None, str(err))
++    check("S4 放行寫得進去", ok is True and err is None, str(err))
+     cur, err2 = m._lint_waivers_load(root)
+-    check("S7 讀得回來", err2 is None and "abc123" in cur and cur["abc123"]["reason"] == "測試理由", str(cur))
++    check("S4 讀得回來", err2 is None and "abc123" in cur and cur["abc123"]["reason"] == "測試理由", str(cur))
+     ok2, err3 = m._lint_waivers_add(root, "abc123", "R", "a.py", "再來一次", "tester")
+-    check("S7 同一個指紋不重複放行", ok2 is False and "已經放行過" in (err3 or ""), str(err3))
++    check("S4 同一個指紋不重複放行", ok2 is False and "已經放行過" in (err3 or ""), str(err3))
+     # 放在會進版控的位置(不是被忽略的暫存目錄)
+-    check("S7 放行檔路徑固定", str(m._lint_waivers_path(root)).endswith(".lumos/lint-waivers.json"),
++    check("S4 放行檔路徑固定", str(m._lint_waivers_path(root)).endswith(".lumos/lint-waivers.json"),
+           str(m._lint_waivers_path(root)))
+     # 併發:兩筆不同指紋各自加,兩筆都要在(只做原子換名的話後寫的會蓋掉先寫的)
+     m._lint_waivers_add(root, "def456", "R2", "b.py", "第二筆", "tester")
+     cur2, _ = m._lint_waivers_load(root)
+-    check("S7 兩筆放行都留著", set(cur2) == {"abc123", "def456"}, str(sorted(cur2)))
++    check("S4 兩筆放行都留著", set(cur2) == {"abc123", "def456"}, str(sorted(cur2)))
+ 
+ 
+ def t_lint_new_gate():
+     """[S6] 這道閘接在代碼審那一關,而且不看風險分級(低風險照樣擋)。"""
+     m = _lng_module()
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
+     i_disp = src.index("dv = _dispositions_verdict(")
+     i_lint = src.index("lv = _lint_new_verdict(")
+     i_tier = src.index('if tier != "high":\n        return {"blocked": False, "reason": f"tier={tier}(非 high)"')
+     check("S6 排在表態之後", i_lint > i_disp, f"{i_disp} {i_lint}")
+@@ -70792,22 +70792,24 @@ fail = os.environ.get("FAKE_CLAUDE_FAIL", "")
+ raw = os.environ.get("FAKE_CLAUDE_RAW")          # 列表類指令改吐這串(壞 JSON 用)
+ late = os.environ.get("FAKE_CLAUDE_APPLY_THEN_FAIL", "")
+ delayed = os.environ.get("FAKE_CLAUDE_APPLY_DELAYED", "")
+ def save():
+     json.dump(st, open(st_p, "w"))
+ if a[:3] == ["plugin", "marketplace", "list"]:
+     print(raw if raw is not None else json.dumps(st["markets"])); sys.exit(0)
+ if a[:2] == ["plugin", "list"]:
+     print(raw if raw is not None else json.dumps(st["plugins"])); sys.exit(0)
+ sub = a[2] if a[1] == "marketplace" else a[1]
+-if fail and fail == sub:
++if fail and fail == sub and os.environ.get("FAKE_CLAUDE_FAIL_ID", a[2] if len(a) > 2 else "") == (a[2] if len(a) > 2 else ""):
+     print("boom: " + sub, file=sys.stderr); sys.exit(1)
++if a[:2] == ["plugin", "install"] and os.environ.get("FAKE_CLAUDE_INSTALL_NOOP") == a[2]:
++    sys.exit(0)                                   # 回成功但其實沒裝上
+ if a[:3] == ["plugin", "marketplace", "add"] and delayed == "add":
+     import subprocess
+     src = a[3]; name = json.load(open(os.path.join(src, ".claude-plugin", "marketplace.json")))["name"]
+     entry = json.dumps({"name": name, "source": "directory", "path": src})
+     subprocess.Popen([sys.executable, "-c", "import json,sys,time;time.sleep(1);p=sys.argv[1];"
+                       "st=json.load(open(p)) if __import__('os').path.exists(p) else {'markets':[],'plugins':[]};"
+                       "st['markets'].append(json.loads(sys.argv[2]));json.dump(st,open(p,'w'))", st_p, entry])
+     print("locked by another process", file=sys.stderr); sys.exit(1)
+ if a[:3] == ["plugin", "marketplace", "add"]:
+     src = a[3]; name = json.load(open(os.path.join(src, ".claude-plugin", "marketplace.json")))["name"]
+@@ -70834,21 +70836,22 @@ print("unknown " + " ".join(a), file=sys.stderr); sys.exit(2)
+ 
+ def _fake_claude_env(state=None, with_claude=True):
+     """回 (env 增量, state 路徑, log 路徑, 來源 repo)。來源 repo 帶市集檔;state 給定就先寫進去。"""
+     import json as _j
+     import os
+     base = Path(tempfile.mkdtemp(prefix="gctl-fake-claude-"))
+     bin_d, src = base / "bin", base / "src"
+     bin_d.mkdir(); (src / ".claude-plugin").mkdir(parents=True)
+     (src / ".claude-plugin" / "marketplace.json").write_text(
+         _j.dumps({"name": "lumos-toolchain", "owner": {"name": "t"},
+-                  "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"}]}), encoding="utf-8")
++                  "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"},
++                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"}]}), encoding="utf-8")
+     if with_claude:
+         (bin_d / "claude").write_text(_FAKE_CLAUDE, encoding="utf-8"); (bin_d / "claude").chmod(0o755)
+     st, log = base / "state.json", base / "calls.log"
+     log.write_text("", encoding="utf-8")
+     if state is not None:
+         st.write_text(_j.dumps(state), encoding="utf-8")
+     env = {"PATH": str(bin_d) + os.pathsep + os.environ.get("PATH", ""), "LUMOS_HOME": str(src),
+            "FAKE_CLAUDE_STATE": str(st), "FAKE_CLAUDE_LOG": str(log)}
+     return env, st, log, src
+ 
+@@ -70874,21 +70877,22 @@ def t_install_registers_ledger_plugin():
+     env, st, log, src = _fake_claude_env()
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     check("S6① 回 ok", r == "ok", r)
+     check("S6① 以 _lumos_src() 為來源加市集(--scope user)",
+           any(l.startswith("plugin marketplace add " + str(src.resolve())) and "--scope user" in l for l in c), str(c))
+     check("S6① 安裝外掛(--scope user)", "plugin install lumos-ledger@lumos-toolchain --scope user" in c, str(c))
+     # ② 已經一樣 → 只查詢、不加不裝
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src) + "/"}],
+-                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
++                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True},
++                                        {"id": "lumos-context@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     check("S6② 已裝好 → ok 且不呼叫 add / install(路徑多一個結尾斜線也算一樣)",
+           r == "ok" and not any(" add " in f" {l} " or l.startswith("plugin install") for l in c), str(c))
+     # ③ 同名市集指向別的本機路徑 → 先移除再加
+     env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "directory",
+                                                               "path": "/tmp/old-worktree"}], "plugins": []})
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     ia = next((i for i, l in enumerate(c) if l.startswith("plugin marketplace remove lumos-toolchain")), -1)
+@@ -70920,21 +70924,21 @@ def t_install_registers_ledger_plugin():
+     check("S6⑥ 外掛失敗不改 install 回傳碼", r.returncode == base_rc, f"rc={r.returncode} base={base_rc} {r.stderr[-300:]}")
+     check("S6⑥ 失敗印到標準錯誤", "lumos-ledger" in r.stderr, r.stderr[-300:])
+     # ⑦ 開關打開 → 整段略過、一個 claude 都不叫
+     env, st, log, src = _fake_claude_env()
+     _with_env(dict(env, LUMOS_SKIP_CLAUDE_PLUGIN="1"), m._sync_claude_plugin, drop=())
+     check("S6⑦ LUMOS_SKIP_CLAUDE_PLUGIN=1 → 不呼叫 claude", calls(log) == [], str(calls(log)))
+ 
+ 
+ def t_teardown_removes_ledger_plugin():
+     """S7:實際跑 `lumos uninstall`(子行程):外掛有列出就移除、市集是我們的就 --scope user 移除(外掛沒列也要);
+-    兩者都沒有不印失敗;失敗附兩個手動指令;LUMOS_PROBE 時整個被擋、不叫 claude。"""
++    兩者都沒有不印失敗;失敗只列還沒做成那幾步的手動指令(外掛移除失敗時保留市集);LUMOS_PROBE 時整個被擋、不叫 claude。"""
+     import os
+     def run(env, extra=None):
+         full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env); full.update(extra or {})
+         return subprocess.run([sys.executable, GRAPHCTL, "uninstall"], env=full, capture_output=True, check=False, text=True)
+     calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+     def ours(src, plugin=True):
+         return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src)}],
+                 "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}] if plugin else []}
+     env, st, log, src = _fake_claude_env()
+     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+@@ -70950,23 +70954,24 @@ def t_teardown_removes_ledger_plugin():
+     env, st, log, src = _fake_claude_env()
+     r = run(env)
+     check("S7③ 兩者都沒有 → 不印失敗", "失敗" not in r.stdout + r.stderr, r.stdout + r.stderr)
+     env, st, log, src = _fake_claude_env(with_claude=False)
+     env["PATH"] = str(Path(env["PATH"].split(os.pathsep)[0]))
+     r = run(env)
+     check("S7③ 找不到 claude → 不印失敗", "失敗" not in r.stdout + r.stderr, r.stdout + r.stderr)
+     env, st, log, src = _fake_claude_env()
+     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+     r = run(env, {"FAKE_CLAUDE_FAIL": "uninstall"})
+-    check("S7④ 失敗時只附還沒做成那步的手動指令(外掛那步失敗、市集已移除)",
++    check("S7④ 外掛那步失敗:市集保留,手動指令列那支外掛與市集",
+           "claude plugin uninstall lumos-ledger@lumos-toolchain" in r.stderr
+-          and "claude plugin marketplace remove" not in r.stderr, r.stderr[-400:])
++          and "claude plugin marketplace remove" in r.stderr
++          and "plugin marketplace remove lumos-toolchain --scope user" not in calls(log), r.stderr[-400:])
+     env, st, log, src = _fake_claude_env()
+     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+     r = run(env, {"FAKE_CLAUDE_RAW": "null"})
+     check("S7④ 兩步都失敗時附兩個手動指令",
+           "claude plugin uninstall lumos-ledger@lumos-toolchain" in r.stderr
+           and "claude plugin marketplace remove lumos-toolchain --scope user" in r.stderr, r.stderr[-400:])
+     env, st, log, src = _fake_claude_env()
+     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+     r = run(env, {"LUMOS_PROBE": "1"})
+     check("S7⑤ LUMOS_PROBE → 整個被擋(rc 2)且不呼叫 claude", r.returncode == 2 and calls(log) == [], f"rc={r.returncode} {calls(log)}")
+@@ -71292,28 +71297,30 @@ def t_ledger_plugin_teardown_scope_and_messages():
+     # 只有專案範圍那份:不叫 uninstall、不印失敗,市集照清
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "project"}]}),
+                   encoding="utf-8")
+     r, out, err = run(env, m._teardown_claude_plugin)
+     c = calls(log)
+     check("只有專案範圍那份:不呼叫 plugin uninstall", not any(l.startswith("plugin uninstall") for l in c), str(c))
+     check("只有專案範圍那份:市集照樣移除、不印失敗",
+           "plugin marketplace remove lumos-toolchain --scope user" in c and "失敗" not in err, f"{c} {err}")
+-    # 外掛移除失敗:市集照樣處理
++    # 外掛移除失敗:保留市集(移掉會讓那支外掛變成找不到來源的孤兒),手動指令列那支加市集
+     env, st, log, src = _fake_claude_env()
+     env["FAKE_CLAUDE_FAIL"] = "uninstall"
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
+                   encoding="utf-8")
+     r, out, err = run(env, m._teardown_claude_plugin)
+-    check("外掛移除失敗:市集照樣移除", "plugin marketplace remove lumos-toolchain --scope user" in calls(log), str(calls(log)))
++    check("外掛移除失敗:保留市集", "plugin marketplace remove lumos-toolchain --scope user" not in calls(log), str(calls(log)))
++    check("外掛移除失敗:手動指令列那支外掛加市集",
++          "claude plugin uninstall lumos-ledger@lumos-toolchain" in err and "claude plugin marketplace remove" in err, err[-400:])
+     # uninstall 帶 source:不設 LUMOS_HOME 也找得到是我們的市集
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                             "plugins": []}), encoding="utf-8")
+     env2 = dict(env); env2.pop("LUMOS_HOME")
+     def call_uninstall():
+         os.environ.pop("LUMOS_HOME", None)
+         return m._teardown_claude_plugin(source=str(src))
+     _with_env(env2, call_uninstall)
+     check("帶 source:沒有 LUMOS_HOME 也移除得到我們的市集", "plugin marketplace remove lumos-toolchain --scope user" in calls(log),
+@@ -71472,48 +71479,49 @@ def t_events_r3_honest_messages():
+         removed, failed = m._events_prune(base, 30)
+     check("r3 掃描時檔案剛被改名:沒刪、也不說刪了一部分", removed == [] and failed == [("A", False)]
+           and (a / "1.jsonl").exists(), f"{removed} {failed}")
+     # 等待有總預算:每次查很慢時,不會照次數一直等
+     n = {"c": 0}
+     def slow():
+         n["c"] += 1
+         _t.sleep(0.5)
+         return False
+     t0 = _t.time()
+-    m._ledger_wait(slow, tries=10, pause=0.05, budget=1.0)
+-    check("r3 _ledger_wait 有總預算:查得慢時提早收手", n["c"] <= 3 and _t.time() - t0 < 2.5, f"{n['c']} 次")
++    m._lumos_plugin_wait(slow, tries=10, pause=0.05, budget=1.0)
++    check("r3 _lumos_plugin_wait 有總預算:查得慢時提早收手", n["c"] <= 3 and _t.time() - t0 < 2.5, f"{n['c']} 次")
+     # add 逾時(可能已寫入):照樣稍等再查
+     def run(env, fn, **kw):
+         out, err = io.StringIO(), io.StringIO()
+         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+             r = _with_env(env, lambda: fn(**kw))
+         return r, out.getvalue(), err.getvalue()
+     env, st, log, src = _fake_claude_env()
+     real_do = m._claude_do
+     def do(claude, args):
+         if args[:3] == ["plugin", "marketplace", "add"]:
+             real_do(claude, args)
+             raise subprocess.TimeoutExpired(args, 30)
+         return real_do(claude, args)
+-    with mock.patch.object(m, "_claude_do", do), mock.patch.object(m, "_ledger_wait",
++    with mock.patch.object(m, "_claude_do", do), mock.patch.object(m, "_lumos_plugin_wait",
+                                                                     lambda check, **kw: check()):
+         r, out, err = run(env, m._sync_claude_plugin)
+     check("r3 市集 add 逾時但其實寫進去了:稍等再查後算成功", r == "ok", f"{r} {err}")
+     # 卸載做一半:只給還沒做的那步
+     env, st, _log, src = _fake_claude_env()
+     env["FAKE_CLAUDE_FAIL"] = "uninstall"
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
+                   encoding="utf-8")
+     r, _out, err = run(env, m._teardown_claude_plugin)
+-    check("r3 外掛移除失敗、市集已移除:手動指令只給外掛那條",
+-          "plugin uninstall lumos-ledger@lumos-toolchain" in err and "marketplace remove" not in err, err)
++    check("r3 外掛移除失敗:市集保留(全部外掛移除成功才移市集),手動指令給外掛那條加市集",
++          "plugin uninstall lumos-ledger@lumos-toolchain" in err and "marketplace remove lumos-toolchain" in err
++          and not any(ln.startswith("plugin marketplace remove") for ln in _log.read_text(encoding="utf-8").splitlines()), err)
+     # 沒有事件帳:來源還沒附外掛 → 不叫人跑 install;附了才叫
+     root = _mk_repo_with_graph()
+     nosrc = Path(tempfile.mkdtemp(prefix="gctl-r3-nosrc-"))
+     e = dict(os.environ, LUMOS_HOME=str(nosrc))
+     r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=root, capture_output=True, text=True, check=False, env=e)
+     check("r3 來源沒有市集檔:提示講外掛還沒附,不叫人跑 lumos install", "lumos install" not in r.stdout and "還沒" in r.stdout, r.stdout)
+     e = dict(os.environ, LUMOS_HOME=str(src))
+     r = subprocess.run([sys.executable, GRAPHCTL, "events"], cwd=root, capture_output=True, text=True, check=False, env=e)
+     check("r3 來源有市集檔:提示照舊叫人跑 lumos install", "lumos install" in r.stdout, r.stdout)
+ 
+@@ -71541,21 +71549,23 @@ def t_enforcement_ledger_row_symlinks():
+ def t_ledger_plugin_files_valid():
+     """S9:repo 內的外掛檔——市集檔與外掛描述檔是合法 JSON、市集 source 是 ./ 開頭且指到存在的外掛資料夾、
+     外掛只往事件帳資料夾寫、寫的 .gitignore 內容跟 _note_audit_work_dir 相同、不用會改變行為的介面。"""
+     import json as _j
+     import re as _re
+     _need_src(".claude-plugin/marketplace.json", "mods/claude/lumos-ledger")   # 消費專案沒有外掛檔,記成 skip
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+     check("S9 市集名是 lumos-toolchain", mk.get("name") == "lumos-toolchain", str(mk.get("name")))
+     plugins = [p for p in mk.get("plugins", []) if p.get("name") == "lumos-ledger"]
+-    check("S9 市集只列 lumos-ledger 一個外掛", len(mk.get("plugins", [])) == 1 and len(plugins) == 1, str(mk.get("plugins")))
++    names = sorted(f"{p.get('name')}@{mk.get('name')}" for p in mk.get("plugins", []))
++    check("S9 市集列出的外掛恰好是外掛清單那幾支(lumos-ledger 是其中一支)",
++          len(plugins) == 1 and names == sorted(_load_lumos_inproc()._LUMOS_PLUGINS), str(mk.get("plugins")))
+     src = plugins[0].get("source", "") if plugins else ""
+     check("S9 source 是 ./ 開頭的相對路徑", isinstance(src, str) and src.startswith("./"), repr(src))
+     pdir = (repo / src).resolve()
+     check("S9 source 指到存在的外掛資料夾(含外掛描述檔)", (pdir / ".claude-plugin" / "plugin.json").is_file(), str(pdir))
+     pj = _j.loads((pdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+     check("S9 外掛描述檔名稱是 lumos-ledger", pj.get("name") == "lumos-ledger", str(pj))
+     hooks = _j.loads((pdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+     check("S9 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
+     code = (pdir / "hooks" / "register.ts").read_text(encoding="utf-8")
+     m = _re.search(r"EVENTS_REL = '([^']+)'", code)
+@@ -71572,20 +71582,228 @@ def t_ledger_plugin_files_valid():
+     want = _re.search(r'_write_lf\(d / "\.gitignore", "([^"]*)"\)', lumos_src)
+     check("S9 寫的 .gitignore 內容跟 _note_audit_work_dir 相同",
+           bool(gi and want) and gi.group(1).encode().decode("unicode_escape") == want.group(1).encode().decode("unicode_escape"),
+           f"{gi.group(1) if gi else None!r} vs {want.group(1) if want else None!r}")
+     banned = [("回傳拒絕", r"\bdeny\s*:"), ("改寫事件後交下去", r"next\(\{"),
+               ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'")]
+     for what, pat in banned:
+         check(f"S9 不用會改變行為的介面:{what}", not _re.search(pat, code), pat)
+ 
+ 
++def t_install_registers_context_plugin():
++    """Claude-mod第二批 S4:外掛清單兩支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
++    市集只在全部外掛移除成功後才移除,任一支失敗保留市集;來源市集檔沒列的那支略過。"""
++    import contextlib
++    import io
++    import json as _j
++    m = _load_lumos_inproc()
++    def calls(log):
++        return [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln]
++    def run(env, fn):
++        out, err = io.StringIO(), io.StringIO()
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++            r = _with_env(env, fn)
++        return r, out.getvalue(), err.getvalue()
++    check("S4 外掛清單是事件帳與交棒脈絡兩支",
++          tuple(m._LUMOS_PLUGINS) == ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain"), str(m._LUMOS_PLUGINS))
++    env, st, log, src = _fake_claude_env()
++    r, out, err = run(env, m._sync_claude_plugin)
++    c = calls(log)
++    check("S4 兩支都以 --scope user 裝上、回 ok",
++          r == "ok" and all(f"plugin install {p} --scope user" in c for p in m._LUMOS_PLUGINS), f"{r} {c}")
++    check("S4 兩支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
++    # 一支裝失敗:另一支照裝、回 failed、失敗那支印到標準錯誤
++    env, st, log, src = _fake_claude_env()
++    env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
++    r, out, err = run(env, m._sync_claude_plugin)
++    check("S4 事件帳外掛裝失敗:交棒脈絡外掛照裝", "plugin install lumos-context@lumos-toolchain --scope user" in calls(log), str(calls(log)))
++    check("S4 一支失敗回 failed、失敗那支印到標準錯誤",
++          r == "failed" and "lumos-ledger@lumos-toolchain 沒裝好" in err and "lumos-context@lumos-toolchain 已就位" in out, f"{r} {err} {out}")
++    # install 回成功但列表裡沒有:判那支 failed
++    env, st, log, src = _fake_claude_env()
++    env["FAKE_CLAUDE_INSTALL_NOOP"] = "lumos-context@lumos-toolchain"
++    with __import__("unittest").mock.patch.object(m, "_lumos_plugin_wait", lambda *a, **k: False):
++        r, out, err = run(env, m._sync_claude_plugin)
++    check("S4 裝完列表確認:回成功但沒裝上 → 那支 failed", r == "failed" and "lumos-context@lumos-toolchain 沒裝好" in err, f"{r} {err}")
++    # 來源市集檔沒列交棒脈絡外掛:那支略過(no-source),事件帳照裝
++    env, st, log, src = _fake_claude_env()
++    mk = src / ".claude-plugin" / "marketplace.json"
++    d = _j.loads(mk.read_text(encoding="utf-8"))
++    d["plugins"] = d["plugins"][:1]
++    mk.write_text(_j.dumps(d), encoding="utf-8")
++    r, out, err = run(env, m._sync_claude_plugin)
++    check("S4 來源沒列的那支略過、不硬裝", r == "no-source" and not any("lumos-context" in ln for ln in calls(log))
++          and "lumos-ledger@lumos-toolchain 已就位" in out, f"{r} {calls(log)}")
++    # 移除:兩支都移除,市集最後移除一次
++    def both(src):
++        return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
++                "plugins": [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]}
++    env, st, log, src = _fake_claude_env()
++    st.write_text(_j.dumps(both(src)), encoding="utf-8")
++    r, out, err = run(env, m._teardown_claude_plugin)
++    c = calls(log)
++    rm = [i for i, ln in enumerate(c) if ln.startswith("plugin uninstall")]
++    mi = next((i for i, ln in enumerate(c) if ln.startswith("plugin marketplace remove")), -1)
++    check("S4 移除:兩支都移除、市集在它們之後只移除一次",
++          r == "ok" and len(rm) == 2 and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
++    # 移除時一支失敗:另一支照移、市集保留、手動指令只列失敗那支加市集
++    env, st, log, src = _fake_claude_env()
++    st.write_text(_j.dumps(both(src)), encoding="utf-8")
++    env.update(FAKE_CLAUDE_FAIL="uninstall", FAKE_CLAUDE_FAIL_ID="lumos-context@lumos-toolchain")
++    r, out, err = run(env, m._teardown_claude_plugin)
++    c = calls(log)
++    check("S4 一支移除失敗:另一支照移、市集保留",
++          r == "failed" and "plugin uninstall lumos-ledger@lumos-toolchain --scope user" in c
++          and not any(ln.startswith("plugin marketplace remove") for ln in c), str(c))
++    check("S4 手動指令只列失敗那支加市集",
++          "claude plugin uninstall lumos-context@lumos-toolchain" in err and "claude plugin uninstall lumos-ledger" not in err
++          and "claude plugin marketplace remove lumos-toolchain" in err, err)
++
++
++def t_lumos_plugin_install_edge_cases():
++    """外掛清單的邊角(從審查席唯讀隔離分支搬來,那邊代碼審 r1 的修正):裝完確認的第一次查詢出錯也交給等待重查;來源沒有市集檔的訊息走共用函式;
++    移除失敗時只有市集是我們的才叫人移除它;市集檔 plugins 欄位怪或檔首有 BOM 不丟例外。"""
++    import contextlib
++    import io
++    import json as _j
++    from unittest import mock
++    m = _load_lumos_inproc()
++    # ① 裝完第一次查詢丟錯(另一支 install 同時在寫):交給等待重查,不判失敗
++    seq = iter([False, RuntimeError("busy")])
++    def user(_c, _pid, timeout=30):
++        x = next(seq)
++        if isinstance(x, Exception):
++            raise x
++        return x
++    with mock.patch.object(m, "_lumos_plugin_user", user), mock.patch.object(m, "_claude_do", lambda *a, **k: None), \
++         mock.patch.object(m, "_lumos_plugin_wait", lambda check, **k: True):
++        try:
++            m._lumos_plugin_ensure("claude", "lumos-context@lumos-toolchain")
++            ok = True
++        except Exception as e:  # 測的就是不得丟例外
++            ok = f"EXC {type(e).__name__}"
++    check("裝完第一次查詢丟錯:交給等待重查、不判失敗", ok is True, str(ok))
++    # ② 來源 repo 沒有市集檔:訊息跟共用函式產生的一字不差
++    env, _st, _log, src = _fake_claude_env()
++    (src / ".claude-plugin" / "marketplace.json").unlink()
++    out = io.StringIO()
++    with contextlib.redirect_stdout(out):
++        r = _with_env(env, m._sync_claude_plugin)
++    check("來源沒有市集檔的訊息走 _plugin_sync_msg", r == "no-source" and m._plugin_sync_msg("no-source", str(src.resolve())) in out.getvalue(),
++          out.getvalue())
++    # ③ 移除失敗時:市集不是我們的(github 來源)就不叫人移除它;是我們的才列
++    def teardown_err(state, env_extra):
++        env, st, _log, src = _fake_claude_env()
++        st.write_text(_j.dumps(state(src)), encoding="utf-8")
++        env.update(env_extra)
++        err = io.StringIO()
++        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
++            r = _with_env(env, m._teardown_claude_plugin)
++        return r, err.getvalue()
++    plugs = [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]
++    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "github", "repo": "x/y"}], "plugins": plugs},
++                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
++    check("移除失敗、市集不是我們的:手動指令不列移除市集", r == "failed" and "marketplace remove" not in err, err)
++    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
++                                       "plugins": plugs},
++                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
++    check("移除失敗、市集是我們的:手動指令列移除市集", r == "failed" and "marketplace remove lumos-toolchain" in err, err)
++    # ⑥ 手動指令行都能直接整行貼上:不在行尾帶 # 註解
++    r, err = teardown_err(lambda src: {"markets": [], "plugins": plugs}, {"FAKE_CLAUDE_RAW": "null"})
++    cmds = [ln.strip() for ln in err.splitlines() if ln.strip().startswith("claude plugin")]
++    check("手動指令行不帶 # 註解", bool(cmds) and not any("#" in c for c in cmds), err)
++    # ⑦ 裝完確認那次查詢用 10 秒逾時(claude 卡住時不拖太久)
++    tims = []
++    def user2(_c, _pid, timeout=30):
++        tims.append(timeout)
++        return len(tims) > 1
++    with mock.patch.object(m, "_lumos_plugin_user", user2), mock.patch.object(m, "_claude_do", lambda *a, **k: None):
++        m._lumos_plugin_ensure("claude", "lumos-context@lumos-toolchain")
++    check("裝完確認那次查詢用 10 秒逾時", tims[1:2] == [10], str(tims))
++    # ⑤ 回傳取最差:一支來源沒列(no-source)、另一支裝失敗(failed)→ 整體 failed
++    env, _st, _log, src = _fake_claude_env()
++    mk = src / ".claude-plugin" / "marketplace.json"
++    dd = _j.loads(mk.read_text(encoding="utf-8"))
++    dd["plugins"] = dd["plugins"][:1]
++    mk.write_text(_j.dumps(dd), encoding="utf-8")
++    env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
++    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++        r = _with_env(env, m._sync_claude_plugin)
++    check("回傳取最差:no-source 加 failed → failed", r == "failed", r)
++    # ④ 市集檔怪內容:不丟例外;檔首有 BOM 照樣讀得到
++    d = Path(tempfile.mkdtemp(prefix="gctl-mk-"))
++    (d / ".claude-plugin").mkdir()
++    for raw in ('{"plugins": null}', '{"plugins": 5}', '{"plugins": [5, "x", null]}', "[]", "not json"):
++        (d / ".claude-plugin" / "marketplace.json").write_text(raw, encoding="utf-8")
++        try:
++            got = m._lumos_plugin_listed(d)
++        except Exception as e:
++            got = f"EXC {type(e).__name__}"
++        check(f"市集檔 {raw!r}:回空集合、不丟例外", got == set(), str(got))
++    (d / ".claude-plugin" / "marketplace.json").write_text(
++        "\ufeff" + _j.dumps({"name": "lumos-toolchain", "plugins": [{"name": "lumos-context"}]}), encoding="utf-8")
++    check("市集檔檔首有 BOM:照樣讀得到", m._lumos_plugin_listed(d) == {"lumos-context@lumos-toolchain"}, str(m._lumos_plugin_listed(d)))
++
++
++def t_plugin_market_matches_list():
++    """Claude-mod第二批 S5:市集檔恰好列出外掛清單的每一支,每支 source 是 ./ 開頭、資料夾裡有描述檔與 hooks/hooks.json。"""
++    import json as _j
++    _need_src(".claude-plugin/marketplace.json")   # 消費專案沒有外掛檔,記成 skip
++    m = _load_lumos_inproc()
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
++    names = sorted(f"{p.get('name')}@{mk.get('name')}" for p in mk.get("plugins", []))
++    check("S5 市集列出的外掛恰好是外掛清單那幾支", names == sorted(m._LUMOS_PLUGINS), f"{names} vs {m._LUMOS_PLUGINS}")
++    for p in mk.get("plugins", []):
++        src = p.get("source", "")
++        pdir = (repo / src).resolve()
++        check(f"S5 {p.get('name')} 的 source 是 ./ 開頭、資料夾有描述檔與 hooks/hooks.json",
++              isinstance(src, str) and src.startswith("./") and (pdir / ".claude-plugin" / "plugin.json").is_file()
++              and (pdir / "hooks" / "hooks.json").is_file(), repr(src))
++        pj = _j.loads((pdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
++        check(f"S5 {p.get('name')} 描述檔的名稱跟市集一致", pj.get("name") == p.get("name"), str(pj))
++
++
++def t_context_plugin_files_valid():
++    """Claude-mod第二批 S6:lumos-context 不設環境變數,沒有網路、寫檔與執行外部程式的呼叫;
++    只掛壓縮一個事件,而且掛了 .catch。"""
++    import json as _j
++    import re as _re
++    _need_src("mods/claude/lumos-context")   # 消費專案沒有外掛檔,記成 skip
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    cdir = repo / "mods" / "claude" / "lumos-context"
++    hooks = _j.loads((cdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
++    check("S6 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
++    code = (cdir / "hooks" / "register.ts").read_text(encoding="utf-8")
++    banned = [("跑外部指令", r"\$\.process\."), ("寫檔", r"\$\.fs\."), ("網路", r"\bfetch\(|\$\.net\.|\$\.http"),
++              ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'"),
++              ("附加對話列", r"\$\.session\.append"), ("擋工具或派工", r"\bdeny\s*:"), ("設或讀環境變數", r"\$\.env\.")]
++    for what, pat in banned:
++        check(f"S6 不用:{what}", not _re.search(pat, code), pat)
++    check("S6 只掛壓縮一個事件",
++          sorted(set(_re.findall(r"on\('([a-z.]+)'", code))) == ["session.compact"],
++          str(_re.findall(r"on\('([a-z.]+)'", code)))
++    # CI 沒有 claude 指令,這一段只在本機有 claude 時查
++    import shutil as _sh
++    claude = _sh.which("claude")
++    if claude:
++        r = subprocess.run([claude, "plugin", "validate", str(cdir), "--json"], capture_output=True, text=True,
++                           errors="replace", check=False, timeout=60)
++        try:
++            gh = [g for c in _j.loads(r.stdout).get("contents", []) for g in c.get("gatingHooks") or []]
++        except ValueError:
++            gh = None
++        check("S6 claude plugin validate:能擋人的掛鉤只有 session.compact,而且掛了 .catch",
++              gh is not None and [g.get("hook") for g in gh] == ["session.compact"] and all(g.get("hasCatch") is True for g in gh),
++              r.stdout[-600:] if gh is None else str(gh))
++
++
+ def t_ledger_rules_match_reader():
+     """外掛(TypeScript)與讀取端(Python)各寫一份的三條規則,用同一份案例檔 mods/claude/lumos-ledger/hooks/rules-fixture.ts 對齊
+     (代碼審:規則重寫兩份又沒有守衛,一邊改了另一邊不會被擋)。外掛那邊由 ledger.test.ts 跑同一批案例。"""
+     import json as _j
+     import os
+     from unittest import mock
+     _need_src("mods/claude/lumos-ledger/hooks/rules-fixture.ts")
+     m = _load_lumos_inproc()
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     txt = (repo / "mods/claude/lumos-ledger/hooks/rules-fixture.ts").read_text(encoding="utf-8")

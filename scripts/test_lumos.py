@@ -72914,8 +72914,10 @@ if a[:3] == ["plugin", "marketplace", "list"]:
 if a[:2] == ["plugin", "list"]:
     print(raw if raw is not None else json.dumps(st["plugins"])); sys.exit(0)
 sub = a[2] if a[1] == "marketplace" else a[1]
-if fail and fail == sub:
+if fail and fail == sub and os.environ.get("FAKE_CLAUDE_FAIL_ID", a[2] if len(a) > 2 else "") == (a[2] if len(a) > 2 else ""):
     print("boom: " + sub, file=sys.stderr); sys.exit(1)
+if a[:2] == ["plugin", "install"] and os.environ.get("FAKE_CLAUDE_INSTALL_NOOP") == a[2]:
+    sys.exit(0)                                   # 回成功但其實沒裝上
 if a[:3] == ["plugin", "marketplace", "add"] and delayed == "add":
     import subprocess
     src = a[3]; name = json.load(open(os.path.join(src, ".claude-plugin", "marketplace.json")))["name"]
@@ -72956,7 +72958,8 @@ def _fake_claude_env(state=None, with_claude=True):
     bin_d.mkdir(); (src / ".claude-plugin").mkdir(parents=True)
     (src / ".claude-plugin" / "marketplace.json").write_text(
         _j.dumps({"name": "lumos-toolchain", "owner": {"name": "t"},
-                  "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"}]}), encoding="utf-8")
+                  "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"},
+                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"}]}), encoding="utf-8")
     if with_claude:
         (bin_d / "claude").write_text(_FAKE_CLAUDE, encoding="utf-8"); (bin_d / "claude").chmod(0o755)
     st, log = base / "state.json", base / "calls.log"
@@ -72996,7 +72999,8 @@ def t_install_registers_ledger_plugin():
     # ② 已經一樣 → 只查詢、不加不裝
     env, st, log, src = _fake_claude_env()
     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src) + "/"}],
-                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
+                            "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True},
+                                        {"id": "lumos-context@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
     r = _with_env(env, m._sync_claude_plugin)
     c = calls(log)
     check("S6② 已裝好 → ok 且不呼叫 add / install(路徑多一個結尾斜線也算一樣)",
@@ -73042,7 +73046,7 @@ def t_install_registers_ledger_plugin():
 
 def t_teardown_removes_ledger_plugin():
     """S7:實際跑 `lumos uninstall`(子行程):外掛有列出就移除、市集是我們的就 --scope user 移除(外掛沒列也要);
-    兩者都沒有不印失敗;失敗附兩個手動指令;LUMOS_PROBE 時整個被擋、不叫 claude。"""
+    兩者都沒有不印失敗;失敗只列還沒做成那幾步的手動指令(外掛移除失敗時保留市集);LUMOS_PROBE 時整個被擋、不叫 claude。"""
     import os
     def run(env, extra=None):
         full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env); full.update(extra or {})
@@ -73072,9 +73076,10 @@ def t_teardown_removes_ledger_plugin():
     env, st, log, src = _fake_claude_env()
     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
     r = run(env, {"FAKE_CLAUDE_FAIL": "uninstall"})
-    check("S7④ 失敗時只附還沒做成那步的手動指令(外掛那步失敗、市集已移除)",
+    check("S7④ 外掛那步失敗:市集保留,手動指令列那支外掛與市集",
           "claude plugin uninstall lumos-ledger@lumos-toolchain" in r.stderr
-          and "claude plugin marketplace remove" not in r.stderr, r.stderr[-400:])
+          and "claude plugin marketplace remove" in r.stderr
+          and "plugin marketplace remove lumos-toolchain --scope user" not in calls(log), r.stderr[-400:])
     env, st, log, src = _fake_claude_env()
     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
     r = run(env, {"FAKE_CLAUDE_RAW": "null"})
@@ -73414,14 +73419,16 @@ def t_ledger_plugin_teardown_scope_and_messages():
     check("只有專案範圍那份:不呼叫 plugin uninstall", not any(l.startswith("plugin uninstall") for l in c), str(c))
     check("只有專案範圍那份:市集照樣移除、不印失敗",
           "plugin marketplace remove lumos-toolchain --scope user" in c and "失敗" not in err, f"{c} {err}")
-    # 外掛移除失敗:市集照樣處理
+    # 外掛移除失敗:保留市集(移掉會讓那支外掛變成找不到來源的孤兒),手動指令列那支加市集
     env, st, log, src = _fake_claude_env()
     env["FAKE_CLAUDE_FAIL"] = "uninstall"
     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
                   encoding="utf-8")
     r, out, err = run(env, m._teardown_claude_plugin)
-    check("外掛移除失敗:市集照樣移除", "plugin marketplace remove lumos-toolchain --scope user" in calls(log), str(calls(log)))
+    check("外掛移除失敗:保留市集", "plugin marketplace remove lumos-toolchain --scope user" not in calls(log), str(calls(log)))
+    check("外掛移除失敗:手動指令列那支外掛加市集",
+          "claude plugin uninstall lumos-ledger@lumos-toolchain" in err and "claude plugin marketplace remove" in err, err[-400:])
     # uninstall 帶 source:不設 LUMOS_HOME 也找得到是我們的市集
     env, st, log, src = _fake_claude_env()
     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
@@ -73594,8 +73601,8 @@ def t_events_r3_honest_messages():
         _t.sleep(0.5)
         return False
     t0 = _t.time()
-    m._ledger_wait(slow, tries=10, pause=0.05, budget=1.0)
-    check("r3 _ledger_wait 有總預算:查得慢時提早收手", n["c"] <= 3 and _t.time() - t0 < 2.5, f"{n['c']} 次")
+    m._lumos_plugin_wait(slow, tries=10, pause=0.05, budget=1.0)
+    check("r3 _lumos_plugin_wait 有總預算:查得慢時提早收手", n["c"] <= 3 and _t.time() - t0 < 2.5, f"{n['c']} 次")
     # add 逾時(可能已寫入):照樣稍等再查
     def run(env, fn, **kw):
         out, err = io.StringIO(), io.StringIO()
@@ -73609,7 +73616,7 @@ def t_events_r3_honest_messages():
             real_do(claude, args)
             raise subprocess.TimeoutExpired(args, 30)
         return real_do(claude, args)
-    with mock.patch.object(m, "_claude_do", do), mock.patch.object(m, "_ledger_wait",
+    with mock.patch.object(m, "_claude_do", do), mock.patch.object(m, "_lumos_plugin_wait",
                                                                     lambda check, **kw: check()):
         r, out, err = run(env, m._sync_claude_plugin)
     check("r3 市集 add 逾時但其實寫進去了:稍等再查後算成功", r == "ok", f"{r} {err}")
@@ -73620,8 +73627,9 @@ def t_events_r3_honest_messages():
                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True, "scope": "user"}]}),
                   encoding="utf-8")
     r, _out, err = run(env, m._teardown_claude_plugin)
-    check("r3 外掛移除失敗、市集已移除:手動指令只給外掛那條",
-          "plugin uninstall lumos-ledger@lumos-toolchain" in err and "marketplace remove" not in err, err)
+    check("r3 外掛移除失敗:市集保留(全部外掛移除成功才移市集),手動指令給外掛那條加市集",
+          "plugin uninstall lumos-ledger@lumos-toolchain" in err and "marketplace remove lumos-toolchain" in err
+          and not any(ln.startswith("plugin marketplace remove") for ln in _log.read_text(encoding="utf-8").splitlines()), err)
     # 沒有事件帳:來源還沒附外掛 → 不叫人跑 install;附了才叫
     root = _mk_repo_with_graph()
     nosrc = Path(tempfile.mkdtemp(prefix="gctl-r3-nosrc-"))
@@ -73663,7 +73671,8 @@ def t_ledger_plugin_files_valid():
     mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     check("S9 市集名是 lumos-toolchain", mk.get("name") == "lumos-toolchain", str(mk.get("name")))
     plugins = [p for p in mk.get("plugins", []) if p.get("name") == "lumos-ledger"]
-    check("S9 市集只列 lumos-ledger 一個外掛", len(mk.get("plugins", [])) == 1 and len(plugins) == 1, str(mk.get("plugins")))
+    check("S9 市集裡 lumos-ledger 恰好一筆(市集與外掛清單一致由 t_plugin_market_matches_list 管)",
+          len(plugins) == 1, str(mk.get("plugins")))
     src = plugins[0].get("source", "") if plugins else ""
     check("S9 source 是 ./ 開頭的相對路徑", isinstance(src, str) and src.startswith("./"), repr(src))
     pdir = (repo / src).resolve()
@@ -73692,6 +73701,214 @@ def t_ledger_plugin_files_valid():
               ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'")]
     for what, pat in banned:
         check(f"S9 不用會改變行為的介面:{what}", not _re.search(pat, code), pat)
+
+
+def t_install_registers_context_plugin():
+    """Claude-mod第二批 S4:外掛清單兩支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
+    市集只在全部外掛移除成功後才移除,任一支失敗保留市集;來源市集檔沒列的那支略過。"""
+    import contextlib
+    import io
+    import json as _j
+    m = _load_lumos_inproc()
+    def calls(log):
+        return [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln]
+    def run(env, fn):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r = _with_env(env, fn)
+        return r, out.getvalue(), err.getvalue()
+    check("S4 外掛清單是事件帳與交棒脈絡兩支",
+          tuple(m._LUMOS_PLUGINS) == ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain"), str(m._LUMOS_PLUGINS))
+    env, st, log, src = _fake_claude_env()
+    r, out, err = run(env, m._sync_claude_plugin)
+    c = calls(log)
+    check("S4 兩支都以 --scope user 裝上、回 ok",
+          r == "ok" and all(f"plugin install {p} --scope user" in c for p in m._LUMOS_PLUGINS), f"{r} {c}")
+    check("S4 兩支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
+    # 一支裝失敗:另一支照裝、回 failed、失敗那支印到標準錯誤
+    env, st, log, src = _fake_claude_env()
+    env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
+    r, out, err = run(env, m._sync_claude_plugin)
+    check("S4 事件帳外掛裝失敗:交棒脈絡外掛照裝", "plugin install lumos-context@lumos-toolchain --scope user" in calls(log), str(calls(log)))
+    check("S4 一支失敗回 failed、失敗那支印到標準錯誤",
+          r == "failed" and "lumos-ledger@lumos-toolchain 沒裝好" in err and "lumos-context@lumos-toolchain 已就位" in out, f"{r} {err} {out}")
+    # install 回成功但列表裡沒有:判那支 failed
+    env, st, log, src = _fake_claude_env()
+    env["FAKE_CLAUDE_INSTALL_NOOP"] = "lumos-context@lumos-toolchain"
+    with __import__("unittest").mock.patch.object(m, "_lumos_plugin_wait", lambda *a, **k: False):
+        r, out, err = run(env, m._sync_claude_plugin)
+    check("S4 裝完列表確認:回成功但沒裝上 → 那支 failed", r == "failed" and "lumos-context@lumos-toolchain 沒裝好" in err, f"{r} {err}")
+    # 來源市集檔沒列交棒脈絡外掛:那支略過(no-source),事件帳照裝
+    env, st, log, src = _fake_claude_env()
+    mk = src / ".claude-plugin" / "marketplace.json"
+    d = _j.loads(mk.read_text(encoding="utf-8"))
+    d["plugins"] = d["plugins"][:1]
+    mk.write_text(_j.dumps(d), encoding="utf-8")
+    r, out, err = run(env, m._sync_claude_plugin)
+    check("S4 來源沒列的那支略過、不硬裝", r == "no-source" and not any("lumos-context" in ln for ln in calls(log))
+          and "lumos-ledger@lumos-toolchain 已就位" in out, f"{r} {calls(log)}")
+    # 移除:兩支都移除,市集最後移除一次
+    def both(src):
+        return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                "plugins": [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]}
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps(both(src)), encoding="utf-8")
+    r, out, err = run(env, m._teardown_claude_plugin)
+    c = calls(log)
+    rm = [i for i, ln in enumerate(c) if ln.startswith("plugin uninstall")]
+    mi = next((i for i, ln in enumerate(c) if ln.startswith("plugin marketplace remove")), -1)
+    check("S4 移除:兩支都移除、市集在它們之後只移除一次",
+          r == "ok" and len(rm) == 2 and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
+    # 移除時一支失敗:另一支照移、市集保留、手動指令只列失敗那支加市集
+    env, st, log, src = _fake_claude_env()
+    st.write_text(_j.dumps(both(src)), encoding="utf-8")
+    env.update(FAKE_CLAUDE_FAIL="uninstall", FAKE_CLAUDE_FAIL_ID="lumos-context@lumos-toolchain")
+    r, out, err = run(env, m._teardown_claude_plugin)
+    c = calls(log)
+    check("S4 一支移除失敗:另一支照移、市集保留",
+          r == "failed" and "plugin uninstall lumos-ledger@lumos-toolchain --scope user" in c
+          and not any(ln.startswith("plugin marketplace remove") for ln in c), str(c))
+    check("S4 手動指令只列失敗那支加市集",
+          "claude plugin uninstall lumos-context@lumos-toolchain" in err and "claude plugin uninstall lumos-ledger" not in err
+          and "claude plugin marketplace remove lumos-toolchain" in err, err)
+
+
+def t_lumos_plugin_install_edge_cases():
+    """外掛清單的邊角(從審查席唯讀隔離分支搬來,那邊代碼審 r1 的修正):裝完確認的第一次查詢出錯也交給等待重查;來源沒有市集檔的訊息走共用函式;
+    移除失敗時只有市集是我們的才叫人移除它;市集檔 plugins 欄位怪或檔首有 BOM 不丟例外。"""
+    import contextlib
+    import io
+    import json as _j
+    from unittest import mock
+    m = _load_lumos_inproc()
+    # ① 裝完第一次查詢丟錯(另一支 install 同時在寫):交給等待重查,不判失敗
+    seq = iter([False, RuntimeError("busy")])
+    def user(_c, _pid, timeout=30):
+        x = next(seq)
+        if isinstance(x, Exception):
+            raise x
+        return x
+    with mock.patch.object(m, "_lumos_plugin_user", user), mock.patch.object(m, "_claude_do", lambda *a, **k: None), \
+         mock.patch.object(m, "_lumos_plugin_wait", lambda check, **k: True):
+        try:
+            m._lumos_plugin_ensure("claude", "lumos-context@lumos-toolchain")
+            ok = True
+        except Exception as e:  # 測的就是不得丟例外
+            ok = f"EXC {type(e).__name__}"
+    check("裝完第一次查詢丟錯:交給等待重查、不判失敗", ok is True, str(ok))
+    # ② 來源 repo 沒有市集檔:訊息跟共用函式產生的一字不差
+    env, _st, _log, src = _fake_claude_env()
+    (src / ".claude-plugin" / "marketplace.json").unlink()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        r = _with_env(env, m._sync_claude_plugin)
+    check("來源沒有市集檔的訊息走 _plugin_sync_msg", r == "no-source" and m._plugin_sync_msg("no-source", str(src.resolve())) in out.getvalue(),
+          out.getvalue())
+    # ③ 移除失敗時:市集不是我們的(github 來源)就不叫人移除它;是我們的才列
+    def teardown_err(state, env_extra):
+        env, st, _log, src = _fake_claude_env()
+        st.write_text(_j.dumps(state(src)), encoding="utf-8")
+        env.update(env_extra)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            r = _with_env(env, m._teardown_claude_plugin)
+        return r, err.getvalue()
+    plugs = [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]
+    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "github", "repo": "x/y"}], "plugins": plugs},
+                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
+    check("移除失敗、市集不是我們的:手動指令不列移除市集", r == "failed" and "marketplace remove" not in err, err)
+    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                                       "plugins": plugs},
+                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
+    check("移除失敗、市集是我們的:手動指令列移除市集", r == "failed" and "marketplace remove lumos-toolchain" in err, err)
+    # ⑥ 手動指令行都能直接整行貼上:不在行尾帶 # 註解
+    r, err = teardown_err(lambda src: {"markets": [], "plugins": plugs}, {"FAKE_CLAUDE_RAW": "null"})
+    cmds = [ln.strip() for ln in err.splitlines() if ln.strip().startswith("claude plugin")]
+    check("手動指令行不帶 # 註解", bool(cmds) and not any("#" in c for c in cmds), err)
+    # ⑦ 裝完確認那次查詢用 10 秒逾時(claude 卡住時不拖太久)
+    tims = []
+    def user2(_c, _pid, timeout=30):
+        tims.append(timeout)
+        return len(tims) > 1
+    with mock.patch.object(m, "_lumos_plugin_user", user2), mock.patch.object(m, "_claude_do", lambda *a, **k: None):
+        m._lumos_plugin_ensure("claude", "lumos-context@lumos-toolchain")
+    check("裝完確認那次查詢用 10 秒逾時", tims[1:2] == [10], str(tims))
+    # ⑤ 回傳取最差:一支來源沒列(no-source)、另一支裝失敗(failed)→ 整體 failed
+    env, _st, _log, src = _fake_claude_env()
+    mk = src / ".claude-plugin" / "marketplace.json"
+    dd = _j.loads(mk.read_text(encoding="utf-8"))
+    dd["plugins"] = dd["plugins"][:1]
+    mk.write_text(_j.dumps(dd), encoding="utf-8")
+    env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        r = _with_env(env, m._sync_claude_plugin)
+    check("回傳取最差:no-source 加 failed → failed", r == "failed", r)
+    # ④ 市集檔怪內容:不丟例外;檔首有 BOM 照樣讀得到
+    d = Path(tempfile.mkdtemp(prefix="gctl-mk-"))
+    (d / ".claude-plugin").mkdir()
+    for raw in ('{"plugins": null}', '{"plugins": 5}', '{"plugins": [5, "x", null]}', "[]", "not json"):
+        (d / ".claude-plugin" / "marketplace.json").write_text(raw, encoding="utf-8")
+        try:
+            got = m._lumos_plugin_listed(d)
+        except Exception as e:
+            got = f"EXC {type(e).__name__}"
+        check(f"市集檔 {raw!r}:回空集合、不丟例外", got == set(), str(got))
+    (d / ".claude-plugin" / "marketplace.json").write_text(
+        "\ufeff" + _j.dumps({"name": "lumos-toolchain", "plugins": [{"name": "lumos-context"}]}), encoding="utf-8")
+    check("市集檔檔首有 BOM:照樣讀得到", m._lumos_plugin_listed(d) == {"lumos-context@lumos-toolchain"}, str(m._lumos_plugin_listed(d)))
+
+
+def t_plugin_market_matches_list():
+    """Claude-mod第二批 S5:市集檔恰好列出外掛清單的每一支,每支 source 是 ./ 開頭、資料夾裡有描述檔與 hooks/hooks.json。"""
+    import json as _j
+    _need_src(".claude-plugin/marketplace.json")   # 消費專案沒有外掛檔,記成 skip
+    m = _load_lumos_inproc()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    names = sorted(f"{p.get('name')}@{mk.get('name')}" for p in mk.get("plugins", []))
+    check("S5 市集列出的外掛恰好是外掛清單那幾支", names == sorted(m._LUMOS_PLUGINS), f"{names} vs {m._LUMOS_PLUGINS}")
+    for p in mk.get("plugins", []):
+        src = p.get("source", "")
+        pdir = (repo / src).resolve()
+        check(f"S5 {p.get('name')} 的 source 是 ./ 開頭、資料夾有描述檔與 hooks/hooks.json",
+              isinstance(src, str) and src.startswith("./") and (pdir / ".claude-plugin" / "plugin.json").is_file()
+              and (pdir / "hooks" / "hooks.json").is_file(), repr(src))
+        pj = _j.loads((pdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        check(f"S5 {p.get('name')} 描述檔的名稱跟市集一致", pj.get("name") == p.get("name"), str(pj))
+
+
+def t_context_plugin_files_valid():
+    """Claude-mod第二批 S6:lumos-context 不設環境變數,沒有網路、寫檔與執行外部程式的呼叫;
+    只掛壓縮一個事件,而且掛了 .catch。"""
+    import json as _j
+    import re as _re
+    _need_src("mods/claude/lumos-context")   # 消費專案沒有外掛檔,記成 skip
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    cdir = repo / "mods" / "claude" / "lumos-context"
+    hooks = _j.loads((cdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    check("S9 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
+    code = (cdir / "hooks" / "register.ts").read_text(encoding="utf-8")
+    banned = [("跑外部指令", r"\$\.process\."), ("寫檔", r"\$\.fs\."), ("網路", r"\bfetch\(|\$\.net\.|\$\.http"),
+              ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'"),
+              ("附加對話列", r"\$\.session\.append"), ("擋工具或派工", r"\bdeny\s*:"), ("設或讀環境變數", r"\$\.env\.")]
+    for what, pat in banned:
+        check(f"S6 不用:{what}", not _re.search(pat, code), pat)
+    check("S6 只掛壓縮一個事件",
+          sorted(set(_re.findall(r"on\('([a-z.]+)'", code))) == ["session.compact"],
+          str(_re.findall(r"on\('([a-z.]+)'", code)))
+    # CI 沒有 claude 指令,這一段只在本機有 claude 時查
+    import shutil as _sh
+    claude = _sh.which("claude")
+    if claude:
+        r = subprocess.run([claude, "plugin", "validate", str(cdir), "--json"], capture_output=True, text=True,
+                           errors="replace", check=False, timeout=60)
+        try:
+            gh = [g for c in _j.loads(r.stdout).get("contents", []) for g in c.get("gatingHooks") or []]
+        except ValueError:
+            gh = None
+        check("S6 claude plugin validate:能擋人的掛鉤只有 session.compact,而且掛了 .catch",
+              gh is not None and [g.get("hook") for g in gh] == ["session.compact"] and all(g.get("hasCatch") is True for g in gh),
+              r.stdout[-600:] if gh is None else str(gh))
 
 
 def t_ledger_rules_match_reader():
