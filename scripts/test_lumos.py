@@ -6350,8 +6350,8 @@ def t_panel_probe_retired():
     check("retired: 拒判訊息指路 --disposal", "--disposal" in ra.stderr and "僅供舊迴圈回放" in ra.stderr, ra.stderr[-300:])
     # (b) code-* major+accepted → FAIL;散文同構 → PASS(用 --disposal,無 spec 綁定的最小帳)
     specf = v / "Systems" / "strict-spec.md"
-    specf.write_text("severity: major\n## f1\nseverity: major\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # 兼當席報告:檔首檔級行+一條宣告(2026-09-09 寫側拒收沒正規化的報告)
-    specm = v / "Systems" / "strict-spec-minor.md"; specm.write_text("severity: minor\n## f1\nseverity: minor\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # minor 記帳用的報告(帳面不得低於報告最高)
+    specf.write_text("severity: major\n## f1\nseverity: major\n引句：「引句素材行,長度超過十個字元。」\n", encoding="utf-8")   # 兼當席報告:檔首檔級行+一條宣告(2026-09-09 寫側拒收沒正規化的報告)
+    specm = v / "Systems" / "strict-spec-minor.md"; specm.write_text("severity: minor\n## f1\nseverity: minor\n引句：「引句素材行,長度超過十個字元。」\n", encoding="utf-8")   # minor 記帳用的報告(帳面不得低於報告最高)
     import hashlib as _hl
     sha = _hl.sha256(specf.read_bytes()).hexdigest()
     for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
@@ -6365,7 +6365,7 @@ def t_panel_probe_retired():
           rb.returncode == 1 and "major 一律折" in rb.stdout, rb.stdout[-400:])
     rc_ = run(v, "loop", "status", "prose-strict-t", "--disposal", "--spec", str(specf))
     check("retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息",
-          "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
+          rc_.returncode == 0 and "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
     # (c) 舊迴圈(harness cutoff=9999 → 視為舊)panel PASS 印行=觀測語意
     _u = _sec.token_hex(3)
     for rnd in ("r1", "r2"):
@@ -25287,11 +25287,20 @@ def t_disposal_gate_r1_panel_hardening():
     # ── ⑤ 非 UTF-8 報告:FAIL 但不得 traceback ──
     lid5 = f"h8e-{_M1U}"
     rptBin = d / "h8bin.md"
-    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")   # 首行合法宣告=過寫側;其餘 bytes 仍非 UTF-8,讀側行為不變
+    rptBin.write_text(rptA.read_text(encoding="utf-8"), encoding="utf-8")
     run(v, "canary", "record", "caught", "--loop", lid5, "--round", "r1", "--auditor", "s1",
         "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rptBin), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    valid = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("★前置★ UTF-8 壞帳注入前本輪讀側 rc0", valid.returncode == 0, valid.stdout[-300:] + valid.stderr[-200:])
+    # 現行寫側拒收非法編碼；歷史壞帳用既有 helper 構造，保留讀側編碼防線。
+    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")
+    _ledger_patch_last(ledger, lid5, report_path=rptBin)
+    bad_rows = [_j.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines()
+                if l.strip() and _j.loads(l).get("loop") == lid5]
+    check("★前置★ 壞報告與帳面 hash 一致，讀側確實驗編碼", len(bad_rows) == 1
+          and bad_rows[0]["report_sha256"] == _sha256_of(rptBin), str(bad_rows)[-200:])
     r7 = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
     check("★非 UTF-8 報告:讀側 FAIL(rc1/2)且無 traceback★",
           r7.returncode in (1, 2) and "Traceback" not in r7.stderr,
@@ -25613,6 +25622,183 @@ def t_canary_record_carrier_must_be_fully_anchored():
         expect_rc=0)
     last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
     check("載體全錨/反面: 全錨席當載體照樣記得進去", last.get("findings_set") == ["a", "b"], str(last)[:200])
+
+
+def t_canary_carrier_zero_quote_rejected():
+    """載體零引句要在只進不出的 canary 帳寫入前拒收；空輪不帶處置集照舊。
+
+    現場：code-seat-input-validation r2 把 none 當 finding ID 寫進零發現帳，
+    寫側成功但處置閘因零引句失敗。不是增加放行標準，是把既有拒收往前移。
+    翻紅：原 CLI 在四種可讀快照案例皆成功追加，rc2 與帳不變兩項翻紅。
+    """
+    import json as _j
+    import os as _os
+    v = mkvault()
+    snap = v / "Projects" / "snapshot.patch"
+    snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+    clean = v / "Projects" / "clean.md"
+    clean.write_text("severity: clean\n# 沒有問題\n本席沒有發現。\n", encoding="utf-8")
+    minor = v / "Projects" / "minor.md"
+    minor.write_text("severity: minor\n## F1\nseverity: minor\n報了一條但沒有引句。\n", encoding="utf-8")
+    ledger = v.parent / ".canary-log.jsonl"
+    # 先建成功前綴，逐位元比較證明失敗沒有追加；不是只看最後一行。
+    run(v, "canary", "record", "none", "--loop", f"code-zq-prefix-{_M1U}", "--auditor", "通才-codex",
+        "--severity", "clean", "--findings", "0", "--report", str(clean), "--snapshot", str(snap), expect_rc=0)
+    seed = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+    check("載體零引句前置：loop 審查席報告解析路徑成立", seed.get("reported") == 0, str(seed))
+    cases = (("none", clean, "clean", ["--findings", "0"]),
+             ("F1", clean, "clean", ["--findings", "0"]),
+             ("F1", minor, "minor", ["--findings", "1"]),
+             ("F1", minor, "minor", []))
+    for optimized in (False, True):
+        prefix = [sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                  "--vault", str(v), "canary", "record", "none", "--round", "r1",
+                  "--auditor", "通才-codex", "--snapshot", str(snap)]
+        for index, (fid, report, severity, count_args) in enumerate(cases):
+            before = ledger.read_bytes()
+            r = subprocess.run([*prefix, "--loop", f"code-zq-{_M1U}-{optimized}-{index}",
+                                "--report", str(report), "--severity", severity,
+                                *count_args, "--findings-set", fid, "--folded-set", fid,
+                                "--refuted-set", "none"], capture_output=True, text=True,
+                               env={**_os.environ})
+            label = f"載體零引句/{optimized}/{fid}/{count_args}"
+            check(label + " rc2 且明確拒收", r.returncode == 2 and "沒有引句" in r.stderr,
+                  f"rc={r.returncode} {r.stdout[-150:]} {r.stderr[-200:]}")
+            check(label + " 提示兩條復原路徑", "處置選項" in r.stderr and "改選" in r.stderr
+                  and "載體" in r.stderr, r.stderr[-200:])
+            check(label + " 不印成功、不 traceback", "✓" not in r.stdout and "Traceback" not in r.stderr,
+                  r.stdout[-150:] + r.stderr[-150:])
+            check(label + " canary 帳逐位元不變", ledger.read_bytes() == before,
+                  str(_j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])))
+        # 有引句但快照缺失，要由既有 IO 出口拒收，不誤報成零引句。
+        quoted = v / "Projects" / "quoted.md"
+        quoted.write_text("severity: minor\n## F1\nseverity: minor\n"
+                          "引句:「這是凍結材料裡可以核對的一整段文字」\n", encoding="utf-8")
+        before = ledger.read_bytes()
+        r = subprocess.run([*prefix, "--loop", f"code-zq-io-{_M1U}-{optimized}",
+                            "--snapshot", str(v / "missing.patch"),
+                            "--report", str(quoted), "--severity", "minor", "--findings", "1",
+                            "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"],
+                           capture_output=True, text=True, env={**_os.environ})
+        check(f"載體快照 IO/{optimized} rc2、不誤報零引句",
+              r.returncode == 2 and "--snapshot" in r.stderr and "沒有引句" not in r.stderr,
+              f"rc={r.returncode} {r.stderr[-200:]}")
+        check(f"載體快照 IO/{optimized} canary 帳逐位元不變", ledger.read_bytes() == before, "")
+
+
+def t_canary_carrier_quote_positive_controls():
+    """全錨載體照舊；literal none 真實 ID 與全輪集合不可被新守衛誤擋。"""
+    import json as _j
+    v = mkvault()
+    snap = v / "Projects" / "snapshot.patch"
+    snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+    rpt = v / "Projects" / "quoted.md"
+    rpt.write_text("severity: minor\n## F1\nseverity: minor\n"
+                   "引句:「這是凍結材料裡可以核對的一整段文字」\n", encoding="utf-8")
+    for optimized in (False, True):
+        newline = "\r\n" if optimized else "\n"
+        snap.write_bytes(("這是凍結材料裡可以核對的一整段文字" + newline).encode("utf-8"))
+        rpt.write_bytes(("severity: minor\n## F1\nseverity: minor\n"
+                         "引句:「這是凍結材料裡可以核對的一整段文字」\n").replace("\n", newline).encode("utf-8"))
+        for index, (fid, count_args) in enumerate((("none", ["--findings", "1"]),
+                                                ("F1", []), ("F1,F2", ["--findings", "1"]))):
+            r = subprocess.run([sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                                "--vault", str(v), "canary", "record", "none", "--round", "r1",
+                                "--loop", f"code-zq-positive-{_M1U}-{optimized}-{index}",
+                                "--auditor", "通才-codex", "--report", str(rpt), "--snapshot", str(snap),
+                                "--severity", "minor", *count_args, "--findings-set", fid,
+                                "--folded-set", fid, "--refuted-set", "none"], capture_output=True, text=True)
+            check(f"載體全錨/{optimized}/{fid}/{count_args} 成功", r.returncode == 0,
+                  f"rc={r.returncode} {r.stderr[-200:]}")
+            rows = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()
+            last = _j.loads(rows[-1])
+            check(f"載體全錨/{optimized}/{fid} 前置：確實解析審查報告", last.get("reported") == 1,
+                  str(last)[-200:])
+            check(f"載體全錨/{optimized}/{fid} ID 保留原意", last.get("findings_set") == fid.split(",")
+                  and last.get("folded_set") == fid.split(","), str(last)[-200:])
+
+
+def t_canary_carrier_invalid_report_encoding():
+    """載體報告不能以替換字元掩蓋非法 UTF-8，寫側與讀側要驗同一份資料。"""
+    import json as _j
+    for optimized in (False, True):
+        v = mkvault()
+        snap = v / "Projects" / "snapshot.patch"
+        snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+        report = v / "Projects" / "report.md"
+        good = ("severity: minor\n## F1\nseverity: minor\n"
+                "引句:「這是凍結材料裡可以核對的一整段文字」\n").encode("utf-8")
+        report.write_bytes(good + b"\xff\n")
+        prefix = [sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                  "--vault", str(v), "canary", "record", "none", "--auditor", "通才-codex",
+                  "--report", str(report), "--snapshot", str(snap), "--round", "r1",
+                  "--severity", "minor", "--findings", "1"]
+        # 非載體沿既有替換讀取：不是這次載體一致性守衛的範圍。
+        seed = subprocess.run([*prefix, "--loop", f"code-zq-encoding-seed-{_M1U}"],
+                              capture_output=True, text=True)
+        check(f"報告編碼/{optimized} 前置：非載體既有行為", seed.returncode == 0, seed.stderr[-200:])
+        ledger = v.parent / ".canary-log.jsonl"
+        before = ledger.read_bytes()
+        last = _j.loads(before.decode("utf-8").splitlines()[-1])
+        check(f"報告編碼/{optimized} 前置：報告確經解析", last.get("reported") == 1, str(last)[-200:])
+        result = subprocess.run([*prefix, "--loop", f"code-zq-encoding-{_M1U}",
+                                 "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"],
+                                capture_output=True, text=True)
+        check(f"報告編碼/{optimized} rc2、定位報告與編碼", result.returncode == 2
+              and "--report" in result.stderr and "utf-8" in result.stderr.lower(), result.stderr[-200:])
+        check(f"報告編碼/{optimized} 沒有假成功或 traceback", "✓" not in result.stdout
+              and "Traceback" not in result.stderr, result.stdout[-150:] + result.stderr[-150:])
+        check(f"報告編碼/{optimized} canary 帳逐位元不變", ledger.read_bytes() == before, "")
+
+
+def t_canary_carrier_evidence_changes_before_hash():
+    """驗引句與落帳指紋不得混用不同版本；可控替換確實發生在 hash 讀取前。"""
+    import ast as _ast
+    import contextlib as _ctx
+    import io as _io
+    lm = _load_lumos_inproc()
+    tree = _ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
+    function = next(n for n in tree.body if isinstance(n, _ast.FunctionDef) and n.name == "cmd_canary")
+    for optimized in (0, 1):
+        for target in ("report", "snapshot"):
+            v = mkvault()
+            snap = v / "Projects" / "snapshot.patch"
+            report = v / "Projects" / "report.md"
+            snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+            report.write_text("severity: minor\n## F1\nseverity: minor\n"
+                              "引句:「這是凍結材料裡可以核對的一整段文字」\n", encoding="utf-8")
+            kwargs = dict(round_id="r1", auditor="通才-codex", severity="minor", findings=1,
+                          report=str(report), snapshot=str(snap))
+            with _ctx.redirect_stdout(_io.StringIO()), _ctx.redirect_stderr(_io.StringIO()):
+                seed_rc = lm.cmd_canary(lm.Env(v), "none", loop="code-zq-race-seed", **kwargs)
+            check(f"換檔/{optimized}/{target} 前置：合法材料可記帳", seed_rc == 0, str(seed_rc))
+            ledger = v.parent / ".canary-log.jsonl"
+            before = ledger.read_bytes()
+            changing = report if target == "report" else snap
+            changed = []
+            original_hash = lm._sha256_file
+            def mutate_then_hash(path, changing=changing, target=target, changed=changed,
+                                 original_hash=original_hash):
+                if Path(path) == changing and not changed:
+                    content = ("severity: minor\n## F1\nseverity: minor\n零引句新報告。\n"
+                               if target == "report" else "另外一個程序已換掉快照內容。\n")
+                    changing.write_text(content, encoding="utf-8")
+                    changed.append(str(changing))
+                return original_hash(path)
+            namespace = dict(lm.__dict__)
+            namespace["_sha256_file"] = mutate_then_hash
+            exec(compile(_ast.Module(body=[function], type_ignores=[]), GRAPHCTL, "exec",
+                         optimize=optimized), namespace)
+            out, err = _io.StringIO(), _io.StringIO()
+            with _ctx.redirect_stdout(out), _ctx.redirect_stderr(err):
+                rc = namespace["cmd_canary"](lm.Env(v), "none", loop="code-zq-race",
+                                             findings_set="F1", folded_set="F1", refuted_set="none", **kwargs)
+            check(f"換檔/{optimized}/{target} 前置：確在 hash 讀取前替換", changed == [str(changing)], str(changed))
+            check(f"換檔/{optimized}/{target} rc2 且定位材料變動", rc == 2 and "變動" in err.getvalue()
+                  and f"--{target}" in err.getvalue(), f"rc={rc} {err.getvalue()[-200:]}")
+            check(f"換檔/{optimized}/{target} 不印成功、不 traceback", "✓" not in out.getvalue()
+                  and "Traceback" not in err.getvalue(), out.getvalue()[-150:] + err.getvalue()[-150:])
+            check(f"換檔/{optimized}/{target} canary 帳逐位元不變", ledger.read_bytes() == before, "")
 
 
 def t_canary_record_disposal_fields_optional():
@@ -67210,9 +67396,9 @@ def t_canary_regression_set():
     _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
     d = root / "docs"
     rep = d / "rep.md"
-    rep.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: minor\n", encoding="utf-8")
+    rep.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: minor\n引句:「這是測試載體可核對的完整凍結材料」\n", encoding="utf-8")
     snap = d / "snap.patch"
-    snap.write_text("diff\n", encoding="utf-8")
+    snap.write_text("這是測試載體可核對的完整凍結材料\n", encoding="utf-8")
 
     def rec(rnd, *extra, loop=("--loop", "rgs")):
         return run(v, "canary", "record", "none", *loop, "--round", rnd, "--auditor", "s1-sonnet",
@@ -67322,9 +67508,9 @@ def _fc_ledger(root, v, loop="code-fx", rnd="r1", findings="f1", folded="f1", ki
     d = root / "docs"
     rep = d / f"rep-{rnd}.md"
     ids = [x for x in findings.split(",") if x]
-    rep.write_text(f"severity: {severity}\n" + "".join(f"## {i}\nseverity: {severity}\n" for i in ids), encoding="utf-8")
+    rep.write_text(f"severity: {severity}\n" + "".join(f"## {i}\nseverity: {severity}\n" for i in ids) + "引句:「這是修正關卡載體可核對的完整凍結材料」\n", encoding="utf-8")
     snap = d / f"snap-{rnd}.patch"
-    snap.write_text("diff\n", encoding="utf-8")
+    snap.write_text("這是修正關卡載體可核對的完整凍結材料\n", encoding="utf-8")
     args = ["canary", "record", "none", "--loop", loop, "--round", rnd, "--auditor", "s1-sonnet", "--severity", severity,
             "--findings", str(len(ids)), "--report", str(rep), "--snapshot", str(snap), "--tier", "standard",
             "--findings-set", findings, "--folded-set", folded, "--refuted-set", "none", *extra]
