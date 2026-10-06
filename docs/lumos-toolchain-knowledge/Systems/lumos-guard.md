@@ -12,6 +12,7 @@ about_code:
   - mods/claude/lumos-guard/.claude-plugin/plugin.json
   - mods/claude/lumos-guard/tsconfig.json
   - mods/claude/lumos-guard/types/index.d.ts
+  - mods/claude/lumos-guard/hooks/seat-fixture.ts
 tags:
   - type/system
   - status/doing
@@ -42,4 +43,5 @@ verified_by:
 
 - 型別檔 `types/index.d.ts` 只為一件事:用 `declare module 'claude-code'` 擴充 `PluginState`,宣告 `$.state` 裡 `lumos-guard/seats` 這個鍵的形狀;型別檔要求 `$.state` 的鍵在 `PluginState` 裡宣告(沒宣告時型別對不上)。其他兩支外掛不用 `$.state`,所以沒有這個檔(代碼審 r3 架構對齊席問到)。
 REVISIT:2026-11-06 實測一次 $.state 寫一個沒在 PluginState 宣告的鍵,引擎會不會擋;會擋就在這段寫明,不會就拿掉這句宣告的理由
-- 三處跟另兩支外掛寫法不同,都是刻意的(代碼審 r4 架構對齊席):①工具呼叫的接線抽成 `onTool` 並匯出——事件帳外掛的接線只用 Python 釘字串,守不住「接線改成一律放行」,這邊要讓 TS 測試直接打得到;②存回 `$.state` 帶版本、撞版重試加時間上限——另兩支外掛不跨實例共用 `$.state`,沒有這個問題;③Python 端從原始碼抽 `SEAT_RE` 編譯來比——標記格式只留一份真相,不像事件帳那樣兩端各寫一份再拿同一組案例對。
+- 三處跟另兩支外掛寫法不同,都是刻意的(代碼審 r4 架構對齊席):①工具呼叫的接線抽成 `onTool` 並匯出——事件帳外掛的接線只用 Python 釘字串,守不住「接線改成一律放行」,這邊要讓 TS 測試直接打得到;②存回 `$.state` 帶版本、撞版重試加時間上限——另兩支外掛不跨實例共用 `$.state`,沒有這個問題;③派工範本的檢查(`t_seat_templates_carry_marker`)從原始碼抽 `SEAT_RE` 編譯來比——範本那邊不再另抄一份格式。事件帳外掛的 `seat` 欄是另一回事:兩支外掛各寫一份判法,拿同一批案例對(見下一點)。
+- `hooks/seat-fixture.ts` 是審查席標記的共用案例:事件帳外掛記 `spawn` 的 `seat` 欄也用同一套判法,兩支外掛各放一份一模一樣的,各自的測試跑同一批([[Systems/lumos事件帳]])。
