@@ -27406,14 +27406,16 @@ def _nodehome_changed_vs_disk(repo_root, where):
     return {nfc(x) for x in _nodehome_split_z(raw)}
 
 
-def _nodehome_reader(repo_root, where):
+def _nodehome_reader(repo_root, where, from_git=False):
     """回 read(path)->bytes|None。讀的是 where 那個版本:跟磁碟一樣的直接讀磁碟,不一樣的用 git show 讀
     ([S38]:提交前只讀提交索引——同一個工作目錄另一個會談寫到一半、還沒加進索引的東西讀不到)。"""
     if where is None:
         return lambda p: None
     disk_ok_all = False
     differ = None
-    if where == "index":
+    if from_git:
+        pass                                                # 新借用的測試證據只讀版本,不信先前的磁碟相等判定
+    elif where == "index":
         differ = _nodehome_changed_vs_disk(repo_root, "index")
     else:
         head = _lens_full_sha(repo_root, "HEAD")
@@ -27589,8 +27591,9 @@ def _nodehome_side(repo_root, where, vault_rel, share=None, changed=None, deadli
     return s
 
 
-def _nodehome_required(repo_root, side, cfg, vendored_skip):
-    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。"""
+def _nodehome_required(repo_root, side, cfg, vendored_skip, include_tests=False):
+    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。
+    include_tests=True僅供寫回路由證據;預設免測試安家及其餘排除保持。"""
     import fnmatch
     req, bad_names = set(), set()
     layout = _nodehome_layout(side.all_paths)   # 測試資料夾要旁邊的程式目標有同一種檔
@@ -27600,7 +27603,7 @@ def _nodehome_required(repo_root, side, cfg, vendored_skip):
             continue
         if any(fnmatch.fnmatch(p, g) for g in _NODEHOME_EXCLUDE_GLOBS):
             continue
-        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or _nodehome_is_test(p, layout):
+        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or (not include_tests and _nodehome_is_test(p, layout)):
             continue
         if kind == "shebang?":
             if p in side.shebang:
@@ -27928,13 +27931,53 @@ def _nodehome_commit_groups(repo_root, base, tip):
     return out
 
 
-def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
+def _nodehome_route_tests(repo_root, files, all_paths, candidates, where, cfg, skip, reader, shebang=None):
+    """只有實際變更且已宣告歸屬的測試能借用為路由證據;沿用同一分類器,首行固定讀版本。"""
+    layout = _nodehome_layout(all_paths)
+    tests = {p: files[p] for p in candidates if p in files and _nodehome_is_test(p, layout)}
+    if not tests:
+        return set()
+    side = _NodehomeSide()
+    side.files, side.all_paths, side.notes = tests, all_paths, {}
+    side.where = where
+    side._reader = reader
+    side.shebang = shebang if shebang is not None else {}
+    side.share, side.changed = None, set()
+    eligible, _bad = _nodehome_required(repo_root, side, cfg, skip, include_tests=True)
+    return eligible
+
+
+def _nodehome_group_route_tests(repo_root, group, notes, route_cache, cfg, skip):
+    """讀取層收集同提交測試證據;共享最近兩版完整清單,讀不到就撤回額外證據。"""
+    candidates = {p for info in notes.values() for p in group["paths"] & info["own"]}
+    routes = set()
+    if not candidates:
+        return routes
+    for sha in [*group["parents"], group["sha"]]:
+        if sha in route_cache:
+            cached = route_cache.pop(sha)
+        else:
+            if len(route_cache) >= 2:
+                route_cache.pop(next(iter(route_cache)))
+            cached = (_nodehome_list(repo_root, sha), {}, _nodehome_reader(repo_root, sha, from_git=True))
+        route_cache[sha] = cached
+        lst, shebang, read = cached
+        if lst is None:
+            return set()
+        files, all_paths = lst
+        routes.update(_nodehome_route_tests(
+            repo_root, files, all_paths, candidates, sha, cfg, skip, reader=read, shebang=shebang))
+    return routes
+
+
+def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None, route_cfg=None, route_skip=frozenset()):
     """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
     計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
     {這個提交之後的路徑: {type, status, own}},判定那層只在同一個提交裡比「管的檔」跟「改的程式」,不必跨提交追名字
     (合併進來的平行分支、一次推送改名好幾次都不影響——代碼審 r2 單reviewer)。這個提交裡改名的,拿改名前的路徑去
     上一個提交讀;這個提交才新開的算有變;讀不到一律當有變,照原本那樣查。"""
     pre = vault_rel + "/Systems/"
+    route_cache = {}                                         # 至多兩版清單;父版先讀,線性相鄰提交可共用
     for g in groups or ():
         after = _nodehome_reader(repo_root, g["sha"])
         # 上一版用「這個提交的第幾個上一版」讀(sha^1、sha^2):跟起點那一側的讀取分開算,不跟它搶共用
@@ -27957,6 +28000,8 @@ def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
             # 狀態看這個提交前後兩版(代碼審 r3 單reviewer:只看之後的,「這個提交降成 planned 順便寫、下一個再升回來」就繞過了)
             notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
         g["content_notes"] = notes
+        if route_cfg is not None:
+            g["route_tests"] = _nodehome_group_route_tests(repo_root, g, notes, route_cache, route_cfg, route_skip)
     return groups
 
 
@@ -27990,11 +28035,11 @@ def _nodehome_clamp_base(repo_root, base, tip, mark=None, hook=_NOTELINES_PRECOM
     return gl if (r is not None and r.returncode == 0 and base != gl) else base
 
 
-def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None, tag_judge=None):
+def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None, tag_judge=None, staged_route_tests=frozenset()):
     """規則一到四的判定。回 dict:blocks=[(類別, 項目)]、reminders=[(類別, 項目)]、pairs=[(檔, 節點)]。
     B=之前、N=之後;changes=_nodehome_changes 的結果。groups=範圍裡每個提交各自改了哪些路徑(推送前用;
     規則三只看「同一個提交裡也改了程式」的節點——純整理節點的提交跟改程式的提交一起推,不會被混在一起誤擋)。
-    None=整批當成一個提交(提交前)。"""
+    None=整批當成一個提交(提交前或讀取失敗退路);staged_route_tests只由真正提交前的讀取入口提供。"""
     reqN, bad_names = _nodehome_required(repo_root, N, cfg, vendored_skip)
     reqB, _ = _nodehome_required(repo_root, B, cfg, vendored_skip)
     homesN, ownN = _nodehome_homes(repo_root, N)
@@ -28100,6 +28145,8 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
             g_code = {p for p in g_paths if p in reqN or p in reqB}
             if not g_code:
                 continue                                    # 純整理節點的提交:規則三不管 [S11]
+            g_route_code = g_code | (g.get("route_tests", set()) if g["sha"] else (
+                g_paths & staged_route_tests))
             if g["sha"] and "content_notes" in g:
                 # ★推送前:判定在那個提交自己裡面做★——那篇的內容是不是在這個提交改的(只補簿記不算)、它在這個提交前後管的檔
                 # 跟這個提交改的程式對不對得上;不跨提交追名字(2026-09-11 平板 POS 第一次真推送踩到的誤擋、代碼審兩輪抓到的改名與合併)
@@ -28111,14 +28158,14 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, 
                         continue
                     wb_files |= g_code
                     wb_notes.add(rel)
-                    if not (info["own"] & g_code):
-                        per_commit.setdefault(rel, set()).update(g_code)
+                    if not (info["own"] & g_route_code):
+                        per_commit.setdefault(rel, set()).update(g_route_code)
                 continue
             # 提交前(整批就是一個提交)或讀取層沒算到:碰到就算,家看起點與終點兩版
             g_notes = {rel for rel in content_changed
                        if (vpre + rel) in g_paths or (vpre + route_src.get(rel, rel)) in g_paths}
             for rel in g_notes:
-                routed.setdefault(rel, set()).update(g_code)
+                routed.setdefault(rel, set()).update(g_route_code)
             if g_notes:
                 wb_files |= g_code
                 wb_notes |= g_notes
@@ -28388,6 +28435,7 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
             return 0
         head = _lens_full_sha(root, "HEAD")
         base_where, tip_where, mode_word = head, "index", "這次提交"
+        index_before = _nodehome_git(root, "ls-files", "-s", "-z")
         changes = _nodehome_changes(root, head, "index")
     else:
         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
@@ -28456,8 +28504,25 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
             _tj.append(_nodehome_tag_judge(root, None if staged else tip_where))
         return _tj[0]
     groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
-                                                                 tag_judge=tag_judge)
-    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge)
+                                                                 tag_judge=tag_judge, route_cfg=cfg, route_skip=skip)
+    staged_route_tests = set()
+    if staged:
+        candidates = set()
+        for side in (N, B):
+            for note in side.notes.values():
+                for value in note["about"]:
+                    key = _nodehome_key(value)
+                    if key in changed_paths:
+                        candidates.add(key)
+        for side in (N, B):
+            staged_route_tests.update(_nodehome_route_tests(
+                root, side.files, side.all_paths, candidates, side.where, cfg, skip,
+                reader=_nodehome_reader(root, side.where, from_git=True)))
+        if staged_route_tests and (index_before is None or _nodehome_git(root, "ls-files", "-s", "-z") != index_before):
+            staged_route_tests.clear()                     # 觀察到索引變動時撤回借用證據,不改既有正式程式退路
+            print("提醒:暫存區在檢查期間變動或讀不到,額外測試寫回證據不採信;請重新檢查。", file=sys.stderr)
+    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge,
+                             staged_route_tests=staged_route_tests)
     homesN, _own = _nodehome_homes(root, N)
     lines = _nodehome_render(res, homesN, N, cfg, mode_word)
     blocked = bool(res["blocks"])

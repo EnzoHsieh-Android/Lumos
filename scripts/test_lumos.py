@@ -48329,6 +48329,330 @@ def _nh_tag_repo(extra_tests=()):
     return root
 
 
+def t_nodehome_optional_test_home_writeback():
+    """已宣告的測試家可接同次寫回；不把測試免安家改成全部強制安家。"""
+    import subprocess as _sp, os as _os
+    cases = (("mixed", 0), ("test-only", 0), ("untouched-test", 1),
+             ("unowned-test", 0), ("ignored-test", 1), ("symlink-test", 1),
+             ("deleted-test", 0), ("renamed-test", 0), ("json-home", 1),
+             ("new-homeless", 1), ("diff-mixed", 0), ("diff-split", 1),
+             ("pure-test-other-home", 0), ("diff-middle-delete", 0),
+             ("diff-middle-rename", 0), ("diff-double-rename", 0),
+             ("shebang-index-positive", 0), ("shebang-index-negative", 1))
+    for optimized in (False, True):
+        for case, expected in cases:
+            root = _nh_repo({"node_home": {"ignore": ["scripts/test_checks.py"]}}
+                            if case == "ignored-test" else None)
+            _nh_file(root, "src/a.py")
+            test_path = "tests/check" if case.startswith("shebang-index-") else "scripts/test_checks.py"
+            test = _nh_file(root, test_path)
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home_path = "src/fixture.json" if case == "json-home" else test_path
+            if case == "json-home":
+                _nh_file(root, home_path, "{}\n")
+            if case == "symlink-test":
+                target = _nh_file(root, "fixture.txt", "test data\n")
+                test.unlink()
+                _os.symlink(target, test)
+            home = None if case == "unowned-test" else _nh_node(
+                root, "TestHome", about=[home_path], body="test context")
+            _nh_commit(root, "baseline")
+            base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+            if case not in ("untouched-test", "symlink-test", "json-home", "diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
+                if case == "deleted-test":
+                    test.unlink()
+                elif case == "renamed-test":
+                    new_test = root / "scripts/test_renamed.py"
+                    test.rename(new_test)
+                else:
+                    _nh_file(root, test_path, "#!/usr/bin/env python3\nx = 2\n"
+                             if case == "shebang-index-positive" else "x = 2\n")
+            if case == "diff-double-rename":
+                middle = root / "scripts/test_mid.py"
+                test.rename(middle)
+                home.write_text(home.read_text().replace(test_path, "scripts/test_mid.py"))
+                _nh_commit(root, "test rename before mixed commit")
+                test = middle
+                _nh_file(root, "scripts/test_mid.py", "x = 2\n")
+            if case == "diff-split":
+                _nh_commit(root, "test change only")
+            if case not in ("test-only", "pure-test-other-home"):
+                _nh_file(root, "src/a.py", "x = 2\n")
+            if case == "new-homeless":
+                _nh_file(root, "src/new.py", "x = 2\n")
+            if case == "json-home":
+                _nh_file(root, home_path, '{"changed": true}\n')
+            if home is None or case == "pure-test-other-home":
+                home = root / "docs/kg-knowledge/Systems/Production.md"
+            if case in ("diff-middle-delete", "diff-middle-rename"):
+                test = _nh_file(root, "scripts/test_temp.py", "x = 2\n")
+            text = home.read_text(encoding="utf-8")
+            if case == "renamed-test":
+                text = text.replace("scripts/test_checks.py", "scripts/test_renamed.py")
+            if case in ("diff-middle-delete", "diff-middle-rename"):
+                text = text.replace("scripts/test_checks.py", "scripts/test_temp.py")
+            elif case == "diff-double-rename":
+                text = text.replace("scripts/test_checks.py", "scripts/test_mid.py")
+            home.write_text(text + "\nWHY:This test guards an independently reproduced failure.\n", encoding="utf-8")
+            _nh_git(root, "add", "-A")
+            if case.startswith("shebang-index-"):
+                _nh_file(root, test_path, "x = 3\n" if case == "shebang-index-positive"
+                         else "#!/usr/bin/env python3\nx = 3\n")
+            # 前置斷言查實際索引，不讓其他錯誤恰好提供相同退出碼。
+            staged_paths = set(_nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines())
+            intended = test.relative_to(root).as_posix()
+            expected_own = ("src/a.py" if case in ("unowned-test", "pure-test-other-home") else
+                            "scripts/test_renamed.py" if case == "renamed-test" else
+                            home_path if case == "json-home" else intended)
+            check(f"測試家現場/{optimized}/{case}:宣告歸屬成立",
+                  f"  - {expected_own}\n" in home.read_text(), home.read_text())
+            check(f"測試家現場/{optimized}/{case}:正式程式啟動條件成立",
+                  ("src/a.py" in staged_paths) == (case not in ("test-only", "pure-test-other-home")), str(staged_paths))
+            if case not in ("diff-split", "diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
+                check(f"測試家現場/{optimized}/{case}:測試變更條件成立",
+                      (("scripts/test_renamed.py" if case == "renamed-test" else test_path) in staged_paths)
+                      == (case not in ("untouched-test", "symlink-test", "json-home")), str(staged_paths))
+            if case == "ignored-test":
+                check(f"測試家現場/{optimized}/{case}:索引排除設定成立",
+                      "scripts/test_checks.py" in _nh_git(root, "show", ":.lumos/config.json").stdout)
+            if case == "symlink-test":
+                check(f"測試家現場/{optimized}/{case}:索引為連結不是一般檔",
+                      _nh_git(root, "ls-files", "-s", "--", test_path).stdout.startswith("120000 "))
+            check(f"測試家現場/{optimized}/{case}:寫回正文已入索引",
+                  home.relative_to(root).as_posix() in staged_paths, str(staged_paths))
+            if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
+                check(f"測試家現場/{optimized}/{case}:唯一候選是中間測試",
+                      intended in staged_paths and "scripts/test_checks.py" not in staged_paths
+                      and intended not in _nh_git(root, "ls-tree", "-r", "--name-only", base).stdout.splitlines(),
+                      str(staged_paths))
+                check(f"測試家現場/{optimized}/{case}:中間測試已宣告家",
+                      f"  - {intended}\n" in home.read_text(), home.read_text())
+            if case.startswith("shebang-index-"):
+                indexed = _nh_git(root, "show", ":" + test_path).stdout
+                check(f"測試家現場/{optimized}/{case}:索引與磁碟首行相反",
+                      indexed.startswith("#!") == (case == "shebang-index-positive")
+                      and test.read_text().startswith("#!") != indexed.startswith("#!"), indexed)
+            mode = ["--staged"]
+            if case.startswith("diff-"):
+                _nh_commit(root, "production and graph change")
+                if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
+                    if case == "diff-middle-delete":
+                        test.unlink()
+                    else:
+                        final = root / "scripts/test_final.py"
+                        previous = test.relative_to(root).as_posix()
+                        test.rename(final)
+                        home.write_text(home.read_text().replace(previous, "scripts/test_final.py"))
+                    _nh_commit(root, "remove intermediate test path")
+                tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+                if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
+                    check(f"測試家現場/{optimized}/{case}:候選不在終點",
+                          intended not in _nh_git(root, "ls-tree", "-r", "--name-only", tip).stdout.splitlines(), tip)
+                mode = ["--diff", base + ".." + tip]
+            result = _sp.run([sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                              "home", "check", *mode, "--repo", str(root)],
+                             capture_output=True, text=True)
+            check(f"測試家寫回/{optimized}/{case}:預期rc{expected}",
+                  result.returncode == expected, result.stdout + result.stderr)
+            if expected == 1:
+                output = result.stdout + result.stderr
+                clue = "src/new.py" if case == "new-homeless" else "Systems/TestHome"
+                reason = "沒有家" if case == "new-homeless" else "不是任何一支改動檔的家"
+                check(f"測試家拒收理由/{optimized}/{case}:命中目標規則",
+                      clue in output and reason in output, output)
+
+
+def t_nodehome_optional_test_snapshot_race():
+    '''讀取前才改工作目錄，不能換掉索引/提交的測試證據；普通及-O雙向。'''
+    import subprocess as sp, json
+    wrapper = Path(tempfile.mkdtemp(prefix="nh-read-race-")) / "reader.py"
+    wrapper.write_text('''import runpy,sys,json
+cli=sys.argv.pop(1);tip=sys.argv.pop(1);replacement=sys.argv.pop(1)
+ns=runpy.run_path(cli,run_name="_race_");g=ns["main"].__globals__;original=g["_nodehome_reader"];fired=[]
+def factory(root,where,*a,**kw):
+ read=original(root,where,*a,**kw)
+ def race(p):
+  if str(where)==tip and p=="tests/check" and not fired:
+   from pathlib import Path
+   fp=Path(root)/p;before=fp.read_bytes();fp.write_bytes(bytes.fromhex(replacement));out=read(p)
+   fired.append({"before":before.hex(),"after":fp.read_bytes().hex(),"read":out.hex() if out is not None else None});return out
+  return read(p)
+ return race
+g["_nodehome_reader"]=factory;rc=ns["main"]();print("RACE:"+json.dumps(fired),file=sys.stderr);raise SystemExit(rc or 0)
+''')
+    for optimized in (False, True):
+        for staged in (False, True):
+            for valid in (False, True):
+                root = _nh_repo()
+                _nh_file(root, "src/a.py")
+                _nh_file(root, "tests/check", "x = 0\n")
+                _nh_node(root, "Production", about=["src/a.py"], body="production context")
+                home = _nh_node(root, "TestHome", about=["tests/check"], body="test context")
+                _nh_commit(root, "baseline")
+                base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+                committed = "#!/usr/bin/env python3\nx = 2\n" if valid else "x = 2\n"
+                _nh_file(root, "tests/check", committed)
+                _nh_file(root, "src/a.py", "x = 2\n")
+                home.write_text(home.read_text() + "\nWHY: synthetic race reproduction.\n")
+                _nh_git(root, "add", "-A")
+                if staged:
+                    where, mode = "index", ["--staged"]
+                else:
+                    _nh_commit(root, "mixed writeback")
+                    where = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+                    mode = ["--diff", base + ".." + where]
+                spec = ":tests/check" if staged else where + ":tests/check"
+                check(f"版本競態/{optimized}/{staged}/{valid}:版本種子成立",
+                      _nh_git(root, "show", spec).stdout == committed, spec)
+                replacement = "x = 3\n" if valid else "#!/usr/bin/env python3\nx = 3\n"
+                q = sp.run([sys.executable, *(["-O"] if optimized else []), str(wrapper), GRAPHCTL,
+                            where, replacement.encode().hex(), "home", "check", *mode, "--repo", str(root)],
+                           text=True, capture_output=True)
+                events = [json.loads(line[5:]) for line in q.stderr.splitlines() if line.startswith("RACE:")]
+                fired = events[0] if events else []
+                check(f"版本競態/{optimized}/{staged}/{valid}:讀取前換檔確實執行",
+                      len(fired) == 1 and fired[0]["before"] == committed.encode().hex()
+                      and fired[0]["after"] == replacement.encode().hex(), q.stderr)
+                check(f"版本競態/{optimized}/{staged}/{valid}:仍依版本拒收或放行",
+                      q.returncode == (0 if valid else 1)
+                      and (valid or ("Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr)), q.stderr)
+
+
+def t_nodehome_optional_test_group_failure():
+    '''逐提交清單讀不到時不能把兩個提交的測試變更合成合法證據。'''
+    import subprocess as sp
+    root = _nh_repo()
+    _nh_file(root, "src/a.py")
+    _nh_file(root, "scripts/test_checks.py")
+    _nh_node(root, "Production", about=["src/a.py"], body="production context")
+    home = _nh_node(root, "TestHome", about=["scripts/test_checks.py"], body="test context")
+    _nh_commit(root, "baseline")
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_file(root, "scripts/test_checks.py", "x = 2\n")
+    _nh_commit(root, "test only")
+    middle = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_file(root, "src/a.py", "x = 2\n")
+    home.write_text(home.read_text() + "\nWHY: split commit regression.\n")
+    _nh_commit(root, "production and wrong home")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    check("分組失敗:測試只在前一提交變更",
+          set(_nh_git(root, "diff", "--name-only", base, middle).stdout.splitlines()) == {"scripts/test_checks.py"}
+          and "scripts/test_checks.py" not in _nh_git(root, "diff", "--name-only", middle, tip).stdout.splitlines())
+    wrapper = Path(tempfile.mkdtemp(prefix="nh-groups-fault-")) / "fault.py"
+    wrapper.write_text('''import runpy,sys
+cli=sys.argv.pop(1);ns=runpy.run_path(cli,run_name="_group_fault_");g=ns["main"].__globals__
+def fault(*a,**kw):
+ print("GROUP-FAULT:called",file=sys.stderr);return None
+g["_nodehome_commit_groups"]=fault;raise SystemExit(ns["main"]() or 0)
+''')
+    for optimized in (False, True):
+        q = sp.run([sys.executable, *(["-O"] if optimized else []), str(wrapper), GRAPHCTL,
+                    "home", "check", "--diff", base + ".." + tip, "--repo", str(root)],text=True,capture_output=True)
+        check(f"分組失敗/{optimized}:故障入口確實執行", "GROUP-FAULT:called" in q.stderr, q.stderr)
+        check(f"分組失敗/{optimized}:不跨提交借測試",
+              q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stderr)
+
+
+def t_nodehome_optional_test_cache_is_bounded():
+    """清單容器保留量不隨提交數成長；量生命週期，不把它冒稱RSS。"""
+    import weakref, gc
+    for commits in (4, 12):
+        root = _nh_repo()
+        _nh_file(root, "src/a.py", "x = 0\n")
+        _nh_file(root, "scripts/test_checks.py", "x = 0\n")
+        _nh_node(root, "Production", about=["src/a.py"], body="production context")
+        home = _nh_node(root, "TestHome", about=["scripts/test_checks.py"], body="test context")
+        _nh_commit(root, "baseline")
+        base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+        for i in range(1, commits + 1):
+            _nh_file(root, "src/a.py", f"x = {i}\n")
+            _nh_file(root, "scripts/test_checks.py", f"x = {i}\n")
+            home.write_text(home.read_text() + f"\nWHY: cache lifetime case {i}.\n")
+            _nh_commit(root, "mixed cache case")
+        tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+        m = _load_lumos_module()
+        groups = m._nodehome_commit_groups(root, base, tip)
+        check(f"清單快取/{commits}:每提交皆有獨立測試與程式變更",
+              groups is not None and len(groups) == commits
+              and all({"src/a.py", "scripts/test_checks.py"} <= g["paths"] for g in groups))
+        if groups is None:
+            continue
+        alive, peak, count = set(), [0], [0]
+        class Pair:
+            def __init__(self, value):
+                self.value = value
+                count[0] += 1
+                ident = count[0]
+                alive.add(ident)
+                peak[0] = max(peak[0], len(alive))
+                weakref.finalize(self, alive.discard, ident)
+            def __iter__(self):
+                return iter(self.value)
+        original = m._nodehome_list
+        def meter(*a, **kw):
+            value = original(*a, **kw)
+            return None if value is None else Pair(value)
+        m._nodehome_list = meter
+        cfg = m._nodehome_config(root, b"{}", from_snapshot=True)
+        marked = m._nodehome_mark_note_content(root, groups, "docs/kg-knowledge", route_cfg=cfg)
+        gc.collect()
+        check(f"清單快取/{commits}:所有候選仍被辨識",
+              all(g["route_tests"] == {"scripts/test_checks.py"} for g in marked))
+        check(f"清單快取/{commits}:存活版本有界且返回釋放",
+              peak[0] <= 3 and not alive, f"peak={peak[0]},alive={len(alive)},calls={count[0]}")
+        check(f"清單快取/{commits}:線性相鄰版本只讀一次",
+              count[0] == commits + 1, f"calls={count[0]},expected={commits + 1}")
+
+
+def t_nodehome_optional_test_index_changed():
+    """檢查期間暫存區已撤回的測試不能繼續當寫回證據;穩定索引及工作樹變更對照保持。"""
+    import json
+    for opt in (False, True):
+        for mode in ("index-change", "stable", "worktree-only"):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check.py", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
+            _nh_commit(root, "baseline")
+            _nh_file(root, "src/a.py", "x = 2\n")
+            _nh_file(root, "tests/check.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: synthetic staged evidence case.\n")
+            _nh_git(root, "add", ".")
+            before = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
+            check(f"索引證據/{opt}/{mode}:現場三項一起staged",
+                  {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(before))
+            shim = ("import runpy,sys,json,subprocess\nfrom pathlib import Path\n"
+                    f"namespace=runpy.run_path({GRAPHCTL!r});g=namespace['main'].__globals__\n"
+                    "original=g['_nodehome_route_tests'];fired=[]\n"
+                    "def route(root,*args,**kwargs):\n"
+                    "    if not fired:\n"
+                    f"        mode={mode!r}\n"
+                    "        if mode=='index-change':\n"
+                    "            permissions,kind,oid,path=subprocess.check_output(['git','ls-tree','HEAD','tests/check.py'],cwd=root,text=True).split()\n"
+                    "            subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
+                    "        elif mode=='worktree-only':\n"
+                    "            (Path(root)/'tests/check.py').write_text('x = 99\\n')\n"
+                    "        paths=subprocess.check_output(['git','diff','--cached','--name-only'],cwd=root,text=True).splitlines()\n"
+                    "        fired.append({'mode':mode,'test_staged':'tests/check.py' in paths})\n"
+                    "    return original(root,*args,**kwargs)\n"
+                    "g['_nodehome_route_tests']=route\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=namespace['main']();print('INDEX-EVIDENCE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], text=True, capture_output=True)
+            marker = next((line.split("INDEX-EVIDENCE:", 1)[1] for line in q.stderr.splitlines()
+                           if line.startswith("INDEX-EVIDENCE:")), "[]")
+            fired = json.loads(marker)
+            check(f"索引證據/{opt}/{mode}:注入確實發生且暫存區現場符合模式",
+                  len(fired) == 1 and fired[0] == {"mode": mode, "test_staged": mode != "index-change"}, q.stderr)
+            correct = (q.returncode == 1 and "Systems/TestHome" in q.stderr
+                       and "不是任何一支改動檔的家" in q.stderr) if mode == "index-change" else q.returncode == 0
+            check(f"索引證據/{opt}/{mode}:只拒收已撤回的測試證據", correct, q.stdout + q.stderr)
+            after = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
+            check(f"索引證據/{opt}/{mode}:檢查未改寫暫存區",
+                  ("tests/check.py" in after) == (mode != "index-change"), str(after))
+
+
 def t_nodehome_test_tag_only_edit_is_not_write_back():
     """[只換測試綁定不算寫說明 S1][S3] 同一個提交改了程式、另一篇只換測試綁定(新出現的名稱指得到真測試)→ 不算寫說明,
     寫回落點與「有寫回時改動檔要有家」都不擋。
@@ -71818,3 +72142,4 @@ def t_ledger_rules_match_reader():
 
 if __name__ == "__main__":
     sys.exit(main())
+
