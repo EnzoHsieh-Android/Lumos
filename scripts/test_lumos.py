@@ -16783,6 +16783,30 @@ def t_hook_inner_timeout_always_below_outer():
 
 
 
+def t_lens_tests_avoid_branch_dependent_range():
+    """[鏡頭測試範圍固定 S2] 對真實 repo 呼叫 dispatch-lens 的測試,不准用「…..HEAD」當範圍——那段範圍就是當下分支的改動,
+    改到讓鏡頭算很久的東西時測試就逾時(2026-10-06 合併請求 #14:改一篇計劃筆記,鏡頭 3 分 14 秒,兩支認領測試卡過 180 秒)。
+    改用 _lens_smallest_commit 挑主線上改動最小的那一個提交。翻紅釘:任一支改回 f"{ml}..HEAD" → 紅並列出函式名。"""
+    print("t_lens_tests_avoid_branch_dependent_range")
+    import re as _re
+    src = Path(__file__).read_text(encoding="utf-8")
+    funcs = _re.split(r"(?m)^(?=def )", src)
+    bad, seen = [], []
+    for f in funcs:
+        m = _re.match(r"def (t_\w+)\(", f)
+        if not m or m.group(1) == "t_lens_tests_avoid_branch_dependent_range":
+            continue
+        if '"dispatch-lens"' not in f or "Path(GRAPHCTL).resolve().parent.parent" not in f:
+            continue      # 沒呼叫鏡頭、或用的是臨時造的 repo:範圍成本固定,不在此限
+        seen.append(m.group(1))
+        if _re.search(r"""\.\.HEAD["']""", f):
+            bad.append(m.group(1))
+    # ★前置★ 現場成立:篩選字串日後改名、一支都篩不到時,下面那條會恆綠
+    check("★前置★ 掃到那兩支對真實 repo 跑鏡頭的認領測試",
+          {"t_codex_s1_lens_arm_claim", "t_codex_s1_r1_fixes"} <= set(seen), str(seen))
+    check("對真實 repo 跑鏡頭的測試沒有用「…..HEAD」當範圍", not bad, str(bad))
+
+
 def _lens_smallest_commit(repo, ref, depth=30):
     """ref 最近 depth 個非合併、而且有父提交的提交裡,改動行數最少的那個(同分取較新的);沒有回 ""。
     二進位檔的增減在 numstat 是「-」,當 0 算。"""
@@ -38015,20 +38039,28 @@ def t_codex_s1_lens_arm_claim():
     # 不是鏡頭內容。原本四次武裝都用 <upstream>..HEAD,而算一次鏡頭的成本跟「本機比遠端多幾個 commit」
     # 成正比——那天本機多 5 個 commit、73 個檔,單次 47 秒,四次就撞破 180 秒上限。也就是說:**你要推的
     # 東西越多,這支測試越容易在 pre-push 當場紅**,而 pre-push 正是它唯一會被跑到的時機。改法:只留
-    # 第一次用真範圍(證明真內容跑得通),其餘三次用 <upstream>..<upstream> 這個空 diff——一樣過 base
+    # 第一次用真範圍(證明真的提交範圍跑得通;範圍取主線上最小的提交,內容小、不保證有鑑別力),其餘三次用 <upstream>..<upstream> 這個空 diff——一樣過 base
     # 必須在主線的守衛,一樣走完整的武裝/認領/過期/並發路徑,但不必重算鏡頭(實測 1.4 秒)。
     cheap = f"{ml}..{ml}"
+    # 真範圍取主線上改動最小的那一個提交(兩端都在主線上):用「主線..HEAD」的話範圍就是當下分支的改動,
+    # 改到讓鏡頭算很久的東西時這支就逾時(2026-10-06 合併請求 #14,Projects/鏡頭測試範圍固定_計劃)
+    _head = _lens_smallest_commit(repo, ml)
+    _base = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", _head + "~1^{commit}"],
+                    capture_output=True, text=True).stdout.strip() if _head else ""
+    if not (_head and _base):
+        raise _SrcOnly("這個 repo 的歷史不夠長,挑不到主線上的小範圍")
+    rng = f"{_base}..{_head}"
     def lens(*args):
         return _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", *args, "--repo", str(repo)], env=env, capture_output=True, text=True)
     r = lens("--claim", "--json")
     check("s1-arm: 沒武裝 → claim 回 not-armed、rc0", r.returncode == 0 and _j.loads(r.stdout.strip().splitlines()[-1])["reason"] == "not-armed", r.stdout[-100:] + r.stderr[-100:])
-    r = lens("--arm", f"{ml}..HEAD", "--seats", "2")
+    r = lens("--arm", rng, "--seats", "2")
     check("s1-arm: arm 2 席 rc0 且印席數", r.returncode == 0 and "共 2 席" in r.stdout, r.stdout[-200:] + r.stderr[-200:])
     key = hashlib.sha256(str(Path(os.path.realpath(str(repo)))).encode()).hexdigest()[:32]
     d = home / ".cache" / "lumos" / "dispatch-lens" / "armed" / key
     check("s1-arm: armed 目錄=realpath key、2 個 token、meta.json", d.is_dir() and len(list(d.glob("tok-*"))) == 2 and (d / "meta.json").exists(), str(list(d.glob("*")) if d.is_dir() else "no dir"))
     c1 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1]); c2 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1]); c3 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1])
-    check("s1-arm: 兩次認領席次 1、2,文字首行帶 LUMOS-LENS range", c1["seat"] == 1 and c2["seat"] == 2 and c1["text"].startswith(f"LUMOS-LENS range={ml}..HEAD 第 1/2 席"), str((c1["seat"], c2["seat"], (c1["text"] or "")[:60])))
+    check("s1-arm: 兩次認領席次 1、2,文字首行帶 LUMOS-LENS range", c1["seat"] == 1 and c2["seat"] == 2 and c1["text"].startswith(f"LUMOS-LENS range={rng} 第 1/2 席"), str((c1["seat"], c2["seat"], (c1["text"] or "")[:60])))
     check("s1-arm: 第三次 → 歸零已刪,not-armed", c3["reason"] == "not-armed" and not d.exists(), str(c3))
     # TTL 先驗:回溯 ts → expired 且整夾刪
     lens("--arm", cheap, "--seats", "1")
@@ -38122,7 +38154,15 @@ def t_codex_s1_r1_fixes():
     home = Path(_tf.mkdtemp(prefix="gctl-s1r1-")); env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), LUMOS_DISPATCH_LENS_NO_CACHE="1")
     ml = _sp.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "main@{upstream}"], capture_output=True, text=True).stdout.strip() or "main"
     def lens(*a): return _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", *a, "--repo", str(repo)], env=env, capture_output=True, text=True)
-    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    # 真範圍取主線上改動最小的那一個提交(兩端都在主線上):用「主線..HEAD」的話範圍就是當下分支的改動,
+    # 改到讓鏡頭算很久的東西時這支就逾時(2026-10-06 合併請求 #14,Projects/鏡頭測試範圍固定_計劃)
+    _head = _lens_smallest_commit(repo, ml)
+    _base = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", _head + "~1^{commit}"],
+                    capture_output=True, text=True).stdout.strip() if _head else ""
+    if not (_head and _base):
+        raise _SrcOnly("這個 repo 的歷史不夠長,挑不到主線上的小範圍")
+    rng = f"{_base}..{_head}"
+    lens("--arm", rng, "--seats", "3")
     import hashlib
     key = hashlib.sha256(str(Path(os.path.realpath(str(repo)))).encode()).hexdigest()[:32]
     dd = home / ".cache" / "lumos" / "dispatch-lens" / "armed" / key
@@ -38153,7 +38193,7 @@ def t_codex_s1_r1_fixes():
           isinstance(_tmo, (int, float)) and 0 < _tmo <= 30 * 0.75,
           f"內層 {_tmo} vs 外層 30(上限應為 22.5)")
     # ⑤ 互斥
-    r = lens("--arm", f"{ml}..HEAD", "--claim")
+    r = lens("--arm", rng, "--claim")
     check("s1-r1⑤: --arm 與 --claim 同給 → rc 2 擋下", r.returncode == 2 and "擋下" in r.stderr + r.stdout, f"rc={r.returncode} {r.stderr[-120:]}")
     lens("--disarm")
 
