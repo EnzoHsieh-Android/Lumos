@@ -63086,6 +63086,27 @@ def t_drift_c6_detects_pending_clause_to_settled_note():
     check("③來源本身已收尾的不列", _df_find(v, "c6", "Projects/Old_計劃.md") == [], "")
 
 
+
+def t_drift_c6_ignores_link_title_words():
+    """[c6 不看連結標題 S1] 連到標題含待定詞(「還沒做」)的已收尾筆記、連結外沒寫待定詞 → 不列;連結外寫了 → 照列;
+    別名裡的待定詞也不算(2026-10-06 rtb 盤點 1-1 的兩條誤報)。翻紅釘:判待定詞不遮連結 → ①③紅。"""
+    print("t_drift_c6_ignores_link_title_words")
+    root = _df_repo()
+    v = root / _DR_VAULT
+    _nh_file(root, f"{_DR_VAULT}/Issues/收據還沒做.md", "---\ntype: issue\nstatus: resolved\n---\n# 收據還沒做\n不做了\n")
+    live = _nh_file(root, f"{_DR_VAULT}/Projects/Moc_計劃.md",
+                    "---\ntype: project\nstatus: doing\n---\n# Moc\n"
+                    "寅 收據不做、已結案,見 [[Issues/收據還沒做]]\n"
+                    "卯 收據這邊還沒做,見 [[Issues/收據還沒做]]\n"
+                    "辰 見 [[Issues/收據還沒做|那件還沒做的事]]\n")
+    _df_commit(root, "c6 link title")
+    fs = _df_find(v, "c6", "Projects/Moc_計劃.md")
+    got = sorted(f["line"] for f in fs) if isinstance(fs, list) else fs
+    check("①連結標題裡的「還沒做」不算:寅不列", isinstance(got, list) and _c6_ln(live, "寅 ") not in got, str(fs))
+    check("②連結外真的寫了「還沒做」:卯照列", isinstance(got, list) and _c6_ln(live, "卯 ") in got, str(fs))
+    check("③別名裡的「還沒做」也不算:辰不列", isinstance(got, list) and _c6_ln(live, "辰 ") not in got, str(fs))
+
+
 def t_drift_fix_c6_appends_settled_bracket():
     """[S2] drift fix --kind c6 --settled:待定子句結尾補「(已裁定:日期 結論,見 [[目標]])」、那行不再被列、修復帳 kind=c6;
     兩個連結沒給 --by 回 2;表格行、沒有待定子句的行回 2;擋下都不寫檔。
