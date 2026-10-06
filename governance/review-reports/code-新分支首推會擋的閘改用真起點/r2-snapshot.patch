@@ -1,0 +1,127 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md b/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
+index 941a2f74..fc9001d7 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
+@@ -74,17 +74,17 @@ RETIRE-IF: pitfalls、impact、spec-gate、code-loop check 都自己吃 --push-r
+ 退回本案的提交即可:只改推送前掛鉤與新增一個唯讀指令,退回後新分支首推恢復從空樹算(會再被誤擋)。消費專案要重跑 `lumos update` 才拿到新掛鉤;退回也一樣要更新一次。
+ 
+ ## 天花板
+ 
+ 1. 只修新分支首推;一般增量推送合過主線、重定基底後 force-push(舊值還在本機)時的多算照舊(另一張 Issue)。
+ 2. 每支檔有家與筆記形狀擋仍用各自的起點推導;掛鉤裡同時有兩種起點,直到收斂。
+ 3. 找不到主線的 repo(主線叫 develop/trunk 又沒有遠端 HEAD)新分支首推照舊從空樹算。
+ 
+ ## 實作紀錄
+ 
+-- 2026-10-06:照做法 1–7 實作;新測試 3 支(`t_prepush_new_branch_block_range`、`t_push_range_cli`、`t_prepush_block_range_callers`)、推送前掛鉤相關既有測試(prepush、push_range、drift_range、drift_start、touched 五組共 315 條斷言)與指令索引、指令數兩支守衛全綠;`t_prepush_gates_stop_on_signal` 的停下行數從 6 改成 8(新增迴圈與觸及清單兩處)。翻紅驗證 6 處(不叫 push-range、退回不講、不停下、code-loop check 改回 _range、判不了照印、空樹寫死 SHA-1)各自讓對應測試紅。實作時 `pp_block_range_for` 的結果放全域變數 `_PP_BR`、不用 `$(...)` 回傳,被訊號殺掉時才停得下整支掛鉤;觸及清單那一處在子殼裡跑,外層另接一次停下。測試說明裡的全形連接號換成「到」(新增告警閘會把它算成新告警)。
++- 2026-10-06:照做法 1–7 實作;新測試 3 支(`t_prepush_new_branch_block_range`、`t_push_range_cli`、`t_prepush_block_range_callers`)、推送前掛鉤相關既有測試(prepush、push_range、drift_range、drift_start、touched 五組共 315 條斷言)與指令索引、指令數兩支守衛全綠;`t_prepush_gates_stop_on_signal` 的停下行數從 6 改成 8(新增迴圈與觸及清單兩處)。翻紅驗證 6 處(不叫 push-range、退回不講、不停下、code-loop check 改回 _range、判不了照印、空樹寫死 SHA-1)各自讓對應測試紅。實作時 `pp_block_range_for` 的結果放全域變數 `_PP_BR`、不用 `$(...)` 回傳,被訊號殺掉時才停得下整支掛鉤;觸及清單那一處在子殼裡跑,外層另接一次停下。測試說明裡的全形連接號換成「到」(新增告警閘會把它算成新告警)。代碼審 r1(兩席 8 條 minor):折 4 條(觸及清單任何一個 diff 失敗就不交、分派改關鍵字參數、回傳碼變數宣告 local、總目錄補新指令),放行 4 條(理由見卷證)。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-06,6 席):33 條/blocking 15/方向改了——原本在掛鉤層用「不在任何遠端分支上的最早提交」當起點,三席實測出合過主線多算、追蹤分支過期少算、--no-verify 推到別的遠端分支再改名推能繞過,另三席指出那跟「起點只在 `_push_range_start` 算一處」的既有決定相反;改成新指令 `lumos push-range` 包那支函式、掛鉤只在新分支首推與舊值找不到時呼叫,失敗退回空樹。另補:`pp_touched_file` 其實餵會擋的 doctor、標籤與分支共用那次風險分級、合過主線與舊值找不到的條款。放行 2 條(本機與 CI 起點兩支並存、掛鉤裡三個範圍名)。例:新分支先合過主線、主線之後多了 700 條告警的提交,再首推 → 修改前擋,修改後只算分支自己的提交、放行。
+ - 卷證:governance/review-reports/新分支首推會擋的閘改用真起點/
+ - r2(2026-10-06,6 席):30 條/blocking 10/四點——遠端舊值找不到也走新起點會變鬆(兩席實跑:找不到主線時只查最後一個提交),範圍收回只修推分支的新分支首推;SHA-256 repo 會印 SHA-1 空樹(兩席),改印這個 repo 自己的空樹;被訊號中斷要停、舊版 lumos 的錯誤訊息吞掉只印一句;驗收補每個呼叫點的靜態守衛、新增指令要同步的文件。另更正 CI 後盾的說法(功能分支推送不跑 CI)、空範圍時觸及清單交空檔。放行 5 條(沒有整體時限、空樹算不出時既有守衛已跳過、記帳與雙向門放行跟 code-loop check 同範圍、兩種輸出形狀、何時呼叫由掛鉤判)。例:推 main 而遠端舊值本機找不到、又找不到主線 → 修改前空樹全掃,r2 版會只掃最後一個提交,r3 版照舊空樹全掃。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index e9f3cfc8..3aa1101a 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -46,22 +46,21 @@ pp_range_for() {
+ }
+ 
+ # 會擋或決定擋不擋的那幾步用的範圍(Projects/新分支首推會擋的閘改用真起點_計劃):$1=remote_sha $2=local_sha $3=remote_ref
+ # [$4=quiet 不印退回的說明]。結果放 _PP_BR——不用 $(...) 回傳:裡面的 lumos 被訊號殺掉時要能照 pp_stop_if_signaled 停下整支掛鉤。
+ # 推分支(refs/heads/*)而且遠端舊值全零(新分支首推)時,改問 lumos push-range(_push_range_start:跟主線的分岔點,
+ # 存量漂移檢查用的同一支);其他形狀(一般增量、舊值本機找不到、推標籤)照 pp_range_for。
+ # push-range 不存在(舊版 lumos)、失敗、印出怪東西 → 照舊空樹(寧可多擋),講一句;錯誤文字丟掉(舊版會印「沒有這個指令」)。
+ pp_block_range_for() {
+   _PP_BR="$(pp_range_for "$1" "$2")"
+   [[ "$1" =~ ^0{40}(0{24})?$ && "$3" == refs/heads/* ]] || return 0
+-  local _out
+-  pr_rc=0
++  local _out pr_rc=0
+   _out="$("$PY" "$GRAPHCTL" push-range --diff "$1..$2" --push-remote "$_PP_REMOTE" --pushed-ref "$3" \
+     --repo "$REPO_ROOT" 2>/dev/null)" || pr_rc=$?
+   pp_stop_if_signaled "$pr_rc" "新分支首推起點(push-range)"
+   if [[ "$pr_rc" -eq 0 && "$_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?\.\.[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+     _PP_BR="$_out"
+   elif [[ "${4:-}" != quiet ]]; then
+     echo "新分支首推的起點沒算出來,照舊從空樹比(會擋的閘這次看整個 repo;更新 lumos 之後再推就會用真起點)。" >&2
+   fi
+ }
+ 
+@@ -93,21 +92,21 @@ pp_touched_file() {
+   # 範圍跟會擋的閘同一支(這份清單餵 doctor --touched-from,會擋)。每個 ref 的 diff 都成功、結果卻是空的(推的東西
+   # 已整段在主線上)→ 照樣交空清單,意思是「這次什麼都沒碰到」;任何一個 diff 失敗、或根本沒有推送行 → 不交(doctor 照舊全擋)
+   local _n=0 _ok=1
+   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     read -r _ _lsha _rref _rsha <<< "$_ppl"
+     [[ "$_lsha" == "$_ZERO" ]] && continue
+     pp_block_range_for "$_rsha" "$_lsha" "$_rref" quiet
+     _n=$((_n + 1))
+     git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f" 2>/dev/null || _ok=0
+   done
+-  if [[ -s "$_f" || ( "$_n" -gt 0 && "$_ok" -eq 1 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
++  if [[ "$_ok" -eq 1 && ( -s "$_f" || "$_n" -gt 0 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+ }
+ 
+ # 沒有 scripts/lumos → 降級放行(不為缺環境 brick push,CI 兜底);有 lumos 卻找不到 Python 3.14 → 擋下
+ # (Projects/最低Python版本改3.14_計劃 做法第 3 點;PY 在下面讀完設定後才決定)
+ GRAPHCTL="$REPO_ROOT/scripts/lumos"
+ PY=""
+ # ── python-launcher begin(三支 git 掛鉤與四支安裝腳本內嵌同一段,t_python_launcher_blocks_agree 逐字守一致)──
+ # 只負責找一支任何版本的 python 把 lumos 叫起來;版本判斷全交給 lumos(Systems/python直譯器選擇)。
+ # 固定位置排在 python3 前面:圖形用戶端的 PATH 很短,先執行 /usr/bin/python3 會在沒裝開發工具的 Mac 跳安裝對話框。
+ # LUMOS_PYTHON_SEARCH_DIRS(冒號分隔)有設就換掉固定位置——測試接縫,跟 lumos 內部那份同一個。
+diff --git a/scripts/lumos b/scripts/lumos
+index 833f148c..1504cc73 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -47475,21 +47475,22 @@ def main():
+             return cmd_note_audit_reread_prepare(repo=args.na_repo, diff_range=args.na_diff, orchestrator=args.na_orch,
+                                                  push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref,
+                                                  all_=args.na_all)
+         if args.nacmd == "reread-record":
+             return cmd_note_audit_reread_record(repo=args.na_repo, prepared=args.na_prepared, report=args.na_report)
+         if args.nacmd == "reread-check":
+             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
+                                                push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref)
+         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+     if args.cmd == "push-range":
+-        return cmd_push_range(args.prg_repo, args.prg_diff, args.prg_remote, args.prg_ref)
++        return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
++                              pushed_ref=args.prg_ref)
+     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
+         if args.drcmd == "check":
+             return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
+                                    pushed_ref=args.dr_pushed_ref)
+         if not args.dr_history and not args.dr_exam:
+             print("擋下:lumos drift exam 要給考卷,或帶 --history N", file=sys.stderr)
+             return 2
+         return cmd_drift_exam(args.dr_exam, args.dr_repo, probes=args.dr_probes, at=args.dr_at,
+                               history=args.dr_history, as_json=args.dr_json)
+     if args.cmd == "note-shape":
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 316fe25a..104b4086 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -26,19 +26,19 @@
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / drift scan·fix·ack(存量漂移:列出、用工具改掉、表態照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀守檔筆記) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀守檔筆記) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range(推送前掛鉤在新分支首推時取跟主線的分岔點) |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
+ 2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別寫(會過期;新寫的程式行號引用、沒帶 `[來源:…]` 的 FACT/FLOW/DEP 提交時會被擋),程式碼答不了的現況才寫、同一行帶 `[來源:部署|資料庫|生產|外部|人工]`;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸);綁的測試刪了改寫 `[test-gone:名稱]`。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
