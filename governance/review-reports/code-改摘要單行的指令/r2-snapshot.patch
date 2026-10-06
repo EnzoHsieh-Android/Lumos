@@ -1,0 +1,168 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/改摘要單行的指令_計劃.md b/docs/lumos-toolchain-knowledge/Projects/改摘要單行的指令_計劃.md
+index cb68c6e7..7bde6bad 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/改摘要單行的指令_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/改摘要單行的指令_計劃.md
+@@ -29,22 +29,22 @@ RETIRE-IF: 2027-04-06 前各消費專案治理帳裡 `summary-line` 一次都沒
+ - 做:定位——摘要區塊裡含舊片段的實體行;恰一行而且那一行裡只出現一次 → 換;零行 → 擋(rc2,講找不到);兩行以上、或同一行出現兩次以上 → 擋(rc2),列出每個候選的行號與前 40 字,教人給更長的片段或 `--nth N`(N 從 1 起,照摘要裡由上而下的順序數「含舊片段的出現處」)。
+ - 做:換完那一行只剩空白 → 拿掉那一行;摘要因此一行都不剩 → 擋(摘要不能空)。
+ - 做:那一行屬於跨多個實體行的條目(後面接著續行、或本身是續行)→ 擋,講不支援續行、請手改。
+ - 做:寫入照 `atomic_write_verify`(寫暫存、重新解析開頭欄位自驗、開頭欄位的格式檢查不得多出新問題,失敗原檔不動);同一次把 `updated:` 改成今天(本機日期,專案慣例 `datetime.now(timezone.utc).astimezone().date()`);印改前與改後那一行,並提示 `lumos lint <節點>`(筆記層級的檢查,例如 RULE 行欄位齊不齊,不在寫入自驗的範圍)。`--dry-run` 只印不寫。
+ - 做:指令說明字典、skill 指令速查(`commands/03-寫回圖譜.md`)、指令總數(ARCHITECTURE.md、`skills/lumos-project-notes/reference.md`)、總目錄 `commands/INDEX.md` 同步。
+ - 不做:插行、改前綴、續行、正文段落(正文用一般編輯)。
+ - 不做:改完自動跑結案連帶掃描(選配,另案)。
+ 
+ ## 做法
+ 
+-1. `cmd_summary_line(env, node, old, new, nth=None, dry_run=False)`:`env.find` 解析節點;`_vault_write_lock` 內 `load_raw_for_edit`;找出摘要區塊的實體行範圍(`summary: |-` 那一行之後、縮排比它深的連續行;摘要寫成單行值 `summary: 一句` 時那一行本身算唯一一行)。
+-2. 舊片段不得是空字串、不得含換行;新片段不得含換行(rc2)。
++1. `cmd_summary_line(env, node, old, new, nth=None, dry_run=False)`:`env.find` 解析節點(找不到走 `_node_not_found` 給近名候選);`_vault_write_lock` 內 `load_raw_for_edit`;摘要區塊的實體行用 `_notelines_regions` 判(`summary: |-`、`|`、`>` 之後縮排更深的連續行)。摘要寫成單行值 `summary: 一句` 的不支援(會報找不到),要改就手改或先改成區塊寫法。
++2. 舊片段不得是空字串;舊、新片段都不得含任何換行類字元(`str.splitlines` 認得的全部);舊新相同擋下講「沒有要改的」(rc2)。
+ 3. 收集所有出現處(行號, 在行內的位置);依範圍第 2 條判定;`--nth` 超出範圍 rc2。
+ 4. 續行判斷沿用 `_ns_summary_logical`:目標行若不是某個邏輯條目的唯一一行 → 擋。
+ 5. 新行 = 舊行把那一處換掉;若去掉縮排後是空的 → 刪行。`updated:` 行存在就換成今天,沒有就不加。
+ 6. `atomic_write_verify(path, new_lines, "summary", check)`,check 驗新摘要裡含新的那一行(刪行時驗舊行不在);失敗原檔不動、rc2。
+ 7. 印 `改前:…` / `改後:…`(刪行時印「已刪除」);成功 rc0。
+ 8. 寫回 [[Systems/lumos-cli-write]](寫入指令的家)。
+ 
+ ## 實務隱患
+ 
+ - **同一篇兩人同時改**:寫入包 `_vault_write_lock`,跟其他寫入指令排同一把鎖。
+@@ -68,11 +68,11 @@ RETIRE-IF: 2027-04-06 前各消費專案治理帳裡 `summary-line` 一次都沒
+ 
+ 退回本案的提交即可:只新增一個寫入指令與說明,沒有改動既有指令的行為或資料格式。
+ 
+ ## 天花板
+ 
+ 1. 只認單一實體行的條目;續行條目得手改。
+ 2. 只換字,不判斷改後的句子對不對;寫入只驗開頭欄位格式,筆記層級的檢查(RULE 欄位齊不齊)要跑 `lumos lint`,工具只提示不代跑。
+ 
+ ## 實作紀錄
+ 
+-- 2026-10-06:照做法 1–8 實作;新測試 6 支、指令索引與指令數兩支守衛全綠。翻紅驗證 6 處(不改 updated、多處時改第一個、--nth 數錯、不擋續行、刪行留空行、不走自驗直接寫)各自讓對應測試紅。實作時發現寫入自驗只看開頭欄位格式、不做筆記層級檢查,S6 改成驗「自驗失敗原檔不動」並在成功後提示 `lumos lint <節點>`。為了不帶進新告警,主函式拆成找出現處、判要改哪一處、組新內容三支小函式。
++- 2026-10-06:照做法 1–8 實作;新測試 6 支、指令索引與指令數兩支守衛全綠。翻紅驗證 6 處(不改 updated、多處時改第一個、--nth 數錯、不擋續行、刪行留空行、不走自驗直接寫)各自讓對應測試紅。實作時發現寫入自驗只看開頭欄位格式、不做筆記層級檢查,S6 改成驗「自驗失敗原檔不動」並在成功後提示 `lumos lint <節點>`。為了不帶進新告警,主函式拆成找出現處、判要改哪一處、組新內容三支小函式。代碼審 r1(兩席 5 條 minor)全折:換行類字元一律擋、新舊相同擋、單行值摘要寫明不支援並拿掉死碼、補「新行跟另一行一樣」的自驗案例、找不到節點改走 `_node_not_found`。
+diff --git a/scripts/lumos b/scripts/lumos
+index 49d52aaf..8f8714cb 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18018,29 +18018,33 @@ def _vault_write_lock(vault):
+ 
+ def cmd_set(env, rel, key, value):
+     with _vault_write_lock(env.vault):
+         return _cmd_set_locked(env, rel, key, value)
+ 
+ 
+ def cmd_summary_line(env, node, old, new, nth=None, dry_run=False):
+     """lumos summary-line <節點> "<舊片段>" "<新片段>":摘要裡唯一含舊片段的那一處換成新片段(Projects/改摘要單行的指令_計劃)。
+     定位照 guard bind 的「片段比對、對到多個就擋」;多個時列候選、--nth 指定第幾個出現處;續行條目不支援;
+     換完只剩空白就拿掉那一行(摘要不得因此變空);寫入照 atomic_write_verify,同一次把 updated 改成今天。"""
+-    if not old or "\n" in old or "\n" in (new or ""):
++    new = new or ""
++    # 換行類字元一律擋(splitlines 認得的全部:\r、\x0b、\x0c、\x1c-\x1e、\x85、\u2028、\u2029;代碼審 r1 正確性席 F1)
++    if not old or len((old + "x").splitlines()) > 1 or len((new + "x").splitlines()) > 1:
+         print("擋下:舊片段不能是空的,舊片段與新片段都不能含換行", file=sys.stderr)
+         return 2
++    if old == new:
++        print("擋下:舊片段跟新片段一樣,沒有要改的", file=sys.stderr)
++        return 2
+     rel = env.find(node)
+     if rel is None:
+-        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+-        return 2
++        return _node_not_found(env, node, write_side=True)
+     with _vault_write_lock(env.vault):
+-        return _summary_line_locked(env, rel, old, new or "", nth, dry_run)
++        return _summary_line_locked(env, rel, old, new, nth, dry_run)
+ 
+ 
+ def _summary_line_hits(lines, regs, old):
+     """摘要區裡舊片段的每一個出現處 → [(0 起的行號, 行內位置)],照由上而下、由左而右。"""
+     hits = []
+     for i, (ln, rg) in enumerate(zip(lines, regs)):
+         if rg != "summary":
+             continue
+         k = ln.find(old)
+         while k >= 0:
+@@ -18088,21 +18092,21 @@ def _summary_line_locked(env, rel, old, new, nth, dry_run):
+         print(err, file=sys.stderr)
+         return 2
+     i, k = hits[(nth or 1) - 1]
+     cont = {}       # {續行行號: 所屬那條的行號}(1 起)
+     _ns_summary_logical(text, cont)
+     if (i + 1) in cont or (i + 1) in set(cont.values()):
+         print(f"擋下:{rel} 第 {i + 1} 行屬於一條拆成多行(續行)的摘要條目,這個指令不支援續行,請手改", file=sys.stderr)
+         return 2
+     old_line = lines[i]
+     new_line = old_line[:k] + new + old_line[k + len(old):]
+-    delete = not new_line.strip() or new_line.strip() == "summary:"
++    delete = not new_line.strip()
+     if delete and not any(rg == "summary" and ln.strip() and not ln.lstrip().startswith("summary:")
+                           for j, (ln, rg) in enumerate(zip(lines, regs)) if j != i):
+         print(f"擋下:刪掉這一行之後 {rel} 的摘要就空了,摘要不能是空的", file=sys.stderr)
+         return 2
+     today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
+     new_lines = _summary_line_rebuild(lines, i, None if delete else new_line, e, today)
+     print(f"改前:{_esc_clean(old_line.strip(), 300)}")
+     print("改後:" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
+     if dry_run:
+         print("(--dry-run:只印,沒寫)")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0f136d9d..0ae2895b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -32585,20 +32585,24 @@ def t_summary_line_replace():
+     print("t_summary_line_replace")
+     _root, v, p = _sl_vault("WHY:用 A 方案 [出處:x] [因:y]\nKEY:第二條不動\nWHY:另一條 [出處:z] [因:w]")
+     before = p.read_text(encoding="utf-8")
+     r = run(v, "summary-line", "Systems/Pay", "用 A 方案", "改用 B 方案")
+     s = _sl_summary(p)
+     check("①換掉那一段、其他行不動", r.returncode == 0 and s == ["WHY:改用 B 方案 [出處:x] [因:y]", "KEY:第二條不動",
+                                                           "WHY:另一條 [出處:z] [因:w]"], (r.stdout + r.stderr, s))
+     check("②updated 改成今天", f"updated: {_sl_today()}" in p.read_text(encoding="utf-8"), p.read_text(encoding="utf-8")[:300])
+     check("③印改前改後", "WHY:用 A 方案" in r.stdout and "WHY:改用 B 方案" in r.stdout, r.stdout)
+     body_old = before.split("\n---\n", 1)[1]
++    # ⑤新的那一行剛好跟另一行一模一樣:自驗照算對(代碼審 r1 正確性席 F4)
++    _root2, v2, p2 = _sl_vault("KEY:甲\nKEY:乙")
++    r2 = run(v2, "summary-line", "Systems/Pay", "乙", "甲")
++    check("⑤新行跟另一行一樣:照改", r2.returncode == 0 and _sl_summary(p2) == ["KEY:甲", "KEY:甲"], (r2.stdout + r2.stderr, _sl_summary(p2)))
+     check("④正文一字不動", p.read_text(encoding="utf-8").split("\n---\n", 1)[1] == body_old, "")
+     print("  ✓ t_summary_line_replace")
+ 
+ 
+ def t_summary_line_ambiguous():
+     """[改摘要單行 S2] 舊片段出現兩行以上或同一行兩次 → rc2 不寫、列候選行號與前 40 字;--nth 2 改第二個出現處。
+     翻紅釘:對到多個時改第一個 → ①紅;--nth 數錯 → ③紅。"""
+     print("t_summary_line_ambiguous")
+     _root, v, p = _sl_vault("RULE:甲 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]\n"
+                            "RULE:乙 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]")
+@@ -32622,22 +32626,29 @@ def t_summary_line_rejects():
+     """[改摘要單行 S3] 找不到、舊片段空或含換行、新片段含換行、節點不存在 → rc2 不寫。翻紅釘:不擋空的舊片段 → ①-④紅。"""
+     print("t_summary_line_rejects")
+     _root, v, p = _sl_vault("KEY:一條 [x]\nKEY:另一條")
+     before = p.read_text(encoding="utf-8")
+     for args, why, say in ((("找不到的字", "新"), "找不到", "摘要裡找不到"), (("", "新"), "舊片段空", "不能是空的"),
+                            (("一條\nKEY", "新"), "舊片段含換行", "不能含換行"), (("一條", "新\n行"), "新片段含換行", "不能含換行")):
+         r = run(v, "summary-line", "Systems/Pay", *args)
+         check(f"①-④{why}:rc2、檔不動、講原因", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+               and say in r.stdout + r.stderr, r.stdout + r.stderr)
+     r = run(v, "summary-line", "Systems/不存在", "a", "b")
+-    check("⑤節點不存在:rc2、講找不到那篇", r.returncode == 2 and "找不到叫 Systems/不存在 的筆記" in r.stdout + r.stderr,
+-          r.stdout + r.stderr)
++    check("⑤節點不存在:rc2、講找不到那篇(共用的近名候選訊息)", r.returncode == 2
++          and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr, r.stdout + r.stderr)
++    for bad in ("\r", "\x85", "\u2028", "\x0b"):
++        r = run(v, "summary-line", "Systems/Pay", "一條", f"新{bad}行")
++        check(f"⑥新片段含換行類字元 {bad!r}:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++              and "不能含換行" in r.stdout + r.stderr, r.stdout + r.stderr)
++    r = run(v, "summary-line", "Systems/Pay", "一條", "一條")
++    check("⑦新舊片段相同:rc2、講沒有要改的", r.returncode == 2 and p.read_text(encoding="utf-8") == before
++          and "沒有要改的" in r.stdout + r.stderr, r.stdout + r.stderr)
+     print("  ✓ t_summary_line_rejects")
+ 
+ 
+ def t_summary_line_continuation():
+     """[改摘要單行 S5] 目標行屬於跨多個實體行的條目(第一行或續行)→ rc2、檔不動、講不支援續行。翻紅釘:不擋續行 → ①紅。"""
+     print("t_summary_line_continuation")
+     _root, v, p = _sl_vault("RULE:要人簽 [依據:人] [since:2026-09-01]\n  [retire:when-file:src/a.py]\nKEY:別條")
+     before = p.read_text(encoding="utf-8")
+     for frag in ("要人簽", "src/a.py"):
+         r = run(v, "summary-line", "Systems/Pay", frag, "改")

@@ -32919,6 +32919,283 @@ def t_drift_ack_routed_tracked_state():
     print("  ✓ t_drift_ack_routed_tracked_state")
 
 
+# ── 改摘要單行的指令(Projects/改摘要單行的指令_計劃)─────────────────────────────────────────────
+def _sl_vault(summary):
+    """一篇 Systems/Pay,摘要給定 → (root, vault, 筆記路徑)。"""
+    root = _nh_repo()
+    p = _nh_node(root, "Pay", summary=summary)
+    _nh_commit(root, "init")
+    return root, root / "docs" / "kg-knowledge", p
+
+
+def _sl_summary(p):
+    lines = p.read_text(encoding="utf-8").split("\n")
+    i = next(k for k, ln in enumerate(lines) if ln.startswith("summary:"))
+    out = []
+    for ln in lines[i + 1:]:
+        if ln.startswith("  "):
+            out.append(ln[2:])
+        else:
+            break
+    return out
+
+
+def _sl_today():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()
+
+
+def t_summary_line_replace():
+    """[改摘要單行 S1] 舊片段恰好出現一次 → 換成新片段、updated 改今天、印改前改後、其他行不動。
+    翻紅釘:不改 updated → ②紅;換了第一個以外的行 → ①紅。"""
+    print("t_summary_line_replace")
+    _root, v, p = _sl_vault("WHY:用 A 方案 [出處:x] [因:y]\nKEY:第二條不動\nWHY:另一條 [出處:z] [因:w]")
+    before = p.read_text(encoding="utf-8")
+    r = run(v, "summary-line", "Systems/Pay", "用 A 方案", "改用 B 方案")
+    s = _sl_summary(p)
+    check("①換掉那一段、其他行不動", r.returncode == 0 and s == ["WHY:改用 B 方案 [出處:x] [因:y]", "KEY:第二條不動",
+                                                          "WHY:另一條 [出處:z] [因:w]"], (r.stdout + r.stderr, s))
+    check("②updated 改成今天", f"updated: {_sl_today()}" in p.read_text(encoding="utf-8"), p.read_text(encoding="utf-8")[:300])
+    check("③印改前改後", "WHY:用 A 方案" in r.stdout and "WHY:改用 B 方案" in r.stdout, r.stdout)
+    body_old = before.split("\n---\n", 1)[1]
+    # ⑤新的那一行剛好跟另一行一模一樣:自驗照算對(代碼審 r1 正確性席 F4)
+    _root2, v2, p2 = _sl_vault("KEY:甲\nKEY:乙")
+    r2 = run(v2, "summary-line", "Systems/Pay", "乙", "甲")
+    check("⑤新行跟另一行一樣:照改", r2.returncode == 0 and _sl_summary(p2) == ["KEY:甲", "KEY:甲"], (r2.stdout + r2.stderr, _sl_summary(p2)))
+    check("④正文一字不動", p.read_text(encoding="utf-8").split("\n---\n", 1)[1] == body_old, "")
+    print("  ✓ t_summary_line_replace")
+
+
+def t_summary_line_ambiguous():
+    """[改摘要單行 S2] 舊片段出現兩行以上或同一行兩次 → rc2 不寫、列候選行號與前 40 字;--nth 2 改第二個出現處。
+    翻紅釘:對到多個時改第一個 → ①紅;--nth 數錯 → ③紅。"""
+    print("t_summary_line_ambiguous")
+    _root, v, p = _sl_vault("RULE:甲 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]\n"
+                           "RULE:乙 [依據:人] [since:2026-01-01] [retire:人裁] [until:2027-01-01]")
+    before = p.read_text(encoding="utf-8")
+    r = run(v, "summary-line", "Systems/Pay", "[依據:人]", "[依據:外部]")
+    out = r.stdout + r.stderr
+    check("①對到兩行:rc2、檔不動、列出兩個候選", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+          and "RULE:甲" in out and "RULE:乙" in out and "--nth" in out, out)
+    _root, v, p = _sl_vault("KEY:同一行 xx 兩次 xx")
+    before = p.read_text(encoding="utf-8")
+    r = run(v, "summary-line", "Systems/Pay", "xx", "yy")
+    check("②同一行出現兩次:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
+    r = run(v, "summary-line", "Systems/Pay", "xx", "yy", "--nth", "2")
+    check("③--nth 2:換第二個出現處", r.returncode == 0 and _sl_summary(p) == ["KEY:同一行 xx 兩次 yy"], (r.stdout + r.stderr, _sl_summary(p)))
+    r = run(v, "summary-line", "Systems/Pay", "yy", "zz", "--nth", "3")
+    check("④--nth 超出範圍:rc2", r.returncode == 2, r.stdout + r.stderr)
+    print("  ✓ t_summary_line_ambiguous")
+
+
+def t_summary_line_rejects():
+    """[改摘要單行 S3] 找不到、舊片段空或含換行、新片段含換行、節點不存在 → rc2 不寫。翻紅釘:不擋空的舊片段 → ①-④紅。"""
+    print("t_summary_line_rejects")
+    _root, v, p = _sl_vault("KEY:一條 [x]\nKEY:另一條")
+    before = p.read_text(encoding="utf-8")
+    for args, why, say in ((("找不到的字", "新"), "找不到", "摘要裡找不到"), (("", "新"), "舊片段空", "不能是空的"),
+                           (("一條\nKEY", "新"), "舊片段含換行", "不能含換行"), (("一條", "新\n行"), "新片段含換行", "不能含換行")):
+        r = run(v, "summary-line", "Systems/Pay", *args)
+        check(f"①-④{why}:rc2、檔不動、講原因", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+              and say in r.stdout + r.stderr, r.stdout + r.stderr)
+    r = run(v, "summary-line", "Systems/不存在", "a", "b")
+    check("⑤節點不存在:rc2、講找不到那篇(共用的近名候選訊息)", r.returncode == 2
+          and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr, r.stdout + r.stderr)
+    for bad in ("\r", "\x85", "\u2028", "\x0b"):
+        r = run(v, "summary-line", "Systems/Pay", "一條", f"新{bad}行")
+        check(f"⑥新片段含換行類字元 {bad!r}:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+              and "不能含換行" in r.stdout + r.stderr, r.stdout + r.stderr)
+    r = run(v, "summary-line", "Systems/Pay", "一條", "一條")
+    check("⑦新舊片段相同:rc2、講沒有要改的", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+          and "沒有要改的" in r.stdout + r.stderr, r.stdout + r.stderr)
+    print("  ✓ t_summary_line_rejects")
+
+
+def t_summary_line_continuation():
+    """[改摘要單行 S5] 目標行屬於跨多個實體行的條目(第一行或續行)→ rc2、檔不動、講不支援續行。翻紅釘:不擋續行 → ①紅。"""
+    print("t_summary_line_continuation")
+    _root, v, p = _sl_vault("RULE:要人簽 [依據:人] [since:2026-09-01]\n  [retire:when-file:src/a.py]\nKEY:別條")
+    before = p.read_text(encoding="utf-8")
+    for frag in ("要人簽", "src/a.py"):
+        r = run(v, "summary-line", "Systems/Pay", frag, "改")
+        check(f"①續行條目({frag}):rc2、檔不動、講續行", r.returncode == 2 and p.read_text(encoding="utf-8") == before
+              and "續行" in r.stdout + r.stderr, r.stdout + r.stderr)
+    r = run(v, "summary-line", "Systems/Pay", "KEY:別條", "KEY:別條改過")
+    check("②同一篇單行的條目照改", r.returncode == 0 and "KEY:別條改過" in _sl_summary(p), r.stdout + r.stderr)
+    print("  ✓ t_summary_line_continuation")
+
+
+def t_summary_line_delete():
+    """[改摘要單行 S4] 換完只剩空白 → 拿掉那一行;摘要因此變空 → rc2 不寫。翻紅釘:留下空行 → ①紅。"""
+    print("t_summary_line_delete")
+    _root, v, p = _sl_vault("KEY:留著\nKEY:要刪的這一條")
+    r = run(v, "summary-line", "Systems/Pay", "KEY:要刪的這一條", "")
+    check("①整行刪光:拿掉那一行", r.returncode == 0 and _sl_summary(p) == ["KEY:留著"], (r.stdout + r.stderr, _sl_summary(p)))
+    before = p.read_text(encoding="utf-8")
+    r = run(v, "summary-line", "Systems/Pay", "KEY:留著", "")
+    check("②刪完摘要會空:rc2、檔不動", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
+    print("  ✓ t_summary_line_delete")
+
+
+def t_summary_line_verify():
+    """[改摘要單行 S6] 寫入自驗失敗 → rc2、原檔不動;--dry-run 只印不寫;成功後提示 lint 那一篇。
+    翻紅釘:不走 atomic_write_verify(直接寫)→ ①紅。"""
+    print("t_summary_line_verify")
+    import io, contextlib
+    m = _load_lumos_inproc()
+    _root, v, p = _sl_vault("KEY:正常的一條\nKEY:別條")
+    before = p.read_text(encoding="utf-8")
+    orig = m.atomic_write_verify
+
+    def _boom(*a, **k):
+        raise RuntimeError("測試:自驗失敗")
+    m.atomic_write_verify = _boom
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = m.cmd_summary_line(m.Env(v), "Systems/Pay", "正常的一條", "改過的一條")
+    finally:
+        m.atomic_write_verify = orig
+    check("①寫入自驗失敗:rc2、原檔不動", rc == 2 and p.read_text(encoding="utf-8") == before, buf.getvalue())
+    r = run(v, "summary-line", "Systems/Pay", "正常的一條", "改過的一條", "--dry-run")
+    check("②--dry-run:印改後、檔不動", r.returncode == 0 and "改過的一條" in r.stdout and p.read_text(encoding="utf-8") == before,
+          r.stdout + r.stderr)
+    r = run(v, "summary-line", "Systems/Pay", "正常的一條", "改過的一條")
+    check("③成功後提示 lint 那一篇", r.returncode == 0 and "lumos lint Systems/Pay" in r.stdout, r.stdout)
+    print("  ✓ t_summary_line_verify")
+
+
+# ── 筆記 updated 落後:健檢列出加一鍵修(Projects/提交時自動更新筆記日期_計劃)────────────────────────
+def _us_today():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()
+
+
+def _us_repo():
+    """兩篇筆記都寫 updated 2026-09-11、今天提交(→ 落後);一篇沒有 updated 欄。→ (root, vault)。"""
+    root = _nh_repo()
+    _nh_node(root, "Pay", summary="KEY:a")
+    _nh_node(root, "Ship", summary="KEY:b")
+    nou = root / "docs" / "kg-knowledge" / "Systems" / "NoDate.md"
+    nou.write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:c\n---\n# NoDate\n", encoding="utf-8")
+    _nh_commit(root, "init")
+    return root, root / "docs" / "kg-knowledge"
+
+
+def _us_updated(vault, rel):
+    import re as _re
+    m = _re.search(r"^updated: (\S+)$", (vault / rel).read_text(encoding="utf-8"), _re.M)
+    return m.group(1) if m else None
+
+
+def t_doctor_updated_stale():
+    """[updated 落後 S1] updated 早於 git 上最後一次提交日期 → doctor 印筆數與那幾篇、附 lumos updated-sync --stale;
+    都沒落後 → 不印。翻紅釘:doctor 不接 _updated_stale_notes → ①紅。"""
+    print("t_doctor_updated_stale")
+    root, v = _us_repo()
+    r = run(v, "doctor")
+    out = r.stdout + r.stderr
+    check("①兩篇落後:印筆數、例子、指令", "updated 落後" in out and "2 篇" in out and "Systems/Pay" in out
+          and "lumos updated-sync --stale" in out, out[-1200:])
+    for n in ("Pay", "Ship"):
+        p = v / "Systems" / f"{n}.md"
+        p.write_text(p.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {_us_today()}"), encoding="utf-8")
+    _nh_commit(root, "bump")
+    r = run(v, "doctor")
+    check("②都改成今天後:不印", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-800:])
+    # ③淺複製(只有最近一個提交):日期表全變同一天、判不準 → 不印(代碼審 r1 正確性席 F1)
+    import subprocess as _sp
+    root, v = _us_repo()
+    (root / "README.md").write_text("x\n")
+    _nh_commit(root, "later")
+    sh = Path(tempfile.mkdtemp(prefix="gctl-us-shallow-")) / "c"
+    _sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
+    r = run(sh / "docs" / "kg-knowledge", "doctor")
+    check("③淺複製:不印 updated 落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
+    r = run(sh / "docs" / "kg-knowledge", "updated-sync", "--stale", "--dry-run")
+    check("③淺複製:--stale 沒有要改的", "會改" not in r.stdout, r.stdout + r.stderr)
+    # ④只落後一天(跨午夜才提交):不算(代碼審 r1 正確性席 F3)
+    import datetime as _dt, os as _os
+    root, v = _us_repo()
+    y = (_dt.date.fromisoformat(_us_today()) - _dt.timedelta(days=1)).isoformat()
+    for n in ("Pay", "Ship"):
+        q = v / "Systems" / f"{n}.md"
+        q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {y}"), encoding="utf-8")
+    _nh_git(root, "add", "-A")
+    _sp.run(["git", "-C", str(root), "commit", "-qm", "y"], capture_output=True, env=dict(_os.environ, GIT_COMMITTER_DATE=f"{_us_today()}T12:00:00"))
+    r = run(v, "doctor")
+    check("④updated 只比 git 日期早一天:不算落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
+    print("  ✓ t_doctor_updated_stale")
+
+
+def t_updated_sync_stale():
+    """[updated 落後 S2] updated-sync --stale → 落後的每篇改成今天、其他欄位與正文不動;沒有 updated 欄的不加;已是今天的跳過。
+    翻紅釘:改成 git 日期而非今天 → ①紅;沒有 updated 也加 → ③紅。"""
+    print("t_updated_sync_stale")
+    _root, v = _us_repo()
+    before = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
+    r = run(v, "updated-sync", "--stale")
+    check("①兩篇改成今天", r.returncode == 0 and _us_updated(v, "Systems/Pay.md") == _us_today()
+          and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
+    after = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
+    check("②只動 updated 那一行", [ln for ln in before.split("\n") if not ln.startswith("updated:")]
+          == [ln for ln in after.split("\n") if not ln.startswith("updated:")], after[:300])
+    check("③沒有 updated 欄的不加(--stale 本來就不挑它)", _us_updated(v, "Systems/NoDate.md") is None,
+          (v / "Systems" / "NoDate.md").read_text())
+    r = run(v, "updated-sync", "Systems/NoDate")
+    check("③b直接指定沒有 updated 欄的那篇:跳過、不加", r.returncode == 0 and "沒有 updated 欄或是空的" in r.stdout
+          and _us_updated(v, "Systems/NoDate.md") is None, r.stdout + r.stderr)
+    r = run(v, "updated-sync", "--stale")
+    check("④再跑一次(都已是今天、但還沒提交):照樣改成今天、不報錯", r.returncode == 0, r.stdout + r.stderr)
+    print("  ✓ t_updated_sync_stale")
+
+
+def t_updated_sync_nodes():
+    """[updated 落後 S3] 指定節點只改那一篇;找不到的走近名候選、rc 非 0、其他照改;--dry-run 只印不寫。
+    翻紅釘:找不到就整批停 → ②紅;--dry-run 照寫 → ③紅。"""
+    print("t_updated_sync_nodes")
+    _root, v = _us_repo()
+    r = run(v, "updated-sync", "Systems/Pay")
+    check("①只改指定那篇", r.returncode == 0 and _us_updated(v, "Systems/Pay.md") == _us_today()
+          and _us_updated(v, "Systems/Ship.md") == "2026-09-11", r.stdout + r.stderr)
+    r = run(v, "updated-sync", "Systems/不存在", "Systems/Ship")
+    check("②找不到的走近名候選、rc 非 0、其他照改", r.returncode != 0 and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr
+          and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
+    _root, v = _us_repo()
+    r = run(v, "updated-sync", "--stale", "--dry-run")
+    check("③--dry-run:印會改哪幾篇、不寫", r.returncode == 0 and "Systems/Pay" in r.stdout
+          and _us_updated(v, "Systems/Pay.md") == "2026-09-11", r.stdout + r.stderr)
+    r = run(v, "updated-sync")
+    check("④沒給節點也沒給 --stale:rc2", r.returncode == 2, r.stdout + r.stderr)
+    # ⑤一篇寫入時丟例外:其他照改、rc 非 0(代碼審 r2 回歸席 F1)
+    m = _load_lumos_inproc()
+    import io, contextlib
+    _root2, v2 = _us_repo()
+    orig = m.cmd_set
+
+    def _boom(env, rel, key, value):
+        if rel.endswith("Pay.md"):
+            raise RuntimeError("測試:寫入失敗")
+        return orig(env, rel, key, value)
+    m.cmd_set = _boom
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = m.cmd_updated_sync(m.Env(v2), ["Systems/Pay", "Systems/Ship"])
+    finally:
+        m.cmd_set = orig
+    check("⑤一篇丟例外:其他照改、rc 非 0、講原因", rc != 0 and _us_updated(v2, "Systems/Ship.md") == _us_today()
+          and "測試:寫入失敗" in buf.getvalue(), buf.getvalue())
+    # ⑥updated 是不存在的日期:當成落後列出(代碼審 r2 回歸席 F2)
+    _root3, v3 = _us_repo()
+    q = v3 / "Systems" / "Pay.md"
+    q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", "updated: 2026-02-30"), encoding="utf-8")
+    _nh_commit(_root3, "bad date")
+    r = run(v3, "updated-sync", "--stale", "--dry-run")
+    check("⑥updated 是不存在的日期:列成要改", "會改 Systems/Pay" in r.stdout, r.stdout + r.stderr)
+    print("  ✓ t_updated_sync_nodes")
+
+
 def _rt_events(root):
     return [e for e in _ns_gov(root) if e.get("gate") == "drift-check" and e.get("check") == "retire"]
 
@@ -63298,6 +63575,27 @@ def t_drift_c6_detects_pending_clause_to_settled_note():
     check("②related 是那一行命中的已收尾目標", rel.get(_c6_ln(live, "己 ")) == ["Issues/Res.md"]
           and rel.get(_c6_ln(live, "甲 ")) == ["Projects/Done_計劃.md"], str(rel))
     check("③來源本身已收尾的不列", _df_find(v, "c6", "Projects/Old_計劃.md") == [], "")
+
+
+
+def t_drift_c6_ignores_link_title_words():
+    """[c6 不看連結標題 S1] 連到標題含待定詞(「還沒做」)的已收尾筆記、連結外沒寫待定詞 → 不列;連結外寫了 → 照列;
+    別名裡的待定詞也不算(2026-10-06 rtb 盤點 1-1 的兩條誤報)。翻紅釘:判待定詞不遮連結 → ①③紅。"""
+    print("t_drift_c6_ignores_link_title_words")
+    root = _df_repo()
+    v = root / _DR_VAULT
+    _nh_file(root, f"{_DR_VAULT}/Issues/收據還沒做.md", "---\ntype: issue\nstatus: resolved\n---\n# 收據還沒做\n不做了\n")
+    live = _nh_file(root, f"{_DR_VAULT}/Projects/Moc_計劃.md",
+                    "---\ntype: project\nstatus: doing\n---\n# Moc\n"
+                    "寅 收據不做、已結案,見 [[Issues/收據還沒做]]\n"
+                    "卯 收據這邊還沒做,見 [[Issues/收據還沒做]]\n"
+                    "辰 見 [[Issues/收據還沒做|那件還沒做的事]]\n")
+    _df_commit(root, "c6 link title")
+    fs = _df_find(v, "c6", "Projects/Moc_計劃.md")
+    got = sorted(f["line"] for f in fs) if isinstance(fs, list) else fs
+    check("①連結標題裡的「還沒做」不算:寅不列", isinstance(got, list) and _c6_ln(live, "寅 ") not in got, str(fs))
+    check("②連結外真的寫了「還沒做」:卯照列", isinstance(got, list) and _c6_ln(live, "卯 ") in got, str(fs))
+    check("③別名裡的「還沒做」也不算:辰不列", isinstance(got, list) and _c6_ln(live, "辰 ") not in got, str(fs))
 
 
 def t_drift_fix_c6_appends_settled_bracket():
