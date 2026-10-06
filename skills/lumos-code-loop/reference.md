@@ -184,7 +184,7 @@ lumos impact --diff <merge-base>..HEAD --sync-check   # 落成核對:受影響�
 lumos code-loop pass --note "<收斂理由 / loop-id，例:code-<topic> 收斂 N 輪 caught 無 blocker>"
 ```
 
-> **為什麼**：pre-push hook 已升級為 **blocking**——tier=high 分支若無有效的 `pass`（或 `skip`）留痕，`git push` 會被硬擋（rc1）。`loop status` exit 0 只代表審計收斂，留痕要另外寫一次才閉環。`skip` 是假陽性逃生閥（繞行也留痕），正常收斂後用 `pass`。
+> **為什麼**：pre-push hook 已升級為 **blocking**——tier=high 分支若無有效的 `pass`（或 `skip`）留痕，`git push` 會被硬擋（rc1）。`loop status` exit 0 只代表審計收斂，留痕要另外寫一次才閉環。`skip` 是假陽性逃生閥（繞行也留痕），正常收斂後用 `pass`。合併請求合進主線後，主線 CI 會認合進來那一側的留痕（2026-10-07 起）——前提是分支合併前已跟上主線、合併提交不手改；壓成單一提交（squash）的合併不適用，主線那邊要補審或補記。
 
 > 設計全文見 `docs/design/2026-07-04-pitfalls-code-loop.md` ### ③ `lumos-code-loop`。
 
