@@ -1,0 +1,180 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 18e45bcd..8b232cac 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -23287,22 +23287,34 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
+       ★任何一份★ material(scope 三集合:materials=必查;repo 查證引用恆合法——本檢查
+       只驗引句錨定,不碰 file:line 證據;引句出界才記越界)
+     - materials 為空 → vacuous 豁免(不判兩類)
+     恆 rc0(觀測不擋,升閘須另過 loop);輸入壞損 rc2 fail loud。--ledger 時 out_of_scope
+     逐條 append {round,seat,quote,reason}(越界另記一本、不進收斂帳)。
+     ★射程:測的是報告與留痕的協議內一致性——席一致地說謊(引句自編但恰好錨得進)抓不到★"""
+     import json
+     try:
+         rtext = Path(report).read_text(encoding="utf-8")
+         disp = json.loads(Path(dispatch).read_text(encoding="utf-8"))
+-        materials = disp.get("materials") or []
+-        assert isinstance(materials, list)
++        if not isinstance(disp, dict):
++            raise ValueError("dispatch 必須是 JSON 物件")
++        materials = disp.get("materials")
++        if materials is None:
++            materials = []
++        if not isinstance(materials, list):
++            raise ValueError("materials 必須是路徑清單或 null")
++        for i, mp in enumerate(materials):
++            if not isinstance(mp, str) or not mp or "\x00" in mp:
++                raise ValueError(f"materials[{i}] 必須是非空且不含 NUL 的路徑字串")
++            try:
++                os.fsencode(mp)
++            except UnicodeEncodeError as error:
++                raise ValueError(f"materials[{i}] 路徑無法使用目前的檔案系統編碼") from error
+     except (OSError, UnicodeDecodeError, ValueError, AssertionError) as e:
+         print(f"擋下:審查報告或派工單讀不到: {e}", file=sys.stderr)
+         return 2
+     out = {"report": str(report), "round": disp.get("round"), "seat": disp.get("seat"),
+            "lens": disp.get("lens"), "unreported": [], "out_of_scope": [], "vacuous": False}
+     if not materials:
+         out["vacuous"] = True
+         if as_json:
+             print(json.dumps(out, ensure_ascii=False))
+         else:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a2f68bcd..1e1b1300 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -33989,20 +33989,134 @@ def t_s1_seat_check():
+                                     "auditor": "sonnet"}), encoding="utf-8")
+     r = run(v, "seat-check", str(rep_oos), "--dispatch", str(disp_empty))
+     check("★空 materials=vacuous 豁免(不判 unreported/out_of_scope)★", r.returncode == 0
+           and "vacuous" in r.stdout, r.stdout[:400])
+     # e) dispatch 讀不到=rc2(壞輸入 fail loud,非觀測靜默)
+     r = run(v, "seat-check", str(rep_ok), "--dispatch", str(d / "不存在.json"))
+     check("dispatch 缺檔=rc2", r.returncode == 2, str(r.returncode))
+ 
+ 
+ 
++def t_s1_seat_check_bad_dispatch():
++    """合法 JSON 不等於可用派工單；普通／最佳化 CLI 都在讀材料前回 rc2。"""
++    print("t_s1_seat_check_bad_dispatch")
++    import json as _j
++    v = mkvault()
++    d = v.parent / "seat-shape"
++    d.mkdir()
++    report = d / "report.md"
++    report.write_text("引句:「這句有足夠中文字但是不在材料範圍」。\n", encoding="utf-8")
++    material = d / "材料 有空白.md"
++    material.write_text("有效材料內容。\n", encoding="utf-8")
++    ledger = d / "ledger.jsonl"
++    before = b'{"previous":true}\n'
++    cases = [(x, "dispatch") for x in [None, [], True, 1, "dispatch"]]
++    cases += [({"materials": x}, "materials") for x in [False, 0, "", {}, {"bad": "shape"}]]
++    cases += [({"materials": [x]}, "materials[0]")
++              for x in [None, False, 1, [], {}, "", "nul\x00path"]]
++    cases += [({"materials": [str(material), {}]}, "materials[1]")]
++    cases += [({"materials": ["\ud800"]}, "materials[0]"),
++              ({"materials": [str(material), "\udc00"]}, "materials[1]")]
++    for i, (value, field) in enumerate(cases):
++        dispatch = d / "dispatch.json"
++        dispatch.write_text(_j.dumps(value, ensure_ascii=True), encoding="utf-8")
++        check(f"JSON 已成功解析且保留現場形態 {i}", _j.loads(dispatch.read_text()) == value
++              and report.is_file() and material.is_file())
++        for optimized in (False, True):
++            ledger.write_bytes(before)
++            args = [sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
++                    "--vault", str(v), "seat-check", str(report), "--dispatch", str(dispatch),
++                    "--ledger", str(ledger), "--json"]
++            r = subprocess.run(args, capture_output=True, text=True, timeout=15)
++            check(f"壞派工形態 {i} optimized={optimized} 是輸入錯誤 rc2", r.returncode == 2,
++                  str(r.returncode) + r.stderr[-180:])
++            check(f"壞派工形態 {i} optimized={optimized} 無 traceback 或假觀測 JSON",
++                  "Traceback" not in r.stderr and not r.stdout.strip()
++                  and "擋下:" in r.stderr and field in r.stderr,
++                  r.stdout[:100] + r.stderr[-180:])
++            check(f"壞派工形態 {i} optimized={optimized} 不寫越界帳", ledger.read_bytes() == before)
++
++
++def t_s1_seat_check_valid_dispatch():
++    """空材料豁免與實際觀測不變，不把漏材料／引句越界升成阻擋。"""
++    print("t_s1_seat_check_valid_dispatch")
++    import json as _j
++    v = mkvault()
++    d = v.parent / "seat-valid"
++    d.mkdir()
++    material = d / "材料 有空白.md"
++    material.write_text("這句有效的引用來自實際被審材料。\n", encoding="utf-8")
++    report = d / "report.md"
++    report.write_text("材料 有空白.md\n引句:「這句有效的引用來自實際被審材料」。\n", encoding="utf-8")
++    dispatch = d / "dispatch.json"
++    for value in ({}, {"materials": None}, {"materials": []}):
++        dispatch.write_text(_j.dumps(value), encoding="utf-8")
++        r = run(v, "seat-check", str(report), "--dispatch", str(dispatch), "--json")
++        check("合法空材料保留 rc0 豁免", r.returncode == 0 and _j.loads(r.stdout)["vacuous"], r.stderr)
++    dispatch.write_text(_j.dumps({"round": "r1", "seat": "s1", "materials": [str(material)]},
++                                ensure_ascii=False), encoding="utf-8")
++    r = run(v, "seat-check", str(report), "--dispatch", str(dispatch), "--json")
++    out = _j.loads(r.stdout)
++    check("含空白中文路徑的實際材料正常對帳", r.returncode == 0 and not out["vacuous"]
++          and not out["unreported"] and not out["out_of_scope"], r.stdout)
++    report.write_text("引句:「這句是越界引言因為不在被審材料裡」。\n", encoding="utf-8")
++    ledger = d / "ledger.jsonl"
++    r = run(v, "seat-check", str(report), "--dispatch", str(dispatch), "--ledger", str(ledger), "--json")
++    out = _j.loads(r.stdout)
++    check("有效派工的漏報及越界仍 rc0 觀測", r.returncode == 0
++          and out["unreported"] == [str(material)] and len(out["out_of_scope"]) == 1, r.stdout)
++    row = _j.loads(ledger.read_text())
++    check("有效越界仍寫既有帳本欄位", row["round"] == "r1" and row["seat"] == "s1"
++          and row["quote"] == out["out_of_scope"][0])
++
++
++
++def t_s1_seat_check_preflight_order():
++    """真 cmd_seat_check 在尾端壞項前不可讀第一份材料；用可觀測讀取取代 FIFO。"""
++    print("t_s1_seat_check_preflight_order")
++    import ast as _ast, json as _j, io as _io
++    from contextlib import redirect_stderr, redirect_stdout
++    from unittest.mock import patch
++    v = mkvault()
++    report, dispatch, material = (v.parent / n for n in ("report.md", "dispatch.json", "material.md"))
++    report.write_text("引句:「這句是合法格式卻沒有對應材料的引文」。\n", encoding="utf-8")
++    material.write_text("先讀材料會被現場觀測到。\n", encoding="utf-8")
++    dispatch.write_text(_j.dumps({"materials": [str(material), {}]}), encoding="utf-8")
++    tree = _ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
++    fn = next(n for n in tree.body if isinstance(n, _ast.FunctionDef) and n.name == "cmd_seat_check")
++    original_read = Path.read_text
++    for tail in ({}, "\ud800"):
++        dispatch.write_text(_j.dumps({"materials": [str(material), tail]}), encoding="utf-8")
++        check("現場直接取真入口且首項有效、尾項是錯形態或不可編碼字串",
++              isinstance(fn, _ast.FunctionDef) and material.is_file()
++              and _j.loads(dispatch.read_text())["materials"][1] == tail)
++        for optimized in (0, 1):
++            reads = []
++            def observed_read(path, *args, observed_reads=reads, **kwargs):
++                observed_reads.append(path)
++                return original_read(path, *args, **kwargs)
++            env = {"Path": Path, "sys": sys, "os": _os_mod, "_quote_norm": lambda text: text,
++                   "_quote_rows": lambda *_: []}
++            exec(compile(_ast.Module(body=[fn], type_ignores=[]), GRAPHCTL, "exec", optimize=optimized), env)
++            stderr, stdout = _io.StringIO(), _io.StringIO()
++            with patch.object(Path, "read_text", observed_read), redirect_stderr(stderr), redirect_stdout(stdout):
++                try:
++                    rc = env["cmd_seat_check"](str(report), str(dispatch), as_json=True)
++                except (TypeError, AttributeError, UnicodeEncodeError) as error:
++                    rc = "uncaught " + type(error).__name__
++            check(f"optimized={optimized} 確實讀到派工單後回 rc2", dispatch in reads and rc == 2, str(rc))
++            check(f"optimized={optimized} 尾端壞項前未讀首項材料", material not in reads, str(reads))
++            check(f"optimized={optimized} 索引診斷且無觀測輸出",
++                  "materials[1]" in stderr.getvalue() and not stdout.getvalue(), stderr.getvalue()[-200:])
++
++
++
+ # ⛔ t_s2_snr_synthetic 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃;共用 fixture 保留)
+ 
+ def _hk_impact(repo, file, query, extra_env=None, top="8"):
+     import subprocess, json as _j, os
+     env = dict(os.environ)
+     if extra_env:
+         env.update(extra_env)
+     r = subprocess.run([sys.executable, GRAPHCTL, "impact", "--file", file,
+                         "--repo", str(repo), "--ranked", "--top", top,
+                         "--stdin-payload", "--json"],

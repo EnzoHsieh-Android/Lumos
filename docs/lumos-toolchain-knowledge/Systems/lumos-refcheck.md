@@ -13,6 +13,7 @@ tags:
 verified_by:
   - "[[Verification/2026-07-02_lumos-refcheck]]"
   - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
+  - "[[Verification/2026-10-06_引用座標修復主線CI]]"
 summary: |-
   FLOW:refcheck <md> --repo <root>→FENCE剝/INLINE抽/剝反引號→跳://與*<>?→剝:suffix(純數字才當行號)→須含/且首段=頂層目錄→(token,line)去重→exists/is_dir/行號範圍核對→manifest{token,line,status,excerpt}+統計→rc 0/1/2
   KEY:vault-free(pre-Env 分流,同 install/bootstrap);--repo 省略時 cwd 逐層向上找 .git,無則 rc2
