@@ -17575,6 +17575,205 @@ def t_prepush_range_scan():
 
 
 
+# ── 新分支首推會擋的閘改用真起點(Projects/新分支首推會擋的閘改用真起點_計劃)────────────────────────
+_FP_HIGH = "import requests\ndef f():\n    requests.post('http://x')\n"
+
+
+def _fp_repo(lumos_wrapper=None):
+    """有遠端(bare)的測試 repo:main 上有一支高風險寫法的 app.py,已推上遠端 → (工作目錄, git 函式)。
+    scripts/lumos 預設指向真的 lumos;lumos_wrapper 給字串就寫成那支包裝腳本(測 push-range 失敗、被殺)。"""
+    import subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="gctl-fp-"))
+    bare = Path(tempfile.mkdtemp(prefix="gctl-fp-bare-"))
+    _sp.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], capture_output=True)
+
+    def g(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (d / "app.py").write_text(_FP_HIGH)
+    g("add", ".")
+    g("commit", "-qm", "high on main")
+    g("remote", "add", "origin", str(bare))
+    g("push", "-q", "--no-verify", "origin", "main")
+    g("fetch", "-q", "origin")
+    g("remote", "set-head", "origin", "main")
+    sd = d / "scripts"
+    sd.mkdir(exist_ok=True)
+    real = str(Path(GRAPHCTL).resolve())
+    if lumos_wrapper is None:
+        (sd / "lumos").symlink_to(real)
+    else:
+        (sd / "lumos").write_text(lumos_wrapper.replace("@REAL@", real), encoding="utf-8")
+        (sd / "lumos").chmod(0o755)
+    (d / ".git" / "info" / "exclude").write_text("scripts/\n")
+    return d, g
+
+
+def _fp_hook(d, stdin):
+    import subprocess as _sp, os as _os
+    hook = str(Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push")
+    env = dict(_os.environ)
+    env["GIT_DIR"] = str(d / ".git")
+    env.pop("LUMOS_SKIP_DRIFT_CHECK", None)
+    r = _sp.run(["bash", hook, "origin", "x"], cwd=str(d), input=stdin, capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout + r.stderr
+
+
+def t_prepush_new_branch_block_range():
+    """[新分支首推 S1 到 S6] 推分支的新分支首推(遠端舊值全零)改用 lumos push-range 算的起點:主線上的舊高風險寫法不算這次的;
+    分支自己的高風險照擋;合過主線只算分支自己的;頂端已在主線放行;一般增量、舊值找不到、推標籤照舊;push-range 失敗退回空樹並講一句,
+    被訊號殺掉停下。翻紅釘:掛鉤不呼叫 push-range(照舊空樹)→ ①③④紅;退回不講 → ⑥紅;不走 pp_stop_if_signaled → ⑦紅。"""
+    print("t_prepush_new_branch_block_range")
+    zero = "0" * 40
+    # ①只多一個乾淨提交的新分支:主線那支高風險檔不算 → 放行
+    d, g = _fp_repo()
+    g("checkout", "-qb", "feat")
+    (d / "notes.md").write_text("docs only\n")
+    g("add", "notes.md")
+    g("commit", "-qm", "docs")
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+    check("①新分支首推、只多一個乾淨提交:放行(主線上的高風險寫法不算這次的)", rc == 0, out[-800:])
+    # ②分支自己的提交帶高風險寫法 → 照擋
+    (d / "svc.py").write_text(_FP_HIGH)
+    g("add", "svc.py")
+    g("commit", "-qm", "high on feat")
+    tip2 = g("rev-parse", "HEAD").stdout.strip()
+    rc, out = _fp_hook(d, f"refs/heads/feat {tip2} refs/heads/feat {zero}\n")
+    check("②分支自己帶高風險寫法:照擋", rc == 1, out[-800:])
+    # ③合過主線(主線在分岔後又多了高風險提交)再首推:只算分支自己的乾淨提交 → 放行
+    d, g = _fp_repo()
+    g("checkout", "-qb", "feat")
+    (d / "notes.md").write_text("docs only\n")
+    g("add", "notes.md")
+    g("commit", "-qm", "docs")
+    g("checkout", "-q", "main")
+    (d / "more.py").write_text(_FP_HIGH)
+    g("add", "more.py")
+    g("commit", "-qm", "more high on main")
+    g("push", "-q", "--no-verify", "origin", "main")
+    g("fetch", "-q", "origin")
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "main")
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+    check("③合過主線再首推:只算分支自己的、放行", rc == 0, out[-800:])
+    # ④頂端已整段在主線上(把 main 推到新名字):放行
+    d, g = _fp_repo()
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out = _fp_hook(d, f"refs/heads/copy {tip} refs/heads/copy {zero}\n")
+    check("④頂端已在主線:放行", rc == 0, out[-800:])
+    # ⑤遠端舊值本機找不到、推標籤:照舊從空樹算(主線那支高風險檔照算 → 分支擋、標籤只提醒)
+    rc, out = _fp_hook(d, f"refs/heads/copy {tip} refs/heads/copy {'1' * 40}\n")
+    check("⑤遠端舊值本機找不到:照舊空樹,擋", rc == 1, out[-600:])
+    rc, out = _fp_hook(d, f"refs/tags/v1 {tip} refs/tags/v1 {zero}\n")
+    check("⑤推標籤:照舊空樹,只提醒放行", rc == 0 and "advisory" in out, out[-600:])
+    # ⑥push-range 不存在或失敗:退回空樹(同改之前)並講一句
+    wrap = ("#!/usr/bin/env python3\nimport sys, subprocess, os, signal\n"
+            "if len(sys.argv) > 1 and sys.argv[1] == 'push-range':\n"
+            "    if os.environ.get('FP_SIG'):\n        os.kill(os.getpid(), signal.SIGTERM)\n"
+            "    print('擋下:沒有「push-range」這個指令。', file=sys.stderr); sys.exit(2)\n"
+            "sys.exit(subprocess.run([sys.executable, '@REAL@', *sys.argv[1:]]).returncode)\n")
+    d, g = _fp_repo(lumos_wrapper=wrap)
+    g("checkout", "-qb", "feat")
+    (d / "notes.md").write_text("docs only\n")
+    g("add", "notes.md")
+    g("commit", "-qm", "docs")
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+    check("⑥push-range 失敗:退回空樹(主線高風險照算 → 擋)、講一句、不印它的錯誤文字",
+          rc == 1 and "新分支首推的起點沒算出來,照舊從空樹比" in out and "沒有「push-range」這個指令" not in out, out[-800:])
+    # ⑦push-range 被訊號殺掉:停下
+    import os as _os
+    _os.environ["FP_SIG"] = "1"
+    try:
+        rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+    finally:
+        _os.environ.pop("FP_SIG", None)
+    check("⑦push-range 被訊號殺掉:停下、回那個回傳碼", rc >= 128 and "被中斷" in out, f"rc={rc} {out[-400:]}")
+    print("  ✓ t_prepush_new_branch_block_range")
+
+
+def t_push_range_cli():
+    """[新分支首推 S7] lumos push-range:頂端已在主線 → 頂端..頂端;找得到分岔點 → 分岔點..頂端;判不了 → 這個 repo 的空樹..頂端;
+    SHA-256 repo 找不到主線 → SHA-256 空樹;少帶 --push-remote 或 --pushed-ref → rc2。
+    翻紅釘:判不了照印 _PUSH_START_UNKNOWN → ③紅;空樹寫死 SHA-1 → ④紅。"""
+    print("t_push_range_cli")
+    import subprocess as _sp, io, contextlib
+    zero = "0" * 40
+
+    def pr(repo, *a):
+        r = _sp.run([sys.executable, GRAPHCTL, "push-range", *a, "--repo", str(repo)], capture_output=True, text=True)
+        return r.returncode, r.stdout.strip(), r.stderr
+    d, g = _fp_repo()
+    main_tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out, err = pr(d, "--diff", f"{zero}..{main_tip}", "--push-remote", "origin", "--pushed-ref", "refs/heads/copy")
+    check("①頂端已在主線:印 頂端..頂端", rc == 0 and out == f"{main_tip}..{main_tip}", (rc, out, err[-200:]))
+    g("checkout", "-qb", "feat")
+    (d / "notes.md").write_text("x\n")
+    g("add", "notes.md")
+    g("commit", "-qm", "c")
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    rc, out, err = pr(d, "--diff", f"{zero}..{tip}", "--push-remote", "origin", "--pushed-ref", "refs/heads/feat")
+    check("②找得到分岔點:印 分岔點..頂端", rc == 0 and out == f"{main_tip}..{tip}", (rc, out, err[-200:]))
+    m = _load_lumos_inproc()
+    orig = m._push_range_start
+    m._push_range_start = lambda *a, **k: (m._PUSH_START_UNKNOWN, "測試:git 失敗")
+    buf, ebuf = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(ebuf):
+            rc = m.cmd_push_range(str(d), f"{zero}..{tip}", "origin", "refs/heads/feat")
+    finally:
+        m._push_range_start = orig
+    empty = g("hash-object", "-t", "tree", "/dev/null").stdout.strip()
+    check("③判不了:印 這個 repo 的空樹..頂端", rc == 0 and buf.getvalue().strip() == f"{empty}..{tip}", (rc, buf.getvalue(), ebuf.getvalue()))
+    s2 = Path(tempfile.mkdtemp(prefix="gctl-fp-sha256-"))
+
+    def g2(*a):
+        return _sp.run(["git", "-C", str(s2), *a], capture_output=True, text=True)
+    if g2("init", "-q", "--object-format=sha256", "-b", "main").returncode == 0:
+        g2("config", "user.email", "t@t.t")
+        g2("config", "user.name", "t")
+        (s2 / "a.md").write_text("x\n")
+        g2("add", ".")
+        g2("commit", "-qm", "c")
+        t2 = g2("rev-parse", "HEAD").stdout.strip()
+        e2 = g2("hash-object", "-t", "tree", "/dev/null").stdout.strip()
+        rc, out, err = pr(s2, "--diff", f"{'0' * 64}..{t2}", "--push-remote", "origin", "--pushed-ref", "refs/heads/main")
+        check("④SHA-256 repo 找不到主線:印 SHA-256 空樹..頂端", rc == 0 and out == f"{e2}..{t2}" and len(e2) == 64,
+              (rc, out, err[-200:]))
+    else:
+        print("  (這台 git 不支援 SHA-256,④略過)")
+    rc, out, err = pr(d, "--diff", f"{zero}..{tip}", "--pushed-ref", "refs/heads/feat")
+    check("⑤少帶 --push-remote:rc2", rc == 2, (rc, err[-200:]))
+    rc, out, err = pr(d, "--diff", f"{zero}..{tip}", "--push-remote", "origin")
+    check("⑤少帶 --pushed-ref:rc2", rc == 2, (rc, err[-200:]))
+    print("  ✓ t_push_range_cli")
+
+
+def t_prepush_block_range_callers():
+    """[新分支首推 S8] 掛鉤裡會擋或決定擋不擋的那幾處都吃 _brange(或 pp_block_range_for):pp_touched_file、impact_once、
+    分支路徑兩次 pitfalls、spec-gate --push-check、code-loop check、兩處 loop escape。翻紅釘:任一處改回 $_range → 點名那一處紅。"""
+    print("t_prepush_block_range_callers")
+    import re as _re
+    txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    body = txt[txt.index("pp_touched_file() {"):]
+    body = body[:body.index("\n}\n")]
+    check("pp_touched_file 呼叫 pp_block_range_for", "pp_block_range_for" in body, body[:400])
+    want = {"impact_once": r'impact_once "\$_brange"',
+            "pitfalls --json": r'pitfalls --diff "\$_brange" --no-lint --json',
+            "pitfalls 高風險列命中": r'echo "命中的地方列在下面:"\n\s+"\$PY" "\$GRAPHCTL" pitfalls --diff "\$_brange"',
+            "spec-gate --push-check": r'spec-gate --push-check "\$_brange"',
+            "code-loop check": r'code-loop check --diff "\$_brange"'}
+    for name, pat in want.items():
+        check(f"{name} 吃 _brange", _re.search(pat, txt) is not None, name)
+    check("兩處 loop escape 都吃 _brange", len(_re.findall(r'--range "\$_brange"', txt)) == 2
+          and '--range "$_range"' not in txt, str(_re.findall(r'--range "\$_\w+"', txt)))
+    print("  ✓ t_prepush_block_range_callers")
+
+
 def t_prepush_cheap_gates_run_before_expensive_suite():
     """★便宜的閘擋下時,八分鐘的全套不准已經跑完★(2026-09-06 全 repo 審視 #12)。
 
@@ -55782,7 +55981,9 @@ def t_prepush_gates_stop_on_signal():
     # 五道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照。
     # 第六行是回頭重讀提醒(Projects/守檔筆記對照改動_計劃 [S9]):它只在回傳碼 130(Ctrl-C)時才交給 pp_stop_if_signaled,
     # 被其他訊號砍掉照推——那一道的兩種情形在 t_note_audit_reread_check_wired 驗,這裡只數行數
-    check("前置:掛鉤裡六道閘各有一行 pp_stop_if_signaled(五道會擋的閘+回頭重讀提醒的 Ctrl-C)", n == 6, str(n))
+    # 第七、八行是新分支首推起點(push-range,Projects/新分支首推會擋的閘改用真起點_計劃):迴圈裡一次、餵 doctor 的觸及清單一次;
+    # 這支的推送行遠端舊值不是全零、走不到它,被殺掉停下的情形在 t_prepush_new_branch_block_range ⑦ 驗
+    check("前置:掛鉤裡八行 pp_stop_if_signaled(五道會擋的閘+回頭重讀提醒的 Ctrl-C+新分支首推起點兩處)", n == 8, str(n))
     old_hook = Path(tempfile.mkdtemp(prefix="gctl-oldhook-")) / "pre-push"
     old_hook.write_text(old_txt, encoding="utf-8")
     rc, lines, out = _dr_hook_run(root, stdin)

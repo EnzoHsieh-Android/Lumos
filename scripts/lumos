@@ -42395,6 +42395,33 @@ def _push_range_start(repo_root, old, tip, remote, pushed_ref):
     return _push_pick_base(repo_root, bases, old_sha, names, "新分支首推" if zero else "遠端舊值在本機找不到")
 
 
+def cmd_push_range(repo, diff_range, push_remote, pushed_ref):
+    """lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>:印 _push_range_start 算出的範圍一行,
+    給推送前掛鉤在新分支首推時用(Projects/新分支首推會擋的閘改用真起點_計劃)。頂端已在主線 → `頂端..頂端`;判不了或起點是空樹 →
+    這個 repo 自己的空樹(SHA-256 的 repo 也對)`..頂端`(寧可多擋);其他 `起點..頂端`。說明印 stderr。唯讀、不寫治理帳。
+    參數錯、少帶推送參數(值可以是空字串)、不在 git 專案 → rc2。"""
+    if push_remote is None or pushed_ref is None:
+        print("擋下:--push-remote 與 --pushed-ref 都要給(值可以是空字串)", file=sys.stderr)
+        return 2
+    root = _note_audit_root(repo)
+    if root is None:
+        print("擋下:這裡不是 git 專案", file=sys.stderr)
+        return 2
+    rg = _lens_range_ok(diff_range or "")
+    tip = _lens_full_sha(root, rg[1]) if rg else None
+    if tip is None:
+        print("擋下:--diff 要寫成 <遠端舊值>..<頂端>,頂端要是這個 repo 裡的提交", file=sys.stderr)
+        return 2
+    base, why = _push_range_start(root, rg[0], tip, push_remote, pushed_ref)
+    if base is None:
+        base = tip
+    elif base == _PUSH_START_UNKNOWN or base == _EMPTY_TREE_SHA:
+        base = _drift_empty_tree(root)
+    print(f"起點——{why}", file=sys.stderr)
+    print(f"{base}..{tip}")
+    return 0
+
+
 def _push_no_mainline(repo_root, why, old_sha, zero, tip):
     """找不到可用的主線:舊值找得到用舊值;全 0 從空樹算;舊值找不到退到頂端的第一個父提交(沒有父提交從空樹)。"""
     if old_sha:
@@ -46742,6 +46769,7 @@ HELP_WHEN = {
     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+    "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
     "ci-status": "只看上次 CI 結果,不打網路。",
     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
@@ -47501,6 +47529,11 @@ def main():
     evp.add_argument("--json", dest="ev_json", action="store_true")
     evp.add_argument("--prune", dest="ev_prune", action="store_true", help="刪舊會談資料夾(會刪檔)")
     evp.add_argument("--days", dest="ev_days", default="30")
+    prg = sub.add_parser("push-range", help="推送前掛鉤用:印這次推送真正的新改動範圍(跟主線的分岔點..頂端)")
+    prg.add_argument("--diff", dest="prg_diff", required=True, metavar="舊值..頂端")
+    prg.add_argument("--push-remote", dest="prg_remote", default=None, metavar="遠端名")
+    prg.add_argument("--pushed-ref", dest="prg_ref", default=None, metavar="遠端ref")
+    prg.add_argument("--repo", dest="prg_repo", default=None)
     cs = sub.add_parser("ci-status", help="[CI回流閉環] 唯讀查最後一次 CI 結果(不打網路)")
     cs.add_argument("--repo-dir", dest="cs_repo", default=None)
     cs.add_argument("--json", dest="cs_json", action="store_true")
@@ -47945,6 +47978,9 @@ def main():
             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
                                                push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref)
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+    if args.cmd == "push-range":
+        return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
+                              pushed_ref=args.prg_ref)
     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
         if args.drcmd == "check":
             return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
