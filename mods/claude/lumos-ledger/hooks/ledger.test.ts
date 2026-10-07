@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnEvent, spawnFields, toolExtra, vaultIn, type Io } from './register'
+import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, seatOf, spawnEvent, spawnFields, toolExtra, vaultIn, type Io } from './register'
 import { RULES } from './rules-fixture'
+import { SEAT_CASES } from './seat-fixture'
 
 // S13:並行、重新載入、/clear;另驗位置判定、寫入失敗與暫時失敗(Projects/Lumos事件帳_計劃 做法第 2 節)。
 // 讀寫檔與 git 全用假的:測的是緩衝、塊名、串行佇列這些自己的邏輯,不是引擎。
@@ -332,7 +333,7 @@ describe('lumos-ledger 出錯看得見', () => {
 
   test('工具呼叫中途丟錯(例如被中斷):照樣記一筆 ok=false、interrupted=true', () => {
     expect(toolExtra({ tool: 'Bash', command: 'sleep 9' }, undefined, true)).toEqual(
-      { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9' })
+      { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9', cmd_len: 7 })
     expect(toolExtra({ tool: 'Read', file_path: '/a' }, { isError: true }, false)).toEqual(
       { tool: 'Read', ok: false, denied: false, paths: ['/a'] })
   })
@@ -348,7 +349,44 @@ describe('lumos-ledger 出錯看得見', () => {
 
   test('S12 交給 record 的整組參數:發起方是 parentAgentId,不是子代理自己的 agentId', () => {
     expect(spawnEvent({ parentAgentId: 'sub-1', agentId: 'wrong' }, { agentId: 'grand-1' }))
-      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false }])
+      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false, cwd: null, seat: null }])
+  })
+
+  test('補記 S1 Grep、Glob 記 pattern、glob(各前 200 字)與 output_mode;不是字串不記', () => {
+    const g = toolExtra({ tool: 'Grep', pattern: 'x'.repeat(250), glob: '*.ts', output_mode: 'content', path: '/r' }, {}, false)
+    expect(g.pattern).toBe('x'.repeat(200))
+    expect(g.glob).toBe('*.ts')
+    expect(g.output_mode).toBe('content')
+    expect(g.paths).toEqual(['/r'])
+    const gl = toolExtra({ tool: 'Glob', pattern: '**/*.md' }, {}, false)
+    expect(gl.pattern).toBe('**/*.md')
+    expect('glob' in gl || 'output_mode' in gl).toBe(false)
+    const bad = toolExtra({ tool: 'Grep', pattern: 5, glob: null, output_mode: {} }, {}, false)
+    expect('pattern' in bad || 'glob' in bad || 'output_mode' in bad).toBe(false)
+    expect('pattern' in toolExtra({ tool: 'Read', pattern: 'x', file_path: '/a' }, {}, false)).toBe(false)
+  })
+
+  test('補記 S2 Bash 記整條指令的長度', () => {
+    const e = toolExtra({ tool: 'Bash', command: 'y'.repeat(800) }, {}, false)
+    expect(e.cmd).toBe('y'.repeat(500))
+    expect(e.cmd_len).toBe(800)
+  })
+
+  test('補記 S3 派工記 cwd 與合格的席位標記值,不記派工詞其他內容', () => {
+    const a = spawnFields({ prompt: '\n  LUMOS-SEAT: 迴圈/r1/正確性-sonnet\n請審查這份 diff', cwd: '/w' }, { agentId: 'c1' })
+    expect(a.extra.seat).toBe('迴圈/r1/正確性-sonnet')
+    expect(a.extra.cwd).toBe('/w')
+    expect(JSON.stringify(a.extra).includes('請審查')).toBe(false)
+    const long = spawnFields({ prompt: 'LUMOS-SEAT: a/r1/' + 'z'.repeat(300) }, {})
+    expect(long.extra.seat).toBe(('a/r1/' + 'z'.repeat(300)).slice(0, 200))
+    for (const prompt of ['請審查', 'lumos-seat: a/r1/b', '說明\nLUMOS-SEAT: a/r1/b', 'LUMOS-SEAT: a b', 42, undefined]) {
+      expect(spawnFields({ prompt }, {}).extra.seat).toBe(null)
+    }
+    expect(spawnFields({ cwd: 7 }, {}).extra.cwd).toBe(null)
+  })
+
+  test('補記 S3 席位標記的共用案例:跟審查席隔離外掛認的一致', () => {
+    for (const c of SEAT_CASES) expect([c.prompt, seatOf(c.prompt)]).toEqual([c.prompt, c.seat])
   })
 
   test('空緩衝不寫空塊', async () => {

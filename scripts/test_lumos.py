@@ -75468,6 +75468,26 @@ def t_context_plugin_files_valid():
               r.stdout[-600:] if gh is None else str(gh))
 
 
+def t_ledger_seat_re_matches_guard():
+    """事件帳補記搜尋與席位 S4:事件帳外掛記 spawn 的 seat 欄用的判法,跟審查席隔離外掛各寫一份——
+    兩邊的 SEAT_RE 一字不差(從原始碼各抽出來比),兩邊的案例檔 hooks/seat-fixture.ts 也一字不差
+    (各自的外掛測試跑同一批案例;外掛測試不能引用別的外掛資料夾的檔,所以放兩份)。"""
+    import re as _re
+    _need_src("mods/claude/lumos-ledger/hooks/register.ts", "mods/claude/lumos-guard/hooks/register.ts",
+              "mods/claude/lumos-ledger/hooks/seat-fixture.ts")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    pat = _re.compile(r"^const SEAT_RE = /(.+)/$", _re.M)   # 跟 t_seat_templates_carry_marker 同一種抽法
+    got = {}
+    for name in ("lumos-ledger", "lumos-guard"):
+        m = pat.search((repo / "mods" / "claude" / name / "hooks" / "register.ts").read_text(encoding="utf-8"))
+        got[name] = m.group(1) if m else None
+        check(f"S4 {name} 原始碼裡抽得到 SEAT_RE", m is not None, "")
+    check("S4 兩支外掛的 SEAT_RE 一字不差", got["lumos-ledger"] is not None and got["lumos-ledger"] == got["lumos-guard"], str(got))
+    fx = [(repo / "mods" / "claude" / n / "hooks" / "seat-fixture.ts") for n in ("lumos-ledger", "lumos-guard")]
+    check("S4 兩支外掛的席位標記案例檔一字不差(兩邊的測試各跑同一批案例)",
+          all(f.is_file() for f in fx) and fx[0].read_bytes() == fx[1].read_bytes(), "")
+
+
 def t_ledger_rules_match_reader():
     """外掛(TypeScript)與讀取端(Python)各寫一份的三條規則,用同一份案例檔 mods/claude/lumos-ledger/hooks/rules-fixture.ts 對齊
     (代碼審:規則重寫兩份又沒有守衛,一邊改了另一邊不會被擋)。外掛那邊由 ledger.test.ts 跑同一批案例。"""

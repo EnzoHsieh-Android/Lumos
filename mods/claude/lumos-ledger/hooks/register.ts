@@ -73,8 +73,39 @@ export function toolExtra(e: any, r: any, threw: boolean): Record<string, unknow
   }
   if (threw) extra.interrupted = true
   if (paths.length) extra.paths = paths
-  if (e?.tool === 'Bash' && typeof e?.command === 'string') extra.cmd = e.command.slice(0, 500)
+  if (e?.tool === 'Bash' && typeof e?.command === 'string') {
+    extra.cmd = e.command.slice(0, 500)
+    extra.cmd_len = e.command.length // 讀的人看得出 cmd 有沒有被截斷(Projects/事件帳補記搜尋與席位_計劃 S2)
+  }
+  // 搜尋條件:只記輸入、不記結果,各前 200 字(同上 S1)
+  if (e?.tool === 'Grep' || e?.tool === 'Glob') {
+    for (const k of ['pattern', 'glob'] as const) if (typeof e?.[k] === 'string') extra[k] = e[k].slice(0, 200)
+    if (typeof e?.output_mode === 'string') extra.output_mode = e.output_mode.slice(0, 40)
+  }
   return extra
+}
+
+// 認標記的判法跟審查席隔離外掛(mods/claude/lumos-guard 的 parseMarker)同一套:切行、找第一個非空行、
+// 嚴格比對、驗三段。兩支外掛各寫一份,seat-fixture.ts 的案例兩邊的測試都跑;SEAT_RE 另由 t_ledger_seat_re_matches_guard 釘住
+const SEAT_RE = /^LUMOS-SEAT:\s*(\S+)$/
+const FORMAT_CHARS = /\p{Cf}/gu
+const clean = (line: string) => line.normalize('NFKC').replace(FORMAT_CHARS, '').trim()
+function segOk(p: string): boolean {
+  return p !== '' && p !== '.' && p !== '..' && !/[\/\\\s\u0000-\u001f\u007f\p{Cf}]/u.test(p)
+}
+
+// 派工詞第一個非空行是守衛會認成審查席的標記時,回「迴圈/輪次/席名」(前 200 字),否則 null;
+// 派工詞其他內容一律不碰(「不記提示全文」唯一的例外,Projects/事件帳補記搜尋與席位_計劃 d1)
+export function seatOf(prompt: unknown): string | null {
+  if (typeof prompt !== 'string') return null
+  for (const raw of prompt.split(/\n|\u2028|\u2029/)) {
+    if (!clean(raw)) continue
+    const m = SEAT_RE.exec(raw.trim())
+    if (!m) return null
+    const parts = m[1].split('/')
+    return parts.length === 3 && parts.every(segOk) ? m[1].slice(0, 200) : null
+  }
+  return null
 }
 
 export function createLedger(io: Io) {
@@ -324,6 +355,8 @@ export function spawnFields(e: any, r: any): { agent: string | null; extra: Reco
       model: r?.model ?? null,
       child: r?.agentId ?? null,
       denied: typeof r?.deny === 'string',
+      cwd: typeof e?.cwd === 'string' ? e.cwd : null,
+      seat: seatOf(e?.prompt),
     },
   }
 }

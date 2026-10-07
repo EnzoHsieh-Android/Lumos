@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
+import { SEAT_CASES } from './seat-fixture'
 import { BASH_ERROR, BASH_MAX, SAVE_MS, WAIT_MS, bashBlock, checkTool, createGuard, makeIo, onCall, onCallFailed, onEnd, onSpawn, onTool, seatishOf, parseMarker, realOf, type Io, type Seat } from './register'
 
 // 條款 S1–S8(Projects/審查席唯讀隔離_計劃)。查路徑、時間、提示全用假的:測的是規則本身,不是引擎。
@@ -851,6 +852,15 @@ describe('代碼審 r5 修正', () => {
     const r = await g.spawn('S', '/repo', { prompt: 'lumos-seat: 寫壞\n內文' }, async () => ({ agentId: 'a1' }))
     expect(String(r?.deny)).toContain('第一行別用 lumos-seat 這個詞開頭')
     expect(String(r?.deny)).toContain('不用刪內文')
+  })
+})
+
+describe('S5 席位標記的共用案例(seat-fixture.ts,事件帳外掛有同一份)', () => {
+  test('S5 守衛認成審查席的值跟案例一致,其他判成不是或寫壞', () => {
+    for (const c of SEAT_CASES) {
+      const m = parseMarker(c.prompt)
+      expect([c.prompt, m.kind === 'seat' ? `${m.loop}/${m.round}/${m.name}` : null]).toEqual([c.prompt, c.seat])
+    }
   })
 })
 

@@ -13,6 +13,7 @@ about_code:
   - mods/claude/lumos-ledger/.claude-plugin/plugin.json
   - .claude-plugin/marketplace.json
   - mods/claude/lumos-ledger/hooks/rules-fixture.ts
+  - mods/claude/lumos-ledger/hooks/seat-fixture.ts
 tags:
   - type/system
   - status/doing
@@ -51,6 +52,7 @@ verified_by:
 - 外掛緩衝只以會談為鍵,每筆帶收到時的 cwd;寫的時候照到達順序把連續寫到同一處的合成一塊,寫前逐層確認事件帳路徑沒有符號連結。
 - 外掛的驗證器要求引擎介面 `$` 只能傳給檔案頂層宣告的函式;包在註冊函式裡的內部函式收 `$` 會被拒載(`claude plugin validate` 會擋)。
 - 外掛裝與移除的流程與狀態用詞(ok / absent / no-source / failed)的細節在 [[Systems/lumos-cli-lifecycle]];`lumos events` 指令的用法在 [[Systems/lumos-cli-read]]。
+- 2026-10-07 起多記幾個欄位([[Projects/事件帳補記搜尋與席位_計劃]]):`Grep`、`Glob` 事件的 `pattern`、`glob`(各前 200 字)與 `output_mode`;`Bash` 事件的 `cmd_len`(看得出 `cmd` 有沒有被截);`spawn` 事件的 `cwd` 與 `seat`(派工詞第一個非空行是合格審查席標記時的值,其他內容不記——「不記提示全文」唯一的例外,理由在那篇的決策)。`seat` 的判法跟 [[Systems/lumos-guard]] 同一套,兩支外掛各放一份一模一樣的 `seat-fixture.ts` 案例(這邊是 `hooks/seat-fixture.ts`),`t_ledger_seat_re_matches_guard` 釘住兩份案例與正規式一字不差。
 - 外掛自己的測試要在本機跑:`claude plugin test mods/claude/lumos-ledger`(CI 沒有 Claude)。
 
 ## 誠實界線

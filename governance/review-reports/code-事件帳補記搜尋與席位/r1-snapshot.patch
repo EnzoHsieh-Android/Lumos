@@ -1,0 +1,288 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/事件帳補記搜尋與席位_計劃.md b/docs/lumos-toolchain-knowledge/Projects/事件帳補記搜尋與席位_計劃.md
+new file mode 100644
+index 00000000..2542028c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/事件帳補記搜尋與席位_計劃.md
+@@ -0,0 +1,64 @@
++---
++type: project
++status: doing
++created: 2026-10-07
++updated: 2026-10-07
++tags:
++  - type/project
++  - status/doing
++  - scope/agent-dag
++lands_in:
++  - Systems/lumos事件帳
++decisions:
++  - content: 事件帳的 spawn 事件記派工詞第一個非空行的審查席標記值(只在整行合格時、前 200 字),作為「不記提示全文」唯一的例外:標記是編排者寫給機器看的標籤,不是提示內容;不記的話,事件帳對不出哪個子代理是哪一席,核對審查員讀檔做不起來。考慮過:①從審查席隔離外掛的 $.state 對照表讀(兩支外掛互相讀狀態,事件帳就不再只觀察自己看到的事件);②讀取端掃逐字稿找標記(逐字稿格式不是公開合約)。代價:標記值裡若有人寫了機密,會進事件帳;事件帳資料夾自帶忽略檔。
++    id: d1
++    decided: 2026-10-07
++    valid: true
++---
++# 事件帳補記搜尋與席位_計劃
++
++白話:事件帳外掛([[Systems/lumos事件帳]])已經逐筆記下每個子代理的工具呼叫,但少了三樣東西,所以「核對審查員引用的檔有沒有真的讀過」做不起來([[Projects/Claude-mod第二批_計劃]] 第二輪拿掉的那一項):搜尋用了什麼條件、子代理在哪個目錄做事、這個子代理是哪一席審查員。這篇只補記錄,核對留到下一篇。
++
++PRIOR-ART: 沿用事件帳外掛既有的 `toolExtra` 與 `spawnFields` 兩支純函式加欄位,不另開觀察點;Bash 指令已經照「前 500 字」的寫法記,搜尋條件照同一種「截斷、只記輸入不記結果」的寫法。席位標記的格式不另訂:直接用審查席隔離外掛([[Systems/lumos-guard]])認的那一條 `SEAT_RE`,兩邊由一支 Python 測試釘成同一條。
++
++RETIRE-IF: ①「核對審查員讀檔」那篇兩個月內沒開工,或開工後決定不用這幾個欄位——欄位撤掉;②事件帳整個撤掉時一起撤。
++
++## 範圍
++
++- **做**:
++  1. `Grep`、`Glob` 的工具事件多記 `pattern`(前 200 字)、`glob`(前 200 字)、`output_mode`;只收字串,其他型別不記。
++  2. `Bash` 的工具事件多記 `cmd_len`(整條指令的長度),讓讀的人知道 `cmd` 有沒有被截斷。
++  3. `spawn` 事件多記 `cwd`(派工輸入帶的工作目錄;沒帶就是 null)與 `seat`(派工詞第一個非空行符合審查席標記時,記標記後面那串,前 200 字;不符合就是 null)。
++- **不做**:
++  - 核對審查員讀檔(另開一篇;要等這幾個欄位上線、有真實資料再設計)。
++  - 讀取端 `lumos events` 的文字輸出不加這些欄位(JSON 輸出本來就帶全部欄位)。
++  - 子代理每一筆工具事件都帶 cwd:子代理的工作目錄在派工那筆就有,每筆都記只是重複。
++
++落點:[[Systems/lumos事件帳]]。
++
++## 做法要點
++
++- 「不記提示全文」([[Projects/Lumos事件帳_計劃]] 事件表那節)照舊:`seat` 只記第一個非空行、而且只在它整行符合標記格式時記值,派工詞其他內容一律不碰。這是那條規則唯一的例外,記成決策。
++- 標記格式:事件帳外掛裡放一份跟審查席隔離外掛一字不差的 `SEAT_RE`,`t_ledger_seat_re_matches_guard` 從兩支外掛的原始碼各抽出來比;只認合格標記,寫壞的標記事件帳記 null(擋不擋是審查席隔離外掛的事)。
++- 截斷一律用字串的前 N 個字;不是字串就不記那個欄位。
++
++## 條款
++
++外掛行為的條款綁在 `mods/claude/lumos-ledger/hooks/ledger.test.ts`,測試標題以「補記」加條款編號開頭,用 `claude plugin test mods/claude/lumos-ledger` 在本機跑。
++
++- [S1] 當 `Grep` 或 `Glob` 的工具事件被記,應多記 `pattern`、`glob`(各前 200 字)與 `output_mode`;欄位不是字串時不記 [manual:claude plugin test mods/claude/lumos-ledger 標題以「補記 S1」開頭的測試全綠]
++- [S2] 當 `Bash` 的工具事件被記,應多記 `cmd_len`,值是整條指令的長度 [manual:claude plugin test mods/claude/lumos-ledger 標題以「補記 S2」開頭的測試全綠]
++- [S3] 當 `spawn` 事件被記,應多記 `cwd`(派工輸入的工作目錄或 null)與 `seat`(第一個非空行是合格審查席標記時的值,前 200 字,否則 null),不記派工詞其他內容 [manual:claude plugin test mods/claude/lumos-ledger 標題以「補記 S3」開頭的測試全綠]
++- [S4] 當 Python 端檢查兩支外掛的原始碼,事件帳外掛的 `SEAT_RE` 應跟審查席隔離外掛的一字不差 [test:t_ledger_seat_re_matches_guard]
++
++## 回退
++
++- 外掛改動只在 `toolExtra` 與 `spawnFields` 多加欄位,`git revert` 那個提交即可;已經寫進事件帳的舊事件多幾個欄位,讀取端不認得的欄位本來就略過。
++
++## 實務隱患
++
++- 已排除:金流:不碰付款
++- 已排除:對外送出:外掛不呼叫網路,只往既有的事件帳資料夾寫
++- 已排除:不可逆:只多記欄位,不刪不改既有檔
++- 已排除:守衛面:事件帳只觀察、不擋,多記的欄位不影響任何判定;審查席隔離外掛不讀事件帳
++- 隱私:`pattern` 可能含要搜的字(跟 `cmd` 前 500 字同一等級的暴露面),事件帳資料夾自帶忽略檔
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+index 9c51c368..bddf597e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+@@ -44,18 +44,19 @@ verified_by:
+ > 白話:Claude Code 裝了 lumos-ledger 外掛之後,每場會談做了什麼(回合開始結束、每次工具呼叫成不成功、派了哪些子代理、實際用哪個模型)會寫成一份事件帳,放在主 checkout 的 governance/runtime/events/<會談編號>/ 底下,不進版控。`lumos events` 讀它,`lumos events --prune --days N` 清舊的,`lumos enforcement` 的 claude-event-ledger 那一列看它最近有沒有在寫。設計、條款與兩輪設計審在 [[Projects/Lumos事件帳_計劃]];前提實驗在 [[Verification/2026-10-05_Claude-mod能力實測]]。
+ 
+ ## 現況(2026-10-06)
+ 
+ - 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。市集檔 2026-10-06 起另列 [[Systems/lumos-context]] 與審查席隔離外掛 [[Systems/lumos-guard]],市集列的外掛要恰好等於安裝端的外掛清單。
+ - 外掛的寫法:核心邏輯在 `register.ts` 的 `createLedger`(緩衝、塊名、串行寫入、位置判定),讀寫檔與跑 git 由外面注入,所以 `ledger.test.ts` 能用假的讀寫測並行與重新載入;引擎掛鉤只收事件交給核心。
+ - 會談編號、圖譜判定、主 checkout 判定這三條規則在外掛(TypeScript)與讀取端(Python)各寫一份;兩邊共用 `mods/claude/lumos-ledger/hooks/rules-fixture.ts` 的案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它,一邊改了規則另一邊會紅。外掛環境只能匯入程式模組(不能匯入 JSON),所以案例檔是 `.ts`、內容寫成純 JSON,Python 端切出 `RULES = ` 後面那段用 json.loads 讀。
+ - 外掛緩衝只以會談為鍵,每筆帶收到時的 cwd;寫的時候照到達順序把連續寫到同一處的合成一塊,寫前逐層確認事件帳路徑沒有符號連結。
+ - 外掛的驗證器要求引擎介面 `$` 只能傳給檔案頂層宣告的函式;包在註冊函式裡的內部函式收 `$` 會被拒載(`claude plugin validate` 會擋)。
+ - 外掛裝與移除的流程與狀態用詞(ok / absent / no-source / failed)的細節在 [[Systems/lumos-cli-lifecycle]];`lumos events` 指令的用法在 [[Systems/lumos-cli-read]]。
++- 2026-10-07 起多記幾個欄位([[Projects/事件帳補記搜尋與席位_計劃]]):`Grep`、`Glob` 事件的 `pattern`、`glob`(各前 200 字)與 `output_mode`;`Bash` 事件的 `cmd_len`(看得出 `cmd` 有沒有被截);`spawn` 事件的 `cwd` 與 `seat`(派工詞第一個非空行是合格審查席標記時的值,其他內容不記——「不記提示全文」唯一的例外,理由在那篇的決策)。`seat` 的格式跟 [[Systems/lumos-guard]] 認的同一條,`t_ledger_seat_re_matches_guard` 釘住。
+ - 外掛自己的測試要在本機跑:`claude plugin test mods/claude/lumos-ledger`(CI 沒有 Claude)。
+ 
+ ## 誠實界線
+ 
+ - 只有 Claude Code 會寫;Codex 沒有同等事件。
+ - 寫入端出錯時引擎會跳過它,那段沒有事件:事件帳只能證明「記到的有發生」,不能證明「沒記到的沒發生」。
+ - 其餘界線(子模組、slim、永久性 git 失敗、指令文字可能含秘密)見計劃的〈誠實界線〉。
+ 
+diff --git a/mods/claude/lumos-ledger/hooks/ledger.test.ts b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+index c4313add..4351471a 100644
+--- a/mods/claude/lumos-ledger/hooks/ledger.test.ts
++++ b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+@@ -325,37 +325,70 @@ describe('lumos-ledger 出錯看得見', () => {
+     const [c] = chunks(f.files)
+     const evs = events(f.files, c)
+     expect(evs[0].ev).toBe('ledger_error')
+     expect(String(evs[0].what)).toContain('read-only')
+     expect(evs[0].lost).toBe(2)
+     expect(evs[evs.length - 1].id).toBe('next')
+   })
+ 
+   test('工具呼叫中途丟錯(例如被中斷):照樣記一筆 ok=false、interrupted=true', () => {
+     expect(toolExtra({ tool: 'Bash', command: 'sleep 9' }, undefined, true)).toEqual(
+-      { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9' })
++      { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9', cmd_len: 7 })
+     expect(toolExtra({ tool: 'Read', file_path: '/a' }, { isError: true }, false)).toEqual(
+       { tool: 'Read', ok: false, denied: false, paths: ['/a'] })
+   })
+ 
+   test('S12 子代理派孫代理:spawn 事件的 agent 欄是發起的子代理(parentAgentId),不是空的', () => {
+     const child = spawnFields({ parentAgentId: 'sub-1', subagentType: 'general-purpose' }, { model: 'm', agentId: 'grand-1' })
+     expect(child.agent).toBe('sub-1')
+     expect(child.extra.child).toBe('grand-1')
+     const top = spawnFields({ subagentType: 'Explore' }, { deny: 'no' })
+     expect(top.agent).toBe(null)
+     expect(top.extra.denied).toBe(true)
+   })
+ 
+   test('S12 交給 record 的整組參數:發起方是 parentAgentId,不是子代理自己的 agentId', () => {
+     expect(spawnEvent({ parentAgentId: 'sub-1', agentId: 'wrong' }, { agentId: 'grand-1' }))
+-      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false }])
++      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false, cwd: null, seat: null }])
++  })
++
++  test('補記 S1 Grep、Glob 記 pattern、glob(各前 200 字)與 output_mode;不是字串不記', () => {
++    const g = toolExtra({ tool: 'Grep', pattern: 'x'.repeat(250), glob: '*.ts', output_mode: 'content', path: '/r' }, {}, false)
++    expect(g.pattern).toBe('x'.repeat(200))
++    expect(g.glob).toBe('*.ts')
++    expect(g.output_mode).toBe('content')
++    expect(g.paths).toEqual(['/r'])
++    const gl = toolExtra({ tool: 'Glob', pattern: '**/*.md' }, {}, false)
++    expect(gl.pattern).toBe('**/*.md')
++    expect('glob' in gl || 'output_mode' in gl).toBe(false)
++    const bad = toolExtra({ tool: 'Grep', pattern: 5, glob: null, output_mode: {} }, {}, false)
++    expect('pattern' in bad || 'glob' in bad || 'output_mode' in bad).toBe(false)
++    expect('pattern' in toolExtra({ tool: 'Read', pattern: 'x', file_path: '/a' }, {}, false)).toBe(false)
++  })
++
++  test('補記 S2 Bash 記整條指令的長度', () => {
++    const e = toolExtra({ tool: 'Bash', command: 'y'.repeat(800) }, {}, false)
++    expect(e.cmd).toBe('y'.repeat(500))
++    expect(e.cmd_len).toBe(800)
++  })
++
++  test('補記 S3 派工記 cwd 與合格的席位標記值,不記派工詞其他內容', () => {
++    const a = spawnFields({ prompt: '\n  LUMOS-SEAT: 迴圈/r1/正確性-sonnet\n請審查這份 diff', cwd: '/w' }, { agentId: 'c1' })
++    expect(a.extra.seat).toBe('迴圈/r1/正確性-sonnet')
++    expect(a.extra.cwd).toBe('/w')
++    expect(JSON.stringify(a.extra).includes('請審查')).toBe(false)
++    const long = spawnFields({ prompt: 'LUMOS-SEAT: ' + 'z'.repeat(300) }, {})
++    expect(long.extra.seat).toBe('z'.repeat(200))
++    for (const prompt of ['請審查', 'lumos-seat: a/r1/b', '說明\nLUMOS-SEAT: a/r1/b', 'LUMOS-SEAT: a b', 42, undefined]) {
++      expect(spawnFields({ prompt }, {}).extra.seat).toBe(null)
++    }
++    expect(spawnFields({ cwd: 7 }, {}).extra.cwd).toBe(null)
+   })
+ 
+   test('空緩衝不寫空塊', async () => {
+     const f = fakeIo()
+     const l = createLedger(f.io)
+     await l.flushSession('S1')
+     l.add('S1', '/repo', { v: 1, ev: 'tool' })
+     await l.flushSession('S1')
+     await l.flushSession('S1')
+     expect(chunks(f.files).length).toBe(1)
+diff --git a/mods/claude/lumos-ledger/hooks/register.ts b/mods/claude/lumos-ledger/hooks/register.ts
+index 4e0f747f..fc1e4159 100644
+--- a/mods/claude/lumos-ledger/hooks/register.ts
++++ b/mods/claude/lumos-ledger/hooks/register.ts
+@@ -66,24 +66,48 @@ export async function vaultIn(io: Pick<Io, 'list' | 'stat'>, main: string): Prom
+ // 一次工具呼叫要記的欄位;threw=next 丟錯(例如被中斷),照樣記一筆
+ export function toolExtra(e: any, r: any, threw: boolean): Record<string, unknown> {
+   const paths = ['file_path', 'path', 'notebook_path'].map(k => e?.[k]).filter((x: unknown) => typeof x === 'string')
+   const extra: Record<string, unknown> = {
+     tool: e?.tool,
+     ok: !threw && !(r?.isError === true) && typeof r?.deny !== 'string',
+     denied: typeof r?.deny === 'string',
+   }
+   if (threw) extra.interrupted = true
+   if (paths.length) extra.paths = paths
+-  if (e?.tool === 'Bash' && typeof e?.command === 'string') extra.cmd = e.command.slice(0, 500)
++  if (e?.tool === 'Bash' && typeof e?.command === 'string') {
++    extra.cmd = e.command.slice(0, 500)
++    extra.cmd_len = e.command.length // 讀的人看得出 cmd 有沒有被截斷(Projects/事件帳補記搜尋與席位_計劃 S2)
++  }
++  // 搜尋條件:只記輸入、不記結果,各前 200 字(同上 S1)
++  if (e?.tool === 'Grep' || e?.tool === 'Glob') {
++    for (const k of ['pattern', 'glob'] as const) if (typeof e?.[k] === 'string') extra[k] = e[k].slice(0, 200)
++    if (typeof e?.output_mode === 'string') extra.output_mode = e.output_mode.slice(0, 40)
++  }
+   return extra
+ }
+ 
++// 跟審查席隔離外掛(mods/claude/lumos-guard)的 SEAT_RE 一字不差,t_ledger_seat_re_matches_guard 釘住
++const SEAT_RE = /^LUMOS-SEAT:\s*(\S+)$/
++
++// 派工詞第一個非空行整行是合格的審查席標記時回標記值(前 200 字),否則 null;
++// 派工詞其他內容一律不碰(「不記提示全文」唯一的例外,同上計劃 d1)
++export function seatOf(prompt: unknown): string | null {
++  if (typeof prompt !== 'string') return null
++  for (const raw of prompt.split('\n')) {
++    const line = raw.trim()
++    if (!line) continue
++    const m = SEAT_RE.exec(line)
++    return m ? m[1].slice(0, 200) : null
++  }
++  return null
++}
++
+ export function createLedger(io: Io) {
+   const bufs = new Map<string, Buf>()
+   const verdicts = new Map<string, Verdict>()
+   const floors = new Map<string, number>() // 會談資料夾 → 已知最大塊名毫秒(新載入的實例也排在舊塊之後)
+   let lastMs = 0
+   let queue: Promise<void> = Promise.resolve()
+ 
+   function fresh(cwd: string): Verdict | undefined {
+     const v = verdicts.get(cwd)
+     if (!v) return undefined
+@@ -317,20 +341,22 @@ async function onTurnEnd(st: State, $: any, e: any) {
+ }
+ 
+ export function spawnFields(e: any, r: any): { agent: string | null; extra: Record<string, unknown> } {
+   return {
+     agent: e?.parentAgentId ?? null, // 發起方;主迴圈派的沒有(型別檔 AgentSpawnInput)
+     extra: {
+       agent_type: e?.subagentType ?? null,
+       model: r?.model ?? null,
+       child: r?.agentId ?? null,
+       denied: typeof r?.deny === 'string',
++      cwd: typeof e?.cwd === 'string' ? e.cwd : null,
++      seat: seatOf(e?.prompt),
+     },
+   }
+ }
+ 
+ // record 要的整組參數(發起方、事件名、欄位)由純函式一次給齊,接線那行只原樣轉交、沒有欄位可以選錯
+ // (代碼審 r1:原本測試只測 spawnFields,把接線改回 e.agentId 照綠)
+ export function spawnEvent(e: any, r: any): [string | null, string, Record<string, unknown>] {
+   const f = spawnFields(e, r)
+   return [f.agent, 'spawn', f.extra]
+ }
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f0429c8d..f08752c4 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -74207,20 +74207,35 @@ def t_context_plugin_files_valid():
+                            errors="replace", check=False, timeout=60)
+         try:
+             gh = [g for c in _j.loads(r.stdout).get("contents", []) for g in c.get("gatingHooks") or []]
+         except ValueError:
+             gh = None
+         check("S6 claude plugin validate:能擋人的掛鉤只有 session.compact,而且掛了 .catch",
+               gh is not None and [g.get("hook") for g in gh] == ["session.compact"] and all(g.get("hasCatch") is True for g in gh),
+               r.stdout[-600:] if gh is None else str(gh))
+ 
+ 
++def t_ledger_seat_re_matches_guard():
++    """事件帳補記搜尋與席位 S4:事件帳外掛記 spawn 的 seat 欄用的 SEAT_RE,跟審查席隔離外掛的一字不差
++    (兩支外掛各寫一份,一邊改了另一邊不會跟著改;從原始碼各抽出來比)。"""
++    import re as _re
++    _need_src("mods/claude/lumos-ledger/hooks/register.ts", "mods/claude/lumos-guard/hooks/register.ts")
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    pat = _re.compile(r"^const SEAT_RE = (/.+/[a-z]*)$", _re.M)
++    got = {}
++    for name in ("lumos-ledger", "lumos-guard"):
++        m = pat.search((repo / "mods" / "claude" / name / "hooks" / "register.ts").read_text(encoding="utf-8"))
++        got[name] = m.group(1) if m else None
++        check(f"S4 {name} 原始碼裡抽得到 SEAT_RE", m is not None, "")
++    check("S4 兩支外掛的 SEAT_RE 一字不差", got["lumos-ledger"] is not None and got["lumos-ledger"] == got["lumos-guard"], str(got))
++
++
+ def t_ledger_rules_match_reader():
+     """外掛(TypeScript)與讀取端(Python)各寫一份的三條規則,用同一份案例檔 mods/claude/lumos-ledger/hooks/rules-fixture.ts 對齊
+     (代碼審:規則重寫兩份又沒有守衛,一邊改了另一邊不會被擋)。外掛那邊由 ledger.test.ts 跑同一批案例。"""
+     import json as _j
+     import os
+     from unittest import mock
+     _need_src("mods/claude/lumos-ledger/hooks/rules-fixture.ts")
+     m = _load_lumos_inproc()
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     txt = (repo / "mods/claude/lumos-ledger/hooks/rules-fixture.ts").read_text(encoding="utf-8")
