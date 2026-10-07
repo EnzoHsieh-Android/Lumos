@@ -42,8 +42,8 @@ plan_refs:
 
 ## 後續優化方向
 
-REVISIT:2026-11-06 實測一次 workflow 派出的審查席:派工詞第一行帶標記時審查席隔離外掛照擋,事件帳的 spawn 事件看得到 workflow 的 run 與 index;看得到就把這兩欄加進事件帳
-REVISIT:2026-11-06 實測一次審查席用 Grep 帶 file_path 指向席報告暫存處時照樣被擋(驗證「掛鉤看到修正後參數」),結果寫回 Systems/lumos-guard
+REVISIT:2026-11-06 查清 workflow 派工時 agent.spawn 輸入裡 run 與 index 的欄位名,加進事件帳的 spawn 事件(workflow 派出的審查席照擋、事件帳記得到席位,2026-10-07 已實測,見 Verification/2026-10-07_審查席隔離真引擎實測)
+REVISIT:2026-11-06 在有 Grep 工具的建置上實測一次審查席用 Grep 帶 file_path 指向席報告暫存處時照樣被擋(2026-10-07 本機建置的子代理沒有 Grep 工具,測不了),結果寫回 Systems/lumos-guard
 REVISIT:2026-11-06 決定設計審與代碼審的派工範本要不要用 Agent 的 effort 參數分級(例如資安、合約席拉高,架構對齊用預設);要用就改 skills/lumos-design-loop/templates.md
 REVISIT:2026-12-06 決定 lumos install 的外掛安裝要不要改用 claude plugin install --marketplace 一步完成,省掉自己先查再加市集那段
 REVISIT:2026-12-06 決定要不要做一支 prompt.autocomplete 外掛,把常用的 lumos 指令放進輸入框自動完成
