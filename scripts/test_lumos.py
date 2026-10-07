@@ -32705,6 +32705,112 @@ def t_note_wording_isolated():
     print("  ✓ t_note_wording_isolated")
 
 
+def t_note_wording_binding_hint():
+    """[S1] 新寫的一行綁兩支以上不同的測試(一個 [test:] 寫多支,或多個 [test:] 各一支)→ 提交時提醒拆成一支一行,
+    印出名稱;正文、摘要、計劃條款都看;回傳碼不變。翻紅釘:綁定規則不接 → ①紅;只看第一個 [test:] → ②紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="甲句守好幾件事 [test:t_alpha,t_beta,t_gamma]\n乙句 [test:t_one] 另一半 [test:t_two]")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("①一個 [test:] 寫三支:提醒並列出名稱", any("甲句" in h for h in hits) and "t_alpha、t_beta、t_gamma" in out,
+          "\n".join(hits) or out[-800:])
+    check("②兩個 [test:] 各一支也算", any("乙句" in h for h in hits), "\n".join(hits) or out[-800:])
+    check("③只提醒:rc0", rc == 0, out[-300:])
+    root = _wd_repo()
+    _ns_note(root, summary="KEY:x\nWHY:摘要句 [出處:a] [因:b] [test:t_a,t_b]")
+    _nh_node(root, "P", typ="project", folder="Projects", body="## 驗收條款\n\n- [S1] 當甲 應 乙 [test:t_c,t_d]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("④摘要行與計劃條款也看", any("摘要句" in h for h in hits) and any("Projects/P.md" in h for h in hits),
+          "\n".join(hits) or out[-800:])
+    # ⑤–⑨ 代碼審 r1:名稱照 note-shape 與 S20 的切法從原文取(大小寫、全形冒號、反引號名稱);名稱多時只列前幾支;
+    # 同一行數量先命中時綁定照樣提醒
+    root = _wd_repo()
+    _ns_note(root, body="\n".join([
+        "丙句 [Test:t_c1,t_c2]",
+        "丁句 [test：t_d1,t_d2]",
+        "戊句 [test:`k a`,`k b`]",
+        "己句 [test:" + ",".join(f"t_m{i}" for i in range(12)) + "]",
+        "庚句 `KINDS` 有三種 [test:t_g1,t_g2]",
+        "辛句 [test:t_h1,「x」,t_h2]",
+    ]))
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("⑤大小寫與全形冒號的寫法也認", any("丙句" in h for h in hits) and any("丁句" in h for h in hits),
+          "\n".join(hits) or out[-800:])
+    check("⑥反引號包住的名稱照原樣印出", "k a、k b" in out and "\x00" not in out, out[-800:])
+    check("⑦名稱多時只列前幾支並講總數(照檔內既有的「等 N 支」)", "等 12 支" in out and "t_m11" not in out, out[-800:])
+    check("⑨綁定裡夾著引號:引號那段不算一支、不印出看不見的字", "這行綁了 2 支(t_h1、t_h2)" in out and "\x00" not in out,
+          out[-800:])
+    check("⑧同一行數量先命中,綁定照樣提醒", any("庚句" in h for h in hits) and any("庚句" in h for h in _wd_hint_lines(out, "數量")),
+          out[-1200:])
+    print("  ✓ t_note_wording_binding_hint")
+
+
+def t_note_wording_binding_quiet():
+    """[S2] 一行一支、同一支寫兩次、只有 [test-gone:]、寫在行內程式碼或引號裡、圍欄、REVISIT 行、舊行尾補不含綁定的括號
+    → 不出綁定提醒;同一次提交放一句該提醒的當對照。翻紅釘:不去重 → B 紅;不遮引號 → E 紅;不看句尾補括號 → G 紅。"""
+    root = _wd_repo()
+    _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2]")
+    _nh_commit(root, "old")
+    cases = {
+        "A": "只綁一支 [test:t_one]",
+        "B": "同一支寫兩次 [test:t_one] 又 [test:t_one]",
+        "C": "只有消失的 [test-gone:t_x,t_y]",
+        "D": "範例寫在程式碼裡 `[test:t_x,t_y]`",
+        "E": "範例寫在引號裡「[test:t_x,t_y]」",
+        "F": "```\n圍欄裡 [test:t_x,t_y]\n```",
+        "H": "REVISIT:2026-12-01 到期再看 [test:t_x,t_y]",
+        "I": "反引號包一支、另一支沒包,其實是同一支 [test:`t_one`,t_one]",
+        "J": "綁定裡夾著引號只算一支 [test:t_one,「x」]",
+    }
+    for name, body in cases.items():
+        _nh_node(root, name, body=body)
+    _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2](更正:見新說明)")
+    _nh_node(root, "Z", body="對照組 [test:t_z1,t_z2]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("只有對照組那一句提醒,其餘全部不提醒", len(hits) == 1 and "Systems/Z.md" in hits[0], "\n".join(hits) or out[-800:])
+    print("  ✓ t_note_wording_binding_quiet")
+
+
+def t_note_wording_binding_isolated():
+    """綁定規則丟例外:只印一句沒跑完、回傳碼與否定現況句、前綴提醒照常(代碼審 r1 正確性席)。
+    翻紅釘:綁定規則移到 _ns_wording_collect 的 try 外面 → 替身直接炸出測試。"""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    for with_viol, want_rc in ((False, 0), (True, 1)):
+        root = _wd_repo()
+        _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可",
+                 body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做\n甲句 [test:t_a,t_b]")
+        _ns_stage(root)
+        rc, out = _neg_inproc(root, _ns_wd_binding_hit=_boom)
+        check(f"綁定規則丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、另兩組提醒照常",
+              rc == want_rc and "新寫句子寫法提醒這次沒跑完(RuntimeError)" in out and _WD_HEAD not in out
+              and _NEG_HEAD in out and _TAG_HEAD in out, out[-800:])
+    print("  ✓ t_note_wording_binding_isolated")
+
+
+def t_note_wording_binding_ledger():
+    """[S3] 有綁定提醒時 hinted 帳的 rules 含 binding;note_shape.wording=off 時不出。翻紅釘:rules 漏 binding → ①紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="甲句 [test:t_a,t_b]")
+    _ns_stage(root)
+    _ns(root)
+    ev = [e for e in _neg_events(root, "hinted") if e.get("check") == "wording"]
+    check("①hinted 帳 rules 含 binding", len(ev) == 1 and ev[0].get("rules") == ["binding"], str(ev))
+    root = _wd_repo(cfg={"note_shape": {"wording": "off"}})
+    _ns_note(root, body="甲句 [test:t_a,t_b]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("②off:不出", "[綁定]" not in out, out[-400:])
+    print("  ✓ t_note_wording_binding_ledger")
+
+
 def t_doctor_lists_stale_rules():
     """[S6] doctor 列出有效 RULE 的 [until:] 過期、超過半年沒確認、沒寫 [confirmed:](舊行也列),不計入問題數;
     superseded 的不列。翻紅釘:拿掉 superseded 那道跳過 → ③紅;warn_soft 改成算問題 → ④紅。"""
