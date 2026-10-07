@@ -40,3 +40,8 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 原生路由两臂是原 description／擴充 description，body與手冊相同；兩個lane的baseline含义不同。評估不更動全域技能；模型呼叫沿固定模型、一次每題每臂，不把未載入、拒絕或逾時當作路由失敗。只有Claude Code隔離native路由被量測，其他宿主與技能共存環境另驗。
 
 有限迴圈僅支援固定字面值 tuple/list、字面值容器變數及 dict.items、字面值 range；可用 self.subTest。未知迭代器拒絕，逾時亦列無效。生成源碼保存於 .first-draft.json／.tests.json 的 code 與 SHA256。若事後補齊考卷語法，凍結原始事件與分數並對全部兩臂一致重算，生成 runner SHA 與重算 runner SHA 分開留存。
+
+
+## 真實歷史弱測試重播
+
+`python3 governance/eval/historical_test_quality.py --out /tmp/lumos-historical-new-output` 重播一個固定歷史案例，輸出目錄須全新；只需要本地完整 git 歷史與 Python 標準庫，支援 POSIX symlink/SIGALRM。它在暫存 HOME 與筆記庫執行歷史錯版／修復版、原弱測試／修正強測試四組，保存 code hash 及原始結果。強測試原8秒鬧鐘改2秒；程序超時、匯入錯、零／缺少預期斷言、情境前置不成立都不能算檢出。這是考卷預檢，不執行模型輸出，也不證手冊效果。
