@@ -44,7 +44,7 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
    - diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點,那些綁定測試會被自動真跑:高風險走 `code-loop check`,紅/懸空/方法名不合法就擋;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了印出來、記帳、不擋(擋下去最可能的結果是人改走 `--no-verify`,零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。紅了要修測試:補一筆 `code-loop pass` 修不好一支紅掉的測試。
 5. **修與釘**:動手修前，按共用範本§3.1第0步，替每個程式根因組先選原問題與既有行為保留候選；修後分開記兩種結果；修補混入重構時也照該節保存可執行的分段驗證點，高風險保留案例的抓錯能力抽查也沿該節辦理，詳細做法單源在該節。真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
    **修正關卡**(只提醒不擋;[[Projects/代碼審修正關卡第0步_計劃]]):修完先提交,寫修正紀錄 `governance/review-reports/<編號>/rN-fix.json`(骨架:`lumos loop fix-check <編號> --round rN --record-template`;修正動到的檔都列成 `fixed`、每條附守著它的測試),派下一輪全新席之前、或到上限要推之前,跑 `lumos loop fix-check <編號> --round rN`——約 5 分鐘,**在背景跑**(對話裡跑指令預設 2 分鐘上限會砍掉它)。它驗紀錄完整、測試存在、紀錄裡的測試在修正後是綠的、受波及合約測試全綠;同類提醒與根因／修補因果的判讀、prior誠實填法見共用範本§3.1第0步;跟派全新席掃 delta 並列,不取代。`loop next` 會在最新一輪有修正卻沒驗過時提醒。
-6. **記帳**:第 2 輪起載體席帶 `--regression-set <id串|none>`(這輪哪些發現是上一輪修補造成的),建議也帶 `--finding-kind`(文件、流程類的折入就不用寫修正紀錄)。多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,帳本不能撤銷,只能換編號重記。
+6. **記帳**:第 2 輪起載體席完成修補因果核對才帶 `--regression-set <id串|none>`(這輪哪些發現是上一輪修補造成的;判過且無回歸才寫 none)。仍有未判定因果時省略此欄，在 intake 留 finding ID、原因與證據，照共用範本 §3.1，不把未知填成 none；建議也帶 `--finding-kind`(文件、流程類的折入就不用寫修正紀錄)。多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,帳本不能撤銷,只能換編號重記。
    `lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳。`--finding-kind` 一個 id 一個旗標。
 7. **問閘**:單席循序與多席一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席照步驟 6 的彙總記帳);code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折;散文設計審不受此限)。架構對齊席與棧別檢核題對同一段給相反意見時,兩邊的發現都留、不挑邊:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折。`--gate --panel` 只供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾不印「審查有沒有用」那行(數字照樣進 `lumos gov --stats`)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
 8. **過了留痕**:
@@ -67,5 +67,6 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
 |---|---|
 | 席位紀律、抑噪、辯方順產 fix | `reference.md`〈3 · 派乾淨 reviewer〉〈4 · 判讀 + 辯方〉 |
 | 入口頁每條規則的由來、實際踩過的事故 | `reference.md`〈入口頁舊版全文(去時效前)〉 |
+| 要比較流程的修復／保留效果、輪數與成本 | `lumos-project-notes/commands/06-代碼審與推送.md`〈離線比較審查收斂〉;工具鏈來源 repo 專用、唯讀分析、不自動跑模型／驗收 |
 | mutation 算子理由、capture-recapture 算法 | `reference.md`〈mutation 與 capture-recapture〉〈panel 模式與收斂判準〉 |
 | 已停用的 canary 流程與全部歷史修正 | `reference.md`〈歷史與停用〉 |

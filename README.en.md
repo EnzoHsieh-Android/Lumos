@@ -19,7 +19,7 @@ Coding through conversation is fast, but trade-offs and rejected options stay in
 
 Lumos keeps that context in the project. With Claude Code or Codex, it requires AI to record each code change's reasons, rules to preserve, and verification method in Markdown notes. Versioned alongside the code, the notes are available to anyone using any tool. At commit and push time, Git hooks check what can be automated, such as whether notes were updated. Think of ADRs (architecture decision records), CODEOWNERS, and pre-commit combined to check AI's work. For code quality, Lumos uses each language's existing linters and community rules, blocking only new warnings before a push. It assigns AI reviewers by risk to examine changes from several angles and confirms that tests ran and can catch problems.
 
-The toolset is small: a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes.
+The core toolset consists of a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes. Claude Code also has three plugins: session event recording, handoff instructions during conversation compaction, and restrictions on marked review agents’ tools and direct file writes. These plugins have no Codex counterpart. The review restrictions are not a security sandbox: Bash remains a full shell. Use `lumos events` to inspect the event ledger.
 
 ## How it works
 
@@ -58,6 +58,8 @@ Linked notes form a “graph”; each note is a “node” covering a plan, feat
 - **Choose how many AI reviewers to assign**: Ordinary changes get 1 to 2; high-risk changes get at least 7 per round: 5 look for problems, 1 checks architectural consistency, and 1 checks security. A finalized design spec adds 1 reviewer to check against it.
 - **High-risk changes need a review outcome to push**: Record a pass or a skip with a written reason before pushing; otherwise, the Git hook blocks the push.
 
+**Fixing a defect must also preserve behavior that already worked.** Revision-round instructions pin the before and after versions, check that the original problem fails before and passes after, and separately check that existing behavior passes on both versions. Fresh reviewers then examine repair side effects. Repairs mixed with refactoring retain intermediate verification points; selected high-risk preservation cases also check whether tests detect degradation. `lumos loop fix-check` checks repair records and post-fix tests, but is advisory and does not replace these checks or the next review. Evidence references, snapshots, and records are also checked before accepting them. See the [code review instructions](skills/lumos-code-loop/SKILL.md).
+
 Review is one layer. Risk classification, AI review, approval rules, external rules (linters), and tests each have gaps. Stacking them makes it harder for a problem to pass through them all: the Swiss cheese model.
 
 <p align="center">
@@ -71,7 +73,7 @@ Review is one layer. Risk classification, AI review, approval rules, external ru
 By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
 
 - Requirements, trade-offs, risk acceptance, and irreversible operations.
-- High-risk review runs for at most 3 rounds. If it still has not passed, a person takes over; AI cannot declare a pass itself. This is a working rule—the tool only warns at the limit.
+- If high-risk review has not passed after 3 rounds, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
 - Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
 - Each round's review reports and outcomes stay in the repo for spot-checking at any time.
 
@@ -90,6 +92,8 @@ Some sentences go stale easily: “there is no refund page yet” becomes wrong 
 One more pre-push check only warns. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the tool reminds you to give the change and the whole note to AI, which points out the lines that are no longer true.
 
 **Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue through the tool is blocked while its summary still lists an undecided decision or unhandled revisit conditions.
+
+Closing a note without updating its summary also triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Keeping a met revisit condition requires an expiry or a traceable destination. Use `lumos summary-line` to maintain summaries; preview stale update-date repairs with `lumos updated-sync --stale --dry-run`.
 
 When a note says something like “there are N kinds,” it can be tied to the list in the code (Python for now); if the code gains an item and the note doesn't, the health check lists it and one command updates the number.
 
@@ -127,11 +131,15 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 <p align="center">
   <a href="assets/evals-overview-en.svg">
-    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests measured again the next week" width="760">
+    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, checks with notification thresholds alert a person, and fixes become rules or tests measured again the next week" width="760">
   </a>
 </p>
 
-Results are recorded weekly, and regressions or failed checks alert a person. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+The notification step in the illustration applies to checks with notification thresholds; missed-note checks produce a list and distribution.
+
+Results are recorded weekly. Checks with notification thresholds alert a person on regressions or failures; missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+
+There is also an [offline review convergence evaluator](governance/eval/review_convergence.md). It collects case leads from ordinary and capped reviews and compares two workflows on pinned cases and versions, separating repair, preserved behavior, new defects, rounds, and cost. Missing data remains unknown. It is a read-only local analysis tool, outside the weekly schedule; it does not run models or re-execute acceptance checks. Fingerprints check declaration consistency, not truth, and do not prove that review rounds have decreased.
 
 These evals run only in Lumos's own repo. They ensure regressions are visible, but do not guarantee that every change is an improvement.
 
@@ -142,6 +150,8 @@ You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project di
 ```bash
 curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 ```
+
+**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7 update audit](docs/updates/2026-10-07-readme-audit.md) lists commits, documentation changes, and release boundaries.
 
 When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to confirm all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese). To upgrade an existing project, run `lumos update --dry-run` first to preview which rule files and tool files would change; it changes nothing.
 

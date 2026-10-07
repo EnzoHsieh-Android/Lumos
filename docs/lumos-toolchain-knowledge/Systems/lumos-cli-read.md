@@ -105,6 +105,7 @@ verified_by:
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-07_handoff接手視圖]]"
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+  - "[[Verification/2026-10-07_README更新清點]]"
 about_code:
   - scripts/lumos
 ---
