@@ -16,6 +16,7 @@ summary: |-
   WHY: 分開判準來源、抓錯與重構證據 [出處:2026-10-07 使用者要求實驗轉成各棧接入標準] [因:重抄算法可與独立答案呈現相同紅綠結果，故障證據不能替代來源核對]
 verified_by:
   - "[[Verification/2026-10-07_測試三項證據固定實驗]]"
+  - "[[Verification/2026-10-08_PHP與Laravel測試接入規格核對]]"
 related:
   - "[[Systems/test-quality-scan]]"
   - "[[Systems/test-quality-multilang]]"
@@ -32,3 +33,8 @@ WHY: 三項證據分工而不合成真假分數 [出處:[[Verification/2026-10-0
 
 來源：Oracle Problem Survey https://discovery.ucl.ac.uk/id/eprint/1471263/ ；Google Change-Detector Tests https://testing.googleblog.com/2015/01/testing-on-toilet-change-detector-tests.html 。各棧接入需求在共用手冊，平台支援边界見 [[Systems/test-quality-multilang]]。
 REVISIT:2026-10-21 核對第一個真專案原生runner是否完成負例資格考卷，再裁是否擴大接入或修訂標準。
+
+## PHP／Laravel 接入取捨
+
+WHY: Laravel接入另驗框架情境與fake邊界 [出處:2026-10-08 使用者補充PHP/Laravel及官方測試文件] [因:純PHP斷言不能證明HTTP授權、Eloquent事件或真queue進場，工具分數也不能證明expected來源獨立]。Unit／Feature、PHPUnit／Pest、資料庫與fake範圍分開留證；共用撰寫原則沿同一標準。
+REVISIT:2026-10-21 PHP／Laravel標準目前是planned的文件接入規格，第一個消費專案固定版本後跑原生負例資格考卷；不得拿Python/Node固定機制實驗或其他語言掃描結果代替。
