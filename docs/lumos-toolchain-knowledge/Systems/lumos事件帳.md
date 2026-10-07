@@ -40,6 +40,7 @@ verified_by:
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
   - "[[Verification/2026-10-06_事件帳mod段實作]]"
   - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
+  - "[[Verification/2026-10-07_審查席隔離真引擎實測]]"
 ---
 # lumos事件帳
 

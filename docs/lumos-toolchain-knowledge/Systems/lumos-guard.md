@@ -33,6 +33,7 @@ summary: |-
 verified_by:
   - "[[Verification/2026-10-06_審查席隔離實作]]"
   - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
+  - "[[Verification/2026-10-07_審查席隔離真引擎實測]]"
 ---
 # lumos-guard
 
