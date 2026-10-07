@@ -983,6 +983,38 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
         pass
 
 
+def _replay_write_verdict(tmp, target, vdir, verdict):
+    """凍結判定寫檔:①新內容落暫存檔 ②有舊檔就歸檔成 verdict-<時間>.json(不覆寫歷史)③暫存檔 replace 上位。
+    → (rc, 歸檔檔名或 None):rc 0 成功、2 失敗(已印原因)。暫存檔的清理在呼叫端的 finally(任何一步失敗都不留)。"""
+    import datetime
+    try:
+        tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
+        return 2, None
+    refroze = None
+    if target.exists():
+        stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S")   # 本地時間(同原寫法),帶時區只為不觸發 DTZ005
+        arch = vdir / f"verdict-{stamp}.json"
+        if arch.exists():
+            print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
+            return 2, None
+        try:
+            target.rename(arch)
+        except OSError as e:
+            print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
+            return 2, None
+        refroze = arch.name
+    try:
+        os.replace(tmp, target)
+    except OSError as e:
+        print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
+              + (f"已歸檔 {refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if refroze else "未動")
+              , file=sys.stderr)
+        return 2, refroze
+    return 0, refroze
+
+
 def _replay_git_blob(root, relpath):
     """--freeze 前置:檔案已 commit 且與 HEAD 一致才記 blob id(r3 delta d-f2:hash-object 不落
     物件、-w 落懸空 blob 兩週可被 GC——取 HEAD 的 blob 保證被 tree 引用)。回 (blob_id, err)。"""
@@ -1046,6 +1078,19 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     if freeze:
         if not spec:
             print("擋下:凍結模式要帶 --spec(帳裡沒有 spec 路徑欄,凍結當下由操作者給)", file=sys.stderr)
+            return 2
+        # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫。
+        # ★在印處置閘、寫暫存檔之前判★:原本先跑處置閘(印一長串 [disposal] 與 GATE PASS)、寫暫存檔,才判要不要擋——
+        # 擋下時暫存檔留在 governance/replay/<編號>/ 被 `git add governance` 一起提交(主線上兩個編號帶著它),
+        # 而且擋下訊息走 stderr、PASS 走 stdout,接管線或只看尾端時最後一行是 PASS,以為凍好了(2026-10-07 工具鏈會談實踩、代碼審 r2)
+        _cur_v = root / "governance" / "replay" / loop_id / "verdict.json"
+        if _cur_v.exists() and (not note or not note.strip()):
+            try:
+                cur = json.loads(_cur_v.read_text(encoding="utf-8")).get("round") or "?"
+            except (OSError, ValueError, AttributeError):
+                cur = "?"
+            print(f"擋下:判定檔沒有更新——這個 loop 已有 golden 判定檔(現行仍是 {cur});"
+                  "重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
             return 2
         raw, parsed = _load_rows()
         if raw is None:
@@ -1117,37 +1162,19 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         target = vdir / "verdict.json"
         # 順序(cb3 s2-f3):①新內容先落暫存檔(最會失敗的一步最先做)②舊檔歸檔③replace 上位
         # ④最後才寫治理帳留痕——寫入失敗時不會留下「帳說成功、檔卻不在」的假紀錄。
-        _tmp = vdir / ".verdict.tmp"
+        # 暫存檔只活在這一段:任何一步失敗提早結束,都在 finally 刪掉(成功時 replace 已把它換上位)。
+        # ★檔名每次都不一樣★(同 _write_lf):固定名時兩個重凍同時跑,先結束的那邊的 finally 會刪掉另一邊剛寫好的暫存檔
+        # (代碼審 r1 正確性席、架構對齊席);.gitignore 忽略 .verdict*.tmp
+        _tmp = vdir / f".verdict.{os.getpid()}-{uuid.uuid4().hex[:8]}.tmp"
         try:
-            _tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
-        except OSError as e:
-            print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
-            return 2
-        _refroze = None
-        if target.exists():
-            # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫
-            if not note or not note.strip():
-                print("擋下:這個 loop 已有 golden 判定檔——重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
-                return 2
-            stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-            arch = vdir / f"verdict-{stamp}.json"
-            if arch.exists():
-                print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
-                return 2
+            rc_w, _refroze = _replay_write_verdict(_tmp, target, vdir, verdict)
+        finally:
             try:
-                target.rename(arch)
-            except OSError as e:
-                print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
-                return 2
-            _refroze = arch.name
-        import os as _os_rp
-        try:
-            _os_rp.replace(_tmp, target)
-        except OSError as e:
-            print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
-                  + (f"已歸檔 {_refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if _refroze else "未動")
-                  , file=sys.stderr)
-            return 2
+                os.unlink(_tmp)
+            except OSError:          # 成功時已 replace 上位、不在了(FileNotFoundError 也是 OSError)
+                pass
+        if rc_w:
+            return rc_w
         if _refroze:
             _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
             print(f"  舊 golden 已歸檔 {_refroze};重凍理由已寫治理帳")

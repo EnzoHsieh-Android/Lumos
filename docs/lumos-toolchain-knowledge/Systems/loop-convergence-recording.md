@@ -47,6 +47,7 @@ summary: |-
   KEY:missed 輪 ×tail-K 自然重置——一個 missed 落在窗內就擋收斂,直到隨新輪滑出;無需特例(dogfood R6 逼出)
   KEY:缺 severity 視同未收斂(逼明確宣告、不得當 clean);exit 0=CONVERGED｜1=未收斂(含無記錄=還沒開始)｜2=真錯誤(argparse/IO)
   KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+auditor;結局帳 --outcome 豁免——★cb3 折入:原 loop+round+auditor 三者齊備觸發=漏打 round 即繞道,已放寬;處置帳另必綁輪次+讀側 round-less 處置帳拒判★)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
+  PITFALL:`loop replay --freeze` 重凍沒帶 --note 被擋時,governance/replay/<編號>/.verdict.tmp 留在原地,`git add governance` 會把它一起提交(主線上兩個編號帶著它,其中「筆記格子寫法與過期檢查」那份是被擋下的 r3 判定、正式檔仍是 r2);現在 --note 檢查移到跑處置閘、寫暫存檔之前,擋下訊息開頭講明「判定檔沒有更新」與現行是第幾輪,被擋時不印任何 [disposal] 與 GATE PASS(原本擋下訊息走 stderr、PASS 走 stdout,接管線或只看尾端時最後一行是 PASS;代碼審 r2),寫完暫存檔後任何一步失敗都在 finally 清掉;暫存檔名照 _write_lf 每次不同(帶行程編號與隨機尾碼),不然兩個重凍同時跑時先結束的那邊會刪掉另一邊的暫存檔(代碼審 r1);寫檔三步抽成 _replay_write_verdict,歸檔檔名的時間改用帶時區的取法、值照舊是本地時間;.gitignore 另忽略 .verdict*.tmp [出處:2026-10-07 工具鏈會談回報、本會談重現] [根因:先寫暫存檔才判擋不擋,擋下的提早 return 沒清] [test:t_loop_replay_freeze_leaves_no_tmp]
   KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+spec 窗末 sha+卷證 HEAD blob+engine_rev)入 governance/replay/;回放唯讀(治理帳零寫入、無觀測尾巴),差異四分類:邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期(engine_rev 分流)=列出不紅;重凍比照 anchor approve 留痕+歸檔不覆寫;週跑 run_replay 補漏+輪替抽查(便宜自動升全跑);CONVERGED 仍非防竄改正確性證明,但「同輸入同判定」自此可每週機械重問
   KEY:[2026-09-17]逃逸帳多了自動模式:lumos loop escape --auto --range a..b(碰到的計劃各記一筆、對不回不記、去重鍵=迴圈/階段/sha);三個來源自動掛——代碼審 code-<主題> 記到 major 以上、推送閘擋下(fail-open)、CI 紅(範圍=上一個綠..這次紅)。歸因守衛在自動模式放寬成「迴圈在審查帳或計劃檔存在」,帳上 attribution 標 ledger|plan-file;door 欄由規格閘留痕填、上線前一律 unknown。單源:[[Projects/規格落成可驗收條件_計劃]] 第五節
   KEY:[2026-09-17]逃逸自動記(三來源掛勾、--auto、precision 欄、CI 步驟名判準)的單源改成 [[Projects/逃逸自動記_計劃]](從規格落成可驗收條件_計劃拆出);上一行提到的「第五節」已搬走
@@ -176,3 +177,5 @@ lumos canary record caught|missed|none --loop <id> --severity clean|minor|major|
 **順帶一條**:存席報告之前**打開看一眼**。子代理的 `.output` 是 JSONL 逐字稿不是報告,
 存錯了 `quote-check` 會出現一堆莫名其妙的錨不到(它從逐字稿裡撈到各種中間文字當引句),
 而那個症狀很容易被誤判成「席位引錯了」。
+
+REVISIT:2026-10-21 補上 loop replay --freeze 寫入端的 --note 防線:提前檢查與真正歸檔之間若有另一個凍結先寫好判定檔,沒帶 --note 的那邊會歸檔舊檔後在 note.strip() 崩潰、繞過重凍要帶理由(代碼審 code-凍結暫存檔清理 r3 正確性席);另開小修正,在 _replay_write_verdict 歸檔前或 _refroze 有值時再判一次

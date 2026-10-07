@@ -38071,10 +38071,9 @@ def t_loop_replay_ignores_spec_gate_rows():
     check("回放:帳上有規格閘留痕照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
 
 
-def t_loop_replay_freeze_and_golden():
-    """[改制回測 S1/S2] 凍結+回放全鏈:閉包完整/spec 活檔免疫/帳本長大不紅/帳被動紅/
-    凍結檔被動紅(不誤報邏輯漂移)/golden 過期不紅指路重凍/邏輯漂移紅/唯讀(治理帳零寫入+
-    無 roster-alerts)/重凍留痕+歸檔不覆寫/未 commit 卷證拒凍/panel 形狀 rc2 指路。"""
+def _replay_fx():
+    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(rp 迴圈一輪、報告與快照還沒提交)、帳本一列。
+    → (v, repo, spec, ledger, d, rpt, row, hsp)。"""
     import json as _j
     import hashlib as _h
     import subprocess as _sp
@@ -38111,6 +38110,16 @@ def t_loop_replay_freeze_and_golden():
            "snapshot_path": "governance/review-reports/rp/r1-snapshot.md", "snapshot_sha256": hs}
     ledger = v.parent / ".canary-log.jsonl"
     ledger.write_text(_j.dumps(row) + "\n", encoding="utf-8")
+    return v, repo, spec, ledger, d, rpt, row, hsp
+
+
+def t_loop_replay_freeze_and_golden():
+    """[改制回測 S1/S2] 凍結+回放全鏈:閉包完整/spec 活檔免疫/帳本長大不紅/帳被動紅/
+    凍結檔被動紅(不誤報邏輯漂移)/golden 過期不紅指路重凍/邏輯漂移紅/唯讀(治理帳零寫入+
+    無 roster-alerts)/重凍留痕+歸檔不覆寫/未 commit 卷證拒凍/panel 形狀 rc2 指路。"""
+    import json as _j
+    import subprocess as _sp
+    v, repo, spec, ledger, d, rpt, row, hsp = _replay_fx()
 
     # ① 凍結模式缺 --spec → rc2
     r = run(v, "loop", "replay", "rp", "--freeze", "--repo", str(repo))
@@ -38222,6 +38231,77 @@ def t_loop_replay_freeze_and_golden():
     r = run(v, "loop", "replay", "rp-panel", "--freeze", "--spec", str(spec), "--repo", str(repo))
     check("replay:panel 舊制形狀 rc2 指路 --gate --panel", r.returncode == 2 and "--panel" in r.stderr,
           f"rc={r.returncode} {r.stderr[:200]}")
+
+
+def t_loop_replay_freeze_leaves_no_tmp():
+    """凍結成功、重凍缺 --note 被擋、帶 --note 重凍、寫完暫存檔後換上位失敗,跑完 governance/replay/<編號>/ 都不留
+    自己的暫存檔;別的行程正在用的暫存檔不動;被擋那次現行 verdict.json 一個字都不動,訊息講明判定檔沒有更新、現行是第幾輪。
+    翻紅釘:先寫暫存檔再檢查 --note → ②紅;拿掉呼叫端 finally 的清理 → ④紅;暫存檔用固定名 → ⑤紅。"""
+    import subprocess as _sp
+    import io, contextlib
+    v, repo, spec, _ledger, _d, _rpt, _row, _hsp = _replay_fx()
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+    vdir = repo / "governance" / "replay" / "rp"
+    other = vdir / ".verdict.tmp"         # 別的行程(或舊版)正在用的暫存檔:固定名的寫法會把它蓋掉再刪掉
+
+    def _mine():
+        return sorted(p.name for p in vdir.glob(".verdict*.tmp") if p != other)
+    run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo), expect_rc=0)
+    check("①凍結成功:不留暫存檔", not _mine(), str(list(vdir.iterdir())))
+    other.write_text("別人的", encoding="utf-8")
+    before = (vdir / "verdict.json").read_bytes()
+    r = run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo))
+    check("②重凍缺 --note 被擋:不留暫存檔、現行判定不動", r.returncode == 2 and not _mine()
+          and (vdir / "verdict.json").read_bytes() == before, str(list(vdir.iterdir())))
+    check("②擋下訊息講明判定檔沒有更新、現行是第幾輪", "判定檔沒有更新" in r.stderr and "r1" in r.stderr, r.stderr[-300:])
+    check("②擋下時不印處置閘的 PASS(只看尾端或接管線時才不會被誤讀成凍好了;代碼審 r2 正確性席)",
+          "GATE PASS" not in r.stdout and "[disposal]" not in r.stdout, r.stdout[-300:])
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "golden"], capture_output=True)
+    run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo), "--note", "重凍測試", expect_rc=0)
+    check("③帶 --note 重凍:不留暫存檔", not _mine(), str(list(vdir.iterdir())))
+    m = _load_lumos_inproc()
+
+    def _inproc(**patch):
+        saved = {k: getattr(m, k) for k in patch if hasattr(m, k)}
+        buf = io.StringIO()
+        try:
+            for k, val in patch.items():
+                setattr(m, k, val)
+            with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+                rc = m.cmd_loop_replay(m.Env(v), "rp", freeze=True, spec=str(spec), note="再凍一次", repo=str(repo))
+        finally:
+            for k, val in saved.items():
+                setattr(m, k, val)
+        return rc, buf.getvalue()
+    # ④ 寫完暫存檔之後才失敗:替身寫完暫存檔就回 rc2,呼叫端要清掉暫存檔、現行判定不動
+    def _fail_after_tmp(tmp, target, vdir_, verdict):
+        tmp.write_text("{}", encoding="utf-8")
+        return 2, None
+    before = (vdir / "verdict.json").read_bytes()
+    rc, out = _inproc(_replay_write_verdict=_fail_after_tmp)
+    check("④寫完暫存檔才失敗:rc2、不留暫存檔、現行判定不動", rc == 2 and not _mine()
+          and (vdir / "verdict.json").read_bytes() == before, f"rc={rc} {list(vdir.iterdir())} {out[-300:]}")
+    # ⑤ 真的讓換上位失敗(代碼審 r1 正確性席:④用替身沒走到真的那段):舊判定已歸檔、暫存檔清掉、別人的暫存檔不動
+    real_replace = m.os.replace
+
+    def _boom_replace(a, b):
+        if str(a).endswith(".tmp"):
+            raise OSError("模擬磁碟滿")
+        return real_replace(a, b)
+    arch_before = set(vdir.glob("verdict-*.json"))
+    import time as _t
+    _t.sleep(1.1)                                         # 歸檔檔名到秒,跟上一次重凍錯開
+    m.os.replace = _boom_replace
+    try:
+        rc, out = _inproc()
+    finally:
+        m.os.replace = real_replace
+    check("⑤換上位失敗:rc2、印出救法、舊判定已歸檔、不留自己的暫存檔、別人的暫存檔不動",
+          rc == 2 and "換上位失敗" in out and len(set(vdir.glob("verdict-*.json")) - arch_before) == 1
+          and not _mine() and other.exists(), f"rc={rc} {list(vdir.iterdir())} {out[-300:]}")
+    print("  ✓ t_loop_replay_freeze_leaves_no_tmp")
 
 
 def _mk_dref_vault():
