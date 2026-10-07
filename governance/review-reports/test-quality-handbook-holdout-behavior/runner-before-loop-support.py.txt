@@ -32,59 +32,17 @@ TASKS = {
         'faults': [('constant', '"A" if user_id % 2 == 0 else "B"', '"A"'), ('skip-guard', 'if not active:', 'if False:'), ('reason', '"inactive"', '"other"')],
     },
 }
-ALLOWED_ASSERTS = {'assertEqual', 'assertNotEqual', 'assertTrue', 'assertFalse', 'assertRaises', 'assertRaisesRegex', 'assertIn', 'assertIsInstance', 'subTest'}
+ALLOWED_ASSERTS = {'assertEqual', 'assertNotEqual', 'assertTrue', 'assertFalse', 'assertRaises', 'assertRaisesRegex', 'assertIn', 'assertIsInstance'}
 ALLOWED_NODES = {ast.Module, ast.Import, ast.ImportFrom, ast.alias, ast.ClassDef, ast.FunctionDef,
                  ast.arguments, ast.arg, ast.Expr, ast.Constant, ast.Assign, ast.Name, ast.Load,
                  ast.Store, ast.Attribute, ast.Call, ast.keyword, ast.Assert, ast.Compare, ast.Eq,
                  ast.NotEq, ast.Gt, ast.GtE, ast.Lt, ast.LtE, ast.BinOp, ast.Add, ast.Sub, ast.Mult,
                  ast.FloorDiv, ast.Mod, ast.UnaryOp, ast.USub, ast.Not, ast.With, ast.withitem,
-                 ast.For, ast.Pass, ast.Tuple, ast.List, ast.Dict, ast.Subscript}
+                 ast.Pass, ast.Tuple, ast.List, ast.Dict, ast.Subscript}
 
 
 def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
-
-
-def bounded_iteration_count(node, bindings=None):
-    bindings = bindings or {}
-    try:
-        if isinstance(node, (ast.Tuple, ast.List)):
-            size = len(ast.literal_eval(node))
-        elif isinstance(node, ast.Name) and isinstance(bindings.get(node.id), (tuple, list, dict)):
-            size = len(bindings[node.id])
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'items' and not node.args and not node.keywords and isinstance(node.func.value, ast.Name) and isinstance(bindings.get(node.func.value.id), dict):
-            size = len(bindings[node.func.value.id])
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range' and not node.keywords:
-            values = [ast.literal_eval(arg) for arg in node.args]
-            if not 1 <= len(values) <= 3 or any(type(value) is not int for value in values):
-                raise ValueError('nonliteral-range')
-            size = len(range(*values))
-        else:
-            raise ValueError('nonliteral-loop')
-    except (TypeError, SyntaxError, OverflowError) as exc:
-        raise ValueError('unsupported-loop') from exc
-    if size > 1000:
-        raise ValueError('loop-too-large')
-    return max(size, 1)
-
-
-def literal_binding_scopes(tree):
-    scopes = {}
-    functions = [tree] + [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
-    for function in functions:
-        bindings = {}
-        for statement in function.body:
-            if isinstance(statement, ast.Assign):
-                try:
-                    value = ast.literal_eval(statement.value)
-                except (ValueError, TypeError, SyntaxError):
-                    value = None
-                for target in statement.targets:
-                    if isinstance(target, ast.Name):
-                        bindings[target.id] = value
-        for node in ast.walk(function):
-            scopes[id(node)] = bindings
-    return scopes
 
 
 def validate_test(code):
@@ -92,17 +50,9 @@ def validate_test(code):
     tree = ast.parse(code)
     if len(list(ast.walk(tree))) > 3000:
         raise ValueError('test-too-large')
-    loop_budget = 1
-    scopes = literal_binding_scopes(tree)
     for node in ast.walk(tree):
         if type(node) not in ALLOWED_NODES:
             raise ValueError('unsupported-test-node:' + type(node).__name__)
-        if isinstance(node, ast.For):
-            loop_budget *= bounded_iteration_count(node.iter, scopes[id(node)])
-            if loop_budget > 10000:
-                raise ValueError('loop-budget-exceeded')
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range':
-            bounded_iteration_count(node)
         if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
             raise ValueError('unsupported-import')
         if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
@@ -113,11 +63,10 @@ def validate_test(code):
             permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
                          or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
                          or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
-                         or node.attr == 'exception'
-                         or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
+                         or node.attr == 'exception')
             if not permitted:
                 raise ValueError('unsupported-attribute:' + node.attr)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError'}:
             raise ValueError('unsupported-call:' + node.func.id)
     return tree
 
@@ -133,7 +82,7 @@ def execute_tests(code, source):
             raise ImportError(name)
         return mod if name == 'subject' else unittest
     namespace = {'__name__': 'generated_tests', '__builtins__': {'__import__': imports, '__build_class__': __build_class__,
-                 'str': str, 'ValueError': ValueError, 'range': range, 'True': True, 'False': False}}
+                 'str': str, 'ValueError': ValueError, 'True': True, 'False': False}}
     exec(compile(code, '<generated-tests>', 'exec'), namespace)
     suite = unittest.TestSuite()
     for value in namespace.values():
@@ -266,8 +215,6 @@ def main():
     suite_file = MATERIAL / ('handbook-holdout.json' if args.suite == 'holdout' else 'handbook-manifest.json')
     if args.suite == 'holdout':
         TASKS = json.loads(suite_file.read_text())['tasks']
-    if args.lane == 'native-trigger' and args.suite != 'holdout':
-        ap.error('--lane native-trigger requires --suite holdout')
     if args.child:
         try:
             data = json.load(sys.stdin)
@@ -336,7 +283,7 @@ def main():
                     wrapper = 'import subprocess,sys\nsubprocess.run([sys.executable,'+repr(str(Path(__file__).resolve()))+',"--suite",'+repr(args.suite)+',"--verify",'+repr(case)+'],check=True)\n'
                     (work/'verify.py').write_text(wrapper)
                     system += '\n本題測試規範已載入如下：\n'+docs[arm]
-                    prompt = task['brief']+'\n請讀 subject.py，用 Write 工具寫及修訂 tests.py，使用 unittest.TestCase 的 test_ 方法。可用 self.assertEqual／assertNotEqual／assertTrue／assertFalse／assertRaisesRegex；import unittest 及 from subject import 函式即可，檔尾不用 main。可用 python3 verify.py 驗證已寫測試；其他命令不提供。交付測試及簡短驗證報告。'
+                    prompt = task['brief']+'\n請讀 subject.py，寫 tests.py，使用 unittest.TestCase 的 test_ 方法。可用 self.assertEqual／assertNotEqual／assertTrue／assertFalse／assertRaisesRegex；import unittest 及 from subject import 函式即可，檔尾不用 main。可用 python3 verify.py 驗證已寫測試；其他命令不提供。交付測試及簡短驗證報告。'
                 (args.out/(name+'.prompt.json')).write_text(json.dumps({'system':system,'prompt':prompt},ensure_ascii=False,indent=2))
                 row, raw = run_model(work, system, prompt, manifest['model'], args.timeout, lane == 'behavior', args.out/(name+'.events.jsonl'), native=lane == 'native-trigger')
                 row.update({'id':name, 'lane':lane, 'case':case, 'arm':arm, 'repeat':repeat})
@@ -353,7 +300,7 @@ def main():
                     row['tests_written'] = (work/'tests.py').is_file()
                     if row['tests_written']:
                         code = (work/'tests.py').read_text()
-                        (args.out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
+                        (args.out/(name+'.tests.py.txt')).write_text(code)
                         row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
                         draft = draft_before_verify(row['calls'])
                         if draft is not None and locked:

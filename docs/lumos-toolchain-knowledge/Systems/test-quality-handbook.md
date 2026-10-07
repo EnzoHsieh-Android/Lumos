@@ -19,6 +19,7 @@ related:
   - "[[Systems/test-quality-scan]]"
 verified_by:
   - "[[Verification/2026-10-07_測試手冊措辭兩臂試行]]"
+  - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
 ---
 # test-quality-handbook
 
@@ -38,3 +39,11 @@ WHY: 新措辭組合只比較整體效果 [出處:2026-10-07 使用者三點提�
 PITFALL: 初批事件彙整中止導致行為對照資料不齊 [出處:2026-10-07 固定手冊試行 v1 instrument-disposal] [根因:事件的 message 可為文字，彙整器假設全部是物件] [repro:python3 -m unittest discover -s governance/eval -p test_test_quality_handbook.py -v]。儀器修訂保留首批，解析前先保存原始事件；最終納入範圍以驗證紀錄的場次清單裁定，不以模型會談 valid 直接宣稱實驗有效。
 
 WHY: 候選措辭暫留實驗材料 [出處:[[Verification/2026-10-07_測試手冊措辭兩臂試行]]] [因:固定指標無提升且事後探查有覆蓋缺口，措辭清楚不能代替測試抓錯證據]。原規範持續使用；採用候選需另批獨立留出與原生路由證據，重驗條件見驗證紀錄。
+
+## 本批重驗取捨
+
+WHY: 首次生成與回饋後修訂分開 [出處:2026-10-07 使用者要求繼續獨立題與原生路由重驗] [因:模型看見固定故障報告後補齊測試，會遮住手冊對初次生成的差異]。主要觀察是第一次 verify 回饋前的完整測試，最終交付另報；評分仍沿同一固定題目判準。
+
+WHY: 原生描述用最小 project skill 對照 [出處:Claude Code 官方 skills 文件及本機原生preflight-v2] [因:全域安裝版與其他技能會影響選擇，須先固定可見目錄再比較描述]。臨時技能body與手冊相同，只有description不同；結論限該宿主與孤立目錄，不代替完整Lumos部署或Codex路由。
+
+PITFALL: 正常有限迴圈被考卷語法拒絕會使測試效果失去可比性 [出處:[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]] [repro:python3 -m unittest discover -s governance/eval -p test_test_quality_handbook.py -v]。保留原始分數與生成版本，補齊固定字面值迴圈語法後對兩臂全部草稿一致重算，不能把語法不支援算成品質差。

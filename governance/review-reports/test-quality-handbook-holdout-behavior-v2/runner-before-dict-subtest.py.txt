@@ -32,7 +32,7 @@ TASKS = {
         'faults': [('constant', '"A" if user_id % 2 == 0 else "B"', '"A"'), ('skip-guard', 'if not active:', 'if False:'), ('reason', '"inactive"', '"other"')],
     },
 }
-ALLOWED_ASSERTS = {'assertEqual', 'assertNotEqual', 'assertTrue', 'assertFalse', 'assertRaises', 'assertRaisesRegex', 'assertIn', 'assertIsInstance', 'subTest'}
+ALLOWED_ASSERTS = {'assertEqual', 'assertNotEqual', 'assertTrue', 'assertFalse', 'assertRaises', 'assertRaisesRegex', 'assertIn', 'assertIsInstance'}
 ALLOWED_NODES = {ast.Module, ast.Import, ast.ImportFrom, ast.alias, ast.ClassDef, ast.FunctionDef,
                  ast.arguments, ast.arg, ast.Expr, ast.Constant, ast.Assign, ast.Name, ast.Load,
                  ast.Store, ast.Attribute, ast.Call, ast.keyword, ast.Assert, ast.Compare, ast.Eq,
@@ -45,15 +45,10 @@ def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def bounded_iteration_count(node, bindings=None):
-    bindings = bindings or {}
+def bounded_iteration_count(node):
     try:
         if isinstance(node, (ast.Tuple, ast.List)):
             size = len(ast.literal_eval(node))
-        elif isinstance(node, ast.Name) and isinstance(bindings.get(node.id), (tuple, list, dict)):
-            size = len(bindings[node.id])
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'items' and not node.args and not node.keywords and isinstance(node.func.value, ast.Name) and isinstance(bindings.get(node.func.value.id), dict):
-            size = len(bindings[node.func.value.id])
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range' and not node.keywords:
             values = [ast.literal_eval(arg) for arg in node.args]
             if not 1 <= len(values) <= 3 or any(type(value) is not int for value in values):
@@ -68,37 +63,17 @@ def bounded_iteration_count(node, bindings=None):
     return max(size, 1)
 
 
-def literal_binding_scopes(tree):
-    scopes = {}
-    functions = [tree] + [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
-    for function in functions:
-        bindings = {}
-        for statement in function.body:
-            if isinstance(statement, ast.Assign):
-                try:
-                    value = ast.literal_eval(statement.value)
-                except (ValueError, TypeError, SyntaxError):
-                    value = None
-                for target in statement.targets:
-                    if isinstance(target, ast.Name):
-                        bindings[target.id] = value
-        for node in ast.walk(function):
-            scopes[id(node)] = bindings
-    return scopes
-
-
 def validate_test(code):
     """Bounded benchmark grammar, not a general sandbox or Python quality verdict."""
     tree = ast.parse(code)
     if len(list(ast.walk(tree))) > 3000:
         raise ValueError('test-too-large')
     loop_budget = 1
-    scopes = literal_binding_scopes(tree)
     for node in ast.walk(tree):
         if type(node) not in ALLOWED_NODES:
             raise ValueError('unsupported-test-node:' + type(node).__name__)
         if isinstance(node, ast.For):
-            loop_budget *= bounded_iteration_count(node.iter, scopes[id(node)])
+            loop_budget *= bounded_iteration_count(node.iter)
             if loop_budget > 10000:
                 raise ValueError('loop-budget-exceeded')
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range':
@@ -113,8 +88,7 @@ def validate_test(code):
             permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
                          or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
                          or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
-                         or node.attr == 'exception'
-                         or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
+                         or node.attr == 'exception')
             if not permitted:
                 raise ValueError('unsupported-attribute:' + node.attr)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:

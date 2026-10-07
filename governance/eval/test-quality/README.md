@@ -29,3 +29,14 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 執行固定模型兩臂（會使用 Claude 配額）：`python3 governance/eval/test_quality_handbook.py --run --out /tmp/handbook-new-run`。`--lane behavior` 只跑行為題，`--lane trigger` 只跑入口模擬；輸出目錄必須為新目錄，保存原始事件、材料摘要、測試與故障結果。
 
 入口模擬用明示技能目錄與 Read，非原生 Skill 調用；行為題強制載入規範。生成測試僅允許固定 unittest 語法子集，超出者列無效；此 runner 不是通用程式沙盒。人工敘述核對是探索性觀察；機械評分不讀 arm 或文字說明，只看固定斷言紅綠。首批不完整場次按 instrument-disposal 排除，不能直接累加所有 results.json 的 valid 數。
+
+### 人工推導澄清與原生路由重驗
+
+`handbook-holdout.json` 固定 shipping/calendar 兩個新業務題與故障，`handbook-clarified.md` 是澄清候選快照。行為 baseline 此次是前批 candidate，與原規範不同；澄清版只補人工從規格推導答案與固定字面值。
+
+- 行為：`python3 governance/eval/test_quality_handbook.py --run --suite holdout --lane behavior --out /tmp/handbook-holdout-behavior`。首個 verify.py 回饋前最後完整 Write 為 first_draft_score，最終交付為 score，分開報。
+- 原生路由：`python3 governance/eval/test_quality_handbook.py --run --suite holdout --lane native-trigger --out /tmp/handbook-holdout-native`。用隔離 project skill、唯讀 Read/Skill；init 只准有待測技能，Skill invocation 與實際 handbook Read 分開核對。
+
+原生路由两臂是原 description／擴充 description，body與手冊相同；兩個lane的baseline含义不同。評估不更動全域技能；模型呼叫沿固定模型、一次每題每臂，不把未載入、拒絕或逾時當作路由失敗。只有Claude Code隔離native路由被量測，其他宿主與技能共存環境另驗。
+
+有限迴圈僅支援固定字面值 tuple/list、字面值容器變數及 dict.items、字面值 range；可用 self.subTest。未知迭代器拒絕，逾時亦列無效。生成源碼保存於 .first-draft.json／.tests.json 的 code 與 SHA256。若事後補齊考卷語法，凍結原始事件與分數並對全部兩臂一致重算，生成 runner SHA 與重算 runner SHA 分開留存。
