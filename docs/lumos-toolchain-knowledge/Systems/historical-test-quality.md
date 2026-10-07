@@ -9,6 +9,7 @@ aliases: []
 about_code:
   - governance/eval/historical_test_quality.py
   - governance/eval/historical_handbook_trial.py
+  - governance/eval/historical_case_corpus.py
 tags:
   - type/system
   - status/doing
@@ -21,6 +22,7 @@ verified_by:
   - "[[Verification/2026-10-07_歷史弱測試鎖回歸重播]]"
   - "[[Verification/2026-10-07_歷史鎖案例手冊模型對照]]"
   - "[[Verification/2026-10-07_歷史鎖案例減少提示對照]]"
+  - "[[Verification/2026-10-07_不同失效歷史案例集資格重播]]"
 ---
 # historical-test-quality
 
@@ -45,3 +47,10 @@ PITFALL:normal fixture未建可信快取，正常前置斷言在修復版也紅 
 WHY:lean提示只減少題目示範，不改評分器 [出處:[[Projects/歷史弱測試手冊評估_計劃]]] [因:避免降低提示時同時改考卷，把分數差異歸錯來源]。展示去除註解及文件字串的錯版函式投影，完整原碼仍用於執行；grade/execute/validate與前次逐字相同，source SHA核對另存控制證據。fixture及API仍提供部份現場與判準，所以不是自由測試開發。
 
 WHY:同歷史鎖案例兩批皆滿分後停止疊加提示 [出處:[[Verification/2026-10-07_歷史鎖案例減少提示對照]]] [因:反覆調提示仍無鑑別力，容易把重抽當改善]。本案例改作評分器控制；後續效果比較改用事先固定的不同失效形態案例集。
+
+
+## 不同失效形態案例集
+
+WHY:鎖只當控制，效果候選換Java辨識與圍欄復原 [出處:[[Verification/2026-10-07_不同失效歷史案例集資格重播]]] [因:同鎖案例兩批滿分平手，換失效形態而非繼續調提示找改善]。資格矩陣先跑原弱／強測試、固定錯版／修復版；資格通過不代答模型效果。
+
+PITFALL:把功能加入提交當成修復版會抽不到後續強化測試 [出處:歷史案例集首批Java端點資格失敗] [根因:修復分在後續d92e4ae5提交，首選2e261846只有原8斷言] [repro:python3 governance/eval/historical_case_corpus.py --out /tmp/lumos-corpus-new]。保留首批失敗來源，查歷史後固定真修復，預定失敗索引不改，完整矩陣另批重跑。

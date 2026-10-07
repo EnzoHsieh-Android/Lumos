@@ -28,15 +28,15 @@ def historical_file(commit, path):
                           capture_output=True, text=True, check=True, timeout=20).stdout
 
 
-def test_function(source):
+def test_function(source, method=METHOD):
     matches = [n for n in ast.parse(source).body
-               if isinstance(n, ast.FunctionDef) and n.name == METHOD]
+               if isinstance(n, ast.FunctionDef) and n.name == method]
     if len(matches) != 1:
         raise ValueError('historical-test-not-unique')
     return ast.get_source_segment(source, matches[0]) + '\n'
 
 
-def replay(source, test):
+def replay(source, test, method=METHOD, require_precondition_label=True):
     # Historical test is trusted repository code. These paths are isolated fixtures,
     # not a sandbox suitable for arbitrary model output.
     with tempfile.TemporaryDirectory(prefix='lumos-history-') as directory:
@@ -48,12 +48,13 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location('historical_lumos','lumos.py')
 m=importlib.util.module_from_spec(spec);sys.modules[spec.name]=m;spec.loader.exec_module(m)
 def _lm(): return m
+def _load_lumos(): return m
 def mkvault(): return Path(tempfile.mkdtemp(prefix='vault-',dir='.'))
 checks=[]
 def check(label,condition,detail):
     checks.append({'label':label,'passed':bool(condition),'detail':str(detail)})
 '''
-        harness += test + '\n' + METHOD + '()\nprint("RESULT_JSON="+json.dumps(checks,ensure_ascii=False))\n'
+        harness += test + '\n' + method + '()\nprint("RESULT_JSON="+json.dumps(checks,ensure_ascii=False))\n'
         (work / 'replay.py').write_text(harness)
         env = {'PATH': os.defpath, 'HOME': str(work / 'home'),
                'TMPDIR': str(work), 'PYTHONDONTWRITEBYTECODE': '1'}
@@ -68,7 +69,7 @@ def check(label,condition,detail):
         if result.returncode or len(lines) != 1:
             return dict(raw, status='invalid', reason='child-error-or-missing-result')
         checks = json.loads(lines[0])
-        if not checks or not checks[0]['label'].startswith('★前置★') or not checks[0]['passed']:
+        if not checks or not checks[0]['passed'] or (require_precondition_label and not checks[0]['label'].startswith('★前置★')):
             return dict(raw, checks=checks, status='invalid', reason='fixture-not-established')
         return dict(raw, checks=checks, status='executed')
 

@@ -57,3 +57,8 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 `--prompt-profile lean` 在相同歷史案例與評分器下減少題目提示：
 `python3 governance/eval/historical_handbook_trial.py --run --prompt-profile lean --out /tmp/history-lean-new`。
 此profile展示去除註解與文件字串的實作投影，保留正常需求與可用API，讓模型自選設定及情境；評分仍跑完整固定歷史碼。控制／手冊兩臂各兩次且無回饋；不是自由建立fixture或多案例集，也不把與前批的跨批差異當提示因果效果。同案例若再次兩臂全檢出，即停止疊加提示試行，轉事前固定的不同失效歷史案例集。
+
+
+## 不同失效形態歷史案例集
+
+`python3 governance/eval/historical_case_corpus.py --out /tmp/history-corpus-new` 固定重播鎖、Java測試辨識、文件圍欄復原三案各四組。鎖只當控制，後兩案才是新效果候選；不呼叫模型。需完整本地git歷史及固定審查patch；Java錯版從base+patch重建，完整blob必須吻合。manifest在執行前保存斷言數和失敗索引，12組全符合才資格通過；原／實跑測試、來源SHA與原始結果均輸出。首批選錯Java修復端點的紀錄保留，使用v2通過批。這是Python工具鏈測試的歷史案例資格，不是Java/Android原生測試執行或手冊效果。
