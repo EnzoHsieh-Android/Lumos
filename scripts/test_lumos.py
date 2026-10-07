@@ -75524,5 +75524,31 @@ def t_ledger_rules_match_reader():
         check(f"主 checkout 判定 {c} 讀取端一致", Path(got).resolve() == want.resolve(), f"{got} != {want}")
 
 
+
+def _review_convergence_unit_group(group):
+    _need_src("governance/eval/test_review_convergence.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    r = subprocess.run([sys.executable, "governance/eval/test_review_convergence.py", group],
+                       cwd=root, capture_output=True, text=True, timeout=90)
+    check("審查eval行為反例 " + group, r.returncode == 0,
+          (r.stdout + r.stderr)[-5000:])
+
+
+def t_review_eval_cohort():
+    _review_convergence_unit_group("CohortTests")
+
+
+def t_review_eval_case():
+    _review_convergence_unit_group("CaseTests")
+
+
+def t_review_eval_trials():
+    _review_convergence_unit_group("TrialTests")
+
+
+def t_review_eval_comparison():
+    _review_convergence_unit_group("ComparisonTests")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -76,6 +76,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 
 研究題:怎麼量這些機制到底有沒有用
 
+- [[Systems/review-convergence-eval]]
 - [[Systems/drift-history]]
 - [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。
 - [[Systems/verification-rot-eval]] `[superseded]` — 從圖譜史抽衝突測試集定期回測 L3 腐化偵測(設計收斂未落地)。
