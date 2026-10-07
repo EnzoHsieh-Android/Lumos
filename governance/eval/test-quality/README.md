@@ -45,3 +45,10 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 ## 真實歷史弱測試重播
 
 `python3 governance/eval/historical_test_quality.py --out /tmp/lumos-historical-new-output` 重播一個固定歷史案例，輸出目錄須全新；只需要本地完整 git 歷史與 Python 標準庫，支援 POSIX symlink/SIGALRM。它在暫存 HOME 與筆記庫執行歷史錯版／修復版、原弱測試／修正強測試四組，保存 code hash 及原始結果。強測試原8秒鬧鐘改2秒；程序超時、匯入錯、零／缺少預期斷言、情境前置不成立都不能算檢出。這是考卷預檢，不執行模型輸出，也不證手冊效果。
+
+
+### 歷史案例模型對照
+
+`python3 governance/eval/historical_handbook_trial.py --controls --out /tmp/history-controls-new` 先驗八個強弱／無效控制；通過後 `python3 governance/eval/historical_handbook_trial.py --run --out /tmp/history-model-new` 跑固定Claude模型四場（使用配額）。無手冊／正式手冊各兩次，Read-only看到同一份歷史錯版函式；只交一次受限unittest，不提供執行回饋。模型不能用任意Python API；fixture協助觀察取鎖、鎖存在與外部写入，並提供部分失敗判準，所以不代表自由測試開發。
+
+原始會談成功不等於測試有效；需另看score，修復版必須非零測試、非零明示斷言全綠，錯版必須目標AssertionError與巢狀退路觀測同時成立。原始程序逾時／不支持語法仍invalid。支持精確標準main尾段（在generated_tests下不執行），不支持其他if。首批正常fixture接線修訂以instrument-disposal及原始／重算JSON分開保存。
