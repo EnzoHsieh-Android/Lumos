@@ -1,0 +1,578 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md b/docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md
+index 9895adef..03ad87a8 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md
+@@ -107,21 +107,21 @@ r3 架構席抓到:第 2/3 版新加的四個判斷——主線分支怎麼取
+ 
+ ## 設計
+ 
+ 1. **觸發**:`PreToolUse`,matcher `Agent`(早上實測用 `Agent|Task|Subagent`,2.1.259 實際 `tool_name` 是 `Agent`;另兩個是保險,本案只留實測到的那個)。派工詞含一行 `LUMOS-IMPACT: <base>..HEAD` 才動作;沒有就逐位元原樣放行(`{}` 或不輸出)。★標記文法定死★(r2:文法沒定,差一個空白就靜默不注入):逐行比對正規式 `^LUMOS-IMPACT:\s*(\S+)\s*$`,取第一個命中;範圍必須★恰好一個 `..`、兩端非空、不含 `...`、不以 `-` 開頭★(r3:`a..b..c`/`..HEAD`/`main...HEAD` 都含 `..`,首版判準太寬),否則放行。REVISIT 那條 grep 用同一個正規式。★範圍由標記明寫,不從散文猜;`--repo` 比照四支鄰居:先 `CLAUDE_PROJECT_DIR` 環境變數、再 hook payload 的 `cwd`;★`dispatch-lens` 拿到後先 `git rev-parse --show-toplevel` 取 repo 根,之後所有 git 指令一律 `git -C <根>` 從根跑★(r3 極端輸入席實測:`--repo` 指到子目錄時 `ls-tree`/`git show` 回相對子目錄的路徑,白名單全對不上)★(省略 `--repo` 時 `impact --diff` 只從 hook 行程 cwd 往上找,cwd≠目標專案就查錯 repo)。
+ 2. **清單**:`lumos impact --diff <範圍> --repo <cwd> --json`,取 `pinned: true`;★剔除 `files` 全落在 `governance/review-reports/` 的節點★(d8 記在案的已知污染源:凍結快照 patch 是審計證物,impact 沒排除、會頂到滿分;手貼時靠人眼剔,本案機器剔)。剔完後 `listed` 為 0→★附「既有相依」備援段★(v1.2;第一版是不注入,見 v1.2 節)。★base 必須是主線可達的 commit★(r2 外家:標記左側填分支上任一 commit,主線讀取就形同虛設):base 存在用既有 `_git_commit_exists`,再 `git rev-parse` 取全長 sha 且必須通過 `^[0-9a-f]{40}$` 或 `^[0-9a-f]{64}$`(SHA-256 倉庫;否則放行);再 `git merge-base --is-ancestor <base> <主線 tip>` 不成立→放行。★威脅模型明寫★(r3 外家:本 repo 的 `refs/remotes/origin/HEAD` 根本沒設,會退到本地 main,而本地 main 可移動):攻擊者控制的是「送審分支的內容」;審查者本機的 ref、remote 設定、家目錄與本 hook 安裝副本屬同一信任等級,不在防線內。主線 tip 沿既有主線判定函式(約 16748 行,現只試本地 main/master),★在那個函式補「本地 main/master 的 upstream(`main@{upstream}`)優先、沒設 upstream 才用本地分支」★(r3 通才:本 repo 的 remote 叫 `Lumos` 不叫 `origin`,寫死 origin 在自家就解析不到),不在 hook 另寫;都沒有→放行;取到哪一個寫進 debug 行。★威脅模型再加一條★(r3 載荷席實測:分支若能在 checkout 時執行任意碼——例如 git hooks 路徑指向樹內——就能改本地任何 ref):那是「checkout 這條分支的人已被拿下」,是 repo 整體姿態,不在本 hook 防線內。★本 repo 現況 `core.hooksPath=scripts/hooks`,就是樹內★——這條攻擊在自家是真的,不是理論;本案不解,另立 [[Issues/git-hooks路徑指向樹內_checkout即執行分支碼]] 追。★固定席「清單」本身仍用工作樹圖譜算★(impact 載入工作樹 vault):分支作者能改關係讓某節點不被釘=「藏」,藏的結果等於今天沒 hook 的狀態;能「說」的通道全部封在下面 3–5 條。r2/r3 外家兩輪都判「寫成界線不算修」——編排者裁為正式決策 d3:不修,理由=藏 ≤ 現狀、修法要 impact 加 `--vault` 旗標並每次 `git archive` base 版圖譜到快取(改 scripts/lumos,成本翻倍);★事件型回頭條件:任何人要拿本 hook 當閘(擋推送/擋派工)之前,必須先修這條,入口=本計劃 d3 與 [[Systems/design-loop]]★。
+ 3. **內容來源=base ref,不是工作樹**(r1 blocker):前 8 篇貼內容,內容用 `git show <base>:<repo 相對路徑>` 讀★base 那版★(base=標記左側)。★`--json` 的 `node` 是圖譜相對路徑★(r2 三席實跑:直接代入 `git show` 全部失敗、每篇都會被誤判「分支新增」)→repo 相對路徑=`docs/<slug>-knowledge/` + node,圖譜根★從 base 樹解析★:`git ls-tree --name-only <base> docs/` 裡 `*-knowledge` 的目錄,多個取排序第一個(跟 `find_vault` 一致)——r3 載荷席實測:工作樹版 `find_vault` 取排序第一個,分支加一個空的、名字排序在前的 knowledge 目錄就讓整批固定席悄悄熄燈;base 樹攻擊者加不進去。節點在 base 不存在(本分支新增)→★連名字都不列★,只報「另有 N 篇本分支新增節點未列」(名字本身就是注入管道)。理由:工作樹的圖譜筆記是待審分支的一部分(鐵則 1 逼改 code 必改筆記),分支作者可控;base 是主線,不可控。
+ 4. **消毒原則:★來自圖譜或 diff 的自由文字零輸出★**(r1 blocker 只擋了 `files`;r2 載荷席實跑抓到 `contract` 欄位會把 `risk/<任意文字>` 標籤逐字印成 ★RISK·任意文字★、事故節點的 `matched_by` 是觸發字串原文且永遠排最前)。hook 輸出只允許三種東西:①固定字彙表——`contract` 欄實際值域只有 INVARIANT/IRREVERSIBLE/RISK·<後綴>/空(`_impact_contract`,約 15601 行;CHECKPOINT 不在這欄),只印前綴類別、RISK 後綴丟;`kind` 印 direct/indirect/incident(事故靠 `kind: incident`,不是 contract);`matched_by`、摘要、一句話層★完全不印★;②★base 已追蹤的路徑★——`files` 與節點路徑只列出現在 `git -c core.quotePath=false ls-tree -r --name-only <base>` 裡的(r2:沒帶 quotePath 中文檔名全被轉義、白名單永遠不過——impact 自己修過同一坑),長度 ≤200;base 是主線,所以主線有的名字就是可信的,不再另設字元白名單(r2:字元白名單會把含空白的合法檔名靜默剔掉);其餘只報「另有 N 個本分支新增/改名檔未列」;③base 那版節點的合約行:`git show` 出來的全文裡用既有 `INVARIANT_RE`/`CHECKPOINT_RE`/`IRREVERSIBLE_RE` 認出的行(它們只認 frontmatter 的 `KEY:` 行——r3 外家:圖譜裡合約多半長成 `  KEY:★INVARIANT★…`;r3 架構席:既有正規式刻意不掃正文,避免正文提到標記就誤判),每行截 200 字。★定序★:對每個 pinned 節點先問「repo 相對路徑在 base 樹裡嗎」——在:列名、貼內容(前 8 篇)、列 base 已追蹤的 files;不在:只進「未列」計數,後面的檢查都不跑。
+ 5. **截斷**:前 8 篇貼內容(節點名+`kind`+`contract` 類別+base 已追蹤 `files`+該節點 base 版的合約行),其餘只列名。單篇內容上限 40 行(合約行優先),整段上限 400 行,超出截斷並標「已截」。★code-loop SKILL 第 19 行現制是三層(貼內容/前 10 篇「列名+一句話」/純列名),本案有意砍掉中間的一句話層★——一句話=節點摘要=自由文字=注入管道;同步 SKILL.md 時明寫這是砍層不是漏寫。
+ 6. **措辭**:純文字條列(比照四支鄰居的注入格式,不用 Markdown 標題+方括號代號),固定第一行 `lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)`。★不用命令式、不用「暗號」型措辭★(實測會被子代理指認為提示注入而拒答)。★這個標頭配 `updatedInput` 的組合尚未實測★(追測二測的是 `additionalContext`)——列入驗收第一條。
+ 7. **時間預算與快取**:外層 `HOOK_ENTRIES` 宣告 60 秒、內層 subprocess 45 秒(必須外>內:本 repo 栽過內 20>外 10,見 [[Projects/enforcement儀表板_計劃]])。實測本 repo 單 commit 12 秒、41 檔 17.7 秒、更大 35 秒;同輪多席會對同一範圍重算——★快取★:鍵=(repo 根, base sha, HEAD sha),兩個 sha 都必須通過 `^[0-9a-f]{40}$|^[0-9a-f]{64}$` 才能當檔名(r2:rev-parse 失敗時會把輸入原樣吐到 stdout,含斜線點號,直接拿去拼檔名=路徑注入),檔名=三者串起來的 sha256;存使用者私有目錄 `~/.cache/lumos/dispatch-lens/<sha256>.json`(目錄 0700;r3 載荷席:$TMPDIR 路徑可預測、可被搶先偽造),讀取時檔案 owner≠當前 uid 或 group/other 可寫→視為無快取;寫暫存再 rename;TTL 20 分鐘(沿鄰居 `_ttl_should_inject` 形態),同輪只有第一席付錢。★大 diff 超時=靜默放行★,這是接受的界線(見〈誠實界線〉)。
+-8. **失敗一律放行、預設靜默**:算不出、超時、不是 git repo、base 解析不到、lumos 不在——原樣放行;比照鄰居「技術性失敗純靜默」,只有 `LUMOS_HOOK_DEBUG=1` 才在 stderr 印一行(白話三段式)。
++8. **失敗一律放行、預設靜默**(★2026-10-07 起範圍算不出來——提交不存在、不是 git 專案、base 不在主線——改附一行說明,見 [[Projects/派工鏡頭跨repo不再靜默_計劃]];超時那條 2026-09-05 已改)★:算不出、超時、不是 git repo、base 解析不到、lumos 不在——原樣放行;比照鄰居「技術性失敗純靜默」,只有 `LUMOS_HOOK_DEBUG=1` 才在 stderr 印一行(白話三段式)。
+ 9. **安裝三個登記點+錨點**:檔名 dispatch-lens-hook.py、住 scripts/hooks/claude/ 目錄(沿 -hook.py 慣例——四支現役有三支如此,check-graph-sync.py 例外;將建,現在還不存在);①`_GLOBAL_CLAUDE_HOOKS` ②`merge-claude-settings.py` 的 `HOOK_ENTRIES` ③★`lumos enforcement` 寫死的四元組★(`scripts/lumos` 約 12109 行;它不讀 ①,漏了就是「根本沒查」而非「查了沒事」;連帶 `t_enforcement_never_raises_on_missing` 釘死的列數要改)④`ANCHOR_FILES` 加一行並 `lumos anchor approve`;★加一條測試交叉核對 `ANCHOR_FILES` 與 `governance/anchor-baseline.json` 的鍵集合相等★(r2:兩者現在沒有任何測試互證,錨點修復可以落地卻沒真保護);⑤同步 [[Systems/anchor-integrity]](它寫死「5 錨點=runner×2+hooks×3」,本案是第 6 個、新類別)。不自造流程、不引入外部二進位、不用 jq。
+ 10. **不做**:不 deny、不驗證審查員有沒有讀、不記治理帳、不量成效、不碰設計迴圈。
+ 
+ ## 跟既有手貼格的關係(r1 兩席問的:取代,不是疊加)
+ 
+ - 代碼審模板 §3 第 3 格「圖譜鏡頭」(d8 手貼固定席、含兩條填寫雷)→★改成只放一行 `LUMOS-IMPACT: <base>..HEAD`★,填寫雷①(審計證物污染)由 hook 機器剔、雷②留字。
+ - 架構對齊席 §7.6「圖譜裡相關功能筆記」那格是兩種迴圈共用→改成兩支(見〈範圍〉):代碼迴圈填標記那一行、設計迴圈維持手貼。
+ - `lumos-code-loop/SKILL.md` 第 19 行對同機制的摘要句→同步改字(templates 改了摘要沒跟=本 repo 記過的「知識同步散落會漏」形態)。
+ - 設計審模板 §1★不動★;§7.6 只加設計那一支的字,行為不變。
+ - 一份派工詞只會有一份固定席清單:標記在、hook 補;編排者不再手貼。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/派工鏡頭跨repo不再靜默_計劃.md b/docs/lumos-toolchain-knowledge/Projects/派工鏡頭跨repo不再靜默_計劃.md
+new file mode 100644
+index 00000000..d1807d62
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/派工鏡頭跨repo不再靜默_計劃.md
+@@ -0,0 +1,59 @@
++---
++type: project
++status: done
++created: 2026-10-07
++updated: 2026-10-07
++tags:
++  - type/project
++  - status/done
++  - scope/loop-engineering
++lands_in:
++  - Systems/codex-harness
++related:
++  - "[[Projects/派工鏡頭注入_計劃]]"
++  - "[[Projects/第二輪審視六修_計劃]]"
++summary: |-
++  WHY:派工鏡頭算不出範圍(提交在會談專案裡不存在、會談專案不是 git 專案、base 不在主線)時,掛鉤改派工詞附一行固定說明,不再靜默放行 [出處:rtb 2026-10-07 回報 code-審查跑滿回顧 四輪派工 0 份附加;實驗證實] [因:掛鉤用會談的專案目錄(CLAUDE_PROJECT_DIR,其次會談 cwd)算鏡頭,rtb 會談開在 rtb 專案、審的是 lumos 工具鏈的分支,範圍在 rtb 專案找不到 → 派工鏡頭回錯誤碼 → 掛鉤照〈失敗一律放行、預設靜默〉什麼都不附,四輪都沒人知道] [不選:標記行加 repo 路徑讓掛鉤改去那裡算(標記行文法要改、派工詞的自由文字會變成掛鉤去跑 git 的路徑,先不開這個口;說明行給繞法即可)] [不選:讓掛鉤讀派工鏡頭的錯誤輸出原文轉進派工詞(自由文字零輸出是消毒原則)]
++---
++# 派工鏡頭跨repo不再靜默_計劃
++
++白話:派代碼審的審查員時,有一支掛鉤會在派工詞尾端自動接上「這次改動牽連到的圖譜筆記」(派工鏡頭)。它用「這個對話開在哪個專案」去算;對話開在 A 專案、審的卻是 B 專案的分支時,範圍在 A 找不到,鏡頭算不出來,掛鉤就什麼都不附、也不講——rtb 一個迴圈四輪派工全部沒附,自己翻報告才發現。這次讓它在算不出來時講一句,說清楚範圍、在哪個專案算的、怎麼繞過。
++
++依據:rtb 2026-10-07 回報(四輪派工 0 份附加,證據在主線 `governance/review-reports/code-審查跑滿回顧/`);本機實驗:`ce2a961f` 在 lumos 工具鏈存在、在 rtb 專案不存在,`lumos dispatch-lens ce2a961f..HEAD --repo <rtb 專案>` 回「範圍有一端不是本地存在的 commit」;同一天開在 lumos 工具鏈的會談派的席位都確認看到附加段。
++
++PRIOR-ART: 沿用 [[Projects/第二輪審視六修_計劃]] 對「超時」那次的翻案形狀——[[Projects/派工鏡頭注入_計劃]] 原設計〈失敗一律放行、預設靜默〉,v1.3 因「39 次派工 21 次放空、編排者完全不知道」改成超時附一行固定句;本案把同一形狀套到「範圍算不出來」這一族。說明句沿用既有 `TIMEOUT_NOTE` 那組的寫法(`LUMOS-LENS:` 開頭、零自由文字、只填固定欄位);派工鏡頭失敗時印 JSON 沿用角色卡選項已有的失敗 JSON(帶 `role_text`)。
++RETIRE-IF: 掛鉤改成從子代理實際工作的目錄算鏡頭(例如 Claude Code 在派工事件帶出子代理的工作目錄),會談專案與審查目標不再可能錯開,這句說明就該拿掉。
++
++## 範圍
++
++- 做:派工鏡頭(`--json`)在「範圍算不出來」時,標準輸出印一行 JSON,帶固定字彙的原因代碼欄 `lens_fail`:`commit_missing`(範圍有一端在這個專案不存在)、`not_git`(指定的目錄不在 git 專案裡)、`sha_unresolved`(兩端解析不到完整提交編號)、`no_mainline`(找不到 main/master)、`base_not_mainline`(base 不在主線上)、`empty_range`(起點等於終點——標記終點寫 HEAD、卻在會談專案解讀成 base 本身時最常見);前五種回傳碼不變(2/2/2/4/4),`empty_range` 原本照算出全零備援段、改成回 2。有角色卡時同一行 JSON 照帶 `role_text`。
++- 做:掛鉤在派工鏡頭回非零碼、JSON 帶認得的 `lens_fail` 時,改派工詞附一行固定說明(`LUMOS-LENS:` 開頭):這次沒附固定席節點、範圍、在哪個專案算的(會談專案路徑,去反引號、換行換成空白、截 300 字)、原因(由代碼查固定句)、繞法(標記終點寫完整提交編號、從開在目標專案的會談派席,或派工前手動 `lumos impact --diff <範圍>` 把固定席內容貼進派工詞);範圍不合保守的 ref 字元集(英數與 `._/~^-`)就以 `<範圍>` 代替,不轉述原文;有角色卡照附在說明之後;記一筆掛鉤事件(同超時那條)。
++- 做:說明同步(派工範本鏡頭 3 的三件事、代碼審手冊步驟 2、派工鏡頭計劃誠實界線)。
++- 不做:讓標記行指定 repo;範圍格式寫錯(`main...HEAD` 之類)仍照舊放行(標記文法另案);沒有圖譜(rc3)、主線找不到(rc4 另一種)照舊;Codex 認領那條路不動。
++
++## 實務隱患
++
++- **舊 lumos 配新掛鉤**:掛鉤是複製進使用者目錄的,兩邊版本錯開是常態;舊版失敗不印 `lens_fail` → 掛鉤照舊放行(只附角色卡),不會報錯。
++- **路徑消毒**:會談專案路徑來自環境變數,不是圖譜或改動內容,但仍截長度、去換行,跟鎖路徑同處理。
++- 已排除:金流:只改派工詞的附加段,不碰任何金流
++- 已排除:對外送出:不連網、不送任何東西出去
++- 已排除:不可逆:不寫任何資料檔,退回提交即恢復
++- 已排除:守衛面:掛鉤只改派工詞、不擋派工,任何失敗照舊放行;不改任何閘的判定
++
++## 驗收條款
++
++- [S1] 當派工鏡頭以 `--json` 執行、範圍有一端在指定專案不存在、指定目錄不在 git 專案裡、找不到主線、base 不在主線上、或範圍是空的時,應 在標準輸出印一行帶 `lens_fail`(分別是 commit_missing、not_git、no_mainline、base_not_mainline、empty_range)的 JSON,前四種回傳碼照舊、空範圍回 2;範圍格式不合法時 應 照舊什麼都不印 [test:t_dispatch_lens_fail_reason_json]
++- [S2] 當掛鉤收到派工鏡頭非零回傳、JSON 帶認得的 `lens_fail` 時,應 改派工詞附一行 `LUMOS-LENS:` 說明(含範圍、會談專案路徑、原因句、繞法、終點要寫完整提交編號),範圍不合保守字元集時以 `<範圍>` 代替、路徑去反引號與換行並截長,有角色卡照附在說明之後;JSON 沒有 `lens_fail` 或值不認得時 應 照舊(只附角色卡或原樣放行) [test:t_dispatch_lens_hook_fail_reason_notice]
++
++## 回退
++
++退回本案的提交即可;掛鉤與 lumos 各自退回都相容(舊掛鉤不讀新欄位、新掛鉤遇舊 lumos 照舊放行)。
++
++## 天花板
++
++1. 只講「算不出來」,不替編排者改去對的專案算;要附節點仍得照說明裡的繞法做。
++
++## 實作紀錄
++
++- 2026-10-07:先寫兩支測試、規格閘記下兩條都紅(風險低,不派設計審),再實作。lumos 端抽 `_dispatch_lens_fail`,三個失敗點改呼叫它;掛鉤端新判斷收進 `_fail_note`,主函式原本的「有角色卡才附」改成「有說明或角色卡就附」——第一版直接寫在主函式裡,複雜度 27→29 會被新增告警閘算成新告警,搬出去後告警與改動前逐條相同。既有 `t_dispatch_lens_base_and_zero` 那格寫死「base 不在主線不輸出」,改成只印原因代碼。翻紅:說明函式永遠不給原因 → 4 斷言紅。派工鏡頭相關 98 支、錨點相關 39 支全綠。 新測試第一版把替身類別的兩個欄位用分號寫在一行,被新增告警判成高風險,拆成兩行後分級回到 standard。
++- 2026-10-07 代碼審 r1(一般風險,正確性+架構對齊兩席,4 條 minor,另編排者自己發現 1 條):①範圍字串照原樣放進說明、還包在反引號裡,路徑也只截長——兩席各一條,同一個根因「說明行帶了沒驗證的欄位」,統一成範圍只收保守字元集(不合就寫 `<範圍>`)、路徑去反引號與換行並截長;②找不到主線、提交編號解析不到兩條也同屬靜默放空,補 `no_mainline`、`sha_unresolved`;③掛鉤讀 lumos JSON 寫了兩份,抽成 `_last_json` 讓角色卡與失敗原因共用;④編排者發現:這輪兩席都沒看到固定席——派工在主工作目錄的會談裡、標記寫 `9385ff96..HEAD`,HEAD 在主工作目錄解讀成 `9385ff96` 本身,範圍是空的,派工鏡頭照算出一段全零的備援段;同一天 C5 那幾輪的 `de1fb54f..HEAD` 也是在主工作目錄解讀,附的是主線的改動而不是 C5 分支。補 `empty_range`,說明句與派工範本講明標記終點要寫完整提交編號。`_dispatch_lens_graph` 新判斷併進原本 base 不在主線那個 if,複雜度維持 32。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index ae25443e..a228596f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -31,20 +31,21 @@ summary: |-
+   RULE:[since:2026-09-21][confirmed:2026-09-21][retire:連續兩季零腐爛,或誤報多過真報]跑探針之前先驗每題的目標還在不在,不在就整輪停手回 rc3(跟行為不及格分開),要照跑得明寫 `--allow-stale-targets`。兩層:題目裡提到的路徑要存在、`target` 欄位宣告的字串要找得到。★比對前先剝整行註解★:本 repo 移除東西時的慣例是留一句提到舊名字的註解,不剝的話那句註解會被當成「東西還在」——防線對原始事故本身失效(2026-09-21 審查席 blocker)。路徑判準是「每一段都要含字母」,所以版本對照 `0.144.1/0.153.2` 不會被誤當路徑,而沒有副檔名的推送前那支掛鉤([[Systems/bound-tests-gate]] 管的那支)與圖譜節點名抓得到。誠實界線:只擋得住整行註解,名字留在字串字面值或檔名裡仍會判成健在。驗一條 target 的邏輯拆在 `_check_one_target`,不是為了好看——合在一起會超過本專案的複雜度上限、被新增告警閘擋。[test:t_probe_detects_rotten_targets]
+   PITFALL:[2026-09-21]★探針題目會跟著程式碼腐爛,腐爛之後量到的東西跟題目想量的無關,而且看起來像規矩失效★——d01 叫 AI 改提交前那道閘([[Systems/每支檔有家]] 管的那支)裡的 sync_nudge,那段 2026-09-11 就移除了;AI 查了波及、讀了碼、發現前提不成立就停下來問,這是正確行為,卻因為「沒寫回圖譜」被判不及格。新舊定位各跑三次都 0/3,一度被誤判成定位改壞了寫回紀律。挑題目的條件:①目標現在真的存在 ②改了會影響行為 ③它的家有筆記在講它。重現:`python3 scripts/scenario_probe.py --scenarios governance/scenarios/discipline.jsonl --only d01-writeback-after-code --runs 3 --timeout 700`
+   PITFALL:[2026-09-29]★探針把「撞回合上限/逾時」記成 AI 沒照規矩★——9 月週抽四個失敗裡三個其實是被砍在半路(結果事件 subtype=error_max_turns),過去三次都靠加步數事後解。現在 claude 執行器跟 Codex 執行器一樣標成截斷、理由以「儀器例外」開頭、不算分;總結分母只算有效場次,有效不到一半時分母退回整批(自主迴圈靠總結行 p≠n 發通知,不退回會 0/0 安靜全過)。單源 [[Projects/探針判準對齊程式碼為主_計劃]] [test:t_probe_truncated_run_not_scored] [test:t_probe_flags_truncation_heavy_batches]
+   WHY:[2026-09-29 [[Projects/探針判準對齊程式碼為主_計劃]]]★題庫拿掉讀碼類禁令★(Grep/Read/grep/cat/ls/find/git log 等不再「先做就不及格」),寫入與替代類禁令保留(Edit/Write/sed/mv/gh run/git push);唯一的純程式碼題 v04 改成期望「有讀程式碼」、lumos 可敲可不敲。理由:2026-09-21 起紀律第一步是先讀程式碼,舊判準會把符合新定位的行為量成退步。判準版本寫進週抽歷史(`GRADER_VERSION`),09-29 前後的通過率不可直接比 [test:t_probe_scenarios_allow_code_first] [test:t_probe_code_question_regrade]
+   FACT:[2026-09-21 以程式碼為準]SessionStart 進場提醒(`scripts/hooks/claude/lumos-entry-hook.py`)的開場句跟著紀律範本改定位改寫了:從「第一個工具呼叫是 lumos,不是 grep」改成「程式碼是現況的依據,圖譜補程式碼看不出的脈絡」。這句話同時硬編在八個入口檔,漏改任一處就會有兩套互斥的第一步,由 `scripts/test_lumos.py` 的 `t_entry_points_agree_with_code_first` 擋。★另有兩支既有測試把訊息文字寫死在斷言裡★(`t_entry_hook_index_and_lag`、`t_entry_hook_enforcement_failopen`):它們釘的是「核心提醒有沒有被吃掉」,所以改訊息時要一起改斷言裡那個指令名,現在釘的是 `lumos impact`。2026-09-21 就是漏跑這兩支、被推送前的全套閘擋下來才發現的。現值查:`grep -n 'msg = ' scripts/hooks/claude/lumos-entry-hook.py`
+   FACT:[2026-09-21 以程式碼為準]情境探針消融組要拔掉的那一節,邊界常數跟著紀律範本改定位一起改名了(原本抓「第一個工具呼叫是 lumos」那一節,現在抓「怎麼用」到「寫筆記時」之間);拔錯範圍會讓「不帶查詢指引」那組的前提失效,所以 `scripts/scenario_probe.py` 拔不到邊界時直接停手、不跑。現值查:`grep -n 'RULE_HEAD\|RULE_END' scripts/scenario_probe.py`
+   DEP:scripts/lumos(_codex_home/_sync_global_hooks/_install_codex_agent/dispatch-lens/loop next --orchestrator/enforcement Codex 列)/merge-claude-settings.py --target codex/scripts/hooks/claude/{check-graph-sync,impact-hook,dispatch-lens-hook,lumos-entry-hook}.py/scenario_probe.py --runner codex --stop-block/recount.py 讀 Codex 稿
+   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
+   WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]派工鏡頭掛鉤認 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards;lumos 超時或回非零碼(沒有圖譜、base 不在主線)時,回傳裡若有 role_text 照附(角色不需要圖譜,消費專案還沒建圖譜時才拿得到卡)。掛鉤是複製進使用者目錄的,舊掛鉤只在成功路徑附得到,要重跑安裝;預算:lumos 先算角色、再算圖譜,角色從掛鉤給的同一份期限裡先扣,最多 3 秒且不超過期限五分之一,最多讀 300 支檔內容(一次批次讀取),掛鉤外層上限不變
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
++  WHY:[2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]]]派工鏡頭掛鉤在 lumos 回非零碼、JSON 帶認得的 lens_fail(commit_missing/not_git/sha_unresolved/no_mainline/base_not_mainline/empty_range)時附一行 `LUMOS-LENS:` 說明(範圍、會談專案路徑、固定原因句、繞法、終點要寫完整提交編號),角色卡接在後;範圍不合保守字元集以 `<範圍>` 代替、路徑去反引號與換行;判斷住在 `_fail_note`,讀 JSON 共用 `_last_json`,主函式只多一個「或」 [出處:rtb 2026-10-07 回報四輪派工 0 份附加] [因:掛鉤用會談的專案目錄算鏡頭,會談開在別的專案時範圍找不到,原設計失敗一律靜默] [不選:讀 lumos 的錯誤輸出原文轉進派工詞(自由文字零輸出)] [test:t_dispatch_lens_hook_fail_reason_notice]
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+     context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 5795a1fc..5985937c 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -39,20 +39,36 @@ ROLE_RE = re.compile(r"^LUMOS-ROLE-CARDS:\s*on\s*$")
+ TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,範圍 {what})。"
+                 "照派工詞審查即可,不用自己補算。")
+ LOCK_UNCERTAIN_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what});鎖狀態未知,"
+                        "請檢查鎖 {lock}。鎖內 PID 是啟動者,不能只憑它已結束就刪鎖。"
+                        "照派工詞審查即可。")
+ LOCK_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;鎖無法建立({lock}),"
+                    "請檢查鎖位置與檔案權限。照派工詞審查即可。")
+ SPAWN_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;本次背景未啟動。"
+                     "同名鎖可能仍在或已由其他工作持有,請檢查鎖 {lock}。"
+                     "照派工詞審查即可。")
++# ★範圍算不出來也不再靜默★(Projects/派工鏡頭跨repo不再靜默_計劃):repo 取會談的專案目錄,會談開在 A、審的是 B 的分支時
++# 範圍在 A 找不到——rtb 一個迴圈四輪派工全部放空、沒人知道。只認 lumos 印的固定字彙原因代碼,錯誤原文(stderr)不轉進派工詞。
++LENS_FAIL_REASONS = {
++    "commit_missing": "範圍有一端在這個專案裡不存在",
++    "not_git": "這個目錄不在 git 專案裡",
++    "base_not_mainline": "base 不在這個專案的主線歷史上",
++    "no_mainline": "這個專案找不到 main 或 master 主線",
++    "sha_unresolved": "範圍兩端解析不到完整提交編號",
++    "empty_range": "範圍是空的(起點等於終點)",
++}
++FAIL_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what} 在會談專案 {repo} 算不出來:{why})。"
++             "掛鉤拿會談的專案目錄算,標記終點寫 HEAD 時也在那裡解讀——在別的專案或工作目錄做事,"
++             "終點要寫完整提交編號,或從開在目標專案的會談派席;也可以派工前在目標專案跑 "
++             "`lumos impact --diff {what}`,把固定席內容貼進派工詞。照派工詞審查即可。")
++# 說明行只准固定字彙與已驗證欄位(代碼審 r1 兩席):範圍不合保守的 ref 字元集就以 <範圍> 代替,不轉述原文
++_SAFE_RANGE_RE = re.compile(r"^[A-Za-z0-9._/~^-]{1,200}\.\.[A-Za-z0-9._/~^-]{1,200}$")
+ 
+ # ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
+ # 超時說明原本在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
+ # 就武裝好的檔案裡原子領一席,**全程不寫任何快取**。對這條路講快取是每次都錯,
+ # 不是邊界情況。真正該講的是:這次沒領到,要重新武裝。
+ # ★設計審那條路也要用不同的說明★(2026-09-07 代碼審 r2 通才席抓到)
+ # 超時說明原本在講「背景會把快取算完」,但設計審模式(LUMOS-SPEC:)★本來就不快取★
+ # (計劃常改,快取會給過期答案),所以也沒有背景暖快取這回事——超時就是這次沒有,
+ # 下一次還是要重算。對這條路講快取是每次都錯。
+ SPEC_TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,計劃 {what})。"
+@@ -148,27 +164,56 @@ def find_marker(prompt: str) -> str | None:
+         m = MARKER_RE.match(line.strip())
+         if m:
+             return m.group(1)
+     return None
+ 
+ 
+ def wants_role_cards(prompt: str) -> bool:
+     return any(ROLE_RE.match(line.strip()) for line in prompt.split("\n"))
+ 
+ 
+-def _role_text(r) -> str:
+-    """lumos 失敗分支(超時、沒有圖譜、base 不在主線)也會印帶 role_text 的 JSON;讀得到就回它,讀不到回空字串。"""
++def _last_json(r) -> dict:
++    """lumos 印在標準輸出最後一行的 JSON 物件;讀不到或不是物件回空 dict(角色卡與失敗原因共用)。"""
+     try:
+         d = json.loads((r.stdout or "").strip().splitlines()[-1])
+     except (ValueError, IndexError, AttributeError):
++        return {}
++    return d if isinstance(d, dict) else {}
++
++
++def _lens_fail_why(r) -> str | None:
++    """lumos 失敗時印的 JSON 若帶認得的 lens_fail,回對應的固定原因句;沒有、不認得(舊版 lumos、別的失敗)回 None。"""
++    code = _last_json(r).get("lens_fail")
++    return LENS_FAIL_REASONS.get(code) if isinstance(code, str) else None
++
++
++def _fail_note(r, rng, repo) -> str:
++    """範圍算不出來(lumos 印了認得的 lens_fail)→ 回一行固定說明並記一筆掛鉤事件;其他情況回空字串。"""
++    why = _lens_fail_why(r) if rng else None
++    if not why:
+         return ""
+-    t = d.get("role_text") if isinstance(d, dict) else None
++    _debug(f"lumos dispatch-lens rc={r.returncode}、範圍算不出來,附說明行")
++    try:   # 同超時那條:吞掉失敗的地方自己記一筆,不然會被記成成功跑完
++        import sys as _s2, pathlib as _p2
++        _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
++        from _hookevent import mark as _mark
++        _mark("error", "lumos dispatch-lens 範圍算不出來,附了說明行")
++    except Exception:
++        pass
++    what = rng if _SAFE_RANGE_RE.match(rng) else "<範圍>"
++    where = str(repo).replace("`", "").replace("\n", " ").replace("\r", " ")[:300]
++    return FAIL_NOTE.format(what=what, repo=where, why=why)
++
++
++def _role_text(r) -> str:
++    """lumos 失敗分支(超時、沒有圖譜、base 不在主線)也會印帶 role_text 的 JSON;讀得到就回它,讀不到回空字串。"""
++    t = _last_json(r).get("role_text")
+     return t if isinstance(t, str) else ""
+ 
+ 
+ def find_spec_marker(prompt: str) -> str | None:
+     for line in prompt.split("\n"):
+         m = SPEC_RE.match(line.strip())
+         if m:
+             return m.group(1)
+     return None
+ 
+@@ -408,22 +453,23 @@ def main() -> int:
+             import sys as _s2, pathlib as _p2
+             _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
+             from _hookevent import mark as _mark
+             _mark("timeout", "lumos dispatch-lens 逾時,附了說明行")
+         except Exception:
+             pass
+         return 0
+ 
+     if r.returncode != 0:
+         _role = _role_text(r)
+-        if _role:   # 圖譜那段失敗,角色卡照附(角色不需要圖譜)
+-            _emit_updated(tool_input, prompt, _role)
++        _note = _fail_note(r, rng, repo)   # 範圍算不出來才有;說明在前、角色卡在後
++        if _note or _role:   # 圖譜那段失敗,角色卡照附(角色不需要圖譜)
++            _emit_updated(tool_input, prompt, "\n\n".join(x for x in (_note, _role) if x))
+         _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},{'只附角色卡' if _role else '放行'}")
+         return 0
+     try:
+         data = json.loads(r.stdout.strip().splitlines()[-1])
+     except (ValueError, IndexError):
+         _debug("回傳讀不懂,放行")
+         return 0
+     text = data.get("text") if isinstance(data, dict) else None
+     if not text:
+         _debug(f"固定席 0 篇(pinned={data.get('pinned') if isinstance(data, dict) else '?'}),不注入")
+diff --git a/scripts/lumos b/scripts/lumos
+index e745096a..fe840809 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -45537,51 +45537,64 @@ def _dispatch_lens_role_text(diff_range, repo, deadline):
+     if not (b and h):
+         return ""
+     # ★角色是附加提示,出任何錯都當沒有角色,不准拖垮圖譜那段★(代碼審 r1 正確性 F3)——這裡寬接是刻意的
+     try:
+         return _review_role_text(_review_roles(root, b, h, budget=_role_budget(deadline)))
+     except Exception as e:
+         print(f"提醒:角色鏡頭算不出來({e.__class__.__name__}),這次不附卡;圖譜那段照常", file=sys.stderr)
+         return ""
+ 
+ 
++def _dispatch_lens_fail(as_json, code, rc):
++    """範圍算不出來(三種)時,--json 印一行只帶固定字彙原因代碼的 JSON,掛鉤據此附一句說明、不再靜默放空
++    (Projects/派工鏡頭跨repo不再靜默_計劃:會談開在別的專案時範圍找不到,rtb 四輪派工全沒附)。錯誤原文照舊只進 stderr。"""
++    if as_json:
++        import json as _json
++        print(_json.dumps({"lens_fail": code}))
++    return rc
++
++
+ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
+     """派工鏡頭的圖譜那段(原 cmd_dispatch_lens 本體;快取、背景暖機、Codex 武裝都只存這段,不含角色段)。"""
+     import json as _json
+     import io, contextlib, time as _time
+     _t0 = _time.monotonic()   # v1.2:hook 內層 45 秒是總帳,備援段預算=45−已耗−保留
+     parts = _lens_range_ok(diff_range)
+     if parts is None:
+         print("擋下:範圍要長成 <base>..<head>(恰好一個 ..、兩端都有、不能是 ... 或 - 開頭)", file=sys.stderr)
+         return 2
+     base_ref, head_ref = parts
+     start = Path(repo) if repo else Path.cwd()
+     r = _lens_git(start, "rev-parse", "--show-toplevel")
+     if r is None or r.returncode != 0 or not r.stdout.strip():
+         print(f"擋下:{start} 不在 git 專案裡", file=sys.stderr)
+-        return 2
++        return _dispatch_lens_fail(as_json, "not_git", 2)
+     root = Path(r.stdout.strip())
+     if not _git_commit_exists(root, base_ref) or not _git_commit_exists(root, head_ref):
+         print(f"擋下:範圍 {diff_range} 有一端不是本地存在的 commit", file=sys.stderr)
+-        return 2
++        return _dispatch_lens_fail(as_json, "commit_missing", 2)
+     base_sha, head_sha = _lens_full_sha(root, base_ref), _lens_full_sha(root, head_ref)
+     if not base_sha or not head_sha:
+         print("擋下:sha 解析不到或格式不對", file=sys.stderr)
+-        return 2
++        return _dispatch_lens_fail(as_json, "sha_unresolved", 2)
+     ml = _mainline_ref(root)
+     if ml is None:
+         print("擋下:找不到主線(main/master 都沒有)", file=sys.stderr)
+-        return 4
++        return _dispatch_lens_fail(as_json, "no_mainline", 4)
+     anc = _lens_git(root, "merge-base", "--is-ancestor", base_sha, ml[1])
+-    if anc is None or anc.returncode != 0:
+-        print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base", file=sys.stderr)
+-        return 4
++    # 起點等於終點也擋:標記寫 `<base>..HEAD`、HEAD 卻在會談專案解讀成 base 本身(人在別的工作目錄做事)最常見;
++    # 照算只會附一段全零的備援段,看起來像「查過了、沒牽連」(2026-10-07 本工具鏈自己的代碼審就這樣放空)
++    bad = "base_not_mainline" if anc is None or anc.returncode != 0 else ("empty_range" if base_sha == head_sha else "")
++    if bad:
++        print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base" if bad == "base_not_mainline"
++              else f"擋下:範圍 {diff_range} 是空的(起點等於終點)", file=sys.stderr)
++        return _dispatch_lens_fail(as_json, bad, 4 if bad == "base_not_mainline" else 2)
+     # 表態記錄(表態閘 S8):有才附;快取 key 含它的 sha256
+     # 只讀本機 marker(marker_only):沒表態的分支不掃治理帳(r1 併發席 f6)。背景暖機那支從環境變數拿派工那一刻算好的 key,
+     # 不自己重算(r1 併發席 f7:中間有人重表態的話兩邊會寫到不同快取檔)。
+     _disp_rec = _codeloop_read_dispositions(root, _codeloop_git_branch(root), marker_only=True)
+     _disp_key = os.environ.get("LUMOS_LENS_DISP_KEY") if os.environ.get(_LENS_WARM_ENV) else None
+     if _disp_key is None:
+         _disp_key = ""
+         if _disp_rec:
+             import hashlib as _hl, json as _dj
+             _disp_key = _hl.sha256(_dj.dumps(_disp_rec, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d31213e4..bb1a4d1d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -38717,21 +38717,22 @@ def t_dispatch_lens_sanitized_output():
+     check("dispatch-lens: 框在最外層、標頭緊接在框之後",
+           len(_tl) >= 2 and _tl[0].startswith("─────") and _tl[1].startswith("lumos 自動附加:"),
+           "\n".join(_tl[:3]))
+ 
+ 
+ def t_dispatch_lens_base_and_zero():
+     import json as _json, subprocess as _sp
+     d, v = _mk_lens_repo()
+     # base 不在主線上(HEAD 在 feat)→ rc 4、不輸出
+     r = run(v, "dispatch-lens", "HEAD..HEAD", "--repo", str(d), "--json", "--no-cache")
+-    check("dispatch-lens: base 不在主線 rc=4 且不輸出", r.returncode == 4 and r.stdout.strip() == "", f"rc={r.returncode} {r.stdout[:80]!r}")
++    check("dispatch-lens: base 不在主線 rc=4、只印原因代碼(Projects/派工鏡頭跨repo不再靜默_計劃;原本什麼都不印)",
++          r.returncode == 4 and _json.loads(r.stdout.strip().splitlines()[-1]) == {"lens_fail": "base_not_mainline"}, f"rc={r.returncode} {r.stdout[:80]!r}")
+     # 只動 README 的範圍 → 0 固定席 → text 空
+     (d / "README.md").write_text("x\n", encoding="utf-8")
+     _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True); _sp.run(["git", "-C", str(d), "commit", "-qm", "readme"], capture_output=True)
+     _sp.run(["git", "-C", str(d), "checkout", "-q", "main"], capture_output=True)
+     _sp.run(["git", "-C", str(d), "cherry-pick", "feat"], capture_output=True)  # main 上多一個只改 README 的 commit
+     r = run(v, "dispatch-lens", "main~1..main", "--repo", str(d), "--json", "--no-cache")
+     data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+     check("dispatch-lens: 零固定席 rc=0、listed 0、★附既有相依備援段(v1.2)★", r.returncode == 0 and data.get("listed") == 0 and "圖譜沒有釘到節點" in data.get("text", "") and data.get("fallback_status") in ("attached", "attached-empty"), f"rc={r.returncode} {str(data)[:300]}")
+ 
+ 
+@@ -40647,20 +40648,93 @@ def t_review_role_warning_never_echoes_config_values():
+ def t_review_role_timeout_is_not_silent_and_budget_floor():
+     """[代碼審 r1 正確性 F2/外家 F3] 超時而且一支都沒判出來時要講一句,不能靜默;期限很短時角色至少有 1 秒。"""
+     m = _load_lumos_inproc()
+     res = {"roles": {"a.kt": None}, "counts": {"frontend": 0, "backend": 0, "unknown": 1}, "warnings": [], "capped": 0, "timed_out": True}
+     t = m._review_role_text(res)
+     check("超時且全判不出 → 角色段有一句說明", "超過時間上限" in t and "沒附卡" in t, repr(t))
+     check("期限 3 秒 → 角色預算至少 1 秒;期限 60 秒 → 3 秒;沒給期限 → 3 秒",
+           m._role_budget(3.0) >= 1.0 and m._role_budget(60.0) == 3.0 and m._role_budget(None) == 3.0, str((m._role_budget(3.0), m._role_budget(60.0))))
+ 
+ 
++def t_dispatch_lens_fail_reason_json():
++    """[S1] 派工鏡頭算不出範圍時 --json 印一行帶 lens_fail 的 JSON(固定字彙),回傳碼照舊;範圍格式不合法照舊什麼都不印;
++    不帶 --json 也照舊不印(Projects/派工鏡頭跨repo不再靜默_計劃:rtb 會談開在別的專案,四輪派工鏡頭都靜默放空)。"""
++    import json as _j, tempfile
++    d, v = _mk_lens_repo()
++    def js(r):
++        return _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
++    r = run(v, "dispatch-lens", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef..HEAD", "--repo", str(d), "--json", "--no-cache")
++    check("S1: 範圍有一端在這個專案不存在 → rc2、lens_fail=commit_missing", r.returncode == 2 and js(r).get("lens_fail") == "commit_missing", f"rc={r.returncode} {r.stdout[:200]!r}")
++    nd = tempfile.mkdtemp()
++    r = run(v, "dispatch-lens", "main..HEAD", "--repo", nd, "--json", "--no-cache")
++    check("S1: 指定目錄不在 git 專案裡 → rc2、lens_fail=not_git", r.returncode == 2 and js(r).get("lens_fail") == "not_git", f"rc={r.returncode} {r.stdout[:200]!r}")
++    r = run(v, "dispatch-lens", "HEAD..HEAD", "--repo", str(d), "--json", "--no-cache")
++    check("S1: base 不在主線 → rc4、lens_fail=base_not_mainline", r.returncode == 4 and js(r).get("lens_fail") == "base_not_mainline", f"rc={r.returncode} {r.stdout[:200]!r}")
++    r = run(v, "dispatch-lens", "main..main", "--repo", str(d), "--json", "--no-cache")
++    check("S1: 範圍是空的(起點等於終點;多半是 HEAD 在會談專案解讀成別的提交)→ rc2、lens_fail=empty_range",
++          r.returncode == 2 and js(r).get("lens_fail") == "empty_range", f"rc={r.returncode} {r.stdout[:200]!r}")
++    import subprocess as _sp
++    nm = Path(tempfile.mkdtemp())
++    for a in (("init", "-q", "-b", "develop"), ("config", "user.email", "t@t.t"), ("config", "user.name", "t"),
++              ("commit", "-q", "--allow-empty", "-m", "a"), ("commit", "-q", "--allow-empty", "-m", "b")):
++        _sp.run(["git", "-C", str(nm), *a], capture_output=True)
++    r = run(v, "dispatch-lens", "develop~1..develop", "--repo", str(nm), "--json", "--no-cache")
++    check("S1: 會談專案沒有 main/master 主線 → rc4、lens_fail=no_mainline(代碼審 r1 正確性席:同族靜默)",
++          r.returncode == 4 and js(r).get("lens_fail") == "no_mainline", f"rc={r.returncode} {r.stdout[:200]!r}")
++    r = run(v, "dispatch-lens", "main...HEAD", "--repo", str(d), "--json", "--no-cache")
++    check("S1: 範圍格式不合法 → rc2、照舊什麼都不印", r.returncode == 2 and r.stdout.strip() == "", r.stdout[:200])
++    r = run(v, "dispatch-lens", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef..HEAD", "--repo", str(d), "--no-cache")
++    check("S1: 不帶 --json → 照舊不印", r.returncode == 2 and r.stdout.strip() == "", r.stdout[:200])
++
++
++def t_dispatch_lens_hook_fail_reason_notice():
++    """[S2] 掛鉤收到非零回傳、JSON 帶認得的 lens_fail → 改派工詞附一行 LUMOS-LENS: 說明(範圍、會談專案路徑去換行、原因句、繞法),
++    角色卡照附在說明之後;沒有 lens_fail 或值不認得 → 照舊(只附角色卡或原樣放行)。"""
++    import json as _j, io as _io, os as _os
++    from unittest.mock import patch
++    hm = _load_hook_mod("dlens_fail_reason", "dispatch-lens-hook.py")
++    role = "[角色鏡頭] 這次改動:前端 1 支\n前端卡:\n- fe-race:x"
++    def fire(rc_, body, roles=False, rng="ce2a961f..HEAD", proj="/tmp/會談專案\n第二行"):
++        class R:
++            returncode = rc_
++            stdout = _j.dumps(body)
++            stderr = ""
++        out = _io.StringIO()
++        prompt = f"審查。\nLUMOS-IMPACT: {rng}\n" + ("LUMOS-ROLE-CARDS: on\n" if roles else "")
++        payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp/payload-cwd",
++                   "tool_input": {"prompt": prompt}}
++        with patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": proj}), \
++                patch.object(hm.subprocess, "run", lambda *a, **k: R()), patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), \
++                patch.object(hm.sys, "stdout", out):
++            hm.main()
++        return out.getvalue()
++    for rc_, code in ((2, "commit_missing"), (2, "not_git"), (4, "base_not_mainline"), (4, "no_mainline"), (2, "sha_unresolved"), (2, "empty_range")):
++        o = fire(rc_, {"lens_fail": code})
++        ok = "updatedInput" in o and "LUMOS-LENS:" in o and "ce2a961f..HEAD" in o and "/tmp/會談專案 第二行" in o and "lumos impact --diff" in o
++        check(f"S2: {code} → 附一行說明(範圍、會談專案路徑去換行、繞法)", ok, o[:400])
++    o = fire(2, {"lens_fail": "empty_range"})
++    check("S2: 說明講明標記終點要寫完整提交編號(HEAD 在會談專案解讀)", "完整提交編號" in o, o[:400])
++    # 代碼審 r1 兩席:說明行只准固定字彙與已驗證欄位——範圍不合保守字元集就不帶進說明;路徑去掉反引號、換行並截長
++    o = fire(2, {"lens_fail": "not_git"}, rng="x`id`$(id)..HEAD", proj="/tmp/a`b`" + "長" * 400)
++    note = _j.loads(o)["hookSpecificOutput"]["updatedInput"]["prompt"].split("LUMOS-LENS:", 1)[-1] if "LUMOS-LENS:" in o else ""
++    check("S2: 範圍帶反引號或 $( → 說明裡以 <範圍> 代替,路徑去反引號並截長(只看附加的說明,原派工詞照留)",
++          bool(note) and "<範圍>" in note and "$(id)" not in note and "`id`" not in note and "a`b`" not in note and "長" * 300 not in note, note[:500])
++    o = fire(2, {"lens_fail": "commit_missing", "role_text": role}, roles=True)
++    check("S2: 有角色卡 → 照附、在說明之後", "fe-race" in o and 0 <= o.find("LUMOS-LENS:") < o.find("fe-race"), o[:400])
++    o = fire(2, {"lens_fail": "xyz"})
++    check("S2: lens_fail 值不認得 → 原樣放行", "updatedInput" not in o, o[:200])
++    o = fire(2, {})
++    check("S2: 沒有 lens_fail(舊版 lumos)→ 原樣放行", "updatedInput" not in o, o[:200])
++    o = fire(2, {"role_text": role}, roles=True)
++    check("S2: 沒有 lens_fail、有角色卡 → 只附角色卡", "fe-race" in o and "LUMOS-LENS:" not in o, o[:300])
++
++
+ def t_dispatch_lens_hook_retries_without_role_flag_on_old_lumos():
+     """[代碼審 r1 外家 F2/正確性 F4] 新掛鉤配舊 lumos:舊版不認 --role-cards 回 rc2 空輸出 → 不帶旗標重叫一次,圖譜段照附。"""
+     import json as _j, io as _io
+     from unittest.mock import patch
+     hm = _load_hook_mod("dlens_retry", "dispatch-lens-hook.py")
+     seen = []
+     def fake_run(argv, timeout=None, **k):
+         seen.append(list(argv))
+         class R: pass
+         r = R()
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 62a7df4e..5a6c1f08 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -20,21 +20,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。擋在問閘、不在 `code-loop pass`:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+-   - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`;派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差/base 不在主線→靜默放行;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
++   - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(★不要寫 HEAD★:掛鉤在會談的專案目錄解讀它,你在另一個工作目錄做事時會算到別的提交);派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差→靜默放行;★範圍在會談專案算不出來(提交不存在、不是 git 專案、base 不在主線)→附一行 `LUMOS-LENS:` 說明★——會談開在別的專案、審另一個專案的分支時會這樣,照說明從開在目標專案的會談派席,或手動 `lumos impact --diff` 貼固定席;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - **角色鏡頭**:正確性席(standard 單席就是那一席)派工詞另留一行 `LUMOS-ROLE-CARDS: on`,hook 依這次改到前端或後端在框外附角色鏡頭卡(範本 §3 第 5 點;其他席不放這行;Codex 編排的代碼審目前不附,見 [[Projects/代碼審前後端角色鏡頭_計劃]] d4)。
+    - 另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。
+    - **席報告格式**以 lumos-design-loop `templates.md` 的卷證規則為唯一來源,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(反引號必加,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。派工詞照範本寫,收貨就不需要臨場轉格式。
+    - 允許席位做 git 實驗時,派工詞寫明一律 `git -C <臨時目錄>`、不准在 repo 根跑 commit / reset / restore / checkout / stash。
+    派工單落 `rN-dispatch.json`,頂層加 `"base_commit": "<git rev-parse HEAD 的 40 碼>"`(修正關卡的修正紀錄從這裡帶入 `base`)。
+ 3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先留在對話裡、不寫到硬碟,同輪全部交回才一次寫進卷證(lumos-design-loop templates.md §0)。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。全部到齊、寫進卷證之後,第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
+    - 記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行、或沒正規化(檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算)都 rc2。`lumos report-normalize <席報告>` 不帶 --write 先看差在哪。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。
+    - 可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現,跑得出來才撈回。
+    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index 61a56b35..7a4c5995 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -99,28 +99,28 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}
+ > 這欄只記辯方怎麼表態。用途=補 2026-08-22「辯方三分類先不做」裁定點名的缺口(帳無逐席對錯),
+ > 開始記,日後才能抽驗「標 evidence 降級的、後來證明是真的」有沒有——那就是那條裁定的重啟條件。
+ > 出處 [[Systems/finding-refute]]。
+ 
+ ## 3. Code-loop reviewer（sonnet;blocker/major 須附翻紅重現,已寫進下方派工詞）
+ 
+ ### §3 編排者派工前須知(不貼進派工詞)
+ 
+ 圖譜鏡頭(派工詞第 3 點)的標記行與 hook 行為:
+ 
+-★派工詞第 3 點的 `LUMOS-IMPACT:` 那行原樣留在派工詞裡(換成真實 base,例 `main..HEAD`)★★派工前一刻先敲一次 `lumos dispatch-lens <base>..HEAD` 暖快取(20 分內有效):10 個 commit 以上算一次約 25 秒起,hook 內層 45 秒超時會放空;2026-09-05 起超時會在派工詞尾端附一行固定說明,不再靜默★——派子代理那一刻,`dispatch-lens-hook`
++★派工詞第 3 點的 `LUMOS-IMPACT:` 那行原樣留在派工詞裡(換成真實範圍,終點寫完整提交編號,例 `main..3f2a…`(40 碼);不要寫 HEAD,理由見下方①)★★派工前一刻先敲一次 `lumos dispatch-lens <base>..HEAD` 暖快取(20 分內有效):10 個 commit 以上算一次約 25 秒起,hook 內層 45 秒超時會放空;2026-09-05 起超時會在派工詞尾端附一行固定說明,不再靜默★——派子代理那一刻,`dispatch-lens-hook`
+ 會把 `lumos impact --diff` 的固定席(帶硬合約或出過事故的筆記)接在派工詞尾端:前 8 篇貼節點路徑+
+ 相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行(★每條 ★INVARIANT★ 行帶綁定測試狀態:有/懸空/偽證據/裸合約,
+ 節點小計一行;「有」=測試方法存在,不代表跑過或有殺傷力——閘只看 rc★,v1.1),其餘只列名(d9 截錄)。內容一律從 base 讀、
+ 零自由文字(節點摘要/事故觸發字串/risk 標籤後綴都不印),這是有意砍掉的一句話層;唯一例外是帶 `[來源:外部]` 的外部事實行
+ (2026-10-03,[[Projects/外部回應碼語意要有出處_計劃]]):合約行後面另印,改動碰到外部回應碼比對時固定席之後再附自帶框的「外部碼表」補選段。
+ ★編排者要知道的三件事★(單源=[[Projects/派工鏡頭注入_計劃]]):
+-① 標記不在、格式差一個字、base 不在主線歷史上——hook 一律靜默放行;★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
++① 標記不在、格式差一個字——hook 一律靜默放行;★範圍在會談專案算不出來(有一端提交不存在、會談專案不是 git 專案、base 不在主線歷史上)會附一行 `LUMOS-LENS:` 說明(2026-10-07 起,[[Projects/派工鏡頭跨repo不再靜默_計劃]])★——掛鉤拿「會談開在哪個專案」去算,會談開在 A、審 B 的分支就會這樣,照說明從開在 B 的會談派席或手動 `lumos impact --diff` 貼固定席;★標記終點一律寫完整提交編號、不寫 HEAD★——HEAD 是在會談專案解讀的,人在另一個工作目錄做事時會解讀成別的提交,範圍算錯卻不報錯(2026-10-07 本工具鏈自己的代碼審就附了主線的改動);★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
+ 派工詞不會多任何東西;★固定席 0 篇不再靜默(v1.2)★:改附「圖譜沒有釘到節點」備援段——受影響測試/
+ 共改夥伴/呼叫者三格(全部只用主線樹算),那段不是合約、不必逐條答;派完看子代理回覆有沒有
+ 「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
+ ② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
+ ③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
+ ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
+ 標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
+ 子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
+ 讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。審查席身分:派工詞點名 `lumos_reviewer`(install 寫在 CODEX_HOME/agents/,0.153.2 實測有 agent_type 選得中、0.144.1 忽略)。★三席分流(2026-09-08 Enzo 裁;2026-09-11 Enzo 裁三席模型一律降到 gpt-5.6-sol,額度常撞上限)★——**點哪一席看你在審什麼**:
+ > ・**散文審(設計審、文件、spec)→ `lumos_reviewer`**(gpt-5.6-sol + medium)。也是預設。
+@@ -152,21 +152,21 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
+    · 寫一半：寫到一半被中斷（例外、被 kill、磁碟滿），留下什麼狀態？下次讀認得出、救得回嗎？錯誤訊息教的救法真的救得回嗎？
+    · 衍生資料：它是真相來源還是算出來的（快取、索引、彙總、狀態提示）？同一件事有多筆紀錄（重跑、重試、撤回）時取哪一筆？
+    · 時間：時間戳與日期比大小、判過期時，拿一個具體時刻走一遍（例如台北凌晨 1 點＝UTC 的前一天）；時鐘倒退、兩台機器時間不一致呢？
+    · 不可逆：刪除、覆寫、截斷、搬移資料，會不會連帶動到不該動的？
+    每條 finding 講清「**哪個輸入、走到哪一行**會出錯」，不是只點名詞。
+    （風格好壞與架構一致性歸架構對齊席，不在這鏡頭。）
+ 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
+    的讀 question 欄逐條判「真隱患/誤報」（真隱患必答對應提問）；source:"lint:..."
+    的讀 message。manifest 命中位置是注意力導引，不是全部——散文外的 hunk 也要自己看。
+ 3. **圖譜鏡頭——這次改動牽連到的筆記**:
+-LUMOS-IMPACT: {base}..HEAD
++LUMOS-IMPACT: {base}..{head 完整提交編號}
+    派工時 hook 會在尾端附上固定席筆記(帶硬合約或出過事故的節點)。
+    逐條判:這份 diff 會不會破壞該節點宣稱的行為或合約?**固定席必答**(可分組摘要,
+    判「不影響」也要寫一句為什麼)。這些筆記記的是「為什麼這樣設計、哪裡不能碰、以前
+    在這裡出過什麼包」——**是 code 本身讀不出來的東西**。
+    若尾端是「圖譜沒有釘到節點」備援段,那段不是合約、不必逐條答。
+ 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
+ 5. **角色鏡頭——依改到前端或後端附的卡**:
+ LUMOS-ROLE-CARDS: on
+    派工時 hook 依這次改到前端還是後端,在尾端「參考資料」框外附前端卡或後端卡(全端兩張都附、判不出就不附;
+    卡片內容單源在 lumos 本體 `_ROLE_CARDS`,這裡不複製)。照卡上的題逐一挑一個具體輸入走一遍;
+@@ -324,21 +324,21 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文);要做實驗就寫到 /tmp/
+ 
+ ```
+ LUMOS-SEAT: {loop}/{rN}/{席名}
+ (實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
+ 你是架構對齊審查員。你唯一的工作:判這份 diff(或設計)有沒有「跟這個專案既有的做法不一樣」。
+ 不找 bug(別的審查員管),不評風格好壞——只管「一不一致」。
+ 
+ 被審材料:{工作副本路徑}
+ 同層最相似的既有檔(對照用,這些代表專案現在的寫法):{鄰居檔清單,pitfalls --diff 會吐}
+ 這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms / java-idioms / dart-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
+-圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..HEAD`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:留一行 `LUMOS-SPEC: <計劃.md>`,hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
++圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..{head 完整提交編號}`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:留一行 `LUMOS-SPEC: <計劃.md>`,hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
+ 
+ 三問(設計審多第四問),逐問答、每問附對照的 file:line:
+ 1. 分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟鄰居檔一樣嗎?有沒有跨層直呼(例:UI 直接打 DB、Service 直接 new 另一個 Service)?
+ 2. 命名與錯誤處理:命名慣例、例外/錯誤回傳方式、日誌方式,跟鄰居檔一樣嗎?
+ 3. 第二種做法:這份 diff 有沒有引入專案裡原本沒有的做法(新的 DI 方式、新的狀態管理、另一套 HTTP client、自創的工具函式而鄰居已有同功能)?
+ 4. (設計審才問)落點合不合理:計劃的 lands_in 列了現況要寫進哪幾篇——該寫進既有那篇,還是另開一篇?派工詞尾端的「落點現況」列了每篇掛幾份計劃、幾行 KEY、管幾支檔;一篇已經很大、或要塞進的東西超出它的負責範圍,就該另開(每支檔有家,2026-09-11)。
+ 
+ 跟棧別檢核題撞到時(2026-09-09 起,Projects/兩席相反時端出張力_計劃):派工單附的表態記錄裡若有 `status=tension` 的題,
+ 那是作者已經看見兩邊——既有寫法 X(existing)、隱患 Y(hazard)、建議 Z(suggestion)、這次選了哪邊(chosen)。
+ 你的工作是查這四欄真假:existing 指的檔真的那樣寫嗎(開檔對照)、hazard 在這份 diff 裡真的成立嗎、suggestion 在這專案可行嗎、
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 752a66db..3a8fd2ae 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -19,21 +19,21 @@
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"`;只想驗剛加的那條:kill-add 加 `--try` 當場只跑它,或 `lumos guard kill <節點> --id <短身分>` | 相關有效壞法後須由目標行為斷言翻紅；仍綠只證未偵測此錯誤，等價／未跑／無效錯誤不能直接推論測試無效；判讀詳本頁末尾指向的§3.1第0步;`--try` 的結果是弱證據(筆記還沒提交),合約背書不採信,提交後照它印的那行再跑一次 | — |
+ | 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add --try`(當場只跑新的那條),提交後跑 `lumos guard kill <節點> --id <短身分>` | 移除前印出那條完整內容與範本(--old、--new 都要照現在的程式重填,原樣貼待填字樣會被擋);短身分至少 8 字元,對到不同的多條會擋下;不帶 --id 跑一次列出這篇每條的短身分,guard kill 每條結果行的 id= 也是 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「`lumos doctor` 的 P2 段說有配方最近一次真跑判 survived」 | 照那行的 `lumos guard kill <節點> --id <短身分>` 重跑;確定那條壞法本來就殺不掉(不是測試漏洞)才照第二個指令 kill-rm | 只看每條配方最近一次的結果,原文對不上的那段列過的不重複列;行尾寫「證據弱」或「之後改過」的先重跑;之後補強過測試的也先重跑(這種情況工具判不出來) | 原文對得上卻殺不掉,P2 原本看不出來,只有跑整篇 guard kill 才發現 |
+ | 「配方驗的測試不在合約的測試清單上(kill-add 提醒、`lumos doctor` 的 P2 段)」 | 照提醒的修法:要讓推送閘也守它就貼那行 `lumos guard bind`;清單外那支不該用就 kill-rm 後改用清單上那支重新 kill-add;講平台不同的,kill-rm 後帶 `--platform` 重新 kill-add | 綁上後這條合約有多支測試,之後 kill-add 不帶 `--test` 會要你指明;方法名不是識別字(反引號名、含點)的 bind 綁不了;清單外那支是不是刻意更細的測試由人判 | 合約清單是推送前會真跑的測試,配方驗的是另一支時,殺傷力證明的不是推送閘守的那支 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+-| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
++| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(不寫 HEAD:它在會談的專案目錄解讀),hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;hook 拿會談的專案目錄算,範圍在那裡算不出來會附一行 `LUMOS-LENS:` 說明、不附節點;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 綠 rc0/紅 rc1 | 紅了沒人知道 |
+ | 「推新分支時,推送前的閘拿哪一段當這次的改動?」 | 推送前掛鉤自動叫;手動查 `lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <遠端 ref>` | 印一行範圍:跟主線的分岔點..頂端;頂端已在主線印頂端..頂端;判不了印空樹..頂端(多擋) | 新分支首推把整個 repo 當新改動誤擋 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+ | 「這輪代碼審修完了,派下一輪前驗一下修法」 | 修完先提交,寫 `governance/review-reports/<編號>/rN-fix.json`(骨架 `lumos loop fix-check <編號> --round rN --record-template`),再在背景跑 `lumos loop fix-check <編號> --round rN`;跳過用 `LUMOS_SKIP_FIX_CHECK=1`(會記帳) | 0 過/1 沒過(列哪一項)/2 輸入錯;約 5 分鐘 | 修補自己弄出的新 bug 留到下一輪審查員才看到;只提醒不擋,只驗修正後是綠的 |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+ 
+ ## 筆記內容審:新寫的筆記是不是程式碼推得出來(推送前)

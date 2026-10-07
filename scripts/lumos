@@ -45892,6 +45892,17 @@ def _dispatch_lens_role_text(diff_range, repo, deadline):
         return ""
 
 
+def _dispatch_lens_fail(as_json, code, rc):
+    """範圍算不出來(六種,代碼見掛鉤的 LENS_FAIL_REASONS)時,--json 印一行只帶固定字彙原因代碼的 JSON,掛鉤據此附一句說明、不再靜默放空
+    (Projects/派工鏡頭跨repo不再靜默_計劃:會談開在別的專案時範圍找不到,rtb 四輪派工全沒附)。錯誤原文照舊只進 stderr。
+    ★形狀跟同指令的 spawn_error/lock_error 列不同是刻意的★(代碼審 r3 架構對齊席):那幾列各是單一狀況、用布林旗標當鍵;
+    這裡是同一種失敗的六個原因,用一個鍵帶代碼,掛鉤一處白名單查表——拆成六個布林鍵,掛鉤就要六個分支。新增原因加代碼,不加鍵。"""
+    if as_json:
+        import json as _json
+        print(_json.dumps({"lens_fail": code}, ensure_ascii=False))
+    return rc
+
+
 def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
     """派工鏡頭的圖譜那段(原 cmd_dispatch_lens 本體;快取、背景暖機、Codex 武裝都只存這段,不含角色段)。"""
     import json as _json
@@ -45906,23 +45917,27 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
     r = _lens_git(start, "rev-parse", "--show-toplevel")
     if r is None or r.returncode != 0 or not r.stdout.strip():
         print(f"擋下:{start} 不在 git 專案裡", file=sys.stderr)
-        return 2
+        return _dispatch_lens_fail(as_json, "not_git", 2)
     root = Path(r.stdout.strip())
     if not _git_commit_exists(root, base_ref) or not _git_commit_exists(root, head_ref):
         print(f"擋下:範圍 {diff_range} 有一端不是本地存在的 commit", file=sys.stderr)
-        return 2
+        return _dispatch_lens_fail(as_json, "commit_missing", 2)
     base_sha, head_sha = _lens_full_sha(root, base_ref), _lens_full_sha(root, head_ref)
     if not base_sha or not head_sha:
         print("擋下:sha 解析不到或格式不對", file=sys.stderr)
-        return 2
+        return _dispatch_lens_fail(as_json, "sha_unresolved", 2)
     ml = _mainline_ref(root)
     if ml is None:
         print("擋下:找不到主線(main/master 都沒有)", file=sys.stderr)
-        return 4
+        return _dispatch_lens_fail(as_json, "no_mainline", 4)
     anc = _lens_git(root, "merge-base", "--is-ancestor", base_sha, ml[1])
-    if anc is None or anc.returncode != 0:
-        print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base", file=sys.stderr)
-        return 4
+    # 起點等於終點也擋:標記寫 `<base>..HEAD`、HEAD 卻在會談專案解讀成 base 本身(人在別的工作目錄做事)最常見;
+    # 照算只會附一段全零的備援段,看起來像「查過了、沒牽連」(2026-10-07 本工具鏈自己的代碼審就這樣放空)
+    bad = "base_not_mainline" if anc is None or anc.returncode != 0 else ("empty_range" if base_sha == head_sha else "")
+    if bad:
+        print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base" if bad == "base_not_mainline"
+              else f"擋下:範圍 {diff_range} 是空的(起點等於終點)", file=sys.stderr)
+        return _dispatch_lens_fail(as_json, bad, 4 if bad == "base_not_mainline" else 2)
     # 表態記錄(表態閘 S8):有才附;快取 key 含它的 sha256
     # 只讀本機 marker(marker_only):沒表態的分支不掃治理帳(r1 併發席 f6)。背景暖機那支從環境變數拿派工那一刻算好的 key,
     # 不自己重算(r1 併發席 f7:中間有人重表態的話兩邊會寫到不同快取檔)。
