@@ -71434,6 +71434,106 @@ def t_doctor_s20_prose_retire_by_verdict_verb():
         check(f"{label}:{'列' if want else '不列'}", bool(got) == want, str(got))
 
 
+def _s21_cases(label, cases):
+    """S21 三支測試共用:每格 (說明, 來源句, X 全文或 None, 要不要列) → 在假圖譜跑 _doctor_revisit_ref_lines 逐格比。回 m 或 None。"""
+    m = _load_lumos_inproc()
+    root, _b = _tr_repo()
+    vault = root / "docs" / "kg-knowledge"
+    fn = getattr(m, "_doctor_revisit_ref_lines", None)
+    check(f"★前置★ {label}:有 _doctor_revisit_ref_lines", fn is not None, "")
+    if fn is None:
+        return None
+    for desc, src, xtext, want in cases:
+        texts = {"Projects/P_計劃.md": _S21_HEAD + src + "\n"}
+        if xtext is not None:
+            texts["Systems/X.md"] = _S21_HEAD + xtext + "\n"
+        got = fn(m.Env.from_texts(vault, texts))
+        check(f"{desc}:{'列' if want else '不列'}", bool(got) == want, str(got))
+    return m, vault
+
+
+_S21_HEAD = "---\ntype: project\nstatus: doing\nsummary: |-\n  WHY:x\n---\n# 標題\n"
+
+
+def t_doctor_s21_revisit_ref_dated():
+    """[A3 S1] doctor S21:「[[X]] … REVISIT 日期」(日期在 REVISIT 前或後、24 字內;REVISIT 與日期包在反引號裡也認)
+    而 X 沒有那天的回頭條件行 → 列;X 有那天的日期式、條件式 [by:]、或那天但已結案的行 → 不列(rtb 第三輪提案 A3)。
+    翻紅釘:不認 [by:] → ③紅;把已結案當沒有 → ④紅;剝掉行內程式碼才找 REVISIT → ②紅。"""
+    print("t_doctor_s21_revisit_ref_dated")
+    x = "REVISIT:2026-10-20 量一次"
+    r = _s21_cases("S1", [
+        ("①的 REVISIT 日期,X 沒有那天", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", x, True),
+        ("②既有那條 `REVISIT:日期`(包在反引號裡也認),X 沒有那天", "跟 [[Systems/X]] 既有那條 `REVISIT:2026-11-08` 量的是同一件事。", x, True),
+        ("③X 有條件式 [by:那天]", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", "REVISIT:[when-file:a.py][by:2026-11-08] 回頭", False),
+        ("④X 有那天但已結案", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", "REVISIT:2026-11-08 量 [closed:2026-10-01 已量過了]", False),
+        ("⑤日期寫在 REVISIT 前面,X 有那天", "由 [[Systems/X]] 的 2026-10-20 REVISIT 承接。", x, False),
+        ("⑥日期寫在 REVISIT 前面,X 沒有那天", "由 [[Systems/X]] 的 2026-11-08 REVISIT 承接。", x, True),
+        # 代碼審 r1 正確性席 F2:全形冒號後的日期要讀到(原本退化成「X 有任一條就不列」)
+        ("⑧全形冒號:REVISIT:日期,X 沒有那天", "見 [[Systems/X]] 的 REVISIT：2026-11-08 再量。", x, True)])
+    if r:
+        m, vault = r
+        got = m._doctor_revisit_ref_lines(m.Env.from_texts(vault, {
+            "Projects/P_計劃.md": _S21_HEAD + "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。\n", "Systems/X.md": _S21_HEAD + x + "\n"}))
+        check("⑦列出那行帶來源篇、行號、目標與日期",
+              bool(got) and "Projects/P_計劃.md:" in got[0] and "Systems/X" in got[0] and "2026-11-08" in got[0], str(got))
+
+
+def t_doctor_s21_revisit_ref_undated():
+    """[A3 S2] doctor S21:「回頭條件見/在/寫在/記在/放在 [[X]]」不帶日期,X 一條回頭條件行都沒有 → 列;有任一條(含已結案)→ 不列。"""
+    print("t_doctor_s21_revisit_ref_undated")
+    _s21_cases("S2", [
+        ("①回頭條件見 X,X 一條都沒有", "回頭條件見 [[Systems/X]]。", "沒有回頭條件", True),
+        ("②回頭條件記在 X,X 一條都沒有", "這件事的回頭條件記在 [[Systems/X]]。", "沒有回頭條件", True),
+        ("③回頭條件寫在 X,X 有一條(已結案也算)", "回頭條件寫在 [[Systems/X]]。", "REVISIT:2026-01-01 x [closed:2026-02-01 已處理完畢]", False),
+        ("④回頭條件在 X,X 有一條未結案", "回頭條件在 [[Systems/X]]。", "REVISIT:2026-10-20 量一次", False),
+        # 代碼審 r2 正確性席 F1:日期緊接在連結後、中間隔分號也要讀到(r1 把分號算句尾後切掉了)
+        ("⑤回頭條件見 X;日期,X 沒有那天", "回頭條件見 [[Systems/X]];2026-11-08。", "REVISIT:2026-10-20 量一次", True)])
+
+
+def t_doctor_s21_revisit_ref_excluded():
+    """[A3 S3] doctor S21 不列的情形:連結到 REVISIT 或日期之後 30 字內(到句號為止)有待辦指示詞、X 不存在、連結包在行內程式碼裡、
+    整句在圍欄裡;30 字之外的指示詞不排除(真懸空那句後半有「規則改成軟提醒」)。翻紅釘:不排除待辦指示 → ①②紅;看整句 → ③紅。"""
+    print("t_doctor_s21_revisit_ref_excluded")
+    x = "REVISIT:2026-10-20 量一次"
+    _s21_cases("S3", [
+        ("①待辦指示:REVISIT 之後 30 字內有「改寫」", "[[Systems/X]] 各有一條 `REVISIT:2026-11-08`,兩條都改寫成已由本計劃回答。", x, False),
+        ("②待辦指示:REVISIT 前面有「把…改成」", "[[Systems/X]] 把 11-01 那行 REVISIT 改成指向本計劃。", "沒有回頭條件", False),
+        ("③30 字之外的「改成」不排除", "跟 [[Systems/X]] 既有那條 `REVISIT:2026-11-08` 量的是同一件事,到期時用本口徑一次量、兩處合併,之後規則改成軟提醒。", x, True),
+        ("④連結包在行內程式碼裡(舉例)", "回頭條件在 `[[Systems/X]]` 的 REVISIT 2026-11-08。", x, False),
+        ("⑤整句在圍欄裡", "```\n見 [[Systems/X]] 的 REVISIT 2026-11-08\n```", x, False),
+        ("⑥X 不存在(壞連結歸既有檢查)", "見 [[Systems/X]] 的 REVISIT 2026-11-08。", None, False)])
+    # 代碼審 r2 正確性席 F2:連結跟 REVISIT 不跨句配對(;後面是本篇自己的回頭條件);r2 架構對齊席:句尾只准一份定義
+    r2 = _s21_cases("S3-r2", [("⑫連結與 REVISIT 隔著分號(本篇自己的回頭條件)", "沿用 [[Systems/X]] 的做法;REVISIT:2026-11-08 重看。", x, False)])
+    if r2:
+        m2 = r2[0]
+        check("⑬句尾只有一份定義(S21 與漂移檢查共用 _SENT_END_RE)",
+              not hasattr(m2, "_RREF_SENT_END_RE") and getattr(m2, "_DRIFT_M1_CUT_RE", None) is getattr(m2, "_SENT_END_RE", 0), "")
+    # 代碼審 r1 正確性席 F1、F4:待辦詞範圍不含連結本身的名稱;句尾除了。也認!?;
+    m = _load_lumos_inproc()
+    vault = _tr_repo()[0] / "docs" / "kg-knowledge"
+    for desc, src, tname, want in (
+            ("⑧連結名稱含「結案」,句子本身不是待辦", "見 [[Systems/結案X]] 的 REVISIT 2026-11-08 再量。", "Systems/結案X.md", True),
+            ("⑨回頭條件見名稱含「改成」的篇,那篇一條都沒有", "回頭條件見 [[Systems/改成X]]。", "Systems/改成X.md", True),
+            ("⑩分號斷句:下一句的「改成」不算", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量;另外把 Y 改成 Z。", "Systems/X.md", True)):
+        body = x if tname == "Systems/X.md" or "結案" in tname else "沒有回頭條件"
+        got = m._doctor_revisit_ref_lines(m.Env.from_texts(vault, {"Projects/P_計劃.md": _S21_HEAD + src + "\n", tname: _S21_HEAD + body + "\n"}))
+        check(f"{desc}:{'列' if want else '不列'}", bool(got) == want, str(got))
+    # 代碼審 r1 正確性席 F3:同一行大量行內程式碼加大量引用,判「在不在程式碼裡」原本每次掃全部區段,成平方
+    import time as _t2
+    e = m.Env.from_texts(vault, {"Projects/P_計劃.md": _S21_HEAD + "`a` [[Systems/X]] REVISIT 2026-11-08 " * 30000 + "\n", "Systems/X.md": _S21_HEAD + x + "\n"})
+    t0 = _t2.monotonic()
+    m._doctor_revisit_ref_lines(e)
+    check("⑪同一行三萬組行內程式碼加引用(5 秒內)", _t2.monotonic() - t0 < 5, f"{_t2.monotonic() - t0:.1f}s")
+    # ⑦效能:一行兩萬個 [[ 原本回溯成平方(85KB 要 41 秒);連結內文不收 [ 之後是線性
+    import time as _t
+    m = _load_lumos_inproc()
+    e = m.Env.from_texts(_tr_repo()[0] / "docs" / "kg-knowledge",
+                         {"Projects/P_計劃.md": _S21_HEAD + "[[" * 20000 + "REVISIT" + "]]" * 20000 + "\n", "Systems/X.md": _S21_HEAD})
+    t0 = _t.monotonic()
+    m._doctor_revisit_ref_lines(e)
+    check("⑦一行兩萬個 [[ 不回溯成平方(5 秒內)", _t.monotonic() - t0 < 5, f"{_t.monotonic() - t0:.1f}s")
+
+
 def t_doctor_s20_prose_retire_manual():
     """[C5 S1] doctor S20 散文撤除候選也看掛 [manual:] 的條款(rtb 2026-10-03 第三輪:Phase 13 七條子行寫撤除、主行掛 [manual:]
     沒標作廢,只看 [test:] 的偵測漏掉):整篇沒有 [test:] 也照看;[manual:] 已寫成已撤除、已標作廢、下一層沒寫撤除的不列;

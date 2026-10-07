@@ -414,6 +414,8 @@ def _inline_hidden(line):
     return merged, i >= 0
 WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+# 「句尾」的唯一定義:漂移檢查切小句(_DRIFT_M1_CUT_RE)與 doctor S21 判「同一句」共用;英文句點不算(路徑、版本號裡有)
+_SENT_END_RE = re.compile(r"[。;；!?！？]")
 TOP_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
 LIST_ITEM_RE = re.compile(r"^\s+-\s+(.*)$")
 QUOTED_DATE_RE = re.compile(
@@ -3010,6 +3012,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     except Exception as _e20:
         ok(f"測試綁定這段跳過(測試索引建不起來:{_e20.__class__.__name__})")
     print()
+    # 指向別篇的回頭條件(Projects/指向別篇的回頭條件懸空_計劃,rtb 第三輪提案 A3):不計入問題數、不寫帳(同 S17 到 S20)
+    section("S21", "指向別篇的回頭條件還在不在(「[[X]] 的 REVISIT 日期」「回頭條件見 [[X]]」;提醒,不擋)")
+    _rr21 = _doctor_revisit_ref_lines(env)
+    if not _rr21:
+        ok("指向別篇的回頭條件都還在")
+    else:
+        warn_soft(_rr21, f"{len(_rr21)} 處指向別篇的回頭條件已不在(不計入問題數):",
+                  "改指到那篇現在的那條回頭條件;那件事已不用回頭看,就把這句改寫成已處理(寫明哪天、怎麼處理的)")
+    print()
 
     # ── 每支檔有家的舊帳(2026-09-11,Projects/每支檔有家_計劃 [S28]):排在合約條數那段之後、[H] 之前——
     # 軟段截斷那支測試切的是 [S] 到 [E1],插進那個窗口會被數進去而翻紅(鄰居三段同一條位置紀律)。
@@ -4050,6 +4061,82 @@ def _doctor_replacement_lines(env):
                 out.append(_esc_clean(f"{rel}:{no}:[被取代:{v[:40]}] {why}", _DOCTOR_LINE_MAX))
     return out
 
+
+
+# doctor S21(Projects/指向別篇的回頭條件懸空_計劃):句子指向別篇的某條回頭條件,那篇已經沒有那條 → 列。
+_RREF_LINK = r"\[\[([^\[\]|#\n]+)(?:[|#][^\[\]\n]*)?\]\]"   # 內文不收 [:一行一堆 [[ 時不回溯成平方
+_RREF_NOT_END = r"[^\n\[" + _SENT_END_RE.pattern[1:-1] + "]"           # 同一句:不跨句尾、不跨下一個連結
+_RREF_DATED_RE = re.compile(_RREF_LINK + "(" + _RREF_NOT_END + r"{0,24}?)REVISIT")   # [[X]] … REVISIT(日期在前或在後)
+_RREF_SEE_RE = re.compile(r"回頭條件" + _RREF_NOT_END + r"{0,4}?(?:見|在|寫在|記在|放在)[ \t]*" + _RREF_LINK)
+_RREF_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_RREF_AFTER_DATE_RE = re.compile(r"[`*:：;；,，\s]*(" + _RREF_DATE_RE.pattern + ")")  # 緊接著的日期:中間隔冒號、分號、逗號都認(r1、r2 正確性席)
+_RREF_TODO_RE = re.compile(r"改寫|改成|改指向|拿掉|刪掉|移除|結案")
+_RREF_TAIL = 30
+
+
+def _revisit_ref_dates(text):
+    """一篇筆記全部回頭條件行的日期 → (日期集合, 行數)。已結案的也算(本段只管「被刪掉」,結案歸結案連帶掃描);
+    條件式取 [by:]。讀法共用 _revisit_all_lines。"""
+    rows = _revisit_all_lines(text)
+    return {d for _no, kind, d, *_r in rows if kind != "bad" and d}, len(rows)
+
+
+def _rref_window(raw, a, b, link):
+    """待辦詞要看的那段:從比對起點 a 到終點 b 之後 30 字、到句尾為止,★扣掉連結本身★(名稱裡的「結案」不算,r1 正確性席 F1)。"""
+    ls, le = link
+    return _SENT_END_RE.split(raw[a:ls] + raw[le:b + _RREF_TAIL], maxsplit=1)[0]
+
+
+def _revisit_ref_hits(raw):
+    """一行可見文字裡指向別篇回頭條件的引用 → [(目標, 日期或 None)]。連結本身在行內程式碼裡的不算(舉例);
+    REVISIT 與日期包在反引號裡照認。從連結到 REVISIT(或日期)之後 30 字內、到句號為止有待辦指示詞的不算(那是要去改它)。"""
+    import bisect
+    hidden = _inline_hidden(raw)[0]
+    starts = [a for a, _b in hidden]
+    def _in_code(i):        # 區段由左到右、不重疊 → 二分找(原本每次掃全部區段,一行三萬組要 35 秒;r1 正確性席 F3)
+        k = bisect.bisect_right(starts, i) - 1
+        return k >= 0 and i < hidden[k][1]
+    out = []
+    for m in _RREF_DATED_RE.finditer(raw):
+        after = _RREF_AFTER_DATE_RE.match(raw, m.end())
+        mid = _RREF_DATE_RE.search(m.group(2))
+        end = after.end() if after else m.end()
+        out.append((m, m.start(), end, (m.start(), m.start(2)), (after.group(1) if after else (mid.group(0) if mid else None))))
+    for m in _RREF_SEE_RE.finditer(raw):
+        after = _RREF_AFTER_DATE_RE.match(raw, m.end())          # 緊接著的日期先認,再找同一句後面 40 字內的
+        d = after or _RREF_DATE_RE.search(_SENT_END_RE.split(raw[m.end():m.end() + 40], maxsplit=1)[0])
+        out.append((m, m.start(), after.end() if after else m.end(), (raw.rfind("[[", 0, m.start(1)), m.end()),
+                    (d.group(1) if after else d.group(0)) if d else None))
+    res = []
+    for m, a, b, link, date in out:
+        if _in_code(m.start(1)) or _RREF_TODO_RE.search(_rref_window(raw, a, b, link)):
+            continue
+        res.append((m.group(1).strip(), date))
+    return res
+
+
+def _doctor_revisit_ref_lines(env):
+    """doctor S21 → 要列的行:句子指向別篇的回頭條件,那篇沒有那天的回頭條件行(帶日期的)、或一條都沒有(不帶日期的)。
+    目標不存在不列(壞連結由既有檢查管);只提醒、不計入問題數、不寫治理帳(同 S17 到 S20)。印出前清控制字元。"""
+    out, cache = [], {}
+    for rel in sorted(env.notes):       # 同 S17 到 S20 排序:列出被截斷時各機器看到的前幾條一樣(r1 架構對齊席 A4)
+        text = env_text(env, rel)
+        if not text or ("REVISIT" not in text and "回頭條件" not in text):
+            continue
+        for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
+            for tgt, date in dict.fromkeys(_revisit_ref_hits(raw)):
+                trel = env.resolve(link_target(tgt))      # 同 S17 先過 link_target(去引號、.md、nfc;r1 架構對齊席 A2)
+                if trel is None:
+                    continue
+                if trel not in cache:
+                    cache[trel] = _revisit_ref_dates(env_text(env, trel) or "")
+                dates, n = cache[trel]
+                if (date in dates) if date else n:
+                    continue
+                why = f"那篇沒有 {date} 的回頭條件行" if date else "那篇一條回頭條件行都沒有"
+                out.append(_esc_clean(f"{rel}:{no}:指向 [[{tgt}]] 的回頭條件{(' ' + date + ' ') if date else ''}已不在({why})",
+                                      _DOCTOR_LINE_MAX))
+    return out
 
 _METRIC_CMP = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b, ">": lambda a, b: a > b,
                ">=": lambda a, b: a >= b, "==": lambda a, b: a == b}
@@ -35509,26 +35596,32 @@ def _revisit_misplaced_lines(text):
     return out
 
 
-def _revisit_lines(text):
-    """一篇筆記的每一條回頭條件 → [(行號, 種類, 日期或 None, 摘要, 原文)];種類 date/cond/bad(同 _revisit_split)。
-    剝程式碼區(_search_visible_lines)、餵剝過行內程式碼的那一版給 _revisit_split。doctor E5 與 set 把 Issue 結案時的列出
-    共用這一支(存量漂移改法 第 6 節);乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。
-    已寫合格結案標記的行不回(兩個呼叫端都要排除,不另加參數)。"""
+def _revisit_all_lines(text):
+    """一篇筆記的每一條回頭條件,★含已結案★ → [(行號, 種類, 日期或 None, 摘要, 原文, 已結案)];種類 date/cond/bad(同 _revisit_split)。
+    剝程式碼區(_search_visible_lines)、餵剝過行內程式碼的那一版給 _revisit_split——「讀回頭條件行」的唯一一份:
+    _revisit_lines(E5、set 結案列出)濾掉已結案的,doctor S21(指向別篇的回頭條件還在不在)全部都要(代碼審
+    code-指向別篇的回頭條件懸空 r1 架構對齊席:原本 S21 另抄一份迴圈)。乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。"""
     out = []
     for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
         probe = _strip_inline_markup(raw)[0]
         kind, rest = _revisit_split(probe)
         if kind is None:
             continue
-        if kind != "bad" and _revisit_closed(probe)["closed"]:
-            continue        # 合格結案的不回(E5 不唸、Issue 結案不列;回頭條件寫法補齊〈做法〉2.4)
+        closed = kind != "bad" and bool(_revisit_closed(probe)["closed"])
         date, summ = None, ""
         if kind == "cond":
             date, summ = _probe_parse(rest)["by"], _PROBE_LEAD_RE.sub("", rest)
         elif kind == "date":
             date, _sp, summ = rest.partition(" ")
-        out.append((no, kind, date, summ.strip(), raw))
+        out.append((no, kind, date, summ.strip(), raw, closed))
     return out
+
+
+def _revisit_lines(text):
+    """一篇筆記的每一條沒結案的回頭條件 → [(行號, 種類, 日期或 None, 摘要, 原文)]。doctor E5 與 set 把 Issue 結案時的列出
+    共用這一支(存量漂移改法 第 6 節);讀法在 _revisit_all_lines。
+    已寫合格結案標記的行不回(兩個呼叫端都要排除;回頭條件寫法補齊〈做法〉2.4)。"""
+    return [row[:5] for row in _revisit_all_lines(text) if not row[5]]
 
 
 def _closing_revisits(env, rel, new_status):
@@ -38574,7 +38667,7 @@ _DRIFT_M1_RETIRE_WORDS = ("撤除", "撤掉", "作廢", "已失效", "已過時"
 _DRIFT_M1_NOT_YET_RE = re.compile(r"(尚未|還沒|未)(撤除|撤掉|作廢|失效|取代|凍結|結案)")
 _DRIFT_M1_SCOPE_WORDS = ("下面", "以下", "本節", "這一節", "整篇", "之後")
 _DRIFT_M1_HEAD_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-_DRIFT_M1_CUT_RE = re.compile(r"[。;；!?！？]")
+_DRIFT_M1_CUT_RE = _SENT_END_RE      # 句尾定義在檔案前段(doctor S21 也用)
 # 文字抽定義:跟 _drift_py_def_re(name, test=False) 同一組形狀(任何縮排的 def/class/async def,不縮排的「名 =」
 # 「名: 型別 = 值」),加 add_argument( 後面緊接的引號旗標;t_drift_m1_unparsable_files 釘兩者對同一批名稱判斷一致
 _DRIFT_M1_TEXT_DEF_RE = re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)|^(\w+)[ \t]*(?::[^=\n]*)?=(?!=)", re.M)
