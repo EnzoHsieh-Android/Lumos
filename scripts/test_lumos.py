@@ -27500,6 +27500,27 @@ def t_ci_rerun_latest_attempt_wins():
     check("④ 開場提醒:別的執行真的紅,照舊喊", "CI 是紅的" in h.stdout and "Lint" in h.stdout, h.stdout[:300])
 
 
+def t_ci_wait_short_sha_resolved():
+    """ci-wait --sha 給短版:先在本機換成完整提交編號再去查 CI(GitHub 用完整 sha 篩,短的永遠查不到、等到逾時判 no-run;
+    rtb 2026-10-07 回報);本機找不到的 sha → rc2 講清楚。翻紅釘:不換完整 sha → ①紅;找不到照查 → ②紅。"""
+    print("t_ci_wait_short_sha_resolved")
+    import json as _json, subprocess as _sp
+    green = [{"databaseId": 1, "attempt": 1, "status": "completed", "conclusion": "success",
+              "displayTitle": "ok", "url": "u1", "workflowName": "CI"}]
+    stub = (_GH_STUB_HEAD + f"RUNS_FIRST = {green!r}\nRUNS_LATER = {green!r}\n".replace("'", '"')
+            + "\nif args[:2] == [\"run\", \"list\"]:\n    print(json.dumps(RUNS_FIRST))\n    sys.exit(0)\nsys.exit(0)\n")
+    root, v, env = _mk_ci_env(stub)
+    env["GH_STATE"] = str(root / "st")
+    full = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    r = _ci_run(root, v, env, "ci-wait", "--json", "--grace", "0", "--sha", full[:8])
+    d = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    check("①短 sha → 換成完整 sha 再查", r.returncode == 0 and d.get("sha") == full, f"{r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
+    r = _ci_run(root, v, env, "ci-wait", "--json", "--sha", "deadbeef")
+    check("②本機找不到的 sha → rc2、講清楚(列出幾種可能)", r.returncode == 2 and "完整" in r.stderr and "git fetch" in r.stderr
+          and "不只一個" in r.stderr, f"{r.returncode} {r.stderr[-300:]}")
+    print("  ✓ t_ci_wait_short_sha_resolved")
+
+
 def t_ci_wait_rerun_records_latest_attempt():
     """真的走一次:第一次 ci-wait 記下紅,重跑後再 ci-wait 記下第 2 次嘗試的綠,ci-status 就該報綠。
 
