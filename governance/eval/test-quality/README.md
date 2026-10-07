@@ -19,3 +19,13 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 固定故障只停用兩個掃描器辨識分支，各選一條已有獨立預期值的 CLI 行為考卷；保存基準綠、目標斷言紅、還原綠及來源 hash。它不接受任意測試命令或生產環境操作。
 
 後續手冊效果實驗須固定開發題、模型、起始程式與故障評分器，兩臂只有是否讀新規範不同；保留輸出與重複次數。這個固定語法考卷不是該實驗，也不提供跨真實專案的誤報率。
+
+## 手冊效果試行
+
+`handbook-baseline.md`、`handbook-candidate.md` 與 `handbook-manifest.json` 是凍結實驗材料；政策仍以共用手冊為單一來源，候選文字依證據決定是否採用。
+
+離線驗評分器：`python3 -m unittest discover -s governance/eval -p test_test_quality_handbook.py -v`。
+
+執行固定模型兩臂（會使用 Claude 配額）：`python3 governance/eval/test_quality_handbook.py --run --out /tmp/handbook-new-run`。`--lane behavior` 只跑行為題，`--lane trigger` 只跑入口模擬；輸出目錄必須為新目錄，保存原始事件、材料摘要、測試與故障結果。
+
+入口模擬用明示技能目錄與 Read，非原生 Skill 調用；行為題強制載入規範。生成測試僅允許固定 unittest 語法子集，超出者列無效；此 runner 不是通用程式沙盒。人工敘述核對是探索性觀察；機械評分不讀 arm 或文字說明，只看固定斷言紅綠。首批不完整場次按 instrument-disposal 排除，不能直接累加所有 results.json 的 valid 數。
