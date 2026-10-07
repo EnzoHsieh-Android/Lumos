@@ -85,6 +85,8 @@ assert total_price(quantity=3, unit_price=5) == 15
 
 這個案例只是起點；折扣、空訂單與錯誤輸入等行為仍要依需求補齊。Lumos 要求開發時先說清楚「輸入、預期結果、判準來源、應抓到的錯誤」，修 bug 與關鍵守衛還要確認故障真的能讓目標斷言翻紅，再還原跑綠。結構與接線檢查可以保留，但不能取代行為驗證。
 
+**能抓到程式被改壞，不等於預期答案正確。** 程式與測試可能一起抄錯需求；先核對獨立答案來源，再看相關故障紅→還原綠。疑似綁死實作的行為測試，另驗保持行為的重構仍綠。各棧的撰寫流程、工具資格考卷與證據邊界見 [測試品質接入標準](skills/lumos-project-notes/commands/test-quality-standard.md)。
+
 完整做法見 [實作測試品質](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質)，開發與審查工作指引共用這份規範。這是開發及審查要求；自動檢查紀錄格式，不能替人判斷測試是否真的有用。
 
 工具鏈來源 repo 提供唯讀試行掃描：`python3 scripts/test_quality_scan.py <測試檔或目錄> --json`。Python 可找四類可疑寫法；其他語言選配本機 Semgrep，先找特定斷言的自比。工具只列候選與未分析範圍，**零命中不能當成品質通過**。用法與支援邊界見 [事後掃描手冊](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描工具鏈來源-repo)。

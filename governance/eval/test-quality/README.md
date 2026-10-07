@@ -62,3 +62,9 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 ## 不同失效形態歷史案例集
 
 `python3 governance/eval/historical_case_corpus.py --out /tmp/history-corpus-new` 固定重播鎖、Java測試辨識、文件圍欄復原三案各四組。鎖只當控制，後兩案才是新效果候選；不呼叫模型。需完整本地git歷史及固定審查patch；Java錯版從base+patch重建，完整blob必須吻合。manifest在執行前保存斷言數和失敗索引，12組全符合才資格通過；原／實跑測試、來源SHA與原始結果均輸出。首批選錯Java修復端點的紀錄保留，使用v2通過批。這是Python工具鏈測試的歷史案例資格，不是Java/Android原生測試執行或手冊效果。
+
+## 判準、故障與重構的互補實驗
+
+`python3 governance/eval/test_quality_evidence.py --out /tmp/evidence-new-run`：輸出目錄必須全新，只執行固定可信來源，Python unittest與選配Node assert，不接受模型輸出或任意命令。事前凍結需求與25格預期；兩語言各25格，另各3次錯誤規則完整還原循環，共56次。缺Node或結果偏離回傳2，不能默算通過。
+
+卷證見 governance/review-reports/test-quality-three-evidence/run-v2；run-v1保留為未增加明確錯版還原循環的中間版本，不能拿它核對最終runner hash。這是固定機制證據，不是模型效果或各棧完整資格。結論與接入考卷見共用手冊的 test-quality-standard.md。

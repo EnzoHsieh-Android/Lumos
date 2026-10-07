@@ -26,6 +26,8 @@
 | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
 | 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆;直接硬讀 code 會漏承重牆與 why |
 
+寫測試或接各技術棧的測試品質工具：先讀 [測試品質接入標準](test-quality-standard.md)，再依專案 runner 保存證據。
+
 ## 二、九類子檔(按情境分)
 
 | 你正在… | 開這個子檔 | 裡面有 |
