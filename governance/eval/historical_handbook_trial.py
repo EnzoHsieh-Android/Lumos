@@ -28,6 +28,16 @@ s.lock() 是被測歷史 _vault_write_lock 的 context manager；s.fallback_read
 固定可執行語法：with fixture("normal"或"cache-moved") as s、with s.lock()、pass，以及 self.assertTrue/assertFalse/assertEqual/assertGreater(s.fallback_ready()/s.held()/s.external_written(), 字面值)。可省略斷言第二參數。可巢狀 with，不用迴圈/變數赋值/其他API/import/函式/例外捕捉/檔尾main。
 fixture 的 s.lock() 最多等待2秒，無法進入時記錄具體取鎖失敗並拋 AssertionError；程序15秒上限只是執行器防卡，不算測試檢出。'''
 
+LEAN_API = '''測試介面：from subject import fixture。
+fixture("normal") 或 fixture("cache-moved") 提供隔離的筆記庫與家目錄設定，with fixture(...) as s 使用。
+s.lock() 是鎖的 context manager；s.fallback_ready() 查主要快取路徑是否不可信；s.held() 查鎖是否存在；s.external_written() 查外部快取目錄是否有鎖寫入。
+輸出 unittest.TestCase 的 test_ 方法，只 import unittest 與 from subject import fixture。
+可執行語法：with fixture(...) as s、with s.lock()、pass、self.assertTrue/assertFalse/assertEqual/assertGreater 搭配以上查詢及字面值。with 可依 Python 語法組合。測試用名稱 self 與 s，不使用其他變數、迴圈、額外呼叫或匯入；可含標準 main 尾段。
+fixture 有取鎖等待上限；取鎖失敗回報 AssertionError。程序逾時、語法或環境錯誤列無效。'''
+LEAN_TASK = '''請為笔記修改的鎖加實際有用的測試，自行選擇情境。
+需求：同一程序對同一筆記庫可重入；使用者可以搬移快取目錄，這項設定下仍須保持鎖的行為，鎖只寫在可信位置；使用完應釋放。
+最後只輸出一個 python code fence。implementation.txt 是目前實作的程式投影（去除註解與文件字串）；先讀。沒有執行工具或驗證回饋。'''
+
 
 def validate(code):
     tree = ast.parse(code)
@@ -190,6 +200,7 @@ def main():
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--controls', action='store_true')
     parser.add_argument('--run', action='store_true')
+    parser.add_argument('--prompt-profile', choices=['explicit', 'lean'], default='explicit')
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     if args.child:
@@ -224,8 +235,16 @@ def main():
     source = history.historical_file(history.VERSIONS['faulty'], 'scripts/lumos')
     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == '_vault_write_lock')
     visible = ast.get_source_segment(source, node)
+    api = API
     prompt = API + '\n請為此內部鎖合約補實際有用的測試。最後只輸出一個 python code fence，不要其他文字。\n實作片段在 implementation.txt；先讀。沒有執行工具或驗證回饋。'
-    manifest = {'model': MODEL, 'repeats': 2, 'api': API, 'prompt': prompt, 'handbook': handbook,
+    if args.prompt_profile == 'lean':
+        for function in ast.walk(node):
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
+                function.body = function.body[1:]
+        visible = ast.unparse(node)
+        api = LEAN_API
+        prompt = api + '\n' + LEAN_TASK
+    manifest = {'model': MODEL, 'repeats': 2, 'prompt_profile': args.prompt_profile, 'api': api, 'prompt': prompt, 'handbook': handbook,
                 'visible_source': visible, 'visible_source_sha256': history.sha(visible), 'versions': history.VERSIONS,
                 'runner_sha256': history.sha(Path(__file__).read_text()), 'primary': 'only submission before any verifier feedback'}
     (args.out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')

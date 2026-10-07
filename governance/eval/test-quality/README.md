@@ -52,3 +52,8 @@ Python 使用內建 AST；其他語言選配 Semgrep CE 1.179.0，先只含特�
 `python3 governance/eval/historical_handbook_trial.py --controls --out /tmp/history-controls-new` 先驗八個強弱／無效控制；通過後 `python3 governance/eval/historical_handbook_trial.py --run --out /tmp/history-model-new` 跑固定Claude模型四場（使用配額）。無手冊／正式手冊各兩次，Read-only看到同一份歷史錯版函式；只交一次受限unittest，不提供執行回饋。模型不能用任意Python API；fixture協助觀察取鎖、鎖存在與外部写入，並提供部分失敗判準，所以不代表自由測試開發。
 
 原始會談成功不等於測試有效；需另看score，修復版必須非零測試、非零明示斷言全綠，錯版必須目標AssertionError與巢狀退路觀測同時成立。原始程序逾時／不支持語法仍invalid。支持精確標準main尾段（在generated_tests下不執行），不支持其他if。首批正常fixture接線修訂以instrument-disposal及原始／重算JSON分開保存。
+
+
+`--prompt-profile lean` 在相同歷史案例與評分器下減少題目提示：
+`python3 governance/eval/historical_handbook_trial.py --run --prompt-profile lean --out /tmp/history-lean-new`。
+此profile展示去除註解與文件字串的實作投影，保留正常需求與可用API，讓模型自選設定及情境；評分仍跑完整固定歷史碼。控制／手冊兩臂各兩次且無回饋；不是自由建立fixture或多案例集，也不把與前批的跨批差異當提示因果效果。同案例若再次兩臂全檢出，即停止疊加提示試行，轉事前固定的不同失效歷史案例集。

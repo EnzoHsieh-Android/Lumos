@@ -20,6 +20,7 @@ related:
 verified_by:
   - "[[Verification/2026-10-07_歷史弱測試鎖回歸重播]]"
   - "[[Verification/2026-10-07_歷史鎖案例手冊模型對照]]"
+  - "[[Verification/2026-10-07_歷史鎖案例減少提示對照]]"
 ---
 # historical-test-quality
 
@@ -39,3 +40,8 @@ REVISIT:2026-11-07 在加入生成測試執行前，凍結其允許操作與隔�
 WHY:歷史重播與生成測試執行器分開 [出處:[[Projects/歷史弱測試手冊評估_計劃]]] [因:原歷史碼可信，模型輸出只能經明示受限語法與固定fixture執行]。生成試行強制提供手冊，不代答原生路由；未知語法不算測試品質差。
 
 PITFALL:normal fixture未建可信快取，正常前置斷言在修復版也紅 [出處:[[Verification/2026-10-07_歷史鎖案例手冊模型對照]]] [根因:只建.cache卻以normal名義暴露信任查詢] [repro:python3 governance/eval/historical_handbook_trial.py --controls --out /tmp/lumos-history-controls-new]。補齊正常目錄並接受精確不執行的main尾段後，保留原分數，對無回饋的四場初稿一致重算；不把儀器錯誤當手冊效果。
+
+
+WHY:lean提示只減少題目示範，不改評分器 [出處:[[Projects/歷史弱測試手冊評估_計劃]]] [因:避免降低提示時同時改考卷，把分數差異歸錯來源]。展示去除註解及文件字串的錯版函式投影，完整原碼仍用於執行；grade/execute/validate與前次逐字相同，source SHA核對另存控制證據。fixture及API仍提供部份現場與判準，所以不是自由測試開發。
+
+WHY:同歷史鎖案例兩批皆滿分後停止疊加提示 [出處:[[Verification/2026-10-07_歷史鎖案例減少提示對照]]] [因:反覆調提示仍無鑑別力，容易把重抽當改善]。本案例改作評分器控制；後續效果比較改用事先固定的不同失效形態案例集。
