@@ -983,9 +983,21 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
         pass
 
 
-def _replay_write_verdict(tmp, target, vdir, verdict):
+def _replay_refreeze_blocked(target):
+    """已有判定檔、重凍卻沒帶 --note → 印擋下訊息(開頭講明判定檔沒有更新與現行是第幾輪)。開頭的前置檢查與寫入端共用這一句。"""
+    try:
+        cur = json.loads(target.read_text(encoding="utf-8")).get("round") or "?"
+    except (OSError, ValueError, AttributeError):
+        cur = "?"
+    print(f"擋下:判定檔沒有更新——這個 loop 已有 golden 判定檔(現行仍是 {cur});"
+          "重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
+
+
+def _replay_write_verdict(tmp, target, vdir, verdict, note=None):
     """凍結判定寫檔:①新內容落暫存檔 ②有舊檔就歸檔成 verdict-<時間>.json(不覆寫歷史)③暫存檔 replace 上位。
-    → (rc, 歸檔檔名或 None):rc 0 成功、2 失敗(已印原因)。暫存檔的清理在呼叫端的 finally(任何一步失敗都不留)。"""
+    → (rc, 歸檔檔名或 None):rc 0 成功、2 失敗(已印原因)。暫存檔的清理在呼叫端的 finally(任何一步失敗都不留)。
+    ★歸檔前再判一次 --note★:呼叫端開頭已判過,但兩個第一次凍結同時跑時,開頭判的那一刻還沒有判定檔、到這裡已經有了,
+    不再判的話沒帶 --note 的這邊會把對方的判定檔歸檔掉、在留痕時崩潰(代碼審 code-凍結暫存檔清理 r3 正確性席)。"""
     import datetime
     try:
         tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -994,6 +1006,9 @@ def _replay_write_verdict(tmp, target, vdir, verdict):
         return 2, None
     refroze = None
     if target.exists():
+        if not note or not note.strip():
+            _replay_refreeze_blocked(target)
+            return 2, None
         stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S")   # 本地時間(同原寫法),帶時區只為不觸發 DTZ005
         arch = vdir / f"verdict-{stamp}.json"
         if arch.exists():
@@ -1083,14 +1098,10 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         # ★在印處置閘、寫暫存檔之前判★:原本先跑處置閘(印一長串 [disposal] 與 GATE PASS)、寫暫存檔,才判要不要擋——
         # 擋下時暫存檔留在 governance/replay/<編號>/ 被 `git add governance` 一起提交(主線上兩個編號帶著它),
         # 而且擋下訊息走 stderr、PASS 走 stdout,接管線或只看尾端時最後一行是 PASS,以為凍好了(2026-10-07 工具鏈會談實踩、代碼審 r2)
-        _cur_v = root / "governance" / "replay" / loop_id / "verdict.json"
-        if _cur_v.exists() and (not note or not note.strip()):
-            try:
-                cur = json.loads(_cur_v.read_text(encoding="utf-8")).get("round") or "?"
-            except (OSError, ValueError, AttributeError):
-                cur = "?"
-            print(f"擋下:判定檔沒有更新——這個 loop 已有 golden 判定檔(現行仍是 {cur});"
-                  "重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
+        vdir = root / "governance" / "replay" / loop_id
+        target = vdir / "verdict.json"
+        if target.exists() and (not note or not note.strip()):
+            _replay_refreeze_blocked(target)
             return 2
         raw, parsed = _load_rows()
         if raw is None:
@@ -1157,9 +1168,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
             "files": files,
             "verdict": {"rc": rc, "fails": out.get("fails", [])},
         }
-        vdir = root / "governance" / "replay" / loop_id
         vdir.mkdir(parents=True, exist_ok=True)
-        target = vdir / "verdict.json"
         # 順序(cb3 s2-f3):①新內容先落暫存檔(最會失敗的一步最先做)②舊檔歸檔③replace 上位
         # ④最後才寫治理帳留痕——寫入失敗時不會留下「帳說成功、檔卻不在」的假紀錄。
         # 暫存檔只活在這一段:任何一步失敗提早結束,都在 finally 刪掉(成功時 replace 已把它換上位)。
@@ -1167,7 +1176,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         # (代碼審 r1 正確性席、架構對齊席);.gitignore 忽略 .verdict*.tmp
         _tmp = vdir / f".verdict.{os.getpid()}-{uuid.uuid4().hex[:8]}.tmp"
         try:
-            rc_w, _refroze = _replay_write_verdict(_tmp, target, vdir, verdict)
+            rc_w, _refroze = _replay_write_verdict(_tmp, target, vdir, verdict, note)
         finally:
             try:
                 os.unlink(_tmp)
