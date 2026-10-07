@@ -26,6 +26,8 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 
 ## 2. 動手前
 
+- 寫或改測試先讀 `commands/03-寫回圖譜.md`〈實作測試品質〉；先列輸入、預期結果、判準來源與應抓到的錯誤。
+
 - `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
 - `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
 - 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。

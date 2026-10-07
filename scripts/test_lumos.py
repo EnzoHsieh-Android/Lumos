@@ -75987,5 +75987,18 @@ def t_review_eval_comparison():
     _review_convergence_unit_group("ComparisonTests")
 
 
+def t_test_quality_scan_cli():
+    _need_src("scripts/test_quality_scan.py")
+    _need_src("scripts/test_test_quality_scan.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
+                         cwd=root, capture_output=True, text=True, timeout=60)
+    import re
+    output = run.stdout + run.stderr
+    check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
+          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+          output[-5000:])
+
+
 if __name__ == "__main__":
     sys.exit(main())
