@@ -31563,26 +31563,55 @@ def _ns_wd_count_hit(box, files, reader, line, masked, cut):
 
 
 def _ns_wd_line_hit(box, files, reader, ln, seen, masked, cut):
-    """一行 → (原行裡的位置, count|position, 要貼的標記或 None) 或 None;數量優先,只認起點在 cut 之後的命中。
+    """一行 → [(原行裡的位置, count|position|binding, 給作者的建議一句)],只認起點在 cut 之後的命中。
+    數量與位置照順序取第一個(都是「之後會指錯」);綁定是另一件事,另外看,同一行可以兩則都出(代碼審 r1 正確性席:
+    原本同一行只出一則,數量先命中就把綁定吞掉,修完數量那行變舊行、綁定永遠不再提醒)。
     成對引號裡的字不看(只是在提這種寫法;同否定現況句提醒的 _ns_neg_quote_spans),所以引號也是誤報的出口。"""
     quotes = _ns_neg_quote_spans(masked)
     masked = _inline_blank(masked, quotes)
+    out = []
     if "[count:" not in seen and "lumos:count" not in seen and not box["py_capped"]:
         fields = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), masked)
         c = _ns_wd_count_hit(box, files, reader, ln, fields, cut)
         if c is not None:
-            return c[0], "count", c[1]
-    for a, b in _ns_wd_paren_groups(masked):
-        g = masked[a:b]
-        if a >= cut and _NS_WD_FIX_RE.match(g):
-            m = _NS_WD_POS_RE.search(g)
-            if m:
-                return a + m.start(), "position", None
-    return None
+            out.append((c[0], "count", f"掛上 {c[1]},清單改了 lumos drift scan 會列出來"))
+    if not out:
+        for a, b in _ns_wd_paren_groups(masked):
+            g = masked[a:b]
+            if a >= cut and _NS_WD_FIX_RE.match(g):
+                m = _NS_WD_POS_RE.search(g)
+                if m:
+                    out.append((a + m.start(), "position", "改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)"))
+                    break
+    bh = _ns_wd_binding_hit(ln, cut, quotes)
+    return out + ([bh] if bh is not None else [])
+
+
+_NS_WD_BINDING_SHOW = 5        # 綁定提醒最多列幾支名稱,其餘講總數
+
+
+def _ns_wd_binding_hit(raw, cut, quotes=()):
+    """綁定規則(Projects/測試綁定一行一支提醒_計劃)→ (位置, "binding", 建議字串) 或 None:這一行 cut 之後所有 [test:]
+    去重後兩支以上。★掃原文、走專案唯一的欄位掃描器 _slot_scan★(slot_parse 也走它):鍵名不分大小寫、冒號收全形、
+    行內程式碼裡的範例不算、反引號包住的名稱照認;起點落在成對引號(quotes,原行座標)裡的欄位整個不算——只是在舉例。
+    不去改原文:代碼審 r1 原本先找字面 [test: 又餵遮掉行內程式碼的文字,r2 改成遮引號後,值裡夾的引號又被當成一支名稱。
+    名稱切法用 note-shape 的 test_refs 與 S20 共用的 _test_names_of,佔位名稱與整個被引號包住的名稱(值裡在舉例)不算。"""
+    fields, at = [], None
+    for kind, a, _b, key, val, err in _slot_scan(raw[cut:]):
+        if kind == "field" and key == "test" and not any(qa <= cut + a < qb for qa, qb in quotes):
+            fields.append((key, val, err))
+            at = cut + a if at is None else at
+    names, _empty = _test_names_of({"fields": fields})
+    uniq = list(dict.fromkeys(nm for nm in names if nm and not _ns_tr_placeholder(nm)
+                              and not any(nm.startswith(qa) and nm.endswith(qb) and len(nm) > 1 for qa, qb in _NS_NEG_QUOTES)))
+    if len(uniq) < 2:
+        return None
+    shown = "、".join(uniq[:_NS_WD_BINDING_SHOW]) + (f" 等 {len(uniq)} 支" if len(uniq) > _NS_WD_BINDING_SHOW else "")
+    return at, "binding", f"這行綁了 {len(uniq)} 支({shown}):拆成一支一行,每行寫那支測試守的是哪一點"
 
 
 def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
-    """一篇 → [(路徑, 行號, 規則 count|position, 片段, 要貼的標記或 None)];一行至多一筆(數量優先)。
+    """一篇 → [(路徑, 行號, 規則 count|position|binding, 片段, 給作者的建議一句)];一行至多兩筆(數量或位置一筆、綁定一筆)。
     只看 body/summary、圍欄外、不是 REVISIT 的新行;舊行只在句尾補括號時只看補上的那段(_NotelinesPairs)。"""
     vis_nos = {no for no, _l in _visible_lines(text.split("\n"))}
     out = []
@@ -31593,15 +31622,14 @@ def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
         if not seen.strip() or _revisit_split(seen)[0] is not None:
             continue
         masked = _inline_visible_mask(ln)
-        hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
-        if hit is not None and pairs is not None:
+        hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
+        if hits and pairs is not None:
             # 有命中才查配對表(同否定現況句提醒:配對要跑 git,沒命中的行不付這筆)
             o = (pairs.table().get(nfc(path)) or {}).get(i)
             if o is not None and o.rstrip() and ln.rstrip().startswith(o.rstrip()):
-                hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
-        if hit is not None:
-            lead = len(ln) - len(ln.lstrip())
-            out.append((path, i, hit[1], _ns_negation_snippet(ln.strip(), max(0, hit[0] - lead)), hit[2]))
+                hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
+        lead = len(ln) - len(ln.lstrip())
+        out += [(path, i, h[1], _ns_negation_snippet(ln.strip(), max(0, h[0] - lead)), h[2]) for h in hits]
     return out
 
 
@@ -31639,18 +31667,17 @@ def _ns_wording_emit(root, items, capped, fail):
             print(f"提醒:新寫句子的數量提醒這次沒跑完({capped}),後面的行不再看數量;位置提醒照常", file=sys.stderr)
         if not items:
             return
-        word = {"count": "數量", "position": "位置"}
+        word = {"count": "數量", "position": "位置", "binding": "綁定"}
         out = [f"提醒:這次提交新寫的句子有 {len(items)} 處之後容易過期或指錯(note_shape.wording=warn,不擋):"]
         for p, n, rule, frag, tag in items:
             out.append(f"  {p}:{n}  [{word[rule]}] {frag}")
-            out.append(f"      → 掛上 {tag},清單改了 lumos drift scan 會列出來" if rule == "count" else
-                       "      → 改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)")
-        out.append("不是在數那個清單、或不是在指清單裡的項目,就不用理;這次提交之後這幾行不會再提醒。"
+            out.append(f"      → {tag}")
+        out.append("不是在數那個清單、不是在指清單裡的項目、或那幾支測試確實守同一件事,就不用理;這次提交之後這幾行不會再提醒。"
                    "關掉這個提醒:.lumos/config.json 的 note_shape.wording 設成 off")
         print("\n".join(out), file=sys.stderr)
         rules = sorted({x[2] for x in items})
         _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:新寫句子寫法提醒 {len(items)} 處",
-                            extra={"check": "wording", "rules": rules, "lines": len(items),
+                            extra={"check": "wording", "rules": rules, "lines": len({(x[0], x[1]) for x in items}),
                                    "notes": len({x[0] for x in items})})
     except Exception as e:
         print(f"提醒:新寫句子寫法提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
