@@ -21,6 +21,7 @@ summary: |-
   WHY:不做會談編號交給 lumos [出處:2026-10-06 實測] [因:外掛只看得到 claude 啟動時繼承的環境,看不到交給 Bash 的官方編號]
 verified_by:
   - "[[Verification/2026-10-06_會談編號外掛實測]]"
+  - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
 ---
 # lumos-context
 
