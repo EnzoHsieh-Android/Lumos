@@ -1,0 +1,126 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-context.md b/docs/lumos-toolchain-knowledge/Systems/lumos-context.md
+index 199350a9..1fb2d6c2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-context.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-context.md
+@@ -14,19 +14,20 @@ about_code:
+ tags:
+   - type/system
+   - status/doing
+   - scope/agent-dag
+ summary: |-
+   WHY:壓縮前改摘要指示用外掛做,不用官方 PreCompact hook [出處:2026-10-06 核對官方 hook 文件] [因:PreCompact 只能讀指示、整個擋,改不了] [不選:壓縮後重新注入規矩——開場 hook 壓縮後本來就會再跑]
+   WHY:附加段用詞不帶 lumos 專用名詞 [出處:Claude-mod第二批 設計審第二輪] [因:外掛裝在使用者層,所有專案的壓縮都會附]
+   WHY:不做會談編號交給 lumos [出處:2026-10-06 實測] [因:外掛只看得到 claude 啟動時繼承的環境,看不到交給 Bash 的官方編號]
+ verified_by:
+   - "[[Verification/2026-10-06_會談編號外掛實測]]"
++  - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
+ ---
+ # lumos-context
+ 
+ 白話:對話快滿、要壓縮成摘要之前,這支外掛在給摘要器的指示後面多附一段固定要求,叫它逐字留住使用者的裁定、目前做到哪、還在跑的背景代理、沒提交的改動、待回覆的問題。子代理壓縮時附精簡版。
+ 
+ - 附加段第一行是固定標記行,指示裡已有那一行(整行相等)就不重附;使用者 `/compact <文字>` 的原文一字不改,接在後面。
+ - 掛鉤自己出錯時照原樣交下去,不影響壓縮。用 `.catch(($, e, next) => next(e))` 寫,不像事件帳外掛在每個掛鉤裡自己吞錯:事件帳只觀察、吞錯就等於放行;這支會改寫壓縮的輸入,能擋流程的掛鉤沒掛 `.catch` 時 `claude plugin validate` 會列出來,`.catch` 裡的 `next` 不會重跑(壓縮已做完就交回原結果)。審查席隔離分支的外掛也是這樣寫。
+ - 檔:`hooks/register.ts` 是掛鉤與附加段文字,`hooks/context.test.ts` 綁條款 S1–S3 的測試(`claude plugin test` 跑),`hooks/hooks.json` 只載入 register.ts,`.claude-plugin/plugin.json` 是外掛描述檔,`tsconfig.json` 沿用引擎給的型別設定。
+ - 決策與範圍:[[Projects/Claude-mod第二批_計劃]];會談編號那項為什麼沒做:[[Verification/2026-10-06_會談編號外掛實測]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md b/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
+index c73a5bfc..58ac4eb2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
+@@ -25,20 +25,21 @@ summary: |-
+   WHY:席報告收齊前不寫到硬碟,外掛擋讀暫存處只當多一層保護 [出處:Projects/審查席唯讀隔離_計劃 決策 d5] [因:代碼審 r1 通才、邊界兩席實測 Bash 的 grep -r /tmp、cat 加萬用字元都讀得到暫存處] [不選:加強 Bash 粗擋去擋暫存處前綴與暫存根搜尋]
+   WHY:讀、寫、搜尋遇到看不懂的路徑一律擋 [出處:代碼審 r1 四席獨立抓到讀檔放行] [因:讀檔原本把看不懂當成不在暫存處,/tmp/./lumos-seat-staging/… 就讀得到]
+   WHY:對照表存 $.state [出處:代碼審 r1 併發資源席] [因:模組變數在熱重載時歸零,執行中的審查席會悄悄脫離白名單;$.state 由引擎替會談保管、跨熱重載]
+   RULE:外掛原始碼不呼叫 $.process、不改寫輸入或結果、只掛 agent.spawn、tool.call、session.end [依據:審計] [since:2026-10-06] [retire:人裁] [until:2027-04-06] [confirmed:2026-10-06] [test:t_guard_plugin_files_valid]
+   PITFALL:掛鉤自己丟錯時引擎直接跳過它,等於放行 [出處:plugin-authoring reference.md 與 claude plugin validate 的 gating hook 警告] [根因:沒掛 .catch 的擋人掛鉤出錯就被略過] [修法:兩個掛鉤都掛 .catch,工具已經跑過就交回原本結果;沒跑過時,子代理(判不出是不是審查席也算)的 Bash 擋、其他放行,主會談一律放行;要 Claude Code 2.1.290 起,之前 .catch 可能被一起卸掉] [test:t_guard_plugin_files_valid]
+   PITFALL:原始碼裡的 \uFEFF、\u3000 跳脫被寫成看不見的字元本身,改壞驗證的字串對不上 [出處:2026-10-06 實作] [根因:寫檔工具把跳脫序列轉成實際字元] [修法:改用 trim(),JS 的空白本來就含這兩個字元] [repro:grep -nP "[\x{3000}\x{FEFF}]" mods/claude/lumos-guard/hooks/register.ts 應 0 行]
+   TEST:claude plugin test mods/claude/lumos-guard(條款 S1–S8,94 支,含掛鉤接線那組;第一版改壞 25 處、代碼審 r1 修補後再改壞 11 處,全翻紅;r2 到 r5 的修正各自逐條撤回驗過會翻紅);t_install_registers_guard_plugin、t_guard_plugin_files_valid、t_seat_templates_carry_marker
+   SEE:[[Projects/審查席唯讀隔離_計劃]] [[Systems/lumos事件帳]] [[Systems/lumos-cli-lifecycle]]
+ verified_by:
+   - "[[Verification/2026-10-06_審查席隔離實作]]"
++  - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
+ ---
+ # lumos-guard
+ 
+ 白話:設計審、代碼審派出去的審查員是子代理,權限跟編排者一樣大。這支 Claude Code 外掛認出派工詞第一行帶 `LUMOS-SEAT:` 的子代理(和它再派出去的),把它的工具收窄:只准讀取、搜尋、Bash、網路查詢、派一般子代理;寫檔只准它自己的工作資料夾 `<暫存根>/lumos-seat-work/<迴圈>/<席名>/`(暫存根是 /tmp、/var/tmp、$TMPDIR 這幾個,實驗一般放 /tmp 底下);不准碰席報告暫存處 `<暫存根>/lumos-seat-staging/`;Bash 指令提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作就擋。
+ 
+ 防的是「被審的文件裡藏了指令,把審查員誘導去改 repo、開 PR、偷看別席報告」,不防一個有心繞的審查員:Bash 仍是完整的 shell,在 repo 裡改檔這版擋不到也不報。設計與三輪設計審的取捨見 [[Projects/審查席唯讀隔離_計劃]]。
+ 
+ 外掛裝在 [[Systems/lumos事件帳]] 同一份市集檔裡,由 [[Systems/lumos-cli-lifecycle]] 的安裝與移除流程一起裝上、拿掉。
+ 
+ - 型別檔 `types/index.d.ts` 只為一件事:用 `declare module 'claude-code'` 擴充 `PluginState`,宣告 `$.state` 裡 `lumos-guard/seats` 這個鍵的形狀;型別檔要求 `$.state` 的鍵在 `PluginState` 裡宣告(沒宣告時型別對不上)。其他兩支外掛不用 `$.state`,所以沒有這個檔(代碼審 r3 架構對齊席問到)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+index 448564e0..d4e7fe57 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+@@ -32,20 +32,21 @@ summary: |-
+   RULE:[since:2026-10-05][retire:事件帳不再由可被強制提交進 repo 的檔案提供,或改成只出 JSON 不出文字][confirmed:2026-10-05]印到終端的事件帳內容一律過 _esc_clean 加 _PATH_SPECIAL_CATS(控制、格式含雙向覆寫與零寬、行段分隔、孤立代理),--json 一律 ASCII 跳脫,不另寫第三套消毒——塊檔可能被人強制提交,雙向覆寫能把工具名顯示成別的樣子,孤立代理字元印到 UTF-8 終端會直接丟編碼錯誤。讀進來時就把關:巢狀超過 32 層或單行超過 64KB 算壞行、塊檔超過 16MB 略過並計數——約 7 萬到 11 萬層的巢狀讀得進來、印的時候才爆(代碼審 r3),只擋解析端會漏掉這段;每個欄位各自清理截斷,狀態標記接在最後 [test:t_events_reader_hostile_lines] [test:t_events_r3_hostile_output]
+   RULE:[since:2026-10-05][retire:清理改由寫入端自己做,或事件帳搬出 repo][confirmed:2026-10-05]lumos events --prune 只收 1 到 36500 的半形整數(下限 1 同時就是「最近 24 小時動過的會談不刪」的唯一保護,開放 --days 0 會刪到正在寫的會談);事件帳路徑從 repo 根往下每層都不能是連結(讀取也過這道,不然會讀到 repo 外);在 worktree 裡跑時那個 worktree 必須真的登記在主 checkout 的 .git/worktrees 裡(gitdir 是相對路徑時照 gitdir 檔所在目錄解讀,壞項目略過不連累別的)——.git 檔可以被改成指到別的 repo,不驗就會刪到別人的事件帳 [test:t_events_prune_hardening] [test:t_events_prune_edge_cases] [test:t_events_r3_path_trust]
+   TEST:t_events_reader_merges_chunks、t_events_reader_no_ledger、t_events_reader_from_worktree、t_events_reader_edge_lines、t_events_reader_hostile_lines、t_events_session_name_and_repo_validation、t_events_prune_only_old_sessions、t_events_prune_edge_cases、t_events_prune_hardening、t_enforcement_ledger_row、t_enforcement_ledger_row_git_hang、t_runner_isolates_claude_plugin、t_install_registers_ledger_plugin、t_teardown_removes_ledger_plugin、t_ledger_plugin_bad_json_and_races、t_ledger_plugin_messages_and_bootstrap、t_ledger_plugin_teardown_scope_and_messages、t_ledger_plugin_files_valid、t_ledger_rules_match_reader、t_events_r3_hostile_output、t_events_r3_path_trust、t_events_r3_honest_messages、t_enforcement_ledger_row_symlinks(python3.14 scripts/test_lumos.py -k events / -k ledger / -k runner_isolates)
+ related:
+   - "[[Projects/Lumos事件帳_計劃]]"
+   - "[[Systems/lumos-cli-lifecycle]]"
+   - "[[Systems/lumos-cli-read]]"
+ verified_by:
+   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+   - "[[Verification/2026-10-06_事件帳mod段實作]]"
++  - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
+ ---
+ # lumos事件帳
+ 
+ > 白話:Claude Code 裝了 lumos-ledger 外掛之後,每場會談做了什麼(回合開始結束、每次工具呼叫成不成功、派了哪些子代理、實際用哪個模型)會寫成一份事件帳,放在主 checkout 的 governance/runtime/events/<會談編號>/ 底下,不進版控。`lumos events` 讀它,`lumos events --prune --days N` 清舊的,`lumos enforcement` 的 claude-event-ledger 那一列看它最近有沒有在寫。設計、條款與兩輪設計審在 [[Projects/Lumos事件帳_計劃]];前提實驗在 [[Verification/2026-10-05_Claude-mod能力實測]]。
+ 
+ ## 現況(2026-10-06)
+ 
+ - 讀取端、清理、enforcement 那一列、外掛安裝與移除、測試執行器隔離(Python 段)與寫入端外掛(mod 段)都在。外掛在 `mods/claude/lumos-ledger/`,市集檔在 repo 根的 `.claude-plugin/marketplace.json`;`lumos install` 會用市集檔把外掛裝到使用者範圍。市集檔 2026-10-06 起另列 [[Systems/lumos-context]] 與審查席隔離外掛 [[Systems/lumos-guard]],市集列的外掛要恰好等於安裝端的外掛清單。
+ - 外掛的寫法:核心邏輯在 `register.ts` 的 `createLedger`(緩衝、塊名、串行寫入、位置判定),讀寫檔與跑 git 由外面注入,所以 `ledger.test.ts` 能用假的讀寫測並行與重新載入;引擎掛鉤只收事件交給核心。
+ - 會談編號、圖譜判定、主 checkout 判定這三條規則在外掛(TypeScript)與讀取端(Python)各寫一份;兩邊共用 `mods/claude/lumos-ledger/hooks/rules-fixture.ts` 的案例,外掛測試與 `t_ledger_rules_match_reader` 都跑它,一邊改了規則另一邊會紅。外掛環境只能匯入程式模組(不能匯入 JSON),所以案例檔是 `.ts`、內容寫成純 JSON,Python 端切出 `RULES = ` 後面那段用 json.loads 讀。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-07_Claude-Code-2.1.292-mod異動.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-07_Claude-Code-2.1.292-mod異動.md
+new file mode 100644
+index 00000000..ac40667a
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-07_Claude-Code-2.1.292-mod異動.md
+@@ -0,0 +1,43 @@
++---
++type: verification
++status: pass
++date: 2026-10-07
++valid_under: Claude Code 2.1.292
++revalidate_when: Claude Code 升版,更新說明裡有 mod、plugin 或 hook 相關改動
++tags:
++  - type/verification
++  - status/pass
++  - scope/agent-dag
++plan_refs:
++  - "[[Projects/Claude-mod第二批_計劃]]"
++---
++# 2026-10-07_Claude-Code-2.1.292-mod異動
++
++白話:Claude Code 2.1.291、2.1.292 的更新說明裡,跟 mod(外掛函式掛鉤)有關的改動,以及它們對 lumos 三支外掛的影響。2.1.291 只修兩個回歸問題,跟 mod 無關;mod 相關的都在 2.1.292。來源是本機 `~/.claude/cache/changelog.md` 的 2.1.292 段。
++
++## 驗了什麼
++
++- 用 2.1.292 對主線 `de1fb54f` 的三支外掛重跑 `claude plugin test` 與 `claude plugin validate`:[[Systems/lumos事件帳]] 29 支、[[Systems/lumos-context]] 6 支、[[Systems/lumos-guard]] 95 支全綠,三支 validate 都合格。新版把「測試註冊的掛鉤裡斷言失敗」改成判紅,三支沒有受影響。
++
++## 跟三支外掛直接有關的改動
++
++- `agent.spawn` 掛鉤開始包含 workflow 代理,並帶它的 run 與 index,外掛可以拒絕它。審查席隔離外掛因此也看得到 workflow 派出的代理(標記判準照舊),事件帳會多記到 workflow 的派工。
++- `tool.call` 掛鉤改成看到「參數名修正之後」的輸入;同版 Grep 接受 `file_path` 當 `path`。審查席隔離外掛判搜尋範圍只讀 `path`,照更新說明,修正後才交給掛鉤,不會從 `file_path` 漏掉(實測排在下面的回頭條件)。
++- 守衛類掛鉤在另一支外掛的呼叫底下,`.catch` 原本可能被靜默跳過,現在照樣執行。
++- 外掛擋下 Write、Edit、NotebookEdit 與單筆 Read、Grep、Glob 時,畫面現在顯示擋下的理由。
++- `claude plugin validate`:透過被重新宣告或重新賦值的頂層 `var` 讀 `$.state` 的外掛會被拒絕;同一個常數做大量 `$.state` 呼叫的外掛載入變快。審查席隔離外掛沒有前一種寫法。
++
++## 新能力(目前沒用到)
++
++- `prompt.autocomplete`:外掛可以往輸入框的自動完成清單加項目。
++- `$.model.complete` 支援提示快取。
++- Agent 工具多了 `effort` 參數,可以指定子代理的推理強度。
++- `claude plugin install --marketplace <source>`:需要時先加市集再裝外掛。
++
++## 後續優化方向
++
++REVISIT:2026-11-06 實測一次 workflow 派出的審查席:派工詞第一行帶標記時審查席隔離外掛照擋,事件帳的 spawn 事件看得到 workflow 的 run 與 index;看得到就把這兩欄加進事件帳
++REVISIT:2026-11-06 實測一次審查席用 Grep 帶 file_path 指向席報告暫存處時照樣被擋(驗證「掛鉤看到修正後參數」),結果寫回 Systems/lumos-guard
++REVISIT:2026-11-06 決定設計審與代碼審的派工範本要不要用 Agent 的 effort 參數分級(例如資安、合約席拉高,架構對齊用預設);要用就改 skills/lumos-design-loop/templates.md
++REVISIT:2026-12-06 決定 lumos install 的外掛安裝要不要改用 claude plugin install --marketplace 一步完成,省掉自己先查再加市集那段
++REVISIT:2026-12-06 決定要不要做一支 prompt.autocomplete 外掛,把常用的 lumos 指令放進輸入框自動完成

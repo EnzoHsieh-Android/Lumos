@@ -32,6 +32,7 @@ summary: |-
   SEE:[[Projects/審查席唯讀隔離_計劃]] [[Systems/lumos事件帳]] [[Systems/lumos-cli-lifecycle]]
 verified_by:
   - "[[Verification/2026-10-06_審查席隔離實作]]"
+  - "[[Verification/2026-10-07_Claude-Code-2.1.292-mod異動]]"
 ---
 # lumos-guard
 
