@@ -505,6 +505,23 @@ def t_scaffold_project():
 
 
 
+def t_runner_disables_child_colors():
+    """測試進程裡子程序的錯誤追蹤一律不上色(2026-10-07:殼裡 FORCE_COLOR=3 讓 Python 3.14 把 traceback 上色,
+    比對錯誤名稱的斷言被 ANSI 碼切開而假紅,CI 沒設所以綠)。進入點設 PYTHON_COLORS=0、拿掉 FORCE_COLOR;
+    這支守那兩行:拿掉就紅。前置斷言先證明不中和時真的會上色(現場成立)。翻紅:刪掉 main 裡設 PYTHON_COLORS 那行 → 第二、四條紅;
+    不拿掉 FORCE_COLOR 且殼裡有設 → 第三條紅。"""
+    import os
+    import subprocess as _sp, sys as _sys
+    # ★前置★ 現場成立:不中和的話,這支 Python 在 FORCE_COLOR 下真的會把 traceback 上色(不然後面全綠也證明不了什麼)
+    bare = {k: v for k, v in os.environ.items() if k not in ("PYTHON_COLORS", "NO_COLOR")}   # 現場只吃自己造的:殼裡的 NO_COLOR 會讓前置斷言誤紅
+    r0 = _sp.run([_sys.executable, "-c", "raise RuntimeError('x')"], capture_output=True, text=True, env=dict(bare, FORCE_COLOR="3"))
+    check("不上色: ★前置★ 現場成立——不中和時 FORCE_COLOR 會讓子程序 traceback 帶顏色碼", "\x1b[" in r0.stderr, repr(r0.stderr[-120:]))
+    check("不上色: PYTHON_COLORS=0(子程序繼承,traceback 不上色)", os.environ.get("PYTHON_COLORS") == "0", repr(os.environ.get("PYTHON_COLORS")))
+    check("不上色: 沒有 FORCE_COLOR", "FORCE_COLOR" not in os.environ, repr(os.environ.get("FORCE_COLOR")))
+    r = _sp.run([_sys.executable, "-c", "raise RuntimeError('x')"], capture_output=True, text=True)
+    check("不上色: 子程序 traceback 裡 RuntimeError 字樣完整(沒被顏色碼切開)", "RuntimeError: x" in r.stderr and "\x1b[" not in r.stderr, repr(r.stderr[-120:]))
+
+
 def t_runner_isolates_real_home_and_tmp():
     """★測試跑起來時,家目錄與暫存目錄必須是拋棄式的★(2026-09-06 全 repo 審視 #11)。
 
@@ -35583,6 +35600,13 @@ def main():
                "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         _os_env.environ.pop(_v, None)
 
+    # ★子程序的錯誤追蹤一律不上色★(2026-10-07,另一個會談推送前全套 6 條假紅):殼裡設了 FORCE_COLOR=3 時,
+    # Python 3.14 會把子程序 traceback 上色,`RuntimeError` 被 ANSI 碼切開,比對錯誤名稱的斷言就比不到;CI 沒設這個變數所以綠。
+    # 修在唯一進入點、理由同上面清 GIT_*:對現有與未來起子程序比對輸出的測試都自動成立,不用每支各自帶 env。
+    # PYTHON_COLORS 優先於 FORCE_COLOR 與 NO_COLOR(Python 3.13 起),設 0 就關;FORCE_COLOR 一併拿掉,免得別的工具照它上色。
+    _os_env.environ["PYTHON_COLORS"] = "0"
+    _os_env.environ.pop("FORCE_COLOR", None)
+
     # ★參數要嚴格解析★(2026-09-06 全 repo 審視 #12):原本用的是「不認得的參數就靜默丟掉」,
     # 於是 `--help`、打錯的旗標、甚至直接打測試名(情境錄音裡真的有人這樣敲),全部會被當成
     # 「沒帶任何條件」→ **直接跑滿八分鐘的全套**。實測:`--help` 當場把全套跑起來了。
@@ -50972,7 +50996,7 @@ def t_lens_recount_search_multi_r1_codex():
     check("外家②:單引號裡的 $FOO 是字面查詢(判零命中、照字面記)", e2 == [{"ts": "T", "query": "$ZZZQXJ_NO_HIT", "verdict": "zero"}], str(e2))
     e3 = m._search_events("python3 scripts/lumos search __NO_HIT_FLAG__ --path Systems --top 2 --json", Z, False, "T")
     import os as _os, re as _re
-    helptxt = _sp.run([sys.executable, GRAPHCTL, "search", "-h"], capture_output=True, text=True, env=dict(_os.environ, NO_COLOR="1")).stdout
+    helptxt = _sp.run([sys.executable, GRAPHCTL, "search", "-h"], capture_output=True, text=True).stdout   # 顏色在測試進入點已關(PYTHON_COLORS=0)
     helptxt = _re.sub(r"\x1b\[[0-9;]*m", "", helptxt)
     with_val = set(_re.findall(r"(?m)^\s+(--[a-z][a-z-]*) [A-Z_]+\s", helptxt))
     check("外家③:--path、--top 的值不併進查詢詞;帶值旗標清單跟 lumos search -h 一致", e3[0]["query"] == "__NO_HIT_FLAG__" and with_val and with_val == set(m._SEARCH_VALUE_FLAGS),
