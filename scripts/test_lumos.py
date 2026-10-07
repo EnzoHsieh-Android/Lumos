@@ -71062,6 +71062,50 @@ def t_doctor_s20_prose_retire_by_verdict_verb():
         check(f"{label}:{'列' if want else '不列'}", bool(got) == want, str(got))
 
 
+def t_doctor_s20_prose_retire_manual():
+    """[C5 S1] doctor S20 散文撤除候選也看掛 [manual:] 的條款(rtb 2026-10-03 第三輪:Phase 13 七條子行寫撤除、主行掛 [manual:]
+    沒標作廢,只看 [test:] 的偵測漏掉):整篇沒有 [test:] 也照看;[manual:] 已寫成已撤除、已標作廢、下一層沒寫撤除的不列;
+    修法提示講標作廢。翻紅釘:入口篩選不認 [manual:] → ①紅;候選條件只認測試名 → ②紅;不跳過已撤除 → ③紅。"""
+    print("t_doctor_s20_prose_retire_manual")
+    m = _load_lumos_inproc()
+    root, _b = _tr_repo()
+    vault = root / "docs" / "kg-knowledge"
+    head = "---\ntype: project\nstatus: doing\nsummary: |-\n  WHY:計劃\n---\n# P\n"
+    cases = [("①整篇只有 [manual:]、下一層寫撤除", "- [S1] 當 x 時應 y [manual:開頁面目測一次]\n  - 代使用者裁定:撤除這條", True),
+             ("②同篇另有 [test:] 條款,[manual:] 那條下一層寫撤除", "- [S1] 當 x 時應 y [test:test_alive]\n- [S2] 當 a 時應 b [manual:開頁面目測一次]\n  - 裁定:撤除", True),
+             ("③[manual:] 已寫成已撤除", "- [S1] 當 x 時應 y [manual:已撤除,見 Issues/X]\n  - 裁定:撤除", False),
+             ("④已標作廢", "- [S1] 當 x 時應 y [manual:開頁面目測一次] [status:superseded] [被取代:無 x]\n  - 裁定:撤除", False),
+             ("⑤下一層沒寫撤除", "- [S1] 當 x 時應 y [manual:開頁面目測一次]\n  - 裁定:改寫 x", False),
+             ("⑦[manual:] 太短(條款解析判成未標)", "- [S1] 當 x 時應 y [manual:x]\n  - 裁定:撤除", False)]
+    for label, body, want in cases:
+        e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + body + "\n"})
+        got = m._doctor_test_ref_lines(e, root)["prose"]
+        check(f"{label}:{'列' if want else '不列'}", bool(got) == want, str(got))
+    e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + cases[0][1] + "\n"})
+    got = m._doctor_test_ref_lines(e, root)["prose"]
+    check("⑥列出的那行講是 [manual:] 條款", got and "[manual:]" in got[0], str(got))
+    e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + "- [S1] 當 x 時應 y [test:test_alive] [manual:開頁面目測一次]\n  - 裁定:撤除\n"})
+    got = m._doctor_test_ref_lines(e, root)["prose"]
+    check("⑧同一行同時掛 [test:] 與 [manual:] → 只列一次(以 [test:] 為準)", len(got) == 1 and "[test:]" in got[0], str(got))
+    # ⑨同編號定義兩次:條款解析判成重複(要人先修),[manual:] 這條路照它的判定不列、不自己重判(Enzo 2026-10-07 裁;
+    # 代碼審 r3 架構對齊席);[test:] 那條路照舊列——兩條路在這個形狀上刻意不同,釘住免得被「修成一致」又長出第二套判法
+    for tag, want in (("[manual:開頁面目測一次]", False), ("[test:test_alive]", True)):
+        e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + f"- [S1] 當 x 時應 y {tag}\n  - 裁定:撤除\n- [S1] 當 z 時應 w [manual:另一個說明喔]\n"})
+        got = m._doctor_test_ref_lines(e, root)["prose"]
+        check(f"⑨同編號定義兩次、第一條掛 {tag} 下一層寫撤除 → {'列' if want else '不列'}", bool(got) == want, str(got))
+    # ⑩⑪ 代碼審收尾輪正確性席:[manual:] 這條路要跟 [test:] 那條路看同一批行——同行的 [test:] 寫法 [test:] 那條路認得(全形冒號、
+    # 括號內空白)就讓它列;摘要(開頭欄位)裡長得像條款的行不是驗收條款,兩條路都不列
+    for label, tag in (("全形冒號", "[test：test_alive]"), ("括號內空白", "[ test : test_alive ]")):
+        e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + f"- [S1] 當 x 時應 y [manual:開頁面目測一次] {tag}\n  - 裁定:撤除\n"})
+        got = m._doctor_test_ref_lines(e, root)["prose"]
+        check(f"⑩同一行掛 [manual:] 與{label}的 [test:] → 只列一次", len(got) == 1, str(got))
+    fm = "---\ntype: project\nstatus: doing\nsummary: |-\n  WHY:計劃\n  - [S1] a [manual:開頁面目測一次]\n    - 裁定:撤除\n---\n# P\n- [S2] 當 x 時應 y [manual:開頁面目測一次]\n"
+    e = m.Env.from_texts(vault, {"Projects/P_計劃.md": fm})
+    got = m._doctor_test_ref_lines(e, root)["prose"]
+    check("⑪開頭欄位摘要裡長得像條款的行:不列", got == [], str(got))
+    print("  ✓ t_doctor_s20_prose_retire_manual")
+
+
 
 # ── 驗收紀錄寫明驗了哪些功能(Projects/驗收紀錄寫明驗了哪些功能_計劃,2026-10-03)────────────────────
 def _sr_vault():
