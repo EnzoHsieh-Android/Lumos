@@ -32442,6 +32442,250 @@ def t_note_tags_hints_isolated():
     print("  ✓ t_note_tags_hints_isolated")
 
 
+# ── 新寫句子的數量與位置提醒(Projects/新寫句子的數量與位置提醒_計劃)──────────────────────────
+_WD_HEAD = "提醒:這次提交新寫的句子有"
+
+
+def _wd_repo(cfg=None):
+    """數量提醒的測試專案:_ns_repo 加兩支 Python 檔(KINDS 三個成員、ONE 一個、DUP 兩支檔都有)。"""
+    root = _ns_repo(cfg=cfg)
+    _nh_file(root, "src/kinds.py", 'KINDS = ("a", "b", "c")\nONE = ("a",)\nDUP = ("x", "y")\n')
+    _nh_file(root, "src/other.py", 'DUP = ["p", "q"]\n')
+    _nh_commit(root, "kinds")
+    return root
+
+
+def _wd_hint_lines(out, tag):
+    return [x for x in out.split("\n") if x.startswith("  ") and f"[{tag}]" in x]
+
+
+def t_note_wording_count_hint():
+    """[S1] 新寫的句子點名 `名稱`、寫了等於成員數的數量、沒掛標記 → 提交時提醒並印好要貼的標記,回傳碼不變。
+    翻紅釘:數量規則不接進 _note_shape_eval → ①紅;中文數字不認 → ①紅;摘要行不看 → ③紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="外掛清單 `KINDS` 有三種,各自獨立")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①中文數字:提醒並印出要貼的標記", _WD_HEAD in out and "[count:src/kinds.py::KINDS=3]" in out
+          and len(_wd_hint_lines(out, "數量")) == 1, out[-800:])
+    check("①只提醒:rc0", rc == 0, out[-300:])
+    root = _wd_repo()
+    _ns_note(root, body="`src/kinds.py::KINDS` 共 3 個")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("②帶路徑、阿拉伯數字", "[count:src/kinds.py::KINDS=3]" in out and rc == 0, out[-800:])
+    root = _wd_repo()
+    _ns_note(root, body="`KINDS` 有3種")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("②數字緊貼中文字照算", "[count:src/kinds.py::KINDS=3]" in out, out[-800:])
+    root = _wd_repo()
+    _ns_note(root, summary="KEY:x\nWHY:`KINDS` 有 3 種 [出處:a] [因:b]")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("③摘要行也看", "[count:src/kinds.py::KINDS=3]" in out, out[-800:])
+    print("  ✓ t_note_wording_count_hint")
+
+
+def t_note_wording_count_quiet():
+    """[S2] 數字不等於成員數、成員數小於 2、已有標記、名稱零支或兩支檔數得出、數字在行內程式碼或方括號欄位裡、
+    前面是「第」、阿拉伯數字緊貼英數字或 _ . / : -(v3、r1-3,同 drift fix 認的邊界)、不同段、圍欄、REVISIT 行、在引號裡 → 數量提醒都不出。翻紅釘:拿掉任一道排除 → 對應那行冒出來。"""
+    root = _wd_repo()
+    cases = {
+        "B": "`KINDS` 有兩種",
+        "C": "`ONE` 有一種",
+        "D": "`KINDS` 有三種 [count:src/kinds.py::KINDS=3]",
+        "E": "`DUP` 有兩種",
+        "F": "`NOPE` 有三種",
+        "G": "看 `KINDS` 的 `3 種`",
+        "H": "`KINDS` 見 [出處:三種]",
+        "I": "`KINDS` 的第 3 種",
+        "J": "`KINDS` 是清單,裡面有三種",
+        "K": "```\n`KINDS` 有三種\n```",
+        "L": "REVISIT:2026-12-01 `KINDS` 有三種時再看",
+        "M": "例如寫「`KINDS` 有三種」這種句子",
+        "N": "`KINDS` 見 v3 種寫法",
+        "O": "`KINDS` 見 r1-3 種",
+        "P": "`KINDS` 見 a/3 種",
+        "Q": "`KINDS` 見 x:3 種",
+    }
+    for name, body in cases.items():
+        _nh_node(root, name, body=body)
+    _nh_node(root, "Z", body="對照組:`KINDS` 有三種")      # 同一次提交放一句該提醒的,功能整個沒跑時這支測試也會紅
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "數量")
+    check("只有對照組那一句提醒,其餘全部不提醒", len(hits) == 1 and "Systems/Z.md" in hits[0], "\n".join(hits) or out[-600:])
+    print("  ✓ t_note_wording_count_quiet")
+
+
+def t_note_wording_position_hint():
+    """[S3] 新寫的更正括號(左括號後緊接更正類字眼加冒號,可隔一個短前綴)裡用「第 N 項/最後一個/倒數第 N」指位置 → 提醒;
+    括號沒有更正標記、只是提到「修正」、位置在括號外、「第 2 輪」這類時間序、整個括號在引號裡 → 不出。
+    翻紅釘:不限更正括號或只看含字眼 → ②紅;漏「最後一」或「倒數第」或短前綴 → ①紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="\n".join([
+        "說明甲(更正:原稿第 3 項其實是取消通知)",
+        "說明乙（訂正：最後一個是 b）",
+        "說明丙(更正:倒數第二 是 x)",
+        "說明丁(補充:第 3 項)",
+        "說明戊第 3 項(更正:見別篇)",
+        "說明己(更正:第 2 輪代碼審抓到)",
+        "說明庚(修正關卡第 3 項也用)",
+        "說明辛(r1 更正：原稿第 4 項其實是 y)",
+        "說明壬寫「(更正:第 3 項其實是…)」這種括號",
+    ]))
+    _ns_stage(root)
+    rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "位置")
+    check("①三種寫法、帶短前綴的更正各提醒一次", len(hits) == 4
+          and all(any(k in h for h in hits) for k in ("說明甲", "說明乙", "說明丙", "說明辛")),
+          "\n".join(hits) or out[-800:])
+    check("②沒有更正標記、位置在括號外、時間序、括號裡只是提到「修正」都不出",
+          not any(k in h for h in hits for k in ("說明丁", "說明戊", "說明己", "說明庚", "說明壬")),
+          "\n".join(hits))
+    check("③只提醒:rc0", rc == 0, out[-300:])
+    print("  ✓ t_note_wording_position_hint")
+
+
+def t_note_wording_paren_any_depth():
+    """[S3] 更正括號在任何一層都認:包在別的括號裡、前面有沒收尾的左括號、全形巢狀,都照樣提醒;
+    非更正括號裡的位置寫法照舊不出。翻紅釘:只看最外層 → ①②紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="\n".join([
+        "說明甲(見別篇(更正:第 3 項其實是 c))",
+        "說明乙 :-( 然後 (更正:第 3 項是 c)",
+        "說明丙（見（訂正：最後一個是 b））",
+        "說明丁(見別篇(補充:第 3 項))",
+    ]))
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "位置")
+    check("①包在別的括號裡、全形巢狀:照樣提醒", any("說明甲" in h for h in hits) and any("說明丙" in h for h in hits),
+          "\n".join(hits) or out[-800:])
+    check("②前面有沒收尾的左括號:照樣提醒", any("說明乙" in h for h in hits), "\n".join(hits) or out[-800:])
+    check("③內層不是更正括號:不出", not any("說明丁" in h for h in hits), "\n".join(hits))
+    print("  ✓ t_note_wording_paren_any_depth")
+
+
+def t_note_wording_def_shapes():
+    """[S1][S2] 定義那一段的判定跟數量標記一致:連鎖指派照數;字串裡(三引號、t-string)頂格的假定義不算、另一支檔的真定義照認;
+    定義含無效跳脫時不漏出 Python 警告。翻紅釘:另寫一份只認單一目標的判定 → ①紅;不排除字串裡的行 → ②⑤⑥紅;不關警告 → ③紅。"""
+    root = _ns_repo()
+    _nh_file(root, "src/shapes.py", 'CHAIN = ALIAS = ("a", "b", "c")\n'
+             'FAKE_SRC = """\nFAKE = ["p", "q", "r"]\n"""\n'
+             'ESC = ("\\d+", "\\w+", "\\s+")\n')
+    _nh_commit(root, "shapes")
+    _ns_note(root, body="`CHAIN` 有三種\n`FAKE` 有三種\n`ESC` 有三種")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("①連鎖指派照數(drift scan 也數得到)", "[count:src/shapes.py::CHAIN=3]" in out, out[-800:])
+    check("②字串裡頂格的假定義不算", "::FAKE=" not in out, out[-800:])
+    check("③無效跳脫:照樣提醒、不漏出 SyntaxWarning", "[count:src/shapes.py::ESC=3]" in out and "SyntaxWarning" not in out,
+          out[-800:])
+    m = _load_lumos_inproc()
+    src = (root / "src" / "shapes.py").read_text(encoding="utf-8")
+    check("④跟數量標記的數法一致", m._count_eval(src, "CHAIN")[0] == 3 and m._count_eval(src, "FAKE")[0] is None, "")
+    # ⑤⑥ 字串裡的假定義跟真定義分在兩支檔:只認真的那支;t-string(3.14)裡的也是字串(代碼審 r2 正確性席)
+    root = _ns_repo()
+    _nh_file(root, "src/tfake.py", 'S = t"""\nTSTR = ("p", "q", "r") {x}\n"""\nX = 1\n')
+    _nh_file(root, "src/treal.py", 'TSTR = ("a", "b", "c")\n')
+    _nh_file(root, "src/sfake.py", 'S = """\nPLAIN = ["p", "q", "r"]\n"""\n')
+    _nh_file(root, "src/sreal.py", 'PLAIN = ["a", "b", "c"]\n')
+    _nh_commit(root, "split")
+    _ns_note(root, body="`TSTR` 有三種\n`PLAIN` 有三種")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("⑤t-string 裡的假定義不算,指到真的那支", "[count:src/treal.py::TSTR=3]" in out and "tfake.py::" not in out,
+          out[-800:])
+    check("⑥一般三引號字串裡的假定義不算,指到真的那支", "[count:src/sreal.py::PLAIN=3]" in out and "sfake.py::" not in out,
+          out[-800:])
+    print("  ✓ t_note_wording_def_shapes")
+
+
+def t_note_wording_tail_append():
+    """[S4] 舊行原封不動、只在句尾補括號:兩種提醒都只看補上的那段。
+    翻紅釘:不傳 pairs(整行看)→ ①紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="\n".join([
+        "`KINDS` 有三種,這是寫好很久的舊句",
+        "原稿說明寫在這裡(更正:第 3 項是 c)",
+        "清單說明寫在這裡很久了",
+        "`KINDS` 舊句說明寫在這裡",
+    ]))
+    _nh_commit(root, "old")
+    _ns_note(root, body="\n".join([
+        "`KINDS` 有三種,這是寫好很久的舊句(更正:見新說明)",
+        "原稿說明寫在這裡(更正:第 3 項是 c)(補記)",
+        "清單說明寫在這裡很久了(更正:第 3 項是 c)",
+        "`KINDS` 舊句說明寫在這裡(更正:`KINDS` 現在有三種)",
+    ]))
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    cnt, pos = _wd_hint_lines(out, "數量"), _wd_hint_lines(out, "位置")
+    check("①舊行原有的數量句、位置括號不算", not any("寫好很久" in h for h in cnt)
+          and not any("原稿說明" in h for h in pos), "\n".join(cnt + pos))
+    check("②補上的括號裡有位置寫法就提醒", any("清單說明" in h for h in pos), "\n".join(pos) or out[-800:])
+    check("③補上的括號裡有數量句就提醒", any("舊句說明" in h for h in cnt), "\n".join(cnt) or out[-800:])
+    print("  ✓ t_note_wording_tail_append")
+
+
+def t_note_wording_switch():
+    """[S5] note_shape.wording=off 不出、doctor 講一句;看不懂的值照 warn 並講一句;推送時(--diff)不出。
+    翻紅釘:prepare 不看 off → ①紅;doctor 沒接 → ②紅;--diff 也給容器 → ④紅。"""
+    m = _load_lumos_inproc()
+    root = _wd_repo(cfg={"note_shape": {"wording": "off"}})
+    _ns_note(root, body="`KINDS` 有三種")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("①off:不出提醒", _WD_HEAD not in out and rc == 0, out[-400:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("②off 時 doctor 講一句", any("wording=off" in x for x in lines), str(lines))
+    root = _wd_repo(cfg={"note_shape": {"wording": "block"}})
+    _ns_note(root, body="`KINDS` 有三種")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    check("③看不懂的值照 warn 並講一句", _WD_HEAD in out and "note_shape.wording" in out and "看不懂" in out and rc == 0,
+          out[-600:])
+    lines = m._note_shape_doctor_lines(root, root / "docs" / "kg-knowledge", ci=True)
+    check("③看不懂的值 doctor 也講一句", any("note_shape.wording" in x for x in lines), str(lines))
+    root = _wd_repo()
+    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _ns_note(root, body="`KINDS` 有三種")
+    _nh_commit(root, "count")
+    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    rc, out = _neg_inproc(root, staged=False, diff_range=f"{base}..{tip}")
+    check("④--diff:不出、不記", _WD_HEAD not in out and not [e for e in _neg_events(root, "hinted")
+                                                             if e.get("check") == "wording"], out[-400:])
+    print("  ✓ t_note_wording_switch")
+
+
+def t_note_wording_isolated():
+    """[S6] 這組提醒任一步丟例外只印一句沒跑完,回傳碼、否定現況句提醒、筆記前綴提醒照常;有提醒時記一筆 hinted 帳。
+    翻紅釘:拿掉 _ns_wording_collect 的例外防護 → 替身直接炸出測試;不記帳 → ①紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="`KINDS` 有三種\n說明(更正:第 3 項是 c)")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    ev = [e for e in _neg_events(root, "hinted") if e.get("check") == "wording"]
+    check("①記一筆 hinted(check=wording、兩種規則、兩行、一篇)", len(ev) == 1 and ev[0].get("rules") == ["count", "position"]
+          and ev[0].get("lines") == 2 and ev[0].get("notes") == 1, str(ev))
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    for label, name in (("判定", "_ns_wording_hints"), ("讀設定", "_note_shape_wording_parse")):
+        for with_viol, want_rc in ((False, 0), (True, 1)):
+            root = _wd_repo()
+            _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可",
+                     body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做\n`KINDS` 有三種")
+            _ns_stage(root)
+            rc, out = _neg_inproc(root, **{name: _boom})
+            check(f"{label}丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、另兩組提醒照常",
+                  rc == want_rc and "新寫句子寫法提醒這次沒跑完(RuntimeError)" in out and _WD_HEAD not in out
+                  and _NEG_HEAD in out and _TAG_HEAD in out, out[-800:])
+    print("  ✓ t_note_wording_isolated")
+
+
 def t_doctor_lists_stale_rules():
     """[S6] doctor 列出有效 RULE 的 [until:] 過期、超過半年沒確認、沒寫 [confirmed:](舊行也列),不計入問題數;
     superseded 的不列。翻紅釘:拿掉 superseded 那道跳過 → ③紅;warn_soft 改成算問題 → ④紅。"""

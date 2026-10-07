@@ -31288,6 +31288,298 @@ def _ns_tag_hints_doctor_lines(cfg_text):
     return r["warns"][:1] if r["bad_value"] else []
 
 
+# ★新寫句子寫法提醒★(Projects/新寫句子的數量與位置提醒_計劃):提交前多看兩種「寫下去之後容易過期或指錯」的寫法——
+# 數量:點名 Python 具名集合、寫的數字剛好等於成員數、卻沒掛 [count:](數法沿用數量標記的 _count_eval);
+# 位置:更正括號裡用「第 N 項/最後一個/倒數第 N」指清單項目。照前綴提醒的路:自己的開關 note_shape.wording(warn/off)、
+# 只在提交前算、不進違規清單、不改回傳碼、出錯只印一句,不影響另外兩組提醒與判定。
+_NS_WD_SEG_RE = re.compile(r"[。;；!?！？,，]|——")
+_NS_WD_NUM = r"(?:[0-9]{1,9}|[一二兩三四五六七八九十]{1,3})"
+_NS_WD_COUNT_RE = re.compile(r"(" + _NS_WD_NUM + r")\s*(?:成員|種|類|項|款|樣|個|支|條|值|鍵|欄|組)")
+_NS_WD_UNITS = "個|項|條|點|行|列|筆|段|格|欄|處|支|句|步|節"
+_NS_WD_POS_RE = re.compile(r"第\s*" + _NS_WD_NUM + r"\s*(?:" + _NS_WD_UNITS + r")|最後一\s*(?:" + _NS_WD_UNITS
+                           + r")|倒數第\s*" + _NS_WD_NUM)
+# 更正括號:左括號後(可隔一個短前綴,例「r1 」「2026-10-07 」)緊接更正類字眼加冒號;只要求含字眼的話「修正關卡第 3 項」這種
+# 專有名詞全部誤報(2026-10-07 本 repo 試掃 9 處只有 2 處真的是更正括號)
+_NS_WD_FIX_RE = re.compile(r"[(（]\s*(?:[^\s()（）]{1,12}\s+)?(?:更正|修正|訂正|勘誤)\s*[:：]")
+_NS_WD_NAME_RE = re.compile(r"(?:(.+)::)?([A-Za-z_][A-Za-z0-9_]*)")
+_NS_WD_ZH_DIGITS = {"一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_NS_WD_PY_MAX_BYTES = 64 * 1048576      # 數量規則讀 Python 檔的總量上限;超過這次數量規則就不再提醒(〈做法〉3)
+_NS_WD_MAX_EVALS = 50                   # 一次提交最多數幾個不同名稱;超過同上
+_NS_WD_DEF_MAX_LINES = 2000             # 定義那一段最多讀幾行(再長就不數)
+
+
+def _note_shape_wording_parse(text):
+    """note_shape.wording → {mode, warns, bad_value}(同前綴提醒,共用 _note_shape_mode_parse)。"""
+    return _note_shape_mode_parse(text, "wording", "新寫句子寫法提醒")
+
+
+def _ns_wording_prepare(cfg_text):
+    """提交前讀 note_shape.wording → (容器或 None, 設定提醒, 失敗的例外類別名或 None);off 就不給容器。"""
+    try:
+        r = _note_shape_wording_parse(cfg_text)
+    except Exception as e:
+        return None, [], e.__class__.__name__
+    box = {"items": [], "error": None, "seen": 0, "py": None, "py_capped": None, "res": {}, "evals": 0, "top": {}}
+    return (box if r["mode"] != "off" else None), r["warns"], None
+
+
+def _ns_wd_num(s):
+    """阿拉伯數字或一到九十九的中文數字 → 整數;看不懂的中文寫法(「十十」「二百」)回 None。"""
+    if s.isdigit():
+        return int(s)
+    if s in _NS_WD_ZH_DIGITS:
+        return _NS_WD_ZH_DIGITS[s]
+    head, ten, tail = s.partition("十")
+    if not ten or "十" in tail or len(head) > 1 or len(tail) > 1:
+        return None
+    if (head and head not in _NS_WD_ZH_DIGITS) or (tail and tail not in _NS_WD_ZH_DIGITS):
+        return None
+    return (_NS_WD_ZH_DIGITS[head] if head else 1) * 10 + (_NS_WD_ZH_DIGITS[tail] if tail else 0)
+
+
+_NS_WD_DEF_RE = re.compile(r"^(?:([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]*)?=(?!=)|class\s+([A-Za-z_][A-Za-z0-9_]*))", re.M)
+
+
+def _ns_wd_py(box, files, reader):
+    """被檢查版本的 Python 檔 → {名稱: [(路徑, 原文, 定義行的起點)]}(行首像模組最上層指派或類別的,一處一筆),
+    一次提交只讀、只建一次;總量超過上限就停、記 py_capped。建索引而不是每個名稱掃一遍全部檔:
+    一次提交點名幾千個不同名稱時才不會變成名稱數乘檔案量。"""
+    if box["py"] is None:
+        out, total = {}, 0
+        for p in files:
+            if not (p.endswith(".py") or _nodehome_code_kind(p) == "shebang?"):
+                continue
+            b = reader(p)
+            if b is None:
+                continue
+            total += len(b)
+            if total > _NS_WD_PY_MAX_BYTES:
+                box["py_capped"] = f"要讀的 Python 檔超過 {_NS_WD_PY_MAX_BYTES // 1048576} MB"
+                break
+            txt = b.decode("utf-8", errors="replace")
+            if _drift_probe_is_py(p, txt):
+                for m in _NS_WD_DEF_RE.finditer(txt):
+                    out.setdefault(m.group(1) or m.group(2), []).append((p, txt, m.start()))
+        box["py"] = out
+    return box["py"]
+
+
+def _ns_wd_resolve(box, files, reader, path, name, n):
+    """`路徑::名稱` 或 `名稱`、句子寫的數 n → 要貼標記的路徑或 None。名稱在所有 Python 檔裡(帶路徑就只看那支)的行首定義,
+    先各自只解析那一段數成員(便宜);有一處數得出 n,才用 ast 確認哪幾處是真的模組最上層定義(字串裡頂格的假定義不算),
+    真的恰好一處而且就是數得出 n 的那處才算。數到第 _NS_WD_MAX_EVALS 個名稱就停。"""
+    key = (path, name)
+    if key not in box["res"]:
+        defs = [d for d in _ns_wd_py(box, files, reader).get(name, ()) if path is None or d[0] == path]
+        if defs and not box["py_capped"]:
+            if box["evals"] >= _NS_WD_MAX_EVALS:      # 只算真的要數的(有定義的);找不到定義的名稱不佔額度
+                box["py_capped"] = f"這次點名、找得到定義的程式名稱超過 {_NS_WD_MAX_EVALS} 個"
+                return None
+            box["evals"] += 1
+        box["res"][key] = [(p, t, _ns_wd_def_count(t, at, name)) for p, t, at in defs] if not box["py_capped"] else []
+    cands = box["res"][key]
+    if not any(c == n for _p, _t, c in cands):
+        return None
+    real = [(p, c) for p, t, c in cands if _ns_wd_toplevel(box, p, t, name)]
+    return real[0][0] if len(real) == 1 and real[0][1] == n else None
+
+
+def _ns_wd_toplevel(box, path, txt, name):
+    """那個名稱在這支檔是不是真的模組最上層指派或類別:用 _drift_py_names(ast;字串與 docstring 裡的不算,drift 那邊
+    同一件事的唯一判法),一支檔只解析一次;解析不了、或大於 _DRIFT_M1_PARSE_MAX_BYTES 的檔不信、回 False。★只在數字已經對上、準備提醒時才呼叫★——
+    整支解析在 3 MB 的檔上約 1.8 秒、350 MB,讓每次點名都付太貴(代碼審 r2 架構對齊席:原本另用 tokenize 判,是第二種做法)。"""
+    import warnings
+    if path not in box["top"]:
+        if len(txt.encode("utf-8", errors="replace")) > _DRIFT_M1_PARSE_MAX_BYTES:
+            got = None                          # 照舊句檢查的上限:太大的檔不用 ast(尖峰記憶體約原始碼 100 到 280 倍),不提醒
+        else:
+            with warnings.catch_warnings():     # 同 _ns_wd_def_count:無效跳脫的 SyntaxWarning 不准漏到終端
+                warnings.simplefilter("ignore")
+                got = _drift_py_names(txt)
+        box["top"][path] = None if got is None else (got[1] | got[2])
+    names = box["top"][path]
+    return names is not None and name in names
+
+
+def _ns_wd_def_count(txt, start, name):
+    """只解析定義那一段(從定義行到下一個頂格的語句)→ 成員數或 None;判定與數法整段交給數量標記的 _count_eval
+    (哪種語句算定義、怎麼數只有一份)。★不解析整支檔★:本 repo 的常數大多在一支 3 MB 的檔裡,整支解析一次約 1.8 秒、350 MB,
+    提交時每次點名都要付;代價是不查定義之後有沒有被改過,這裡只是提醒,掛上標記後 drift scan 照完整判法再判一次。
+    解析時關掉 Python 的警告(無效跳脫的 SyntaxWarning 會直接印到 stderr,打破「出錯只印一句」)。"""
+    import warnings
+    lines = txt[start:].split("\n", _NS_WD_DEF_MAX_LINES + 1)
+    seg = [lines[0]]
+    for ln in lines[1:]:
+        if ln[:1] and not ln[:1].isspace() and ln[:1] not in ")]}":
+            break
+        seg.append(ln)
+    else:
+        if len(lines) > _NS_WD_DEF_MAX_LINES:
+            return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return _count_eval("\n".join(seg), name)[0]
+
+
+def _ns_wd_paren_groups(s):
+    """一行(位置不動的遮罩版)裡每一層的括號群 → [(起, 迄)],照起點排;半形與全形混用、可巢狀,每個右括號配最近一個沒配到的
+    左括號,沒收尾的左括號不算、也不吃掉後面的群(「:-( 然後 (更正:…)」照認)。★任何一層都吐★:更正括號常包在別的括號裡。"""
+    out, stack = [], []
+    for i, ch in enumerate(s):
+        if ch in "(（":
+            stack.append(i)
+        elif ch in ")）" and stack:
+            out.append((stack.pop(), i + 1))
+    return sorted(out)
+
+
+def _ns_wd_names(line):
+    """一行裡反引號包著的程式名稱 → [(在原行的位置, 路徑或 None, 名稱)];名稱要是 Python 識別字,`路徑::名稱` 也認。"""
+    out = []
+    for a, b in _inline_hidden(line)[0]:
+        seg = line[a:b]
+        m = _NS_WD_NAME_RE.fullmatch(seg[1:-1]) if len(seg) > 2 and seg[0] == seg[-1] == "`" else None
+        if m:
+            out.append((a, m.group(1), m.group(2)))
+    return out
+
+
+def _ns_wd_numbers(masked, a, b, cut):
+    """一段裡的數量 → 逐個吐 (位置, 數);跳過起點在 cut 之前的、前面是「第」的、阿拉伯數字前面緊貼 _COUNT_NUM_EDGE 的
+    (F3、r1-3、a/3 這類;跟 drift fix 認的獨立數字同一組字,中文字緊貼照算,「有3種」是數量)、看不懂的中文數字、小於 2 的。"""
+    for m in _NS_WD_COUNT_RE.finditer(masked, a, b):
+        if m.start() < cut:
+            continue
+        raw = masked[a:m.start()]
+        prev = raw[-1:]
+        if raw.rstrip().endswith("第") or (m.group(1).isdigit() and re.fullmatch(f"[{_COUNT_NUM_EDGE}]", prev)):
+            continue
+        n = _ns_wd_num(m.group(1))
+        if n is not None and n >= 2:
+            yield m.start(), n
+
+
+def _ns_wd_count_hit(box, files, reader, line, masked, cut):
+    """數量規則 → (原行裡的位置, 要貼的標記) 或 None。masked:行內程式碼、方括號欄位、引號裡換成 \\0;只認起點在 cut 之後的數字。"""
+    names = _ns_wd_names(line)
+    if not names:
+        return None
+    bounds = [0] + [x for m in _NS_WD_SEG_RE.finditer(masked) for x in (m.start(), m.end())] + [len(masked)]
+    for a, b in zip(bounds[::2], bounds[1::2]):
+        segnames = [(p, nm) for at, p, nm in names if a <= at < b]
+        for pos, n in (_ns_wd_numbers(masked, a, b, cut) if segnames else ()):
+            for p, name in segnames:
+                r = _ns_wd_resolve(box, files, reader, p, name, n)
+                if r is not None:
+                    return pos, f"[count:{r}::{name}={n}]"
+    return None
+
+
+def _ns_wd_line_hit(box, files, reader, ln, seen, masked, cut):
+    """一行 → (原行裡的位置, count|position, 要貼的標記或 None) 或 None;數量優先,只認起點在 cut 之後的命中。
+    成對引號裡的字不看(只是在提這種寫法;同否定現況句提醒的 _ns_neg_quote_spans),所以引號也是誤報的出口。"""
+    quotes = _ns_neg_quote_spans(masked)
+    masked = _inline_blank(masked, quotes)
+    if "[count:" not in seen and "lumos:count" not in seen and not box["py_capped"]:
+        fields = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), masked)
+        c = _ns_wd_count_hit(box, files, reader, ln, fields, cut)
+        if c is not None:
+            return c[0], "count", c[1]
+    for a, b in _ns_wd_paren_groups(masked):
+        g = masked[a:b]
+        if a >= cut and _NS_WD_FIX_RE.match(g):
+            m = _NS_WD_POS_RE.search(g)
+            if m:
+                return a + m.start(), "position", None
+    return None
+
+
+def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
+    """一篇 → [(路徑, 行號, 規則 count|position, 片段, 要貼的標記或 None)];一行至多一筆(數量優先)。
+    只看 body/summary、圍欄外、不是 REVISIT 的新行;舊行只在句尾補括號時只看補上的那段(_NotelinesPairs)。"""
+    vis_nos = {no for no, _l in _visible_lines(text.split("\n"))}
+    out = []
+    for i, ln, reg in rows:
+        if reg not in ("body", "summary") or i not in vis_nos:
+            continue
+        seen = _strip_inline_markup(ln)[0]
+        if not seen.strip() or _revisit_split(seen)[0] is not None:
+            continue
+        masked = _inline_visible_mask(ln)
+        hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
+        if hit is not None and pairs is not None:
+            # 有命中才查配對表(同否定現況句提醒:配對要跑 git,沒命中的行不付這筆)
+            o = (pairs.table().get(nfc(path)) or {}).get(i)
+            if o is not None and o.rstrip() and ln.rstrip().startswith(o.rstrip()):
+                hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
+        if hit is not None:
+            lead = len(ln) - len(ln.lstrip())
+            out.append((path, i, hit[1], _ns_negation_snippet(ln.strip(), max(0, hit[0] - lead)), hit[2]))
+    return out
+
+
+def _ns_wording_collect(box, p, text, rows, pairs, files, reader):
+    """_note_shape_eval 逐篇呼叫:box 是 None 或已經失敗就不算;丟例外就清空、記類別名,這次提交不再算。"""
+    if box is None or box.get("error") is not None:
+        return
+    try:
+        box["seen"] = box.get("seen", 0) + sum(1 for _i, _l, r in rows if r in ("body", "summary"))
+        box["items"].extend(_ns_wording_hints(p, text, rows, pairs, files, reader, box))
+    except Exception as e:
+        box["items"] = []
+        box["error"] = e.__class__.__name__
+
+
+def _ns_wording_collected(box, warns, fail):
+    """eval 之後 → (要印的提醒, 數量規則沒跑完的原因或 None, 失敗的例外類別名或 None)。設定的提醒只在這次有新寫的
+    正文或摘要行時印(同前綴提醒的 _ns_tag_hints_collected)。"""
+    if box is None:
+        return [], None, fail
+    fail = fail or box.get("error")
+    if box.get("seen"):
+        for w in warns:
+            print(f"提醒:{w}", file=sys.stderr)
+    return ([] if fail else sorted(box["items"], key=lambda x: (x[0], x[1]))), box.get("py_capped"), fail
+
+
+def _ns_wording_emit(root, items, capped, fail):
+    """印新寫句子寫法提醒並記一筆 hinted 帳(check=wording、規則、幾行、幾篇);任何一步出錯只印一句。★不回傳、不改判定★。"""
+    if fail:
+        print(f"提醒:新寫句子寫法提醒這次沒跑完({fail}),不影響這道檢查的判定", file=sys.stderr)
+        return
+    try:
+        if capped:
+            print(f"提醒:新寫句子的數量提醒這次沒跑完({capped}),後面的行不再看數量;位置提醒照常", file=sys.stderr)
+        if not items:
+            return
+        word = {"count": "數量", "position": "位置"}
+        out = [f"提醒:這次提交新寫的句子有 {len(items)} 處之後容易過期或指錯(note_shape.wording=warn,不擋):"]
+        for p, n, rule, frag, tag in items:
+            out.append(f"  {p}:{n}  [{word[rule]}] {frag}")
+            out.append(f"      → 掛上 {tag},清單改了 lumos drift scan 會列出來" if rule == "count" else
+                       "      → 改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)")
+        out.append("不是在數那個清單、或不是在指清單裡的項目,就不用理;這次提交之後這幾行不會再提醒。"
+                   "關掉這個提醒:.lumos/config.json 的 note_shape.wording 設成 off")
+        print("\n".join(out), file=sys.stderr)
+        rules = sorted({x[2] for x in items})
+        _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:新寫句子寫法提醒 {len(items)} 處",
+                            extra={"check": "wording", "rules": rules, "lines": len(items),
+                                   "notes": len({x[0] for x in items})})
+    except Exception as e:
+        print(f"提醒:新寫句子寫法提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
+
+
+def _ns_wording_doctor_lines(cfg_text):
+    """doctor 的一行:note_shape.wording 是 off 或寫了看不懂的值才講(照前綴提醒的先例)。"""
+    try:
+        r = _note_shape_wording_parse(cfg_text)
+    except Exception:
+        return []
+    if r["mode"] == "off":
+        return ["這個專案把新寫句子寫法提醒關掉了(note_shape.wording=off)"]
+    return r["warns"][:1] if r["bad_value"] else []
+
+
 # ★筆記格子的擋★(Projects/筆記格子寫法與過期檢查_計劃〈擋〉第 1 步):只看新寫的摘要行,照 slot_check 查必有的格子。
 # 開不開由掛鉤決定:提交時要掛鉤呼叫帶 --slots;推送、CI、doctor 事後掃描看格子自己的上線點記號,
 # ★找不到記號=整段不跑★(既有上線點找不到是「不過濾、全查」,格子不能照抄,否則程式一上線就把歷史全當新違規)。
@@ -31691,7 +31983,7 @@ def _ns_slot_extra(sviol, mixed=False):
 
 
 def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclude_remote=True, mark=None, max_count=None,
-                     hints=None, tags=None, slots=None, relaxed=None):
+                     hints=None, tags=None, slots=None, relaxed=None, wording=None):
     """算這次的違規 → (violations[(筆記路徑, 行號, 規則, 片段, 改法)], errors[訊息])。
     舊行原封不動、只在句尾補括號的行(_NotelinesPairs)只報比舊行多出來的違規,扣減在那一篇收進總表之前做,
     被扣過的行照樣被「新程式檔喚醒」那一路看到(Projects/舊行尾追加不算新寫_計劃〈做法〉2)。
@@ -31700,6 +31992,7 @@ def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclud
     逐篇多算一次否定現況句提醒放進 items(★不進 violations,回傳值照舊兩個★),seen=要判的正文與摘要新行數。
     提醒丟例外就清空 items、error 記例外類別名、這次提交不再算(提醒失敗不能讓閘失敗)。
     tags:筆記前綴提醒的容器(同 hints 的規矩,各自隔離;_ns_tag_hints_collect)。
+    wording:新寫句子寫法提醒的容器(同上,各自隔離;_ns_wording_collect,要讀被檢查版本的 Python 檔所以多傳 files、reader)。
     slots:取貨容器——跑完放回這次改到的筆記(notes)與舊行(old_by);★格子跑不跑看它有沒有 mark2★(_ns_slots_prepare 決定),
     不帶 mark2 的空容器只取貨、不開格子,測試綁定那組就是這樣拿碰到的筆記(Projects/筆記測試綁定要存在_計劃〈做法〉1)。原說明:
     筆記格子的容器(只有格子要跑時傳):帶 mark2(推送時格子的上線點記號)就逐提交另收掛鉤帶它的提交寫的行
@@ -31749,6 +32042,7 @@ def _note_shape_eval(repo_root, staged, base_where, tip_where, vault_rel, exclud
         viol.extend(pv)
         _ns_negation_collect(hints, p, text, rows, pairs)
         _ns_tag_hints_collect(tags, p, text, rows)
+        _ns_wording_collect(wording, p, text, rows, pairs, files, reader)
     # 2) 新程式檔喚醒舊引用(筆記這次沒改也查;上線點版本裡就有的那行是舊帳,不算)
     became = _ns_became_code(repo_root, base_where if not staged else _lens_full_sha(repo_root, "HEAD"),
                              tip_where, reader)
@@ -31822,6 +32116,7 @@ def _note_shape_doctor_lines(repo_root, vault, ci=False):
     # 否定現況句提醒的子開關:放在 ci 返回之前,推送前與 CI 路徑每次都唸(照 drift_check.old_sentence 那行)
     out += _ns_negation_doctor_lines(txt)
     out += _ns_tag_hints_doctor_lines(txt)
+    out += _ns_wording_doctor_lines(txt)
     out += _ns_close_summary_doctor_lines(txt)
     out += _ns_slots_doctor_lines(root, mode, txt, ci)
     wf = root / ".github" / "workflows"
@@ -32500,11 +32795,12 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None, slots_flag=False):
     # 讀設定、判定、組字樣、印出、記帳全包在 try 裡——提醒失敗只印一句,rc 照既有判定(掛鉤對 rc1 會擋提交)
     hints, neg_mode, neg_warns, neg_fail = _ns_negation_prepare(cfg_text) if staged else (None, "warn", [], None)
     tags, tag_warns, tag_fail = _ns_tag_hints_prepare(cfg_text) if staged else (None, [], None)
+    wbox, wd_warns, wd_fail = _ns_wording_prepare(cfg_text) if staged else (None, [], None)
     smode, slots = _ns_slots_prepare(root, staged, slots_flag, mode, cfg_text, tip_where)
     box = slots if slots is not None else {}   # 測試綁定要碰到的筆記:一律帶容器;不帶 mark2 時格子不跑(格子另由 slots 判)
     relaxed = None if staged else {}
     res = _note_shape_eval(root, staged, base_where, tip_where, vault_rel, hints=hints, tags=tags, slots=box,
-                           relaxed=relaxed)
+                           relaxed=relaxed, wording=wbox)
     if res is None:
         print("筆記形狀擋:git 算不出這次的改動,跳過(fail-open)", file=sys.stderr)
         return 0
@@ -32520,6 +32816,8 @@ def cmd_note_shape(repo=None, staged=False, diff_range=None, slots_flag=False):
         _note_shape_negation_emit(root, neg_items, neg_mode, neg_fail)
     tag_items, tag_fail = _ns_tag_hints_collected(tags, tag_warns, tag_fail)
     _ns_tag_hints_emit(root, tag_items, tag_fail)
+    wd_items, wd_capped, wd_fail = _ns_wording_collected(wbox, wd_warns, wd_fail)
+    _ns_wording_emit(root, wd_items, wd_capped, wd_fail)
     _ns_close_summary_emit(root, *_ns_close_summary_collect(root, staged, base_where, vault_rel, cfg_text))
     return rc
 
@@ -36234,6 +36532,8 @@ _COUNT_WRAP_CALLS = {"frozenset": True, "set": True, "tuple": False, "list": Fal
 
 
 _COUNT_NUM_RE = re.compile(r"[0-9]{1,9}")     # 九位數以內:超長的數字轉整數會丟例外、整個 scan 停掉(代碼審 r1 正確性席 F4)
+# 句子裡的數字前後緊貼這些字就不是獨立數字(F3、r1-3、a/3);drift fix 與新寫句子的數量提醒共用
+_COUNT_NUM_EDGE = r"0-9A-Za-z_./:\-"
 
 
 def _count_parse(v):
@@ -36452,7 +36752,7 @@ def _count_rewrite(line, old, new):
     行內程式碼裡的範例標籤不動(只改看得見的那一個)。"""
     seen = _inline_visible_mask(line)                         # 行內程式碼遮掉(同 _strip_inline_markup 的判定,位置不動)
     prose = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), seen)   # 方括號欄位也遮掉,只剩句子
-    hits = list(re.finditer(rf"(?<![0-9A-Za-z_./:\-]){old}(?![0-9A-Za-z_./:\-])", prose))
+    hits = list(re.finditer(rf"(?<![{_COUNT_NUM_EDGE}]){old}(?![{_COUNT_NUM_EDGE}])", prose))
     if not hits:
         return None, f"句子裡找不到舊數字 {old}(寫成中文數字或別的說法),手動改這一行"
     if len(hits) > 1:
