@@ -64757,6 +64757,80 @@ def t_doctor_revisit_marks_closed_issues():
           f"{n_doc} {len(seen)} {buf.getvalue()}")
 
 
+def _rvb_vault(src_body):
+    v = mkvault()
+    write(v, "Verification/X.md", "type: verification\nstatus: pass\nrevalidate_when: 產圖腳本改變時", body="# X\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n" + src_body + "\n")
+    write(v, "Projects/Q.md", "type: project\nstatus: doing", body="# Q\n無關\n")
+    return v
+
+
+def t_set_revalidate_when_lists_backrefs():
+    """[B5 S1] lumos set 改了某篇的 revalidate_when:列出連到它、同一句講到 revalidate_when 的句子
+    (來源篇、行號、原句)與改完之後的事件清單;沒有這種句子不多印;不擋、不改別篇(rtb 第三次比對回傳第 10 項)。
+    翻紅釘:拿掉 main 裡 set 之後的呼叫 → ①紅;印改之前的值 → ②紅。append/remove 本來就不收 revalidate_when(只能 set 整欄換)。"""
+    print("t_set_revalidate_when_lists_backrefs")
+    src = "Phase 12 頁面上主線時由 [[Verification/X]] 的 revalidate_when 觸發重驗。"
+    v = _rvb_vault(src)
+    before = (v / "Projects" / "P.md").read_text(encoding="utf-8")
+    r = run(v, "set", "Verification/X", "revalidate_when", "字型改變時")
+    lines = before.split("\n")
+    no = next(i + 1 for i, ln in enumerate(lines) if "觸發重驗" in ln)
+    check("①set 之後列出引用它的句子(來源篇與行號、原句)", r.returncode == 0 and f"Projects/P.md:{no}" in r.stdout and "觸發重驗" in r.stdout, r.stdout + r.stderr)
+    check("②印出改完之後的事件清單", "字型改變時" in r.stdout and r.stdout.find("字型改變時") >= 0, r.stdout)
+    check("①不改別篇", (v / "Projects" / "P.md").read_text(encoding="utf-8") == before, "")
+    r = run(v, "set", "Verification/X", "revalidate_when", "README 文案改變時", "字型改變時")
+    check("③整欄換成多個值也列,並印出多個事件", r.returncode == 0 and "Projects/P.md:" in r.stdout and "README 文案改變時" in r.stdout, r.stdout + r.stderr)
+    # 代碼審 r1 正確性席 F1:同一行兩句都指向同一篇,兩句都要列(原本每行取到一句就停)
+    v3 = _rvb_vault("甲 [[Verification/X]] 的 revalidate_when 第一;乙 [[Verification/X]] 的 revalidate_when 第二。")
+    r = run(v3, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑥同一行兩句指向同一篇:兩句都列", r.returncode == 0 and "第一" in r.stdout and "第二" in r.stdout and "有 2 句" in r.stdout, r.stdout)
+    # 代碼審 r2 正確性席 F1:同一句裡兩組完整配對,這一句只列一次(r1 拿掉取到就停之後會列兩次、把句數灌水)
+    v5 = _rvb_vault("[[Verification/X]] 的 revalidate_when 與 [[Verification/X]] 的 revalidate_when 同一句。")
+    r = run(v5, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑨同一句兩組配對:只列一次", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 1 and "有 1 句" in r.stdout, r.stdout)
+    # 代碼審 r1 架構對齊席 A1:同 _drift_print_backrefs 最多列 20 句,其餘說還有幾句
+    v4 = _rvb_vault("\n".join(f"第{i}行由 [[Verification/X]] 的 revalidate_when 觸發。" for i in range(25)))
+    r = run(v4, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑦超過 20 句只列 20 句,其餘說還有 5 句", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 20 and "還有 5 句" in r.stdout, r.stdout[-300:])
+    # 代碼審 r1 架構對齊席 A2:列出出錯不改回傳碼,stderr 說寫入照樣完成(同 _drift_print_backrefs 的 fail-open)
+    m = _load_lumos_inproc()
+    import io as _io2
+    from unittest.mock import patch as _patch2
+    err = _io2.StringIO()
+    with _patch2.object(m, "_revalidate_backref_lines", side_effect=ValueError("壞掉")), _patch2.object(m.sys, "stderr", err):
+        raised = None
+        try:
+            m._print_revalidate_backrefs(None, "Verification/X.md")
+        except Exception as e:     # noqa: BLE001 — 要的就是「不丟例外」
+            raised = e
+    check("⑧列出出錯不丟例外,stderr 說寫入照樣完成", raised is None and "寫入照樣完成" in err.getvalue(), repr(raised) + err.getvalue())
+    v2 = _rvb_vault("沒有引用")
+    r = run(v2, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑤沒有引用句:不多印", r.returncode == 0 and "句連到這篇" not in r.stdout, r.stdout)
+
+
+def t_set_revalidate_when_backrefs_excluded():
+    """[B5 S2] 不列的情形:連結包在行內程式碼裡、整句在程式碼區裡、連到別篇、revalidate_when 跟連結隔著句尾、改的是別的欄位。
+    每一格都在同一篇另放一句對照句(沒有排除情形),對照句要列——證明「不列」不是因為根本什麼都沒印。"""
+    print("t_set_revalidate_when_backrefs_excluded")
+    ctl = "\n對照:由 [[Verification/X]] 的 revalidate_when 觸發。"
+    for desc, body in (("①連結在行內程式碼裡", "例如 `[[Verification/X]]` 的 revalidate_when 觸發。"),
+                       ("②整句在程式碼區裡", "```\n由 [[Verification/X]] 的 revalidate_when 觸發\n```"),
+                       ("③連到別篇", "由 [[Projects/Q]] 的 revalidate_when 觸發。"),
+                       ("④隔著句尾", "見 [[Verification/X]]。另外 revalidate_when 要寫清楚。")):
+        v = _rvb_vault(body + ctl)
+        lines = (v / "Projects" / "P.md").read_text(encoding="utf-8").split("\n")
+        bad = [i + 1 for i, ln in enumerate(lines) if "對照" not in ln and ("revalidate_when" in ln or "[[" in ln)]
+        ok_no = next(i + 1 for i, ln in enumerate(lines) if "對照" in ln)
+        r = run(v, "set", "Verification/X", "revalidate_when", "字型改變時")
+        check(f"{desc}:不列,對照句照列", r.returncode == 0 and f"Projects/P.md:{ok_no}" in r.stdout
+              and not any(f"Projects/P.md:{n} " in r.stdout or f"Projects/P.md:{n}\n" in r.stdout for n in bad), r.stdout)
+    v = _rvb_vault("由 [[Verification/X]] 的 revalidate_when 觸發。")
+    r = run(v, "set", "Verification/X", "status", "pass")
+    check("⑤改的是別的欄位:不列", r.returncode == 0 and "Projects/P.md:" not in r.stdout, r.stdout)
+
+
 def t_set_issue_closed_lists_revisits():
     """[S7] lumos set 或 drift fix --kind c2 --close 把 Issue 改成結案值:列出它全部的回頭條件行(程式碼區與行內程式碼裡的不算),
     不擋不改;行號用寫完之後的內容算。

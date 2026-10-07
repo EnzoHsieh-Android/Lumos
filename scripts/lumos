@@ -4114,15 +4114,21 @@ def _rref_window(raw, a, b, link):
     return _SENT_END_RE.split(raw[a:ls] + raw[le:b + _RREF_TAIL], maxsplit=1)[0]
 
 
+def _in_spans(spans, starts, i):
+    """位置 i 在不在 spans(由左到右、不重疊的 (起, 迄),通常是 _inline_hidden 的結果)裡;starts 是各段起點,呼叫端每行算一次。
+    二分找(原本每次掃全部區段,一行三萬組要 35 秒;code-指向別篇的回頭條件懸空 r1 正確性席 F3)。S21 與改重驗事件時的列出共用。"""
+    import bisect
+    k = bisect.bisect_right(starts, i) - 1
+    return k >= 0 and i < spans[k][1]
+
+
 def _revisit_ref_hits(raw):
     """一行可見文字裡指向別篇回頭條件的引用 → [(目標, 日期或 None)]。連結本身在行內程式碼裡的不算(舉例);
     REVISIT 與日期包在反引號裡照認。從連結到 REVISIT(或日期)之後 30 字內、到句號為止有待辦指示詞的不算(那是要去改它)。"""
-    import bisect
     hidden = _inline_hidden(raw)[0]
     starts = [a for a, _b in hidden]
-    def _in_code(i):        # 區段由左到右、不重疊 → 二分找(原本每次掃全部區段,一行三萬組要 35 秒;r1 正確性席 F3)
-        k = bisect.bisect_right(starts, i) - 1
-        return k >= 0 and i < hidden[k][1]
+    def _in_code(i):
+        return _in_spans(hidden, starts, i)
     out = []
     for m in _RREF_DATED_RE.finditer(raw):
         after = _RREF_AFTER_DATE_RE.match(raw, m.end())
@@ -4164,6 +4170,60 @@ def _doctor_revisit_ref_lines(env):
                 out.append(_esc_clean(f"{rel}:{no}:指向 [[{tgt}]] 的回頭條件{(' ' + date + ' ') if date else ''}已不在({why})",
                                       _DOCTOR_LINE_MAX))
     return out
+
+
+# 改重驗事件時列出引用它的句子(Projects/改重驗事件時列出引用它的句子_計劃,rtb 第三次比對回傳第 10 項):
+# 「[[X]] … revalidate_when」同一句 24 字內;連結認法同 S21(行內程式碼裡的不算、不跨句尾、先過 link_target)
+_RVB_RE = re.compile(_RREF_LINK + _RREF_NOT_END + r"{0,24}?revalidate_when")
+
+
+def _revalidate_backref_lines(env, rel):
+    """全庫連到 rel、同一句講到 revalidate_when 的句子 → [(來源篇, 行號, 那一句)];rel 自己那篇不算。只讀不寫。
+    回的是連結所在的那一句(前後切到句尾 _SENT_END_RE),不是整行:長行裡相關的那句常在行尾,印整行會被截掉。
+    同一行有好幾句都指向 rel 就每句各一筆(代碼審 r1 正確性席:原本每行取到一句就停)。"""
+    out = []
+    for src in sorted(env.notes):
+        text = env_text(env, src)
+        if src == rel or not text or "revalidate_when" not in text:
+            continue
+        for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
+            hidden = _inline_hidden(raw)[0]
+            starts = [a for a, _b in hidden]
+            seen = set()        # 同一句裡兩組配對只算一句(代碼審 r2 正確性席:r1 拿掉取到就停後會列兩次、把句數灌水)
+            for m in _RVB_RE.finditer(raw):
+                if not _in_spans(hidden, starts, m.start(1)) and env.resolve(link_target(m.group(1))) == rel:
+                    head = max((e.end() for e in _SENT_END_RE.finditer(raw, 0, m.start())), default=0)
+                    if head in seen:
+                        continue
+                    seen.add(head)
+                    tail = _SENT_END_RE.search(raw, m.end())
+                    out.append((src, no, raw[head:tail.end() if tail else len(raw)].strip()))
+    return out
+
+
+def _print_revalidate_backrefs(env, rel):
+    """lumos set 改了 rel 的 revalidate_when 之後:列出引用它的句子,附上改完之後的事件清單讓人對照。只印、不擋、不改;
+    env 是改之前載入的(別篇沒變),新清單從磁碟重讀。沒有引用句就什麼都不印。寫入已經完成,掃描出錯只在 stderr 講一句、
+    最多列 20 句——兩者同 _drift_print_backrefs(代碼審 r1 架構對齊席)。"""
+    try:
+        rows = _revalidate_backref_lines(env, rel)
+    except (OSError, ValueError, RuntimeError, UnicodeDecodeError) as e:
+        print(f"(列出引用這篇 revalidate_when 的句子失敗,剛才的寫入照樣完成了:{e})", file=sys.stderr)
+        return
+    if not rows:
+        return
+    print(f"有 {len(rows)} 句連到這篇、講到它的 revalidate_when——事件清單改了,看一眼那句說的事件還在不在(只列出、不擋):")
+    for src, no, raw in rows[:20]:
+        print(f"  · {_esc_clean(src, 200)}:{no}  {_esc_clean(raw, 160)}")
+    if len(rows) > 20:
+        print(f"  …還有 {len(rows) - 20} 句")
+    try:
+        now = _note_from_text(rel, _phys_path(env.vault, rel).read_text(encoding="utf-8-sig")).fields.get("revalidate_when")
+    except (OSError, UnicodeDecodeError):
+        return
+    print("  這篇現在的 revalidate_when:")
+    for c in _conds(now) or ["(空)"]:
+        print(f"    - {_esc_clean(c, 160)}")
 
 _METRIC_CMP = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b, ">": lambda a, b: a > b,
                ">=": lambda a, b: a >= b, "==": lambda a, b: a == b}
@@ -50817,6 +50877,8 @@ def main():
         try:
             if args.cmd == "set":
                 rc = cmd_set(env, rel, args.key, args.value)
+                if rc == 0 and args.key == "revalidate_when":      # 引用它的句子(改重驗事件時列出引用它的句子_計劃)
+                    _print_revalidate_backrefs(env, rel)
                 if rc == 0 and args.key == "status":
                     # 計劃收尾時列連帶待辦(存量漂移防線 [S6]):只多印、不擋、不寫;env 是改之前載入的,連結沒變
                     _v = args.value[0] if isinstance(args.value, list) and len(args.value) == 1 else args.value

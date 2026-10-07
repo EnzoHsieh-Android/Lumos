@@ -1,0 +1,78 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/改重驗事件時列出引用它的句子_計劃.md b/docs/lumos-toolchain-knowledge/Projects/改重驗事件時列出引用它的句子_計劃.md
+index 2be3d4b83cc6529687fcf74416e240070d5b2094..d34b67815f106f60c6de5588ba7e46c997c02264 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/改重驗事件時列出引用它的句子_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/改重驗事件時列出引用它的句子_計劃.md
+@@ -50,11 +50,11 @@ RETIRE-IF: 連續 8 週工具鏈與 rtb 都沒有人在改 revalidate_when 時
+ 
+ 1. 一開始就寫錯的句子(聲稱的事件從沒出現在對方清單裡)抓不到;rtb 現有那一句請 rtb 手動改。
+ 2. 只認「[[X]] … revalidate_when」這種寫法;沒寫欄位名的(「由 X 的重驗條件觸發」)看不到。
+ 3. 庫裡有同名、不同資料夾的筆記時,只寫短名的連結照全工具共用的解析規則可能解析成另一篇,那句就不會被列出(代碼審 r1 正確性席,附理由放行)。
+ 
+ ## 實作紀錄
+ 
+ - 2026-10-07:先寫兩支測試、規格閘記下 S1、S2 紅(S2 原本在實作前就綠——「不列」在什麼都不印時當然成立,加一句對照句要列才有鑑別力;一度標 [keeps] 被規格閘擋:keeps 要測試在計劃前就存在)。append、remove 本來就不收 revalidate_when,範圍收成只有 set。「某位置在不在行內程式碼裡」從 S21 的內嵌函式提成 `_in_spans` 兩邊共用。列出的是連結所在那一句、不是整行(rtb 那行相關的句子在行尾,印整行會被截掉)。翻紅:拿掉呼叫、印改之前的值、不排除行內程式碼、不比對目標(測試原本沒抓到,對照組判斷修正後紅)、跨句尾,五種各自紅。rtb 真圖譜:改 README 流程動圖驗證那篇時列出那一句(0.02 秒);工具鏈列出 1 句(0.18 秒)。
+ - 風險分級第一次判 high:新增告警閘抓到測試裡三處單字母變數名 `l`(第一次只改到一處),全部改成 `ln` 後重算。
+ - 2026-10-07 代碼審 r1(一般風險,正確性+架構對齊兩席,4 條 minor):同一行兩句指向同一篇只列第一句(拿掉取到就停);沒有行數上限、掃描沒包安全網(照 `_drift_print_backrefs`:最多 20 句、出錯只在 stderr 說寫入照樣完成)。同名不同資料夾時短名連結會解析成另一篇而漏列,是全工具共用的連結解析行為,附理由放行(見天花板 3)。新加 3 格修前紅。
+-
++- 2026-10-07 代碼審 r2(新席兩位,1 條 minor):r1 拿掉「每行取到一句就停」後,同一句裡兩組完整配對會列兩次、把句數灌水——每行記住已列過的句首位置。新加 1 格修前紅。
+diff --git a/scripts/lumos b/scripts/lumos
+index 11c7893c921c4a5ee8e80f06dfae3ea2103f761e..3f3945cd51ccc704c852a754dfc4618a21d33560 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4155,23 +4155,27 @@ def _revalidate_backref_lines(env, rel):
+     回的是連結所在的那一句(前後切到句尾 _SENT_END_RE),不是整行:長行裡相關的那句常在行尾,印整行會被截掉。
+     同一行有好幾句都指向 rel 就每句各一筆(代碼審 r1 正確性席:原本每行取到一句就停)。"""
+     out = []
+     for src in sorted(env.notes):
+         text = env_text(env, src)
+         if src == rel or not text or "revalidate_when" not in text:
+             continue
+         for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
+             hidden = _inline_hidden(raw)[0]
+             starts = [a for a, _b in hidden]
++            seen = set()        # 同一句裡兩組配對只算一句(代碼審 r2 正確性席:r1 拿掉取到就停後會列兩次、把句數灌水)
+             for m in _RVB_RE.finditer(raw):
+                 if not _in_spans(hidden, starts, m.start(1)) and env.resolve(link_target(m.group(1))) == rel:
+                     head = max((e.end() for e in _SENT_END_RE.finditer(raw, 0, m.start())), default=0)
++                    if head in seen:
++                        continue
++                    seen.add(head)
+                     tail = _SENT_END_RE.search(raw, m.end())
+                     out.append((src, no, raw[head:tail.end() if tail else len(raw)].strip()))
+     return out
+ 
+ 
+ def _print_revalidate_backrefs(env, rel):
+     """lumos set 改了 rel 的 revalidate_when 之後:列出引用它的句子,附上改完之後的事件清單讓人對照。只印、不擋、不改;
+     env 是改之前載入的(別篇沒變),新清單從磁碟重讀。沒有引用句就什麼都不印。寫入已經完成,掃描出錯只在 stderr 講一句、
+     最多列 20 句——兩者同 _drift_print_backrefs(代碼審 r1 架構對齊席)。"""
+     try:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index afa20077265bcbc124db57df8df801def196b116..3ca674d3ef6b4685770eb2a1df0c904386840a83 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -64196,20 +64196,24 @@ def t_set_revalidate_when_lists_backrefs():
+     no = next(i + 1 for i, ln in enumerate(lines) if "觸發重驗" in ln)
+     check("①set 之後列出引用它的句子(來源篇與行號、原句)", r.returncode == 0 and f"Projects/P.md:{no}" in r.stdout and "觸發重驗" in r.stdout, r.stdout + r.stderr)
+     check("②印出改完之後的事件清單", "字型改變時" in r.stdout and r.stdout.find("字型改變時") >= 0, r.stdout)
+     check("①不改別篇", (v / "Projects" / "P.md").read_text(encoding="utf-8") == before, "")
+     r = run(v, "set", "Verification/X", "revalidate_when", "README 文案改變時", "字型改變時")
+     check("③整欄換成多個值也列,並印出多個事件", r.returncode == 0 and "Projects/P.md:" in r.stdout and "README 文案改變時" in r.stdout, r.stdout + r.stderr)
+     # 代碼審 r1 正確性席 F1:同一行兩句都指向同一篇,兩句都要列(原本每行取到一句就停)
+     v3 = _rvb_vault("甲 [[Verification/X]] 的 revalidate_when 第一;乙 [[Verification/X]] 的 revalidate_when 第二。")
+     r = run(v3, "set", "Verification/X", "revalidate_when", "字型改變時")
+     check("⑥同一行兩句指向同一篇:兩句都列", r.returncode == 0 and "第一" in r.stdout and "第二" in r.stdout and "有 2 句" in r.stdout, r.stdout)
++    # 代碼審 r2 正確性席 F1:同一句裡兩組完整配對,這一句只列一次(r1 拿掉取到就停之後會列兩次、把句數灌水)
++    v5 = _rvb_vault("[[Verification/X]] 的 revalidate_when 與 [[Verification/X]] 的 revalidate_when 同一句。")
++    r = run(v5, "set", "Verification/X", "revalidate_when", "字型改變時")
++    check("⑨同一句兩組配對:只列一次", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 1 and "有 1 句" in r.stdout, r.stdout)
+     # 代碼審 r1 架構對齊席 A1:同 _drift_print_backrefs 最多列 20 句,其餘說還有幾句
+     v4 = _rvb_vault("\n".join(f"第{i}行由 [[Verification/X]] 的 revalidate_when 觸發。" for i in range(25)))
+     r = run(v4, "set", "Verification/X", "revalidate_when", "字型改變時")
+     check("⑦超過 20 句只列 20 句,其餘說還有 5 句", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 20 and "還有 5 句" in r.stdout, r.stdout[-300:])
+     # 代碼審 r1 架構對齊席 A2:列出出錯不改回傳碼,stderr 說寫入照樣完成(同 _drift_print_backrefs 的 fail-open)
+     m = _load_lumos_inproc()
+     import io as _io2
+     from unittest.mock import patch as _patch2
+     err = _io2.StringIO()
+     with _patch2.object(m, "_revalidate_backref_lines", side_effect=ValueError("壞掉")), _patch2.object(m.sys, "stderr", err):
