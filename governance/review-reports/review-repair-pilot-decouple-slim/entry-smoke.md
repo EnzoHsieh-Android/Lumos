@@ -1,0 +1,3 @@
+**現在不得登記第 2 案。** 倉庫的 [AGENTS.md](/Users/enzo/orca/workspaces/lumos-toolchain/aspidochelone/AGENTS.md:92) 明定：先讀試行計劃與生效驗證，尚未生效時不得登記第 2 案。
+
+[計劃](/Users/enzo/orca/workspaces/lumos-toolchain/aspidochelone/docs/lumos-toolchain-knowledge/Projects/代碼審修復穩定性試行_計劃.md:72) 要求精簡版設計審正式 PASS，並將核准版本、生效時間及入口核對結果寫入 Verification，三者齊備才能領第 2 案；[五格表](/Users/enzo/orca/workspaces/lumos-toolchain/aspidochelone/docs/lumos-toolchain-knowledge/Projects/代碼審修復穩定性試行_計劃.md:59) 仍標「待登記」。[Verification](/Users/enzo/orca/workspaces/lumos-toolchain/aspidochelone/docs/lumos-toolchain-knowledge/Verification/2026-10-04_代碼審改道生效驗證.md:16) 的目前狀態是 **pending、執行規則未生效**，且未記 PASS 或生效時刻。

@@ -1,0 +1,63 @@
+severity: minor
+
+已讀範圍：凍結 patch 全部 538 行，逐個 hunk 讀過。另外唯讀對照了這些地方：
+- 目前的 `governance/eval/ablation_lumos_first.py`，包括 `load_results`、`collect_skills_health`、`needed`、`runs_in_window`、`run_job`、`main`。
+- `scripts/scenario_probe.py:1113-1175`，探針只在 finally 裡把整檔一次寫進 `--out`。
+- 圖譜 `Systems/ablation-lumos-first.md`，以及前一份外家報告 `r1-final-external.txt`。
+- `scripts/test_autonomous_loop.py` 裡呼叫本模組的地方。
+
+沒有改任何檔案，也沒有跑任何指令。
+
+**Finding 1**
+severity: minor
+blocking: 否
+引句:「同一輸出目錄的另一個 CLI 可能已在跑模型；其 stop 旗標不會跨進程共享。」
+file: `governance/eval/ablation_lumos_first.py:424`（相關：`:205`、`:425-433`）
+
+具體失敗情境：
+1. **鎖只綁在 runner 進程上，沒綁在它啟動的探針上。** 目錄鎖和舊鎖檔都用 `os.open` 打開。Python 3.4 以後，這樣開的 fd 預設不會被子進程繼承（O_CLOEXEC），`subprocess.run` 也預設 `close_fds=True`。所以 `scenario_probe`（以及它啟動的 claude）手上沒有這把鎖。
+2. **只殺 runner 時，探針會變孤兒繼續跑。** 例如 `kill -TERM <runner pid>`、`timeout` 包裝，或 launchd／CI 停止 runner 進程。Python 預設的 SIGTERM 處理會讓 runner 直接結束，不會走到 `subprocess.run` 的 kill 清理。結果是鎖已經釋放，但探針還在跑模型。
+3. **第二個 CLI 會重派同一題。** 第二個 CLI 隨即拿到目錄鎖。因為探針只在結束時才寫 `--out`（`scenario_probe.py:1160`），磁碟上還沒有這題的結果檔：
+   - 開跑前的 `collect_skills_health` 掃不到事故；
+   - `needed` 算出這題仍缺場，又派一次同題。
+   - 這就回到這次設計要排除的狀態：「事故後還有另一個已開始的模型」，而且兩邊會同時改動全域 `~/.claude/skills`。
+4. **事故不會被藏起來，但會多出一場。**
+   - 如果孤兒探針回報事故，第二批結束時的重掃會看到它的 fatal 檔，回傳 3，所以事故仍看得見。
+   - 如果孤兒探針正常結束，同一題在這個組別會多出一場有效結果。`_arm_stats` 沒有限制每題最多幾場，所以 with 和 without 兩組之間的權重會變得不對稱。
+
+最小重現（構想，未實跑）：
+1. 用 stub 取代 `PROBE`，內容是 `time.sleep(5)` 之後寫一份有效 JSON。
+2. 啟動 runner A，加 `--runs 1 --arms with`。
+3. 等 stub 啟動後，只對 A 的 pid 送 SIGTERM。
+4. 立刻啟動 runner B，參數相同。
+
+預期結果：
+- B 拿得到鎖，回傳碼不是 3；
+- B 會再派同一題；
+- 兩個 stub 會同時存在；
+- 最後這題 with 組有 2 場有效結果，但 `--runs` 是 1。
+
+**為什麼只算 minor：**
+- 不是這次引入的。修補前完全沒有鎖，這條路徑本來就存在。
+- 前提是 runner 單獨被殺。終端機 Ctrl-C 會對整個前景進程組送 SIGINT，探針也會一起停。
+- 事故仍會被最後的掃描抓到。
+- 圖譜已經把這把鎖定位成「合作進程的本機 advisory 鎖」。
+
+所以這是互斥範圍沒涵蓋到這種情況，不是會讓結果錯或事故消失的缺陷。
+
+可考慮的方向（只是建議）：
+- 讓探針子進程繼承這兩個鎖 fd（`pass_fds`），這樣探針活著時鎖就不會釋放；
+- 或者在 runner 收到 SIGTERM 時，先終止子進程組再退出。
+
+**查過、沒有問題的地方：**
+- **事故紀錄與歸檔順序：** 先原子取代成 fatal 紀錄，再歸檔。新版 tombstone 是 `fatal: True` 加上空的 `results`，舊版讀取端的 `invalid_batch_evidence` 也會拒收，新舊版本互通沒問題。
+- **歸檔失敗會遺失原始內容：** 這是你們已接受的取捨。我沒找到比圖譜所述更廣的因果鏈。
+- **捕捉 `TimeoutExpired` 的分支：** `subprocess.run` 沒傳 timeout，所以這個分支實際上不會觸發。只是多餘的防禦，不影響結果。
+- **雜湊題號檔名：** 沒有任何程式靠檔名反推題號。讀取端只取檔名第一段當組別，這段沒變。
+- **暫存檔與 `.failed`：** 檔名結尾都不是 `.json`，不會被掃成結果。
+- **目錄鎖與舊鎖檔：** 兩把都是 LOCK_NB，取鎖順序固定，不會死鎖。目錄鎖鎖的是 inode，所以別名路徑和 symlink 指向同一目錄時也會互斥。
+- **`--merge-only`：** 也要先拿鎖，不會在批次跑到一半時覆寫摘要。
+- **`--workers` 預設 1、live 模式拒絕其他值：** repo 裡沒有其他呼叫端帶 `--workers 2`。
+- **新增的測試：** 各自的斷言都能抓到它們要驗的回歸。歸檔中斷測試裡 patch `Path.replace` 那段在新版碼不會被用到，但不影響結論。
+
+總結：最大 severity minor；blocking 0 條。

@@ -1,0 +1,103 @@
+---
+type: project
+status: doing
+created: 2026-10-04
+updated: 2026-10-04
+tags:
+  - type/project
+  - status/doing
+  - risk/守衛面
+  - scope/evals
+lands_in:
+  - Systems/codex-harness
+  - Systems/測試假綠形態
+  - Systems/ablation-lumos-first
+related:
+  - "[[Projects/代碼審修復穩定性試行_計劃]]"
+  - "[[Issues/探針Git隔離的設定與絕對路徑缺口]]"
+  - "[[Issues/探針共用沙盒清理失敗仍繼續評分]]"
+  - "[[Issues/探針讀碼證據不足]]"
+  - "[[Issues/代碼審next把新處置帳誤判舊panel]]"
+  - "[[Issues/探針健康檢查不可判資料仍被重用]]"
+  - "[[Issues/探針批次停止後的剩餘工作與落檔邊界]]"
+---
+# 探針隔離與清理收斂_計劃
+
+本案接 [[Projects/代碼審修復穩定性試行_計劃]] 第1案第4輪的失敗證據；原迴圈 `code-repair-pilot-01` 累計四輪且未放行，不清帳、不改寫舊判定。本修復是五案試行之外的儀器介入，不占第2案格子；其代碼審另用 `code-probe-boundary-remediation` 編號，不把新迴圈輪數冒充原案收斂。完成時把介入耗時、改動與版號回寫原試行計劃，然後以第2至5個新工作續測三輪收斂方向。
+
+PRIOR-ART: 借用現有 `make_sandbox` 複製完整 Git 歷史與 `source_probe` 每次獨立副本；Git 官方文件確認 local include、worktree config 可以改變有效設定（https://git-scm.com/docs/git-config），故改為複製後以封閉白名單重建副本 Git config，再驗有效值，而非只清一次目前分支的 remote/hook。比較全新 `git init`、既有副本加一次性檢查、白名單重建設定加逐次副本：全新 init 會丟失題目可見的歷史；一次性檢查漏掉切分支才生效的 include；共用副本的清理還須復原索引、提交、設定與未追蹤檔。選擇保留歷史、凍結批次基線、每次複製並重建安全設定。零新增相依。
+
+RETIRE-IF: 若外層已有可驗證的獨立檔案系統與 Git 設定隔離，或每週歷史的 `sandbox_secs` 與 `model_secs` 連續四週顯示逐次複製成本超過模型耗時兩成且污染案例為零，就重評本層逐次複製；入口為每週探針執行紀錄與下次 `make_sandbox` 實作變更。撤除前須保留同等的隔離反例測試。
+
+## 根因與取捨
+
+第4輪四組 blocker 的共同點是儀器把「已做一個動作」當成「邊界成立」：移除 remote／設定 hooksPath 不等於有效 Git 設定安全，複製頂層 `.git` 不等於巢狀 Git 安全，呼叫清理命令不等於清理成功，收到相同空字串不等於有可關聯的工具識別碼。先測結果和失敗語意，再動模型判分。
+
+Git 副本保留來源已有歷史及現行 `rsync` 複製範圍內的檔案內容，仍排除 `node_modules`、`.venv`，並在副本提交量測快照；不聲稱保留來源未提交／索引狀態。副本路徑驗收後、首次會觸發 Git 外部程式的操作前，直接把副本 local/config.worktree 改成最低限度的已知安全設定；未知 Git 倉庫格式或 extension 就拒絕，不執行來源的 include、filter、fsmonitor、credential 或 remote 設定。只保留 Git 歷史所需的檔案格式欄位、設定副本專用 hooksPath、假身分，並驗有效 remote 空、hooksPath 正確。切到其他已有分支後仍須成立；設定驗收失敗永遠刪副本，即使帶 `--keep` 也不保留未放行現場。
+
+凡來源工作樹含巢狀 `.git` 目錄或 gitfile、`.gitmodules`、索引 gitlink 或主 Git 資料內 `modules/`（含尚未初始化的 submodule），在副本 Git 快照寫入與模型啟動前拒絕，回儀器錯誤；工作樹任何符號連結解析到副本外、懸空或成環也拒絕。頂層 `.git` 為相對 gitfile、指向同一副本內 `.hidden-git` 時仍允許，但要通過現有 gitdir、common-dir、toplevel 與 Git 資料符號連結檢查。這是保守的「不支援」判定，不暗稱已隔離巢狀 Git。來源與副本外的 byte 快照在反例後要相同。
+
+設定隔離不再用逐項 `git remote remove`，因為來源 include 和切分支能讓已移除的值重新出現。白名單重建後讀有效 `git remote`、`core.hooksPath` 與設定來源，只有 remote 空、hook 等於本次專用目錄且沒有副本外來源設定才准啟動模型；驗收失敗刪副本、報儀器錯誤，不當模型失敗。此邊界只涵蓋繼承的 Git 設定及意外 `git push`，不宣稱封住模型主動指定 URL、停用 hook 或以其他網路工具外送；若題目要求對外送出，沿 [[Issues/探針沙盒能推到真遠端]] 的重驗入口，先取得外層隔離再跑。
+
+批次先建立一份凍結基線，只讓後續 `make_sandbox` 從它複製；來源在批次中改動不會改變同題重試的輸入。所有題目及重試改用各自副本，跑完在 `finally` 刪除；不再靠共用副本的 `checkout`/`clean` 回復。普通題與讀碼題由 `main` 共用同一套 attempt 生命週期及 `_remove_sandbox` 清理；舊讀碼專用 `_run_source_attempt` 刪除，讀碼標記僅作選配輸入，`SourceProbeCleanupError` 仍表示 fatal 清理錯誤。刪除回傳失敗為 fatal 儀器錯誤：當次不算有效分數、整批 inconclusive、退出碼 3、後續 runner 零呼叫；`--history` 及 JSON 同時保存 `inconclusive`、`fatal` 與有效分母。`--keep` 只保留最後一個已成功驗收的普通題嘗試副本並印其路徑，其他副本仍清理；讀碼題含一次性秘密標記，沿既有合約永不保留；建立失敗的副本一律刪除，凍結基線一律刪除。一般單題模型例外仍可記錄後續跑，沿用現有語意。
+
+逐次副本只承諾 repo 檔案互不污染，Claude 真 HOME/skills 仍沿既有 runner；每次後執行現有全域 skills 健康檢查，檢出損壞立即停批、整批 inconclusive。無法由此證明其他全域檔案不受模型影響；下一次正式真模型探針若題目要求寫 HOME 或網路，需先取得外層隔離，重驗入口同 [[Issues/探針沙盒改動真全域機器狀態]]。模型 `--timeout` 僅限 runner 執行，副本建立與刪除卡住未在本次解決；若每週執行出現 setup/cleanup 卡住，入口為該次排程超時記錄，另補外層 watchdog，不能把那批算有效。
+
+Claude 的 `tool_use.id` 和 `tool_result.tool_use_id` 均要求非空字串；不完整事件記 unknown 而非 present／absent。已有其他有效正證據時仍優先 present；Codex 缺／壞 ID 的現行路徑不變。判分版號仍由 `GRADER_VERSION` 識別；另加 `SANDBOX_VERSION` 到 JSON 與歷史（撤回後舊制缺欄即為 legacy，不改寫舊列），並保存每次/批次的副本建立與清理秒數，讓新舊儀器不被合算。
+
+## 驗收條款
+
+- [S1] 當來源含巢狀 `.git`/gitfile、`.gitmodules`、gitlink 或主 Git 資料內 `modules/`，而頂層是合法 repo 時，建立副本應在快照 Git 寫入前拒絕並清理；普通 clone 及通過現有路徑檢查的頂層相對 gitfile 應成功。[test: t_probe_boundary_nested_git]
+- [S2] 當工作樹符號連結指向副本外、懸空或成環時，建立副本應在模型啟動前拒絕並清理，來源及副本外目標 byte 相同；解析後仍在副本內的連結應成功。[test: t_probe_boundary_worktree_links]
+- [S3] 當來源 Git 設定含 includeIf、filter.clean、fsmonitor 或 worktree override 時，副本應先封閉重建設定才執行 `git add`，並保持有效 remote 空、hooksPath 專用；切到已存在分支後也應如此，本機 bare dry-run push 須被 hook 阻擋、來源與外部檔案 byte 不變。[test: t_probe_boundary_git_config]
+- [S4] 當普通題或重試逐次執行時，探針應從同一凍結基線建立不同副本，前次對提交、索引、Git 設定、未追蹤檔的修改不得污染後次；即使原來源中途變動，同題重試仍讀同一輸入；一般模式各次刪除，`--keep` 只保留最後一個已驗收的普通題副本並列出路徑，讀碼題仍刪除。[test: t_probe_boundary_attempt_isolation]
+- [S5] 當任一次副本刪除失敗時，main 應把當次排除於有效分數、把整批標為 inconclusive、回 3 且不呼叫後續 runner；JSON/history 應保存 fatal、inconclusive、有效分母，普通模型例外仍照現行分流。[test: t_probe_boundary_cleanup_failure]
+- [S6] 當 Claude 工具呼叫或結果識別碼為空字串時，無其他正證據應判 unknown 並排除有效分母；有效正證據與正常非空 ID 路徑保持原判。[test: t_probe_boundary_claude_ids]
+- [S7] 當新版沙盒開始產生結果時，JSON 與歷史應保存獨立 `SANDBOX_VERSION`、副本建立/清理秒數及模型執行秒數，舊列缺欄保持 legacy，撤回後不得把同名 grader 的新舊批次合算。[test: t_probe_boundary_history_version]
+
+## 先紅後綠與邊界
+
+以 `governance/review-reports/code-repair-pilot-01/r4-parent-reproduction.json` 與 r4 報告作前提，先在現碼新增七組反例，逐條記現場前置斷言（有效 remote／hooks override、filter 寫出、切分支後 include 生效、巢狀 Git/未初始化子模組、外指連結、清理確實失敗、空 ID 確實進解析器），確認會紅再改實作。跑相關 `probe_` 子集和本案測試；真模型、網路推送及五案收斂率不由單元測試代替。若正常來源有合法巢狀 Git，明確報不支援與替代路徑，不靜默給假安全結果。
+
+## 實務隱患
+
+已排除:金流:僅改本機量測儀器。
+對外送出:只用本機 bare Git 與 dry-run 驗證，不能把 Git hook 當完整網路隔離。
+已排除:正式環境不可逆:本案不執行正式探針、不推送。
+守衛面:探針的隔離與失敗判分會改，須先過設計閘，實作後依 pitfalls 風險過代碼審。
+
+## 回退
+
+回退本案實作時保留 r4 原始卷證與新反例，原案仍未放行；歷史的 `SANDBOX_VERSION` 能辨識新制，舊制列缺欄視 legacy，不改寫任一列。不能把舊共用副本分數當新判準證據。若逐次副本成本過高，先量測、再提出能保留相同隔離證據的替代設計，不直接關掉 fail-closed 條件。
+
+## 審計修正紀錄
+
+r1（2026-10-04，五主席加一架構席）：內部原報告共15條、blocking 14；另有外家唯讀否決席原稿（格式未進帳）。相同 `--keep` 發現去重。三個外逸反例由編排者在臨時 Git repo 複現：filter.clean 在快照時寫出、切分支後 include 恢復 remote/hook、絕對符號連結寫回來源。改為白名單 Git 設定、拒絕外指連結與所有子模組形狀、凍結批次基線、明訂 `--keep`／歷史版號／失敗語意。卷證見 governance/review-reports/探針隔離與清理收斂/。
+
+實作代碼審首輪另在 `governance/review-reports/probe-boundary-remediation/` 保存凍結差異與四席報告，報10條、去重9組。兩組巢狀Git形狀（`.GIT` 與 bare repo）、父環境 `GIT_TRACE` 寫來源、未保留假身分、混合題序 `--keep` 留零份、重試時間漏逐場、故障注入測試漏清暫存，以及舊讀碼 helper 成第二套生命週期都已折回反例。修後 `probe_` 為243項通過、0失敗，仍待後輪審差異。編排者把首輪四席都誤記成處置載體，`loop status --disposal` 明確拒絕；兩本錯帳 `probe-boundary-remediation`（四席誤都掛處置）及 `probe-boundary-remediation-ledger2`（名稱未帶 code- 前綴，會被當設計審）保留作失敗操作紀錄；正式更正帳用 `code-probe-boundary-remediation`，仍引用同一首輪報告與凍結 hash，不重派首輪、不把它算新樣本或新增審查輪。這是記帳更正，非原試行 `code-repair-pilot-01` 的第五輪。
+
+第二輪代碼審在 730b06fe 凍結的 558 行修補差異中，正確性席報兩項 blocking、架構席 clean：主 Git 資料的 `worktrees/*/gitdir` 文字外指可讓模型把真 linked worktree 指回副本；`GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過副本假身分，單讀 `git config user.*` 的測試是假綠。新增 `t_probe_boundary_review2_linked_worktree` 與 `t_probe_boundary_review2_effective_identity`，前者前置證明真 linked 指標存在、後者驗快照與後續模型提交的實際作者；舊碼均翻紅，修法是拒絕主 Git `worktrees/` 資料、清洗模型及儀器共同環境。編排者另在非席位重現中發現全域 skills 健康檢查讀取拋錯會被當普通題失敗、繼續後題，最終檢查拋錯甚至寫不出 JSON；`t_probe_boundary_review2_health_unreadable` 紅綠後改成兩處都 fatal、停批或保留不可判紀錄。這三條不追加到原第1案四輪；第二輪與第三輪僅屬樣本外儀器修補。卷證在同一審查目錄的 `r2-*`；本案尚待第三輪檢查修補差異。
+
+第三輪凍結 730b06fe..cfe7a703 的235行修補差異後，三席報兩項新的 major blocking、架構席 clean。runner 在模型後拋錯會跳過當場 skills 健康檢查，仍先跑下一題；最終健康檢查拋錯雖 rc3 且 JSON 標 fatal/inconclusive，消融下游仍把兩場 `reason=ok` 的結果當有效樣本、`needed=0`。編排者於臨時 repo 逐項重現，`r3-reproduction.json` 可重算；r3 無折入或放行，`loop status --disposal` 顯示 FAIL，standard 三輪上限已到。後續問題見 [[Issues/探針健康檢查不可判資料仍被重用]]；原第1案四輪FAIL與本案三輪FAIL各自保留，不互相抵銷。
+
+使用者於 2026-10-04 明示「開第四」，僅對本儀器修補例外授權 r4，不重算原第1案或新增試行樣本。r4 先驗兩條第三輪缺口：runner 拋錯後仍在下一場前查健康；整批 fatal 結果檔在真消融 `load_results`、`needed`、`merge` 與失效掃描都不被重用。兩條反例舊碼均紅，首版修後 `probe_` 254 項、消融既有 23 項通過。第四輪首派三席中正確性 clean，架構對齊兩項 minor（MOC 新家入口及 verified_by，均折入），邊界席三項 major：舊 schema 只標 skills_health_bad 或逐場 fatal 的事故仍混算；舊失效檔在補跑後才掃；缺檔/半檔但 rc1 仍續派。三條實消費端反例修前5個斷言翻紅，修法統一整批失效判定、派工前掃舊檔、live 產物不可讀即停批，普通低有效場數的 inconclusive 仍可保留有效列。卷證 `probe-boundary-remediation/r4-*`；目前仍待修補差異的新席審與機械閘，不能宣告 r4 PASS。消融讀取器由新家 [[Systems/ablation-lumos-first]] 管理，探針本體仍由 [[Systems/codex-harness]] 管理。r4 判定前不可啟動剩餘四個新工作樣本的探針量測。
+
+第四輪內的原邊界席續驗又指出 live 結果雖語法完整卻缺三個健康欄位時仍會被當普通失敗；全新差異席指出完全缺檔時停止旗標到 `main` 末尾會遺失，summary 空事故且 rc0。兩條都是 major，新增反例在首修版3項翻紅，已補 live schema 核驗及停止狀態傳遞；此時仍須全新席掃最後差異，未過前本案狀態維持 doing、Issue open、Verification pending。前三輪原判定和本輪首派發現全部留在 `r4-intake.md`，不得用一次綠測試蓋掉。
+
+最後全新席審 1b9d8fe1..79d3f371 的235行修補差異，回報 clean、blocking 0；其原報告 `r4-last.md`。第四輪至此共七條發現（首派三 major／兩 minor，追加兩 major）均有紅燈或圖譜健檢證據及折入位置，相關 `probe_` 263項與消融既有23項通過。此時只待正式 `loop status --disposal` 判定與圖譜驗證狀態寫回；尚未量真模型、網路、完整測試套件或五案收斂率。
+
+第四輪正式處置閘已 PASS，七條全折入；第三輪 intake 因留帳後追記產生的 hash 漂移，移出追記並恢復原 bytes 後重算通過。精確卷證與測試範圍見 [[Verification/2026-10-04_探針隔離與清理收斂]]。按使用者要求逐項對照 Git、Python、JSON Schema 官方文件，另辨認出子程序啟動例外未落 summary、事故後已在途模型無法由 stop 取消、直接寫 JSON 可留半檔；這三項不冒充第四輪席位 finding，列 [[Issues/探針批次停止後的剩餘工作與落檔邊界]]。下次真模型派工前先處置前兩項並故障注入，落檔問題按該 Issue 的事件入口重評；目前仍未開始四個新工作，不能稱試行已收斂。
+
+## 第四輪後的派工邊界補強
+
+PRIOR-ART: Python 官方文件確認 `subprocess.run` 啟動可拋 `OSError`，但本呼叫未設定 outer timeout，故 `TimeoutExpired` 只作注入防回歸，不冒稱現行會逾時；`ThreadPoolExecutor` 即使用 `cancel_futures` 也不取消已執行的工作（https://docs.python.org/3/library/subprocess.html；https://docs.python.org/3/library/concurrent.futures.html）。比較可取消子程序與每次一個工作的派工：前者需跨程序取消、清理與結果協定；此輪採後者，先確保單次 CLI 執行事故後沒有第二個由本次啟動的模型在途，並用同一輸出目錄的跨進程鎖阻止另一個 CLI 同時派工。Python `fcntl.flock(LOCK_EX|LOCK_NB)` 可作本機互斥，取不到鎖明確退出；同檔案系統 `os.replace` 可原子替換失敗紀錄（https://docs.python.org/3/library/fcntl.html；https://docs.python.org/3/library/os.html#os.replace）。零新增相依。
+
+RETIRE-IF: 若已用兩工作競速故障注入證明可取消 runner 在任一工作報事故後能結束所有在途子程序，且後續模型動作為零、summary 仍標失效，才恢復多路派工；入口是下次要求提高 `--workers` 吞吐量或修改 `run_job` 的子程序生命週期。跨進程鎖只有在外層提供同輸出目錄的可驗證獨占租約時才能撤，入口為批次編排器變更；撤除前保留同等反例。
+
+- [S8] 當探針子程序啟動丟 `OSError`，或將來加 outer timeout 後丟 `TimeoutExpired`，整批應停止下一題、留下失效 summary 並退出 3；每次失敗要留下不能被下次 summary 覆蓋的 fatal 逐題紀錄，若已寫出看似有效的結果要先隔離原檔再以 fatal 紀錄取代，使下次補跑／純合併在人工處置前仍辨認事故。紀錄需含例外類型、arm、qid、log 路徑，不把完整命令或秘密放進 summary。[test: t_probe_boundary_postreview_launch_exception_summary]
+- [S9] 當任一工作將批次停止旗標設為 true（探針異常退出、失效或結果不可判），派工器應阻止後續工作進入 `run_job`；live 派工在改寫 meta/summary 前僅接受 `--workers == 1`，省略參數時預設 1，0／負數／大於 1 明確拒絕。純 `--merge-only` 不派模型，保留原參數相容。[test: t_probe_boundary_postreview_serial_dispatch]
+- [S10] 當兩個 CLI 指向同一輸出目錄時，只准先取得本機獨占鎖者派工或合併；另一個應在改寫 meta/summary 前退出 3、不覆蓋既有結果；第一個正常或異常退出後鎖可釋放。[test: t_probe_boundary_postreview_cross_process_lock]
+
+回退：若此補強出現誤擋，保留逐題 fatal 紀錄、失效摘要與上述紅燈反例；可以調整 CLI 文案，但 live 預設仍為 1，不得重開並行模型派工，直到 S9 的競速反例以可取消 runner 通過。若鎖取得失敗，不得以忽略鎖來恢復服務；先確認另一個進程是否仍持有並保留其結果。真模型批次前再查 [[Issues/探針批次停止後的剩餘工作與落檔邊界]] 的落檔觸發條件。
+
+設計審 r1（2026-10-04，五席加架構對齊）：九條原 finding 去重為跨進程互斥、失敗嘗試持久紀錄、CLI 範圍與預設、最小診斷四組；blocking 五條均折入 S8–S10，minor 四條隨同折入，無接受風險。首輪報告與前掃見 `governance/review-reports/probe-postreview-dispatch/r1-*`。下一步先讓新增反例翻紅，再實作；正式處置閘與凍結回放尚待卷證留帳。

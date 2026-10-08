@@ -414,6 +414,8 @@ def _inline_hidden(line):
     return merged, i >= 0
 WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+# 「句尾」的唯一定義:漂移檢查切小句(_DRIFT_M1_CUT_RE)與 doctor S21 判「同一句」共用;英文句點不算(路徑、版本號裡有)
+_SENT_END_RE = re.compile(r"[。;；!?！？]")
 TOP_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
 LIST_ITEM_RE = re.compile(r"^\s+-\s+(.*)$")
 QUOTED_DATE_RE = re.compile(
@@ -981,6 +983,53 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
         pass
 
 
+def _replay_refreeze_blocked(target):
+    """已有判定檔、重凍卻沒帶 --note → 印擋下訊息(開頭講明判定檔沒有更新與現行是第幾輪)。開頭的前置檢查與寫入端共用這一句。"""
+    try:
+        cur = json.loads(target.read_text(encoding="utf-8")).get("round") or "?"
+    except (OSError, ValueError, AttributeError):
+        cur = "?"
+    print(f"擋下:判定檔沒有更新——這個 loop 已有 golden 判定檔(現行仍是 {cur});"
+          "重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
+
+
+def _replay_write_verdict(tmp, target, vdir, verdict, note=None):
+    """凍結判定寫檔:①新內容落暫存檔 ②有舊檔就歸檔成 verdict-<時間>.json(不覆寫歷史)③暫存檔 replace 上位。
+    → (rc, 歸檔檔名或 None):rc 0 成功、2 失敗(已印原因)。暫存檔的清理在呼叫端的 finally(任何一步失敗都不留)。
+    ★歸檔前再判一次 --note★:呼叫端開頭已判過,但兩個第一次凍結同時跑時,開頭判的那一刻還沒有判定檔、到這裡已經有了,
+    不再判的話沒帶 --note 的這邊會把對方的判定檔歸檔掉、在留痕時崩潰(代碼審 code-凍結暫存檔清理 r3 正確性席)。"""
+    import datetime
+    try:
+        tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
+        return 2, None
+    refroze = None
+    if target.exists():
+        if not note or not note.strip():
+            _replay_refreeze_blocked(target)
+            return 2, None
+        stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S")   # 本地時間(同原寫法),帶時區只為不觸發 DTZ005
+        arch = vdir / f"verdict-{stamp}.json"
+        if arch.exists():
+            print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
+            return 2, None
+        try:
+            target.rename(arch)
+        except OSError as e:
+            print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
+            return 2, None
+        refroze = arch.name
+    try:
+        os.replace(tmp, target)
+    except OSError as e:
+        print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
+              + (f"已歸檔 {refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if refroze else "未動")
+              , file=sys.stderr)
+        return 2, refroze
+    return 0, refroze
+
+
 def _replay_git_blob(root, relpath):
     """--freeze 前置:檔案已 commit 且與 HEAD 一致才記 blob id(r3 delta d-f2:hash-object 不落
     物件、-w 落懸空 blob 兩週可被 GC——取 HEAD 的 blob 保證被 tree 引用)。回 (blob_id, err)。"""
@@ -1044,6 +1093,15 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     if freeze:
         if not spec:
             print("擋下:凍結模式要帶 --spec(帳裡沒有 spec 路徑欄,凍結當下由操作者給)", file=sys.stderr)
+            return 2
+        # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫。
+        # ★在印處置閘、寫暫存檔之前判★:原本先跑處置閘(印一長串 [disposal] 與 GATE PASS)、寫暫存檔,才判要不要擋——
+        # 擋下時暫存檔留在 governance/replay/<編號>/ 被 `git add governance` 一起提交(主線上兩個編號帶著它),
+        # 而且擋下訊息走 stderr、PASS 走 stdout,接管線或只看尾端時最後一行是 PASS,以為凍好了(2026-10-07 工具鏈會談實踩、代碼審 r2)
+        vdir = root / "governance" / "replay" / loop_id
+        target = vdir / "verdict.json"
+        if target.exists() and (not note or not note.strip()):
+            _replay_refreeze_blocked(target)
             return 2
         raw, parsed = _load_rows()
         if raw is None:
@@ -1110,42 +1168,22 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
             "files": files,
             "verdict": {"rc": rc, "fails": out.get("fails", [])},
         }
-        vdir = root / "governance" / "replay" / loop_id
         vdir.mkdir(parents=True, exist_ok=True)
-        target = vdir / "verdict.json"
         # 順序(cb3 s2-f3):①新內容先落暫存檔(最會失敗的一步最先做)②舊檔歸檔③replace 上位
         # ④最後才寫治理帳留痕——寫入失敗時不會留下「帳說成功、檔卻不在」的假紀錄。
-        _tmp = vdir / ".verdict.tmp"
+        # 暫存檔只活在這一段:任何一步失敗提早結束,都在 finally 刪掉(成功時 replace 已把它換上位)。
+        # ★檔名每次都不一樣★(同 _write_lf):固定名時兩個重凍同時跑,先結束的那邊的 finally 會刪掉另一邊剛寫好的暫存檔
+        # (代碼審 r1 正確性席、架構對齊席);.gitignore 忽略 .verdict*.tmp
+        _tmp = vdir / f".verdict.{os.getpid()}-{uuid.uuid4().hex[:8]}.tmp"
         try:
-            _tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
-        except OSError as e:
-            print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
-            return 2
-        _refroze = None
-        if target.exists():
-            # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫
-            if not note or not note.strip():
-                print("擋下:這個 loop 已有 golden 判定檔——重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
-                return 2
-            stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-            arch = vdir / f"verdict-{stamp}.json"
-            if arch.exists():
-                print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
-                return 2
+            rc_w, _refroze = _replay_write_verdict(_tmp, target, vdir, verdict, note)
+        finally:
             try:
-                target.rename(arch)
-            except OSError as e:
-                print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
-                return 2
-            _refroze = arch.name
-        import os as _os_rp
-        try:
-            _os_rp.replace(_tmp, target)
-        except OSError as e:
-            print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
-                  + (f"已歸檔 {_refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if _refroze else "未動")
-                  , file=sys.stderr)
-            return 2
+                os.unlink(_tmp)
+            except OSError:          # 成功時已 replace 上位、不在了(FileNotFoundError 也是 OSError)
+                pass
+        if rc_w:
+            return rc_w
         if _refroze:
             _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
             print(f"  舊 golden 已歸檔 {_refroze};重凍理由已寫治理帳")
@@ -3010,6 +3048,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     except Exception as _e20:
         ok(f"測試綁定這段跳過(測試索引建不起來:{_e20.__class__.__name__})")
     print()
+    # 指向別篇的回頭條件(Projects/指向別篇的回頭條件懸空_計劃,rtb 第三輪提案 A3):不計入問題數、不寫帳(同 S17 到 S20)
+    section("S21", "指向別篇的回頭條件還在不在(「[[X]] 的 REVISIT 日期」「回頭條件見 [[X]]」;提醒,不擋)")
+    _rr21 = _doctor_revisit_ref_lines(env)
+    if not _rr21:
+        ok("指向別篇的回頭條件都還在")
+    else:
+        warn_soft(_rr21, f"{len(_rr21)} 處指向別篇的回頭條件已不在(不計入問題數):",
+                  "改指到那篇現在的那條回頭條件;那件事已不用回頭看,就把這句改寫成已處理(寫明哪天、怎麼處理的)")
+    print()
 
     # ── 每支檔有家的舊帳(2026-09-11,Projects/每支檔有家_計劃 [S28]):排在合約條數那段之後、[H] 之前——
     # 軟段截斷那支測試切的是 [S] 到 [E1],插進那個窗口會被數進去而翻紅(鄰居三段同一條位置紀律)。
@@ -4050,6 +4097,142 @@ def _doctor_replacement_lines(env):
                 out.append(_esc_clean(f"{rel}:{no}:[被取代:{v[:40]}] {why}", _DOCTOR_LINE_MAX))
     return out
 
+
+
+# doctor S21(Projects/指向別篇的回頭條件懸空_計劃):句子指向別篇的某條回頭條件,那篇已經沒有那條 → 列。
+_RREF_LINK = r"\[\[([^\[\]|#\n]+)(?:[|#][^\[\]\n]*)?\]\]"   # 內文不收 [:一行一堆 [[ 時不回溯成平方
+_RREF_NOT_END = r"[^\n\[" + _SENT_END_RE.pattern[1:-1] + "]"           # 同一句:不跨句尾、不跨下一個連結
+_RREF_DATED_RE = re.compile(_RREF_LINK + "(" + _RREF_NOT_END + r"{0,24}?)REVISIT")   # [[X]] … REVISIT(日期在前或在後)
+_RREF_SEE_RE = re.compile(r"回頭條件" + _RREF_NOT_END + r"{0,4}?(?:見|在|寫在|記在|放在)[ \t]*" + _RREF_LINK)
+_RREF_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_RREF_AFTER_DATE_RE = re.compile(r"[`*:：;；,，\s]*(" + _RREF_DATE_RE.pattern + ")")  # 緊接著的日期:中間隔冒號、分號、逗號都認(r1、r2 正確性席)
+_RREF_TODO_RE = re.compile(r"改寫|改成|改指向|拿掉|刪掉|移除|結案")
+_RREF_TAIL = 30
+
+
+def _revisit_ref_dates(text):
+    """一篇筆記全部回頭條件行的日期 → (日期集合, 行數)。已結案的也算(本段只管「被刪掉」,結案歸結案連帶掃描);
+    條件式取 [by:]。讀法共用 _revisit_all_lines。"""
+    rows = _revisit_all_lines(text)
+    return {d for _no, kind, d, *_r in rows if kind != "bad" and d}, len(rows)
+
+
+def _rref_window(raw, a, b, link):
+    """待辦詞要看的那段:從比對起點 a 到終點 b 之後 30 字、到句尾為止,★扣掉連結本身★(名稱裡的「結案」不算,r1 正確性席 F1)。"""
+    ls, le = link
+    return _SENT_END_RE.split(raw[a:ls] + raw[le:b + _RREF_TAIL], maxsplit=1)[0]
+
+
+def _in_spans(spans, starts, i):
+    """位置 i 在不在 spans(由左到右、不重疊的 (起, 迄),通常是 _inline_hidden 的結果)裡;starts 是各段起點,呼叫端每行算一次。
+    二分找(原本每次掃全部區段,一行三萬組要 35 秒;code-指向別篇的回頭條件懸空 r1 正確性席 F3)。S21 與改重驗事件時的列出共用。"""
+    import bisect
+    k = bisect.bisect_right(starts, i) - 1
+    return k >= 0 and i < spans[k][1]
+
+
+def _revisit_ref_hits(raw):
+    """一行可見文字裡指向別篇回頭條件的引用 → [(目標, 日期或 None)]。連結本身在行內程式碼裡的不算(舉例);
+    REVISIT 與日期包在反引號裡照認。從連結到 REVISIT(或日期)之後 30 字內、到句號為止有待辦指示詞的不算(那是要去改它)。"""
+    hidden = _inline_hidden(raw)[0]
+    starts = [a for a, _b in hidden]
+    def _in_code(i):
+        return _in_spans(hidden, starts, i)
+    out = []
+    for m in _RREF_DATED_RE.finditer(raw):
+        after = _RREF_AFTER_DATE_RE.match(raw, m.end())
+        mid = _RREF_DATE_RE.search(m.group(2))
+        end = after.end() if after else m.end()
+        out.append((m, m.start(), end, (m.start(), m.start(2)), (after.group(1) if after else (mid.group(0) if mid else None))))
+    for m in _RREF_SEE_RE.finditer(raw):
+        after = _RREF_AFTER_DATE_RE.match(raw, m.end())          # 緊接著的日期先認,再找同一句後面 40 字內的
+        d = after or _RREF_DATE_RE.search(_SENT_END_RE.split(raw[m.end():m.end() + 40], maxsplit=1)[0])
+        out.append((m, m.start(), after.end() if after else m.end(), (raw.rfind("[[", 0, m.start(1)), m.end()),
+                    (d.group(1) if after else d.group(0)) if d else None))
+    res = []
+    for m, a, b, link, date in out:
+        if _in_code(m.start(1)) or _RREF_TODO_RE.search(_rref_window(raw, a, b, link)):
+            continue
+        res.append((m.group(1).strip(), date))
+    return res
+
+
+def _doctor_revisit_ref_lines(env):
+    """doctor S21 → 要列的行:句子指向別篇的回頭條件,那篇沒有那天的回頭條件行(帶日期的)、或一條都沒有(不帶日期的)。
+    目標不存在不列(壞連結由既有檢查管);只提醒、不計入問題數、不寫治理帳(同 S17 到 S20)。印出前清控制字元。"""
+    out, cache = [], {}
+    for rel in sorted(env.notes):       # 同 S17 到 S20 排序:列出被截斷時各機器看到的前幾條一樣(r1 架構對齊席 A4)
+        text = env_text(env, rel)
+        if not text or ("REVISIT" not in text and "回頭條件" not in text):
+            continue
+        for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
+            for tgt, date in dict.fromkeys(_revisit_ref_hits(raw)):
+                trel = env.resolve(link_target(tgt))      # 同 S17 先過 link_target(去引號、.md、nfc;r1 架構對齊席 A2)
+                if trel is None:
+                    continue
+                if trel not in cache:
+                    cache[trel] = _revisit_ref_dates(env_text(env, trel) or "")
+                dates, n = cache[trel]
+                if (date in dates) if date else n:
+                    continue
+                why = f"那篇沒有 {date} 的回頭條件行" if date else "那篇一條回頭條件行都沒有"
+                out.append(_esc_clean(f"{rel}:{no}:指向 [[{tgt}]] 的回頭條件{(' ' + date + ' ') if date else ''}已不在({why})",
+                                      _DOCTOR_LINE_MAX))
+    return out
+
+
+# 改重驗事件時列出引用它的句子(Projects/改重驗事件時列出引用它的句子_計劃,rtb 第三次比對回傳第 10 項):
+# 「[[X]] … revalidate_when」同一句 24 字內;連結認法同 S21(行內程式碼裡的不算、不跨句尾、先過 link_target)
+_RVB_RE = re.compile(_RREF_LINK + _RREF_NOT_END + r"{0,24}?revalidate_when")
+
+
+def _revalidate_backref_lines(env, rel):
+    """全庫連到 rel、同一句講到 revalidate_when 的句子 → [(來源篇, 行號, 那一句)];rel 自己那篇不算。只讀不寫。
+    回的是連結所在的那一句(前後切到句尾 _SENT_END_RE),不是整行:長行裡相關的那句常在行尾,印整行會被截掉。
+    同一行有好幾句都指向 rel 就每句各一筆(代碼審 r1 正確性席:原本每行取到一句就停)。"""
+    out = []
+    for src in sorted(env.notes):
+        text = env_text(env, src)
+        if src == rel or not text or "revalidate_when" not in text:
+            continue
+        for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
+            hidden = _inline_hidden(raw)[0]
+            starts = [a for a, _b in hidden]
+            seen = set()        # 同一句裡兩組配對只算一句(代碼審 r2 正確性席:r1 拿掉取到就停後會列兩次、把句數灌水)
+            for m in _RVB_RE.finditer(raw):
+                if not _in_spans(hidden, starts, m.start(1)) and env.resolve(link_target(m.group(1))) == rel:
+                    head = max((e.end() for e in _SENT_END_RE.finditer(raw, 0, m.start())), default=0)
+                    if head in seen:
+                        continue
+                    seen.add(head)
+                    tail = _SENT_END_RE.search(raw, m.end())
+                    out.append((src, no, raw[head:tail.end() if tail else len(raw)].strip()))
+    return out
+
+
+def _print_revalidate_backrefs(env, rel):
+    """lumos set 改了 rel 的 revalidate_when 之後:列出引用它的句子,附上改完之後的事件清單讓人對照。只印、不擋、不改;
+    env 是改之前載入的(別篇沒變),新清單從磁碟重讀。沒有引用句就什麼都不印。寫入已經完成,掃描出錯只在 stderr 講一句、
+    最多列 20 句——兩者同 _drift_print_backrefs(代碼審 r1 架構對齊席)。"""
+    try:
+        rows = _revalidate_backref_lines(env, rel)
+    except (OSError, ValueError, RuntimeError, UnicodeDecodeError) as e:
+        print(f"(列出引用這篇 revalidate_when 的句子失敗,剛才的寫入照樣完成了:{e})", file=sys.stderr)
+        return
+    if not rows:
+        return
+    print(f"有 {len(rows)} 句連到這篇、講到它的 revalidate_when——事件清單改了,看一眼那句說的事件還在不在(只列出、不擋):")
+    for src, no, raw in rows[:20]:
+        print(f"  · {_esc_clean(src, 200)}:{no}  {_esc_clean(raw, 160)}")
+    if len(rows) > 20:
+        print(f"  …還有 {len(rows) - 20} 句")
+    try:
+        now = _note_from_text(rel, _phys_path(env.vault, rel).read_text(encoding="utf-8-sig")).fields.get("revalidate_when")
+    except (OSError, UnicodeDecodeError):
+        return
+    print("  這篇現在的 revalidate_when:")
+    for c in _conds(now) or ["(空)"]:
+        print(f"    - {_esc_clean(c, 160)}")
 
 _METRIC_CMP = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b, ">": lambda a, b: a > b,
                ">=": lambda a, b: a >= b, "==": lambda a, b: a == b}
@@ -31501,26 +31684,55 @@ def _ns_wd_count_hit(box, files, reader, line, masked, cut):
 
 
 def _ns_wd_line_hit(box, files, reader, ln, seen, masked, cut):
-    """一行 → (原行裡的位置, count|position, 要貼的標記或 None) 或 None;數量優先,只認起點在 cut 之後的命中。
+    """一行 → [(原行裡的位置, count|position|binding, 給作者的建議一句)],只認起點在 cut 之後的命中。
+    數量與位置照順序取第一個(都是「之後會指錯」);綁定是另一件事,另外看,同一行可以兩則都出(代碼審 r1 正確性席:
+    原本同一行只出一則,數量先命中就把綁定吞掉,修完數量那行變舊行、綁定永遠不再提醒)。
     成對引號裡的字不看(只是在提這種寫法;同否定現況句提醒的 _ns_neg_quote_spans),所以引號也是誤報的出口。"""
     quotes = _ns_neg_quote_spans(masked)
     masked = _inline_blank(masked, quotes)
+    out = []
     if "[count:" not in seen and "lumos:count" not in seen and not box["py_capped"]:
         fields = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), masked)
         c = _ns_wd_count_hit(box, files, reader, ln, fields, cut)
         if c is not None:
-            return c[0], "count", c[1]
-    for a, b in _ns_wd_paren_groups(masked):
-        g = masked[a:b]
-        if a >= cut and _NS_WD_FIX_RE.match(g):
-            m = _NS_WD_POS_RE.search(g)
-            if m:
-                return a + m.start(), "position", None
-    return None
+            out.append((c[0], "count", f"掛上 {c[1]},清單改了 lumos drift scan 會列出來"))
+    if not out:
+        for a, b in _ns_wd_paren_groups(masked):
+            g = masked[a:b]
+            if a >= cut and _NS_WD_FIX_RE.match(g):
+                m = _NS_WD_POS_RE.search(g)
+                if m:
+                    out.append((a + m.start(), "position", "改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)"))
+                    break
+    bh = _ns_wd_binding_hit(ln, cut, quotes)
+    return out + ([bh] if bh is not None else [])
+
+
+_NS_WD_BINDING_SHOW = 5        # 綁定提醒最多列幾支名稱,其餘講總數
+
+
+def _ns_wd_binding_hit(raw, cut, quotes=()):
+    """綁定規則(Projects/測試綁定一行一支提醒_計劃)→ (位置, "binding", 建議字串) 或 None:這一行 cut 之後所有 [test:]
+    去重後兩支以上。★掃原文、走專案唯一的欄位掃描器 _slot_scan★(slot_parse 也走它):鍵名不分大小寫、冒號收全形、
+    行內程式碼裡的範例不算、反引號包住的名稱照認;起點落在成對引號(quotes,原行座標)裡的欄位整個不算——只是在舉例。
+    不去改原文:代碼審 r1 原本先找字面 [test: 又餵遮掉行內程式碼的文字,r2 改成遮引號後,值裡夾的引號又被當成一支名稱。
+    名稱切法用 note-shape 的 test_refs 與 S20 共用的 _test_names_of,佔位名稱與整個被引號包住的名稱(值裡在舉例)不算。"""
+    fields, at = [], None
+    for kind, a, _b, key, val, err in _slot_scan(raw[cut:]):
+        if kind == "field" and key == "test" and not any(qa <= cut + a < qb for qa, qb in quotes):
+            fields.append((key, val, err))
+            at = cut + a if at is None else at
+    names, _empty = _test_names_of({"fields": fields})
+    uniq = list(dict.fromkeys(nm for nm in names if nm and not _ns_tr_placeholder(nm)
+                              and not any(nm.startswith(qa) and nm.endswith(qb) and len(nm) > 1 for qa, qb in _NS_NEG_QUOTES)))
+    if len(uniq) < 2:
+        return None
+    shown = "、".join(uniq[:_NS_WD_BINDING_SHOW]) + (f" 等 {len(uniq)} 支" if len(uniq) > _NS_WD_BINDING_SHOW else "")
+    return at, "binding", f"這行綁了 {len(uniq)} 支({shown}):拆成一支一行,每行寫那支測試守的是哪一點"
 
 
 def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
-    """一篇 → [(路徑, 行號, 規則 count|position, 片段, 要貼的標記或 None)];一行至多一筆(數量優先)。
+    """一篇 → [(路徑, 行號, 規則 count|position|binding, 片段, 給作者的建議一句)];一行至多兩筆(數量或位置一筆、綁定一筆)。
     只看 body/summary、圍欄外、不是 REVISIT 的新行;舊行只在句尾補括號時只看補上的那段(_NotelinesPairs)。"""
     vis_nos = {no for no, _l in _visible_lines(text.split("\n"))}
     out = []
@@ -31531,15 +31743,14 @@ def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
         if not seen.strip() or _revisit_split(seen)[0] is not None:
             continue
         masked = _inline_visible_mask(ln)
-        hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
-        if hit is not None and pairs is not None:
+        hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
+        if hits and pairs is not None:
             # 有命中才查配對表(同否定現況句提醒:配對要跑 git,沒命中的行不付這筆)
             o = (pairs.table().get(nfc(path)) or {}).get(i)
             if o is not None and o.rstrip() and ln.rstrip().startswith(o.rstrip()):
-                hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
-        if hit is not None:
-            lead = len(ln) - len(ln.lstrip())
-            out.append((path, i, hit[1], _ns_negation_snippet(ln.strip(), max(0, hit[0] - lead)), hit[2]))
+                hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
+        lead = len(ln) - len(ln.lstrip())
+        out += [(path, i, h[1], _ns_negation_snippet(ln.strip(), max(0, h[0] - lead)), h[2]) for h in hits]
     return out
 
 
@@ -31577,18 +31788,17 @@ def _ns_wording_emit(root, items, capped, fail):
             print(f"提醒:新寫句子的數量提醒這次沒跑完({capped}),後面的行不再看數量;位置提醒照常", file=sys.stderr)
         if not items:
             return
-        word = {"count": "數量", "position": "位置"}
+        word = {"count": "數量", "position": "位置", "binding": "綁定"}
         out = [f"提醒:這次提交新寫的句子有 {len(items)} 處之後容易過期或指錯(note_shape.wording=warn,不擋):"]
         for p, n, rule, frag, tag in items:
             out.append(f"  {p}:{n}  [{word[rule]}] {frag}")
-            out.append(f"      → 掛上 {tag},清單改了 lumos drift scan 會列出來" if rule == "count" else
-                       "      → 改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)")
-        out.append("不是在數那個清單、或不是在指清單裡的項目,就不用理;這次提交之後這幾行不會再提醒。"
+            out.append(f"      → {tag}")
+        out.append("不是在數那個清單、不是在指清單裡的項目、或那幾支測試確實守同一件事,就不用理;這次提交之後這幾行不會再提醒。"
                    "關掉這個提醒:.lumos/config.json 的 note_shape.wording 設成 off")
         print("\n".join(out), file=sys.stderr)
         rules = sorted({x[2] for x in items})
         _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:新寫句子寫法提醒 {len(items)} 處",
-                            extra={"check": "wording", "rules": rules, "lines": len(items),
+                            extra={"check": "wording", "rules": rules, "lines": len({(x[0], x[1]) for x in items}),
                                    "notes": len({x[0] for x in items})})
     except Exception as e:
         print(f"提醒:新寫句子寫法提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
@@ -35534,26 +35744,32 @@ def _revisit_misplaced_lines(text):
     return out
 
 
-def _revisit_lines(text):
-    """一篇筆記的每一條回頭條件 → [(行號, 種類, 日期或 None, 摘要, 原文)];種類 date/cond/bad(同 _revisit_split)。
-    剝程式碼區(_search_visible_lines)、餵剝過行內程式碼的那一版給 _revisit_split。doctor E5 與 set 把 Issue 結案時的列出
-    共用這一支(存量漂移改法 第 6 節);乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。
-    已寫合格結案標記的行不回(兩個呼叫端都要排除,不另加參數)。"""
+def _revisit_all_lines(text):
+    """一篇筆記的每一條回頭條件,★含已結案★ → [(行號, 種類, 日期或 None, 摘要, 原文, 已結案)];種類 date/cond/bad(同 _revisit_split)。
+    剝程式碼區(_search_visible_lines)、餵剝過行內程式碼的那一版給 _revisit_split——「讀回頭條件行」的唯一一份:
+    _revisit_lines(E5、set 結案列出)濾掉已結案的,doctor S21(指向別篇的回頭條件還在不在)全部都要(代碼審
+    code-指向別篇的回頭條件懸空 r1 架構對齊席:原本 S21 另抄一份迴圈)。乙的 _probe_lines、第一層、第二層各自的逐行迴圈不在這裡。"""
     out = []
     for no, raw, _pr in _search_visible_lines(text.split("\n"), False):
         probe = _strip_inline_markup(raw)[0]
         kind, rest = _revisit_split(probe)
         if kind is None:
             continue
-        if kind != "bad" and _revisit_closed(probe)["closed"]:
-            continue        # 合格結案的不回(E5 不唸、Issue 結案不列;回頭條件寫法補齊〈做法〉2.4)
+        closed = kind != "bad" and bool(_revisit_closed(probe)["closed"])
         date, summ = None, ""
         if kind == "cond":
             date, summ = _probe_parse(rest)["by"], _PROBE_LEAD_RE.sub("", rest)
         elif kind == "date":
             date, _sp, summ = rest.partition(" ")
-        out.append((no, kind, date, summ.strip(), raw))
+        out.append((no, kind, date, summ.strip(), raw, closed))
     return out
+
+
+def _revisit_lines(text):
+    """一篇筆記的每一條沒結案的回頭條件 → [(行號, 種類, 日期或 None, 摘要, 原文)]。doctor E5 與 set 把 Issue 結案時的列出
+    共用這一支(存量漂移改法 第 6 節);讀法在 _revisit_all_lines。
+    已寫合格結案標記的行不回(兩個呼叫端都要排除;回頭條件寫法補齊〈做法〉2.4)。"""
+    return [row[:5] for row in _revisit_all_lines(text) if not row[5]]
 
 
 def _closing_revisits(env, rel, new_status):
@@ -38599,7 +38815,7 @@ _DRIFT_M1_RETIRE_WORDS = ("撤除", "撤掉", "作廢", "已失效", "已過時"
 _DRIFT_M1_NOT_YET_RE = re.compile(r"(尚未|還沒|未)(撤除|撤掉|作廢|失效|取代|凍結|結案)")
 _DRIFT_M1_SCOPE_WORDS = ("下面", "以下", "本節", "這一節", "整篇", "之後")
 _DRIFT_M1_HEAD_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-_DRIFT_M1_CUT_RE = re.compile(r"[。;；!?！？]")
+_DRIFT_M1_CUT_RE = _SENT_END_RE      # 句尾定義在檔案前段(doctor S21 也用)
 # 文字抽定義:跟 _drift_py_def_re(name, test=False) 同一組形狀(任何縮排的 def/class/async def,不縮排的「名 =」
 # 「名: 型別 = 值」),加 add_argument( 後面緊接的引號旗標;t_drift_m1_unparsable_files 釘兩者對同一批名稱判斷一致
 _DRIFT_M1_TEXT_DEF_RE = re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)|^(\w+)[ \t]*(?::[^=\n]*)?=(?!=)", re.M)
@@ -50760,6 +50976,8 @@ def main():
         try:
             if args.cmd == "set":
                 rc = cmd_set(env, rel, args.key, args.value)
+                if rc == 0 and args.key == "revalidate_when":      # 引用它的句子(改重驗事件時列出引用它的句子_計劃)
+                    _print_revalidate_backrefs(env, rel)
                 if rc == 0 and args.key == "status":
                     # 計劃收尾時列連帶待辦(存量漂移防線 [S6]):只多印、不擋、不寫;env 是改之前載入的,連結沒變
                     _v = args.value[0] if isinstance(args.value, list) and len(args.value) == 1 else args.value

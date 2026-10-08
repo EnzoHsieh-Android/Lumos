@@ -2,8 +2,9 @@
 type: system
 status: done
 created: 2026-09-05
-updated: 2026-10-07
+updated: 2026-10-08
 responsibility: 負責 lumos 的防護怎麼接到 Claude 與 Codex 兩家 CLI 上:進場提醒、改檔前推波及、派審查員附鏡頭、收工點名這四個時點的 hook 腳本,以及情境探針這支量「AI 有沒有自己去查脈絡」的儀器;不負責這些 hook 推出來的內容對不對(那是各機制自己的節點),也不負責 lumos 本體的讀寫語意
+self_audit: gpt-5.6-sol/2026-10-08
 aliases: []
 about_code:
   - scripts/hooks/claude/check-graph-sync.py
@@ -42,10 +43,21 @@ summary: |-
   PITFALL:Codex 編排時派工鏡頭掛鉤領席(--claim)超時那條路一走就 NameError,超時說明附不出去——掛鉤呼叫 _frame_injected 卻從沒複製 ★注入框★ 區塊;框一致性守衛把這支檔列在清單上、但找不到框常數就略過,所以一直沒抓到 [出處:2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]] 代碼審第三輪查證時發現] [根因:複製式共用(hook 彼此 import 不到)只守「有的複本一致」、沒守「該有的都有」] [修法:區塊逐字抄進來;守衛改成自動找:用到框函式或清理函式的 hook 都要有完整區塊、連同 lumos 本體整段逐字相同(原本只比框常數、只看寫死的清單,memory-sweep 不在清單上)] [test:t_dispatch_lens_hook_claim_timeout_framed]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+  - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
+  - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
+  - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
+  - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+  - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+  - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
+  - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
+  - "[[Verification/持久用量帳第五輪修補驗證]]"
+  - "[[Verification/持久用量帳第五輪審查修補驗證]]"
+  - "[[Verification/持久用量帳第六輪審查修補驗證]]"
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
+  - "[[Verification/持久用量帳第七輪審查修補驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -91,12 +103,59 @@ related:
 - 行為精修(擋停一次、範本通用句、shebang):[[Projects/Codex行為精修_計劃]];驗證 [[Verification/2026-09-05_Codex行為精修f02後測]]。
 - 收工檢查本體:[[Systems/graph-sync-coverage]];安裝生命週期:[[Systems/lumos-cli-lifecycle]];設計/代碼迴圈的 Codex 席位規則:[[Systems/design-loop]]、[[Systems/pitfalls-code-loop]]、[[Systems/cross-family-audit]]。
 
+## 探針修復的歷史脈絡（2026-10-03）
+
+PITFALL: 首次修復穩定性試行重審 2db51cc4 時，讀 README 會冒充讀碼、Claude 非零退出混入有效樣本、逐題與整體分母不一致；前者來自判準放寬，退出碼缺口原已存在，分母矛盾在新增排除規則後暴露。出處 [[Verification/2026-10-03_修復穩定性試行第1案]]；後兩項防回歸測試 t_probe_repair_nonzero_exit、t_probe_repair_per_question_cli；讀碼問題尚未修好，重現與重啟條件見 [[Issues/探針讀碼證據不足]]。
+
+WHY: 本次曾試把讀碼正則收窄到目標程式檔，但第二輪證明仍把搜尋路徑文字當讀碼，且誤傷先切目錄再讀檔；因此撤回這一候選，不把 shell 解析或工具結果關聯塞進同一修復。出處為該案 r2-correctness 與 r2-classification.json；下次處理讀碼判準，先依 [[Issues/探針讀碼證據不足]] 重估資料來源再實作。
+
 ## 回頭條件
+
+WHY: 第1案續辦改從成功工具回傳辨識目標片段，避免繼續解析shell字串；標記若加在既有快照後會被收工hook當作模型改碼，所以此題每次嘗試建立含標記的獨立乾淨副本，結束刪除。代價是多一次複製；只限此題，正式探針首次部署與runner格式升級時重驗耗時及截斷。出處 [[Projects/探針讀碼結果證據_計劃]] 的設計審M1及 [[Verification/2026-10-03_修復穩定性試行第1案續辦]]；第三輪仍未收斂，候選未放行，後續先交使用者裁決。
+
+PITFALL: 設計審B1重現建立副本後Git定位環境變數被runner重新繼承，cwd不保證隔離；沿用既有清洗函式延伸到runner與清理。防回歸 t_probe_source_probe_git_env 在兩個暫存repo驗證外側內容不變；清理失敗停批由 t_probe_source_probe_main 驗證。來源同續辦驗證，不把未跑真模型的fixture當生產觀測。
+
+PITFALL: 第三輪證明上項測試只覆蓋兩種定位環境，不能保證 Git 設定注入與 absolute gitfile 的隔離；出處及可重現步驟見 [[Issues/探針Git隔離的設定與絕對路徑缺口]]。讀碼證據仍有缺 ID 事件計分的反例，見 [[Issues/探針讀碼證據不足]]；兩項 Issue 都是下次重啟的必讀入口，現有綠測試不構成放行證據。
+
+WHY: 2026-10-04 使用者授權例外續修三項缺口；Git只關閉父程序command/global/system設定來源，保留HOME與非Git環境，避免改變被測CLI的skills/hooks來源。代價是不再採用使用者全域Git偏好；來源設定不寫入，副本local設定仍使用。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]，防回歸t_probe_repair4_git_config；未來改Git設定來源時從該驗證入口重驗。
+
+PITFALL: 單驗副本gitdir仍可能漏掉共用資料、core.worktree或refs等中繼資料符號連結；本輪臨時fixture在補最後一道前確實改動外側refs。選擇在Git寫入前拒絕中繼資料符號連結，即使連結目標在副本內也拒絕；普通clone與安全相對gitfile保持可用。出處同例外續修驗證，重現及防回歸t_probe_repair4_copied_git_paths；若要支援這類連結，先從該測試與Issue重估，不能直接移除拒絕條件。
+
+PITFALL: 第四輪把副本頂層的綠測試誤擴成整棵Git樹安全會漏兩種配置：local include/worktree scope可恢復有效remote並蓋掉防推勾子，子模組仍有自己的remote及Git資料。另有共用沙盒清理失敗卻繼續下一題，以及Claude空ID工具回傳被當成功的反例。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]；成對重現r4-parent-reproduction.json及r4-boundary.md，後續防回歸入口為 [[Issues/探針Git隔離的設定與絕對路徑缺口]]、[[Issues/探針共用沙盒清理失敗仍繼續評分]] 與 [[Issues/探針讀碼證據不足]]。第4輪處置閘FAIL，不能把t_probe_repair4_*的局部綠燈當成放行。
+
+WHY: 2026-10-04 另開 [[Projects/探針隔離與清理收斂_計劃]] 處理第4輪的四組阻擋行為，不改寫原案四輪FAIL。保留可見Git歷史，但將繼承設定改為封閉重建、批次凍結後每場複製；這比單次清遠端或共用副本清理更容易界定失敗。代價是副本建立時間與磁碟用量增加；每週探針的 `sandbox_secs` 與 `model_secs` 是重評入口。證據見 [[Verification/2026-10-04_探針隔離與清理收斂]]。
+
+PITFALL: 探針的Git hook僅擋意外push，不是網路隔離；模型若主動指定URL、停hook或用其他網路工具仍可能外送。外指符號連結與巢狀Git也不能用「頂層副本安全」推論安全，故本案採前置拒絕。重現入口與回歸測試為 [[Projects/探針隔離與清理收斂_計劃]] S1–S3 的 `t_probe_boundary_nested_git`、`t_probe_boundary_worktree_links`、`t_probe_boundary_git_config`；正式模型題目若要求HOME或網路操作，先依 [[Issues/探針沙盒改動真全域機器狀態]] 重驗外層隔離。
+
+PITFALL: 本案實作首輪證明「找 `.git`」漏掉大小寫變體與 bare repo，且 `GIT_TRACE` 可讓儀器自己的 Git 呼叫把 log 寫進來源；白名單設定若漏 `user.*`，模型提交還會退用本機身分。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及其 `probe-boundary-remediation/r1-*` 卷證；回歸測試 `t_probe_boundary_review1_git_shapes`、`t_probe_boundary_review1_trace_identity`。下次調整 `_git_env` 或 `_check_worktree_entries` 時重跑兩測試及 `probe_`，不能只看頂層 remote/hook 空值。
+
+PITFALL: 第二輪代碼審在凍結版 730b06fe 證出主 Git 資料的 `worktrees/*/gitdir` 文字外指不受符號連結檢查保護，模型可把真 linked worktree 的 `.git` 改指向臨時副本；同輪證出 `GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過 local 假身分，`git config user.*` 綠燈不能證明實際提交作者。另由編排者重現健康檢查讀取失敗被誤當普通題失敗。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及 `probe-boundary-remediation/r2-*`；防回歸 `t_probe_boundary_review2_linked_worktree`、`t_probe_boundary_review2_effective_identity`、`t_probe_boundary_review2_health_unreadable`。下次改 Git 副本、runner 環境或 skills 健康檢查時以這三項重驗。
+
+PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；第三輪 FAIL 保留。使用者已例外授權 r4，新增 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 在舊碼翻紅、修後轉綠，仍須以新席與處置閘判定，不以254項綠測試代替審查。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
 
+PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互動用的 `--only`：它允許逗號清單與前綴，空值等於不篩選。正式審查的空題號反例可一次選中整份題庫；因此新增精確單題入口，缺題或重複題要在建沙盒前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-security.md`；防回歸 `t_probe_boundary_formal_input_validation`。如果將來調整選題語意，先證明外層單題派工不會擴題。
+
+PITFALL: 只把外層 `--runs` 縮到窗口剩餘額度，探針內用量上限重試仍可額外啟動模型。r2 反例用真 `main` 流程證明兩次重試後須停止第三次呼叫並把批次標失效；`--max-attempts` 在每次模型呼叫前扣額，`--exact-id=值` 容許合法短線開頭題號。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-concurrency-v2.md` 與 Python argparse 官方長選項語法；防回歸 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。調整重試或選題時從實際模型啟動數重驗。
+
+PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫，外層失敗批次與隔日重跑仍會重得滿額，故不可把單次子程序上限稱作五小時帳號上限。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 G10–G11，重現指令在 `r3-intake.md`。改外層額度來源或重試行為時，先跑「失敗／歸檔／同窗口重跑」與「跨午夜」兩組反例。
+
+WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或解析器故障返還已消耗名額；採 SQLite 原子交易沿用 Python 標準庫、維持零第三方依賴。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+
+WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建成；`verified_by` 連到 pending 的 [[Verification/2026-10-08_持久用量帳第四輪代碼審停點]] 是負面驗證與下一入口，不表示持久用量帳分支已通過或可推送。
+
+PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
+
+PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、字元裝置以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
+
+PITFALL: 第五輪的輸出修補自己又帶出三個洞：把 FIFO 也當裝置「直接寫」，沒人讀時整批跑完後永遠卡住（修前會換成普通檔，不會卡）；為了讓新檔照 umask，把整個程序的 umask 設成 0 再設回來，正是 lumos 自己的原子寫入原語註明否決的做法；開跑前檢查對歷史檔漏查父目錄可寫、FIFO 與檔名錯誤 [出處:code-probe-postreview-dispatch-ledger r6 CON6-01/ARCH6-01/COR6-01/BND6-02] [根因:新增「直接寫」分支時沒有逐一列出每種目標型別在取代與追加兩種模式下的行為，也沒先讀專案既有的原子寫入原語] [test:t_probe_boundary_fifth_round_output_edges]。規則由第七輪收斂，見下方「第六輪的修補留下四個相鄰的洞」那條 PITFALL（開檔函式）。證據 [[Verification/持久用量帳第六輪審查修補驗證]]。
+
+WHY: 原子寫入時，既有普通檔只有「自己擁有、而且只有一個名字」才沿用它的權限位元，新建、別人擁有或有多個名字的一律照 umask；要沿用時暫存檔一建立就用那個權限、寫入前補回原值，內容不會先落在比原檔寬的暫存檔裡；這跟 lumos 原語對既有檔一律沿用權限不同 [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01、r6 SEC6-02/ARCH6-02 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但探針的輸出目錄可能是共用的：別人預先放好的寬權限檔、或連到我某個寬權限檔的硬連結若被沿用，替換後的結果檔會讓對方可寫；lumos 原語寫的是使用者自己的筆記庫，沒有這個威脅] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+
+PITFALL: 第六輪的修補留下四個相鄰的洞：字元裝置開檔沒帶 `O_NOCTTY`，在沒有控制終端的 session 裡寫進終端會把它收成控制終端；開跑前檢查對字元裝置一律放行，沒有控制終端時的 `/dev/tty` 或沒寫入權的裝置要整批跑完才失敗；要沿用 0600 時暫存檔先以 0644 寫入再收窄；歷史追加開檔後沒確認型別，跑的期間換成有人讀的 FIFO 或硬連結會寫過去 [出處:code-probe-postreview-dispatch-ledger r7 COR7-01/02、PLT7-01/02、CON7-01、BND7-01/02、SEC7-01、CTR7-01/04] [根因:同一個開檔規則在開跑前檢查、取代寫入、歷史追加三處各寫一次，修一處時其他兩處沒跟上] [test:t_probe_boundary_char_device_session,t_probe_boundary_fifth_round_output_edges]。現在三處共用兩個開檔函式：`_open_char_device`（不阻塞、不跟隨連結、不收控制終端、確認仍是字元裝置、改回阻塞）與 `_open_history`（只收只有一個名字的普通檔與字元裝置）；開跑前檢查對字元裝置實際試開一次；暫存檔一建立就用要沿用的權限。證據 [[Verification/持久用量帳第七輪審查修補驗證]]。
 ## 2026-10-05 背景啟動錯誤的派工提示
 
 [[Projects/背景啟動失敗即時回報_計劃]] 對同步啟動失敗新增獨立於逾時與建鎖錯誤的提示，是因為三者要求不同的人工處置；尤其不能讓事件帳把明確的啟動失敗算成 timeout 或成功。提示只說「本次背景未啟動」，同名鎖可能已被另一工作接手；原始例外不進派工詞，角色卡仍可附上。t_dispatch_lens_hook_spawn_error_notice 與 t_lens_stale_lock_reports_uncertainty 分別驗新舊分類。

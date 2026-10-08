@@ -505,6 +505,23 @@ def t_scaffold_project():
 
 
 
+def t_runner_disables_child_colors():
+    """測試進程裡子程序的錯誤追蹤一律不上色(2026-10-07:殼裡 FORCE_COLOR=3 讓 Python 3.14 把 traceback 上色,
+    比對錯誤名稱的斷言被 ANSI 碼切開而假紅,CI 沒設所以綠)。進入點設 PYTHON_COLORS=0、拿掉 FORCE_COLOR;
+    這支守那兩行:拿掉就紅。前置斷言先證明不中和時真的會上色(現場成立)。翻紅:刪掉 main 裡設 PYTHON_COLORS 那行 → 第二、四條紅;
+    不拿掉 FORCE_COLOR 且殼裡有設 → 第三條紅。"""
+    import os
+    import subprocess as _sp, sys as _sys
+    # ★前置★ 現場成立:不中和的話,這支 Python 在 FORCE_COLOR 下真的會把 traceback 上色(不然後面全綠也證明不了什麼)
+    bare = {k: v for k, v in os.environ.items() if k not in ("PYTHON_COLORS", "NO_COLOR")}   # 現場只吃自己造的:殼裡的 NO_COLOR 會讓前置斷言誤紅
+    r0 = _sp.run([_sys.executable, "-c", "raise RuntimeError('x')"], capture_output=True, text=True, env=dict(bare, FORCE_COLOR="3"))
+    check("不上色: ★前置★ 現場成立——不中和時 FORCE_COLOR 會讓子程序 traceback 帶顏色碼", "\x1b[" in r0.stderr, repr(r0.stderr[-120:]))
+    check("不上色: PYTHON_COLORS=0(子程序繼承,traceback 不上色)", os.environ.get("PYTHON_COLORS") == "0", repr(os.environ.get("PYTHON_COLORS")))
+    check("不上色: 沒有 FORCE_COLOR", "FORCE_COLOR" not in os.environ, repr(os.environ.get("FORCE_COLOR")))
+    r = _sp.run([_sys.executable, "-c", "raise RuntimeError('x')"], capture_output=True, text=True)
+    check("不上色: 子程序 traceback 裡 RuntimeError 字樣完整(沒被顏色碼切開)", "RuntimeError: x" in r.stderr and "\x1b[" not in r.stderr, repr(r.stderr[-120:]))
+
+
 def t_runner_isolates_real_home_and_tmp():
     """★測試跑起來時,家目錄與暫存目錄必須是拋棄式的★(2026-09-06 全 repo 審視 #11)。
 
@@ -10234,6 +10251,43 @@ def t_confirm_tty_unit():
         builtins.input = real_input
         os.environ.pop("LUMOS_TTY", None)
         os.environ.pop("LUMOS_TTY_TIMEOUT", None)
+
+
+def t_confirm_tty_no_ctty_session_survives():
+    """TTY 確認在「新 session、沒有控制終端」的程序裡開 pty 再關掉,程序不能收到掛斷(全套第 3 片 rc129)。
+    上面那支在開發者終端機裡跑時,拿掉 O_NOCTTY 也照綠——那個環境根本走不到「開 tty 就變成控制終端」這條路;
+    所以另開子程序並先斷言現場成立:它是 session leader,而且開不了 /dev/tty。"""
+    import os, subprocess, sys, textwrap
+    if not hasattr(os, "openpty") or not hasattr(os, "setsid"):
+        raise _SrcOnly("非 POSIX(沒有 pty 與 session),這段沒驗到")
+    code = textwrap.dedent('''
+        import os, sys, time, importlib.util
+        from importlib.machinery import SourceFileLoader
+        loader = SourceFileLoader("lumos_ctty", sys.argv[1])
+        spec = importlib.util.spec_from_loader("lumos_ctty", loader)
+        m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+        leader = os.getsid(0) == os.getpid()
+        try:
+            os.close(os.open("/dev/tty", os.O_RDWR)); has_ctty = True
+        except OSError:
+            has_ctty = False
+        print(f"SCENE leader={leader} ctty={has_ctty}", flush=True)
+        class _Pipe:
+            def isatty(self): return False
+        m.sys.stdin = _Pipe()
+        master, slave = os.openpty()
+        os.environ["LUMOS_TTY"] = os.ttyname(slave)
+        os.write(master, b"y\\n")
+        r = m._confirm_tty("q? ")
+        os.close(master); os.close(slave)
+        time.sleep(0.3)
+        print(f"ALIVE result={r}", flush=True)
+    ''')
+    p = subprocess.run([sys.executable, "-c", code, GRAPHCTL], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=True, timeout=60)
+    detail = (p.returncode, p.stdout, p.stderr[-300:])
+    check("現場成立:子程序是 session leader 且沒有控制終端", "SCENE leader=True ctty=False" in p.stdout, detail)
+    check("開 pty 確認後關掉,程序沒收到掛斷", p.returncode == 0 and "ALIVE result=True" in p.stdout, detail)
 
 
 def _bootstrap_run(cwd, *args, interactive_off=True):
@@ -32706,6 +32760,112 @@ def t_note_wording_isolated():
     print("  ✓ t_note_wording_isolated")
 
 
+def t_note_wording_binding_hint():
+    """[S1] 新寫的一行綁兩支以上不同的測試(一個 [test:] 寫多支,或多個 [test:] 各一支)→ 提交時提醒拆成一支一行,
+    印出名稱;正文、摘要、計劃條款都看;回傳碼不變。翻紅釘:綁定規則不接 → ①紅;只看第一個 [test:] → ②紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="甲句守好幾件事 [test:t_alpha,t_beta,t_gamma]\n乙句 [test:t_one] 另一半 [test:t_two]")
+    _ns_stage(root)
+    rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("①一個 [test:] 寫三支:提醒並列出名稱", any("甲句" in h for h in hits) and "t_alpha、t_beta、t_gamma" in out,
+          "\n".join(hits) or out[-800:])
+    check("②兩個 [test:] 各一支也算", any("乙句" in h for h in hits), "\n".join(hits) or out[-800:])
+    check("③只提醒:rc0", rc == 0, out[-300:])
+    root = _wd_repo()
+    _ns_note(root, summary="KEY:x\nWHY:摘要句 [出處:a] [因:b] [test:t_a,t_b]")
+    _nh_node(root, "P", typ="project", folder="Projects", body="## 驗收條款\n\n- [S1] 當甲 應 乙 [test:t_c,t_d]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("④摘要行與計劃條款也看", any("摘要句" in h for h in hits) and any("Projects/P.md" in h for h in hits),
+          "\n".join(hits) or out[-800:])
+    # ⑤–⑨ 代碼審 r1:名稱照 note-shape 與 S20 的切法從原文取(大小寫、全形冒號、反引號名稱);名稱多時只列前幾支;
+    # 同一行數量先命中時綁定照樣提醒
+    root = _wd_repo()
+    _ns_note(root, body="\n".join([
+        "丙句 [Test:t_c1,t_c2]",
+        "丁句 [test：t_d1,t_d2]",
+        "戊句 [test:`k a`,`k b`]",
+        "己句 [test:" + ",".join(f"t_m{i}" for i in range(12)) + "]",
+        "庚句 `KINDS` 有三種 [test:t_g1,t_g2]",
+        "辛句 [test:t_h1,「x」,t_h2]",
+    ]))
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("⑤大小寫與全形冒號的寫法也認", any("丙句" in h for h in hits) and any("丁句" in h for h in hits),
+          "\n".join(hits) or out[-800:])
+    check("⑥反引號包住的名稱照原樣印出", "k a、k b" in out and "\x00" not in out, out[-800:])
+    check("⑦名稱多時只列前幾支並講總數(照檔內既有的「等 N 支」)", "等 12 支" in out and "t_m11" not in out, out[-800:])
+    check("⑨綁定裡夾著引號:引號那段不算一支、不印出看不見的字", "這行綁了 2 支(t_h1、t_h2)" in out and "\x00" not in out,
+          out[-800:])
+    check("⑧同一行數量先命中,綁定照樣提醒", any("庚句" in h for h in hits) and any("庚句" in h for h in _wd_hint_lines(out, "數量")),
+          out[-1200:])
+    print("  ✓ t_note_wording_binding_hint")
+
+
+def t_note_wording_binding_quiet():
+    """[S2] 一行一支、同一支寫兩次、只有 [test-gone:]、寫在行內程式碼或引號裡、圍欄、REVISIT 行、舊行尾補不含綁定的括號
+    → 不出綁定提醒;同一次提交放一句該提醒的當對照。翻紅釘:不去重 → B 紅;不遮引號 → E 紅;不看句尾補括號 → G 紅。"""
+    root = _wd_repo()
+    _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2]")
+    _nh_commit(root, "old")
+    cases = {
+        "A": "只綁一支 [test:t_one]",
+        "B": "同一支寫兩次 [test:t_one] 又 [test:t_one]",
+        "C": "只有消失的 [test-gone:t_x,t_y]",
+        "D": "範例寫在程式碼裡 `[test:t_x,t_y]`",
+        "E": "範例寫在引號裡「[test:t_x,t_y]」",
+        "F": "```\n圍欄裡 [test:t_x,t_y]\n```",
+        "H": "REVISIT:2026-12-01 到期再看 [test:t_x,t_y]",
+        "I": "反引號包一支、另一支沒包,其實是同一支 [test:`t_one`,t_one]",
+        "J": "綁定裡夾著引號只算一支 [test:t_one,「x」]",
+    }
+    for name, body in cases.items():
+        _nh_node(root, name, body=body)
+    _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2](更正:見新說明)")
+    _nh_node(root, "Z", body="對照組 [test:t_z1,t_z2]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    hits = _wd_hint_lines(out, "綁定")
+    check("只有對照組那一句提醒,其餘全部不提醒", len(hits) == 1 and "Systems/Z.md" in hits[0], "\n".join(hits) or out[-800:])
+    print("  ✓ t_note_wording_binding_quiet")
+
+
+def t_note_wording_binding_isolated():
+    """綁定規則丟例外:只印一句沒跑完、回傳碼與否定現況句、前綴提醒照常(代碼審 r1 正確性席)。
+    翻紅釘:綁定規則移到 _ns_wording_collect 的 try 外面 → 替身直接炸出測試。"""
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    for with_viol, want_rc in ((False, 0), (True, 1)):
+        root = _wd_repo()
+        _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可",
+                 body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做\n甲句 [test:t_a,t_b]")
+        _ns_stage(root)
+        rc, out = _neg_inproc(root, _ns_wd_binding_hit=_boom)
+        check(f"綁定規則丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、另兩組提醒照常",
+              rc == want_rc and "新寫句子寫法提醒這次沒跑完(RuntimeError)" in out and _WD_HEAD not in out
+              and _NEG_HEAD in out and _TAG_HEAD in out, out[-800:])
+    print("  ✓ t_note_wording_binding_isolated")
+
+
+def t_note_wording_binding_ledger():
+    """[S3] 有綁定提醒時 hinted 帳的 rules 含 binding;note_shape.wording=off 時不出。翻紅釘:rules 漏 binding → ①紅。"""
+    root = _wd_repo()
+    _ns_note(root, body="甲句 [test:t_a,t_b]")
+    _ns_stage(root)
+    _ns(root)
+    ev = [e for e in _neg_events(root, "hinted") if e.get("check") == "wording"]
+    check("①hinted 帳 rules 含 binding", len(ev) == 1 and ev[0].get("rules") == ["binding"], str(ev))
+    root = _wd_repo(cfg={"note_shape": {"wording": "off"}})
+    _ns_note(root, body="甲句 [test:t_a,t_b]")
+    _ns_stage(root)
+    _rc, out = _ns(root)
+    check("②off:不出", "[綁定]" not in out, out[-400:])
+    print("  ✓ t_note_wording_binding_ledger")
+
+
 def t_doctor_lists_stale_rules():
     """[S6] doctor 列出有效 RULE 的 [until:] 過期、超過半年沒確認、沒寫 [confirmed:](舊行也列),不計入問題數;
     superseded 的不列。翻紅釘:拿掉 superseded 那道跳過 → ③紅;warn_soft 改成算問題 → ④紅。"""
@@ -35478,6 +35638,13 @@ def main():
                "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         _os_env.environ.pop(_v, None)
 
+    # ★子程序的錯誤追蹤一律不上色★(2026-10-07,另一個會談推送前全套 6 條假紅):殼裡設了 FORCE_COLOR=3 時,
+    # Python 3.14 會把子程序 traceback 上色,`RuntimeError` 被 ANSI 碼切開,比對錯誤名稱的斷言就比不到;CI 沒設這個變數所以綠。
+    # 修在唯一進入點、理由同上面清 GIT_*:對現有與未來起子程序比對輸出的測試都自動成立,不用每支各自帶 env。
+    # PYTHON_COLORS 優先於 FORCE_COLOR 與 NO_COLOR(Python 3.13 起),設 0 就關;FORCE_COLOR 一併拿掉,免得別的工具照它上色。
+    _os_env.environ["PYTHON_COLORS"] = "0"
+    _os_env.environ.pop("FORCE_COLOR", None)
+
     # ★參數要嚴格解析★(2026-09-06 全 repo 審視 #12):原本用的是「不認得的參數就靜默丟掉」,
     # 於是 `--help`、打錯的旗標、甚至直接打測試名(情境錄音裡真的有人這樣敲),全部會被當成
     # 「沒帶任何條件」→ **直接跑滿八分鐘的全套**。實測:`--help` 當場把全套跑起來了。
@@ -37942,10 +38109,9 @@ def t_loop_replay_ignores_spec_gate_rows():
     check("回放:帳上有規格閘留痕照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
 
 
-def t_loop_replay_freeze_and_golden():
-    """[改制回測 S1/S2] 凍結+回放全鏈:閉包完整/spec 活檔免疫/帳本長大不紅/帳被動紅/
-    凍結檔被動紅(不誤報邏輯漂移)/golden 過期不紅指路重凍/邏輯漂移紅/唯讀(治理帳零寫入+
-    無 roster-alerts)/重凍留痕+歸檔不覆寫/未 commit 卷證拒凍/panel 形狀 rc2 指路。"""
+def _replay_fx():
+    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(rp 迴圈一輪、報告與快照還沒提交)、帳本一列。
+    → (v, repo, spec, ledger, d, rpt, row, hsp)。"""
     import json as _j
     import hashlib as _h
     import subprocess as _sp
@@ -37982,6 +38148,16 @@ def t_loop_replay_freeze_and_golden():
            "snapshot_path": "governance/review-reports/rp/r1-snapshot.md", "snapshot_sha256": hs}
     ledger = v.parent / ".canary-log.jsonl"
     ledger.write_text(_j.dumps(row) + "\n", encoding="utf-8")
+    return v, repo, spec, ledger, d, rpt, row, hsp
+
+
+def t_loop_replay_freeze_and_golden():
+    """[改制回測 S1/S2] 凍結+回放全鏈:閉包完整/spec 活檔免疫/帳本長大不紅/帳被動紅/
+    凍結檔被動紅(不誤報邏輯漂移)/golden 過期不紅指路重凍/邏輯漂移紅/唯讀(治理帳零寫入+
+    無 roster-alerts)/重凍留痕+歸檔不覆寫/未 commit 卷證拒凍/panel 形狀 rc2 指路。"""
+    import json as _j
+    import subprocess as _sp
+    v, repo, spec, ledger, d, rpt, row, hsp = _replay_fx()
 
     # ① 凍結模式缺 --spec → rc2
     r = run(v, "loop", "replay", "rp", "--freeze", "--repo", str(repo))
@@ -38093,6 +38269,114 @@ def t_loop_replay_freeze_and_golden():
     r = run(v, "loop", "replay", "rp-panel", "--freeze", "--spec", str(spec), "--repo", str(repo))
     check("replay:panel 舊制形狀 rc2 指路 --gate --panel", r.returncode == 2 and "--panel" in r.stderr,
           f"rc={r.returncode} {r.stderr[:200]}")
+
+
+def t_loop_replay_freeze_leaves_no_tmp():
+    """凍結成功、重凍缺 --note 被擋、帶 --note 重凍、寫完暫存檔後換上位失敗,跑完 governance/replay/<編號>/ 都不留
+    自己的暫存檔;別的行程正在用的暫存檔不動;被擋那次現行 verdict.json 一個字都不動,訊息講明判定檔沒有更新、現行是第幾輪。
+    翻紅釘:先寫暫存檔再檢查 --note → ②紅;拿掉呼叫端 finally 的清理 → ④紅;暫存檔用固定名 → ⑤紅。"""
+    import subprocess as _sp
+    import io, contextlib
+    v, repo, spec, _ledger, _d, _rpt, _row, _hsp = _replay_fx()
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+    vdir = repo / "governance" / "replay" / "rp"
+    other = vdir / ".verdict.tmp"         # 別的行程(或舊版)正在用的暫存檔:固定名的寫法會把它蓋掉再刪掉
+
+    def _mine():
+        return sorted(p.name for p in vdir.glob(".verdict*.tmp") if p != other)
+    run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo), expect_rc=0)
+    check("①凍結成功:不留暫存檔", not _mine(), str(list(vdir.iterdir())))
+    other.write_text("別人的", encoding="utf-8")
+    before = (vdir / "verdict.json").read_bytes()
+    r = run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo))
+    check("②重凍缺 --note 被擋:不留暫存檔、現行判定不動", r.returncode == 2 and not _mine()
+          and (vdir / "verdict.json").read_bytes() == before, str(list(vdir.iterdir())))
+    check("②擋下訊息講明判定檔沒有更新、現行是第幾輪", "判定檔沒有更新" in r.stderr and "r1" in r.stderr, r.stderr[-300:])
+    check("②擋下時不印處置閘的 PASS(只看尾端或接管線時才不會被誤讀成凍好了;代碼審 r2 正確性席)",
+          "GATE PASS" not in r.stdout and "[disposal]" not in r.stdout, r.stdout[-300:])
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "golden"], capture_output=True)
+    run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo), "--note", "重凍測試", expect_rc=0)
+    check("③帶 --note 重凍:不留暫存檔", not _mine(), str(list(vdir.iterdir())))
+    m = _load_lumos_inproc()
+
+    def _inproc(**patch):
+        saved = {k: getattr(m, k) for k in patch if hasattr(m, k)}
+        buf = io.StringIO()
+        try:
+            for k, val in patch.items():
+                setattr(m, k, val)
+            with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+                rc = m.cmd_loop_replay(m.Env(v), "rp", freeze=True, spec=str(spec), note="再凍一次", repo=str(repo))
+        finally:
+            for k, val in saved.items():
+                setattr(m, k, val)
+        return rc, buf.getvalue()
+    # ④ 寫完暫存檔之後才失敗:替身寫完暫存檔就回 rc2,呼叫端要清掉暫存檔、現行判定不動
+    def _fail_after_tmp(tmp, target, vdir_, verdict, note=None):
+        tmp.write_text("{}", encoding="utf-8")
+        return 2, None
+    before = (vdir / "verdict.json").read_bytes()
+    rc, out = _inproc(_replay_write_verdict=_fail_after_tmp)
+    check("④寫完暫存檔才失敗:rc2、不留暫存檔、現行判定不動", rc == 2 and not _mine()
+          and (vdir / "verdict.json").read_bytes() == before, f"rc={rc} {list(vdir.iterdir())} {out[-300:]}")
+    # ⑤ 真的讓換上位失敗(代碼審 r1 正確性席:④用替身沒走到真的那段):舊判定已歸檔、暫存檔清掉、別人的暫存檔不動
+    real_replace = m.os.replace
+
+    def _boom_replace(a, b):
+        if str(a).endswith(".tmp"):
+            raise OSError("模擬磁碟滿")
+        return real_replace(a, b)
+    arch_before = set(vdir.glob("verdict-*.json"))
+    import time as _t
+    _t.sleep(1.1)                                         # 歸檔檔名到秒,跟上一次重凍錯開
+    m.os.replace = _boom_replace
+    try:
+        rc, out = _inproc()
+    finally:
+        m.os.replace = real_replace
+    check("⑤換上位失敗:rc2、印出救法、舊判定已歸檔、不留自己的暫存檔、別人的暫存檔不動",
+          rc == 2 and "換上位失敗" in out and len(set(vdir.glob("verdict-*.json")) - arch_before) == 1
+          and not _mine() and other.exists(), f"rc={rc} {list(vdir.iterdir())} {out[-300:]}")
+    print("  ✓ t_loop_replay_freeze_leaves_no_tmp")
+
+
+def t_loop_replay_freeze_race_needs_note():
+    """開頭檢查時還沒有判定檔、寫入前另一個凍結先寫好了(兩個第一次凍結同時跑),沒帶 --note 的這邊在寫入端也要擋:
+    rc2、不丟例外、對方的 verdict.json 一個字不動、不歸檔、不留暫存檔、訊息講判定檔沒有更新(代碼審 code-凍結暫存檔清理 r3)。
+    翻紅釘:寫入端不再判 note → 歸檔對方的檔後在 note.strip() 丟 AttributeError。"""
+    import subprocess as _sp
+    import io, contextlib
+    v, repo, spec, _ledger, _d, _rpt, _row, _hsp = _replay_fx()
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+    vdir = repo / "governance" / "replay" / "rp"
+    m = _load_lumos_inproc()
+    orig = m._replay_git_blob
+    other = '{"loop": "rp", "round": "r1", "by": "另一個凍結"}'
+
+    def _race(root, rel):                 # 開頭檢查之後、寫入之前:另一個凍結先把判定檔寫好
+        if not (vdir / "verdict.json").exists():
+            vdir.mkdir(parents=True, exist_ok=True)
+            (vdir / "verdict.json").write_text(other, encoding="utf-8")
+        return orig(root, rel)
+    buf = io.StringIO()
+    err = None
+    try:
+        m._replay_git_blob = _race
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_loop_replay(m.Env(v), "rp", freeze=True, spec=str(spec), note=None, repo=str(repo))
+    except Exception as e:                # 就是要看有沒有丟出來
+        rc, err = None, e
+    finally:
+        m._replay_git_blob = orig
+    check("寫入端也擋:rc2、不丟例外", err is None and rc == 2, f"rc={rc} err={err!r} {buf.getvalue()[-300:]}")
+    check("對方的判定檔不動、不歸檔、不留暫存檔",
+          (vdir / "verdict.json").read_text(encoding="utf-8") == other and not list(vdir.glob("verdict-*.json"))
+          and not list(vdir.glob(".verdict*.tmp")), str(list(vdir.iterdir())))
+    check("訊息講判定檔沒有更新", "判定檔沒有更新" in buf.getvalue(), buf.getvalue()[-300:])
+    print("  ✓ t_loop_replay_freeze_race_needs_note")
 
 
 def _mk_dref_vault():
@@ -41299,8 +41583,8 @@ def t_probe_scenarios_allow_code_first():
 
 
 def t_probe_code_question_regrade():
-    """探針判準對齊程式碼為主 [S5]:純程式碼題(v04)——2026-09-28 週抽那場先 grep、讀碼、答對、沒敲 lumos,新判準要判過;
-    只 grep 圖譜資料夾、沒讀程式碼的要判不過。呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
+    """9/28歷史僅存呼叫摘要，沒有原始工具結果；不能替新尺補造正證據。
+    呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
     mod = _load_probe_module("sp_v04")
     v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
     real_calls = [("Grep", "_BOOKKEEPING_FILES"),
@@ -41308,12 +41592,2185 @@ def t_probe_code_question_regrade():
                   ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; sed -n 5395,5402p scripts/lumos")]
     real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
     ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
-    check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
+    check("探針 v04: 9/28歷史摘要在新尺下證據不足，答案判分仍保留", ok is False and why.startswith("儀器例外") and content_ok is True, (why, content_ok))
     graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
     ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
     check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
     ok3, why3, c3 = mod.grade(v04, real_calls, "我不知道")
     check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
+
+
+def t_probe_repair_nonzero_exit():
+    """修復試行 C2: 相同有效工具流,退出碼改為非零不得判過;正常失敗仍計分。"""
+    import json as _j
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_repair_exit")
+    sc = {"id": "q", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+    class R:
+        def __init__(self, code, events):
+            self.returncode, self.stderr = code, "cli crashed" if code else ""
+            self.stdout = "\n".join(_j.dumps(e) for e in events)
+    def run(code, events):
+        with patch.object(mod.subprocess, "run", return_value=R(code, events)) as mock:
+            result = mod.run_one(sc, Path("."), 18, 10, "")
+        check("probe repair C2 前置: Claude adapter 確實跑 subprocess", mock.call_count == 1 and mock.call_args.args[0][0] == "claude", mock.call_args)
+        return result
+    success = {"type": "result", "subtype": "success", "result": "ok"}
+    good = run(0, [tool, success])
+    ordinary_fail = run(0, [success])
+    check("probe repair C2 好例: 正常完成照題判分", good["passed"] and not ordinary_fail["passed"] and not ordinary_fail["reason"].startswith("儀器例外"), (good, ordinary_fail))
+    for events in [[], [tool, success]]:
+        bad = run(7, events)
+        check("probe repair C2 壞例: 非零退出不算分", not bad["passed"] and bad["reason"].startswith("儀器例外") and not bad["truncated"] and not bad["limit_hit"], bad)
+        summary = mod.summarize_results([good, ordinary_fail, bad])
+        check("probe repair C2 壞例: 摘要與歷史排除 CLI 故障", summary["scored"] == 2 and summary["passed"] == 1 and len(summary["failed"]) == 1 and len(summary["excluded"]) == 1, summary)
+    for ev, key in [({"type": "result", "subtype": "error_max_turns"}, "truncated"),
+                    ({"type": "result", "subtype": "error_max_turns", "is_error": True, "result": "You've hit your usage limit"}, "limit_hit")]:
+        res = run(1, [ev] if key == "limit_hit" else [tool, ev])
+        check("probe repair C2 好例: 非零退出仍保留 " + key, res[key] and not res["passed"] and (key != "limit_hit" or not res["truncated"]), res)
+
+
+def t_probe_repair_per_question_cli():
+    """修復試行 C3: 真 main 輸出與歷史口徑一致;mock 所有子程序以免碰真機/外部模型。"""
+    import contextlib, io, json as _j, tempfile
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_repair_cli")
+    with tempfile.TemporaryDirectory(prefix="probe-repair-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        questions = root / "questions.jsonl"
+        questions.write_text(_j.dumps({"id": "q", "prompt": "p", "expect": ["lumos search"]}) + "\n", encoding="utf-8")
+        def exercise(rows):
+            results = [dict(r, first_tool=None, secs=0) for r in rows]
+            out = io.StringIO()
+            with patch.object(mod.sys, "argv", ["probe", "--repo", str(src), "--scenarios", str(questions), "--runs", "2"]), \
+                 patch.object(mod, "check_scenario_targets", return_value=[]), \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 patch.object(mod, "run_one", side_effect=results) as runner, \
+                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                rc = mod.main()
+            check("probe repair C3 前置: main 跑完兩場且輸出逐題統計", runner.call_count == 2 and "每題通過次數:" in out.getvalue(), out.getvalue())
+            return rc, out.getvalue()
+        rc, good = exercise([_probe_res("q", True), _probe_res("q", False, "沒敲到期望指令")])
+        check("probe repair C3 好例: 有效失敗仍在分母", rc == 1 and "每題通過次數: q 1/2" in good, good)
+        excluded = _probe_res("q", False, "儀器例外: 截斷", truncated=True)
+        rc, mixed = exercise([_probe_res("q", True), excluded])
+        check("probe repair C3 壞例: 整體及逐題都只算有效場", rc == 0 and "1/1 個情境" in mixed and "每題通過次數: q 1/1 (不算分 1)" in mixed, mixed)
+        rc, empty = exercise([excluded, excluded])
+        check("probe repair C3 壞例: 全被排除仍列題目並標數量", rc == 1 and "每題通過次數: q 0/0 (不算分 2)" in empty and "不能下結論" in empty, empty)
+
+
+def _source_probe_fixture(root):
+    """真正隔離 Git repo；內容取實際 lumos，所有模型呼叫由各測試 stub。"""
+    import subprocess
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts/lumos").write_bytes((Path(GRAPHCTL)).read_bytes())
+    (root / "README.md").write_text("scripts/lumos ledger\n", encoding="utf-8")
+    for args in [("init", "-q"), ("add", "-A"), ("-c", "user.name=test", "-c", "user.email=t@t", "commit", "-qm", "fixture")]:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                       env=_load_probe_module("sp_fixture")._git_env())
+    return {"id": "v04-where-used", "prompt": "常數用途?", "expect": ["^(?:Read|Grep):|.+"],
+            "answer_expect": ["帳"], "source_probe": {"path": "scripts/lumos", "line_prefix": "_BOOKKEEPING_FILES ="}}
+
+
+def _source_probe_events(harness, output, command="cat scripts/lumos", success=True):
+    if harness == "codex":
+        return [{"type": "item.completed", "item": {"id": "c", "type": "command_execution", "command": command,
+                "aggregated_output": output, "status": "completed" if success else "failed", "exit_code": 0 if success else 1}},
+                {"type": "item.completed", "item": {"type": "agent_message", "text": "帳本"}}, {"type": "turn.completed"}]
+    return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c", "name": "Bash", "input": {"command": command}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "c", "content": output, "is_error": not success}]}},
+            {"type": "result", "subtype": "success", "result": "帳本"}]
+
+
+def t_probe_source_probe_setup():
+    import ast, tempfile, subprocess, os
+    mod = _load_probe_module("sp_source_setup")
+    with tempfile.TemporaryDirectory(prefix="probe-source-test-") as td:
+        root = Path(td); sc = _source_probe_fixture(root / "source")
+        original = (root / "source/scripts/lumos").read_bytes()
+        tokens = []
+        for _ in range(2):
+            def runner(work, token):
+                tokens.append(token)
+                body = (work / "scripts/lumos").read_text()
+                clean = subprocess.run(["git", "status", "--porcelain"], cwd=work, env=mod._git_env(), capture_output=True, text=True)
+                check("source probe 乾淨基線不觸發code_entries", clean.returncode == 0 and not clean.stdout, clean.stdout)
+                check("source probe 標記注入且AST含位置不變", token in body and ast.dump(ast.parse(body), include_attributes=True) == ast.dump(ast.parse(original), include_attributes=True), "")
+                return {"path": str(work), "answer": token, "passed": True}
+            token = "LUMOS_READ_" + __import__("secrets").token_hex(16)
+            work = mod.make_sandbox(root / "source", "with", source_probe=(sc["source_probe"], token))
+            try:
+                res = mod._redact_source_token(runner(work, token), token)
+            finally:
+                mod._remove_sandbox(work)
+            check("source probe 專用副本刪除/结果遮罩", not Path(res["path"]).exists() and tokens[-1] not in str(res), res)
+        check("source probe 每次新標記/本體不動", tokens[0] != tokens[1] and (root / "source/scripts/lumos").read_bytes() == original, "")
+        work = root / "unsafe"; (work / "scripts").mkdir(parents=True)
+        target = work / "scripts/lumos"; target.write_bytes(original)
+        configs = [{"path": "/tmp/lumos", "line_prefix": "x"}, {"path": "../source/scripts/lumos", "line_prefix": "x"},
+                   {"path": "scripts/lumos", "line_prefix": "missing"}, {"path": "scripts/lumos", "line_prefix": "def "}]
+        for conf in configs:
+            try: mod._prepare_source_probe(work, conf, "LUMOS_READ_" + "a" * 32); rejected = False
+            except (ValueError, OSError, SyntaxError): rejected = True
+            check("source probe 壞目標拒絕且不寫", rejected and target.read_bytes() == original, conf)
+        for kind in ["symlink", "hardlink", "parent"]:
+            target.unlink()
+            if kind == "symlink": target.symlink_to(root / "source/scripts/lumos")
+            elif kind == "hardlink": os.link(root / "source/scripts/lumos", target)
+            else:
+                target.parent.rmdir(); target.parent.symlink_to(root / "source/scripts", target_is_directory=True)
+            try: mod._prepare_source_probe(work, sc["source_probe"], "LUMOS_READ_" + "b" * 32); rejected = False
+            except (ValueError, OSError): rejected = True
+            check("source probe 拒絕" + kind, rejected and (root / "source/scripts/lumos").read_bytes() == original, "")
+
+
+def t_probe_source_probe_results():
+    import json
+    mod = _load_probe_module("sp_source_results"); token = "LUMOS_READ_" + "c" * 32
+    for harness in ["claude", "codex"]:
+        def state(events, tok=token): return mod.source_evidence([json.dumps(e) for e in events], harness, tok)
+        positive = _source_probe_events(harness, "code " + token)
+        check("source result 真成功 " + harness, state(positive) == "present", "")
+        check("source result 失敗不算讀到 " + harness, state(_source_probe_events(harness, token, success=False)) == "absent", "")
+        check("source result 命令中標記不算 " + harness, state(_source_probe_events(harness, "README", command="echo " + token)) == "absent", "")
+        check("source result 缺標記前提 " + harness, state(positive, None) == "unknown", "")
+        check("source result 缺結束/空歷史 " + harness, state([]) == "unknown", "")
+        check("source result 完整零呼叫是失敗 " + harness, state(positive[-1:]) == "absent", "")
+        if harness == "claude":
+            missing = [positive[0], positive[-1]]
+            orphan = [positive[1], positive[-1]]
+            blocks = _source_probe_events(harness, [{"type": "text", "text": token}])
+            check("source result Claude文字區塊", state(blocks) == "present", "")
+            glob = _source_probe_events(harness, token); glob[0]["message"]["content"][0]["name"] = "Glob"
+            check("source result Glob不算證據", state(glob) == "absent", "")
+        else:
+            missing = _source_probe_events(harness, token); del missing[0]["item"]["aggregated_output"]
+            orphan = [{"type": "item.completed", "item": {"type": "agent_message", "text": token}}, positive[-1]]
+        check("source result 缺已發呼叫結果 " + harness, state(missing) == "unknown", "")
+        check("source result 孤立結果或答案不得正證 " + harness, state(orphan) != "present", "")
+
+
+def t_probe_source_probe_runners():
+    import tempfile, subprocess, json, re
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_source_runners")
+    with tempfile.TemporaryDirectory(prefix="probe-source-run-") as td:
+        root = Path(td); sc = _source_probe_fixture(root)
+        token = "LUMOS_READ_" + "d" * 32
+        mod._prepare_source_probe(root, sc["source_probe"], token)
+        line = next(i for i, s in enumerate((root / "scripts/lumos").read_text().splitlines(), 1) if token in s)
+        commands = [("cat scripts/lumos", True), ("cd scripts && cat lumos", True),
+                    ("grep -n '_BOOKKEEPING_FILES\\|_BOOKKEEPING_DIRS' scripts/lumos | cut -c1-220", True),
+                    (f"sed -n '{line},{line+2}p' scripts/lumos", True), ("grep 'scripts/lumos' README.md", False),
+                    ("find . -type f | grep scripts/lumos", False), ("cat README.md", False)]
+        for command, expected in commands:
+            r = subprocess.run(["/bin/sh", "-c", command], cwd=root, capture_output=True, text=True, check=True)
+            for harness in ["claude", "codex"]:
+                events = _source_probe_events(harness, r.stdout, command)
+                out = "\n".join(json.dumps(e) for e in events)
+                with patch.object(mod.subprocess, "run", return_value=SimpleNamespace(stdout=out, stderr="", returncode=0)):
+                    res = (mod.run_one(sc, root, 6, 1, None, source_token=token) if harness == "claude" else mod.run_one_codex(sc, root, 1, None, source_token=token))
+                check("source runner " + harness + " " + command, res["passed"] is expected and not res["reason"].startswith("儀器例外"), res["reason"])
+        v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
+        check("source probe 真題庫已接線", v04.get("source_probe") == sc["source_probe"], v04)
+        ok, reason, content = mod.grade(v04, [("Bash", "cat README.md")], "帳本")
+        check("source probe 舊摘要不假裝通過", not ok and reason.startswith("儀器例外") and content, reason)
+
+
+def t_probe_source_probe_main():
+    import tempfile, json, contextlib, io
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_source_main")
+    with tempfile.TemporaryDirectory(prefix="probe-source-main-") as td:
+        root = Path(td); sc = _source_probe_fixture(root / "src")
+        q = root / "q.jsonl"; q.write_text(json.dumps(sc) + "\n")
+        for harness in ["claude", "codex"]:
+            for fatal in [False, True]:
+                out = root / "out.json"; cleanup_calls = []
+                runner_seen = []
+                real_remove = mod._remove_sandbox
+                def model(*args, **kwargs):
+                    runner_seen.append(kwargs.get("source_token"))
+                    r = _probe_res(sc["id"], len(runner_seen) > 1, "ok" if len(runner_seen) > 1 else "儀器例外: limit")
+                    r.update(first_tool=None, secs=0, source_evidence="absent", limit_hit=len(runner_seen) == 1)
+                    return r
+                def remove(work):
+                    cleanup_calls.append(work)
+                    if fatal and len(cleanup_calls) == 1:
+                        raise mod.SourceProbeCleanupError("remove failed")
+                    real_remove(work)
+                with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--runner", harness, "--runs", "2", "--wait-on-limit", "300", "--keep", "--out", str(out)]), \
+                     patch.object(mod, "check_scenario_targets", return_value=[]), \
+                     patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod, "_remove_sandbox", side_effect=remove), \
+                     patch.object(mod, "run_one", side_effect=model) as claude, patch.object(mod, "run_one_codex", side_effect=model) as codex, \
+                     patch.object(mod.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = mod.main()
+                data = json.loads(out.read_text())
+                check("source main 重試/致命清理 " + harness + str(fatal), (rc == 3 and len(runner_seen) == 1 and data["inconclusive"]) if fatal else (rc == 0 and len(runner_seen) == 3), data)
+                check("source main 接到指定runner且傳標記 " + harness, all(runner_seen) and (claude.call_count == 0 if harness == "codex" else codex.call_count == 0), runner_seen)
+                if fatal and cleanup_calls:
+                    real_remove(cleanup_calls[0])   # 故障注入在刪除前拋錯，測試自行清掉殘留副本
+        token = "LUMOS_READ_" + "e" * 32
+        def raises(*_args, **_kwargs): raise RuntimeError(token)
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--out", str(out)]), \
+             patch.object(mod, "check_scenario_targets", return_value=[]), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             patch.object(mod, "run_one", side_effect=raises), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        body = out.read_text()
+        check("source main 模型例外遮罩標記", rc == 1 and token not in body and "[source-marker]" in body, body[-200:])
+
+
+def t_probe_source_probe_git_env():
+    import os, tempfile, subprocess, json
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_source_env")
+    with tempfile.TemporaryDirectory(prefix="probe-git-env-") as td:
+        root = Path(td); _source_probe_fixture(root / "outside"); _source_probe_fixture(root / "inside")
+        outside = root / "outside"; inside = root / "inside"
+        before = {p.relative_to(outside): p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+        seen = []
+        def run(cmd, **kw):
+            seen.append(kw["env"])
+            subprocess.check_call(["git", "config", "probe.test", "inside"], cwd=kw["cwd"], env=kw["env"])
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        with patch.dict(os.environ, {"GIT_DIR": str(outside / ".git"), "GIT_WORK_TREE": str(outside)}), patch.object(mod.subprocess, "run", side_effect=run):
+            sc = {"id": "x", "prompt": "x", "expect": ["cat"]}
+            mod.run_one(sc, inside, 1, 1, None); mod.run_one_codex(sc, inside, 1, None)
+        after = {p.relative_to(outside): p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+        check("source Git 環境不能把兩runner導去本體", before == after and all("GIT_DIR" not in e and "GIT_WORK_TREE" not in e for e in seen), "")
+
+
+def t_probe_repair4_incomplete_ids():
+    import json
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_r4_ids")
+    token = "LUMOS_READ_" + "f" * 32
+    sc = next(row for row in _probe_scenarios_all() if row["id"] == "v04-where-used")
+    for event_type in ("item.started", "item.updated"):
+        for ident in (None, "", 7):
+            item = {"type": "command_execution", "command": "cat scripts/lumos"}
+            if ident is not None:
+                item["id"] = ident
+            events = [{"type": event_type, "item": item}, {"type": "turn.completed"}]
+            output = "\n".join(json.dumps(e) for e in events)
+            with patch.object(mod.subprocess, "run", return_value=SimpleNamespace(stdout=output, stderr="", returncode=0)):
+                result = mod.run_one_codex(sc, Path("."), 1, None, source_token=token)
+            summary = mod.summarize_results([result])
+            mixed = mod.summarize_results([result, _probe_res("control", True)])
+            check("r4 缺/壞ID排除 " + event_type + repr(ident), result["source_evidence"] == "unknown" and summary["excluded"] == [sc["id"]] and not summary["failed"] and summary["inconclusive"] and mixed["scored"] == 1, result)
+            positive = events + _source_probe_events("codex", token)
+            check("r4 已有正證據不受其他壞呼叫影響", mod.source_evidence([json.dumps(e) for e in positive], "codex", token) == "present", "")
+    completed = _source_probe_events("codex", "not the target")
+    check("r4 完整有效未讀仍計失敗", mod.source_evidence([json.dumps(e) for e in completed], "codex", token) == "absent", "")
+
+
+def t_probe_repair4_git_config():
+    import os, tempfile, subprocess, shutil
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    mod = _load_probe_module("sp_r4_config")
+    real_run = subprocess.run
+    with tempfile.TemporaryDirectory(prefix="probe-r4-config-") as td:
+        root = Path(td)
+        _source_probe_fixture(root / "src")
+        bare = root / "remote.git"
+        real_run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+        empty_hooks = root / "empty-hooks"
+        empty_hooks.mkdir()
+        conf = root / "injected.config"
+        conf.write_text(f'[remote "escape"]\n\turl = {bare}\n[core]\n\thooksPath = {empty_hooks}\n')
+        variants = [
+            {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "remote.escape.url", "GIT_CONFIG_VALUE_0": str(bare), "GIT_CONFIG_KEY_1": "core.hooksPath", "GIT_CONFIG_VALUE_1": str(empty_hooks)},
+            {"GIT_CONFIG_PARAMETERS": f"'remote.escape.url={bare}' 'core.hooksPath={empty_hooks}'"},
+            {"GIT_CONFIG_GLOBAL": str(conf)}, {"GIT_CONFIG_SYSTEM": str(conf), "GIT_CONFIG_NOSYSTEM": "0"},
+        ]
+        work = mod.make_sandbox(root / "src")
+        try:
+            for variant in variants:
+                seen = []
+                def runner(cmd, _seen=seen, **kw):
+                    env = kw["env"]
+                    remotes = real_run(["git", "-C", str(work), "remote"], env=env, capture_output=True, text=True)
+                    hooks = real_run(["git", "-C", str(work), "config", "--get", "core.hooksPath"], env=env, capture_output=True, text=True)
+                    push = real_run(["git", "-C", str(work), "push", "--dry-run", str(bare), "HEAD:refs/heads/probe"], env=env, capture_output=True, text=True)
+                    _seen.append((remotes, hooks, push, env))
+                    return SimpleNamespace(stdout="", stderr="", returncode=0)
+                with patch.dict(os.environ, variant), patch.object(mod.subprocess, "run", side_effect=runner):
+                    sc = {"id": "x", "prompt": "x", "expect": ["cat"]}
+                    mod.run_one(sc, work, 1, 1, None)
+                    mod.run_one_codex(sc, work, 1, None)
+                check("r4 Git設定注入兩runner均隔離 " + next(iter(variant)), len(seen) == 2 and all(not r.stdout.strip() and h.stdout.strip() == str(work.parent / "hooks") and p.returncode != 0 and "探針沙盒:禁止 push" in p.stderr for r, h, p, e in seen), [(r.stdout, h.stdout, p.returncode) for r, h, p, e in seen])
+                check("r4 保持非Git環境PATH", all(e.get("PATH") == os.environ.get("PATH") for r, h, p, e in seen), "")
+            refs = real_run(["git", "-C", str(bare), "for-each-ref"], capture_output=True, text=True, check=True)
+            check("r4 dry-run沒有寫入bare", not refs.stdout, refs.stdout)
+        finally:
+            shutil.rmtree(work.parent)
+
+
+def _probe_repair4_bytes(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def _probe_repair4_path_fixture(src, shape, root, git):
+    import shutil
+    if shape in ("relative", "absolute", "symlink"):
+        (src / ".git").rename(src / ".hidden-git")
+        if shape == "symlink":
+            (src / ".git").symlink_to(src / ".hidden-git", target_is_directory=True)
+        else:
+            target = ".hidden-git" if shape == "relative" else str(src / ".hidden-git")
+            (src / ".git").write_text("gitdir: " + target + "\n")
+        (src / ".gitignore").write_text(".hidden-git/\n.git\n")
+    elif shape == "worktree-config":
+        git("config", "core.worktree", str(src))
+    elif shape == "common-external":
+        common = root / "external-common"
+        shutil.copytree(src / ".git", common)
+        (src / ".git/commondir").write_text(str(common) + "\n")
+        return common
+    elif shape == "refs-symlink":
+        common = root / "external-refs"
+        (src / ".git/refs").rename(common)
+        (src / ".git/refs").symlink_to(common, target_is_directory=True)
+        (src / "README.md").write_text("snapshot must commit a real change\n")
+        return common
+    return None
+
+
+def t_probe_repair4_copied_git_paths():
+    import tempfile, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_r4_gitpaths")
+    with tempfile.TemporaryDirectory(prefix="probe-r4-paths-") as td:
+        root = Path(td)
+        for shape in ("plain", "relative", "absolute", "symlink", "worktree-config", "common-external", "refs-symlink"):
+            src = root / shape
+            _source_probe_fixture(src)
+            def git(*args, _src=src):
+                return subprocess.run(["git", "-C", str(_src), *args], env=mod._git_env(), text=True, capture_output=True, check=True).stdout.strip()
+            git("remote", "add", "sentinel", str(root / "local-only.git"))
+            common = _probe_repair4_path_fixture(src, shape, root, git)
+            common_before = _probe_repair4_bytes(common) if common else None
+            check("r4 現場來源Git目錄在來源內 " + shape, Path(git("rev-parse", "--absolute-git-dir")).resolve().is_relative_to(src.resolve()), "")
+            before = _probe_repair4_bytes(src)
+            disposable = root / ("copy-" + shape)
+            disposable.mkdir()
+            rejected = False
+            work = None
+            try:
+                with patch.object(mod.tempfile, "mkdtemp", return_value=str(disposable)):
+                    work = mod.make_sandbox(src)
+            except RuntimeError:
+                rejected = True
+            after = _probe_repair4_bytes(src)
+            safe = shape in ("plain", "relative")
+            check("r4 副本Git落點判定 " + shape, rejected is not safe, rejected)
+            check("r4 來源byte-equal " + shape, before == after, sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k)))
+            if common is not None:
+                common_after = _probe_repair4_bytes(common)
+                check("r4 共用Git資料不受副本影響", common_before == common_after, "")
+            if rejected:
+                check("r4 拒絕後副本已清理 " + shape, not disposable.exists(), str(disposable))
+            if work is not None:
+                shutil.rmtree(work.parent)
+
+
+def _probe_boundary_repo(root):
+    """小型真 Git 來源；所有推送測試只碰同一暫存根的 bare。"""
+    import subprocess
+    root.mkdir(parents=True)
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), *args], check=True,
+                              capture_output=True, text=True)
+    git("init", "-q", "-b", "main")
+    (root / "base.txt").write_text("clean\n", encoding="utf-8")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    return git
+
+
+def t_probe_boundary_git_config():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_config")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-git-") as td:
+        root = Path(td); src = root / "src"; git = _probe_boundary_repo(src)
+        bare = root / "bare.git"; empty = root / "empty-hooks"; empty.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        include = root / "branch.config"
+        include.write_text(f'[remote "escape"]\n\turl = {bare}\n[core]\n\thooksPath = {empty}\n')
+        git("branch", "escape")
+        git("config", "includeIf.onbranch:escape.path", str(include))
+        marker = root / "filter-marker"
+        git("config", "filter.escape.clean", f"sh -c 'printf hit > {marker}; cat'")
+        (src / ".gitattributes").write_text("*.txt filter=escape\n")
+        (src / "dirty.txt").write_text("payload\n")
+        before = _probe_repair4_bytes(src)
+        work = mod.make_sandbox(src)
+        try:
+            check("邊界現場:來源確有條件設定與clean filter", bool(git("config", "--get", "includeIf.onbranch:escape.path").stdout.strip()) and bool(git("config", "--get", "filter.escape.clean").stdout.strip()), "")
+            check("Git filter 不得在建立副本時執行", not marker.exists(), "filter 寫出副本外")
+            subprocess.run(["git", "-C", str(work), "checkout", "-q", "escape"], env=mod._git_env(), check=True)
+            remotes = subprocess.run(["git", "-C", str(work), "remote"], env=mod._git_env(), capture_output=True, text=True, check=True)
+            hooks = subprocess.run(["git", "-C", str(work), "config", "--get", "core.hooksPath"], env=mod._git_env(), capture_output=True, text=True, check=True)
+            check("切分支後仍無繼承remote/hook覆寫", not remotes.stdout.strip() and hooks.stdout.strip() == str(work.parent / "hooks"), (remotes.stdout, hooks.stdout))
+            push = subprocess.run(["git", "-C", str(work), "push", "--dry-run", str(bare), "HEAD:refs/heads/probe"], env=mod._git_env(), capture_output=True, text=True)
+            check("本機bare dry-run仍被pre-push擋", push.returncode != 0 and "探針沙盒:禁止 push" in push.stderr, push.stderr[-160:])
+        finally:
+            shutil.rmtree(work.parent)
+        check("設定隔離來源byte不變", before == _probe_repair4_bytes(src), "")
+
+
+def t_probe_boundary_worktree_links():
+    import tempfile, shutil
+    mod = _load_probe_module("sp_boundary_links")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-link-") as td:
+        root = Path(td); src = root / "src"; git = _probe_boundary_repo(src)
+        target = src / "base.txt"
+        (src / "escape-link").symlink_to(target)
+        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "link")
+        before = target.read_bytes(); rejected = False; work = None
+        try: work = mod.make_sandbox(src)
+        except RuntimeError: rejected = True
+        check("前置:連結確實指回來源", (src / "escape-link").resolve() == target.resolve(), "")
+        check("外指工作樹連結建立副本即拒絕", rejected, str(work))
+        check("拒絕時來源未被寫動", target.read_bytes() == before, target.read_text())
+        if work is not None: shutil.rmtree(work.parent)
+        (src / "escape-link").unlink()
+        (src / "inside-link").symlink_to("base.txt")
+        work = mod.make_sandbox(src)
+        try: check("內指工作樹連結好例", (work / "inside-link").resolve() == (work / "base.txt").resolve(), "")
+        finally: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_nested_git():
+    import tempfile, shutil
+    mod = _load_probe_module("sp_boundary_nested")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-nested-") as td:
+        root = Path(td)
+        for shape in ("nested", "gitmodules"):
+            src = root / shape; _probe_boundary_repo(src)
+            if shape == "nested":
+                nested = src / "lib"; _probe_boundary_repo(nested)
+            else:
+                (src / ".gitmodules").write_text('[submodule "lib"]\n\tpath = lib\n\turl = ../lib\n')
+            before = _probe_repair4_bytes(src)
+            rejected = False; work = None
+            try: work = mod.make_sandbox(src)
+            except RuntimeError: rejected = True
+            check("巢狀Git前置成立 " + shape, (src / "lib/.git").exists() if shape == "nested" else (src / ".gitmodules").exists(), "")
+            check("巢狀Git或未初始化子模組拒絕 " + shape, rejected, str(work))
+            check("拒絕時來源byte相同 " + shape, before == _probe_repair4_bytes(src), "")
+            if work is not None: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_claude_ids():
+    import json
+    mod = _load_probe_module("sp_boundary_ids")
+    token = "LUMOS_READ_" + "b" * 32
+    for ident in ("", None):
+        call = {"type": "tool_use", "name": "Bash", "input": {"command": "cat x"}}
+        result = {"type": "tool_result", "content": token, "is_error": False}
+        if ident is not None: call["id"] = result["tool_use_id"] = ident
+        events = [{"type": "assistant", "message": {"content": [call]}},
+                  {"type": "user", "message": {"content": [result]}},
+                  {"type": "result", "subtype": "success", "result": "ok"}]
+        check("Claude空/缺ID不能配成正證據 " + repr(ident),
+              mod.source_evidence([json.dumps(e) for e in events], "claude", token) == "unknown", "")
+        good = events + _source_probe_events("claude", token)
+        check("另有真證據仍優先 " + repr(ident),
+              mod.source_evidence([json.dumps(e) for e in good], "claude", token) == "present", "")
+
+
+def t_probe_boundary_attempt_isolation():
+    import tempfile, json, io, contextlib, shutil, subprocess
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_attempt")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-attempt-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        scenarios = root / "q.jsonl"
+        scenarios.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                      for s in ("a", "b")) + "\n")
+        out = root / "out.json"; seen = []
+        def runner(sc, work, *_args, **_kwargs):
+            seen.append((work, (work / "base.txt").read_text(),
+                         (work / "poison.txt").exists(),
+                         subprocess.run(["git", "-C", str(work), "config", "--get", "probe.poison"],
+                                        capture_output=True, text=True).stdout.strip()))
+            if len(seen) == 1:
+                (src / "base.txt").write_text("changed outside batch\n")
+                (work / "base.txt").write_text("changed in first attempt\n")
+                (work / "poison.txt").write_text("poison\n")
+                subprocess.run(["git", "-C", str(work), "config", "probe.poison", "yes"], check=True)
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": None}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(scenarios),
+                "--runner", "claude", "--out", str(out), "--keep"]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("逐場副本前置:兩runner確實呼叫", len(seen) == 2, seen)
+        if len(seen) == 2:
+            check("逐場副本彼此不同且來源變動不改批次基線",
+                  seen[0][0] != seen[1][0] and seen[1][1] == "clean\n" and not seen[1][2] and seen[1][3] == "", seen)
+            check("keep只留最後一份有效副本", not seen[0][0].exists() and seen[1][0].exists(), seen)
+            if seen[0][0].exists() and seen[0][0] != seen[1][0]: shutil.rmtree(seen[0][0].parent)
+            if seen[1][0].exists(): shutil.rmtree(seen[1][0].parent)
+        check("逐場批次結果仍有效且帶版號成本", rc == 0 and data["passed"] == 2
+              and data.get("sandbox_version") == mod.SANDBOX_VERSION
+              and data.get("sandbox_secs", 0) > 0 and data.get("valid_total") == 2
+              and all("sandbox_secs" in r and "model_secs" in r for r in data["results"]), data)
+
+
+def t_probe_boundary_cleanup_failure():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_cleanup")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-cleanup-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        scenarios = root / "q.jsonl"
+        scenarios.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                      for s in ("a", "b")) + "\n")
+        out = root / "out.json"; history = root / "history.jsonl"; calls = []
+        real_remove = mod._remove_sandbox
+        def remove(work):
+            calls.append(work)
+            if len(calls) == 1:
+                raise mod.SourceProbeCleanupError("forced cleanup failure")
+            real_remove(work)
+        def runner(sc, *_args, **_kwargs):
+            runner.calls.append(sc["id"])
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": None}
+        runner.calls = []
+        argv = ["probe", "--repo", str(src), "--scenarios", str(scenarios),
+                "--runner", "claude", "--out", str(out), "--history", str(history)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "_remove_sandbox", side_effect=remove), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); hist = json.loads(history.read_text().splitlines()[-1])
+        check("普通題清理失敗確實觸發而後題未跑", calls and runner.calls == ["a"], (calls, runner.calls))
+        check("清理失敗整批退出3且不算有效分數", rc == 3 and data["inconclusive"] and data.get("valid_total") == 0 and data["excluded"] == ["a"], data)
+        check("不確定與fatal寫入歷史", hist.get("inconclusive") is True and hist.get("fatal") is True, hist)
+        if calls:
+            real_remove(calls[0])   # 故障注入在刪除前拋錯，測試自行清掉殘留副本
+
+
+def t_probe_boundary_history_version():
+    mod = _load_probe_module("sp_boundary_version")
+    summ = {"passed": 1, "scored": 1, "failed": [], "excluded": [], "inconclusive": False}
+    row = mod.history_record("now", "seed", summ)
+    check("歷史保留沙盒版號與成本", bool(row.get("sandbox_version")) and "sandbox_secs" in row and "model_secs" in row, row)
+
+
+def t_probe_boundary_setup_failure():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_setup_fail")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-setup-fail-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; calls = []
+        def make(*args, **kwargs):
+            calls.append(args[0])
+            raise RuntimeError("setup blocked")
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]), \
+             patch.object(mod, "make_sandbox", side_effect=make), \
+             patch.object(mod, "run_one") as runner, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("基線建立失敗沒有模型呼叫", rc == 3 and calls == [src.resolve()] and runner.call_count == 0, (calls, data))
+        check("基線建立失敗留不可判紀錄", data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
+
+
+def t_probe_boundary_review1_git_shapes():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_r1_shapes")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-shapes-") as td:
+        root = Path(td)
+        for kind in ("case", "bare"):
+            src = root / kind; _probe_boundary_repo(src)
+            nested = src / "nested"; nested.mkdir()
+            if kind == "case":
+                subprocess.run(["git", "init", "-q", str(nested)], check=True)
+                (nested / "inner.txt").write_text("inner\n")
+                subprocess.run(["git", "-C", str(nested), "add", "-A"], check=True)
+                subprocess.run(["git", "-C", str(nested), "-c", "user.name=t", "-c", "user.email=t@t",
+                                "commit", "-qm", "inner"], check=True)
+                (nested / ".git").rename(nested / ".GIT")
+                check("r1 大小寫現場有.GIT", (nested / ".GIT").exists(), "")
+            else:
+                shutil.rmtree(nested)
+                subprocess.run(["git", "init", "-q", "--bare", str(nested)], check=True)
+                check("r1 bare現場有HEAD/objects/refs", (nested / "HEAD").is_file()
+                      and (nested / "objects").is_dir() and (nested / "refs").is_dir(), "")
+            try:
+                work = mod.make_sandbox(src); rejected = False
+            except RuntimeError:
+                work = None; rejected = True
+            if work is not None: shutil.rmtree(work.parent)
+            check("r1 巢狀Git必拒絕 " + kind, rejected, str(nested))
+
+
+def t_probe_boundary_review1_trace_identity():
+    import tempfile, os, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r1_env")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-env-") as td:
+        src = Path(td) / "src"; _probe_boundary_repo(src)
+        marker = src / "trace.txt"; marker.write_text("ORIGINAL\n")
+        before = marker.read_bytes(); work = None
+        with patch.dict(os.environ, {"GIT_TRACE": str(marker)}):
+            try: work = mod.make_sandbox(src)
+            finally: pass
+        check("r1 GIT_TRACE不改來源byte", marker.read_bytes() == before, str(len(marker.read_bytes())))
+        if work is not None:
+            name = subprocess.run(["git", "config", "--get", "user.name"], cwd=work,
+                                  env=mod._git_env(), capture_output=True, text=True).stdout.strip()
+            email = subprocess.run(["git", "config", "--get", "user.email"], cwd=work,
+                                   env=mod._git_env(), capture_output=True, text=True).stdout.strip()
+            check("r1 副本模型提交使用假身分", (name, email) == ("probe", "probe@local"), (name, email))
+            shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_review1_keep_retry():
+    import tempfile, json, io, contextlib, shutil, threading
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r1_keep")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r1-keep-") as td:
+        root = Path(td); source = root / "src"; source_sc = _source_probe_fixture(source)
+        ordinary = {"id": "ordinary", "prompt": "q", "expect": ["Bash"]}
+        q = root / "q.jsonl"; q.write_text(json.dumps(ordinary) + "\n" + json.dumps(source_sc) + "\n")
+        out = root / "out.json"; paths = []
+        def runner(sc, work, *_args, **_kwargs):
+            paths.append((sc["id"], work))
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0,
+                    "limit_hit": False, "source_evidence": "absent" if sc.get("source_probe") else None}
+        err = io.StringIO()
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(source), "--scenarios", str(q), "--keep", "--out", str(out)]), \
+             patch.object(mod, "run_one", side_effect=runner), patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = mod.main()
+        check("r1 keep普通題排在讀碼題前仍留下", rc == 0 and len(paths) == 2
+              and paths[0][1].exists() and not paths[1][1].exists()
+              and str(paths[0][1]) in err.getvalue(), (paths, err.getvalue()[-150:]))
+        if paths and paths[0][1].exists(): shutil.rmtree(paths[0][1].parent)
+
+        q.write_text(json.dumps(ordinary) + "\n")
+        calls = []
+        def limit_runner(sc, work, *_args, **_kwargs):
+            calls.append(work)
+            threading.Event().wait(0.02)
+            return {**_probe_res(sc["id"], len(calls) > 1, "ok" if len(calls) > 1 else "儀器例外: limit"),
+                    "first_tool": None, "secs": 0, "limit_hit": len(calls) == 1, "source_evidence": None}
+        with patch.object(mod.sys, "argv", ["probe", "--repo", str(source), "--scenarios", str(q),
+                                            "--wait-on-limit", "300", "--out", str(out)]), \
+             patch.object(mod, "run_one", side_effect=limit_runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); retried = data["results"][0].get("retry_attempts", [])
+        check("r1 用量重試的逐場成本仍入結果", rc == 0 and len(calls) == 2 and len(retried) == 1
+              and retried[0].get("model_secs", 0) >= 0.01, data)
+
+
+def t_probe_boundary_review2_linked_worktree():
+    import tempfile, subprocess, shutil
+    mod = _load_probe_module("sp_boundary_r2_worktree")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-worktree-") as td:
+        root = Path(td); src = root / "src"; linked = root / "linked"
+        _probe_boundary_repo(src)
+        subprocess.run(["git", "-C", str(src), "worktree", "add", "-q", "-b", "linked", str(linked)], check=True)
+        pointer = linked / ".git"; before = pointer.read_bytes(); work = None
+        check("r2 現場確有外指linked worktree", (src / ".git/worktrees").is_dir()
+              and str(src / ".git/worktrees") in before.decode(), before)
+        try:
+            work = mod.make_sandbox(src); rejected = False
+        except RuntimeError:
+            rejected = True
+        finally:
+            if work is not None: shutil.rmtree(work.parent)
+        check("r2 有linked worktree的來源在副本建立前拒絕", rejected, str(work))
+        check("r2 拒絕不改真linked指標", pointer.read_bytes() == before, pointer.read_bytes())
+
+
+def t_probe_boundary_review2_effective_identity():
+    import tempfile, os, subprocess, shutil
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r2_identity")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-identity-") as td:
+        src = Path(td) / "src"; _probe_boundary_repo(src)
+        (src / "pending.txt").write_text("snapshot change\n")
+        real = {"GIT_AUTHOR_NAME": "REAL PERSON", "GIT_AUTHOR_EMAIL": "real@example.test",
+                "GIT_COMMITTER_NAME": "REAL PERSON", "GIT_COMMITTER_EMAIL": "real@example.test"}
+        work = None
+        with patch.dict(os.environ, real):
+            check("r2 身分覆蓋現場成立", os.environ["GIT_AUTHOR_NAME"] == "REAL PERSON", "")
+            try:
+                work = mod.make_sandbox(src)
+                def ident():
+                    return subprocess.run(["git", "log", "-1", "--format=%an <%ae>|%cn <%ce>"], cwd=work,
+                                          env=mod._git_env(), capture_output=True, text=True, check=True).stdout.strip()
+                check("r2 副本快照實際提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
+                (work / "model.txt").write_text("model change\n")
+                subprocess.run(["git", "add", "-A"], cwd=work, env=mod._git_env(), check=True)
+                subprocess.run(["git", "commit", "-qm", "model"], cwd=work, env=mod._git_env(), check=True)
+                check("r2 模型後續提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
+            finally:
+                if work is not None: shutil.rmtree(work.parent)
+
+
+def t_probe_boundary_review2_health_unreadable():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r2_health")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-health-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        out = root / "out.json"; calls = []
+        def runner(sc, *_args, **_kwargs):
+            calls.append(sc["id"])
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[OSError("health unreadable"), [], []]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("r2 健康檢查讀不到即停批且標fatal", rc == 3 and calls == ["a"]
+              and data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
+        out.unlink(); calls.clear()
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final health unreadable")]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                rc = mod.main(); threw = False
+            except OSError:
+                rc = None; threw = True
+        data = json.loads(out.read_text()) if out.exists() else {}
+        check("r2 最終健康檢查讀不到仍寫不可判紀錄", not threw and rc == 3
+              and data.get("fatal") and data.get("inconclusive") and len(data.get("results", [])) == 2,
+              (threw, rc, data))
+
+
+def t_probe_boundary_review4_runner_error_checks_health():
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r4_runner")
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-runner-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        out = root / "out.json"; events = []
+        def runner(sc, *_args, **_kwargs):
+            events.append("run:" + sc["id"])
+            raise RuntimeError("model output failed")
+        def health():
+            events.append("health")
+            if len(events) == 2:
+                return [("damaged", "/tmp/broken")]
+            return []
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=health), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("r4 runner拋錯也先查健康再決定後題", events[:2] == ["run:a", "health"]
+              and "run:b" not in events and rc == 3 and data["fatal"] and data["inconclusive"],
+              (events, rc, data))
+
+
+def t_probe_boundary_review4_fatal_batch_not_reused():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_boundary_r4_final")
+    spec = importlib.util.spec_from_file_location("ablation_r4", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-final-") as td:
+        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
+        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
+                                                   for s in ("a", "b")) + "\n")
+        outdir = root / "out"; outdir.mkdir(); out = outdir / "with-q-a-1.json"
+        def runner(sc, *_args, **_kwargs):
+            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
+        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final unreadable")]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); loaded = ablation.load_results(outdir)
+        merged = ablation.merge(outdir, ["a", "b"], 1)
+        poisoned = ablation.collect_skills_health(outdir)
+        check("r4 現場兩場成功但最終健康不可判", rc == 3 and data["fatal"] and data["inconclusive"]
+              and len(data["results"]) == 2 and all(r["reason"] == "ok" for r in data["results"]), data)
+        check("r4 下游不得重用致命批次", not loaded["with"] and ablation.needed(loaded, "with", "a", 1) == 1
+              and merged["arms"]["with"]["n"] == 0 and bool(poisoned),
+              (loaded["with"], merged["arms"]["with"], poisoned))
+
+
+def t_probe_boundary_review4_legacy_poison_not_reused():
+    import tempfile, json, importlib.util
+    spec = importlib.util.spec_from_file_location("ablation_r4_legacy", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-legacy-") as td:
+        for name, extras in (("skills", {"skills_health_bad": [["broken", "/tmp/broken"]]}),
+                             ("rowfatal", {"inconclusive": True, "skills_health_bad": []})):
+            outdir = Path(td) / name; outdir.mkdir()
+            rows = [{"id": "a", "passed": True, "reason": "ok", "calls": [], "n_calls": 0}]
+            if name == "rowfatal":
+                rows.append({"id": "b", "passed": False, "reason": "儀器例外: cleanup", "fatal": True})
+            (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": rows, **extras}))
+            loaded = ablation.load_results(outdir)
+            merged = ablation.merge(outdir, ["a"], 1)
+            poisoned = ablation.collect_skills_health(outdir)
+            check("r4 舊schema事故檔排除 " + name, not loaded["with"]
+                  and ablation.needed(loaded, "with", "a", 1) == 1
+                  and merged["arms"]["with"]["n"] == 0 and bool(poisoned),
+                  (loaded["with"], merged["arms"]["with"], poisoned))
+
+
+def t_probe_boundary_review4_existing_poison_stops_dispatch():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_preflight", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-preflight-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+        outdir = root / "out"; outdir.mkdir()
+        (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "fatal": True,
+            "inconclusive": True, "results": [{"id": "a", "passed": True, "reason": "ok"}]}))
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation, "run_job", side_effect=lambda arm, qid, n, *_args: (arm, qid, "stub")) as runner, \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("r4 舊失效檔在補跑前就阻止新模型", runner.call_count == 0 and rc == 3
+              and summary["arms"]["with"]["n"] == 0 and summary["skills_health_poisoned"],
+              (runner.call_count, rc, summary))
+
+
+def t_probe_boundary_review4_partial_output_stops_batch():
+    import tempfile, json, threading, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_partial", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-partial-") as td:
+        for shape in ("missing", "partial", "schema_missing", "schema_bad", "valid"):
+            outdir = Path(td) / shape; outdir.mkdir(); stop = threading.Event()
+            def run(cmd, **_kwargs):
+                out = Path(cmd[cmd.index("--out") + 1])
+                if shape == "partial":
+                    out.write_text('{"results": [')
+                elif shape in ("schema_missing", "schema_bad", "valid"):
+                    data = {"arm": "with", "results": [{"id": "a", "passed": False,
+                                                          "reason": "ordinary failure"}]}
+                    if shape == "valid":
+                        data.update({"fatal": False, "inconclusive": False, "skills_health_bad": []})
+                    elif shape == "schema_bad":
+                        data.update({"fatal": "", "inconclusive": "", "skills_health_bad": 0})
+                    out.write_text(json.dumps(data))
+                return type("Done", (), {"returncode": 1})()
+            with patch.object(ablation.subprocess, "run", side_effect=run):
+                status = ablation.run_job("with", "a", 1, [], 1, 1, outdir, 0, stop=stop)[2]
+            check("r4 缺檔半檔停批但有效失敗可續 " + shape,
+                  stop.is_set() is (shape != "valid"), (shape, status, stop.is_set()))
+
+
+def t_probe_boundary_review4_missing_output_main():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_missing_main", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-missing-main-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+        outdir = root / "out"
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        calls = []
+        def run(cmd, **_kwargs):
+            calls.append(cmd)
+            return type("Done", (), {"returncode": 1, "stdout": "stub"})()
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("r4 live缺檔要讓頂層與summary一起失效", len(calls) == 2 and rc == 3
+              and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
+
+
+def t_probe_boundary_postreview_launch_exception_summary():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_launch_failure", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    for failure in (FileNotFoundError("probe interpreter missing"),
+                    ablation.subprocess.TimeoutExpired("probe", 1)):
+        with tempfile.TemporaryDirectory(prefix="probe-launch-failure-") as td:
+            root = Path(td); q = root / "q.jsonl"
+            q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+            outdir = root / "out"; launched = []
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                    "--arms", "with", "--out-dir", str(outdir)]
+            def run(cmd, **_kwargs):
+                if cmd == ["claude", "--version"]:
+                    return type("Version", (), {"stdout": "stub"})()
+                launched.append(cmd)
+                if isinstance(failure, ablation.subprocess.TimeoutExpired):
+                    Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                        "arm": "with", "results": [{"id": "a", "passed": True, "reason": "ok"}],
+                        "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+                raise failure
+            rc = None
+            with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    rc = ablation.main()
+                except type(failure):
+                    pass
+            summary = json.loads((outdir / "summary.json").read_text()) if (outdir / "summary.json").exists() else {}
+            attempts = list(outdir.glob("with-q-*.json"))
+            attempt = json.loads(attempts[0].read_text()) if len(attempts) == 1 else {}
+            check("探針啟動例外須留失效摘要並停下一題 " + type(failure).__name__,
+                  len(launched) == 1 and rc == 3 and bool(summary.get("skills_health_poisoned"))
+                  and attempt.get("fatal") is True and attempt.get("results") == []
+                  and attempt.get("failure_type") == type(failure).__name__
+                  and attempt.get("arm") == "with" and attempt.get("qid") == "a"
+                  and attempt.get("log_path") and attempt.get("retry_policy") == "confirm-no-live-probe-then-archive-recovery-paths-and-rerun"
+                  and attempt.get("candidate_path")
+                  and "cmd" not in attempt and "failure_message" not in attempt,
+                  (type(failure).__name__, len(launched), rc, summary, attempt))
+            with patch.object(ablation.sys, "argv", argv + ["--merge-only"]), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                merge_rc = ablation.main()
+            merged = json.loads((outdir / "summary.json").read_text())
+            check("失敗嘗試在下次純合併仍不可採信 " + type(failure).__name__,
+                  merge_rc == 3 and bool(merged["skills_health_poisoned"])
+                  and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+                  (merge_rc, merged))
+
+
+def t_probe_boundary_postreview_serial_dispatch():
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_serial", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-serial-dispatch-") as td:
+        root = Path(td); q = root / "q.jsonl"
+        q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+        outdir = root / "out"; calls = []
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                "--arms", "with", "--out-dir", str(outdir)]
+        def runner(arm, qid, n, files, timeout, max_turns, output, wait_on_limit, model, max_per_window, stop):
+            calls.append(qid)
+            stop.set()
+            return (arm, qid, "stub failure")
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation, "run_job", side_effect=runner), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        summary = json.loads((outdir / "summary.json").read_text())
+        check("事故後不得再啟動下一個工作", calls == ["a"] and rc == 3
+              and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
+    with tempfile.TemporaryDirectory(prefix="probe-parallel-reject-") as td:
+        q = Path(td) / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        for value in ("0", "-1", "2"):
+            outdir = Path(td) / ("out-" + value)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
+            rejected = False
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    ablation.main()
+                except (SystemExit, ValueError) as exc:
+                    rejected = isinstance(exc, SystemExit) and exc.code == 2
+            check("live 派工拒絕無效 workers 且不改寫目錄 " + value,
+                  rejected and runner.call_count == 0 and not outdir.exists(),
+                  (value, rejected, runner.call_count, outdir.exists()))
+        outdir = Path(td) / "merge"; argv = ["ablation", "--max-per-window", "0", "--questions", str(q),
+            "--workers", "2", "--merge-only", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+             contextlib.redirect_stdout(io.StringIO()):
+            merge_rc = ablation.main()
+        check("純合併不因 workers 舊參數誤擋", merge_rc == 0 and runner.call_count == 0,
+              (merge_rc, runner.call_count))
+        default_out = Path(td) / "default"
+        default_argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                        "--out-dir", str(default_out)]
+        with patch.object(ablation.sys, "argv", default_argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             patch.object(ablation, "run_job", return_value=("with", "a", "stub")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            ablation.main()
+        meta = json.loads((default_out / "meta.json").read_text())
+        check("省略 workers 時預設單路", meta["workers"] == 1, meta)
+
+
+def t_probe_boundary_postreview_cross_process_lock():
+    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl, os
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_process_lock", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-process-lock-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        old_meta = b'{"old":"meta"}'; old_summary = b'{"old":"summary"}'
+        (outdir / "meta.json").write_bytes(old_meta); (outdir / "summary.json").write_bytes(old_summary)
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                    ready.set(); release.wait(10)
+                finally:
+                    os.close(dir_fd)
+        child = multiprocessing.get_context("fork").Process(target=hold_lock)
+        child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", "1", "--arms", "with",
+                    "--runs", "1", "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("另一進程持有批次鎖時拒絕派工且不覆寫舊摘要", held and rc == 3
+                  and runner.call_count == 0 and (outdir / "meta.json").read_bytes() == old_meta
+                  and (outdir / "summary.json").read_bytes() == old_summary,
+                  (held, rc, runner.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_lockfile_replacement():
+    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl, os
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_lock_replacement", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-lock-replacement-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                    (outdir / ".ablation.lock").unlink()
+                    ready.set(); release.wait(10)
+                finally:
+                    os.close(dir_fd)
+        child = multiprocessing.get_context("fork").Process(target=hold_lock); child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                    "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("鎖檔被移除後第二批仍不得進入", held and rc == 3 and batch.call_count == 0,
+                  (held, rc, batch.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_legacy_lock_interop():
+    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_legacy_lock", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-legacy-lock-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+        def hold_legacy_lock():
+            with open(outdir / ".ablation.lock", "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                ready.set(); release.wait(10)
+        child = multiprocessing.get_context("fork").Process(target=hold_legacy_lock); child.start()
+        try:
+            held = ready.wait(5)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                    "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), \
+                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = ablation.main() if held else None
+            check("舊版批次只持鎖檔時新版仍拒絕進入", held and rc == 3 and batch.call_count == 0,
+                  (held, rc, batch.call_count))
+        finally:
+            release.set(); child.join(5)
+            if child.is_alive():
+                child.terminate(); child.join(5)
+
+
+def t_probe_boundary_postreview_cli_entry_and_modes():
+    import tempfile, subprocess, stat, json
+    script = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
+    with tempfile.TemporaryDirectory(prefix="probe-cli-entry-") as td:
+        root = Path(td); q = root / "q.jsonl"
+        q.write_text('{"id":"a","prompt":"a"}\n')
+        outdir = root / "out"; outdir.mkdir()
+        for name in ("meta.json", "summary.json", "summary.md"):
+            path = outdir / name; path.write_text("old"); path.chmod(0o640)
+        cmd = [sys.executable, str(script), "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        summary = json.loads((outdir / "summary.json").read_text()) if done.returncode == 0 else {}
+        check("真 CLI 入口須能純合併並產出摘要", done.returncode == 0
+              and summary.get("expected_ids") == ["a"],
+              (done.returncode, done.stderr[-400:]))
+        check("原子取代仍保留既有普通摘要權限", done.returncode == 0
+              and all(stat.S_IMODE((outdir / name).stat().st_mode) == 0o640
+                      for name in ("meta.json", "summary.json", "summary.md")),
+              {name: oct(stat.S_IMODE((outdir / name).stat().st_mode))
+               for name in ("meta.json", "summary.json", "summary.md")})
+
+
+def t_probe_boundary_postreview_symlink_outputs():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_symlink_outputs", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-symlink-outputs-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+        victims = {}
+        for name in ("meta.json", "summary.json", "summary.md"):
+            victim = root / (name + ".victim"); victim.write_text("KEEP-ME")
+            (outdir / name).symlink_to(victim); victims[name] = victim
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+        with patch.object(ablation.sys, "argv", argv), \
+             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            rc = ablation.main()
+        check("摘要落檔不得跟隨既有符號連結到目錄外", rc == 0
+              and all(v.read_text() == "KEEP-ME" for v in victims.values())
+              and all(not (outdir / name).is_symlink() for name in ("summary.json", "summary.md"))
+              and (outdir / "meta.json").is_symlink()
+              and "來源日期未知" in (outdir / "summary.md").read_text()
+              and isinstance(json.loads((outdir / "summary.json").read_text()), dict),
+              (rc, {k: v.read_text()[:40] for k, v in victims.items()}))
+
+
+def t_probe_boundary_postreview_long_qid():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_long_qid", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-long-qid-") as td:
+        root = Path(td); qid = "q" * 220; q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": qid, "prompt": "a"}) + "\n")
+        outdir = root / "out"
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                "--out-dir", str(outdir)]
+        def run(cmd, **_kwargs):
+            if cmd == ["claude", "--version"]:
+                return type("Version", (), {"stdout": "stub"})()
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": qid, "passed": True, "reason": "ok"}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Done", (), {"returncode": 0})()
+        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                rc = ablation.main()
+            except OSError:
+                rc = None
+        check("長題號不使結果檔名超長且仍能寫摘要", rc == 0
+              and (outdir / "summary.json").exists() and len(list(outdir.glob("with-q-*.json"))) == 1,
+              (rc, list(outdir.iterdir())))
+
+
+def t_probe_boundary_postreview_archive_interrupt():
+    import tempfile, io, contextlib, importlib.util, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_archive_interrupt", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-archive-interrupt-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def run(cmd, **_kwargs):
+            out = Path(cmd[cmd.index("--out") + 1])
+            out.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                       "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            raise ablation.subprocess.TimeoutExpired("probe", 1)
+        old_replace = Path.replace
+        interrupted = []
+        def interrupt_archive(path, target):
+            if str(target).endswith(".failed"):
+                interrupted.append("replace")
+                raise KeyboardInterrupt()
+            return old_replace(path, target)
+        old_atomic = getattr(ablation, "_atomic_write_bytes", None)
+        def interrupt_atomic_archive(path, data):
+            if str(path).endswith(".failed"):
+                interrupted.append("archive")
+                raise KeyboardInterrupt()
+            return old_atomic(path, data)
+        with patch.object(ablation.subprocess, "run", side_effect=run), \
+             patch.object(Path, "replace", interrupt_archive), \
+             patch.object(ablation, "_atomic_write_bytes", side_effect=interrupt_atomic_archive, create=True):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except KeyboardInterrupt:
+                pass
+        # 新碼會先透過 _atomic_write_text 寫 fatal，才呼叫 _atomic_write_bytes 歸檔；
+        # 舊碼會在 Path.replace 原結果時中斷。兩版都在歸檔處故障。
+        finals = list(outdir.glob("with-q-*.json"))
+        check("歸檔注入確實發生且 fatal 已先落地", bool(interrupted) and len(finals) == 1
+              and json.loads(finals[0].read_text()).get("fatal") is True
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              (interrupted, list(outdir.iterdir())))
+
+
+def t_probe_boundary_formal_dispatch_fail_closed():
+    """正式審查反例：子程序失敗、父程序中斷、schema、窗口與顯示都不得假綠。"""
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def result(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2})()
+        with patch.object(ablation.subprocess, "run", side_effect=result):
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+        check("非零退出須留下跨執行失效紀錄", bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-interrupt-") as td:
+        outdir = Path(td)
+        with patch.object(ablation.subprocess, "run", side_effect=KeyboardInterrupt):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except KeyboardInterrupt:
+                pass
+        check("父程序中斷後仍保留未完成標記", bool(ablation.collect_skills_health(outdir)),
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-enospc-") as td:
+        outdir = Path(td); wrote = []
+        real_write = ablation._atomic_write_text
+        def fail_tombstone(path, content):
+            if path.suffix == ".json":
+                wrote.append("tombstone")
+                raise OSError(28, "No space left on device")
+            return real_write(path, content)
+        def write_then_fail(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            raise FileNotFoundError("injected launch failure")
+        with patch.object(ablation.subprocess, "run", side_effect=write_then_fail), \
+             patch.object(ablation, "_atomic_write_text", side_effect=fail_tombstone):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except OSError:
+                pass
+        check("fatal 落檔二次失敗仍不得採信舊成功列", wrote == ["tombstone"]
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              (wrote, list(outdir.iterdir())))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-schema-") as td:
+        outdir = Path(td)
+        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+            {"id": "a", "passed": "false"}], "fatal": False, "inconclusive": False,
+            "skills_health_bad": []}))
+        check("錯誤布林型別須標整批失效", bool(ablation.collect_skills_health(outdir))
+              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+            {"id": "a", "passed": True, "arm": "without"}], "fatal": False,
+            "inconclusive": False, "skills_health_bad": []}))
+        check("逐場組別不一致須標整批失效", bool(ablation.collect_skills_health(outdir))
+              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+        for bad_field in ({"n_calls": "1"}, {"answer_content_ok": "false"}, {"limit_hit": "false"}):
+            (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+                {"id": "a", "passed": True, **bad_field}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            check("錯型計分欄位拒收 " + str(bad_field), bool(ablation.collect_skills_health(outdir))
+                  and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-cap-") as td:
+        outdir = Path(td)
+        def count(cmd, **_kwargs):
+            result_data = {"arm": "with", "results": [{"id": "a", "passed": True}],
+                           "fatal": False, "inconclusive": False, "skills_health_bad": []}
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps(result_data))
+            return type("Result", (), {"returncode": 0})()
+        ledger = outdir / "usage.sqlite3"
+        ablation.attempt_ledger_remaining(ledger, 50, now=1000)
+        with patch.object(ablation.subprocess, "run", side_effect=count) as run, \
+             patch.object(ablation.time, "time", return_value=20000):
+            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50, attempt_ledger=ledger)
+        check("單一工作不可超過窗口剩餘額度", run.call_count == 1 and
+              int(run.call_args.args[0][run.call_args.args[0].index("--runs") + 1]) <= 50
+              and run.call_args.args[0][run.call_args.args[0].index("--max-attempts") + 1] == "50",
+              run.call_args)
+    summary = {"arms": {"with": {"m1_passed": 0, "n": 0, "m1_rate": None,
+             "m2_ever": 0, "m2_n": 0, "m2_rate": None, "m3_first_idx_median": None, "m3_n": 0,
+             "m4_gated_passed": 0, "m4_gated_n": 0, "m4_content_passed": 0, "m4_content_n": 0,
+             "inconsistent_questions": [], "missing": 1, "limit_hits": 0, "instrument_errors": 0},
+             "without": {}}, "expected_ids": ["a"], "runs": 1, "m1_delta_pp": None,
+             "class_counts": {}, "per_question": {}, "skills_health_poisoned": [("bad.json", ["fatal"])]}
+    summary["arms"]["without"] = summary["arms"]["with"].copy()
+    md = ablation.render_md(summary, {"date": "test", "claude_version": "stub"})
+    check("Markdown 摘要須直接標出整批失效", "不可採信" in md and "bad.json" in md, md[:250])
+
+
+def t_probe_boundary_formal_parent_killed_child_continues():
+    """真進程反例：父程序被殺後子程序仍落有效外觀結果，下一批不得採信。"""
+    import tempfile, subprocess, time, json
+    with tempfile.TemporaryDirectory(prefix="probe-parent-killed-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        started = root / "child-started"; probe = root / "child_probe.py"
+        probe.write_text("import argparse,json,os,time\nfrom pathlib import Path\n"
+                         "a=argparse.ArgumentParser(add_help=False);a.add_argument('--out');v,_=a.parse_known_args()\n"
+                         f"Path({str(started)!r}).write_text(str(os.getpid()))\n"
+                         "time.sleep(0.5)\n"
+                         "Path(v.out).write_text(json.dumps({'arm':'with','results':[{'id':'a','passed':True}],"
+                         "'fatal':False,'inconclusive':False,'skills_health_bad':[]}))\n")
+        runner = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
+        parent_code = ("import importlib.util\nfrom pathlib import Path\n"
+                       f"s=importlib.util.spec_from_file_location('ablation_kill',{str(runner)!r})\n"
+                       "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                       f"m.PROBE=Path({str(probe)!r})\n"
+                       f"m.run_job('with','a',1,['dummy'],1,1,Path({str(outdir)!r}),1)\n")
+        proc = subprocess.Popen([sys.executable, "-c", parent_code],
+                                cwd=str(Path(__file__).resolve().parents[1]),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 5
+        try:
+            while not started.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            check("父程序中斷反例確實啟動子程序", started.exists(), proc.poll())
+            proc.kill(); proc.wait(timeout=5)
+            while not list(outdir.glob("*.candidate")) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            spec = __import__("importlib.util", fromlist=["spec_from_file_location"])
+            ms = spec.spec_from_file_location("ablation_kill_check", runner)
+            m = spec.module_from_spec(ms); ms.loader.exec_module(m)
+            check("子程序在父程序死後只留候選檔且不得抵缺場", bool(list(outdir.glob("*.candidate")))
+                  and not list(outdir.glob("with-q-*.json"))
+                  and bool(m.collect_skills_health(outdir))
+                  and m.needed(m.load_results(outdir), "with", "a", 1) == 1,
+                  list(outdir.iterdir()))
+        finally:
+            if proc.poll() is None:
+                proc.kill(); proc.wait(timeout=5)
+
+
+def t_probe_boundary_formal_input_validation():
+    """不啟動模型即可判定輸入選取與路徑是否封閉。"""
+    import tempfile, io, contextlib, importlib.util, subprocess, os, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal_input", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-input-") as td:
+        root = Path(td); q = root / "q.jsonl"; outdir = root / "out"
+        for qid in ("", "a,b", "a\nspoof"):
+            q.write_text(__import__("json").dumps({"id": qid}) + "\n")
+            try:
+                ids = ablation.load_ids([str(q)])
+            except ValueError:
+                ids = []
+            check("非法題號入口須拒絕 " + repr(qid), not ids, ids)
+        q.write_text('{"id":"a"}\n')
+        for arms in ("with,with", "../escaped", "with,"):
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
+            rejected = False
+            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    ablation.main()
+                except SystemExit as exc:
+                    rejected = exc.code == 2
+            check("非法組別在落檔前拒絕 " + arms, rejected and not outdir.exists(),
+                  (rejected, list(root.iterdir())))
+        q.write_text('{"id":"a"}\n{"id":"a-extra"}\n')
+        probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
+        exact = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
+                                "--exact-id", "a", "--dry-list"], capture_output=True, text=True)
+        absent = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
+                                 "--exact-id", "missing", "--dry-list"], capture_output=True, text=True)
+        check("精確選題只得單一 id，缺題要拒絕", exact.returncode == 0 and exact.stdout.strip() == "a"
+              and absent.returncode == 2, (exact.stdout, exact.stderr, absent.returncode))
+        q.write_text('{"id":"a"}\n')
+        captured = []
+        def fake_run(cmd, **_kwargs):
+            if cmd == ["claude", "--version"]:
+                return type("Version", (), {"stdout": "stub"})()
+            target = Path(cmd[cmd.index("--out") + 1]); captured.append(target)
+            target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                          "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 0})()
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", "with", "--runs", "1",
+                    "--out-dir", "relative/out"]
+            with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=fake_run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                rc = ablation.main()
+        finally:
+            os.chdir(old_cwd)
+        check("相對輸出路徑與鎖指向同一絕對目錄", rc == 0 and len(captured) == 1
+              and captured[0].is_absolute() and captured[0].parent.resolve() == (root / "relative/out").resolve(),
+              (rc, captured))
+        meta = root / "relative/out/meta.json"
+        meta.write_text(json.dumps({"date": "2025-01-02", "claude_version": "historical"}))
+        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
+                                                "--out-dir", "relative/out"]), \
+             patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                merge_rc = ablation.main()
+            finally:
+                os.chdir(old_cwd)
+        check("純合併保留來源版本，不能冒稱當前 CLI", merge_rc == 0
+              and json.loads(meta.read_text())["claude_version"] == "historical"
+              and "historical" in (meta.parent / "summary.md").read_text(), meta.read_text())
+        meta.write_text("{}")
+        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
+                                                "--out-dir", "relative/out"]), \
+             patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                unknown_rc = ablation.main()
+            finally:
+                os.chdir(old_cwd)
+        unknown_report = (meta.parent / "summary.md").read_text()
+        check("歷史 meta 空物件要明寫來源未知", unknown_rc == 0
+              and meta.read_text() == "{}"
+              and "來源日期未知" in unknown_report
+              and "來源版本未知" in unknown_report,
+              (meta.read_text(), unknown_report[:200]))
+
+
+def t_probe_boundary_formal_second_round_regressions():
+    """先證明事故路徑被執行，再驗歸檔、短列、錯型、題號與窗口不假綠。"""
+    import tempfile, json, importlib.util, time
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal_r2", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def success_looking(cmd, **_kwargs):
+            target = Path(cmd[cmd.index("--out") + 1])
+            target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                          "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2})()
+        with patch.object(ablation.subprocess, "run", side_effect=success_looking) as runner:
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+        check("事故反例確實叫到子程序且留下成功外觀 byte", runner.call_count == 1
+              and bool(list(outdir.glob("*.candidate")))
+              and json.loads(next(outdir.glob("*.candidate")).read_text())["results"][0]["passed"],
+              list(outdir.iterdir()))
+        for marker in outdir.glob("*.pending"):
+            marker.rename(marker.with_suffix(".archived"))
+        final_json = list(outdir.glob("with-q-*.json"))
+        check("只歸檔事故標記也不得讓候選列復活", bool(final_json)
+              and all(json.loads(p.read_text()).get("fatal") is True for p in final_json)
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-short-") as td:
+        outdir = Path(td)
+        def one_of_two(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 0})()
+        with patch.object(ablation.subprocess, "run", side_effect=one_of_two) as runner:
+            ablation.run_job("with", "a", 2, ["dummy"], 1, 1, outdir, 1)
+        check("成功退出但少一列仍是整批失效", runner.call_count == 1
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 2) == 2,
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-schema-") as td:
+        outdir = Path(td); path = outdir / "with-q-bad.json"
+        base = {"arm": "with", "results": [{"id": "a", "passed": True, "reason": "ok"}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}
+        for label, mutate in (
+            ("reason", lambda d: d["results"][0].update(reason=["儀器例外: timeout"])),
+            ("skills_health_bad", lambda d: d.update(skills_health_bad="")),
+            ("fatal", lambda d: d.update(fatal=0)),
+            ("inconclusive", lambda d: d.update(inconclusive=[])),
+            ("non-dict row", lambda d: d["results"].append("壞元素")),
+        ):
+            d = json.loads(json.dumps(base)); mutate(d); path.write_text(json.dumps(d))
+            check("錯型整批拒收 " + label, bool(ablation.collect_skills_health(outdir))
+                  and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+                  (label, ablation.collect_skills_health(outdir)))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-unrelated-") as td:
+        outdir = Path(td)
+        (outdir / "notes.json").write_text('{"memo":"operator note"}')
+        (outdir / "with.json").write_text('{"memo":"old unrelated export"}')
+        check("非探針檔名的 JSON 不應毒化專用輸出目錄", not ablation.collect_skills_health(outdir)
+              and not ablation.load_results(outdir)["with"], ablation.collect_skills_health(outdir))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-ids-") as td:
+        q = Path(td) / "q.jsonl"
+        for qid in ("   ", "a\u0085spoof", "a\u202espoof"):
+            q.write_text(json.dumps({"id": qid}) + "\n")
+            try:
+                ablation.load_ids([str(q)]); rejected = False
+            except ValueError:
+                rejected = True
+            check("不可見題號須在派工前拒絕 " + repr(qid), rejected, qid)
+        q.write_text('{"id":"a"}\n{"id":"a"}\n')
+        try:
+            ablation.load_ids([str(q)]); duplicate_rejected = False
+        except ValueError:
+            duplicate_rejected = True
+        check("重複題號須在派工前拒絕", duplicate_rejected, q.read_text())
+        q.write_text('{"id":"-x","prompt":"q","expect":["Bash"]}\n')
+        probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
+        dash = __import__("subprocess").run([sys.executable, str(probe), "--scenarios", str(q),
+                                             "--exact-id=-x", "--dry-list"], capture_output=True, text=True)
+        check("以短線起頭的題號可用 argparse 等號形式精確選取", dash.returncode == 0
+              and dash.stdout.strip() == "-x", (dash.returncode, dash.stderr))
+        with tempfile.TemporaryDirectory(prefix="probe-formal-r2-dash-out-") as out_td:
+            def dash_result(cmd, **_kwargs):
+                Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                    "arm": "with", "results": [{"id": "-x", "passed": True}], "fatal": False,
+                    "inconclusive": False, "skills_health_bad": []}))
+                return type("Result", (), {"returncode": 0})()
+            with patch.object(ablation.subprocess, "run", side_effect=dash_result) as runner:
+                ablation.run_job("with", "-x", 1, [str(q)], 1, 1, Path(out_td), 1)
+            check("派工傳短線題號時使用等號形式", runner.call_count == 1
+                  and "--exact-id=-x" in runner.call_args.args[0], runner.call_args)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-window-") as td:
+        outdir = Path(td)
+        (outdir / "with-q-1.json").write_text(json.dumps({
+            "arm": "with", "results": [{"id": "a", "passed": True,
+                                          "retry_attempts": [{"reason": "limit"}, {"reason": "limit"}]}],
+            "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+        check("窗口要把兩次重試與最後嘗試都算進去", ablation.runs_in_window(outdir, now=time.time()) == 3,
+              ablation.runs_in_window(outdir, now=time.time()))
+    rows = [{"id": "a", "passed": True}] * 3
+    stats = ablation._arm_stats(rows, ["a", "b"], 1)
+    check("別題多跑不能遮住缺題", stats["missing"] == 1, stats["missing"])
+
+
+def t_probe_boundary_formal_retry_budget():
+    """實跑探針控制流：用量重試必須消耗批次嘗試額度，不能多啟動模型。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_formal_retry_budget")
+    with tempfile.TemporaryDirectory(prefix="probe-formal-budget-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"; q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; calls = []
+        def runner(sc, work, *_args, **_kwargs):
+            calls.append(work)
+            return {**_probe_res(sc["id"], len(calls) > 1, "ok" if len(calls) > 1 else "儀器例外: limit"),
+                    "first_tool": None, "secs": 0, "limit_hit": len(calls) == 1, "source_evidence": None}
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--runs", "2",
+                "--wait-on-limit", "300", "--max-attempts", "2", "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("重試確實發生且額度用盡前只叫兩次模型", len(calls) == 2
+              and len(data["results"][0].get("retry_attempts", [])) == 1,
+              (len(calls), data))
+        check("額度用盡不能再啟動第三次且整批 fatal", rc == 3 and data["fatal"] is True
+              and data["inconclusive"] is True and len(calls) == 2,
+              (rc, len(calls), data))
+
+
+def t_probe_boundary_persistent_ledger_stop_contracts():
+    """從 CLI 結果與模型啟動數驗拒絕與重試，預期不重抄用量算法。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_persistent_stop")
+    with tempfile.TemporaryDirectory(prefix="probe-ledger-stop-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; ledger = root / "usage.sqlite3"
+        mod.attempt_ledger_remaining(ledger, 1, now=1000)
+        mod.claim_model_attempt(ledger, 1, now=20000)
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--runs", "2",
+                "--wait-on-limit", "300", "--max-per-window", "1", "--attempt-ledger", str(ledger), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod.time, "time", return_value=20001), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); row = data["results"][0]
+        check("claim 被拒絕產生整批不可判而非計分失敗", rc == 3 and data["fatal"] and data["inconclusive"]
+              and data["valid_total"] == 0 and len(data["results"]) == 1, data)
+        check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
+              and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
+        # 供應商回上限且 runner 已 claim 持久帳最後一格：直接停止，不能先等 300 秒。
+        # 刻意不設 --max-attempts，避免批次額度先截斷而讓持久帳分支壞掉仍假綠。
+        retry_ledger = root / "retry-usage.sqlite3"
+        mod.attempt_ledger_remaining(retry_ledger, 1, now=1000)
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
+                "--max-per-window", "1", "--attempt-ledger", str(retry_ledger), "--out", str(out)]
+        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                   "secs": 0, "limit_hit": True, "source_evidence": None}
+        def claim_then_limit(*_args, **_kwargs):
+            check("供應商回上限前已真正 claim 最後一格",
+                  mod.claim_model_attempt(retry_ledger, 1, now=20000))
+            return limited
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=claim_then_limit) as model, \
+             patch.object(mod.time, "time", return_value=20000), patch.object(mod.time, "sleep") as sleeping, \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
+              and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
+
+        # 等待預算小於輪詢間隔時，只能睡剩餘秒數，不能把「最多等 1 秒」放大成 300 秒。
+        budget_out = root / "budget.json"; calls = []
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "1",
+                "--max-per-window", "0", "--out", str(budget_out)]
+        def limit_then_pass(sc, *_args, **_kwargs):
+            calls.append(sc["id"])
+            return ({**limited} if len(calls) == 1 else
+                    {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+                     "limit_hit": False, "source_evidence": None})
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_then_pass), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("等待總量不超過 --wait-on-limit", rc == 0 and len(calls) == 2
+              and sleeping.call_args_list == [__import__("unittest").mock.call(1)],
+              (rc, len(calls), sleeping.call_args_list))
+
+
+def t_probe_boundary_fifth_round_output_contracts():
+    """候選輸出經真 main 寫入時只能替換連結本身，不得改到連結指向的檔。"""
+    import tempfile, json, io, contextlib, stat
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_fifth_output")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-output-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        victim = root / "victim.txt"; victim.write_text("keep")
+        out = root / "out.json"; out.symlink_to(victim)
+        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+               "limit_hit": False, "source_evidence": None}
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("輸出連結不改寫受害檔", rc == 0 and victim.read_text() == "keep", victim.read_text())
+        check("輸出位置改成工具自己的普通 JSON 檔", stat.S_ISREG(out.lstat().st_mode)
+              and json.loads(out.read_text())["passed"] == 1, out.lstat())
+
+
+class _Hung(Exception):
+    """_guard_hang 用的「卡住了」;刻意不是 OSError(TimeoutError 是 OSError 的子類,會被受測程式或測試裡接 OSError 的地方吞成「正常報錯」)。"""
+
+
+class _guard_hang:
+    """暫時借 SIGALRM 抓卡住的呼叫;結束時把測試執行器原本的逾時鬧鐘還回去(借完就關掉,後面那段卡住就沒人管)。
+    用法:with _guard_hang(5) as hung: ...;卡住時 hung 變成非空、例外被吃掉。"""
+    def __init__(self, secs):
+        self.secs, self.hung = secs, []
+    def __enter__(self):
+        import signal, time
+        self._t0, self._prev = time.monotonic(), signal.alarm(0)
+        def _hang(*_a): raise _Hung("卡住")
+        self._old = signal.signal(signal.SIGALRM, _hang)
+        signal.alarm(self.secs)
+        return self.hung
+    def __exit__(self, et, ev, tb):
+        import signal, time
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, self._old)
+        if self._prev:
+            signal.alarm(max(1, self._prev - int(time.monotonic() - self._t0)))
+        if et is _Hung:
+            self.hung.append(True)
+            return True
+        return False
+
+
+def t_probe_boundary_fifth_round_output_edges():
+    """輸出寫入的相鄰路徑:新檔權限照 umask、不沿用舊檔的寬權限、唯讀檔照舊拒絕、長檔名、裝置照寫;
+    輸出或歷史位置有問題要在呼叫模型前擋下,不能整批跑完才炸(第五輪 r5 審查)。"""
+    import tempfile, json, io, contextlib, stat, os
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_fifth_edges")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-edges-") as td:
+        root = Path(td); work = root / "w"; work.mkdir()
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.NamedTemporaryFile(dir=root, delete=False) as scene:
+                pass
+            check("現場成立:同目錄暫存檔預設 0600,跟 umask 結果不同",
+                  stat.S_IMODE(os.stat(scene.name).st_mode) == 0o600)
+            new = work / "new.json"; mod._atomic_write_text(new, "{}")
+            check("新建輸出檔權限照 umask", stat.S_IMODE(new.stat().st_mode) == 0o644, oct(new.stat().st_mode))
+            mine = work / "mine.json"; mine.write_text("old"); os.chmod(mine, 0o640)
+            mod._atomic_write_text(mine, "{}")
+            check("自己擁有的既有檔照舊保留刻意設的權限", stat.S_IMODE(mine.stat().st_mode) == 0o640,
+                  oct(mine.stat().st_mode))
+            # 別人預先放的寬權限檔:測試機沒有第二個帳號,改讓探針的「目前使用者」回不同的 uid,走的是同一條真實判斷
+            wide = work / "wide.json"; wide.write_text("old"); os.chmod(wide, 0o666)
+            with patch.object(mod, "_euid", return_value=wide.stat().st_uid + 1):
+                mod._atomic_write_text(wide, "{}")
+            check("別人擁有的寬權限檔不把群組與他人可寫帶到新檔", stat.S_IMODE(wide.stat().st_mode) == 0o644,
+                  oct(wide.stat().st_mode))
+            # 硬連結能騙過擁有者判斷:別人在輸出位置放一個連到我某個寬權限檔的硬連結
+            mine_wide = root / "mine-wide.json"; mine_wide.write_text("V"); os.chmod(mine_wide, 0o666)
+            linked = work / "linked.json"; os.link(mine_wide, linked)
+            check("現場成立:輸出位置是自己擁有、有兩個名字的檔", linked.stat().st_nlink == 2
+                  and linked.stat().st_uid == os.geteuid())
+            mod._atomic_write_text(linked, "{}")
+            check("有多個名字的檔不沿用權限,原本那個名字內容不變",
+                  stat.S_IMODE(linked.stat().st_mode) == 0o644 and mine_wide.read_text() == "V",
+                  oct(linked.stat().st_mode))
+            ro = work / "ro.json"; ro.write_text("keep"); os.chmod(ro, 0o444)
+            try:
+                mod._atomic_write_text(ro, "{}"); refused = False
+            except PermissionError:
+                refused = True
+            if os.geteuid() == 0:
+                # root 的 write_text 本來就寫得進唯讀檔,照修前行為
+                check("root 下唯讀檔照修前一樣寫得進去", not refused and ro.read_text() == "{}")
+            else:
+                check("既有唯讀檔照舊拒絕寫入且內容不變", refused and ro.read_text() == "keep")
+            # 沒人讀的 FIFO:不能卡住,照修前一樣換成普通檔
+            import signal
+            fifo = work / "fifo.json"; os.mkfifo(fifo)
+            runner_left = signal.getitimer(signal.ITIMER_REAL)[0]
+            with _guard_hang(5) as hung:
+                mod._atomic_write_text(fifo, "{}")
+            check("借鬧鐘抓卡住之後,測試執行器原本的逾時還在",
+                  runner_left == 0 or signal.getitimer(signal.ITIMER_REAL)[0] > 0, runner_left)
+            check("沒人讀的 FIFO 不會卡住,換成普通檔", not hung and stat.S_ISREG(fifo.lstat().st_mode)
+                  and fifo.read_text() == "{}", hung)
+            # 要沿用 0600 的檔:暫存檔從建立那一刻起就不能比 0600 寬(大檔先寫進 0644 暫存檔,別人趁空檔開檔就收不回)
+            secret = work / "secret.json"; secret.write_text("old"); os.chmod(secret, 0o600)
+            real_open, tmp_modes = os.open, []
+            def spy_open(p, flags, *a, **k):
+                fd = real_open(p, flags, *a, **k)
+                if ".probe-out-" in str(p):
+                    tmp_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+                return fd
+            with patch.object(mod.os, "open", side_effect=spy_open):
+                mod._atomic_write_text(secret, "x" * 1_000_000)
+            check("現場成立:真的建了暫存檔", len(tmp_modes) == 1, tmp_modes)
+            check("沿用 0600 時暫存檔一建立就不比 0600 寬", tmp_modes and tmp_modes[0] & 0o077 == 0
+                  and stat.S_IMODE(secret.stat().st_mode) == 0o600, [oct(m) for m in tmp_modes])
+            long = work / ("a" * 250 + ".json")
+            mod._atomic_write_text(long, "{}")
+            check("檔名剛好 255 bytes 仍寫得出", long.read_text() == "{}")
+            mod._atomic_write_text(Path(os.devnull), "{}")
+            check("裝置目標照舊直接寫入且仍是裝置", stat.S_ISCHR(os.lstat(os.devnull).st_mode))
+            check("寫完不留暫存檔", sorted(p.name for p in work.iterdir())
+                  == sorted(["new.json", "mine.json", "wide.json", "linked.json", "ro.json", "fifo.json",
+                             "secret.json", long.name]),
+                  sorted(p.name for p in work.iterdir()))
+            # 專案的原子寫入原語不碰整個程序的 umask(設成 0 再設回來的那一瞬間,別的執行緒建檔會拿到錯的權限)。
+            # 看行為不看字面:寫入期間誰呼叫 umask(包在別的輔助函式裡也一樣)都會炸。
+            def no_umask(*_a): raise AssertionError("寫入期間呼叫了 umask")
+            try:
+                with patch.object(mod.os, "umask", side_effect=no_umask):
+                    mod._atomic_write_text(work / "um-new.json", "{}")
+                    mod._atomic_write_text(mine, "{}")
+                touched = None
+            except AssertionError as exc:
+                touched = exc
+            check("原子寫入不碰整個程序的 umask", touched is None, touched)
+            (work / "um-new.json").unlink()
+            # 字元裝置分支:開到的若已不是字元裝置(檢查後被換掉)就不寫——用 lstat 謊報一個普通檔是字元裝置來造現場
+            decoy = work / "decoy.json"; decoy.write_text("keep")
+            real_lstat = Path.lstat
+            def fake_lstat(p, *a, **k):
+                st = real_lstat(p, *a, **k)
+                if str(p) == str(decoy):
+                    return os.stat_result((stat.S_IFCHR | 0o666,) + tuple(st)[1:])
+                return st
+            with patch.object(Path, "lstat", fake_lstat):
+                check("現場成立:檢查時把普通檔看成字元裝置", stat.S_ISCHR(decoy.lstat().st_mode))
+                try:
+                    mod._atomic_write_text(decoy, "NEW"); swapped = None
+                except OSError as exc:
+                    swapped = exc
+            check("開到的不是字元裝置就不寫", swapped is not None and decoy.read_text() == "keep",
+                  (swapped, decoy.read_text()))
+            decoy.unlink()
+            # 字元裝置用不阻塞的方式開,寫之前要改回阻塞:終端讀得慢時,大量輸出不能寫一半就丟 BlockingIOError
+            import threading
+            master, slave = os.openpty()
+            got = bytearray()
+            def drain():
+                import time as _t
+                while len(got) < 300_000:
+                    _t.sleep(0.001)
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    got.extend(chunk)
+            reader = threading.Thread(target=drain, daemon=True); reader.start()
+            try:
+                mod._atomic_write_bytes(Path(os.ttyname(slave)), b"x" * 300_000); pty_err = None
+            except OSError as exc:
+                pty_err = exc
+            reader.join(20)
+            os.close(slave); os.close(master)
+            check("終端讀得慢時大量輸出照樣寫完", pty_err is None and len(got) >= 300_000, (pty_err, len(got)))
+            # 暫存檔名連續撞名的上限:固定隨機尾碼並預先放好同名檔,要報 FileExistsError、不改目標、不空轉
+            capped = work / "capped.json"; capped.write_text("keep")
+            jam = work / f".probe-out-{os.getpid()}-deadbeef.tmp"; jam.write_text("x")
+            try:
+                with patch.object(mod.secrets, "token_hex", return_value="deadbeef"):
+                    mod._atomic_write_text(capped, "{}")
+                cap_err = None
+            except FileExistsError as exc:
+                cap_err = exc
+            check("暫存檔名一直撞名時報錯且目標不變", cap_err is not None and capped.read_text() == "keep", cap_err)
+            jam.unlink(); capped.unlink()
+            # 消融腳本用的就是這一份:新檔照 umask、長檔名寫得出(舊的本地拷貝是 0600、長檔名會爆)
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("ablation_r6_write", Path(__file__).resolve().parents[1]
+                                                          / "governance/eval/ablation_lumos_first.py")
+            ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+            abl_new = root / ("b" * 250 + ".json"); ablation._atomic_write_text(abl_new, "{}")
+            check("消融腳本的原子寫入新檔照 umask、長檔名寫得出",
+                  stat.S_IMODE(abl_new.stat().st_mode) == 0o644 and abl_new.read_text() == "{}")
+        finally:
+            os.umask(old_umask)
+        source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        victim = root / "victim.txt"; victim.write_text("keep")
+        hist = root / "hist.jsonl"; hist.symlink_to(victim)
+        check("現場成立:歷史檔位置真的是符號連結", hist.is_symlink())
+        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+               "limit_hit": False, "source_evidence": None}
+        def run(extra):
+            argv = ["probe", "--repo", str(source), "--scenarios", str(q), *extra]
+            with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row) as model, \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return mod.main(), model.call_count
+        ro_dir = root / "ro-dir"; ro_dir.mkdir(); os.chmod(ro_dir, 0o555)
+        hist_fifo = root / "hist-fifo"; os.mkfifo(hist_fifo)
+        plain = root / "plain.txt"; plain.write_text("x")
+        cases = [("輸出父目錄不存在", ["--out", str(root / "missing" / "o.json")]),
+                 ("輸出位置是目錄", ["--out", str(work)]),
+                 ("輸出檔名超過上限", ["--out", str(root / ("c" * 300 + ".json"))]),
+                 ("輸出的父路徑是普通檔", ["--out", str(plain / "o.json")]),
+                 ("歷史檔是符號連結", ["--out", str(root / "o.json"), "--history", str(hist)]),
+                 ("歷史檔是 FIFO", ["--out", str(root / "o.json"), "--history", str(hist_fifo)])]
+        if os.geteuid() != 0:
+            cases.append(("歷史檔要建在唯讀目錄", ["--out", str(root / "o.json"), "--history", str(ro_dir / "h.jsonl")]))
+        for label, extra in cases:
+            rc, calls = run(extra)
+            check(f"{label}:呼叫模型前就擋下", rc == 2 and calls == 0, (rc, calls))
+        check("歷史連結指向的檔沒被追加", victim.read_text() == "keep", victim.read_text())
+        good_hist = root / "good.jsonl"
+        rc, calls = run(["--out", str(root / "o.json"), "--history", str(good_hist)])
+        check("正常輸出與歷史位置照常跑完並追加", rc == 0 and calls == 1
+              and len(good_hist.read_text().splitlines()) == 1, (rc, calls))
+        os.chmod(ro_dir, 0o755)
+        # 開跑前檢查過了,模型跑的期間才有人把歷史檔位置換成連結:追加那一步本身也不能跟過去
+        victim2 = root / "victim2.txt"; victim2.write_text("keep")
+        swap_hist = root / "swap.jsonl"
+        def swap_then_ok(*_a, **_k):
+            swap_hist.symlink_to(victim2)
+            return row
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(root / "o3.json"),
+                "--history", str(swap_hist)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=swap_then_ok), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                mod.main(); swap_err = None
+            except OSError as exc:
+                swap_err = exc
+        check("現場成立:跑的期間歷史檔位置真的被換成連結", swap_hist.is_symlink())
+        check("跑的期間被換成連結時追加不跟過去", swap_err is not None and victim2.read_text() == "keep",
+              (swap_err, victim2.read_text()))
+        # 開跑前:歷史檔是有兩個名字的普通檔(硬連結到別的檔)也擋下
+        linked_hist = root / "linked-hist.jsonl"; os.link(victim, linked_hist)
+        rc, calls = run(["--out", str(root / "o.json"), "--history", str(linked_hist)])
+        check("歷史檔有兩個名字:呼叫模型前就擋下", rc == 2 and calls == 0 and victim.read_text() == "keep", (rc, calls))
+        # 跑的期間把歷史檔換成 FIFO(有人讀/沒人讀)或硬連結:追加開檔後要確認是一般檔案、只有一個名字,否則報錯
+        def swap_case(make):
+            target = root / f"swap-{len(list(root.glob('swap-*')))}.jsonl"
+            def side(*_a, **_k):
+                make(target)
+                return row
+            argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(root / "o4.json"),
+                    "--history", str(target)]
+            err = None
+            with _guard_hang(10) as hung, patch.object(mod.sys, "argv", argv), \
+                 patch.object(mod, "run_one", side_effect=side), \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    mod.main()
+                except OSError as exc:
+                    err = exc
+            return target, err, hung
+        readers = []
+        def fifo_with_reader(t):
+            os.mkfifo(t); readers.append(os.open(t, os.O_RDONLY | os.O_NONBLOCK))
+        t, err, hung = swap_case(fifo_with_reader)
+        try:
+            leaked = os.read(readers[0], 4096) if readers else b"?"
+        except BlockingIOError:
+            leaked = b""
+        for r in readers:
+            os.close(r)
+        check("現場成立:跑的期間換成有人讀的 FIFO", stat.S_ISFIFO(t.lstat().st_mode))
+        check("換成有人讀的 FIFO:報錯且讀的人拿不到紀錄", err is not None and not hung and leaked == b"", (err, hung, leaked))
+        t, err, hung = swap_case(lambda t: os.mkfifo(t))
+        check("換成沒人讀的 FIFO:報錯不卡住", err is not None and not hung, (err, hung))
+        victim3 = root / "victim3.txt"; victim3.write_text("keep")
+        t, err, hung = swap_case(lambda t: os.link(victim3, t))
+        check("現場成立:跑的期間換成硬連結", t.stat().st_nlink == 2)
+        check("換成硬連結:報錯且另一個名字的內容不變", err is not None and victim3.read_text() == "keep",
+              (err, victim3.read_text()))
+
+
+def t_probe_boundary_char_device_session():
+    """字元裝置當輸出(終端、/dev/tty):在沒有控制終端的新 session 裡,開跑前就要知道開不起來,
+    寫入時也不能把終端收成控制終端(lumos 的終端確認早就為同一件事加了 O_NOCTTY)。"""
+    import os, subprocess, sys, textwrap
+    if not hasattr(os, "openpty") or not hasattr(os, "setsid"):
+        raise _SrcOnly("非 POSIX(沒有 pty 與 session),這段沒驗到")
+    probe = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+    code = textwrap.dedent('''
+        import os, sys, importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("sp_ctty", sys.argv[1])
+        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        def ctty():
+            try:
+                os.close(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)); return True
+            except OSError:
+                return False
+        print(f"SCENE leader={os.getsid(0) == os.getpid()} ctty={ctty()}", flush=True)
+        print(f"PRE_TTY {m._output_target_problem('/dev/tty') is not None}", flush=True)
+        print(f"PRE_TTY_HIST {m._output_target_problem('/dev/tty', replace=False) is not None}", flush=True)
+        master, slave = os.openpty()
+        m._atomic_write_bytes(Path(os.ttyname(slave)), b"{}")
+        print(f"AFTER_WRITE ctty={ctty()} got={os.read(master, 16)!r}", flush=True)
+        os.close(slave); os.close(master)
+        print("ALIVE", flush=True)
+    ''')
+    try:
+        p = subprocess.run([sys.executable, "-c", code, probe], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, start_new_session=True, timeout=30)
+        out, rc = p.stdout, p.returncode
+    except subprocess.TimeoutExpired as exc:
+        out, rc = (exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""), "timeout"
+    check("現場成立:子程序是 session leader 且沒有控制終端", "SCENE leader=True ctty=False" in out, (rc, out))
+    check("沒有控制終端時 --out /dev/tty 開跑前就擋下", "PRE_TTY True" in out, out)
+    check("沒有控制終端時 --history /dev/tty 開跑前就擋下", "PRE_TTY_HIST True" in out, out)
+    check("寫進終端不會把它收成控制終端", "AFTER_WRITE ctty=False" in out and "ALIVE" in out and rc == 0, (rc, out))
+
+
+def t_probe_boundary_wait_over_poll_interval():
+    """--wait-on-limit 大於 300 時仍分段等:每次最多 300 秒,最後一段只等剩餘秒數(第五輪 r5 審查)。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch, call
+    mod = _load_probe_module("sp_fifth_wait")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-wait-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                   "secs": 0, "limit_hit": True, "source_evidence": None}
+        ok = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+              "limit_hit": False, "source_evidence": None}
+        calls = []
+        def limit_twice(*_a, **_k):
+            calls.append(1)
+            return dict(limited) if len(calls) <= 2 else dict(ok)
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "301",
+                "--max-per-window", "0", "--out", str(root / "o.json")]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_twice), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("現場成立:真的撞了兩次上限才過", len(calls) == 3, len(calls))
+        check("先等滿一段 300 秒,再只等剩下的 1 秒", rc == 0
+              and sleeping.call_args_list == [call(300), call(1)], (rc, sleeping.call_args_list))
+
+
+def t_probe_boundary_fourth_round_result_contracts():
+    """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
+    import tempfile, json, importlib.util
+    spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
+        outdir = Path(td)
+        a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
+        b = {"id": "b", "passed": False, "calls": [], "n_calls": 0}
+        path = outdir / "with-q-a.json"
+        path.write_text(json.dumps({"arm": "with", "results": [a] * 100 + [b]}))
+        check("現場確有一百筆同題成功與另一題失敗", len(ablation.load_results(outdir)["with"]) == 101)
+        result = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
+        check("同題超額列不能灌高通過率或工具使用分母", result["n"] == 2
+              and result["m1_passed"] == 1 and result["m1_rate"] == 0.5
+              and result["m2_n"] == 2 and result["m2_ever"] == 1, result)
+        path.write_text(json.dumps({"arm": "with", "results": [a, b]}))
+        normal = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
+        check("正常一題一場仍保留二分之一與首次工具步數", normal["m1_rate"] == 0.5
+              and normal["m3_first_idx_median"] == 0 and normal["missing"] == 0, normal)
+        for calls in ([42], [["Bash"]], [["Bash", 42]], [[42, "lumos"]]):
+            path.write_text(json.dumps({"arm": "with", "results": [{**a, "calls": calls}]}))
+            check("錯型工具呼叫整批拒收而非算沒有使用工具 " + repr(calls),
+                  bool(ablation.collect_skills_health(outdir))
+                  and not ablation.load_results(outdir)["with"], ablation.collect_skills_health(outdir))
+
+
+def t_probe_boundary_fourth_round_recovery_recipe():
+    """照事故紀錄給的路徑歸檔，真健康入口須恢復且下一次能升格正式結果。"""
+    import tempfile, json, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_recovery", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-recovery-") as td:
+        outdir = Path(td)
+        def fake_probe(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({"arm": "with",
+                "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2 if runner.call_count == 1 else 0})()
+        with patch.object(ablation.subprocess, "run", side_effect=fake_probe) as runner:
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            artifacts = list(outdir.glob("with-q-*"))
+            marker = json.loads(next(outdir.glob("with-q-*.json")).read_text())
+            expected = {str(p) for p in artifacts if p.suffix in (".json", ".candidate", ".pending")}
+            check("現場失敗確有正式事故候選與未完成三檔", runner.call_count == 1
+                  and len(expected) == 3 and bool(ablation.collect_skills_health(outdir)), artifacts)
+            recovery = marker.get("recovery_paths", [])
+            check("恢復清單列齊三檔", set(recovery) == expected, marker)
+            for name in recovery:
+                p = Path(name); p.rename(p.with_suffix(p.suffix + ".archived"))
+            check("照紀錄完整歸檔後健康掃描恢復", not ablation.collect_skills_health(outdir),
+                  ablation.collect_skills_health(outdir))
+            if not ablation.collect_skills_health(outdir):
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+                check("恢复后新結果經父程序核對升格且可抵缺場", runner.call_count == 2
+                      and not ablation.collect_skills_health(outdir)
+                      and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 0)
+
+
+def t_probe_boundary_fourth_round_report_and_provenance():
+    """真純合併入口保留壞meta原始byte，報表的題號／檔名／來源不產生HTML。"""
+    import tempfile, json, importlib.util, io, contextlib
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_report", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-report-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a"}\n')
+        outdir = root / "out"; outdir.mkdir(); meta = outdir / "meta.json"
+        for raw in (b'{"date":', b'[]', b'{}'):
+            meta.write_bytes(raw)
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
+                 patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not launch model")):
+                rc = ablation.main()
+            check("純合併保留不可判meta原始證據 " + repr(raw), rc == 0 and meta.read_bytes() == raw,
+                  (rc, meta.read_bytes()))
+            report = (outdir / "summary.md").read_text()
+            check("meta不可判仍在報表明寫來源未知", "來源日期未知" in report and "來源版本未知" in report, report[:200])
+        attack = '<img src=x onerror=alert(1)>'
+        row = {"id": attack, "passed": True}
+        (outdir / "with-q-results.json").write_text(json.dumps({"arm": "with", "results": [row, {**row, "passed": False}]}))
+        summary = ablation.merge(outdir, [attack], 2)
+        summary["skills_health_poisoned"] = [(attack, ["failed"])]
+        md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
+        check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
+        check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
+        markdown = "![run](https://example.invalid/x) [label](https://example.invalid/y)"
+        controls = "prefix\x1b]0;LUMOS\x07suffix"
+        md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
+        check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
+        check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
+              and "u001b" in md and "u0007" in md, repr(md[:240]))
+        # 第五輪:GFM 會把裸網址、www、email 自動變連結,~~ 變刪除線;只擋 [] () 不夠。
+        autolinks = "https://evil.example/x www.evil.example a@b.example ~~s~~"
+        md = ablation.render_md(summary, {"date": autolinks, "claude_version": "v"})
+        check("現場成立:裸網址真的進了報表那一行", "evil" in md, md[:240])
+        check("裸網址、www、email 與刪除線不留可自動連結的原形",
+              all(t not in md for t in ("https://", "www.", "a@b", "~~")), md[:240])
+        # 真的控制字元與「字面寫成 \x1b 的文字」呈現不同(\x 形式)。字面寫成 \u001b 的文字會跟真控制字元一樣,
+        # 那是沿用主程式 _kill_esc 寫法刻意接受的取捨(見 Systems/ablation-lumos-first 的 WHY),這裡不斷言它。
+        esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
+        lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
+        check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
+        # 跟 lumos 主程式的 _kill_esc 同一套:只有控制、格式、行段分隔、代理這幾類寫成 \\uXXXX,其餘(含全形空白)照原樣。
+        # 先直接比類別集合(主程式日後增減類別,這裡立刻紅),再拿每一類各一個字元比寫法。
+        lm = _load_lumos_inproc()
+        check("報表的控制字元類別跟 lumos 主程式同一組", ablation._SPECIAL_CATS == lm._PATH_SPECIAL_CATS,
+              (sorted(ablation._SPECIAL_CATS), sorted(lm._PATH_SPECIAL_CATS)))
+        sample = "\x01\u202e\ufeff\u2028\u2029\ud800\U000e0001\u3000\u00a0x"
+        md = ablation.render_md(summary, {"date": sample, "claude_version": "v"})
+        expect = lm._kill_esc(sample).replace("\\", "\\\\")
+        check("報表的控制字元寫法跟 lumos 主程式的 _kill_esc 一致(Cc/Cf/Zl/Zp/Cs 各一)", expect in md, (expect, md[:200]))
+        # 字面反斜線只照 Markdown 規則轉一次:渲染後跟原值一樣是一個,不能變兩個
+        md = ablation.render_md(summary, {"date": "C:\\dir", "claude_version": "v"})
+        check("字面反斜線渲染後仍是一個", "C\\:\\\\dir" in md and "\\\\\\\\dir" not in md, md[:200])
 
 
 def t_delguard_logs_ok_too():
@@ -50867,7 +53324,7 @@ def t_lens_recount_search_multi_r1_codex():
     check("外家②:單引號裡的 $FOO 是字面查詢(判零命中、照字面記)", e2 == [{"ts": "T", "query": "$ZZZQXJ_NO_HIT", "verdict": "zero"}], str(e2))
     e3 = m._search_events("python3 scripts/lumos search __NO_HIT_FLAG__ --path Systems --top 2 --json", Z, False, "T")
     import os as _os, re as _re
-    helptxt = _sp.run([sys.executable, GRAPHCTL, "search", "-h"], capture_output=True, text=True, env=dict(_os.environ, NO_COLOR="1")).stdout
+    helptxt = _sp.run([sys.executable, GRAPHCTL, "search", "-h"], capture_output=True, text=True).stdout   # 顏色在測試進入點已關(PYTHON_COLORS=0)
     helptxt = _re.sub(r"\x1b\[[0-9;]*m", "", helptxt)
     with_val = set(_re.findall(r"(?m)^\s+(--[a-z][a-z-]*) [A-Z_]+\s", helptxt))
     check("外家③:--path、--top 的值不併進查詢詞;帶值旗標清單跟 lumos search -h 一致", e3[0]["query"] == "__NO_HIT_FLAG__" and with_val and with_val == set(m._SEARCH_VALUE_FLAGS),
@@ -64548,6 +67005,80 @@ def t_doctor_revisit_marks_closed_issues():
           f"{n_doc} {len(seen)} {buf.getvalue()}")
 
 
+def _rvb_vault(src_body):
+    v = mkvault()
+    write(v, "Verification/X.md", "type: verification\nstatus: pass\nrevalidate_when: 產圖腳本改變時", body="# X\n")
+    write(v, "Projects/P.md", "type: project\nstatus: doing", body="# P\n" + src_body + "\n")
+    write(v, "Projects/Q.md", "type: project\nstatus: doing", body="# Q\n無關\n")
+    return v
+
+
+def t_set_revalidate_when_lists_backrefs():
+    """[B5 S1] lumos set 改了某篇的 revalidate_when:列出連到它、同一句講到 revalidate_when 的句子
+    (來源篇、行號、原句)與改完之後的事件清單;沒有這種句子不多印;不擋、不改別篇(rtb 第三次比對回傳第 10 項)。
+    翻紅釘:拿掉 main 裡 set 之後的呼叫 → ①紅;印改之前的值 → ②紅。append/remove 本來就不收 revalidate_when(只能 set 整欄換)。"""
+    print("t_set_revalidate_when_lists_backrefs")
+    src = "Phase 12 頁面上主線時由 [[Verification/X]] 的 revalidate_when 觸發重驗。"
+    v = _rvb_vault(src)
+    before = (v / "Projects" / "P.md").read_text(encoding="utf-8")
+    r = run(v, "set", "Verification/X", "revalidate_when", "字型改變時")
+    lines = before.split("\n")
+    no = next(i + 1 for i, ln in enumerate(lines) if "觸發重驗" in ln)
+    check("①set 之後列出引用它的句子(來源篇與行號、原句)", r.returncode == 0 and f"Projects/P.md:{no}" in r.stdout and "觸發重驗" in r.stdout, r.stdout + r.stderr)
+    check("②印出改完之後的事件清單", "字型改變時" in r.stdout and r.stdout.find("字型改變時") >= 0, r.stdout)
+    check("①不改別篇", (v / "Projects" / "P.md").read_text(encoding="utf-8") == before, "")
+    r = run(v, "set", "Verification/X", "revalidate_when", "README 文案改變時", "字型改變時")
+    check("③整欄換成多個值也列,並印出多個事件", r.returncode == 0 and "Projects/P.md:" in r.stdout and "README 文案改變時" in r.stdout, r.stdout + r.stderr)
+    # 代碼審 r1 正確性席 F1:同一行兩句都指向同一篇,兩句都要列(原本每行取到一句就停)
+    v3 = _rvb_vault("甲 [[Verification/X]] 的 revalidate_when 第一;乙 [[Verification/X]] 的 revalidate_when 第二。")
+    r = run(v3, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑥同一行兩句指向同一篇:兩句都列", r.returncode == 0 and "第一" in r.stdout and "第二" in r.stdout and "有 2 句" in r.stdout, r.stdout)
+    # 代碼審 r2 正確性席 F1:同一句裡兩組完整配對,這一句只列一次(r1 拿掉取到就停之後會列兩次、把句數灌水)
+    v5 = _rvb_vault("[[Verification/X]] 的 revalidate_when 與 [[Verification/X]] 的 revalidate_when 同一句。")
+    r = run(v5, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑨同一句兩組配對:只列一次", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 1 and "有 1 句" in r.stdout, r.stdout)
+    # 代碼審 r1 架構對齊席 A1:同 _drift_print_backrefs 最多列 20 句,其餘說還有幾句
+    v4 = _rvb_vault("\n".join(f"第{i}行由 [[Verification/X]] 的 revalidate_when 觸發。" for i in range(25)))
+    r = run(v4, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑦超過 20 句只列 20 句,其餘說還有 5 句", r.returncode == 0 and r.stdout.count("Projects/P.md:") == 20 and "還有 5 句" in r.stdout, r.stdout[-300:])
+    # 代碼審 r1 架構對齊席 A2:列出出錯不改回傳碼,stderr 說寫入照樣完成(同 _drift_print_backrefs 的 fail-open)
+    m = _load_lumos_inproc()
+    import io as _io2
+    from unittest.mock import patch as _patch2
+    err = _io2.StringIO()
+    with _patch2.object(m, "_revalidate_backref_lines", side_effect=ValueError("壞掉")), _patch2.object(m.sys, "stderr", err):
+        raised = None
+        try:
+            m._print_revalidate_backrefs(None, "Verification/X.md")
+        except Exception as e:     # noqa: BLE001 — 要的就是「不丟例外」
+            raised = e
+    check("⑧列出出錯不丟例外,stderr 說寫入照樣完成", raised is None and "寫入照樣完成" in err.getvalue(), repr(raised) + err.getvalue())
+    v2 = _rvb_vault("沒有引用")
+    r = run(v2, "set", "Verification/X", "revalidate_when", "字型改變時")
+    check("⑤沒有引用句:不多印", r.returncode == 0 and "句連到這篇" not in r.stdout, r.stdout)
+
+
+def t_set_revalidate_when_backrefs_excluded():
+    """[B5 S2] 不列的情形:連結包在行內程式碼裡、整句在程式碼區裡、連到別篇、revalidate_when 跟連結隔著句尾、改的是別的欄位。
+    每一格都在同一篇另放一句對照句(沒有排除情形),對照句要列——證明「不列」不是因為根本什麼都沒印。"""
+    print("t_set_revalidate_when_backrefs_excluded")
+    ctl = "\n對照:由 [[Verification/X]] 的 revalidate_when 觸發。"
+    for desc, body in (("①連結在行內程式碼裡", "例如 `[[Verification/X]]` 的 revalidate_when 觸發。"),
+                       ("②整句在程式碼區裡", "```\n由 [[Verification/X]] 的 revalidate_when 觸發\n```"),
+                       ("③連到別篇", "由 [[Projects/Q]] 的 revalidate_when 觸發。"),
+                       ("④隔著句尾", "見 [[Verification/X]]。另外 revalidate_when 要寫清楚。")):
+        v = _rvb_vault(body + ctl)
+        lines = (v / "Projects" / "P.md").read_text(encoding="utf-8").split("\n")
+        bad = [i + 1 for i, ln in enumerate(lines) if "對照" not in ln and ("revalidate_when" in ln or "[[" in ln)]
+        ok_no = next(i + 1 for i, ln in enumerate(lines) if "對照" in ln)
+        r = run(v, "set", "Verification/X", "revalidate_when", "字型改變時")
+        check(f"{desc}:不列,對照句照列", r.returncode == 0 and f"Projects/P.md:{ok_no}" in r.stdout
+              and not any(f"Projects/P.md:{n} " in r.stdout or f"Projects/P.md:{n}\n" in r.stdout for n in bad), r.stdout)
+    v = _rvb_vault("由 [[Verification/X]] 的 revalidate_when 觸發。")
+    r = run(v, "set", "Verification/X", "status", "pass")
+    check("⑤改的是別的欄位:不列", r.returncode == 0 and "Projects/P.md:" not in r.stdout, r.stdout)
+
+
 def t_set_issue_closed_lists_revisits():
     """[S7] lumos set 或 drift fix --kind c2 --close 把 Issue 改成結案值:列出它全部的回頭條件行(程式碼區與行內程式碼裡的不算),
     不擋不改;行號用寫完之後的內容算。
@@ -71433,6 +73964,106 @@ def t_doctor_s20_prose_retire_by_verdict_verb():
         e = m.Env.from_texts(vault, {"Projects/P_計劃.md": head + body + "\n"})
         got = m._doctor_test_ref_lines(e, root)["prose"]
         check(f"{label}:{'列' if want else '不列'}", bool(got) == want, str(got))
+
+
+def _s21_cases(label, cases):
+    """S21 三支測試共用:每格 (說明, 來源句, X 全文或 None, 要不要列) → 在假圖譜跑 _doctor_revisit_ref_lines 逐格比。回 m 或 None。"""
+    m = _load_lumos_inproc()
+    root, _b = _tr_repo()
+    vault = root / "docs" / "kg-knowledge"
+    fn = getattr(m, "_doctor_revisit_ref_lines", None)
+    check(f"★前置★ {label}:有 _doctor_revisit_ref_lines", fn is not None, "")
+    if fn is None:
+        return None
+    for desc, src, xtext, want in cases:
+        texts = {"Projects/P_計劃.md": _S21_HEAD + src + "\n"}
+        if xtext is not None:
+            texts["Systems/X.md"] = _S21_HEAD + xtext + "\n"
+        got = fn(m.Env.from_texts(vault, texts))
+        check(f"{desc}:{'列' if want else '不列'}", bool(got) == want, str(got))
+    return m, vault
+
+
+_S21_HEAD = "---\ntype: project\nstatus: doing\nsummary: |-\n  WHY:x\n---\n# 標題\n"
+
+
+def t_doctor_s21_revisit_ref_dated():
+    """[A3 S1] doctor S21:「[[X]] … REVISIT 日期」(日期在 REVISIT 前或後、24 字內;REVISIT 與日期包在反引號裡也認)
+    而 X 沒有那天的回頭條件行 → 列;X 有那天的日期式、條件式 [by:]、或那天但已結案的行 → 不列(rtb 第三輪提案 A3)。
+    翻紅釘:不認 [by:] → ③紅;把已結案當沒有 → ④紅;剝掉行內程式碼才找 REVISIT → ②紅。"""
+    print("t_doctor_s21_revisit_ref_dated")
+    x = "REVISIT:2026-10-20 量一次"
+    r = _s21_cases("S1", [
+        ("①的 REVISIT 日期,X 沒有那天", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", x, True),
+        ("②既有那條 `REVISIT:日期`(包在反引號裡也認),X 沒有那天", "跟 [[Systems/X]] 既有那條 `REVISIT:2026-11-08` 量的是同一件事。", x, True),
+        ("③X 有條件式 [by:那天]", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", "REVISIT:[when-file:a.py][by:2026-11-08] 回頭", False),
+        ("④X 有那天但已結案", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。", "REVISIT:2026-11-08 量 [closed:2026-10-01 已量過了]", False),
+        ("⑤日期寫在 REVISIT 前面,X 有那天", "由 [[Systems/X]] 的 2026-10-20 REVISIT 承接。", x, False),
+        ("⑥日期寫在 REVISIT 前面,X 沒有那天", "由 [[Systems/X]] 的 2026-11-08 REVISIT 承接。", x, True),
+        # 代碼審 r1 正確性席 F2:全形冒號後的日期要讀到(原本退化成「X 有任一條就不列」)
+        ("⑧全形冒號:REVISIT:日期,X 沒有那天", "見 [[Systems/X]] 的 REVISIT：2026-11-08 再量。", x, True)])
+    if r:
+        m, vault = r
+        got = m._doctor_revisit_ref_lines(m.Env.from_texts(vault, {
+            "Projects/P_計劃.md": _S21_HEAD + "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量。\n", "Systems/X.md": _S21_HEAD + x + "\n"}))
+        check("⑦列出那行帶來源篇、行號、目標與日期",
+              bool(got) and "Projects/P_計劃.md:" in got[0] and "Systems/X" in got[0] and "2026-11-08" in got[0], str(got))
+
+
+def t_doctor_s21_revisit_ref_undated():
+    """[A3 S2] doctor S21:「回頭條件見/在/寫在/記在/放在 [[X]]」不帶日期,X 一條回頭條件行都沒有 → 列;有任一條(含已結案)→ 不列。"""
+    print("t_doctor_s21_revisit_ref_undated")
+    _s21_cases("S2", [
+        ("①回頭條件見 X,X 一條都沒有", "回頭條件見 [[Systems/X]]。", "沒有回頭條件", True),
+        ("②回頭條件記在 X,X 一條都沒有", "這件事的回頭條件記在 [[Systems/X]]。", "沒有回頭條件", True),
+        ("③回頭條件寫在 X,X 有一條(已結案也算)", "回頭條件寫在 [[Systems/X]]。", "REVISIT:2026-01-01 x [closed:2026-02-01 已處理完畢]", False),
+        ("④回頭條件在 X,X 有一條未結案", "回頭條件在 [[Systems/X]]。", "REVISIT:2026-10-20 量一次", False),
+        # 代碼審 r2 正確性席 F1:日期緊接在連結後、中間隔分號也要讀到(r1 把分號算句尾後切掉了)
+        ("⑤回頭條件見 X;日期,X 沒有那天", "回頭條件見 [[Systems/X]];2026-11-08。", "REVISIT:2026-10-20 量一次", True)])
+
+
+def t_doctor_s21_revisit_ref_excluded():
+    """[A3 S3] doctor S21 不列的情形:連結到 REVISIT 或日期之後 30 字內(到句號為止)有待辦指示詞、X 不存在、連結包在行內程式碼裡、
+    整句在圍欄裡;30 字之外的指示詞不排除(真懸空那句後半有「規則改成軟提醒」)。翻紅釘:不排除待辦指示 → ①②紅;看整句 → ③紅。"""
+    print("t_doctor_s21_revisit_ref_excluded")
+    x = "REVISIT:2026-10-20 量一次"
+    _s21_cases("S3", [
+        ("①待辦指示:REVISIT 之後 30 字內有「改寫」", "[[Systems/X]] 各有一條 `REVISIT:2026-11-08`,兩條都改寫成已由本計劃回答。", x, False),
+        ("②待辦指示:REVISIT 前面有「把…改成」", "[[Systems/X]] 把 11-01 那行 REVISIT 改成指向本計劃。", "沒有回頭條件", False),
+        ("③30 字之外的「改成」不排除", "跟 [[Systems/X]] 既有那條 `REVISIT:2026-11-08` 量的是同一件事,到期時用本口徑一次量、兩處合併,之後規則改成軟提醒。", x, True),
+        ("④連結包在行內程式碼裡(舉例)", "回頭條件在 `[[Systems/X]]` 的 REVISIT 2026-11-08。", x, False),
+        ("⑤整句在圍欄裡", "```\n見 [[Systems/X]] 的 REVISIT 2026-11-08\n```", x, False),
+        ("⑥X 不存在(壞連結歸既有檢查)", "見 [[Systems/X]] 的 REVISIT 2026-11-08。", None, False)])
+    # 代碼審 r2 正確性席 F2:連結跟 REVISIT 不跨句配對(;後面是本篇自己的回頭條件);r2 架構對齊席:句尾只准一份定義
+    r2 = _s21_cases("S3-r2", [("⑫連結與 REVISIT 隔著分號(本篇自己的回頭條件)", "沿用 [[Systems/X]] 的做法;REVISIT:2026-11-08 重看。", x, False)])
+    if r2:
+        m2 = r2[0]
+        check("⑬句尾只有一份定義(S21 與漂移檢查共用 _SENT_END_RE)",
+              not hasattr(m2, "_RREF_SENT_END_RE") and getattr(m2, "_DRIFT_M1_CUT_RE", None) is getattr(m2, "_SENT_END_RE", 0), "")
+    # 代碼審 r1 正確性席 F1、F4:待辦詞範圍不含連結本身的名稱;句尾除了。也認!?;
+    m = _load_lumos_inproc()
+    vault = _tr_repo()[0] / "docs" / "kg-knowledge"
+    for desc, src, tname, want in (
+            ("⑧連結名稱含「結案」,句子本身不是待辦", "見 [[Systems/結案X]] 的 REVISIT 2026-11-08 再量。", "Systems/結案X.md", True),
+            ("⑨回頭條件見名稱含「改成」的篇,那篇一條都沒有", "回頭條件見 [[Systems/改成X]]。", "Systems/改成X.md", True),
+            ("⑩分號斷句:下一句的「改成」不算", "見 [[Systems/X]] 的 REVISIT 2026-11-08 再量;另外把 Y 改成 Z。", "Systems/X.md", True)):
+        body = x if tname == "Systems/X.md" or "結案" in tname else "沒有回頭條件"
+        got = m._doctor_revisit_ref_lines(m.Env.from_texts(vault, {"Projects/P_計劃.md": _S21_HEAD + src + "\n", tname: _S21_HEAD + body + "\n"}))
+        check(f"{desc}:{'列' if want else '不列'}", bool(got) == want, str(got))
+    # 代碼審 r1 正確性席 F3:同一行大量行內程式碼加大量引用,判「在不在程式碼裡」原本每次掃全部區段,成平方
+    import time as _t2
+    e = m.Env.from_texts(vault, {"Projects/P_計劃.md": _S21_HEAD + "`a` [[Systems/X]] REVISIT 2026-11-08 " * 30000 + "\n", "Systems/X.md": _S21_HEAD + x + "\n"})
+    t0 = _t2.monotonic()
+    m._doctor_revisit_ref_lines(e)
+    check("⑪同一行三萬組行內程式碼加引用(5 秒內)", _t2.monotonic() - t0 < 5, f"{_t2.monotonic() - t0:.1f}s")
+    # ⑦效能:一行兩萬個 [[ 原本回溯成平方(85KB 要 41 秒);連結內文不收 [ 之後是線性
+    import time as _t
+    m = _load_lumos_inproc()
+    e = m.Env.from_texts(_tr_repo()[0] / "docs" / "kg-knowledge",
+                         {"Projects/P_計劃.md": _S21_HEAD + "[[" * 20000 + "REVISIT" + "]]" * 20000 + "\n", "Systems/X.md": _S21_HEAD})
+    t0 = _t.monotonic()
+    m._doctor_revisit_ref_lines(e)
+    check("⑦一行兩萬個 [[ 不回溯成平方(5 秒內)", _t.monotonic() - t0 < 5, f"{_t.monotonic() - t0:.1f}s")
 
 
 def t_doctor_s20_prose_retire_manual():

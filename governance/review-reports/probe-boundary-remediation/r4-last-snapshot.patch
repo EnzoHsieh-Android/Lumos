@@ -1,0 +1,235 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md b/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
+index 34c57489..78a3b4ca 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
++++ b/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
+@@ -21,10 +21,12 @@ related:
+ # 探針健康檢查不可判資料仍被重用
+ 
+ 第三輪凍結差異 `governance/review-reports/probe-boundary-remediation/r3-snapshot.patch` 有兩條未處置重大發現，完整席報告 `r3-correctness.md`、`r3-boundary.md`，編排者重現結果 `r3-reproduction.json`，機械判定 `r3-gate.txt`。本 Issue 同時記這兩條相連的資料有效性缺口；`code-probe-boundary-remediation` 第三輪 FAIL，不得用前兩輪 PASS 或251項綠測試替代。
+ 
+ 1. 模型 runner 若在執行後、解析時拋例外，流程跳過這一場的 `global_skills_health()`；臨時 repo 的 a 題拋錯且健康檢查回報壞連結時，b runner 仍先被呼叫。當場健康檢查必須在下一題前完成，無論 runner 是否正常回傳；損壞或無法檢查即停批、fatal/inconclusive、退出3。
+ 2. 最終健康檢查拋例外時，探針雖回3並標整批 fatal/inconclusive，逐場仍是 `reason=ok`、有效分母2；消融讀取器 `is_valid` 接受兩列、`needed(a)=0`、`collect_skills_health=[]`，會把不可判資料合併且不補跑。修法要讓結果檔本身足以讓所有既有消費端排除或拒收整批，不能只靠呼叫端看退出碼。驗收需用真 `load_results`、`needed`、`merge` 與 `collect_skills_health` 跑紅綠，不只看探針 JSON 的 `fatal` 欄。
+ 
+ 處置上限：本案代碼審已跑三輪（r1九條折入、r2兩條折入、r3兩條 major 未處置）；原 r3 FAIL 卷證保留。使用者於 2026-10-04 明示「開第四」，只授權本儀器修補例外 r4。新反例 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 先紅後綠，並實跑真消融消費端；第四輪新席與處置閘完成前仍維持 open，本案驗證節點仍是 pending，不將局部修補當作審查通過。
+ 
+ 第四輪邊界席續抓三項 major：舊事故檔只有 `skills_health_bad` 或逐場 `fatal` 時仍被讀為有效；已有失效檔先補跑才掃描；新工作缺檔／半檔但 rc1 仍繼續派工。三條實路徑反例見 [[Verification/2026-10-04_探針隔離與清理收斂]] 及 `governance/review-reports/probe-boundary-remediation/r4-boundary.md`，修前5項失敗。修補差異仍待新席驗收，本 Issue 在閘過前不關閉。
++
++同輪續驗又新增兩項 major：語法正確但缺整批健康欄位的 live 輸出仍被收作普通結果；完全缺檔的 live stop 訊號在頂層被重掃覆蓋，summary 空事故且 rc0。反例在首修版3項翻紅，兩份原報告及修補證據見上述 Verification 的第四輪段落。第五個新工作樣本尚未開始；此處仍是儀器修補，不算試行改善率。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md b/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
+index 1767867a..59f3591b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
+@@ -73,10 +73,12 @@ Claude 的 `tool_use.id` 和 `tool_result.tool_use_id` 均要求非空字串；
+ 
+ r1（2026-10-04，五主席加一架構席）：內部原報告共15條、blocking 14；另有外家唯讀否決席原稿（格式未進帳）。相同 `--keep` 發現去重。三個外逸反例由編排者在臨時 Git repo 複現：filter.clean 在快照時寫出、切分支後 include 恢復 remote/hook、絕對符號連結寫回來源。改為白名單 Git 設定、拒絕外指連結與所有子模組形狀、凍結批次基線、明訂 `--keep`／歷史版號／失敗語意。卷證見 governance/review-reports/探針隔離與清理收斂/。
+ 
+ 實作代碼審首輪另在 `governance/review-reports/probe-boundary-remediation/` 保存凍結差異與四席報告，報10條、去重9組。兩組巢狀Git形狀（`.GIT` 與 bare repo）、父環境 `GIT_TRACE` 寫來源、未保留假身分、混合題序 `--keep` 留零份、重試時間漏逐場、故障注入測試漏清暫存，以及舊讀碼 helper 成第二套生命週期都已折回反例。修後 `probe_` 為243項通過、0失敗，仍待後輪審差異。編排者把首輪四席都誤記成處置載體，`loop status --disposal` 明確拒絕；兩本錯帳 `probe-boundary-remediation`（四席誤都掛處置）及 `probe-boundary-remediation-ledger2`（名稱未帶 code- 前綴，會被當設計審）保留作失敗操作紀錄；正式更正帳用 `code-probe-boundary-remediation`，仍引用同一首輪報告與凍結 hash，不重派首輪、不把它算新樣本或新增審查輪。這是記帳更正，非原試行 `code-repair-pilot-01` 的第五輪。
+ 
+ 第二輪代碼審在 730b06fe 凍結的 558 行修補差異中，正確性席報兩項 blocking、架構席 clean：主 Git 資料的 `worktrees/*/gitdir` 文字外指可讓模型把真 linked worktree 指回副本；`GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過副本假身分，單讀 `git config user.*` 的測試是假綠。新增 `t_probe_boundary_review2_linked_worktree` 與 `t_probe_boundary_review2_effective_identity`，前者前置證明真 linked 指標存在、後者驗快照與後續模型提交的實際作者；舊碼均翻紅，修法是拒絕主 Git `worktrees/` 資料、清洗模型及儀器共同環境。編排者另在非席位重現中發現全域 skills 健康檢查讀取拋錯會被當普通題失敗、繼續後題，最終檢查拋錯甚至寫不出 JSON；`t_probe_boundary_review2_health_unreadable` 紅綠後改成兩處都 fatal、停批或保留不可判紀錄。這三條不追加到原第1案四輪；第二輪與第三輪僅屬樣本外儀器修補。卷證在同一審查目錄的 `r2-*`；本案尚待第三輪檢查修補差異。
+ 
+ 第三輪凍結 730b06fe..cfe7a703 的235行修補差異後，三席報兩項新的 major blocking、架構席 clean。runner 在模型後拋錯會跳過當場 skills 健康檢查，仍先跑下一題；最終健康檢查拋錯雖 rc3 且 JSON 標 fatal/inconclusive，消融下游仍把兩場 `reason=ok` 的結果當有效樣本、`needed=0`。編排者於臨時 repo 逐項重現，`r3-reproduction.json` 可重算；r3 無折入或放行，`loop status --disposal` 顯示 FAIL，standard 三輪上限已到。後續問題見 [[Issues/探針健康檢查不可判資料仍被重用]]；原第1案四輪FAIL與本案三輪FAIL各自保留，不互相抵銷。
+ 
+ 使用者於 2026-10-04 明示「開第四」，僅對本儀器修補例外授權 r4，不重算原第1案或新增試行樣本。r4 先驗兩條第三輪缺口：runner 拋錯後仍在下一場前查健康；整批 fatal 結果檔在真消融 `load_results`、`needed`、`merge` 與失效掃描都不被重用。兩條反例舊碼均紅，首版修後 `probe_` 254 項、消融既有 23 項通過。第四輪首派三席中正確性 clean，架構對齊兩項 minor（MOC 新家入口及 verified_by，均折入），邊界席三項 major：舊 schema 只標 skills_health_bad 或逐場 fatal 的事故仍混算；舊失效檔在補跑後才掃；缺檔/半檔但 rc1 仍續派。三條實消費端反例修前5個斷言翻紅，修法統一整批失效判定、派工前掃舊檔、live 產物不可讀即停批，普通低有效場數的 inconclusive 仍可保留有效列。卷證 `probe-boundary-remediation/r4-*`；目前仍待修補差異的新席審與機械閘，不能宣告 r4 PASS。消融讀取器由新家 [[Systems/ablation-lumos-first]] 管理，探針本體仍由 [[Systems/codex-harness]] 管理。r4 判定前不可啟動剩餘四個新工作樣本的探針量測。
++
++第四輪內的原邊界席續驗又指出 live 結果雖語法完整卻缺三個健康欄位時仍會被當普通失敗；全新差異席指出完全缺檔時停止旗標到 `main` 末尾會遺失，summary 空事故且 rc0。兩條都是 major，新增反例在首修版3項翻紅，已補 live schema 核驗及停止狀態傳遞；此時仍須全新席掃最後差異，未過前本案狀態維持 doing、Issue open、Verification pending。前三輪原判定和本輪首派發現全部留在 `r4-intake.md`，不得用一次綠測試蓋掉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+index 6c6beab0..b14e0012 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
++++ b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+@@ -8,22 +8,25 @@ aliases: []
+ about_code:
+   - governance/eval/ablation_lumos_first.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/evals
+ summary: |-
+   WHY: 2026-10-04 第三輪代碼審證明探針整批 fatal 時仍可能保留逐場成功列；消融讀取端須再查整批有效性。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 與 r3-reproduction.json。
+   PITFALL: 只按逐場 reason 判有效會把健康不可判的批次計入統計且抵掉缺場。出處 [[Issues/探針健康檢查不可判資料仍被重用]]。[test:t_probe_boundary_review4_fatal_batch_not_reused]
+   PITFALL: 新頂層 fatal 不能涵蓋舊輸出只標 skills_health_bad 或逐場 fatal 的事故，且失效檔若在補跑後才掃會先啟動模型。出處 r4 邊界席 [[Verification/2026-10-04_探針隔離與清理收斂]]。[test:t_probe_boundary_review4_legacy_poison_not_reused]
++  PITFALL: 子程序缺檔／半檔時只停派仍不夠，末尾若只重掃磁碟會把無檔事故消掉；語法正確但缺健康欄位的本版 live 結果也不能證明健康。出處 r4 續驗與差異席 [[Verification/2026-10-04_探針隔離與清理收斂]]。[test:t_probe_boundary_review4_missing_output_main]
+ verified_by:
+   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+ ---
+ # ablation-lumos-first
+ 
+ 這篇是 `governance/eval/ablation_lumos_first.py` 的家，負責消融結果檔的有效性、缺場與合併判定。
+ 
+ 此篇管消融結果的「能不能拿來算」這道邊界。[[Systems/codex-harness]] 管探針如何產生與隔離樣本；兩邊都要守住整批失效的訊號，否則即使探針退出碼正確，重開消融或只做合併時仍可能吃到事故資料。
+ 
+ 第四輪修補採整檔排除：fatal 檔案保留原始逐場紀錄供事故分析，但不能抵掉缺場或進入統計；掃描失效檔時同時辨認全域連結損壞與未能完成健康／清理檢查的 fatal。沿用既有彙總欄位以免舊讀取器漏看，呈現文字改為「探針失效」，不把所有 fatal 都叫作 skills 連結損壞。若未來新增消費端，先以 [[Verification/2026-10-04_探針隔離與清理收斂]] 的致命批次反例驗證整批欄位有被讀到。
+ 
+ 第四輪邊界席又證出三種舊/壞資料入口：沒有頂層 fatal 的舊事故檔、事後才掃失效檔、模型程序留下缺檔或半檔但仍續派。處置是同一份整批失效判定供讀取、掃描與 live 派工共用；舊列只要明示 skills 損壞或逐場 fatal，就拒收整檔，普通因有效場不足的 inconclusive 不因此整批作廢。先掃舊檔才派模型；本輪產物不可讀或程序異常退出也停批。反例為 `t_probe_boundary_review4_legacy_poison_not_reused`、`t_probe_boundary_review4_existing_poison_stops_dispatch`、`t_probe_boundary_review4_partial_output_stops_batch`；若改結果 schema 或派工順序，從這三項重驗。
++
++原席續驗發現語法完整但缺健康欄的 live 檔可被當普通模型失敗，故同 checkout 的 producer/consumer 要求三個整批健康欄位及型別；歷史舊檔仍由 `invalid_batch_evidence` 做相容判定，不回頭強求新 schema。全新差異席另發現「完全缺檔」時 `run_job` 雖停派，`main` 的磁碟重掃卻把事故訊號洗掉；本輪停止旗標要傳到 summary/退出碼。兩條反例為 `t_probe_boundary_review4_partial_output_stops_batch` 的 schema 分支及 `t_probe_boundary_review4_missing_output_main`，均先紅後綠。下次改 live 結果的可採信條件，兩項要一起跑。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
+index c8389721..13d5d2c4 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
+@@ -53,10 +53,12 @@ plan_refs:
+ 
+ 圖譜已寫回計劃、系統隱患與 Issue；當時 `lumos lint` 觸及節點無錯，`lumos doctor` 為0 issues（601篇），另有23段共239條全圖提醒，不屬本案通過條件。原 `code-repair-pilot-01` 四輪FAIL仍有效，本案是樣本外儀器介入且第三輪FAIL；五案試行仍只占第1案，剩4個新工作未開始。不得用本次紅綠測試推論收斂率改善。
+ 
+ ## 使用者授權的例外第四輪：送審前驗證
+ 
+ 2026-10-04 使用者明示「開第四」，只增開本儀器修補的 r4，原第1案與本案前三輪判定均不回寫。兩條新測試先在舊碼翻紅：runner 拋錯後直接跑 b 題、當場健康檢查未執行；最終健康檢查無法完成時，真實消融讀取器仍收兩列、`needed(a)=0`、合併分母2、失效掃描空。紅燈原始輸出 `probe-boundary-remediation/r4-pre-fix-red.txt`。
+ 
+ 修後 `python3.14 scripts/test_lumos.py -k probe_boundary_review4` 為3項通過；全 `probe_` 子集254項通過，消融既有 `TestScenarioProbeAblation` 23項通過；`py_compile` 與 `git diff --check` 通過。輸出保存於 `probe-boundary-remediation/r4-postfix-*.txt`。實作於 [[Systems/codex-harness]] 與 [[Systems/ablation-lumos-first]]：模型執行器的例外路徑也先查健康；整批 fatal 檔案不得抵掉缺場或進統計，失效掃描應能辨認 health 結果不可判的 fatal。這些是本機臨時 Git repo 加 stub runner 測試，尚未代表真模型、網路或完整套件驗收。第四輪獨立審查與機械閘尚未結束，因此本篇仍為 pending，不能拿這段綠測試當放行。
+ 
+ 第四輪首派凍結差異 `r4-snapshot.patch` 742 行，SHA-256 `aba46af10824bc3bf4f9f1a49ed81c8971be92012aba4d63da5541e4f9b5eb42`。正確性席 clean；架構席兩項 minor 是新家的 MOC 入口與驗證反向連結，已補；邊界席三項 major 均經真消融讀取／派工函式重現，席原報告見 `r4-boundary.md`。舊格式的 `skills_health_bad` 或逐場 fatal 未被整檔排除、先補跑後掃已有失效檔、缺檔／半檔但 rc1 繼續派工，新增反例修前 4 項通過、5 項失敗，原始輸出 `r4-boundary-pre-fix-red.txt`。修補後舊事故檔與新 fatal 檔一律排除、派工前先查已有失效檔、結果不可讀立即停批；`python3.14 scripts/test_lumos.py -k probe_` 260項通過、消融既有測試23項通過，輸出 `r4-boundary-postfix-*.txt`；`py_compile`、`git diff --check` 通過。新增修補差異仍待全新席驗收，不能把首派的 clean 覆蓋邊界席三條 major。
++
++原邊界席只續驗自己三條，確認前兩條已折，第三條另抓到語法完整但缺三個健康欄的 live 檔仍被當有效；全新差異席看 369 行 `r4-postfix-snapshot.patch`，SHA-256 `945b76e6d22855514f5bd90dfcff1ff4531d66fbabfb1a26cf361978fb6a0d76`，另抓到完全缺檔時停止旗標在 `main` 末尾被磁碟重掃洗掉，summary 未標事故且 rc0。兩條均 major，原報告 `r4-boundary-recheck.md`、`r4-delta.md`；首修版新增反例 9 passed、3 failed，輸出 `r4-delta-pre-fix-red.txt`。修法要求 live 本版結果健康欄位具備正確型別，並讓停止旗標進最終 summary 與 rc3；定向修後12 passed，全 `probe_` 263 passed、消融既有23 passed，輸出 `r4-final-postfix-*.txt`；`py_compile` 與 `git diff --check` 通過。最後差異仍待新席審，故本篇狀態 pending。
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index fa40b44a..0d2bd05e 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -172,22 +172,26 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
+         cmd += ["--model", model]
+     t0 = time.time()
+     with open(log, "w", encoding="utf-8") as lf:
+         lf.write("$ " + " ".join(cmd) + "\n")
+         lf.flush()
+         r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+     bad_health = False
+     unreadable = False
+     try:
+         d = json.loads(out.read_text(encoding="utf-8"))
++        if not isinstance(d, dict):
++            raise ValueError("invalid probe output")
+         rows = d["results"]
+-        if not isinstance(d, dict) or not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows):
++        if (not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows)
++                or type(d.get("fatal")) is not bool or type(d.get("inconclusive")) is not bool
++                or not isinstance(d.get("skills_health_bad"), list)):
+             raise ValueError("invalid probe output")
+         got = sum(1 for x in rows if is_valid(x))
+         lim = sum(1 for x in rows if x.get("limit_hit"))
+         bad_health = bool(invalid_batch_evidence(d))
+     except Exception:
+         got, lim = 0, 0
+         unreadable = True
+     if r.returncode not in (0, 1) or bad_health or unreadable:
+         # 探針退出異常、結果檔不可讀或整批失效都設停止旗標，後續不再派工。
+         if stop is not None:
+@@ -311,44 +315,48 @@ def main():
+     try:
+         ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
+     except Exception:
+         ver = "?"
+     meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
+             "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
+             "started": datetime.datetime.now().isoformat(timespec="seconds")}
+     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
+     poisoned = collect_skills_health(out_dir)
++    live_failed = False
+     if not a.merge_only and not poisoned:
+         by_arm = load_results(out_dir)
+         jobs = []
+         for qid in ids:                       # 逐題、兩組交錯:中途被殺兩組進度也對稱
+             for arm in a.arms.split(","):
+                 n = needed(by_arm, arm, qid, a.runs)
+                 if n:
+                     jobs.append((arm, qid, n))
+         total = sum(n for _, _, n in jobs)
+         print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
+               f"{len(jobs)} 個工作,{a.workers} 路平行,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
+         import threading
+         stop = threading.Event()          # 任一工作偵測到全域 skills 事故就 set,其餘工作看到就不派(r1 併發席 F1)
+         with ThreadPoolExecutor(max_workers=a.workers) as ex:
+             futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model,
+                               a.max_per_window, stop)
+                     for arm, qid, n in jobs]
+             for f in futs:
+                 arm, qid, st = f.result()
+                 print(f"  {arm} {qid}: {st}", flush=True)
++        live_failed = stop.is_set()
+     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
+     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
+     # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
+     poisoned = collect_skills_health(out_dir)
++    if live_failed and not poisoned:
++        poisoned = [("本次派工", ["探針程序失效且沒有可採信的結果檔"])]
+     s = merge(out_dir, ids, a.runs)
+     s["skills_health_poisoned"] = poisoned
+     if poisoned:
+         print("\n" + "!" * 60)
+         print(f"✗ 偵測到 {len(poisoned)} 個探針失效結果檔——本次資料不可採信。", flush=True)
+         print("  檢查結果檔與探針日誌；若 skills 連結損壞，在真 repo 執行 python3 scripts/lumos install --force。")
+         print("  summary 仍產出，但失效檔不參與統計，並已標 skills_health_poisoned。")
+         print("!" * 60)
+     (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
+     md = render_md(s, meta)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9947e877..dcadf698 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37607,36 +37607,64 @@ def t_probe_boundary_review4_existing_poison_stops_dispatch():
+               (runner.call_count, rc, summary))
+ 
+ 
+ def t_probe_boundary_review4_partial_output_stops_batch():
+     import tempfile, json, threading, importlib.util
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_r4_partial", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-partial-") as td:
+-        for shape in ("missing", "partial", "valid"):
++        for shape in ("missing", "partial", "schema_missing", "schema_bad", "valid"):
+             outdir = Path(td) / shape; outdir.mkdir(); stop = threading.Event()
+             def run(cmd, **_kwargs):
+                 out = Path(cmd[cmd.index("--out") + 1])
+                 if shape == "partial":
+                     out.write_text('{"results": [')
+-                elif shape == "valid":
+-                    out.write_text(json.dumps({"arm": "with", "results": [
+-                        {"id": "a", "passed": False, "reason": "ordinary failure"}]}))
++                elif shape in ("schema_missing", "schema_bad", "valid"):
++                    data = {"arm": "with", "results": [{"id": "a", "passed": False,
++                                                          "reason": "ordinary failure"}]}
++                    if shape == "valid":
++                        data.update({"fatal": False, "inconclusive": False, "skills_health_bad": []})
++                    elif shape == "schema_bad":
++                        data.update({"fatal": "", "inconclusive": "", "skills_health_bad": 0})
++                    out.write_text(json.dumps(data))
+                 return type("Done", (), {"returncode": 1})()
+             with patch.object(ablation.subprocess, "run", side_effect=run):
+                 status = ablation.run_job("with", "a", 1, [], 1, 1, outdir, 0, stop=stop)[2]
+             check("r4 缺檔半檔停批但有效失敗可續 " + shape,
+                   stop.is_set() is (shape != "valid"), (shape, status, stop.is_set()))
+ 
+ 
++def t_probe_boundary_review4_missing_output_main():
++    import tempfile, json, io, contextlib, importlib.util
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_r4_missing_main", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-missing-main-") as td:
++        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
++        outdir = root / "out"
++        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
++                "--arms", "with", "--out-dir", str(outdir)]
++        calls = []
++        def run(cmd, **_kwargs):
++            calls.append(cmd)
++            return type("Done", (), {"returncode": 1, "stdout": "stub"})()
++        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
++             contextlib.redirect_stdout(io.StringIO()):
++            rc = ablation.main()
++        summary = json.loads((outdir / "summary.json").read_text())
++        check("r4 live缺檔要讓頂層與summary一起失效", len(calls) == 2 and rc == 3
++              and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
++
++
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)

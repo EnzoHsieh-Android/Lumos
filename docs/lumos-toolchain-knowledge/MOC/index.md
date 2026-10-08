@@ -76,6 +76,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 
 研究題:怎麼量這些機制到底有沒有用
 
+- [[Systems/ablation-lumos-first]] — 消融結果檔的整批有效性、缺場與合併邊界。
 - [[Systems/review-convergence-eval]]
 - [[Systems/drift-history]]
 - [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。

@@ -1,0 +1,267 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/測試綁定一行一支提醒_計劃.md b/docs/lumos-toolchain-knowledge/Projects/測試綁定一行一支提醒_計劃.md
+index f3fea3edcc9ff0ba05e581aa6e7c6a2f38331dbb..4bc9e7badfcacd7fe8d136524a158cebea9fb8fb 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/測試綁定一行一支提醒_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/測試綁定一行一支提醒_計劃.md
+@@ -32,23 +32,23 @@ RETIRE-IF: 上線滿 8 週,從 hinted 帳(check=wording、rules 含 binding)抽
+ REVISIT:2026-12-07 數 hinted 帳裡 rules 含 binding 的筆數並抽 20 筆對回提交,照 RETIRE-IF 判
+ 
+ ## 範圍
+ 
+ - **做**:新寫句子寫法提醒多一條規則「綁定」;hinted 帳的 rules 多一個值 binding;手冊 `skills/lumos-project-notes/commands/03-寫回圖譜.md` 那一列補半句。
+ - **不做**:擋;新語法;判斷那支測試到底有沒有在守(那是 guard kill 的事);舊行不回頭提醒;`[test-gone:]` 不看(那是已經不在的測試)。
+ 
+ ## 做法
+ 
+ 1. **哪些行**:跟數量、位置兩條同一批——body 與 summary 區塊、圍欄外看得見、不是 REVISIT 的新行;舊行原封不動只在句尾補括號時只看補上的那段。
+-2. **怎麼數**:成對引號裡的字遮掉(同另外兩條規則的引號出口),再用 `slot_parse` 解出整行所有 `[test:]` 欄位、`_test_names_of` 切名稱;去重後兩支以上就提醒一次。佔位名稱(`_ns_tr_placeholder` 認的)不算。一行裡寫兩個 `[test:]` 各一支也算一行綁兩支。
+-3. **優先序**:同一行只提醒一處,數量、位置、綁定照這個順序取第一個命中的(數量與位置是指錯的風險,綁定是寫法)。
+-4. **印出**:每處一行「路徑:行號 [綁定] 片段」,下面一行「→ 這行綁了 N 支(名稱…):拆成一支一行,每行寫那支測試守的是哪一點」;記帳 rules 多 binding。
++2. **怎麼數**:原文只把成對引號裡的字遮掉(同另外兩條規則的引號出口),再用 `slot_parse` 解出整行所有 `[test:]` 欄位、`_test_names_of` 切名稱——跟 note-shape 的 test_refs 與 S20 同一套:鍵名不分大小寫、冒號收全形、行內程式碼裡的範例不算、反引號包住的名稱照認(代碼審 r1:原本先找字面 `[test:` 又餵遮掉行內程式碼的文字,這幾種全漏或變亂碼);去重後兩支以上就提醒一次。佔位名稱(`_ns_tr_placeholder` 認的)不算。一行裡寫兩個 `[test:]` 各一支也算一行綁兩支。
++3. **同一行**:數量與位置照順序取第一個;綁定另外看,同一行可以兩則都出(代碼審 r1:原本同一行只出一則,數量先命中就把綁定吞掉,修完數量那行變舊行、綁定永遠不再提醒)。帳本的 lines 數不重複的行。
++4. **印出**:每處一行「路徑:行號 [綁定] 片段」,下面一行「→ 這行綁了 N 支(名稱…):拆成一支一行,每行寫那支測試守的是哪一點」,名稱最多列 5 支、其餘講總數;記帳 rules 多 binding。
+ 
+ ## 實務隱患
+ 
+ - **效能**:每行多一次 `slot_parse`,只對含 `[test:` 字樣的新行做;不讀程式檔。
+ - **相容**:同一個開關 note_shape.wording;關掉的專案三條一起關。hinted 帳 rules 多一個值,讀帳端只數。
+ - **回滾**:還原本案提交。
+ - 已排除:金流:只讀筆記
+ - 已排除:對外送出:不呼叫網路
+ - 已排除:不可逆:只印提醒、追加一筆帳
+ - 已排除:守衛面:不碰任何擋的判定與回傳碼
+diff --git a/scripts/lumos b/scripts/lumos
+index 8ae509bf45ee74e99229186dedb0f0493c62fd5e..b5af394963c8f5952bfc21278d36a5bb6d19e7a4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -31469,72 +31469,82 @@ def _ns_wd_count_hit(box, files, reader, line, masked, cut):
+         segnames = [(p, nm) for at, p, nm in names if a <= at < b]
+         for pos, n in (_ns_wd_numbers(masked, a, b, cut) if segnames else ()):
+             for p, name in segnames:
+                 r = _ns_wd_resolve(box, files, reader, p, name, n)
+                 if r is not None:
+                     return pos, f"[count:{r}::{name}={n}]"
+     return None
+ 
+ 
+ def _ns_wd_line_hit(box, files, reader, ln, seen, masked, cut):
+-    """一行 → (原行裡的位置, count|position|binding, 要貼的標記或名稱清單或 None) 或 None;照數量、位置、綁定的順序取第一個,
+-    只認起點在 cut 之後的命中。
++    """一行 → [(原行裡的位置, count|position|binding, 要貼的標記或說明字串或 None)],只認起點在 cut 之後的命中。
++    數量與位置照順序取第一個(都是「之後會指錯」);綁定是另一件事,另外看,同一行可以兩則都出(代碼審 r1 正確性席:
++    原本同一行只出一則,數量先命中就把綁定吞掉,修完數量那行變舊行、綁定永遠不再提醒)。
+     成對引號裡的字不看(只是在提這種寫法;同否定現況句提醒的 _ns_neg_quote_spans),所以引號也是誤報的出口。"""
+     quotes = _ns_neg_quote_spans(masked)
+     masked = _inline_blank(masked, quotes)
++    out = []
+     if "[count:" not in seen and "lumos:count" not in seen and not box["py_capped"]:
+         fields = re.sub(r"\[[^\]]*\]", lambda b: "\0" * len(b.group(0)), masked)
+         c = _ns_wd_count_hit(box, files, reader, ln, fields, cut)
+         if c is not None:
+-            return c[0], "count", c[1]
+-    for a, b in _ns_wd_paren_groups(masked):
+-        g = masked[a:b]
+-        if a >= cut and _NS_WD_FIX_RE.match(g):
+-            m = _NS_WD_POS_RE.search(g)
+-            if m:
+-                return a + m.start(), "position", None
+-    return _ns_wd_binding_hit(masked, cut)
++            out.append((c[0], "count", c[1]))
++    if not out:
++        for a, b in _ns_wd_paren_groups(masked):
++            g = masked[a:b]
++            if a >= cut and _NS_WD_FIX_RE.match(g):
++                m = _NS_WD_POS_RE.search(g)
++                if m:
++                    out.append((a + m.start(), "position", None))
++                    break
++    bh = _ns_wd_binding_hit(_inline_blank(ln, quotes), cut)
++    return out + ([bh] if bh is not None else [])
+ 
+ 
+-def _ns_wd_binding_hit(masked, cut):
+-    """綁定規則(Projects/測試綁定一行一支提醒_計劃)→ (位置, "binding", 名稱清單) 或 None:這一行(cut 之後、行內程式碼與
+-    引號已遮掉)所有 [test:] 去重後兩支以上。名稱切法用 note-shape 與 S20 共用的 _test_names_of,佔位名稱不算。"""
+-    tail = masked[cut:]
+-    at = tail.find("[test:")
+-    if at < 0:
+-        return None
+-    names, _empty = _test_names_of(slot_parse(tail))
++_NS_WD_BINDING_SHOW = 5        # 綁定提醒最多列幾支名稱,其餘講總數
++
++
++def _ns_wd_binding_hit(raw, cut):
++    """綁定規則(Projects/測試綁定一行一支提醒_計劃)→ (位置, "binding", 說明字串) 或 None:這一行 cut 之後所有 [test:]
++    去重後兩支以上。★吃原文(只遮掉引號)★,名稱切法照 note-shape 的 test_refs 與 S20 共用的 slot_parse + _test_names_of:
++    鍵名不分大小寫、冒號收全形、行內程式碼裡的範例不算、反引號包住的名稱照認(代碼審 r1:原本先找字面 [test: 又餵遮掉行內
++    程式碼的文字,大小寫與全形冒號整條漏掉、反引號名稱變成看不見的字)。佔位名稱不算。"""
++    sp = slot_parse(raw[cut:])
++    names, _empty = _test_names_of(sp)
+     uniq = list(dict.fromkeys(nm for nm in names if nm and not _ns_tr_placeholder(nm)))
+-    return (cut + at, "binding", uniq) if len(uniq) >= 2 else None
++    if len(uniq) < 2:
++        return None
++    shown = "、".join(uniq[:_NS_WD_BINDING_SHOW]) + (f"…等共 {len(uniq)} 支" if len(uniq) > _NS_WD_BINDING_SHOW else "")
++    at = re.search(r"\[\s*test\s*[:：]", raw[cut:], re.I)
++    return cut + (at.start() if at else 0), "binding", f"這行綁了 {len(uniq)} 支({shown})"
+ 
+ 
+ def _ns_wording_hints(path, text, rows, pairs, files, reader, box):
+-    """一篇 → [(路徑, 行號, 規則 count|position|binding, 片段, 要貼的標記、名稱清單或 None)];一行至多一筆(數量、位置、綁定的順序)。
++    """一篇 → [(路徑, 行號, 規則 count|position|binding, 片段, 要貼的標記、說明字串或 None)];一行至多兩筆(數量或位置一筆、綁定一筆)。
+     只看 body/summary、圍欄外、不是 REVISIT 的新行;舊行只在句尾補括號時只看補上的那段(_NotelinesPairs)。"""
+     vis_nos = {no for no, _l in _visible_lines(text.split("\n"))}
+     out = []
+     for i, ln, reg in rows:
+         if reg not in ("body", "summary") or i not in vis_nos:
+             continue
+         seen = _strip_inline_markup(ln)[0]
+         if not seen.strip() or _revisit_split(seen)[0] is not None:
+             continue
+         masked = _inline_visible_mask(ln)
+-        hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
+-        if hit is not None and pairs is not None:
++        hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, 0)
++        if hits and pairs is not None:
+             # 有命中才查配對表(同否定現況句提醒:配對要跑 git,沒命中的行不付這筆)
+             o = (pairs.table().get(nfc(path)) or {}).get(i)
+             if o is not None and o.rstrip() and ln.rstrip().startswith(o.rstrip()):
+-                hit = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
+-        if hit is not None:
+-            lead = len(ln) - len(ln.lstrip())
+-            out.append((path, i, hit[1], _ns_negation_snippet(ln.strip(), max(0, hit[0] - lead)), hit[2]))
++                hits = _ns_wd_line_hit(box, files, reader, ln, seen, masked, len(o.rstrip()))
++        lead = len(ln) - len(ln.lstrip())
++        out += [(path, i, h[1], _ns_negation_snippet(ln.strip(), max(0, h[0] - lead)), h[2]) for h in hits]
+     return out
+ 
+ 
+ def _ns_wording_collect(box, p, text, rows, pairs, files, reader):
+     """_note_shape_eval 逐篇呼叫:box 是 None 或已經失敗就不算;丟例外就清空、記類別名,這次提交不再算。"""
+     if box is None or box.get("error") is not None:
+         return
+     try:
+         box["seen"] = box.get("seen", 0) + sum(1 for _i, _l, r in rows if r in ("body", "summary"))
+         box["items"].extend(_ns_wording_hints(p, text, rows, pairs, files, reader, box))
+@@ -31563,29 +31573,29 @@ def _ns_wording_emit(root, items, capped, fail):
+     try:
+         if capped:
+             print(f"提醒:新寫句子的數量提醒這次沒跑完({capped}),後面的行不再看數量;位置提醒照常", file=sys.stderr)
+         if not items:
+             return
+         word = {"count": "數量", "position": "位置", "binding": "綁定"}
+         out = [f"提醒:這次提交新寫的句子有 {len(items)} 處之後容易過期或指錯(note_shape.wording=warn,不擋):"]
+         for p, n, rule, frag, tag in items:
+             out.append(f"  {p}:{n}  [{word[rule]}] {frag}")
+             out.append(f"      → 掛上 {tag},清單改了 lumos drift scan 會列出來" if rule == "count" else
+-                       f"      → 這行綁了 {len(tag)} 支({'、'.join(tag)}):拆成一支一行,每行寫那支測試守的是哪一點"
++                       f"      → {tag}:拆成一支一行,每行寫那支測試守的是哪一點"
+                        if rule == "binding" else
+                        "      → 改成引那一項的名稱或開頭幾個字(清單增刪一項後「第 N 項」會指到別的)")
+         out.append("不是在數那個清單、不是在指清單裡的項目、或那幾支測試確實守同一件事,就不用理;這次提交之後這幾行不會再提醒。"
+                    "關掉這個提醒:.lumos/config.json 的 note_shape.wording 設成 off")
+         print("\n".join(out), file=sys.stderr)
+         rules = sorted({x[2] for x in items})
+         _gate_event_or_warn(root, "note-shape", "hinted", f"這次提交:新寫句子寫法提醒 {len(items)} 處",
+-                            extra={"check": "wording", "rules": rules, "lines": len(items),
++                            extra={"check": "wording", "rules": rules, "lines": len({(x[0], x[1]) for x in items}),
+                                    "notes": len({x[0] for x in items})})
+     except Exception as e:
+         print(f"提醒:新寫句子寫法提醒這次沒跑完({e.__class__.__name__}),不影響這道檢查的判定", file=sys.stderr)
+ 
+ 
+ def _ns_wording_doctor_lines(cfg_text):
+     """doctor 的一行:note_shape.wording 是 off 或寫了看不懂的值才講(照前綴提醒的先例)。"""
+     try:
+         r = _note_shape_wording_parse(cfg_text)
+     except Exception:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 56411f94e2658a2ee7f2b91e51abdf0b8c91643b..d85a1bc4c8199c2fd8f101634899cb21d50e9708 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -32699,49 +32699,86 @@ def t_note_wording_binding_hint():
+     check("②兩個 [test:] 各一支也算", any("乙句" in h for h in hits), "\n".join(hits) or out[-800:])
+     check("③只提醒:rc0", rc == 0, out[-300:])
+     root = _wd_repo()
+     _ns_note(root, summary="KEY:x\nWHY:摘要句 [出處:a] [因:b] [test:t_a,t_b]")
+     _nh_node(root, "P", typ="project", folder="Projects", body="## 驗收條款\n\n- [S1] 當甲 應 乙 [test:t_c,t_d]")
+     _ns_stage(root)
+     _rc, out = _ns(root)
+     hits = _wd_hint_lines(out, "綁定")
+     check("④摘要行與計劃條款也看", any("摘要句" in h for h in hits) and any("Projects/P.md" in h for h in hits),
+           "\n".join(hits) or out[-800:])
++    # ⑤–⑨ 代碼審 r1:名稱照 note-shape 與 S20 的切法從原文取(大小寫、全形冒號、反引號名稱);名稱多時只列前幾支;
++    # 同一行數量先命中時綁定照樣提醒
++    root = _wd_repo()
++    _ns_note(root, body="\n".join([
++        "丙句 [Test:t_c1,t_c2]",
++        "丁句 [test：t_d1,t_d2]",
++        "戊句 [test:`k a`,`k b`]",
++        "己句 [test:" + ",".join(f"t_m{i}" for i in range(12)) + "]",
++        "庚句 `KINDS` 有三種 [test:t_g1,t_g2]",
++    ]))
++    _ns_stage(root)
++    _rc, out = _ns(root)
++    hits = _wd_hint_lines(out, "綁定")
++    check("⑤大小寫與全形冒號的寫法也認", any("丙句" in h for h in hits) and any("丁句" in h for h in hits),
++          "\n".join(hits) or out[-800:])
++    check("⑥反引號包住的名稱照原樣印出", "k a、k b" in out and "\x00" not in out, out[-800:])
++    check("⑦名稱多時只列前幾支並講總數", "共 12 支" in out and "t_m11" not in out, out[-800:])
++    check("⑧同一行數量先命中,綁定照樣提醒", any("庚句" in h for h in hits) and any("庚句" in h for h in _wd_hint_lines(out, "數量")),
++          out[-1200:])
+     print("  ✓ t_note_wording_binding_hint")
+ 
+ 
+ def t_note_wording_binding_quiet():
+     """[S2] 一行一支、同一支寫兩次、只有 [test-gone:]、寫在行內程式碼或引號裡、圍欄、REVISIT 行、舊行尾補不含綁定的括號
+     → 不出綁定提醒;同一次提交放一句該提醒的當對照。翻紅釘:不去重 → B 紅;不遮引號 → E 紅;不看句尾補括號 → G 紅。"""
+     root = _wd_repo()
+     _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2]")
+     _nh_commit(root, "old")
+     cases = {
+         "A": "只綁一支 [test:t_one]",
+         "B": "同一支寫兩次 [test:t_one] 又 [test:t_one]",
+         "C": "只有消失的 [test-gone:t_x,t_y]",
+         "D": "範例寫在程式碼裡 `[test:t_x,t_y]`",
+         "E": "範例寫在引號裡「[test:t_x,t_y]」",
+         "F": "```\n圍欄裡 [test:t_x,t_y]\n```",
+         "H": "REVISIT:2026-12-01 到期再看 [test:t_x,t_y]",
++        "I": "反引號包一支、另一支沒包,其實是同一支 [test:`t_one`,t_one]",
+     }
+     for name, body in cases.items():
+         _nh_node(root, name, body=body)
+     _nh_node(root, "G", body="舊句綁了兩支,寫好很久了 [test:t_g1,t_g2](更正:見新說明)")
+     _nh_node(root, "Z", body="對照組 [test:t_z1,t_z2]")
+     _ns_stage(root)
+     _rc, out = _ns(root)
+     hits = _wd_hint_lines(out, "綁定")
+     check("只有對照組那一句提醒,其餘全部不提醒", len(hits) == 1 and "Systems/Z.md" in hits[0], "\n".join(hits) or out[-800:])
+     print("  ✓ t_note_wording_binding_quiet")
+ 
+ 
++def t_note_wording_binding_isolated():
++    """綁定規則丟例外:只印一句沒跑完、回傳碼與否定現況句、前綴提醒照常(代碼審 r1 正確性席)。
++    翻紅釘:綁定規則移到 _ns_wording_collect 的 try 外面 → 替身直接炸出測試。"""
++    def _boom(*a, **k):
++        raise RuntimeError("boom")
++    for with_viol, want_rc in ((False, 0), (True, 1)):
++        root = _wd_repo()
++        _ns_note(root, summary="KEY:x\nRULE:大額退費要人工核可",
++                 body=("新寫 `src/a.py:5`\n" if with_viol else "") + "前端頁面還沒做\n甲句 [test:t_a,t_b]")
++        _ns_stage(root)
++        rc, out = _neg_inproc(root, _ns_wd_binding_hit=_boom)
++        check(f"綁定規則丟例外({'有' if with_viol else '沒有'}違規):只印沒跑完、rc{want_rc}、另兩組提醒照常",
++              rc == want_rc and "新寫句子寫法提醒這次沒跑完(RuntimeError)" in out and _WD_HEAD not in out
++              and _NEG_HEAD in out and _TAG_HEAD in out, out[-800:])
++    print("  ✓ t_note_wording_binding_isolated")
++
++
+ def t_note_wording_binding_ledger():
+     """[S3] 有綁定提醒時 hinted 帳的 rules 含 binding;note_shape.wording=off 時不出。翻紅釘:rules 漏 binding → ①紅。"""
+     root = _wd_repo()
+     _ns_note(root, body="甲句 [test:t_a,t_b]")
+     _ns_stage(root)
+     _ns(root)
+     ev = [e for e in _neg_events(root, "hinted") if e.get("check") == "wording"]
+     check("①hinted 帳 rules 含 binding", len(ev) == 1 and ev[0].get("rules") == ["binding"], str(ev))
+     root = _wd_repo(cfg={"note_shape": {"wording": "off"}})
+     _ns_note(root, body="甲句 [test:t_a,t_b]")
