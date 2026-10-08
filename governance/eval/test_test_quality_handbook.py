@@ -194,6 +194,44 @@ class ModelCommandTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_exited_model_with_stream_holding_worker_is_not_timeout(self):
+        fake = self.root / "claude"
+        fake.write_text(
+            "#!" + sys.executable + "\nimport subprocess,sys,time\n"
+            "p=subprocess.Popen([sys.executable,'-c',"
+            "'import time; print(\"worker-holds-stream\",flush=True); time.sleep(60)'])\n"
+            "time.sleep(0.3)\nprint('model-done',p.pid,flush=True)\n"
+        )
+        fake.chmod(0o755)
+        started = time.monotonic()
+        result = ev.model_command([str(fake)], self.root, 5)
+        self.assertLess(time.monotonic() - started, 3, "exited model is not a timeout")
+        self.assertEqual(result.returncode, 0)
+        words = result.stdout.split()
+        self.assertIn("worker-holds-stream", words, "worker really shared the model stream")
+        pid = int(words[words.index("model-done") + 1])
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_model_timeout_keeps_partial_stream(self):
+        fake = self.root / "claude"
+        fake.write_text(
+            "#!" + sys.executable + "\nimport time\n"
+            "print('{\"type\":\"system\",\"subtype\":\"init\"}',flush=True)\ntime.sleep(60)\n"
+        )
+        fake.chmod(0o755)
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            ev.model_command([str(fake)], self.root, 1)
+        partial = caught.exception.stdout
+        partial = partial.decode() if isinstance(partial, bytes) else partial
+        self.assertIn('"subtype":"init"', partial)
 
 
 if __name__ == '__main__':

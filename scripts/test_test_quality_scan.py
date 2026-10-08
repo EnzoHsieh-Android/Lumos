@@ -4,6 +4,7 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,11 +28,7 @@ class ScanTests(unittest.TestCase):
         loader = SourceFileLoader('test_quality_semgrep_control', str(SEMGREP_TOOL))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)
-        sys.path.insert(0, str(SEMGREP_TOOL.parent))
-        try:
-            loader.exec_module(module)
-        finally:
-            sys.path.pop(0)
+        loader.exec_module(module)
         return module
 
     def scan(self, source, implementation=None, suffix='.py', check_helper=None):
@@ -237,6 +234,119 @@ class ScanTests(unittest.TestCase):
             self.assertFalse(out['complete'])
             self.assertEqual(out['inputs'][0]['status'], 'unavailable')
             self.assertIn('invalid finding location', out['inputs'][0]['reason'])
+
+    @staticmethod
+    def stream_holding_semgrep(root, mode):
+        record = root / 'calls.jsonl'
+        fake = root / 'semgrep'
+        fake.write_text(
+            '#!' + sys.executable + '\n'
+            'import json,os,subprocess,sys,time\nfrom pathlib import Path\n'
+            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\n"
+            'with open(' + repr(str(record)) + ",'a') as f:\n"
+            "    f.write(json.dumps({'pid':p.pid,'cwd_has_rules':Path('rules.json').is_file(),"
+            "'metrics':os.environ.get('SEMGREP_SEND_METRICS')})+'\\n')\n"
+            'if ' + repr(mode) + " == 'hang':\n    time.sleep(60)\n"
+            "source=sys.argv[-1]\nprint(json.dumps({'results':[],'errors':[],"
+            "'paths':{'scanned':[source]},'version':'fixture'}),flush=True)\n"
+            'sys.exit(3 if ' + repr(mode) + " == 'nonzero' else 0)\n"
+        )
+        fake.chmod(0o700)
+        return fake, record
+
+    def calls(self, record):
+        rows = [json.loads(line) for line in record.read_text().splitlines()]
+        for row in rows:
+            self.addCleanup(lambda pid=row['pid']: os.kill(pid, 9) if self.alive(pid) else None)
+        return rows
+
+    def assert_stopped(self, pid):
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX process group qualification')
+    def test_semgrep_backend_outcomes_stop_stream_holding_worker(self):
+        cases = [('success', 'scanned', None), ('nonzero', 'error', 3), ('hang', 'timeout', None)]
+        for mode, status, returncode in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                source = root / 'Test.swift'
+                source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+                fake, record = self.stream_holding_semgrep(root, mode)
+                module = self.semgrep_module()
+                module.BACKEND_TIMEOUT = 2
+                started = time.monotonic()
+                entry, _ = module.scan(source, 'swift', str(fake))
+                [call] = self.calls(record)
+                self.assertTrue(call['cwd_has_rules'], 'backend ran inside the isolated rules directory')
+                self.assertEqual(call['metrics'], 'off')
+                self.assertEqual(entry['status'], status, entry)
+                self.assertEqual(entry.get('returncode'), returncode)
+                limit = 6 if mode == 'hang' else 1.5
+                self.assertLess(time.monotonic() - started, limit, 'exit is classified by the launcher, timeout by its budget')
+                self.assert_stopped(call['pid'])
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX process group qualification')
+    def test_sigterm_during_semgrep_stops_scan_and_backend(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sources = [root / 'A.swift', root / 'B.swift']
+            for source in sources:
+                source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+            fake, record = self.stream_holding_semgrep(root, 'hang')
+            process = subprocess.Popen(
+                [sys.executable, str(TOOL), *map(str, sources), '--json', '--semgrep', str(fake)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+            deadline = time.monotonic() + 10
+            while not record.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(record.exists(), 'first backend really started before the signal')
+            process.send_signal(signal.SIGTERM)
+            process.communicate(timeout=5)
+            self.assertNotEqual(process.returncode, 0)
+            [call] = self.calls(record)
+            self.assert_stopped(call['pid'])
+
+    def test_semgrep_report_over_evidence_limit_is_structured_unavailable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'Test.swift'
+            source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+            fake = root / 'semgrep'
+            fake.write_text(
+                '#!' + sys.executable + '\nimport json,sys\n'
+                "sys.stderr.write('x' * (11 * 1024 * 1024))\n"
+                "print(json.dumps({'results':[],'errors':[],'paths':{'scanned':[sys.argv[-1]]},'version':'fixture'}))\n"
+            )
+            fake.chmod(0o700)
+            run = subprocess.run(
+                [sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)],
+                capture_output=True, text=True, timeout=20,
+            )
+            out = json.loads(run.stdout)
+            self.assertEqual(run.returncode, 2)
+            self.assertFalse(out['complete'])
+            self.assertEqual(out['inputs'][0]['status'], 'unavailable')
+            self.assertIn('output exceeds 10 MiB', out['inputs'][0]['reason'])
+
+    def test_python_scan_does_not_need_semgrep_runner_bundle(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ('test_quality_scan.py', 'test_quality_semgrep.py'):
+                (root / name).write_bytes((TOOL.parent / name).read_bytes())
+            self.assertFalse((root / 'test_quality.py').exists(), 'core runner really absent')
+            sample = root / 'test_sample.py'
+            sample.write_text('def test_total():\n    assert 1 + 1 == 2\n')
+            run = subprocess.run(
+                [sys.executable, str(root / 'test_quality_scan.py'), str(sample), '--json'],
+                capture_output=True, text=True, timeout=20, cwd=root,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout)['inputs'][0]['status'], 'scanned')
 
     def test_corpus_runner_reports_unavailable_languages(self):
         runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'

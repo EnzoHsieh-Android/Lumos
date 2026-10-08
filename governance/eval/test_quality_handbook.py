@@ -10,16 +10,19 @@ import hashlib
 import io
 import json
 import os
-import signal
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import types
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# 模型程序與 CLI 收證共用同一個程序群清理實作，不另抄一份。
+sys.path.insert(0, str(ROOT / 'scripts'))
+from test_quality import CaptureTimeout, run_capture_command
+
 MATERIAL = ROOT / 'governance/eval/test-quality'
 TASKS = {
     'pricing': {
@@ -224,35 +227,13 @@ def draft_before_verify(calls):
 
 
 def model_command(cmd, directory, timeout):
-    previous = signal.getsignal(signal.SIGTERM)
-
-    def interrupted(signum, frame):
-        raise ValueError('model interrupted by signal ' + str(signum))
-
-    signal.signal(signal.SIGTERM, interrupted)
-    proc = None
     try:
-        proc = subprocess.Popen(cmd, cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, start_new_session=True)
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            exc.stdout, exc.stderr = proc.communicate()
-            raise
-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-        if proc is not None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            if proc.poll() is None:
-                proc.communicate()
+        returncode, stdout, stderr = run_capture_command(cmd, timeout, cwd=directory)
+    except CaptureTimeout as exc:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=exc.stdout.decode(errors='replace'),
+                                        stderr=exc.stderr.decode(errors='replace')) from exc
+    return subprocess.CompletedProcess(cmd, returncode, stdout.decode(errors='replace'),
+                                       stderr.decode(errors='replace'))
 
 
 def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
@@ -359,6 +340,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     manifest = json.loads(suite_file.read_text())
     manifest['runner_sha256'] = sha(Path(__file__).read_text())
+    manifest['process_runner_sha256'] = sha((ROOT / 'scripts/test_quality.py').read_text())
     manifest['tasks'] = TASKS
     docs = {arm: (MATERIAL/manifest.get('handbooks', {}).get(arm, f'handbook-{arm}.md')).read_text() for arm in manifest['arms']}
     manifest['handbook_sha256'] = {arm: sha(doc) for arm, doc in docs.items()}

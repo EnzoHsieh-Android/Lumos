@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import tempfile
 
-from test_quality import run_capture_command
+from test_quality import CaptureInterrupted, CaptureTimeout, run_capture_command
+
+BACKEND_TIMEOUT = 40
 
 PATTERNS = {
     'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
@@ -70,7 +72,7 @@ def scan(path, language, executable):
             command = [executable, 'scan', '--config', str(rules), '--json', '--quiet',
                        '--metrics', 'off', '--disable-version-check', '--no-git-ignore',
                        '--oss-only', '--strict', '--timeout', '5', str(source)]
-            returncode, stdout, _ = run_capture_command(command, 40, cwd=root, env=env)
+            returncode, stdout, _ = run_capture_command(command, BACKEND_TIMEOUT, cwd=root, env=env)
             result = json.loads(stdout.decode('utf-8'))
             if not isinstance(result, dict) or not isinstance(result.get('results'), list) or not isinstance(result.get('errors'), list):
                 raise ValueError('invalid Semgrep report shape')
@@ -85,11 +87,10 @@ def scan(path, language, executable):
                 return entry, findings
             findings.extend(backend_findings(result, source, path, raw))
             entry['status'] = 'scanned'
-    except ValueError as exc:
-        if str(exc) == 'timeout; never detected':
-            entry.update(status='timeout', reason='backend timed out')
-        else:
-            entry.update(status='unavailable', reason=str(exc))
-    except (OSError, UnicodeError, KeyError, TypeError, IndexError) as exc:
+    except CaptureInterrupted:
+        raise
+    except CaptureTimeout:
+        entry.update(status='timeout', reason='backend timed out')
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
         entry.update(status='unavailable', reason=str(exc))
     return entry, findings

@@ -46,6 +46,18 @@ def validate_suite_counts(root):
                 raise ValueError('suite summary inconsistent with testcase rows: ' + field)
 
 
+class CaptureTimeout(ValueError):
+    """Deadline reached; keeps the partial streams for callers that archive them."""
+
+    def __init__(self, stdout=b'', stderr=b''):
+        super().__init__('timeout; never detected')
+        self.stdout, self.stderr = stdout, stderr
+
+
+class CaptureInterrupted(ValueError):
+    """SIGTERM reached the runner; callers must stop instead of treating it as one bad input."""
+
+
 def terminate_group(proc):
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -71,7 +83,7 @@ def run_capture_command(command, timeout, cwd=None, env=None):
     previous = signal.getsignal(signal.SIGTERM)
 
     def interrupted(signum, frame):
-        raise ValueError('execution interrupted by signal ' + str(signum))
+        raise CaptureInterrupted('execution interrupted by signal ' + str(signum))
 
     proc = None
     group_stopped = False
@@ -86,7 +98,7 @@ def run_capture_command(command, timeout, cwd=None, env=None):
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ValueError('timeout; never detected')
+                    raise CaptureTimeout(bytes(buffers['stdout']), bytes(buffers['stderr']))
                 read_ready_output(selector, selector.select(min(remaining, 0.1)), buffers)
                 if proc.poll() is not None and not group_stopped:
                     terminate_group(proc)
@@ -94,7 +106,7 @@ def run_capture_command(command, timeout, cwd=None, env=None):
         try:
             proc.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as exc:
-            raise ValueError('timeout; never detected') from exc
+            raise CaptureTimeout(bytes(buffers['stdout']), bytes(buffers['stderr'])) from exc
         return proc.returncode, bytes(buffers['stdout']), bytes(buffers['stderr'])
     finally:
         signal.signal(signal.SIGTERM, previous)

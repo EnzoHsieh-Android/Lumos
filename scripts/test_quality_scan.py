@@ -283,7 +283,6 @@ def inspect_python_file(path, entry, report, models, check_helpers):
 
 
 def main(argv=None, *, args=None):
-    from test_quality_semgrep import scan as semgrep_scan
     started = time.monotonic()
     if args is None:
         parser = add_scan_arguments(argparse.ArgumentParser(description=__doc__))
@@ -303,6 +302,8 @@ def main(argv=None, *, args=None):
         report['inputs'].append(entry)
         if language != 'python':
             if args.semgrep and language != 'unknown':
+                # 只有選配 backend 需要共用程序 runner；純 Python 掃描不載入它。
+                from test_quality_semgrep import scan as semgrep_scan
                 backend_entry, found = semgrep_scan(path, language, str(Path(args.semgrep).resolve()) if '/' in args.semgrep else args.semgrep)
                 entry.update(backend_entry)
                 report['findings'].extend(found)

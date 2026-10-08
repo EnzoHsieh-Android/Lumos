@@ -62,3 +62,5 @@ WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-tes
 WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
 
 PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。
+
+PITFALL: 模型已正常退出、但留下繼承 stdout 的子程序時，`model_command` 會等管線 EOF 等到逾時，整場被記成 model-timeout 無效 [出處:code-test-quality-r4-repair/r3-架構對齊-sonnet.md ARC-1、r3-defender-A-opus.md] [根因:handbook 自寫一份 Popen＋communicate 清理，CLI 收證修好「已退出 launcher 被誤判逾時」時這份沒跟著改] [防回歸:test_exited_model_with_stream_holding_worker_is_not_timeout、test_model_timeout_keeps_partial_stream]。`model_command` 改走 [[Systems/test-quality-cli]] 的共用 runner，逾時仍轉成 `subprocess.TimeoutExpired` 並帶部分輸出，呼叫端不變；manifest 另記共用 runner 的 `process_runner_sha256`。歷來 61 份事件檔最大 72 KB，共用的 10 MiB 輸出上限不影響既有場次。

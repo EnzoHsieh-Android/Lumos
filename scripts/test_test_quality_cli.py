@@ -450,14 +450,24 @@ class QualityCLI(unittest.TestCase):
         command = [
             sys.executable,
             "-c",
-            "import subprocess,sys; "
-            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
-            "print('launcher-failed',flush=True); sys.exit(1)",
+            "import subprocess,sys,time; "
+            "p=subprocess.Popen([sys.executable,'-c',"
+            "'import time; print(\"worker-holds-stream\",flush=True); time.sleep(60)']); "
+            "time.sleep(0.3); print('launcher-failed',p.pid,flush=True); sys.exit(1)",
         ]
         module = self.quality_module()
-        rc, out, _ = module.run_capture_command(command, 1)
+        rc, out, _ = module.run_capture_command(command, 5)
         self.assertEqual(rc, 1)
-        self.assertEqual(out.strip(), b"launcher-failed")
+        lines = out.decode().split()
+        self.assertIn("worker-holds-stream", lines, "worker really shared the captured stream")
+        pid = int(lines[lines.index("launcher-failed") + 1])
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
 
     @staticmethod
     def lumos_module():
