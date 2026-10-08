@@ -1,0 +1,48 @@
+import importlib.util,json,subprocess,sys,tempfile,time,os
+from pathlib import Path
+repo=Path.cwd()
+sys.path.insert(0,str(repo/'scripts'))
+import scenario_probe as sp
+spec=importlib.util.spec_from_file_location('ablation',repo/'governance/eval/ablation_lumos_first.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory(prefix='ledger-parent-death-') as td:
+ root=Path(td);ledger=root/'usage.sqlite3';out=root/'out';out.mkdir();ready=root/'ready';probe=root/'fake_probe.py'
+ sp.attempt_ledger_remaining(ledger,1,now=time.time()-20000)
+ probe.write_text('import sys,json,time,os,argparse\nfrom pathlib import Path\n'+f'sys.path.insert(0,{str(repo/"scripts")!r})\n'+'''import scenario_probe as p
+ap=argparse.ArgumentParser(add_help=False);ap.add_argument('--out');ap.add_argument('--attempt-ledger');ap.add_argument('--max-per-window',type=int);a,_=ap.parse_known_args()
+assert p.claim_model_attempt(a.attempt_ledger,a.max_per_window)
+'''+f'Path({str(ready)!r}).write_text(str(os.getpid()))\n'+'''time.sleep(2)
+Path(a.out).write_text(json.dumps({'arm':'with','results':[{'id':'q','passed':True,'calls':[],'n_calls':0}],'fatal':False,'inconclusive':False,'skills_health_bad':[]}))
+''')
+ script='import sys,importlib.util;from pathlib import Path;'+f'spec=importlib.util.spec_from_file_location("ablation",{str(repo/"governance/eval/ablation_lumos_first.py")!r});m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.PROBE=Path({str(probe)!r});m.run_job("with","q",1,[],1,1,Path({str(out)!r}),0,max_per_window=1,attempt_ledger=Path({str(ledger)!r}))'
+ parent=subprocess.Popen([sys.executable,'-c',script],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+ child_pid=None
+ try:
+  deadline=time.monotonic()+10
+  while not ready.exists() and parent.poll() is None and time.monotonic()<deadline:time.sleep(.02)
+  assert ready.exists(),'claim not reached'
+  child_pid=int(ready.read_text());assert list(out.glob('*.pending'))
+  parent.kill();parent.communicate(timeout=5);assert parent.returncode<0
+  deadline=time.monotonic()+8
+  while not list(out.glob('*.candidate')) and time.monotonic()<deadline:time.sleep(.02)
+  assert list(out.glob('*.candidate')),'surviving child did not emit candidate'
+  assert sp.attempt_ledger_remaining(ledger,1)==0
+  assert m.needed(m.load_results(out),'with','q',1)==1
+  archive=root/'archive';archive.mkdir()
+  archived=[]
+  for artifact in list(out.iterdir()):
+   if artifact.suffix in ('.json','.candidate','.pending'):
+    archived.append(artifact.name);artifact.rename(archive/artifact.name)
+  assert m.collect_skills_health(out)==[]
+  result=m.run_job('with','q',1,[],1,1,out,0,max_per_window=1,attempt_ledger=ledger)
+  assert result[2].startswith('skip'),result
+  assert sp.attempt_ledger_remaining(ledger,1)==0
+  print(json.dumps({'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'parent_rc':parent.returncode,'child_emitted_after_parent_death':True,'archived_existing_paths':archived,'remaining_after_archive':0,'retry':result[2],'real_model_calls':0},ensure_ascii=False))
+ finally:
+  if parent.poll() is None:parent.kill();parent.communicate(timeout=5)
+  if child_pid:
+   try:os.kill(child_pid,0)
+   except ProcessLookupError:pass
+   else:
+    try:os.kill(child_pid,9)
+    except ProcessLookupError:pass

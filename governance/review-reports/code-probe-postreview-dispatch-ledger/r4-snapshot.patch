@@ -1,0 +1,1455 @@
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 0cdf0048..826598cb 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -7,21 +7,21 @@
+ 第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗。
+ 現在只准單路派工，探針帶 --wait-on-limit 撞到就等重置再補同一場；並行需先驗證在途取消。
+ 
+ 四個尺(讀法預註冊在計劃筆記,這裡只算數不解讀):
+   M1 通過率(期望指令在禁做動作之前)  M2 整場有沒有敲過 lumos
+   M3 首次敲 lumos 的步數中位(只算有敲的場)  M4 答案題(id 以 a 開頭)正確率
+ 
+ 用法:
+   governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
+ """
+-import argparse, datetime, errno, fcntl, hashlib, json, os, stat, statistics, subprocess, sys, tempfile, time
++import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ PROBE = ROOT / "scripts" / "scenario_probe.py"
+ DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
+ ARMS = ["with", "without"]
+ 
+ 
+ def _atomic_write_bytes(path, data):
+     """同目錄暫存後取代目標；不跟隨既有目標符號連結。"""
+@@ -48,21 +48,22 @@ def _atomic_write_bytes(path, data):
+             tmp_path.unlink(missing_ok=True)
+ 
+ 
+ def _atomic_write_text(path, content):
+     _atomic_write_bytes(path, content.encode("utf-8"))
+ 
+ 
+ # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
+ # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
+ sys.path.insert(0, str(ROOT / "scripts"))
+-from scenario_probe import LIMIT_RE, LUMOS_CALL_RE  # noqa: E402  ★單一實作來源★
++from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,
++                            attempt_ledger_remaining, ProbeAttemptLedgerError)  # noqa: E402  ★單一實作來源★
+ 
+ 
+ def load_ids(files):
+     """回題目 id 清單；重複 id 會讓精確選題命中多題，故在派工前拒絕。"""
+     ids, seen = [], set()
+     for f in files:
+         for ln in (ROOT / f).read_text(encoding="utf-8").splitlines():
+             if ln.strip():
+                 qid = json.loads(ln)["id"]
+                 if (not isinstance(qid, str) or not qid.strip() or "," in qid
+@@ -135,34 +136,37 @@ def invalid_batch_evidence(d, filename_arm=None):
+             return ["逐場通過欄位型別錯誤，健康狀態不可判"]
+         calls = row.get("calls")
+         n_calls = row.get("n_calls", 0)
+         if (type(n_calls) is not int or n_calls < 0 or (calls is not None and not isinstance(calls, list))
+                 or ("reason" in row and not isinstance(row["reason"], str))
+                 or ("fatal" in row and type(row["fatal"]) is not bool)
+                 or (row.get("answer") is not None and not isinstance(row["answer"], str))
+                 or ("limit_hit" in row and type(row["limit_hit"]) is not bool)
+                 or (row.get("answer_content_ok") is not None and type(row["answer_content_ok"]) is not bool)):
+             return ["逐場計分欄位型別錯誤，健康狀態不可判"]
++        if calls is not None and any(not isinstance(call, (list, tuple)) or len(call) != 2
++                                     or not all(isinstance(part, str) for part in call) for call in calls):
++            return ["逐場工具呼叫內容型別錯誤，健康狀態不可判"]
+         retries = row.get("retry_attempts", [])
+         if not isinstance(retries, list) or any(not isinstance(r, dict) for r in retries):
+             return ["逐場重試紀錄型別錯誤，窗口用量不可判"]
+         if arm is not None and row.get("arm") is not None and row["arm"] != arm:
+             return ["逐場組別與結果檔不一致，健康狀態不可判"]
+     if d.get("fatal") or any(isinstance(r, dict) and r.get("fatal") for r in rows):
+         return ["探針整批 fatal；健康或清理結果不可判"]
+     return []
+ 
+ 
+ def _result_json_files(out_dir):
+     """只讀本工具兩組逐題或舊 shard 的正式結果，不把旁邊的 JSON 備註當探針。"""
+     return sorted(p for p in Path(out_dir).glob("*.json")
+-                  if p.name.startswith(("with-", "without-")))
++                  if re.fullmatch(r"(?:with|without)-(?:q-.+|shard[0-9]+)\.json", p.name))
+ 
+ 
+ def load_results(out_dir):
+     """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
+     壞檔不拖垮整批；非物件頂層或逐場元素都拒收該檔。
+     整批 fatal 的檔案即使逐場 reason=ok 也不可計分或抵掉缺場。"""
+     by_arm = {a: [] for a in ARMS}
+     unfinished = {p.stem for p in Path(out_dir).glob("*.pending")}
+     for p in _result_json_files(out_dir):
+         if p.stem in unfinished:
+@@ -219,49 +223,62 @@ def runs_in_window(out_dir, hours=5.0, now=None):
+         try:
+             if now - p.stat().st_mtime > hours * 3600:
+                 continue
+             rows = json.loads(p.read_text(encoding="utf-8")).get("results", [])
+             n += sum(1 + len(r.get("retry_attempts", [])) for r in rows if isinstance(r, dict))
+         except Exception:
+             continue
+     return n
+ 
+ 
+-def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None):
++def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None, attempt_ledger=None):
+     if stop is not None and stop.is_set():
+         return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
+-    if max_per_window:
+-        remaining = max_per_window - runs_in_window(out_dir)
+-        if remaining <= 0:
+-            return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
+-        n = min(n, remaining)
+     stamp = f"{time.strftime('%H%M%S')}-{time.time_ns()}"
+     qid_key = hashlib.sha256(qid.encode("utf-8")).hexdigest()[:16]
+     out = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.json"
+     candidate = out.with_suffix(".candidate")
+     log = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.log"
+     pending = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.pending"
+-    cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
+-           f"--exact-id={qid}", "--runs", str(n), "--arm", arm, "--out", str(candidate),
+-           "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
+-    if max_per_window:
+-        cmd += ["--max-attempts", str(remaining)]
+-    if model:
+-        cmd += ["--model", model]
+     # 先留下保守事故標記；父程序被殺時，子程序可能還在跑，不能讓下批吃進其結果。
+     marker = {"arm": arm, "qid": qid, "results": [], "fatal": True,
+               "inconclusive": True, "skills_health_bad": [], "failure_type": "unfinished",
+               "log_path": str(log), "candidate_path": str(candidate),
+-              "retry_policy": "archive-fatal-and-candidate-then-rerun"}
++              "recovery_paths": [str(out), str(candidate), str(pending)],
++              "retry_policy": "confirm-no-live-probe-then-archive-recovery-paths-and-rerun"}
+     _atomic_write_text(pending, json.dumps(marker, ensure_ascii=False))
+     t0 = time.time()
+     with open(log, "w", encoding="utf-8") as lf:
++        if max_per_window:
++            ledger = Path(attempt_ledger or default_attempt_ledger()).absolute()
++            try:
++                remaining = attempt_ledger_remaining(ledger, max_per_window)
++            except ProbeAttemptLedgerError as exc:
++                lf.write(f"用量帳事故: {exc}\n")
++                lf.flush()
++                _atomic_write_text(out, json.dumps({**marker, "failure_type": "attempt-ledger", "reason": str(exc)}, ensure_ascii=False))
++                if stop is not None:
++                    stop.set()
++                return (arm, qid, f"★探針批次失效★ 用量帳不可判——停止派工，檢查 {log}")
++            if remaining <= 0:
++                pending.unlink()
++                lf.write("持久窗口額度已滿或初始化冷卻中，未啟動子程序\n")
++                return (arm, qid, f"skip 持久窗口已達 {max_per_window} 場上限或冷卻中，之後再補")
++            n = min(n, remaining)
++        cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
++               f"--exact-id={qid}", "--runs", str(n), "--arm", arm, "--out", str(candidate),
++               "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
++        if max_per_window:
++            cmd += ["--max-attempts", str(remaining), "--max-per-window", str(max_per_window),
++                    "--attempt-ledger", str(ledger)]
++        if model:
++            cmd += ["--model", model]
+         lf.write("$ " + " ".join(cmd) + "\n")
+         lf.flush()
+         try:
+             r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+         except (OSError, subprocess.TimeoutExpired) as exc:
+             lf.write(f"探針子程序例外 {type(exc).__name__}: {exc}\n")
+             lf.flush()
+             try:
+                 prior_result = candidate.read_bytes()
+             except OSError as read_exc:
+@@ -312,21 +329,31 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
+     os.replace(candidate, out)
+     pending.unlink()
+     return (arm, qid, f"rc={r.returncode} 有效 {got}/{n} 撞上限 {lim} {round(time.time() - t0)}s")
+ 
+ 
+ def _arm_stats(results, expected_ids, runs):
+     # ★r1 正確性席:只算現在題庫裡的題★——out_dir 是跨天累積的逐題檔,題庫改過後舊題殘檔還在,
+     # 不過濾會把舊題的通過/不通過靜默混進 M1-M4 與頭條差值。用 expected_ids 篩掉不在現行題庫的。
+     idset = set(expected_ids)
+     results = [r for r in results if r.get("id") in idset]
+-    valid = [r for r in results if is_valid(r)]
++    # 以既有檔案排序決定每題前 runs 個有效場；超額列仍保留於原始結果但不增加權重。
++    valid, accepted_per_id, surplus = [], {}, 0
++    for row in results:
++        if not is_valid(row):
++            continue
++        qid = row["id"]
++        if accepted_per_id.get(qid, 0) >= runs:
++            surplus += 1
++            continue
++        accepted_per_id[qid] = accepted_per_id.get(qid, 0) + 1
++        valid.append(row)
+     n = len(valid)
+     m1 = sum(1 for r in valid if r.get("passed"))
+     # ★r2 正確性席:ever_lumos 為 None = 截斷資料判不出,排除在 M2 分母外(不當成 False 灌低)★
+     m2_known = [r for r in valid if r.get("ever_lumos") is not None]
+     m2 = sum(1 for r in m2_known if r.get("ever_lumos"))
+     idxs = [r["first_lumos_idx"] for r in valid if r.get("first_lumos_idx") is not None]
+     m3 = statistics.median(idxs) if idxs else None
+     ans = [r for r in valid if str(r.get("id", "")).startswith("a")]
+     # M4 兩把尺:gated=敲對指令且答對(passed);content=純答案內容對(不管走哪條路,只在有記 answer_content_ok 的場算)
+     content = [r for r in ans if r.get("answer_content_ok") is not None]
+@@ -336,21 +363,22 @@ def _arm_stats(results, expected_ids, runs):
+         per[r["id"]][1] += 1
+         per[r["id"]][0] += 1 if r.get("passed") else 0
+     inconsistent = sorted(i for i, (c, t) in per.items() if 0 < c < t)
+     return {"n": n, "m1_passed": m1, "m1_rate": round(m1 / n, 4) if n else None,
+             "m2_ever": m2, "m2_n": len(m2_known), "m2_rate": round(m2 / len(m2_known), 4) if m2_known else None,
+             "m3_first_idx_median": m3, "m3_n": len(idxs),
+             "m4_gated_passed": sum(1 for r in ans if r.get("passed")), "m4_gated_n": len(ans),
+             "m4_content_passed": sum(1 for r in content if r.get("answer_content_ok")), "m4_content_n": len(content),
+             "inconsistent_questions": inconsistent,
+             "missing": sum(max(0, runs - per.get(q, [0, 0])[1]) for q in expected_ids),
+-            "instrument_errors": len(results) - n,
++            "excluded_surplus": surplus,
++            "instrument_errors": sum(not is_valid(r) for r in results),
+             "limit_hits": sum(1 for r in results if r.get("limit_hit")),
+             "per_question": per}
+ 
+ 
+ def classify_question(w, wo):
+     """一題對「這條規矩」有沒有鑑別力。w/wo = [過幾次, 跑幾次]。
+     區分=帶著比拔掉多過至少三分之二;反向=拔掉反而多過;都過/都不過=這題測不到這條規矩;其餘=弱/不穩。
+     (借 skill-creator 的 analyzer:抓「不管有沒有裝都過」的斷言——那種題留在題庫裡只是在花配額。)"""
+     if not w[1] or not wo[1]:
+         return "缺資料"
+@@ -378,67 +406,63 @@ def merge(out_dir, expected_ids, runs):
+     class_counts = {}
+     for c in classes.values():
+         class_counts[c] = class_counts.get(c, 0) + 1
+     return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+             "question_class": classes, "class_counts": class_counts}
+ 
+ 
+ def render_md(s, meta):
+     a, b = s["arms"]["with"], s["arms"]["without"]
+     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
+-    lines = [f"# 修法 A ablation 對照(記錄日期 {meta.get('date')};當次 Claude CLI {meta.get('claude_version', '?')})", "",
++    def text(x): return html.escape(str(x)).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
++    lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
+              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
+              f"只算有效場(撞用量上限/儀器例外不算)。", "",
+              "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
+              "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
+              f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
+              f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
+              f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
+              f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
+              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
+              f"| 同題多次不一致的題數 | {len(a['inconsistent_questions'])} | {len(b['inconsistent_questions'])} |",
+              f"| 缺場 / 撞上限 / 其他儀器例外 | {a['missing']} / {a['limit_hits']} / {a['instrument_errors'] - a['limit_hits']} | {b['missing']} / {b['limit_hits']} / {b['instrument_errors'] - b['limit_hits']} |",
++             f"| 超額有效場（保留原始資料、不計分） | {a.get('excluded_surplus', 0)} | {b.get('excluded_surplus', 0)} |",
+              "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
+              "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
+              "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
+     if s.get("skills_health_poisoned"):
+-        bad = ", ".join(name for name, _ in s["skills_health_poisoned"])
++        bad = ", ".join(text(name) for name, _ in s["skills_health_poisoned"])
+         lines[2:2] = [f"**整批不可採信：探針失效；請先處置 {bad}。**", ""]
+     for q, v in s["per_question"].items():
+-        qmd = q.replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
++        qmd = text(q)
+         lines.append(f"| {qmd} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
+     if a["inconsistent_questions"] or b["inconsistent_questions"]:
+-        lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
++        lines += ["", f"不一致題 with: {', '.join(text(q) for q in a['inconsistent_questions']) or '—'};without: {', '.join(text(q) for q in b['inconsistent_questions']) or '—'}"]
+     return "\n".join(lines) + "\n"
+ 
+ 
+ def _run_locked_batch(a, files, ids, date, out_dir):
+     if a.merge_only:
+         meta_path = out_dir / "meta.json"
+         try:
+             if not stat.S_ISREG(meta_path.lstat().st_mode):
+                 raise ValueError("unsafe meta")
+             meta = json.loads(meta_path.read_text(encoding="utf-8"))
+             if not isinstance(meta, dict):
+                 raise ValueError("invalid meta")
+-            meta_changed = False
+             if not isinstance(meta.get("date"), str) or not meta["date"].strip():
+                 meta["date"] = "來源日期未知"
+-                meta_changed = True
+             if not isinstance(meta.get("claude_version"), str) or not meta["claude_version"].strip():
+                 meta["claude_version"] = "來源版本未知"
+-                meta_changed = True
+-            if meta_changed:
+-                _atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
+         except (OSError, ValueError):
+             meta = {"date": "來源日期未知", "claude_version": "來源版本未知"}
+-            _atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
+     else:
+         try:
+             ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
+         except Exception:
+             ver = "?"
+         meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
+                 "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
+                 "started": datetime.datetime.now().isoformat(timespec="seconds")}
+         _atomic_write_text(out_dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
+     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
+@@ -454,21 +478,22 @@ def _run_locked_batch(a, files, ids, date, out_dir):
+                     jobs.append((arm, qid, n))
+         total = sum(n for _, _, n in jobs)
+         print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
+               f"{len(jobs)} 個工作,單路派工,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
+         import threading
+         stop = threading.Event()
+         for arm, qid, n in jobs:
+             if stop.is_set():
+                 break
+             _, _, st = run_job(arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit,
+-                               a.model, a.max_per_window, stop)
++                               a.model, a.max_per_window, stop,
++                               **({"attempt_ledger": a.attempt_ledger} if a.attempt_ledger else {}))
+             print(f"  {arm} {qid}: {st}", flush=True)
+         live_failed = stop.is_set()
+     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
+     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
+     # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
+     poisoned = collect_skills_health(out_dir)
+     if live_failed and not poisoned:
+         poisoned = [("本次派工", ["探針程序失效且沒有可採信的結果檔"])]
+     s = merge(out_dir, ids, a.runs)
+     s["skills_health_poisoned"] = poisoned
+@@ -486,28 +511,31 @@ def _run_locked_batch(a, files, ids, date, out_dir):
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--questions", default=",".join(DEFAULT_Q))
+     ap.add_argument("--runs", type=int, default=3)
+     ap.add_argument("--workers", type=int, default=1,
+                     help="live 探針只准 1 路；恢復並行前須驗證事故時可取消在途模型")
+     ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
+     ap.add_argument("--max-per-window", type=int, default=50,
+-                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
++                    help="本機共用帳五小時內最多記幾次模型啟動意圖(含失敗與重試)；0=停用記帳，不管其他工具或帳號總量")
++    ap.add_argument("--attempt-ledger", default="", help="本機持久用量帳路徑；各批次共用同一帳，首次初始化冷卻五小時；切換前先確認舊探針已停止")
+     ap.add_argument("--timeout", type=int, default=600)
+     ap.add_argument("--max-turns", type=int, default=18)
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out-dir", default="")
+     ap.add_argument("--arms", default=",".join(ARMS))
+     ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
+     a = ap.parse_args()
++    if a.max_per_window < 0:
++        ap.error("--max-per-window 不可為負")
+     if not a.merge_only and a.workers != 1:
+         ap.error("live 探針目前只准 --workers 1；--merge-only 保留舊參數相容")
+     arms = a.arms.split(",")
+     if not arms or len(arms) != len(set(arms)) or any(arm not in ARMS for arm in arms):
+         ap.error("--arms 只能指定不重複的 with,without")
+     files = a.questions.split(",")
+     ids = load_ids(files)
+     date = datetime.date.today().isoformat()
+     out_dir = (Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date).resolve()
+     out_dir.mkdir(parents=True, exist_ok=True)
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index f8ecb66a..1c093cf3 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -701,21 +701,100 @@ def _codex_hook_trace(thread_id):
+             continue
+         texts = [c.get("text", "") for c in (pl.get("content") or []) if isinstance(c, dict)]
+         text = "\n".join(t for t in texts if isinstance(t, str))
+         if pl.get("role") == "developer" and text.lstrip().startswith(_LUMOS_HOOK_HEADS):
+             fired += 1
+         if pl.get("role") == "user" and "hook_run_id=" in text and "LUMOS-STOP" in text:
+             stop_seen += 1
+     return {"hooks_fired": fired, "stop_block_seen": stop_seen}
+ 
+ 
+-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None):
++class ProbeAttemptLedgerError(RuntimeError):
++    """持久額度帳不可判；不是模型行為失敗。"""
++
++
++def default_attempt_ledger():
++    return Path.home() / ".local/state/lumos/probe-attempts.sqlite3"
++
++
++def _attempt_ledger_transaction(path, limit, claim=False, now=None):
++    """同一交易核帳並選擇追加啟動意圖；不從可歸檔結果推算用量。"""
++    if type(limit) is not int or limit < 0:
++        raise ProbeAttemptLedgerError("窗口上限必須為非負整數")
++    if limit == 0:
++        return True if claim else None
++    import math
++    now = time.time() if now is None else now
++    if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
++        raise ProbeAttemptLedgerError("用量帳時鐘不可判")
++    conn = None
++    try:
++        import sqlite3
++        path = Path(path).absolute()
++        try:
++            info = path.lstat()
++            if not stat.S_ISREG(info.st_mode):
++                raise ProbeAttemptLedgerError("用量帳必須為一般檔案")
++            fresh = False
++        except FileNotFoundError:
++            fresh = True
++        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
++        conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
++        conn.execute("BEGIN IMMEDIATE")
++        version = conn.execute("PRAGMA user_version").fetchone()[0]
++        if fresh and version == 0:
++            conn.execute("CREATE TABLE ledger_meta (id INTEGER PRIMARY KEY CHECK(id=1), initialized_at REAL NOT NULL)")
++            conn.execute("CREATE TABLE launch_intents (claimed_at REAL NOT NULL CHECK(typeof(claimed_at)='real' AND claimed_at>=0))")
++            conn.execute("CREATE INDEX intents_time ON launch_intents(claimed_at)")
++            conn.execute("INSERT INTO ledger_meta VALUES (1, ?)", (float(now),))
++            conn.execute("PRAGMA user_version=1")
++        elif version != 1:
++            raise ProbeAttemptLedgerError("用量帳版本或結構不可判")
++        meta = conn.execute("SELECT initialized_at FROM ledger_meta").fetchall()
++        if len(meta) != 1 or type(meta[0][0]) is not float or not math.isfinite(meta[0][0]):
++            raise ProbeAttemptLedgerError("用量帳初始化時間不可判")
++        initialized = meta[0][0]
++        latest = conn.execute("SELECT MAX(claimed_at) FROM launch_intents").fetchone()[0]
++        if latest is not None and (type(latest) is not float or not math.isfinite(latest)):
++            raise ProbeAttemptLedgerError("用量帳啟動時間不可判")
++        if now < max(initialized, latest if latest is not None else initialized):
++            raise ProbeAttemptLedgerError("時鐘早於已記用量時間，停止派工")
++        used = conn.execute("SELECT COUNT(*) FROM launch_intents WHERE claimed_at > ?", (now - 18000,)).fetchone()[0]
++        remaining = 0 if now < initialized + 18000 else max(0, limit - used)
++        if claim and remaining:
++            conn.execute("INSERT INTO launch_intents VALUES (?)", (float(now),))
++        conn.commit()
++        return bool(remaining) if claim else remaining
++    except (OSError, ImportError) as exc:
++        raise ProbeAttemptLedgerError(f"用量帳不可用: {type(exc).__name__}") from exc
++    except Exception as exc:
++        if isinstance(exc, ProbeAttemptLedgerError):
++            raise
++        raise ProbeAttemptLedgerError(f"用量帳交易失敗: {type(exc).__name__}") from exc
++    finally:
++        if conn is not None:
++            try:
++                if conn.in_transaction:
++                    conn.rollback()
++            finally:
++                conn.close()
++
++
++def attempt_ledger_remaining(path, limit, now=None):
++    return _attempt_ledger_transaction(path, limit, now=now)
++
++
++def claim_model_attempt(path, limit, now=None):
++    return _attempt_ledger_transaction(path, limit, claim=True, now=now)
++
++
++def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
+     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
+     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
+                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
+@@ -726,20 +805,22 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
+         cmd += ["-m", model]
+     cmd.append(sc["prompt"])
+     env = _git_env(); env["LUMOS_PROBE"] = "1"
+     if arm == "without":
+         env["LUMOS_ENTRY_HOOK_OFF"] = "1"
+     if stop_block == "off":
+         env["LUMOS_STOP_BLOCK_OFF"] = "1"
+     t0 = time.time()
+     instrument_fail = None   # 超時 / 非零退出 = 儀器例外,這場不算分(code-codex-s3 r1 外家 #3:半途已印期望指令也不能判過)
+     truncated = False
++    if max_per_window and not claim_model_attempt(attempt_ledger or default_attempt_ledger(), max_per_window):
++        raise ProbeAttemptBudgetExceeded("本機持久窗口額度已用完，未啟動模型")
+     try:
+         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+         out, err = r.stdout, r.stderr[-400:]
+         if r.returncode != 0:
+             instrument_fail = f"codex exec 退出碼 {r.returncode}"
+     except subprocess.TimeoutExpired as e:
+         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+         err = "timeout"
+         instrument_fail = f"codex exec 超時 {timeout}s"
+         truncated = True
+@@ -770,21 +851,21 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
+ def _scenario_max_turns(sc, default):
+     """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。
+     ★只影響 claude runner:codex exec 沒有 --max-turns 這種旗標,codex runner 忽略此欄(外家 r1 m3,誠實寫在這裡與 --help)。★"""
+     try:
+         v = int(sc.get("max_turns", default))
+         return v if v > 0 else default
+     except (TypeError, ValueError):
+         return default
+ 
+ 
+-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None):
++def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
+     max_turns = _scenario_max_turns(sc, max_turns)
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+@@ -804,20 +885,22 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
+     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+     # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
+     # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
+     # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
+     env["LUMOS_PROBE"] = "1"
+     if arm == "without":
+         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
+     t0 = time.time()
+     timed_out = False
+     returncode = 0
++    if max_per_window and not claim_model_attempt(attempt_ledger or default_attempt_ledger(), max_per_window):
++        raise ProbeAttemptBudgetExceeded("本機持久窗口額度已用完，未啟動模型")
+     try:
+         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
+         out = r.stdout
+         err = r.stderr[-400:]
+         returncode = r.returncode
+     except subprocess.TimeoutExpired as e:
+         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+         err = "timeout"
+         timed_out = True
+     calls = tool_calls_from_stream(out.splitlines())
+@@ -946,23 +1029,27 @@ def main():
+                     help="codex runner:off=設 LUMOS_STOP_BLOCK_OFF=1 關掉收工擋停(對照組;Projects/Codex行為精修_計劃)")
+     ap.add_argument("--codex-bypass-hook-trust", action="store_true",
+                     help="codex runner 帶 --dangerously-bypass-hook-trust(★只准隔離環境★;本機審過信任不需要)")
+     ap.add_argument("--arm", choices=["with", "without"], default="with",
+                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     ap.add_argument("--max-attempts", type=int, default=0,
+                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
++    ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
++    ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
+     a = ap.parse_args()
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
++    if a.max_per_window < 0:
++        print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
+     if a.max_attempts < 0:
+         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+     if a.exact_id is not None and a.only:
+         print("✗ --exact-id 與 --only 不可並用", file=sys.stderr); return 2
+     if (a.exact_id is not None and (not a.exact_id.strip() or not a.exact_id.isprintable())):
+         print("✗ --exact-id 不可為空白或含不可列印字元", file=sys.stderr); return 2
+     scs = []
+     for f in a.scenarios.split(","):
+         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
+     if a.exact_id is not None:
+@@ -1015,35 +1102,40 @@ def main():
+         print(f"探的是: {src}\n凍結基線: {baseline}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+               file=sys.stderr)
+     results = []
+     waited = 0
+     attempts_started = 0
+     fatal = setup_error is not None
+     fatal_reason = setup_error
+     retained = None
+     def run_at(workdir, token=None):
+         extra = {"source_token": token} if token is not None else {}
++        if a.max_per_window:
++            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
+         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
+                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
+     try:
+         for sc in scs if baseline is not None else []:
+             for k in range(1, a.runs + 1):
+                 retried = []
+                 while True:
+                     work = None
+                     token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
+                     res = None
+                     attempt_fatal = False
+                     attempt_sandbox_secs = 0.0
+                     attempt_model_secs = 0.0
+                     setup_started = time.monotonic()
+                     try:
++                        bad = _validate_scenario(sc)
++                        if bad:
++                            raise ValueError(bad)
+                         if a.max_attempts and attempts_started >= a.max_attempts:
+                             raise ProbeAttemptBudgetExceeded("模型嘗試額度已用完")
+                         # baseline 已套用 arm；每場從它複製，不能讓前場或來源的後續修改滲入。
+                         work = make_sandbox(baseline, "with", source_probe=(sc["source_probe"], token) if token else None)
+                         setup_elapsed = time.monotonic() - setup_started
+                         sandbox_secs += setup_elapsed
+                         attempt_sandbox_secs += setup_elapsed
+                         model_started = time.monotonic()
+                         try:
+                             attempts_started += 1
+@@ -1053,21 +1145,21 @@ def main():
+                             model_secs += attempt_model_secs
+                             # runner/解析器拋錯也可能已改到真 HOME；下一場前仍須驗健康。
+                             try:
+                                 health = global_skills_health()
+                             except Exception as e:
+                                 raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
+                             if health:
+                                 raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                     except Exception as e:
+                         if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError,
+-                                                          ProbeAttemptBudgetExceeded)):
++                                                          ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError)):
+                             attempt_fatal = True
+                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
+                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                                "limit_hit": False, "result_subtype": None, "source_evidence": "unknown" if sc.get("source_probe") else None,
+                                "fatal": attempt_fatal}
+                     finally:
+                         # 讀碼標記的現場永不保留；普通題只保留最後一場通過隔離驗收的副本。
+                         retain = bool(a.keep and not token and not attempt_fatal
+@@ -1106,20 +1198,31 @@ def main():
+                         if work is None:
+                             setup_elapsed = time.monotonic() - setup_started
+                             sandbox_secs += setup_elapsed
+                             attempt_sandbox_secs += setup_elapsed
+                     res["sandbox_secs"] = round(attempt_sandbox_secs, 3)
+                     res["model_secs"] = round(attempt_model_secs, 3)
+                     if attempt_fatal:
+                         fatal = True
+                         fatal_reason = res["reason"]
+                     if res.get("limit_hit") and waited < a.wait_on_limit:
++                        try:
++                            exhausted = bool(a.max_attempts and attempts_started >= a.max_attempts)
++                            if a.max_per_window:
++                                exhausted = exhausted or attempt_ledger_remaining(Path(a.attempt_ledger or default_attempt_ledger()).absolute(), a.max_per_window) <= 0
++                            if exhausted:
++                                raise ProbeAttemptBudgetExceeded("重試前模型額度已用完，未等待或啟動模型")
++                        except (ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError) as exc:
++                            res.update(passed=False, fatal=True, limit_hit=False, reason=f"儀器例外: {type(exc).__name__}: {exc}")
++                            fatal = True
++                            fatal_reason = res["reason"]
++                            break
+                         retried.append({"reason": res.get("reason"),
+                                         "sandbox_secs": res["sandbox_secs"],
+                                         "model_secs": res["model_secs"]})
+                         print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+                         time.sleep(300); waited += 300
+                         continue
+                     break
+                 if retried:
+                     res["retry_attempts"] = retried
+                 res["run"] = k
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index aebf90fa..9287b051 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1840,20 +1840,219 @@ class TestScenarioProbeAblation(unittest.TestCase):
+     def setUpClass(cls):
+         import importlib.util
+         root = Path(__file__).resolve().parent.parent
+         spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+         cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
+         spec2 = importlib.util.spec_from_file_location("ablation_lumos_first",
+                                                        root / "governance" / "eval" / "ablation_lumos_first.py")
+         cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
+         cls.root = root
+ 
++    def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
++        import threading
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            ledger = root / "bad.sqlite3"
++            ledger.write_bytes(b"not a database")
++            stop = threading.Event()
++            with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger, create=True), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("model must not launch")):
++                result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
++            self.assertIn("失效", result[2])
++            self.assertTrue(stop.is_set())
++            markers = list(root.glob("*.json"))
++            self.assertEqual(len(markers), 1)
++            evidence = json.loads(markers[0].read_text())
++            self.assertTrue(evidence["fatal"])
++            self.assertEqual(evidence["failure_type"], "attempt-ledger")
++            self.assertTrue(list(root.glob("*.pending")))
++            self.assertTrue(list(root.glob("*.log")))
++            self.assertFalse(list(root.glob("*.candidate")))
++            self.assertEqual(ledger.read_bytes(), b"not a database")
++
++    def test_attempt_ledger_cold_start_expiry_and_zero_mode(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            ledger = Path(tmp) / "usage.sqlite3"
++            self.assertTrue(self.sp.claim_model_attempt(ledger, 0, now=1000))
++            self.assertFalse(ledger.exists())
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 2, now=1000.25), 0)
++            self.assertFalse(self.sp.claim_model_attempt(ledger, 2, now=19000.24))
++            self.assertTrue(self.sp.claim_model_attempt(ledger, 2, now=19000.25))
++            self.assertTrue(self.sp.claim_model_attempt(ledger, 2, now=19000.75))
++            self.assertFalse(self.sp.claim_model_attempt(ledger, 2, now=37000.24))
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 2, now=37000.25), 1)
++            with self.assertRaises(self.sp.ProbeAttemptLedgerError):
++                self.sp.attempt_ledger_remaining(ledger, 2, now=18000)
++
++    def test_attempt_ledger_two_processes_share_last_slot(self):
++        import subprocess
++        with tempfile.TemporaryDirectory() as tmp:
++            ledger = Path(tmp) / "usage.sqlite3"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
++            script = "import sys; sys.path.insert(0, sys.argv[1]); import scenario_probe as p; print(int(p.claim_model_attempt(sys.argv[2], 1, now=20000)))"
++            commands = [[sys.executable, "-c", script, str(self.root / "scripts"), str(ledger)] for _ in range(2)]
++            children = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for cmd in commands]
++            outputs = [child.communicate(timeout=15) for child in children]
++            self.assertEqual([child.returncode for child in children], [0, 0], outputs)
++            self.assertEqual(sorted(out.strip() for out, err in outputs), ["0", "1"])
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 0)
++
++    def test_attempt_ledger_failed_launch_archive_and_cross_date_keep_quota(self):
++        import subprocess, threading
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            ledger = root / "usage.sqlite3"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
++            old = root / "2026-10-07"; old.mkdir()
++            newer = root / "2026-10-08"; newer.mkdir()
++            launched = []
++            scenario = {"id": "q", "prompt": "probe", "expect": "lumos"}
++            def launch(cmd, **kwargs):
++                if cmd[0] == "claude":
++                    launched.append(cmd)
++                    raise subprocess.TimeoutExpired(cmd, 1)
++                candidate = Path(cmd[cmd.index("--out") + 1])
++                path = Path(cmd[cmd.index("--attempt-ledger") + 1])
++                row = self.sp.run_one(scenario, root, 1, 1, "", attempt_ledger=path, max_per_window=1)
++                candidate.write_text(json.dumps({"arm": "with", "results": [row], "fatal": True, "inconclusive": True, "skills_health_bad": []}))
++                return subprocess.CompletedProcess(cmd, 3)
++            with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), mock.patch.object(self.sp.time, "time", return_value=20000), mock.patch.object(self.sp.subprocess, "run", side_effect=launch):
++                stop = threading.Event()
++                first = self.rn.run_job("with", "q", 1, [], 1, 1, old, 0, max_per_window=1, stop=stop)
++                self.assertIn("失效", first[2])
++                self.assertEqual(len(launched), 1)
++                archive = root / "archive"; archive.mkdir()
++                for artifact in old.iterdir():
++                    artifact.rename(archive / artifact.name)
++                for output in (old, newer):
++                    retry = self.rn.run_job("with", "q", 1, [], 1, 1, output, 0, max_per_window=1)
++                    self.assertTrue(retry[2].startswith("skip"), retry)
++                self.assertEqual(len(launched), 1, "失敗、歸檔、跨日皆不退還模型啟動意圖")
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 0)
++
++    def test_attempt_ledger_invalid_scenario_spends_no_intent(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp); ledger = root / "usage.sqlite3"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
++            with mock.patch.object(self.sp.time, "time", return_value=20000), mock.patch.object(self.sp.subprocess, "run", side_effect=AssertionError("must not launch")):
++                result = self.sp.run_one({"id": "q", "prompt": "probe"}, root, 1, 1, "", attempt_ledger=ledger, max_per_window=1)
++            self.assertFalse(result["passed"])
++            self.assertIn("expect", result["reason"])
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 1)
++
++    def test_attempt_ledger_lock_timeout_preserves_parent_incident(self):
++        import sqlite3, threading
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp); ledger = root / "usage.sqlite3"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
++            with sqlite3.connect(ledger, isolation_level=None) as locked:
++                locked.execute("BEGIN IMMEDIATE")
++                stop = threading.Event()
++                started = time.monotonic()
++                with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("must not launch")):
++                    result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
++                elapsed = time.monotonic() - started
++                locked.rollback()
++            self.assertIn("失效", result[2])
++            self.assertTrue(stop.is_set())
++            self.assertGreaterEqual(elapsed, 4)
++            self.assertLess(elapsed, 10)
++            self.assertEqual(json.loads(next(root.glob("*.json")).read_text())["failure_type"], "attempt-ledger")
++            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20000), 1)
++
++    def test_attempt_ledger_process_death_retains_committed_intent(self):
++        import subprocess
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp); ledger = root / "usage.sqlite3"; ready = root / "ready"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
++            script = "import sys,time; from pathlib import Path; sys.path.insert(0,sys.argv[1]); import scenario_probe as p; assert p.claim_model_attempt(sys.argv[2],1,now=20000); Path(sys.argv[3]).write_text('ready'); time.sleep(30)"
++            child = subprocess.Popen([sys.executable, "-c", script, str(self.root / "scripts"), str(ledger), str(ready)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
++            try:
++                deadline = time.monotonic() + 5
++                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
++                    time.sleep(.02)
++                self.assertTrue(ready.exists(), "啟動意圖需先真正提交")
++                child.kill()
++                child.communicate(timeout=5)
++                self.assertFalse(self.sp.claim_model_attempt(ledger, 1, now=20001))
++            finally:
++                if child.poll() is None:
++                    child.kill(); child.communicate(timeout=5)
++
++    def test_attempt_ledger_two_parent_race_retains_loser_candidate(self):
++        import subprocess
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp); ledger = root / "usage.sqlite3"
++            self.sp.attempt_ledger_remaining(ledger, 1, now=time.time() - 20000)
++            probe = root / "fake_probe.py"
++            probe.write_text("""import argparse,json,sys
++from pathlib import Path
++sys.path.insert(0, sys.argv[1]); import scenario_probe as p
++ap=argparse.ArgumentParser(add_help=False)
++ap.add_argument('--out'); ap.add_argument('--attempt-ledger'); ap.add_argument('--max-per-window',type=int)
++a,_=ap.parse_known_args(sys.argv[2:])
++ok=p.claim_model_attempt(a.attempt_ledger,a.max_per_window)
++if ok: Path(a.out).with_suffix('.launched').write_text('fake model launched')
++row={'id':'q','passed':ok,'calls':[],'n_calls':0,'arm':'with','fatal':not ok,'limit_hit':False,'reason':'ok' if ok else '儀器例外: quota'}
++Path(a.out).write_text(json.dumps({'arm':'with','results':[row],'fatal':not ok,'inconclusive':not ok,'skills_health_bad':[]}))
++sys.exit(0 if ok else 3)
++""")
++            # 父派工器在查帳之後同步，重現兩者皆見到最後一個名額的 race。
++            parent = """import sys,importlib.util,time,threading,json
++from pathlib import Path
++repo,root,ident=sys.argv[1:]
++root=Path(root); out=root/ident; out.mkdir()
++spec=importlib.util.spec_from_file_location('ablation',Path(repo)/'governance/eval/ablation_lumos_first.py')
++m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
++probe=root/'fake_probe.py'
++# run_job 的啟動向量固定為 python + PROBE；替身自行找正式 scenario_probe 模組。
++text=probe.read_text(); text=text.replace('sys.path.insert(0, sys.argv[1])', 'sys.path.insert(0, '+repr(str(Path(repo)/'scripts'))+')').replace('sys.argv[2:]', 'sys.argv[1:]')
++local=root/('fake-'+ident+'.py');local.write_text(text);m.PROBE=local
++original=m.attempt_ledger_remaining
++def remaining(path,limit):
++ value=original(path,limit)
++ (root/('ready-'+ident)).write_text('ready')
++ deadline=time.monotonic()+10
++ while len(list(root.glob('ready-*')))<2:
++  if time.monotonic()>deadline: raise RuntimeError('barrier timeout')
++  time.sleep(.01)
++ return value
++m.attempt_ledger_remaining=remaining
++stop=threading.Event()
++result=m.run_job('with','q',1,[],1,1,out,300,max_per_window=1,stop=stop,attempt_ledger=root/'usage.sqlite3')
++print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(out.glob('*.candidate'))),'pending':len(list(out.glob('*.pending')))}))
++"""
++            children = [subprocess.Popen([sys.executable, "-c", parent, str(self.root), str(root), ident], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for ident in ("a", "b")]
++            try:
++                outputs = [child.communicate(timeout=20) for child in children]
++                self.assertEqual([child.returncode for child in children], [0, 0], outputs)
++                results = [json.loads(out) for out, err in outputs]
++                losers = [r for r in results if r['stop']]
++                self.assertEqual(len(losers), 1, results)
++                self.assertEqual((losers[0]['candidate'], losers[0]['pending']), (1, 1))
++                self.assertIn('失效', losers[0]['status'])
++                self.assertEqual(len(list(root.glob('*/*.launched'))), 1)
++                self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1), 0)
++            finally:
++                for child in children:
++                    if child.poll() is None:
++                        child.kill(); child.communicate(timeout=5)
++
++    def test_ablation_notes_are_not_results_but_legacy_shards_are(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            (root / "with-notes.json").write_text('{"note":"operator memo"}')
++            self.assertEqual(self.rn.collect_skills_health(root), [])
++            (root / "with-shard0.json").write_text(json.dumps({"arm":"with", "results":[{"id":"q", "passed":True}]}))
++            self.assertEqual(self.rn.load_results(root)["with"][0]["id"], "q")
++            (root / "without-q-bad.json").write_text("[]")
++            self.assertTrue(self.rn.collect_skills_health(root))
++
+     def test_strip_removes_only_rule_section(self):
+         txt = ("## 程式碼為主\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
+                + self.sp.RULE_END + "\n1. 寫回\n")
+         out, ok = self.sp.strip_lumos_first_rule(txt)
+         self.assertTrue(ok)
+         self.assertIn("## 程式碼為主\n前提兩行", out, "標題與前提要留")
+         self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "後面那節要留")
+         self.assertNotIn("★第四條★", out, "小節正文要砍")
+         self.assertNotIn(self.sp.RULE_HEAD, out)
+ 
+@@ -1953,21 +2152,24 @@ class TestScenarioProbeAblation(unittest.TestCase):
+ 
+     def test_runs_in_window_counts_recent_only(self):
+         import os, time as _t
+         d = Path(tempfile.mkdtemp())
+         (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
+         old = d / "with-q-b-1.json"
+         old.write_text(json.dumps({"arm": "with", "results": [{}]}), encoding="utf-8")
+         os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
+         (d / "summary.json").write_text("{}", encoding="utf-8")
+         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
+-        self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
++        # 結果視圖只作診斷；派工以獨立持久用量帳為準。
++        ledger = d / "usage.sqlite3"
++        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger):
++            self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
+ 
+     def test_lumos_stats_rejects_quoted_and_echo(self):
+         # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
+         f = self.sp.lumos_stats
+         self.assertEqual(f([("Bash", "rg 'lumos search' CLAUDE.md")]), (False, None))
+         self.assertEqual(f([("Bash", 'echo "lumos doctor"')]), (False, None))
+         self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
+         self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
+         self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1f064d89..d8a7c68b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37587,21 +37587,21 @@ def t_probe_boundary_review4_existing_poison_stops_dispatch():
+     import tempfile, json, io, contextlib, importlib.util
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_r4_preflight", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-preflight-") as td:
+         root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+         outdir = root / "out"; outdir.mkdir()
+         (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "fatal": True,
+             "inconclusive": True, "results": [{"id": "a", "passed": True, "reason": "ok"}]}))
+-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
++        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                 "--arms", "with", "--out-dir", str(outdir)]
+         with patch.object(ablation.sys, "argv", argv), \
+              patch.object(ablation, "run_job", side_effect=lambda arm, qid, n, *_args: (arm, qid, "stub")) as runner, \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              contextlib.redirect_stdout(io.StringIO()):
+             rc = ablation.main()
+         summary = json.loads((outdir / "summary.json").read_text())
+         check("r4 舊失效檔在補跑前就阻止新模型", runner.call_count == 0 and rc == 3
+               and summary["arms"]["with"]["n"] == 0 and summary["skills_health_poisoned"],
+               (runner.call_count, rc, summary))
+@@ -37637,21 +37637,21 @@ def t_probe_boundary_review4_partial_output_stops_batch():
+ 
+ def t_probe_boundary_review4_missing_output_main():
+     import tempfile, json, io, contextlib, importlib.util
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_r4_missing_main", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-missing-main-") as td:
+         root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
+         outdir = root / "out"
+-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
++        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                 "--arms", "with", "--out-dir", str(outdir)]
+         calls = []
+         def run(cmd, **_kwargs):
+             calls.append(cmd)
+             return type("Done", (), {"returncode": 1, "stdout": "stub"})()
+         with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+              contextlib.redirect_stdout(io.StringIO()):
+             rc = ablation.main()
+         summary = json.loads((outdir / "summary.json").read_text())
+         check("r4 live缺檔要讓頂層與summary一起失效", len(calls) == 2 and rc == 3
+@@ -37663,21 +37663,21 @@ def t_probe_boundary_postreview_launch_exception_summary():
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_launch_failure", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     for failure in (FileNotFoundError("probe interpreter missing"),
+                     ablation.subprocess.TimeoutExpired("probe", 1)):
+         with tempfile.TemporaryDirectory(prefix="probe-launch-failure-") as td:
+             root = Path(td); q = root / "q.jsonl"
+             q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+             outdir = root / "out"; launched = []
+-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                     "--arms", "with", "--out-dir", str(outdir)]
+             def run(cmd, **_kwargs):
+                 if cmd == ["claude", "--version"]:
+                     return type("Version", (), {"stdout": "stub"})()
+                 launched.append(cmd)
+                 if isinstance(failure, ablation.subprocess.TimeoutExpired):
+                     Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                         "arm": "with", "results": [{"id": "a", "passed": True, "reason": "ok"}],
+                         "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+                 raise failure
+@@ -37689,21 +37689,21 @@ def t_probe_boundary_postreview_launch_exception_summary():
+                 except type(failure):
+                     pass
+             summary = json.loads((outdir / "summary.json").read_text()) if (outdir / "summary.json").exists() else {}
+             attempts = list(outdir.glob("with-q-*.json"))
+             attempt = json.loads(attempts[0].read_text()) if len(attempts) == 1 else {}
+             check("探針啟動例外須留失效摘要並停下一題 " + type(failure).__name__,
+                   len(launched) == 1 and rc == 3 and bool(summary.get("skills_health_poisoned"))
+                   and attempt.get("fatal") is True and attempt.get("results") == []
+                   and attempt.get("failure_type") == type(failure).__name__
+                   and attempt.get("arm") == "with" and attempt.get("qid") == "a"
+-                  and attempt.get("log_path") and attempt.get("retry_policy") == "archive-fatal-and-candidate-then-rerun"
++                  and attempt.get("log_path") and attempt.get("retry_policy") == "confirm-no-live-probe-then-archive-recovery-paths-and-rerun"
+                   and attempt.get("candidate_path")
+                   and "cmd" not in attempt and "failure_message" not in attempt,
+                   (type(failure).__name__, len(launched), rc, summary, attempt))
+             with patch.object(ablation.sys, "argv", argv + ["--merge-only"]), \
+                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                  contextlib.redirect_stdout(io.StringIO()):
+                 merge_rc = ablation.main()
+             merged = json.loads((outdir / "summary.json").read_text())
+             check("失敗嘗試在下次純合併仍不可採信 " + type(failure).__name__,
+                   merge_rc == 3 and bool(merged["skills_health_poisoned"])
+@@ -37714,61 +37714,61 @@ def t_probe_boundary_postreview_launch_exception_summary():
+ def t_probe_boundary_postreview_serial_dispatch():
+     import tempfile, json, io, contextlib, importlib.util
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_serial", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-serial-dispatch-") as td:
+         root = Path(td); q = root / "q.jsonl"
+         q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
+         outdir = root / "out"; calls = []
+-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
++        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
+                 "--arms", "with", "--out-dir", str(outdir)]
+         def runner(arm, qid, n, files, timeout, max_turns, output, wait_on_limit, model, max_per_window, stop):
+             calls.append(qid)
+             stop.set()
+             return (arm, qid, "stub failure")
+         with patch.object(ablation.sys, "argv", argv), patch.object(ablation, "run_job", side_effect=runner), \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              contextlib.redirect_stdout(io.StringIO()):
+             rc = ablation.main()
+         summary = json.loads((outdir / "summary.json").read_text())
+         check("事故後不得再啟動下一個工作", calls == ["a"] and rc == 3
+               and bool(summary["skills_health_poisoned"]), (calls, rc, summary))
+     with tempfile.TemporaryDirectory(prefix="probe-parallel-reject-") as td:
+         q = Path(td) / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+         for value in ("0", "-1", "2"):
+             outdir = Path(td) / ("out-" + value)
+-            argv = ["ablation", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
+             rejected = False
+             with patch.object(ablation.sys, "argv", argv), \
+                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                  patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                 try:
+                     ablation.main()
+                 except (SystemExit, ValueError) as exc:
+                     rejected = isinstance(exc, SystemExit) and exc.code == 2
+             check("live 派工拒絕無效 workers 且不改寫目錄 " + value,
+                   rejected and runner.call_count == 0 and not outdir.exists(),
+                   (value, rejected, runner.call_count, outdir.exists()))
+-        outdir = Path(td) / "merge"; argv = ["ablation", "--questions", str(q),
++        outdir = Path(td) / "merge"; argv = ["ablation", "--max-per-window", "0", "--questions", str(q),
+             "--workers", "2", "--merge-only", "--out-dir", str(outdir)]
+         with patch.object(ablation.sys, "argv", argv), \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+              contextlib.redirect_stdout(io.StringIO()):
+             merge_rc = ablation.main()
+         check("純合併不因 workers 舊參數誤擋", merge_rc == 0 and runner.call_count == 0,
+               (merge_rc, runner.call_count))
+         default_out = Path(td) / "default"
+-        default_argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++        default_argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                         "--out-dir", str(default_out)]
+         with patch.object(ablation.sys, "argv", default_argv), \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              patch.object(ablation, "run_job", return_value=("with", "a", "stub")), \
+              contextlib.redirect_stdout(io.StringIO()):
+             ablation.main()
+         meta = json.loads((default_out / "meta.json").read_text())
+         check("省略 workers 時預設單路", meta["workers"] == 1, meta)
+ 
+ 
+@@ -37790,21 +37790,21 @@ def t_probe_boundary_postreview_cross_process_lock():
+                 dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                 try:
+                     fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                     ready.set(); release.wait(10)
+                 finally:
+                     os.close(dir_fd)
+         child = multiprocessing.get_context("fork").Process(target=hold_lock)
+         child.start()
+         try:
+             held = ready.wait(5)
+-            argv = ["ablation", "--questions", str(q), "--workers", "1", "--arms", "with",
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", "1", "--arms", "with",
+                     "--runs", "1", "--out-dir", str(outdir)]
+             with patch.object(ablation.sys, "argv", argv), \
+                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                  patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                  contextlib.redirect_stdout(io.StringIO()):
+                 rc = ablation.main() if held else None
+             check("另一進程持有批次鎖時拒絕派工且不覆寫舊摘要", held and rc == 3
+                   and runner.call_count == 0 and (outdir / "meta.json").read_bytes() == old_meta
+                   and (outdir / "summary.json").read_bytes() == old_summary,
+                   (held, rc, runner.call_count))
+@@ -37830,21 +37830,21 @@ def t_probe_boundary_postreview_lockfile_replacement():
+                 dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
+                 try:
+                     fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                     (outdir / ".ablation.lock").unlink()
+                     ready.set(); release.wait(10)
+                 finally:
+                     os.close(dir_fd)
+         child = multiprocessing.get_context("fork").Process(target=hold_lock); child.start()
+         try:
+             held = ready.wait(5)
+-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                     "--out-dir", str(outdir)]
+             with patch.object(ablation.sys, "argv", argv), \
+                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                  patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                 rc = ablation.main() if held else None
+             check("鎖檔被移除後第二批仍不得進入", held and rc == 3 and batch.call_count == 0,
+                   (held, rc, batch.call_count))
+         finally:
+             release.set(); child.join(5)
+@@ -37862,21 +37862,21 @@ def t_probe_boundary_postreview_legacy_lock_interop():
+         root = Path(td); outdir = root / "out"; outdir.mkdir()
+         q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+         ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+         def hold_legacy_lock():
+             with open(outdir / ".ablation.lock", "a+") as f:
+                 fcntl.flock(f, fcntl.LOCK_EX)
+                 ready.set(); release.wait(10)
+         child = multiprocessing.get_context("fork").Process(target=hold_legacy_lock); child.start()
+         try:
+             held = ready.wait(5)
+-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                     "--out-dir", str(outdir)]
+             with patch.object(ablation.sys, "argv", argv), \
+                  patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                 rc = ablation.main() if held else None
+             check("舊版批次只持鎖檔時新版仍拒絕進入", held and rc == 3 and batch.call_count == 0,
+                   (held, rc, batch.call_count))
+         finally:
+             release.set(); child.join(5)
+             if child.is_alive():
+@@ -37911,43 +37911,45 @@ def t_probe_boundary_postreview_symlink_outputs():
+     spec = importlib.util.spec_from_file_location("ablation_symlink_outputs", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-symlink-outputs-") as td:
+         root = Path(td); outdir = root / "out"; outdir.mkdir()
+         q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+         victims = {}
+         for name in ("meta.json", "summary.json", "summary.md"):
+             victim = root / (name + ".victim"); victim.write_text("KEEP-ME")
+             (outdir / name).symlink_to(victim); victims[name] = victim
+-        argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
++        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+         with patch.object(ablation.sys, "argv", argv), \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              contextlib.redirect_stdout(io.StringIO()):
+             rc = ablation.main()
+         check("摘要落檔不得跟隨既有符號連結到目錄外", rc == 0
+               and all(v.read_text() == "KEEP-ME" for v in victims.values())
+-              and all(not (outdir / name).is_symlink() for name in victims)
++              and all(not (outdir / name).is_symlink() for name in ("summary.json", "summary.md"))
++              and (outdir / "meta.json").is_symlink()
++              and "來源日期未知" in (outdir / "summary.md").read_text()
+               and isinstance(json.loads((outdir / "summary.json").read_text()), dict),
+               (rc, {k: v.read_text()[:40] for k, v in victims.items()}))
+ 
+ 
+ def t_probe_boundary_postreview_long_qid():
+     import tempfile, io, contextlib, importlib.util, json
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_long_qid", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-long-qid-") as td:
+         root = Path(td); qid = "q" * 220; q = root / "q.jsonl"
+         q.write_text(json.dumps({"id": qid, "prompt": "a"}) + "\n")
+         outdir = root / "out"
+-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
+                 "--out-dir", str(outdir)]
+         def run(cmd, **_kwargs):
+             if cmd == ["claude", "--version"]:
+                 return type("Version", (), {"stdout": "stub"})()
+             Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                 "arm": "with", "results": [{"id": qid, "passed": True, "reason": "ok"}],
+                 "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+             return type("Done", (), {"returncode": 0})()
+         with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
+              contextlib.redirect_stdout(io.StringIO()):
+@@ -38072,22 +38074,25 @@ def t_probe_boundary_formal_dispatch_fail_closed():
+                 "inconclusive": False, "skills_health_bad": []}))
+             check("錯型計分欄位拒收 " + str(bad_field), bool(ablation.collect_skills_health(outdir))
+                   and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+     with tempfile.TemporaryDirectory(prefix="probe-formal-cap-") as td:
+         outdir = Path(td)
+         def count(cmd, **_kwargs):
+             result_data = {"arm": "with", "results": [{"id": "a", "passed": True}],
+                            "fatal": False, "inconclusive": False, "skills_health_bad": []}
+             Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps(result_data))
+             return type("Result", (), {"returncode": 0})()
+-        with patch.object(ablation.subprocess, "run", side_effect=count) as run:
+-            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50)
++        ledger = outdir / "usage.sqlite3"
++        ablation.attempt_ledger_remaining(ledger, 50, now=1000)
++        with patch.object(ablation.subprocess, "run", side_effect=count) as run, \
++             patch.object(ablation.time, "time", return_value=20000):
++            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50, attempt_ledger=ledger)
+         check("單一工作不可超過窗口剩餘額度", run.call_count == 1 and
+               int(run.call_args.args[0][run.call_args.args[0].index("--runs") + 1]) <= 50
+               and run.call_args.args[0][run.call_args.args[0].index("--max-attempts") + 1] == "50",
+               run.call_args)
+     summary = {"arms": {"with": {"m1_passed": 0, "n": 0, "m1_rate": None,
+              "m2_ever": 0, "m2_n": 0, "m2_rate": None, "m3_first_idx_median": None, "m3_n": 0,
+              "m4_gated_passed": 0, "m4_gated_n": 0, "m4_content_passed": 0, "m4_content_n": 0,
+              "inconsistent_questions": [], "missing": 1, "limit_hits": 0, "instrument_errors": 0},
+              "without": {}}, "expected_ids": ["a"], "runs": 1, "m1_delta_pp": None,
+              "class_counts": {}, "per_question": {}, "skills_health_poisoned": [("bad.json", ["fatal"])]}
+@@ -38149,21 +38154,21 @@ def t_probe_boundary_formal_input_validation():
+         root = Path(td); q = root / "q.jsonl"; outdir = root / "out"
+         for qid in ("", "a,b", "a\nspoof"):
+             q.write_text(__import__("json").dumps({"id": qid}) + "\n")
+             try:
+                 ids = ablation.load_ids([str(q)])
+             except ValueError:
+                 ids = []
+             check("非法題號入口須拒絕 " + repr(qid), not ids, ids)
+         q.write_text('{"id":"a"}\n')
+         for arms in ("with,with", "../escaped", "with,"):
+-            argv = ["ablation", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
+             rejected = False
+             with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
+                 try:
+                     ablation.main()
+                 except SystemExit as exc:
+                     rejected = exc.code == 2
+             check("非法組別在落檔前拒絕 " + arms, rejected and not outdir.exists(),
+                   (rejected, list(root.iterdir())))
+         q.write_text('{"id":"a"}\n{"id":"a-extra"}\n')
+         probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
+@@ -38178,61 +38183,62 @@ def t_probe_boundary_formal_input_validation():
+         def fake_run(cmd, **_kwargs):
+             if cmd == ["claude", "--version"]:
+                 return type("Version", (), {"stdout": "stub"})()
+             target = Path(cmd[cmd.index("--out") + 1]); captured.append(target)
+             target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                           "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+             return type("Result", (), {"returncode": 0})()
+         old_cwd = Path.cwd()
+         try:
+             os.chdir(root)
+-            argv = ["ablation", "--questions", str(q), "--arms", "with", "--runs", "1",
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", "with", "--runs", "1",
+                     "--out-dir", "relative/out"]
+             with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=fake_run), \
+                  contextlib.redirect_stdout(io.StringIO()):
+                 rc = ablation.main()
+         finally:
+             os.chdir(old_cwd)
+         check("相對輸出路徑與鎖指向同一絕對目錄", rc == 0 and len(captured) == 1
+               and captured[0].is_absolute() and captured[0].parent.resolve() == (root / "relative/out").resolve(),
+               (rc, captured))
+         meta = root / "relative/out/meta.json"
+         meta.write_text(json.dumps({"date": "2025-01-02", "claude_version": "historical"}))
+-        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
++        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
+                                                 "--out-dir", "relative/out"]), \
+              patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+              contextlib.redirect_stdout(io.StringIO()):
+             old_cwd = Path.cwd()
+             try:
+                 os.chdir(root)
+                 merge_rc = ablation.main()
+             finally:
+                 os.chdir(old_cwd)
+         check("純合併保留來源版本，不能冒稱當前 CLI", merge_rc == 0
+               and json.loads(meta.read_text())["claude_version"] == "historical"
+               and "historical" in (meta.parent / "summary.md").read_text(), meta.read_text())
+         meta.write_text("{}")
+-        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
++        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
+                                                 "--out-dir", "relative/out"]), \
+              patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+              contextlib.redirect_stdout(io.StringIO()):
+             old_cwd = Path.cwd()
+             try:
+                 os.chdir(root)
+                 unknown_rc = ablation.main()
+             finally:
+                 os.chdir(old_cwd)
+-        unknown_meta = json.loads(meta.read_text())
++        unknown_report = (meta.parent / "summary.md").read_text()
+         check("歷史 meta 空物件要明寫來源未知", unknown_rc == 0
+-              and unknown_meta.get("date") == "來源日期未知"
+-              and unknown_meta.get("claude_version") == "來源版本未知",
+-              unknown_meta)
++              and meta.read_text() == "{}"
++              and "來源日期未知" in unknown_report
++              and "來源版本未知" in unknown_report,
++              (meta.read_text(), unknown_report[:200]))
+ 
+ 
+ def t_probe_boundary_formal_second_round_regressions():
+     """先證明事故路徑被執行，再驗歸檔、短列、錯型、題號與窗口不假綠。"""
+     import tempfile, json, importlib.util, time
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_formal_r2", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-formal-r2-") as td:
+@@ -38355,20 +38361,149 @@ def t_probe_boundary_formal_retry_budget():
+             rc = mod.main()
+         data = json.loads(out.read_text())
+         check("重試確實發生且額度用盡前只叫兩次模型", len(calls) == 2
+               and len(data["results"][0].get("retry_attempts", [])) == 1,
+               (len(calls), data))
+         check("額度用盡不能再啟動第三次且整批 fatal", rc == 3 and data["fatal"] is True
+               and data["inconclusive"] is True and len(calls) == 2,
+               (rc, len(calls), data))
+ 
+ 
++def t_probe_boundary_persistent_ledger_stop_contracts():
++    """從 CLI 結果與模型啟動數驗拒絕與重試，預期不重抄用量算法。"""
++    import tempfile, json, io, contextlib
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_persistent_stop")
++    with tempfile.TemporaryDirectory(prefix="probe-ledger-stop-") as td:
++        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
++        q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
++        out = root / "out.json"; ledger = root / "usage.sqlite3"
++        mod.attempt_ledger_remaining(ledger, 1, now=1000)
++        mod.claim_model_attempt(ledger, 1, now=20000)
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--runs", "2",
++                "--wait-on-limit", "300", "--max-per-window", "1", "--attempt-ledger", str(ledger), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod.time, "time", return_value=20001), \
++             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        data = json.loads(out.read_text()); row = data["results"][0]
++        check("claim 被拒絕產生整批不可判而非計分失敗", rc == 3 and data["fatal"] and data["inconclusive"]
++              and data["valid_total"] == 0 and len(data["results"]) == 1, data)
++        check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
++              and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
++        # 供應商回上限且最後一次批次名額已花掉：直接停止，不能先等 300 秒。
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
++                "--max-attempts", "1", "--out", str(out)]
++        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
++                   "secs": 0, "limit_hit": True, "source_evidence": None}
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=limited) as model, \
++             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        data = json.loads(out.read_text())
++        check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
++              and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
++
++
++def t_probe_boundary_fourth_round_result_contracts():
++    """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
++    import tempfile, json, importlib.util
++    spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
++        outdir = Path(td)
++        a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
++        b = {"id": "b", "passed": False, "calls": [], "n_calls": 0}
++        path = outdir / "with-q-a.json"
++        path.write_text(json.dumps({"arm": "with", "results": [a] * 100 + [b]}))
++        check("現場確有一百筆同題成功與另一題失敗", len(ablation.load_results(outdir)["with"]) == 101)
++        result = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
++        check("同題超額列不能灌高通過率或工具使用分母", result["n"] == 2
++              and result["m1_passed"] == 1 and result["m1_rate"] == 0.5
++              and result["m2_n"] == 2 and result["m2_ever"] == 1, result)
++        path.write_text(json.dumps({"arm": "with", "results": [a, b]}))
++        normal = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
++        check("正常一題一場仍保留二分之一與首次工具步數", normal["m1_rate"] == 0.5
++              and normal["m3_first_idx_median"] == 0 and normal["missing"] == 0, normal)
++        for calls in ([42], [["Bash"]], [["Bash", 42]], [[42, "lumos"]]):
++            path.write_text(json.dumps({"arm": "with", "results": [{**a, "calls": calls}]}))
++            check("錯型工具呼叫整批拒收而非算沒有使用工具 " + repr(calls),
++                  bool(ablation.collect_skills_health(outdir))
++                  and not ablation.load_results(outdir)["with"], ablation.collect_skills_health(outdir))
++
++
++def t_probe_boundary_fourth_round_recovery_recipe():
++    """照事故紀錄給的路徑歸檔，真健康入口須恢復且下一次能升格正式結果。"""
++    import tempfile, json, importlib.util
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_r4_recovery", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-r4-recovery-") as td:
++        outdir = Path(td)
++        def fake_probe(cmd, **_kwargs):
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({"arm": "with",
++                "results": [{"id": "a", "passed": True}], "fatal": False,
++                "inconclusive": False, "skills_health_bad": []}))
++            return type("Result", (), {"returncode": 2 if runner.call_count == 1 else 0})()
++        with patch.object(ablation.subprocess, "run", side_effect=fake_probe) as runner:
++            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++            artifacts = list(outdir.glob("with-q-*"))
++            marker = json.loads(next(outdir.glob("with-q-*.json")).read_text())
++            expected = {str(p) for p in artifacts if p.suffix in (".json", ".candidate", ".pending")}
++            check("現場失敗確有正式事故候選與未完成三檔", runner.call_count == 1
++                  and len(expected) == 3 and bool(ablation.collect_skills_health(outdir)), artifacts)
++            recovery = marker.get("recovery_paths", [])
++            check("恢復清單列齊三檔", set(recovery) == expected, marker)
++            for name in recovery:
++                p = Path(name); p.rename(p.with_suffix(p.suffix + ".archived"))
++            check("照紀錄完整歸檔後健康掃描恢復", not ablation.collect_skills_health(outdir),
++                  ablation.collect_skills_health(outdir))
++            if not ablation.collect_skills_health(outdir):
++                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++                check("恢复后新結果經父程序核對升格且可抵缺場", runner.call_count == 2
++                      and not ablation.collect_skills_health(outdir)
++                      and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 0)
++
++
++def t_probe_boundary_fourth_round_report_and_provenance():
++    """真純合併入口保留壞meta原始byte，報表的題號／檔名／來源不產生HTML。"""
++    import tempfile, json, importlib.util, io, contextlib
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_r4_report", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-r4-report-") as td:
++        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a"}\n')
++        outdir = root / "out"; outdir.mkdir(); meta = outdir / "meta.json"
++        for raw in (b'{"date":', b'[]', b'{}'):
++            meta.write_bytes(raw)
++            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
++            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
++                 patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not launch model")):
++                rc = ablation.main()
++            check("純合併保留不可判meta原始證據 " + repr(raw), rc == 0 and meta.read_bytes() == raw,
++                  (rc, meta.read_bytes()))
++            report = (outdir / "summary.md").read_text()
++            check("meta不可判仍在報表明寫來源未知", "來源日期未知" in report and "來源版本未知" in report, report[:200])
++        attack = '<img src=x onerror=alert(1)>'
++        row = {"id": attack, "passed": True}
++        (outdir / "with-q-results.json").write_text(json.dumps({"arm": "with", "results": [row, {**row, "passed": False}]}))
++        summary = ablation.merge(outdir, [attack], 2)
++        summary["skills_health_poisoned"] = [(attack, ["failed"])]
++        md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
++        check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
++        check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
++
++
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)

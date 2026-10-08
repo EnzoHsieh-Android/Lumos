@@ -2,8 +2,9 @@
 type: system
 status: doing
 created: 2026-10-04
-updated: 2026-10-04
+updated: 2026-10-08
 responsibility: 負責探針消融結果檔的有效性篩選、缺場補跑與統計合併；不負責探針沙盒本身的隔離與健康檢查執行
+self_audit: gpt-5.6-sol/2026-10-08
 aliases: []
 about_code:
   - governance/eval/ablation_lumos_first.py
@@ -29,6 +30,7 @@ verified_by:
   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
   - "[[Verification/2026-10-08_消融結果與恢復控制驗證]]"
   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
+  - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
 ---
 # ablation-lumos-first
 
@@ -58,7 +60,7 @@ PITFALL: r2 指出只歸檔 `.pending` 會讓原先由子程序直寫的成功�
 
 PITFALL: 結果欄位錯型、非物件逐場元素及 A 題多跑遮掉 B 題缺場，都曾讓讀取端報出虛高數字。現在按檔拒收錯型結果，缺場逐題計算；旁邊的無關 JSON 不再當探針事故。出處同篇 Verification 的 r2 intake；防回歸 `t_probe_boundary_formal_second_round_regressions` 與 `test_load_results_skips_bad_json`。結果 schema 或檔名規則變更時重跑。
 
-WHY: 五小時窗口要算實際模型呼叫，故正式結果中的重試次數也計入，並把剩餘額度傳給探針；純合併保留可用的歷史 meta，缺日期或版本則標未知。出處 [[Projects/探針隔離與清理收斂_計劃]] S17–S18、[[Verification/2026-10-04_消融派工正式審查修正]]；反例 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。若改窗口或 meta 來源，先核對實際模型啟動數與歷史報表標示。
+WHY: [status:superseded] 2026-10-04 曾以正式結果與重試次數近似「實際模型呼叫」；2026-10-08 持久帳設計已推翻這個權威來源，改記模型啟動前提交且失敗不退還的 launch-intent。舊近似只保留為決策歷史，現況與驗證入口見 [[Projects/探針持久用量帳_計劃]]、[[Verification/2026-10-08_持久用量帳暫存控制驗證]]。
 
 PITFALL: 上段只是 r2 修法的意圖，r3 證明現碼沒有做到帳號級五小時額度：`runs_in_window` 只掃當前日期目錄內正式 JSON；子程序失敗時真正用量留在候選檔，歸檔後歸零，跨午夜也歸零。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 FAIL 與 `r3-intake.md` G10–G11；重現指令與輸出在同一 intake。若保留硬額度，先建不隨結果歸檔消失的權威用量帳，不能再從 M1 計分結果推回實耗。
 
