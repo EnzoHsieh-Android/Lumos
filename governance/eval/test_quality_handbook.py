@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # 模型程序與 CLI 收證共用同一個程序群清理實作，不另抄一份。
 sys.path.insert(0, str(ROOT / 'scripts'))
-from test_quality import CaptureTimeout, run_capture_command
+from test_quality import CaptureInterrupted, CaptureTimeout, run_capture_command
 
 MATERIAL = ROOT / 'governance/eval/test-quality'
 TASKS = {
@@ -255,6 +255,10 @@ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, nat
         raw = exc.stdout or b''
         raw = raw.decode() if isinstance(raw, bytes) else raw
         stderr, rc = 'model-timeout', None
+    except CaptureInterrupted:
+        raise
+    except ValueError as exc:
+        raw, stderr, rc = '', 'model-output-rejected: ' + str(exc), None
     raw_path.write_text(raw)
     raw_path.with_suffix(".stderr.txt").write_text(stderr)
     parsed = events(raw)

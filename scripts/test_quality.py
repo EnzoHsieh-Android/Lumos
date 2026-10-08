@@ -61,7 +61,8 @@ class CaptureInterrupted(ValueError):
 def terminate_group(proc):
     try:
         os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # macOS 對只剩殭屍 leader 的程序群回 EPERM；leader 被 reap 之前 PGID 不會被別人重用。
         pass
     proc.wait()
 

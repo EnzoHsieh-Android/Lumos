@@ -59,4 +59,6 @@ PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launche
 
 WHY: 共用 runner 用 CaptureTimeout 與 CaptureInterrupted 兩個 ValueError 子型別回報逾時與 SIGTERM 中斷，呼叫端按型別分類，中斷一律往上傳、不收成單一輸入的錯誤 [出處:code-test-quality-r4-repair/r3-邊界-sonnet.md BND-1、r3-架構對齊-sonnet.md ARC-2] [因:改用訊息字串比對時，Semgrep backend 把 SIGTERM 收成單檔 unavailable 後繼續掃下一檔，多拖一整段 backend 逾時；字串一改，逾時也會悄悄變成 unavailable] [不選:各呼叫端比對例外訊息字串] [代價:直接執行 scanner 收到 SIGTERM 時以 traceback 非零結束，經 lumos 入口才轉成結構化不完整結果] [test:t_test_quality_scan_cli]。控制方法為 test_sigterm_during_semgrep_stops_scan_and_backend；子型別保留原訊息，CLI capture 的 receipt reason 不變；逾時例外帶著已讀到的部分輸出，供 handbook 保存原始事件。
 
+PITFALL: 逾時邊界上 launcher 剛退出時，macOS 對只剩殭屍 leader 的程序群 killpg 回 EPERM，權限錯誤從 finally 蓋掉原本的回傳或逾時 [出處:code-test-quality-r4-repair/r4-邊界資源-sonnet.md BND4-1] [根因:清理只容忍 ProcessLookupError] [防回歸:test_zombie_only_group_permission_error_is_not_fatal]。leader 被 reap 之前 PGID 不會被別人重用，所以 EPERM 一律視為已無可清；控制用注入的 EPERM 驗呼叫仍正常回傳，因為真實競態 300 次只出現十幾次、不能當穩定測試。
+
 WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。

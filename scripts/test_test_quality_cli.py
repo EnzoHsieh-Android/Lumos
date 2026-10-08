@@ -420,6 +420,37 @@ class QualityCLI(unittest.TestCase):
         while self.alive(pid) and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
+        receipt = json.loads((self.root / "capture" / "receipt.json").read_text())
+        self.assertEqual(receipt["status"], "invalid")
+        self.assertEqual(receipt["reason"], "execution interrupted by signal 15")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_timeout_after_streams_close_keeps_partial_output(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import os,time; print('partial',flush=True); os.close(1); os.close(2); time.sleep(30)",
+        ]
+        module = self.quality_module()
+        with self.assertRaises(module.CaptureTimeout) as caught:
+            module.run_capture_command(command, 1)
+        self.assertEqual(caught.exception.stdout.strip(), b"partial")
+        self.assertEqual(str(caught.exception), "timeout; never detected")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_zombie_only_group_permission_error_is_not_fatal(self):
+        module = self.quality_module()
+        calls = []
+
+        def zombie_group(pgid, sig):
+            calls.append(pgid)
+            raise PermissionError(1, "Operation not permitted")
+
+        with mock.patch.object(module.os, "killpg", zombie_group):
+            rc, out, _ = module.run_capture_command([sys.executable, "-c", "print('done')"], 5)
+        self.assertTrue(calls, "cleanup really reached killpg")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), b"done")
 
     @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
     def test_failed_capture_stops_stream_detached_worker(self):

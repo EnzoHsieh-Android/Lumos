@@ -201,7 +201,8 @@ class ModelCommandTests(unittest.TestCase):
             "#!" + sys.executable + "\nimport subprocess,sys,time\n"
             "p=subprocess.Popen([sys.executable,'-c',"
             "'import time; print(\"worker-holds-stream\",flush=True); time.sleep(60)'])\n"
-            "time.sleep(0.3)\nprint('model-done',p.pid,flush=True)\n"
+            "time.sleep(0.3)\nimport os\nprint('model-cwd',os.getcwd(),flush=True)\n"
+            "print('model-done',p.pid,flush=True)\n"
         )
         fake.chmod(0o755)
         started = time.monotonic()
@@ -210,6 +211,7 @@ class ModelCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         words = result.stdout.split()
         self.assertIn("worker-holds-stream", words, "worker really shared the model stream")
+        self.assertEqual(Path(words[words.index("model-cwd") + 1]).resolve(), self.root.resolve())
         pid = int(words[words.index("model-done") + 1])
         self.addCleanup(
             lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
@@ -218,6 +220,21 @@ class ModelCommandTests(unittest.TestCase):
         while self.alive(pid) and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
+
+    def test_model_output_over_limit_is_invalid_session_not_abort(self):
+        binary = self.root / "bin"
+        binary.mkdir()
+        fake = binary / "claude"
+        fake.write_text("#!" + sys.executable + "\nimport sys\nsys.stdout.write('x' * (11 * 1024 * 1024))\n")
+        fake.chmod(0o755)
+        raw = self.root / "raw.jsonl"
+        with mock.patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}):
+            self.assertEqual(shutil.which("claude"), str(fake), "fixture entrypoint, never real provider")
+            result, _ = ev.run_model(self.root, "fixture", "fixture", "fixture-model", 20, False, raw)
+        self.assertFalse(result["valid"])
+        self.assertIsNone(result["returncode"])
+        self.assertIn("output exceeds 10 MiB", result["stderr"])
+        self.assertTrue(raw.exists(), "session record still written")
 
     @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
     def test_model_timeout_keeps_partial_stream(self):
