@@ -48,6 +48,7 @@ verified_by:
   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
   - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
+  - "[[Verification/持久用量帳第五輪修補驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -126,3 +127,5 @@ PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫�
 WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或解析器故障返還已消耗名額；採 SQLite 原子交易沿用 Python 標準庫、維持零第三方依賴。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
 
 WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建成；`verified_by` 連到 pending 的 [[Verification/2026-10-08_持久用量帳第四輪代碼審停點]] 是負面驗證與下一入口，不表示持久用量帳分支已通過或可推送。
+
+PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。

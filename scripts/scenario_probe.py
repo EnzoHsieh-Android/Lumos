@@ -24,6 +24,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _atomic_write_text(path, content):
+    """以同目錄暫存檔原子取代目標，避免跟隨既有目標符號連結。"""
+    path = Path(path)
+    mode = None
+    try:
+        old = path.lstat()
+        if stat.S_ISREG(old.st_mode):
+            mode = stat.S_IMODE(old.st_mode) & 0o666
+    except FileNotFoundError:
+        pass
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(content)
+            if mode is not None:
+                os.fchmod(tmp.fileno(), mode)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
 def tool_calls_from_codex_json(lines):
     """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
     只認 item.completed:command_execution→("Bash", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→("Edit", 路徑串);
@@ -1219,8 +1245,9 @@ def main():
                         retried.append({"reason": res.get("reason"),
                                         "sandbox_secs": res["sandbox_secs"],
                                         "model_secs": res["model_secs"]})
-                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
-                        time.sleep(300); waited += 300
+                        delay = min(300, a.wait_on_limit - waited)
+                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 {delay} 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+                        time.sleep(delay); waited += delay
                         continue
                     break
                 if retried:
@@ -1284,13 +1311,13 @@ def main():
         if a.out:
             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
-            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
-                                               "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
-                                               "excluded": summ["excluded"], "valid_total": summ["valid_total"],
-                                               "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
-                                               "sandbox_version": SANDBOX_VERSION,
-                                               "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
-                                               "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
+            _atomic_write_text(Path(a.out), json.dumps({"results": results, "passed": p, "total": n,
+                                                       "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+                                                       "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+                                                       "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+                                                       "sandbox_version": SANDBOX_VERSION,
+                                                       "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
+                                                       "skills_health_bad": bad}, ensure_ascii=False, indent=1))
         if a.history:
             with open(a.history, "a", encoding="utf-8") as hf:
                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,

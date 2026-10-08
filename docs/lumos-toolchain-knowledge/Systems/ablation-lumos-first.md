@@ -31,6 +31,7 @@ verified_by:
   - "[[Verification/2026-10-08_消融結果與恢復控制驗證]]"
   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
   - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
+  - "[[Verification/持久用量帳第五輪修補驗證]]"
 ---
 # ablation-lumos-first
 
@@ -85,3 +86,5 @@ PITFALL: 備註檔與探針同用組別前綴，健康掃描曾將操作者備�
 WHY: 用量帳控制案例保留在既有探針消融測試群，使用外部模型邊界假替身與暫存帳，避免驗證本身觸碰真模型或使用者額度。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
 
 WHY: 用量帳控制從真探針 CLI 與消融派工入口驗輸出協定及副作用計數，不用重抄計數公式來製造綠燈。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+
+PITFALL: HTML escape 不會阻止 Markdown 圖片／連結語法，也不會移除 ESC、BEL 等終端控制字元；報表在 Markdown 預覽或直接印到終端時仍會把外部 meta 當控制內容。第五輪改為先將不可列印字元轉成可見序列，再轉義會啟動行內 Markdown 的字元；同時保留既有事故檔名字面。防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_formal_dispatch_fail_closed]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。

@@ -2151,7 +2151,7 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
         self.assertEqual(c([3, 3], [0, 0]), "缺資料")
 
     def test_runs_in_window_counts_recent_only(self):
-        import os, time as _t
+        import os, subprocess, time as _t
         d = Path(tempfile.mkdtemp())
         (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
         old = d / "with-q-b-1.json"
@@ -2159,10 +2159,18 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
         os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
         (d / "summary.json").write_text("{}", encoding="utf-8")
         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
-        # 結果視圖只作診斷；派工以獨立持久用量帳為準。
+        # 結果視圖只作診斷；用已度過冷卻且未 claim 的帳，證明舊結果不能重新變成硬限。
         ledger = d / "usage.sqlite3"
-        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger):
-            self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
+        self.sp.attempt_ledger_remaining(ledger, 3, now=time.time() - 18001)
+        def fake_probe(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "zz", "passed": True}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return subprocess.CompletedProcess(cmd, 0)
+        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), \
+             mock.patch.object(self.rn.subprocess, "run", side_effect=fake_probe):
+            result = self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)
+        self.assertTrue(result[2].startswith("rc=0"), result)
 
     def test_lumos_stats_rejects_quoted_and_echo(self):
         # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算

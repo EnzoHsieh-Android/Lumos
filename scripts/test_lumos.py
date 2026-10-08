@@ -38391,18 +38391,66 @@ def t_probe_boundary_persistent_ledger_stop_contracts():
               and data["valid_total"] == 0 and len(data["results"]) == 1, data)
         check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
               and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
-        # 供應商回上限且最後一次批次名額已花掉：直接停止，不能先等 300 秒。
+        # 供應商回上限且 runner 已 claim 持久帳最後一格：直接停止，不能先等 300 秒。
+        # 刻意不設 --max-attempts，避免批次額度先截斷而讓持久帳分支壞掉仍假綠。
+        retry_ledger = root / "retry-usage.sqlite3"
+        mod.attempt_ledger_remaining(retry_ledger, 1, now=1000)
         argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
-                "--max-attempts", "1", "--out", str(out)]
+                "--max-per-window", "1", "--attempt-ledger", str(retry_ledger), "--out", str(out)]
         limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
                    "secs": 0, "limit_hit": True, "source_evidence": None}
-        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=limited) as model, \
-             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+        def claim_then_limit(*_args, **_kwargs):
+            check("供應商回上限前已真正 claim 最後一格",
+                  mod.claim_model_attempt(retry_ledger, 1, now=20000))
+            return limited
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=claim_then_limit) as model, \
+             patch.object(mod.time, "time", return_value=20000), patch.object(mod.time, "sleep") as sleeping, \
+             patch.object(mod, "global_skills_health", return_value=[]), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             rc = mod.main()
         data = json.loads(out.read_text())
         check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
               and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
+
+        # 等待預算小於輪詢間隔時，只能睡剩餘秒數，不能把「最多等 1 秒」放大成 300 秒。
+        budget_out = root / "budget.json"; calls = []
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "1",
+                "--max-per-window", "0", "--out", str(budget_out)]
+        def limit_then_pass(sc, *_args, **_kwargs):
+            calls.append(sc["id"])
+            return ({**limited} if len(calls) == 1 else
+                    {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+                     "limit_hit": False, "source_evidence": None})
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_then_pass), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("等待總量不超過 --wait-on-limit", rc == 0 and len(calls) == 2
+              and sleeping.call_args_list == [__import__("unittest").mock.call(1)],
+              (rc, len(calls), sleeping.call_args_list))
+
+
+def t_probe_boundary_fifth_round_output_contracts():
+    """候選輸出經真 main 寫入時只能替換連結本身，不得改到連結指向的檔。"""
+    import tempfile, json, io, contextlib, stat
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_fifth_output")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-output-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        victim = root / "victim.txt"; victim.write_text("keep")
+        out = root / "out.json"; out.symlink_to(victim)
+        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+               "limit_hit": False, "source_evidence": None}
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("輸出連結不改寫受害檔", rc == 0 and victim.read_text() == "keep", victim.read_text())
+        check("輸出位置改成工具自己的普通 JSON 檔", stat.S_ISREG(out.lstat().st_mode)
+              and json.loads(out.read_text())["passed"] == 1, out.lstat())
 
 
 def t_probe_boundary_fourth_round_result_contracts():
@@ -38495,6 +38543,12 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
         check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
         check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
+        markdown = "![run](https://example.invalid/x) [label](https://example.invalid/y)"
+        controls = "prefix\x1b]0;LUMOS\x07suffix"
+        md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
+        check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
+        check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
+              and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
 
 
 def t_delguard_logs_ok_too():

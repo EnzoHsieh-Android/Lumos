@@ -413,7 +413,12 @@ def merge(out_dir, expected_ids, runs):
 def render_md(s, meta):
     a, b = s["arms"]["with"], s["arms"]["without"]
     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
-    def text(x): return html.escape(str(x)).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+    def text(x):
+        raw = str(x).replace("\r", " ").replace("\n", " ")
+        raw = "".join(ch if ch.isprintable() else
+                      (f"\\x{ord(ch):02x}" if ord(ch) <= 0xff else f"\\u{ord(ch):04x}")
+                      for ch in raw)
+        return re.sub(r"([\\`*_\[\]()!|])", r"\\\1", html.escape(raw))
     lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
              f"只算有效場(撞用量上限/儀器例外不算)。", "",
