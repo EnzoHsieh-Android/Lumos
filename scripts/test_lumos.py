@@ -38276,7 +38276,7 @@ def t_loop_replay_freeze_leaves_no_tmp():
                 setattr(m, k, val)
         return rc, buf.getvalue()
     # ④ 寫完暫存檔之後才失敗:替身寫完暫存檔就回 rc2,呼叫端要清掉暫存檔、現行判定不動
-    def _fail_after_tmp(tmp, target, vdir_, verdict):
+    def _fail_after_tmp(tmp, target, vdir_, verdict, note=None):
         tmp.write_text("{}", encoding="utf-8")
         return 2, None
     before = (vdir / "verdict.json").read_bytes()
@@ -38302,6 +38302,43 @@ def t_loop_replay_freeze_leaves_no_tmp():
           rc == 2 and "換上位失敗" in out and len(set(vdir.glob("verdict-*.json")) - arch_before) == 1
           and not _mine() and other.exists(), f"rc={rc} {list(vdir.iterdir())} {out[-300:]}")
     print("  ✓ t_loop_replay_freeze_leaves_no_tmp")
+
+
+def t_loop_replay_freeze_race_needs_note():
+    """開頭檢查時還沒有判定檔、寫入前另一個凍結先寫好了(兩個第一次凍結同時跑),沒帶 --note 的這邊在寫入端也要擋:
+    rc2、不丟例外、對方的 verdict.json 一個字不動、不歸檔、不留暫存檔、訊息講判定檔沒有更新(代碼審 code-凍結暫存檔清理 r3)。
+    翻紅釘:寫入端不再判 note → 歸檔對方的檔後在 note.strip() 丟 AttributeError。"""
+    import subprocess as _sp
+    import io, contextlib
+    v, repo, spec, _ledger, _d, _rpt, _row, _hsp = _replay_fx()
+    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+    vdir = repo / "governance" / "replay" / "rp"
+    m = _load_lumos_inproc()
+    orig = m._replay_git_blob
+    other = '{"loop": "rp", "round": "r1", "by": "另一個凍結"}'
+
+    def _race(root, rel):                 # 開頭檢查之後、寫入之前:另一個凍結先把判定檔寫好
+        if not (vdir / "verdict.json").exists():
+            vdir.mkdir(parents=True, exist_ok=True)
+            (vdir / "verdict.json").write_text(other, encoding="utf-8")
+        return orig(root, rel)
+    buf = io.StringIO()
+    err = None
+    try:
+        m._replay_git_blob = _race
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = m.cmd_loop_replay(m.Env(v), "rp", freeze=True, spec=str(spec), note=None, repo=str(repo))
+    except Exception as e:                # 就是要看有沒有丟出來
+        rc, err = None, e
+    finally:
+        m._replay_git_blob = orig
+    check("寫入端也擋:rc2、不丟例外", err is None and rc == 2, f"rc={rc} err={err!r} {buf.getvalue()[-300:]}")
+    check("對方的判定檔不動、不歸檔、不留暫存檔",
+          (vdir / "verdict.json").read_text(encoding="utf-8") == other and not list(vdir.glob("verdict-*.json"))
+          and not list(vdir.glob(".verdict*.tmp")), str(list(vdir.iterdir())))
+    check("訊息講判定檔沒有更新", "判定檔沒有更新" in buf.getvalue(), buf.getvalue()[-300:])
+    print("  ✓ t_loop_replay_freeze_race_needs_note")
 
 
 def _mk_dref_vault():
