@@ -1,5 +1,7 @@
 """CLI 行為考卷；預期結果來自人工分類，不呼叫掃描器算 oracle。"""
 import json
+import importlib.util
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import subprocess
 import sys
@@ -7,9 +9,18 @@ import tempfile
 import unittest
 
 TOOL = Path(__file__).with_name('test_quality_scan.py')
+SEMGREP_TOOL = Path(__file__).with_name('test_quality_semgrep.py')
 
 
 class ScanTests(unittest.TestCase):
+    @staticmethod
+    def semgrep_module():
+        loader = SourceFileLoader('test_quality_semgrep_control', str(SEMGREP_TOOL))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
     def scan(self, source, implementation=None, suffix='.py', check_helper=None):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -130,6 +141,33 @@ class ScanTests(unittest.TestCase):
                 self.assertEqual(run.returncode, 2)
                 self.assertEqual(out['inputs'][0]['status'], 'error')
                 self.assertFalse(out['complete'])
+
+    def test_semgrep_findings_decode_once_and_reject_out_of_range_line(self):
+        module = self.semgrep_module()
+        source = Path('/isolated/test_snapshot.php')
+        original = Path('/project/test_price.php')
+
+        class Raw:
+            calls = 0
+
+            def decode(self, encoding):
+                self.calls += 1
+                return 'first line\nsecond line\n'
+
+        raw = Raw()
+        result = {
+            'results': [
+                {'check_id': 'lumos.same-comparison', 'path': str(source), 'start': {'line': 1}},
+                {'check_id': 'lumos.same-comparison', 'path': str(source), 'start': {'line': 2}},
+            ]
+        }
+        findings = module.backend_findings(result, source, original, raw)
+        self.assertEqual(raw.calls, 1)
+        self.assertEqual([item['snippet'] for item in findings], ['first line', 'second line'])
+
+        result['results'][1]['start']['line'] = 3
+        with self.assertRaisesRegex(ValueError, 'invalid finding location'):
+            module.backend_findings(result, source, original, b'first line\nsecond line\n')
 
     def test_corpus_runner_reports_unavailable_languages(self):
         runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'

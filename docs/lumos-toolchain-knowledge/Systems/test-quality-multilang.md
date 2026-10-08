@@ -5,10 +5,12 @@ created: 2026-10-07
 updated: 2026-10-07
 responsibility: 選配本機 Semgrep 的來源自比辨識與失敗狀態；不執行來源、不保證完整測試框架或算法同源分析
 self_audit: GPT-6-Codex-clean-agent/2026-10-08
+about_code_stamp: claude/2026-10-08/5e59066aaa5e
 aliases: []
 about_code:
   - scripts/test_quality_semgrep.py
   - governance/eval/test_quality_corpus.py
+  - scripts/test_test_quality_scan.py
 tags:
   - type/system
   - status/doing
@@ -38,6 +40,7 @@ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處
 ## 本篇的檔案邊界
 
 - `scripts/test_quality_semgrep.py` 的選配依賴、快照隔離與有限介面支援決策歸本篇，候選通用語義歸 [[Systems/test-quality-scan]]。
+- `scripts/test_test_quality_scan.py` 內送入 fake Semgrep 報告、驗 backend 邊界與失敗狀態的控制歸本篇；Python 候選判準的控制仍歸 [[Systems/test-quality-scan]]。
 - `governance/eval/test_quality_corpus.py` 的獨立固定標註、未知／未分析結果與跨語言外推限制歸本篇，不把考卷符合率當真實專案品質。
 
 WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。
@@ -48,4 +51,4 @@ WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test
 
 PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
 
-PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_backend]。這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
+PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_findings_decode_once_and_reject_out_of_range_line]。控制用兩筆合法 finding 驗解碼次數與 snippet，再用越界行號驗拒收；這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。

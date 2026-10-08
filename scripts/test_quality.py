@@ -47,12 +47,11 @@ def validate_suite_counts(root):
 
 
 def terminate_group(proc):
-    if proc.returncode is None:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
 
 
 def read_ready_output(selector, ready, buffers):

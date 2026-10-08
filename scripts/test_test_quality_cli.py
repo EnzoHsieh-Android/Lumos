@@ -421,11 +421,46 @@ class QualityCLI(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_failed_capture_stops_stream_detached_worker(self):
+        pidfile = self.root / "failed-worker.pid"
+        command = [
+            sys.executable,
+            "-c",
+            "import subprocess,sys; from pathlib import Path; "
+            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+            "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+            "Path(" + repr(str(pidfile)) + ").write_text(str(p.pid)); sys.exit(1)",
+        ]
+        module = self.quality_module()
+        rc, _, _ = module.run_capture_command(command, 5)
+        self.assertEqual(rc, 1)
+        self.assertTrue(pidfile.exists(), "worker actually launched before launcher error")
+        pid = int(pidfile.read_text())
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+
     @staticmethod
     def lumos_module():
         from importlib.machinery import SourceFileLoader
 
         loader = SourceFileLoader("quality_lumos_control", str(TOOL))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def quality_module():
+        from importlib.machinery import SourceFileLoader
+
+        path = TOOL.with_name("test_quality.py")
+        loader = SourceFileLoader("test_quality_process_control", str(path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)
         loader.exec_module(module)
@@ -485,6 +520,7 @@ class QualityCLI(unittest.TestCase):
                 "--check-helper",
                 "check",
             ],
+            cwd=self.root,
             capture_output=True,
             text=True,
             timeout=10,

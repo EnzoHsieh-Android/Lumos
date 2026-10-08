@@ -55,4 +55,6 @@ PITFALL: ASCII bytes 搜尋漏掉 UTF-16 的 DTD，suite 失敗標記不在 test
 
 PITFALL: 另看 argv 首項會漏掉合法 --vault 全域選項 [出處:code-test-quality-native-push/r2-架構-codex.md] [防回歸:test_global_vault_option_retains_structured_deployment_error、test_mixed_scanner_retains_legacy_help]。命令身份沿正式 argparse，不維護第二份命令解析。
 
+PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；CLI capture 與 handbook model runner 都建立獨立 POSIX 程序群，必須採同一項返回前清理政策 [出處:code-test-quality-r4-repair/r1-architecture-report.md A1] [防回歸:test_failed_capture_stops_stream_detached_worker、test_cancelled_capture_stops_child]。可信測試 runner 正常使用 worker 仍屬本程序群責任；子程序主動 setsid 逃逸不在可攜式保證內。
+
 WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。
