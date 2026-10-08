@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-20
+updated: 2026-10-08
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
 responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
@@ -26,7 +26,7 @@ summary: |-
   KEY:★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06]
   KEY:★DEBT★ CLAUDE.md START sentinel 的版本戳(LUMOS_VERSION)=人可讀標籤/advisory nudge,非正確性守衛(內容比對 doctor Check D 才是;版本在 body 外、bump 不觸發守衛)
   KEY:install 全域指令 Unix=symlink、Win=lumos.cmd shim;skills 經 _link_or_copy(Unix symlink / Win junction / 失敗 fallback copytree)
-  KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-rename.sh、fetch-notesmd.sh)+scripts/hooks/+scripts/templates/兩夾,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移;★2026-07-25 pre-commit 圖譜閘也豁免此白名單★(精確路徑非 scripts/* 整夾,專案自有 scripts/foo.py 仍擋)——vendored .py 誤中 code 副檔名判定,致每次 lumos update 例行更新都撞閘、bypass 帳被灌水稀釋真訊號;豁免住兩個 hook(pre-commit 擋+post-commit 記 bypass 帳)★必須對齊★——只修前者時 post-commit 照記假 bypass 灌水(2026-07-25 實測踩過);且★源 repo 守門★:偵測 skills/lumos-project-notes(=Lumos 源)時豁免失效(源 repo 內這些檔=產品碼,豁免會弄弱自家閘)。bash 清單↔常數↔兩 hook 對齊靠 [test:t_precommit_whitelist_drift_guard]+行為測試 t_precommit_vendored_exempt(放行 vendored/仍擋使用者檔/源 repo 內仍擋)
+  KEY:_VENDORED_TOOLKIT 的精確路徑白名單,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移;★2026-07-25 pre-commit 圖譜閘也豁免此白名單★(精確路徑非 scripts/* 整夾,專案自有 scripts/foo.py 仍擋)——vendored .py 誤中 code 副檔名判定,致每次 lumos update 例行更新都撞閘、bypass 帳被灌水稀釋真訊號;豁免住兩個 hook(pre-commit 擋+post-commit 記 bypass 帳)★必須對齊★——只修前者時 post-commit 照記假 bypass 灌水(2026-07-25 實測踩過);且★源 repo 守門★:偵測 skills/lumos-project-notes(=Lumos 源)時豁免失效(源 repo 內這些檔=產品碼,豁免會弄弱自家閘)。bash 清單↔常數↔兩 hook 對齊靠 [test:t_precommit_whitelist_drift_guard]+行為測試 t_precommit_vendored_exempt(放行 vendored/仍擋使用者檔/源 repo 內仍擋)
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
   KEY:★2026-08-11 來源 pull 改 fail-closed★——有 remote 卻拉不到最新即中止,★中止點在寫任何檔之前(不留半套)★;政策收進 _pull_source_or_abort 單一函式,_vendor_toolchain(專案層)與 cmd_bootstrap(機器層)共用避免漂移。無 remote=離線 clone 不算失敗照跑(不誤擋手動複製/slim 安裝);逃生門 --allow-stale(update/init/bootstrap 三處齊備)。原行為只印警告續跑→消費端 mOrangePos 咬過兩次靜默降版 [test:t_vendor_pull_failure_aborts,t_vendor_no_remote_skips_pull,t_vendor_allow_stale_overrides_pull_failure,t_bootstrap_pull_failure_aborts]
   KEY:★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl 等簿記檔恆髒,一律擋會天天卡住;要做需先分「簿記檔 vs 實質檔」白名單
@@ -97,6 +97,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 about_code:
   - get.sh
   - scripts/lumos
@@ -162,3 +163,6 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`、`t_install_registers_guard_plugin`、`t_lumos_plugin_install_edge_cases`(裝完確認重試、訊息走共用函式、移除時判市集歸屬、市集檔怪內容)。事件帳本身見 [[Systems/lumos事件帳]]。
 
 WHY: 新test-quality sidecar沿精確vendor白名單部署及清理 [出處:[[Projects/測試品質工具接線_計劃]]] [因:來源CLI可用但consumer沒模組會成空殼，精確路徑避免刪除使用者同目錄其他檔案]。執行卷證邊界歸[[Systems/test-quality-cli]]。
+
+PITFALL: 部署缺少遞移sidecar曾漏過core模組的備援攔截 [出處:code-test-quality-native-push/r1-邊界-codex.md b1] [防回歸:test_partial_sidecar_returns_structured_invalid、test_missing_all_sidecars_explains_update、test_missing_quality_sidecar_does_not_break_legacy_help]。精確名單沿安裝白名單取得，維持單一來源；舊命令仍可用，新的不完整命令要求update。
+

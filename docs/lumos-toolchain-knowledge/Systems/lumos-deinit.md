@@ -12,6 +12,7 @@ tags:
   - scope/platform
 verified_by:
   - "[[Verification/2026-06-26_lumos-deinit_跨平台]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 summary: |-
   FLOW:pre-flight守衛(非git→rc2｜專案路徑不是UTF-8→rc2(嚴格解碼不猜路徑,2026-09-11 見 [[Issues/風險掃描遇到非UTF-8內容整支中斷]])｜root==_lumos_src→rc2｜vault==root→強制keep-graph)→[--dry-run僅印即返]→[刪圖譜安全網:非tty無--yes→rc2｜印清單+未commit數→互動y確認]→拆閘→剝CLAUDE區塊→刪vault→移vendored(最後,可能含自己)
   KEY:對稱 lumos init 的「專案層」反安裝(對比 uninstall=機器層);只動本 repo,不碰 ~/.claude
@@ -76,7 +77,7 @@ about_code:
 1. 拆閘 `git -C root config --unset core.hooksPath`(best-effort:rc 0/5 皆成功,其他印 warning 續行)。
 2. 剝 `CLAUDE.md` 的 graph-discipline 區塊(無標記/無檔 → no-op)。
 3. 刪 vault(僅 `will_delete_vault` 時)。
-4. **最後**移 vendored 工具組:`_VENDORED_TOOLKIT` 5 檔(`scripts/lumos`、`scripts/test_lumos.py`、`scripts/merge-claude-settings.py`、`scripts/graph-rename.sh`、`scripts/fetch-notesmd.sh`)+ `scripts/hooks/`、`scripts/templates/` **逐檔白名單刪(F9 修 2026-07-24,原整夾 rmtree 會連坐使用者自有檔)**——`_deinit_remove_vendored(root, src)` 從 `src` 兩夾 rglob 列舉 lumos 檔(對稱 `_vendor_toolchain` 安裝)、只刪這些;夾內尚有使用者檔則留夾+warn、空了才移;src 缺(None/來源夾不存在)→保守留夾+warn 不刪(never delete unknown)。見 [[Issues/deinit整夾刪使用者檔]]。`scripts/` 底下使用者自有檔不碰、空了才 `rmdir`。放最後因 POSIX 上刪到執行中的 `scripts/lumos` 自己無妨;Windows 用全域 `lumos`(指向來源 copy)亦無事。
+4. **最後**移 vendored 工具組:`_VENDORED_TOOLKIT` 精確檔名白名單+ `scripts/hooks/`、`scripts/templates/` **逐檔白名單刪(F9 修 2026-07-24,原整夾 rmtree 會連坐使用者自有檔)**——`_deinit_remove_vendored(root, src)` 從 `src` 兩夾 rglob 列舉 lumos 檔(對稱 `_vendor_toolchain` 安裝)、只刪這些;夾內尚有使用者檔則留夾+warn、空了才移;src 缺(None/來源夾不存在)→保守留夾+warn 不刪(never delete unknown)。見 [[Issues/deinit整夾刪使用者檔]]。`scripts/` 底下使用者自有檔不碰、空了才 `rmdir`。放最後因 POSIX 上刪到執行中的 `scripts/lumos` 自己無妨;Windows 用全域 `lumos`(指向來源 copy)亦無事。
    另外拿掉 `.lumos/vendored.json`(安裝時記下的工具檔內容指紋;2026-09-10 起有,見 [[Issues/健檢技術棧那段撞到多平台設定就整支中斷]])。
 
 ## 已知平台差異
@@ -87,3 +88,6 @@ about_code:
 - 設計稿:`docs/design/2026-06-26-lumos-deinit.md`(design-loop 收斂,5 輪)。
 - 實作計畫:`docs/superpowers/plans/2026-06-26-lumos-deinit.md`(8 任務 TDD)。
 - 實作落點:`scripts/lumos` `cmd_deinit` + 五個 `_deinit_*` helper + `_VENDORED_TOOLKIT` 常數。
+
+PITFALL: 新增runtime imports會留下工具自己的Python bytecode，單刪來源不能完整卸載 [出處:code-test-quality-native-push/r1-邊界-codex.md b2] [防回歸:test_deinit_removes_only_vendored_bytecode]。取精確vendor模組stem清理自己的bytecode，保留使用者快取與符號連結外側內容，承接原逐檔白名單避免整夾連坐的裁決。
+

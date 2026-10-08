@@ -20,6 +20,7 @@ verified_by:
   - "[[Verification/2026-10-07_跨語言測試品質檢測規劃]]"
   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 about_code:
   - scripts/test_quality_scan.py
   - scripts/test_test_quality_scan.py
@@ -42,3 +43,6 @@ WHY: 先公布語法範圍再擴充規則 [出處:2026-10-07 跨語言要求] [�
 - `governance/eval/test_quality_pilot.py` 的固定故障與安全執行範圍歸本篇，不能擴張為任意命令的通用變異 runner。
 
 WHY: 掃描入口隨consumer更新部署但語義不升級 [出處:[[Projects/測試品質工具接線_計劃]]] [因:方便日後實作時直接掃，不把安裝可用等同業務品質通過]。PHP有限介面自比歸[[Systems/test-quality-multilang]]；可信本機命令收證歸[[Systems/test-quality-cli]]，固定試行不變成通用mutation engine。
+
+WHY: 來源與安裝入口共用掃描參數，選配適配器延後載入 [出處:code-test-quality-native-push/r1-邊界-codex.md b1與r1-架構-codex.md a1/a3] [因:遞移缺檔不應使既有CLI的help失效，測試品質命令則須明確回不完整及更新指引]。保留控制见 [[Systems/test-quality-cli]]；局部bindings、算式模型、檔案解析各有獨立責任，有限語法掃描不裁決獨立業務答案。
+

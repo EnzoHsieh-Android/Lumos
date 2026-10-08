@@ -50,6 +50,7 @@ verified_by:
   - "[[Verification/2026-09-16_別名欄對檢索的實際貢獻]]"
   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
@@ -106,3 +107,6 @@ WHY:[2026-10-06 第三輪跨簿記改名補償]保守保留未知種子，不代
 
 WHY:[2026-10-06 非 UTF-8 真 Git 邊界]無損檔名的替身字元需要在機器 JSON 沿標準 encoder escaping；人讀呈現沿既有 _nodehome_show。顯示替字不回寫索引值，避免資料交接成功碼配上不可讀 UTF 位元組。[出處:code-review-artifact-impact-inputs/r3-parent-nonutf8-output.json、r3-orchestrator-utf8.md] [因:讀入無損還要驗輸出與接收端可逆] 防回歸：t_impact_diff_nonutf8_json，同驗預設／嚴格 stdout、位元組可逆、事故及兩個人讀入口。Python 官方 [JSON encoder](https://docs.python.org/3/library/json.html) 提供 escaping 判準，[os 檔案系統編碼](https://docs.python.org/3/library/os.html#os.fsdecode) 提供本工具的位元組轉換口徑；官方資料不替實際反例背書。
 REVISIT:2026-10-13 若加入非 Python JSON 消費者，驗孤立替身字元的處理與原路徑可逆口徑；不能直接假設跨語言處理一致。
+
+WHY: 原生驗證增加大量已追蹤XML、TRX、log和zip，原分類未涵蓋eval結果目錄，導致附件成為審查種子 [出處:code-test-quality-native-push/r1-資源-codex.md r4；本輪根因查核788種子其中773附件] [因:重用既有凍結模式與程式例外分類，比忽略附件或另建分類更能保留證據] [防回歸:test_eval_attachments_keep_actual_code_as_impact_seeds及既有impact_diff子集]。這只擴充影響輸入分類，不把eval結果加入code-loop留痕後可改的簿記豁免；真程式、可執行檔、無副檔名腳本和未知模式仍保留。單次種子數下降不是收斂輪數改善量測。
+

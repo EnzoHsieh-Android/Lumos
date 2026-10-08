@@ -39,6 +39,34 @@ LEAN_TASK = '''請為笔記修改的鎖加實際有用的測試，自行選擇�
 最後只輸出一個 python code fence。implementation.txt 是目前實作的程式投影（去除註解與文件字串）；先讀。沒有執行工具或驗證回饋。'''
 
 
+def validate_import(node):
+    if isinstance(node, ast.Import) and [(a.name, a.asname) for a in node.names] != [('unittest', None)]:
+        raise ValueError('unsupported-import')
+    if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or [(a.name, a.asname) for a in node.names] != [('fixture', None)]):
+        raise ValueError('unsupported-import')
+
+
+def validate_node_access(node):
+    validate_import(node)
+    if isinstance(node, ast.FunctionDef) and (not node.name.startswith('test_') or len(node.args.args) != 1 or node.args.args[0].arg != 'self' or node.decorator_list or node.returns):
+        raise ValueError('unsupported-method')
+    if isinstance(node, ast.ClassDef) and (len(node.bases) != 1 or ast.unparse(node.bases[0]) != 'unittest.TestCase' or node.decorator_list or node.keywords):
+        raise ValueError('unsupported-class')
+    if isinstance(node, ast.Name) and node.id not in {'unittest', 'fixture', 's', 'self'}:
+        raise ValueError('unsupported-name')
+    if isinstance(node, ast.Attribute):
+        attrs = {'self': ASSERTS, 's': {'lock', 'fallback_ready', 'held', 'external_written'}, 'unittest': {'TestCase'}}
+        if not isinstance(node.value, ast.Name) or node.attr not in attrs.get(node.value.id, set()):
+            raise ValueError('unsupported-attribute')
+    if isinstance(node, ast.Call):
+        if node.keywords:
+            raise ValueError('unsupported-keywords')
+        if isinstance(node.func, ast.Name) and (node.func.id != 'fixture' or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.args[0].value not in {'normal', 'cache-moved'}):
+            raise ValueError('unsupported-call')
+        if not isinstance(node.func, (ast.Name, ast.Attribute)):
+            raise ValueError('unsupported-call')
+
+
 def validate(code):
     tree = ast.parse(code)
     footer = ast.parse('if __name__ == "__main__":\n    unittest.main()\n').body[0]
@@ -56,40 +84,11 @@ def validate(code):
     for node in ast.walk(checked):
         if type(node) not in allowed:
             raise ValueError('unsupported-node:' + type(node).__name__)
-        if isinstance(node, ast.Import) and [(a.name, a.asname) for a in node.names] != [('unittest', None)]:
-            raise ValueError('unsupported-import')
-        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or [(a.name, a.asname) for a in node.names] != [('fixture', None)]):
-            raise ValueError('unsupported-import')
-        if isinstance(node, ast.FunctionDef) and (not node.name.startswith('test_') or len(node.args.args) != 1 or node.args.args[0].arg != 'self' or node.decorator_list or node.returns):
-            raise ValueError('unsupported-method')
-        if isinstance(node, ast.ClassDef) and (len(node.bases) != 1 or ast.unparse(node.bases[0]) != 'unittest.TestCase' or node.decorator_list or node.keywords):
-            raise ValueError('unsupported-class')
-        if isinstance(node, ast.Name) and node.id not in {'unittest', 'fixture', 's', 'self'}:
-            raise ValueError('unsupported-name')
-        if isinstance(node, ast.Attribute):
-            attrs = {'self': ASSERTS, 's': {'lock', 'fallback_ready', 'held', 'external_written'}, 'unittest': {'TestCase'}}
-            if not isinstance(node.value, ast.Name) or node.attr not in attrs.get(node.value.id, set()):
-                raise ValueError('unsupported-attribute')
-        if isinstance(node, ast.Call):
-            if node.keywords:
-                raise ValueError('unsupported-keywords')
-            if isinstance(node.func, ast.Name) and (node.func.id != 'fixture' or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.args[0].value not in {'normal', 'cache-moved'}):
-                raise ValueError('unsupported-call')
-            if not isinstance(node.func, (ast.Name, ast.Attribute)):
-                raise ValueError('unsupported-call')
+        validate_node_access(node)
     return tree
 
 
-def execute(code, source, work):
-    validate(code)
-    path = work / 'historical_lumos.py'
-    path.write_text(source)
-    spec = importlib.util.spec_from_file_location('historical_lumos', path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    evidence = {'blocked_nested_fallback': False, 'assertions': 0, 'entries': []}
-
+def scenario_type(module, evidence):
     class Scenario:
         def __init__(self, home, vault, external):
             self.home, self.vault, self.external = home, vault, external
@@ -130,6 +129,31 @@ def execute(code, source, work):
                 self.depth -= 1
                 cm.__exit__(None, None, None)
 
+    return Scenario
+
+
+def restricted_importer(proxy, fixture):
+    def importer(name, *unused):
+        if name == 'unittest':
+            return proxy
+        if name == 'subject':
+            return type('SubjectAPI', (), {'fixture': staticmethod(fixture)})
+        raise ImportError(name)
+    return importer
+
+
+def execute(code, source, work):
+    validate(code)
+    path = work / 'historical_lumos.py'
+    path.write_text(source)
+    spec = importlib.util.spec_from_file_location('historical_lumos', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    evidence = {'blocked_nested_fallback': False, 'assertions': 0, 'entries': []}
+
+    Scenario = scenario_type(module, evidence)
+
     @contextlib.contextmanager
     def fixture(mode):
         with tempfile.TemporaryDirectory(dir=work) as directory:
@@ -156,12 +180,7 @@ def execute(code, source, work):
             return getattr(unittest.TestCase, _name)(self, *args)
         setattr(Counted, name, counted)
     proxy = type('UnittestAPI', (), {'TestCase': Counted})
-    def importer(name, *unused):
-        if name == 'unittest':
-            return proxy
-        if name == 'subject':
-            return type('SubjectAPI', (), {'fixture': staticmethod(fixture)})
-        raise ImportError(name)
+    importer = restricted_importer(proxy, fixture)
     namespace = {'__name__': 'generated_tests', '__builtins__': {'__import__': importer, '__build_class__': __build_class__}}
     exec(compile(code, '<generated-tests>', 'exec'), namespace)
     suite = unittest.TestSuite()
@@ -195,6 +214,40 @@ def grade(code):
     return {'status': 'detected' if detected else ('survived' if valid and fault['passed'] else 'invalid'), 'versions': scores, 'test_sha256': history.sha(code)}
 
 
+def child_main():
+    try:
+        data = json.load(sys.stdin)
+        result = execute(data['code'], data['source'], Path.cwd())
+    except Exception as exc:
+        result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def run_controls(out):
+    head = 'import unittest\nfrom subject import fixture\nclass LockTests(unittest.TestCase):\n    def test_lock(self):\n        with fixture("cache-moved") as s:\n            self.assertTrue(s.fallback_ready())\n'
+    weak = head + '            with s.lock():\n                self.assertTrue(s.held())\n            with s.lock():\n                self.assertTrue(s.held())\n'
+    strong = head + '            with s.lock():\n                with s.lock():\n                    self.assertTrue(s.held())\n'
+    normal = head.replace('"cache-moved"', '"normal"').replace('assertTrue(s.fallback_ready())', 'assertFalse(s.fallback_ready())') + '            with s.lock():\n                self.assertTrue(s.held())\n            self.assertFalse(s.held())\n'
+    cases = {'weak': weak, 'strong': strong, 'empty': 'import unittest\n', 'bad-baseline': head + '            self.assertFalse(s.fallback_ready())\n', 'unsupported': 'import os\n', 'normal': normal,
+             'canonical-footer': strong + '\nif __name__ == "__main__":\n    unittest.main()\n',
+             'noncanonical-footer': strong + '\nif True:\n    unittest.main()\n'}
+    scores = {name: grade(code) for name, code in cases.items()}
+    expected = {'weak': 'survived', 'strong': 'detected', 'empty': 'invalid', 'bad-baseline': 'invalid', 'unsupported': 'invalid', 'normal': 'survived', 'canonical-footer': 'detected', 'noncanonical-footer': 'invalid'}
+    result = {'runner_sha256': history.sha(Path(__file__).read_text()), 'cases': cases, 'scores': scores}
+    (out / 'controls.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    passed = all(scores[k]['status'] == v for k, v in expected.items())
+    print('controls_passed=' + str(passed))
+    return 0 if passed else 2
+
+
+def lean_projection(node):
+    for function in ast.walk(node):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
+            function.body = function.body[1:]
+    return ast.unparse(node)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--child', action='store_true')
@@ -204,31 +257,12 @@ def main():
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     if args.child:
-        try:
-            data = json.load(sys.stdin)
-            result = execute(data['code'], data['source'], Path.cwd())
-        except Exception as exc:
-            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return child_main()
     if not args.out or not (args.controls or args.run):
         parser.error('Use --controls or --run with --out NEW_DIRECTORY')
     args.out.mkdir(parents=True, exist_ok=False)
     if args.controls:
-        head = 'import unittest\nfrom subject import fixture\nclass LockTests(unittest.TestCase):\n    def test_lock(self):\n        with fixture("cache-moved") as s:\n            self.assertTrue(s.fallback_ready())\n'
-        weak = head + '            with s.lock():\n                self.assertTrue(s.held())\n            with s.lock():\n                self.assertTrue(s.held())\n'
-        strong = head + '            with s.lock():\n                with s.lock():\n                    self.assertTrue(s.held())\n'
-        normal = head.replace('"cache-moved"', '"normal"').replace('assertTrue(s.fallback_ready())', 'assertFalse(s.fallback_ready())') + '            with s.lock():\n                self.assertTrue(s.held())\n            self.assertFalse(s.held())\n'
-        cases = {'weak': weak, 'strong': strong, 'empty': 'import unittest\n', 'bad-baseline': head + '            self.assertFalse(s.fallback_ready())\n', 'unsupported': 'import os\n', 'normal': normal,
-                 'canonical-footer': strong + '\nif __name__ == "__main__":\n    unittest.main()\n',
-                 'noncanonical-footer': strong + '\nif True:\n    unittest.main()\n'}
-        scores = {name: grade(code) for name, code in cases.items()}
-        expected = {'weak': 'survived', 'strong': 'detected', 'empty': 'invalid', 'bad-baseline': 'invalid', 'unsupported': 'invalid', 'normal': 'survived', 'canonical-footer': 'detected', 'noncanonical-footer': 'invalid'}
-        result = {'runner_sha256': history.sha(Path(__file__).read_text()), 'cases': cases, 'scores': scores}
-        (args.out / 'controls.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
-        passed = all(scores[k]['status'] == v for k, v in expected.items())
-        print('controls_passed=' + str(passed))
-        return 0 if passed else 2
+        return run_controls(args.out)
     command_doc = (history.REPO / 'skills/lumos-project-notes/commands/03-寫回圖譜.md').read_text()
     handbook = command_doc.split('**測試必須有獨立的判準')[1].split('## ')[0]
     handbook = '**測試必須有獨立的判準' + handbook
@@ -238,10 +272,7 @@ def main():
     api = API
     prompt = API + '\n請為此內部鎖合約補實際有用的測試。最後只輸出一個 python code fence，不要其他文字。\n實作片段在 implementation.txt；先讀。沒有執行工具或驗證回饋。'
     if args.prompt_profile == 'lean':
-        for function in ast.walk(node):
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
-                function.body = function.body[1:]
-        visible = ast.unparse(node)
+        visible = lean_projection(node)
         api = LEAN_API
         prompt = api + '\n' + LEAN_TASK
     manifest = {'model': MODEL, 'repeats': 2, 'prompt_profile': args.prompt_profile, 'api': api, 'prompt': prompt, 'handbook': handbook,
@@ -258,7 +289,7 @@ def main():
                 system = '你是開發者，為既有功能寫測試。僅讀目前目錄提供的 implementation.txt。'
                 if arm == 'handbook':
                     system += '\n正式測試手冊：\n' + handbook
-                row, raw = run_model(work, system, prompt, MODEL, 180, False, args.out / (name + '.events.jsonl'))
+                row, _raw = run_model(work, system, prompt, MODEL, 180, False, args.out / (name + '.events.jsonl'))
                 reads = [c for c in row['calls'] if c['name'] == 'Read']
                 row['only_visible_material_read'] = bool(reads) and all(
                     c['name'] == 'Read' and Path(c['input'].get('file_path', '')).resolve() == (work / 'implementation.txt').resolve()

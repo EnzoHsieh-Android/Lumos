@@ -40,6 +40,6 @@ refactor-safe三棧均實跑綠，check-safe.json均detected／not_assessed；�
 
 AGP instrumentation XML也可能沒有type/message，只把首個java.lang.AssertionError及JUnit斷言stack放正文；用原生樣本補認首個例外與Assert frame，不從nested cause提到斷言名作歸因，正反例各留一個控制。
 
-收工交叉審計：乾淨agent唯讀圖譜×程式×原生卷證核對無finding，manifest729項hash一致，三棧check-safe用當前CLI均detected/not_assessed。相關子集2passed/0failed；22個收證控制通過。doctor全圖譜0issues／786篇；30段386條既有提醒屬全圖譜健檢。獨立模擬器已關閉，重跑按README啟動；尚未推送。
+收工交叉審計：乾淨agent唯讀圖譜×程式×原生卷證核對無finding，manifest729項hash一致，三棧check-safe用當前CLI均detected/not_assessed。相關子集2passed/0failed；22個收證控制通過。doctor全圖譜0issues／786篇；30段386條既有提醒屬全圖譜健檢。獨立模擬器已關閉，重跑按README啟動。
 
-五消費專案最終vendor收證模組均與本機來源hash一致，所有implementation目前hash對回各自restored快照，未殘留故障或重構實作。
+原生驗收當時五消費專案vendor收證模組與當時本機來源hash一致，所有implementation目前hash對回各自restored快照，未殘留故障或重構實作。

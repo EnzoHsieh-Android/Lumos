@@ -21963,14 +21963,34 @@ def _deinit_strip_claude(root: Path) -> bool:
     return hit
 
 
+def _deinit_remove_bytecode(root: Path) -> list:
+    cache = root / "scripts/__pycache__"
+    if cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir():
+        return []
+    names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
+    removed = []
+    for name in names:
+        for path in cache.glob(name + ".*.pyc"):
+            try:
+                path.unlink()
+                removed.append(str(path.relative_to(root)))
+            except OSError as exc:
+                print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
+    try:
+        cache.rmdir()
+    except OSError:
+        pass  # 使用者的 bytecode 仍在時保留目錄。
+    return removed
+
+
 def _deinit_remove_vendored(root: Path, src=None) -> list:
-    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 固定 5 檔;
+    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 的精確檔名;
     ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
     F9 修(2026-07-24,Issues/deinit整夾刪使用者檔):不再整夾 rmtree——只刪 src 有的 lumos 檔、
     保留使用者放這兩夾的自有檔,夾空了才移。fallback(a):src 缺(None 或來源夾不存在)→ 保守留夾
     +warn、不刪(never delete unknown)。scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。
     回傳已移除相對路徑列表。"""
-    removed = []
+    removed = _deinit_remove_bytecode(root)
     for rel in _VENDORED_TOOLKIT:
         p = root / rel
         if p.exists():
@@ -44037,6 +44057,8 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
 
 
 _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
+# 僅 impact 的附件分類；不擴大 code-loop 留痕可改動的簿記範圍。
+_IMPACT_RECORD_DIRS = (*_BOOKKEEPING_DIRS, "governance/eval/results/")
 
 
 def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=True):
@@ -44049,7 +44071,7 @@ def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=Tru
     # 固定帳檔仍排除；目錄內的程式例外先成立，不再被文檔副檔名二次排掉。
     if f in _BOOKKEEPING_FILES:
         return False
-    if f.startswith(_BOOKKEEPING_DIRS):
+    if f.startswith(_IMPACT_RECORD_DIRS):
         kind = _nodehome_code_kind(f)
         if file_mode == "100755" or kind == "ext":
             return True
@@ -44084,7 +44106,7 @@ def _impact_diff_raw(repo_root, diff_args, deadline):
 
 def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
     """簿記來源取凍結模式與首行；普通來源不多查 Git。刪檔取舊物件。"""
-    if not any(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS) for f in files):
+    if not any(f in _BOOKKEEPING_FILES or f.startswith(_IMPACT_RECORD_DIRS) for f in files):
         return {}
     import time as _t
     raw = _impact_diff_raw(repo_root, diff_args, deadline)
@@ -44095,7 +44117,7 @@ def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
     for f, (old, new, old_oid, new_oid) in changes.items():
         mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
         out[f] = (mode, None)
-        if (f.startswith(_BOOKKEEPING_DIRS) and mode != "100755"
+        if (f.startswith(_IMPACT_RECORD_DIRS) and mode != "100755"
                 and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
                 and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
             ask.append((f, oid))
@@ -49195,7 +49217,23 @@ def cmd_python_path():
     return 0
 
 
+def _test_quality_deployment_ready(argv):
+    if argv[:1] != ["test-quality"]:
+        return True
+    folder = Path(__file__).resolve().parent
+    required = [Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")]
+    missing = [p for p in required if not (folder / p).is_file()]
+    if not missing:
+        return True
+    import json
+    print(json.dumps({"verdict": "not_assessed", "complete": False,
+                      "reason": "測試品質工具未完整部署:缺 " + ", ".join(missing) + "；請 lumos update。"}, ensure_ascii=False))
+    return False
+
+
 def main():
+    if not _test_quality_deployment_ready(sys.argv[1:]):
+        return 2
     class _LumosParser(argparse.ArgumentParser):
         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
 

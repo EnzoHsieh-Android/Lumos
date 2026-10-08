@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 import re
 import signal
+import selectors
 import subprocess
-import tempfile
 import xml.etree.ElementTree as ET
 
 LIMIT = 10 * 1024 * 1024
@@ -27,6 +27,77 @@ def read(path):
 
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def xml_tag(node):
+    return node.tag.split('}')[-1]
+
+
+def validate_suite_counts(root):
+    for suite in root.iter():
+        if xml_tag(suite) not in {'testsuite', 'testsuites'}:
+            continue
+        cases = [n for n in suite.iter() if xml_tag(n) == 'testcase']
+        observed = {'tests': len(cases)}
+        for field, tag in [('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')]:
+            observed[field] = sum(any(xml_tag(c) == tag for c in case) for case in cases)
+        for field, count in observed.items():
+            if field in suite.attrib and int(suite.get(field)) != count:
+                raise ValueError('suite summary inconsistent with testcase rows: ' + field)
+
+
+def terminate_group(proc):
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+
+
+def read_ready_output(selector, ready, buffers):
+    for key, _ in ready:
+        chunk = os.read(key.fd, 65536)
+        if not chunk:
+            selector.unregister(key.fileobj)
+            continue
+        buffers[key.data].extend(chunk)
+        if len(buffers[key.data]) > LIMIT:
+            raise ValueError('output exceeds 10 MiB')
+
+
+def run_capture_command(command, timeout):
+    import time
+    buffers = {'stdout': bytearray(), 'stderr': bytearray()}
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(signum, frame):
+        raise ValueError('execution interrupted by signal ' + str(signum))
+
+    proc = None
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        deadline = time.monotonic() + timeout
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout, selectors.EVENT_READ, 'stdout')
+            selector.register(proc.stderr, selectors.EVENT_READ, 'stderr')
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError('timeout; never detected')
+                read_ready_output(selector, selector.select(remaining), buffers)
+        try:
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError('timeout; never detected') from exc
+        return proc.returncode, bytes(buffers['stdout']), bytes(buffers['stderr'])
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if proc is not None:
+            terminate_group(proc)
+            proc.stdout.close()
+            proc.stderr.close()
 
 
 def assertion_failure(node):
@@ -58,7 +129,7 @@ def junit(raw):
     if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
         raise ValueError('DTD/entity declarations not accepted')
     root = ET.fromstring(raw)
-    tag = lambda n: n.tag.split('}')[-1]
+    tag = xml_tag
     if tag(root) not in {'testsuites', 'testsuite'}:
         raise ValueError('expected JUnit testsuite(s)')
     cases = []
@@ -86,6 +157,7 @@ def junit(raw):
     # Suite-level errors must not disappear behind passing testcase rows.
     if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
         raise ValueError('runner/suite errors')
+    validate_suite_counts(root)
     return cases
 
 
@@ -93,11 +165,14 @@ def add_parser(sub):
     p = sub.add_parser('test-quality', help='測試品質候選掃描、可信本機測試收證與三階段JUnit證據核對；不裁決業務答案')
     actions = p.add_subparsers(dest='tqcmd', required=True)
     scan = actions.add_parser('scan', help='唯讀來源掃描，零候選不是品質通過')
-    scan.add_argument('paths', nargs='+')
-    scan.add_argument('--semgrep')
-    scan.add_argument('--check-helper', action='append', default=[])
-    scan.add_argument('--implementation', action='append', default=[])
-    scan.add_argument('--json', action='store_true')
+    try:
+        from test_quality_scan import add_scan_arguments
+    except ModuleNotFoundError as exc:
+        if exc.name != 'test_quality_scan':
+            raise
+        scan.add_argument('scan_args', nargs=argparse.REMAINDER)
+    else:
+        add_scan_arguments(scan)
     actions.add_parser('capabilities', help='列實際接入範圍與未驗邊界')
     capture = actions.add_parser('capture', help='明示執行可信本機測試，保存JUnit與不可覆寫快照；不提供沙盒')
     capture.add_argument('--out', type=Path, required=True)
@@ -129,18 +204,23 @@ def dump(value, out=None):
     print(text, end='')
 
 
-def capture(args):
-    command = args.command[1:] if args.command[:1] == ['--'] else args.command
-    if not command or bool(args.report) == args.junit_stdout or not 1 <= args.timeout <= 300:
-        raise ValueError('require command, exactly one JUnit source, timeout 1..300')
-    if args.report and args.report.exists():
-        raise ValueError('report must be new; stale report refused')
+def tracked_entries(args):
     entries = []
     for role, paths in [('implementation', args.source), ('tests', args.test_source), ('context', args.context)]:
         for path in paths:
             entries.append({'role': role, 'path': str(path.resolve()), 'raw': read(path)})
     if len({e['path'] for e in entries}) != len(entries):
         raise ValueError('duplicate tracked paths')
+    return entries
+
+
+def capture(args):
+    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    if not command or bool(args.report) == args.junit_stdout or not 1 <= args.timeout <= 300:
+        raise ValueError('require command, exactly one JUnit source, timeout 1..300')
+    if args.report and args.report.exists():
+        raise ValueError('report must be new; stale report refused')
+    entries = tracked_entries(args)
     args.out.mkdir(parents=True, exist_ok=False)
     receipt = {'schema_version': 1, 'kind': 'execution-receipt', 'language': args.language,
                'framework': args.framework, 'command': command, 'cwd': str(Path.cwd()),
@@ -151,18 +231,7 @@ def capture(args):
         (args.out/name).write_bytes(entry['raw'])
         receipt['snapshots'].append({k: entry[k] for k in ('role', 'path')} | {'artifact': name, 'sha256': sha(entry['raw'])})
     try:
-        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-            proc = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
-            try:
-                proc.wait(timeout=args.timeout)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
-                raise ValueError('timeout; never detected')
-            stdout.seek(0); stderr.seek(0)
-            out, err = stdout.read(LIMIT + 1), stderr.read(LIMIT + 1)
-            if max(len(out), len(err)) > LIMIT:
-                raise ValueError('output exceeds 10 MiB')
+        exit_code, out, err = run_capture_command(command, args.timeout)
         (args.out/'stdout.txt').write_bytes(out)
         (args.out/'stderr.txt').write_bytes(err)
         raw = out if args.junit_stdout else read(args.report)
@@ -175,9 +244,9 @@ def capture(args):
         if any(read(Path(e['path'])) != e['raw'] for e in entries):
             raise ValueError('tracked sources changed during execution')
         passed = all(c['status'] == 'passed' for c in cases)
-        if (passed and proc.returncode != 0) or (not passed and proc.returncode != 1):
+        if (passed and exit_code != 0) or (not passed and exit_code != 1):
             raise ValueError('exit status inconsistent with testcase results')
-        receipt.update(status='executed', exit_code=proc.returncode, report_sha256=sha(raw), tests=cases)
+        receipt.update(status='executed', exit_code=exit_code, report_sha256=sha(raw), tests=cases)
     except (OSError, ValueError, ET.ParseError) as exc:
         receipt['reason'] = str(exc)
     (args.out/'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -211,18 +280,7 @@ def load_receipt(folder):
     return r, signatures, {c['id']: c for c in cases}
 
 
-def check(args):
-    result = {'kind': 'fault-evidence', 'verdict': 'not_assessed', 'fault_evidence': 'invalid',
-              'oracle': {'status': 'declared' if args.oracle_note else 'unknown', 'source': args.oracle_note},
-              'limitations': ['只核對收證內容一致性；報告可偽造，非執行真實性認證。',
-                             '故障檢出不證明獨立判準或業務正確；context覆蓋與重構等價性另審。']}
-    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
-    if args.refactor:
-        phases['refactor'] = load_receipt(args.refactor)
-    base, bs, tests = phases['baseline']
-    targets = set(args.target)
-    if not targets or len(targets) != len(args.target) or not targets <= set(tests):
-        raise ValueError('missing/duplicate target test identity')
+def validate_phases(phases, base, bs, tests):
     for name, (r, signatures, cases) in phases.items():
         if (r['language'], r['framework'], r['command'], r['cwd']) != (base['language'], base['framework'], base['command'], base['cwd']):
             raise ValueError('runtime selection or command changed across phases')
@@ -236,6 +294,21 @@ def check(args):
             raise ValueError('restoration snapshot mismatch')
         if name in {'fault', 'refactor'} and signatures == bs:
             raise ValueError(name + ' implementation did not change')
+
+
+def check(args):
+    result = {'kind': 'fault-evidence', 'verdict': 'not_assessed', 'fault_evidence': 'invalid',
+              'oracle': {'status': 'declared' if args.oracle_note else 'unknown', 'source': args.oracle_note},
+              'limitations': ['只核對收證內容一致性；報告可偽造，非執行真實性認證。',
+                             '故障檢出不證明獨立判準或業務正確；context覆蓋與重構等價性另審。']}
+    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
+    if args.refactor:
+        phases['refactor'] = load_receipt(args.refactor)
+    base, bs, tests = phases['baseline']
+    targets = set(args.target)
+    if not targets or len(targets) != len(args.target) or not targets <= set(tests):
+        raise ValueError('missing/duplicate target test identity')
+    validate_phases(phases, base, bs, tests)
     r, _, cases = phases['fault']
     failed = {cid for cid, c in cases.items() if c['status'] != 'passed'}
     if not failed:
@@ -255,12 +328,7 @@ def dispatch(args):
     try:
         if args.tqcmd == 'scan':
             from test_quality_scan import main
-            argv = list(args.paths)
-            for flag in ('semgrep', 'check_helper', 'implementation'):
-                value = getattr(args, flag)
-                for item in (value if isinstance(value, list) else [value] if value else []):
-                    argv += ['--' + flag.replace('_', '-'), item]
-            return main(argv + (['--json'] if args.json else []))
+            return main(args=args)
         if args.tqcmd == 'capture':
             return capture(args)
         if args.tqcmd == 'check':
@@ -271,6 +339,6 @@ def dispatch(args):
                             'framework_qualification': 'per project; format support does not qualify frameworks'},
               'verdict': 'not_assessed'})
         return 0
-    except (OSError, ValueError, TypeError, KeyError, ET.ParseError) as exc:
+    except (OSError, ValueError, TypeError, KeyError, ImportError, ET.ParseError) as exc:
         dump({'verdict': 'not_assessed', 'complete': False, 'reason': str(exc)})
         return 2

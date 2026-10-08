@@ -20,6 +20,24 @@ PATTERNS = {
 }
 
 
+def backend_findings(result, source, path, raw):
+    findings = []
+    for item in result['results']:
+        if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
+            raise ValueError('invalid finding shape')
+        if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+            raise ValueError('unexpected finding rule or snapshot')
+        line = item['start']['line']
+        if type(line) is not int or line < 1:
+            raise ValueError('invalid finding location')
+        findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
+                         'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
+                         'reason': '斷言兩側是相同語法表達式',
+                         'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
+                         'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
+    return findings
+
+
 def scan(path, language, executable):
     entry = {'path': str(path), 'language': language, 'adapter': 'semgrep-ce',
              'supported_rules': ['same-comparison'], 'test_identity': 'unverified', 'interfaces': PATTERNS[language],
@@ -60,19 +78,7 @@ def scan(path, language, executable):
             if proc.returncode != 0 or result['errors'] or str(source) not in scanned:
                 entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=proc.returncode)
                 return entry, findings
-            for item in result['results']:
-                if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
-                    raise ValueError('invalid finding shape')
-                if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
-                    raise ValueError('unexpected finding rule or snapshot')
-                line = item['start']['line']
-                if type(line) is not int or line < 1:
-                    raise ValueError('invalid finding location')
-                findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
-                                 'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
-                                 'reason': '斷言兩側是相同語法表達式',
-                                 'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
-                                 'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
+            findings.extend(backend_findings(result, source, path, raw))
             entry['status'] = 'scanned'
     except subprocess.TimeoutExpired:
         entry.update(status='timeout', reason='backend timed out')

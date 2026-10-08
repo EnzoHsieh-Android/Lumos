@@ -23,6 +23,7 @@ verified_by:
   - "[[Verification/2026-10-07_歷史鎖案例手冊模型對照]]"
   - "[[Verification/2026-10-07_歷史鎖案例減少提示對照]]"
   - "[[Verification/2026-10-07_不同失效歷史案例集資格重播]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 ---
 # historical-test-quality
 
@@ -54,3 +55,6 @@ WHY:同歷史鎖案例兩批皆滿分後停止疊加提示 [出處:[[Verificatio
 WHY:鎖只當控制，效果候選換Java辨識與圍欄復原 [出處:[[Verification/2026-10-07_不同失效歷史案例集資格重播]]] [因:同鎖案例兩批滿分平手，換失效形態而非繼續調提示找改善]。資格矩陣先跑原弱／強測試、固定錯版／修復版；資格通過不代答模型效果。
 
 PITFALL:把功能加入提交當成修復版會抽不到後續強化測試 [出處:歷史案例集首批Java端點資格失敗] [根因:修復分在後續d92e4ae5提交，首選2e261846只有原8斷言] [repro:python3 governance/eval/historical_case_corpus.py --out /tmp/lumos-corpus-new]。保留首批失敗來源，查歷史後固定真修復，預定失敗索引不改，完整矩陣另批重跑。
+
+WHY: 將scenario、隔離执行、允許的匯入與AST存取驗證分責任保留 [出處:code-test-quality-native-push推送前新增告警檢查] [因:避免複雜度超出既有上限造成後續修復難驗]。使用既有controls的弱測試存活／真正巢狀故障檢出／無效語法與正常鎖控制核對重構；保留原始模型卷證，不重新付費採樣。
+

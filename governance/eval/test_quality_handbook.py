@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -87,6 +88,25 @@ def literal_binding_scopes(tree):
     return scopes
 
 
+def validate_node_access(node, scopes):
+    if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
+        raise ValueError('unsupported-import')
+    if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
+        raise ValueError('unsupported-import')
+    if isinstance(node, ast.Name) and node.id.startswith('__'):
+        raise ValueError('unsupported-dunder')
+    if isinstance(node, ast.Attribute):
+        permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
+                     or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
+                     or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
+                     or node.attr == 'exception'
+                     or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
+        if not permitted:
+            raise ValueError('unsupported-attribute:' + node.attr)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
+        raise ValueError('unsupported-call:' + node.func.id)
+
+
 def validate_test(code):
     """Bounded benchmark grammar, not a general sandbox or Python quality verdict."""
     tree = ast.parse(code)
@@ -103,22 +123,7 @@ def validate_test(code):
                 raise ValueError('loop-budget-exceeded')
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range':
             bounded_iteration_count(node)
-        if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
-            raise ValueError('unsupported-import')
-        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
-            raise ValueError('unsupported-import')
-        if isinstance(node, ast.Name) and node.id.startswith('__'):
-            raise ValueError('unsupported-dunder')
-        if isinstance(node, ast.Attribute):
-            permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
-                         or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
-                         or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
-                         or node.attr == 'exception'
-                         or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
-            if not permitted:
-                raise ValueError('unsupported-attribute:' + node.attr)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
-            raise ValueError('unsupported-call:' + node.func.id)
+        validate_node_access(node, scopes)
     return tree
 
 
@@ -218,6 +223,37 @@ def draft_before_verify(calls):
     return draft
 
 
+def model_command(cmd, directory, timeout):
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(signum, frame):
+        raise ValueError('model interrupted by signal ' + str(signum))
+
+    signal.signal(signal.SIGTERM, interrupted)
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            exc.stdout, exc.stderr = proc.communicate()
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+
+
 def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
     tools = 'Read,Write,Bash' if behavior else ('Read,Skill' if native else 'Read')
     cmd = ['claude', '-p', prompt, '--model', model, '--effort', 'low',
@@ -231,7 +267,7 @@ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, nat
         cmd += ['--allowedTools', 'Write', 'Bash(python3 verify.py)']
     start = time.monotonic()
     try:
-        proc = subprocess.run(cmd, cwd=directory, capture_output=True, text=True, timeout=timeout)
+        proc = model_command(cmd, directory, timeout)
         raw, stderr, rc = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as exc:
         raw = exc.stdout or b''
@@ -252,11 +288,55 @@ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, nat
             'cost_usd': result.get('total_cost_usd'), 'stderr': stderr}, raw
 
 
+def child_main():
+    try:
+        data = json.load(sys.stdin)
+        result = execute_tests(data['code'], data['source'])
+        result['status'] = 'executed'
+    except Exception as exc:
+        result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
+    print(json.dumps(result))
+    return 0
+
+
+def selected_jobs(manifest, lane):
+    jobs = [('trigger', q['id'], 0) for q in manifest['trigger_queries']]
+    jobs += [('behavior', task, n) for n in range(manifest['repeats']) for task in TASKS]
+    if lane == 'native-trigger':
+        jobs = [('native-trigger', q['id'], 0) for q in manifest['trigger_queries']]
+    else:
+        jobs = [job for job in jobs if lane == 'all' or job[0] == lane]
+    return jobs
+
+
+def score_submission(row, lane, query, work, task, wrapper, case, out, name):
+    if lane in {'trigger', 'native-trigger'}:
+        row['skill_invoked'] = any(c['name'] == 'Skill' and c['input'].get('skill') == 'lumos-project-notes' for c in row['calls'])
+        row['positive'] = query['positive']
+        row['skill_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='SKILL.md' for c in row['calls'])
+        row['handbook_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='handbook.md' for c in row['calls'])
+    else:
+        locked = (work/'subject.py').read_text()==task['source'] and (work/'verify.py').read_text()==wrapper
+        row['locked_material_unchanged'] = locked
+        row['valid'] = row['valid'] and locked
+        row['tests_written'] = (work/'tests.py').is_file()
+        if row['tests_written']:
+            code = (work/'tests.py').read_text()
+            (out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
+            row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
+            draft = draft_before_verify(row['calls'])
+            if draft is not None and locked:
+                row['first_draft_score'] = score(case, draft)
+                (out/(name+'.first-draft.json')).write_text(json.dumps({'code':draft,'sha256':sha(draft)},ensure_ascii=False,indent=2)+'\n')
+            else:
+                row['first_draft_score'] = {'status':'unavailable'}
+
+
 def main():
     global TASKS
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--child', action='store_true')
-    ap.add_argument('--verify', choices=list(TASKS) + ['shipping', 'calendar'])
+    ap.add_argument('--verify', choices=[*TASKS, 'shipping', 'calendar'])
     ap.add_argument('--suite', choices=['wording', 'holdout'], default='wording')
     ap.add_argument('--run', action='store_true', help='Opt-in paid/usage-consuming fixed model calls')
     ap.add_argument('--out', type=Path)
@@ -269,14 +349,7 @@ def main():
     if args.lane == 'native-trigger' and args.suite != 'holdout':
         ap.error('--lane native-trigger requires --suite holdout')
     if args.child:
-        try:
-            data = json.load(sys.stdin)
-            result = execute_tests(data['code'], data['source'])
-            result['status'] = 'executed'
-        except Exception as exc:
-            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
-        print(json.dumps(result))
-        return 0
+        return child_main()
     if args.verify:
         print(json.dumps(score(args.verify, Path('tests.py').read_text()), ensure_ascii=False, indent=2))
         return 0
@@ -290,12 +363,7 @@ def main():
     manifest['handbook_sha256'] = {arm: sha(doc) for arm, doc in docs.items()}
     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
     rows = []
-    jobs = [('trigger', q['id'], 0) for q in manifest['trigger_queries']]
-    jobs += [('behavior', task, n) for n in range(manifest['repeats']) for task in TASKS]
-    if args.lane == 'native-trigger':
-        jobs = [('native-trigger', q['id'], 0) for q in manifest['trigger_queries']]
-    else:
-        jobs = [job for job in jobs if args.lane == 'all' or job[0] == args.lane]
+    jobs = selected_jobs(manifest, args.lane)
     manifest['selected_lane'] = args.lane
     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
     for index, (lane, case, repeat) in enumerate(jobs):
@@ -341,26 +409,7 @@ def main():
                 row, raw = run_model(work, system, prompt, manifest['model'], args.timeout, lane == 'behavior', args.out/(name+'.events.jsonl'), native=lane == 'native-trigger')
                 row.update({'id':name, 'lane':lane, 'case':case, 'arm':arm, 'repeat':repeat})
                 (args.out/(name+'.events.jsonl')).write_text(raw)
-                if lane in {'trigger', 'native-trigger'}:
-                    row['skill_invoked'] = any(c['name'] == 'Skill' and c['input'].get('skill') == 'lumos-project-notes' for c in row['calls'])
-                    row['positive'] = query['positive']
-                    row['skill_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='SKILL.md' for c in row['calls'])
-                    row['handbook_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='handbook.md' for c in row['calls'])
-                else:
-                    locked = (work/'subject.py').read_text()==task['source'] and (work/'verify.py').read_text()==wrapper
-                    row['locked_material_unchanged'] = locked
-                    row['valid'] = row['valid'] and locked
-                    row['tests_written'] = (work/'tests.py').is_file()
-                    if row['tests_written']:
-                        code = (work/'tests.py').read_text()
-                        (args.out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
-                        row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
-                        draft = draft_before_verify(row['calls'])
-                        if draft is not None and locked:
-                            row['first_draft_score'] = score(case, draft)
-                            (args.out/(name+'.first-draft.json')).write_text(json.dumps({'code':draft,'sha256':sha(draft)},ensure_ascii=False,indent=2)+'\n')
-                        else:
-                            row['first_draft_score'] = {'status':'unavailable'}
+                score_submission(row, lane, query if lane != 'behavior' else None, work, task if lane == 'behavior' else None, wrapper if lane == 'behavior' else None, case, args.out, name)
                 rows.append(row)
                 (args.out/'results.json').write_text(json.dumps({'manifest_sha256':sha((args.out/'manifest.json').read_text()),'rows':rows},ensure_ascii=False,indent=2)+'\n')
                 print(name, 'valid='+str(row['valid']), flush=True)

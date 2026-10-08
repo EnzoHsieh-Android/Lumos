@@ -17,7 +17,6 @@ from pathlib import Path
 import sys
 import tokenize
 import time
-from test_quality_semgrep import scan as semgrep_scan
 
 VERSION = '0.1'
 LANGUAGES = {'.py': 'python', '.kt': 'kotlin', '.java': 'java', '.swift': 'swift',
@@ -136,43 +135,53 @@ def mirror(call, expected, models, aliases):
     return set(bound) == set(params) and key(expand(body, bound)) == key(expected)
 
 
+def comparison_rule(expr, models, aliases):
+    pair = pairs(expr)
+    if not pair:
+        return None
+    left, right = pair
+    if key(left) == key(right):
+        return 'same-comparison'
+    containers = {'set', 'list', 'tuple', 'dict', 'str', 'int', 'float', 'bool', 'len', 'sorted', 'frozenset'}
+    if isinstance(left, ast.Call) and isinstance(right, ast.Call) and qualified(left.func, aliases) == qualified(right.func, aliases) and qualified(left.func, aliases) not in containers:
+        return 'oracle-reuses-call'
+    if mirror(left, right, models, aliases) or mirror(right, left, models, aliases):
+        return 'mirror-expression'
+    return None
+
+
+def update_bindings(statement, bindings):
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        value = statement.value
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        resolved = expand(value, bindings) if value is not None else None
+        for target in targets:
+            if isinstance(target, ast.Name):
+                if resolved is not None:
+                    bindings[target.id] = resolved
+                else:
+                    bindings.pop(target.id, None)
+            elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(resolved, (ast.Tuple, ast.List)) and len(target.elts) == len(resolved.elts):
+                for name, item in zip(target.elts, resolved.elts):
+                    if isinstance(name, ast.Name):
+                        bindings[name.id] = item
+            else:
+                bindings.clear()
+    elif not isinstance(statement, (ast.Expr, ast.Assert, ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
+        # 分支／迴圈／with 等不推資料流；清除直線假設，避免用舊 expected。
+        bindings.clear()
+
+
 def inspect_test(fn, path, aliases, models, lines, check_helpers=()):
     bindings, findings, seen = {}, [], []
     for statement in fn.body:
         for location, expr in assertions(statement, check_helpers):
             current = expand(expr, bindings)
             seen.append((location, source_based(current, aliases)))
-            pair = pairs(current)
-            rule = None
-            if pair:
-                left, right = pair
-                if key(left) == key(right):
-                    rule = 'same-comparison'
-                elif isinstance(left, ast.Call) and isinstance(right, ast.Call) and qualified(left.func, aliases) == qualified(right.func, aliases) and qualified(left.func, aliases) not in {'set', 'list', 'tuple', 'dict', 'str', 'int', 'float', 'bool', 'len', 'sorted', 'frozenset'}:
-                    rule = 'oracle-reuses-call'
-                elif mirror(left, right, models, aliases) or mirror(right, left, models, aliases):
-                    rule = 'mirror-expression'
+            rule = comparison_rule(current, models, aliases)
             if rule:
                 findings.append(finding(rule, fn.name, path, location, lines))
-        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
-            value = statement.value
-            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-            resolved = expand(value, bindings) if value is not None else None
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    if resolved is not None:
-                        bindings[target.id] = resolved
-                    else:
-                        bindings.pop(target.id, None)
-                elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(resolved, (ast.Tuple, ast.List)) and len(target.elts) == len(resolved.elts):
-                    for name, item in zip(target.elts, resolved.elts):
-                        if isinstance(name, ast.Name):
-                            bindings[name.id] = item
-                else:
-                    bindings.clear()
-        elif not isinstance(statement, (ast.Expr, ast.Assert, ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
-            # 分支／迴圈／with 等不推資料流；清除直線假設，避免用舊 expected。
-            bindings.clear()
+        update_bindings(statement, bindings)
     if seen and all(from_source for _, from_source in seen):
         findings.append(finding('source-only', fn.name, path, seen[0][0], lines))
     return findings
@@ -217,25 +226,19 @@ def discover(paths, report):
     return sorted(files)
 
 
-def main(argv=None):
-    started = time.monotonic()
-    parser = argparse.ArgumentParser(description=__doc__)
+def add_scan_arguments(parser):
     parser.add_argument('paths', nargs='+', type=Path)
     parser.add_argument('--check-helper', action='append', default=[], metavar='NAME', help='明示 check(name, condition, detail) 類斷言 helper，可重複')
     parser.add_argument('--semgrep', metavar='EXECUTABLE', help='選配本機 Semgrep CE；其他語言先只辨識來源自比')
     parser.add_argument('--json', action='store_true', help='輸出共用 JSON 報告')
     parser.add_argument('--implementation', action='append', default=[], metavar='MODULE=PATH', help='Python 算式比對來源（只 parse，不 import）')
-    args = parser.parse_args(argv)
-    report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
-              'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
-              'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
-                  '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
-                  '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
-    report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
-    report['assertion_helpers'] = args.check_helper
+    return parser
+
+
+def load_models(specs, report):
     models = {}
     errors = (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, MemoryError)
-    for spec in args.implementation:
+    for spec in specs:
         module, sep, name = spec.partition('=')
         entry = {'module': module, 'path': name}
         report['implementations'].append(entry)
@@ -257,6 +260,42 @@ def main(argv=None):
             entry['unmodeled_functions'] = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name not in supported]
         except errors as exc:
             entry.update(status='error', reason=str(exc))
+    return models
+
+
+def inspect_python_file(path, entry, report, models, check_helpers):
+    errors = (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, MemoryError)
+    try:
+        source, tree, digest = parse_file(path)
+        tests = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(('test_', 't_')):
+                tests.append(node)
+            elif isinstance(node, ast.ClassDef):
+                tests.extend(fn for fn in node.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith('test_'))
+        entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
+        aliases, lines = imports(tree), source.splitlines()
+        entry['tests_with_known_assertions'] = sum(any(list(assertions(st, check_helpers)) for st in fn.body) for fn in tests)
+        for fn in tests:
+            report['findings'].extend(inspect_test(fn, path, aliases, models, lines, check_helpers))
+    except errors as exc:
+        entry.update(status='error', reason=str(exc))
+
+
+def main(argv=None, *, args=None):
+    from test_quality_semgrep import scan as semgrep_scan
+    started = time.monotonic()
+    if args is None:
+        parser = add_scan_arguments(argparse.ArgumentParser(description=__doc__))
+        args = parser.parse_args(argv)
+    report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+              'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
+              'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
+                  '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
+                  '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
+    report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
+    report['assertion_helpers'] = args.check_helper
+    models = load_models(args.implementation, report)
     files = discover(args.paths, report)
     for path in files:
         language = LANGUAGES.get(path.suffix, 'unknown')
@@ -270,21 +309,7 @@ def main(argv=None):
             else:
                 entry.update(status='unsupported', reason='optional Semgrep adapter not enabled')
             continue
-        try:
-            source, tree, digest = parse_file(path)
-            tests = []
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(('test_', 't_')):
-                    tests.append(node)
-                elif isinstance(node, ast.ClassDef):
-                    tests.extend(fn for fn in node.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith('test_'))
-            entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
-            aliases, lines = imports(tree), source.splitlines()
-            entry['tests_with_known_assertions'] = sum(any(list(assertions(st, args.check_helper)) for st in fn.body) for fn in tests)
-            for fn in tests:
-                report['findings'].extend(inspect_test(fn, path, aliases, models, lines, args.check_helper))
-        except errors as exc:
-            entry.update(status='error', reason=str(exc))
+        inspect_python_file(path, entry, report, models, args.check_helper)
     if not report['inputs']:
         report['inputs'].append({'path': ', '.join(str(p) for p in args.paths), 'status': 'no_tests', 'reason': 'no test candidates discovered'})
     report['complete'] = bool(report['inputs']) and all(i['status'] == 'scanned' for i in report['inputs']) and all(i['status'] == 'parsed' for i in report['implementations'])

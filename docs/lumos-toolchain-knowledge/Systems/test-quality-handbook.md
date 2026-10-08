@@ -20,6 +20,7 @@ related:
 verified_by:
   - "[[Verification/2026-10-07_測試手冊措辭兩臂試行]]"
   - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
 ---
 # test-quality-handbook
 
@@ -47,3 +48,6 @@ WHY: 首次生成與回饋後修訂分開 [出處:2026-10-07 使用者要求繼�
 WHY: 原生描述用最小 project skill 對照 [出處:Claude Code 官方 skills 文件及本機原生preflight-v2] [因:全域安裝版與其他技能會影響選擇，須先固定可見目錄再比較描述]。臨時技能body與手冊相同，只有description不同；結論限該宿主與孤立目錄，不代替完整Lumos部署或Codex路由。
 
 PITFALL: 正常有限迴圈被考卷語法拒絕會使測試效果失去可比性 [出處:[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]] [repro:python3 -m unittest discover -s governance/eval -p test_test_quality_handbook.py -v]。保留原始分數與生成版本，補齊固定字面值迴圈語法後對兩臂全部草稿一致重算，不能把語法不支援算成品質差。
+
+PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能繼續消耗 [出處:code-test-quality-native-push/r1-資源-codex.md r2] [防回歸:test_model_timeout_stops_worker_without_paid_call]。控制使用PATH前置可確認的fake claude，真的生成工作者再逾時、確認停止，不消耗模型額度。模型命令使用獨立POSIX程序群組；本次不延伸Windows資格。語法限制與模型提交計分分開，沿既有固定題grammar，不宣稱一般Python沙盒。
+
