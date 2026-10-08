@@ -21,6 +21,7 @@ verified_by:
   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
+  - "[[Verification/測試品質分支第三輪審查停點]]"
 ---
 # test-quality-cli
 
