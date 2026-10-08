@@ -93,6 +93,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
+  - "[[Verification/TTY確認不取得控制終端驗證]]"
 about_code:
   - get.sh
   - scripts/lumos
@@ -146,3 +147,5 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
 - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
 - 分發機制脈絡:user-memory `lumos-update-distribution`。
+
+PITFALL: 無控制終端的 session leader 用 `os.open(tty, O_RDWR)` 開 pty slave，可能把它取得成 controlling terminal；關閉後 runner 收到 SIGHUP 129，讓全套測試沒有摘要就中斷 [出處:[[Verification/TTY確認不取得控制終端驗證]]] [防回歸:t_confirm_tty_unit]。`_confirm_tty` 開 tty 時在平台有提供才加 `O_NOCTTY`，保留 Windows fallback 與既有三階確認語意。
