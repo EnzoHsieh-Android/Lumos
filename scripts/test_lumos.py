@@ -76408,5 +76408,150 @@ def t_review_eval_comparison():
     _review_convergence_unit_group("ComparisonTests")
 
 
+def _rej_vault():
+    """舊否決清單的佈景:四種來源各有要列的,也各有不該列的對照(圍欄裡的 WHY、沒有不選的 WHY、一般有效決策、
+    翻案或只在引號裡提到不做的決策、關鍵字落在 120 字之後的決策、活節點);每個關鍵字、每種作廢節點各有一筆單獨撐。"""
+    v = mkvault()
+    pad = "前" * 100
+    write(v, "Projects/甲_計劃.md",
+          "type: project\nstatus: doing\ntags:\n  - type/project\n  - status/doing\n"
+          "summary: |-\n  WHY:做甲 [出處:x] [因:y] [不選:乙方案(太慢)] [不選:丙方案]\n"
+          "decisions:\n  - content: 舊做法戊\n    id: d1\n    decided: 2026-01-01\n    valid: false\n    superseded_by: d2\n"
+          "  - content: 停案己方案\n    id: d2\n    decided: 2026-01-02\n"
+          "  - content: 一般決策庚\n    id: d3\n    decided: 2026-01-03\n"
+          "  - content: 不做舊方案壬\n    id: d4\n    decided: 2026-01-04\n    valid: false\n    superseded_by: d2\n"
+          "  - content: 否決癸方案\n    id: d5\n    decided: 2026-01-05\n"
+          "  - content: 不採子方案\n    id: d6\n    decided: 2026-01-06\n"
+          f"  - content: 寅{pad}不做寅方案\n    id: d7\n    decided: 2026-01-07\n"
+          f"  - content: 卯{pad}{'後' * 30}不做卯方案\n    id: d8\n    decided: 2026-01-08\n"
+          "  - content: 推翻舊的不做,改做辰方案\n    id: d9\n    decided: 2026-01-09\n"
+          "  - content: 停案酉方案,核心想法被實測推翻\n    id: d13\n    decided: 2026-01-13\n"
+          "  - content: 收窄「巳方案不做」那句\n    id: d10\n    decided: 2026-01-10\n"
+          "  - content: 不做午方案\n    decided: 2026-01-11\n"
+          "  - content: 舊的申\n    id: d12\n    decided: 2026-01-12\n    valid: false\n"
+          "  - content: 推翻了丙的舊方案;戌方案停案\n    id: d14\n    decided: 2026-01-14\n"
+          f"  - content: 亥{pad[:99]}「不做亥方案{'後' * 30}」\n    id: d15\n    decided: 2026-01-15\n"
+          "  - content: 舊的乙一\n    id: d16\n    decided: 2026-01-16\n    valid: false\n    superseded_by:\n"
+          "  - content: 舊的乙二\n    id: d17\n    decided: 2026-01-17\n    valid: false\n    superseded_by:\n      - d2\n      - d3",
+          "# 甲_計劃\n\nWHY:正文決定 [出處:a] [因:b] [不選:丁方案]\n\nWHY:沒有不選這一行 [出處:a] [因:b]\n\n"
+          "WHY:做甲 [出處:x] [因:y] [不選:乙方案(太慢)] [不選:丙方案]\n\n"
+          "- WHY:列表裡的決定 [出處:a] [因:b] [不選:未方案]\n\n"
+          "```\nWHY:範例 [出處:a] [因:b] [不選:圍欄方案]\n```\n")
+    write(v, "Systems/作廢篇.md",
+          "type: system\nstatus: superseded\ntags:\n  - type/system\n  - status/superseded\n"
+          "summary: |-\n  WHY:作廢篇自己 [出處:a] [因:b] [不選:辛方案]",
+          "# 作廢篇\n> 白話:作廢篇的一句話\n")
+    write(v, "Systems/否決篇.md", "type: system\nstatus: rejected\ntags:\n  - type/system\n  - status/rejected",
+          "# 否決篇\n> 白話:否決篇的一句話\n")
+    write(v, "Systems/活篇.md", "type: system\nstatus: doing\ntags:\n  - type/system\n  - status/doing",
+          "# 活篇\n> 白話:活篇不該列\n")
+    write(v, "Projects/作廢計劃_計劃.md", "type: project\nstatus: superseded\ntags:\n  - type/project\n  - status/superseded",
+          "# 作廢計劃_計劃\n> 白話:作廢計劃的一句話\n")
+    write(v, "Issues/不修議題.md", "type: issue\nstatus: wontfix\ntags:\n  - type/issue\n  - status/wontfix",
+          "# 不修議題\n> 白話:不修議題的一句話\n")
+    write(v, "Issues/活議題.md", "type: issue\nstatus: open\ntags:\n  - type/issue\n  - status/open",
+          "# 活議題\n> 白話:活議題不該列\n")
+    return v
+
+
+_REJ_WANT = ("乙方案(太慢)", "丙方案", "丁方案", "未方案", "辛方案",            # WHY 行的不選(摘要、正文、列表行、作廢篇自己的)
+             "舊做法戊", "不做舊方案壬", "舊的申", "舊的乙一", "舊的乙二",      # 被翻案的決策(推翻者空鍵、區塊清單也收)
+             "停案己方案", "否決癸方案", "不採子方案", "不做寅方案", "不做午方案",  # 每個關鍵字單獨一筆;120 字內
+             "停案酉方案", "戌方案停案",                                       # 先講停案、後文才提推翻;一句推翻、另一句停案:照收
+             "作廢篇的一句話", "否決篇的一句話", "作廢計劃的一句話", "不修議題的一句話")
+
+
+def t_rejections_collects_sources():
+    """[否決提案收齊查重 S1] 四種來源逐條列出(來源篇、種類、內容),印總筆數與怎麼用;作廢節點自己的不選也收;
+    圍欄裡的 WHY、沒有不選的 WHY、一般有效決策、活節點不列。"""
+    print("t_rejections_collects_sources")
+    v = _rej_vault()
+    r = run(v, "rejections")
+    out = r.stdout
+    check("①rc 0", r.returncode == 0, out + r.stderr)
+    for want in _REJ_WANT:
+        check(f"②列出 {want}", want in out, out)
+    check("③不選那一條帶來源篇與那行的決定", any("Projects/甲_計劃" in ln and "乙方案" in ln and "做甲" in ln for ln in out.split("\n")), out)
+    for bad in ("圍欄方案", "沒有不選這一行", "一般決策庚", "活篇不該列", "活議題不該列", "卯方案", "辰方案", "巳方案",
+                "不做亥方案"):   # 亥:引號開在 120 字內、收在 120 字外,整段仍是引述
+        check(f"④不列 {bad}", bad not in out, out)
+    check("⑤總筆數 21 與怎麼用的一句", "共 21 筆" in out and "按概念" in out, out[-400:])
+    check("⑥被翻案的決策內文寫不做:只算翻案、不重複列成不做決策", out.count("不做舊方案壬") == 1, out)
+    check("⑦摘要與正文寫同一行 WHY:只收一次", out.count("乙方案(太慢)") == 1 and out.count("丙方案") == 1, out)
+    check("⑧沒有編號的決策不印空的 #", "#:" not in out and "#" not in next(ln for ln in out.split("\n") if "不做午方案" in ln), out)
+
+
+def t_rejections_json_and_empty():
+    """[否決提案收齊查重 S2] --json 每條帶來源篇、種類、內容,另有總筆數;一條都沒有時印 0 筆、正常結束。"""
+    print("t_rejections_json_and_empty")
+    import json as _j
+    v = _rej_vault()
+    r = run(v, "rejections", "--json")
+    d = _j.loads(r.stdout)
+    items = d.get("results") or []
+    check("①總筆數與條數一致(陣列跟 query、search 一樣叫 results)", r.returncode == 0 and d.get("total") == 21 and len(items) == 21,
+          r.stdout[:600])
+    check("②每條有來源篇(跟其他指令一樣叫 node、帶 .md)、種類、內容",
+          all({"node", "kind", "content"} <= set(x) and x["node"].endswith(".md") for x in items), r.stdout[:600])
+    kinds = {x["kind"] for x in items}
+    check("③四種種類都在", kinds == {"rejected-alt", "superseded-decision", "no-go-decision", "retired-node"}, str(kinds))
+    sup = {x["content"]: x["context"] for x in items if x["kind"] == "superseded-decision"}
+    check("④翻案的 context 是推翻它的決策編號本身,沒寫或空鍵是 null,區塊清單用逗號接",
+          sup.get("舊做法戊") == "d2" and sup.get("舊的申") is None and sup.get("舊的乙一") is None and sup.get("舊的乙二") == "d2,d3",
+          str(sup))
+    e = mkvault()
+    r = run(e, "rejections")
+    check("⑤空圖譜印一句「無…」、0 筆、rc 0", r.returncode == 0 and "共 0 筆" in r.stdout and "無舊否決" in r.stdout
+          and "按概念" not in r.stdout, r.stdout + r.stderr)
+    r = run(e, "rejections", "--json")
+    check("⑥空圖譜 --json total 0", r.returncode == 0 and _j.loads(r.stdout) == {"total": 0, "results": []}, r.stdout)
+
+
+def t_spec_gate_rejections_hint():
+    """[否決提案收齊查重 S4] 規格閘多印一行舊否決筆數、指向 lumos rejections;回傳碼不變;收集出錯就略過這行(只印略過原因)。"""
+    print("t_spec_gate_rejections_hint")
+    _d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "rejhint")
+    write(kg, "Systems/作廢篇.md", "type: system\nstatus: superseded\ntags:\n  - type/system\n  - status/superseded",
+          "# 作廢篇\n")
+    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+    line = next((ln for ln in r.stdout.split("\n") if "舊否決" in ln), "")
+    check("①印一行舊否決筆數並指向指令", "1 筆" in line and "lumos rejections" in r.stdout, r.stdout[-600:])
+    m = _load_lumos_inproc()
+    import io as _io
+    from unittest.mock import patch as _patch
+    out, calls = _io.StringIO(), []
+
+    def _boom(env):
+        calls.append(env)
+        raise ValueError("壞掉")
+    with _patch.object(m, "_rejections_collect", side_effect=_boom), _patch.object(m.sys, "stdout", out):
+        rc = m.cmd_spec_gate(m.Env(kg), "Projects/甲_計劃", no_run=True)
+    got = out.getvalue()
+    check("②收集真的被叫到(不是提早返回才沒印)", len(calls) == 1, (calls, got[-300:]))
+    check("③收集出錯:不印筆數、印略過原因,回傳碼跟正常時一樣",
+          "圖譜寫下的有" not in got and "壞掉" in got and "略過" in got and rc == r.returncode, (rc, r.returncode, got[-300:]))
+
+
+def t_rejections_retired_statuses_in_enum():
+    """作廢整篇收的狀態值,每個都要是該類型的合法狀態(_STATUS_ENUM),不另立一份狀態詞彙。"""
+    print("t_rejections_retired_statuses_in_enum")
+    m = _load_lumos_inproc()
+    bad = [(t, v) for t, vs in m._REJ_RETIRED.items() for v in vs if v not in m._STATUS_ENUM.get(t, ())]
+    check("①每個作廢狀態都在該類型的值域裡", not bad, str(bad))
+
+
+def t_decisions_superseded_output_unchanged():
+    """lumos decisions --superseded 改用共用收集函式後,輸出一字不差(否決提案收齊查重_計劃〈範圍〉第 2 點;不列條款)。"""
+    print("t_decisions_superseded_output_unchanged")
+    v = _rej_vault()
+    r = run(v, "decisions", "--superseded")
+    check("①格式不變", r.returncode == 0 and r.stdout == ("甲_計劃: 舊做法戊 → d2\n甲_計劃: 不做舊方案壬 → d2\n甲_計劃: 舊的申 → ?\n"
+                                              "甲_計劃: 舊的乙一 → []\n甲_計劃: 舊的乙二 → ['d2', 'd3']\n"),
+          repr(r.stdout))
+    r = run(mkvault(), "decisions", "--superseded")
+    check("②沒有時照舊印「無被推翻的決策」", r.stdout == "無被推翻的決策\n", repr(r.stdout))
+
+
 if __name__ == "__main__":
     sys.exit(main())
