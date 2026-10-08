@@ -129,7 +129,7 @@ def _atomic_write_bytes(path, data):
     keep_mode = (stat.S_IMODE(old.st_mode) & 0o666
                  if old is not None and stat.S_ISREG(old.st_mode)
                  and old.st_uid == _euid() and old.st_nlink == 1 else None)
-    for _ in range(100):                        # 隨機名撞名機率極低;設上限跟專案其他 O_EXCL 迴圈一樣,防異常狀況空轉
+    for _ in range(100):                        # 隨機名撞名機率極低;設上限防異常狀況空轉(lumos 主程式另一處 O_EXCL 迴圈也設了上限)
         # 暫存檔名固定短,不帶目標檔名:目標檔名接近 255 bytes 上限時才不會超長
         tmp_path = path.with_name(f".probe-out-{os.getpid()}-{secrets.token_hex(4)}.tmp")
         try:

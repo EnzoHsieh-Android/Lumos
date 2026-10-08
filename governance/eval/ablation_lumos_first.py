@@ -383,7 +383,7 @@ def merge(out_dir, expected_ids, runs):
 
 
 # lumos 主程式 _PATH_SPECIAL_CATS 的同一組類別(C0/C1、雙向覆寫與零寬、行段分隔、代理字元);主程式是無副檔名的
-# 單檔 CLI,這裡不為一組常數載入整支,改由測試核對兩邊寫法一致(t_probe_boundary_fourth_round_report_and_provenance)。
+# 單檔 CLI,這裡不為一組常數載入整支,改由測試直接比對兩邊的類別集合與寫法(t_probe_boundary_fourth_round_report_and_provenance)。
 _SPECIAL_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs"))
 
 
@@ -395,6 +395,7 @@ def render_md(s, meta):
         # 其餘照原樣。字面寫著 \u001b 的文字會跟真的控制字元呈現成同一個樣子,主程式已接受這個取捨,這裡不另起一套。
         return f"\\u{ord(ch):04x}" if unicodedata.category(ch) in _SPECIAL_CATS else ch
     def text(x):
+        # 換行先換成空白(表格一列不能斷行),所以 CR/LF 不像 _kill_esc 寫成 \u000d/\u000a;這是報表排版的刻意差異
         raw = str(x).replace("\r", " ").replace("\n", " ")
         raw = "".join(visible(ch) for ch in raw)
         # : @ ~ 與 www. 也跳脫:GFM 會把裸網址、email 自動變連結、~~ 變刪除線

@@ -43469,6 +43469,17 @@ def t_probe_boundary_fifth_round_output_edges():
             reader.join(20)
             os.close(slave); os.close(master)
             check("終端讀得慢時大量輸出照樣寫完", pty_err is None and len(got) >= 300_000, (pty_err, len(got)))
+            # 暫存檔名連續撞名的上限:固定隨機尾碼並預先放好同名檔,要報 FileExistsError、不改目標、不空轉
+            capped = work / "capped.json"; capped.write_text("keep")
+            jam = work / f".probe-out-{os.getpid()}-deadbeef.tmp"; jam.write_text("x")
+            try:
+                with patch.object(mod.secrets, "token_hex", return_value="deadbeef"):
+                    mod._atomic_write_text(capped, "{}")
+                cap_err = None
+            except FileExistsError as exc:
+                cap_err = exc
+            check("暫存檔名一直撞名時報錯且目標不變", cap_err is not None and capped.read_text() == "keep", cap_err)
+            jam.unlink(); capped.unlink()
             # 消融腳本用的就是這一份:新檔照 umask、長檔名寫得出(舊的本地拷貝是 0600、長檔名會爆)
             import importlib.util
             spec = importlib.util.spec_from_file_location("ablation_r6_write", Path(__file__).resolve().parents[1]
@@ -43742,16 +43753,20 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         check("現場成立:裸網址真的進了報表那一行", "evil" in md, md[:240])
         check("裸網址、www、email 與刪除線不留可自動連結的原形",
               all(t not in md for t in ("https://", "www.", "a@b", "~~")), md[:240])
-        # 真的控制字元與「字面寫成 \x1b 的文字」要呈現得不一樣,不然讀報表的人分不出來。
+        # 真的控制字元與「字面寫成 \x1b 的文字」呈現不同(\x 形式)。字面寫成 \u001b 的文字會跟真控制字元一樣,
+        # 那是沿用主程式 _kill_esc 寫法刻意接受的取捨(見 Systems/ablation-lumos-first 的 WHY),這裡不斷言它。
         esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
         lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
         check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
-        # 跟 lumos 主程式的 _kill_esc 同一套:只有控制、格式、行段分隔、代理這幾類寫成 \\uXXXX,其餘(含全形空白)照原樣
+        # 跟 lumos 主程式的 _kill_esc 同一套:只有控制、格式、行段分隔、代理這幾類寫成 \\uXXXX,其餘(含全形空白)照原樣。
+        # 先直接比類別集合(主程式日後增減類別,這裡立刻紅),再拿每一類各一個字元比寫法。
         lm = _load_lumos_inproc()
-        sample = "\u202e\ufeff\U000e0001\u3000\u00a0x"
+        check("報表的控制字元類別跟 lumos 主程式同一組", ablation._SPECIAL_CATS == lm._PATH_SPECIAL_CATS,
+              (sorted(ablation._SPECIAL_CATS), sorted(lm._PATH_SPECIAL_CATS)))
+        sample = "\x01\u202e\ufeff\u2028\u2029\ud800\U000e0001\u3000\u00a0x"
         md = ablation.render_md(summary, {"date": sample, "claude_version": "v"})
         expect = lm._kill_esc(sample).replace("\\", "\\\\")
-        check("報表的控制字元寫法跟 lumos 主程式的 _kill_esc 一致", expect in md, (expect, md[:200]))
+        check("報表的控制字元寫法跟 lumos 主程式的 _kill_esc 一致(Cc/Cf/Zl/Zp/Cs 各一)", expect in md, (expect, md[:200]))
         # 字面反斜線只照 Markdown 規則轉一次:渲染後跟原值一樣是一個,不能變兩個
         md = ablation.render_md(summary, {"date": "C:\\dir", "claude_version": "v"})
         check("字面反斜線渲染後仍是一個", "C\\:\\\\dir" in md and "\\\\\\\\dir" not in md, md[:200])
