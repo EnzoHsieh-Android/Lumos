@@ -1,0 +1,894 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ea3b6468..aa98a550 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -51206,31 +51206,33 @@ def t_drift_check_default_gate_blocks():
+     (root / ".lumos" / "config.json").write_text(_j.dumps({"note_lint": {"gate": "on"}}), encoding="utf-8")
+     _nh_commit(root, "設定檔在、沒寫 drift_check")
+     rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
+     check("③設定檔在、沒寫 drift_check → 預設 block:擋下、rc1", rc == 1 and "擋下" in out, out[-600:])
+ 
+ 
+ def _dr_hook_fakes(root):
+     """推送前掛鉤的測試現場:假 lumos(記下每次被叫的參數;drift 子命令轉給真的 lumos)、假全套測試(跑了記一筆 SUITE)。
+     放在工作目錄、不提交——drift check 讀的是被推送頂端提交的樹,跟它們無關;所以要在最後一個提交之後才放。
+     FAKE_DRIFT_RC=<n>:drift 不轉給真的,印舊版工具那句「擋下:沒有 drift 這個指令」回 n;FAKE_DRIFT_SIG=1:drift 被 SIGTERM 殺掉;
+-    FAKE_SIG_CMD=<子命令>:那個子命令(home、note-shape、spec-gate、code-loop…)被 SIGTERM 殺掉。"""
++    FAKE_SIG_CMD=<子命令>:那個子命令(home、note-shape、spec-gate、code-loop…)被 SIGTERM 殺掉;
++    FAKE_INT_CMD=<子命令>:那個子命令被 SIGINT 殺掉(等同 Ctrl-C,回傳碼 130;回頭重讀提醒只在 130 停下)。"""
+     import os as _os
+     real = Path(GRAPHCTL).resolve()
+     log = root / "argv.log"
+     (root / "scripts" / "lumos").write_text(
+         "#!/usr/bin/env python3\nimport sys, json, pathlib, os, subprocess, signal\n"
+         f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+         "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+         "if c == 'python-path':\n    print(sys.executable); sys.exit(0)\n"
+         "if c == 'drift' and os.environ.get('FAKE_DRIFT_SIG'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
+         "if c and c == os.environ.get('FAKE_SIG_CMD'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
++        "if c and c == os.environ.get('FAKE_INT_CMD'):\n    signal.signal(signal.SIGINT, signal.SIG_DFL); os.kill(os.getpid(), signal.SIGINT)\n"
+         "if c == 'drift' and os.environ.get('FAKE_DRIFT_RC'):\n"
+         "    print('擋下:沒有「drift」這個指令。', file=sys.stderr); sys.exit(int(os.environ['FAKE_DRIFT_RC']))\n"
+         f"if c == 'drift':\n    sys.exit(subprocess.run([sys.executable, {str(real)!r}, *sys.argv[1:]]).returncode)\n"
+         "if c == 'impact' and '--json' in sys.argv:\n"
+         "    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
+         "elif c == 'pitfalls' and '--json' in sys.argv:\n"
+         "    print(json.dumps({'tier': 'standard'}))\n"
+         "sys.exit(0)\n", encoding="utf-8")
+     _os.chmod(root / "scripts" / "lumos", 0o755)
+     (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
+@@ -51241,21 +51243,21 @@ def _dr_hook_fakes(root):
+ 
+ 
+ def _dr_hook_run(root, stdin, args=(), hook=None, **env):
+     """真的跑工具鏈的推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。args 是 git 給掛鉤的參數(遠端名、網址);
+     hook 給了就跑那一支(測試造的改動版),不給跑工具鏈自己的。"""
+     import subprocess as sp, os as _os
+     hook = hook or Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     log = root / "argv.log"
+     log.unlink(missing_ok=True)
+     e = dict(_os.environ, GIT_DIR=str(root / ".git"), LUMOS_TEST_SHARDS="1")
+-    for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG", "FAKE_SIG_CMD"):
++    for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG", "FAKE_SIG_CMD", "FAKE_INT_CMD"):
+         e.pop(k, None)
+     e.update(env)
+     r = sp.run(["bash", str(hook), *args], cwd=str(root), input=stdin, capture_output=True, text=True, env=e, timeout=300)
+     lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+     return r.returncode, lines, r.stdout + r.stderr
+ 
+ 
+ def t_prepush_gates_stop_on_signal():
+     """推送前掛鉤裡「rc1 擋、其他非零放行」的閘(每支檔有家、筆記形狀擋、雙向門放行 spec-gate、code-loop check、
+     存量漂移檢查)被訊號殺掉(回傳碼 128 以上,多半是 Ctrl-C)→ 印「<閘名>被中斷(rc=…),推送停下,後面的檢查不跑。」、
+@@ -51271,22 +51273,24 @@ def t_prepush_gates_stop_on_signal():
+     base = _na_head(root)
+     _nh_node(root, "Pay", summary="FLOW:b")
+     _nh_commit(root, "c")
+     head = _na_head(root)
+     _dr_hook_fakes(root)
+     stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
+     gates = (("home", "每支檔有家檢查"), ("note-shape", "筆記形狀擋"), ("spec-gate", "雙向門放行檢查(spec-gate)"),
+              ("code-loop", "code-loop check"), ("drift", "存量漂移檢查"))
+     txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+     old_txt, n = re.subn(r"^[ \t]*pp_stop_if_signaled \"\$[a-z]+_rc\".*\n", "", txt, flags=re.M)
+-    # 五道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照
+-    check("前置:掛鉤裡五道閘各有一行 pp_stop_if_signaled", n == 5, str(n))
++    # 五道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照。
++    # 第六行是回頭重讀提醒(Projects/守檔筆記對照改動_計劃 [S9]):它只在回傳碼 130(Ctrl-C)時才交給 pp_stop_if_signaled,
++    # 被其他訊號砍掉照推——那一道的兩種情形在 t_note_audit_reread_check_wired 驗,這裡只數行數
++    check("前置:掛鉤裡六道閘各有一行 pp_stop_if_signaled(五道會擋的閘+回頭重讀提醒的 Ctrl-C)", n == 6, str(n))
+     old_hook = Path(tempfile.mkdtemp(prefix="gctl-oldhook-")) / "pre-push"
+     old_hook.write_text(old_txt, encoding="utf-8")
+     rc, lines, out = _dr_hook_run(root, stdin)
+     check("前置:沒人被殺掉時整支掛鉤放行、跑到全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-400:]}")
+     for cmd, name in gates:
+         rc, lines, out = _dr_hook_run(root, stdin, hook=old_hook, FAKE_SIG_CMD=cmd)
+         called = any(ln.startswith(cmd) for ln in lines)
+         check(f"前置({cmd}):拿掉停下的掛鉤(等同舊掛鉤)被殺掉的閘當成放行、照跑全套", called and rc == 0 and "SUITE" in lines,
+               f"rc={rc} {lines} {out[-300:]}")
+         rc, lines, out = _dr_hook_run(root, stdin, FAKE_SIG_CMD=cmd)
+@@ -53571,20 +53575,804 @@ def t_note_audit_skips_conditional_revisit():
+     m = _load_lumos_inproc()
+     root, base = _na_repo()
+     _na_body(root, ["REVISIT:[when-file:src/a.py][by:2099-01-01] 條件式的", "REVISIT:2099-01-01 現在沒有權限檢查,之後補"])
+     _nh_commit(root, "new")
+     got = m._note_audit_items(root, base, _na_head(root), _NA_VAULT)
+     texts = [it["text"] for it in got[0]] if got else []
+     check("①條件式回頭條件不送審", not any("條件式的" in t for t in texts), str(texts))
+     check("②日期式照審", any("現在沒有權限檢查" in t for t in texts), str(texts))
+ 
+ 
++# ── 回頭重讀守檔筆記(Projects/守檔筆記對照改動_計劃,2026-10-01)──────────────────────────────────────
++def _rr_repo(cfg=None):
++    """回頭重讀的測試專案:src/a.py、src/b.py、src/c.py 各 20 行,家分別是 Systems 的 A、B、C,已提交。回 (根, 起點提交)。"""
++    root = _nh_repo(cfg)
++    for f in ("a", "b", "c"):
++        _nh_file(root, f"src/{f}.py", "\n".join(f"{f}{i} = {i}" for i in range(1, 21)) + "\n")
++    for n in ("A", "B", "C"):
++        _nh_node(root, n, about=[f"src/{n.lower()}.py"], body=f"{n} 的第一行")
++    _nh_commit(root, "init")
++    return root, _na_head(root)
++
++
++def _rr_touch(root, rel, line="改一行"):
++    """在 rel 檔尾加一行(程式或筆記都用這支)。"""
++    p = root / rel
++    p.write_text(p.read_text(encoding="utf-8") + line + "\n", encoding="utf-8")
++
++
++def _rr_note(name):
++    return f"{_NA_VAULT}/Systems/{name}.md"
++
++
++def _rr(root, *args, env=None):
++    """跑 lumos note-audit <子指令> → (rc, 標準輸出, 標準錯誤)(reread-check 要分開驗「只走標準輸出」)。"""
++    import subprocess as sp, os as _os
++    e = dict(_os.environ)
++    for k in ("LUMOS_SKIP_REREAD_CHECK", "CI"):
++        e.pop(k, None)
++    if env:
++        e.update(env)
++    r = sp.run([sys.executable, GRAPHCTL, "note-audit", *args, "--repo", str(root)], capture_output=True, text=True, env=e)
++    return r.returncode, r.stdout, r.stderr
++
++
++def _rr_prepare(root, rng, *extra, orch="claude"):
++    import re as _re
++    rc, out, err = _rr(root, "reread-prepare", "--diff", rng, "--orchestrator", orch, *extra)
++    return rc, out + err, [Path(f) for f in _re.findall(r"項目檔:(\S+\.md)$", out, _re.M)]
++
++
++def _rr_meta(item):
++    import re as _re
++    head = Path(item).read_text(encoding="utf-8").split("\n---本文---\n", 1)[0]
++    return dict(_re.findall(r"^([^:\n]+): (.+)$", head, _re.M))
++
++
++def _rr_body(item):
++    return Path(item).read_text(encoding="utf-8").split("\n---本文---\n", 1)[1]
++
++
++def _rr_report(path, item, items, seat="r1", provider=None, model=None, prepared=None, head=True, extra_head=()):
++    """判定者報告:開頭四行(照抄項目檔頭,可故意改)+ 一段 ```json 區塊。"""
++    import json as _j
++    meta = _rr_meta(item)
++    lines = []
++    if head:
++        lines += [f"seat: {seat}", f"provider: {provider or meta['編排者']}", f"model: {model or meta['判定者模型']}",
++                  f"prepared: {prepared or meta['材料指紋']}", *extra_head, ""]
++    lines += ["說明:見下。", "```json", _j.dumps(items, ensure_ascii=False), "```"]
++    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
++    return Path(path)
++
++
++def _rr_records(root):
++    d = root / "governance" / "reread-verdicts"
++    return sorted(d.glob("*.json")) if d.is_dir() else []
++
++
++def _rr_kinds(events):
++    return [e.get("kind") for e in events if e.get("gate") == "note-reread"]
++
++
++def _rr_line_no(root, rev, rel, text):
++    """rel 在 rev 那一版裡內容等於 text 的那一行的行號(從 1 起)。"""
++    body = _nh_git(root, "show", f"{rev}:{rel}").stdout
++    return body.split("\n").index(text) + 1
++
++
++def t_note_audit_reread_prepare_candidates():
++    """[S1] 候選 = 範圍改到的檔(含測試檔、刪檔、從 about_code 移出)在起點或頂端的家 ∩ 範圍裡任一提交碰過(含改了又改回)∩ 頂端還在;
++    家沒改過、不是家(計劃)、只改筆記沒改程式的不產;關掉每支檔有家照樣產;沒候選印一句、rc0、不產生檔;
++    檔名含 [ 的程式檔不把別支檔的改動帶進 diff。
++
++    翻紅釘:_note_reread_scan 改用淨差異(git diff)找碰過的筆記 → ②紅;家只取頂端那邊 → ③紅;
++    組 diff 拿掉 --literal-pathspecs → ⑦紅。"""
++    print("t_note_audit_reread_prepare_candidates")
++    root, _b0 = _rr_repo()
++    _nh_node(root, "P_計劃", about=["src/a.py"], typ="project", folder="Projects", resp=None, body="計劃也列了 src/a.py")
++    _nh_commit(root, "plan")
++    base = _na_head(root)
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, _rr_note("A"), "A 追加的一行")
++    _rr_touch(root, "src/b.py")
++    _rr_touch(root, f"{_NA_VAULT}/Projects/P_計劃.md", "計劃追加")
++    _rr_touch(root, _rr_note("C"), "C 改了但 src/c.py 沒改")
++    _nh_commit(root, "r1")
++    rc, out, files = _rr_prepare(root, f"{base}..HEAD")
++    check("①家這次也改過 → 產一份;家沒改(B)、不是家(計劃)、只改筆記沒改程式(C)不產",
++          rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")], out[-600:])
++    b2 = _na_head(root)
++    keep = (root / _rr_note("A")).read_text(encoding="utf-8")
++    _rr_touch(root, "src/a.py", "再改")
++    _rr_touch(root, _rr_note("A"), "暫時寫的一行")
++    _nh_commit(root, "touch")
++    (root / _rr_note("A")).write_text(keep, encoding="utf-8")
++    _nh_commit(root, "revert note")
++    rc, out, files = _rr_prepare(root, f"{b2}..HEAD")
++    check("②範圍裡筆記改了又改回(淨差異看不到)照樣產", rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")],
++          out[-600:])
++    b3 = _na_head(root)
++    (root / "src" / "b.py").unlink()
++    _nh_node(root, "B", about=[], body="B 的第一行\nB 刪檔後追加")
++    _nh_commit(root, "delete b, drop from about_code")
++    rc, out, files = _rr_prepare(root, f"{b3}..HEAD")
++    check("③刪檔、又從 about_code 移出 → 起點那邊的家照樣產", rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("B")],
++          out[-600:])
++    _nh_file(root, "tests/test_a.py", "def test_a():\n    pass\n")
++    _nh_node(root, "A", about=["src/a.py", "tests/test_a.py"], body="A 的第一行\n測試也歸這篇")
++    _nh_commit(root, "add test to A")
++    b4 = _na_head(root)
++    _rr_touch(root, "tests/test_a.py", "# 只改測試")
++    _rr_touch(root, _rr_note("A"), "測試改了追加")
++    _nh_commit(root, "test only")
++    rc, out, files = _rr_prepare(root, f"{b4}..HEAD")
++    check("④只改家列的測試檔(不經要有家的程式檔過濾)照樣產", rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")],
++          out[-600:])
++    root2, base2 = _rr_repo(cfg={"node_home": {"mode": "off"}})
++    _rr_touch(root2, "src/a.py")
++    _rr_touch(root2, _rr_note("A"), "追加")
++    _nh_commit(root2, "r")
++    rc, out, files = _rr_prepare(root2, f"{base2}..HEAD")
++    check("⑤關掉每支檔有家(node_home.mode=off)照樣產", rc == 0 and len(files) == 1, out[-400:])
++    root3, base3 = _rr_repo()
++    _rr_touch(root3, "src/c.py")
++    _nh_commit(root3, "code only")
++    rc, out, files = _rr_prepare(root3, f"{base3}..HEAD")
++    check("⑥沒有候選:印「這次沒有要對照的家筆記」、rc0、不產生檔", rc == 0 and "這次沒有要對照的家筆記" in out and not files
++          and not (root3 / ".lumos" / "note-audit").exists(), out[-400:])
++    root4, _b4 = _rr_repo()
++    _nh_file(root4, "src/[id].py", "x = 1\n")
++    _nh_file(root4, "src/i.py", "i = 1\n")
++    _nh_file(root4, "src/s*.py", "s = 1\n")
++    _nh_file(root4, "src/sx.py", "sx = 1\n")
++    _nh_node(root4, "A", about=["src/a.py", "src/[id].py", "src/s*.py"], body="A 的第一行")
++    _nh_commit(root4, "glob-ish names")
++    base4 = _na_head(root4)
++    _rr_touch(root4, "src/[id].py", "x = 2")
++    _rr_touch(root4, "src/i.py", "i = 2")
++    _rr_touch(root4, "src/s*.py", "s = 2")
++    _rr_touch(root4, "src/sx.py", "sx = 2")
++    _rr_touch(root4, _rr_note("A"), "追加")
++    _nh_commit(root4, "r")
++    rc, out, files = _rr_prepare(root4, f"{base4}..HEAD")
++    body = _rr_body(files[0]) if files else ""
++    check("⑦檔名含 [、* 的程式檔:diff 只含它自己,萬用字元比對得到的 src/i.py、src/sx.py 只列檔名",
++          "b/src/[id].py" in body and "b/src/s*.py" in body and "diff --git a/src/i.py" not in body
++          and "diff --git a/src/sx.py" not in body and "只列檔名:src/i.py、src/sx.py" in body, body[:1500])
++
++
++def _rr_ref_trunc(d, cap):
++    """實驗的平均截斷(逐字抄自 governance/eval/home-check/validate/scripts/vcommon.py 的 truncated_diff 後半),當對照。"""
++    import re as _re
++    parts = [p for p in _re.split(r"(?m)^(?=diff --git )", d) if p.strip()]
++    order = sorted(range(len(parts)), key=lambda i: len(parts[i]))
++    out = [None] * len(parts); remaining = cap; left = len(parts)
++    for i in order:
++        share = remaining // left
++        p = parts[i]
++        if len(p) <= share:
++            out[i] = p
++        else:
++            cut = p[:share]; cut = cut[:cut.rfind("\n") + 1]
++            omitted = p[len(cut):].count("\n")
++            out[i] = cut + f"[截斷:本檔 diff 另有 {omitted} 行未列出]\n"
++        remaining -= len(out[i]); left -= 1
++    return "".join(out)
++
++
++def t_note_audit_reread_prepare_diff_scope():
++    """[S2] diff 放那篇(頂端或起點)about_code 列了而且這次改到的檔(含測試、刪檔、改名新舊路徑)與補進來的測試檔
++    (同層、或 tests/<X> 對 src/<專案>/<X>);其他改到的程式檔只列檔名;上下文 3、1、0 依序縮,仍超過照實驗平均截斷。
++
++    翻紅釘:_note_reread_given 只看頂端 about_code → ①的刪檔那項紅;拿掉同層補測試 → ②紅;上下文不試 1 行 → ⑥紅。"""
++    print("t_note_audit_reread_prepare_diff_scope")
++    m = _load_lumos_inproc()
++    root = _nh_repo()
++    body20 = lambda t: "\n".join(f"{t}{i} = {i}" for i in range(1, 21)) + "\n"
++    for f in ("src/a.py", "src/old.py", "src/gone.py", "src/b.py"):
++        _nh_file(root, f, body20(f.split("/")[1][0]))
++    for f in ("tests/test_a.py", "src/test_helper.py", "lib/test_z.py"):
++        _nh_file(root, f, "def test_x():\n    pass\n")
++    _nh_node(root, "A", about=["src/a.py", "tests/test_a.py", "src/old.py", "src/gone.py"], body="A 的第一行")
++    _nh_node(root, "B", about=["src/b.py"], body="B 的第一行")
++    _nh_commit(root, "init")
++    base = _na_head(root)
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, "tests/test_a.py", "# 改測試")
++    _nh_git(root, "mv", "src/old.py", "src/new.py")
++    (root / "src" / "gone.py").unlink()
++    _rr_touch(root, "src/test_helper.py", "# 沒有家的同層測試")
++    _rr_touch(root, "src/b.py")
++    _rr_touch(root, "lib/test_z.py", "# 別處的測試")
++    _nh_node(root, "A", about=["src/a.py", "tests/test_a.py", "src/new.py"], body="A 的第一行\n追加")
++    _nh_commit(root, "r")
++    rc, out, files = _rr_prepare(root, f"{base}..HEAD")
++    body = _rr_body(files[0]) if files else ""
++    diff = body.split("===== (一) 程式 diff =====\n", 1)[-1].split("\n===== (二)", 1)[0]
++    check("①diff 含 about_code 列了而且改到的檔:程式、測試、改名新舊路徑、起點列的刪檔",
++          all(s in diff for s in ("b/src/a.py", "b/tests/test_a.py", "rename from src/old.py", "rename to src/new.py",
++                                  "a/src/gone.py")), diff[:2000])
++    check("②同層沒有家的測試檔補進 diff,並寫進開頭那句", "b/src/test_helper.py" in diff
++          and "另加同套件目錄裡沒有家的測試檔(src/test_helper.py)" in body, body[:600])
++    check("③別家的程式檔與別處的測試檔不進 diff、只列檔名", "src/b.py" not in diff and "lib/test_z.py" not in diff
++          and "只列檔名:lib/test_z.py、src/b.py" in body, body[:600])
++    root2 = _nh_repo()
++    _nh_file(root2, "src/proj/pay/x.py", "x = 1\n")
++    _nh_file(root2, "tests/pay/test_x.py", "def test_x():\n    pass\n")
++    _nh_file(root2, "tests/other/test_y.py", "def test_y():\n    pass\n")
++    _nh_node(root2, "Pay", about=["src/proj/pay/x.py"], body="Pay 的第一行")
++    _nh_commit(root2, "init")
++    b2 = _na_head(root2)
++    for f in ("src/proj/pay/x.py", "tests/pay/test_x.py", "tests/other/test_y.py"):
++        _rr_touch(root2, f, "# 改")
++    _rr_touch(root2, _rr_note("Pay"), "追加")
++    _nh_commit(root2, "r")
++    rc, out, files = _rr_prepare(root2, f"{b2}..HEAD")
++    body = _rr_body(files[0]) if files else ""
++    check("④repo 根 tests/<X> 對 src/<專案>/<X> 補進來;別的套件只列檔名",
++          "b/tests/pay/test_x.py" in body and "diff --git a/tests/other/test_y.py" not in body
++          and "只列檔名:tests/other/test_y.py" in body, body[:1200])
++    root3 = _nh_repo()
++    _nh_file(root3, "src/big.py", "\n".join(f"big{i} = {i}" for i in range(300)) + "\n")
++    _nh_file(root3, "src/small.py", "s = 1\n")
++    _nh_commit(root3, "init")
++    b3 = _na_head(root3)
++    (root3 / "src" / "big.py").write_text("\n".join(f"big{i} = {i * 2 if i % 10 == 0 else i}" for i in range(300)) + "\n",
++                                          encoding="utf-8")
++    (root3 / "src" / "small.py").write_text("s = 2\n", encoding="utf-8")
++    _nh_commit(root3, "r")
++    t3 = _na_head(root3)
++    raws = ["src/big.py", "src/small.py"]
++
++    def gd(u):
++        return _nh_git(root3, "diff", *m._NOTE_REREAD_DIFF_ARGS, f"-U{u}", "-M", b3, t3, "--", *raws).stdout
++    u3, u1, u0 = gd(3), gd(1), gd(0)
++    check("前置:三種上下文的長度嚴格遞減(改動間隔夠大,不會因為併段反而變短)", len(u3) > len(u1) > len(u0) > 0,
++          f"{len(u3)} {len(u1)} {len(u0)}")
++    got = m._note_reread_diff(root3, b3, t3, raws, cap=len(u3))
++    check("⑤沒超過:上下文 3 行、沒截斷", got == (u3, False, len(u3), 3), str(got)[:200])
++    got = m._note_reread_diff(root3, b3, t3, raws, cap=len(u1))
++    check("⑥3 行超過、1 行沒超過 → 用 1 行,原始字數記 3 行那一版的", got == (u1, True, len(u3), 1), str(got)[:200])
++    got = m._note_reread_diff(root3, b3, t3, raws, cap=len(u0))
++    check("⑦1 行還超過 → 用 0 行", got == (u0, True, len(u3), 0), str(got)[:200])
++    cap = len(u0) // 2
++    got = m._note_reread_diff(root3, b3, t3, raws, cap=cap)
++    check("⑧0 行仍超過 → 照實驗的平均截斷(逐字相同),小檔整份留著、大檔接截斷註明",
++          got == (_rr_ref_trunc(u0, cap), True, len(u3), 0) and "[截斷:本檔 diff 另有" in got[0]
++          and gd(0).split("diff --git a/src/small.py", 1)[1] in got[0], str(got)[:300])
++    check("⑨沒有要放的檔填「(無)」", m._note_reread_diff(root3, b3, t3, []) == ("(無)", False, 0, 3), "")
++
++
++def t_note_audit_reread_prepare_prompt_verbatim():
++    """[S3] 項目檔的派工詞 = 範本剝掉 SPDX 行與開頭註解、照佔位字表一次掃描填入;材料裡的佔位字樣原樣保留;
++    筆記帶照 split('\\n') 切、含開頭欄位、4 格靠右的行號;筆記內容審的派工詞輸出逐字不變。
++
++    翻紅釘:_note_template_fill 改成逐個 str.replace → ②紅;行號改成 enumerate 從 0 起 → ①③紅。"""
++    print("t_note_audit_reread_prepare_prompt_verbatim")
++    import re as _re
++    m = _load_lumos_inproc()
++    root, base = _rr_repo()
++    _rr_touch(root, "src/a.py", "# 程式裡寫著 {{DIFF}} 與 {{NOTETEXT}}")
++    _rr_touch(root, _rr_note("A"), "筆記裡寫著 {{NOTE}} 與 {{TIP}}")
++    _rr_touch(root, "src/b.py")
++    _nh_commit(root, "r")
++    tip = _na_head(root)
++    rc, out, files = _rr_prepare(root, f"{base}..{tip}")
++    body = _rr_body(files[0]) if files else ""
++    tpl = (Path(GRAPHCTL).resolve().parent / "templates" / "note-audit-reread.md").read_text(encoding="utf-8")
++    tpl = "".join(ln for ln in tpl.splitlines(keepends=True) if not ln.startswith("# SPDX-"))
++    tpl = tpl.split("-->", 1)[1].lstrip("\n") if tpl.lstrip().startswith("<!--") else tpl
++    diff = _nh_git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
++                   "-U3", "-M", base, tip, "--", "src/a.py").stdout
++    note = _nh_git(root, "show", f"{tip}:{_rr_note('A')}").stdout
++    numbered = "\n".join(f"{i + 1:4d}| {l}" for i, l in enumerate(note.split("\n")))
++    table = {"TRUNC": "", "OTHERS": "src/b.py", "DIFF": diff, "NOTE": "Systems/A.md", "TIP": tip, "NOTETEXT": numbered}
++    expect = _re.sub(r"\{\{([A-Z_]+)\}\}", lambda mm: table[mm.group(1)], tpl)
++    check("①派工詞 = 範本剝掉 SPDX 行與開頭註解、照佔位字表一次掃描填入的結果", rc == 0 and body == expect,
++          f"rc={rc}\n{out[-300:]}\n--- 差在:{next((i for i, (x, y) in enumerate(zip(body, expect)) if x != y), None)}")
++    check("②材料裡剛好出現的佔位字樣原樣保留(沒被二次替換)",
++          "# 程式裡寫著 {{DIFF}} 與 {{NOTETEXT}}" in body and "筆記裡寫著 {{NOTE}} 與 {{TIP}}" in body, "")
++    check("③行號照 split('\\n') 切(檔尾換行的空字串也算一行)、含開頭欄位、靠右 4 格",
++          "   1| ---" in body and body.endswith(f"{len(note.split(chr(10))):4d}| \n")
++          and _rr_meta(files[0]).get("筆記行數") == str(len(note.split("\n"))), body[-200:])
++    check("④派工詞沒有剩下的佔位字(材料裡寫的除外)", "{{TRUNC}}" not in body and "{{OTHERS}}" not in body, "")
++
++    def legacy(r):
++        """筆記內容審抽共用前的派工詞做法(逐字抄當時的 _note_audit_prompt),當對照。"""
++        here = Path(GRAPHCTL).resolve().parent.parent
++        t = None
++        for cand in (Path(r) / m._NOTE_AUDIT_TEMPLATE, here / m._NOTE_AUDIT_TEMPLATE):
++            if cand.is_file():
++                t = cand.read_text(encoding="utf-8")
++                break
++        t = "".join(ln for ln in t.splitlines(keepends=True) if not ln.startswith("# SPDX-"))
++        if t.lstrip().startswith("<!--") and "-->" in t:
++            t = t.split("-->", 1)[1].lstrip("\n")
++        cnt = sorted(m._stack_ext_counts(Path(r)).items(), key=lambda kv: -kv[1])[:5]
++        stacks = "主要程式檔副檔名:" + (", ".join(f"{e}×{n}" for e, n in cnt) if cnt else "未偵測到")
++        return (t.replace("{{REPO_PATH}}", str(Path(r).resolve())).replace("{{STACK}}", stacks)
++                 .replace("{{PROMPT_VERSION}}", str(m._NOTE_AUDIT_PROMPT_VERSION)))
++    check("⑤筆記內容審的派工詞輸出逐字不變(改走共用的範本載入與填字)", m._note_audit_prompt(root) == legacy(root), "")
++
++
++def t_note_audit_reread_template_pinned():
++    """[S4] 範本內容雜湊與版本常數一起釘住:範本改了而 _NOTE_REREAD_PROMPT_VERSION 沒改 → 這條紅。
++    改範本的人要升版號、照計劃 S10 重跑、結果記進計劃,再把這裡的雜湊與版本一起改。"""
++    print("t_note_audit_reread_template_pinned")
++    import hashlib
++    m = _load_lumos_inproc()
++    p = Path(GRAPHCTL).resolve().parent / "templates" / "note-audit-reread.md"
++    h = hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() if p.is_file() else None
++    check("範本雜湊與版本常數一起釘住(改範本要升版、照 S10 重跑再改這裡)",
++          (m._NOTE_REREAD_PROMPT_VERSION, h) == (1, "079c09fb31831ed47cb0e1898af9928209975524d01d7273c8886ba0863c0260"), f"版本 {m._NOTE_REREAD_PROMPT_VERSION}、雜湊 {h}")
++
++
++def t_note_audit_reread_record_intake():
++    """[S5] reread-record:沒有或解析不了 json 區塊、頂層不是清單、範本版本不符、報告不是 UTF-8 → 整份拒收 rc2;
++    最後一段沒收尾退回前一段完整的;來源錨點(含 prepared 對材料指紋)不符照收、標 provenance_ok: false;
++    逐項丟掉不是物件、行號不是整數(含布林、字串)或超出筆記行數的並印原因,重複行號只留第一次;
++    寫成 governance/reread-verdicts/<對照指紋>-…json,那一行全文從項目檔頭的 blob 讀;記 recorded、印提交指令。
++
++    翻紅釘:行號檢查拿掉 isinstance(ln, bool) → ③的布林那項紅;全文改讀工作目錄 → ⑤紅。"""
++    print("t_note_audit_reread_record_intake")
++    import json as _j, re as _re
++    root, base = _rr_repo()
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, _rr_note("A"), "A 追加的一行")
++    _nh_commit(root, "r")
++    tip = _na_head(root)
++    rc, out, files = _rr_prepare(root, f"{base}..{tip}")
++    item = files[0]
++    meta = _rr_meta(item)
++    n = int(meta["筆記行數"])
++    l1, l2 = _rr_line_no(root, tip, _rr_note("A"), "A 的第一行"), _rr_line_no(root, tip, _rr_note("A"), "A 追加的一行")
++    l3 = l1 - 1
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-rr-rep-"))
++
++    def rec(rp, it=item):
++        return _rr(root, "reread-record", "--prepared", str(it), "--report", str(rp))
++
++    def clear():
++        for f in _rr_records(root):
++            f.unlink()
++    bad = tmp / "bad.md"
++    for label, txt in (("沒有 json 區塊", "seat: x\n沒有區塊\n"), ("json 解析不了", "```json\n[{\"line\": 1,\n```\n"),
++                       ("頂層不是清單", "```json\n{\"line\": 1}\n```\n"), ("只有一段沒收尾的", "```json\n[{\"line\": 1}]\n")):
++        bad.write_text(txt, encoding="utf-8")
++        rc, o, e = rec(bad)
++        check(f"①{label} → 整份拒收 rc2、不寫紀錄", rc == 2 and not _rr_records(root), o + e)
++    bad.write_bytes(b"\xff\xfe\x00")
++    rc, o, e = rec(bad)
++    check("①報告不是 UTF-8 → rc2", rc == 2 and not _rr_records(root), o + e)
++    it2 = tmp / "item-v99.md"
++    it2.write_text(item.read_text(encoding="utf-8").replace("範本版本: 1\n", "範本版本: 99\n", 1), encoding="utf-8")
++    rc, o, e = rec(_rr_report(tmp / "ok.md", item, []), it=it2)
++    check("①項目檔頭的範本版本跟程式不同 → rc2(範本改了要重新 prepare)", rc == 2 and not _rr_records(root), o + e)
++    bad.write_text(f"```json\n[{{\"line\": {l1}, \"quote\": \"q\", \"why\": \"w\"}}]\n```\n再想想\n```JSON\n[{{\"line\": {l2}",
++                   encoding="utf-8")
++    rc, o, e = rec(bad)
++    docs = [_j.loads(f.read_text(encoding="utf-8")) for f in _rr_records(root)]
++    check("②最後一段沒收尾(輸出被截斷)→ 退回前一段完整的", rc == 0 and len(docs) == 1 and [r["line"] for r in docs[0]["rows"]] == [l1],
++          o + e)
++    clear()
++    (root / _rr_note("A")).write_text((root / _rr_note("A")).read_text(encoding="utf-8").replace("A 的第一行", "作者已經改掉"),
++                                      encoding="utf-8")
++    items = ["不是物件", {"line": str(l1)}, {"line": True}, {"line": 0}, {"line": n + 1},
++             {"line": l1, "quote": "\x1b[31m紅字", "why": 123}, {"line": l1, "quote": "重複的"}, {"line": l2},
++             {"line": l3, "quote": "長" * 600, "why": None}]
++    rp = _rr_report(tmp / "r.md", item, items, extra_head=("model-actual: claude-sonnet-實際",))
++    rc, o, e = rec(rp)
++    recs = _rr_records(root)
++    doc = _j.loads(recs[0].read_text(encoding="utf-8")) if recs else {}
++    rows = {r["line"]: r for r in doc.get("rows", [])}
++    check("③逐項:不是物件、字串行號、布林行號、0、超出行數各丟掉並印原因;重複行號只留第一次",
++          rc == 0 and sorted(rows) == sorted({l1, l2, l3}) and o.count("沒收:") == 6 and o.count("不是整數") == 2
++          and rows[l1]["quote"] == "\x1b[31m紅字", o + e)
++    check("④quote/why 缺了當空字串、不是字串轉成字串、各截到 500 字;印到終端的過 _esc_clean(沒有控制字元)",
++          rows[l2]["quote"] == "" and rows[l2]["why"] == "" and rows[l1]["why"] == "123" and rows[l3]["why"] == "None"
++          and len(rows[l3]["quote"]) == 500 and "\x1b" not in o, str(rows)[:400])
++    check("⑤那一行全文從項目檔頭的 blob 讀(作者已經改了工作目錄也照當時那版)", rows[l1].get("text") == "A 的第一行", str(rows.get(l1)))
++    check("⑥紀錄檔名 = <對照指紋>-<UTC 時間>-<32 位亂數>.json,內容帶來源四行、model-actual、兩個指紋、範圍終點",
++          len(recs) == 1 and _re.fullmatch(meta["對照指紋"] + r"-\d{8}T\d{6}Z-[0-9a-f]{32}\.json", recs[0].name)
++          and doc.get("provenance_ok") is True and doc.get("model-actual") == "claude-sonnet-實際"
++          and doc.get("contrast_fp") == meta["對照指紋"] and doc.get("material_fp") == meta["材料指紋"] and doc.get("tip") == tip
++          and doc.get("seat") == "r1" and doc.get("note") == _rr_note("A"), str(doc)[:400])
++    ev = [x for x in _ns_gov(root) if x.get("gate") == "note-reread"]
++    check("⑦記 recorded(帶筆記路徑)、印提交指令", ev and ev[-1].get("kind") == "recorded" and _rr_note("A") in str(ev[-1])
++          and "git add governance/reread-verdicts && git commit" in o, str(ev)[-300:] + o[-300:])
++    for label, kw in (("prepared 不是材料指紋", {"prepared": "0" * 16}), ("provider 跟編排者不同", {"provider": "codex"}),
++                      ("缺開頭四行", {"head": False})):
++        clear()
++        rc, o, e = rec(_rr_report(tmp / "p.md", item, [{"line": l2, "quote": "q", "why": "w"}], **kw))
++        recs = _rr_records(root)
++        d = _j.loads(recs[0].read_text(encoding="utf-8")) if recs else {}
++        check(f"⑧來源錨點不符({label})→ 照收、標 provenance_ok: false、印一行提醒",
++              rc == 0 and d.get("provenance_ok") is False and [r["line"] for r in d.get("rows", [])] == [l2] and "提醒" in o, o + e)
++
++
++def t_note_audit_reread_check_reminds():
++    """[S6] reread-check:候選沒有同對照指紋的已提交紀錄 → 列出、印帶同一組參數的指令、記 reminded;頂端沒有紀錄資料夾照樣列;
++    紀錄只在工作目錄沒提交不算;全對照過記 covered、沒候選記 none;record 後照判定改了筆記再跑也不再列;
++    合過主線的歷史上,手動不帶推送參數 prepare、record、提交之後,帶推送參數的 check 不再列那篇。
++
++    翻紅釘:對照指紋把筆記 blob 算進去 → ⑤紅;把範圍或 diff 算進去 → ⑧紅。"""
++    print("t_note_audit_reread_check_reminds")
++    import subprocess as sp
++    root, base = _rr_repo()
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, _rr_note("A"), "A 追加的一行")
++    _nh_commit(root, "r")
++    rng = f"{base}..{_na_head(root)}"
++    n0 = len(_ns_gov(root))
++    rc, o, e = _rr(root, "reread-check", "--diff", rng)
++    check("①頂端沒有紀錄資料夾:照樣列出那篇、印帶同一組參數的指令、記 reminded、回 0、只走標準輸出、最後一行是不擋那句",
++          rc == 0 and e == "" and "Systems/A.md" in o and f"reread-prepare --diff {rng} --orchestrator <claude 或 codex>" in o
++          and _rr_kinds(_ns_gov(root)[n0:]) == ["reminded"] and o.strip().splitlines()[-1] == "這只是提醒、不擋,忽略照推也可以",
++          f"rc={rc}\n{o}\n{e}")
++    rc, o, e = _rr(root, "reread-check", "--diff", rng, "--push-remote", "origin", "--pushed-ref", "refs/heads/feat")
++    check("②帶推送參數時,印的指令原樣帶 --push-remote 與 --pushed-ref",
++          rc == 0 and f"reread-prepare --diff {rng} --push-remote origin --pushed-ref refs/heads/feat --orchestrator" in o, o + e)
++    rc, out, files = _rr_prepare(root, rng)
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-rr-rep-"))
++    _rr(root, "reread-record", "--prepared", str(files[0]), "--report", str(_rr_report(tmp / "r.md", files[0], [])))
++    rc, o, e = _rr(root, "reread-check", "--diff", rng)
++    check("③紀錄只在工作目錄、沒提交 → 不算,照列並講還沒提交", rc == 0 and "Systems/A.md" in o and "還沒提交" in o, o + e)
++    _nh_commit(root, "records")
++    n0 = len(_ns_gov(root))
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++    check("④紀錄提交進被推的頂端 → 全對照過、記 covered", rc == 0 and "都對照過" in o and "Systems/A.md" not in o
++          and _rr_kinds(_ns_gov(root)[n0:]) == ["covered"], o + e)
++    _rr_touch(root, _rr_note("A"), "照判定改了筆記")
++    _nh_commit(root, "fix note per verdict")
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++    check("⑤record 之後照判定改了筆記(同一次推送)→ 不再列(對照指紋只看程式那一半)", rc == 0 and "都對照過" in o, o + e)
++    _rr_touch(root, "src/a.py", "程式又改了")
++    _nh_commit(root, "code again")
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++    check("⑥對照組:程式又改了 → 對照指紋變了,照列", rc == 0 and "Systems/A.md" in o and "還沒對照" in o, o + e)
++    b6 = _na_head(root)
++    _rr_touch(root, "src/c.py")
++    _nh_commit(root, "c only")
++    n0 = len(_ns_gov(root))
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{b6}..HEAD")
++    check("⑦沒候選 → 印一句、記 none", rc == 0 and "這次沒有要對照的家筆記" in o and _rr_kinds(_ns_gov(root)[n0:]) == ["none"], o + e)
++    bare = Path(tempfile.mkdtemp(prefix="gctl-rr-bare-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    r2, _b = _rr_repo()
++    _nh_git(r2, "branch", "-M", "main")
++    _nh_git(r2, "remote", "add", "origin", str(bare))
++    _nh_git(r2, "push", "-q", "-u", "origin", "main")
++    _nh_git(r2, "checkout", "-qb", "feat")
++    _rr_touch(r2, "src/a.py")
++    _rr_touch(r2, _rr_note("A"), "分支上追加")
++    _nh_commit(r2, "feat 1")
++    c1 = _na_head(r2)
++    _nh_git(r2, "push", "-q", "-u", "origin", "feat")
++    _nh_git(r2, "checkout", "-q", "main")
++    _rr_touch(r2, "src/b.py")
++    _rr_touch(r2, _rr_note("B"), "主線上追加")
++    _nh_commit(r2, "main 1")
++    _nh_git(r2, "push", "-q", "origin", "main")
++    _nh_git(r2, "checkout", "-q", "feat")
++    _nh_git(r2, "merge", "-q", "--no-edit", "--no-ff", "main")
++    _rr_touch(r2, "src/a.py", "合過主線之後再改")
++    _rr_touch(r2, _rr_note("A"), "合過主線之後追加")
++    _nh_commit(r2, "feat 2")
++    rc, out, files = _rr_prepare(r2, f"{c1}..HEAD")
++    for k, f in enumerate(files):
++        _rr(r2, "reread-record", "--prepared", str(f), "--report", str(_rr_report(tmp / f"m{k}.md", f, [])))
++    _nh_commit(r2, "records")
++    rc, o, e = _rr(r2, "reread-check", "--diff", f"{c1}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/heads/feat")
++    check("⑧合過主線:手動不帶推送參數 prepare→record→提交之後,帶推送參數的 check 不再列那篇(起點算法不同也對得上)",
++          len(files) >= 1 and rc == 0 and "Systems/A.md" not in o and "都對照過" in o, f"{out[-300:]}\n{o}\n{e}")
++
++
++def t_note_audit_reread_check_never_blocks():
++    """[S7] reread-check 在範圍格式錯、終點找不到、推送參數只給一個、起點算不出、淺層 clone、沒有圖譜、git 失敗、超過 30 秒、
++    丟出沒預料的例外時:印「這次沒提醒:<原因>」、閘 note-reread 恰好一筆 skipped、回 0、不寫任何事件到閘 note-audit;
++    刪除分支記 none(〈做法〉4:「這次沒有新東西」);Ctrl-C(KeyboardInterrupt)不吞;紀錄資料夾裡的 .tmp-wlf 殘檔不算已對照。
++
++    翻紅釘:最外層改接 BaseException → ⑪紅;_note_audit_resolve 不帶 reasons 照舊印與記帳 → ⑤多一筆、紅。"""
++    print("t_note_audit_reread_check_never_blocks")
++    import contextlib, io, subprocess as sp
++    m = _load_lumos_inproc()
++    root, base = _rr_repo()
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, _rr_note("A"), "A 追加的一行")
++    _nh_commit(root, "r")
++    tip = _na_head(root)
++    rng = f"{base}..{tip}"
++
++    def judge(label, r, rc, o, e, n0, want="skipped", word="這次沒提醒:"):
++        new = _ns_gov(r)[n0:]
++        check(f"{label}:印「{word}」、回 0、只走標準輸出、閘 note-reread 恰好一筆 {want}、不寫 note-audit",
++              rc == 0 and word in o and e == "" and _rr_kinds(new) == [want]
++              and not any(x.get("gate") == "note-audit" for x in new), f"rc={rc}\n{o}\n{e}\n{new}")
++
++    def sub(label, *args, r=root, want="skipped", word="這次沒提醒:"):
++        n0 = len(_ns_gov(r))
++        rc, o, e = _rr(r, "reread-check", *args)
++        judge(label, r, rc, o, e, n0, want, word)
++
++    def inproc(label, patch, want="skipped", word="這次沒提醒:", **kw):
++        g = m.cmd_note_audit_reread_check.__globals__
++        saved = {k: g[k] for k in patch}
++        n0 = len(_ns_gov(root))
++        so, se = io.StringIO(), io.StringIO()
++        try:
++            g.update(patch)
++            with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
++                rc = m.cmd_note_audit_reread_check(repo=str(root), diff_range=kw.pop("diff", rng), **kw)
++        finally:
++            g.update(saved)
++        judge(label, root, rc, so.getvalue(), se.getvalue(), n0, want, word)
++        return so.getvalue()
++    sub("①範圍格式錯", "--diff", "abc")
++    sub("②終點找不到", "--diff", f"{base}..{'1' * 40}")
++    sub("③推送參數只給一個", "--diff", rng, "--push-remote", "origin")
++    sub("④刪除分支 → 記 none(這次沒有新東西)", "--diff", f"{base}..{'0' * 40}", want="none", word="這次沒有新東西")
++    inproc("⑤起點算不出(_PUSH_START_UNKNOWN)", {"_push_range_start": lambda *a, **k: (m._PUSH_START_UNKNOWN, "測試造的查詢失敗")},
++           push_remote="origin", pushed_ref="refs/heads/x")
++    shallow = Path(tempfile.mkdtemp(prefix="gctl-rr-shallow-")) / "s"
++    sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(shallow)], capture_output=True)
++    sub("⑥淺層 clone", "--diff", f"{tip}..{tip}", r=shallow)
++    nov = _nh_repo()
++    import shutil as _sh
++    _sh.rmtree(nov / "docs" / "kg-knowledge")
++    _nh_file(nov, "docs/README.md", "# 沒有圖譜\n")
++    _nh_file(nov, "src/a.py", "x = 1\n")
++    _nh_commit(nov, "no vault")
++    sub("⑦沒有圖譜", "--diff", f"{m._EMPTY_TREE_SHA}..HEAD", r=nov)
++    o = inproc("⑧git 失敗", {"_ns_git": lambda *a, **k: None})
++    check("⑧原因寫 git 失敗", "git 失敗" in o, o)
++    o = inproc("⑨超過時間上限", {"_NOTE_REREAD_BUDGET_SEC": -1})
++    check("⑨原因寫逾時", "逾時" in o, o)
++
++    def boom(*a, **k):
++        raise RuntimeError("測試造的例外")
++    o = inproc("⑩沒預料到的例外", {"_nodehome_side": boom})
++    check("⑩原因寫出例外種類", "RuntimeError" in o, o)
++
++    def ctrl_c(*a, **k):
++        raise KeyboardInterrupt()
++    g = m.cmd_note_audit_reread_check.__globals__
++    saved = g["_nodehome_side"]
++    hit = False
++    try:
++        g["_nodehome_side"] = ctrl_c
++        with contextlib.redirect_stdout(io.StringIO()):
++            m.cmd_note_audit_reread_check(repo=str(root), diff_range=rng)
++    except KeyboardInterrupt:
++        hit = True
++    finally:
++        g["_nodehome_side"] = saved
++    check("⑪Ctrl-C 不吞(最外層只接 Exception)", hit, "")
++    about = [f"src/a.py"]
++    oids = {}
++    m._nodehome_list(root, tip, oids=oids)
++    fp = m._note_reread_contrast_fp(_rr_note("A"), about, oids)
++    _nh_file(root, f"governance/reread-verdicts/{fp}-20260930T000000Z-{'1' * 32}.json.123-abcd1234.tmp-wlf", "{}\n")
++    _nh_commit(root, "leftover tmp")
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++    check("⑫紀錄資料夾裡的 .tmp-wlf 殘檔不算已對照", rc == 0 and "Systems/A.md" in o and fp in o, o + e)
++
++
++def t_note_audit_reread_verdicts_bookkeeping():
++    """[S8] governance/reread-verdicts/ 在簿記豁免裡:只新增紀錄檔的提交不讓代碼審留痕失效、不算小改動閘的改動量、
++    不抬風險分級、推送前測試範圍照純文件;放在別的 governance 夾的同一個檔(對照組)會讓留痕失效。"""
++    print("t_note_audit_reread_verdicts_bookkeeping")
++    import json as _j, subprocess as sp
++    m = _load_lumos_inproc()
++    check("①在簿記目錄清單裡", "governance/reread-verdicts/" in m._BOOKKEEPING_DIRS, str(m._BOOKKEEPING_DIRS))
++    root, base = _na_repo()
++    risky = '{"version":1,"rows":[{"line":1,"quote":"subprocess.run(password) UPDATE users SET a=1; os.system(x); eval(y)"}]}\n'
++    name = "0" * 16 + "-20260930T000000Z-" + "2" * 32 + ".json"
++    _nh_file(root, f"governance/reread-verdicts/{name}", risky)
++    _nh_commit(root, "record only")
++    tip = _na_head(root)
++    files, _why = m._sc_changed_files(root, f"{base}..{tip}", _NA_VAULT)
++    check("②小改動閘的改動量不算紀錄檔", files is not None and not any("reread-verdicts" in f[0] for f in files), str(files))
++    r = sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", f"{base}..{tip}", "--json"], capture_output=True, text=True, cwd=str(root))
++    try:
++        pj = _j.loads(r.stdout)
++    except ValueError:
++        pj = {}
++    check("③不被風險型樣掃描、不抬風險分級", pj.get("tier") == "light" and not pj.get("claims"), r.stdout[-300:] + r.stderr[-300:])
++    ok, why = m._codeloop_record_valid(root, base, tip)
++    check("④只新增紀錄檔不讓代碼審留痕失效", ok, why)
++    got = m._test_suite_for_range(root, f"{base}..{tip}")
++    check("⑤推送前測試範圍照純文件", got.get("suite") == "docs", str(got))
++    root2, base2 = _na_repo()
++    _nh_file(root2, f"governance/other/{name}", risky)
++    _nh_commit(root2, "not bookkeeping")
++    ok, _why = m._codeloop_record_valid(root2, base2, _na_head(root2))
++    check("⑥對照組:別的 governance 夾的同一個檔會讓留痕失效(豁免是這個夾給的)", not ok, _why)
++
++
++def t_note_audit_reread_check_wired():
++    """[S9] 推送前掛鉤在存量漂移檢查之後有上線標記行與 reread-check 呼叫(帶同一組 --diff/--push-remote/--pushed-ref、
++    標準錯誤丟掉)、只在回傳碼 130 時交給 pp_stop_if_signaled、其他非零放行;CI 在 drift check 之後有一步
++    continue-on-error: true 的 reread-check;兩個檔都沒有連續字串「note-audit check」(筆記內容審真的接線那次改這條)。
++
++    翻紅釘:掛鉤改成對所有非零都交給 pp_stop_if_signaled → ⑥紅(被 SIGTERM 砍掉也擋推送)。"""
++    print("t_note_audit_reread_check_wired")
++    import re as _re
++    _need_src("scripts/hooks/pre-push", ".github/workflows/ci.yml")
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    hook = (repo / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
++    ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
++    lines = hook.split("\n")
++    i_dr = next((i for i, l in enumerate(lines) if l.strip().startswith('pp_stop_if_signaled "$dr_rc"')), None)
++    i_mark = next((i for i, l in enumerate(lines) if l == "# lumos note-audit reread-check"), None)
++    i_call = next((i for i, l in enumerate(lines) if "note-audit reread-check --diff" in l and not l.lstrip().startswith("#")), None)
++    check("①掛鉤:存量漂移檢查之後有獨立一行上線標記,再來是 reread-check 呼叫",
++          None not in (i_dr, i_mark, i_call) and i_dr < i_mark < i_call, f"{i_dr} {i_mark} {i_call}")
++    call = " ".join(lines[i_call:i_call + 2]) if i_call is not None else ""
++    check("②呼叫帶同一組 --diff/--push-remote/--pushed-ref,標準錯誤丟到 /dev/null",
++          '--diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref"' in call and "2>/dev/null" in call, call)
++    seg = "\n".join(lines[i_call:i_call + 12]) if i_call is not None else ""
++    stops = [l for l in seg.split("\n") if l.strip().startswith("pp_stop_if_signaled")]
++    check("③只在回傳碼 130 時交給 pp_stop_if_signaled", len(stops) == 1 and _re.search(r"-eq 130", seg) is not None, seg)
++    check("④兩個檔都沒有連續字串「note-audit check」", "note-audit check" not in hook and "note-audit check" not in ci, "")
++    steps = _re.split(r"(?m)^      - name: ", ci)
++    i_ci_dr = next((i for i, s in enumerate(steps) if s.startswith("drift check")), None)
++    i_ci_rr = next((i for i, s in enumerate(steps) if "note-audit reread-check" in s), None)
++    rr = steps[i_ci_rr] if i_ci_rr is not None else ""
++    check("⑤CI:drift check 之後一步,continue-on-error: true、指令尾巴 || true、帶推送參數",
++          None not in (i_ci_dr, i_ci_rr) and i_ci_rr == i_ci_dr + 1 and "continue-on-error: true" in rr
++          and _re.search(r"note-audit reread-check --diff \"\$BEFORE\.\.\$SHA\" --push-remote origin --pushed-ref \"\$GITHUB_REF\""
++                         r" --repo \. \|\| true", rr) is not None
++          and "refs/remotes/origin/HEAD" in rr, rr[:800])
++    root = _dr_repo()
++    base = _na_head(root)
++    _nh_node(root, "Pay", summary="FLOW:b")
++    _nh_commit(root, "c")
++    head = _na_head(root)
++    _dr_hook_fakes(root)
++    stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++    rc, argv, out = _dr_hook_run(root, stdin, args=("origin",))
++    i_d = next((i for i, l in enumerate(argv) if l.startswith("drift check")), None)
++    i_r = next((i for i, l in enumerate(argv) if l.startswith("note-audit reread-check")), None)
++    check("⑥實跑:reread-check 排在 drift check 之後、帶同一組參數、整支放行",
++          rc == 0 and None not in (i_d, i_r) and i_d < i_r
++          and argv[i_r].startswith(f"note-audit reread-check --diff {base}..{head} --push-remote origin --pushed-ref refs/heads/main")
++          and "SUITE" in argv, f"rc={rc} {argv} {out[-300:]}")
++    rc, argv, out = _dr_hook_run(root, stdin, FAKE_SIG_CMD="note-audit")
++    check("⑦reread-check 被 SIGTERM 砍掉(143,不是 Ctrl-C)→ 印一句沒跑完、照推、全套照跑",
++          rc == 0 and "SUITE" in argv and "回頭重讀提醒這次沒跑完" in out, f"rc={rc} {argv} {out[-300:]}")
++    rc, argv, out = _dr_hook_run(root, stdin, FAKE_INT_CMD="note-audit")
++    check("⑧reread-check 被 Ctrl-C(130)→ 整支掛鉤停下、不跑全套", rc == 130 and "SUITE" not in argv
++          and "回頭重讀提醒被中斷(rc=130)" in out, f"rc={rc} {argv} {out[-300:]}")
++
++
++def t_note_audit_reread_template_vendored():
++    """[S11] 範本登記在工具鏈自裝檔清單裡,lumos update 發到消費專案。"""
++    print("t_note_audit_reread_template_vendored")
++    m = _load_lumos_inproc()
++    check("①範本在自裝檔清單裡", m._NOTE_REREAD_TEMPLATE in m._VENDORED_TREE_FILES, "")
++    real = Path(GRAPHCTL).resolve().parent / "templates" / "note-audit-reread.md"
++    check("②範本檔真的在工具安裝樹裡", real.is_file(), str(real))
++    with tempfile.TemporaryDirectory() as td_s, tempfile.TemporaryDirectory() as td_p:
++        import subprocess as sp
++        src = _mk_vendor_src(td_s)
++        (src / "scripts" / "templates" / "note-audit-reread.md").write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
++        tgt = Path(td_p)
++        sp.run(["git", "init", "-q", str(tgt)], capture_output=True)
++        (tgt / "docs" / "consumer-knowledge").mkdir(parents=True)
++        _run_vendor(src, tgt, no_pull=True)
++        got = tgt / "scripts" / "templates" / "note-audit-reread.md"
++        check("③更新時發到消費專案", got.is_file() and got.read_text(encoding="utf-8") == real.read_text(encoding="utf-8"), "")
++
++
++def t_notes_touched_in_range_shared():
++    """[S12] 抽出的 _notes_touched_in_range:回範圍裡任一提交碰過的筆記(改名取新路徑、改了又改回也算)、git 失敗或截止時間到回 None、
++    不做頂端過濾;_notes_status_flipped 改呼叫它、行為不變(嚴格模式頂端讀不到回 None、截止時間到回 None、git 失敗回 None)。"""
++    print("t_notes_touched_in_range_shared")
++    import inspect as _insp, time as _t
++    m = _load_lumos_inproc()
++    root, base = _rr_repo()
++    keep = (root / _rr_note("C")).read_text(encoding="utf-8")
++    _rr_touch(root, _rr_note("A"), "追加")
++    _rr_touch(root, _rr_note("C"), "暫時")
++    _nh_git(root, "mv", _rr_note("B"), _rr_note("B2"))
++    _nh_commit(root, "r1")
++    (root / _rr_note("C")).write_text(keep, encoding="utf-8")
++    _nh_git(root, "rm", "-q", _rr_note("A"))
++    _nh_commit(root, "r2")
++    tip = _na_head(root)
++    got = m._notes_touched_in_range(root, base, tip, _NA_VAULT)
++    check("①回範圍裡任一提交碰過的筆記:改名取新路徑、改了又改回、頂端已刪的都在(不做頂端過濾)",
++          got == sorted([_rr_note("A"), _rr_note("B2"), _rr_note("C")]), str(got))
++    check("②截止時間已過 → None", m._notes_touched_in_range(root, base, tip, _NA_VAULT, deadline=_t.monotonic() - 1) is None, "")
++    g = m._notes_touched_in_range.__globals__
++    saved = g["_ns_git"]
++    try:
++        g["_ns_git"] = lambda *a, **k: None
++        check("③git 失敗 → None", m._notes_touched_in_range(root, base, tip, _NA_VAULT) is None, "")
++        f = m._notes_status_flipped
++        check("④_notes_status_flipped:git 失敗照舊回 None",
++              f(root, base, tip, _NA_VAULT, lambda q: b"", lambda ty, st: True, lambda a, b: True) is None, "")
++    finally:
++        g["_ns_git"] = saved
++    f = m._notes_status_flipped
++    check("⑤_notes_status_flipped:截止時間到照舊回 None",
++          f(root, base, tip, _NA_VAULT, lambda q: b"", lambda ty, st: True, lambda a, b: True, deadline=_t.monotonic() - 1) is None, "")
++    check("⑥_notes_status_flipped:嚴格模式頂端讀不到照舊回 None",
++          f(root, base, tip, _NA_VAULT, lambda q: None, lambda ty, st: True, lambda a, b: True, strict=True) is None, "")
++    check("⑦_notes_status_flipped 改呼叫共用函式(不再自己跑 git log)",
++          "_notes_touched_in_range(" in _insp.getsource(f) and "--name-only" not in _insp.getsource(f), "")
++
++
++def t_note_audit_reread_mode_and_isolation():
++    """[S13] note_reread.gate=off:reread-check 印一行、回 0、不寫帳;block、壞值、讀不成 JSON、null、不是物件:照 warn 並印一句;
++    governance/reread-verdicts/ 有紀錄檔時,筆記內容審既有的 prepare、record、check 輸出跟沒有時相同。"""
++    print("t_note_audit_reread_mode_and_isolation")
++    import json as _j, re as _re
++    root, base = _rr_repo(cfg={"note_reread": {"gate": "off"}})
++    _rr_touch(root, "src/a.py")
++    _rr_touch(root, _rr_note("A"), "追加")
++    _nh_commit(root, "r")
++    n0 = len(_ns_gov(root))
++    rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++    check("①off:印一行、回 0、不寫帳", rc == 0 and len(o.strip().splitlines()) == 1 and "關掉了回頭重讀提醒" in o
++          and len(_ns_gov(root)) == n0, o + e)
++    for label, raw, word in (("block", {"note_reread": {"gate": "block"}}, "轉擋還沒做"),
++                             ("壞值", {"note_reread": {"gate": "nope"}}, "只能是 block/warn/off"),
++                             ("null", {"note_reread": {"gate": None}}, "null"),
++                             ("不是物件", {"note_reread": "off"}, "不是物件"),
++                             ("讀不成 JSON", "{壞掉", "讀不成 JSON")):
++        (root / ".lumos" / "config.json").write_text(raw if isinstance(raw, str) else _j.dumps(raw), encoding="utf-8")
++        _nh_commit(root, label)
++        rc, o, e = _rr(root, "reread-check", "--diff", f"{base}..HEAD")
++        check(f"②{label}:照 warn(照樣列出)、印一句", rc == 0 and word in o and "Systems/A.md" in o, o + e)
++
++    def norm(s):
++        s = _re.sub(r"\d{8}T\d{6}Z-[0-9a-f]{32}\.json", "<檔>", s)
++        s = _re.sub(r"[0-9a-f]{40}", "<sha>", s)
++        s = _re.sub(r"[0-9a-f]{16}", "<fp>", s)
++        return _re.sub(r"/[^\s]*gctl-[^\s/]+", "<tmp>", s)
++
++    def scenario(with_rr):
++        r, b = _na_repo()
++        _na_body(r, ["甲行", "乙行"])
++        if with_rr:
++            _nh_file(r, "governance/reread-verdicts/" + "0" * 16 + "-20260930T000000Z-" + "1" * 32 + ".json", '{"version":1,"rows":[]}\n')
++        _nh_commit(r, "add")
++        rng = f"{b}..{_na_head(r)}"
++        outs = [_na(r, "check", "--diff", rng)]
++        rc, out, fs = _na_prepare(r, rng)
++        outs.append((rc, out, [f.read_text(encoding="utf-8") for f in fs]))
++        rp = _na_report(Path(tempfile.mkdtemp(prefix="gctl-rr-na-")) / "r.md", fs[0], [(i, "CONTEXT") for i, _t in _na_rows(fs[0])])
++        outs.append(_na_record(r, rng, fs[0], rp))
++        _nh_commit(r, "verdicts")
++        outs.append(_na(r, "check", "--diff", f"{b}..{_na_head(r)}"))
++        return norm(repr(outs))
++    a, b_ = scenario(False), scenario(True)
++    check("③有回頭重讀紀錄檔時,筆記內容審的 check、prepare、record、再 check 輸出跟沒有時相同", a == b_ and "甲行" in a,
++          f"\n{a[:600]}\n----\n{b_[:600]}")
++
++
++def t_note_audit_reread_skill_section():
++    """[S14] skill 推送前那個子檔有「推送前回頭重讀守檔筆記」一小節,提到 reread-prepare、reread-record 與提交紀錄檔。"""
++    print("t_note_audit_reread_skill_section")
++    rel = "skills/lumos-project-notes/commands/06-代碼審與推送.md"
++    _need_src(rel)
++    t = (Path(GRAPHCTL).resolve().parent.parent / rel).read_text(encoding="utf-8")
++    parts = t.split("## 推送前回頭重讀守檔筆記", 1)
++    sec = parts[1].split("\n## ", 1)[0] if len(parts) == 2 else ""
++    check("①有這一小節", bool(sec), "")
++    check("②提到 reread-prepare、reread-record 與提交紀錄檔", all(s in sec for s in (
++        "note-audit reread-prepare", "note-audit reread-record", "git add governance/reread-verdicts")), sec[:400])
++    check("③放在筆記內容審那節之後", t.find("## 筆記內容審") < t.find("## 推送前回頭重讀守檔筆記"), "")
++
++
+ def t_set_plan_closed_lists_satisfied_status_probes():
+     """[S15] lumos set 把計劃收尾時,另列 [when-status:<這份計劃>=…] 的 status 條件因此成立的回頭條件(只做文字比對);
+     同一行還有別的條件時註明另有條件。
+ 
+     翻紅釘:拿掉 _drift_plan_followups 的第③項 → ①紅。
+     """
+     print("t_set_plan_closed_lists_satisfied_status_probes")
+     v = mkvault()
+     (v / "Issues").mkdir()
+     write(v, "Projects/P_計劃.md", "type: project\nstatus: doing", body="# P\n")

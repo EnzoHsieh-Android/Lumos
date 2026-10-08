@@ -1,0 +1,1498 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/審查席唯讀隔離_計劃.md b/docs/lumos-toolchain-knowledge/Projects/審查席唯讀隔離_計劃.md
+index 5b5da0ca..3721108a 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/審查席唯讀隔離_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/審查席唯讀隔離_計劃.md
+@@ -25,139 +25,147 @@ decisions:
+   - content: 審查席的 Bash 改成粗擋加事後查:不再逐詞解析 git 指令,只在指令字串出現 gh、hub、git 配 push 或 send-email、GitHub API 網址、席報告暫存處路徑時擋(寧可誤擋);審查席每次答完,外掛比對 repo 的檔案狀態、目前提交、分支、worktree 清單、repo 與使用者設定檔跟派工時是否一樣,不一樣就在回答後附警告並跳提示。寫檔只准這席自己的工作資料夾;讀保護只管席報告暫存處,卷證資料夾不擋。考慮過:①照逐詞解析補洞(設計審 r2 四席又抓到十多條同類漏擋誤擋,連兩輪同一類);②縮案、Bash 整類不管(改 repo 與開 PR 完全不擋)。Enzo 2026-10-06 裁粗擋加事後查。代價:在 repo 裡改檔或改狀態的 git 變成事後抓到而不是事前擋住;指令裡提到 push 之類的字也會被誤擋。
+     id: d3
+     decided: 2026-10-06
+     valid: false
+     superseded_by: Projects/審查席唯讀隔離_計劃.md#d4
+     ended: 2026-10-06
+   - content: 拿掉事後查 repo:外掛不再自己跑 git 比對 repo。保留工具白名單、寫檔只准這席的工作資料夾、席報告暫存處擋讀、Bash 粗擋對外動作(gh、hub、glab、claude、git 配 push 或 send-pack 或 send-email、GitHub API 網址、暫存處路徑)。審查員用 Bash 在 repo 裡改檔不擋也不報,寫進誠實界線、另開題。考慮過:①全修事後查、不開第四輪(修法本身沒人審過,而且第三輪四席裡 16 條會擋的有 13 條出在這段:外掛跑 git status 會照 repo 設定執行過濾指令、會搶索引鎖、在 worktree 讀不到設定也看錯 repo、髒檔內容變了看不出、背景改動讓警告變噪音);②破例開第四輪(前三輪每輪都在新機制上找到會擋的問題)。Enzo 2026-10-06 裁拿掉。代價:repo 被審查員用 Bash 改了不會有人提醒,要靠編排者收貨時自己看。
+     id: d4
+     decided: 2026-10-06
+     valid: true
++  - content: 席報告收齊前不落地:編排者收到審查席回報時先留在對話裡,同輪全部交回才一次寫進卷證資料夾;外掛擋讀 /tmp/lumos-seat-staging/ 留著當多一層保護。考慮過:①加強 Bash 粗擋去擋 lumos-seat-st 前綴與整個暫存根當搜尋範圍(代碼審 r1 通才、邊界兩席實測 grep -r /tmp、cat 加萬用字元都讀得到,補了還有 cd 再搜這類寫法,只是把洞縮小);②寫進擋不到的清單(r1 有 major,代碼審規則不能放行)。Enzo 2026-10-06 裁收齊前不落地。代價:編排者會談中途斷掉時,已交回的報告要從任務輸出檔救回。
++    id: d5
++    decided: 2026-10-06
++    valid: true
+ ---
+ # 審查席唯讀隔離_計劃
+ 
+ 白話:設計審、代碼審派出去的審查員是用 Agent 工具開的子代理,會繼承編排者的全部權限——被審的文件如果藏了惡意指令,審查員可以被誘導去改 repo、開 PR、改使用者設定;同一輪的審查員也看得到別席已經交回的報告,「各自獨立」只靠派工詞自律。這份計劃新增一支 Claude Code 外掛 `lumos-guard`:派工詞第一行是 `LUMOS-SEAT:` 的子代理,工具改用白名單、寫檔只准它自己的工作資料夾、不准碰席報告暫存處;Bash 只做粗擋(提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作就擋)。防的是「被文件裡的指令誘導」,不防一個有心繞的審查員:Bash 仍是完整的 shell,在 repo 裡改檔這版既不擋也不報。
+ 
+ PRIOR-ART: 最小解在 harness 的工具呼叫攔截點,不在提示詞。[[Systems/nested-agent-permission-scope]] 2026-06 設計過另一條路——把審查員改成 `claude -p --allowedTools "Read,Grep,Glob"` 子程序(工具清單在 harness 層收窄),但一直沒實作,而且審查員常要跑 Bash 做重現實驗(`git -C <臨時目錄>`、一次性的腳本),工具清單收到只剩讀取就做不了。本案改用外掛的 `tool.call` 攔截:引擎每次要跑工具前都經過它,`e.agentId` 指出是哪個子代理,`{ deny }` 擋下(型別檔 'tool.call' 說明);子代理是誰派的、派工詞是什麼,從 `agent.spawn` 的輸入 `prompt`、`parentAgentId`、`cwd` 與結果 `agentId` 對起來。設計審第一輪證明「看指令文字列黑名單」漏得一塌糊塗,改成白名單(決策 d2);第二輪又在「逐詞解析 Bash 指令」這一類抓到十多條漏擋與誤擋,連兩輪同一類,改成粗擋加事後查 repo(決策 d3);第三輪四席 16 條會擋的發現有 13 條出在事後查本身(外掛跑 `git status` 會照 repo 設定執行過濾指令、搶索引鎖、在 worktree 看錯 repo、髒檔內容變了看不出、背景改動讓警告變噪音),所以整段拿掉,外掛不跑任何外部指令(Enzo 2026-10-06 裁,決策 d4)。外掛寫法、市集、測試做法沿用 [[Systems/lumos事件帳]](核心邏輯可注入、`claude plugin test`、條款以測試標題開頭綁、本 repo 的 `.claude-plugin/marketplace.json`);標記解析照 `scripts/hooks/claude/dispatch-lens-hook.py` 讀 `LUMOS-IMPACT:` 的寫法(整行比對、去頭尾空白),但只認第一個非空行;擋下理由照本 repo 工具輸出的三段式(發生什麼、為什麼在意、要怎麼做獨立一行)。
+ RETIRE-IF: ①上線兩個月內 `lumos events` 看得到的審查席工具呼叫裡,這支外掛一次都沒擋過,而且審查卷證也沒出現過席位改 repo、讀別席報告或用白名單外的工具——風險沒在真實發生,維護成本不值;②誤擋多過真擋(席位常被擋下合法的重現實驗);③Claude Code 的 Agent 工具開始支援逐次指定可用工具與寫入範圍(那時改用官方機制)。
+ 
+ ## 名詞
+ 
+ - **審查席**:派工詞第一個非空行是合格 `LUMOS-SEAT: <迴圈編號>/<輪次>/<席名>` 的子代理,以及審查席再派出去的子代理(一律繼承)。
+ - **暫存根**:作業系統暫存目錄的真實路徑:macOS 是 `/private/tmp`、`/private/var/tmp`、`/private/var/folders/<兩層>/T`;Linux 是 `/tmp`、`/var/tmp`。比對一律帶路徑分隔字元(`/private/tmpX` 不算)。
+ - **席位工作資料夾**:`<任一暫存根>/lumos-seat-work/<迴圈編號>/<席名>/`。審查席唯一能用 `Write`、`Edit`、`NotebookEdit` 寫的地方;派工範本叫它把實驗與臨時 repo 放這裡。
+-- **席報告暫存處**:`<任一暫存根>/lumos-seat-staging/`(整個資料夾,不分迴圈)。編排者收到席報告時先存 `lumos-seat-staging/<迴圈編號>/`,全部交回才搬進卷證資料夾(把使用者記憶「報告存 repo 外」那條做法定成固定位置,讓外掛找得到要保護的地方)。卷證資料夾不保護:報告搬進去時同輪各席都已交回。
++- **席報告暫存處**:`<任一暫存根>/lumos-seat-staging/`(整個資料夾,不分迴圈)。編排者收到席報告時**先留在對話裡,同輪全部交回才一次寫進卷證資料夾**(決策 d5:收齊前硬碟上沒有別席報告可讀,Bash 怎麼寫都無所謂);這個資料夾留給沒照新做法、仍把報告先存到硬碟的情況,外掛擋讀它當多一層保護。卷證資料夾不保護:報告寫進去時同輪各席都已交回。
+ 
+ ## 範圍
+ 
+ - **做**:
+   1. 新外掛 `mods/claude/lumos-guard/`,加進同一份市集檔;安裝流程改成支援多支外掛。
+   2. 認出審查席(見〈做法〉一)。
+   3. 對審查席的每次工具呼叫套規則(見〈做法〉二);不合的回 `{ deny }`。
+   4. 修事件帳外掛:它的 `spawn` 事件用 `e.agentId` 記發起方,引擎給的欄位叫 `parentAgentId`(型別檔 `AgentSpawnInput`),子代理再派子代理時發起方被記成空的;改用 `parentAgentId` 並補測試。獨立成一個 fix 提交。
+-  5. 派工範本與編排者須知:`skills/lumos-design-loop/templates.md` 的 §1 審計員、§3 code-loop reviewer、§7.6 架構對齊、§7.8 資安四段的派工詞第一行加 `LUMOS-SEAT: <loop>/<rN>/<席名>`,並把「實驗用臨時目錄」改指席位工作資料夾;編排者須知寫明這行必須在第一行、席報告收到時存進 `lumos-seat-staging/<迴圈編號>/`、收貨時自己看一次 repo 有沒有被動過(外掛不報)。設計審與代碼審手冊「先到的席報告先存檔放著」那句指到席報告暫存處;使用者記憶「報告存 repo 外」那條改指這個位置。
++  5. 派工範本與編排者須知:`skills/lumos-design-loop/templates.md` 的 §1 審計員、§3 code-loop reviewer、§7.6 架構對齊、§7.8 資安四段的派工詞第一行加 `LUMOS-SEAT: <loop>/<rN>/<席名>`,並把「實驗用臨時目錄」改指席位工作資料夾;編排者須知寫明這行必須在第一行、席報告收齊前不寫到硬碟(決策 d5)、收貨時自己看一次 repo 有沒有被動過(外掛不報)。設計審與代碼審手冊「先到的席報告先存檔放著」那句改成收齊前不落地;使用者記憶「報告存 repo 外」那條跟著改。
+ - **不做**:
+   - 逐詞解析 Bash 指令(決策 d3 否決;設計審 r1、r2 連兩輪在這一類抓到漏擋與誤擋)。Bash 只做〈做法〉二·4 的粗擋。
+   - 擋或偵測 Bash 在 repo 裡改檔、跑改狀態的 git、改使用者層的檔(決策 d4 否決事後查;r3 證明外掛自己跑 git 會被利用)。寫進誠實界線,另開題。
+   - 擋審查席的網路外洩(`WebFetch` 網址、`curl` 帶內容送出):寫進誠實界線。
+   - Codex 編排的審查席(Codex 沒有同等攔截點)。
+   - 自主迴圈解禁 `--pr`:這份隔離只防被誘導,Bash 仍能做任何事,**不構成** [[Systems/nested-agent-permission-scope]] 決策 d4 的解禁依據。
+   - 驗席位自報的模型:事件帳的 `spawn` 事件已記引擎實際解析出的模型;比對派工單另案。
+ 
+ 落點:新開 `Systems/lumos-guard`(管外掛檔);市集檔的家仍是 [[Systems/lumos事件帳]]、安裝流程的家仍是 [[Systems/lumos-cli-lifecycle]],只在那兩篇補一句。
+ 
+ ## 做法
+ 
+ ### 一、認出審查席
+ 
+ - `agent.spawn` 進來時(還沒 `next(e)`):
+-  - 發起方是審查席(輸入的 `parentAgentId` 在對應表裡)→ 新子代理一律繼承發起方的標記,派工詞自己帶的標記不算數。
++  - 發起方是審查席(輸入的 `parentAgentId` 在對應表裡)→ 新子代理一律繼承發起方的標記,派工詞自己帶的標記不算數;工作目錄取輸入的 `cwd`,沒給就沿用發起方的(子代理通常在發起方的目錄裡工作,比會談 cwd 準)。
+   - 否則看派工詞:先去掉開頭的 BOM,再跳過「去掉空白後為空」的行(空白含 `\r`、全形空白 U+3000),取第一行去頭尾空白。
+     - 整行符合 `^LUMOS-SEAT:\s*(\S+)$`,值以 `/` 切成恰好三段,每段非空、不是 `.` 或 `..`、不含 `\`、空白與控制字元 → 是審查席。輪次不限格式(真實帳上有 `r3-dref`、`驗收` 這類寫法)。
+-    - 第一行不分大小寫以 `LUMOS-SEAT` 開頭(含全形冒號 `：`)卻不合上一點 → 回 `{ deny }` 擋下這次派工,理由說哪裡寫壞:編排者想隔離卻寫錯,靜默放行等於整席沒保護。
++    - 第一行去掉開頭的 `#`、`>`、`*`、`_`、反引號這類 markdown 修飾後,不分大小寫以 `lumos-seat`(或 `lumos-seats`)接冒號(含全形冒號 `：`)開頭,卻不合上一點 → 回 `{ deny }` 擋下這次派工,理由說哪裡寫壞:編排者想隔離卻寫錯,靜默放行等於整席沒保護。只是提到 lumos-seat、後面沒接冒號的一般派工(例 `lumos-seat-work 資料夾清理`)不算(代碼審 r1)。
+     - 其他 → 不是審查席(不擋)。只看第一行,所以派工詞內文貼進來的被審材料、範本範例裡的標記不會被誤認。
+-  - 是審查席時,把這次派工放進該會談的「啟動中」清單,再 `next(e)`;拿到結果的 `agentId` 就登記「子代理編號 → 迴圈、輪次、席名、工作目錄(輸入的 `cwd`,沒給就是會談 cwd)」(只寫記憶體,不跑外部指令);不論成功、被拒、丟錯,都在 `finally` 裡把它從「啟動中」拿掉。
+-- `tool.call` 遇到表裡查不到的子代理、而同一會談有「啟動中」的審查席派工時,最多等 5 秒讓它們回報完再查表;等不到就照查不到處理(不是審查席,放行),並 `$.ui.toast` 一行固定開頭 `lumos-guard 逾時放行:` 的提示。等的是整批,同時派很多席時非審查席的子代理可能多等,上限 5 秒。
+-- 會談結束(`session.end`)清掉那個會談的對應與「啟動中」清單。
++  - 是審查席時,把這次派工放進該會談的「啟動中」清單,再 `next(e)`;拿到結果的 `agentId` 就登記「子代理編號 → 迴圈、輪次、席名、工作目錄(輸入的 `cwd`,沒給就是會談 cwd)」,同時寫進 `$.state`(引擎替這場會談保管、外掛熱重載後還在;記憶體查不到時讀回,代碼審 r1);不跑外部指令;不論成功、被拒、丟錯,都在 `finally` 裡把它從「啟動中」拿掉。
++- `tool.call` 遇到表裡查不到的子代理、而同一會談有「啟動中」的審查席派工時,每登記完一席就重查一次,查到就判、不必等整批;5 秒內一直查不到就照查不到處理(不是審查席,放行),並 `$.ui.toast` 一行固定開頭 `lumos-guard 逾時放行:` 的提示。非審查席的子代理在有審查席啟動中時可能多等,上限 5 秒。
++- 會談結束(`session.end`)清掉那個會談的對應與「啟動中」清單,叫醒還在等的工具呼叫,`$.state` 也一併拿掉這場的席。
+ 
+ ### 二、審查席的工具規則
+ 
+ 1. **工具白名單**:`Read`、`Grep`、`Glob`、`Bash`、`WebFetch`、`WebSearch`、`ToolSearch`、`TodoWrite`、`TaskOutput`、`TaskStop`、`Agent`(某些建置叫 `Task`,兩個名字都認),以及照第 2 點判過的 `Write`、`Edit`、`NotebookEdit`。其他一律擋,包括 `Skill`(fork 型技能開的子迴圈沒有 `agent.spawn`,外掛認不出它是審查席的子代理)、`SendMessage`、`Monitor`、`Workflow`、`TaskCreate`、`EnterWorktree`、`PowerShell`、所有 `mcp__` 開頭的工具、外掛自己註冊的工具。工具名用字串比對(`Grep`、`Glob` 在某些建置不註冊,不影響)。
+    - `Agent` 帶 `isolation`(任何值)→ 擋:`remote` 在雲端跑、本機攔截點看不到,`worktree` 會在真 repo 開分支。`subagent_type` 只准沒給、`general-purpose`、`Explore`、`Plan`:其他代理定義可能自帶 isolation,外掛在呼叫端看不到。
+-2. **寫檔**:讀的欄位是 `Write`、`Edit` 的 `file_path`、`NotebookEdit` 的 `notebook_path`;欄位不是字串、不是絕對路徑,或任何一段是空的、`.`、`..` → 擋。其餘取「最深一層已存在的上層」:`$.fs.stat(p, { resolve: true })` 拿不到 `realPath`(含懸空連結)→ 擋;拿得到就接上剩下的段,在 macOS 折疊大小寫、統一成 NFC 後比對:落在這席自己的席位工作資料夾裡 → 放行;其餘一律擋。
++2. **寫檔**:讀的欄位是 `Write`、`Edit` 的 `file_path`、`NotebookEdit` 的 `notebook_path`;欄位不是字串、不是絕對路徑,或任何一段是空的、`.`、`..` → 擋。其餘取「最深一層已存在的上層」:`$.fs.stat(p, { resolve: true })` 拿不到 `realPath`(含懸空連結)→ 擋;拿得到就接上剩下的段,折疊大小寫、統一成 NFC 後比對(各平台都折小寫:引擎的 `realPath` 保留大小寫別名的原拼法;Linux 上多折只會讓暫存處擋得更多、工作資料夾多放行暫存根底下大小寫不同的同名資料夾,不會放出暫存根):落在這席自己的席位工作資料夾裡 → 放行;其餘一律擋。路徑超過 4096 字或 256 段也當看不懂、擋(代碼審 r1:不存在的超長路徑逐層往上找是平方級)。
+ 3. **席報告暫存處**:
+-   - `Read` 的 `file_path` 照第 2 點取真實路徑,落在席報告暫存處裡 → 擋。
++   - `Read` 的 `file_path` 照第 2 點取真實路徑:看不懂(相對路徑、含 `.` 或 `..` 段、空段、過長、懸空連結)→ 擋;落在席報告暫存處裡 → 擋。看不懂一律擋,讀、寫、搜尋同一條(代碼審 r1:原本讀檔遇到看不懂的路徑放行,`/tmp/./lumos-seat-staging/…` 就讀得到)。
+    - 搜尋範圍:`Grep` 只看 `path`(`pattern` 是正規表示式、`glob` 是檔名過濾,都不當路徑);`Glob` 看 `path` 再接上 `pattern` 第一個萬用字元之前的固定段(`pattern` 是絕對路徑時就用它)。`path` 是相對路徑就以這席的工作目錄補全,含 `..` 段 → 擋,沒給就是工作目錄。取真實路徑(同第 2 點的「最深一層已存在的上層」)後,範圍跟席報告暫存處有祖孫關係(範圍在暫存處裡,或暫存處在範圍裡,例如 `path=/private/tmp`)→ 擋。
+-4. **Bash 粗擋**:先把指令字串切成詞(以 `A-Z a-z 0-9 _ . -` 以外的字元為界,`/usr/bin/gh` 切出 `gh`),再判下面任一條成立就擋,不管它在引號、heredoc、`bash -lc`、子殼層或註解裡:
+-   - 有詞 `gh`、`hub`、`glab` 或 `claude`(`claude -p` 開的子程序不帶標記,外掛管不到)。
++4. **Bash 粗擋**:指令先一律轉小寫,再以空白、引號與 shell 符號(`; | & ( ) { } < > $ \` 與反引號)切詞——不切斜線,路徑裡只是出現 `claude` 不算(代碼審 r1:原本切斜線,`cat mods/claude/x.ts` 被擋;原本分大小寫,`GH pr create` 放行)。下面任一條成立就擋,不管它在引號、heredoc、`bash -lc`、子殼層或註解裡:
++   - 有詞 `gh`、`hub`、`glab` 或 `claude`,或明確的執行路徑(`/`、`./`、`../`、`~/` 開頭)最後一段是這幾個字(`/usr/bin/gh`、`./gh`)。`claude -p` 開的子程序不帶標記,外掛管不到。
+    - 有詞 `git`,同時有詞 `push`、`send-pack` 或 `send-email`。
+    - 字串含 `api.github.com` 或 `uploads.github.com`。
+    - 字串含 `lumos-seat-staging`。
+    - 指令超過 1MB,或判斷本身出錯 → 擋(這一項 fail-closed,是第 6 點的例外)。
+-   - 寧可誤擋:heredoc、說明文字、搜尋字串裡出現這些字也會被擋,理由文字教它換寫法(要搜尋文字改用 `Grep` 工具;報告內容直接寫在回答裡)。其他指令照常。
++   - 寧可誤擋:heredoc、說明文字、搜尋字串裡出現這些整詞也會被擋,理由文字教它換寫法(檔案內容用 Read 讀;要搜的字避開這幾個詞,或把 git 與 push 分成兩條指令;報告內容直接寫在回答裡)。不叫人改用 `Grep` 工具:有些建置沒有 Grep、Glob(代碼審 r1 通才席實查)。其他指令照常。
+ 5. **擋下理由**:三段式,例「擋下:審查席只能寫自己的工作資料夾(/Users/x/repo/a.md 不在裡面)。\n為什麼在意:被審材料裡的指令不能讓審查員改到 repo 或你的設定。\n要做實驗請寫到:\n  /tmp/lumos-seat-work/<迴圈>/<席名>/」;派工、工具、寫檔、暫存處、Bash 各一種固定開頭字串。
+-6. 不擋的照原樣 `next(e)`,外掛不改輸入、不改結果、不跑任何外部指令。外掛自己出錯時引擎會跳過它(放行),第 4 點的 Bash 判斷除外。
++6. 不擋的照原樣 `next(e)`,外掛不改輸入、不改結果、不跑任何外部指令。外掛自己出錯時放行,例外是審查席(已登記,或有審查席派工在啟動中、判不出是不是)的 Bash:擋。主會談與非審查席子代理的 Bash 出錯照常放行(代碼審 r1)。掛鉤層出錯走 `.catch`:工具已經跑過就交回原本結果,不謊稱擋下。
+ 
+ ### 三、安裝流程改成多外掛
+ 
+-- `scripts/lumos` 的 `_LEDGER_PLUGIN` 改成外掛清單 `_LUMOS_PLUGINS`(兩支);常數、訊息與函式名裡寫死「事件帳外掛」的改成通用說法(`_ledger_*` 改 `_lumos_plugin_*`,對應測試名跟著改)。
+-- 同步:市集照舊確保一次;已登記市集的既有使用者先跑一次 `claude plugin marketplace update lumos-toolchain`,非零只印警告、不中止;外掛清單逐支「使用者範圍沒裝就裝」,裝完以外掛列表確認真的在,不在就判那支 failed。各支的結果分開印,回傳值取最差的一支(failed > no-source > absent > ok)。
+-  - 實作前先在隔離的 Claude 設定資料夾實測資料夾型市集的 `marketplace update`(返回碼、不跑它時新外掛裝不裝得上),結果寫進驗證紀錄;實測證明不需要就拿掉這步。
+-- 移除:外掛清單逐支移除(各支獨立做);全部成功才移除市集,任一支失敗就保留市集,手動補做的指令列出失敗的那幾支加市集。
++- `scripts/lumos` 的 `_LEDGER_PLUGIN` 改成外掛清單 `_LUMOS_PLUGINS`(兩支);常數、訊息與函式名裡寫死「事件帳外掛」的改成通用說法(`_ledger_*` 改 `_lumos_plugin_*`)。既有測試名(`t_install_registers_ledger_plugin`、`t_ledger_plugin_*`)不改:它們被 [[Projects/Lumos事件帳_計劃]] 的條款綁著、也寫在已定稿的驗證紀錄裡,改名要連帶改寫定稿紀錄(代碼審 r1 合約席與規格席抓到計劃說要改卻沒改,改成不改並寫理由)。
++- 同步:市集照舊確保一次;外掛清單逐支「使用者範圍沒裝就裝」,裝完以外掛列表確認真的在(第一次查詢出錯也交給等待重查),不在就判那支 failed;來源 repo 的市集檔沒列的那支略過、回 no-source(舊來源還沒有新外掛時不會整段失敗)。各支的結果分開印,回傳值取最差的一支(failed > no-source > absent > ok)。
++  - 不跑 `claude plugin marketplace update`:2026-10-06 在隔離的 Claude 設定資料夾實測,資料夾型市集新增外掛後不更新也裝得上(重跑指令見 [[Verification/2026-10-06_審查席隔離實作]])。
++- 移除:外掛清單逐支移除(各支獨立做);全部成功才移除市集,任一支失敗就保留市集,手動補做的指令列出失敗的那幾支;市集確定是我們的才加移除市集那條,判不出來照列並附一句先確認來源(代碼審 r1:確定不是我們的還叫人刪,會刪到使用者自己的同名市集)。
+ - 既有測試 `t_ledger_plugin_files_valid` 的「市集只列一個外掛」改成「市集列出的外掛恰好是清單那幾支」。
+ 
+ ## 條款
+ 
+ 外掛行為的條款綁在 `mods/claude/lumos-guard/hooks/guard.test.ts`,測試標題以條款編號開頭,用 `claude plugin test mods/claude/lumos-guard` 在本機跑(CI 沒有 Claude,同事件帳外掛的做法)。
+ 
+ - [S1] 當審查席呼叫 `Write`、`Edit`(`file_path`)或 `NotebookEdit`(`notebook_path`),只有落在自己席位工作資料夾的才放行;repo、家目錄、別席的工作資料夾、暫存根的其他位置、相對路徑、含 `.` 或 `..` 段的、最深已存在上層是懸空連結的、大小寫不同或經過連結指到外面的都應擋 [manual:claude plugin test mods/claude/lumos-guard 的 S1 測試全綠]
+-- [S2] 當審查席用 `Read` 讀席報告暫存處裡的檔,或 `Grep` 的 `path`、`Glob` 的 `path` 加 `pattern` 固定段跟席報告暫存處有祖孫關係(含 `path=/private/tmp`、`Glob pattern=/tmp/**/*.md`),應擋;`Grep pattern=/tmp path=<repo>`、卷證資料夾、repo 內搜尋、不碰暫存處的暫存根搜尋應照常 [manual:claude plugin test mods/claude/lumos-guard 的 S2 測試全綠]
+-- [S3] 當審查席的 `Bash` 指令字串有詞 `gh`、`hub`、`glab` 或 `claude`、同時有 `git` 與 `push`、`send-pack` 或 `send-email`、含 GitHub API 網址或 `lumos-seat-staging`、超過 1MB,應擋,不論包在引號、heredoc、`bash -lc` 或子殼層裡;`git log`、`git grep -c x`、`git -C /tmp/lumos-seat-work/l/s commit`、`T=$(mktemp -d); git -C "$T" init`、`git clone <repo> /tmp/x`、`git log -- scripts/hooks/pre-push` 應照常 [manual:claude plugin test mods/claude/lumos-guard 的 S3 測試全綠]
++- [S2] 當審查席用 `Read` 讀席報告暫存處裡的檔、或讀檔路徑看不懂(相對、含 `.` 或 `..` 段、空段、過長),或 `Grep` 的 `path`、`Glob` 的 `path` 加 `pattern` 固定段跟席報告暫存處有祖孫關係(含 `path=/private/tmp`、`Glob pattern=/tmp/**/*.md`),應擋;`Grep pattern=/tmp path=<repo>`、卷證資料夾、repo 內搜尋、不碰暫存處的暫存根搜尋應照常 [manual:claude plugin test mods/claude/lumos-guard 的 S2 測試全綠]
++- [S3] 當審查席的 `Bash` 指令字串(不分大小寫)有詞 `gh`、`hub`、`glab` 或 `claude`(或執行路徑最後一段是它們)、同時有 `git` 與 `push`、`send-pack` 或 `send-email`、含 GitHub API 網址或 `lumos-seat-staging`、超過 1MB,應擋,不論包在引號、heredoc、`bash -lc` 或子殼層裡;`git log`、`git grep -c x`、`git -C /tmp/lumos-seat-work/l/s commit`、`T=$(mktemp -d); git -C "$T" init`、`git clone <repo> /tmp/x`、`git log -- scripts/hooks/pre-push`、`cat mods/claude/x.ts`、`git log --grep=push` 應照常 [manual:claude plugin test mods/claude/lumos-guard 的 S3 測試全綠]
+ - [S4] 當審查席呼叫工具白名單以外的工具(`Skill`、`SendMessage`、`Monitor`、`Workflow`、`TaskCreate`、`EnterWorktree`、`mcp__` 開頭的),或呼叫 `Agent`/`Task` 帶 `isolation`、`subagent_type` 不在准用清單,應擋;`TodoWrite`、`TaskOutput`、`TaskStop` 應照常 [manual:claude plugin test mods/claude/lumos-guard 的 S4 測試全綠]
+-- [S5] 若派工詞第一個非空行不以 `LUMOS-SEAT` 開頭(含標記出現在內文、程式碼區塊、第二行以後),或呼叫者是主會談,外掛應完全不擋、不改輸入與結果;第一行以 `LUMOS-SEAT` 開頭卻不合格(少一段、`..`、全形冒號、大小寫不同)應擋下派工;中文迴圈編號與席名、`r3-dref` 這類輪次、開頭有 BOM 或全形空白行的應認得 [manual:claude plugin test mods/claude/lumos-guard 的 S5 測試全綠]
++- [S5] 若派工詞第一個非空行不以 `LUMOS-SEAT` 開頭(含標記出現在內文、程式碼區塊、第二行以後),或呼叫者是主會談,外掛應完全不擋、不改輸入與結果;第一行去掉 markdown 修飾後以 `lumos-seat` 接冒號開頭卻不合格(少一段、`..`、全形冒號、大小寫不同、包在反引號或標題裡)應擋下派工;只是提到 lumos-seat、沒接冒號的一般派工應照常;中文迴圈編號與席名、`r3-dref` 這類輪次、開頭有 BOM 或全形空白行的應認得 [manual:claude plugin test mods/claude/lumos-guard 的 S5 測試全綠]
+ - [S6] 若審查席再派子代理(輸入帶 `parentAgentId`),新子代理應繼承發起方的標記、忽略自己派工詞裡的標記 [manual:claude plugin test mods/claude/lumos-guard 的 S6 測試全綠]
+-- [S7] 若審查席子代理在登記完成前就呼叫工具,外掛應先等同一會談啟動中的審查席派工(最多 5 秒)再判斷,逾時放行並跳 `lumos-guard 逾時放行:` 提示;派工被拒或丟錯時應從啟動中清單移除 [manual:claude plugin test mods/claude/lumos-guard 的 S7 測試全綠]
+-- [S8] 當外掛內部出錯,該次工具呼叫應照常放行,Bash 判斷出錯除外(應擋) [manual:claude plugin test mods/claude/lumos-guard 的 S8 測試全綠]
+-- [S9] 當 `lumos install` 與 `uninstall` 執行,外掛清單的兩支應各自裝上(裝完列表確認)與移除;`marketplace update` 非零只警告;市集只在全部外掛移除成功後才移除,任一支失敗保留市集並照實印出 [test:t_install_registers_guard_plugin]
+-- [S10] 當檢查 repo 內的外掛檔,`lumos-guard` 的描述檔與 hooks.json 應合法,市集列出的外掛恰好是清單那兩支,外掛原始碼不改寫任何輸入或結果、不呼叫 `$.process` [test:t_guard_plugin_files_valid]
+-- [S11] 當設計審與代碼審的派工範本更新,§1、§3、§7.6、§7.8 四段的派工詞第一行應是合格的 `LUMOS-SEAT:`、實驗目錄指到席位工作資料夾,且編排者須知寫明席報告暫存處與收貨時自己看 repo [test:t_seat_templates_carry_marker]
+-- [S12] 當事件帳外掛記 `spawn` 事件,發起方應取 `parentAgentId`,子代理派的孫代理那筆的 `agent` 欄應是那個子代理的編號 [manual:claude plugin test mods/claude/lumos-ledger 的 S12 測試全綠]
++- [S7] 若審查席子代理在登記完成前就呼叫工具,外掛應每登記一席就重查(最多等 5 秒)再判斷,逾時放行並跳 `lumos-guard 逾時放行:` 提示;派工被拒或丟錯時應從啟動中清單移除;外掛熱重載後(對照表從 `$.state` 讀回)執行中的審查席與它派的子代理應照擋 [manual:claude plugin test mods/claude/lumos-guard 的 S7 測試全綠]
++- [S8] 當外掛內部出錯,該次工具呼叫應照常放行,審查席的 Bash 除外(應擋);主會談的 Bash 照常;工具已經跑過才出錯時應交回原本結果 [manual:claude plugin test mods/claude/lumos-guard 的 S8 測試全綠]
++- [S9] 當 `lumos install` 與 `uninstall` 執行,外掛清單的兩支應各自裝上(裝完列表確認)與移除;來源市集檔沒列的那支略過;市集只在全部外掛移除成功後才移除,任一支失敗保留市集並照實印出,確定不是我們的市集不叫人移除 [test:t_lumos_plugin_install_review_fixes] [test:t_install_registers_guard_plugin]
++- [S10] 當檢查 repo 內的外掛檔,`lumos-guard` 的描述檔與 hooks.json 應合法,市集列出的外掛恰好是清單那兩支,外掛原始碼不改寫任何輸入或結果(不賦值事件欄位、`next` 只交 `e`)、不呼叫 `$.process`,兩個能擋人的掛鉤都掛 `.catch` [test:t_guard_plugin_files_valid]
++- [S11] 當設計審與代碼審的派工範本更新,§1、§3、§7.6、§7.8 四段的派工詞第一行應是合格的 `LUMOS-SEAT:`、實驗目錄指到席位工作資料夾,且編排者須知寫明席報告收齊前不落地與收貨時自己看 repo [test:t_seat_templates_carry_marker]
++- [S12] 當事件帳外掛記 `spawn` 事件,交給記錄的整組參數(發起方、事件名、欄位)應由同一支純函式給齊,發起方取 `parentAgentId`,子代理派的孫代理那筆的 `agent` 欄應是那個子代理的編號 [manual:claude plugin test mods/claude/lumos-ledger 的 S12 測試全綠]
+ - [S13] 當用 `claude -p` 載入兩支外掛、在暫存根以外的暫存 repo 派一個第一行帶 `LUMOS-SEAT:` 的子代理,叫它用 `Write` 改 repo 的檔、讀席報告暫存處的別席報告、`gh pr create`,三者都應被擋,repo 內容不變 [manual:暫存 repo 建在家目錄下的臨時資料夾、放一份假暫存處,claude -p 搭 --plugin-dir 兩支外掛跑一場,比對 git status 與 lumos events]
+ 
+ ## 回退
+ 
+ - 把 `lumos-guard` 從外掛清單與市集檔拿掉,同步流程照 [[Projects/Lumos事件帳_計劃]] 回退節第 1 步的做法改成「確保它不在」,下次 install / update 就會移除;再刪外掛資料夾、測試與手冊那一行。外掛不寫任何檔,沒有資料要清。
+ 
+ ## 實務隱患
+ 
+ - 已排除:金流:只擋本機工具呼叫,不碰付款
+ - 已排除:對外送出:外掛本身不呼叫網路、不跑外部指令(取真實路徑用引擎的檔案介面)
+ - 已排除:不可逆:外掛只擋不改,擋錯的代價是審查員那次工具呼叫失敗、換做法;拿掉外掛即回到現狀。審查員用 Bash 刪改未提交內容不在本外掛範圍,見誠實界線
+ - 守衛面:審查席工具白名單、寫檔只准席位工作資料夾、席報告暫存處擋讀、Bash 粗擋對外動作;fail-open(Bash 判斷例外);S1 到 S8 綁測試。
+ - 效能:每次工具呼叫多一次記憶體查表;只有審查席的呼叫才取真實路徑與切詞。
+ - 併發:多個審查席同時跑,各自以子代理編號查表;「啟動中」清單以會談為鍵、只在派工期間存在。同時派很多席時,非審查席子代理的工具呼叫可能因等整批而慢,上限 5 秒。
+-- 誤擋:Bash 粗擋會擋下指令裡只是提到 `push`、`gh`、`claude` 的合法寫法(heredoc、說明文字、`git log --grep=push`、`command -v gh`);理由文字教它改用 `Grep` 工具或換寫法。
++- 誤擋:Bash 粗擋會擋下指令裡出現 `push`、`gh`、`claude` 整詞的合法寫法(heredoc、說明文字、`grep -rn "git push" docs`、`command -v gh`);路徑裡只是含這些字不擋。理由文字教它用 Read 讀檔或換寫法。
+ REVISIT:2026-11-06 用 lumos events 數這一個月審查席被擋的次數與種類(誤擋另計)、逾時放行的提示次數,誤擋多就調規則
+ 
+ ## 誠實界線
+ 
+-- Bash 仍是完整的 shell:`cat` 或萬用字元(`/tmp/lumos-seat-st*`)讀暫存處、`python -c`、變數或編碼組出來的指令、先寫腳本再執行(腳本內容不掃)都擋不到。這道隔離防的是「被文件裡的指令誘導,直接改 repo、開 PR、讀別席報告」,不防一個有心繞的審查員,也不夠當自主迴圈解禁 `--pr` 的依據。
++- Bash 仍是完整的 shell:`cat` 或萬用字元(`/tmp/lumos-seat-st*`)、`grep -r … /tmp` 讀得到硬碟上任何席報告——所以席報告收齊前不落地(決策 d5),硬碟上沒有同輪別席報告;`python -c`、變數或編碼組出來的指令、先寫腳本再執行(腳本內容不掃)都擋不到。這道隔離防的是「被文件裡的指令誘導,直接改 repo、開 PR、讀別席報告」,不防一個有心繞的審查員,也不夠當自主迴圈解禁 `--pr` 的依據。
+ - 在 repo 裡改檔、改狀態的 git、刪掉未提交的內容(`rm`、`git clean`、`git checkout -- .`)、改使用者層的檔(shell 設定、`~/.claude` 底下的掛鉤與技能)都不擋也不報;編排者收貨時要自己看 repo 有沒有被動過。
+ REVISIT:2026-11-06 另開題設計 repo 改動偵測(候選:收貨時由 lumos 指令在編排者那邊比對,不在外掛裡跑 git),順便量這一個月卷證裡有沒有席位改到 repo 的紀錄
+ - 經由別的程式間接打 GitHub(例如 `lumos ci-wait` 內部呼叫 `gh`,指令字串裡沒有 `gh` 這個詞)不擋;目前那些呼叫都是唯讀查詢。
+ - 別席的席位工作資料夾讀得到;範本叫席位把發現寫在回答裡,不要放工作資料夾。
+ - 網路外洩不擋:審查席能把內容放進 `WebFetch` 網址或 `curl` 送出。`Bash` 的 `dangerouslyDisableSandbox` 對這份設計沒影響(不倚賴沙盒);日後改用作業系統沙盒時要一併擋。
+ - 標記靠派工詞第一行:編排者漏寫,那一席就沒有隔離(寫壞會被擋下派工,漏寫不會)。S11 只盯範本,盯不到編排者實際派工時有沒有照抄。
+ REVISIT:2026-11-06 用 lumos events 數這一個月派出的審查席裡,派工詞第一行帶 LUMOS-SEAT 的比例;低於九成就把「派工有沒有帶標記」接進收貨檢查
+ - 子代理在 Bash 裡 `cd` 之後的工作目錄外掛看不到;`Grep`、`Glob` 的相對路徑只以派工時的工作目錄補全。
+-- 外掛熱重載、行程重啟、`/clear`、`--resume` 都會清掉對應表,之前派出、還在背景跑的席位之後不受保護;fail-open 也一樣。
+-- 席報告暫存處是新的慣例:編排者沒照做(把報告存別處)時,別席報告不受保護。
++- 外掛熱重載後對照表從 `$.state` 讀回;行程重啟、`/clear`、`--resume` 會不會保留 `$.state` 沒實測(型別檔只寫它跨熱重載),保留不住時之前派出、還在背景跑的席位之後不受保護;fail-open 也一樣。
++REVISIT:2026-11-06 實測一次 /clear 與 --resume 之後審查席還擋不擋,結果寫進驗證紀錄
++- 外掛自己的原始碼就在審查席改得到的 repo 裡,而且市集直接讀那個資料夾:審查席用 Bash 改了它,熱重載或下次載入後守衛就變了(代碼審 r1 資安席)。這跟「Bash 在 repo 裡改檔不擋不報」是同一個洞,跟著上面那條另開題的回頭條件一起處理。
++- 收齊前不落地靠編排者照做:編排者還是先把報告存到硬碟(不論存哪),別席報告就讀得到;存在暫存處底下時外掛擋 Read 與搜尋,擋不到 Bash。
+ - Codex 編排的審查席不受保護。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-06,4 席:正確性、邊界、資安、架構對齊;外家席依 Enzo 指示不派):40 條/blocking 26/兩席獨立抓到 blocker:標記格式首字限英數,真實席名多數判不合格、隔離靜默全關;資安席實測 7 條繞法(gh 開 PR、--git-dir 抵消 -C、Monitor 與 Workflow 與 SendMessage 繞過、macOS 大小寫不分的路徑、別席報告審查中在 repo 外)。Enzo 裁改白名單、防被誘導(決策 d2 取代 d1)。卷證 `governance/review-reports/審查席唯讀隔離/`。
+   - 折入:工具改白名單、寫檔只准暫存區(取真實路徑、折疊大小寫)、git 改唯讀白名單並整串斷詞、gh 擋、定席報告暫存處並保護它、讀別席報告只擋明確指向、標記只認第一行且中文可、子代理一律繼承、啟動中清單 try/finally 與 5 秒上限;不再需要 repo 範圍判定,pickMain 與漂移守衛整段拿掉;安裝流程多外掛細節寫齊;外掛行為條款綁 TS 測試標題;明寫這份隔離不構成自主迴圈解禁依據。
+ - r2(2026-10-06,4 席:正確性、邊界、資安、架構對齊;資安席首派被安全分類器中斷、改防禦面框架重派):32 條/blocking 19/三席 major:逐詞解析 Bash 這一類連兩輪漏擋與誤擋(heredoc、`bash -lc`、包裝詞、`git -C` 暫存區可 push、造 `.git` 檔導回真 repo、`-c`/`-o` 誤擋);暫存區太寬(repo 在暫存區時保護全關、共用材料可改);Agent 的 `isolation` 可派出不受攔截的代理;輪次格式太窄且寫壞時靜默放行。Enzo 裁 Bash 改粗擋加事後查(決策 d3 取代 d2)。卷證同上。
+   - 折入:Bash 改粗擋(gh、hub、git push、send-email、GitHub API 網址、暫存處路徑、超長、判斷出錯即擋);新增事後查 repo;寫檔只准席位工作資料夾、欄位名分清、相對路徑與 `.`/`..` 段與懸空連結擋;席報告暫存處改整個資料夾、讀保護改祖孫關係、卷證資料夾不保護;暫存根列齊並帶分隔字元比對;Agent 擋 `isolation` 與未知代理類型;工具白名單加輔助工具;標記不限輪次格式、寫壞擋下派工、BOM 與全形空白;逾時放行跳提示;`marketplace update` 失敗只警告並排實測、裝完列表確認、移除失敗保留市集。
+ - r3(2026-10-06,4 席:正確性、邊界、資安、架構對齊;末輪):29 條/blocking 16/三席 major,16 條會擋的有 13 條出在事後查本身:外掛跑 `git status` 會照 repo 設定執行過濾指令、搶索引鎖、在 worktree 讀不到設定也看錯 repo、髒檔內容變了看不出、基準比等待上限慢、背景改動讓警告變噪音。另 3 條:`claude -p` 子程序不受管、Grep 的 `pattern` 被當路徑誤擋、`Skill` 的 fork 子迴圈認不出。三輪到頂,Enzo 裁拿掉事後查(決策 d4 取代 d3)。卷證同上。
+   - 折入:事後查整段拿掉(連同 S13 與 S14 的事後查部分;外掛不跑任何外部指令,S10 加「不呼叫 `$.process`」);Bash 粗擋加 `claude`、`glab`、`send-pack`;Grep 只看 `path`;`Skill` 移出白名單;擋下理由教改用 `Grep` 工具;誠實界線補 repo 與使用者層改動不擋不報、刪未提交內容、間接打 GitHub、別席工作資料夾可讀,並附另開題的回頭條件;編排者須知加「收貨時自己看 repo」。
++- 代碼審 r1(2026-10-06,8 席:正確性、併發資源、邊界輸入、合約圖譜、通才、架構對齊、資安、規格符合):32 條/blocking 7/五席 major:讀檔遇到看不懂的路徑放行(四席獨立抓到);Bash 粗擋分大小寫、拿路徑段比而誤擋、一般寫法讀得到暫存處;事件帳修正的測試守不住接線。Enzo 裁席報告收齊前不落地(決策 d5)。卷證 `governance/review-reports/code-審查席唯讀隔離/`。
++  - 回寫進設計:讀檔看不懂一律擋;Bash 轉小寫、不切斜線;寫壞標記的判準;出錯時只擋審查席的 Bash;每登記一席就重查、對照表存 `$.state`;安裝流程不跑 update、來源沒列略過、移除時判市集歸屬;測試名不改並寫理由;各平台都折小寫、繼承子代理沿用發起方 cwd 的理由。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 8b0ff1f6..21804de9 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -147,16 +147,16 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
+ ## 相關
+ - 對稱反安裝細節:[[Systems/lumos-deinit]](唯一有獨立設計稿 `docs/design/2026-06-26-lumos-deinit.md` 的生命週期指令)。
+ - 圖譜讀指令群:`scripts/lumos` `new`/`set`/`lint`/`doctor` 等:[[Systems/lumos-cli-read]]。
+ - 圖譜寫指令群(`new`/`set`/`rename` 等):[[Systems/lumos-cli-write]]。
+ - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
+ - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
+ - 分發機制脈絡:user-memory `lumos-update-distribution`。
+ 
+ ## Claude 外掛(事件帳、審查席隔離)的安裝與移除(2026-10-05,[[Projects/Lumos事件帳_計劃]];2026-10-06 改多支,[[Projects/審查席唯讀隔離_計劃]])
+ 
+-- **多支外掛**:外掛清單逐支各自裝、各自印一行,回傳取最差的一支;來源 repo 市集檔沒列的那支略過、不硬裝(舊來源還沒有新外掛時不會整段失敗);裝完以列表確認真的在。不跑 `marketplace update`:資料夾型市集 install 時直接讀市集檔,2026-10-06 用隔離的 Claude 設定資料夾實測,新增外掛不更新也裝得上。移除逐支獨立;★全部成功才移除市集,任一支失敗就保留市集★——移掉會讓那支外掛變成找不到來源的孤兒;手動補做只列失敗的那幾支加市集。外掛本身見 [[Systems/lumos事件帳]]、[[Systems/lumos-guard]]。
++- **多支外掛**:外掛清單逐支各自裝、各自印一行,回傳取最差的一支;來源 repo 市集檔沒列的那支略過、不硬裝(舊來源還沒有新外掛時不會整段失敗);裝完以列表確認真的在(第一次查詢撞到另一支同時在寫也交給等待重查)。不跑 `marketplace update`:資料夾型市集 install 時直接讀市集檔,2026-10-06 用隔離的 Claude 設定資料夾實測,新增外掛不更新也裝得上。移除逐支獨立;★全部成功才移除市集,任一支失敗就保留市集★——移掉會讓那支外掛變成找不到來源的孤兒;手動補做只列失敗的那幾支;市集確定是我們的才加移除市集那條,判不出來照列並附一句先確認來源,確定不是我們的就不叫人刪(代碼審 r1)。外掛本身見 [[Systems/lumos事件帳]]、[[Systems/lumos-guard]]。
+ 
+ - **裝**:`_sync_global_hooks(src, "claude")` 在合併器之前呼叫一次 `_sync_claude_plugin()`(只留這一個呼叫點;它不讀 settings.json,合併器失敗提前返回也不受影響)。bootstrap 起安裝子行程時把 `LUMOS_HOME` 傳進去,子行程的 `_lumos_src()` 才會指到這次的來源(代碼審 r1 合約席抓到原本沒傳)。來源先解成絕對真實路徑再交給 claude。所以 `lumos install`、`update`、`bootstrap`、`init`、vendor 都會確保外掛在。市集來源一律 `_lumos_src()`,不用執行中這支 lumos 的位置:資料夾型市集是直接讀來源資料夾,登記成會被刪的 worktree 外掛就會失效。同名市集指向別的本機路徑 → 先移除再加(兩邊正規化後比);同名但不是本機資料夾(使用者自己加的)→ 不動、回 failed。add 或 install 回錯時再查一次清單,已經是想要的狀態就算成功(另一支 install 同時跑先做完了);移除舊市集後加新的失敗,訊息教重跑 `lumos install --force`。只算使用者範圍裝的那份(專案範圍那份只在那個專案生效)。claude 的列表輸出不是「物件組成的清單」一律當失敗、不丟例外。
+-- **狀態**:外掛步驟自己回 ok / absent(找不到 claude 或測試開關)/ no-source(來源 repo 沒有市集檔)/ failed,自己印一行(`_plugin_sync_msg`),★不併進 `_sync_global_hooks` 的回傳字串★——`cmd_install` 只認 merge-failed、`_sync_global_claude` 用等於 ok 判斷,混進新值會誤判。所以外掛失敗不改 `lumos install` 的回傳碼。那一行會出現在呼叫端印的「全域 hooks 已同步」之前,刻意不為順序改四個呼叫端。
++- **狀態**:外掛步驟自己回 ok / absent(找不到 claude 或測試開關)/ no-source(來源 repo 沒有市集檔,或市集檔沒列那一支)/ failed,每支各印一行(都走 `_plugin_sync_msg`),回傳取最差的一支,★不併進 `_sync_global_hooks` 的回傳字串★——`cmd_install` 只認 merge-failed、`_sync_global_claude` 用等於 ok 判斷,混進新值會誤判。所以外掛失敗不改 `lumos install` 的回傳碼。那一行會出現在呼叫端印的「全域 hooks 已同步」之前,刻意不為順序改四個呼叫端。
+ - **移除**:`cmd_uninstall` 開頭的探針拒絕之後呼叫 `_teardown_claude_plugin()`;`lumos teardown` 第三步就是 `cmd_uninstall`,兩個指令都會移除、都受探針保護。外掛有列出就移除;市集存在且來源是我們的就以 `--scope user` 移除(外掛沒列出也要);兩者都沒有或找不到 claude 時安靜略過;成功印出移掉了什麼;失敗印還沒做成那幾步的手動指令。teardown 的確認清單有列出外掛與市集。只移除使用者範圍那份(`--scope user`;專案範圍那份不是我們裝的,不帶範圍 uninstall 還會失敗);任一支外掛移除失敗就保留市集(見〈多支外掛〉);`cmd_uninstall(source)` 收 `teardown --source` 傳下來的來源(代碼審 r2)。安裝端 add 或 install 回錯時最多再等三次、每次一秒再查(另一支 install 可能還在寫);來源不是預設位置或有設 `LUMOS_HOME` 時會印出登記的來源路徑;救援訊息依哪一步失敗照實說。★不要掛在 `_teardown_global_claude`★(那是只有測試呼叫的相容包裝)也不要掛在 `_teardown_global_hooks`(設定檔壞掉時會提前返回)——設計審第二輪兩席獨立抓到。
+-- **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`、`t_install_registers_guard_plugin`。事件帳本身見 [[Systems/lumos事件帳]]。
++- **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`、`t_install_registers_guard_plugin`、`t_lumos_plugin_install_review_fixes`(裝完確認重試、訊息走共用函式、移除時判市集歸屬、市集檔怪內容)。事件帳本身見 [[Systems/lumos事件帳]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-deinit.md b/docs/lumos-toolchain-knowledge/Systems/lumos-deinit.md
+index 12e631aa..219a5035 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-deinit.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-deinit.md
+@@ -43,21 +43,21 @@ decisions:
+     valid: true
+ about_code:
+   - scripts/lumos
+ ---
+ # lumos-deinit
+ 
+ `scripts/lumos` 的 `deinit` 子指令 —— 與 `lumos init` 對稱的**專案層反安裝**。
+ 
+ ## 定位
+ - `lumos deinit` = 專案層:拆本 repo 的 pre-commit 閘(`core.hooksPath`)、vendored 工具組、`CLAUDE.md` 的 `LUMOS:GRAPH-DISCIPLINE` 注入區塊、(預設)知識圖譜 vault。
+-- `lumos uninstall` = 機器層(既有):全域 `~/.local/bin/lumos`、user-scope skills;2026-10-05 起另外移除使用者範圍的 Claude 事件帳外掛與我們登記的市集(規矩見 [[Systems/lumos事件帳]])。
++- `lumos uninstall` = 機器層(既有):全域 `~/.local/bin/lumos`、user-scope skills;2026-10-05 起另外移除使用者範圍的 Claude 外掛(事件帳 lumos-ledger,2026-10-06 起加審查席隔離 lumos-guard)與我們登記的市集(規矩見 [[Systems/lumos-cli-lifecycle]])。
+ - deinit **不碰機器共用項**(`~/.claude/hooks/*.py`、`~/.claude/settings.json`)。
+ 
+ ## 指令介面
+ `lumos deinit [--keep-graph] [--dry-run] [-y/--yes] [--source <path>]`
+ - `--keep-graph`:保留圖譜,其餘照拆。
+ - `--dry-run`:唯讀預演,完全不觸發確認機制,不動任何檔/config。
+ - `-y/--yes`:跳過互動確認(CI/非互動用)。
+ - `--source`:僅供 `root==_lumos_src()` 自我保護比對;白名單是 hardcoded 常數,不隨 source 變。
+ 
+ ## 四重閘保護(不可逆的 `shutil.rmtree(vault)`)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md b/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
+index d0d484ab..9f600c28 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-guard.md
+@@ -4,34 +4,38 @@ status: doing
+ created: 2026-10-06
+ updated: 2026-10-06
+ responsibility: 審查席隔離外掛:認出派工詞第一行帶 LUMOS-SEAT 的子代理(與它再派的),對它的工具呼叫套白名單、寫檔只准席位工作資料夾、擋讀席報告暫存處、Bash 粗擋對外動作。不負責:偵測 repo 被改(這版不做)、安裝與移除(lumos-cli-lifecycle)、市集檔(lumos事件帳)、事件紀錄(lumos事件帳)
+ aliases: []
+ about_code:
+   - mods/claude/lumos-guard/hooks/register.ts
+   - mods/claude/lumos-guard/hooks/guard.test.ts
+   - mods/claude/lumos-guard/hooks/hooks.json
+   - mods/claude/lumos-guard/.claude-plugin/plugin.json
+   - mods/claude/lumos-guard/tsconfig.json
++  - mods/claude/lumos-guard/types/index.d.ts
+ tags:
+   - type/system
+   - status/doing
+   - scope/agent-dag
+ summary: |-
+-  WHY:審查席改用白名單,不用黑名單 [出處:Projects/審查席唯讀隔離_計劃 決策 d2] [因:設計審 r1 四席實測黑名單有多條繞法(大小寫不分的路徑、--git-dir、Monitor 與 Workflow 與 SendMessage)] [不選:先查作業系統沙盒能不能限單一子代理]
+-  WHY:Bash 只粗擋對外動作字樣,不逐詞解析指令 [出處:Projects/審查席唯讀隔離_計劃 決策 d3] [因:設計審 r1、r2 連兩輪在逐詞解析這一類抓到漏擋與誤擋(heredoc、bash -lc、包裝詞、git -C 暫存區照樣能 push)] [代價:指令裡只是提到 push、gh、claude 也會被擋]
++  WHY:審查席改用白名單,不用黑名單 [出處:Projects/審查席唯讀隔離_計劃 決策 d4(現行;白名單始於 d2,d2、d3 已被取代)] [因:設計審 r1 四席實測黑名單有多條繞法(大小寫不分的路徑、--git-dir、Monitor 與 Workflow 與 SendMessage)] [不選:先查作業系統沙盒能不能限單一子代理]
++  WHY:Bash 只粗擋對外動作字樣,不逐詞解析指令 [出處:Projects/審查席唯讀隔離_計劃 決策 d4(現行;粗擋始於 d3)] [因:設計審 r1、r2 連兩輪在逐詞解析這一類抓到漏擋與誤擋(heredoc、bash -lc、包裝詞、git -C 暫存區照樣能 push)] [代價:指令裡只是提到 push、gh、claude 也會被擋]
+   WHY:外掛不跑任何外部指令,不做事後查 repo [出處:Projects/審查席唯讀隔離_計劃 決策 d4] [因:設計審 r3 證實外掛跑 git status 會照 repo 設定執行過濾指令、會改寫索引(編排者臨時目錄重現,卷證 r3-intake)] [代價:審查席用 Bash 改 repo 不擋也不報]
+-  WHY:路徑一律折成小寫再比,不只 macOS [出處:2026-10-06 實作,偏離計劃寫的「在 macOS」] [因:引擎的 realPath 保留大小寫別名的原拼法;Linux 上多折只會讓暫存處擋得更多、工作資料夾多放行暫存根底下大小寫不同的同名資料夾,不會放出暫存根]
++  WHY:路徑一律折成小寫再比,不只 macOS [出處:2026-10-06 實作;代碼審 r1 後已寫回計劃〈做法〉二·2] [因:引擎的 realPath 保留大小寫別名的原拼法;Linux 上多折只會讓暫存處擋得更多、工作資料夾多放行暫存根底下大小寫不同的同名資料夾,不會放出暫存根]
++  WHY:席報告收齊前不寫到硬碟,外掛擋讀暫存處只當多一層保護 [出處:Projects/審查席唯讀隔離_計劃 決策 d5] [因:代碼審 r1 通才、邊界兩席實測 Bash 的 grep -r /tmp、cat 加萬用字元都讀得到暫存處] [不選:加強 Bash 粗擋去擋暫存處前綴與暫存根搜尋]
++  WHY:讀、寫、搜尋遇到看不懂的路徑一律擋 [出處:代碼審 r1 四席獨立抓到讀檔放行] [因:讀檔原本把看不懂當成不在暫存處,/tmp/./lumos-seat-staging/… 就讀得到]
++  WHY:對照表存 $.state [出處:代碼審 r1 併發資源席] [因:模組變數在熱重載時歸零,執行中的審查席會悄悄脫離白名單;$.state 由引擎替會談保管、跨熱重載]
+   RULE:外掛原始碼不呼叫 $.process、不改寫輸入或結果、只掛 agent.spawn、tool.call、session.end [依據:審計] [since:2026-10-06] [retire:人裁] [until:2027-04-06] [confirmed:2026-10-06] [test:t_guard_plugin_files_valid]
+   PITFALL:掛鉤自己丟錯時引擎直接跳過它,等於放行 [出處:plugin-authoring reference.md 與 claude plugin validate 的 gating hook 警告] [根因:沒掛 .catch 的擋人掛鉤出錯就被略過] [修法:兩個掛鉤都掛 .catch,工具已經跑過就交回原本結果,沒跑過 Bash 擋、其他放行;要 Claude Code 2.1.290 起,之前 .catch 可能被一起卸掉] [test:t_guard_plugin_files_valid]
+   PITFALL:原始碼裡的 \uFEFF、\u3000 跳脫被寫成看不見的字元本身,改壞驗證的字串對不上 [出處:2026-10-06 實作] [根因:寫檔工具把跳脫序列轉成實際字元] [修法:改用 trim(),JS 的空白本來就含這兩個字元] [repro:grep -nP "[\x{3000}\x{FEFF}]" mods/claude/lumos-guard/hooks/register.ts 應 0 行]
+-  TEST:claude plugin test mods/claude/lumos-guard(條款 S1–S8,33 支,改壞 25 處全翻紅);t_install_registers_guard_plugin、t_guard_plugin_files_valid、t_seat_templates_carry_marker
++  TEST:claude plugin test mods/claude/lumos-guard(條款 S1–S8,49 支;第一版改壞 25 處、代碼審 r1 修補後再改壞 11 處,全翻紅);t_install_registers_guard_plugin、t_guard_plugin_files_valid、t_seat_templates_carry_marker
+   SEE:[[Projects/審查席唯讀隔離_計劃]] [[Systems/lumos事件帳]] [[Systems/lumos-cli-lifecycle]]
+ verified_by:
+   - "[[Verification/2026-10-06_審查席隔離實作]]"
+ ---
+ # lumos-guard
+ 
+-白話:設計審、代碼審派出去的審查員是子代理,權限跟編排者一樣大。這支 Claude Code 外掛認出派工詞第一行帶 `LUMOS-SEAT:` 的子代理(和它再派出去的),把它的工具收窄:只准讀取、搜尋、Bash、網路查詢、派一般子代理;寫檔只准它自己的工作資料夾 `/tmp/lumos-seat-work/<迴圈>/<席名>/`;不准碰席報告暫存處 `/tmp/lumos-seat-staging/`;Bash 指令提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作就擋。
++白話:設計審、代碼審派出去的審查員是子代理,權限跟編排者一樣大。這支 Claude Code 外掛認出派工詞第一行帶 `LUMOS-SEAT:` 的子代理(和它再派出去的),把它的工具收窄:只准讀取、搜尋、Bash、網路查詢、派一般子代理;寫檔只准它自己的工作資料夾 `<暫存根>/lumos-seat-work/<迴圈>/<席名>/`(暫存根是 /tmp、/var/tmp、$TMPDIR 這幾個,實驗一般放 /tmp 底下);不准碰席報告暫存處 `<暫存根>/lumos-seat-staging/`;Bash 指令提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作就擋。
+ 
+ 防的是「被審的文件裡藏了指令,把審查員誘導去改 repo、開 PR、偷看別席報告」,不防一個有心繞的審查員:Bash 仍是完整的 shell,在 repo 裡改檔這版擋不到也不報。設計與三輪設計審的取捨見 [[Projects/審查席唯讀隔離_計劃]]。
+ 
+ 外掛裝在 [[Systems/lumos事件帳]] 同一份市集檔裡,由 [[Systems/lumos-cli-lifecycle]] 的安裝與移除流程一起裝上、拿掉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+index ea4d7c4f..0e1b61cb 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos事件帳.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-05
+-updated: 2026-10-05
++updated: 2026-10-06
+ responsibility: 負責 Lumos 事件帳:Claude Code 的 lumos-ledger 外掛把回合、工具呼叫、子代理寫成的結構化事件帳,它的格式、寫在哪、怎麼讀(lumos events)、怎麼清(--prune)、enforcement 的 claude-event-ledger 那一列怎麼判;不負責外掛怎麼裝(lumos-cli-lifecycle)、也不負責讀它的消費端(收工檢查、接手視圖各自的節點)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - mods/claude/lumos-ledger/hooks/register.ts
+   - mods/claude/lumos-ledger/hooks/ledger.test.ts
+   - mods/claude/lumos-ledger/hooks/hooks.json
+   - mods/claude/lumos-ledger/.claude-plugin/plugin.json
+   - .claude-plugin/marketplace.json
+   - mods/claude/lumos-ledger/hooks/rules-fixture.ts
+@@ -20,21 +20,21 @@ tags:
+ summary: |-
+   WHY:[2026-10-05 Projects/Lumos事件帳_計劃]判斷「AI 這一輪做了什麼」原本只能事後解析逐字稿;逐字稿官方明說不是穩定介面(Codex 收工檢查只認兩版逐字稿,本機升到 0.160.0 後靜默失效),有些情境逐字稿根本不落地。Claude Code 的 mod 能在行程內看到結構化的回合、工具呼叫、子代理,所以改成由 lumos-ledger 外掛寫 Lumos 自己的事件帳,讀取端只讀它
+   WHY:[2026-10-05 設計審 r1 架構席]事件種類欄位叫 ev 不叫 kind:同資料夾的 hook-events.jsonl 用 kind 表示結果(ok/timeout/error),同名異義會讓讀兩本帳的人猜錯。兩本帳互不取代:那本記「lumos 的 hook 自己有沒有跑」,這本記「AI 做了什麼」;在 worktree 裡,hook 事件帳寫會談所在的 worktree,事件帳寫主 checkout(worktree 會被刪)
+   WHY:[2026-10-05 設計審 r2 架構席]清理(lumos events --prune)放讀取端、要人或排程跑,不像 _note_audit_work_dir 在寫入端自動清——寫入端是 mod,mod 的檔案介面沒有刪除功能
+   RULE:[since:2026-10-05][retire:開場提醒改成不只點名 inactive/degraded,或 enforcement_summary 的分母規則改變][confirmed:2026-10-05]enforcement 的 claude-event-ledger 那一列只准 active/stale/unknown 三值,而且除了解主 checkout 的那一次 git rev-parse(限 3 秒,卡住就退回原根)之外不呼叫外部指令(尤其不叫 claude);事件帳上層是連結時判 unknown、連結的會談資料夾不算寫入——開場提醒只點名 inactive、degraded,用錯會讓沒裝外掛、只用 Codex 的人每次開場都被唸;叫 claude plugin list 每次約 0.9 秒(2026-10-05 設計審前掃席本機實測)並讓測試依機器而變;enforcement 每次開場都跑,git 卡住不能拖垮整份(代碼審 r2) [test:t_enforcement_ledger_row] [test:t_enforcement_ledger_row_git_hang] [test:t_enforcement_ledger_row_symlinks]
+   FACT:[來源:外部][2026-10-05 Claude Code 2.1.289 隔離設定目錄實測]claude plugin marketplace list --json 每筆是 name、source(本機資料夾為 directory)、path;claude plugin list --json 每筆有 id、enabled、readFromFolder——readFromFolder 證實資料夾型市集直接讀來源資料夾本身、不讀安裝拷貝。外掛安裝與移除照這兩個格式判斷
+   PITFALL:[2026-10-05 設計審 r2 正確性席與接手席獨立抓到]外掛移除若掛在 _teardown_global_claude,測試會綠但真的 lumos uninstall 與 lumos teardown 都不會移除——那支只是給測試用的相容包裝,沒有任何指令呼叫它;現在掛在 cmd_uninstall 開頭的探針拒絕之後,測試用子行程跑真指令 [test:t_teardown_removes_ledger_plugin]
+   PITFALL:[2026-10-05 代碼審 r1 正確性席與邊界席獨立抓到]claude 的列表指令吐 null 或物件時,迭代它會丟 TypeError,把整個 lumos install 與 uninstall 帶倒(uninstall 停在半拆)。現在 _claude_json 只收「物件組成的清單」,其他一律當失敗 [test:t_ledger_plugin_bad_json_and_races]
+   PITFALL:[2026-10-06 mod 段實作]外掛測試第一版跟程式一起寫、沒先看紅,改壞驗證時九個關鍵機制有四個拿掉照樣綠(假時鐘不動加隨機字串遞增遮住了塊名遞增、事件全在寫檔前送完測不到「寫到一半有新事件」、先寫再看緩衝看不出不累積、一行死碼);補了遞減隨機字串、可暫停的假寫檔、不寫直接看緩衝三種測法 [重現指令:claude plugin test mods/claude/lumos-ledger]
+   PITFALL:[2026-10-05 實作]enforcement 加一列會同時動到兩支釘數字的既有測試(總列數 23→24、unknown 列數 11→12);設計審只列到第一支 [test:t_enforcement_never_raises_on_missing] [test:t_enforcement_summary_excludes_unknown]
+-  PITFALL:子代理再派子代理時,spawn 事件的 agent 欄記成空的 [出處:2026-10-06 審查席唯讀隔離設計審 r1 前掃] [根因:用了 e.agentId,引擎給發起方的欄位叫 parentAgentId] [repro:claude plugin test mods/claude/lumos-ledger 的 S12 測試]
++  PITFALL:子代理再派子代理時,spawn 事件的 agent 欄記成空的 [出處:2026-10-06 審查席唯讀隔離設計審 r1 前掃] [根因:用了 e.agentId,引擎給發起方的欄位叫 parentAgentId] [repro:claude plugin test mods/claude/lumos-ledger 的 S12 測試;代碼審 r1 起交給 record 的整組參數由 spawnEvent 給齊,接線那行沒有欄位可選錯]
+   RULE:[since:2026-10-05][retire:事件帳不再由可被強制提交進 repo 的檔案提供,或改成只出 JSON 不出文字][confirmed:2026-10-05]印到終端的事件帳內容一律過 _esc_clean 加 _PATH_SPECIAL_CATS(控制、格式含雙向覆寫與零寬、行段分隔、孤立代理),--json 一律 ASCII 跳脫,不另寫第三套消毒——塊檔可能被人強制提交,雙向覆寫能把工具名顯示成別的樣子,孤立代理字元印到 UTF-8 終端會直接丟編碼錯誤。讀進來時就把關:巢狀超過 32 層或單行超過 64KB 算壞行、塊檔超過 16MB 略過並計數——約 7 萬到 11 萬層的巢狀讀得進來、印的時候才爆(代碼審 r3),只擋解析端會漏掉這段;每個欄位各自清理截斷,狀態標記接在最後 [test:t_events_reader_hostile_lines] [test:t_events_r3_hostile_output]
+   RULE:[since:2026-10-05][retire:清理改由寫入端自己做,或事件帳搬出 repo][confirmed:2026-10-05]lumos events --prune 只收 1 到 36500 的半形整數(下限 1 同時就是「最近 24 小時動過的會談不刪」的唯一保護,開放 --days 0 會刪到正在寫的會談);事件帳路徑從 repo 根往下每層都不能是連結(讀取也過這道,不然會讀到 repo 外);在 worktree 裡跑時那個 worktree 必須真的登記在主 checkout 的 .git/worktrees 裡(gitdir 是相對路徑時照 gitdir 檔所在目錄解讀,壞項目略過不連累別的)——.git 檔可以被改成指到別的 repo,不驗就會刪到別人的事件帳 [test:t_events_prune_hardening] [test:t_events_prune_edge_cases] [test:t_events_r3_path_trust]
+   TEST:t_events_reader_merges_chunks、t_events_reader_no_ledger、t_events_reader_from_worktree、t_events_reader_edge_lines、t_events_reader_hostile_lines、t_events_session_name_and_repo_validation、t_events_prune_only_old_sessions、t_events_prune_edge_cases、t_events_prune_hardening、t_enforcement_ledger_row、t_enforcement_ledger_row_git_hang、t_runner_isolates_claude_plugin、t_install_registers_ledger_plugin、t_teardown_removes_ledger_plugin、t_ledger_plugin_bad_json_and_races、t_ledger_plugin_messages_and_bootstrap、t_ledger_plugin_teardown_scope_and_messages、t_ledger_plugin_files_valid、t_ledger_rules_match_reader、t_events_r3_hostile_output、t_events_r3_path_trust、t_events_r3_honest_messages、t_enforcement_ledger_row_symlinks(python3.14 scripts/test_lumos.py -k events / -k ledger / -k runner_isolates)
+ related:
+   - "[[Projects/Lumos事件帳_計劃]]"
+   - "[[Systems/lumos-cli-lifecycle]]"
+   - "[[Systems/lumos-cli-read]]"
+ verified_by:
+   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+   - "[[Verification/2026-10-06_事件帳mod段實作]]"
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查席隔離實作.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查席隔離實作.md
+index 76613030..f3826e22 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查席隔離實作.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_審查席隔離實作.md
+@@ -10,24 +10,39 @@ tags:
+   - scope/agent-dag
+ plan_refs:
+   - "[[Projects/審查席唯讀隔離_計劃]]"
+ ---
+ # 2026-10-06_審查席隔離實作
+ 
+ 白話:審查席隔離外掛 `lumos-guard` 做完了,外掛測試、改壞驗證、Python 測試與一場真機驗收都過。
+ 
+ ## 驗了什麼
+ 
+-- **外掛測試**:`claude plugin test mods/claude/lumos-guard`,33 支全綠,涵蓋條款 S1–S8。
++- **外掛測試**:`claude plugin test mods/claude/lumos-guard`,49 支全綠,涵蓋條款 S1–S8(代碼審 r1 修補後;第一版 33 支)。
+ - **掛鉤層出錯**:`.catch` 裡先看工具跑過沒——跑過就交回原本結果(引擎保證不重跑),沒跑過 Bash 才擋;第一版跑過也回「擋下」,補測試先紅再修。`t_guard_plugin_files_valid` 在本機有 `claude` 時用 2.1.290 起的 `claude plugin validate --json` 確認兩個能擋人的掛鉤都掛了 `.catch`,拿掉一個會翻紅;CI 沒有 `claude`,那一段不跑。
+-- **改壞驗證**:把外掛的 25 處規則逐一改壞(白名單、isolation、代理類型、寫檔判定、notebook_path 欄位、`..` 段、懸空連結、大小寫、暫存處與它的上層、Grep 的 pattern、Bash 各詞、超長、繼承、寫壞標記、啟動中清單、逾時提示、派工 cwd、Bash 出錯、去空白行、會談結束、等啟動中),每一處都至少讓一支測試翻紅。
++- **改壞驗證**:第一版把外掛的 25 處規則逐一改壞(白名單、isolation、代理類型、寫檔判定、notebook_path 欄位、`..` 段、懸空連結、大小寫、暫存處與它的上層、Grep 的 pattern、Bash 各詞、超長、繼承、寫壞標記、啟動中清單、逾時提示、派工 cwd、Bash 出錯、去空白行、會談結束、等啟動中),每一處都至少讓一支測試翻紅。
+   - 第一次跑有兩處沒翻紅:「Bash 判斷出錯就擋」的測試其實走不到出錯那條路(改成讀參數時丟錯);「去掉 BOM」是多餘的死碼(JS 的空白本來就含 BOM),拿掉。
+ - **Python 測試**:`t_install_registers_guard_plugin`(S9)、`t_guard_plugin_files_valid`(S10)、`t_seat_templates_carry_marker`(S11)全綠;安裝流程 5 處改壞(外掛失敗仍移市集、不做列表確認、沒列也硬裝、一支失敗就停、回傳不取最差)、範本拿掉一段標記,都翻紅。既有的事件帳外掛測試照新行為改了兩條期望(外掛移除失敗時保留市集)。
+ - **事件帳修正**(S12):`claude plugin test mods/claude/lumos-ledger` 24 支全綠;S12 先看到紅(發起方記成空的)才修。
+ - **真機驗收**(S13):家目錄下開一個沒有遠端的暫存 repo、放一份假的別席報告,`claude -p --plugin-dir mods/claude/lumos-guard` 派一個第一行帶 `LUMOS-SEAT: S13/r1/probe` 的子代理。用 Write 改 repo 的檔、讀暫存處的別席報告、`gh pr create` 三件都被擋,擋下訊息是三段式;寫自己的工作資料夾照常;repo 內容沒變。
+-- **市集更新要不要跑**:隔離的 Claude 設定資料夾實測,資料夾型市集新增外掛後不跑 `marketplace update` 也裝得上,所以安裝流程沒加這一步(計劃寫明「實測證明不需要就拿掉」)。
++- **市集更新要不要跑**:隔離的 Claude 設定資料夾實測,資料夾型市集新增外掛後不跑 `marketplace update` 也裝得上,所以安裝流程沒加這一步(計劃寫明「實測證明不需要就拿掉」)。重跑方法(在 repo 根,約 30 秒):
++
++  ```
++  W=$(mktemp -d); mkdir -p $W/mk/.claude-plugin $W/mk/mods/claude && cp -R mods/claude/lumos-ledger $W/mk/mods/claude/ && python3.14 -c "import json,sys;d=json.load(open('.claude-plugin/marketplace.json'));d['plugins']=d['plugins'][:1];json.dump(d,open(sys.argv[1],'w'))" $W/mk/.claude-plugin/marketplace.json
++  export CLAUDE_CONFIG_DIR=$W/cfg; mkdir -p $CLAUDE_CONFIG_DIR; claude plugin marketplace add $W/mk; claude plugin install lumos-ledger@lumos-toolchain --scope user
++  cp -R mods/claude/lumos-guard $W/mk/mods/claude/ && cp .claude-plugin/marketplace.json $W/mk/.claude-plugin/
++  claude plugin install lumos-guard@lumos-toolchain --scope user   # 不先跑 marketplace update,應回 Successfully installed
++  unset CLAUDE_CONFIG_DIR; rm -rf $W
++  ```
++
++## 代碼審 r1 之後(2026-10-06)
++
++- 八席抓到 32 條(會擋 7 條),全部折。修補依根因分九組,每組先寫會紅的測試:讀寫搜尋遇到看不懂的路徑一律擋、Bash 轉小寫且不切斜線、寫壞標記的判準、出錯時只擋審查席的 Bash、每登記一席就重查、對照表存 `$.state`、安裝流程四處(裝完確認重試、訊息走共用函式、移除時判市集歸屬、市集檔怪內容)、事件帳接線、S10 加嚴。
++- 修補後再改壞 17 處(外掛 11、Python 6),全翻紅;範本 S11 改壞也翻紅。
++- 效能:接近 1MB 的 Bash 指令最慢 62 毫秒、多用 15MB;5MB 派工詞 7 毫秒;10 萬段的讀檔路徑 0.2 毫秒就擋(超過上限直接判看不懂)。
++- 事件帳外掛 25 支全綠;`t_lumos_plugin_install_review_fixes` 11 條、`t_install_registers_guard_plugin` 10 條、`t_guard_plugin_files_valid` 16 條、`t_seat_templates_carry_marker` 10 條全綠。
+ 
+ ## 沒驗的
+ 
+ - 外掛在互動模式、熱重載、`/clear`、`--resume` 之後的行為沒跑真機;誠實界線已寫對應表會清空。
+ - 掛鉤層的 `.catch` 決策抽成函式測過、validate 確認有掛上;沒造一個讓引擎裡的掛鉤真的丟錯的情境。
+ REVISIT:2026-11-06 跟計劃的 REVISIT 一起用 lumos events 看真實派工有沒有被誤擋或漏擋,順便補一場互動模式的真機驗收
+diff --git a/mods/claude/lumos-guard/.claude-plugin/plugin.json b/mods/claude/lumos-guard/.claude-plugin/plugin.json
+index e06a8d62..6a477f1b 100644
+--- a/mods/claude/lumos-guard/.claude-plugin/plugin.json
++++ b/mods/claude/lumos-guard/.claude-plugin/plugin.json
+@@ -1,5 +1,6 @@
+ {
+   "name": "lumos-guard",
+   "version": "0.1.0",
+-  "description": "Lumos 審查席隔離:派工詞第一行帶 LUMOS-SEAT 的子代理只准讀取、寫自己的工作資料夾、不碰席報告暫存處、不做對外動作"
++  "description": "Lumos 審查席隔離:派工詞第一行帶 LUMOS-SEAT 的子代理只准讀取、寫自己的工作資料夾、不碰席報告暫存處、不做對外動作",
++  "types": "./types/index.d.ts"
+ }
+diff --git a/mods/claude/lumos-guard/hooks/guard.test.ts b/mods/claude/lumos-guard/hooks/guard.test.ts
+index 80757b50..332cba16 100644
+--- a/mods/claude/lumos-guard/hooks/guard.test.ts
++++ b/mods/claude/lumos-guard/hooks/guard.test.ts
+@@ -9,20 +9,21 @@ const LINKS: Record<string, string | null> = { // 連結 → 目標;null = 懸
+   '/private/tmp/lumos-seat-work/L/s/out': '/repo',
+   '/private/tmp/lumos-seat-work/L/s/dang': null,
+ }
+ const EXISTS = new Set([
+   '/', '/private', '/private/tmp', '/private/var', '/private/var/tmp', '/private/var/folders',
+   '/private/var/folders/ab', '/private/var/folders/ab/cd', '/private/var/folders/ab/cd/T',
+   '/private/tmp/lumos-seat-work', '/private/tmp/lumos-seat-work/L', '/private/tmp/lumos-seat-work/L/s',
+   '/private/tmp/lumos-seat-work/L/other',
+   '/private/tmp/lumos-seat-staging', '/private/tmp/lumos-seat-staging/L', '/private/tmp/lumos-seat-staging/L/r1-x.md',
+   '/private/tmp/scratch', '/repo', '/repo/a.md', '/repo/docs', '/home', '/home/u',
++  '/private/tmp/lumos-seat-work/L/caf\u00e9',
+ ])
+ 
+ function fakeReal(path: string): string | undefined {
+   let p = path
+   for (let hop = 0; hop < 10; hop++) {
+     const parts = p.split('/')
+     let changed = false
+     for (let n = parts.length; n >= 1; n--) {
+       const pre = parts.slice(0, n).join('/') || '/'
+       if (pre in LINKS) {
+@@ -35,30 +36,33 @@ function fakeReal(path: string): string | undefined {
+         changed = true
+         break
+       }
+     }
+     if (!changed) break
+   }
+   if (!EXISTS.has(p)) throw new Error('ENOENT')
+   return p
+ }
+ 
+-function fakeIo() {
++function fakeIo(store: { seats: Record<string, Seat> } = { seats: {} }) {
+   const toasts: string[] = []
+   let gate: (() => void) | null = null
++  let fired = false // 逾時信號比 sleep 先到也記得
+   const io: Io = {
+     real: async p => fakeReal(p),
+     now: () => 0,
+-    sleep: ms => new Promise<void>(res => { if (ms === WAIT_MS) gate = res }),
++    sleep: ms => new Promise<void>(res => { if (ms === WAIT_MS) { if (fired) res(); else gate = res } }),
+     toast: t => { toasts.push(t) },
++    loadSeats: async () => ({ ...store.seats }),
++    saveSeats: async s => { store.seats = { ...s } },
+   }
+-  return { io, toasts, fireTimeout: () => gate?.() }
++  return { io, toasts, store, fireTimeout: () => { fired = true; gate?.() } }
+ }
+ 
+ const SEAT: Seat = { loop: 'L', round: 'r1', name: 's', cwd: '/repo' }
+ const chk = (e: any) => checkTool(fakeIo().io, SEAT, e)
+ 
+ describe('S1 寫檔只准自己的工作資料夾', () => {
+   test('S1 寫到自己的工作資料夾放行(經過 /tmp 連結、大小寫不同、還不存在的子路徑也算)', async () => {
+     expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/a.md' })).toBe(null)
+     expect(await chk({ tool: 'Edit', file_path: '/private/tmp/LUMOS-SEAT-WORK/L/S/new/dir/b.txt' })).toBe(null)
+     expect(await chk({ tool: 'NotebookEdit', notebook_path: '/private/tmp/lumos-seat-work/L/s/n.ipynb' })).toBe(null)
+@@ -144,25 +148,24 @@ describe('S3 Bash 粗擋', () => {
+     }
+     expect(bashBlock(42)).not.toBe(null)
+   })
+   test('S3 一般實驗照常:git log、grep -c、工作資料夾 commit、mktemp、clone、pre-push 路徑', () => {
+     for (const c of ['git log --oneline -5', 'git grep -c x', 'git -C /tmp/lumos-seat-work/l/s commit -m x',
+                      'T=$(mktemp -d); git -C "$T" init', 'git clone /repo /tmp/x', 'git log -- scripts/hooks/pre-push',
+                      'python3 -c "print(1)"', 'ls github', 'echo push', 'gh-pages', 'claude-code']) {
+       expect(bashBlock(c)).toBe(null)
+     }
+   })
+-  test('S3 擋下理由是三段式、教改用 Grep 工具', async () => {
++  test('S3 擋下理由是三段式', async () => {
+     const r = await chk({ tool: 'Bash', command: 'git push' })
+     expect(r).toContain('lumos-guard Bash')
+     expect(r).toContain('為什麼在意')
+-    expect(r).toContain('Grep 工具')
+   })
+ })
+ 
+ describe('S4 工具白名單', () => {
+   test('S4 白名單外的工具擋', async () => {
+     for (const t of ['Skill', 'SendMessage', 'Monitor', 'Workflow', 'TaskCreate', 'EnterWorktree', 'PowerShell',
+                      'mcp__x__y', 'MyPluginTool']) {
+       expect(await chk({ tool: t })).toContain('lumos-guard 工具')
+     }
+   })
+@@ -184,22 +187,21 @@ describe('S4 工具白名單', () => {
+ })
+ 
+ describe('S5 認出審查席', () => {
+   test('S5 合格標記:中文迴圈與席名、r3-dref 這類輪次、開頭有 BOM 或全形空白行', () => {
+     expect(parseMarker('LUMOS-SEAT: 審查席唯讀隔離/r1/資安-sonnet\n內文')).toEqual(
+       { kind: 'seat', loop: '審查席唯讀隔離', round: 'r1', name: '資安-sonnet' })
+     expect(parseMarker('﻿\n　\r\n  LUMOS-SEAT:x/r3-dref/s  \r\n').kind).toBe('seat')
+     expect(parseMarker('LUMOS-SEAT:x/驗收/s').kind).toBe('seat')
+   })
+   test('S5 不以 LUMOS-SEAT 開頭:不是審查席(標記在內文、程式碼區塊、第二行以後)', () => {
+-    for (const p of ['請審查\nLUMOS-SEAT: a/r1/b', '```\nLUMOS-SEAT: a/r1/b\n```', '', '   ', 42, undefined,
+-                     '> LUMOS-SEAT: a/r1/b']) {
++    for (const p of ['請審查\nLUMOS-SEAT: a/r1/b', '```\nLUMOS-SEAT: a/r1/b\n```', '', '   ', 42, undefined]) {
+       expect(parseMarker(p).kind).toBe('none')
+     }
+   })
+   test('S5 以 LUMOS-SEAT 開頭卻寫壞:判成寫壞(少一段、..、全形冒號、大小寫、空段)', () => {
+     for (const p of ['LUMOS-SEAT: a/r1', 'LUMOS-SEAT: a/../b', 'LUMOS-SEAT：a/r1/b', 'lumos-seat: a/r1/b',
+                      'LUMOS-SEAT: a//b', 'LUMOS-SEAT: a/r1/b c', 'LUMOS-SEAT:', 'LUMOS-SEATS: a/r1/b']) {
+       expect(parseMarker(p).kind).toBe('bad')
+     }
+   })
+   test('S5 主會談與非審查席的子代理完全不擋;寫壞的標記擋下派工', async () => {
+@@ -291,43 +293,162 @@ describe('S7 登記完成前的工具呼叫', () => {
+     const { io } = fakeIo()
+     const g = createGuard(io)
+     await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
+     g.end('S')
+     expect(g._state.seat('a1')).toBe(undefined)
+   })
+ })
+ 
+ describe('S8 外掛自己出錯', () => {
+   test('S8 查路徑丟出意外錯誤:非 Bash 放行,Bash 判斷出錯擋', async () => {
+-    const io: Io = { real: async () => { throw new Error('ENOENT') }, now: () => 0, sleep: async () => {}, toast: () => {} }
++    const io: Io = { real: async () => { throw new Error('ENOENT') }, now: () => 0, sleep: async () => {}, toast: () => {},
++                     loadSeats: async () => ({}), saveSeats: async () => {} }
+     const g = createGuard({ ...io, real: async () => { throw new TypeError('壞了') } })
+     await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
+-    // real 全丟錯 → 找不到任何已存在的上層 → 寫檔擋(安全方向);Read 放行
+-    expect(await g.call('S', { tool: 'Read', file_path: '/repo/a.md', agentId: 'a1' })).toBe(null)
++    // real 全丟錯 → 找不到任何已存在的上層 → 路徑看不懂,讀寫都擋(安全方向)
++    expect(await g.call('S', { tool: 'Read', file_path: '/repo/a.md', agentId: 'a1' })).toContain('lumos-guard')
+     const boom = createGuard(io)
+     await boom.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
+     const bash = await boom.call('S', { tool: 'Bash', get command(): string { throw new Error('x') }, agentId: 'a1' })
+     const read = await boom.call('S', { tool: 'Read', get file_path(): string { throw new Error('x') }, agentId: 'a1' })
+     expect(read).toBe(null)
+     expect(bash).toContain('lumos-guard Bash')
+   })
+ })
+ 
+ describe('S8 掛鉤層出錯(.catch)', () => {
+   const nextOf = (called: boolean) => {
+     let runs = 0
+     const next: any = async () => { runs += 1; return { text: 'ran' } }
+     next.called = called
+     return { next, runs: () => runs }
+   }
+   test('S8 工具還沒跑就出錯:Bash 擋,其他工具交下去跑', async () => {
+     const a = nextOf(false)
+-    expect(await onCallFailed({ tool: 'Bash' }, a.next)).toEqual({ deny: BASH_ERROR })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, a.next, true)).toEqual({ deny: BASH_ERROR })
+     expect(a.runs()).toBe(0)
+     const b = nextOf(false)
+-    expect(await onCallFailed({ tool: 'Read' }, b.next)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Read', agentId: 'a1' }, b.next, true)).toEqual({ text: 'ran' })
+   })
+   test('S8 工具已經跑過才出錯(例如中斷):交回原本的結果,不謊稱擋下', async () => {
+     const a = nextOf(true)
+-    expect(await onCallFailed({ tool: 'Bash' }, a.next)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, a.next, true)).toEqual({ text: 'ran' })
+   })
+ })
++
++describe('代碼審 r1 組一:看不懂的路徑一律擋(讀、寫、搜尋同一條)', () => {
++  test('S2 Read 路徑含 . 、空段、..、相對路徑或過長:擋', async () => {
++    for (const p of ['/tmp/./lumos-seat-staging/L/r1-x.md', '/tmp//lumos-seat-staging/L/r1-x.md',
++                     '/repo/../tmp/lumos-seat-staging/L/r1-x.md', 'lumos-seat-staging/L/r1-x.md', 42,
++                     '/repo/' + 'a/'.repeat(300) + 'x', '/repo/' + 'x'.repeat(5000)]) {
++      expect(await chk({ tool: 'Read', file_path: p })).toContain('lumos-guard')
++    }
++  })
++  test('S1 Write 路徑過長:擋', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/' + 'a/'.repeat(300) + 'x' })).toContain('lumos-guard 寫檔')
++  })
++  test('S2 正常的絕對路徑照常讀', async () => {
++    for (const p of ['/repo/a.md', '/repo/docs/x/y.md', '/tmp/scratch/z']) expect(await chk({ tool: 'Read', file_path: p })).toBe(null)
++  })
++})
++
++describe('代碼審 r1 組二:Bash 粗擋', () => {
++  test('S3 大小寫不同也擋', () => {
++    for (const c of ['GH pr create', 'Git push origin HEAD', 'CLAUDE -p x', 'Hub pull-request', 'git SEND-PACK u r',
++                     'cat /tmp/LUMOS-SEAT-STAGING/L/x', 'curl https://API.GITHUB.COM/repos']) expect(bashBlock(c)).not.toBe(null)
++  })
++  test('S3 明確的執行路徑也擋:/usr/bin/gh、./gh、~/bin/claude', () => {
++    for (const c of ['/usr/local/bin/gh pr create', './gh x', '~/bin/claude -p x', 'x=$(gh api y)', "bash -lc 'gh pr create'",
++                     'env GH_TOKEN=1 gh pr list', '(cd /tmp && claude)']) expect(bashBlock(c)).not.toBe(null)
++  })
++  test('S3 路徑或參數裡只是出現這些字:照常', () => {
++    for (const c of ['cat mods/claude/lumos-guard/hooks/register.ts', 'git -C /r diff -- mods/claude', 'git log --grep=push',
++                     'git log -- scripts/push', 'curl https://github.com/gh/foo', 'ls hub-config', 'cat docs/claude-notes.md',
++                     'git log -- scripts/hooks/pre-push']) expect(bashBlock(c)).toBe(null)
++  })
++  test('S3 擋下提示不再叫人改用 Grep 工具(有些建置沒有),改教用 Read 讀檔', async () => {
++    const r = await chk({ tool: 'Bash', command: 'gh pr create' })
++    expect(r).not.toContain('Grep 工具')
++    expect(r).toContain('Read')
++  })
++})
++
++describe('代碼審 r1 組四:寫壞的標記與出錯時的方向', () => {
++  test('S5 標記加了 markdown 修飾:判成寫壞、擋下派工', () => {
++    for (const p of ['`LUMOS-SEAT: a/b/c`', '# LUMOS-SEAT: a/b/c', '**LUMOS-SEAT:** a/b/c', '> LUMOS-SEAT: a/b/c']) {
++      expect(parseMarker(p).kind).toBe('bad')
++    }
++  })
++  test('S5 一般派工第一行只是提到 lumos-seat:不是審查席、不擋', () => {
++    for (const p of ['Lumos-seating plan', 'lumos-seat-work 資料夾清理', 'LUMOS-SEAT 外掛的 bug 查一下']) {
++      expect(parseMarker(p).kind).toBe('none')
++    }
++  })
++  test('S8 掛鉤出錯時:主會談與非審查席的 Bash 照常,審查席的 Bash 擋', async () => {
++    const mk = () => { const n: any = async () => ({ text: 'ran' }); n.called = false; return n }
++    expect(await onCallFailed({ tool: 'Bash' }, mk(), false)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'n1' }, mk(), false)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, mk(), true)).toEqual({ deny: BASH_ERROR })
++  })
++  test('S8 seatish:已登記或有啟動中的審查席派工才算', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    expect(g.seatish('a1')).toBe(false)
++    let finish: (r: any) => void = () => {}
++    const sp = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finish = res }))
++    expect(g.seatish('zz')).toBe(true)
++    finish({ agentId: 'a1' })
++    await sp
++    expect(g.seatish('a1')).toBe(true)
++    expect(g.seatish('zz')).toBe(false)
++  })
++})
++
++describe('代碼審 r1 組五:登記、等待與熱重載', () => {
++  test('S7 先登記好的席不必等同批最後一席', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    let finA: (r: any) => void = () => {}
++    let finB: (r: any) => void = () => {}
++    const a = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finA = res }))
++    void g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/t' }, () => new Promise(res => { finB = res }))
++    const early = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })
++    finA({ agentId: 'a1' })
++    await a
++    expect(await early).toContain('lumos-guard 寫檔')
++    expect(g._state.pending('S')).toBe(1)
++    finB({ agentId: 'b1' })
++  })
++  test('S7 熱重載後(新的 guard、同一份 $.state):執行中的審查席與它派的子代理照擋', async () => {
++    const f = fakeIo()
++    const g1 = createGuard(f.io)
++    await g1.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    const g2 = createGuard(fakeIo(f.store).io)
++    expect(await g2.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })).toContain('lumos-guard 寫檔')
++    await g2.spawn('S', '/repo', { prompt: '沒有標記', parentAgentId: 'a1' }, async () => ({ agentId: 'c1' }))
++    expect(await g2.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'c1' })).toContain('lumos-guard 寫檔')
++  })
++  test('會談結束:叫醒還在等的工具呼叫、從 $.state 拿掉這場的席', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    void g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/t' }, () => new Promise(() => {}))
++    const waiting = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'x9' })
++    g.end('S')
++    expect(await waiting).toBe(null)
++    expect(f.toasts.length).toBe(0)
++    await Promise.resolve()
++    expect(f.store.seats['a1']).toBe(undefined)
++  })
++})
++
++describe('代碼審 r1 組七:補守不住的地方', () => {
++  test('S1 /var/tmp 也是暫存根:寫 /var/tmp/lumos-seat-work/<迴圈>/<席>/ 照常', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/var/tmp/lumos-seat-work/L/s/a' })).toBe(null)
++    expect(await chk({ tool: 'Read', file_path: '/var/tmp/lumos-seat-staging/L/x' })).toContain('lumos-guard 暫存處')
++  })
++  test('S1 中文或重音席名:分解字(NFD)寫法也算自己的工作資料夾', async () => {
++    const seat: Seat = { loop: 'L', round: 'r1', name: 'caf\u00e9', cwd: '/repo' }
++    expect(await checkTool(fakeIo().io, seat, { tool: 'Write', file_path: '/tmp/lumos-seat-work/L/cafe\u0301/a' })).toBe(null)
++  })
++})
++
+diff --git a/mods/claude/lumos-guard/hooks/register.ts b/mods/claude/lumos-guard/hooks/register.ts
+index 85f1f656..19d36ec8 100644
+--- a/mods/claude/lumos-guard/hooks/register.ts
++++ b/mods/claude/lumos-guard/hooks/register.ts
+@@ -1,42 +1,50 @@
+ import type { Register } from 'claude-code'
++import type { GuardSeat } from '../types'
+ 
+ // lumos-guard:審查席的工具規則(Projects/審查席唯讀隔離_計劃)。
+ // 派工詞第一個非空行是 LUMOS-SEAT: <迴圈>/<輪次>/<席名> 的子代理(與它再派的子代理)套白名單;其他人照常。
+ // 防的是被文件裡的指令誘導,不防有心繞:Bash 仍是完整的 shell。外掛不改輸入與結果、不跑任何外部指令。
+ // 核心邏輯在 createGuard,查路徑、時間、提示由外面注入,測試可以換成假的(guard.test.ts)。
+ 
+-export type Seat = { loop: string; round: string; name: string; cwd: string }
++export type Seat = GuardSeat
+ export type Marker = { kind: 'none' } | { kind: 'seat'; loop: string; round: string; name: string } | { kind: 'bad'; why: string }
+ export type Io = {
+   // 真實路徑(跟過所有連結、折疊 . 與 ..);不存在丟錯;存在但拿不到(懸空連結)回 undefined
+   real: (path: string) => Promise<string | undefined>
+   now: () => number
+   sleep: (ms: number) => Promise<void>
+   toast: (text: string) => void
++  // 對照表存在 $.state:外掛熱重載後模組變數歸零,讀回來繼續擋
++  loadSeats: () => Promise<Record<string, Seat>>
++  saveSeats: (seats: Record<string, Seat>) => Promise<void>
+ }
+ 
+ export const WAIT_MS = 5000 // 子代理登記完成前就呼叫工具時,最多等這麼久
+ export const BASH_MAX = 1_000_000 // 指令超過這麼長一律擋
++export const PATH_MAX = 4096 // 路徑超過這麼長或這麼多段,當看不懂(擋)
++export const SEGS_MAX = 256
+ 
+ const TOOLS_OK = new Set(['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch', 'ToolSearch', 'TodoWrite', 'TaskOutput',
+                           'TaskStop', 'Agent', 'Task', 'Write', 'Edit', 'NotebookEdit'])
+ const AGENT_TYPES_OK = new Set(['general-purpose', 'Explore', 'Plan'])
+ const BASH_WORDS = new Set(['gh', 'hub', 'glab', 'claude'])
+ const GIT_PUSH_WORDS = new Set(['push', 'send-pack', 'send-email'])
+ const BASH_STRINGS = ['api.github.com', 'uploads.github.com', 'lumos-seat-staging']
+ // 暫存根(真實路徑,一律小寫比):macOS 的 /tmp、/var/tmp 是連結,真實路徑在 /private 底下
+ const ROOTS = ['/private/tmp', '/private/var/tmp', '/tmp', '/var/tmp']
+ const FOLDERS_ROOT = /^\/private\/var\/folders\/[^/]+\/[^/]+\/t(?=\/|$)/
+ 
+ const SEAT_RE = /^LUMOS-SEAT:\s*(\S+)$/
+-const SEAT_LOOSE_RE = /^lumos-seat/i
++// 寫壞的判準:去掉開頭的 # > * 反引號等 markdown 修飾後,以 lumos-seat(或 lumos-seats)接冒號開頭;
++// 只是提到 lumos-seat 的一般派工(沒接冒號)不算
++const SEAT_LOOSE_RE = /^[#>*_`\s]*lumos-seats?\s*[:\uff1a]/i
+ 
+ // 第一個非空行:跳過去空白後為空的行;JS 的 \s 本來就含 \r、BOM(U+FEFF)與全形空白(U+3000)
+ function firstLine(prompt: string): string {
+   for (const raw of prompt.split('\n')) {
+     const line = raw.trim()
+     if (line) return line
+   }
+   return ''
+ }
+ 
+@@ -73,22 +81,23 @@ function inStaging(p: string): boolean {
+ 
+ // 範圍是不是暫存處的祖先(含 /、/private、暫存根本身、/private/var/folders 底下到 T 為止)
+ function aboveStaging(p: string): boolean {
+   if (p === '/') return true
+   if (ROOTS.some(r => r === p || r.startsWith(p + '/'))) return true
+   return /^\/private\/var\/folders(\/[^/]+){0,2}(\/t)?$/.test(p) || p === '/private/var'
+ }
+ 
+ // 絕對路徑的真實路徑(小寫、NFC):取最深一層已存在的上層,再接上剩下的段;任何一段是空的、.、.. 回 null
+ export async function realOf(io: Io, path: unknown): Promise<string | null> {
+-  if (typeof path !== 'string' || !path.startsWith('/')) return null
++  if (typeof path !== 'string' || !path.startsWith('/') || path.length > PATH_MAX) return null
+   const parts = path.split('/').slice(1)
++  if (parts.length > SEGS_MAX) return null
+   if (parts.length && parts[parts.length - 1] === '') parts.pop() // 結尾的斜線
+   if (parts.some(s => s === '' || s === '.' || s === '..')) return null
+   for (let n = parts.length; n >= 0; n--) {
+     let got: string | undefined
+     try {
+       got = await io.real('/' + parts.slice(0, n).join('/'))
+     } catch {
+       continue // 這一層不存在,往上找
+     }
+     if (got === undefined) return null // 懸空連結或拿不到:擋
+@@ -102,27 +111,34 @@ function workDir(seat: Seat, root: string): string {
+   return fold(`${root}/lumos-seat-work/${seat.loop}/${seat.name}`)
+ }
+ 
+ export const BASH_ERROR = '擋下(lumos-guard Bash):判斷出錯。\n為什麼在意:判斷不了的指令寧可擋。\n換個寫法再試。'
+ 
+ const why = (head: string, what: string, how: string) =>
+   `擋下(lumos-guard ${head}):${what}\n為什麼在意:被審材料裡的指令不能讓審查員改到 repo、你的設定,或看到別席的報告。\n${how}`
+ 
+ const WORK_HINT = (seat: Seat) => `要做實驗請寫到:\n  /tmp/lumos-seat-work/${seat.loop}/${seat.name}/`
+ 
++// 粗擋:一律轉小寫;以空白、引號與 shell 符號切詞(不切斜線,路徑裡只是出現 claude 不算)。
++// gh、hub、glab、claude 看整詞,或明確的執行路徑(/、./、../、~/ 開頭)最後一段;push 這類只看整詞
+ export function bashBlock(cmd: unknown): string | null {
+   if (typeof cmd !== 'string') return '指令不是字串'
+   if (cmd.length > BASH_MAX) return '指令超過 1MB'
+-  const words = new Set(cmd.split(/[^A-Za-z0-9_.-]+/).filter(Boolean))
+-  for (const w of BASH_WORDS) if (words.has(w)) return `指令裡有「${w}」`
++  const low = cmd.toLowerCase()
++  const toks = low.split(/[\s'"`;|&(){}<>$\\]+/).filter(Boolean)
++  const words = new Set(toks)
++  for (const t of toks) {
++    const last = /^(\/|\.\.?\/|~\/)/.test(t) ? t.slice(t.lastIndexOf('/') + 1) : t
++    if (BASH_WORDS.has(last)) return `指令裡有「${last}」`
++  }
+   if (words.has('git')) for (const w of GIT_PUSH_WORDS) if (words.has(w)) return `指令裡同時有「git」與「${w}」`
+-  for (const s of BASH_STRINGS) if (cmd.includes(s)) return `指令裡有「${s}」`
++  for (const s of BASH_STRINGS) if (low.includes(s)) return `指令裡有「${s}」`
+   return null
+ }
+ 
+ // 搜尋範圍:Grep 只看 path;Glob 再接上 pattern 第一個萬用字元之前的固定段
+ function searchBase(e: any, seat: Seat): string | null {
+   const p = e?.path
+   let base: string
+   if (p === undefined || p === null || p === '') base = seat.cwd
+   else if (typeof p !== 'string') return null
+   else if (p.startsWith('/')) base = p
+@@ -162,62 +178,84 @@ export async function checkTool(io: Io, seat: Seat, e: any): Promise<string | nu
+     return null
+   }
+   if (tool === 'Write' || tool === 'Edit' || tool === 'NotebookEdit') {
+     const raw = tool === 'NotebookEdit' ? e?.notebook_path : e?.file_path
+     const real = await realOf(io, raw)
+     const ok = real !== null && rootOf(real) !== null && inside(real, workDir(seat, rootOf(real)!))
+     return ok ? null : why('寫檔', `審查席只能寫自己的工作資料夾(${String(raw)} 不在裡面)。`, WORK_HINT(seat))
+   }
+   if (tool === 'Read') {
+     const real = await realOf(io, e?.file_path)
+-    return real !== null && inStaging(real)
++    if (real === null) return why('暫存處', `讀檔路徑看不懂(${String(e?.file_path).slice(0, 200)}:相對路徑、含 . 或 .. 段、空段或過長)。`, '改用乾淨的絕對路徑。')
++    return inStaging(real)
+       ? why('暫存處', '審查席不能讀席報告暫存處裡的檔。', '別席的報告要等全部交回才看得到;你的發現直接寫在回答裡。')
+       : null
+   }
+   if (tool === 'Grep' || tool === 'Glob') {
+     const base = searchBase(e, seat)
+     const real = base === null ? null : await realOf(io, base)
+     if (real === null) return why('暫存處', '搜尋範圍看不懂(含 .. 或不是字串)。', '改用絕對路徑指定 path。')
+     return inStaging(real) || aboveStaging(real)
+       ? why('暫存處', `搜尋範圍(${real})包含席報告暫存處。`, '把 path 指到要搜的 repo 或資料夾,不要指到暫存根或它的上層。')
+       : null
+   }
+   if (tool === 'Bash') {
+     const hit = bashBlock(e?.command)
+     return hit === null ? null
+       : why('Bash', `${hit}:審查席的 Bash 不能做對外動作(開 PR、推分支、另開 claude)或碰席報告暫存處。`,
+-            '要搜尋文字請改用 Grep 工具;報告內容直接寫在回答裡,不要用指令寫檔。')
++            '檔案內容用 Read 工具讀;要搜的字避開這幾個詞,或把 git 與 push 分成兩條指令;報告內容直接寫在回答裡。')
+   }
+   return null
+ }
+ 
+ type Pend = { n: number; waiters: (() => void)[] }
+ 
+ export function createGuard(io: Io) {
+   const seats = new Map<string, Seat>() // 子代理編號 → 席位
+   const bySession = new Map<string, Set<string>>()
+   const pending = new Map<string, Pend>() // 會談 → 啟動中的審查席派工
+ 
++  function wake(p: Pend) {
++    const ws = p.waiters
++    p.waiters = []
++    for (const w of ws) w()
++  }
++
+   function release(session: string) {
+     const p = pending.get(session)
+     if (!p) return
+     p.n -= 1
+-    if (p.n <= 0) {
+-      pending.delete(session)
+-      for (const w of p.waiters) w()
++    if (p.n <= 0) pending.delete(session)
++    wake(p) // 每登記一席就叫醒等待者各自重查,不必等整批
++  }
++
++  async function save() {
++    try { await io.saveSeats(Object.fromEntries(seats)) } catch { /* 存不進去:這場仍在記憶體裡擋 */ }
++  }
++
++  // 記憶體查不到時讀 $.state(熱重載後模組變數歸零)
++  async function lookup(id: string): Promise<Seat | undefined> {
++    const s = seats.get(id)
++    if (s) return s
++    try {
++      const saved = (await io.loadSeats())?.[id]
++      if (saved) seats.set(id, saved)
++      return saved
++    } catch {
++      return undefined
+     }
+   }
+ 
+   return {
+     // agent.spawn:回 { deny } 或 next 的結果
+     async spawn(session: string, sessionCwd: string, e: any, next: (e: any) => Promise<any>): Promise<any> {
+-      const parent = typeof e?.parentAgentId === 'string' ? seats.get(e.parentAgentId) : undefined
++      const parent = typeof e?.parentAgentId === 'string' ? await lookup(e.parentAgentId) : undefined
+       let seat: Seat | null = null
+       if (parent) seat = { ...parent, cwd: typeof e?.cwd === 'string' ? e.cwd : parent.cwd }
+       else {
+         const m = parseMarker(e?.prompt)
+         if (m.kind === 'bad') {
+           return { deny: why('派工', `派工詞第一行像審查席標記但寫壞了:${m.why}。`, '修好第一行再派;不是審查席就拿掉這行。') }
+         }
+         if (m.kind === 'seat') {
+           seat = { loop: m.loop, round: m.round, name: m.name, cwd: typeof e?.cwd === 'string' ? e.cwd : sessionCwd }
+         }
+@@ -225,115 +263,130 @@ export function createGuard(io: Io) {
+       if (!seat) return next(e)
+       const p = pending.get(session) ?? { n: 0, waiters: [] }
+       p.n += 1
+       pending.set(session, p)
+       try {
+         const r = await next(e)
+         if (r && typeof r.agentId === 'string') {
+           seats.set(r.agentId, seat)
+           if (!bySession.has(session)) bySession.set(session, new Set())
+           bySession.get(session)!.add(r.agentId)
++          await save()
+         }
+         return r
+       } finally {
+         release(session)
+       }
+     },
+     // tool.call:回擋下理由或 null(放行)
+     async call(session: string, e: any): Promise<string | null> {
+       const id = e?.agentId
+       if (typeof id !== 'string') return null // 主會談
+-      let seat = seats.get(id)
++      let seat = await lookup(id)
+       if (!seat && pending.has(session)) {
+-        const p = pending.get(session)!
+         let timedOut = false
+-        await Promise.race([
+-          new Promise<void>(res => p.waiters.push(res)),
+-          io.sleep(WAIT_MS).then(() => { timedOut = true }),
+-        ])
+-        seat = seats.get(id)
++        const timer = io.sleep(WAIT_MS).then(() => { timedOut = true })
++        while (!seat && !timedOut && pending.has(session)) {
++          const p = pending.get(session)!
++          await Promise.race([new Promise<void>(res => p.waiters.push(res)), timer])
++          seat = seats.get(id)
++        }
+         if (!seat && timedOut) io.toast(`lumos-guard 逾時放行:子代理 ${id} 等了 ${WAIT_MS / 1000} 秒還沒登記完`)
+       }
+       if (!seat) return null
+       try {
+         return await checkTool(io, seat, e)
+       } catch (err) {
+         if (e?.tool === 'Bash') return why('Bash', `判斷出錯(${String((err as Error)?.message ?? err).slice(0, 100)})。`, '換個寫法再試。')
+         return null // 外掛自己出錯:放行
+       }
+     },
+     end(session: string) {
+       for (const id of bySession.get(session) ?? []) seats.delete(id)
+       bySession.delete(session)
+       const p = pending.get(session)
+       pending.delete(session)
+-      for (const w of p?.waiters ?? []) w()
++      if (p) wake(p)
++      void save()
++    },
++    // 出錯時要不要當審查席處理:已登記,或還有審查席派工在啟動中(查不到時寧可當是)
++    seatish(id: unknown): boolean {
++      if (typeof id !== 'string') return false
++      return seats.has(id) || [...pending.values()].some(p => p.n > 0)
+     },
+     _state: { seat: (id: string) => seats.get(id), pending: (session: string) => pending.get(session)?.n ?? 0 },
+   }
+ }
+ 
+ function makeIo($: any): Io {
+   return {
+     real: async path => (await $.fs.stat(path, { resolve: true })).realPath,
+     now: () => Date.now(),
+     sleep: ms => $.clock.sleep(ms),
+     toast: text => {
+       try { $.ui.toast(text) } catch { /* 沒有介面 */ }
+     },
++    loadSeats: async () => (await $.state.get({ plugin: 'lumos-guard', key: 'seats' })).value ?? {},
++    saveSeats: async seats => { await $.state.set({ plugin: 'lumos-guard', key: 'seats' }, seats) },
+   }
+ }
+ 
+ type State = { guard: ReturnType<typeof createGuard> | null }
+ 
+ async function onSpawn(st: State, $: any, e: any, next: (e: any) => Promise<any>) {
+   let session = ''
+   let cwd = ''
+   try {
+     if (!st.guard) st.guard = createGuard(makeIo($))
+     session = await $.session.id()
+     cwd = await $.session.cwd()
+   } catch {
+     return next(e) // 外掛自己出錯:放行
+   }
+   return st.guard.spawn(session, cwd, e, next)
+ }
+ 
++// 出錯時:審查席(或判不出是不是)的 Bash 擋,其他放行;主會談一律放行
++function seatishOf(st: State, e: any): boolean {
++  if (typeof e?.agentId !== 'string') return false
++  return st.guard === null || st.guard.seatish(e.agentId)
++}
++
+ async function onCall(st: State, $: any, e: any): Promise<string | null> {
+   try {
+     if (!st.guard) st.guard = createGuard(makeIo($))
+     return await st.guard.call(await $.session.id(), e)
+   } catch {
+-    return null
++    return e?.tool === 'Bash' && seatishOf(st, e) ? BASH_ERROR : null
+   }
+ }
+ 
+ async function onEnd(st: State, e: any) {
+   try {
+     st.guard?.end(e.sessionId)
+   } catch { /* 同上 */ }
+ }
+ 
+ // tool.call 掛鉤自己出錯時怎麼辦(S8)。.catch 裡的 next 不會重跑:工具已經跑過(called)就交回原本的結果,
+-// 不謊稱擋下;還沒跑時 Bash 擋、其他工具交下去(型別檔 Caught)
+-export function onCallFailed(e: any, next: any): any {
++// 不謊稱擋下;還沒跑時審查席的 Bash 擋、其他交下去(型別檔 Caught)
++export function onCallFailed(e: any, next: any, seatish: boolean): any {
+   if (next?.called === true) return next(e)
+-  return e?.tool === 'Bash' ? { deny: BASH_ERROR } : next(e)
++  return e?.tool === 'Bash' && seatish ? { deny: BASH_ERROR } : next(e)
+ }
+ 
+ export const register: Register = on => {
+   const st: State = { guard: null }
+ 
+   // 掛鉤自己丟錯時引擎會跳過它(等於放行);.catch 寫明出錯怎麼辦:派工放行,Bash 擋、其他工具放行(S8)
+   on('agent.spawn', async ($, e, next) => onSpawn(st, $, e, next))
+     .catch(($, e, next) => next(e))
+ 
+   on('tool.call', async ($, e, next) => {
+     const deny = await onCall(st, $, e)
+     return deny === null ? next(e) : { deny }
+-  }).catch(($, e, next) => onCallFailed(e, next))
++  }).catch(($, e, next) => onCallFailed(e, next, seatishOf(st, e)))
+ 
+   on('session.end', async ($, e, next) => {
+     await onEnd(st, e)
+     return next(e)
+   })
+ }
+diff --git a/mods/claude/lumos-guard/types/index.d.ts b/mods/claude/lumos-guard/types/index.d.ts
+new file mode 100644
+index 00000000..905e8f45
+--- /dev/null
++++ b/mods/claude/lumos-guard/types/index.d.ts
+@@ -0,0 +1,8 @@
++// lumos-guard 放進 $.state 的值:子代理編號 → 審查席(熱重載後還在,外掛讀回來繼續擋)
++export type GuardSeat = { loop: string; round: string; name: string; cwd: string }
++
++declare module 'claude-code' {
++  interface PluginState {
++    'lumos-guard': { seats: Record<string, GuardSeat> }
++  }
++}
+diff --git a/mods/claude/lumos-ledger/hooks/ledger.test.ts b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+index 97890235..c4313add 100644
+--- a/mods/claude/lumos-ledger/hooks/ledger.test.ts
++++ b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+@@ -1,12 +1,12 @@
+ import { describe, expect, test } from 'claude-code/testing'
+-import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnFields, toolExtra, vaultIn, type Io } from './register'
++import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnEvent, spawnFields, toolExtra, vaultIn, type Io } from './register'
+ import { RULES } from './rules-fixture'
+ 
+ // S13:並行、重新載入、/clear;另驗位置判定、寫入失敗與暫時失敗(Projects/Lumos事件帳_計劃 做法第 2 節)。
+ // 讀寫檔與 git 全用假的:測的是緩衝、塊名、串行佇列這些自己的邏輯,不是引擎。
+ 
+ const MAIN = '/repo'
+ type FakeOpts = {
+   git?: 'ok' | 'not-git' | 'boom' | 'worktree' | 'dubious'
+   vault?: boolean
+   failWrites?: number
+@@ -339,20 +339,25 @@ describe('lumos-ledger 出錯看得見', () => {
+ 
+   test('S12 子代理派孫代理:spawn 事件的 agent 欄是發起的子代理(parentAgentId),不是空的', () => {
+     const child = spawnFields({ parentAgentId: 'sub-1', subagentType: 'general-purpose' }, { model: 'm', agentId: 'grand-1' })
+     expect(child.agent).toBe('sub-1')
+     expect(child.extra.child).toBe('grand-1')
+     const top = spawnFields({ subagentType: 'Explore' }, { deny: 'no' })
+     expect(top.agent).toBe(null)
+     expect(top.extra.denied).toBe(true)
+   })
+ 
++  test('S12 交給 record 的整組參數:發起方是 parentAgentId,不是子代理自己的 agentId', () => {
++    expect(spawnEvent({ parentAgentId: 'sub-1', agentId: 'wrong' }, { agentId: 'grand-1' }))
++      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false }])
++  })
++
+   test('空緩衝不寫空塊', async () => {
+     const f = fakeIo()
+     const l = createLedger(f.io)
+     await l.flushSession('S1')
+     l.add('S1', '/repo', { v: 1, ev: 'tool' })
+     await l.flushSession('S1')
+     await l.flushSession('S1')
+     expect(chunks(f.files).length).toBe(1)
+   })
+ })
+diff --git a/mods/claude/lumos-ledger/hooks/register.ts b/mods/claude/lumos-ledger/hooks/register.ts
+index 4986739a..4b063c07 100644
+--- a/mods/claude/lumos-ledger/hooks/register.ts
++++ b/mods/claude/lumos-ledger/hooks/register.ts
+@@ -321,23 +321,30 @@ export function spawnFields(e: any, r: any): { agent: string | null; extra: Reco
+     agent: e?.parentAgentId ?? null, // 發起方;主迴圈派的沒有(型別檔 AgentSpawnInput)
+     extra: {
+       agent_type: e?.subagentType ?? null,
+       model: r?.model ?? null,
+       child: r?.agentId ?? null,
+       denied: typeof r?.deny === 'string',
+     },
+   }
+ }
+ 
+-async function onSpawn(st: State, $: any, e: any, r: any) {
++// record 要的整組參數(發起方、事件名、欄位)由純函式一次給齊,接線那行只原樣轉交、沒有欄位可以選錯
++// (代碼審 r1:原本測試只測 spawnFields,把接線改回 e.agentId 照綠)
++export function spawnEvent(e: any, r: any): [string | null, string, Record<string, unknown>] {
+   const f = spawnFields(e, r)
+-  await record(st, $, f.agent, 'spawn', f.extra)
++  return [f.agent, 'spawn', f.extra]
++}
++
++async function onSpawn(st: State, $: any, e: any, r: any) {
++  const [agent, ev, extra] = spawnEvent(e, r)
++  await record(st, $, agent, ev, extra)
+ }
+ 
+ // 會談結束:整條鏈共用一個很短的時間上限,只用它的八成;判定沒有快取的塊直接放棄
+ async function onEnd(st: State, $: any, e: any, remainingMs: number) {
+   try {
+     if (st.ledger) {
+       const budget = Math.max(0, Math.floor((Number.isFinite(remainingMs) ? remainingMs : 1000) * 0.8))
+       await Promise.race([st.ledger.flushSessionCachedOnly(e.sessionId), $.clock.sleep(budget)])
+       st.ledger.drop(e.sessionId)
+     }
+diff --git a/scripts/lumos b/scripts/lumos
+index 831765d0..f9eff158 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21915,21 +21915,22 @@ def _same_local_path(a, b):
+ 
+ 
+ def _plugin_sync_msg(state: str, detail: str = "", pid: str = "") -> str:
+     """外掛步驟的狀態→給人看的一行(跟 _sync_msg 同一種 ✓ / ⚠ 前綴)。pid 空 = 整段(市集或找不到 claude)。"""
+     who = f"Claude 外掛 {pid}" if pid else "Claude 外掛"
+     if state == "ok":
+         return f"  ✓ {who} 已就位"
+     if state == "absent":
+         return f"  (略過{who}:{detail or '找不到 claude 指令'})"
+     if state == "no-source":
+-        return f"  (略過{who}:lumos 來源 repo 的 .claude-plugin/marketplace.json 沒有它——{detail})"
++        where = "的 .claude-plugin/marketplace.json 沒有列出它" if pid else "沒有 .claude-plugin/marketplace.json"
++        return f"  (略過{who}:lumos 來源 repo {where}——{detail})"
+     return f"  ⚠ {who} 沒裝好:{detail}"
+ 
+ 
+ def _lumos_plugin_market(claude):
+     return next((x for x in _claude_json(claude, ["plugin", "marketplace", "list", "--json"])
+                  if x.get("name") == _LUMOS_MARKET), None)
+ 
+ 
+ def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
+     """同時跑的另一支 install 可能還在寫:最多再查 tries 次、每次隔 pause 秒;
+@@ -21951,39 +21952,42 @@ def _lumos_plugin_wait(check, tries=3, pause=1.0, budget=10.0):
+ def _lumos_plugin_user(claude, pid):
+     """使用者範圍有沒有裝(專案範圍裝過的那份不算:它只在那個專案生效)。"""
+     return any(x.get("id") == pid and x.get("scope", "user") == "user"
+                for x in _claude_json(claude, ["plugin", "list", "--json"]))
+ 
+ 
+ def _lumos_plugin_listed(src):
+     """來源 repo 市集檔列了哪些外掛(id 形如 名稱@市集);讀不到回空集合。"""
+     import json as _j
+     try:
+-        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+-        return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in mk.get("plugins", []) if isinstance(p, dict)}
+-    except (OSError, ValueError, AttributeError):
++        mk = _j.loads((src / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8-sig"))
++    except (OSError, ValueError):
++        return set()
++    plugins = mk.get("plugins") if isinstance(mk, dict) else None
++    if not isinstance(plugins, list):            # null、數字、物件都當沒列(代碼審 r1)
+         return set()
++    return {f"{p.get('name')}@{_LUMOS_MARKET}" for p in plugins if isinstance(p, dict) and isinstance(p.get("name"), str)}
+ 
+ 
+ def _sync_claude_plugin(source=None) -> str:
+     """確保外掛清單的每一支都裝好。回最差的一支:ok / absent / no-source / failed;
+     自己印訊息(成功與略過到 stdout、失敗到 stderr),各支分開印。"""
+     if os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN") == "1":
+         print(_plugin_sync_msg("absent", "LUMOS_SKIP_CLAUDE_PLUGIN=1"))
+         return "absent"
+     claude = _py_which("claude")
+     if not claude:
+         print(_plugin_sync_msg("absent"))
+         return "absent"
+     src = _lumos_src(source).resolve()      # 相對路徑的 LUMOS_HOME 不能原樣交給 claude(它會照自己的目前目錄解讀)
+     if not (src / ".claude-plugin" / "marketplace.json").is_file():
+-        print(f"  (略過 Claude 外掛:lumos 來源 repo 沒有 .claude-plugin/marketplace.json——{src})")
++        print(_plugin_sync_msg("no-source", str(src)))
+         return "no-source"
+     if src != _lumos_src(None).expanduser().resolve() or os.environ.get("LUMOS_HOME"):
+         print(f"  (Claude 外掛的市集來源:{_events_clean(src)})")    # 來源不是預設位置時讓人看得到
+     step = {"removed_old": False, "added": False}
+     try:
+         if not _lumos_plugin_ensure_market(claude, src, step):
+             print(_plugin_sync_msg("failed", f"已有同名市集 {_LUMOS_MARKET} 但來源不是本機資料夾(可能是你自己加的),不動它"),
+                   file=sys.stderr)
+             return "failed"
+         step["added"] = True
+@@ -22032,21 +22036,25 @@ def _lumos_plugin_ensure_market(claude, src, step):
+ def _lumos_plugin_ensure(claude, pid):
+     """使用者範圍裝上這支外掛,裝完以列表確認真的在;另一支同時在裝時以最終狀態為準。"""
+     if _lumos_plugin_user(claude, pid):
+         return
+     try:
+         _claude_do(claude, ["plugin", "install", pid, "--scope", "user"])
+     except (RuntimeError, subprocess.TimeoutExpired):
+         if not _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid)):
+             raise
+         return
+-    if not (_lumos_plugin_user(claude, pid) or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
++    try:                                     # 第一次查詢撞到另一支同時在寫也交給等待重查(代碼審 r1)
++        seen = _lumos_plugin_user(claude, pid)
++    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++        seen = False
++    if not (seen or _lumos_plugin_wait(lambda: _lumos_plugin_user(claude, pid))):
+         raise RuntimeError("install 回成功但外掛列表裡沒有它")
+ 
+ 
+ def _lumos_plugin_fail_hint(step):
+     """同步外掛失敗時照實說做到哪一步。"""
+     if step["removed_old"] and not step["added"]:
+         return ";舊的市集登記已移除、新的沒加上,外掛暫時都沒生效——修好原因後重跑 lumos install --force"
+     if step["added"]:
+         return ";市集已登記、這支外掛沒裝上,它暫時沒生效——修好原因後重跑 lumos install --force"
+     return ";修好原因後重跑 lumos install --force"
+@@ -22066,21 +22074,29 @@ def _teardown_claude_plugin(source=None) -> str:
+     market_cmd = f"claude plugin marketplace remove {_LUMOS_MARKET} --scope user"
+     for pid in _LUMOS_PLUGINS:               # 只移除使用者範圍那份:專案範圍那份 uninstall 不帶 --scope 會失敗,也不是我們裝的
+         try:
+             if _lumos_plugin_user(claude, pid):
+                 _claude_do(claude, ["plugin", "uninstall", pid, "--scope", "user"])
+                 gone.append(f"外掛 {pid}")
+         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+             errors.append(str(e))
+             todo.append(f"claude plugin uninstall {pid} --scope user")
+     if errors:                               # 有外掛沒移掉:保留市集(移掉市集會讓那支外掛變成找不到來源的孤兒)
+-        todo.append(market_cmd)
++        try:                                 # 確定不是我們的市集就不叫人移除(代碼審 r1);判不出來照列、附一句先確認
++            mk = _lumos_plugin_market(claude)
++            ours = bool(mk and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src))
++        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
++            ours = None
++        if ours:
++            todo.append(market_cmd)
++        elif ours is None:
++            todo.append(f"{market_cmd}    # 先用 claude plugin marketplace list 確認它的來源是 lumos 的資料夾再刪")
+     else:
+         try:
+             mk = _lumos_plugin_market(claude)
+             if mk is not None and mk.get("source") == "directory" and mk.get("path") and _same_local_path(mk["path"], src):
+                 _claude_do(claude, ["plugin", "marketplace", "remove", _LUMOS_MARKET, "--scope", "user"])
+                 gone.append(f"市集 {_LUMOS_MARKET}")
+         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+             errors.append(str(e))
+             todo.append(market_cmd)
+     if errors:                               # 只給還沒做成的那幾步:已移除的再照抄會看到新的錯(代碼審 r3)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 32b8937e..bffbb767 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -69552,21 +69552,21 @@ def t_install_registers_ledger_plugin():
+     check("S6⑥ 外掛失敗不改 install 回傳碼", r.returncode == base_rc, f"rc={r.returncode} base={base_rc} {r.stderr[-300:]}")
+     check("S6⑥ 失敗印到標準錯誤", "lumos-ledger" in r.stderr, r.stderr[-300:])
+     # ⑦ 開關打開 → 整段略過、一個 claude 都不叫
+     env, st, log, src = _fake_claude_env()
+     _with_env(dict(env, LUMOS_SKIP_CLAUDE_PLUGIN="1"), m._sync_claude_plugin, drop=())
+     check("S6⑦ LUMOS_SKIP_CLAUDE_PLUGIN=1 → 不呼叫 claude", calls(log) == [], str(calls(log)))
+ 
+ 
+ def t_teardown_removes_ledger_plugin():
+     """S7:實際跑 `lumos uninstall`(子行程):外掛有列出就移除、市集是我們的就 --scope user 移除(外掛沒列也要);
+-    兩者都沒有不印失敗;失敗附兩個手動指令;LUMOS_PROBE 時整個被擋、不叫 claude。"""
++    兩者都沒有不印失敗;失敗只列還沒做成那幾步的手動指令(外掛移除失敗時保留市集);LUMOS_PROBE 時整個被擋、不叫 claude。"""
+     import os
+     def run(env, extra=None):
+         full = dict(os.environ); full.pop("LUMOS_SKIP_CLAUDE_PLUGIN", None); full.update(env); full.update(extra or {})
+         return subprocess.run([sys.executable, GRAPHCTL, "uninstall"], env=full, capture_output=True, check=False, text=True)
+     calls = lambda log: [l for l in log.read_text(encoding="utf-8").splitlines() if l]
+     def ours(src, plugin=True):
+         return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src)}],
+                 "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True}] if plugin else []}
+     env, st, log, src = _fake_claude_env()
+     st.write_text(__import__("json").dumps(ours(src)), encoding="utf-8")
+@@ -70301,21 +70301,22 @@ def t_guard_plugin_files_valid():
+         check(f"S10 {p.get('name')} 的 source 是 ./ 開頭、指到含描述檔的資料夾",
+               isinstance(src, str) and src.startswith("./") and (pdir / ".claude-plugin" / "plugin.json").is_file(), repr(src))
+     gdir = repo / "mods" / "claude" / "lumos-guard"
+     pj = _j.loads((gdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+     check("S10 描述檔名稱是 lumos-guard", pj.get("name") == "lumos-guard", str(pj))
+     hooks = _j.loads((gdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+     check("S10 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
+     code = (gdir / "hooks" / "register.ts").read_text(encoding="utf-8")
+     banned = [("跑外部指令", r"\$\.process\."), ("改寫事件後交下去", r"next\(\{"), ("寫檔", r"\$\.fs\.(write|append|remove|mkdir)"),
+               ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'"),
+-              ("動回合結果", r"'turn\.complete'"), ("附加對話列", r"\$\.session\.append")]
++              ("動回合結果", r"'turn\.complete'"), ("附加對話列", r"\$\.session\.append"),
++              ("改寫事件欄位", r"\be\??\.[A-Za-z_]\w*\s*(=(?!=)|\+=|-=)"), ("把 e 以外的東西交下去", r"next\((?!e\))")]
+     for what, pat in banned:
+         check(f"S10 不用:{what}", not _re.search(pat, code), pat)
+     check("S10 只掛派工、工具呼叫、會談結束三個事件",
+           sorted(set(_re.findall(r"on\('([a-z.]+)'", code))) == ["agent.spawn", "session.end", "tool.call"],
+           str(_re.findall(r"on\('([a-z.]+)'", code)))
+     # 能擋人的掛鉤都要掛 .catch:沒掛的話掛鉤自己出錯時引擎直接跳過它,等於放行(Claude Code 2.1.290 起 validate 會列出)。
+     # CI 沒有 claude 指令,這一段只在本機有 claude 時查
+     import shutil as _sh
+     claude = _sh.which("claude")
+     if claude:
+@@ -70340,24 +70341,97 @@ def t_seat_templates_carry_marker():
+     seat_re = _re.compile(r"^LUMOS-SEAT:\s*(\S+)$")   # 跟 mods/claude/lumos-guard 的 SEAT_RE 同一條
+     for head in ("## 1. Design-loop 審計員", "## 3. Code-loop reviewer", "## 7.6 架構對齊席派工", "## 7.8 資安席派工"):
+         i = next((k for k, ln in enumerate(L) if ln.startswith(head)), -1)
+         j = next((k for k in range(i + 1, len(L)) if L[k].startswith("```")), -1) if i >= 0 else -1
+         first = next((ln.strip() for ln in L[j + 1:] if ln.strip()), "") if j >= 0 else ""
+         m = seat_re.match(first)
+         check(f"S11 {head} 派工詞第一行是合格的 LUMOS-SEAT", bool(m) and len(m.group(1).split("/")) == 3, first)
+         end = next((k for k in range(j + 1, len(L)) if L[k].startswith("```")), len(L)) if j >= 0 else 0
+         check(f"S11 {head} 派工詞把實驗目錄指到席位工作資料夾", "/tmp/lumos-seat-work/" in "\n".join(L[j:end]), "")
+     body = "\n".join(L)
+-    check("S11 編排者須知寫明席報告暫存處", "/tmp/lumos-seat-staging/" in body, "")
++    check("S11 編排者須知寫明席報告收齊前不寫到硬碟", "收齊前不寫到硬碟" in body, "")
+     check("S11 編排者須知寫明收貨時自己看 repo", "git status" in body and "不報" in body, "")
+ 
+ 
++def t_lumos_plugin_install_review_fixes():
++    """審查席唯讀隔離 代碼審 r1:裝完確認的第一次查詢出錯也交給等待重查;來源沒有市集檔的訊息走共用函式;
++    移除失敗時只有市集是我們的才叫人移除它;市集檔 plugins 欄位怪或檔首有 BOM 不丟例外。"""
++    import contextlib
++    import io
++    import json as _j
++    from unittest import mock
++    m = _load_lumos_inproc()
++    # ① 裝完第一次查詢丟錯(另一支 install 同時在寫):交給等待重查,不判失敗
++    seq = iter([False, RuntimeError("busy")])
++    def user(_c, _pid):
++        x = next(seq)
++        if isinstance(x, Exception):
++            raise x
++        return x
++    with mock.patch.object(m, "_lumos_plugin_user", user), mock.patch.object(m, "_claude_do", lambda *a, **k: None), \
++         mock.patch.object(m, "_lumos_plugin_wait", lambda check, **k: True):
++        try:
++            m._lumos_plugin_ensure("claude", "lumos-guard@lumos-toolchain")
++            ok = True
++        except Exception as e:  # noqa: BLE001 —— 測的就是不得丟例外
++            ok = f"EXC {type(e).__name__}"
++    check("裝完第一次查詢丟錯:交給等待重查、不判失敗", ok is True, str(ok))
++    # ② 來源 repo 沒有市集檔:訊息跟共用函式產生的一字不差
++    env, st, log, src = _fake_claude_env()
++    (src / ".claude-plugin" / "marketplace.json").unlink()
++    out = io.StringIO()
++    with contextlib.redirect_stdout(out):
++        r = _with_env(env, m._sync_claude_plugin)
++    check("來源沒有市集檔的訊息走 _plugin_sync_msg", r == "no-source" and m._plugin_sync_msg("no-source", str(src.resolve())) in out.getvalue(),
++          out.getvalue())
++    # ③ 移除失敗時:市集不是我們的(github 來源)就不叫人移除它;是我們的才列
++    def teardown_err(state, env_extra):
++        env, st, log, src = _fake_claude_env()
++        st.write_text(_j.dumps(state(src)), encoding="utf-8")
++        env.update(env_extra)
++        err = io.StringIO()
++        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
++            r = _with_env(env, m._teardown_claude_plugin)
++        return r, err.getvalue()
++    plugs = [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]
++    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "github", "repo": "x/y"}], "plugins": plugs},
++                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-guard@lumos-toolchain"})
++    check("移除失敗、市集不是我們的:手動指令不列移除市集", r == "failed" and "marketplace remove" not in err, err)
++    r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
++                                       "plugins": plugs},
++                          {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-guard@lumos-toolchain"})
++    check("移除失敗、市集是我們的:手動指令列移除市集", r == "failed" and "marketplace remove lumos-toolchain" in err, err)
++    # ⑤ 回傳取最差:一支來源沒列(no-source)、另一支裝失敗(failed)→ 整體 failed
++    env, st, log, src = _fake_claude_env()
++    mk = src / ".claude-plugin" / "marketplace.json"
++    dd = _j.loads(mk.read_text(encoding="utf-8"))
++    dd["plugins"] = dd["plugins"][:1]
++    mk.write_text(_j.dumps(dd), encoding="utf-8")
++    env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
++    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++        r = _with_env(env, m._sync_claude_plugin)
++    check("回傳取最差:no-source 加 failed → failed", r == "failed", r)
++    # ④ 市集檔怪內容:不丟例外;檔首有 BOM 照樣讀得到
++    d = Path(tempfile.mkdtemp(prefix="gctl-mk-"))
++    (d / ".claude-plugin").mkdir()
++    for raw in ('{"plugins": null}', '{"plugins": 5}', '{"plugins": [5, "x", null]}', "[]", "not json"):
++        (d / ".claude-plugin" / "marketplace.json").write_text(raw, encoding="utf-8")
++        try:
++            got = m._lumos_plugin_listed(d)
++        except Exception as e:  # noqa: BLE001
++            got = f"EXC {type(e).__name__}"
++        check(f"市集檔 {raw!r}:回空集合、不丟例外", got == set(), str(got))
++    (d / ".claude-plugin" / "marketplace.json").write_text(
++        "\ufeff" + _j.dumps({"name": "lumos-toolchain", "plugins": [{"name": "lumos-guard"}]}), encoding="utf-8")
++    check("市集檔檔首有 BOM:照樣讀得到", m._lumos_plugin_listed(d) == {"lumos-guard@lumos-toolchain"}, str(m._lumos_plugin_listed(d)))
++
++
+ def t_ledger_rules_match_reader():
+     """外掛(TypeScript)與讀取端(Python)各寫一份的三條規則,用同一份案例檔 mods/claude/lumos-ledger/hooks/rules-fixture.ts 對齊
+     (代碼審:規則重寫兩份又沒有守衛,一邊改了另一邊不會被擋)。外掛那邊由 ledger.test.ts 跑同一批案例。"""
+     import json as _j
+     import os
+     from unittest import mock
+     _need_src("mods/claude/lumos-ledger/hooks/rules-fixture.ts")
+     m = _load_lumos_inproc()
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     txt = (repo / "mods/claude/lumos-ledger/hooks/rules-fixture.ts").read_text(encoding="utf-8")
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 59c3f99e..14ef4e41 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -25,21 +25,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。擋在問閘、不在 `code-loop pass`:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+    - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`;派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差/base 不在主線→靜默放行;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - **角色鏡頭**:正確性席(standard 單席就是那一席)派工詞另留一行 `LUMOS-ROLE-CARDS: on`,hook 依這次改到前端或後端在框外附角色鏡頭卡(範本 §3 第 5 點;其他席不放這行;Codex 編排的代碼審目前不附,見 [[Projects/代碼審前後端角色鏡頭_計劃]] d4)。
+    - 另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。
+    - **席報告格式**以 lumos-design-loop `templates.md` 的卷證規則為唯一來源,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(反引號必加,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。派工詞照範本寫,收貨就不需要臨場轉格式。
+    - 允許席位做 git 實驗時,派工詞寫明一律 `git -C <臨時目錄>`、不准在 repo 根跑 commit / reset / restore / checkout / stash。
+    派工單落 `rN-dispatch.json`,頂層加 `"base_commit": "<git rev-parse HEAD 的 40 碼>"`(修正關卡的修正紀錄從這裡帶入 `base`)。
+-3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先存進 `/tmp/lumos-seat-staging/<loop>/`(lumos-design-loop templates.md §0;lumos-guard 擋審查席讀這裡)。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
++3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先留在對話裡、不寫到硬碟,同輪全部交回才一次寫進卷證(lumos-design-loop templates.md §0)。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
+    - 記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行、或沒正規化(檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算)都 rc2。`lumos report-normalize <席報告>` 不帶 --write 先看差在哪。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。
+    - 可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現,跑得出來才撈回。
+    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:**席位給的「觀察」和「判準」要分開驗**——席位常常量到的現象對、但「怎麼算才算過」講錯;照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(通常是對的),再自己想一遍什麼條件才算過,不把它的判準當結論。
+    - severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。
+    - **外家席預設不派**(2026-09-30 使用者裁,省外家成本;編制表外家席=條件席):high 五個找問題席都用同門(鏡頭5 補原外家 finder 的名額),辯方也用同門;要另一家視角時(同門意見分歧、碰資安或不可逆操作)才加派外家 finder 或辯方。沒派外家時,收斂結論照實寫成「單家族視角下未發現」;問閘偵測到席位異常會自動轉述當輪(異常才印;外家未派只轉述編制對照、不裁決);全史核對用 `loop status --roster`。
+    - diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點,那些綁定測試會被自動真跑:高風險走 `code-loop check`,紅/懸空/方法名不合法就擋;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了印出來、記帳、不擋(擋下去最可能的結果是人改走 `--no-verify`,零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。紅了要修測試:補一筆 `code-loop pass` 修不好一支紅掉的測試。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+    **修正關卡**(只提醒不擋;[[Projects/代碼審修正關卡第0步_計劃]]):修完先提交,寫修正紀錄 `governance/review-reports/<編號>/rN-fix.json`(骨架:`lumos loop fix-check <編號> --round rN --record-template`;修正動到的檔都列成 `fixed`、每條附守著它的測試),派下一輪全新席之前、或到上限要推之前,跑 `lumos loop fix-check <編號> --round rN`——約 5 分鐘,**在背景跑**(對話裡跑指令預設 2 分鐘上限會砍掉它)。它驗紀錄完整、測試存在、紀錄裡的測試在修正後是綠的、受波及合約測試全綠;跟派全新席掃 delta 並列,不取代。`loop next` 會在最新一輪有修正卻沒驗過時提醒。
+diff --git a/skills/lumos-design-loop/SKILL.md b/skills/lumos-design-loop/SKILL.md
+index a3ed0165..9ecc9dc3 100644
+--- a/skills/lumos-design-loop/SKILL.md
++++ b/skills/lumos-design-loop/SKILL.md
+@@ -17,21 +17,21 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—
+ - 進場前一行 `lumos loop next <編號> --tier standard|high|light --orchestrator claude|codex --spec <計劃.md>`,第一次一定帶 `--tier` 與 `--orchestrator`(誰在編排;外家席=不是編排者那一家),之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」:近名或已翻案的先讀它的 decisions 再開案。
+ 
+ ## 一輪怎麼跑(照這個順序)
+ 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審。
+ 2. **先機械排乾**(每輪):
+    - `lumos refcheck <副本> --repo <根> --json`:引的檔案/行號不存在直接修真檔。
+    - `lumos prose-lint <計劃.md>`:中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」。
+    - `lumos pitfalls <計劃.md> --check`:沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。
+    - **首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**)。①②③與存在類命中=直接修真檔、不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)。
+ 3. **派審查員**:派工詞留一行 `LUMOS-SPEC: <計劃筆記.md>`(hook 自動附上計劃牽連的合約/事故節點與直接連結節點,免手貼);Agent、`model: sonnet`、指向工作副本(Codex 編排時的完整做法:**單源見 `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `loop next … --orchestrator codex`)。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。允許席位做 git 實驗時,派工詞寫明一律 `git -C <臨時目錄>`、不准在 repo 根跑 commit / reset / restore / checkout / stash。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+-4. **收貨三道(全機械,錨不到的不採信)**。**所有席收齊之前不要動被審材料或工作目錄**:先到的席報告先存進 `/tmp/lumos-seat-staging/<loop>/`(templates.md §0;lumos-guard 擋審查席讀這裡);先折會讓後到的席讀到改過的東西、甚至讀到先到那席的報告,「多席獨立一致→直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
++4. **收貨三道(全機械,錨不到的不採信)**。**所有席收齊之前不要動被審材料或工作目錄**:先到的席報告先留在對話裡、不寫到硬碟,同輪全部交回才一次寫進卷證(templates.md §0);先折會讓後到的席讀到改過的東西、甚至讀到先到那席的報告,「多席獨立一致→直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    存席報告先正規化(漏做的機械後果=記帳時 rc2 擋;「報了幾條」要由機器從報告數,格式不對數出來就是假的):
+    - ①檔首第一個非空行=檔級 `severity: <值>`(來源註記放它後面;HTML 註解不跳過;乾淨輪也要一行 `severity: clean`)②每條 finding 恰一行獨立 `severity: <值>`——列表項、粗體、標題嵌等級(`## F1 — MAJOR`)、方括號 `[major]`、`Severity:`/`sev:`/「嚴重度:」全算殘留,rc2 印行號③驗收輪留前輪已折平的舊項時**不留任何 severity 字樣**;引句行、blockquote、``` 圍欄、總結句不算。引句轉成「引句:「…」」同行格式。
+    - 機械那一半:`lumos report-normalize <席報告>` 先印會改什麼,`--write` 只搬格式(把行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不動引句與圍欄;轉不了的印行號要人改)——動的是宣告放在哪一行,不是宣告了什麼,這就是跟「不改證據」的界線。記帳寫側:審查席記帳必附報告、帳面不得低於報告宣告最高;「報了幾條」機器數進帳上 `reported` 欄,沒有旗標可填,`--findings` 不得多於它。
+    然後:
+    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
+    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。
+    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
+    - 三道之外(非取代):編排者對「佐證通道」與錨不到引句做**機械重現**,留痕 `rN-intake.md`(命令+輸出+HIT/MISS;判準與 MISS 處置見 templates.md〈編排者判讀規則〉——此步是人工判讀+機械留痕,不是全機械)。
+ 5. **判讀**:**席位給的「觀察」和「判準」要分開驗**:席位常常量到的現象對、但「該怎麼算才算過」講錯。照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(那通常對),再自己想一遍「什麼條件才算過」,不要把它的判準當結論。
+    - severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index 9cd992cd..48cd344b 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -12,21 +12,21 @@
+ - 編排者判讀規則
+ - §7.5 spec-conformance slot · §7.6 架構對齊席 · §7.7 席位立場與輸出格式 · §7.8 資安席 · §7 平行 panel 派工
+ 
+ **分工**:§1-2 供 `lumos-design-loop`、§3-4 供 `lumos-code-loop`(該 skill 以 `../lumos-design-loop/templates.md` 引用本檔)、§5-6 供 design-loop 收斂後的 subagent-driven TDD 派工。派工以本檔為準;SKILL.md 內嵌 framing 是摘要,漂移時以本檔為權威。
+ 
+ ---
+ 
+ ## 0. 審查席標記與報告暫存處(lumos-guard 外掛;單源=[[Projects/審查席唯讀隔離_計劃]])
+ 
+ - 下面 §1、§3、§7.6、§7.8 的派工詞**第一行**固定是 `LUMOS-SEAT: <loop>/<rN>/<席名>`(換成真值,例 `LUMOS-SEAT: 審查席唯讀隔離/r2/資安-sonnet`),前面不准有別的字。外掛靠這行認出審查席:只准讀取、搜尋、Bash、網路查詢、派一般子代理,寫檔只准 `/tmp/lumos-seat-work/<loop>/<席名>/`,Bash 提到 `gh`、`git push`、`claude`、GitHub API 這類對外動作會被擋。第一行像標記卻寫壞(少一段、全形冒號、小寫)派工會被擋下;漏寫就整席沒有隔離。
+-- 席報告收到時先存 `/tmp/lumos-seat-staging/<loop>/`,同輪全部交回才搬進卷證資料夾;外掛擋審查席讀這個資料夾。
++- 席報告**收齊前不寫到硬碟**:收到時先留在對話裡,同輪全部交回才一次寫進卷證資料夾(決策 d5;硬碟上有別席報告,審查席用 Bash 的 `grep -r`、`cat` 加萬用字元就讀得到,外掛擋不乾淨)。一定要先存時放 `/tmp/lumos-seat-staging/<loop>/`,外掛至少擋 Read 與搜尋。
+ - 外掛**不報** repo 被改:審查席用 Bash 在 repo 裡改檔擋不到。收貨時自己 `git status` 看一次 repo 有沒有被動過。
+ 
+ ## 1. Design-loop 審計員（sonnet;空泛或引句大面積錨不到才升 opus）
+ 
+ ```
+ LUMOS-SEAT: {loop}/{rN}/{席名}
+ (實驗、臨時 repo 一律放 /tmp/lumos-seat-work/{loop}/{席名}/;git 一律 `git -C <那個目錄>`;你的發現直接寫在回答裡,不要寫檔)
+ 你是外部審稿人。以下是一份「外部第三方投稿」的設計 spec（不是本系統/本團隊寫的），
+ 把它當投稿審：逐節讀、主動挑出投稿者自己沒看到的洞。
+ {輪次語境：r1 省略；r2+ 加「這是第 N 版修訂稿（已折入 N-1 輪審計修正）；
+diff --git a/skills/lumos-project-notes/commands/07-安裝維運.md b/skills/lumos-project-notes/commands/07-安裝維運.md
+index 6e1867a8..8d294977 100644
+--- a/skills/lumos-project-notes/commands/07-安裝維運.md
++++ b/skills/lumos-project-notes/commands/07-安裝維運.md
+@@ -1,11 +1,11 @@
+ # 07 安裝維運(人工操作;Claude 除非被要求,不主動跑)
+ 
+ | 情境 | 指令 | 備註 |
+ |---|---|---|
+ | 新機器第一次裝 | `lumos bootstrap`(或 `~/harness/lumos-toolchain/install.sh`) | 裝全域 CLI + skills + 專案接線 |
+ | 新專案要用圖譜 | `lumos init` | 建資料夾、.gitignore、pre-commit/pre-push |
+-| 只裝全域指令 | `lumos install [--force]` / 移除 `lumos uninstall` | symlink 到 ~/.local/bin;找得到 `claude` 指令時也會在使用者層加市集 `lumos-toolchain`、裝 Claude 事件帳外掛 `lumos-ledger`(來源是 `$LUMOS_HOME` 或 ~/harness/lumos-toolchain),移除時一併拿掉 |
++| 只裝全域指令 | `lumos install [--force]` / 移除 `lumos uninstall` | symlink 到 ~/.local/bin;找得到 `claude` 指令時也會在使用者層加市集 `lumos-toolchain`、裝 Claude 外掛 `lumos-ledger`(事件帳)與 `lumos-guard`(審查席隔離)(來源是 `$LUMOS_HOME` 或 ~/harness/lumos-toolchain),移除時一併拿掉 |
+ | 專案裡的工具組舊了 | `lumos update [--allow-stale]`;規範檔要先給人看才能改的專案先跑 `lumos update --dry-run` | 從唯一來源更新;來源拉不到最新會先停。★工具組與 CLAUDE.md、AGENTS.md 的紀律區塊要同一次提交、一起推★:只推工具不推紀律區塊,推送前健康檢查的 [D] 會把「紀律區塊跟範本不同步」算成問題擋下(rtb 2026-10-01 更新 v1.2 時遇到) |
+ | 「這台機器的 lumos 用哪支 Python?提交為什麼說找不到 3.14?」 | `lumos python-path` | 印一支 Python 3.14 以上的絕對路徑(git 掛鉤就是用它挑直譯器);找不到印說明與安裝指令回 2。舊版 `python3` 叫它也行,會自己改用 3.14;`LUMOS_PYTHON` 有設就只認它 |
+ | 專案不用了 | `lumos deinit`(只拆專案層) / `lumos teardown`(連機器全域一起拆,圖譜保留) | 非互動要加 --yes |
+ | 把 sqlfluff / stylelint / dart analyze 輸出接進 lint 適配器 | `sqlfluff … --format json \| lumos sqlfluff-sarif`;`stylelint … --formatter json \| lumos stylelint-sarif`;`dart analyze --format=json … \| lumos dart-sarif`(讀不懂 rc2、不吐空結果) | 轉 SARIF |

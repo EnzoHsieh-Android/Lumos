@@ -1,0 +1,88 @@
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -29467,50 +29467,6 @@
+     return eligible
+ 
+ 
+-def _nodehome_staged_route_tests(repo_root, B, N, changed_paths, tree, vault_rel):
+-    """額外測試路由只讀捕獲樹及既有起點;不改正式檢查、安家或測試名判定。"""
+-    changes = _nodehome_changes(repo_root, B.where, tree)
+-    listing = _nodehome_list(repo_root, tree)
+-    if changes is None or listing is None:
+-        return set()
+-    changed_paths = {p for _c, old_path, new_path in changes for p in (old_path, new_path) if p}
+-    files, all_paths = listing
+-    layouts = (_nodehome_layout(B.all_paths), _nodehome_layout(all_paths))
+-    old = {_nodehome_key(value) for note in B.notes.values() for value in note["about"]}
+-    live = {_nodehome_key(value) for note in N.notes.values() for value in note["about"]}
+-    possible = {p for p in changed_paths & (old | live) if any(_nodehome_is_test(p, view) for view in layouts)}
+-    notes = [rel for rel, note in N.notes.items() if possible & {_nodehome_key(x) for x in note["about"]}]
+-    import time as _t
+-    blobs = _nodehome_cat_blobs_capped(repo_root, [f"{tree}:{vault_rel}/{rel}" for rel in notes],
+-                                      256 * 1024, timeout=5, max_total_bytes=8 * 1024 * 1024,
+-                                      deadline=_t.monotonic() + 5)
+-    if blobs is None:
+-        return set()
+-    captured_by_note = {rel: {_nodehome_key(value) for value in _nodehome_parse_note(raw)["about"]}
+-                        for rel, raw in zip(notes, blobs) if raw is not None}
+-    untrusted = set()
+-    for rel in notes:
+-        claimed = {_nodehome_key(value) for value in N.notes[rel]["about"]} & possible
+-        previous = {_nodehome_key(value) for value in B.notes.get(rel, {}).get("about", [])}
+-        untrusted.update(claimed - previous - captured_by_note.get(rel, set()))
+-    captured = {key for values in captured_by_note.values() for key in values}
+-    # 另一篇合法安家不能替本篇的途中假宣告作證;不确定时只撤回補助路由。
+-    candidates = (possible & (old | captured)) - untrusted
+-    read = _nodehome_reader(repo_root, tree, from_git=True)
+-    config = read(".lumos/config.json")
+-    if config is None and ".lumos/config.json" in all_paths:
+-        return set()
+-    cfg = _nodehome_config(repo_root, config, from_snapshot=True)
+-    skip = frozenset() if _is_toolchain_repo(repo_root) else _vendored_state(repo_root, tree)[0]
+-    routes = _nodehome_route_tests(repo_root, files, all_paths, candidates, tree, cfg, skip, reader=read)
+-    old_read = _nodehome_reader(repo_root, B.where, from_git=True)
+-    old_config = old_read(".lumos/config.json")
+-    if old_config is not None or ".lumos/config.json" not in B.all_paths:
+-        old_cfg = _nodehome_config(repo_root, old_config, from_snapshot=True)
+-        old_skip = frozenset() if B.where is None or _is_toolchain_repo(repo_root) else _vendored_state(repo_root, B.where)[0]
+-        routes.update(_nodehome_route_tests(repo_root, B.files, B.all_paths, candidates, B.where, old_cfg, old_skip,
+-                                           reader=old_read))
+-    return routes
+ 
+ 
+ def _nodehome_group_route_tests(repo_root, group, notes, route_cache, cfg, skip):
+@@ -30001,8 +29957,7 @@
+             return 0
+         head = _lens_full_sha(root, "HEAD")
+         base_where, tip_where, mode_word = head, "index", "這次提交"
+-        index_before = _nodehome_git(root, "write-tree")
+-        index_tree = index_before.decode("ascii").strip() if index_before else None
++        index_before = _nodehome_git(root, "ls-files", "-s", "-z")
+         changes = _nodehome_changes(root, head, "index")
+     else:
+         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
+@@ -30073,10 +30028,20 @@
+     groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
+                                                                  tag_judge=tag_judge, route_cfg=cfg, route_skip=skip)
+     staged_route_tests = set()
+-    if staged and index_tree:
+-        staged_route_tests = _nodehome_staged_route_tests(root, B, N, changed_paths, index_tree, vault_rel)
+-        if staged_route_tests and _nodehome_git(root, "write-tree") != index_before:
+-            staged_route_tests.clear()                     # 只撤回額外證據;正式裁判與 fail-open 政策維持
++    if staged:
++        candidates = set()
++        for side in (N, B):
++            for note in side.notes.values():
++                for value in note["about"]:
++                    key = _nodehome_key(value)
++                    if key in changed_paths:
++                        candidates.add(key)
++        for side in (N, B):
++            staged_route_tests.update(_nodehome_route_tests(
++                root, side.files, side.all_paths, candidates, side.where, cfg, skip,
++                reader=_nodehome_reader(root, side.where, from_git=True)))
++        if staged_route_tests and (index_before is None or _nodehome_git(root, "ls-files", "-s", "-z") != index_before):
++            staged_route_tests.clear()                     # 觀察到索引變動時撤回借用證據,不改既有正式程式退路
+             print("提醒:暫存區在檢查期間變動或讀不到,額外測試寫回證據不採信;請重新檢查。", file=sys.stderr)
+     res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge,
+                              staged_route_tests=staged_route_tests)

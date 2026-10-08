@@ -14,11 +14,13 @@
 | 中文查詢 | 概念之間加空白:`作廢 收回 點數`,不要 `作廢訂單點數怎麼收回` | 黏成一串當片語比對,幾乎必定 0 筆 |
 | 「這篇筆記完整內容」 | `lumos show <節點>` | search 只給索引行,下結論前要讀全文 |
 | 「最近誰改了什麼 / 現在在做什麼」 | `lumos recent --days 7`、`lumos query --tag status/doing` | git log 看不到圖譜層的進度 |
-| 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行 |
+| 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行;推送時 drift check 的舊句檢查 m1 也會列出這次消失的名稱筆記還在講的句子,照 `commands/04-自檢與健康.md` 處理 |
 | 「當初為什麼做這個決定?後來翻案了嗎?」 | `lumos decisions <節點> [--superseded]` | 決策是結構化欄位,grep 散文抓不全 |
 | 「設計寫完要進審之前,這份退得回嗎、條款句式對嗎、跑起來紅綠?」 | `lumos spec-gate <計劃節點>` | 先判門:風險高→句式/綁定/回退節擋、紅綠只印、再進審;風險低(四行已排除+沒命中硬訊號)→不派審,沒標 keeps 的條款各自紅才放行並留痕;相依回歸紅就擋 |
 | 「這個計劃的條款每條綁了測試沒、哪條還沒標?」 | `lumos spec-trace <計劃節點>` | 裁決看條款那一行的 [test:]/[manual:];舊制「驗證筆記回指」欄只當對照 |
 | 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>` | git status 看得到檔、看不到上一輪在動什麼與人最後說了什麼;逐字稿在本機,指令自己找(排掉自己這個 session)、缺就印「意圖不可得」 |
+| 「比較審查流程有沒有改善?」 | 開 `commands/06-代碼審與推送.md`〈離線比較審查收斂〉 | 先看修復、保留與新缺陷,再看輪數 |
+| 「Claude 會談做了什麼?」 | `lumos events` | 讀外掛事件帳;Codex 沒有 |
 | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
 | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
 | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
@@ -28,17 +30,17 @@
 
 | 你正在… | 開這個子檔 | 裡面有 |
 |---|---|---|
-| 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
+| 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
 | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
-| 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
-| 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / drift scan·fix·ack(存量漂移:列出、用工具改掉、表態照留) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
-| 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add·kill / ci-wait / ci-status |
-| 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+| 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+| 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots(診斷;啟用看07) / doctor / stale / gov / drift-history / drift exam(工具鏈考卷重放) / drift scan·fix·ack(存量漂移:列出、工具改、照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+| 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
+| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range / 離線收斂評測 |
+| 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
 | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
 | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
 
 ## 三、三條不變的規矩
-1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
-2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別寫(會過期;新寫的程式行號引用、沒帶 `[來源:…]` 的 FACT/FLOW/DEP 提交時會被擋),程式碼答不了的現況才寫、同一行帶 `[來源:部署|資料庫|生產|外部|人工]`;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+1. **先讀程式碼,再查脈絡**(理由、限制、事故)。改 code 前跑 `lumos impact --file <檔>`;不解釋可以,不查不行。筆記與程式衝突怎麼裁,照專案 CLAUDE.md／AGENTS.md 的紀律區塊。
+2. 改了會影響行為、決策、驗證的 code,當次寫回圖譜。**先問程式碼推不推得出來**:推得出來的別抄;程式碼答不了的現況同一行帶 `[來源:…]`;理由用 `WHY:`、限制用 `RULE:`(退場條件)、事故用 `PITFALL:`(防回歸)。刪除的測試改 `[test-gone:名稱]`。詳見 `commands/03-寫回圖譜.md`。
 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。

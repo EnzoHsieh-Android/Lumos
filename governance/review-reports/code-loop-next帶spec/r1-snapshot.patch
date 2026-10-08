@@ -1,0 +1,103 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 9ecbc842..6cf9c3e4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -13213,29 +13213,39 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                                                  f"(2026-08-25 以前定錨的舊 panel 帳要改用 --gate --panel)"})
+         _older = next((r["spec_path"] for r in reversed(rounds)
+                        if isinstance(r.get("spec_path"), str) and r["spec_path"].strip()), None)
+         if _older:
+             return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關。"
+                                                  f"★最後一輪沒記材料★(更早的輪次記過 {_older},但那不是這一輪審的東西),"
+                                                  "所以指令補不完——要自己找出這一輪的材料再帶 --spec"})
+         return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"
+                                              "(帳上也沒記這個迴圈在審什麼,要自己找)"})
+     # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
++    # ★新迴圈問處置閘,不問 panel 閘★(Issues/loop-next帶spec誤走退役panel閘):panel 閘 2026-08-25 退役後
++    # 只供舊迴圈回放,新編號問它一定 rc2——lumos-code-loop 手冊第 1 步教的 `loop next … --spec` 因此照做必擋。
++    # 判法與 panel 閘自己拒判的那支同一支(_panel_retired_for),兩邊不會對「新舊」有不同意見。
++    disposal = panel_fmt and not light and _panel_retired_for(rounds)
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+-        rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
+-                             spec=spec, repo=repo, panel=(panel_fmt and not light),
+-                             light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
++        if disposal:   # 處置閘是獨立的一套,不收 need/min-seats(那是 panel 閘的參數)
++            rc = cmd_loop_status(env, loop_id, spec=spec, repo=repo, disposal=True)
++        else:
++            rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
++                                 spec=spec, repo=repo, panel=(panel_fmt and not light),
++                                 light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+     if rc == 2:
+         sys.stderr.write(buf.getvalue())
+         return 2
+     if rc == 0:
++        if disposal:
++            _loop_gov_mark(env, loop_id, "converged", "loop next 判處置閘通過")
++            return emit("converged", {"gate_basis": "處置閘通過(每個發現都折入或附理由放行、留痕可重算、引句錨定)"})
+         _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
+         return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
+     # ③ cap(資訊充分且未 PASS)
+     if rounds_count >= cap:
+         _loop_gov_mark(env, loop_id, "cap-reached", f"cap={cap} tier={eff_tier}")
+         return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去"})
+     # ④ plant-canary
+     return emit("plant-canary")
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 02e3a71c..2785c049 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -24524,20 +24524,51 @@ def t_loop_next_disposal_cmd_actually_runs():
+     check("★record_cmd 模板真的跑得動(rc0)★", rrec.returncode == 0, f"rc={rrec.returncode} {rrec.stderr[:200]}")
+     rr = run(v, *argv[1:])
+     check("★disposal_cmd 模板真的跑得動(rc0)★", rr.returncode == 0,
+           f"rc={rr.returncode} {rr.stderr[:200]}")
+     g = (d["disposal_gate"].replace("<計劃節點.md>", str(spec)).replace("<root>", str(v.parent)))
+     rg = run(v, *g.split()[1:])
+     check("★disposal_gate 模板跑得動且對剛記的帳給出判定(rc0/1 非 rc2)★", rg.returncode in (0, 1),
+           f"rc={rg.returncode} {rg.stderr[:200]}")
+ 
+ 
++def t_loop_next_spec_uses_disposal_gate_for_new_loops():
++    """loop next 帶 --spec 時代問的閘:2026-08-25 之後開的新編號問處置閘,不走已退役的 panel 閘
++    (Issues/loop-next帶spec誤走退役panel閘:原本照 lumos-code-loop 手冊第 1 步帶 --spec 必被「panel 閘僅供舊迴圈回放」擋 rc2);
++    舊編號(退役日之前定錨)照舊走 panel 閘回放。"""
++    import json as _j
++    import os as _os
++    v = mkvault()
++    spec = v / "Projects" / "nxspec.md"
++    spec.write_text("nx spec\n規則甲:這是一段足夠長的內容當引句。\n", encoding="utf-8")
++    h = _sha256_of(spec)
++    rpt = v / "Projects" / "nxrpt.md"
++    rpt.write_text("severity: minor\n## F1 甲\nseverity: minor\n引句：「規則甲:這是一段足夠長的內容當引句。」\n", encoding="utf-8")
++    lid = f"nx-{_M1U}"
++    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "正確性-s", "--severity", "minor",
++        "--findings", "1", "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none",
++        "--report", str(rpt), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
++        "--tier", "standard", "--orchestrator", "claude", "--scope-lines", "10", expect_rc=0)
++    # 測試總檔開頭把退役日凍在 9999(所有編號都算舊迴圈),這個 bug 因此一直沒被全套抓到;新迴圈要自己把退役日拉到過去
++    env_new = dict(_os.environ, LUMOS_PANEL_RETIRE_CUTOFF="2000-01-01")
++    r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "next", lid, "--spec", str(spec),
++                        "--repo", str(v.parent), "--json"], capture_output=True, text=True, env=env_new)
++    check("★新編號帶 --spec 不被退役的 panel 閘擋(rc0、沒有 panel 閘字樣)★",
++          r.returncode == 0 and "panel 閘" not in r.stderr, f"rc={r.returncode} {r.stderr[:300]} OUT={r.stdout[:300]}")
++    d = _j.loads(r.stdout) if r.returncode == 0 else {}
++    check("★處置閘判過 → phase=converged★", d.get("phase") == "converged", str(d)[:300])
++    r2 = run(v, "loop", "next", lid, "--spec", str(spec), "--repo", str(v.parent), "--json")   # 總檔預設:舊迴圈
++    d2 = _j.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
++    check("舊編號(退役日之前)照舊走 panel 閘回放:不拿處置閘當收斂依據", r2.returncode != 2
++          and d2.get("phase") != "converged", f"rc={r2.returncode} {str(d2)[:200]} {r2.stderr[:200]}")
++
++
+ def t_disposal_loop_requires_provenance():
+     """[T6 收緊](plan:design-loop重設計_實作計畫 T6)
+ 
+     定錨規則(同 M2 cluster 前例):loop ★首筆帶 findings_set 的記錄★定錨為 disposal loop;
+     定錨後該 loop 後續 record ★必帶 --report+--snapshot★,缺=rc2(寫側擋)。
+     ★舊 loop/未定錨 loop 完全不受影響★(相容鐵則)。
+     翻紅釘:把強制檢查還原掉 → 「定錨後缺 report 必 rc2」翻紅。"""
+     v = mkvault()
+     d = v / "Projects"
+     rpt = d / "t6r.md"; rpt.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")

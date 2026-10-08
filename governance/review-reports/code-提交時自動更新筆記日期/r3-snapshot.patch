@@ -1,0 +1,269 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/提交時自動更新筆記日期_計劃.md b/docs/lumos-toolchain-knowledge/Projects/提交時自動更新筆記日期_計劃.md
+index a1b86b4f..dc136ce5 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/提交時自動更新筆記日期_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/提交時自動更新筆記日期_計劃.md
+@@ -20,21 +20,21 @@ summary: |-
+ 
+ 白話:每篇筆記開頭有一欄 `updated`(最後更新日期),靠人改完內容記得改它,常常忘。這次讓 doctor(健檢)把「`updated` 比 git 上那一篇最後一次改動還舊」的筆記列出來,再給一條指令 `lumos updated-sync`,一次把列出來的改成今天。不在提交時偷偷改檔,所以不碰提交流程、不影響設計審的指紋。
+ 
+ 依據:Enzo 2026-10-06 兩次裁定——先選「提交時自動改」,設計審 r1 指出它會讓已通過的設計審失效等代價後,改選「健檢列出加一鍵修」。
+ 
+ PRIOR-ART: `git_last_change_dates(repo_root, vault)` 已經一次 `git log` 拿到圖譜底下每篇的最後改動日期(2026-08-23 為工具清單 #5 做的,目前沒有呼叫者);doctor 的提醒段(warn_soft)與其他「列出加指令」的形狀照既有寫法;寫檔照 `lumos set` 的寫入原語(`_vault_write_lock`、`load_raw_for_edit`、`atomic_write_verify`)。
+ RETIRE-IF: 2027-01-06 起連續兩次 doctor 在本工具鏈與 rtb 都列出 0 篇落後(大家已經習慣改或用指令),就把 doctor 那一行降成只在 --verbose 印。
+ 
+ ## 範圍
+ 
+-- 做:doctor 多一行提醒(只提醒不擋):圖譜裡有 `updated:` 欄、而且它早於 git 上那一篇最後一次提交日期的筆記,印筆數與前 3 篇,附一條指令 `lumos updated-sync --stale`。git 不可用(不是 repo、git 失敗)就不印。
++- 做:doctor 多一行提醒(只提醒不擋):圖譜裡有 `updated:` 欄、而且它比 git 上那一篇最後一次提交日期早超過一天的筆記(早一天以內不算:今天改、隔天才提交是正常的),印筆數與前 3 篇,附一條指令 `lumos updated-sync --stale`。git 不可用(不是 repo、git 失敗)或淺複製(只有最近幾個提交,每篇的 git 日期會變成同一天)就不印。
+ - 做:新指令 `lumos updated-sync <節點>… | --stale [--dry-run]`:把指定的筆記(或 doctor 那一行列的全部)開頭 `updated:` 改成今天(本機日期,專案慣例 `datetime.now(timezone.utc).astimezone().date()`);沒有 `updated:` 欄的不加;已是今天的跳過;印改了哪幾篇。寫入照 `lumos set` 的寫入原語,一篇一篇寫,任一篇失敗印原因、其他照寫,最後 rc 非 0。
+ - 做:指令說明字典、skill 總目錄與速查(`commands/03-寫回圖譜.md`、`04-自檢與健康.md`)、指令總數同步。
+ - 不做:提交時自動改、推送前或 CI 擋。
+ - 不做:判斷「正文改過」還是「只改了開頭其他欄位」(git 最後改動日期不分);只改了狀態而沒改日期的也會被列,改成今天即可。
+ 
+ ## 做法
+ 
+ 1. doctor:`git_last_change_dates(repo_root, vault)` 拿表;對 env.notes 裡每篇有 `updated` 的,`updated`(只認 YYYY-MM-DD)早於表裡那篇的日期 → 落後;印一行 `updated 落後 git 最後改動的筆記 N 篇(例:…)——lumos updated-sync --stale 一次改成今天`;0 篇不印。
+ 2. `cmd_updated_sync(env, nodes, stale, dry_run)`:`--stale` 用同一支判落後的函式取清單;節點名用 `env.find`(找不到走 `_node_not_found`)。每篇走 `_cmd_set_locked(env, rel, "updated", 今天)`(set 已有的寫入路徑,含鎖、自驗、原子寫入)。
+ 3. 判落後抽成一支 `_updated_stale_notes(env, repo_root)`,doctor 與指令共用。
+@@ -59,16 +59,16 @@ RETIRE-IF: 2027-01-06 起連續兩次 doctor 在本工具鏈與 rtb 都列出 0
+ 
+ 退回本案的提交即可:只多一行 doctor 提醒與一個手動指令,不改既有指令與資料格式。
+ 
+ ## 天花板
+ 
+ 1. git 最後改動日期不分正文或開頭欄位,只改狀態沒改日期的也會被列。
+ 2. 只提醒,不擋;沒人看 doctor 就照舊落後。
+ 
+ ## 實作紀錄
+ 
+-- 2026-10-06:實作前先跑規格閘留下三條條款全紅的紀錄,再照做法 1–3 實作;3 支測試、指令索引與指令數守衛全綠。實作時踩到 `git_last_change_dates` 的既有缺陷:專案根解析成實體路徑、圖譜路徑沒有,macOS 暫存目錄下整張日期表靜默變空(它之前沒有呼叫者);改成兩邊都先解析,寫進 [[Systems/lumos-cli-write]] 的 PITFALL。翻紅驗證 6 處(doctor 不列、改成別的日期、沒有 updated 也改、找不到就整批停、dry-run 照寫、路徑不解析)各自讓對應測試紅;「沒有 updated 也改」第一版測試走不到那個分支(--stale 不挑沒日期的筆記),補了直接指定那篇的案例。測試裡沒用到的變數(三處)改成底線開頭(新增告警閘)。
++- 2026-10-06:實作前先跑規格閘留下三條條款全紅的紀錄,再照做法 1–3 實作;3 支測試、指令索引與指令數守衛全綠。實作時踩到 `git_last_change_dates` 的既有缺陷:專案根解析成實體路徑、圖譜路徑沒有,macOS 暫存目錄下整張日期表靜默變空(它之前沒有呼叫者);改成兩邊都先解析,寫進 [[Systems/lumos-cli-write]] 的 PITFALL。代碼審 r1(兩席 4 條,1 major)全折:淺複製不判(席位用 depth 1 clone 重現整張日期表變同一天)、早一天以內不算(跨午夜提交不重列)、updated 空值的訊息、分派補例外兜底。r2(一席 2 條 minor)全折:一篇寫入丟例外時其他篇照改、rc 非 0;updated 是不存在的日期時當成落後列出。翻紅驗證 6 處(doctor 不列、改成別的日期、沒有 updated 也改、找不到就整批停、dry-run 照寫、路徑不解析)各自讓對應測試紅;「沒有 updated 也改」第一版測試走不到那個分支(--stale 不挑沒日期的筆記),補了直接指定那篇的案例。測試裡沒用到的變數(三處)改成底線開頭(新增告警閘)。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-06,6 席):45 條/blocking 20/提交時自動改的版本被實測出四類代價:設計審整檔指紋會被隔天自動改日期弄失效、doctor 翻案提醒會被悄悄消掉、git 給掛鉤的索引在指定路徑提交/-a/worktree 各不同、多會談共用工作目錄時掛鉤 git add 會帶進別人的半成品;另有檔名萬用字元、CRLF、amend 基準、400 篇 29 秒等細節。Enzo 改裁健檢列出加一鍵修,這些都隨掛鉤一起拿掉。例:計劃筆記昨天設計審通過、今天改一個字提交 → 第一版會自動改 updated、處置閘報審後被改;新版不碰提交。
+ - 卷證:governance/review-reports/提交時自動更新筆記日期/
+diff --git a/scripts/lumos b/scripts/lumos
+index a03c28f8..59068d94 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18024,28 +18024,39 @@ def _vault_write_lock(vault):
+             try:   # 只刪自己的鎖(若檔名已被別的程序換入,不可刪它)
+                 if lock.read_text(encoding="utf-8").split("\n", 1)[0] == str(os.getpid()):
+                     lock.unlink()
+             except OSError:
+                 pass
+     return _cm()
+ 
+ 
+ def _updated_stale_notes(env, repo_root):
+     """開頭 updated(YYYY-MM-DD)早於 git 上那一篇最後一次提交日期的筆記 → [(圖譜內路徑, updated, git 日期)],照路徑排序。
+-    git 不可用(不是 repo、失敗)時 git_last_change_dates 回空表,這裡就回 []。doctor 的 U 段與 updated-sync --stale 共用。"""
+-    dates = git_last_change_dates(repo_root, env.vault) if repo_root else {}
++    git 不可用(不是 repo、失敗)時 git_last_change_dates 回空表,這裡就回 []。doctor 的 U 段與 updated-sync --stale 共用。
++    ★淺複製不判★:只有最近幾個提交時,每篇的 git 日期都變成同一天,會誤列大批、勸人蓋掉真日期(代碼審 r1 正確性席 F1)。
++    ★早一天以內不算★:今天跑 updated-sync、隔天才提交時,git 日期比 updated 晚一天,不該再被列(代碼審 r1 正確性席 F3)。"""
++    import datetime as _dt
++    if not repo_root or _git_is_shallow(repo_root):
++        return []
++    dates = git_last_change_dates(repo_root, env.vault)
+     out = []
+     for rel, n in sorted(env.notes.items()):
+         if _note_unreadable(n):
+             continue
+         u, g = _drift_str(n, "updated"), dates.get(rel)
+-        if g and re.fullmatch(r"\d{4}-\d{2}-\d{2}", u) and u < g:
++        if not (g and re.fullmatch(r"\d{4}-\d{2}-\d{2}", u)):
++            continue
++        try:
++            lag = (_dt.date.fromisoformat(g) - _dt.date.fromisoformat(u)).days
++        except ValueError:      # 形狀像日期但不存在(2026-02-30):當成落後列出,一鍵修會改成今天(代碼審 r2 回歸席 F2)
++            lag = 2
++        if lag > 1:
+             out.append((rel, u, g))
+     return out
+ 
+ 
+ def cmd_updated_sync(env, nodes, stale=False, dry_run=False):
+     """lumos updated-sync <節點>… | --stale [--dry-run]:把筆記開頭的 updated 改成今天(Projects/提交時自動更新筆記日期_計劃)。
+     --stale 取 doctor U 段列的那幾篇;寫入一篇一篇走 cmd_set(鎖、自驗、原子寫入);找不到的節點給近名候選、其他照改、
+     最後 rc 非 0;沒有 updated 欄的不加;已是今天的跳過。"""
+     import datetime as _dt
+     if not nodes and not stale:
+@@ -18057,29 +18068,33 @@ def cmd_updated_sync(env, nodes, stale=False, dry_run=False):
+         rels += [r for r, _u, _g in _updated_stale_notes(env, _vault_repo_root(env))]
+     for nd in nodes:
+         rel = env.find(nd)
+         if rel is None:
+             rc = max(rc, _node_not_found(env, nd, write_side=True))
+             continue
+         rels.append(rel)
+     for rel in dict.fromkeys(rels):
+         u = _drift_str(env.notes.get(rel), "updated")
+         if not u:
+-            print(f"跳過 {rel[:-3]}:開頭沒有 updated 欄(不加)")
++            print(f"跳過 {rel[:-3]}:開頭沒有 updated 欄或是空的(不加)")
+             continue
+         if u == today:
+             print(f"跳過 {rel[:-3]}:updated 已是今天")
+             continue
+         if dry_run:
+             print(f"會改 {rel[:-3]}:updated {u} → {today}")
+             continue
+-        rc = max(rc, cmd_set(env, rel, "updated", today))
++        try:            # 一篇失敗不影響其他篇(代碼審 r2 回歸席 F1)
++            rc = max(rc, cmd_set(env, rel, "updated", today))
++        except (ValueError, RuntimeError) as ex:
++            print(f"擋下 {rel[:-3]}:{ex}", file=sys.stderr)
++            rc = max(rc, 2)
+     if not rels and not rc:
+         print("沒有要改的筆記")
+     return rc
+ 
+ 
+ def cmd_set(env, rel, key, value):
+     with _vault_write_lock(env.vault):
+         return _cmd_set_locked(env, rel, key, value)
+ 
+ 
+@@ -48300,21 +48315,25 @@ def main():
+                                  tracked_in=args.dr_tracked)
+         if args.drcmd == "fix":
+             return cmd_drift_fix(env, args.dr_node, args.dr_line, args.dr_kind,
+                                  {"dry_run": args.dr_dry, "date": args.dr_date, "close": args.dr_close,
+                                   "keep": args.dr_keep, "status": args.dr_status, "reason": args.dr_reason,
+                                   "by": args.dr_by, "settled": args.dr_settled, "decision": args.dr_decision,
+                                   "keep_revisits": args.dr_keep_revisits})
+         print(f"擋下:不認得的 drift 子命令 {args.drcmd}", file=sys.stderr)
+         return 2
+     if args.cmd == "updated-sync":
+-        return cmd_updated_sync(env, args.nodes, stale=args.us_stale, dry_run=args.us_dry)
++        try:            # 同 set/append/remove:寫入原語丟的 ValueError/RuntimeError 轉成擋下訊息、rc2,不印堆疊
++            return cmd_updated_sync(env, args.nodes, stale=args.us_stale, dry_run=args.us_dry)
++        except (ValueError, RuntimeError) as ex:
++            print(f"擋下:{ex}", file=sys.stderr)
++            return 2
+     if args.cmd in ("set", "append", "remove"):
+         rel = env.find(args.note)
+         if rel is None:
+             return _node_not_found(env, args.note, write_side=True)
+         try:
+             if args.cmd == "set":
+                 rc = cmd_set(env, rel, args.key, args.value)
+                 if rc == 0 and args.key == "status":
+                     # 計劃收尾時列連帶待辦(存量漂移防線 [S6]):只多印、不擋、不寫;env 是改之前載入的,連結沒變
+                     _v = args.value[0] if isinstance(args.value, list) and len(args.value) == 1 else args.value
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ef71b76f..af270750 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -32584,39 +32584,61 @@ def t_doctor_updated_stale():
+     r = run(v, "doctor")
+     out = r.stdout + r.stderr
+     check("①兩篇落後:印筆數、例子、指令", "updated 落後" in out and "2 篇" in out and "Systems/Pay" in out
+           and "lumos updated-sync --stale" in out, out[-1200:])
+     for n in ("Pay", "Ship"):
+         p = v / "Systems" / f"{n}.md"
+         p.write_text(p.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {_us_today()}"), encoding="utf-8")
+     _nh_commit(root, "bump")
+     r = run(v, "doctor")
+     check("②都改成今天後:不印", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-800:])
++    # ③淺複製(只有最近一個提交):日期表全變同一天、判不準 → 不印(代碼審 r1 正確性席 F1)
++    import subprocess as _sp
++    root, v = _us_repo()
++    (root / "README.md").write_text("x\n")
++    _nh_commit(root, "later")
++    sh = Path(tempfile.mkdtemp(prefix="gctl-us-shallow-")) / "c"
++    _sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
++    r = run(sh / "docs" / "kg-knowledge", "doctor")
++    check("③淺複製:不印 updated 落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
++    r = run(sh / "docs" / "kg-knowledge", "updated-sync", "--stale", "--dry-run")
++    check("③淺複製:--stale 沒有要改的", "會改" not in r.stdout, r.stdout + r.stderr)
++    # ④只落後一天(跨午夜才提交):不算(代碼審 r1 正確性席 F3)
++    import datetime as _dt, os as _os
++    root, v = _us_repo()
++    y = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
++    for n in ("Pay", "Ship"):
++        q = v / "Systems" / f"{n}.md"
++        q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", f"updated: {y}"), encoding="utf-8")
++    _nh_git(root, "add", "-A")
++    _sp.run(["git", "-C", str(root), "commit", "-qm", "y"], capture_output=True, env=dict(_os.environ, GIT_COMMITTER_DATE=f"{_dt.date.today().isoformat()}T12:00:00"))
++    r = run(v, "doctor")
++    check("④updated 只比 git 日期早一天:不算落後", "updated 落後" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-600:])
+     print("  ✓ t_doctor_updated_stale")
+ 
+ 
+ def t_updated_sync_stale():
+     """[updated 落後 S2] updated-sync --stale → 落後的每篇改成今天、其他欄位與正文不動;沒有 updated 欄的不加;已是今天的跳過。
+     翻紅釘:改成 git 日期而非今天 → ①紅;沒有 updated 也加 → ③紅。"""
+     print("t_updated_sync_stale")
+     _root, v = _us_repo()
+     before = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
+     r = run(v, "updated-sync", "--stale")
+     check("①兩篇改成今天", r.returncode == 0 and _us_updated(v, "Systems/Pay.md") == _us_today()
+           and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
+     after = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
+     check("②只動 updated 那一行", [ln for ln in before.split("\n") if not ln.startswith("updated:")]
+           == [ln for ln in after.split("\n") if not ln.startswith("updated:")], after[:300])
+     check("③沒有 updated 欄的不加(--stale 本來就不挑它)", _us_updated(v, "Systems/NoDate.md") is None,
+           (v / "Systems" / "NoDate.md").read_text())
+     r = run(v, "updated-sync", "Systems/NoDate")
+-    check("③b直接指定沒有 updated 欄的那篇:跳過、不加", r.returncode == 0 and "沒有 updated 欄" in r.stdout
++    check("③b直接指定沒有 updated 欄的那篇:跳過、不加", r.returncode == 0 and "沒有 updated 欄或是空的" in r.stdout
+           and _us_updated(v, "Systems/NoDate.md") is None, r.stdout + r.stderr)
+     r = run(v, "updated-sync", "--stale")
+     check("④再跑一次(都已是今天、但還沒提交):照樣改成今天、不報錯", r.returncode == 0, r.stdout + r.stderr)
+     print("  ✓ t_updated_sync_stale")
+ 
+ 
+ def t_updated_sync_nodes():
+     """[updated 落後 S3] 指定節點只改那一篇;找不到的走近名候選、rc 非 0、其他照改;--dry-run 只印不寫。
+     翻紅釘:找不到就整批停 → ②紅;--dry-run 照寫 → ③紅。"""
+     print("t_updated_sync_nodes")
+@@ -32626,20 +32648,46 @@ def t_updated_sync_nodes():
+           and _us_updated(v, "Systems/Ship.md") == "2026-09-11", r.stdout + r.stderr)
+     r = run(v, "updated-sync", "Systems/不存在", "Systems/Ship")
+     check("②找不到的走近名候選、rc 非 0、其他照改", r.returncode != 0 and "找不到叫「Systems/不存在」的筆記" in r.stdout + r.stderr
+           and _us_updated(v, "Systems/Ship.md") == _us_today(), r.stdout + r.stderr)
+     _root, v = _us_repo()
+     r = run(v, "updated-sync", "--stale", "--dry-run")
+     check("③--dry-run:印會改哪幾篇、不寫", r.returncode == 0 and "Systems/Pay" in r.stdout
+           and _us_updated(v, "Systems/Pay.md") == "2026-09-11", r.stdout + r.stderr)
+     r = run(v, "updated-sync")
+     check("④沒給節點也沒給 --stale:rc2", r.returncode == 2, r.stdout + r.stderr)
++    # ⑤一篇寫入時丟例外:其他照改、rc 非 0(代碼審 r2 回歸席 F1)
++    m = _load_lumos_inproc()
++    import io, contextlib
++    _root2, v2 = _us_repo()
++    orig = m.cmd_set
++
++    def _boom(env, rel, key, value):
++        if rel.endswith("Pay.md"):
++            raise RuntimeError("測試:寫入失敗")
++        return orig(env, rel, key, value)
++    m.cmd_set = _boom
++    buf = io.StringIO()
++    try:
++        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
++            rc = m.cmd_updated_sync(m.Env(v2), ["Systems/Pay", "Systems/Ship"])
++    finally:
++        m.cmd_set = orig
++    check("⑤一篇丟例外:其他照改、rc 非 0、講原因", rc != 0 and _us_updated(v2, "Systems/Ship.md") == _us_today()
++          and "測試:寫入失敗" in buf.getvalue(), buf.getvalue())
++    # ⑥updated 是不存在的日期:當成落後列出(代碼審 r2 回歸席 F2)
++    _root3, v3 = _us_repo()
++    q = v3 / "Systems" / "Pay.md"
++    q.write_text(q.read_text(encoding="utf-8").replace("updated: 2026-09-11", "updated: 2026-02-30"), encoding="utf-8")
++    _nh_commit(_root3, "bad date")
++    r = run(v3, "updated-sync", "--stale", "--dry-run")
++    check("⑥updated 是不存在的日期:列成要改", "會改 Systems/Pay" in r.stdout, r.stdout + r.stderr)
+     print("  ✓ t_updated_sync_nodes")
+ 
+ 
+ def _rt_events(root):
+     return [e for e in _ns_gov(root) if e.get("gate") == "drift-check" and e.get("check") == "retire"]
+ 
+ 
+ def _rt_inproc(m, root, base, tip, **patch):
+     """行程內跑 cmd_drift_check,暫換模組常數 → (rc, 輸出)。"""
+     import io, contextlib

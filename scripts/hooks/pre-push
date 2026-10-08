@@ -36,6 +36,7 @@ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
 # 一個 ref 的檢查範圍:$1=remote_sha $2=local_sha。
 # 新 ref、或本地沒有那個 remote 物件(shallow / force-push 分岔沒 fetch)→ 保守掃全部引入內容
 # (不是 fail-open:放行會讓「推個新分支」變成穩定繞法)。其餘走增量。
+# ★只提醒的幾道用這支★;會擋或決定擋不擋的用下面的 pp_block_range_for(新分支首推時換成真起點)。
 pp_range_for() {
   if [[ "$1" == "$_ZERO" ]] || ! git cat-file -e "$1" 2>/dev/null; then
     printf '%s..%s' "$_EMPTY_TREE" "$2"
@@ -43,6 +44,38 @@ pp_range_for() {
     printf '%s..%s' "$1" "$2"
   fi
 }
+
+# 會擋或決定擋不擋的那幾步用的範圍(Projects/新分支首推會擋的閘改用真起點_計劃):$1=remote_sha $2=local_sha $3=remote_ref
+# [$4=quiet 不印退回的說明]。結果放 _PP_BR——不用 $(...) 回傳:裡面的 lumos 被訊號殺掉時要能照 pp_stop_if_signaled 停下整支掛鉤。
+# 推分支(refs/heads/*)而且遠端舊值全零(新分支首推)時,改問 lumos push-range(_push_range_start:跟主線的分岔點,
+# 存量漂移檢查用的同一支);其他形狀(一般增量、舊值本機找不到、推標籤)照 pp_range_for。
+# push-range 不存在(舊版 lumos)、失敗、印出怪東西 → 照舊空樹(寧可多擋),講一句;錯誤文字丟掉(舊版會印「沒有這個指令」)。
+pp_block_range_for() {
+  _PP_BR="$(pp_range_for "$1" "$2")"
+  [[ "$1" =~ ^0{40}(0{24})?$ && "$3" == refs/heads/* ]] || return 0
+  local _out pr_rc=0
+  _out="$("$PY" "$GRAPHCTL" push-range --diff "$1..$2" --push-remote "$_PP_REMOTE" --pushed-ref "$3" \
+    --repo "$REPO_ROOT" 2>/dev/null)" || pr_rc=$?
+  pp_stop_if_signaled "$pr_rc" "新分支首推起點(push-range)"
+  if [[ "$pr_rc" -eq 0 && "$_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?\.\.[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    _PP_BR="$_out"
+  elif [[ "${4:-}" != quiet ]]; then
+    echo "新分支首推的起點沒算出來,照舊從空樹比(會擋的閘這次看整個 repo;更新 lumos 之後再推就會用真起點)。" >&2
+  fi
+}
+
+# 會擋的閘「rc1 擋、其他非零放行」,但回傳碼 128 以上是被訊號殺掉(多半是 Ctrl-C)——那不是工具錯誤,不能當成放行往下跑。
+# 每支檔有家、筆記形狀擋、雙向門放行、code-loop check、存量漂移檢查都先過這一支(推送閘接漂移檢查代碼審 r2 架構對齊席:
+# 原本只有漂移那道會停)。$1=回傳碼 $2=閘名。
+pp_stop_if_signaled() {
+  if [[ "$1" -ge 128 ]]; then
+    echo "$2被中斷(rc=$1),推送停下,後面的檢查不跑。" >&2
+    exit "$1"
+  fi
+}
+
+# 推送的遠端名(git 傳給掛鉤的第一個參數;直接推網址時是網址、手動跑時是空的)——存量漂移檢查拿它找主線。
+_PP_REMOTE="${1:-}"
 
 # 這次推送總共改到哪些檔(所有 ref 的聯集,一行一個)。寫進暫存檔,回印路徑;算不出來回空字串。
 # ★給圖譜健康那一段用★:逾期的預告合約,本機這一層只擋「這次碰到的」那幾條,
@@ -56,13 +89,17 @@ pp_touched_file() {
   [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
   _f="$_PP_TMP/touched.txt"
   : > "$_f" 2>/dev/null || return 0
+  # 範圍跟會擋的閘同一支(這份清單餵 doctor --touched-from,會擋)。每個 ref 的 diff 都成功、結果卻是空的(推的東西
+  # 已整段在主線上)→ 照樣交空清單,意思是「這次什麼都沒碰到」;任何一個 diff 失敗、或根本沒有推送行 → 不交(doctor 照舊全擋)
+  local _n=0 _ok=1
   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
-    read -r _ _lsha _ _rsha <<< "$_ppl"
+    read -r _ _lsha _rref _rsha <<< "$_ppl"
     [[ "$_lsha" == "$_ZERO" ]] && continue
-    _r="$(pp_range_for "$_rsha" "$_lsha")"
-    git diff --no-ext-diff --no-textconv --name-only "$_r" >> "$_f" 2>/dev/null || true
+    pp_block_range_for "$_rsha" "$_lsha" "$_rref" quiet
+    _n=$((_n + 1))
+    git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f" 2>/dev/null || _ok=0
   done
-  if [[ -s "$_f" ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+  if [[ "$_ok" -eq 1 && ( -s "$_f" || "$_n" -gt 0 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
 }
 
 # 沒有 scripts/lumos → 降級放行(不為缺環境 brick push,CI 兜底);有 lumos 卻找不到 Python 3.14 → 擋下
@@ -263,6 +300,8 @@ fi
 # (anchor 0.22s / 簽名檔 0.04s / doctor 1.1s / pitfalls 0.23s / code-loop 0.61s
 #  / test-layers 0.21s / 自主迴圈那支 10.3s),而全套是 8 分鐘。
 # ★原本全套排在第四位★,所以被那 13 秒裡任何一道擋下時,8 分鐘已經白燒完了。
+# (2026-09-30 加了存量漂移檢查,排在 code-loop 之後:小專案每個 ref 約 1 秒;最壞每個 ref 判定本體 60 秒的預算,
+#  預算之前算範圍的 git 呼叫另計(每次最多 20 秒逾時),一次推多個 ref 會相加——所以上面那個 13 秒不再是上限。)
 
 # 圖譜健康(只在 vault 存在時跑)
 # ★2026-09-06 重排:原本這段在最後面,而且「沒有 vault 就 exit 0」會直接結束整支 hook。
@@ -271,7 +310,9 @@ have_vault=0
 for d in docs/*-knowledge docs/knowledge; do
   [[ -d "$d" ]] && have_vault=1 && break
 done
-_TOUCHED_F="$(pp_touched_file)"
+tf_rc=0
+_TOUCHED_F="$(pp_touched_file)" || tf_rc=$?
+pp_stop_if_signaled "$tf_rc" "新分支首推起點(push-range)"
 _DOCTOR_ARGS=(doctor --ci)
 [[ -n "$_TOUCHED_F" ]] && _DOCTOR_ARGS+=(--touched-from "$_TOUCHED_F")
 if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" "${_DOCTOR_ARGS[@]}"; then
@@ -295,6 +336,8 @@ fi
 # main-direct 同軌;無基準(新 ref/缺物件)倒向保守掃 empty-tree..local_sha(非 fail-open,
 # 否則守衛升格成穩定繞法);留痕綁 remote_ref 目的地(非 checkout);逐 ref 獨立判,某 ref
 # high 未過即擋。fail-open 僅剩:pitfalls 本身出錯 / empty-tree 都跑不動。
+# ★2026-10-06 起★推分支的新分支首推不再一律空樹:會擋的那幾步改用 pp_block_range_for(lumos push-range 算跟主線的分岔點,
+# 算不出來才空樹);只提醒的照舊空樹(Projects/新分支首推會擋的閘改用真起點_計劃)。
 # 推送前要跑哪個測試範圍(2026-09-18 Enzo 裁:純文件改動、或判成 light 的小改動,不用等全套):
 # 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
 # light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
@@ -307,13 +350,18 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   # 兩處各寫一份的話,哪天保守兜底改了只改一邊,擋的範圍就會兩邊不一致)
   _range="$(pp_range_for "$_rsha" "$_lsha")"
   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
+  # 會擋或決定擋不擋的那幾步(波及計算、分級、雙向門放行、code-loop check、逃逸記帳)用 _brange:新分支首推時是跟主線的分岔點,
+  # 其他形狀跟 _range 一樣;只提醒的(標籤路徑的風險提醒、受波及合約測試提醒、測試分層建議)照舊 _range,寧可多掃
+  pp_block_range_for "$_rsha" "$_lsha" "$_rref"
+  _brange="$_PP_BR"
 
   # 每支檔有家(2026-09-11,Projects/每支檔有家_計劃 [S26]):把這次要推的範圍整段查一次,接住跳過提交前檢查的。
   # ★新分支不沿用上面的空樹兜底★(那會把整段歷史當新改動,本工具鏈有 1900 多個提交):起點改用
   # 「不在任何遠端分支上的提交」裡最早那一個的上一個提交;全部已在遠端就不查;最早那個沒有上一個提交(真的全新)才從空樹比。
   # 起點早於這道檢查上線的那個提交時,lumos 會自己改從上線點算(上線前進來的是舊帳)。rc1=擋;其他非零=放行。
-  # ★跟上面 _range 是刻意不同的兩套★(代碼審 r1 架構席問過):_range 給波及計算與風險掃描用,只提醒、寧可掃多;
-  # 這道會擋,把整段歷史當新改動就是誤擋。別把兩套合併成一套。
+  # ★跟上面 _range 是刻意不同的兩套★(代碼審 r1 架構席問過):_range 給只提醒的幾道用、寧可掃多;
+  # 這道會擋,把整段歷史當新改動就是誤擋。別把兩套合併成一套。另有第三種 _brange(pp_block_range_for)給其他會擋的步驟,
+  # 三者的收斂路在 Issues/推送前其他閘的範圍在合過主線時會多算。
   _hrange=""
   if [[ "$_rsha" != "$_ZERO" ]] && git cat-file -e "$_rsha" 2>/dev/null; then
     _hrange="$_rsha..$_lsha"
@@ -330,6 +378,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   if [[ -n "$_hrange" ]]; then
     nh_rc=0
     "$PY" "$GRAPHCTL" home check --diff "$_hrange" --repo "$REPO_ROOT" || nh_rc=$?
+    pp_stop_if_signaled "$nh_rc" "每支檔有家檢查"
     if [[ "$nh_rc" -eq 1 ]]; then
       {
         echo ""
@@ -341,18 +390,19 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     # 筆記形狀擋(Projects/筆記形狀擋_計劃):同一段範圍再查一次,接住 --no-verify 跳過提交前那道的;範圍算法同上(不用空樹兜底)
     ns_rc=0
     "$PY" "$GRAPHCTL" note-shape --diff "$_hrange" --repo "$REPO_ROOT" || ns_rc=$?
+    pp_stop_if_signaled "$ns_rc" "筆記形狀擋"
     if [[ "$ns_rc" -eq 1 ]]; then
       {
         echo ""
-        echo "逃生:照上面改寫(行號改成函式名或測試名、或釘版本 路徑@<提交編號>:行號;現況描述刪掉或帶 [來源:…]);誤擋就 LUMOS_SKIP_NOTE_SHAPE=1 單次跳過(會留帳);整個專案先只提醒 → .lumos/config.json 的 note_shape.gate 設成 warn。"
+        echo "逃生:照上面改寫(行號改成函式名或測試名、或釘版本 路徑@<提交編號>:行號;現況描述刪掉或帶 [來源:…]);碰到的筆記有指不到的測試名 → 改成真名、測試已刪寫 [test-gone:名稱];誤擋就 LUMOS_SKIP_NOTE_SHAPE=1 單次跳過(會留帳);只關測試綁定那組 → .lumos/config.json 的 note_shape.test_refs 設成 warn;整個專案先只提醒 → note_shape.gate 設成 warn。"
         echo ""
       } >&2
       exit 1
     fi
   fi
 
-  impact_once "$_range"
-  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+  impact_once "$_brange"
+  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_brange" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   _tier_high=0
   printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
   _SUITE_SEEN=1
@@ -364,7 +414,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       echo ""
       echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
       echo "命中的地方列在下面:"
-      "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+      "$PY" "$GRAPHCTL" pitfalls --diff "$_brange" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2
   fi
@@ -372,12 +422,13 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   # 合約測試紅 / 有適用題表態不完整 / tier=high 無留痕,三個獨立判定各自出各自的訊息、由 check 印
   # ——這裡不再自己寫死「跑一輪代碼審」文案、也不再把它的輸出丟 /dev/null(r3 正確性席 C3)。非 heads → advisory。
   # 雙向門放行(Projects/雙向門放行_計劃 S11–S14/S21):這次範圍碰到、仍 doing、有雙向門留痕的計劃,留痕裡的測試全綠才准推;
-  # 留痕過期(條款或它連到的節點變了)也擋。風險低計劃不派設計審,這裡是它唯一的閘;lumos 算不出範圍/索引就 fail-open 放行(rc≠1)。
+  # 留痕過期(條款或它連到的節點變了)也擋。風險低計劃不派設計審,這裡是它唯一的閘;lumos 算不出範圍/索引就 fail-open 放行(rc≠1;128 以上是被中斷,停下)。
   sg_rc=0
   _sg_out="$_PP_TMP/sg-$RANDOM.log"
   # tee:一邊即時印到 stderr(r1 併發席:先存檔跑完才印,人會以為卡住去 Ctrl-C)、一邊留一份給下面認 light 用;rc 取管線第一段
-  "$PY" "$GRAPHCTL" spec-gate --push-check "$_range" --repo "$REPO_ROOT" 2>&1 | tee "$_sg_out" >&2
+  "$PY" "$GRAPHCTL" spec-gate --push-check "$_brange" --repo "$REPO_ROOT" 2>&1 | tee "$_sg_out" >&2
   sg_rc="${PIPESTATUS[0]}"
+  pp_stop_if_signaled "$sg_rc" "雙向門放行檢查(spec-gate)"
   # push-check 判成 light(它才有圖譜、才知道計劃風險低與小改動閘過):改到程式檔也不跑全套,
   # 只跑文件子集 + 原始碼提到「改到的函式/子命令/檔名」的測試;CI 那邊照樣跑全套當後盾。
   # ★還要 pitfalls 說 light_ok★(r1 資安席):小改動閘的擴散只查程式檔,測試檔/skills/workflow 這種既不是文件也不是程式的
@@ -402,21 +453,22 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     # 低風險推送的受波及合約測試維持「只提醒不擋」(2026-09-07 全 repo 審視 #17 人裁);高風險不帶旗標,照擋
     # pitfalls 沒吐 JSON(暫時失敗)就不帶 advisory:讓 check 自己算 tier 決定擋不擋(r1 外家 finder f4/否決 f3)
     _ba=(); [[ -n "$pf_json" && "$_tier_high" -eq 0 ]] && _ba=(--bound-tests-advisory)
-    _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
+    _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_brange" --at-sha "$_lsha" --branch "$_rbranch" \
       --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} 2>&1)" || cl_rc=$?
+    pp_stop_if_signaled "$cl_rc" "code-loop check"
     if [[ "$cl_rc" -eq 1 ]]; then
       # 逃逸自動記(規格落成可驗收條件_計劃 第五節):推送閘擋下=下游抓到了設計審/規格閘放行後的洞,
       # 碰到的計劃筆記各記一筆;對不回就不記。★永遠 fail-open★——記帳失敗不能變成擋推送的第二個理由。
       # ★只認「受波及合約的測試沒過」那型★:缺表態/高風險缺留痕是流程沒走完,不是下游抓到缺陷,不進逃逸帳(首輪前掃訂正)
       if printf '%s' "$_cl_out" | grep -q "受波及合約的測試沒過"; then
         "$PY" "$GRAPHCTL" loop escape --auto --stage push-gate --severity major \
-          --desc "推送閘擋下:$(printf '%s' "$_cl_out" | grep -m1 '受波及合約的測試沒過')" --range "$_range" --repo "$REPO_ROOT" >&2 || true
+          --desc "推送閘擋下:$(printf '%s' "$_cl_out" | grep -m1 '受波及合約的測試沒過')" --range "$_brange" --repo "$REPO_ROOT" >&2 || true
       fi
       # 高風險缺審查留痕:只有「該計劃被判成風險低、跳過設計審」才算逃逸(lumos 那邊查有沒有風險低留痕,沒有就不記)
       # ★只認「tier=high 且…」開頭的缺留痕句★:測試紅的擋下句尾巴也帶 tier=high,認整個詞會兩筆都記(r2 回滾席)
       if printf '%s' "$_cl_out" | grep -q "tier=high 且"; then
         "$PY" "$GRAPHCTL" loop escape --auto --stage push-gate-unreviewed --severity major \
-          --desc "推送閘擋下:高風險缺審查留痕" --range "$_range" --repo "$REPO_ROOT" >&2 || true
+          --desc "推送閘擋下:高風險缺審查留痕" --range "$_brange" --repo "$REPO_ROOT" >&2 || true
       fi
       {
         echo ""
@@ -427,7 +479,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       } >&2
       exit 1
     fi
-    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常):fail-open 放行
+    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常,128 以上除外):fail-open 放行
     [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘' >&2 || true; }
   else
     # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,一律 advisory(r2 外家 F7)
@@ -441,6 +493,54 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       } >&2 || true
     fi
     bound_tests_advisory "$_range"
+  fi
+  # 存量漂移檢查(Projects/存量漂移防線_計劃〈做法〉第 4 節第 4 點、[S1][S18]):已經寫進圖譜的句子因為這次推送改了狀態而過期
+  # (轉正了還留著預告句、計劃收尾了連著的 Issue 還開著…)。排在 code-loop check 之後、全套測試之前:code-loop 約 0.6 秒、
+  # 這道最壞 60 秒、全套 8 分鐘,便宜的先跑。分支與 tag 都查(不像 code-loop 要分支名)。
+  # 上線標記:下一行那串是 lumos 找「這道檢查從哪個提交起上線」用的(範圍起點截到那裡,上線前的是舊帳),別改寫也別刪:
+# lumos drift check
+  # 範圍原樣交 遠端舊值..本地頂端,連同遠端名與遠端 ref 名:起點由 lumos 的 _push_range_start 算(跟主線的分岔點與遠端舊值
+  # 取比較新的;CI 那步也交給同一支),掛鉤不自己算——原本掛鉤、CI、工具各算一份,三份各有洞(代碼審 r2)。不用上面的 _range。
+  # 模式由 lumos 讀被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=block,2026-09-30 起):block 有要處理 rc1 → 擋;warn 只印 rc0;
+  # off 它自己跳過。LUMOS_SKIP_DRIFT_CHECK=1 單次略過、淺層 clone 跳過,都由 lumos 記帳。每一筆的 lumos drift fix 修法由它印。
+  # 回傳碼:1 → 擋;128 以上(被訊號殺掉,多半是 Ctrl-C)→ 整支掛鉤停下、不放行、不往下跑全套;
+  # 其他非零(工具錯誤、git 太慢逾時、舊版工具沒有 drift 子命令)→ 講一句「這次沒檢查」再放行,
+  # 跟每支檔有家、筆記形狀擋的「只認 rc1 擋」同一種處理(代碼審 r1 併發回滾席)。
+  dr_rc=0
+  "$PY" "$GRAPHCTL" drift check --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
+    --repo "$REPO_ROOT" || dr_rc=$?
+  pp_stop_if_signaled "$dr_rc" "存量漂移檢查"
+  if [[ "$dr_rc" -eq 1 ]]; then
+    {
+      echo ""
+      echo "逃生:照上面每一筆的 lumos drift fix 指令改掉、或 lumos drift ack 表態照留(兩種都要提交進去才算),再推;誤擋就 LUMOS_SKIP_DRIFT_CHECK=1 git push 單次略過(會留帳);整個專案先只提醒 → .lumos/config.json 的 drift_check.gate 設成 warn;上面是「擋下:舊句檢查」的話,改的是 drift_check.old_sentence(設成 warn),改 gate 沒用。"
+      echo ""
+    } >&2
+    exit 1
+  fi
+  if [[ "$dr_rc" -ne 0 ]]; then
+    echo "漂移檢查沒能跑完(工具錯誤或 git 太慢),這次沒檢查;CI 會再檢查一次。(上面如果印了「擋下:」,指的是這道檢查自己沒跑成,推送沒有被擋。)" >&2
+  fi
+  # 回頭重讀守檔筆記(Projects/守檔筆記對照改動_計劃〈做法〉第 4 節、[S9]):這次改到的程式檔的家、而且這次也被改過的筆記,
+  # 還沒對照過這一版程式的就列出來,提醒派判定者問「哪幾行被這次改動弄得不成立了」。★只提醒、不擋★,工具自己任何情況都回 0、
+  # 輸出都走標準輸出;開關(.lumos/config.json 的 note_reread.gate)、單次略過(LUMOS_SKIP_REREAD_CHECK=1)、記帳都在工具裡判。
+  # 排在存量漂移檢查之後;最多約 30 秒(工具自己的軟上限),逐 ref 各跑一次。
+  # 上線標記:下一行那串是 lumos 找「這道提醒從哪個提交起上線」用的(範圍起點截到那裡),別改寫也別刪;
+  # 這一段的指令與註解都不准出現筆記內容審的上線字串(那道閘名接一個空白再接它的檢查子指令)——它靠那串找自己的上線點,doctor 也靠它判接線了沒:
+# lumos note-audit reread-check
+  # 範圍照存量漂移那段原樣交 遠端舊值..本地頂端、遠端名與遠端 ref 名(起點由 lumos 的 _push_range_start 算)。
+  # 標準錯誤丟掉:舊版 lumos 不認得這個子指令時 argparse 的說明印在那裡,不給人看雜訊(回傳碼 2,照下面放行)。
+  # 回傳碼:只有 130(Ctrl-C)交給 pp_stop_if_signaled 停下整支掛鉤;其他非零——含 128 以上的其他訊號,例如記憶體不夠被系統砍掉——
+  # 印一句放行:這道只提醒,被外部砍掉不該擋推送(CI 那步同理吞掉)。同檔 bound-tests --advisory、test-layers 兩段整個吞掉回傳碼,
+  # 這一段比它們多守了 Ctrl-C。
+  rr_rc=0
+  "$PY" "$GRAPHCTL" note-audit reread-check --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
+    --repo "$REPO_ROOT" 2>/dev/null || rr_rc=$?
+  rrint_rc=0
+  [[ "$rr_rc" -eq 130 ]] && rrint_rc=130
+  pp_stop_if_signaled "$rrint_rc" "回頭重讀提醒"
+  if [[ "$rr_rc" -ne 0 ]]; then
+    echo "回頭重讀提醒這次沒跑完(rc=$rr_rc),照推——這道只提醒、不擋。" >&2
   fi
   # ★合約測試閘:低風險這一路也要跑★(2026-09-07 全 repo 審視 #17,人裁)
   # 舊行為:這件事藏在 code-loop check 裡,而那支只在 tier=high 且推的是分支時才跑

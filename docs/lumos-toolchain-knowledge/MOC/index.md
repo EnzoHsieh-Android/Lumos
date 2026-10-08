@@ -37,9 +37,11 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 研究題:給一個任務,哪些節點該浮上來、排序對不對
 
 - [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
+- [[Systems/改檔前推播]] — 改檔前把牽連的筆記推到模型眼前的那支 hook:用哪個 repo 的圖譜查(worktree 裡的檔用那個 worktree)、冷卻窗。
+- [[Issues/worktree裡改檔推不出筆記]] — 已修:切進 worktree 後推播整個消失、沒提示;同寫法還有三支 hook 沒修。
 - [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
 - [[Projects/檢索訊號三件_計劃]] `[todo]` — 排隊中:別名欄只填 12% 但權重第二高、沒有真實查詢紀錄所以評測題庫是人編的、導覽樞紐標(被殺的 A3 是量法不是訊號)。
-- [[Projects/檢索核心重建_計劃]] `[todo]` — 排隊中,等評測尺修復。撈候選那一關換成標準函式庫的全文索引(零新依賴):0.7 秒→0.2 毫秒、多詞召回破口一併修、三條字面路徑共用同一份索引;另接三個標籤用途(風險類進注入、優先級進待辦排序、別名回填)。
+- [[Projects/檢索核心重建_計劃]] `[done]` — 2026-09-16 收案不落地(該案裁定 d2):收斂候選實作過也量過,排序品質沒過門檻,改動已退。原本要把撈候選那一關換成標準函式庫的全文索引(零新依賴):0.7 秒→0.2 毫秒、多詞召回破口一併修、三條字面路徑共用同一份索引;另接三個標籤用途(風險類進注入、優先級進待辦排序、別名回填)。
 - [[Projects/評測尺修復_計劃]] — 前置案:量出來的尺壞了(未標 222/790 計 0 分、34 題只有 3 題帶空白、標註停在 766 個提交前、已誤導過一次撤回決策);補標＋擴題＋用已知答案的改動校準,不改計分算法。
 - [[Issues/尺切換恆等斷言反覆不過]] `[doing]` — 新尺寫好三週一次沒上線過，程式自己印著「這不該發生」；2026-09-15 消融確認根因是兩個小缺陷（拿不同題目集的平均在比相等、未標檢查只涵蓋三條排法裡的一條），修法各幾行。
 - [[Issues/評測事故數字兩個版本打架]] — 同一個評測事故在 repo 裡有兩個版本的數字，從同一個提交起就並存、從沒調和過；那是「尺會懲罰改善」的唯一實證。
@@ -55,6 +57,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 - [[Systems/finding-refute]] — 辯方 refute:對 ≥major finding 派獨立 opus 強制 file:line 反證才降(防假陽性,對稱 canary)。
 - [[Systems/judge-severity-gate]] — 讓 judge 覆蓋 severity 維度,堵「收斂門檻沒覆蓋處偷工」。
 - [[Systems/loop-convergence-recording]] — `canary record --loop/--severity` + `loop status --need` 算收斂、可機械終止多輪。
+- [[Systems/loop-retro]] — 審查跑滿上限的人裁紀錄、跑滿回顧(歸族、怎麼少跑一輪、行動項)與跨迴圈彙整;有人裁紀錄的迴圈沒合格回顧,記新一輪與處置閘第八步會擋。
 - [[Systems/lumos-refcheck]]
 - [[Systems/pitfalls-code-loop]]
 - [[Systems/risk-tiered-review]]
@@ -74,6 +77,7 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 研究題:怎麼量這些機制到底有沒有用
 
 - [[Systems/ablation-lumos-first]] — 消融結果檔的整批有效性、缺場與合併邊界。
+- [[Systems/review-convergence-eval]]
 - [[Systems/drift-history]]
 - [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。
 - [[Systems/verification-rot-eval]] `[superseded]` — 從圖譜史抽衝突測試集定期回測 L3 腐化偵測(設計收斂未落地)。

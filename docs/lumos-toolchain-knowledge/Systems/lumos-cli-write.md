@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-26
+updated: 2026-10-07
 self_audit: claude-fable/2026-08-24
 tags:
   - type/system
@@ -14,9 +14,17 @@ related:
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Systems/check-u-overgeneralization]]"
   - "[[Projects/工具分類_計劃]]"
+  - "[[Projects/過期鎖安全接手_計劃]]"
 summary: |-
+  WHY:`lumos summary-line <節點> "<舊片段>" "<新片段>"` 改摘要裡的一行:片段比對照 guard bind(對到多處就擋、列候選、--nth 指定),續行條目不支援,換完只剩空白就拿掉那一行(摘要不得變空),寫入照 atomic_write_verify、同一次把 updated 改成今天 [出處:2026-10-06 [[Projects/改摘要單行的指令_計劃]];rtb 第三輪提案 D1] [因:摘要沒有指令可改,只能手改開頭欄位;rtb 這輪手改 10 次全是同一行改一小段] [test:t_summary_line_replace] [test:t_summary_line_ambiguous]
+  WHY:`lumos updated-sync <節點>… | --stale` 把筆記開頭 updated 改成今天,一篇一篇走 cmd_set;doctor U 段列出 updated 早於 git 上那篇最後一次提交日期的筆記(`_updated_stale_notes`,讀 git_last_change_dates),只提醒不擋;不在提交時自動改 [出處:2026-10-06 [[Projects/提交時自動更新筆記日期_計劃]];Enzo 先裁提交時自動改、設計審 r1 後改裁健檢列出加一鍵修] [因:提交時自動改會讓設計審整檔指紋失效、消掉翻案提醒、多會談共用工作目錄時帶進半成品] [test:t_doctor_updated_stale] [test:t_updated_sync_stale]
+  PITFALL:git_last_change_dates 原本拿未解析的圖譜路徑跟解析過的專案根算相對路徑,macOS 暫存目錄(/var → /private/var)或任何經符號連結的圖譜會讓整張日期表靜默變空;它在本案之前沒有呼叫者所以沒人踩到,現在兩邊都先解析成實體路徑 [出處:2026-10-06 [[Projects/提交時自動更新筆記日期_計劃]] 實作] [根因:relpath 兩端一個解析過一個沒有] [test:t_doctor_updated_stale]
+  WHY:decision-add、decision-supersede 成功之後,列出別篇連到這篇、同一子句還寫待定的行與 c6 補括號指令;只印、失敗只在 stderr 講一句,決策已寫入、回傳碼不變(同 cascade 的 fail-open);supersede 的列出排在 cascade 之後,stdout 第一行照舊 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:翻案或補上決策之後,別篇寫「待裁定」的句子沒人提醒] [不選:要求被連的那篇已收尾才列(加決策不改狀態,會永遠列不到)] [test:t_settle_backrefs_listed_after_close_and_decisions]
+  WHY:驗收紀錄的開頭欄位 system_refs 進 LIST_KEYS(append/remove 可用、lint 認得);new verification --systems 照舊只對功能加 verified_by、不自動寫 system_refs;sync-verified-by 改用 doctor 3/4 同一支判「驗了誰」(有 system_refs 就只看它,寫壞的項不補、在「無漏寫」之前先印一行指到 3/4) [出處:2026-10-03 [[Projects/驗收紀錄寫明驗了哪些功能_計劃]]] [因:正文的指路連結被當成驗過、推送被擋(rtb 清理循環第 1 輪第 2 項);自動寫會讓作者事後在正文補的功能不再被檢查(設計審 r3)] [test:t_sync_verified_by_system_refs] [test:t_new_verification_no_auto_system_refs] [test:t_system_refs_registered_field]
   WHY:[2026-09-30 [[Projects/存量漂移改法_計劃]] 代碼審 r4]set 整欄改 valid_under/revalidate_when 時,值裡還留著 <整項新內容> 就擋、檔案不動——那是 drift fix --kind c4 證據頁預填指令裡要人填的那一項,原封不動照貼會把佔位字寫進驗收前提 [test:t_drift_fix_c4_evidence_then_replace]
+  WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 2 節]同一道檢查多擋 c4 範本句的兩個佔位字 <卷證>、<sha>:範本不再自動填卷證目錄(設計審 r2 後整類拿掉自動判斷),整句照貼一定留著 <卷證>,擋下逼人換成從清單挑的目錄與真的提交。三個字面放同一份常數,證據頁的範本與預填指令都從那裡取;訊息點名是哪一個,<整項新內容> 那句訊息一字不改;其他檢查與順序不動。跟擋 drift fix --reason 佔位字的那份用途不同、不合併。代價:驗收前提裡本來就合法要寫這兩個字串的會被擋,機率極低,訊息講明是佔位字檢查。代碼審 r1(邊界席)後打錯的變體也擋,只擋兩邊都有角括號、括號裡只有佔位字本身的:全形角括號、括號內多空白、sha 大小寫。少一邊角括號的第一版也擋,代碼審第二輪重現「若卷證>20個就重驗」「輸出 git-sha> 時重驗」被誤擋,拿掉;<卷證 目錄>、<sha 1>、<git-sha>、<SHA-1>、<sha256> 照收 [test:t_set_conditions_blocks_drift_placeholders] [test:t_set_conditions_blocks_placeholder_variants]
   WHY:[2026-09-26 驗收前提欄位可改,另一個對話回報、Enzo 裁「好」]`set` 收 valid_under/revalidate_when,整欄換掉(一個值=單行、多個值=一行一項清單,原本單行/清單/空的/多行區塊都拿乾淨);另列 COND_KEYS、不併進 SCALAR_KEYS(那份白名單的數量有漂移守衛在數,且這兩欄本質可以是清單)。不給 append/remove:這兩欄是散文常提連結,append/remove 用連結目標判「同一項」會把提到同一篇的不同條件當重複。其他欄位給兩個值照擋。★引號改白名單、全寫入指令共用★(代碼審 r1 兩席:原本只列「要加引號的」,本工具自己讀自己永遠對得上,標準 YAML/Obsidian 讀卻會把「空白+#」後面當註解切掉、把雙引號裡的反斜線當跳脫):`_yaml_plain_ok` 只放行確定兩邊讀法一樣的值,其餘由 `_yaml_quote` 加引號——沒反斜線沒雙引號用雙引號、否則單引號、兩種都不行就擋;fmt_scalar、fmt_list_item 與決策文字欄位(`_fmt_decision_value`,r2 架構席抓到的第三套手刻判準)都改走它,所以 set 其他欄位、append、decision-add/supersede 一併修到;白名單另擋標準 YAML 會讀成日期、十六/八/二進位、六十進位、無限大的寫法(r2 通才席)。副作用:signoff 寫的日期現在加引號(本工具讀起來一樣,Obsidian 改讀成字串);DATE_KEYS 照舊刻意不加引號、不經這裡 [test:t_set_condition_fields_standard_yaml_safe] [test:t_decision_add_standard_yaml_safe] [test:t_set_condition_fields_replace_any_shape] [test:t_set_condition_fields_multi_values] [test:t_set_condition_fields_reject_bad_values] [test:t_set_other_keys_single_value_only] [test:t_set_condition_fields_keep_other_lines]
+  WHY:[2026-10-07 [[Projects/改重驗事件時列出引用它的句子_計劃]]]`set <節點> revalidate_when …` 寫入成功後,列出全庫連到這篇、同一句(不跨句尾 _SENT_END_RE、24 字內)講到 revalidate_when 的那一句(來源篇與行號)並印出改完之後的事件清單;只印不擋不改,判斷在 _revalidate_backref_lines(連結認法同 doctor S21:行內程式碼裡的不算、先過 link_target),沒有引用句不多印;同一行每句各一筆、最多列 20 句、掃描出錯只在 stderr 說寫入照樣完成(同 _drift_print_backrefs) [出處:rtb 第三次比對回傳第 10 項(交接 B5);Enzo 2026-10-07 裁「改的那一刻列出來」] [因:revalidate_when 是自由文字,別篇寫「某事發生時由 `[[X]]` 的 revalidate_when 觸發重驗」,X 的事件被改掉後那句永遠不會觸發] [不選:doctor 全庫用關鍵詞重疊比對聲稱的事件(兩邊只有 3 句引用、1 句真壞,門檻沒樣本可定)] [test:t_set_revalidate_when_lists_backrefs]
   KEY:[2026-09-25 筆記欄位關卡補齊]寫入指令補兩道:①`set responsibility` 用新開節點那支判斷(`_nodehome_resp_ok`,至少 10 字、要有實字),不過就擋、檔案不動,不看開關——跟 `new --responsibility` 同一種擋法(原本 set 可以寫進一個字);②`append about_code`、`new --code` 共用的 `_about_code_path` 補「不在圖譜資料夾裡」——有一篇 Issue 就是用 append 把筆記路徑寫進 about_code;要連結別篇請寫 related。lint 的 about_code 規則也呼叫同一支,兩邊判法一致 [test:t_set_responsibility_min_length] [test:t_about_code_writer_rejects_vault_path] [test:t_lint_about_code_must_exist]
   KEY:[推送閘回頭擋住自己 2026-09-16]修好 linter 送檔那批之後第一次推,★推送前的新增告警閘當場擋下★,抓到三條這批自己帶進來的新告警:兩個函式超過複雜度上限、一個 import 沒人用。三條都修掉、沒有走放行。★這道閘以前根本不會擋★——它跑的是同一份宣告,而那份宣告在當天之前從來沒真的檢查過任何一行。修複雜度的做法不是硬拆:把「決定鎖放哪」抽成模組層獨立一支(`_vault_lock_where`),順便讓代碼審 r2 抓到的那個坑(位置排在可重入判斷後面)變成★結構上不可能再犯★。連帶一條測試翻紅——它用函式名抓區段來驗「有沒有走共用的信任檢查」,檢查搬家就抓不到,正好證明它真的在盯
   KEY:[代碼審 r2 折入 2026-09-16]★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★——退路那版把判斷排在可重入檢查後面,巢狀呼叫時拿舊路徑的鍵去查、查不到,內層卡滿 60 秒再拋「別的程序正在寫」這句★假訊息★;而這正是本函式說明裡「第四輪已修過」的舊坑從退路分支重新長出來。★同批還抓到自己的假測試★:原本那條「巢狀允許」寫成前後兩個不重疊的區塊,根本沒測到巢狀,改成真巢狀(用短逾時代替 60 秒)當場翻紅 [test:t_vault_lock_falls_back_instead_of_giving_up]
@@ -76,10 +84,16 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
 about_code:
   - scripts/lumos
 ---
 # lumos-cli-write
+
+## 2026-10-05 寫入鎖的安全邊界
+
+[[Issues/過期鎖接手可能雙持]] 的跨程序交錯證明「先看 mtime 再按路徑 rename」可把別人剛建的新鎖搬走。[[Projects/過期鎖安全接手_計劃]] 決定停止自動接手，理由是派工鏡頭共用此原語，鎖內的啟動者 PID 不能證明背景工作已停；只加 PID 檢查會把同一類雙持帶回來。正常獨佔建立時要處理短寫與建檔錯誤，否則停止自動接手反而會使半成品鎖永久阻斷。防回歸測試為 `t_excl_lock_stale_takeover_is_single_owner`、`t_excl_lock_creation_failure_cleans_own_file`、`t_vault_stale_lock_fails_with_path`。這是同版程序的保證；混用舊版前須先停舊進程，不能宣稱跨版本安全。
 
 `scripts/lumos` 的**專案層圖譜寫入原語**(7 個子指令)—— 對知識圖譜 frontmatter 的唯一安全寫入路徑。直接手改 frontmatter / obsidian `property:set` 會繞過寫後自驗與格式鐵則(實測 `property:set` 塞多 wikilink 會長出亂碼 ghost 節點)。
 
@@ -89,7 +103,7 @@ about_code:
 | 指令 | 結構層 | 做什麼 |
 |---|---|---|
 | `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`(以 scripts/lumos 常數為準,2026-08-24 為 10 鍵含 about_code_stamp);行級手術最小 diff |
-| `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`(以常數為準,2026-08-24 為 8 項,含 about_code/core_refs/pitfall_when/aliases);鐵則1 安全格式 + `link_target` dedup |
+| `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`(以常數為準,2026-10-03 為 10 項,含 about_code/core_refs/pitfall_when/aliases/lands_in/system_refs);鐵則1 安全格式 + `link_target` dedup |
 | `remove <node> <key> [value]` | list/純量 | 逐值拿掉 list 項(清死背書 verified_by/拔 core_refs);不帶 value=整欄拿掉純量(骨架欄 type/status/created 擋);同受 atomic_write_verify 保護 |
 | `self-audit <node> [--model][--date]` | 純量 | 寫 `self_audit: <model>/<date>` 節點級自足性審計戳記(內部即 `set self_audit`) |
 | `decision-add <node> "<content>" --decided DATE [--context][--why]` | 巢狀 | append 一條 ADR 決策(無 `decisions:` 則在 fm 末尾建) |

@@ -1,0 +1,1494 @@
+diff --git a/.claude-plugin/marketplace.json b/.claude-plugin/marketplace.json
+index 5945badc..7789451f 100644
+--- a/.claude-plugin/marketplace.json
++++ b/.claude-plugin/marketplace.json
+@@ -1,8 +1,9 @@
+ {
+   "name": "lumos-toolchain",
+   "owner": { "name": "lumos" },
+   "plugins": [
+     { "name": "lumos-ledger", "source": "./mods/claude/lumos-ledger", "description": "Lumos 事件帳:只觀察,不擋、不改、不注入" },
+-    { "name": "lumos-context", "source": "./mods/claude/lumos-context", "description": "Lumos 交棒脈絡:壓縮前叫摘要保住交棒狀態" }
++    { "name": "lumos-context", "source": "./mods/claude/lumos-context", "description": "Lumos 交棒脈絡:壓縮前叫摘要保住交棒狀態" },
++    { "name": "lumos-guard", "source": "./mods/claude/lumos-guard", "description": "Lumos 審查席隔離:審查員子代理只准讀取、寫自己的工作資料夾、不碰別席報告、不做對外動作" }
+   ]
+ }
+diff --git a/mods/claude/lumos-guard/.claude-plugin/plugin.json b/mods/claude/lumos-guard/.claude-plugin/plugin.json
+new file mode 100644
+index 00000000..6a477f1b
+--- /dev/null
++++ b/mods/claude/lumos-guard/.claude-plugin/plugin.json
+@@ -0,0 +1,6 @@
++{
++  "name": "lumos-guard",
++  "version": "0.1.0",
++  "description": "Lumos 審查席隔離:派工詞第一行帶 LUMOS-SEAT 的子代理只准讀取、寫自己的工作資料夾、不碰席報告暫存處、不做對外動作",
++  "types": "./types/index.d.ts"
++}
+diff --git a/mods/claude/lumos-guard/hooks/guard.test.ts b/mods/claude/lumos-guard/hooks/guard.test.ts
+new file mode 100644
+index 00000000..ec1801f7
+--- /dev/null
++++ b/mods/claude/lumos-guard/hooks/guard.test.ts
+@@ -0,0 +1,571 @@
++import { describe, expect, test } from 'claude-code/testing'
++import { BASH_ERROR, BASH_MAX, WAIT_MS, bashBlock, checkTool, createGuard, makeIo, onCallFailed, onEnd, parseMarker, realOf, type Io, type Seat } from './register'
++
++// 條款 S1–S8(Projects/審查席唯讀隔離_計劃)。查路徑、時間、提示全用假的:測的是規則本身,不是引擎。
++
++const LINKS: Record<string, string | null> = { // 連結 → 目標;null = 懸空
++  '/tmp': '/private/tmp',
++  '/var/tmp': '/private/var/tmp',
++  '/private/tmp/lumos-seat-work/L/s/out': '/repo',
++  '/private/tmp/lumos-seat-work/L/s/dang': null,
++}
++const EXISTS = new Set([
++  '/', '/private', '/private/tmp', '/private/var', '/private/var/tmp', '/private/var/folders',
++  '/private/var/folders/ab', '/private/var/folders/ab/cd', '/private/var/folders/ab/cd/T',
++  '/private/tmp/lumos-seat-work', '/private/tmp/lumos-seat-work/L', '/private/tmp/lumos-seat-work/L/s',
++  '/private/tmp/lumos-seat-work/L/other',
++  '/private/tmp/lumos-seat-staging', '/private/tmp/lumos-seat-staging/L', '/private/tmp/lumos-seat-staging/L/r1-x.md',
++  '/private/tmp/scratch', '/repo', '/repo/a.md', '/repo/docs', '/home', '/home/u',
++  '/private/tmp/lumos-seat-work/L/caf\u00e9',
++])
++
++function fakeReal(path: string): string | undefined {
++  let p = path
++  for (let hop = 0; hop < 10; hop++) {
++    const parts = p.split('/')
++    let changed = false
++    for (let n = parts.length; n >= 1; n--) {
++      const pre = parts.slice(0, n).join('/') || '/'
++      if (pre in LINKS) {
++        const to = LINKS[pre]
++        if (to === null) {
++          if (n === parts.length) return undefined // 懸空連結本身
++          throw new Error('ENOENT')
++        }
++        p = to + parts.slice(n).map(s => '/' + s).join('')
++        changed = true
++        break
++      }
++    }
++    if (!changed) break
++  }
++  if (!EXISTS.has(p)) throw new Error('ENOENT')
++  return p
++}
++
++function fakeIo(store: { seats: Record<string, Seat> } = { seats: {} }) {
++  const toasts: string[] = []
++  let gate: (() => void) | null = null
++  let fired = false // 逾時信號比 sleep 先到也記得
++  const io: Io = {
++    real: async p => fakeReal(p),
++    now: () => 0,
++    sleep: ms => new Promise<void>(res => { if (ms === WAIT_MS) { if (fired) res(); else gate = res } }),
++    toast: t => { toasts.push(t) },
++    loadSeats: async () => ({ ...store.seats }),
++    saveSeats: async s => { store.seats = { ...s } },
++  }
++  return { io, toasts, store, fireTimeout: () => { fired = true; gate?.() } }
++}
++
++const SEAT: Seat = { loop: 'L', round: 'r1', name: 's', cwd: '/repo' }
++const chk = (e: any) => checkTool(fakeIo().io, SEAT, e)
++
++describe('S1 寫檔只准自己的工作資料夾', () => {
++  test('S1 寫到自己的工作資料夾放行(經過 /tmp 連結、大小寫不同、還不存在的子路徑也算)', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/a.md' })).toBe(null)
++    expect(await chk({ tool: 'Edit', file_path: '/private/tmp/LUMOS-SEAT-WORK/L/S/new/dir/b.txt' })).toBe(null)
++    expect(await chk({ tool: 'NotebookEdit', notebook_path: '/private/tmp/lumos-seat-work/L/s/n.ipynb' })).toBe(null)
++  })
++  test('S1 repo、家目錄、別席的工作資料夾、暫存根其他位置都擋', async () => {
++    for (const p of ['/repo/a.md', '/home/u/.zshrc', '/private/tmp/lumos-seat-work/L/other/x', '/tmp/scratch/x',
++                     '/private/var/folders/ab/cd/T/x', '/private/tmp/lumos-seat-staging/L/r1-x.md']) {
++      expect(await chk({ tool: 'Write', file_path: p })).toContain('lumos-guard 寫檔')
++    }
++  })
++  test('S1 相對路徑、含 . 或 .. 段、空段、欄位不是字串都擋', async () => {
++    for (const p of ['a.md', '/tmp/lumos-seat-work/L/s/../../../../repo/a.md', '/tmp/lumos-seat-work/L/s/./a',
++                     '/tmp//lumos-seat-work/L/s/a', 42, undefined]) {
++      expect(await chk({ tool: 'Write', file_path: p })).toContain('lumos-guard 寫檔')
++    }
++  })
++  test('S1 經過連結指到外面、最深已存在上層是懸空連結都擋', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/out/a.md' })).toContain('lumos-guard 寫檔')
++    expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/dang' })).toContain('lumos-guard 寫檔')
++  })
++  test('S1 NotebookEdit 讀 notebook_path,不是 file_path', async () => {
++    expect(await chk({ tool: 'NotebookEdit', file_path: '/tmp/lumos-seat-work/L/s/n.ipynb', notebook_path: '/repo/n.ipynb' }))
++      .toContain('lumos-guard 寫檔')
++  })
++  test('realOf:接上不存在的段、結尾斜線、根目錄', async () => {
++    const { io } = fakeIo()
++    expect(await realOf(io, '/tmp/lumos-seat-work/L/s/x/y')).toBe('/private/tmp/lumos-seat-work/l/s/x/y')
++    expect(await realOf(io, '/repo/')).toBe('/repo')
++    expect(await realOf(io, '/')).toBe('/')
++  })
++})
++
++describe('S2 席報告暫存處擋讀', () => {
++  test('S2 Read 暫存處裡的檔擋(經 /tmp 連結、大小寫不同也擋)', async () => {
++    expect(await chk({ tool: 'Read', file_path: '/tmp/lumos-seat-staging/L/r1-x.md' })).toContain('lumos-guard 暫存處')
++    expect(await chk({ tool: 'Read', file_path: '/private/tmp/Lumos-Seat-Staging/L/r1-x.md' })).toContain('lumos-guard 暫存處')
++    expect(await chk({ tool: 'Read', file_path: '/private/var/folders/ab/cd/T/lumos-seat-staging/z' })).toContain('lumos-guard 暫存處')
++  })
++  test('S2 Grep、Glob 的範圍在暫存處裡或是它的上層都擋', async () => {
++    for (const e of [
++      { tool: 'Grep', pattern: 'x', path: '/private/tmp' },
++      { tool: 'Grep', pattern: 'x', path: '/tmp/lumos-seat-staging/L' },
++      { tool: 'Grep', pattern: 'x', path: '/' },
++      { tool: 'Grep', pattern: 'x', path: '/private/var/folders' },
++      { tool: 'Glob', pattern: '/tmp/**/*.md' },
++      { tool: 'Glob', pattern: '**/*.md', path: '/private/tmp' },
++      { tool: 'Glob', pattern: 'lumos-seat-staging/*/r1-*.md', path: '/tmp' },
++    ]) expect(await chk(e)).toContain('lumos-guard 暫存處')
++  })
++  test('S2 Grep 的 pattern 是正規表示式不當路徑:搜 repo 裡的 /tmp 字樣照常', async () => {
++    expect(await chk({ tool: 'Grep', pattern: '/tmp', path: '/repo' })).toBe(null)
++    expect(await chk({ tool: 'Grep', pattern: '/private/tmp/lumos-seat-staging', glob: '/tmp/**' })).toBe(null)
++  })
++  test('S2 卷證資料夾、repo 內搜尋、不帶 path、不碰暫存處的暫存根搜尋、讀 repo 檔都照常', async () => {
++    for (const e of [
++      { tool: 'Read', file_path: '/repo/a.md' },
++      { tool: 'Read', file_path: '/tmp/lumos-seat-work/L/other/x' },
++      { tool: 'Grep', pattern: 'x' },
++      { tool: 'Grep', pattern: 'x', path: 'docs' },
++      { tool: 'Glob', pattern: 'docs/**/*.md' },
++      { tool: 'Grep', pattern: 'x', path: '/tmp/scratch' },
++      { tool: 'Glob', pattern: '/tmp/lumos-seat-work/L/s/**' },
++    ]) expect(await chk(e)).toBe(null)
++  })
++  test('S2 相對 path 含 .. 擋', async () => {
++    expect(await chk({ tool: 'Grep', pattern: 'x', path: '../../private/tmp' })).toContain('lumos-guard 暫存處')
++    expect(await chk({ tool: 'Glob', pattern: '../**' })).toContain('lumos-guard 暫存處')
++  })
++})
++
++describe('S3 Bash 粗擋', () => {
++  test('S3 gh、hub、glab、claude 這幾個詞,不論包在哪裡都擋', () => {
++    for (const c of ['gh pr create', '/usr/local/bin/gh api x', 'bash -lc "gh pr create"', 'cat <<EOF\ngh 沒登入\nEOF',
++                     'x=$(hub pull-request)', 'glab mr create', "claude -p '開 PR'", '(cd /tmp && claude)']) {
++      expect(bashBlock(c)).not.toBe(null)
++    }
++  })
++  test('S3 git 配 push、send-pack、send-email 擋;GitHub API 網址、暫存處字樣、超長也擋', () => {
++    for (const c of ['git push origin HEAD', 'git -C /tmp/x push', 'git send-pack url ref', 'git send-email a.patch',
++                     'curl https://api.github.com/repos/x/pulls', 'curl https://uploads.github.com/x',
++                     'cat /tmp/lumos-seat-staging/L/r1-x.md', 'x'.repeat(BASH_MAX + 1)]) {
++      expect(bashBlock(c)).not.toBe(null)
++    }
++    expect(bashBlock(42)).not.toBe(null)
++  })
++  test('S3 一般實驗照常:git log、grep -c、工作資料夾 commit、mktemp、clone、pre-push 路徑', () => {
++    for (const c of ['git log --oneline -5', 'git grep -c x', 'git -C /tmp/lumos-seat-work/l/s commit -m x',
++                     'T=$(mktemp -d); git -C "$T" init', 'git clone /repo /tmp/x', 'git log -- scripts/hooks/pre-push',
++                     'python3 -c "print(1)"', 'ls github', 'echo push', 'gh-pages', 'claude-code']) {
++      expect(bashBlock(c)).toBe(null)
++    }
++  })
++  test('S3 擋下理由是三段式', async () => {
++    const r = await chk({ tool: 'Bash', command: 'git push' })
++    expect(r).toContain('lumos-guard Bash')
++    expect(r).toContain('為什麼在意')
++  })
++})
++
++describe('S4 工具白名單', () => {
++  test('S4 白名單外的工具擋', async () => {
++    for (const t of ['Skill', 'SendMessage', 'Monitor', 'Workflow', 'TaskCreate', 'EnterWorktree', 'PowerShell',
++                     'mcp__x__y', 'MyPluginTool']) {
++      expect(await chk({ tool: t })).toContain('lumos-guard 工具')
++    }
++  })
++  test('S4 白名單內的輔助工具照常', async () => {
++    for (const t of ['TodoWrite', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch', 'ToolSearch']) {
++      expect(await chk({ tool: t })).toBe(null)
++    }
++  })
++  test('S4 Agent/Task 帶 isolation、或 subagent_type 不在准用清單擋;不指定或准用類型照常', async () => {
++    for (const e of [{ tool: 'Agent', isolation: 'remote' }, { tool: 'Task', isolation: 'worktree' },
++                     { tool: 'Agent', subagent_type: 'my-custom' }]) {
++      expect(await chk(e)).toContain('lumos-guard 工具')
++    }
++    for (const e of [{ tool: 'Agent' }, { tool: 'Agent', subagent_type: 'Explore' }, { tool: 'Task', subagent_type: 'Plan' },
++                     { tool: 'Agent', subagent_type: 'general-purpose' }]) {
++      expect(await chk(e)).toBe(null)
++    }
++  })
++})
++
++describe('S5 認出審查席', () => {
++  test('S5 合格標記:中文迴圈與席名、r3-dref 這類輪次、開頭有 BOM 或全形空白行', () => {
++    expect(parseMarker('LUMOS-SEAT: 審查席唯讀隔離/r1/資安-sonnet\n內文')).toEqual(
++      { kind: 'seat', loop: '審查席唯讀隔離', round: 'r1', name: '資安-sonnet' })
++    expect(parseMarker('﻿\n　\r\n  LUMOS-SEAT:x/r3-dref/s  \r\n').kind).toBe('seat')
++    expect(parseMarker('LUMOS-SEAT:x/驗收/s').kind).toBe('seat')
++  })
++  test('S5 不以 LUMOS-SEAT 開頭:不是審查席(標記在內文、程式碼區塊、第二行以後)', () => {
++    for (const p of ['請審查\nLUMOS-SEAT: a/r1/b', '```\nLUMOS-SEAT: a/r1/b\n```', '', '   ', 42, undefined]) {
++      expect(parseMarker(p).kind).toBe('none')
++    }
++  })
++  test('S5 以 LUMOS-SEAT 開頭卻寫壞:判成寫壞(少一段、..、全形冒號、大小寫、空段)', () => {
++    for (const p of ['LUMOS-SEAT: a/r1', 'LUMOS-SEAT: a/../b', 'LUMOS-SEAT：a/r1/b', 'lumos-seat: a/r1/b',
++                     'LUMOS-SEAT: a//b', 'LUMOS-SEAT: a/r1/b c', 'LUMOS-SEAT:', 'LUMOS-SEATS: a/r1/b']) {
++      expect(parseMarker(p).kind).toBe('bad')
++    }
++  })
++  test('S5 主會談與非審查席的子代理完全不擋;寫壞的標記擋下派工', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    expect(await g.call('S', { tool: 'Write', file_path: '/repo/a.md' })).toBe(null) // 主會談沒有 agentId
++    const r = await g.spawn('S', '/repo', { prompt: '一般任務' }, async () => ({ agentId: 'n1' }))
++    expect(r.agentId).toBe('n1')
++    expect(await g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'n1' })).toBe(null)
++    let ran = false
++    const bad = await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: a/r1' }, async () => { ran = true; return { agentId: 'b1' } })
++    expect(bad.deny).toContain('lumos-guard 派工')
++    expect(ran).toBe(false)
++  })
++  test('S5 審查席登記後,它的工具呼叫套規則;工作目錄取派工的 cwd', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s', cwd: '/tmp/scratch' }, async () => ({ agentId: 'a1' }))
++    expect(g._state.seat('a1')?.cwd).toBe('/tmp/scratch')
++    expect(await g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })).toContain('lumos-guard 寫檔')
++    expect(await g.call('S', { tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/a', agentId: 'a1' })).toBe(null)
++  })
++})
++
++describe('S6 子代理繼承', () => {
++  test('S6 審查席派的子代理繼承發起方的標記,忽略自己派工詞裡的標記', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/other\n', parentAgentId: 'a1' }, async () => ({ agentId: 'c1' }))
++    await g.spawn('S', '/repo', { prompt: '沒有標記', parentAgentId: 'c1' }, async () => ({ agentId: 'g1' }))
++    expect(g._state.seat('c1')?.name).toBe('s')
++    expect(g._state.seat('g1')?.name).toBe('s')
++    expect(await g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'g1' })).toContain('lumos-guard 寫檔')
++  })
++  test('S6 繼承時寫壞的標記不會擋下派工(發起方是審查席就一律繼承)', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    const r = await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: 壞', parentAgentId: 'a1' }, async () => ({ agentId: 'c2' }))
++    expect(r.agentId).toBe('c2')
++    expect(g._state.seat('c2')?.name).toBe('s')
++  })
++})
++
++describe('S7 登記完成前的工具呼叫', () => {
++  test('S7 子代理在登記完成前呼叫工具:等啟動中的派工回報完再判斷', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    let finish: (r: any) => void = () => {}
++    const spawned = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finish = res }))
++    expect(g._state.pending('S')).toBe(1)
++    const early = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })
++    finish({ agentId: 'a1' })
++    await spawned
++    expect(await early).toContain('lumos-guard 寫檔')
++    expect(g._state.pending('S')).toBe(0)
++  })
++  test('S7 等不到(5 秒):放行並跳 lumos-guard 逾時放行 提示', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    void g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(() => {}))
++    const early = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'x9' })
++    await Promise.resolve()
++    f.fireTimeout()
++    expect(await early).toBe(null)
++    expect(f.toasts.join('\n')).toContain('lumos-guard 逾時放行:')
++  })
++  test('S7 派工被拒或丟錯:從啟動中清單移除', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    const denied = await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ deny: 'no' }))
++    expect(denied.deny).toBe('no')
++    expect(g._state.pending('S')).toBe(0)
++    let threw = false
++    try {
++      await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => { throw new Error('boom') })
++    } catch { threw = true }
++    expect(threw).toBe(true)
++    expect(g._state.pending('S')).toBe(0)
++  })
++  test('S7 沒有啟動中的派工時,查不到的子代理不等、直接放行', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    expect(await g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'zz' })).toBe(null)
++    expect(f.toasts.length).toBe(0)
++  })
++  test('會談結束清掉對應表與啟動中清單', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    g.end('S')
++    expect(g._state.seat('a1')).toBe(undefined)
++  })
++})
++
++describe('S8 外掛自己出錯', () => {
++  test('S8 查路徑丟出意外錯誤:非 Bash 放行,Bash 判斷出錯擋', async () => {
++    const io: Io = { real: async () => { throw new Error('ENOENT') }, now: () => 0, sleep: async () => {}, toast: () => {},
++                     loadSeats: async () => ({}), saveSeats: async () => {} }
++    const g = createGuard({ ...io, real: async () => { throw new TypeError('壞了') } })
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    // real 全丟錯 → 找不到任何已存在的上層 → 路徑看不懂,讀寫都擋(安全方向)
++    expect(await g.call('S', { tool: 'Read', file_path: '/repo/a.md', agentId: 'a1' })).toContain('lumos-guard')
++    const boom = createGuard(io)
++    await boom.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    const bash = await boom.call('S', { tool: 'Bash', get command(): string { throw new Error('x') }, agentId: 'a1' })
++    const read = await boom.call('S', { tool: 'Read', get file_path(): string { throw new Error('x') }, agentId: 'a1' })
++    expect(read).toBe(null)
++    expect(bash).toContain('lumos-guard Bash')
++  })
++})
++
++describe('S8 掛鉤層出錯(.catch)', () => {
++  const nextOf = (called: boolean) => {
++    let runs = 0
++    const next: any = async () => { runs += 1; return { text: 'ran' } }
++    next.called = called
++    return { next, runs: () => runs }
++  }
++  test('S8 工具還沒跑就出錯:Bash 擋,其他工具交下去跑', async () => {
++    const a = nextOf(false)
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, a.next, true)).toEqual({ deny: BASH_ERROR })
++    expect(a.runs()).toBe(0)
++    const b = nextOf(false)
++    expect(await onCallFailed({ tool: 'Read', agentId: 'a1' }, b.next, true)).toEqual({ text: 'ran' })
++  })
++  test('S8 工具已經跑過才出錯(例如中斷):交回原本的結果,不謊稱擋下', async () => {
++    const a = nextOf(true)
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, a.next, true)).toEqual({ text: 'ran' })
++  })
++})
++
++describe('代碼審 r1 組一:看不懂的路徑一律擋(讀、寫、搜尋同一條)', () => {
++  test('S2 Read 路徑含 . 、空段、..、相對路徑或過長:擋', async () => {
++    for (const p of ['/tmp/./lumos-seat-staging/L/r1-x.md', '/tmp//lumos-seat-staging/L/r1-x.md',
++                     '/repo/../tmp/lumos-seat-staging/L/r1-x.md', 'lumos-seat-staging/L/r1-x.md', 42,
++                     '/repo/' + 'a/'.repeat(300) + 'x', '/repo/' + 'x'.repeat(5000)]) {
++      expect(await chk({ tool: 'Read', file_path: p })).toContain('lumos-guard')
++    }
++  })
++  test('S1 Write 路徑過長:擋', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/tmp/lumos-seat-work/L/s/' + 'a/'.repeat(300) + 'x' })).toContain('lumos-guard 寫檔')
++  })
++  test('S2 正常的絕對路徑照常讀', async () => {
++    for (const p of ['/repo/a.md', '/repo/docs/x/y.md', '/tmp/scratch/z']) expect(await chk({ tool: 'Read', file_path: p })).toBe(null)
++  })
++})
++
++describe('代碼審 r1 組二:Bash 粗擋', () => {
++  test('S3 大小寫不同也擋', () => {
++    for (const c of ['GH pr create', 'Git push origin HEAD', 'CLAUDE -p x', 'Hub pull-request', 'git SEND-PACK u r',
++                     'cat /tmp/LUMOS-SEAT-STAGING/L/x', 'curl https://API.GITHUB.COM/repos']) expect(bashBlock(c)).not.toBe(null)
++  })
++  test('S3 明確的執行路徑也擋:/usr/bin/gh、./gh、~/bin/claude', () => {
++    for (const c of ['/usr/local/bin/gh pr create', './gh x', '~/bin/claude -p x', 'x=$(gh api y)', "bash -lc 'gh pr create'",
++                     'env GH_TOKEN=1 gh pr list', '(cd /tmp && claude)']) expect(bashBlock(c)).not.toBe(null)
++  })
++  test('S3 路徑或參數裡只是出現這些字:照常', () => {
++    for (const c of ['cat mods/claude/lumos-guard/hooks/register.ts', 'git log --grep=push', 'curl https://github.com/gh/foo',
++                     'ls hub-config', 'cat docs/claude-notes.md', 'git log -- scripts/hooks/pre-push']) expect(bashBlock(c)).toBe(null)
++    // 代碼審 r2 起每個詞都取最後一段比:路徑最後一段剛好是這些字的會被擋,是接受的誤擋(寧可誤擋)
++    for (const c of ['git -C /r diff -- mods/claude', 'git log -- scripts/push']) expect(bashBlock(c)).not.toBe(null)
++  })
++  test('S3 擋下提示不再叫人改用 Grep 工具(有些建置沒有),改教用 Read 讀檔', async () => {
++    const r = await chk({ tool: 'Bash', command: 'gh pr create' })
++    // 有些建置沒有 Grep:提到它時一定附「有的話」(代碼審 r2 起才提,r1 時一律不提)
++    expect(r.includes('Grep 工具') ? r.includes('Grep 工具(有的話)') : true).toBe(true)
++    expect(r).toContain('Read')
++  })
++})
++
++describe('代碼審 r1 組四:寫壞的標記與出錯時的方向', () => {
++  test('S5 標記加了 markdown 修飾:判成寫壞、擋下派工', () => {
++    for (const p of ['`LUMOS-SEAT: a/b/c`', '# LUMOS-SEAT: a/b/c', '**LUMOS-SEAT:** a/b/c', '> LUMOS-SEAT: a/b/c']) {
++      expect(parseMarker(p).kind).toBe('bad')
++    }
++  })
++  test('S5 一般派工第一行只是提到 lumos-seat:不是審查席、不擋', () => {
++    // 'LUMOS-SEAT 外掛的 bug 查一下' 這種以整詞開頭的,跟忘了打冒號的標記分不出來,代碼審 r2 起改判寫壞(擋下派工並說明)
++    expect(parseMarker('LUMOS-SEAT 外掛的 bug 查一下').kind).toBe('bad')
++    for (const p of ['Lumos-seating plan', 'lumos-seat-work 資料夾清理']) {
++      expect(parseMarker(p).kind).toBe('none')
++    }
++  })
++  test('S8 掛鉤出錯時:主會談與非審查席的 Bash 照常,審查席的 Bash 擋', async () => {
++    const mk = () => { const n: any = async () => ({ text: 'ran' }); n.called = false; return n }
++    expect(await onCallFailed({ tool: 'Bash' }, mk(), false)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'n1' }, mk(), false)).toEqual({ text: 'ran' })
++    expect(await onCallFailed({ tool: 'Bash', agentId: 'a1' }, mk(), true)).toEqual({ deny: BASH_ERROR })
++  })
++  test('S8 seatish(出錯時用):有子代理編號就當審查席(判不出寧可擋),主會談不算', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    expect(g.seatish('zz')).toBe(true)
++    expect(g.seatish(undefined)).toBe(false)
++  })
++  test('舊版 seatish 測試(保留形狀,改成新語意)', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    expect(g.seatish('a1')).toBe(true)
++    let finish: (r: any) => void = () => {}
++    const sp = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finish = res }))
++    expect(g.seatish('zz')).toBe(true)
++    finish({ agentId: 'a1' })
++    await sp
++    expect(g.seatish('a1')).toBe(true)
++  })
++})
++
++describe('代碼審 r1 組五:登記、等待與熱重載', () => {
++  test('S7 先登記好的席不必等同批最後一席', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    let finA: (r: any) => void = () => {}
++    let finB: (r: any) => void = () => {}
++    const a = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finA = res }))
++    void g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/t' }, () => new Promise(res => { finB = res }))
++    const early = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })
++    finA({ agentId: 'a1' })
++    await a
++    expect(await early).toContain('lumos-guard 寫檔')
++    expect(g._state.pending('S')).toBe(1)
++    finB({ agentId: 'b1' })
++  })
++  test('S7 熱重載後(新的 guard、同一份 $.state):執行中的審查席與它派的子代理照擋', async () => {
++    const f = fakeIo()
++    const g1 = createGuard(f.io)
++    await g1.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    const g2 = createGuard(fakeIo(f.store).io)
++    expect(await g2.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'a1' })).toContain('lumos-guard 寫檔')
++    await g2.spawn('S', '/repo', { prompt: '沒有標記', parentAgentId: 'a1' }, async () => ({ agentId: 'c1' }))
++    expect(await g2.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'c1' })).toContain('lumos-guard 寫檔')
++  })
++  test('會談結束:叫醒還在等的工具呼叫、從 $.state 拿掉這場的席', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, async () => ({ agentId: 'a1' }))
++    void g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/t' }, () => new Promise(() => {}))
++    const waiting = g.call('S', { tool: 'Write', file_path: '/repo/a.md', agentId: 'x9' })
++    g.end('S')
++    expect(await waiting).toBe(null)
++    expect(f.toasts.length).toBe(0)
++    await Promise.resolve()
++    expect(f.store.seats['a1']).toBe(undefined)
++  })
++})
++
++describe('代碼審 r1 組七:補守不住的地方', () => {
++  test('S1 /var/tmp 也是暫存根:寫 /var/tmp/lumos-seat-work/<迴圈>/<席>/ 照常', async () => {
++    expect(await chk({ tool: 'Write', file_path: '/var/tmp/lumos-seat-work/L/s/a' })).toBe(null)
++    expect(await chk({ tool: 'Read', file_path: '/var/tmp/lumos-seat-staging/L/x' })).toContain('lumos-guard 暫存處')
++  })
++  test('S1 中文或重音席名:分解字(NFD)寫法也算自己的工作資料夾', async () => {
++    const seat: Seat = { loop: 'L', round: 'r1', name: 'caf\u00e9', cwd: '/repo' }
++    expect(await checkTool(fakeIo().io, seat, { tool: 'Write', file_path: '/tmp/lumos-seat-work/L/cafe\u0301/a' })).toBe(null)
++  })
++})
++
++describe('代碼審 r2 組甲:對照表存回、會談結束、讀回驗形狀', () => {
++  const spawn = (g: any, s: string, name: string, id: string) =>
++    g.spawn(s, '/repo', { prompt: `LUMOS-SEAT: L/r1/${name}` }, async () => ({ agentId: id }))
++  const write = (g: any, s: string, id: string) => g.call(s, { tool: 'Write', file_path: '/repo/a.md', agentId: id })
++  test('S7 熱重載後新登記一席:舊席還在 $.state、照擋', async () => {
++    const f = fakeIo()
++    const g1 = createGuard(f.io)
++    await spawn(g1, 'S', 's', 'a1')
++    await spawn(g1, 'S', 't', 'b1')
++    const g2 = createGuard(fakeIo(f.store).io)
++    await spawn(g2, 'S', 'u', 'c1')
++    expect(Object.keys(f.store.seats).sort()).toEqual(['a1', 'b1', 'c1'])
++    const g3 = createGuard(fakeIo(f.store).io)
++    expect(await write(g3, 'S', 'b1')).toContain('lumos-guard 寫檔')
++  })
++  test('會談結束只刪那一場的席(熱重載後也一樣),別場的留著', async () => {
++    const f = fakeIo()
++    const g1 = createGuard(f.io)
++    await spawn(g1, 'S', 's', 'a1')
++    await spawn(g1, 'T', 't', 'b1')
++    const g2 = createGuard(fakeIo(f.store).io)
++    await g2.end('S')
++    expect(Object.keys(f.store.seats)).toEqual(['b1'])
++    expect(await write(g2, 'T', 'b1')).toContain('lumos-guard 寫檔')
++  })
++  test('會談結束的掛鉤等存檔做完才回:回來時那一場的席已不在存檔', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    await spawn(g, 'S', 's', 'a1')
++    expect(Object.keys(f.store.seats)).toEqual(['a1'])
++    await onEnd({ guard: g }, { sessionId: 'S' })
++    expect(f.store.seats['a1']).toBe(undefined)
++  })
++  test('會談結束後才登記完成的派工:不放回對照表', async () => {
++    const f = fakeIo()
++    const g = createGuard(f.io)
++    let finish: (r: any) => void = () => {}
++    const sp = g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s' }, () => new Promise(res => { finish = res }))
++    await g.end('S')
++    finish({ agentId: 'late' })
++    await sp
++    expect(g._state.seat('late')).toBe(undefined)
++    expect(f.store.seats['late']).toBe(undefined)
++  })
++  test('$.state 讀回的值形狀不對:當查不到', async () => {
++    const f = fakeIo({ seats: { a1: { loop: 'L', round: 'r1', name: 5 } as any, b1: 'x' as any } })
++    const g = createGuard(f.io)
++    expect(await write(g, 'S', 'a1')).toBe(null)
++    expect(await write(g, 'S', 'b1')).toBe(null)
++  })
++  test('$.state 讀不到(丟錯):子代理的 Bash 擋,其他工具照常', async () => {
++    const f = fakeIo()
++    const g = createGuard({ ...f.io, loadSeats: async () => { throw new Error('state 壞了') } })
++    expect(await g.call('S', { tool: 'Bash', command: 'ls', agentId: 'x1' })).toContain('lumos-guard Bash')
++    expect(await g.call('S', { tool: 'Read', file_path: '/repo/a.md', agentId: 'x1' })).toBe(null)
++    expect(await g.call('S', { tool: 'Bash', command: 'ls' })).toBe(null)
++  })
++  test('makeIo 接 $.state:讀 value、寫進同一個鍵', async () => {
++    let saved: any = null
++    const ref: any[] = []
++    const $: any = { state: { get: async (r: any) => { ref.push(r); return { value: { a1: { loop: 'L', round: 'r1', name: 's', cwd: '/r' } }, version: 3 } },
++                              set: async (r: any, v: any) => { ref.push(r); saved = v; return { isSet: true, version: 4 } } } }
++    const io = makeIo($)
++    expect(await io.loadSeats()).toEqual({ a1: { loop: 'L', round: 'r1', name: 's', cwd: '/r' } })
++    await io.saveSeats({ b1: { loop: 'L', round: 'r1', name: 't', cwd: '/r' } })
++    expect(saved).toEqual({ b1: { loop: 'L', round: 'r1', name: 't', cwd: '/r' } })
++    expect(ref.every(r => r.plugin === 'lumos-guard' && r.key === 'seats')).toBe(true)
++  })
++})
++
++describe('代碼審 r2 組丙:寫壞標記的判準', () => {
++  test('S5 開頭有清單符號、編號、括號、引號、零寬空白,或冒號在修飾符外、忘了冒號:判成寫壞', () => {
++    for (const p of ['- LUMOS-SEAT: a/r1/b', '1. LUMOS-SEAT: a/r1/b', '[LUMOS-SEAT: a/r1/b]', '"LUMOS-SEAT: a/r1/b"',
++                     '**LUMOS-SEAT**: a/r1/b', 'LUMOS-SEAT a/r1/b', '\u200bLUMOS-SEAT: a/r1/b', '+ lumos-seat: a/r1/b']) {
++      expect(parseMarker(p).kind).toBe('bad')
++    }
++  })
++  test('S5 只是提到 lumos-seat 開頭的字(後面接連字號或字母):照常', () => {
++    for (const p of ['lumos-seat-work 資料夾清理', 'Lumos-seating plan', 'lumos-seats-report 整理', '- lumos-seat-staging 要清']) {
++      expect(parseMarker(p).kind).toBe('none')
++    }
++  })
++  test('S5 合格標記不受新判準影響', () => {
++    expect(parseMarker('LUMOS-SEAT: L/r1/s').kind).toBe('seat')
++  })
++})
++
++describe('代碼審 r2 組庚:補守不住的地方', () => {
++  test('S6 子代理沒給 cwd:沿用發起方的工作目錄', async () => {
++    const { io } = fakeIo()
++    const g = createGuard(io)
++    await g.spawn('S', '/repo', { prompt: 'LUMOS-SEAT: L/r1/s', cwd: '/tmp/scratch' }, async () => ({ agentId: 'a1' }))
++    await g.spawn('S', '/repo', { prompt: 'x', parentAgentId: 'a1' }, async () => ({ agentId: 'c1' }))
++    expect(g._state.seat('c1')?.cwd).toBe('/tmp/scratch')
++  })
++})
++
++describe('代碼審 r2 組乙:每個詞都取路徑最後一段比', () => {
++  test('S3 帶路徑的指令詞照擋', () => {
++    for (const c of ['/usr/bin/git push', '$HOME/bin/gh x', 'bin/gh x', 'node_modules/.bin/claude x']) {
++      expect(bashBlock(c)).not.toBe(null)
++    }
++  })
++  test('S3 路徑只是含這些字、最後一段不是:照常', () => {
++    for (const c of ['cat mods/claude/x.ts', 'ls mods/claude/', 'cat docs/claude-notes.md']) expect(bashBlock(c)).toBe(null)
++  })
++})
++
+diff --git a/mods/claude/lumos-guard/hooks/hooks.json b/mods/claude/lumos-guard/hooks/hooks.json
+new file mode 100644
+index 00000000..5fcba7ce
+--- /dev/null
++++ b/mods/claude/lumos-guard/hooks/hooks.json
+@@ -0,0 +1 @@
++{ "modules": ["./register.ts"] }
+diff --git a/mods/claude/lumos-guard/hooks/register.ts b/mods/claude/lumos-guard/hooks/register.ts
+new file mode 100644
+index 00000000..1a3d468d
+--- /dev/null
++++ b/mods/claude/lumos-guard/hooks/register.ts
+@@ -0,0 +1,425 @@
++import type { Register } from 'claude-code'
++import type { GuardSeat } from '../types'
++
++// lumos-guard:審查席的工具規則(Projects/審查席唯讀隔離_計劃)。
++// 派工詞第一個非空行是 LUMOS-SEAT: <迴圈>/<輪次>/<席名> 的子代理(與它再派的子代理)套白名單;其他人照常。
++// 防的是被文件裡的指令誘導,不防有心繞:Bash 仍是完整的 shell。外掛不改輸入與結果、不跑任何外部指令。
++// 核心邏輯在 createGuard,查路徑、時間、提示由外面注入,測試可以換成假的(guard.test.ts)。
++
++export type Seat = GuardSeat
++export type Marker = { kind: 'none' } | { kind: 'seat'; loop: string; round: string; name: string } | { kind: 'bad'; why: string }
++export type Io = {
++  // 真實路徑(跟過所有連結、折疊 . 與 ..);不存在丟錯;存在但拿不到(懸空連結)回 undefined
++  real: (path: string) => Promise<string | undefined>
++  now: () => number
++  sleep: (ms: number) => Promise<void>
++  toast: (text: string) => void
++  // 對照表存在 $.state:外掛熱重載後模組變數歸零,讀回來繼續擋
++  loadSeats: () => Promise<Record<string, Seat>>
++  saveSeats: (seats: Record<string, Seat>) => Promise<void>
++}
++
++export const WAIT_MS = 5000 // 子代理登記完成前就呼叫工具時,最多等這麼久
++export const BASH_MAX = 1_000_000 // 指令超過這麼長一律擋
++export const PATH_MAX = 4096 // 路徑超過這麼長或這麼多段,當看不懂(擋)
++export const SEGS_MAX = 256
++
++const TOOLS_OK = new Set(['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch', 'ToolSearch', 'TodoWrite', 'TaskOutput',
++                          'TaskStop', 'Agent', 'Task', 'Write', 'Edit', 'NotebookEdit'])
++const AGENT_TYPES_OK = new Set(['general-purpose', 'Explore', 'Plan'])
++const BASH_WORDS = new Set(['gh', 'hub', 'glab', 'claude'])
++const GIT_PUSH_WORDS = new Set(['push', 'send-pack', 'send-email'])
++const BASH_STRINGS = ['api.github.com', 'uploads.github.com', 'lumos-seat-staging']
++// 暫存根(真實路徑,一律小寫比):macOS 的 /tmp、/var/tmp 是連結,真實路徑在 /private 底下
++const ROOTS = ['/private/tmp', '/private/var/tmp', '/tmp', '/var/tmp']
++const FOLDERS_ROOT = /^\/private\/var\/folders\/[^/]+\/[^/]+\/t(?=\/|$)/
++
++const SEAT_RE = /^LUMOS-SEAT:\s*(\S+)$/
++// 寫壞的判準:去掉開頭所有非字母數字的字元(markdown 修飾、清單符號、引號、零寬空白)與「1.」這類編號後,
++// 以 lumos-seat(或 lumos-seats)開頭、後面不接字母數字或連字號 → 想寫標記;不合格就擋下派工(代碼審 r1、r2)。
++// 只是提到 lumos-seat-work、Lumos-seating 這類字的一般派工不算
++const SEAT_LOOSE_RE = /^lumos-seats?(?![a-z0-9_-])/i
++function looseHead(line: string): string {
++  return line.replace(/^[^\p{L}\p{N}]+/u, '').replace(/^\d+[.)]\s*/, '').replace(/^[^\p{L}\p{N}]+/u, '')
++}
++
++// 第一個非空行:跳過去空白後為空的行;JS 的 \s 本來就含 \r、BOM(U+FEFF)與全形空白(U+3000)
++function firstLine(prompt: string): string {
++  for (const raw of prompt.split('\n')) {
++    const line = raw.trim()
++    if (line) return line
++  }
++  return ''
++}
++
++export function parseMarker(prompt: unknown): Marker {
++  const line = firstLine(typeof prompt === 'string' ? prompt : '')
++  if (!SEAT_LOOSE_RE.test(looseHead(line))) return { kind: 'none' }
++  const m = SEAT_RE.exec(line)
++  if (!m) return { kind: 'bad', why: '要寫成 LUMOS-SEAT: <迴圈>/<輪次>/<席名>(半形冒號、大寫)' }
++  const parts = m[1].split('/')
++  if (parts.length !== 3) return { kind: 'bad', why: `值要剛好三段,現在是 ${parts.length} 段` }
++  for (const p of parts) {
++    if (!p || p === '.' || p === '..' || /[\\\s\u0000-\u001f\u007f]/.test(p)) {
++      return { kind: 'bad', why: `「${p}」不能當一段(空的、.、..、含反斜線或控制字元)` }
++    }
++  }
++  return { kind: 'seat', loop: parts[0], round: parts[1], name: parts[2] }
++}
++
++const fold = (p: string) => p.normalize('NFC').toLowerCase()
++
++function rootOf(p: string): string | null {
++  const f = FOLDERS_ROOT.exec(p)
++  if (f) return f[0]
++  return ROOTS.find(r => p === r || p.startsWith(r + '/')) ?? null
++}
++
++const inside = (p: string, dir: string) => p === dir || p.startsWith(dir + '/')
++
++// 在不在席報告暫存處裡(任一暫存根底下的 lumos-seat-staging)
++function inStaging(p: string): boolean {
++  const r = rootOf(p)
++  return r !== null && inside(p, `${r}/lumos-seat-staging`)
++}
++
++// 範圍是不是暫存處的祖先(含 /、/private、暫存根本身、/private/var/folders 底下到 T 為止)
++function aboveStaging(p: string): boolean {
++  if (p === '/') return true
++  if (ROOTS.some(r => r === p || r.startsWith(p + '/'))) return true
++  return /^\/private\/var\/folders(\/[^/]+){0,2}(\/t)?$/.test(p) || p === '/private/var'
++}
++
++// 絕對路徑的真實路徑(小寫、NFC):取最深一層已存在的上層,再接上剩下的段;任何一段是空的、.、.. 回 null
++export async function realOf(io: Io, path: unknown): Promise<string | null> {
++  if (typeof path !== 'string' || !path.startsWith('/') || path.length > PATH_MAX) return null
++  const parts = path.split('/').slice(1)
++  if (parts.length > SEGS_MAX) return null
++  if (parts.length && parts[parts.length - 1] === '') parts.pop() // 結尾的斜線
++  if (parts.some(s => s === '' || s === '.' || s === '..')) return null
++  for (let n = parts.length; n >= 0; n--) {
++    let got: string | undefined
++    try {
++      got = await io.real('/' + parts.slice(0, n).join('/'))
++    } catch {
++      continue // 這一層不存在,往上找
++    }
++    if (got === undefined) return null // 懸空連結或拿不到:擋
++    const rest = parts.slice(n)
++    return fold([got.replace(/\/$/, ''), ...rest].join('/') || '/')
++  }
++  return null
++}
++
++function workDir(seat: Seat, root: string): string {
++  return fold(`${root}/lumos-seat-work/${seat.loop}/${seat.name}`)
++}
++
++export const BASH_ERROR = '擋下(lumos-guard Bash):判斷出錯。\n為什麼在意:判斷不了的指令寧可擋。\n換個寫法再試。'
++
++const why = (head: string, what: string, how: string) =>
++  `擋下(lumos-guard ${head}):${what}\n為什麼在意:被審材料裡的指令不能讓審查員改到 repo、你的設定,或看到別席的報告。\n${how}`
++
++const WORK_HINT = (seat: Seat) => `要做實驗請寫到:\n  /tmp/lumos-seat-work/${seat.loop}/${seat.name}/`
++
++// 粗擋:一律轉小寫;以空白、引號與 shell 符號切詞(不切斜線,路徑裡只是出現 claude 不算)。
++// gh、hub、glab、claude 看整詞,或明確的執行路徑(/、./、../、~/ 開頭)最後一段;push 這類只看整詞
++export function bashBlock(cmd: unknown): string | null {
++  if (typeof cmd !== 'string') return '指令不是字串'
++  if (cmd.length > BASH_MAX) return '指令超過 1MB'
++  const low = cmd.toLowerCase()
++  const toks = low.split(/[\s'"`;|&(){}<>$\\]+/).filter(Boolean)
++  // 每個詞都取最後一段斜線之後的部分比:帶路徑的寫法(絕對、相對、$HOME/…)一律算數(代碼審 r2)
++  const words = new Set(toks.map(t => t.slice(t.lastIndexOf('/') + 1)).filter(Boolean))
++  for (const w of BASH_WORDS) if (words.has(w)) return `指令裡有「${w}」`
++  if (words.has('git')) for (const w of GIT_PUSH_WORDS) if (words.has(w)) return `指令裡同時有「git」與「${w}」`
++  for (const s of BASH_STRINGS) if (low.includes(s)) return `指令裡有「${s}」`
++  return null
++}
++
++// 搜尋範圍:Grep 只看 path;Glob 再接上 pattern 第一個萬用字元之前的固定段
++function searchBase(e: any, seat: Seat): string | null {
++  const p = e?.path
++  let base: string
++  if (p === undefined || p === null || p === '') base = seat.cwd
++  else if (typeof p !== 'string') return null
++  else if (p.startsWith('/')) base = p
++  else {
++    if (p.split('/').some((s: string) => s === '..')) return null
++    base = `${seat.cwd}/${p}`
++  }
++  if (e?.tool === 'Glob' && typeof e?.pattern === 'string') {
++    const pat: string = e.pattern
++    const segs: string[] = []
++    for (const s of (pat.startsWith('/') ? pat.slice(1) : pat).split('/')) {
++      if (/[*?[{]/.test(s)) break
++      segs.push(s)
++    }
++    if (segs.some(s => s === '..')) return null
++    const fixed = segs.filter(s => s && s !== '.').join('/')
++    if (pat.startsWith('/')) base = '/' + fixed
++    else if (fixed) base = `${base}/${fixed}`
++  }
++  return base.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1').split('/').filter(s => s !== '.').join('/') || '/'
++}
++
++// 一次工具呼叫該不該擋;回擋下理由或 null
++export async function checkTool(io: Io, seat: Seat, e: any): Promise<string | null> {
++  const tool = String(e?.tool ?? '')
++  if (!TOOLS_OK.has(tool)) {
++    return why('工具', `審查席不能用「${tool}」。`, '只准讀取、搜尋、Bash、網路查詢、派一般子代理,以及寫自己的工作資料夾。')
++  }
++  if (tool === 'Agent' || tool === 'Task') {
++    if (e?.isolation !== undefined && e?.isolation !== null) {
++      return why('工具', `審查席派子代理不能帶 isolation(${String(e.isolation)})。`, '拿掉 isolation 再派:remote 在雲端跑、這裡管不到,worktree 會在真 repo 開分支。')
++    }
++    const t = e?.subagent_type
++    if (t !== undefined && t !== null && !AGENT_TYPES_OK.has(String(t))) {
++      return why('工具', `審查席不能派「${String(t)}」型的子代理。`, '只准不指定,或 general-purpose、Explore、Plan。')
++    }
++    return null
++  }
++  if (tool === 'Write' || tool === 'Edit' || tool === 'NotebookEdit') {
++    const raw = tool === 'NotebookEdit' ? e?.notebook_path : e?.file_path
++    const real = await realOf(io, raw)
++    const ok = real !== null && rootOf(real) !== null && inside(real, workDir(seat, rootOf(real)!))
++    return ok ? null : why('寫檔', `審查席只能寫自己的工作資料夾(${String(raw)} 不在裡面)。`, WORK_HINT(seat))
++  }
++  if (tool === 'Read') {
++    const real = await realOf(io, e?.file_path)
++    if (real === null) return why('暫存處', `讀檔路徑看不懂(${String(e?.file_path).slice(0, 200)}:相對路徑、含 . 或 .. 段、空段或過長)。`, '改用乾淨的絕對路徑。')
++    return inStaging(real)
++      ? why('暫存處', '審查席不能讀席報告暫存處裡的檔。', '別席的報告要等全部交回才看得到;你的發現直接寫在回答裡。')
++      : null
++  }
++  if (tool === 'Grep' || tool === 'Glob') {
++    const base = searchBase(e, seat)
++    const real = base === null ? null : await realOf(io, base)
++    if (real === null) return why('暫存處', '搜尋範圍看不懂(含 .. 或不是字串)。', '改用絕對路徑指定 path。')
++    return inStaging(real) || aboveStaging(real)
++      ? why('暫存處', `搜尋範圍(${real})包含席報告暫存處。`, '把 path 指到要搜的 repo 或資料夾,不要指到暫存根或它的上層。')
++      : null
++  }
++  if (tool === 'Bash') {
++    const hit = bashBlock(e?.command)
++    return hit === null ? null
++      : why('Bash', `${hit}:審查席的 Bash 不能做對外動作(開 PR、推分支、另開 claude)或碰席報告暫存處。`,
++            '檔案內容用 Read 工具讀;搜字可用 Grep 工具(有的話);git 與 push 要分成兩次 Bash 呼叫(同一行用分號分開也不行);報告內容直接寫在回答裡。')
++  }
++  return null
++}
++
++type Pend = { n: number; waiters: (() => void)[] }
++
++export function createGuard(io: Io) {
++  const seats = new Map<string, Seat>() // 子代理編號 → 席位
++  const bySession = new Map<string, Set<string>>()
++  const pending = new Map<string, Pend>() // 會談 → 啟動中的審查席派工
++
++  function wake(p: Pend) {
++    const ws = p.waiters
++    p.waiters = []
++    for (const w of ws) w()
++  }
++
++  function release(session: string) {
++    const p = pending.get(session)
++    if (!p) return
++    p.n -= 1
++    if (p.n <= 0) pending.delete(session)
++    wake(p) // 每登記一席就叫醒等待者各自重查,不必等整批
++  }
++
++  const ended = new Set<string>() // 已結束的會談:之後才回來的派工不再登記
++  const sessionOf = new Map<string, string>() // 子代理編號 → 所屬會談
++
++  // 存回 $.state:先讀既有的再合併(熱重載後記憶體只有部分席,整份覆寫會抹掉別席;代碼審 r2),
++  // 拿掉 drop 指定的會談;一次只跑一個,避免兩次存回交錯、後寫蓋掉先寫
++  let saving: Promise<void> = Promise.resolve()
++  function save(drop?: string): Promise<void> {
++    saving = saving.then(async () => {
++      try {
++        const merged: Record<string, Seat & { session?: string }> = {}
++        for (const [id, s] of Object.entries(await io.loadSeats() ?? {})) if (validSeat(s)) merged[id] = s as any
++        for (const [id, s] of seats) merged[id] = { ...s, session: sessionOf.get(id) ?? (s as any).session }
++        if (drop !== undefined) for (const id of Object.keys(merged)) if ((merged[id] as any).session === drop) delete merged[id]
++        await io.saveSeats(merged)
++      } catch { /* 存不進去:這場仍在記憶體裡擋 */ }
++    })
++    return saving
++  }
++
++  // 記憶體查不到時讀 $.state(熱重載後模組變數歸零);讀壞了回 'error'
++  async function lookup(id: string): Promise<Seat | undefined | 'error'> {
++    const s = seats.get(id)
++    if (s) return s
++    let saved: unknown
++    try {
++      saved = (await io.loadSeats())?.[id]
++    } catch {
++      return 'error'
++    }
++    if (!validSeat(saved)) return undefined
++    seats.set(id, saved)
++    if (typeof (saved as any).session === 'string') sessionOf.set(id, (saved as any).session)
++    return saved
++  }
++
++  return {
++    // agent.spawn:回 { deny } 或 next 的結果
++    async spawn(session: string, sessionCwd: string, e: any, next: (e: any) => Promise<any>): Promise<any> {
++      const found = typeof e?.parentAgentId === 'string' ? await lookup(e.parentAgentId) : undefined
++      const parent = found === 'error' ? undefined : found
++      let seat: Seat | null = null
++      if (parent) seat = { ...parent, cwd: typeof e?.cwd === 'string' ? e.cwd : parent.cwd }
++      else {
++        const m = parseMarker(e?.prompt)
++        if (m.kind === 'bad') {
++          return { deny: why('派工', `派工詞第一行像審查席標記但寫壞了:${m.why}。`, '修好第一行再派;不是審查席就拿掉這行。') }
++        }
++        if (m.kind === 'seat') {
++          seat = { loop: m.loop, round: m.round, name: m.name, cwd: typeof e?.cwd === 'string' ? e.cwd : sessionCwd }
++        }
++      }
++      if (!seat) return next(e)
++      const p = pending.get(session) ?? { n: 0, waiters: [] }
++      p.n += 1
++      pending.set(session, p)
++      try {
++        const r = await next(e)
++        if (r && typeof r.agentId === 'string' && !ended.has(session)) {
++          seats.set(r.agentId, seat)
++          sessionOf.set(r.agentId, session)
++          if (!bySession.has(session)) bySession.set(session, new Set())
++          bySession.get(session)!.add(r.agentId)
++          await save()
++        }
++        return r
++      } finally {
++        release(session)
++      }
++    },
++    // tool.call:回擋下理由或 null(放行)
++    async call(session: string, e: any): Promise<string | null> {
++      const id = e?.agentId
++      if (typeof id !== 'string') return null // 主會談
++      const found = await lookup(id)
++      if (found === 'error') return e?.tool === 'Bash' ? BASH_ERROR : null // 判不出是不是審查席:Bash 寧可擋
++      let seat = found
++      if (!seat && pending.has(session)) {
++        let timedOut = false
++        const timer = io.sleep(WAIT_MS).then(() => { timedOut = true })
++        while (!seat && !timedOut && pending.has(session)) {
++          const p = pending.get(session)!
++          await Promise.race([new Promise<void>(res => p.waiters.push(res)), timer])
++          seat = seats.get(id)
++        }
++        if (!seat && timedOut) io.toast(`lumos-guard 逾時放行:子代理 ${id} 等了 ${WAIT_MS / 1000} 秒還沒登記完`)
++      }
++      if (!seat) return null
++      try {
++        return await checkTool(io, seat, e)
++      } catch (err) {
++        if (e?.tool === 'Bash') return why('Bash', `判斷出錯(${String((err as Error)?.message ?? err).slice(0, 100)})。`, '換個寫法再試。')
++        return null // 外掛自己出錯:放行
++      }
++    },
++    end(session: string): Promise<void> {
++      ended.add(session)
++      for (const id of bySession.get(session) ?? []) seats.delete(id)
++      for (const [id, s] of sessionOf) if (s === session) { seats.delete(id); sessionOf.delete(id) }
++      bySession.delete(session)
++      const p = pending.get(session)
++      pending.delete(session)
++      if (p) wake(p)
++      return save(session)
++    },
++    // 出錯時要不要當審查席處理:判不出來(熱重載後記憶體不全、$.state 可能讀不到)寧可當是——
++    // 有子代理編號就算;主會談沒有編號,不算(代碼審 r2)
++    seatish(id: unknown): boolean {
++      return typeof id === 'string'
++    },
++    _state: { seat: (id: string) => seats.get(id), pending: (session: string) => pending.get(session)?.n ?? 0 },
++  }
++}
++
++// 讀回 $.state 的值要先驗形狀(別的外掛可以掛 state 事件改寫它;代碼審 r2)
++function validSeat(s: unknown): s is Seat {
++  const o = s as any
++  return !!o && typeof o === 'object' && ['loop', 'round', 'name', 'cwd'].every(k => typeof o[k] === 'string')
++}
++
++export function makeIo($: any): Io {
++  return {
++    real: async path => (await $.fs.stat(path, { resolve: true })).realPath,
++    now: () => Date.now(),
++    sleep: ms => $.clock.sleep(ms),
++    toast: text => {
++      try { $.ui.toast(text) } catch { /* 沒有介面 */ }
++    },
++    loadSeats: async () => (await $.state.get({ plugin: 'lumos-guard', key: 'seats' })).value ?? {},
++    saveSeats: async seats => { await $.state.set({ plugin: 'lumos-guard', key: 'seats' }, seats) },
++  }
++}
++
++type State = { guard: ReturnType<typeof createGuard> | null }
++
++async function onSpawn(st: State, $: any, e: any, next: (e: any) => Promise<any>) {
++  let session = ''
++  let cwd = ''
++  try {
++    if (!st.guard) st.guard = createGuard(makeIo($))
++    session = await $.session.id()
++    cwd = await $.session.cwd()
++  } catch {
++    return next(e) // 外掛自己出錯:放行
++  }
++  return st.guard.spawn(session, cwd, e, next)
++}
++
++// 出錯時:審查席(或判不出是不是)的 Bash 擋,其他放行;主會談一律放行
++function seatishOf(st: State, e: any): boolean {
++  if (typeof e?.agentId !== 'string') return false
++  return st.guard === null || st.guard.seatish(e.agentId)
++}
++
++async function onCall(st: State, $: any, e: any): Promise<string | null> {
++  try {
++    if (!st.guard) st.guard = createGuard(makeIo($))
++    return await st.guard.call(await $.session.id(), e)
++  } catch {
++    return e?.tool === 'Bash' && seatishOf(st, e) ? BASH_ERROR : null
++  }
++}
++
++// 會談結束:等存回 $.state 做完才回,免得引擎接著關掉時那一場的席還留在存檔裡
++export async function onEnd(st: State, e: any) {
++  try {
++    await st.guard?.end(e.sessionId)
++  } catch { /* 同上 */ }
++}
++
++// tool.call 掛鉤自己出錯時怎麼辦(S8)。.catch 裡的 next 不會重跑:工具已經跑過(called)就交回原本的結果,
++// 不謊稱擋下;還沒跑時審查席的 Bash 擋、其他交下去(型別檔 Caught)
++export function onCallFailed(e: any, next: any, seatish: boolean): any {
++  if (next?.called === true) return next(e)
++  return e?.tool === 'Bash' && seatish ? { deny: BASH_ERROR } : next(e)
++}
++
++export const register: Register = on => {
++  const st: State = { guard: null }
++
++  // 掛鉤自己丟錯時引擎會跳過它(等於放行);.catch 寫明出錯怎麼辦:派工放行,Bash 擋、其他工具放行(S8)
++  on('agent.spawn', async ($, e, next) => onSpawn(st, $, e, next))
++    .catch(($, e, next) => next(e))
++
++  on('tool.call', async ($, e, next) => {
++    const deny = await onCall(st, $, e)
++    return deny === null ? next(e) : { deny }
++  }).catch(($, e, next) => onCallFailed(e, next, seatishOf(st, e)))
++
++  on('session.end', async ($, e, next) => {
++    await onEnd(st, e)
++    return next(e)
++  })
++}
+diff --git a/mods/claude/lumos-guard/tsconfig.json b/mods/claude/lumos-guard/tsconfig.json
+new file mode 100644
+index 00000000..8681ec01
+--- /dev/null
++++ b/mods/claude/lumos-guard/tsconfig.json
+@@ -0,0 +1,3 @@
++{
++  "extends": "./.claude-plugin/types/tsconfig.json"
++}
+diff --git a/mods/claude/lumos-guard/types/index.d.ts b/mods/claude/lumos-guard/types/index.d.ts
+new file mode 100644
+index 00000000..e7132f04
+--- /dev/null
++++ b/mods/claude/lumos-guard/types/index.d.ts
+@@ -0,0 +1,9 @@
++// 只給 $.state 用:lumos-guard 放進 $.state 的值,子代理編號 → 審查席(熱重載後還在,外掛讀回來繼續擋;
++// session 是所屬會談,會談結束時只刪那一場)
++export type GuardSeat = { loop: string; round: string; name: string; cwd: string; session?: string }
++
++declare module 'claude-code' {
++  interface PluginState {
++    'lumos-guard': { seats: Record<string, GuardSeat> }
++  }
++}
+diff --git a/mods/claude/lumos-ledger/hooks/ledger.test.ts b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+index bd617455..c4313add 100644
+--- a/mods/claude/lumos-ledger/hooks/ledger.test.ts
++++ b/mods/claude/lumos-ledger/hooks/ledger.test.ts
+@@ -1,12 +1,12 @@
+ import { describe, expect, test } from 'claude-code/testing'
+-import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, toolExtra, vaultIn, type Io } from './register'
++import { BUF_MAX, FLUSH_AT, createLedger, pickMain, sessionOk, spawnEvent, spawnFields, toolExtra, vaultIn, type Io } from './register'
+ import { RULES } from './rules-fixture'
+ 
+ // S13:並行、重新載入、/clear;另驗位置判定、寫入失敗與暫時失敗(Projects/Lumos事件帳_計劃 做法第 2 節)。
+ // 讀寫檔與 git 全用假的:測的是緩衝、塊名、串行佇列這些自己的邏輯,不是引擎。
+ 
+ const MAIN = '/repo'
+ type FakeOpts = {
+   git?: 'ok' | 'not-git' | 'boom' | 'worktree' | 'dubious'
+   vault?: boolean
+   failWrites?: number
+@@ -330,20 +330,34 @@ describe('lumos-ledger 出錯看得見', () => {
+     expect(evs[evs.length - 1].id).toBe('next')
+   })
+ 
+   test('工具呼叫中途丟錯(例如被中斷):照樣記一筆 ok=false、interrupted=true', () => {
+     expect(toolExtra({ tool: 'Bash', command: 'sleep 9' }, undefined, true)).toEqual(
+       { tool: 'Bash', ok: false, denied: false, interrupted: true, cmd: 'sleep 9' })
+     expect(toolExtra({ tool: 'Read', file_path: '/a' }, { isError: true }, false)).toEqual(
+       { tool: 'Read', ok: false, denied: false, paths: ['/a'] })
+   })
+ 
++  test('S12 子代理派孫代理:spawn 事件的 agent 欄是發起的子代理(parentAgentId),不是空的', () => {
++    const child = spawnFields({ parentAgentId: 'sub-1', subagentType: 'general-purpose' }, { model: 'm', agentId: 'grand-1' })
++    expect(child.agent).toBe('sub-1')
++    expect(child.extra.child).toBe('grand-1')
++    const top = spawnFields({ subagentType: 'Explore' }, { deny: 'no' })
++    expect(top.agent).toBe(null)
++    expect(top.extra.denied).toBe(true)
++  })
++
++  test('S12 交給 record 的整組參數:發起方是 parentAgentId,不是子代理自己的 agentId', () => {
++    expect(spawnEvent({ parentAgentId: 'sub-1', agentId: 'wrong' }, { agentId: 'grand-1' }))
++      .toEqual(['sub-1', 'spawn', { agent_type: null, model: null, child: 'grand-1', denied: false }])
++  })
++
+   test('空緩衝不寫空塊', async () => {
+     const f = fakeIo()
+     const l = createLedger(f.io)
+     await l.flushSession('S1')
+     l.add('S1', '/repo', { v: 1, ev: 'tool' })
+     await l.flushSession('S1')
+     await l.flushSession('S1')
+     expect(chunks(f.files).length).toBe(1)
+   })
+ })
+diff --git a/mods/claude/lumos-ledger/hooks/register.ts b/mods/claude/lumos-ledger/hooks/register.ts
+index 96551c53..4e0f747f 100644
+--- a/mods/claude/lumos-ledger/hooks/register.ts
++++ b/mods/claude/lumos-ledger/hooks/register.ts
+@@ -309,27 +309,47 @@ async function onTurnStart(st: State, $: any, e: any) {
+ // 主會談的回合用數字 turn(這個行程裡數的,重載或 resume 後從 1 重算);子代理沒有 turn.start,用引擎給的 turn_id
+ async function onTurnEnd(st: State, $: any, e: any) {
+   try {
+     const s: string = await $.session.id()
+     const which = e.agentId ? { turn_id: e.turnId } : { turn: st.turnNo.get(s) ?? null }
+     await record(st, $, e.agentId, 'turn_end', { ...which, reason: e.reason })
+     if (st.ledger) void st.ledger.flushSession(s) // 不等寫檔
+   } catch { /* 同上 */ }
+ }
+ 
++export function spawnFields(e: any, r: any): { agent: string | null; extra: Record<string, unknown> } {
++  return {
++    agent: e?.parentAgentId ?? null, // 發起方;主迴圈派的沒有(型別檔 AgentSpawnInput)
++    extra: {
++      agent_type: e?.subagentType ?? null,
++      model: r?.model ?? null,
++      child: r?.agentId ?? null,
++      denied: typeof r?.deny === 'string',
++    },
++  }
++}
++
++// record 要的整組參數(發起方、事件名、欄位)由純函式一次給齊,接線那行只原樣轉交、沒有欄位可以選錯
++// (代碼審 r1:原本測試只測 spawnFields,把接線改回 e.agentId 照綠)
++export function spawnEvent(e: any, r: any): [string | null, string, Record<string, unknown>] {
++  const f = spawnFields(e, r)
++  return [f.agent, 'spawn', f.extra]
++}
++
++// 只收一整組參數;這裡拿不到原始事件 e,接線那行只能把 spawnEvent 算出的整組原樣交過來(代碼審 r2:
++// 拆成三個變數再傳,發起方那格照樣能接錯)
++async function recordEvent(st: State, $: any, ev: [string | null, string, Record<string, unknown>]) {
++  await record(st, $, ev[0], ev[1], ev[2])
++}
++
+ async function onSpawn(st: State, $: any, e: any, r: any) {
+-  await record(st, $, e.agentId, 'spawn', {
+-    agent_type: e.subagentType ?? null,
+-    model: r?.model ?? null,
+-    child: r?.agentId ?? null,
+-    denied: typeof r?.deny === 'string',
+-  })
++  await recordEvent(st, $, spawnEvent(e, r))
+ }
+ 
+ // 會談結束:整條鏈共用一個很短的時間上限,只用它的八成;判定沒有快取的塊直接放棄
+ async function onEnd(st: State, $: any, e: any, remainingMs: number) {
+   try {
+     if (st.ledger) {
+       const budget = Math.max(0, Math.floor((Number.isFinite(remainingMs) ? remainingMs : 1000) * 0.8))
+       await Promise.race([st.ledger.flushSessionCachedOnly(e.sessionId), $.clock.sleep(budget)])
+       st.ledger.drop(e.sessionId)
+     }
+diff --git a/scripts/lumos b/scripts/lumos
+index 45b77290..daad589c 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -20216,21 +20216,21 @@ def cmd_teardown(yes=False, source=None):
+         print("  (若 PATH 還沒吃到,先重開一個終端;或直接用來源那份:"
+               f"  python {src / 'scripts' / 'lumos'} teardown)", file=sys.stderr)
+         return 2
+     # 確認——★拒絕/取消前零 mutation★(std F13)
+     if not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不拆。確定要拆就加 --yes", file=sys.stderr)
+             return 2
+         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
+         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks、"
+-              "Claude 外掛 lumos-ledger、lumos-context 與市集 lumos-toolchain)。")
++              "Claude 外掛 lumos-ledger、lumos-context、lumos-guard 與市集 lumos-toolchain)。")
+         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
+         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
+         print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
+         print("  (只拆當前 repo——別的 repo 與 bootstrap 來源 clone 不動。)")
+         try:
+             ans = input("確定? [y/N] ").strip().lower()
+         except EOFError:
+             # isatty() 在某些終端/Windows 回 True 但 stdin 其實 EOF → 讀不到確認。
+             # 對齊 cmd_deinit 與 _confirm_tty 的既有硬化(同一現場,Windows 真機踩過):
+             # 破壞性操作安全預設=拒絕(rc2,同上面非互動分支),不是往下做。
+@@ -22100,26 +22100,26 @@ def _remove_codex_agent(home=None) -> list:
+     for nm, _ in _CODEX_SEATS:
+         f = d / f"{nm}.toml"
+         try:
+             if f.exists() and _CODEX_AGENT_MARK in f.read_text(encoding="utf-8", errors="replace"):
+                 f.unlink(); gone.append(f"agents/{nm}.toml")
+         except OSError:
+             pass
+     return gone
+ 
+ 
+-# ── Claude 外掛:事件帳與交棒脈絡(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點)────
++# ── Claude 外掛:事件帳、交棒脈絡與審查席隔離(Projects/Lumos事件帳_計劃 做法第 4 節、Projects/Claude-mod第二批_計劃 做法要點、Projects/審查席唯讀隔離_計劃 做法三)────
+ # 市集來源一律用 _lumos_src():資料夾型市集是直接讀那個資料夾本身(claude plugin list --json 的
+ # readFromFolder 欄位,2026-10-05 實測),登記成會被刪的 worktree 外掛就會失效。
+ # 新增外掛不必先跑 marketplace update:資料夾型市集 install 時直接讀市集檔(2026-10-06 隔離設定資料夾實測)。
+ _LUMOS_MARKET = "lumos-toolchain"
+-_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain")
++_LUMOS_PLUGINS = ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain", "lumos-guard@lumos-toolchain")
+ _PLUGIN_RANK = {"ok": 0, "absent": 1, "no-source": 2, "failed": 3}   # 回傳值取最差的一支
+ 
+ 
+ def _claude_json(claude, args, timeout=30):
+     """跑一個 claude 列表指令,回「物件組成的清單」;格式認不得(null、物件、數字、空、元素不是物件)一律當失敗——
+     代碼審 r1:吐 null 時迭代 None 會丟 TypeError,把整個 install / uninstall 帶倒。"""
+     import json as _j
+     r = subprocess.run([claude, *args], capture_output=True, check=False, text=True, errors="replace", timeout=timeout)
+     if r.returncode != 0:
+         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else f"rc={r.returncode}")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f68c5184..49067b6f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -71336,21 +71336,22 @@ print("unknown " + " ".join(a), file=sys.stderr); sys.exit(2)
+ def _fake_claude_env(state=None, with_claude=True):
+     """回 (env 增量, state 路徑, log 路徑, 來源 repo)。來源 repo 帶市集檔;state 給定就先寫進去。"""
+     import json as _j
+     import os
+     base = Path(tempfile.mkdtemp(prefix="gctl-fake-claude-"))
+     bin_d, src = base / "bin", base / "src"
+     bin_d.mkdir(); (src / ".claude-plugin").mkdir(parents=True)
+     (src / ".claude-plugin" / "marketplace.json").write_text(
+         _j.dumps({"name": "lumos-toolchain", "owner": {"name": "t"},
+                   "plugins": [{"name": "lumos-ledger", "source": "./mods/claude/lumos-ledger"},
+-                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"}]}), encoding="utf-8")
++                              {"name": "lumos-context", "source": "./mods/claude/lumos-context"},
++                              {"name": "lumos-guard", "source": "./mods/claude/lumos-guard"}]}), encoding="utf-8")
+     if with_claude:
+         (bin_d / "claude").write_text(_FAKE_CLAUDE, encoding="utf-8"); (bin_d / "claude").chmod(0o755)
+     st, log = base / "state.json", base / "calls.log"
+     log.write_text("", encoding="utf-8")
+     if state is not None:
+         st.write_text(_j.dumps(state), encoding="utf-8")
+     env = {"PATH": str(bin_d) + os.pathsep + os.environ.get("PATH", ""), "LUMOS_HOME": str(src),
+            "FAKE_CLAUDE_STATE": str(st), "FAKE_CLAUDE_LOG": str(log)}
+     return env, st, log, src
+ 
+@@ -71377,21 +71378,22 @@ def t_install_registers_ledger_plugin():
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     check("S6① 回 ok", r == "ok", r)
+     check("S6① 以 _lumos_src() 為來源加市集(--scope user)",
+           any(l.startswith("plugin marketplace add " + str(src.resolve())) and "--scope user" in l for l in c), str(c))
+     check("S6① 安裝外掛(--scope user)", "plugin install lumos-ledger@lumos-toolchain --scope user" in c, str(c))
+     # ② 已經一樣 → 只查詢、不加不裝
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src) + "/"}],
+                             "plugins": [{"id": "lumos-ledger@lumos-toolchain", "enabled": True},
+-                                        {"id": "lumos-context@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
++                                        {"id": "lumos-context@lumos-toolchain", "enabled": True},
++                                          {"id": "lumos-guard@lumos-toolchain", "enabled": True}]}), encoding="utf-8")
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     check("S6② 已裝好 → ok 且不呼叫 add / install(路徑多一個結尾斜線也算一樣)",
+           r == "ok" and not any(" add " in f" {l} " or l.startswith("plugin install") for l in c), str(c))
+     # ③ 同名市集指向別的本機路徑 → 先移除再加
+     env, st, log, src = _fake_claude_env(state={"markets": [{"name": "lumos-toolchain", "source": "directory",
+                                                               "path": "/tmp/old-worktree"}], "plugins": []})
+     r = _with_env(env, m._sync_claude_plugin)
+     c = calls(log)
+     ia = next((i for i, l in enumerate(c) if l.startswith("plugin marketplace remove lumos-toolchain")), -1)
+@@ -72081,41 +72083,41 @@ def t_ledger_plugin_files_valid():
+     check("S9 寫的 .gitignore 內容跟 _note_audit_work_dir 相同",
+           bool(gi and want) and gi.group(1).encode().decode("unicode_escape") == want.group(1).encode().decode("unicode_escape"),
+           f"{gi.group(1) if gi else None!r} vs {want.group(1) if want else None!r}")
+     banned = [("回傳拒絕", r"\bdeny\s*:"), ("改寫事件後交下去", r"next\(\{"),
+               ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'")]
+     for what, pat in banned:
+         check(f"S9 不用會改變行為的介面:{what}", not _re.search(pat, code), pat)
+ 
+ 
+ def t_install_registers_context_plugin():
+-    """Claude-mod第二批 S4:外掛清單兩支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
++    """Claude-mod第二批 S4:外掛清單每支各自裝上(裝完列表確認)與移除;一支失敗只影響它自己並照實印出;
+     市集只在全部外掛移除成功後才移除,任一支失敗保留市集;來源市集檔沒列的那支略過。"""
+     import contextlib
+     import io
+     import json as _j
+     m = _load_lumos_inproc()
+     def calls(log):
+         return [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln]
+     def run(env, fn):
+         out, err = io.StringIO(), io.StringIO()
+         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+             r = _with_env(env, fn)
+         return r, out.getvalue(), err.getvalue()
+-    check("S4 外掛清單是事件帳與交棒脈絡兩支",
+-          tuple(m._LUMOS_PLUGINS) == ("lumos-ledger@lumos-toolchain", "lumos-context@lumos-toolchain"), str(m._LUMOS_PLUGINS))
++    check("S4 外掛清單含事件帳與交棒脈絡,事件帳排第一",
++          m._LUMOS_PLUGINS[0] == "lumos-ledger@lumos-toolchain" and "lumos-context@lumos-toolchain" in m._LUMOS_PLUGINS, str(m._LUMOS_PLUGINS))
+     env, st, log, src = _fake_claude_env()
+     r, out, err = run(env, m._sync_claude_plugin)
+     c = calls(log)
+-    check("S4 兩支都以 --scope user 裝上、回 ok",
++    check("S4 每支都以 --scope user 裝上、回 ok",
+           r == "ok" and all(f"plugin install {p} --scope user" in c for p in m._LUMOS_PLUGINS), f"{r} {c}")
+-    check("S4 兩支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
++    check("S4 每支各印一行已就位", all(f"{p} 已就位" in out for p in m._LUMOS_PLUGINS), out)
+     # 一支裝失敗:另一支照裝、回 failed、失敗那支印到標準錯誤
+     env, st, log, src = _fake_claude_env()
+     env.update(FAKE_CLAUDE_FAIL="install", FAKE_CLAUDE_FAIL_ID="lumos-ledger@lumos-toolchain")
+     r, out, err = run(env, m._sync_claude_plugin)
+     check("S4 事件帳外掛裝失敗:交棒脈絡外掛照裝", "plugin install lumos-context@lumos-toolchain --scope user" in calls(log), str(calls(log)))
+     check("S4 一支失敗回 failed、失敗那支印到標準錯誤",
+           r == "failed" and "lumos-ledger@lumos-toolchain 沒裝好" in err and "lumos-context@lumos-toolchain 已就位" in out, f"{r} {err} {out}")
+     # install 回成功但列表裡沒有:判那支 failed
+     env, st, log, src = _fake_claude_env()
+     env["FAKE_CLAUDE_INSTALL_NOOP"] = "lumos-context@lumos-toolchain"
+@@ -72134,36 +72136,137 @@ def t_install_registers_context_plugin():
+     # 移除:兩支都移除,市集最後移除一次
+     def both(src):
+         return {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                 "plugins": [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]}
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps(both(src)), encoding="utf-8")
+     r, out, err = run(env, m._teardown_claude_plugin)
+     c = calls(log)
+     rm = [i for i, ln in enumerate(c) if ln.startswith("plugin uninstall")]
+     mi = next((i for i, ln in enumerate(c) if ln.startswith("plugin marketplace remove")), -1)
+-    check("S4 移除:兩支都移除、市集在它們之後只移除一次",
+-          r == "ok" and len(rm) == 2 and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
++    check("S4 移除:每支都移除、市集在它們之後只移除一次",
++          r == "ok" and len(rm) == len(m._LUMOS_PLUGINS) and mi > max(rm) and sum(ln.startswith("plugin marketplace remove") for ln in c) == 1, str(c))
+     # 移除時一支失敗:另一支照移、市集保留、手動指令只列失敗那支加市集
+     env, st, log, src = _fake_claude_env()
+     st.write_text(_j.dumps(both(src)), encoding="utf-8")
+     env.update(FAKE_CLAUDE_FAIL="uninstall", FAKE_CLAUDE_FAIL_ID="lumos-context@lumos-toolchain")
+     r, out, err = run(env, m._teardown_claude_plugin)
+     c = calls(log)
+     check("S4 一支移除失敗:另一支照移、市集保留",
+           r == "failed" and "plugin uninstall lumos-ledger@lumos-toolchain --scope user" in c
+           and not any(ln.startswith("plugin marketplace remove") for ln in c), str(c))
+     check("S4 手動指令只列失敗那支加市集",
+           "claude plugin uninstall lumos-context@lumos-toolchain" in err and "claude plugin uninstall lumos-ledger" not in err
+           and "claude plugin marketplace remove lumos-toolchain" in err, err)
+ 
+ 
++def t_install_registers_guard_plugin():
++    """審查席唯讀隔離 S9:外掛清單含 lumos-guard,install 會裝上、uninstall 會移除(逐支邏輯本身由
++    t_install_registers_context_plugin 與 t_lumos_plugin_install_edge_cases 管)。"""
++    import contextlib
++    import io
++    import json as _j
++    m = _load_lumos_inproc()
++    gid = "lumos-guard@lumos-toolchain"
++    check("S9 外掛清單含審查席隔離", gid in m._LUMOS_PLUGINS, str(m._LUMOS_PLUGINS))
++    def run(env, fn):
++        out, err = io.StringIO(), io.StringIO()
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++            r = _with_env(env, fn)
++        return r, out.getvalue(), err.getvalue()
++    env, st, log, src = _fake_claude_env()
++    r, out, _err = run(env, m._sync_claude_plugin)
++    c = log.read_text(encoding="utf-8").splitlines()
++    check("S9 install 裝上審查席隔離外掛", r == "ok" and f"plugin install {gid} --scope user" in c and f"{gid} 已就位" in out, f"{r} {c}")
++    env, st, log, src = _fake_claude_env()
++    st.write_text(_j.dumps({"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
++                            "plugins": [{"id": p, "enabled": True, "scope": "user"} for p in m._LUMOS_PLUGINS]}), encoding="utf-8")
++    r, _out, _err = run(env, m._teardown_claude_plugin)
++    c = log.read_text(encoding="utf-8").splitlines()
++    check("S9 uninstall 移除審查席隔離外掛", r == "ok" and f"plugin uninstall {gid} --scope user" in c, str(c))
++
++
++def t_guard_plugin_files_valid():
++    """審查席唯讀隔離 S10:lumos-guard 的描述檔與 hooks.json 合法;市集列出的外掛恰好是外掛清單那幾支;
++    外掛原始碼不改寫輸入或結果、不跑外部指令。"""
++    import json as _j
++    import re as _re
++    _need_src(".claude-plugin/marketplace.json", "mods/claude/lumos-guard")   # 消費專案沒有外掛檔,記成 skip
++    m = _load_lumos_inproc()
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    mk = _j.loads((repo / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
++    names = sorted(f"{p.get('name')}@{mk.get('name')}" for p in mk.get("plugins", []))
++    check("S10 市集列出的外掛恰好是外掛清單那幾支", names == sorted(m._LUMOS_PLUGINS), f"{names} vs {m._LUMOS_PLUGINS}")
++    for p in mk.get("plugins", []):
++        src = p.get("source", "")
++        pdir = (repo / src).resolve()
++        check(f"S10 {p.get('name')} 的 source 是 ./ 開頭、指到含描述檔的資料夾",
++              isinstance(src, str) and src.startswith("./") and (pdir / ".claude-plugin" / "plugin.json").is_file(), repr(src))
++    gdir = repo / "mods" / "claude" / "lumos-guard"
++    pj = _j.loads((gdir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
++    check("S10 描述檔名稱是 lumos-guard", pj.get("name") == "lumos-guard", str(pj))
++    hooks = _j.loads((gdir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
++    check("S10 hooks.json 只載入 register.ts", hooks == {"modules": ["./register.ts"]}, str(hooks))
++    code = (gdir / "hooks" / "register.ts").read_text(encoding="utf-8")
++    banned = [("跑外部指令", r"\$\.process\."), ("改寫事件後交下去", r"next\(\{"), ("寫檔", r"\$\.fs\.(write|append|remove|mkdir)"),
++              ("改系統提示或注入內容", r"'prompt\.(compose|section|context|attachment)'"), ("改使用者輸入", r"'prompt\.submit'"),
++              ("動回合結果", r"'turn\.complete'"), ("附加對話列", r"\$\.session\.append"),
++              ("改寫事件欄位", r"\be\??\.[A-Za-z_]\w*\s*(=(?!=)|\+=|-=|\|\|=|&&=|\?\?=)"),
++              ("用中括號改寫事件欄位", r"\be\[[^\]]*\]\s*=(?!=)"), ("合併進事件", r"Object\.assign\(\s*e\b"),
++              ("刪事件欄位", r"\bdelete\s+e[.\[]"), ("把 e 換成別的物件", r"(?<![.\w])e\s*=(?!=)"),
++              ("把 e 以外的東西交下去", r"next\((?!\s*e\s*\))")]
++    for what, pat in banned:
++        check(f"S10 不用:{what}", not _re.search(pat, code), pat)
++    check("S10 只掛派工、工具呼叫、會談結束三個事件",
++          sorted(set(_re.findall(r"on\('([a-z.]+)'", code))) == ["agent.spawn", "session.end", "tool.call"],
++          str(_re.findall(r"on\('([a-z.]+)'", code)))
++    # 能擋人的掛鉤都要掛 .catch:沒掛的話掛鉤自己出錯時引擎直接跳過它,等於放行(Claude Code 2.1.290 起 validate 會列出)。
++    # CI 沒有 claude 指令,這一段只在本機有 claude 時查
++    import shutil as _sh
++    claude = _sh.which("claude")
++    if claude:
++        r = subprocess.run([claude, "plugin", "validate", str(gdir), "--json"], capture_output=True, text=True,
++                           errors="replace", check=False, timeout=60)
++        try:
++            gh = [g for c in _j.loads(r.stdout).get("contents", []) for g in c.get("gatingHooks") or []]
++        except ValueError:
++            gh = None
++        check("S10 claude plugin validate:能擋人的掛鉤是 agent.spawn 與 tool.call,都掛了 .catch",
++              gh is not None and sorted(g.get("hook") for g in gh) == ["agent.spawn", "tool.call"]
++              and all(g.get("hasCatch") is True for g in gh), r.stdout[-600:] if gh is None else str(gh))
++
++
++def t_seat_templates_carry_marker():
++    """審查席唯讀隔離 S11:派工範本 §1、§3、§7.6、§7.8 的派工詞第一行是合格的 LUMOS-SEAT 標記、
++    實驗目錄指到席位工作資料夾;編排者須知寫明席報告暫存處與收貨時自己看 repo。"""
++    import re as _re
++    _need_src("skills/lumos-design-loop/templates.md")
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    L = (repo / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8").split("\n")
++    seat_re = _re.compile(r"^LUMOS-SEAT:\s*(\S+)$")   # 跟 mods/claude/lumos-guard 的 SEAT_RE 同一條
++    for head in ("## 1. Design-loop 審計員", "## 3. Code-loop reviewer", "## 7.6 架構對齊席派工", "## 7.8 資安席派工"):
++        i = next((k for k, ln in enumerate(L) if ln.startswith(head)), -1)
++        j = next((k for k in range(i + 1, len(L)) if L[k].startswith("```")), -1) if i >= 0 else -1
++        first = next((ln.strip() for ln in L[j + 1:] if ln.strip()), "") if j >= 0 else ""
++        m = seat_re.match(first)
++        check(f"S11 {head} 派工詞第一行是合格的 LUMOS-SEAT", bool(m) and len(m.group(1).split("/")) == 3, first)
++        end = next((k for k in range(j + 1, len(L)) if L[k].startswith("```")), len(L)) if j >= 0 else 0
++        check(f"S11 {head} 派工詞把實驗目錄指到席位工作資料夾", "/tmp/lumos-seat-work/" in "\n".join(L[j:end]), "")
++    body = "\n".join(L)
++    check("S11 編排者須知寫明席報告收齊前不寫到硬碟", "收齊前不寫到硬碟" in body, "")
++    check("S11 編排者須知寫明收貨時自己看 repo", "git status" in body and "不報" in body, "")
++    for rel in ("skills/lumos-design-loop/SKILL.md", "skills/lumos-code-loop/SKILL.md",
++                "skills/lumos-design-loop/reference.md", "skills/lumos-code-loop/reference.md"):
++        txt = (repo / rel).read_text(encoding="utf-8")
++        check(f"S11 {rel} 不再寫「先存檔放著」(決策 d5 收齊前不落地)", "先存檔放著" not in txt, "")
++
++
+ def t_lumos_plugin_install_edge_cases():
+     """外掛清單的邊角(從審查席唯讀隔離分支搬來,那邊代碼審 r1 的修正):裝完確認的第一次查詢出錯也交給等待重查;來源沒有市集檔的訊息走共用函式;
+     移除失敗時只有市集是我們的才叫人移除它;市集檔 plugins 欄位怪或檔首有 BOM 不丟例外。"""
+     import contextlib
+     import io
+     import json as _j
+     from unittest import mock
+     m = _load_lumos_inproc()
+     # ① 裝完第一次查詢丟錯(另一支 install 同時在寫):交給等待重查,不判失敗
+     seq = iter([False, RuntimeError("busy")])
+@@ -72202,20 +72305,21 @@ def t_lumos_plugin_install_edge_cases():
+                           {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
+     check("移除失敗、市集不是我們的:手動指令不列移除市集", r == "failed" and "marketplace remove" not in err, err)
+     r, err = teardown_err(lambda src: {"markets": [{"name": "lumos-toolchain", "source": "directory", "path": str(src.resolve())}],
+                                        "plugins": plugs},
+                           {"FAKE_CLAUDE_FAIL": "uninstall", "FAKE_CLAUDE_FAIL_ID": "lumos-context@lumos-toolchain"})
+     check("移除失敗、市集是我們的:手動指令列移除市集", r == "failed" and "marketplace remove lumos-toolchain" in err, err)
+     # ⑥ 手動指令行都能直接整行貼上:不在行尾帶 # 註解
+     r, err = teardown_err(lambda src: {"markets": [], "plugins": plugs}, {"FAKE_CLAUDE_RAW": "null"})
+     cmds = [ln.strip() for ln in err.splitlines() if ln.strip().startswith("claude plugin")]
+     check("手動指令行不帶 # 註解", bool(cmds) and not any("#" in c for c in cmds), err)
++    check("判不出市集是不是我們的:另起一行提醒先確認來源再刪", "判不出是不是我們的" in err and "marketplace list" in err, err)
+     # ⑦ 裝完確認那次查詢用 10 秒逾時(claude 卡住時不拖太久)
+     tims = []
+     def user2(_c, _pid, timeout=30):
+         tims.append(timeout)
+         return len(tims) > 1
+     with mock.patch.object(m, "_lumos_plugin_user", user2), mock.patch.object(m, "_claude_do", lambda *a, **k: None):
+         m._lumos_plugin_ensure("claude", "lumos-context@lumos-toolchain")
+     check("裝完確認那次查詢用 10 秒逾時", tims[1:2] == [10], str(tims))
+     # ⑤ 回傳取最差:一支來源沒列(no-source)、另一支裝失敗(failed)→ 整體 failed
+     env, _st, _log, src = _fake_claude_env()

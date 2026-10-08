@@ -1,0 +1,222 @@
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index ed99eb88..23f23845 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "6f11758f41a582bcdf83bf32da51927c63d8b76ef592c382798dbb2938b53f84",
++    "scripts/test_lumos.py": "bbf4862d7281add86980dd152e13e25139ccb0e419bbe133f14b3a443a74a5cb",
+     "scripts/test_autonomous_loop.py": "a9bff38eeb3a521bbf731874b3c59d3cc540f0d0c4a6af3cf7a7a4288a697e78",
+     "scripts/hooks/pre-commit": "5a8dc225ef018d942f6b1d5e831db9879742a9ae20d4becb1af77d8fa5ab0656",
+     "scripts/hooks/pre-push": "4d603c1c4864ed0e5d26efb520136a5a43f7b4120443ecde297896304cd69f88",
+     "scripts/hooks/post-commit": "f7ccea562d2e0fa83ec2e9d527b93a6f10204c541f377f425e42ad814a3a27dc",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "eb22df8bda22fa42f9ee0a5ea5a628c7bc24017f35bc1ef758a1ab2b83988a1a",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "16851237e0b3cecdb867e9b2dd36cc71e0f4e5c4a01cb155510d3f46df7f3e00",
+     "scripts/hooks/claude/check-graph-sync.py": "b01ec12ca4514b6f6f6904194cc2d6b747f8fca919c6a5dea9bb571c3a4974de",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-10-05T03:02:20+08:00",
+-  "note": "派工鏡頭加入同步背景啟動失敗的固定提示與 error 事件，相關測試先紅後綠"
++  "approved_at": "2026-10-05T03:26:10+08:00",
++  "note": "整段代碼審修正無 getuid 快取信任與期限末誤報，新增先紅後綠驗證"
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index 1064ffac..447a8b75 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -33126,29 +33126,34 @@ def _lens_dispositions_lines(lines, rec):
+ 
+ def _lens_cache_path(repo_root, base_sha, head_sha, extra=""):
+     import hashlib
+     # repo 部分用 realpath(跟 armed 檔的 _lens_repo_key 同一種算法;code-codex-s1 r1 架構席:兩套 key 並存)
+     # extra=表態記錄的 sha256(表態閘 S8):重表態之後舊快取自然 miss
+     key = hashlib.sha256(f"{os.path.realpath(str(repo_root))}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}|{extra}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
+     return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+ 
+ 
+ def _lens_cache_read(path, ttl_sec=1200):
+-    """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
++    """只讀私有快取目錄的普通檔；POSIX 加驗 owner/權限，並限制 TTL 與結果形狀。"""
+     import json as _json, stat as _stat, time as _time
+     try:
++        if not _trusted_private_dir(path.parent, ".cache", "lumos", "dispatch-lens") or path.is_symlink():
++            return None
+         st = path.stat()
++        if not _stat.S_ISREG(st.st_mode):
++            return None
+         if hasattr(os, "getuid") and (st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))):
+             return None
+         if _time.time() - st.st_mtime > ttl_sec:
+             return None
+-        return _json.loads(path.read_text(encoding="utf-8"))
++        got = _json.loads(path.read_text(encoding="utf-8"))
++        return got if isinstance(got, dict) and isinstance(got.get("text"), str) else None
+     except (OSError, ValueError):
+         return None
+ 
+ 
+ def _lens_cache_write(path, data):
+     """★寫入端也要驗目錄★(2026-09-06 全 repo 審視 #6):原本直接 mkdir + chmod(0700),
+     目錄若被換成指向別處的 symlink,就會把**別人的目錄**權限改掉。讀取端一直都有檢查,
+     寫入端沒有——現在兩邊都走同一支 _trusted_private_dir。不過關就靜默不寫(fail-open)。"""
+     import json as _json, tempfile as _tf
+     try:
+@@ -34009,20 +34014,25 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline, warm_ra
+     # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
+     end = _t.monotonic() + float(deadline)
+     while _t.monotonic() < end:
+         got = _lens_cache_read(cpath)
+         if got is not None:
+             # 等待端只讀快取:即使起初搶到鎖,啟動失敗後也可能被別人換入新鎖。
+             # 正常背景工作會核對啟動者再清自己的鎖;等待端不能按舊取得狀態刪路徑。
+             _lens_emit_cache_hit(got, as_json)
+             return 0
+         _t.sleep(0.1)
++    # 最後一次睡眠期間若已產出快取，先採用結果，才分類鎖的逾時狀態。
++    got = _lens_cache_read(cpath)
++    if got is not None:
++        _lens_emit_cache_hit(got, as_json)
++        return 0
+     # ★非 JSON 模式也要講人話★:第一版只印空行,手動敲時完全不知下一步。
+     return _lens_report_lock_timeout(lock, diff_range, as_json)
+ 
+ 
+ def _lens_release_owned_lock():
+     """背景程序只釋放派工端指定、仍寫著該派工端 PID 的私有快取鎖。"""
+     if os.environ.get(_LENS_WARM_ENV) != "1":
+         return
+     owner = os.environ.get("LUMOS_LENS_LOCK_OWNER")
+     name = os.environ.get("LUMOS_LENS_LOCK_NAME", "")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 3559ebad..20797589 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -54807,33 +54807,114 @@ def t_lens_warmer_ref_move_keeps_lock_identity():
+ 
+ def t_lens_cache_read_without_getuid():
+     """快取讀取沿用私有目錄的平台分支，POSIX 仍檢查擁有者與權限。"""
+     import json as _json
+     import os as _os
+     import types as _types
+     from unittest import mock as _mock
+ 
+     m = _load_lumos_module()
+     with tempfile.TemporaryDirectory() as d:
+-        p = Path(d) / "cache.json"
++        home = Path(d)
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        p = cache_dir / "cache.json"
+         p.write_text(_json.dumps({"text": "cached"}), encoding="utf-8")
+         without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
+-        with _mock.patch.object(m, "os", without_uid):
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "os", without_uid):
+             got = m._lens_cache_read(p)
+         check("Windows 分支:沒有 getuid 仍可讀合法快取", got == {"text": "cached"}, str(got))
+-        if hasattr(_os, "getuid"):
+-            with _mock.patch.object(m.os, "getuid", return_value=_os.getuid() + 1):
+-                foreign = m._lens_cache_read(p)
+-            p.chmod(0o666)
+-            writable = m._lens_cache_read(p)
+-            check("POSIX 分支:不信非自己擁有或他人可寫的快取",
+-                  foreign is None and writable is None, f"foreign={foreign} writable={writable}")
++        with _mock.patch.object(Path, "home", return_value=home):
++            if hasattr(_os, "getuid"):
++                with _mock.patch.object(m.os, "getuid", return_value=_os.getuid() + 1):
++                    foreign = m._lens_cache_read(p)
++                p.chmod(0o666)
++                writable = m._lens_cache_read(p)
++                check("POSIX 分支:不信非自己擁有或他人可寫的快取",
++                      foreign is None and writable is None, f"foreign={foreign} writable={writable}")
++
++
++
++def t_lens_cache_read_rejects_untrusted_path_without_getuid():
++    """沒有 getuid 時，連結到私有快取外的目錄或檔案也不能進派工詞。"""
++    import json as _json
++    import os as _os
++    import types as _types
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        home, shared = root / "home", root / "shared"
++        home.mkdir()
++        shared.mkdir()
++        parent = home / ".cache" / "lumos"
++        parent.mkdir(parents=True)
++        cache_dir = parent / "dispatch-lens"
++        cache_dir.symlink_to(shared, target_is_directory=True)
++        attack = cache_dir / "attack.json"
++        attack.write_text(_json.dumps({"text": "ATTACKER-CONTROLLED"}), encoding="utf-8")
++        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "os", without_uid):
++            trusted = m._trusted_private_dir(cache_dir, ".cache", "lumos", "dispatch-lens")
++            got = m._lens_cache_read(attack)
++        check("無 getuid 快取前置:外部連結目錄本身不可信", trusted is False,
++              f"trusted={trusted} path={attack}")
++        check("無 getuid 快取:不讀外部連結目錄的任意派工文字", got is None, str(got))
++
++        cache_dir.unlink()
++        cache_dir.mkdir(mode=0o700)
++        linked_file = cache_dir / "linked.json"
++        linked_file.symlink_to(shared / "attack.json")
++        malformed = cache_dir / "malformed.json"
++        malformed.write_text(_json.dumps({"text": 42}), encoding="utf-8")
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "os", without_uid):
++            linked = m._lens_cache_read(linked_file)
++            invalid = m._lens_cache_read(malformed)
++        check("無 getuid 快取:檔案連結也不讀", linked is None, str(linked))
++        check("無 getuid 快取:不把非文字 JSON 當派工內容", invalid is None, str(invalid))
++
++
++def t_lens_deadline_final_cache_read():
++    """最後一次輪詢後、期限前已寫好的快取應優先於逾時分類。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        cache = root / "cache.json"
++        lock = cache.with_name(cache.name + ".warming")
++        lock.write_text("existing", encoding="utf-8")
++        state = {"written": False}
++        def finish_during_sleep(_seconds):
++            state["written"] = True
++            lock.unlink()
++        out = _io.StringIO()
++        with _mock.patch("time.monotonic", side_effect=[0.0, 0.0, 2.0]), \
++                _mock.patch("time.sleep", side_effect=finish_during_sleep), \
++                _mock.patch.object(m, "_lens_cache_read",
++                    side_effect=lambda _path: {"text": "ready"} if state["written"] else None), \
++                _ctx.redirect_stdout(out):
++            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 1)
++        data = _json.loads(out.getvalue())
++        check("期限末前置:背景在最後一次睡眠期間完成並清鎖",
++              state["written"] and not lock.exists(), str(data))
++        check("期限末:讀到已完成快取就不誤報鎖狀態未知",
++              rc == 0 and data.get("text") == "ready" and not data.get("timed_out"),
++              f"rc={rc} data={data}")
+ 
+ 
+ def t_lens_warmer_cache_ttl_retries():
+     """早退清鎖後，過期快取不能阻止下一次暖機取得同名鎖。"""
+     import os as _os
+     import time as _time
+     from unittest import mock as _mock
+ 
+     m = _load_lumos_module()
+     with tempfile.TemporaryDirectory() as d:

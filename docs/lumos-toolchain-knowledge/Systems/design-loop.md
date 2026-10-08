@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-29
+updated: 2026-10-06
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
@@ -32,6 +32,12 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
   - "[[Verification/2026-09-11_skills健檢]]"
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
+  - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
+  - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
+  - "[[Verification/2026-10-06_載體拒收修復主線CI]]"
+  - "[[Verification/2026-10-06_負數發現計數拒收驗證]]"
+  - "[[Verification/2026-10-06_負數計數拒收主線CI]]"
+  - "[[Verification/2026-10-06_快照拒收入口驗證]]"
 summary: |-
   PITFALL:[2026-09-26 兩份設計審過閘後凍結被擋]規格閘的留痕(kind=spec-gate、不帶輪次)跟審查帳記在同一個迴圈編號下;處置閘讀帳本來就略過它,凍結判定與回放(loop replay)讀帳卻沒略過,整個迴圈被判成「有的帶輪次有的不帶」而拒凍——規格閘 09-17 上線後、先跑規格閘再開設計審的迴圈都凍不起來。修法:replay 讀帳同樣略過 spec-gate。凡是按迴圈編號讀審查帳的地方都要記得這一類列 [test:t_loop_replay_ignores_spec_gate_rows]
   PITFALL:[2026-09-25 筆記欄位關卡補齊的設計審與代碼審中實踩]兩個收貨工具的漏:①★report-normalize 對「檔首判成非 clean、但 F 段沒寫 severity」說已正規化★——正確性席報告 F1、F2 都漏寫,工具放行,到記帳時才因報了幾條對不上被擋;現在檔首非 clean 時,★只數數量★:發現段(標題 F<n>,不分大小寫、容許縮排、F1.1 這種編號子標題不算、標題寫明已驗過/沒問題/已看,無 的不算)比 severity 行多就印出來要審查席自己補(不替它填值)。★為什麼只數數量★:代碼審三輪裡,逐段找範圍的做法每輪都被標題寫法的邊界打穿(子標題、層級錯位、同名標題、縮排、編號子標題),而且每輪的洞都是上一輪修正帶進來的——照「同類修兩輪沒乾淨就換形狀」,Enzo 裁改成跟記帳「報了幾條」同一種數法;天花板:指不出哪一條漏,某條寫兩行另一條沒寫時會漏看。只在記帳當下檢查,不回頭驗舊報告(掃 1885 份歷史報告有 8 份會中,都是舊格式,凍結判定不受影響)。②★loop next 印的記帳模板還建議已停用的 caught|missed★(canary 協議 08-14 停用),而且沒帶 --snapshot、照抄會被代碼審的第一筆就要附審材那條擋;改成 none 並補 --snapshot。重現:拿一份檔首 blocker、F 段沒 severity 的報告跑 lumos report-normalize [test:t_report_normalize_flags_finding_without_severity] [test:t_loop_next_record_templates_use_current_kind]
@@ -41,7 +47,7 @@ summary: |-
   KEY:[2026-09-09 審查有沒有用記帳]收貨線多一道機械閘:席報告沒正規化(檔首檔級 severity 行、每條 finding 恰一行獨立宣告)記帳 rc2 並在治理帳留 canary/blocked;`lumos report-normalize` 只搬格式(vault-free);載體必帶 --refuted-set(intake 整字驗、圍欄不算);問閘尾一行「席位報 N(機器數)→存活/重現不到→折/放行」觀測不進合取;單源 [[Projects/審查有沒有用記帳_計劃]]
   KEY:[2026-09-17 Enzo 裁]架構對齊席每個分級都派(_TIER_ROSTER 六組合:design/code × light/standard/high):code/light 以前沒編制、skill 寫可跳,現在=只派架構對齊一席(算人數);design/light 多一席架構對齊(不算人數)。理由:小改動也不能脫離原有架構亂加 [test:t_tier_roster_table] [test:t_loop_next_roster]
   KEY:[2026-09-17 風險低放行]處置閘第五步呼叫 _clause_check 時 door=None(=風險高語意:收 manual、要回退節);風險低的加嚴只在規格閘那一路(plan_risk=low);風險低計劃不會進處置閘(不派審),進來了也照風險高判——判定不會比規格閘鬆
-  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 [test:]/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭;code 開頭但沒連字號的也當設計審)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 `[test:]`/[manual:≥4 字且含實字] 就不得 PASS(理由印「條款綁定」;★2026-09-17 起判定走跟 lumos spec-gate 同一支 _clause_check([[Systems/規格閘]]):首筆帳晚於 2026-09-18T00:00+08:00 的迴圈另驗句式(一條文法:觸發子句?主體 應 回應;當/在/若啟用/若 開頭要有逗號、停用詞當無條件型、複合觸發擋)與「## 回退」節 ≥20 字含實字,不合不得 PASS;早於的只驗綁定不回溯;懸空只提醒不擋照舊 [test:t_disposal_step5_shares_checker] [test:t_disposal_step5_grammar_skip_only] [test:t_spec_gate_not_retroactive]★;哪些字看得見沿用 _visible_lines(行層級:```/~~~ 各自配對且關的至少要一樣長、縮排 ≤3 才是圍欄)+ _strip_inline_markup(行內:單/雙反引號 span、未閉合反引號之後一律不信);★不偵測 HTML 註解★(註解裡的 [SN] 走認不得→擋);被截掉的段落裡有 [SN]=認不得,擋;一行只認一條,後面的 [SN] 是引用;勾選框/• + — 1) 1、a. aa. 一、十一、甲) ① ㈠ ⅰ 列都算定義行(1–2 字母/中文數字+分隔符=編號,三字母以上=詞);同編號定義兩次擋;[SN] 像清單項卻是不認得的前綴=格式看不懂,擋(不管有沒有別的合法條款、也不管該編號是否已在別處定義);詞+冒號(注:[S1])算散文;只在散文/標題提到 [SN]=視同未啟用跳過;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed、計劃讀不到同 G3 擋下 rc2 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
   KEY:[2026-09-08 條款綁定]為什麼加在閘不是 skill 散文:接手席/架構席/簡化席三席獨立查證「設計審出口寫一句流程規則」零約束,跟 spec-trace 33 篇 15 篇零認領同型;閘是設計審往下走的唯一入口(進度從提交推導 d9)。漏洞:整份不寫 [SN] 可繞過 → REVISIT:2026-11-08 那次連「過審計劃有 [SN] 的比例」一起量
   KEY:處置閘第六步「落點」(2026-09-11,[[Projects/每支檔有家_計劃]] [S21]):設計審的計劃(Projects 底下、type: project)要有 lands_in(現況落在哪幾篇、或新開哪一篇,每項 Systems/<名>),空的或格式不對不得 PASS;首筆帳在 2026-09-12T00:00+08:00 之後的迴圈才看、不回溯,形狀照第五步;派工鏡頭(LUMOS-SPEC)附上落點每篇的現況(掛幾份計劃、幾行 KEY、幾條合約、管幾支檔),架構對齊席多第四問「落點合不合理」——節點長成一篇包全部,是因為落點從來沒被審過 [test:t_disposal_gate_requires_landing] [test:t_design_dispatch_shows_landing_sizes]
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
@@ -140,6 +146,12 @@ decisions:
     why_chosen: 數字上限與同一份範本「講清楚哪個輸入走到哪一行」的要求互相拉扯;抑噪靠逐字引句、refcheck、不准模稜兩可,不靠句數
     decided: 2026-09-25
     valid: true
+  - content: 外家席改成條件席、預設不派:編制表六組的外家 finder/否決席都從 required-fail-closed / note-if-absent 改成 conditional;code/high 原外家 finder 的名額由同門鏡頭5 補,寬度維持 5;設計審與代碼審的辯方預設同門,要另一家視角時才派 Codex。取代 2026-07-18 S5「辯方預設 Codex、high 雙外家席」。
+    id: d11
+    context: 外家(Codex)每次高風險審查都要派兩席,額度與成本是額外負擔;使用者不想之後都花這筆成本
+    why_chosen: 使用者裁定改成可選、預設不派,空出的找問題席由 Claude 補上(保持並行寬度與審查廣度);另一家視角留作需要時的選項。代價:收斂結論只代表同一家模型的視角,同門共同盲點的風險變高
+    decided: 2026-09-30
+    valid: true
 about_code:
   - scripts/lumos
 aliases:
@@ -199,3 +211,29 @@ aliases:
 - 設計稿(辯方 refute 後續):`docs/design/` finding-refute(3 輪自動收斂)。
 - 實作落點:`skills/lumos-design-loop/SKILL.md`(B);`scripts/lumos` `cmd_canary` + `cmd_loop_status`(A 原語)。
 - 衍生:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`(自主迭代 loop 跨輪 headless 跑 design-loop)。
+
+WHY:席位對帳先把派工單的資料形態與路徑編碼錯誤分開，避免 traceback 被誤當成審查內容越界；合法材料仍只觀測，脈絡寫回本節點既有收貨三道範圍，不擴張圖譜 read 原語責任 [出處:2026-10-06 seat-input-validation 設計審 r1、真CLI反例與原S1規格] [因:排除錯材料引起的錯誤診斷，保留既有觀測分工]
+## 同一入口的測試不一定同名（2026-10-06）
+
+PITFALL: 改canary載體入口後，只跑名稱含canary的測試，會漏掉透過共用helper或讀側場景進入同一入口的fix_check、panel退場及disposal讀側測試；本案原子集222/2、首次未完成分片2與4、重啟分片7與11的原紅收據為出處。相關子集規劃需核對圖譜合約、共用helper及讀寫兩側；測試名稱不能當成覆蓋全部的證據。重現與防回歸入口：`t_fix_check_record_template`、`t_fix_check_recipe_rerun_note`、`t_disposal_gate_r1_panel_hardening`、`t_panel_probe_retired`；本次仍保留原有判準，沒有為了入口提早拒收而移除讀側舊帳防線。
+REVISIT:2026-10-20 在載體入口後續十份真實修補收據，核對首審前選測試是否仍漏同族；若既有testmap穩定涵蓋全部案例，撤掉人工補列，不新造第二套測試映射。
+
+WHY: 本案記帳入口及處置閘的現行說明落在本節點；停用的注意力探針仍留於 [[Systems/canary-audit]]，不因本次改善重啟協議。來源為本案推送home閘與canary-audit的既有停用決策；本篇管轄 `scripts/lumos` 的處置記帳讀寫。
+
+## 負數計數的追加前重驗（2026-10-06）
+
+PITFALL:數量參數以整數轉換不等於有效數量；前案固定來源的真實CLI把-1成功追加後，處置閘再判有發現卻無處置帳，合法0的同材兩席則通過。出處為 [[Projects/負數發現計數在追加前拒收_計劃]] 的最小對照卷證；歷史重現入口 `t_canary_negative_findings_rejected` 的34條版本（測試SHA2cefe1f7、red-source-bind-final收據）在未修CLI84d013c時14通過/20失敗，包含種子帳逐位元不變及首筆不建帳。設計順序折入後擴成38條（測試SHAcc6d8390、red-after-order-fold收據），同未修CLI為16通過/22失敗；兩份原紅各綁自身測試版本，不覆寫成同一數字。目前新CLI52c9c4d7的472條相關綠燈另見 [[Verification/2026-10-06_負數發現計數拒收驗證]]，完整分片與终審的最新實際收據見同篇驗證，CI各依該篇有效範圍；不宣稱真實審查輪數下降。
+REVISIT:2026-10-20 在canary寫入與本案卷證入口查十份真實收據，區分輸入錯誤與修復回歸；共用數量守衛若接管全部入口，撤掉局部分支。
+
+WHY:負數數量在報告驗證前拒收，沿用現有非負成本欄的stderr/rc2形狀，沒有另造解析器；出處 [[Projects/負數發現計數在追加前拒收_計劃]] 的六席首輪及resources-F1順序折入。成功canary帳不追加，治理拒收telemetry按原約定；實驗紅燈仍原樣留存，驗證結果另立紀錄，不把輸入錯誤當修補回歸。
+
+## 載體快照編碼的獨立輸入契約（2026-10-06）
+
+PITFALL: 前案有效UTF8範圍之外的快照解碼例外會被當成程式故障，雖不追加錯帳，仍需另定可修正的拒收訊息。出處 [[Projects/載體快照非法編碼受控拒收_計劃]] 的雙来源最小對照、前案preflight探針與 [[Issues/主程式讀取路徑漏接UnicodeDecodeError]]；防回歸入口 t_canary_carrier_invalid_snapshot_encoding，初版34條20/14原紅各綁SHA。本段為實作前紀錄：當時只驗證候選、尚未修改生產；後續狀態須讀該計劃的最新收貨與Verification。
+WHY: 沿用既有quote-check及報告入口的特定解碼錯誤處理，維持strict與原bytes指紋；不把replace後文字當證據、不擴成全repo掃除或改非載體政策。出處同計劃的官方Python文檔及獨立唯讀既有方案查證。
+REVISIT:2026-10-20 依[[Projects/載體快照非法編碼受控拒收_計劃]]「真實收據入口與限制」人工JSON格式，從本案卷證real-input-receipts入口核對十份編碼/I/O拒收與配對恢復紀錄；測試及注入不计數，未新增自動收集器，不足十份就記實際數，再判斷是否較少重記。
+
+PITFALL:[2026-10-06 快照拒收設計R1 logic-F1]驗句讀取遇一次性I/O失敗後若只清空結果，稍後rawhash讀取恢復會把未驗材料追加，處置閘才quote FAIL而需重記。來源本案R1原報與非法UTF8/不錨對照；防回歸t_canary_carrier_snapshot_io_recovery_rejected，普通/-O首筆及已有帳控制；未知解析RuntimeError另由t_canary_carrier_invalid_snapshot_encoding控制，不用廣捕捉掩蓋。
+
+
+PITFALL:2026-10-06 R2故障注入把_quote_rows改為OSError，會被快照讀取try誤報成材料讀不到；原報major，辯方判minor診斷錯誤，原報保持。只讓read/decode留在try，parser在外呼叫；成功帳不可因未知parser例外追加。出處：R2 alignment-F1、state-defender及parser48/2→50/0；防回歸t_canary_carrier_invalid_snapshot_encoding同時保留RuntimeError與OSError普通/-O控制。

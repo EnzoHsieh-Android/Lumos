@@ -1,0 +1,48 @@
+def t_nodehome_optional_test_index_aba():
+    """索引讀取途中改動再還原，也只能採信捕獲的版本；普通/-O保留合法及非法路由。"""
+    import json
+    for opt in (False, True):
+        for valid, inject in ((False, False), (False, True), (True, True)):
+            root = _nh_repo()
+            _nh_file(root, "src/a.py", "x = 0\n")
+            _nh_file(root, "tests/check", "x = 0\n")
+            _nh_node(root, "Production", about=["src/a.py"], body="production context")
+            home = _nh_node(root, "TestHome", about=["tests/check"], body="test context")
+            _nh_commit(root, "baseline")
+            seed = "#!/usr/bin/env python3\nx = 2\n" if valid else "x = 2\n"
+            _nh_file(root, "tests/check", seed)
+            _nh_file(root, "src/a.py", "x = 2\n")
+            home.write_text(home.read_text() + "\nWHY: synthetic staged ABA reproduction.\n")
+            _nh_git(root, "add", ".")
+            label = f"索引ABA/{opt}/{valid}/{inject}"
+            check(label + ":原始索引種子成立", _nh_git(root, "show", ":tests/check").stdout == seed)
+            transient = "x = 99\n" if valid else "#!/usr/bin/env python3\nx = 99\n"
+            shim = ("import runpy,sys,json,subprocess\n"
+                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_route_tests'];fired=[]\n"
+                    "def route(root,*args,**kwargs):\n"
+                    f"    if {inject!r} and not fired:\n"
+                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check'],cwd=root,text=True).split()\n"
+                    f"        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input={transient.encode()!r}).decode().strip()\n"
+                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check'],cwd=root,check=True)\n"
+                    "        changed=subprocess.check_output(['git','show',':tests/check'],cwd=root,text=True)\n"
+                    "        try:result=original(root,*args,**kwargs)\n"
+                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check'],cwd=root,check=True)\n"
+                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
+                    "        fired.append({'restored':before==after,'transient':changed,'borrowed':'tests/check' in result});return result\n"
+                    "    return original(root,*args,**kwargs)\n"
+                    "g['_nodehome_route_tests']=route\n"
+                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
+                    "rc=ns['main']();print('ABA:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
+            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
+            marker = next((line[4:] for line in q.stderr.splitlines() if line.startswith("ABA:")), "[]")
+            events = json.loads(marker)
+            check(label + ":真實索引注入及還原成立",
+                  len(events) == (1 if inject else 0) and (not inject or
+                  (events[0]["restored"] is True and events[0]["transient"] == transient)), q.stderr)
+            check(label + ":只借原始版本的測試證據", not inject or
+                  (len(events) == 1 and events[0]["borrowed"] is valid), q.stderr)
+            check(label + ":只依原始版本判斷",
+                  q.returncode == (0 if valid else 1) and (valid or ("Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr)), q.stdout + q.stderr)
+            check(label + ":檢查後索引內容不變", _nh_git(root, "show", ":tests/check").stdout == seed)
+

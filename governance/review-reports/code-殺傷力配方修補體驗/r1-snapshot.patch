@@ -1,0 +1,605 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index afc5860a..dd3b5084 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -12907,21 +12907,23 @@ def _kill_read_recipes(path):
+     except ValueError as ex:
+         return None, f"kill_recipes JSON 解析失敗: {ex}"
+ 
+ 
+ def _kill_recipe_key(node, invariant, file, old):
+     """配方身分(Projects/併發與效能表態要合約背書_計劃):同一篇筆記裡 invariant、file、old 相同就是同一條配方。
+     kill-add 判重、kill 寫 kill-log 的 recipe_id、寫表態算背書時分組,三處都用這一支(別各寫一份比對)。
+     用 json.dumps 序列化再雜湊:直接串接會讓 ("a","bc") 跟 ("ab","c") 撞在一起。"""
+     import hashlib
+     import json
+-    return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False).encode("utf-8")).hexdigest()
++    # surrogatepass:欄位帶落單替身字元時不崩潰,其他配方的身分不變(Projects/殺傷力配方修補體驗_計劃)
++    return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False)
++                          .encode("utf-8", "surrogatepass")).hexdigest()
+ 
+ 
+ def _kill_method_name(test, multiplatform):
+     """配方 test 欄 → 實際跑的方法名:多平台時去掉「平台:」前綴,再去 Kotlin 反引號。kill 與算背書共用。"""
+     t = str(test or "")
+     m = t.split(":", 1)[1] if (":" in t and multiplatform) else t
+     return m.strip("`")
+ 
+ 
+ # ── 殺傷力配方失配提醒(Projects/殺傷力配方失配提醒_計劃,三輪設計審)──
+@@ -12934,21 +12936,21 @@ def _kill_method_name(test, multiplatform):
+ 
+ def _kill_recipe_id(node, elem):
+     """配方身分(P2、kill-add 提醒、kill-rm 共用這一支)。node 一律是筆記在圖譜裡的相對路徑(跟 kill-add 判重傳的 str(rel) 同值)。
+     物件而且 invariant/file/old 都是字串 → 既有 `_kill_recipe_key`;其他(不是物件、欄位缺或型別不對)→
+     sha256(json ["malformed", node, 原始元素]),讓格式壞的配方也有身分、kill-rm 也移得掉。印出時取前 12 字元。"""
+     import hashlib
+     import json
+     if isinstance(elem, dict) and all(isinstance(elem.get(k), str) for k in ("invariant", "file", "old")):
+         return _kill_recipe_key(node, elem["invariant"], elem["file"], elem["old"])
+     return hashlib.sha256(json.dumps(["malformed", node, elem], ensure_ascii=False, sort_keys=True)
+-                          .encode("utf-8")).hexdigest()
++                          .encode("utf-8", "surrogatepass")).hexdigest()
+ 
+ 
+ def _kill_node_arg(rel):
+     """修法指令裡的節點寫法:圖譜相對路徑去掉 .md(env.find 認得),必要時加引號。
+     筆記名帶控制字元(換行、回行首、終端跳脫碼…)時不印出可貼的名字,改印佔位字(代碼審第 2 輪資安席:
+     引號擋得住 shell 斷字、擋不住終端把整行蓋掉)。"""
+     import shlex
+     r = str(rel)
+     if _path_special_chars(r):
+         return "'<筆記名含控制字元,先改檔名>'"
+@@ -13314,24 +13316,30 @@ def _kill_p2_one(st, repo_root, rel, stem, r, idx):
+     return code
+ 
+ 
+ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+                        platform=None, note=None, covers=None):
+     """宣告一條壞法配方進 kill_recipes + KEY 行補 [kill:recipes](同檔一次 atomic 寫)。
+     covers(選填,逗號分隔題目 id):這條壞法涵蓋哪幾題被標 needs_backing 的棧別檢核題(寫表態算背書用)。
+     同一條配方(`_kill_recipe_key` 相同)已存在時:有帶 covers、new 相同、note/platform/test 沒帶或跟既有相同
+     → 只把 covers 換成這次的清單;其他情況照舊擋(Projects/併發與效能表態要合約背書_計劃)。
+     寫入成功後(放掉寫入鎖)會驗這條配方的原文在程式裡是不是恰好一次,不是就在標準錯誤多印一行提醒
+-    (Projects/殺傷力配方失配提醒_計劃)。"""
++    (Projects/殺傷力配方失配提醒_計劃)。--old 或 --new 整欄等於 kill-rm 範本的待填字樣就擋下(還沒填完、不是配方;
++    Projects/殺傷力配方修補體驗_計劃)。"""
+     if old == new:
+         print("擋下:要替換的舊字串和新字串一模一樣,這個突變配方等於沒改", file=sys.stderr)
+         return 2
++    if _kill_is_placeholder(old) or _kill_is_placeholder(new):
++        # 待填字樣原樣寫進去,guard kill 會把程式換成這串字、語法錯誤讓測試變紅,被判成殺得掉
++        # (Projects/殺傷力配方修補體驗_計劃 S4;只擋整欄等於,含有照寫)
++        print("擋下:範本的待填欄還沒填——--old 要填現在程式裡的原文、--new 要填照新原文改寫的壞法", file=sys.stderr)
++        return 2
+     covers_list = None
+     if covers is not None:
+         covers_list = []
+         for q in str(covers).split(","):
+             q = q.strip()
+             if not q:
+                 print("擋下:--covers 裡有空的題目 id(例:--covers java-concurrency,sql-nplus1)", file=sys.stderr)
+                 return 2
+             _stk, _spec = _stack_spec_by_id(q)
+             if not (_spec and _spec.get("needs_backing")):
+@@ -13474,102 +13482,161 @@ def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, tes
+     if updated is not None:
+         print(f"✓ 只更新了既有配方的 covers({rel}):{_kill_esc(', '.join(map(str, updated[0]))) or '(無)'} → "
+               f"{_kill_esc(', '.join(updated[1]))}")   # 舊的 covers 來自筆記(代碼審第 3 輪資安席)
+         print("  下一步:把筆記提交後重跑 lumos guard kill,再重表態")
+         return 0
+     print(f"✓ kill 配方寫入 {rel}(invariant『{_kill_esc(invariant_substr[:24])}…』, test={_kill_esc(test)})")   # test 可能取自筆記的 KEY 行
+     print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
+     return 0
+ 
+ 
++_KILL_PH_OLD = "<照現在的程式填原文>"      # kill-rm 範本的兩個待填欄(kill-add 看到整欄等於它們就擋)
++_KILL_PH_NEW = "<照新原文改寫的壞法>"
++
++
++def _kill_is_placeholder(v):
++    """整欄(去掉前後空白與一對外圍引號)等於範本的待填字樣;只是含有這串字的不算(lumos 自己產生範本那行程式就含)。"""
++    t = str(v).strip()
++    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
++        t = t[1:-1].strip()
++    return t in (_KILL_PH_OLD, _KILL_PH_NEW)
++
++
+ def _kill_add_template(node_arg, r):
+     """被移除的配方 → 一行照它改寫後重新宣告的 kill-add 範本(原文那一欄留給人照現在的程式填)。"""
+     import shlex
+     q = shlex.quote
+     r = r if isinstance(r, dict) else {}
+ 
+     def ok(v):   # 帶控制字元的欄位不放進可貼的範本(代碼審第 2 輪資安席:引號擋不住終端把整行蓋掉),改印佔位字
+         return isinstance(v, str) and v and not _path_special_chars(v)
+ 
+     def val(k, placeholder):
+         return q(r[k]) if ok(r.get(k)) else placeholder
+     parts = ["lumos guard kill-add", node_arg, val("invariant", "'<KEY 行片段>'"),
+-             "--file", val("file", "'<檔>'"), "--old", "'<照現在的程式填原文>'", "--new", val("new", "'<壞法>'")]
++             "--file", val("file", "'<檔>'"), "--old", f"'{_KILL_PH_OLD}'", "--new", f"'{_KILL_PH_NEW}'"]
+     for k in ("test", "platform", "note"):
+         if isinstance(r.get(k), str) and r[k]:
+             parts += [f"--{k}", q(r[k]) if ok(r[k]) else f"'<{k} 含控制字元,看上面的完整內容>'"]
+     cov = r.get("covers")
+     if isinstance(cov, list) and cov and all(isinstance(c, str) for c in cov):
+         parts += ["--covers", q(",".join(cov)) if ok(",".join(cov)) else "'<covers 含控制字元>'"]
+     return " ".join(parts)
+ 
+ 
+ def _kill_invariants_of(recipes):
+     """配方清單裡寫得好好的(非空字串)invariant。"""
+     return [r["invariant"] for r in recipes
+             if isinstance(r, dict) and isinstance(r.get("invariant"), str) and r["invariant"]]
+ 
+ 
+ def cmd_guard_kill_rm(env, node, rid):
+     """移除一條殺傷力配方(Projects/殺傷力配方失配提醒_計劃 做法 4)。失配配方的修法:先 rm 舊的、再照現在的程式 kill-add 新的
+     (配方身分含原文,不先移掉舊的就改不了)。rid=短身分(doctor P2 或 kill-add 提醒印的那串),至少 8 個十六進位字元。
+     對到零條、或對到不同完整身分的多條 → 擋下 rc2;對到的全是同一完整身分(手改造成的重複)→ 一起移除。
+     移除前把每一條的完整內容與 kill-add 範本印到標準輸出;剩下的配方都對不到的 KEY 行拿掉 [kill:recipes]。
+-    kill-log 的舊紀錄不刪(歷史帳;背書計算本來就只認筆記現有的配方)。"""
++    kill-log 的舊紀錄不刪(歷史帳;背書計算本來就只認筆記現有的配方)。
++    rid 是 None(沒帶 --id)→ 唯讀列出這篇每條配方的短身分(不拿寫入鎖、不寫檔;Projects/殺傷力配方修補體驗_計劃)。"""
++    if rid is None:
++        return _guard_kill_rm_list(env, node)
+     pre = str(rid or "").strip().lower()
+     if not re.fullmatch(r"[0-9a-f]{8,64}", pre):
+-        print(f"擋下:--id 要給 8 到 64 個十六進位字元的配方短身分(收到 {rid!r});doctor --verbose 的 P2 段"
+-              "與 kill-add 提醒的修法裡都有印,給太短容易移錯", file=sys.stderr)
++        print(f"擋下:--id 要給 8 到 64 個十六進位字元的配方短身分(收到 {rid!r});不帶 --id 跑一次會列出這篇每條的短身分,"
++              "doctor --verbose 的 P2 段與 kill-add 提醒的修法裡也有印,給太短容易移錯", file=sys.stderr)
+         return 2
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
+     with _vault_write_lock(env.vault):     # 讀—改—寫整段拿鎖(跟 kill-add 同一把)
+         return _guard_kill_rm_locked(env, rel, pre)
+ 
+ 
++def _guard_kill_rm_list(env, node):
++    """kill-rm 沒帶 --id:唯讀列出這篇每條配方的短身分、合約片段、檔、原文開頭、test、平台(不拿鎖、不寫檔)。"""
++    import json
++    rel = env.find(node)
++    if rel is None:
++        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
++        return 2
++    recipes, err = _kill_read_recipes(env.vault / rel)
++    if recipes is None:
++        print(f"擋下:{_kill_esc(err)}", file=sys.stderr)
++        return 2
++    if not recipes:
++        print("這篇沒有殺傷力配方")
++        return 0
++    rows = {}
++    for r in recipes:                              # 同一完整身分合成一行,各欄取第一條
++        rid = _kill_recipe_id(str(rel), r)
++        rows.setdefault(rid, [r, 0])[1] += 1
++    for rid, (r, n) in rows.items():
++        dup = f"  (同一條 ×{n},移除會一起移掉)" if n > 1 else ""
++        if not isinstance(r, dict):
++            body = json.dumps(r, ensure_ascii=False, sort_keys=True)
++            print(f"{rid[:12]}  格式壞:{_kill_show(body[:60])}{dup}")
++            continue
++        print(f"{rid[:12]}  合約 {_kill_list_cell(r, 'invariant', 30)}  檔 {_kill_list_cell(r, 'file')}"
++              f"  原文 {_kill_list_cell(r, 'old', 30)}  test {_kill_list_cell(r, 'test')}"
++              f"  平台 {_kill_list_cell(r, 'platform', empty='(預設)')}{dup}")
++    print(f"移除:lumos guard kill-rm {_kill_node_arg(rel)} --id <短身分>")
++    return 0
++
++
++def _kill_list_cell(r, k, cut=0, empty="(缺)"):
++    """列出的一欄:沒有或 null 印 empty(平台空字串也算沒寫);不是字串印型別;字串先截字(截了加 …)再跳脫。"""
++    v = r.get(k)
++    if v is None or (k == "platform" and v == ""):
++        return empty
++    if not isinstance(v, str):
++        return f"(不是字串:{type(v).__name__})"
++    if cut and len(v) > cut:
++        v = v[:cut] + "…"
++    return _kill_show(v)
++
++
+ def _guard_kill_rm_locked(env, rel, pre):
+     from collections import Counter
+     path = env.vault / rel
+     try:
+         lines, _, e = load_raw_for_edit(path)
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     recipes, err = _kill_read_recipes(path)
+     if recipes is None:
+         print(f"擋下:{err}", file=sys.stderr)
+         return 2
+     ids = [_kill_recipe_id(str(rel), r) for r in recipes]
+     hit = sorted({i for i in ids if i.startswith(pre)})
+     if not hit:
+-        print(f"擋下:{rel} 的配方裡沒有身分以 {pre} 開頭的(lumos doctor --verbose 的 P2 段逐條列出的配方,修法裡都有短身分)", file=sys.stderr)
++        print(f"擋下:{rel} 的配方裡沒有身分以 {pre} 開頭的(不帶 --id 跑一次會列出這篇每條的短身分)", file=sys.stderr)
+         return 2
+     if len(hit) > 1:
+         print(f"擋下:{pre} 對到 {len(hit)} 條不同的配方,分不清要移哪一條;給長一點的身分:", file=sys.stderr)
+         for h in hit:
+             print(f"  {h}", file=sys.stderr)
+         return 2
+     full = hit[0]
+     gone = [r for r, i in zip(recipes, ids) if i == full]
+     keep = [r for r, i in zip(recipes, ids) if i != full]
+     _kill_rm_show(_kill_node_arg(rel), gone)
+     new_lines, unmarked = _kill_rm_rewrite(lines, e, gone, keep)
+     try:
+         atomic_write_verify(path, new_lines, "kill_recipes", _kill_rm_check(str(rel), Counter(ids), full))
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     tail = f";{unmarked} 條 KEY 行已經沒有配方對得到,拿掉了 [kill:recipes] 標記" if unmarked else ""
+     print(f"✓ 從 {rel} 移除了 {len(gone)} 條配方{tail}")
+-    print("  下一步:照上面的範本填好原文 kill-add 改寫後的配方,把程式與筆記提交後跑 lumos guard kill 確認真的殺得掉")
++    print("  下一步:照上面的範本填好原文(--old)與照新原文改寫的壞法(--new)再 kill-add,"
++          "把程式與筆記提交後跑 lumos guard kill 確認真的殺得掉")
+     return 0
+ 
+ 
+ def _kill_rm_show(node_arg, gone):
+     """移除前把★每一條★的完整內容與 kill-add 範本印到標準輸出(同身分的多條,new、covers 可能不一樣)。"""
+     import json
+     for r in gone:
+         print("要移除的配方(完整內容):")
+         print("  " + _kill_esc(json.dumps(r, ensure_ascii=False, sort_keys=True)))
+         print("  照現在的程式改寫後重新宣告:" + _kill_add_template(node_arg, r))
+@@ -13779,20 +13846,23 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+     commit = ""   # 迴圈外留痕用;多平台時記最後一組的 HEAD(各 row 的 platform 欄可辨)
+     ts = datetime.datetime.now().isoformat(timespec="seconds")
+     # 背書用(Projects/併發與效能表態要合約背書_計劃):每組記 [起始索引, 完整 HEAD, 整套一起跑, flaky],迴圈後逐筆蓋章;
+     # 筆記在工作樹有未提交改動 → 讀到的配方(covers)跟沙盒那一版不同,那次算弱證據
+     marks = []   # 每組一個 dict:start(這組第一筆在 results 的索引)、head、ws(整套一起跑)、flaky
+     try:
+         node_dirty = bool(subprocess.run(["git", "-C", str(repo_root), "status", "--porcelain", "--", str(path)],
+                                          capture_output=True, text=True, errors="replace").stdout.strip())
+     except OSError:
+         node_dirty = False
++    # 每條配方先帶上 kill-rm 認得的短身分(用原配方算;Projects/殺傷力配方修補體驗_計劃):
++    # 後面 9 個組結果的地方 {**r, …} 自然帶上,人讀輸出印 id=,--json 前濾掉
++    recipes = [{**r, "_rid": _kill_recipe_id(str(rel), r)} if isinstance(r, dict) else r for r in recipes]
+     # 依 platform 分組(每平台一個 worktree + baseline per test)
+     groups = {}
+     for r in recipes:
+         groups.setdefault(r.get("platform") or platform_override or default_plat, []).append(r)
+     for plat, plist in groups.items():
+         marks.append({"start": len(results), "head": "", "ws": False, "flaky": False})
+         pentry = plats.get(plat)
+         if pentry is None:
+             for r in plist:
+                 results.append({**r, "platform": plat, "verdict": "error",
+@@ -13945,31 +14015,32 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                                      "invariant": res.get("invariant", ""), "test": res.get("test", ""),
+                                      "platform": res.get("platform", ""),
+                                      "verdict": res["verdict"], "note": res.get("note", ""),
+                                      "flaky_risk": res.get("flaky_risk", False),
+                                      "tail": res.get("tail", ""),
+                                      "covers": res.get("covers", []), "recipe_id": res.get("recipe_id", ""),
+                                      "head_sha": res.get("head_sha", ""), "weak": res.get("weak", False)},
+                                     ensure_ascii=False) + "\n")
+     verdicts = [r["verdict"] for r in results]
+     if as_json:
+-        print(json.dumps({"results": [{k: v for k, v in r.items() if k != "_logged"}
++        print(json.dumps({"results": [{k: v for k, v in r.items() if k not in ("_logged", "_rid")}
+                                       for r in results]}, ensure_ascii=False))
+     else:
+         # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
+         # 且掛 ✓ 會讓人誤以為逾時算接住——現在逾時是 timed_out_weak ⚠)
+         icon = {"killed": "✓", "killed_unattributed": "⚠",
+                 "timed_out_weak": "⚠", "survived": "✗",
+                 "drifted": "⚠", "abort": "⚠", "error": "⚠"}
+         for r in results:
+-            print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} {r.get('invariant','')[:30]}"
+-                  f" [{r.get('test','')}] {r.get('detail','')}")
++            # id= 放在人寫的欄位前面(test 名、說明可能夾換行偽造一個 id,偽造的只會出現在真的後面)
++            print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} id={str(r.get('_rid', ''))[:12]} "
++                  f"{str(r.get('invariant', ''))[:30]} [{r.get('test','')}] {r.get('detail','')}")
+     if "survived" in verdicts:
+         print("✗ 有配方 SURVIVED——綁定測試接不住宣告的壞法(稻草人證據),補強測試", file=sys.stderr)
+         return 1
+     if any(v in ("drifted", "abort", "error") for v in verdicts):
+         return 2
+     # 弱證據 fail-open 修補(2026-07-29 終審 Codex):全部弱證據=沒有任何一條配方被歸因到綁定測試
+     # → rc1(同 survived 級「證據不足」),不得以 rc0 讓 hook/CI 誤判通過。混有強殺則 rc0。
+     if verdicts and "killed" not in verdicts and all(
+             v in ("killed_unattributed", "timed_out_weak") for v in verdicts):
+         print("✗ 全部弱證據(未歸因/逾時)——無任一配方證實被綁定測試咬住,補 filter 或強化斷言",
+@@ -40228,21 +40299,21 @@ HELP_WHEN = {
+     "scaffold": "幫某條合約產一個測試骨架(預設紅燈,斷言留 TODO)。",
+     "prune": "剪掉填錯的 decision_ref(正規化定位;--by 移該欄、無 --by 兩欄都移)。",
+     "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
+     "plan": "這條合約之後才會做:一次寫好預告標記、建待完成的守衛節點、雙向連好。查那篇功能節點時會看到它,逾期會擋推送而且不准延期。",
+     "settle": "預告的那條做完了:預告行換成正式合約行並綁上測試,守衛節點就地轉成已通過(要 --test);已經 pass 但還留著預告句時補改成歷史說法(不用 --test,可給 --date)。",
+     "abandon": "預告的那條決定不做了:立墓碑而不是刪掉(下一個人看得到曾經打算做什麼)。要先 lumos signoff <守衛節點> --ref <守衛節點>。",
+     "required": "看現在有幾條預告還沒做完、有沒有逾期或七天內到期。有逾期回非零。",
+     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
+-    "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add。",
++    "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add;不帶 --id 跑一次列出這篇每條的短身分。",
+     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
+     "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次印紅綠(不擋)。",
+     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
+     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
+     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
+     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+@@ -40725,22 +40796,22 @@ def main():
+     gka.add_argument("--old", required=True, help="literal 原文(須唯一命中)")
+     gka.add_argument("--new", required=True, help="壞版本")
+     gka.add_argument("--test", help="綁定測試名(缺省=KEY 行唯一 [test:] ref)")
+     gka.add_argument("--platform", dest="gk_platform", help="配方所屬平台(多平台 config)")
+     gka.add_argument("--note", default=None, help="業務上壞了什麼(人話)")
+     gka.add_argument("--covers", default=None,
+                      help="這條壞法涵蓋哪幾題要背書的棧別檢核題(逗號分隔題目 id,例 java-concurrency,sql-nplus1);"
+                           "同一條配方已存在時只更新它的 covers")
+     gkr = gsub.add_parser("kill-rm", help="移除一條殺傷力配方(失配配方的修法:先移掉舊的、再照現在的程式 kill-add;同檔原子寫)")
+     gkr.add_argument("node")
+-    gkr.add_argument("--id", dest="gkr_id", required=True,
+-                     help="配方短身分(doctor P2 段或 kill-add 提醒印的那串),至少 8 個十六進位字元")
++    gkr.add_argument("--id", dest="gkr_id", default=None,
++                     help="配方短身分(8 到 64 個十六進位字元);不帶就列出這篇每條配方的短身分(唯讀)")
+     gk = gsub.add_parser("kill", help="跑殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅")
+     gk.add_argument("node")
+     gk.add_argument("invariant", nargs="?", help="限某合約(KEY 行子字串;預設全部配方)")
+     gk.add_argument("--platform", dest="gk_platform", help="覆蓋配方平台")
+     gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
+     gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
+ 
+     p = sub.add_parser("spec-gate", help="規格閘(半套):條款句式+綁定+回退節(擋)、把綁的測試真跑一次印紅/綠/弱證據(不擋)、治理帳留一行")
+     p.add_argument("node", nargs="?", help="計劃節點(Projects/<名>_計劃)")
+     p.add_argument("--no-run", dest="sg_no_run", action="store_true", help="只驗句式與綁定,不跑測試(風險低不會放行、不留痕)")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 53ebc4a1..5a043797 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -60512,20 +60512,133 @@ def t_kill_recipe_check_fs_and_git():
+     root, v = _mk_kill_env()
+     m._kill_recipe_judge = spy2
+     try:
+         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = m.cmd_guard_kill_add(m.Env(v), "Systems/Limit", "上限恆為5", "prod.py", "LIMIT = 42", "LIMIT = 9")
+     finally:
+         m._kill_recipe_judge = orig
+     check("kill-add 驗原文時已經放掉寫入鎖", rc == 0 and held == [False], f"{rc} {held}")
+ 
+ 
++def t_guard_kill_rm_lists_ids():
++    """[S2] kill-rm 不帶 --id:唯讀列出那篇每條配方的短身分(前 12 字元,同 P2 與 kill-add 提醒)、合約片段、檔、原文開頭、
++    test、平台;格式壞的也列、不崩潰,身分可拿去 --id 移除;重複的合一行;沒配方印一句;控制字元不原樣印;
++    --id 給空字串照舊擋下 rc2。"""
++    m = _load_lumos_inproc()
++    node = "Systems/Limit.md"
++    long_old = "LIMIT = 5" + "x" * 40
++    good = _kr_recipe("prod.py", old=long_old)
++    esc = _kr_recipe("p\x1b[2K.py", old="A\nB")
++    nonobj = 7
++    missing = {"invariant": "上限恆為5", "file": "prod.py", "test": None, "old": 5}
++    dup = _kr_recipe("prod.py", old="def check")
++    recipes = [good, esc, nonobj, missing, dup, dict(dup)]
++    root, v = _mk_kill_env()
++    p = v / "Systems" / "Limit.md"
++    p.write_text(_kr_note(recipes), encoding="utf-8")
++    _kr_commit(root)
++    before = p.read_bytes()
++    r = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit")
++    out = r.stdout
++    rid = lambda e: m._kill_recipe_id(node, e)[:12]
++    check("①不帶 --id → rc0、筆記不變", r.returncode == 0 and p.read_bytes() == before, f"{r.returncode} {r.stderr}")
++    for label, e in (("一般", good), ("控制字元", esc), ("不是物件", nonobj), ("欄位型別錯", missing), ("重複", dup)):
++        check(f"②{label}的配方列出、帶短身分", sum(ln.startswith(rid(e)) for ln in out.splitlines()) == 1, out)
++    check("③原文先截 30 字再跳脫、截了加 …", f'原文 "{long_old[:30]}…"' in out, out)
++    check("③欄位缺或 null 印(缺)、不是字串印型別、平台沒寫印(預設)",
++          "test (缺)" in out and "原文 (不是字串:int)" in out and "平台 (預設)" in out, out)
++    check("③不是物件的印格式壞", "格式壞:" in out, out)
++    check("③重複的合成一行並註明會一起移除", "(同一條 ×2,移除會一起移掉)" in out, out)
++    check("③控制字元不原樣印出", "\x1b" not in out and "\\u001b" in out, repr(out))
++    check("③合約片段也列", '合約 "上限恆為5"' in out, out)
++    check("④最後一句給移除指令(節點可貼、短身分是佔位字)", "移除:lumos guard kill-rm Systems/Limit --id <短身分>" in out, out)
++    for label, e in (("不是物件", nonobj), ("欄位型別錯", missing)):
++        rr = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", rid(e))
++        check(f"⑤列出的{label}身分拿去 --id 移得掉", rr.returncode == 0, rr.stderr)
++    r2 = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", "")
++    check("⑥--id 給空字串照舊擋下 rc2", r2.returncode == 2 and "擋下" in r2.stderr, r2.stdout + r2.stderr)
++    root2, v2 = _mk_kill_env()
++    r3 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit")
++    check("⑦沒有配方 → 這篇沒有殺傷力配方、rc0", r3.returncode == 0 and "這篇沒有殺傷力配方" in r3.stdout, r3.stdout + r3.stderr)
++    r4 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Nope")
++    check("⑦找不到筆記 → 擋下 rc2", r4.returncode == 2, r4.stderr)
++    # ⑧配方欄位帶落單替身字元(手改筆記寫成 JSON 跳脫):算身分不崩潰,列得出來也移得掉
++    import json as _json
++    sur = _kr_recipe("prod.py", old="LIMIT\ud800")
++    blob = "".join(f"\\u{ord(c):04x}" if 0xD800 <= ord(c) <= 0xDFFF else c for c in _json.dumps([sur], ensure_ascii=False))
++    (v2 / "Systems" / "Limit.md").write_text(_kr_note(blob), encoding="utf-8")
++    _kr_commit(root2, "sur")
++    r5 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit")
++    sid = m._kill_recipe_id(node, sur)[:12]
++    check("⑧落單替身字元:列出不崩潰、帶短身分", r5.returncode == 0 and r5.stdout.startswith(sid), r5.stdout + r5.stderr[-300:])
++    r6 = _kr_lum(root2, v2, "guard", "kill-rm", "Systems/Limit", "--id", sid)
++    check("⑧落單替身字元:拿短身分移得掉", r6.returncode == 0, r6.stderr[-300:])
++
++
++def t_guard_kill_prints_recipe_id():
++    """[S3] guard kill 人讀輸出每條結果在判定之後附 id=<短身分>,拿去 kill-rm --id 對得到那一條(缺 old 這類照常出結果的
++    格式壞配方也一樣);一條結果一行;--json 只有 JSON、各筆欄位跟改動前一樣(沒有 _rid)。"""
++    import json as _json
++    m = _load_lumos_inproc()
++    node = "Systems/Limit.md"
++    ok = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive")
++    noold = {"invariant": "上限恆為5", "test": "TestLimitFive", "file": "prod.py", "new": "X = 1", "note": ""}
++    forged = _kr_recipe("prod.py", old="def check", test="TestLimitFive", note="")
++    forged["invariant"] = "上限恆為5 id=deadbeefdead"
++    root, v = _mk_kill_env()
++    (v / "Systems" / "Limit.md").write_text(_kr_note([ok, noold, forged], inv_lines=[
++        "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive] [kill:recipes]"]), encoding="utf-8")
++    _kr_commit(root)
++    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit")
++    lines = [ln for ln in r.stdout.splitlines() if " id=" in ln]
++    check("①每條結果一行、都附 id=", len(lines) == 3, r.stdout)
++    for label, e in (("一般", ok), ("缺 old", noold), ("合約片段夾假 id", forged)):
++        want = m._kill_recipe_id(node, e)[:12]
++        hit = [ln for ln in lines if ln.split(" id=", 1)[1].startswith(want)]
++        check(f"②{label}:判定之後第一個 id= 就是它的短身分", len(hit) == 1, r.stdout)
++    rr = _kr_lum(root, v, "guard", "kill-rm", "Systems/Limit", "--id", m._kill_recipe_id(node, noold)[:12])
++    check("③缺 old 那條的 id 拿去 kill-rm 移得掉", rr.returncode == 0, rr.stderr)
++    root, v = _mk_kill_env()
++    (v / "Systems" / "Limit.md").write_text(_kr_note([ok], inv_lines=[
++        "KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive] [kill:recipes]"]), encoding="utf-8")
++    _kr_commit(root)
++    rj = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--json")
++    try:
++        data = _json.loads(rj.stdout)
++    except ValueError:
++        data = None
++    keys = set(data["results"][0]) if data and data.get("results") else set()
++    check("④--json 只有 JSON、結果沒有 _rid、既有 recipe_id 還在", data is not None and "_rid" not in keys
++          and "_logged" not in keys and "recipe_id" in keys and " id=" not in rj.stdout, rj.stdout[:400])
++
++
++def t_guard_kill_add_rejects_template_placeholder():
++    """[S4] kill-add 的 --old 或 --new 去掉前後空白(與一對外圍引號)後整個等於 kill-rm 範本的待填字樣 → 擋下 rc2、筆記不變;
++    只是含有這串字照常寫入(lumos 自己產生範本那行程式就含)。"""
++    base = ["guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.py"]
++    for label, old, new in (("--new 是待填字樣", "LIMIT = 5", "<照新原文改寫的壞法>"),
++                            ("--old 是待填字樣(帶空白)", "  <照現在的程式填原文> ", "LIMIT = 9"),
++                            ("--new 帶外圍引號", "LIMIT = 5", "'<照新原文改寫的壞法>'")):
++        root, v = _mk_kill_env()
++        p = v / "Systems" / "Limit.md"
++        before = p.read_bytes()
++        r = _kr_lum(root, v, *base, "--old", old, "--new", new)
++        check(f"①{label} → 擋下 rc2、筆記不變", r.returncode == 2 and "待填" in r.stderr and p.read_bytes() == before,
++              f"{r.returncode} {r.stderr}")
++    root, v = _mk_kill_env()
++    (root / "tpl.py").write_text('X = "--new <照新原文改寫的壞法>"\n', encoding="utf-8")
++    _kr_commit(root, "tpl")
++    r = _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "tpl.py",
++                "--old", 'X = "--new <照新原文改寫的壞法>"', "--new", 'X = ""')
++    check("②只是含有待填字樣 → 照常寫入 rc0", r.returncode == 0, r.stdout + r.stderr)
++
++
+ def t_guard_kill_rm():
+     """[S6] kill-rm 只移除短身分對到的那一條(或全是同一完整身分的重複時一起移除),原子寫入,移除前印完整內容與 kill-add 範本;
+     格式壞的配方也移得掉;沒有配方對得到的 KEY 行拿掉 [kill:recipes]、還對得到的保留;
+     短身分不到 8 個十六進位字元、對到零條、對到不同完整身分的多條 → 擋下 rc2、筆記不變。kill-add/kill-rm 讀筆記時拿著寫入鎖。"""
+     m = _load_lumos_inproc()
+     node = "Systems/Limit.md"
+     # 造兩條前 8 字元相同、完整身分不同的配方(生日碰撞,約 6 萬次雜湊)
+     pre = {}
+     pair = None
+     for i in range(400000):
+@@ -60563,20 +60676,27 @@ def t_guard_kill_rm():
+     check("①b 對到多條時列出候選的完整身分", rid(c1) in r.stderr and rid(c2) in r.stderr, r.stderr)
+     r = rm(rid(ra) + "0")
+     check("①c 太長的訊息講範圍(8 到 64),不是只說至少 8", "8 到 64" in r.stderr, r.stderr)
+     ino = p.stat().st_ino
+ 
+     r = rm(rid(ra)[:12])
+     left = m._kill_read_recipes(p)[0]
+     check("②只移除對到的那一條", r.returncode == 0 and ra not in left and len(left) == len(recipes) - 1, f"{r.stderr} {left}")
+     check("②移除前印出那條完整內容(note、covers 都在)", "上限失守" in r.stdout and "java-concurrency" in r.stdout and "LIMIT = 5" in r.stdout, r.stdout)
+     check("②印出可照填的 kill-add 範本", "lumos guard kill-add Systems/Limit" in r.stdout and "--covers java-concurrency" in r.stdout, r.stdout)
++    # [S1] 範本那一行的 --new 是待填字樣、不抄舊壞法;完整內容那一行照印舊壞法(只對範本那一行斷言)
++    tpl = [ln for ln in r.stdout.splitlines() if "照現在的程式改寫後重新宣告" in ln]
++    full = [ln for ln in r.stdout.splitlines() if ln.strip().startswith("{")]
++    check("②[S1] 範本的 --new 是待填字樣、不含舊壞法;完整內容仍有舊壞法",
++          len(tpl) == 1 and "XX_BROKEN = 1" not in tpl[0] and "--new '<照新原文改寫的壞法>'" in tpl[0]
++          and any("XX_BROKEN = 1" in ln for ln in full), r.stdout)
++    check("②下一步提醒 --new 也要照新原文改寫", "--new" in r.stdout.splitlines()[-1], r.stdout)
+     check("②還有配方對得到第一條 KEY 行 → 標記保留", p.read_text(encoding="utf-8").count("[kill:recipes]") == 2, p.read_text(encoding="utf-8")[:600])
+     check("②沒有留下暫存檔", not [x for x in p.parent.iterdir() if "tmp" in x.name], str(list(p.parent.iterdir())))
+     check("②原子寫入:新檔換上去(inode 換了),不是原地改寫", p.stat().st_ino != ino, f"{ino} {p.stat().st_ino}")
+ 
+     r = rm(rid(rb)[:12])
+     left = m._kill_read_recipes(p)[0]
+     check("③全是同一完整身分的重複 → 一起移除、逐條印", r.returncode == 0 and rb not in left and r.stdout.count("n <= LIMIT") >= 2,
+           f"{r.stdout} {left}")
+     r1, r2 = rm(rid(bad)[:12]), rm(rid(3)[:12])
+     left = m._kill_read_recipes(p)[0]
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 728991f9..2faad07e 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -14,21 +14,21 @@
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"` | 套壞法後測試必須翻紅,沒翻紅=測試是裝飾 | — |
+-| 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add`,提交後跑 `lumos guard kill <節點>` | 移除前印出那條完整內容與範本;短身分至少 8 字元,對到不同的多條會擋下 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
++| 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add`,提交後跑 `lumos guard kill <節點>` | 移除前印出那條完整內容與範本(--old、--new 都要照現在的程式重填,原樣貼待填字樣會被擋);短身分至少 8 字元,對到不同的多條會擋下;不帶 --id 跑一次列出這篇每條的短身分,guard kill 每條結果行的 id= 也是 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+ | 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀、零自由文字) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 綠 rc0/紅 rc1 | 紅了沒人知道 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+ 
+ ## 筆記內容審:新寫的筆記是不是程式碼推得出來(推送前)
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 6e501876..0e1a2868 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -26,19 +26,19 @@
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / drift scan·fix·ack(存量漂移:列出、用工具改掉、表態照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill-rm·kill / ci-wait / ci-status |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill-rm(不帶 --id 列出)·kill / ci-wait / ci-status |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
+ 2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別寫(會過期;新寫的程式行號引用、沒帶 `[來源:…]` 的 FACT/FLOW/DEP 提交時會被擋),程式碼答不了的現況才寫、同一行帶 `[來源:部署|資料庫|生產|外部|人工]`;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 11dd329b..07b507d5 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -585,21 +585,21 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,扣點前擋下 ... [te
+ 
+ ```bash
+ lumos guard list [--unbound]        # 列所有 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked);--unbound 只列未綁
+ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
+     --method <測試名> --type pure|behavioral|state --claim "<向人確認過的可測斷言>" \
+     [--out <測試專案目錄>] [--template <路徑>] [--class <類別名>]
+ lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
+ lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
+ lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
+ lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--covers 題目id,…]   # 宣告壞法配方(kill_recipes+[kill:recipes])
+-lumos guard kill-rm <node> --id <短身分>   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add;短身分看 kill-add 提醒或 doctor P2)
++lumos guard kill-rm <node> [--id <短身分>]   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add);不帶 --id 列出這篇每條的短身分
+ lumos guard kill <node> ["<KEY子字串>"] [--json]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
+ ```
+ 
+ **改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。
+ 
+ **補 verified_by 漏寫**(doctor Check 3 的零判斷項自動修):
+ ```bash
+ lumos sync-verified-by            # dry-run:列 Verification 連到 Systems 但 verified_by 漏列的
+ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
+ ```

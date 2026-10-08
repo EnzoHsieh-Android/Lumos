@@ -39,6 +39,8 @@ summary: |-
   TEST:t_codex_stop_block_once(23 斷言)/t_codex_s1_graph_sync_codex_transcript/t_codex_s1_r1_fixes/t_codex_s1_lens_arm_claim/t_codex_s3_probe_codex_parser/t_codex_d6_agent_toml/t_codex_sync_global_tristate(python3 scripts/test_lumos.py -k codex 共 164 案例綠)
   WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]派工鏡頭掛鉤認 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards;lumos 超時或回非零碼(沒有圖譜、base 不在主線)時,回傳裡若有 role_text 照附(角色不需要圖譜,消費專案還沒建圖譜時才拿得到卡)。掛鉤是複製進使用者目錄的,舊掛鉤只在成功路徑附得到,要重跑安裝;預算:lumos 先算角色、再算圖譜,角色從掛鉤給的同一份期限裡先扣,最多 3 秒且不超過期限五分之一,最多讀 300 支檔內容(一次批次讀取),掛鉤外層上限不變
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
+  WHY:[2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]]]派工鏡頭掛鉤在 lumos 回非零碼、JSON 帶認得的 lens_fail(commit_missing/not_git/sha_unresolved/no_mainline/base_not_mainline/empty_range)時附一行 `LUMOS-LENS:` 說明(範圍、會談專案路徑、固定原因句、繞法、終點要寫完整提交編號),角色卡接在後;範圍不合保守字元集以 `<範圍>` 代替、路徑先過同層掛鉤共用的正典 _plain_label(★注入框★區塊逐字複本)再多清反引號與 U+2028/U+2029/U+0085;判斷住在 `_fail_note`,讀 JSON 共用 `_last_json`,主函式只多一個「或」 [出處:rtb 2026-10-07 回報四輪派工 0 份附加] [因:掛鉤用會談的專案目錄算鏡頭,會談開在別的專案時範圍找不到,原設計失敗一律靜默] [不選:讀 lumos 的錯誤輸出原文轉進派工詞(自由文字零輸出)] [test:t_dispatch_lens_hook_fail_reason_notice]
+  PITFALL:Codex 編排時派工鏡頭掛鉤領席(--claim)超時那條路一走就 NameError,超時說明附不出去——掛鉤呼叫 _frame_injected 卻從沒複製 ★注入框★ 區塊;框一致性守衛把這支檔列在清單上、但找不到框常數就略過,所以一直沒抓到 [出處:2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]] 代碼審第三輪查證時發現] [根因:複製式共用(hook 彼此 import 不到)只守「有的複本一致」、沒守「該有的都有」] [修法:區塊逐字抄進來;守衛改成自動找:用到框函式或清理函式的 hook 都要有完整區塊、連同 lumos 本體整段逐字相同(原本只比框常數、只看寫死的清單,memory-sweep 不在清單上)] [test:t_dispatch_lens_hook_claim_timeout_framed]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
@@ -51,6 +53,10 @@ verified_by:
   - "[[Verification/持久用量帳第五輪修補驗證]]"
   - "[[Verification/持久用量帳第五輪審查修補驗證]]"
   - "[[Verification/持久用量帳第六輪審查修補驗證]]"
+  - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+  - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+  - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+  - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -58,8 +64,18 @@ decisions:
     why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
     decided: 2026-09-11
     valid: true
+related:
+  - "[[Projects/過期鎖安全接手_計劃]]"
 ---
 # codex-harness
+
+## 2026-10-05 派工鏡頭鎖的狀態告知
+
+[[Projects/過期鎖安全接手_計劃]] 停止按時間偷派工鎖；原因是鎖記啟動者 PID，背景工作可在啟動者退出後繼續。鏡頭因此要把「超過舊門檻而無快取，鎖狀態未知」與「鎖檔根本建不起來」分開，hook 亦須保留這個區別，否則只修底層會讓審查席仍看到一般超時訊息。`t_lens_stale_lock_reports_uncertainty` 由鏡頭一路驗到 hook；正常背景暖快取沿用 `t_lens_timeout_keeps_warming_cache`。殘留鎖不能只憑鎖內 PID 已消失就刪，人工復原需另查相關背景工作。
+
+代碼審 r1 的兩席均指出：hook 將建鎖錯誤轉成提示後正常返回，若不標 `_hookevent.mark("error", …)`，事件帳會把失敗記成成功，儀表板形成假綠。同一輪也核對到等待者看見快取時不能替持有者刪鎖；否則失敗清理與重新建鎖可再形成換檔窗口。這兩項都由 `t_lens_stale_lock_reports_uncertainty` 的紅綠斷言驗收。
+
+代碼審 r2 再次證明只在 `already=True` 時保護別人不夠：`already=False` 的等待端可能因背景啟動失敗已釋放鎖，後續有新持有者。等待端的快取命中路徑因此一律不刪鎖；正常背景工作在快取寫完後按啟動者資料清自己的鎖，`t_lens_timeout_keeps_warming_cache` 驗這條整合路徑。`t_lens_stale_lock_reports_uncertainty` 加了「取得→啟動失敗→換入→快取命中」的先紅後綠回歸。
 
 > 白話:lumos 原本的「防護」全掛在 Claude Code 上——進場提醒、改檔前推波及、派審查員附鏡頭、收工點名沒補的筆記。這篇講的是同一套東西怎麼接到 OpenAI 的 Codex CLI 上、哪些地方兩家行為刻意不同、哪些是 Codex 平台補不了的限制。程式碼只告訴你現在長怎樣;為什麼這樣接、哪裡踩過雷,看這裡和下面兩份計劃。
 
@@ -137,3 +153,18 @@ PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果�
 PITFALL: 第五輪的輸出修補自己又帶出三個洞：把 FIFO 也當裝置「直接寫」，沒人讀時整批跑完後永遠卡住（修前會換成普通檔，不會卡）；為了讓新檔照 umask，把整個程序的 umask 設成 0 再設回來，正是 lumos 自己的原子寫入原語註明否決的做法；開跑前檢查對歷史檔漏查父目錄可寫、FIFO 與檔名錯誤 [出處:code-probe-postreview-dispatch-ledger r6 CON6-01/ARCH6-01/COR6-01/BND6-02] [根因:新增「直接寫」分支時沒有逐一列出每種目標型別在取代與追加兩種模式下的行為，也沒先讀專案既有的原子寫入原語] [test:t_probe_boundary_fifth_round_output_edges]。現在的規則：取代模式只有字元裝置直接寫（不阻塞開檔、開到的不是字元裝置就不寫），FIFO、socket、連結都換成普通檔；追加模式只收普通檔與字元裝置；暫存檔跟 lumos 原語一樣用獨佔建立加 0o666 讓 umask 自己生效。證據 [[Verification/持久用量帳第六輪審查修補驗證]]。
 
 WHY: 原子寫入時，既有普通檔只有「自己擁有、而且只有一個名字」才沿用它的權限位元，新建、別人擁有或有多個名字的一律照 umask；這跟 lumos 原語對既有檔一律沿用權限不同 [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01、r6 SEC6-02/ARCH6-02 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但探針的輸出目錄可能是共用的：別人預先放好的寬權限檔、或連到我某個寬權限檔的硬連結若被沿用，替換後的結果檔會讓對方可寫；lumos 原語寫的是使用者自己的筆記庫，沒有這個威脅] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+## 2026-10-05 背景啟動錯誤的派工提示
+
+[[Projects/背景啟動失敗即時回報_計劃]] 對同步啟動失敗新增獨立於逾時與建鎖錯誤的提示，是因為三者要求不同的人工處置；尤其不能讓事件帳把明確的啟動失敗算成 timeout 或成功。提示只說「本次背景未啟動」，同名鎖可能已被另一工作接手；原始例外不進派工詞，角色卡仍可附上。t_dispatch_lens_hook_spawn_error_notice 與 t_lens_stale_lock_reports_uncertainty 分別驗新舊分類。
+
+安裝邊界：hook 以複製檔安裝，全域 lumos 可指向較新的來源。舊 hook 對新 CLI 的 spawn_error 無對應分流，可能只附角色卡且不記事件；因此實際安裝的前案 S6 必須核對兩者成對更新，未做該驗證前不能聲稱使用者環境已修好。
+
+
+## 2026-10-05 整段審查抓出的快取與期限邊界
+
+PITFALL:整段代碼審 r1 的正確性席以無 `getuid` 故障注入證明：只檢快取檔 owner 的平台分支，會讓外部目錄連結中的文字進入派工詞。讀取端必須先沿用私有目錄的路徑信任判準，並拒絕檔案連結與非文字結果；來源見 `governance/review-reports/code-過期鎖收斂修復/r1-single-reviewer.md`，防回歸 `t_lens_cache_read_rejects_untrusted_path_without_getuid`。這是審查中實際重現的缺口，不把局部綠燈當整體可信。
+
+PITFALL:同席的期限末注入證明：最後一次輪詢後、期限前快取已完成且鎖已清，若直接分類逾時會誤記 lock_uncertain 並叫人檢查已不存在的鎖。來源同上；防回歸 `t_lens_deadline_final_cache_read`。期限到點仍須最後讀一次結果，然後才判鎖狀態。
+
+
+PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻仍沿該目錄建立暖機鎖，會在外部目標留下無法由背景工作清除的鎖，後續呼叫反覆逾時。整段審查 r2 正確性席已在無 `getuid` 故障注入重現首、次呼叫皆 rc5 且只啟動一次；來源 `governance/review-reports/code-過期鎖收斂修復/r2-single-reviewer.md`。防回歸 `t_lens_untrusted_cache_never_creates_external_lock` 驗拒絕外部路徑與零新背景程序，`t_lens_trusted_cache_still_spawns_warmer` 驗合法私有目錄仍能暖機；兩面要一起守。

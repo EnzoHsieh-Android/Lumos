@@ -1,0 +1,176 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\350\274\211\351\253\224\345\277\253\347\205\247\351\235\236\346\263\225\347\267\250\347\242\274\345\217\227\346\216\247\346\213\222\346\224\266_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\350\274\211\351\253\224\345\277\253\347\205\247\351\235\236\346\263\225\347\267\250\347\242\274\345\217\227\346\216\247\346\213\222\346\224\266_\350\250\210\345\212\203.md"
+index 534ff9ad..a660e334 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\350\274\211\351\253\224\345\277\253\347\205\247\351\235\236\346\263\225\347\267\250\347\242\274\345\217\227\346\216\247\346\213\222\346\224\266_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\350\274\211\351\253\224\345\277\253\347\205\247\351\235\236\346\263\225\347\267\250\347\242\274\345\217\227\346\216\247\346\213\222\346\224\266_\350\250\210\345\212\203.md"
+@@ -16,9 +16,9 @@ lands_in:
+ 
+ 把已知的載體快照解碼例外變成可修正的拒收訊息，避免把輸入錯誤當程式故障而重開審查。本節為實作前紀錄（初版34條控制）：當時只做獨立查證與紅測試，生產入口尚未修改；後續成果另按固定來源寫Verification，不將本段當完成狀態。
+ 
+-既有 [[Issues/主程式讀取路徑漏接UnicodeDecodeError]] 要求逐入口判斷；[[Projects/載體零引句在記帳前拒收_計劃]] 曾重現但刻意排除此情況，若改rc2須另立輸入契約與正反控制。本案只補這一個入口，不關閉整個Issue、不重寫前案範圍。
++既有 [[Issues/主程式讀取路徑漏接UnicodeDecodeError]] 要求逐入口判斷；[[Projects/載體零引句在記帳前拒收_計劃]] 曾重現但刻意排除此情況，若改rc2須另立輸入契約與正反控制。本案只補這一個入口，不關閉整個Issue、不重寫前案範圍。正式R1另證實該入口一次性IO失敗可跳過驗句，因此拒收範圍補上這條可重記帳的既有路徑；不擴為其他入口掃除。
+ 
+-PRIOR-ART: Python官方例外階層顯示UnicodeDecodeError不屬OSError；codecs文件的strict預設遇解碼錯誤拋UnicodeError，replace會改寫壞字元。沿用cmd_quote_check與報告入口既有受控rc2形狀，不新增依賴、共用層或解析器。來源 https://docs.python.org/3/library/exceptions.html#UnicodeDecodeError 與 https://docs.python.org/3/library/codecs.html#error-handlers ，2026-10-06實讀。
++PRIOR-ART: Python官方例外階層顯示UnicodeDecodeError不屬OSError；codecs文件的strict預設遇解碼錯誤拋UnicodeError，replace會改寫壞字元。沿用cmd_quote_check與報告入口既有受控rc2形狀，不新增依賴、共用層或解析器。MITRE CWE-754要求局部捕捉特定例外且核對異常結果；CWE-367提醒不同時點檢查不能保證同一材料，本案採未驗就拒收，不新增鎖或宣稱跨程序原子性。來源 https://cwe.mitre.org/data/definitions/754.html 與 https://cwe.mitre.org/data/definitions/367.html 及 https://docs.python.org/3/library/exceptions.html#UnicodeDecodeError 與 https://docs.python.org/3/library/codecs.html#error-handlers ，2026-10-06實讀。
+ RETIRE-IF: cmd_canary若改用與quote-check共用的嚴格解碼入口，且本案所有普通/最佳化與同份原始bytes指紋控制持續綠，於該入口改動時移除本地重複捕捉；不以吞掉錯誤或替換字元當退場。
+ 
+ 落點與沿用合約見 [[Systems/design-loop]]。本案不改處置閘第五步；既有四支相依回歸在規格閘真跑全綠。
+@@ -29,7 +29,9 @@ RETIRE-IF: cmd_canary若改用與quote-check共用的嚴格解碼入口，且本
+ - [S2] 當載體快照有效UTF8且引句全錨，記帳器應保持LF/CRLF成功與同份bytes指紋；非載體的既有rawbytes雜湊政策應保持，不連帶強制解碼。 [test:t_canary_carrier_invalid_snapshot_encoding] [test:t_canary_carrier_quote_positive_controls]
+ - [S3] 當其他證據或數量不合法，記帳器應保留既有零引句、報告非法編碼、驗後換檔與負數拒收；缺檔OSError分流不得改成編碼診斷，不新增集合數量等式。 [test:t_canary_carrier_zero_quote_rejected] [test:t_canary_carrier_invalid_report_encoding] [test:t_canary_carrier_evidence_changes_before_hash] [test:t_canary_negative_findings_rejected]
+ 
+-- [S4] 當快照讀入階段出現非編碼且非I/O程式例外，記帳器應保留原例外，不改報成UTF8輸入rc2，成功帳不追加。 [test:t_canary_carrier_invalid_snapshot_encoding]
++- [S4] 當快照讀入或引句解析階段出現非編碼且非I/O程式例外，記帳器應保留原例外，不改報成UTF8輸入rc2，成功帳不追加。 [test:t_canary_carrier_invalid_snapshot_encoding]
++
++- [S5] 當載體快照在引句驗證讀取時發生I/O例外，記帳器應當場回rc2與--snapshot讀取失敗診斷、不追加成功帳，即使稍後讀取可恢復也不得以rawhash成功代替驗句；普通及最佳化、首次及已有帳皆成立。 [test:t_canary_carrier_snapshot_io_recovery_rejected]
+ 
+ ## 最小重現
+ 
+@@ -37,7 +39,7 @@ RETIRE-IF: cmd_canary若改用與quote-check共用的嚴格解碼入口，且本
+ 
+ ## 回退
+ 
+-只回退本案快照解碼錯誤的受控拒收分支；保留前案零引句、報告編碼、換檔與負數守衛、原帳及測試。回退後恢復該輸入的rc1/traceback風險，但仍不得追加錯帳；重驗本案紅綠與合法對照，不刪帳或換ID洗歷史。
++只回退本案快照解碼及驗句讀取失敗的受控拒收分支；保留前案零引句、報告編碼、換檔與負數守衛、原帳及測試。回退後恢復非法編碼的rc1/traceback及暫時IO失敗未驗材料先追加的已知風險；不能用刪帳彌補，回退前需確認已不觸發本案失敗控制；重驗本案紅綠與合法對照，不刪帳或換ID洗歷史。
+ 
+ ## 實務隱患
+ 
+@@ -47,9 +49,9 @@ RETIRE-IF: cmd_canary若改用與quote-check共用的嚴格解碼入口，且本
+ 守衛面:本案正是入口邊界，不能排除；規格閘及必要正式設計審過後才實作。
+ 併發:不新增鎖或跨程序版本保證，保留同份讀入bytes與指紋核對。
+ 效能與資源:只捕捉特定解碼例外，不吞Exception、不另讀快照或新增背景工作。
+-回退:不擴成全repo編碼整治，不改非載體政策與OSError分流；Windows排除。
++回退:不擴成全repo編碼整治，不改非載體政策；OSError仍是讀取失敗診斷，僅從稍後hash出口前移到驗句讀取失敗當場，避免未知材料先記帳；Windows排除。
+ 
+-REVISIT:2026-10-20 在本案CLI與卷證入口核對十份真實編碼拒收及恢復收據，區分輸入問題與修復回歸；沒有實際收據前不宣稱審查輪數下降。
++REVISIT:2026-10-20 在本案CLI與下節指定的真實拒收及恢復收據入口核對十份配對紀錄，區分輸入問題與修復回歸；沒有實際收據前不宣稱審查輪數下降。
+ 
+ ## 初版34條控制的來源釘定（實作前）
+ 
+@@ -60,3 +62,14 @@ REVISIT:2026-10-20 在本案CLI與卷證入口核對十份真實編碼拒收及
+ ## 前掃折入與第三個測試版本（實作前）
+ 
+ PF-1量到廣泛吞Exception也能讓初版控制通過；原觀察為靜態，本次在隔離mutant實跑後HIT。加Runtime控制後38條旧碼24/14，壞廣捕捉36/2；再加IO分流後42條舊碼28/14，壞mutant38/4。初版34的20/14仍原樣存各自來源；不取代或混稱版本。新增S4只是把原不吞未知錯誤的限制接上控制；生產尚未實作。
++
++## 真實收據入口與限制
++
++十份真實案例必須來自實際審查操作，測試/變異/人工注入收據不計入十份。每個案例在治理卷證本案目錄的 real-input-receipts/ 保存獨立JSON：case_id、時間、CLI提交與SHA256、report/snapshot bytes的SHA256、原命令參數、拒收rc/stdout/stderr、帳前後SHA256或不存在、失敗類型（編碼/I/O）、配對修正後重試的命令/rc/成功帳token/材料與帳雜湊。未知程式故障不得記成輸入拒收。由2026-10-20的獨立Verification連結這些檔，逐份重算CLI/材料雜湊、核對拒收不追加與配對恢復成功；累計不足十份就記實際數與不足，不補造案例或宣稱輪數下降。此為人工蒐證格式，未新增自動收集器。
++
++## 審計修正紀錄
++
++r1(2026-10-06,6席):3條/blocking 2/兩項守衛缺口及收據入口精度均折入；生產尚未修改，新增控制先跑舊碼紅燈。
++卷證：governance/review-reports/snapshot-encoding-preflight/，原席報告及原34/38/42版本保留。logic-F1實測一次性IO失敗後非法UTF8或不錨材料rc0追加、處置閘quote FAIL；resources-F1補引句解析RuntimeError控制並以內層廣捕捉mutant查證；receipt-F1寫明真實配對收據位置/欄位及10份不足不得造數。
++
++合約候選：載體快照未成功完成嚴格解碼與引句核對，不得以rawhash成功作已驗材料落帳；本次只作候選，不自行升格硬合約。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/design-loop.md b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+index de966329..1c5156f9 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/design-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+@@ -231,3 +231,5 @@ WHY:負數數量在報告驗證前拒收，沿用現有非負成本欄的stderr/
+ PITFALL: 前案有效UTF8範圍之外的快照解碼例外會被當成程式故障，雖不追加錯帳，仍需另定可修正的拒收訊息。出處 [[Projects/載體快照非法編碼受控拒收_計劃]] 的雙来源最小對照、前案preflight探針與 [[Issues/主程式讀取路徑漏接UnicodeDecodeError]]；防回歸入口 t_canary_carrier_invalid_snapshot_encoding，初版34條20/14原紅各綁SHA。本段為實作前紀錄：當時只驗證候選、尚未修改生產；後續狀態須讀該計劃的最新收貨與Verification。
+ WHY: 沿用既有quote-check及報告入口的特定解碼錯誤處理，維持strict與原bytes指紋；不把replace後文字當證據、不擴成全repo掃除或改非載體政策。出處同計劃的官方Python文檔及獨立唯讀既有方案查證。
+ REVISIT:2026-10-20 在本案CLI與卷證入口核對十份實際編碼拒收與恢復收據，再判斷入口錯誤是否較少造成重記。
++
++PITFALL:[2026-10-06 快照拒收設計R1 logic-F1]驗句讀取遇一次性I/O失敗後若只清空結果，稍後rawhash讀取恢復會把未驗材料追加，處置閘才quote FAIL而需重記。來源本案R1原報與非法UTF8/不錨對照；防回歸t_canary_carrier_snapshot_io_recovery_rejected，普通/-O首筆及已有帳控制；未知解析RuntimeError另由t_canary_carrier_invalid_snapshot_encoding控制，不用廣捕捉掩蓋。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1f149f1e..7439d8ec 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25809,7 +25809,7 @@ def t_canary_carrier_invalid_snapshot_encoding():
+         report.write_text("severity: minor\n## F1\nseverity: minor\nblocking: 否\n"
+                           + "引句:「" + text + "」\n", encoding="utf-8")
+         ledger = root / ".canary-log.jsonl"
+-        def carrier(label, non_encoding_fault=False):
++        def carrier(label, non_encoding_fault=False, quote_fault=False):
+             args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
+                 "--loop", f"code-snapshot-{opt}-{label}", "--round", "r1", "--auditor", "通才-codex",
+                 "--severity", "minor", "--findings", "1", "--tier", "standard", "--report", str(report),
+@@ -25825,6 +25825,13 @@ def t_canary_carrier_invalid_snapshot_encoding():
+                         "Path.read_bytes = read_bytes\n"
+                         f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
+                 return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++            if quote_fault:
++                shim = ("import runpy, sys\n"
++                        f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
++                        "def quote_rows(*args):\n    raise RuntimeError('snapshot-quote-parser-fault')\n"
++                        "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
++                        "sys.exit(namespace['main']())\n")
++                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
+             return subprocess.run([*prefix, *args], capture_output=True, text=True)
+         snap.write_bytes(b"\xff\xfe")
+         first = carrier("first-bad")
+@@ -25870,6 +25877,12 @@ def t_canary_carrier_invalid_snapshot_encoding():
+               fault.stdout + fault.stderr)
+         check(f"快照編碼 opt={opt}:非編碼故障不追加成功帳",
+               ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        fault = carrier("quote-parser-fault", quote_fault=True)
++        check(f"快照編碼 opt={opt}:引句解析故障仍為原RuntimeError",
++              fault.returncode == 1 and "RuntimeError: snapshot-quote-parser-fault" in fault.stderr,
++              fault.stdout + fault.stderr)
++        check(f"快照編碼 opt={opt}:引句解析故障不追加成功帳",
++              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
+         clean = root / "clean.md"
+         clean.write_text("severity: clean\n本席沒有發現。\n", encoding="utf-8")
+         snap.write_bytes(b"\xff\xfe")
+@@ -25893,6 +25906,62 @@ def t_canary_carrier_invalid_snapshot_encoding():
+               "Traceback" not in missing.stderr and ledger.read_bytes() == before and "✓" not in missing.stdout,
+               missing.stdout + missing.stderr)
+ 
++def t_canary_carrier_snapshot_io_recovery_rejected():
++    """驗句讀取失敗不能由稍後可讀的 raw hash 代替，成功帳保持不變。"""
++    for optimized in (False, True):
++        v = mkvault()
++        root = v.parent
++        text = "這是凍結材料裡可以核對的一整段原始文字"
++        snap = root / "snapshot.patch"
++        report = root / "report.md"
++        report.write_text("severity: minor\n## F1\nseverity: minor\n引句:「" + text + "」\n", encoding="utf-8")
++        ledger = root / ".canary-log.jsonl"
++        def call(label, transient=True):
++            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
++                    "--loop", f"code-snapshot-io-{optimized}-{label}", "--round", "r1",
++                    "--auditor", "通才-codex", "--severity", "minor", "--findings", "1",
++                    "--tier", "standard", "--report", str(report), "--snapshot", str(snap),
++                    "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
++            prefix = [sys.executable, *(["-O"] if optimized else [])]
++            if not transient:
++                return subprocess.run([*prefix, *args], capture_output=True, text=True)
++            shim = ("import runpy, sys\nfrom pathlib import Path\noriginal = Path.read_bytes\nseen = []\n"
++                    "def read_bytes(path):\n"
++                    f"    if path == Path({str(snap)!r}) and not seen:\n"
++                    "        seen.append(1)\n        raise OSError('transient-snapshot-read')\n"
++                    "    return original(path)\nPath.read_bytes = read_bytes\n"
++                    f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
++            return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        first = call("first")
++        check(f"快照IO/{optimized}:首次暫時失敗當場拒收並定位IO",
++              first.returncode == 2 and "--snapshot" in first.stderr
++              and "transient-snapshot-read" in first.stderr and "UTF" not in first.stderr,
++              first.stdout + first.stderr)
++        check(f"快照IO/{optimized}:首次不建成功帳",
++              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
++        seed = call("valid-seed", transient=False)
++        check(f"快照IO/{optimized}:正常讀取合法材料確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        for label, data in (("valid", (text + "\n").encode("utf-8")),
++                            ("invalid-encoding", b"\xff\xfe"),
++                            ("unmatched", "這份材料沒有報告所引用的那一段原文。\n".encode("utf-8"))):
++            snap.write_bytes(data)
++            before = ledger.read_bytes()
++            result = call(label)
++            check(f"快照IO/{optimized}/{label}:暫時失敗當場rc2不誤診",
++                  result.returncode == 2 and "--snapshot" in result.stderr
++                  and "transient-snapshot-read" in result.stderr and "UTF" not in result.stderr,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:無traceback或成功訊息",
++                  "Traceback" not in result.stderr and "✓" not in result.stdout,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:成功帳逐位元不變",
++                  ledger.read_bytes() == before, result.stdout + result.stderr)
++
++
+ 
+ def t_canary_carrier_invalid_report_encoding():
+     """載體報告不能以替換字元掩蓋非法 UTF-8，寫側與讀側要驗同一份資料。"""

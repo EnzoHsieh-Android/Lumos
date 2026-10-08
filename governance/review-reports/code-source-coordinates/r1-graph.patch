@@ -1,0 +1,249 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/引用座標依實際換行_計劃.md b/docs/lumos-toolchain-knowledge/Projects/引用座標依實際換行_計劃.md
+new file mode 100644
+index 00000000..a8f68b14
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/引用座標依實際換行_計劃.md
+@@ -0,0 +1,82 @@
++---
++type: project
++status: doing
++created: 2026-10-06
++updated: 2026-10-06
++tags:
++  - type/project
++  - status/doing
++  - scope/loop-engineering
++  - risk/守衛面
++lands_in:
++  - Systems/lumos-refcheck
++  - Systems/pitfalls-code-loop
++  - Systems/測試假綠形態
++---
++# 引用座標依實際換行_計劃
++
++
++白話：引用檢查像查門牌，檔案只有兩層樓，特殊字元卻被算成第三層，讓不存在的座標通過。先把樓層數算正確，仍保留原本只驗存在性、不驗業務語意的分工。
++
++WHY:用共用引用驗證入口修正行數，避免審查與表態各補一套規則 [出處:2026-10-06 固定源碼最小重現與 Systems/lumos-refcheck 決策 d1、d2]
++
++PRIOR-ART:Python 官方 str.splitlines 明列 Unicode 行／段落分隔符、NEL 與控制分隔符；它的邊界比 universal newlines 更廣。已有文字讀取層處理常見換行，只需保留讀取層正規化後的 LF 邊界。https://docs.python.org/3/library/stdtypes.html#str.splitlines
++
++RETIRE-IF:共用引用驗證入口改為提供已釘版本的來源行陣列且本計劃的反例全部由該入口守住時，撤掉本次局部行分割；不得與新入口並存第二套。
++
++## 現場與重現
++
++- 兩個 LF 行的有效 Python 檔，第一行字串含 U+2028，第二行是 value = 1。現有共用函式對第 2 行回傳錯引文，對第 3 行回傳 ok。
++- 工作樹與釘提交兩條讀法皆重現；實際 refcheck CLI 對第 3 行回 0；表態路徑證據消費端也回 True。
++- 最小命令與原始結果保存於本案卷證。這是既有的引用行數問題；比較修正關卡便宜錯誤功能之前的 main 提交 74d9d1c842131d82222f0f304ae33d15c012d8b3 與功能提交 4fc747538388a8cd631e665300047dfd7ac778fe，_validate_repo_ref 的 AST 相同（attribution-pinned.json），因此不記成該功能的修補回歸。
++
++涉及程式：`scripts/lumos` 的共用引用驗證與既有消費端；`scripts/test_lumos.py` 的引用測試。
++
++圖譜邊界：[[Systems/lumos-refcheck]] 決策 d1、d2；[[Systems/pitfalls-code-loop]] 表態證據；[[Systems/check-j-regen-guard]] 重生來源引用；[[Systems/測試假綠形態]] 現場與翻紅前置。
++
++## 核心裁定
++
++1. 共用入口仍是 _validate_repo_ref；修正它的兩條讀檔分支使用同一行數判法。借用既有 LF 分割，排除字串裡的 Unicode／控制分隔符，移除單一末尾 LF 帶來的額外空項；空檔沒有第 1 行，中間與末尾的實際空白行不得消失。
++2. 正式引用驗證保留現有文字讀取層的通用換行與 BOM／解碼方式；不改檔案 bytes、Git 調用、釘版合法性、引用抽取、治理格式或 CLI 返回碼。測試 fixture 的 Git 配置隔離與有限逾時另依 S5，不改正式入口的 Git 設定。
++3. 只驗檔案與行號範圍存在；不新增語意驗證、引句匹配、來源真假政策或新依賴。既有目錄與無行號短路保留。
++4. 引用與表態證據繼續共用原入口；回傳 tuple 與 manifest 格式不變。實際不存在的行必須回 line_out_of_range，不可再以多算的分隔符證明存在。
++
++## 驗收條款
++
++- [S1] 當有效兩行來源第一行字串含 Unicode 或控制分隔符時，共用引用驗證應保持工作樹與釘提交的第 2 行引文為實際內容，第 3 行及跨到它的範圍回 line_out_of_range；合法範圍保持首尾引文。[test:t_refcheck_physical_unicode]
++- [S2] 當 refcheck CLI 收到第 3 行的工作樹或合法釘版引用時，refcheck 應回 1 並保留 out_of_range 統計；引用第 2 行仍回 0 且引文正確。[test:t_refcheck_physical_cli]
++- [S3] 當表態路徑證據消費端驗證同一釘提交的第 3 行時，表態證據檢查應回 False 並說明超界；有效第 2 行保持 True。[test:t_refcheck_physical_dispositions]
++- [S4] 當來源是空檔、單一空行、末尾空白行、沒有末尾換行、常見換行或帶 BOM 時，共用引用驗證應保留原本正規化與引文邊界；反向範圍、缺檔、目錄與無行號語義不退化。[test:t_refcheck_physical_legacy]
++
++- [S5] 當測試程序繼承使用者 Git 設定或 Git 環境變數時，來源 fixture 應只在臨時來源倉庫建立提交、不執行使用者 hooks 或簽章，且每次 Git 子程序有有限逾時；父程序設定不改寫。[test:t_refcheck_physical_fixture_isolated]
++
++## 實務隱患
++
++- 守衛面：會讓原本錯誤通過的座標被擋下。保留四種實際消費／讀取對照、原有 refcheck 與表態範圍測試；不修原始報告掩蓋問題，漂移引用用原始固定版本重驗。
++- 來源邊界：文字讀取層原有 CR／CRLF 正規化仍保留，目標是排除其餘分隔符，不擴張平台相容性工作。
++- 空檔與尾端：只移除最後一個分割空項；連續 LF 的真實空白行保留。驗有效最後一行與下一行超界，不能只看引文是否含關鍵詞。
++- 分層與資源：沿用共用驗證與原 Git timeout，測試 fixture 過濾繼承的 GIT_*，以 Git 官方環境選项隔離全域與系統配置；每次命令指定臨時空 hooks 目錄、停用簽章並設 8 秒逾時，只在臨時 Git repo 操作，不寫使用者工作目錄、不外呼。
++- 已排除:金流:此案只讀來源，不操作帳務。
++- 已排除:對外送出:不發送外部業務訊息。
++- 已排除:不可逆:不改來源檔與生產資料，提交可還原。
++- 守衛面仍有風險，依設計審與完整推送閘，不列風險低。
++
++## 回退
++
++回退本功能提交即可恢復原讀法；保留原始紅燈與固定源碼卷證，不把舊的 phantom 座標改寫成正確證據。沒有資料遷移或新增長駐機制。
++
++## 驗收與重驗界線
++
++機械對照只證明座標範圍與引文位置修正，不證明引文的業務語意，也不證明真實代碼審輪數下降。
++REVISIT:2026-10-20 抽查近期使用引用檢查的十次審查，統計錯座標發現與同類修補回歸；有來源行陣列新入口時依 RETIRE-IF 撤掉局部分割。
++
++## 審計修正紀錄
++
++r1(2026-10-06，六席):2 條／blocking 2／資源設定污染一條機械命中折入；來源編譯一條機械反證排除，原報告等級保留。
++完整原始報告、派工鏡頭、凍結規格與重現保存在 governance/review-reports/source-coordinates/。
++
++- resources-F1：隔離 parent TemporaryDirectory 配置 core.hooksPath，舊 fixture 確實在來源倉庫外建立 hook marker；使用者簽章設定也令新 S5 測試紅燈。只補測試 fixture 隔離與有限逾時，正式入口的 Git 行為不變。
++- PRIOR-ART:Git 官方 git 與 git-config 文件提供 GIT_CONFIG_GLOBAL、GIT_CONFIG_NOSYSTEM、core.hooksPath 與 commit.gpgSign；使用既有配置入口，不另建沙箱引擎。https://git-scm.com/docs/git https://git-scm.com/docs/git-config
++- 合約候選：同一份兩行來源不得接受第三行；來源 fixture 的提交隔離。現階段以 S1、S5 的反例守住，不自行升格或宣稱已新增硬合約。
++
++- integration-F1：真測試 AST 八字元的 compile/exec 全部成功；乾淨反向核對席亦驗有效性與64次 validator 控制流程可達。其真臨時 Git 操作被唯讀沙箱擋住，不能當作真驗證器綠燈；真源碼座標反例另由編排者跑過。保留單引號來源，該席原始 major 宣告不改寫。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-refcheck.md b/docs/lumos-toolchain-knowledge/Systems/lumos-refcheck.md
+index d7bae0e4..9dfae08f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-refcheck.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-refcheck.md
+@@ -45,10 +45,12 @@ about_code:
+ design-loop/跨家族複核最吃重的「地面事實查證」恰是 LLM 最不可靠的能力(<55%);放行本 spec 時 qwen disputed 的 5 條 ≥major 指控被 python/sed 秒級全反證,即現場實證。refcheck 把「檔在不在、行號在不在範圍」機械化,LLM 只判 grep 查不到的語意。
+ 
+ ## 三個消費端
+ - 自動 loop:`governance/autonomous_loop/orchestrator-prompt.md` §2 步驟 2.8(植 canary 後、spawn auditor 前對工作副本跑;missing/超界=機械 finding 修原稿留痕)+ auditor/judge prompt 附 manifest + §2.5a ground_truth 機械底座(不得刪減,散文規範)。
+ - 手動 loop:`skills/lumos-design-loop/SKILL.md` 步驟 2.5 同款 + (d) 型 canary 裸檔名校準規則。
+ - 方法論:`docs/methodology/圖譜即合約.md` 設計前審計 loop 表「機械 refcheck」列。
+ 
+ ## 相關
+ - 設計稿:`docs/design/2026-07-02-spec-refcheck.md`(design-loop 3 輪收斂;qwen disputed 經人裁機械反證後放行)。
+ - 實作計畫:`docs/superpowers/plans/2026-07-02-spec-refcheck.md`。
++
++WHY:來源行座標沿讀取層正規化後的 LF 計數，Unicode／控制分隔符是來源內容；只移除末尾換行的分割哨兵，保留空檔與真空白行。既有BOM／CR處理與只驗存在性決策不擴張 [出處:引用座標依實際換行設計審r1與官方Python str.splitlines] 防回歸：t_refcheck_physical_unicode、t_refcheck_physical_cli、t_refcheck_physical_legacy；固定源碼反向控制回舊讀法時71紅。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index cdeaf8be..4d9c1e7a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -162,10 +162,12 @@ AI 開發仰賴模型自決實作方式、只需通過最終驗證,但實作選
+ 
+ WHY:[2026-10-06 附件種子第二輪]模式與首行必須同出凍結版本；共用 raw 解析器提供模式及物件，舊留痕消費者仍只取原模式對，避免影響分析另建解析器漂移。既有簿記程式例外測試子集已驗 5 案例25條全綠，不代表整個分支放行。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:只共享目錄或副檔名仍有跨層分類不一致] [test:t_code_loop_bookkeeping_exec_mode_and_bom] [test:t_code_loop_bookkeeping_shebang_script_not_exempt]
+ 
+ WHY:[2026-10-06 角色功能驗收時間控制]凍結內容正確性不應同時承諾機器負載下三秒必讀完；兩個真 Git 功能案例顯式給30秒測試預算，正式3秒與期限降級仍由原專門案例驗。原斷言不改，不用自動重試掩盖紅燈。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:可控3.1秒觀測使原內容案例必紅、充足測試預算使原內容斷言全綠] [test:t_review_role_changed_files_population] [test:t_review_role_reads_head_content_base_config] [test:t_review_role_file_cap_and_budget]
+ 
+ WHY:[2026-10-06 零角色預算先做讀取反例]budget=0 的真時間斷言曾紅，禁止 Git／選檔的探針也先0過2敗；沒有時間可用應先回超時空結果，不先耗設定與 metadata 查詢。此修復保留原零預算三秒斷言，沒有放寬正式預設時間。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:耗盡預算後才檢查讓派工仍做無用讀取] [test:t_review_role_zero_budget_no_git] [test:t_review_role_file_cap_and_budget]
+ 
+ WHY:角色新增簿記查詢承接剩餘預算，不再自開固定timeout；一般角色改名仍取新路徑，只有被終點附件排除遮住的舊程式要保留 [出處:審查附件不作程式影響種子設計審r1] [因:小幅正預算會被新增查詢穿透，跨簿記改名也曾令角色輸入全空] [test:t_review_role_bookkeeping_remaining_budget,t_impact_diff_bookkeeping_boundary_rename]
+ 
+ WHY:[2026-10-06 第三輪角色統計補強]固定帳檔與未知首行終點也需要舊側角色證據；只對確定排除的目錄補償，不能兌現完整跨簿記改名承諾。採同一分類入口的「已確認」口徑，不另建簿記表、不改一般改名只取新側。[出處:code-review-artifact-impact-inputs/r3-correctness.md、r3-architecture.md] [因:避免角色消費者與影響分析消費者分岔，降低同類修復再次漏邊界] 防回歸：t_review_role_bookkeeping_rename_uncertainty，含三種真 R100、超限／逾期未知與角色不重複計數。
++
++WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存在的第三行在不同證據閘得到相反結果；本次只修座標計數，不把存在性檢查升格為語意正確性 [出處:source-coordinates 最小重現、r1設計審與countercontrol] 防回歸：t_refcheck_physical_dispositions。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+index 4561c44f..25379f9f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
++++ b/docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md
+@@ -12,20 +12,21 @@ tags:
+   - scope/guards-gates
+ verified_by:
+   - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
+   - "[[Verification/2026-07-10_審計loop研究硬化]]"
+   - "[[Verification/2026-07-10_合約鏈補強234]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
+   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
+   - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
++  - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
+ summary: |-
+   PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
+   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
+   WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
+   WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
+   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
+   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
+   FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:decisions] → doctor Check R / lint 強制 → ③ findings 經 doctor(僅 --ci)append .governance-log.jsonl → lumos gov 唯讀彙整查詢
+   KEY:可逆性走平行函式 extract_reversibility,完全不碰 extract_contracts 的 7 個 callsite(invariant 合約家族零靜默失效)[test:t_reversibility_doctor]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md b/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
+index cff419b2..7a497249 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
++++ b/docs/lumos-toolchain-knowledge/Systems/代碼審修正關卡.md
+@@ -16,20 +16,21 @@ summary: |-
+   WHY:[2026-10-02 第0步設計審 r1–r3]整次對開跑當下的 HEAD 建一棵隔離工作樹跑(並行會談改檔不影響);設定讀樹裡那份、不改寫它(r3 實測改寫會穿過符號連結改到樹外真檔);依賴資料夾預設連回主工作目錄(r2:不連時 Node 的 npx 會在樹裡上網抓測試工具)
+   WHY:[2026-10-02 第0步設計審 r2]測試名格式只在解析前擋 `]`、`,`,拆出平台之後方法名才過白名單(整串先過會把 `web:t_x` 的冒號擋掉,Kotlin 反引號名靠白名單收空白)
+   PITFALL:[2026-10-02 第0步實作]代碼審第 2 輪起 loop next 多半停在 gate-pending(沒帶 --spec),原本只在 plant-canary 給的處置記帳範本就永遠拿不到,--regression-set 看不到;改成代碼審第 2 輪起 gate-pending 也給 [test:t_loop_next_fix_check_reminder]
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]載體席選填 `--regression-set`(這輪哪些發現是上一輪修補造成的;none=判過沒有):由編排者標、辯方不推翻;不併進 --finding-kind(那欄量流程自產工作量,混進去會弄壞那個量);只當撤除條件的輔助指標 [test:t_canary_regression_set]
+   WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]] ④]修正改到殺傷力配方指著的檔時,提醒段多印「這幾條配方指著這次改過的檔」與每條的 `guard kill --id`(最多 10 條):原文可能對不上或殺不掉了。平台用關卡自己讀的那份樹裡設定(不另讀主工作目錄那份,同一個指令平台根只有一個來源),配方也讀樹裡的筆記(代碼審 r1 架構對齊席);平台不在設定或釘不住版本(根在樹外=別的 repo、子模組、連結、沒進版控)的配方不收。只印、不影響過不過、不寫事件欄位 [test:t_fix_check_recipe_rerun_note]
+   SEE:[[Systems/guard-kill]]、[[Systems/規格閘]]、[[Systems/bound-tests-gate]]、[[Systems/loop-convergence-recording]]、[[Systems/finding-refute]]
+   TEST:t_fix_check_record_complete、t_fix_check_bad_input、t_fix_check_test_must_exist、t_fix_check_listed_tests_green、t_fix_check_bound_tests_green、t_fix_check_repeat_category_needs_why、t_fix_check_gov_event、t_loop_next_fix_check_reminder、t_canary_regression_set、t_fix_check_record_template、t_isolated_worktree_shared、t_fix_check_tree_setup
+   REVISIT:2026-10-20 數 fix-check 跑了幾次、擋了幾次、擋在哪一項、耗時;通過的輪下一輪仍被標成上一輪修補造成的有幾條,決定先紅要不要做(Projects/代碼審修正關卡第0步_計劃)
+ verified_by:
+   - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
++  - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
+ ---
+ # 代碼審修正關卡
+ 
+ 白話:代碼審一輪修完、派下一輪之前,先讓工具驗一次編排者的修正紀錄——每個折入的發現有沒有歸到一組根因、每條修了的路徑有沒有測試守著、那些測試在修好的版本裡真的存在而且是綠的、受波及的合約測試全綠。只提醒不擋。設計與取捨單源在 [[Projects/代碼審修正關卡第0步_計劃]];還沒做的「修之前會紅」在 [[Projects/代碼審修正關卡_計劃]]。
+ 
+ ## 怎麼用
+ 
+ - 修完先提交,寫修正紀錄 `governance/review-reports/<迴圈編號>/<輪>-fix.json`;骨架:
+   `lumos loop fix-check <迴圈編號> --round <輪> --record-template > governance/review-reports/<迴圈編號>/<輪>-fix.json`
+   (`base` 從派工單的 `base_commit` 帶入;派工單在手冊第 2 步寫時記 `git rev-parse HEAD`)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index 0b186722..ec336214 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -37,20 +37,21 @@ verified_by:
+   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
+   - "[[Verification/2026-08-03_Windows回歸測試三缺陷]]"
+   - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
+   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
+   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
+   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
+   - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
++  - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
+ about_code:
+   - scripts/test_lumos.py
+ aliases:
+   - 翻紅釘
+   - 現場成立前置斷言
+   - 斷言只問會不會擋不問為什麼
+   - 假紅不一定是真的
+ ---
+ # 測試假綠形態（「測試存在，但沒在驗它宣稱要驗的」）
+ 
+@@ -583,10 +584,12 @@ Python 棧支援上線之後,同一行 `requests.post` 也觸發了兩題 Python
+ 這一節的存在就是為了把那個步驟變成清單,不靠記得。
+ 
+ ## 宣告支援 3.9,但測試只在 3.12 上跑過(2026-09-29)
+ 
+ CI 用 3.12 跑,平常推送的終端機路徑上先找到的又是 Homebrew 的新版 Python,所以兩邊都綠;
+ 換一個路徑上先找到系統內建 3.9 的環境一推,推送前的閘就紅了。**綠燈只證明「在新版上驗過」,
+ 不證明「在宣告的最低版本上驗過」**——這是環境版的「根本沒去驗」。
+ 
+ PITFALL:[2026-09-29 推送代碼審資料狀態鏡頭時被擋,出處見 [[Projects/代碼審資料狀態鏡頭_計劃]]]測試裡混進三處 3.9 沒有的寫法:f-string 大括號裡帶反斜線(3.12 才允許,`scripts/test_lumos.py` 整支在 3.9 下解析失敗,9 月 6 日起就這樣)、`tomllib`(3.11,改走 `_toml_loads`:沒有就找另一支 3.11+ 直譯器代解,找不到判紅不跳過)、`enterContext`(3.11,在 [[Systems/autonomous-iteration-loop]] 那支測試,改成跟同檔一樣用 with 包住整段)。重現:`/usr/bin/python3 -c "import ast;ast.parse(open('scripts/test_lumos.py',encoding='utf-8').read())"`;防回歸測試 [test:t_codex_d6_agent_toml]。★沒有機械守衛★:CI 沒有 3.9 那一格,下次有人寫進 3.10+ 的東西,照樣只有碰巧用 3.9 推送的人會撞到。
+ (2026-09-29 已由 [[Projects/最低Python版本改3.14_計劃]] 回答:最低版本改成 3.14,CI 跑 3.14;「3.9 能不能解析」只剩開頭檢查需要的三類檔,CI 用釘版本的 ruff 以 py39 查。原本這裡的回頭點撤掉。)
++
++WHY:引用座標反例需先證實來源有效、兩個 LF 與真 Git 提交，再驗正確最後一行和不存在下一行；來源 fixture 另隔離使用者 hooks／簽章與 Git 配置，避免環境紅燈引出錯修法 [出處:source-coordinates 設計審 r1-resources、r1-defense 与 r1-intake] 防回歸：t_refcheck_physical_unicode、t_refcheck_physical_fixture_isolated。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡前置檢查主線CI.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡前置檢查主線CI.md
+new file mode 100644
+index 00000000..24425a8f
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_修正關卡前置檢查主線CI.md
+@@ -0,0 +1,30 @@
++---
++type: verification
++status: pass
++date: 2026-10-06
++valid_under: "僅適用 GitHub main 合併提交 48c7d58ed673ffb7b04f1002672e335366d5b9f3；PR #16 與 main CI 均由 lumos ci-wait 得到 green，程式內容與本機完整測試驗過的225cae一致；不是實際收斂輪數量測"
++revalidate_when: 對新主線版本宣稱 CI 通過時，以新 SHA 重跑 ci-wait；本篇不得外推未驗版本
++tags:
++  - type/verification
++  - status/pass
++  - scope/loop-engineering
++plan_refs:
++  - "[[Projects/修正關卡先驗便宜條件_計劃]]"
++system_refs:
++  - "[[Systems/代碼審修正關卡]]"
++  - "[[Systems/reversibility-governance-ledger]]"
++  - "[[Systems/測試假綠形態]]"
++---
++# 修正關卡前置檢查主線 CI 驗收
++
++修正紀錄有便宜錯誤時，先回報測試未執行的功能已交付主線；固定版本的 PR 與 main CI 都通過。
++
++FACT:GitHub PR #16 已合併，PR 與合併提交的 CI 皆由 lumos ci-wait 收到 verdict green [來源:外部] [confirmed:2026-10-06]
++
++- PR：https://github.com/EnzoHsieh-Android/Lumos/pull/16
++- PR CI：https://github.com/EnzoHsieh-Android/Lumos/actions/runs/37391015018
++- main CI：https://github.com/EnzoHsieh-Android/Lumos/actions/runs/37392164666
++- 合併版本：48c7d58ed673ffb7b04f1002672e335366d5b9f3。
++- 兩支程式檔經 git show 固定版本逐 bytes 比對，與225cae功能交付版本一致；該內容的本機10340項斷言、59合約與145自主測試結果見本案先前本機驗證。原始 CI 判定與來源雜湊在 governance/review-reports/code-fix-check-preflight/main-delivery-ci.json。
++
++這是交付版本驗收，尚未宣稱真實代碼審輪數下降。下一項引用座標修復有獨立紅燈，不能套用本篇通過結果。

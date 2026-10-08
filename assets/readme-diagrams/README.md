@@ -1,6 +1,6 @@
 # README diagram source
 
-Seven bilingual scenes share one visual system without sharing one layout.
+Ten bilingual scenes share one visual system without sharing one layout.
 The generator uses only the Python standard library and writes the existing
 SVG filenames used by the READMEs. Logos, the recorded GIF, and the detailed
 diagrams in docs are outside its scope.
@@ -10,7 +10,7 @@ python3 assets/readme-diagrams/generate.py
 python3 assets/readme-diagrams/generate.py --check
 ```
 
-The check validates XML, reproduces all 14 assets exactly, and ensures that
+The check validates XML, reproduces all 20 assets exactly, and ensures that
 animation is confined to decorative paths or borders, except for the knowledge
 scene's explicit node-reveal timeline.
 The knowledge scene also checks its plan-to-feature-to-verification relations,
@@ -43,3 +43,10 @@ Scene roles:
 These are conceptual illustrations, not screenshots, benchmark reports, or
 claims of guaranteed correctness. The map retains a moving loop; every scene
 is complete and readable when animation is unavailable.
+
+The map labels each hand-off with what travels along it and uses the same step
+names as the README body. The case-review scene is a timeline of one real review
+round set (counts come from `governance/review-reports/code-工具自裝檔不算消費專案/`);
+if that record is ever corrected, update the scene text and alt text together.
+Do not hand-edit the map SVG: a 2026-09-21 hand edit left the generator out of
+sync until 2026-09-30.

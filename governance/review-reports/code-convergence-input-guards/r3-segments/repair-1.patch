@@ -1,0 +1,830 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1018,7 +1018,7 @@
+     def _load_rows():
+         raw, parsed = [], []
+         try:
+-            for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
++            for line in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
+                 if not line.strip():
+                     continue
+                 try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1056,7 +1056,7 @@
+         # 凍結若對活檔算 G3,回放(對凍結 sha 算)就恆報假邏輯漂移(凍結/回放兩側輸入必須同構)。
+         out = {}
+         rc = _loop_status_disposal(parsed, loop_id, spec, 0, root, env=env, repo=repo,
+-                                   readonly=True, result_out=out)
++                                   readonly=True, result_out=out, retro_skip=True)   # 第八步(跑滿回顧)凍結不判
+         if rc == 2:
+             print("擋下:這個 loop 的帳形狀進不了 d5 處置判定(多半是 panel 舊制多席各自帳)——"
+                   "舊制語意重算用 lumos loop status <id> --gate --panel;golden 回放只涵蓋 d5", file=sys.stderr)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1070,7 +1070,7 @@
+                                 if r.get("round") == rid and r.get("result_sha256")), None)
+         out = {}
+         rc = _loop_status_disposal(parsed, loop_id, None, 0, root, env=env, repo=repo,
+-                                   readonly=True, spec_sha_override=spec_sha_frozen, result_out=out)
++                                   readonly=True, spec_sha_override=spec_sha_frozen, result_out=out, retro_skip=True)
+         try:
+             if spec_sha_frozen and _sha256_file(spec) != spec_sha_frozen:
+                 print("  (提示:spec 檔已在收斂後被編輯——常態;閉包凍的是窗末指紋,回放不受影響)")
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1219,7 +1219,7 @@
+             out = {}
+             rc = _loop_status_disposal(rows, loop_id, None, 0, root, env=env, repo=repo,
+                                        readonly=True, spec_sha_override=g.get("spec_sha"),
+-                                       result_out=out)
++                                       result_out=out, retro_skip=True)
+             want = g.get("verdict") or {}
+             if rc == 2:
+                 red.append("邏輯漂移:凍結輸入現在連判定都進不了(當時判得了)——讀側行為變了")
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1252,7 +1252,7 @@
+         # (successor=lf-a 誤中 successor=lf-a2;clf r1 主審 F1 實驗重現),偽造連續重寫警告。
+         _pat = _re.compile(r"successor=" + _re.escape(loop_id.strip()) + r"(;|$)")
+         if gl.exists():
+-            for line in gl.read_text(encoding="utf-8").splitlines():
++            for line in _ledger_lines(gl.read_text(encoding="utf-8")):
+                 try:
+                     o = _j.loads(line)
+                 except ValueError:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1326,7 +1326,7 @@
+     # doctor 各段真的會寫 warned 的 check-* 閘(照 run_doctor 的寫入點逐一列,不用前綴比對;
+     # check-j 只寫 shallow-skip 與擋人,不列)
+     + [(g, "warned") for g in ("check-cascade", "check-e1", "check-e2", "check-e3", "check-k",
+-                              "check-lint-decl", "check-p2", "check-p2s", "check-r", "check-revisit",
++                              "check-lint-decl", "check-p2", "check-p2s", "check-p2t", "check-r", "check-revisit",
+                               "check-s", "check-s2", "check-s3", "check-s4", "check-s5", "check-s6",
+                               "check-s7", "check-s8", "check-s9", "check-s10", "check-s11", "check-s16")])
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1336,19 +1336,22 @@
+     return Path(docs_dir) / name
+ 
+ 
+-def _regular_own_fd(path, flags, mode=0o666):
++def _regular_own_fd(path, flags, mode=0o666, require_owner=True, follow=False):
+     """開檔 → 檔案代號;開不了、不是一般檔案、不是自己的檔就回 None(代號已關)。
++    require_owner=False 只讀不寫的讀者用(回顧檔、帳尾檢查):共用機器或 CI 用別的帳號 checkout 時,檔不是自己的也要讀得到(代碼審 code-審查跑滿回顧 r1/r2)。
+     帶 O_NOFOLLOW(不跟捷徑)、O_NONBLOCK(沒有讀者的管線直接失敗,不卡住)——同 _drift_m1_ledger_miss 那段的寫法
+-    (代碼審 code-gov-ledger-split-2 r2 架構對齊席:原本另抄一份還少了擁有者檢查)。"""
++    (代碼審 code-gov-ledger-split-2 r2 架構對齊席:原本另抄一份還少了擁有者檢查)。
++    follow=True 不帶 O_NOFOLLOW、跟隨捷徑(仍非阻塞、仍開檔後判一般檔):只給帳尾檢查用——它要看的是寫入器「實際會追加的那個檔」,
++    而版控治理帳的寫入器(open(path, "a"))跟隨捷徑(代碼審 code-審查跑滿回顧 r3 合約、邊界席)。"""
+     import stat as _stat
+-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
++    flags |= (0 if follow else getattr(os, "O_NOFOLLOW", 0)) | getattr(os, "O_NONBLOCK", 0)
+     try:
+         fd = os.open(str(path), flags, mode)
+-    except OSError:
++    except (OSError, ValueError):
+         return None
+     try:
+         st = os.fstat(fd)
+-        if _stat.S_ISREG(st.st_mode) and not (hasattr(os, "getuid") and st.st_uid != os.getuid()):
++        if _stat.S_ISREG(st.st_mode) and not (require_owner and hasattr(os, "getuid") and st.st_uid != os.getuid()):
+             return fd
+     except OSError:
+         pass
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1365,7 +1368,7 @@
+     try:
+         data = text.encode("utf-8")
+         return os.write(fd, data) == len(data)
+-    except OSError:
++    except (OSError, UnicodeEncodeError):
+         return False
+     finally:
+         os.close(fd)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1493,14 +1496,38 @@
+     local = _gov_routes_local(ev)
+     path = _docs_ledger_path(docs, GOV_LOCAL_LOG_NAME if local else GOV_LOG_NAME)
+     line = _json.dumps(ev, ensure_ascii=False) + "\n"
++    if _ledger_tail_needs_newline(path):
++        line = "\n" + line
+     if local:
+         return _local_ledger_append(path, line)
+     try:
+         with open(path, "a", encoding="utf-8") as f:
+             f.write(line)
+         return True
++    except (OSError, UnicodeEncodeError):   # 帶不能編碼的字串(孤立代理字元)也算寫不進去,不丟堆疊(r2 併發、邊界席)
++        return False
++
++
++def _ledger_tail_needs_newline(path):
++    """帳檔非空而且最後一個位元組不是換行(上一次寫一半)→ True。追加前先補一個換行,新事件才不會黏在半行後面、整行被讀側丟掉
++    (代碼審 code-審查跑滿回顧 r1 併發席)。★帳尾檢查只有這一支★:_gate_event、_append_governance_log 與 _drift_ledger_append 呼叫它(r2 架構對齊席);★不是所有追加寫入器★——code-loop 的 _codeloop_gov_log、_codeloop_dispositions_gov_log 與審查帳的 _jsonl_append_verified 還沒接(r4 併發席,本分支沒改,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口)。
++    開檔走 _regular_own_fd(一次開檔、管線不卡住、開檔後才判一般檔;不先 stat 再 open,r2 併發席);不是一般檔或讀不到 → False(不碰)。
++    ★跟隨捷徑(follow=True)★:版控治理帳的寫入器跟隨捷徑追加,帳尾要看同一個檔,不然捷徑帳缺換行時新事件照樣黏行(r3 合約、邊界席);
++    不跟隨捷徑的寫入器(_local_ledger_append 開檔就擋捷徑、_drift_ledger_append 先過 _drift_ledger_path_err)遇到捷徑本來就不寫,跟不跟隨不影響它們。
++    讀最後一個位元組用 os.lseek + os.read(os.pread 只有 Unix 有,r3 邊界席)。"""
++    fd = _regular_own_fd(path, os.O_RDONLY, require_owner=False, follow=True)
++    if fd is None:
++        return False
++    try:
++        size = os.fstat(fd).st_size
++        if size <= 0:
++            return False
++        os.lseek(fd, size - 1, os.SEEK_SET)
++        return os.read(fd, 1) != b"\n"
+     except OSError:
+         return False
++    finally:
++        os.close(fd)
+ 
+ 
+ def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1572,15 +1599,36 @@
+                         (_docs_ledger_path(vault.parent, GOV_LOCAL_LOG_NAME), local)):
+         if not batch:
+             continue
+-        text = "".join(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n" for e in batch)
+-        if batch is local:
+-            _local_ledger_append(path, text)
++        # ★逐筆組、只略過不能編碼的那筆★(帶孤立代理字元):整批組成一個字串再寫,一筆壞就整批靜默丟光,
++        # 同一批要進版控帳的 hard 事件也跟著不見(代碼審 code-審查跑滿回顧 r4 邊界席);略過與寫不進去都在 stderr 講一句(比照 _gate_event_or_warn)
++        lines, skipped = [], 0
++        for e in batch:
++            ln = json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n"
++            try:
++                ln.encode("utf-8")
++            except UnicodeEncodeError:
++                skipped += 1
++                continue
++            lines.append(ln)
++        if skipped:
++            print(f"  ⚠ telemetry-write-failed:有 {skipped} 筆治理帳事件帶不能編碼的字元,略過那幾筆;同一批其他 {len(lines)} 筆照寫",
++                  file=sys.stderr)
++        if not lines:
+             continue
+-        try:
+-            with open(path, "a", encoding="utf-8") as f:
+-                f.write(text)
+-        except OSError:
+-            pass
++        text = "".join(lines)
++        if _ledger_tail_needs_newline(path):
++            text = "\n" + text
++        if batch is local:
++            ok = _local_ledger_append(path, text)
++        else:
++            try:
++                with open(path, "a", encoding="utf-8") as f:
++                    f.write(text)
++                ok = True
++            except OSError:
++                ok = False
++        if not ok:
++            print(f"  ⚠ telemetry-write-failed:{len(lines)} 筆治理帳事件寫不進 {path.name}(判定不受影響,照原樣執行)", file=sys.stderr)
+ 
+ 
+ def _read_touched_list(path):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2252,7 +2300,7 @@
+             try:
+                 _clog = _repo_root / "docs" / ".canary-log.jsonl"
+                 import json as _j
+-                _rows = [_j.loads(_l) for _l in _clog.read_text(encoding="utf-8").splitlines() if _l.strip()]
++                _rows = [_j.loads(_l) for _l in _ledger_lines(_clog.read_text(encoding="utf-8")) if _l.strip()]
+                 for _d in _absent:
+                     if any(_row.get("loop") == _d and _row.get("severity") == "blocker" for _row in _rows):
+                         _blk.append(_d)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2277,6 +2325,37 @@
+         ok(f"前掃留痕觀測跳過(fail-open:{_e})")
+     print()
+ 
++    section("I2", "審查跑滿上限、記了人裁之後,跑滿回顧有沒有寫(提醒,不擋)")
++    # Projects/審查跑滿回顧_計劃〈四〉:判定用同一支 _cap_retro_status;每個迴圈各自判,壞了只標那一個;只提醒、不計入 issues
++    try:
++        _rr_i2 = _vault_repo_root(env)
++        _rows_i2 = []
++        _scan_i2, _gerr_i2 = _cap_retro_scan(env, _rr_i2)
++        if _gerr_i2:   # 治理帳讀不了:列不出哪些迴圈記了人裁,另外報一行(不當成一個迴圈;代碼審 r4)
++            _rows_i2.append(f"治理帳讀不了,列不出哪些迴圈記了人裁:{_esc_clean(_gerr_i2, 200)} → "
++                            f"{_cap_retro_fix_cmd(_rr_i2, None, 'gov-bad')}")
++        for _lp_i2, _st_i2 in _scan_i2:
++            try:   # 每個迴圈各自組字;一個壞了只標它(計劃 S9;代碼審 r1 邊界席:孤立代理字元曾讓整段炸掉)
++                _nm_i2 = _esc_clean(_lp_i2, 60)
++                if _st_i2.get("error"):
++                    _rows_i2.append(f"{_nm_i2}:判不了({_esc_clean(_st_i2['error'], 80)}),略過這一個")
++                elif _st_i2.get("applies") and _st_i2.get("state") in ("none", "stale"):
++                    _why_i2 = f"({_esc_clean(_st_i2['problems'][0], 80)})" if _st_i2.get("problems") else ""
++                    _rows_i2.append(f"{_nm_i2}:回顧{_RETRO_STATE_LABEL[_st_i2['state']]}{_why_i2} → "
++                                    f"{_cap_retro_fix_cmd(_rr_i2, _lp_i2, _st_i2['state'])}")
++            except Exception as _e_i2:
++                _rows_i2.append(f"{_esc_clean(_lp_i2, 60)}:判不了({_e_i2.__class__.__name__}),略過這一個")
++        if _gerr_i2 and len(_rows_i2) == 1:
++            warn_soft(_rows_i2, "治理帳讀不了,判不了跑滿回顧(不計入問題數):", "照上面那行的出口修好治理帳再跑 doctor")
++        elif _rows_i2:
++            warn_soft(_rows_i2, f"{len(_rows_i2)} 個迴圈記了人裁,但跑滿回顧沒有或過期(不計入問題數):",
++                      "派沒參與該迴圈的乾淨代理起草,--check 過了 --record;人裁決定不寫就 lumos loop retro <編號> --skip --note \"<理由>\"")
++        else:
++            ok("記了人裁的迴圈都有合格的跑滿回顧(或還沒有人裁紀錄)")
++    except Exception as _e:
++        warn_soft([], f"這一段算不出來({_e.__class__.__name__}: {_e}),先跳過")
++    print()
++
+     section("A1", "每天自動跑的那支治理腳本,最近有沒有跑完(提醒,不擋)")
+     # ★第二通道★(2026-09-07 全 repo 審視 #18):即時通道是 governance/wrapper-watchdog.sh
+     # (獨立排程、跟被監看的那支不同失敗域)。這一段是入帳通道,看門狗是外部 shell、沒有寫治理帳的入口。
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2674,6 +2753,19 @@
+                   advice="lumos drift scan(每筆的 lumos drift fix 指令)  ·  照留:lumos drift ack <節點> <行號> --kind <種類> --reason \"…\"(回頭條件、撤除條件可加 --tracked-in <Issue 或計劃>)")
+         print()
+ 
++    # Check U: 筆記開頭的 updated 落後 git 上最後一次改動(Projects/提交時自動更新筆記日期_計劃):只提醒、不擋,
++    #   附一鍵修的指令;git 不可用就不印。不寫治理帳(同 Z 段:存量每天唸同一批不升級成噪音)。
++    try:
++        _us = _updated_stale_notes(env, _vault_repo_root(env))
++    except Exception:            # 體檢的提醒段不因這段壞掉而整支中斷
++        _us = []
++    if _us:
++        section("U", "筆記開頭的 updated 落後 git 上最後一次改動")
++        _ex = "、".join(r[:-3] for r, _u, _g in _us[:3])
++        warn_soft([f"updated 落後 git 最後改動的筆記 {len(_us)} 篇(例:{_ex})"], "只列出、不擋",
++                  advice="lumos updated-sync --stale 一次改成今天(先看就加 --dry-run)")
++        print()
++
+     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
+     #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
+     #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3004,7 +3096,7 @@
+         _first = {}
+         _cl = env.vault.parent / ".canary-log.jsonl"
+         if _cl.exists():
+-            for _ln in _cl.read_text(encoding="utf-8", errors="replace").splitlines():
++            for _ln in _ledger_lines(_cl.read_text(encoding="utf-8", errors="replace")):
+                 try:
+                     _d = json.loads(_ln)
+                 except ValueError:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3382,6 +3474,8 @@
+                     gov_events.append({"gate": "check-p2s", "kind": "warned", "hard": False, "nodes": [_stem]})
+         except Exception as _e:
+             warn_soft([], f"survived 清單算不出來({_e.__class__.__name__}: {_e}),先跳過")
++        # 第三個提醒:配方驗的測試不在合約的測試清單上(Projects/殺傷力配方綁的測試要在合約清單_計劃)
++        _doctor_p2_unbound(env.vault, notes, _p2, gov_events, warn_soft)
+     print()
+ 
+     # ── Check N:可重算數字宣稱(存查詢不存答案;成因 F「寫死易漂的值」)──
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7220,7 +7314,7 @@
+     ledger = env.vault.parent / ".canary-log.jsonl"
+     best = None
+     if ledger.exists():
+-        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
++        for ln in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
+             if not ln.strip():
+                 continue
+             try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7524,7 +7618,7 @@
+     latest = {}
+     if not path.exists():
+         return latest
+-    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
++    for ln in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
+         if not ln.strip():
+             continue
+         try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -8008,7 +8102,12 @@
+                 # 2026-10-01 殺傷力配方的原文還對不對得上程式(doctor P2,只提醒不擋;Projects/殺傷力配方失配提醒_計劃)
+                 "check-p2",
+                 # 2026-10-02 殺傷力配方最近一次真跑判 survived(doctor P2 第二個提醒,只提醒不擋;Projects/殺傷力配方當場試跑_計劃)
+-                "check-p2s")
++                "check-p2s",
++                # 2026-10-05 審查跑滿回顧:人裁紀錄、回顧已記、跳過(Projects/審查跑滿回顧_計劃;不在 design-loop/code-loop 底下,不影響 loop list 關門判定)
++                "loop-retro",
++                # 2026-10-06 殺傷力配方驗的測試不在合約的測試清單上(doctor P2 第三個提醒,只提醒不擋;
++                # Projects/殺傷力配方綁的測試要在合約清單_計劃)
++                "check-p2t")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -8931,28 +9030,34 @@
+     return "human-decides"
+ 
+ 
+-def _cap_hint_print(rows, gate=None):
++def _cap_hint_print(rows, gate=None, loop_id=None, env=None, repo=None):
+     """處置閘印跑滿上限提示:任何例外都吞掉、什麼都不印,不得影響判定與退出碼(代碼審 r1:帳上某輪欄位壞掉會讓處置閘噴例外)。"""
+     try:
+-        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate)):
++        for _ln in _cap_hint_lines(_cap_hint(rows, gate=gate), loop_id=loop_id, env=env, repo=repo):
+             print(_ln)
+     except Exception:
+         pass
+ 
+ 
+-def _cap_hint_lines(h):
+-    """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。"""
++def _cap_hint_lines(h, loop_id=None, env=None, repo=None, phase=None):
++    """把 _cap_hint 的結果印成 [cap-hint] 開頭的幾行(loop next 與處置閘同一種措辭)。
++    到上限時多印「人裁:」那幾行(審查跑滿回顧〈三〉3、S19):代碼審的處置閘在 major 全折後就判過,
++    loop next 走 converged、不會走到 cap-reached,人裁的入口只剩這一段(2026-10-06 第一次實用時發現)。
++    ★記人裁的提示只有一處決定:_cap_retro_next_lines★(治理帳壞不叫人記、已有人裁改印回顧狀態、範圍外不印;
++    代碼審 code-審查跑滿回顧 r4 架構、通才、正確性、合約席:這裡原本自己組一份,loop next 到 cap-reached 印兩次,
++    治理帳壞或已記人裁時還叫人去記)。這裡只決定要不要叫人記(ask):到上限而提示不是「可以停」,或 loop next 判到 cap-reached
++    (閘問過了沒過,停在上限)。沒給 env(判不了治理帳)就不印這段。帳上的輪次與分級印出前過 _esc_clean(r4 資安席)。"""
+     if not h:
+         return []
+     P = "  "   # 標籤只印在段首一行,後面縮排(跟處置閘各段的輸出慣例一樣)
+     lines = []
+     if h["at_cap"]:
+-        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {h['tier']} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
++        lines.append("[cap-hint] " + f"已經跑了 {len(h['rounds'])} 輪,到了分級 {_esc_clean(h['tier'], 40)} 的上限 {h['cap']} 輪。每輪折入與最高嚴重度:")
+     else:
+         lines.append("[cap-hint] " + f"還沒到上限({len(h['rounds'])}/{h['cap']} 輪),但累計折入已經很多。每輪折入與最高嚴重度:")
+     for x in h["rounds"]:
+         f = "這輪沒記處置" if not x["recorded"] else f"折 {x['folded']} 條"
+-        lines.append(P + f"  {x['round']}:{f},最高 {x['max_severity'] or '?'}")
++        lines.append(P + f"  {_esc_clean(x['round'], 80)}:{f},最高 {x['max_severity'] or '?'}")
+     g = h.get("gate_status")
+     if g is None:
+         gate_txt = "過了沒要帶 --spec 問處置閘(lumos loop status <編號> --disposal --spec <材料> --repo <根>)"
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -8968,6 +9073,10 @@
+         "human-decides": "有進展(折入在降),但還有 major 以上而且已到上限:要不要破例再一輪,由人裁",
+     }[h["hint"]]
+     lines.append(P + "提示:" + msg)   # 一律印:熔斷觸發但判不了時也要講判不了(設計 S8「並列」)
++    if h["at_cap"] and env is not None and loop_id:
++        ask = h["hint"] != "can-stop" or phase == "cap-reached"
++        for _ln in _cap_retro_next_lines(env, loop_id, repo, ask=ask):
++            lines.append(P + "人裁:" + _ln)
+     if h.get("breaker"):
+         b = h["breaker"]
+         lines.append(P + f"熔斷:各輪累計折入已經 {b['total']} 條(超過 {_CAP_HINT_BREAKER}),建議拆小改動"
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9111,7 +9220,7 @@
+         print(f"擋下:找不到帳本 {ledger}(--repo 要指 repo 根)", file=sys.stderr)
+         return 2
+     hit = None
+-    for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
++    for line in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
+         if not line.strip():
+             continue
+         try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9190,6 +9299,15 @@
+             print(f"擋下:輪次編號不能用 __ 開頭(工具內部保留這個字首),換一個: {round_id!r}", file=sys.stderr)
+             return 2
+         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
++        # 審查跑滿回顧〈三〉1:人裁之後再記新一輪——要記的列輪次不在帳上而且這個迴圈要回顧時才讀治理帳;沒有人裁紀錄的迴圈放行(行為不變)
++        if loop:
++            _crb = _cap_retro_record_block(env, loop, round_id)
++            if _crb:
++                if _crb[0] != "cap-gov-bad":   # 治理帳本身不能碰(捷徑、管線…)時不往裡寫擋下事件(代碼審 code-審查跑滿回顧 r3 資安席)
++                    _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked", f"{_crb[0]} loop={loop} id={uuid.uuid4().hex[:8]}", hard=True)
++                for _ln in _crb[1]:
++                    print(_ln, file=sys.stderr)
++                return 2
+     if capture_counts:
+         try:
+             rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9577,7 +9695,7 @@
+             _qrows = None
+             try:
+                 _sbytes = Path(snapshot).read_bytes()
+-                _qrows = _quote_rows(_rtext, _sbytes.decode("utf-8"))
++                _stext = _sbytes.decode("utf-8")
+                 _validated_sha["--snapshot"] = hashlib.sha256(_sbytes).hexdigest()
+                 del _sbytes
+             except UnicodeDecodeError as e:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9587,6 +9705,7 @@
+                 print(f"擋下:--snapshot 指的檔案讀不到: {e}", file=sys.stderr)
+                 return 2
+             else:
++                _qrows = _quote_rows(_rtext, _stext)
+                 if _qrows is None:
+                     print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
+                     print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9664,7 +9783,7 @@
+             # [r1 終審修] 逐行容錯:壞行只跳該行——原整包 try 被 any() 短路順序玩死
+             # (壞行排在定錨行前→先炸→整包 fail-open,T6 強制被繞過;4 席重疊 finding)。
+             # 殘餘天花板:定錨行★自己★損毀仍偵測不到(讀側 disposal 閘壞行 rc2 兜底)。
+-            for _l in path.read_text(encoding="utf-8").splitlines():
++            for _l in _ledger_lines(path.read_text(encoding="utf-8")):
+                 if not _l.strip():
+                     continue
+                 try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10442,7 +10561,7 @@
+         return stamps, bad
+     # 長的編號先比,免得 code-audit-batch4 吃掉 code-audit-batch4b 的 detail
+     ordered = sorted((l for l in known_loops if l), key=len, reverse=True)
+-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
++    for line in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
+         line = line.strip()
+         if not line:
+             continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10487,7 +10606,7 @@
+     per = {}
+     bad = 0
+     if path.exists():
+-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
++        for line in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
+             line = line.strip()
+             if not line:
+                 continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10647,7 +10766,7 @@
+         else:
+             o["badtype"] += 1
+     try:
+-        for line in path.read_text(encoding="utf-8").splitlines():
++        for line in _ledger_lines(path.read_text(encoding="utf-8")):
+             line = line.strip()
+             if not line:
+                 continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10719,7 +10838,7 @@
+     typed = {}
+     n_attr = n_note = n_unknown = 0
+     try:
+-        for line in path.read_text(encoding="utf-8").splitlines():
++        for line in _ledger_lines(path.read_text(encoding="utf-8")):
+             try:
+                 d = json.loads(line)
+             except ValueError:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10770,7 +10889,7 @@
+     rounds = []
+     try:
+         if path.exists():
+-            for line in path.read_text(encoding="utf-8").splitlines():
++            for line in _ledger_lines(path.read_text(encoding="utf-8")):
+                 line = line.strip()
+                 if not line:
+                     continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10943,8 +11062,15 @@
+ def _esc_clean(v, limit=200):
+     """逃逸帳顯示消毒(code-escape r1 B-1/B-2):控制字元(含換行/ESC)換空格——
+     --list 的「一行一筆」是攔截/逃逸週報 grep 的載重合約,使用者可控的 desc 不得打穿;
+-    ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。"""
+-    out = "".join(ch if ch >= " " and not ("\x7f" <= ch <= "\x9f") else " " for ch in str(v))   # 含 8 位元 C1 控制碼(r2 資安席)
++    ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。
++    ★為什麼不用共用的 _PATH_SPECIAL_CATS 類別組★(代碼審 code-審查跑滿回顧 r3 架構對齊席):這支是「換成空格」的有損清洗、而且是全域顯示函式,
++    類別 Cf 整類換掉會把零寬連字(ZWJ)組成的表情、零寬非連字、軟連字號、BOM 拆壞;Zl/Zp(U+2028/2029)終端不當換行、不清。
++    要「無損、看得見」的跳脫(JSON 骨架、設定檔字樣)用 _PATH_SPECIAL_CATS 那組(_json_text_escaped、_kill_esc),兩種用途不併。"""
++    # 只清會被終端執行或改變顯示方向的字元:C0/DEL/C1(含 ESC 開頭的控制序列、OSC、8 位元 CSI)、雙向覆寫與隔離字元
++    # (U+202A–U+202E、U+2066–U+2069);另外孤立代理字元換掉——不換的話印到終端或 json.dumps(ensure_ascii=False) 會整支炸掉
++    # (代碼審 code-審查跑滿回顧 r2)。★零寬連字(ZWJ)、零寬非連字、軟連字號、BOM 照留★:全域函式,組合表情符號不能被拆開。
++    out = "".join(" " if (ch < " " or "\x7f" <= ch <= "\x9f" or "\u202a" <= ch <= "\u202e" or "\u2066" <= ch <= "\u2069"
++                          or "\ud800" <= ch <= "\udfff") else ch for ch in str(v))
+     return out if len(out) <= limit else out[:limit] + "…"
+ 
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11010,7 +11136,7 @@
+     door = "unknown"
+     if not path.exists():
+         return door
+-    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
++    for ln in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
+         if not ln.strip():
+             continue
+         try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11031,7 +11157,7 @@
+     ledger = env.vault.parent / ".canary-log.jsonl"
+     known = set()
+     if ledger.exists():
+-        for ln in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
++        for ln in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
+             if not ln.strip():
+                 continue
+             try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11263,7 +11389,7 @@
+     known, led_bad, review_ids = set(), 0, set()   # 審查帳只掃一次:編號存在與否、哪些是審查紀錄(r2 併發席)
+     if ledger.exists():
+         import json as _je2
+-        for ln in ledger.read_text(encoding="utf-8").splitlines():
++        for ln in _ledger_lines(ledger.read_text(encoding="utf-8")):
+             if not ln.strip():
+                 continue
+             try:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11367,7 +11493,7 @@
+     """審查帳裡的審查紀錄,依迴圈編號(NFC)分組;規格閘留痕不算。"""
+     by_loop = {}
+     try:
+-        for ln in (env.vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
++        for ln in _ledger_lines((env.vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8", errors="replace")):
+             try:
+                 d = json.loads(ln)
+             except (ValueError, RecursionError):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11384,7 +11510,7 @@
+     nodes 帶編號;有任何一筆 converged 就算),而且審查帳有它的審查紀錄。"""
+     released = set()
+     try:
+-        for ln in (env.vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
++        for ln in _ledger_lines((env.vault.parent / ".governance-log.jsonl").read_text(encoding="utf-8", errors="replace")):
+             try:
+                 d = json.loads(ln)
+             except (ValueError, RecursionError):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11571,7 +11697,7 @@
+     bad_linenos = []   # disposal rc2 訊息用:壞行可一分鐘定位修復(r2 三席異議的降噪配套)
+     try:
+         if path.exists():
+-            for _ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
++            for _ln, line in enumerate(_ledger_lines(path.read_text(encoding="utf-8")), 1):
+                 line = line.strip()
+                 if not line:
+                     continue
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11586,6 +11712,12 @@
+     except OSError as e:
+         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+         return 2
++    except UnicodeDecodeError as e:
++        # 審查跑滿回顧 S17:有人裁紀錄的迴圈帳壞 → 第八步 ✗、不丟堆疊;沒有人裁紀錄的迴圈照原樣(re-raise,行為不變)
++        if disposal and _disposal_retro_ledger_bad(env, loop_id, Path(repo).resolve() if repo else _vault_repo_root(env),
++                                                   f"審查帳不是 UTF-8(第 {e.start} 個位元組讀不動)"):
++            return 1
++        raise
+ 
+     if roster:
+         # [派工編制資料化] advisory 觀測——恆在各模式分支 early-return 之前印,rc 完全不動
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11606,6 +11738,11 @@
+         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
+         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
+         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
++        # 審查跑滿回顧 S17:某列輪次不是字串時分輪會丟堆疊;有人裁紀錄的迴圈改成第八步 ✗,沒有的照原樣往下走
++        _bad_rid = next((r.get("round") for r in rounds if "round" in r and not isinstance(r.get("round"), str)), _RETRO_NO_BAD)
++        if _bad_rid is not _RETRO_NO_BAD and _disposal_retro_ledger_bad(
++                env, loop_id, _dsp_root, f"審查帳有一列輪次不是字串({_esc_clean(repr(_bad_rid), 40)})"):
++            return 1
+         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
+                                      bad_linenos=bad_linenos, env=env, roster=roster, repo=repo, readonly=readonly)
+     if not panel and n_round > 0:
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11874,29 +12011,83 @@
+ _ROSTER_CODEX_KEYS = ("codex", "gpt")     # 編排者是 Codex 時,這幾個字眼=同門
+ 
+ 
+-def _loop_records(env, loop_id, strict=False):
+-    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。單一讀法——cmd_loop_next 與 record 定錨檢查共用
+-    (code-codex-s2 r1 架構席:兩份逐行相同的讀帳迴圈會各自漂)。strict=True 時檔讀不到就丟 OSError 給呼叫端印。"""
++_LEDGER_LINE_RE = re.compile(r"\r\n|\n|\r")
++_LEDGER_LINE_RE_B = re.compile(rb"\r\n|\n|\r")
++
++
++def _ledger_lines(text):
++    """帳檔切行的唯一規則:只認 \\r\\n、\\n、\\r。不用 splitlines(它還認 U+2028/U+2029/U+0085,寫入端
++    json.dumps(ensure_ascii=False) 不跳脫這三個,一列會被劈開丟掉);也不只認 \\n(整本 \\r 行尾會被當成一行丟掉)。
++    審查帳(.canary-log.jsonl)與治理帳(.governance-log.jsonl)原本用 splitlines 的讀者都改走這一支(代碼審 code-審查跑滿回顧 r1/r2 接了三處,
++    r3 架構對齊席指出其餘讀者還在 splitlines、同一列在不同讀者眼中行數不同,r3 把那 20 處換掉;t_cap_retro_r3_ledger_lines_everywhere 掃原始碼守著)。
++    ★不是兩本帳所有讀者★:_drift_jsonl_iter 這一系(lumos gov 載入器、_gov_ledger_rows_by_time、doctor 增速與度量段)與 _fix_check_events
++    仍只在 \\n 切行(r4 四席,本分支沒改,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口)。"""
++    return (_LEDGER_LINE_RE_B if isinstance(text, bytes) else _LEDGER_LINE_RE).split(text)
++
++
++def _canary_ledger_scan(env):
++    """審查帳單一讀法的核心(loop next、canary record 定錨檢查、跑滿回顧一族共用)。回 (by_loop, bad_by_loop, decode_exc)。
++    by_loop:編號 → 該編號的列(濾掉規格閘留痕);bad_by_loop:編號 → 「某列輪次不是字串」的說明;decode_exc:整本不是 UTF-8 時的例外。
++    ★切行用 _ledger_lines★(只認 \\r\\n、\\n、\\r):寫入端 json.dumps(ensure_ascii=False) 不跳脫 U+2028/U+2029/U+0085,splitlines 會把含它們的一列劈成兩半、
++    整列當壞行丟掉、輪數少算(代碼審 code-審查跑滿回顧 r1 正確性、邊界席;r2 起認 \\r 行尾)。壞行與不是物件的行跳過。檔讀不到 → OSError 往上丟。"""
+     import json as _json
+     path = env.vault.parent / ".canary-log.jsonl"
+-    out = []
++    by, bad = {}, {}
++    if not path.exists():
++        return by, bad, None
++    raw = path.read_bytes()
+     try:
+-        if path.exists():
+-            for line in path.read_text(encoding="utf-8").splitlines():
+-                line = line.strip()
+-                if not line:
+-                    continue
+-                try:
+-                    d = _json.loads(line)
+-                except ValueError:
+-                    continue
+-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
+-                    out.append(d)
++        text = raw.decode("utf-8")
++    except UnicodeDecodeError as e:
++        return by, bad, e
++    for line in _ledger_lines(text):
++        line = line.strip()
++        if not line:
++            continue
++        try:
++            d = _json.loads(line)
++        except (ValueError, RecursionError):
++            continue
++        if not isinstance(d, dict) or d.get("kind") == "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
++            continue
++        lp = d.get("loop")
++        if not isinstance(lp, str):
++            continue
++        by.setdefault(lp, []).append(d)
++        if "round" in d and not isinstance(d["round"], str) and lp not in bad:
++            bad[lp] = f"審查帳 {_esc_clean(lp, 60)} 有一列輪次不是字串({_esc_clean(repr(d['round']), 40)})"
++    return by, bad, None
++
++
++def _loop_records(env, loop_id, strict=False):
++    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。單一讀法——cmd_loop_next 與 record 定錨檢查共用
++    (code-codex-s2 r1 架構席:兩份逐行相同的讀帳迴圈會各自漂)。strict=True 時檔讀不到就丟 OSError 給呼叫端印。
++    整本不是 UTF-8 時照舊丟 UnicodeDecodeError(既有呼叫端行為不變);要不丟例外、拿帳壞原因的用 _loop_records_checked。"""
++    try:
++        by, _bad, exc = _canary_ledger_scan(env)
+     except OSError:
+         if strict:
+             raise
+-        return out
+-    return out
++        return []
++    if exc is not None:
++        raise exc
++    return by.get(loop_id, [])
++
++
++def _loop_records_checked(env, loop_id, scan=None):
++    """同 _loop_records 那一套讀法,但帳壞不丟例外:回 (列, 帳壞原因或 None)。帳壞=讀不到、整本不是 UTF-8、這個編號某列輪次不是字串。
++    scan=_canary_ledger_scan 的結果(統計一次讀完共用)。跑滿回顧一族用它(計劃〈實務隱患〉帳壞:新路徑不讓解碼錯誤冒成堆疊)。"""
++    if scan is None:
++        if env is None:
++            return [], "沒有審查帳可對"
++        try:
++            scan = _canary_ledger_scan(env)
++        except OSError as e:
++            return [], f"審查帳讀不到({e.__class__.__name__})"
++    by, bad, exc = scan
++    if exc is not None:
++        return [], f"審查帳不是 UTF-8(第 {exc.start} 個位元組讀不動)"
++    return by.get(loop_id, []), bad.get(loop_id)
+ 
+ 
+ def _loop_orchestrators(rounds):
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -12417,10 +12608,12 @@
+     return typ
+ 
+ 
+-def _fix_bad_strings(obj):
++def _fix_bad_strings(obj, nul=True):
+     """解析之後逐一看每個字串(鍵也看;迭代不遞迴,深巢狀不爆):含空字元、或有轉不成 UTF-8 的孤立代理字元
+     (JSON 合法,但拿去當路徑或參數會當掉)→ 回原因;都沒有回 ""。代碼審 r1 通才A、r2 通才:第一版在原始文字裡找
+-    \u0000 字樣,會誤擋 note 裡寫的字面反斜線。"""
++    \u0000 字樣,會誤擋 note 裡寫的字面反斜線。
++    nul=False 不查空字元、只查能不能編碼成 UTF-8:跑滿回顧一族進檔、進帳前用(回顧檔、骨架、--note、輪次;空字元在那裡不是錯,
++    原本另寫一支 _retro_utf8_bad,代碼審 code-審查跑滿回顧 r3 架構對齊席指出是第二套,收回來)。"""
+     stack = [obj]
+     while stack:
+         x = stack.pop()
+diff --git a/scripts/lumos b/scripts/lumos
+index 77f89644..6f4efd32 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -12430,7 +12623,7 @@
+         elif isinstance(x, list):
+             stack.extend(x)
+         elif isinstance(x, str):
+-            if "\x00" in x:
++            if nul and "\x00" in x:
+                 return "修正紀錄裡有空字元,路徑、版本與測試名都不能含它"
+             try:
+                 x.encode("utf-8")

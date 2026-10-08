@@ -1,0 +1,186 @@
+OpenAI Codex v0.156.1
+--------
+workdir: /private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/82c93a23-33db-4a5a-af96-cd2d2b4af3c1/scratchpad/negguard
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0f14c-d43c-71e1-b947-bf0dd21fc19b
+--------
+user
+你報告 F1 的引句「同一區塊裡、這一行的原始行號前後 3 行內有一行判成條件式的回頭條件,就不提醒。」在凍結 spec 裡找不到逐字原文(你省略了括號與反引號裡的字)。請把 F1 的引句改成從凍結 spec 第 76 行逐字複製的一段(≥10 字,可以取其中連續的一段,引句內不要再包「」),其他內容一字不動,輸出完整的報告全文。
+hook: SessionStart
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit Completed
+codex
+severity: major
+
+重現狀態：未能重現。唯讀沙盒禁止建立共同規則要求的 shared clone；以下為凍結 spec、現行程式與既有量測可直接判定的設計缺陷。
+
+## F1 鄰近任意探針都算「已配」，會漏掉真正未綁事件的句子
+
+severity: major  
+blocking: 是  
+引句:「同一區塊(`body` 或 `summary`)裡、這一行的原始行號前後 3 行內(空行也算一行)有一行 `_revisit_split` 判成條件式(`cond`)的回頭條件,就不提醒。」  
+file: `governance/eval/negation-revisit/neg_revisit_measure.py:176`
+
+1. `_revisit_near` 只檢查前後三行是否存在任意條件式 REVISIT，不比較探針與否定句是否描述同一事件；凍結設計要求正式工具照搬此判法。
+2. 具體反例：
+
+   ```text
+   - getMetrics 尚未實作
+   REVISIT:[when-status:Projects/另一個計劃_計劃=done][by:2026-12-31] 收尾另一個計劃
+   ```
+
+   依 spec，第一行不提醒；另一個計劃完成時漂移閘可能擋推送，但 `getMetrics` 真正實作時沒有任何探針會觸發。
+3. 上線前資料的條件式配對數是 0，現有量測完全沒有驗過這個「位置等於語意配對」的假設；既有事故又已確認 33 條探針至少 2 條綁錯事件，見 `docs/lumos-toolchain-knowledge/Issues/rtb接上漂移檢查後回報的四個小改進.md:32`。
+4. S3 也沒有「鄰近但無關」反例。應先設計可辨識歸屬的配對形狀，不能把任意 ±3 行探針當成已保護。
+
+## F2 提交時的修法只教三種直接探針，已知近半真例不適用
+
+severity: major  
+blocking: 是  
+引句:「配法:緊鄰那一行加一行條件式回頭條件,條件優先綁那個東西本身——它會在的檔、它的函式名、守它的測試」  
+file: `governance/eval/negation-revisit/report-2026-09-30.md:72`
+
+1. 人工判定的 22 個真例中，只有 12 個可綁 `when-symbol/file/test`；7 個應綁計劃狀態，3 個只能寫日期。也就是 45% 真例無法照提醒提供的修法處理。
+2. 雖然〈做法〉8 後文提到 `when-status` 或日期，真正出現在提交 stderr、且由 S5 要求逐字測試的訊息只給 direct-probe 範本。
+3. 對「設計還沒做」這類句子，作者照提示綁預計修改、但目前已存在的檔案，條件會立即成立；既有 drift gate 預設為 block，當次推送便被擋，見 `scripts/lumos:26332`、`scripts/lumos:27391`、`scripts/lumos:28618`。
+4. 若改猜未來函式名，則可能變成永遠不成立的錯事件。這正是既有 2/33 綁錯事故的同一形狀。提交時的主提示必須分流展示 `when-status`、日期及適用判準，否則不應進實作。
+
+## F3 已量到多數提醒為誤報，卻沒有上線門檻
+
+severity: major  
+blocking: 是  
+引句:「量測裡大約四分之一到三成改到圖譜的提交會看到提醒,通常 1 行、最多 9 行;準度 43%,一半以上的提醒是看一眼就可以略過的。」  
+file: `governance/eval/negation-revisit/report-2026-09-30.md:9`
+
+1. 這不是尚待確認的風險：歷史重放已量到 25%–32% 的圖譜提交會出聲，留出樣本準度只有 43%，即多數提醒無需處理。
+2. spec 沒有「只提醒功能能否上線」的最低準度；70% 是未來升級成擋的門檻，而 RETIRE-IF 要低於 30% 才撤。若實際維持目前 43%，它會在多數誤報的狀態下長期存活。
+3. 提醒又與真正的 note-shape 違規共用提交 stderr；每三至四次圖譜提交就出現一次多數可忽略的訊息，會訓練作者忽略同區塊輸出，削弱既有硬擋的可見性。
+4. 應先提高獨立留出樣本準度並訂定 warn 上線門檻；現有數據不支持直接部署。
+
+## F4 升級門檻第 4 條沒有可重算的分母，零樣本也未定義
+
+severity: major  
+blocking: 是  
+引句:「事件綁錯是語意問題,工具判不了;〈做法〉7 第 4 條與 RETIRE-IF ③ 用漂移的表態紀錄事後人讀。」  
+file: `scripts/lumos:29559`
+
+1. `drift scan` 明定「不寫帳」；`drift check` 只留下彙總的 blocked/warned 事件。只有作者選擇 `drift ack` 時才有逐筆理由。
+2. 條件成立後若作者直接完成待辦並刪除 REVISIT，不會有 ack；scan 曾點名但未處理也沒有事件。因此八週後無法得到「所有被點名條件」的分母，只能看到選擇照留的偏差樣本。
+3. 現有 `neg_revisit_measure.py` 只有歷史新增行掃描、摘要與抽樣，沒有重放每條探針何時成立、如何處置的功能，見 `governance/eval/negation-revisit/neg_revisit_measure.py:365`。
+4. 若八週內沒有條件被點名，「綁錯不到一成」是 0/0；spec 沒有最小樣本或延長規則。相鄰的舊句檢查設計反而明確規定少於 20 筆就延長、零分母不升級，見 `docs/lumos-toolchain-knowledge/Projects/舊句檢查_計劃.md:36`。
+5. 因而「四條全部成立才提議轉擋」以及 RETIRE-IF ③ 都無法照字面判定。需先補逐筆、可回放的來源與處置帳，並定義零／小樣本規則。
+
+## 逐節讀取紀錄
+
+- 白話、依據與量測：已讀；對應 F3。
+- PRIOR-ART：已讀,無 finding。
+- RETIRE-IF／REVISIT：已讀；對應 F3、F4。
+- 範圍：已讀,無 finding。
+- 做法 1：已讀,無 finding。
+- 做法 2：已讀；對應 F1。
+- 做法 3：已讀；對應 F2、F3。
+- 做法 4：已讀,無 finding。
+- 做法 5：已讀,無 finding。
+- 做法 6：已讀；對應 F2。
+- 做法 7：已讀；對應 F4。
+- 做法 8：已讀；對應 F1、F2。
+- 與參考實作的刻意差異：已讀,無 finding。
+- 條款 S1–S8：已讀；S3 對應 F1，S5 對應 F2，其餘無 finding。
+- 回退：已讀,無 finding。
+- 實務隱患：已讀；對應 F3。
+- 誠實界線：已讀；對應 F3、F4。
+- 下一步：已讀,無 finding。
+
+最高等級:major;blocking 共 4 條
+hook: Stop
+hook: Stop Completed
+tokens used
+390,079
+severity: major
+
+重現狀態：未能重現。唯讀沙盒禁止建立共同規則要求的 shared clone；以下為凍結 spec、現行程式與既有量測可直接判定的設計缺陷。
+
+## F1 鄰近任意探針都算「已配」，會漏掉真正未綁事件的句子
+
+severity: major  
+blocking: 是  
+引句:「同一區塊(`body` 或 `summary`)裡、這一行的原始行號前後 3 行內(空行也算一行)有一行 `_revisit_split` 判成條件式(`cond`)的回頭條件,就不提醒。」  
+file: `governance/eval/negation-revisit/neg_revisit_measure.py:176`
+
+1. `_revisit_near` 只檢查前後三行是否存在任意條件式 REVISIT，不比較探針與否定句是否描述同一事件；凍結設計要求正式工具照搬此判法。
+2. 具體反例：
+
+   ```text
+   - getMetrics 尚未實作
+   REVISIT:[when-status:Projects/另一個計劃_計劃=done][by:2026-12-31] 收尾另一個計劃
+   ```
+
+   依 spec，第一行不提醒；另一個計劃完成時漂移閘可能擋推送，但 `getMetrics` 真正實作時沒有任何探針會觸發。
+3. 上線前資料的條件式配對數是 0，現有量測完全沒有驗過這個「位置等於語意配對」的假設；既有事故又已確認 33 條探針至少 2 條綁錯事件，見 `docs/lumos-toolchain-knowledge/Issues/rtb接上漂移檢查後回報的四個小改進.md:32`。
+4. S3 也沒有「鄰近但無關」反例。應先設計可辨識歸屬的配對形狀，不能把任意 ±3 行探針當成已保護。
+
+## F2 提交時的修法只教三種直接探針，已知近半真例不適用
+
+severity: major  
+blocking: 是  
+引句:「配法:緊鄰那一行加一行條件式回頭條件,條件優先綁那個東西本身——它會在的檔、它的函式名、守它的測試」  
+file: `governance/eval/negation-revisit/report-2026-09-30.md:72`
+
+1. 人工判定的 22 個真例中，只有 12 個可綁 `when-symbol/file/test`；7 個應綁計劃狀態，3 個只能寫日期。也就是 45% 真例無法照提醒提供的修法處理。
+2. 雖然〈做法〉8 後文提到 `when-status` 或日期，真正出現在提交 stderr、且由 S5 要求逐字測試的訊息只給 direct-probe 範本。
+3. 對「設計還沒做」這類句子，作者照提示綁預計修改、但目前已存在的檔案，條件會立即成立；既有 drift gate 預設為 block，當次推送便被擋，見 `scripts/lumos:26332`、`scripts/lumos:27391`、`scripts/lumos:28618`。
+4. 若改猜未來函式名，則可能變成永遠不成立的錯事件。這正是既有 2/33 綁錯事故的同一形狀。提交時的主提示必須分流展示 `when-status`、日期及適用判準，否則不應進實作。
+
+## F3 已量到多數提醒為誤報，卻沒有上線門檻
+
+severity: major  
+blocking: 是  
+引句:「量測裡大約四分之一到三成改到圖譜的提交會看到提醒,通常 1 行、最多 9 行;準度 43%,一半以上的提醒是看一眼就可以略過的。」  
+file: `governance/eval/negation-revisit/report-2026-09-30.md:9`
+
+1. 這不是尚待確認的風險：歷史重放已量到 25%–32% 的圖譜提交會出聲，留出樣本準度只有 43%，即多數提醒無需處理。
+2. spec 沒有「只提醒功能能否上線」的最低準度；70% 是未來升級成擋的門檻，而 RETIRE-IF 要低於 30% 才撤。若實際維持目前 43%，它會在多數誤報的狀態下長期存活。
+3. 提醒又與真正的 note-shape 違規共用提交 stderr；每三至四次圖譜提交就出現一次多數可忽略的訊息，會訓練作者忽略同區塊輸出，削弱既有硬擋的可見性。
+4. 應先提高獨立留出樣本準度並訂定 warn 上線門檻；現有數據不支持直接部署。
+
+## F4 升級門檻第 4 條沒有可重算的分母，零樣本也未定義
+
+severity: major  
+blocking: 是  
+引句:「事件綁錯是語意問題,工具判不了;〈做法〉7 第 4 條與 RETIRE-IF ③ 用漂移的表態紀錄事後人讀。」  
+file: `scripts/lumos:29559`
+
+1. `drift scan` 明定「不寫帳」；`drift check` 只留下彙總的 blocked/warned 事件。只有作者選擇 `drift ack` 時才有逐筆理由。
+2. 條件成立後若作者直接完成待辦並刪除 REVISIT，不會有 ack；scan 曾點名但未處理也沒有事件。因此八週後無法得到「所有被點名條件」的分母，只能看到選擇照留的偏差樣本。
+3. 現有 `neg_revisit_measure.py` 只有歷史新增行掃描、摘要與抽樣，沒有重放每條探針何時成立、如何處置的功能，見 `governance/eval/negation-revisit/neg_revisit_measure.py:365`。
+4. 若八週內沒有條件被點名，「綁錯不到一成」是 0/0；spec 沒有最小樣本或延長規則。相鄰的舊句檢查設計反而明確規定少於 20 筆就延長、零分母不升級，見 `docs/lumos-toolchain-knowledge/Projects/舊句檢查_計劃.md:36`。
+5. 因而「四條全部成立才提議轉擋」以及 RETIRE-IF ③ 都無法照字面判定。需先補逐筆、可回放的來源與處置帳，並定義零／小樣本規則。
+
+## 逐節讀取紀錄
+
+- 白話、依據與量測：已讀；對應 F3。
+- PRIOR-ART：已讀,無 finding。
+- RETIRE-IF／REVISIT：已讀；對應 F3、F4。
+- 範圍：已讀,無 finding。
+- 做法 1：已讀,無 finding。
+- 做法 2：已讀；對應 F1。
+- 做法 3：已讀；對應 F2、F3。
+- 做法 4：已讀,無 finding。
+- 做法 5：已讀,無 finding。
+- 做法 6：已讀；對應 F2。
+- 做法 7：已讀；對應 F4。
+- 做法 8：已讀；對應 F1、F2。
+- 與參考實作的刻意差異：已讀,無 finding。
+- 條款 S1–S8：已讀；S3 對應 F1，S5 對應 F2，其餘無 finding。
+- 回退：已讀,無 finding。
+- 實務隱患：已讀；對應 F3。
+- 誠實界線：已讀；對應 F3、F4。
+- 下一步：已讀,無 finding。
+
+最高等級:major;blocking 共 4 條

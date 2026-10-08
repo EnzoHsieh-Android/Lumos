@@ -1,0 +1,20 @@
+from pathlib import Path
+import importlib.util,subprocess,sys,json,hashlib
+r=Path('/tmp/lumos-review-snapshot-encoding-preflight');sp=importlib.util.spec_from_file_location('index_counter_tests',r/'scripts/test_lumos.py');m=importlib.util.module_from_spec(sp);sp.loader.exec_module(m)
+wrapper=Path('/tmp/lumos-batch-index-race-original-wrapper.py');wrapper.write_text('''import runpy,sys,json,subprocess
+cli=sys.argv.pop(1);ns=runpy.run_path(cli,run_name="_index_race_");g=ns["main"].__globals__;original=g["_nodehome_required"];fired=[]
+def race(root,*a,**kw):
+ if kw.get("include_tests") and not fired:
+  mode,kind,sha,path=subprocess.check_output(['git','ls-tree','HEAD','tests/check.py'],cwd=root,text=True).split()
+  subprocess.run(['git','update-index','--cacheinfo',mode,sha,path],cwd=root,check=True)
+  paths=subprocess.check_output(['git','diff','--cached','--name-only'],cwd=root,text=True).splitlines()
+  assert 'tests/check.py' not in paths
+  fired.append({'index_changed_test_absent':True,'paths_after':paths})
+ return original(root,*a,**kw)
+g["_nodehome_required"]=race;rc=ns["main"]();print("INDEX_RACE:"+json.dumps(fired),file=sys.stderr);raise SystemExit(rc or 0)
+''')
+original_source=Path('/tmp/lumos-batch-index-race-r1-lumos');original_source.write_bytes(subprocess.check_output(['git','show','4f0c979a:scripts/lumos'],cwd=r));
+root=m._nh_repo();m._nh_file(root,'src/a.py','x = 0\n');m._nh_file(root,'tests/check.py','x = 0\n');m._nh_node(root,'Production',about=['src/a.py'],body='production context');home=m._nh_node(root,'TestHome',about=['tests/check.py'],body='test context');m._nh_commit(root,'baseline');m._nh_file(root,'src/a.py','x = 2\n');m._nh_file(root,'tests/check.py','x = 2\n');home.write_text(home.read_text()+'\nWHY: synthetic staged proof race.\n');m._nh_git(root,'add','.');before=m._nh_git(root,'diff','--cached','--name-only').stdout.splitlines();assert 'tests/check.py' in before
+q=subprocess.run([sys.executable,str(wrapper),str(original_source),'home','check','--staged','--repo',str(root)],text=True,capture_output=True)
+baseline=Path('/tmp/lumos-batch-index-race-baseline-lumos');baseline.write_bytes(subprocess.check_output(['git','show','cc032633:scripts/lumos'],cwd=r));old=subprocess.run([sys.executable,str(baseline),'home','check','--staged','--repo',str(root)],text=True,capture_output=True)
+proof={'head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'source':hashlib.sha256(original_source.read_bytes()).hexdigest(), 'tested_version':'4f0c979a','root':str(root),'staged_paths_before':before,'new':{'rc':q.returncode,'stdout':q.stdout,'stderr':q.stderr},'baseline_after_mutation':{'rc':old.returncode,'stdout':old.stdout,'stderr':old.stderr},'scope':'deterministic live index mutation only in private fixture; first route call resets target to HEAD; not normal git-commit concurrency proof'};Path('/tmp/lumos-batch-index-race-original-counter.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n');print(json.dumps(proof,ensure_ascii=False,indent=2))

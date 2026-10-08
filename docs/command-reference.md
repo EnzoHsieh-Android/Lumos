@@ -112,6 +112,7 @@ lumos bootstrap   # install everything     ↔  lumos teardown   # remove everyt
 lumos install     # machine layer only     ↔  lumos uninstall
 lumos init        # project layer only     ↔  lumos deinit [--keep-graph] [--dry-run]
 lumos update      # refresh the toolkit inside this project
+lumos update --dry-run   # preview which rule files and toolkit files would change (no pull, no writes)
 ```
 
 **Which layer to remove:** the whole machine at once is `teardown`; just this repo is `deinit`; just the global command is `uninstall`.

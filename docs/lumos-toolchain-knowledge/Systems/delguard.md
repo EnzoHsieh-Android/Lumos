@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-11
-updated: 2026-08-21
+updated: 2026-09-30
 about_code_stamp: batch-2026-08-23/2026-08-23/20d0869a4d67
 aliases: []
 self_audit: sonnet/2026-08-21
@@ -16,6 +16,8 @@ related:
   - "[[code側刪除傳播守衛_實作計畫]]"
   - "[[Systems/cochange-guard]]"
 summary: |-
+  PITFALL:[2026-09-30 [[Projects/舊句偵測實驗_計劃]] 實驗]大提交時 40 個被刪名稱的上限會被 64 位十六進位雜湊值吃光(rtb b2fc512 前 40 個裡約 30 個是雜湊),真的被刪的函式名排不進來;抽字時該排掉純十六進位的長字串。重現:那份實驗(見計劃〈實驗結果〉與它連到的報告)照原樣重放本守衛,在 b2fc512 只擋到 1 題
+  REVISIT:2026-11-30 還沒排掉十六進位字串就攤給 Enzo 排
   FLOW:pre-commit Gate DG(Gate CC 旁)→`lumos delguard --staged`→S1 staged diff `-` 行抽被刪識別字(per-file 回收表/stopword/排除域路徑段+lockfile/.md 不抽)→單次 git grep --cached 判兩檔信心(全域消失=high/呼叫點殘存=low)→三件套 regex 掃 vault 指名「還在講它」的節點+原句(型別只排序不壓低,Systems 排前)→S2 純連結編輯(LINK_KEYS 子集)∧S1 命中=假同步嫌疑→S3 退場三問(stdout)
   KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0→★15.0s(2026-08-27:5.0 在本 vault 377 篇+大 diff 仍常超,一 session 降級多次;Enzo 指示優化)★
   KEY:advisory 恆 rc0——crash(`|| true`+except Exception)/timeout(python 內建 deadline,env LUMOS_DELGUARD_DEADLINE,預設 ★15.0s★)/git diff rc≠0 皆降級放行,降級訊息走 stdout;--json 含 tokens/hits/fake_sync/degraded
@@ -25,6 +27,7 @@ summary: |-
   KEY:排除域與 pre-commit should_exclude 對齊(7 目錄+lock 三檔名),漂移由 t_precommit_whitelist_drift_guard 釘第三份清單;S3 問句同步在 lumos-project-notes skill 退場段(無 delguard 的 repo 靠自律)
   KEY:★2026-09-05 成功也記帳★([[Projects/第二輪審視六修_計劃]] d3):之前只記 degraded,治理帳 63/63 全是超時,外部稽核誤判成「從沒守到」;實測一般 commit 0.4 秒跑完、近 30 天 646 commit 只 63 次超時;現在跑完記 kind=ok(tokens/hits/secs)
   KEY:[2026-09-06]★逾時降級的真因是命中行數,不是 token 數★——帳上 30% 執行是逾時降級(守衛在半盲狀態下擋人)。原以為跟 token 數有關,量出來是:6 token/835 命中=9.7 秒、10 token/1615 命中=14 秒(預算 15 秒)、6 token/0 命中=0.3 秒。真因是 git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、7.17 秒,排除 governance/ 與 docs/ 後 7336 行、0.47 秒(15 倍)。★修法第一版是 blocker,已改★:我為了滿足既有漂移守衛,把兩夾一起抄進 pre-commit 的 should_exclude,結果 governance/ 底下 28 支真程式全部從「改 code 沒動圖譜就擋」的硬閘掉出去(審查席在乾淨 clone 實測重現:帶著改動可以直接提交,還原就擋)。★兩份清單語意根本不同★——delguard 那份是「哪裡不算活著的程式」,pre-commit 那份是「哪些檔改了不必配圖譜」。定案:拆成 `_DELGUARD_EXCLUDE_DIRS`(建置產物,與 pre-commit 對齊)與 `_DELGUARD_PROSE_DIRS`(散文帳本,delguard 專用、明令不得複製到 pre-commit),並在測試裡釘死這條。散文清單★只認 repo 根★,不認任何深度——消費專案的 `src/docs/parser.py`、`packages/governance/rules.py` 很可能是真程式(外家席)。★語意也更準★:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還活著 [test:t_delguard_excludes_prose_dirs]。★用罕見詞量不會重現★——第一次我用 cmd_doctor 之類量到 0.75 秒就差點判「已經不慢了」
+  WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 5 節,代碼審第三輪撤掉]消費專案提交時照樣從工具自裝檔抽被刪名稱、不跳過任何檔:試過讓它跳過「原封不動的工具檔」,三輪代碼審每輪錯一種位置(只比檔名、讀工作目錄、只看改之後、兩態判斷新增行刪除行不對稱),同一類第三次整類拿掉;工具更新造成的誤報照舊,重做前先看 [[Issues/刪除守衛在消費專案把工具更新刪掉的名稱當成專案的]] [test:t_delguard_scans_vendored_files_in_consumer]
   DEP:[[Systems/cochange-guard]](同型 advisory 前例,Gate CC 鄰位)｜scripts/hooks/pre-commit Gate DG｜find_vault/_cochange_repo_root 共用 helper
   TEST:t_delguard(scripts/test_lumos.py,85 條:S1 抽取/信心/掃描/S2/S3/fail-open/deadline/邊界輸入/鑑別力翻紅驗證)+t_precommit_whitelist_drift_guard 擴充;全量 2515/0@95c4224
 verified_by:

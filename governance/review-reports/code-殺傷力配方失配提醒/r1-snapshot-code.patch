@@ -1,0 +1,858 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index edb51798..1fc9d2be 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2914,20 +2914,49 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+                     loc = f"{rel}:{line}" if line else rel
+                     stale_claims.append(f"{loc} → {token}(已不存在)")
+         if stale_claims:
+             warn_soft(stale_claims,
+                       f"有 {len(stale_claims)} 處筆記提到的程式檔路徑已經不存在(碼被刪或搬了?):",
+                       "碼被刪/改名?更新節點正文的路徑引用,或補對應節點")
+         else:
+             ok("筆記提到的程式檔都還在")
+     print()
+ 
++    # ── Check P2:殺傷力配方的原文還對不對得上程式(Projects/殺傷力配方失配提醒_計劃)──
++    # 配方失配原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次抓到 10 條,全掛在 ★INVARIANT★ 上)。
++    # 形狀照 P 段:讀工作目錄、只提醒(warn_soft,不動回傳碼)、--ci 才落帳。判法對齊 guard kill,見 _kill_recipe_judge。
++    section("P2", "殺傷力配方的原文還對不對得上程式(提醒,不擋)")
++    if repo_root is None:
++        ok("這個專案沒有 docs/ 資料夾,跳過")
++    else:
++        try:
++            _p2 = _kill_p2_scan(env.vault, notes, repo_root)
++            if _p2["cfg_err"]:
++                warn_soft([f"設定檔讀不了:{_p2['cfg_err']}"],
++                          "殺傷力配方這一段先跳過(算不出配方屬於哪個平台):",
++                          "修好 .lumos/config.json 再跑一次 lumos doctor")
++                gov_events.append({"gate": "check-p2", "kind": "warned", "hard": False, "nodes": []})
++            elif _p2["items"]:
++                warn_soft([t for _st, t in _p2["items"]],
++                          f"有 {len(_p2['items'])} 條殺傷力配方的原文對不上程式(guard kill 跑到會判 drifted 或擋下;不擋):",
++                          "照每條的修法 kill-rm 舊配方、照現在的程式 kill-add 新的;程式與筆記提交後跑 lumos guard kill <節點> 確認")
++                for _stem in sorted({x for _st, _t in _p2["items"] for x in _st}) or [None]:
++                    gov_events.append({"gate": "check-p2", "kind": "warned", "hard": False,
++                                       "nodes": [_stem] if _stem else []})
++            elif _p2["total"]:
++                ok("殺傷力配方的原文都對得上")
++            else:
++                ok("沒有殺傷力配方")
++        except Exception as _e:        # 整段兜底:這一段壞掉不讓 doctor 整支中斷
++            print(f"  (殺傷力配方這一段算不出來:{_e.__class__.__name__}: {_e})")
++    print()
++
+     # ── Check N:可重算數字宣稱(存查詢不存答案;成因 F「寫死易漂的值」)──
+     # 由來:2026-08-12 LandmarkMember 全 24 篇交叉審計,★F 類每一批都復發★——
+     # 「共 5 處」(實為 7)、「8 場景通過」、「46 場景」(實為 40)、「9 個元件」(實為 8 少列一個)、
+     # 行號 173/392(實為 189/415)。2026-06-10 首跑就記過教訓「計數/清單型主張最會漂」,
+     # 但★沒有配任何機制★,兩個月後照樣復發。
+     # PRIOR-ART(真搜):世界的解是 doctest 那套「單一真相源」哲學——同一份東西既是文件也是
+     # 可執行檢查,不維護第二份。這裡的借法是★存查詢不存答案★:節點寫下「怎麼算」,
+     # doctor 每次重算並比對,數字漂了當場說。
+     # 語法(body 內,緊跟在數字後面):
+     #   <!--lumos:count=7 re=某正則 in=**/*.cs-->
+@@ -6963,21 +6992,23 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
+                 "lint-new",
+                 # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
+                 "check-s11",
+                 # 2026-09-27 筆記形狀擋:擋下與跳過(Projects/筆記形狀擋_計劃)
+                 "note-shape",
+                 # 2026-09-28 筆記內容審:派出、記錄、略過、擋下(Projects/筆記內容審_計劃)
+                 "note-audit",
+                 # 2026-09-28 存量漂移守衛:擋下、提醒、跳過、判不了、表態(Projects/存量漂移防線_計劃)
+                 "drift-check",
+                 # 2026-10-01 回頭重讀守檔筆記:提醒、沒候選、全對照過、跳過、記錄(Projects/守檔筆記對照改動_計劃;只提醒不擋)
+-                "note-reread")
++                "note-reread",
++                # 2026-10-01 殺傷力配方的原文還對不對得上程式(doctor P2,只提醒不擋;Projects/殺傷力配方失配提醒_計劃)
++                "check-p2")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+ 
+@@ -12876,27 +12907,377 @@ def _kill_recipe_key(node, invariant, file, old):
+     return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False).encode("utf-8")).hexdigest()
+ 
+ 
+ def _kill_method_name(test, multiplatform):
+     """配方 test 欄 → 實際跑的方法名:多平台時去掉「平台:」前綴,再去 Kotlin 反引號。kill 與算背書共用。"""
+     t = str(test or "")
+     m = t.split(":", 1)[1] if (":" in t and multiplatform) else t
+     return m.strip("`")
+ 
+ 
++# ── 殺傷力配方失配提醒(Projects/殺傷力配方失配提醒_計劃,三輪設計審)──
++# 配方是人寫的宣告式壞法,程式重構後原文找不到(或出現好幾次)就靜靜失效——原本只有手動跑 guard kill 才看得到。
++# 這一組給三個地方共用:kill-add 寫入時提醒、doctor P2 每次逐條數、kill-rm 用同一個身分找配方。
++# ★判法逐項對齊 cmd_guard_kill,但不改它★(它的圍欄、錯誤說明、回傳碼有既有合約與測試;抽共用會改到它的行為):
++#   基準 = 配方平台根所在 repo 的最上層;路徑照 guard kill 在「暫存資料夾/wt」裡 os.path.realpath 的走法重演;
++#   檔要在 HEAD 的提交裡(工作樹是從提交檢出的);文字模式 UTF-8 讀、原文恰好一次。
++# 兩邊不分家靠 t_kill_recipe_check_matches_guard_kill:一格一格真跑 guard kill 對照,日後誰改了判法這條先紅。
++
++def _kill_recipe_id(node, elem):
++    """配方身分(P2、kill-add 提醒、kill-rm 共用這一支)。node 一律是筆記在圖譜裡的相對路徑(跟 kill-add 判重傳的 str(rel) 同值)。
++    物件而且 invariant/file/old 都是字串 → 既有 `_kill_recipe_key`;其他(不是物件、欄位缺或型別不對)→
++    sha256(json ["malformed", node, 原始元素]),讓格式壞的配方也有身分、kill-rm 也移得掉。印出時取前 12 字元。"""
++    import hashlib
++    import json
++    if isinstance(elem, dict) and all(isinstance(elem.get(k), str) for k in ("invariant", "file", "old")):
++        return _kill_recipe_key(node, elem["invariant"], elem["file"], elem["old"])
++    return hashlib.sha256(json.dumps(["malformed", node, elem], ensure_ascii=False, sort_keys=True)
++                          .encode("utf-8")).hexdigest()
++
++
++def _kill_node_arg(rel):
++    """修法指令裡的節點寫法:圖譜相對路徑去掉 .md(env.find 認得),必要時加引號。"""
++    import shlex
++    r = str(rel)
++    return shlex.quote(r[:-3] if r.endswith(".md") else r)
++
++
++def _kill_cfg_load(repo_root):
++    """讀配方要用的平台設定。回 (pdata, None) 或 (None, 讀不了的原因)。
++    ★先自己把 config.json 當 JSON 解析★:load_platforms 遇到壞 JSON 只印一句警告就退回單一預設、不丟錯,
++    靠它的例外判斷不出「讀不了」。解析得了才交給 load_platforms(cfg=…)(不讓它再讀一次檔);
++    它印到標準錯誤的警告接走(kill-add 的提醒只准多一行),丟出任何例外都當讀不了。"""
++    import contextlib
++    import io
++    import json
++    p = Path(repo_root) / ".lumos" / "config.json"
++    cfg = {}
++    if p.exists():
++        try:
++            cfg = json.loads(p.read_text(encoding="utf-8"))
++        except (OSError, ValueError) as ex:
++            return None, f".lumos/config.json 解析不了({ex})"
++        if not isinstance(cfg, dict):
++            return None, f".lumos/config.json 最外層要是物件,現在是 {type(cfg).__name__}"
++    buf = io.StringIO()
++    try:
++        with contextlib.redirect_stderr(buf):
++            return load_platforms(Path(repo_root), cfg=cfg), None
++    except Exception as ex:   # 內容寫錯(兩個平台沒寫預設、root 是 null…)各種例外都有
++        first = next((ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()), "")
++        return None, str(ex) or first or ex.__class__.__name__
++
++
++def _kill_check_ctx(repo_root):
++    """一次判定共用的狀態:設定只讀一次(load_platforms 只呼叫一次);repo 頂、提交裡的檔、檔案全文各自快取
++    (★同一支檔只讀一次★,rtb 有 73 條配方、很多指到同一支檔)。"""
++    pdata, err = _kill_cfg_load(repo_root)
++    return {"pdata": pdata, "cfg_err": err, "tops": {}, "trees": {}, "texts": {}}
++
++
++def _kill_plat_top(ctx, proot):
++    """平台根 → (所在 repo 的最上層, None) 或 (None, 找不到的原因)。guard kill 對平台根下 `git worktree add`,
++    工作樹的根就是那個 repo 的最上層,配方的 file 從那裡算。"""
++    import subprocess
++    key = str(proot)
++    if key in ctx["tops"]:
++        return ctx["tops"][key]
++    res = (None, "不存在")
++    if Path(proot).is_dir():
++        r = subprocess.run(["git", "-C", key, "rev-parse", "--show-toplevel"],
++                           capture_output=True, text=True, errors="replace")
++        top = r.stdout.strip()
++        if r.returncode != 0 or not top:
++            res = (None, "不在 git repo 裡")
++        elif subprocess.run(["git", "-C", top, "rev-parse", "--verify", "-q", "HEAD"],
++                            capture_output=True).returncode != 0:
++            res = (None, "所在 repo 還沒有任何提交")
++        else:
++            res = (Path(top), None)
++    ctx["tops"][key] = res
++    return res
++
++
++def _kill_tree(ctx, top):
++    """repo 頂 → (HEAD 裡每個路徑的模式, HEAD 裡的所有資料夾)。guard kill 的工作樹是從 HEAD 檢出的:
++    還沒提交的新檔、被忽略的檔、子模組裡的檔它都沒有。每個 repo 頂只跑一次 git ls-tree。"""
++    import subprocess
++    key = str(top)
++    if key not in ctx["trees"]:
++        r = subprocess.run(["git", "-C", key, "ls-tree", "-r", "-z", "--full-tree", "HEAD"], capture_output=True)
++        if r.returncode != 0:
++            raise RuntimeError(f"讀不了 HEAD 的檔案清單:{r.stderr.decode('utf-8', 'replace').strip()[:120]}")
++        modes, dirs = {}, set()
++        for rec in r.stdout.split(b"\0"):
++            if not rec:
++                continue
++            meta, _tab, raw = rec.partition(b"\t")
++            rel = os.fsdecode(raw)
++            modes[rel] = meta.split(b" ", 1)[0].decode("ascii", "replace")
++            parts = rel.split("/")
++            for i in range(1, len(parts)):
++                dirs.add("/".join(parts[:i]))
++        ctx["trees"][key] = (modes, dirs)
++    return ctx["trees"][key]
++
++
++_KILL_OUT = object()   # 解析落在暫存資料夾外面(上一層的名字是隨機的,再怎麼走都回不來)
++
++
++def _kill_path_kind(pth, modes, dirs):
++    """模擬工作樹裡某個位置是什麼:"dir"/"file"/"link"/None(不存在)。pth 從暫存資料夾算起,("wt",) 就是 repo 頂。"""
++    if pth[0] != "wt":
++        return None                       # 暫存資料夾裡只有 wt
++    if len(pth) == 1:
++        return "dir"
++    rel = "/".join(pth[1:])
++    mode = modes.get(rel)
++    if mode == "120000":
++        return "link"
++    if mode == "160000":
++        return "dir"                      # 子模組:工作樹裡是空資料夾
++    if mode is not None:
++        return "file"
++    return "dir" if rel in dirs else None
++
++
++def _kill_readlink(top, pth):
++    """連結目標:讀工作目錄的;工作目錄裡不是連結才讀 HEAD 的。"""
++    import subprocess
++    rel = "/".join(pth[1:])
++    try:
++        return os.readlink(str(Path(top) / rel))
++    except OSError:
++        r = subprocess.run(["git", "-C", str(top), "cat-file", "-p", f"HEAD:{rel}"],
++                           capture_output=True, text=True, errors="surrogateescape")
++        return r.stdout
++
++
++def _kill_split(s):
++    return re.split(r"[\\/]", s) if _IS_WIN else s.split("/")
++
++
++def _kill_parent(path):
++    """`..` 照字面退一層:wt 退到暫存資料夾,暫存資料夾再退就落到外面。"""
++    if path is _KILL_OUT:
++        return path
++    return path[:-1] if path else _KILL_OUT
++
++
++def _kill_resolve(top, modes, dirs, file):
++    """重演 guard kill 的 `os.path.realpath(<暫存資料夾>/wt/<file>)`,回 (repo 內路徑, 最後一段的種類);
++    落在 wt 外、或剛好等於 wt 本身(不以「wt 加分隔字元」開頭,guard kill 判逃逸)→ (None, None)。
++
++    模型:wt 就是 repo 頂(內容照 HEAD),它的上一層是只有 wt 這一個子資料夾的暫存資料夾。
++    走法逐行照 posixpath.realpath(非 strict):`.` 與空段略過;`..` 照字面退一層;不存在的段照字面接上
++    (之後的 `..` 可以把它退掉);遇到連結讀目標——絕對目標落在 wt 外,相對目標把各段接回去繼續走;
++    連結迴圈停在連結本身(guard kill 接著開檔會失敗)。"""
++    if os.path.isabs(file):
++        return None, None          # os.path.join 遇到絕對路徑直接用它,不可能落在新建的暫存資料夾裡
++    rest = _kill_split(file)[::-1]
++    count = len(rest)
++    path = ("wt",)
++    seen = {}
++    while count:
++        name = rest.pop()
++        if name is None:              # 一個連結的目標走完了:記下它解析到哪
++            seen[rest.pop()] = path
++            continue
++        count -= 1
++        if name == "..":
++            path = _kill_parent(path)
++            continue
++        if path is _KILL_OUT or name in ("", "."):
++            continue
++        newpath = (*path, name)
++        if _kill_path_kind(newpath, modes, dirs) != "link":
++            path = newpath
++            continue
++        if newpath in seen:           # 走過的連結:有結果用結果,還沒結果就是迴圈(realpath 停在連結本身)
++            path = seen[newpath] if seen[newpath] is not None else newpath
++            continue
++        target = _kill_readlink(top, newpath)
++        if target.startswith("/") or os.path.isabs(target):
++            path = _KILL_OUT
++            continue
++        seen[newpath] = None
++        rest += [newpath, None]
++        tparts = _kill_split(target)[::-1]
++        rest.extend(tparts)
++        count += len(tparts)
++    if path is _KILL_OUT or len(path) < 2 or path[0] != "wt":
++        return None, None
++    return "/".join(path[1:]), _kill_path_kind(path, modes, dirs)
++
++
++def _kill_read_text(path):
++    """工作目錄裡讀一支檔的全文:回 ("ok", 全文) 或 (狀態, 原因)。不是一般檔不開(具名管線會卡住)。"""
++    import stat as _stat
++    try:
++        st = os.stat(path)
++    except OSError as ex:
++        return "missing", f"工作目錄裡沒有這支檔({ex.strerror or ex})"
++    if not _stat.S_ISREG(st.st_mode):
++        return "missing", "不是一般檔"
++    try:
++        with open(path, encoding="utf-8") as fh:     # 跟 guard kill 同一種讀法:文字模式 UTF-8(換行會正規化)
++            return "ok", fh.read()
++    except UnicodeDecodeError:
++        return "undecodable", "不是 UTF-8"
++    except OSError as ex:
++        return "missing", f"開不了({ex.strerror or ex})"
++
++
++def _kill_recipe_judge(ctx, r):
++    """一條配方判一次。回 dict:status、detail、plat、file(、count)。status:
++    判得出來的 ok(原文恰好一次)/hits(不是一次)/missing(讀不到)/undecodable(讀不成 UTF-8)/outside(跑出 repo);
++    malformed(欄位格式不對);判不了的 cfg(設定檔讀不了)/noplat(平台不在設定裡)/noroot(平台根找不到或不在 git repo)。
++    對應 guard kill:ok=套得上壞法、hits/missing=drifted、outside=error(逃逸)、undecodable=讀檔出錯。"""
++    out = {"status": "malformed", "detail": "配方欄位格式不對", "plat": "", "file": ""}
++    # ★先判是不是物件、欄位型別對不對,再讀任何欄位★(型別壞的配方不能在取平台時先出錯)
++    if not isinstance(r, dict) or not isinstance(r.get("file"), str) or not isinstance(r.get("old"), str) \
++            or any(r.get(k) is not None and not isinstance(r.get(k), str) for k in ("platform", "invariant")):
++        return out
++    out["file"] = r["file"]
++    if ctx["cfg_err"]:
++        out.update(status="cfg", detail=f"設定檔讀不了:{ctx['cfg_err']}")
++        return out
++    pdata = ctx["pdata"]
++    plat = r.get("platform") or pdata["default_platform"]
++    out["plat"] = plat
++    pentry = pdata["platforms"].get(plat)
++    if pentry is None:
++        out.update(status="noplat", detail=f"平台 {plat} 不在設定裡")
++        return out
++    top, why = _kill_plat_top(ctx, pentry["root"])
++    if top is None:
++        out.update(status="noroot", detail=f"平台 {plat} 的根找不到({pentry['root']}:{why})")
++        return out
++    out.update(_kill_judge_file(ctx, top, r["file"], r["old"]))
++    return out
++
++
++def _kill_judge_file(ctx, top, file, old):
++    """平台的 repo 頂找到之後:解析路徑、確認在提交裡、讀檔、數原文。回要蓋進結果的欄位。"""
++    if file.endswith(("/", "\\") if _IS_WIN else "/"):
++        # realpath 會把結尾斜線吃掉,guard kill 套得上壞法,但接著 `git checkout -- <file>/` 還原失敗、判 error(實跑)
++        return {"status": "missing", "detail": "路徑以斜線結尾(guard kill 套得上壞法、還原會失敗,判 error)"}
++    modes, dirs = _kill_tree(ctx, top)
++    rel, kind = _kill_resolve(top, modes, dirs, file)
++    if rel is None:
++        return {"status": "outside", "detail": "解析後跑出 repo"}
++    if kind != "file":
++        why = {"link": "連結迴圈", "dir": "是資料夾,不是一般檔"}.get(kind)
++        if why is None:
++            why = "不在提交裡(guard kill 的工作樹沒有它)" if os.path.lexists(str(top / rel)) else "不存在"
++        return {"status": "missing", "detail": why}
++    key = (str(top), rel)
++    if key not in ctx["texts"]:          # ★同一支檔只讀一次★
++        ctx["texts"][key] = _kill_read_text(str(top / rel))
++    st, val = ctx["texts"][key]
++    if st != "ok":
++        return {"status": st, "detail": val}
++    n = val.count(old)
++    if n != 1:
++        return {"status": "hits", "detail": f"原文出現 {n} 次", "count": n}
++    return {"status": "ok", "detail": ""}
++
++
++def _kill_fix_hint(rel, elem):
++    """可以直接貼的修法(kill-add 提醒與 P2 共用)。"""
++    return f"lumos guard kill-rm {_kill_node_arg(rel)} --id {_kill_recipe_id(str(rel), elem)[:12]}"
++
++
++def _kill_add_warn(env, rel, recipe):
++    """kill-add 寫入前:這次實際要寫進去的那一條原文不是恰好一次,就在標準錯誤印恰好一行提醒。
++    ★只提醒、照舊寫入★(保留「宣告不擋、跑時擋」:既有測試刻意用 kill-add 宣告失配或逃逸的配方來測 guard kill);
++    標準輸出與回傳碼不變。判斷自己出了沒預料的錯也只印一行、照舊寫入(不能比現在退步成崩潰不寫入)。"""
++    try:
++        res = _kill_recipe_judge(_kill_check_ctx(_repo_root_from_env(env)), recipe)
++        st, f = res["status"], res["file"]
++        if st == "ok":
++            return
++        fix = f"修法:{_kill_fix_hint(rel, recipe)},照現在的程式改寫後再 kill-add"
++        if st == "hits":
++            msg = f"這條配方的原文在 {f} 出現 {res['count']} 次;guard kill 跑到它會判 drifted。{fix}"
++        elif st in ("missing", "undecodable"):
++            msg = f"{f} 讀不到({res['detail']});guard kill 跑到它會判 drifted 或讀檔出錯。{fix}"
++        elif st == "outside":
++            msg = f"{f} 解析後跑出 repo;guard kill 會擋在圍欄外(判 error)。{fix}"
++        elif st == "malformed":
++            msg = f"配方欄位格式不對。{fix}"
++        else:
++            msg = f"{res['detail']},沒驗原文"
++    except Exception as ex:
++        msg = f"判斷時出錯({ex.__class__.__name__}: {ex}),沒驗原文"
++    print(f"⚠ 提醒:{msg}", file=sys.stderr)
++
++
++def _kill_p2_scan(vault, notes, repo_root):
++    """doctor P2 的計算(印交給 doctor)。回 dict:cfg_err(設定檔讀不了的原因或 None)、
++    items([(節點 stem 清單, 一行文字)])、total(看過的配方條數)。
++    跳過的節點逐字照 P 段:verification 型、status 是 superseded/stale。每條、每篇各自包例外保護。"""
++    st = {"ctx": None, "items": [], "total": 0, "noroot": {}}   # noroot:平台 → [說明, 條數, 節點]:只列一條
++    for rel, n in sorted(notes.items()):
++        if n.fields.get("type") == "verification" or \
++           str(n.fields.get("status", "")).strip() in ("superseded", "stale"):
++            continue
++        if n.fields.get("kill_recipes") is None:
++            continue
++        try:
++            recipes, err = _kill_read_recipes(vault / rel)
++            if recipes is None:
++                st["items"].append(([n.stem], f"{rel} → {err}"))
++                continue
++            for r in recipes:
++                if _kill_p2_one(st, repo_root, rel, n.stem, r) == "cfg":
++                    return {"cfg_err": st["ctx"]["cfg_err"], "items": [], "total": st["total"]}
++        except Exception as ex:
++            st["items"].append(([n.stem], f"{rel} → 這篇判不了:{ex.__class__.__name__}: {ex}"))
++    for detail, cnt, stems in (v for _k, v in sorted(st["noroot"].items())):
++        st["items"].append((sorted(stems), f"{detail},它底下 {cnt} 條配方沒驗"))
++    return {"cfg_err": None, "items": st["items"], "total": st["total"]}
++
++
++def _kill_p2_one(st, repo_root, rel, stem, r):
++    """P2 判一條配方,有問題就加進 st["items"](平台根找不到的先記進 st["noroot"])。回判定狀態。"""
++    st["total"] += 1
++    if st["ctx"] is None:
++        st["ctx"] = _kill_check_ctx(repo_root)     # 設定只讀一次;沒有配方的專案完全不碰設定
++    try:
++        res = _kill_recipe_judge(st["ctx"], r)
++    except Exception as ex:
++        st["items"].append(([stem], f"{rel} → 這條判不了:{ex.__class__.__name__}: {ex}"))
++        return "error"
++    code = res["status"]
++    if code == "noroot":
++        slot = st["noroot"].setdefault(res["plat"], [res["detail"], 0, set()])
++        slot[1] += 1
++        slot[2].add(stem)
++    elif code == "noplat":
++        st["items"].append(([stem], f"{rel} → 平台 {res['plat']} 不在設定裡,沒驗"))
++    elif code not in ("ok", "cfg"):
++        detail = f"讀不到({res['detail']})" if code in ("missing", "undecodable") else res["detail"]
++        inv = r.get("invariant") if isinstance(r, dict) and isinstance(r.get("invariant"), str) else ""
++        st["items"].append(([stem], f"{rel} → {res['plat']}:{res['file']}:{detail}"
++                                    f"(合約片段:{inv[:30]};修法:{_kill_fix_hint(rel, r)})"))
++    return code
++
++
+ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+                        platform=None, note=None, covers=None):
+     """宣告一條壞法配方進 kill_recipes + KEY 行補 [kill:recipes](同檔一次 atomic 寫)。
+     covers(選填,逗號分隔題目 id):這條壞法涵蓋哪幾題被標 needs_backing 的棧別檢核題(寫表態算背書用)。
+     同一條配方(`_kill_recipe_key` 相同)已存在時:有帶 covers、new 相同、note/platform/test 沒帶或跟既有相同
+-    → 只把 covers 換成這次的清單;其他情況照舊擋(Projects/併發與效能表態要合約背書_計劃)。"""
+-    import json
++    → 只把 covers 換成這次的清單;其他情況照舊擋(Projects/併發與效能表態要合約背書_計劃)。
++    寫入前會驗這條配方的原文在程式裡是不是恰好一次,不是就在標準錯誤多印一行提醒、照舊寫入
++    (Projects/殺傷力配方失配提醒_計劃)。"""
+     if old == new:
+         print("擋下:要替換的舊字串和新字串一模一樣,這個突變配方等於沒改", file=sys.stderr)
+         return 2
+     covers_list = None
+     if covers is not None:
+         covers_list = []
+         for q in str(covers).split(","):
+             q = q.strip()
+             if not q:
+                 print("擋下:--covers 裡有空的題目 id(例:--covers java-concurrency,sql-nplus1)", file=sys.stderr)
+@@ -12907,20 +13288,31 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+                 print(f"擋下:--covers 的 {q!r} 不是要背書的題目 id。可用的:{', '.join(ok_ids)}", file=sys.stderr)
+                 return 2
+             if q not in covers_list:
+                 covers_list.append(q)
+     # note/platform/test 為 None=這次沒帶、沿用既有值;帶了空字串才算「改成空」——只補 covers 時不必逐字重打原本的 note
+     test_arg = test
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
++    # ★讀—改—寫整段拿筆記庫寫入鎖★(Projects/殺傷力配方失配提醒_計劃 第 3 輪併發席:
++    # kill-rm 與 kill-add 同時改同一篇會互蓋;跟 set/append/remove 同一把)
++    with _vault_write_lock(env.vault):
++        return _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, test_arg,
++                                      platform, note, covers_list)
++
++
++def _guard_kill_add_locked(env, rel, invariant_substr, file, old, new, test, test_arg,
++                           platform, note, covers_list):
++    """cmd_guard_kill_add 拿著寫入鎖之後的那一段:讀筆記、判重、提醒、原子寫入。"""
++    import json
+     path = env.vault / rel
+     try:
+         lines, _, e = load_raw_for_edit(path)
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     # 定位 KEY 行(去標記後比對,避免子字串誤中標記文字)
+     target_idx = None
+     for i in range(1, e):
+         if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
+@@ -12957,25 +13349,29 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+     for r in recipes:
+         if not isinstance(r, dict) or _kill_recipe_key(str(rel), r.get("invariant"), r.get("file"), r.get("old")) != key:
+             continue
+         same_rest = (r.get("new") == new
+                      and (note is None or note == (r.get("note") or ""))
+                      and (platform is None or platform == r.get("platform"))
+                      and (test_arg is None or test_arg == r.get("test")))
+         if covers_list is not None and same_rest:
+             updated = (list(r.get("covers") or []), covers_list)
+             r["covers"] = covers_list
++            recipe = r      # 只更新 covers:下面驗原文驗的是既有那一條(用它自己的 platform)
+             break
+         tip = ("(要補 covers 的話,--new 要跟既有的一樣,--note/--platform/--test 不帶或跟既有一樣)"
+                if covers_list is not None else "")
+-        print(f"擋下:同一條合約、同檔、同一個舊字串的突變配方已經有了,先把舊的那條手動拿掉{tip}", file=sys.stderr)
++        print(f"擋下:同一條合約、同檔、同一個舊字串的突變配方已經有了,"
++              f"先用 lumos guard kill-rm {_kill_node_arg(rel)} --id {key[:12]} 拿掉舊的那條{tip}", file=sys.stderr)
+         return 2
++    # 判重之後、寫入之前:這次實際要寫進去的那一條原文還對不對得上(只提醒、照舊寫入——「宣告不擋、跑時擋」)
++    _kill_add_warn(env, rel, recipe)
+     if updated is None:
+         recipes.append(recipe)
+     blob = json.dumps(recipes, ensure_ascii=False)
+     # 重寫 frontmatter:替換或插入 kill_recipes block(單行 compact) + KEY 行補標記
+     newline = line if KILL_REF_RE.search(line) else line.rstrip() + " [kill:recipes]"
+     out, i, replaced = [], 0, False
+     while i < e:
+         l = lines[i]
+         if i == target_idx:
+             out.append(newline); i += 1; continue
+@@ -13020,20 +13416,155 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+         return 2
+     if updated is not None:
+         print(f"✓ 只更新了既有配方的 covers({rel}):{', '.join(updated[0]) or '(無)'} → {', '.join(updated[1])}")
+         print("  下一步:把筆記提交後重跑 lumos guard kill,再重表態")
+         return 0
+     print(f"✓ kill 配方寫入 {rel}(invariant『{invariant_substr[:24]}…』, test={test})")
+     print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
+     return 0
+ 
+ 
++def _kill_add_template(node_arg, r):
++    """被移除的配方 → 一行照它改寫後重新宣告的 kill-add 範本(原文那一欄留給人照現在的程式填)。"""
++    import shlex
++    q = shlex.quote
++    r = r if isinstance(r, dict) else {}
++
++    def val(k, placeholder):
++        return q(r[k]) if isinstance(r.get(k), str) and r[k] else placeholder
++    parts = ["lumos guard kill-add", node_arg, val("invariant", "'<KEY 行片段>'"),
++             "--file", val("file", "'<檔>'"), "--old", "'<照現在的程式填原文>'", "--new", val("new", "'<壞法>'")]
++    for k in ("test", "platform", "note"):
++        if isinstance(r.get(k), str) and r[k]:
++            parts += [f"--{k}", q(r[k])]
++    cov = r.get("covers")
++    if isinstance(cov, list) and cov and all(isinstance(c, str) for c in cov):
++        parts += ["--covers", q(",".join(cov))]
++    return " ".join(parts)
++
++
++def _kill_invariants_of(recipes):
++    """配方清單裡寫得好好的(非空字串)invariant。"""
++    return [r["invariant"] for r in recipes
++            if isinstance(r, dict) and isinstance(r.get("invariant"), str) and r["invariant"]]
++
++
++def cmd_guard_kill_rm(env, node, rid):
++    """移除一條殺傷力配方(Projects/殺傷力配方失配提醒_計劃 做法 4)。失配配方的修法:先 rm 舊的、再照現在的程式 kill-add 新的
++    (配方身分含原文,不先移掉舊的就改不了)。rid=短身分(doctor P2 或 kill-add 提醒印的那串),至少 8 個十六進位字元。
++    對到零條、或對到不同完整身分的多條 → 擋下 rc2;對到的全是同一完整身分(手改造成的重複)→ 一起移除。
++    移除前把每一條的完整內容與 kill-add 範本印到標準輸出;剩下的配方都對不到的 KEY 行拿掉 [kill:recipes]。
++    kill-log 的舊紀錄不刪(歷史帳;背書計算本來就只認筆記現有的配方)。"""
++    pre = str(rid or "").strip().lower()
++    if not re.fullmatch(r"[0-9a-f]{8,64}", pre):
++        print(f"擋下:--id 要給至少 8 個十六進位字元的配方短身分(收到 {rid!r});doctor --verbose 的 P2 段"
++              "或 kill-add 的提醒裡都有印,給太短容易移錯", file=sys.stderr)
++        return 2
++    rel = env.find(node)
++    if rel is None:
++        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
++        return 2
++    with _vault_write_lock(env.vault):     # 讀—改—寫整段拿鎖(跟 kill-add 同一把)
++        return _guard_kill_rm_locked(env, rel, pre)
++
++
++def _guard_kill_rm_locked(env, rel, pre):
++    from collections import Counter
++    path = env.vault / rel
++    try:
++        lines, _, e = load_raw_for_edit(path)
++    except (ValueError, RuntimeError) as ex:
++        print(f"擋下:{ex}", file=sys.stderr)
++        return 2
++    recipes, err = _kill_read_recipes(path)
++    if recipes is None:
++        print(f"擋下:{err}", file=sys.stderr)
++        return 2
++    ids = [_kill_recipe_id(str(rel), r) for r in recipes]
++    hit = sorted({i for i in ids if i.startswith(pre)})
++    if not hit:
++        print(f"擋下:{rel} 的配方裡沒有身分以 {pre} 開頭的(lumos doctor --verbose 的 P2 段會印每條的短身分)", file=sys.stderr)
++        return 2
++    if len(hit) > 1:
++        print(f"擋下:{pre} 對到 {len(hit)} 條不同的配方,分不清要移哪一條;給長一點的身分:", file=sys.stderr)
++        for h in hit:
++            print(f"  {h}", file=sys.stderr)
++        return 2
++    full = hit[0]
++    gone = [r for r, i in zip(recipes, ids) if i == full]
++    keep = [r for r, i in zip(recipes, ids) if i != full]
++    _kill_rm_show(_kill_node_arg(rel), gone)
++    new_lines, unmarked = _kill_rm_rewrite(lines, e, gone, keep)
++    try:
++        atomic_write_verify(path, new_lines, "kill_recipes", _kill_rm_check(str(rel), Counter(ids), full))
++    except (ValueError, RuntimeError) as ex:
++        print(f"擋下:{ex}", file=sys.stderr)
++        return 2
++    tail = f";{unmarked} 條 KEY 行已經沒有配方對得到,拿掉了 [kill:recipes] 標記" if unmarked else ""
++    print(f"✓ 從 {rel} 移除了 {len(gone)} 條配方{tail}")
++    print("  下一步:照上面的範本填好原文 kill-add 改寫後的配方,把程式與筆記提交後跑 lumos guard kill 確認真的殺得掉")
++    return 0
++
++
++def _kill_rm_show(node_arg, gone):
++    """移除前把★每一條★的完整內容與 kill-add 範本印到標準輸出(同身分的多條,new、covers 可能不一樣)。"""
++    import json
++    for r in gone:
++        print("要移除的配方(完整內容):")
++        print("  " + json.dumps(r, ensure_ascii=False, sort_keys=True))
++        print("  照現在的程式改寫後重新宣告:" + _kill_add_template(node_arg, r))
++    if len({json.dumps(r, ensure_ascii=False, sort_keys=True) for r in gone}) > 1:
++        print("  注意:這幾條身分相同但內容不同,上面逐條都印了,要留哪個設定自己挑")
++
++
++def _kill_rm_rewrite(lines, e, gone, keep):
++    """重寫開頭欄位:kill_recipes 換成剩下的(沒剩就整欄拿掉);被移除的配方對得到、剩下的都對不到的 KEY 行
++    拿掉 [kill:recipes](比對法同 kill-add:去掉標記後含 invariant 片段)。回 (新的全文行, 拿掉標記的行數)。"""
++    import json
++    gone_invs, keep_invs = _kill_invariants_of(gone), _kill_invariants_of(keep)
++    out, i, unmarked = [], 0, 0
++    while i < e:
++        ln = lines[i]
++        if i > 0 and INVARIANT_RE.match(ln.strip()) and KILL_REF_RE.search(ln):
++            clean = INV_TAG_RE.sub("", ln)
++            if any(v in clean for v in gone_invs) and not any(v in clean for v in keep_invs):
++                ln = re.sub(r"\s*\[kill:\s*recipes\s*\]", "", ln)
++                unmarked += 1
++        if ln.startswith("kill_recipes:"):
++            i += 1
++            while i < e and (lines[i].startswith("  ") or not lines[i].strip()):
++                i += 1
++            if keep:
++                out += ["kill_recipes: |-", "  " + json.dumps(keep, ensure_ascii=False)]
++            continue
++        out.append(ln)
++        i += 1
++    return out + lines[e:], unmarked
++
++
++def _kill_rm_check(node, before, full):
++    """kill-rm ★自己的寫後自驗★(kill-add 那支遇到格式壞的元素會崩潰,第 3 輪邊界席實測):
++    讀回來的配方全走共用身分函式——被移除的身分不在了、其他身分出現的次數跟移除前一樣。"""
++    import json
++    from collections import Counter
++    want = Counter({k: c for k, c in before.items() if k != full})
++
++    def check(fields):
++        raw = fields.get("kill_recipes")
++        try:
++            data = [] if raw is None else json.loads(raw if isinstance(raw, str) else str(raw))
++        except ValueError:
++            return False
++        return isinstance(data, list) and Counter(_kill_recipe_id(node, r) for r in data) == want
++    return check
++
++
+ def _run_cmd_expand(run_cmd, method=None):
+     """測試指令的佔位符換成實際值 → 字串。{python} = 執行中的這支 lumos 用的直譯器(依平台加引號,路徑含空白照樣可執行);
+     {method} = 測試名(照舊用 shell 引號)。讀 run_cmd 的三處(guard kill、合約測試閘本體、過濾探針)都經這一支
+     ——原本三處各自代換 {method},新佔位符漏補一處就會把字面 {python} 交給 shell(Projects/最低Python版本改3.14_計劃 做法第 6 點)。"""
+     import shlex as _shlex
+     import subprocess as _sp
+     cmd = str(run_cmd)
+     if "{python}" in cmd:
+         exe = sys.executable or "python3"
+         cmd = cmd.replace("{python}", _sp.list2cmdline([exe]) if _IS_WIN else _shlex.quote(exe))
+@@ -39636,20 +40167,21 @@ HELP_WHEN = {
+     "scaffold": "幫某條合約產一個測試骨架(預設紅燈,斷言留 TODO)。",
+     "prune": "剪掉填錯的 decision_ref(正規化定位;--by 移該欄、無 --by 兩欄都移)。",
+     "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
+     "plan": "這條合約之後才會做:一次寫好預告標記、建待完成的守衛節點、雙向連好。查那篇功能節點時會看到它,逾期會擋推送而且不准延期。",
+     "settle": "預告的那條做完了:預告行換成正式合約行並綁上測試,守衛節點就地轉成已通過(要 --test);已經 pass 但還留著預告句時補改成歷史說法(不用 --test,可給 --date)。",
+     "abandon": "預告的那條決定不做了:立墓碑而不是刪掉(下一個人看得到曾經打算做什麼)。要先 lumos signoff <守衛節點> --ref <守衛節點>。",
+     "required": "看現在有幾條預告還沒做完、有沒有逾期或七天內到期。有逾期回非零。",
+     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
++    "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add。",
+     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
+     "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次印紅綠(不擋)。",
+     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
+     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
+     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
+     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+@@ -40121,29 +40653,33 @@ def main():
+     ga = gsub.add_parser("audit", help="留痕 [audit:模型/日期]:合法性經無脈絡獨立 agent 審計過(maker≠checker)")
+     ga.add_argument("node")
+     ga.add_argument("invariant", help="KEY 行子字串")
+     ga.add_argument("--model", default="sonnet", help="審計用的模型(預設 sonnet — 刻意較弱,不腦補補洞)")
+     ga.add_argument("--date", help="審計日期 YYYY-MM-DD(預設今天)")
+     gt = gsub.add_parser("trace", help="合約→守衛測試→Verification 證據鏈(reverse:爆炸半徑可查)")
+     gt.add_argument("node", nargs="?", help="限單節點(預設全 vault)")
+     gka = gsub.add_parser("kill-add", help="宣告壞法配方(kill_recipes+[kill:recipes],同檔原子寫)")
+     gka.add_argument("node")
+     gka.add_argument("invariant", help="KEY 行子字串")
+-    gka.add_argument("--file", required=True, help="要弄壞的檔(相對配方平台 root)")
++    gka.add_argument("--file", required=True, help="要弄壞的檔(相對配方平台所在 repo 的最上層)")
+     gka.add_argument("--old", required=True, help="literal 原文(須唯一命中)")
+     gka.add_argument("--new", required=True, help="壞版本")
+     gka.add_argument("--test", help="綁定測試名(缺省=KEY 行唯一 [test:] ref)")
+     gka.add_argument("--platform", dest="gk_platform", help="配方所屬平台(多平台 config)")
+     gka.add_argument("--note", default=None, help="業務上壞了什麼(人話)")
+     gka.add_argument("--covers", default=None,
+                      help="這條壞法涵蓋哪幾題要背書的棧別檢核題(逗號分隔題目 id,例 java-concurrency,sql-nplus1);"
+                           "同一條配方已存在時只更新它的 covers")
++    gkr = gsub.add_parser("kill-rm", help="移除一條殺傷力配方(失配配方的修法:先移掉舊的、再照現在的程式 kill-add;同檔原子寫)")
++    gkr.add_argument("node")
++    gkr.add_argument("--id", dest="gkr_id", required=True,
++                     help="配方短身分(doctor P2 段或 kill-add 提醒印的那串),至少 8 個十六進位字元")
+     gk = gsub.add_parser("kill", help="跑殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅")
+     gk.add_argument("node")
+     gk.add_argument("invariant", nargs="?", help="限某合約(KEY 行子字串;預設全部配方)")
+     gk.add_argument("--platform", dest="gk_platform", help="覆蓋配方平台")
+     gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
+     gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
+ 
+     p = sub.add_parser("spec-gate", help="規格閘(半套):條款句式+綁定+回退節(擋)、把綁的測試真跑一次印紅/綠/弱證據(不擋)、治理帳留一行")
+     p.add_argument("node", nargs="?", help="計劃節點(Projects/<名>_計劃)")
+     p.add_argument("--no-run", dest="sg_no_run", action="store_true", help="只驗句式與綁定,不跑測試(風險低不會放行、不留痕)")
+@@ -41068,20 +41604,22 @@ def main():
+             return cmd_guard_required(env)
+         if args.gcmd == "bind":
+             return cmd_guard_bind(env, args.node, args.invariant, args.method,
+                                   platform=args.platform)
+         if args.gcmd == "audit":
+             return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
+         if args.gcmd == "kill-add":
+             return cmd_guard_kill_add(env, args.node, args.invariant, file=args.file,
+                                       old=args.old, new=args.new, test=args.test,
+                                       platform=args.gk_platform, note=args.note, covers=args.covers)
++        if args.gcmd == "kill-rm":
++            return cmd_guard_kill_rm(env, args.node, args.gkr_id)
+         if args.gcmd == "kill":
+             return cmd_guard_kill(env, args.node, invariant_substr=args.invariant,
+                                   platform_override=args.gk_platform,
+                                   as_json=args.gk_json, keep_worktree=args.keep_worktree)
+         if args.gcmd == "trace":
+             return cmd_guard_trace(env, args.node)
+ 
+     if args.cmd == "sync-verified-by":
+         return cmd_sync_verified_by(env, apply=args.apply)
+ 
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index fc8e7288..728991f9 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -14,20 +14,21 @@
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"` | 套壞法後測試必須翻紅,沒翻紅=測試是裝飾 | — |
++| 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add`,提交後跑 `lumos guard kill <節點>` | 移除前印出那條完整內容與範本;短身分至少 8 字元,對到不同的多條會擋下 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+ | 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀、零自由文字) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 綠 rc0/紅 rc1 | 紅了沒人知道 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+ 
+ ## 筆記內容審:新寫的筆記是不是程式碼推得出來(推送前)
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 2ab3456e..6e501876 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -26,19 +26,19 @@
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / drift scan·fix·ack(存量漂移:列出、用工具改掉、表態照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill / ci-wait / ci-status |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / guard list·scaffold·bind·audit·trace·kill-add(--covers)·kill-rm·kill / ci-wait / ci-status |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼得出現況,再用 `lumos` 補程式碼看不出的脈絡**(為什麼這樣決定、程式看不到的限制、踩過的坑)。改 code 前至少 `lumos impact --file <檔>` 一行,**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行。筆記跟程式對不上,以程式碼為準(只有決策、合約行、Issues、Verification 能挑戰程式碼)。
+ 2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。**寫之前先分「這句程式碼推不推得出來」**:推得出來的別寫(會過期;新寫的程式行號引用、沒帶 `[來源:…]` 的 FACT/FLOW/DEP 提交時會被擋),程式碼答不了的現況才寫、同一行帶 `[來源:部署|資料庫|生產|外部|人工]`;為什麼這樣決定用 `WHY:`、程式看不到的限制用 `RULE:`(要有退場條件)、踩過的坑用 `PITFALL:`(要有防回歸)。細節在 `commands/03-寫回圖譜.md` 的〈寫什麼進去〉。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index bdefdd20..f151f1f7 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -107,21 +107,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+ | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull]` | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+-> **子命令全覽（80 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
++> **子命令全覽（80 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats` `handoff`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
+ 第三方 `notesmd-cli`（原 Yakitrak/obsidian-cli，Go 單檔）**只准用 `move`**（rename 連結改寫含 frontmatter 字串,2026-06-13 驗收通過;即上方 `graph-rename.sh` 封的那層）。**`frontmatter --edit` 嚴禁對真實 vault 使用**：實測會把整篇 frontmatter 鍵序重排成字母序、縮排 2→4、**日期加引號（property 型別 date→text 靜默損傷）**——一碰整篇 diff 不可審,且 pre-commit 污染指紋會擋。frontmatter 寫入合法路徑只有：lumos T1（純量/list/decisions）、obsidian `processFrontMatter` eval（白名單外）。驗收證據：MyApp vault 的 `2026-06-13_Yakitrak三題驗收`。
+ 
+ 
+@@ -585,20 +585,21 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,扣點前擋下 ... [te
+ 
+ ```bash
+ lumos guard list [--unbound]        # 列所有 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked);--unbound 只列未綁
+ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
+     --method <測試名> --type pure|behavioral|state --claim "<向人確認過的可測斷言>" \
+     [--out <測試專案目錄>] [--template <路徑>] [--class <類別名>]
+ lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
+ lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
+ lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
+ lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--covers 題目id,…]   # 宣告壞法配方(kill_recipes+[kill:recipes])
++lumos guard kill-rm <node> --id <短身分>   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add;短身分看 kill-add 提醒或 doctor P2)
+ lumos guard kill <node> ["<KEY子字串>"] [--json]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1
+ ```
+ 
+ **改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。
+ 
+ **補 verified_by 漏寫**(doctor Check 3 的零判斷項自動修):
+ ```bash
+ lumos sync-verified-by            # dry-run:列 Verification 連到 Systems 但 verified_by 漏列的
+ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
+ ```

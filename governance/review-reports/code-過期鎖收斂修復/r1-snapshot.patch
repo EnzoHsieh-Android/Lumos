@@ -1,0 +1,1527 @@
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 321ab9f9..ed99eb88 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "47d9fdba3708d16afea7f4b492c8ea5480e2f7ff2c8e627d911f190d6c542fdf",
++    "scripts/test_lumos.py": "6f11758f41a582bcdf83bf32da51927c63d8b76ef592c382798dbb2938b53f84",
+     "scripts/test_autonomous_loop.py": "a9bff38eeb3a521bbf731874b3c59d3cc540f0d0c4a6af3cf7a7a4288a697e78",
+     "scripts/hooks/pre-commit": "5a8dc225ef018d942f6b1d5e831db9879742a9ae20d4becb1af77d8fa5ab0656",
+     "scripts/hooks/pre-push": "4d603c1c4864ed0e5d26efb520136a5a43f7b4120443ecde297896304cd69f88",
+     "scripts/hooks/post-commit": "f7ccea562d2e0fa83ec2e9d527b93a6f10204c541f377f425e42ad814a3a27dc",
+-    "scripts/hooks/claude/dispatch-lens-hook.py": "41ccdb9911800508f2ae0964919335ccf9b5b8750eb167caf8364848ebb92e97",
++    "scripts/hooks/claude/dispatch-lens-hook.py": "eb22df8bda22fa42f9ee0a5ea5a628c7bc24017f35bc1ef758a1ab2b83988a1a",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "16851237e0b3cecdb867e9b2dd36cc71e0f4e5c4a01cb155510d3f46df7f3e00",
+     "scripts/hooks/claude/check-graph-sync.py": "b01ec12ca4514b6f6f6904194cc2d6b747f8fca919c6a5dea9bb571c3a4974de",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-09-30T03:05:50+08:00",
+-  "note": "情境探針新增 5 支測試(截斷不算分、總結分母、截斷過半、題庫不禁先讀碼、程式碼題重判)並清掉新告警;沒有放寬或拿掉任何既有檢查"
++  "approved_at": "2026-10-05T03:02:20+08:00",
++  "note": "派工鏡頭加入同步背景啟動失敗的固定提示與 error 事件，相關測試先紅後綠"
+ }
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 6b2344e6..5795a1fc 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -3,21 +3,21 @@
+ # SPDX-License-Identifier: MIT
+ # MIT licensed. Full text: scripts/lumos header, or LICENSE at
+ # https://github.com/EnzoHsieh-Android/Lumos
+ """dispatch-lens-hook — Claude Code PreToolUse(matcher Agent)薄殼(Projects/派工鏡頭注入_計劃,2026-09-03);
+ Codex 側掛 SubagentStart(Projects/Codex完全支援_計劃 d3,2026-09-04):叫 `lumos dispatch-lens --claim` 領一席 → additionalContext。
+ 
+ Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>`(有 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards)
+ ②subprocess 叫 `lumos dispatch-lens` ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理);
+ lumos 失敗時回傳裡若有角色段(role_text)照附。
+ 其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
+-永不 deny、永不改 permissionDecision;失敗一律放行。★2026-09-05 起超時不再靜默★:附一行固定超時句進派工詞(Codex 走 additionalContext);其他失敗仍靜默(LUMOS_HOOK_DEBUG=1 才印 stderr)。
++永不 deny、永不改 permissionDecision;失敗一律放行。超時、建鎖錯誤與本次背景啟動失敗各附固定說明並記事件；其他失敗仍可在 LUMOS_HOOK_DEBUG=1 看 stderr。
+ 本檔在 ANCHOR_FILES 內:改它要 `lumos anchor approve --note`。
+ """
+ from __future__ import annotations
+ 
+ import json
+ import os
+ import re
+ import subprocess
+ import sys
+ from pathlib import Path
+@@ -31,20 +31,28 @@ ROLE_RE = re.compile(r"^LUMOS-ROLE-CARDS:\s*on\s*$")
+ # 那件事現在機器自己做了(超時不再殺子行程,它會繼續算完寫進快取)。
+ # ★刻意不寫「下一席大概率就有」★:那是機率宣稱,而這個專案的規矩是機率宣稱要附
+ # 回頭看的條件、要有量測。目前沒有量過「超時後下一席命中率」,所以只講機制事實
+ # (那支還在背景算),不講機率。
+ # REVISIT:2026-12-07 量一次「超時之後、同範圍下一席的快取命中率」;
+ #   命中率低就表示放手不殺沒買到東西,那時該改回殺掉或另找解法
+ # 讀這句的是審查席(子代理),不是編排者:快取怎麼運作、怎麼自己重算留在註解與治理帳,
+ # 不寫進派工詞——寫了審查席會當成要照做的指令去補算。
+ TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,範圍 {what})。"
+                 "照派工詞審查即可,不用自己補算。")
++LOCK_UNCERTAIN_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what});鎖狀態未知,"
++                       "請檢查鎖 {lock}。鎖內 PID 是啟動者,不能只憑它已結束就刪鎖。"
++                       "照派工詞審查即可。")
++LOCK_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;鎖無法建立({lock}),"
++                   "請檢查鎖位置與檔案權限。照派工詞審查即可。")
++SPAWN_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;本次背景未啟動。"
++                    "同名鎖可能仍在或已由其他工作持有,請檢查鎖 {lock}。"
++                    "照派工詞審查即可。")
+ 
+ # ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
+ # 超時說明原本在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
+ # 就武裝好的檔案裡原子領一席,**全程不寫任何快取**。對這條路講快取是每次都錯,
+ # 不是邊界情況。真正該講的是:這次沒領到,要重新武裝。
+ # ★設計審那條路也要用不同的說明★(2026-09-07 代碼審 r2 通才席抓到)
+ # 超時說明原本在講「背景會把快取算完」,但設計審模式(LUMOS-SPEC:)★本來就不快取★
+ # (計劃常改,快取會給過期答案),所以也沒有背景暖快取這回事——超時就是這次沒有,
+ # 下一次還是要重算。對這條路講快取是每次都錯。
+ SPEC_TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,計劃 {what})。"
+@@ -307,22 +315,22 @@ def main() -> int:
+         return 0
+     repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
+     if not repo:
+         _debug("沒有 CLAUDE_PROJECT_DIR 也沒有 cwd,放行")
+         return 0
+     lumos = _find_lumos_script()
+     if lumos is None:
+         _debug("找不到 lumos,放行")
+         return 0
+     argv = [sys.executable, lumos, "dispatch-lens"] + ([rng] if rng else ["--spec", spec]) + ["--repo", repo, "--json"]
+-    # ★薄殼★:帶 --deadline 叫 lumos;它自己會在超時時派一個脫離的行程把快取算完,
+-    #   rc5 = 「這次沒算完,但背景還在算」。hook 只負責把說明接進派工詞。
++    # ★薄殼★:帶 --deadline 叫 lumos;它自己處理背景快取。rc5 可能是仍在算,
++    #   也可能是鎖狀態未知;hook 只負責把對應說明接進派工詞。
+     # ★不要取整★:內層預算可能是 0.x 秒(天花板小、或已經耗掉不少),取整會變 0
+     #   → lumos 那邊當成「沒給 deadline」或立刻超時,每次都走超時那條路。
+     #   (第一版寫 int(),假環境算出 0.7 秒被取成 0,測試當場翻紅。)
+     # ★下限不能訂太小★:光是起一個 python 行程就要 0.4 秒起跳(實測小專案整趟 0.46 秒),
+     #   下限 0.5 秒等於「每次都超時」,連一瞬間算得完的小專案都被推去走背景那條路。
+     #   訂 3 秒:夠小專案跑完,對大範圍又遠小於天花板、該超時的照樣超時。
+     # ★deadline 與外層 timeout 都必須留在天花板之內★(2026-09-07 代碼審 r2 兩席都提):
+     #   第一版寫 max(3.0, 內層預算),而外層 subprocess timeout 是「內層預算 + 5」——
+     #   兩個數字都可能超過天花板:①天花板調小時 0.7×天花板+5 會大於天花板
+     #   ②已耗很多時內層剩 1 秒,卻被下限抬成 3 秒。那正是這批要修的「內層 ≥ 外層」。
+@@ -339,29 +347,66 @@ def main() -> int:
+         r = None
+     if r is not None and r.returncode == 2 and not (r.stdout or "").strip() and "--role-cards" in argv:
+         # 新掛鉤配舊 lumos:舊版不認 --role-cards 會回 rc2 空輸出,不重叫的話連圖譜段都丟(代碼審 r1 外家 F2)。
+         # 掛鉤是複製進使用者目錄的,兩邊版本錯開是常態;拿掉旗標重叫一次,舊版照附圖譜段。
+         argv = [a for a in argv if a != "--role-cards"]
+         _debug("lumos 不認 --role-cards(rc2、沒輸出),多半是舊版;拿掉旗標重叫一次")
+         try:
+             r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
+         except (subprocess.TimeoutExpired, OSError):
+             r = None
++    lock_status = {}
++    if r is not None and r.returncode in (2, 5):
++        try:
++            parsed = json.loads((r.stdout or "").strip().splitlines()[-1])
++            if isinstance(parsed, dict):
++                lock_status = parsed
++        except (ValueError, IndexError):
++            pass
++    lock_path = str(lock_status.get("lock_path", ""))[:300].replace("\n", " ").replace("\r", " ")
++    if lock_status.get("spawn_error") is True:
++        _role = _role_text(r)
++        _emit_updated(tool_input, prompt, SPAWN_ERROR_NOTE.format(lock=lock_path)
++                      + ("\n\n" + _role if _role else ""))
++        _debug("lumos dispatch-lens 本次背景未啟動,已附錯誤說明")
++        try:
++            import sys as _s2, pathlib as _p2
++            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
++            from _hookevent import mark as _mark
++            _mark("error", "lumos dispatch-lens 本次背景未啟動,附了說明行")
++        except Exception:
++            pass
++        return 0
++    if lock_status.get("lock_error") is True:
++        _role = _role_text(r)
++        _emit_updated(tool_input, prompt, LOCK_ERROR_NOTE.format(lock=lock_path)
++                      + ("\n\n" + _role if _role else ""))
++        _debug("lumos dispatch-lens 鎖無法建立,已附錯誤說明")
++        try:
++            import sys as _s2, pathlib as _p2
++            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
++            from _hookevent import mark as _mark
++            _mark("error", "lumos dispatch-lens 鎖無法建立,附了說明行")
++        except Exception:
++            pass
++        return 0
+     if r is None or r.returncode == 5:
+         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
+         what = rng or spec
+         # 兩條路的機制不同,說明也要不同(r2 通才席:共用那句對設計審是假話)
+-        _note = (TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng
+-                 else SPEC_TIMEOUT_NOTE.format(what=what))
++        _note = (LOCK_UNCERTAIN_NOTE.format(what=what, lock=lock_path)
++                 if lock_status.get("lock_uncertain") is True else
++                 TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng else
++                 SPEC_TIMEOUT_NOTE.format(what=what))
+         _role = _role_text(r) if r is not None else ""
+         _emit_updated(tool_input, prompt, _note + ("\n\n" + _role if _role else ""))
+-        _debug("lumos dispatch-lens 超時,已附超時說明行(那支仍在背景把快取算完)")
++        _debug("lumos dispatch-lens 超時或鎖狀態未知,已附對應說明行")
+         # ★吞掉逾時的地方要自己講一聲★(#19 r1 外家否決席 blocker):
+         # 這一條是「捕捉逾時 → 附說明 → 正常 return 0」,而 guard() 只看得到有沒有丟例外,
+         # 所以不講的話這次會被記成「成功跑完」——一支每次都逾時的 hook 會穩定顯示
+         # 「近期跑過 N 次」,正是這一批要防的假綠。
+         try:
+             import sys as _s2, pathlib as _p2
+             _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
+             from _hookevent import mark as _mark
+             _mark("timeout", "lumos dispatch-lens 逾時,附了說明行")
+         except Exception:
+diff --git a/scripts/lumos b/scripts/lumos
+index 9c426d06..1064ffac 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -14969,21 +14969,21 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
+             break
+     fields, _, new_lint = parse_frontmatter(new_fm_lines)
+     if not expected_check(fields):
+         raise RuntimeError(f"寫完讀回來檢查,{key} 的值跟要寫的不一樣,這次寫入不算成功")
+     introduced = set(new_lint) - orig_lint
+     if introduced:
+         raise RuntimeError("寫完讀回來檢查,發現欄位區塊多了會讀錯的寫法,這次寫入不算成功:" + "; ".join(sorted(introduced)))
+     _write_lf(path, text)   # 本身就是「寫暫存檔→原子換名」;原本外面再包一層固定檔名的暫存檔,兩層固定名互搶(r3)
+ 
+ 
+-_VAULT_LOCK_STALE_SEC = 30   # 一次筆記寫入不到一秒;鎖檔 30 秒還沒放掉,當成拿鎖的程序死了、原子接手
++_VAULT_LOCK_STALE_SEC = 30   # 舊介面參數;過期也不自動偷鎖(鎖內 PID 不是跨呼叫端的存活證明)
+ _VAULT_LOCK_HELD = {}         # 這個程序已經拿著的寫入鎖 → 巢狀呼叫直接過(可重入),不自己卡自己
+ 
+ 
+ _VAULT_LOCK_WARNED = {}        # 鎖的位置換過一次就別再唸(同一個程序內)
+ 
+ 
+ def _vault_lock_where(vault):
+     """這個筆記庫的寫入鎖該放哪、位置有沒有不對勁。回 (鎖檔路徑, 不對勁的原因|None)。
+ 
+     ★獨立一支,不是巢狀函式★(2026-09-16 推送前的新增告警閘擋下:算進外層之後超過複雜度
+@@ -15024,25 +15024,25 @@ def _vault_lock_say(lock, why):
+           f"這次改把鎖放在筆記庫自己裡面({lock.name}),功能不變,只是位置換了。",
+           file=sys.stderr)
+     print("  要回到原本的位置,先看那條路徑是誰建的:", file=sys.stderr)
+     print(f"    ls -ld {why[1]} {Path(why[1]).parent}", file=sys.stderr)
+ 
+ 
+ def _vault_write_lock(vault):
+     """同一個筆記庫的 set/append/remove 一次只讓一個程序做「讀—改—寫」(2026-09-10 代碼審 r3 併發資源席:
+     沒有鎖時,回報成功的項目會被同時跑的另一個程序蓋掉)。
+ 
+-    ★用專案既有的鎖檔做法★(_excl_lock_try:獨佔建鎖檔、寫程序編號、過期用換名原子接手;第四輪架構席:
+-    第三輪另開了一套 flock,是專案裡第二種鎖),搶不到就每 0.05 秒再試、最多 60 秒(RuntimeError)。
++    ★用專案既有的鎖檔做法★(_excl_lock_try:獨佔建鎖檔、寫程序編號;過期也不自動接手,
++    否則會雙持),搶不到就每 0.05 秒再試、最多 60 秒(RuntimeError)。
+     鎖檔放 ~/.cache/lumos/vault-lock/(照 dispatch-lens 快取的先例:不放共用暫存目錄——路徑可預測、會被別的使用者先佔)。
+     同一個程序巢狀拿同一把鎖直接過(第四輪:原本自己卡自己 60 秒,訊息還說「別的程序在寫」);
+-    鎖的資料夾建不起來就照寫,但會講一聲(第四輪:原本默默不上鎖)。"""
++    快取鎖目錄不可信時改用筆記庫內的鎖並提醒;該位置也無法建鎖則拒絕寫入。"""
+     import contextlib, time as _t
+ 
+     @contextlib.contextmanager
+     def _cm():
+         # ★「鎖放哪」必須在「這把鎖是不是自己已經拿著」之前決定★(2026-09-16 代碼審 r2):
+         # 排在後面的話,巢狀呼叫會拿舊路徑的鍵去查、查不到,內層卡滿 60 秒再拋
+         # 「別的程序正在寫」這句假訊息——那正是本函式說明裡「第四輪已修過」的舊坑
+         # 從退路分支重新長出來。現在決定位置是獨立一支,結構上不可能再排錯順序。
+         lock, why = _vault_lock_where(vault)
+         k = str(lock)
+@@ -15052,30 +15052,37 @@ def _vault_write_lock(vault):
+             try:
+                 yield
+             finally:
+                 _VAULT_LOCK_HELD[k] -= 1
+             return
+ 
+         if why and not _VAULT_LOCK_WARNED.get(k):
+             _VAULT_LOCK_WARNED[k] = True
+             _vault_lock_say(lock, why)
+         deadline = _t.monotonic() + 60
+-        while not _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC):
++        while True:
++            try:
++                acquired = _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC)
++            except OSError as exc:
++                raise RuntimeError(f"寫入鎖無法建立({lock}):{exc};請檢查鎖位置與檔案權限,檔案沒動") from exc
++            if acquired:
++                break
+             if _t.monotonic() > deadline:
+-                raise RuntimeError("等了 60 秒還輪不到寫入(同一個筆記庫有別的程序正在寫,或上一個寫入的程序卡住了),檔案沒動")
++                raise RuntimeError(f"等了 60 秒還輪不到寫入;鎖檔在 {lock}。可能有程序正在寫,"
++                                   "也可能是殘留鎖。請先確認相關程序都已停止,才可人工清鎖;檔案沒動")
+             _t.sleep(0.05)
+         _VAULT_LOCK_HELD[k] = 1
+         try:
+             yield
+         finally:
+             _VAULT_LOCK_HELD.pop(k, None)
+-            try:   # 只刪自己的鎖(過期被接手時,鎖檔已經是別人的)
++            try:   # 只刪自己的鎖(若檔名已被別的程序換入,不可刪它)
+                 if lock.read_text(encoding="utf-8").split("\n", 1)[0] == str(os.getpid()):
+                     lock.unlink()
+             except OSError:
+                 pass
+     return _cm()
+ 
+ 
+ def cmd_set(env, rel, key, value):
+     with _vault_write_lock(env.vault):
+         return _cmd_set_locked(env, rel, key, value)
+@@ -27507,21 +27514,21 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False):
+     root, vault_rel = _drift_vault_of(env)
+     head = ""
+     for ln in reversed(lines[:line]):
+         if ln.startswith("#"):
+             head = ln.lstrip("#").strip()
+             break
+     token = "DACK-" + secrets.token_hex(4)
+     rec = {"id": token, "path": f"{vault_rel}/{rel}", "text": lines[line - 1].strip(), "kind": kind,
+            "reason": reason.strip(), "date": datetime.date.today().isoformat(), "heading": head, "line": line}
+     if kind in _DRIFT_BOUND_KINDS:
+-        # 鎖外新建圖譜物件重判(大圖譜重建可能超過鎖的 30 秒接手線)
++        # 鎖外新建圖譜物件重判(縮短占鎖時間;過期已不再自動接手)
+         f, err = _drift_current_finding(Env(env.vault), rel, line, kind)
+         if err:
+             print(f"擋下:{err}", file=sys.stderr)
+             return 2
+         rec["related"] = sorted(nfc(str(x)) for x in f.get("related", []))
+     if dry_run:     # drift fix --kind c2 --keep --dry-run:判定做完、不拿鎖不寫(代碼審 r1 六席同報:原本照樣寫表態)
+         print(f"預覽(沒寫):會記一筆表態——{_esc_clean(rel, 200)} 第 {line} 行照留({_DRIFT_KIND_NAMES[kind]}),"
+               f"理由:{_esc_clean(reason.strip(), 200)}"
+               + (f";當時連著 {_esc_clean('、'.join(x[:-3] for x in rec['related']), 300)}" if rec.get("related") else ""))
+         return 0
+@@ -33123,21 +33130,21 @@ def _lens_cache_path(repo_root, base_sha, head_sha, extra=""):
+     # extra=表態記錄的 sha256(表態閘 S8):重表態之後舊快取自然 miss
+     key = hashlib.sha256(f"{os.path.realpath(str(repo_root))}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}|{extra}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
+     return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+ 
+ 
+ def _lens_cache_read(path, ttl_sec=1200):
+     """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
+     import json as _json, stat as _stat, time as _time
+     try:
+         st = path.stat()
+-        if st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH)):
++        if hasattr(os, "getuid") and (st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))):
+             return None
+         if _time.time() - st.st_mtime > ttl_sec:
+             return None
+         return _json.loads(path.read_text(encoding="utf-8"))
+     except (OSError, ValueError):
+         return None
+ 
+ 
+ def _lens_cache_write(path, data):
+     """★寫入端也要驗目錄★(2026-09-06 全 repo 審視 #6):原本直接 mkdir + chmod(0700),
+@@ -33815,138 +33822,241 @@ def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
+                     lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
+         else:
+             lines.append(f"- {it['rel']}(超出上限,只列名)")
+         if len(lines) >= max_lines:
+             lines.append("(已截:超過 400 行)")
+             break
+ 
+ 
+ 
+ _LENS_WARM_ENV = "LUMOS_LENS_WARMING"
+-# 鎖多久沒動就當它死了。★這個數字有依據★:實測單 commit 12 秒、41 檔 17.7 秒、
++# 鎖多久沒動就提醒「狀態未知」,不自動認定持有者已死。數字依據:實測單 commit 12 秒、41 檔 17.7 秒、
+ # 120 個 commit 137 秒;900 秒是最慢實測的 6.5 倍餘裕。
+ # 第一版寫 300——而 137 秒的範圍再大一點就會撞到,那時鎖會被誤判成死的(r2 外家席指出)。
+-# REVISIT:2026-12-07 若出現實際算超過 900 秒的範圍,這個數字要跟著調,或改成看行程還在不在
++# REVISIT:2026-12-07 若出現實際算超過 900 秒的範圍,重驗提醒門檻與背景工作身份；不可只看啟動者 PID
+ _LENS_LOCK_STALE_SEC = 900
+ 
+ 
+-def _excl_lock_try(lock, stale_sec):
+-    """獨佔建鎖檔(內容=程序編號+時間),搶到回 True、沒搶到回 False;專案裡唯一的一套鎖檔做法
+-    (dispatch-lens 的「同範圍只讓一個在算」與筆記庫寫入鎖 _vault_write_lock 共用;2026-09-10 從 dispatch-lens 抽出來)。
++def _excl_lock_record_identity(identity_out, identity):
++    """把建鎖時 fstat 的身份交給需要安全清理的呼叫端。"""
++    if identity_out is not None:
++        identity_out[:] = [identity]
++
+ 
+-    ★接手也要原子★(2026-09-07 代碼審 r2 外家席):第一版的過期判斷是
+-    「建不成 → 看鎖檔多舊 → 太舊就當它死了」,**但只是把 already 設成 False 就繼續往下派工,
+-    沒有真的把鎖換成自己的**。於是鎖一旦過期,同時進來的每一個呼叫者都會各自派一支去算
+-    (實測兩個呼叫者都判定要派工)。更糟的是先算完的那支會無條件刪掉鎖檔,
+-    可能刪掉另一支正在用的。
+-    現在:過期(比 stale_sec 舊)時用「換名字」的方式原子接手——只有真的把舊鎖搬走的那個人才算搶到。"""
++def _excl_lock_try(lock, stale_sec, identity_out=None):
++    """獨佔建鎖檔:取得回 True,鎖已存在回 False,其他建檔錯誤向外拋。
++
++    筆記庫與派工鏡頭共用。舊版按 mtime 判過期後 rename 的接手會發生 ABA:
++    後到者可搬走前到者的新鎖,兩者都回 True。更不能依鎖內 PID 接手:
++    派工鏡頭記的是短命啟動者 PID,背景工作可能仍活著。因此不自動接手既有鎖。
++    stale_sec 留作既有呼叫介面相容;兩個呼叫端可自行用其門檻作診斷,不得用來偷鎖。"""
+     import time as _t
++    lock.parent.mkdir(parents=True, exist_ok=True)
+     try:
+-        lock.parent.mkdir(parents=True, exist_ok=True)
+         fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+-        os.write(fd, f"{os.getpid()}\n{_t.time():.0f}".encode())
+-        os.close(fd)
+-        return True
+     except FileExistsError:
+-        pass
+-    except OSError:
+         return False
+-    # 鎖已存在:只有「明顯過期」才嘗試接手,而且接手本身必須是原子的
+-    try:
+-        if _t.time() - lock.stat().st_mtime < stale_sec:
+-            return False                      # 還新,別人在用
++    identity = None
++    closed = False
++    try:
++        own = os.fstat(fd)
++        identity = (own.st_dev, own.st_ino)
++        data = f"{os.getpid()}\n{_t.time():.0f}".encode()
++        while data:
++            n = os.write(fd, data)
++            if n <= 0:
++                raise OSError("寫入鎖檔時沒有前進")
++            data = data[n:]
++        closed = True                  # close 若報錯,不得重試不確定是否已關的 fd
++        os.close(fd)
++        _excl_lock_record_identity(identity_out, identity)  # 同一個 fd,不事後按路徑猜
++        return True
+     except OSError:
+-        return False
+-    stale = lock.with_name(lock.name + f".stale-{os.getpid()}")
++        if not closed:
++            try:
++                os.close(fd)
++            except OSError:
++                pass
++        # 正常競爭者不會刪半成品;若檔名已被換成別人的,不能清掉對方。
++        if identity is not None:
++            try:
++                now = lock.lstat()
++                if (now.st_dev, now.st_ino) == identity:
++                    lock.unlink()
++            except OSError:
++                pass
++        raise
++
++
++def _lens_report_lock_timeout(lock, diff_range, as_json):
++    """鎖可能是背景工作，也可能是殘留；超時只回可查證的狀態。"""
++    import json as _j2, time as _t
+     try:
+-        os.rename(str(lock), str(stale))      # ★原子★:同時兩個人只有一個 rename 得到
++        uncertain = _t.time() - lock.stat().st_mtime >= _LENS_LOCK_STALE_SEC
+     except OSError:
+-        return False                          # 別人先接手了
+-    try:
+-        stale.unlink()
++        uncertain = True
++    if as_json:
++        row = {"timed_out": True, "still_warming": not uncertain, "range": diff_range}
++        if uncertain:
++            row.update({"lock_uncertain": True, "lock_path": str(lock)})
++        print(_j2.dumps(row, ensure_ascii=False))
++    elif uncertain:
++        print(f"這次沒算完({diff_range});鎖狀態未知,請檢查鎖 {lock}。")
++        print("  鎖內 PID 是啟動者,不能只憑它已結束就刪鎖;先確認相關背景工作也已停止。")
++    else:
++        print(f"這次沒算完({diff_range});背景工作可能仍在算,稍後可再試快取。")
++        print("  為什麼在意:若背景工作已停,舊鎖需要人工確認後復原。")
++        print("  想拿結果就再敲一次:")
++        print(f"      lumos dispatch-lens {diff_range}")
++    return 5
++
++
++def _lens_spawn_warmer(lock, diff_range, repo, owned_identity):
++    """回 (啟動失敗,清鎖失敗);只清建鎖當下那一個 inode。"""
++    import subprocess as _sp
++    argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
++            "--json"] + (["--repo", str(repo)] if repo else [])
++    kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
++    if hasattr(os, "setsid"):
++        kw["start_new_session"] = True
++    env = dict(os.environ)
++    env[_LENS_WARM_ENV] = "1"
++    env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())
++    env["LUMOS_LENS_LOCK_NAME"] = lock.name
++    env["LUMOS_LENS_DISP_KEY"] = getattr(cmd_dispatch_lens, "_disp_key", "")
++    try:
++        _sp.Popen(argv, env=env, **kw)
+     except OSError:
+-        pass
+-    return _excl_lock_try(lock, stale_sec)     # 舊鎖清掉了,再正常搶一次
++        try:
++            now = lock.lstat()
++            if (now.st_dev, now.st_ino) == owned_identity:
++                lock.unlink()
++        except FileNotFoundError:
++            pass  # 本次鎖已被移除,不碰後來取得同名路徑的持有者。
++        except OSError:
++            return True, True
++        return True, False
++    return False, False
++
++
++def _lens_emit_cache_hit(got, as_json):
++    import json as _j2
++    got["cache_hit"] = True
++    print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
+ 
+ 
+-def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
++def _lens_report_spawn_error(lock, diff_range, as_json, cleanup_error):
++    """只報本次啟動失敗；同名鎖可能仍在或由別人接手。"""
++    import json as _j2
++    if as_json:
++        row = {"spawn_error": True, "lock_path": str(lock), "range": diff_range}
++        if cleanup_error:
++            row["lock_cleanup_error"] = True
++        print(_j2.dumps(row, ensure_ascii=False))
++    else:
++        print(f"本次背景未啟動({diff_range});請檢查鎖 {lock}。"
++              "同名鎖可能仍在或已由其他工作持有,不能直接刪。")
++        if cleanup_error:
++            print("本次鎖清理失敗;請檢查鎖位置與檔案權限。")
++    return 2
++
++
++def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline, warm_range=None):
+     """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
+ 
+     ★為什麼輸出要丟掉不是接管道★(2026-09-07 代碼審 r1 通才席實測):
+     接管道而沒人讀的話,輸出一多就卡在「寫不出去」,那支永遠算不完——
+     「它會自己把快取寫好」這個宣稱直接失效。實測輸出 300KB 時三秒後仍沒做完。
+     丟到 devnull 就沒有這個問題,而且我們本來就不需要它的輸出(要的是快取)。
+ 
+     ★為什麼開獨立行程組★:不然 hook 那一組被收掉時會把它一起帶走,等於還是白算。
+ 
+     ★同範圍只讓一個在算★:用一個帶行程編號的鎖檔,已經有人在算就不再派第二個
+     (並行派工時 N 席同時進來,不加這道會派出 N 個算同一件事的行程)。
+     """
+-    import subprocess as _sp, time as _t, json as _j2
++    import time as _t, json as _j2
+ 
+     # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
+     # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
+     lock = cpath.with_name(cpath.name + ".warming")
+ 
++    owned_identity = []
+     def _take_lock():
+-        """搶到鎖回 True(該由我派工),沒搶到回 False(已經有人在算)。做法見 _excl_lock_try。"""
+-        return _excl_lock_try(lock, _LENS_LOCK_STALE_SEC)
++        """搶到鎖回 True(該由我派工),已存在回 False(工作可能仍在算或鎖已殘留)。"""
++        return _excl_lock_try(lock, _LENS_LOCK_STALE_SEC, identity_out=owned_identity)
+ 
+-    already = not _take_lock()
++    try:
++        already = not _take_lock()
++    except OSError as exc:
++        if as_json:
++            print(_j2.dumps({"lock_error": True, "lock_path": str(lock), "range": diff_range,
++                             "reason": str(exc)}, ensure_ascii=False))
++        else:
++            print(f"鎖無法建立({lock}):{exc}。請檢查鎖位置與檔案權限。")
++        return 2
+ 
+     if not already:
+-        argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
+-                "--json"] + (["--repo", str(repo)] if repo else [])
+-        kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
+-        if hasattr(os, "setsid"):
+-            kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
+-        env = dict(os.environ)
+-        env[_LENS_WARM_ENV] = "1"
+-        env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())   # 背景那支據此只刪自己這把鎖
+-        env["LUMOS_LENS_DISP_KEY"] = getattr(cmd_dispatch_lens, "_disp_key", "")   # 同一把快取 key(r1 併發席 f7)
+-        try:
+-            _sp.Popen(argv, env=env, **kw)
+-        except OSError:
+-            try:
+-                lock.unlink()
+-            except OSError:
+-                pass
++        spawn_error, cleanup_error = _lens_spawn_warmer(
++            lock, warm_range or diff_range, repo, owned_identity[0])
++        if spawn_error:
++            if not cleanup_error:
++                got = _lens_cache_read(cpath)
++                if got is not None:
++                    _lens_emit_cache_hit(got, as_json)
++                    return 0
++            return _lens_report_spawn_error(lock, diff_range, as_json, cleanup_error)
+ 
+     # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
+     # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
+     end = _t.monotonic() + float(deadline)
+     while _t.monotonic() < end:
+         got = _lens_cache_read(cpath)
+         if got is not None:
+-            try:
+-                lock.unlink()
+-            except OSError:
+-                pass
+-            got["cache_hit"] = True
+-            print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
++            # 等待端只讀快取:即使起初搶到鎖,啟動失敗後也可能被別人換入新鎖。
++            # 正常背景工作會核對啟動者再清自己的鎖;等待端不能按舊取得狀態刪路徑。
++            _lens_emit_cache_hit(got, as_json)
+             return 0
+         _t.sleep(0.1)
+-    # 到時間了:那支還在背景算。印一行機器讀得懂的說明,讓 hook 照它自己的格式轉述。
+-    # ★非 JSON 模式也要講人話★(2026-09-07 代碼審 r2 兩席都提):第一版只印一個空行,
+-    #   人手動敲這個指令時完全看不出發生什麼事,違反「發生什麼→為何在意→下一步」的慣例。
+-    if as_json:
+-        print(_j2.dumps({"timed_out": True, "still_warming": True, "range": diff_range},
+-                        ensure_ascii=False))
+-    else:
+-        print(f"這次沒算完({diff_range}),但沒有白算——有一支在背景把它算完並寫進快取。")
+-        print("  為什麼在意:下一次同一個範圍就直接拿得到,不必再等。")
+-        print(f"  想拿結果就再敲一次(算完之前會再回這句):")
+-        print(f"      lumos dispatch-lens {diff_range}")
+-    return 5
++    # ★非 JSON 模式也要講人話★:第一版只印空行,手動敲時完全不知下一步。
++    return _lens_report_lock_timeout(lock, diff_range, as_json)
++
++
++def _lens_release_owned_lock():
++    """背景程序只釋放派工端指定、仍寫著該派工端 PID 的私有快取鎖。"""
++    if os.environ.get(_LENS_WARM_ENV) != "1":
++        return
++    owner = os.environ.get("LUMOS_LENS_LOCK_OWNER")
++    name = os.environ.get("LUMOS_LENS_LOCK_NAME", "")
++    if not owner or not re.fullmatch(r"[0-9a-f]{64}\.json\.warming", name):
++        return
++    cache_dir = Path.home() / ".cache" / "lumos" / "dispatch-lens"
++    if not _trusted_private_dir(cache_dir, ".cache", "lumos", "dispatch-lens"):
++        return
++    lock = cache_dir / name
++    try:
++        if lock.is_symlink():
++            return
++        if lock.read_text(encoding="utf-8").split("\n", 1)[0].strip() == owner:
++            lock.unlink()
++    except (OSError, UnicodeError):
++        pass
+ 
+ 
+ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None, role_cards=False):
++    """讓受託暖機的所有離場路徑共用唯一清鎖點。"""
++    try:
++        return _cmd_dispatch_lens_impl(diff_range, repo, as_json, no_cache, cap, max_lines, deadline, role_cards)
++    finally:
++        _lens_release_owned_lock()
++
++
++def _cmd_dispatch_lens_impl(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None, role_cards=False):
+     """派工鏡頭入口。role_cards=True(掛鉤看到派工詞有 LUMOS-ROLE-CARDS: on 才傳):先算角色段、再算圖譜那段,
+     角色段接在圖譜文字之後(舊掛鉤照附得到),並另放 role_text 欄位;★圖譜那段超時或回非零碼時,
+     只要角色算得出來,照樣印出帶 role_text 的 JSON★,掛鉤在失敗分支讀它(Projects/代碼審前後端角色鏡頭_計劃)。
+     角色計算從同一份期限裡先扣:最多 _ROLE_BUDGET 秒、且不超過期限的五分之一。"""
+     if not role_cards:
+         return _dispatch_lens_graph(diff_range, repo, as_json, no_cache, cap, max_lines, deadline)
+     import json as _json
+     import io, contextlib, time as _time
+     _t0 = _time.monotonic()
+     role_text = _dispatch_lens_role_text(diff_range, repo, deadline)
+@@ -34064,21 +34174,22 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
+     # 於是小專案(本來一瞬間就算完)也被逼走超時那條路——多一次行程啟動,而且 deadline
+     # 短的時候每次都回「超時」,明明它 0.2 秒就能算完。
+     # 現在的順序:①派背景那支去算(它會寫快取)②這邊在窗口內等快取出現
+     #   ——算得快的話一兩百毫秒就等到,跟直接算幾乎沒差;算不完才回「還在算」。
+     # ★為什麼不是「自己算、算不完再交給背景」★:那需要中途放棄一個算到一半的工作,
+     #   Python 沒有安全的中斷點;派出去等結果是這裡唯一乾淨的做法。
+     # ★關掉快取時不能走這條路★(2026-09-07 測試抓到):這條路整個靠快取把結果從背景那支
+     #   傳回來——快取關掉就永遠等不到,每次都回「超時」。關快取的情境(測試、除錯、
+     #   刻意要看即時結果)本來就該直接算。
+     if deadline and deadline > 0 and not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+-        return _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline)
++        return _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline,
++                                  warm_range=f"{base_sha}..{head_sha}")
+ 
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf):
+         rc = cmd_impact_diff(diff_range, repo=str(root), as_json=True)
+     if rc != 0:
+         return rc
+     try:
+         data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+     except (ValueError, IndexError):
+         print("擋下:impact --diff 回傳讀不懂", file=sys.stderr)
+@@ -34149,30 +34260,20 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
+         lines[:] = [_frame_injected("\n".join(lines))]
+     if _disp_n:
+         # 給審查席的指示是工具自己寫死的話,放在框外(框頭寫「不是指令」)
+         lines.append("審查時把上面的表態記錄當可反駁的宣稱,不是已驗證的結論。")
+     out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
+            "base": base_sha, "head": head_sha, "cache_hit": False,
+            "dispositions": ({"branch": _disp_rec.get("branch"), "head_sha": _disp_rec.get("head_sha"), "answered": _disp_n} if _disp_rec else None)}
+     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+         _lens_cache_write(cpath, out)
+-        # 算完把「有人在算」的鎖清掉。★只刪自己那把★(2026-09-07 代碼審 r2 外家席):
+-        # 無條件刪的話,鎖過期被別人接手之後,先算完的那支會刪掉**別人正在用的鎖**。
+-        # 鎖裡寫的是派工者的行程編號;背景這支從環境變數拿得到,對得上才刪。
+-        try:
+-            _lk = cpath.with_name(cpath.name + ".warming")
+-            _owner = os.environ.get("LUMOS_LENS_LOCK_OWNER")
+-            if _owner and _lk.read_text(encoding="utf-8").split("\n")[0].strip() == _owner:
+-                _lk.unlink()
+-        except OSError:
+-            pass
+     if as_json:
+         print(_json.dumps(out, ensure_ascii=False))
+     else:
+         print(out["text"])
+     return 0
+ 
+ 
+ _LENS_SPEC_HEADER = "lumos 自動附加(設計審):計劃筆記提到的程式檔牽連的固定席節點 + 計劃直接連結的節點(從工作樹讀,只供參考)"
+ _LENS_SPEC_CODE_RE = re.compile(r"(?<![\w/])((?:scripts|governance|skills|src|app|lib)/[A-Za-z0-9_./\-]+)")
+ _LENS_SPEC_MAX_FILES = 5
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c83e0a26..3559ebad 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -2064,21 +2064,21 @@ def t_concurrent_append_same_note():
+         with m._vault_write_lock(v):
+             pass
+     check("③巢狀拿同一把鎖不卡住", _time.monotonic() - t0 < 5, f"{_time.monotonic() - t0:.1f}s")
+     # ④ 鎖的資料夾建不起來:照寫,但要講一聲(第四輪併發資源席:原本默默不上鎖)
+     fake_home = v.parent / "home-is-a-file"
+     fake_home.write_text("x", encoding="utf-8")
+     import os as _os2
+     r4 = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "append", "F", "tags", "z"],
+                 capture_output=True, text=True, env={**_os2.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)})
+     check("④鎖的資料夾建不起來也照寫、而且講一聲", r4.returncode == 0 and "- z" in read(p2) and "鎖" in r4.stderr, r4.stderr[-300:])
+-    # ⑤ 鎖是跟專案既有的同一套(建鎖檔+過期接手),不是另一套機制(第四輪架構席)
++    # ⑤ 鎖是跟專案既有的同一套(獨佔建鎖檔;過期不再自動接手),不是另一套機制(第四輪架構席)
+     import inspect as _insp
+     src_lock = _insp.getsource(m._vault_write_lock)
+     check("⑤寫入鎖用專案既有的鎖檔做法(_excl_lock_try),沒有另開 flock/msvcrt", "_excl_lock_try" in src_lock
+           and "fcntl" not in src_lock and "msvcrt" not in src_lock, "")
+ 
+ 
+ def t_write_lf_keeps_normal_permissions():
+     """_write_lf 寫出來的檔權限要跟一般建檔一樣(受 umask 管),原本就有的檔保留原權限(例如 +x)。
+     2026-09-10 代碼審 r4 併發資源席:第三輪為了把暫存檔權限調回來,讀 umask 的寫法會短暫改掉整個程序的 umask,
+     多執行緒時別的執行緒建的檔會拿到錯的權限。現在不碰 umask。"""
+@@ -16297,22 +16297,23 @@ def t_lens_timeout_keeps_warming_cache():
+ 
+     這支驗的是行為:真的用 lumos 跑一個算不完的範圍,看
+     ①有沒有在期限內回「還在算」②背景那支有沒有活著把快取寫完 ③鎖有沒有自己清掉。"""
+     import subprocess as _sp, time as _t, json as _j, os as _os
+     m = _load_lumos()
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     if not (repo / ".git").exists():
+         raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
+ 
+     def sha(ref):
+-        r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
+-        return r.stdout.strip()
++        r = _sp.run(["git", "-C", str(repo), "rev-parse", "--verify", ref + "^{commit}"],
++                    capture_output=True, text=True)
++        return r.stdout.strip() if r.returncode == 0 else ""
+ 
+     # ★怎麼讓它一定超時,又不必挑一個「算很久」的範圍★(2026-09-07 CI 紅了一次之後改)
+     # 舊寫法是「挑 HEAD~12 這種算不完 1.5 秒的範圍」。問題是**那個範圍的成本會隨著
+     # repo 長大而變**:寫的當天本機 90 秒上限還很寬,兩天後同一個範圍本機就要 55 秒,
+     # CI 上超過等它的 60 秒,於是 CI 紅——而紅的原因不是機制壞,是我拿「算多久」當開關。
+     # 現在改成:範圍挑最小的(算一兩秒),**開關改用期限本身**(0.05 秒,光是把子行程
+     # 生出來就不只這個數)。這樣「一定會超時」跟 repo 多大完全無關。
+     #
+     # ★但範圍的兩端必須都在「主線」上★(2026-09-07 代碼審 r1 通才席判 blocker):
+     # 鏡頭只信主線可達的起點,而它認的主線是**已經推上去的**那條(main@{upstream}),
+@@ -54364,12 +54365,786 @@ def t_drift_fix_c5_completes_settle():
+     check("②修復帳記下用了哪一支測試", rows and rows[-1]["kind"] == "c5" and rows[-1]["test"] == "t_refund", str(rows))
+     check("②c5、c1 都消失", not _df_find(v, "c5", "Verification/G.md") and not _df_find(v, "c1", "Verification/G.md"), "")
+     fs2 = _df_find(v, "c5", "Verification/G2.md")
+     raw2 = (V / "G2.md").read_bytes()
+     rc, out = _df_fix(v, "Verification/G2", str(fs2[0]["line"]) if fs2 else "3", "--kind", "c5")
+     check("③家節點同時有預告行與正式行:回 2、說先手動刪預告行", fs2 and rc == 2 and "先手動刪掉預告行" in out
+           and (V / "G2.md").read_bytes() == raw2 and (v / "Systems" / "Pay.md").read_bytes() == pay, out)
+     check("④跟 settle 第二步同一支算內容(_guard_settle_record_lines)", len(calls) == 1, str(len(calls)))
+ 
+ 
++def t_excl_lock_stale_takeover_is_single_owner():
++    """S1: 在兩個真程序間釘住舊版 stat→rename 的 ABA 交錯。"""
++    import os as _os
++    import subprocess as _sp
++    import time as _time
++    import json as _json
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        lock = root / "race.lock"
++        lock.write_text("99999999\n0", encoding="utf-8")
++        old = _time.time() - 1200
++        _os.utime(lock, (old, old))
++        ready, go = root / "ready", root / "go"
++        code = '''import importlib.util, json, os, sys, time
++from pathlib import Path
++from importlib.machinery import SourceFileLoader
++src, lock, ready, go = map(Path, sys.argv[1:])
++spec = importlib.util.spec_from_file_location("lock_child", str(src), loader=SourceFileLoader("lock_child", str(src)))
++m = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(m)
++stat = Path.stat
++def paused(self, *args, **kwargs):
++    value = stat(self, *args, **kwargs)
++    if self == lock:
++        ready.write_text("ready")
++        for _ in range(500):
++            if go.exists():
++                break
++            time.sleep(.01)
++        else:
++            raise TimeoutError("parent did not release stat")
++    return value
++Path.stat = paused
++print(json.dumps({"pid": os.getpid(), "acquired": m._excl_lock_try(lock, 900)}))
++'''
++        child = _sp.Popen([sys.executable, "-c", code, GRAPHCTL, str(lock), str(ready), str(go)],
++                          stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
++        try:
++            reached = False
++            for _ in range(500):
++                if ready.exists():
++                    reached = True
++                    break
++                if child.poll() is not None:
++                    break
++                _time.sleep(.01)
++            parent_acquired = m._excl_lock_try(lock, 900)
++            go.write_text("go")
++            out, err = child.communicate(timeout=8)
++        finally:
++            go.write_text("go")
++            if child.poll() is None:
++                child.kill()
++                child.communicate(timeout=8)
++        check("過期鎖 S1 前置:舊碼到達 stat 間隙或新碼直接拒絕", reached or child.returncode == 0,
++              f"rc={child.returncode} err={err}")
++        result = _json.loads(out) if child.returncode == 0 else {}
++        check("過期鎖 S1 前置:競爭者是不同 PID", result.get("pid") not in (None, _os.getpid()), str(result))
++        check("過期鎖 S1:兩程序都拒絕接手且舊鎖不變",
++              parent_acquired is False and result.get("acquired") is False
++              and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
++              f"parent={parent_acquired} child={result} lock={lock.read_text() if lock.exists() else 'missing'} err={err}")
++
++
++def t_excl_lock_existing_is_not_stolen():
++    """S2: 無法證明持有者已停時，不按年齡或 PID 偷鎖。"""
++    import os as _os
++    import time as _time
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        old = _time.time() - 1200
++        for name, pid in (("live", _os.getpid()), ("dead", 99999999)):
++            lock = root / f"{name}.lock"
++            value = f"{pid}\n0"
++            lock.write_text(value, encoding="utf-8")
++            _os.utime(lock, (old, old))
++            got = m._excl_lock_try(lock, 900)
++            check(f"過期鎖 S2:{name} PID 的舊鎖保留", got is False and lock.read_text(encoding="utf-8") == value,
++                  f"got={got} content={lock.read_text(encoding='utf-8')!r}")
++        target = root / "target"
++        target.write_text("untouched", encoding="utf-8")
++        link = root / "link.lock"
++        try:
++            link.symlink_to(target)
++        except (OSError, NotImplementedError):
++            if _os.name != "nt":
++                raise
++        else:
++            got = m._excl_lock_try(link, 900)
++            check("過期鎖 S2:符號連結與目標均不動", got is False and link.is_symlink() and target.read_text() == "untouched", str(got))
++        fresh = root / "fresh.lock"
++        first, second = m._excl_lock_try(fresh, 900), m._excl_lock_try(fresh, 900)
++        check("過期鎖 S2:正常獨佔建檔", first is True and second is False, f"{first=} {second=}")
++
++
++def t_excl_lock_creation_failure_cleans_own_file():
++    """S3: 短寫補齊，寫失敗只清自己新建的半成品。"""
++    import os as _os
++
++    m = _load_lumos_module()
++    real_write = _os.write
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        short = root / "short.lock"
++
++        def one_byte(fd, data):
++            return real_write(fd, data[:1])
++
++        m.os.write = one_byte
++        try:
++            got = m._excl_lock_try(short, 900)
++        finally:
++            m.os.write = real_write
++        content = short.read_text(encoding="utf-8") if short.exists() else ""
++        check("過期鎖 S3:短寫不得宣稱已寫完", got is True and content.startswith(str(_os.getpid()) + "\n"),
++              f"got={got} content={content!r}")
++
++        failed = root / "failed.lock"
++
++        def no_space(fd, data):
++            raise OSError(28, "injected full disk")
++
++        m.os.write = no_space
++        raised = False
++        try:
++            m._excl_lock_try(failed, 900)
++        except OSError:
++            raised = True
++        finally:
++            m.os.write = real_write
++        check("過期鎖 S3:寫失敗回真錯誤且不留自己空鎖", raised and not failed.exists(),
++              f"raised={raised} exists={failed.exists()}")
++
++        replaced = root / "replaced.lock"
++
++        def other_owner(fd, data):
++            replaced.unlink()
++            replaced.write_text("OTHER", encoding="utf-8")
++            raise OSError(28, "injected replacement")
++
++        m.os.write = other_owner
++        try:
++            try:
++                m._excl_lock_try(replaced, 900)
++            except OSError:
++                pass
++        finally:
++            m.os.write = real_write
++        check("過期鎖 S3:失敗清理不刪他人換入的鎖", replaced.read_text(encoding="utf-8") == "OTHER",
++              replaced.read_text(encoding="utf-8"))
++
++        denied = root / "denied.lock"
++        real_open = _os.open
++
++        def deny(path, flags, mode=0o777, **kwargs):
++            if str(path) == str(denied):
++                raise PermissionError(13, "injected permission denied")
++            return real_open(path, flags, mode, **kwargs)
++
++        m.os.open = deny
++        raised = False
++        try:
++            m._excl_lock_try(denied, 900)
++        except PermissionError:
++            raised = True
++        finally:
++            m.os.open = real_open
++        check("過期鎖 S3:無權限與鎖已存在分開報", raised and not denied.exists(), str(raised))
++
++
++def t_vault_stale_lock_fails_with_path():
++    """S3: 殘留鎖不能讓筆記庫無限等待，也要說出可查核的位置。"""
++    import os as _os
++    import time as _time
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        home, vault = root / "home", root / "vault"
++        home.mkdir()
++        vault.mkdir()
++        old_home = _os.environ.get("HOME")
++        real_monotonic = _time.monotonic
++        _os.environ["HOME"] = str(home)
++        try:
++            lock, _ = m._vault_lock_where(vault)
++            lock.parent.mkdir(parents=True, exist_ok=True)
++            lock.write_text("99999999\n0", encoding="utf-8")
++            old = _time.time() - 1200
++            _os.utime(lock, (old, old))
++            ticks = iter((0, 61))
++            _time.monotonic = lambda: next(ticks, 61)
++            try:
++                with m._vault_write_lock(vault):
++                    pass
++                message = ""
++            except RuntimeError as exc:
++                message = str(exc)
++            finally:
++                _time.monotonic = real_monotonic
++            check("過期鎖 S3 前置:筆記庫入口真的走到等待上限", "60 秒" in message, message)
++            check("過期鎖 S3:指出鎖位置與人工查核", str(lock) in message and "確認" in message,
++                  message)
++            content = lock.read_text(encoding="utf-8") if lock.exists() else "<鎖已被移除>"
++            check("過期鎖 S3:拒絕寫入且原鎖保留", content == "99999999\n0", content)
++            started = _time.monotonic()
++            with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")):
++                try:
++                    with m._vault_write_lock(vault):
++                        pass
++                    permission_message = ""
++                except RuntimeError as exc:
++                    permission_message = str(exc)
++            check("過期鎖 S4:建鎖失敗立即回真錯誤", "無法建立" in permission_message
++                  and str(lock) in permission_message and _time.monotonic() - started < 2,
++                  permission_message)
++        finally:
++            if old_home is None:
++                _os.environ.pop("HOME", None)
++            else:
++                _os.environ["HOME"] = old_home
++
++
++def t_lens_stale_lock_reports_uncertainty():
++    """S4: 舊派工鎖不能自動偷，也不能假稱背景工作一定仍活著。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    import time as _time
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        cache = root / "cache.json"
++        lock = root / "cache.json.warming"
++        lock.write_text("99999999\n0", encoding="utf-8")
++        old = _time.time() - m._LENS_LOCK_STALE_SEC - 10
++        _os.utime(lock, (old, old))
++        out = _io.StringIO()
++        with _mock.patch("subprocess.Popen") as spawn, _ctx.redirect_stdout(out):
++            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
++        result = _json.loads(out.getvalue())
++        check("過期鎖 S4 前置:確實走到派工鏡頭超時", rc == 5 and result.get("timed_out") is True,
++              out.getvalue())
++        check("過期鎖 S4:舊鎖不啟動第二支", spawn.call_count == 0 and lock.read_text() == "99999999\n0",
++              f"spawn={spawn.call_count} lock={lock.read_text() if lock.exists() else 'missing'}")
++        check("過期鎖 S4:超時只報狀態未知", result.get("lock_uncertain") is True and result.get("still_warming") is not True,
++              out.getvalue())
++
++        cached = _io.StringIO()
++        with _mock.patch.object(m, "_lens_cache_read", return_value={"text": "ready"}), \
++                _ctx.redirect_stdout(cached):
++            cached_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
++        check("過期鎖 S5:非持有者見快取也不能刪別人的鎖",
++              cached_rc == 0 and lock.exists() and lock.read_text(encoding="utf-8") == "99999999\n0",
++              f"rc={cached_rc} lock={lock.read_text() if lock.exists() else 'missing'}")
++
++        lock.unlink()
++        replacement = {"acquired": False}
++        def cache_after_failed_spawn(_path):
++            replacement["acquired"] = m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC)
++            return {"text": "ready"}
++        switched = _io.StringIO()
++        with _mock.patch("subprocess.Popen", side_effect=OSError("spawn failed")), \
++                _mock.patch.object(m, "_lens_cache_read", side_effect=cache_after_failed_spawn), \
++                _ctx.redirect_stdout(switched):
++            switched_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
++        check("過期鎖 S5:啟動失敗後新持有者的鎖不能被舊等待端刪除",
++              switched_rc == 0 and replacement["acquired"] is True and lock.exists(),
++              f"rc={switched_rc} acquired={replacement['acquired']} lock={lock.exists()}")
++
++        hook = _load_hook_mod("stale_lens_hook", "dispatch-lens-hook.py")
++        response = type("Response", (), {"returncode": 5, "stdout": _json.dumps(result), "stderr": ""})()
++        payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
++        rendered = _io.StringIO()
++        with _mock.patch.object(hook.subprocess, "run", return_value=response), \
++                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
++                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
++                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
++                _ctx.redirect_stdout(rendered):
++            hook_rc = hook.main()
++        check("過期鎖 S4:派工 hook 傳達需查鎖", hook_rc == 0 and "狀態未知" in rendered.getvalue() and "檢查鎖" in rendered.getvalue(),
++              rendered.getvalue())
++
++        error_output = _io.StringIO()
++        with _mock.patch.object(m, "_excl_lock_try", side_effect=PermissionError(13, "injected")), \
++                _ctx.redirect_stdout(error_output):
++            try:
++                error_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
++            except PermissionError:
++                error_rc = None
++        try:
++            error_data = _json.loads(error_output.getvalue())
++        except ValueError:
++            error_data = {}
++        check("過期鎖 S5:建鎖錯誤有獨立 rc 與鎖位置", error_rc == 2 and error_data.get("lock_error") is True
++              and error_data.get("lock_path") == str(lock), f"rc={error_rc} data={error_data}")
++
++        error_response = type("Response", (), {"returncode": 2,
++                              "stdout": _json.dumps({"lock_error": True, "lock_path": str(lock), "range": "a..b"}),
++                              "stderr": ""})()
++        rendered = _io.StringIO()
++        mark = _mock.Mock()
++        with _mock.patch.object(hook.subprocess, "run", return_value=error_response), \
++                _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
++                _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
++                _mock.patch.dict(sys.modules, {"_hookevent": type("Event", (), {"mark": mark})}), \
++                _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(root)}), \
++                _ctx.redirect_stdout(rendered):
++            hook_rc = hook.main()
++        check("過期鎖 S5:派工 hook 傳達建鎖失敗", hook_rc == 0 and "鎖無法建立" in rendered.getvalue()
++              and str(lock) in rendered.getvalue(), rendered.getvalue())
++        check("過期鎖 S5:吞下建鎖失敗後事件帳不可記成成功",
++              mark.call_count == 1 and mark.call_args.args[0] == "error", str(mark.call_args_list))
++
++
++def t_lens_warmer_cache_hit_releases_owned_lock():
++    """背景程序即使一進場就讀到快取，也要釋放派工端交給它的鎖。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    import subprocess as _sp
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    base, head = "a" * 40, "b" * 40
++    with tempfile.TemporaryDirectory() as d:
++        home = Path(d)
++        repo = home / "repo"
++        repo.mkdir()
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        with _mock.patch.object(Path, "home", return_value=home):
++            cpath = m._lens_cache_path(repo, base, head)
++        lock = cpath.with_name(cpath.name + ".warming")
++        lock.write_text("123\n0", encoding="utf-8")
++
++        def git(_root, *args, **_kw):
++            if args[:2] == ("rev-parse", "--show-toplevel"):
++                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
++            return _sp.CompletedProcess(args, 0, "", "")
++
++        out = _io.StringIO()
++        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
++               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "_lens_git", side_effect=git), \
++                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
++                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
++                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
++                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
++                _mock.patch.object(m, "_lens_cache_read", return_value={"text": "cached"}), \
++                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
++            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
++        result = _json.loads(out.getvalue())
++        check("背景快取命中前置:確實走到快取早退", rc == 0 and result.get("cache_hit") is True,
++              out.getvalue())
++        check("背景快取命中:清掉本次受託的鎖", not lock.exists(), str(lock))
++
++
++def t_lens_warmer_ref_move_keeps_lock_identity():
++    """符號 ref 移動後仍傳固定 SHA；同 PID 不同範圍及錯誤身份不得被清。"""
++    import os as _os
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    stable = "a" * 40 + ".." + "b" * 40
++    with tempfile.TemporaryDirectory() as d:
++        home = Path(d)
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        own = cache_dir / ("a" * 64 + ".json.warming")
++        other = cache_dir / ("b" * 64 + ".json.warming")
++        own.write_text("123\n0", encoding="utf-8")
++        other.write_text("123\n0", encoding="utf-8")
++        env = {"LUMOS_LENS_LOCK_OWNER": "123", "LUMOS_LENS_LOCK_NAME": own.name}
++
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0), \
++                _mock.patch.dict(_os.environ, env):
++            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: ""}):
++                m.cmd_dispatch_lens("a..b")
++            check("鎖身份:一般呼叫不清鎖", own.exists(), str(own))
++            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "999"}):
++                m.cmd_dispatch_lens("a..b")
++            check("鎖身份:PID 不符不清鎖", own.exists(), str(own))
++            with _mock.patch.dict(_os.environ, {m._LENS_WARM_ENV: "1"}):
++                m.cmd_dispatch_lens("a..b")
++            check("鎖身份:同 PID 另一範圍不被清", not own.exists() and other.exists(),
++                  f"own={own.exists()} other={other.exists()}")
++
++        with _mock.patch("subprocess.Popen") as spawn, \
++                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
++                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
++            rc = m._lens_wait_or_warm(home, own.with_suffix(""), "main~1..moving-ref", home,
++                                      True, 0, warm_range=stable)
++        argv = spawn.call_args.args[0] if spawn.call_args else []
++        child_env = spawn.call_args.kwargs.get("env", {}) if spawn.call_args else {}
++        check("鎖身份:派工後 ref 可移動但子程序使用固定 SHA 與原鎖名稱",
++              rc == 5 and len(argv) > 3 and argv[3] == stable and
++              child_env.get("LUMOS_LENS_LOCK_NAME") == own.with_suffix("").name + ".warming",
++              f"argv={argv} lock={child_env.get('LUMOS_LENS_LOCK_NAME')}")
++
++        import subprocess as _sp
++        base_sha, head_sha = stable.split("..")
++        def git(_root, *args, **_kw):
++            if args[:2] == ("rev-parse", "--show-toplevel"):
++                return _sp.CompletedProcess(args, 0, str(home) + "\n", "")
++            return _sp.CompletedProcess(args, 0, "", "")
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(m, "_lens_git", side_effect=git), \
++                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
++                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"main~1": base_sha, "moving-ref": head_sha}[ref]), \
++                _mock.patch.object(m, "_mainline_ref", return_value=("main", head_sha)), \
++                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
++                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
++                _mock.patch.object(m, "_lens_wait_or_warm", return_value=5) as wait:
++            parent_rc = m.cmd_dispatch_lens("main~1..moving-ref", repo=str(home), deadline=1)
++        check("鎖身份:真正派工入口把已解析 SHA 交給背景等待段",
++              parent_rc == 5 and wait.call_args.kwargs.get("warm_range") == stable,
++              str(wait.call_args))
++
++
++def t_lens_cache_read_without_getuid():
++    """快取讀取沿用私有目錄的平台分支，POSIX 仍檢查擁有者與權限。"""
++    import json as _json
++    import os as _os
++    import types as _types
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        p = Path(d) / "cache.json"
++        p.write_text(_json.dumps({"text": "cached"}), encoding="utf-8")
++        without_uid = _types.SimpleNamespace(**{k: v for k, v in vars(_os).items() if k != "getuid"})
++        with _mock.patch.object(m, "os", without_uid):
++            got = m._lens_cache_read(p)
++        check("Windows 分支:沒有 getuid 仍可讀合法快取", got == {"text": "cached"}, str(got))
++        if hasattr(_os, "getuid"):
++            with _mock.patch.object(m.os, "getuid", return_value=_os.getuid() + 1):
++                foreign = m._lens_cache_read(p)
++            p.chmod(0o666)
++            writable = m._lens_cache_read(p)
++            check("POSIX 分支:不信非自己擁有或他人可寫的快取",
++                  foreign is None and writable is None, f"foreign={foreign} writable={writable}")
++
++
++def t_lens_warmer_cache_ttl_retries():
++    """早退清鎖後，過期快取不能阻止下一次暖機取得同名鎖。"""
++    import os as _os
++    import time as _time
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        home = Path(d)
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        cpath = cache_dir / ("c" * 64 + ".json")
++        lock = cpath.with_name(cpath.name + ".warming")
++        lock.write_text("123\n0", encoding="utf-8")
++        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
++               "LUMOS_LENS_LOCK_NAME": lock.name}
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.dict(_os.environ, env), \
++                _mock.patch.object(m, "_cmd_dispatch_lens_impl", return_value=0):
++            m.cmd_dispatch_lens("a..b")
++        cpath.write_text('{"text":"old"}', encoding="utf-8")
++        old = _time.time() - 1300
++        _os.utime(cpath, (old, old))
++        with _mock.patch("subprocess.Popen") as spawn, \
++                _mock.patch.object(m, "_lens_report_lock_timeout", return_value=5):
++            rc = m._lens_wait_or_warm(home, cpath, "a..b", home, True, 0)
++        check("過期快取:舊鎖已清、下一次可取得鎖並派暖機",
++              rc == 5 and lock.exists() and spawn.call_count == 1,
++              f"rc={rc} lock={lock.exists()} spawn={spawn.call_count}")
++
++
++def t_lens_warmer_error_exit_releases_owned_lock():
++    """impact、JSON、base 樹失敗與未預期例外，都保留原錯誤並釋放背景鎖。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    import subprocess as _sp
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    base, head = "a" * 40, "b" * 40
++    with tempfile.TemporaryDirectory() as d:
++        home = Path(d)
++        repo = home / "repo"
++        repo.mkdir()
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        with _mock.patch.object(Path, "home", return_value=home):
++            cpath = m._lens_cache_path(repo, base, head)
++        lock = cpath.with_name(cpath.name + ".warming")
++        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
++               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
++
++        for case, expected in (("impact", 7), ("json", 2), ("base-tree", 2), ("exception", RuntimeError)):
++            lock.write_text("123\n0", encoding="utf-8")
++
++            def git(_root, *args, **_kw):
++                if args[:2] == ("rev-parse", "--show-toplevel"):
++                    return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
++                if args and args[0] == "ls-tree":
++                    return _sp.CompletedProcess(args, 1, "", "")
++                return _sp.CompletedProcess(args, 0, "", "")
++
++            def impact(*_args, _case=case, **_kw):
++                if _case == "impact":
++                    return 7
++                if _case == "exception":
++                    raise RuntimeError("injected")
++                if _case == "base-tree":
++                    print(_json.dumps({"results": [], "files": []}))
++                return 0
++
++            out = _io.StringIO()
++            with _mock.patch.object(Path, "home", return_value=home), \
++                    _mock.patch.object(m, "_lens_git", side_effect=git), \
++                    _mock.patch.object(m, "_git_commit_exists", return_value=True), \
++                    _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
++                    _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
++                    _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
++                    _mock.patch.object(m, "_lens_cache_read", return_value=None), \
++                    _mock.patch.object(m, "cmd_impact_diff", side_effect=impact), \
++                    _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
++                try:
++                    rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
++                except RuntimeError:
++                    rc = RuntimeError
++            check(f"錯誤出口 {case}:原返回或例外保留且受託鎖已清",
++                  rc == expected and not lock.exists(), f"rc={rc} lock={lock.exists()}")
++
++
++def t_lens_warmer_cleanup_runs_once():
++    """清掉舊鎖後若同版新工作立即取得同名鎖，舊背景不可再清第二次。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    import subprocess as _sp
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    base, head = "a" * 40, "b" * 40
++    with tempfile.TemporaryDirectory() as d:
++        home = Path(d)
++        repo = home / "repo"
++        repo.mkdir()
++        cache_dir = home / ".cache" / "lumos" / "dispatch-lens"
++        cache_dir.mkdir(parents=True, mode=0o700)
++        cache_dir.chmod(0o700)
++        with _mock.patch.object(Path, "home", return_value=home):
++            cpath = m._lens_cache_path(repo, base, head)
++        lock = cpath.with_name(cpath.name + ".warming")
++        lock.write_text("123\n0", encoding="utf-8")
++        env = {m._LENS_WARM_ENV: "1", "LUMOS_LENS_LOCK_OWNER": "123",
++               "LUMOS_LENS_LOCK_NAME": lock.name, "LUMOS_LENS_DISP_KEY": ""}
++
++        def git(_root, *args, **_kw):
++            if args[:2] == ("rev-parse", "--show-toplevel"):
++                return _sp.CompletedProcess(args, 0, str(repo) + "\n", "")
++            if args and args[0] == "ls-tree":
++                return _sp.CompletedProcess(args, 0,
++                    "100644 blob abc\tdocs/lumos-toolchain-knowledge/MOC/index.md\n", "")
++            return _sp.CompletedProcess(args, 0, "", "")
++
++        original_unlink = Path.unlink
++        removed = []
++        def replace_after_first_release(path, *args, **kwargs):
++            result = original_unlink(path, *args, **kwargs)
++            if path == lock:
++                removed.append(1)
++                if len(removed) == 1:
++                    lock.write_text("123\nnew", encoding="utf-8")
++            return result
++
++        out = _io.StringIO()
++        with _mock.patch.object(Path, "home", return_value=home), \
++                _mock.patch.object(Path, "unlink", new=replace_after_first_release), \
++                _mock.patch.object(m, "_lens_git", side_effect=git), \
++                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
++                _mock.patch.object(m, "_lens_full_sha", side_effect=lambda _r, ref: {"base": base, "head": head}[ref]), \
++                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
++                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
++                _mock.patch.object(m, "_lens_cache_read", return_value=None), \
++                _mock.patch.object(m, "_lens_cache_write"), \
++                _mock.patch.object(m, "_lens_fallback", return_value=([], "none", {})), \
++                _mock.patch.object(m, "_platform_test_index", return_value=None), \
++                _mock.patch.object(m, "cmd_impact_diff", side_effect=lambda *_a, **_kw: (print(_json.dumps({"results": [], "files": []})) or 0)), \
++                _mock.patch.dict(_os.environ, env), _ctx.redirect_stdout(out):
++            rc = m.cmd_dispatch_lens("base..head", repo=str(repo), as_json=True)
++        check("單一清理點:新同名鎖在第一次釋放後換入並存活",
++              rc == 0 and removed == [1] and lock.exists() and lock.read_text(encoding="utf-8") == "123\nnew",
++              f"rc={rc} removed={removed} lock={lock.exists()} output={out.getvalue()[:100]}")
++
++
++
++def t_lens_spawn_failure_reports_error():
++    """建子程序失敗要即時分流；清鎖再失敗不能被可用快取掩蓋。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import time as _time
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root, cache = Path(d), Path(d) / "cache.json"
++        lock = Path(str(cache) + ".warming")
++        out = _io.StringIO()
++        started = _time.monotonic()
++        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")) as spawn, \
++                _ctx.redirect_stdout(out):
++            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .4)
++        data = _json.loads(out.getvalue())
++        check("啟動失敗前置:確實取得鎖且呼叫 Popen", spawn.call_count == 1 and not lock.exists() and rc in (2, 5),
++              f"rc={rc} lock={lock.exists()}")
++        check("啟動失敗 S1:立即獨立錯誤而非逾時",
++              rc == 2 and data.get("spawn_error") is True and data.get("lock_path") == str(lock)
++              and data.get("range") == "a..b" and not data.get("timed_out")
++              and _time.monotonic() - started < .35, f"rc={rc} data={data}")
++        manual = _io.StringIO()
++        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")), \
++                _ctx.redirect_stdout(manual):
++            manual_rc = m._lens_wait_or_warm(root, cache, "a..b", root, False, 0)
++        check("啟動失敗 S1:人工模式有固定診斷且不洩漏例外",
++              manual_rc == 2 and "本次背景未啟動" in manual.getvalue()
++              and str(lock) in manual.getvalue() and "SECRET" not in manual.getvalue(),
++              f"rc={manual_rc} out={manual.getvalue()}")
++        real_unlink = Path.unlink
++        cleanup = {"attempted": False}
++        def deny_own_lock(path, *args, **kwargs):
++            if path == lock:
++                cleanup["attempted"] = True
++                raise PermissionError("injected cleanup failure")
++            return real_unlink(path, *args, **kwargs)
++        blocked = _io.StringIO()
++        with _mock.patch("subprocess.Popen", side_effect=OSError("SECRET spawn failure")) as blocked_spawn, \
++                _mock.patch.object(Path, "unlink", deny_own_lock), \
++                _mock.patch.object(m, "_lens_cache_read", return_value={"text": "ready"}) as ready_cache, \
++                _ctx.redirect_stdout(blocked):
++            blocked_rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, .2)
++        blocked_data = _json.loads(blocked.getvalue())
++        check("啟動失敗 S1 前置:清鎖被拒且可用快取已注入",
++              blocked_spawn.call_count == 1 and cleanup["attempted"] and lock.exists()
++              and ready_cache.return_value == {"text": "ready"},
++              f"rc={blocked_rc} data={blocked_data} lock={lock.exists()}")
++        check("啟動失敗 S1:殘鎖風險優先於快取命中",
++              blocked_rc == 2 and blocked_data.get("spawn_error") is True
++              and blocked_data.get("lock_cleanup_error") is True and lock.exists(),
++              f"rc={blocked_rc} data={blocked_data}")
++
++
++def t_lens_spawn_failure_preserves_replacement_lock():
++    """Popen 尚未拋回前路徑被別人換鎖時，清理不可刪替代持有者。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root, cache = Path(d), Path(d) / "cache.json"
++        lock = Path(str(cache) + ".warming")
++        state = {"acquired": False}
++        def replace_then_fail(*args, **kwargs):
++            lock.unlink()
++            state["acquired"] = m._excl_lock_try(lock, m._LENS_LOCK_STALE_SEC)
++            raise OSError("injected spawn failure")
++        out = _io.StringIO()
++        with _mock.patch("subprocess.Popen", side_effect=replace_then_fail), \
++                _ctx.redirect_stdout(out):
++            rc = m._lens_wait_or_warm(root, cache, "a..b", root, True, 0)
++        data = _json.loads(out.getvalue())
++        check("換鎖 S4 前置:確實在 Popen 裡換入新持有者",
++              state["acquired"] is True, str(state))
++        check("換鎖 S4:啟動失敗不刪別人的新鎖",
++              rc == 2 and data.get("spawn_error") is True and lock.exists(),
++              f"rc={rc} data={data} lock={lock.exists()}")
++
++
++def t_dispatch_lens_hook_spawn_error_notice():
++    """hook 把本次啟動失敗說成錯誤，保留角色卡且不傳原始例外。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    from unittest import mock as _mock
++
++    hook = _load_hook_mod("spawn_error_lens_hook", "dispatch-lens-hook.py")
++    payload = {"tool_name": "Agent", "tool_input": {"prompt": "請審查\nLUMOS-IMPACT: a..b"}}
++    result = {"spawn_error": True, "lock_path": "/tmp/lock\nbad-line", "range": "a..b",
++              "reason": "SECRET raw exception", "role_text": "ROLE-CARD"}
++    response = type("Response", (), {"returncode": 2, "stdout": _json.dumps(result), "stderr": ""})()
++    rendered, mark = _io.StringIO(), _mock.Mock()
++    with tempfile.TemporaryDirectory() as d, \
++            _mock.patch.object(hook.subprocess, "run", return_value=response), \
++            _mock.patch.object(hook, "_find_lumos_script", return_value="/trusted/lumos"), \
++            _mock.patch.object(hook.sys, "stdin", _io.StringIO(_json.dumps(payload))), \
++            _mock.patch.dict(sys.modules, {"_hookevent": type("Event", (), {"mark": mark})}), \
++            _mock.patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": d}), \
++            _ctx.redirect_stdout(rendered):
++        hook_rc = hook.main()
++    output = rendered.getvalue()
++    check("啟動失敗 S2 前置:hook 真的讀到 rc2 JSON",
++          hook_rc == 0 and response.returncode == 2 and result["spawn_error"] is True,
++          f"rc={hook_rc}")
++    check("啟動失敗 S2/S5:固定提示、角色卡與消毒鎖位置",
++          "本次背景未啟動" in output and "ROLE-CARD" in output
++          and "/tmp/lock bad-line" in output and "SECRET" not in output,
++          output)
++    check("啟動失敗 S2/S5:記事件 error 而非 timeout",
++          mark.call_count == 1 and mark.call_args.args[0] == "error",
++          str(mark.call_args_list))
++
++
++def t_lens_no_cache_bypasses_warmer():
++    """停用開關生效後，即使帶 deadline 也走同步計算。"""
++    import contextlib as _ctx
++    import io as _io
++    import json as _json
++    import os as _os
++    from unittest import mock as _mock
++
++    m = _load_lumos_module()
++    with tempfile.TemporaryDirectory() as d:
++        root = Path(d)
++        base, head = "a" * 40, "b" * 40
++        def git(_root, *args, **kwargs):
++            stdout = str(root) if args[:2] == ("rev-parse", "--show-toplevel") else (
++                "100644 blob c\tdocs/t-knowledge/MOC/index.md\n" if args[:2] == ("ls-tree", "-r") else "")
++            return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
++        def impact(*args, **kwargs):
++            print(_json.dumps({"results": [], "files": []}))
++            return 0
++        out = _io.StringIO()
++        with _mock.patch.object(m, "_lens_git", side_effect=git), \
++                _mock.patch.object(m, "_git_commit_exists", return_value=True), \
++                _mock.patch.object(m, "_lens_full_sha", side_effect=[base, head]), \
++                _mock.patch.object(m, "_mainline_ref", return_value=("main", head)), \
++                _mock.patch.object(m, "_codeloop_read_dispositions", return_value=None), \
++                _mock.patch.object(m, "_codeloop_git_branch", return_value="branch"), \
++                _mock.patch.object(m, "cmd_impact_diff", side_effect=impact) as impact_call, \
++                _mock.patch.object(m, "_lens_fallback", return_value=([], "none", {})), \
++                _mock.patch.object(m, "_platform_test_index", return_value=None), \
++                _mock.patch.object(m, "_lens_wait_or_warm") as warm_call, \
++                _mock.patch("subprocess.Popen") as spawn, \
++                _mock.patch.dict(_os.environ, {"LUMOS_DISPATCH_LENS_NO_CACHE": "1", "HOME": d}), \
++                _ctx.redirect_stdout(out):
++            rc = m.cmd_dispatch_lens("base..head", repo=str(root), as_json=True, deadline=1)
++        check("回退 S6 前置:同步 impact 真有被呼叫", impact_call.call_count == 1,
++              f"rc={rc} impact={impact_call.call_count} out={out.getvalue()[:100]}")
++        check("回退 S6:不啟動暖機或留下新鎖",
++              rc == 0 and warm_call.call_count == 0 and spawn.call_count == 0
++              and not list(root.rglob("*.warming")),
++              f"rc={rc} warm={warm_call.call_count} spawn={spawn.call_count}")
++
+ if __name__ == "__main__":
+     sys.exit(main())

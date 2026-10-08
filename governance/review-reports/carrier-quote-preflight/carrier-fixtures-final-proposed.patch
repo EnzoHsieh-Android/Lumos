@@ -1,0 +1,44 @@
+--- original/scripts/test_lumos.py
++++ prototype/scripts/test_lumos.py
+@@ -6350,8 +6350,8 @@
+     check("retired: 拒判訊息指路 --disposal", "--disposal" in ra.stderr and "僅供舊迴圈回放" in ra.stderr, ra.stderr[-300:])
+     # (b) code-* major+accepted → FAIL;散文同構 → PASS(用 --disposal,無 spec 綁定的最小帳)
+     specf = v / "Systems" / "strict-spec.md"
+-    specf.write_text("severity: major\n## f1\nseverity: major\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # 兼當席報告:檔首檔級行+一條宣告(2026-09-09 寫側拒收沒正規化的報告)
+-    specm = v / "Systems" / "strict-spec-minor.md"; specm.write_text("severity: minor\n## f1\nseverity: minor\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # minor 記帳用的報告(帳面不得低於報告最高)
++    specf.write_text("severity: major\n## f1\nseverity: major\n引句：「引句素材行,長度超過十個字元。」\n", encoding="utf-8")   # 兼當席報告:檔首檔級行+一條宣告(2026-09-09 寫側拒收沒正規化的報告)
++    specm = v / "Systems" / "strict-spec-minor.md"; specm.write_text("severity: minor\n## f1\nseverity: minor\n引句：「引句素材行,長度超過十個字元。」\n", encoding="utf-8")   # minor 記帳用的報告(帳面不得低於報告最高)
+     import hashlib as _hl
+     sha = _hl.sha256(specf.read_bytes()).hexdigest()
+     for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
+@@ -6365,7 +6365,7 @@
+           rb.returncode == 1 and "major 一律折" in rb.stdout, rb.stdout[-400:])
+     rc_ = run(v, "loop", "status", "prose-strict-t", "--disposal", "--spec", str(specf))
+     check("retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息",
+-          "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
++          rc_.returncode == 0 and "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
+     # (c) 舊迴圈(harness cutoff=9999 → 視為舊)panel PASS 印行=觀測語意
+     _u = _sec.token_hex(3)
+     for rnd in ("r1", "r2"):
+@@ -25263,11 +25263,20 @@
+     # ── ⑤ 非 UTF-8 報告:FAIL 但不得 traceback ──
+     lid5 = f"h8e-{_M1U}"
+     rptBin = d / "h8bin.md"
+-    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")   # 首行合法宣告=過寫側;其餘 bytes 仍非 UTF-8,讀側行為不變
++    rptBin.write_text(rptA.read_text(encoding="utf-8"), encoding="utf-8")
+     run(v, "canary", "record", "caught", "--loop", lid5, "--round", "r1", "--auditor", "s1",
+         "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
+         "--report", str(rptBin), "--snapshot", str(snap),
+         "--spec", str(spec), "--reviewed", h, expect_rc=0)
++    valid = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
++    check("★前置★ UTF-8 壞帳注入前本輪讀側 rc0", valid.returncode == 0, valid.stdout[-300:] + valid.stderr[-200:])
++    # 現行寫側拒收非法編碼；歷史壞帳用既有 helper 構造，保留讀側編碼防線。
++    rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")
++    _ledger_patch_last(ledger, lid5, report_path=rptBin)
++    bad_rows = [_j.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines()
++                if l.strip() and _j.loads(l).get("loop") == lid5]
++    check("★前置★ 壞報告與帳面 hash 一致，讀側確實驗編碼", len(bad_rows) == 1
++          and bad_rows[0]["report_sha256"] == _sha256_of(rptBin), str(bad_rows)[-200:])
+     r7 = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+     check("★非 UTF-8 報告:讀側 FAIL(rc1/2)且無 traceback★",
+           r7.returncode in (1, 2) and "Traceback" not in r7.stderr,

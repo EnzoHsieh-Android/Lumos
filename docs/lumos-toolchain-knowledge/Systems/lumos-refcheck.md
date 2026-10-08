@@ -12,6 +12,8 @@ tags:
   - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-07-02_lumos-refcheck]]"
+  - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
+  - "[[Verification/2026-10-06_引用座標修復主線CI]]"
 summary: |-
   FLOW:refcheck <md> --repo <root>→FENCE剝/INLINE抽/剝反引號→跳://與*<>?→剝:suffix(純數字才當行號)→須含/且首段=頂層目錄→(token,line)去重→exists/is_dir/行號範圍核對→manifest{token,line,status,excerpt}+統計→rc 0/1/2
   KEY:vault-free(pre-Env 分流,同 install/bootstrap);--repo 省略時 cwd 逐層向上找 .git,無則 rc2
@@ -52,3 +54,7 @@ design-loop/跨家族複核最吃重的「地面事實查證」恰是 LLM 最不
 ## 相關
 - 設計稿:`docs/design/2026-07-02-spec-refcheck.md`(design-loop 3 輪收斂;qwen disputed 經人裁機械反證後放行)。
 - 實作計畫:`docs/superpowers/plans/2026-07-02-spec-refcheck.md`。
+
+WHY:來源行座標沿讀取層正規化後的 LF 計數，Unicode／控制分隔符是來源內容；只移除末尾換行的分割哨兵，保留空檔與真空白行。既有BOM／CR處理與只驗存在性決策不擴張 [出處:引用座標依實際換行設計審r1與官方Python str.splitlines] 防回歸：t_refcheck_physical_unicode、t_refcheck_physical_cli、t_refcheck_physical_legacy；固定源碼反向控制回舊讀法時71紅。 [因:Unicode字串分隔符不該製造不存在的來源行]
+
+WHY:引用座標反例需先證實來源有效、兩個 LF 與真 Git 提交，再驗正確最後一行和不存在下一行；來源 fixture 另隔離使用者 hooks／簽章與 Git 配置，避免環境紅燈引出錯修法 [出處:source-coordinates 設計審 r1-resources、r1-defense 与 r1-intake] 防回歸：t_refcheck_physical_unicode、t_refcheck_physical_fixture_isolated。 [因:避免無效來源或使用者Git設定把紅燈導向錯修法]

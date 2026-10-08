@@ -1,0 +1,61 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md b/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md
+index a220bfbb..76547ce4 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md
++++ b/docs/lumos-toolchain-knowledge/Issues/會談編號環境變數接續後停在舊值.md
+@@ -18,21 +18,22 @@ summary: |-
+ 
+ 白話:Claude Code 的 Bash 裡其實讀得到 `CLAUDE_CODE_SESSION_ID`,舊筆記寫「拿不到會談編號、沒有環境變數」已經過時;但這個變數在會談接續後會停在接續前的舊編號,直接拿來用會對錯會談。
+ 
+ ## 症狀
+ 
+ - [[Projects/進度從提交推導_計劃]] 記「普通 CLI 拿不到 session_id(無環境變數)」,跟 [[Projects/接手視圖_計劃]] 用 `CLAUDE_CODE_SESSION_ID` 排掉自己的記載互相矛盾。
+ - 2026-10-06 本會談實測:Bash 環境有 `CLAUDE_CODE_SESSION_ID`,值是會談一開始的編號;會談接續後工作資料夾已換成新編號,環境變數沒跟著換。
+ 
+ ## 根因
+ 
+-沒查清。2026-10-06 實測([[Verification/2026-10-06_會談編號外掛實測]]):`CLAUDE_CODE_SESSION_ID` 是 `claude` 另外塞給 Bash 的,新開的會談與 `claude -p --resume` 都給對;本會談是對話壓縮後接續、換成新編號,給的仍是接續前的編號。外掛讀不到這一份(它只看得到 `claude` 啟動時繼承的環境),所以不能靠外掛配對來修。
++沒查清。2026-10-07 互動會談實測:`/clear`、`/compact`、互動模式接續三種情況官方編號都是對的,重現不出來;看到舊值的那一場是從 claude.ai 遠端橋接、又因內容太長而接續的會談(見 [[Verification/2026-10-06_會談編號外掛實測]] 的 10-07 段)。2026-10-06 的觀察:`CLAUDE_CODE_SESSION_ID` 是 `claude` 另外塞給 Bash 的,新開的會談與 `claude -p --resume` 都給對;本會談是對話壓縮後接續、換成新編號,給的仍是接續前的編號。外掛讀不到這一份(它只看得到 `claude` 啟動時繼承的環境),所以不能靠外掛配對來修。
+ 
+ ## 現在怎麼繞
+ 
+ `lumos handoff` 照用(拿來排掉自己,舊值在同一場會談裡仍成立);[[Projects/Claude-mod第二批_計劃]] 原本的外掛配對做法實測不成立、沒做。
+ 
+-REVISIT:2026-11-06 找「當下」會談編號的可靠來源(例如比對程式編號),找到就改這段繞法
++可靠來源已經找到備案:外掛用小程式問到的程式編號跟 Bash 的 `CLAUDE_PID` 對得上,真有需要時可用來配對;目前常見情況官方編號就對,不做。
++REVISIT:2026-12-06 兩個月內沒再遇到舊值就結案;再遇到就記下會談種類並改用程式編號配對
+ 
+ ## 什麼條件算修好
+ 
+ lumos 需要會談編號的地方在對話壓縮後接續、`/clear` 後讀到的是新編號,而且在會談裡再開的子會談讀到的是子會談自己的。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md
+index c24b1823..95b3106a 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-06_會談編號外掛實測.md
+@@ -30,13 +30,25 @@ plan_refs:
+ - 外掛的 `$.env.get` 讀的是 `claude` 這支程式啟動時繼承來的環境;Bash 的官方編號是 `claude` 另外塞給子程式的,外掛看不到。
+ - 所以從終端機直接開的會談,外掛讀到空值,整項等於沒做;會談裡再開的子會談,BASE 是外層的編號。
+ - `claude -p --resume` 接續不換編號,重現不了「接續後停在舊值」;本會談自己就是例子(對話壓縮後接續,環境裡的官方編號仍是接續前的),要另外找方法重現。
+ 
+ 依計劃寫好的規則(任一步不過就整項停下,不走別的備案),這項不做。要做得重新設計,例如改比對程式編號,另開題。
+ 
+ ## 2026-10-07 補測:改用程式編號配對
+ 
+ - 外掛的 JavaScript 環境拿不到 `process.pid`(印出來是空的),型別檔的 `$.session` 也沒有程式編號。
+ - 外掛用 `$.process.run(['sh','-c','echo $PPID'])` 開一個小程式問父程式是誰,拿到的編號跟 Bash 看到的 `CLAUDE_PID` 一樣(`claude -p --plugin-dir` 實測,兩邊都是 92719)。所以配對可以改成:Bash 的 `CLAUDE_PID` 等於外掛記下的編號,才採用外掛給的會談編號;會談裡另開的 `claude -p` 是另一支程式,編號不同,不會讀錯。
+-- 還沒驗:對話壓縮後接續、`/clear` 換編號之後,外掛記下的會談編號會不會跟著換——`claude -p` 測不到,要在互動會談裡測;每回合多開一次小程式的時間成本也還沒量。
+ 
+-REVISIT:2026-11-06 在互動會談裡實測 /clear 與壓縮後接續,外掛用程式編號配對給出的會談編號對不對、每回合多花多少時間;都過就重開「會談編號交給 lumos」那一項
++## 2026-10-07 互動會談實測(Claude Code 2.1.292)
++
++用 `expect` 開互動的 `claude`(載入實驗外掛,拿掉 `CLAUDE_CODE_CHILD_SESSION` 才存得了逐字稿、接續得了),叫它把外掛設的編號、外掛記的程式編號、`CLAUDE_PID`、`CLAUDE_CODE_SESSION_ID` 寫進暫存檔:
++
++| 情況 | 官方 `CLAUDE_CODE_SESSION_ID` | 外掛設的編號 | 程式編號配對 |
++|---|---|---|---|
++| `/clear` 之後 | 換成新編號 | 換成新編號 | 對得上 |
++| `/compact` 之後 | 不變 | 不變 | 對得上 |
++| 互動模式 `--resume` 接續 | 不變 | 不變 | 對得上(新程式、新編號) |
++
++- 結論:這三種常見情況下,官方編號本來就是對的,外掛給的跟它一樣。「接續或 `/clear` 後官方編號停在舊值」在這三種情況重現不出來。
++- 2026-10-06 看到的舊值,出在一場從 claude.ai 遠端橋接、又因內容太長而接續的會談;是不是那條路徑才會發生,沒能重現。
++- 所以「會談編號交給 lumos」這項不必做;程式編號配對的做法留著,真有需要再用。每回合多開一次小程式的時間成本沒量,因為不做了。
++REVISIT:2026-12-06 再遇到官方會談編號停在舊值時,記下是哪種會談(遠端橋接、接續方式);兩個月內沒再遇到就把 [[Issues/會談編號環境變數接續後停在舊值]] 結案

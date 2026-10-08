@@ -1,0 +1,509 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 06b82d3c..9cb424fb 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -147,21 +147,21 @@ jobs:
+             exit "$rc"
+           }
+       - name: drift check (存量漂移檢查;--no-verify 後盾)
+         # 已經寫進圖譜的句子因為這次推送改了狀態而過期(轉正了還留著預告句…;Projects/存量漂移防線_計劃 [S1][S18])。
+         # 起點:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF"(Actions 內建),由 lumos 算
+         # ——跟主線(origin 的預設分支優先、跳過就是這次推的那條)的分岔點與 before 取比較新的;推 main 本身時主線候選都被跳過,
+         # 用 before。原本在這裡用 shell 補(before 找不到就改用頂端的父提交),合過主線與新分支一次帶多個提交時算錯(代碼審 r2)。
+         # 主線候選是 checkout(fetch-depth: 0)抓下來的 origin/*,這步不依賴前面 note-shape 那步的 fetch。
+         # actions/checkout 不建 refs/remotes/origin/HEAD:沒有就照 GitHub 給的預設分支補上(預設分支不叫 main/master 時,
+         # 不補的話主線候選裡沒有它,git-flow/trunk 的專案會把預設分支上別人的轉正算進來;代碼審 r3 外家否決席、正確性席)。
+-        # 模式照被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=warn):warn 只印、回 0,CI 不紅;block 有要處理回 1,
++        # 模式照被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=block,2026-09-30 起):warn 只印、回 0,CI 不紅;block 有要處理回 1,
+         # 印擋下原因、CI 紅;其他非零(參數錯、工具出錯)照原碼讓 CI 紅——工具出錯時寧可紅,跟上面 code-loop gate、note-shape 兩步同一個慣例
+         # (推送前掛鉤對其他非零是放行並講一句「這次沒檢查」——128 以上是被訊號中斷,停下不放行;兩邊刻意不同:CI 是最後一道後盾)。
+         # 排在 code-loop gate 之後;全套測試在這步前面(既有安排,沒搬),跟防線計劃 [S18] 字面不同,理由寫在 Systems/存量漂移守衛。
+         if: github.event_name == 'push'
+         env:
+           BEFORE: ${{ github.event.before }}
+           SHA: ${{ github.sha }}
+           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+         run: |
+           [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
+diff --git a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+index dffa1301..fcefb040 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+@@ -12,20 +12,31 @@ lands_in:
+   - Systems/筆記內容閘
+   - Systems/筆記內容審
+   - Systems/guard-kill
+   - Systems/reversibility-governance-ledger
+ related:
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+   - "[[Projects/舊句偵測實驗_計劃]]"
+   - "[[Projects/筆記內容審_計劃]]"
+   - "[[Projects/筆記形狀擋_計劃]]"
+   - "[[Issues/筆記把程式現況寫進脈絡而漂移_rtb實測回饋]]"
++decisions:
++  - content: 存量漂移檢查(drift check)沒寫設定時的預設從 warn 改成 block:沒在 .lumos/config.json 寫 drift_check.gate 的專案,轉正後留著預告句的推送會被擋;寫了 warn/off 的照舊,單次略過照用 LUMOS_SKIP_DRIFT_CHECK=1(留帳);舊句檢查(drift_check.old_sentence)不在這條裡
++    id: d1
++    context: 〈做法〉第 4 節第 4 點規定三條門檻都過才把預設改成 block。2026-09-30 已接進推送前掛鉤與 CI、仍是 warn;門檻量測結果在〈考試結果〉
++    alternatives_considered:
++      - "照〈考試結果〉那條 REVISIT 等到 2026-10-26:兩份圖譜的散文回頭條件改寫成條件式、乙的歷史重放量完再轉——乙的數據齊了,但這段期間甲(c1)抓到的真漂移一律照推"
++      - "維持預設 warn,要擋的專案自己在 .lumos/config.json 寫 block(接線時的做法)——不會突然擋到誰,但沒寫設定的專案永遠只看到提醒,提醒照推就是 rtb 那 7 筆真漂移的形狀"
++    why_chosen: Enzo 2026-09-30 裁定。依據:①考卷正例全對(甲 A4–A6 擋到、E1–E3 點到,乙 A7、B1–B4 擋到);②rtb 345 個主線提交重放,要處理出現在 7 個提交、7 筆都是真漂移、0 筆假,工具鏈最近 100 個主線提交不亂擋(要處理 0 筆);③每個提交噪音 1 篇(≤5)。乙(條件式回頭條件)那條門檻②仍是空測(兩份圖譜都還沒有條件式的行),Enzo 已知並裁定一起轉
++    trade_offs: "消費專案更新 lumos 後,轉正後留著預告句的推送開始被擋,要照印出的 lumos drift fix 改掉、drift ack 表態,或在設定寫 warn/off;乙的條件式行在歷史上沒被重放過,出現後若誤擋只能靠三態開關、單次略過與 RETIRE-IF 兜底(2026-10-26 那條 REVISIT 照舊要量)。開關讀被推送頂端提交的設定,推的人照樣能在同一個提交寫 off 放過自己——只防疏忽、不防存心繞過"
++    decided: 2026-09-30
++    valid: true
+ ---
+ # 存量漂移防線_計劃
+ 
+ 白話:筆記形狀擋與筆記內容審只管「新寫進來的句子該不該寫」。這一篇管另一半的一部分——**已經寫進去的句子,因為別處的狀態或程式變了而過期,要有東西把它指出來**。rtb 抽查 33 處,20 處是這種漂移,現有健檢一處都沒抓到([[Issues/存量筆記漂移三種機制_rtb根因回饋]],證據全文 `governance/audits/2026-09-28-rtb-drift-rootcause/rootcause.md`)。三種產生方式裡,這一篇做兩道誤報低的:**甲**(改狀態時連帶處理,機制③)與**乙**(回頭條件改成機器能判的條件,機制②);第三種(程式改了、舊句還在講,機制①)誤報與漏抓要實測才知道,拆到 [[Projects/舊句偵測實驗_計劃]] 先做實驗。每道做完先拿考卷考一次。
+ 
+ 依據:Enzo 2026-09-28 裁「把沒防護到的修一修,然後用新工具健檢一次筆記,看能修復多少」;設計審 r1 後裁「拆開:甲乙先做、丙先實驗」。
+ 
+ PRIOR-ART: 最小解在工具鏈自己這一層(筆記與程式都在同一個 git 裡)。世界解:[[Projects/先問世界_存量掃描裁定]] 點名過 Doorstop 的邊級 suspect 與 Swimm 的行級錨點——要先埋錨點,rtb 現有筆記沒有,留作候選;回頭條件寫成可判定條件的做法,世界上最接近的是 ADR 工具的 superseded 鏈與 feature flag 的「到期條件」,都是作者明寫、工具判定,本計劃照這個形狀。借用:①推送範圍起點借三道檢查共用的推送起點判法(`_lens_push_base`),再用 `_nodehome_clamp_base` 截到自己的上線點,參數照筆記內容審那一處(推送前掛鉤裡的標記,不是提交前掛鉤);②閘的形狀(block/warn/off 三態、略過開關只認 1、只看這次帶進來的、治理帳事件、doctor 印模式行與 CI 沒呼叫的提醒)照筆記形狀擋與筆記內容審;③讀某個提交的樹借 `_nodehome_reader`、列某個提交的全部路徑借 `_nodehome_list`;④測試檔判定借 `_nodehome_is_test`,並照它的要求先用那棵樹的全部路徑算版面(`_nodehome_layout`)再傳進去;⑤狀態欄位與標籤同步借 `edit_fm_sync_status_tag`,寫入借 `atomic_write_verify` 並包在 `_vault_write_lock` 裡(照 `cmd_set`);⑥可見行判定借行級的那一對:圍欄用 `_visible_lines`、行內反引號(含雙反引號)用 `_strip_inline_markup`,不另寫反引號正則(設計時寫的 `_strip_code_text` 是整段文字層級、沒有行號,乙要逐行判,實作改用這一對;乙代碼審 r1 圖譜一致席);表格行照 doctor E5 既有判法(去掉行首空白後以 `|` 開頭);⑦新寫的 REVISIT 行擋在筆記形狀擋(第一層)裡,照它「只看新行、截到上線點」的規矩;⑧筆記改名的對應用範圍那一次 `git diff --name-status -M` 的結果,交給全檔共用的解析器 `_nodehome_name_status`(它加一個可選的狀態字母輸出,候選篩選要知道哪些檔是新增或刪除),不另起一次 git、不另寫第二套解析(設計時寫的是借 `_notelines_range_added` 的內部改名追蹤,那支是逐提交帶改名、給「每個提交各自新增的行」用的,乙只要範圍兩端的對應;乙代碼審 r1 架構對齊席、圖譜一致席);⑨表態檔寫入借 `_jsonl_append_verified`(追加後讀回自驗)。自建:條件語法(`[when-…:…]`)與它的評估、甲的狀態一致檢查、一支三處共用的「這行是不是 REVISIT」判定、考試指令。跟既有的 `drift-history`(沿歷史重放 Check Y 的離線量測)不重疊:那支量「符號還在不在」,本計劃不碰符號存在性(那是 [[Projects/舊句偵測實驗_計劃]] 的題目)。跟 `valid_under`/`revalidate_when` 的分工:那兩欄照舊是人讀的前提與重驗時機,工具不評估;條件式只在正文與摘要行生效(見〈做法〉第 0 節)。
+ RETIRE-IF: 上線兩個月後任一成立就撤掉或重想:①推送時被 drift check 擋下的,作者表態「沒過期、照留」的比例超過一半(誤報太多);②rtb 用同方法重抽機制②③那 11 處同類句,仍有一半以上是漂移(擋不住);③新寫的 REVISIT 行裡用條件式的不到一成(大家都改寫日期繞過)。
+ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表態事件分布。
+@@ -50,21 +61,21 @@ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表
+ **「這行是不是 REVISIT」**(E5、第一層、第二層共用一支):去掉行首空白,再去掉一層列表或引用記號(`- ` `* ` `+ ` `1. ` `1) ` `> `),以 `REVISIT:` 開頭;表格行與圍欄內不算。`REVISIT:` 後面(去掉空白)若以 `[when-` 開頭,就連續吃掉條件標記與一個 `[by:…]`(中間可有空白),這行是**條件式回頭條件**;否則取到第一個空白為止的字串,用跟 E5 現在一樣的 `date.fromisoformat` 解析,成功是**日期式**,失敗是格式壞損(E5 照舊算壞行、第一層擋新寫的)。這支判定比 E5 現在多認 `+ ` `1. ` `1) ` `> ` 四種記號,E5 改用它之後範圍跟著變大;2026-09-28 工具鏈圖譜裡這四種開頭的 REVISIT 行是 0 條,不會一上線就多出一批壞行。
+ 
+ **「同一條」怎麼認**(判「這個條件是不是這次才成立」要用):先用 git 的改名偵測把終點的筆記路徑對回起點的路徑(借用清單⑧),再看起點那篇裡有沒有一行**條件標記一模一樣**(同樣的標記、同樣的順序,`[by:]` 與後面的待辦文字不算)的條件式回頭條件。有就是「同一條」,只改待辦文字、改期限都還是同一條;條件標記改了就是另一條。
+ 
+ **指令**:
+ - `lumos drift check --diff <起點>..<終點>`:推送前與 CI 的閘(閘名 `drift-check`)。有「要處理」的發現才回 1,只有「只列出」的回 0;參數錯回 2。範圍起點照 `_lens_push_base`,再截到上線點(推送前掛鉤裡出現標記 `drift check` 的第一個提交)。讀被推送頂端提交的樹(`_nodehome_reader`),不讀工作目錄。**只評估這次推送可能改變結果的行**(篩選單位是「行」,不是單一條件):一行裡任一條件落在下列情形,這一行就是候選——①`file`:路徑在範圍裡被新增、刪除或改名(改名的兩端都算);②`symbol`、`test` 帶路徑:那支檔在範圍裡有任何變動(改動、新增、刪除、改名);不帶路徑:名稱出現在範圍裡改到的程式檔或測試檔的終點全文(乙代碼審 r2 改:原本寫「改動行」,抓不到只刪三引號、只加 #! 這種名稱那行沒動的推送),或範圍裡有程式檔或測試檔被新增、刪除、改名(改名可能讓檔換了類別、名稱不在改動行裡),或兩端的測試資料夾版面不一樣(乙代碼審 r3:刪一支不算程式檔的檔也能讓別的檔換類別)——這時所有不帶路徑的 `symbol`/`test` 行都當候選;③`status`:指到的筆記在範圍裡有任何變動(含新增、刪除、改名);④這次新寫或改了條件標記的行。候選行在起點與終點**各評估它的全部條件**(一行是「全部成立」)。不是候選的行,起點與終點結果一定一樣,不評估。範圍的改動只算一次(一次 `git diff --name-status -M`;有不帶路徑的條件時再批次讀一次改到的程式檔),兩端的全部路徑各列一次,帶路徑的條件指到的檔一批讀完,讀檔有快取——不逐條件、也不逐檔各起一次 git。
+ - `lumos drift scan [--at <提交>] [--json] [--budget <秒>]`:對整份圖譜(**含 superseded 的筆記**)現況或某個提交的樹,跑甲的五種一致檢查與乙的全部條件評估,列出全部發現,已表態的標「已表態」另計。不擋、不寫帳。這是回退時清點條件式行、修復階段產清單用的。
+ - `lumos drift ack <節點> <行號> --kind probe|c1|c2|c3|c4|c5 --reason "<為什麼照留>"`:表態「這行照留」。用 `_jsonl_append_verified` 寫進 `governance/drift-acks.jsonl`(加進簿記豁免),每筆存:路徑、行的原文、種類、理由、日期、表態時的小標題與行號(只供人讀)。**對得上**的條件是「同一路徑、一字不差的原文、同一種類」——改小標題不失效;改了那一行或筆記改名就失效,失效時工具用「原文與種類相同」在表態檔裡找,找到就印出舊理由供照抄。理由少於 4 個字拒絕;每筆記一筆治理帳 `acked`。check 只認**被推送頂端提交裡**的表態檔(照第二層「判定檔要提交才算」),所以表態後印提交指令。scan 與 doctor 對已表態的行照列、標「已表態」。
+ - `lumos drift exam <考卷.json> --repo <被考的 repo> [--probes <改寫檔>]`:在被考 repo 的歷史上重放,算甲乙各自擋到、點到、漏、誤報(〈做法〉第 3 節)。考試模式不寫治理帳、不寫任何檔。
+ - doctor Z 段:**不評估條件**(不跑 `git grep`、`ls-tree`),只讀筆記:條件式回頭條件幾條、沒帶期限的幾條、寫錯的條件幾條、寫在不評估的地方的幾條,甲的五種一致檢查各幾筆與前幾筆;要看哪些條件已成立,跑 `lumos drift scan`。唯一的 git 呼叫是判斷「有沒有接線」時讀一次推送前掛鉤(`git show HEAD:<掛鉤>`,照筆記內容審那處的判法)。照 doctor 的全靜默慣例:全部是 0 就整段不印。每次推送多出的成本是讀一遍筆記加一次 `git show`。
+-- 開關:`.lumos/config.json` 的 `drift_check.gate` = block / warn / off,讀被推送頂端提交裡的設定;**設定檔沒寫時的預設值**寫在程式裡,照〈做法〉第 4 節第 4 點的門檻定——過門檻是 block,沒過是 warn(兩處講的是同一個值);單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(只認 1,記 `skipped-env`);淺層 clone 跳過並記帳(同兩層筆記閘)。gate 不是 block、而且專案自己寫了開關或已經接線時 doctor 印一行(沒寫設定也沒接線時預設就是 warn,不唸;實作期代碼審 r3、r4 改);接線後,專案 CI 沒呼叫 `drift check` 時 doctor 也印一行並給要貼的步驟(照筆記形狀擋與筆記內容審的 CI 提醒)。
++- 開關:`.lumos/config.json` 的 `drift_check.gate` = block / warn / off,讀被推送頂端提交裡的設定;**設定檔沒寫時的預設值**寫在程式裡,照〈做法〉第 4 節第 4 點的門檻定——過門檻是 block,沒過是 warn(兩處講的是同一個值;2026-09-30 起是 block,見決策 d1);單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(只認 1,記 `skipped-env`);淺層 clone 跳過並記帳(同兩層筆記閘)。gate 不是 block、而且專案自己寫了開關或已經接線時 doctor 印一行(沒寫設定也沒接線時預設就是 warn,不唸;實作期代碼審 r3、r4 改;2026-09-30 預設改 block 後,不是 block 只剩自己寫了 warn/off,沒寫設定一律不唸,設定寫壞照預設 block 並講出寫錯的地方);接線後,專案 CI 沒呼叫 `drift check` 時 doctor 也印一行並給要貼的步驟(照筆記形狀擋與筆記內容審的 CI 提醒)。
+ - 閘名 `drift-check` 登記進既有閘名單;事件種類:`blocked`、`warned`、`skipped-env`、`skipped`、`degraded`、`acked`。沒發現的放行不寫帳(同筆記形狀擋)。
+ - **判不了的時候**:git 單次沿用 `_lens_git` 的 20 秒逾時;check 總預算 60 秒。check 要評估的條件都跟這次推送有關、數量小,**判不了的(git 失敗、逾時、預算用完)算「要處理」**並印原因——判不了就放行,等於給了一條繞過的路;要推就單次略過(留帳)。scan 判不了的列成「判不了」、不擋、不寫帳(scan 不是閘;讀指令不寫帳是既有決定,實作期代碼審 r3 改)。
+ 
+ ### 1. 甲:狀態指令連帶處理(對應機制③,考卷 A4–A6、E1–E3)
+ 
+ 1. **`guard settle` 轉正時,把守衛紀錄裡 `guard plan` 寫的四種預告句改成歷史說法**(只動工具自己寫出的固定句型)。四種句型用**行首前綴**認(去掉摘要的縮排後,從行首比對;前綴照 `guard plan` 樣板的實際字元,含反引號),settle 與 c1 共用同一支比對函式:
+    - 摘要前綴 `TEST:還沒有測試在守這條` → 整行換成 `TEST:[<轉正日期>] 預告已轉正,合約改由 [[<家筆記>]] 的正式合約行守`(講「哪天發生了什麼」,不重複寫測試名——那是程式碼答得了的,筆記內容審會判成推得出);作者只改了日期或負責人,前綴照樣認得;
+    - 摘要前綴 `WHY:[`、而且同一行有 `]預告這條合約但還沒做:` → 行尾加 `(<轉正日期> 已轉正)`,行尾已經有「已轉正」就不再加;
+    - 正文前綴 `為什麼還不做:` → 換成 `預告當時為什麼還不做:`(新的前綴不以 `為什麼還不做:` 開頭,c1 不會再認);
+    - 正文前綴 ``做完之後跑 `lumos guard settle` 轉正``(樣板整句是 ``做完之後跑 `lumos guard settle` 轉正,不要手改狀態。``)→ 整行換成 `(<轉正日期> 已轉正)`。
+@@ -110,20 +121,21 @@ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表
+ ### 4. 掃全圖譜與修復
+ 
+ 1. 甲乙都做完、考完,對工具鏈自己的圖譜與 rtb(`/Users/enzo/rtb-mainwt` 主線頂端)各跑一次 `drift scan --json`,存成待修清單(工具鏈的存 `governance/audits/<日期>-drift-scan/scan.json`;rtb 的交給 rtb 會談、存在 rtb 那邊)。
+ 2. 工具鏈自己的:本會談逐條處理(改句、刪句、補條件、掛撤除橫幅、或 `drift ack`);**修復的筆記改動單獨成一個提交**,提交說明寫清單檔路徑;清單旁的 `fixed.txt` 每處理一筆寫一行:路徑、當時行號、原文、發現種類、怎麼處理——事後發現工具判錯,照這份就能整批找出、還原。修完再 scan 一次,前後筆數記進本計劃。
+ 3. rtb 的:用跨會談訊息傳「待修清單在哪、怎麼修、修完怎麼量、修復單獨提交並留 fixed.txt」(只傳指標),由 rtb 會談修;它回報的前後數字記進本計劃。
+ 4. 接線:drift check 接進工具鏈自己的推送前掛鉤與 CI,**排在 code-loop check 之後、全套測試之前**(掛鉤「便宜的先跑、貴的最後」:code-loop check 約 0.6 秒,drift check 最壞 60 秒)。預設模式三條全過才 block,任一沒過先 warn、攤給 Enzo 裁:
+    - **①抓得到**:甲的 A4–A6 全部擋到、E1–E3 全部點到;乙的 A7、B1–B4 全部擋到。這是下限不是成績——考卷是拿來設計的那一份,不是沒看過的新題,全對只證明「照設計做出來了」。
+    - **②真實歷史上不亂擋**:rtb 這份考卷在「要處理」層有鑑別力的非漂移樣本幾乎是 0(rtb 歷史上沒有條件式的行,current_state 走的 scan 也不分層),所以另拿工具鏈自己的歷史量:對主線最近 100 個提交各跑一次 `drift check --diff <父>..<提交>`,每一筆「要處理」由編排者逐筆判真假,**判成假的有任何一筆**就沒過;結果(提交數、要處理筆數、判假幾筆、每筆一句理由)寫進〈考試結果〉。
+    - **③噪音**:每個考題提交與重放提交的「要處理」筆數(同一篇的 c1 合算一筆)都不超過 5。
+    這個門檻仍只有 rtb 與工具鏈兩個專案,是已知的薄弱依據,靠三態開關與 RETIRE-IF 兜底。
++   **2026-09-30 已轉擋**:Enzo 裁定沒寫設定時的預設改成 block(決策 d1;門檻量測見〈考試結果〉:考卷正例全對、rtb 345 個主線提交重放 7 筆真漂移 0 筆假、每個提交噪音 1 篇)。乙的門檻②仍是空測,照實留在〈考試結果〉,Enzo 已知並裁定一起轉;2026-10-26 那條 REVISIT 照舊要量。
+    2026-09-30 已接線(warn),門檻量測另行(掛接位置、範圍怎麼交見 [[Systems/bound-tests-gate]];[S18] 綁的測試已補上)。接線代碼審 r1 後:推送前掛鉤自己算範圍起點(跟主線的分岔點與遠端舊值取比較新的)、CI 的 before 是全 0 或找不到時改用頂端的父提交,不全靠 [S1] 寫的共用起點判法——那支在合過主線、沒設 upstream、CI 已 fetch 三種情況會誤算。接線代碼審 r2 查出掛鉤、CI、工具三份起點算法各有洞,改成:起點只在工具的 `_push_range_start` 算一處(r3 後:所有主線候選一起算、取離頂端最近的分岔點,跳過「推送遠端/被推分支」那條,每個分岔點都是遠端舊值的祖先才用舊值,git 查詢失敗算判不了;CI 先照預設分支補 origin/HEAD),掛鉤與 CI 帶 `--push-remote`/`--pushed-ref` 原樣交範圍;細節見 [[Systems/bound-tests-gate]]。
+ 
+ ### 5. 落點
+ 
+ - **[[Systems/存量漂移守衛]](新開)**:管 `lumos drift` 家族(check/scan/ack/exam)、條件文法與評估、甲的五種一致檢查、REVISIT 共用判定、doctor Z 段;about_code 是 `scripts/lumos`(與考卷目錄不算程式)。不管筆記新寫的形狀(第一層)、判定者怎麼判(第二層)、settle 本身(guard-kill)。
+ - **[[Systems/筆記內容閘]]**:第一層加的 REVISIT 規則。
+ - **[[Systems/筆記內容審]]**:第二層排除條件式回頭條件。
+ - **[[Systems/guard-kill]]**:settle 改寫預告句、補救路徑;plan、settle、abandon 整段讀改寫拿同一把寫入鎖。
+ - **[[Systems/reversibility-governance-ledger]]**:新閘名 `drift-check` 登記進既有閘名單、新事件種類,在那篇補一行。
+ - **[[Issues/治理帳多個寫入者都沒上鎖]]**:實作時在那篇補一行,列出本計劃新增的兩個寫入者(表態檔、drift-check 事件),讓它 2026-10-11 回頭看時算進去。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index c0ac6d7e..46a8bbf1 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -12,21 +12,21 @@ about_code:
+   - governance/eval/drift-exam/old-sentence/old_sentence_exp.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/node-content
+ summary: |-
+   WHY:[2026-09-28 Projects/存量漂移防線_計劃]筆記形狀擋與筆記內容審只管新寫的句子;已經寫進去的句子因為別處狀態變了而過期,現有健檢一處都抓不到(rtb 抽查 33 處、20 處漂移)。這篇管「甲」:狀態改了連帶處理——五種狀態一致檢查、計劃收尾時列連帶待辦、推送時只擋「這次轉正、預告句還留著」
+   WHY:[2026-09-28 設計審 r1–r3]推送閘只擋 c1:只有它是工具自己寫的固定句型、判得準;c2–c5 連的是人寫的連結,連結有時只是參考,擋了會逼人亂結案,所以只列出
+   WHY:[2026-09-28 設計審 r2 外家席]check 判不了(git 失敗、逾時、預算用完)算要處理,跟筆記內容審相反(那邊判不了放行):判不了就放行等於給了一條繞過的路;真要推用單次略過,會留帳
+   WHY:[2026-09-29 設計審 r3 外家席]條件式必帶期限 [by:]:名字拼錯、Python 常數寫成認不得的樣子、路徑寫錯,條件就永遠不會成立;有期限,最晚那天 E5 會唸
+-  RULE:[since:2026-09-28][retire:三條門檻考過、預設改成 block 並接進掛鉤與 CI 時撤掉這條]沒寫設定時預設 warn(2026-09-30 已接進推送前掛鉤與 CI,仍是 warn);預設改 block 要三條全過:考卷正例全對、工具鏈自己最近 100 個提交重放每筆要處理都判成真、每次要處理 ≤5(計劃〈做法〉第 4 節第 4 點);門檻量測另行,回頭點是計劃〈考試結果〉2026-10-26 那一條
++  WHY:[2026-09-30 Enzo 裁定,[[Projects/存量漂移防線_計劃]] 決策 d1]沒寫設定時預設 block;原本那條「沒寫設定預設 warn」的 RULE 照它自己的撤除條件(三條門檻考過、預設改成 block 並接進掛鉤與 CI)撤掉。依據:rtb 345 個主線提交重放 7 筆真漂移 0 筆假、考卷正例全對、工具鏈 100 提交不亂擋、每個提交噪音 1 篇;乙(條件式回頭條件)那條門檻仍是空測,Enzo 已知並裁定一起轉。寫了 warn/off 的專案照舊,單次略過 LUMOS_SKIP_DRIFT_CHECK=1 [test:t_drift_check_default_gate_blocks]
+   PITFALL:[2026-09-28 實作翻紅檢查]考試的 status_replay 有兩條點到的路(記憶體重放連帶待辦、真實範圍的 check 列出 c2),真實提交本身就收尾計劃時兩條都會中,測試分不出重放有沒有做;另放一題「提交本身沒收尾、只有重放才抓得到」 [test:t_drift_exam_scores]
+   RULE:[since:2026-09-29][retire:閘的開關改成只認主線上已提交的設定、或改由伺服器端強制時撤掉]開關讀被推送頂端提交裡的 .lumos/config.json,推的人可以在同一個提交把 drift_check.gate 改成 off 放過自己(代碼審 r1 資安席);這道閘跟筆記內容審一樣只防疏忽、不防存心繞過,要擋存心繞過得把開關挪到推的人拿不到的地方
+   PITFALL:[2026-09-29 代碼審 r1–r3 併發席]新分支第一次推送找不到主線時從空樹算,原本對範圍裡碰過的每一篇逐提交讀狀態,實測 67 秒才判超過 60 秒預算;改成先從頂端的樹挑候選(終點是 pass 的守衛紀錄、已收尾的計劃)再逐提交讀,同一個情境 26 秒。預算在每一次 git 呼叫前都看,正在跑的那一次不打斷(一般呼叫最多 20 秒,批次讀以剩下的時間為上限),所以最壞比預算多一次呼叫的時間——r2 只在每篇之前看、r3 查到一篇裡還有兩次呼叫不看,兩輪說明都寫錯 [test:t_drift_code_review_r3_regressions]。重現:在工具鏈 repo 跑 `time python3 scripts/lumos drift check --diff 87d43a50..HEAD`(87d43a50 是全庫第一個提交)
+   PITFALL:[2026-09-29 代碼審 r1–r3,正確性席、外家席、架構對齊席]認「家筆記已經是正式合約行」連續三輪被抓:剝掉全部 [鍵:值] 會把原文自帶的標籤剝掉、只認 test/audit/kill 又漏了 [src:]/[git:] 證據指針、用子字串比 [test:x] 對不上 [test:a,x] 這種多支綁定。第三輪改成跟 guard 家族同一套:剝標記用 INV_TAG_RE、測試名用 invariant_test_refs 拆清單比完整名(帶平台前綴的綁定照 resolve_test_refs 解:前綴是專案定義過的平台才拆、沒定義不猜;r4 架構對齊席、r5 正確性席),只看摘要。已有同一句的正式行但綁的測試裡沒有這支、或預告行重複兩條時,settle 擋下不猜 [test:t_drift_code_review_r1_regressions] [test:t_drift_code_review_r2_regressions] [test:t_drift_code_review_r3_regressions]
+   WHY:[2026-09-29 代碼審 r3 併發席 blocker]逐提交讀狀態那段跟筆記內容審共用,「讀不到(批次讀失敗、改名對照失敗、頂端或起點或歷史任一版解不開)算判不了」只給存量漂移這條路(strict;起點那一版 r5 才補上);r2 曾經讓共用那段一律嚴格,結果筆記內容審一篇計劃的歷史讀失敗就整道放行、連別的新寫的行都不審。筆記內容審照舊把讀不到當成那篇沒有翻轉(r4:一篇的 git log 失敗也只丟那一篇、別篇照算;原本整支回判不了、筆記內容審就整道放行,那是這次動之前就有的行為,代碼審 r4 併發席一起修掉) [test:t_drift_code_review_r4_regressions]
+   WHY:[2026-09-29 代碼審 r3 併發席、正確性席]drift scan 判不了的列出來但不寫治理帳:讀指令不寫帳是既有決定(見 [[Systems/lumos-cli-read]] 的 d1),計劃 [S2] 原本要記 degraded,改成跟決定一致
+   PITFALL:[2026-09-29 乙代碼審 r1 正確性席]工具鏈主程式 scripts/lumos 沒有副檔名,第一版語料只收副檔名清單裡的檔,寫在它上面的 symbol 條件全是死條件、scan 也看不出來;語料與候選篩選改成共用一支判定,沒副檔名、開頭是 #! 的也算程式檔,帶路徑的條件直接讀那支檔、不看它算哪一類 [test:t_drift_code_review_yi_r1_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r1、r2 正確性席]不帶路徑的 symbol/test 原本只在「名稱出現在新增行」時才算候選,兩輪各漏一種:r1 是標了 -diff 屬性的程式檔 git 只印「Binary files differ」、新增行整批看不見;r2 是判定改用 ast、收了 #! 腳本之後,只刪掉包住 def 的三引號、只在第一行加 #!,定義就出現了,名稱那行卻沒動。第二次換形狀:改看這次改到的程式檔在終點的全文(要處理只看終點成立,所以只要終點),算新增行的那次 diff 一起拿掉 [test:t_drift_code_review_yi_r1_regressions] [test:t_drift_code_review_yi_r2_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r2 邊界席]巢狀很深但語法合法的 Python 檔,ast 解析丟的是 MemoryError(「too complex to parse」)不是 SyntaxError,原本沒接住,scan 與推送檢查整支當掉;跟語法錯一樣退回正則 [test:t_drift_code_review_yi_r2_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r2 正確性席、邊界席]程式檔開頭帶 BOM 時,python3.9 的 ast 解析失敗退回正則、docstring 範例又被當定義,沒副檔名的 #! 腳本則整支不進語料;讀檔改用 utf-8-sig(全庫讀取器本來就這樣) [test:t_drift_code_review_yi_r2_regressions]
+@@ -34,21 +34,21 @@ summary: |-
+   WHY:[2026-09-29 乙代碼審 r1 外家席、邊界席]條件裡的路徑在解析時就正規化(去 ./、NFC):git 列出的路徑是 NFC,macOS 貼上的中文路徑常是 NFD,原本判定與候選篩選都對不上、永遠不成立而且沒有任何提示。正規化之後再驗一次文法(r2 正確性席、邊界席:`..\x.py` 原文用 / 切不出 .. 段,轉成斜線才是 ../x.py,原本三層都不列)
+   WHY:[2026-09-29 乙代碼審 r2 外家席、r3 正確性席]樹上列得出、內容讀不出來的程式檔或筆記,碰到它的條件算判不了,不算不成立或不存在(原本單一檔讀不到被當成沒定義,block 模式照樣放行);判不了的說明點名是哪支檔。前提是「讀不到」只能是 git 真的壞了:所以一律用列檔時記下的內容編號讀,不用「版本:路徑」——樹清單把路徑轉成 NFC,git 裡存的可能是 NFD、兩種混用、相容表意字(NFC 與 NFD 都會把它換掉)或含換行,用路徑讀永遠讀不到,r2 的「換成 NFD 再讀一次」補不到後兩種,反而讓有這種檔名的專案每次推送都判不了 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r3 外家席]python3.9 的 ast.parse 碰到極長的單一運算式(一長串負號、not、加法、屬性鏈、lambda…)整個程序崩潰(SIGSEGV),r2 補的「接住 MemoryError」接不到;3.11、3.14 實測都改丟接得住的例外。曾在 3.12 以前先用斷詞器量最長邏輯行、超過 2 萬個詞退回正則,但量法只看單一邏輯行,跨行的 elif 長鏈照樣崩(r4 正確性席)。★已撤★:工具最低版本改成 3.14([[Projects/最低Python版本改3.14_計劃]],2026-09-29 推上主線),事先量測整段刪掉,只留接 MemoryError/RecursionError;測試改驗極長的一行與極長的 elif 鏈在 3.14 上回 None 退回正則 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r3 併發席]改看終點全文之後,候選篩選對幾 MB 的全文逐條跑正則、迴圈又不看預算,實測 100 行條件 10 秒、預算 2 秒照樣跑完;改成終點全文先切成識別字集合查,每一行之前看預算 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r4 外家席、正確性席]SHA-256 物件格式的 repo 提交編號是 64 碼;列檔快取原本只認 40 碼,這種 repo 記不到內容編號、退回用「版本:路徑」讀,NFD 或相容表意字檔名的檔又讀不到,條件每次判不了、block 模式每次擋 [test:t_drift_code_review_yi_r4_regressions]
+   WHY:[2026-09-29 乙代碼審 r4 外家席]不帶路徑的 symbol/test 在候選篩選時,改到的程式檔有幾支讀不出:讀得出的那幾支找到名稱照算候選,找不到才算判不了——原本一支讀不出就整份作廢,另一支已經確定命中的也被降成判不了,block 模式錯擋;判不了時只點名這一行條件實際碰到的檔或筆記,檔名印之前換掉控制字元
+   WHY:[2026-09-29 乙代碼審 r5 架構對齊席、外家席、正確性席]「一個條件碰到哪支檔、哪篇筆記」只有一份:symbol/test 拆路徑與名稱、status 找指到的筆記各一支共用函式,判定、預讀、候選篩選、判不了的點名都用它們;不帶路徑的條件依它看的語料分程式檔與測試檔兩類(symbol 只看程式檔、test 只看測試檔),候選篩選的名稱集合與點名也分兩類——前三輪點名與判定範圍對不上,根因是四處各自拆條件 [test:t_drift_code_review_yi_r5_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r5 外家席]SHA-256 repo 首推、沒有起點時,拿寫死的 SHA-1 空樹去 git diff 會認不得、整道判不了;漂移這兩條路改用這個 repo 算出的空樹(標準輸入明確給空的),其他閘同一個問題見 [[Issues/SHA-256的repo其他閘仍用SHA-1空樹]] [test:t_drift_code_review_yi_r5_regressions]
+   WHY:[2026-09-29 乙代碼審 r1 正確性席、外家席]status 條件只看筆記、不需要 git,不是 git 專案也照判;指到的筆記讀不出來(不是 UTF-8)算判不了,不能當成不成立放行
+   WHY:[2026-09-30 計劃 [S18]]接線只在掛鉤與 CI 呼叫 drift check,模式、略過、淺層 clone、上線點截斷都留在工具裡判——掛鉤不讀設定,改模式只改 .lumos/config.json;每一筆的 drift fix 修法也由 check 自己印。範圍起點也留在工具裡:掛鉤與 CI 都帶 --push-remote/--pushed-ref,起點由 _push_range_start 算(跟主線的分岔點與遠端舊值取比較新的)——r1 曾在掛鉤的 bash 與 CI 的 shell 各補一份,r2 查出三份各有洞,改成只算一處(推送閘接漂移檢查代碼審 r2 裁定),細節與掛在哪見 [[Systems/bound-tests-gate]]。doctor 在已接線、CI 沒呼叫時給消費專案貼的 CI 步驟(`scripts/lumos` 的 _DRIFT_CI_STEP)補 before、補 origin/HEAD、呼叫 drift check 那幾行跟工具鏈 ci.yml 逐字相同——只差直譯器名(ci.yml 用 python、範本用 python3)與 ci.yml 接在後面的回傳碼處理;回傳碼照原樣讓那步紅綠;說明與 Python 3.14 那句寫成縮排對齊步驟的 YAML 註解,整段貼進 workflow 能被解析(r2 外家否決席) [test:t_doctor_drift_ci_template_start_fallback,t_ci_drift_start_shapes]。CI 裡這步排在全套測試之後、跟防線計劃 [S18] 字面(全套測試之前)不同,理由是 CI 的全套本來就排最前面、任一步紅整個 job 就紅,順序只影響全套紅了時這步有沒有跑到。接線之後 doctor 開頭會唸「這個專案的存量漂移檢查是 warn」(設計如此:已接線又不是 block 就講) [test:t_prepush_and_ci_wire_drift_check]
+-  TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section、t_drift_code_review_r1_regressions、t_drift_code_review_r2_regressions、t_drift_code_review_r3_regressions、t_drift_code_review_r4_regressions、t_drift_code_review_r5_regressions、t_drift_when_probes_evaluate_and_trigger、t_note_shape_revisit_needs_date_or_probe、t_doctor_revisit_skips_probe_lines、t_note_audit_skips_conditional_revisit、t_set_plan_closed_lists_satisfied_status_probes、t_drift_probe_scan_and_doctor、t_drift_exam_probe_mode、t_drift_code_review_yi_r1_regressions、t_drift_code_review_yi_r2_regressions、t_drift_code_review_yi_r3_regressions、t_drift_code_review_yi_r4_regressions、t_drift_code_review_yi_r5_regressions、t_drift_fix_refuses_wrong_kind、t_drift_fix_c1_rewrites_with_commit_date、t_guard_settle_pass_completes_prose、t_drift_fix_c3_sets_status_and_note、t_drift_fix_c4_evidence_then_replace、t_doctor_revisit_marks_closed_issues、t_set_issue_closed_lists_revisits、t_drift_ack_binds_related_plans、t_drift_fix_dry_run_lock_and_ledger、t_drift_hints_point_to_fix、t_drift_fix_c2_close_or_keep、t_drift_fix_c5_completes_settle、t_drift_fix_review_r1_edges、t_drift_fix_review_r2_edges、t_drift_fix_review_r3_edges、t_drift_fix_review_r4_edges、t_prepush_and_ci_wire_drift_check、t_prepush_drift_range_ref_shapes、t_doctor_drift_ci_template_start_fallback、t_drift_c4_reports_from_first_commit、t_drift_fix_c3_reason、t_drift_c4_code_review_r1、t_drift_fix_c1_missing_tail_once、t_drift_c4_lists_all_dirs、t_drift_c4_code_review_r2、t_drift_c4_code_review_r3
++  TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section、t_drift_code_review_r1_regressions、t_drift_code_review_r2_regressions、t_drift_code_review_r3_regressions、t_drift_code_review_r4_regressions、t_drift_code_review_r5_regressions、t_drift_when_probes_evaluate_and_trigger、t_note_shape_revisit_needs_date_or_probe、t_doctor_revisit_skips_probe_lines、t_note_audit_skips_conditional_revisit、t_set_plan_closed_lists_satisfied_status_probes、t_drift_probe_scan_and_doctor、t_drift_exam_probe_mode、t_drift_code_review_yi_r1_regressions、t_drift_code_review_yi_r2_regressions、t_drift_code_review_yi_r3_regressions、t_drift_code_review_yi_r4_regressions、t_drift_code_review_yi_r5_regressions、t_drift_fix_refuses_wrong_kind、t_drift_fix_c1_rewrites_with_commit_date、t_guard_settle_pass_completes_prose、t_drift_fix_c3_sets_status_and_note、t_drift_fix_c4_evidence_then_replace、t_doctor_revisit_marks_closed_issues、t_set_issue_closed_lists_revisits、t_drift_ack_binds_related_plans、t_drift_fix_dry_run_lock_and_ledger、t_drift_hints_point_to_fix、t_drift_fix_c2_close_or_keep、t_drift_fix_c5_completes_settle、t_drift_fix_review_r1_edges、t_drift_fix_review_r2_edges、t_drift_fix_review_r3_edges、t_drift_fix_review_r4_edges、t_prepush_and_ci_wire_drift_check、t_prepush_drift_range_ref_shapes、t_doctor_drift_ci_template_start_fallback、t_drift_c4_reports_from_first_commit、t_drift_fix_c3_reason、t_drift_c4_code_review_r1、t_drift_fix_c1_missing_tail_once、t_drift_c4_lists_all_dirs、t_drift_c4_code_review_r2、t_drift_c4_code_review_r3、t_drift_check_default_gate_blocks
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]drift fix 補「改法」(rtb 照清單修時 28 筆有 24 筆工具沒路可走),分法照 lint 工具的 --fix:c1 改句跟 settle 同一支、c3 改狀態加一行、c2 由人判結案或照留、c4 只給證據、範本與一條預填好的 lumos set 指令(2026-09-30 起;原本是由人給要換的片段,見下面 c4 那條 PITFALL)、c5 補完轉正。改之前那篇要在版控裡而且乾淨(或改動全是工具自己留下的——認修復帳這一篇最後一筆的指紋),所以★不自動還原★:設計審三輪都在自動還原長出新洞,git 一定退得回來;修復帳只是稽核紀錄
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃 設計審 r2、r3]c2、c3 表態記當時連著的已收尾計劃(related)與檔內遞增序號(seq),比對只看記了清單的、取序號最大的那幾筆(同號保守)全部涵蓋現在的清單才算;沒記清單的舊表態不再算數——不然舊表態會永久豁免之後才收尾的計劃。看序號不看檔內順序也不看時間:兩個工作樹各自追加後是一般的文字合併
+   WHY:[2026-09-29 存量漂移改法代碼審 r1 資安席、正確性席、合約圖譜席]印給人照貼的指令,參數只由文字、數字(含中文)、底線與 ./@%+=:,- 組成才原樣印,其他交給既有的 _sh_quote 加 shell 引號——檔名帶 $(…) 或 ; 的筆記原本照貼提示就會執行(代碼審 r2 又抓到計劃收尾「看:」那一行漏網;- 開頭的節點印成 ./ 開頭,drift fix 與一般查找都把 ./ 開頭當明確路徑);git 指令用 git 裡的原樣路徑、不截斷、加 --literal-pathspecs(檔名裡的 * 不被 git 當萬用字元;工具自己跑的乾淨檢查也加,代碼審 r4),路徑含控制字元就不印可照貼的指令(代碼審 r3);提示裡的佔位字 <…> 照抄進 --reason、--new 一律擋——原本會把還沒解決的 Issue 標成結案、理由是佔位字;只認提示真的印過的那幾種,Map<K,V> 這種真理由照收 [test:t_drift_fix_review_r1_edges,t_drift_fix_review_r2_edges]
+   PITFALL:[2026-09-30 存量漂移改法代碼審 r1 到 r4 邊界席、外家席、正確性席]c4 不自己寫開頭欄位的原始文字:先是「人給片段、工具換原始文字」、再換成「工具寫整項」,都要自己判斷原文是什麼 YAML 形狀(引號、全形空白、冒號後空白、控制字元、巢狀、註解、跨行、空行),零依賴下沒有標準 YAML 讀法可驗,四輪每輪都漏一種。Enzo 2026-09-30 裁改走既有的 lumos set 整欄重寫(不讀原文形狀、從人給的各項重寫):drift fix --kind c4 只列證據、範本、目前各項與一條預填好的 lumos set 指令,要改的那項放佔位字 <整項新內容>,原封不動照貼會被 set 擋下。★這跟 [[Projects/存量漂移改法_計劃]] 第 5 節與 [S5]「帶 --old/--new 就替換」不同,以這裡與程式為準★ [test:t_drift_fix_c4_evidence_then_replace]
+   WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 1 節,rtb 用 drift fix 修完 26 筆後回報]c4 證據頁的卷證目錄兩種來源都列、每個標來源:這篇第一次被提交的那個提交加進來(含改名進來)的 governance/review-reports/<目錄>(借專案規矩「程式、筆記、卷證放同一個提交」;只留現在還在的)與計劃名比對到的;排序兩者 → code- 開頭 → 其他;同提交超過 3 個先提醒可能是整批匯入;git 查不到寫明、不當成空;印的一律是現存目錄的實際名字,git 裡的名字只拿 NFC 再 casefold 的鍵去對應(代碼審第二輪:印 git 的名字在 macOS 上 NFC/NFD 不同時是不存在的路徑、同一個目錄列兩行;第三輪:不分大小寫的檔案系統上只差大小寫也要對得上),一個現存目錄一行;目錄名裡的方向控制、零寬字元印成 \uXXXX(資安席);全部列出、不設上限(第一輪加的 20 個上限與補充指令三輪長出四個新缺陷,第三輪撤回:長清單罕見,證據頁是人主動叫出來看的)。★範本句的卷證一律是 <卷證>、不自動填★:前兩版要工具自己挑、自己寫 c4,設計審兩輪 100 條發現大多落在這段自己的判斷上,整類拿掉——c4 照舊走 lumos set、不進修復帳,稽核靠 git 歷史;照貼範本會被 set 擋下(見 [[Systems/lumos-cli-write]])。前一份計劃 [[Projects/存量漂移改法_計劃]] 的 RETIRE-IF ③(修復帳裡 c4 照抄範本的比例)從此量不到,由這份計劃取代 [test:t_drift_c4_reports_from_first_commit]
+   WHY:[2026-09-30 [[Projects/漂移修法補強_計劃]] 第 4 節]c3 收選填的 --reason,接在補的那一行最後「;理由:…」(三種寫法都一樣);長度、單行、佔位字規則跟 c2 同一套,理由裡的連結不驗存在。c1 找不到預告句時的訊息改走 settle 那支,見 [[Systems/guard-kill]] [test:t_drift_fix_c3_reason]
+   PITFALL:[2026-09-29 存量漂移改法代碼審 r1 邊界席、併發席]帳檔讀取原本用 splitlines,U+2028、U+0085 這類字元會把工具自己寫進去的一筆劈成兩段壞行、讀不回來,同一篇一項一項修的流程就斷掉;表態檔與修復帳現在共用一支只在換行字元切的解析,寫進去的自由文字也擋這類字元 [test:t_drift_fix_review_r1_edges]
+ related:
+   - "[[Projects/存量漂移防線_計劃]]"
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+@@ -63,30 +63,30 @@ related:
+ 
+ scan、check、doctor Z 共用同一支檢查,也能跑在任一個提交的樹上(考試與推送檢查用)。種類與「只列出/會擋」的分法見計劃〈做法〉第 1 節第 4、5 點;轉正預告句的比對跟 [[Systems/guard-kill]] 的 settle 改寫共用同一支,兩邊不能各寫一份——各寫一份時,settle 改完的句子可能又被認成預告,轉正後的推送被自己擋。
+ 
+ ## 條件式回頭條件(乙)
+ 
+ 回頭條件可以寫成機器判得了的條件加期限,例如 `REVISIT:[when-file:<路徑>][by:<日期>] 待辦`,文法與判定規則在 [[Projects/存量漂移防線_計劃]]〈做法〉第 0、2 節。「這行是不是 REVISIT」全庫只有一支判定(doctor E5、筆記形狀擋、筆記內容審都用它),三處餵給它的也是同一版文字(剝掉行內程式碼,含雙反引號);各處自己判、或餵的東西不同,同一行會在一處算條件式、另一處算壞損或根本看不見(乙代碼審 r1:E5 原本只剝單反引號,雙反引號裡的範例在 E5 被唸到期、另兩層看不到)。推送時擋的是「這次推送讓條件從不成立變成立」;「同一條」只看條件標記,只改待辦文字或期限還是同一條,改了條件標記就是新寫的,新寫而已經成立的一樣擋。
+ 
+ ## 跟設計稿不一樣的兩處(實作時決定)
+ 
+ - **考試的「誤報」不算同一篇同一種的兄弟句**:c1 一句一筆,一篇守衛紀錄有四句預告句,題目只考 TEST 那句,另外三句是同一個轉正事件的真發現,算成誤報會把「抓得對」算成「亂抓」。同一篇別種的發現、別篇的發現照算(代碼審 r1 外家席:第一版把同一篇全部排除,誤報被低估)。
+-- **doctor 的閘提醒放在開頭、發現放在 Z 段**:設計把兩者都寫在 Z 段。開關不是 block、CI 沒呼叫這兩行照筆記形狀擋與筆記內容審的位置放在 doctor 開頭(代碼審 r1 架構對齊席:同一種閘提醒不該有兩種呈現);c1–c5 的筆數是筆記內容的發現,跟 E5 一樣放 Z 段;某一種只剩已表態的不開段(全靜默,完整清單看 drift scan)——設計寫的是「照列、標已表態」,那是 scan 的做法,doctor 照列會讓表態完那一段永遠不安靜(代碼審 r2 正確性席)。開關提醒只在專案自己寫了開關、或已經接線時才印(代碼審 r1 外家席:關掉了要看得見;第一版只看接線,r2 改成一律印,r3 發現沒寫設定時預設就是 warn,每個專案每次 doctor 都多一行、也破壞既有軟段計數測試,收成現在這樣)。
++- **doctor 的閘提醒放在開頭、發現放在 Z 段**:設計把兩者都寫在 Z 段。開關不是 block、CI 沒呼叫這兩行照筆記形狀擋與筆記內容審的位置放在 doctor 開頭(代碼審 r1 架構對齊席:同一種閘提醒不該有兩種呈現);c1–c5 的筆數是筆記內容的發現,跟 E5 一樣放 Z 段;某一種只剩已表態的不開段(全靜默,完整清單看 drift scan)——設計寫的是「照列、標已表態」,那是 scan 的做法,doctor 照列會讓表態完那一段永遠不安靜(代碼審 r2 正確性席)。開關提醒只在專案自己寫了開關、或已經接線時才印(代碼審 r1 外家席:關掉了要看得見;第一版只看接線,r2 改成一律印,r3 發現沒寫設定時預設就是 warn,每個專案每次 doctor 都多一行、也破壞既有軟段計數測試,收成現在這樣)。2026-09-30 預設改成 block 之後,不是 block 只剩專案自己寫了 warn/off,「沒寫設定、已接線時唸是預設的 warn」那一支拿掉;設定寫壞(拼錯、null、不是物件、JSON 壞)照預設 block,照樣講出寫錯的地方。
+ 
+ - **乙的 symbol/test 語料比設計寬一點**(乙代碼審 r1 正確性席):設計寫「副檔名清單裡的程式檔」,實作另收沒副檔名、開頭是 `#!` 的檔(主程式 scripts/lumos 就是這種);帶路徑的條件直接讀那支檔,不管它算程式檔還是測試檔——作者明寫了哪支檔,工具不該再用分類把它排掉。
+ - **scan 多列一種問題**:`[when-symbol:Config::load]` 這種「型別::方法」寫法照文法會切成路徑 Config、名稱 load,永遠不成立;路徑那段在樹上找不到、沒有 `/`、最後一段也不像副檔名(字母開頭、只有字母數字與 `_+-`、全小寫或全大寫)時,scan 列成「不像檔案路徑」——`v1.2`、`app.Config` 列,`.c++`、`.R` 不列(乙代碼審 r2、r3 邊界席、r3 外家席)。還沒建的檔(`src/new.py::main`)是正常的等待狀態,不列;`Makefile` 這種沒副檔名的根目錄檔分不出來,提示裡講明「還沒建的根目錄檔建了就會判,不用管」。
+ - **不帶路徑的條件怎麼算候選**(乙代碼審 r2、r3 正確性席;設計稿已同步改,計劃〈做法〉第 0 節):原設計寫「名稱出現在範圍的改動行」,改成「名稱出現在範圍裡改到的程式檔或測試檔的終點全文」,並加一條「兩端的測試資料夾版面不一樣」也算形狀改變——改動行抓不到「刪掉三引號」「加上 #!」,形狀改變原本抓不到「刪一支不算程式檔的檔,讓別的檔從測試檔變程式檔」。留在這一節是記「為什麼改」,現在設計與實作一致。
+ - **考試的改寫檔要先過文法**:改寫不合條件式文法(含沒帶期限)的,exam 直接擋下回 2,不照考——原本考過的 A7、B3、B4 三題都沒帶期限,是第一層會擋的寫法(乙代碼審 r1 外家席、正確性席)。
+ 
+ ## 怎麼用
+ 
+-- 推送時自動跑(2026-09-30 接線):`scripts/hooks/pre-push` 對每個要推的 ref、`.github/workflows/ci.yml` 在 push 事件的 drift check 那一步,都叫 `lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>`(起點由工具算;不帶後兩個參數時照共用起點判法,手動跑用這種;這篇只管那一段呼叫,掛在哪、前後是哪些閘見 [[Systems/bound-tests-gate]]),預設 warn 只印;專案要擋就在 .lumos/config.json 寫 `{"drift_check": {"gate": "block"}}`,單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(留帳)。
++- 推送時自動跑(2026-09-30 接線):`scripts/hooks/pre-push` 對每個要推的 ref、`.github/workflows/ci.yml` 在 push 事件的 drift check 那一步,都叫 `lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>`(起點由工具算;不帶後兩個參數時照共用起點判法,手動跑用這種;這篇只管那一段呼叫,掛在哪、前後是哪些閘見 [[Systems/bound-tests-gate]]),沒寫設定就擋(2026-09-30 起預設 block;之前是 warn 只印);專案要先只提醒就在 .lumos/config.json 寫 `{"drift_check": {"gate": "warn"}}`、關掉寫 `off`,單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(留帳)。
+ - 健檢全圖譜:`lumos drift scan`(`--at <提交>` 看某個版本、`--json` 給修復清單用)。
+ - 照清單修:`lumos drift fix <節點> <行號> --kind c1..c5`(先加 `--dry-run` 看改法;c2 要 `--close --status … --reason` 或 `--keep --reason`,c3 要 `--status`、可加 `--reason`,c4 只列證據(卷證目錄標來源)、範本句與一條預填好的 `lumos set <節點> valid_under …` 指令,把 <整項新內容> 換成改寫後的整句、範本的 <卷證> 換成從清單挑的目錄再貼;set 改完先提交,再對同一篇跑別的 drift fix,不然乾淨檢查會擋);修完修復帳要跟筆記一起提交。
+ - 某一行確定照留:`lumos drift ack <節點> <行號> --kind <種類> --reason "…"`,提交進去才算;那一行一改就失效。
+ - 考試:`lumos drift exam <考卷> --repo <被考的 repo>`;`--history N` 對最近 N 個主線提交重放(門檻②)。
+ 
+ ## 代碼審放行的邊角(2026-09-29,存量漂移改法代碼審 r1)
+ 
+ - `drift ack` 的表態檔與修復帳共用同一道路徑檢查:從 repo 根到帳檔的每一層都不能是符號連結。所以 `governance/` 本身是連結的專案,升級後連原本的 `drift ack` 也會被擋(併發回滾席)。這是設計審刻意收緊的(帳檔寫前擋連結),目前工具鏈與 rtb 的 `governance/` 都是一般目錄。
+ REVISIT:2026-12-29 看有沒有專案回報 drift ack 因為 governance 是連結被擋;有就改成只擋帳檔本身與 repo 外的連結,repo 內指向 repo 內的目錄連結放行
+ - 混版:還沒升級的機器看不懂新的修復帳是簿記檔,在代碼審留痕之後又提交修復帳,會被判成動了代碼、要重審(方向是多審,不會少審);各機器 `lumos update` 之後就沒有這個問題(併發回滾席)。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 17a41eea..37d0f340 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -461,21 +461,21 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     fi
+     bound_tests_advisory "$_range"
+   fi
+   # 存量漂移檢查(Projects/存量漂移防線_計劃〈做法〉第 4 節第 4 點、[S1][S18]):已經寫進圖譜的句子因為這次推送改了狀態而過期
+   # (轉正了還留著預告句、計劃收尾了連著的 Issue 還開著…)。排在 code-loop check 之後、全套測試之前:code-loop 約 0.6 秒、
+   # 這道最壞 60 秒、全套 8 分鐘,便宜的先跑。分支與 tag 都查(不像 code-loop 要分支名)。
+   # 上線標記:下一行那串是 lumos 找「這道檢查從哪個提交起上線」用的(範圍起點截到那裡,上線前的是舊帳),別改寫也別刪:
+ # lumos drift check
+   # 範圍原樣交 遠端舊值..本地頂端,連同遠端名與遠端 ref 名:起點由 lumos 的 _push_range_start 算(跟主線的分岔點與遠端舊值
+   # 取比較新的;CI 那步也交給同一支),掛鉤不自己算——原本掛鉤、CI、工具各算一份,三份各有洞(代碼審 r2)。不用上面的 _range。
+-  # 模式由 lumos 讀被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=warn):block 有要處理 rc1 → 擋;warn 只印 rc0;
++  # 模式由 lumos 讀被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=block,2026-09-30 起):block 有要處理 rc1 → 擋;warn 只印 rc0;
+   # off 它自己跳過。LUMOS_SKIP_DRIFT_CHECK=1 單次略過、淺層 clone 跳過,都由 lumos 記帳。每一筆的 lumos drift fix 修法由它印。
+   # 回傳碼:1 → 擋;128 以上(被訊號殺掉,多半是 Ctrl-C)→ 整支掛鉤停下、不放行、不往下跑全套;
+   # 其他非零(工具錯誤、git 太慢逾時、舊版工具沒有 drift 子命令)→ 講一句「這次沒檢查」再放行,
+   # 跟每支檔有家、筆記形狀擋的「只認 rc1 擋」同一種處理(代碼審 r1 併發回滾席)。
+   dr_rc=0
+   "$PY" "$GRAPHCTL" drift check --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
+     --repo "$REPO_ROOT" || dr_rc=$?
+   pp_stop_if_signaled "$dr_rc" "存量漂移檢查"
+   if [[ "$dr_rc" -eq 1 ]]; then
+     {
+diff --git a/scripts/lumos b/scripts/lumos
+index 4539fefe..1300f0f8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -26307,23 +26307,24 @@ _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連
+                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
+                      "c5": "轉正做了一半", "probe": "回頭條件成立了"}
+ _DRIFT_ACKS = "governance/drift-acks.jsonl"
+ # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
+ # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
+ _DRIFT_FIXES = "governance/drift-fixes.jsonl"
+ _DRIFT_FIX_KINDS = ("c1", "c2", "c3", "c4", "c5")
+ _DRIFT_BOUND_KINDS = ("c2", "c3")          # 表態要綁當時連著的已收尾計劃(related)與序號(seq)的種類
+ _DRIFT_GOLIVE_MARK = "drift check"
+ _DRIFT_GATE_VALUES = ("block", "warn", "off")
+-# ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、工具鏈歷史重放不亂擋、噪音 ≤5)
+-# 都過才改成 block;還沒考就是 warn。
+-_DRIFT_DEFAULT_GATE = "warn"
++# ★沒寫設定時的預設★(計劃〈做法〉第 4 節第 4 點):三條門檻(考卷正例全對、歷史重放不亂擋、噪音 ≤5)考過,
++# Enzo 2026-09-30 裁定改成 block(防線計劃的決策紀錄;乙的歷史重放那條仍是空測,已知並一起轉)。
++# 專案要先只提醒或關掉,在 .lumos/config.json 寫 drift_check.gate=warn|off;設定寫壞也照這個預設。
++_DRIFT_DEFAULT_GATE = "block"
+ _DRIFT_BUDGET_SEC = 60
+ 
+ 
+ def _drift_str(n, key):
+     v = n.fields.get(key, "") if n is not None else ""
+     return v.strip() if isinstance(v, str) else ""
+ 
+ 
+ def _drift_fm_end(lines):
+     """開頭欄位收尾那一行的索引(沒有開頭欄位回 0)。"""
+@@ -28535,43 +28536,44 @@ def _drift_doctor_lines(env):
+         rows = [f for f in left if f["kind"] == k]
+         nd = sum(1 for f in done if f["kind"] == k)
+         if rows:     # 只剩已表態的不開段(全靜默;代碼審 r2 正確性席:表態完那一段永遠不會安靜);全部清單看 drift scan
+             ex = ";".join(f"{f['path'][:-3]}:{f['line']}" for f in rows[:3])
+             out.append(f"[{k}] {_DRIFT_KIND_NAMES[k]} {len(rows)} 筆(例:{ex})" + (f";另 {nd} 筆已表態" if nd else "")
+                        + ";改法例:" + _drift_fix_hint(k, rows[0]["path"], rows[0]["line"])[0])
+     return out
+ 
+ 
+ def _drift_gate_doctor_lines(repo_root):
+-    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):開關不是 block,而且專案自己寫了開關或已經接線時講
+-    (沒寫設定也沒接線時預設就是 warn,每次都唸只是噪音;計劃 [S14] 已跟著改);
++    """doctor 開頭的閘提醒(照筆記形狀擋與筆記內容審那兩支的位置與呈現):專案自己寫了 warn/off 時講一聲(關掉了要看得見);
++    設定寫壞了(照預設 block)也講出寫錯的地方。沒寫設定就是預設 block,不唸(2026-09-30 預設從 warn 改成 block 前,
++    這裡還得在已接線、沒寫設定時唸「是預設的 warn」;計劃 [S14]);
+     只收專案根:鄰居多收的圖譜位置與 ci 旗標是給它們的事後掃描用的,這支沒有事後掃描(代碼審 r3 架構對齊席:抄了參數不用是死參數)。
+     接線後(推送前掛鉤出現標記)專案 CI 沒呼叫 drift check 就給要貼的步驟。唯一的 git 呼叫是讀一次推送前掛鉤。"""
+     out = []
+     root = Path(repo_root)
+     cp = root / ".lumos" / "config.json"
+     txt = None
+     try:        # .lumos 資料夾本身是捷徑也不跟(照 _note_audit_doctor_lines;代碼審 r2 架構對齊席)
+         if cp.is_file() and not cp.is_symlink() and cp.resolve() == root.resolve() / ".lumos" / "config.json":
+             txt = cp.read_bytes()
+     except OSError:
+         txt = None
+     mode, cfg_warns, explicit = _drift_config(txt)
+     hk = _lens_git(root, "show", f"HEAD:{_NOTELINES_PREPUSH}")
+     wired = hk is not None and hk.returncode == 0 and _DRIFT_GOLIVE_MARK in hk.stdout
+-    # 開關不是 block 時講一聲——只在專案自己寫了開關、或已經接線時(代碼審 r1 外家席:關掉了要看得見);
+-    # 還沒接線又沒寫設定時預設本來就是 warn,每個專案每次 doctor 都多一行只是噪音(代碼審 r3:那一行也破壞既有測試
+-    # t_doctor_summary_admits_soft_reminders 的軟段計數)
+-    if mode != "block" and (wired or explicit):
+-        src = (f"({cfg_warns[0]})" if cfg_warns else "(.lumos/config.json 的 drift_check)" if explicit
+-               else "(沒寫設定,這是預設值)")
+-        out.append(f"這個專案的存量漂移檢查是 {mode}{src}——轉正後留著預告句的推送不會被擋")
++    # 開關不是 block 時講一聲(代碼審 r1 外家席:關掉了要看得見)——預設是 block,所以只剩專案自己寫了 warn/off 這一種;
++    # 設定寫壞(拼錯、null、不是物件、JSON 壞)照預設 block,也講出寫錯的地方(代碼審 r5 正確性席:人明明寫了東西)。
++    # 沒寫設定不唸:每個專案每次 doctor 都多一行只是噪音(代碼審 r3:那一行也破壞 t_doctor_summary_admits_soft_reminders 的軟段計數)
++    if explicit and cfg_warns:
++        out.append(f"存量漂移檢查的設定沒讀懂({cfg_warns[0]})——轉正後留著預告句的推送會被擋")
++    elif explicit and mode != "block":
++        out.append(f"這個專案的存量漂移檢查是 {mode}(.lumos/config.json 的 drift_check)——轉正後留著預告句的推送不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+     if wired and ymls and "drift check" not in body:
+         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
+                    + _DRIFT_CI_STEP)
+     return out
+ 
+ 
+ # doctor 給消費專案貼的 CI 步驟:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF",
+@@ -37877,21 +37879,21 @@ def main():
+     nac = nasub.add_parser("check", help="這段推送的新筆記行都被已提交的判定涵蓋了沒(沒有 rc1;warn 模式只印)")
+     nac.add_argument("--diff", dest="na_diff", required=True, metavar="A..B")
+     nac.add_argument("--repo", dest="na_repo", default=None)
+     nas = nasub.add_parser("skip", help="把從來沒被判過的待審行記成略過(要理由,會留帳)")
+     nas.add_argument("--diff", dest="na_diff", required=True, metavar="A..B")
+     nas.add_argument("--note", dest="na_note", required=True)
+     nas.add_argument("--repo", dest="na_repo", default=None)
+ 
+     dr_p = sub.add_parser("drift", help="存量漂移守衛:已經寫進去的句子因為別處狀態變了而過期;spec=Projects/存量漂移防線_計劃")
+     drsub = dr_p.add_subparsers(dest="drcmd", required=True)
+-    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;warn 模式只印)")
++    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;沒寫設定就是 block,.lumos/config.json 寫 drift_check.gate=warn 只印)")
+     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
+     drc.add_argument("--repo", dest="dr_repo", default=None)
+     drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",
+                      help="推送前掛鉤與 CI 用(跟 --pushed-ref 一起給):--diff 的起點當成遠端舊值,改從跟主線最近的分岔點算")
+     drc.add_argument("--pushed-ref", dest="dr_pushed_ref", default=None, metavar="ref",
+                      help="這次推的遠端 ref(refs/heads/X;跟 --push-remote 一起給);找主線時跳過就是這條的候選")
+     drs = drsub.add_parser("scan", help="健檢整份圖譜跟狀態對不上的地方(不擋、不寫帳)")
+     drs.add_argument("--at", dest="dr_at", default=None, metavar="提交", help="看某個提交的圖譜(預設工作目錄)")
+     drs.add_argument("--json", dest="dr_json", action="store_true")
+     drs.add_argument("--budget", dest="dr_budget", type=float, default=None, metavar="秒",
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index eaf1ec43..2147f1d5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -51153,20 +51153,56 @@ def t_drift_check_state_events_in_range():
+     b2 = _na_head(root2)
+     gg = v2 / "Verification" / "G.md"
+     gg.write_text(gg.read_text(encoding="utf-8").replace("status: pending", "status: pass"), encoding="utf-8")
+     _nh_commit(root2, "舊轉正")
+     _nh_file(root2, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+     _nh_commit(root2, "上線")
+     rc, out = _dr(root2, "check", "--diff", f"{b2}..HEAD")
+     check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
+ 
+ 
++def t_drift_check_default_gate_blocks():
++    """沒寫設定時預設 block(Enzo 2026-09-30 裁定,三條門檻見 Projects/存量漂移防線_計劃〈做法〉第 4 節第 4 點):
++    專案沒寫 drift_check → 轉正後留著預告句的推送回 1、印「擋下」;寫了 warn 的照舊只印、回 0。
++    ①前置:同一個範圍寫 warn 時確實有一筆要處理(只印),證明後面的 rc1 是預設值造成的、不是場景本身壞了
++    ②整份設定沒有(沒有 .lumos/config.json)→ block ③設定檔在、沒寫 drift_check → block ④設定解析:三種「沒寫」都回 block
++
++    翻紅釘:_DRIFT_DEFAULT_GATE 改回 "warn" → ②③④紅。
++    """
++    print("t_drift_check_default_gate_blocks")
++    import json as _j
++    m = _load_lumos_inproc()
++    for label, txt in (("沒有設定檔", None), ("空物件", b"{}"), ("只寫別的閘", b'{"note_audit": {"gate": "warn"}}')):
++        mode, warns, explicit = m._drift_config(txt)
++        check(f"④{label}:預設 block、不算自己寫了", mode == "block" and warns == [] and explicit is False,
++              str((mode, warns, explicit)))
++    root = _dr_repo(cfg={"drift_check": {"gate": "warn"}})
++    vault = root / _DR_VAULT
++    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
++    _nh_commit(root, "base")
++    base = _na_head(root)
++    _dr_settle(root)
++    _nh_commit(root, "舊版 settle 的轉正,預告句還留著")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("①前置:寫了 warn → 有要處理、只印、rc0", rc == 0 and "提醒(drift_check.gate=warn" in out
++          and "Verification/G.md" in out, out[-600:])
++    (root / ".lumos" / "config.json").unlink()
++    _nh_commit(root, "拿掉設定檔")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("②沒有設定檔 → 預設 block:擋下、rc1", rc == 1 and out.count("擋下") >= 1 and "提醒(drift_check.gate=warn" not in out
++          and "Verification/G.md" in out, out[-600:])
++    (root / ".lumos" / "config.json").write_text(_j.dumps({"note_lint": {"gate": "on"}}), encoding="utf-8")
++    _nh_commit(root, "設定檔在、沒寫 drift_check")
++    rc, out = _dr(root, "check", "--diff", f"{base}..HEAD")
++    check("③設定檔在、沒寫 drift_check → 預設 block:擋下、rc1", rc == 1 and "擋下" in out, out[-600:])
++
++
+ def _dr_hook_fakes(root):
+     """推送前掛鉤的測試現場:假 lumos(記下每次被叫的參數;drift 子命令轉給真的 lumos)、假全套測試(跑了記一筆 SUITE)。
+     放在工作目錄、不提交——drift check 讀的是被推送頂端提交的樹,跟它們無關;所以要在最後一個提交之後才放。
+     FAKE_DRIFT_RC=<n>:drift 不轉給真的,印舊版工具那句「擋下:沒有 drift 這個指令」回 n;FAKE_DRIFT_SIG=1:drift 被 SIGTERM 殺掉;
+     FAKE_SIG_CMD=<子命令>:那個子命令(home、note-shape、spec-gate、code-loop…)被 SIGTERM 殺掉。"""
+     import os as _os
+     real = Path(GRAPHCTL).resolve()
+     log = root / "argv.log"
+     (root / "scripts" / "lumos").write_text(
+         "#!/usr/bin/env python3\nimport sys, json, pathlib, os, subprocess, signal\n"
+@@ -51248,21 +51284,21 @@ def t_prepush_gates_stop_on_signal():
+ 
+ def _dr_settle(root, name="G"):
+     """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+     g = root / _DR_VAULT / "Verification" / f"{name}.md"
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                  encoding="utf-8")
+ 
+ 
+ def t_prepush_and_ci_wire_drift_check():
+     """[S18] 推送前掛鉤每個 ref 在 code-loop check 之後、全套測試之前跑 drift check;block 有要處理 → 擋、不跑全套;
+-    warn(含沒寫設定的預設)只印、照推;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
++    warn 只印、照推;沒寫設定是預設 block、擋;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
+     drift check 回其他非零(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講一句「這次沒檢查」再放行;被訊號殺掉 → 掛鉤停下、不跑全套。
+     工具鏈 CI 在 code-loop gate 之後有一步 drift check:回 0 不紅、回 1 印擋下原因並紅、其他非零照原碼紅(工具出錯時寧可紅,
+     跟同檔 code-loop gate、note-shape 兩步同一個慣例);before 原樣交(空的換成 40 個 0),帶 --push-remote origin
+     --pushed-ref "$GITHUB_REF",起點由 lumos 算(各種形狀在 t_ci_drift_start_shapes)。
+ 
+     真的跑那支掛鉤:假 lumos 記下每次被叫的參數,drift 子命令轉給真的 lumos,在一個「守衛紀錄這次轉正、預告句還留著」
+     的專案上判(c1 要處理)。假全套測試跑起來記一筆 SUITE,拿三者在記錄裡的先後判順序。各種 ref 形狀的起點在
+     t_prepush_drift_range_ref_shapes。
+ 
+     翻紅釘:掛鉤裡 drift check 那段搬到全套測試後面 → ①⑤紅;rc1 不擋 → ①紅;128 以上不停 → ⑨紅;CI 那步拿掉 → ⑦紅;
+@@ -51313,22 +51349,22 @@ def t_prepush_and_ci_wire_drift_check():
+     (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "warn"}}), encoding="utf-8")
+     _nh_commit(root, "warn")
+     rc, lines, out = pp()
+     ok, why = order_ok(lines)
+     check("⑤warn:只印不擋,順序是 code-loop check → drift check → 全套測試", rc == 0 and ok
+           and "提醒(drift_check.gate=warn" in out, f"rc={rc} {why} {out[-600:]}")
+     check("⑤warn 也印 lumos drift fix 修法", "lumos drift fix" in out, out[-600:])
+     (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
+     _nh_commit(root, "沒寫 drift_check")
+     rc, lines, out = pp()
+-    check("⑥沒寫設定 = 預設 warn,不擋", rc == 0 and "提醒(drift_check.gate=warn" in out and at(lines, "SUITE") >= 0,
+-          f"rc={rc} {out[-400:]}")
++    check("⑥沒寫設定 = 預設 block(2026-09-30 起):擋下、全套測試沒跑", rc == 1 and "提醒(drift_check.gate=warn" not in out
++          and at(lines, "SUITE") < 0, f"rc={rc} {out[-400:]}")
+     (root / ".lumos" / "config.json").write_text(_j.dumps({"drift_check": {"gate": "off"}}), encoding="utf-8")
+     _nh_commit(root, "off")
+     rc, lines, out = pp()
+     check("⑥off:放行、不判(lumos 讀到 off 就跳過)", rc == 0 and "關掉" in out and "lumos drift fix" not in out
+           and at(lines, "SUITE") >= 0, f"rc={rc} {out[-400:]}")
+     hook_txt = hook.read_text(encoding="utf-8")
+     check("⑥掛鉤裡有上線標記那一行(lumos 從它第一次出現的提交截範圍起點)", "\n# lumos drift check\n" in hook_txt, "")
+ 
+     # CI:push 事件、before..sha;回 1 印擋下原因並紅,其他非零照原碼紅
+     ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+@@ -52461,21 +52497,21 @@ def t_drift_code_review_r3_regressions():
+     r1 = run(root / "docs" / "kg-knowledge", "doctor")
+     check("⑩自己寫了 off:唸出來", "存量漂移檢查是 off" in r1.stdout, r1.stdout[:400])
+ 
+ 
+ def t_drift_code_review_r4_regressions():
+     """存量漂移守衛代碼審 r4 的回歸釘。
+ 
+     ①筆記內容審(不嚴格):一篇的 git log --follow 失敗只丟那一篇,別篇照算 ②樹的批次讀逾時扣掉列路徑花掉的時間
+     ③測試名只認完全相同,不猜平台前綴 ④開關「有沒有自己寫」從 _drift_config 同一次解析來,格式寫錯也算寫了
+     ⑤嚴格:歷史裡有一版解不開就判不了 ⑥空連結不算有落點 ⑦嚴格:頂端那一版逐篇讀失敗判不了
+-    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時,提醒講明是預設值
++    ⑧考試重放碰到讀不出來的計劃不崩 ⑨沒寫設定但已接線時不唸(2026-09-30 起預設 block;原本唸「是預設的 warn」),自己寫了 warn 照唸
+     """
+     print("t_drift_code_review_r4_regressions")
+     import pathlib, time as _t
+     m = _load_lumos_inproc()
+     Vp = pathlib.Path("docs/kg-knowledge")
+     f = m._notes_status_flipped
+     g_ = f.__globals__
+     saved = {k: g_[k] for k in ("_ns_git", "_nodehome_cat_blobs", "_nodehome_list")}
+     a, b = "a" * 40, "b" * 40
+     p1, p2 = "docs/kg-knowledge/Projects/P1.md", "docs/kg-knowledge/Projects/P2.md"
+@@ -52541,21 +52577,26 @@ def t_drift_code_review_r4_regressions():
+         check("⑧考試重放碰到讀不出來的計劃:不崩", isinstance(got, set) or got == "unreadable", str(got))
+     except Exception as ex:           # noqa: BLE001 — 崩了就記紅
+         check("⑧考試重放碰到讀不出來的計劃:不崩", False, repr(ex))
+     finally:
+         g2["_drift_tree_env"] = sv
+     # ⑨
+     root = _nh_repo()
+     _nh_file(root, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+     _nh_commit(root, "wired")
+     r = run(root / "docs" / "kg-knowledge", "doctor")
+-    check("⑨已接線、沒寫設定:提醒講明是預設值", "存量漂移檢查是 warn" in r.stdout and "預設" in r.stdout, r.stdout[:500])
++    check("⑨已接線、沒寫設定:預設 block,開關那行不唸", "存量漂移檢查是" not in r.stdout
++          and "存量漂移檢查的設定" not in r.stdout, r.stdout[:500])
++    (root / ".lumos").mkdir(exist_ok=True)
++    (root / ".lumos" / "config.json").write_text('{"drift_check": {"gate": "warn"}}', encoding="utf-8")
++    r = run(root / "docs" / "kg-knowledge", "doctor")
++    check("⑨自己寫了 warn:照唸「是 warn」", "存量漂移檢查是 warn" in r.stdout, r.stdout[:500])
+ 
+ 
+ def t_drift_code_review_r5_regressions():
+     """存量漂移守衛代碼審 r5 的回歸釘。
+ 
+     ①嚴格:起點那一版解不開也判不了 ②多平台專案:正式行綁 [test:ios:t_x](ios 有定義)算綁了 t_x,settle 只補紀錄;
+     前綴沒定義的照樣不猜 ③doctor 開關提醒:設定檔寫壞、drift_check 空物件、gate 寫 null 都算自己寫了,說明照實講
+     ④考試重放碰到讀不出來的計劃:記成略過,不記成漏
+     """
+     print("t_drift_code_review_r5_regressions")
+diff --git a/skills/lumos-project-notes/commands/08-自動跑的.md b/skills/lumos-project-notes/commands/08-自動跑的.md
+index 57e299d8..eb75d120 100644
+--- a/skills/lumos-project-notes/commands/08-自動跑的.md
++++ b/skills/lumos-project-notes/commands/08-自動跑的.md
+@@ -1,15 +1,15 @@
+ # 08 自動跑的(hook 會替你呼叫,不用手敲;但要看得懂它印什麼)
+ 
+ | 時機 | 自動跑什麼 | 擋不擋 |
+ |---|---|---|
+ | `git commit` 前(pre-commit) | 污染檢查、`lumos lint` 逐篇、`lumos home check --staged`(每支檔有家;「該動哪篇」的點名也在這裡照家算)、`lumos note-shape --staged`(筆記形狀擋)、「改 code 沒動圖譜」檢查、`lumos cochange check`、`lumos delguard` | 前四項擋;後兩項提醒 |
+ | `git commit` 後(post-commit) | 記 bypass 帳(用 --no-verify 繞過也會留痕) | 不擋 |
+-| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos note-shape --diff`(筆記形狀擋,同一段範圍)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <ref>`(存量漂移檢查,分支與 tag 都查;起點由工具算:所有主線候選(遠端 HEAD、main/master 的 upstream、遠端 main/master,跳過就是這次推的那條)一起取離頂端最近的分岔點,跟遠端舊值取比較新的;兩個參數要一起給)、`lumos doctor --ci` | 全擋;★drift check 例外★:預設 warn 只印,`.lumos/config.json` 的 `drift_check.gate` 設 block 才擋,工具沒跑成(錯誤、git 太慢)講一句就放行(被 Ctrl-C 等訊號中斷、回傳碼 128 以上則停下,其他閘也一樣) |
++| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos note-shape --diff`(筆記形狀擋,同一段範圍)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <ref>`(存量漂移檢查,分支與 tag 都查;起點由工具算:所有主線候選(遠端 HEAD、main/master 的 upstream、遠端 main/master,跳過就是這次推的那條)一起取離頂端最近的分岔點,跟遠端舊值取比較新的;兩個參數要一起給)、`lumos doctor --ci` | 全擋;★drift check 例外★:沒寫設定就擋(2026-09-30 起預設 block),`.lumos/config.json` 的 `drift_check.gate` 設 warn 只印、設 off 關掉,單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(留帳);工具沒跑成(錯誤、git 太慢)講一句就放行(被 Ctrl-C 等訊號中斷、回傳碼 128 以上則停下,其他閘也一樣) |
+ | `git push` 前(pre-push,低風險那一路) | 同一次 `code-loop check` 帶 `--bound-tests-advisory`:這次改動碰到的硬合約綁的測試紅了只印 | ★合約測試只提醒不擋★(人裁 2026-09-07);表態閘照擋(不看 tier,2026-09-09) |
+-| CI(push 後) | 同 pre-push + `lumos code-loop check`、`lumos drift check`(補查 --no-verify 繞過的;drift 那步先照預設分支補 origin/HEAD(actions/checkout 不建),再交 before..sha 加 `--push-remote origin --pushed-ref "$GITHUB_REF"`,起點跟推送前同一支算) | 紅燈(drift check 預設 warn 不紅;工具出錯照紅) |
++| CI(push 後) | 同 pre-push + `lumos code-loop check`、`lumos drift check`(補查 --no-verify 繞過的;drift 那步先照預設分支補 origin/HEAD(actions/checkout 不建),再交 before..sha 加 `--push-remote origin --pushed-ref "$GITHUB_REF"`,起點跟推送前同一支算) | 紅燈(drift check 沒寫設定就是 block;設了 warn 不紅;工具出錯照紅) |
+ | Claude 要 Edit/Write 前(impact hook) | `lumos impact --file <檔>` 的結果注入 | 只提醒;邊界仍要自己查 |
+ | 回合結束(check-graph-sync,Stop hook) | 提醒「改了 code 還沒動圖譜」 | 兩家同 session 擋一次續做(`LUMOS_STOP_BLOCK_OFF=1` 關;2026-09-05 起 Claude 也擋) |
+ | 每天 09:30(autonomous-loop) | 自動選題 → 設計審查 → 備 pending 等人放行 | — |
+ | 每天 09:30(launchd daily-governance) | 治理日報、lint-watch 版本掃、doctor --ci、testmap 重建、每週回放與探針抽查;★自主迭代 loop 的派工 2026-09-05 起暫停(LUMOS_AUTOLOOP_OFF 預設 1)★ | 全 fail-open;腳本已包成 main() 免邊跑邊改讀到半行 |
+ 
+ 看到「擋下:」就是上面某一道擋了,訊息第一句講發生什麼、最後一行給該敲的指令。

@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-09-11
+updated: 2026-10-07
 self_audit: claude-fable/2026-08-24
 about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
@@ -10,6 +10,14 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  WHY:doctor 3/4 判「驗收紀錄驗了誰」改用共用的 _verification_system_targets:紀錄寫了 system_refs 就只看它,每項照具名欄位索引的單項規則(_typed_link_target,build_typed_index 也改用它、行為不變)判,寫壞的任何形狀另起標題算 issue(畫面封頂 20、問題數照實算),功能那側多掛的只提醒;1/4 孤兒推薦對有宣告的只推它列的、全寫壞時叫人先修;1/4、3/4、E1、sync 的失效與作廢判斷改用 _verification_status 不分大小寫 [出處:2026-10-03 [[Projects/驗收紀錄寫明驗了哪些功能_計劃]]] [因:正文指路連結被當成驗過而擋推送;宣告寫壞若默默當成沒驗等於關掉檢查(設計審 r1 三席);自訂單項規則會變第二套(設計審 r2)] [test:t_doctor_check3_system_refs_authoritative] [test:t_doctor_check3_system_refs_bad_entry] [test:t_typed_link_target_unchanged] [test:t_verification_status_case_insensitive]
+  PITFALL:doctor S20 的散文撤除候選原本只看條款下一層有沒有「撤除」兩字,「代使用者裁定:改寫:…舊守衛撤除」這種改寫說明被誤列(rtb 3 條);改成先把「裁定…:改寫/改為/改成/保留/維持…」那幾段挖掉、剩下的照舊判(代碼審 r2 抓到 r1 那版「有裁定就只看冒號後」會漏掉「裁定撤除這條,理由:…」這種真撤除,而這份候選是散文撤除唯一的網;「不保留」不算保留;r3 再抓到前綴放寬到「裁定到冒號之間任意字」會把「裁定撤除這條,理由:改寫後…」整段挖掉,同類第三次,換形狀成★只認緊貼的裁定前綴★:裁定直接接冒號、或中間只夾一個括號)——「只看裁定後第一個詞」那種修法會漏掉「裁定:這條撤除了」,實測後沒採 [出處:2026-10-03 rtb 清理循環第 2 輪回傳,[[Projects/漂移防治路線圖_計劃]]] [根因:撤除判斷只做字面比對,沒分清條款本身被撤還是說明裡提到別的東西被撤] [test:t_doctor_s20_prose_retire_by_verdict_verb]
+  WHY:doctor 接在 S19 後多一段 S20:全庫每一篇照筆記測試綁定那五項判(指不到、作廢掛活測試、佔位字或空的、`[test-gone:]` 不對;判存在只做第①道),另列計劃條款仍掛 `[test:]` 而下一層寫了撤除的候選;不計入問題數、不寫治理帳,抽取與名稱切分跟 note-shape 同一套(_ns_test_ref_lines、_test_names_of) [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]〈做法〉10] [因:推送只擋碰到的筆記,沒碰到的舊帳要有地方看得到] [test:t_doctor_note_test_refs]
+  WHY:[2026-10-07 [[Projects/撤除候選也看manual條款_計劃]]]S20 散文撤除候選也看掛 `[manual:]` 的條款(整篇沒有 `[test:]` 也看;`[manual:已撤除,…]`、已標作廢的不列);`[manual:]` 不是 slot 欄位,_ns_test_ref_lines 列不到,另由 _ns_tr_manual_clauses 直接取 clause_bindings 判成「靠人驗」的條款(同行有 `[test:]` 以 `[test:]` 為準、`[manual:]` 太短算未標,都照它;同編號定義兩次的條款不列——解析器已判成重複、要人先修;跟 `[test:]` 那條路看同一批行:只看正文、同行那條路認得測試名就讓它列;doctor 每篇只解析一次,兩條路共用 _ns_clause_rows) [出處:rtb 第三輪回傳與盤點 C5,Phase 13 七條子行寫撤除、主行掛 `[manual:]` 被漏掉] [因:S20 一開頭只挑整篇有 `[test:]` 的筆記,候選條件又要求條款綁了測試名] [不選:另開一段專管 `[manual:]`(同一件事分兩段列)] [test:t_doctor_s20_prose_retire_manual]
+  WHY:[2026-10-07 [[Projects/指向別篇的回頭條件懸空_計劃]]]doctor 接在 S20 後多一段 S21:句子指向別篇的某條回頭條件(「`[[X]]` 的 REVISIT 日期」日期在前在後都認、「回頭條件見/在/寫在/記在/放在 `[[X]]`」),那篇沒有那天的回頭條件行(已結案、條件式 [by:] 都算有)或一條都沒有就列;連結到 REVISIT 之後 30 字內有待辦指示詞(改寫、改成、拿掉…)不列、連結包在行內程式碼裡不列、目標不存在不列;不計入問題數、不寫治理帳,判斷在 _doctor_revisit_ref_lines;讀回頭條件行跟 E5、set 結案列出共用 _revisit_all_lines(含已結案、帶旗標,_revisit_lines 是濾掉已結案的那一層),解析連結先過 link_target、待辦詞範圍扣掉連結本身;「同一句」用檔案前段唯一一份句尾定義 _SENT_END_RE(漂移檢查切小句的 _DRIFT_M1_CUT_RE 也引用它),比對、待辦詞範圍、找日期三處共用 [出處:rtb 第三輪回傳提案 A3;2026-10-07 量測工具鏈 23 句引用 1 句真懸空、rtb 4 句 0 句] [因:回頭條件被刪或改日期時,別篇引用它的句子沒人知道要跟著改] [不選:看整句排除待辦詞(真懸空那句後半有「規則改成軟提醒」);只看逗號切出的那段(「各有一條…,兩條都改寫成」的指示在逗號後)] [test:t_doctor_s21_revisit_ref_dated]
+  WHY:doctor 多一段 S16 列出有效 RULE 的 [until:] 過期、半年沒確認、沒寫 [confirmed:],舊行也列、不計入問題數;過期判斷與 lint 的生命週期提醒共用 _rule_stale_keys,治理帳一篇記一筆 check-s16(判斷在 _doctor_stale_rules,測得到去重) [出處:2026-10-01 [[Projects/筆記標籤_過時判定與按需載入_計劃]] [S6]] [因:到期是時間的函數,只看新寫行的提醒送不到沒人碰的舊 RULE] [test:t_doctor_lists_stale_rules]
+  WHY:doctor 接在 S16 後面多三段筆記格子的過期提醒,都不計入問題數、不寫治理帳:S16 到 S19 讀摘要條目共用 _note_summary_entries(續行接回、單行寫法的 summary 照判;S16 原本逐實體行判);S17 標了作廢的行,接手欄位指到的節點或決策不在、或也作廢了(只看一跳,決策引用用 _dref_norm 解析、判翻案照 E3);S18 RULE 的度量式撤除條件成立(先用提交時同一支 _slot_retire_err 重驗寫法,寫不合列成提醒;治理帳檔尾只讀一遍,跟帳增速那段共用 _gov_tail_bytes 與逐筆版 _drift_jsonl_iter;暖機、[since:] 不滿 N 週、閘目前 off 不判;整段包住,算不出來只講一句);S19 FACT/FLOW/DEP 的 [confirmed:] 超過 [recheck:] 或來源預設。S17、S18 在 --ci 不跑(要讀本機帳、只在完整 doctor),S19 照跑、條數照軟段既有上限;印出前清控制字元。這幾段 doctor 提醒讀 .lumos/config.json 統一走 _doctor_cfg_bytes(捷徑不跟;度量段的 lint-new 開關也用它讀好的那份,_lint_new_config 加 from_snapshot) [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 3 步 [S13]] [因:時間到期是時間的函數,只看新寫行的擋送不到沒人碰的舊行;這三種只提醒,記帳會變成每次重唸同一批的週報噪音] [test:t_slots_doctor_reminders] [test:t_slots_doctor_reminders_edges] [test:t_slots_doctor_reminders_r2]
+  WHY:lint 對新文法的摘要行照筆記格子那張表唸,舊寫法的行照舊判準;RULE 六個鍵在新文法的行走 slot_parse,不留第二套切欄位規則 [出處:2026-10-01 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 0 步] [因:範本換成新寫法後只用舊判準會把合格的新寫法唸成錯,全部換新表又會對幾百行舊帳噴警告] [test:t_slots_single_table]
   WHY:[2026-09-30 [[Projects/存量漂移改法_計劃]] 代碼審 r3、r4]find 把 ./ 開頭當明確路徑:剝掉 ./ 後只認那一篇,找不到就回找不到、不退回用檔名猜——drift 的提示對 - 開頭的節點印成 ./-x(不然被當成選項),退回猜會讓 lumos set ./z 改到 A/z 那一篇 [test:t_drift_fix_review_r4_edges]
   RULE:[since:2026-09-25][confirmed:2026-09-25][retire:note_lint.gate 在所有消費專案都打開且連續 8 週零擋下 → 改回只在 CI 跑;或擋下的一半以上事後是誤擋 → 預設改回只提醒]★筆記欄位新規則擋不擋看專案開關 note_lint.gate★(on/warn/off,沒設=warn;設定檔壞掉、捷徑檔、note_lint 不是物件=當沒設並警告;值看不懂=當 on)——新規則:四類筆記 status 必填(空白也算沒填)、日期年-月-日且是真日期(含決策 decided/ended)、決策 valid 有寫只能 true/false(不分大小寫、沒寫不算錯)、about_code 每項要是磁碟上的檔且不在圖譜資料夾、type project 的「_計劃」在 created ≥ 2026-09-12 時要有 lands_in 且每項是 Systems/<名> 純字串(不要求已存在)。★開關只管新規則;lint 原有錯誤規則照舊擋提交★。判定抽成 `_lint_collect`(原有)與 `_lint_new_rules`(新增),`lumos lint` 與健檢 L 段都呼叫它們。單源 [[Projects/筆記欄位關卡補齊_計劃]] [test:t_note_lint_gate_default_warns] [test:t_note_lint_gate_does_not_relax_existing_rules] [test:t_lint_status_required]
   PITFALL:[2026-09-25 代碼審 r1 正確性席、邊界席、外家兩席]三個坑:①★開關要從跟每支檔有家同一個 repo 根讀(_vault_repo_root,往上找 .git)★——初版用另一支找根,圖譜就在 repo 根、巢狀專案、monorepo 深層三種擺法都讀錯、開關一律當 warn;②★健檢改成整個圖譜跑 lint 之後,一篇 type 寫成清單的筆記會讓整個健檢丟例外★——lint 補防呆、L 段逐篇包住,順手修了總索引那段拿 type 查集合的同一個舊坑;③★日期寫成空字串會繞過日期規則與既有建立日切點★,寫了卻空一律報錯——頂層日期與決策 decided/ended 共用 `_note_date_problem` 一支判斷(代碼審 r2 五席:初修只補了頂層三個,同構的決策日期沒跟上)。設定檔整份不是物件也要警告。重現:`type:` 寫成兩行清單跑 lumos doctor [test:t_note_lint_gate_repo_root_layouts] [test:t_doctor_note_lint_survives_malformed_note] [test:t_lint_empty_date_is_error] [test:t_note_lint_config_not_object_warns]
@@ -28,12 +36,12 @@ summary: |-
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
   KEY:[2026-09-07 loop list]新讀原語 `lumos loop list`——先看有哪些審查編號還開著(next/status/verify-progress 全都強制要 loop_id,卻沒有入口能先拿到編號;缺口出自 [[Projects/執行DAG_調研]])。★關門訊號取治理帳本來就會落的放行事件★(design-loop converged/cap-reached/rewrite + code-loop passed/skipped,nodes 帶編號),不新增任何要人維護的狀態;開著=沒關門事件或關門後又記新輪次。★誠實界線印在輸出裡★:關門事件慣例 2026-08-22 才開始,更早的迴圈天生沒這筆,工具只說「帳面沒看到關門事件」不說「沒做完」。唯讀恆 rc0;`--stale` 看空轉候選、`--exclude <前綴>` 排掉自主迴圈每日場次(不寫死前綴)、`--now YYYY-MM-DD` 指定今天(重算/測試用,壞值擋下 rc2)。★時間一律走 UTC 正規化再比(`_loop_ts_key`/`_loop_ts_newer`)★——兩本帳今天全寫 +08:00(數過 1101/26443 筆),直接比字串剛好會對但那是巧合;換一台機器寫 UTC 就會**靜默**把開著判成關了。解不動或沒帶時區才退回字串比對(舊帳相容),★沒帶時區一律不猜★。驗證見 [[Verification/2026-09-07_loop-list開著的迴圈]]
   KEY:[2026-08-16 query 結構化查詢]新讀原語 `query`——WHERE over 標籤家族(--tag 可重複=AND/--no-tag/--active 排收案態/--contract 沿 extract_contracts/--linked 1-hop 鄰域/--json);旗標 AND 疊加不發明查詢語言(borrow zk list);預設排除 superseded 對齊 search 真遺忘+--include-superseded 逃生;bare 無條件 rc2(對齊 stale --candidate);緣起=標籤收編後「欄位只有顯示沒有篩選」,Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]] [test:t_query_tag_and,t_query_no_tag_and_active,t_query_contract_uses_real_parser,t_query_linked_scope,t_query_forget_superseded,t_query_bare_rc2,t_query_json]
-  KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
+  KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail/superseded 驗證→死背書;superseded=真遺忘第二刀 2026-07-26,同刀:Check3 skip 集+sync-verified-by 過濾+orphan 豁免四位一致)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 query(標籤家族 WHERE)/contracts/decisions/stale 而非 search
   KEY:★多詞回退(2026-08-03 人裁翻為預設,--no-any 逃生;--any 留相容)★——整串片語在檢查範圍內無命中時,退成各詞 OR 召回再交 BM25F 排序。★fallback-only 不是永遠 OR★:片語找得到就不觸發,故對既有查詢零回歸(機械可證+對照組 5 題逐檔實證)。同時印★逐詞覆蓋★到 stderr——回退後搜尋幾乎不可能再回 0,「查無」這個訊號會消失,逐詞覆蓋把它換一種形式還回來(某詞 0 命中會標 ★)。★訊息宣稱的範圍不得大於實際檢查的範圍★:範圍字串必須同時反映 --path／作廢與否／--code 三個維度(這條在 code-loop 四輪裡被抓到三次,每次都是漏掉其中一個維度) [test:t_search_multiword_fallback_is_default_and_only_on_zero,t_search_multiword_fallback_reports_per_term_coverage,t_search_multiword_fallback_scope_message_covers_path_and_superseded]
-  KEY:★預檢迴圈與主迴圈共用 `_search_visible_lines` 單一實作★(2026-08-03 code-loop r2)——原本預檢自己一份「整段 regex 剝 fence」,遇未閉合圍欄與主迴圈分岔,導致逐詞覆蓋虛報非零;同源修法也收編了 `load_vault`／`cmd_guard_trace`(見 [[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]],★`FENCE_RE` 仍活在 refcheck 家族三處未收編★)
+  KEY:★預檢迴圈與主迴圈共用 `_search_visible_lines` 單一實作★(2026-08-03 code-loop r2)——原本預檢自己一份「整段 regex 剝 fence」,遇未閉合圍欄與主迴圈分岔,導致逐詞覆蓋虛報非零;同源修法也收編了 `load_vault`／`cmd_guard_trace`(見 [[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]],`FENCE_RE` 當時仍在 refcheck 家族三處,同日已收編並刪掉)
   KEY:★INVARIANT★ search 預設排除 status=superseded 節點但不排除 stale(真遺忘,GateMem 2026-07-24;stale 是待重驗警訊,藏了=製造新洞,doctor Check S 綁 stale+superseded 正是反例),--include-superseded 逃生;濾網插「命中確認後、三路分岔前」故 ranked/legacy/regex 三路一致、hidden 數=命中被藏筆數非全庫;隱藏數走 stderr(全模式含 --files-only,不污染 stdout)、--json 加 hidden_superseded 欄位 [test:t_search_forget_superseded] [audit:sonnet/2026-07-24]
   KEY:[缺口已補 2026-07-25]原「Check T 無 Python profile」缺口已補(TEST_PROFILES 加 python:行首錨+檔名錨+comment_strip=none),本合約隨之升回正式;★根因更正★:當初被判偽證據的真兇不是 dirs(Check T 掃描走全 repo 不吃 dirs),是 discover 對所有語言剝 C 式註解、test_lumos.py 中文註解的 status/* 與遠處 glob 字面 **/ 配對吃掉半個檔(260→94);詳 [[Projects/CheckT-Python-profile_計劃]]
   KEY:真遺忘只做 search 這一刀(2026-07-24 使用者裁定);context 基本鄰居/推薦、impact、doctor 對作廢驗證的不一致=已知殘留(impact 永不做預設藏——direct 命中是事故記憶);設計與三審見 [[Projects/真遺忘召回過濾_計劃]]
@@ -49,7 +57,7 @@ related:
   - "[[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]]"
   - "[[Projects/圖譜結構化查詢_計劃]]"
 decisions:
-  - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
+  - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
     id: d1
     context: 直接手改 frontmatter 會繞過寫後自驗與鐵則防護(YAML 格式爆、ghost 節點、裸合約),且讀指令若兼寫會讓「查脈絡」帶副作用
     why_chosen: 讀路徑不動圖譜內容才能放心當入口反覆掃(best-effort 事件帳/治理帳不在此限,2026-07-21 措辭修真);寫路徑集中過 atomic 自驗閘,任一步敗則 tmp 丟棄原檔不動,保證圖譜永遠可解析
@@ -98,6 +106,8 @@ verified_by:
   - "[[Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活]]"
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-07_handoff接手視圖]]"
+  - "[[Verification/2026-10-05_事件帳Python段實作]]"
+  - "[[Verification/2026-10-07_README更新清點]]"
 about_code:
   - scripts/lumos
 ---
@@ -108,7 +118,7 @@ about_code:
 源起:CLI 核心非日報觸發(read 原語是 lumos 工具鏈的地基能力,非某日報 gap/inspiration 衍生的單一功能)。
 
 ## 共同地基
-所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-log 事件帳(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
+所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-local,不進版控)(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
 
 ## 14 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**
@@ -131,7 +141,7 @@ about_code:
   - `stats`(`cmd_stats`):各資料夾節點數 + total。
 
 ## 關鍵設計
-- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
+- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
 - **doctor vs lint 分工**:doctor 全圖權威(跨節點 + [test:] 存在性);`lint <節點>` 單檔 node-local 快檢,predicts pre-push 會不會擋。寫節點當下 lint,收尾 doctor。
 - **lint 另有一項軟提醒:開頭欄位的鍵打錯會被唸出來**(2026-09-06 全 repo 審視 #16)。出身:鍵打錯(例如把 `valid_under` 打成 `valid_unde`)以前是**所有檢查靜默略過**——那個欄位等於沒寫,而它可能正是承載回頭條件或驗證關聯的欄位。現在會指出哪個鍵不認得,並在只差一個字元時給出近名候選。
   - ★只算 warning 不升 error★:工具對未知欄位的立場是前向相容(消費專案與跨專案核心庫各有自己的欄位),升成 error 會讓別人的圖譜每次 lint 都被嘮叨。
@@ -192,3 +202,11 @@ about_code:
 ### 說明段:不再手抄清單
 
 手抄那份停在 10 個、實際 66 個,而且 argparse 會再印一遍(畫面上兩份)。**改法不是把清單補齊**——補齊的隔天又會過期。清單的單一來源交給 argparse 自己印,說明段只留定位與入口三步,**刻意不寫「共幾個」**(寫了就是另一個會過期的數字)。守衛盯的是「手抄清單不准長回來」。
+
+## lumos events(2026-10-05,[[Projects/Lumos事件帳_計劃]])
+
+- 唯讀讀 Claude 的 lumos-ledger 外掛寫的事件帳:沒給 `--session` 列最近 10 個會談(只依會談資料夾修改時間排序、只讀前 10 個的塊檔),給了就逐筆印;`--json` 給機器讀。塊檔依檔名排序、塊內照行序,壞行與版本不是 1 的行各自計數後略過。
+- 找事件帳一律先解主 checkout(`_events_root`:git-common-dir 是 `.git` 資料夾就取上一層,失敗退回原根),所以在 worktree 裡跑讀的是主 checkout 那份。
+- 回傳碼:沒有事件帳回 0(三段式印可能原因);`--session` 給不存在的編號回 2。`--session` 只收單層名稱(英數開頭,後面英數與 `._-`),空字串、`..`、斜線、絕對路徑、符號連結一律回 2 不讀;`--repo` 不是目錄回 2(沿用 `_anchor_repo_root`,不誤報成沒有事件帳)。只認 `\n` 斷行(JSON 字串裡的 U+2028 不算);版本只認整數 1;tool 缺 `ok` 印 ?、不算失敗;印到終端前消毒(代碼審 r2 改用既有的 `_esc_clean` 加 `_PATH_SPECIAL_CATS`,連雙向覆寫、零寬、孤立代理字元一起處理);`--json` 一律 ASCII 跳脫;解析失敗或巢狀過深都算壞行;塊檔是連結不讀;擋下訊息印到標準錯誤。規矩與綁定測試在 [[Systems/lumos事件帳]]。
+- 讀進來時就把關(代碼審 r3):巢狀太深、單行太長算壞行,塊檔太大略過並計數;事件帳上層是連結時讀也不讀、回 2;`--repo` 給子目錄時當成那個 repo。上限數字與理由在 [[Systems/lumos事件帳]]。
+- `--prune --days N` 例外會刪檔(N 是 1 到 36500 的半形整數,否則回 2 不刪;下限 1 就是最近 24 小時不刪的保護;另驗路徑與 worktree 登記),它的規矩寫在 [[Systems/lumos事件帳]]。測試:`t_events_reader_merges_chunks`、`t_events_reader_no_ledger`、`t_events_reader_from_worktree`、`t_events_prune_only_old_sessions`、`t_events_prune_edge_cases`、`t_events_prune_hardening`、`t_events_r3_hostile_output`、`t_events_r3_path_trust`。

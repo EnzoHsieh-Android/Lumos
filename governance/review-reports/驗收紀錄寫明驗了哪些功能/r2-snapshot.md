@@ -1,0 +1,85 @@
+---
+type: project
+status: doing
+created: 2026-10-03
+updated: 2026-10-03
+tags:
+  - type/project
+  - status/doing
+  - scope/node-content
+lands_in:
+  - Systems/lumos-cli-read
+  - Systems/lumos-cli-write
+related:
+  - "[[Projects/漂移防治路線圖_計劃]]"
+  - "[[Systems/lumos-cli-read]]"
+  - "[[Systems/lumos-cli-write]]"
+---
+# 驗收紀錄寫明驗了哪些功能_計劃
+
+白話:健康檢查(doctor)第 3 段「驗收紀錄說它驗了某功能,功能那邊有沒有反向登記」(下稱 doctor 3/4)——但驗收紀錄本身沒有任何欄位寫「驗了哪些功能」,工具只能拿正文裡的每一個 `[[Systems/X]]` 連結反推。正文裡寫「現況見 [[Systems/X]]」這種指路連結(只是帶讀者去看、不代表驗過),就被當成「驗過 X」,要求 X 反向登記,推送被擋。這份計劃讓驗收紀錄可以在開頭欄位 `system_refs` 明寫驗了哪些功能;有寫就只看它,正文連結不算,寫壞了一律報出來、不默默當成沒驗;沒寫的舊紀錄照舊從正文推。
+
+依據:
+- rtb(另一個用 lumos 的消費專案)清理循環第 1 輪回傳第 2 項(rtb 的 governance/audits/2026-10-01-drift-sweep/2026-10-02-cleanup/return-to-toolchain.md):在驗收紀錄補更正括號「現況見 [[Systems/X]]」,doctor 立刻要求 7 篇 Systems 反向登記,算 7 個 issue、推送被擋;rtb 只好把 14 個指路連結改成純文字。
+- Enzo 2026-10-03 裁:加新欄位、範圍收窄(第一版只接健康檢查、建紀錄指令、同步指令、合法欄位清單,不接圖譜連線等其他用到 `plan_refs` 的地方)。
+- [[Projects/漂移防治路線圖_計劃]] 清理與防治循環第 1 輪排序:1b 之後就是這項(擋錯推送、修法小)。
+
+PRIOR-ART: 照驗收紀錄既有的 `plan_refs`(這份驗收對應哪份計劃)開頭欄位寫法——清單欄位、每項一個 `[[連結]]`、`lumos append` 加、`new verification --plan` 建檔時寫、自己那段(doctor 4/4)報自己的斷鏈。「沒有對象」用明寫的 `無 <理由>`,照格子 `[被取代:無 <理由>]` 的先例;「宣告優先、沒宣告才推」在本 repo 的近似先例是 `aliases: []` 宣告制與「有宣告才驗」的 lint 設定。推「驗了誰」的邏輯(含跳過作廢、失效、不通過的紀錄)在 doctor 3/4 與 `sync-verified-by` 各寫了一份一模一樣的,這次整段抽成共用一支 `_verification_system_targets`,兩邊與孤兒紀錄的推薦都改用它,跳過哪些狀態也只留這一份。世界解:文件系統常見「明確宣告的依賴 vs 從內文推出的引用」分兩種(例如套件管理的宣告依賴對比原始碼 import 掃描),宣告的優先、沒宣告才退回推;宣告寫壞時要報錯,不能默默當成沒有依賴。
+RETIRE-IF: 滿 8 週全部專案的驗收紀錄都沒寫過 `system_refs`、doctor 3/4 也沒再出現指路連結誤報 → 欄位留著但說明降級;或寫了 `system_refs` 的紀錄裡,有一半以上漏列真的驗了的功能(反向登記因此少掛)→ 改回只從正文推、另給指路連結的寫法;或寫了的紀錄有一半以上曾被 doctor 3/4 判寫壞 → 寫法太難,回頭改設計。
+REVISIT:2026-12-01 數本 repo 與 rtb 的驗收紀錄有幾篇寫了 system_refs、doctor 3/4 有沒有再出現指路連結誤報或寫壞的 system_refs,判 RETIRE-IF;順便看 rtb 自己複製進 repo 的 lumos 版本含不含 system_refs
+
+## 範圍
+
+- 做:驗收紀錄的開頭欄位 `system_refs`(清單,每項是一個 `[[Systems/X]]`,或單獨一項 `無 <理由>`);doctor 3/4、`sync-verified-by`、孤兒紀錄的推薦改用共用函式判「驗了誰」;`system_refs` 寫壞的任何形狀 doctor 3/4 都列出、算 issue(不默默當成沒驗);`new verification --systems` 建檔時把其中的功能筆記寫進 `system_refs`;登記成可 `append`/`remove` 的清單欄位;功能那側多掛、紀錄的 `system_refs` 沒列的舊登記只提醒。
+- 不做:不接具名連線(`TYPED_EDGE_FIELDS`)、作廢連鎖、反向索引、圖譜視覺化等其他寫死 `plan_refs` 的地方(Enzo 裁範圍收窄)——但 `system_refs` 每一項是單一連結,照既有通則會進 `n.targets`,一般圖譜邊(孤兒、壞連結等)照樣算它,這是既有行為、本案不改;不加進 `LINK_KEYS`(它不做寫法檢查,只影響「只改連結欄位的提交算不算假同步」的判定,本案用不到);不改驗收紀錄範本(範本預放欄位會讓忘了填的紀錄變成宣告);不自動把舊紀錄補上 `system_refs`;不自動拿掉功能那側多掛的舊 `verified_by`(要人確認那份紀錄是不是真的沒驗它)。
+
+## 做法
+
+1. **共用判法** `_verification_system_targets(env, rel, n)` → None(紀錄的 status 去空白、轉小寫後是 stale、fail 或 superseded,不構成雙向義務,呼叫端跳過)或 `(宣告了沒, 驗了哪些 Systems 的 rel 集合, 寫壞的項)`:
+   - 開頭欄位沒有 `system_refs` 這個鍵 → 沒宣告,照舊用現行 `n.targets`(正文去掉程式碼區塊後的連結,加上開頭欄位裡「整個值恰為單一連結」且不是區塊寫法的項)落在 `Systems/` 的。
+   - 有這個鍵 → 宣告了,只看它,逐項嚴格判。合格的項只有兩種:①整個值恰為一個 `[[…]]`(別名、`#段落` 照既有 `link_target` 去掉),解析得到、落在 `Systems/`,而且連結有寫路徑時路徑要跟解析結果一致(防 `[[Projects/A]]` 被檔名救成 `Systems/A`);沒寫路徑的 `[[A]]` 解析落在 `Systems/` 就收,落在別的資料夾(例如 Projects/A 與 Systems/A 同名)算寫壞、改法叫人寫成 `[[Systems/A]]`;②整份清單只有一項、是 `無` 加至少 4 個字的理由。其他任何形狀——區塊寫法、空值、空字串、空清單 `[]` 或沒縮排而解析成空清單、純量多連結、純文字路徑、全形括號、連結後面多一句、解析不到、不是 Systems、`無` 跟連結混用——都收進「寫壞的項」(附原文與原因);鍵在但一項都沒有,本身算一項寫壞(「宣告是空的」)。
+2. **doctor 3/4** 改呼叫它(跳過哪些狀態由它決定),比對 `verified_by` 照舊;另外兩個標題:「有 N 項 system_refs 寫壞了」(`warn`,算 issue,每項印紀錄、原文、原因與改法——照 doctor 4/4 對 `plan_refs` 斷鏈自己報的先例,指到不存在的節點 2/4 也會報,重複可接受);「有 N 篇功能筆記多掛了沒宣告它的驗收紀錄」(`warn_soft`,不計入問題數:只看 `Systems/` 的功能筆記——計劃掛 `verified_by` 是既有做法、不在 `system_refs` 裡,不唸;功能的 `verified_by` 列了某份有宣告的紀錄,而那份的 `system_refs` 沒列這個功能;改法給 `lumos remove <功能> verified_by "[[紀錄]]"` 或把它補進紀錄的 `system_refs`)。
+3. **`sync-verified-by`** 改呼叫它:有宣告的紀錄只補它列的功能;寫壞的項不補、印一行指到 doctor 3/4。dry-run 說明句補一句「有 system_refs 的紀錄只看它」。**孤兒紀錄的推薦**(doctor 1/4 的 `--suggest` 那段)對有宣告的紀錄改用它列的功能。
+4. **建紀錄** `new verification --systems A,B`:照舊先驗每個都存在、對每個加 `verified_by`(本 repo 有 42 篇計劃帶 `verified_by`,掛在計劃上是既有做法);只把其中落在 `Systems/` 的寫進新紀錄自己的 `system_refs`(走 `cmd_append`,照 `plan_refs` 那段);一個 Systems 都沒有就不寫這個鍵(維持從正文推)。寫 `system_refs` 失敗時提醒句另給 `lumos append <新紀錄> system_refs "[[Systems/X]]"`(既有那句叫人跑 `sync-verified-by --apply`,它只補功能那側)、rc2。建紀錄當下印的教學(`NEW_HINT` 的 verification 那段)補一句 `system_refs`,以及「這份沒驗任何功能、正文全是指路的,建好後 `lumos append <新紀錄> system_refs "無 <理由>"`」。
+5. **登記**:`system_refs` 只進 `LIST_KEYS`——`append`/`remove` 的白名單、多個連結塞同一行的 lint 都看它,lint 的已知欄位清單也併入它。`remove` 拿掉最後一項時鍵會一起消失(既有行為),紀錄就回到「沒宣告、從正文推」——對驗收紀錄的 `system_refs` 這樣刪光時,`remove` 另印一句提醒:這份回到從正文推,正文的指路連結又會被要求反向登記;要宣告「沒驗任何功能」改寫 `無 <理由>`。
+6. **要同步的文件**:[[Systems/lumos-cli-read]](doctor 1/4 推薦與 3/4)、[[Systems/lumos-cli-write]](new verification、sync-verified-by、append 清單欄位);`skills/lumos-project-notes/commands/03-寫回圖譜.md`(驗收紀錄怎麼寫)、`skills/lumos-project-notes/SKILL.md` 決策與驗證那段、`skills/lumos-project-notes/reference.md`(健康巡檢列、list 追加那列、plan_refs 欄位那節旁補 system_refs)、精簡版 `slim/skills/lumos-project-notes/reference.md` 的 plan_refs 欄位那節;`scripts/lumos` 裡 `append` 與 `new --systems`、`sync-verified-by` 的說明字串。
+
+## 條款
+
+(測試名是預先宣告,實作時新增。)
+
+- [S1] 當驗收紀錄寫了 `system_refs` 列 Systems/A、正文又連到 Systems/B 時,doctor 3/4 應只要求 A 反向登記,B 沒登記不算漏 [test:t_doctor_check3_system_refs_authoritative]
+- [S2] 當驗收紀錄沒寫 `system_refs` 時,doctor 3/4 應照舊從正文連結推;放在 `Verification/` 子資料夾的紀錄同樣適用 [test:t_doctor_check3_system_refs_authoritative]
+- [S3] 當 `system_refs` 只有一項 `無 <理由>` 時,doctor 3/4 應不要求任何功能反向登記;理由不到 4 個字、或 `無` 跟連結混用時應算寫壞 [test:t_doctor_check3_system_refs_authoritative]
+- [S4] 當 `system_refs` 寫成區塊寫法、空值、空清單、純量多連結、純文字路徑、全形括號、連結後面多一句、解析不到、或指到不是 Systems 的節點時,doctor 3/4 應在「system_refs 寫壞了」標題下列出每一項並算 issue,不默默當成沒驗 [test:t_doctor_check3_system_refs_bad_entry]
+- [S5] 當連結寫了路徑 `[[Projects/A]]`、而只有 Systems/A 存在時,應算寫壞,不被檔名救成 Systems/A;沒寫路徑的 `[[A]]` 解析落在 Systems 時應收,落在別的資料夾時應算寫壞並叫人寫完整路徑 [test:t_doctor_check3_system_refs_bad_entry]
+- [S6] 當功能的 `verified_by` 列了某份有宣告的紀錄、而那份的 `system_refs` 沒列這個功能時,doctor 3/4 應只提醒、不計入問題數;掛在計劃上的 `verified_by` 不唸 [test:t_doctor_check3_system_refs_extra_backlink]
+- [S7] 當跑 `sync-verified-by` 時,有宣告的紀錄應只補它列的功能,正文指路連結與寫壞的項都不補 [test:t_sync_verified_by_system_refs]
+- [S8] 當 `new verification <名> --systems Systems/A,Projects/P` 時,新紀錄的 `system_refs` 應只列 A,A 與 P 都應帶 `verified_by` 回指;`--systems` 全是非 Systems 時應不寫 `system_refs` [test:t_new_verification_writes_system_refs]
+- [S9] 當 `lumos append` 對驗收紀錄加 `system_refs` 時應成功,lint 應不把它當成打錯的欄位名;`remove` 拿掉最後一項時應印提醒,之後 doctor 3/4 應回到從正文推 [test:t_system_refs_registered_field]
+- [S10] 當驗收紀錄的 status 是 stale、fail、superseded(不分大小寫、前後有空白)時,不論有沒有 `system_refs`,doctor 3/4 與 sync 都應跳過 [test:t_doctor_check3_system_refs_authoritative]
+- [S11] 當孤兒驗收紀錄有宣告時,doctor 1/4 的推薦應只推它 `system_refs` 列的功能 [test:t_doctor_orphan_suggest_system_refs]
+
+## 回退
+
+- revert 實作提交即可。已寫進筆記的 `system_refs` 留著:revert 後 lint 會唸「不認得的欄位」(只提醒),doctor 3/4 照舊從 `n.targets` 推——`system_refs` 每項的連結本來就在 `n.targets` 裡,不會少掛;但靠它擺脫指路連結誤報的紀錄,revert 後正文指路連結又會被要求反向登記、推送被擋,要把指路連結改成純文字或回到新版。`無 <理由>` 那項不是連結,revert 後不影響任何判定。
+
+## 實務隱患
+
+- **漏網**:寫了 `system_refs` 卻漏列真的驗了的功能,反向登記就少掛一篇,doctor 不會發現——宣告優先的代價,RETIRE-IF 第二條在量。功能那側多掛的舊登記只提醒,不自動拿。
+- **誤擋**:`system_refs` 寫壞(任何形狀)會算 issue、推送前 `doctor --ci` 擋——本意,寧可擋也不默默關掉檢查;訊息逐項講原因與改法。
+- **相容**:舊紀錄不寫就照舊,消費專案 `lumos update` 後行為不變;只有自己寫了欄位的紀錄換判法。還沒更新的舊版 lumos 讀到 `system_refs` 時不認得這個語意,照舊從 `n.targets` 推,指路連結誤報不會解——要擺脫誤報得先 `lumos update`。
+- **時間**:判法跟現行一樣是逐篇讀開頭欄位,不多讀檔;嚴格判每項多一次 `resolve`。
+- 已排除:金流:不碰任何付款或計費
+- 已排除:對外送出:只讀寫筆記,不連網
+- 已排除:不可逆:只改判法與新增欄位,revert 回得去
+- 已排除:併發:寫入走既有的 cmd_append(逐檔原子、自帶鎖),不新增寫入路徑
+- 守衛面:doctor 3/4 本來就算 issue、推送前會擋;這次讓它少擋指路連結、多擋寫壞的 `system_refs`。
+
+## 實作紀錄
+
+(還沒開始)
+
+## 審計修正紀錄
+
+- r1(2026-10-03,4 席:正確性-opus、邊界-sonnet、整合-sonnet、架構對齊-sonnet):20 條/blocking 8/全折,無放行、無駁回。三席獨立撞到同一個根:「有這個鍵就只看它」讓寫壞的形狀(空值、全形括號、區塊寫法、純量多連結、純文字路徑、連結後多一句)鍵存在、解出來是空,等於默默關掉檢查;`remove` 拿掉最後一項會連鍵刪掉,空清單用指令到不了。換形狀:每項嚴格判、寫壞的任何形狀都報 issue(照 doctor 4/4 對 plan_refs 自己報斷鏈的先例);「沒驗任何功能」改寫 `無 <理由>`(照 [被取代:無 <理由>] 先例);路徑式連結要跟解析結果一致(防檔名救援);`--systems` 只把 Systems 寫進 system_refs(計劃照舊掛 verified_by);status 判斷不分大小寫;功能那側多掛的舊登記只提醒;孤兒推薦也改用共用判法;同步清單訂正(精簡版說明書其實有 plan_refs 那節);回退與舊版相容講清楚。鏡像核對再補:多掛舊登記只算 Systems、撤除條件加寫壞率、空清單算寫壞、`remove` 刪光印提醒、裸檔名規則、子資料夾、REVISIT 看 rtb 的工具版本、建檔提示寫 `無`。例:`system_refs: ""` 加正文連到 Systems/A → 修前不要求任何反向登記也不報、修後列成寫壞;`system_refs: [[Projects/A]]` 而只有 Systems/A → 修前被救成 A、修後寫壞。條款擴成 S1–S11。席報告在 `governance/review-reports/驗收紀錄寫明驗了哪些功能/`。

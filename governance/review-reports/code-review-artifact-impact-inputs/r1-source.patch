@@ -1,0 +1,103 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index ab1c35a0..e203e433 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -41004,23 +41004,26 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                 print(f"  {x['node']}{contract_tag}  (trigger: {x['matched_by']})")
+ 
+     return 0
+ 
+ 
+ _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
+ 
+ 
+ def _impact_diff_seed_ok(f):
+     """--diff 種子過濾:只收 code 檔。剔除圖譜/凍結快照/帳檔(.jsonl)/文檔(.md)/
++    簿記分類沿用 _BOOKKEEPING_FILES/_BOOKKEEPING_DIRS,卷證不是程式;
+     governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。"""
+     if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP):
+         return False
++    if f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS):
++        return False
+     if f.endswith((".jsonl", ".md")):
+         return False
+     if f.endswith(".json") and f.startswith("governance/"):
+         return False
+     return True
+ 
+ 
+ def _impact_payload_read(path):
+     """讀一份已經算好的波及結果(pre-push 每次推送只算一次,兩個消費者共用同一份)。
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 195d8a96..84f9a205 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23027,20 +23027,67 @@ def t_impact_ranked():
+     check("incidents-only 只有事故", all(x.get("kind") == "incident" for x in di["results"]),
+           str(di)[:200])
+     # 磁碟檔無 SQL → legacy(無 prospective)不觸發該事故
+     r = lum("impact", "--file", "src/svc.py", "--json")
+     d2 = json.loads(r.stdout.strip().splitlines()[-1])
+     check("無 prospective 時磁碟無 SQL 不誤觸發", not any("SQL" in x["node"] for x in d2["incidents"]),
+           str(d2["incidents"]))
+     shutil.rmtree(root, ignore_errors=True)
+ 
+ 
++def t_impact_diff_review_artifacts():
++    """歷史審查附件不當程式種子；混合差異仍保留真程式、已刪檔與相鄰目錄。"""
++    import json, shutil
++    root = _nh_repo()
++    try:
++        _nh_file(root, 'src/current.py')
++        _nh_file(root, 'src/deleted.py', 'legacy_deleted = 17\n')
++        _nh_node(root, 'Current', about=['src/current.py'], body='實作在 `src/current.py`。')
++        _nh_node(root, 'Deleted', about=['src/deleted.py'], body='實作在 `src/deleted.py`。')
++        _nh_node(root, 'Historical', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:ARCHIVED_ONLY', body='歷史片段的事故。')
++        _nh_node(root, 'Actual', typ='issue', folder='Issues', resp=None,
++                 extra='pitfall_when:\n  - content:REAL_TOUCH', body='實際程式的事故。')
++        _nh_commit(root, 'base')
++        _nh_file(root, 'governance/review-reports/case/snapshot.patch', '+ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/review-reports/case/派工.txt', 'ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/replay/case/verdict.patch', '+ARCHIVED_ONLY\n')
++        _nh_file(root, 'governance/code-loop/case/example.py', 'ARCHIVED_ONLY = True\n')
++        _nh_commit(root, 'artifacts')
++        def impact(span):
++            r = subprocess.run([sys.executable, GRAPHCTL, 'impact', '--diff', span,
++                                '--repo', str(root), '--json'], capture_output=True, text=True)
++            check('附件測試的 impact 指令成功', r.returncode == 0, r.stderr)
++            return json.loads(r.stdout)
++        archive = impact('HEAD~1..HEAD')
++        check('只有審查附件時種子為空', archive['files'] == [], str(archive['files']))
++        check('歷史片段不能觸發事故', not archive['results'], str(archive['results'])[:300])
++        _nh_file(root, 'src/current.py', 'REAL_TOUCH = True\n')
++        _nh_git(root, 'rm', '-q', 'src/deleted.py')
++        _nh_file(root, 'governance/review-reports-other/worker.py', 'adjacent_worker = 29\n')
++        _nh_commit(root, 'mixed')
++        mixed = impact('HEAD~2..HEAD')
++        check('混合差異僅保留真程式與相鄰目錄', set(mixed['files']) ==
++              {'src/current.py', 'src/deleted.py', 'governance/review-reports-other/worker.py'},
++              str(mixed['files']))
++        pinned = {x['node'] for x in mixed['results'] if x.get('pinned')}
++        check('真程式的家仍必推', 'Systems/Current.md' in pinned, str(pinned))
++        check('已刪程式的家仍必推', 'Systems/Deleted.md' in pinned, str(pinned))
++        check('真程式事故仍必推', 'Issues/Actual.md' in pinned, str(pinned))
++        check('混合差異排除歷史事故', 'Issues/Historical.md' not in pinned, str(pinned))
++        tracked = _nh_git(root, 'ls-files', 'governance/review-reports').stdout.splitlines()
++        check('審查附件仍留在版本紀錄', len(tracked) == 2, str(tracked))
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++
+ def t_impact_diff():
+     """impact --diff(code-loop 橋接):聚合整段 diff 的 ranked impact 成受影響功能面 manifest。"""
+     import subprocess as sp, json, shutil
+     root = Path(tempfile.mkdtemp(prefix="gctl-impd-"))
+     def g(*a):
+         sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+     v = root / "docs" / "z-knowledge"
+     (v / "Systems").mkdir(parents=True); (v / "Issues").mkdir(); (v / "MOC").mkdir()
+     (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")

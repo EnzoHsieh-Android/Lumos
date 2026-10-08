@@ -1,0 +1,1623 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 011be64e..4add29aa 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -141,39 +141,35 @@ jobs:
+           python scripts/lumos note-shape --diff "$BEFORE..$SHA" --repo . || {
+             rc=$?
+             if [ "$rc" -eq 1 ]; then
+               echo "::error::note-shape 擋下(原因在上面):筆記新寫了程式行號引用或沒寫來源的現況描述——本機提交前/推送前被繞過(--no-verify)或用了 LUMOS_SKIP_NOTE_SHAPE 單次跳過;改寫那幾行後重推,或把專案的 note_shape.gate 設成 warn"
+               exit 1
+             fi
+             exit "$rc"
+           }
+       - name: drift check (存量漂移檢查;--no-verify 後盾)
+         # 已經寫進圖譜的句子因為這次推送改了狀態而過期(轉正了還留著預告句…;Projects/存量漂移防線_計劃 [S1][S18])。
+-        # 起點:before 在本機找得到就用它;before 是空的、40 個 0(新分支首推)、或本機找不到(force push 蓋掉的舊頂端)時,
+-        # 改用這次頂端的第一個父提交(至少查到這次推送的最後一個提交;頂端沒有父提交就從空樹比)——不交給 lumos 自己判:
+-        # 這一步之前已經 fetch 過,main 的 upstream 就是這次的頂端,lumos 會判「頂端已在主線、沒有新東西」整步跳過(代碼審 r1 外家席)。
+-        # 因為起點不是 before 就是頂端的父提交,都在 checkout(fetch-depth: 0)抓下來的歷史裡,這步不依賴前面 note-shape 那步的 fetch。
++        # 起點:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF"(Actions 內建),由 lumos 算
++        # ——跟主線(origin 的預設分支優先、跳過就是這次推的那條)的分岔點與 before 取比較新的;推 main 本身時主線候選都被跳過,
++        # 用 before。原本在這裡用 shell 補(before 找不到就改用頂端的父提交),合過主線與新分支一次帶多個提交時算錯(代碼審 r2)。
++        # 主線候選是 checkout(fetch-depth: 0)抓下來的 origin/*,這步不依賴前面 note-shape 那步的 fetch。
+         # 模式照被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=warn):warn 只印、回 0,CI 不紅;block 有要處理回 1,
+         # 印擋下原因、CI 紅;其他非零(參數錯、工具出錯)照原碼讓 CI 紅——工具出錯時寧可紅,跟上面 code-loop gate、note-shape 兩步同一個慣例
+         # (推送前掛鉤對其他非零是放行並講一句「這次沒檢查」,兩邊刻意不同:CI 是最後一道後盾)。
+         # 排在 code-loop gate 之後;全套測試在這步前面(既有安排,沒搬),跟防線計劃 [S18] 字面不同,理由寫在 Systems/存量漂移守衛。
+         if: github.event_name == 'push'
+         env:
+           BEFORE: ${{ github.event.before }}
+           SHA: ${{ github.sha }}
+         run: |
+-          if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+-            OLD="${BEFORE:-(空的)}"
+-            BEFORE="$(git rev-parse -q --verify "$SHA^1^{commit}" 2>/dev/null || git hash-object -t tree /dev/null)"
+-            echo "漂移檢查起點:before=$OLD 是新分支首推或本機找不到,改從 $BEFORE 算(至少查這次推送的最後一個提交)"
+-          fi
+-          python scripts/lumos drift check --diff "$BEFORE..$SHA" --repo . || {
++          [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
++          python scripts/lumos drift check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo . || {
+             rc=$?
+             if [ "$rc" -eq 1 ]; then
+               echo "::error::drift check 擋下(每一筆與 lumos drift fix 修法在上面):這次推送讓筆記跟狀態對不上——本機推送前被繞過(--no-verify)或用了 LUMOS_SKIP_DRIFT_CHECK 單次略過;照上面的指令改掉或 lumos drift ack 表態後重推,或把專案的 drift_check.gate 設成 warn"
+               exit 1
+             fi
+             exit "$rc"
+           }
+       - name: Anchor verify (baseline 缺失必紅)
+         run: |
+           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
+diff --git a/docs/lumos-toolchain-knowledge/Issues/健檢CI範本說明貼進workflow不是合法YAML.md b/docs/lumos-toolchain-knowledge/Issues/健檢CI範本說明貼進workflow不是合法YAML.md
+new file mode 100644
+index 00000000..ebe539da
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Issues/健檢CI範本說明貼進workflow不是合法YAML.md
+@@ -0,0 +1,31 @@
++---
++type: issue
++status: open
++created: 2026-09-30
++updated: 2026-09-30
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/issue
++  - status/open
++  - scope/guards-gates
++summary: |-
++  PITFALL:[2026-09-30 推送閘接漂移檢查代碼審 r2 外家否決席 F1]健檢(doctor)給消費專案貼的 CI 步驟提示裡,筆記形狀擋與筆記內容審那兩處把說明文字(含共用的 Python 3.14 那句 _CI_PY314_NOTE)直接接在步驟後面、不是 YAML 註解,照整段貼進 workflow 的 steps 底下會解析失敗;存量漂移檢查那處已改成縮排對齊步驟的 # 註解,這兩處還沒改。重現:把筆記內容審那處的步驟字串接在一份 workflow 的 steps: 後面,用 ruby -ryaml 的 YAML.safe_load 解析,報 could not find expected ':';判法可沿用 t_doctor_drift_ci_template_start_fallback 的 _dr_yaml_tail_ok
++related:
++  - "[[Systems/存量漂移守衛]]"
++---
++# 健檢CI範本說明貼進workflow不是合法YAML
++
++## 現象
++
++`lumos doctor` 在專案 CI 沒呼叫某道閘時,會印一段「CI 貼這一步」的提示。筆記形狀擋(note-shape)與筆記內容審(note-audit)這兩處的提示,是「步驟本身 + 兩格縮排的括號說明 + 共用的 Python 3.14 說明」接在一起。說明那幾行不是 YAML 註解,縮排又比步驟淺,人照整段貼進 workflow 的 `steps:` 底下,GitHub Actions 讀不了那份 workflow。
++
++存量漂移檢查那處在推送閘接漂移檢查代碼審第二輪(外家否決席 F1)已改:說明與 Python 3.14 那句都寫成縮排對齊步驟、以 `#` 開頭的註解,不接共用的 `_CI_PY314_NOTE`。這兩處不在那次的範圍。
++
++## 要做的
++
++- 這兩處的說明改成跟漂移那處同一種寫法(縮排對齊步驟的 `#` 註解);共用的 `_CI_PY314_NOTE` 換成註解形式或拆掉,`t_ci_runs_python314_and_old_syntax_check` ③ 的計數跟著改。
++- 補一條測試:拿 doctor 印出的提示字串,斷言步驟之後每一行都是空行或縮排後的 `#` 註解(標準庫沒有 YAML 解析器),並先證明舊寫法會讓斷言紅。
++
++REVISIT:2026-10-31 還沒改就攤給 Enzo 排
+diff --git a/docs/lumos-toolchain-knowledge/Issues/推送前其他閘的範圍在合過主線時會多算.md b/docs/lumos-toolchain-knowledge/Issues/推送前其他閘的範圍在合過主線時會多算.md
+index 6e99ece3..77d663d2 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/推送前其他閘的範圍在合過主線時會多算.md
++++ b/docs/lumos-toolchain-knowledge/Issues/推送前其他閘的範圍在合過主線時會多算.md
+@@ -2,31 +2,34 @@
+ type: issue
+ status: open
+ created: 2026-09-30
+ updated: 2026-09-30
+ aliases: []
+ about_code:
+   - scripts/hooks/pre-push
+ tags:
+   - type/issue
+   - status/open
++  - scope/guards-gates
+ summary: |-
+-  PITFALL:[2026-09-30 推送閘接漂移檢查代碼審 r1 正確性席]推送前掛鉤裡的每支檔有家與筆記形狀擋,範圍用「不在任何遠端上的最早提交的上一個」算;功能分支合過主線、或重定基底後強推時,可能把主線上別人的改動算成這次推送的,誤擋或誤報。漂移檢查那道已改成自己算起點(遠端舊值與主線分岔點取較新的),這兩道還沒改 [test:t_prepush_drift_range_ref_shapes]
++  PITFALL:[2026-09-30 推送閘接漂移檢查代碼審 r1 正確性席]推送前掛鉤裡的每支檔有家與筆記形狀擋,範圍用「不在任何遠端上的最早提交的上一個」算;功能分支合過主線、或重定基底後強推時,可能把主線上別人的改動算成這次推送的,誤擋或誤報。漂移檢查那道的起點已改由 lumos 的 _push_range_start 算(遠端舊值與主線分岔點取較新的;代碼審 r2 起掛鉤不再自己算),這兩道還沒改 [test:t_prepush_drift_range_ref_shapes]
+ related:
+   - "[[Systems/bound-tests-gate]]"
+   - "[[Systems/存量漂移守衛]]"
+ ---
+ # 推送前其他閘的範圍在合過主線時會多算
+ 
+ ## 現象
+ 
+-推送前掛鉤的漂移檢查在代碼審第一輪被抓到:功能分支合過主線再推、或重定基底後強推時,「遠端舊值..本地新值」會把主線上別人的改動算進這次推送。修法是掛鉤自己算起點——只有主線分岔點是遠端舊值的祖先時才用遠端舊值,其他一律用分岔點;找主線依序看 `main@{upstream}`、`master@{upstream}`、推送的遠端的 HEAD、遠端 main、遠端 master。測試 `t_prepush_drift_range_ref_shapes` 釘著各種推送形狀。
++推送前掛鉤的漂移檢查在代碼審第一輪被抓到:功能分支合過主線再推、或重定基底後強推時,「遠端舊值..本地新值」會把主線上別人的改動算進這次推送。第一輪折入時掛鉤自己算起點;第二輪代碼審查出掛鉤、CI、工具三份各有洞,改成起點只在 lumos 裡的 `_push_range_start` 算一處:掛鉤把「遠端舊值..本地頂端」連同遠端名(`--push-remote`)與遠端 ref 名(`--pushed-ref`)原樣交給 `lumos drift check`。規則:主線依序找遠端 HEAD、`main@{upstream}`、`master@{upstream}`、遠端 main、遠端 master,跳過就是這次推的那條;每一個合併基底都是遠端舊值的祖先才用舊值,否則用第一個不是的基底。測試 `t_prepush_drift_range_ref_shapes`、`t_prepush_drift_start_mainline_shapes`、`t_ci_drift_start_shapes` 釘著各種推送形狀。
+ 
+ 同一支掛鉤裡的每支檔有家(home check)與筆記形狀擋(note-shape)用的是另一套範圍算法,正確性席指出同一個「合過主線」的形狀可能也會多算;那次代碼審的範圍只限漂移檢查,沒動這兩道。
+ 
+ ## 要做的
+ 
+ - 先重現:在臨時 repo 造「功能分支合過主線、主線上有別人新增一支沒家的程式檔或一句新的程式行號引用」,推功能分支,看這兩道會不會擋到別人的改動。
+-- 會的話,這兩道改用漂移檢查那一套起點算法(抽成掛鉤裡共用的一段),並補同一組推送形狀的測試。
++- 會的話,這兩道改用 `_push_range_start`(`home check`、`note-shape` 比照 `drift check` 加 `--push-remote`/`--pushed-ref`,掛鉤原樣交範圍),別在掛鉤裡另寫一份,並補同一組推送形狀的測試。
+ - 不會的話(它們的算法其實已經排除了遠端上已有的提交),在這篇寫明為什麼、結案。
+ 
++另一處不一致(第二輪代碼審架構對齊席 F3)**已修**:原本掛鉤裡只有漂移檢查那道把「回傳碼 128 以上」(被 Ctrl-C 或訊號殺掉)當成整支停下,每支檔有家與筆記形狀擋被中斷時會放行往下跑。提交「fix: 推送前其他閘被中斷時也停下,不再當成放行(代碼審折入)」把每支檔有家、筆記形狀擋、spec-gate、code-loop check 與漂移那道一起改走同一支 pp_stop_if_signaled,測試 `t_prepush_gates_stop_on_signal`。這篇剩下的只有範圍多算那件事。
++
+ REVISIT:2026-10-31 還沒重現就攤給 Enzo 排
+diff --git a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+index 6bd46cd9..117eb67b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/存量漂移防線_計劃.md
+@@ -110,21 +110,21 @@ REVISIT:2026-11-28 跑上面三個量;順便看 drift-check 閘的擋下與表
+ ### 4. 掃全圖譜與修復
+ 
+ 1. 甲乙都做完、考完,對工具鏈自己的圖譜與 rtb(`/Users/enzo/rtb-mainwt` 主線頂端)各跑一次 `drift scan --json`,存成待修清單(工具鏈的存 `governance/audits/<日期>-drift-scan/scan.json`;rtb 的交給 rtb 會談、存在 rtb 那邊)。
+ 2. 工具鏈自己的:本會談逐條處理(改句、刪句、補條件、掛撤除橫幅、或 `drift ack`);**修復的筆記改動單獨成一個提交**,提交說明寫清單檔路徑;清單旁的 `fixed.txt` 每處理一筆寫一行:路徑、當時行號、原文、發現種類、怎麼處理——事後發現工具判錯,照這份就能整批找出、還原。修完再 scan 一次,前後筆數記進本計劃。
+ 3. rtb 的:用跨會談訊息傳「待修清單在哪、怎麼修、修完怎麼量、修復單獨提交並留 fixed.txt」(只傳指標),由 rtb 會談修;它回報的前後數字記進本計劃。
+ 4. 接線:drift check 接進工具鏈自己的推送前掛鉤與 CI,**排在 code-loop check 之後、全套測試之前**(掛鉤「便宜的先跑、貴的最後」:code-loop check 約 0.6 秒,drift check 最壞 60 秒)。預設模式三條全過才 block,任一沒過先 warn、攤給 Enzo 裁:
+    - **①抓得到**:甲的 A4–A6 全部擋到、E1–E3 全部點到;乙的 A7、B1–B4 全部擋到。這是下限不是成績——考卷是拿來設計的那一份,不是沒看過的新題,全對只證明「照設計做出來了」。
+    - **②真實歷史上不亂擋**:rtb 這份考卷在「要處理」層有鑑別力的非漂移樣本幾乎是 0(rtb 歷史上沒有條件式的行,current_state 走的 scan 也不分層),所以另拿工具鏈自己的歷史量:對主線最近 100 個提交各跑一次 `drift check --diff <父>..<提交>`,每一筆「要處理」由編排者逐筆判真假,**判成假的有任何一筆**就沒過;結果(提交數、要處理筆數、判假幾筆、每筆一句理由)寫進〈考試結果〉。
+    - **③噪音**:每個考題提交與重放提交的「要處理」筆數(同一篇的 c1 合算一筆)都不超過 5。
+    這個門檻仍只有 rtb 與工具鏈兩個專案,是已知的薄弱依據,靠三態開關與 RETIRE-IF 兜底。
+-   2026-09-30 已接線(warn),門檻量測另行(掛接位置、範圍怎麼交見 [[Systems/bound-tests-gate]];[S18] 綁的測試已補上)。接線代碼審 r1 後:推送前掛鉤自己算範圍起點(跟主線的分岔點與遠端舊值取比較新的)、CI 的 before 是全 0 或找不到時改用頂端的父提交,不全靠 [S1] 寫的共用起點判法——那支在合過主線、沒設 upstream、CI 已 fetch 三種情況會誤算。
++   2026-09-30 已接線(warn),門檻量測另行(掛接位置、範圍怎麼交見 [[Systems/bound-tests-gate]];[S18] 綁的測試已補上)。接線代碼審 r1 後:推送前掛鉤自己算範圍起點(跟主線的分岔點與遠端舊值取比較新的)、CI 的 before 是全 0 或找不到時改用頂端的父提交,不全靠 [S1] 寫的共用起點判法——那支在合過主線、沒設 upstream、CI 已 fetch 三種情況會誤算。接線代碼審 r2 查出掛鉤、CI、工具三份起點算法各有洞,改成:起點只在工具的 `_push_range_start` 算一處(主線以遠端預設分支優先、跳過就是這次推的那條,每個合併基底都是遠端舊值的祖先才用舊值),掛鉤與 CI 帶 `--push-remote`/`--pushed-ref` 原樣交範圍;細節見 [[Systems/bound-tests-gate]]。
+ 
+ ### 5. 落點
+ 
+ - **[[Systems/存量漂移守衛]](新開)**:管 `lumos drift` 家族(check/scan/ack/exam)、條件文法與評估、甲的五種一致檢查、REVISIT 共用判定、doctor Z 段;about_code 是 `scripts/lumos`(與考卷目錄不算程式)。不管筆記新寫的形狀(第一層)、判定者怎麼判(第二層)、settle 本身(guard-kill)。
+ - **[[Systems/筆記內容閘]]**:第一層加的 REVISIT 規則。
+ - **[[Systems/筆記內容審]]**:第二層排除條件式回頭條件。
+ - **[[Systems/guard-kill]]**:settle 改寫預告句、補救路徑;plan、settle、abandon 整段讀改寫拿同一把寫入鎖。
+ - **[[Systems/reversibility-governance-ledger]]**:新閘名 `drift-check` 登記進既有閘名單、新事件種類,在那篇補一行。
+ - **[[Issues/治理帳多個寫入者都沒上鎖]]**:實作時在那篇補一行,列出本計劃新增的兩個寫入者(表態檔、drift-check 事件),讓它 2026-10-11 回頭看時算進去。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index e566db40..2dfc21fa 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -19,23 +19,24 @@ summary: |-
+   KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F];r1 代碼審把判準整條換掉):主力證據是★逐支看測試工具自己的輸出有沒有說「執行了 N 支(N≥1)」★(_RAN_EVIDENCE,只填實測過「跑 1 支」與「跑 0 支」兩種輸出的 profile:swift-xctest/csharp-xunit/node-jest/python);沒有樣式可比的 profile 才退回過濾能力冒煙測試(拿不存在的測試名跑一次看回不回 0)。任一支證不出來 → 狀態 unfilterable、不報綠,擋的路徑上跟紅一樣擋 [test:t_bound_tests_unproven_blocks_push]
+   KEY:為什麼不是只用冒煙測試(同上,r1 實測推翻第一版):★大多數測試工具都分不出「測試不存在」與「測試通過」★——xcodebuild 三段 -only-testing 但方法名打錯回 0、dotnet test --filter 對不到回 0、jest -t 對不到回 0;只有 pytest(回 5)分得出來。只靠冒煙測試等於把最常見的幾種棧全判成不可信,不是擋錯人就是等於沒擋 [test:t_bound_tests_rejects_unfilterable_cmd]
+   KEY:★xcodebuild 帶 -quiet 時跑 1 支跟跑 0 支的輸出一模一樣★(2026-09-09 在 calc-ios 實測,逐字比對過兩份輸出):所以 swift 骨架指令刻意不帶 -quiet,unfilterable 的訊息也直接點名這件事;dotnet 的解法是尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`(實測對不到回 1、對到回 0),已寫進骨架
+   KEY:★「擋」跟「講」是兩個地方★(2026-09-09 代碼審 r2 blocker):判定在 _codeloop_guard_verdict、但印給人看的在 cmd_code_loop,後者原本只認 green/red——低風險推送因此在假綠上一個字都不印就放行,高風險擋下時也看不到逃生指令。動判定一定要回頭看列印分流 [test:t_code_loop_check_speaks_about_unproven]
+   KEY:證據行不得被輸出截斷砍掉(同上 r2):輸出超過 256KB 取頭尾各半時,符合證據樣式的行要從中段撈回來(_kill_cap 的 keep_re);★審查席舉的 jest 實例實測不成立(jest 29 摘要仍在最後一行),這是防禦性修法★——沒有它等於押注「所有測試工具都把摘要印在最後」
+   KEY:整套跑(run_cmd 沒有 {method})那條路也驗證據(同上 r2):整套跑但一支都沒執行、退出碼仍為 0 的情況不得報綠;★天花板:整套跑只證得出「有測試跑過」,證不出「你綁的那一支跑過」★
+   KEY:★這一層不驗「跑的是不是正確那一支」★(同上 r2 訂正):它只數輸出裡有沒有「N passed」,不比對測試名。「合約綁的名字對到別支測試」是更早的存在性靜態檢查(resolve_test_refs 判 real/dangling/fake)擋下的,別把既有防線的功勞算到新機制頭上
+   KEY:零覆蓋不再靜默(同上 [E]):四種來源各自出聲(找不到知識庫/沒節點引用/沒綁測試/算不出範圍),訊息帶「受波及合約測試」關鍵字以通過 pre-push 對 check 輸出的 grep 過濾 [test:t_bound_tests_explains_no_pins]
+   KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
+   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
+-  KEY:[2026-09-17 風險低放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(風險低計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 一律放行(fail-open)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
++  KEY:[2026-09-17 風險低放行]pre-push 在 code-loop check 之前多一段:對每個 ref 的 _range 叫 `lumos spec-gate --push-check <範圍> --repo <根>`,rc1 就擋(風險低計劃留痕裡的測試沒全綠、或留痕過期);rc≠1 放行(fail-open;回傳碼 128 以上是被中斷,掛鉤停下,見下面 pp_stop_if_signaled 那行)。判定與訊息都在 [[Systems/規格閘]],這裡只管掛接 [test:t_prepush_hook_calls_spec_gate_push_check]
+   WHY:[2026-09-30 Projects/存量漂移防線_計劃 [S18]]推送前掛鉤在 code-loop check 之後、test-layers 與全套測試之前多一段 drift check(每個 ref,分支與 tag 都查;code-loop 約 0.6 秒、它最壞每個 ref 60 秒預算加前置的 git 呼叫、全套 8 分鐘,便宜的先擋)。回傳碼:1 擋;128 以上(被訊號殺掉)整支掛鉤停下、不跑全套;其他非零(工具錯誤、git 太慢逾時、舊版工具沒有 drift)講一句「這次沒檢查」再放行。CI 那步回 1 印擋下原因並紅,其他非零照原碼紅(工具出錯寧可紅,同 code-loop gate、note-shape 兩步)——掛鉤與 CI 對「其他非零」刻意不同,CI 是最後一道後盾。掛鉤裡的上線標記註解是 lumos 截範圍起點用的,不能改寫。CI 的全套測試仍在它前面(CI 是後盾,順序只影響全套紅時這步有沒有跑到)。模式、判定與訊息都在 [[Systems/存量漂移守衛]],這裡只管掛接 [test:t_prepush_and_ci_wire_drift_check]
+-  PITFALL:[2026-09-30 推送閘接漂移檢查代碼審 r1 正確性席、併發回滾席、外家席實測]範圍起點三個坑:①把 遠端舊值..本地新值 原樣交出去,功能分支合過主線、或重定基底後 force push 時,git log 舊..新 會把合進來的主線提交(別人的轉正)算成這次的;②交給 lumos 的共用起點判法,它只在舊值是全 0 或找不到時才算分岔點,而且主線只認 main/master 的 upstream,沒設 upstream 就退回從空樹算、截到上線點,新分支把上線後主線的舊帳全算進來;③CI 裡前一步 fetch 過,main 的 upstream 就是這次頂端,before 是全 0 或找不到時 lumos 判「頂端已在主線、沒有新東西」整步跳過。現在:掛鉤自己算起點(pp_drift_range)——分岔點是遠端舊值的祖先才用遠端舊值,其他(新分支、舊值找不到、兩者分岔)用分岔點;主線依序找 main/master 的 upstream、這次推送的遠端的 HEAD、遠端 main、遠端 master,都找不到才原樣交並講一聲。CI 的 before 是空的、全 0、找不到時改從頂端的第一個父提交算(沒有父提交從空樹)。★折入時先定的做法是「分岔點不是遠端舊值的後代就用遠端舊值」,實測合過主線與重定基底兩種照樣誤擋(兩者分岔、誰也不是誰的後代),改成現在這樣★ [test:t_prepush_drift_range_ref_shapes,t_prepush_and_ci_wire_drift_check]
++  WHY:[2026-09-30 推送閘接漂移檢查代碼審 r2 架構對齊席 F3]推送前掛鉤裡「rc1 擋、其他非零放行」的五道閘(每支檔有家、筆記形狀擋、spec-gate --push-check、code-loop check、drift check)都先過 pp_stop_if_signaled:回傳碼 128 以上(被訊號殺掉,多半是 Ctrl-C)就印「<閘名>被中斷(rc=…),推送停下,後面的檢查不跑。」並以那個回傳碼離開、不跑全套——被中斷不是工具錯誤,當成放行等於按一下 Ctrl-C 就繞過那道閘;原本只有 drift 那道會停。anchor verify、doctor 那兩道本來就是任何非零都擋,advisory 的(test-layers、bound-tests --advisory、pitfalls)恆放行,都不是這種形狀 [test:t_prepush_gates_stop_on_signal]
++  PITFALL:[2026-09-30 推送閘接漂移檢查代碼審 r1 正確性席、併發回滾席、外家席實測;r2 正確性席、邊界席、架構對齊席、外家否決席]範圍起點的坑:①把 遠端舊值..本地新值 原樣當範圍,功能分支合過主線、或重定基底後 force push 時,git log 舊..新 會把合進來的主線提交(別人的轉正)算成這次的;②共用起點判法(_lens_push_base)只在舊值是全 0 或找不到時才算分岔點,主線只認 main/master 的 upstream;③CI 裡前一步 fetch 過,main 的 upstream 就是這次頂端,before 是全 0 或找不到時會判「頂端已在主線、沒有新東西」整步跳過。r1 折入時在掛鉤的 bash 與 CI 的 shell 各補一份起點算法,r2 查出兩份各有洞:CI 補法只在 before 找不到時換起點(合過主線照樣算進別人的轉正)、新分支首推退到頂端的父提交(一次推多個提交時前面的不查,頂端是合主線的合併提交時反而查進主線那一側);掛鉤的主線候選 upstream 排在遠端預設分支前面(git-flow、主線叫 trunk 時用到過期的 main/master)、交叉合併只看 git 挑的第一個合併基底。★現在起點只在 lumos 的 _push_range_start 算一處★:掛鉤原樣交 遠端舊值..本地頂端 加 --push-remote <遠端名> --pushed-ref <遠端 ref>,CI 交 before..sha(空的換成 40 個 0)加 --push-remote origin --pushed-ref "$GITHUB_REF";主線依序找遠端 HEAD、main/master 的 upstream、遠端 main/master,跳過就是這次推的那條(推主線本身時用遠端舊值);每一個合併基底都是舊值的祖先才用舊值,否則用第一個不是的那個基底 [test:t_prepush_drift_range_ref_shapes,t_prepush_drift_start_mainline_shapes,t_ci_drift_start_shapes,t_prepush_and_ci_wire_drift_check]
+   KEY:逃生門 `code-loop check --skip-bound-tests --note` 或 `bound-tests --skip --note`(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
+   KEY:★2026-09-12 這道閘的核心保證被實際打穿過一次(Java 補棧代碼審 r1 資安席)★——閘驗的是「合約綁的名字有沒有出現在 discover_test_methods 掃出來的集合裡」,所以★掃描器認錯名字=閘直接失效★:當時 Java 的方法正則太鬆,一支「掛註解但不是 void 的誘餌方法」後面接一支完全沒掛註解的空方法,那支空方法就被收成真證據,健檢一聲不吭。教訓:新增任何語言的測試掃描時,除了「收得到真測試」還要有「收不到假測試」的斷言,兩邊都要 [test:t_java_profile_discovery]
+   DEP:[[Systems/pitfalls-code-loop]]
+   DEP:[[Systems/guard-kill]]
+   KEY:[2026-09-11 多平台缺指令,Issues/多平台設定下測試指令被默默略過]沒設 run_cmd 改成★逐平台★——有指令的平台照跑,沒指令的平台那幾支列成 not_run(平台點名);全部沒指令才 no-config;原本碰到第一支沒指令就整批 no-config,連前面已判的懸空紅都被吞掉(違反上一行合約「任一懸空 → 擋」的原意)。訊息改由 _no_run_cmd_reason 給:多平台點名平台,最上層還留著 test.run_cmd 就照 2026-07-10 並存優先序講明它不生效、要搬;code-loop check 與 bound-tests 兩條路共用 [test:t_bound_tests_multiplatform_missing_cmd]
+   KEY:[2026-09-12]CI 的全套測試改成切 4 片同時跑(`--shard i/4`,跟推送前掛鉤同一支旗標);單行程版本已經從 25–27 分鐘漲到撞 job 上限 30 分被砍(8a45751b 那次),不是測試紅、是跑不完。上限同時拉到 45 分留餘裕;任一片紅就整步紅,四片的尾端都會印出來
+   KEY:[2026-09-17]推送閘擋下時的逃逸自動記:code-loop check 回 rc1 那個分支多兩個 grep——「受波及合約的測試沒過」→ lumos loop escape --auto --stage push-gate;「tier=high 且」開頭的缺留痕句 → --stage push-gate-unreviewed(lumos 端查有風險低留痕才記);兩者都 || true,記帳失敗不能變成擋推送的第二個理由。單源:[[Projects/逃逸自動記_計劃]]
+   KEY:[2026-09-18]推送前與 CI 的全套測試,純文件改動只跑文件子集(Enzo 裁「像這種改動 CI 可以跳過吧」「判成 light 的也不用」):掛鉤每個 ref 讀 pitfalls 的 suite,全部 docs → 分片改帶 `--suite docs`(執行器挑「讀真 repo 根、而且讀 README/根目錄文件/assets/docs 底下非圖譜文件」的測試,連看它呼叫的本檔輔助函式一跳;2026-09-18 實推量到舊挑法 209 支四片跑 234 秒、跟全套一樣慢——假環境裡順手寫 CLAUDE.md 的重測試全被挑進來;收緊後 63/1021 支、四片 21 秒,測試釘 ≤10% 且不含 t_ci_wait/t_slim_gate;讀真圖譜的測試平常不算;★推送碰到圖譜筆記時★(pitfalls 的 suite_graph)加 `--graph` 把讀★真★圖譜(lumos 找到的那個目錄名,不是任何 -knowledge 字樣:假環境 x-knowledge 會把 34 支評測 fixture 帶回來)的 12 支加回——圖譜健檢只驗結構、驗不到檢索品質(代碼審 code-文件子集收緊 r1/r2 通才席),合計 75 支、四片 55 秒;掛鉤先讀檔探執行器認不認得 `--graph`,不認得退全套;先挑子集再切片);改到程式但 spec-gate --push-check 判 light ★且 pitfalls light_ok★ 的,文件子集之外再跑 `--suite keys --keys <affected_keys>`(原始碼整字提到改到的頂層函式/檔名的測試;一個關鍵字選中 >30% 就丟),兩組各自分片、真的同時跑(2026-09-18 實測前一版是一組跑完才跑下一組,註解卻寫平行);keys 每片都 rc3(沒對到)不擋、講明 CI 會跑全套當後盾,有紅照擋;其餘全套。CI 只認 docs(push 事件用 before..sha 問 lumos;首推/force-push 對不到起點/pull_request 一律全套)。純文件推送的自主迴圈測試(整支 68 秒)兩邊都只跑讀真 CLAUDE.md 那一條(`-k real_claude_md`,接線測試真跑確認選得到 1 支);★light 推送前也一樣★,除非 pitfalls 的 `autoloop_full` 為真:affected_keys 有任一個整字出現在那支測試的原始碼裡(它測自主迴圈模組、主程式常數、兩支探針腳本),或抽不出任何關鍵字(不知道改了什麼就整支跑);整字比對只有 lumos `_keys_mentioned` 一份,執行器 `--suite keys` 也用它(代碼審 code-light自主迴圈 r1)——2026-09-18 在隔離工作樹造真 light 情境實測 108 秒 → 40 秒。CI 對 light 照跑全套當後盾。執行器不認得 --suite(讀檔探旗標)就退全套。push-check 輸出用 tee 即時印(r1 併發席:先存檔再印人會以為卡住);暫存檔全收 _PP_TMP 掛 trap。★誠實界線★:文件子集是「原始碼字樣」挑的,不是真的追蹤誰讀了哪個檔——第一版單看字樣挑到 254 支跑 9 分半比全套分片還慢,現在 docs/、governance/ 要跟真 repo 根寫法同現才算
+   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]測試指令用 {python} 佔位符,由 lumos 代入自己那支直譯器並依平台加引號;原本吃 PATH 上的 python3,3.14 只以 python3.14 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。三處代入點(guard kill、合約測試閘本體、過濾探針)都經同一支函式 [test:t_test_run_cmd_uses_running_python]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index 83b30a52..6e00869e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -32,21 +32,21 @@ summary: |-
+   WHY:[2026-09-29 乙代碼審 r1 外家席、架構對齊席]Python 的 symbol/test 用 ast 認定義,不用逐行正則:三引號字串或 docstring 裡的範例 def 會被當成定義,推送只加了文件範例就誤擋、之後真的定義反而因為起點早就成立而漏擋(_py_declared_methods 早就為同一個坑改用 ast);語法壞掉解析不了的檔才退回正則
+   WHY:[2026-09-29 乙代碼審 r1 外家席、邊界席]條件裡的路徑在解析時就正規化(去 ./、NFC):git 列出的路徑是 NFC,macOS 貼上的中文路徑常是 NFD,原本判定與候選篩選都對不上、永遠不成立而且沒有任何提示。正規化之後再驗一次文法(r2 正確性席、邊界席:`..\x.py` 原文用 / 切不出 .. 段,轉成斜線才是 ../x.py,原本三層都不列)
+   WHY:[2026-09-29 乙代碼審 r2 外家席、r3 正確性席]樹上列得出、內容讀不出來的程式檔或筆記,碰到它的條件算判不了,不算不成立或不存在(原本單一檔讀不到被當成沒定義,block 模式照樣放行);判不了的說明點名是哪支檔。前提是「讀不到」只能是 git 真的壞了:所以一律用列檔時記下的內容編號讀,不用「版本:路徑」——樹清單把路徑轉成 NFC,git 裡存的可能是 NFD、兩種混用、相容表意字(NFC 與 NFD 都會把它換掉)或含換行,用路徑讀永遠讀不到,r2 的「換成 NFD 再讀一次」補不到後兩種,反而讓有這種檔名的專案每次推送都判不了 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r3 外家席]python3.9 的 ast.parse 碰到極長的單一運算式(一長串負號、not、加法、屬性鏈、lambda…)整個程序崩潰(SIGSEGV),r2 補的「接住 MemoryError」接不到;3.11、3.14 實測都改丟接得住的例外。曾在 3.12 以前先用斷詞器量最長邏輯行、超過 2 萬個詞退回正則,但量法只看單一邏輯行,跨行的 elif 長鏈照樣崩(r4 正確性席)。★已撤★:工具最低版本改成 3.14([[Projects/最低Python版本改3.14_計劃]],2026-09-29 推上主線),事先量測整段刪掉,只留接 MemoryError/RecursionError;測試改驗極長的一行與極長的 elif 鏈在 3.14 上回 None 退回正則 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r3 併發席]改看終點全文之後,候選篩選對幾 MB 的全文逐條跑正則、迴圈又不看預算,實測 100 行條件 10 秒、預算 2 秒照樣跑完;改成終點全文先切成識別字集合查,每一行之前看預算 [test:t_drift_code_review_yi_r3_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r4 外家席、正確性席]SHA-256 物件格式的 repo 提交編號是 64 碼;列檔快取原本只認 40 碼,這種 repo 記不到內容編號、退回用「版本:路徑」讀,NFD 或相容表意字檔名的檔又讀不到,條件每次判不了、block 模式每次擋 [test:t_drift_code_review_yi_r4_regressions]
+   WHY:[2026-09-29 乙代碼審 r4 外家席]不帶路徑的 symbol/test 在候選篩選時,改到的程式檔有幾支讀不出:讀得出的那幾支找到名稱照算候選,找不到才算判不了——原本一支讀不出就整份作廢,另一支已經確定命中的也被降成判不了,block 模式錯擋;判不了時只點名這一行條件實際碰到的檔或筆記,檔名印之前換掉控制字元
+   WHY:[2026-09-29 乙代碼審 r5 架構對齊席、外家席、正確性席]「一個條件碰到哪支檔、哪篇筆記」只有一份:symbol/test 拆路徑與名稱、status 找指到的筆記各一支共用函式,判定、預讀、候選篩選、判不了的點名都用它們;不帶路徑的條件依它看的語料分程式檔與測試檔兩類(symbol 只看程式檔、test 只看測試檔),候選篩選的名稱集合與點名也分兩類——前三輪點名與判定範圍對不上,根因是四處各自拆條件 [test:t_drift_code_review_yi_r5_regressions]
+   PITFALL:[2026-09-29 乙代碼審 r5 外家席]SHA-256 repo 首推、沒有起點時,拿寫死的 SHA-1 空樹去 git diff 會認不得、整道判不了;漂移這兩條路改用這個 repo 算出的空樹(標準輸入明確給空的),其他閘同一個問題見 [[Issues/SHA-256的repo其他閘仍用SHA-1空樹]] [test:t_drift_code_review_yi_r5_regressions]
+   WHY:[2026-09-29 乙代碼審 r1 正確性席、外家席]status 條件只看筆記、不需要 git,不是 git 專案也照判;指到的筆記讀不出來(不是 UTF-8)算判不了,不能當成不成立放行
+-  WHY:[2026-09-30 計劃 [S18]]接線只在掛鉤與 CI 呼叫 drift check,模式、略過、淺層 clone、上線點截斷都留在工具裡判——掛鉤不讀設定,改模式只改 .lumos/config.json;每一筆的 drift fix 修法也由 check 自己印。範圍起點例外:掛鉤自己算(跟主線的分岔點與遠端舊值取比較新的),CI 的 before 是全 0 或找不到時改用頂端的父提交——工具的共用起點判法在合過主線、沒設 upstream、CI 已 fetch 這三種情況會誤算,細節與掛在哪見 [[Systems/bound-tests-gate]]。doctor 在已接線、CI 沒呼叫時給消費專案貼的 CI 步驟(`scripts/lumos` 的 _DRIFT_CI_STEP)用同一套 before 補法,那幾行跟工具鏈 ci.yml 逐字相同、回傳碼照原樣讓那步紅綠 [test:t_doctor_drift_ci_template_start_fallback]。CI 裡這步排在全套測試之後、跟防線計劃 [S18] 字面(全套測試之前)不同,理由是 CI 的全套本來就排最前面、任一步紅整個 job 就紅,順序只影響全套紅了時這步有沒有跑到。接線之後 doctor 開頭會唸「這個專案的存量漂移檢查是 warn」(設計如此:已接線又不是 block 就講) [test:t_prepush_and_ci_wire_drift_check]
++  WHY:[2026-09-30 計劃 [S18]]接線只在掛鉤與 CI 呼叫 drift check,模式、略過、淺層 clone、上線點截斷都留在工具裡判——掛鉤不讀設定,改模式只改 .lumos/config.json;每一筆的 drift fix 修法也由 check 自己印。範圍起點也留在工具裡:掛鉤與 CI 都帶 --push-remote/--pushed-ref,起點由 _push_range_start 算(跟主線的分岔點與遠端舊值取比較新的)——r1 曾在掛鉤的 bash 與 CI 的 shell 各補一份,r2 查出三份各有洞,改成只算一處(推送閘接漂移檢查代碼審 r2 裁定),細節與掛在哪見 [[Systems/bound-tests-gate]]。doctor 在已接線、CI 沒呼叫時給消費專案貼的 CI 步驟(`scripts/lumos` 的 _DRIFT_CI_STEP)呼叫那兩行跟工具鏈 ci.yml 逐字相同、回傳碼照原樣讓那步紅綠;說明與 Python 3.14 那句寫成縮排對齊步驟的 YAML 註解,整段貼進 workflow 能被解析(r2 外家否決席) [test:t_doctor_drift_ci_template_start_fallback,t_ci_drift_start_shapes]。CI 裡這步排在全套測試之後、跟防線計劃 [S18] 字面(全套測試之前)不同,理由是 CI 的全套本來就排最前面、任一步紅整個 job 就紅,順序只影響全套紅了時這步有沒有跑到。接線之後 doctor 開頭會唸「這個專案的存量漂移檢查是 warn」(設計如此:已接線又不是 block 就講) [test:t_prepush_and_ci_wire_drift_check]
+   TEST:t_guard_settle_rewrites_planned_prose、t_guard_settle_recovers_half_done、t_guard_commands_hold_vault_lock、t_set_plan_closed_lists_followups、t_drift_state_consistency_checks、t_drift_check_state_events_in_range、t_drift_unknown_blocks_check_not_scan、t_drift_exam_scores、t_doctor_drift_section、t_drift_code_review_r1_regressions、t_drift_code_review_r2_regressions、t_drift_code_review_r3_regressions、t_drift_code_review_r4_regressions、t_drift_code_review_r5_regressions、t_drift_when_probes_evaluate_and_trigger、t_note_shape_revisit_needs_date_or_probe、t_doctor_revisit_skips_probe_lines、t_note_audit_skips_conditional_revisit、t_set_plan_closed_lists_satisfied_status_probes、t_drift_probe_scan_and_doctor、t_drift_exam_probe_mode、t_drift_code_review_yi_r1_regressions、t_drift_code_review_yi_r2_regressions、t_drift_code_review_yi_r3_regressions、t_drift_code_review_yi_r4_regressions、t_drift_code_review_yi_r5_regressions、t_drift_fix_refuses_wrong_kind、t_drift_fix_c1_rewrites_with_commit_date、t_guard_settle_pass_completes_prose、t_drift_fix_c3_sets_status_and_note、t_drift_fix_c4_evidence_then_replace、t_doctor_revisit_marks_closed_issues、t_set_issue_closed_lists_revisits、t_drift_ack_binds_related_plans、t_drift_fix_dry_run_lock_and_ledger、t_drift_hints_point_to_fix、t_drift_fix_c2_close_or_keep、t_drift_fix_c5_completes_settle、t_drift_fix_review_r1_edges、t_drift_fix_review_r2_edges、t_drift_fix_review_r3_edges、t_drift_fix_review_r4_edges、t_prepush_and_ci_wire_drift_check、t_prepush_drift_range_ref_shapes、t_doctor_drift_ci_template_start_fallback
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]drift fix 補「改法」(rtb 照清單修時 28 筆有 24 筆工具沒路可走),分法照 lint 工具的 --fix:c1 改句跟 settle 同一支、c3 改狀態加一行、c2 由人判結案或照留、c4 只給證據由人給要換的片段、c5 補完轉正。改之前那篇要在版控裡而且乾淨(或改動全是工具自己留下的——認修復帳這一篇最後一筆的指紋),所以★不自動還原★:設計審三輪都在自動還原長出新洞,git 一定退得回來;修復帳只是稽核紀錄
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃 設計審 r2、r3]c2、c3 表態記當時連著的已收尾計劃(related)與檔內遞增序號(seq),比對只看記了清單的、取序號最大的那幾筆(同號保守)全部涵蓋現在的清單才算;沒記清單的舊表態不再算數——不然舊表態會永久豁免之後才收尾的計劃。看序號不看檔內順序也不看時間:兩個工作樹各自追加後是一般的文字合併
+   WHY:[2026-09-29 存量漂移改法代碼審 r1 資安席、正確性席、合約圖譜席]印給人照貼的指令,參數只由文字、數字(含中文)、底線與 ./@%+=:,- 組成才原樣印,其他交給既有的 _sh_quote 加 shell 引號——檔名帶 $(…) 或 ; 的筆記原本照貼提示就會執行(代碼審 r2 又抓到計劃收尾「看:」那一行漏網;- 開頭的節點印成 ./ 開頭,drift fix 與一般查找都把 ./ 開頭當明確路徑);git 指令用 git 裡的原樣路徑、不截斷、加 --literal-pathspecs(檔名裡的 * 不被 git 當萬用字元;工具自己跑的乾淨檢查也加,代碼審 r4),路徑含控制字元就不印可照貼的指令(代碼審 r3);提示裡的佔位字 <…> 照抄進 --reason、--new 一律擋——原本會把還沒解決的 Issue 標成結案、理由是佔位字;只認提示真的印過的那幾種,Map<K,V> 這種真理由照收 [test:t_drift_fix_review_r1_edges,t_drift_fix_review_r2_edges]
+   PITFALL:[2026-09-30 存量漂移改法代碼審 r1 到 r4 邊界席、外家席、正確性席]c4 不自己寫開頭欄位的原始文字:先是「人給片段、工具換原始文字」、再換成「工具寫整項」,都要自己判斷原文是什麼 YAML 形狀(引號、全形空白、冒號後空白、控制字元、巢狀、註解、跨行、空行),零依賴下沒有標準 YAML 讀法可驗,四輪每輪都漏一種。Enzo 2026-09-30 裁改走既有的 lumos set 整欄重寫(不讀原文形狀、從人給的各項重寫):drift fix --kind c4 只列證據、範本、目前各項與一條預填好的 lumos set 指令,要改的那項放佔位字 <整項新內容>,原封不動照貼會被 set 擋下。★這跟 [[Projects/存量漂移改法_計劃]] 第 5 節與 [S5]「帶 --old/--new 就替換」不同,以這裡與程式為準★ [test:t_drift_fix_c4_evidence_then_replace]
+   PITFALL:[2026-09-29 存量漂移改法代碼審 r1 邊界席、併發席]帳檔讀取原本用 splitlines,U+2028、U+0085 這類字元會把工具自己寫進去的一筆劈成兩段壞行、讀不回來,同一篇一項一項修的流程就斷掉;表態檔與修復帳現在共用一支只在換行字元切的解析,寫進去的自由文字也擋這類字元 [test:t_drift_fix_review_r1_edges]
+ related:
+   - "[[Projects/存量漂移防線_計劃]]"
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+   - "[[Systems/guard-kill]]"
+@@ -69,21 +69,21 @@ scan、check、doctor Z 共用同一支檢查,也能跑在任一個提交的樹
+ - **考試的「誤報」不算同一篇同一種的兄弟句**:c1 一句一筆,一篇守衛紀錄有四句預告句,題目只考 TEST 那句,另外三句是同一個轉正事件的真發現,算成誤報會把「抓得對」算成「亂抓」。同一篇別種的發現、別篇的發現照算(代碼審 r1 外家席:第一版把同一篇全部排除,誤報被低估)。
+ - **doctor 的閘提醒放在開頭、發現放在 Z 段**:設計把兩者都寫在 Z 段。開關不是 block、CI 沒呼叫這兩行照筆記形狀擋與筆記內容審的位置放在 doctor 開頭(代碼審 r1 架構對齊席:同一種閘提醒不該有兩種呈現);c1–c5 的筆數是筆記內容的發現,跟 E5 一樣放 Z 段;某一種只剩已表態的不開段(全靜默,完整清單看 drift scan)——設計寫的是「照列、標已表態」,那是 scan 的做法,doctor 照列會讓表態完那一段永遠不安靜(代碼審 r2 正確性席)。開關提醒只在專案自己寫了開關、或已經接線時才印(代碼審 r1 外家席:關掉了要看得見;第一版只看接線,r2 改成一律印,r3 發現沒寫設定時預設就是 warn,每個專案每次 doctor 都多一行、也破壞既有軟段計數測試,收成現在這樣)。
+ 
+ - **乙的 symbol/test 語料比設計寬一點**(乙代碼審 r1 正確性席):設計寫「副檔名清單裡的程式檔」,實作另收沒副檔名、開頭是 `#!` 的檔(主程式 scripts/lumos 就是這種);帶路徑的條件直接讀那支檔,不管它算程式檔還是測試檔——作者明寫了哪支檔,工具不該再用分類把它排掉。
+ - **scan 多列一種問題**:`[when-symbol:Config::load]` 這種「型別::方法」寫法照文法會切成路徑 Config、名稱 load,永遠不成立;路徑那段在樹上找不到、沒有 `/`、最後一段也不像副檔名(字母開頭、只有字母數字與 `_+-`、全小寫或全大寫)時,scan 列成「不像檔案路徑」——`v1.2`、`app.Config` 列,`.c++`、`.R` 不列(乙代碼審 r2、r3 邊界席、r3 外家席)。還沒建的檔(`src/new.py::main`)是正常的等待狀態,不列;`Makefile` 這種沒副檔名的根目錄檔分不出來,提示裡講明「還沒建的根目錄檔建了就會判,不用管」。
+ - **不帶路徑的條件怎麼算候選**(乙代碼審 r2、r3 正確性席;設計稿已同步改,計劃〈做法〉第 0 節):原設計寫「名稱出現在範圍的改動行」,改成「名稱出現在範圍裡改到的程式檔或測試檔的終點全文」,並加一條「兩端的測試資料夾版面不一樣」也算形狀改變——改動行抓不到「刪掉三引號」「加上 #!」,形狀改變原本抓不到「刪一支不算程式檔的檔,讓別的檔從測試檔變程式檔」。留在這一節是記「為什麼改」,現在設計與實作一致。
+ - **考試的改寫檔要先過文法**:改寫不合條件式文法(含沒帶期限)的,exam 直接擋下回 2,不照考——原本考過的 A7、B3、B4 三題都沒帶期限,是第一層會擋的寫法(乙代碼審 r1 外家席、正確性席)。
+ 
+ ## 怎麼用
+ 
+-- 推送時自動跑(2026-09-30 接線):`scripts/hooks/pre-push` 對每個要推的 ref、`.github/workflows/ci.yml` 在 push 事件的 drift check 那一步,都叫 `lumos drift check --diff <起點>..<終點>`(這篇只管那一段呼叫,掛在哪、前後是哪些閘見 [[Systems/bound-tests-gate]]),預設 warn 只印;專案要擋就在 .lumos/config.json 寫 `{"drift_check": {"gate": "block"}}`,單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(留帳)。
++- 推送時自動跑(2026-09-30 接線):`scripts/hooks/pre-push` 對每個要推的 ref、`.github/workflows/ci.yml` 在 push 事件的 drift check 那一步,都叫 `lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>`(起點由工具算;不帶後兩個參數時照共用起點判法,手動跑用這種;這篇只管那一段呼叫,掛在哪、前後是哪些閘見 [[Systems/bound-tests-gate]]),預設 warn 只印;專案要擋就在 .lumos/config.json 寫 `{"drift_check": {"gate": "block"}}`,單次略過 `LUMOS_SKIP_DRIFT_CHECK=1`(留帳)。
+ - 健檢全圖譜:`lumos drift scan`(`--at <提交>` 看某個版本、`--json` 給修復清單用)。
+ - 照清單修:`lumos drift fix <節點> <行號> --kind c1..c5`(先加 `--dry-run` 看改法;c2 要 `--close --status … --reason` 或 `--keep --reason`,c3 要 `--status`,c4 只列證據與一條預填好的 `lumos set <節點> valid_under …` 指令,把 <整項新內容> 換成改寫後的整句再貼);修完修復帳要跟筆記一起提交。
+ - 某一行確定照留:`lumos drift ack <節點> <行號> --kind <種類> --reason "…"`,提交進去才算;那一行一改就失效。
+ - 考試:`lumos drift exam <考卷> --repo <被考的 repo>`;`--history N` 對最近 N 個主線提交重放(門檻②)。
+ 
+ ## 代碼審放行的邊角(2026-09-29,存量漂移改法代碼審 r1)
+ 
+ - `drift ack` 的表態檔與修復帳共用同一道路徑檢查:從 repo 根到帳檔的每一層都不能是符號連結。所以 `governance/` 本身是連結的專案,升級後連原本的 `drift ack` 也會被擋(併發回滾席)。這是設計審刻意收緊的(帳檔寫前擋連結),目前工具鏈與 rtb 的 `governance/` 都是一般目錄。
+ REVISIT:2026-12-29 看有沒有專案回報 drift ack 因為 governance 是連結被擋;有就改成只擋帳檔本身與 repo 外的連結,repo 內指向 repo 內的目錄連結放行
+ - 混版:還沒升級的機器看不懂新的修復帳是簿記檔,在代碼審留痕之後又提交修復帳,會被判成動了代碼、要重審(方向是多審,不會少審);各機器 `lumos update` 之後就沒有這個問題(併發回滾席)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+index 59be5d06..4f240bfb 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
++++ b/docs/lumos-toolchain-knowledge/Systems/每支檔有家.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-11
+-updated: 2026-09-12
++updated: 2026-09-30
+ responsibility: 程式檔歸屬與寫回落點的提交前、推送前檢查與健檢舊帳三段;不管節點內容好壞,也不管設計審出口(那在 design-loop)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/hooks/pre-commit
+   - scripts/hooks/pre-push
+   - governance/eval/home_audit.py
+ tags:
+   - type/system
+   - status/doing
+@@ -46,21 +46,21 @@ verified_by:
+   - "[[Verification/2026-09-12_推筆記認家落地]]"
+ decision_refs:
+   - "Projects/每支檔有家_計劃.md#d4"
+ ---
+ # 每支檔有家
+ 
+ > 白話：每支程式檔都要有一篇「管它的」節點；節點只准寫自己管的檔；程式改了，說明寫進改到那支檔的那一篇。新加的違規在提交前、推送前當場擋，舊帳交給健檢提醒。
+ 
+ ## 同一個位置的鄰居:筆記形狀擋(2026-09-27)
+ 
+-提交前與推送前掛鉤在這道檢查的緊後面,多呼叫一次 `lumos note-shape`(同一段範圍、同樣只認 rc1 為擋)。它借了這道的新分支起點算法、上線點截斷與合併處理——上線點與合併的兩支函式加了參數、拆出一支,這道自己的行為不變(預設值就是原本的)。它管的是筆記內容的形狀,不是檔案歸屬,細節見 [[Systems/筆記內容閘]]。改這道的範圍、上線點或合併判法時,記得那邊共用同一套。
++提交前與推送前掛鉤在這道檢查的緊後面,多呼叫一次 `lumos note-shape`(同一段範圍、同樣只認 rc1 為擋;兩道被中斷、回傳碼 128 以上時掛鉤停下,不當成放行)。它借了這道的新分支起點算法、上線點截斷與合併處理——上線點與合併的兩支函式加了參數、拆出一支,這道自己的行為不變(預設值就是原本的)。它管的是筆記內容的形狀,不是檔案歸屬,細節見 [[Systems/筆記內容閘]]。改這道的範圍、上線點或合併判法時,記得那邊共用同一套。
+ 
+ ## 為什麼有這一道
+ 
+ 2026-09-11 對三個 POS 消費專案健檢，客人網頁那個專案又長成一篇包全部——距離後端第一次長歪不到兩天，而且整套工具全綠。
+ 查下來不是哪道檢查壞了，是**沒有檢查在量這個形狀**：節點用反引號寫了別人的檔，改那些檔時工具就推它、寫回就落它；
+ 提交前只看「有沒有動任何一篇」；合約條數提醒只數合約。詳細的來龍去脈、兩次設計審的發現與處置在 [[Projects/每支檔有家_計劃]]。
+ 
+ ## 三個進入點共用同一套判定
+ 
+ | 進入點 | 讀哪個版本 | 判什麼 |
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 93185f38..728844d3 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "8cb27ecea4a221a08e35b239d8802f251e26af7390ba970a77ca935a7fc9ebe3",
++    "scripts/test_lumos.py": "8f93a80a12f3a26bd7c4bcd0354418b4d06a09406af866854247f6a38d2d194c",
+     "scripts/test_autonomous_loop.py": "a9bff38eeb3a521bbf731874b3c59d3cc540f0d0c4a6af3cf7a7a4288a697e78",
+     "scripts/hooks/pre-commit": "5a8dc225ef018d942f6b1d5e831db9879742a9ae20d4becb1af77d8fa5ab0656",
+-    "scripts/hooks/pre-push": "6fed4b36261fc3865eced8f4484e134ffa9fd9a00bc3138eba8f963446086e04",
++    "scripts/hooks/pre-push": "2eefffcccfef42b487c37e8324f915fc651f566356a335465bcc81cc6afa3b5b",
+     "scripts/hooks/post-commit": "f7ccea562d2e0fa83ec2e9d527b93a6f10204c541f377f425e42ad814a3a27dc",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "41ccdb9911800508f2ae0964919335ccf9b5b8750eb167caf8364848ebb92e97",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "16851237e0b3cecdb867e9b2dd36cc71e0f4e5c4a01cb155510d3f46df7f3e00",
+     "scripts/hooks/claude/check-graph-sync.py": "b01ec12ca4514b6f6f6904194cc2d6b747f8fca919c6a5dea9bb571c3a4974de",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-09-30T03:39:02+08:00",
+-  "note": "健檢給消費專案的 CI 範本補上漂移檢查的起點補法;新增 t_doctor_drift_ci_template_start_fallback"
++  "approved_at": "2026-09-30T04:38:39+08:00",
++  "note": "推送前其他閘被中斷時也停下;新增 t_prepush_gates_stop_on_signal"
+ }
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 5de281e8..17a41eea 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -37,63 +37,33 @@ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+ # 新 ref、或本地沒有那個 remote 物件(shallow / force-push 分岔沒 fetch)→ 保守掃全部引入內容
+ # (不是 fail-open:放行會讓「推個新分支」變成穩定繞法)。其餘走增量。
+ pp_range_for() {
+   if [[ "$1" == "$_ZERO" ]] || ! git cat-file -e "$1" 2>/dev/null; then
+     printf '%s..%s' "$_EMPTY_TREE" "$2"
+   else
+     printf '%s..%s' "$1" "$2"
+   fi
+ }
+ 
+-# 存量漂移檢查的範圍(代碼審 r1 正確性席 F1、F2;併發回滾席 F1)。$1=remote_sha $2=local_sha → 設 _DR_RANGE 與 _DR_NOTE。
+-# ★起點取「遠端舊值」與「本地新值跟主線的分岔點」裡比較新的★:
+-#   - 分岔點是遠端舊值的祖先(或同一個)→ 遠端舊值較新,用它(一般的增量推送,只看這次新加的);
+-#   - 遠端舊值是全 0(新分支)、本機找不到、或兩者分岔(功能分支合過主線、重定基底後 force push)→ 用分岔點。
+-#     分岔那種情況若用遠端舊值,`git log 舊..新` 會把合進來的主線提交(別人的轉正)算成這次帶進來的而誤報或誤擋;
+-#     用分岔點頂多把自己上次已推過的提交再看一次(那是自己的東西)。
+-# ★為什麼掛鉤自己算、不原樣交給 lumos★:lumos 的共用起點判法只在遠端舊值是全 0 或找不到時才算分岔點,
+-#   而且主線只認 main/master 的 upstream——沒設 upstream 就退回從空樹算、截到上線點,把上線後主線的舊帳全算進新分支。
+-# 主線依序找:main@{upstream} → master@{upstream} → 這次推送的遠端的預設分支(refs/remotes/<遠端>/HEAD)→ <遠端>/main
+-#   → <遠端>/master(遠端名是 git 傳給掛鉤的第一個參數);都找不到才原樣交給 lumos 自己判,並講一聲。
+-_PP_REMOTE="${1:-}"
+-pp_mainline() {   # 印主線頂端的提交編號;找不到什麼都不印
+-  local _c _cands=("main@{upstream}" "master@{upstream}")
+-  if [[ -n "$_PP_REMOTE" ]]; then
+-    _cands+=("refs/remotes/$_PP_REMOTE/HEAD" "refs/remotes/$_PP_REMOTE/main" "refs/remotes/$_PP_REMOTE/master")
+-  fi
+-  for _c in "${_cands[@]}"; do
+-    git rev-parse -q --verify "$_c^{commit}" 2>/dev/null && return 0
+-  done
+-  return 0
+-}
+-pp_drift_range() {
+-  local _ml _mb
+-  _DR_NOTE=""
+-  _DR_RANGE="$1..$2"
+-  _ml="$(pp_mainline)"
+-  if [[ -z "$_ml" ]]; then
+-    _DR_NOTE="找不到主線(main/master 沒設 upstream,遠端 ${_PP_REMOTE:-(不明)} 也沒有 HEAD/main/master),起點交給 lumos 自己判;新分支可能把主線上別人的改動算進來"
+-    return 0
+-  fi
+-  _mb="$(git merge-base "$2" "$_ml" 2>/dev/null | head -1)"
+-  if [[ -z "$_mb" ]]; then
+-    _DR_NOTE="要推的提交跟主線沒有共同祖先,起點交給 lumos 自己判"
+-    return 0
+-  fi
+-  if [[ "$1" != "$_ZERO" ]] && git cat-file -e "$1^{commit}" 2>/dev/null \
+-     && git merge-base --is-ancestor "$_mb" "$1" 2>/dev/null; then
+-    _DR_RANGE="$1..$2"
+-  else
+-    _DR_RANGE="$_mb..$2"
++# 會擋的閘「rc1 擋、其他非零放行」,但回傳碼 128 以上是被訊號殺掉(多半是 Ctrl-C)——那不是工具錯誤,不能當成放行往下跑。
++# 每支檔有家、筆記形狀擋、雙向門放行、code-loop check、存量漂移檢查都先過這一支(推送閘接漂移檢查代碼審 r2 架構對齊席:
++# 原本只有漂移那道會停)。$1=回傳碼 $2=閘名。
++pp_stop_if_signaled() {
++  if [[ "$1" -ge 128 ]]; then
++    echo "$2被中斷(rc=$1),推送停下,後面的檢查不跑。" >&2
++    exit "$1"
+   fi
+ }
+ 
++# 推送的遠端名(git 傳給掛鉤的第一個參數;直接推網址時是網址、手動跑時是空的)——存量漂移檢查拿它找主線。
++_PP_REMOTE="${1:-}"
++
+ # 這次推送總共改到哪些檔(所有 ref 的聯集,一行一個)。寫進暫存檔,回印路徑;算不出來回空字串。
+ # ★給圖譜健康那一段用★:逾期的預告合約,本機這一層只擋「這次碰到的」那幾條,
+ # 別人的逾期不該擋掉你的推送(被擋的人解不開別人的合約)。CI 不給這份清單,那邊照舊擋全部。
+ pp_touched_file() {
+   local _f _r
+   [[ -n "$_EMPTY_TREE" ]] || return 0
+   # ★放進 $_PP_TMP,不要自己另外 mktemp 一個檔★(代碼審 r1 架構席):那個目錄有 trap 在收,
+   # 正常結束、exit 1、Ctrl-C、被砍都會清掉。自己逐處 rm 會在「還沒回傳路徑就被打斷」時漏掉
+   # ——這支腳本前面那段註解就是為了同一種漏而寫的,不要再走一次同一條路。
+   [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
+@@ -368,31 +338,33 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+       if git rev-parse -q --verify "$_hold^" >/dev/null 2>&1; then
+         _hrange="$(git rev-parse "$_hold^")..$_lsha"
+       else
+         _hrange="$_EMPTY_TREE..$_lsha"
+       fi
+     fi
+   fi
+   if [[ -n "$_hrange" ]]; then
+     nh_rc=0
+     "$PY" "$GRAPHCTL" home check --diff "$_hrange" --repo "$REPO_ROOT" || nh_rc=$?
++    pp_stop_if_signaled "$nh_rc" "每支檔有家檢查"
+     if [[ "$nh_rc" -eq 1 ]]; then
+       {
+         echo ""
+         echo "逃生:照上面的指令替檔安家、或把說明改寫進對的那篇,再推;整個專案先改成只提醒 → .lumos/config.json 的 node_home.gate 設成 warn;緊急硬推 git push --no-verify(本機不留痕)。"
+         echo ""
+       } >&2
+       exit 1
+     fi
+     # 筆記形狀擋(Projects/筆記形狀擋_計劃):同一段範圍再查一次,接住 --no-verify 跳過提交前那道的;範圍算法同上(不用空樹兜底)
+     ns_rc=0
+     "$PY" "$GRAPHCTL" note-shape --diff "$_hrange" --repo "$REPO_ROOT" || ns_rc=$?
++    pp_stop_if_signaled "$ns_rc" "筆記形狀擋"
+     if [[ "$ns_rc" -eq 1 ]]; then
+       {
+         echo ""
+         echo "逃生:照上面改寫(行號改成函式名或測試名、或釘版本 路徑@<提交編號>:行號;現況描述刪掉或帶 [來源:…]);誤擋就 LUMOS_SKIP_NOTE_SHAPE=1 單次跳過(會留帳);整個專案先只提醒 → .lumos/config.json 的 note_shape.gate 設成 warn。"
+         echo ""
+       } >&2
+       exit 1
+     fi
+   fi
+ 
+@@ -410,26 +382,27 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+       echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
+       echo "命中的地方列在下面:"
+       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+       echo ""
+     } >&2
+   fi
+   # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支:★無條件★叫 check(表態閘 2026-09-09,Projects/棧別提問表態閘_計劃 S7):
+   # 合約測試紅 / 有適用題表態不完整 / tier=high 無留痕,三個獨立判定各自出各自的訊息、由 check 印
+   # ——這裡不再自己寫死「跑一輪代碼審」文案、也不再把它的輸出丟 /dev/null(r3 正確性席 C3)。非 heads → advisory。
+   # 雙向門放行(Projects/雙向門放行_計劃 S11–S14/S21):這次範圍碰到、仍 doing、有雙向門留痕的計劃,留痕裡的測試全綠才准推;
+-  # 留痕過期(條款或它連到的節點變了)也擋。風險低計劃不派設計審,這裡是它唯一的閘;lumos 算不出範圍/索引就 fail-open 放行(rc≠1)。
++  # 留痕過期(條款或它連到的節點變了)也擋。風險低計劃不派設計審,這裡是它唯一的閘;lumos 算不出範圍/索引就 fail-open 放行(rc≠1;128 以上是被中斷,停下)。
+   sg_rc=0
+   _sg_out="$_PP_TMP/sg-$RANDOM.log"
+   # tee:一邊即時印到 stderr(r1 併發席:先存檔跑完才印,人會以為卡住去 Ctrl-C)、一邊留一份給下面認 light 用;rc 取管線第一段
+   "$PY" "$GRAPHCTL" spec-gate --push-check "$_range" --repo "$REPO_ROOT" 2>&1 | tee "$_sg_out" >&2
+   sg_rc="${PIPESTATUS[0]}"
++  pp_stop_if_signaled "$sg_rc" "雙向門放行檢查(spec-gate)"
+   # push-check 判成 light(它才有圖譜、才知道計劃風險低與小改動閘過):改到程式檔也不跑全套,
+   # 只跑文件子集 + 原始碼提到「改到的函式/子命令/檔名」的測試;CI 那邊照樣跑全套當後盾。
+   # ★還要 pitfalls 說 light_ok★(r1 資安席):小改動閘的擴散只查程式檔,測試檔/skills/workflow 這種既不是文件也不是程式的
+   # 會從它眼皮下溜過——範圍裡只要有一支這種檔,就不准少跑全套。
+   if [[ "$_suite_this" == "full" ]] && grep -q '改動風險分級:light' "$_sg_out" && printf '%s' "$pf_json" | grep -q '"light_ok": *true'; then
+     _suite_this="light"
+     _k="$(printf '%s' "$pf_json" | "$PY" -c 'import json,sys; print(",".join(json.load(sys.stdin).get("affected_keys", [])))' 2>/dev/null || true)"
+     [[ -n "$_k" ]] && _SUITE_KEYS="${_SUITE_KEYS:+$_SUITE_KEYS,}$_k"
+     printf '%s' "$pf_json" | grep -q '"autoloop_full": *true' && _AUTOLOOP_FULL=1
+   fi
+@@ -442,20 +415,21 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+   if [[ "$_rref" == refs/heads/* ]]; then
+     _rbranch="${_rref#refs/heads/}"
+     cl_rc=0
+     # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次波及。
+     _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
+     # 低風險推送的受波及合約測試維持「只提醒不擋」(2026-09-07 全 repo 審視 #17 人裁);高風險不帶旗標,照擋
+     # pitfalls 沒吐 JSON(暫時失敗)就不帶 advisory:讓 check 自己算 tier 決定擋不擋(r1 外家 finder f4/否決 f3)
+     _ba=(); [[ -n "$pf_json" && "$_tier_high" -eq 0 ]] && _ba=(--bound-tests-advisory)
+     _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
+       --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} 2>&1)" || cl_rc=$?
++    pp_stop_if_signaled "$cl_rc" "code-loop check"
+     if [[ "$cl_rc" -eq 1 ]]; then
+       # 逃逸自動記(規格落成可驗收條件_計劃 第五節):推送閘擋下=下游抓到了設計審/規格閘放行後的洞,
+       # 碰到的計劃筆記各記一筆;對不回就不記。★永遠 fail-open★——記帳失敗不能變成擋推送的第二個理由。
+       # ★只認「受波及合約的測試沒過」那型★:缺表態/高風險缺留痕是流程沒走完,不是下游抓到缺陷,不進逃逸帳(首輪前掃訂正)
+       if printf '%s' "$_cl_out" | grep -q "受波及合約的測試沒過"; then
+         "$PY" "$GRAPHCTL" loop escape --auto --stage push-gate --severity major \
+           --desc "推送閘擋下:$(printf '%s' "$_cl_out" | grep -m1 '受波及合約的測試沒過')" --range "$_range" --repo "$REPO_ROOT" >&2 || true
+       fi
+       # 高風險缺審查留痕:只有「該計劃被判成風險低、跳過設計審」才算逃逸(lumos 那邊查有沒有風險低留痕,沒有就不記)
+       # ★只認「tier=high 且…」開頭的缺留痕句★:測試紅的擋下句尾巴也帶 tier=high,認整個詞會兩筆都記(r2 回滾席)
+@@ -465,54 +439,51 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+       fi
+       {
+         echo ""
+         printf '%s\n' "$_cl_out"
+         echo ""
+         echo "逃生路依上面 check 講的原因走:缺表態 → 先表態(上面的 dispositions 指令);高風險缺審查留痕 → 審過 lumos code-loop pass --note、或刻意不審 lumos code-loop skip --note \"為什麼\";合約測試紅 → 修測試。緊急硬推 git push --no-verify(本機不留痕,CI 會把這次推送標紅)"
+         echo ""
+       } >&2
+       exit 1
+     fi
+-    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常):fail-open 放行
++    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常,128 以上除外):fail-open 放行
+     [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘' >&2 || true; }
+   else
+     # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,一律 advisory(r2 外家 F7)
+     [[ "$_tier_high" -eq 1 ]] && echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
+     if printf '%s' "$pf_json" | grep -q '"stack_questions_applicable": *{"'; then
+       {
+         echo ""
+         echo "提醒:這次改到的技術棧有幾題效能檢核被觸發(推的是 tag,只提醒不擋),列在下面:"
+         "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+         echo ""
+       } >&2 || true
+     fi
+     bound_tests_advisory "$_range"
+   fi
+   # 存量漂移檢查(Projects/存量漂移防線_計劃〈做法〉第 4 節第 4 點、[S1][S18]):已經寫進圖譜的句子因為這次推送改了狀態而過期
+   # (轉正了還留著預告句、計劃收尾了連著的 Issue 還開著…)。排在 code-loop check 之後、全套測試之前:code-loop 約 0.6 秒、
+   # 這道最壞 60 秒、全套 8 分鐘,便宜的先跑。分支與 tag 都查(不像 code-loop 要分支名)。
+   # 上線標記:下一行那串是 lumos 找「這道檢查從哪個提交起上線」用的(範圍起點截到那裡,上線前的是舊帳),別改寫也別刪:
+ # lumos drift check
+-  # 範圍起點由 pp_drift_range 算(見那支函式):跟主線的分岔點與遠端舊值取比較新的;不用上面的 _range(空樹兜底)。
++  # 範圍原樣交 遠端舊值..本地頂端,連同遠端名與遠端 ref 名:起點由 lumos 的 _push_range_start 算(跟主線的分岔點與遠端舊值
++  # 取比較新的;CI 那步也交給同一支),掛鉤不自己算——原本掛鉤、CI、工具各算一份,三份各有洞(代碼審 r2)。不用上面的 _range。
+   # 模式由 lumos 讀被推送頂端提交的 .lumos/config.json(drift_check.gate,沒寫=warn):block 有要處理 rc1 → 擋;warn 只印 rc0;
+   # off 它自己跳過。LUMOS_SKIP_DRIFT_CHECK=1 單次略過、淺層 clone 跳過,都由 lumos 記帳。每一筆的 lumos drift fix 修法由它印。
+   # 回傳碼:1 → 擋;128 以上(被訊號殺掉,多半是 Ctrl-C)→ 整支掛鉤停下、不放行、不往下跑全套;
+   # 其他非零(工具錯誤、git 太慢逾時、舊版工具沒有 drift 子命令)→ 講一句「這次沒檢查」再放行,
+   # 跟每支檔有家、筆記形狀擋的「只認 rc1 擋」同一種處理(代碼審 r1 併發回滾席)。
+-  pp_drift_range "$_rsha" "$_lsha"
+-  [[ -n "$_DR_NOTE" ]] && echo "提醒(存量漂移檢查):$_DR_NOTE" >&2
+   dr_rc=0
+-  "$PY" "$GRAPHCTL" drift check --diff "$_DR_RANGE" --repo "$REPO_ROOT" || dr_rc=$?
+-  if [[ "$dr_rc" -ge 128 ]]; then
+-    echo "存量漂移檢查被中斷(rc=$dr_rc),推送停下,後面的檢查不跑。" >&2
+-    exit "$dr_rc"
+-  fi
++  "$PY" "$GRAPHCTL" drift check --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
++    --repo "$REPO_ROOT" || dr_rc=$?
++  pp_stop_if_signaled "$dr_rc" "存量漂移檢查"
+   if [[ "$dr_rc" -eq 1 ]]; then
+     {
+       echo ""
+       echo "逃生:照上面每一筆的 lumos drift fix 指令改掉、或 lumos drift ack 表態照留(兩種都要提交進去才算),再推;誤擋就 LUMOS_SKIP_DRIFT_CHECK=1 git push 單次略過(會留帳);整個專案先只提醒 → .lumos/config.json 的 drift_check.gate 設成 warn。"
+       echo ""
+     } >&2
+     exit 1
+   fi
+   if [[ "$dr_rc" -ne 0 ]]; then
+     echo "漂移檢查沒能跑完(工具錯誤或 git 太慢),這次沒檢查;CI 會再檢查一次。(上面如果印了「擋下:」,指的是這道檢查自己沒跑成,推送沒有被擋。)" >&2
+diff --git a/scripts/lumos b/scripts/lumos
+index fa7b1ba5..4d76fc8f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -25752,43 +25752,49 @@ def _note_audit_fold(docs):
+     out = dict(best)
+     for i in skipped:
+         out.setdefault(i, "SKIP")
+     return out
+ 
+ 
+ def _note_audit_covered(cls):
+     return cls in ("CONTEXT", "SKIP")
+ 
+ 
+-def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=None):
++def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=None, push=None):
+     """--diff 範圍 → (base_where, tip, vault_rel) 或 (None, rc, None)。起點照三道檢查共用的 _lens_push_base,
+-    再截到上線點(推送前掛鉤的標記;預設是第二層的,存量漂移檢查傳自己的)。"""
++    再截到上線點(推送前掛鉤的標記;預設是第二層的,存量漂移檢查傳自己的)。
++    push=(遠端名, 遠端 ref) 時範圍的起點當成遠端舊值,改由 _push_range_start 算(存量漂移檢查的 --push-remote/--pushed-ref),
++    說明一定印一行。"""
+     rg = _lens_range_ok(diff_range)
+     if rg is None:
+         print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有", file=sys.stderr)
+         return None, 2, None
+     sh = _lens_git(root, "rev-parse", "--is-shallow-repository")
+     if sh is not None and sh.stdout.strip() == "true":
+         print(f"{gate_word}:淺層 clone 算不出範圍,這次不查——CI 請設 fetch-depth: 0", file=sys.stderr)
+         _gate_event_or_warn(root, gate, "skipped-env", "shallow clone")
+         return None, 0, None
+     a, b = rg
+     if _ZERO_SHA_RE.fullmatch(b):
+         print(f"{gate_word}:範圍終點是全 0(刪除分支),沒有要審的東西", file=sys.stderr)
+         return None, 0, None
+     tip = _lens_full_sha(root, b)
+     if tip is None:
+         # 推送前的終點是本機要推的提交、CI 的是剛 checkout 的那個,都一定找得到;找不到就是範圍寫錯,
+         # 放行等於整道檢查沒跑(代碼審 r1 外家席),所以當參數錯
+         print(f"擋下:範圍 {diff_range} 的終點在本機找不到——範圍寫錯了?", file=sys.stderr)
+         return None, 2, None
+-    base, why = _lens_push_base(root, a, tip)
++    if push is not None:
++        base, why = _push_range_start(root, a, tip, push[0], push[1])
++        why = f"起點——{why}"
++    else:
++        base, why = _lens_push_base(root, a, tip)
+     if why:
+         print(f"{gate_word}:{why}", file=sys.stderr)
+     if base is None:
+         _gate_event_or_warn(root, gate, "skipped", why)
+         return None, 0, None
+     base = _nodehome_clamp_base(root, base, tip, mark or _NOTE_AUDIT_GOLIVE_MARK, _NOTELINES_PREPUSH)
+     lst = _nodehome_list(root, tip)
+     if lst is None:
+         return None, 0, None
+     vaults = sorted({_vault_slug_of(p) for p in lst[1]} - {None})
+@@ -28228,34 +28234,37 @@ def _drift_print_findings(rows, stream, acks=None, alive=None):
+         prev = _drift_prev_ack_line(f)
+         old = None if prev else (_drift_old_reason(f, acks, alive) if acks else None)
+         if prev:
+             print(f"      ({_esc_clean(prev, 400)})", file=stream)
+         elif old:
+             print(f"      (這一行以前表態過、後來改了或搬了,舊理由:{old[:80]})", file=stream)
+     if len(rows) > 20:
+         print(f"  …還有 {len(rows) - 20} 筆", file=stream)
+ 
+ 
+-def cmd_drift_check(repo=None, diff_range=None):
++def cmd_drift_check(repo=None, diff_range=None, push_remote=None, pushed_ref=None):
+     """lumos drift check --diff A..B:推送前與 CI 的閘(閘名 drift-check)。有「要處理」的 rc1(warn 只印 rc0);
+-    只有「只列出」的 rc0;參數錯 rc2;判不了的(git 失敗、逾時、預算用完)算要處理——放行等於一條繞過的路。"""
++    只有「只列出」的 rc0;參數錯 rc2;判不了的(git 失敗、逾時、預算用完)算要處理——放行等於一條繞過的路。
++    帶 --push-remote 或 --pushed-ref(推送前掛鉤與 CI 用):A 當成遠端舊值,起點由 _push_range_start 算;
++    都沒帶照共用起點判法(_lens_push_base),行為不變。"""
+     import time as _t
+     root = _note_audit_root(repo)
+     if root is None:
+         print("存量漂移檢查:這裡不是 git 專案,跳過", file=sys.stderr)
+         return 0
+     if os.environ.get("LUMOS_SKIP_DRIFT_CHECK") == "1":        # 只認 1
+         print("存量漂移檢查:LUMOS_SKIP_DRIFT_CHECK 設了,這次跳過(已記進治理帳;CI 照查)", file=sys.stderr)
+         _gate_event_or_warn(root, "drift-check", "skipped-env", "LUMOS_SKIP_DRIFT_CHECK")
+         return 0
++    push = None if (push_remote is None and pushed_ref is None) else (push_remote or "", pushed_ref or "")
+     base, tip, vault_rel = _note_audit_resolve(root, diff_range, "存量漂移檢查", gate="drift-check",
+-                                               mark=_DRIFT_GOLIVE_MARK)
++                                               mark=_DRIFT_GOLIVE_MARK, push=push)
+     if tip is None or isinstance(tip, int):
+         return tip if isinstance(tip, int) else 0
+     mode, warns, _explicit = _drift_config(_nodehome_reader(root, tip)(".lumos/config.json"))
+     for w in warns:
+         print(f"提醒:{w}", file=sys.stderr)
+     if mode == "off":
+         print("存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", file=sys.stderr)
+         return 0
+     must, listed, unknown = _drift_check_core(root, base, tip, vault_rel,
+                                               deadline=_t.monotonic() + _DRIFT_BUDGET_SEC)
+@@ -28425,43 +28434,42 @@ def _drift_gate_doctor_lines(repo_root):
+     # t_doctor_summary_admits_soft_reminders 的軟段計數)
+     if mode != "block" and (wired or explicit):
+         src = (f"({cfg_warns[0]})" if cfg_warns else "(.lumos/config.json 的 drift_check)" if explicit
+                else "(沒寫設定,這是預設值)")
+         out.append(f"這個專案的存量漂移檢查是 {mode}{src}——轉正後留著預告句的推送不會被擋")
+     wf = root / ".github" / "workflows"
+     ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
+     body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
+     if wired and ymls and "drift check" not in body:
+         out.append("專案 CI 沒呼叫 `lumos drift check`,`--no-verify` 推上去的沒人查——CI 在 note-audit 那步後面加:"
+-                   + _DRIFT_CI_STEP + _CI_PY314_NOTE)
++                   + _DRIFT_CI_STEP)
+     return out
+ 
+ 
+-# doctor 給消費專案貼的 CI 步驟(推送閘接漂移檢查代碼審 r1 外家席 F2 的同一個洞):before 是空的、40 個 0、或本機找不到時,
+-# ★不能原樣交給 lumos★——前面的步驟 fetch 過的話,main 的 upstream 就是這次頂端,共用起點判法會判「頂端已在主線、沒有新東西」
+-# 整步跳過。改用頂端的第一個父提交(沒有父提交就從空樹),至少查這次推送的最後一個提交。起點補法那幾行跟工具鏈自己的
+-# .github/workflows/ci.yml 那步逐字相同(t_doctor_drift_ci_template_start_fallback 比對並真的跑一次)。
++# doctor 給消費專案貼的 CI 步驟:before 原樣交(空的換成 40 個 0),帶 --push-remote origin --pushed-ref "$GITHUB_REF",
++# 起點由 lumos 的 _push_range_start 算(推送閘接漂移檢查代碼審 r2:原本的 shell 補法在合過主線、新分支首推一次帶多個提交時算錯)。
++# 呼叫那兩行跟工具鏈自己的 .github/workflows/ci.yml 那步逐字相同(t_doctor_drift_ci_template_start_fallback 比對並真的跑一次)。
++# ★說明寫成 YAML 註解、縮排對齊步驟★(代碼審 r2 外家否決席):整段貼進 workflow 的 steps 底下要能被解析;
++# Python 3.14 那句也寫成註解,不接共用的 _CI_PY314_NOTE(另兩處範本的同一個問題另開 Issue)。
+ _DRIFT_CI_STEP = """
+     - name: drift check
+       if: github.event_name == 'push'
+       env:
+         BEFORE: ${{ github.event.before }}
+         SHA: ${{ github.sha }}
+       run: |
+-        if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+-          OLD="${BEFORE:-(空的)}"
+-          BEFORE="$(git rev-parse -q --verify "$SHA^1^{commit}" 2>/dev/null || git hash-object -t tree /dev/null)"
+-          echo "漂移檢查起點:before=$OLD 是新分支首推或本機找不到,改從 $BEFORE 算(至少查這次推送的最後一個提交)"
+-        fi
+-        python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --repo .
+-  (checkout 要設 fetch-depth: 0。回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;
+-   其他非零是工具出錯或參數錯,也會紅——工具出錯時寧可紅)"""
++        [ -n "$BEFORE" ] || BEFORE=0000000000000000000000000000000000000000
++        python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo .
++    # checkout 要設 fetch-depth: 0。起點由 lumos 算:跟主線(origin 的預設分支優先)的分岔點與 before 取比較新的。
++    # 回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;
++    # 其他非零是工具出錯或參數錯,也會紅——工具出錯時寧可紅。
++    # 這一步要在 Python 3.14 上跑:actions/setup-python 的 python-version 設 "3.14";lumos 的最低版本是 3.14,舊版會回 2 並說明。"""
+ 
+ 
+ # ── 考試 ─────────────────────────────────────────────────────────────────────────────
+ 
+ def _drift_set_status_text(text, status):
+     """全文裡把 status 欄改掉(連同 status/* 標籤)——考試在記憶體裡重放 lumos set 用,不寫檔。"""
+     lines = text.split("\n")
+     e = _drift_fm_end(lines)
+     if not e:
+         return text
+@@ -33078,20 +33086,116 @@ def _lens_push_base(repo_root, a, tip):
+     if ml:
+         anc = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, ml[1])
+         if anc is not None and anc.returncode == 0:
+             return None, f"{why},而且頂端已在主線({ml[0]})上——沒有新東西"
+         mb = _lens_git(repo_root, "merge-base", tip, ml[1])
+         if mb is not None and mb.returncode == 0 and mb.stdout.strip():
+             return mb.stdout.strip(), f"{why}:從跟主線({ml[0]})的分岔點算"
+     return _EMPTY_TREE_SHA, f"{why}:找不到主線,從空樹算(截到上線點)"
+ 
+ 
++def _push_mainline_branch(repo_root, cand, remote):
++    """主線候選指到的分支短名(判「就是這次被推的那條」用);判不出回 None。
++    遠端 HEAD 用 symbolic-ref 解出它指的分支;X@{upstream} 用 rev-parse --symbolic-full-name 解,再去掉那條本地分支設定的遠端名。"""
++    if cand.startswith("refs/remotes/"):
++        if cand.endswith("/HEAD"):
++            r = _lens_git(repo_root, "symbolic-ref", "-q", cand)
++            if r is None or r.returncode != 0:
++                return None
++            full = r.stdout.strip()
++        else:
++            full = cand
++        pre = f"refs/remotes/{remote}/"
++        return full[len(pre):] if remote and full.startswith(pre) else None
++    local = cand.split("@{", 1)[0]
++    r = _lens_git(repo_root, "rev-parse", "--symbolic-full-name", cand)
++    if r is None or r.returncode != 0:
++        return None
++    full = r.stdout.strip()
++    if full.startswith("refs/heads/"):          # upstream 設成本機另一條分支(branch.X.remote = .)
++        return full[len("refs/heads/"):]
++    rm = _lens_git(repo_root, "config", "--get", f"branch.{local}.remote")
++    pre = f"refs/remotes/{rm.stdout.strip()}/" if (rm is not None and rm.returncode == 0 and rm.stdout.strip()) else None
++    return full[len(pre):] if pre and full.startswith(pre) else None
++
++
++def _push_mainline(repo_root, remote, pushed_ref):
++    """推送的主線 → (候選名, sha) 或 None。依序:遠端宣告的預設分支(refs/remotes/<遠端>/HEAD)→ main@{upstream}
++    → master@{upstream} → <遠端>/main → <遠端>/master;沒給遠端名就跳過帶遠端的候選。
++    ★跳過「就是這次被推的那條分支」★:推主線本身時,掛鉤裡 main@{upstream} 還是舊值、CI 裡 origin/main 已經等於頂端,
++    拿它當主線會在 CI 判成「頂端已在主線、沒有新東西」整步跳過——跳過後兩邊都走「沒有別的主線、用遠端舊值」。
++    指到哪條分支判不出來(遠端 HEAD 不是捷徑、upstream 的遠端名讀不到)就不跳過。"""
++    pushed = pushed_ref[len("refs/heads/"):] if (pushed_ref or "").startswith("refs/heads/") else None
++    cands = ([f"refs/remotes/{remote}/HEAD"] if remote else []) + ["main@{upstream}", "master@{upstream}"] \
++        + ([f"refs/remotes/{remote}/main", f"refs/remotes/{remote}/master"] if remote else [])
++    for cand in cands:
++        sha = _lens_full_sha(repo_root, cand)
++        if not sha:
++            continue
++        if pushed is not None and _push_mainline_branch(repo_root, cand, remote) == pushed:
++            continue
++        return cand, sha
++    return None
++
++
++def _push_range_start(repo_root, old, tip, remote, pushed_ref):
++    """推送前掛鉤與 CI 的範圍起點 → (起點 sha 或 None, 說明)。None=頂端已在主線上、沒有新東西。
++    old 是遠端舊值(40/64 個 0=新分支首推;本機可能找不到=force push 蓋掉的舊頂端),remote 是推送的遠端名,
++    pushed_ref 是遠端那一側的 ref(refs/heads/X、refs/tags/Y)。
++    ★起點只在這裡算一處★(推送閘接漂移檢查代碼審 r2:掛鉤的 bash、CI 的 shell 補法、工具端各算一份,三份各有洞):
++    - 主線照 _push_mainline 找;找不到:舊值找得到用舊值;舊值全 0 從空樹算;舊值找不到退到頂端的第一個父提交
++      (沒有父提交從空樹),只查最後一個提交——說明照實講。
++    - 找到主線:頂端是主線的祖先(或相等)→ None;`merge-base --all` 沒有 → 同找不到主線;
++      舊值找得到而且**每一個**合併基底都是舊值的祖先 → 用舊值(一般增量推送);否則用第一個不是舊值祖先的合併基底
++      (功能分支合過主線、重定基底、交叉合併:用舊值的話 `舊..新` 會把合進來的主線提交——別人的轉正——算成這次的;
++      只看 git 挑的那一個基底,交叉合併時會挑到舊值那個而退回原樣範圍)。舊值不在時用第一個基底。"""
++    if old == _EMPTY_TREE_SHA:
++        return old, "起點是空樹,從空樹比"
++    zero = bool(_ZERO_SHA_RE.fullmatch(old or ""))
++    old_sha = None if zero else _lens_full_sha(repo_root, old)
++
++    def _no_mainline(why):
++        if old_sha:
++            return old_sha, f"{why},用遠端舊值 {old_sha[:12]} 當起點"
++        if zero:
++            return _EMPTY_TREE_SHA, f"{why},新分支首推:從空樹算(截到上線點)"
++        par = _lens_full_sha(repo_root, f"{tip}^1")
++        if par:
++            return par, f"{why},遠端舊值在本機找不到:從頂端的第一個父提交 {par[:12]} 算,只查最後一個提交"
++        return _EMPTY_TREE_SHA, f"{why},遠端舊值在本機找不到、頂端沒有父提交:從空樹算"
++
++    ml = _push_mainline(repo_root, remote, pushed_ref)
++    if ml is None:
++        return _no_mainline("找不到主線(遠端預設分支、main/master 的 upstream、遠端 main/master 都沒有,或就是這次推的分支)")
++    anc = _lens_git(repo_root, "merge-base", "--is-ancestor", tip, ml[1])
++    if anc is not None and anc.returncode == 0:
++        return None, f"頂端已在主線({ml[0]})上——沒有新東西"
++    mb = _lens_git(repo_root, "merge-base", "--all", tip, ml[1])
++    bases = [b for b in (mb.stdout.split() if (mb is not None and mb.returncode == 0) else []) if _LENS_SHA_RE.match(b)]
++    if not bases:
++        return _no_mainline(f"跟主線({ml[0]})沒有共同祖先")
++    if old_sha:
++        return _push_pick_base(repo_root, bases, old_sha, ml[0])
++    what = "新分支首推" if zero else "遠端舊值在本機找不到"
++    return bases[0], f"{what}:從跟主線({ml[0]})的分岔點 {bases[0][:12]} 算"
++
++
++def _push_pick_base(repo_root, bases, old_sha, ml_name):
++    """遠端舊值找得到時:每一個合併基底都是舊值的祖先(或相等)→ 用舊值;否則用第一個不是舊值祖先的基底。
++    git 判不了(逾時)的基底當成不是祖先——寧可多查自己上次推過的,也不把舊值之後主線合進來的算成這次的。"""
++    for b in bases:
++        r = _lens_git(repo_root, "merge-base", "--is-ancestor", b, old_sha)
++        if r is None or r.returncode != 0:
++            return b, f"遠端舊值跟主線({ml_name})分岔(合過主線或重定基底):從分岔點 {b[:12]} 算"
++    return old_sha, f"一般增量推送:從遠端舊值 {old_sha[:12]} 算"
++
++
+ def _lens_git(repo_root, *args, quote=False, binary=False):
+     """binary=True:輸出照位元組回(不解碼)——讀檔案內容算指紋用,非 UTF-8 的內容也不會在解碼時噴錯。"""
+     import subprocess as _sp
+     cmd = ["git", "-C", str(repo_root)]
+     if quote:
+         cmd += ["-c", "core.quotePath=false"]
+     try:
+         if binary:
+             return _sp.run(cmd + list(args), capture_output=True, timeout=20)
+         return _sp.run(cmd + list(args), capture_output=True, text=True, errors="replace", timeout=20)
+@@ -37586,20 +37690,24 @@ def main():
+     nas = nasub.add_parser("skip", help="把從來沒被判過的待審行記成略過(要理由,會留帳)")
+     nas.add_argument("--diff", dest="na_diff", required=True, metavar="A..B")
+     nas.add_argument("--note", dest="na_note", required=True)
+     nas.add_argument("--repo", dest="na_repo", default=None)
+ 
+     dr_p = sub.add_parser("drift", help="存量漂移守衛:已經寫進去的句子因為別處狀態變了而過期;spec=Projects/存量漂移防線_計劃")
+     drsub = dr_p.add_subparsers(dest="drcmd", required=True)
+     drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;warn 模式只印)")
+     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
+     drc.add_argument("--repo", dest="dr_repo", default=None)
++    drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",
++                     help="推送前掛鉤與 CI 用:--diff 的起點當成遠端舊值,改從跟主線(這個遠端的預設分支優先)的分岔點算")
++    drc.add_argument("--pushed-ref", dest="dr_pushed_ref", default=None, metavar="ref",
++                     help="這次推的遠端 ref(refs/heads/X);找主線時跳過就是這條的候選")
+     drs = drsub.add_parser("scan", help="健檢整份圖譜跟狀態對不上的地方(不擋、不寫帳)")
+     drs.add_argument("--at", dest="dr_at", default=None, metavar="提交", help="看某個提交的圖譜(預設工作目錄)")
+     drs.add_argument("--json", dest="dr_json", action="store_true")
+     drs.add_argument("--budget", dest="dr_budget", type=float, default=None, metavar="秒",
+                      help=f"總預算(預設 {_DRIFT_BUDGET_SEC} 秒);用完的條件列成判不了")
+     dra = drsub.add_parser("ack", help="表態某一行照留(要理由;提交進去才算)")
+     dra.add_argument("dr_node", metavar="節點")
+     dra.add_argument("dr_line", metavar="行號", type=int)
+     dra.add_argument("--kind", dest="dr_kind", required=True, choices=_DRIFT_KINDS)
+     dra.add_argument("--reason", dest="dr_reason", required=True)
+@@ -37832,21 +37940,22 @@ def main():
+         if args.nacmd == "prepare":
+             return cmd_note_audit_prepare(repo=args.na_repo, diff_range=args.na_diff, orchestrator=args.na_orch, only=args.na_only)
+         if args.nacmd == "record":
+             return cmd_note_audit_record(repo=args.na_repo, diff_range=args.na_diff, prepared=args.na_prepared,
+                                          reports=args.na_reports, dispute=args.na_dispute, disputes=args.na_disputes)
+         if args.nacmd == "check":
+             return cmd_note_audit_check(repo=args.na_repo, diff_range=args.na_diff)
+         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
+         if args.drcmd == "check":
+-            return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff)
++            return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
++                                   pushed_ref=args.dr_pushed_ref)
+         if not args.dr_history and not args.dr_exam:
+             print("擋下:lumos drift exam 要給考卷,或帶 --history N", file=sys.stderr)
+             return 2
+         return cmd_drift_exam(args.dr_exam, args.dr_repo, probes=args.dr_probes, at=args.dr_at,
+                               history=args.dr_history, as_json=args.dr_json)
+     if args.cmd == "note-shape":
+         if args.ns_staged and args.ns_diff is not None:
+             print("擋下:--staged 和 --diff 不能一起用,擇一", file=sys.stderr)
+             return 2
+         if not args.ns_staged and args.ns_diff is None:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 359ca7bd..d631a428 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -51014,81 +51014,124 @@ def t_drift_check_state_events_in_range():
+     _nh_commit(root2, "舊轉正")
+     _nh_file(root2, "scripts/hooks/pre-push", "#!/bin/bash\n# lumos drift check\n")
+     _nh_commit(root2, "上線")
+     rc, out = _dr(root2, "check", "--diff", f"{b2}..HEAD")
+     check("⑩上線點之前的轉正不查(起點截到推送前掛鉤出現標記的提交)", rc == 0, out)
+ 
+ 
+ def _dr_hook_fakes(root):
+     """推送前掛鉤的測試現場:假 lumos(記下每次被叫的參數;drift 子命令轉給真的 lumos)、假全套測試(跑了記一筆 SUITE)。
+     放在工作目錄、不提交——drift check 讀的是被推送頂端提交的樹,跟它們無關;所以要在最後一個提交之後才放。
+-    FAKE_DRIFT_RC=<n>:drift 不轉給真的,印舊版工具那句「擋下:沒有 drift 這個指令」回 n;FAKE_DRIFT_SIG=1:drift 被 SIGTERM 殺掉。"""
++    FAKE_DRIFT_RC=<n>:drift 不轉給真的,印舊版工具那句「擋下:沒有 drift 這個指令」回 n;FAKE_DRIFT_SIG=1:drift 被 SIGTERM 殺掉;
++    FAKE_SIG_CMD=<子命令>:那個子命令(home、note-shape、spec-gate、code-loop…)被 SIGTERM 殺掉。"""
+     import os as _os
+     real = Path(GRAPHCTL).resolve()
+     log = root / "argv.log"
+     (root / "scripts" / "lumos").write_text(
+         "#!/usr/bin/env python3\nimport sys, json, pathlib, os, subprocess, signal\n"
+         f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+         "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+         "if c == 'python-path':\n    print(sys.executable); sys.exit(0)\n"
+         "if c == 'drift' and os.environ.get('FAKE_DRIFT_SIG'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
++        "if c and c == os.environ.get('FAKE_SIG_CMD'):\n    os.kill(os.getpid(), signal.SIGTERM)\n"
+         "if c == 'drift' and os.environ.get('FAKE_DRIFT_RC'):\n"
+         "    print('擋下:沒有「drift」這個指令。', file=sys.stderr); sys.exit(int(os.environ['FAKE_DRIFT_RC']))\n"
+         f"if c == 'drift':\n    sys.exit(subprocess.run([sys.executable, {str(real)!r}, *sys.argv[1:]]).returncode)\n"
+         "if c == 'impact' and '--json' in sys.argv:\n"
+         "    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
+         "elif c == 'pitfalls' and '--json' in sys.argv:\n"
+         "    print(json.dumps({'tier': 'standard'}))\n"
+         "sys.exit(0)\n", encoding="utf-8")
+     _os.chmod(root / "scripts" / "lumos", 0o755)
+     (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
+     (root / "scripts" / "test_lumos.py").write_text(
+         f"import pathlib\npathlib.Path({str(log)!r}).open('a').write('SUITE\\n')\nprint('1 passed, 0 failed')\n",
+         encoding="utf-8")
+     return log
+ 
+ 
+-def _dr_hook_run(root, stdin, args=(), **env):
+-    """真的跑工具鏈的推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。args 是 git 給掛鉤的參數(遠端名、網址)。"""
++def _dr_hook_run(root, stdin, args=(), hook=None, **env):
++    """真的跑工具鏈的推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。args 是 git 給掛鉤的參數(遠端名、網址);
++    hook 給了就跑那一支(測試造的改動版),不給跑工具鏈自己的。"""
+     import subprocess as sp, os as _os
+-    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    hook = hook or Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     log = root / "argv.log"
+     log.unlink(missing_ok=True)
+     e = dict(_os.environ, GIT_DIR=str(root / ".git"), LUMOS_TEST_SHARDS="1")
+-    for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG"):
++    for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG", "FAKE_SIG_CMD"):
+         e.pop(k, None)
+     e.update(env)
+     r = sp.run(["bash", str(hook), *args], cwd=str(root), input=stdin, capture_output=True, text=True, env=e, timeout=300)
+     lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+     return r.returncode, lines, r.stdout + r.stderr
+ 
+ 
++def t_prepush_gates_stop_on_signal():
++    """推送前掛鉤裡「rc1 擋、其他非零放行」的閘(每支檔有家、筆記形狀擋、雙向門放行 spec-gate、code-loop check、
++    存量漂移檢查)被訊號殺掉(回傳碼 128 以上,多半是 Ctrl-C)→ 印「<閘名>被中斷(rc=…),推送停下,後面的檢查不跑。」、
++    exit 那個回傳碼、不跑全套(推送閘接漂移檢查代碼審 r2 架構對齊席 F3:原本只有漂移那道會停)。
++    先證明現場:把掛鉤裡那幾行停下拿掉(等同舊掛鉤),同一個被殺掉的閘會被當成放行、照跑全套、rc0。
++
++    翻紅釘:拿掉任一道閘後面的 pp_stop_if_signaled → 那一道紅;pp_stop_if_signaled 門檻改成 >128 以外的值(例如只認 130)→ 全紅。
++    """
++    print("t_prepush_gates_stop_on_signal")
++    import re
++    _need_src("scripts/hooks/pre-push")
++    root = _dr_repo()
++    base = _na_head(root)
++    _nh_node(root, "Pay", summary="FLOW:b")
++    _nh_commit(root, "c")
++    head = _na_head(root)
++    _dr_hook_fakes(root)
++    stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++    gates = (("home", "每支檔有家檢查"), ("note-shape", "筆記形狀擋"), ("spec-gate", "雙向門放行檢查(spec-gate)"),
++             ("code-loop", "code-loop check"), ("drift", "存量漂移檢查"))
++    txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
++    old_txt, n = re.subn(r"^[ \t]*pp_stop_if_signaled \"\$[a-z]+_rc\".*\n", "", txt, flags=re.M)
++    # 五道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照
++    check("前置:掛鉤裡五道閘各有一行 pp_stop_if_signaled", n == 5, str(n))
++    old_hook = Path(tempfile.mkdtemp(prefix="gctl-oldhook-")) / "pre-push"
++    old_hook.write_text(old_txt, encoding="utf-8")
++    rc, lines, out = _dr_hook_run(root, stdin)
++    check("前置:沒人被殺掉時整支掛鉤放行、跑到全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-400:]}")
++    for cmd, name in gates:
++        rc, lines, out = _dr_hook_run(root, stdin, hook=old_hook, FAKE_SIG_CMD=cmd)
++        called = any(ln.startswith(cmd) for ln in lines)
++        check(f"前置({cmd}):拿掉停下的掛鉤(等同舊掛鉤)被殺掉的閘當成放行、照跑全套", called and rc == 0 and "SUITE" in lines,
++              f"rc={rc} {lines} {out[-300:]}")
++        rc, lines, out = _dr_hook_run(root, stdin, FAKE_SIG_CMD=cmd)
++        check(f"{cmd}被訊號殺掉(rc≥128)→ 掛鉤停下、回那個回傳碼、不跑全套、講明是哪道被中斷",
++              rc >= 128 and "SUITE" not in lines and f"{name}被中斷(rc={rc}),推送停下,後面的檢查不跑。" in out,
++              f"rc={rc} {lines} {out[-300:]}")
++
++
+ def _dr_settle(root, name="G"):
+     """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+     g = root / _DR_VAULT / "Verification" / f"{name}.md"
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                  encoding="utf-8")
+ 
+ 
+ def t_prepush_and_ci_wire_drift_check():
+     """[S18] 推送前掛鉤每個 ref 在 code-loop check 之後、全套測試之前跑 drift check;block 有要處理 → 擋、不跑全套;
+     warn(含沒寫設定的預設)只印、照推;off 放行;LUMOS_SKIP_DRIFT_CHECK=1 放行。印出的每筆都帶 lumos drift fix 修法。
+     drift check 回其他非零(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講一句「這次沒檢查」再放行;被訊號殺掉 → 掛鉤停下、不跑全套。
+     工具鏈 CI 在 code-loop gate 之後有一步 drift check:回 0 不紅、回 1 印擋下原因並紅、其他非零照原碼紅(工具出錯時寧可紅,
+-    跟同檔 code-loop gate、note-shape 兩步同一個慣例);before 是空的、全 0、本機找不到時改從頂端的父提交算。
++    跟同檔 code-loop gate、note-shape 兩步同一個慣例);before 原樣交(空的換成 40 個 0),帶 --push-remote origin
++    --pushed-ref "$GITHUB_REF",起點由 lumos 算(各種形狀在 t_ci_drift_start_shapes)。
+ 
+     真的跑那支掛鉤:假 lumos 記下每次被叫的參數,drift 子命令轉給真的 lumos,在一個「守衛紀錄這次轉正、預告句還留著」
+     的專案上判(c1 要處理)。假全套測試跑起來記一筆 SUITE,拿三者在記錄裡的先後判順序。各種 ref 形狀的起點在
+     t_prepush_drift_range_ref_shapes。
+ 
+     翻紅釘:掛鉤裡 drift check 那段搬到全套測試後面 → ①⑤紅;rc1 不擋 → ①紅;128 以上不停 → ⑨紅;CI 那步拿掉 → ⑦紅;
+-    CI 那步把 rc 吞掉 → ⑧紅;CI 的 before 補法拿掉 → ⑧起點紅。
++    CI 那步把 rc 吞掉 → ⑧紅;CI 不帶推送參數 → ⑧起點紅。
+     """
+     print("t_prepush_and_ci_wire_drift_check")
+     import subprocess as sp, os as _os, json as _j, textwrap as _tw, re
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     _need_src("scripts/hooks/pre-push", ".github/workflows/ci.yml")
+     root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+     vault = root / _DR_VAULT
+     (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+     _nh_commit(root, "base")
+     base = _na_head(root)
+@@ -51105,22 +51148,23 @@ def t_prepush_and_ci_wire_drift_check():
+     def order_ok(lines):
+         cl, dr, su = at(lines, "code-loop check"), at(lines, "drift check"), at(lines, "SUITE")
+         return 0 <= cl < dr < su, f"code-loop={cl} drift={dr} suite={su}"
+ 
+     rc, lines, out = pp()
+     dr_line = lines[at(lines, "drift check")] if at(lines, "drift check") >= 0 else ""
+     check("①block:轉正了還留著預告句 → 推送擋下、全套測試沒跑", rc == 1 and at(lines, "SUITE") < 0
+           and 0 <= at(lines, "code-loop check") < at(lines, "drift check"), f"rc={rc} {lines} {out[-600:]}")
+     check("②擋下時印出每筆的 lumos drift fix 修法與逃生路", "lumos drift fix" in out and "drift_check.gate" in out
+           and "LUMOS_SKIP_DRIFT_CHECK=1" in out, out[-800:])
+-    check("③沒有遠端、找不到主線:範圍原樣交 remote_sha..local_sha,並講一聲起點交給 lumos 判",
+-          f"--diff {base}..{_na_head(root)}" in dr_line and "找不到主線" in out, dr_line + out[-400:])
++    check("③沒有遠端、找不到主線:範圍原樣交 remote_sha..local_sha(帶遠端 ref 名),lumos 講一聲、用遠端舊值",
++          f"--diff {base}..{_na_head(root)}" in dr_line and "--pushed-ref refs/heads/main" in dr_line
++          and "找不到主線" in out and "用遠端舊值" in out, dr_line + out[-400:])
+     rc, lines, out = pp(LUMOS_SKIP_DRIFT_CHECK="1")
+     ok, why = order_ok(lines)
+     check("④LUMOS_SKIP_DRIFT_CHECK=1:放行,照跑全套", rc == 0 and ok, f"rc={rc} {why} {out[-400:]}")
+     rc, lines, out = pp(FAKE_DRIFT_RC="2")
+     ok, why = order_ok(lines)
+     check("⑨drift check 回 2(工具錯誤、git 太慢、舊版工具沒有 drift)→ 講明這次沒檢查、放行、照跑全套",
+           rc == 0 and ok and "漂移檢查沒能跑完" in out and "推送沒有被擋" in out, f"rc={rc} {why} {out[-400:]}")
+     rc, lines, out = pp(FAKE_DRIFT_SIG="1")
+     check("⑨drift check 被訊號殺掉(rc≥128)→ 掛鉤停下、不放行、不跑全套",
+           rc != 0 and at(lines, "SUITE") < 0 and "被中斷" in out, f"rc={rc} {lines[-3:]} {out[-400:]}")
+@@ -51164,47 +51208,61 @@ def t_prepush_and_ci_wire_drift_check():
+         sp.run(["git", "-C", str(cr), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"c{i}", "--no-verify"],
+                capture_output=True)
+         shas.append(sp.run(["git", "-C", str(cr), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+     fb = Path(tempfile.mkdtemp(prefix="gctl-ci-drift-"))
+     (fb / "python").write_text("#!/bin/bash\necho \"python $*\" > \"$FAKE_LOG\"\nexit \"$FAKE_RC\"\n", encoding="utf-8")
+     _os.chmod(fb / "python", 0o755)
+ 
+     def ci_run(before, sha, frc="0"):
+         (fb / "log").unlink(missing_ok=True)
+         e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", FAKE_RC=frc, FAKE_LOG=str(fb / "log"),
+-                 BEFORE=before, SHA=sha)
++                 BEFORE=before, SHA=sha, GITHUB_REF="refs/heads/main")
+         e.pop("GIT_DIR", None)
+         r = sp.run(["bash", "-e", "-c", body], cwd=str(cr), capture_output=True, text=True, env=e, timeout=30)
+         called = (fb / "log").read_text(encoding="utf-8") if (fb / "log").exists() else ""
+         return r.returncode, called, r.stdout + r.stderr
+ 
+     got = {frc: ci_run(shas[0], shas[2], frc)[0] for frc in ("0", "1", "2", "7")}
+     check("⑧CI 那步:warn(回 0)不讓 CI 紅、block 擋下(回 1)讓 CI 紅、其他非零照原碼紅",
+           bool(body) and got == {"0": 0, "1": 1, "2": 2, "7": 7}, f"{got} {body[:300]}")
+-    _rc, called, _o = ci_run(shas[0], shas[2])
+-    check("⑧CI 起點:before 在本機找得到就照用", f"drift check --diff {shas[0]}..{shas[2]} --repo ." in called, called)
+-    for label, before in (("空的", ""), ("40 個 0", "0" * 40), ("本機找不到", "de" * 20)):
++    push = "--push-remote origin --pushed-ref refs/heads/main --repo ."
++    for label, before, want in (("找得到", shas[0], shas[0]), ("空的", "", "0" * 40), ("40 個 0", "0" * 40, "0" * 40),
++                                ("本機找不到", "de" * 20, "de" * 20)):
+         _rc, called, out = ci_run(before, shas[2])
+-        check(f"⑧CI 起點:before {label} → 改從頂端的父提交算,並印一行說明",
+-              f"drift check --diff {shas[1]}..{shas[2]} --repo ." in called and "漂移檢查起點" in out, called + out[-300:])
+-    empty = sp.run(["git", "hash-object", "-t", "tree", "/dev/null"], capture_output=True, text=True).stdout.strip()
+-    _rc, called, out = ci_run("0" * 40, shas[0])
+-    check("⑧CI 起點:頂端是第一個提交(沒有父提交)→ 從空樹比", f"drift check --diff {empty}..{shas[0]} --repo ." in called,
+-          called + out[-300:])
++        check(f"⑧CI 起點:before {label} → 原樣交(空的換成 40 個 0),帶遠端名與這次推的 ref,起點交給 lumos 算",
++              f"drift check --diff {want}..{shas[2]} {push}" in called, called + out[-300:])
++
++
++def _dr_yaml_tail_ok(text):
++    """健檢範本貼進 workflow 能不能被解析的替代斷言(標準庫沒有 YAML 解析器):`run: |` 那段 shell 之後的每一行
++    都是空行或縮排後以 # 開頭(YAML 註解)。→ (是否合格, 第一個不合格的行)。"""
++    ls = text.split("\n")
++    i = next((k for k, x in enumerate(ls) if x.strip() == "run: |"), None)
++    if i is None:
++        return False, "(找不到 run: |)"
++    k = i + 1
++    while k < len(ls) and ls[k].startswith("        "):
++        k += 1
++    for x in ls[k:]:
++        if x.strip() and not (x[:1] == " " and x.lstrip().startswith("#")):
++            return False, x
++    return True, ""
+ 
+ 
+ def t_doctor_drift_ci_template_start_fallback():
+-    """doctor 給消費專案貼的 CI 步驟(已接線、CI 沒呼叫 drift check 時唸):before 是空的、40 個 0、本機找不到時改從頂端的
+-    第一個父提交算(沒有父提交從空樹),印一行說明;回傳碼照原樣(0 綠、1 紅、其他非零也紅)。起點補法那幾行跟工具鏈自己的
+-    ci.yml 逐字相同,並在一個真的 git 專案裡跑一次。
++    """doctor 給消費專案貼的 CI 步驟(已接線、CI 沒呼叫 drift check 時唸):before 原樣交(空的換成 40 個 0),
++    帶 --push-remote origin --pushed-ref "$GITHUB_REF",起點由 lumos 算;回傳碼照原樣(0 綠、1 紅、其他非零也紅)。
++    呼叫那兩行跟工具鏈自己的 ci.yml 逐字相同(python 與 python3 之別除外),並在一個真的 git 專案裡跑一次。
++    說明(含 Python 3.14 那句)寫成縮排對齊步驟的 YAML 註解,整段貼進 workflow 的 steps 底下能被解析(代碼審 r2 外家否決席 F1)。
++    各種推送形狀的起點對不對在 t_ci_drift_start_shapes(真的 lumos)。
+ 
+-    翻紅釘:範本改回「before 空的補 40 個 0 原樣交給 lumos」→ ②③紅(那樣新分支首推會被判「頂端已在主線」整步跳過)。
++    翻紅釘:範本改回 shell 補起點、或不帶推送參數 → ②③紅;說明改回不帶 # 的文字 → ⑤紅。
+     """
+     print("t_doctor_drift_ci_template_start_fallback")
+     import subprocess as sp, os as _os, textwrap as _tw
+     m = _load_lumos_inproc()
+     root = _dr_repo()
+     _nh_file(root, ".github/workflows/ci.yml", "name: CI\non: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n"
+              "      - run: echo hi\n")
+     lines = m._drift_gate_doctor_lines(root)
+     hint = next((l for l in lines if "沒呼叫 `lumos drift check`" in l), "")
+     check("①前置:已接線、CI 沒呼叫 drift check → doctor 唸並給要貼的步驟", bool(hint), str(lines))
+@@ -51212,165 +51270,420 @@ def t_doctor_drift_ci_template_start_fallback():
+     for ln in hint.split("\n"):
+         if ln.strip() == "run: |":
+             grab = True
+             continue
+         if grab:
+             if not ln.startswith("        "):
+                 break
+             body_lines.append(ln)
+     body = _tw.dedent("\n".join(body_lines)) + "\n"
+ 
+-    def fallback(text):
+-        ls = text.split("\n")
+-        i = next((k for k, x in enumerate(ls) if x.startswith('if [ -z "$BEFORE" ]')), None)
+-        j = next((k for k, x in enumerate(ls) if i is not None and k > i and x == "fi"), None)
+-        return "\n".join(ls[i:j + 1]) if i is not None and j is not None else ""
++    def call(text):
++        """補 before 那一行與 drift check 那一行(去掉 python 直譯器名與 CI 那邊接的 `|| {`)。"""
++        ls = [x.strip() for x in text.split("\n")]
++        fill = next((x for x in ls if x.startswith('[ -n "$BEFORE" ]')), "")
++        dr = next((x for x in ls if "scripts/lumos drift check" in x), "")
++        dr = dr[dr.find("scripts/lumos"):].split(" || {")[0] if dr else ""
++        return fill + "\n" + dr if fill and dr else ""
+ 
+     ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml")
+     if ci.is_file():
+         import re as _re
+         step = next((x for x in _re.split(r"\n(?=      - )", ci.read_text(encoding="utf-8")) if "drift check --diff" in x), "")
+         mm = _re.search(r"\n        run: \|\n((?:          .*\n?|\s*\n)+)", step)
+         ci_body = _tw.dedent(mm.group(1)) if mm else ""
+-        check("②範本的起點補法跟工具鏈 ci.yml 那步逐字相同", bool(fallback(body)) and fallback(body) == fallback(ci_body),
+-              fallback(body) + "\n----\n" + fallback(ci_body))
++        check("②範本的呼叫跟工具鏈 ci.yml 那步逐字相同,而且都帶推送參數、沒有 shell 補起點",
++              bool(call(body)) and call(body) == call(ci_body) and '--push-remote origin --pushed-ref "$GITHUB_REF"' in call(body)
++              and "SHA^1" not in body and "SHA^1" not in ci_body, call(body) + "\n----\n" + call(ci_body))
+     cr = Path(tempfile.mkdtemp(prefix="gctl-drift-tpl-repo-"))
+     sp.run(["git", "init", "-q", str(cr)], capture_output=True)
+     shas = []
+     for i in range(2):
+         (cr / f"f{i}.txt").write_text(str(i), encoding="utf-8")
+         sp.run(["git", "-C", str(cr), "add", "-A"], capture_output=True)
+         sp.run(["git", "-C", str(cr), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"c{i}", "--no-verify"],
+                capture_output=True)
+         shas.append(sp.run(["git", "-C", str(cr), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+     fb = Path(tempfile.mkdtemp(prefix="gctl-drift-tpl-"))
+     (fb / "python3").write_text("#!/bin/bash\necho \"python3 $*\" > \"$FAKE_LOG\"\nexit \"$FAKE_RC\"\n", encoding="utf-8")
+     _os.chmod(fb / "python3", 0o755)
+ 
+     def run_step(before, sha, frc="0"):
+         (fb / "log").unlink(missing_ok=True)
+         e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", FAKE_RC=frc, FAKE_LOG=str(fb / "log"),
+-                 BEFORE=before, SHA=sha)
++                 BEFORE=before, SHA=sha, GITHUB_REF="refs/heads/feat")
+         e.pop("GIT_DIR", None)
+         r = sp.run(["bash", "-e", "-c", body], cwd=str(cr), capture_output=True, text=True, env=e, timeout=30)
+         called = (fb / "log").read_text(encoding="utf-8") if (fb / "log").exists() else ""
+         return r.returncode, called, r.stdout + r.stderr
+ 
+-    empty = sp.run(["git", "hash-object", "-t", "tree", "/dev/null"], capture_output=True, text=True).stdout.strip()
+     ok = True
+     detail = []
+-    for before, sha, want in (("", shas[1], shas[0]), ("0" * 40, shas[1], shas[0]), ("de" * 20, shas[1], shas[0]),
+-                              ("0" * 40, shas[0], empty), (shas[0], shas[1], shas[0])):
+-        _rc, called, out = run_step(before, sha)
+-        good = f"drift check --diff {want}..{sha} --repo ." in called and (before == shas[0] or "漂移檢查起點" in out)
++    for before, want in (("", "0" * 40), ("0" * 40, "0" * 40), ("de" * 20, "de" * 20), (shas[0], shas[0])):
++        _rc, called, _out = run_step(before, shas[1])
++        good = f"drift check --diff {want}..{shas[1]} --push-remote origin --pushed-ref refs/heads/feat --repo ." in called
+         ok = ok and good
+-        detail.append(f"{before[:6] or '空'}→{called.strip()[:90]} {good}")
+-    check("③範本真的跑:before 空的/全 0/找不到 → 頂端的父提交;沒有父提交 → 空樹;找得到照用;補的時候印一行", ok,
+-          "\n".join(detail))
++        detail.append(f"{before[:6] or '空'}→{called.strip()[:120]} {good}")
++    check("③範本真的跑:before 原樣交(空的換成 40 個 0),帶遠端名 origin 與這次推的 ref", ok, "\n".join(detail))
+     got = {frc: run_step(shas[0], shas[1], frc)[0] for frc in ("0", "1", "2")}
+     check("④回傳碼照原樣:0 綠、1 紅、其他非零也紅,說明裡照實寫", got == {"0": 0, "1": 1, "2": 2}
+           and "1 是 block 模式擋下" in hint and "其他非零" in hint, str(got))
++    old_tail = ("\n    - name: x\n      run: |\n        echo x\n"
++                "  (checkout 要設 fetch-depth: 0。回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;"
++                + m._CI_PY314_NOTE)
++    check("⑤前置:舊範本那種不帶 # 的說明文字,這條斷言會判不合格", not _dr_yaml_tail_ok(old_tail)[0], old_tail)
++    good, bad = _dr_yaml_tail_ok(hint)
++    check("⑤範本步驟之後每一行都是空行或縮排後的 # 註解(貼進 workflow 是合法 YAML),含 Python 3.14 那句",
++          good and "3.14" in hint[hint.find("run: |"):], bad)
++
++
++def _dr_push_repo(branch="main", remote="origin", guards=("G",)):
++    """推送起點測試的現場:block 模式的漂移專案 + 一個裸遠端;每篇守衛紀錄 pending,M0 推上去並設 upstream。
++    回 (root, bare, g)。遠端的 HEAD 不設(actions/checkout 也不設),要的測試自己設。"""
++    import subprocess as sp
++    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
++    g = lambda *a: _nh_git(root, *a)
++    g("branch", "-M", branch)
++    bare = Path(tempfile.mkdtemp(prefix="gctl-dr-remote-")) / "r.git"
++    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
++    g("remote", "add", remote, str(bare))
++    for n in guards:
++        (root / _DR_VAULT / "Verification" / f"{n}.md").write_text(_dr_guard_text("pending", claim=f"{n} 這條合約"),
++                                                                   encoding="utf-8")
++    _nh_commit(root, "M0")
++    g("push", "-q", "--no-verify", "-u", remote, branch)
++    return root, bare, g
++
++
++def _dr_hook_start(root, stdin, args):
++    """跑推送前掛鉤(drift 轉給真的 lumos)→ (rc, drift check 那次呼叫的參數, lumos 印的起點說明, 輸出)。"""
++    rc, lines, out = _dr_hook_run(root, stdin, args)
++    dl = next((ln for ln in lines if ln.startswith("drift check")), "")
++    ex = next((ln for ln in out.splitlines() if ln.startswith("存量漂移檢查:起點——")), "")
++    return rc, dl, ex, out
+ 
+ 
+ def t_prepush_drift_range_ref_shapes():
+-    """[S18] 推送前掛鉤替 drift check 算範圍起點:跟主線的分岔點與遠端舊值取比較新的(代碼審 r1 正確性席 F1、F2)。
+-    功能分支合過主線再推、重定基底後 force push、新分支首推、主分支沒設 upstream,都不把主線上別人的轉正算成這次的;
+-    自己分支(或 tag)裡的轉正照擋;主線找不到才原樣交給 lumos 並講一聲。
++    """[S18] 推送前掛鉤把 遠端舊值..本地頂端 原樣交給 drift check,連同遠端名與遠端 ref 名;起點由 lumos 的 _push_range_start 算
++    (推送閘接漂移檢查代碼審 r2:原本掛鉤自己用 bash 算一份,跟 CI、工具端成三份)。功能分支合過主線、重定基底後 force push、
++    新分支首推、主分支沒設 upstream,都不把主線上別人的轉正算成這次的;自己分支(或 tag)裡的轉正照擋;一般增量推送用遠端舊值;
++    推主線本身時主線候選都是被推的那條、跳過,用遠端舊值,舊值..頂端裡的轉正照擋;主線找不到講一聲、從空樹算。
+ 
+-    每一種先證明現場成立:同一段原樣範圍直接交給 lumos 會擋(rc1),才看掛鉤放行。
++    每一種先證明現場成立:同一段原樣範圍直接交給 lumos(不帶推送參數)會擋(rc1),才看掛鉤放行。
+ 
+-    翻紅釘:分岔那種情況改用遠端舊值 → ②③紅;主線只找 upstream(拿掉遠端 HEAD/main/master)→ ⑥紅。
++    翻紅釘:分岔那種情況改用遠端舊值 → ②③紅;增量推送也改用分岔點 → ④紅;
++    掛鉤不帶 --push-remote/--pushed-ref → ②③⑤⑥紅(退回共用起點判法)。
+     """
+     print("t_prepush_drift_range_ref_shapes")
+     _need_src("scripts/hooks/pre-push")
+-    import subprocess as sp
+     z = "0" * 40
+-    root = _dr_repo(cfg={"drift_check": {"gate": "block"}})
+-    vault = root / _DR_VAULT
+-    g = lambda *a: _nh_git(root, *a)
+-    g("branch", "-M", "main")
+-    bare = Path(tempfile.mkdtemp(prefix="gctl-dr-remote-")) / "r.git"
+-    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+-    g("remote", "add", "origin", str(bare))
+-    (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
+-    (vault / "Verification" / "G2.md").write_text(_dr_guard_text("pending", claim="小額退費自動核可"), encoding="utf-8")
+-    _nh_commit(root, "M0")
++    root, bare, g = _dr_push_repo(guards=("G", "G2", "G3", "G4"))
+     m0 = _na_head(root)
+-    g("push", "-q", "--no-verify", "-u", "origin", "main")
+     g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
++    g("checkout", "-q", "-b", "inc")
++    _dr_settle(root, "G4")
++    _nh_commit(root, "inc: 上次已經推過的轉正(當時 warn 或單次略過)")
++    i1 = _na_head(root)
++    _nh_file(root, "notes/i.txt", "i\n")
++    _nh_commit(root, "inc: 這次新加的無關改動")
++    i2 = _na_head(root)
++    g("checkout", "-q", "main")
+     g("checkout", "-q", "-b", "feat")
+     _nh_file(root, "notes/a.txt", "a\n")
+     _nh_commit(root, "feat: 無關的改動")
+     f1 = _na_head(root)
+     g("push", "-q", "--no-verify", "origin", "feat")
+     g("checkout", "-q", "main")
+     _dr_settle(root, "G")
+     _nh_commit(root, "M1:別人在主線上舊版 settle,預告句留著")
+     m1 = _na_head(root)
+     g("push", "-q", "--no-verify", "origin", "main")
+-    # 合過主線
+     g("checkout", "-q", "feat")
+     g("merge", "-q", "--no-edit", "--no-verify", "main")
+     f2 = _na_head(root)
+-    # 重定基底(另一條分支,從 f1 起)
+     g("checkout", "-q", "-b", "feat_rb", f1)
+     g("rebase", "-q", "main")
+     f1r = _na_head(root)
+-    # 新分支(從主線頂端,只帶無關改動)
+     g("checkout", "-q", "-b", "newb", "main")
+     _nh_file(root, "notes/b.txt", "b\n")
+     _nh_commit(root, "newb: 無關的改動")
+     nb = _na_head(root)
+-    # 自己的分支裡自己轉正
+     g("checkout", "-q", "-b", "own", "main")
+     _dr_settle(root, "G2")
+     _nh_commit(root, "own: 自己轉正,預告句留著")
+     own = _na_head(root)
+     g("tag", "v-own", own)
+     g("checkout", "-q", "main")
++    _dr_settle(root, "G3")
++    _nh_commit(root, "M2:主線本身要推的轉正,預告句留著(還沒推)")
++    m2 = _na_head(root)
+     _dr_hook_fakes(root)
+ 
+     def direct(rng):
+         return _dr(root, "check", "--diff", rng)[0]
+ 
+     def hook(stdin, args=("origin", str(bare))):
+-        rc, lines, out = _dr_hook_run(root, stdin, args)
+-        dl = next((l for l in lines if l.startswith("drift check")), "")
+-        return rc, dl, out
++        return _dr_hook_start(root, stdin, args)
+ 
+     check("①前置:主線上別人那次轉正是真的發現(M0..M1 直接交給 lumos 會擋)", direct(f"{m0}..{m1}") == 1, "")
+     check("②前置:合過主線,原樣的 遠端舊值..本地新值 直接交給 lumos 會擋", direct(f"{f1}..{f2}") == 1, "")
+-    rc, dl, out = hook(f"refs/heads/feat {f2} refs/heads/feat {f1}\n")
+-    check("②合過主線再推:起點用分岔點(主線頂端),不擋", rc == 0 and f"--diff {m1}..{f2}" in dl, f"rc={rc} {dl} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/heads/feat {f2} refs/heads/feat {f1}\n")
++    check("②掛鉤原樣交 遠端舊值..本地頂端,帶遠端名與遠端 ref 名",
++          f"--diff {f1}..{f2} --push-remote origin --pushed-ref refs/heads/feat" in dl, dl)
++    check("②合過主線再推:lumos 從分岔點(主線頂端)算,不擋", rc == 0 and m1[:12] in ex and "分岔" in ex,
++          f"rc={rc} {ex} {out[-500:]}")
+     check("③前置:重定基底,原樣範圍直接交給 lumos 會擋", direct(f"{f1}..{f1r}") == 1, "")
+-    rc, dl, out = hook(f"refs/heads/feat {f1r} refs/heads/feat {f1}\n")
+-    check("③重定基底後 force push:起點用分岔點,不擋", rc == 0 and f"--diff {m1}..{f1r}" in dl, f"rc={rc} {dl} {out[-500:]}")
+-    rc, dl, out = hook(f"refs/heads/feat {f1} refs/heads/feat {m0}\n")
+-    check("④一般增量推送(遠端舊值比分岔點新或相同):照用遠端舊值", rc == 0 and f"--diff {m0}..{f1}" in dl, f"rc={rc} {dl}")
+-    rc, dl, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+-    check("⑤新分支首推(全 0):從分岔點算,不擋", rc == 0 and f"--diff {m1}..{nb}" in dl, f"rc={rc} {dl} {out[-500:]}")
+-    rc, dl, out = hook(f"refs/heads/own {own} refs/heads/own {z}\n")
+-    check("⑤反面:新分支自己帶進來的轉正照擋(不是一律放行)", rc == 1 and f"--diff {m1}..{own}" in dl, f"rc={rc} {dl} {out[-500:]}")
+-    rc, dl, out = hook(f"refs/tags/v-own {own} refs/tags/v-own {z}\n")
+-    check("⑤tag 也查:tag 指到的提交帶進來的轉正照擋", rc == 1 and f"--diff {m1}..{own}" in dl, f"rc={rc} {dl} {out[-500:]}")
+-    # 主分支沒設 upstream
++    rc, dl, ex, out = hook(f"refs/heads/feat {f1r} refs/heads/feat {f1}\n")
++    check("③重定基底後 force push:從分岔點算,不擋", rc == 0 and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/heads/feat {f1} refs/heads/feat {m0}\n")
++    check("④一般增量推送(每個合併基底都是遠端舊值的祖先):照用遠端舊值", rc == 0 and "一般增量" in ex and m0[:12] in ex,
++          f"rc={rc} {ex}")
++    check("④前置:增量推送的分岔點(M0)到頂端之間有上次已推的轉正(直接交給 lumos 會擋)", direct(f"{m0}..{i2}") == 1, "")
++    rc, dl, ex, out = hook(f"refs/heads/inc {i2} refs/heads/inc {i1}\n")
++    check("④一般增量推送只看這次新加的:從遠端舊值算,不把上次已推的再算一次", rc == 0 and "一般增量" in ex and i1[:12] in ex,
++          f"rc={rc} {ex} {out[-400:]}")
++    rc, dl, ex, out = hook(f"refs/heads/own {own} refs/heads/own {m1}\n")
++    check("④一般增量推送裡自己的轉正照擋", rc == 1 and "一般增量" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-400:]}")
++    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
++    check("⑤新分支首推(全 0):從分岔點算,不擋", rc == 0 and "新分支首推" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/heads/own {own} refs/heads/own {z}\n")
++    check("⑤反面:新分支自己帶進來的轉正照擋(不是一律放行)", rc == 1 and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/tags/v-own {own} refs/tags/v-own {z}\n")
++    check("⑤tag 也查:tag 指到的提交帶進來的轉正照擋(tag 不跳過任何主線候選)",
++          rc == 1 and "--pushed-ref refs/tags/v-own" in dl and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
++    check("⑤b前置:主線本身這次要推的範圍有轉正(M1..M2 直接交給 lumos 會擋)", direct(f"{m1}..{m2}") == 1, "")
++    rc, dl, ex, out = hook(f"refs/heads/main {m2} refs/heads/main {m1}\n")
++    check("⑤b推主線本身(main@{upstream} 還是舊值):主線候選都是被推的那條、跳過,用遠端舊值,轉正照擋",
++          rc == 1 and "找不到主線" in ex and m1[:12] in ex, f"rc={rc} {ex} {out[-500:]}")
+     g("branch", "--unset-upstream", "main")
+     check("⑥前置:沒設 upstream 時,新分支的原樣範圍直接交給 lumos 會擋(它退回從空樹算)", direct(f"{z}..{nb}") == 1, "")
+-    rc, dl, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+-    check("⑥沒設 upstream:改用這次推送的遠端的預設分支(origin/HEAD),不擋", rc == 0 and f"--diff {m1}..{nb}" in dl,
+-          f"rc={rc} {dl} {out[-500:]}")
++    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
++    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
++    check("⑥沒設 upstream:用這次推送的遠端的預設分支(origin/HEAD),不擋", rc == 0 and "origin/HEAD" in ex and m1[:12] in ex,
++          f"rc={rc} {ex} {out[-500:]}")
+     g("symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+-    rc, dl, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
+-    check("⑥遠端也沒有 HEAD:改用 origin/main,不擋", rc == 0 and f"--diff {m1}..{nb}" in dl, f"rc={rc} {dl} {out[-500:]}")
+-    rc, dl, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n", args=())
+-    check("⑦主線都找不到(沒給遠端名):原樣交給 lumos 自己判,並印一行說明", f"--diff {z}..{nb}" in dl and "找不到主線" in out,
+-          f"rc={rc} {dl} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n")
++    check("⑥遠端也沒有 HEAD:改用 origin/main,不擋", rc == 0 and "origin/main" in ex and m1[:12] in ex,
++          f"rc={rc} {ex} {out[-500:]}")
++    rc, dl, ex, out = hook(f"refs/heads/newb {nb} refs/heads/newb {z}\n", args=())
++    check("⑦主線都找不到(沒給遠端名、main 沒 upstream):印一行說明,從空樹算", "找不到主線" in ex and "空樹" in ex
++          and f"--diff {z}..{nb}" in dl, f"rc={rc} {dl} {ex} {out[-500:]}")
++
++
++def t_prepush_drift_start_mainline_shapes():
++    """推送起點找主線的三種形狀(推送閘接漂移檢查代碼審 r2 正確性席 F2、F3,邊界席 F1):
++    ①git-flow:遠端 HEAD 指 develop、本地 main 的 upstream 過期,功能分支合過 develop 再推 → 用遠端 HEAD,不擋;
++    ②主線叫 trunk、本地留著過期的 master upstream → 用遠端 HEAD,不擋;
++    ③交叉合併(兩個合併基底)兩種提交先後都不擋——要每一個基底都是遠端舊值的祖先才用舊值。
++    每一種先證明原樣範圍(或過期主線算出的範圍)直接交給 lumos 會擋。
++
++    翻紅釘:主線候選改回 upstream 優先(遠端 HEAD 排後面)→ ①②紅;合併基底只看 git 挑的第一個 → ③其中一種先後紅。
++    """
++    print("t_prepush_drift_start_mainline_shapes")
++    _need_src("scripts/hooks/pre-push")
++    z = "0" * 40
++    # ① git-flow
++    root, bare, g = _dr_push_repo()
++    m0 = _na_head(root)
++    g("checkout", "-q", "-b", "develop")
++    g("push", "-q", "--no-verify", "-u", "origin", "develop")
++    g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
++    g("checkout", "-q", "-b", "feat")
++    _nh_file(root, "notes/a.txt", "a\n")
++    _nh_commit(root, "feat 無關")
++    f1 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "feat")
++    g("checkout", "-q", "develop")
++    _dr_settle(root, "G")
++    _nh_commit(root, "D1 別人在 develop 轉正")
++    d1 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "develop")
++    g("checkout", "-q", "feat")
++    g("merge", "-q", "--no-edit", "--no-verify", "develop")
++    f2 = _na_head(root)
++    _dr_hook_fakes(root)
++    stale = _nh_git(root, "rev-parse", "main@{upstream}").stdout.strip()
++    check("①前置:本地 main 的 upstream 過期(停在 M0),原樣範圍 F1..F2 直接交給 lumos 會擋",
++          stale == m0 and _dr(root, "check", "--diff", f"{f1}..{f2}")[0] == 1, stale)
++    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat {f2} refs/heads/feat {f1}\n", ("origin", str(bare)))
++    check("①git-flow:用遠端宣告的預設分支(develop),從 D1 算,不擋", rc == 0 and "origin/HEAD" in ex and d1[:12] in ex,
++          f"rc={rc} {ex} {out[-500:]}")
++    # ② trunk + 過期的 master upstream(遠端叫 fork)
++    root, bare, g = _dr_push_repo(branch="master", remote="fork")
++    m0 = _na_head(root)
++    g("checkout", "-q", "-b", "trunk")
++    _dr_settle(root, "G")
++    _nh_commit(root, "T1 別人在 trunk 轉正")
++    t1 = _na_head(root)
++    g("push", "-q", "--no-verify", "fork", "trunk")
++    g("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/trunk")
++    g("checkout", "-q", "-b", "feat2")
++    _nh_file(root, "notes/b.txt", "b\n")
++    _nh_commit(root, "feat2 無關")
++    n = _na_head(root)
++    g("checkout", "-q", "master")
++    _dr_hook_fakes(root)
++    stale = _nh_git(root, "rev-parse", "master@{upstream}").stdout.strip()
++    check("②前置:master 的 upstream 過期(停在 M0),從它算的範圍直接交給 lumos 會擋",
++          stale == m0 and _dr(root, "check", "--diff", f"{m0}..{n}")[0] == 1, stale)
++    rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat2 {n} refs/heads/feat2 {z}\n", ("fork", str(bare)))
++    check("②主線叫 trunk:用遠端 HEAD(fork/trunk),從 T1 算,不擋", rc == 0 and "fork/HEAD" in ex and t1[:12] in ex,
++          f"rc={rc} {ex} {out[-500:]}")
++    # ③ 交叉合併
++    for order in ("主線先合", "分支先合"):
++        root, bare, g = _dr_push_repo()
++        g("checkout", "-q", "-b", "feat")
++        _nh_file(root, "notes/a.txt", "a\n")
++        _nh_commit(root, "feat 無關")
++        f1 = _na_head(root)
++        g("push", "-q", "--no-verify", "origin", "feat")
++        g("checkout", "-q", "main")
++        _dr_settle(root, "G")
++        _nh_commit(root, "M1 別人轉正")
++        m1 = _na_head(root)
++        # 主線把 feat(F1)合進去、feat 把 M1 合進來——兩邊互合,F1 與 M1 都是合併基底;先後兩種都跑
++        merges = [("main", f1), ("feat", m1)] if order == "主線先合" else [("feat", m1), ("main", f1)]
++        for br, other in merges:
++            g("checkout", "-q", br)
++            g("merge", "-q", "--no-ff", "--no-edit", "--no-verify", other)
++        g("checkout", "-q", "main")
++        g("push", "-q", "--no-verify", "origin", "main")
++        g("checkout", "-q", "feat")
++        f2 = _na_head(root)
++        bases = _nh_git(root, "merge-base", "--all", f2, "origin/main").stdout.split()
++        _dr_hook_fakes(root)
++        check(f"③前置({order}):兩個合併基底(F1 與 M1),原樣範圍直接交給 lumos 會擋",
++              sorted(bases) == sorted([f1, m1]) and _dr(root, "check", "--diff", f"{f1}..{f2}")[0] == 1, str(bases))
++        rc, _dl, ex, out = _dr_hook_start(root, f"refs/heads/feat {f2} refs/heads/feat {f1}\n", ("origin", str(bare)))
++        check(f"③交叉合併({order}):從不是遠端舊值祖先的那個基底(M1)算,不擋", rc == 0 and m1[:12] in ex,
++              f"rc={rc} {ex} {out[-500:]}")
++
++
++# 推送閘接漂移檢查代碼審 r2 以前,CI 與健檢範本在 shell 裡補起點的寫法(只留著給測試證明現場:同一個輸入舊寫法會算錯)
++_DR_OLD_CI_FALLBACK = (
++    'if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then\n'
++    '  BEFORE="$(git rev-parse -q --verify "$SHA^1^{commit}" 2>/dev/null || git hash-object -t tree /dev/null)"\n'
++    'fi\n'
++    'python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --repo .\n')
++
++
++def _dr_ci_bodies():
++    """工具鏈 ci.yml 的 drift check 那步、健檢給消費專案的範本,兩段 run 的內容 → [(名稱, shell)]。"""
++    import re, textwrap as _tw
++    out = []
++    ci = Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
++    if ci.is_file():
++        step = next((x for x in re.split(r"\n(?=      - )", ci.read_text(encoding="utf-8")) if "drift check --diff" in x), "")
++        mm = re.search(r"\n        run: \|\n((?:          .*\n?|\s*\n)+)", step)
++        out.append(("ci.yml", _tw.dedent(mm.group(1)) if mm else ""))
++    tpl, grab = [], False
++    for ln in _load_lumos_inproc()._DRIFT_CI_STEP.split("\n"):
++        if ln.strip() == "run: |":
++            grab = True
++            continue
++        if grab:
++            if not ln.startswith("        "):
++                break
++            tpl.append(ln)
++    out.append(("範本", _tw.dedent("\n".join(tpl)) + "\n"))
++    return out
++
++
++def _dr_ci_run(root, body, before, sha, ref):
++    """在 root 裡真的跑一段 CI shell:python/python3 換成轉給真 lumos 的殼 → (rc, 輸出)。"""
++    import subprocess as sp, os as _os
++    fb = Path(tempfile.mkdtemp(prefix="gctl-dr-ci-py-"))
++    for nm in ("python", "python3"):
++        (fb / nm).write_text(f"#!/bin/bash\nshift\nexec {sys.executable} {Path(GRAPHCTL).resolve()} \"$@\"\n", encoding="utf-8")
++        _os.chmod(fb / nm, 0o755)
++    e = dict(_os.environ, PATH=f"{fb}:{_os.environ.get('PATH', '')}", BEFORE=before, SHA=sha, GITHUB_REF=ref)
++    for k in ("GIT_DIR", "LUMOS_SKIP_DRIFT_CHECK"):
++        e.pop(k, None)
++    r = sp.run(["bash", "-e", "-c", body], cwd=str(root), capture_output=True, text=True, env=e, timeout=180)
++    return r.returncode, r.stdout + r.stderr
++
++
++def t_ci_drift_start_shapes():
++    """CI 那步與健檢範本(兩段 shell 真的跑、lumos 是真的)的起點(推送閘接漂移檢查代碼審 r2 正確性席 F1、外家否決席 F2、
++    邊界席 F2、架構席 F2):before 原樣交、帶 --push-remote origin --pushed-ref $GITHUB_REF,由 lumos 算——
++    ①功能分支合過主線再推,before 找得到 → 不把主線上別人的轉正算進來;②新分支首推、頂端是合主線的合併提交 → 不擋;
++    ③新分支首推一次帶多個提交、轉正在第一個 → 擋;④推主線本身(origin/main 已等於頂端)→ 候選都是被推的那條、跳過,
++    用 before,轉正照擋、不會變成「沒有新東西」;⑤before 找不到、主線也找不到 → 退到頂端的父提交(沒有父從空樹),說明照實講。
++    ①②③各先證明舊的 shell 補法在同一個輸入會算錯。
++
++    翻紅釘:CI/範本改回 shell 補法 → ①②③紅;拿掉「跳過被推的那條」→ ④紅。
++    """
++    print("t_ci_drift_start_shapes")
++    _need_src(".github/workflows/ci.yml")
++    z = "0" * 40
++    root, _bare, g = _dr_push_repo(guards=("G", "G2", "G3"))
++    g("checkout", "-q", "-b", "feat")
++    _nh_file(root, "notes/a.txt", "a\n")
++    _nh_commit(root, "feat 無關")
++    f1 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "feat")
++    g("checkout", "-q", "main")
++    _dr_settle(root, "G")
++    _nh_commit(root, "M1 別人轉正")
++    m1 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "main")
++    g("checkout", "-q", "feat")
++    g("merge", "-q", "--no-edit", "--no-verify", "main")
++    f2 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "feat")
++    g("checkout", "-q", "-b", "x", "main")
++    _dr_settle(root, "G2")
++    _nh_commit(root, "X1 自己轉正,預告句留著")
++    _nh_file(root, "notes/x.txt", "x\n")
++    _nh_commit(root, "X2 無關")
++    x2 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "x")
++    g("checkout", "-q", "main")
++    bodies = _dr_ci_bodies()
++    check("前置:ci.yml 與範本兩段都抽得出來,而且都帶推送參數", len(bodies) == 2 and all(
++        '--push-remote origin --pushed-ref "$GITHUB_REF"' in b for _n, b in bodies), str(bodies))
++    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, f1, f2, "refs/heads/feat")[0]
++    check("①前置:舊的 shell 補法在「合過主線、before 找得到」會擋", old == 1, f"rc={old}")
++    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, z, f2, "refs/heads/feat")[0]
++    check("②前置:舊的 shell 補法在「新分支首推、頂端是合主線的合併提交」會擋", old == 1, f"rc={old}")
++    old = _dr_ci_run(root, _DR_OLD_CI_FALLBACK, z, x2, "refs/heads/x")[0]
++    check("③前置:舊的 shell 補法在「新分支首推多個提交、轉正在第一個」放行(只查最後一個提交)", old == 0, f"rc={old}")
++    for name, body in bodies:
++        rc, out = _dr_ci_run(root, body, f1, f2, "refs/heads/feat")
++        check(f"①{name}:合過主線再推,從分岔點 M1 算,不擋", rc == 0 and m1[:12] in out, f"rc={rc} {out[-500:]}")
++        rc, out = _dr_ci_run(root, body, z, f2, "refs/heads/feat")
++        check(f"②{name}:新分支首推、頂端是合主線的合併提交,不擋", rc == 0 and m1[:12] in out, f"rc={rc} {out[-500:]}")
++        rc, out = _dr_ci_run(root, body, "", x2, "refs/heads/x")
++        check(f"③{name}:新分支首推(before 空的)一次帶多個提交、轉正在第一個 → 擋", rc == 1 and m1[:12] in out,
++              f"rc={rc} {out[-500:]}")
++    _dr_settle(root, "G3")
++    _nh_commit(root, "M2 主線本身的轉正")
++    m2 = _na_head(root)
++    g("push", "-q", "--no-verify", "origin", "main")
++    check("④前置:origin/main 已等於頂端,而且 M1..M2 有轉正(直接交給 lumos 會擋)",
++          _nh_git(root, "rev-parse", "origin/main").stdout.strip() == m2 and _dr(root, "check", "--diff", f"{m1}..{m2}")[0] == 1, "")
++    for name, body in bodies:
++        rc, out = _dr_ci_run(root, body, m1, m2, "refs/heads/main")
++        check(f"④{name}:推主線本身,用 before,轉正照擋(不會變成「沒有新東西」)", rc == 1 and "沒有新東西" not in out,
++              f"rc={rc} {out[-500:]}")
++    m = _load_lumos_inproc()
++    empty = m._EMPTY_TREE_SHA
++    first = _nh_git(root, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
++    s, why = m._push_range_start(root, "de" * 20, m2, "", "refs/heads/main")
++    check("⑤before 找不到、主線也找不到 → 頂端的第一個父提交,說明寫「只查最後一個提交」", s == m1 and "只查最後一個提交" in why,
++          f"{s} {why}")
++    s, why = m._push_range_start(root, "de" * 20, first, "", "refs/heads/main")
++    check("⑤頂端沒有父提交 → 空樹", s == empty and "空樹" in why, f"{s} {why}")
++    s, why = m._push_range_start(root, z, first, "", "refs/heads/main")
++    check("⑤全 0、主線找不到 → 空樹", s == empty and "空樹" in why, f"{s} {why}")
++    s, why = m._push_range_start(root, z, m1, "origin", "refs/heads/x")
++    check("⑤頂端已在主線上 → 沒有新東西(None)", s is None and "沒有新東西" in why, f"{s} {why}")
+ 
+ 
+ def t_drift_unknown_blocks_check_not_scan():
+     """[S2] check 判不了(git 算不出範圍事件)→ 算要處理、印原因(block 模式 rc1)。
+ 
+     乙那一半:條件指到的程式檔讀不出來 → check 擋、scan 列判不了且不寫帳。
+ 
+     翻紅釘:判不了改成放行 → ①②紅;scan 把判不了當不成立 → ③紅。
+     """
+     print("t_drift_unknown_blocks_check_not_scan")
+@@ -52496,22 +52809,25 @@ def t_ci_runs_python314_and_old_syntax_check():
+     """[S6] CI 在 3.14 上跑,並以釘版本的 ruff(py39)檢查三類必須 3.9 能解析的檔;doctor 印給消費專案的 CI 步驟提示講明要 3.14
+     (Projects/最低Python版本改3.14_計劃 做法第 7 點)。
+     翻紅釘:CI 版本改回 → ①紅;ruff 步驟拿掉或沒釘版本 → ②紅;提示拿掉 → ③紅。"""
+     print("t_ci_runs_python314_and_old_syntax_check")
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+     check("①CI 用 3.14", 'python-version: "3.14"' in ci, "")
+     check("②CI 裝釘版本的 ruff、以 py39 查三類檔的語法錯誤", "ruff==" in ci and "--target-version py39 --select E9" in ci
+           and all(f in ci for f in ("scripts/lumos", "scripts/merge-claude-settings.py", "scripts/hooks/claude/*.py")), "")
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
+-    check("③doctor 三處 CI 步驟提示都接上「要在 3.14 上跑」", src.count("+ _CI_PY314_NOTE") == 3 and "3.14" in src[src.index("_CI_PY314_NOTE = "):][:200],
+-          str(src.count("+ _CI_PY314_NOTE")))
++    # 存量漂移那處把這句寫成範本裡的 YAML 註解(推送閘接漂移檢查代碼審 r2 外家否決席:貼進 workflow 要能解析),不接共用那句
++    drift_tpl = src[src.index("_DRIFT_CI_STEP = "):][:1500]
++    check("③doctor 三處 CI 步驟提示都講明「要在 3.14 上跑」(兩處接共用那句、漂移那處寫在範本的註解裡)",
++          src.count("+ _CI_PY314_NOTE") == 2 and "3.14" in src[src.index("_CI_PY314_NOTE = "):][:200]
++          and '# 這一步要在 Python 3.14 上跑' in drift_tpl, str(src.count("+ _CI_PY314_NOTE")))
+ 
+ 
+ def t_lumos_parses_under_old_grammar():
+     """[S7] scripts/lumos、merge-claude-settings.py、scripts/hooks/claude/*.py 仍要能被 3.9 語法解析:ruff(py39)查語法錯誤、
+     先用一行 3.12 才合法的樣本證明 ruff 真的會報;找得到真的舊版直譯器就實際編譯;兩者都沒有就明說沒驗到。
+     另外守版本檢查之前的 import 只用 3.9 就有的模組(翻紅釘:檔頭加 import tomllib → 最後一格紅)。"""
+     print("t_lumos_parses_under_old_grammar")
+     import shutil as _sh, subprocess as _sp, tempfile as _tf, glob as _g
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     files = [str(repo / "scripts" / "lumos"), str(repo / "scripts" / "merge-claude-settings.py")] + \
+diff --git a/skills/lumos-project-notes/commands/08-自動跑的.md b/skills/lumos-project-notes/commands/08-自動跑的.md
+index a5d3f8c8..b427d34e 100644
+--- a/skills/lumos-project-notes/commands/08-自動跑的.md
++++ b/skills/lumos-project-notes/commands/08-自動跑的.md
+@@ -1,15 +1,15 @@
+ # 08 自動跑的(hook 會替你呼叫,不用手敲;但要看得懂它印什麼)
+ 
+ | 時機 | 自動跑什麼 | 擋不擋 |
+ |---|---|---|
+ | `git commit` 前(pre-commit) | 污染檢查、`lumos lint` 逐篇、`lumos home check --staged`(每支檔有家;「該動哪篇」的點名也在這裡照家算)、`lumos note-shape --staged`(筆記形狀擋)、「改 code 沒動圖譜」檢查、`lumos cochange check`、`lumos delguard` | 前四項擋;後兩項提醒 |
+ | `git commit` 後(post-commit) | 記 bypass 帳(用 --no-verify 繞過也會留痕) | 不擋 |
+-| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos note-shape --diff`(筆記形狀擋,同一段範圍)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos drift check --diff`(存量漂移檢查,分支與 tag 都查;起點是跟主線的分岔點與遠端舊值裡比較新的)、`lumos doctor --ci` | 全擋;★drift check 例外★:預設 warn 只印,`.lumos/config.json` 的 `drift_check.gate` 設 block 才擋,工具沒跑成(錯誤、git 太慢)講一句就放行 |
++| `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos home check --diff`(每支檔有家,這次要推的範圍整段查一次)、`lumos note-shape --diff`(筆記形狀擋,同一段範圍)、`lumos code-loop check`(每個分支 ref 無條件叫;合約測試紅 / 效能檢核題沒表態 / 高風險沒審查留痕,三個判定各自擋)、`lumos drift check --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <ref>`(存量漂移檢查,分支與 tag 都查;起點由工具算:跟主線——遠端預設分支優先、跳過就是這次推的那條——的分岔點與遠端舊值裡比較新的)、`lumos doctor --ci` | 全擋;★drift check 例外★:預設 warn 只印,`.lumos/config.json` 的 `drift_check.gate` 設 block 才擋,工具沒跑成(錯誤、git 太慢)講一句就放行 |
+ | `git push` 前(pre-push,低風險那一路) | 同一次 `code-loop check` 帶 `--bound-tests-advisory`:這次改動碰到的硬合約綁的測試紅了只印 | ★合約測試只提醒不擋★(人裁 2026-09-07);表態閘照擋(不看 tier,2026-09-09) |
+-| CI(push 後) | 同 pre-push + `lumos code-loop check`、`lumos drift check`(補查 --no-verify 繞過的;drift 的 before 是全 0 或找不到時從頂端的父提交算) | 紅燈(drift check 預設 warn 不紅;工具出錯照紅) |
++| CI(push 後) | 同 pre-push + `lumos code-loop check`、`lumos drift check`(補查 --no-verify 繞過的;drift 那步交 before..sha 加 `--push-remote origin --pushed-ref "$GITHUB_REF"`,起點跟推送前同一支算) | 紅燈(drift check 預設 warn 不紅;工具出錯照紅) |
+ | Claude 要 Edit/Write 前(impact hook) | `lumos impact --file <檔>` 的結果注入 | 只提醒;邊界仍要自己查 |
+ | 回合結束(check-graph-sync,Stop hook) | 提醒「改了 code 還沒動圖譜」 | 兩家同 session 擋一次續做(`LUMOS_STOP_BLOCK_OFF=1` 關;2026-09-05 起 Claude 也擋) |
+ | 每天 09:30(autonomous-loop) | 自動選題 → 設計審查 → 備 pending 等人放行 | — |
+ | 每天 09:30(launchd daily-governance) | 治理日報、lint-watch 版本掃、doctor --ci、testmap 重建、每週回放與探針抽查;★自主迭代 loop 的派工 2026-09-05 起暫停(LUMOS_AUTOLOOP_OFF 預設 1)★ | 全 fail-open;腳本已包成 main() 免邊跑邊改讀到半行 |
+ 
+ 看到「擋下:」就是上面某一道擋了,訊息第一句講發生什麼、最後一行給該敲的指令。

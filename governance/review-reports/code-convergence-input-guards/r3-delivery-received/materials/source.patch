@@ -1,0 +1,1299 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 51a6cc03..d2737a43 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9688,26 +9688,31 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+             return 2
+         # ★載體席必須全錨,記帳當下就驗★(2026-09-06 第三次踩:規矩寫「先跑引句檢查再選載體」,
+         # 我三席都跑了、卻還是把有兩句錨不回快照的那席當載體)。處置閘本來就會驗,但那時帳已經
+         # 寫進只進不出的帳本,撤不掉、只能換編號重記整輪——**把同一道檢查往前挪到寫帳之前,
+         # 代價從「整輪重記」降成「換一席再敲一次」**。只驗載體席(帶處置清單那筆),
+         # 其餘席的引句本來就允許錨不到(不採信而已,不擋)。
+         if findings_set is not None and snapshot:
+             _qrows = None
+             try:
+                 _sbytes = Path(snapshot).read_bytes()
+-                _qrows = _quote_rows(_rtext, _sbytes.decode("utf-8"))
++                _stext = _sbytes.decode("utf-8")
+                 _validated_sha["--snapshot"] = hashlib.sha256(_sbytes).hexdigest()
+                 del _sbytes
+-            except OSError:
+-                _qrows = None   # 快照讀不到:下面的 --snapshot 存在性檢查會擋,這裡不重複報
++            except UnicodeDecodeError as e:
++                print(f"擋下:--snapshot 不是有效 UTF-8: {e}", file=sys.stderr)
++                return 2
++            except OSError as e:
++                print(f"擋下:--snapshot 指的檔案讀不到: {e}", file=sys.stderr)
++                return 2
+             else:
++                _qrows = _quote_rows(_rtext, _stext)
+                 if _qrows is None:
+                     print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
+                     print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
+                     return 2
+             if _qrows:
+                 _qmiss = [r for r in _qrows if not r["ok"]]
+                 if _qmiss:
+                     print(f"擋下:這一席要當全輪的帳本載體(帶了處置清單),但它的 {len(_qrows)} 句引言裡"
+                           f"有 {len(_qmiss)} 句在凍結快照裡找不到原文。", file=sys.stderr)
+                     print("  載體是整輪的記帳憑據,引句錨不回審材就等於憑據對不上;規矩是**挑每句都錨得到的那一席當載體**。", file=sys.stderr)
+@@ -28914,28 +28919,30 @@ def _nodehome_changed_vs_disk(repo_root, where):
+     where='index':工作目錄 vs 索引;where=HEAD 的 sha:工作目錄 vs HEAD;其他提交=None(全部從 git 讀)。"""
+     if where == "index":
+         raw = _nodehome_git(repo_root, "diff", "--name-only", "-z", "--no-renames")
+     else:
+         raw = _nodehome_git(repo_root, "diff", "--name-only", "-z", "--no-renames", where)
+     if raw is None:
+         return None
+     return {nfc(x) for x in _nodehome_split_z(raw)}
+ 
+ 
+-def _nodehome_reader(repo_root, where):
++def _nodehome_reader(repo_root, where, from_git=False):
+     """回 read(path)->bytes|None。讀的是 where 那個版本:跟磁碟一樣的直接讀磁碟,不一樣的用 git show 讀
+     ([S38]:提交前只讀提交索引——同一個工作目錄另一個會談寫到一半、還沒加進索引的東西讀不到)。"""
+     if where is None:
+         return lambda p: None
+     disk_ok_all = False
+     differ = None
+-    if where == "index":
++    if from_git:
++        pass                                                # 新借用的測試證據只讀版本,不信先前的磁碟相等判定
++    elif where == "index":
+         differ = _nodehome_changed_vs_disk(repo_root, "index")
+     else:
+         head = _lens_full_sha(repo_root, "HEAD")
+         if head and head == where:
+             differ = _nodehome_changed_vs_disk(repo_root, where)
+     root = Path(repo_root)
+     spec = "" if where == "index" else where
+ 
+     def read(p):
+         if differ is not None and p not in differ:
+@@ -29097,32 +29104,33 @@ def _nodehome_side(repo_root, where, vault_rel, share=None, changed=None, deadli
+                 s.notes[rel] = share.notes[rel]
+                 continue
+             if deadline is not None and time.monotonic() > deadline:
+                 return None
+             raw = s._reader(p)
+             if raw is not None:
+                 s.notes[rel] = _nodehome_parse_note(raw)
+     return s
+ 
+ 
+-def _nodehome_required(repo_root, side, cfg, vendored_skip):
+-    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。"""
++def _nodehome_required(repo_root, side, cfg, vendored_skip, include_tests=False):
++    """[S1] 需要家的檔集合,另回檔名不是 UTF-8 的程式檔(永遠寫不進圖譜,只提醒改名或排除)。
++    include_tests=True僅供寫回路由證據;預設免測試安家及其餘排除保持。"""
+     import fnmatch
+     req, bad_names = set(), set()
+     layout = _nodehome_layout(side.all_paths)   # 測試資料夾要旁邊的程式目標有同一種檔
+     for p in side.files:
+         kind = _nodehome_code_kind(p)
+         if kind is None:
+             continue
+         if any(fnmatch.fnmatch(p, g) for g in _NODEHOME_EXCLUDE_GLOBS):
+             continue
+-        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or _nodehome_is_test(p, layout):
++        if p in vendored_skip or _cochange_excluded(p, cfg["ignore"]) or (not include_tests and _nodehome_is_test(p, layout)):
+             continue
+         if kind == "shebang?":
+             if p in side.shebang:
+                 ok = side.shebang[p]
+             elif side.share is not None and p not in side.changed and p in side.share.shebang:
+                 ok = side.shebang[p] = side.share.shebang[p]
+             else:
+                 head = side._reader(p)
+                 ok = side.shebang[p] = _head_is_shebang(head)
+             if not ok:
+@@ -29436,27 +29444,113 @@ def _nodehome_commit_groups(repo_root, base, tip):
+                     if r is None:
+                         return None
+                     per.append(_nodehome_name_status(r))
+                 paths = set.intersection(*(x[0] for x in per))
+                 src = {k: v for k, v in per[0][1].items() if k in paths}
+                 gone = set.intersection(*(x[2] for x in per))
+         out.append({"sha": sha, "parents": parents, "paths": paths, "src": src, "gone": gone})
+     return out
+ 
+ 
+-def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
++def _nodehome_route_tests(repo_root, files, all_paths, candidates, where, cfg, skip, reader, shebang=None):
++    """只有實際變更且已宣告歸屬的測試能借用為路由證據;沿用同一分類器,首行固定讀版本。"""
++    layout = _nodehome_layout(all_paths)
++    tests = {p: files[p] for p in candidates if p in files and _nodehome_is_test(p, layout)}
++    if not tests:
++        return set()
++    side = _NodehomeSide()
++    side.files, side.all_paths, side.notes = tests, all_paths, {}
++    side.where = where
++    side._reader = reader
++    side.shebang = shebang if shebang is not None else {}
++    side.share, side.changed = None, set()
++    eligible, _bad = _nodehome_required(repo_root, side, cfg, skip, include_tests=True)
++    return eligible
++
++
++def _nodehome_staged_route_tests(repo_root, B, N, changed_paths, tree, vault_rel):
++    """額外測試路由只讀捕獲樹及既有起點;不改正式檢查、安家或測試名判定。"""
++    changes = _nodehome_changes(repo_root, B.where, tree)
++    listing = _nodehome_list(repo_root, tree)
++    if changes is None or listing is None:
++        return set()
++    changed_paths = {p for _c, old_path, new_path in changes for p in (old_path, new_path) if p}
++    files, all_paths = listing
++    layouts = (_nodehome_layout(B.all_paths), _nodehome_layout(all_paths))
++    old = {_nodehome_key(value) for note in B.notes.values() for value in note["about"]}
++    live = {_nodehome_key(value) for note in N.notes.values() for value in note["about"]}
++    possible = {p for p in changed_paths & (old | live) if any(_nodehome_is_test(p, view) for view in layouts)}
++    notes = [rel for rel, note in N.notes.items() if possible & {_nodehome_key(x) for x in note["about"]}]
++    import time as _t
++    blobs = _nodehome_cat_blobs_capped(repo_root, [f"{tree}:{vault_rel}/{rel}" for rel in notes],
++                                      256 * 1024, timeout=5, max_total_bytes=8 * 1024 * 1024,
++                                      deadline=_t.monotonic() + 5)
++    if blobs is None:
++        return set()
++    captured_by_note = {rel: {_nodehome_key(value) for value in _nodehome_parse_note(raw)["about"]}
++                        for rel, raw in zip(notes, blobs) if raw is not None}
++    untrusted = set()
++    for rel in notes:
++        claimed = {_nodehome_key(value) for value in N.notes[rel]["about"]} & possible
++        previous = {_nodehome_key(value) for value in B.notes.get(rel, {}).get("about", [])}
++        untrusted.update(claimed - previous - captured_by_note.get(rel, set()))
++    captured = {key for values in captured_by_note.values() for key in values}
++    # 另一篇合法安家不能替本篇的途中假宣告作證;不确定时只撤回補助路由。
++    candidates = (possible & (old | captured)) - untrusted
++    read = _nodehome_reader(repo_root, tree, from_git=True)
++    config = read(".lumos/config.json")
++    if config is None and ".lumos/config.json" in all_paths:
++        return set()
++    cfg = _nodehome_config(repo_root, config, from_snapshot=True)
++    skip = frozenset() if _is_toolchain_repo(repo_root) else _vendored_state(repo_root, tree)[0]
++    routes = _nodehome_route_tests(repo_root, files, all_paths, candidates, tree, cfg, skip, reader=read)
++    old_read = _nodehome_reader(repo_root, B.where, from_git=True)
++    old_config = old_read(".lumos/config.json")
++    if old_config is not None or ".lumos/config.json" not in B.all_paths:
++        old_cfg = _nodehome_config(repo_root, old_config, from_snapshot=True)
++        old_skip = frozenset() if B.where is None or _is_toolchain_repo(repo_root) else _vendored_state(repo_root, B.where)[0]
++        routes.update(_nodehome_route_tests(repo_root, B.files, B.all_paths, candidates, B.where, old_cfg, old_skip,
++                                           reader=old_read))
++    return routes
++
++
++def _nodehome_group_route_tests(repo_root, group, notes, route_cache, cfg, skip):
++    """讀取層收集同提交測試證據;共享最近兩版完整清單,讀不到就撤回額外證據。"""
++    candidates = {p for info in notes.values() for p in group["paths"] & info["own"]}
++    routes = set()
++    if not candidates:
++        return routes
++    for sha in [*group["parents"], group["sha"]]:
++        if sha in route_cache:
++            cached = route_cache.pop(sha)
++        else:
++            if len(route_cache) >= 2:
++                route_cache.pop(next(iter(route_cache)))
++            cached = (_nodehome_list(repo_root, sha), {}, _nodehome_reader(repo_root, sha, from_git=True))
++        route_cache[sha] = cached
++        lst, shebang, read = cached
++        if lst is None:
++            return set()
++        files, all_paths = lst
++        routes.update(_nodehome_route_tests(
++            repo_root, files, all_paths, candidates, sha, cfg, skip, reader=read, shebang=shebang))
++    return routes
++
++
++def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None, route_cfg=None, route_skip=frozenset()):
+     """推送前逐提交看寫回:每個提交裡,哪幾篇 Systems 節點的內容(摘要、決策、正文)是在這個提交改的——只補驗證連結、
+     計劃連結這類簿記欄位的不算——以及那篇在這個提交前後管哪些檔。在讀取這一層先算好放進分組的 content_notes
+     {這個提交之後的路徑: {type, status, own}},判定那層只在同一個提交裡比「管的檔」跟「改的程式」,不必跨提交追名字
+     (合併進來的平行分支、一次推送改名好幾次都不影響——代碼審 r2 單reviewer)。這個提交裡改名的,拿改名前的路徑去
+     上一個提交讀;這個提交才新開的算有變;讀不到一律當有變,照原本那樣查。"""
+     pre = vault_rel + "/Systems/"
++    route_cache = {}                                         # 至多兩版清單;父版先讀,線性相鄰提交可共用
+     for g in groups or ():
+         after = _nodehome_reader(repo_root, g["sha"])
+         # 上一版用「這個提交的第幾個上一版」讀(sha^1、sha^2):跟起點那一側的讀取分開算,不跟它搶共用
+         befores = [_nodehome_reader(repo_root, f"{g['sha']}^{i + 1}") for i in range(len(g["parents"]))]
+         notes = {}
+         for p in g["paths"]:
+             if not (p.startswith(pre) and p.endswith(".md")) or p in g["gone"]:
+                 continue
+             new = after(p)
+             n = _nodehome_parse_note(new) if new is not None else None
+@@ -29465,20 +29559,22 @@ def _nodehome_mark_note_content(repo_root, groups, vault_rel, tag_judge=None):
+             if n is not None and any(o["sig"] == n["sig"] or _nodehome_tag_only_change(o, n, tag_judge) for o in olds):
+                 continue                                    # 跟上一版一樣(只補簿記;合併時照搬某一邊也算):不算這個提交寫回
+             own, statuses = set(), set()
+             for x in [n] + olds:
+                 if x is not None:
+                     own |= {k for k in (_nodehome_key(v) for v in x["about"]) if k}
+                     statuses.add(x["status"])
+             # 狀態看這個提交前後兩版(代碼審 r3 單reviewer:只看之後的,「這個提交降成 planned 順便寫、下一個再升回來」就繞過了)
+             notes[p] = {"type": n["type"] if n else "system", "statuses": statuses or {"doing"}, "own": own}
+         g["content_notes"] = notes
++        if route_cfg is not None:
++            g["route_tests"] = _nodehome_group_route_tests(repo_root, g, notes, route_cache, route_cfg, route_skip)
+     return groups
+ 
+ 
+ _NOTELINES_PRECOMMIT = "scripts/hooks/pre-commit"
+ _NOTELINES_PREPUSH = "scripts/hooks/pre-push"
+ 
+ 
+ def _nodehome_golive(repo_root, tip, mark=None, hook=_NOTELINES_PRECOMMIT):
+     """[S39] 這個 repo 裡「提交前掛鉤第一次包含這道檢查」的那個提交(tip 的歷史裡最早那一個);沒有回 None。
+     mark=要找的標記字串,預設是每支檔有家自己的;筆記形狀擋傳它自己的(Projects/筆記形狀擋_計劃 [S4])。"""
+@@ -29498,25 +29594,25 @@ def _nodehome_clamp_base(repo_root, base, tip, mark=None, hook=_NOTELINES_PRECOM
+         return base
+     r = _lens_git(repo_root, "merge-base", "--is-ancestor", gl, tip)
+     if r is None or r.returncode != 0:
+         return base                                    # 上線點不在這條歷史上
+     if base in (None, _EMPTY_TREE_SHA):
+         return gl
+     r = _lens_git(repo_root, "merge-base", "--is-ancestor", base, gl)
+     return gl if (r is not None and r.returncode == 0 and base != gl) else base
+ 
+ 
+-def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None, tag_judge=None):
++def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel, groups=None, tag_judge=None, staged_route_tests=frozenset()):
+     """規則一到四的判定。回 dict:blocks=[(類別, 項目)]、reminders=[(類別, 項目)]、pairs=[(檔, 節點)]。
+     B=之前、N=之後;changes=_nodehome_changes 的結果。groups=範圍裡每個提交各自改了哪些路徑(推送前用;
+     規則三只看「同一個提交裡也改了程式」的節點——純整理節點的提交跟改程式的提交一起推,不會被混在一起誤擋)。
+-    None=整批當成一個提交(提交前)。"""
++    None=整批當成一個提交(提交前或讀取失敗退路);staged_route_tests只由真正提交前的讀取入口提供。"""
+     reqN, bad_names = _nodehome_required(repo_root, N, cfg, vendored_skip)
+     reqB, _ = _nodehome_required(repo_root, B, cfg, vendored_skip)
+     homesN, ownN = _nodehome_homes(repo_root, N)
+     homesB, ownB = _nodehome_homes(repo_root, B)
+     blocks, reminders, pairs = [], [], []
+     added, changed_new, renamed_from, deleted = set(), set(), {}, set()
+     for code, old, new in changes:
+         if old is not None and (new is None or code == "R"):
+             deleted.add(old)
+         if new is None:
+@@ -29608,39 +29704,41 @@ def _nodehome_evaluate(repo_root, B, N, changes, cfg, vendored_skip, vault_rel,
+         cc = set(content_changed)
+         if groups is None:                                  # 提交前:整批就是一個提交(內容有沒有變已經是這個提交的)
+             groups = [{"sha": None, "paths": {p for _c, o, n in changes for p in (o, n) if p}, "src": {}}]
+         routed, wb_files, wb_notes = {}, set(), set()
+         per_commit = {}                                     # 推送前:{那個提交裡的節點名: 寫回卻不是家的那幾支改動檔}
+         for g in groups:
+             g_paths = g["paths"]
+             g_code = {p for p in g_paths if p in reqN or p in reqB}
+             if not g_code:
+                 continue                                    # 純整理節點的提交:規則三不管 [S11]
++            g_route_code = g_code | (g.get("route_tests", set()) if g["sha"] else (
++                g_paths & staged_route_tests))
+             if g["sha"] and "content_notes" in g:
+                 # ★推送前:判定在那個提交自己裡面做★——那篇的內容是不是在這個提交改的(只補簿記不算)、它在這個提交前後管的檔
+                 # 跟這個提交改的程式對不對得上;不跨提交追名字(2026-09-11 平板 POS 第一次真推送踩到的誤擋、代碼審兩輪抓到的改名與合併)
+                 for p, info in g["content_notes"].items():
+                     rel = p[len(vpre):]
+                     # 能當家:這個提交前後任一版是,或推送終點那一版是(擋「先降格、在規劃中時寫、再升回來」三步走)
+                     tip_home = rel in N.notes and N.notes[rel]["status"] in _NODEHOME_HOME_STATUSES
+                     if info["type"] != "system" or not (info["statuses"] & set(_NODEHOME_HOME_STATUSES) or tip_home):
+                         continue
+                     wb_files |= g_code
+                     wb_notes.add(rel)
+-                    if not (info["own"] & g_code):
+-                        per_commit.setdefault(rel, set()).update(g_code)
++                    if not (info["own"] & g_route_code):
++                        per_commit.setdefault(rel, set()).update(g_route_code)
+                 continue
+             # 提交前(整批就是一個提交)或讀取層沒算到:碰到就算,家看起點與終點兩版
+             g_notes = {rel for rel in content_changed
+                        if (vpre + rel) in g_paths or (vpre + route_src.get(rel, rel)) in g_paths}
+             for rel in g_notes:
+-                routed.setdefault(rel, set()).update(g_code)
++                routed.setdefault(rel, set()).update(g_route_code)
+             if g_notes:
+                 wb_files |= g_code
+                 wb_notes |= g_notes
+         # [S13] 寫進去的節點要是同一個提交裡某支改動(含刪掉)的檔的家——刪掉的檔看它刪之前的家
+         for rel in content_changed:
+             if rel not in routed:
+                 continue
+             mine = ownN.get(rel, set()) | ownB.get(route_src.get(rel, rel), set())
+             if not (mine & routed[rel]):
+                 blocks.append(("route", (rel, sorted(routed[rel]))))
+@@ -29896,20 +29994,22 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
+             print("擋下:這裡不是 git 專案,用 --repo 指定", file=sys.stderr)
+             return 2
+         root = Path(r.stdout.strip())
+     if staged:
+         mh = _lens_git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+         if mh is not None and mh.returncode == 0:
+             print("每支檔有家:合併提交跳過(推送前會把合併的結果整段查一次)", file=sys.stderr)
+             return 0
+         head = _lens_full_sha(root, "HEAD")
+         base_where, tip_where, mode_word = head, "index", "這次提交"
++        index_before = _nodehome_git(root, "write-tree")
++        index_tree = index_before.decode("ascii").strip() if index_before else None
+         changes = _nodehome_changes(root, head, "index")
+     else:
+         # 寫法用派工鏡頭那支判法:恰好兩個點、兩端都有、不收三個點——原本只切第一個「..」,
+         # 三個點的寫法變成「起點 到 .終點」、找不到就放行,同一條違規完全沒擋(代碼審 r1 邊界席)
+         rg = _lens_range_ok(diff_range)
+         if rg is None:
+             print("擋下:--diff 要給 <起點>..<終點>——恰好兩個點、兩端都要有(三個點的寫法這裡不收:"
+                   "先用 git merge-base 算出起點再給)", file=sys.stderr)
+             return 2
+         a, b = rg
+@@ -29964,22 +30064,29 @@ def cmd_home_check(repo=None, staged=False, diff_range=None):
+         return 0
+     skip = frozenset() if _is_toolchain_repo(root) else _vendored_state(root, "" if staged else tip_where)[0]
+     _tj = []
+ 
+     def tag_judge():
+         """測試名判定,第一次真的需要(某篇只差測試綁定)才建——建索引要掃測試檔。"""
+         if not _tj:
+             _tj.append(_nodehome_tag_judge(root, None if staged else tip_where))
+         return _tj[0]
+     groups = None if staged else _nodehome_mark_note_content(root, _nodehome_commit_groups(root, base_where, tip_where), vault_rel,
+-                                                                 tag_judge=tag_judge)
+-    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge)
++                                                                 tag_judge=tag_judge, route_cfg=cfg, route_skip=skip)
++    staged_route_tests = set()
++    if staged and index_tree:
++        staged_route_tests = _nodehome_staged_route_tests(root, B, N, changed_paths, index_tree, vault_rel)
++        if staged_route_tests and _nodehome_git(root, "write-tree") != index_before:
++            staged_route_tests.clear()                     # 只撤回額外證據;正式裁判與 fail-open 政策維持
++            print("提醒:暫存區在檢查期間變動或讀不到,額外測試寫回證據不採信;請重新檢查。", file=sys.stderr)
++    res = _nodehome_evaluate(root, B, N, changes, cfg, skip, vault_rel, groups=groups, tag_judge=tag_judge,
++                             staged_route_tests=staged_route_tests)
+     homesN, _own = _nodehome_homes(root, N)
+     lines = _nodehome_render(res, homesN, N, cfg, mode_word)
+     blocked = bool(res["blocks"])
+     if blocked and cfg["mode"] == "warn":
+         lines = [l.replace("擋下:", "提醒(node_home.gate=warn,不擋):", 1) for l in lines]
+     for l in lines:
+         print(l, file=sys.stderr)
+     # 治理帳:nodes 只放程式檔路徑(統計語意表這麼宣告);沒有程式檔的違規(負責範圍)把節點另放 notes
+     files, notes_ = set(), set()
+     for kind, it in res["blocks"]:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e19e0b61..aded93e9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -6733,35 +6733,48 @@ def t_gov_split_ignore_rule():
+         (docs / ".gitignore").write_bytes(b"  " + lines[0].encode() + b"\n")
+         check("⑥行首有空白的不算有(跟 git 一樣)", lines[0] in m._ensure_docs_gitignore(docs), (docs / ".gitignore").read_bytes())
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+     print("  ✓ t_gov_split_ignore_rule")
+ 
+ 
+ def t_gov_split_pairs_drift():
+     """[治理帳例行紀錄分流 S6] 本機名單的閘名都在 _KNOWN_GATES、每個「閘名+種類」在程式裡有寫入點,
+     判定類讀者讀的三個閘不在名單上。"""
++    import ast as _ast
+     import re as _re
+     m = _load_lumos()
+     src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    # 寫入函式變長不等於寫入點消失；只查真正的完整函式，不借鄰居或註解的字串。
++    home_writer = next(n for n in _ast.parse(src).body
++                       if isinstance(n, _ast.FunctionDef) and n.name == "cmd_home_check")
++    home_kinds = {target.id: {c.value for c in _ast.walk(n.value) if isinstance(c, _ast.Constant)}
++                  for n in _ast.walk(home_writer) if isinstance(n, _ast.Assign)
++                  for target in n.targets if isinstance(target, _ast.Name)}
++    home_writes = [n for n in _ast.walk(home_writer)
++                   if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)
++                   and n.func.id.startswith("_gate_event") and len(n.args) >= 3
++                   and isinstance(n.args[1], _ast.Constant) and n.args[1].value == "nodehome-check"
++                   and isinstance(n.args[2], _ast.Name)]
+     pairs = sorted(m._GOV_LOCAL_PAIRS)
+     check("①前置:名單非空", len(pairs) >= 10, str(pairs))
+     unknown = [g for g, _k in pairs if g not in m._KNOWN_GATES]
+     check("②名單的閘名都在 _KNOWN_GATES", not unknown, str(unknown))
+     no_writer = []
+     for g, k in pairs:
+         # 寫入點三種樣子:字面 {"gate": g, "kind": k}、_gate_event*(… g, k …)、閘的寫入函式裡算 kind 的運算式出現 k
+         lit = f'"gate": "{g}", "kind": "{k}"' in src
+         call = _re.search(r'_gate_event\w*\([^()\n]*"' + _re.escape(g) + r'", *"' + _re.escape(k) + '"', src) is not None
+         dyn = {"nodehome-check": "_home_check", "drift-check": "def _drift_m1_ledger", "delguard": "_delguard_log_result(gr,",
+                "daily-wrapper": '"daily-wrapper"', "note-reread": '"note-reread"'}.get(g)
+-        near = dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)])
++        near = any(k in home_kinds.get(n.args[2].id, set()) for n in home_writes) if g == "nodehome-check" else (
++            dyn is not None and any(f'"{k}"' in src[i:i + 6000] for i in [mm.start() for mm in _re.finditer(_re.escape(dyn), src)]))
+         if not (lit or call or near):
+             no_writer.append((g, k))
+     check("③每個「閘名+種類」在程式裡有寫入點", not no_writer, str(no_writer))
+     judged = {g for g, _k in pairs} & {"code-loop", "fix-check", "design-loop"}
+     check("④code-loop、fix-check、design-loop 不在名單上", not judged, str(judged))
+     print("  ✓ t_gov_split_pairs_drift")
+ 
+ 
+ def t_gov_split_review_r1_fixes():
+     """治理帳例行紀錄分流代碼審 r1 折入:①度量撤除條件數的是走本機帳的閘時,暖機護欄看本機帳(沒有本機帳就不判),
+@@ -26301,20 +26314,187 @@ def t_canary_carrier_quote_positive_controls():
+             check(f"載體全錨/{optimized}/{fid}/{count_args} 成功", r.returncode == 0,
+                   f"rc={r.returncode} {r.stderr[-200:]}")
+             rows = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()
+             last = _j.loads(rows[-1])
+             check(f"載體全錨/{optimized}/{fid} 前置：確實解析審查報告", last.get("reported") == 1,
+                   str(last)[-200:])
+             check(f"載體全錨/{optimized}/{fid} ID 保留原意", last.get("findings_set") == fid.split(",")
+                   and last.get("folded_set") == fid.split(","), str(last)[-200:])
+ 
+ 
++def t_canary_carrier_invalid_snapshot_encoding():
++    """載體快照解碼錯誤須受控拒收，合法與非載體控制不改寫證據。"""
++    import json as _j
++    text = "這是可以核對的凍結材料原文而且字數足夠"
++    for opt in (False, True):
++        v = mkvault()
++        root = v.parent
++        snap = root / "snapshot.patch"
++        report = root / "quoted.md"
++        report.write_text("severity: minor\n## F1\nseverity: minor\nblocking: 否\n"
++                          + "引句:「" + text + "」\n", encoding="utf-8")
++        ledger = root / ".canary-log.jsonl"
++        def carrier(label, non_encoding_fault=False, quote_fault=False):
++            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
++                "--loop", f"code-snapshot-{opt}-{label}", "--round", "r1", "--auditor", "通才-codex",
++                "--severity", "minor", "--findings", "1", "--tier", "standard", "--report", str(report),
++                "--snapshot", str(snap), "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
++            prefix = [sys.executable, *(["-O"] if opt else [])]
++            if non_encoding_fault:
++                shim = ("import runpy, sys\nfrom pathlib import Path\n"
++                        "original = Path.read_bytes\n"
++                        "def read_bytes(path):\n"
++                        f"    if path == Path({str(snap)!r}):\n"
++                        "        raise RuntimeError('snapshot-non-encoding-fault')\n"
++                        "    return original(path)\n"
++                        "Path.read_bytes = read_bytes\n"
++                        f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
++                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++            if quote_fault:
++                shim = ("import runpy, sys\n"
++                        f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
++                        f"def quote_rows(*args):\n    raise {quote_fault if isinstance(quote_fault, str) else 'RuntimeError'}('snapshot-quote-parser-fault')\n"
++                        "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
++                        "sys.exit(namespace['main']())\n")
++                return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++            return subprocess.run([*prefix, *args], capture_output=True, text=True)
++        snap.write_bytes(b"\xff\xfe")
++        first = carrier("first-bad")
++        check(f"快照編碼 opt={opt}:首筆rc2指出snapshot編碼",
++              first.returncode == 2 and "--snapshot" in first.stderr and "UTF" in first.stderr,
++              first.stdout + first.stderr)
++        check(f"快照編碼 opt={opt}:首筆不建帳且無成功訊息",
++              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        seed = carrier("valid-seed")
++        check(f"快照編碼 opt={opt}:全錨合法種子確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:種子確實解析報告且存同份指紋",
++              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        bads = (b"\xff\xfe", (text + "\n").encode("utf-8") + b"\xff",
++                (text + "\n").encode("utf-8") + b"\xe4\xb8")
++        for i, badbytes in enumerate(bads):
++            snap.write_bytes(badbytes)
++            before = ledger.read_bytes()
++            bad = carrier(f"bad-{i}")
++            check(f"快照編碼 opt={opt} case={i}:rc2與欄位診斷",
++                  bad.returncode == 2 and "--snapshot" in bad.stderr and "UTF" in bad.stderr,
++                  bad.stdout + bad.stderr)
++            check(f"快照編碼 opt={opt} case={i}:無traceback或成功訊息",
++                  "Traceback" not in bad.stderr and "✓" not in bad.stdout, bad.stdout + bad.stderr)
++            check(f"快照編碼 opt={opt} case={i}:成功帳逐位元不變",
++                  ledger.read_bytes() == before, bad.stdout + bad.stderr)
++        snap.write_bytes((text + "\r\n").encode("utf-8"))
++        good = carrier("valid-crlf")
++        check(f"快照編碼 opt={opt}:CRLF合法對照成功",
++              good.returncode == 0, good.stdout + good.stderr)
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:CRLF仍記同份原始bytes指紋",
++              row.get("reported") == 1 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        before = ledger.read_bytes()
++        fault = carrier("non-encoding-fault", non_encoding_fault=True)
++        check(f"快照編碼 opt={opt}:非編碼故障仍為原RuntimeError",
++              fault.returncode == 1 and "RuntimeError: snapshot-non-encoding-fault" in fault.stderr,
++              fault.stdout + fault.stderr)
++        check(f"快照編碼 opt={opt}:非編碼故障不追加成功帳",
++              ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        for error in ("RuntimeError", "OSError"):
++            fault = carrier(f"quote-parser-{error}", quote_fault=error)
++            check(f"快照編碼 opt={opt}:引句解析故障仍為原{error}",
++                  fault.returncode == 1 and f"{error}: snapshot-quote-parser-fault" in fault.stderr,
++                  fault.stdout + fault.stderr)
++            check(f"快照編碼 opt={opt}:引句解析{error}不追加成功帳",
++                  ledger.read_bytes() == before and "✓" not in fault.stdout, fault.stdout + fault.stderr)
++        clean = root / "clean.md"
++        clean.write_text("severity: clean\n本席沒有發現。\n", encoding="utf-8")
++        snap.write_bytes(b"\xff\xfe")
++        legacy = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
++            "--vault", str(v), "canary", "record", "none", "--loop", f"code-noncarrier-{opt}",
++            "--round", "r1", "--auditor", "通才-codex", "--severity", "clean", "--findings", "0",
++            "--tier", "standard", "--report", str(clean), "--snapshot", str(snap)],
++            capture_output=True, text=True)
++        check(f"快照編碼 opt={opt}:非載體原政策仍成功",
++              legacy.returncode == 0, legacy.stdout + legacy.stderr)
++        row = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
++        check(f"快照編碼 opt={opt}:非載體保存壞編碼原bytes指紋",
++              row.get("reported") == 0 and row.get("snapshot_sha256") == _sha256_of(snap), str(row))
++        snap.unlink()
++        before = ledger.read_bytes()
++        missing = carrier("missing-snapshot")
++        check(f"快照編碼 opt={opt}:缺檔沿用IO診斷而非編碼",
++              missing.returncode == 2 and "--snapshot" in missing.stderr and "UTF" not in missing.stderr,
++              missing.stdout + missing.stderr)
++        check(f"快照編碼 opt={opt}:缺檔無traceback且帳不變",
++              "Traceback" not in missing.stderr and ledger.read_bytes() == before and "✓" not in missing.stdout,
++              missing.stdout + missing.stderr)
++
++def t_canary_carrier_snapshot_io_recovery_rejected():
++    """驗句讀取失敗不能由稍後可讀的 raw hash 代替，成功帳保持不變。"""
++    for optimized in (False, True):
++        v = mkvault()
++        root = v.parent
++        text = "這是凍結材料裡可以核對的一整段原始文字"
++        snap = root / "snapshot.patch"
++        report = root / "report.md"
++        report.write_text("severity: minor\n## F1\nseverity: minor\n引句:「" + text + "」\n", encoding="utf-8")
++        ledger = root / ".canary-log.jsonl"
++        def call(label, transient=True):
++            args = [GRAPHCTL, "--vault", str(v), "canary", "record", "none",
++                    "--loop", f"code-snapshot-io-{optimized}-{label}", "--round", "r1",
++                    "--auditor", "通才-codex", "--severity", "minor", "--findings", "1",
++                    "--tier", "standard", "--report", str(report), "--snapshot", str(snap),
++                    "--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
++            prefix = [sys.executable, *(["-O"] if optimized else [])]
++            if not transient:
++                return subprocess.run([*prefix, *args], capture_output=True, text=True)
++            shim = ("import runpy, sys\nfrom pathlib import Path\noriginal = Path.read_bytes\nseen = []\n"
++                    "def read_bytes(path):\n"
++                    f"    if path == Path({str(snap)!r}) and not seen:\n"
++                    "        seen.append(1)\n        raise OSError('transient-snapshot-read')\n"
++                    "    return original(path)\nPath.read_bytes = read_bytes\n"
++                    f"sys.argv = {args!r}\nrunpy.run_path({GRAPHCTL!r}, run_name='__main__')\n")
++            return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
++        snap.write_bytes((text + "\n").encode("utf-8"))
++        first = call("first")
++        check(f"快照IO/{optimized}:首次暫時失敗當場拒收並定位IO",
++              first.returncode == 2 and "--snapshot" in first.stderr
++              and "transient-snapshot-read" in first.stderr and "UTF" not in first.stderr,
++              first.stdout + first.stderr)
++        check(f"快照IO/{optimized}:首次不建成功帳",
++              not ledger.exists() and "✓" not in first.stdout, first.stdout + first.stderr)
++        seed = call("valid-seed", transient=False)
++        check(f"快照IO/{optimized}:正常讀取合法材料確實落帳",
++              seed.returncode == 0 and ledger.exists(), seed.stdout + seed.stderr)
++        if seed.returncode != 0 or not ledger.exists():
++            continue
++        for label, data in (("valid", (text + "\n").encode("utf-8")),
++                            ("invalid-encoding", b"\xff\xfe"),
++                            ("unmatched", "這份材料沒有報告所引用的那一段原文。\n".encode("utf-8"))):
++            snap.write_bytes(data)
++            before = ledger.read_bytes()
++            result = call(label)
++            check(f"快照IO/{optimized}/{label}:暫時失敗當場rc2不誤診",
++                  result.returncode == 2 and "--snapshot" in result.stderr
++                  and "transient-snapshot-read" in result.stderr and "UTF" not in result.stderr,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:無traceback或成功訊息",
++                  "Traceback" not in result.stderr and "✓" not in result.stdout,
++                  result.stdout + result.stderr)
++            check(f"快照IO/{optimized}/{label}:成功帳逐位元不變",
++                  ledger.read_bytes() == before, result.stdout + result.stderr)
++
++
++
+ def t_canary_carrier_invalid_report_encoding():
+     """載體報告不能以替換字元掩蓋非法 UTF-8，寫側與讀側要驗同一份資料。"""
+     import json as _j
+     for optimized in (False, True):
+         v = mkvault()
+         snap = v / "Projects" / "snapshot.patch"
+         snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+         report = v / "Projects" / "report.md"
+         good = ("severity: minor\n## F1\nseverity: minor\n"
+                 "引句:「這是凍結材料裡可以核對的一整段文字」\n").encode("utf-8")
+@@ -40286,21 +40466,26 @@ def t_dispatch_lens_role_cards_opt_in():
+           rc == 0 and all(q["id"] in t for q in _load_lumos_inproc()._ROLE_CARDS["frontend"]) and "be-authz" not in t, t[-600:])
+     check("S9: 角色段在參考資料框外(框結束線之後)、且回傳 text 本身就含(舊掛鉤照附)",
+           "[角色鏡頭]" in t and ("─────" not in t or t.rfind("─────") < t.find("[角色鏡頭]")) and data.get("role_text", "") in t, t[-600:])
+     w("src/api.py", "def f():\n    return 2\n"); c("be")
+     rc, data = lens("--role-cards")
+     check("S9: 全端改動 → 兩張都附", "fe-race" in data.get("text", "") and "be-authz" in data.get("text", ""), data.get("text", "")[-400:])
+     d2, g2, w2, c2 = _role_lens_repo()
+     w2("notes.txt", "x\n"); c2("unknown only")
+     r = run(d2 / "docs" / "t-knowledge", "dispatch-lens", "main..HEAD", "--repo", str(d2), "--json", "--no-cache", "--role-cards")
+     dd = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+-    check("S9: 全部判不出 → 一張都不附", "role_text" not in dd and "[角色鏡頭]" not in dd.get("text", ""), str(dd)[:300])
++    card_output = dd.get("text", "") + "\n" + dd.get("role_text", "")
++    card_ids = [q["id"] for cards in _load_lumos_inproc()._ROLE_CARDS.values() for q in cards]
++    check("S9: 判不出或逾時 → 有效回應且一張卡都不附",
++          r.returncode == 0 and isinstance(dd.get("text"), str) and bool(dd["text"])
++          and "[角色鏡頭]" not in card_output and not any(q in card_output for q in card_ids),
++          f"rc={r.returncode} {str(dd)[:300]}")
+     d3, g3, w3, c3 = _role_lens_repo()
+     g3("checkout", "-q", "main"); w3(".lumos/config.json", '{"review_roles": "oops"}'); c3("bad decl")
+     g3("checkout", "-q", "feat"); g3("rebase", "-q", "main"); w3("notes.txt", "x\n"); c3("unknown only")
+     r = run(d3 / "docs" / "t-knowledge", "dispatch-lens", "main..HEAD", "--repo", str(d3), "--json", "--no-cache", "--role-cards")
+     dd = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+     check("S9: 宣告壞掉、全部判不出 → 只附警告那一行", dd.get("role_text", "").startswith("(角色鏡頭)⚠") and "[角色鏡頭]" not in dd.get("role_text", ""), str(dd)[:300])
+     hm = _load_hook_mod("dlens_role", "dispatch-lens-hook.py")
+     seen = []
+     def fake_run(argv, timeout=None, **k):
+         seen.append(list(argv))
+@@ -48944,20 +49129,653 @@ _NH_TAG_TESTS = ("old", "new", "keep", "drop", "more", "y", "more2", "more3", "h
+ def _nh_tag_repo(extra_tests=()):
+     """只換測試綁定那組的測試專案:python 測試棧,tests/test_b.py 有 test_<名> 這些真測試(綁定要指得到真測試才算只換綁定)。"""
+     root = _nh_repo({"test_profile": "python"})
+     _nh_file(root, "tests/test_b.py", "".join(f"def test_{n}():\n    pass\n\n\n" for n in _NH_TAG_TESTS + tuple(extra_tests)))
+     _nh_file(root, "src/a.py")
+     _nh_file(root, "src/b.py")
+     _nh_node(root, "A", about=["src/a.py"], body="實作在 `src/a.py`。")
+     return root
+ 
+ 
++def t_nodehome_optional_test_home_writeback():
++    """已宣告的測試家可接同次寫回；不把測試免安家改成全部強制安家。"""
++    import subprocess as _sp, os as _os
++    cases = (("mixed", 0), ("test-only", 0), ("untouched-test", 1),
++             ("unowned-test", 0), ("ignored-test", 1), ("symlink-test", 1),
++             ("deleted-test", 0), ("renamed-test", 0), ("json-home", 1),
++             ("new-homeless", 1), ("diff-mixed", 0), ("diff-split", 1),
++             ("pure-test-other-home", 0), ("diff-middle-delete", 0),
++             ("diff-middle-rename", 0), ("diff-double-rename", 0),
++             ("shebang-index-positive", 0), ("shebang-index-negative", 1))
++    for optimized in (False, True):
++        for case, expected in cases:
++            root = _nh_repo({"node_home": {"ignore": ["scripts/test_checks.py"]}}
++                            if case == "ignored-test" else None)
++            _nh_file(root, "src/a.py")
++            test_path = "tests/check" if case.startswith("shebang-index-") else "scripts/test_checks.py"
++            test = _nh_file(root, test_path)
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home_path = "src/fixture.json" if case == "json-home" else test_path
++            if case == "json-home":
++                _nh_file(root, home_path, "{}\n")
++            if case == "symlink-test":
++                target = _nh_file(root, "fixture.txt", "test data\n")
++                test.unlink()
++                _os.symlink(target, test)
++            home = None if case == "unowned-test" else _nh_node(
++                root, "TestHome", about=[home_path], body="test context")
++            _nh_commit(root, "baseline")
++            base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++            if case not in ("untouched-test", "symlink-test", "json-home", "diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                if case == "deleted-test":
++                    test.unlink()
++                elif case == "renamed-test":
++                    new_test = root / "scripts/test_renamed.py"
++                    test.rename(new_test)
++                else:
++                    _nh_file(root, test_path, "#!/usr/bin/env python3\nx = 2\n"
++                             if case == "shebang-index-positive" else "x = 2\n")
++            if case == "diff-double-rename":
++                middle = root / "scripts/test_mid.py"
++                test.rename(middle)
++                home.write_text(home.read_text().replace(test_path, "scripts/test_mid.py"))
++                _nh_commit(root, "test rename before mixed commit")
++                test = middle
++                _nh_file(root, "scripts/test_mid.py", "x = 2\n")
++            if case == "diff-split":
++                _nh_commit(root, "test change only")
++            if case not in ("test-only", "pure-test-other-home"):
++                _nh_file(root, "src/a.py", "x = 2\n")
++            if case == "new-homeless":
++                _nh_file(root, "src/new.py", "x = 2\n")
++            if case == "json-home":
++                _nh_file(root, home_path, '{"changed": true}\n')
++            if home is None or case == "pure-test-other-home":
++                home = root / "docs/kg-knowledge/Systems/Production.md"
++            if case in ("diff-middle-delete", "diff-middle-rename"):
++                test = _nh_file(root, "scripts/test_temp.py", "x = 2\n")
++            text = home.read_text(encoding="utf-8")
++            if case == "renamed-test":
++                text = text.replace("scripts/test_checks.py", "scripts/test_renamed.py")
++            if case in ("diff-middle-delete", "diff-middle-rename"):
++                text = text.replace("scripts/test_checks.py", "scripts/test_temp.py")
++            elif case == "diff-double-rename":
++                text = text.replace("scripts/test_checks.py", "scripts/test_mid.py")
++            home.write_text(text + "\nWHY:This test guards an independently reproduced failure.\n", encoding="utf-8")
++            _nh_git(root, "add", "-A")
++            if case.startswith("shebang-index-"):
++                _nh_file(root, test_path, "x = 3\n" if case == "shebang-index-positive"
++                         else "#!/usr/bin/env python3\nx = 3\n")
++            # 前置斷言查實際索引，不讓其他錯誤恰好提供相同退出碼。
++            staged_paths = set(_nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines())
++            intended = test.relative_to(root).as_posix()
++            expected_own = ("src/a.py" if case in ("unowned-test", "pure-test-other-home") else
++                            "scripts/test_renamed.py" if case == "renamed-test" else
++                            home_path if case == "json-home" else intended)
++            check(f"測試家現場/{optimized}/{case}:宣告歸屬成立",
++                  f"  - {expected_own}\n" in home.read_text(), home.read_text())
++            check(f"測試家現場/{optimized}/{case}:正式程式啟動條件成立",
++                  ("src/a.py" in staged_paths) == (case not in ("test-only", "pure-test-other-home")), str(staged_paths))
++            if case not in ("diff-split", "diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                check(f"測試家現場/{optimized}/{case}:測試變更條件成立",
++                      (("scripts/test_renamed.py" if case == "renamed-test" else test_path) in staged_paths)
++                      == (case not in ("untouched-test", "symlink-test", "json-home")), str(staged_paths))
++            if case == "ignored-test":
++                check(f"測試家現場/{optimized}/{case}:索引排除設定成立",
++                      "scripts/test_checks.py" in _nh_git(root, "show", ":.lumos/config.json").stdout)
++            if case == "symlink-test":
++                check(f"測試家現場/{optimized}/{case}:索引為連結不是一般檔",
++                      _nh_git(root, "ls-files", "-s", "--", test_path).stdout.startswith("120000 "))
++            check(f"測試家現場/{optimized}/{case}:寫回正文已入索引",
++                  home.relative_to(root).as_posix() in staged_paths, str(staged_paths))
++            if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                check(f"測試家現場/{optimized}/{case}:唯一候選是中間測試",
++                      intended in staged_paths and "scripts/test_checks.py" not in staged_paths
++                      and intended not in _nh_git(root, "ls-tree", "-r", "--name-only", base).stdout.splitlines(),
++                      str(staged_paths))
++                check(f"測試家現場/{optimized}/{case}:中間測試已宣告家",
++                      f"  - {intended}\n" in home.read_text(), home.read_text())
++            if case.startswith("shebang-index-"):
++                indexed = _nh_git(root, "show", ":" + test_path).stdout
++                check(f"測試家現場/{optimized}/{case}:索引與磁碟首行相反",
++                      indexed.startswith("#!") == (case == "shebang-index-positive")
++                      and test.read_text().startswith("#!") != indexed.startswith("#!"), indexed)
++            mode = ["--staged"]
++            if case.startswith("diff-"):
++                _nh_commit(root, "production and graph change")
++                if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                    if case == "diff-middle-delete":
++                        test.unlink()
++                    else:
++                        final = root / "scripts/test_final.py"
++                        previous = test.relative_to(root).as_posix()
++                        test.rename(final)
++                        home.write_text(home.read_text().replace(previous, "scripts/test_final.py"))
++                    _nh_commit(root, "remove intermediate test path")
++                tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++                if case in ("diff-middle-delete", "diff-middle-rename", "diff-double-rename"):
++                    check(f"測試家現場/{optimized}/{case}:候選不在終點",
++                          intended not in _nh_git(root, "ls-tree", "-r", "--name-only", tip).stdout.splitlines(), tip)
++                mode = ["--diff", base + ".." + tip]
++            result = _sp.run([sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
++                              "home", "check", *mode, "--repo", str(root)],
++                             capture_output=True, text=True)
++            check(f"測試家寫回/{optimized}/{case}:預期rc{expected}",
++                  result.returncode == expected, result.stdout + result.stderr)
++            if expected == 1:
++                output = result.stdout + result.stderr
++                clue = "src/new.py" if case == "new-homeless" else "Systems/TestHome"
++                reason = "沒有家" if case == "new-homeless" else "不是任何一支改動檔的家"
++                check(f"測試家拒收理由/{optimized}/{case}:命中目標規則",
++                      clue in output and reason in output, output)
++
++
++def t_nodehome_optional_test_snapshot_race():
++    '''讀取前才改工作目錄，不能換掉索引/提交的測試證據；普通及-O雙向。'''
++    import subprocess as sp, json
++    wrapper = Path(tempfile.mkdtemp(prefix="nh-read-race-")) / "reader.py"
++    wrapper.write_text('''import runpy,sys,json
++cli=sys.argv.pop(1);tip=sys.argv.pop(1);replacement=sys.argv.pop(1)
++ns=runpy.run_path(cli,run_name="_race_");g=ns["main"].__globals__;original=g["_nodehome_reader"];fired=[]
++def factory(root,where,*a,**kw):
++ read=original(root,where,*a,**kw)
++ def race(p):
++  if str(where)==tip and p=="tests/check" and not fired:
++   from pathlib import Path
++   fp=Path(root)/p;before=fp.read_bytes();fp.write_bytes(bytes.fromhex(replacement));out=read(p)
++   fired.append({"before":before.hex(),"after":fp.read_bytes().hex(),"read":out.hex() if out is not None else None});return out
++  return read(p)
++ return race
++g["_nodehome_reader"]=factory;rc=ns["main"]();print("RACE:"+json.dumps(fired),file=sys.stderr);raise SystemExit(rc or 0)
++''')
++    for optimized in (False, True):
++        for staged in (False, True):
++            for valid in (False, True):
++                root = _nh_repo()
++                _nh_file(root, "src/a.py")
++                _nh_file(root, "tests/check", "x = 0\n")
++                _nh_node(root, "Production", about=["src/a.py"], body="production context")
++                home = _nh_node(root, "TestHome", about=["tests/check"], body="test context")
++                _nh_commit(root, "baseline")
++                base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++                committed = "#!/usr/bin/env python3\nx = 2\n" if valid else "x = 2\n"
++                _nh_file(root, "tests/check", committed)
++                _nh_file(root, "src/a.py", "x = 2\n")
++                home.write_text(home.read_text() + "\nWHY: synthetic race reproduction.\n")
++                _nh_git(root, "add", "-A")
++                if staged:
++                    where, mode = _nh_git(root, "write-tree").stdout.strip(), ["--staged"]
++                else:
++                    _nh_commit(root, "mixed writeback")
++                    where = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++                    mode = ["--diff", base + ".." + where]
++                spec = ":tests/check" if staged else where + ":tests/check"
++                check(f"版本競態/{optimized}/{staged}/{valid}:版本種子成立",
++                      _nh_git(root, "show", spec).stdout == committed, spec)
++                replacement = "x = 3\n" if valid else "#!/usr/bin/env python3\nx = 3\n"
++                q = sp.run([sys.executable, *(["-O"] if optimized else []), str(wrapper), GRAPHCTL,
++                            where, replacement.encode().hex(), "home", "check", *mode, "--repo", str(root)],
++                           text=True, capture_output=True)
++                events = [json.loads(line[5:]) for line in q.stderr.splitlines() if line.startswith("RACE:")]
++                fired = events[0] if events else []
++                check(f"版本競態/{optimized}/{staged}/{valid}:讀取前換檔確實執行",
++                      len(fired) == 1 and fired[0]["before"] == committed.encode().hex()
++                      and fired[0]["after"] == replacement.encode().hex(), q.stderr)
++                check(f"版本競態/{optimized}/{staged}/{valid}:仍依版本拒收或放行",
++                      q.returncode == (0 if valid else 1)
++                      and (valid or ("Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr)), q.stderr)
++
++
++def t_nodehome_optional_test_group_failure():
++    '''逐提交清單讀不到時不能把兩個提交的測試變更合成合法證據。'''
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_file(root, "src/a.py")
++    _nh_file(root, "scripts/test_checks.py")
++    _nh_node(root, "Production", about=["src/a.py"], body="production context")
++    home = _nh_node(root, "TestHome", about=["scripts/test_checks.py"], body="test context")
++    _nh_commit(root, "baseline")
++    base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_file(root, "scripts/test_checks.py", "x = 2\n")
++    _nh_commit(root, "test only")
++    middle = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    _nh_file(root, "src/a.py", "x = 2\n")
++    home.write_text(home.read_text() + "\nWHY: split commit regression.\n")
++    _nh_commit(root, "production and wrong home")
++    tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++    check("分組失敗:測試只在前一提交變更",
++          set(_nh_git(root, "diff", "--name-only", base, middle).stdout.splitlines()) == {"scripts/test_checks.py"}
++          and "scripts/test_checks.py" not in _nh_git(root, "diff", "--name-only", middle, tip).stdout.splitlines())
++    wrapper = Path(tempfile.mkdtemp(prefix="nh-groups-fault-")) / "fault.py"
++    wrapper.write_text('''import runpy,sys
++cli=sys.argv.pop(1);ns=runpy.run_path(cli,run_name="_group_fault_");g=ns["main"].__globals__
++def fault(*a,**kw):
++ print("GROUP-FAULT:called",file=sys.stderr);return None
++g["_nodehome_commit_groups"]=fault;raise SystemExit(ns["main"]() or 0)
++''')
++    for optimized in (False, True):
++        q = sp.run([sys.executable, *(["-O"] if optimized else []), str(wrapper), GRAPHCTL,
++                    "home", "check", "--diff", base + ".." + tip, "--repo", str(root)],text=True,capture_output=True)
++        check(f"分組失敗/{optimized}:故障入口確實執行", "GROUP-FAULT:called" in q.stderr, q.stderr)
++        check(f"分組失敗/{optimized}:不跨提交借測試",
++              q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stderr)
++
++
++def t_nodehome_optional_test_cache_is_bounded():
++    """清單容器保留量不隨提交數成長；量生命週期，不把它冒稱RSS。"""
++    import weakref, gc
++    for commits in (4, 12):
++        root = _nh_repo()
++        _nh_file(root, "src/a.py", "x = 0\n")
++        _nh_file(root, "scripts/test_checks.py", "x = 0\n")
++        _nh_node(root, "Production", about=["src/a.py"], body="production context")
++        home = _nh_node(root, "TestHome", about=["scripts/test_checks.py"], body="test context")
++        _nh_commit(root, "baseline")
++        base = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++        for i in range(1, commits + 1):
++            _nh_file(root, "src/a.py", f"x = {i}\n")
++            _nh_file(root, "scripts/test_checks.py", f"x = {i}\n")
++            home.write_text(home.read_text() + f"\nWHY: cache lifetime case {i}.\n")
++            _nh_commit(root, "mixed cache case")
++        tip = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
++        m = _load_lumos_module()
++        groups = m._nodehome_commit_groups(root, base, tip)
++        check(f"清單快取/{commits}:每提交皆有獨立測試與程式變更",
++              groups is not None and len(groups) == commits
++              and all({"src/a.py", "scripts/test_checks.py"} <= g["paths"] for g in groups))
++        if groups is None:
++            continue
++        alive, peak, count = set(), [0], [0]
++        class Pair:
++            def __init__(self, value):
++                self.value = value
++                count[0] += 1
++                ident = count[0]
++                alive.add(ident)
++                peak[0] = max(peak[0], len(alive))
++                weakref.finalize(self, alive.discard, ident)
++            def __iter__(self):
++                return iter(self.value)
++        original = m._nodehome_list
++        def meter(*a, **kw):
++            value = original(*a, **kw)
++            return None if value is None else Pair(value)
++        m._nodehome_list = meter
++        cfg = m._nodehome_config(root, b"{}", from_snapshot=True)
++        marked = m._nodehome_mark_note_content(root, groups, "docs/kg-knowledge", route_cfg=cfg)
++        gc.collect()
++        check(f"清單快取/{commits}:所有候選仍被辨識",
++              all(g["route_tests"] == {"scripts/test_checks.py"} for g in marked))
++        check(f"清單快取/{commits}:存活版本有界且返回釋放",
++              peak[0] <= 3 and not alive, f"peak={peak[0]},alive={len(alive)},calls={count[0]}")
++        check(f"清單快取/{commits}:線性相鄰版本只讀一次",
++              count[0] == commits + 1, f"calls={count[0]},expected={commits + 1}")
++
++
++def t_nodehome_optional_test_index_changed():
++    """檢查期間暫存區已撤回的測試不能繼續當寫回證據;穩定索引及工作樹變更對照保持。"""
++    import json
++    for opt in (False, True):
++        for mode in ("index-change", "stable", "worktree-only"):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check.py", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            _nh_file(root, "tests/check.py", "x = 2\n")
++            home.write_text(home.read_text() + "\nWHY: synthetic staged evidence case.\n")
++            _nh_git(root, "add", ".")
++            before = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
++            check(f"索引證據/{opt}/{mode}:現場三項一起staged",
++                  {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(before))
++            shim = ("import runpy,sys,json,subprocess\nfrom pathlib import Path\n"
++                    f"namespace=runpy.run_path({GRAPHCTL!r});g=namespace['main'].__globals__\n"
++                    "original=g['_nodehome_route_tests'];fired=[]\n"
++                    "def route(root,*args,**kwargs):\n"
++                    "    if not fired:\n"
++                    f"        mode={mode!r}\n"
++                    "        if mode=='index-change':\n"
++                    "            permissions,kind,oid,path=subprocess.check_output(['git','ls-tree','HEAD','tests/check.py'],cwd=root,text=True).split()\n"
++                    "            subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
++                    "        elif mode=='worktree-only':\n"
++                    "            (Path(root)/'tests/check.py').write_text('x = 99\\n')\n"
++                    "        paths=subprocess.check_output(['git','diff','--cached','--name-only'],cwd=root,text=True).splitlines()\n"
++                    "        fired.append({'mode':mode,'test_staged':'tests/check.py' in paths})\n"
++                    "    return original(root,*args,**kwargs)\n"
++                    "g['_nodehome_route_tests']=route\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=namespace['main']();print('INDEX-EVIDENCE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], text=True, capture_output=True)
++            marker = next((line.split("INDEX-EVIDENCE:", 1)[1] for line in q.stderr.splitlines()
++                           if line.startswith("INDEX-EVIDENCE:")), "[]")
++            fired = json.loads(marker)
++            check(f"索引證據/{opt}/{mode}:注入確實發生且暫存區現場符合模式",
++                  len(fired) == 1 and fired[0] == {"mode": mode, "test_staged": mode != "index-change"}, q.stderr)
++            correct = (q.returncode == 1 and "Systems/TestHome" in q.stderr
++                       and "不是任何一支改動檔的家" in q.stderr) if mode == "index-change" else q.returncode == 0
++            check(f"索引證據/{opt}/{mode}:只拒收已撤回的測試證據", correct, q.stdout + q.stderr)
++            after = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
++            check(f"索引證據/{opt}/{mode}:檢查未改寫暫存區",
++                  ("tests/check.py" in after) == (mode != "index-change"), str(after))
++
++
++def t_nodehome_optional_test_index_aba():
++    """索引讀取途中改動再還原，也只能採信捕獲的版本；普通/-O保留合法及非法路由。"""
++    import json
++    for opt in (False, True):
++        for valid, inject in ((False, False), (False, True), (True, True)):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check"], body="test context")
++            _nh_commit(root, "baseline")
++            seed = "#!/usr/bin/env python3\nx = 2\n" if valid else "x = 2\n"
++            _nh_file(root, "tests/check", seed)
++            _nh_file(root, "src/a.py", "x = 2\n")
++            home.write_text(home.read_text() + "\nWHY: synthetic staged ABA reproduction.\n")
++            _nh_git(root, "add", ".")
++            label = f"索引ABA/{opt}/{valid}/{inject}"
++            check(label + ":原始索引種子成立", _nh_git(root, "show", ":tests/check").stdout == seed)
++            transient = "x = 99\n" if valid else "#!/usr/bin/env python3\nx = 99\n"
++            shim = ("import runpy,sys,json,subprocess\n"
++                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_route_tests'];fired=[]\n"
++                    "def route(root,*args,**kwargs):\n"
++                    f"    if {inject!r} and not fired:\n"
++                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check'],cwd=root,text=True).split()\n"
++                    f"        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input={transient.encode()!r}).decode().strip()\n"
++                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check'],cwd=root,check=True)\n"
++                    "        changed=subprocess.check_output(['git','show',':tests/check'],cwd=root,text=True)\n"
++                    "        try:result=original(root,*args,**kwargs)\n"
++                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check'],cwd=root,check=True)\n"
++                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "        fired.append({'restored':before==after,'transient':changed,'borrowed':'tests/check' in result});return result\n"
++                    "    return original(root,*args,**kwargs)\n"
++                    "g['_nodehome_route_tests']=route\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=ns['main']();print('ABA:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
++            marker = next((line[4:] for line in q.stderr.splitlines() if line.startswith("ABA:")), "[]")
++            events = json.loads(marker)
++            check(label + ":真實索引注入及還原成立",
++                  len(events) == (1 if inject else 0) and (not inject or
++                  (events[0]["restored"] is True and events[0]["transient"] == transient)), q.stderr)
++            check(label + ":只借原始版本的測試證據", not inject or
++                  (len(events) == 1 and events[0]["borrowed"] is valid), q.stderr)
++            check(label + ":只依原始版本判斷",
++                  q.returncode == (0 if valid else 1) and (valid or ("Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr)), q.stdout + q.stderr)
++            check(label + ":檢查後索引內容不變", _nh_git(root, "show", ":tests/check").stdout == seed)
++
++
++def t_nodehome_optional_test_tree_capture_failure():
++    """捕獲索引樹失敗時，不借額外測試；正式程式自己的寫回退路保持。"""
++    import json
++    for opt in (False, True):
++        for test_home_writeback in (False, True):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check.py", "x = 0\n")
++            production = _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            _nh_file(root, "tests/check.py", "x = 2\n")
++            target = home if test_home_writeback else production
++            target.write_text(target.read_text() + "\nWHY: synthetic snapshot failure control.\n")
++            _nh_git(root, "add", ".")
++            label = f"索引捕獲失敗/{opt}/{test_home_writeback}"
++            check(label + ":合法測試確實在索引", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
++            shim = ("import runpy,sys,json\n"
++                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_git'];fired=[]\n"
++                    "def git(root,*args,**kwargs):\n"
++                    "    if args==('write-tree',):fired.append(list(args));return None\n"
++                    "    return original(root,*args,**kwargs)\n"
++                    "g['_nodehome_git']=git\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=ns['main']();print('CAPTURE:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
++            marker = next((line[8:] for line in q.stderr.splitlines() if line.startswith("CAPTURE:")), "[]")
++            check(label + ":捕獲失敗確實注入", json.loads(marker) == [["write-tree"]], q.stderr)
++            expected = (q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr) if test_home_writeback else q.returncode == 0
++            check(label + ":只撤回額外測試、不改正式程式退路", expected, q.stdout + q.stderr)
++            check(label + ":索引內容不變", _nh_git(root, "show", ":tests/check.py").stdout == "x = 2\n")
++
++
++def t_nodehome_optional_test_captured_owner_isolation():
++    """另一篇真的測試家不能替途中偽造的本篇about_code背書。"""
++    original = _nh_node
++    added = []
++
++    def node(root, name, *args, **kwargs):
++        if name == "TestHome" and kwargs.get("about") == []:
++            original(root, "OtherHome", about=["tests/check.py"], body="actual other owner unchanged")
++            added.append(root)
++        return original(root, name, *args, **kwargs)
++
++    namespace = globals()
++    namespace["_nh_node"] = node
++    try:
++        t_nodehome_optional_test_input_snapshots()
++    finally:
++        namespace["_nh_node"] = original
++    check("另一個測試家:普通/-O宣告案例各確實新增", len(added) == 2, str(added))
++    for root in added:
++        old = _nh_git(root, "show", "HEAD:docs/kg-knowledge/Systems/OtherHome.md")
++        staged = _nh_git(root, "show", ":docs/kg-knowledge/Systems/OtherHome.md")
++        check("另一個測試家:起點與索引合法宣告保持原樣",
++              old.returncode == staged.returncode == 0 and old.stdout == staged.stdout
++              and "tests/check.py" in staged.stdout, old.stdout + staged.stdout)
++
++
++def t_nodehome_optional_test_input_snapshots():
++    """額外測試證據的設定、歸屬與檔案模式皆不能借用途中改動又還原的索引。"""
++    import json
++    for opt in (False, True):
++        for mode in ("config", "declaration", "file-mode"):
++            cfg = {"node_home": {"mode": "on", "ignore": ["tests/check.py"]}} if mode == "config" else None
++            root = _nh_repo(cfg)
++            _nh_file(root, "src/a.py", "x = 0\n")
++            test = _nh_file(root, "tests/check.py", "x = 0\n")
++            if mode == "file-mode":
++                test.unlink(); test.symlink_to("../src/a.py")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=[] if mode == "declaration" else ["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            if mode == "file-mode":
++                test.unlink(); test.symlink_to("../src/a.py.changed")
++            else:
++                _nh_file(root, "tests/check.py", "x = 2\n")
++            home.write_text(home.read_text() + "\nWHY: synthetic captured input case.\n")
++            _nh_git(root, "add", ".")
++            target = ".lumos/config.json" if mode == "config" else "docs/kg-knowledge/Systems/TestHome.md"
++            if mode == "config":
++                replacement = '{"node_home":{"mode":"on","ignore":[]}}'
++                (root / target).write_text(replacement)   # 迫使既有 reader 走索引而非相同工作樹捷徑
++            elif mode == "declaration":
++                replacement = home.read_text().replace("about_code: []", "about_code:\n  - tests/check.py")
++                home.write_text(replacement)
++            else:
++                replacement = ""
++            label = f"索引輸入快照/{opt}/{mode}"
++            staged = _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()
++            check(label + ":程式與測試及家一起staged", {"src/a.py", "tests/check.py", "docs/kg-knowledge/Systems/TestHome.md"} <= set(staged))
++            shim = ("import runpy,sys,json,subprocess\n"
++                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;fired=[];counts=[];mode={mode!r};target={target!r};replacement={replacement.encode()!r}\n"
++                    "def mutate(root,read):\n"
++                    "    before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "    path='tests/check.py' if mode=='file-mode' else target\n"
++                    "    entry=subprocess.check_output(['git','ls-files','-s',path],cwd=root,text=True).split()\n"
++                    "    oid=entry[1] if mode=='file-mode' else subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=replacement).decode().strip()\n"
++                    "    permissions='100644' if mode=='file-mode' else entry[0]\n"
++                    "    subprocess.run(['git','update-index','--cacheinfo',permissions,oid,path],cwd=root,check=True)\n"
++                    "    try:out=read()\n"
++                    "    finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],path],cwd=root,check=True)\n"
++                    "    after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "    seen=(out[0].get(path)=='100644') if mode=='file-mode' else out==replacement\n"
++                    "    fired.append({'restored':before==after,'seen_transient':seen});return out\n"
++                    "original_reader=g['_nodehome_reader'];original_list=g['_nodehome_list']\n"
++                    "def factory(root,where,*a,**kw):\n"
++                    "    read=original_reader(root,where,*a,**kw)\n"
++                    "    def wrapped(p):\n"
++                    "        if mode!='file-mode' and where=='index' and p==target and not fired:return mutate(root,lambda:read(p))\n"
++                    "        return read(p)\n"
++                    "    return wrapped\n"
++                    "def listing(root,where,*a,**kw):\n"
++                    "    if where=='index':counts.append(where)\n"
++                    "    if mode=='file-mode' and where=='index' and len(counts)==2 and not fired:return mutate(root,lambda:original_list(root,where,*a,**kw))\n"
++                    "    return original_list(root,where,*a,**kw)\n"
++                    "g['_nodehome_reader']=factory;g['_nodehome_list']=listing\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=ns['main']();print('SNAPSHOT:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
++            marker = next((line[9:] for line in q.stderr.splitlines() if line.startswith("SNAPSHOT:")), "[]")
++            check(label + ":真實索引輸入已變動並還原", json.loads(marker) == [{"restored": True, "seen_transient": True}], q.stderr)
++            check(label + ":不採信暫時輸入而誤放路由",
++                  q.returncode == 1 and "Systems/TestHome" in q.stderr and "不是任何一支改動檔的家" in q.stderr, q.stdout + q.stderr)
++
++
++def t_nodehome_optional_test_fixed_change_set():
++    """捕獲樹後短暫出現的測試變動不能借為寫回證據；真正測試變動仍可用。"""
++    import json
++    for opt in (False, True):
++        for changed in (False, True):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check.py", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            if changed:
++                _nh_file(root, "tests/check.py", "x = 2\n")
++            home.write_text(home.read_text() + "\nWHY: fixed change-set control.\n")
++            _nh_git(root, "add", ".")
++            label = f"固定變更集合/{opt}/{changed}"
++            seed = "x = 2\n" if changed else "x = 0\n"
++            check(label + ":原始測試變動符合模式",
++                  ("tests/check.py" in _nh_git(root, "diff", "--cached", "--name-only").stdout.splitlines()) == changed)
++            shim = ("import runpy,sys,json,subprocess\n"
++                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_changes'];fired=[]\n"
++                    "def changes(root,base,tip):\n"
++                    "    if tip=='index' and not fired:\n"
++                    "        before=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "        entry=subprocess.check_output(['git','ls-files','-s','tests/check.py'],cwd=root,text=True).split()\n"
++                    "        oid=subprocess.check_output(['git','hash-object','-w','--stdin'],cwd=root,input=b'x = 99\\n').decode().strip()\n"
++                    "        subprocess.run(['git','update-index','--cacheinfo',entry[0],oid,'tests/check.py'],cwd=root,check=True)\n"
++                    "        try:result=original(root,base,tip)\n"
++                    "        finally:subprocess.run(['git','update-index','--cacheinfo',entry[0],entry[1],'tests/check.py'],cwd=root,check=True)\n"
++                    "        after=subprocess.check_output(['git','ls-files','-s','-z'],cwd=root)\n"
++                    "        fired.append({'restored':before==after,'transient_listed':any('tests/check.py' in (old,new) for _,old,new in result)});return result\n"
++                    "    return original(root,base,tip)\n"
++                    "g['_nodehome_changes']=changes\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=ns['main']();print('FIXED-CHANGES:'+json.dumps(fired),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
++            marker = next((line[len("FIXED-CHANGES:"):] for line in q.stderr.splitlines()
++                           if line.startswith("FIXED-CHANGES:")), "[]")
++            check(label + ":真實變動已注入且還原",
++                  json.loads(marker) == [{"restored": True, "transient_listed": True}], q.stderr)
++            check(label + ":只借捕獲樹的真實變動",
++                  q.returncode == (0 if changed else 1) and (changed or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
++            check(label + ":測試索引未被改寫", _nh_git(root, "show", ":tests/check.py").stdout == seed)
++
++
++def t_nodehome_optional_test_each_source_config():
++    """刪除的測試按起點自己的設定分類，不用終點設定把兩份非法來源拼成合法。"""
++    import json
++    for opt in (False, True):
++        for old_ignored, new_ignored in ((True, False), (False, True), (True, True)):
++            root = _nh_repo({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if old_ignored else []}})
++            _nh_file(root, "src/a.py", "x = 0\n")
++            test = _nh_file(root, "tests/check.py", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            home = _nh_node(root, "TestHome", about=["tests/check.py"], body="test context")
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            test.unlink()
++            (root / ".lumos/config.json").write_text(json.dumps({"node_home": {"mode": "on", "ignore": ["tests/check.py"] if new_ignored else []}}))
++            home.write_text(home.read_text() + "\nWHY: independent source config control.\n")
++            _nh_git(root, "add", ".")
++            label = f"各版設定/{opt}/{old_ignored}/{new_ignored}"
++            check(label + ":刪除現場成立", "D\ttests/check.py" in _nh_git(root, "diff", "--cached", "--name-status").stdout)
++            check(label + ":起終設定確實不同或同為忽略",
++                  json.loads(_nh_git(root, "show", "HEAD:.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if old_ignored else [])
++                  and json.loads(_nh_git(root, "show", ":.lumos/config.json").stdout)["node_home"]["ignore"] == (["tests/check.py"] if new_ignored else []))
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), GRAPHCTL,
++                                "home", "check", "--staged", "--repo", str(root)], capture_output=True, text=True)
++            check(label + ":各版各自合法後才聯集",
++                  q.returncode == (1 if old_ignored else 0) and (not old_ignored or "Systems/TestHome" in q.stderr), q.stdout + q.stderr)
++
++
++def t_nodehome_optional_test_declaration_read_limits():
++    """補助路由的筆記重讀有單筆、整批與共用截止；超限只撤回新宣告證據。"""
++    import json
++    for opt in (False, True):
++        for mode in ("normal", "single", "total", "deadline"):
++            root = _nh_repo()
++            _nh_file(root, "src/a.py", "x = 0\n")
++            _nh_file(root, "tests/check.py", "x = 0\n")
++            _nh_node(root, "Production", about=["src/a.py"], body="production context")
++            homes = [_nh_node(root, "TestHome", about=[], body="test context")]
++            if mode == "total":
++                homes.extend(_nh_node(root, f"Other{i}", about=[], body="test context") for i in range(44))
++            _nh_commit(root, "baseline")
++            _nh_file(root, "src/a.py", "x = 2\n")
++            _nh_file(root, "tests/check.py", "x = 2\n")
++            pad = "x" * (300 * 1024 if mode == "single" else 200 * 1024 if mode == "total" else 0)
++            for home in homes:
++                home.write_text(home.read_text().replace("about_code: []", "about_code:\n  - tests/check.py")
++                                + "\nWHY: captured declaration limit control.\n" + pad)
++            _nh_git(root, "add", ".")
++            label = f"宣告讀取上限/{opt}/{mode}"
++            check(label + ":新增宣告確實入索引",
++                  "  - tests/check.py" in _nh_git(root, "show", ":docs/kg-knowledge/Systems/TestHome.md").stdout)
++            shim = ("import runpy,sys,json,time\n"
++                    f"ns=runpy.run_path({GRAPHCTL!r});g=ns['main'].__globals__;original=g['_nodehome_cat_blobs_capped'];events=[]\n"
++                    "def capped(root,specs,max_bytes,timeout=60,max_total_bytes=None,deadline=None):\n"
++                    "    relevant=any(s.endswith('/Systems/TestHome.md') for s in specs)\n"
++                    "    if not relevant:return original(root,specs,max_bytes,timeout=timeout,max_total_bytes=max_total_bytes,deadline=deadline)\n"
++                    "    old_sizes=g['_nodehome_cat_sizes'];old_clock=time.monotonic;shift=[0];fired=[]\n"
++                    "    def sizes(*args,**kwargs):\n"
++                    "        out=old_sizes(*args,**kwargs)\n"
++                    f"        if {mode!r}=='deadline':shift[0]=10;fired.append(True)\n"
++                    "        return out\n"
++                    "    remaining=None if deadline is None else deadline-old_clock()\n"
++                    "    try:\n"
++                    "        g['_nodehome_cat_sizes']=sizes;time.monotonic=lambda:old_clock()+shift[0]\n"
++                    "        out=original(root,specs,max_bytes,timeout=timeout,max_total_bytes=max_total_bytes,deadline=deadline)\n"
++                    "    finally:g['_nodehome_cat_sizes']=old_sizes;time.monotonic=old_clock\n"
++                    "    events.append({'per_file':max_bytes,'total':max_total_bytes,'remaining':remaining,'expired':bool(fired),'read_count':0 if out is None else sum(x is not None for x in out)});return out\n"
++                    "g['_nodehome_cat_blobs_capped']=capped\n"
++                    f"sys.argv=[{GRAPHCTL!r},'home','check','--staged','--repo',{str(root)!r}]\n"
++                    "rc=ns['main']();print('ROUTE-LIMITS:'+json.dumps(events),file=sys.stderr);sys.exit(rc or 0)\n")
++            q = subprocess.run([sys.executable, *(["-O"] if opt else []), "-c", shim], capture_output=True, text=True)
++            marker = next((line[len("ROUTE-LIMITS:"):] for line in q.stderr.splitlines()
++                           if line.startswith("ROUTE-LIMITS:")), "[]")
++            events = json.loads(marker)
++            check(label + ":批次上限及共用截止實際接上",
++                  len(events) == 1 and 0 < events[0]["per_file"] <= 256 * 1024
++                  and 0 < (events[0]["total"] or 0) <= 8 * 1024 * 1024
++                  and 0 < (events[0]["remaining"] or 0) <= 5, q.stderr)
++            check(label + ":截止或大小上限確實生效", len(events) == 1 and
++                  ((mode == "deadline" and events[0]["expired"] and events[0]["read_count"] == 0)
++                   or (mode == "single" and events[0]["read_count"] == 0)
++                   or (mode == "total" and 0 < events[0]["read_count"] < len(homes))
++                   or (mode == "normal" and events[0]["read_count"] == 1)), q.stderr)
++            check(label + ":只借完整可信的宣告證據",
++                  q.returncode == (0 if mode == "normal" else 1) and (mode == "normal" or "不是任何一支改動檔的家" in q.stderr), q.stdout + q.stderr)
++
++
+ def t_nodehome_test_tag_only_edit_is_not_write_back():
+     """[只換測試綁定不算寫說明 S1][S3] 同一個提交改了程式、另一篇只換測試綁定(新出現的名稱指得到真測試)→ 不算寫說明,
+     寫回落點與「有寫回時改動檔要有家」都不擋。
+     出身:rtb 2026-10-03 改測試名後,另一篇筆記只把 [test:] 換成新名就被擋,測試檔當不了家、沒有合法出口(rtb 第三輪提案 D2)。
+     翻紅釘:內容比對不拿掉綁定 → ①②③⑨紅;新名稱不核對真測試 → ④⑥紅;test-gone 不核對上一版綁過 → ⑤紅。"""
+     print("t_nodehome_test_tag_only_edit_is_not_write_back")
+     root = _nh_tag_repo()
+     _nh_node(root, "B", about=["src/b.py"], summary="KEY:b 的規則 [test:test_old] [test:test_keep]",
+              body="實作在 `src/b.py`。\n- [S1] 當 b 收到空值時應回 0 [test:test_old]\n- [S2] 另一條 [test:test_drop]")
+     _nh_commit(root, "init")

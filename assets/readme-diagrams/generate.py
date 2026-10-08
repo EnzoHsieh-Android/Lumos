@@ -80,28 +80,81 @@ def scene(name,lang,title,kicker,h,body,desc):
 '''
 
 def map_scene(en):
-    title="Context, action, feedback." if en else "讓每次改動，都接得上下一次"
+    title="Read the code first. Write back after." if en else "先讀程式碼，改完寫回"
     b=path("M74 156H674Q720 156 720 205V491Q720 544 669 544H89Q40 544 40 495V217Q40 156 74 156","coral",2.5,"12 8",True)
-    b+=rect(203,129,354,50,"#111f34","#6a4c56",16)
-    b+=text(380,162,"evals · Evaluate & calibrate" if en else "evals · 評測與校準",23,"coral","middle",600)
+    b+=rect(170,129,420,50,"#111f34","#6a4c56",16)
+    b+=text(380,162,"Outer loop: checking the process" if en else "外圈：定期檢查這套流程",22,"coral","middle",600)
     b+=path("M40 205H199V229","coral",2)+arrow(199,230,"down","coral")
-    b+=rect(58,185,275,29,"#122038","none",6)+text(68,207,"Calibration feeds back" if en else "校準後回到開發",21,"coral")
+    b+=rect(58,185,275 if en else 168,29,"#122038","none",6)+text(68,207,"Adjust rules on drift" if en else "有走樣就調整規則",21,"coral")
     b+=path("M572 452V535","coral",2)+arrow(572,543,"down","coral")
-    b+=rect(421,481,286,33,"#101c30","none",6)+text(565,505,"Each round leaves records" if en else "每輪留下紀錄",21,"coral","middle")
-    # Clear clockwise station loop; text never fades.
+    # Label sits left of the downward connector so the line never crosses the text.
+    b+=rect(*((276,481,284,33) if en else (404,481,156,33)),"#101c30","none",6)+text(552,505,"Records go to the outer loop" if en else "每輪紀錄送進外圈",19 if en else 21,"coral","end")
+    # Clockwise station loop. Each hand-off is labelled with what travels along it.
     b+=path("M324 271H428","blue",2,"12 8",True)+arrow(437,271,"right","blue")
-    b+=path("M563 309V366","purple",2,"12 8",True)+arrow(563,372,"down","purple")
+    b+=text(380,258,"notes + diff" if en else "筆記＋改動",15,"blue","middle",550)
+    b+=path("M563 311V366","purple",2,"12 8",True)+arrow(563,372,"down","purple")
+    b+=text(575,346,"findings" if en else "各自的意見",15,"purple",weight=550)
     b+=path("M436 410H332","gold",2,"12 8",True)+arrow(324,410,"left","gold")
-    b+=path("M197 372V319","green",2,"12 8",True)+arrow(197,309,"up","green")
-    nodes=[(70,231,"01", "Notes" if en else "圖譜","Retrieve context" if en else "查回相關脈絡","green","search"),
-           (436,231,"02","Dispatch" if en else "派工","Independent views" if en else "不同角度獨立看","blue","fork"),
-           (436,372,"03","Review" if en else "審查","Challenge evidence" if en else "檢查改動與依據","purple","shield"),
-           (70,372,"04","Write-back" if en else "寫回","Keep the reasoning" if en else "留下決策與驗證","gold","note")]
-    for x,y,n,t,s,c,i in nodes:
+    b+=text(380,432,"outcomes" if en else "處理結果",15,"gold","middle",550)
+    b+=path("M197 372V319","green",2,"12 8",True)+arrow(197,311,"up","green")
+    b+=text(185,346,"next time" if en else "下次查得到",15,"green","end",550)
+    nodes=[(70,231,"01","Read code" if en else "讀程式碼","Notes add the why" if en else "筆記補上理由","green"),
+           (436,231,"02","Dispatch" if en else "分派審查","Reviewers by risk" if en else "依風險派 AI 審查","blue"),
+           (436,372,"03","Review & resolve" if en else "審查與處理","Every finding logged" if en else "每條意見記下怎麼處理","purple"),
+           (70,372,"04","Write back" if en else "寫回筆記","Trade-offs + checks" if en else "留下取捨與驗證","gold")]
+    for x,y,_n,t,s,c in nodes:
         b+=rect(x,y,254,80)+text(x+22,y+32,t,26,c,weight=600)+text(x+22,y+60,s,19)
-    b+=text(380,346,"LUMOS",14,"muted","middle",650)
-    b+=text(380,589,"Development inside. Evaluation around it." if en else "內圈做開發，外圈評估並校準。",22,"muted","middle")
-    return title,620,b,"Four stations form a development loop. Records flow to evals; calibration returns to development. Decorative paths animate; all labels remain visible."
+    b+=text(380,589,"Git hooks check the parts that can be checked mechanically." if en else "提交與推送時，Git hooks 檢查能機械判斷的部分。",21,"muted","middle")
+    return title,620,b,"Four steps around each change: read the code and add context from notes, dispatch reviewers by risk, review and record every finding, write back. Each hand-off is labelled. An outer loop records each round and checks the process itself. Decorative paths animate; all labels remain visible."
+
+def case_scene(en):
+    title = "How review changed the fix" if en else "審查如何改變修法"
+    b = text(36, 136, "Installed tool files caused a false high-risk rating." if en else "工具掃到自己安裝的檔案、讓小專案首次推送被誤判高風險", 18, "muted")
+    widths = (210, 214, 216) if en else (202, 202, 236)
+    headings = ("Skip the directory", "Match filenames", "Compare content") if en else ("整個目錄免查", "只認檔名", "比對內容")
+    labels = ("Round 1 / 4 reviewers", "Round 3 / reviewers", "Result / fingerprints") if en else ("第 1 輪 / 4 位各自抓到", "第 3 輪 / 審查員抓到", "結果 / 內容指紋")
+    lines = (
+        ("User code in the same", "directory is skipped too."),
+        ("Same-named user files", "and modified tool files", "still escape checks."),
+        ("Record hashes at install.", "Skip only listed filenames", "with matching content.", "Changed files get checked."),
+    ) if en else (
+        ("同目錄的使用者程式", "也跟著逃過檢查"),
+        ("使用者自己的同名檔", "或改過的工具檔", "仍然會漏查"),
+        ("安裝時記下雜湊值", "檔名在清單上且內容相同", "才免查、改過就照掃"),
+    )
+    x = 36
+    for i, (width, heading, label, rows, color) in enumerate(zip(widths, headings, labels, lines, ("coral", "purple", "green"))):
+        b += rect(x, 164, width, 280)
+        b += text(x + 16, 193, f"0{i + 1}", 14, color, weight=650)
+        b += text(x + 16, 228, heading, 20 if en else 24, color, weight=600)
+        b += text(x + 16, 262, label, 14, color, weight=600)
+        for j, row in enumerate(rows):
+            b += text(x + 16, 299 + j * 25, row, 15 if en else 17, "muted")
+        if i == 2:
+            b += text(x + 16, 414, "Accidents, not abuse." if en else "防不小心、不防刻意繞過", 15 if en else 16, "green", weight=600)
+        if i < 2:
+            b += path(f"M{x + width + 3} 237H{x + width + 20}", color, 2)
+            b += arrow(x + width + 21, 237, "right", color)
+        x += width + 24
+    footer = (
+        "The list lives in the project. Editing it too can bypass the check.",
+        "At the three-round limit, a human approved round 4. Its fixes were not reviewed again.",
+        "All 46 findings were handled before committing; many concerned other issues,",
+        "including list-field writes and concurrency.",
+    ) if en else (
+        "指紋清單也放在專案裡、連清單一起改就能繞過。",
+        "跑滿 3 輪上限後、由人決定加開第 4 輪。第 4 輪的修正未再受審。",
+        "四輪 46 條意見全部處理後才提交、其中不少與此事無關、",
+        "例如清單欄位寫入與併發問題。",
+    )
+    for i, row in enumerate(footer):
+        b += text(36, 478 + i * 26, row, 15 if en else 17, "muted")
+    desc = (
+        "Three fixes linked by review findings. Round 1: four reviewers independently found that skipping the tool directory also skipped user code. Round 3: exact filenames still missed same-named user files and modified tool files. The final fix records hashes at installation and skips only listed filenames with identical content. The project-local list can itself be changed, so this prevents accidents, not deliberate bypass. A human approved round 4 after the three-round limit; its fixes were not reviewed again. All 46 findings, many unrelated, were handled before committing."
+        if en else
+        "三格因果圖。第 1 輪有 4 位審查員各自抓到整個目錄免查會漏掉使用者程式。第 3 輪抓到只認精確檔名仍漏掉使用者同名檔與改過的工具檔。最後在安裝時記下雜湊值、僅檔名在清單上且內容相同才免查。專案內的清單也能被改、防不小心、不防刻意繞過。跑滿 3 輪由人加開第 4 輪、其修正未再受審。四輪 46 條包含不少無關問題、全部處理後才提交。"
+    )
+    return title, 588, b, desc
 
 def first_scene(en):
     title="A conversation becomes a change." if en else "從一句需求，到有依據的改動"
@@ -239,8 +292,53 @@ def dispatch_scene(en):
     b+=text(564,234,"Findings" if en else "意見",22,"purple",weight=600)
     for y,t,c in [(290,"Adopt" if en else "採納","green"),(332,"Reject" if en else "駁回","muted"),(374,"Follow up" if en else "待處理","gold")]:
         b+=circle(567,y-6,4,C[c])+text(582,y,t,23,c)
-    b+=text(380,473,"Reviewers do not see one another’s reports." if en else "各席彼此看不到報告；一致不等於一定正確。",22,"muted","middle")
+    b+=text(380,473,"Finders don't see one another's reports; agreement isn't proof." if en else "找問題的審查看不到彼此的報告；意見一致也不等於一定對。",22,"muted","middle")
     return title,505,b,"The same change, context, rules and evidence fan out to independent review perspectives, then findings are accounted for as adopted, rejected or needing follow-up. Seats are illustrative."
+
+def risk_review_scene(en):
+    title="Review weight follows risk" if en else "依風險決定審多重"
+    # Column A: what goes in and how risk is judged.
+    b=badge(36,121,"INPUT" if en else "輸入","green",110)
+    b+=rect(36,166,150,262)
+    b+=rect(37,167,4,260,C["green"],"none",2)
+    b+=text(56,204,"New code" if en else "新增的程式碼",20 if en else 21,"green",weight=600)
+    b+=text(56,240,"Scanned with" if en else "用固定規則",17,"muted")
+    b+=text(56,264,"fixed rules" if en else "掃高風險寫法",17,"muted")
+    b+=text(56,318,"e.g." if en else "例如：",15,"muted")
+    b+=text(56,342,"write w/o txn" if en else "寫入沒包交易",15)
+    b+=text(56,366,"HTTP, no timeout" if en else "HTTP 沒設逾時",15)
+    # Column B: two branches.
+    b+=path("M186 196H214","line",2)+arrow(221,196)
+    b+=path("M186 330H214","coral",2)+arrow(221,330,color="coral")
+    b+=rect(222,166,344,58)
+    b+=text(242,202,"Ordinary change" if en else "一般改動",19,"blue",weight=600)
+    b+=text(546,202,"1 to 2 reviewers" if en else "派 1 到 2 位審查",17,"muted","end")
+    b+=rect(222,240,344,188,"url(#panel)","#6a4c56")
+    b+=text(242,272,"High risk" if en else "高風險",19,"coral",weight=600)
+    b+=text(546,272,"7+ per round" if en else "每輪至少 7 位",17,"muted","end")
+    cells=[("Correctness" if en else "正確性","ink"),("Concurrency" if en else "併發與資源","ink"),("Edges & input" if en else "邊界與輸入","ink"),
+           ("Rules & notes" if en else "規則與筆記","ink"),("Architecture" if en else "架構一致","purple"),("Security" if en else "資安","gold"),
+           ("Generalist" if en else "通才找問題","ink"),("Spec, if any" if en else "對照規格","muted")]
+    for i,(label,c) in enumerate(cells):
+        # 最後一排不滿三格時置中,不讓右邊空一塊
+        last=(len(cells)-1)//3
+        pad=(3-(len(cells)-last*3))*54 if i//3==last else 0
+        x=236+(i%3)*108+pad
+        y=288+(i//3)*40
+        b+=rect(x,y,100,32,"#182a42","none" if c!="coral" else C["coral"],9,.8)
+        b+=text(x+50,y+21,label,13 if en else 14,c,"middle",550)
+    b+=text(242,418,"Spec = only with a finalized design spec" if en else "對照規格 = 有定稿的設計規格才派",13,"muted")
+    # Column C: every finding gets a disposition.
+    b+=path("M566 196H578V297M566 330H578V297","line",2)+path("M578 297H584","line",2)+arrow(591,297)
+    b+=badge(574,121,"OUTPUT" if en else "每條意見的去向","purple",150)
+    b+=rect(592,166,132,262)
+    for y,label,c in [(236,"Fixed" if en else "修掉","green"),(290,"Waived" if en else "附理由不修","gold"),(344,"Disproved" if en else "證明不成立","muted")]:
+        b+=circle(610,y-6,4,C[c])+text(622,y,label,18,c)
+    # Bottom: the one mechanical rule plus the independence caveat.
+    b+=rect(36,452,688,72,"#13243a","#334c68",14)
+    b+=text(56,482,"High-risk push is blocked without a review outcome." if en else "高風險推送前必須留下審查結果：通過，或寫明理由的跳過。",18 if en else 19,weight=600)
+    b+=text(56,508,"Finders don't see each other's reports; agreement isn't proof." if en else "找問題的審查彼此看不到報告，意見一致也不等於一定對。",16,"muted")
+    return title,556,b,"A risk scan of new code sends ordinary changes to one or two reviewers and high-risk changes to at least seven per round: five problem-finders, architecture and security, plus a spec check when a finalized spec exists. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome."
 
 def review_scene(en):
     title="Different checks. Shared evidence." if en else "從規則、判斷到行為，交叉看同一個改動"
@@ -276,30 +374,38 @@ def writeback_scene(en):
     return title,513,b,"A change’s design decisions, review dispositions and verification results are written to relevant notes. A later session retrieves them; records are updated, rechecked or marked stale as needed."
 
 def evals_scene(en):
-    title="Evaluate the process, not just the patch." if en else "評測工作台：流程本身也要被檢查"
-    b=badge(36,122,"REVIEW REPLAY" if en else "審查回放","purple",en and 205 or 175)
-    b+=badge(36,314,"RETRIEVAL EVAL" if en else "查詢評測","blue",en and 205 or 175)
-    for y,t,s,c in [(174,"Review records" if en else "審查紀錄","Findings + dispositions" if en else "發現與處置","purple"),
-                    (366,"Labelled set" if en else "標註題目","Retrieval reference" if en else "查詢參照","blue")]:
-        b+=document(36,y,248,104,t,s,c)
-    b+=path("M284 225H319","purple",2)+arrow(326,225,"right","purple")
-    b+=path("M284 417H319","blue",2)+arrow(326,417,"right","blue")
-    b+=rect(329,174,241,296)
-    b+=text(350,211,"Compare" if en else "回放與比較",en and 25 or 24,weight=600)
-    b+=path("M349 235H550","#344b69",1)
-    b+=text(449,272,"Verdicts" if en else "判定有沒有改變？",en and 24 or 22,"purple","middle")
-    b+=rect(351,291,92,41,"#252b47","none",10)+rect(456,291,92,41,"#252b47","none",10)
-    b+=text(397,319,"Prior" if en else "舊案",20,"muted","middle")+text(502,319,"Replay" if en else "回放",20,"purple","middle")
-    b+=path("M349 350H550","#344b69",1)
-    b+=text(449,389,"Retrieval results" if en else "查詢結果怎麼變？",en and 22 or 22,"blue","middle")
-    b+=path("M355 419H414M355 432H393M463 419H541M463 432H523","blue",4)
-    b+=path("M570 322H603","coral",2.5)+arrow(611,322,"right","coral")
-    b+=rect(609,287,115,74,"#322d3b","#a67476",14)
-    b+=text(666,332,"Calibrate" if en else "校準",en and 22 or 27,"coral","middle",600)
-    b+=path("M669 361V410","coral",2)
-    b+=path("M669 410V498H160V484","coral",2,"8 7")+arrow(160,479,"up","coral")
-    b+=rect(270,484,331,34,"#101d30","none",8)+text(435,508,"Feed subsequent rounds" if en else "帶回後續流程，再留下新紀錄",en and 22 or 20,"coral","middle")
-    return title,548,b,"Two evaluation streams: replay review records to compare verdicts, and use human-labelled retrieval questions to compare results. Comparisons inform calibration. This conceptual workbench shows no measured scores or guaranteed improvement."
+    title = "The toolkit itself is checked every week" if en else "每週自動檢查這套工具本身"
+    b = rect(36, 122, 688, 290)
+    b += text(60, 160, "Scheduled in Lumos's own repo" if en else "在 Lumos 自己的 repo 排程執行", 18, "muted")
+    rows = [
+        (180, "Review replay" if en else "審查回放", "Recompute past verdicts; they should not change" if en else "用現在的判定程式重算舊案，結論應該不變", "purple"),
+        (236, "Retrieval exam" if en else "查詢考卷", "Labelled questions: are the right notes found?" if en else "人工標好的題目：查得到該看的筆記嗎？", "blue"),
+        (292, "Scenario probes" if en else "情境探針", "Plain requests: does the AI check notes itself?" if en else "用口語出題：AI 會不會自己去查筆記？", "green"),
+        (348, "Missed notes" if en else "推播漏網", "Did notes shown before edits miss relevant ones?" if en else "改檔前送上的筆記，有沒有漏掉該看的？", "gold"),
+    ]
+    for y, label, desc, color in rows:
+        b += chip(60, y, label, color, 160 if en else 130)
+        b += text(236 if en else 206, y + 25, desc, 18 if en else 19)
+    b += path("M380 414V446", "coral", 2) + arrow(380, 452, "down", "coral")
+    boxes = [
+        (36, "Record every week" if en else "每週留下紀錄"),
+        (280, "Alert on regressions" if en else "退步或沒過，通知人"),
+        (524, "Fix rules or add tests" if en else "修規則或補測試"),
+    ]
+    for x, label in boxes:
+        b += rect(x, 460, 200, 64, "#322d3b", "#a67476", 14)
+        b += text(x + 100, 499, label, 17 if en else 20, "coral", "middle", 600)
+    for x in (236, 480):
+        b += path(f"M{x} 492H{x + 36}", "coral", 2) + arrow(x + 43, 492, "right", "coral")
+    b += path("M624 524V566H20V266H28", "coral", 2, "8 7") + arrow(34, 266, "right", "coral")
+    b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
+    b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
+    desc = (
+        "Four checks run on a schedule in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+        if en else
+        "在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄，退步或沒過就通知人，修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+    )
+    return title, 650, b, desc
 
 def swiss_cheese_scene(en):
     title="Five imperfect layers. Fewer escapes." if en else "五層都有洞，但問題更難一路穿過"
@@ -311,10 +417,10 @@ def swiss_cheese_scene(en):
     b+='<g data-kind="aligned-escape">'+path("M590 132V540","coral",3,"9 8",True)+'</g>'
     rows=[
       (150,"01","Risk tiering" if en else "風險分級","purple",[(318,164,12),(448,188,9),(590,175,10),(676,161,8)]),
-      (230,"02","Multi-seat review" if en else "多席審查","blue",[(287,246,9),(405,265,13),(522,240,8),(590,255,10),(680,270,11)]),
+      (230,"02","AI reviewers" if en else "多個 AI 審查","blue",[(287,246,9),(405,265,13),(522,240,8),(590,255,10),(680,270,11)]),
       (310,"03","Disposition gate" if en else "放行規則","coral",[(305,340,12),(468,324,9),(590,335,10),(690,348,8)]),
       (390,"04","External rules" if en else "外部規則","gold",[(280,404,8),(390,430,12),(505,405,10),(590,415,10),(675,432,9)]),
-      (470,"05","Failure-proven tests" if en else "測試翻紅","green",[(315,495,11),(445,480,8),(545,510,12),(590,495,10),(690,482,8)]),
+      (470,"05","Tests proven red" if en else "測試翻紅","green",[(315,495,11),(445,480,8),(545,510,12),(590,495,10),(690,482,8)]),
     ]
     for i,(y,n,label,c,holes) in enumerate(rows):
         mask=f"cheese-{i}"
@@ -343,10 +449,65 @@ def swiss_cheese_scene(en):
             en and 19 or 21,"muted","middle")
     return title,700,b,"Five Swiss-cheese defence layers: risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail when behaviour is removed. A rare aligned escape enters an escape ledger, which feeds new mechanical rules or tests. Intercept and escape ledgers make precision and recall observable; the model does not claim zero defects."
 
+def drift_scene(en):
+    title = "From writing notes to pushing code" if en else "從寫下筆記到推送程式碼"
+    b = path("M57 147V550", "blue", 2)
+    stages = [
+        (122, 231, "Writing notes" if en else "寫入時", "green"),
+        (373, 132, "At commit" if en else "提交時", "blue"),
+        (525, 359, "Before push" if en else "推送前", "purple"),
+    ]
+    for number, (y, height, label, color) in enumerate(stages, 1):
+        b += circle(57, y + 25, 20, "#14243a", C[color])
+        b += text(57, y + 32, str(number), 20, color, "middle", 600)
+        b += rect(94, y, 630, height)
+        b += text(114, y + 32, label, 23, color, weight=600)
+    for y in (363, 515):
+        b += arrow(57, y, "down", "blue")
+
+    b += text(114, 185, "Keep reasons the code can't explain." if en else "只記程式碼看不出來的理由", 17)
+    b += text(114, 211, "Don't copy fields, defaults or flows." if en else "欄位、預設值、流程不抄進筆記", 17, "muted")
+    b += text(114, 241, "New code line refs / unsourced state descriptions" if en else "新增程式行號 / 沒註明來源的現況描述", 16)
+    b += badge(542 if en else 584, 219, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
+    b += text(114, 272, "'No refund page yet': suggest a revisit condition" if en else "新寫「還沒有退款頁面」這類句子：建議改成回頭條件", 16)
+    b += badge(566 if en else 584, 250, "Warn only" if en else "只提醒", "gold", 138 if en else 120)
+    b += text(114, 303, "Revisit condition mid-sentence or in a table" if en else "回頭條件寫在句子中間或表格裡", 16)
+    b += badge(542 if en else 584, 281, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
+    b += text(114, 334, "Other content needs rules and review." if en else "其餘內容靠守則和審查", 16, "muted")
+
+    rows = [
+        (434, "Code changed, no notes touched" if en else "改了程式、一篇筆記都沒動", "Always block" if en else "一定擋下", "coral"),
+        (473, "New source file, no assigned note" if en else "新增程式檔、沒指定負責的筆記", "Block" if en else "擋下", "coral"),
+        (586, "Note still cites a removed name or path" if en else "名稱或路徑消失、筆記還在提", "Warn only" if en else "只提醒", "gold"),
+        (625, "Test exists, note says 'test to be added'" if en else "測試已上線、筆記還說之後補測試", "Block" if en else "擋下", "coral"),
+        (664, "Linked note was deleted" if en else "連到的另一篇筆記已被刪除", "Always block" if en else "一定擋下", "coral"),
+        (703, "Revisit condition met (refund page now exists)" if en else "回頭條件成立了（退款頁面做出來了）", "Block" if en else "擋下", "coral"),
+        (742, "A rule's retire condition is met" if en else "規則寫的撤除條件成立了", "Block" if en else "擋下", "coral"),
+        (781, "Bound test not found (projects can block)" if en else "綁的測試名稱找不到（專案可設成擋）", "Warn only" if en else "只提醒", "gold"),
+        (820, "Links a closed note, still says 'pending'" if en else "連到已收尾的筆記、同一句還寫待定", "Warn only" if en else "只提醒", "gold"),
+        (859, "Code and its note changed: AI rereads the note" if en else "程式和管它的筆記一起改：請 AI 重讀整篇舊句", "Warn only" if en else "只提醒", "gold"),
+    ]
+    for y, label, status, color in rows:
+        b += text(114, y, label, 16)
+        b += badge(566 if en else 584, y - 22, status, color, 138 if en else 120)
+
+    b += text(94, 916, "Other blocks can be set to warn by the project." if en else "除了兩項一定擋下的檢查、其餘可由專案改成提醒", 16, "muted")
+    b += text(94, 943, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
+    desc = (
+        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, removed names or paths still in notes, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, a note changed together with the code it manages gets a reminder to have AI reread the whole note for lines the change made untrue, while outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block. Missing note updates and broken links always block. Other blocks can be set to warn. Content accuracy needs review and people."
+        if en else
+        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、消失的名稱或路徑、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒、程式和管它的筆記同一次都改了時提醒交給 AI 重讀整篇找出不成立的舊句、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下。改程式沒動筆記和連結斷掉一定擋、其餘可改成提醒。內容正確性仍靠審查和人。"
+    )
+    return title, 974, b, desc
+
+
 SCENES={"map":("00 / THE SYSTEM",map_scene),
+        "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
         "first-change":("START / NATURAL LANGUAGE",first_scene),
         "graph-demo":("01 / KNOWLEDGE",graph_scene),
+        "case-review":("CASE / REAL REVIEW",case_scene),
         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
+        "risk-review":("02-03 / REVIEW BY RISK",risk_review_scene),
         "review-overview":("03 / REVIEW",review_scene),
         "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
         "writeback-overview":("04 / WRITE-BACK",writeback_scene),
