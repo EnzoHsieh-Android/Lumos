@@ -14,7 +14,7 @@
 用法:
   governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
 """
-import argparse, datetime, errno, fcntl, hashlib, html, json, os, stat, statistics, subprocess, sys, tempfile, time
+import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +55,8 @@ def _atomic_write_text(path, content):
 # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
 # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
 sys.path.insert(0, str(ROOT / "scripts"))
-from scenario_probe import LIMIT_RE, LUMOS_CALL_RE  # noqa: E402  ★單一實作來源★
+from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,
+                            attempt_ledger_remaining, ProbeAttemptLedgerError)  # noqa: E402  ★單一實作來源★
 
 
 def load_ids(files):
@@ -158,7 +159,7 @@ def invalid_batch_evidence(d, filename_arm=None):
 def _result_json_files(out_dir):
     """只讀本工具兩組逐題或舊 shard 的正式結果，不把旁邊的 JSON 備註當探針。"""
     return sorted(p for p in Path(out_dir).glob("*.json")
-                  if p.name.startswith(("with-", "without-")))
+                  if re.fullmatch(r"(?:with|without)-(?:q-.+|shard[0-9]+)\.json", p.name))
 
 
 def load_results(out_dir):
@@ -229,27 +230,15 @@ def runs_in_window(out_dir, hours=5.0, now=None):
     return n
 
 
-def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None):
+def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None, attempt_ledger=None):
     if stop is not None and stop.is_set():
         return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
-    if max_per_window:
-        remaining = max_per_window - runs_in_window(out_dir)
-        if remaining <= 0:
-            return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
-        n = min(n, remaining)
     stamp = f"{time.strftime('%H%M%S')}-{time.time_ns()}"
     qid_key = hashlib.sha256(qid.encode("utf-8")).hexdigest()[:16]
     out = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.json"
     candidate = out.with_suffix(".candidate")
     log = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.log"
     pending = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.pending"
-    cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
-           f"--exact-id={qid}", "--runs", str(n), "--arm", arm, "--out", str(candidate),
-           "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
-    if max_per_window:
-        cmd += ["--max-attempts", str(remaining)]
-    if model:
-        cmd += ["--model", model]
     # 先留下保守事故標記；父程序被殺時，子程序可能還在跑，不能讓下批吃進其結果。
     marker = {"arm": arm, "qid": qid, "results": [], "fatal": True,
               "inconclusive": True, "skills_health_bad": [], "failure_type": "unfinished",
@@ -259,6 +248,30 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
     _atomic_write_text(pending, json.dumps(marker, ensure_ascii=False))
     t0 = time.time()
     with open(log, "w", encoding="utf-8") as lf:
+        if max_per_window:
+            ledger = Path(attempt_ledger or default_attempt_ledger()).absolute()
+            try:
+                remaining = attempt_ledger_remaining(ledger, max_per_window)
+            except ProbeAttemptLedgerError as exc:
+                lf.write(f"用量帳事故: {exc}\n")
+                lf.flush()
+                _atomic_write_text(out, json.dumps({**marker, "failure_type": "attempt-ledger", "reason": str(exc)}, ensure_ascii=False))
+                if stop is not None:
+                    stop.set()
+                return (arm, qid, f"★探針批次失效★ 用量帳不可判——停止派工，檢查 {log}")
+            if remaining <= 0:
+                pending.unlink()
+                lf.write("持久窗口額度已滿或初始化冷卻中，未啟動子程序\n")
+                return (arm, qid, f"skip 持久窗口已達 {max_per_window} 場上限或冷卻中，之後再補")
+            n = min(n, remaining)
+        cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
+               f"--exact-id={qid}", "--runs", str(n), "--arm", arm, "--out", str(candidate),
+               "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
+        if max_per_window:
+            cmd += ["--max-attempts", str(remaining), "--max-per-window", str(max_per_window),
+                    "--attempt-ledger", str(ledger)]
+        if model:
+            cmd += ["--model", model]
         lf.write("$ " + " ".join(cmd) + "\n")
         lf.flush()
         try:
@@ -472,7 +485,8 @@ def _run_locked_batch(a, files, ids, date, out_dir):
             if stop.is_set():
                 break
             _, _, st = run_job(arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit,
-                               a.model, a.max_per_window, stop)
+                               a.model, a.max_per_window, stop,
+                               **({"attempt_ledger": a.attempt_ledger} if a.attempt_ledger else {}))
             print(f"  {arm} {qid}: {st}", flush=True)
         live_failed = stop.is_set()
     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
@@ -504,7 +518,8 @@ def main():
                     help="live 探針只准 1 路；恢復並行前須驗證事故時可取消在途模型")
     ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
     ap.add_argument("--max-per-window", type=int, default=50,
-                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
+                    help="本機共用帳五小時內最多記幾次模型啟動意圖(含失敗與重試)；0=停用記帳，不管其他工具或帳號總量")
+    ap.add_argument("--attempt-ledger", default="", help="本機持久用量帳路徑；各批次共用同一帳，首次初始化冷卻五小時；切換前先確認舊探針已停止")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--max-turns", type=int, default=18)
     ap.add_argument("--model", default="")
@@ -512,6 +527,8 @@ def main():
     ap.add_argument("--arms", default=",".join(ARMS))
     ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
     a = ap.parse_args()
+    if a.max_per_window < 0:
+        ap.error("--max-per-window 不可為負")
     if not a.merge_only and a.workers != 1:
         ap.error("live 探針目前只准 --workers 1；--merge-only 保留舊參數相容")
     arms = a.arms.split(",")

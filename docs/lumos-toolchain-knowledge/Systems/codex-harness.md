@@ -45,6 +45,7 @@ verified_by:
   - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+  - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -119,3 +120,5 @@ PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互�
 PITFALL: 只把外層 `--runs` 縮到窗口剩餘額度，探針內用量上限重試仍可額外啟動模型。r2 反例用真 `main` 流程證明兩次重試後須停止第三次呼叫並把批次標失效；`--max-attempts` 在每次模型呼叫前扣額，`--exact-id=值` 容許合法短線開頭題號。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-concurrency-v2.md` 與 Python argparse 官方長選項語法；防回歸 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。調整重試或選題時從實際模型啟動數重驗。
 
 PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫，外層失敗批次與隔日重跑仍會重得滿額，故不可把單次子程序上限稱作五小時帳號上限。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 G10–G11，重現指令在 `r3-intake.md`。改外層額度來源或重試行為時，先跑「失敗／歸檔／同窗口重跑」與「跨午夜」兩組反例。
+
+WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或解析器故障返還已消耗名額；採 SQLite 原子交易沿用 Python 標準庫、維持零第三方依賴。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]

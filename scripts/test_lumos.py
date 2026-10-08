@@ -37594,7 +37594,7 @@ def t_probe_boundary_review4_existing_poison_stops_dispatch():
         outdir = root / "out"; outdir.mkdir()
         (outdir / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "fatal": True,
             "inconclusive": True, "results": [{"id": "a", "passed": True, "reason": "ok"}]}))
-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
                 "--arms", "with", "--out-dir", str(outdir)]
         with patch.object(ablation.sys, "argv", argv), \
              patch.object(ablation, "run_job", side_effect=lambda arm, qid, n, *_args: (arm, qid, "stub")) as runner, \
@@ -37644,7 +37644,7 @@ def t_probe_boundary_review4_missing_output_main():
     with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-missing-main-") as td:
         root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"q"}\n')
         outdir = root / "out"
-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
                 "--arms", "with", "--out-dir", str(outdir)]
         calls = []
         def run(cmd, **_kwargs):
@@ -37670,7 +37670,7 @@ def t_probe_boundary_postreview_launch_exception_summary():
             root = Path(td); q = root / "q.jsonl"
             q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
             outdir = root / "out"; launched = []
-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
                     "--arms", "with", "--out-dir", str(outdir)]
             def run(cmd, **_kwargs):
                 if cmd == ["claude", "--version"]:
@@ -37721,7 +37721,7 @@ def t_probe_boundary_postreview_serial_dispatch():
         root = Path(td); q = root / "q.jsonl"
         q.write_text('{"id":"a","prompt":"a"}\n{"id":"b","prompt":"b"}\n')
         outdir = root / "out"; calls = []
-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--workers", "1",
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--workers", "1",
                 "--arms", "with", "--out-dir", str(outdir)]
         def runner(arm, qid, n, files, timeout, max_turns, output, wait_on_limit, model, max_per_window, stop):
             calls.append(qid)
@@ -37738,7 +37738,7 @@ def t_probe_boundary_postreview_serial_dispatch():
         q = Path(td) / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
         for value in ("0", "-1", "2"):
             outdir = Path(td) / ("out-" + value)
-            argv = ["ablation", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", value, "--out-dir", str(outdir)]
             rejected = False
             with patch.object(ablation.sys, "argv", argv), \
                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
@@ -37751,7 +37751,7 @@ def t_probe_boundary_postreview_serial_dispatch():
             check("live 派工拒絕無效 workers 且不改寫目錄 " + value,
                   rejected and runner.call_count == 0 and not outdir.exists(),
                   (value, rejected, runner.call_count, outdir.exists()))
-        outdir = Path(td) / "merge"; argv = ["ablation", "--questions", str(q),
+        outdir = Path(td) / "merge"; argv = ["ablation", "--max-per-window", "0", "--questions", str(q),
             "--workers", "2", "--merge-only", "--out-dir", str(outdir)]
         with patch.object(ablation.sys, "argv", argv), \
              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
@@ -37761,7 +37761,7 @@ def t_probe_boundary_postreview_serial_dispatch():
         check("純合併不因 workers 舊參數誤擋", merge_rc == 0 and runner.call_count == 0,
               (merge_rc, runner.call_count))
         default_out = Path(td) / "default"
-        default_argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+        default_argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
                         "--out-dir", str(default_out)]
         with patch.object(ablation.sys, "argv", default_argv), \
              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
@@ -37797,7 +37797,7 @@ def t_probe_boundary_postreview_cross_process_lock():
         child.start()
         try:
             held = ready.wait(5)
-            argv = ["ablation", "--questions", str(q), "--workers", "1", "--arms", "with",
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--workers", "1", "--arms", "with",
                     "--runs", "1", "--out-dir", str(outdir)]
             with patch.object(ablation.sys, "argv", argv), \
                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
@@ -37837,7 +37837,7 @@ def t_probe_boundary_postreview_lockfile_replacement():
         child = multiprocessing.get_context("fork").Process(target=hold_lock); child.start()
         try:
             held = ready.wait(5)
-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
                     "--out-dir", str(outdir)]
             with patch.object(ablation.sys, "argv", argv), \
                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
@@ -37869,7 +37869,7 @@ def t_probe_boundary_postreview_legacy_lock_interop():
         child = multiprocessing.get_context("fork").Process(target=hold_legacy_lock); child.start()
         try:
             held = ready.wait(5)
-            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
                     "--out-dir", str(outdir)]
             with patch.object(ablation.sys, "argv", argv), \
                  patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
@@ -37918,7 +37918,7 @@ def t_probe_boundary_postreview_symlink_outputs():
         for name in ("meta.json", "summary.json", "summary.md"):
             victim = root / (name + ".victim"); victim.write_text("KEEP-ME")
             (outdir / name).symlink_to(victim); victims[name] = victim
-        argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
         with patch.object(ablation.sys, "argv", argv), \
              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -37942,7 +37942,7 @@ def t_probe_boundary_postreview_long_qid():
         root = Path(td); qid = "q" * 220; q = root / "q.jsonl"
         q.write_text(json.dumps({"id": qid, "prompt": "a"}) + "\n")
         outdir = root / "out"
-        argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
+        argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--runs", "1", "--arms", "with",
                 "--out-dir", str(outdir)]
         def run(cmd, **_kwargs):
             if cmd == ["claude", "--version"]:
@@ -38081,8 +38081,11 @@ def t_probe_boundary_formal_dispatch_fail_closed():
                            "fatal": False, "inconclusive": False, "skills_health_bad": []}
             Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps(result_data))
             return type("Result", (), {"returncode": 0})()
-        with patch.object(ablation.subprocess, "run", side_effect=count) as run:
-            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50)
+        ledger = outdir / "usage.sqlite3"
+        ablation.attempt_ledger_remaining(ledger, 50, now=1000)
+        with patch.object(ablation.subprocess, "run", side_effect=count) as run, \
+             patch.object(ablation.time, "time", return_value=20000):
+            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50, attempt_ledger=ledger)
         check("單一工作不可超過窗口剩餘額度", run.call_count == 1 and
               int(run.call_args.args[0][run.call_args.args[0].index("--runs") + 1]) <= 50
               and run.call_args.args[0][run.call_args.args[0].index("--max-attempts") + 1] == "50",
@@ -38158,7 +38161,7 @@ def t_probe_boundary_formal_input_validation():
             check("非法題號入口須拒絕 " + repr(qid), not ids, ids)
         q.write_text('{"id":"a"}\n')
         for arms in ("with,with", "../escaped", "with,"):
-            argv = ["ablation", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
             rejected = False
             with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
                 try:
@@ -38187,7 +38190,7 @@ def t_probe_boundary_formal_input_validation():
         old_cwd = Path.cwd()
         try:
             os.chdir(root)
-            argv = ["ablation", "--questions", str(q), "--arms", "with", "--runs", "1",
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--arms", "with", "--runs", "1",
                     "--out-dir", "relative/out"]
             with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=fake_run), \
                  contextlib.redirect_stdout(io.StringIO()):
@@ -38199,7 +38202,7 @@ def t_probe_boundary_formal_input_validation():
               (rc, captured))
         meta = root / "relative/out/meta.json"
         meta.write_text(json.dumps({"date": "2025-01-02", "claude_version": "historical"}))
-        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
+        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
                                                 "--out-dir", "relative/out"]), \
              patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -38213,7 +38216,7 @@ def t_probe_boundary_formal_input_validation():
               and json.loads(meta.read_text())["claude_version"] == "historical"
               and "historical" in (meta.parent / "summary.md").read_text(), meta.read_text())
         meta.write_text("{}")
-        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
+        with patch.object(ablation.sys, "argv", ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only",
                                                 "--out-dir", "relative/out"]), \
              patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -38365,6 +38368,43 @@ def t_probe_boundary_formal_retry_budget():
               (rc, len(calls), data))
 
 
+def t_probe_boundary_persistent_ledger_stop_contracts():
+    """從 CLI 結果與模型啟動數驗拒絕與重試，預期不重抄用量算法。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_persistent_stop")
+    with tempfile.TemporaryDirectory(prefix="probe-ledger-stop-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; ledger = root / "usage.sqlite3"
+        mod.attempt_ledger_remaining(ledger, 1, now=1000)
+        mod.claim_model_attempt(ledger, 1, now=20000)
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--runs", "2",
+                "--wait-on-limit", "300", "--max-per-window", "1", "--attempt-ledger", str(ledger), "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod.time, "time", return_value=20001), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text()); row = data["results"][0]
+        check("claim 被拒絕產生整批不可判而非計分失敗", rc == 3 and data["fatal"] and data["inconclusive"]
+              and data["valid_total"] == 0 and len(data["results"]) == 1, data)
+        check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
+              and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
+        # 供應商回上限且最後一次批次名額已花掉：直接停止，不能先等 300 秒。
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
+                "--max-attempts", "1", "--out", str(out)]
+        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                   "secs": 0, "limit_hit": True, "source_evidence": None}
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=limited) as model, \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
+              and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
+
+
 def t_probe_boundary_fourth_round_result_contracts():
     """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
     import tempfile, json, importlib.util
@@ -38439,7 +38479,7 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         outdir = root / "out"; outdir.mkdir(); meta = outdir / "meta.json"
         for raw in (b'{"date":', b'[]', b'{}'):
             meta.write_bytes(raw)
-            argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+            argv = ["ablation", "--max-per-window", "0", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
             with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                  patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not launch model")):
                 rc = ablation.main()

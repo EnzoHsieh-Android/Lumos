@@ -28,6 +28,7 @@ verified_by:
   - "[[Verification/2026-10-04_探針停派與失敗留痕]]"
   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
   - "[[Verification/2026-10-08_消融結果與恢復控制驗證]]"
+  - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
 ---
 # ablation-lumos-first
 
@@ -74,3 +75,11 @@ PITFALL: r3 的額度測試在空目錄給 `max_per_window=50`，就算把「剩
 PITFALL: 第三輪證實同題超額結果可灌高通過率、錯型 calls 可被當成沒用工具，事故文字也漏了未完成檔。修後保留原始資料但每題只採前 runs 個有效場；calls 逐項驗兩個字串；事故列三個恢復路徑且先確認無在途探針。出處 [[Verification/2026-10-08_消融結果與恢復控制驗證]]；防回歸 [test:t_probe_boundary_fourth_round_result_contracts][test:t_probe_boundary_fourth_round_recovery_recipe]。
 
 PITFALL: 純合併把壞meta覆寫成來源未知會抹掉救援證據，報表不一致題清單、健康檔名與版本來源也曾漏轉義。修後metadata只作輸入，未知只呈現在報表，來源byte及metadata符號連結保留；摘要仍原子取代且不寫到連結目標。出處 [[Verification/2026-10-08_消融結果與恢復控制驗證]]；防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_postreview_symlink_outputs]。
+
+PITFALL: 可封存的結果檔與日期目錄不是硬額度來源；失效候選被排除計分後，舊計數會讓已啟動模型的額度消失。[根因:把計分視圖混當啟動用量帳][出處:code-probe-postreview-dispatch-ledger r3 G10/G11][test:test_attempt_ledger_failed_launch_archive_and_cross_date_keep_quota] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+
+PITFALL: 備註檔與探針同用組別前綴，健康掃描曾將操作者備註視為事故，造成無效停批。[根因:僅依組別前綴辨認正式結果][出處:code-probe-postreview-dispatch-ledger r3 G14][test:test_ablation_notes_are_not_results_but_legacy_shards_are]
+
+WHY: 用量帳控制案例保留在既有探針消融測試群，使用外部模型邊界假替身與暫存帳，避免驗證本身觸碰真模型或使用者額度。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+
+WHY: 用量帳控制從真探針 CLI 與消融派工入口驗輸出協定及副作用計數，不用重抄計數公式來製造綠燈。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]

@@ -708,7 +708,86 @@ def _codex_hook_trace(thread_id):
     return {"hooks_fired": fired, "stop_block_seen": stop_seen}
 
 
-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None):
+class ProbeAttemptLedgerError(RuntimeError):
+    """持久額度帳不可判；不是模型行為失敗。"""
+
+
+def default_attempt_ledger():
+    return Path.home() / ".local/state/lumos/probe-attempts.sqlite3"
+
+
+def _attempt_ledger_transaction(path, limit, claim=False, now=None):
+    """同一交易核帳並選擇追加啟動意圖；不從可歸檔結果推算用量。"""
+    if type(limit) is not int or limit < 0:
+        raise ProbeAttemptLedgerError("窗口上限必須為非負整數")
+    if limit == 0:
+        return True if claim else None
+    import math
+    now = time.time() if now is None else now
+    if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
+        raise ProbeAttemptLedgerError("用量帳時鐘不可判")
+    conn = None
+    try:
+        import sqlite3
+        path = Path(path).absolute()
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ProbeAttemptLedgerError("用量帳必須為一般檔案")
+            fresh = False
+        except FileNotFoundError:
+            fresh = True
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
+        conn.execute("BEGIN IMMEDIATE")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if fresh and version == 0:
+            conn.execute("CREATE TABLE ledger_meta (id INTEGER PRIMARY KEY CHECK(id=1), initialized_at REAL NOT NULL)")
+            conn.execute("CREATE TABLE launch_intents (claimed_at REAL NOT NULL CHECK(typeof(claimed_at)='real' AND claimed_at>=0))")
+            conn.execute("CREATE INDEX intents_time ON launch_intents(claimed_at)")
+            conn.execute("INSERT INTO ledger_meta VALUES (1, ?)", (float(now),))
+            conn.execute("PRAGMA user_version=1")
+        elif version != 1:
+            raise ProbeAttemptLedgerError("用量帳版本或結構不可判")
+        meta = conn.execute("SELECT initialized_at FROM ledger_meta").fetchall()
+        if len(meta) != 1 or type(meta[0][0]) is not float or not math.isfinite(meta[0][0]):
+            raise ProbeAttemptLedgerError("用量帳初始化時間不可判")
+        initialized = meta[0][0]
+        latest = conn.execute("SELECT MAX(claimed_at) FROM launch_intents").fetchone()[0]
+        if latest is not None and (type(latest) is not float or not math.isfinite(latest)):
+            raise ProbeAttemptLedgerError("用量帳啟動時間不可判")
+        if now < max(initialized, latest if latest is not None else initialized):
+            raise ProbeAttemptLedgerError("時鐘早於已記用量時間，停止派工")
+        used = conn.execute("SELECT COUNT(*) FROM launch_intents WHERE claimed_at > ?", (now - 18000,)).fetchone()[0]
+        remaining = 0 if now < initialized + 18000 else max(0, limit - used)
+        if claim and remaining:
+            conn.execute("INSERT INTO launch_intents VALUES (?)", (float(now),))
+        conn.commit()
+        return bool(remaining) if claim else remaining
+    except (OSError, ImportError) as exc:
+        raise ProbeAttemptLedgerError(f"用量帳不可用: {type(exc).__name__}") from exc
+    except Exception as exc:
+        if isinstance(exc, ProbeAttemptLedgerError):
+            raise
+        raise ProbeAttemptLedgerError(f"用量帳交易失敗: {type(exc).__name__}") from exc
+    finally:
+        if conn is not None:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            finally:
+                conn.close()
+
+
+def attempt_ledger_remaining(path, limit, now=None):
+    return _attempt_ledger_transaction(path, limit, now=now)
+
+
+def claim_model_attempt(path, limit, now=None):
+    return _attempt_ledger_transaction(path, limit, claim=True, now=now)
+
+
+def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
@@ -733,6 +812,8 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
     t0 = time.time()
     instrument_fail = None   # 超時 / 非零退出 = 儀器例外,這場不算分(code-codex-s3 r1 外家 #3:半途已印期望指令也不能判過)
     truncated = False
+    if max_per_window and not claim_model_attempt(attempt_ledger or default_attempt_ledger(), max_per_window):
+        raise ProbeAttemptBudgetExceeded("本機持久窗口額度已用完，未啟動模型")
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
         out, err = r.stdout, r.stderr[-400:]
@@ -777,7 +858,7 @@ def _scenario_max_turns(sc, default):
         return default
 
 
-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None):
+def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
     max_turns = _scenario_max_turns(sc, max_turns)
     bad = _validate_scenario(sc)
     if bad:
@@ -811,6 +892,8 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
     t0 = time.time()
     timed_out = False
     returncode = 0
+    if max_per_window and not claim_model_attempt(attempt_ledger or default_attempt_ledger(), max_per_window):
+        raise ProbeAttemptBudgetExceeded("本機持久窗口額度已用完，未啟動模型")
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
         out = r.stdout
@@ -953,9 +1036,13 @@ def main():
                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
     ap.add_argument("--max-attempts", type=int, default=0,
                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
+    ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
+    ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
     a = ap.parse_args()
     if a.runs < 1:
         print("✗ --runs 至少 1", file=sys.stderr); return 2
+    if a.max_per_window < 0:
+        print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
     if a.max_attempts < 0:
         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
     if a.exact_id is not None and a.only:
@@ -1022,6 +1109,8 @@ def main():
     retained = None
     def run_at(workdir, token=None):
         extra = {"source_token": token} if token is not None else {}
+        if a.max_per_window:
+            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
     try:
@@ -1037,6 +1126,9 @@ def main():
                     attempt_model_secs = 0.0
                     setup_started = time.monotonic()
                     try:
+                        bad = _validate_scenario(sc)
+                        if bad:
+                            raise ValueError(bad)
                         if a.max_attempts and attempts_started >= a.max_attempts:
                             raise ProbeAttemptBudgetExceeded("模型嘗試額度已用完")
                         # baseline 已套用 arm；每場從它複製，不能讓前場或來源的後續修改滲入。
@@ -1060,7 +1152,7 @@ def main():
                                 raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
                     except Exception as e:
                         if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError,
-                                                          ProbeAttemptBudgetExceeded)):
+                                                          ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError)):
                             attempt_fatal = True
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
@@ -1113,6 +1205,17 @@ def main():
                         fatal = True
                         fatal_reason = res["reason"]
                     if res.get("limit_hit") and waited < a.wait_on_limit:
+                        try:
+                            exhausted = bool(a.max_attempts and attempts_started >= a.max_attempts)
+                            if a.max_per_window:
+                                exhausted = exhausted or attempt_ledger_remaining(Path(a.attempt_ledger or default_attempt_ledger()).absolute(), a.max_per_window) <= 0
+                            if exhausted:
+                                raise ProbeAttemptBudgetExceeded("重試前模型額度已用完，未等待或啟動模型")
+                        except (ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError) as exc:
+                            res.update(passed=False, fatal=True, limit_hit=False, reason=f"儀器例外: {type(exc).__name__}: {exc}")
+                            fatal = True
+                            fatal_reason = res["reason"]
+                            break
                         retried.append({"reason": res.get("reason"),
                                         "sandbox_secs": res["sandbox_secs"],
                                         "model_secs": res["model_secs"]})
