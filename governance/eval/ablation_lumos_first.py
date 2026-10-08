@@ -382,18 +382,18 @@ def merge(out_dir, expected_ids, runs):
             "question_class": classes, "class_counts": class_counts}
 
 
+# lumos 主程式 _PATH_SPECIAL_CATS 的同一組類別(C0/C1、雙向覆寫與零寬、行段分隔、代理字元);主程式是無副檔名的
+# 單檔 CLI,這裡不為一組常數載入整支,改由測試核對兩邊寫法一致(t_probe_boundary_fourth_round_report_and_provenance)。
+_SPECIAL_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs"))
+
+
 def render_md(s, meta):
     a, b = s["arms"]["with"], s["arms"]["without"]
     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
     def visible(ch):
-        # 不可列印字元寫成 ⟦U+XXXX⟧;標記字元 ⟦ 本身也照寫,原文因此一對一還原得回去,字面反斜線不必加倍
-        if ch == "⟦":
-            return "⟦U+27E6⟧"
-        if ch.isprintable():
-            return ch
-        if unicodedata.category(ch) == "Zs":
-            return " "                                   # 全形空白這類一般空白照空白顯示
-        return f"⟦U+{ord(ch):04X}⟧"
+        # 跟 lumos 主程式的 _kill_esc 同一套:控制、格式(雙向覆寫、零寬)、行段分隔、代理字元寫成看得見的 \uXXXX,
+        # 其餘照原樣。字面寫著 \u001b 的文字會跟真的控制字元呈現成同一個樣子,主程式已接受這個取捨,這裡不另起一套。
+        return f"\\u{ord(ch):04x}" if unicodedata.category(ch) in _SPECIAL_CATS else ch
     def text(x):
         raw = str(x).replace("\r", " ").replace("\n", " ")
         raw = "".join(visible(ch) for ch in raw)

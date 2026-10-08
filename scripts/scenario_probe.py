@@ -25,15 +25,51 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _euid():
-    """目前的有效使用者;單獨一個函式,測試才能只換掉這一處,不必改整個程序的 os 模組。"""
+    """目前的有效使用者;單獨一個函式,測試才能只換掉這一處,不必改整個程序的 os 模組
+    (代碼審 r6 架構席要求測試縫要窄;本專案別處直接呼叫 os.geteuid,這裡是刻意的例外)。"""
     return os.geteuid()
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NOCTTY = getattr(os, "O_NOCTTY", 0)
+
+
+def _open_char_device(path):
+    """開一個字元裝置來寫:不阻塞地開(檢查後被換成沒人讀的 FIFO 也不會卡住)、不跟隨連結、不把終端收成控制終端
+    (lumos 的終端確認早就為同一件事加 O_NOCTTY);開到的若已不是字元裝置就關掉報錯;最後改回阻塞,
+    終端讀得慢時才不會寫一半就 BlockingIOError。開跑前檢查與實際寫入共用這一個,兩邊判斷才不會分岔。"""
+    fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | _NOFOLLOW | _NOCTTY)
+    try:
+        if not stat.S_ISCHR(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "輸出位置在檢查後被換掉,已不是字元裝置", str(path))
+        os.set_blocking(fd, True)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_history(path):
+    """開歷史檔來追加:只收「只有一個名字的普通檔」與字元裝置。不跟隨連結、不阻塞(換成沒人讀的 FIFO 也不卡住)、
+    不收控制終端;開到的若是 FIFO、socket,或是有多個名字的普通檔(硬連結,可能連到別人的檔),關掉報錯。"""
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | _NOFOLLOW | _NOCTTY, 0o666)
+    try:
+        st = os.fstat(fd)
+        if stat.S_ISCHR(st.st_mode):
+            os.set_blocking(fd, True)
+        elif not (stat.S_ISREG(st.st_mode) and st.st_nlink == 1):
+            raise OSError(errno.EINVAL, "歷史檔位置不是只有一個名字的一般檔案(可能在檢查後被換掉)", str(path))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _output_target_problem(path, replace=True):
     """跑模型之前先看輸出位置寫不寫得出去;回問題描述或 None。replace=False 是追加用的歷史檔。
-    規則跟 _atomic_write_bytes 與歷史檔追加一一對應:取代模式下,字元裝置直接寫、其他非目錄的東西
-    (連結、FIFO、socket)會被換成普通檔;追加模式只收普通檔與字元裝置,其餘都會寫到別處或卡住。
-    要新建(或取代)時父目錄必須可寫。"""
+    規則跟 _atomic_write_bytes 與 _open_history 一一對應:取代模式下,字元裝置直接寫(這裡實際試開一次,
+    開不起來就停)、其他非目錄的東西(連結、FIFO、socket)會被換成普通檔;追加模式只收只有一個名字的普通檔與
+    字元裝置,其餘都會寫到別處或卡住。要新建(或取代)時父目錄必須可寫。"""
     path = Path(path)
     try:
         st = path.lstat()
@@ -45,11 +81,17 @@ def _output_target_problem(path, replace=True):
         if stat.S_ISDIR(st.st_mode):
             return f"{path} 是目錄"
         if stat.S_ISCHR(st.st_mode):
+            try:
+                os.close(_open_char_device(path))
+            except OSError as exc:              # 沒有控制終端時的 /dev/tty、沒寫入權的裝置……
+                return f"{path} 開不起來({exc.strerror})"
             return None
         if stat.S_ISREG(st.st_mode):
             if not os.access(path, os.W_OK):
                 return f"{path} 不可寫"
             if not replace:
+                if st.st_nlink != 1:
+                    return f"{path} 有多個名字(硬連結),追加會寫進別的名字指向的內容"
                 return None
         elif not replace:
             return f"{path} 不是一般檔案(符號連結、FIFO 或 socket),追加會寫到別處或卡住"
@@ -66,24 +108,20 @@ def _atomic_write_text(path, content):
 
 def _atomic_write_bytes(path, data):
     """以同目錄暫存檔原子取代目標,不跟隨既有目標的符號連結(消融腳本也 import 這一份,不另抄)。
-    暫存檔跟 lumos 的 _write_lf 一樣用 O_EXCL 加 0o666 建立,讓 umask 自己生效——★不把整個程序的
-    umask 設成 0 再設回來★,那一瞬間別的執行緒建的檔會拿到錯的權限。
+    暫存檔跟 lumos 的 _write_lf 一樣用 O_EXCL 建立、讓 umask 自己生效——★不把整個程序的 umask 設成 0 再設回來★,
+    那一瞬間別的執行緒建的檔會拿到錯的權限。
     既有普通檔只有「自己擁有、而且只有這一個名字」時才沿用它的權限位元(先前審查要求保留使用者刻意設的
     0640 這類權限);別人擁有的、或有多個名字(硬連結,可能是別人連到我某個寬權限檔)的,一律照新建檔。
-    既有目標是字元裝置(例如 /dev/null)時照舊直接寫入;FIFO、socket 這類照修前一樣換成普通檔(直接開
-    沒人讀的 FIFO 會永遠卡住)。既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
+    要沿用時暫存檔一建立就用那個權限(再被 umask 收窄也只會更嚴)、寫入前補回原值,內容不會先落在比原檔寬的暫存檔裡。
+    既有目標是字元裝置(例如 /dev/null)時照舊直接寫入(見 _open_char_device);FIFO、socket 這類照修前一樣換成普通檔
+    (直接開沒人讀的 FIFO 會永遠卡住)。既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
     path = Path(path)
     try:
         old = path.lstat()
     except FileNotFoundError:
         old = None
     if old is not None and stat.S_ISCHR(old.st_mode):
-        # 不阻塞地開,開到的若已經不是字元裝置(檢查後被換掉)就不寫
-        fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "wb") as fh:
-            if not stat.S_ISCHR(os.fstat(fd).st_mode):
-                raise OSError(errno.EINVAL, "輸出位置在檢查後被換掉,已不是字元裝置", str(path))
-            os.set_blocking(fd, True)
+        with os.fdopen(_open_char_device(path), "wb") as fh:
             fh.write(data)
         return
     if old is not None and stat.S_ISREG(old.st_mode) and not os.access(path, os.W_OK):
@@ -91,19 +129,22 @@ def _atomic_write_bytes(path, data):
     keep_mode = (stat.S_IMODE(old.st_mode) & 0o666
                  if old is not None and stat.S_ISREG(old.st_mode)
                  and old.st_uid == _euid() and old.st_nlink == 1 else None)
-    while True:
+    for _ in range(100):                        # 隨機名撞名機率極低;設上限跟專案其他 O_EXCL 迴圈一樣,防異常狀況空轉
         # 暫存檔名固定短,不帶目標檔名:目標檔名接近 255 bytes 上限時才不會超長
         tmp_path = path.with_name(f".probe-out-{os.getpid()}-{secrets.token_hex(4)}.tmp")
         try:
-            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o666)
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                         0o666 if keep_mode is None else keep_mode)
             break
         except FileExistsError:
             continue
+    else:
+        raise FileExistsError(errno.EEXIST, "連續 100 次都撞到既有的暫存檔名", str(path.parent))
     try:
         with os.fdopen(fd, "wb") as tmp:
-            tmp.write(data)
             if keep_mode is not None:
                 os.fchmod(tmp.fileno(), keep_mode)
+            tmp.write(data)
             tmp.flush()
             os.fsync(tmp.fileno())
         os.replace(tmp_path, path)
@@ -1386,9 +1427,7 @@ def main():
                                                        "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
                                                        "skills_health_bad": bad}, ensure_ascii=False, indent=1))
         if a.history:
-            hist_fd = os.open(a.history, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK
-                              | getattr(os, "O_NOFOLLOW", 0), 0o666)   # 跑的期間被換成連結或 FIFO 時報錯,不跟過去也不卡住
-            with os.fdopen(hist_fd, "a", encoding="utf-8") as hf:
+            with os.fdopen(_open_history(a.history), "a", encoding="utf-8") as hf:
                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
         if retained is not None:

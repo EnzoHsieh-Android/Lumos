@@ -57,6 +57,7 @@ verified_by:
   - "[[Verification/2026-10-05_背景快取命中清鎖驗證]]"
   - "[[Verification/2026-10-05_背景啟動失敗即時回報驗證]]"
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
+  - "[[Verification/持久用量帳第七輪審查修補驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -150,9 +151,11 @@ PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可�
 
 PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、字元裝置以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
 
-PITFALL: 第五輪的輸出修補自己又帶出三個洞：把 FIFO 也當裝置「直接寫」，沒人讀時整批跑完後永遠卡住（修前會換成普通檔，不會卡）；為了讓新檔照 umask，把整個程序的 umask 設成 0 再設回來，正是 lumos 自己的原子寫入原語註明否決的做法；開跑前檢查對歷史檔漏查父目錄可寫、FIFO 與檔名錯誤 [出處:code-probe-postreview-dispatch-ledger r6 CON6-01/ARCH6-01/COR6-01/BND6-02] [根因:新增「直接寫」分支時沒有逐一列出每種目標型別在取代與追加兩種模式下的行為，也沒先讀專案既有的原子寫入原語] [test:t_probe_boundary_fifth_round_output_edges]。現在的規則：取代模式只有字元裝置直接寫（不阻塞開檔、開到的不是字元裝置就不寫），FIFO、socket、連結都換成普通檔；追加模式只收普通檔與字元裝置；暫存檔跟 lumos 原語一樣用獨佔建立加 0o666 讓 umask 自己生效。證據 [[Verification/持久用量帳第六輪審查修補驗證]]。
+PITFALL: 第五輪的輸出修補自己又帶出三個洞：把 FIFO 也當裝置「直接寫」，沒人讀時整批跑完後永遠卡住（修前會換成普通檔，不會卡）；為了讓新檔照 umask，把整個程序的 umask 設成 0 再設回來，正是 lumos 自己的原子寫入原語註明否決的做法；開跑前檢查對歷史檔漏查父目錄可寫、FIFO 與檔名錯誤 [出處:code-probe-postreview-dispatch-ledger r6 CON6-01/ARCH6-01/COR6-01/BND6-02] [根因:新增「直接寫」分支時沒有逐一列出每種目標型別在取代與追加兩種模式下的行為，也沒先讀專案既有的原子寫入原語] [test:t_probe_boundary_fifth_round_output_edges]。規則由第七輪收斂，見下一條。證據 [[Verification/持久用量帳第六輪審查修補驗證]]。
 
-WHY: 原子寫入時，既有普通檔只有「自己擁有、而且只有一個名字」才沿用它的權限位元，新建、別人擁有或有多個名字的一律照 umask；這跟 lumos 原語對既有檔一律沿用權限不同 [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01、r6 SEC6-02/ARCH6-02 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但探針的輸出目錄可能是共用的：別人預先放好的寬權限檔、或連到我某個寬權限檔的硬連結若被沿用，替換後的結果檔會讓對方可寫；lumos 原語寫的是使用者自己的筆記庫，沒有這個威脅] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+WHY: 原子寫入時，既有普通檔只有「自己擁有、而且只有一個名字」才沿用它的權限位元，新建、別人擁有或有多個名字的一律照 umask；要沿用時暫存檔一建立就用那個權限、寫入前補回原值，內容不會先落在比原檔寬的暫存檔裡；這跟 lumos 原語對既有檔一律沿用權限不同 [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01、r6 SEC6-02/ARCH6-02 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但探針的輸出目錄可能是共用的：別人預先放好的寬權限檔、或連到我某個寬權限檔的硬連結若被沿用，替換後的結果檔會讓對方可寫；lumos 原語寫的是使用者自己的筆記庫，沒有這個威脅] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+
+PITFALL: 第六輪的修補留下四個相鄰的洞：字元裝置開檔沒帶 `O_NOCTTY`，在沒有控制終端的 session 裡寫進終端會把它收成控制終端；開跑前檢查對字元裝置一律放行，沒有控制終端時的 `/dev/tty` 或沒寫入權的裝置要整批跑完才失敗；要沿用 0600 時暫存檔先以 0644 寫入再收窄；歷史追加開檔後沒確認型別，跑的期間換成有人讀的 FIFO 或硬連結會寫過去 [出處:code-probe-postreview-dispatch-ledger r7 COR7-01/02、PLT7-01/02、CON7-01、BND7-01/02、SEC7-01、CTR7-01/04] [根因:同一個開檔規則在開跑前檢查、取代寫入、歷史追加三處各寫一次，修一處時其他兩處沒跟上] [test:t_probe_boundary_char_device_session,t_probe_boundary_fifth_round_output_edges]。現在三處共用兩個開檔函式：`_open_char_device`（不阻塞、不跟隨連結、不收控制終端、確認仍是字元裝置、改回阻塞）與 `_open_history`（只收只有一個名字的普通檔與字元裝置）；開跑前檢查對字元裝置實際試開一次；暫存檔一建立就用要沿用的權限。證據 [[Verification/持久用量帳第七輪審查修補驗證]]。
 ## 2026-10-05 背景啟動錯誤的派工提示
 
 [[Projects/背景啟動失敗即時回報_計劃]] 對同步啟動失敗新增獨立於逾時與建鎖錯誤的提示，是因為三者要求不同的人工處置；尤其不能讓事件帳把明確的啟動失敗算成 timeout 或成功。提示只說「本次背景未啟動」，同名鎖可能已被另一工作接手；原始例外不進派工詞，角色卡仍可附上。t_dispatch_lens_hook_spawn_error_notice 與 t_lens_stale_lock_reports_uncertainty 分別驗新舊分類。

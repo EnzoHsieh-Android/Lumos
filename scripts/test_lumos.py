@@ -43312,6 +43312,34 @@ def t_probe_boundary_fifth_round_output_contracts():
               and json.loads(out.read_text())["passed"] == 1, out.lstat())
 
 
+class _Hung(Exception):
+    """_guard_hang 用的「卡住了」;刻意不是 OSError(TimeoutError 是 OSError 的子類,會被受測程式或測試裡接 OSError 的地方吞成「正常報錯」)。"""
+
+
+class _guard_hang:
+    """暫時借 SIGALRM 抓卡住的呼叫;結束時把測試執行器原本的逾時鬧鐘還回去(借完就關掉,後面那段卡住就沒人管)。
+    用法:with _guard_hang(5) as hung: ...;卡住時 hung 變成非空、例外被吃掉。"""
+    def __init__(self, secs):
+        self.secs, self.hung = secs, []
+    def __enter__(self):
+        import signal, time
+        self._t0, self._prev = time.monotonic(), signal.alarm(0)
+        def _hang(*_a): raise _Hung("卡住")
+        self._old = signal.signal(signal.SIGALRM, _hang)
+        signal.alarm(self.secs)
+        return self.hung
+    def __exit__(self, et, ev, tb):
+        import signal, time
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, self._old)
+        if self._prev:
+            signal.alarm(max(1, self._prev - int(time.monotonic() - self._t0)))
+        if et is _Hung:
+            self.hung.append(True)
+            return True
+        return False
+
+
 def t_probe_boundary_fifth_round_output_edges():
     """輸出寫入的相鄰路徑:新檔權限照 umask、不沿用舊檔的寬權限、唯讀檔照舊拒絕、長檔名、裝置照寫;
     輸出或歷史位置有問題要在呼叫模型前擋下,不能整批跑完才炸(第五輪 r5 審查)。"""
@@ -43360,27 +43388,87 @@ def t_probe_boundary_fifth_round_output_edges():
             # 沒人讀的 FIFO:不能卡住,照修前一樣換成普通檔
             import signal
             fifo = work / "fifo.json"; os.mkfifo(fifo)
-            def _hang(*_a): raise TimeoutError("寫入 FIFO 卡住")
-            old_alarm = signal.signal(signal.SIGALRM, _hang); signal.alarm(5)
-            try:
-                mod._atomic_write_text(fifo, "{}"); hung = False
-            except TimeoutError:
-                hung = True
-            finally:
-                signal.alarm(0); signal.signal(signal.SIGALRM, old_alarm)
+            runner_left = signal.getitimer(signal.ITIMER_REAL)[0]
+            with _guard_hang(5) as hung:
+                mod._atomic_write_text(fifo, "{}")
+            check("借鬧鐘抓卡住之後,測試執行器原本的逾時還在",
+                  runner_left == 0 or signal.getitimer(signal.ITIMER_REAL)[0] > 0, runner_left)
             check("沒人讀的 FIFO 不會卡住,換成普通檔", not hung and stat.S_ISREG(fifo.lstat().st_mode)
                   and fifo.read_text() == "{}", hung)
+            # 要沿用 0600 的檔:暫存檔從建立那一刻起就不能比 0600 寬(大檔先寫進 0644 暫存檔,別人趁空檔開檔就收不回)
+            secret = work / "secret.json"; secret.write_text("old"); os.chmod(secret, 0o600)
+            real_open, tmp_modes = os.open, []
+            def spy_open(p, flags, *a, **k):
+                fd = real_open(p, flags, *a, **k)
+                if ".probe-out-" in str(p):
+                    tmp_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+                return fd
+            with patch.object(mod.os, "open", side_effect=spy_open):
+                mod._atomic_write_text(secret, "x" * 1_000_000)
+            check("現場成立:真的建了暫存檔", len(tmp_modes) == 1, tmp_modes)
+            check("沿用 0600 時暫存檔一建立就不比 0600 寬", tmp_modes and tmp_modes[0] & 0o077 == 0
+                  and stat.S_IMODE(secret.stat().st_mode) == 0o600, [oct(m) for m in tmp_modes])
             long = work / ("a" * 250 + ".json")
             mod._atomic_write_text(long, "{}")
             check("檔名剛好 255 bytes 仍寫得出", long.read_text() == "{}")
             mod._atomic_write_text(Path(os.devnull), "{}")
             check("裝置目標照舊直接寫入且仍是裝置", stat.S_ISCHR(os.lstat(os.devnull).st_mode))
             check("寫完不留暫存檔", sorted(p.name for p in work.iterdir())
-                  == sorted(["new.json", "mine.json", "wide.json", "linked.json", "ro.json", "fifo.json", long.name]),
+                  == sorted(["new.json", "mine.json", "wide.json", "linked.json", "ro.json", "fifo.json",
+                             "secret.json", long.name]),
                   sorted(p.name for p in work.iterdir()))
-            # 專案的原子寫入原語不碰整個程序的 umask(設成 0 再設回來的那一瞬間,別的執行緒建檔會拿到錯的權限)
-            import inspect
-            check("原子寫入不碰整個程序的 umask", "umask" not in inspect.getsource(mod._atomic_write_bytes).split('"""', 2)[-1])
+            # 專案的原子寫入原語不碰整個程序的 umask(設成 0 再設回來的那一瞬間,別的執行緒建檔會拿到錯的權限)。
+            # 看行為不看字面:寫入期間誰呼叫 umask(包在別的輔助函式裡也一樣)都會炸。
+            def no_umask(*_a): raise AssertionError("寫入期間呼叫了 umask")
+            try:
+                with patch.object(mod.os, "umask", side_effect=no_umask):
+                    mod._atomic_write_text(work / "um-new.json", "{}")
+                    mod._atomic_write_text(mine, "{}")
+                touched = None
+            except AssertionError as exc:
+                touched = exc
+            check("原子寫入不碰整個程序的 umask", touched is None, touched)
+            (work / "um-new.json").unlink()
+            # 字元裝置分支:開到的若已不是字元裝置(檢查後被換掉)就不寫——用 lstat 謊報一個普通檔是字元裝置來造現場
+            decoy = work / "decoy.json"; decoy.write_text("keep")
+            real_lstat = Path.lstat
+            def fake_lstat(p, *a, **k):
+                st = real_lstat(p, *a, **k)
+                if str(p) == str(decoy):
+                    return os.stat_result((stat.S_IFCHR | 0o666,) + tuple(st)[1:])
+                return st
+            with patch.object(Path, "lstat", fake_lstat):
+                check("現場成立:檢查時把普通檔看成字元裝置", stat.S_ISCHR(decoy.lstat().st_mode))
+                try:
+                    mod._atomic_write_text(decoy, "NEW"); swapped = None
+                except OSError as exc:
+                    swapped = exc
+            check("開到的不是字元裝置就不寫", swapped is not None and decoy.read_text() == "keep",
+                  (swapped, decoy.read_text()))
+            decoy.unlink()
+            # 字元裝置用不阻塞的方式開,寫之前要改回阻塞:終端讀得慢時,大量輸出不能寫一半就丟 BlockingIOError
+            import threading
+            master, slave = os.openpty()
+            got = bytearray()
+            def drain():
+                import time as _t
+                while len(got) < 300_000:
+                    _t.sleep(0.001)
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    got.extend(chunk)
+            reader = threading.Thread(target=drain, daemon=True); reader.start()
+            try:
+                mod._atomic_write_bytes(Path(os.ttyname(slave)), b"x" * 300_000); pty_err = None
+            except OSError as exc:
+                pty_err = exc
+            reader.join(20)
+            os.close(slave); os.close(master)
+            check("終端讀得慢時大量輸出照樣寫完", pty_err is None and len(got) >= 300_000, (pty_err, len(got)))
             # 消融腳本用的就是這一份:新檔照 umask、長檔名寫得出(舊的本地拷貝是 0600、長檔名會爆)
             import importlib.util
             spec = importlib.util.spec_from_file_location("ablation_r6_write", Path(__file__).resolve().parents[1]
@@ -43443,6 +43531,85 @@ def t_probe_boundary_fifth_round_output_edges():
         check("現場成立:跑的期間歷史檔位置真的被換成連結", swap_hist.is_symlink())
         check("跑的期間被換成連結時追加不跟過去", swap_err is not None and victim2.read_text() == "keep",
               (swap_err, victim2.read_text()))
+        # 開跑前:歷史檔是有兩個名字的普通檔(硬連結到別的檔)也擋下
+        linked_hist = root / "linked-hist.jsonl"; os.link(victim, linked_hist)
+        rc, calls = run(["--out", str(root / "o.json"), "--history", str(linked_hist)])
+        check("歷史檔有兩個名字:呼叫模型前就擋下", rc == 2 and calls == 0 and victim.read_text() == "keep", (rc, calls))
+        # 跑的期間把歷史檔換成 FIFO(有人讀/沒人讀)或硬連結:追加開檔後要確認是一般檔案、只有一個名字,否則報錯
+        def swap_case(make):
+            target = root / f"swap-{len(list(root.glob('swap-*')))}.jsonl"
+            def side(*_a, **_k):
+                make(target)
+                return row
+            argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(root / "o4.json"),
+                    "--history", str(target)]
+            err = None
+            with _guard_hang(10) as hung, patch.object(mod.sys, "argv", argv), \
+                 patch.object(mod, "run_one", side_effect=side), \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    mod.main()
+                except OSError as exc:
+                    err = exc
+            return target, err, hung
+        readers = []
+        def fifo_with_reader(t):
+            os.mkfifo(t); readers.append(os.open(t, os.O_RDONLY | os.O_NONBLOCK))
+        t, err, hung = swap_case(fifo_with_reader)
+        try:
+            leaked = os.read(readers[0], 4096) if readers else b"?"
+        except BlockingIOError:
+            leaked = b""
+        for r in readers:
+            os.close(r)
+        check("現場成立:跑的期間換成有人讀的 FIFO", stat.S_ISFIFO(t.lstat().st_mode))
+        check("換成有人讀的 FIFO:報錯且讀的人拿不到紀錄", err is not None and not hung and leaked == b"", (err, hung, leaked))
+        t, err, hung = swap_case(lambda t: os.mkfifo(t))
+        check("換成沒人讀的 FIFO:報錯不卡住", err is not None and not hung, (err, hung))
+        victim3 = root / "victim3.txt"; victim3.write_text("keep")
+        t, err, hung = swap_case(lambda t: os.link(victim3, t))
+        check("現場成立:跑的期間換成硬連結", t.stat().st_nlink == 2)
+        check("換成硬連結:報錯且另一個名字的內容不變", err is not None and victim3.read_text() == "keep",
+              (err, victim3.read_text()))
+
+
+def t_probe_boundary_char_device_session():
+    """字元裝置當輸出(終端、/dev/tty):在沒有控制終端的新 session 裡,開跑前就要知道開不起來,
+    寫入時也不能把終端收成控制終端(lumos 的終端確認早就為同一件事加了 O_NOCTTY)。"""
+    import os, subprocess, sys, textwrap
+    if not hasattr(os, "openpty") or not hasattr(os, "setsid"):
+        raise _SrcOnly("非 POSIX(沒有 pty 與 session),這段沒驗到")
+    probe = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+    code = textwrap.dedent('''
+        import os, sys, importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("sp_ctty", sys.argv[1])
+        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        def ctty():
+            try:
+                os.close(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)); return True
+            except OSError:
+                return False
+        print(f"SCENE leader={os.getsid(0) == os.getpid()} ctty={ctty()}", flush=True)
+        print(f"PRE_TTY {m._output_target_problem('/dev/tty') is not None}", flush=True)
+        print(f"PRE_TTY_HIST {m._output_target_problem('/dev/tty', replace=False) is not None}", flush=True)
+        master, slave = os.openpty()
+        m._atomic_write_bytes(Path(os.ttyname(slave)), b"{}")
+        print(f"AFTER_WRITE ctty={ctty()} got={os.read(master, 16)!r}", flush=True)
+        os.close(slave); os.close(master)
+        print("ALIVE", flush=True)
+    ''')
+    try:
+        p = subprocess.run([sys.executable, "-c", code, probe], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, start_new_session=True, timeout=30)
+        out, rc = p.stdout, p.returncode
+    except subprocess.TimeoutExpired as exc:
+        out, rc = (exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""), "timeout"
+    check("現場成立:子程序是 session leader 且沒有控制終端", "SCENE leader=True ctty=False" in out, (rc, out))
+    check("沒有控制終端時 --out /dev/tty 開跑前就擋下", "PRE_TTY True" in out, out)
+    check("沒有控制終端時 --history /dev/tty 開跑前就擋下", "PRE_TTY_HIST True" in out, out)
+    check("寫進終端不會把它收成控制終端", "AFTER_WRITE ctty=False" in out and "ALIVE" in out and rc == 0, (rc, out))
 
 
 def t_probe_boundary_wait_over_poll_interval():
@@ -43568,7 +43735,7 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
         check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
         check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
-              and "U+001B" in md and "U+0007" in md, repr(md[:240]))
+              and "u001b" in md and "u0007" in md, repr(md[:240]))
         # 第五輪:GFM 會把裸網址、www、email 自動變連結,~~ 變刪除線;只擋 [] () 不夠。
         autolinks = "https://evil.example/x www.evil.example a@b.example ~~s~~"
         md = ablation.render_md(summary, {"date": autolinks, "claude_version": "v"})
@@ -43579,11 +43746,12 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
         lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
         check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
-        mark_md = ablation.render_md(summary, {"date": "\u27e6U+001B\u27e7", "claude_version": "v"})
-        check("字面寫成標記樣子的文字也跟真控制字元不同", mark_md != esc_md, (esc_md[:120], mark_md[:120]))
-        md = ablation.render_md(summary, {"date": "\U000e0001\u3000x", "claude_version": "v"})
-        check("超過四位的碼點寫完整、全形空白照空白",
-              "U+E0001" in md and "u3000" not in md and "U+3000" not in md, md[:200])
+        # 跟 lumos 主程式的 _kill_esc 同一套:只有控制、格式、行段分隔、代理這幾類寫成 \\uXXXX,其餘(含全形空白)照原樣
+        lm = _load_lumos_inproc()
+        sample = "\u202e\ufeff\U000e0001\u3000\u00a0x"
+        md = ablation.render_md(summary, {"date": sample, "claude_version": "v"})
+        expect = lm._kill_esc(sample).replace("\\", "\\\\")
+        check("報表的控制字元寫法跟 lumos 主程式的 _kill_esc 一致", expect in md, (expect, md[:200]))
         # 字面反斜線只照 Markdown 規則轉一次:渲染後跟原值一樣是一個,不能變兩個
         md = ablation.render_md(summary, {"date": "C:\\dir", "claude_version": "v"})
         check("字面反斜線渲染後仍是一個", "C\\:\\\\dir" in md and "\\\\\\\\dir" not in md, md[:200])
