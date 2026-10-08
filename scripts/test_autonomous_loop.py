@@ -2028,18 +2028,12 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertEqual((st["m4_gated_passed"], st["m4_gated_n"]), (1, 2), "gated 只算 passed")
         self.assertEqual((st["m4_content_passed"], st["m4_content_n"]), (2, 2), "content 兩題答案都對")
 
-    def test_load_ids_dedup(self):
+    def test_load_ids_rejects_duplicates(self):
         d = Path(tempfile.mkdtemp())
         f = d / "q.jsonl"
         f.write_text('{"id":"s01","expect":["x"]}\n{"id":"s01","expect":["x"]}\n{"id":"s02","expect":["y"]}\n', encoding="utf-8")
-        # load_ids 讀 ROOT/f;這裡用絕對路徑塞進去測去重邏輯——改用相對 ROOT 不便,直接測 set 去重行為
-        import json as _j
-        seen, ids = set(), []
-        for ln in f.read_text().splitlines():
-            q = _j.loads(ln)["id"]
-            if q not in seen:
-                seen.add(q); ids.append(q)
-        self.assertEqual(ids, ["s01", "s02"])
+        with self.assertRaisesRegex(ValueError, "題號重複"):
+            self.rn.load_ids([str(f)])
 
     def test_collect_skills_health(self):
         d = Path(tempfile.mkdtemp())
@@ -2053,7 +2047,7 @@ class TestScenarioProbeAblation(unittest.TestCase):
         (d / "with-q-a-1.json").write_text("[]", encoding="utf-8")   # 合法 JSON 但非 dict
         (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [{"id": "s01", "passed": True}, "壞元素"]}), encoding="utf-8")
         by = self.rn.load_results(d)   # 不該炸
-        self.assertEqual(len(by["with"]), 1, "非 dict 檔與非 dict 元素都跳過")
+        self.assertEqual(len(by["with"]), 0, "非 dict 元素使整批失效，不能把同檔成功列計分")
 
     def test_merge_counts_missing(self):
         d = Path(tempfile.mkdtemp())

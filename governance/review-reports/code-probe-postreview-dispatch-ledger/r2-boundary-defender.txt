@@ -1,0 +1,42 @@
+**Conclusion: CONFIRM.** The single major finding in r2-boundary.md holds against the literal text of S13. Its impact section overstates the risk, though, and the shape is very hard to produce in practice.
+
+## Observed facts (no judgement)
+
+1. **The skip exists.** `governance/eval/ablation_lumos_first.py:122-125`: inside `invalid_batch_evidence`, any element of `results` that is not an object hits `continue`. It never reaches the type checks at `:126-138`. The frozen snapshot `r2-snapshot.patch:54-57` has the same lines, so the current code matches what was frozen.
+2. **The reproduction works as described.** For the file `{"arm":"with","results":[{"id":"a","passed":true},"not-a-row"],...}`:
+   - The string element is skipped. The good row passes the checks, and `fatal`/`skills_health_bad` are empty. So `invalid_batch_evidence` returns `[]`, and `collect_skills_health` (`:185-187`) records nothing.
+   - `load_results` (`:161-166`) keeps the good row, so `by_arm["with"]` contains question `a`.
+   - `needed` (`:193`) counts it, so `needed(...,"with","a",1) == 0`.
+   - The "not trustworthy" banner in `merge` at `:380` only appears when `collect_skills_health` reports something, so it doesn't appear here.
+3. **The skip was deliberate and is written down:**
+   - Code comment at `:123`.
+   - `Verification/2026-10-04_消融派工正式審查修正.md:22`: 「結果欄位與組別不合即整檔拒收，歷史非 dict 雜項維持逐列跳過」 (files with bad fields or a mismatched arm are rejected whole; stray non-object items in historical files are still skipped one by one).
+   - An existing test pins the same shape: `scripts/test_autonomous_loop.py:2054-2056` expects `[{"id":"s01","passed":True},"壞元素"]` to load as 1 row.
+4. **In-repo writers can't produce this shape:**
+   - `scripts/scenario_probe.py:1112-1113`: `res["run"]=k; results.append(res)`, so every element it writes is a dict.
+   - `run_job` at `:271` treats a live output with any non-dict row as unreadable and returns at `:287` before `pending.unlink()`. The `.pending` file stays, so `load_results` skips that file (`:153`) and `collect_skills_health` flags the marker (`:174`).
+   - A partially written file is invalid JSON, which `collect_skills_health` flags at `:180`. So the report's claim that a partially written file would get through doesn't hold. Only a hand-edited file or an outside writer can produce this shape.
+
+## Does it violate S13?
+
+- **S13's text** (`Projects/探針隔離與清理收斂_計劃.md:126`): 「當舊結果欄位型別無效或整批失效時，讀取端應拒絕計分」 (when an old result's field types are invalid or the whole batch is invalid, the reader must refuse to score it).
+  - `results` is itself a field, and the reader already treats a non-list `results` as invalid (`:115-116`).
+  - A list holding a string means `results` doesn't have its expected type ("a list of row objects"). That falls under "field type invalid".
+- **S11, same plan** (`:124`): 「成功外觀列不能抵缺場」 (a row that only looks successful must not cover a missing run). Fact 2 shows exactly that happening.
+- **Arguments against, and why they fall short:**
+  - `:122` says to see the Verification note for conclusions, and `Verification:22` records the skip. But that note is an implementation record. It doesn't amend S13, and the S13 text has no carve-out. A documented exception that contradicts the contract is still a violation.
+  - The test at `test_autonomous_loop.py:2054-2056` was written for an earlier finding whose only aim was "one bad file must not crash the whole merge". It predates S13. It shows the old requirement was "don't crash", not "count the rest anyway".
+- **Severity:** the violation stands, but given fact 4 the impact section is overstated, and the real exposure is close to minor. I'm not counting that as grounds to refute, because S13 is written as a fail-closed rule regardless of how the bad file got there.
+
+## Minimal fix and what it breaks
+
+- **Fix:** in `invalid_batch_evidence`, change `continue` at `:124-125` to `return ["逐場資料不是物件，健康狀態不可判"]` and update the comment at `:123`. The `isinstance(r, dict)` filters in `load_results` at `:166` and in the fatal check at `:139` become redundant but harmless.
+- **Test change:** `test_autonomous_loop.py:2054-2056` must change to expect 0 rows from the mixed file. The "doesn't crash" assertion can stay.
+- **Add a regression test** using the reproduction file. It should assert that `collect_skills_health` flags the file, `needed == 1`, and `merge` shows the "整批不可採信" (whole batch not trustworthy) banner.
+- **Compatibility cost:**
+  - A historical file with stray items is rejected whole, and `main` stops at `:443` until someone archives it.
+  - Per fact 4, no in-repo writer has produced such files, so the expected real impact is close to zero.
+  - `Verification:22` needs its wording corrected to match.
+  - Not recommended: narrowing S13's text to allow the skip. That would let a success-looking row stand in for a missing run.
+
+**CONFIRM.** Reason: S13 says the reader must refuse to score when field types are invalid. A non-object element in `results` is a type error in that field, yet `ablation_lumos_first.py:124-125` skips it, so the good row still covers the missing run and no "not trustworthy" banner appears. The skip is recorded in the Verification note and pinned by an old test, but S13's text was never changed to allow it. The fix is the one-line change above. Its cost is changing one existing test and the Verification wording. The report overstates the impact: partial writes don't reach this path, so only hand-edited or outside files are affected.

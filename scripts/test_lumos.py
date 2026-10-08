@@ -37696,7 +37696,8 @@ def t_probe_boundary_postreview_launch_exception_summary():
                   and attempt.get("fatal") is True and attempt.get("results") == []
                   and attempt.get("failure_type") == type(failure).__name__
                   and attempt.get("arm") == "with" and attempt.get("qid") == "a"
-                  and attempt.get("log_path") and attempt.get("retry_policy") == "archive-fatal-then-rerun"
+                  and attempt.get("log_path") and attempt.get("retry_policy") == "archive-fatal-and-candidate-then-rerun"
+                  and attempt.get("candidate_path")
                   and "cmd" not in attempt and "failure_message" not in attempt,
                   (type(failure).__name__, len(launched), rc, summary, attempt))
             with patch.object(ablation.sys, "argv", argv + ["--merge-only"]), \
@@ -37973,13 +37974,16 @@ def t_probe_boundary_postreview_archive_interrupt():
                                        "fatal": False, "inconclusive": False, "skills_health_bad": []}))
             raise ablation.subprocess.TimeoutExpired("probe", 1)
         old_replace = Path.replace
+        interrupted = []
         def interrupt_archive(path, target):
             if str(target).endswith(".failed"):
+                interrupted.append("replace")
                 raise KeyboardInterrupt()
             return old_replace(path, target)
         old_atomic = getattr(ablation, "_atomic_write_bytes", None)
         def interrupt_atomic_archive(path, data):
             if str(path).endswith(".failed"):
+                interrupted.append("archive")
                 raise KeyboardInterrupt()
             return old_atomic(path, data)
         with patch.object(ablation.subprocess, "run", side_effect=run), \
@@ -37991,9 +37995,371 @@ def t_probe_boundary_postreview_archive_interrupt():
                 pass
         # 新碼會先透過 _atomic_write_text 寫 fatal，才呼叫 _atomic_write_bytes 歸檔；
         # 舊碼會在 Path.replace 原結果時中斷。兩版都在歸檔處故障。
-        check("歸檔被中斷也須留下掃描得到的致命嘗試", bool(ablation.collect_skills_health(outdir))
+        finals = list(outdir.glob("with-q-*.json"))
+        check("歸檔注入確實發生且 fatal 已先落地", bool(interrupted) and len(finals) == 1
+              and json.loads(finals[0].read_text()).get("fatal") is True
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              (interrupted, list(outdir.iterdir())))
+
+
+def t_probe_boundary_formal_dispatch_fail_closed():
+    """正式審查反例：子程序失敗、父程序中斷、schema、窗口與顯示都不得假綠。"""
+    import tempfile, json, io, contextlib, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def result(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2})()
+        with patch.object(ablation.subprocess, "run", side_effect=result):
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+        check("非零退出須留下跨執行失效紀錄", bool(ablation.collect_skills_health(outdir))
               and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
               list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-interrupt-") as td:
+        outdir = Path(td)
+        with patch.object(ablation.subprocess, "run", side_effect=KeyboardInterrupt):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except KeyboardInterrupt:
+                pass
+        check("父程序中斷後仍保留未完成標記", bool(ablation.collect_skills_health(outdir)),
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-enospc-") as td:
+        outdir = Path(td); wrote = []
+        real_write = ablation._atomic_write_text
+        def fail_tombstone(path, content):
+            if path.suffix == ".json":
+                wrote.append("tombstone")
+                raise OSError(28, "No space left on device")
+            return real_write(path, content)
+        def write_then_fail(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            raise FileNotFoundError("injected launch failure")
+        with patch.object(ablation.subprocess, "run", side_effect=write_then_fail), \
+             patch.object(ablation, "_atomic_write_text", side_effect=fail_tombstone):
+            try:
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            except OSError:
+                pass
+        check("fatal 落檔二次失敗仍不得採信舊成功列", wrote == ["tombstone"]
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              (wrote, list(outdir.iterdir())))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-schema-") as td:
+        outdir = Path(td)
+        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+            {"id": "a", "passed": "false"}], "fatal": False, "inconclusive": False,
+            "skills_health_bad": []}))
+        check("錯誤布林型別須標整批失效", bool(ablation.collect_skills_health(outdir))
+              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+            {"id": "a", "passed": True, "arm": "without"}], "fatal": False,
+            "inconclusive": False, "skills_health_bad": []}))
+        check("逐場組別不一致須標整批失效", bool(ablation.collect_skills_health(outdir))
+              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+        for bad_field in ({"n_calls": "1"}, {"answer_content_ok": "false"}, {"limit_hit": "false"}):
+            (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
+                {"id": "a", "passed": True, **bad_field}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            check("錯型計分欄位拒收 " + str(bad_field), bool(ablation.collect_skills_health(outdir))
+                  and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-cap-") as td:
+        outdir = Path(td)
+        def count(cmd, **_kwargs):
+            result_data = {"arm": "with", "results": [{"id": "a", "passed": True}],
+                           "fatal": False, "inconclusive": False, "skills_health_bad": []}
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps(result_data))
+            return type("Result", (), {"returncode": 0})()
+        with patch.object(ablation.subprocess, "run", side_effect=count) as run:
+            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50)
+        check("單一工作不可超過窗口剩餘額度", run.call_count == 1 and
+              int(run.call_args.args[0][run.call_args.args[0].index("--runs") + 1]) <= 50
+              and run.call_args.args[0][run.call_args.args[0].index("--max-attempts") + 1] == "50",
+              run.call_args)
+    summary = {"arms": {"with": {"m1_passed": 0, "n": 0, "m1_rate": None,
+             "m2_ever": 0, "m2_n": 0, "m2_rate": None, "m3_first_idx_median": None, "m3_n": 0,
+             "m4_gated_passed": 0, "m4_gated_n": 0, "m4_content_passed": 0, "m4_content_n": 0,
+             "inconsistent_questions": [], "missing": 1, "limit_hits": 0, "instrument_errors": 0},
+             "without": {}}, "expected_ids": ["a"], "runs": 1, "m1_delta_pp": None,
+             "class_counts": {}, "per_question": {}, "skills_health_poisoned": [("bad.json", ["fatal"])]}
+    summary["arms"]["without"] = summary["arms"]["with"].copy()
+    md = ablation.render_md(summary, {"date": "test", "claude_version": "stub"})
+    check("Markdown 摘要須直接標出整批失效", "不可採信" in md and "bad.json" in md, md[:250])
+
+
+def t_probe_boundary_formal_parent_killed_child_continues():
+    """真進程反例：父程序被殺後子程序仍落有效外觀結果，下一批不得採信。"""
+    import tempfile, subprocess, time, json
+    with tempfile.TemporaryDirectory(prefix="probe-parent-killed-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        started = root / "child-started"; probe = root / "child_probe.py"
+        probe.write_text("import argparse,json,os,time\nfrom pathlib import Path\n"
+                         "a=argparse.ArgumentParser(add_help=False);a.add_argument('--out');v,_=a.parse_known_args()\n"
+                         f"Path({str(started)!r}).write_text(str(os.getpid()))\n"
+                         "time.sleep(0.5)\n"
+                         "Path(v.out).write_text(json.dumps({'arm':'with','results':[{'id':'a','passed':True}],"
+                         "'fatal':False,'inconclusive':False,'skills_health_bad':[]}))\n")
+        runner = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
+        parent_code = ("import importlib.util\nfrom pathlib import Path\n"
+                       f"s=importlib.util.spec_from_file_location('ablation_kill',{str(runner)!r})\n"
+                       "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                       f"m.PROBE=Path({str(probe)!r})\n"
+                       f"m.run_job('with','a',1,['dummy'],1,1,Path({str(outdir)!r}),1)\n")
+        proc = subprocess.Popen([sys.executable, "-c", parent_code],
+                                cwd=str(Path(__file__).resolve().parents[1]),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 5
+        try:
+            while not started.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            check("父程序中斷反例確實啟動子程序", started.exists(), proc.poll())
+            proc.kill(); proc.wait(timeout=5)
+            while not list(outdir.glob("*.candidate")) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            spec = __import__("importlib.util", fromlist=["spec_from_file_location"])
+            ms = spec.spec_from_file_location("ablation_kill_check", runner)
+            m = spec.module_from_spec(ms); ms.loader.exec_module(m)
+            check("子程序在父程序死後只留候選檔且不得抵缺場", bool(list(outdir.glob("*.candidate")))
+                  and not list(outdir.glob("with-q-*.json"))
+                  and bool(m.collect_skills_health(outdir))
+                  and m.needed(m.load_results(outdir), "with", "a", 1) == 1,
+                  list(outdir.iterdir()))
+        finally:
+            if proc.poll() is None:
+                proc.kill(); proc.wait(timeout=5)
+
+
+def t_probe_boundary_formal_input_validation():
+    """不啟動模型即可判定輸入選取與路徑是否封閉。"""
+    import tempfile, io, contextlib, importlib.util, subprocess, os, json
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal_input", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-input-") as td:
+        root = Path(td); q = root / "q.jsonl"; outdir = root / "out"
+        for qid in ("", "a,b", "a\nspoof"):
+            q.write_text(__import__("json").dumps({"id": qid}) + "\n")
+            try:
+                ids = ablation.load_ids([str(q)])
+            except ValueError:
+                ids = []
+            check("非法題號入口須拒絕 " + repr(qid), not ids, ids)
+        q.write_text('{"id":"a"}\n')
+        for arms in ("with,with", "../escaped", "with,"):
+            argv = ["ablation", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
+            rejected = False
+            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    ablation.main()
+                except SystemExit as exc:
+                    rejected = exc.code == 2
+            check("非法組別在落檔前拒絕 " + arms, rejected and not outdir.exists(),
+                  (rejected, list(root.iterdir())))
+        q.write_text('{"id":"a"}\n{"id":"a-extra"}\n')
+        probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
+        exact = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
+                                "--exact-id", "a", "--dry-list"], capture_output=True, text=True)
+        absent = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
+                                 "--exact-id", "missing", "--dry-list"], capture_output=True, text=True)
+        check("精確選題只得單一 id，缺題要拒絕", exact.returncode == 0 and exact.stdout.strip() == "a"
+              and absent.returncode == 2, (exact.stdout, exact.stderr, absent.returncode))
+        q.write_text('{"id":"a"}\n')
+        captured = []
+        def fake_run(cmd, **_kwargs):
+            if cmd == ["claude", "--version"]:
+                return type("Version", (), {"stdout": "stub"})()
+            target = Path(cmd[cmd.index("--out") + 1]); captured.append(target)
+            target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                          "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 0})()
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            argv = ["ablation", "--questions", str(q), "--arms", "with", "--runs", "1",
+                    "--out-dir", "relative/out"]
+            with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=fake_run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                rc = ablation.main()
+        finally:
+            os.chdir(old_cwd)
+        check("相對輸出路徑與鎖指向同一絕對目錄", rc == 0 and len(captured) == 1
+              and captured[0].is_absolute() and captured[0].parent.resolve() == (root / "relative/out").resolve(),
+              (rc, captured))
+        meta = root / "relative/out/meta.json"
+        meta.write_text(json.dumps({"date": "2025-01-02", "claude_version": "historical"}))
+        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
+                                                "--out-dir", "relative/out"]), \
+             patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                merge_rc = ablation.main()
+            finally:
+                os.chdir(old_cwd)
+        check("純合併保留來源版本，不能冒稱當前 CLI", merge_rc == 0
+              and json.loads(meta.read_text())["claude_version"] == "historical"
+              and "historical" in (meta.parent / "summary.md").read_text(), meta.read_text())
+        meta.write_text("{}")
+        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
+                                                "--out-dir", "relative/out"]), \
+             patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                unknown_rc = ablation.main()
+            finally:
+                os.chdir(old_cwd)
+        unknown_meta = json.loads(meta.read_text())
+        check("歷史 meta 空物件要明寫來源未知", unknown_rc == 0
+              and unknown_meta.get("date") == "來源日期未知"
+              and unknown_meta.get("claude_version") == "來源版本未知",
+              unknown_meta)
+
+
+def t_probe_boundary_formal_second_round_regressions():
+    """先證明事故路徑被執行，再驗歸檔、短列、錯型、題號與窗口不假綠。"""
+    import tempfile, json, importlib.util, time
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_formal_r2", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-") as td:
+        root = Path(td); outdir = root / "out"; outdir.mkdir()
+        def success_looking(cmd, **_kwargs):
+            target = Path(cmd[cmd.index("--out") + 1])
+            target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                          "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2})()
+        with patch.object(ablation.subprocess, "run", side_effect=success_looking) as runner:
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+        check("事故反例確實叫到子程序且留下成功外觀 byte", runner.call_count == 1
+              and bool(list(outdir.glob("*.candidate")))
+              and json.loads(next(outdir.glob("*.candidate")).read_text())["results"][0]["passed"],
+              list(outdir.iterdir()))
+        for marker in outdir.glob("*.pending"):
+            marker.rename(marker.with_suffix(".archived"))
+        final_json = list(outdir.glob("with-q-*.json"))
+        check("只歸檔事故標記也不得讓候選列復活", bool(final_json)
+              and all(json.loads(p.read_text()).get("fatal") is True for p in final_json)
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-short-") as td:
+        outdir = Path(td)
+        def one_of_two(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 0})()
+        with patch.object(ablation.subprocess, "run", side_effect=one_of_two) as runner:
+            ablation.run_job("with", "a", 2, ["dummy"], 1, 1, outdir, 1)
+        check("成功退出但少一列仍是整批失效", runner.call_count == 1
+              and bool(ablation.collect_skills_health(outdir))
+              and ablation.needed(ablation.load_results(outdir), "with", "a", 2) == 2,
+              list(outdir.iterdir()))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-schema-") as td:
+        outdir = Path(td); path = outdir / "with-q-bad.json"
+        base = {"arm": "with", "results": [{"id": "a", "passed": True, "reason": "ok"}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}
+        for label, mutate in (
+            ("reason", lambda d: d["results"][0].update(reason=["儀器例外: timeout"])),
+            ("skills_health_bad", lambda d: d.update(skills_health_bad="")),
+            ("fatal", lambda d: d.update(fatal=0)),
+            ("inconclusive", lambda d: d.update(inconclusive=[])),
+            ("non-dict row", lambda d: d["results"].append("壞元素")),
+        ):
+            d = json.loads(json.dumps(base)); mutate(d); path.write_text(json.dumps(d))
+            check("錯型整批拒收 " + label, bool(ablation.collect_skills_health(outdir))
+                  and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
+                  (label, ablation.collect_skills_health(outdir)))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-unrelated-") as td:
+        outdir = Path(td)
+        (outdir / "notes.json").write_text('{"memo":"operator note"}')
+        (outdir / "with.json").write_text('{"memo":"old unrelated export"}')
+        check("非探針檔名的 JSON 不應毒化專用輸出目錄", not ablation.collect_skills_health(outdir)
+              and not ablation.load_results(outdir)["with"], ablation.collect_skills_health(outdir))
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-ids-") as td:
+        q = Path(td) / "q.jsonl"
+        for qid in ("   ", "a\u0085spoof", "a\u202espoof"):
+            q.write_text(json.dumps({"id": qid}) + "\n")
+            try:
+                ablation.load_ids([str(q)]); rejected = False
+            except ValueError:
+                rejected = True
+            check("不可見題號須在派工前拒絕 " + repr(qid), rejected, qid)
+        q.write_text('{"id":"a"}\n{"id":"a"}\n')
+        try:
+            ablation.load_ids([str(q)]); duplicate_rejected = False
+        except ValueError:
+            duplicate_rejected = True
+        check("重複題號須在派工前拒絕", duplicate_rejected, q.read_text())
+        q.write_text('{"id":"-x","prompt":"q","expect":["Bash"]}\n')
+        probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
+        dash = __import__("subprocess").run([sys.executable, str(probe), "--scenarios", str(q),
+                                             "--exact-id=-x", "--dry-list"], capture_output=True, text=True)
+        check("以短線起頭的題號可用 argparse 等號形式精確選取", dash.returncode == 0
+              and dash.stdout.strip() == "-x", (dash.returncode, dash.stderr))
+        with tempfile.TemporaryDirectory(prefix="probe-formal-r2-dash-out-") as out_td:
+            def dash_result(cmd, **_kwargs):
+                Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                    "arm": "with", "results": [{"id": "-x", "passed": True}], "fatal": False,
+                    "inconclusive": False, "skills_health_bad": []}))
+                return type("Result", (), {"returncode": 0})()
+            with patch.object(ablation.subprocess, "run", side_effect=dash_result) as runner:
+                ablation.run_job("with", "-x", 1, [str(q)], 1, 1, Path(out_td), 1)
+            check("派工傳短線題號時使用等號形式", runner.call_count == 1
+                  and "--exact-id=-x" in runner.call_args.args[0], runner.call_args)
+    with tempfile.TemporaryDirectory(prefix="probe-formal-r2-window-") as td:
+        outdir = Path(td)
+        (outdir / "with-q-1.json").write_text(json.dumps({
+            "arm": "with", "results": [{"id": "a", "passed": True,
+                                          "retry_attempts": [{"reason": "limit"}, {"reason": "limit"}]}],
+            "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+        check("窗口要把兩次重試與最後嘗試都算進去", ablation.runs_in_window(outdir, now=time.time()) == 3,
+              ablation.runs_in_window(outdir, now=time.time()))
+    rows = [{"id": "a", "passed": True}] * 3
+    stats = ablation._arm_stats(rows, ["a", "b"], 1)
+    check("別題多跑不能遮住缺題", stats["missing"] == 1, stats["missing"])
+
+
+def t_probe_boundary_formal_retry_budget():
+    """實跑探針控制流：用量重試必須消耗批次嘗試額度，不能多啟動模型。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_formal_retry_budget")
+    with tempfile.TemporaryDirectory(prefix="probe-formal-budget-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"; q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        out = root / "out.json"; calls = []
+        def runner(sc, work, *_args, **_kwargs):
+            calls.append(work)
+            return {**_probe_res(sc["id"], len(calls) > 1, "ok" if len(calls) > 1 else "儀器例外: limit"),
+                    "first_tool": None, "secs": 0, "limit_hit": len(calls) == 1, "source_evidence": None}
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--runs", "2",
+                "--wait-on-limit", "300", "--max-attempts", "2", "--out", str(out)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
+             patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        data = json.loads(out.read_text())
+        check("重試確實發生且額度用盡前只叫兩次模型", len(calls) == 2
+              and len(data["results"][0].get("retry_attempts", [])) == 1,
+              (len(calls), data))
+        check("額度用盡不能再啟動第三次且整批 fatal", rc == 3 and data["fatal"] is True
+              and data["inconclusive"] is True and len(calls) == 2,
+              (rc, len(calls), data))
 
 
 def t_delguard_logs_ok_too():

@@ -44,6 +44,7 @@ verified_by:
   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
   - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+  - "[[Verification/2026-10-04_消融派工正式審查修正]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -112,3 +113,9 @@ PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner �
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
 - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
+
+PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互動用的 `--only`：它允許逗號清單與前綴，空值等於不篩選。正式審查的空題號反例可一次選中整份題庫；因此新增精確單題入口，缺題或重複題要在建沙盒前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-security.md`；防回歸 `t_probe_boundary_formal_input_validation`。如果將來調整選題語意，先證明外層單題派工不會擴題。
+
+PITFALL: 只把外層 `--runs` 縮到窗口剩餘額度，探針內用量上限重試仍可額外啟動模型。r2 反例用真 `main` 流程證明兩次重試後須停止第三次呼叫並把批次標失效；`--max-attempts` 在每次模型呼叫前扣額，`--exact-id=值` 容許合法短線開頭題號。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-concurrency-v2.md` 與 Python argparse 官方長選項語法；防回歸 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。調整重試或選題時從實際模型啟動數重驗。
+
+PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫，外層失敗批次與隔日重跑仍會重得滿額，故不可把單次子程序上限稱作五小時帳號上限。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 G10–G11，重現指令在 `r3-intake.md`。改外層額度來源或重試行為時，先跑「失敗／歸檔／同窗口重跑」與「跨午夜」兩組反例。

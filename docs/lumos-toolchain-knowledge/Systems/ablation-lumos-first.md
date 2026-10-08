@@ -26,6 +26,7 @@ summary: |-
 verified_by:
   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
   - "[[Verification/2026-10-04_探針停派與失敗留痕]]"
+  - "[[Verification/2026-10-04_消融派工正式審查修正]]"
 ---
 # ablation-lumos-first
 
@@ -44,3 +45,27 @@ verified_by:
 代碼審續驗證明鎖檔名稱不能代表同一 inode，故互斥目標改為輸出目錄本身；這仍是合作進程的本機 advisory 鎖。若輸出目錄改為不受信任者可任意改名的共用空間，入口是該部署／權限變更，須重驗目錄身分與所有讀寫路徑，不能沿用本機互斥結論。歸檔前先原子取代 fatal 記錄；摘要、meta 亦以原子替換避免跟隨目標符號連結到目錄外。長題號改用固定長度檔名摘要，完整題號保留在結果或失敗紀錄。對應四條先紅後綠反例在 [[Verification/2026-10-04_探針停派與失敗留痕]]；變更落檔或鎖身分時一起重跑。
 
 真 CLI 子程序測試補了 import 測試看不到的執行順序；新版還要同時持有舊鎖檔，直到不再可能與只鎖舊檔的程序交接。若將來確定所有舊程序已退出且不再從舊版啟動，入口是部署版本清查，才可考慮撤掉舊鎖相容；撤前重跑 `t_probe_boundary_postreview_legacy_lock_interop` 並更新計劃退場條件。摘要原子替換沿用既有普通檔的權限，目標是符號連結時不抄其模式；反例同由 `t_probe_boundary_postreview_cli_entry_and_modes` 與 `t_probe_boundary_postreview_symlink_outputs` 釘住。
+
+PITFALL: 正式代碼審多席找到「非零退出只停本輪、下次合併卻採信成功外觀列」；父程序被殺時，原本只由父程序持有的鎖也無法代表子程序已停。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r1-formal-correctness.md`、`r1-formal-concurrency.md`。重現／防回歸：`t_probe_boundary_formal_dispatch_fail_closed`。未完成標記以先建立、驗證成功後才清理的順序封住此洞；標記殘留表示人工要先查日誌與在途程序，不能直接採信同名結果。
+
+PITFALL: 單工作場數可超過窗口剩餘額度，`--only` 的逗號／前綴語意又可能將一題展成多題；相對輸出路徑曾令鎖住的目錄與子程序落檔目錄不同。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r1-formal-security.md`。重現／防回歸：`t_probe_boundary_formal_input_validation`、`t_probe_boundary_formal_dispatch_fail_closed`。若將來更換選題或批次編排介面，先重驗精確一題與同目錄互斥。
+
+WHY: 結果檔 schema 採讀取端保守拒收，因錯誤字串 `passed: "false"` 可被 Python 視為真值並抬高 M1；報表 Markdown 必須直接顯示整批不可採信，因人可能只看這份檔案。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的正式 r1 資料席與邊界席，反例 `t_probe_boundary_formal_dispatch_fail_closed`。這是輸出可信度邊界，不將低有效場數的普通 inconclusive 一概判 fatal。
+
+PITFALL: r2 指出只歸檔 `.pending` 會讓原先由子程序直寫的成功外觀 JSON 復活。子程序現在寫候選檔，父程序驗證精確列數、題號、組別、schema 與退出碼後才升格；殘留候選檔本身也是失效訊號。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r2-external-finder-v2.txt`；防回歸 `t_probe_boundary_formal_second_round_regressions`、`t_probe_boundary_formal_parent_killed_child_continues`。若改結果落地協定，先重驗只歸檔標記仍不能採信未驗證列。
+
+PITFALL: 結果欄位錯型、非物件逐場元素及 A 題多跑遮掉 B 題缺場，都曾讓讀取端報出虛高數字。現在按檔拒收錯型結果，缺場逐題計算；旁邊的無關 JSON 不再當探針事故。出處同篇 Verification 的 r2 intake；防回歸 `t_probe_boundary_formal_second_round_regressions` 與 `test_load_results_skips_bad_json`。結果 schema 或檔名規則變更時重跑。
+
+WHY: 五小時窗口要算實際模型呼叫，故正式結果中的重試次數也計入，並把剩餘額度傳給探針；純合併保留可用的歷史 meta，缺日期或版本則標未知。出處 [[Projects/探針隔離與清理收斂_計劃]] S17–S18、[[Verification/2026-10-04_消融派工正式審查修正]]；反例 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。若改窗口或 meta 來源，先核對實際模型啟動數與歷史報表標示。
+
+PITFALL: 上段只是 r2 修法的意圖，r3 證明現碼沒有做到帳號級五小時額度：`runs_in_window` 只掃當前日期目錄內正式 JSON；子程序失敗時真正用量留在候選檔，歸檔後歸零，跨午夜也歸零。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 FAIL 與 `r3-intake.md` G10–G11；重現指令與輸出在同一 intake。若保留硬額度，先建不隨結果歸檔消失的權威用量帳，不能再從 M1 計分結果推回實耗。
+
+PITFALL: r3 另證明逐題缺場修好後，重複同題列仍可灌高 M1–M4；`calls` 只驗外層 list，錯型元素仍能被當無 lumos 呼叫。出處同篇 Verification 的 r3 G12–G13；重現指令與輸出見 `r3-intake.md`。結果計分前要先驗每題場數和每個呼叫元素形狀，不能以 `missing=0` 推論分母正確。
+
+PITFALL: 消融題庫去重的舊測試只在測試內複寫去重迴圈，沒有呼叫真正派工讀題函式；實作改壞仍可能維持綠燈。r2 改用實際 `load_ids` 載入含重複題號的暫存題庫，斷言派工前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-external-finder-v2.txt`；防回歸 `test_load_ids_rejects_duplicates`。若再寫協定測試，先確認斷言經過正式入口。
+
+PITFALL: 歸檔中斷測試只驗「最後有 fatal」，卻沒驗注入點真的觸發；既有或新加的其他 fatal 標記可讓整支測試假綠。正式代碼審指出後補上注入計數斷言。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-correctness.md`；防回歸 `t_probe_boundary_postreview_archive_interrupt`。改故障注入時先讓斷言證明注入有發生，再驗收結果。
+
+PITFALL: r2 再指出同一測試只要 `.pending` 還在，`load_results` 就會拒收同名成功檔；即使 fatal 正式檔根本沒寫，也可假綠。現在注入點後直接檢查 fatal 正式 JSON 已落地，再看整批拒收。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-external-finder-v2.txt`；防回歸 `t_probe_boundary_postreview_archive_interrupt`。修改事故落地順序時要同時檢查標記、正式檔與候選檔。
+
+PITFALL: r3 的額度測試在空目錄給 `max_per_window=50`，就算把「剩餘額度」誤改成「整個上限」，測試仍綠；橫幅測試只查文字存在，移到報表最後也會綠。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r3-external-finder.txt`；重現方法及觀測在 `r3-intake.md` G20。下次寫額度和顯示測試，先用「已有 45、剩 5」及「警示必在第一屏」作前置斷言，再做移除守衛的翻紅檢查。

@@ -408,6 +408,10 @@ class ProbeHealthError(RuntimeError):
     """全域 skills 無法驗健康或已損壞：整批不能再跑。"""
 
 
+class ProbeAttemptBudgetExceeded(RuntimeError):
+    """消融派工的模型嘗試額度用完；重試也消耗一格。"""
+
+
 def _prepare_source_probe(work, config, token):
     """只在尚未提交的自有副本注入Python註解；不追連結，不改語法。"""
     if not isinstance(config, dict):
@@ -644,7 +648,8 @@ def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
 def _validate_scenario(sc):
     """題目缺必要欄位就回一句錯誤字串(否則 None)。★r1 邊界席:缺 expect 的畸形題原本會先燒一次真實
     claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
-    if not sc.get("id"):
+    if (not isinstance(sc.get("id"), str) or not sc["id"].strip()
+            or not sc["id"].isprintable()):
         return "題目缺 id"
     if not sc.get("prompt"):
         return f"題目 {sc.get('id')} 缺 prompt"
@@ -913,6 +918,8 @@ def main():
                          "題目再怎麼寫都是在探錯的 repo(2026-08-22 實際踩過)")
     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
     ap.add_argument("--only", default="")
+    ap.add_argument("--exact-id", default=None,
+                    help="只跑 id 完全相等的一題；消融派工專用，找不到或重複時拒絕")
     # ★預設 8 → 18(2026-08-22)★:實測既有題庫最慢 6 步(s02/s11),8 只留 2 步餘裕;
     # absence 題組天生要「查不到→換方法再查」,最慢 12 步——吃預設會在它開口之前截斷,
     # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
@@ -944,13 +951,25 @@ def main():
     ap.add_argument("--wait-on-limit", type=int, default=0,
                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+    ap.add_argument("--max-attempts", type=int, default=0,
+                    help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
     a = ap.parse_args()
     if a.runs < 1:
         print("✗ --runs 至少 1", file=sys.stderr); return 2
+    if a.max_attempts < 0:
+        print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+    if a.exact_id is not None and a.only:
+        print("✗ --exact-id 與 --only 不可並用", file=sys.stderr); return 2
+    if (a.exact_id is not None and (not a.exact_id.strip() or not a.exact_id.isprintable())):
+        print("✗ --exact-id 不可為空白或含不可列印字元", file=sys.stderr); return 2
     scs = []
     for f in a.scenarios.split(","):
         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
-    if a.only:
+    if a.exact_id is not None:
+        scs = [s for s in scs if s.get("id") == a.exact_id]
+        if len(scs) != 1:
+            print("✗ --exact-id 必須且只能選到一題", file=sys.stderr); return 2
+    elif a.only:
         keep = set(a.only.split(","))
         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
     if a.sample and a.sample < len(scs):
@@ -997,6 +1016,7 @@ def main():
               file=sys.stderr)
     results = []
     waited = 0
+    attempts_started = 0
     fatal = setup_error is not None
     fatal_reason = setup_error
     retained = None
@@ -1017,6 +1037,8 @@ def main():
                     attempt_model_secs = 0.0
                     setup_started = time.monotonic()
                     try:
+                        if a.max_attempts and attempts_started >= a.max_attempts:
+                            raise ProbeAttemptBudgetExceeded("模型嘗試額度已用完")
                         # baseline 已套用 arm；每場從它複製，不能讓前場或來源的後續修改滲入。
                         work = make_sandbox(baseline, "with", source_probe=(sc["source_probe"], token) if token else None)
                         setup_elapsed = time.monotonic() - setup_started
@@ -1024,6 +1046,7 @@ def main():
                         attempt_sandbox_secs += setup_elapsed
                         model_started = time.monotonic()
                         try:
+                            attempts_started += 1
                             res = _redact_source_token(run_at(work, token), token)
                         finally:
                             attempt_model_secs = time.monotonic() - model_started
@@ -1036,7 +1059,8 @@ def main():
                             if health:
                                 raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
                     except Exception as e:
-                        if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError)):
+                        if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError,
+                                                          ProbeAttemptBudgetExceeded)):
                             attempt_fatal = True
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
