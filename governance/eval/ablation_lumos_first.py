@@ -14,7 +14,7 @@
 用法:
   governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
 """
-import argparse, datetime, errno, fcntl, hashlib, json, os, stat, statistics, subprocess, sys, tempfile, time
+import argparse, datetime, errno, fcntl, hashlib, html, json, os, stat, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -400,7 +400,8 @@ def merge(out_dir, expected_ids, runs):
 def render_md(s, meta):
     a, b = s["arms"]["with"], s["arms"]["without"]
     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
-    lines = [f"# 修法 A ablation 對照(記錄日期 {meta.get('date')};當次 Claude CLI {meta.get('claude_version', '?')})", "",
+    def text(x): return html.escape(str(x)).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+    lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
              f"只算有效場(撞用量上限/儀器例外不算)。", "",
              "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
@@ -417,13 +418,13 @@ def render_md(s, meta):
              "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
              "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
     if s.get("skills_health_poisoned"):
-        bad = ", ".join(name for name, _ in s["skills_health_poisoned"])
+        bad = ", ".join(text(name) for name, _ in s["skills_health_poisoned"])
         lines[2:2] = [f"**整批不可採信：探針失效；請先處置 {bad}。**", ""]
     for q, v in s["per_question"].items():
-        qmd = q.replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
+        qmd = text(q)
         lines.append(f"| {qmd} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
     if a["inconsistent_questions"] or b["inconsistent_questions"]:
-        lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
+        lines += ["", f"不一致題 with: {', '.join(text(q) for q in a['inconsistent_questions']) or '—'};without: {', '.join(text(q) for q in b['inconsistent_questions']) or '—'}"]
     return "\n".join(lines) + "\n"
 
 
@@ -436,18 +437,12 @@ def _run_locked_batch(a, files, ids, date, out_dir):
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             if not isinstance(meta, dict):
                 raise ValueError("invalid meta")
-            meta_changed = False
             if not isinstance(meta.get("date"), str) or not meta["date"].strip():
                 meta["date"] = "來源日期未知"
-                meta_changed = True
             if not isinstance(meta.get("claude_version"), str) or not meta["claude_version"].strip():
                 meta["claude_version"] = "來源版本未知"
-                meta_changed = True
-            if meta_changed:
-                _atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
         except (OSError, ValueError):
             meta = {"date": "來源日期未知", "claude_version": "來源版本未知"}
-            _atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
     else:
         try:
             ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()

@@ -37925,7 +37925,9 @@ def t_probe_boundary_postreview_symlink_outputs():
             rc = ablation.main()
         check("摘要落檔不得跟隨既有符號連結到目錄外", rc == 0
               and all(v.read_text() == "KEEP-ME" for v in victims.values())
-              and all(not (outdir / name).is_symlink() for name in victims)
+              and all(not (outdir / name).is_symlink() for name in ("summary.json", "summary.md"))
+              and (outdir / "meta.json").is_symlink()
+              and "來源日期未知" in (outdir / "summary.md").read_text()
               and isinstance(json.loads((outdir / "summary.json").read_text()), dict),
               (rc, {k: v.read_text()[:40] for k, v in victims.items()}))
 
@@ -38221,11 +38223,12 @@ def t_probe_boundary_formal_input_validation():
                 unknown_rc = ablation.main()
             finally:
                 os.chdir(old_cwd)
-        unknown_meta = json.loads(meta.read_text())
+        unknown_report = (meta.parent / "summary.md").read_text()
         check("歷史 meta 空物件要明寫來源未知", unknown_rc == 0
-              and unknown_meta.get("date") == "來源日期未知"
-              and unknown_meta.get("claude_version") == "來源版本未知",
-              unknown_meta)
+              and meta.read_text() == "{}"
+              and "來源日期未知" in unknown_report
+              and "來源版本未知" in unknown_report,
+              (meta.read_text(), unknown_report[:200]))
 
 
 def t_probe_boundary_formal_second_round_regressions():
@@ -38422,6 +38425,36 @@ def t_probe_boundary_fourth_round_recovery_recipe():
                 check("恢复后新結果經父程序核對升格且可抵缺場", runner.call_count == 2
                       and not ablation.collect_skills_health(outdir)
                       and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 0)
+
+
+def t_probe_boundary_fourth_round_report_and_provenance():
+    """真純合併入口保留壞meta原始byte，報表的題號／檔名／來源不產生HTML。"""
+    import tempfile, json, importlib.util, io, contextlib
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_report", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-report-") as td:
+        root = Path(td); q = root / "q.jsonl"; q.write_text('{"id":"a"}\n')
+        outdir = root / "out"; outdir.mkdir(); meta = outdir / "meta.json"
+        for raw in (b'{"date":', b'[]', b'{}'):
+            meta.write_bytes(raw)
+            argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
+            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
+                 patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not launch model")):
+                rc = ablation.main()
+            check("純合併保留不可判meta原始證據 " + repr(raw), rc == 0 and meta.read_bytes() == raw,
+                  (rc, meta.read_bytes()))
+            report = (outdir / "summary.md").read_text()
+            check("meta不可判仍在報表明寫來源未知", "來源日期未知" in report and "來源版本未知" in report, report[:200])
+        attack = '<img src=x onerror=alert(1)>'
+        row = {"id": attack, "passed": True}
+        (outdir / "with-q-results.json").write_text(json.dumps({"arm": "with", "results": [row, {**row, "passed": False}]}))
+        summary = ablation.merge(outdir, [attack], 2)
+        summary["skills_health_poisoned"] = [(attack, ["failed"])]
+        md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
+        check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
+        check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
 
 
 def t_delguard_logs_ok_too():
