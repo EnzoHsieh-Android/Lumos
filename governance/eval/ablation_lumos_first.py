@@ -142,6 +142,9 @@ def invalid_batch_evidence(d, filename_arm=None):
                 or ("limit_hit" in row and type(row["limit_hit"]) is not bool)
                 or (row.get("answer_content_ok") is not None and type(row["answer_content_ok"]) is not bool)):
             return ["逐場計分欄位型別錯誤，健康狀態不可判"]
+        if calls is not None and any(not isinstance(call, (list, tuple)) or len(call) != 2
+                                     or not all(isinstance(part, str) for part in call) for call in calls):
+            return ["逐場工具呼叫內容型別錯誤，健康狀態不可判"]
         retries = row.get("retry_attempts", [])
         if not isinstance(retries, list) or any(not isinstance(r, dict) for r in retries):
             return ["逐場重試紀錄型別錯誤，窗口用量不可判"]
@@ -251,7 +254,8 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
     marker = {"arm": arm, "qid": qid, "results": [], "fatal": True,
               "inconclusive": True, "skills_health_bad": [], "failure_type": "unfinished",
               "log_path": str(log), "candidate_path": str(candidate),
-              "retry_policy": "archive-fatal-and-candidate-then-rerun"}
+              "recovery_paths": [str(out), str(candidate), str(pending)],
+              "retry_policy": "confirm-no-live-probe-then-archive-recovery-paths-and-rerun"}
     _atomic_write_text(pending, json.dumps(marker, ensure_ascii=False))
     t0 = time.time()
     with open(log, "w", encoding="utf-8") as lf:
@@ -319,7 +323,17 @@ def _arm_stats(results, expected_ids, runs):
     # 不過濾會把舊題的通過/不通過靜默混進 M1-M4 與頭條差值。用 expected_ids 篩掉不在現行題庫的。
     idset = set(expected_ids)
     results = [r for r in results if r.get("id") in idset]
-    valid = [r for r in results if is_valid(r)]
+    # 以既有檔案排序決定每題前 runs 個有效場；超額列仍保留於原始結果但不增加權重。
+    valid, accepted_per_id, surplus = [], {}, 0
+    for row in results:
+        if not is_valid(row):
+            continue
+        qid = row["id"]
+        if accepted_per_id.get(qid, 0) >= runs:
+            surplus += 1
+            continue
+        accepted_per_id[qid] = accepted_per_id.get(qid, 0) + 1
+        valid.append(row)
     n = len(valid)
     m1 = sum(1 for r in valid if r.get("passed"))
     # ★r2 正確性席:ever_lumos 為 None = 截斷資料判不出,排除在 M2 分母外(不當成 False 灌低)★
@@ -343,7 +357,8 @@ def _arm_stats(results, expected_ids, runs):
             "m4_content_passed": sum(1 for r in content if r.get("answer_content_ok")), "m4_content_n": len(content),
             "inconsistent_questions": inconsistent,
             "missing": sum(max(0, runs - per.get(q, [0, 0])[1]) for q in expected_ids),
-            "instrument_errors": len(results) - n,
+            "excluded_surplus": surplus,
+            "instrument_errors": sum(not is_valid(r) for r in results),
             "limit_hits": sum(1 for r in results if r.get("limit_hit")),
             "per_question": per}
 
@@ -397,6 +412,7 @@ def render_md(s, meta):
              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
              f"| 同題多次不一致的題數 | {len(a['inconsistent_questions'])} | {len(b['inconsistent_questions'])} |",
              f"| 缺場 / 撞上限 / 其他儀器例外 | {a['missing']} / {a['limit_hits']} / {a['instrument_errors'] - a['limit_hits']} | {b['missing']} / {b['limit_hits']} / {b['instrument_errors'] - b['limit_hits']} |",
+             f"| 超額有效場（保留原始資料、不計分） | {a.get('excluded_surplus', 0)} | {b.get('excluded_surplus', 0)} |",
              "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
              "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
              "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]

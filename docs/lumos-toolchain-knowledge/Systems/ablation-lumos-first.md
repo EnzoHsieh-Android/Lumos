@@ -27,6 +27,7 @@ verified_by:
   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
   - "[[Verification/2026-10-04_探針停派與失敗留痕]]"
   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+  - "[[Verification/2026-10-08_消融結果與恢復控制驗證]]"
 ---
 # ablation-lumos-first
 
@@ -69,3 +70,5 @@ PITFALL: 歸檔中斷測試只驗「最後有 fatal」，卻沒驗注入點真�
 PITFALL: r2 再指出同一測試只要 `.pending` 還在，`load_results` 就會拒收同名成功檔；即使 fatal 正式檔根本沒寫，也可假綠。現在注入點後直接檢查 fatal 正式 JSON 已落地，再看整批拒收。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-external-finder-v2.txt`；防回歸 `t_probe_boundary_postreview_archive_interrupt`。修改事故落地順序時要同時檢查標記、正式檔與候選檔。
 
 PITFALL: r3 的額度測試在空目錄給 `max_per_window=50`，就算把「剩餘額度」誤改成「整個上限」，測試仍綠；橫幅測試只查文字存在，移到報表最後也會綠。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r3-external-finder.txt`；重現方法及觀測在 `r3-intake.md` G20。下次寫額度和顯示測試，先用「已有 45、剩 5」及「警示必在第一屏」作前置斷言，再做移除守衛的翻紅檢查。
+
+PITFALL: 第三輪證實同題超額結果可灌高通過率、錯型 calls 可被當成沒用工具，事故文字也漏了未完成檔。修後保留原始資料但每題只採前 runs 個有效場；calls 逐項驗兩個字串；事故列三個恢復路徑且先確認無在途探針。出處 [[Verification/2026-10-08_消融結果與恢復控制驗證]]；防回歸 [test:t_probe_boundary_fourth_round_result_contracts][test:t_probe_boundary_fourth_round_recovery_recipe]。

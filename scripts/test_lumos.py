@@ -37696,7 +37696,7 @@ def t_probe_boundary_postreview_launch_exception_summary():
                   and attempt.get("fatal") is True and attempt.get("results") == []
                   and attempt.get("failure_type") == type(failure).__name__
                   and attempt.get("arm") == "with" and attempt.get("qid") == "a"
-                  and attempt.get("log_path") and attempt.get("retry_policy") == "archive-fatal-and-candidate-then-rerun"
+                  and attempt.get("log_path") and attempt.get("retry_policy") == "confirm-no-live-probe-then-archive-recovery-paths-and-rerun"
                   and attempt.get("candidate_path")
                   and "cmd" not in attempt and "failure_message" not in attempt,
                   (type(failure).__name__, len(launched), rc, summary, attempt))
@@ -38360,6 +38360,68 @@ def t_probe_boundary_formal_retry_budget():
         check("額度用盡不能再啟動第三次且整批 fatal", rc == 3 and data["fatal"] is True
               and data["inconclusive"] is True and len(calls) == 2,
               (rc, len(calls), data))
+
+
+def t_probe_boundary_fourth_round_result_contracts():
+    """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
+    import tempfile, json, importlib.util
+    spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
+        outdir = Path(td)
+        a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
+        b = {"id": "b", "passed": False, "calls": [], "n_calls": 0}
+        path = outdir / "with-q-a.json"
+        path.write_text(json.dumps({"arm": "with", "results": [a] * 100 + [b]}))
+        check("現場確有一百筆同題成功與另一題失敗", len(ablation.load_results(outdir)["with"]) == 101)
+        result = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
+        check("同題超額列不能灌高通過率或工具使用分母", result["n"] == 2
+              and result["m1_passed"] == 1 and result["m1_rate"] == 0.5
+              and result["m2_n"] == 2 and result["m2_ever"] == 1, result)
+        path.write_text(json.dumps({"arm": "with", "results": [a, b]}))
+        normal = ablation.merge(outdir, ["a", "b"], 1)["arms"]["with"]
+        check("正常一題一場仍保留二分之一與首次工具步數", normal["m1_rate"] == 0.5
+              and normal["m3_first_idx_median"] == 0 and normal["missing"] == 0, normal)
+        for calls in ([42], [["Bash"]], [["Bash", 42]], [[42, "lumos"]]):
+            path.write_text(json.dumps({"arm": "with", "results": [{**a, "calls": calls}]}))
+            check("錯型工具呼叫整批拒收而非算沒有使用工具 " + repr(calls),
+                  bool(ablation.collect_skills_health(outdir))
+                  and not ablation.load_results(outdir)["with"], ablation.collect_skills_health(outdir))
+
+
+def t_probe_boundary_fourth_round_recovery_recipe():
+    """照事故紀錄給的路徑歸檔，真健康入口須恢復且下一次能升格正式結果。"""
+    import tempfile, json, importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location("ablation_r4_recovery", Path(__file__).resolve().parents[1]
+                                                  / "governance/eval/ablation_lumos_first.py")
+    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+    with tempfile.TemporaryDirectory(prefix="probe-r4-recovery-") as td:
+        outdir = Path(td)
+        def fake_probe(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({"arm": "with",
+                "results": [{"id": "a", "passed": True}], "fatal": False,
+                "inconclusive": False, "skills_health_bad": []}))
+            return type("Result", (), {"returncode": 2 if runner.call_count == 1 else 0})()
+        with patch.object(ablation.subprocess, "run", side_effect=fake_probe) as runner:
+            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+            artifacts = list(outdir.glob("with-q-*"))
+            marker = json.loads(next(outdir.glob("with-q-*.json")).read_text())
+            expected = {str(p) for p in artifacts if p.suffix in (".json", ".candidate", ".pending")}
+            check("現場失敗確有正式事故候選與未完成三檔", runner.call_count == 1
+                  and len(expected) == 3 and bool(ablation.collect_skills_health(outdir)), artifacts)
+            recovery = marker.get("recovery_paths", [])
+            check("恢復清單列齊三檔", set(recovery) == expected, marker)
+            for name in recovery:
+                p = Path(name); p.rename(p.with_suffix(p.suffix + ".archived"))
+            check("照紀錄完整歸檔後健康掃描恢復", not ablation.collect_skills_health(outdir),
+                  ablation.collect_skills_health(outdir))
+            if not ablation.collect_skills_health(outdir):
+                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+                check("恢复后新結果經父程序核對升格且可抵缺場", runner.call_count == 2
+                      and not ablation.collect_skills_health(outdir)
+                      and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 0)
 
 
 def t_delguard_logs_ok_too():
