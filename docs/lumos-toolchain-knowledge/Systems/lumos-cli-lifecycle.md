@@ -131,7 +131,7 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 ## 關鍵機制
 - **分發=symlink 指向源**:`install`/`_install_skills` 把全域 lumos 與 skills 連到來源 clone(`$LUMOS_HOME`,預設 `~/harness/lumos-toolchain`)。`git pull` 來源 clone 即吃到 CLI 行為 + skill 更新,免重裝;但 `graph-discipline.md` 速查是 `_scaffold_project` per-project 注入專案 `CLAUDE.md`,要重跑 `init`/`update` 才刷新。
 - **`_link_or_copy` 跨平台 + 冪等**:Unix `symlink_to`、Win `mklink /J` junction(輸出走 OEM 碼頁,`errors="replace"` 防 UnicodeDecodeError)、皆失敗 fallback `copytree`(失去 pull 即更新)。重跑須冪等且絕不刪來源(`t_link_or_copy_idempotent`)——junction/空夾用 `os.rmdir` 只移連結本身、不跟進 target。
-- **vendor 共用白名單 + 結尾自癒**:`_VENDORED_TOOLKIT`(`scripts/lumos`、`scripts/test_lumos.py`、`scripts/merge-claude-settings.py`、`scripts/graph-rename.sh`、`scripts/fetch-notesmd.sh`)+ `scripts/hooks/`、`scripts/templates/` 兩夾。`_vendor_toolchain` 收尾以 `filecmp.cmp(shallow=False)` 逐檔比對 src↔target,差異即 `copy2` 覆補(自癒 installer 漏檔)。
+- WHY: 安裝與卸載共用精確白名單 [出處:[[Projects/測試品質工具接線_計劃]]] [因:新增 sidecar 後正文列舉未同步，會誤導接手者漏帶配套；清單從本篇程式的 `_VENDORED_TOOLKIT` 查，不在正文保留第二份]。
 - **資料保護**:`_scaffold_project` 偵測 vault 已存在即 skip;`init --force` 也只重裝 hooks/工具組,vault 內容不動。
 - **來源自我保護**:`deinit` 偵測 `root==_lumos_src()` 即 `return 2`(不可在 Lumos 源本身跑專案層指令);`update` 在來源 repo 自身只刷新紀律區塊、回 0(`--dry-run` 只預覽紀律區塊)。
 - **hooks 安裝**(`_install_hooks_py`):①`git config core.hooksPath scripts/hooks` ②Claude hooks `.py` copy 進 `~/.claude/hooks/`(個別檔不用 junction,因 `mklink /J` 只連目錄)③`merge-claude-settings.py` 用 resolved python 註冊 settings。

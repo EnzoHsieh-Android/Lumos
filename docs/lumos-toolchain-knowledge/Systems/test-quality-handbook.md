@@ -9,6 +9,7 @@ aliases: []
 about_code:
   - governance/eval/test_quality_handbook.py
   - governance/eval/test_test_quality_handbook.py
+  - scripts/test_lumos.py
 tags:
   - type/system
   - status/doing
@@ -21,6 +22,7 @@ verified_by:
   - "[[Verification/2026-10-07_測試手冊措辭兩臂試行]]"
   - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 ---
 # test-quality-handbook
 
@@ -51,3 +53,7 @@ PITFALL: 正常有限迴圈被考卷語法拒絕會使測試效果失去可比�
 
 PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能繼續消耗 [出處:code-test-quality-native-push/r1-資源-codex.md r2] [防回歸:test_model_timeout_stops_worker_without_paid_call]。控制使用PATH前置可確認的fake claude，真的生成工作者再逾時、確認停止，不消耗模型額度。模型命令使用獨立POSIX程序群組；本次不延伸Windows資格。語法限制與模型提交計分分開，沿既有固定題grammar，不宣稱一般Python沙盒。
 
+
+## 模型程序清理控制的歸屬
+
+WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。

@@ -76009,5 +76009,18 @@ def t_test_quality_scan_cli():
           output[-5000:])
 
 
+
+def t_test_quality_handbook_controls():
+    import re
+    _need_src("governance/eval/test_test_quality_handbook.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
+                         cwd=root, capture_output=True, text=True, timeout=60)
+    output = run.stdout + run.stderr
+    check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
+          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+          output[-5000:])
+
+
 if __name__ == "__main__":
     sys.exit(main())

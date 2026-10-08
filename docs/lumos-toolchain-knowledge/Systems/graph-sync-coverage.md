@@ -25,6 +25,7 @@ verified_by:
   - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
   - "[[Verification/2026-09-05_README審視量測]]"
   - "[[Verification/2026-09-18_收工點名改問版本控制]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 decisions:
   - content: 收工 Stop hook 擋一次兩家一致(Claude 也擋):Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌、模型看不到,舊「軟提醒」實為零;07-06 撤的是每回合 nag,同 session 只擋一次且只在改了碼沒寫回時不算重開 nag。單源 Projects/README審視五修_計劃 d2
     id: d1
@@ -135,3 +136,7 @@ python3 governance/eval/sync-nudge/probe_sync.py <repo根>
 
 ## 怎麼用
 `lumos impact --diff staged --sync-check`(commit 前自己先看)、`lumos impact --diff <range> --sync-check`(推前)。
+
+## 程式分類補齊
+
+PITFALL: PHP 與 Node 模組來源被附件分类誤排，日後同步點名亦需要共用完整分類 [出處:code-test-quality-native-push/r2-邊界-codex.md] [防回歸:t_code_exts_lists_agree、test_php_and_node_variants_kept_in_impact]。沿既有五份一致性控制补齊，不改 Stop 點名、阻擋次數與失敗處理。

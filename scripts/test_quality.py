@@ -125,10 +125,13 @@ def assertion_failure(node):
     return False
 
 
+class NoDtdTreeBuilder(ET.TreeBuilder):
+    def doctype(self, name, pubid, system):
+        raise ValueError("DTD/entity declarations not accepted")
+
+
 def junit(raw):
-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
-        raise ValueError('DTD/entity declarations not accepted')
-    root = ET.fromstring(raw)
+    root = ET.fromstring(raw, parser=ET.XMLParser(target=NoDtdTreeBuilder()))
     tag = xml_tag
     if tag(root) not in {'testsuites', 'testsuite'}:
         raise ValueError('expected JUnit testsuite(s)')
@@ -157,6 +160,10 @@ def junit(raw):
     # Suite-level errors must not disappear behind passing testcase rows.
     if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
         raise ValueError('runner/suite errors')
+    attached = {id(n) for case in root.iter() if tag(case) == "testcase"
+                for n in case if tag(n) in {"failure", "skipped"}}
+    if any(tag(n) in {"failure", "skipped"} and id(n) not in attached for n in root.iter()):
+        raise ValueError("outcome outside testcase")
     validate_suite_counts(root)
     return cases
 

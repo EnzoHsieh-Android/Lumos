@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Independent controls for the fixed handbook experiment grader."""
 import unittest
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from unittest import mock
 import test_quality_handbook as ev
 
 HEADER = 'import unittest\nfrom subject import total\nclass Tests(unittest.TestCase):\n'
@@ -94,6 +103,70 @@ class Tests(unittest.TestCase):
 '''
         result = ev.score('routing', code)
         self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
+
+
+class ModelCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    @staticmethod
+    def alive(pid):
+        run = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True
+        )
+        return (
+            run.returncode == 0
+            and bool(run.stdout.strip())
+            and not run.stdout.strip().startswith("Z")
+        )
+
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_model_timeout_stops_worker_without_paid_call(self):
+        module = ev
+        binary = self.root / "bin"
+        binary.mkdir()
+        fake = binary / "claude"
+        pidfile = self.root / "worker.pid"
+        fake.write_text(
+            "#!"
+            + sys.executable
+            + '\nimport subprocess,sys,time\nfrom pathlib import Path\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\nPath('
+            + repr(str(pidfile))
+            + ").write_text(str(p.pid))\ntime.sleep(60)\n"
+        )
+        fake.chmod(0o755)
+        with mock.patch.dict(
+            os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}
+        ):
+            self.assertEqual(
+                shutil.which("claude"),
+                str(fake),
+                "fixture entrypoint, never real provider",
+            )
+            result, _ = module.run_model(
+                self.root,
+                "fixture",
+                "fixture",
+                "fixture-model",
+                1,
+                False,
+                self.root / "raw.jsonl",
+            )
+        self.assertTrue(pidfile.exists(), "worker actually launched before timeout")
+        pid = int(pidfile.read_text())
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        self.assertFalse(result["valid"])
+        self.assertIsNone(result["returncode"])
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+
 
 
 if __name__ == '__main__':

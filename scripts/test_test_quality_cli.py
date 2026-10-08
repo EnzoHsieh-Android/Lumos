@@ -424,7 +424,8 @@ class QualityCLI(unittest.TestCase):
     @staticmethod
     def lumos_module():
         from importlib.machinery import SourceFileLoader
-        loader = SourceFileLoader('quality_lumos_control', str(TOOL))
+
+        loader = SourceFileLoader("quality_lumos_control", str(TOOL))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)
         loader.exec_module(module)
@@ -432,93 +433,336 @@ class QualityCLI(unittest.TestCase):
 
     def test_eval_attachments_keep_actual_code_as_impact_seeds(self):
         module = self.lumos_module()
-        prefix = 'governance/eval/results/fixture/'
-        for suffix in ['txt', 'xml', 'log', 'trx', 'zip']:
-            self.assertFalse(module._impact_diff_seed_ok(prefix + 'report.' + suffix, '100644', False))
-        for name, mode, shebang in [('test.py', '100644', None), ('runner.txt', '100755', None), ('runner', '100644', True)]:
+        prefix = "governance/eval/results/fixture/"
+        for suffix in ["txt", "xml", "log", "trx", "zip"]:
+            self.assertFalse(
+                module._impact_diff_seed_ok(
+                    prefix + "report." + suffix, "100644", False
+                )
+            )
+        for name, mode, shebang in [
+            ("test.py", "100644", None),
+            ("runner.txt", "100755", None),
+            ("runner", "100644", True),
+        ]:
             self.assertTrue(module._impact_diff_seed_ok(prefix + name, mode, shebang))
-        self.assertTrue(module._impact_diff_seed_ok(prefix + 'unknown.txt'))
-        self.assertNotIn('governance/eval/results/', module._BOOKKEEPING_DIRS)
+        self.assertTrue(module._impact_diff_seed_ok(prefix + "unknown.txt"))
+        self.assertNotIn("governance/eval/results/", module._BOOKKEEPING_DIRS)
 
     def test_deinit_removes_only_vendored_bytecode(self):
         module = self.lumos_module()
-        cache = self.root / 'scripts/__pycache__'
+        cache = self.root / "scripts/__pycache__"
         cache.mkdir(parents=True)
-        owned = cache / 'test_quality.cpython-314.pyc'
-        user = cache / 'user_app.cpython-314.pyc'
-        owned.write_bytes(b'owned')
-        user.write_bytes(b'user')
+        owned = cache / "test_quality.cpython-314.pyc"
+        user = cache / "user_app.cpython-314.pyc"
+        owned.write_bytes(b"owned")
+        user.write_bytes(b"user")
         module._deinit_remove_vendored(self.root)
         self.assertFalse(owned.exists())
-        self.assertEqual(user.read_bytes(), b'user')
+        self.assertEqual(user.read_bytes(), b"user")
         user.unlink()
         cache.rmdir()
-        external = self.root / 'external'
+        external = self.root / "external"
         external.mkdir()
         target = external / owned.name
-        target.write_bytes(b'external')
+        target.write_bytes(b"external")
         cache.symlink_to(external, target_is_directory=True)
         module._deinit_remove_vendored(self.root)
-        self.assertEqual(target.read_bytes(), b'external')
+        self.assertEqual(target.read_bytes(), b"external")
 
     def test_scan_entrypoints_share_options_and_results(self):
-        test_file = self.root / 'test_sample.py'
-        test_file.write_text('def test_same():\n    assert 1 == 1\n')
-        cli_rc, cli_result = self.run_cli('scan', '--json', test_file, '--check-helper', 'check')
-        run = subprocess.run([sys.executable, str(TOOL.with_name('test_quality_scan.py')), '--json', str(test_file), '--check-helper', 'check'], capture_output=True, text=True, timeout=10)
+        test_file = self.root / "test_sample.py"
+        test_file.write_text("def test_same():\n    assert 1 == 1\n")
+        cli_rc, cli_result = self.run_cli(
+            "scan", "--json", test_file, "--check-helper", "check"
+        )
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL.with_name("test_quality_scan.py")),
+                "--json",
+                str(test_file),
+                "--check-helper",
+                "check",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         standalone = json.loads(run.stdout)
         self.assertEqual(run.returncode, cli_rc)
         for report in [cli_result, standalone]:
-            report.pop('elapsed_seconds')
+            report.pop("elapsed_seconds")
         self.assertEqual(cli_result, standalone)
-        self.assertEqual(cli_result['findings'][0]['rule_id'], 'same-comparison')
+        self.assertEqual(cli_result["findings"][0]["rule_id"], "same-comparison")
 
-    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
-    def test_model_timeout_stops_worker_without_paid_call(self):
-        path = TOOL.parent.parent / "governance/eval/test_quality_handbook.py"
-        spec = importlib.util.spec_from_file_location("test_handbook_worker", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        binary = self.root / "bin"
-        binary.mkdir()
-        fake = binary / "claude"
-        pidfile = self.root / "worker.pid"
-        fake.write_text(
+    def copied_bundle(self, old=False):
+        target = self.root / "scripts"
+        target.mkdir()
+        for name in [
+            "lumos",
+            "test_quality.py",
+            "test_quality_scan.py",
+            "test_quality_semgrep.py",
+        ]:
+            shutil.copy2(TOOL.with_name(name), target / name)
+        if old:
+            core = target / "test_quality.py"
+            current = core.read_bytes()
+            previous = current.replace(b"    validate_suite_counts(root)\n", b"")
+            self.assertNotEqual(
+                previous, current, "old package fixture must omit summary validation"
+            )
+            core.write_bytes(previous)
+        return target
+
+    def test_mixed_sidecars_refused_before_false_green(self):
+        target = self.copied_bundle(old=True)
+        (self.root / "source.txt").write_text("production")
+        (self.root / "tests.txt").write_text("independent")
+        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "test-quality",
+                "capture",
+                "--out",
+                "capture",
+                "--source",
+                "source.txt",
+                "--test-source",
+                "tests.txt",
+                "--junit-stdout",
+                "--language",
+                "fixture",
+                "--framework",
+                "control",
+                "--",
+                sys.executable,
+                "-c",
+                "print(" + repr(xml) + ")",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 2, run.stdout)
+        self.assertEqual(json.loads(run.stdout)["verdict"], "not_assessed")
+        self.assertFalse((self.root / "capture").exists())
+
+    def test_orphan_failure_refused(self):
+        rc, report = self.capture(
+            '<testsuite><testcase classname="T" name="x"/><failure type="AssertionError">boom</failure></testsuite>'
+        )
+        self.assertEqual(rc, 2, report)
+
+    def test_php_and_node_variants_kept_in_impact(self):
+        tool = self.lumos_module()
+        for name in ["Test.php", "runner.cjs", "runner.mts", "runner.cts"]:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    tool._impact_diff_seed_ok(
+                        "governance/eval/results/example/" + name, "100644", None
+                    )
+                )
+
+    def test_owned_extensionless_cache_removed(self):
+        target = self.copied_bundle()
+        from importlib.machinery import SourceFileLoader
+
+        loader = SourceFileLoader("copied_lumos_cache", str(target / "lumos"))
+        module_spec = importlib.util.spec_from_loader(loader.name, loader)
+        tool = importlib.util.module_from_spec(module_spec)
+        loader.exec_module(tool)
+        cache = target / "__pycache__"
+        owned = list(cache.glob("lumos*.pyc"))
+        self.assertTrue(owned, "SourceFileLoader must actually create bytecode")
+        user = cache / "lumos_user.cpython-314.pyc"
+        user.write_bytes(b"user bytes")
+        tool._deinit_remove_vendored(self.root)
+        self.assertFalse(any(p.exists() for p in owned))
+        self.assertEqual(user.read_bytes(), b"user bytes")
+
+    def test_resolved_cache_escape_preserved(self):
+        tool = self.lumos_module()
+        target = self.root / "external"
+        target.mkdir()
+        artifact = target / "test_quality.cpython-314.pyc"
+        artifact.write_bytes(b"external")
+        (self.root / "scripts").mkdir()
+        cache = self.root / "scripts/__pycache__"
+        cache.symlink_to(target, target_is_directory=True)
+        self.assertEqual(cache.resolve(), target.resolve())
+        with mock.patch.object(Path, "is_symlink", return_value=False):
+            tool._deinit_remove_vendored(self.root)
+        self.assertEqual(artifact.read_bytes(), b"external")
+
+    def test_results_rename_preserves_original_role_source(self):
+        tool = self.lumos_module()
+        repository = self.root / "rename"
+        repository.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-C", str(repository), *args],
+                stderr=subprocess.STDOUT,
+                text=True,
+            ).strip()
+
+        git("init", "-q")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        (repository / "service.py").write_text("def public_api():\n    return 42\n")
+        git("add", "service.py")
+        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "before")
+        before = git("rev-parse", "HEAD")
+        destination = repository / "governance/eval/results/run/report.txt"
+        destination.parent.mkdir(parents=True)
+        git("mv", "service.py", str(destination.relative_to(repository)))
+        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "after")
+        after = git("rev-parse", "HEAD")
+        self.assertTrue(
+            git("diff", "--name-status", "-M", before, after).startswith("R100"),
+            "real rename must be recognized",
+        )
+        self.assertIn(
+            ("service.py", before),
+            tool._review_role_changed_files(repository, before, after),
+        )
+
+    def test_mixed_scanner_retains_legacy_help(self):
+        target = self.copied_bundle()
+        (target / "test_quality_scan.py").write_text(
+            "# previous scanner has no shared argument export\n"
+        )
+        run = subprocess.run(
+            [sys.executable, str(target / "lumos"), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
+    def test_invalid_semgrep_rule_has_structured_shape_error(self):
+        source = self.root / "test_sample.php"
+        source.write_text("<?php assert(true);")
+        backend = self.root / "semgrep"
+        backend.write_text(
             "#!"
             + sys.executable
-            + '\nimport subprocess,sys,time\nfrom pathlib import Path\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\nPath('
-            + repr(str(pidfile))
-            + ").write_text(str(p.pid))\ntime.sleep(60)\n"
+            + "\n"
+            + "import json,sys\n"
+            + "p=sys.argv[-1]\n"
+            + 'print(json.dumps({"results":[{"check_id":None,"path":p,"start":{"line":1}}],"errors":[],"paths":{"scanned":[p]}}))\n'
         )
-        fake.chmod(0o755)
-        with mock.patch.dict(
-            os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}
-        ):
-            self.assertEqual(
-                shutil.which("claude"),
-                str(fake),
-                "fixture entrypoint, never real provider",
-            )
-            result, _ = module.run_model(
-                self.root,
+        backend.chmod(0o755)
+        rc, report = self.run_cli("scan", "--json", "--semgrep", backend, source)
+        self.assertEqual(rc, 2)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["verdict"], "not_assessed")
+        self.assertIn("invalid finding rule", report["inputs"][0]["reason"])
+
+    def test_source_bytes_not_stale_bytecode_authorize_capture(self):
+        target = self.copied_bundle()
+        from importlib.machinery import SourceFileLoader
+
+        path = target / "test_quality.py"
+        good = path.read_bytes()
+        old = good.replace(b"    validate_suite_counts(root)\n", b"")
+        self.assertLess(len(old), len(good))
+        path.write_bytes(old + b" " * (len(good) - len(old)))
+        loader = SourceFileLoader("quality_old_cache", str(path))
+        module_spec = importlib.util.spec_from_loader(loader.name, loader)
+        loaded = importlib.util.module_from_spec(module_spec)
+        loader.exec_module(loaded)
+        cache = Path(importlib.util.cache_from_source(str(path)))
+        self.assertTrue(cache.exists(), "stale cache must exist before restoration")
+        old_stamp = path.stat()
+        path.write_bytes(good)
+        os.utime(path, ns=(old_stamp.st_atime_ns, old_stamp.st_mtime_ns))
+        self.assertEqual(path.read_bytes(), good, "source actually restored")
+        (self.root / "source.txt").write_text("production")
+        (self.root / "tests.txt").write_text("independent")
+        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "test-quality",
+                "capture",
+                "--out",
+                "capture",
+                "--source",
+                "source.txt",
+                "--test-source",
+                "tests.txt",
+                "--junit-stdout",
+                "--language",
                 "fixture",
-                "fixture",
-                "fixture-model",
-                1,
-                False,
-                self.root / "raw.jsonl",
-            )
-        self.assertTrue(pidfile.exists(), "worker actually launched before timeout")
-        pid = int(pidfile.read_text())
-        self.addCleanup(
-            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+                "--framework",
+                "control",
+                "--",
+                sys.executable,
+                "-c",
+                "print(" + repr(xml) + ")",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
-        self.assertFalse(result["valid"])
-        self.assertIsNone(result["returncode"])
-        deadline = time.monotonic() + 2
-        while self.alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertFalse(self.alive(pid))
+        self.assertEqual(run.returncode, 2, run.stdout)
+        self.assertEqual(json.loads(run.stdout)["status"], "invalid")
+
+    def test_utf16_dtd_is_not_a_valid_receipt(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+        ]
+        rc, report = self.capture("", command=command)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("DTD", report["reason"])
+
+    def test_plain_utf16_report_retains_valid_capture(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><testsuite><testcase name="ok"/></testsuite>'
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+        ]
+        rc, report = self.capture("", command=command)
+        self.assertEqual(rc, 0)
+        self.assertEqual(report["status"], "executed")
+
+    def test_global_vault_option_retains_structured_deployment_error(self):
+        target = self.copied_bundle()
+        (target / "test_quality_scan.py").unlink()
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "--vault",
+                str(self.root / "vault"),
+                "test-quality",
+                "scan",
+                "sample.py",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 2, run.stderr)
+        report = json.loads(run.stdout)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["verdict"], "not_assessed")
+        self.assertNotIn("Traceback", run.stderr)
 
 
 if __name__ == "__main__":

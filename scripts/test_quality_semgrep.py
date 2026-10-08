@@ -25,7 +25,10 @@ def backend_findings(result, source, path, raw):
     for item in result['results']:
         if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
             raise ValueError('invalid finding shape')
-        if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+        rule = item.get('check_id')
+        if not isinstance(rule, str):
+            raise ValueError('invalid finding rule')
+        if rule.split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
             raise ValueError('unexpected finding rule or snapshot')
         line = item['start']['line']
         if type(line) is not int or line < 1:

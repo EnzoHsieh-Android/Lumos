@@ -21,6 +21,8 @@ verified_by:
   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
+  - "[[Verification/測試品質分支推送前修復驗證]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 ---
 # test-quality-multilang
 
@@ -38,3 +40,9 @@ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處
 - `governance/eval/test_quality_corpus.py` 的獨立固定標註、未知／未分析結果與跨語言外推限制歸本篇，不把考卷符合率當真實專案品質。
 
 WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。
+
+## 推送前結果形狀修復
+
+WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test-quality-native-push/r1-fix.json] [因:沿固定 backend 結果合約拆分，沒有增加第二個 parser；配對控制與 [[Verification/測試品質分支推送前修復驗證]] 分開記錄來源掃描與原生執行資格]。
+
+PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。

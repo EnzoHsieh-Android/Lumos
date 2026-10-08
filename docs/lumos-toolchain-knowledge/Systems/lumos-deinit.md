@@ -13,6 +13,7 @@ tags:
 verified_by:
   - "[[Verification/2026-06-26_lumos-deinit_跨平台]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 summary: |-
   FLOW:pre-flight守衛(非git→rc2｜專案路徑不是UTF-8→rc2(嚴格解碼不猜路徑,2026-09-11 見 [[Issues/風險掃描遇到非UTF-8內容整支中斷]])｜root==_lumos_src→rc2｜vault==root→強制keep-graph)→[--dry-run僅印即返]→[刪圖譜安全網:非tty無--yes→rc2｜印清單+未commit數→互動y確認]→拆閘→剝CLAUDE區塊→刪vault→移vendored(最後,可能含自己)
   KEY:對稱 lumos init 的「專案層」反安裝(對比 uninstall=機器層);只動本 repo,不碰 ~/.claude
@@ -91,3 +92,9 @@ about_code:
 
 PITFALL: 新增runtime imports會留下工具自己的Python bytecode，單刪來源不能完整卸載 [出處:code-test-quality-native-push/r1-邊界-codex.md b2] [防回歸:test_deinit_removes_only_vendored_bytecode]。取精確vendor模組stem清理自己的bytecode，保留使用者快取與符號連結外側內容，承接原逐檔白名單避免整夾連坐的裁決。
 
+
+## 第二輪快取邊界
+
+PITFALL: 無副檔名 CLI 的 SourceFileLoader 會留下不同拼法的自有 bytecode，僅列 .py stem 漏清 [出處:code-test-quality-native-push/r2-資源-codex.md] [防回歸:test_owned_extensionless_cache_removed]。控制先由真 loader 產生快取，並驗使用者快取原 bytes 保留；只辨識已知 CPython 檔名，未知快取保持保守留存。
+
+PITFALL: 只靠 is_symlink 不能守住解析後在外側的 cache 目錄 [出處:code-test-quality-native-push/r2-邊界-codex.md] [防回歸:test_resolved_cache_escape_preserved、test_deinit_removes_only_vendored_bytecode]。本次為 POSIX 連結與受控 API 反例，沒有 Windows 原生資格；平台與 cache-tag 改變時重驗本控制（驗證前提見 [[Verification/測試品質分支推送前修復驗證]]）。

@@ -21570,7 +21570,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
             print(f"  刪圖譜 vault: {vault}({n} 檔)")
         elif vault is not None:
             print(f"  保留圖譜 vault: {vault}")
-        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
+        print(f"  移除 vendored 工具組(白名單:{len(_VENDORED_TOOLKIT)} 檔 + hooks/templates 兩夾)")
         return 0
     if will_delete_vault and not yes:
         if not sys.stdin.isatty():
@@ -21965,17 +21965,21 @@ def _deinit_strip_claude(root: Path) -> bool:
 
 def _deinit_remove_bytecode(root: Path) -> list:
     cache = root / "scripts/__pycache__"
-    if cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir():
+    if (cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir()
+            or cache.resolve() != root.resolve() / "scripts/__pycache__"):
         return []
     names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
     removed = []
-    for name in names:
-        for path in cache.glob(name + ".*.pyc"):
-            try:
-                path.unlink()
-                removed.append(str(path.relative_to(root)))
-            except OSError as exc:
-                print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
+    patterns = [re.escape(name) + r"[.]cpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc" for name in names]
+    patterns.append(r"lumoscpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc")
+    for path in cache.glob("*.pyc"):
+        if not any(re.fullmatch(pattern, path.name) for pattern in patterns):
+            continue
+        try:
+            path.unlink()
+            removed.append(str(path.relative_to(root)))
+        except OSError as exc:
+            print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
     try:
         cache.rmdir()
     except OSError:
@@ -26515,7 +26519,7 @@ def _review_role_changed_files(root, base, head, deadline=None):
         return None
     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
     out += [(old, base) for old, new in renamed
-            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
+            if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
     return [(path, ref) for path, ref in out
@@ -28651,7 +28655,7 @@ def _lint_watch_mode(repo_root, as_json):
 # ★為什麼存在★:一篇節點在依賴行用反引號寫別人的檔,改那些檔時推筆記就推它、寫回就落它——兩個消費專案兩天內
 # 長歪兩次、工具全綠。這一段在提交與推送的當下擋「新違規」,舊帳交給健檢提醒(決策 d1)。
 # 單源=計劃節點;每條規則的註解標它對回的條款編號 [SN]。
-_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".sql", ".py", ".kt", ".kts",
+_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php", ".sql", ".py", ".kt", ".kts",
                        ".java", ".swift", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".ps1"}
 # ↑「改程式要動圖譜」那道閘的第五份副本(另外四份在提交前/提交後掛鉤與 Claude 端兩支掛鉤)——
 #   t_code_exts_lists_agree 釘五份一致 [S1]。不借 CODE_EXTS_T:那份是符號查核用的,內容不同。
@@ -49217,23 +49221,48 @@ def cmd_python_path():
     return 0
 
 
-def _test_quality_deployment_ready(argv):
-    if argv[:1] != ["test-quality"]:
-        return True
+_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': 'd945c8d9437a61de7942d28b9cefd578c0dd68e4fddf4851d2db1eb3a934d3d1', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
+
+
+def _test_quality_bundle_sources():
     folder = Path(__file__).resolve().parent
-    required = [Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")]
-    missing = [p for p in required if not (folder / p).is_file()]
-    if not missing:
-        return True
-    import json
-    print(json.dumps({"verdict": "not_assessed", "complete": False,
-                      "reason": "測試品質工具未完整部署:缺 " + ", ".join(missing) + "；請 lumos update。"}, ensure_ascii=False))
-    return False
+    required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
+        raise ValueError("配套指紋清單未對齊")
+    sources = {}
+    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
+        with (folder / name).open("rb") as stream:
+            raw = stream.read(10 * 1024 * 1024 + 1)
+        if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
+            raise ValueError("配套版本不一致:" + name)
+        sources[name.removesuffix(".py")] = (folder / name, raw)
+    return sources
+
+
+def _test_quality_load_bundle():
+    import importlib.util
+    missing = object()
+    previous = {}
+    try:
+        sources = _test_quality_bundle_sources()
+        previous = {name: sys.modules.get(name, missing) for name in sources}
+        for name, (path, raw) in sources.items():
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            exec(compile(raw, str(path), "exec"), module.__dict__)
+    except (OSError, ValueError, ImportError, SyntaxError) as exc:
+        for name, module in previous.items():
+            if module is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+        return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
+    return None
 
 
 def main():
-    if not _test_quality_deployment_ready(sys.argv[1:]):
-        return 2
+    quality_deployment_error = _test_quality_load_bundle()
     class _LumosParser(argparse.ArgumentParser):
         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
 
@@ -49447,13 +49476,13 @@ def main():
     cr.add_argument("--refuted-set", dest="refuted_set",
                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
 
-    try:
-        from test_quality import add_parser as _tq_parser
-    except ModuleNotFoundError as exc:
-        if exc.name != "test_quality":
-            raise
-        sub.add_parser("test-quality", help="測試品質工具未完整部署，請更新來源與vendor")
+    if quality_deployment_error:
+        quality = sub.add_parser("test-quality", add_help=False,
+                                 help="測試品質工具未完整部署，請更新來源與vendor")
+        quality.add_argument("quality_args", nargs=argparse.REMAINDER)
+        quality.add_argument("--help", action="store_true")
     else:
+        from test_quality import add_parser as _tq_parser
         _tq_parser(sub)
 
     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
@@ -50259,6 +50288,10 @@ def main():
     if args.cmd == "prose-lint":
         return cmd_prose_lint(args.path)
     if args.cmd == "test-quality":
+        if quality_deployment_error:
+            print(json.dumps({"verdict": "not_assessed", "complete": False,
+                              "reason": quality_deployment_error}, ensure_ascii=False))
+            return 2
         try:
             from test_quality import dispatch as _tq_dispatch
         except ModuleNotFoundError as exc:

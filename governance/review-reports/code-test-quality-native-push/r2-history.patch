@@ -1,0 +1,620 @@
+diff --git a/governance/eval/historical_handbook_trial.py b/governance/eval/historical_handbook_trial.py
+index 39160bf5..4ff20a8d 100644
+--- a/governance/eval/historical_handbook_trial.py
++++ b/governance/eval/historical_handbook_trial.py
+@@ -32,71 +32,70 @@ LEAN_API = '''測試介面：from subject import fixture。
+ fixture("normal") 或 fixture("cache-moved") 提供隔離的筆記庫與家目錄設定，with fixture(...) as s 使用。
+ s.lock() 是鎖的 context manager；s.fallback_ready() 查主要快取路徑是否不可信；s.held() 查鎖是否存在；s.external_written() 查外部快取目錄是否有鎖寫入。
+ 輸出 unittest.TestCase 的 test_ 方法，只 import unittest 與 from subject import fixture。
+ 可執行語法：with fixture(...) as s、with s.lock()、pass、self.assertTrue/assertFalse/assertEqual/assertGreater 搭配以上查詢及字面值。with 可依 Python 語法組合。測試用名稱 self 與 s，不使用其他變數、迴圈、額外呼叫或匯入；可含標準 main 尾段。
+ fixture 有取鎖等待上限；取鎖失敗回報 AssertionError。程序逾時、語法或環境錯誤列無效。'''
+ LEAN_TASK = '''請為笔記修改的鎖加實際有用的測試，自行選擇情境。
+ 需求：同一程序對同一筆記庫可重入；使用者可以搬移快取目錄，這項設定下仍須保持鎖的行為，鎖只寫在可信位置；使用完應釋放。
+ 最後只輸出一個 python code fence。implementation.txt 是目前實作的程式投影（去除註解與文件字串）；先讀。沒有執行工具或驗證回饋。'''
+ 
+ 
++def validate_import(node):
++    if isinstance(node, ast.Import) and [(a.name, a.asname) for a in node.names] != [('unittest', None)]:
++        raise ValueError('unsupported-import')
++    if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or [(a.name, a.asname) for a in node.names] != [('fixture', None)]):
++        raise ValueError('unsupported-import')
++
++
++def validate_node_access(node):
++    validate_import(node)
++    if isinstance(node, ast.FunctionDef) and (not node.name.startswith('test_') or len(node.args.args) != 1 or node.args.args[0].arg != 'self' or node.decorator_list or node.returns):
++        raise ValueError('unsupported-method')
++    if isinstance(node, ast.ClassDef) and (len(node.bases) != 1 or ast.unparse(node.bases[0]) != 'unittest.TestCase' or node.decorator_list or node.keywords):
++        raise ValueError('unsupported-class')
++    if isinstance(node, ast.Name) and node.id not in {'unittest', 'fixture', 's', 'self'}:
++        raise ValueError('unsupported-name')
++    if isinstance(node, ast.Attribute):
++        attrs = {'self': ASSERTS, 's': {'lock', 'fallback_ready', 'held', 'external_written'}, 'unittest': {'TestCase'}}
++        if not isinstance(node.value, ast.Name) or node.attr not in attrs.get(node.value.id, set()):
++            raise ValueError('unsupported-attribute')
++    if isinstance(node, ast.Call):
++        if node.keywords:
++            raise ValueError('unsupported-keywords')
++        if isinstance(node.func, ast.Name) and (node.func.id != 'fixture' or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.args[0].value not in {'normal', 'cache-moved'}):
++            raise ValueError('unsupported-call')
++        if not isinstance(node.func, (ast.Name, ast.Attribute)):
++            raise ValueError('unsupported-call')
++
++
+ def validate(code):
+     tree = ast.parse(code)
+     footer = ast.parse('if __name__ == "__main__":\n    unittest.main()\n').body[0]
+     checked = tree
+     if tree.body and ast.dump(tree.body[-1]) == ast.dump(footer):
+         # This exact conventional footer is false under generated_tests module name.
+         # Keep original code for execution/hash; validate the test body separately.
+         checked = ast.Module(body=tree.body[:-1], type_ignores=[])
+     allowed = {ast.Module, ast.Import, ast.ImportFrom, ast.alias, ast.ClassDef,
+                ast.FunctionDef, ast.arguments, ast.arg, ast.With, ast.withitem,
+                ast.Expr, ast.Call, ast.Attribute, ast.Name, ast.Load, ast.Store,
+                ast.Constant, ast.Pass}
+     if len(list(ast.walk(tree))) > 2000:
+         raise ValueError('test-too-large')
+     for node in ast.walk(checked):
+         if type(node) not in allowed:
+             raise ValueError('unsupported-node:' + type(node).__name__)
+-        if isinstance(node, ast.Import) and [(a.name, a.asname) for a in node.names] != [('unittest', None)]:
+-            raise ValueError('unsupported-import')
+-        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or [(a.name, a.asname) for a in node.names] != [('fixture', None)]):
+-            raise ValueError('unsupported-import')
+-        if isinstance(node, ast.FunctionDef) and (not node.name.startswith('test_') or len(node.args.args) != 1 or node.args.args[0].arg != 'self' or node.decorator_list or node.returns):
+-            raise ValueError('unsupported-method')
+-        if isinstance(node, ast.ClassDef) and (len(node.bases) != 1 or ast.unparse(node.bases[0]) != 'unittest.TestCase' or node.decorator_list or node.keywords):
+-            raise ValueError('unsupported-class')
+-        if isinstance(node, ast.Name) and node.id not in {'unittest', 'fixture', 's', 'self'}:
+-            raise ValueError('unsupported-name')
+-        if isinstance(node, ast.Attribute):
+-            attrs = {'self': ASSERTS, 's': {'lock', 'fallback_ready', 'held', 'external_written'}, 'unittest': {'TestCase'}}
+-            if not isinstance(node.value, ast.Name) or node.attr not in attrs.get(node.value.id, set()):
+-                raise ValueError('unsupported-attribute')
+-        if isinstance(node, ast.Call):
+-            if node.keywords:
+-                raise ValueError('unsupported-keywords')
+-            if isinstance(node.func, ast.Name) and (node.func.id != 'fixture' or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.args[0].value not in {'normal', 'cache-moved'}):
+-                raise ValueError('unsupported-call')
+-            if not isinstance(node.func, (ast.Name, ast.Attribute)):
+-                raise ValueError('unsupported-call')
++        validate_node_access(node)
+     return tree
+ 
+ 
+-def execute(code, source, work):
+-    validate(code)
+-    path = work / 'historical_lumos.py'
+-    path.write_text(source)
+-    spec = importlib.util.spec_from_file_location('historical_lumos', path)
+-    module = importlib.util.module_from_spec(spec)
+-    sys.modules[spec.name] = module
+-    spec.loader.exec_module(module)
+-    evidence = {'blocked_nested_fallback': False, 'assertions': 0, 'entries': []}
+-
++def scenario_type(module, evidence):
+     class Scenario:
+         def __init__(self, home, vault, external):
+             self.home, self.vault, self.external = home, vault, external
+             self.depth = 0
+ 
+         def fallback_ready(self):
+             return not module._trusted_private_dir(self.home / '.cache/lumos/vault-lock', '.cache', 'lumos', 'vault-lock')
+ 
+         def held(self):
+             return any(self.vault.glob('*.lock')) or any((self.home / '.cache/lumos/vault-lock').glob('*.lock'))
+@@ -123,20 +122,45 @@ def execute(code, source, work):
+                 signal.alarm(0)
+                 signal.signal(signal.SIGALRM, previous)
+             evidence['entries'].append({'depth': depth, 'fallback': fallback, 'completed': True})
+             self.depth += 1
+             try:
+                 yield
+             finally:
+                 self.depth -= 1
+                 cm.__exit__(None, None, None)
+ 
++    return Scenario
++
++
++def restricted_importer(proxy, fixture):
++    def importer(name, *unused):
++        if name == 'unittest':
++            return proxy
++        if name == 'subject':
++            return type('SubjectAPI', (), {'fixture': staticmethod(fixture)})
++        raise ImportError(name)
++    return importer
++
++
++def execute(code, source, work):
++    validate(code)
++    path = work / 'historical_lumos.py'
++    path.write_text(source)
++    spec = importlib.util.spec_from_file_location('historical_lumos', path)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    evidence = {'blocked_nested_fallback': False, 'assertions': 0, 'entries': []}
++
++    Scenario = scenario_type(module, evidence)
++
+     @contextlib.contextmanager
+     def fixture(mode):
+         with tempfile.TemporaryDirectory(dir=work) as directory:
+             base = Path(directory)
+             home, vault, external = (base / name for name in ('home', 'vault', 'external'))
+             for p in (home, vault, external, home / '.cache'):
+                 p.mkdir()
+             if mode == 'cache-moved':
+                 (home / '.cache/lumos').symlink_to(external)
+             else:
+@@ -149,26 +173,21 @@ def execute(code, source, work):
+                 os.environ['HOME'] = previous
+ 
+     class Counted(unittest.TestCase):
+         pass
+     for name in ASSERTS:
+         def counted(self, *args, _name=name):
+             evidence['assertions'] += 1
+             return getattr(unittest.TestCase, _name)(self, *args)
+         setattr(Counted, name, counted)
+     proxy = type('UnittestAPI', (), {'TestCase': Counted})
+-    def importer(name, *unused):
+-        if name == 'unittest':
+-            return proxy
+-        if name == 'subject':
+-            return type('SubjectAPI', (), {'fixture': staticmethod(fixture)})
+-        raise ImportError(name)
++    importer = restricted_importer(proxy, fixture)
+     namespace = {'__name__': 'generated_tests', '__builtins__': {'__import__': importer, '__build_class__': __build_class__}}
+     exec(compile(code, '<generated-tests>', 'exec'), namespace)
+     suite = unittest.TestSuite()
+     for value in namespace.values():
+         if isinstance(value, type) and issubclass(value, Counted) and value is not Counted:
+             suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(value))
+     stream = io.StringIO()
+     result = unittest.TextTestRunner(stream=stream).run(suite)
+     return {'status': 'executed', 'tests_run': result.testsRun, 'passed': result.wasSuccessful(),
+             'failures': [text for _, text in result.failures], 'errors': [text for _, text in result.errors],
+@@ -188,84 +207,96 @@ def grade(code):
+                                       text=True, cwd=work, env={'HOME': str(work / 'home'), 'PATH': os.defpath, 'TMPDIR': str(work)}, timeout=15)
+                 scores[key] = json.loads(proc.stdout) if proc.returncode == 0 else {'status': 'invalid', 'stderr': proc.stderr}
+             except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+                 scores[key] = {'status': 'invalid', 'reason': type(exc).__name__}
+     baseline, fault = scores['fixed'], scores['faulty']
+     valid = all(s.get('status') == 'executed' and s.get('tests_run', 0) > 0 and s['evidence']['assertions'] > 0 and not s['errors'] for s in scores.values()) and baseline.get('passed', False)
+     detected = valid and bool(fault['failures']) and fault['evidence']['blocked_nested_fallback'] and any('AssertionError: lock-enter-incomplete' in f for f in fault['failures'])
+     return {'status': 'detected' if detected else ('survived' if valid and fault['passed'] else 'invalid'), 'versions': scores, 'test_sha256': history.sha(code)}
+ 
+ 
++def child_main():
++    try:
++        data = json.load(sys.stdin)
++        result = execute(data['code'], data['source'], Path.cwd())
++    except Exception as exc:
++        result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
++    print(json.dumps(result, ensure_ascii=False))
++    return 0
++
++
++def run_controls(out):
++    head = 'import unittest\nfrom subject import fixture\nclass LockTests(unittest.TestCase):\n    def test_lock(self):\n        with fixture("cache-moved") as s:\n            self.assertTrue(s.fallback_ready())\n'
++    weak = head + '            with s.lock():\n                self.assertTrue(s.held())\n            with s.lock():\n                self.assertTrue(s.held())\n'
++    strong = head + '            with s.lock():\n                with s.lock():\n                    self.assertTrue(s.held())\n'
++    normal = head.replace('"cache-moved"', '"normal"').replace('assertTrue(s.fallback_ready())', 'assertFalse(s.fallback_ready())') + '            with s.lock():\n                self.assertTrue(s.held())\n            self.assertFalse(s.held())\n'
++    cases = {'weak': weak, 'strong': strong, 'empty': 'import unittest\n', 'bad-baseline': head + '            self.assertFalse(s.fallback_ready())\n', 'unsupported': 'import os\n', 'normal': normal,
++             'canonical-footer': strong + '\nif __name__ == "__main__":\n    unittest.main()\n',
++             'noncanonical-footer': strong + '\nif True:\n    unittest.main()\n'}
++    scores = {name: grade(code) for name, code in cases.items()}
++    expected = {'weak': 'survived', 'strong': 'detected', 'empty': 'invalid', 'bad-baseline': 'invalid', 'unsupported': 'invalid', 'normal': 'survived', 'canonical-footer': 'detected', 'noncanonical-footer': 'invalid'}
++    result = {'runner_sha256': history.sha(Path(__file__).read_text()), 'cases': cases, 'scores': scores}
++    (out / 'controls.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
++    passed = all(scores[k]['status'] == v for k, v in expected.items())
++    print('controls_passed=' + str(passed))
++    return 0 if passed else 2
++
++
++def lean_projection(node):
++    for function in ast.walk(node):
++        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
++            function.body = function.body[1:]
++    return ast.unparse(node)
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument('--child', action='store_true')
+     parser.add_argument('--controls', action='store_true')
+     parser.add_argument('--run', action='store_true')
+     parser.add_argument('--prompt-profile', choices=['explicit', 'lean'], default='explicit')
+     parser.add_argument('--out', type=Path)
+     args = parser.parse_args()
+     if args.child:
+-        try:
+-            data = json.load(sys.stdin)
+-            result = execute(data['code'], data['source'], Path.cwd())
+-        except Exception as exc:
+-            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
+-        print(json.dumps(result, ensure_ascii=False))
+-        return 0
++        return child_main()
+     if not args.out or not (args.controls or args.run):
+         parser.error('Use --controls or --run with --out NEW_DIRECTORY')
+     args.out.mkdir(parents=True, exist_ok=False)
+     if args.controls:
+-        head = 'import unittest\nfrom subject import fixture\nclass LockTests(unittest.TestCase):\n    def test_lock(self):\n        with fixture("cache-moved") as s:\n            self.assertTrue(s.fallback_ready())\n'
+-        weak = head + '            with s.lock():\n                self.assertTrue(s.held())\n            with s.lock():\n                self.assertTrue(s.held())\n'
+-        strong = head + '            with s.lock():\n                with s.lock():\n                    self.assertTrue(s.held())\n'
+-        normal = head.replace('"cache-moved"', '"normal"').replace('assertTrue(s.fallback_ready())', 'assertFalse(s.fallback_ready())') + '            with s.lock():\n                self.assertTrue(s.held())\n            self.assertFalse(s.held())\n'
+-        cases = {'weak': weak, 'strong': strong, 'empty': 'import unittest\n', 'bad-baseline': head + '            self.assertFalse(s.fallback_ready())\n', 'unsupported': 'import os\n', 'normal': normal,
+-                 'canonical-footer': strong + '\nif __name__ == "__main__":\n    unittest.main()\n',
+-                 'noncanonical-footer': strong + '\nif True:\n    unittest.main()\n'}
+-        scores = {name: grade(code) for name, code in cases.items()}
+-        expected = {'weak': 'survived', 'strong': 'detected', 'empty': 'invalid', 'bad-baseline': 'invalid', 'unsupported': 'invalid', 'normal': 'survived', 'canonical-footer': 'detected', 'noncanonical-footer': 'invalid'}
+-        result = {'runner_sha256': history.sha(Path(__file__).read_text()), 'cases': cases, 'scores': scores}
+-        (args.out / 'controls.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+-        passed = all(scores[k]['status'] == v for k, v in expected.items())
+-        print('controls_passed=' + str(passed))
+-        return 0 if passed else 2
++        return run_controls(args.out)
+     command_doc = (history.REPO / 'skills/lumos-project-notes/commands/03-寫回圖譜.md').read_text()
+     handbook = command_doc.split('**測試必須有獨立的判準')[1].split('## ')[0]
+     handbook = '**測試必須有獨立的判準' + handbook
+     source = history.historical_file(history.VERSIONS['faulty'], 'scripts/lumos')
+     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == '_vault_write_lock')
+     visible = ast.get_source_segment(source, node)
+     api = API
+     prompt = API + '\n請為此內部鎖合約補實際有用的測試。最後只輸出一個 python code fence，不要其他文字。\n實作片段在 implementation.txt；先讀。沒有執行工具或驗證回饋。'
+     if args.prompt_profile == 'lean':
+-        for function in ast.walk(node):
+-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
+-                function.body = function.body[1:]
+-        visible = ast.unparse(node)
++        visible = lean_projection(node)
+         api = LEAN_API
+         prompt = api + '\n' + LEAN_TASK
+     manifest = {'model': MODEL, 'repeats': 2, 'prompt_profile': args.prompt_profile, 'api': api, 'prompt': prompt, 'handbook': handbook,
+                 'visible_source': visible, 'visible_source_sha256': history.sha(visible), 'versions': history.VERSIONS,
+                 'runner_sha256': history.sha(Path(__file__).read_text()), 'primary': 'only submission before any verifier feedback'}
+     (args.out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+     rows = []
+     for repeat in range(2):
+         for arm in (['control', 'handbook'] if repeat == 0 else ['handbook', 'control']):
+             name = str(repeat) + '-' + arm
+             with tempfile.TemporaryDirectory(prefix='history-model-') as directory:
+                 work = Path(directory)
+                 (work / 'implementation.txt').write_text(visible)
+                 system = '你是開發者，為既有功能寫測試。僅讀目前目錄提供的 implementation.txt。'
+                 if arm == 'handbook':
+                     system += '\n正式測試手冊：\n' + handbook
+-                row, raw = run_model(work, system, prompt, MODEL, 180, False, args.out / (name + '.events.jsonl'))
++                row, _raw = run_model(work, system, prompt, MODEL, 180, False, args.out / (name + '.events.jsonl'))
+                 reads = [c for c in row['calls'] if c['name'] == 'Read']
+                 row['only_visible_material_read'] = bool(reads) and all(
+                     c['name'] == 'Read' and Path(c['input'].get('file_path', '')).resolve() == (work / 'implementation.txt').resolve()
+                     for c in row['calls'])
+                 row['valid'] = row['valid'] and row['only_visible_material_read'] and (work / 'implementation.txt').read_text() == visible
+                 row.update(arm=arm, repeat=repeat)
+                 matches = re.findall(r'```python\s*\n(.*?)```', row['answer'], re.S)
+                 if row['valid'] and len(matches) == 1:
+                     code = matches[0]
+                     row['score'] = grade(code)
+diff --git a/governance/eval/test_quality_handbook.py b/governance/eval/test_quality_handbook.py
+index e218b2f7..3746de6b 100644
+--- a/governance/eval/test_quality_handbook.py
++++ b/governance/eval/test_quality_handbook.py
+@@ -3,20 +3,21 @@
+ 
+ Only fixed unittest fixtures are executed, with an AST-restricted generated test subset.
+ Trigger lane simulates metadata discovery via Read, not the native Skill router.
+ """
+ import argparse
+ import ast
+ import hashlib
+ import io
+ import json
+ import os
++import signal
+ from pathlib import Path
+ import subprocess
+ import sys
+ import tempfile
+ import time
+ import types
+ import unittest
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ MATERIAL = ROOT / 'governance/eval/test-quality'
+@@ -80,52 +81,56 @@ def literal_binding_scopes(tree):
+                 except (ValueError, TypeError, SyntaxError):
+                     value = None
+                 for target in statement.targets:
+                     if isinstance(target, ast.Name):
+                         bindings[target.id] = value
+         for node in ast.walk(function):
+             scopes[id(node)] = bindings
+     return scopes
+ 
+ 
++def validate_node_access(node, scopes):
++    if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
++        raise ValueError('unsupported-import')
++    if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
++        raise ValueError('unsupported-import')
++    if isinstance(node, ast.Name) and node.id.startswith('__'):
++        raise ValueError('unsupported-dunder')
++    if isinstance(node, ast.Attribute):
++        permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
++                     or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
++                     or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
++                     or node.attr == 'exception'
++                     or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
++        if not permitted:
++            raise ValueError('unsupported-attribute:' + node.attr)
++    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
++        raise ValueError('unsupported-call:' + node.func.id)
++
++
+ def validate_test(code):
+     """Bounded benchmark grammar, not a general sandbox or Python quality verdict."""
+     tree = ast.parse(code)
+     if len(list(ast.walk(tree))) > 3000:
+         raise ValueError('test-too-large')
+     loop_budget = 1
+     scopes = literal_binding_scopes(tree)
+     for node in ast.walk(tree):
+         if type(node) not in ALLOWED_NODES:
+             raise ValueError('unsupported-test-node:' + type(node).__name__)
+         if isinstance(node, ast.For):
+             loop_budget *= bounded_iteration_count(node.iter, scopes[id(node)])
+             if loop_budget > 10000:
+                 raise ValueError('loop-budget-exceeded')
+         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range':
+             bounded_iteration_count(node)
+-        if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
+-            raise ValueError('unsupported-import')
+-        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
+-            raise ValueError('unsupported-import')
+-        if isinstance(node, ast.Name) and node.id.startswith('__'):
+-            raise ValueError('unsupported-dunder')
+-        if isinstance(node, ast.Attribute):
+-            permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
+-                         or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
+-                         or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
+-                         or node.attr == 'exception'
+-                         or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
+-            if not permitted:
+-                raise ValueError('unsupported-attribute:' + node.attr)
+-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
+-            raise ValueError('unsupported-call:' + node.func.id)
++        validate_node_access(node, scopes)
+     return tree
+ 
+ 
+ def execute_tests(code, source):
+     """Called only inside a time-limited child, with restricted imports/builtins."""
+     validate_test(code)
+     mod = types.ModuleType('subject')
+     exec(source, mod.__dict__)
+     sys.modules['subject'] = mod
+     def imports(name, *args, **kwargs):
+@@ -211,98 +216,161 @@ def draft_before_verify(calls):
+     draft = None
+     for call in calls:
+         data = call.get('input', {})
+         if call['name'] == 'Bash' and data.get('command', '').strip() == 'python3 verify.py':
+             break
+         if call['name'] == 'Write' and Path(data.get('file_path', '')).name == 'tests.py':
+             draft = data.get('content')
+     return draft
+ 
+ 
++def model_command(cmd, directory, timeout):
++    previous = signal.getsignal(signal.SIGTERM)
++
++    def interrupted(signum, frame):
++        raise ValueError('model interrupted by signal ' + str(signum))
++
++    signal.signal(signal.SIGTERM, interrupted)
++    proc = None
++    try:
++        proc = subprocess.Popen(cmd, cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
++                                text=True, start_new_session=True)
++        try:
++            stdout, stderr = proc.communicate(timeout=timeout)
++        except subprocess.TimeoutExpired as exc:
++            try:
++                os.killpg(proc.pid, signal.SIGKILL)
++            except ProcessLookupError:
++                pass
++            exc.stdout, exc.stderr = proc.communicate()
++            raise
++        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
++    finally:
++        signal.signal(signal.SIGTERM, previous)
++        if proc is not None and proc.poll() is None:
++            try:
++                os.killpg(proc.pid, signal.SIGKILL)
++            except ProcessLookupError:
++                pass
++            proc.communicate()
++
++
+ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
+     tools = 'Read,Write,Bash' if behavior else ('Read,Skill' if native else 'Read')
+     cmd = ['claude', '-p', prompt, '--model', model, '--effort', 'low',
+            '--strict-mcp-config', '--setting-sources', 'project' if native else '', '--no-session-persistence', '--permission-mode', 'dontAsk',
+            '--tools', tools, '--allowedTools', 'Read', '--output-format', 'stream-json', '--verbose', '--system-prompt', system]
+     if native:
+         cmd += ['--settings', json.dumps({'disableAllHooks': True, 'disableBundledSkills': True, 'autoMemoryEnabled': False, 'skillOverrides': {'design': 'off', 'doctor': 'off', 'plugin-authoring': 'off'}}), '--allowedTools', 'Skill(lumos-project-notes)']
+     else:
+         cmd += ['--safe-mode', '--restricted']
+     if behavior:
+         cmd += ['--allowedTools', 'Write', 'Bash(python3 verify.py)']
+     start = time.monotonic()
+     try:
+-        proc = subprocess.run(cmd, cwd=directory, capture_output=True, text=True, timeout=timeout)
++        proc = model_command(cmd, directory, timeout)
+         raw, stderr, rc = proc.stdout, proc.stderr, proc.returncode
+     except subprocess.TimeoutExpired as exc:
+         raw = exc.stdout or b''
+         raw = raw.decode() if isinstance(raw, bytes) else raw
+         stderr, rc = 'model-timeout', None
+     raw_path.write_text(raw)
+     raw_path.with_suffix(".stderr.txt").write_text(stderr)
+     parsed = events(raw)
+     init = next((r for r in parsed if r.get('subtype') == 'init'), {})
+     result = next((r for r in reversed(parsed) if r.get('type') == 'result'), {})
+     calls = tool_calls(parsed)
+     advertised = init.get('skills', [])
+     valid = (rc == 0 and result.get('subtype') == 'success' and not result.get('is_error')
+              and init.get('model') == model and not result.get('permission_denials')
+              and (not native or advertised == ['lumos-project-notes']))
+     return {'valid': valid, 'advertised_skills': advertised, 'actual_model': init.get('model'), 'elapsed_seconds': round(time.monotonic()-start, 2),
+             'returncode': rc, 'calls': calls, 'answer': result.get('result', ''),
+             'cost_usd': result.get('total_cost_usd'), 'stderr': stderr}, raw
+ 
+ 
++def child_main():
++    try:
++        data = json.load(sys.stdin)
++        result = execute_tests(data['code'], data['source'])
++        result['status'] = 'executed'
++    except Exception as exc:
++        result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
++    print(json.dumps(result))
++    return 0
++
++
++def selected_jobs(manifest, lane):
++    jobs = [('trigger', q['id'], 0) for q in manifest['trigger_queries']]
++    jobs += [('behavior', task, n) for n in range(manifest['repeats']) for task in TASKS]
++    if lane == 'native-trigger':
++        jobs = [('native-trigger', q['id'], 0) for q in manifest['trigger_queries']]
++    else:
++        jobs = [job for job in jobs if lane == 'all' or job[0] == lane]
++    return jobs
++
++
++def score_submission(row, lane, query, work, task, wrapper, case, out, name):
++    if lane in {'trigger', 'native-trigger'}:
++        row['skill_invoked'] = any(c['name'] == 'Skill' and c['input'].get('skill') == 'lumos-project-notes' for c in row['calls'])
++        row['positive'] = query['positive']
++        row['skill_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='SKILL.md' for c in row['calls'])
++        row['handbook_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='handbook.md' for c in row['calls'])
++    else:
++        locked = (work/'subject.py').read_text()==task['source'] and (work/'verify.py').read_text()==wrapper
++        row['locked_material_unchanged'] = locked
++        row['valid'] = row['valid'] and locked
++        row['tests_written'] = (work/'tests.py').is_file()
++        if row['tests_written']:
++            code = (work/'tests.py').read_text()
++            (out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
++            row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
++            draft = draft_before_verify(row['calls'])
++            if draft is not None and locked:
++                row['first_draft_score'] = score(case, draft)
++                (out/(name+'.first-draft.json')).write_text(json.dumps({'code':draft,'sha256':sha(draft)},ensure_ascii=False,indent=2)+'\n')
++            else:
++                row['first_draft_score'] = {'status':'unavailable'}
++
++
+ def main():
+     global TASKS
+     ap = argparse.ArgumentParser(description=__doc__)
+     ap.add_argument('--child', action='store_true')
+-    ap.add_argument('--verify', choices=list(TASKS) + ['shipping', 'calendar'])
++    ap.add_argument('--verify', choices=[*TASKS, 'shipping', 'calendar'])
+     ap.add_argument('--suite', choices=['wording', 'holdout'], default='wording')
+     ap.add_argument('--run', action='store_true', help='Opt-in paid/usage-consuming fixed model calls')
+     ap.add_argument('--out', type=Path)
+     ap.add_argument('--lane', choices=['all', 'behavior', 'trigger', 'native-trigger'], default='all')
+     ap.add_argument('--timeout', type=int, default=180)
+     args = ap.parse_args()
+     suite_file = MATERIAL / ('handbook-holdout.json' if args.suite == 'holdout' else 'handbook-manifest.json')
+     if args.suite == 'holdout':
+         TASKS = json.loads(suite_file.read_text())['tasks']
+     if args.lane == 'native-trigger' and args.suite != 'holdout':
+         ap.error('--lane native-trigger requires --suite holdout')
+     if args.child:
+-        try:
+-            data = json.load(sys.stdin)
+-            result = execute_tests(data['code'], data['source'])
+-            result['status'] = 'executed'
+-        except Exception as exc:
+-            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
+-        print(json.dumps(result))
+-        return 0
++        return child_main()
+     if args.verify:
+         print(json.dumps(score(args.verify, Path('tests.py').read_text()), ensure_ascii=False, indent=2))
+         return 0
+     if not args.run or not args.out:
+         ap.error('Use --run --out NEW_DIRECTORY for the frozen model experiment')
+     args.out.mkdir(parents=True, exist_ok=False)
+     manifest = json.loads(suite_file.read_text())
+     manifest['runner_sha256'] = sha(Path(__file__).read_text())
+     manifest['tasks'] = TASKS
+     docs = {arm: (MATERIAL/manifest.get('handbooks', {}).get(arm, f'handbook-{arm}.md')).read_text() for arm in manifest['arms']}
+     manifest['handbook_sha256'] = {arm: sha(doc) for arm, doc in docs.items()}
+     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+     rows = []
+-    jobs = [('trigger', q['id'], 0) for q in manifest['trigger_queries']]
+-    jobs += [('behavior', task, n) for n in range(manifest['repeats']) for task in TASKS]
+-    if args.lane == 'native-trigger':
+-        jobs = [('native-trigger', q['id'], 0) for q in manifest['trigger_queries']]
+-    else:
+-        jobs = [job for job in jobs if args.lane == 'all' or job[0] == args.lane]
++    jobs = selected_jobs(manifest, args.lane)
+     manifest['selected_lane'] = args.lane
+     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+     for index, (lane, case, repeat) in enumerate(jobs):
+         arms = ['baseline', 'candidate'] if index % 2 == 0 else ['candidate', 'baseline']
+         for arm in arms:
+             name = f'{lane}-{case}-{repeat}-{arm}'
+             with tempfile.TemporaryDirectory(prefix='lumos-handbook-') as temp:
+                 work = Path(temp)
+                 (work/'SKILL.md').write_text('寫或改測試時，讀 handbook.md 再完成任務。\n')
+                 (work/'handbook.md').write_text(docs[arm])
+@@ -334,38 +402,19 @@ def main():
+                     task = TASKS[case]
+                     (work/'subject.py').write_text(task['source'])
+                     wrapper = 'import subprocess,sys\nsubprocess.run([sys.executable,'+repr(str(Path(__file__).resolve()))+',"--suite",'+repr(args.suite)+',"--verify",'+repr(case)+'],check=True)\n'
+                     (work/'verify.py').write_text(wrapper)
+                     system += '\n本題測試規範已載入如下：\n'+docs[arm]
+                     prompt = task['brief']+'\n請讀 subject.py，用 Write 工具寫及修訂 tests.py，使用 unittest.TestCase 的 test_ 方法。可用 self.assertEqual／assertNotEqual／assertTrue／assertFalse／assertRaisesRegex；import unittest 及 from subject import 函式即可，檔尾不用 main。可用 python3 verify.py 驗證已寫測試；其他命令不提供。交付測試及簡短驗證報告。'
+                 (args.out/(name+'.prompt.json')).write_text(json.dumps({'system':system,'prompt':prompt},ensure_ascii=False,indent=2))
+                 row, raw = run_model(work, system, prompt, manifest['model'], args.timeout, lane == 'behavior', args.out/(name+'.events.jsonl'), native=lane == 'native-trigger')
+                 row.update({'id':name, 'lane':lane, 'case':case, 'arm':arm, 'repeat':repeat})
+                 (args.out/(name+'.events.jsonl')).write_text(raw)
+-                if lane in {'trigger', 'native-trigger'}:
+-                    row['skill_invoked'] = any(c['name'] == 'Skill' and c['input'].get('skill') == 'lumos-project-notes' for c in row['calls'])
+-                    row['positive'] = query['positive']
+-                    row['skill_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='SKILL.md' for c in row['calls'])
+-                    row['handbook_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='handbook.md' for c in row['calls'])
+-                else:
+-                    locked = (work/'subject.py').read_text()==task['source'] and (work/'verify.py').read_text()==wrapper
+-                    row['locked_material_unchanged'] = locked
+-                    row['valid'] = row['valid'] and locked
+-                    row['tests_written'] = (work/'tests.py').is_file()
+-                    if row['tests_written']:
+-                        code = (work/'tests.py').read_text()
+-                        (args.out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
+-                        row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
+-                        draft = draft_before_verify(row['calls'])
+-                        if draft is not None and locked:
+-                            row['first_draft_score'] = score(case, draft)
+-                            (args.out/(name+'.first-draft.json')).write_text(json.dumps({'code':draft,'sha256':sha(draft)},ensure_ascii=False,indent=2)+'\n')
+-                        else:
+-                            row['first_draft_score'] = {'status':'unavailable'}
++                score_submission(row, lane, query if lane != 'behavior' else None, work, task if lane == 'behavior' else None, wrapper if lane == 'behavior' else None, case, args.out, name)
+                 rows.append(row)
+                 (args.out/'results.json').write_text(json.dumps({'manifest_sha256':sha((args.out/'manifest.json').read_text()),'rows':rows},ensure_ascii=False,indent=2)+'\n')
+                 print(name, 'valid='+str(row['valid']), flush=True)
+     return 0 if all(row['valid'] for row in rows) else 2
+ 
+ 
+ if __name__ == '__main__':
+     sys.exit(main())

@@ -1,0 +1,329 @@
+diff --git a/scripts/test_quality_scan.py b/scripts/test_quality_scan.py
+index 79aa0231..c689ec44 100644
+--- a/scripts/test_quality_scan.py
++++ b/scripts/test_quality_scan.py
+@@ -10,21 +10,20 @@ import argparse
+ import ast
+ import copy
+ import hashlib
+ import io
+ import json
+ import os
+ from pathlib import Path
+ import sys
+ import tokenize
+ import time
+-from test_quality_semgrep import scan as semgrep_scan
+ 
+ VERSION = '0.1'
+ LANGUAGES = {'.py': 'python', '.kt': 'kotlin', '.java': 'java', '.swift': 'swift',
+              '.cs': 'csharp', '.php': 'php', '.js': 'javascript', '.ts': 'typescript',
+              '.jsx': 'javascript', '.tsx': 'typescript', '.mjs': 'javascript',
+              '.cjs': 'javascript', '.mts': 'typescript', '.cts': 'typescript'}
+ EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'build', 'dist', 'vendor', 'storage'}
+ LIMIT = 10 * 1024 * 1024
+ 
+ 
+@@ -129,57 +128,67 @@ def mirror(call, expected, models, aliases):
+     bound = dict(zip(params, call.args))
+     if len(call.args) > len(params):
+         return False
+     for item in call.keywords:
+         if item.arg not in params or item.arg in bound:
+             return False
+         bound[item.arg] = item.value
+     return set(bound) == set(params) and key(expand(body, bound)) == key(expected)
+ 
+ 
++def comparison_rule(expr, models, aliases):
++    pair = pairs(expr)
++    if not pair:
++        return None
++    left, right = pair
++    if key(left) == key(right):
++        return 'same-comparison'
++    containers = {'set', 'list', 'tuple', 'dict', 'str', 'int', 'float', 'bool', 'len', 'sorted', 'frozenset'}
++    if isinstance(left, ast.Call) and isinstance(right, ast.Call) and qualified(left.func, aliases) == qualified(right.func, aliases) and qualified(left.func, aliases) not in containers:
++        return 'oracle-reuses-call'
++    if mirror(left, right, models, aliases) or mirror(right, left, models, aliases):
++        return 'mirror-expression'
++    return None
++
++
++def update_bindings(statement, bindings):
++    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
++        value = statement.value
++        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
++        resolved = expand(value, bindings) if value is not None else None
++        for target in targets:
++            if isinstance(target, ast.Name):
++                if resolved is not None:
++                    bindings[target.id] = resolved
++                else:
++                    bindings.pop(target.id, None)
++            elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(resolved, (ast.Tuple, ast.List)) and len(target.elts) == len(resolved.elts):
++                for name, item in zip(target.elts, resolved.elts):
++                    if isinstance(name, ast.Name):
++                        bindings[name.id] = item
++            else:
++                bindings.clear()
++    elif not isinstance(statement, (ast.Expr, ast.Assert, ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
++        # 分支／迴圈／with 等不推資料流；清除直線假設，避免用舊 expected。
++        bindings.clear()
++
++
+ def inspect_test(fn, path, aliases, models, lines, check_helpers=()):
+     bindings, findings, seen = {}, [], []
+     for statement in fn.body:
+         for location, expr in assertions(statement, check_helpers):
+             current = expand(expr, bindings)
+             seen.append((location, source_based(current, aliases)))
+-            pair = pairs(current)
+-            rule = None
+-            if pair:
+-                left, right = pair
+-                if key(left) == key(right):
+-                    rule = 'same-comparison'
+-                elif isinstance(left, ast.Call) and isinstance(right, ast.Call) and qualified(left.func, aliases) == qualified(right.func, aliases) and qualified(left.func, aliases) not in {'set', 'list', 'tuple', 'dict', 'str', 'int', 'float', 'bool', 'len', 'sorted', 'frozenset'}:
+-                    rule = 'oracle-reuses-call'
+-                elif mirror(left, right, models, aliases) or mirror(right, left, models, aliases):
+-                    rule = 'mirror-expression'
++            rule = comparison_rule(current, models, aliases)
+             if rule:
+                 findings.append(finding(rule, fn.name, path, location, lines))
+-        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+-            value = statement.value
+-            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+-            resolved = expand(value, bindings) if value is not None else None
+-            for target in targets:
+-                if isinstance(target, ast.Name):
+-                    if resolved is not None:
+-                        bindings[target.id] = resolved
+-                    else:
+-                        bindings.pop(target.id, None)
+-                elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(resolved, (ast.Tuple, ast.List)) and len(target.elts) == len(resolved.elts):
+-                    for name, item in zip(target.elts, resolved.elts):
+-                        if isinstance(name, ast.Name):
+-                            bindings[name.id] = item
+-                else:
+-                    bindings.clear()
+-        elif not isinstance(statement, (ast.Expr, ast.Assert, ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
+-            # 分支／迴圈／with 等不推資料流；清除直線假設，避免用舊 expected。
+-            bindings.clear()
++        update_bindings(statement, bindings)
+     if seen and all(from_source for _, from_source in seen):
+         findings.append(finding('source-only', fn.name, path, seen[0][0], lines))
+     return findings
+ 
+ 
+ REASONS = {
+     'same-comparison': ('斷言兩側是相同語法表達式', '確認是否只驗穩定性；另找能區分錯誤輸出的獨立答案。'),
+     'oracle-reuses-call': ('斷言兩側呼叫同一函式，可能共用被測算法', '確認是否為合法關係測試或可信參考；用相關故障驗證抓錯能力。'),
+     'mirror-expression': ('expected 與明確提供的單一 return 算式相同', '改用需求例子或可信獨立參考；同算法不等於業務正確。'),
+     'source-only': ('已辨識的斷言都依賴 inspect.getsource', '確認目的是否只守結構；宣稱功能正確時補可觀察行為。'),
+@@ -210,39 +219,33 @@ def discover(paths, report):
+                     if p.suffix in LANGUAGES and 'test' in str(p.relative_to(path)).lower():
+                         if p.is_symlink():
+                             report['inputs'].append({'path': str(p), 'status': 'error', 'reason': 'symlink not scanned'})
+                         else:
+                             files.add(p)
+         else:
+             report['inputs'].append({'path': str(path), 'status': 'error', 'reason': 'missing or not a regular file/directory'})
+     return sorted(files)
+ 
+ 
+-def main(argv=None):
+-    started = time.monotonic()
+-    parser = argparse.ArgumentParser(description=__doc__)
++def add_scan_arguments(parser):
+     parser.add_argument('paths', nargs='+', type=Path)
+     parser.add_argument('--check-helper', action='append', default=[], metavar='NAME', help='明示 check(name, condition, detail) 類斷言 helper，可重複')
+     parser.add_argument('--semgrep', metavar='EXECUTABLE', help='選配本機 Semgrep CE；其他語言先只辨識來源自比')
+     parser.add_argument('--json', action='store_true', help='輸出共用 JSON 報告')
+     parser.add_argument('--implementation', action='append', default=[], metavar='MODULE=PATH', help='Python 算式比對來源（只 parse，不 import）')
+-    args = parser.parse_args(argv)
+-    report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+-              'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
+-              'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
+-                  '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
+-                  '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
+-    report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
+-    report['assertion_helpers'] = args.check_helper
++    return parser
++
++
++def load_models(specs, report):
+     models = {}
+     errors = (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, MemoryError)
+-    for spec in args.implementation:
++    for spec in specs:
+         module, sep, name = spec.partition('=')
+         entry = {'module': module, 'path': name}
+         report['implementations'].append(entry)
+         try:
+             if not sep or not module or not name or module in {x['module'] for x in report['implementations'][:-1]}:
+                 raise ValueError('expected unique MODULE=PATH')
+             _, tree, digest = parse_file(Path(name))
+             entry.update(status='parsed', sha256=digest)
+             supported = []
+             for node in tree.body:
+@@ -250,48 +253,70 @@ def main(argv=None):
+                     params = [arg.arg for arg in node.args.posonlyargs + node.args.args]
+                     if not (node.args.vararg or node.args.kwarg or node.args.kwonlyargs or node.args.defaults or node.decorator_list):
+                         body = node.body[0].value
+                         if isinstance(body, (ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare)):
+                             models[module + '.' + node.name] = (params, body)
+                             supported.append(node.name)
+             entry['modeled_functions'] = supported
+             entry['unmodeled_functions'] = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name not in supported]
+         except errors as exc:
+             entry.update(status='error', reason=str(exc))
++    return models
++
++
++def inspect_python_file(path, entry, report, models, check_helpers):
++    errors = (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, MemoryError)
++    try:
++        source, tree, digest = parse_file(path)
++        tests = []
++        for node in tree.body:
++            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(('test_', 't_')):
++                tests.append(node)
++            elif isinstance(node, ast.ClassDef):
++                tests.extend(fn for fn in node.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith('test_'))
++        entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
++        aliases, lines = imports(tree), source.splitlines()
++        entry['tests_with_known_assertions'] = sum(any(list(assertions(st, check_helpers)) for st in fn.body) for fn in tests)
++        for fn in tests:
++            report['findings'].extend(inspect_test(fn, path, aliases, models, lines, check_helpers))
++    except errors as exc:
++        entry.update(status='error', reason=str(exc))
++
++
++def main(argv=None, *, args=None):
++    from test_quality_semgrep import scan as semgrep_scan
++    started = time.monotonic()
++    if args is None:
++        parser = add_scan_arguments(argparse.ArgumentParser(description=__doc__))
++        args = parser.parse_args(argv)
++    report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
++              'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
++              'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
++                  '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
++                  '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
++    report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
++    report['assertion_helpers'] = args.check_helper
++    models = load_models(args.implementation, report)
+     files = discover(args.paths, report)
+     for path in files:
+         language = LANGUAGES.get(path.suffix, 'unknown')
+         entry = {'path': str(path), 'language': language}
+         report['inputs'].append(entry)
+         if language != 'python':
+             if args.semgrep and language != 'unknown':
+                 backend_entry, found = semgrep_scan(path, language, str(Path(args.semgrep).resolve()) if '/' in args.semgrep else args.semgrep)
+                 entry.update(backend_entry)
+                 report['findings'].extend(found)
+             else:
+                 entry.update(status='unsupported', reason='optional Semgrep adapter not enabled')
+             continue
+-        try:
+-            source, tree, digest = parse_file(path)
+-            tests = []
+-            for node in tree.body:
+-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(('test_', 't_')):
+-                    tests.append(node)
+-                elif isinstance(node, ast.ClassDef):
+-                    tests.extend(fn for fn in node.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith('test_'))
+-            entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
+-            aliases, lines = imports(tree), source.splitlines()
+-            entry['tests_with_known_assertions'] = sum(any(list(assertions(st, args.check_helper)) for st in fn.body) for fn in tests)
+-            for fn in tests:
+-                report['findings'].extend(inspect_test(fn, path, aliases, models, lines, args.check_helper))
+-        except errors as exc:
+-            entry.update(status='error', reason=str(exc))
++        inspect_python_file(path, entry, report, models, args.check_helper)
+     if not report['inputs']:
+         report['inputs'].append({'path': ', '.join(str(p) for p in args.paths), 'status': 'no_tests', 'reason': 'no test candidates discovered'})
+     report['complete'] = bool(report['inputs']) and all(i['status'] == 'scanned' for i in report['inputs']) and all(i['status'] == 'parsed' for i in report['implementations'])
+     report['summary'] = {'files_scanned': sum(i['status'] == 'scanned' for i in report['inputs']),
+                          'tests_seen': sum(i.get('tests_seen', 0) for i in report['inputs']),
+                          'candidates': len(report['findings'])}
+     report['elapsed_seconds'] = round(time.monotonic() - started, 6)
+     if args.json:
+         print(json.dumps(report, ensure_ascii=False, indent=2))
+     else:
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+index 4cd7ad2a..e6d4af7f 100644
+--- a/scripts/test_quality_semgrep.py
++++ b/scripts/test_quality_semgrep.py
+@@ -13,20 +13,38 @@ PATTERNS = {
+             'expect($X)->toBe($X)', 'expect($X)->toEqual($X)'],
+     'kotlin': ['assertEquals($X, $X, ...)'],
+     'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
+     'swift': ['XCTAssertEqual($X, $X, ...)'],
+     'csharp': ['Assert.Equal($X, $X)', 'Assert.AreEqual($X, $X, ...)', '$X.Should().Be($X, ...)'],
+     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+     'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+ }
+ 
+ 
++def backend_findings(result, source, path, raw):
++    findings = []
++    for item in result['results']:
++        if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
++            raise ValueError('invalid finding shape')
++        if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
++            raise ValueError('unexpected finding rule or snapshot')
++        line = item['start']['line']
++        if type(line) is not int or line < 1:
++            raise ValueError('invalid finding location')
++        findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
++                         'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
++                         'reason': '斷言兩側是相同語法表達式',
++                         'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
++                         'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
++    return findings
++
++
+ def scan(path, language, executable):
+     entry = {'path': str(path), 'language': language, 'adapter': 'semgrep-ce',
+              'supported_rules': ['same-comparison'], 'test_identity': 'unverified', 'interfaces': PATTERNS[language],
+              'limitations': ['只辨識列出的斷言介面自比；未分析判準同源、重抄算法或執行情境。'] + (['Swift Testing #expect 未支援；僅 XCTest。'] if language == 'swift' else [])}
+     findings = []
+     try:
+         with path.open('rb') as stream:
+             raw = stream.read(10 * 1024 * 1024 + 1)
+         if len(raw) > 10 * 1024 * 1024:
+             raise ValueError('input exceeds 10 MiB limit')
+@@ -53,29 +71,17 @@ def scan(path, language, executable):
+                 raise ValueError('invalid Semgrep report shape')
+             entry['backend_version'] = result.get('version', 'unknown')
+             entry['backend_errors'] = result['errors']
+             paths = result.get('paths')
+             if not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list):
+                 raise ValueError('missing scanned snapshot evidence')
+             scanned = paths['scanned']
+             if proc.returncode != 0 or result['errors'] or str(source) not in scanned:
+                 entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=proc.returncode)
+                 return entry, findings
+-            for item in result['results']:
+-                if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
+-                    raise ValueError('invalid finding shape')
+-                if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+-                    raise ValueError('unexpected finding rule or snapshot')
+-                line = item['start']['line']
+-                if type(line) is not int or line < 1:
+-                    raise ValueError('invalid finding location')
+-                findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
+-                                 'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
+-                                 'reason': '斷言兩側是相同語法表達式',
+-                                 'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
+-                                 'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
++            findings.extend(backend_findings(result, source, path, raw))
+             entry['status'] = 'scanned'
+     except subprocess.TimeoutExpired:
+         entry.update(status='timeout', reason='backend timed out')
+     except (OSError, UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+         entry.update(status='unavailable', reason=str(exc))
+     return entry, findings
