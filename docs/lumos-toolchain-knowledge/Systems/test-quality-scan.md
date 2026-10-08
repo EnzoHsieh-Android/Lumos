@@ -4,7 +4,7 @@ status: doing
 created: 2026-10-07
 updated: 2026-10-07
 responsibility: 跨語言測試品質檢測的邊界與決策；不替代業務判準或宣稱適配器已完成
-self_audit: GPT-6-Codex-clean-agent/2026-10-07
+self_audit: GPT-6-Codex-clean-agent/2026-10-08
 aliases: []
 tags:
   - type/system
@@ -19,6 +19,7 @@ related:
 verified_by:
   - "[[Verification/2026-10-07_跨語言測試品質檢測規劃]]"
   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
+  - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
 about_code:
   - scripts/test_quality_scan.py
   - scripts/test_test_quality_scan.py
@@ -39,3 +40,5 @@ WHY: 先公布語法範圍再擴充規則 [出處:2026-10-07 跨語言要求] [�
 - `scripts/test_quality_scan.py` 的候選／裁決分界與局部判準取捨歸本篇，跨語言 backend 的特殊限制歸 [[Systems/test-quality-multilang]]。
 - `scripts/test_test_quality_scan.py` 的獨立 oracle 與合理反例選擇歸本篇，不將測試數量當品質標準。
 - `governance/eval/test_quality_pilot.py` 的固定故障與安全執行範圍歸本篇，不能擴張為任意命令的通用變異 runner。
+
+WHY: 掃描入口隨consumer更新部署但語義不升級 [出處:[[Projects/測試品質工具接線_計劃]]] [因:方便日後實作時直接掃，不把安裝可用等同業務品質通過]。PHP有限介面自比歸[[Systems/test-quality-multilang]]；可信本機命令收證歸[[Systems/test-quality-cli]]，固定試行不變成通用mutation engine。

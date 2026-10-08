@@ -36,9 +36,9 @@
 
 工具版本与候選來源： [StrykerJS](https://stryker-mutator.io/docs/stryker-js/incremental/)、[Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/)、[Gradle PIT 相容限制](https://github.com/szpak/gradle-pitest-plugin)、[Apple 測試入口](https://developer.apple.com/documentation/xcode/testing)。各專案固定版本後跑資格考卷，表格不是指定必裝的新依賴。
 
-### PHP／Laravel 的撰寫與接入補充（planned）
+### PHP／Laravel 的撰寫與接入補充
 
-沿共用規範驗需求答案與相關故障，框架特性另驗以下範圍。此節是官方文件核對後的接入規格，沒有PHP／Laravel原生實跑資格；既有Lumos靜態試行掃描器也沒有PHP規則，不能拿其他語言的零候選替PHP放行。
+沿共用規範驗需求答案與相關故障，框架特性另驗以下範圍。此節是官方文件核對後的接入規格。2026-10-08 獨立消費案例已用 Laravel12.69.3／PHPUnit11.5.57／PHP8.5.10 實跑 Unit、HTTP、記憶體 SQLite、故障／還原／重構／零選中控制；這只是部分原生驗證，未完成下方全部資格考卷。選配 Semgrep1.179.0 已辨識 PHPUnit assertSame/assertEquals、Pest expect 自比介面；Pest 執行、完整算法同源與框架情境分開驗，零候選不放行。
 
 - **Unit／Feature 分開**：Laravel預設Unit測試不啟動應用，適合純業務邏輯；需要路由、middleware、FormRequest、Policy、Eloquent與container時用會啟動應用的Feature測試。對本次守護的結果斷言HTTP內容、拒絕理由、資料狀態或副作用，不只看200/403，也不重抄rules陣列或controller算法當expected。
 - **資料與判準分開**：factory可建立情境，但預期價格、權限或狀態另有已確認來源；不要從同一Model accessor、resource或service讀出expected再與它自己比。檢查資料寫入可使用assertDatabaseHas等行為斷言，依需求檢查應有與不應有的內容，不能只查測試自己剛建立的factory記錄。
@@ -50,6 +50,22 @@
 資格考卷除下方共用負例外，加入framework bootstrap失敗、fake使前置情境失效、factory與expected同源、拒絕理由代打、測試DB設定錯與漏tenant限制。使用隔離可信fixture驗錯誤設定，不連正式DB。每個PHP/Laravel/Pest或PHPUnit組合分開標記；Dusk/browser、真queue及正式DB相容證據各列範圍。
 
 來源（本次核對Laravel12.x作例子，消費專案須換成自己的版本）：[Laravel testing](https://laravel.com/docs/12.x/testing)、[database testing](https://laravel.com/docs/12.x/database-testing)、[mocking](https://laravel.com/docs/12.x/mocking)、[Event fake 與factory限制](https://laravel.com/docs/12.x/events#testing)、[Pest mutation testing](https://pestphp.com/docs/mutation-testing)、[Infection supported frameworks](https://infection.github.io/guide/supported-test-frameworks.html)、[Composer platform](https://getcomposer.org/doc/06-config.md#platform)。
+
+### C#、Android、iOS 的原生收證接入
+
+沿已安裝 `lumos test-quality capture/check` 保存 JUnit；原生 runner 必須實際執行、report 全新、`--target` 指向真正案例。reporter／橋接腳本、設定、runtime 及 lock 用 `--context` 綁定，原始報告與退出碼一起歸檔。以下是固定消費案例的部分原生資格，完整考卷仍逐項驗，不自動升格整棧 synthetic-verified。
+
+| 棧與本次組合 | 實跑範圍 | 收證與資格邊界 |
+|---|---|---|
+| C# net9.0／SDK9.0.117、xUnit／VSTest、JunitXml.TestLogger4.1.0 | 獨立金額案例、故障／還原／重構、零選中、編譯錯、一般執行例外 | native TRX與JUnit／退出碼並存；部分logger抹掉例外型別時只認已測的assertion訊息簽名；ASP.NET、NUnit、MSTest另验 |
+| Android AGP8.13.2／Gradle8.13／Kotlin2.2.21、JUnit4、API35模擬器 | Local unit與instrumentation分開跑，私有SharedPreferences的寫入／拒絕理由／零副作用 | 保留兩路原始XML及退出碼，匯整不吞錯；JVM全綠不能當装置實跑；Compose／UI／生命週期／其他API另驗 |
+| iOS Xcode26.6／iOS26.5模擬器、XCTest、xcbeautify3.2.1 | 價格與test-only UserDefaults寫入／拒絕理由／零副作用 | 保留xcresult及原始退出碼；JUnit是reporter轉出，不單看Xcode65或共同非零碼；Swift Testing／真機／UI另驗 |
+
+當原生工具失敗時，編譯錯、零選中、逾時與錯誤原因代打均保留 invalid。一般例外的訊息提到 AssertionError／XCTAssert 等字樣也不能當失敗歸因；只接受已確認的reporter型別或訊息結構，新增框架／reporter版本先跑真正正反例，再擴充辨識。
+
+C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴、記錄SDK/JVM/裝置，iOS固定Xcode/runtime/reporter與destination。跨版本、參數化或多destination的身份、skip、crash需要新資格證據，不能直接套本次固定案例。
+
+原生工具參考：[VSTest dotnet test](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-vstest)、[JUnit logger](https://github.com/spekt/junit.testlogger)、[Android命令列測試](https://developer.android.com/studio/test/command-line)、[xcbeautify](https://github.com/cpisciotta/xcbeautify)、[Xcode測試結果](https://developer.apple.com/documentation/xcode/running-tests-and-interpreting-results)。
 
 ### 適配器資格考卷
 
@@ -68,7 +84,7 @@
 
 ### 共用證據格式（接入契約，v1）
 
-各工具輸出可不同，歸檔时保存以下資料。這是內容契約，不是已交付的 schema validator。
+各工具輸出可不同，歸檔时保存以下資料。這是內容契約。已安裝 `lumos test-quality capture/check` 實作其中 JUnit 執行、來源快照與故障一致性核對子集；人工判準、完整依賴閉包、報告真實性與各棧全部資格仍須另驗。用法見 [CLI 手冊](03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
 
 - 身份：case_id、language、framework、runner/tool版本、測試身份、實際選取命令与發現數。
 - 来源：需求／合約版本、输入与expected、oracle_source、人工核對者及理由。`declared`、`reviewed-independent`、`unknown` 分列；自述只到 declared。

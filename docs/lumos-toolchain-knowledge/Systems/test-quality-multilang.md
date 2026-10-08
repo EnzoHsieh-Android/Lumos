@@ -4,7 +4,7 @@ status: doing
 created: 2026-10-07
 updated: 2026-10-07
 responsibility: 選配本機 Semgrep 的來源自比辨識與失敗狀態；不執行來源、不保證完整測試框架或算法同源分析
-self_audit: GPT-6-Codex-clean-agent/2026-10-07
+self_audit: GPT-6-Codex-clean-agent/2026-10-08
 aliases: []
 about_code:
   - scripts/test_quality_semgrep.py
@@ -19,6 +19,8 @@ related:
   - "[[Systems/test-quality-scan]]"
 verified_by:
   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
+  - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
+  - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
 ---
 # test-quality-multilang
 
@@ -34,3 +36,5 @@ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處
 
 - `scripts/test_quality_semgrep.py` 的選配依賴、快照隔離與有限介面支援決策歸本篇，候選通用語義歸 [[Systems/test-quality-scan]]。
 - `governance/eval/test_quality_corpus.py` 的獨立固定標註、未知／未分析結果與跨語言外推限制歸本篇，不把考卷符合率當真實專案品質。
+
+WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。

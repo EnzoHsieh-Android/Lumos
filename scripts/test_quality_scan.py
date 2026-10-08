@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
 """唯讀 Python 測試品質候選掃描。零候選不代表測試有用；不執行輸入。
 
 python3 scripts/test_quality_scan.py <測試檔或目錄> --json
@@ -19,10 +21,10 @@ from test_quality_semgrep import scan as semgrep_scan
 
 VERSION = '0.1'
 LANGUAGES = {'.py': 'python', '.kt': 'kotlin', '.java': 'java', '.swift': 'swift',
-             '.cs': 'csharp', '.js': 'javascript', '.ts': 'typescript',
+             '.cs': 'csharp', '.php': 'php', '.js': 'javascript', '.ts': 'typescript',
              '.jsx': 'javascript', '.tsx': 'typescript', '.mjs': 'javascript',
              '.cjs': 'javascript', '.mts': 'typescript', '.cts': 'typescript'}
-EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'build', 'dist'}
+EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'build', 'dist', 'vendor', 'storage'}
 LIMIT = 10 * 1024 * 1024
 
 

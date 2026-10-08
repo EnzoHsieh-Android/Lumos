@@ -89,7 +89,7 @@ assert total_price(quantity=3, unit_price=5) == 15
 
 完整做法見 [實作測試品質](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質)，開發與審查工作指引共用這份規範。這是開發及審查要求；自動檢查紀錄格式，不能替人判斷測試是否真的有用。
 
-工具鏈來源 repo 提供唯讀試行掃描：`python3 scripts/test_quality_scan.py <測試檔或目錄> --json`。Python 可找四類可疑寫法；其他語言選配本機 Semgrep，先找特定斷言的自比。工具只列候選與未分析範圍，**零命中不能當成品質通過**。用法與支援邊界見 [事後掃描手冊](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描工具鏈來源-repo)。
+已安裝的 `lumos test-quality scan <測試檔或目錄> --json` 提供唯讀候選掃描；Python 可找四類可疑寫法，其他語言選配本機 Semgrep 辨識特定斷言自比（含 PHP）。`capture` 可明示執行可信本機 runner、保存 JUnit 與來源快照；`check` 核對正常→故障→還原及選配重構證據。**零候選、綠燈或故障檢出，都不能單獨證明測試有獨立答案。** 工具不提供沙盒、不替代需求來源審查；先用 `capabilities` 看範圍，再讀 [操作與能力邊界](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
 
 ## 人在哪裡介入？
 

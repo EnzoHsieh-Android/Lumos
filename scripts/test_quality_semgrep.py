@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
 """選配 Semgrep CE 來源語法適配器；只用本機固定規則掃描快照。"""
 import hashlib
 import json
@@ -7,6 +9,8 @@ import subprocess
 import tempfile
 
 PATTERNS = {
+    'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
+            'expect($X)->toBe($X)', 'expect($X)->toEqual($X)'],
     'kotlin': ['assertEquals($X, $X, ...)'],
     'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
     'swift': ['XCTAssertEqual($X, $X, ...)'],
