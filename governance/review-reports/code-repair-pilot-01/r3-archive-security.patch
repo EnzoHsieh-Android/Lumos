@@ -1,0 +1,1375 @@
+++     # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
+++     # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
+++     # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
+++     env["LUMOS_PROBE"] = "1"
+++     if arm == "without":
+++         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
+++     t0 = time.time()
++++    timed_out = False
+++     try:
+++         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
+++         out = r.stdout
+++         err = r.stderr[-400:]
+++     except subprocess.TimeoutExpired as e:
+++         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+++         err = "timeout"
++++        timed_out = True
+++     calls = tool_calls_from_stream(out.splitlines())
+++-    ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+++-    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
+++     final = ""
+++     result_ev = {}
+++     for ln in out.splitlines():
+++         ln = ln.strip()
+++         if not ln.startswith("{"):
+++             continue
+++         try:
+++             ev = json.loads(ln)
+++         except Exception:
+++             continue
+++         if isinstance(ev, dict) and ev.get("type") == "result":
+++             final = ev.get("result") or ""
+++             result_ev = ev
++++    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中。
+++     # ★r1 外家/正確性席:答案內容對不對 與 通過閘(敲對指令+答對)分開記★——
+++     # M4 若只看 passed,會把「答案對但先 grep」記成失敗,混淆「答案對不對」與「走對路徑沒有」。
+++-    answer_content_ok = None
+++-    if sc.get("answer_expect"):
+++-        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
+++-        answer_content_ok = not miss_a
+++-        if ok and not answer_content_ok:
+++-            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
++++    ok, why, answer_content_ok = grade(sc, calls, final)
+++     limit_hit = is_limit_hit(calls, final, result_ev)
++++    # ★截斷不算分★(Projects/探針判準對齊程式碼為主_計劃 [S1]):撞回合上限或逾時,紀錄不完整,判過判不過都是猜;
++++    # 以前記成「沒敲到期望指令」,9 月週抽四個失敗裡三個其實是這個。跟 Codex 執行器的逾時同一套處理。
++++    truncated = (not limit_hit) and (timed_out or result_ev.get("subtype") == "error_max_turns")
+++     if limit_hit:
+++         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
++++    elif truncated:
++++        cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
++++        ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+++     ever, first_idx = lumos_stats(calls)
+++     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+++             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+++             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+++             "answer": (final or "")[:1500],
+++             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+++             "answer_content_ok": answer_content_ok,
+++-            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype"), "harness": "claude"}
++++            "limit_hit": limit_hit, "truncated": truncated,
++++            "result_subtype": result_ev.get("subtype"), "harness": "claude"}
++++
++++
++++def summarize_results(results, arm="with"):
++++    """一批結果 → 總結。分母只算有效場次(扣掉截斷、用量上限、其他儀器例外)。
++++    ★有效不到一半時分母退回整批★:自主迴圈只在總結行 p≠n 時發通知,不退回的話整批被截斷會是 0/0、安靜顯示全過。
++++    總結行第一行固定以「p/n 個情境 Claude 自己敲對了」開頭——governance/autonomous-loop.sh 的 run_probe 靠這個格式解析。"""
++++    def is_instr(r):
++++        return str(r.get("reason", "")).startswith("儀器例外")
++++    total = len(results)
++++    valid = [r for r in results if not is_instr(r)]
++++    excl = [r for r in results if is_instr(r)]
++++    n_trunc = sum(1 for r in excl if r.get("truncated"))
++++    n_limit = sum(1 for r in excl if r.get("limit_hit") and not r.get("truncated"))
++++    n_other = len(excl) - n_trunc - n_limit
++++    inconclusive = total > 0 and len(valid) * 2 < total
++++    p = sum(1 for r in valid if r.get("passed"))
++++    n = total if inconclusive else len(valid)
++++    per = {}
++++    for r in results:
++++        c = per.setdefault(r.get("id", "?"), [0, 0])
++++        c[1] += 1
++++        c[0] += 1 if r.get("truncated") else 0
++++    mostly = [q for q, (t, k) in per.items() if k > 1 and t * 2 > k]
++++    line = f"{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {arm})" if arm != "with" else "")
++++    parts = [f"{name} {k}" for name, k in (("截斷", n_trunc), ("用量上限", n_limit), ("其他儀器例外", n_other)) if k]
++++    if parts:
++++        line += ";不算分:" + "、".join(parts)
++++    if inconclusive:
++++        line += f";★有效場次 {len(valid)}/{total} 不到一半,這批不能下結論(分母退回整批)★"
++++    if mostly:
++++        line += "\n截斷過半的題(題目或步數上限要檢查,不是 AI 沒照規矩): " + ", ".join(mostly)
++++    return {"passed": p, "scored": n, "total": total, "inconclusive": inconclusive, "mostly_truncated": mostly,
++++            "failed": [r.get("id") for r in valid if not r.get("passed")],
++++            "excluded": [r.get("id") for r in excl], "line": line}
++++
++++
++++def history_record(ts, seed, summary, arm="with", runs=1):
++++    """週抽歷史一列:failed 只含有效場次沒過的題;被排除的另記;帶判準版本(換過判準的紀錄不可直接比)。"""
++++    rec = {"ts": ts, "seed": seed, "passed": summary["passed"], "total": summary["scored"],
++++           "failed": summary["failed"], "excluded": summary["excluded"], "grader": GRADER_VERSION}
++++    if arm != "with" or runs > 1:
++++        rec.update({"arm": arm, "runs": runs})
++++    return rec
+++ 
+++ 
+++ def main():
+++     ap = argparse.ArgumentParser()
+++     ap.add_argument("--repo", default=str(ROOT),
+++                     help="要被探的專案根目錄(預設=本 repo)。★探別的專案必須給★——"
+++                          "沒給的話不論在哪個目錄執行,複製的都是 lumos-toolchain 自己,"
+++                          "題目再怎麼寫都是在探錯的 repo(2026-08-22 實際踩過)")
+++     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
+++     ap.add_argument("--only", default="")
+++@@ -660,41 +722,38 @@ def main():
+++     finally:
+++         bad = global_skills_health()
+++         if bad:
+++             print("\n" + "!" * 60, file=sys.stderr)
+++             print(f"✗ 事故:全域 ~/.claude/skills 有 {len(bad)} 個連結被動到(懸空或指進沙盒):", file=sys.stderr)
+++             for name, tgt in bad:
+++                 print(f"    {name} → {tgt}", file=sys.stderr)
+++             print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
+++                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
+++             print("!" * 60, file=sys.stderr)
+++-        n = len(results); p = sum(1 for r in results if r["passed"])
+++-        lim = sum(1 for r in results if r.get("limit_hit"))
+++-        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {a.arm})" if a.arm != "with" else "")
+++-              + (f";其中 {lim} 場撞帳號用量上限沒真的跑,不算分" if lim else ""))
++++        summ = summarize_results(results, a.arm)
++++        p, n = summ["passed"], summ["scored"]
++++        print("\n" + summ["line"])
+++         if a.runs > 1:
+++             per = {}
+++             for r in results:
+++                 per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
+++             print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
+++         if a.out:
+++             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
+++             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
+++             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
+++-                                               "arm": a.arm, "runs": a.runs,
++++                                               "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
++++                                               "excluded": summ["excluded"], "inconclusive": summ["inconclusive"],
+++                                                "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
+++         if a.history:
+++             with open(a.history, "a", encoding="utf-8") as hf:
+++-                hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
+++-                                     "failed": [r["id"] for r in results if not r["passed"]],
+++-                                     **({"arm": a.arm, "runs": a.runs} if (a.arm != "with" or a.runs > 1) else {})},
+++-                                    ensure_ascii=False) + "\n")
++++                hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs), ensure_ascii=False) + "\n")
+++         if not a.keep:
+++             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
+++             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
+++             shutil.rmtree(work.parent, ignore_errors=True)
+++     if bad:
+++         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+++     return 0 if p == n else 1
+++ 
+++ 
+++ if __name__ == "__main__":
+++diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+++index ff42656e..c83e0a26 100644
+++--- a/scripts/test_lumos.py
++++++ b/scripts/test_lumos.py
+++@@ -36591,20 +36591,162 @@ def t_scenario_probe_per_scenario_max_turns():
+++     from importlib.machinery import SourceFileLoader
+++     path = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+++     spec = importlib.util.spec_from_file_location("sp_mt", path, loader=SourceFileLoader("sp_mt", path)); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+++     check("probe max_turns: 題目帶 30 → 30;沒帶 → 預設;壞值/0 → 預設", mod._scenario_max_turns({"max_turns": 30}, 18) == 30 and mod._scenario_max_turns({}, 18) == 18 and mod._scenario_max_turns({"max_turns": "x"}, 18) == 18 and mod._scenario_max_turns({"max_turns": 0}, 18) == 18, "")
+++     import json as _j
+++     rows = [_j.loads(l) for l in open(Path(GRAPHCTL).resolve().parent.parent / "governance" / "scenarios" / "commands.jsonl", encoding="utf-8") if l.strip()]
+++     s15 = [r for r in rows if r["id"] == "s15-new-verification"]
+++     check("probe max_turns: s15 題庫帶 max_turns 30", s15 and s15[0].get("max_turns") == 30, str(s15[0].get("max_turns") if s15 else None))
+++ 
+++ 
++++def _load_probe_module(tag):
++++    import importlib.util
++++    from importlib.machinery import SourceFileLoader
++++    path = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
++++    spec = importlib.util.spec_from_file_location(tag, path, loader=SourceFileLoader(tag, path))
++++    mod = importlib.util.module_from_spec(spec)
++++    spec.loader.exec_module(mod)
++++    return mod
++++
++++
++++def _probe_scenarios_all():
++++    import json as _j
++++    d = Path(GRAPHCTL).resolve().parent.parent / "governance" / "scenarios"
++++    rows = []
++++    for f in sorted(d.glob("*.jsonl")):
++++        if f.name == "history.jsonl":
++++            continue
++++        rows += [_j.loads(ln) for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()]
++++    return rows
++++
++++
++++def t_probe_truncated_run_not_scored():
++++    """探針判準對齊程式碼為主 [S1]:撞回合上限/逾時=截斷、不算分(官方 eval-audit:截斷不能算錯)。
++++    ★前置斷言★:假事件流裡有一個「本來會判過」的 lumos 呼叫——確認截斷真的蓋掉判定,不是本來就判不過。"""
++++    import json as _j, subprocess as _sp
++++    mod = _load_probe_module("sp_trunc")
++++    sc = {"id": "x1", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
++++    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
++++
++++    class R:
++++        def __init__(self, out): self.stdout, self.stderr, self.returncode = out, "", 0
++++
++++    def fake_run_factory(result_ev):
++++        def fake_run(cmd, **kw):
++++            return R("\n".join(_j.dumps(e) for e in [tool, result_ev]))
++++        return fake_run
++++    real = mod.subprocess.run
++++    try:
++++        mod.subprocess.run = fake_run_factory({"type": "result", "subtype": "success", "result": "ok"})
++++        base = mod.run_one(sc, Path("."), 18, 10, "")
++++        mod.subprocess.run = fake_run_factory({"type": "result", "subtype": "error_max_turns", "result": ""})
++++        mt = mod.run_one(sc, Path("."), 18, 10, "")
++++
++++        def raise_to(cmd, **kw):
++++            raise _sp.TimeoutExpired(cmd, 10, output="\n".join([_j.dumps(tool)]))
++++        mod.subprocess.run = raise_to
++++        to = mod.run_one(sc, Path("."), 18, 10, "")
++++        mod.subprocess.run = lambda cmd, **kw: R(_j.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "You've hit your usage limit"}))
++++        lim = mod.run_one(sc, Path("."), 18, 10, "")
++++        mod.subprocess.run = raise_to
++++        cx = mod.run_one_codex(sc, Path("."), 10, "")
++++    finally:
++++        mod.subprocess.run = real
++++    check("探針截斷 前置: 同一串呼叫、正常結束時會判過", base["passed"] is True and not base.get("truncated"), base["reason"])
++++    check("探針截斷: 撞回合上限 → 截斷、不算過、理由以儀器例外開頭", mt["passed"] is False and mt.get("truncated") is True and mt["reason"].startswith("儀器例外"), (mt.get("truncated"), mt["reason"]))
++++    check("探針截斷: 子程序逾時 → 同樣標截斷", to["passed"] is False and to.get("truncated") is True and to["reason"].startswith("儀器例外"), (to.get("truncated"), to["reason"]))
++++    check("探針截斷: 用量上限照舊標用量上限、不標截斷", lim.get("limit_hit") is True and not lim.get("truncated") and "用量" in lim["reason"], (lim.get("limit_hit"), lim.get("truncated"), lim["reason"]))
++++    check("探針截斷: Codex 執行器逾時也帶截斷欄位", cx.get("truncated") is True and cx["reason"].startswith("儀器例外"), (cx.get("truncated"), cx["reason"]))
++++
++++
++++def _probe_res(qid, passed, reason="ok", truncated=False, limit=False):
++++    return {"id": qid, "passed": passed, "reason": reason, "truncated": truncated, "limit_hit": limit}
++++
++++
++++def t_probe_summary_excludes_instrument_runs():
++++    """探針判準對齊程式碼為主 [S2]:分母只算有效場次;總結行格式要讓自主迴圈的 shell 解析照舊(pp=/ 前、tt=/ 後到空白)。"""
++++    import re as _re
++++    mod = _load_probe_module("sp_sum")
++++    rs = [_probe_res("a", True), _probe_res("b", False, "沒敲到期望指令"), _probe_res("c", True),
++++          _probe_res("d", False, "儀器例外: 撞到回合上限", truncated=True),
++++          _probe_res("e", False, "儀器例外: 帳號用量/速率上限", limit=True), _probe_res("f", True)]
++++    s = mod.summarize_results(rs)
++++    line = s["line"]
++++    pp = line.split("/")[0]
++++    tt = _re.sub(r"^[0-9]+/([0-9]+) .*", r"\1", line.splitlines()[0])
++++    check("探針總結: 6 場扣 2 場儀器例外 → 3/4", (s["passed"], s["scored"]) == (3, 4) and (pp, tt) == ("3", "4"), line)
++++    check("探針總結: 總結行仍以「p/n 個情境 Claude 自己敲對了」開頭", _re.match(r"^\d+/\d+ 個情境 Claude 自己敲對了", line) is not None, line)
++++    check("探針總結: 列出截斷與用量上限各幾場", "截斷 1" in line and "用量上限 1" in line, line)
++++    h = mod.history_record("2026-10-05", "2026-W41", s)
++++    check("探針歷史: failed 只含有效場次沒過的題、另記 excluded 與判準版本",
++++          h["failed"] == ["b"] and sorted(h["excluded"]) == ["d", "e"] and h["passed"] == 3 and h["total"] == 4
++++          and h.get("grader") == mod.GRADER_VERSION and mod.GRADER_VERSION, str(h))
++++
++++
++++def t_probe_flags_truncation_heavy_batches():
++++    """探針判準對齊程式碼為主 [S3]:同題截斷過半要點名;有效不到一半 → 分母退回整批、寫明不能下結論(自主迴圈靠 p≠n 發通知,不退回會 0/0 安靜全過)。"""
++++    mod = _load_probe_module("sp_heavy")
++++    rs = [_probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True),
++++          _probe_res("q", True), _probe_res("r", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("r", True), _probe_res("s", True)]
++++    s = mod.summarize_results(rs)
++++    check("探針總結: q 三場截斷兩場 → 點名;r 兩場截斷一場(剛好一半)→ 不點名", s["mostly_truncated"] == ["q"] and "q" in s["line"], (s["mostly_truncated"], s["line"]))
++++    check("探針總結: 有效 3/6 剛好一半 → 還算可下結論", not s["inconclusive"] and (s["passed"], s["scored"]) == (3, 3), s["line"])
++++    all_t = [_probe_res(f"z{i}", False, "儀器例外: 撞到回合上限", truncated=True) for i in range(7)] + [_probe_res("ok", True)]
++++    s2 = mod.summarize_results(all_t)
++++    first = s2["line"].splitlines()[0]
++++    check("探針總結: 8 場只有 1 場有效 → 分母退回 8、寫明不能下結論、p≠n", s2["inconclusive"] and (s2["passed"], s2["scored"]) == (1, 8) and first.startswith("1/8 ") and "不能下結論" in s2["line"], s2["line"])
++++    s3 = mod.summarize_results([_probe_res("z", False, "儀器例外: 撞到回合上限", truncated=True)])
++++    check("探針總結: 整批只有截斷 → 0/1,不會變成 0/0 安靜全過", s3["line"].startswith("0/1 ") and s3["inconclusive"], s3["line"])
++++
++++
++++# 讀碼類禁令(紀律 2026-09-21 起第一步就是先讀程式碼,不能再判成違規);寫入與替代類禁令不在此列
++++_PROBE_READ_BANS = {"Grep", "Glob", "Read", "\\bgrep\\b", "\\brg\\b", "\\bcat\\b", "\\bls\\b", "\\bfind\\b", "git log", "\\bgit (status|diff|log)\\b"}
++++
++++
++++def t_probe_scenarios_allow_code_first():
++++    """探針判準對齊程式碼為主 [S4]:題庫不再禁「先讀碼」;寫入/替代類禁令保留;期望的 lumos 指令不變。
++++    ★行為斷言★:s04(為什麼停用 canary)先 Grep 再敲 lumos 要判過;s09 先 Edit 再 lumos set 仍判不過。"""
++++    mod = _load_probe_module("sp_cf")
++++    rows = _probe_scenarios_all()
++++    by = {r["id"]: r for r in rows}
++++    bad = [(r["id"], sorted(set(r.get("forbid_before", [])) & _PROBE_READ_BANS)) for r in rows if set(r.get("forbid_before", [])) & _PROBE_READ_BANS]
++++    check("探針題庫: 沒有任何一題禁止先讀碼", not bad, str(bad)[:300])
++++    kept = {"s09-writeback": "Edit", "s10-decision-add": "Edit", "s17-ci": "gh run", "v09-push-casual": "git push", "v12-rename-casual": "\\bmv\\b", "v02-just-do-it": "Edit", "s23-restore-existing": "Edit"}
++++    miss = [k for k, v in kept.items() if v not in by.get(k, {}).get("forbid_before", [])]
++++    check("探針題庫: 寫入與替代類禁令保留", not miss, str(miss))
++++    lumos_q = [r["id"] for r in rows if r["id"] != "v04-where-used" and not any("lumos" in e for e in r["expect"])]
++++    check("探針題庫: 除純程式碼題外,期望仍是敲 lumos(或紀律題的寫回動作)", set(lumos_q) <= {"a05-verify-before-negative", "d01-writeback-after-code", "d02-contract-change", "d03-negative-needs-agent", "d04-design-goes-to-graph", "d05-decision-writeback", "d06-verify-after-done"} | {r["id"] for r in rows if r.get("cat") == "discipline"}, str(lumos_q))
++++    s04 = by["s04-decision"]
++++    ok1, _, _ = mod.judge([("Grep", "canary docs/lumos-toolchain-knowledge"), ("Bash", "scripts/lumos search canary 停用")], s04["expect"], s04.get("forbid_before", []))
++++    s09 = by["s09-writeback"]
++++    ok2, _, _ = mod.judge([("Edit", "docs/lumos-toolchain-knowledge/Projects/x.md"), ("Bash", "scripts/lumos set x status done")], s09["expect"], s09.get("forbid_before", []))
++++    check("探針判準: 為什麼題先 Grep 再查圖譜 → 過;寫回題先 Edit 再 lumos set → 不過", ok1 is True and ok2 is False, (ok1, ok2))
++++
++++
++++def t_probe_code_question_regrade():
++++    """探針判準對齊程式碼為主 [S5]:純程式碼題(v04)——2026-09-28 週抽那場先 grep、讀碼、答對、沒敲 lumos,新判準要判過;
++++    只 grep 圖譜資料夾、沒讀程式碼的要判不過。呼叫序列取自 governance/scenarios/run-2026-09-28-weekly.json(未進版控,內嵌)。"""
++++    mod = _load_probe_module("sp_v04")
++++    v04 = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
++++    real_calls = [("Grep", "_BOOKKEEPING_FILES"),
++++                  ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; grep -n \"_BOOKKEEPING_FILES\\|_BOOKKEEPING_DIRS\" scripts/lumos | cut -c1-220; echo ---; sed -n 20250,20280p scripts/lumos"),
++++                  ("Bash", "cd /private/var/folders/tc/x/T/lumos-probe-t1selakc/repo; sed -n 5395,5402p scripts/lumos")]
++++    real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
++++    ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
++++    check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
++++    graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
++++    ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
++++    check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
++++    ok3, why3, c3 = mod.grade(v04, real_calls, "我不知道")
++++    check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
++++
++++
+++ def t_delguard_logs_ok_too():
+++     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+++     import subprocess as _sp, os, tempfile as _tf, json as _j
+++     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+++     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+++     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+++     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+++     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+++     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+++     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
++diff --git a/governance/review-reports/code-repair-pilot-01/roster-alerts.log b/governance/review-reports/code-repair-pilot-01/roster-alerts.log
++new file mode 100644
++index 00000000..b59d30a7
++--- /dev/null
+++++ b/governance/review-reports/code-repair-pilot-01/roster-alerts.log
++@@ -0,0 +1 @@
+++2026-10-03 r1 單家族
++diff --git a/governance/review-reports/review-repair-pilot/r1-arch.md b/governance/review-reports/review-repair-pilot/r1-arch.md
++new file mode 100644
++index 00000000..35644c1e
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-arch.md
++@@ -0,0 +1,39 @@
+++severity: clean
+++
+++A1 分層：已讀，無 finding。試行入口放一頁手冊、細節放 reference、個案登記留在計劃，符合現有「入口／深層說明／圖譜脈絡」分層。
+++
+++引句:「入口與細則放入代碼審 skill 及其 reference」
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:31`
+++file: `skills/lumos-code-loop/SKILL.md:57`
+++file: `skills/lumos-code-loop/reference.md:213`
+++
+++A2 命名：已讀，無 finding。「代碼審修復穩定性試行」準確表達作用域、觀測目標與暫行性，未與既有 code-loop、修與釘、驗修用語另造競爭概念。
+++
+++引句:「先把每次修復驗穩，再看是否比較容易收斂」
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:13`
+++file: `skills/lumos-code-loop/SKILL.md:44`
+++file: `skills/lumos-code-loop/reference.md:213`
+++
+++A3 第二種做法：已讀，無 finding。設計是在既有先紅後綠、原席針對驗收、新席掃 delta 的同一路徑增加根因整理、好例與來源分類；並明文維持三輪上限、major 處置及既有必派席，沒有建立平行修復流程。
+++
+++引句:「三輪上限照舊，不另開隱藏審查輪次」
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:24`
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:25`
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:26`
+++file: `skills/lumos-code-loop/SKILL.md:12`
+++file: `skills/lumos-code-loop/SKILL.md:44`
+++file: `skills/lumos-code-loop/SKILL.md:47`
+++file: `docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:44`
+++
+++A4 lands_in：已讀，無 finding。`Systems/pitfalls-code-loop` 已負責 pitfalls 與 code-loop 的流程、分級、席位及收斂脈絡，試行決策落在此節點合適；計劃節點也已列入該 System 的 related。
+++
+++引句:「決策脈絡歸 [[Systems/pitfalls-code-loop]]」
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:10`
+++file: `governance/review-reports/review-repair-pilot/r1-snapshot.md:31`
+++file: `docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:108`
+++file: `docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:117`
+++
+++refcheck: 0 errors
+++
+++總結：最嚴重 severity clean；blocking 0 條。
+++
++diff --git a/governance/review-reports/review-repair-pilot/r1-boundary.md b/governance/review-reports/review-repair-pilot/r1-boundary.md
++new file mode 100644
++index 00000000..c00b07f4
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-boundary.md
++@@ -0,0 +1,49 @@
+++severity: major
+++
+++B1 — 五案名額沒有跨 session／多人競爭的原子占位，可能同時開出第六案  
+++severity: major  
+++blocking: 是  
+++引句:「入口開工時與每案收尾時讀此表；編排者負責更新，不新增自動計數器。名額已滿則先交回顧，不開始第六案。」  
+++設計把唯一名額狀態放在人工更新的 Markdown 表，未定義鎖、唯一鍵、重讀後再寫或衝突處置；既有工具對多人寫入明知需要把「讀—改—寫」包在同一把鎖內。  
+++file: `scripts/lumos:15030`  
+++最小重現：  
+++1. 兩個 worktree／session 都從「第 5 格待登記」的同一版本開始。  
+++2. A、B 各自讀表，均判定尚有名額，各把不同 loop 登記為序號 5 並開始首輪。  
+++3. 後續即使 merge 時發現衝突，兩個工作都已開始；合計成為六個不同工作，違反 S1 與「不開始第六案」。  
+++
+++B2 — 跨 session 耗時沒有必填的事件落點，完全照規格做仍可讓核心成本資料全數未知  
+++severity: major  
+++blocking: 是  
+++引句:「總耗時是首輪首次派工到最終問閘或明確中止的牆鐘分鐘，另列有起訖紀錄的暫停時間；跨 session 也保留起訖。」  
+++S1、S5 與登記表都沒有規定首次派工、暫停、恢復、最終問閘及三類新增步驟的時間要在何時、寫到哪個欄位；現行派工單入口只要求落 `rN-dispatch.json`，帳面 `wallclock_min` 也是單席分鐘，不能還原整案區間聯集。  
+++file: `skills/lumos-code-loop/SKILL.md:34`  
+++file: `scripts/lumos:8110`  
+++最小重現：  
+++1. Session A 於 10:00 首次派工，完成根因整理後中斷，但依條款沒有任何必做的時間戳寫入。  
+++2. Session B 於 11:00 接手，11:20 問閘並收尾，同樣沒有可用的暫停起訖或新增步驟區間。  
+++3. 操作者遵守 S5「缺任一起訖則未知」，總耗時與新增步驟耗時均只能填未知；五案皆可如此合規完成，試行因此無法判斷新增流程的成本。  
+++
+++B3 — 回退未裁定進行中案件採舊制完成或立即停用，跨 session 接手會產生兩種都符合字面的結果  
+++severity: major  
+++blocking: 是  
+++引句:「移除 skill 中的試行入口與 reference 試行段落，恢復既有修與釘說明；保留已產生的 intake 與本計劃登記，標記試行停止。」  
+++回退只說移除入口及保留既有資料，沒有定義已登記但尚未收尾的案件是否繼續蒐集、算入五案、何時截斷觀測，或以何種狀態結案；現行 code-loop 又明定操作者只認機械閘與三輪上限，試行停止不會由既有閘替它裁決。  
+++file: `skills/lumos-code-loop/SKILL.md:57`  
+++最小重現：  
+++1. 工作 3 已登記並完成 r1，intake 已有試行欄位。  
+++2. 使用者在 r2 前裁定回退，入口與 reference 段落被移除。  
+++3. 新 session 只讀現行 skill，可合理地停止蒐集；舊 session 依已讀規則也可合理地繼續到收尾。兩條路會得到半套資料或回退後仍持續試行，且登記表無標準結案值可區分。  
+++
+++既有 major 處置：已讀，無 finding。S3 明定來源分類不改嚴重度與處置規則。  
+++
+++三輪上限與停止疊補丁：已讀，無 finding。S4 明定三輪上限照舊且不另開隱藏輪次。  
+++
+++高風險資安覆蓋：已讀，無 finding。S4 保留正式凍結材料與既有必派席要求；現行 high 資安席仍由處置閘強制。  
+++file: `skills/lumos-code-loop/SKILL.md:28`  
+++
+++凍結證據：已讀，無 finding。S5 禁止覆寫已入帳報告，並把事後資訊導向計劃紀錄；現行 intake 入帳會保存 SHA，處置閘會全輪重驗。  
+++file: `scripts/lumos:8431`  
+++file: `scripts/lumos:19768`  
+++
+++總結最嚴重 severity: major；blocking: 3 條
+++
++diff --git a/governance/review-reports/review-repair-pilot/r1-dispatch.json b/governance/review-reports/review-repair-pilot/r1-dispatch.json
++new file mode 100644
++index 00000000..0b4f1ce0
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-dispatch.json
++@@ -0,0 +1,41 @@
+++{
+++  "round": "r1",
+++  "loop": "review-repair-pilot",
+++  "tier": "standard",
+++  "materials": ["governance/review-reports/review-repair-pilot/r1-snapshot.md"],
+++  "note": "依本次實際派工訊息補存，未在派工當刻落檔；所有席唯讀，同一快照，全席收齊後才折入。外家否決席未派，本輪為單家族視角，不宣稱跨家族覆核。",
+++  "seats": [
+++    {
+++      "seat": "general",
+++      "lens": "通才",
+++      "auditor": "codex",
+++      "materials": [
+++        "r1-snapshot.md"
+++      ]
+++    },
+++    {
+++      "seat": "measure",
+++      "lens": "度量",
+++      "auditor": "codex",
+++      "materials": [
+++        "r1-snapshot.md"
+++      ]
+++    },
+++    {
+++      "seat": "boundary",
+++      "lens": "邊界",
+++      "auditor": "codex",
+++      "materials": [
+++        "r1-snapshot.md"
+++      ]
+++    },
+++    {
+++      "seat": "arch",
+++      "lens": "架構對齊",
+++      "auditor": "codex",
+++      "materials": [
+++        "r1-snapshot.md"
+++      ]
+++    }
+++  ]
+++}
++diff --git a/governance/review-reports/review-repair-pilot/r1-final-plan.md b/governance/review-reports/review-repair-pilot/r1-final-plan.md
++new file mode 100644
++index 00000000..b57ee90d
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-final-plan.md
++@@ -0,0 +1,76 @@
+++---
+++type: project
+++status: doing
+++created: 2026-10-03
+++updated: 2026-10-03
+++tags:
+++  - type/project
+++  - status/doing
+++  - scope/loop-engineering
+++lands_in:
+++  - Systems/pitfalls-code-loop
+++---
+++# 代碼審修復穩定性試行_計劃
+++
+++先把每次修復驗穩，再看是否比較容易收斂。使用者在 2026-10-03 對話同意先試行五次；「後輪問題通常由前輪修復引入」目前是使用者觀察，尚未逐案回放驗證。
+++
+++PRIOR-ART: 借用現有先紅後綠、原席驗收、新席查差異及既有 intake 報告；Google Small CLs 建議縮小完整變更並保護既有行為（https://google.github.io/eng-practices/review/developer/small-cls.html）。最小改動落在 skill 說明，沿用既有報告，無新命令或相依套件。
+++
+++RETIRE-IF: 第五次收尾時若紀錄成本高於找到問題的效益、資料無法支持改善，撤下試行入口或縮減欄位；證據不足不得宣稱有效，也不自動升格為永久要求。第五次收尾必交使用者裁決，未裁決不繼續擴大試行。
+++
+++## 範圍與條款
+++
+++- [S1] 當本 repo 在入口更新後新開有程式改動的代碼審時，編排者應於首輪 intake 登記試行序號與 loop id，按登記順序取前五個不同工作；重開編號接續原工作序號，純文件審不佔名額，已登記後中止或達上限仍計一次，避免只挑成功案例。[manual: 對照入口條件與計劃五格登記表，檢查重開和中止例]
+++- [S2] 當採信真缺陷並準備修復時，編排者應先彙整相同根因並保留各 finding id，記錄根因、改變行為及保持行為；修復應具備壞例修前紅修後綠、好例修前修後綠及受影響回歸結果，既有測試可沿用，寫入或副作用情境另驗失敗路徑；不能執行則記未驗與原因，不以此取代既有放行判定。[manual: 用非法路徑被拒與合法中文空白路徑仍可用的案例推演]
+++- [S3] 當下一輪出現新 finding 時，編排者應以同一案例在修復前後版本的結果，分類為原有漏看、修復引入、新需求或偏好、待查；修復引入應連回前輪 finding 與修復版本。來源分類不改嚴重度與處置規則。[manual: 推演修前綠修後紅、兩版皆紅及環境不可用三例]
+++- [S4] 當進行修復驗收時，編排者應讓原席只驗其原發現，新席依既有編制檢查修復差異、上下文、呼叫者與測試，正式凍結材料與既有必派席覆蓋要求維持；同根因連續兩次修復引入問題時停止疊補丁，重估修法層次與範圍，三輪上限照舊，不另開隱藏審查輪次。[manual: 對照既有席位及上限，推演第三輪仍有真缺陷的情況]
+++- [S5] 當試行工作收尾時，編排者應在本計劃登記表補結果與報告指標，在表後逐案記修復引入缺陷數、根因修復組數、審查耗時及新增步驟耗時；每輪證據寫入尚未入帳的 intake，已入帳報告保持不動。第五次收尾或到期時彙整，缺值記未知。放行後缺陷沿用既有 escape 紀錄，觀測截止日與追蹤天數必記；五案不足以證明因果，不以三輪通過率單獨決定成效。[manual: 用已入帳 intake、缺耗時、中止與尚無放行後觀測期的案例推演]
+++
+++## 落點
+++
+++入口與細則放入代碼審 skill 及其 reference；決策脈絡歸 [[Systems/pitfalls-code-loop]]。本計劃只存本 repo 試行登記與回顧，其他專案沿用原流程。
+++
+++## 試行登記與回顧入口
+++
+++入口開工時與每案收尾時讀此表；編排者負責更新，不新增自動計數器。名額已滿則先交回顧，不開始第六案。這是單一協調會談循序執行的試行：唯一登記工作目錄是本計劃這次落地的 `/Users/enzo/orca/workspaces/lumos-toolchain/aspidochelone`；其他 worktree 不自行領號。表中有未收尾工作時，只能接續該工作，不能另開試行；換協調會談須明確交接、確認原會談已停手。無法確認單一寫入者時暫停試行，普通代碼審照舊，待協調清楚再續；需要並行試行時先重驗取樣與登記方式。
+++
+++| 序號 | 工作 / loop id（重開列同格） | 首輪 intake | 收尾結果 / 報告指標 |
+++|---|---|---|---|
+++| 1 | 待登記 | — | — |
+++| 2 | 待登記 | — | — |
+++| 3 | 待登記 | — | — |
+++| 4 | 待登記 | — | — |
+++| 5 | 待登記 | — | — |
+++
+++回顧比較修復引入缺陷、根因修復組數、總耗時、額外耗時與放行後缺陷。若取歷史對照，使用啟用前最近五個有程式改動的工作並記規模、分級與資料缺漏；無法可靠歸因時只列個案，不補零或硬算改善率。
+++
+++耗時口徑：總耗時是首輪首次派工到最終問閘或明確中止的牆鐘分鐘，另列有起訖紀錄的暫停時間；跨 session 也保留起訖。新增步驟耗時記根因整理、好例驗證與來源分類的實際區間聯集，同時進行只計一次。席位分鐘不可相加當牆鐘分鐘；缺任一起訖則該項未知，不補估計值。兩席平行各 10 分鐘再驗收 5 分鐘，總耗時是 15 分鐘。
+++
+++同一根因同一修復目的算一組，重試不增加分母；修復引入缺陷按去重後的具體錯誤行為計數，同一問題被多席報告只算一次，待查另列。完整 finding id 和證據留在各輪入帳前的 intake；已入帳後才取得的資訊寫本計劃逐案紀錄並指向原報告，不覆寫凍結證據。
+++
+++證據接線：試行每輪有修復或來源分類紀錄時，載體席記帳必帶既有的 `--intake`；零發現且沒有載體席的輪次，擇一一般席帶入。每個 intake 只入帳一次，之後不可追加；補充資料在下一份未入帳 intake 或本計劃逐案紀錄標出時間與原證據指標。這是人工執行要求，工具本身不新增欄位檢查。
+++
+++時間落點：首次派工前在本計劃該案逐案紀錄寫帶時區的開始時間；暫停、恢復、最終問閘或中止時當場追加事件時間。根因整理、好例驗證、來源分類各步開始及結束時記區間與活動名。意外中斷缺失時間只記未知，不用重建猜測值。時間事件放本計劃，不去改已入帳的 intake。
+++
+++放行後缺陷先逐案陳列，不以不同曝光期的原始件數排名或決定升格。需比較時，限定各案放行後首 14 天內被發現的缺陷；未滿 14 天或缺發現日期的案標未成熟／未知，排除於此項比較，不能填零。14 天只是本次固定觀測窗，不代表足以證明安全；第五次收尾仍照期回顧，不為等曝光期新增第六案或延長審查。
+++
+++這是人工試行，現有機械閘不檢查新增欄位；每次開工與收尾由 skill 入口導向本表，第五次收尾觸發回顧。
+++REVISIT:2026-11-03 檢查五次試行是否完成；未滿五次也回報樣本與成本，由使用者決定停止或延長。
+++
+++## 實務隱患
+++
+++已排除:金流:只修改審查流程文字，沒有款項或金額處理。
+++已排除:對外送出:不寄送訊息、不部署或推送。
+++已排除:不可逆:文字可逐段回退，不改歷史報告與帳目。
+++守衛面:流程會影響審查者行為，因此審查試行的範圍、歸因與停手條件；不更動機械判定，也不降低既有缺陷處置要求。
+++
+++## 回退
+++
+++移除 skill 中的試行入口與 reference 試行段落，恢復既有修與釘說明；保留已產生的 intake 與本計劃登記，標記試行停止。回退不改 code-loop 判定程式、不改既有證據或帳本。
+++
+++回退時在本計劃記停止時間，所有已登記但未結案工作計入既有名額、標「試行中止」，新增步驟蒐集到該時刻截止；工作本身按原有代碼審規則完成，不因試行停止而放行。後續缺陷仍依既有 escape 流程記錄。每輪開始與交接接手時先讀本計劃停止狀態；已停止就不再執行試行步驟。
+++
+++## 審計修正紀錄
+++
+++r1（2026-10-03，4 席）：5 條／blocking 5／全數折入，補明證據綁定、觀測窗、單一協調者、即時記事與回退截斷；外家否決席未派，結論限單家族視角。
+++卷證：governance/review-reports/review-repair-pilot/；前掃另有兩條語意修正，記於 r1-intake.md。
++diff --git a/governance/review-reports/review-repair-pilot/r1-general.md b/governance/review-reports/review-repair-pilot/r1-general.md
++new file mode 100644
++index 00000000..07c867e9
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-general.md
++@@ -0,0 +1,30 @@
+++severity: major
+++
+++G1 試行把完整 finding 與驗證證據放進 intake，卻未要求記帳時帶 `--intake`；現行命令把它列為選配，處置閘也只重驗帳列中已附的 intake。因此在 `--refuted-set none` 的常見輪次，編排者可不附 intake，事後內容遭改仍不會被偵測，五案的缺陷歸因、根因組數與耗時證據便無法可靠回放。設計應明定試行每輪 carrier 一律帶 `--intake`，或把同等不可變證據移入必定雜湊的報告。
+++
+++severity: major
+++
+++blocking: 是
+++
+++引句:「完整 finding id 和證據留在各輪入帳前的 intake；已入帳後才取得的資訊寫本計劃逐案紀錄」
+++
+++file: `scripts/lumos:8431`
+++
+++file: `scripts/lumos:19768`
+++
+++file: `skills/lumos-code-loop/SKILL.md:46`
+++
+++最小翻紅重現：建立含試行證據的 `r1-intake.md`，以 `--refuted-set none` 且不帶 `--intake` 完成 carrier 記帳，記帳後改寫該 intake，再執行 `lumos loop status <id> --disposal --spec <patch> --repo <root>`；預期應因試行證據雜湊不符回 rc1，依現行程式只掃帳列的 `intake_path`，實際仍可通過。未能重現：本席受唯讀、禁止寫檔與治理帳 mutation 限制。
+++
+++範圍與條款：除 G1 外已讀，無 finding；major 處置仍一律折入，三輪上限、原席只驗原 finding、新席掃 delta 與 high 資安席覆蓋均有保留。
+++
+++落點：已讀，無 finding。
+++
+++試行登記與回顧入口：除 G1 外已讀，無 finding；五案取樣、中止計數、歷史對照、耗時與去重口徑可執行。
+++
+++實務隱患：已讀，無 finding。
+++
+++回退：已讀，無 finding。
+++
+++總結：最嚴重 severity: major；blocking: 1 條。
+++
++diff --git a/governance/review-reports/review-repair-pilot/r1-intake.md b/governance/review-reports/review-repair-pilot/r1-intake.md
++new file mode 100644
++index 00000000..d190759b
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-intake.md
++@@ -0,0 +1,29 @@
+++# 設計審前掃與處置
+++
+++preflight-4: ran
+++
+++## 前掃
+++
+++唯讀前掃席 /root/preflight 指出兩條：原案「收尾更新 intake」會改壞既有雜湊，已於正式快照前改為入帳前寫定、結案統計寫計劃；原案未定耗時口徑，已改為牆鐘時間與新增步驟區間聯集。這兩條是正式派工前的語意修正，沒有作為正式席發現計數。
+++
+++機械前掃：refcheck 0 claims/0 errors；prose-lint 無命中；pitfalls --check 有節；spec-gate 高風險、5 條 manual 全綁、句式與回退節通過。
+++
+++## 正式席判讀
+++
+++| ID | 查證 | 處置與驗收例 |
+++|---|---|---|
+++| G1 | HIT：read-side 只查附入帳的 intake，既有 t_intake_guard_gate_and_reverify 測試實跑 10 passed | 每輪相關 intake 由一席帶 --intake 入帳，入帳後不改；非宣稱新機械閘 |
+++| M1 | 採信：28 天與 0 天觀測不可比較，屬規格推演而非已跑效益試驗 | 不同曝光期只陳列；比較限定放行首14天，未成熟或缺日期排除，不能填零 |
+++| B1 | 採信：兩 worktree 同取末格的反例成立，屬規格推演 | 收窄為單工作目錄、單協調會談循序；不能確認寫入者則暫停試行，普通審查不受影響；並行需求為重驗入口，不建立自動計數器或鎖 |
+++| B2 | 採信：原案只有事後未知規則，沒有即時記事入口 | 本計劃逐案紀錄在派工前、暫停恢復、新增步驟起訖、收尾時寫時間；意外缺漏仍未知 |
+++| B3 | 採信：原案回退未說進行中個案如何截斷 | 停止時記時間、已登記計數不撤，標試行中止；停止新增蒐集，原代碼審照舊完成 |
+++
+++以上規格欠定義已直接補明，不把推演稱成程式執行結果；未降級或反駁任何 finding。原席位報告原文保存，架構席僅由原席修正「無 finding 卻逐段列 severity」的格式。外家否決席未派，本輪只支持單家族設計審結論。
+++
+++## 驗證指令
+++
+++python3.14 scripts/test_lumos.py -k intake_guard_gate_and_reverify：10 passed, 0 failed；覆蓋入帳後竄改失敗、還原後通過。
+++
+++本檔正式入帳後不再追加執行結果；後續驗證落在 Verification 節點。
+++
+++收貨：四席 report-normalize、quote-check、refcheck 通過。seat-check 非空材料模式下全席無 out_of_scope；三席未在報告逐字寫快照檔名而被標 unreported，派工訊息與逐字引句已確認讀同一快照，保留原報告不由編排者補字。派工單在收貨後依實際訊息補存，時點偏離已明記，不能當作派工當刻存檔的證明。
++diff --git a/governance/review-reports/review-repair-pilot/r1-measure.md b/governance/review-reports/review-repair-pilot/r1-measure.md
++new file mode 100644
++index 00000000..ca3ba28e
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-measure.md
++@@ -0,0 +1,22 @@
+++severity: major
+++
+++範圍與條款：已讀，無 finding。
+++
+++落點：已讀，無 finding。
+++
+++試行登記與回顧入口
+++
+++M1 放行後缺陷用不同曝光期的原始件數比較，會把較晚收尾的案例系統性美化  
+++severity: major  
+++blocking: 是  
+++引句:「放行後缺陷沿用既有 escape 紀錄，觀測截止日與追蹤天數必記」  
+++設計雖要求列出追蹤天數，卻仍把「放行後缺陷」列為五案比較項，沒有共同成熟窗、每單位觀測時間口徑，或「未滿共同窗不得比較」的規則。既有 escape 只記錄已發現的漏網缺陷，不會校正曝光期。  
+++file: `skills/lumos-code-loop/SKILL.md:55`  
+++最小重現：案 1 放行後追蹤 28 天，發現 1 個 escape；案 5 在第五次收尾當天只追蹤 0 天，得到 0 個 escape。照快照可立即回顧成「1/28 天」與「0/0 天」，原始件數會顯示案 5 較好，但它尚未有發現缺陷的機會。應設共同觀測窗，或把未成熟案件排除於放行後缺陷比較；若只陳列個案，也須禁止據此作退出或升格判斷。
+++
+++實務隱患：已讀，無 finding。
+++
+++回退：已讀，無 finding。
+++
+++總結：最嚴重 severity major；blocking 1 條。
+++
++diff --git a/governance/review-reports/review-repair-pilot/r1-snapshot.md b/governance/review-reports/review-repair-pilot/r1-snapshot.md
++new file mode 100644
++index 00000000..e754bd6a
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/r1-snapshot.md
++@@ -0,0 +1,63 @@
+++---
+++type: project
+++status: doing
+++created: 2026-10-03
+++updated: 2026-10-03
+++tags:
+++  - type/project
+++  - status/doing
+++  - scope/loop-engineering
+++lands_in:
+++  - Systems/pitfalls-code-loop
+++---
+++# 代碼審修復穩定性試行_計劃
+++
+++先把每次修復驗穩，再看是否比較容易收斂。使用者在 2026-10-03 對話同意先試行五次；「後輪問題通常由前輪修復引入」目前是使用者觀察，尚未逐案回放驗證。
+++
+++PRIOR-ART: 借用現有先紅後綠、原席驗收、新席查差異及既有 intake 報告；Google Small CLs 建議縮小完整變更並保護既有行為（https://google.github.io/eng-practices/review/developer/small-cls.html）。最小改動落在 skill 說明，沿用既有報告，無新命令或相依套件。
+++
+++RETIRE-IF: 第五次收尾時若紀錄成本高於找到問題的效益、資料無法支持改善，撤下試行入口或縮減欄位；證據不足不得宣稱有效，也不自動升格為永久要求。第五次收尾必交使用者裁決，未裁決不繼續擴大試行。
+++
+++## 範圍與條款
+++
+++- [S1] 當本 repo 在入口更新後新開有程式改動的代碼審時，編排者應於首輪 intake 登記試行序號與 loop id，按登記順序取前五個不同工作；重開編號接續原工作序號，純文件審不佔名額，已登記後中止或達上限仍計一次，避免只挑成功案例。[manual: 對照入口條件與計劃五格登記表，檢查重開和中止例]
+++- [S2] 當採信真缺陷並準備修復時，編排者應先彙整相同根因並保留各 finding id，記錄根因、改變行為及保持行為；修復應具備壞例修前紅修後綠、好例修前修後綠及受影響回歸結果，既有測試可沿用，寫入或副作用情境另驗失敗路徑；不能執行則記未驗與原因，不以此取代既有放行判定。[manual: 用非法路徑被拒與合法中文空白路徑仍可用的案例推演]
+++- [S3] 當下一輪出現新 finding 時，編排者應以同一案例在修復前後版本的結果，分類為原有漏看、修復引入、新需求或偏好、待查；修復引入應連回前輪 finding 與修復版本。來源分類不改嚴重度與處置規則。[manual: 推演修前綠修後紅、兩版皆紅及環境不可用三例]
+++- [S4] 當進行修復驗收時，編排者應讓原席只驗其原發現，新席依既有編制檢查修復差異、上下文、呼叫者與測試，正式凍結材料與既有必派席覆蓋要求維持；同根因連續兩次修復引入問題時停止疊補丁，重估修法層次與範圍，三輪上限照舊，不另開隱藏審查輪次。[manual: 對照既有席位及上限，推演第三輪仍有真缺陷的情況]
+++- [S5] 當試行工作收尾時，編排者應在本計劃登記表補結果與報告指標，在表後逐案記修復引入缺陷數、根因修復組數、審查耗時及新增步驟耗時；每輪證據寫入尚未入帳的 intake，已入帳報告保持不動。第五次收尾或到期時彙整，缺值記未知。放行後缺陷沿用既有 escape 紀錄，觀測截止日與追蹤天數必記；五案不足以證明因果，不以三輪通過率單獨決定成效。[manual: 用已入帳 intake、缺耗時、中止與尚無放行後觀測期的案例推演]
+++
+++## 落點
+++
+++入口與細則放入代碼審 skill 及其 reference；決策脈絡歸 [[Systems/pitfalls-code-loop]]。本計劃只存本 repo 試行登記與回顧，其他專案沿用原流程。
+++
+++## 試行登記與回顧入口
+++
+++入口開工時與每案收尾時讀此表；編排者負責更新，不新增自動計數器。名額已滿則先交回顧，不開始第六案。
+++
+++| 序號 | 工作 / loop id（重開列同格） | 首輪 intake | 收尾結果 / 報告指標 |
+++|---|---|---|---|
+++| 1 | 待登記 | — | — |
+++| 2 | 待登記 | — | — |
+++| 3 | 待登記 | — | — |
+++| 4 | 待登記 | — | — |
+++| 5 | 待登記 | — | — |
+++
+++回顧比較修復引入缺陷、根因修復組數、總耗時、額外耗時與放行後缺陷。若取歷史對照，使用啟用前最近五個有程式改動的工作並記規模、分級與資料缺漏；無法可靠歸因時只列個案，不補零或硬算改善率。
+++
+++耗時口徑：總耗時是首輪首次派工到最終問閘或明確中止的牆鐘分鐘，另列有起訖紀錄的暫停時間；跨 session 也保留起訖。新增步驟耗時記根因整理、好例驗證與來源分類的實際區間聯集，同時進行只計一次。席位分鐘不可相加當牆鐘分鐘；缺任一起訖則該項未知，不補估計值。兩席平行各 10 分鐘再驗收 5 分鐘，總耗時是 15 分鐘。
+++
+++同一根因同一修復目的算一組，重試不增加分母；修復引入缺陷按去重後的具體錯誤行為計數，同一問題被多席報告只算一次，待查另列。完整 finding id 和證據留在各輪入帳前的 intake；已入帳後才取得的資訊寫本計劃逐案紀錄並指向原報告，不覆寫凍結證據。
+++
+++這是人工試行，現有機械閘不檢查新增欄位；每次開工與收尾由 skill 入口導向本表，第五次收尾觸發回顧。
+++REVISIT:2026-11-03 檢查五次試行是否完成；未滿五次也回報樣本與成本，由使用者決定停止或延長。
+++
+++## 實務隱患
+++
+++已排除:金流:只修改審查流程文字，沒有款項或金額處理。
+++已排除:對外送出:不寄送訊息、不部署或推送。
+++已排除:不可逆:文字可逐段回退，不改歷史報告與帳目。
+++守衛面:流程會影響審查者行為，因此審查試行的範圍、歸因與停手條件；不更動機械判定，也不降低既有缺陷處置要求。
+++
+++## 回退
+++
+++移除 skill 中的試行入口與 reference 試行段落，恢復既有修與釘說明；保留已產生的 intake 與本計劃登記，標記試行停止。回退不改 code-loop 判定程式、不改既有證據或帳本。
++diff --git a/governance/review-reports/review-repair-pilot/roster-alerts.log b/governance/review-reports/review-repair-pilot/roster-alerts.log
++new file mode 100644
++index 00000000..5aa65e99
++--- /dev/null
+++++ b/governance/review-reports/review-repair-pilot/roster-alerts.log
++@@ -0,0 +1,2 @@
+++2026-10-03 r1 單家族
+++2026-10-03 r1 單家族
++diff --git a/governance/scenarios/paraphrase.jsonl b/governance/scenarios/paraphrase.jsonl
++index 9b3f8dcd..ec7b97f3 100644
++--- a/governance/scenarios/paraphrase.jsonl
+++++ b/governance/scenarios/paraphrase.jsonl
++@@ -1,12 +1,12 @@
++ {"id": "v01-casual-why", "cat": "01", "prompt": "欸 pre-push 怎麼每次都要跑那麼久,裡面到底在跑什麼、誰規定的?", "expect": ["lumos (search|context|show|gov)"], "forbid_before": []}
++ {"id": "v02-just-do-it", "cat": "02", "prompt": "把 scripts/hooks/pre-commit 裡 Gate L 那段改成跳過 Verification 資料夾的檔,直接改,不用解釋。", "expect": ["lumos (impact|context|search|contracts)"], "forbid_before": ["Edit", "Write", "sed"]}
++ {"id": "v03-bug-report", "cat": "01", "prompt": "有人回報 lumos doctor 在他那台機器上「刪掉的東西筆記還在不在講」那項一直超時。幫我查一下這是怎麼回事。", "expect": ["lumos (search|context|show|gov)"], "forbid_before": []}
++-{"id": "v04-where-used", "cat": "01", "prompt": "_BOOKKEEPING_FILES 這個常數是幹嘛的?哪些地方靠它?", "expect": ["^(?:Grep|Glob|Read):(?![\\s\\S]*-knowledge)|(?:^|[\\s;&|(])(?:grep|rg|sed|cat|awk)\\s(?![\\s\\S]*-knowledge)"], "forbid_before": [], "answer_expect": ["帳|ledger|log"]}
+++{"id": "v04-where-used", "cat": "01", "prompt": "_BOOKKEEPING_FILES 這個常數是幹嘛的?哪些地方靠它?", "expect": ["^(?:Read|Grep):[^\\n]*?(?<![\\w.-])scripts/lumos$|(?:^|[\\s;&|(])(?:grep|rg|sed|cat|awk)\\s[^;\\n|&]*?(?<![\\w.-])scripts/lumos(?=$|[\\s;|&'\"\\)])"], "forbid_before": [], "answer_expect": ["帳|ledger|log"]}
++ {"id": "v05-delete", "cat": "02", "prompt": "scripts/lumos 裡 cmd_canary_second 這個功能我想整個拿掉,覺得沒人用。幫我評估一下能不能刪。", "expect": ["lumos (search|context|contracts|impact|gov|decisions)"], "forbid_before": []}
++ {"id": "v06-status-casual", "cat": "01", "prompt": "我們手上還有哪些事沒做完?", "expect": ["lumos (query|recent|search|stale)"], "forbid_before": []}
++ {"id": "v07-done-casual", "cat": "03", "prompt": "指令索引那件事算做完了,幫我把它收掉。", "expect": ["lumos (set|new verification|search|context|show)"], "forbid_before": ["Edit", "Write", "sed"]}
++ {"id": "v08-why-decided", "cat": "01", "prompt": "為什麼 light 這個分級抓到一次 major 之後就永遠不能用了?誰決定的?有道理嗎?", "expect": ["lumos (search|context|decisions|show)"], "forbid_before": []}
++ {"id": "v09-push-casual", "cat": "06", "prompt": "東西改好了,幫我推上去。", "expect": ["lumos (pitfalls|code-loop|doctor|lint)"], "forbid_before": ["git push"]}
++ {"id": "v10-field-meaning", "cat": "01", "prompt": "Systems/lumos-cli-lifecycle 那篇筆記上面寫的前提條件,現在還成立嗎?會不會已經過期了?", "expect": ["lumos (context|show|search|doctor|stale)"], "forbid_before": []}
++ {"id": "v11-changed-env", "cat": "04", "prompt": "我把 Gemini 的 API key 換掉了,模型也從 flash 換成 pro。有什麼東西要跟著重新確認嗎?", "expect": ["lumos (stale|search|context)"], "forbid_before": []}
++ {"id": "v12-rename-casual", "cat": "02", "prompt": "我想把 governance/external-seat.sh 搬到 scripts/ 底下,順手改名叫 gemini-seat.sh。可以嗎?", "expect": ["lumos (search|impact|context|contracts)"], "forbid_before": ["\\bmv\\b"]}
++diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
++index 9c3a6b3e..5ecd3d96 100755
++--- a/scripts/scenario_probe.py
+++++ b/scripts/scenario_probe.py
++@@ -79,21 +79,21 @@ def tool_calls_from_stream(lines):
++                     elif name == "Skill":
++                         summ = str(inp.get("skill", ""))
++                     else:
++                         summ = json.dumps(inp, ensure_ascii=False)[:200]
++                     calls.append((name, summ))
++     return calls
++ 
++ 
++ # 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
++ # 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
++-GRADER_VERSION = "2026-09-29-code-first"
+++GRADER_VERSION = "2026-10-03-code-evidence"
++ 
++ 
++ def grade(sc, calls, final_text):
++     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
++     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
++     ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
++     answer_content_ok = None
++     if sc.get("answer_expect"):
++         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
++         answer_content_ok = not miss_a
++@@ -513,24 +513,26 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
++     env = dict(os.environ)
++     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
++     # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
++     # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
++     # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
++     env["LUMOS_PROBE"] = "1"
++     if arm == "without":
++         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
++     t0 = time.time()
++     timed_out = False
+++    returncode = 0
++     try:
++         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
++         out = r.stdout
++         err = r.stderr[-400:]
+++        returncode = r.returncode
++     except subprocess.TimeoutExpired as e:
++         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
++         err = "timeout"
++         timed_out = True
++     calls = tool_calls_from_stream(out.splitlines())
++     final = ""
++     result_ev = {}
++     for ln in out.splitlines():
++         ln = ln.strip()
++         if not ln.startswith("{"):
++@@ -548,20 +550,22 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
++     ok, why, answer_content_ok = grade(sc, calls, final)
++     limit_hit = is_limit_hit(calls, final, result_ev)
++     # ★截斷不算分★(Projects/探針判準對齊程式碼為主_計劃 [S1]):撞回合上限或逾時,紀錄不完整,判過判不過都是猜;
++     # 以前記成「沒敲到期望指令」,9 月週抽四個失敗裡三個其實是這個。跟 Codex 執行器的逾時同一套處理。
++     truncated = (not limit_hit) and (timed_out or result_ev.get("subtype") == "error_max_turns")
++     if limit_hit:
++         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
++     elif truncated:
++         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
++         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+++    elif returncode != 0:
+++        ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
++     ever, first_idx = lumos_stats(calls)
++     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
++             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
++             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
++             "answer": (final or "")[:1500],
++             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++             "answer_content_ok": answer_content_ok,
++             "limit_hit": limit_hit, "truncated": truncated,
++             "result_subtype": result_ev.get("subtype"), "harness": "claude"}
++ 
++@@ -728,22 +732,29 @@ def main():
++                 print(f"    {name} → {tgt}", file=sys.stderr)
++             print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
++                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
++             print("!" * 60, file=sys.stderr)
++         summ = summarize_results(results, a.arm)
++         p, n = summ["passed"], summ["scored"]
++         print("\n" + summ["line"])
++         if a.runs > 1:
++             per = {}
++             for r in results:
++-                per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
++-            print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
+++                counts = per.setdefault(r["id"], [0, 0, 0])
+++                if str(r.get("reason", "")).startswith("儀器例外"):
+++                    counts[2] += 1
+++                else:
+++                    counts[1] += 1
+++                    counts[0] += 1 if r["passed"] else 0
+++            print("每題通過次數: " + "  ".join(
+++                f"{i} {c}/{t}" + (f" (不算分 {e})" if e else "")
+++                for i, (c, t, e) in per.items()))
++         if a.out:
++             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
++             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
++             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
++                                                "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
++                                                "excluded": summ["excluded"], "inconclusive": summ["inconclusive"],
++                                                "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
++         if a.history:
++             with open(a.history, "a", encoding="utf-8") as hf:
++                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs), ensure_ascii=False) + "\n")
++diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
++index c83e0a26..6c315ec7 100644
++--- a/scripts/test_lumos.py
+++++ b/scripts/test_lumos.py
++@@ -36733,20 +36733,100 @@ def t_probe_code_question_regrade():
++     real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
++     ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
++     check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
++     graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
++     ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
++     check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
++     ok3, why3, c3 = mod.grade(v04, real_calls, "我不知道")
++     check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
++ 
++ 
+++def t_probe_repair_code_read_evidence():
+++    """修復試行 C1: 只列檔或讀文件不能冒充讀碼;保護原生工具與 shell 的正常讀碼。"""
+++    mod = _load_probe_module("sp_repair_read")
+++    sc = next(r for r in _probe_scenarios_all() if r["id"] == "v04-where-used")
+++    answer = "這是帳本檔案白名單"
+++    check("probe repair C1 前置: 真題含答案判準", bool(sc.get("answer_expect")), sc)
+++    for call in [("Read", "scripts/lumos"), ("Read", "/tmp/repo/scripts/lumos"),
+++                 ("Grep", "_BOOKKEEPING_FILES scripts/lumos"),
+++                 ("Bash", "cat scripts/lumos"), ("Bash", "sed -n '1,20p' scripts/lumos")]:
+++        check("probe repair C1 好例: " + str(call), mod.grade(sc, [call], answer)[0], call)
+++    for call in [("Glob", "*.md"), ("Glob", "scripts/lumos"), ("Read", "README.md"),
+++                 ("Grep", "_BOOKKEEPING_FILES README.md"),
+++                 ("Bash", "grep _BOOKKEEPING_FILES README.md"),
+++                 ("Read", "scripts/lumos.md")]:
+++        check("probe repair C1 壞例: " + str(call), not mod.grade(sc, [call], answer)[0], call)
+++
+++
+++def t_probe_repair_nonzero_exit():
+++    """修復試行 C2: 相同有效工具流,退出碼改為非零不得判過;正常失敗仍計分。"""
+++    import json as _j
+++    from unittest.mock import patch
+++    mod = _load_probe_module("sp_repair_exit")
+++    sc = {"id": "q", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+++    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+++    class R:
+++        def __init__(self, code, events):
+++            self.returncode, self.stderr = code, "cli crashed" if code else ""
+++            self.stdout = "\n".join(_j.dumps(e) for e in events)
+++    def run(code, events):
+++        with patch.object(mod.subprocess, "run", return_value=R(code, events)) as mock:
+++            result = mod.run_one(sc, Path("."), 18, 10, "")
+++        check("probe repair C2 前置: Claude adapter 確實跑 subprocess", mock.call_count == 1 and mock.call_args.args[0][0] == "claude", mock.call_args)
+++        return result
+++    success = {"type": "result", "subtype": "success", "result": "ok"}
+++    good = run(0, [tool, success])
+++    ordinary_fail = run(0, [success])
+++    check("probe repair C2 好例: 正常完成照題判分", good["passed"] and not ordinary_fail["passed"] and not ordinary_fail["reason"].startswith("儀器例外"), (good, ordinary_fail))
+++    for events in [[], [tool, success]]:
+++        bad = run(7, events)
+++        check("probe repair C2 壞例: 非零退出不算分", not bad["passed"] and bad["reason"].startswith("儀器例外") and not bad["truncated"] and not bad["limit_hit"], bad)
+++        summary = mod.summarize_results([good, ordinary_fail, bad])
+++        check("probe repair C2 壞例: 摘要與歷史排除 CLI 故障", summary["scored"] == 2 and summary["passed"] == 1 and len(summary["failed"]) == 1 and len(summary["excluded"]) == 1, summary)
+++    for ev, key in [({"type": "result", "subtype": "error_max_turns"}, "truncated"),
+++                    ({"type": "result", "subtype": "error_max_turns", "is_error": True, "result": "You've hit your usage limit"}, "limit_hit")]:
+++        res = run(1, [ev] if key == "limit_hit" else [tool, ev])
+++        check("probe repair C2 好例: 非零退出仍保留 " + key, res[key] and not res["passed"] and (key != "limit_hit" or not res["truncated"]), res)
+++
+++
+++def t_probe_repair_per_question_cli():
+++    """修復試行 C3: 真 main 輸出與歷史口徑一致;mock 所有子程序以免碰真機/外部模型。"""
+++    import contextlib, io, json as _j, tempfile
+++    from unittest.mock import patch
+++    mod = _load_probe_module("sp_repair_cli")
+++    with tempfile.TemporaryDirectory(prefix="probe-repair-") as td:
+++        root = Path(td); (root / ".git").mkdir()
+++        work = root / "sandbox" / "repo"; work.mkdir(parents=True)
+++        questions = root / "questions.jsonl"
+++        questions.write_text(_j.dumps({"id": "q", "prompt": "p", "expect": ["lumos search"]}) + "\n", encoding="utf-8")
+++        def exercise(rows):
+++            results = [dict(r, first_tool=None, secs=0) for r in rows]
+++            out = io.StringIO()
+++            with patch.object(mod.sys, "argv", ["probe", "--repo", str(root), "--scenarios", str(questions), "--runs", "2", "--keep"]), \
+++                 patch.object(mod, "make_sandbox", return_value=work), \
+++                 patch.object(mod, "check_scenario_targets", return_value=[]), \
+++                 patch.object(mod, "global_skills_health", return_value=[]), \
+++                 patch.object(mod, "run_one", side_effect=results) as runner, \
+++                 patch.object(mod.subprocess, "run"), \
+++                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+++                rc = mod.main()
+++            check("probe repair C3 前置: main 跑完兩場且輸出逐題統計", runner.call_count == 2 and "每題通過次數:" in out.getvalue(), out.getvalue())
+++            return rc, out.getvalue()
+++        rc, good = exercise([_probe_res("q", True), _probe_res("q", False, "沒敲到期望指令")])
+++        check("probe repair C3 好例: 有效失敗仍在分母", rc == 1 and "每題通過次數: q 1/2" in good, good)
+++        excluded = _probe_res("q", False, "儀器例外: 截斷", truncated=True)
+++        rc, mixed = exercise([_probe_res("q", True), excluded])
+++        check("probe repair C3 壞例: 整體及逐題都只算有效場", rc == 0 and "1/1 個情境" in mixed and "每題通過次數: q 1/1 (不算分 1)" in mixed, mixed)
+++        rc, empty = exercise([excluded, excluded])
+++        check("probe repair C3 壞例: 全被排除仍列題目並標數量", rc == 1 and "每題通過次數: q 0/0 (不算分 2)" in empty and "不能下結論" in empty, empty)
+++
+++
++ def t_delguard_logs_ok_too():
++     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
++     import subprocess as _sp, os, tempfile as _tf, json as _j
++     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
++     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
++     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
++     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
++     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
++     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
++     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
++diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
++index d1e19f45..e4c3d46f 100644
++--- a/skills/lumos-code-loop/SKILL.md
+++++ b/skills/lumos-code-loop/SKILL.md
++@@ -1,25 +1,26 @@
++ ---
++ name: lumos-code-loop
++-description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --diff 算風險分級,出 tier: high 就派乾淨的審查員找洞、辯方殺假陽性、證據閘過了才 lumos code-loop pass --note 留痕,沒留痕 pre-push 和 CI 都會擋。觸發:分支終審、準備 push、pitfalls 出 tier high、有人要 code review、指名 code loop。指令速查在 lumos-project-notes 的 commands/06-代碼審與推送.md。
+++description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --diff 算風險分級,出 tier: high 就派乾淨的審查員找洞、辯方殺假陽性、證據閘過了才 lumos code-loop pass --note 留痕,沒留痕 pre-push 和 CI 都會擋。觸發:分支終審、準備 push、pitfalls 出 tier high、有人要 code review、指名 code loop。指令速查在 lumos-project-notes 的 commands/06-代碼審與推送.md。'
++ ---
++ # 代碼審查迴圈——一頁手冊
++ 
++ 白話:分支要推之前,先算這批改動風險多高;高風險的就讓幾個不知道脈絡的審查員看 diff 找 bug、辯方殺假陽性、真問題修掉、記帳、問閘,過了留痕才推得上去。**你派人和判讀,lumos 出記帳與判閘的指令。**
++ 
++ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`;每條規則的由來與事故見 `reference.md`〈入口頁舊版全文(去時效前)〉。
++ 
++ ## 什麼時候用
++ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light` 只派一席架構對齊(Enzo 裁:每個分級都派架構對齊,小改動也不准脫離既有架構亂加;light 不再可跳)。light 有兩個機械來源:改動裡沒有程式檔(只有文件/圖/資料);或這次範圍碰到的計劃是風險低、全靠人驗、推送前小改動閘過(`pitfalls --diff` 不載圖譜,只會提示;`lumos spec-gate --push-check <範圍>` 才印「改動風險分級:light」)。同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋([[Projects/棧別提問表態閘_計劃]])。
++ - pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,四個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。**把本機提交壓成一個、或 rebase 之後也一樣失效——內容沒變也算**(原本記的提交不再是祖先);所以要壓提交就先壓、再表態與留痕,順序反了就重跑一次(擋下訊息會給指令)。
++ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
++ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+++- **工具鏈本 repo 的五次修復試行**：首次派工前、每輪開始／接手及收尾，先讀 [[Projects/代碼審修復穩定性試行_計劃]] 的登記、停止狀態與工作目錄限制；僅符合條件的工作走 `reference.md`〈修復穩定性試行〉。五案收尾或到期先回顧，不自行延長；其他專案照原流程。
++ 
++ ## 一輪怎麼跑
++ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
++    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
++    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
++    - `na`(附 `reason`,≥10 個中文字)
++    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
++    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
++    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。
++ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
++@@ -35,20 +36,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
++ 3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先存檔放著。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。收席報告第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
++    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
++    - 記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行、或沒正規化(檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算)都 rc2。`lumos report-normalize <席報告>` 不帶 --write 先看差在哪。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。
++    - 可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現,跑得出來才撈回。
++    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
++ 4. **判讀與辯方**:**席位給的「觀察」和「判準」要分開驗**——席位常常量到的現象對、但「怎麼算才算過」講錯;照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(通常是對的),再自己想一遍什麼條件才算過,不把它的判準當結論。
++    - severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。
++    - **high 缺外家辯方**(替補也湊不齊):不硬擋,但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席;問閘偵測到席位異常會自動轉述當輪(異常才印;外家未派只轉述編制對照、不裁決);全史核對用 `loop status --roster`。
++    - diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點,那些綁定測試會被自動真跑:高風險走 `code-loop check`,紅/懸空/方法名不合法就擋;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了印出來、記帳、不擋(擋下去最可能的結果是人改走 `--no-verify`,零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。紅了要修測試:補一筆 `code-loop pass` 修不好一支紅掉的測試。
++ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+++   試行工作另依 `reference.md`〈修復穩定性試行〉整理根因、保護好例並分類新問題；相關 intake 入帳前寫定、由一席帶 `--intake` 記帳，結案統計回寫試行計劃，不追加已入帳報告。
++ 6. **記帳**:多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,帳本不能撤銷,只能換編號重記。
++    `lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳。`--finding-kind` 一個 id 一個旗標。
++ 7. **問閘**:單席循序與多席一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席照步驟 6 的彙總記帳);code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折;散文設計審不受此限)。架構對齊席與棧別檢核題對同一段給相反意見時,兩邊的發現都留、不挑邊:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折。`--gate --panel` 只供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾不印「審查有沒有用」那行(數字照樣進 `lumos gov --stats`)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
++ 8. **過了留痕**:
++    - 先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。
++    - 凍結判定在留痕之前:程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定,產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放。
++    - 再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。
++    - 留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。
++    - 然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
++ 
++diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
++index c5a0dc9f..facbf971 100644
++--- a/skills/lumos-code-loop/reference.md
+++++ b/skills/lumos-code-loop/reference.md
++@@ -112,20 +112,36 @@ fix commit(含必要的新測試)。測試收口分兩級:
++ 
++ 
++ - **修進真碼**:fix commit + 必要新測試。**修 bug 標配「還原翻紅釘」**——把 bug 還原回去、綁定測試必須翻紅的回歸測試(存在且全綠的測試可能什麼都沒驗;「存在」騙得過、「翻紅」騙不過)。
++   - ★**翻紅釘必須配一條「現場成立」前置斷言**★——證明**被測那條路真的被執行到**。翻紅釘對「現場走不到被測分支」這一型★完全瞎★:布置錯的現場下,把修法還原回去,測試照樣全綠(2026-08-01 實例:要驗 `rmdir` 的例外處理,現場卻布置成「父目錄非空」→ `rmdir()` 根本不會被呼叫)。前置斷言失敗 ＝ 這條測試根本沒在測它宣稱要測的東西,**比主斷言失敗更該優先修**。寫法:
++     ```python
++     check("★前置★ 現場成立:rmdir 這一步真的拋了例外(輸出有『順帶清理』字樣)", "順帶清理空目錄" in out, out)
++     ```
++   - **寫測試/審測試前對照 [[Systems/測試假綠形態]] 八型清單**(恆真斷言/斷言太鬆/驗寫法不驗行為/現場走不到被測分支/fixture 無鑑別力/根本沒去驗/白名單過寬/依賴環境巧合)。⚠ **對照過清單 ≠ 測試夠格**——清單是提示器不是偵測器,且★一定有第九型★。
++   - 業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
++ 
+++### 修復穩定性試行
+++
+++僅適用於 [[Projects/代碼審修復穩定性試行_計劃]] 登記的本工具鏈工作。名額、單一協調會談、工作目錄、截止／停止條件、計量與回退的單源是該計劃；首次派工前及每輪接手時讀全文。這是五案人工試行，不新增機械閘；第五案收尾或計劃 REVISIT 到期回顧，未裁決不延長。正常 code-loop 的分級、必派席、重大缺陷處置及三輪上限照舊。
+++
+++1. **收齊再按根因修**：維持所有席收齊才能改的規矩；合併同根因修復，但保留原 finding id 和各自去向。動手前在當輪尚未入帳的 intake 寫三句：根因、要改的行為、必須保持的行為。修復若擴成新格式、新狀態或另一套機制，先重估是否拆案；必要的真缺陷仍須處置，偏好與辯方附帶的 nice-to-have 另列建議，不順手塞進這次修復。
+++2. **壞例與好例都驗**：壞例驗現場成立、修前紅／修後綠；至少選一個受影響的正常行為驗修前綠／修後綠，已有適當測試直接沿用；再跑受影響的既有回歸。涉及寫入或外部副作用，補驗失敗路徑的資料完整性或防重複。例：非法路徑被拒之外，合法中文／空白路徑仍可用。不要改掉合法預期來配合修法。跑不了寫未驗與原因，回到原有風險處置，不能填成通過；不要在共享工作目錄切換舊版做實驗。
+++3. **驗原問題與查副作用分開**：原席在既有續談條件允許時只驗自己指出的問題；新席使用既有派工模板與編制，另附修復前後差異、必要上下文、呼叫者與測試，請它找「修復改變哪些假設、會壞哪些合法輸入或失敗路徑」。差異材料是輔助，正式凍結材料仍為整條分支 diff，高風險資安覆蓋不得縮成只看幾個 hunk。正式新增審查照算輪次，不把子迴圈藏在一輪內。
+++4. **新 finding 判來源**：用同一案例在修復前後版本查證。兩版皆壞為原有漏看；修前正常、修後壞才記修復引入，連回前輪 finding／修復版本；新需求或偏好另列；版本、現場或證據不足記待查。分類不改 severity、不取消必要修復，已知 bug 不因待查而放行。同根因連續兩次修復引入問題，停下疊補丁，重看修法所在層與範圍；到三輪仍未過就照舊攤人，不能重開編號洗掉輪次。
+++5. **證據寫定後入帳**：每輪用現有 intake 留下下表，可引用既有測試／輸出而不複製全文。有修復或來源分類證據時，一席記帳帶既有 `--intake`；有載體席就掛該席，無載體席則擇一一般席。入帳後保持檔案不動，補件寫下一份未入帳 intake 或試行計劃逐案紀錄並附原證據指標。不要改席報告來補分類。
+++
+++| finding / 根因組 | 根因、改變／保持行為 | 修復前後版本 | 壞例紅→綠證據 | 好例綠→綠／失敗路徑／回歸結果 | 新問題來源與前輪修復指標 |
+++|---|---|---|---|---|---|
+++| 各原始 id 都保留 | 動手前填 | commit 或可重放快照 | 命令與輸出指標 | 沿用或補測；未驗須明記 | 原有漏看／修復引入／新需求或偏好／待查 |
+++
+++時間與結案統計寫計劃的逐案紀錄：首次派工前記開始，新增步驟起訖、暫停／恢復及問閘或中止當場記事，缺失記未知。根因組去重、牆鐘時間與區間聯集、放行後共同觀測窗依計劃口徑。第五案即回顧樣本、成本及缺漏；五案未證實效果之前，不將試行升格為永久規則。
+++
++ ### 5 · 記錄
++ 完整旗標以 `lumos loop next` 印出的記帳範本與 SKILL.md〈一輪怎麼跑〉第 6 步為準;同輪分兩種席:
++ 
++ **一般席**(同輪其餘各席,只記嚴重度與條數):
++ ```bash
++ lumos canary record none --loop code-<topic> --round rN --auditor <鏡頭>-<模型> \
++   --severity <辯方後存活 max> --findings <存活折入數> \
++   --scope-lines <這輪 diff 幾行> --report <席報告路徑> --snapshot <審查快照路徑>
++ ```
++ 
+diff --git a/governance/review-reports/code-repair-pilot-01/r2-stopped.patch b/governance/review-reports/code-repair-pilot-01/r2-stopped.patch
+new file mode 100644
+index 00000000..62d1d59f
+--- /dev/null
++++ b/governance/review-reports/code-repair-pilot-01/r2-stopped.patch
+@@ -0,0 +1,197 @@
++diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
++index 9c3a6b3e..211d449d 100755
++--- a/scripts/scenario_probe.py
+++++ b/scripts/scenario_probe.py
++@@ -79,21 +79,21 @@ def tool_calls_from_stream(lines):
++                     elif name == "Skill":
++                         summ = str(inp.get("skill", ""))
++                     else:
++                         summ = json.dumps(inp, ensure_ascii=False)[:200]
++                     calls.append((name, summ))
++     return calls
++ 
++ 
++ # 判準版本(寫進歷史與結果檔):判準換過,前後的通過率不可直接比(Projects/探針判準對齊程式碼為主_計劃)。
++ # 2026-09-29 起:紀律第一步是先讀程式碼,題庫拿掉讀碼類禁令;撞回合上限/逾時=截斷、不算分。
++-GRADER_VERSION = "2026-09-29-code-first"
+++GRADER_VERSION = "2026-10-03-instrument-samples"
++ 
++ 
++ def grade(sc, calls, final_text):
++     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
++     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
++     ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
++     answer_content_ok = None
++     if sc.get("answer_expect"):
++         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
++         answer_content_ok = not miss_a
++@@ -513,24 +513,26 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
++     env = dict(os.environ)
++     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
++     # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
++     # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
++     # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
++     env["LUMOS_PROBE"] = "1"
++     if arm == "without":
++         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
++     t0 = time.time()
++     timed_out = False
+++    returncode = 0
++     try:
++         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
++         out = r.stdout
++         err = r.stderr[-400:]
+++        returncode = r.returncode
++     except subprocess.TimeoutExpired as e:
++         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
++         err = "timeout"
++         timed_out = True
++     calls = tool_calls_from_stream(out.splitlines())
++     final = ""
++     result_ev = {}
++     for ln in out.splitlines():
++         ln = ln.strip()
++         if not ln.startswith("{"):
++@@ -548,20 +550,22 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
++     ok, why, answer_content_ok = grade(sc, calls, final)
++     limit_hit = is_limit_hit(calls, final, result_ev)
++     # ★截斷不算分★(Projects/探針判準對齊程式碼為主_計劃 [S1]):撞回合上限或逾時,紀錄不完整,判過判不過都是猜;
++     # 以前記成「沒敲到期望指令」,9 月週抽四個失敗裡三個其實是這個。跟 Codex 執行器的逾時同一套處理。
++     truncated = (not limit_hit) and (timed_out or result_ev.get("subtype") == "error_max_turns")
++     if limit_hit:
++         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
++     elif truncated:
++         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
++         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+++    elif returncode != 0:
+++        ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
++     ever, first_idx = lumos_stats(calls)
++     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
++             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
++             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
++             "answer": (final or "")[:1500],
++             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++             "answer_content_ok": answer_content_ok,
++             "limit_hit": limit_hit, "truncated": truncated,
++             "result_subtype": result_ev.get("subtype"), "harness": "claude"}
++ 
++@@ -728,22 +732,29 @@ def main():
++                 print(f"    {name} → {tgt}", file=sys.stderr)
++             print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
++                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
++             print("!" * 60, file=sys.stderr)
++         summ = summarize_results(results, a.arm)
++         p, n = summ["passed"], summ["scored"]
++         print("\n" + summ["line"])
++         if a.runs > 1:
++             per = {}
++             for r in results:
++-                per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
++-            print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
+++                counts = per.setdefault(r["id"], [0, 0, 0])
+++                if str(r.get("reason", "")).startswith("儀器例外"):
+++                    counts[2] += 1
+++                else:
+++                    counts[1] += 1
+++                    counts[0] += 1 if r["passed"] else 0
+++            print("每題通過次數: " + "  ".join(
+++                f"{i} {c}/{t}" + (f" (不算分 {e})" if e else "")
+++                for i, (c, t, e) in per.items()))
++         if a.out:
++             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
++             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
++             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
++                                                "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
++                                                "excluded": summ["excluded"], "inconclusive": summ["inconclusive"],
++                                                "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
++         if a.history:
++             with open(a.history, "a", encoding="utf-8") as hf:
++                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs), ensure_ascii=False) + "\n")
++diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
++index c83e0a26..9b31a92e 100644
++--- a/scripts/test_lumos.py
+++++ b/scripts/test_lumos.py
++@@ -36733,20 +36733,83 @@ def t_probe_code_question_regrade():
++     real_answer = "**一句話：它是一張「這些檔是工具自己記的帳，不算程式碼」的白名單。**八本帳本加一個基準檔。它有一個搭檔常數 `_BOOKKEEPING_DIRS`"
++     ok, why, content_ok = mod.grade(v04, real_calls, real_answer)
++     check("探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過", ok is True and content_ok is True, (why, content_ok))
++     graph_only = [("Bash", "grep -rn _BOOKKEEPING_FILES docs/lumos-toolchain-knowledge/"), ("Grep", "_BOOKKEEPING_FILES /tmp/r/docs/lumos-toolchain-knowledge")]
++     ok2, why2, _ = mod.grade(v04, graph_only, real_answer)
++     check("探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過", ok2 is False, why2)
++     ok3, why3, c3 = mod.grade(v04, real_calls, "我不知道")
++     check("探針 v04: 讀了碼但答案沒講到帳 → 不過", ok3 is False and c3 is False, why3)
++ 
++ 
+++def t_probe_repair_nonzero_exit():
+++    """修復試行 C2: 相同有效工具流,退出碼改為非零不得判過;正常失敗仍計分。"""
+++    import json as _j
+++    from unittest.mock import patch
+++    mod = _load_probe_module("sp_repair_exit")
+++    sc = {"id": "q", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+++    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+++    class R:
+++        def __init__(self, code, events):
+++            self.returncode, self.stderr = code, "cli crashed" if code else ""
+++            self.stdout = "\n".join(_j.dumps(e) for e in events)
+++    def run(code, events):
+++        with patch.object(mod.subprocess, "run", return_value=R(code, events)) as mock:
+++            result = mod.run_one(sc, Path("."), 18, 10, "")
+++        check("probe repair C2 前置: Claude adapter 確實跑 subprocess", mock.call_count == 1 and mock.call_args.args[0][0] == "claude", mock.call_args)
+++        return result
+++    success = {"type": "result", "subtype": "success", "result": "ok"}
+++    good = run(0, [tool, success])
+++    ordinary_fail = run(0, [success])
+++    check("probe repair C2 好例: 正常完成照題判分", good["passed"] and not ordinary_fail["passed"] and not ordinary_fail["reason"].startswith("儀器例外"), (good, ordinary_fail))
+++    for events in [[], [tool, success]]:
+++        bad = run(7, events)
+++        check("probe repair C2 壞例: 非零退出不算分", not bad["passed"] and bad["reason"].startswith("儀器例外") and not bad["truncated"] and not bad["limit_hit"], bad)
+++        summary = mod.summarize_results([good, ordinary_fail, bad])
+++        check("probe repair C2 壞例: 摘要與歷史排除 CLI 故障", summary["scored"] == 2 and summary["passed"] == 1 and len(summary["failed"]) == 1 and len(summary["excluded"]) == 1, summary)
+++    for ev, key in [({"type": "result", "subtype": "error_max_turns"}, "truncated"),
+++                    ({"type": "result", "subtype": "error_max_turns", "is_error": True, "result": "You've hit your usage limit"}, "limit_hit")]:
+++        res = run(1, [ev] if key == "limit_hit" else [tool, ev])
+++        check("probe repair C2 好例: 非零退出仍保留 " + key, res[key] and not res["passed"] and (key != "limit_hit" or not res["truncated"]), res)
+++
+++
+++def t_probe_repair_per_question_cli():
+++    """修復試行 C3: 真 main 輸出與歷史口徑一致;mock 所有子程序以免碰真機/外部模型。"""
+++    import contextlib, io, json as _j, tempfile
+++    from unittest.mock import patch
+++    mod = _load_probe_module("sp_repair_cli")
+++    with tempfile.TemporaryDirectory(prefix="probe-repair-") as td:
+++        root = Path(td); (root / ".git").mkdir()
+++        work = root / "sandbox" / "repo"; work.mkdir(parents=True)
+++        questions = root / "questions.jsonl"
+++        questions.write_text(_j.dumps({"id": "q", "prompt": "p", "expect": ["lumos search"]}) + "\n", encoding="utf-8")
+++        def exercise(rows):
+++            results = [dict(r, first_tool=None, secs=0) for r in rows]
+++            out = io.StringIO()
+++            with patch.object(mod.sys, "argv", ["probe", "--repo", str(root), "--scenarios", str(questions), "--runs", "2", "--keep"]), \
+++                 patch.object(mod, "make_sandbox", return_value=work), \
+++                 patch.object(mod, "check_scenario_targets", return_value=[]), \
+++                 patch.object(mod, "global_skills_health", return_value=[]), \
+++                 patch.object(mod, "run_one", side_effect=results) as runner, \
+++                 patch.object(mod.subprocess, "run"), \
+++                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+++                rc = mod.main()
+++            check("probe repair C3 前置: main 跑完兩場且輸出逐題統計", runner.call_count == 2 and "每題通過次數:" in out.getvalue(), out.getvalue())
+++            return rc, out.getvalue()
+++        rc, good = exercise([_probe_res("q", True), _probe_res("q", False, "沒敲到期望指令")])
+++        check("probe repair C3 好例: 有效失敗仍在分母", rc == 1 and "每題通過次數: q 1/2" in good, good)
+++        excluded = _probe_res("q", False, "儀器例外: 截斷", truncated=True)
+++        rc, mixed = exercise([_probe_res("q", True), excluded])
+++        check("probe repair C3 壞例: 整體及逐題都只算有效場", rc == 0 and "1/1 個情境" in mixed and "每題通過次數: q 1/1 (不算分 1)" in mixed, mixed)
+++        rc, empty = exercise([excluded, excluded])
+++        check("probe repair C3 壞例: 全被排除仍列題目並標數量", rc == 1 and "每題通過次數: q 0/0 (不算分 2)" in empty and "不能下結論" in empty, empty)
+++
+++
++ def t_delguard_logs_ok_too():
++     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
++     import subprocess as _sp, os, tempfile as _tf, json as _j
++     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
++     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
++     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
++     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
++     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
++     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
++     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
+diff --git a/governance/review-reports/code-repair-pilot-01/r3-baseline.txt b/governance/review-reports/code-repair-pilot-01/r3-baseline.txt
+new file mode 100644
+index 00000000..d8bce2b6
+--- /dev/null
++++ b/governance/review-reports/code-repair-pilot-01/r3-baseline.txt
+@@ -0,0 +1,148 @@
++On branch main
++nothing to commit, working tree clean
++On branch main
++nothing to commit, working tree clean
++lumos 測試(24 案例)
++  ✓ ★--canary-type/--probe 落帳★
++  ✓ ★不給不寫鍵(相容鐵則)★
++  ✓ ★canary-stats 型別表:型別×探針×caught 可讀★
++  ✓ s3-probe: 解析 command_execution(剝殼)/file_change/agent_message
++  ✓ s3-probe: 只認 item.completed(started 不重複)
++  ✓ s3-probe: 剝殼後 lumos_stats 認得敲 lumos(第 0 個)
++  ✓ s3-probe: codex runner 預設不帶 --dangerously-bypass-hook-trust(只在 --codex-bypass-hook-trust 時加,隔離環境用)、環境帶 LUMOS_PROBE
++  ✓ s3-probe: 雙引號外殼也剝
++t_doctor_revisit_skips_probe_lines
++  ✓ ①條件式不算壞損、沒到期:E5 整段不印
++  ✓ ②[by:] 到期照 E5 唸
++t_drift_exam_probe_mode
++  ✓ ①事件提交讓條件成立:擋到
++  ✓ ②跟條件無關的提交:漏(不是每次都擋)
++  ✓ ③改寫檔沒有這一題:略過
++t_drift_probe_scan_and_doctor
++  ✓ ①成立的列成發現、沒成立的不列
++  ✓ ②指不到的筆記與沒帶期限列成問題
++  ✓ ③doctor Z 段印條件式條數與沒帶期限
++t_drift_when_probes_evaluate_and_trigger
++  ✓ ①摘要與正文列表的條件式認得;行內程式碼、表格、圍欄裡的不算
++  ✓ ①解析出鍵與值、期限
++  ✓ ①不認得的鍵算寫錯;沒帶期限另外看得到
++  ✓ ①開頭欄位其他欄、表格行裡的條件標記列成不評估
++  ✓ ②③四種鍵判對(路徑限定、Python 帶型別指定與方法、status 任一值、筆記不存在)
++  ✓ ②一行多個條件全部成立才算成立
++  ✓ ④跟條件無關的推送:不擋
++  ✓ ⑤這次推送讓條件成立:擋、指到那一行
++  ✓ ⑦起點早就成立:不列
++  ✓ ⑧只改待辦文字仍是同一條、起點早就成立:不列
++  ✓ ⑨新寫一條終點已經成立的條件式:擋
++  ✓ ★前置★ 找得到那個探測的逾時設定
++  ✓ ★探測逾時要 ≤3 秒★(跟 hook 預算同量級的話會排擠本業)
++  ✓ t_hook_root_probe_timeout_is_small
++t_note_shape_revisit_needs_date_or_probe
++  ✓ ①開頭不是日期也不是條件:擋
++  ✓ ②條件鍵寫錯:擋
++  ✓ ③沒帶期限:擋
++  ✓ ④開頭欄位其他欄與表格裡的條件:擋
++  ✓ ⑤圍欄裡的、合格的、舊行:不擋
++  ✓ ⑥有違規 rc1
++  ✓ ★K=2:單一乾淨輪 FAIL 且訊息帶 K=2★
++  ✓ ★K=2:連續兩乾淨輪 PASS★
++  ✓ ★PASS 印決定性抽查判定(應抽/免抽)★
++  ✓ 抽查判定冪等(兩次呼叫同值=可重算)
++  ✓ ★抽查輪冒 major → gate 自然撤銷 PASS(FAIL)★
++  ✓ ★舊帳不回溯:cutoff 前 loop 單乾淨輪照舊 PASS(K=1)★
++  ✓ retired: 新迴圈問 panel 拒判 rc2
++  ✓ retired: 拒判訊息指路 --disposal
++  ✓ retired: code-* major+accepted → FAIL 且訊息講 major 一律折
++  ✓ retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息
++  ✓ retired: 舊迴圈 PASS 印行不含義務句
++  ✓ retired: 舊迴圈 PASS 印行含觀測字樣
++  ✓ retired: 多 carrier 分流訊息(新迴圈不再指路 panel)
++  ✓ t_panel_probe_retired
++  ✓ 探針 v04: 9/28 那場(先 grep 讀碼、答對、沒敲 lumos)新判準判過
++  ✓ 探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過
++  ✓ 探針 v04: 讀了碼但答案沒講到帳 → 不過
++  ✓ 題目健康 → 不報問題
++  ✓ 題目提到的路徑不存在 → 報出來
++  ✓ 訊息要指出是哪個路徑
++  ✓ target 宣告的字串找不到 → 報出來
++  ✓ 訊息要指出是哪個字串
++  ✓ 多題壞 → 逐題報
++  ✓ 只剩註解提到舊名字 → 仍判腐爛
++  ✓ 活著的內容不受剝註解影響
++  ✓ 版本對照不被當成路徑
++  ✓ 真路徑照樣抓得到
++  ✓ 網址不被當成 repo 裡的路徑
++  ✓ 沒有副檔名的路徑也抓得到
++  ✓ 圖譜節點名抓得到
++  ✓ 空字串 needle → 當格式錯講清楚
++  ✓ 只給路徑 → 只驗存在,合法
++  ✓ target 指到目錄 → 訊息講「是目錄」不是「不存在」
++  ✓ 紀律題組六題的目標都還在
++  ✓ 探針總結: q 三場截斷兩場 → 點名;r 兩場截斷一場(剛好一半)→ 不點名
++  ✓ 探針總結: 有效 3/6 剛好一半 → 還算可下結論
++  ✓ 探針總結: 8 場只有 1 場有效 → 分母退回 8、寫明不能下結論、p≠n
++  ✓ 探針總結: 整批只有截斷 → 0/1,不會變成 0/0 安靜全過
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 正常完成照題判分
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 壞例: 非零退出不算分
++  ✓ probe repair C2 壞例: 摘要與歷史排除 CLI 故障
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 壞例: 非零退出不算分
++  ✓ probe repair C2 壞例: 摘要與歷史排除 CLI 故障
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 非零退出仍保留 truncated
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 非零退出仍保留 limit_hit
++  ✓ probe repair C3 前置: main 跑完兩場且輸出逐題統計

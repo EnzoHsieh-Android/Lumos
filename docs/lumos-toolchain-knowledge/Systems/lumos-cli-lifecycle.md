@@ -95,6 +95,7 @@ verified_by:
   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
+  - "[[Verification/TTY確認不取得控制終端驗證]]"
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
 about_code:
@@ -136,7 +137,7 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - **hooks 安裝**(`_install_hooks_py`):①`git config core.hooksPath scripts/hooks` ②Claude hooks `.py` copy 進 `~/.claude/hooks/`(個別檔不用 junction,因 `mklink /J` 只連目錄)③`merge-claude-settings.py` 用 resolved python 註冊 settings。
 
 ## 已知限制 / 雷
-- PITFALL: 2026-10-05 推送前全套測試實跑發現，session leader 在 `_confirm_tty` 的第二階開啟測試用 PTY slave 時若未帶 `O_NOCTTY`，關閉 master 會讓測試程序收到 SIGHUP（rc 129），而非測例正常結案。`python3 scripts/test_lumos.py -k confirm_tty_unit` 修前停在「prompt 有寫進 tty」，修後 6 passed、0 failed；POSIX `open()` 對 `O_NOCTTY` 的定義是避免取得控制終端（https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html）。若之後更動終端開啟旗標，重跑此單例與全套分片。
+- PITFALL: 2026-10-05 推送前全套測試實跑發現，session leader 在 `_confirm_tty` 的第二階開啟測試用 PTY slave 時若未帶 `O_NOCTTY`，關閉 master 會讓測試程序收到 SIGHUP（rc 129），而非測例正常結案。`python3 scripts/test_lumos.py -k confirm_tty_unit` 修前停在「prompt 有寫進 tty」，修後 6 passed、0 failed；POSIX `open()` 對 `O_NOCTTY` 的定義是避免取得控制終端（https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html）。若之後更動終端開啟旗標，重跑全套分片與 `t_confirm_tty_no_ctty_session_survives`——那支自己以新 session 啟動、先斷言沒有控制終端，拿掉 `O_NOCTTY` 會翻紅；`confirm_tty_unit` 只在執行器本身恰好是沒有控制終端的 session leader 時才走得到這條路，在一般終端機裡拿掉 `O_NOCTTY` 照樣全綠，不能單獨當重驗（下方 PITFALL）。[出處:code-probe-postreview-dispatch-ledger r7 CTR7-02]
 - `bootstrap` 不加 `--pull`,既有 clone 會跳過更新 → 直接 `git pull` 來源 clone 最乾脆。
 - `_link_or_copy` fallback 到 copytree 後就失去「pull 即更新」(該機器無法建連結時)。
 - bootstrap/init 裝完 hooks 需**重啟 Claude Code session** 才載入 L1/L3 hooks。
@@ -152,6 +153,7 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
 - 分發機制脈絡:user-memory `lumos-update-distribution`。
 
+PITFALL: 無控制終端的 session leader 用 `os.open(tty, O_RDWR)` 開 pty slave，可能把它取得成 controlling terminal；關閉後 runner 收到 SIGHUP 129，讓全套測試沒有摘要就中斷 [出處:[[Verification/TTY確認不取得控制終端驗證]]] [根因:沒有控制終端的 session leader 開終端裝置時，核心會把它當成控制終端] [test:t_confirm_tty_no_ctty_session_survives]。既有的 `t_confirm_tty_unit` 在有控制終端的開發機上走不到這條路，拿掉 `O_NOCTTY` 照樣全綠，不能當防回歸；新測試另開子程序，先斷言它是 session leader 且開不了 `/dev/tty` 才驗收不到掛斷。`_confirm_tty` 開 tty 時在平台有提供才加 `O_NOCTTY`，保留 Windows fallback 與既有三階確認語意。
 ## Claude 外掛(事件帳、審查席隔離)的安裝與移除(2026-10-05,[[Projects/Lumos事件帳_計劃]];2026-10-06 改多支,[[Projects/審查席唯讀隔離_計劃]])
 
 - **多支外掛**:外掛不是單一常數,是完整 id 清單 `_LUMOS_PLUGINS`(事件帳、交棒脈絡、審查席隔離三支;交棒脈絡那批 [[Projects/Claude-mod第二批_計劃]] 先合進主線)。逐支各自裝、各自印一行,回傳取最差的一支;來源 repo 市集檔沒列的那支略過、不硬裝(舊來源還沒有新外掛時不會整段失敗);裝完以列表確認真的在(第一次查詢撞到另一支同時在寫也交給等待重查)。不跑 `marketplace update`:資料夾型市集 install 時直接讀市集檔,2026-10-06 用隔離的 Claude 設定資料夾實測,新增外掛不更新也裝得上。移除逐支獨立;★全部成功才移除市集,任一支失敗就保留市集★——移掉會讓那支外掛變成找不到來源的孤兒;手動補做只列失敗的那幾支;市集確定是我們的才加移除市集那條,判不出來照列並附一句先確認來源,確定不是我們的就不叫人刪(代碼審 r1)。外掛本身見 [[Systems/lumos事件帳]]、[[Systems/lumos-guard]]。 測試:`t_install_registers_context_plugin`、`t_install_registers_guard_plugin`、`t_lumos_plugin_install_edge_cases`;市集與清單一致:`t_plugin_market_matches_list`。

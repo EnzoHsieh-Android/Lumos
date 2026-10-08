@@ -1,0 +1,749 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/探針持久用量帳_計劃.md b/docs/lumos-toolchain-knowledge/Projects/探針持久用量帳_計劃.md
+index 22364eaf..3c56f5fc 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/探針持久用量帳_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/探針持久用量帳_計劃.md
+@@ -1,58 +1,61 @@
+ ---
+ type: project
+ status: doing
+ created: 2026-10-08
+ updated: 2026-10-08
++self_audit: gpt-5.6-sol/2026-10-08
+ tags:
+   - type/project
+   - status/doing
+   - scope/evals
+ lands_in:
+   - Systems/codex-harness
+   - Systems/ablation-lumos-first
+ related:
+   - "[[Projects/探針隔離與清理收斂_計劃]]"
+ ---
+ 
+ # 探針持久用量帳
+ 
+ ## 原問題與範圍
+ 
+ 父計劃 [[Projects/探針隔離與清理收斂_計劃]] 第三輪 G10、G11 原始反例見 governance/review-reports/code-probe-postreview-dispatch-ledger/r3-intake.md：失敗結果歸檔後窗口用量回到零，換日期輸出目錄也回到零。本案只修本機同一帳路徑的五小時派工限制，不把它說成供應商帳號／跨機全域用量。模型正式結果是否可計分仍由消融讀取器裁定，不因記用量而變有效。
+ 
+ PRIOR-ART: 採 Python sqlite3 標準庫及 SQLite BEGIN IMMEDIATE 的持久交易，借既有交易序列化而不自寫多檔鎖或結算協定。官方來源 https://docs.python.org/3/library/sqlite3.html 、https://www.sqlite.org/lang_transaction.html 。sqlite3 是 CPython 可選模組；缺模組、壞帳或鎖逾時均在模型前停止，不退回從结果檔估算。
+-RETIRE-IF: 下一個完整真模型窗口若顯示持久帳的保守誤擋／維護成本高於省下呼叫成本，由使用者裁決撤回硬額度；修改 [[Projects/探針隔離與清理收斂_計劃]] S18 與 CLI 承諾後再移除，不靜默旁路。
++RETIRE-IF: 下一個完整真模型窗口逐次記錄「帳拒絕但人工確認仍有合法額度」的保守誤擋、人工恢復分鐘數與避免的模型啟動數；若任一合法工作被誤擋，或人工維護分鐘數高於按同窗口平均啟動耗時換算的避免成本，由使用者裁決撤回硬額度。修改 [[Projects/探針隔離與清理收斂_計劃]] S18 與 CLI 承諾後再移除，不靜默旁路。
+ 
+ ## 設計
+ 
+ - 用量帳位於共用本機預設路徑 `~/.local/state/lumos/probe-attempts.sqlite3`，探針命令 scripts/scenario_probe.py 與父派工命令 governance/eval/ablation_lumos_first.py 均可用 `--attempt-ledger` 指定同一絕對路徑。不同路徑、使用者、機器是不同額度域；CLI 明示此邊界。`--max-per-window 0` 完全停用用量帳（不開帳、不查帳、不寫意圖），保留直跑相鄰路徑。硬額度只統計啟用此帳的launch-intent；零值模式、舊版、其他模型工具及其他帳路徑不納入，不能用它保證總帳號用量。驗收零值切回有限值時只核對已入帳意圖，不能把未受管的啟動假算成零用量。
+ - SQLite helper 放入探針模組，父派工器 run_job import 同一實作；不新增第三方依賴。run_one 與 run_one_codex 兩個真模型 runner 只在 max-per-window>0 時讀寫帳；在題目及副本驗證完成後、呼叫 subprocess 前，以一個 BEGIN IMMEDIATE 交易核對窗口並寫入一次 launch-intent。核帳用同一個 now；已達限不插入且rollback，未達限插入並commit；commit成功才啟動模型。SQLite鎖等待上限固定五秒，超時fatal、不啟動。
+ - 每次重試重新 claim；失敗、取消、解析失敗及結果歸檔都不刪 launch-intent。啟動 OS 例外也保守占一筆，文案稱啟動意圖額度而非已付費呼叫數；不做不可證的退款。
+-- 初始化交易寫 initialized_at（Unix epoch秒）；新建帳自動從 initialized_at 保守封住首五小時，使新工具上線前或遺失帳後的舊呼叫先過期，避免在受控切換前提下把遺失的受管用量當零。首次部署／遺失帳重建前須人工確認舊版或未受管探針已停派、沒有在途工作；此確認與之後的五小時冷卻才構成切換前提，不宣稱程式能阻止舊版繼續啟動。此項在下一次真模型窗口的驗證入口檢查，目前不啟動真模型。既有帳以每筆 claimed_at（REAL型别，Unix epoch秒，不取整）；initialized_at亦為REAL計算；claimed_at <= now-18000 的紀錄已過期；now、初始化及計數使用同一份浮點epoch秒；偵測系統時鐘早於已記時間時停止，避免回撥後低估。壞帳包含損壞、非一般檔、既有schema/version不符或不可讀寫；時計錯誤包含 now 小於 initialized_at 或已記 claimed_at。初始化、時計與鎖錯誤使用專用 fatal 例外，探針產生 fatal=true、inconclusive=true、rc3 的候選結果並停止所有後題／重試；父程序停止派工並保留正式事故、候選及pending。
++- 初始化交易寫 initialized_at（Unix epoch秒）；實作在帳路徑缺失時會自動建立帳並從 initialized_at 保守封住首五小時。這項能力只供完成受控切換後使用；首次部署或遺失帳時，操作者不得先以正窗口值啟動派工器來偷跑冷卻計時，必須先完成下一條的人工確認，才可讓程式建立新帳。此確認與建立後完整五小時冷卻才構成支援的切換前提，不宣稱程式能阻止舊版繼續啟動。既有帳以每筆 claimed_at（REAL型别，Unix epoch秒，不取整）；initialized_at亦為REAL計算；claimed_at <= now-18000 的紀錄已過期；now、初始化及計數使用同一份浮點epoch秒；偵測系統時鐘早於已記時間時停止，避免回撥後低估。壞帳包含損壞、非一般檔、既有schema/version不符或不可讀寫；時計錯誤包含 now 小於 initialized_at 或已記 claimed_at。初始化、時計與鎖錯誤使用專用 fatal 例外，探針產生 fatal=true、inconclusive=true、rc3 的候選結果並停止所有後題／重試；父程序停止派工並保留正式事故、候選及pending。
++- 首次切換或遺失帳恢復由執行者在新的 Verification 留下：預定帳本絕對路徑、`ps -axo pid,lstart,command` 中所有 `scenario_probe.py`／`ablation_lumos_first.py` 命中及逐一處置、人工確認沒有其他受管帳路徑或在途工作、確認者與時間。壞帳先停止派工；一般且可讀檔保留原物、`stat` 與 SHA-256 到事故目錄，非一般檔或不可讀物件改留 `lstat` 的類型／模式／擁有者／路徑、雜湊失敗錯誤與父目錄清單，原物維持原地等待人工處置，不要求不可能產出的 SHA-256。禁止只換 `--attempt-ledger` 路徑重置額度。只有上述確認完成後才允許派工器建立新帳，並從新帳 initialized_at 再冷卻完整五小時。這是可稽核的人工切換程序，不宣稱能機械發現未揭露的舊工具或其他使用者程序。
+ - 父程序只用帳的剩餘量作提前提醒及本批 max-attempts；探針新增 --max-per-window 接收父派工器原始窗口上限；--max-attempts 仍只限本批。每個實際 launch 前仍在同一交易重驗，同一額度域其他輸出目錄不能競爭超額。
+ - 本機交易拒絕claim時拋專用額度耗盡例外，新增一筆該題passed=false、reason=儀器例外、n_calls=0、calls=[]、limit_hit=false、fatal=true的結果列，停止後題／重試，批次fatal/inconclusive、rc3。這是資料不完整而不能下結論，不當模型行為失敗；父程序保存候選原byte、正式事故与pending並停止派工，不升格計分。
+ - 父程序先建立pending与日志，再做剩餘量查询；查帳异常直接写正式事故並设stop，不启动子探针。candidate若未產生不捏造檔案；恢復清單標示三個可能路徑，只歸檔已存在者且先确认无在途探针。查询返回零則移除本次尚未派工的pending，記skip及原因，沒有子探針／模型啟動。
+ - 供應商limit回來後、sleep前檢查本批次餘額及同帳當時可用額度；已為零則保留首次意圖、將當批標額度耗盡並停止，sleep零次。若檢查時有餘額但等待中被其他程序耗盡，下次claim仍原子拒絕；不保證消除該並行race的等待，只保證不會多啟動。日期與評分結果 mtime 不參與硬額度。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當同一帳已有四筆啟動意圖且窗口上限為五筆時，兩個獨立程序競爭剩餘一筆應只有一個 claim 成功且總数五；鎖逾時不得呼叫模型。[manual:暫存SQLite帳加兩個程序競爭，核對成功數一及持久行數五]
+ - [S2] 當模型啟動後失敗或父程序死亡，且操作者歸檔三份結果或改跨午夜輸出目錄時，重跑仍應讀到原用量並拒絕超限。[manual:故障注入後歸檔三檔及切换日期輸出，核對同帳剩餘量與模型啟動計數]
+ - [S3] 當帳缺失、損壞、不可讀或時鐘回撥時，派工器應在模型前停止；新帳首五小時只保守等待且五小時後可 claim。[manual:固定時鐘與壞資料庫反例，核對模型零啟動及新帳跨窗口結果；父程序查帳故障同時核對stop、正式事故与pending存在、候選不存在時不捏造]
+ - [S4] 當題目預驗失败、或首次撞供應商上限已記啟動意圖、且本批額度已滿時，該筆意圖保留；其後被本機額度拒絕的重試應零新增 launch-intent，且不再先等待300秒。[manual:缺expect及最後一筆limit結果兩案例，核對意圖行數與sleep零次]
+ 
+ - [S5] 當窗口限制為零時，應不讀寫帳且保留既有直跑；之後切回有限值時只計受管意圖，不外推未記帳呼叫。[manual:壞帳路徑配零值仍可用假模型；再啟有限值核對持久受管意圖及CLI資格邊界]
+ - [S6] 當兩個父程序競爭最後一筆且其中一個claim失敗時，應保留敗方fatal/inconclusive結果與事故證據，不計分、不走供應商等待，只有勝方啟動。[manual:同帳競爭後核對敗方rc3及limit_hit=false、零sleep、父程序停止與候選保留]
++- [S7] 當輸出位置是符號連結、等待上限小於輪詢間隔、外部文字含 Markdown 或終端控制字元時，工具不得改寫連結目標、不得超睡，報表只呈現可見字面；持久帳與結果檔的權威邊界須有能殺死第二套硬限的控制。[manual:執行 Verification/持久用量帳第五輪修補驗證所列四組定向案例]
+ 
+ ## 實務隱患
+ 
+ 已排除:金流:只控制本機模型啟動意圖，不計價，不當供應商帳務來源。
+ 對外送出:本案正式驗證用假模型子程序與暫存帳，真模型窗口量測另記驗證，不在設計閘啟動。
+ 已排除:正式環境不可逆:不改使用者業務資料，持久帳只追加啟動意圖。
+ 守衛面:本案會改派工額度與故障停止條件，須過完整設計審與修後代碼審。
+ 
+ ## 回退
+ 
+ 回退實作先停真模型派工並保留持久帳及原始事故；若仍宣稱五小時限制，不可恢復以可歸檔結果檔反推硬額度。需要撤回硬額度時先裁決並修改 S18／CLI 說明，保留歷史三輪FAIL。
+ 
+-REVISIT:[when-file:scripts/scenario_probe.py][by:2026-11-08] 下一個完整真模型窗口核對持久帳保守誤擋與維護成本，觀測到保守誤擋／維護成本高於省下呼叫成本時由使用者按RETIRE-IF裁決撤除。
++REVISIT:[when-file:scripts/scenario_probe.py][by:2026-11-08] 下一個完整真模型窗口按 RETIRE-IF 記錄誤擋次數、人工恢復分鐘與避免啟動數，達門檻時由使用者裁決撤除。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+index 6b686a11..c39a83ef 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
++++ b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+@@ -1,16 +1,17 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-04
+-updated: 2026-10-04
++updated: 2026-10-08
+ responsibility: 負責探針消融結果檔的有效性篩選、缺場補跑與統計合併；不負責探針沙盒本身的隔離與健康檢查執行
++self_audit: gpt-5.6-sol/2026-10-08
+ aliases: []
+ about_code:
+   - governance/eval/ablation_lumos_first.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/evals
+ summary: |-
+   WHY: 2026-10-04 第三輪代碼審證明探針整批 fatal 時仍可能保留逐場成功列；消融讀取端須再查整批有效性。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 與 r3-reproduction.json。
+   PITFALL: 只按逐場 reason 判有效會把健康不可判的批次計入統計且抵掉缺場。出處 [[Issues/探針健康檢查不可判資料仍被重用]]。[test:t_probe_boundary_review4_fatal_batch_not_reused]
+@@ -22,20 +23,22 @@ summary: |-
+   PITFALL: 鎖檔路徑被移除後另一進程可鎖到新 inode；只看鎖檔名稱會誤認仍有互斥。出處 [[Verification/2026-10-04_探針停派與失敗留痕]] 與 Linux flock(2) 官方手冊。[test:t_probe_boundary_postreview_lockfile_replacement]
+   PITFALL: 摘要既有符號連結可把直接寫檔導出目錄外，長題號再加奈秒時間戳會使檔名超過檔案系統上限。出處 [[Verification/2026-10-04_探針停派與失敗留痕]]。[test:t_probe_boundary_postreview_symlink_outputs]
+   PITFALL: 只以 import 載入被測 CLI 會避開 __main__ 的執行順序；helper 若定義在入口後方，測試全綠而實際命令必定 NameError。出處 [[Verification/2026-10-04_探針停派與失敗留痕]]。[test:t_probe_boundary_postreview_cli_entry_and_modes]
+   PITFALL: 目錄鎖修掉可刪鎖檔競態後，仍在跑的舊版若只持鎖檔，新版只鎖目錄就會在版本交接時同時派工。出處 [[Verification/2026-10-04_探針停派與失敗留痕]]。[test:t_probe_boundary_postreview_legacy_lock_interop]
+ verified_by:
+   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+   - "[[Verification/2026-10-04_探針停派與失敗留痕]]"
+   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+   - "[[Verification/2026-10-08_消融結果與恢復控制驗證]]"
+   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
++  - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
++  - "[[Verification/持久用量帳第五輪修補驗證]]"
+ ---
+ # ablation-lumos-first
+ 
+ 這篇是 `governance/eval/ablation_lumos_first.py` 的家，負責消融結果檔的有效性、缺場與合併判定。
+ 
+ 此篇管消融結果的「能不能拿來算」這道邊界。[[Systems/codex-harness]] 管探針如何產生與隔離樣本；兩邊都要守住整批失效的訊號，否則即使探針退出碼正確，重開消融或只做合併時仍可能吃到事故資料。
+ 
+ 第四輪修補採整檔排除：fatal 檔案保留原始逐場紀錄供事故分析，但不能抵掉缺場或進入統計；掃描失效檔時同時辨認全域連結損壞與未能完成健康／清理檢查的 fatal。沿用既有彙總欄位以免舊讀取器漏看，呈現文字改為「探針失效」，不把所有 fatal 都叫作 skills 連結損壞。若未來新增消費端，先以 [[Verification/2026-10-04_探針隔離與清理收斂]] 的致命批次反例驗證整批欄位有被讀到。
+ 
+ 第四輪邊界席又證出三種舊/壞資料入口：沒有頂層 fatal 的舊事故檔、事後才掃失效檔、模型程序留下缺檔或半檔但仍續派。處置是同一份整批失效判定供讀取、掃描與 live 派工共用；舊列只要明示 skills 損壞或逐場 fatal，就拒收整檔，普通因有效場不足的 inconclusive 不因此整批作廢。先掃舊檔才派模型；本輪產物不可讀或程序異常退出也停批。反例為 `t_probe_boundary_review4_legacy_poison_not_reused`、`t_probe_boundary_review4_existing_poison_stops_dispatch`、`t_probe_boundary_review4_partial_output_stops_batch`；若改結果 schema 或派工順序，從這三項重驗。
+@@ -51,21 +54,21 @@ verified_by:
+ PITFALL: 正式代碼審多席找到「非零退出只停本輪、下次合併卻採信成功外觀列」；父程序被殺時，原本只由父程序持有的鎖也無法代表子程序已停。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r1-formal-correctness.md`、`r1-formal-concurrency.md`。重現／防回歸：`t_probe_boundary_formal_dispatch_fail_closed`。未完成標記以先建立、驗證成功後才清理的順序封住此洞；標記殘留表示人工要先查日誌與在途程序，不能直接採信同名結果。
+ 
+ PITFALL: 單工作場數可超過窗口剩餘額度，`--only` 的逗號／前綴語意又可能將一題展成多題；相對輸出路徑曾令鎖住的目錄與子程序落檔目錄不同。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r1-formal-security.md`。重現／防回歸：`t_probe_boundary_formal_input_validation`、`t_probe_boundary_formal_dispatch_fail_closed`。若將來更換選題或批次編排介面，先重驗精確一題與同目錄互斥。
+ 
+ WHY: 結果檔 schema 採讀取端保守拒收，因錯誤字串 `passed: "false"` 可被 Python 視為真值並抬高 M1；報表 Markdown 必須直接顯示整批不可採信，因人可能只看這份檔案。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的正式 r1 資料席與邊界席，反例 `t_probe_boundary_formal_dispatch_fail_closed`。這是輸出可信度邊界，不將低有效場數的普通 inconclusive 一概判 fatal。
+ 
+ PITFALL: r2 指出只歸檔 `.pending` 會讓原先由子程序直寫的成功外觀 JSON 復活。子程序現在寫候選檔，父程序驗證精確列數、題號、組別、schema 與退出碼後才升格；殘留候選檔本身也是失效訊號。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 與 `r2-external-finder-v2.txt`；防回歸 `t_probe_boundary_formal_second_round_regressions`、`t_probe_boundary_formal_parent_killed_child_continues`。若改結果落地協定，先重驗只歸檔標記仍不能採信未驗證列。
+ 
+ PITFALL: 結果欄位錯型、非物件逐場元素及 A 題多跑遮掉 B 題缺場，都曾讓讀取端報出虛高數字。現在按檔拒收錯型結果，缺場逐題計算；旁邊的無關 JSON 不再當探針事故。出處同篇 Verification 的 r2 intake；防回歸 `t_probe_boundary_formal_second_round_regressions` 與 `test_load_results_skips_bad_json`。結果 schema 或檔名規則變更時重跑。
+ 
+-WHY: 五小時窗口要算實際模型呼叫，故正式結果中的重試次數也計入，並把剩餘額度傳給探針；純合併保留可用的歷史 meta，缺日期或版本則標未知。出處 [[Projects/探針隔離與清理收斂_計劃]] S17–S18、[[Verification/2026-10-04_消融派工正式審查修正]]；反例 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。若改窗口或 meta 來源，先核對實際模型啟動數與歷史報表標示。
++WHY: [status:superseded] 2026-10-04 曾以正式結果與重試次數近似「實際模型呼叫」；2026-10-08 持久帳設計已推翻這個權威來源，改記模型啟動前提交且失敗不退還的 launch-intent。舊近似只保留為決策歷史，現況與驗證入口見 [[Projects/探針持久用量帳_計劃]]、[[Verification/2026-10-08_持久用量帳暫存控制驗證]]。
+ 
+ PITFALL: 上段只是 r2 修法的意圖，r3 證明現碼沒有做到帳號級五小時額度：`runs_in_window` 只掃當前日期目錄內正式 JSON；子程序失敗時真正用量留在候選檔，歸檔後歸零，跨午夜也歸零。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 FAIL 與 `r3-intake.md` G10–G11；重現指令與輸出在同一 intake。若保留硬額度，先建不隨結果歸檔消失的權威用量帳，不能再從 M1 計分結果推回實耗。
+ 
+ PITFALL: r3 另證明逐題缺場修好後，重複同題列仍可灌高 M1–M4；`calls` 只驗外層 list，錯型元素仍能被當無 lumos 呼叫。出處同篇 Verification 的 r3 G12–G13；重現指令與輸出見 `r3-intake.md`。結果計分前要先驗每題場數和每個呼叫元素形狀，不能以 `missing=0` 推論分母正確。
+ 
+ PITFALL: 消融題庫去重的舊測試只在測試內複寫去重迴圈，沒有呼叫真正派工讀題函式；實作改壞仍可能維持綠燈。r2 改用實際 `load_ids` 載入含重複題號的暫存題庫，斷言派工前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-external-finder-v2.txt`；防回歸 `test_load_ids_rejects_duplicates`。若再寫協定測試，先確認斷言經過正式入口。
+ 
+ PITFALL: 歸檔中斷測試只驗「最後有 fatal」，卻沒驗注入點真的觸發；既有或新加的其他 fatal 標記可讓整支測試假綠。正式代碼審指出後補上注入計數斷言。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-correctness.md`；防回歸 `t_probe_boundary_postreview_archive_interrupt`。改故障注入時先讓斷言證明注入有發生，再驗收結果。
+ 
+ PITFALL: r2 再指出同一測試只要 `.pending` 還在，`load_results` 就會拒收同名成功檔；即使 fatal 正式檔根本沒寫，也可假綠。現在注入點後直接檢查 fatal 正式 JSON 已落地，再看整批拒收。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-external-finder-v2.txt`；防回歸 `t_probe_boundary_postreview_archive_interrupt`。修改事故落地順序時要同時檢查標記、正式檔與候選檔。
+@@ -76,10 +79,12 @@ PITFALL: 第三輪證實同題超額結果可灌高通過率、錯型 calls 可
+ 
+ PITFALL: 純合併把壞meta覆寫成來源未知會抹掉救援證據，報表不一致題清單、健康檔名與版本來源也曾漏轉義。修後metadata只作輸入，未知只呈現在報表，來源byte及metadata符號連結保留；摘要仍原子取代且不寫到連結目標。出處 [[Verification/2026-10-08_消融結果與恢復控制驗證]]；防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_postreview_symlink_outputs]。
+ 
+ PITFALL: 可封存的結果檔與日期目錄不是硬額度來源；失效候選被排除計分後，舊計數會讓已啟動模型的額度消失。[根因:把計分視圖混當啟動用量帳][出處:code-probe-postreview-dispatch-ledger r3 G10/G11][test:test_attempt_ledger_failed_launch_archive_and_cross_date_keep_quota] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ PITFALL: 備註檔與探針同用組別前綴，健康掃描曾將操作者備註視為事故，造成無效停批。[根因:僅依組別前綴辨認正式結果][出處:code-probe-postreview-dispatch-ledger r3 G14][test:test_ablation_notes_are_not_results_but_legacy_shards_are]
+ 
+ WHY: 用量帳控制案例保留在既有探針消融測試群，使用外部模型邊界假替身與暫存帳，避免驗證本身觸碰真模型或使用者額度。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ WHY: 用量帳控制從真探針 CLI 與消融派工入口驗輸出協定及副作用計數，不用重抄計數公式來製造綠燈。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
++
++PITFALL: HTML escape 不會阻止 Markdown 圖片／連結語法，也不會移除 ESC、BEL 等終端控制字元；報表在 Markdown 預覽或直接印到終端時仍會把外部 meta 當控制內容。第五輪改為先將不可列印字元轉成可見序列，再轉義會啟動行內 Markdown 的字元；同時保留既有事故檔名字面。防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_formal_dispatch_fail_closed]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index 5420417e..972e73e8 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -1,16 +1,17 @@
+ ---
+ type: system
+ status: done
+ created: 2026-09-05
+-updated: 2026-09-05
++updated: 2026-10-08
+ responsibility: 負責 lumos 的防護怎麼接到 Claude 與 Codex 兩家 CLI 上:進場提醒、改檔前推波及、派審查員附鏡頭、收工點名這四個時點的 hook 腳本,以及情境探針這支量「AI 有沒有自己去查脈絡」的儀器;不負責這些 hook 推出來的內容對不對(那是各機制自己的節點),也不負責 lumos 本體的讀寫語意
++self_audit: gpt-5.6-sol/2026-10-08
+ aliases: []
+ about_code:
+   - scripts/hooks/claude/check-graph-sync.py
+   - scripts/hooks/claude/dispatch-lens-hook.py
+   - scripts/hooks/claude/impact-hook.py
+   - scripts/merge-claude-settings.py
+   - scripts/scenario_probe.py
+   - scripts/lumos
+   - scripts/hooks/claude/lumos-entry-hook.py
+ tags:
+@@ -39,20 +40,22 @@ summary: |-
+   WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]派工鏡頭掛鉤認 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards;lumos 超時或回非零碼(沒有圖譜、base 不在主線)時,回傳裡若有 role_text 照附(角色不需要圖譜,消費專案還沒建圖譜時才拿得到卡)。掛鉤是複製進使用者目錄的,舊掛鉤只在成功路徑附得到,要重跑安裝;預算:lumos 先算角色、再算圖譜,角色從掛鉤給的同一份期限裡先扣,最多 3 秒且不超過期限五分之一,最多讀 300 支檔內容(一次批次讀取),掛鉤外層上限不變
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
+   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
+   - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
+   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
++  - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
++  - "[[Verification/持久用量帳第五輪修補驗證]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+     context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+     why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
+     decided: 2026-09-11
+     valid: true
+ ---
+ # codex-harness
+ 
+@@ -115,10 +118,14 @@ PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 
+ - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
+ - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
+ 
+ PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互動用的 `--only`：它允許逗號清單與前綴，空值等於不篩選。正式審查的空題號反例可一次選中整份題庫；因此新增精確單題入口，缺題或重複題要在建沙盒前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-security.md`；防回歸 `t_probe_boundary_formal_input_validation`。如果將來調整選題語意，先證明外層單題派工不會擴題。
+ 
+ PITFALL: 只把外層 `--runs` 縮到窗口剩餘額度，探針內用量上限重試仍可額外啟動模型。r2 反例用真 `main` 流程證明兩次重試後須停止第三次呼叫並把批次標失效；`--max-attempts` 在每次模型呼叫前扣額，`--exact-id=值` 容許合法短線開頭題號。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-concurrency-v2.md` 與 Python argparse 官方長選項語法；防回歸 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。調整重試或選題時從實際模型啟動數重驗。
+ 
+ PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫，外層失敗批次與隔日重跑仍會重得滿額，故不可把單次子程序上限稱作五小時帳號上限。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 G10–G11，重現指令在 `r3-intake.md`。改外層額度來源或重試行為時，先跑「失敗／歸檔／同窗口重跑」與「跨午夜」兩組反例。
+ 
+ WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或解析器故障返還已消耗名額；採 SQLite 原子交易沿用 Python 標準庫、維持零第三方依賴。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
++
++WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建成；`verified_by` 連到 pending 的 [[Verification/2026-10-08_持久用量帳第四輪代碼審停點]] 是負面驗證與下一入口，不表示持久用量帳分支已通過或可推送。
++
++PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 06431939..9352e224 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -86,20 +86,21 @@ verified_by:
+   - "[[Verification/2026-08-05_流程優化六件落地]]"
+   - "[[Verification/2026-08-19_精簡版update指令落地]]"
+   - "[[Verification/2026-08-20_gov-stats落地]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+   - "[[Verification/2026-08-22_指令索引與情境探針]]"
+   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
++  - "[[Verification/TTY確認不取得控制終端驗證]]"
+ about_code:
+   - get.sh
+   - scripts/lumos
+   - scripts/merge-claude-settings.py
+   - install.sh
+   - get.ps1
+   - scripts/install-hooks.sh
+   - scripts/install-graph-toolchain.sh
+ ---
+ # lumos-cli-lifecycle
+@@ -139,10 +140,12 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
+ - ★改了 repo 裡的 hook 檔不等於已部署★(2026-09-18 實測):同一支 hook 存在於三類位置——repo 裡的原始檔、家目錄下兩份(兩種 AI 工具各一)、以及每個接入專案自己的一份。改完要跑安裝指令才會同步到家目錄那兩份;接入專案那份是另一個指令、而且要在各專案裡各跑一次。**當天實測家目錄那份的內容雜湊跟 repo 裡的不一樣,也就是已部署的版本落後**。改 hook 的計劃要把「改完跑一次安裝指令、對兩個部署位置各比一次 sha256」寫進驗收,否則改對了也等於沒改。
+ - ★接入專案那份退不乾淨,這是限制不是待辦★:整個工具裡沒有任何地方登記「這台機器上有哪些專案裝過」,所以沒有清單可以枚舉,也就無法確認是不是都更新/退回了。想要可保證得先做一個安裝登記機制,那是獨立題目。回頭條件=下次因為「某個接入專案跑的是舊版」踩到坑時,重新評估要不要做。單源 [[Projects/收工點名問版本控制_計劃]]〈回退〉節。
+ 
+ ## 相關
+ - 對稱反安裝細節:[[Systems/lumos-deinit]](唯一有獨立設計稿 `docs/design/2026-06-26-lumos-deinit.md` 的生命週期指令)。
+ - 圖譜讀指令群:`scripts/lumos` `new`/`set`/`lint`/`doctor` 等:[[Systems/lumos-cli-read]]。
+ - 圖譜寫指令群(`new`/`set`/`rename` 等):[[Systems/lumos-cli-write]]。
+ - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
+ - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
+ - 分發機制脈絡:user-memory `lumos-update-distribution`。
++
++PITFALL: 無控制終端的 session leader 用 `os.open(tty, O_RDWR)` 開 pty slave，可能把它取得成 controlling terminal；關閉後 runner 收到 SIGHUP 129，讓全套測試沒有摘要就中斷 [出處:[[Verification/TTY確認不取得控制終端驗證]]] [防回歸:t_confirm_tty_unit]。`_confirm_tty` 開 tty 時在平台有提供才加 `O_NOCTTY`，保留 Windows fallback 與既有三階確認語意。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳暫存控制驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳暫存控制驗證.md
+index 7e5dc2ba..9e13577b 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳暫存控制驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳暫存控制驗證.md
+@@ -1,16 +1,18 @@
+ ---
+ type: verification
+ status: pass
+ date: 2026-10-08
+ valid_under: Python 3.14、暫存 SQLite、假模型子程序；只驗本機受管啟動意圖，不代表供應商配額或真模型窗口
+-revalidate_when: 修改用量帳交易、派工與重試流程時重跑控制；首次真模型切換前先確認無舊探針在途
++revalidate_when: 修改用量帳交易、派工與重試流程時重跑控制；首次真模型切換前另開 Verification，記帳路徑、程序盤點與處置、其他帳路徑人工確認、確認者與時間，確認後新建帳並冷卻五小時
++updated: 2026-10-08
++self_audit: gpt-5.6-sol/2026-10-08
+ tags:
+   - type/verification
+   - status/pass
+   - scope/evals
+ plan_refs:
+   - "[[Projects/探針持久用量帳_計劃]]"
+ ---
+ # 2026-10-08_持久用量帳暫存控制驗證
+ 
+ ## 此次範圍
+@@ -22,26 +24,28 @@ plan_refs:
+ - 用量帳壞檔的父派工反例：implementation-initial-controls.log 記錄 3 項控制中 1 項失敗；舊父派工忽略壞帳而抵達模型啟動邊界，假模型以 AssertionError 中止。另兩項已在 helper 補入後執行，不能稱為舊版翻紅證據。
+ - 接線後相同三項控制均通過：implementation-wired-controls.log。
+ - 消融相關 unittest 子集：implementation-ablation-suite.log，28 tests OK；涵蓋兩個真正獨立程序爭用最後一個名額、逾時後封存全部事故檔與跨日仍拒絕新啟動、缺 expect 不花額度、零模式不建立帳、冷啟動及小數時間窗口。
+ - 原有探針邊界子集：implementation-probe-boundary.log，135 passed / 0 failed。額度測試使用暫存成熟帳，其餘消融案例明示零模式，防止測試碰到使用者的持久帳。
+ - CLI 停止合約：implementation-stop-contracts.log，3 passed / 0 failed；實際 CLI 查已滿帳產生 rc3/fatal/inconclusive、有效場數零、零工具、limit_hit=false；供應商上限與本批最後名額耗盡時只啟動一次且 sleep 零次。
+ 
+ 上述檔案均在 governance/review-reports/probe-attempt-ledger/。測試驗公開 helper、真 CLI 與派工入口；假模型只設於子程序外部邊界。沒有抄寫 SQLite 計數算法或評分公式。
+ 
+ ## 資格邊界
+ 
+-S1 的競爭只驗最後一個名額，未驗五秒鎖逾時；S2 已驗逾時、封存與跨日，父程序強制死亡的持久帳組合仍待加入。S6 已驗 claim 敗方 CLI 協定，兩個父派工器競爭並保留敗方候選的整條組合仍待加入。這不是正式第四輪代碼審通過紀錄。
++最初紀錄只完成 S1 最後一格、S2 逾時／封存／跨日及 S6 claim 敗方 CLI；後續段落已補齊五秒鎖逾時、雙父競爭，以及父程序死亡後子程序仍完成候選檔的組合。這些都使用假模型，不代表真模型窗口，也不是正式第四輪代碼審通過紀錄。
+ 
+-REVISIT:2026-10-09 在正式代碼審派席前補鎖逾時、父程序死亡與雙父派工競爭的整條控制。
+-REVISIT:2026-11-08 首次真模型切換前確認舊探針已停止，另記真窗口觀測與保守誤擋；零模式及其他工具不納入本機帳結論。
++COMPLETED:2026-10-08 鎖逾時、父程序死亡與雙父派工競爭三項控制均已補齊，證據見後續補強控制。
++REVISIT:2026-11-08 首次真模型切換前另開 Verification，記錄預定帳路徑、程序盤點與處置、其他受管帳路徑人工確認、確認者與時間；完成後才建立新帳並冷卻完整五小時，再記真窗口觀測與保守誤擋。零模式及其他工具不納入本機帳結論。
+ 
+ ## 後續補強控制
+ 
+ 鎖逾時與真正程序死亡兩控制補入後，implementation-ablation-suite-expanded.log 為 30 tests OK。程序死亡案例驗登記意圖的程序被殺，沒有把它冒稱為完整父死子活重現。
+ 
+ implementation-parent-race.log 為 1 test OK：兩個真正父程序在查帳後同步，皆見最後一個名額，再啟假探針 claim；只有一個留下假模型啟動標記，敗方候選和pending保留、父程序設stop且批次失效。S6 的並行整條路徑已補入。
+ 
+ 另以公開健康入口重現 G14 的 with-notes.json 誤擋；implementation-notes-red.log 確實失敗。修補限定正式逐題及舊 shard 命名，控制同時核對舊 shard 仍能計分、真正錯型逐題檔仍阻擋。
+ 
+ G14 修補第一版漏了模組級 re 匯入；implementation-ablation-final.log 為 32 tests / 7 errors，implementation-probe-boundary-final.log 為 69 passed / 17 failed。此為本輪新修補造成的已確認回歸，不改稱測試環境失敗；補匯入後另存重跑紀錄。
+ 
+ 最後修正後紀錄：implementation-ablation-corrected.log 為 32 tests OK，implementation-probe-boundary-corrected.log 為 138 passed / 0 failed。前述第一版漏匯入失敗檔完整保留，不以新檔覆蓋。
++
++r4-parent-death-ledger-case.txt 與 r4-parent-death-ledger.log 補上完整父死子活組合：真父程序先寫 pending/log，假子探針使用公開 claim helper 寫入成熟 SQLite 帳；父程序遭終止後子程序仍產生候選檔。只歸檔實際存在的 pending/candidate 後，同帳剩餘量仍為零，新父派工直接 skip，真模型呼叫計數為零。此案例補足 S2 的程序生命週期控制，但仍不外推到真模型或跨機額度。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md
+new file mode 100644
+index 00000000..ded1c6b0
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md
+@@ -0,0 +1,33 @@
++---
++type: verification
++status: pending
++date: 2026-10-08
++valid_under: 固定 before 532f5a15 與 after 05e87b54、七席同一份1455行快照；只代表第四輪停點，不代表分支通過
++revalidate_when: 使用者裁決再開修補輪後，以新提交重跑完整代碼審與全套測試
++self_audit: gpt-5.6-sol/2026-10-08
++tags:
++  - type/verification
++  - status/pending
++  - scope/evals
++plan_refs:
++  - "[[Projects/探針持久用量帳_計劃]]"
++---
++# 2026-10-08_持久用量帳第四輪代碼審停點
++
++## 結論
++
++第四輪未通過。七個找問題席使用同一份 1455 行凍結差異；辯方排除三個把新政策當現行合約的 major，並把 Markdown 圖片語法降為呈現層 minor。候選檔仍由一般 `Path.write_text` 落地，在不受信任者可修改輸出目錄的部署下會跟隨符號連結；這條 major 沒有折入修補，獨立辯方續查又被模型安全閘中止，不能當成反證。
++
++本輪另保留四類 minor：供應商限制等待可能超過使用者設定秒數、兩個測試無法證明持久帳是唯一硬限制、Markdown 字面未完整轉義、舊 meta 控制字元可進終端。逐條重現、兩版因果資格、原席報告與被擋的辯方事件都在 governance/review-reports/code-probe-postreview-dispatch-ledger/ 的 r4 卷證。
++
++## 修補回歸與測試資格
++
++本輪發現沒有取得 after-only 行為證據：候選檔與終端控制 sink、等待超時、Markdown 語法在 before/after 都存在；兩個架構項是新增測試的保留力不足。修補期間曾漏匯入 `re`，造成 7 個消融 unittest errors 與 17 個探針邊界失敗；原始紅燈保留，補匯入後針對性控制為 32 tests OK 與 138 passed / 0 failed。因此可以說這個已知修補回歸已修好，不能說整個分支驗證完成。
++
++完整父死子活控制另已通過：父程序遭終止後，假子探針仍完成候選檔；只歸檔 pending/candidate 後，持久帳仍拒絕下一次派工，真模型呼叫數為零。這補齊 [[Verification/2026-10-08_持久用量帳暫存控制驗證]] 的 S2 資格。
++
++全套 `python3 scripts/test_lumos.py` 約 22 分鐘後以 129 中斷，沒有完成摘要，原因未判定且沒有人工終止證據。它不能計為通過，也不能以針對性子集代替。
++
++## 下一個入口
++
++本輪是第三輪上限後由使用者裁決開出的唯一額外輪。依代碼審迴圈規則，到頂且處置閘未過須再次由人裁決；未取得裁決前只允許保存卷證與圖譜，不開第五輪、不宣告 code-loop pass、不推送此分支。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md b/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md
+new file mode 100644
+index 00000000..ae86a53a
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md
+@@ -0,0 +1,22 @@
++---
++type: verification
++status: pass
++date: 2026-10-08
++valid_under: macOS、Python 3.14、以 os.openpty 建立的無控制終端 session；不包含 Windows
++revalidate_when: 改動 _confirm_tty 的 tty 開啟旗標、select 等待或 t_confirm_tty_unit 時
++tags:
++  - type/verification
++  - status/pass
++  - scope/platform
++plan_refs:
++  - "[[Projects/bootstrap一鍵對稱_計劃]]"
++---
++# TTY確認不取得控制終端驗證
++
++## 結論
++
++`t_confirm_tty_unit` 在修補前穩定走到第 2 階 pty 成功路徑後收到 SIGHUP，測試 runner 以 129 結束，第四個 timeout 控制沒有執行。原因是無控制終端的 session leader 用 `os.open(..., O_RDWR)` 開 pty slave 時可能取得它作 controlling terminal；關閉 pty 後 kernel 對該 session 發 SIGHUP。
++
++`_confirm_tty` 開 tty 時加入平台有提供才使用的 `O_NOCTTY`。同一條既有測試修後完成六項斷言並以 rc0 結束，涵蓋 isatty 輸入、EOF fallback、pty 提示與 timeout；這不是以新測試重抄實作，而是讓原本已能翻紅的端到端控制跑到底。
++
++本輪只建立 POSIX/macOS 資格。Windows 不使用這個旗標，仍沿既有平台驗證邊界。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪修補驗證.md b/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪修補驗證.md
+new file mode 100644
+index 00000000..72de5b36
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪修補驗證.md
+@@ -0,0 +1,32 @@
++---
++type: verification
++status: pass
++date: 2026-10-08
++valid_under: 本機 macOS、Python 3.14、假模型與暫存輸出；只驗第五輪修補的探針輸出、等待預算、報表文字及持久帳權威邊界，不代表完整代碼審或全套推送閘通過
++revalidate_when: 改動 scenario_probe 最終輸出、供應商上限重試、ablation Markdown renderer、run_job 硬額度來源，或第五輪乾淨審查提出新反例時
++self_audit: pending-fifth-round-review
++tags:
++  - type/verification
++  - status/pass
++  - scope/evals
++plan_refs:
++  - "[[Projects/探針持久用量帳_計劃]]"
++---
++# 持久用量帳第五輪修補驗證
++
++## 結論
++
++第四輪仍成立的五個缺口已先建立能打到公共入口的控制，再修實作。候選輸出若預先是指向其他檔案的符號連結，舊版會覆寫連結目標且輸出位置仍是連結；修後連結目標保持原 byte，輸出位置成為工具自己的普通 JSON 檔。`--wait-on-limit 1` 舊版實際呼叫 `sleep(300)`，修後只睡剩餘一秒。
++
++Markdown 與終端控制案例同樣先紅：外部 meta 的圖片／連結語法會被 renderer 解讀，ESC 與 BEL 會原樣出現在報表。修後這些值以字面文字呈現，控制字元改成可見的 `\\xNN`，既有 HTML 轉義與「bad.json」事故提示仍保留。
++
++兩個架構測試也改成可區分錯誤實作：持久帳停止線不再由 `--max-attempts` 提前代打，而是 runner 真正 claim 最後一格後驗零等待；結果檔權威測試使用已度過冷卻且未 claim 的帳，三筆近期結果不再能讓第二套硬限假綠。
++
++## 驗證
++
++- `TestScenarioProbeAblation`：32 tests OK，含成熟帳、跨日、程序死亡、雙父競爭及結果檔非權威控制。
++- 探針邊界擴大子集：首次執行 143 passed / 1 failed；失敗是舊斷言要求事故檔名 `bad.json` 保持原樣，據此縮窄 Markdown 轉義集合後，該舊控制與新 Markdown／控制字元控制各自重跑皆通過。
++- 第五輪定向控制：持久停止與等待 5/5、符號連結輸出 2/2、來源呈現 10/10、既有 fatal Markdown 10/10。
++- 四支 Python 檔 `py_compile` 與 `git diff --check` 通過。
++
++第四輪全套曾以 129 中斷；本篇沒有把上述子集冒充全套。第五輪提交凍結後仍須重跑完整測試並由乾淨席審查，才可更新 `self_audit` 與代碼審處置帳。
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 826598cb..dc6cb290 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -406,21 +406,26 @@ def merge(out_dir, expected_ids, runs):
+     class_counts = {}
+     for c in classes.values():
+         class_counts[c] = class_counts.get(c, 0) + 1
+     return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+             "question_class": classes, "class_counts": class_counts}
+ 
+ 
+ def render_md(s, meta):
+     a, b = s["arms"]["with"], s["arms"]["without"]
+     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
+-    def text(x): return html.escape(str(x)).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
++    def text(x):
++        raw = str(x).replace("\r", " ").replace("\n", " ")
++        raw = "".join(ch if ch.isprintable() else
++                      (f"\\x{ord(ch):02x}" if ord(ch) <= 0xff else f"\\u{ord(ch):04x}")
++                      for ch in raw)
++        return re.sub(r"([\\`*_\[\]()!|])", r"\\\1", html.escape(raw))
+     lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
+              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
+              f"只算有效場(撞用量上限/儀器例外不算)。", "",
+              "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
+              "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
+              f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
+              f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
+              f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
+              f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
+              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
+diff --git a/scripts/lumos b/scripts/lumos
+index 9c426d06..cc660e89 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18863,21 +18863,21 @@ def _confirm_tty(prompt):
+         try:
+             return _norm(input(prompt))
+         except EOFError:
+             pass                                     # isatty 撒謊 → 試 ②(F2-A)
+     tty_path = os.environ.get("LUMOS_TTY", "/dev/tty")
+     try:
+         timeout = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
+     except ValueError:
+         timeout = 30.0
+     try:
+-        fd = os.open(tty_path, os.O_RDWR)
++        fd = os.open(tty_path, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
+     except OSError:
+         return None
+     try:
+         os.write(fd, prompt.encode("utf-8"))
+         readable, _, _ = select.select([fd], [], [], timeout)
+         if not readable:
+             os.write(fd, "\n(無回應,視為略過)\n".encode("utf-8"))
+             return None
+         data = os.read(fd, 256)
+         if not data:
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 1c093cf3..359775a8 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -17,20 +17,46 @@
+ 用法:
+   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
+                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
+ """
+ import argparse, ast, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ 
+ 
++def _atomic_write_text(path, content):
++    """以同目錄暫存檔原子取代目標，避免跟隨既有目標符號連結。"""
++    path = Path(path)
++    mode = None
++    try:
++        old = path.lstat()
++        if stat.S_ISREG(old.st_mode):
++            mode = stat.S_IMODE(old.st_mode) & 0o666
++    except FileNotFoundError:
++        pass
++    tmp_path = None
++    try:
++        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
++                                         prefix=path.name + ".", delete=False) as tmp:
++            tmp_path = Path(tmp.name)
++            tmp.write(content)
++            if mode is not None:
++                os.fchmod(tmp.fileno(), mode)
++            tmp.flush()
++            os.fsync(tmp.fileno())
++        os.replace(tmp_path, path)
++    finally:
++        if tmp_path is not None:
++            tmp_path.unlink(missing_ok=True)
++
++
+ def tool_calls_from_codex_json(lines):
+     """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
+     只認 item.completed:command_execution→("Bash", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→("Edit", 路徑串);
+     回 (calls, final_text)。事件形狀在 0.144.1 實看,改版要重驗。"""
+     calls, final = [], ""
+     for ln in lines:
+         ln = ln.strip()
+         if not ln.startswith("{"):
+             continue
+         try:
+@@ -1212,22 +1238,23 @@ def main():
+                             if exhausted:
+                                 raise ProbeAttemptBudgetExceeded("重試前模型額度已用完，未等待或啟動模型")
+                         except (ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError) as exc:
+                             res.update(passed=False, fatal=True, limit_hit=False, reason=f"儀器例外: {type(exc).__name__}: {exc}")
+                             fatal = True
+                             fatal_reason = res["reason"]
+                             break
+                         retried.append({"reason": res.get("reason"),
+                                         "sandbox_secs": res["sandbox_secs"],
+                                         "model_secs": res["model_secs"]})
+-                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+-                        time.sleep(300); waited += 300
++                        delay = min(300, a.wait_on_limit - waited)
++                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 {delay} 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
++                        time.sleep(delay); waited += delay
+                         continue
+                     break
+                 if retried:
+                     res["retry_attempts"] = retried
+                 res["run"] = k
+                 results.append(res)
+                 mark = "✓" if res["passed"] else "✗"
+                 ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
+                 tag = f" #{k}" if a.runs > 1 else ""
+                 print(f"  {mark} {res['id']:22s}{tag} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
+@@ -1277,27 +1304,27 @@ def main():
+                     counts[2] += 1
+                 else:
+                     counts[1] += 1
+                     counts[0] += 1 if r["passed"] else 0
+             print("每題通過次數: " + "  ".join(
+                 f"{i} {c}/{t}" + (f" (不算分 {e})" if e else "")
+                 for i, (c, t, e) in per.items()))
+         if a.out:
+             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
+             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
+-            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
+-                                               "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+-                                               "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+-                                               "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+-                                               "sandbox_version": SANDBOX_VERSION,
+-                                               "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
+-                                               "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
++            _atomic_write_text(Path(a.out), json.dumps({"results": results, "passed": p, "total": n,
++                                                       "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
++                                                       "excluded": summ["excluded"], "valid_total": summ["valid_total"],
++                                                       "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
++                                                       "sandbox_version": SANDBOX_VERSION,
++                                                       "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
++                                                       "skills_health_bad": bad}, ensure_ascii=False, indent=1))
+         if a.history:
+             with open(a.history, "a", encoding="utf-8") as hf:
+                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
+                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
+         if retained is not None:
+             print(f"保留最後副本: {retained}", file=sys.stderr)
+     if bad or fatal:
+         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+     return 0 if p == n else 1
+ 
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index 9287b051..ff73f2c3 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -2144,32 +2144,40 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
+         c = self.rn.classify_question
+         self.assertEqual(c([3, 3], [3, 3]), "不區分(都過)")
+         self.assertEqual(c([0, 3], [0, 3]), "不區分(都不過)")
+         self.assertEqual(c([3, 3], [1, 3]), "區分")
+         self.assertEqual(c([3, 3], [0, 3]), "區分")
+         self.assertEqual(c([1, 3], [2, 3]), "反向")
+         self.assertEqual(c([3, 3], [2, 3]), "弱/不穩")
+         self.assertEqual(c([3, 3], [0, 0]), "缺資料")
+ 
+     def test_runs_in_window_counts_recent_only(self):
+-        import os, time as _t
++        import os, subprocess, time as _t
+         d = Path(tempfile.mkdtemp())
+         (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
+         old = d / "with-q-b-1.json"
+         old.write_text(json.dumps({"arm": "with", "results": [{}]}), encoding="utf-8")
+         os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
+         (d / "summary.json").write_text("{}", encoding="utf-8")
+         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
+-        # 結果視圖只作診斷；派工以獨立持久用量帳為準。
++        # 結果視圖只作診斷；用已度過冷卻且未 claim 的帳，證明舊結果不能重新變成硬限。
+         ledger = d / "usage.sqlite3"
+-        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger):
+-            self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
++        self.sp.attempt_ledger_remaining(ledger, 3, now=time.time() - 18001)
++        def fake_probe(cmd, **_kwargs):
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
++                "arm": "with", "results": [{"id": "zz", "passed": True}],
++                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
++            return subprocess.CompletedProcess(cmd, 0)
++        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), \
++             mock.patch.object(self.rn.subprocess, "run", side_effect=fake_probe):
++            result = self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)
++        self.assertTrue(result[2].startswith("rc=0"), result)
+ 
+     def test_lumos_stats_rejects_quoted_and_echo(self):
+         # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
+         f = self.sp.lumos_stats
+         self.assertEqual(f([("Bash", "rg 'lumos search' CLAUDE.md")]), (False, None))
+         self.assertEqual(f([("Bash", 'echo "lumos doctor"')]), (False, None))
+         self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
+         self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
+         self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d8a7c68b..a4cced58 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -38384,33 +38384,81 @@ def t_probe_boundary_persistent_ledger_stop_contracts():
+                 "--wait-on-limit", "300", "--max-per-window", "1", "--attempt-ledger", str(ledger), "--out", str(out)]
+         with patch.object(mod.sys, "argv", argv), patch.object(mod.time, "time", return_value=20001), \
+              patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         data = json.loads(out.read_text()); row = data["results"][0]
+         check("claim 被拒絕產生整批不可判而非計分失敗", rc == 3 and data["fatal"] and data["inconclusive"]
+               and data["valid_total"] == 0 and len(data["results"]) == 1, data)
+         check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
+               and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
+-        # 供應商回上限且最後一次批次名額已花掉：直接停止，不能先等 300 秒。
++        # 供應商回上限且 runner 已 claim 持久帳最後一格：直接停止，不能先等 300 秒。
++        # 刻意不設 --max-attempts，避免批次額度先截斷而讓持久帳分支壞掉仍假綠。
++        retry_ledger = root / "retry-usage.sqlite3"
++        mod.attempt_ledger_remaining(retry_ledger, 1, now=1000)
+         argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
+-                "--max-attempts", "1", "--out", str(out)]
++                "--max-per-window", "1", "--attempt-ledger", str(retry_ledger), "--out", str(out)]
+         limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                    "secs": 0, "limit_hit": True, "source_evidence": None}
+-        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=limited) as model, \
+-             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++        def claim_then_limit(*_args, **_kwargs):
++            check("供應商回上限前已真正 claim 最後一格",
++                  mod.claim_model_attempt(retry_ledger, 1, now=20000))
++            return limited
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=claim_then_limit) as model, \
++             patch.object(mod.time, "time", return_value=20000), patch.object(mod.time, "sleep") as sleeping, \
++             patch.object(mod, "global_skills_health", return_value=[]), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         data = json.loads(out.read_text())
+         check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
+               and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
+ 
++        # 等待預算小於輪詢間隔時，只能睡剩餘秒數，不能把「最多等 1 秒」放大成 300 秒。
++        budget_out = root / "budget.json"; calls = []
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "1",
++                "--max-per-window", "0", "--out", str(budget_out)]
++        def limit_then_pass(sc, *_args, **_kwargs):
++            calls.append(sc["id"])
++            return ({**limited} if len(calls) == 1 else
++                    {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++                     "limit_hit": False, "source_evidence": None})
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_then_pass), \
++             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        check("等待總量不超過 --wait-on-limit", rc == 0 and len(calls) == 2
++              and sleeping.call_args_list == [__import__("unittest").mock.call(1)],
++              (rc, len(calls), sleeping.call_args_list))
++
++
++def t_probe_boundary_fifth_round_output_contracts():
++    """候選輸出經真 main 寫入時只能替換連結本身，不得改到連結指向的檔。"""
++    import tempfile, json, io, contextlib, stat
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_fifth_output")
++    with tempfile.TemporaryDirectory(prefix="probe-r5-output-") as td:
++        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
++        q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
++        victim = root / "victim.txt"; victim.write_text("keep")
++        out = root / "out.json"; out.symlink_to(victim)
++        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++               "limit_hit": False, "source_evidence": None}
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row), \
++             patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        check("輸出連結不改寫受害檔", rc == 0 and victim.read_text() == "keep", victim.read_text())
++        check("輸出位置改成工具自己的普通 JSON 檔", stat.S_ISREG(out.lstat().st_mode)
++              and json.loads(out.read_text())["passed"] == 1, out.lstat())
++
+ 
+ def t_probe_boundary_fourth_round_result_contracts():
+     """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
+     import tempfile, json, importlib.util
+     spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
+         outdir = Path(td)
+         a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
+@@ -38488,20 +38536,26 @@ def t_probe_boundary_fourth_round_report_and_provenance():
+             report = (outdir / "summary.md").read_text()
+             check("meta不可判仍在報表明寫來源未知", "來源日期未知" in report and "來源版本未知" in report, report[:200])
+         attack = '<img src=x onerror=alert(1)>'
+         row = {"id": attack, "passed": True}
+         (outdir / "with-q-results.json").write_text(json.dumps({"arm": "with", "results": [row, {**row, "passed": False}]}))
+         summary = ablation.merge(outdir, [attack], 2)
+         summary["skills_health_poisoned"] = [(attack, ["failed"])]
+         md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
+         check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
+         check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
++        markdown = "![run](https://example.invalid/x) [label](https://example.invalid/y)"
++        controls = "prefix\x1b]0;LUMOS\x07suffix"
++        md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
++        check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
++        check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
++              and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
+ 
+ 
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")

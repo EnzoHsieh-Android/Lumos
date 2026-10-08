@@ -1847,6 +1847,205 @@ class TestScenarioProbeAblation(unittest.TestCase):
         cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
         cls.root = root
 
+    def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "bad.sqlite3"
+            ledger.write_bytes(b"not a database")
+            stop = threading.Event()
+            with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger, create=True), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("model must not launch")):
+                result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
+            self.assertIn("失效", result[2])
+            self.assertTrue(stop.is_set())
+            markers = list(root.glob("*.json"))
+            self.assertEqual(len(markers), 1)
+            evidence = json.loads(markers[0].read_text())
+            self.assertTrue(evidence["fatal"])
+            self.assertEqual(evidence["failure_type"], "attempt-ledger")
+            self.assertTrue(list(root.glob("*.pending")))
+            self.assertTrue(list(root.glob("*.log")))
+            self.assertFalse(list(root.glob("*.candidate")))
+            self.assertEqual(ledger.read_bytes(), b"not a database")
+
+    def test_attempt_ledger_cold_start_expiry_and_zero_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.sqlite3"
+            self.assertTrue(self.sp.claim_model_attempt(ledger, 0, now=1000))
+            self.assertFalse(ledger.exists())
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 2, now=1000.25), 0)
+            self.assertFalse(self.sp.claim_model_attempt(ledger, 2, now=19000.24))
+            self.assertTrue(self.sp.claim_model_attempt(ledger, 2, now=19000.25))
+            self.assertTrue(self.sp.claim_model_attempt(ledger, 2, now=19000.75))
+            self.assertFalse(self.sp.claim_model_attempt(ledger, 2, now=37000.24))
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 2, now=37000.25), 1)
+            with self.assertRaises(self.sp.ProbeAttemptLedgerError):
+                self.sp.attempt_ledger_remaining(ledger, 2, now=18000)
+
+    def test_attempt_ledger_two_processes_share_last_slot(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.sqlite3"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
+            script = "import sys; sys.path.insert(0, sys.argv[1]); import scenario_probe as p; print(int(p.claim_model_attempt(sys.argv[2], 1, now=20000)))"
+            commands = [[sys.executable, "-c", script, str(self.root / "scripts"), str(ledger)] for _ in range(2)]
+            children = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for cmd in commands]
+            outputs = [child.communicate(timeout=15) for child in children]
+            self.assertEqual([child.returncode for child in children], [0, 0], outputs)
+            self.assertEqual(sorted(out.strip() for out, err in outputs), ["0", "1"])
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 0)
+
+    def test_attempt_ledger_failed_launch_archive_and_cross_date_keep_quota(self):
+        import subprocess, threading
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "usage.sqlite3"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
+            old = root / "2026-10-07"; old.mkdir()
+            newer = root / "2026-10-08"; newer.mkdir()
+            launched = []
+            scenario = {"id": "q", "prompt": "probe", "expect": "lumos"}
+            def launch(cmd, **kwargs):
+                if cmd[0] == "claude":
+                    launched.append(cmd)
+                    raise subprocess.TimeoutExpired(cmd, 1)
+                candidate = Path(cmd[cmd.index("--out") + 1])
+                path = Path(cmd[cmd.index("--attempt-ledger") + 1])
+                row = self.sp.run_one(scenario, root, 1, 1, "", attempt_ledger=path, max_per_window=1)
+                candidate.write_text(json.dumps({"arm": "with", "results": [row], "fatal": True, "inconclusive": True, "skills_health_bad": []}))
+                return subprocess.CompletedProcess(cmd, 3)
+            with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), mock.patch.object(self.sp.time, "time", return_value=20000), mock.patch.object(self.sp.subprocess, "run", side_effect=launch):
+                stop = threading.Event()
+                first = self.rn.run_job("with", "q", 1, [], 1, 1, old, 0, max_per_window=1, stop=stop)
+                self.assertIn("失效", first[2])
+                self.assertEqual(len(launched), 1)
+                archive = root / "archive"; archive.mkdir()
+                for artifact in old.iterdir():
+                    artifact.rename(archive / artifact.name)
+                for output in (old, newer):
+                    retry = self.rn.run_job("with", "q", 1, [], 1, 1, output, 0, max_per_window=1)
+                    self.assertTrue(retry[2].startswith("skip"), retry)
+                self.assertEqual(len(launched), 1, "失敗、歸檔、跨日皆不退還模型啟動意圖")
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 0)
+
+    def test_attempt_ledger_invalid_scenario_spends_no_intent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / "usage.sqlite3"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
+            with mock.patch.object(self.sp.time, "time", return_value=20000), mock.patch.object(self.sp.subprocess, "run", side_effect=AssertionError("must not launch")):
+                result = self.sp.run_one({"id": "q", "prompt": "probe"}, root, 1, 1, "", attempt_ledger=ledger, max_per_window=1)
+            self.assertFalse(result["passed"])
+            self.assertIn("expect", result["reason"])
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20001), 1)
+
+    def test_attempt_ledger_lock_timeout_preserves_parent_incident(self):
+        import sqlite3, threading
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / "usage.sqlite3"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
+            with sqlite3.connect(ledger, isolation_level=None) as locked:
+                locked.execute("BEGIN IMMEDIATE")
+                stop = threading.Event()
+                started = time.monotonic()
+                with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("must not launch")):
+                    result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
+                elapsed = time.monotonic() - started
+                locked.rollback()
+            self.assertIn("失效", result[2])
+            self.assertTrue(stop.is_set())
+            self.assertGreaterEqual(elapsed, 4)
+            self.assertLess(elapsed, 10)
+            self.assertEqual(json.loads(next(root.glob("*.json")).read_text())["failure_type"], "attempt-ledger")
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=20000), 1)
+
+    def test_attempt_ledger_process_death_retains_committed_intent(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / "usage.sqlite3"; ready = root / "ready"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=1000)
+            script = "import sys,time; from pathlib import Path; sys.path.insert(0,sys.argv[1]); import scenario_probe as p; assert p.claim_model_attempt(sys.argv[2],1,now=20000); Path(sys.argv[3]).write_text('ready'); time.sleep(30)"
+            child = subprocess.Popen([sys.executable, "-c", script, str(self.root / "scripts"), str(ledger), str(ready)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(ready.exists(), "啟動意圖需先真正提交")
+                child.kill()
+                child.communicate(timeout=5)
+                self.assertFalse(self.sp.claim_model_attempt(ledger, 1, now=20001))
+            finally:
+                if child.poll() is None:
+                    child.kill(); child.communicate(timeout=5)
+
+    def test_attempt_ledger_two_parent_race_retains_loser_candidate(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / "usage.sqlite3"
+            self.sp.attempt_ledger_remaining(ledger, 1, now=time.time() - 20000)
+            probe = root / "fake_probe.py"
+            probe.write_text("""import argparse,json,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1]); import scenario_probe as p
+ap=argparse.ArgumentParser(add_help=False)
+ap.add_argument('--out'); ap.add_argument('--attempt-ledger'); ap.add_argument('--max-per-window',type=int)
+a,_=ap.parse_known_args(sys.argv[2:])
+ok=p.claim_model_attempt(a.attempt_ledger,a.max_per_window)
+if ok: Path(a.out).with_suffix('.launched').write_text('fake model launched')
+row={'id':'q','passed':ok,'calls':[],'n_calls':0,'arm':'with','fatal':not ok,'limit_hit':False,'reason':'ok' if ok else '儀器例外: quota'}
+Path(a.out).write_text(json.dumps({'arm':'with','results':[row],'fatal':not ok,'inconclusive':not ok,'skills_health_bad':[]}))
+sys.exit(0 if ok else 3)
+""")
+            # 父派工器在查帳之後同步，重現兩者皆見到最後一個名額的 race。
+            parent = """import sys,importlib.util,time,threading,json
+from pathlib import Path
+repo,root,ident=sys.argv[1:]
+root=Path(root); out=root/ident; out.mkdir()
+spec=importlib.util.spec_from_file_location('ablation',Path(repo)/'governance/eval/ablation_lumos_first.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+probe=root/'fake_probe.py'
+# run_job 的啟動向量固定為 python + PROBE；替身自行找正式 scenario_probe 模組。
+text=probe.read_text(); text=text.replace('sys.path.insert(0, sys.argv[1])', 'sys.path.insert(0, '+repr(str(Path(repo)/'scripts'))+')').replace('sys.argv[2:]', 'sys.argv[1:]')
+local=root/('fake-'+ident+'.py');local.write_text(text);m.PROBE=local
+original=m.attempt_ledger_remaining
+def remaining(path,limit):
+ value=original(path,limit)
+ (root/('ready-'+ident)).write_text('ready')
+ deadline=time.monotonic()+10
+ while len(list(root.glob('ready-*')))<2:
+  if time.monotonic()>deadline: raise RuntimeError('barrier timeout')
+  time.sleep(.01)
+ return value
+m.attempt_ledger_remaining=remaining
+stop=threading.Event()
+result=m.run_job('with','q',1,[],1,1,out,300,max_per_window=1,stop=stop,attempt_ledger=root/'usage.sqlite3')
+print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(out.glob('*.candidate'))),'pending':len(list(out.glob('*.pending')))}))
+"""
+            children = [subprocess.Popen([sys.executable, "-c", parent, str(self.root), str(root), ident], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for ident in ("a", "b")]
+            try:
+                outputs = [child.communicate(timeout=20) for child in children]
+                self.assertEqual([child.returncode for child in children], [0, 0], outputs)
+                results = [json.loads(out) for out, err in outputs]
+                losers = [r for r in results if r['stop']]
+                self.assertEqual(len(losers), 1, results)
+                self.assertEqual((losers[0]['candidate'], losers[0]['pending']), (1, 1))
+                self.assertIn('失效', losers[0]['status'])
+                self.assertEqual(len(list(root.glob('*/*.launched'))), 1)
+                self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1), 0)
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill(); child.communicate(timeout=5)
+
+    def test_ablation_notes_are_not_results_but_legacy_shards_are(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "with-notes.json").write_text('{"note":"operator memo"}')
+            self.assertEqual(self.rn.collect_skills_health(root), [])
+            (root / "with-shard0.json").write_text(json.dumps({"arm":"with", "results":[{"id":"q", "passed":True}]}))
+            self.assertEqual(self.rn.load_results(root)["with"][0]["id"], "q")
+            (root / "without-q-bad.json").write_text("[]")
+            self.assertTrue(self.rn.collect_skills_health(root))
+
     def test_strip_removes_only_rule_section(self):
         txt = ("## 程式碼為主\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
                + self.sp.RULE_END + "\n1. 寫回\n")
@@ -1952,7 +2151,7 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertEqual(c([3, 3], [0, 0]), "缺資料")
 
     def test_runs_in_window_counts_recent_only(self):
-        import os, time as _t
+        import os, subprocess, time as _t
         d = Path(tempfile.mkdtemp())
         (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
         old = d / "with-q-b-1.json"
@@ -1960,7 +2159,18 @@ class TestScenarioProbeAblation(unittest.TestCase):
         os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
         (d / "summary.json").write_text("{}", encoding="utf-8")
         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
-        self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
+        # 結果視圖只作診斷；用已度過冷卻且未 claim 的帳，證明舊結果不能重新變成硬限。
+        ledger = d / "usage.sqlite3"
+        self.sp.attempt_ledger_remaining(ledger, 3, now=time.time() - 18001)
+        def fake_probe(cmd, **_kwargs):
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
+                "arm": "with", "results": [{"id": "zz", "passed": True}],
+                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+            return subprocess.CompletedProcess(cmd, 0)
+        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), \
+             mock.patch.object(self.rn.subprocess, "run", side_effect=fake_probe):
+            result = self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)
+        self.assertTrue(result[2].startswith("rc=0"), result)
 
     def test_lumos_stats_rejects_quoted_and_echo(self):
         # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
@@ -2028,18 +2238,12 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertEqual((st["m4_gated_passed"], st["m4_gated_n"]), (1, 2), "gated 只算 passed")
         self.assertEqual((st["m4_content_passed"], st["m4_content_n"]), (2, 2), "content 兩題答案都對")
 
-    def test_load_ids_dedup(self):
+    def test_load_ids_rejects_duplicates(self):
         d = Path(tempfile.mkdtemp())
         f = d / "q.jsonl"
         f.write_text('{"id":"s01","expect":["x"]}\n{"id":"s01","expect":["x"]}\n{"id":"s02","expect":["y"]}\n', encoding="utf-8")
-        # load_ids 讀 ROOT/f;這裡用絕對路徑塞進去測去重邏輯——改用相對 ROOT 不便,直接測 set 去重行為
-        import json as _j
-        seen, ids = set(), []
-        for ln in f.read_text().splitlines():
-            q = _j.loads(ln)["id"]
-            if q not in seen:
-                seen.add(q); ids.append(q)
-        self.assertEqual(ids, ["s01", "s02"])
+        with self.assertRaisesRegex(ValueError, "題號重複"):
+            self.rn.load_ids([str(f)])
 
     def test_collect_skills_health(self):
         d = Path(tempfile.mkdtemp())
@@ -2053,7 +2257,7 @@ class TestScenarioProbeAblation(unittest.TestCase):
         (d / "with-q-a-1.json").write_text("[]", encoding="utf-8")   # 合法 JSON 但非 dict
         (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [{"id": "s01", "passed": True}, "壞元素"]}), encoding="utf-8")
         by = self.rn.load_results(d)   # 不該炸
-        self.assertEqual(len(by["with"]), 1, "非 dict 檔與非 dict 元素都跳過")
+        self.assertEqual(len(by["with"]), 0, "非 dict 元素使整批失效，不能把同檔成功列計分")
 
     def test_merge_counts_missing(self):
         d = Path(tempfile.mkdtemp())

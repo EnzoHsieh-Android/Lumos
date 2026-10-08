@@ -1,0 +1,51 @@
+severity: minor
+
+I found no counterexample that gives a false healthy summary or a duplicate model run within the reviewed scenarios. The three findings below either fail closed into a false red or are a context-line issue the delta didn't introduce. I didn't run anything; every claim comes from reading the code.
+
+**Paths checked:**
+- The full 658-line `r2-snapshot.patch`
+- `governance/eval/ablation_lumos_first.py`: `run_job`, `load_results`, `collect_skills_health`, `invalid_batch_evidence`, `_run_locked_batch`
+- `scripts/scenario_probe.py`: the result-row shapes at lines 713/779/849/1052/1083, the selection code at 960–979, the output write at 1171, and the exit codes at 1184–1186
+- The four new or changed tests in `scripts/test_lumos.py`
+- The plan's S11–S14, PRIOR-ART and rollback text (lines 117–130)
+
+**What holds:**
+- **Pending marker.** It is written before the log file is opened and before `subprocess.run`. It is removed only after the result passes every check:
+  引句:「pending.unlink()」
+  If the parent is killed, `.pending` stays on disk.
+  - The next batch's `collect_skills_health` flags it (`fatal: True`), so nothing is dispatched.
+  - `load_results` skips the same-stem `.json`, so a result the orphaned child writes later can't fill in missing runs.
+  - The lock doesn't pass to the orphan. Documented behaviour: fds from `os.open` are non-inheritable by default (PEP 446), and `subprocess.run` defaults to `close_fds=True`. So the next batch can take the lock, but the pending check stops it.
+  - A duplicate run only happens if someone removes the marker while the child is still running. Plan line 129 forbids that.
+- **Result format.** I checked live probe rows for `passed`, `n_calls`, `calls`, `answer`, `limit_hit` and `answer_content_ok`. All have the types the new check requires: `grade` returns a real bool or None, and `judge` returns a bool. So a normal run isn't rejected by mistake.
+- **Exact-id selection.** `a` no longer pulls in `a-extra`. `run_job` also rejects any row whose id isn't `qid`, and any file with more than `n` rows.
+
+---
+
+finding V1: a question id starting with `-` permanently blocks the batch (S12 doesn't check for it)
+severity: minor
+blocking: 否
+引句:「"--exact-id", qid, "--runs", str(n)」
+file: `governance/eval/ablation_lumos_first.py:227`
+
+`load_ids` only rejects empty ids, commas and control characters. For an id like `-x`, argparse sees `--exact-id -x`, treats `-x` as an option, and exits with "expected one argument" (rc 2). The argparse docs' "Arguments containing -" section says option-like strings are taken as options unless they look like negative numbers; applying that to an option's value is my inference. With rc 2 and no output file, `run_job` takes the failure path and keeps `.pending`, so the directory stays poisoned until someone clears it by hand. This fails closed, so there's no false green. Fix: pass `f"--exact-id={qid}"`, or reject a leading `-` in `load_ids`.
+
+finding V2: a duplicate id across question files is silently de-duplicated on one side and rejected on the other
+severity: minor
+blocking: 否
+引句:「print("✗ --exact-id 必須且只能選到一題", file=sys.stderr); return 2」
+file: `scripts/scenario_probe.py:963`
+
+Repro: put `{"id":"s01",...}` in both `commands.jsonl` and `answers.jsonl`. `load_ids` keeps one `s01`, by design. The probe's `--exact-id s01` then matches two questions and returns rc 2. The marker stays and the directory is permanently poisoned, but the summary only shows the generic "rc=2" message instead of naming the duplicate. Fail-closed, so not blocking. `load_ids` should raise on a duplicate id, since `--exact-id` now requires ids to be unique.
+
+finding V3: the summary's missing-runs count is global, so extra runs on one question can hide missing runs on another (not introduced by this delta)
+severity: minor
+blocking: 否
+引句:「| 缺場 / 撞上限 / 其他儀器例外 |」
+file: `governance/eval/ablation_lumos_first.py:320`
+
+`missing = max(0, len(expected_ids)*runs - n)` counts all questions together. Repro sketch: use an output directory where `with` has 3 valid rows for `a` (from an earlier `--runs 3` batch) and 0 rows for `b`. Then run `--merge-only --runs 1 --questions <a,b>`. `with` reports 0 missing even though `b` has no data. The per-question table still shows `b` as 0/0 / "缺資料", so it isn't fully silent. `run_job`'s `len(rows) > n` check limits each file, not each question across files. Suggest computing it per question: `sum(max(0, runs - per[q][1]))`.
+
+---
+
+max severity: minor; blocking count: 0

@@ -1,0 +1,64 @@
+severity: minor
+
+**Scope I read.** I read all 538 lines of the frozen patch `r1-formal-snapshot.patch` (two hunks of `ablation_lumos_first.py` plus the test hunks in `test_lumos.py`). I also checked these, read-only:
+- the current versions of `merge`, `load_results`, `collect_skills_health`, `needed`, `runs_in_window` and `render_md`;
+- how `scenario_probe.py` writes its output (`finally` around lines 1113–1166);
+- the lock code in the earlier version, `r1-code-snapshot.patch` (only that code; I did not open any other seat's review report);
+- how tests are discovered (`t_` prefix, found automatically).
+
+I did not run anything and changed nothing. That includes the plan file: plan mode asked for one, but this session had no Write or ExitPlanMode tool.
+
+**Paths I followed and cleared (not reported):**
+- **Old-lock interop:** the earlier version only locks `.ablation.lock` with `open("a+")`. The new version takes the directory lock and then that same file, so it turns away an old batch whichever starts first.
+- **Lock file as symlink:** `O_NOFOLLOW` fails with ELOOP, which counts as "busy" and returns 3.
+- **Lock fds leaking to the child:** `subprocess.run` defaults to `close_fds=True`, so they don't.
+- **Summary or meta file as a symlink:** `lstat` sees a non-regular file, and `os.replace` swaps the link itself, so the target outside the directory is untouched.
+- **Interrupted archive:** the tombstone is written first, then the archive step; `test_..._archive_interrupt` really does turn red under the old order.
+- **Next merge-only run:** the tombstone has `fatal=True` and is picked up by `invalid_batch_evidence`, so the run returns 3 and `needed` still counts the missing run.
+- **Tombstone write itself fails (ENOSPC/EMFILE):** the exception escapes and exits 1. No success-looking file is left, so this is not a false green.
+- **Long qid:** the filename now uses a hash. `load_results` takes the arm from the JSON contents, so it doesn't depend on the filename.
+- **New tests:** all six are discovered automatically, and every assertion can actually fail. I found no tautologies.
+
+---
+
+**Finding 1: if only the batch process is killed, its probe child keeps running, the lock is gone, and a second batch can start the same job in parallel**
+severity: minor
+blocking: 否
+引句:「同一輸出目錄的另一個 CLI 可能已在跑模型；其 stop 旗標不會跨進程共享。」
+file: `governance/eval/ablation_lumos_first.py:437` (the `lock_fd` / flock section), `governance/eval/ablation_lumos_first.py:205` (`subprocess.run`)
+
+Cause: the directory lock and the old-style lock are held only by the batch process. The probe child doesn't inherit them (`close_fds`), and it isn't put in the runner's process group or terminated when the runner dies.
+
+Sequence:
+1. Batch A calls `run_job(with, q1, 3)`, and the probe child starts calling the model.
+2. Someone runs `kill -9 <A's pid>`, or a supervisor sends SIGTERM to that pid only.
+3. The kernel releases both of A's locks, but the probe child carries on.
+4. Batch B starts and gets both locks. q1 has no result file yet, so `needed` = 3 and B starts a second q1 probe.
+5. Two models now run in parallel, which defeats the point of "single-path dispatch". When both finish, q1 has 6 valid runs, so it is over-weighted in `_arm_stats`.
+
+Why it's only minor:
+- Ctrl-C or closing the terminal sends the signal to the whole foreground process group, so the child dies too. Only a kill aimed at the runner's pid alone triggers this.
+- The pre-patch version had no lock at all, so this is a gap in the new protection, not a regression.
+- I couldn't produce a red reproduction with the real model.
+
+Minimal reproduction sketch: replace `PROBE` with a script that sleeps 30 s and then writes a valid result → start A → `kill -9` A → immediately start B → B gets rc≠3 and starts a probe while A's child is still alive.
+
+**Finding 2: an incident run overwrites `summary.md` atomically, but the Markdown summary has no "untrustworthy" banner**
+severity: minor
+blocking: 否
+引句:「_atomic_write_text(out_dir / "summary.md", md)」
+file: `governance/eval/ablation_lumos_first.py:408`; `render_md` (`:324-345`) is not part of this diff.
+
+Cause: only `summary.json` gets `skills_health_poisoned`. `render_md` doesn't read that field. So when a new failure path (e.g. a probe launch OSError) or a later merge-only run finds a tombstone:
+- it atomically replaces the last trusted `summary.md`;
+- the new file lists M1–M4 only for the remaining valid files, plus missing-run counts, with no incident warning in the text.
+
+The return code 3 and the stdout banner are correct, so this isn't a false green on the exit code. But anyone who only reads the `.md` file can mistake it for a normal result. The behaviour predates this diff; the diff just makes more paths lead to it.
+
+Minimal reproduction: run `t_probe_boundary_postreview_launch_exception_summary`, then read `outdir/summary.md` — it contains no 失效 / poisoned / 不可採信 marker.
+
+---
+
+I found no reproducible blocker or major in the CLI path, cross-version concurrency, attacker-controlled symlinks, interrupted writes, merge-only reading incident files, or summary overwrites. The two minor trade-offs already in the plan (0600 on new summaries, and possible loss of the original invalid content after the fatal swap) were not re-reported.
+
+Highest severity: minor; blocking: 0.
