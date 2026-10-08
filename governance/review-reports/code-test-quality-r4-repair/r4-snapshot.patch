@@ -1,0 +1,750 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index e242c592543db5b5c95b990f2ff19dbf2bbee974..bca5ff7e1931ade6214cd6cd404ab1433112d150 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -48,13 +48,15 @@ WHY: CLI與來源scanner共用參數定義與同一namespace [出處:code-test-q
+ 
+ 
+ ## 第二輪部署與解析邊界
+ 
+ PITFALL: 檔案都存在仍可能新舊混裝，同時間戳同大小的 bytecode 也曾讓新來源執行舊判讀 [出處:code-test-quality-native-push/r2-正確性-codex.md 與 r2-controls-red.txt] [防回歸:test_mixed_sidecars_refused_before_false_green、test_source_bytes_not_stale_bytecode_authorize_capture；正常 scan/capture/check/capabilities 與既有來源保持控制]。配套校驗的取捨見 [[Projects/測試品質部署配套校驗_計劃]]；只證本機配套一致，不證業務答案或報告真實性。
+ 
+ PITFALL: ASCII bytes 搜尋漏掉 UTF-16 的 DTD，suite 失敗標記不在 testcase 內亦曾被忽略 [出處:code-test-quality-native-push/r2-資安-codex.md 與 r2-邊界-codex.md] [防回歸:test_utf16_dtd_is_not_a_valid_receipt、test_plain_utf16_report_retains_valid_capture、test_orphan_failure_refused]。拒收依標準 XML parser 的宣告事件；正常 UTF-16 不跟著被擋。
+ 
+ PITFALL: 另看 argv 首項會漏掉合法 --vault 全域選項 [出處:code-test-quality-native-push/r2-架構-codex.md] [防回歸:test_global_vault_option_retains_structured_deployment_error、test_mixed_scanner_retains_legacy_help]。命令身份沿正式 argparse，不維護第二份命令解析。
+ 
+-PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、worker 繼續跑」；worker 繼承 stdout/stderr 時還會讓已退出的 launcher 被誤判逾時。CLI capture 與 handbook model runner 都建立獨立 POSIX 程序群，必須採同一項返回前清理政策 [出處:code-test-quality-r4-repair/r1-architecture-report.md A1 與 r2-boundary-report.md B1] [防回歸:test_failed_capture_stops_stream_detached_worker、test_failed_capture_stops_worker_that_inherits_streams、test_cancelled_capture_stops_child]。可信測試 runner 正常使用 worker 仍屬本程序群責任；子程序主動 setsid 逃逸不在可攜式保證內。
++PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、worker 繼續跑」；worker 繼承 stdout/stderr 時還會讓已退出的 launcher 被誤判逾時。CLI capture 與 handbook model runner 都建立獨立 POSIX 程序群，必須採同一項返回前清理政策 [出處:code-test-quality-r4-repair/r1-architecture-report.md A1 與 r2-boundary-report.md B1] [防回歸:test_failed_capture_stops_stream_detached_worker、test_failed_capture_stops_worker_that_inherits_streams、test_cancelled_capture_stops_child]。可信測試 runner 正常使用 worker 仍屬本程序群責任；子程序主動 setsid 逃逸不在可攜式保證內。CLI capture、選配 Semgrep backend 與 handbook 模型命令三個入口共用本檔同一個 runner，不各自保留清理實作；繼承管線的控制要先證明 worker 確實寫進同一條管線，再斷言它已被清掉。
++
++WHY: 共用 runner 用 CaptureTimeout 與 CaptureInterrupted 兩個 ValueError 子型別回報逾時與 SIGTERM 中斷，呼叫端按型別分類，中斷一律往上傳、不收成單一輸入的錯誤 [出處:code-test-quality-r4-repair/r3-邊界-sonnet.md BND-1、r3-架構對齊-sonnet.md ARC-2] [因:改用訊息字串比對時，Semgrep backend 把 SIGTERM 收成單檔 unavailable 後繼續掃下一檔，多拖一整段 backend 逾時；字串一改，逾時也會悄悄變成 unavailable] [不選:各呼叫端比對例外訊息字串] [代價:直接執行 scanner 收到 SIGTERM 時以 traceback 非零結束，經 lumos 入口才轉成結構化不完整結果] [test:t_test_quality_scan_cli]。控制方法為 test_sigterm_during_semgrep_stops_scan_and_backend；子型別保留原訊息，CLI capture 的 receipt reason 不變；逾時例外帶著已讀到的部分輸出，供 handbook 保存原始事件。
+ 
+ WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+index a581c47f0e98f0c5d47003514458f3e498a2144d..483bc4e8a663dadec2cfd08bb9612583c0ac510b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+@@ -55,10 +55,12 @@ PITFALL: 正常有限迴圈被考卷語法拒絕會使測試效果失去可比
+ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能繼續消耗 [出處:code-test-quality-native-push/r1-資源-codex.md r2] [防回歸:test_model_timeout_stops_worker_without_paid_call]。控制使用PATH前置可確認的fake claude，真的生成工作者再逾時、確認停止，不消耗模型額度。模型命令使用獨立POSIX程序群組；本次不延伸Windows資格。語法限制與模型提交計分分開，沿既有固定題grammar，不宣稱一般Python沙盒。
+ 
+ 
+ ## 模型程序清理控制的歸屬
+ 
+ WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
+ 
+ WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
+ 
+ PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。
++
++PITFALL: 模型已正常退出、但留下繼承 stdout 的子程序時，`model_command` 會等管線 EOF 等到逾時，整場被記成 model-timeout 無效 [出處:code-test-quality-r4-repair/r3-架構對齊-sonnet.md ARC-1、r3-defender-A-opus.md] [根因:handbook 自寫一份 Popen＋communicate 清理，CLI 收證修好「已退出 launcher 被誤判逾時」時這份沒跟著改] [防回歸:test_exited_model_with_stream_holding_worker_is_not_timeout、test_model_timeout_keeps_partial_stream]。`model_command` 改走 [[Systems/test-quality-cli]] 的共用 runner，逾時仍轉成 `subprocess.TimeoutExpired` 並帶部分輸出，呼叫端不變；manifest 另記共用 runner 的 `process_runner_sha256`。歷來 61 份事件檔最大 72 KB，共用的 10 MiB 輸出上限不影響既有場次。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+index 66c16da61009cbff1609ddc0e0f344e2b2614475..35836fd8d893da81fbcf387d3e365a691b187b2e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+@@ -46,11 +46,13 @@ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處
+ WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。
+ 
+ ## 推送前結果形狀修復
+ 
+ WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test-quality-native-push/r1-fix.json] [因:沿固定 backend 結果合約拆分，沒有增加第二個 parser；配對控制與 [[Verification/測試品質分支推送前修復驗證]] 分開記錄來源掃描與原生執行資格]。
+ 
+ PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
+ 
+ PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_findings_decode_once_and_reject_out_of_range_line]。控制用兩筆合法 finding 驗解碼次數與 snippet，再用越界行號驗拒收；這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
+ 
+-PITFALL: 選配 Semgrep backend 用 `subprocess.run` 時只會處理 launcher，正常同群 worker 可在成功、非零或逾時後留下；繼承管線的 worker 還會把 launcher 已退出誤報成 timeout [出處:code-test-quality-r4-repair/r2-boundary-report.md B1 與 r2-defender-report.md] [防回歸:test_semgrep_backend_stops_worker_after_launcher_exit、test_failed_capture_stops_worker_that_inherits_streams]。backend 改共用 capture runner 的獨立程序群與返回前清理；固定 corpus 凍結 scanner 時也要帶齊這項遞移 sidecar，不能只複製 adapter。
++PITFALL: 選配 Semgrep backend 用 `subprocess.run` 時只會處理 launcher，正常同群 worker 可在成功、非零或逾時後留下；繼承管線的 worker 還會把 launcher 已退出誤報成 timeout [出處:code-test-quality-r4-repair/r2-boundary-report.md B1 與 r2-defender-report.md] [防回歸:test_semgrep_backend_stops_worker_after_launcher_exit、test_semgrep_backend_outcomes_stop_stream_holding_worker]。backend 改共用 capture runner 的獨立程序群與返回前清理；固定 corpus 凍結 scanner 時也要帶齊這項遞移 sidecar，不能只複製 adapter。成功、非零與逾時三種出口都以握住管線的 worker 控制，同時核對 backend 在隔離 rules 目錄執行且帶 `SEMGREP_SEND_METRICS=off`；逾時預算是模組常數 `BACKEND_TIMEOUT`，控制把它調短而不改判讀。
++
++WHY: Semgrep backend 輸出沿用 capture runner 的 10 MiB 上限，超過時回結構化 unavailable [出處:code-test-quality-r4-repair/r3-回歸正確性-sonnet.md REG-1、r3-邊界-sonnet.md BND-2] [因:整套工具對外部證據一律設同一上限並 fail-closed；單檔掃描加 --quiet 的實際輸出遠小於上限] [不選:backend 另開無上限讀取，等於第二套程序與輸出政策] [代價:超大但合法的 Semgrep 報告會被記成不完整，需拆小輸入重掃]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
+index 3b3b4d2c5d26ec9f2e31abae06f89477a84990d3..152f8a45ed8d0adcf1a323ffc302806d2e361e12 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
+@@ -38,10 +38,12 @@ WHY: 先公布語法範圍再擴充規則 [出處:2026-10-07 跨語言要求] [
+ 
+ ## 本篇的檔案邊界
+ 
+ - `scripts/test_quality_scan.py` 的候選／裁決分界與局部判準取捨歸本篇，跨語言 backend 的特殊限制歸 [[Systems/test-quality-multilang]]。
+ - `scripts/test_test_quality_scan.py` 的獨立 oracle 與合理反例選擇歸本篇，不將測試數量當品質標準。
+ - `governance/eval/test_quality_pilot.py` 的固定故障與安全執行範圍歸本篇，不能擴張為任意命令的通用變異 runner。
+ 
+ WHY: 掃描入口隨consumer更新部署但語義不升級 [出處:[[Projects/測試品質工具接線_計劃]]] [因:方便日後實作時直接掃，不把安裝可用等同業務品質通過]。PHP有限介面自比歸[[Systems/test-quality-multilang]]；可信本機命令收證歸[[Systems/test-quality-cli]]，固定試行不變成通用mutation engine。
+ 
+ WHY: 來源與安裝入口共用掃描參數，選配適配器延後載入 [出處:code-test-quality-native-push/r1-邊界-codex.md b1與r1-架構-codex.md a1/a3] [因:遞移缺檔不應使既有CLI的help失效，測試品質命令則須明確回不完整及更新指引]。保留控制见 [[Systems/test-quality-cli]]；局部bindings、算式模型、檔案解析各有獨立責任，有限語法掃描不裁決獨立業務答案。
++
++WHY: scanner 只在帶 `--semgrep` 時才載入 Semgrep adapter，純 Python 掃描不需要共用程序 runner [出處:code-test-quality-r4-repair/r3-架構對齊-sonnet.md ARC-3] [因:adapter 改用 [[Systems/test-quality-cli]] 的共用 runner 後，模組頂層匯入會讓只掃 Python 的 scanner 也必須帶著 runner 檔，形成 core 到 scan 到 adapter 再回 core 的依賴圈] [不選:另抽一個共用底層模組，會在 bundle 裡多一種模組角色] [test:t_test_quality_scan_cli]。控制方法為 test_python_scan_does_not_need_semgrep_runner_bundle；帶 `--semgrep` 時仍要整組 bundle 與指紋一致。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+index 41225cff82258da17cd40740044ab8b33642a333..1d3ee506bf87e0cebed64ea9f2f757251c96167c 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+@@ -1,16 +1,16 @@
+ ---
+ type: verification
+ status: pass
+ date: 2026-10-08
+ valid_under: macOS、Python 3.14、本機 fake launcher 與暫存 repo；只驗第四輪的程序群清理、測試 oracle 與 Semgrep 熱路徑，不包含 Windows
+-revalidate_when: 改動 handbook model_command、test-quality 拒收原因、bundle digest 或 Semgrep finding 轉換時
++revalidate_when: 改動共用 runner 的例外型別、handbook model_command、test-quality 拒收原因、bundle digest 或 Semgrep finding 轉換時
+ self_audit: pending-fourth-round-review
+ tags:
+   - type/verification
+   - status/pass
+   - scope/evals
+ plan_refs:
+   - "[[Projects/測試品質工具接線_計劃]]"
+ ---
+ # 測試品質第四輪修補驗證
+ 
+@@ -20,10 +20,20 @@ plan_refs:
+ 
+ 四個測試證據缺口也已收緊：orphan outcome 與 stale bytecode 案例改驗專屬拒收 reason；global `--vault` 案例先建立有效 source，再確認原因點名遺失的 scanner；Git rename fixture 的命令都有 10 秒 timeout，commit 明確停用 signing。五項定向 CLI 控制通過。
+ 
+ Semgrep finding 轉換改為每份來源只 decode/split 一次，並在取 snippet 前驗行號沒有超出來源；更新同源 bundle 指紋後，scanner 22 項控制通過。完整 CLI 曾在指紋尚未更新時整批回「配套版本不一致」，這是本輪中途真紅，不列產品回歸。
+ 
+ 修補回歸審再找到 CLI capture 與 Semgrep backend 的同類程序群缺口：fake launcher 啟動 worker 後 rc1，修前會留下 worker；若 worker 繼承管線還會把已退出的 launcher 誤報 timeout。共用 runner 現在會偵測 launcher 已退出、清理自己建立的 POSIX 程序群，再排空管線。`--vault` 控制已改在它建立 source 的暫存目錄執行；刪掉 fixture 會使前置條件不成立。Semgrep 的 decode 次數保留單元控制，越界行號另走 fake backend 真入口驗結構化 unavailable。
+ 
+ 固定 corpus 因 adapter 新增 core runner 相依而一度回 unavailable；凍結 scanner 時帶齊 `test_quality.py` 後恢復。更新兩支 sidecar 的 bundle 指紋後，完整 CLI 46 項、scanner 24 項與 handbook 17 項皆綠。
+ 
+ 本篇是修補驗證，不代表第四輪代碼審處置閘通過。提交後仍須由乾淨席以最後快照審查。
++
++## 第三輪修補回歸審之後
++
++四位乾淨審查席看完上一輪修補後，再找到三件同族問題，都先在修補前版本紅、修後綠：
++
++- handbook 模型命令仍是另一份程序群清理：模型印完輸出就退出，但留下握住管線的子程序時，修前 3 秒後被判逾時；改走共用 runner 後立即回傳 rc0，子程序被清掉。
++- Semgrep backend 用訊息字串分類逾時，SIGTERM 也被收成單檔 unavailable：兩檔掃描中送 SIGTERM，修前要把第二檔整段 backend 逾時跑完才結束；改成型別分類、中斷往上傳後，5 秒內非零結束且 backend 程序群已清。修補前更早的版本會立刻結束，但會留下 backend 子程序。
++- 原有控制殺不掉的變異：拿掉 launcher 退出後的清群、拿掉逾時分類、吞掉中斷、拿掉 backend 的 cwd 或 env，原本整套照綠；新控制對這五個變異都紅在目標斷言（worker 仍存活、狀態變 unavailable、5 秒內沒停、不在隔離 rules 目錄、metrics 環境變數為空）。
++
++修後完整 CLI 46 項、scanner 26 項、handbook 19 項皆綠；scanner 新控制連跑三次後機器上沒有殘留測試程序。大輸出檢查：9 MiB 經共用 runner 與模型命令各約 0.04 秒，20 萬行事件流 0.1 秒，行程記憶體高點約 72 MiB，超過 10 MiB 仍回結構化錯誤。
+diff --git a/governance/eval/test_quality_handbook.py b/governance/eval/test_quality_handbook.py
+index 6570dc0160361d763c1d27822eeb7f35d8ea70c2..32fbbd8651954fe177e9d082e49cd79c27f992ce 100644
+--- a/governance/eval/test_quality_handbook.py
++++ b/governance/eval/test_quality_handbook.py
+@@ -3,30 +3,33 @@
+ 
+ Only fixed unittest fixtures are executed, with an AST-restricted generated test subset.
+ Trigger lane simulates metadata discovery via Read, not the native Skill router.
+ """
+ import argparse
+ import ast
+ import hashlib
+ import io
+ import json
+ import os
+-import signal
+-from pathlib import Path
+ import subprocess
+ import sys
+ import tempfile
+ import time
+ import types
+ import unittest
++from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
++# 模型程序與 CLI 收證共用同一個程序群清理實作，不另抄一份。
++sys.path.insert(0, str(ROOT / 'scripts'))
++from test_quality import CaptureTimeout, run_capture_command
++
+ MATERIAL = ROOT / 'governance/eval/test-quality'
+ TASKS = {
+     'pricing': {
+         'brief': '為 total(quantity, unit_price) 補 unittest。兩參數為非負整數；quantity >= 3 時總價乘 95% 並向下取整，其他照原價；任一負數拋 ValueError("negative")。已確認例子：total(3,101)=287，total(2,101)=202，total(0,101)=0。最近修過三件 bug：折扣消失、門檻把 3 排除、錯誤理由回傳其他文字。',
+         'source': 'def total(quantity, unit_price):\n    if quantity < 0 or unit_price < 0:\n        raise ValueError("negative")\n    amount = quantity * unit_price\n    return amount * 95 // 100 if quantity >= 3 else amount\n',
+         'faults': [('no-discount', 'amount * 95 // 100', 'amount'), ('threshold', 'quantity >= 3', 'quantity > 3'), ('reason', '"negative"', '"other"')],
+     },
+     'routing': {
+         'brief': '為 route(user_id, active) 補 unittest。本題 active 只傳入 bool，user_id 只傳入非 bool 的整數或拒絕案例的字串。先驗 user_id 是非負整數（否則 ValueError("invalid-user")），再驗 active 為 True（否則 ValueError("inactive")）；合法用戶 user_id 偶數回 A、奇數回 B。已確認例子 route(2,True)=A、route(3,True)=B。最近修過三件 bug：永遠回 A、漏掉 inactive 拒絕、inactive 的錯誤理由錯。',
+         'source': 'def route(user_id, active):\n    if not isinstance(user_id, int) or user_id < 0:\n        raise ValueError("invalid-user")\n    if not active:\n        raise ValueError("inactive")\n    return "A" if user_id % 2 == 0 else "B"\n',
+@@ -217,49 +220,27 @@ def draft_before_verify(calls):
+     for call in calls:
+         data = call.get('input', {})
+         if call['name'] == 'Bash' and data.get('command', '').strip() == 'python3 verify.py':
+             break
+         if call['name'] == 'Write' and Path(data.get('file_path', '')).name == 'tests.py':
+             draft = data.get('content')
+     return draft
+ 
+ 
+ def model_command(cmd, directory, timeout):
+-    previous = signal.getsignal(signal.SIGTERM)
+-
+-    def interrupted(signum, frame):
+-        raise ValueError('model interrupted by signal ' + str(signum))
+-
+-    signal.signal(signal.SIGTERM, interrupted)
+-    proc = None
+     try:
+-        proc = subprocess.Popen(cmd, cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+-                                text=True, start_new_session=True)
+-        try:
+-            stdout, stderr = proc.communicate(timeout=timeout)
+-        except subprocess.TimeoutExpired as exc:
+-            try:
+-                os.killpg(proc.pid, signal.SIGKILL)
+-            except ProcessLookupError:
+-                pass
+-            exc.stdout, exc.stderr = proc.communicate()
+-            raise
+-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+-    finally:
+-        signal.signal(signal.SIGTERM, previous)
+-        if proc is not None:
+-            try:
+-                os.killpg(proc.pid, signal.SIGKILL)
+-            except ProcessLookupError:
+-                pass
+-            if proc.poll() is None:
+-                proc.communicate()
++        returncode, stdout, stderr = run_capture_command(cmd, timeout, cwd=directory)
++    except CaptureTimeout as exc:
++        raise subprocess.TimeoutExpired(cmd, timeout, output=exc.stdout.decode(errors='replace'),
++                                        stderr=exc.stderr.decode(errors='replace')) from exc
++    return subprocess.CompletedProcess(cmd, returncode, stdout.decode(errors='replace'),
++                                       stderr.decode(errors='replace'))
+ 
+ 
+ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
+     tools = 'Read,Write,Bash' if behavior else ('Read,Skill' if native else 'Read')
+     cmd = ['claude', '-p', prompt, '--model', model, '--effort', 'low',
+            '--strict-mcp-config', '--setting-sources', 'project' if native else '', '--no-session-persistence', '--permission-mode', 'dontAsk',
+            '--tools', tools, '--allowedTools', 'Read', '--output-format', 'stream-json', '--verbose', '--system-prompt', system]
+     if native:
+         cmd += ['--settings', json.dumps({'disableAllHooks': True, 'disableBundledSkills': True, 'autoMemoryEnabled': False, 'skillOverrides': {'design': 'off', 'doctor': 'off', 'plugin-authoring': 'off'}}), '--allowedTools', 'Skill(lumos-project-notes)']
+     else:
+@@ -352,20 +333,21 @@ def main():
+     if args.child:
+         return child_main()
+     if args.verify:
+         print(json.dumps(score(args.verify, Path('tests.py').read_text()), ensure_ascii=False, indent=2))
+         return 0
+     if not args.run or not args.out:
+         ap.error('Use --run --out NEW_DIRECTORY for the frozen model experiment')
+     args.out.mkdir(parents=True, exist_ok=False)
+     manifest = json.loads(suite_file.read_text())
+     manifest['runner_sha256'] = sha(Path(__file__).read_text())
++    manifest['process_runner_sha256'] = sha((ROOT / 'scripts/test_quality.py').read_text())
+     manifest['tasks'] = TASKS
+     docs = {arm: (MATERIAL/manifest.get('handbooks', {}).get(arm, f'handbook-{arm}.md')).read_text() for arm in manifest['arms']}
+     manifest['handbook_sha256'] = {arm: sha(doc) for arm, doc in docs.items()}
+     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+     rows = []
+     jobs = selected_jobs(manifest, args.lane)
+     manifest['selected_lane'] = args.lane
+     (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+     for index, (lane, case, repeat) in enumerate(jobs):
+         arms = ['baseline', 'candidate'] if index % 2 == 0 else ['candidate', 'baseline']
+diff --git a/governance/eval/test_test_quality_handbook.py b/governance/eval/test_test_quality_handbook.py
+index cdf098f236141093111427fa0ea4e1e76dac3d57..6ca761c478c070d4156a3fd2fc9f2a90cf6be718 100644
+--- a/governance/eval/test_test_quality_handbook.py
++++ b/governance/eval/test_test_quality_handbook.py
+@@ -187,14 +187,52 @@ class ModelCommandTests(unittest.TestCase):
+         self.assertTrue(pidfile.exists(), "worker actually launched before launcher error")
+         pid = int(pidfile.read_text())
+         self.addCleanup(
+             lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+         )
+         deadline = time.monotonic() + 2
+         while self.alive(pid) and time.monotonic() < deadline:
+             time.sleep(0.02)
+         self.assertFalse(self.alive(pid))
+ 
++    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
++    def test_exited_model_with_stream_holding_worker_is_not_timeout(self):
++        fake = self.root / "claude"
++        fake.write_text(
++            "#!" + sys.executable + "\nimport subprocess,sys,time\n"
++            "p=subprocess.Popen([sys.executable,'-c',"
++            "'import time; print(\"worker-holds-stream\",flush=True); time.sleep(60)'])\n"
++            "time.sleep(0.3)\nprint('model-done',p.pid,flush=True)\n"
++        )
++        fake.chmod(0o755)
++        started = time.monotonic()
++        result = ev.model_command([str(fake)], self.root, 5)
++        self.assertLess(time.monotonic() - started, 3, "exited model is not a timeout")
++        self.assertEqual(result.returncode, 0)
++        words = result.stdout.split()
++        self.assertIn("worker-holds-stream", words, "worker really shared the model stream")
++        pid = int(words[words.index("model-done") + 1])
++        self.addCleanup(
++            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++        )
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
++
++    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
++    def test_model_timeout_keeps_partial_stream(self):
++        fake = self.root / "claude"
++        fake.write_text(
++            "#!" + sys.executable + "\nimport time\n"
++            "print('{\"type\":\"system\",\"subtype\":\"init\"}',flush=True)\ntime.sleep(60)\n"
++        )
++        fake.chmod(0o755)
++        with self.assertRaises(subprocess.TimeoutExpired) as caught:
++            ev.model_command([str(fake)], self.root, 1)
++        partial = caught.exception.stdout
++        partial = partial.decode() if isinstance(partial, bytes) else partial
++        self.assertIn('"subtype":"init"', partial)
+ 
+ 
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/scripts/lumos b/scripts/lumos
+index c4eec535504126cf0fe7cb69a0610ab9fe277f5f..0ff7783f28530356689ec4b5fafa7e6a335b9916 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49214,21 +49214,21 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '8300fc5d8eb135456e62ef69310b794cb8634acb9b3ecb5bd3477eb1bf10801e', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': 'fb5401e4e98478a16a8d2eb256ba7914baf1dc2a6b5e1ab3f352718cb4106903'}
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': '783da6236f0110c7bc5e03068149074b497ae0e9ee86e1265e84b131097e388d'}
+ 
+ 
+ def _test_quality_bundle_sources():
+     folder = Path(__file__).resolve().parent
+     required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+     if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
+         raise ValueError("配套指紋清單未對齊")
+     sources = {}
+     for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
+         with (folder / name).open("rb") as stream:
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index 750e5cf34709a4655f41b9927dc564158f2021c3..5635ebbd9c50061dabb219375c87ab0ccb3c0f3e 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -39,20 +39,32 @@ def validate_suite_counts(root):
+             continue
+         cases = [n for n in suite.iter() if xml_tag(n) == 'testcase']
+         observed = {'tests': len(cases)}
+         for field, tag in [('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')]:
+             observed[field] = sum(any(xml_tag(c) == tag for c in case) for case in cases)
+         for field, count in observed.items():
+             if field in suite.attrib and int(suite.get(field)) != count:
+                 raise ValueError('suite summary inconsistent with testcase rows: ' + field)
+ 
+ 
++class CaptureTimeout(ValueError):
++    """Deadline reached; keeps the partial streams for callers that archive them."""
++
++    def __init__(self, stdout=b'', stderr=b''):
++        super().__init__('timeout; never detected')
++        self.stdout, self.stderr = stdout, stderr
++
++
++class CaptureInterrupted(ValueError):
++    """SIGTERM reached the runner; callers must stop instead of treating it as one bad input."""
++
++
+ def terminate_group(proc):
+     try:
+         os.killpg(proc.pid, signal.SIGKILL)
+     except ProcessLookupError:
+         pass
+     proc.wait()
+ 
+ 
+ def read_ready_output(selector, ready, buffers):
+     for key, _ in ready:
+@@ -64,44 +76,44 @@ def read_ready_output(selector, ready, buffers):
+         if len(buffers[key.data]) > LIMIT:
+             raise ValueError('output exceeds 10 MiB')
+ 
+ 
+ def run_capture_command(command, timeout, cwd=None, env=None):
+     import time
+     buffers = {'stdout': bytearray(), 'stderr': bytearray()}
+     previous = signal.getsignal(signal.SIGTERM)
+ 
+     def interrupted(signum, frame):
+-        raise ValueError('execution interrupted by signal ' + str(signum))
++        raise CaptureInterrupted('execution interrupted by signal ' + str(signum))
+ 
+     proc = None
+     group_stopped = False
+     signal.signal(signal.SIGTERM, interrupted)
+     try:
+         proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, start_new_session=True)
+         deadline = time.monotonic() + timeout
+         with selectors.DefaultSelector() as selector:
+             selector.register(proc.stdout, selectors.EVENT_READ, 'stdout')
+             selector.register(proc.stderr, selectors.EVENT_READ, 'stderr')
+             while selector.get_map():
+                 remaining = deadline - time.monotonic()
+                 if remaining <= 0:
+-                    raise ValueError('timeout; never detected')
++                    raise CaptureTimeout(bytes(buffers['stdout']), bytes(buffers['stderr']))
+                 read_ready_output(selector, selector.select(min(remaining, 0.1)), buffers)
+                 if proc.poll() is not None and not group_stopped:
+                     terminate_group(proc)
+                     group_stopped = True
+         try:
+             proc.wait(timeout=max(0, deadline - time.monotonic()))
+         except subprocess.TimeoutExpired as exc:
+-            raise ValueError('timeout; never detected') from exc
++            raise CaptureTimeout(bytes(buffers['stdout']), bytes(buffers['stderr'])) from exc
+         return proc.returncode, bytes(buffers['stdout']), bytes(buffers['stderr'])
+     finally:
+         signal.signal(signal.SIGTERM, previous)
+         if proc is not None and not group_stopped:
+             terminate_group(proc)
+         if proc is not None:
+             proc.stdout.close()
+             proc.stderr.close()
+ 
+ 
+diff --git a/scripts/test_quality_scan.py b/scripts/test_quality_scan.py
+index c689ec449f5def3abf7c057e616ec14d7ef1c8cf..e808d126ad36625fe7f42fe13848a798fcfdf3e9 100644
+--- a/scripts/test_quality_scan.py
++++ b/scripts/test_quality_scan.py
+@@ -276,40 +276,41 @@ def inspect_python_file(path, entry, report, models, check_helpers):
+         entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
+         aliases, lines = imports(tree), source.splitlines()
+         entry['tests_with_known_assertions'] = sum(any(list(assertions(st, check_helpers)) for st in fn.body) for fn in tests)
+         for fn in tests:
+             report['findings'].extend(inspect_test(fn, path, aliases, models, lines, check_helpers))
+     except errors as exc:
+         entry.update(status='error', reason=str(exc))
+ 
+ 
+ def main(argv=None, *, args=None):
+-    from test_quality_semgrep import scan as semgrep_scan
+     started = time.monotonic()
+     if args is None:
+         parser = add_scan_arguments(argparse.ArgumentParser(description=__doc__))
+         args = parser.parse_args(argv)
+     report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+               'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
+               'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
+                   '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
+                   '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
+     report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
+     report['assertion_helpers'] = args.check_helper
+     models = load_models(args.implementation, report)
+     files = discover(args.paths, report)
+     for path in files:
+         language = LANGUAGES.get(path.suffix, 'unknown')
+         entry = {'path': str(path), 'language': language}
+         report['inputs'].append(entry)
+         if language != 'python':
+             if args.semgrep and language != 'unknown':
++                # 只有選配 backend 需要共用程序 runner；純 Python 掃描不載入它。
++                from test_quality_semgrep import scan as semgrep_scan
+                 backend_entry, found = semgrep_scan(path, language, str(Path(args.semgrep).resolve()) if '/' in args.semgrep else args.semgrep)
+                 entry.update(backend_entry)
+                 report['findings'].extend(found)
+             else:
+                 entry.update(status='unsupported', reason='optional Semgrep adapter not enabled')
+             continue
+         inspect_python_file(path, entry, report, models, args.check_helper)
+     if not report['inputs']:
+         report['inputs'].append({'path': ', '.join(str(p) for p in args.paths), 'status': 'no_tests', 'reason': 'no test candidates discovered'})
+     report['complete'] = bool(report['inputs']) and all(i['status'] == 'scanned' for i in report['inputs']) and all(i['status'] == 'parsed' for i in report['implementations'])
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+index 0205eb7e24e4b7be5fc6aa69db7b19ce4dffd299..a85a651fc5322dff4305571e44e35164b7428f0d 100644
+--- a/scripts/test_quality_semgrep.py
++++ b/scripts/test_quality_semgrep.py
+@@ -1,20 +1,22 @@
+ # SPDX-FileCopyrightText: 2026 Enzo Hsieh
+ # SPDX-License-Identifier: MIT
+ """選配 Semgrep CE 來源語法適配器；只用本機固定規則掃描快照。"""
+ import hashlib
+ import json
+ import os
+ from pathlib import Path
+ import tempfile
+ 
+-from test_quality import run_capture_command
++from test_quality import CaptureInterrupted, CaptureTimeout, run_capture_command
++
++BACKEND_TIMEOUT = 40
+ 
+ PATTERNS = {
+     'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
+             'expect($X)->toBe($X)', 'expect($X)->toEqual($X)'],
+     'kotlin': ['assertEquals($X, $X, ...)'],
+     'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
+     'swift': ['XCTAssertEqual($X, $X, ...)'],
+     'csharp': ['Assert.Equal($X, $X)', 'Assert.AreEqual($X, $X, ...)', '$X.Should().Be($X, ...)'],
+     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+     'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+@@ -63,33 +65,32 @@ def scan(path, language, executable):
+         with tempfile.TemporaryDirectory(prefix='lumos-static-') as temp:
+             root = Path(temp)
+             source = root / ('test_snapshot' + path.suffix)
+             source.write_bytes(raw)
+             rules = root / 'rules.json'
+             rules.write_text(json.dumps(config), encoding='utf-8')
+             env.update(SEMGREP_SEND_METRICS='off', SEMGREP_SETTINGS_FILE=str(root/'settings.yml'))
+             command = [executable, 'scan', '--config', str(rules), '--json', '--quiet',
+                        '--metrics', 'off', '--disable-version-check', '--no-git-ignore',
+                        '--oss-only', '--strict', '--timeout', '5', str(source)]
+-            returncode, stdout, _ = run_capture_command(command, 40, cwd=root, env=env)
++            returncode, stdout, _ = run_capture_command(command, BACKEND_TIMEOUT, cwd=root, env=env)
+             result = json.loads(stdout.decode('utf-8'))
+             if not isinstance(result, dict) or not isinstance(result.get('results'), list) or not isinstance(result.get('errors'), list):
+                 raise ValueError('invalid Semgrep report shape')
+             entry['backend_version'] = result.get('version', 'unknown')
+             entry['backend_errors'] = result['errors']
+             paths = result.get('paths')
+             if not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list):
+                 raise ValueError('missing scanned snapshot evidence')
+             scanned = paths['scanned']
+             if returncode != 0 or result['errors'] or str(source) not in scanned:
+                 entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=returncode)
+                 return entry, findings
+             findings.extend(backend_findings(result, source, path, raw))
+             entry['status'] = 'scanned'
+-    except ValueError as exc:
+-        if str(exc) == 'timeout; never detected':
+-            entry.update(status='timeout', reason='backend timed out')
+-        else:
+-            entry.update(status='unavailable', reason=str(exc))
+-    except (OSError, UnicodeError, KeyError, TypeError, IndexError) as exc:
++    except CaptureInterrupted:
++        raise
++    except CaptureTimeout:
++        entry.update(status='timeout', reason='backend timed out')
++    except (OSError, UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+         entry.update(status='unavailable', reason=str(exc))
+     return entry, findings
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+index e78a68089efa0ff233e2efd4c8b85dcc530f49b1..9a6f43946c092a2e0ca9b1795052b1ece4e33b62 100644
+--- a/scripts/test_test_quality_cli.py
++++ b/scripts/test_test_quality_cli.py
+@@ -443,28 +443,38 @@ class QualityCLI(unittest.TestCase):
+         deadline = time.monotonic() + 2
+         while self.alive(pid) and time.monotonic() < deadline:
+             time.sleep(0.02)
+         self.assertFalse(self.alive(pid))
+ 
+     @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+     def test_failed_capture_stops_worker_that_inherits_streams(self):
+         command = [
+             sys.executable,
+             "-c",
+-            "import subprocess,sys; "
+-            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+-            "print('launcher-failed',flush=True); sys.exit(1)",
++            "import subprocess,sys,time; "
++            "p=subprocess.Popen([sys.executable,'-c',"
++            "'import time; print(\"worker-holds-stream\",flush=True); time.sleep(60)']); "
++            "time.sleep(0.3); print('launcher-failed',p.pid,flush=True); sys.exit(1)",
+         ]
+         module = self.quality_module()
+-        rc, out, _ = module.run_capture_command(command, 1)
++        rc, out, _ = module.run_capture_command(command, 5)
+         self.assertEqual(rc, 1)
+-        self.assertEqual(out.strip(), b"launcher-failed")
++        lines = out.decode().split()
++        self.assertIn("worker-holds-stream", lines, "worker really shared the captured stream")
++        pid = int(lines[lines.index("launcher-failed") + 1])
++        self.addCleanup(
++            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++        )
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
+ 
+     @staticmethod
+     def lumos_module():
+         from importlib.machinery import SourceFileLoader
+ 
+         loader = SourceFileLoader("quality_lumos_control", str(TOOL))
+         spec = importlib.util.spec_from_loader(loader.name, loader)
+         module = importlib.util.module_from_spec(spec)
+         loader.exec_module(module)
+         return module
+diff --git a/scripts/test_test_quality_scan.py b/scripts/test_test_quality_scan.py
+index 39f160a2f12a825ee4223063cc1d03020275aace..b7f01f3207f19c883498e0d7221d5434958a6bf2 100644
+--- a/scripts/test_test_quality_scan.py
++++ b/scripts/test_test_quality_scan.py
+@@ -1,16 +1,17 @@
+ """CLI 行為考卷；預期結果來自人工分類，不呼叫掃描器算 oracle。"""
+ import json
+ import importlib.util
+ from importlib.machinery import SourceFileLoader
+ import os
+ from pathlib import Path
++import signal
+ import subprocess
+ import sys
+ import tempfile
+ import time
+ import unittest
+ 
+ TOOL = Path(__file__).with_name('test_quality_scan.py')
+ SEMGREP_TOOL = Path(__file__).with_name('test_quality_semgrep.py')
+ 
+ 
+@@ -20,25 +21,21 @@ class ScanTests(unittest.TestCase):
+         run = subprocess.run(
+             ['ps', '-p', str(pid), '-o', 'stat='], capture_output=True, text=True
+         )
+         return run.returncode == 0 and bool(run.stdout.strip()) and not run.stdout.strip().startswith('Z')
+ 
+     @staticmethod
+     def semgrep_module():
+         loader = SourceFileLoader('test_quality_semgrep_control', str(SEMGREP_TOOL))
+         spec = importlib.util.spec_from_loader(loader.name, loader)
+         module = importlib.util.module_from_spec(spec)
+-        sys.path.insert(0, str(SEMGREP_TOOL.parent))
+-        try:
+-            loader.exec_module(module)
+-        finally:
+-            sys.path.pop(0)
++        loader.exec_module(module)
+         return module
+ 
+     def scan(self, source, implementation=None, suffix='.py', check_helper=None):
+         with tempfile.TemporaryDirectory() as td:
+             root = Path(td)
+             test = root / ('test_example' + suffix)
+             test.write_text(source, encoding='utf-8')
+             before = test.read_bytes()
+             command = [sys.executable, str(TOOL), str(test), '--json']
+             if check_helper:
+@@ -231,20 +228,133 @@ class ScanTests(unittest.TestCase):
+             run = subprocess.run(
+                 [sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)],
+                 capture_output=True, text=True, timeout=20,
+             )
+             out = json.loads(run.stdout)
+             self.assertEqual(run.returncode, 2)
+             self.assertFalse(out['complete'])
+             self.assertEqual(out['inputs'][0]['status'], 'unavailable')
+             self.assertIn('invalid finding location', out['inputs'][0]['reason'])
+ 
++    @staticmethod
++    def stream_holding_semgrep(root, mode):
++        record = root / 'calls.jsonl'
++        fake = root / 'semgrep'
++        fake.write_text(
++            '#!' + sys.executable + '\n'
++            'import json,os,subprocess,sys,time\nfrom pathlib import Path\n'
++            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\n"
++            'with open(' + repr(str(record)) + ",'a') as f:\n"
++            "    f.write(json.dumps({'pid':p.pid,'cwd_has_rules':Path('rules.json').is_file(),"
++            "'metrics':os.environ.get('SEMGREP_SEND_METRICS')})+'\\n')\n"
++            'if ' + repr(mode) + " == 'hang':\n    time.sleep(60)\n"
++            "source=sys.argv[-1]\nprint(json.dumps({'results':[],'errors':[],"
++            "'paths':{'scanned':[source]},'version':'fixture'}),flush=True)\n"
++            'sys.exit(3 if ' + repr(mode) + " == 'nonzero' else 0)\n"
++        )
++        fake.chmod(0o700)
++        return fake, record
++
++    def calls(self, record):
++        rows = [json.loads(line) for line in record.read_text().splitlines()]
++        for row in rows:
++            self.addCleanup(lambda pid=row['pid']: os.kill(pid, 9) if self.alive(pid) else None)
++        return rows
++
++    def assert_stopped(self, pid):
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
++
++    @unittest.skipUnless(os.name == 'posix', 'POSIX process group qualification')
++    def test_semgrep_backend_outcomes_stop_stream_holding_worker(self):
++        cases = [('success', 'scanned', None), ('nonzero', 'error', 3), ('hang', 'timeout', None)]
++        for mode, status, returncode in cases:
++            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
++                root = Path(td)
++                source = root / 'Test.swift'
++                source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
++                fake, record = self.stream_holding_semgrep(root, mode)
++                module = self.semgrep_module()
++                module.BACKEND_TIMEOUT = 2
++                started = time.monotonic()
++                entry, _ = module.scan(source, 'swift', str(fake))
++                [call] = self.calls(record)
++                self.assertTrue(call['cwd_has_rules'], 'backend ran inside the isolated rules directory')
++                self.assertEqual(call['metrics'], 'off')
++                self.assertEqual(entry['status'], status, entry)
++                self.assertEqual(entry.get('returncode'), returncode)
++                limit = 6 if mode == 'hang' else 1.5
++                self.assertLess(time.monotonic() - started, limit, 'exit is classified by the launcher, timeout by its budget')
++                self.assert_stopped(call['pid'])
++
++    @unittest.skipUnless(os.name == 'posix', 'POSIX process group qualification')
++    def test_sigterm_during_semgrep_stops_scan_and_backend(self):
++        with tempfile.TemporaryDirectory() as td:
++            root = Path(td)
++            sources = [root / 'A.swift', root / 'B.swift']
++            for source in sources:
++                source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
++            fake, record = self.stream_holding_semgrep(root, 'hang')
++            process = subprocess.Popen(
++                [sys.executable, str(TOOL), *map(str, sources), '--json', '--semgrep', str(fake)],
++                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
++            )
++            self.addCleanup(lambda: process.kill() if process.poll() is None else None)
++            deadline = time.monotonic() + 10
++            while not record.exists() and time.monotonic() < deadline:
++                time.sleep(0.02)
++            self.assertTrue(record.exists(), 'first backend really started before the signal')
++            process.send_signal(signal.SIGTERM)
++            process.communicate(timeout=5)
++            self.assertNotEqual(process.returncode, 0)
++            [call] = self.calls(record)
++            self.assert_stopped(call['pid'])
++
++    def test_semgrep_report_over_evidence_limit_is_structured_unavailable(self):
++        with tempfile.TemporaryDirectory() as td:
++            root = Path(td)
++            source = root / 'Test.swift'
++            source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
++            fake = root / 'semgrep'
++            fake.write_text(
++                '#!' + sys.executable + '\nimport json,sys\n'
++                "sys.stderr.write('x' * (11 * 1024 * 1024))\n"
++                "print(json.dumps({'results':[],'errors':[],'paths':{'scanned':[sys.argv[-1]]},'version':'fixture'}))\n"
++            )
++            fake.chmod(0o700)
++            run = subprocess.run(
++                [sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)],
++                capture_output=True, text=True, timeout=20,
++            )
++            out = json.loads(run.stdout)
++            self.assertEqual(run.returncode, 2)
++            self.assertFalse(out['complete'])
++            self.assertEqual(out['inputs'][0]['status'], 'unavailable')
++            self.assertIn('output exceeds 10 MiB', out['inputs'][0]['reason'])
++
++    def test_python_scan_does_not_need_semgrep_runner_bundle(self):
++        with tempfile.TemporaryDirectory() as td:
++            root = Path(td)
++            for name in ('test_quality_scan.py', 'test_quality_semgrep.py'):
++                (root / name).write_bytes((TOOL.parent / name).read_bytes())
++            self.assertFalse((root / 'test_quality.py').exists(), 'core runner really absent')
++            sample = root / 'test_sample.py'
++            sample.write_text('def test_total():\n    assert 1 + 1 == 2\n')
++            run = subprocess.run(
++                [sys.executable, str(root / 'test_quality_scan.py'), str(sample), '--json'],
++                capture_output=True, text=True, timeout=20, cwd=root,
++            )
++            self.assertEqual(run.returncode, 0, run.stderr)
++            self.assertEqual(json.loads(run.stdout)['inputs'][0]['status'], 'scanned')
++
+     def test_corpus_runner_reports_unavailable_languages(self):
+         runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'
+         run = subprocess.run([sys.executable, str(runner)], capture_output=True, text=True, timeout=30)
+         out = json.loads(run.stdout)
+         self.assertEqual(run.returncode, 2)
+         self.assertFalse(out['complete'])
+         self.assertFalse(out['supported_checks_match'])
+         python_cases = [c for c in out['cases'] if c['language'] == 'python']
+         self.assertEqual(len(python_cases), 4)
+         self.assertEqual({c['status'] for c in python_cases}, {'verified_for_supported_rules'})
