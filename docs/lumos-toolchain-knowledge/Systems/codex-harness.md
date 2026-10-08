@@ -50,6 +50,7 @@ verified_by:
   - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
   - "[[Verification/持久用量帳第五輪修補驗證]]"
   - "[[Verification/持久用量帳第五輪審查修補驗證]]"
+  - "[[Verification/持久用量帳第六輪審查修補驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -131,6 +132,8 @@ WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建�
 
 PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
 
-PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、裝置與 FIFO 以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
+PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、字元裝置以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
 
-WHY: 原子寫入時，既有普通檔只有「是自己擁有的」才沿用它的權限位元，新建或別人擁有的一律照 umask [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但別人預先放好的寬權限檔若被沿用，替換後的結果檔會讓對方可寫] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+PITFALL: 第五輪的輸出修補自己又帶出三個洞：把 FIFO 也當裝置「直接寫」，沒人讀時整批跑完後永遠卡住（修前會換成普通檔，不會卡）；為了讓新檔照 umask，把整個程序的 umask 設成 0 再設回來，正是 lumos 自己的原子寫入原語註明否決的做法；開跑前檢查對歷史檔漏查父目錄可寫、FIFO 與檔名錯誤 [出處:code-probe-postreview-dispatch-ledger r6 CON6-01/ARCH6-01/COR6-01/BND6-02] [根因:新增「直接寫」分支時沒有逐一列出每種目標型別在取代與追加兩種模式下的行為，也沒先讀專案既有的原子寫入原語] [test:t_probe_boundary_fifth_round_output_edges]。現在的規則：取代模式只有字元裝置直接寫（不阻塞開檔、開到的不是字元裝置就不寫），FIFO、socket、連結都換成普通檔；追加模式只收普通檔與字元裝置；暫存檔跟 lumos 原語一樣用獨佔建立加 0o666 讓 umask 自己生效。證據 [[Verification/持久用量帳第六輪審查修補驗證]]。
+
+WHY: 原子寫入時，既有普通檔只有「自己擁有、而且只有一個名字」才沿用它的權限位元，新建、別人擁有或有多個名字的一律照 umask；這跟 lumos 原語對既有檔一律沿用權限不同 [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01、r6 SEC6-02/ARCH6-02 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但探針的輸出目錄可能是共用的：別人預先放好的寬權限檔、或連到我某個寬權限檔的硬連結若被沿用，替換後的結果檔會讓對方可寫；lumos 原語寫的是使用者自己的筆記庫，沒有這個威脅] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]

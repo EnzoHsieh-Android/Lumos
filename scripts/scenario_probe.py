@@ -18,31 +18,45 @@
   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
 """
-import argparse, ast, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+import argparse, ast, errno, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _euid():
+    """目前的有效使用者;單獨一個函式,測試才能只換掉這一處,不必改整個程序的 os 模組。"""
+    return os.geteuid()
+
+
 def _output_target_problem(path, replace=True):
-    """跑模型之前先看輸出位置寫不寫得出去;回問題描述或 None。replace=False 是追加用的歷史檔。"""
+    """跑模型之前先看輸出位置寫不寫得出去;回問題描述或 None。replace=False 是追加用的歷史檔。
+    規則跟 _atomic_write_bytes 與歷史檔追加一一對應:取代模式下,字元裝置直接寫、其他非目錄的東西
+    (連結、FIFO、socket)會被換成普通檔;追加模式只收普通檔與字元裝置,其餘都會寫到別處或卡住。
+    要新建(或取代)時父目錄必須可寫。"""
     path = Path(path)
     try:
         st = path.lstat()
     except FileNotFoundError:
         st = None
-    if st is not None and stat.S_ISLNK(st.st_mode) and not replace:
-        return f"{path} 是符號連結,追加會寫進連結指向的檔"
-    if st is not None and stat.S_ISDIR(st.st_mode):
-        return f"{path} 是目錄"
-    if st is not None and (stat.S_ISCHR(st.st_mode) or stat.S_ISFIFO(st.st_mode)):
-        return None
-    if st is not None and stat.S_ISREG(st.st_mode) and not os.access(path, os.W_OK):
-        return f"{path} 不可寫"
+    except OSError as exc:                      # 檔名超過上限、父路徑是普通檔……
+        return f"{path} 不能用({exc.strerror})"
+    if st is not None:
+        if stat.S_ISDIR(st.st_mode):
+            return f"{path} 是目錄"
+        if stat.S_ISCHR(st.st_mode):
+            return None
+        if stat.S_ISREG(st.st_mode):
+            if not os.access(path, os.W_OK):
+                return f"{path} 不可寫"
+            if not replace:
+                return None
+        elif not replace:
+            return f"{path} 不是一般檔案(符號連結、FIFO 或 socket),追加會寫到別處或卡住"
     if not path.parent.is_dir():
         return f"{path.parent} 不存在或不是目錄"
-    if replace and not os.access(path.parent, os.W_OK | os.X_OK):
-        return f"{path.parent} 不可寫,沒辦法在同目錄放暫存檔"
+    if not os.access(path.parent, os.W_OK | os.X_OK):
+        return f"{path.parent} 不可寫,沒辦法" + ("在同目錄放暫存檔" if replace else "建立歷史檔")
     return None
 
 
@@ -52,40 +66,50 @@ def _atomic_write_text(path, content):
 
 def _atomic_write_bytes(path, data):
     """以同目錄暫存檔原子取代目標,不跟隨既有目標的符號連結(消融腳本也 import 這一份,不另抄)。
-    既有普通檔是自己擁有的就沿用它的權限位元(先前審查要求保留使用者刻意設的 0640 這類權限);新建檔、
-    或既有檔屬於別人(可能是別人預先放好、帶群組/他人可寫的檔)一律跟新建檔一樣用 0o666 去掉 umask。既有目標是裝置或 FIFO
-    (例如 /dev/null)時照舊直接寫入;既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
+    暫存檔跟 lumos 的 _write_lf 一樣用 O_EXCL 加 0o666 建立,讓 umask 自己生效——★不把整個程序的
+    umask 設成 0 再設回來★,那一瞬間別的執行緒建的檔會拿到錯的權限。
+    既有普通檔只有「自己擁有、而且只有這一個名字」時才沿用它的權限位元(先前審查要求保留使用者刻意設的
+    0640 這類權限);別人擁有的、或有多個名字(硬連結,可能是別人連到我某個寬權限檔)的,一律照新建檔。
+    既有目標是字元裝置(例如 /dev/null)時照舊直接寫入;FIFO、socket 這類照修前一樣換成普通檔(直接開
+    沒人讀的 FIFO 會永遠卡住)。既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
     path = Path(path)
     try:
         old = path.lstat()
     except FileNotFoundError:
         old = None
-    if old is not None and (stat.S_ISCHR(old.st_mode) or stat.S_ISFIFO(old.st_mode)):
-        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+    if old is not None and stat.S_ISCHR(old.st_mode):
+        # 不阻塞地開,開到的若已經不是字元裝置(檢查後被換掉)就不寫
+        fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "wb") as fh:
+            if not stat.S_ISCHR(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "輸出位置在檢查後被換掉,已不是字元裝置", str(path))
+            os.set_blocking(fd, True)
             fh.write(data)
         return
     if old is not None and stat.S_ISREG(old.st_mode) and not os.access(path, os.W_OK):
-        raise PermissionError(13, "輸出檔不可寫", str(path))
-    umask = os.umask(0)
-    os.umask(umask)
-    mode = 0o666 & ~umask
-    if old is not None and stat.S_ISREG(old.st_mode) and old.st_uid == os.geteuid():
-        mode = stat.S_IMODE(old.st_mode) & 0o666
-    tmp_path = None
-    try:
+        raise PermissionError(errno.EACCES, "輸出檔不可寫", str(path))
+    keep_mode = (stat.S_IMODE(old.st_mode) & 0o666
+                 if old is not None and stat.S_ISREG(old.st_mode)
+                 and old.st_uid == _euid() and old.st_nlink == 1 else None)
+    while True:
         # 暫存檔名固定短,不帶目標檔名:目標檔名接近 255 bytes 上限時才不會超長
-        with tempfile.NamedTemporaryFile("wb", dir=path.parent,
-                                         prefix=".probe-out-", suffix=".tmp", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        tmp_path = path.with_name(f".probe-out-{os.getpid()}-{secrets.token_hex(4)}.tmp")
+        try:
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o666)
+            break
+        except FileExistsError:
+            continue
+    try:
+        with os.fdopen(fd, "wb") as tmp:
             tmp.write(data)
-            os.fchmod(tmp.fileno(), mode)
+            if keep_mode is not None:
+                os.fchmod(tmp.fileno(), keep_mode)
             tmp.flush()
             os.fsync(tmp.fileno())
         os.replace(tmp_path, path)
-    finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def tool_calls_from_codex_json(lines):
@@ -1362,7 +1386,8 @@ def main():
                                                        "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
                                                        "skills_health_bad": bad}, ensure_ascii=False, indent=1))
         if a.history:
-            hist_fd = os.open(a.history, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
+            hist_fd = os.open(a.history, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK
+                              | getattr(os, "O_NOFOLLOW", 0), 0o666)   # 跑的期間被換成連結或 FIFO 時報錯,不跟過去也不卡住
             with os.fdopen(hist_fd, "a", encoding="utf-8") as hf:
                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")

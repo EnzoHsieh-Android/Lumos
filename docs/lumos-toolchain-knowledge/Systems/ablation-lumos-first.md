@@ -89,8 +89,8 @@ WHY: 用量帳控制從真探針 CLI 與消融派工入口驗輸出協定及副�
 
 PITFALL: HTML escape 不會阻止 Markdown 圖片／連結語法，也不會移除 ESC、BEL 等終端控制字元；報表在 Markdown 預覽或直接印到終端時仍會把外部 meta 當控制內容。第五輪改為先將不可列印字元轉成可見序列，再轉義會啟動行內 Markdown 的字元；同時保留既有事故檔名字面。防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_formal_dispatch_fail_closed]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
 
-PITFALL: 只轉義 `[]()!` 時，GitHub 類 Markdown 仍會把報表裡的裸網址、`www.` 與 email 自動變成可點連結、`~~` 變刪除線；而先轉控制字元再轉義反斜線，會讓真的 ESC 與原本就寫著 `\x1b` 的文字呈現成同一個樣子 [出處:code-probe-postreview-dispatch-ledger r5 BND5-03/BND5-04/SEC5-02] [根因:轉義集合只依當時見過的語法挑選，且字面反斜線沒有先加倍] [test:t_probe_boundary_fourth_round_report_and_provenance]。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
+PITFALL: 只轉義 `[]()!` 時，GitHub 類 Markdown 仍會把報表裡的裸網址、`www.` 與 email 自動變成可點連結、`~~` 變刪除線；而先轉控制字元再轉義反斜線，會讓真的 ESC 與原本就寫著 `\x1b` 的文字呈現成同一個樣子 [出處:code-probe-postreview-dispatch-ledger r5 BND5-03/BND5-04/SEC5-02] [根因:轉義集合只依當時見過的語法挑選，且控制字元的寫法跟一般文字撞得出同一個樣子] [test:t_probe_boundary_fourth_round_report_and_provenance]。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。第五輪先用「字面反斜線加倍」區分，第六輪發現代價是每個字面反斜線（例如 Windows 路徑）都顯示成兩個，改成下面那條 WHY 的標記寫法 [出處:code-probe-postreview-dispatch-ledger r6 CTR6-03]。
 
-WHY: 原子寫入不在消融腳本另留一份，改從探針匯入同一份實作，跟本檔對判準採「單一實作來源」的做法一致 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-01] [因:兩份逐行相同的實作在第五輪已經開始分岔（權限與裝置處理只修了一邊）] [不選:兩邊各修一次（下次仍會漂移）] [test:t_probe_boundary_postreview_cli_entry_and_modes]
+WHY: 原子寫入不在消融腳本另留一份，跟判準併在同一行從探針匯入，跟本檔對判準採「單一實作來源」的做法一致 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-01、r6 ARCH6-04/CTR6-02] [因:兩份逐行相同的實作在第五輪已經開始分岔（權限與裝置處理只修了一邊）] [不選:兩邊各修一次（下次仍會漂移）] [test:t_probe_boundary_fifth_round_output_edges]（那支直接拿消融腳本寫一個長檔名新檔，舊的本地拷貝會寫不出來、權限也不同）
 
-WHY: 報表裡的外部文字把不可列印字元轉成看得見的 `\xNN` 序列，不像 lumos 主程式清理注入內容那樣換成空白 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-02] [因:消融報表是事後追查的證據，要能從報表看出原值是哪個字元；注入清理的目的只是不讓內容控制版面，原值不重要] [不選:沿用換空白（追查時看不出是 ESC 還是 BEL）] [test:t_probe_boundary_fourth_round_report_and_provenance]
+WHY: 報表裡的外部文字把不可列印字元寫成看得見的 `⟦U+XXXX⟧` 標記（標記字元 `⟦` 本身也照寫），不像 lumos 主程式清理注入內容那樣換成空白 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-02、r6 CTR6-03] [因:消融報表是事後追查的證據，要能從報表一對一看出原值是哪個字元；注入清理的目的只是不讓內容控制版面，原值不重要] [不選:沿用換空白（追查時看不出是 ESC 還是 BEL）；用反斜線序列（得把字面反斜線加倍才分得開，路徑會顯示成兩個反斜線）] [test:t_probe_boundary_fourth_round_report_and_provenance]

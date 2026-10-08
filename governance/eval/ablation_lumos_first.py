@@ -23,16 +23,12 @@ DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answer
 ARMS = ["with", "without"]
 
 
-def _atomic_write_text(path, content):
-    _atomic_write_bytes(path, content.encode("utf-8"))
-
-
 # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
 # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
 sys.path.insert(0, str(ROOT / "scripts"))
-from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,
-                            attempt_ledger_remaining, ProbeAttemptLedgerError)  # noqa: E402  ★單一實作來源★
-from scenario_probe import _atomic_write_bytes  # 原子寫入同樣只留探針那一份
+from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,  # noqa: E402  ★單一實作來源★
+                            attempt_ledger_remaining, ProbeAttemptLedgerError,
+                            _atomic_write_bytes, _atomic_write_text)  # 原子寫入同樣只留探針那一份
 
 
 def load_ids(files):
@@ -390,15 +386,16 @@ def render_md(s, meta):
     a, b = s["arms"]["with"], s["arms"]["without"]
     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
     def visible(ch):
+        # 不可列印字元寫成 ⟦U+XXXX⟧;標記字元 ⟦ 本身也照寫,原文因此一對一還原得回去,字面反斜線不必加倍
+        if ch == "⟦":
+            return "⟦U+27E6⟧"
         if ch.isprintable():
             return ch
         if unicodedata.category(ch) == "Zs":
             return " "                                   # 全形空白這類一般空白照空白顯示
-        n = ord(ch)
-        return f"\\x{n:02x}" if n <= 0xff else (f"\\u{n:04x}" if n <= 0xffff else f"\\U{n:08x}")
+        return f"⟦U+{ord(ch):04X}⟧"
     def text(x):
-        # 先把字面反斜線加倍,真控制字元轉出的 \xNN 才不會跟原本就寫著 \xNN 的文字撞成同一個樣子
-        raw = str(x).replace("\r", " ").replace("\n", " ").replace("\\", "\\\\")
+        raw = str(x).replace("\r", " ").replace("\n", " ")
         raw = "".join(visible(ch) for ch in raw)
         # : @ ~ 與 www. 也跳脫:GFM 會把裸網址、email 自動變連結、~~ 變刪除線
         md = re.sub(r"([\\`*_\[\]()!|:@~])", r"\\\1", html.escape(raw))

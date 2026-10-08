@@ -1,0 +1,646 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+index c39a83ef..0187d587 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
++++ b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+@@ -81,10 +81,16 @@ PITFALL: 純合併把壞meta覆寫成來源未知會抹掉救援證據，報表
+ 
+ PITFALL: 可封存的結果檔與日期目錄不是硬額度來源；失效候選被排除計分後，舊計數會讓已啟動模型的額度消失。[根因:把計分視圖混當啟動用量帳][出處:code-probe-postreview-dispatch-ledger r3 G10/G11][test:test_attempt_ledger_failed_launch_archive_and_cross_date_keep_quota] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ PITFALL: 備註檔與探針同用組別前綴，健康掃描曾將操作者備註視為事故，造成無效停批。[根因:僅依組別前綴辨認正式結果][出處:code-probe-postreview-dispatch-ledger r3 G14][test:test_ablation_notes_are_not_results_but_legacy_shards_are]
+ 
+ WHY: 用量帳控制案例保留在既有探針消融測試群，使用外部模型邊界假替身與暫存帳，避免驗證本身觸碰真模型或使用者額度。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ WHY: 用量帳控制從真探針 CLI 與消融派工入口驗輸出協定及副作用計數，不用重抄計數公式來製造綠燈。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ PITFALL: HTML escape 不會阻止 Markdown 圖片／連結語法，也不會移除 ESC、BEL 等終端控制字元；報表在 Markdown 預覽或直接印到終端時仍會把外部 meta 當控制內容。第五輪改為先將不可列印字元轉成可見序列，再轉義會啟動行內 Markdown 的字元；同時保留既有事故檔名字面。防回歸 [test:t_probe_boundary_fourth_round_report_and_provenance][test:t_probe_boundary_formal_dispatch_fail_closed]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
++
++PITFALL: 只轉義 `[]()!` 時，GitHub 類 Markdown 仍會把報表裡的裸網址、`www.` 與 email 自動變成可點連結、`~~` 變刪除線；而先轉控制字元再轉義反斜線，會讓真的 ESC 與原本就寫著 `\x1b` 的文字呈現成同一個樣子 [出處:code-probe-postreview-dispatch-ledger r5 BND5-03/BND5-04/SEC5-02] [根因:轉義集合只依當時見過的語法挑選，且字面反斜線沒有先加倍] [test:t_probe_boundary_fourth_round_report_and_provenance]。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
++
++WHY: 原子寫入不在消融腳本另留一份，改從探針匯入同一份實作，跟本檔對判準採「單一實作來源」的做法一致 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-01] [因:兩份逐行相同的實作在第五輪已經開始分岔（權限與裝置處理只修了一邊）] [不選:兩邊各修一次（下次仍會漂移）] [test:t_probe_boundary_postreview_cli_entry_and_modes]
++
++WHY: 報表裡的外部文字把不可列印字元轉成看得見的 `\xNN` 序列，不像 lumos 主程式清理注入內容那樣換成空白 [出處:code-probe-postreview-dispatch-ledger r5 ARCH5-02] [因:消融報表是事後追查的證據，要能從報表看出原值是哪個字元；注入清理的目的只是不讓內容控制版面，原值不重要] [不選:沿用換空白（追查時看不出是 ESC 還是 BEL）] [test:t_probe_boundary_fourth_round_report_and_provenance]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index 972e73e8..881c610a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -42,20 +42,21 @@ summary: |-
+ verified_by:
+   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
+   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
+   - "[[Verification/2026-10-03_修復穩定性試行第1案續辦]]"
+   - "[[Verification/2026-10-04_修復穩定性試行第1案例外續修]]"
+   - "[[Verification/2026-10-04_探針隔離與清理收斂]]"
+   - "[[Verification/2026-10-04_消融派工正式審查修正]]"
+   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
+   - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
+   - "[[Verification/持久用量帳第五輪修補驗證]]"
++  - "[[Verification/持久用量帳第五輪審查修補驗證]]"
+ decisions:
+   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
+     id: d1
+     context: 外家席額度常撞上限:2026-09-11 代碼審第二輪 Codex 席跑到一半「You've hit your usage limit」,換 Sol 也被擋到額度重置(額度整個帳號共用);舊分配是散文/程式碼 terra、高風險 astra
+     why_chosen: 降一級模型讓同一段額度撐更多席;三個席名保留,派工詞與範本不用改,之後要拉開只改 _CODEX_SEAT_MODEL
+     decided: 2026-09-11
+     valid: true
+ ---
+ # codex-harness
+ 
+@@ -122,10 +123,14 @@ PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互
+ 
+ PITFALL: 只把外層 `--runs` 縮到窗口剩餘額度，探針內用量上限重試仍可額外啟動模型。r2 反例用真 `main` 流程證明兩次重試後須停止第三次呼叫並把批次標失效；`--max-attempts` 在每次模型呼叫前扣額，`--exact-id=值` 容許合法短線開頭題號。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r2-concurrency-v2.md` 與 Python argparse 官方長選項語法；防回歸 `t_probe_boundary_formal_retry_budget`、`t_probe_boundary_formal_second_round_regressions`。調整重試或選題時從實際模型啟動數重驗。
+ 
+ PITFALL: r3 證明探針內部 `--max-attempts` 雖能擋第三次模型呼叫，外層失敗批次與隔日重跑仍會重得滿額，故不可把單次子程序上限稱作五小時帳號上限。出處 [[Verification/2026-10-04_消融派工正式審查修正]] 的 r3 G10–G11，重現指令在 `r3-intake.md`。改外層額度來源或重試行為時，先跑「失敗／歸檔／同窗口重跑」與「跨午夜」兩組反例。
+ 
+ WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或解析器故障返還已消耗名額；採 SQLite 原子交易沿用 Python 標準庫、維持零第三方依賴。[出處:Projects/探針持久用量帳_計劃] [[Verification/2026-10-08_持久用量帳暫存控制驗證]]
+ 
+ WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建成；`verified_by` 連到 pending 的 [[Verification/2026-10-08_持久用量帳第四輪代碼審停點]] 是負面驗證與下一入口，不表示持久用量帳分支已通過或可推送。
+ 
+ PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
++
++PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、裝置與 FIFO 以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
++
++WHY: 原子寫入時，既有普通檔只有「是自己擁有的」才沿用它的權限位元，新建或別人擁有的一律照 umask [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但別人預先放好的寬權限檔若被沿用，替換後的結果檔會讓對方可寫] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 9352e224..51b1af2e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -141,11 +141,11 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
+ - ★接入專案那份退不乾淨,這是限制不是待辦★:整個工具裡沒有任何地方登記「這台機器上有哪些專案裝過」,所以沒有清單可以枚舉,也就無法確認是不是都更新/退回了。想要可保證得先做一個安裝登記機制,那是獨立題目。回頭條件=下次因為「某個接入專案跑的是舊版」踩到坑時,重新評估要不要做。單源 [[Projects/收工點名問版本控制_計劃]]〈回退〉節。
+ 
+ ## 相關
+ - 對稱反安裝細節:[[Systems/lumos-deinit]](唯一有獨立設計稿 `docs/design/2026-06-26-lumos-deinit.md` 的生命週期指令)。
+ - 圖譜讀指令群:`scripts/lumos` `new`/`set`/`lint`/`doctor` 等:[[Systems/lumos-cli-read]]。
+ - 圖譜寫指令群(`new`/`set`/`rename` 等):[[Systems/lumos-cli-write]]。
+ - 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
+ - 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
+ - 分發機制脈絡:user-memory `lumos-update-distribution`。
+ 
+-PITFALL: 無控制終端的 session leader 用 `os.open(tty, O_RDWR)` 開 pty slave，可能把它取得成 controlling terminal；關閉後 runner 收到 SIGHUP 129，讓全套測試沒有摘要就中斷 [出處:[[Verification/TTY確認不取得控制終端驗證]]] [防回歸:t_confirm_tty_unit]。`_confirm_tty` 開 tty 時在平台有提供才加 `O_NOCTTY`，保留 Windows fallback 與既有三階確認語意。
++PITFALL: 無控制終端的 session leader 用 `os.open(tty, O_RDWR)` 開 pty slave，可能把它取得成 controlling terminal；關閉後 runner 收到 SIGHUP 129，讓全套測試沒有摘要就中斷 [出處:[[Verification/TTY確認不取得控制終端驗證]]] [根因:沒有控制終端的 session leader 開終端裝置時，核心會把它當成控制終端] [test:t_confirm_tty_no_ctty_session_survives]。既有的 `t_confirm_tty_unit` 在有控制終端的開發機上走不到這條路，拿掉 `O_NOCTTY` 照樣全綠，不能當防回歸；新測試另開子程序，先斷言它是 session leader 且開不了 `/dev/tty` 才驗收不到掛斷。`_confirm_tty` 開 tty 時在平台有提供才加 `O_NOCTTY`，保留 Windows fallback 與既有三階確認語意。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index 9c6375a6..6174cb60 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -585,10 +585,12 @@ Python 棧支援上線之後,同一行 `requests.post` 也觸發了兩題 Python
+ 這一節的存在就是為了把那個步驟變成清單,不靠記得。
+ 
+ ## 宣告支援 3.9,但測試只在 3.12 上跑過(2026-09-29)
+ 
+ CI 用 3.12 跑,平常推送的終端機路徑上先找到的又是 Homebrew 的新版 Python,所以兩邊都綠;
+ 換一個路徑上先找到系統內建 3.9 的環境一推,推送前的閘就紅了。**綠燈只證明「在新版上驗過」,
+ 不證明「在宣告的最低版本上驗過」**——這是環境版的「根本沒去驗」。
+ 
+ PITFALL:[2026-09-29 推送代碼審資料狀態鏡頭時被擋,出處見 [[Projects/代碼審資料狀態鏡頭_計劃]]]測試裡混進三處 3.9 沒有的寫法:f-string 大括號裡帶反斜線(3.12 才允許,`scripts/test_lumos.py` 整支在 3.9 下解析失敗,9 月 6 日起就這樣)、`tomllib`(3.11,改走 `_toml_loads`:沒有就找另一支 3.11+ 直譯器代解,找不到判紅不跳過)、`enterContext`(3.11,在 [[Systems/autonomous-iteration-loop]] 那支測試,改成跟同檔一樣用 with 包住整段)。重現:`/usr/bin/python3 -c "import ast;ast.parse(open('scripts/test_lumos.py',encoding='utf-8').read())"`;防回歸測試 [test:t_codex_d6_agent_toml]。★沒有機械守衛★:CI 沒有 3.9 那一格,下次有人寫進 3.10+ 的東西,照樣只有碰巧用 3.9 推送的人會撞到。
+ (2026-09-29 已由 [[Projects/最低Python版本改3.14_計劃]] 回答:最低版本改成 3.14,CI 跑 3.14;「3.9 能不能解析」只剩開頭檢查需要的三類檔,CI 用釘版本的 ruff 以 py39 查。原本這裡的回頭點撤掉。)
++
++PITFALL: 修「無控制終端的 session leader 開 tty 會取得控制終端、關掉後收到掛斷」時,拿既有的 `t_confirm_tty_unit` 當防回歸釘,但它在開發者的終端機裡跑時,執行器本身有控制終端,根本走不到被修的那條路——拿掉 `O_NOCTTY` 照樣六項全綠,是第④型「現場走不到被測分支」 [出處:code-probe-postreview-dispatch-ledger r5 CTR5-01/PLT5-03] [根因:測試沒有自己建出「新 session、沒有控制終端」的現場,只靠碰巧由哪種執行器啟動] [test:t_confirm_tty_no_ctty_session_survives]。新測試另開子程序以新 session 啟動,先斷言自己是 session leader 且開不了 `/dev/tty`,再驗收不到掛斷;拿掉 `O_NOCTTY` 時現場斷言照綠、子程序被掛斷,證據見 [[Verification/持久用量帳第五輪審查修補驗證]]。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md
+index ded1c6b0..af19548e 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-08_持久用量帳第四輪代碼審停點.md
+@@ -23,11 +23,13 @@ plan_refs:
+ ## 修補回歸與測試資格
+ 
+ 本輪發現沒有取得 after-only 行為證據：候選檔與終端控制 sink、等待超時、Markdown 語法在 before/after 都存在；兩個架構項是新增測試的保留力不足。修補期間曾漏匯入 `re`，造成 7 個消融 unittest errors 與 17 個探針邊界失敗；原始紅燈保留，補匯入後針對性控制為 32 tests OK 與 138 passed / 0 failed。因此可以說這個已知修補回歸已修好，不能說整個分支驗證完成。
+ 
+ 完整父死子活控制另已通過：父程序遭終止後，假子探針仍完成候選檔；只歸檔 pending/candidate 後，持久帳仍拒絕下一次派工，真模型呼叫數為零。這補齊 [[Verification/2026-10-08_持久用量帳暫存控制驗證]] 的 S2 資格。
+ 
+ 全套 `python3 scripts/test_lumos.py` 約 22 分鐘後以 129 中斷，沒有完成摘要，原因未判定且沒有人工終止證據。它不能計為通過，也不能以針對性子集代替。
+ 
+ ## 下一個入口
+ 
++**後續（2026-10-08 20:49）**：使用者在本停點具體呈現後明確授權開第五輪修補與重審，已記成治理帳的 cap-decision（extra-round，涵蓋 r1–r4）。第五輪的修補與審查結果見 [[Verification/持久用量帳第五輪修補驗證]] 與 [[Verification/持久用量帳第五輪審查修補驗證]]；下面這段是當時的停點規則，保留原文。
++
+ 本輪是第三輪上限後由使用者裁決開出的唯一額外輪。依代碼審迴圈規則，到頂且處置閘未過須再次由人裁決；未取得裁決前只允許保存卷證與圖譜，不開第五輪、不宣告 code-loop pass、不推送此分支。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md b/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md
+index ae86a53a..f3aa58f7 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/TTY確認不取得控制終端驗證.md
+@@ -1,22 +1,24 @@
+ ---
+ type: verification
+ status: pass
+ date: 2026-10-08
+-valid_under: macOS、Python 3.14、以 os.openpty 建立的無控制終端 session；不包含 Windows
+-revalidate_when: 改動 _confirm_tty 的 tty 開啟旗標、select 等待或 t_confirm_tty_unit 時
++valid_under: macOS、Python 3.14;修補的防回歸只在測試子程序以新 session 啟動且沒有控制終端時才走得到(t_confirm_tty_no_ctty_session_survives 先斷言此現場);不包含 Windows
++revalidate_when: 改動 _confirm_tty 的 tty 開啟旗標、select 等待、t_confirm_tty_unit 或 t_confirm_tty_no_ctty_session_survives,或測試執行器改變啟動 session 的方式時
+ tags:
+   - type/verification
+   - status/pass
+   - scope/platform
+ plan_refs:
+   - "[[Projects/bootstrap一鍵對稱_計劃]]"
+ ---
+ # TTY確認不取得控制終端驗證
+ 
+ ## 結論
+ 
+ `t_confirm_tty_unit` 在修補前穩定走到第 2 階 pty 成功路徑後收到 SIGHUP，測試 runner 以 129 結束，第四個 timeout 控制沒有執行。原因是無控制終端的 session leader 用 `os.open(..., O_RDWR)` 開 pty slave 時可能取得它作 controlling terminal；關閉 pty 後 kernel 對該 session 發 SIGHUP。
+ 
+ `_confirm_tty` 開 tty 時加入平台有提供才使用的 `O_NOCTTY`。同一條既有測試修後完成六項斷言並以 rc0 結束，涵蓋 isatty 輸入、EOF fallback、pty 提示與 timeout；這不是以新測試重抄實作，而是讓原本已能翻紅的端到端控制跑到底。
+ 
++**第五輪審查更正（2026-10-08）**：上段「同一條既有測試……讓原本已能翻紅的端到端控制跑到底」只在測試執行器本身是「沒有控制終端的 session leader」時成立。在一般終端機裡跑 `t_confirm_tty_unit`，拿掉 `O_NOCTTY` 仍是六項全綠（合約圖譜席與平台席各自重現）。所以另加 `t_confirm_tty_no_ctty_session_survives`：子程序以新 session 啟動，先斷言自己是 session leader 且開不了 `/dev/tty`，再走 pty 確認並關閉；拿掉 `O_NOCTTY` 時子程序收到掛斷、測試翻紅，修後通過。證據見 [[Verification/持久用量帳第五輪審查修補驗證]]。
++
+ 本輪只建立 POSIX/macOS 資格。Windows 不使用這個旗標，仍沿既有平台驗證邊界。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪審查修補驗證.md b/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪審查修補驗證.md
+new file mode 100644
+index 00000000..53a07f7a
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/持久用量帳第五輪審查修補驗證.md
+@@ -0,0 +1,32 @@
++---
++type: verification
++status: pass
++date: 2026-10-08
++valid_under: macOS、Python 3.14、假模型與暫存目錄;只驗第五輪七席審查提出的輸出寫入、歷史追加、等待分段、報表轉義與無控制終端 session 這幾條,不代表全套推送閘或代碼審已通過
++revalidate_when: 改動 scenario_probe 的原子寫入或開跑前檢查、--history 追加、等待重試、ablation 報表轉義、_confirm_tty 開 tty 旗標,或下一輪全新審查席提出新反例時
++tags:
++  - type/verification
++  - status/pass
++  - scope/evals
++plan_refs:
++  - "[[Projects/探針持久用量帳_計劃]]"
++---
++# 持久用量帳第五輪審查修補驗證
++
++## 結論
++
++第五輪七席（正確性、併發資源、邊界、合約圖譜、平台終端、架構對齊、資安）審同一份凍結差異，修前 05e87b54、修後 4d765d5c。唯一的重大問題是終端修補的防回歸測試沒有現場：在有控制終端的開發機上，拿掉 `O_NOCTTY` 照樣全綠。其餘小問題同根因收成五組，一次修掉，每組先寫會紅的測試再修。
++
++- 終端：新增 `t_confirm_tty_no_ctty_session_survives`，子程序以新 session 啟動並先斷言自己是 session leader、開不了 `/dev/tty`。
++- 輸出寫入：新建檔照 umask、只有自己擁有的既有檔才沿用權限、唯讀檔照舊拒絕、裝置與 FIFO 直接寫、暫存檔名固定短名；`--out` 與 `--history` 在呼叫模型前就檢查；歷史檔以不跟隨連結的方式追加。原子寫入收斂成探針一份，消融腳本改匯入。
++- 等待：補 `--wait-on-limit 301` 的案例，證明先等 300 秒、再只等剩下 1 秒。
++- 報表：字面反斜線先加倍，超過四位的碼點用八位寫法，一般空白照空白，另轉義 `:`、`@`、`~` 與 `www.`，擋掉自動連結與刪除線。
++
++## 驗證
++
++- 修補前新測試的紅燈：權限、唯讀、長檔名、報表三條各自翻紅（原始輸出 `governance/review-reports/code-probe-postreview-dispatch-ledger/r5-red-before-fix.log`）。
++- 修補後：探針相關子集 396 passed / 0 failed、終端確認 8 passed、消融單元測試 32 OK、消融子集 4 passed。
++- 還原翻紅：拿掉 `O_NOCTTY`、等待改成一次睡滿、拿掉開跑前檢查、不設權限、報表不擋自動連結、不沿用自己檔權限、別人的檔也沿用，七種改壞版本各自讓對應測試翻紅（輸出 `r5-mutation-checks.log`）。拿掉 `O_NOCTTY` 那次，現場斷言照綠、子程序收到掛斷，證明測試真的走到被修的那條路。
++- 兩支產品檔的程式規則告警數與修前相同（修補帶進的兩條已移除）。
++
++全套測試與下一輪全新審查席的回歸掃描不在這篇的範圍，結果記在卷證目錄。
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index dc6cb290..3d5836b0 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -7,63 +7,39 @@
+ 第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗。
+ 現在只准單路派工，探針帶 --wait-on-limit 撞到就等重置再補同一場；並行需先驗證在途取消。
+ 
+ 四個尺(讀法預註冊在計劃筆記,這裡只算數不解讀):
+   M1 通過率(期望指令在禁做動作之前)  M2 整場有沒有敲過 lumos
+   M3 首次敲 lumos 的步數中位(只算有敲的場)  M4 答案題(id 以 a 開頭)正確率
+ 
+ 用法:
+   governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
+ """
+-import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, tempfile, time
++import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, time, unicodedata
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ PROBE = ROOT / "scripts" / "scenario_probe.py"
+ DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
+ ARMS = ["with", "without"]
+ 
+ 
+-def _atomic_write_bytes(path, data):
+-    """同目錄暫存後取代目標；不跟隨既有目標符號連結。"""
+-    mode = None
+-    try:
+-        old = path.lstat()
+-        if stat.S_ISREG(old.st_mode):
+-            mode = stat.S_IMODE(old.st_mode) & 0o666
+-    except FileNotFoundError:
+-        pass
+-    tmp_path = None
+-    try:
+-        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".",
+-                                         delete=False) as tmp:
+-            tmp_path = Path(tmp.name)
+-            tmp.write(data)
+-            if mode is not None:
+-                os.fchmod(tmp.fileno(), mode)
+-            tmp.flush()
+-            os.fsync(tmp.fileno())
+-        os.replace(tmp_path, path)
+-    finally:
+-        if tmp_path is not None:
+-            tmp_path.unlink(missing_ok=True)
+-
+-
+ def _atomic_write_text(path, content):
+     _atomic_write_bytes(path, content.encode("utf-8"))
+ 
+ 
+ # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
+ # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
+ sys.path.insert(0, str(ROOT / "scripts"))
+ from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,
+                             attempt_ledger_remaining, ProbeAttemptLedgerError)  # noqa: E402  ★單一實作來源★
++from scenario_probe import _atomic_write_bytes  # 原子寫入同樣只留探針那一份
+ 
+ 
+ def load_ids(files):
+     """回題目 id 清單；重複 id 會讓精確選題命中多題，故在派工前拒絕。"""
+     ids, seen = [], set()
+     for f in files:
+         for ln in (ROOT / f).read_text(encoding="utf-8").splitlines():
+             if ln.strip():
+                 qid = json.loads(ln)["id"]
+                 if (not isinstance(qid, str) or not qid.strip() or "," in qid
+@@ -406,26 +382,34 @@ def merge(out_dir, expected_ids, runs):
+     class_counts = {}
+     for c in classes.values():
+         class_counts[c] = class_counts.get(c, 0) + 1
+     return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+             "question_class": classes, "class_counts": class_counts}
+ 
+ 
+ def render_md(s, meta):
+     a, b = s["arms"]["with"], s["arms"]["without"]
+     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
++    def visible(ch):
++        if ch.isprintable():
++            return ch
++        if unicodedata.category(ch) == "Zs":
++            return " "                                   # 全形空白這類一般空白照空白顯示
++        n = ord(ch)
++        return f"\\x{n:02x}" if n <= 0xff else (f"\\u{n:04x}" if n <= 0xffff else f"\\U{n:08x}")
+     def text(x):
+-        raw = str(x).replace("\r", " ").replace("\n", " ")
+-        raw = "".join(ch if ch.isprintable() else
+-                      (f"\\x{ord(ch):02x}" if ord(ch) <= 0xff else f"\\u{ord(ch):04x}")
+-                      for ch in raw)
+-        return re.sub(r"([\\`*_\[\]()!|])", r"\\\1", html.escape(raw))
++        # 先把字面反斜線加倍,真控制字元轉出的 \xNN 才不會跟原本就寫著 \xNN 的文字撞成同一個樣子
++        raw = str(x).replace("\r", " ").replace("\n", " ").replace("\\", "\\\\")
++        raw = "".join(visible(ch) for ch in raw)
++        # : @ ~ 與 www. 也跳脫:GFM 會把裸網址、email 自動變連結、~~ 變刪除線
++        md = re.sub(r"([\\`*_\[\]()!|:@~])", r"\\\1", html.escape(raw))
++        return re.sub(r"(?i)(www)\.", r"\1\\.", md)
+     lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
+              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
+              f"只算有效場(撞用量上限/儀器例外不算)。", "",
+              "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
+              "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
+              f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
+              f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
+              f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
+              f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
+              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 359775a8..ee6a300c 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -17,38 +17,76 @@
+ 用法:
+   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
+                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
+ """
+ import argparse, ast, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ 
+ 
++def _output_target_problem(path, replace=True):
++    """跑模型之前先看輸出位置寫不寫得出去;回問題描述或 None。replace=False 是追加用的歷史檔。"""
++    path = Path(path)
++    try:
++        st = path.lstat()
++    except FileNotFoundError:
++        st = None
++    if st is not None and stat.S_ISLNK(st.st_mode) and not replace:
++        return f"{path} 是符號連結,追加會寫進連結指向的檔"
++    if st is not None and stat.S_ISDIR(st.st_mode):
++        return f"{path} 是目錄"
++    if st is not None and (stat.S_ISCHR(st.st_mode) or stat.S_ISFIFO(st.st_mode)):
++        return None
++    if st is not None and stat.S_ISREG(st.st_mode) and not os.access(path, os.W_OK):
++        return f"{path} 不可寫"
++    if not path.parent.is_dir():
++        return f"{path.parent} 不存在或不是目錄"
++    if replace and not os.access(path.parent, os.W_OK | os.X_OK):
++        return f"{path.parent} 不可寫,沒辦法在同目錄放暫存檔"
++    return None
++
++
+ def _atomic_write_text(path, content):
+-    """以同目錄暫存檔原子取代目標，避免跟隨既有目標符號連結。"""
++    _atomic_write_bytes(path, content.encode("utf-8"))
++
++
++def _atomic_write_bytes(path, data):
++    """以同目錄暫存檔原子取代目標,不跟隨既有目標的符號連結(消融腳本也 import 這一份,不另抄)。
++    既有普通檔是自己擁有的就沿用它的權限位元(先前審查要求保留使用者刻意設的 0640 這類權限);新建檔、
++    或既有檔屬於別人(可能是別人預先放好、帶群組/他人可寫的檔)一律跟新建檔一樣用 0o666 去掉 umask。既有目標是裝置或 FIFO
++    (例如 /dev/null)時照舊直接寫入;既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
+     path = Path(path)
+-    mode = None
+     try:
+         old = path.lstat()
+-        if stat.S_ISREG(old.st_mode):
+-            mode = stat.S_IMODE(old.st_mode) & 0o666
+     except FileNotFoundError:
+-        pass
++        old = None
++    if old is not None and (stat.S_ISCHR(old.st_mode) or stat.S_ISFIFO(old.st_mode)):
++        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
++        with os.fdopen(fd, "wb") as fh:
++            fh.write(data)
++        return
++    if old is not None and stat.S_ISREG(old.st_mode) and not os.access(path, os.W_OK):
++        raise PermissionError(13, "輸出檔不可寫", str(path))
++    umask = os.umask(0)
++    os.umask(umask)
++    mode = 0o666 & ~umask
++    if old is not None and stat.S_ISREG(old.st_mode) and old.st_uid == os.geteuid():
++        mode = stat.S_IMODE(old.st_mode) & 0o666
+     tmp_path = None
+     try:
+-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
+-                                         prefix=path.name + ".", delete=False) as tmp:
++        # 暫存檔名固定短,不帶目標檔名:目標檔名接近 255 bytes 上限時才不會超長
++        with tempfile.NamedTemporaryFile("wb", dir=path.parent,
++                                         prefix=".probe-out-", suffix=".tmp", delete=False) as tmp:
+             tmp_path = Path(tmp.name)
+-            tmp.write(content)
+-            if mode is not None:
+-                os.fchmod(tmp.fileno(), mode)
++            tmp.write(data)
++            os.fchmod(tmp.fileno(), mode)
+             tmp.flush()
+             os.fsync(tmp.fileno())
+         os.replace(tmp_path, path)
+     finally:
+         if tmp_path is not None:
+             tmp_path.unlink(missing_ok=True)
+ 
+ 
+ def tool_calls_from_codex_json(lines):
+     """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
+@@ -1064,20 +1102,25 @@ def main():
+                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
+     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
+     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
+     a = ap.parse_args()
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
+     if a.max_per_window < 0:
+         print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
+     if a.max_attempts < 0:
+         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
++    # 輸出寫不出去要在花模型額度之前就知道,不能整批跑完才炸
++    for flag, target, replace in (("--out", a.out, True), ("--history", a.history, False)):
++        problem = target and _output_target_problem(target, replace=replace)
++        if problem:
++            print(f"✗ {flag} {problem},停手", file=sys.stderr); return 2
+     if a.exact_id is not None and a.only:
+         print("✗ --exact-id 與 --only 不可並用", file=sys.stderr); return 2
+     if (a.exact_id is not None and (not a.exact_id.strip() or not a.exact_id.isprintable())):
+         print("✗ --exact-id 不可為空白或含不可列印字元", file=sys.stderr); return 2
+     scs = []
+     for f in a.scenarios.split(","):
+         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
+     if a.exact_id is not None:
+         scs = [s for s in scs if s.get("id") == a.exact_id]
+         if len(scs) != 1:
+@@ -1312,21 +1355,22 @@ def main():
+             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
+             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
+             _atomic_write_text(Path(a.out), json.dumps({"results": results, "passed": p, "total": n,
+                                                        "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+                                                        "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+                                                        "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+                                                        "sandbox_version": SANDBOX_VERSION,
+                                                        "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
+                                                        "skills_health_bad": bad}, ensure_ascii=False, indent=1))
+         if a.history:
+-            with open(a.history, "a", encoding="utf-8") as hf:
++            hist_fd = os.open(a.history, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
++            with os.fdopen(hist_fd, "a", encoding="utf-8") as hf:
+                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
+                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
+         if retained is not None:
+             print(f"保留最後副本: {retained}", file=sys.stderr)
+     if bad or fatal:
+         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+     return 0 if p == n else 1
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a4cced58..4c40bf22 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -9639,20 +9639,57 @@ def t_confirm_tty_unit():
+         os.environ["LUMOS_TTY_TIMEOUT"] = "0.2"
+         check("confirm ④: 有 tty 無人答 → timeout None", m._confirm_tty("q? ") is None)
+         os.close(master2); os.close(slave2)
+     finally:
+         m.sys.stdin = real_stdin
+         builtins.input = real_input
+         os.environ.pop("LUMOS_TTY", None)
+         os.environ.pop("LUMOS_TTY_TIMEOUT", None)
+ 
+ 
++def t_confirm_tty_no_ctty_session_survives():
++    """TTY 確認在「新 session、沒有控制終端」的程序裡開 pty 再關掉,程序不能收到掛斷(全套第 3 片 rc129)。
++    上面那支在開發者終端機裡跑時,拿掉 O_NOCTTY 也照綠——那個環境根本走不到「開 tty 就變成控制終端」這條路;
++    所以另開子程序並先斷言現場成立:它是 session leader,而且開不了 /dev/tty。"""
++    import os, subprocess, sys, textwrap
++    if not hasattr(os, "openpty") or not hasattr(os, "setsid"):
++        raise _SrcOnly("非 POSIX(沒有 pty 與 session),這段沒驗到")
++    code = textwrap.dedent('''
++        import os, sys, time, importlib.util
++        from importlib.machinery import SourceFileLoader
++        loader = SourceFileLoader("lumos_ctty", sys.argv[1])
++        spec = importlib.util.spec_from_loader("lumos_ctty", loader)
++        m = importlib.util.module_from_spec(spec); loader.exec_module(m)
++        leader = os.getsid(0) == os.getpid()
++        try:
++            os.close(os.open("/dev/tty", os.O_RDWR)); has_ctty = True
++        except OSError:
++            has_ctty = False
++        print(f"SCENE leader={leader} ctty={has_ctty}", flush=True)
++        class _Pipe:
++            def isatty(self): return False
++        m.sys.stdin = _Pipe()
++        master, slave = os.openpty()
++        os.environ["LUMOS_TTY"] = os.ttyname(slave)
++        os.write(master, b"y\\n")
++        r = m._confirm_tty("q? ")
++        os.close(master); os.close(slave)
++        time.sleep(0.3)
++        print(f"ALIVE result={r}", flush=True)
++    ''')
++    p = subprocess.run([sys.executable, "-c", code, GRAPHCTL], capture_output=True, text=True,
++                       stdin=subprocess.DEVNULL, start_new_session=True, timeout=60)
++    detail = (p.returncode, p.stdout, p.stderr[-300:])
++    check("現場成立:子程序是 session leader 且沒有控制終端", "SCENE leader=True ctty=False" in p.stdout, detail)
++    check("開 pty 確認後關掉,程序沒收到掛斷", p.returncode == 0 and "ALIVE result=True" in p.stdout, detail)
++
++
+ def _bootstrap_run(cwd, *args, interactive_off=True):
+     """subprocess 跑 bootstrap:假 HOME 隔離+LUMOS_HOME 指真來源(跳過 clone)。
+     interactive_off:stdin=DEVNULL+setsid 真正脫離控制終端機(否則開發機 /dev/tty 開得起來會掛死)。"""
+     import os, subprocess
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     fake = tempfile.mkdtemp(prefix="gctl-bs-home-")
+     kw = dict(cwd=str(cwd), capture_output=True, text=True, timeout=120,
+               env=dict(os.environ, HOME=fake, USERPROFILE=fake, LUMOS_HOME=str(repo)))
+     if interactive_off:
+         kw["stdin"] = subprocess.DEVNULL
+@@ -38446,20 +38483,115 @@ def t_probe_boundary_fifth_round_output_contracts():
+         argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(out)]
+         with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row), \
+              patch.object(mod, "global_skills_health", return_value=[]), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         check("輸出連結不改寫受害檔", rc == 0 and victim.read_text() == "keep", victim.read_text())
+         check("輸出位置改成工具自己的普通 JSON 檔", stat.S_ISREG(out.lstat().st_mode)
+               and json.loads(out.read_text())["passed"] == 1, out.lstat())
+ 
+ 
++def t_probe_boundary_fifth_round_output_edges():
++    """輸出寫入的相鄰路徑:新檔權限照 umask、不沿用舊檔的寬權限、唯讀檔照舊拒絕、長檔名、裝置照寫;
++    輸出或歷史位置有問題要在呼叫模型前擋下,不能整批跑完才炸(第五輪 r5 審查)。"""
++    import tempfile, json, io, contextlib, stat, os
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_fifth_edges")
++    with tempfile.TemporaryDirectory(prefix="probe-r5-edges-") as td:
++        root = Path(td); work = root / "w"; work.mkdir()
++        old_umask = os.umask(0o022)
++        try:
++            with tempfile.NamedTemporaryFile(dir=root, delete=False) as scene:
++                pass
++            check("現場成立:同目錄暫存檔預設 0600,跟 umask 結果不同",
++                  stat.S_IMODE(os.stat(scene.name).st_mode) == 0o600)
++            new = work / "new.json"; mod._atomic_write_text(new, "{}")
++            check("新建輸出檔權限照 umask", stat.S_IMODE(new.stat().st_mode) == 0o644, oct(new.stat().st_mode))
++            mine = work / "mine.json"; mine.write_text("old"); os.chmod(mine, 0o640)
++            mod._atomic_write_text(mine, "{}")
++            check("自己擁有的既有檔照舊保留刻意設的權限", stat.S_IMODE(mine.stat().st_mode) == 0o640,
++                  oct(mine.stat().st_mode))
++            # 別人預先放的寬權限檔:測試機沒有第二個帳號,改讓「我是誰」回不同的 uid,走的是同一條真實判斷
++            wide = work / "wide.json"; wide.write_text("old"); os.chmod(wide, 0o666)
++            with patch.object(mod.os, "geteuid", return_value=wide.stat().st_uid + 1):
++                mod._atomic_write_text(wide, "{}")
++            check("別人擁有的寬權限檔不把群組與他人可寫帶到新檔", stat.S_IMODE(wide.stat().st_mode) == 0o644,
++                  oct(wide.stat().st_mode))
++            ro = work / "ro.json"; ro.write_text("keep"); os.chmod(ro, 0o444)
++            try:
++                mod._atomic_write_text(ro, "{}"); refused = False
++            except PermissionError:
++                refused = True
++            check("既有唯讀檔照舊拒絕寫入且內容不變", refused and ro.read_text() == "keep")
++            long = work / ("a" * 250 + ".json")
++            mod._atomic_write_text(long, "{}")
++            check("檔名剛好 255 bytes 仍寫得出", long.read_text() == "{}")
++            mod._atomic_write_text(Path(os.devnull), "{}")
++            check("裝置目標照舊直接寫入且仍是裝置", stat.S_ISCHR(os.lstat(os.devnull).st_mode))
++            check("寫完不留暫存檔", sorted(p.name for p in work.iterdir())
++                  == sorted(["new.json", "mine.json", "wide.json", "ro.json", long.name]), sorted(p.name for p in work.iterdir()))
++        finally:
++            os.umask(old_umask)
++        source = root / "src"; _probe_boundary_repo(source)
++        q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
++        victim = root / "victim.txt"; victim.write_text("keep")
++        hist = root / "hist.jsonl"; hist.symlink_to(victim)
++        check("現場成立:歷史檔位置真的是符號連結", hist.is_symlink())
++        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++               "limit_hit": False, "source_evidence": None}
++        def run(extra):
++            argv = ["probe", "--repo", str(source), "--scenarios", str(q), *extra]
++            with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row) as model, \
++                 patch.object(mod, "global_skills_health", return_value=[]), \
++                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++                return mod.main(), model.call_count
++        for label, extra in (("輸出父目錄不存在", ["--out", str(root / "missing" / "o.json")]),
++                             ("輸出位置是目錄", ["--out", str(work)]),
++                             ("歷史檔是符號連結", ["--out", str(root / "o.json"), "--history", str(hist)])):
++            rc, calls = run(extra)
++            check(f"{label}:呼叫模型前就擋下", rc == 2 and calls == 0, (rc, calls))
++        check("歷史連結指向的檔沒被追加", victim.read_text() == "keep", victim.read_text())
++        good_hist = root / "good.jsonl"
++        rc, calls = run(["--out", str(root / "o.json"), "--history", str(good_hist)])
++        check("正常輸出與歷史位置照常跑完並追加", rc == 0 and calls == 1
++              and len(good_hist.read_text().splitlines()) == 1, (rc, calls))
++
++
++def t_probe_boundary_wait_over_poll_interval():
++    """--wait-on-limit 大於 300 時仍分段等:每次最多 300 秒,最後一段只等剩餘秒數(第五輪 r5 審查)。"""
++    import tempfile, json, io, contextlib
++    from unittest.mock import patch, call
++    mod = _load_probe_module("sp_fifth_wait")
++    with tempfile.TemporaryDirectory(prefix="probe-r5-wait-") as td:
++        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
++        q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
++        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
++                   "secs": 0, "limit_hit": True, "source_evidence": None}
++        ok = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++              "limit_hit": False, "source_evidence": None}
++        calls = []
++        def limit_twice(*_a, **_k):
++            calls.append(1)
++            return dict(limited) if len(calls) <= 2 else dict(ok)
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "301",
++                "--max-per-window", "0", "--out", str(root / "o.json")]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_twice), \
++             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        check("現場成立:真的撞了兩次上限才過", len(calls) == 3, len(calls))
++        check("先等滿一段 300 秒,再只等剩下的 1 秒", rc == 0
++              and sleeping.call_args_list == [call(300), call(1)], (rc, sleeping.call_args_list))
++
++
+ def t_probe_boundary_fourth_round_result_contracts():
+     """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
+     import tempfile, json, importlib.util
+     spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
+         outdir = Path(td)
+         a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
+         b = {"id": "b", "passed": False, "calls": [], "n_calls": 0}
+@@ -38542,20 +38674,33 @@ def t_probe_boundary_fourth_round_report_and_provenance():
+         summary["skills_health_poisoned"] = [(attack, ["failed"])]
+         md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
+         check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
+         check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
+         markdown = "![run](https://example.invalid/x) [label](https://example.invalid/y)"
+         controls = "prefix\x1b]0;LUMOS\x07suffix"
+         md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
+         check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
+         check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
+               and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
++        # 第五輪:GFM 會把裸網址、www、email 自動變連結,~~ 變刪除線;只擋 [] () 不夠。
++        autolinks = "https://evil.example/x www.evil.example a@b.example ~~s~~"
++        md = ablation.render_md(summary, {"date": autolinks, "claude_version": "v"})
++        check("現場成立:裸網址真的進了報表那一行", "evil" in md, md[:240])
++        check("裸網址、www、email 與刪除線不留可自動連結的原形",
++              all(t not in md for t in ("https://", "www.", "a@b", "~~")), md[:240])
++        # 真的控制字元與「字面寫成 \x1b 的文字」要呈現得不一樣,不然讀報表的人分不出來。
++        esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
++        lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
++        check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
++        md = ablation.render_md(summary, {"date": "\U000e0001　x", "claude_version": "v"})
++        check("超過四位的碼點用八位寫法、全形空白照空白",
++              "U000e0001" in md and "ue0001" not in md and "u3000" not in md, md[:200])
+ 
+ 
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")

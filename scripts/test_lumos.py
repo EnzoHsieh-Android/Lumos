@@ -38510,25 +38510,63 @@ def t_probe_boundary_fifth_round_output_edges():
             mod._atomic_write_text(mine, "{}")
             check("自己擁有的既有檔照舊保留刻意設的權限", stat.S_IMODE(mine.stat().st_mode) == 0o640,
                   oct(mine.stat().st_mode))
-            # 別人預先放的寬權限檔:測試機沒有第二個帳號,改讓「我是誰」回不同的 uid,走的是同一條真實判斷
+            # 別人預先放的寬權限檔:測試機沒有第二個帳號,改讓探針的「目前使用者」回不同的 uid,走的是同一條真實判斷
             wide = work / "wide.json"; wide.write_text("old"); os.chmod(wide, 0o666)
-            with patch.object(mod.os, "geteuid", return_value=wide.stat().st_uid + 1):
+            with patch.object(mod, "_euid", return_value=wide.stat().st_uid + 1):
                 mod._atomic_write_text(wide, "{}")
             check("別人擁有的寬權限檔不把群組與他人可寫帶到新檔", stat.S_IMODE(wide.stat().st_mode) == 0o644,
                   oct(wide.stat().st_mode))
+            # 硬連結能騙過擁有者判斷:別人在輸出位置放一個連到我某個寬權限檔的硬連結
+            mine_wide = root / "mine-wide.json"; mine_wide.write_text("V"); os.chmod(mine_wide, 0o666)
+            linked = work / "linked.json"; os.link(mine_wide, linked)
+            check("現場成立:輸出位置是自己擁有、有兩個名字的檔", linked.stat().st_nlink == 2
+                  and linked.stat().st_uid == os.geteuid())
+            mod._atomic_write_text(linked, "{}")
+            check("有多個名字的檔不沿用權限,原本那個名字內容不變",
+                  stat.S_IMODE(linked.stat().st_mode) == 0o644 and mine_wide.read_text() == "V",
+                  oct(linked.stat().st_mode))
             ro = work / "ro.json"; ro.write_text("keep"); os.chmod(ro, 0o444)
             try:
                 mod._atomic_write_text(ro, "{}"); refused = False
             except PermissionError:
                 refused = True
-            check("既有唯讀檔照舊拒絕寫入且內容不變", refused and ro.read_text() == "keep")
+            if os.geteuid() == 0:
+                # root 的 write_text 本來就寫得進唯讀檔,照修前行為
+                check("root 下唯讀檔照修前一樣寫得進去", not refused and ro.read_text() == "{}")
+            else:
+                check("既有唯讀檔照舊拒絕寫入且內容不變", refused and ro.read_text() == "keep")
+            # 沒人讀的 FIFO:不能卡住,照修前一樣換成普通檔
+            import signal
+            fifo = work / "fifo.json"; os.mkfifo(fifo)
+            def _hang(*_a): raise TimeoutError("寫入 FIFO 卡住")
+            old_alarm = signal.signal(signal.SIGALRM, _hang); signal.alarm(5)
+            try:
+                mod._atomic_write_text(fifo, "{}"); hung = False
+            except TimeoutError:
+                hung = True
+            finally:
+                signal.alarm(0); signal.signal(signal.SIGALRM, old_alarm)
+            check("沒人讀的 FIFO 不會卡住,換成普通檔", not hung and stat.S_ISREG(fifo.lstat().st_mode)
+                  and fifo.read_text() == "{}", hung)
             long = work / ("a" * 250 + ".json")
             mod._atomic_write_text(long, "{}")
             check("檔名剛好 255 bytes 仍寫得出", long.read_text() == "{}")
             mod._atomic_write_text(Path(os.devnull), "{}")
             check("裝置目標照舊直接寫入且仍是裝置", stat.S_ISCHR(os.lstat(os.devnull).st_mode))
             check("寫完不留暫存檔", sorted(p.name for p in work.iterdir())
-                  == sorted(["new.json", "mine.json", "wide.json", "ro.json", long.name]), sorted(p.name for p in work.iterdir()))
+                  == sorted(["new.json", "mine.json", "wide.json", "linked.json", "ro.json", "fifo.json", long.name]),
+                  sorted(p.name for p in work.iterdir()))
+            # 專案的原子寫入原語不碰整個程序的 umask(設成 0 再設回來的那一瞬間,別的執行緒建檔會拿到錯的權限)
+            import inspect
+            check("原子寫入不碰整個程序的 umask", "umask" not in inspect.getsource(mod._atomic_write_bytes).split('"""', 2)[-1])
+            # 消融腳本用的就是這一份:新檔照 umask、長檔名寫得出(舊的本地拷貝是 0600、長檔名會爆)
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("ablation_r6_write", Path(__file__).resolve().parents[1]
+                                                          / "governance/eval/ablation_lumos_first.py")
+            ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+            abl_new = root / ("b" * 250 + ".json"); ablation._atomic_write_text(abl_new, "{}")
+            check("消融腳本的原子寫入新檔照 umask、長檔名寫得出",
+                  stat.S_IMODE(abl_new.stat().st_mode) == 0o644 and abl_new.read_text() == "{}")
         finally:
             os.umask(old_umask)
         source = root / "src"; _probe_boundary_repo(source)
@@ -38545,9 +38583,18 @@ def t_probe_boundary_fifth_round_output_edges():
                  patch.object(mod, "global_skills_health", return_value=[]), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 return mod.main(), model.call_count
-        for label, extra in (("輸出父目錄不存在", ["--out", str(root / "missing" / "o.json")]),
-                             ("輸出位置是目錄", ["--out", str(work)]),
-                             ("歷史檔是符號連結", ["--out", str(root / "o.json"), "--history", str(hist)])):
+        ro_dir = root / "ro-dir"; ro_dir.mkdir(); os.chmod(ro_dir, 0o555)
+        hist_fifo = root / "hist-fifo"; os.mkfifo(hist_fifo)
+        plain = root / "plain.txt"; plain.write_text("x")
+        cases = [("輸出父目錄不存在", ["--out", str(root / "missing" / "o.json")]),
+                 ("輸出位置是目錄", ["--out", str(work)]),
+                 ("輸出檔名超過上限", ["--out", str(root / ("c" * 300 + ".json"))]),
+                 ("輸出的父路徑是普通檔", ["--out", str(plain / "o.json")]),
+                 ("歷史檔是符號連結", ["--out", str(root / "o.json"), "--history", str(hist)]),
+                 ("歷史檔是 FIFO", ["--out", str(root / "o.json"), "--history", str(hist_fifo)])]
+        if os.geteuid() != 0:
+            cases.append(("歷史檔要建在唯讀目錄", ["--out", str(root / "o.json"), "--history", str(ro_dir / "h.jsonl")]))
+        for label, extra in cases:
             rc, calls = run(extra)
             check(f"{label}:呼叫模型前就擋下", rc == 2 and calls == 0, (rc, calls))
         check("歷史連結指向的檔沒被追加", victim.read_text() == "keep", victim.read_text())
@@ -38555,6 +38602,25 @@ def t_probe_boundary_fifth_round_output_edges():
         rc, calls = run(["--out", str(root / "o.json"), "--history", str(good_hist)])
         check("正常輸出與歷史位置照常跑完並追加", rc == 0 and calls == 1
               and len(good_hist.read_text().splitlines()) == 1, (rc, calls))
+        os.chmod(ro_dir, 0o755)
+        # 開跑前檢查過了,模型跑的期間才有人把歷史檔位置換成連結:追加那一步本身也不能跟過去
+        victim2 = root / "victim2.txt"; victim2.write_text("keep")
+        swap_hist = root / "swap.jsonl"
+        def swap_then_ok(*_a, **_k):
+            swap_hist.symlink_to(victim2)
+            return row
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(root / "o3.json"),
+                "--history", str(swap_hist)]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=swap_then_ok), \
+             patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                mod.main(); swap_err = None
+            except OSError as exc:
+                swap_err = exc
+        check("現場成立:跑的期間歷史檔位置真的被換成連結", swap_hist.is_symlink())
+        check("跑的期間被換成連結時追加不跟過去", swap_err is not None and victim2.read_text() == "keep",
+              (swap_err, victim2.read_text()))
 
 
 def t_probe_boundary_wait_over_poll_interval():
@@ -38680,7 +38746,7 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
         check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
         check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
-              and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
+              and "U+001B" in md and "U+0007" in md, repr(md[:240]))
         # 第五輪:GFM 會把裸網址、www、email 自動變連結,~~ 變刪除線;只擋 [] () 不夠。
         autolinks = "https://evil.example/x www.evil.example a@b.example ~~s~~"
         md = ablation.render_md(summary, {"date": autolinks, "claude_version": "v"})
@@ -38691,9 +38757,14 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
         lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
         check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
-        md = ablation.render_md(summary, {"date": "\U000e0001　x", "claude_version": "v"})
-        check("超過四位的碼點用八位寫法、全形空白照空白",
-              "U000e0001" in md and "ue0001" not in md and "u3000" not in md, md[:200])
+        mark_md = ablation.render_md(summary, {"date": "\u27e6U+001B\u27e7", "claude_version": "v"})
+        check("字面寫成標記樣子的文字也跟真控制字元不同", mark_md != esc_md, (esc_md[:120], mark_md[:120]))
+        md = ablation.render_md(summary, {"date": "\U000e0001\u3000x", "claude_version": "v"})
+        check("超過四位的碼點寫完整、全形空白照空白",
+              "U+E0001" in md and "u3000" not in md and "U+3000" not in md, md[:200])
+        # 字面反斜線只照 Markdown 規則轉一次:渲染後跟原值一樣是一個,不能變兩個
+        md = ablation.render_md(summary, {"date": "C:\\dir", "claude_version": "v"})
+        check("字面反斜線渲染後仍是一個", "C\\:\\\\dir" in md and "\\\\\\\\dir" not in md, md[:200])
 
 
 def t_delguard_logs_ok_too():
