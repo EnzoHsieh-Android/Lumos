@@ -62,3 +62,5 @@ WHY: 共用 runner 用 CaptureTimeout 與 CaptureInterrupted 兩個 ValueError �
 PITFALL: 逾時邊界上 launcher 剛退出時，macOS 對只剩殭屍 leader 的程序群 killpg 回 EPERM，權限錯誤從 finally 蓋掉原本的回傳或逾時 [出處:code-test-quality-r4-repair/r4-邊界資源-sonnet.md BND4-1] [根因:清理只容忍 ProcessLookupError] [防回歸:test_zombie_only_group_permission_error_is_not_fatal]。leader 被 reap 之前 PGID 不會被別人重用，所以 EPERM 一律視為已無可清；控制用注入的 EPERM 驗呼叫仍正常回傳，因為真實競態 300 次只出現十幾次、不能當穩定測試。
 
 WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。
+
+PITFALL: test-quality 三支 bundle 檔加進隨工具安裝的清單、又新增 test-quality 子指令後，四道同步守衛在分支上一直是紅的，直到推送前跑全套才發現：文件寫的頂層指令數、每個子指令 --help 的「什麼時候用」、指令總目錄字數上限、提交前與提交後掛鉤的豁免清單 [出處:2026-10-09 測試品質分支推送前全套] [根因:分支開發期間只跑相關子集，這幾道守衛不在子集裡] [防回歸:t_precommit_whitelist_drift_guard、t_every_subcommand_has_when、t_docs_command_count、t_command_index_complete]。新增子指令或 vendored 檔時，連同這四處一起改；豁免在來源 repo 本身照樣不生效。
