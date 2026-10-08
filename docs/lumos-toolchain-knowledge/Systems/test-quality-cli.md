@@ -52,3 +52,5 @@ PITFALL: 檔案都存在仍可能新舊混裝，同時間戳同大小的 bytecod
 PITFALL: ASCII bytes 搜尋漏掉 UTF-16 的 DTD，suite 失敗標記不在 testcase 內亦曾被忽略 [出處:code-test-quality-native-push/r2-資安-codex.md 與 r2-邊界-codex.md] [防回歸:test_utf16_dtd_is_not_a_valid_receipt、test_plain_utf16_report_retains_valid_capture、test_orphan_failure_refused]。拒收依標準 XML parser 的宣告事件；正常 UTF-16 不跟著被擋。
 
 PITFALL: 另看 argv 首項會漏掉合法 --vault 全域選項 [出處:code-test-quality-native-push/r2-架構-codex.md] [防回歸:test_global_vault_option_retains_structured_deployment_error、test_mixed_scanner_retains_legacy_help]。命令身份沿正式 argparse，不維護第二份命令解析。
+
+WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。

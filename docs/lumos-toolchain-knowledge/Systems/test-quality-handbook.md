@@ -57,3 +57,5 @@ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能�
 ## 模型程序清理控制的歸屬
 
 WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
+
+WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
