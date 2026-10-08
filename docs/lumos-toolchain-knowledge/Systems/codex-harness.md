@@ -49,6 +49,7 @@ verified_by:
   - "[[Verification/2026-10-08_持久用量帳暫存控制驗證]]"
   - "[[Verification/2026-10-08_持久用量帳第四輪代碼審停點]]"
   - "[[Verification/持久用量帳第五輪修補驗證]]"
+  - "[[Verification/持久用量帳第五輪審查修補驗證]]"
 decisions:
   - content: 外家審查席三席(lumos_reviewer / _code / _max)模型一律降到 gpt-5.6-sol,推理強度照舊(散文審 medium、程式碼審 xhigh);Claude 編排直接叫 codex exec 時也帶 -m gpt-5.6-sol
     id: d1
@@ -129,3 +130,7 @@ WHY: 持久用量帳記啟動意圖而非成功結果，避免子程序逾時或
 WHY: 本 Systems 節點的 `status: done` 只表示既有 Codex harness 已建成；`verified_by` 連到 pending 的 [[Verification/2026-10-08_持久用量帳第四輪代碼審停點]] 是負面驗證與下一入口，不表示持久用量帳分支已通過或可推送。
 
 PITFALL: 探針最終輸出曾以一般寫入跟隨既有符號連結，讓可寫輸出目錄的相鄰程序把結果導向其他可寫檔；供應商限制重試也會把小於 300 秒的等待預算放大成 300 秒。第五輪採同目錄暫存後原子替換，等待只取剩餘預算；防回歸 [test:t_probe_boundary_fifth_round_output_contracts][test:t_probe_boundary_persistent_ledger_stop_contracts]，紅綠證據見 [[Verification/持久用量帳第五輪修補驗證]]。
+
+PITFALL: 輸出改成「同目錄暫存檔再原子替換」後，新建結果檔從 0644 變成只有自己讀得到的 0600、`--out /dev/null` 這類裝置在整批模型跑完後才報權限錯、目標檔名接近 255 bytes 時暫存檔名超長，`--history` 追加仍會跟隨符號連結 [出處:code-probe-postreview-dispatch-ledger r5 七席審查] [根因:暫存檔沿用標準庫預設權限與「目標檔名加後綴」命名，而且沒有在呼叫模型前檢查輸出位置] [test:t_probe_boundary_fifth_round_output_edges]。修法：暫存檔名固定短名、裝置與 FIFO 以不跟隨連結的方式直接寫、開跑前檢查 `--out` 與 `--history`，歷史檔以不跟隨連結的方式追加。證據 [[Verification/持久用量帳第五輪審查修補驗證]]。
+
+WHY: 原子寫入時，既有普通檔只有「是自己擁有的」才沿用它的權限位元，新建或別人擁有的一律照 umask [出處:code-probe-postreview-dispatch-ledger r5 SEC5-01 與先前輪次的權限保留測試] [因:先前審查要求保留使用者刻意設的 0640 這類權限，但別人預先放好的寬權限檔若被沿用，替換後的結果檔會讓對方可寫] [不選:一律照 umask（會破壞既有權限保留要求）；一律沿用（會繼承攻擊者設的權限）] [test:t_probe_boundary_fifth_round_output_edges,t_probe_boundary_postreview_cli_entry_and_modes]

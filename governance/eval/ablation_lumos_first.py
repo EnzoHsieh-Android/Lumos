@@ -14,38 +14,13 @@
 用法:
   governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
 """
-import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, tempfile, time
+import argparse, datetime, errno, fcntl, hashlib, html, json, os, re, stat, statistics, subprocess, sys, time, unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "scripts" / "scenario_probe.py"
 DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
 ARMS = ["with", "without"]
-
-
-def _atomic_write_bytes(path, data):
-    """同目錄暫存後取代目標；不跟隨既有目標符號連結。"""
-    mode = None
-    try:
-        old = path.lstat()
-        if stat.S_ISREG(old.st_mode):
-            mode = stat.S_IMODE(old.st_mode) & 0o666
-    except FileNotFoundError:
-        pass
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".",
-                                         delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-            tmp.write(data)
-            if mode is not None:
-                os.fchmod(tmp.fileno(), mode)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.replace(tmp_path, path)
-    finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
 
 
 def _atomic_write_text(path, content):
@@ -57,6 +32,7 @@ def _atomic_write_text(path, content):
 sys.path.insert(0, str(ROOT / "scripts"))
 from scenario_probe import (LIMIT_RE, LUMOS_CALL_RE, default_attempt_ledger,
                             attempt_ledger_remaining, ProbeAttemptLedgerError)  # noqa: E402  ★單一實作來源★
+from scenario_probe import _atomic_write_bytes  # 原子寫入同樣只留探針那一份
 
 
 def load_ids(files):
@@ -413,12 +389,20 @@ def merge(out_dir, expected_ids, runs):
 def render_md(s, meta):
     a, b = s["arms"]["with"], s["arms"]["without"]
     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
+    def visible(ch):
+        if ch.isprintable():
+            return ch
+        if unicodedata.category(ch) == "Zs":
+            return " "                                   # 全形空白這類一般空白照空白顯示
+        n = ord(ch)
+        return f"\\x{n:02x}" if n <= 0xff else (f"\\u{n:04x}" if n <= 0xffff else f"\\U{n:08x}")
     def text(x):
-        raw = str(x).replace("\r", " ").replace("\n", " ")
-        raw = "".join(ch if ch.isprintable() else
-                      (f"\\x{ord(ch):02x}" if ord(ch) <= 0xff else f"\\u{ord(ch):04x}")
-                      for ch in raw)
-        return re.sub(r"([\\`*_\[\]()!|])", r"\\\1", html.escape(raw))
+        # 先把字面反斜線加倍,真控制字元轉出的 \xNN 才不會跟原本就寫著 \xNN 的文字撞成同一個樣子
+        raw = str(x).replace("\r", " ").replace("\n", " ").replace("\\", "\\\\")
+        raw = "".join(visible(ch) for ch in raw)
+        # : @ ~ 與 www. 也跳脫:GFM 會把裸網址、email 自動變連結、~~ 變刪除線
+        md = re.sub(r"([\\`*_\[\]()!|:@~])", r"\\\1", html.escape(raw))
+        return re.sub(r"(?i)(www)\.", r"\1\\.", md)
     lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
              f"只算有效場(撞用量上限/儀器例外不算)。", "",

@@ -24,24 +24,62 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _atomic_write_text(path, content):
-    """以同目錄暫存檔原子取代目標，避免跟隨既有目標符號連結。"""
+def _output_target_problem(path, replace=True):
+    """跑模型之前先看輸出位置寫不寫得出去;回問題描述或 None。replace=False 是追加用的歷史檔。"""
     path = Path(path)
-    mode = None
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        st = None
+    if st is not None and stat.S_ISLNK(st.st_mode) and not replace:
+        return f"{path} 是符號連結,追加會寫進連結指向的檔"
+    if st is not None and stat.S_ISDIR(st.st_mode):
+        return f"{path} 是目錄"
+    if st is not None and (stat.S_ISCHR(st.st_mode) or stat.S_ISFIFO(st.st_mode)):
+        return None
+    if st is not None and stat.S_ISREG(st.st_mode) and not os.access(path, os.W_OK):
+        return f"{path} 不可寫"
+    if not path.parent.is_dir():
+        return f"{path.parent} 不存在或不是目錄"
+    if replace and not os.access(path.parent, os.W_OK | os.X_OK):
+        return f"{path.parent} 不可寫,沒辦法在同目錄放暫存檔"
+    return None
+
+
+def _atomic_write_text(path, content):
+    _atomic_write_bytes(path, content.encode("utf-8"))
+
+
+def _atomic_write_bytes(path, data):
+    """以同目錄暫存檔原子取代目標,不跟隨既有目標的符號連結(消融腳本也 import 這一份,不另抄)。
+    既有普通檔是自己擁有的就沿用它的權限位元(先前審查要求保留使用者刻意設的 0640 這類權限);新建檔、
+    或既有檔屬於別人(可能是別人預先放好、帶群組/他人可寫的檔)一律跟新建檔一樣用 0o666 去掉 umask。既有目標是裝置或 FIFO
+    (例如 /dev/null)時照舊直接寫入;既有普通檔不可寫時照舊報 PermissionError,不默默換掉。"""
+    path = Path(path)
     try:
         old = path.lstat()
-        if stat.S_ISREG(old.st_mode):
-            mode = stat.S_IMODE(old.st_mode) & 0o666
     except FileNotFoundError:
-        pass
+        old = None
+    if old is not None and (stat.S_ISCHR(old.st_mode) or stat.S_ISFIFO(old.st_mode)):
+        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return
+    if old is not None and stat.S_ISREG(old.st_mode) and not os.access(path, os.W_OK):
+        raise PermissionError(13, "輸出檔不可寫", str(path))
+    umask = os.umask(0)
+    os.umask(umask)
+    mode = 0o666 & ~umask
+    if old is not None and stat.S_ISREG(old.st_mode) and old.st_uid == os.geteuid():
+        mode = stat.S_IMODE(old.st_mode) & 0o666
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
-                                         prefix=path.name + ".", delete=False) as tmp:
+        # 暫存檔名固定短,不帶目標檔名:目標檔名接近 255 bytes 上限時才不會超長
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent,
+                                         prefix=".probe-out-", suffix=".tmp", delete=False) as tmp:
             tmp_path = Path(tmp.name)
-            tmp.write(content)
-            if mode is not None:
-                os.fchmod(tmp.fileno(), mode)
+            tmp.write(data)
+            os.fchmod(tmp.fileno(), mode)
             tmp.flush()
             os.fsync(tmp.fileno())
         os.replace(tmp_path, path)
@@ -1071,6 +1109,11 @@ def main():
         print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
     if a.max_attempts < 0:
         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+    # 輸出寫不出去要在花模型額度之前就知道,不能整批跑完才炸
+    for flag, target, replace in (("--out", a.out, True), ("--history", a.history, False)):
+        problem = target and _output_target_problem(target, replace=replace)
+        if problem:
+            print(f"✗ {flag} {problem},停手", file=sys.stderr); return 2
     if a.exact_id is not None and a.only:
         print("✗ --exact-id 與 --only 不可並用", file=sys.stderr); return 2
     if (a.exact_id is not None and (not a.exact_id.strip() or not a.exact_id.isprintable())):
@@ -1319,7 +1362,8 @@ def main():
                                                        "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
                                                        "skills_health_bad": bad}, ensure_ascii=False, indent=1))
         if a.history:
-            with open(a.history, "a", encoding="utf-8") as hf:
+            hist_fd = os.open(a.history, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
+            with os.fdopen(hist_fd, "a", encoding="utf-8") as hf:
                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
         if retained is not None:

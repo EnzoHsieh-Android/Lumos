@@ -9646,6 +9646,43 @@ def t_confirm_tty_unit():
         os.environ.pop("LUMOS_TTY_TIMEOUT", None)
 
 
+def t_confirm_tty_no_ctty_session_survives():
+    """TTY 確認在「新 session、沒有控制終端」的程序裡開 pty 再關掉,程序不能收到掛斷(全套第 3 片 rc129)。
+    上面那支在開發者終端機裡跑時,拿掉 O_NOCTTY 也照綠——那個環境根本走不到「開 tty 就變成控制終端」這條路;
+    所以另開子程序並先斷言現場成立:它是 session leader,而且開不了 /dev/tty。"""
+    import os, subprocess, sys, textwrap
+    if not hasattr(os, "openpty") or not hasattr(os, "setsid"):
+        raise _SrcOnly("非 POSIX(沒有 pty 與 session),這段沒驗到")
+    code = textwrap.dedent('''
+        import os, sys, time, importlib.util
+        from importlib.machinery import SourceFileLoader
+        loader = SourceFileLoader("lumos_ctty", sys.argv[1])
+        spec = importlib.util.spec_from_loader("lumos_ctty", loader)
+        m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+        leader = os.getsid(0) == os.getpid()
+        try:
+            os.close(os.open("/dev/tty", os.O_RDWR)); has_ctty = True
+        except OSError:
+            has_ctty = False
+        print(f"SCENE leader={leader} ctty={has_ctty}", flush=True)
+        class _Pipe:
+            def isatty(self): return False
+        m.sys.stdin = _Pipe()
+        master, slave = os.openpty()
+        os.environ["LUMOS_TTY"] = os.ttyname(slave)
+        os.write(master, b"y\\n")
+        r = m._confirm_tty("q? ")
+        os.close(master); os.close(slave)
+        time.sleep(0.3)
+        print(f"ALIVE result={r}", flush=True)
+    ''')
+    p = subprocess.run([sys.executable, "-c", code, GRAPHCTL], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=True, timeout=60)
+    detail = (p.returncode, p.stdout, p.stderr[-300:])
+    check("現場成立:子程序是 session leader 且沒有控制終端", "SCENE leader=True ctty=False" in p.stdout, detail)
+    check("開 pty 確認後關掉,程序沒收到掛斷", p.returncode == 0 and "ALIVE result=True" in p.stdout, detail)
+
+
 def _bootstrap_run(cwd, *args, interactive_off=True):
     """subprocess 跑 bootstrap:假 HOME 隔離+LUMOS_HOME 指真來源(跳過 clone)。
     interactive_off:stdin=DEVNULL+setsid 真正脫離控制終端機(否則開發機 /dev/tty 開得起來會掛死)。"""
@@ -38453,6 +38490,101 @@ def t_probe_boundary_fifth_round_output_contracts():
               and json.loads(out.read_text())["passed"] == 1, out.lstat())
 
 
+def t_probe_boundary_fifth_round_output_edges():
+    """輸出寫入的相鄰路徑:新檔權限照 umask、不沿用舊檔的寬權限、唯讀檔照舊拒絕、長檔名、裝置照寫;
+    輸出或歷史位置有問題要在呼叫模型前擋下,不能整批跑完才炸(第五輪 r5 審查)。"""
+    import tempfile, json, io, contextlib, stat, os
+    from unittest.mock import patch
+    mod = _load_probe_module("sp_fifth_edges")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-edges-") as td:
+        root = Path(td); work = root / "w"; work.mkdir()
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.NamedTemporaryFile(dir=root, delete=False) as scene:
+                pass
+            check("現場成立:同目錄暫存檔預設 0600,跟 umask 結果不同",
+                  stat.S_IMODE(os.stat(scene.name).st_mode) == 0o600)
+            new = work / "new.json"; mod._atomic_write_text(new, "{}")
+            check("新建輸出檔權限照 umask", stat.S_IMODE(new.stat().st_mode) == 0o644, oct(new.stat().st_mode))
+            mine = work / "mine.json"; mine.write_text("old"); os.chmod(mine, 0o640)
+            mod._atomic_write_text(mine, "{}")
+            check("自己擁有的既有檔照舊保留刻意設的權限", stat.S_IMODE(mine.stat().st_mode) == 0o640,
+                  oct(mine.stat().st_mode))
+            # 別人預先放的寬權限檔:測試機沒有第二個帳號,改讓「我是誰」回不同的 uid,走的是同一條真實判斷
+            wide = work / "wide.json"; wide.write_text("old"); os.chmod(wide, 0o666)
+            with patch.object(mod.os, "geteuid", return_value=wide.stat().st_uid + 1):
+                mod._atomic_write_text(wide, "{}")
+            check("別人擁有的寬權限檔不把群組與他人可寫帶到新檔", stat.S_IMODE(wide.stat().st_mode) == 0o644,
+                  oct(wide.stat().st_mode))
+            ro = work / "ro.json"; ro.write_text("keep"); os.chmod(ro, 0o444)
+            try:
+                mod._atomic_write_text(ro, "{}"); refused = False
+            except PermissionError:
+                refused = True
+            check("既有唯讀檔照舊拒絕寫入且內容不變", refused and ro.read_text() == "keep")
+            long = work / ("a" * 250 + ".json")
+            mod._atomic_write_text(long, "{}")
+            check("檔名剛好 255 bytes 仍寫得出", long.read_text() == "{}")
+            mod._atomic_write_text(Path(os.devnull), "{}")
+            check("裝置目標照舊直接寫入且仍是裝置", stat.S_ISCHR(os.lstat(os.devnull).st_mode))
+            check("寫完不留暫存檔", sorted(p.name for p in work.iterdir())
+                  == sorted(["new.json", "mine.json", "wide.json", "ro.json", long.name]), sorted(p.name for p in work.iterdir()))
+        finally:
+            os.umask(old_umask)
+        source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        victim = root / "victim.txt"; victim.write_text("keep")
+        hist = root / "hist.jsonl"; hist.symlink_to(victim)
+        check("現場成立:歷史檔位置真的是符號連結", hist.is_symlink())
+        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+               "limit_hit": False, "source_evidence": None}
+        def run(extra):
+            argv = ["probe", "--repo", str(source), "--scenarios", str(q), *extra]
+            with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row) as model, \
+                 patch.object(mod, "global_skills_health", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return mod.main(), model.call_count
+        for label, extra in (("輸出父目錄不存在", ["--out", str(root / "missing" / "o.json")]),
+                             ("輸出位置是目錄", ["--out", str(work)]),
+                             ("歷史檔是符號連結", ["--out", str(root / "o.json"), "--history", str(hist)])):
+            rc, calls = run(extra)
+            check(f"{label}:呼叫模型前就擋下", rc == 2 and calls == 0, (rc, calls))
+        check("歷史連結指向的檔沒被追加", victim.read_text() == "keep", victim.read_text())
+        good_hist = root / "good.jsonl"
+        rc, calls = run(["--out", str(root / "o.json"), "--history", str(good_hist)])
+        check("正常輸出與歷史位置照常跑完並追加", rc == 0 and calls == 1
+              and len(good_hist.read_text().splitlines()) == 1, (rc, calls))
+
+
+def t_probe_boundary_wait_over_poll_interval():
+    """--wait-on-limit 大於 300 時仍分段等:每次最多 300 秒,最後一段只等剩餘秒數(第五輪 r5 審查)。"""
+    import tempfile, json, io, contextlib
+    from unittest.mock import patch, call
+    mod = _load_probe_module("sp_fifth_wait")
+    with tempfile.TemporaryDirectory(prefix="probe-r5-wait-") as td:
+        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
+        q = root / "q.jsonl"
+        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
+        limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                   "secs": 0, "limit_hit": True, "source_evidence": None}
+        ok = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
+              "limit_hit": False, "source_evidence": None}
+        calls = []
+        def limit_twice(*_a, **_k):
+            calls.append(1)
+            return dict(limited) if len(calls) <= 2 else dict(ok)
+        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "301",
+                "--max-per-window", "0", "--out", str(root / "o.json")]
+        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_twice), \
+             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = mod.main()
+        check("現場成立:真的撞了兩次上限才過", len(calls) == 3, len(calls))
+        check("先等滿一段 300 秒,再只等剩下的 1 秒", rc == 0
+              and sleeping.call_args_list == [call(300), call(1)], (rc, sleeping.call_args_list))
+
+
 def t_probe_boundary_fourth_round_result_contracts():
     """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
     import tempfile, json, importlib.util
@@ -38549,6 +38681,19 @@ def t_probe_boundary_fourth_round_report_and_provenance():
         check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
         check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
               and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
+        # 第五輪:GFM 會把裸網址、www、email 自動變連結,~~ 變刪除線;只擋 [] () 不夠。
+        autolinks = "https://evil.example/x www.evil.example a@b.example ~~s~~"
+        md = ablation.render_md(summary, {"date": autolinks, "claude_version": "v"})
+        check("現場成立:裸網址真的進了報表那一行", "evil" in md, md[:240])
+        check("裸網址、www、email 與刪除線不留可自動連結的原形",
+              all(t not in md for t in ("https://", "www.", "a@b", "~~")), md[:240])
+        # 真的控制字元與「字面寫成 \x1b 的文字」要呈現得不一樣,不然讀報表的人分不出來。
+        esc_md = ablation.render_md(summary, {"date": "\x1b", "claude_version": "v"})
+        lit_md = ablation.render_md(summary, {"date": "\\x1b", "claude_version": "v"})
+        check("真控制字元與字面反斜線文字呈現不同", esc_md != lit_md, (esc_md[:120], lit_md[:120]))
+        md = ablation.render_md(summary, {"date": "\U000e0001　x", "claude_version": "v"})
+        check("超過四位的碼點用八位寫法、全形空白照空白",
+              "U000e0001" in md and "ue0001" not in md and "u3000" not in md, md[:200])
 
 
 def t_delguard_logs_ok_too():
