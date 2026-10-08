@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
+
+from test_quality import run_capture_command
 
 PATTERNS = {
     'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
@@ -66,11 +67,11 @@ def scan(path, language, executable):
             rules = root / 'rules.json'
             rules.write_text(json.dumps(config), encoding='utf-8')
             env.update(SEMGREP_SEND_METRICS='off', SEMGREP_SETTINGS_FILE=str(root/'settings.yml'))
-            proc = subprocess.run([executable, 'scan', '--config', str(rules), '--json', '--quiet',
-                                   '--metrics', 'off', '--disable-version-check', '--no-git-ignore',
-                                   '--oss-only', '--strict', '--timeout', '5', str(source)],
-                                  cwd=root, env=env, capture_output=True, text=True, timeout=40)
-            result = json.loads(proc.stdout)
+            command = [executable, 'scan', '--config', str(rules), '--json', '--quiet',
+                       '--metrics', 'off', '--disable-version-check', '--no-git-ignore',
+                       '--oss-only', '--strict', '--timeout', '5', str(source)]
+            returncode, stdout, _ = run_capture_command(command, 40, cwd=root, env=env)
+            result = json.loads(stdout.decode('utf-8'))
             if not isinstance(result, dict) or not isinstance(result.get('results'), list) or not isinstance(result.get('errors'), list):
                 raise ValueError('invalid Semgrep report shape')
             entry['backend_version'] = result.get('version', 'unknown')
@@ -79,13 +80,16 @@ def scan(path, language, executable):
             if not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list):
                 raise ValueError('missing scanned snapshot evidence')
             scanned = paths['scanned']
-            if proc.returncode != 0 or result['errors'] or str(source) not in scanned:
-                entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=proc.returncode)
+            if returncode != 0 or result['errors'] or str(source) not in scanned:
+                entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=returncode)
                 return entry, findings
             findings.extend(backend_findings(result, source, path, raw))
             entry['status'] = 'scanned'
-    except subprocess.TimeoutExpired:
-        entry.update(status='timeout', reason='backend timed out')
-    except (OSError, UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+    except ValueError as exc:
+        if str(exc) == 'timeout; never detected':
+            entry.update(status='timeout', reason='backend timed out')
+        else:
+            entry.update(status='unavailable', reason=str(exc))
+    except (OSError, UnicodeError, KeyError, TypeError, IndexError) as exc:
         entry.update(status='unavailable', reason=str(exc))
     return entry, findings

@@ -65,7 +65,7 @@ def read_ready_output(selector, ready, buffers):
             raise ValueError('output exceeds 10 MiB')
 
 
-def run_capture_command(command, timeout):
+def run_capture_command(command, timeout, cwd=None, env=None):
     import time
     buffers = {'stdout': bytearray(), 'stderr': bytearray()}
     previous = signal.getsignal(signal.SIGTERM)
@@ -74,9 +74,11 @@ def run_capture_command(command, timeout):
         raise ValueError('execution interrupted by signal ' + str(signum))
 
     proc = None
+    group_stopped = False
     signal.signal(signal.SIGTERM, interrupted)
     try:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, start_new_session=True)
         deadline = time.monotonic() + timeout
         with selectors.DefaultSelector() as selector:
             selector.register(proc.stdout, selectors.EVENT_READ, 'stdout')
@@ -85,7 +87,10 @@ def run_capture_command(command, timeout):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ValueError('timeout; never detected')
-                read_ready_output(selector, selector.select(remaining), buffers)
+                read_ready_output(selector, selector.select(min(remaining, 0.1)), buffers)
+                if proc.poll() is not None and not group_stopped:
+                    terminate_group(proc)
+                    group_stopped = True
         try:
             proc.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as exc:
@@ -93,8 +98,9 @@ def run_capture_command(command, timeout):
         return proc.returncode, bytes(buffers['stdout']), bytes(buffers['stderr'])
     finally:
         signal.signal(signal.SIGTERM, previous)
-        if proc is not None:
+        if proc is not None and not group_stopped:
             terminate_group(proc)
+        if proc is not None:
             proc.stdout.close()
             proc.stderr.close()
 

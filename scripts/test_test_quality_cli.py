@@ -445,6 +445,20 @@ class QualityCLI(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_failed_capture_stops_worker_that_inherits_streams(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import subprocess,sys; "
+            "subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            "print('launcher-failed',flush=True); sys.exit(1)",
+        ]
+        module = self.quality_module()
+        rc, out, _ = module.run_capture_command(command, 1)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.strip(), b"launcher-failed")
+
     @staticmethod
     def lumos_module():
         from importlib.machinery import SourceFileLoader
@@ -520,7 +534,6 @@ class QualityCLI(unittest.TestCase):
                 "--check-helper",
                 "check",
             ],
-            cwd=self.root,
             capture_output=True,
             text=True,
             timeout=10,
@@ -795,6 +808,7 @@ class QualityCLI(unittest.TestCase):
                 "sample.py",
                 "--json",
             ],
+            cwd=self.root,
             capture_output=True,
             text=True,
             timeout=20,

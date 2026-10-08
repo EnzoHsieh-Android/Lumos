@@ -28,6 +28,7 @@ def main():
         frozen_scanner = root/'test_quality_scan.py'
         frozen_scanner.write_bytes((ROOT/'scripts/test_quality_scan.py').read_bytes())
         (root/'test_quality_semgrep.py').write_bytes((ROOT/'scripts/test_quality_semgrep.py').read_bytes())
+        (root/'test_quality.py').write_bytes((ROOT/'scripts/test_quality.py').read_bytes())
         impl = root/'pricing.py'
         impl.write_text(corpus['implementation']['source'])
         for case in corpus['cases']:

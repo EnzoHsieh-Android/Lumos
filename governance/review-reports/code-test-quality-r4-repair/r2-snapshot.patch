@@ -1,0 +1,332 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index d4b0bf27..71548136 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -48,11 +48,13 @@ WHY: CLI與來源scanner共用參數定義與同一namespace [出處:code-test-q
+ 
+ 
+ ## 第二輪部署與解析邊界
+ 
+ PITFALL: 檔案都存在仍可能新舊混裝，同時間戳同大小的 bytecode 也曾讓新來源執行舊判讀 [出處:code-test-quality-native-push/r2-正確性-codex.md 與 r2-controls-red.txt] [防回歸:test_mixed_sidecars_refused_before_false_green、test_source_bytes_not_stale_bytecode_authorize_capture；正常 scan/capture/check/capabilities 與既有來源保持控制]。配套校驗的取捨見 [[Projects/測試品質部署配套校驗_計劃]]；只證本機配套一致，不證業務答案或報告真實性。
+ 
+ PITFALL: ASCII bytes 搜尋漏掉 UTF-16 的 DTD，suite 失敗標記不在 testcase 內亦曾被忽略 [出處:code-test-quality-native-push/r2-資安-codex.md 與 r2-邊界-codex.md] [防回歸:test_utf16_dtd_is_not_a_valid_receipt、test_plain_utf16_report_retains_valid_capture、test_orphan_failure_refused]。拒收依標準 XML parser 的宣告事件；正常 UTF-16 不跟著被擋。
+ 
+ PITFALL: 另看 argv 首項會漏掉合法 --vault 全域選項 [出處:code-test-quality-native-push/r2-架構-codex.md] [防回歸:test_global_vault_option_retains_structured_deployment_error、test_mixed_scanner_retains_legacy_help]。命令身份沿正式 argparse，不維護第二份命令解析。
+ 
++PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；CLI capture 與 handbook model runner 都建立獨立 POSIX 程序群，必須採同一項返回前清理政策 [出處:code-test-quality-r4-repair/r1-architecture-report.md A1] [防回歸:test_failed_capture_stops_stream_detached_worker、test_cancelled_capture_stops_child]。可信測試 runner 正常使用 worker 仍屬本程序群責任；子程序主動 setsid 逃逸不在可攜式保證內。
++
+ WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+index 59635c6b..4310f42f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+@@ -1,21 +1,23 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-07
+ updated: 2026-10-07
+ responsibility: 選配本機 Semgrep 的來源自比辨識與失敗狀態；不執行來源、不保證完整測試框架或算法同源分析
+ self_audit: GPT-6-Codex-clean-agent/2026-10-08
++about_code_stamp: claude/2026-10-08/5e59066aaa5e
+ aliases: []
+ about_code:
+   - scripts/test_quality_semgrep.py
+   - governance/eval/test_quality_corpus.py
++  - scripts/test_test_quality_scan.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/evals
+ summary: |-
+   WHY: 選配固定版本的本機語法工具，避免自建多語言 parser [出處:2026-10-07 跨語言測試品質計劃] [因:保持核心零依賴，缺工具或未掃快照時明確回報不完整]
+ related:
+   - "[[Systems/test-quality-scan]]"
+ verified_by:
+   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
+@@ -31,21 +33,22 @@ verified_by:
+ 
+ WHY: 本機固定規則掃暫存快照，而不沿用來源專案設定 [出處:2026-10-07 測試品質掃描試行] [因:要讓重跑範圍可確認且不受 ignore 或遠端規則變動影響]。核心與 Python 分析仍只依賴標準庫；選配工具由明確路徑指定、版本從結果留痕。
+ 
+ WHY: 未收到快照已掃描的證據就回報不完整 [出處:固定 backend 反例考卷] [因:零結果也可能是工具缺失、解析錯、逾時或整支檔被略過]。此層只驗來源自比候選，方法身份、算法同源與執行情境仍須其他證據。
+ 
+ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處:Semgrep CE 1.179.0 固定考卷實跑] [根因:該版本不能解析 #expect 的規則語法] [防回歸:test_swift_testing_macro_is_not_claimed_supported]。分開公布 XCTest 與 Swift Testing 的介面能力；後者接入時須新增原始樣本、解析失敗與抓錯案例，不能僅看 Swift 語言名稱就啟用。
+ 
+ ## 本篇的檔案邊界
+ 
+ - `scripts/test_quality_semgrep.py` 的選配依賴、快照隔離與有限介面支援決策歸本篇，候選通用語義歸 [[Systems/test-quality-scan]]。
++- `scripts/test_test_quality_scan.py` 內送入 fake Semgrep 報告、驗 backend 邊界與失敗狀態的控制歸本篇；Python 候選判準的控制仍歸 [[Systems/test-quality-scan]]。
+ - `governance/eval/test_quality_corpus.py` 的獨立固定標註、未知／未分析結果與跨語言外推限制歸本篇，不把考卷符合率當真實專案品質。
+ 
+ WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。
+ 
+ ## 推送前結果形狀修復
+ 
+ WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test-quality-native-push/r1-fix.json] [因:沿固定 backend 結果合約拆分，沒有增加第二個 parser；配對控制與 [[Verification/測試品質分支推送前修復驗證]] 分開記錄來源掃描與原生執行資格]。
+ 
+ PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
+ 
+-PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_backend]。這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
++PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_findings_decode_once_and_reject_out_of_range_line]。控制用兩筆合法 finding 驗解碼次數與 snippet，再用越界行號驗拒收；這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+index 2e93cf22..ca0092a1 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+@@ -13,13 +13,15 @@ plan_refs:
+   - "[[Projects/測試品質工具接線_計劃]]"
+ ---
+ # 測試品質第四輪修補驗證
+ 
+ ## 結論
+ 
+ 一般錯誤路徑的程序群缺口已先紅後綠。fake launcher 啟動一個關閉 stdout/stderr 的長跑 worker 後以 rc1 離開；修前 `model_command` 返回後 worker 仍存活，修後會在返回前清理自己建立的程序群。原有 timeout 控制與 handbook 全套 17 項同時通過。本輪只建立 POSIX 資格，Windows 仍排除。
+ 
+ 四個測試證據缺口也已收緊：orphan outcome 與 stale bytecode 案例改驗專屬拒收 reason；global `--vault` 案例先建立有效 source，再確認原因點名遺失的 scanner；Git rename fixture 的命令都有 10 秒 timeout，commit 明確停用 signing。五項定向 CLI 控制通過。
+ 
+-Semgrep finding 轉換改為每份來源只 decode/split 一次，並在取 snippet 前驗行號沒有超出來源；更新同源 bundle 指紋後，scanner 21 項控制通過。完整 CLI 曾在指紋尚未更新時整批回「配套版本不一致」，這是本輪中途真紅，不列產品回歸；更新指紋後定向案例與完整 CLI 44 項皆綠。
++Semgrep finding 轉換改為每份來源只 decode/split 一次，並在取 snippet 前驗行號沒有超出來源；更新同源 bundle 指紋後，scanner 22 項控制通過。完整 CLI 曾在指紋尚未更新時整批回「配套版本不一致」，這是本輪中途真紅，不列產品回歸。
++
++修補回歸審再找到 CLI capture 的同類程序群缺口：fake launcher 啟動關閉管線的 worker 後 rc1，修前 `run_capture_command` 返回後 worker 仍存活，修後在返回前停止。`--vault` 控制也改在它建立 source 的暫存目錄執行；Semgrep 控制現在能區分修補前後。更新 bundle 指紋後，完整 CLI 45 項與 scanner 22 項皆綠。
+ 
+ 本篇是修補驗證，不代表第四輪代碼審處置閘通過。提交後仍須由乾淨席以最後快照審查。
+diff --git a/scripts/lumos b/scripts/lumos
+index be7af76b..10a6c77f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49214,21 +49214,21 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '5e5848eb9260f2583386245abff8c8d556efbb398a5df718283da90e23fec708', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '5e5848eb9260f2583386245abff8c8d556efbb398a5df718283da90e23fec708', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': 'a283c05051bd9f77587a7c467d602262bee20ea15e5275042ca44a04ed2660a2'}
+ 
+ 
+ def _test_quality_bundle_sources():
+     folder = Path(__file__).resolve().parent
+     required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+     if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
+         raise ValueError("配套指紋清單未對齊")
+     sources = {}
+     for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
+         with (folder / name).open("rb") as stream:
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index eb03361b..d5b142b0 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -40,26 +40,25 @@ def validate_suite_counts(root):
+         cases = [n for n in suite.iter() if xml_tag(n) == 'testcase']
+         observed = {'tests': len(cases)}
+         for field, tag in [('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')]:
+             observed[field] = sum(any(xml_tag(c) == tag for c in case) for case in cases)
+         for field, count in observed.items():
+             if field in suite.attrib and int(suite.get(field)) != count:
+                 raise ValueError('suite summary inconsistent with testcase rows: ' + field)
+ 
+ 
+ def terminate_group(proc):
+-    if proc.returncode is None:
+-        try:
+-            os.killpg(proc.pid, signal.SIGKILL)
+-        except ProcessLookupError:
+-            pass
+-        proc.wait()
++    try:
++        os.killpg(proc.pid, signal.SIGKILL)
++    except ProcessLookupError:
++        pass
++    proc.wait()
+ 
+ 
+ def read_ready_output(selector, ready, buffers):
+     for key, _ in ready:
+         chunk = os.read(key.fd, 65536)
+         if not chunk:
+             selector.unregister(key.fileobj)
+             continue
+         buffers[key.data].extend(chunk)
+         if len(buffers[key.data]) > LIMIT:
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+index c7887d43..345a962b 100644
+--- a/scripts/test_test_quality_cli.py
++++ b/scripts/test_test_quality_cli.py
+@@ -414,30 +414,65 @@ class QualityCLI(unittest.TestCase):
+         self.addCleanup(
+             lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+         )
+         process.send_signal(signal.SIGTERM)
+         process.communicate(timeout=5)
+         deadline = time.monotonic() + 2
+         while self.alive(pid) and time.monotonic() < deadline:
+             time.sleep(0.02)
+         self.assertFalse(self.alive(pid))
+ 
++    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
++    def test_failed_capture_stops_stream_detached_worker(self):
++        pidfile = self.root / "failed-worker.pid"
++        command = [
++            sys.executable,
++            "-c",
++            "import subprocess,sys; from pathlib import Path; "
++            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
++            "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
++            "Path(" + repr(str(pidfile)) + ").write_text(str(p.pid)); sys.exit(1)",
++        ]
++        module = self.quality_module()
++        rc, _, _ = module.run_capture_command(command, 5)
++        self.assertEqual(rc, 1)
++        self.assertTrue(pidfile.exists(), "worker actually launched before launcher error")
++        pid = int(pidfile.read_text())
++        self.addCleanup(
++            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++        )
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
++
+     @staticmethod
+     def lumos_module():
+         from importlib.machinery import SourceFileLoader
+ 
+         loader = SourceFileLoader("quality_lumos_control", str(TOOL))
+         spec = importlib.util.spec_from_loader(loader.name, loader)
+         module = importlib.util.module_from_spec(spec)
+         loader.exec_module(module)
+         return module
+ 
++    @staticmethod
++    def quality_module():
++        from importlib.machinery import SourceFileLoader
++
++        path = TOOL.with_name("test_quality.py")
++        loader = SourceFileLoader("test_quality_process_control", str(path))
++        spec = importlib.util.spec_from_loader(loader.name, loader)
++        module = importlib.util.module_from_spec(spec)
++        loader.exec_module(module)
++        return module
++
+     def test_eval_attachments_keep_actual_code_as_impact_seeds(self):
+         module = self.lumos_module()
+         prefix = "governance/eval/results/fixture/"
+         for suffix in ["txt", "xml", "log", "trx", "zip"]:
+             self.assertFalse(
+                 module._impact_diff_seed_ok(
+                     prefix + "report." + suffix, "100644", False
+                 )
+             )
+         for name, mode, shebang in [
+@@ -478,20 +513,21 @@ class QualityCLI(unittest.TestCase):
+         )
+         run = subprocess.run(
+             [
+                 sys.executable,
+                 str(TOOL.with_name("test_quality_scan.py")),
+                 "--json",
+                 str(test_file),
+                 "--check-helper",
+                 "check",
+             ],
++            cwd=self.root,
+             capture_output=True,
+             text=True,
+             timeout=10,
+         )
+         standalone = json.loads(run.stdout)
+         self.assertEqual(run.returncode, cli_rc)
+         for report in [cli_result, standalone]:
+             report.pop("elapsed_seconds")
+         self.assertEqual(cli_result, standalone)
+         self.assertEqual(cli_result["findings"][0]["rule_id"], "same-comparison")
+diff --git a/scripts/test_test_quality_scan.py b/scripts/test_test_quality_scan.py
+index 24be67a5..70619fab 100644
+--- a/scripts/test_test_quality_scan.py
++++ b/scripts/test_test_quality_scan.py
+@@ -1,22 +1,33 @@
+ """CLI 行為考卷；預期結果來自人工分類，不呼叫掃描器算 oracle。"""
+ import json
++import importlib.util
++from importlib.machinery import SourceFileLoader
+ from pathlib import Path
+ import subprocess
+ import sys
+ import tempfile
+ import unittest
+ 
+ TOOL = Path(__file__).with_name('test_quality_scan.py')
++SEMGREP_TOOL = Path(__file__).with_name('test_quality_semgrep.py')
+ 
+ 
+ class ScanTests(unittest.TestCase):
++    @staticmethod
++    def semgrep_module():
++        loader = SourceFileLoader('test_quality_semgrep_control', str(SEMGREP_TOOL))
++        spec = importlib.util.spec_from_loader(loader.name, loader)
++        module = importlib.util.module_from_spec(spec)
++        loader.exec_module(module)
++        return module
++
+     def scan(self, source, implementation=None, suffix='.py', check_helper=None):
+         with tempfile.TemporaryDirectory() as td:
+             root = Path(td)
+             test = root / ('test_example' + suffix)
+             test.write_text(source, encoding='utf-8')
+             before = test.read_bytes()
+             command = [sys.executable, str(TOOL), str(test), '--json']
+             if check_helper:
+                 command += ['--check-helper', check_helper]
+             if implementation is not None:
+@@ -124,20 +135,47 @@ class ScanTests(unittest.TestCase):
+                 source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+                 fake = Path(td) / 'semgrep'
+                 fake.write_text('#!' + sys.executable + '\nprint(' + repr(json.dumps(payload)) + ')\n')
+                 fake.chmod(0o700)
+                 run = subprocess.run([sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)], capture_output=True, text=True, timeout=20)
+                 out = json.loads(run.stdout)
+                 self.assertEqual(run.returncode, 2)
+                 self.assertEqual(out['inputs'][0]['status'], 'error')
+                 self.assertFalse(out['complete'])
+ 
++    def test_semgrep_findings_decode_once_and_reject_out_of_range_line(self):
++        module = self.semgrep_module()
++        source = Path('/isolated/test_snapshot.php')
++        original = Path('/project/test_price.php')
++
++        class Raw:
++            calls = 0
++
++            def decode(self, encoding):
++                self.calls += 1
++                return 'first line\nsecond line\n'
++
++        raw = Raw()
++        result = {
++            'results': [
++                {'check_id': 'lumos.same-comparison', 'path': str(source), 'start': {'line': 1}},
++                {'check_id': 'lumos.same-comparison', 'path': str(source), 'start': {'line': 2}},
++            ]
++        }
++        findings = module.backend_findings(result, source, original, raw)
++        self.assertEqual(raw.calls, 1)
++        self.assertEqual([item['snippet'] for item in findings], ['first line', 'second line'])
++
++        result['results'][1]['start']['line'] = 3
++        with self.assertRaisesRegex(ValueError, 'invalid finding location'):
++            module.backend_findings(result, source, original, b'first line\nsecond line\n')
++
+     def test_corpus_runner_reports_unavailable_languages(self):
+         runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'
+         run = subprocess.run([sys.executable, str(runner)], capture_output=True, text=True, timeout=30)
+         out = json.loads(run.stdout)
+         self.assertEqual(run.returncode, 2)
+         self.assertFalse(out['complete'])
+         self.assertFalse(out['supported_checks_match'])
+         python_cases = [c for c in out['cases'] if c['language'] == 'python']
+         self.assertEqual(len(python_cases), 4)
+         self.assertEqual({c['status'] for c in python_cases}, {'verified_for_supported_rules'})

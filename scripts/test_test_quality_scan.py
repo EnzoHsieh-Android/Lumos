@@ -2,10 +2,12 @@
 import json
 import importlib.util
 from importlib.machinery import SourceFileLoader
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 TOOL = Path(__file__).with_name('test_quality_scan.py')
@@ -14,11 +16,22 @@ SEMGREP_TOOL = Path(__file__).with_name('test_quality_semgrep.py')
 
 class ScanTests(unittest.TestCase):
     @staticmethod
+    def alive(pid):
+        run = subprocess.run(
+            ['ps', '-p', str(pid), '-o', 'stat='], capture_output=True, text=True
+        )
+        return run.returncode == 0 and bool(run.stdout.strip()) and not run.stdout.strip().startswith('Z')
+
+    @staticmethod
     def semgrep_module():
         loader = SourceFileLoader('test_quality_semgrep_control', str(SEMGREP_TOOL))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)
-        loader.exec_module(module)
+        sys.path.insert(0, str(SEMGREP_TOOL.parent))
+        try:
+            loader.exec_module(module)
+        finally:
+            sys.path.pop(0)
         return module
 
     def scan(self, source, implementation=None, suffix='.py', check_helper=None):
@@ -168,6 +181,62 @@ class ScanTests(unittest.TestCase):
         result['results'][1]['start']['line'] = 3
         with self.assertRaisesRegex(ValueError, 'invalid finding location'):
             module.backend_findings(result, source, original, b'first line\nsecond line\n')
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX process group qualification')
+    def test_semgrep_backend_stops_worker_after_launcher_exit(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'Test.swift'
+            source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+            pidfile = root / 'worker.pid'
+            fake = root / 'semgrep'
+            fake.write_text(
+                '#!' + sys.executable + '\n'
+                'import json,subprocess,sys\nfrom pathlib import Path\n'
+                "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+                'stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n'
+                'Path(' + repr(str(pidfile)) + ').write_text(str(p.pid))\n'
+                "source=sys.argv[-1]\nprint(json.dumps({'results':[],'errors':[],"
+                "'paths':{'scanned':[source]},'version':'fixture'}))\n"
+            )
+            fake.chmod(0o700)
+            run = subprocess.run(
+                [sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)],
+                capture_output=True, text=True, timeout=20,
+            )
+            out = json.loads(run.stdout)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertEqual(out['inputs'][0]['status'], 'scanned')
+            self.assertTrue(pidfile.exists(), 'worker actually launched')
+            pid = int(pidfile.read_text())
+            self.addCleanup(lambda: os.kill(pid, 9) if self.alive(pid) else None)
+            deadline = time.monotonic() + 2
+            while self.alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(self.alive(pid))
+
+    def test_semgrep_out_of_range_is_structured_unavailable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'Test.swift'
+            source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
+            fake = root / 'semgrep'
+            fake.write_text(
+                '#!' + sys.executable + '\nimport json,sys\n'
+                "source=sys.argv[-1]\nprint(json.dumps({'results':[{'check_id':'lumos.same-comparison',"
+                "'path':source,'start':{'line':99}}],'errors':[],"
+                "'paths':{'scanned':[source]},'version':'fixture'}))\n"
+            )
+            fake.chmod(0o700)
+            run = subprocess.run(
+                [sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)],
+                capture_output=True, text=True, timeout=20,
+            )
+            out = json.loads(run.stdout)
+            self.assertEqual(run.returncode, 2)
+            self.assertFalse(out['complete'])
+            self.assertEqual(out['inputs'][0]['status'], 'unavailable')
+            self.assertIn('invalid finding location', out['inputs'][0]['reason'])
 
     def test_corpus_runner_reports_unavailable_languages(self):
         runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'

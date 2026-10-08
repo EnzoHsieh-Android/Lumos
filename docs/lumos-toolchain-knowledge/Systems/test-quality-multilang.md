@@ -52,3 +52,5 @@ WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test
 PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
 
 PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_findings_decode_once_and_reject_out_of_range_line]。控制用兩筆合法 finding 驗解碼次數與 snippet，再用越界行號驗拒收；這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
+
+PITFALL: 選配 Semgrep backend 用 `subprocess.run` 時只會處理 launcher，正常同群 worker 可在成功、非零或逾時後留下；繼承管線的 worker 還會把 launcher 已退出誤報成 timeout [出處:code-test-quality-r4-repair/r2-boundary-report.md B1 與 r2-defender-report.md] [防回歸:test_semgrep_backend_stops_worker_after_launcher_exit、test_failed_capture_stops_worker_that_inherits_streams]。backend 改共用 capture runner 的獨立程序群與返回前清理；固定 corpus 凍結 scanner 時也要帶齊這項遞移 sidecar，不能只複製 adapter。
