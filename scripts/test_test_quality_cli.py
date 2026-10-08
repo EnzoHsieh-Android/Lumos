@@ -557,6 +557,7 @@ class QualityCLI(unittest.TestCase):
             '<testsuite><testcase classname="T" name="x"/><failure type="AssertionError">boom</failure></testsuite>'
         )
         self.assertEqual(rc, 2, report)
+        self.assertIn("outcome outside testcase", report["reason"])
 
     def test_php_and_node_variants_kept_in_impact(self):
         tool = self.lumos_module()
@@ -609,6 +610,7 @@ class QualityCLI(unittest.TestCase):
                 ["git", "-C", str(repository), *args],
                 stderr=subprocess.STDOUT,
                 text=True,
+                timeout=10,
             ).strip()
 
         git("init", "-q")
@@ -616,12 +618,12 @@ class QualityCLI(unittest.TestCase):
         git("config", "user.email", "fixture@example.invalid")
         (repository / "service.py").write_text("def public_api():\n    return 42\n")
         git("add", "service.py")
-        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "before")
+        git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "commit", "-qm", "before")
         before = git("rev-parse", "HEAD")
         destination = repository / "governance/eval/results/run/report.txt"
         destination.parent.mkdir(parents=True)
         git("mv", "service.py", str(destination.relative_to(repository)))
-        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "after")
+        git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "commit", "-qm", "after")
         after = git("rev-parse", "HEAD")
         self.assertTrue(
             git("diff", "--name-status", "-M", before, after).startswith("R100"),
@@ -715,7 +717,9 @@ class QualityCLI(unittest.TestCase):
             timeout=20,
         )
         self.assertEqual(run.returncode, 2, run.stdout)
-        self.assertEqual(json.loads(run.stdout)["status"], "invalid")
+        report = json.loads(run.stdout)
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("suite summary inconsistent with testcase rows", report["reason"])
 
     def test_utf16_dtd_is_not_a_valid_receipt(self):
         xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
@@ -743,6 +747,7 @@ class QualityCLI(unittest.TestCase):
     def test_global_vault_option_retains_structured_deployment_error(self):
         target = self.copied_bundle()
         (target / "test_quality_scan.py").unlink()
+        (self.root / "sample.py").write_text("def value():\n    return 1\n")
         run = subprocess.run(
             [
                 sys.executable,
@@ -762,6 +767,7 @@ class QualityCLI(unittest.TestCase):
         report = json.loads(run.stdout)
         self.assertFalse(report["complete"])
         self.assertEqual(report["verdict"], "not_assessed")
+        self.assertIn("test_quality_scan.py", report["reason"])
         self.assertNotIn("Traceback", run.stderr)
 
 

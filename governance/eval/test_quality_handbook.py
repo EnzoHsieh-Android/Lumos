@@ -246,12 +246,13 @@ def model_command(cmd, directory, timeout):
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
     finally:
         signal.signal(signal.SIGTERM, previous)
-        if proc is not None and proc.poll() is None:
+        if proc is not None:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            proc.communicate()
+            if proc.poll() is None:
+                proc.communicate()
 
 
 def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):

@@ -23,6 +23,7 @@ verified_by:
   - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
+  - "[[Verification/測試品質第四輪修補驗證]]"
 ---
 # test-quality-handbook
 
@@ -59,3 +60,5 @@ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能�
 WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
 
 WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
+
+PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。

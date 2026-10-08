@@ -22,6 +22,7 @@ verified_by:
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
   - "[[Verification/測試品質分支第三輪審查停點]]"
+  - "[[Verification/測試品質第四輪修補驗證]]"
 ---
 # test-quality-cli
 

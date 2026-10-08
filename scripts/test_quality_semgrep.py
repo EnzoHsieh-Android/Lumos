@@ -22,6 +22,7 @@ PATTERNS = {
 
 def backend_findings(result, source, path, raw):
     findings = []
+    source_lines = raw.decode('utf-8').splitlines()
     for item in result['results']:
         if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
             raise ValueError('invalid finding shape')
@@ -31,13 +32,13 @@ def backend_findings(result, source, path, raw):
         if rule.split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
             raise ValueError('unexpected finding rule or snapshot')
         line = item['start']['line']
-        if type(line) is not int or line < 1:
+        if type(line) is not int or line < 1 or line > len(source_lines):
             raise ValueError('invalid finding location')
         findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
                          'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
                          'reason': '斷言兩側是相同語法表達式',
                          'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
-                         'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
+                         'snippet': source_lines[line-1][:1200]})
     return findings
 
 

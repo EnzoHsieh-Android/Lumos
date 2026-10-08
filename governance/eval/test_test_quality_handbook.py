@@ -167,6 +167,33 @@ class ModelCommandTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse(self.alive(pid))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+    def test_model_error_stops_detached_stream_worker(self):
+        binary = self.root / "bin"
+        binary.mkdir()
+        fake = binary / "claude"
+        pidfile = self.root / "worker-error.pid"
+        fake.write_text(
+            "#!"
+            + sys.executable
+            + "\nimport subprocess,sys\nfrom pathlib import Path\n"
+            + "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+              "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+            + "Path(" + repr(str(pidfile)) + ").write_text(str(p.pid))\nsys.exit(1)\n"
+        )
+        fake.chmod(0o755)
+        result = ev.model_command([str(fake)], self.root, 5)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(pidfile.exists(), "worker actually launched before launcher error")
+        pid = int(pidfile.read_text())
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+
 
 
 if __name__ == '__main__':

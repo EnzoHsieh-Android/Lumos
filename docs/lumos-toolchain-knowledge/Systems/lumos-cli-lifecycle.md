@@ -98,6 +98,7 @@ verified_by:
   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
+  - "[[Verification/測試品質第四輪修補驗證]]"
 about_code:
   - get.sh
   - scripts/lumos
@@ -166,3 +167,4 @@ WHY: 新test-quality sidecar沿精確vendor白名單部署及清理 [出處:[[Pr
 
 PITFALL: 部署缺少遞移sidecar曾漏過core模組的備援攔截 [出處:code-test-quality-native-push/r1-邊界-codex.md b1] [防回歸:test_partial_sidecar_returns_structured_invalid、test_missing_all_sidecars_explains_update、test_missing_quality_sidecar_does_not_break_legacy_help]。精確名單沿安裝白名單取得，維持單一來源；舊命令仍可用，新的不完整命令要求update。
 
+PITFALL: test-quality sidecar 內容變更卻漏更 bundle 指紋時，consumer 會把整套工具判為配套版本不一致 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_test_quality_cli.py 全套]。拒收是預期的安全行為；修改白名單內 sidecar 時，來源檔與 `scripts/lumos` 的內嵌指紋必須在同一提交更新。

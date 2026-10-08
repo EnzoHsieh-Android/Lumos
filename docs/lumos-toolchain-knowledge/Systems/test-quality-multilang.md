@@ -23,6 +23,7 @@ verified_by:
   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
+  - "[[Verification/測試品質第四輪修補驗證]]"
 ---
 # test-quality-multilang
 
@@ -46,3 +47,5 @@ WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品�
 WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test-quality-native-push/r1-fix.json] [因:沿固定 backend 結果合約拆分，沒有增加第二個 parser；配對控制與 [[Verification/測試品質分支推送前修復驗證]] 分開記錄來源掃描與原生執行資格]。
 
 PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
+
+PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_backend]。這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
