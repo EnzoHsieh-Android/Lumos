@@ -8,6 +8,8 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 
 **實作要寫測試、修 bug、重構或接入測試品質工具時**：先讀 `commands/test-quality-standard.md`，依各棧 runner 提供獨立判準來源與相關故障證據；疑似綁死實作的行為測試再做保持行為的重構檢查。
 
+**新模組要照 DDD 這類目標架構寫、不想被架構對齊席判成跟舊鄰居不一樣時**:抄 `commands/target-arch-ddd-template.md` 的範本開目標架構節點,宣告方式見 `commands/06-代碼審與推送.md` 的 `arch_targets` 那一列。
+
 **指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
 
 ## 1. 進場(每個子任務都重來,不是 session 開頭一次)
