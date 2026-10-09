@@ -1,0 +1,337 @@
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 826598cb..dc6cb290 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -406,21 +406,26 @@ def merge(out_dir, expected_ids, runs):
+     class_counts = {}
+     for c in classes.values():
+         class_counts[c] = class_counts.get(c, 0) + 1
+     return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+             "question_class": classes, "class_counts": class_counts}
+ 
+ 
+ def render_md(s, meta):
+     a, b = s["arms"]["with"], s["arms"]["without"]
+     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
+-    def text(x): return html.escape(str(x)).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
++    def text(x):
++        raw = str(x).replace("\r", " ").replace("\n", " ")
++        raw = "".join(ch if ch.isprintable() else
++                      (f"\\x{ord(ch):02x}" if ord(ch) <= 0xff else f"\\u{ord(ch):04x}")
++                      for ch in raw)
++        return re.sub(r"([\\`*_\[\]()!|])", r"\\\1", html.escape(raw))
+     lines = [f"# 修法 A ablation 對照(記錄日期 {text(meta.get('date'))};當次 Claude CLI {text(meta.get('claude_version', '?'))})", "",
+              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
+              f"只算有效場(撞用量上限/儀器例外不算)。", "",
+              "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
+              "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
+              f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
+              f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
+              f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
+              f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
+              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
+diff --git a/scripts/lumos b/scripts/lumos
+index 9c426d06..cc660e89 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -18863,21 +18863,21 @@ def _confirm_tty(prompt):
+         try:
+             return _norm(input(prompt))
+         except EOFError:
+             pass                                     # isatty 撒謊 → 試 ②(F2-A)
+     tty_path = os.environ.get("LUMOS_TTY", "/dev/tty")
+     try:
+         timeout = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
+     except ValueError:
+         timeout = 30.0
+     try:
+-        fd = os.open(tty_path, os.O_RDWR)
++        fd = os.open(tty_path, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
+     except OSError:
+         return None
+     try:
+         os.write(fd, prompt.encode("utf-8"))
+         readable, _, _ = select.select([fd], [], [], timeout)
+         if not readable:
+             os.write(fd, "\n(無回應,視為略過)\n".encode("utf-8"))
+             return None
+         data = os.read(fd, 256)
+         if not data:
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 1c093cf3..359775a8 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -17,20 +17,46 @@
+ 用法:
+   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
+                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
+ """
+ import argparse, ast, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ 
+ 
++def _atomic_write_text(path, content):
++    """以同目錄暫存檔原子取代目標，避免跟隨既有目標符號連結。"""
++    path = Path(path)
++    mode = None
++    try:
++        old = path.lstat()
++        if stat.S_ISREG(old.st_mode):
++            mode = stat.S_IMODE(old.st_mode) & 0o666
++    except FileNotFoundError:
++        pass
++    tmp_path = None
++    try:
++        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
++                                         prefix=path.name + ".", delete=False) as tmp:
++            tmp_path = Path(tmp.name)
++            tmp.write(content)
++            if mode is not None:
++                os.fchmod(tmp.fileno(), mode)
++            tmp.flush()
++            os.fsync(tmp.fileno())
++        os.replace(tmp_path, path)
++    finally:
++        if tmp_path is not None:
++            tmp_path.unlink(missing_ok=True)
++
++
+ def tool_calls_from_codex_json(lines):
+     """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
+     只認 item.completed:command_execution→("Bash", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→("Edit", 路徑串);
+     回 (calls, final_text)。事件形狀在 0.144.1 實看,改版要重驗。"""
+     calls, final = [], ""
+     for ln in lines:
+         ln = ln.strip()
+         if not ln.startswith("{"):
+             continue
+         try:
+@@ -1212,22 +1238,23 @@ def main():
+                             if exhausted:
+                                 raise ProbeAttemptBudgetExceeded("重試前模型額度已用完，未等待或啟動模型")
+                         except (ProbeAttemptBudgetExceeded, ProbeAttemptLedgerError) as exc:
+                             res.update(passed=False, fatal=True, limit_hit=False, reason=f"儀器例外: {type(exc).__name__}: {exc}")
+                             fatal = True
+                             fatal_reason = res["reason"]
+                             break
+                         retried.append({"reason": res.get("reason"),
+                                         "sandbox_secs": res["sandbox_secs"],
+                                         "model_secs": res["model_secs"]})
+-                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+-                        time.sleep(300); waited += 300
++                        delay = min(300, a.wait_on_limit - waited)
++                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 {delay} 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
++                        time.sleep(delay); waited += delay
+                         continue
+                     break
+                 if retried:
+                     res["retry_attempts"] = retried
+                 res["run"] = k
+                 results.append(res)
+                 mark = "✓" if res["passed"] else "✗"
+                 ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
+                 tag = f" #{k}" if a.runs > 1 else ""
+                 print(f"  {mark} {res['id']:22s}{tag} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
+@@ -1277,27 +1304,27 @@ def main():
+                     counts[2] += 1
+                 else:
+                     counts[1] += 1
+                     counts[0] += 1 if r["passed"] else 0
+             print("每題通過次數: " + "  ".join(
+                 f"{i} {c}/{t}" + (f" (不算分 {e})" if e else "")
+                 for i, (c, t, e) in per.items()))
+         if a.out:
+             # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
+             # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
+-            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
+-                                               "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+-                                               "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+-                                               "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+-                                               "sandbox_version": SANDBOX_VERSION,
+-                                               "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
+-                                               "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
++            _atomic_write_text(Path(a.out), json.dumps({"results": results, "passed": p, "total": n,
++                                                       "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
++                                                       "excluded": summ["excluded"], "valid_total": summ["valid_total"],
++                                                       "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
++                                                       "sandbox_version": SANDBOX_VERSION,
++                                                       "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
++                                                       "skills_health_bad": bad}, ensure_ascii=False, indent=1))
+         if a.history:
+             with open(a.history, "a", encoding="utf-8") as hf:
+                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
+                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
+         if retained is not None:
+             print(f"保留最後副本: {retained}", file=sys.stderr)
+     if bad or fatal:
+         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+     return 0 if p == n else 1
+ 
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index 9287b051..ff73f2c3 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -2144,32 +2144,40 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
+         c = self.rn.classify_question
+         self.assertEqual(c([3, 3], [3, 3]), "不區分(都過)")
+         self.assertEqual(c([0, 3], [0, 3]), "不區分(都不過)")
+         self.assertEqual(c([3, 3], [1, 3]), "區分")
+         self.assertEqual(c([3, 3], [0, 3]), "區分")
+         self.assertEqual(c([1, 3], [2, 3]), "反向")
+         self.assertEqual(c([3, 3], [2, 3]), "弱/不穩")
+         self.assertEqual(c([3, 3], [0, 0]), "缺資料")
+ 
+     def test_runs_in_window_counts_recent_only(self):
+-        import os, time as _t
++        import os, subprocess, time as _t
+         d = Path(tempfile.mkdtemp())
+         (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
+         old = d / "with-q-b-1.json"
+         old.write_text(json.dumps({"arm": "with", "results": [{}]}), encoding="utf-8")
+         os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
+         (d / "summary.json").write_text("{}", encoding="utf-8")
+         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
+-        # 結果視圖只作診斷；派工以獨立持久用量帳為準。
++        # 結果視圖只作診斷；用已度過冷卻且未 claim 的帳，證明舊結果不能重新變成硬限。
+         ledger = d / "usage.sqlite3"
+-        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger):
+-            self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
++        self.sp.attempt_ledger_remaining(ledger, 3, now=time.time() - 18001)
++        def fake_probe(cmd, **_kwargs):
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
++                "arm": "with", "results": [{"id": "zz", "passed": True}],
++                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
++            return subprocess.CompletedProcess(cmd, 0)
++        with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger), \
++             mock.patch.object(self.rn.subprocess, "run", side_effect=fake_probe):
++            result = self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)
++        self.assertTrue(result[2].startswith("rc=0"), result)
+ 
+     def test_lumos_stats_rejects_quoted_and_echo(self):
+         # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
+         f = self.sp.lumos_stats
+         self.assertEqual(f([("Bash", "rg 'lumos search' CLAUDE.md")]), (False, None))
+         self.assertEqual(f([("Bash", 'echo "lumos doctor"')]), (False, None))
+         self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
+         self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
+         self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d8a7c68b..a4cced58 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -38384,33 +38384,81 @@ def t_probe_boundary_persistent_ledger_stop_contracts():
+                 "--wait-on-limit", "300", "--max-per-window", "1", "--attempt-ledger", str(ledger), "--out", str(out)]
+         with patch.object(mod.sys, "argv", argv), patch.object(mod.time, "time", return_value=20001), \
+              patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         data = json.loads(out.read_text()); row = data["results"][0]
+         check("claim 被拒絕產生整批不可判而非計分失敗", rc == 3 and data["fatal"] and data["inconclusive"]
+               and data["valid_total"] == 0 and len(data["results"]) == 1, data)
+         check("本機達限列保留零工具與非供應商上限", row["fatal"] and row["calls"] == []
+               and row["n_calls"] == 0 and row["limit_hit"] is False and sleeping.call_count == 0, row)
+-        # 供應商回上限且最後一次批次名額已花掉：直接停止，不能先等 300 秒。
++        # 供應商回上限且 runner 已 claim 持久帳最後一格：直接停止，不能先等 300 秒。
++        # 刻意不設 --max-attempts，避免批次額度先截斷而讓持久帳分支壞掉仍假綠。
++        retry_ledger = root / "retry-usage.sqlite3"
++        mod.attempt_ledger_remaining(retry_ledger, 1, now=1000)
+         argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "300",
+-                "--max-attempts", "1", "--out", str(out)]
++                "--max-per-window", "1", "--attempt-ledger", str(retry_ledger), "--out", str(out)]
+         limited = {**_probe_res("a", False, "儀器例外: limit"), "first_tool": None,
+                    "secs": 0, "limit_hit": True, "source_evidence": None}
+-        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=limited) as model, \
+-             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++        def claim_then_limit(*_args, **_kwargs):
++            check("供應商回上限前已真正 claim 最後一格",
++                  mod.claim_model_attempt(retry_ledger, 1, now=20000))
++            return limited
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=claim_then_limit) as model, \
++             patch.object(mod.time, "time", return_value=20000), patch.object(mod.time, "sleep") as sleeping, \
++             patch.object(mod, "global_skills_health", return_value=[]), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         data = json.loads(out.read_text())
+         check("最後一次撞供應商上限後零等待零重試", rc == 3 and data["fatal"]
+               and model.call_count == 1 and sleeping.call_count == 0, (rc, model.call_count, sleeping.call_count, data))
+ 
++        # 等待預算小於輪詢間隔時，只能睡剩餘秒數，不能把「最多等 1 秒」放大成 300 秒。
++        budget_out = root / "budget.json"; calls = []
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--wait-on-limit", "1",
++                "--max-per-window", "0", "--out", str(budget_out)]
++        def limit_then_pass(sc, *_args, **_kwargs):
++            calls.append(sc["id"])
++            return ({**limited} if len(calls) == 1 else
++                    {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++                     "limit_hit": False, "source_evidence": None})
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=limit_then_pass), \
++             patch.object(mod.time, "sleep") as sleeping, patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        check("等待總量不超過 --wait-on-limit", rc == 0 and len(calls) == 2
++              and sleeping.call_args_list == [__import__("unittest").mock.call(1)],
++              (rc, len(calls), sleeping.call_args_list))
++
++
++def t_probe_boundary_fifth_round_output_contracts():
++    """候選輸出經真 main 寫入時只能替換連結本身，不得改到連結指向的檔。"""
++    import tempfile, json, io, contextlib, stat
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_fifth_output")
++    with tempfile.TemporaryDirectory(prefix="probe-r5-output-") as td:
++        root = Path(td); source = root / "src"; _probe_boundary_repo(source)
++        q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": "a", "prompt": "q", "expect": ["Bash"]}) + "\n")
++        victim = root / "victim.txt"; victim.write_text("keep")
++        out = root / "out.json"; out.symlink_to(victim)
++        row = {**_probe_res("a", True, "ok"), "first_tool": None, "secs": 0,
++               "limit_hit": False, "source_evidence": None}
++        argv = ["probe", "--repo", str(source), "--scenarios", str(q), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", return_value=row), \
++             patch.object(mod, "global_skills_health", return_value=[]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        check("輸出連結不改寫受害檔", rc == 0 and victim.read_text() == "keep", victim.read_text())
++        check("輸出位置改成工具自己的普通 JSON 檔", stat.S_ISREG(out.lstat().st_mode)
++              and json.loads(out.read_text())["passed"] == 1, out.lstat())
++
+ 
+ def t_probe_boundary_fourth_round_result_contracts():
+     """從真合併入口驗每題權重與錯型拒收，不在測試內重抄計分算法。"""
+     import tempfile, json, importlib.util
+     spec = importlib.util.spec_from_file_location("ablation_r4_contracts", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-r4-result-") as td:
+         outdir = Path(td)
+         a = {"id": "a", "passed": True, "calls": [["Bash", "lumos search payments"]], "n_calls": 1}
+@@ -38488,20 +38536,26 @@ def t_probe_boundary_fourth_round_report_and_provenance():
+             report = (outdir / "summary.md").read_text()
+             check("meta不可判仍在報表明寫來源未知", "來源日期未知" in report and "來源版本未知" in report, report[:200])
+         attack = '<img src=x onerror=alert(1)>'
+         row = {"id": attack, "passed": True}
+         (outdir / "with-q-results.json").write_text(json.dumps({"arm": "with", "results": [row, {**row, "passed": False}]}))
+         summary = ablation.merge(outdir, [attack], 2)
+         summary["skills_health_poisoned"] = [(attack, ["failed"])]
+         md = ablation.render_md(summary, {"date": attack, "claude_version": attack})
+         check("現場題號真的進入不一致清單", summary["arms"]["with"]["inconsistent_questions"] == [attack])
+         check("題號健康檔名與來源文字都轉成HTML文字", attack not in md and "&lt;img" in md, md)
++        markdown = "![run](https://example.invalid/x) [label](https://example.invalid/y)"
++        controls = "prefix\x1b]0;LUMOS\x07suffix"
++        md = ablation.render_md(summary, {"date": markdown, "claude_version": controls})
++        check("外部文字在 Markdown 報表只作字面文字", "![" not in md and "](" not in md, md[:240])
++        check("終端控制字元不原樣進 stdout 報表", "\x1b" not in md and "\x07" not in md
++              and "\\x1b" in md and "\\x07" in md, repr(md[:240]))
+ 
+ 
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")

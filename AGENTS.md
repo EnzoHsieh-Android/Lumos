@@ -1,6 +1,6 @@
 # AGENTS.md（Codex 等外部 agent 的入口指路檔）
 
-<!-- LUMOS:GRAPH-DISCIPLINE:START v1.2 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.3 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
 ## 程式碼為主，知識圖譜補脈絡（必讀）
 
 **程式碼是「實作現在長怎樣」的最終依據（不是所有現況：部署設定、feature flag、資料庫值、生產行為都不在裡面）；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
@@ -70,6 +70,10 @@
 ### 設計與排查
 設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
 
+### 實作測試
+
+測試要能抓到實際錯誤，不能只是把實作重寫一次。寫／改測試及審查時，先讀 **lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉**；完整條款以該節為單一來源。
+
 ### 提交與推送
 一個功能一個提交，說明用白話：
 - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
@@ -95,3 +99,4 @@
 2. **系統現況**：讀 `docs/lumos-toolchain-knowledge/MOC/index.md`（知識圖譜索引），再按需讀 `Systems/`（機制）、`Projects/`（計劃與決策）、`Verification/`（驗證紀錄）。筆記跟程式碼衝突時怎麼裁，照上方紀律區塊「怎麼用」第 3 條，這裡不另寫。
 3. **CLI**：`python3 scripts/lumos --help`（每個子命令附一句什麼時候用；讀圖譜用 `context`/`search`/`contracts`/`query`）。
 4. **看你被派來做什麼**:被派成唯讀審計員/辯方(`codex exec --sandbox read-only`)時,**不要**改 `docs/*-knowledge/` 下的檔,發現問題用報告回覆;被當協作者開在這個 repo 裡時,照 `CLAUDE.md`(與下方紀律區塊)的規矩走——改了會影響行為/決策/驗證的 code,當次就把脈絡寫回圖譜。
+5. **本 repo 代碼審修復穩定性試行**：新開程式工作或接手代碼審前，讀 `docs/lumos-toolchain-knowledge/Projects/代碼審修復穩定性試行_計劃.md` 和 `docs/lumos-toolchain-knowledge/Verification/2026-10-04_代碼審改道生效驗證.md` 的生效／停止狀態；尚未生效時不得登記第2案。這是指路，細則仍以圖譜與本 repo `skills/lumos-code-loop/` 為準。

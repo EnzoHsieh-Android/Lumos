@@ -39,7 +39,7 @@ from pathlib import Path
 # === 觸發提醒的原始碼副檔名 ===
 CODE_EXTS = {
     ".cs",                                                    # C# / .NET
-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
+    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
     ".sql",                                                   # DB migration
     ".py",                                                    # Python
     ".kt", ".kts",                                            # Kotlin / Compose

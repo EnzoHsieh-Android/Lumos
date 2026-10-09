@@ -1,0 +1,742 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md b/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
+index 85ed9282..cf31459a 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
++++ b/docs/lumos-toolchain-knowledge/Issues/探針健康檢查不可判資料仍被重用.md
+@@ -6,23 +6,23 @@ updated: 2026-10-04
+ aliases: []
+ about_code:
+   - scripts/scenario_probe.py
+   - governance/eval/ablation_lumos_first.py
+ tags:
+   - type/issue
+   - status/open
+   - scope/evals
+ summary: |-
+   FLAG:TECHNICAL
+-  DECISION: 第三輪 code-probe-boundary-remediation 有兩項 major 未處置，保留 FAIL 與三輪上限，等待使用者裁決後續範圍。
++  DECISION: 第三輪 code-probe-boundary-remediation 兩項 major 與 FAIL 保留；使用者於 2026-10-04 例外授權儀器修補第四輪，尚待新席與處置閘。
+   PITFALL: 2026-10-04 凍結版 cfe7a703 的 runner 拋錯會跳過當場 skills 健康檢查；最終檢查拋錯雖 rc3，消融下游仍把各場當有效樣本。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 與 r3-reproduction.json；重驗用兩題臨時 repo 加下游 load_results/needed。
+ related:
+   - "[[Projects/探針隔離與清理收斂_計劃]]"
+ ---
+ # 探針健康檢查不可判資料仍被重用
+ 
+ 第三輪凍結差異 `governance/review-reports/probe-boundary-remediation/r3-snapshot.patch` 有兩條未處置重大發現，完整席報告 `r3-correctness.md`、`r3-boundary.md`，編排者重現結果 `r3-reproduction.json`，機械判定 `r3-gate.txt`。本 Issue 同時記這兩條相連的資料有效性缺口；`code-probe-boundary-remediation` 第三輪 FAIL，不得用前兩輪 PASS 或251項綠測試替代。
+ 
+ 1. 模型 runner 若在執行後、解析時拋例外，流程跳過這一場的 `global_skills_health()`；臨時 repo 的 a 題拋錯且健康檢查回報壞連結時，b runner 仍先被呼叫。當場健康檢查必須在下一題前完成，無論 runner 是否正常回傳；損壞或無法檢查即停批、fatal/inconclusive、退出3。
+ 2. 最終健康檢查拋例外時，探針雖回3並標整批 fatal/inconclusive，逐場仍是 `reason=ok`、有效分母2；消融讀取器 `is_valid` 接受兩列、`needed(a)=0`、`collect_skills_health=[]`，會把不可判資料合併且不補跑。修法要讓結果檔本身足以讓所有既有消費端排除或拒收整批，不能只靠呼叫端看退出碼。驗收需用真 `load_results`、`needed`、`merge` 與 `collect_skills_health` 跑紅綠，不只看探針 JSON 的 `fatal` 欄。
+ 
+-處置上限：本案代碼審已跑三輪（r1九條折入、r2兩條折入、r3兩條 major 未處置）；不能自行開 r4 或留 `code-loop pass`。重驗入口是使用者裁決額外審查範圍後的下一次修補，並保留原 r3 FAIL 卷證。若沒有授權，現狀維持 open，圖譜 Verification 為 fail。
++處置上限：本案代碼審已跑三輪（r1九條折入、r2兩條折入、r3兩條 major 未處置）；原 r3 FAIL 卷證保留。使用者於 2026-10-04 明示「開第四」，只授權本儀器修補例外 r4。新反例 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 先紅後綠，並實跑真消融消費端；第四輪新席與處置閘完成前仍維持 open，本案驗證節點仍是 pending，不將局部修補當作審查通過。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md b/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
+index 32bba224..aed25ee0 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/探針隔離與清理收斂_計劃.md
+@@ -4,20 +4,21 @@ status: doing
+ created: 2026-10-04
+ updated: 2026-10-04
+ tags:
+   - type/project
+   - status/doing
+   - risk/守衛面
+   - scope/evals
+ lands_in:
+   - Systems/codex-harness
+   - Systems/測試假綠形態
++  - Systems/ablation-lumos-first
+ related:
+   - "[[Projects/代碼審修復穩定性試行_計劃]]"
+   - "[[Issues/探針Git隔離的設定與絕對路徑缺口]]"
+   - "[[Issues/探針共用沙盒清理失敗仍繼續評分]]"
+   - "[[Issues/探針讀碼證據不足]]"
+   - "[[Issues/代碼審next把新處置帳誤判舊panel]]"
+   - "[[Issues/探針健康檢查不可判資料仍被重用]]"
+ ---
+ # 探針隔離與清理收斂_計劃
+ 
+@@ -69,11 +70,13 @@ Claude 的 `tool_use.id` 和 `tool_result.tool_use_id` 均要求非空字串；
+ 回退本案實作時保留 r4 原始卷證與新反例，原案仍未放行；歷史的 `SANDBOX_VERSION` 能辨識新制，舊制列缺欄視 legacy，不改寫任一列。不能把舊共用副本分數當新判準證據。若逐次副本成本過高，先量測、再提出能保留相同隔離證據的替代設計，不直接關掉 fail-closed 條件。
+ 
+ ## 審計修正紀錄
+ 
+ r1（2026-10-04，五主席加一架構席）：內部原報告共15條、blocking 14；另有外家唯讀否決席原稿（格式未進帳）。相同 `--keep` 發現去重。三個外逸反例由編排者在臨時 Git repo 複現：filter.clean 在快照時寫出、切分支後 include 恢復 remote/hook、絕對符號連結寫回來源。改為白名單 Git 設定、拒絕外指連結與所有子模組形狀、凍結批次基線、明訂 `--keep`／歷史版號／失敗語意。卷證見 governance/review-reports/探針隔離與清理收斂/。
+ 
+ 實作代碼審首輪另在 `governance/review-reports/probe-boundary-remediation/` 保存凍結差異與四席報告，報10條、去重9組。兩組巢狀Git形狀（`.GIT` 與 bare repo）、父環境 `GIT_TRACE` 寫來源、未保留假身分、混合題序 `--keep` 留零份、重試時間漏逐場、故障注入測試漏清暫存，以及舊讀碼 helper 成第二套生命週期都已折回反例。修後 `probe_` 為243項通過、0失敗，仍待後輪審差異。編排者把首輪四席都誤記成處置載體，`loop status --disposal` 明確拒絕；兩本錯帳 `probe-boundary-remediation`（四席誤都掛處置）及 `probe-boundary-remediation-ledger2`（名稱未帶 code- 前綴，會被當設計審）保留作失敗操作紀錄；正式更正帳用 `code-probe-boundary-remediation`，仍引用同一首輪報告與凍結 hash，不重派首輪、不把它算新樣本或新增審查輪。這是記帳更正，非原試行 `code-repair-pilot-01` 的第五輪。
+ 
+ 第二輪代碼審在 730b06fe 凍結的 558 行修補差異中，正確性席報兩項 blocking、架構席 clean：主 Git 資料的 `worktrees/*/gitdir` 文字外指可讓模型把真 linked worktree 指回副本；`GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過副本假身分，單讀 `git config user.*` 的測試是假綠。新增 `t_probe_boundary_review2_linked_worktree` 與 `t_probe_boundary_review2_effective_identity`，前者前置證明真 linked 指標存在、後者驗快照與後續模型提交的實際作者；舊碼均翻紅，修法是拒絕主 Git `worktrees/` 資料、清洗模型及儀器共同環境。編排者另在非席位重現中發現全域 skills 健康檢查讀取拋錯會被當普通題失敗、繼續後題，最終檢查拋錯甚至寫不出 JSON；`t_probe_boundary_review2_health_unreadable` 紅綠後改成兩處都 fatal、停批或保留不可判紀錄。這三條不追加到原第1案四輪；第二輪與第三輪僅屬樣本外儀器修補。卷證在同一審查目錄的 `r2-*`；本案尚待第三輪檢查修補差異。
+ 
+-第三輪凍結 730b06fe..cfe7a703 的235行修補差異後，三席報兩項新的 major blocking、架構席 clean。runner 在模型後拋錯會跳過當場 skills 健康檢查，仍先跑下一題；最終健康檢查拋錯雖 rc3 且 JSON 標 fatal/inconclusive，消融下游仍把兩場 `reason=ok` 的結果當有效樣本、`needed=0`。編排者於臨時 repo 逐項重現，`r3-reproduction.json` 可重算；r3 無折入或放行，`loop status --disposal` 顯示 FAIL，standard 三輪上限已到。後續問題見 [[Issues/探針健康檢查不可判資料仍被重用]]，目前停止修補與新輪審查，等待使用者裁決是否另授權明確範圍；原第1案四輪FAIL與本案三輪FAIL各自保留，不互相抵銷。此時不能啟動剩餘四個新工作樣本的探針量測，因量測儀器的有效性仍未過閘。
++第三輪凍結 730b06fe..cfe7a703 的235行修補差異後，三席報兩項新的 major blocking、架構席 clean。runner 在模型後拋錯會跳過當場 skills 健康檢查，仍先跑下一題；最終健康檢查拋錯雖 rc3 且 JSON 標 fatal/inconclusive，消融下游仍把兩場 `reason=ok` 的結果當有效樣本、`needed=0`。編排者於臨時 repo 逐項重現，`r3-reproduction.json` 可重算；r3 無折入或放行，`loop status --disposal` 顯示 FAIL，standard 三輪上限已到。後續問題見 [[Issues/探針健康檢查不可判資料仍被重用]]；原第1案四輪FAIL與本案三輪FAIL各自保留，不互相抵銷。
++
++使用者於 2026-10-04 明示「開第四」，僅對本儀器修補例外授權 r4，不重算原第1案或新增試行樣本。r4 先驗兩條第三輪缺口：runner 拋錯後仍在下一場前查健康；整批 fatal 結果檔在真消融 `load_results`、`needed`、`merge` 與失效掃描都不被重用。兩條反例舊碼均紅，修後 `probe_` 254 項、消融既有 23 項通過；目前只完成本機修補與測試，尚待凍結差異交新席及機械閘判定。消融讀取器由新家 [[Systems/ablation-lumos-first]] 管理，探針本體仍由 [[Systems/codex-harness]] 管理。r4 判定前不可啟動剩餘四個新工作樣本的探針量測。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+new file mode 100644
+index 00000000..1c9bc1d9
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/ablation-lumos-first.md
+@@ -0,0 +1,24 @@
++---
++type: system
++status: doing
++created: 2026-10-04
++updated: 2026-10-04
++responsibility: 負責探針消融結果檔的有效性篩選、缺場補跑與統計合併；不負責探針沙盒本身的隔離與健康檢查執行
++aliases: []
++about_code:
++  - governance/eval/ablation_lumos_first.py
++tags:
++  - type/system
++  - status/doing
++  - scope/evals
++summary: |-
++  WHY: 2026-10-04 第三輪代碼審證明探針整批 fatal 時仍可能保留逐場成功列；消融讀取端須再查整批有效性。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 與 r3-reproduction.json。
++  PITFALL: 只按逐場 reason 判有效會把健康不可判的批次計入統計且抵掉缺場。出處 [[Issues/探針健康檢查不可判資料仍被重用]]。[test:t_probe_boundary_review4_fatal_batch_not_reused]
++---
++# ablation-lumos-first
++
++這篇是 `governance/eval/ablation_lumos_first.py` 的家，負責消融結果檔的有效性、缺場與合併判定。
++
++此篇管消融結果的「能不能拿來算」這道邊界。[[Systems/codex-harness]] 管探針如何產生與隔離樣本；兩邊都要守住整批失效的訊號，否則即使探針退出碼正確，重開消融或只做合併時仍可能吃到事故資料。
++
++第四輪修補採整檔排除：fatal 檔案保留原始逐場紀錄供事故分析，但不能抵掉缺場或進入統計；掃描失效檔時同時辨認全域連結損壞與未能完成健康／清理檢查的 fatal。沿用既有彙總欄位以免舊讀取器漏看，呈現文字改為「探針失效」，不把所有 fatal 都叫作 skills 連結損壞。若未來新增消費端，先以 [[Verification/2026-10-04_探針隔離與清理收斂]] 的致命批次反例驗證整批欄位有被讀到。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index b5d09e91..bca4e0c7 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -100,15 +100,15 @@ PITFALL: 單驗副本gitdir仍可能漏掉共用資料、core.worktree或refs等
+ PITFALL: 第四輪把副本頂層的綠測試誤擴成整棵Git樹安全會漏兩種配置：local include/worktree scope可恢復有效remote並蓋掉防推勾子，子模組仍有自己的remote及Git資料。另有共用沙盒清理失敗卻繼續下一題，以及Claude空ID工具回傳被當成功的反例。出處 [[Verification/2026-10-04_修復穩定性試行第1案例外續修]]；成對重現r4-parent-reproduction.json及r4-boundary.md，後續防回歸入口為 [[Issues/探針Git隔離的設定與絕對路徑缺口]]、[[Issues/探針共用沙盒清理失敗仍繼續評分]] 與 [[Issues/探針讀碼證據不足]]。第4輪處置閘FAIL，不能把t_probe_repair4_*的局部綠燈當成放行。
+ 
+ WHY: 2026-10-04 另開 [[Projects/探針隔離與清理收斂_計劃]] 處理第4輪的四組阻擋行為，不改寫原案四輪FAIL。保留可見Git歷史，但將繼承設定改為封閉重建、批次凍結後每場複製；這比單次清遠端或共用副本清理更容易界定失敗。代價是副本建立時間與磁碟用量增加；每週探針的 `sandbox_secs` 與 `model_secs` 是重評入口。證據見 [[Verification/2026-10-04_探針隔離與清理收斂]]。
+ 
+ PITFALL: 探針的Git hook僅擋意外push，不是網路隔離；模型若主動指定URL、停hook或用其他網路工具仍可能外送。外指符號連結與巢狀Git也不能用「頂層副本安全」推論安全，故本案採前置拒絕。重現入口與回歸測試為 [[Projects/探針隔離與清理收斂_計劃]] S1–S3 的 `t_probe_boundary_nested_git`、`t_probe_boundary_worktree_links`、`t_probe_boundary_git_config`；正式模型題目若要求HOME或網路操作，先依 [[Issues/探針沙盒改動真全域機器狀態]] 重驗外層隔離。
+ 
+ PITFALL: 本案實作首輪證明「找 `.git`」漏掉大小寫變體與 bare repo，且 `GIT_TRACE` 可讓儀器自己的 Git 呼叫把 log 寫進來源；白名單設定若漏 `user.*`，模型提交還會退用本機身分。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及其 `probe-boundary-remediation/r1-*` 卷證；回歸測試 `t_probe_boundary_review1_git_shapes`、`t_probe_boundary_review1_trace_identity`。下次調整 `_git_env` 或 `_check_worktree_entries` 時重跑兩測試及 `probe_`，不能只看頂層 remote/hook 空值。
+ 
+ PITFALL: 第二輪代碼審在凍結版 730b06fe 證出主 Git 資料的 `worktrees/*/gitdir` 文字外指不受符號連結檢查保護，模型可把真 linked worktree 的 `.git` 改指向臨時副本；同輪證出 `GIT_AUTHOR_*`／`GIT_COMMITTER_*` 會蓋過 local 假身分，`git config user.*` 綠燈不能證明實際提交作者。另由編排者重現健康檢查讀取失敗被誤當普通題失敗。出處 [[Verification/2026-10-04_探針隔離與清理收斂]] 及 `probe-boundary-remediation/r2-*`；防回歸 `t_probe_boundary_review2_linked_worktree`、`t_probe_boundary_review2_effective_identity`、`t_probe_boundary_review2_health_unreadable`。下次改 Git 副本、runner 環境或 skills 健康檢查時以這三項重驗。
+ 
+-PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；目前沒有防回歸測試，代碼審第三輪 FAIL，不能拿251項綠燈放行。使用者裁決續修後，以 Issue 的臨時 repo 重現及實際 `load_results`／`needed`／`merge` 作紅綠入口，再審修補差異。
++PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；第三輪 FAIL 保留。使用者已例外授權 r4，新增 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 在舊碼翻紅、修後轉綠，仍須以新席與處置閘判定，不以254項綠測試代替審查。
+ 
+ - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
+ - REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
+ - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
+index bdbbfae9..f64eef34 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-04_探針隔離與清理收斂.md
+@@ -1,16 +1,16 @@
+ ---
+ type: verification
+ status: pending
+ date: 2026-10-04
+ valid_under: 本機Python3.14、臨時Git與bare fixture；模型CLI一律stub，未做真模型、網路推送或完整測試套件。
+-revalidate_when: 使用者裁決續修範圍後，先補 runner 拋錯必查健康及最終不可判資料不得被 ablation load_results/needed/merge 重用的反例，再重跑 probe_、下游合併測試與獨立代碼審；探針 Git 副本、作者環境、skills 檢查或結果欄位變更也從此入口重驗。
++revalidate_when: 第四輪獨立代碼審與處置閘完成後重驗探針及消融消費端；探針 Git 副本、作者環境、skills 檢查、結果欄位或消融讀取邏輯再變更時，重跑 runner 拋錯與整批 fatal 不得重用的反例。
+ tags:
+   - type/verification
+   - status/pending
+   - scope/evals
+ plan_refs:
+   - "[[Projects/探針隔離與清理收斂_計劃]]"
+ ---
+ # 2026-10-04_探針隔離與清理收斂
+ 
+ 這篇只驗 [[Projects/探針隔離與清理收斂_計劃]] 的探針儀器修補；原第1案 `code-repair-pilot-01` 四輪FAIL不重算，本次不占五案試行的第2格。設計審獨立卷證在 `governance/review-reports/探針隔離與清理收斂/`，首輪處置閘PASS並凍結；外家報告只作諮詢，未冒稱正式席位。
+@@ -44,11 +44,17 @@ plan_refs:
+ 新增的三組回歸初次以舊碼驗到3項通過、4項失敗；紅燈具體為 linked worktree 未拒、實際快照／後續提交仍用真身分、健康檢查失敗後還跑下一題。其後補了最終健康檢查拋錯仍要寫 JSON 的斷言。修後 `python3.14 scripts/test_lumos.py -k probe_boundary_review2` 為8項通過、0失敗；全 `probe_` 子集為251項通過、0失敗，輸出 `governance/review-reports/probe-boundary-remediation/r2-postfix-regression.txt`。程式改為前置拒絕主 Git `worktrees/`、清洗 `GIT_AUTHOR_*`／`GIT_COMMITTER_*`，並把健康檢查無法完成分類為 fatal；反例只用了臨時 repo，未操作工作目錄外的實際 linked worktree 或真網路遠端。`py_compile` 與 `git diff --check` 通過；第三輪審差異仍待最後版本確認。
+ 
+ ## 最終判定：第三輪 FAIL
+ 
+ 第三輪凍結快照 730b06fe..cfe7a703 為235行，SHA-256 `cdbfac731efbea0d59b566865cc2cf1c307954e515f038202c976870274e21e5`。正確性席與邊界席各報一項 major、架構席 clean；三份報告與編排者臨時 repo 重現存於 `governance/review-reports/probe-boundary-remediation/r3-*`。`r3-reproduction.json` 證明兩種未覆蓋情境：最終健康檢查失敗時結果檔仍有 `valid_total=2`，消融 `needed(a)=0` 且 `skills_health_bad=[]`；a runner 在模型後拋錯時，b runner 已呼叫，當場健康檢查被跳過。這兩條都屬真行為問題、未修、未接受風險；詳見 [[Issues/探針健康檢查不可判資料仍被重用]]。
+ 
+ 第三輪席位與凍結差異已記入 `code-probe-boundary-remediation`；`r3-gate.txt` 保存當時 `lumos loop status --disposal` 的 `DISPOSAL GATE FAIL`、退出碼1，原因是兩條存活發現沒有處置帳，且三輪上限已到。計劃寫回後，用 `r3-plan-at-record.md` 的留帳時原文重算成 `r3-gate-replay.txt`，G3 hash 仍 PASS、處置仍 FAIL；不是寫回圖譜造成的假失敗。沒有 `code-loop pass`，也沒有推送。前兩輪的處置閘 PASS 僅表示當輪發現已折入，不可覆蓋最後 FAIL。最後程式的相關測試251項通過、0失敗，`py_compile` 與 `git diff --check` 通過；這些測試明確漏掉第三輪兩個消費端／例外時序情境。未跑真模型、網路推送、全套測試或部署；首派至收尾及新增步驟的完整耗時無打點，記未知。
+ 
+ 本篇標頭 `status: pending` 是圖譜驗證節點允許的「尚未放行」狀態；機械審查結論明確是上段的 FAIL，沒有把 `pending` 當成測試或代碼審通過。
+ 
+-圖譜已寫回計劃、系統隱患與 Issue；最終 `lumos lint` 觸及節點無錯，`lumos doctor` 為0 issues（601篇），另有23段共239條全圖提醒，不屬本案通過條件。原 `code-repair-pilot-01` 四輪FAIL仍有效，本案是樣本外儀器介入且第三輪FAIL；五案試行仍只占第1案，剩4個新工作未開始。待使用者裁決是否授權超出三輪上限的窄範圍續修及審查，才可恢復量測；不得用本次紅綠測試推論收斂率改善。
++圖譜已寫回計劃、系統隱患與 Issue；當時 `lumos lint` 觸及節點無錯，`lumos doctor` 為0 issues（601篇），另有23段共239條全圖提醒，不屬本案通過條件。原 `code-repair-pilot-01` 四輪FAIL仍有效，本案是樣本外儀器介入且第三輪FAIL；五案試行仍只占第1案，剩4個新工作未開始。不得用本次紅綠測試推論收斂率改善。
++
++## 使用者授權的例外第四輪：送審前驗證
++
++2026-10-04 使用者明示「開第四」，只增開本儀器修補的 r4，原第1案與本案前三輪判定均不回寫。兩條新測試先在舊碼翻紅：runner 拋錯後直接跑 b 題、當場健康檢查未執行；最終健康檢查無法完成時，真實消融讀取器仍收兩列、`needed(a)=0`、合併分母2、失效掃描空。紅燈原始輸出 `probe-boundary-remediation/r4-pre-fix-red.txt`。
++
++修後 `python3.14 scripts/test_lumos.py -k probe_boundary_review4` 為3項通過；全 `probe_` 子集254項通過，消融既有 `TestScenarioProbeAblation` 23項通過；`py_compile` 與 `git diff --check` 通過。輸出保存於 `probe-boundary-remediation/r4-postfix-*.txt`。實作於 [[Systems/codex-harness]] 與 [[Systems/ablation-lumos-first]]：模型執行器的例外路徑也先查健康；整批 fatal 檔案不得抵掉缺場或進統計，失效掃描應能辨認 health 結果不可判的 fatal。這些是本機臨時 Git repo 加 stub runner 測試，尚未代表真模型、網路或完整套件驗收。第四輪獨立審查與機械閘尚未結束，因此本篇仍為 pending，不能拿這段綠測試當放行。
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 5015323f..9e52472c 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -69,51 +69,58 @@ def backfill_limit(r):
+     return r
+ 
+ 
+ def is_valid(r):
+     """一場算不算數:撞用量上限或儀器例外都不算(不是被測 AI 的行為)。"""
+     return not r.get("limit_hit") and not str(r.get("reason", "")).startswith("儀器例外")
+ 
+ 
+ def load_results(out_dir):
+     """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
+-    ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。"""
++    ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。
++    整批 fatal 的檔案即使逐場 reason=ok 也不可計分或抵掉缺場。"""
+     by_arm = {a: [] for a in ARMS}
+     for p in sorted(Path(out_dir).glob("*.json")):
+         if p.name in ("summary.json", "meta.json"):
+             continue
+         try:
+             d = json.loads(p.read_text(encoding="utf-8"))
+         except Exception:
+             continue
+         if not isinstance(d, dict):
+             continue
++        if d.get("fatal"):
++            continue
+         arm = d.get("arm") or p.name.split("-")[0]
+         rows = d.get("results")
+         if arm in by_arm and isinstance(rows, list):
+             by_arm[arm].extend(backfill_limit(r) for r in rows if isinstance(r, dict))
+     return by_arm
+ 
+ 
+ def collect_skills_health(out_dir):
+-    """掃探針輸出裡的 skills_health_bad 欄,回 [(檔名, [壞連結…])](空=乾淨)。
+-    ★r1 併發席:健康檢查不能只印 log——跑批讀這個,非空就停整批,免得一場沙盒事故靜默污染後續所有場次。"""
++    """掃探針輸出的壞連結與 fatal 批次，回 [(檔名, [失效原因…])]。
++    健康檢查本身拋錯時 skills_health_bad 是空；fatal 仍須讓重讀者看見。"""
+     hits = []
+     for p in sorted(Path(out_dir).glob("*.json")):
+         if p.name in ("summary.json", "meta.json"):
+             continue
+         try:
+             d = json.loads(p.read_text(encoding="utf-8"))
+         except Exception:
+             continue
+-        if isinstance(d, dict) and d.get("skills_health_bad"):
+-            hits.append((p.name, d["skills_health_bad"]))
++        if isinstance(d, dict):
++            bad = d.get("skills_health_bad")
++            if bad:
++                hits.append((p.name, bad))
++            elif d.get("fatal"):
++                hits.append((p.name, ["探針整批 fatal；健康或清理結果不可判"]))
+     return hits
+ 
+ 
+ def needed(by_arm, arm, qid, runs):
+     """這題這組還缺幾場有效結果。"""
+     have = sum(1 for r in by_arm.get(arm, []) if r.get("id") == qid and is_valid(r))
+     return max(0, runs - have)
+ 
+ 
+ def runs_in_window(out_dir, hours=5.0, now=None):
+@@ -152,28 +159,28 @@ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, mode
+     t0 = time.time()
+     with open(log, "w", encoding="utf-8") as lf:
+         lf.write("$ " + " ".join(cmd) + "\n")
+         lf.flush()
+         r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+     bad_health = False
+     try:
+         d = json.loads(out.read_text(encoding="utf-8"))
+         got = sum(1 for x in d.get("results", []) if is_valid(x))
+         lim = sum(1 for x in d.get("results", []) if x.get("limit_hit"))
+-        bad_health = bool(d.get("skills_health_bad"))
++        bad_health = bool(d.get("skills_health_bad") or d.get("fatal"))
+     except Exception:
+         got, lim = 0, 0
+     if r.returncode == 3 or bad_health:
+         # 探針回 3 或結果檔標了 skills 事故:設停止旗標,其餘 worker 與後續工作不再派(r1 併發席 F1)
+         if stop is not None:
+             stop.set()
+-        return (arm, qid, f"★全域 skills 事故★ rc={r.returncode}——停止派工,先在真 repo 跑 lumos install --force")
++        return (arm, qid, f"★探針批次失效★ rc={r.returncode}——停止派工，檢查結果檔與探針日誌")
+     return (arm, qid, f"rc={r.returncode} 有效 {got}/{n} 撞上限 {lim} {round(time.time() - t0)}s")
+ 
+ 
+ def _arm_stats(results, expected_ids, runs):
+     # ★r1 正確性席:只算現在題庫裡的題★——out_dir 是跨天累積的逐題檔,題庫改過後舊題殘檔還在,
+     # 不過濾會把舊題的通過/不通過靜默混進 M1-M4 與頭條差值。用 expected_ids 篩掉不在現行題庫的。
+     idset = set(expected_ids)
+     results = [r for r in results if r.get("id") in idset]
+     valid = [r for r in results if is_valid(r)]
+     n = len(valid)
+@@ -311,23 +318,23 @@ def main():
+                 arm, qid, st = f.result()
+                 print(f"  {arm} {qid}: {st}", flush=True)
+     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
+     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
+     # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
+     poisoned = collect_skills_health(out_dir)
+     s = merge(out_dir, ids, a.runs)
+     s["skills_health_poisoned"] = poisoned
+     if poisoned:
+         print("\n" + "!" * 60)
+-        print(f"✗ 偵測到全域 ~/.claude/skills 事故({len(poisoned)} 個結果檔標了受污染)——本次資料不可採信。", flush=True)
+-        print("  先修再重跑:\n    python3 scripts/lumos install --force")
+-        print("  見 Issues/探針沙盒改動真全域機器狀態。summary 仍產出但已標 skills_health_poisoned。")
++        print(f"✗ 偵測到 {len(poisoned)} 個探針失效結果檔——本次資料不可採信。", flush=True)
++        print("  檢查結果檔與探針日誌；若 skills 連結損壞，在真 repo 執行 python3 scripts/lumos install --force。")
++        print("  summary 仍產出，但失效檔不參與統計，並已標 skills_health_poisoned。")
+         print("!" * 60)
+     (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
+     md = render_md(s, meta)
+     (out_dir / "summary.md").write_text(md, encoding="utf-8")
+     print("\n" + md)
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/governance/review-reports/probe-boundary-remediation/r4-postfix-ablation-regression.txt b/governance/review-reports/probe-boundary-remediation/r4-postfix-ablation-regression.txt
+new file mode 100644
+index 00000000..796ff7d1
+--- /dev/null
++++ b/governance/review-reports/probe-boundary-remediation/r4-postfix-ablation-regression.txt
+@@ -0,0 +1,30 @@
++test_arm_stats_filters_expected_ids (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_arm_stats_filters_expected_ids) ... ok
++test_arm_stats_m2_excludes_unknown (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_arm_stats_m2_excludes_unknown) ... ok
++test_backfill_recomputes_lumos_from_calls (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_backfill_recomputes_lumos_from_calls) ... ok
++test_backfill_truncated_ambiguous_is_unknown (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_backfill_truncated_ambiguous_is_unknown) ... ok
++test_backfill_truncated_visible_false_positive_downgraded (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_backfill_truncated_visible_false_positive_downgraded) ... ok
++test_backfill_truncated_visible_real_call_kept (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_backfill_truncated_visible_real_call_kept) ... ok
++test_classify_question (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_classify_question) ... ok
++test_collect_skills_health (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_collect_skills_health) ... ok
++test_is_limit_hit (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_is_limit_hit)
++2026-09-02 實跑:撞帳號上限時 claude -p 零工具呼叫、result 文字是上限訊息;有工具呼叫的場永遠不算撞上限。 ... ok
++test_load_ids_dedup (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_load_ids_dedup) ... ok
++test_load_results_skips_bad_json (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_load_results_skips_bad_json) ... ok
++test_lumos_stats (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_lumos_stats) ... ok
++test_lumos_stats_rejects_quoted_and_echo (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_lumos_stats_rejects_quoted_and_echo) ... ok
++test_m4_content_vs_gated (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_m4_content_vs_gated) ... ok
++test_merge_computes_four_metrics (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_merge_computes_four_metrics) ... ok
++test_merge_counts_missing (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_merge_counts_missing) ... ok
++test_needed_counts_only_valid (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_needed_counts_only_valid) ... ok
++test_runs_in_window_counts_recent_only (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_runs_in_window_counts_recent_only) ... ok
++test_strip_missing_marker_returns_unchanged (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_strip_missing_marker_returns_unchanged) ... ok
++test_strip_real_claude_md_has_markers (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_strip_real_claude_md_has_markers)
++釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完其餘各節還在。範本改名這裡先紅。 ... ok
++test_strip_rejects_duplicate_markers (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_strip_rejects_duplicate_markers) ... ok
++test_strip_removes_only_rule_section (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_strip_removes_only_rule_section) ... ok
++test_validate_scenario (scripts.test_autonomous_loop.TestScenarioProbeAblation.test_validate_scenario) ... ok
++
++----------------------------------------------------------------------
++Ran 23 tests in 0.023s
++
++OK
+diff --git a/governance/review-reports/probe-boundary-remediation/r4-postfix-probe-regression.txt b/governance/review-reports/probe-boundary-remediation/r4-postfix-probe-regression.txt
+new file mode 100644
+index 00000000..a6695c7f
+--- /dev/null
++++ b/governance/review-reports/probe-boundary-remediation/r4-postfix-probe-regression.txt
+@@ -0,0 +1,271 @@
++lumos 測試(44 案例)
++  ✓ ★--canary-type/--probe 落帳★
++  ✓ ★不給不寫鍵(相容鐵則)★
++  ✓ ★canary-stats 型別表:型別×探針×caught 可讀★
++  ✓ s3-probe: 解析 command_execution(剝殼)/file_change/agent_message
++  ✓ s3-probe: 只認 item.completed(started 不重複)
++  ✓ s3-probe: 剝殼後 lumos_stats 認得敲 lumos(第 0 個)
++  ✓ s3-probe: codex runner 預設不帶 --dangerously-bypass-hook-trust(只在 --codex-bypass-hook-trust 時加,隔離環境用)、環境帶 LUMOS_PROBE
++  ✓ s3-probe: 雙引號外殼也剝
++t_doctor_revisit_skips_probe_lines
++  ✓ ①條件式不算壞損、沒到期:E5 整段不印
++  ✓ ②[by:] 到期照 E5 唸
++t_drift_exam_probe_mode
++  ✓ ①事件提交讓條件成立:擋到
++  ✓ ②跟條件無關的提交:漏(不是每次都擋)
++  ✓ ③改寫檔沒有這一題:略過
++t_drift_probe_scan_and_doctor
++  ✓ ①成立的列成發現、沒成立的不列
++  ✓ ②指不到的筆記與沒帶期限列成問題
++  ✓ ③doctor Z 段印條件式條數與沒帶期限
++  ✓ ★前置★ 找得到那個探測的逾時設定
++  ✓ ★探測逾時要 ≤3 秒★(跟 hook 預算同量級的話會排擠本業)
++  ✓ t_hook_root_probe_timeout_is_small
++  ✓ retired: 新迴圈問 panel 拒判 rc2
++  ✓ retired: 拒判訊息指路 --disposal
++  ✓ retired: code-* major+accepted → FAIL 且訊息講 major 一律折
++  ✓ retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息
++  ✓ retired: 舊迴圈 PASS 印行不含義務句
++  ✓ retired: 舊迴圈 PASS 印行含觀測字樣
++  ✓ retired: 多 carrier 分流訊息(新迴圈不再指路 panel)
++  ✓ t_panel_probe_retired
++  ✓ 逐場副本前置:兩runner確實呼叫
++  ✓ 逐場副本彼此不同且來源變動不改批次基線
++  ✓ keep只留最後一份有效副本
++  ✓ 逐場批次結果仍有效且帶版號成本
++  ✓ Claude空/缺ID不能配成正證據 ''
++  ✓ 另有真證據仍優先 ''
++  ✓ Claude空/缺ID不能配成正證據 None
++  ✓ 另有真證據仍優先 None
++  ✓ 普通題清理失敗確實觸發而後題未跑
++  ✓ 清理失敗整批退出3且不算有效分數
++  ✓ 不確定與fatal寫入歷史
++  ✓ 邊界現場:來源確有條件設定與clean filter
++  ✓ Git filter 不得在建立副本時執行
++  ✓ 切分支後仍無繼承remote/hook覆寫
++  ✓ 本機bare dry-run仍被pre-push擋
++  ✓ 設定隔離來源byte不變
++  ✓ 歷史保留沙盒版號與成本
++  ✓ 巢狀Git前置成立 nested
++  ✓ 巢狀Git或未初始化子模組拒絕 nested
++  ✓ 拒絕時來源byte相同 nested
++  ✓ 巢狀Git前置成立 gitmodules
++  ✓ 巢狀Git或未初始化子模組拒絕 gitmodules
++  ✓ 拒絕時來源byte相同 gitmodules
++  ✓ r1 大小寫現場有.GIT
++  ✓ r1 巢狀Git必拒絕 case
++  ✓ r1 bare現場有HEAD/objects/refs
++  ✓ r1 巢狀Git必拒絕 bare
++  ✓ r1 keep普通題排在讀碼題前仍留下
++  ✓ r1 用量重試的逐場成本仍入結果
++  ✓ r1 GIT_TRACE不改來源byte
++  ✓ r1 副本模型提交使用假身分
++  ✓ r2 身分覆蓋現場成立
++  ✓ r2 副本快照實際提交用假身分
++  ✓ r2 模型後續提交用假身分
++  ✓ r2 健康檢查讀不到即停批且標fatal
++  ✓ r2 最終健康檢查讀不到仍寫不可判紀錄
++  ✓ r2 現場確有外指linked worktree
++  ✓ r2 有linked worktree的來源在副本建立前拒絕
++  ✓ r2 拒絕不改真linked指標
++  ✓ r4 現場兩場成功但最終健康不可判
++  ✓ r4 下游不得重用致命批次
++  ✓ r4 runner拋錯也先查健康再決定後題
++  ✓ 基線建立失敗沒有模型呼叫
++  ✓ 基線建立失敗留不可判紀錄
++  ✓ 前置:連結確實指回來源
++  ✓ 外指工作樹連結建立副本即拒絕
++  ✓ 拒絕時來源未被寫動
++  ✓ 內指工作樹連結好例
++  ✓ 探針 v04: 9/28歷史摘要在新尺下證據不足，答案判分仍保留
++  ✓ 探針 v04: 只 grep 圖譜資料夾、沒讀程式碼 → 不過
++  ✓ 探針 v04: 讀了碼但答案沒講到帳 → 不過
++  ✓ 題目健康 → 不報問題
++  ✓ 題目提到的路徑不存在 → 報出來
++  ✓ 訊息要指出是哪個路徑
++  ✓ target 宣告的字串找不到 → 報出來
++  ✓ 訊息要指出是哪個字串
++  ✓ 多題壞 → 逐題報
++  ✓ 只剩註解提到舊名字 → 仍判腐爛
++  ✓ 活著的內容不受剝註解影響
++  ✓ 版本對照不被當成路徑
++  ✓ 真路徑照樣抓得到
++  ✓ 網址不被當成 repo 裡的路徑
++  ✓ 沒有副檔名的路徑也抓得到
++  ✓ 圖譜節點名抓得到
++  ✓ 空字串 needle → 當格式錯講清楚
++  ✓ 只給路徑 → 只驗存在,合法
++  ✓ target 指到目錄 → 訊息講「是目錄」不是「不存在」
++  ✓ 紀律題組六題的目標都還在
++  ✓ 探針總結: q 三場截斷兩場 → 點名;r 兩場截斷一場(剛好一半)→ 不點名
++  ✓ 探針總結: 有效 3/6 剛好一半 → 還算可下結論
++  ✓ 探針總結: 8 場只有 1 場有效 → 分母退回 8、寫明不能下結論、p≠n
++  ✓ 探針總結: 整批只有截斷 → 0/1,不會變成 0/0 安靜全過
++  ✓ r4 現場來源Git目錄在來源內 plain
++  ✓ r4 副本Git落點判定 plain
++  ✓ r4 來源byte-equal plain
++  ✓ r4 現場來源Git目錄在來源內 relative
++  ✓ r4 副本Git落點判定 relative
++  ✓ r4 來源byte-equal relative
++  ✓ r4 現場來源Git目錄在來源內 absolute
++  ✓ r4 副本Git落點判定 absolute
++  ✓ r4 來源byte-equal absolute
++  ✓ r4 拒絕後副本已清理 absolute
++  ✓ r4 現場來源Git目錄在來源內 symlink
++  ✓ r4 副本Git落點判定 symlink
++  ✓ r4 來源byte-equal symlink
++  ✓ r4 拒絕後副本已清理 symlink
++  ✓ r4 現場來源Git目錄在來源內 worktree-config
++  ✓ r4 副本Git落點判定 worktree-config
++  ✓ r4 來源byte-equal worktree-config
++  ✓ r4 拒絕後副本已清理 worktree-config
++  ✓ r4 現場來源Git目錄在來源內 common-external
++  ✓ r4 副本Git落點判定 common-external
++  ✓ r4 來源byte-equal common-external
++  ✓ r4 共用Git資料不受副本影響
++  ✓ r4 拒絕後副本已清理 common-external
++  ✓ r4 現場來源Git目錄在來源內 refs-symlink
++  ✓ r4 副本Git落點判定 refs-symlink
++  ✓ r4 來源byte-equal refs-symlink
++  ✓ r4 共用Git資料不受副本影響
++  ✓ r4 拒絕後副本已清理 refs-symlink
++  ✓ r4 Git設定注入兩runner均隔離 GIT_CONFIG_COUNT
++  ✓ r4 保持非Git環境PATH
++  ✓ r4 Git設定注入兩runner均隔離 GIT_CONFIG_PARAMETERS
++  ✓ r4 保持非Git環境PATH
++  ✓ r4 Git設定注入兩runner均隔離 GIT_CONFIG_GLOBAL
++  ✓ r4 保持非Git環境PATH
++  ✓ r4 Git設定注入兩runner均隔離 GIT_CONFIG_SYSTEM
++  ✓ r4 保持非Git環境PATH
++  ✓ r4 dry-run沒有寫入bare
++  ✓ r4 缺/壞ID排除 item.startedNone
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 缺/壞ID排除 item.started''
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 缺/壞ID排除 item.started7
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 缺/壞ID排除 item.updatedNone
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 缺/壞ID排除 item.updated''
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 缺/壞ID排除 item.updated7
++  ✓ r4 已有正證據不受其他壞呼叫影響
++  ✓ r4 完整有效未讀仍計失敗
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 正常完成照題判分
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 壞例: 非零退出不算分
++  ✓ probe repair C2 壞例: 摘要與歷史排除 CLI 故障
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 壞例: 非零退出不算分
++  ✓ probe repair C2 壞例: 摘要與歷史排除 CLI 故障
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 非零退出仍保留 truncated
++  ✓ probe repair C2 前置: Claude adapter 確實跑 subprocess
++  ✓ probe repair C2 好例: 非零退出仍保留 limit_hit
++  ✓ probe repair C3 前置: main 跑完兩場且輸出逐題統計
++  ✓ probe repair C3 好例: 有效失敗仍在分母
++  ✓ probe repair C3 前置: main 跑完兩場且輸出逐題統計
++  ✓ probe repair C3 壞例: 整體及逐題都只算有效場
++  ✓ probe repair C3 前置: main 跑完兩場且輸出逐題統計
++  ✓ probe repair C3 壞例: 全被排除仍列題目並標數量
++  ✓ 沙盒①: remote 全部拔掉
++  ✓ 沙盒②: 加回 remote 後 push 仍被 pre-push 擋(rc≠0)
++  ✓ 沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)
++  ✓ 前提: worktree 的 .git 是檔不是目錄
++  ✓ worktree 當來源 → 停手,不照跑
++  ✓ 停手訊息要講得出為什麼
++  ✓ 來源的 remote 沒被拔掉
++  ✓ 來源的 hooksPath 沒被改
++  ✓ .git 是 symlink 指到別處 → 停手
++  ✓ symlink 情形下來源的 remote 也沒被拔
++  ✓ GIT_DIR 已設 → 要嘛停手、要嘛不受它影響
++  ✓ GIT_DIR 情形下來源的 remote 沒被拔
++  ✓ 探針題庫: 沒有任何一題禁止先讀碼
++  ✓ 探針題庫: 寫入與替代類禁令保留
++  ✓ 探針題庫: 除純程式碼題外,期望仍是敲 lumos(或紀律題的寫回動作)
++  ✓ 探針判準: 為什麼題先 Grep 再查圖譜 → 過;寫回題先 Edit 再 lumos set → 不過
++  ✓ source Git 環境不能把兩runner導去本體
++  ✓ source main 重試/致命清理 claudeFalse
++  ✓ source main 接到指定runner且傳標記 claude
++  ✓ source main 重試/致命清理 claudeTrue
++  ✓ source main 接到指定runner且傳標記 claude
++  ✓ source main 重試/致命清理 codexFalse
++  ✓ source main 接到指定runner且傳標記 codex
++  ✓ source main 重試/致命清理 codexTrue
++  ✓ source main 接到指定runner且傳標記 codex
++  ✓ source main 模型例外遮罩標記
++  ✓ source result 真成功 claude
++  ✓ source result 失敗不算讀到 claude
++  ✓ source result 命令中標記不算 claude
++  ✓ source result 缺標記前提 claude
++  ✓ source result 缺結束/空歷史 claude
++  ✓ source result 完整零呼叫是失敗 claude
++  ✓ source result Claude文字區塊
++  ✓ source result Glob不算證據
++  ✓ source result 缺已發呼叫結果 claude
++  ✓ source result 孤立結果或答案不得正證 claude
++  ✓ source result 真成功 codex
++  ✓ source result 失敗不算讀到 codex
++  ✓ source result 命令中標記不算 codex
++  ✓ source result 缺標記前提 codex
++  ✓ source result 缺結束/空歷史 codex
++  ✓ source result 完整零呼叫是失敗 codex
++  ✓ source result 缺已發呼叫結果 codex
++  ✓ source result 孤立結果或答案不得正證 codex
++  ✓ source runner claude cat scripts/lumos
++  ✓ source runner codex cat scripts/lumos
++  ✓ source runner claude cd scripts && cat lumos
++  ✓ source runner codex cd scripts && cat lumos
++  ✓ source runner claude grep -n '_BOOKKEEPING_FILES\|_BOOKKEEPING_DIRS' scripts/lumos | cut -c1-220
++  ✓ source runner codex grep -n '_BOOKKEEPING_FILES\|_BOOKKEEPING_DIRS' scripts/lumos | cut -c1-220
++  ✓ source runner claude sed -n '21473,21475p' scripts/lumos
++  ✓ source runner codex sed -n '21473,21475p' scripts/lumos
++  ✓ source runner claude grep 'scripts/lumos' README.md
++  ✓ source runner codex grep 'scripts/lumos' README.md
++  ✓ source runner claude find . -type f | grep scripts/lumos
++  ✓ source runner codex find . -type f | grep scripts/lumos
++  ✓ source runner claude cat README.md
++  ✓ source runner codex cat README.md
++  ✓ source probe 真題庫已接線
++  ✓ source probe 舊摘要不假裝通過
++  ✓ source probe 乾淨基線不觸發code_entries
++  ✓ source probe 標記注入且AST含位置不變
++  ✓ source probe 專用副本刪除/结果遮罩
++  ✓ source probe 乾淨基線不觸發code_entries
++  ✓ source probe 標記注入且AST含位置不變
++  ✓ source probe 專用副本刪除/结果遮罩
++  ✓ source probe 每次新標記/本體不動
++  ✓ source probe 壞目標拒絕且不寫
++  ✓ source probe 壞目標拒絕且不寫
++  ✓ source probe 壞目標拒絕且不寫
++  ✓ source probe 壞目標拒絕且不寫
++  ✓ source probe 拒絕symlink
++  ✓ source probe 拒絕hardlink
++  ✓ source probe 拒絕parent
++  ✓ 探針總結: 6 場扣 2 場儀器例外 → 3/4
++  ✓ 探針總結: 總結行仍以「p/n 個情境 Claude 自己敲對了」開頭
++  ✓ 探針總結: 列出截斷與用量上限各幾場
++  ✓ 探針歷史: failed 只含有效場次沒過的題、另記 excluded 與判準版本
++  ✓ 探針截斷 前置: 同一串呼叫、正常結束時會判過
++  ✓ 探針截斷: 撞回合上限 → 截斷、不算過、理由以儀器例外開頭
++  ✓ 探針截斷: 子程序逾時 → 同樣標截斷
++  ✓ 探針截斷: 用量上限照舊標用量上限、不標截斷
++  ✓ 探針截斷: Codex 執行器逾時也帶截斷欄位
++  ✓ 同種子抽同一組
++  ✓ 換種子換一組
++  ✓ 抽樣跨兩份情境檔
++  ✓ t_probe_weekly_sample_deterministic
++  ✓ probe max_turns: 題目帶 30 → 30;沒帶 → 預設;壞值/0 → 預設
++  ✓ probe max_turns: s15 題庫帶 max_turns 30
++
++最慢 5 支(超時上限 180s;餘裕 = 上限 / 最慢):
++    43.4s  t_probe_source_probe_main  (餘裕 4x)
++    16.0s  t_probe_source_probe_setup  (餘裕 11x)
++     6.4s  t_probe_boundary_review1_keep_retry  (餘裕 28x)
++     6.2s  t_panel_probe_retired  (餘裕 29x)
++     4.8s  t_probe_source_probe_runners  (餘裕 37x)
++
++────────────────────────────────────────
++254 passed, 0 failed
+diff --git a/governance/review-reports/probe-boundary-remediation/r4-pre-fix-red.txt b/governance/review-reports/probe-boundary-remediation/r4-pre-fix-red.txt
+new file mode 100644
+index 00000000..eee89b4c
+--- /dev/null
++++ b/governance/review-reports/probe-boundary-remediation/r4-pre-fix-red.txt
+@@ -0,0 +1,14 @@
++lumos 測試(2 案例)
++  ✓ r4 現場兩場成功但最終健康不可判
++  ✗ r4 下游不得重用致命批次  ([{'id': 'a', 'passed': True, 'reason': 'ok', 'truncated': False, 'limit_hit': False, 'first_tool': None, 'secs': 0, 'sandbox_secs': 0.42, 'model_secs': 0.0, 'run': 1, 'calls_truncated': False, 'ever_lumos': False, 'first_lumos_idx': None}, {'id': 'b', 'passed': True, 'reason': 'ok', 'truncated': False, 'limit_hit': False, 'first_tool': None, 'secs': 0, 'sandbox_secs': 0.428, 'model_secs': 0.0, 'run': 1, 'calls_truncated': False, 'ever_lumos': False, 'first_lumos_idx': None}], {'n': 2, 'm1_passed': 2, 'm1_rate': 1.0, 'm2_ever': 0, 'm2_n': 2, 'm2_rate': 0.0, 'm3_first_idx_median': None, 'm3_n': 0, 'm4_gated_passed': 1, 'm4_gated_n': 1, 'm4_content_passed': 0, 'm4_content_n': 0, 'inconsistent_questions': [], 'missing': 0, 'instrument_errors': 0, 'limit_hits': 0}, [])
++  ✗ FAILED t_probe_boundary_review4_fatal_batch_not_reused(1 條斷言)
++  ✗ r4 runner拋錯也先查健康再決定後題  (['run:a', 'run:b', 'health'], 1, {'results': [{'id': 'a', 'cat': None, 'passed': False, 'reason': '儀器例外: RuntimeError: model output failed', 'first_tool': None, 'n_calls': 0, 'calls': [], 'secs': 0, 'stderr': '', 'arm': 'with', 'ever_lumos': False, 'first_lumos_idx': None, 'limit_hit': False, 'result_subtype': None, 'source_evidence': None, 'fatal': False, 'sandbox_secs': 0.379, 'model_secs': 0.0, 'run': 1}, {'id': 'b', 'cat': None, 'passed': False, 'reason': '儀器例外: RuntimeError: model output failed', 'first_tool': None, 'n_calls': 0, 'calls': [], 'secs': 0, 'stderr': '', 'arm': 'with', 'ever_lumos': False, 'first_lumos_idx': None, 'limit_hit': False, 'result_subtype': None, 'source_evidence': None, 'fatal': False, 'sandbox_secs': 0.361, 'model_secs': 0.0, 'run': 1}], 'passed': 0, 'total': 2, 'arm': 'with', 'runs': 1, 'grader': '2026-10-03-source-results', 'excluded': ['a', 'b'], 'valid_total': 0, 'inconclusive': True, 'fatal': False, 'sandbox_version': '2026-10-04-frozen-copy-config-reset', 'sandbox_secs': 1.114, 'model_secs': 0.0, 'skills_health_bad': []})
++  ✗ FAILED t_probe_boundary_review4_runner_error_checks_health(1 條斷言)
++
++最慢 5 支(超時上限 180s;餘裕 = 上限 / 最慢):
++     1.4s  t_probe_boundary_review4_fatal_batch_not_reused  (餘裕 125x)
++     1.2s  t_probe_boundary_review4_runner_error_checks_health  (餘裕 146x)
++
++────────────────────────────────────────
++1 passed, 2 failed
++  這一輪的暫存現場留著沒刪(有紅或 --keep-tmp):/var/folders/tc/xmllmxtn4q5704lsy80wc1kw0000gn/T/gctl-run-0804c5o7
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 505f2945..8c5fa343 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -1021,26 +1021,27 @@ def main():
+                         work = make_sandbox(baseline, "with", source_probe=(sc["source_probe"], token) if token else None)
+                         setup_elapsed = time.monotonic() - setup_started
+                         sandbox_secs += setup_elapsed
+                         attempt_sandbox_secs += setup_elapsed
+                         model_started = time.monotonic()
+                         try:
+                             res = _redact_source_token(run_at(work, token), token)
+                         finally:
+                             attempt_model_secs = time.monotonic() - model_started
+                             model_secs += attempt_model_secs
+-                        try:
+-                            health = global_skills_health()
+-                        except Exception as e:
+-                            raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
+-                        if health:
+-                            raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
++                            # runner/解析器拋錯也可能已改到真 HOME；下一場前仍須驗健康。
++                            try:
++                                health = global_skills_health()
++                            except Exception as e:
++                                raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
++                            if health:
++                                raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                     except Exception as e:
+                         if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError)):
+                             attempt_fatal = True
+                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
+                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                                "limit_hit": False, "result_subtype": None, "source_evidence": "unknown" if sc.get("source_probe") else None,
+                                "fatal": attempt_fatal}
+                     finally:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 650c8f2b..4f1f251a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37497,20 +37497,77 @@ def t_probe_boundary_review2_health_unreadable():
+             try:
+                 rc = mod.main(); threw = False
+             except OSError:
+                 rc = None; threw = True
+         data = json.loads(out.read_text()) if out.exists() else {}
+         check("r2 最終健康檢查讀不到仍寫不可判紀錄", not threw and rc == 3
+               and data.get("fatal") and data.get("inconclusive") and len(data.get("results", [])) == 2,
+               (threw, rc, data))
+ 
+ 
++def t_probe_boundary_review4_runner_error_checks_health():
++    import tempfile, json, io, contextlib
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_boundary_r4_runner")
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-runner-") as td:
++        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
++        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
++                                                   for s in ("a", "b")) + "\n")
++        out = root / "out.json"; events = []
++        def runner(sc, *_args, **_kwargs):
++            events.append("run:" + sc["id"])
++            raise RuntimeError("model output failed")
++        def health():
++            events.append("health")
++            if len(events) == 2:
++                return [("damaged", "/tmp/broken")]
++            return []
++        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
++             patch.object(mod, "global_skills_health", side_effect=health), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        data = json.loads(out.read_text())
++        check("r4 runner拋錯也先查健康再決定後題", events[:2] == ["run:a", "health"]
++              and "run:b" not in events and rc == 3 and data["fatal"] and data["inconclusive"],
++              (events, rc, data))
++
++
++def t_probe_boundary_review4_fatal_batch_not_reused():
++    import tempfile, json, io, contextlib, importlib.util
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_boundary_r4_final")
++    spec = importlib.util.spec_from_file_location("ablation_r4", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r4-final-") as td:
++        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
++        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
++                                                   for s in ("a", "b")) + "\n")
++        outdir = root / "out"; outdir.mkdir(); out = outdir / "with-q-a-1.json"
++        def runner(sc, *_args, **_kwargs):
++            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
++        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
++             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final unreadable")]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        data = json.loads(out.read_text()); loaded = ablation.load_results(outdir)
++        merged = ablation.merge(outdir, ["a", "b"], 1)
++        poisoned = ablation.collect_skills_health(outdir)
++        check("r4 現場兩場成功但最終健康不可判", rc == 3 and data["fatal"] and data["inconclusive"]
++              and len(data["results"]) == 2 and all(r["reason"] == "ok" for r in data["results"]), data)
++        check("r4 下游不得重用致命批次", not loaded["with"] and ablation.needed(loaded, "with", "a", 1) == 1
++              and merged["arms"]["with"]["n"] == 0 and bool(poisoned),
++              (loaded["with"], merged["arms"]["with"], poisoned))
++
++
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)

@@ -280,4 +280,3 @@ git 把 `100644` 記進索引,09-08 09:30 的 wrapper 直呼它 → `Permission 
 看門狗喊「autonomous 那步失敗」——**這一則是真警報,而且第一次就被看門狗抓到**。
 測試沒抓到,因為測試都用 `bash <檔>` 跑,不需要執行位。
 處置:補回 +x;守衛 `t_directly_invoked_scripts_keep_exec_bit` 盯「會被直接呼叫的那幾支」在索引裡必須 755。
-

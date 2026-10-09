@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "loop": "code-test-quality-r4-repair",
+  "rounds": [
+    "r1",
+    "r2",
+    "r3",
+    "r4"
+  ],
+  "drafted_by": "retro-drafter-r4-sonnet",
+  "completed_by": "claude-hook-refactor-session",
+  "families": [
+    {
+      "family": "same-family-unswept",
+      "rounds": [
+        "r1",
+        "r2",
+        "r3",
+        "r4"
+      ],
+      "evidence": [
+        "governance/review-reports/code-test-quality-r4-repair/r1-architecture-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r2-boundary-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r3-架構對齊-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r4-邊界資源-sonnet.md"
+      ],
+      "note": "同根因:程序啟動點的程序群清理政策散在多處,逐輪各抓到一處。項目是 r1 A1(CLI runner 只在 returncode 為 None 時清)、r2 B1(Semgrep 後端走 subprocess.run)、r3 ARC-1(handbook model_command 自寫第二份 Popen/killpg,把已退出 launcher 誤判逾時)、r4 BND4-1(terminate_group 的 killpg 只容忍 ProcessLookupError,launcher 已成殭屍且同群無其他成員時 PermissionError(EPERM) 蓋掉逾時或正常回傳)。前三項在修補前就存在:r3 辯方 A 實跑 10d40f30 與 c4982cb1 的 model_command,兩版同樣誤判逾時,r3 intake 也記為兩版逐位元相同。r4 BND4-1 的兩版同命令 300 次競態,修前 PermissionError 21 次、修後 15 次,修前 runner 與 handbook 自寫版都只接 ProcessLookupError,是修補前就有的缺口,修補既沒引入也沒補上。這四處屬同類疏漏,但本項只主張「同族」,不主張前一輪修補造成後一輪項目。r3 收貨時已把 killpg PermissionError 列為兩席都沒能構造出場景的未驗範圍,r4 才用競態構造出來。r4 ARC4-4(handbook run_test 仍用 subprocess.run)與 ARC4-5(corpus 外層 subprocess.run)是同一類啟動點,但 intake 以「受測碼經 AST 白名單、沒有後代」與「r3 已實跑駁回、屬既有」放行為 accepted,不當缺陷計入,僅記為清單。SEC-R4-1 不併入,它屬 seat-noise。"
+    },
+    {
+      "family": "fix-induced",
+      "rounds": [
+        "r3",
+        "r4"
+      ],
+      "evidence": [
+        "governance/review-reports/code-test-quality-r4-repair/r3-回歸正確性-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r3-邊界-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r4-回歸正確性-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r4-邊界資源-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r4-測試殺傷力-sonnet.md"
+      ],
+      "note": "每項各有同案例兩版可比的觀察。r3:(1) REG-1/BND-2:假 backend 往 stderr 寫 11 MiB 後印合法 JSON,10d40f30 為 scanned,c4982cb1 為 unavailable(output exceeds 10 MiB);由 Semgrep 後端改走共用 runner 帶入上限。(2) BND-1:兩檔掃描時對卡住的假 backend 送 SIGTERM,10d40f30 為 rc143,c4982cb1 為 rc2,且續掃第二檔。(3) ARC-3:只帶 scan 與 adapter、不帶 test_quality.py 時,c4982cb1 會 ModuleNotFoundError。r4:(4) REG4-1/BND4-2/MUT4-1:同一假 claude 印 11 MiB 或 10 MiB+1,7d1975e8 的 run_model 回 valid=False 的 row 並寫出事件檔,a2f30b19 拋 ValueError(output exceeds 10 MiB)使整場中止、事件檔不存在;回歸、邊界、測試殺傷力三席各自用同一類輸入實跑,編排者收貨時再重現。成因是 handbook model_command 改走有 10 MiB 上限的共用 runner,修前自寫版無上限。這與 r3 REG-1 同形(共用 runner 上限被帶進另一個呼叫端)。(5) MUT4-5:從 repo 根以 python -m unittest 跑掃描測試,修前 24 項 OK,修後 4 errors(ModuleNotFoundError: test_quality);成因是 r3 折入移除了 semgrep_module 的 sys.path 插入。專案入口以腳本形式執行不受影響,intake 已放行為 accepted,此處只記為有兩版可比的修補副作用。限制:r3-repair-binding.json 與 r4-repair-binding.json 的 attribution_limits 都寫明修前修後之間只有一個提交,同時含 handbook 改走共用 runner、例外型別、scanner 延後載入、測試補強與圖譜筆記,沒有拆出中間點。行為差異都落在共用 runner 的改寫,但沒有獨立隔離區間內其他可達變更;上限是共用 runner 的屬性、修前自寫版沒有,這是讀碼加實跑的合理推論,不是拆點隔離的證明。觀察由各席實跑,我只讀了這些紀錄,沒有自己重跑。不含 r3 ARC-2(逾時改用訊息字串分類),它只有程式碼閱讀,沒有行為對照案例。r1、r2 沒有證據判為修補造成,不列入本族。"
+    },
+    {
+      "family": "other",
+      "rounds": [
+        "r1",
+        "r2",
+        "r3",
+        "r4"
+      ],
+      "evidence": [
+        "governance/review-reports/code-test-quality-r4-repair/r1-correctness-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r2-mutation-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r2-regression-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r2-architecture-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r3-測試殺傷力-sonnet.md",
+        "governance/review-reports/code-test-quality-r4-repair/r4-測試殺傷力-sonnet.md"
+      ],
+      "note": "attribution-undetermined:修補所附的驗證測試沒有咬住行為(假綠、空指向、入口不對、參數與出口沒守)。項目有 r1 R4-COR-1(防回歸測試名空指向)、R4-COR-2(--vault 案例 cwd 沒指到 fixture)、r2 R4-R2-REG-1 與 MT-1(同一個 cwd 缺陷再現,cwd=self.root 落在另一個呼叫,刪 fixture 案例仍綠)、r2 A1(新控制只測 helper 例外,沒走 scan 公開入口)、r3 MUT-1(inherits 測試沒斷言 worker 已死)、MUT-4(後端出口控制不全)、MUT-2(逾時字串比對改壞仍全綠)、MUT-3(拿掉 cwd 仍全綠)、r4 MUT4-2(拿掉 model_command 的 cwd= 三套照綠)、MUT4-3(runner 第二個逾時出口改回普通 ValueError 或不帶部分輸出,三套照綠)、MUT4-4(中斷訊息改字三套照綠)。其中 r3 MUT-2/MUT-3 與 r4 MUT4-2/MUT4-4 只有「兩版都沒有測試守」的觀察,屬原有缺口,不是修補造成。r4 MUT4-3 是本輪新增的型別分類在第二逾時出口缺測,修前同出口也無測試,沒有同案例可比。cwd 參數沒被測試守是跨 r1、r2、r3、r4 反覆出現的形狀,但各輪是不同呼叫端,現有證據不足以判成「同一處疏漏沒掃乾淨」,所以沒併入 same-family-unswept。缺件:r1 沒有 binding 與兩版案例紀錄,r2 的各項沒有修前同案例的可比紀錄,r3 MUT-1 與 MUT-4、r4 MUT4-3 的測試是新增、修前無同一案例。r2 intake 與 r3 intake 的「可歸因於前一輪」只是作者結論,不採用。r3 ARC-2、ARC-5 為只有程式碼閱讀的小項,同樣未判定。r4 ARC4-1 至 ARC4-3 為命名與 noqa 慣例的 minor,intake 以收益不足放行為 accepted,不判歸因、不併入 fix-induced。"
+    },
+    {
+      "family": "seat-noise",
+      "rounds": [
+        "r1",
+        "r3"
+      ],
+      "evidence": [
+        "governance/review-reports/code-test-quality-r4-repair/r1-security-report.md",
+        "governance/review-reports/code-test-quality-r4-repair/r3-架構對齊-sonnet.md"
+      ],
+      "note": "兩項被辯方或實跑駁回(MISS,refuted)。(1) r1 SEC-R4-1:子程序主動 setsid 逃出程序群確實成立,但已超出「清理自己建立的 POSIX 程序群」的合約,辯方判為合約擴張,且報告所稱的 PermissionError 未能重現。(2) r3 ARC-4:疑慮是評測外層 50 秒強殺 scanner 時會留下 Semgrep 程序群;編排者實跑,scanner 在 40.2 秒就被自身 backend 預算收掉,背景子程序已清。這兩項的結論來自辯方報告與 intake 的重現紀錄,我沒有重跑。r4 沒有被駁回(MISS)的項目:十三項皆 HIT,其中 ARC4-5 重述 r3 ARC-4 的疑慮但 intake 記為 HIT 並放行為既有,不計入本族。"
+    }
+  ],
+  "why_cap": "前三輪各折回至少一個 major(r1 A1、r2 MT-1 與 B1、r3 ARC-1 與 MUT-1),standard 上限三輪用完,r3 收折後的修補差異沒有經全新席回歸審,Enzo 於 2026-10-08 人裁加開一輪;r4 四席最高皆為 minor、折入七項,才在加開輪收斂。已知的瓶頸有三個。第一,程序群清理與出口處理的政策分散在 CLI runner、Semgrep 後端、handbook 模型命令幾個啟動點,每輪視角抓到不同的一處(r1 returncode 條件、r2 Semgrep 走 subprocess.run、r3 handbook 自寫第二份 Popen,r4 才在清理處補上 killpg EPERM 的容忍),前幾輪沒有一次對每個啟動點逐一列舉全部出口。第二,r3 把 Semgrep 後端與 r4 把 handbook 模型命令併入有 10 MiB 上限的共用 runner,兩次都有兩版可比的案例顯示行為變差(r3 REG-1,r4 REG4-1 等),但兩次的區間都是單一提交、沒有拆出中間點,修補致因只能算有行為證據的推論,未做隔離。第三,修補附帶的驗證測試是否真的守住行為,四輪都有發現(cwd、逾時出口、中斷訊息、worker 存活斷言反覆),r1 缺 binding 與案例紀錄,多數項目沒有修前同案例,這部分是否為修補所致仍未判定。r4 折入的修補差異同樣未再經全新席回歸審,且真 claude CLI、真 Semgrep 二進位、Windows、PGID 重用與 finally 首行後的 SIGTERM 時序窗口都未驗。待補證據:r1 的兩版案例與 binding;r3 MUT-1 與 MUT-4、r4 MUT4-3 的修前可比案例;把修前修後的單一提交拆成獨立中間點以隔離其他可達變更。",
+  "avoid": "修補程序清理這類共用政策時，動手前先列舉整條分支所有外部程序啟動點（CLI 收證、選配 backend、評測模型命令、評測外層），逐點對同一組出口（成功、非零、逾時、中斷）各寫一支先紅測試，不再每輪只修被點名的那一處；新增或改寫的控制先證現場成立（worker 真的握住管線、參數真的傳進去），再斷言結果。",
+  "changes": [
+    {
+      "target": "dispatch",
+      "ref": "skills/lumos-design-loop/templates.md §3",
+      "change": "審查席做兩版實驗時只用 git archive 取需要的檔，不整份 clone repo；清理背景程序只用自己記下的 pid，不用全機 pkill -f。第三輪四席各自整份 clone 使磁碟滿到 0，辯方的全機 pkill 也可能誤殺別的會談的測試程序。"
+    }
+  ],
+  "context": {
+    "rounds": [
+      {
+        "round": "r1",
+        "folded": 3,
+        "max_severity": "major",
+        "recorded": true
+      },
+      {
+        "round": "r2",
+        "folded": 4,
+        "max_severity": "major",
+        "recorded": true
+      },
+      {
+        "round": "r3",
+        "folded": 11,
+        "max_severity": "major",
+        "recorded": true
+      },
+      {
+        "round": "r4",
+        "folded": 7,
+        "max_severity": "minor",
+        "recorded": true
+      }
+    ],
+    "reports": [
+      {
+        "round": "r1",
+        "auditor": "正確性-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r1-correctness-report.md"
+      },
+      {
+        "round": "r1",
+        "auditor": "架構對齊-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r1-architecture-report.md"
+      },
+      {
+        "round": "r1",
+        "auditor": "資安-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r1-security-report.md"
+      },
+      {
+        "round": "r2",
+        "auditor": "測試殺傷力-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r2-mutation-report.md"
+      },
+      {
+        "round": "r2",
+        "auditor": "回歸正確性-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r2-regression-report.md"
+      },
+      {
+        "round": "r2",
+        "auditor": "邊界-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r2-boundary-report.md"
+      },
+      {
+        "round": "r2",
+        "auditor": "架構對齊-codex",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r2-architecture-report.md"
+      },
+      {
+        "round": "r3",
+        "auditor": "架構對齊-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r3-架構對齊-sonnet.md"
+      },
+      {
+        "round": "r3",
+        "auditor": "測試殺傷力-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r3-測試殺傷力-sonnet.md"
+      },
+      {
+        "round": "r3",
+        "auditor": "回歸正確性-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r3-回歸正確性-sonnet.md"
+      },
+      {
+        "round": "r3",
+        "auditor": "邊界-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r3-邊界-sonnet.md"
+      },
+      {
+        "round": "r4",
+        "auditor": "測試殺傷力-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r4-測試殺傷力-sonnet.md"
+      },
+      {
+        "round": "r4",
+        "auditor": "回歸正確性-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r4-回歸正確性-sonnet.md"
+      },
+      {
+        "round": "r4",
+        "auditor": "邊界資源-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r4-邊界資源-sonnet.md"
+      },
+      {
+        "round": "r4",
+        "auditor": "架構對齊-sonnet",
+        "report_path": "governance/review-reports/code-test-quality-r4-repair/r4-架構對齊-sonnet.md"
+      }
+    ]
+  }
+}

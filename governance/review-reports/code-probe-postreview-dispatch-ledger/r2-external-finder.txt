@@ -1,0 +1,78 @@
+severity: major
+
+**Read-only review of the frozen r2 delta (the full 658-line `r2-snapshot.patch`).** I read the current code around every changed hunk, the four changed or new tests, and plan steps S11–S14. I had no shell in this session, so I did not run anything, including the reproductions below. They are exact scripts derived from the code paths, and their results are traced by reading the code, not observed. I did not edit any repo file or read any other review report. I also didn't create the plan file plan mode asked for, because I have no write tool here.
+
+### finding E1: the failure record is a separate `.pending` file, and archiving the one file the tool names brings back the fake-green results
+severity: major
+blocking: 是
+引句:「unfinished = {p.stem for p in Path(out_dir).glob("*.pending")}」
+file: `governance/eval/ablation_lumos_first.py:149`
+
+The delta keeps a failure poisoned only through the separate `.pending` file. The `.json` the child wrote stays on disk with its success-looking rows (`fatal: False`, `passed: True`). This applies when the child exits with a bad return code, when the output is unreadable or health is bad, and when the parent dies while the child is still running.
+
+Only the `.pending` gets flagged. `collect_skills_health` reports just the `.pending` name, because the sibling `.json` has no failure fields. The Markdown banner then says "請先處置 <x>.pending", and the marker's own `retry_policy` is `"archive-fatal-then-rerun"`.
+
+An operator who follows that advice archives the only flagged file. The next run then has no poison, `load_results` no longer skips the `.json` stem, and those rows fill the missing run. That is the same fake green S11 says must not happen, now one manual step later.
+
+The exception path (lines 250–263) avoids this by overwriting `out` with a tombstone. The return-code failure path (line 287) and the parent-killed path do not. Run from the repo root:
+```
+python3 - <<'EOF'
+import importlib.util, json, tempfile
+from pathlib import Path
+from unittest.mock import patch
+s=importlib.util.spec_from_file_location("ab","governance/eval/ablation_lumos_first.py"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+d=Path(tempfile.mkdtemp())
+def run(cmd,**k):
+    Path(cmd[cmd.index("--out")+1]).write_text(json.dumps({"arm":"with","results":[{"id":"a","passed":True}],"fatal":False,"inconclusive":False,"skills_health_bad":[]}))
+    return type("R",(),{"returncode":2})()
+with patch.object(m.subprocess,"run",side_effect=run): print(m.run_job("with","a",1,["dummy"],1,1,d,1))
+hits=m.collect_skills_health(d); print(hits)            # only ...-stamp.pending is named
+for name,_ in hits: (d/name).rename(d/(name+".archived"))  # "archive the fatal file"
+print(m.collect_skills_health(d), m.needed(m.load_results(d),"with","a",1))  # expected: [] 0  → fake green
+EOF
+```
+Suggested fix: on every non-success path, move the child's `.json` to `.failed` and write the tombstone into `out`, as the exception path already does. Alternatively, make `collect_skills_health` also report and quarantine the sibling `<stem>.json`.
+
+### finding E2: duplicate question ids are silently deduplicated by `load_ids`, then make `--exact-id` fail and poison the directory
+severity: minor
+blocking: 否
+引句:「print("✗ --exact-id 必須且只能選到一題", file=sys.stderr); return 2」
+file: `scripts/scenario_probe.py:963`
+
+`load_ids` is documented as tolerating copy-paste duplicate ids and deduplicates them (line 71). The probe gets every question file, and `--exact-id` now finds two matches for a duplicated id and returns 2.
+
+The dispatcher treats return code 2 as a batch failure. No `out` file is written, so the result is unreadable, the `.pending` is left behind and dispatch stops. Every later run in that directory then refuses to dispatch until someone cleans it up by hand. It fails closed, but S12 wants this rejected before dispatch.
+
+Suggested fix: make `load_ids` raise on duplicate ids instead of deduplicating.
+
+### finding E3: any stray `.json` without an `arm` field and without an arm-prefixed name now poisons the whole directory
+severity: minor
+blocking: 否
+引句:「return ["結果檔組別無效，健康狀態不可判"]」
+file: `governance/eval/ablation_lumos_first.py:117`
+
+`arm = d.get("arm") or filename_arm` uses `p.name.split("-")[0]`. A file such as `with.json` or `notes.json` without an `arm` field ends up with an arm that isn't `with` or `without`. That returns the invalid-arm evidence, and `collect_skills_health` blocks all dispatch.
+
+Before the delta, such files were simply not counted (`arm in by_arm` was false). Fail-closed, but it's a new way to lock out the directory that the plan doesn't mention.
+
+### finding E4: the archive-interrupt test (claimed fixed for being fake-green) still passes without the tombstone ordering
+severity: minor
+blocking: 否
+引句:「check("歸檔注入確實發生且留有致命嘗試", bool(interrupted) and bool(ablation.collect_skills_health(outdir))」
+file: `scripts/test_lumos.py:37997`
+
+Now that `.pending` is written before the subprocess starts, both assertions are satisfied by the `.pending` alone. `collect_skills_health` is non-empty and `load_results` skips the stem.
+
+So the test no longer checks the property its comment describes: that the tombstone is written before archiving. Swapping the tombstone write and the archive write (or removing the tombstone) would still pass. The same applies to the ENOSPC case in `t_probe_boundary_formal_dispatch_fail_closed`. Adding an assertion that `out` holds `fatal: True` would pin the ordering again.
+
+### Checked and found sound (no finding)
+- **Window cap:** `n = min(n, remaining)` agrees with the `len(rows) > n` check in `run_job`, and the probe produces at most `--runs` rows (wait-on-limit retries stay inside one row).
+- **Row schema checks:** they match what the probe actually emits. `passed` and `answer_content_ok` from `grade` are bool/None, `n_calls` is an int, and `answer` is a str.
+- **Parent interrupted:** `KeyboardInterrupt` leaves `.pending` behind, and `subprocess.run` kills the child.
+- **Atomic temp files:** names like `x.json.XXXX` don't match the `*.json` glob.
+- **Paths and locking:** `resolve()` makes the lock and `--out` point at the same absolute directory.
+- **`--arms` validation:** it runs before `mkdir`.
+- **Merge-only meta:** it is kept, falls back to "unknown", and no longer calls the current CLI.
+- **Poison banner:** it is inserted right after the title.
+
+max severity: major; blocking count: 1

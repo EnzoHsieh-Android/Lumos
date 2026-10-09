@@ -1,0 +1,687 @@
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:1 — imports/helpers/setup, exact source lines
+#!/usr/bin/env python3
+"""Independent evidence validity controls; no implementation formula copied into expected."""
+
+import hashlib
+import os
+import signal
+import time
+import importlib.util
+from unittest import mock
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOL = Path(__file__).with_name("lumos")
+
+
+class QualityCLI(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def run_cli(self, *args):
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "test-quality", *map(str, args)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return r.returncode, json.loads(r.stdout)
+
+    def receipt(
+        self,
+        phase,
+        outcome="passed",
+        impl="correct",
+        tests="independent",
+        failure_type="AssertionError",
+    ):
+        folder = self.root / phase
+        folder.mkdir()
+        failure = (
+            ""
+            if outcome == "passed"
+            else "<skipped/>"
+            if outcome == "skipped"
+            else f'<{outcome} type="{failure_type}">wrong charge</{outcome}>'
+        )
+        xml = f'<testsuite><testcase classname="PriceTest" name="known_90">{failure}</testcase></testsuite>'.encode()
+        (folder / "report.xml").write_bytes(xml)
+        snaps = []
+        for i, (role, value) in enumerate(
+            [("implementation", impl), ("tests", tests), ("context", "locked")]
+        ):
+            raw = value.encode()
+            artifact = f"snapshot-{i}.txt"
+            (folder / artifact).write_bytes(raw)
+            snaps.append(
+                {
+                    "role": role,
+                    "path": "/isolated/" + role,
+                    "artifact": artifact,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        cases = [
+            {
+                "id": "PriceTest::known_90",
+                "status": outcome,
+                "assertion_failure": outcome == "failure"
+                and failure_type == "AssertionError",
+                "reason": ""
+                if outcome == "passed" or outcome == "skipped"
+                else failure_type + "  wrong charge",
+            }
+        ]
+        r = {
+            "schema_version": 1,
+            "kind": "execution-receipt",
+            "status": "executed",
+            "language": "fixture",
+            "framework": "junit-control",
+            "command": ["trusted-runner"],
+            "cwd": "/isolated",
+            "exit_code": 0 if outcome == "passed" else 1,
+            "report_sha256": hashlib.sha256(xml).hexdigest(),
+            "tests": cases,
+            "snapshots": snaps,
+        }
+        (folder / "receipt.json").write_text(json.dumps(r))
+        return folder
+
+    def check(
+        self,
+        fault="failure",
+        kind="AssertionError",
+        changed_tests=False,
+        restored="correct",
+        **kwargs,
+    ):
+        b = self.receipt("baseline")
+        f = self.receipt(
+            "fault", fault, "wrong", "changed" if changed_tests else "independent", kind
+        )
+        r = self.receipt("restored", impl=restored)
+        return self.run_cli(
+            "check",
+            b,
+            f,
+            r,
+            "--target",
+            "PriceTest::known_90",
+            *kwargs.get("extra", []),
+        )
+
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:121 — test_target_assertion_is_detected_without_semantic_verdict
+    def test_target_assertion_is_detected_without_semantic_verdict(self):
+        rc, r = self.check()
+        self.assertEqual(rc, 0)
+        self.assertEqual(r["fault_evidence"], "detected")
+        self.assertEqual(r["verdict"], "not_assessed")
+        self.assertEqual(r["oracle"]["status"], "unknown")
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:138 — test_skipped_target_not_detection
+    def test_skipped_target_not_detection(self):
+        self.assertEqual(self.check("skipped")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:141 — test_test_edits_not_detection
+    def test_test_edits_not_detection(self):
+        rc, r = self.check(changed_tests=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("tests/context changed", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:152 — test_tampered_raw_report_is_invalid
+    def test_tampered_raw_report_is_invalid(self):
+        b = self.receipt("baseline")
+        f = self.receipt("fault", "failure", "wrong")
+        r = self.receipt("restored")
+        (f / "report.xml").write_text("<testsuite/>")
+        rc, report = self.run_cli("check", b, f, r, "--target", "PriceTest::known_90")
+        self.assertEqual(rc, 2)
+        self.assertIn("hash mismatch", report["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:203 — test_xctest_native_assertion_message_is_attributed
+    def test_xctest_native_assertion_message_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure message="/tmp/Test.swift:5 - XCTAssertEqual failed: wrong amount"/></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:219 — test_android_native_assertion_without_type_is_attributed
+    def test_android_native_assertion_without_type_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure>java.lang.AssertionError: expected 90\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:235 — test_zero_cases_capture_invalid
+    def test_zero_cases_capture_invalid(self):
+        rc, r = self.capture("<testsuite/>")
+        self.assertEqual(rc, 2)
+        self.assertIn("zero testcases", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:240 — test_wrapper_success_without_selected_target_invalid
+    def test_wrapper_success_without_selected_target_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase classname="test" name="file.cjs"/></testsuite>',
+            targets=["test::known_90"],
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("expected target missing", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:255 — test_duplicate_identity_capture_invalid
+    def test_duplicate_identity_capture_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase name="x"/><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("duplicate", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:275 — test_missing_quality_sidecar_does_not_break_legacy_help
+    def test_missing_quality_sidecar_does_not_break_legacy_help(self):
+        alone = self.root / "lumos"
+        shutil.copy2(TOOL, alone)
+        r = subprocess.run(
+            [sys.executable, str(alone), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(r.returncode, 0)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:293 — test_root_failure_summary_cannot_hide_green_case
+    def test_root_failure_summary_cannot_hide_green_case(self):
+        rc, _ = self.capture(
+            '<testsuites failures="1"><testsuite><testcase name="x"/></testsuite></testsuites>'
+        )
+        self.assertEqual(rc, 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:306 — test_partial_sidecar_returns_structured_invalid
+    def test_partial_sidecar_returns_structured_invalid(self):
+        for missing in ["test_quality_scan.py", "test_quality_semgrep.py"]:
+            with self.subTest(missing=missing):
+                directory = self.root / missing
+                directory.mkdir()
+                for name in [
+                    "lumos",
+                    "test_quality.py",
+                    "test_quality_scan.py",
+                    "test_quality_semgrep.py",
+                ]:
+                    if name != missing:
+                        shutil.copy2(TOOL.with_name(name), directory / name)
+                run = subprocess.run(
+                    [
+                        sys.executable,
+                        str(directory / "lumos"),
+                        "test-quality",
+                        "scan",
+                        str(TOOL),
+                        "--json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(run.returncode, 2)
+                self.assertFalse(json.loads(run.stdout)["complete"])
+                self.assertNotIn("Traceback", run.stderr)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:433 — test_eval_attachments_keep_actual_code_as_impact_seeds
+    def test_eval_attachments_keep_actual_code_as_impact_seeds(self):
+        module = self.lumos_module()
+        prefix = 'governance/eval/results/fixture/'
+        for suffix in ['txt', 'xml', 'log', 'trx', 'zip']:
+            self.assertFalse(module._impact_diff_seed_ok(prefix + 'report.' + suffix, '100644', False))
+        for name, mode, shebang in [('test.py', '100644', None), ('runner.txt', '100755', None), ('runner', '100644', True)]:
+            self.assertTrue(module._impact_diff_seed_ok(prefix + name, mode, shebang))
+        self.assertTrue(module._impact_diff_seed_ok(prefix + 'unknown.txt'))
+        self.assertNotIn('governance/eval/results/', module._BOOKKEEPING_DIRS)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:443 — test_deinit_removes_only_vendored_bytecode
+    def test_deinit_removes_only_vendored_bytecode(self):
+        module = self.lumos_module()
+        cache = self.root / 'scripts/__pycache__'
+        cache.mkdir(parents=True)
+        owned = cache / 'test_quality.cpython-314.pyc'
+        user = cache / 'user_app.cpython-314.pyc'
+        owned.write_bytes(b'owned')
+        user.write_bytes(b'user')
+        module._deinit_remove_vendored(self.root)
+        self.assertFalse(owned.exists())
+        self.assertEqual(user.read_bytes(), b'user')
+        user.unlink()
+        cache.rmdir()
+        external = self.root / 'external'
+        external.mkdir()
+        target = external / owned.name
+        target.write_bytes(b'external')
+        cache.symlink_to(external, target_is_directory=True)
+        module._deinit_remove_vendored(self.root)
+        self.assertEqual(target.read_bytes(), b'external')
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:464 — test_scan_entrypoints_share_options_and_results
+    def test_scan_entrypoints_share_options_and_results(self):
+        test_file = self.root / 'test_sample.py'
+        test_file.write_text('def test_same():\n    assert 1 == 1\n')
+        cli_rc, cli_result = self.run_cli('scan', '--json', test_file, '--check-helper', 'check')
+        run = subprocess.run([sys.executable, str(TOOL.with_name('test_quality_scan.py')), '--json', str(test_file), '--check-helper', 'check'], capture_output=True, text=True, timeout=10)
+        standalone = json.loads(run.stdout)
+        self.assertEqual(run.returncode, cli_rc)
+        for report in [cli_result, standalone]:
+            report.pop('elapsed_seconds')
+        self.assertEqual(cli_result, standalone)
+        self.assertEqual(cli_result['findings'][0]['rule_id'], 'same-comparison')
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_orphan_failure_refused absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_php_and_node_variants_kept_in_impact absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_owned_extensionless_cache_removed absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_results_rename_preserves_original_role_source absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_source_bytes_not_stale_bytecode_authorize_capture absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:1 — imports/helpers/setup, exact source lines
+#!/usr/bin/env python3
+"""Independent evidence validity controls; no implementation formula copied into expected."""
+
+import hashlib
+import os
+import signal
+import time
+import importlib.util
+from unittest import mock
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOL = Path(__file__).with_name("lumos")
+
+
+class QualityCLI(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def run_cli(self, *args):
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "test-quality", *map(str, args)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return r.returncode, json.loads(r.stdout)
+
+    def receipt(
+        self,
+        phase,
+        outcome="passed",
+        impl="correct",
+        tests="independent",
+        failure_type="AssertionError",
+    ):
+        folder = self.root / phase
+        folder.mkdir()
+        failure = (
+            ""
+            if outcome == "passed"
+            else "<skipped/>"
+            if outcome == "skipped"
+            else f'<{outcome} type="{failure_type}">wrong charge</{outcome}>'
+        )
+        xml = f'<testsuite><testcase classname="PriceTest" name="known_90">{failure}</testcase></testsuite>'.encode()
+        (folder / "report.xml").write_bytes(xml)
+        snaps = []
+        for i, (role, value) in enumerate(
+            [("implementation", impl), ("tests", tests), ("context", "locked")]
+        ):
+            raw = value.encode()
+            artifact = f"snapshot-{i}.txt"
+            (folder / artifact).write_bytes(raw)
+            snaps.append(
+                {
+                    "role": role,
+                    "path": "/isolated/" + role,
+                    "artifact": artifact,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        cases = [
+            {
+                "id": "PriceTest::known_90",
+                "status": outcome,
+                "assertion_failure": outcome == "failure"
+                and failure_type == "AssertionError",
+                "reason": ""
+                if outcome == "passed" or outcome == "skipped"
+                else failure_type + "  wrong charge",
+            }
+        ]
+        r = {
+            "schema_version": 1,
+            "kind": "execution-receipt",
+            "status": "executed",
+            "language": "fixture",
+            "framework": "junit-control",
+            "command": ["trusted-runner"],
+            "cwd": "/isolated",
+            "exit_code": 0 if outcome == "passed" else 1,
+            "report_sha256": hashlib.sha256(xml).hexdigest(),
+            "tests": cases,
+            "snapshots": snaps,
+        }
+        (folder / "receipt.json").write_text(json.dumps(r))
+        return folder
+
+    def check(
+        self,
+        fault="failure",
+        kind="AssertionError",
+        changed_tests=False,
+        restored="correct",
+        **kwargs,
+    ):
+        b = self.receipt("baseline")
+        f = self.receipt(
+            "fault", fault, "wrong", "changed" if changed_tests else "independent", kind
+        )
+        r = self.receipt("restored", impl=restored)
+        return self.run_cli(
+            "check",
+            b,
+            f,
+            r,
+            "--target",
+            "PriceTest::known_90",
+            *kwargs.get("extra", []),
+        )
+
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:121 — test_target_assertion_is_detected_without_semantic_verdict
+    def test_target_assertion_is_detected_without_semantic_verdict(self):
+        rc, r = self.check()
+        self.assertEqual(rc, 0)
+        self.assertEqual(r["fault_evidence"], "detected")
+        self.assertEqual(r["verdict"], "not_assessed")
+        self.assertEqual(r["oracle"]["status"], "unknown")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:138 — test_skipped_target_not_detection
+    def test_skipped_target_not_detection(self):
+        self.assertEqual(self.check("skipped")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:141 — test_test_edits_not_detection
+    def test_test_edits_not_detection(self):
+        rc, r = self.check(changed_tests=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("tests/context changed", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:152 — test_tampered_raw_report_is_invalid
+    def test_tampered_raw_report_is_invalid(self):
+        b = self.receipt("baseline")
+        f = self.receipt("fault", "failure", "wrong")
+        r = self.receipt("restored")
+        (f / "report.xml").write_text("<testsuite/>")
+        rc, report = self.run_cli("check", b, f, r, "--target", "PriceTest::known_90")
+        self.assertEqual(rc, 2)
+        self.assertIn("hash mismatch", report["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:203 — test_xctest_native_assertion_message_is_attributed
+    def test_xctest_native_assertion_message_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure message="/tmp/Test.swift:5 - XCTAssertEqual failed: wrong amount"/></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:219 — test_android_native_assertion_without_type_is_attributed
+    def test_android_native_assertion_without_type_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure>java.lang.AssertionError: expected 90\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:235 — test_zero_cases_capture_invalid
+    def test_zero_cases_capture_invalid(self):
+        rc, r = self.capture("<testsuite/>")
+        self.assertEqual(rc, 2)
+        self.assertIn("zero testcases", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:240 — test_wrapper_success_without_selected_target_invalid
+    def test_wrapper_success_without_selected_target_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase classname="test" name="file.cjs"/></testsuite>',
+            targets=["test::known_90"],
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("expected target missing", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:255 — test_duplicate_identity_capture_invalid
+    def test_duplicate_identity_capture_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase name="x"/><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("duplicate", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:275 — test_missing_quality_sidecar_does_not_break_legacy_help
+    def test_missing_quality_sidecar_does_not_break_legacy_help(self):
+        alone = self.root / "lumos"
+        shutil.copy2(TOOL, alone)
+        r = subprocess.run(
+            [sys.executable, str(alone), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(r.returncode, 0)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:293 — test_root_failure_summary_cannot_hide_green_case
+    def test_root_failure_summary_cannot_hide_green_case(self):
+        rc, _ = self.capture(
+            '<testsuites failures="1"><testsuite><testcase name="x"/></testsuite></testsuites>'
+        )
+        self.assertEqual(rc, 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:306 — test_partial_sidecar_returns_structured_invalid
+    def test_partial_sidecar_returns_structured_invalid(self):
+        for missing in ["test_quality_scan.py", "test_quality_semgrep.py"]:
+            with self.subTest(missing=missing):
+                directory = self.root / missing
+                directory.mkdir()
+                for name in [
+                    "lumos",
+                    "test_quality.py",
+                    "test_quality_scan.py",
+                    "test_quality_semgrep.py",
+                ]:
+                    if name != missing:
+                        shutil.copy2(TOOL.with_name(name), directory / name)
+                run = subprocess.run(
+                    [
+                        sys.executable,
+                        str(directory / "lumos"),
+                        "test-quality",
+                        "scan",
+                        str(TOOL),
+                        "--json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(run.returncode, 2)
+                self.assertFalse(json.loads(run.stdout)["complete"])
+                self.assertNotIn("Traceback", run.stderr)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:434 — test_eval_attachments_keep_actual_code_as_impact_seeds
+    def test_eval_attachments_keep_actual_code_as_impact_seeds(self):
+        module = self.lumos_module()
+        prefix = "governance/eval/results/fixture/"
+        for suffix in ["txt", "xml", "log", "trx", "zip"]:
+            self.assertFalse(
+                module._impact_diff_seed_ok(
+                    prefix + "report." + suffix, "100644", False
+                )
+            )
+        for name, mode, shebang in [
+            ("test.py", "100644", None),
+            ("runner.txt", "100755", None),
+            ("runner", "100644", True),
+        ]:
+            self.assertTrue(module._impact_diff_seed_ok(prefix + name, mode, shebang))
+        self.assertTrue(module._impact_diff_seed_ok(prefix + "unknown.txt"))
+        self.assertNotIn("governance/eval/results/", module._BOOKKEEPING_DIRS)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:452 — test_deinit_removes_only_vendored_bytecode
+    def test_deinit_removes_only_vendored_bytecode(self):
+        module = self.lumos_module()
+        cache = self.root / "scripts/__pycache__"
+        cache.mkdir(parents=True)
+        owned = cache / "test_quality.cpython-314.pyc"
+        user = cache / "user_app.cpython-314.pyc"
+        owned.write_bytes(b"owned")
+        user.write_bytes(b"user")
+        module._deinit_remove_vendored(self.root)
+        self.assertFalse(owned.exists())
+        self.assertEqual(user.read_bytes(), b"user")
+        user.unlink()
+        cache.rmdir()
+        external = self.root / "external"
+        external.mkdir()
+        target = external / owned.name
+        target.write_bytes(b"external")
+        cache.symlink_to(external, target_is_directory=True)
+        module._deinit_remove_vendored(self.root)
+        self.assertEqual(target.read_bytes(), b"external")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:473 — test_scan_entrypoints_share_options_and_results
+    def test_scan_entrypoints_share_options_and_results(self):
+        test_file = self.root / "test_sample.py"
+        test_file.write_text("def test_same():\n    assert 1 == 1\n")
+        cli_rc, cli_result = self.run_cli(
+            "scan", "--json", test_file, "--check-helper", "check"
+        )
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL.with_name("test_quality_scan.py")),
+                "--json",
+                str(test_file),
+                "--check-helper",
+                "check",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        standalone = json.loads(run.stdout)
+        self.assertEqual(run.returncode, cli_rc)
+        for report in [cli_result, standalone]:
+            report.pop("elapsed_seconds")
+        self.assertEqual(cli_result, standalone)
+        self.assertEqual(cli_result["findings"][0]["rule_id"], "same-comparison")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:555 — test_orphan_failure_refused
+    def test_orphan_failure_refused(self):
+        rc, report = self.capture(
+            '<testsuite><testcase classname="T" name="x"/><failure type="AssertionError">boom</failure></testsuite>'
+        )
+        self.assertEqual(rc, 2, report)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:561 — test_php_and_node_variants_kept_in_impact
+    def test_php_and_node_variants_kept_in_impact(self):
+        tool = self.lumos_module()
+        for name in ["Test.php", "runner.cjs", "runner.mts", "runner.cts"]:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    tool._impact_diff_seed_ok(
+                        "governance/eval/results/example/" + name, "100644", None
+                    )
+                )
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:571 — test_owned_extensionless_cache_removed
+    def test_owned_extensionless_cache_removed(self):
+        target = self.copied_bundle()
+        from importlib.machinery import SourceFileLoader
+
+        loader = SourceFileLoader("copied_lumos_cache", str(target / "lumos"))
+        module_spec = importlib.util.spec_from_loader(loader.name, loader)
+        tool = importlib.util.module_from_spec(module_spec)
+        loader.exec_module(tool)
+        cache = target / "__pycache__"
+        owned = list(cache.glob("lumos*.pyc"))
+        self.assertTrue(owned, "SourceFileLoader must actually create bytecode")
+        user = cache / "lumos_user.cpython-314.pyc"
+        user.write_bytes(b"user bytes")
+        tool._deinit_remove_vendored(self.root)
+        self.assertFalse(any(p.exists() for p in owned))
+        self.assertEqual(user.read_bytes(), b"user bytes")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:602 — test_results_rename_preserves_original_role_source
+    def test_results_rename_preserves_original_role_source(self):
+        tool = self.lumos_module()
+        repository = self.root / "rename"
+        repository.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-C", str(repository), *args],
+                stderr=subprocess.STDOUT,
+                text=True,
+            ).strip()
+
+        git("init", "-q")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        (repository / "service.py").write_text("def public_api():\n    return 42\n")
+        git("add", "service.py")
+        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "before")
+        before = git("rev-parse", "HEAD")
+        destination = repository / "governance/eval/results/run/report.txt"
+        destination.parent.mkdir(parents=True)
+        git("mv", "service.py", str(destination.relative_to(repository)))
+        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "after")
+        after = git("rev-parse", "HEAD")
+        self.assertTrue(
+            git("diff", "--name-status", "-M", before, after).startswith("R100"),
+            "real rename must be recognized",
+        )
+        self.assertIn(
+            ("service.py", before),
+            tool._review_role_changed_files(repository, before, after),
+        )
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:668 — test_source_bytes_not_stale_bytecode_authorize_capture
+    def test_source_bytes_not_stale_bytecode_authorize_capture(self):
+        target = self.copied_bundle()
+        from importlib.machinery import SourceFileLoader
+
+        path = target / "test_quality.py"
+        good = path.read_bytes()
+        old = good.replace(b"    validate_suite_counts(root)\n", b"")
+        self.assertLess(len(old), len(good))
+        path.write_bytes(old + b" " * (len(good) - len(old)))
+        loader = SourceFileLoader("quality_old_cache", str(path))
+        module_spec = importlib.util.spec_from_loader(loader.name, loader)
+        loaded = importlib.util.module_from_spec(module_spec)
+        loader.exec_module(loaded)
+        cache = Path(importlib.util.cache_from_source(str(path)))
+        self.assertTrue(cache.exists(), "stale cache must exist before restoration")
+        old_stamp = path.stat()
+        path.write_bytes(good)
+        os.utime(path, ns=(old_stamp.st_atime_ns, old_stamp.st_mtime_ns))
+        self.assertEqual(path.read_bytes(), good, "source actually restored")
+        (self.root / "source.txt").write_text("production")
+        (self.root / "tests.txt").write_text("independent")
+        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "test-quality",
+                "capture",
+                "--out",
+                "capture",
+                "--source",
+                "source.txt",
+                "--test-source",
+                "tests.txt",
+                "--junit-stdout",
+                "--language",
+                "fixture",
+                "--framework",
+                "control",
+                "--",
+                sys.executable,
+                "-c",
+                "print(" + repr(xml) + ")",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 2, run.stdout)
+        self.assertEqual(json.loads(run.stdout)["status"], "invalid")

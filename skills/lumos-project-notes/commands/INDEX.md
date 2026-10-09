@@ -1,6 +1,6 @@
 # lumos 指令索引(總目錄)
 
-**用法**:先在下面找到「你現在想幹嘛」那一行,照指令敲;要旗標細節再開該類的子檔。每個子檔都很短,只開需要的那一個。
+**用法**:先在下面找「你現在想幹嘛」那行,照指令敲;旗標細節開該類子檔(都很短,只開需要的)。
 
 ## 一、grep 衝動對照表(程式碼讀完、要找程式碼看不出的東西時看這張)
 
@@ -14,7 +14,7 @@
 | 中文查詢 | 概念之間加空白:`作廢 收回 點數`,不要 `作廢訂單點數怎麼收回` | 黏成一串當片語比對,幾乎必定 0 筆 |
 | 「這篇筆記完整內容」 | `lumos show <節點>` | search 只給索引行,下結論前要讀全文 |
 | 「最近誰改了什麼 / 現在在做什麼」 | `lumos recent --days 7`、`lumos query --tag status/doing` | git log 看不到圖譜層的進度 |
-| 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行;推送時 drift check 的舊句檢查 m1 也會列出這次消失的名稱筆記還在講的句子,照 `commands/04-自檢與健康.md` 處理 |
+| 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行;推送時 drift check 的舊句檢查 m1 也會列出筆記還在講消失名稱的句子,照 `commands/04-自檢與健康.md` 處理 |
 | 「當初為什麼做這個決定?後來翻案了嗎?」 | `lumos decisions <節點> [--superseded]` | 決策是結構化欄位,grep 散文抓不全 |
 | 「設計寫完要進審之前,這份退得回嗎、條款句式對嗎、跑起來紅綠?」 | `lumos spec-gate <計劃節點>` | 先判門:風險高→句式/綁定/回退節擋、紅綠只印、再進審;風險低(四行已排除+沒命中硬訊號)→不派審,沒標 keeps 的條款各自紅才放行並留痕;相依回歸紅就擋 |
 | 「這個計劃的條款每條綁了測試沒、哪條還沒標?」 | `lumos spec-trace <計劃節點>` | 裁決看條款那一行的 [test:]/[manual:];舊制「驗證筆記回指」欄只當對照 |
@@ -32,8 +32,8 @@
 |---|---|---|
 | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
 | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
-| 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
-| 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots(診斷;啟用看07) / doctor / stale / gov / drift-history / drift exam(工具鏈考卷重放) / drift scan·fix·ack(存量漂移:列出、工具改、照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+| 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh / test-quality |
+| 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots(診斷;啟用看07) / doctor / stale / gov / drift-history / drift exam(工具鏈考卷重放) / drift scan·fix·ack(存量漂移:列出、工具改、照留;舊句 m1 用 ack --name、回頭重讀用 ack --kind reread) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
 | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
 | 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range / 離線收斂評測 |
 | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |

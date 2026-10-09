@@ -1,0 +1,538 @@
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 0d2bd05e..3345d98a 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -1,35 +1,64 @@
+ #!/usr/bin/env python3
+ """修法 A ablation runner(Projects/修法A_lumos先行ablation_計劃):
+ 「CLAUDE.md 那段『第一個工具呼叫是 lumos』+入口 hook 同句」帶/不帶,各跑同一組情境題,比四個尺。
+ 
+ 做法(2026-09-02 第二版):工作單位=(組別, 題),每題需要幾場就叫探針跑幾場(`--only <題> --runs <缺幾場>`),
+ 輸出一檔一次嘗試、永不覆蓋;重跑時先數每題已有的**有效**場次(排除撞用量上限/儀器例外),只補缺的。
+-第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗——所以現在預設 2 路、
+-探針帶 --wait-on-limit 撞到就等重置再補同一場。
++第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗。
++現在只准單路派工，探針帶 --wait-on-limit 撞到就等重置再補同一場；並行需先驗證在途取消。
+ 
+ 四個尺(讀法預註冊在計劃筆記,這裡只算數不解讀):
+   M1 通過率(期望指令在禁做動作之前)  M2 整場有沒有敲過 lumos
+   M3 首次敲 lumos 的步數中位(只算有敲的場)  M4 答案題(id 以 a 開頭)正確率
+ 
+ 用法:
+-  governance/eval/ablation_lumos_first.py [--runs 3] [--workers 2] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
++  governance/eval/ablation_lumos_first.py [--runs 3] [--workers 1] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
+ """
+-import argparse, datetime, json, statistics, subprocess, sys, time
+-from concurrent.futures import ThreadPoolExecutor
++import argparse, datetime, errno, fcntl, hashlib, json, os, stat, statistics, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ PROBE = ROOT / "scripts" / "scenario_probe.py"
+ DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
+ ARMS = ["with", "without"]
+ 
++
++def _atomic_write_bytes(path, data):
++    """同目錄暫存後取代目標；不跟隨既有目標符號連結。"""
++    mode = None
++    try:
++        old = path.lstat()
++        if stat.S_ISREG(old.st_mode):
++            mode = stat.S_IMODE(old.st_mode) & 0o666
++    except FileNotFoundError:
++        pass
++    tmp_path = None
++    try:
++        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".",
++                                         delete=False) as tmp:
++            tmp_path = Path(tmp.name)
++            tmp.write(data)
++            if mode is not None:
++                os.fchmod(tmp.fileno(), mode)
++            tmp.flush()
++            os.fsync(tmp.fileno())
++        os.replace(tmp_path, path)
++    finally:
++        if tmp_path is not None:
++            tmp_path.unlink(missing_ok=True)
++
++
++def _atomic_write_text(path, content):
++    _atomic_write_bytes(path, content.encode("utf-8"))
++
++
+ # ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
+ # 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
+ sys.path.insert(0, str(ROOT / "scripts"))
+ from scenario_probe import LIMIT_RE, LUMOS_CALL_RE  # noqa: E402  ★單一實作來源★
+ 
+ 
+ def load_ids(files):
+     """回題目 id 清單,已去重(★r1 邊界席:題庫人手維護、複製貼上易出重複 id;重複會虛墊缺場數又雙倍排程/雙倍權重★)。"""
+     ids, seen = [], set()
+     for f in files:
+@@ -150,38 +179,62 @@ def runs_in_window(out_dir, hours=5.0, now=None):
+             n += len(json.loads(p.read_text(encoding="utf-8")).get("results", []))
+         except Exception:
+             continue
+     return n
+ 
+ 
+ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None):
+     if stop is not None and stop.is_set():
+         return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
+     if max_per_window and runs_in_window(out_dir) >= max_per_window:
+-        # 事前上限(SWE-agent per-instance / bmad per-story 的窗口版):這個五小時窗口已經跑滿,不再開新工作;
+-        # 之後重跑 runner 會逐題補缺。比「撞到再等」省一次撞牆,也不會把 Enzo 的互動配額吃光。
+-        # ★r1 併發席:這道是 TOCTOU(多 worker 平行可同時放行、超額到 workers×n)——刻意接受:它只是禮貌性軟上限,
+-        #   真正的帳號硬上限由 --wait-on-limit 接住,超額有界(預設 workers=2),不會做出錯的判分。★
++        # 五小時窗口滿就留待下次補缺；本批只准單路派工，避免並行 TOCTOU 多開模型。
+         return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
+-    stamp = time.strftime("%H%M%S")
+-    out = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.json"
+-    log = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.log"
++    stamp = f"{time.strftime('%H%M%S')}-{time.time_ns()}"
++    qid_key = hashlib.sha256(qid.encode("utf-8")).hexdigest()[:16]
++    out = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.json"
++    log = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.log"
+     cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
+            "--only", qid, "--runs", str(n), "--arm", arm, "--out", str(out),
+            "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
+     if model:
+         cmd += ["--model", model]
+     t0 = time.time()
+     with open(log, "w", encoding="utf-8") as lf:
+         lf.write("$ " + " ".join(cmd) + "\n")
+         lf.flush()
+-        r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
++        try:
++            r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
++        except (OSError, subprocess.TimeoutExpired) as exc:
++            lf.write(f"探針子程序例外 {type(exc).__name__}: {exc}\n")
++            lf.flush()
++            try:
++                prior_result = out.read_bytes()
++            except OSError as read_exc:
++                prior_result = None
++                if not isinstance(read_exc, FileNotFoundError):
++                    lf.write(f"舊結果無法讀取 {type(read_exc).__name__}: {read_exc}\n")
++                    lf.flush()
++            tombstone = {"arm": arm, "qid": qid, "results": [], "fatal": True,
++                         "inconclusive": True, "skills_health_bad": [],
++                         "failure_type": type(exc).__name__, "log_path": str(log),
++                         "retry_policy": "archive-fatal-then-rerun"}
++            # 先以單次原子取代釘住事故，再歸檔舊資料；歸檔中斷不能讓下次重跑吃回成功外觀。
++            _atomic_write_text(out, json.dumps(tombstone, ensure_ascii=False))
++            if prior_result is not None:
++                try:
++                    _atomic_write_bytes(out.with_suffix(".failed"), prior_result)
++                except OSError as archive_exc:
++                    lf.write(f"舊結果歸檔失敗 {type(archive_exc).__name__}: {archive_exc}\n")
++                    lf.flush()
++            if stop is not None:
++                stop.set()
++            return (arm, qid, f"★探針批次失效★ {type(exc).__name__}——停止派工，檢查 {log}")
+     bad_health = False
+     unreadable = False
+     try:
+         d = json.loads(out.read_text(encoding="utf-8"))
+         if not isinstance(d, dict):
+             raise ValueError("invalid probe output")
+         rows = d["results"]
+         if (not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows)
+                 or type(d.get("fatal")) is not bool or type(d.get("inconclusive")) is not bool
+                 or not isinstance(d.get("skills_health_bad"), list)):
+@@ -285,85 +338,109 @@ def render_md(s, meta):
+              "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
+              "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
+              "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
+     for q, v in s["per_question"].items():
+         lines.append(f"| {q} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
+     if a["inconsistent_questions"] or b["inconsistent_questions"]:
+         lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
+     return "\n".join(lines) + "\n"
+ 
+ 
+-def main():
+-    ap = argparse.ArgumentParser()
+-    ap.add_argument("--questions", default=",".join(DEFAULT_Q))
+-    ap.add_argument("--runs", type=int, default=3)
+-    ap.add_argument("--workers", type=int, default=2, help="平行路數;瓶頸是帳號用量上限不是機器,多開沒用")
+-    ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
+-    ap.add_argument("--max-per-window", type=int, default=50,
+-                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
+-    ap.add_argument("--timeout", type=int, default=600)
+-    ap.add_argument("--max-turns", type=int, default=18)
+-    ap.add_argument("--model", default="")
+-    ap.add_argument("--out-dir", default="")
+-    ap.add_argument("--arms", default=",".join(ARMS))
+-    ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
+-    a = ap.parse_args()
+-    files = a.questions.split(",")
+-    ids = load_ids(files)
+-    date = datetime.date.today().isoformat()
+-    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
+-    out_dir.mkdir(parents=True, exist_ok=True)
++def _run_locked_batch(a, files, ids, date, out_dir):
+     try:
+         ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
+     except Exception:
+         ver = "?"
+     meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
+             "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
+             "started": datetime.datetime.now().isoformat(timespec="seconds")}
+-    (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
++    _atomic_write_text(out_dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
+     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
+     poisoned = collect_skills_health(out_dir)
+     live_failed = False
+     if not a.merge_only and not poisoned:
+         by_arm = load_results(out_dir)
+         jobs = []
+         for qid in ids:                       # 逐題、兩組交錯:中途被殺兩組進度也對稱
+             for arm in a.arms.split(","):
+                 n = needed(by_arm, arm, qid, a.runs)
+                 if n:
+                     jobs.append((arm, qid, n))
+         total = sum(n for _, _, n in jobs)
+         print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
+-              f"{len(jobs)} 個工作,{a.workers} 路平行,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
++              f"{len(jobs)} 個工作,單路派工,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
+         import threading
+-        stop = threading.Event()          # 任一工作偵測到全域 skills 事故就 set,其餘工作看到就不派(r1 併發席 F1)
+-        with ThreadPoolExecutor(max_workers=a.workers) as ex:
+-            futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model,
+-                              a.max_per_window, stop)
+-                    for arm, qid, n in jobs]
+-            for f in futs:
+-                arm, qid, st = f.result()
+-                print(f"  {arm} {qid}: {st}", flush=True)
++        stop = threading.Event()
++        for arm, qid, n in jobs:
++            if stop.is_set():
++                break
++            _, _, st = run_job(arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit,
++                               a.model, a.max_per_window, stop)
++            print(f"  {arm} {qid}: {st}", flush=True)
+         live_failed = stop.is_set()
+     # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
+     # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
+     # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
+     poisoned = collect_skills_health(out_dir)
+     if live_failed and not poisoned:
+         poisoned = [("本次派工", ["探針程序失效且沒有可採信的結果檔"])]
+     s = merge(out_dir, ids, a.runs)
+     s["skills_health_poisoned"] = poisoned
+     if poisoned:
+         print("\n" + "!" * 60)
+         print(f"✗ 偵測到 {len(poisoned)} 個探針失效結果檔——本次資料不可採信。", flush=True)
+         print("  檢查結果檔與探針日誌；若 skills 連結損壞，在真 repo 執行 python3 scripts/lumos install --force。")
+         print("  summary 仍產出，但失效檔不參與統計，並已標 skills_health_poisoned。")
+         print("!" * 60)
+-    (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
++    _atomic_write_text(out_dir / "summary.json", json.dumps(s, ensure_ascii=False, indent=1))
+     md = render_md(s, meta)
+-    (out_dir / "summary.md").write_text(md, encoding="utf-8")
++    _atomic_write_text(out_dir / "summary.md", md)
+     print("\n" + md)
+     return 3 if poisoned else 0
+ 
+ 
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--questions", default=",".join(DEFAULT_Q))
++    ap.add_argument("--runs", type=int, default=3)
++    ap.add_argument("--workers", type=int, default=1,
++                    help="live 探針只准 1 路；恢復並行前須驗證事故時可取消在途模型")
++    ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
++    ap.add_argument("--max-per-window", type=int, default=50,
++                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
++    ap.add_argument("--timeout", type=int, default=600)
++    ap.add_argument("--max-turns", type=int, default=18)
++    ap.add_argument("--model", default="")
++    ap.add_argument("--out-dir", default="")
++    ap.add_argument("--arms", default=",".join(ARMS))
++    ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
++    a = ap.parse_args()
++    if not a.merge_only and a.workers != 1:
++        ap.error("live 探針目前只准 --workers 1；--merge-only 保留舊參數相容")
++    files = a.questions.split(",")
++    ids = load_ids(files)
++    date = datetime.date.today().isoformat()
++    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
++    out_dir.mkdir(parents=True, exist_ok=True)
++    # 同一輸出目錄的另一個 CLI 可能已在跑模型；其 stop 旗標不會跨進程共享。
++    lock_fd = os.open(out_dir, os.O_RDONLY | os.O_DIRECTORY)
++    legacy_fd = None
++    try:
++        try:
++            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++            # 過渡期舊版只鎖這支檔；同時取得可擋仍在跑的舊批次。
++            legacy_fd = os.open(out_dir / ".ablation.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
++            fcntl.flock(legacy_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except OSError as exc:
++            if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.ELOOP):
++                raise
++            print(f"✗ 探針批次鎖不可用或另一批次正在使用 {out_dir}；本次未改寫結果或摘要。", file=sys.stderr)
++            return 3
++        return _run_locked_batch(a, files, ids, date, out_dir)
++    finally:
++        if legacy_fd is not None:
++            os.close(legacy_fd)
++        os.close(lock_fd)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6e01858f..4263005c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37765,35 +37765,40 @@ def t_probe_boundary_postreview_serial_dispatch():
+         with patch.object(ablation.sys, "argv", default_argv), \
+              patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+              patch.object(ablation, "run_job", return_value=("with", "a", "stub")), \
+              contextlib.redirect_stdout(io.StringIO()):
+             ablation.main()
+         meta = json.loads((default_out / "meta.json").read_text())
+         check("省略 workers 時預設單路", meta["workers"] == 1, meta)
+ 
+ 
+ def t_probe_boundary_postreview_cross_process_lock():
+-    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl
++    import tempfile, json, io, contextlib, importlib.util, multiprocessing, fcntl, os
+     from unittest.mock import patch
+     spec = importlib.util.spec_from_file_location("ablation_process_lock", Path(__file__).resolve().parents[1]
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-process-lock-") as td:
+         root = Path(td); outdir = root / "out"; outdir.mkdir()
+         q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
+         old_meta = b'{"old":"meta"}'; old_summary = b'{"old":"summary"}'
+         (outdir / "meta.json").write_bytes(old_meta); (outdir / "summary.json").write_bytes(old_summary)
+         ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
+         def hold_lock():
+             with open(outdir / ".ablation.lock", "a+") as f:
+                 fcntl.flock(f, fcntl.LOCK_EX)
+-                ready.set(); release.wait(10)
++                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
++                try:
++                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
++                    ready.set(); release.wait(10)
++                finally:
++                    os.close(dir_fd)
+         child = multiprocessing.get_context("fork").Process(target=hold_lock)
+         child.start()
+         try:
+             held = ready.wait(5)
+             argv = ["ablation", "--questions", str(q), "--workers", "1", "--arms", "with",
+                     "--runs", "1", "--out-dir", str(outdir)]
+             with patch.object(ablation.sys, "argv", argv), \
+                  patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
+                  patch.object(ablation, "run_job", return_value=("with", "a", "stub")) as runner, \
+                  contextlib.redirect_stdout(io.StringIO()):
+@@ -37801,20 +37806,203 @@ def t_probe_boundary_postreview_cross_process_lock():
+             check("另一進程持有批次鎖時拒絕派工且不覆寫舊摘要", held and rc == 3
+                   and runner.call_count == 0 and (outdir / "meta.json").read_bytes() == old_meta
+                   and (outdir / "summary.json").read_bytes() == old_summary,
+                   (held, rc, runner.call_count))
+         finally:
+             release.set(); child.join(5)
+             if child.is_alive():
+                 child.terminate(); child.join(5)
+ 
+ 
++def t_probe_boundary_postreview_lockfile_replacement():
++    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl, os
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_lock_replacement", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-lock-replacement-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
++        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
++        def hold_lock():
++            with open(outdir / ".ablation.lock", "a+") as f:
++                fcntl.flock(f, fcntl.LOCK_EX)
++                dir_fd = os.open(outdir, os.O_RDONLY | os.O_DIRECTORY)
++                try:
++                    fcntl.flock(dir_fd, fcntl.LOCK_EX)
++                    (outdir / ".ablation.lock").unlink()
++                    ready.set(); release.wait(10)
++                finally:
++                    os.close(dir_fd)
++        child = multiprocessing.get_context("fork").Process(target=hold_lock); child.start()
++        try:
++            held = ready.wait(5)
++            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++                    "--out-dir", str(outdir)]
++            with patch.object(ablation.sys, "argv", argv), \
++                 patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
++                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
++                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++                rc = ablation.main() if held else None
++            check("鎖檔被移除後第二批仍不得進入", held and rc == 3 and batch.call_count == 0,
++                  (held, rc, batch.call_count))
++        finally:
++            release.set(); child.join(5)
++            if child.is_alive():
++                child.terminate(); child.join(5)
++
++
++def t_probe_boundary_postreview_legacy_lock_interop():
++    import tempfile, io, contextlib, importlib.util, multiprocessing, fcntl
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_legacy_lock", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-legacy-lock-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
++        ready = multiprocessing.get_context("fork").Event(); release = multiprocessing.get_context("fork").Event()
++        def hold_legacy_lock():
++            with open(outdir / ".ablation.lock", "a+") as f:
++                fcntl.flock(f, fcntl.LOCK_EX)
++                ready.set(); release.wait(10)
++        child = multiprocessing.get_context("fork").Process(target=hold_legacy_lock); child.start()
++        try:
++            held = ready.wait(5)
++            argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++                    "--out-dir", str(outdir)]
++            with patch.object(ablation.sys, "argv", argv), \
++                 patch.object(ablation, "_run_locked_batch", return_value=22) as batch, \
++                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++                rc = ablation.main() if held else None
++            check("舊版批次只持鎖檔時新版仍拒絕進入", held and rc == 3 and batch.call_count == 0,
++                  (held, rc, batch.call_count))
++        finally:
++            release.set(); child.join(5)
++            if child.is_alive():
++                child.terminate(); child.join(5)
++
++
++def t_probe_boundary_postreview_cli_entry_and_modes():
++    import tempfile, subprocess, stat, json
++    script = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
++    with tempfile.TemporaryDirectory(prefix="probe-cli-entry-") as td:
++        root = Path(td); q = root / "q.jsonl"
++        q.write_text('{"id":"a","prompt":"a"}\n')
++        outdir = root / "out"; outdir.mkdir()
++        for name in ("meta.json", "summary.json", "summary.md"):
++            path = outdir / name; path.write_text("old"); path.chmod(0o640)
++        cmd = [sys.executable, str(script), "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
++        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
++        summary = json.loads((outdir / "summary.json").read_text()) if done.returncode == 0 else {}
++        check("真 CLI 入口須能純合併並產出摘要", done.returncode == 0
++              and summary.get("expected_ids") == ["a"],
++              (done.returncode, done.stderr[-400:]))
++        check("原子取代仍保留既有普通摘要權限", done.returncode == 0
++              and all(stat.S_IMODE((outdir / name).stat().st_mode) == 0o640
++                      for name in ("meta.json", "summary.json", "summary.md")),
++              {name: oct(stat.S_IMODE((outdir / name).stat().st_mode))
++               for name in ("meta.json", "summary.json", "summary.md")})
++
++
++def t_probe_boundary_postreview_symlink_outputs():
++    import tempfile, io, contextlib, importlib.util, json
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_symlink_outputs", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-symlink-outputs-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        q = root / "q.jsonl"; q.write_text('{"id":"a","prompt":"a"}\n')
++        victims = {}
++        for name in ("meta.json", "summary.json", "summary.md"):
++            victim = root / (name + ".victim"); victim.write_text("KEEP-ME")
++            (outdir / name).symlink_to(victim); victims[name] = victim
++        argv = ["ablation", "--questions", str(q), "--merge-only", "--out-dir", str(outdir)]
++        with patch.object(ablation.sys, "argv", argv), \
++             patch.object(ablation.subprocess, "run", return_value=type("Version", (), {"stdout": "stub"})()), \
++             contextlib.redirect_stdout(io.StringIO()):
++            rc = ablation.main()
++        check("摘要落檔不得跟隨既有符號連結到目錄外", rc == 0
++              and all(v.read_text() == "KEEP-ME" for v in victims.values())
++              and all(not (outdir / name).is_symlink() for name in victims)
++              and isinstance(json.loads((outdir / "summary.json").read_text()), dict),
++              (rc, {k: v.read_text()[:40] for k, v in victims.items()}))
++
++
++def t_probe_boundary_postreview_long_qid():
++    import tempfile, io, contextlib, importlib.util, json
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_long_qid", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-long-qid-") as td:
++        root = Path(td); qid = "q" * 220; q = root / "q.jsonl"
++        q.write_text(json.dumps({"id": qid, "prompt": "a"}) + "\n")
++        outdir = root / "out"
++        argv = ["ablation", "--questions", str(q), "--runs", "1", "--arms", "with",
++                "--out-dir", str(outdir)]
++        def run(cmd, **_kwargs):
++            if cmd == ["claude", "--version"]:
++                return type("Version", (), {"stdout": "stub"})()
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
++                "arm": "with", "results": [{"id": qid, "passed": True, "reason": "ok"}],
++                "fatal": False, "inconclusive": False, "skills_health_bad": []}))
++            return type("Done", (), {"returncode": 0})()
++        with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=run), \
++             contextlib.redirect_stdout(io.StringIO()):
++            try:
++                rc = ablation.main()
++            except OSError:
++                rc = None
++        check("長題號不使結果檔名超長且仍能寫摘要", rc == 0
++              and (outdir / "summary.json").exists() and len(list(outdir.glob("with-q-*.json"))) == 1,
++              (rc, list(outdir.iterdir())))
++
++
++def t_probe_boundary_postreview_archive_interrupt():
++    import tempfile, io, contextlib, importlib.util, json
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_archive_interrupt", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-archive-interrupt-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        def run(cmd, **_kwargs):
++            out = Path(cmd[cmd.index("--out") + 1])
++            out.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
++                                       "fatal": False, "inconclusive": False, "skills_health_bad": []}))
++            raise ablation.subprocess.TimeoutExpired("probe", 1)
++        old_replace = Path.replace
++        def interrupt_archive(path, target):
++            if str(target).endswith(".failed"):
++                raise KeyboardInterrupt()
++            return old_replace(path, target)
++        old_atomic = getattr(ablation, "_atomic_write_bytes", None)
++        def interrupt_atomic_archive(path, data):
++            if str(path).endswith(".failed"):
++                raise KeyboardInterrupt()
++            return old_atomic(path, data)
++        with patch.object(ablation.subprocess, "run", side_effect=run), \
++             patch.object(Path, "replace", interrupt_archive), \
++             patch.object(ablation, "_atomic_write_bytes", side_effect=interrupt_atomic_archive, create=True):
++            try:
++                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++            except KeyboardInterrupt:
++                pass
++        # 新碼會先透過 _atomic_write_text 寫 fatal，才呼叫 _atomic_write_bytes 歸檔；
++        # 舊碼會在 Path.replace 原結果時中斷。兩版都在歸檔處故障。
++        check("歸檔被中斷也須留下掃描得到的致命嘗試", bool(ablation.collect_skills_health(outdir))
++              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
++              list(outdir.iterdir()))
++
++
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)

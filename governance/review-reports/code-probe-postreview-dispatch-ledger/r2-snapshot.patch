@@ -1,0 +1,658 @@
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+index 3345d98a..459c8bc9 100644
+--- a/governance/eval/ablation_lumos_first.py
++++ b/governance/eval/ablation_lumos_first.py
+@@ -58,20 +58,23 @@ sys.path.insert(0, str(ROOT / "scripts"))
+ from scenario_probe import LIMIT_RE, LUMOS_CALL_RE  # noqa: E402  ★單一實作來源★
+ 
+ 
+ def load_ids(files):
+     """回題目 id 清單,已去重(★r1 邊界席:題庫人手維護、複製貼上易出重複 id;重複會虛墊缺場數又雙倍排程/雙倍權重★)。"""
+     ids, seen = [], set()
+     for f in files:
+         for ln in (ROOT / f).read_text(encoding="utf-8").splitlines():
+             if ln.strip():
+                 qid = json.loads(ln)["id"]
++                if (not isinstance(qid, str) or not qid or "," in qid
++                        or any(ord(ch) < 32 or ord(ch) == 127 for ch in qid)):
++                    raise ValueError(f"題號不可為空、含逗號或控制字元：{qid!r}")
+                 if qid not in seen:
+                     seen.add(qid); ids.append(qid)
+     return ids
+ 
+ 
+ def backfill_limit(r):
+     """舊結果檔沒有 limit_hit 欄:零工具呼叫 + 回覆是上限訊息 → 補標 True。有欄的原樣。
+     用修正後的正則從 calls 重算 ever_lumos / first_lumos_idx(舊版正則把路徑/引號裡的 lumos 算進去,灌水)。
+     ★截斷處理(r2 三分支,取代 r1「截斷保留 True」)★:第一版只存前 12 個呼叫。
+       ①沒截斷 → 直接用重算值;②截斷且可見清單裡看得到真呼叫 → 確定 True;
+@@ -96,72 +99,97 @@ def backfill_limit(r):
+         # 原本無條件保留 True 會把可從殘缺清單判掉的假陽性也留著(灌 M2);改標未知(None),_arm_stats 把 None 排除在 M2 分母外。★
+         r["ever_lumos"], r["first_lumos_idx"] = None, None
+     return r
+ 
+ 
+ def is_valid(r):
+     """一場算不算數:撞用量上限或儀器例外都不算(不是被測 AI 的行為)。"""
+     return not r.get("limit_hit") and not str(r.get("reason", "")).startswith("儀器例外")
+ 
+ 
+-def invalid_batch_evidence(d):
++def invalid_batch_evidence(d, filename_arm=None):
+     """新舊探針輸出的整批失效訊號；普通低有效場數的 inconclusive 不等於事故。"""
+     bad = d.get("skills_health_bad")
+     if bad:
+         return bad if isinstance(bad, list) else ["skills 健康欄位異常"]
+     rows = d.get("results")
+     if not isinstance(rows, list):
+         return ["結果檔缺少逐場資料，健康狀態不可判"]
++    arm = d.get("arm") or filename_arm
++    if arm is not None and arm not in ARMS:
++        return ["結果檔組別無效，健康狀態不可判"]
++    if filename_arm in ARMS and d.get("arm") is not None and d["arm"] != filename_arm:
++        return ["結果檔名與組別不一致，健康狀態不可判"]
++    for row in rows:
++        # 歷史檔的非 dict 雜項沿用逐列跳過；有形狀的列若欄位錯誤則整檔拒收。
++        if not isinstance(row, dict):
++            continue
++        if not isinstance(row.get("id"), str) or not row["id"]:
++            return ["逐場資料缺少有效題號，健康狀態不可判"]
++        if type(row.get("passed")) is not bool:
++            return ["逐場通過欄位型別錯誤，健康狀態不可判"]
++        calls = row.get("calls")
++        n_calls = row.get("n_calls", 0)
++        if (type(n_calls) is not int or n_calls < 0 or (calls is not None and not isinstance(calls, list))
++                or (row.get("answer") is not None and not isinstance(row["answer"], str))
++                or ("limit_hit" in row and type(row["limit_hit"]) is not bool)
++                or (row.get("answer_content_ok") is not None and type(row["answer_content_ok"]) is not bool)):
++            return ["逐場計分欄位型別錯誤，健康狀態不可判"]
++        if arm is not None and row.get("arm") is not None and row["arm"] != arm:
++            return ["逐場組別與結果檔不一致，健康狀態不可判"]
+     if d.get("fatal") or any(isinstance(r, dict) and r.get("fatal") for r in rows):
+         return ["探針整批 fatal；健康或清理結果不可判"]
+     return []
+ 
+ 
+ def load_results(out_dir):
+     """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
+     ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。
+     整批 fatal 的檔案即使逐場 reason=ok 也不可計分或抵掉缺場。"""
+     by_arm = {a: [] for a in ARMS}
++    unfinished = {p.stem for p in Path(out_dir).glob("*.pending")}
+     for p in sorted(Path(out_dir).glob("*.json")):
+         if p.name in ("summary.json", "meta.json"):
+             continue
++        if p.stem in unfinished:
++            continue
+         try:
+             d = json.loads(p.read_text(encoding="utf-8"))
+         except Exception:
+             continue
+         if not isinstance(d, dict):
+             continue
+-        if invalid_batch_evidence(d):
++        if invalid_batch_evidence(d, p.name.split("-")[0]):
+             continue
+         arm = d.get("arm") or p.name.split("-")[0]
+         rows = d.get("results")
+         if arm in by_arm and isinstance(rows, list):
+             by_arm[arm].extend(backfill_limit(r) for r in rows if isinstance(r, dict))
+     return by_arm
+ 
+ 
+ def collect_skills_health(out_dir):
+     """掃探針輸出的整批失效訊號，回 [(檔名, [失效原因…])]。
+     健康檢查拋錯時壞連結欄是空；舊檔也可能只在逐場列上標 fatal。"""
+     hits = []
+-    for p in sorted(Path(out_dir).glob("*.json")):
++    for p in sorted([*Path(out_dir).glob("*.json"), *Path(out_dir).glob("*.pending")]):
+         if p.name in ("summary.json", "meta.json"):
+             continue
+         try:
+             d = json.loads(p.read_text(encoding="utf-8"))
+         except Exception:
+             hits.append((p.name, ["結果檔無法讀取，健康狀態不可判"]))
+             continue
+         if not isinstance(d, dict):
+             hits.append((p.name, ["結果檔格式錯誤，健康狀態不可判"]))
+             continue
+-        evidence = invalid_batch_evidence(d)
++        evidence = invalid_batch_evidence(d, p.name.split("-")[0])
+         if evidence:
+             hits.append((p.name, evidence))
+     return hits
+ 
+ 
+ def needed(by_arm, arm, qid, runs):
+     """這題這組還缺幾場有效結果。"""
+     have = sum(1 for r in by_arm.get(arm, []) if r.get("id") == qid and is_valid(r))
+     return max(0, runs - have)
+ 
+@@ -178,85 +206,93 @@ def runs_in_window(out_dir, hours=5.0, now=None):
+                 continue
+             n += len(json.loads(p.read_text(encoding="utf-8")).get("results", []))
+         except Exception:
+             continue
+     return n
+ 
+ 
+ def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None):
+     if stop is not None and stop.is_set():
+         return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
+-    if max_per_window and runs_in_window(out_dir) >= max_per_window:
+-        # 五小時窗口滿就留待下次補缺；本批只准單路派工，避免並行 TOCTOU 多開模型。
+-        return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
++    if max_per_window:
++        remaining = max_per_window - runs_in_window(out_dir)
++        if remaining <= 0:
++            return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
++        n = min(n, remaining)
+     stamp = f"{time.strftime('%H%M%S')}-{time.time_ns()}"
+     qid_key = hashlib.sha256(qid.encode("utf-8")).hexdigest()[:16]
+     out = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.json"
+     log = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.log"
++    pending = Path(out_dir) / f"{arm}-q-{qid_key}-{stamp}.pending"
+     cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
+-           "--only", qid, "--runs", str(n), "--arm", arm, "--out", str(out),
++           "--exact-id", qid, "--runs", str(n), "--arm", arm, "--out", str(out),
+            "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
+     if model:
+         cmd += ["--model", model]
++    # 先留下保守事故標記；父程序被殺時，子程序可能還在跑，不能讓下批吃進其結果。
++    marker = {"arm": arm, "qid": qid, "results": [], "fatal": True,
++              "inconclusive": True, "skills_health_bad": [], "failure_type": "unfinished",
++              "log_path": str(log), "retry_policy": "archive-fatal-then-rerun"}
++    _atomic_write_text(pending, json.dumps(marker, ensure_ascii=False))
+     t0 = time.time()
+     with open(log, "w", encoding="utf-8") as lf:
+         lf.write("$ " + " ".join(cmd) + "\n")
+         lf.flush()
+         try:
+             r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
+         except (OSError, subprocess.TimeoutExpired) as exc:
+             lf.write(f"探針子程序例外 {type(exc).__name__}: {exc}\n")
+             lf.flush()
+             try:
+                 prior_result = out.read_bytes()
+             except OSError as read_exc:
+                 prior_result = None
+                 if not isinstance(read_exc, FileNotFoundError):
+                     lf.write(f"舊結果無法讀取 {type(read_exc).__name__}: {read_exc}\n")
+                     lf.flush()
+-            tombstone = {"arm": arm, "qid": qid, "results": [], "fatal": True,
+-                         "inconclusive": True, "skills_health_bad": [],
+-                         "failure_type": type(exc).__name__, "log_path": str(log),
+-                         "retry_policy": "archive-fatal-then-rerun"}
++            tombstone = {**marker, "failure_type": type(exc).__name__}
+             # 先以單次原子取代釘住事故，再歸檔舊資料；歸檔中斷不能讓下次重跑吃回成功外觀。
+             _atomic_write_text(out, json.dumps(tombstone, ensure_ascii=False))
+             if prior_result is not None:
+                 try:
+                     _atomic_write_bytes(out.with_suffix(".failed"), prior_result)
+                 except OSError as archive_exc:
+                     lf.write(f"舊結果歸檔失敗 {type(archive_exc).__name__}: {archive_exc}\n")
+                     lf.flush()
+             if stop is not None:
+                 stop.set()
+             return (arm, qid, f"★探針批次失效★ {type(exc).__name__}——停止派工，檢查 {log}")
+     bad_health = False
+     unreadable = False
+     try:
+         d = json.loads(out.read_text(encoding="utf-8"))
+         if not isinstance(d, dict):
+             raise ValueError("invalid probe output")
+         rows = d["results"]
+         if (not isinstance(rows, list) or not all(isinstance(x, dict) for x in rows)
++                or invalid_batch_evidence(d, arm) or d.get("arm") != arm
++                or any(x.get("id") != qid for x in rows) or len(rows) > n
+                 or type(d.get("fatal")) is not bool or type(d.get("inconclusive")) is not bool
+                 or not isinstance(d.get("skills_health_bad"), list)):
+             raise ValueError("invalid probe output")
+         got = sum(1 for x in rows if is_valid(x))
+         lim = sum(1 for x in rows if x.get("limit_hit"))
+         bad_health = bool(invalid_batch_evidence(d))
+     except Exception:
+         got, lim = 0, 0
+         unreadable = True
+     if r.returncode not in (0, 1) or bad_health or unreadable:
+         # 探針退出異常、結果檔不可讀或整批失效都設停止旗標，後續不再派工。
+         if stop is not None:
+             stop.set()
+         return (arm, qid, f"★探針批次失效★ rc={r.returncode}——停止派工，檢查結果檔與探針日誌")
++    pending.unlink()
+     return (arm, qid, f"rc={r.returncode} 有效 {got}/{n} 撞上限 {lim} {round(time.time() - t0)}s")
+ 
+ 
+ def _arm_stats(results, expected_ids, runs):
+     # ★r1 正確性席:只算現在題庫裡的題★——out_dir 是跨天累積的逐題檔,題庫改過後舊題殘檔還在,
+     # 不過濾會把舊題的通過/不通過靜默混進 M1-M4 與頭條差值。用 expected_ids 篩掉不在現行題庫的。
+     idset = set(expected_ids)
+     results = [r for r in results if r.get("id") in idset]
+     valid = [r for r in results if is_valid(r)]
+     n = len(valid)
+@@ -317,50 +353,67 @@ def merge(out_dir, expected_ids, runs):
+     class_counts = {}
+     for c in classes.values():
+         class_counts[c] = class_counts.get(c, 0) + 1
+     return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+             "question_class": classes, "class_counts": class_counts}
+ 
+ 
+ def render_md(s, meta):
+     a, b = s["arms"]["with"], s["arms"]["without"]
+     def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
+-    lines = [f"# 修法 A ablation 對照({meta.get('date')};模型 {meta.get('claude_version', '?')})", "",
++    lines = [f"# 修法 A ablation 對照(記錄日期 {meta.get('date')};當次 Claude CLI {meta.get('claude_version', '?')})", "",
+              f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
+              f"只算有效場(撞用量上限/儀器例外不算)。", "",
++             "歷史結果可能跨日或跨模型版本；此處 CLI 版本不代表每場模型版本。", "",
+              "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
+              f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
+              f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
+              f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
+              f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
+              f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
+              f"| 同題多次不一致的題數 | {len(a['inconsistent_questions'])} | {len(b['inconsistent_questions'])} |",
+              f"| 缺場 / 撞上限 / 其他儀器例外 | {a['missing']} / {a['limit_hits']} / {a['instrument_errors'] - a['limit_hits']} | {b['missing']} / {b['limit_hits']} / {b['instrument_errors'] - b['limit_hits']} |",
+              "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
+              "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
+              "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
++    if s.get("skills_health_poisoned"):
++        bad = ", ".join(name for name, _ in s["skills_health_poisoned"])
++        lines[2:2] = [f"**整批不可採信：探針失效；請先處置 {bad}。**", ""]
+     for q, v in s["per_question"].items():
+-        lines.append(f"| {q} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
++        qmd = q.replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
++        lines.append(f"| {qmd} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
+     if a["inconsistent_questions"] or b["inconsistent_questions"]:
+         lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
+     return "\n".join(lines) + "\n"
+ 
+ 
+ def _run_locked_batch(a, files, ids, date, out_dir):
+-    try:
+-        ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
+-    except Exception:
+-        ver = "?"
+-    meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
+-            "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
+-            "started": datetime.datetime.now().isoformat(timespec="seconds")}
+-    _atomic_write_text(out_dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
++    if a.merge_only:
++        meta_path = out_dir / "meta.json"
++        try:
++            if not stat.S_ISREG(meta_path.lstat().st_mode):
++                raise ValueError("unsafe meta")
++            meta = json.loads(meta_path.read_text(encoding="utf-8"))
++            if not isinstance(meta, dict):
++                raise ValueError("invalid meta")
++        except (OSError, ValueError):
++            meta = {"date": "來源日期未知", "claude_version": "來源版本未知"}
++            _atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
++    else:
++        try:
++            ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
++        except Exception:
++            ver = "?"
++        meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
++                "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
++                "started": datetime.datetime.now().isoformat(timespec="seconds")}
++        _atomic_write_text(out_dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
+     # 舊事故檔或上次被殺留下的半檔必須在派工前攔下；事後掃描仍檢查本輪新產物。
+     poisoned = collect_skills_health(out_dir)
+     live_failed = False
+     if not a.merge_only and not poisoned:
+         by_arm = load_results(out_dir)
+         jobs = []
+         for qid in ids:                       # 逐題、兩組交錯:中途被殺兩組進度也對稱
+             for arm in a.arms.split(","):
+                 n = needed(by_arm, arm, qid, a.runs)
+                 if n:
+@@ -409,24 +462,27 @@ def main():
+                     help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
+     ap.add_argument("--timeout", type=int, default=600)
+     ap.add_argument("--max-turns", type=int, default=18)
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out-dir", default="")
+     ap.add_argument("--arms", default=",".join(ARMS))
+     ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
+     a = ap.parse_args()
+     if not a.merge_only and a.workers != 1:
+         ap.error("live 探針目前只准 --workers 1；--merge-only 保留舊參數相容")
++    arms = a.arms.split(",")
++    if not arms or len(arms) != len(set(arms)) or any(arm not in ARMS for arm in arms):
++        ap.error("--arms 只能指定不重複的 with,without")
+     files = a.questions.split(",")
+     ids = load_ids(files)
+     date = datetime.date.today().isoformat()
+-    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
++    out_dir = (Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date).resolve()
+     out_dir.mkdir(parents=True, exist_ok=True)
+     # 同一輸出目錄的另一個 CLI 可能已在跑模型；其 stop 旗標不會跨進程共享。
+     lock_fd = os.open(out_dir, os.O_RDONLY | os.O_DIRECTORY)
+     legacy_fd = None
+     try:
+         try:
+             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+             # 過渡期舊版只鎖這支檔；同時取得可擋仍在跑的舊批次。
+             legacy_fd = os.open(out_dir / ".ablation.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+             fcntl.flock(legacy_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 8c5fa343..dd399cd9 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -906,20 +906,22 @@ def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, mode
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--repo", default=str(ROOT),
+                     help="要被探的專案根目錄(預設=本 repo)。★探別的專案必須給★——"
+                          "沒給的話不論在哪個目錄執行,複製的都是 lumos-toolchain 自己,"
+                          "題目再怎麼寫都是在探錯的 repo(2026-08-22 實際踩過)")
+     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
+     ap.add_argument("--only", default="")
++    ap.add_argument("--exact-id", default=None,
++                    help="只跑 id 完全相等的一題；消融派工專用，找不到或重複時拒絕")
+     # ★預設 8 → 18(2026-08-22)★:實測既有題庫最慢 6 步(s02/s11),8 只留 2 步餘裕;
+     # absence 題組天生要「查不到→換方法再查」,最慢 12 步——吃預設會在它開口之前截斷,
+     # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
+     # ★為什麼不設更大★:步數上限不是「越寬越安全」。給太多步,那些其實在瞎繞的題也可能
+     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
+     ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
+     ap.add_argument("--timeout", type=int, default=240)
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
+@@ -940,24 +942,33 @@ def main():
+     ap.add_argument("--codex-bypass-hook-trust", action="store_true",
+                     help="codex runner 帶 --dangerously-bypass-hook-trust(★只准隔離環境★;本機審過信任不需要)")
+     ap.add_argument("--arm", choices=["with", "without"], default="with",
+                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     a = ap.parse_args()
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
++    if a.exact_id is not None and a.only:
++        print("✗ --exact-id 與 --only 不可並用", file=sys.stderr); return 2
++    if (a.exact_id is not None and (not a.exact_id or any(ord(ch) < 32 or ord(ch) == 127
++                                                        for ch in a.exact_id))):
++        print("✗ --exact-id 不可為空或含控制字元", file=sys.stderr); return 2
+     scs = []
+     for f in a.scenarios.split(","):
+         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
+-    if a.only:
++    if a.exact_id is not None:
++        scs = [s for s in scs if s.get("id") == a.exact_id]
++        if len(scs) != 1:
++            print("✗ --exact-id 必須且只能選到一題", file=sys.stderr); return 2
++    elif a.only:
+         keep = set(a.only.split(","))
+         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
+     if a.sample and a.sample < len(scs):
+         # 決定性輪轉:同一種子永遠抽同一組;種子換(每週)就換一組,幾週下來全部輪過
+         import hashlib
+         h = int(hashlib.sha256(a.seed.encode("utf-8")).hexdigest(), 16)
+         start = h % len(scs)
+         scs = [scs[(start + i * 3) % len(scs)] for i in range(a.sample)]
+         seen, uniq = set(), []
+         for s_ in scs:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 4263005c..67366dcc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37966,41 +37966,251 @@ def t_probe_boundary_postreview_archive_interrupt():
+                                                   / "governance/eval/ablation_lumos_first.py")
+     ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
+     with tempfile.TemporaryDirectory(prefix="probe-archive-interrupt-") as td:
+         root = Path(td); outdir = root / "out"; outdir.mkdir()
+         def run(cmd, **_kwargs):
+             out = Path(cmd[cmd.index("--out") + 1])
+             out.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
+                                        "fatal": False, "inconclusive": False, "skills_health_bad": []}))
+             raise ablation.subprocess.TimeoutExpired("probe", 1)
+         old_replace = Path.replace
++        interrupted = []
+         def interrupt_archive(path, target):
+             if str(target).endswith(".failed"):
++                interrupted.append("replace")
+                 raise KeyboardInterrupt()
+             return old_replace(path, target)
+         old_atomic = getattr(ablation, "_atomic_write_bytes", None)
+         def interrupt_atomic_archive(path, data):
+             if str(path).endswith(".failed"):
++                interrupted.append("archive")
+                 raise KeyboardInterrupt()
+             return old_atomic(path, data)
+         with patch.object(ablation.subprocess, "run", side_effect=run), \
+              patch.object(Path, "replace", interrupt_archive), \
+              patch.object(ablation, "_atomic_write_bytes", side_effect=interrupt_atomic_archive, create=True):
+             try:
+                 ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
+             except KeyboardInterrupt:
+                 pass
+         # 新碼會先透過 _atomic_write_text 寫 fatal，才呼叫 _atomic_write_bytes 歸檔；
+         # 舊碼會在 Path.replace 原結果時中斷。兩版都在歸檔處故障。
+-        check("歸檔被中斷也須留下掃描得到的致命嘗試", bool(ablation.collect_skills_health(outdir))
++        check("歸檔注入確實發生且留有致命嘗試", bool(interrupted) and bool(ablation.collect_skills_health(outdir))
+               and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
++              (interrupted, list(outdir.iterdir())))
++
++
++def t_probe_boundary_formal_dispatch_fail_closed():
++    """正式審查反例：子程序失敗、父程序中斷、schema、窗口與顯示都不得假綠。"""
++    import tempfile, json, io, contextlib, importlib.util
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_formal", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-formal-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        def result(cmd, **_kwargs):
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
++                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
++                "inconclusive": False, "skills_health_bad": []}))
++            return type("Result", (), {"returncode": 2})()
++        with patch.object(ablation.subprocess, "run", side_effect=result):
++            ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++        check("非零退出須留下跨執行失效紀錄", bool(ablation.collect_skills_health(outdir))
++              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
++              list(outdir.iterdir()))
++    with tempfile.TemporaryDirectory(prefix="probe-formal-interrupt-") as td:
++        outdir = Path(td)
++        with patch.object(ablation.subprocess, "run", side_effect=KeyboardInterrupt):
++            try:
++                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++            except KeyboardInterrupt:
++                pass
++        check("父程序中斷後仍保留未完成標記", bool(ablation.collect_skills_health(outdir)),
+               list(outdir.iterdir()))
++    with tempfile.TemporaryDirectory(prefix="probe-formal-enospc-") as td:
++        outdir = Path(td); wrote = []
++        real_write = ablation._atomic_write_text
++        def fail_tombstone(path, content):
++            if path.suffix == ".json":
++                wrote.append("tombstone")
++                raise OSError(28, "No space left on device")
++            return real_write(path, content)
++        def write_then_fail(cmd, **_kwargs):
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({
++                "arm": "with", "results": [{"id": "a", "passed": True}], "fatal": False,
++                "inconclusive": False, "skills_health_bad": []}))
++            raise FileNotFoundError("injected launch failure")
++        with patch.object(ablation.subprocess, "run", side_effect=write_then_fail), \
++             patch.object(ablation, "_atomic_write_text", side_effect=fail_tombstone):
++            try:
++                ablation.run_job("with", "a", 1, ["dummy"], 1, 1, outdir, 1)
++            except OSError:
++                pass
++        check("fatal 落檔二次失敗仍不得採信舊成功列", wrote == ["tombstone"]
++              and bool(ablation.collect_skills_health(outdir))
++              and ablation.needed(ablation.load_results(outdir), "with", "a", 1) == 1,
++              (wrote, list(outdir.iterdir())))
++    with tempfile.TemporaryDirectory(prefix="probe-formal-schema-") as td:
++        outdir = Path(td)
++        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
++            {"id": "a", "passed": "false"}], "fatal": False, "inconclusive": False,
++            "skills_health_bad": []}))
++        check("錯誤布林型別須標整批失效", bool(ablation.collect_skills_health(outdir))
++              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
++        (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
++            {"id": "a", "passed": True, "arm": "without"}], "fatal": False,
++            "inconclusive": False, "skills_health_bad": []}))
++        check("逐場組別不一致須標整批失效", bool(ablation.collect_skills_health(outdir))
++              and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
++        for bad_field in ({"n_calls": "1"}, {"answer_content_ok": "false"}, {"limit_hit": "false"}):
++            (outdir / "with-q-bad.json").write_text(json.dumps({"arm": "with", "results": [
++                {"id": "a", "passed": True, **bad_field}], "fatal": False,
++                "inconclusive": False, "skills_health_bad": []}))
++            check("錯型計分欄位拒收 " + str(bad_field), bool(ablation.collect_skills_health(outdir))
++                  and not ablation.load_results(outdir)["with"], ablation.load_results(outdir))
++    with tempfile.TemporaryDirectory(prefix="probe-formal-cap-") as td:
++        outdir = Path(td)
++        def count(cmd, **_kwargs):
++            result_data = {"arm": "with", "results": [{"id": "a", "passed": True}],
++                           "fatal": False, "inconclusive": False, "skills_health_bad": []}
++            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps(result_data))
++            return type("Result", (), {"returncode": 0})()
++        with patch.object(ablation.subprocess, "run", side_effect=count) as run:
++            ablation.run_job("with", "a", 1000, ["dummy"], 1, 1, outdir, 1, max_per_window=50)
++        check("單一工作不可超過窗口剩餘額度", run.call_count == 1 and
++              int(run.call_args.args[0][run.call_args.args[0].index("--runs") + 1]) <= 50,
++              run.call_args)
++    summary = {"arms": {"with": {"m1_passed": 0, "n": 0, "m1_rate": None,
++             "m2_ever": 0, "m2_n": 0, "m2_rate": None, "m3_first_idx_median": None, "m3_n": 0,
++             "m4_gated_passed": 0, "m4_gated_n": 0, "m4_content_passed": 0, "m4_content_n": 0,
++             "inconsistent_questions": [], "missing": 1, "limit_hits": 0, "instrument_errors": 0},
++             "without": {}}, "expected_ids": ["a"], "runs": 1, "m1_delta_pp": None,
++             "class_counts": {}, "per_question": {}, "skills_health_poisoned": [("bad.json", ["fatal"])]}
++    summary["arms"]["without"] = summary["arms"]["with"].copy()
++    md = ablation.render_md(summary, {"date": "test", "claude_version": "stub"})
++    check("Markdown 摘要須直接標出整批失效", "不可採信" in md and "bad.json" in md, md[:250])
++
++
++def t_probe_boundary_formal_parent_killed_child_continues():
++    """真進程反例：父程序被殺後子程序仍落有效外觀結果，下一批不得採信。"""
++    import tempfile, subprocess, time, json
++    with tempfile.TemporaryDirectory(prefix="probe-parent-killed-") as td:
++        root = Path(td); outdir = root / "out"; outdir.mkdir()
++        started = root / "child-started"; probe = root / "child_probe.py"
++        probe.write_text("import argparse,json,os,time\nfrom pathlib import Path\n"
++                         "a=argparse.ArgumentParser(add_help=False);a.add_argument('--out');v,_=a.parse_known_args()\n"
++                         f"Path({str(started)!r}).write_text(str(os.getpid()))\n"
++                         "time.sleep(0.5)\n"
++                         "Path(v.out).write_text(json.dumps({'arm':'with','results':[{'id':'a','passed':True}],"
++                         "'fatal':False,'inconclusive':False,'skills_health_bad':[]}))\n")
++        runner = Path(__file__).resolve().parents[1] / "governance/eval/ablation_lumos_first.py"
++        parent_code = ("import importlib.util\nfrom pathlib import Path\n"
++                       f"s=importlib.util.spec_from_file_location('ablation_kill',{str(runner)!r})\n"
++                       "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
++                       f"m.PROBE=Path({str(probe)!r})\n"
++                       f"m.run_job('with','a',1,['dummy'],1,1,Path({str(outdir)!r}),1)\n")
++        proc = subprocess.Popen([sys.executable, "-c", parent_code],
++                                cwd=str(Path(__file__).resolve().parents[1]),
++                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++        deadline = time.monotonic() + 5
++        try:
++            while not started.exists() and proc.poll() is None and time.monotonic() < deadline:
++                time.sleep(0.02)
++            check("父程序中斷反例確實啟動子程序", started.exists(), proc.poll())
++            proc.kill(); proc.wait(timeout=5)
++            while not list(outdir.glob("*.json")) and time.monotonic() < deadline:
++                time.sleep(0.02)
++            spec = __import__("importlib.util", fromlist=["spec_from_file_location"])
++            ms = spec.spec_from_file_location("ablation_kill_check", runner)
++            m = spec.module_from_spec(ms); ms.loader.exec_module(m)
++            check("子程序在父程序死後落檔也不得抵缺場", bool(list(outdir.glob("*.json")))
++                  and bool(m.collect_skills_health(outdir))
++                  and m.needed(m.load_results(outdir), "with", "a", 1) == 1,
++                  list(outdir.iterdir()))
++        finally:
++            if proc.poll() is None:
++                proc.kill(); proc.wait(timeout=5)
++
++
++def t_probe_boundary_formal_input_validation():
++    """不啟動模型即可判定輸入選取與路徑是否封閉。"""
++    import tempfile, io, contextlib, importlib.util, subprocess, os, json
++    from unittest.mock import patch
++    spec = importlib.util.spec_from_file_location("ablation_formal_input", Path(__file__).resolve().parents[1]
++                                                  / "governance/eval/ablation_lumos_first.py")
++    ablation = importlib.util.module_from_spec(spec); spec.loader.exec_module(ablation)
++    with tempfile.TemporaryDirectory(prefix="probe-formal-input-") as td:
++        root = Path(td); q = root / "q.jsonl"; outdir = root / "out"
++        for qid in ("", "a,b", "a\nspoof"):
++            q.write_text(__import__("json").dumps({"id": qid}) + "\n")
++            try:
++                ids = ablation.load_ids([str(q)])
++            except ValueError:
++                ids = []
++            check("非法題號入口須拒絕 " + repr(qid), not ids, ids)
++        q.write_text('{"id":"a"}\n')
++        for arms in ("with,with", "../escaped", "with,"):
++            argv = ["ablation", "--questions", str(q), "--arms", arms, "--out-dir", str(outdir)]
++            rejected = False
++            with patch.object(ablation.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
++                try:
++                    ablation.main()
++                except SystemExit as exc:
++                    rejected = exc.code == 2
++            check("非法組別在落檔前拒絕 " + arms, rejected and not outdir.exists(),
++                  (rejected, list(root.iterdir())))
++        q.write_text('{"id":"a"}\n{"id":"a-extra"}\n')
++        probe = Path(__file__).resolve().parents[1] / "scripts/scenario_probe.py"
++        exact = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
++                                "--exact-id", "a", "--dry-list"], capture_output=True, text=True)
++        absent = subprocess.run([sys.executable, str(probe), "--scenarios", str(q),
++                                 "--exact-id", "missing", "--dry-list"], capture_output=True, text=True)
++        check("精確選題只得單一 id，缺題要拒絕", exact.returncode == 0 and exact.stdout.strip() == "a"
++              and absent.returncode == 2, (exact.stdout, exact.stderr, absent.returncode))
++        q.write_text('{"id":"a"}\n')
++        captured = []
++        def fake_run(cmd, **_kwargs):
++            if cmd == ["claude", "--version"]:
++                return type("Version", (), {"stdout": "stub"})()
++            target = Path(cmd[cmd.index("--out") + 1]); captured.append(target)
++            target.write_text(json.dumps({"arm": "with", "results": [{"id": "a", "passed": True}],
++                                          "fatal": False, "inconclusive": False, "skills_health_bad": []}))
++            return type("Result", (), {"returncode": 0})()
++        old_cwd = Path.cwd()
++        try:
++            os.chdir(root)
++            argv = ["ablation", "--questions", str(q), "--arms", "with", "--runs", "1",
++                    "--out-dir", "relative/out"]
++            with patch.object(ablation.sys, "argv", argv), patch.object(ablation.subprocess, "run", side_effect=fake_run), \
++                 contextlib.redirect_stdout(io.StringIO()):
++                rc = ablation.main()
++        finally:
++            os.chdir(old_cwd)
++        check("相對輸出路徑與鎖指向同一絕對目錄", rc == 0 and len(captured) == 1
++              and captured[0].is_absolute() and captured[0].parent.resolve() == (root / "relative/out").resolve(),
++              (rc, captured))
++        meta = root / "relative/out/meta.json"
++        meta.write_text(json.dumps({"date": "2025-01-02", "claude_version": "historical"}))
++        with patch.object(ablation.sys, "argv", ["ablation", "--questions", str(q), "--merge-only",
++                                                "--out-dir", "relative/out"]), \
++             patch.object(ablation.subprocess, "run", side_effect=AssertionError("merge-only must not query current CLI")), \
++             contextlib.redirect_stdout(io.StringIO()):
++            old_cwd = Path.cwd()
++            try:
++                os.chdir(root)
++                merge_rc = ablation.main()
++            finally:
++                os.chdir(old_cwd)
++        check("純合併保留來源版本，不能冒稱當前 CLI", merge_rc == 0
++              and json.loads(meta.read_text())["claude_version"] == "historical"
++              and "historical" in (meta.parent / "summary.md").read_text(), meta.read_text())
+ 
+ 
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")

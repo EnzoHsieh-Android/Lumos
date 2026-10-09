@@ -1,0 +1,89 @@
+severity: major
+
+**結論：S11 到 S17 沒找到推翻的反例，S18（五小時窗口的額度閘）有一個會擋推送的漏洞：額度用完而失敗的那一批，啟動過的模型次數不算進窗口，照規定歸檔重跑後，同一個窗口能再開滿一輪。**
+
+我先核對了投稿：修補檔的 SHA-256 一致、1101 行全讀；工作區四支檔的差異和修補檔逐位元相同，所以實驗都跑在現碼上。實驗只用暫存目錄，沒改任何 repo 檔，也沒做任何會改動 git 的操作。
+
+**老結果相容沒有問題。** 拿 9 月 2 日那批真實舊結果（舊分片檔加逐題檔）餵新版讀取端，健康掃描 0 筆，with 組讀進 141 列、without 組讀進 142 列。
+
+## 發現 1：失敗批次用掉的模型次數，不算進五小時窗口
+severity: major
+blocking: 是
+引句:
+「tombstone = {**marker, "failure_type": f"returncode-{r.returncode}" if r.returncode not in (0, 1)」
+file: `governance/eval/ablation_lumos_first.py:306`（另見 `:218`，窗口計數只讀正式結果檔）
+
+- **輸入**：窗口上限設 2 場，題 a 要跑 2 場。
+  - 探針收到「最多啟動 2 次模型」。第 1 場撞上用量上限，重試一次才成功；第 2 場額度用完，整批 fatal（判定整批失效），退出碼 3。
+  - 這正是 S18 自己設計的「達限就停」那條路。
+- **執行路徑**：派工器看到退出碼不是 0 或 1，就用一份逐場資料是空的事故檔，蓋掉正式結果檔。
+  - 子程序寫的候選結果還留著，但窗口計數不讀候選檔。
+  - 所以實際啟動過的 2 次模型，在窗口裡算 0 次。
+- **再照事故檔寫的處置規定**（先歸檔事故檔和候選檔再重跑）把檔案改名，健康掃描就乾淨了，窗口還是 0。下一批又能拿到滿額 2 場，同一個五小時窗口實際開了 4 場。
+- **這是退步**：修補前，退出碼不是 0 或 1 時，子程序寫的正式結果不會被蓋掉，那幾場至少還算得到（只是重試沒算）。
+- **為什麼要擋**：窗口閘是用來保護帳號額度、留給人用的。現在唯一能恢復派工的人工流程，剛好把已經花掉的額度清零。
+
+最小重現（在 repo 根執行）：
+```
+python3.14 - <<'EOF'
+import importlib.util, json, tempfile
+from pathlib import Path
+from unittest.mock import patch
+s=importlib.util.spec_from_file_location("ab","governance/eval/ablation_lumos_first.py")
+m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as td:
+    out=Path(td)
+    def child(cmd, **kw):
+        rows=[{"id":"a","passed":True,"arm":"with","retry_attempts":[{"reason":"limit"}]},
+              {"id":"a","passed":False,"arm":"with","reason":"儀器例外: ProbeAttemptBudgetExceeded","fatal":True}]
+        Path(cmd[cmd.index("--out")+1]).write_text(json.dumps({"arm":"with","results":rows,"fatal":True,"inconclusive":True,"skills_health_bad":[]}))
+        return type("R",(),{"returncode":3})()
+    with patch.object(m.subprocess,"run",side_effect=child):
+        print(m.run_job("with","a",2,["dummy"],1,1,out,0,max_per_window=2))
+    print("window after (實際已啟動 2 次模型)", m.runs_in_window(out))
+    for p in list(out.iterdir()):
+        if p.suffix in (".json",".candidate",".pending"): p.rename(p.with_name(p.name+".archived"))
+    print("after archive: poisoned", m.collect_skills_health(out), "window", m.runs_in_window(out))
+EOF
+```
+實際輸出：
+```
+('with', 'a', '★探針批次失效★ rc=3——停止派工，檢查結果檔與探針日誌')
+window after (實際已啟動 2 次模型) 0
+after archive: poisoned [] window 0
+```
+
+建議改法：事故檔保留候選檔各列的嘗試次數，或讓窗口計數也讀候選檔、歸檔檔和未完成標記。另外補一條先紅的測試：「失敗批次歸檔後，窗口仍記得已用掉的次數」。
+
+## 發現 2：只靠候選檔判「不可採信」的那條路，沒有測試單獨打到
+severity: minor
+blocking: 否
+引句:
+「hits.append((p.name, ["探針候選結果尚未由父程序驗證，整批不可採信"]))」
+file: `governance/eval/ablation_lumos_first.py:192`；測試在 `scripts/test_lumos.py:38254` 和 `:38131`
+
+- **S15 要求候選檔沒處理之前，報表要一直顯示「不可採信」。** 但宣稱守這條的兩段測試，現場都還有別的檔案在觸發同一個警報：
+  - 「只歸檔標記」那段，目錄裡還有判定整批失效的事故檔。
+  - 「父程序死後」那段，未完成標記還沒歸檔。
+- **照讀碼推斷**，把健康掃描裡的候選檔分支整段刪掉，這幾段測試應該都還是綠的。我沒有實際做「刪掉再跑看會不會翻紅」的實驗。
+- **影響有限**：讀取端本來就不讀候選檔，不會變成用成功外觀的列抵掉缺場，只是「顯示不可採信」這半句沒被證明。
+- 建議補一個現場：目錄裡只有候選檔，然後斷言健康掃描有報警。
+
+## 發現 3：窗口只數當天的輸出目錄，跨午夜會漏算（修補前就有）
+severity: minor
+blocking: 否
+引句:
+「for p in _result_json_files(out_dir):」
+file: `governance/eval/ablation_lumos_first.py:218`
+
+- 預設輸出目錄按日期分開。23:00 在前一天目錄跑的場次，01:00 換成新目錄後就看不到，窗口當成 0。
+- 這不是本次修補造成的，但 S18 沒寫明這個範圍限制。建議在計劃裡註明，或改成連前一天的目錄一起掃。
+
+## 查過、沒找到反例的面向
+- **未完成標記與候選檔升格**：先驗證、再改名升格、最後才刪標記。父程序死在中間任一步都不會讓沒驗證過的列被採信。
+- **整批失效判定**：整批失效、逐場失效、欄位型別錯都會整檔拒收。敲過 lumos 與第一次敲的步數一律從工具呼叫紀錄重算，型別錯也灌不進那兩項指標。
+- **探針端的重試額度**：每次啟動模型前都檢查額度，重試也算；用完就判整批失效、退出碼 3。對應測試走的是探針真正的入口函式。
+- **題號**：空白、逗號、不可列印字元和重複題號都會在派工前擋下；以短線開頭的題號也能精確選到。現有題庫都通過新檢查。
+- **退出碼 1 的歧義**：探針沒接住的例外也會回 1，但那時列數通常不足會被拒收；列數剛好足夠時，那些列也已經過最後一次健康檢查，沒找到假綠路徑。
+
+完整報告也寫在 `/Users/enzo/.claude/plans/governance-review-reports-code-probe-po-mellow-abelson.md`。

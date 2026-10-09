@@ -1,0 +1,235 @@
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index dd737254..505f2945 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -382,35 +382,39 @@ def check_scenario_targets(scenarios, repo):
+                 bad.append(f"{sid}:題目提到 {rel},但它在 repo 裡不存在(改名或刪掉了?)")
+         for item in (s.get("target") or []):
+             bad.extend(_check_one_target(sid, item, repo))
+     return bad
+ 
+ 
+ def _git_env():
+     """洗掉會蓋過 cwd 的 git 環境變數——它們一設,`cwd=副本` 就完全不算數,
+     指令會落到別的 repo 上(2026-09-21 審查席在完全正常的來源上重現過本體遠端被拔光)。"""
+     # command-scope config可覆蓋副本的remote/hooksPath；只拔定位變數不夠。
+-    # GIT_TRACE/GIT_TRACE2* 可直接指定寫入檔；保留會讓我們自己的 Git 命令改到來源。
++    # GIT_TRACE/GIT_TRACE2* 可直接指定寫入檔；AUTHOR/COMMITTER 會蓋過副本假身分。
+     env = {k: v for k, v in os.environ.items()
+-           if not k.startswith(("GIT_CONFIG", "GIT_TRACE"))}
++           if not k.startswith(("GIT_CONFIG", "GIT_TRACE", "GIT_AUTHOR_", "GIT_COMMITTER_"))}
+     for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+         env.pop(k, None)
+     # 不改HOME或真設定檔；探針Git只讀副本自己的設定。
+     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+     return env
+ 
+ 
+ class SourceProbeCleanupError(RuntimeError):
+     """專用副本清不掉：不得以一般單題例外吞掉再續跑。"""
+ 
+ 
++class ProbeHealthError(RuntimeError):
++    """全域 skills 無法驗健康或已損壞：整批不能再跑。"""
++
++
+ def _prepare_source_probe(work, config, token):
+     """只在尚未提交的自有副本注入Python註解；不追連結，不改語法。"""
+     if not isinstance(config, dict):
+         raise ValueError("source_probe 必須是物件")
+     rel, prefix = config.get("path"), config.get("line_prefix")
+     if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+         raise ValueError("source_probe 路徑必須在副本內")
+     if not isinstance(prefix, str) or not prefix or "\n" in prefix or "\r" in prefix:
+         raise ValueError("source_probe 缺目標行前綴")
+     root = Path(work).resolve(strict=True)
+@@ -523,20 +527,22 @@ def _check_copied_git_paths(work, genv):
+ 
+ 
+ def _check_worktree_entries(work, gitdir, common):
+     """副本不接受另一套Git資料或指到副本外的工作樹連結。"""
+     root = work.resolve()
+     metadata = {gitdir, common}
+     if (root / ".git").is_symlink():
+         raise RuntimeError("副本頂層Git連結未隔離")
+     if (gitdir / "modules").exists() or (common / "modules").exists():
+         raise RuntimeError("副本含子模組Git資料，未執行隔離寫入")
++    if (gitdir / "worktrees").exists() or (common / "worktrees").exists():
++        raise RuntimeError("副本含指向其他工作樹的Git資料，未執行隔離寫入")
+     for parent, dirs, files in os.walk(root, followlinks=False):
+         here = Path(parent)
+         # bare repo 沒有 .git 入口，可能以任意名稱藏在工作樹；不可讓它帶自己的 remote/hook。
+         if here != root and (here / "HEAD").is_file() and (here / "config").is_file() \
+                 and (here / "objects").is_dir() and (here / "refs").is_dir():
+             raise RuntimeError("副本含巢狀bare Git資料，未執行隔離寫入")
+         for name in dirs + files:
+             path = here / name
+             if path in metadata:
+                 continue
+@@ -1015,25 +1021,28 @@ def main():
+                         work = make_sandbox(baseline, "with", source_probe=(sc["source_probe"], token) if token else None)
+                         setup_elapsed = time.monotonic() - setup_started
+                         sandbox_secs += setup_elapsed
+                         attempt_sandbox_secs += setup_elapsed
+                         model_started = time.monotonic()
+                         try:
+                             res = _redact_source_token(run_at(work, token), token)
+                         finally:
+                             attempt_model_secs = time.monotonic() - model_started
+                             model_secs += attempt_model_secs
+-                        health = global_skills_health()
++                        try:
++                            health = global_skills_health()
++                        except Exception as e:
++                            raise ProbeHealthError(f"全域 skills 健康檢查無法完成: {type(e).__name__}") from e
+                         if health:
+-                            raise RuntimeError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
++                            raise ProbeHealthError(f"全域 skills 健康檢查失敗({len(health)} 個連結)")
+                     except Exception as e:
+-                        if work is None or isinstance(e, SourceProbeCleanupError) or str(e).startswith("全域 skills 健康檢查失敗"):
++                        if work is None or isinstance(e, (SourceProbeCleanupError, ProbeHealthError)):
+                             attempt_fatal = True
+                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                                "reason": _redact_source_token(f"儀器例外: {type(e).__name__}: {e}", token), "first_tool": None,
+                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                                "limit_hit": False, "result_subtype": None, "source_evidence": "unknown" if sc.get("source_probe") else None,
+                                "fatal": attempt_fatal}
+                     finally:
+                         # 讀碼標記的現場永不保留；普通題只保留最後一場通過隔離驗收的副本。
+                         retain = bool(a.keep and not token and not attempt_fatal
+@@ -1103,21 +1112,27 @@ def main():
+     finally:
+         if baseline is not None:
+             cleanup_started = time.monotonic()
+             try:
+                 _remove_sandbox(baseline)
+             except SourceProbeCleanupError as e:
+                 fatal = True
+                 fatal_reason = f"批次基線清理失敗: {e}"
+             finally:
+                 sandbox_secs += time.monotonic() - cleanup_started
+-        bad = global_skills_health()
++        try:
++            bad = global_skills_health()
++        except Exception as e:
++            bad = []
++            fatal = True
++            health_reason = f"全域 skills 最終健康檢查無法完成: {type(e).__name__}"
++            fatal_reason = f"{fatal_reason}；{health_reason}" if fatal_reason else health_reason
+         if bad:
+             print("\n" + "!" * 60, file=sys.stderr)
+             print(f"✗ 事故:全域 ~/.claude/skills 有 {len(bad)} 個連結被動到(懸空或指進沙盒):", file=sys.stderr)
+             for name, tgt in bad:
+                 print(f"    {name} → {tgt}", file=sys.stderr)
+             print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
+                   "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
+             print("!" * 60, file=sys.stderr)
+         summ = summarize_results(results, a.arm)
+         if fatal or bad:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0c40f4a9..650c8f2b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37417,20 +37417,100 @@ def t_probe_boundary_review1_keep_retry():
+                                             "--wait-on-limit", "300", "--out", str(out)]), \
+              patch.object(mod, "run_one", side_effect=limit_runner), \
+              patch.object(mod, "global_skills_health", return_value=[]), patch.object(mod.time, "sleep"), \
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+             rc = mod.main()
+         data = json.loads(out.read_text()); retried = data["results"][0].get("retry_attempts", [])
+         check("r1 用量重試的逐場成本仍入結果", rc == 0 and len(calls) == 2 and len(retried) == 1
+               and retried[0].get("model_secs", 0) >= 0.01, data)
+ 
+ 
++def t_probe_boundary_review2_linked_worktree():
++    import tempfile, subprocess, shutil
++    mod = _load_probe_module("sp_boundary_r2_worktree")
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-worktree-") as td:
++        root = Path(td); src = root / "src"; linked = root / "linked"
++        _probe_boundary_repo(src)
++        subprocess.run(["git", "-C", str(src), "worktree", "add", "-q", "-b", "linked", str(linked)], check=True)
++        pointer = linked / ".git"; before = pointer.read_bytes(); work = None
++        check("r2 現場確有外指linked worktree", (src / ".git/worktrees").is_dir()
++              and str(src / ".git/worktrees") in before.decode(), before)
++        try:
++            work = mod.make_sandbox(src); rejected = False
++        except RuntimeError:
++            rejected = True
++        finally:
++            if work is not None: shutil.rmtree(work.parent)
++        check("r2 有linked worktree的來源在副本建立前拒絕", rejected, str(work))
++        check("r2 拒絕不改真linked指標", pointer.read_bytes() == before, pointer.read_bytes())
++
++
++def t_probe_boundary_review2_effective_identity():
++    import tempfile, os, subprocess, shutil
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_boundary_r2_identity")
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-identity-") as td:
++        src = Path(td) / "src"; _probe_boundary_repo(src)
++        (src / "pending.txt").write_text("snapshot change\n")
++        real = {"GIT_AUTHOR_NAME": "REAL PERSON", "GIT_AUTHOR_EMAIL": "real@example.test",
++                "GIT_COMMITTER_NAME": "REAL PERSON", "GIT_COMMITTER_EMAIL": "real@example.test"}
++        work = None
++        with patch.dict(os.environ, real):
++            check("r2 身分覆蓋現場成立", os.environ["GIT_AUTHOR_NAME"] == "REAL PERSON", "")
++            try:
++                work = mod.make_sandbox(src)
++                def ident():
++                    return subprocess.run(["git", "log", "-1", "--format=%an <%ae>|%cn <%ce>"], cwd=work,
++                                          env=mod._git_env(), capture_output=True, text=True, check=True).stdout.strip()
++                check("r2 副本快照實際提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
++                (work / "model.txt").write_text("model change\n")
++                subprocess.run(["git", "add", "-A"], cwd=work, env=mod._git_env(), check=True)
++                subprocess.run(["git", "commit", "-qm", "model"], cwd=work, env=mod._git_env(), check=True)
++                check("r2 模型後續提交用假身分", ident() == "probe <probe@local>|probe <probe@local>", ident())
++            finally:
++                if work is not None: shutil.rmtree(work.parent)
++
++
++def t_probe_boundary_review2_health_unreadable():
++    import tempfile, json, io, contextlib
++    from unittest.mock import patch
++    mod = _load_probe_module("sp_boundary_r2_health")
++    with tempfile.TemporaryDirectory(prefix="probe-boundary-r2-health-") as td:
++        root = Path(td); src = root / "src"; _probe_boundary_repo(src)
++        q = root / "q.jsonl"; q.write_text("\n".join(json.dumps({"id": s, "prompt": "q", "expect": ["Bash"]})
++                                                   for s in ("a", "b")) + "\n")
++        out = root / "out.json"; calls = []
++        def runner(sc, *_args, **_kwargs):
++            calls.append(sc["id"])
++            return {**_probe_res(sc["id"], True), "first_tool": None, "secs": 0, "limit_hit": False}
++        argv = ["probe", "--repo", str(src), "--scenarios", str(q), "--out", str(out)]
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
++             patch.object(mod, "global_skills_health", side_effect=[OSError("health unreadable"), [], []]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = mod.main()
++        data = json.loads(out.read_text())
++        check("r2 健康檢查讀不到即停批且標fatal", rc == 3 and calls == ["a"]
++              and data["fatal"] and data["inconclusive"] and data["valid_total"] == 0, data)
++        out.unlink(); calls.clear()
++        with patch.object(mod.sys, "argv", argv), patch.object(mod, "run_one", side_effect=runner), \
++             patch.object(mod, "global_skills_health", side_effect=[[], [], OSError("final health unreadable")]), \
++             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            try:
++                rc = mod.main(); threw = False
++            except OSError:
++                rc = None; threw = True
++        data = json.loads(out.read_text()) if out.exists() else {}
++        check("r2 最終健康檢查讀不到仍寫不可判紀錄", not threw and rc == 3
++              and data.get("fatal") and data.get("inconclusive") and len(data.get("results", [])) == 2,
++              (threw, rc, data))
++
++
+ def t_delguard_logs_ok_too():
+     """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+     import subprocess as _sp, os, tempfile as _tf, json as _j
+     root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+     (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)

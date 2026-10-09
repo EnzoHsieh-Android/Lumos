@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-07-04
 updated: 2026-10-07
-self_audit: sonnet/2026-08-21
+self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
   - type/system
@@ -21,6 +21,10 @@ verified_by:
   - "[[Verification/2026-09-11_全報vs抑噪試點]]"
   - "[[Verification/2026-09-29_代碼審資料狀態鏡頭]]"
   - "[[Verification/2026-09-29_前端卡小實驗]]"
+  - "[[Verification/2026-10-03_代碼審修復穩定性試行落地]]"
+  - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
+  - "[[Verification/2026-10-04_代碼審收斂根因盤點]]"
+  - "[[Verification/2026-10-04_代碼審改道生效驗證]]"
   - "[[Verification/2026-10-04_治理帳寫讀設計遭鎖競態擋下]]"
   - "[[Verification/2026-10-06_附件種子修復獨立驗收]]"
   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
@@ -113,6 +117,7 @@ decisions:
 related:
   - "[[Projects/impact-diff橋接_計劃]]"
   - "[[Projects/新增告警閘_計劃]]"
+  - "[[Projects/代碼審修復穩定性試行_計劃]]"
 about_code:
   - scripts/lumos
 aliases:
@@ -127,6 +132,15 @@ aliases:
 
 ## 動機
 AI 開發仰賴模型自決實作方式、只需通過最終驗證,但實作選型的實務隱患(效能/冪等/併發/資源)沒人逼它回答;且審計火力頭重腳輕——spec 有 canary/辯方/跨家族/證據閘一整套對抗機器,代碼只有 task reviewer + 終審兩道普通眼睛。
+
+## 修復穩定性試行的理由
+
+WHY: 2026-10-03 對話中，使用者指出代碼審常因前輪修復造成新問題而跑滿三輪，並同意先試行五次。這是待驗證的觀察，不能當作已量測的缺陷來源比例；試行決定與登記見 [[Projects/代碼審修復穩定性試行_計劃]]。
+
+WHY: 本次優先補正常行為保護與新問題歸因，因為只證明原問題消失，無法說明修復是否傷到鄰近行為；增加輪數也不能回答這個問題。先沿用審查證據與計劃記事，避免未量效益就新增計數器或判定機制；來源為上述對話及該計劃設計審。
+
+試行尚未證實能降低缺陷或耗時；第五案收尾由計劃入口觸發回顧，未滿五案也有日期檢查，不能自動變成其他專案的永久要求。
+REVISIT:2026-11-03 依試行計劃檢查樣本與成本，決定停止、縮減或經使用者裁決後延長。
 
 ## 組件
 - `scripts/lumos` `cmd_pitfalls`:三模式(spec 提問 / --check 缺節擋 / --diff 代碼風險 manifest+tier),vault-free、詞表自帶。
@@ -186,3 +200,9 @@ WHY:角色新增簿記查詢承接剩餘預算，不再自開固定timeout；一
 WHY:[2026-10-06 第三輪角色統計補強]固定帳檔與未知首行終點也需要舊側角色證據；只對確定排除的目錄補償，不能兌現完整跨簿記改名承諾。採同一分類入口的「已確認」口徑，不另建簿記表、不改一般改名只取新側。[出處:code-review-artifact-impact-inputs/r3-correctness.md、r3-architecture.md] [因:避免角色消費者與影響分析消費者分岔，降低同類修復再次漏邊界] 防回歸：t_review_role_bookkeeping_rename_uncertainty，含三種真 R100、超限／逾期未知與角色不重複計數。
 
 WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存在的第三行在不同證據閘得到相反結果；本次只修座標計數，不把存在性檢查升格為語意正確性 [出處:source-coordinates 最小重現、r1設計審與countercontrol] 防回歸：t_refcheck_physical_dispositions。 [因:避免表態證據與引用檢查對同一來源座標矛盾]
+
+## 架構對齊段多了目標架構兩鍵(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]])
+
+`pitfalls --diff --json` 的 arch_alignment 在專案宣告了 arch_targets 時才多 targets(節點→檔清單)與 warnings(壞宣告的固定警告);沒宣告的專案輸出逐字不變,files 的值型別也沒改。目標組的檔不找鄰居、沒有鄰居也照列,也不算張力候選。這裡只讀起點版設定、不讀節點——維持不載圖譜;規則內容由派工鏡頭附(見 [[Systems/arch-alignment-lens]])。code-loop check 用跟表態同一個範圍印「架構對齊基準:目標 <節點> N 支檔」,範圍內改了宣告或目標節點再多印一行,兩行都不改判定。
+
+`pitfalls --diff --json` 的輸出改成無損跳脫(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]] 代碼審 r2):行與段分隔、控制、雙向覆寫這幾類字元寫成 JSON 的 \uXXXX,讀回來的值不變。原因是檔名由被審分支決定,U+2028 原樣輸出時 code-loop check 與 pre-push 用逐行方式找 JSON 那一行會切壞,走 fail-open 放行。讀 diff 那一端同理(r3):解析 git diff 只照換行切行,不用 splitlines——它也在 U+2028、U+0085、單獨的 CR 切,內容或檔名帶這些字元時,一行新增碼會被切成「新增的前半」加「當成脈絡的後半」,風險寫法漏掃、分級被繞過。r4 再補兩處:git 輸出改用位元組讀(文字模式會先把單獨的 CR 換成換行),檔頭認得 git 加了 C 式引號的檔名(檔名含 tab、雙引號、反斜線時 git 整段包引號,原本認不得,那支檔的新增行被算到上一支檔頭上或整支消失);切行與檔頭跟派工鏡頭共用同兩支函式。

@@ -18,6 +18,7 @@ summary: |-
   PITFALL:[根因:把較少輪誤當品質改善]較少輪但破壞既有行為不能算改善 [出處:Verification/2026-10-07_審查回顧eval補強] [test:t_review_eval_comparison]
 verified_by:
   - "[[Verification/2026-10-07_審查回顧eval補強]]"
+  - "[[Verification/2026-10-07_實作測試獨立判準盤點]]"
 related:
   - Systems/測試假綠形態
 ---

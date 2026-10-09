@@ -20,12 +20,13 @@ verified_by:
   - "[[Verification/2026-10-05_過期鎖安全接手實作驗證]]"
   - "[[Verification/2026-10-06_修正關卡便宜錯誤先回報_驗證]]"
   - "[[Verification/2026-10-06_修正關卡前置檢查主線CI]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 summary: |-
   PITFALL:治理帳檔尾缺換行(磁碟滿寫一半、編輯器刪掉檔尾換行)時,下一筆追加會黏在半行後面,讀側把黏壞的整行當壞行丟掉——寫的一方回成功、事件卻等於沒記 [出處:2026-10-06 代碼審 code-審查跑滿回顧 r1 併發席實跑:人裁紀錄黏行後三個擋點全部失效] [根因:追加前不看檔尾] [修法:`_gate_event`、`_append_governance_log` 與 `_drift_ledger_append` 追加前都呼叫同一支 `_ledger_tail_needs_newline`(安全開檔讀檔尾),檔非空且最後不是換行就先補一個;帳尾檢查跟隨捷徑(版控帳寫入器跟隨捷徑追加,要看同一個檔;r3 合約、邊界席),讀最後一個位元組用 os.lseek + os.read(os.pread 只有 Unix 有,r3 邊界席);`_append_governance_log` 遇到不能編碼的字串不丟堆疊(r3 正確性、邊界席),而且逐筆組、只略過不能編碼的那筆,同一批其他事件照寫,略過與寫不進去都在 stderr 講一句(r4 邊界席:原本整批組成一個字串,一筆壞就整批靜默丟光);code-loop 的 `_codeloop_gov_log`、`_codeloop_dispositions_gov_log` 與審查帳寫入器 `_jsonl_append_verified` 沒接帳尾檢查與編碼例外,見 [[Issues/治理帳與審查帳其他讀寫函式的硬化缺口]]] [test:t_cap_retro_gov_tail_newline] [test:t_cap_retro_r3_writers_portable] [test:t_cap_retro_r3_gov_ledger_rule] [test:t_cap_retro_r4_gov_batch_skips_bad]
   PITFALL:鎖的「是不是我那一把」原本只比裝置與 inode 編號,Linux(ext4、tmpfs)刪檔後馬上建同名檔幾乎必拿到同一個 inode,別人剛換入的新鎖被認成自己的而刪掉;macOS 的 APFS 不馬上重用,所以本機綠、GitHub CI 與雲端必紅 [出處:2026-10-05 合併主線後 t_lens_spawn_failure_preserves_replacement_lock 在 CI 與雲端每次都紅] [根因:inode 編號不是唯一身份,會被重用] [修法:鎖檔第三行寫隨機識別碼,身份改成(裝置,inode,寫入內容),由 _excl_lock_is_mine 判(讀不到要回報清鎖失敗,不當成乾淨);寫到一半出錯的清理(_excl_lock_cleanup_failed)改成趁 fd 還開著比 inode 再刪、最後才關檔(開著時 inode 不會被重用,關檔後才比會把別人換入的空鎖當成自己的);釋放端在別的程序、手上沒有識別碼,照舊比第一行 PID] [test:t_lens_spawn_failure_preserves_replacement_lock] [test:t_excl_lock_creation_failure_cleans_own_file] [test:t_lens_spawn_failure_unreadable_lock_reports_cleanup_error] [同族:[[Issues/過期鎖接手可能雙持]]]
   PITFALL:度量式撤除條件在本機帳不在(新 clone、CI、被刪)時把走本機帳的閘數成零筆、誤報該撤 [出處:2026-10-04 代碼審 code-gov-ledger-split r1 正確性席實跑] [根因:暖機護欄只看版控帳最舊一筆] [修法:走本機帳的組合看本機帳的暖機起點(第二早的時間),本機帳不在就不判] [test:t_gov_split_review_r1_fixes]
   WHY:自動檢查跑出的例行觀察(通過、只提醒的 check-*、doctor-run 等,名單是 _GOV_LOCAL_PAIRS)改寫不進版控的 docs/.governance-local.jsonl,主動決定與硬擋留在版控帳 [出處:Projects/治理帳例行紀錄分流_計劃] [因:例行紀錄每次提交推送都弄髒工作目錄,CI 拿全新副本本來就讀不到] [不選:放 .git/ 底下(另一套路徑規則);整本帳不進版控(CI 要讀代碼審留痕)] [test:t_gov_split_routine_goes_local]
-  WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳與筆記形狀擋的 relaxed 帳共用、不另寫第二支;留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
+  WHY:_gate_event_fit 是跨閘共用的 4 KB 裁法,舊句檢查帳、筆記形狀擋的 relaxed 帳與回頭重讀有東西那一筆(第三個使用者,2026-10-09)共用、不另寫第二支;list_key 可給一串鍵、照順序丟(回頭重讀先丟 rows 再丟 layer1_fps,各記自己的旗標);留幾筆用二分找——原本逐筆丟再重量是平方時間,補括號的行一多推送閘會卡幾十秒(代碼審 r1 四席實量) [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:兩道閘各寫一支裁法會分岔(設計審 r3 架構席)]
   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]新閘名 fix-check(kind passed/warned/skipped-env、hard false,欄位 loop/round/record_sha256/head_sha/secs/failed_items/token);讀端對它吐 token(同提交連跑兩次不被折成一筆),_GOV_FIELD_TYPES 補 record_sha256/head_sha/secs/failed_items——加之前掃過本機全部帳沒有型別衝突 [test:t_fix_check_gov_event]
   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
@@ -135,3 +136,7 @@ PITFALL:2026-10-04 [[Issues/過期鎖接手可能雙持]] 與 [[Verification/202
 - 實作落點：`scripts/lumos` `run_doctor`(Check R/H)、`cmd_lint`、`cmd_gov`、`extract_reversibility`/`_rollback_resolved`/`_guard_resolved`、`CHECKPOINT_RE`/`IRREVERSIBLE_RE`/`ROLLBACK_REF_RE`/`GUARD_REF_RE`。
 
 WHY:未執行階段另行留痕，不能從失敗項清單推測哪段跑過 [出處:Projects/修正關卡先驗便宜條件_計劃 設計審 integration-F1] [因:同一 consumer HEAD 與紀錄的兩種執行路徑產生相同失敗事件] [test:t_fix_check_preflight_not_run_is_durable]
+
+## 繞過觀察的檔案歸属
+
+WHY: post-commit 的繞過觀察歸本篇治理帳責任 [出處:本檔既有 2026-09-29 跳過帳決策與 code-test-quality-native-push/r2-邊界-codex.md] [因:提交後觀察必須和提交前的程式分類同口徑，否則會漏記或產生幽靈事件]。新增 PHP／Node 模組分類沿既有五份一致性控制，不改帳的追加格式與成功失敗語意。
