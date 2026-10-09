@@ -1,0 +1,46 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+index 4374bafe..f9a2af88 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+@@ -59,10 +59,12 @@ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能
+ 
+ WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
+ 
+ WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
+ 
+ PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。
+ 
+ PITFALL: 模型已正常退出、但留下繼承 stdout 的子程序時，`model_command` 會等管線 EOF 等到逾時，整場被記成 model-timeout 無效 [出處:code-test-quality-r4-repair/r3-架構對齊-sonnet.md ARC-1、r3-defender-A-opus.md] [根因:handbook 自寫一份 Popen＋communicate 清理，CLI 收證修好「已退出 launcher 被誤判逾時」時這份沒跟著改] [防回歸:test_exited_model_with_stream_holding_worker_is_not_timeout、test_model_timeout_keeps_partial_stream]。`model_command` 改走 [[Systems/test-quality-cli]] 的共用 runner，逾時仍轉成 `subprocess.TimeoutExpired` 並帶部分輸出，呼叫端不變；manifest 另記共用 runner 的 `process_runner_sha256`。歷來 61 份事件檔最大 72 KB，共用的 10 MiB 輸出上限不影響既有場次。
+ 
+ PITFALL: 模型命令改走共用 runner 後，輸出超過 10 MiB 的 ValueError 沒人接，整場評測以 traceback 中止、那一場的場次紀錄也沒寫出 [出處:code-test-quality-r4-repair/r4-回歸正確性-sonnet.md REG4-1、r4-邊界資源-sonnet.md BND4-2、r4-測試殺傷力-sonnet.md MUT4-1] [根因:run_model 只接逾時，修前自寫版沒有輸出上限] [防回歸:test_model_output_over_limit_is_invalid_session_not_abort]。現在記成 rc 為空、stderr 標 model-output-rejected 的無效場次並照樣寫檔，超量的原始內容不保存；SIGTERM 中斷仍往上傳。
++
++PITFALL: 模型逾時清理控制原本只給 1 秒預算，全套並行跑時假模型的直譯器啟動加上開 worker 可能超過 1 秒，worker 在登記之前就被收掉，前置斷言「worker 確實啟動」落空而偶發紅 [出處:2026-10-09 測試品質分支推送前全套第 2 片、r4-測試殺傷力-sonnet.md 的負載觀察] [根因:逾時預算貼著程序啟動時間] [防回歸:t_test_quality_handbook_controls]。預算放寬到 5 秒，假模型睡 60 秒仍必然逾時；只殺直屬程序的變異照樣紅在 worker 存活斷言。
+diff --git a/governance/eval/test_test_quality_handbook.py b/governance/eval/test_test_quality_handbook.py
+index 8ca46834..b1adc766 100644
+--- a/governance/eval/test_test_quality_handbook.py
++++ b/governance/eval/test_test_quality_handbook.py
+@@ -144,21 +144,23 @@ class ModelCommandTests(unittest.TestCase):
+             self.assertEqual(
+                 shutil.which("claude"),
+                 str(fake),
+                 "fixture entrypoint, never real provider",
+             )
+             result, _ = module.run_model(
+                 self.root,
+                 "fixture",
+                 "fixture",
+                 "fixture-model",
+-                1,
++                # 全套並行時直譯器啟動可能超過 1 秒，worker 來不及登記就被收掉；
++                # 假模型睡 60 秒，5 秒預算仍一定逾時。
++                5,
+                 False,
+                 self.root / "raw.jsonl",
+             )
+         self.assertTrue(pidfile.exists(), "worker actually launched before timeout")
+         pid = int(pidfile.read_text())
+         self.addCleanup(
+             lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+         )
+         self.assertFalse(result["valid"])
+         self.assertIsNone(result["returncode"])

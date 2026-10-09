@@ -151,7 +151,7 @@ class ModelCommandTests(unittest.TestCase):
                 "fixture",
                 "fixture",
                 "fixture-model",
-                1,
+                5,
                 False,
                 self.root / "raw.jsonl",
             )
@@ -245,7 +245,7 @@ class ModelCommandTests(unittest.TestCase):
         )
         fake.chmod(0o755)
         with self.assertRaises(subprocess.TimeoutExpired) as caught:
-            ev.model_command([str(fake)], self.root, 1)
+            ev.model_command([str(fake)], self.root, 5)
         partial = caught.exception.stdout
         partial = partial.decode() if isinstance(partial, bytes) else partial
         self.assertIn('"subtype":"init"', partial)

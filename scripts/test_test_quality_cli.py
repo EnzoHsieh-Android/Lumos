@@ -433,7 +433,7 @@ class QualityCLI(unittest.TestCase):
         ]
         module = self.quality_module()
         with self.assertRaises(module.CaptureTimeout) as caught:
-            module.run_capture_command(command, 1)
+            module.run_capture_command(command, 5)
         self.assertEqual(caught.exception.stdout.strip(), b"partial")
         self.assertEqual(str(caught.exception), "timeout; never detected")
 
