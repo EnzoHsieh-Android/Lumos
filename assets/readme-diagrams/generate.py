@@ -376,7 +376,7 @@ def writeback_scene(en):
 def evals_scene(en):
     title = "The toolkit itself is checked every week" if en else "每週自動檢查這套工具本身"
     b = rect(36, 122, 688, 290)
-    b += text(60, 160, "Scheduled in Lumos's own repo" if en else "在 Lumos 自己的 repo 排程執行", 18, "muted")
+    b += text(60, 160, "Scheduled mainly in Lumos's own repo" if en else "主要在 Lumos 自己的 repo 排程執行", 18, "muted")
     rows = [
         (180, "Review replay" if en else "審查回放", "Recompute past verdicts; they should not change" if en else "用現在的判定程式重算舊案，結論應該不變", "purple"),
         (236, "Retrieval exam" if en else "查詢考卷", "Labelled questions: are the right notes found?" if en else "人工標好的題目：查得到該看的筆記嗎？", "blue"),
@@ -389,7 +389,7 @@ def evals_scene(en):
     b += path("M380 414V446", "coral", 2) + arrow(380, 452, "down", "coral")
     boxes = [
         (36, "Record every week" if en else "每週留下紀錄"),
-        (280, "Alert on regressions" if en else "退步或沒過，通知人"),
+        (280, "Alert on problems" if en else "出問題時通知人"),
         (524, "Fix rules or add tests" if en else "修規則或補測試"),
     ]
     for x, label in boxes:
@@ -401,9 +401,9 @@ def evals_scene(en):
     b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
     b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
     desc = (
-        "Four checks run on a schedule in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many questions are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
         if en else
-        "在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄，退步或沒過就通知人，修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在未標答案的題目太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
     )
     return title, 650, b, desc
 
@@ -491,12 +491,12 @@ def drift_scene(en):
         b += text(114, y, label, 16)
         b += badge(566 if en else 584, y - 22, status, color, 138 if en else 120)
 
-    b += text(94, 916, "Other blocks can be set to warn by the project." if en else "除了兩項一定擋下的檢查、其餘可由專案改成提醒", 16, "muted")
+    b += text(94, 916, "Only some blocks can be set to warn by the project." if en else "只有部分檢查能由專案改成提醒", 16, "muted")
     b += text(94, 943, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
     desc = (
-        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, while removed names or paths still in notes, outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block; a note changed together with the code it manages must first be reread by AI for lines the change made untrue, and rule lines it flags must be fixed or explicitly kept (blocked on the local push only; CI just warns). Missing note updates and broken links always block. Other blocks can be set to warn. Content accuracy needs review and people."
+        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, while removed names or paths still in notes, outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block; a note changed together with the code it manages must first be reread by AI for lines the change made untrue, and rule lines it flags must be fixed or explicitly kept (blocked on the local push only; CI just warns). Missing note updates and broken links always block; only some checks (old names, the reread, note shape and a few others) can be set to warn. Content accuracy needs review and people."
         if en else
-        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒，消失的名稱或路徑還在筆記裡、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下；程式和管它的筆記同一次都改了時，要先交給 AI 重讀整篇找出不成立的舊句，點出的規則行要改掉或表態照留（只在本機推送擋，CI 只提醒）。改程式沒動筆記和連結斷掉一定擋、其餘可改成提醒。內容正確性仍靠審查和人。"
+        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒，消失的名稱或路徑還在筆記裡、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下；程式和管它的筆記同一次都改了時，要先交給 AI 重讀整篇找出不成立的舊句，點出的規則行要改掉或表態照留（只在本機推送擋，CI 只提醒）。改程式沒動筆記和連結斷掉一定擋；能改成提醒的只有舊說法、回頭重讀、筆記寫法等幾類。內容正確性仍靠審查和人。"
     )
     return title, 974, b, desc
 

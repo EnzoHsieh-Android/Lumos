@@ -146,7 +146,7 @@ Use `lumos ci-wait` rather than `gh run list` — the result has to land in the 
 
 ## Project switches
 
-These live in the project's `.lumos/config.json`. Commit any change: the pre-push checks read the version in the commit being pushed. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default.
+These live in the project's `.lumos/config.json`. Commit any change: most pre-push checks read the version in the commit being pushed (`stack_questions` and `note_lint` read the working-tree copy). Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
 
 | Switch | Controls | Values | When unset |
 | --- | --- | --- | --- |
@@ -156,10 +156,11 @@ These live in the project's `.lumos/config.json`. Commit any change: the pre-pus
 | `note_reread.gate` | the note reread (only the local pre-push blocks; CI only warns) | block / warn / off | block |
 | `note_shape.gate` | note wording: new code line references, current-state descriptions without a source | block / warn / off | block |
 | `note_shape.test_refs` | tests bound in touched notes must point to real tests | block / warn / off | warn |
+| `note_shape.slots` | required slots on summary-line prefixes (checked only after the project enables `--slots` in its pre-commit hook, see [07 install and maintenance](../skills/lumos-project-notes/commands/07-安裝維運.md); also governed by `note_shape.gate`) | block / warn / off | block (once enabled) |
 | `node_home.gate` | every code file needs a note that owns it (file ownership) | on / warn / off | on |
 | `lint_new.gate` | new linter warnings | block / warn / off | block |
 | `stack_questions.gate` | answering stack performance questions before a push | all / high-only / off | all |
-| `note_audit.gate` | note content audit (`note-audit check`) | block / warn / off | block |
+| `note_audit.gate` | note content audit (`note-audit check`; blocks only when the pre-push hook calls that command, which this toolkit's own hook does not) | block / warn / off | block |
 | `note_lint.gate` | new note-field rules (the per-note quick check at commit) | on / warn / off | warn |
 
 Code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval (`lumos anchor`), and a missing Python 3.14 have no switch.

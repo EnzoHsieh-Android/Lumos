@@ -96,7 +96,7 @@ The installed `lumos test-quality scan <test file or directory> --json` provides
 By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
 
 - Requirements, trade-offs, risk acceptance, and irreversible operations.
-- If a medium- or high-risk review (design or code review alike) has not passed after its 3-round cap, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
+- If a standard- or high-tier review (design or code review alike) has not passed after its 3-round cap, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
 - Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
 - Each round's review reports and outcomes stay in the repo for spot-checking at any time.
 
@@ -162,7 +162,7 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 Not every check alerts a person as the illustration's step suggests; the next paragraph says which ones do.
 
-Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches or needs refreezing, or when a scenario probe fails. A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when unlabelled questions reach one tenth or more, so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches or needs refreezing, or when a scenario probe fails (a review replay that errors out also alerts). A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when unlabelled questions reach one tenth or more, so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
 
 There is also an [offline review convergence evaluator](governance/eval/review_convergence.md). It collects case leads from ordinary and capped reviews and compares two workflows on pinned cases and versions, separating repair, preserved behavior, new defects, rounds, and cost. Missing data remains unknown. It is a read-only local analysis tool, outside the weekly schedule; it does not run models or re-execute acceptance checks. Fingerprints check declaration consistency, not truth, and do not prove that review rounds have decreased.
 
