@@ -70589,6 +70589,35 @@ def t_drift_m1_review_r3_long_lines_narrowed():
           and "2 行超過 20000 字沒看(跟這次消失的名稱無關、不影響判定):Systems/T.md:9、Systems/U.md:4" in out, out)
 
 
+def t_drift_m1_long_line_whole_word():
+    """Issues/舊句檢查超長行判準偏寬與留痕殘行 第一條(舊句兩道轉擋代碼審 r1 併修):超長行判「跟消失的名稱有關」改用跟整字規則
+    同一個先篩(_drift_m1_line_names),消失的名稱只是那一行較長識別字的一段時算無關、不擋;整字出現照舊算判不了。
+    old_sentence 沒寫照總開關、預設 block 之後,這種誤擋不用專案自己設也會發生,所以這次一起修。
+
+    翻紅釘:超長行改回純子字串比 → ①紅。
+    """
+    print("t_drift_m1_long_line_whole_word")
+    root = _nh_repo(cfg={"drift_check": {"old_sentence": "block"}})
+    _nh_file(root, "src/a.py", "def get_user():\n    pass\n\ndef keep_y_x():\n    pass\n")
+    _m1_note(root, "Systems/Table.md", "# T\n" + "| get_user_id | 值 |" * 1500)
+    _m1_note(root, "Systems/A.md", "# A\n講別的事")
+    base = _m1_commit(root, "base")
+    _nh_file(root, "src/a.py", "def keep_y_x():\n    pass\n")
+    tip = _m1_commit(root, "del")
+    rc, out = _m1_run(root, f"{base}..{tip}")
+    e = _m1_events(root)[-1]
+    check("①前置:有一行超過上限、行裡以子字串出現 get_user(只是 get_user_id 的一段)",
+          len(("| get_user_id | 值 |" * 1500)) > 20000 and e.get("candidates") == 1, str(e)[:400])
+    check("①消失的名稱只是較長識別字的一段:算無關、不擋(rc 0、long_lines 0、long_lines_other 1)",
+          rc == 0 and e["kind"] == "passed" and e["long_lines"] == 0 and e["long_lines_other"] == 1, out[-600:])
+    _m1_note(root, "Systems/B.md", "# B\n" + "| get_user | 舊的 |" * 1500)
+    _m1_commit(root, "whole word long")
+    before = _m1_events(root)
+    rc, out = _m1_run(root, f"{base}..HEAD")
+    e = _gov_since(_m1_events(root), before)[-1]
+    check("②對照組:整字出現 get_user 的超長行照判不了擋", rc == 1 and e["kind"] == "blocked" and e["long_lines"] == 1, out[-600:])
+
+
 def t_drift_m1_review_r3_paste_special_chars():
     """代碼審 r3 外家否決-F2、外家 finder-F2、邊界-F1、正確性-F2:筆記路徑或名稱只要含 Unicode 類別 Cc、Cf、Zl、Zp 的字元或不是 UTF-8,
     就不印照貼指令,改說「路徑含特殊字元,請手動表態」;逐類各一例,一般路徑照印。
