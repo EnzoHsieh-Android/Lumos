@@ -16,7 +16,7 @@
 - 只有來源核對過的判定紀錄(`provenance_ok: true`)才算已對照;來源核對沒過的那份要重派判定者。
 - 照既有手冊把 `reread-check` 接進自家 CI 的專案不受影響:CI 不帶 `--gate`,照舊只提醒、恆回 0。代價是用 `git push --no-verify` 跳過本機掛鉤時,這一道沒有 CI 兜底。
 - 推送前掛鉤的這一段被訊號砍掉(回傳碼 128 以上)時整支推送停下,不再只認 Ctrl-C(130):這道會擋人之後,被外部砍掉也不該當作放行。舊版工具不認得 `--gate` 時這一段講一句「這次沒檢查」放行;`lumos enforcement` 會把沒帶 `--gate` 的生效掛鉤列為沒接上。
-- **舊句檢查(名稱消失,`drift_check.old_sentence`)沒寫時照總開關 `drift_check.gate`**:總開關沒寫是 block,所以沒寫子開關的專案這一項改成擋;總開關設 warn 的跟著只提醒、設 off 的這一項也不跑(**行為變化**:原本 `gate=off`、`old_sentence` 沒寫的專案這一項照跑只印,現在不跑)。明寫的 `old_sentence` 照原義,不受總開關影響;設定檔讀不成 JSON 照 block。這一項本機推送前與 CI 的 `lumos drift check` 都照它擋:CI 接了 `drift check` 的專案,升級後有舊句要處理的推送 CI 也會紅(回頭重讀才是 CI 不受影響的那一道)。
+- **舊句檢查(名稱消失,`drift_check.old_sentence`)沒寫時照總開關 `drift_check.gate`**:總開關沒寫是 block,所以沒寫子開關的專案這一項改成擋;總開關設 warn 的跟著只提醒、設 off 的這一項也不跑(**行為變化**:原本 `gate=off`、`old_sentence` 沒寫的專案這一項照跑只印,現在不跑)。明寫的 `old_sentence` 照原義,不受總開關影響;設定檔讀不成 JSON 照 block。這一項本機推送前與 CI 的 `lumos drift check` 都照它擋:CI 接了 `drift check` 的專案,升級後有舊句要處理的推送 CI 也會紅;判不了(時間到、git 讀不出、筆記讀不出、內部出錯)在 block 下也回 1,CI 那步一樣會紅——CI 永遠是冷快取,大專案較容易碰到 30 秒上限,碰到時把 `drift_check.old_sentence` 設成 warn(回頭重讀才是 CI 不受影響的那一道)。
 
 ## v1.2 — 2026-10-01
 

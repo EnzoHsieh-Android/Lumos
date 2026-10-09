@@ -1577,31 +1577,43 @@ def _ledger_tail_needs_newline(path):
 def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None):
     """整行(照 _ledger_append 的量法,量 _gate_event_build 組出的完整事件)超過 4096 位元組:extra[list_key] 從尾端丟到裝得下,
     丟了就記 extra[list_key + "_truncated"];清單丟光(或本來沒有)仍超過、而且給了 nodes_cap,nodes 多於它就截到 nodes_cap 並記同一個旗標。
-    回傳 nodes(可能被截過),呼叫端拿它寫帳——量的跟寫的是同一行(舊句檢查帳與筆記形狀擋的放寬帳共用;
-    Projects/舊行尾追加不算新寫_計劃〈做法〉5)。留幾筆用二分找(整行長度隨筆數單調),不逐筆丟——逐筆重量是平方時間,
-    兩萬筆要幾十秒(代碼審 r1 四席實量)。"""
+    list_key 也可以給一串鍵:照順序丟,前一個丟光還超過才丟下一個,各鍵記自己的旗標;nodes 截掉時記第一個鍵的旗標
+    (回頭重讀的帳先丟第二層的 rows、再丟第一層的 layer1_fps)。再超過照寫(帳的寫入端沒有硬上限,4096 是讓帳長得慢的政策值)。
+    回傳 nodes(可能被截過),呼叫端拿它寫帳——★量的跟寫的是同一行:head_sha 要傳寫帳時那一個★(不傳時 _gate_event 寫帳才補 HEAD,
+    量的那一行就少了 commit 與 head_sha 兩欄;代碼審發現回頭重讀那一筆沒傳,部分輸入寫出 4156 位元組)。
+    舊句檢查帳、筆記形狀擋的放寬帳、回頭重讀有東西那一筆共用(Projects/舊行尾追加不算新寫_計劃〈做法〉5)。
+    留幾筆用二分找(整行長度隨筆數單調),不逐筆丟——逐筆重量是平方時間,兩萬筆要幾十秒(代碼審 r1 四席實量)。"""
     import json as _j
     nodes = list(nodes or [])
+    keys = (list_key,) if isinstance(list_key, str) else tuple(list_key)
 
     def size():
         ev = _gate_event_build(repo_root, gate, kind, note, hard=hard, head_sha=head_sha, nodes=nodes, extra=extra)
         return len((_j.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8"))
-    rows = extra.get(list_key)
-    if rows and size() > 4096:
-        extra[list_key + "_truncated"] = True              # 旗標先放進去再量(舊寫法逐筆丟時旗標也算在長度裡)
-        full, lo, hi = list(rows), 0, len(rows) - 1          # 找最多能留幾筆:留 lo 筆裝得下(0 筆也算「裝得下」的下界)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            rows[:] = full[:mid]
-            if size() <= 4096:
-                lo = mid
-            else:
-                hi = mid - 1
-        rows[:] = full[:lo]
+    for key in keys:
+        _gate_event_fit_drop(extra, key, size)
     if nodes_cap is not None and len(nodes) > nodes_cap and size() > 4096:
         nodes = nodes[:nodes_cap]
-        extra[list_key + "_truncated"] = True
+        extra[keys[0] + "_truncated"] = True
     return nodes
+
+
+def _gate_event_fit_drop(extra, key, size):
+    """_gate_event_fit 的一個清單:整行超過 4096 就從尾端丟 extra[key],用二分找最多能留幾筆,記 extra[key + "_truncated"]。"""
+    rows = extra.get(key)
+    if not rows or size() <= 4096:
+        return
+    extra[key + "_truncated"] = True                   # 旗標先放進去再量(舊寫法逐筆丟時旗標也算在長度裡)
+    full, lo, hi = list(rows), 0, len(rows) - 1          # 找最多能留幾筆:留 lo 筆裝得下(0 筆也算「裝得下」的下界)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        rows[:] = full[:mid]
+        if size() <= 4096:
+            lo = mid
+        else:
+            hi = mid - 1
+    rows[:] = full[:lo]
+
 
 def _gate_event_or_warn(repo_root, gate, kind, note, **kw):
     """落帳,寫不進去就在 stderr 講一句。★永遠不改變呼叫端的判定★(#19 S7)。"""
@@ -34094,8 +34106,9 @@ def _note_audit_write_verdict(root, doc, dirname=None, prefix="", max_bytes=None
     body = _j.dumps(doc, ensure_ascii=False, indent=1) + "\n"
     size = len(body.encode("utf-8"))
     if max_bytes is not None and size > max_bytes:
-        return None, (f"這份紀錄有 {size // 1024} KB,超過讀端單份上限 {max_bytes // 1024} KB——寫了推送前的檢查也讀不了,不寫"
-                      + too_big)
+        # 印位元組不印取整的 KB:上限加 1 到 1023 位元組時兩個數字都取整會印成「256 KB,超過上限 256 KB」(代碼審發現)
+        return None, (f"這份紀錄有 {size} 位元組,超過讀端單份上限 {max_bytes} 位元組({max_bytes / 1024:g} KB)"
+                      "——寫了推送前的檢查也讀不了,不寫" + too_big)
     name = prefix + _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + _uuid.uuid4().hex + ".json"
     _write_lf(d / name, body)
     return name, None
@@ -34711,13 +34724,12 @@ def _note_reread_config(text):
     """被推頂端提交的 .lumos/config.json 內容(bytes 或 None)→ (gate, warnings)。鍵名與值域同 note_audit.gate、drift_check.gate、
     note_shape.gate(block/warn/off);沒寫照 _NOTE_REREAD_DEFAULT_GATE;壞設定四種(讀不成 JSON、note_reread 不是物件、值不合法、null)
     各給一句、照預設。block 照實回 block——但擋不擋還要看呼叫端有沒有帶 --gate(Projects/舊句兩道轉擋_計劃〈開關〉)。"""
-    import json as _j
     dflt = _NOTE_REREAD_DEFAULT_GATE
     if text is None:
         return dflt, []
     try:
-        cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-    except (ValueError, UnicodeDecodeError):
+        cfg = _note_reread_json(text)
+    except ValueError:
         return dflt, [f".lumos/config.json 讀不成 JSON,回頭重讀照預設 {dflt}"]
     nr = cfg.get("note_reread") if isinstance(cfg, dict) else None
     if nr is not None and not isinstance(nr, dict):
@@ -34824,13 +34836,24 @@ def _note_reread_unread_why(root, specs, names, blobs):
     return f"讀不了判定紀錄 {_NOTE_REREAD_VERDICT_DIR}/{bad}(不是一般檔?)" + _NOTE_REREAD_VERDICT_FIX
 
 
-def _note_reread_verdict_doc(name, raw):
-    """一份紀錄的內容 → (檔名, 對照指紋, dict);讀不成 JSON 或形狀不對丟 _NoteRereadStop(點名那份、怎麼修)。"""
+def _note_reread_json(raw):
+    """回頭重讀讀 JSON(設定、判定紀錄、判定者報告的 json 區塊)→ 解出的值。★解析例外的口徑只有這一份★:不是 UTF-8、
+    不是 JSON、巢狀太深(json 的解析器遞迴爆掉丟 RecursionError,不是 ValueError)一律丟 ValueError。代碼審發現:
+    125000 層的陣列不到 256 KB,原本穿過「讀不成 JSON」那一層、reread-prepare 崩出堆疊。raw 給 bytes 或 str。"""
     import json as _j
+    try:
+        return _j.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except RecursionError:
+        raise ValueError("巢狀太深") from None
+
+
+def _note_reread_verdict_doc(name, raw):
+    """一份紀錄的內容 → (檔名, 對照指紋, dict);讀不成 JSON(含巢狀太深,_note_reread_json)或形狀不對丟 _NoteRereadStop
+    (點名那份、怎麼修)。"""
     where = f"判定紀錄 {_NOTE_REREAD_VERDICT_DIR}/{name}"
     try:
-        doc = _j.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+        doc = _note_reread_json(raw)
+    except ValueError:
         raise _NoteRereadStop(f"{where} 讀不成 JSON" + _NOTE_REREAD_VERDICT_FIX) from None
     why = _note_reread_doc_err(doc)
     if why:
@@ -34862,31 +34885,49 @@ def _note_reread_covered(root, tip, verdicts=None, deadline=None):
     return {fp for _n, fp, d in vs if d.get("provenance_ok") is True}
 
 
-def _note_reread_uncommitted(root, tip):
-    """工作目錄裡有、★被推頂端的樹裡沒有這個檔名★、★而且只差提交就算已對照★的紀錄 → {對照指紋}。原本比指紋,
-    已提交但來源核對沒過的紀錄在工作目錄的那一份會被當成還沒提交(計劃〈重讀:候選與兩層〉)。
-    「只差提交」跟「已對照」(_note_reread_covered)同一口徑:讀內容、只算形狀對而且 provenance_ok 為真的;讀不了、讀不懂、
-    太大、符號連結的都不算(代碼審發現:原本只比檔名,record 剛說「這份不算對照,請重派」,prepare 卻用它把那篇排除、說都對照過)。
-    prepare 用它決定略過哪幾篇、兩邊都用它印「記得提交」。頂端列不出時當頂端沒有紀錄。"""
-    committed = _note_reread_tip_names(root, tip) or set()
+def _note_reread_wt_verdicts(root, skip=()):
+    """★走訪工作目錄的紀錄資料夾只有這一份★(_note_reread_uncommitted 與 drift ack --kind reread 共用;代碼審發現原本各寫一份守門)
+    → [(檔名, 對照指紋, 解出的 JSON 值)],依檔名排序。只收檔名合 _NOTE_REREAD_VERDICT_NAME_RE、不在 skip 裡的;資料夾本身或檔是
+    符號連結、不是一般檔、超過單份上限 _NOTE_REREAD_VERDICT_MAX、讀不了、讀不成 JSON(含巢狀太深)的略過。形狀各呼叫端自己驗。"""
     d = Path(root) / _NOTE_REREAD_VERDICT_DIR
-    out = set()
     try:
-        files = list(d.iterdir()) if d.is_dir() and not d.is_symlink() else []
+        files = sorted(d.iterdir()) if d.is_dir() and not d.is_symlink() else []
     except OSError:
         files = []
+    out = []
     for f in files:
-        if not _NOTE_REREAD_VERDICT_NAME_RE.match(f.name) or f.name in committed:
+        m = _NOTE_REREAD_VERDICT_NAME_RE.match(f.name)
+        if not m or f.name in skip:
             continue
         try:
             if f.is_symlink() or not f.is_file() or f.stat().st_size > _NOTE_REREAD_VERDICT_MAX:
                 continue
-            _n, fp, doc = _note_reread_verdict_doc(f.name, f.read_bytes())
-        except (OSError, _NoteRereadStop):
+            out.append((f.name, m.group(1), _note_reread_json(f.read_bytes())))
+        except (OSError, ValueError):
             continue
-        if doc.get("provenance_ok") is True:
-            out.add(fp)
     return out
+
+
+def _note_reread_uncommitted(root, tip):
+    """工作目錄裡有、★被推頂端的樹裡沒有這個檔名★、★而且只差提交就算已對照★的紀錄 → {對照指紋: [檔名…]}(檔名給「記得提交」
+    那句列具體檔名用)。原本比指紋,已提交但來源核對沒過的紀錄在工作目錄的那一份會被當成還沒提交(計劃〈重讀:候選與兩層〉)。
+    「只差提交」跟「已對照」(_note_reread_covered)同一口徑:讀內容、只算形狀對而且 provenance_ok 為真的;讀不了、讀不懂(含巢狀太深)、
+    太大、符號連結、不是一般檔的都不算(走訪與守門共用 _note_reread_wt_verdicts;代碼審發現:原本只比檔名,record 剛說
+    「這份不算對照,請重派」,prepare 卻用它把那篇排除、說都對照過)。
+    prepare 用它決定略過哪幾篇、兩邊都用它印「記得提交」。頂端列不出時當頂端沒有紀錄。"""
+    out = {}
+    for name, fp, doc in _note_reread_wt_verdicts(root, skip=_note_reread_tip_names(root, tip) or set()):
+        if _note_reread_doc_err(doc) is None and doc.get("provenance_ok") is True:
+            out.setdefault(fp, []).append(name)
+    return out
+
+
+def _note_reread_add_cmd(names):
+    """「把這幾份紀錄提交」的指令:git add 列具體檔名(record、prepare、check 三處共用;整個資料夾會夾帶殘檔與別的會談的紀錄,
+    06 手冊第 5 步)。檔名都合 _NOTE_REREAD_VERDICT_NAME_RE,一般就是十六進位、數字、T、Z、-;照樣過 shlex.quote(\\d 認得
+    非 ASCII 的數字,貼進殼也不會出事)。"""
+    import shlex
+    return "git add " + " ".join(shlex.quote(f"{_NOTE_REREAD_VERDICT_DIR}/{n}") for n in sorted(names)) + " && git commit"
 
 
 # ── 第二層:判定點出的規則類條目(Projects/舊句兩道轉擋_計劃〈重讀:候選與兩層〉)──
@@ -35002,6 +35043,23 @@ def _note_reread_cmdline(diff_range, push):
     return " ".join(parts) + " --orchestrator <claude 或 codex>"
 
 
+def _note_reread_prepare_todo(root, tip, scan, done):
+    """prepare 不帶 --all 時要產項目檔的候選:扣掉已對照的(done)與工作目錄裡已有同對照指紋紀錄、還沒提交的(代碼審 r2 正確性席 F1:
+    記完忘了提交就推,check 照列那幾篇、人照它印的指令貼 prepare 會整批重派);略過的講一句,只差提交的另講一句、列那幾份的檔名
+    (_note_reread_add_cmd)。check 照舊只認已提交的。"""
+    fps = _note_reread_fps(scan)
+    wip = {fp: ns for fp, ns in _note_reread_uncommitted(root, tip).items() if fp not in done}
+    todo = [rel for rel in scan["cands"] if fps[rel] not in done and fps[rel] not in wip]
+    wip_fps = {fps[rel] for rel in scan["cands"] if fps[rel] in wip}
+    if len(todo) < len(scan["cands"]):
+        print(f"已對照 {len(scan['cands']) - len(todo)} 篇(紀錄對得上這一版程式),略過;要全部重產加 --all")
+    if wip_fps:
+        n_wip = sum(1 for rel in scan["cands"] if fps[rel] in wip)
+        print(f"  其中 {n_wip} 篇紀錄還沒提交,記得提交(推送前的檢查只認已提交的):"
+              + _note_reread_add_cmd({n for fp in wip_fps for n in wip[fp]}))
+    return todo
+
+
 def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None, push_remote=None, pushed_ref=None, all_=False):
     """lumos note-audit reread-prepare --diff A..B --orchestrator claude|codex [--push-remote R --pushed-ref REF] [--all]
     (Projects/守檔筆記對照改動_計劃〈做法〉1、2):每篇還沒對照過這一版程式的候選一份項目檔,印派工指令;沒有候選不產生檔、rc0;
@@ -35047,17 +35105,7 @@ def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None,
         except _NoteRereadStop as e:
             print(f"回頭重讀:{e.why};這次全部照產", file=sys.stderr)
             done = set()
-        fps = _note_reread_fps(scan)
-        # 工作目錄裡已有同對照指紋紀錄、還沒提交的也略過(代碼審 r2 正確性席 F1:記完忘了提交就推,check 照列那幾篇、
-        # 人照它印的指令貼 prepare 會整批重派);只差提交的另講一句。check 照舊只認已提交的。
-        wip = _note_reread_uncommitted(root, tip) - done
-        todo = [rel for rel in scan["cands"] if fps[rel] not in done and fps[rel] not in wip]
-        n_wip = sum(1 for rel in scan["cands"] if fps[rel] in wip)
-        if len(todo) < len(scan["cands"]):
-            print(f"已對照 {len(scan['cands']) - len(todo)} 篇(紀錄對得上這一版程式),略過;要全部重產加 --all")
-        if n_wip:
-            print(f"  其中 {n_wip} 篇紀錄還沒提交,記得提交(推送前的檢查只認已提交的):"
-                  f"git add {_NOTE_REREAD_VERDICT_DIR} && git commit")
+        todo = _note_reread_prepare_todo(root, tip, scan, done)
         if not todo:
             print(f"這次要對照的 {len(scan['cands'])} 篇守檔筆記都對照過這一版程式了,不產項目檔")
             return 0
@@ -35096,13 +35144,24 @@ def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None,
     return 0
 
 
+def _note_reread_too_big_hint(rows):
+    """紀錄超過讀端上限時接在原因後面的那句:講點出幾行、原文合計多少字、最長的是哪一行——紀錄每一行記全文加引句與理由,
+    大小約是「點出的行數 × 每行長度」,只點最長那行會誤導(代碼審發現:100 行 × 3300 字時提示只怪單行;把一行拆成三行,
+    判定者可能三行都點出,總量不變)。給的兩條處置都真的會降:長行寫短(原文變少)、筆記拆成幾篇(每篇各一份紀錄)。"""
+    if not rows:
+        return ""
+    longest = max(rows, key=lambda r: len(r["text"]))
+    return (f"(點出 {len(rows)} 行,原文合計 {sum(len(r['text']) for r in rows)} 字,最長的是第 {longest['line']} 行 "
+            f"{len(longest['text'])} 字;紀錄每一行都記全文,大小約是行數乘行長)——把那些長行寫短(拆成好幾行不會變小:"
+            "判定者可能照樣全點出),或把筆記拆成幾篇各自對照,再重新 reread-prepare 派判定者")
+
+
 def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
     """lumos note-audit reread-record --prepared <項目檔> --report <報告>(計劃〈做法〉3)。
     整份拒收(rc2):讀不到項目檔或不是項目檔、範本版本跟程式不同、報告讀不成 UTF-8、沒有或解析不了 json 區塊、頂層不是清單。
     來源錨點不符照收、標 provenance_ok: false(點出的行全是「要回頭看」的,照筆記內容審「重的照收」的信任方向),
     但這份不算對照:第一層只認來源核對過的(_note_reread_covered),要重派判定者;第二層照樣讀它點出的行(較保守)。
     紀錄資料夾是符號連結或跑出 repo 也整份拒收(資安席 F3;落盤共用筆記內容審的 _note_audit_write_verdict)。"""
-    import json as _j
     root = _note_audit_root(repo)
     if root is None:
         print("回頭重讀:這裡不是 git 專案", file=sys.stderr)
@@ -35126,7 +35185,7 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
         return 2
     block, bad = _note_reread_json_block(text), object()
     try:
-        items = _j.loads(block) if block is not None else bad
+        items = _note_reread_json(block) if block is not None else bad
     except ValueError:
         items = bad
     if items is bad:
@@ -35159,11 +35218,8 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
            "contrast_fp": meta["對照指紋"], "material_fp": meta["材料指紋"], "tip": meta["範圍終點"], "rows": rows}
     # text 記整行、不截:截成前綴會改變比對(引句落在截掉的那段就退回前綴,可能漏掉引句本來比得中的規則行;改掉截掉的那段也不再算處理過)。
     # 改成寫之前量大小,讀端讀不了就不寫(_note_audit_write_verdict 的 max_bytes)
-    longest = max(rows, key=lambda r: len(r["text"]), default=None)
-    hint = (f"(點出的第 {longest['line']} 行有 {len(longest['text'])} 字)——把筆記裡那幾行拆短,重新 reread-prepare 再派判定者"
-            if longest else "")
     name, why = _note_audit_write_verdict(root, doc, dirname=_NOTE_REREAD_VERDICT_DIR, prefix=f"{meta['對照指紋']}-",
-                                          max_bytes=_NOTE_REREAD_VERDICT_MAX, too_big=hint)
+                                          max_bytes=_NOTE_REREAD_VERDICT_MAX, too_big=_note_reread_too_big_hint(rows))
     if name is None:
         print(f"擋下:{why}", file=sys.stderr)
         return 2
@@ -35180,7 +35236,7 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
     print("接下來:改掉那幾行;點出的若是規則類條目(RULE:、★INVARIANT★、帶測試綁定的摘要條目),推送時會擋——改掉那句,或確認照留就\n"
           '    lumos drift ack <節點> <那一條的開頭行號> --kind reread --reason "<為什麼照留>"\n'
           "表態也要提交;改筆記不用重新對照(對照只看程式那一半)。\n"
-          f"紀錄要提交,推送前的檢查才認得(只認已提交的):\n    git add {_NOTE_REREAD_VERDICT_DIR}/{name} && git commit")
+          "紀錄要提交,推送前的檢查才認得(只認已提交的):\n    " + _note_reread_add_cmd([name]))
     return 0
 
 
@@ -35248,8 +35304,15 @@ def _note_reread_judge(root, diff_range, push_remote, pushed_ref, res):
     covered = _note_reread_covered(root, tip, verdicts=vs)
     left = [rel for rel in scan["cands"] if fps[rel] not in covered]
     res.update(state="judged", fps=fps, left=left, badprov={fp for _n, fp, d in vs if d.get("provenance_ok") is not True},
-               wip=(_note_reread_uncommitted(root, tip) & {fps[r] for r in left}) if left else set(),
+               wip=_note_reread_wip_left(root, tip, {fps[r] for r in left}),
                layer2=_note_reread_layer2(root, tip, scan, vs, deadline))
+
+
+def _note_reread_wip_left(root, tip, left_fps):
+    """check 第一層沒對照的那幾篇裡,工作目錄有只差提交的紀錄的 → {對照指紋: [檔名…]}(印「記得提交」用);沒有沒對照的不讀工作目錄。"""
+    if not left_fps:
+        return {}
+    return {fp: ns for fp, ns in _note_reread_uncommitted(root, tip).items() if fp in left_fps}
 
 
 def _note_reread_args(root, diff_range, push_remote, pushed_ref, res):
@@ -35392,7 +35455,8 @@ def _note_reread_print_layer1(res, hard, stream):
         if len(rows) > _NOTE_REREAD_LIST_MAX:
             print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
     if res["wip"]:
-        print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:git add {_NOTE_REREAD_VERDICT_DIR} && git commit", file=stream)
+        print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+              + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
     print("  程式改了就要重判:對照指紋含這篇 about_code 列的程式在頂端的版本——合併主線帶進別人對同一支程式的改動、筆記改名、"
           "about_code 增減都算;改筆記不用重判。", file=stream)
     print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
@@ -35418,41 +35482,47 @@ def _note_reread_print_layer2(res, hard, stream):
 
 
 def _note_reread_ledger(root, res, hard):
-    """記一筆帳:off 不記;參數錯、環境查不了、不擋時的判不了記 skipped;擋下的判不了記 blocked(hard);沒新東西 none;
-    判完兩層都沒有 covered,有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字)。"""
-    st = res["state"]
+    """記一筆帳:off 不記;參數錯、環境查不了記 skipped;判不了不擋記 skipped、擋下記 blocked(hard),兩筆都帶 state undecidable
+    (跟舊句檢查的帳一樣用 state 字串記;代碼審發現原本只有擋下那筆帶);沒新東西 none;判完兩層都沒有 covered,
+    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
+    跟舊句檢查、筆記形狀擋的帳一樣。"""
+    st, tip = res["state"], res.get("tip")
     if st == "off":
         return
-    if st in ("param", "skipped") or (st == "undecidable" and not hard):
-        _gate_event_or_warn(root, "note-reread", "skipped", res["why"])
+    if st in ("param", "skipped"):
+        _gate_event_or_warn(root, "note-reread", "skipped", res["why"], head_sha=tip)
     elif st == "undecidable":
-        _gate_event_or_warn(root, "note-reread", "blocked", f"判不了:{res['why']}", hard=True,
-                            extra={"state": "undecidable"})      # 跟舊句檢查的帳一樣用 state 字串記
+        kind, note = ("blocked", f"判不了:{res['why']}") if hard else ("skipped", res["why"])
+        _gate_event_or_warn(root, "note-reread", kind, note, hard=hard, head_sha=tip, extra={"state": "undecidable"})
     elif st == "none":
-        _gate_event_or_warn(root, "note-reread", "none", res["why"])
+        _gate_event_or_warn(root, "note-reread", "none", res["why"], head_sha=tip)
     elif not res["left"] and not res["layer2"]["must"]:
-        _gate_event_or_warn(root, "note-reread", "covered", f"{len(res['fps'])} 篇都對照過")
+        _gate_event_or_warn(root, "note-reread", "covered", f"{len(res['fps'])} 篇都對照過", head_sha=tip)
     else:
         _note_reread_ledger_found(root, res, hard)
 
 
 def _note_reread_ledger_found(root, res, hard):
-    """有東西的那一筆:detail 記兩層各幾篇、第一層要重判幾篇、第二層要處理的前 50 行(路徑、條目前 80 字、紀錄指紋);
-    路徑一律過 _note_reread_show(非 UTF-8 檔名寫帳會編碼失敗,邊界席 F1)。整行超過 4096 位元組時跟舊句檢查、筆記形狀擋的
-    放寬帳一樣走 _gate_event_fit:從尾端丟 rows、記 rows_truncated,還超過再把 nodes 截到 20(筆數欄照記全數;代碼審發現)。"""
-    fps, left, must = res["fps"], res["left"], res["layer2"]["must"]
+    """有東西的那一筆:note 只記兩層篇數、範圍終點與來源;第一層沒對照的前 50 篇(路徑與對照指紋)記 layer1_fps,第二層要處理的前 50 行
+    (路徑、條目前 80 字、紀錄指紋)記 rows。路徑一律過 _note_reread_show(非 UTF-8 檔名寫帳會編碼失敗,邊界席 F1)。
+    整行超過 4096 位元組時跟舊句檢查、筆記形狀擋的放寬帳一樣走 _gate_event_fit:先從尾端丟 rows、再丟 layer1_fps,各記自己的
+    _truncated,還超過再把 nodes 截到 20(筆數欄照記全數);再超過照寫(_gate_event_fit 的約定)。量與寫都帶被推頂端當 head_sha。
+    ★清單不放 note★:note 會原樣再寫一份到 detail、而且 _gate_event_fit 截不到它——原本「路徑=指紋」清單放在 note,
+    30 篇沒對照時 rows 丟光、nodes 截到 20 整行仍有 5886 位元組(代碼審發現)。"""
+    fps, left, must, tip = res["fps"], res["left"], res["layer2"]["must"], res["tip"]
     pre = res["scan"]["vault_rel"] + "/"
-    src = "ci" if _in_ci() else "hook"
     note = (f"沒對照 {len(left)} 篇、已對照 {len(fps) - len(left)} 篇;規則類條目要處理 {len(must)} 條;"
-            f"範圍終點 {res['tip']};來源 {src};" + "、".join(f"{_note_reread_show(r)}={fps[r]}" for r in left[:50]))
+            f"範圍終點 {tip};來源 {'ci' if _in_ci() else 'hook'}")
     rows = [{"path": _note_reread_show(pre + f["path"]), "line": f["line"], "quote": _note_reread_show(f["text"])[:80],
              "verdicts": sorted(f["verdicts"])} for f in must[:50]]
     extra = {"layer1": len(left), "rejudge": len(left), "layer2_notes": len({f["path"] for f in must}),
-             "layer2_rows": len(must), "rows": rows}
+             "layer2_rows": len(must), "rows": rows,
+             "layer1_fps": [{"path": _note_reread_show(pre + r), "fp": fps[r]} for r in left[:50]]}
     nodes = list(dict.fromkeys([_note_reread_show(pre + r) for r in left] + [r["path"] for r in rows]))[:50]
     kind = "blocked" if hard else "reminded"
-    nodes = _gate_event_fit(root, "note-reread", kind, note, extra, "rows", hard=hard, nodes=nodes, nodes_cap=20)
-    _gate_event_or_warn(root, "note-reread", kind, note, hard=hard, nodes=nodes, extra=extra)
+    nodes = _gate_event_fit(root, "note-reread", kind, note, extra, ("rows", "layer1_fps"), hard=hard, head_sha=tip,
+                            nodes=nodes, nodes_cap=20)
+    _gate_event_or_warn(root, "note-reread", kind, note, hard=hard, head_sha=tip, nodes=nodes, extra=extra)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -37972,25 +38042,13 @@ def _drift_ack_reread_line_err(rel, text, line):
 
 def _drift_ack_reread_verdicts(root, note_full, text, line):
     """工作目錄 governance/reread-verdicts/ 裡點出這一條的紀錄 → 排序去重的對照指紋清單(取自檔名)。檔名要合正規式、note 欄等於
-    這篇(repo 相對路徑)、某列的比對字串(同第二層的取法)落在這一條;讀不了、太大、形狀不對的那份略過(表態只認點得出的)。"""
-    import json as _j
-    d = Path(root) / _NOTE_REREAD_VERDICT_DIR
+    這篇(repo 相對路徑)、某列的比對字串(同第二層的取法)落在這一條;讀不了、太大、符號連結、不是一般檔、讀不成 JSON(含巢狀太深)、
+    形狀不對的那份略過(表態只認點得出的)。走訪與守門共用 _note_reread_wt_verdicts。"""
     out = set()
-    try:
-        files = sorted(d.iterdir()) if d.is_dir() and not d.is_symlink() else []
-    except OSError:
-        files = []
-    for f in files:
-        m = _NOTE_REREAD_VERDICT_NAME_RE.match(f.name)
-        try:
-            if not m or f.is_symlink() or not f.is_file() or f.stat().st_size > _NOTE_REREAD_VERDICT_MAX:
-                continue
-            doc = _j.loads(f.read_bytes().decode("utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
-            continue
+    for _name, fp, doc in _note_reread_wt_verdicts(root):
         if isinstance(doc, dict) and doc.get("note") == note_full and isinstance(doc.get("rows"), list):
             if line in _reread_note_hits(text, [r for r in doc["rows"] if isinstance(r, dict)])[0]:
-                out.add(m.group(1))
+                out.add(fp)
     return sorted(out)
 
 

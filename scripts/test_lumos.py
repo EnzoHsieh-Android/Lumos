@@ -35521,19 +35521,6 @@ def t_enforcement_never_raises_on_missing():
     check("enforcement: 缺目錄不炸、回恰 24 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger)", isinstance(rows, list) and len(rows) == 24, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
-def _drop_inherited_skip_env():
-    """★外面繼承來的 LUMOS_SKIP_* 單次略過變數一律清掉★(2026-10-09 代碼審發現):掛鉤的逃生段教人
-    `LUMOS_SKIP_REREAD_CHECK=1 git push`,掛鉤跑全套測試時原樣繼承,行程內直接呼叫工具函式的測試就被它改了行為而紅——
-    逃生寫法反而讓推送被「測試有紅」擋下。修在唯一進入點(main() 呼叫)、理由同 main() 清 GIT_*:要用的測試一律自己設
-    (env= 或設了再還原),沒有測試靠「從外面繼承」這些變數;LUMOS_SKIP_CLAUDE_PLUGIN 之後由 _isolate_environment 重設成 1。
-    CI、GITHUB_ACTIONS 不清:它們是 CI 平台的變數,第三方工具(npm 這類)也照它決定要不要互動;lumos 裡只影響回頭重讀的
-    一句提示、帳的來源欄與版本檢查的一行說明,用到的測試都自己設或清(t_runner_drops_inherited_skip_env 帶著它們驗過)。
-    抽成函式是為了不加 main() 的分支數。"""
-    import os
-    for k in [k for k in os.environ if k.startswith("LUMOS_SKIP_")]:
-        os.environ.pop(k, None)
-
-
 def _isolate_environment():
     """★把整輪測試關進拋棄式的家目錄與暫存目錄★(2026-09-06 全 repo 審視 #11)。
 
@@ -35585,6 +35572,15 @@ def _isolate_environment():
     # 2026-10-05 Lumos事件帳 S10:同一個理由——CLAUDE_CONFIG_DIR 會繞過假家目錄打到真的 Claude 設定;
     # 再加一道開關,讓 install / uninstall 的外掛步驟在測試裡整段略過(要測外掛的那幾支自己取消、放假的 claude)
     os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    # 2026-10-09 ★外面繼承來的 LUMOS_SKIP_* 單次略過變數一律清掉★(代碼審發現):掛鉤的逃生段教人
+    # `LUMOS_SKIP_REREAD_CHECK=1 git push`,掛鉤跑全套測試時原樣繼承,行程內直接呼叫工具函式的測試就被它改了行為而紅
+    # (同族的 NOTE_SHAPE、DRIFT_CHECK 洩漏會讓 t_note_shape_*、t_drift_m1 紅)——逃生寫法反而讓推送被「測試有紅」擋下。
+    # 清整族(前綴)不列名單:新加的略過變數不用回來補。要用的測試一律自己設(env= 或設了再還原),沒有測試靠「從外面繼承」;
+    # 清在下一行把 LUMOS_SKIP_CLAUDE_PLUGIN 設回 1 之前。CI、GITHUB_ACTIONS 不清:它們是 CI 平台的變數,第三方工具也照它決定
+    # 要不要互動;lumos 裡只影響回頭重讀的一句提示、帳的來源欄與版本檢查的一行說明,用到的測試都自己設或清
+    # (t_runner_drops_inherited_skip_env 帶著它們驗過)。
+    for k in [k for k in os.environ if k.startswith("LUMOS_SKIP_")]:
+        os.environ.pop(k, None)
     os.environ["LUMOS_SKIP_CLAUDE_PLUGIN"] = "1"
     # ★LUMOS_HOME 不是使用者家目錄,是「lumos 來源 repo 在哪」★——一開始我把它也設成假家目錄,
     #   結果有支測試找不到來源就跳過了(跑得到變跑不到=覆蓋悄悄少掉,是比 skip 數字才發現)。
@@ -35650,9 +35646,6 @@ def main():
     for _v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
                "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         _os_env.environ.pop(_v, None)
-
-    # ★外面繼承來的 LUMOS_SKIP_* 單次略過變數一律清掉★(理由見 _drop_inherited_skip_env)
-    _drop_inherited_skip_env()
 
     # ★子程序的錯誤追蹤一律不上色★(2026-10-07,另一個會談推送前全套 6 條假紅):殼裡設了 FORCE_COLOR=3 時,
     # Python 3.14 會把子程序 traceback 上色,`RuntimeError` 被 ANSI 碼切開,比對錯誤名稱的斷言就比不到;CI 沒設這個變數所以綠。
@@ -63690,21 +63683,26 @@ def _rr_note(name):
     return f"{_NA_VAULT}/Systems/{name}.md"
 
 
-def _rr(root, *args, env=None):
-    """跑 lumos note-audit <子指令> → (rc, 標準輸出, 標準錯誤)(reread-check 要分開驗「只走標準輸出」)。"""
+def _rr(root, *args, env=None, timeout=None):
+    """跑 lumos note-audit <子指令> → (rc, 標準輸出, 標準錯誤)(reread-check 要分開驗「只走標準輸出」)。
+    給 timeout 時卡住(例如去讀 FIFO)回 (-9, "", "逾時")。"""
     import subprocess as sp, os as _os
     e = dict(_os.environ)
     for k in ("LUMOS_SKIP_REREAD_CHECK", "CI", "GITHUB_ACTIONS"):
         e.pop(k, None)
     if env:
         e.update(env)
-    r = sp.run([sys.executable, GRAPHCTL, "note-audit", *args, "--repo", str(root)], capture_output=True, text=True, env=e)
+    try:
+        r = sp.run([sys.executable, GRAPHCTL, "note-audit", *args, "--repo", str(root)], capture_output=True, text=True, env=e,
+                   timeout=timeout)
+    except sp.TimeoutExpired:
+        return -9, "", "逾時"
     return r.returncode, r.stdout, r.stderr
 
 
-def _rr_prepare(root, rng, *extra, orch="claude"):
+def _rr_prepare(root, rng, *extra, orch="claude", timeout=None):
     import re as _re
-    rc, out, err = _rr(root, "reread-prepare", "--diff", rng, "--orchestrator", orch, *extra)
+    rc, out, err = _rr(root, "reread-prepare", "--diff", rng, "--orchestrator", orch, *extra, timeout=timeout)
     return rc, out + err, [Path(f) for f in _re.findall(r"項目檔:(\S+\.md)$", out, _re.M)]
 
 
@@ -65446,11 +65444,17 @@ def t_note_audit_reread_prepare_skips_uncommitted_records():
     check("①A 的紀錄在工作目錄、還沒提交 → prepare 略過 A、只產 B,講已對照 1 篇、其中 1 篇還沒提交要記得提交",
           rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("B")] and "已對照 1 篇" in out
           and "其中 1 篇紀錄還沒提交" in out and "git add governance/reread-verdicts" in out, out[-600:])
+    rec_a = [p.name for p in _rr_records(root)]
+    check("①b 提交指令列那一份的檔名、不是整個資料夾(整個資料夾會夾帶殘檔與別的會談的紀錄)",
+          len(rec_a) == 1 and f"git add governance/reread-verdicts/{rec_a[0]} && git commit" in out
+          and "git add governance/reread-verdicts &&" not in out, out[-600:])
     rc, out, files = _rr_prepare(root, rng, "--all")
     check("②加 --all 照舊全產", rc == 0 and sorted(_rr_meta(f)["筆記路徑"] for f in files) == [_rr_note("A"), _rr_note("B")],
           out[-600:])
     rc, o, e = _rr(root, "reread-check", "--diff", rng)
     check("②check 照舊只認已提交的:A 照列、講還沒提交", rc == 0 and "Systems/A.md" in o and "還沒提交" in o, o + e)
+    check("②b check 的提交指令也列那一份的檔名、不是整個資料夾",
+          f"git add governance/reread-verdicts/{rec_a[0]} && git commit" in o and "git add governance/reread-verdicts &&" not in o, o[-600:])
     _rr(root, "reread-record", "--prepared", str(first[_rr_note("B")]),
         "--report", str(_rr_report(tmp / "b.md", first[_rr_note("B")], [])))
     fp_b = _rr_meta(first[_rr_note("B")])["對照指紋"]
@@ -65806,6 +65810,11 @@ def t_reread_block_undecidable():
         _nh_commit(root, label)
         rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
         check(f"③[S17]{label} → 判不了、rc1、點名那個檔", rc == 1 and bad in e, f"rc={rc}\n{o}\n{e}")
+    _nh_file(root, f"governance/reread-verdicts/{bad}", "[" * 130000 + "]" * 130000)
+    _nh_commit(root, "deep record")
+    rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
+    check("③[S17]已提交的紀錄巢狀太深(13 萬層陣列,不到 256 KB)→ 判不了、rc1、點名那個檔講讀不成 JSON(不是「沒預料到的錯誤」)",
+          rc == 1 and bad in e and "讀不成 JSON" in e and "沒預料" not in e, f"rc={rc}\n{o}\n{e[-600:]}")
     _nh_file(root, f"governance/reread-verdicts/{bad}", '{"note": "x", "rows": [], "pad": "' + "a" * 300000 + '"}\n')
     _nh_commit(root, "huge record")
     rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
@@ -65820,6 +65829,9 @@ def t_reread_block_undecidable():
     _nh_commit(root, "warn and broken")
     rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
     check("⑤[S17]warn 加 --gate、判定紀錄讀不懂 → rc0、記 skipped", rc == 0 and ev == ["skipped"], f"rc={rc}\n{o}\n{e}\n{ev}")
+    skp = [x for x in _ns_gov(root) if x.get("gate") == "note-reread" and x.get("kind") == "skipped"]
+    check("⑤warn 下判不了的 skipped 帳也帶 state=undecidable(跟 block 下那筆一致)", skp and skp[-1].get("state") == "undecidable",
+          str(skp[-1:])[:400])
     # [S18] 環境與參數
     r2, b2 = _rr_repo()
     _rr_touch(r2, "src/a.py")
@@ -65862,11 +65874,118 @@ def t_reread_block_undecidable():
     check("⑦[S19]LUMOS_SKIP_REREAD_CHECK=1 → rc0、記 skipped-env", rc == 0 and ev == ["skipped-env"], f"rc={rc}\n{o}\n{e}\n{ev}")
 
 
+def _rrwt_reset(root, tmp, name, good, deep, kind):
+    """t_reread_wt_records_guarded 每一組的現場:紀錄資料夾只放一份叫 name 的檔,照 kind 造成符號連結、FIFO、太大、形狀壞、
+    巢狀太深、正常一般檔,或整個資料夾是符號連結;順手清掉前一組留下的表態檔。"""
+    import json as _j, os as _os, shutil
+    d = root / "governance" / "reread-verdicts"
+    (root / "governance" / "drift-acks.jsonl").unlink(missing_ok=True)     # 前一組改壞讓 ack 寫了表態,不連累下一組
+    if d.is_symlink() or d.is_file():
+        d.unlink()
+    elif d.is_dir():
+        shutil.rmtree(d)
+    if kind == "dir-link":
+        d.symlink_to(tmp / "gooddir", target_is_directory=True)
+        return
+    d.mkdir(parents=True)
+    f = d / name
+    if kind == "link":
+        f.symlink_to(tmp / "good.json")
+    elif kind == "fifo":
+        _os.mkfifo(f)
+    else:
+        body = {"good": _j.dumps(good, ensure_ascii=False), "big": _j.dumps(dict(good, pad="a" * 300000)),
+                "not-object": "[1]", "rows-not-list": _j.dumps(dict(good, rows="x")), "deep": deep}[kind]
+        f.write_text(body, encoding="utf-8")
+
+
+def _rrwt_ack(root, line):
+    """在 root 跑 drift ack Systems/A <line> --kind reread(卡住 60 秒算逾時)→ (rc, 輸出)。"""
+    import subprocess as sp
+    try:
+        r = sp.run([sys.executable, GRAPHCTL, "drift", "ack", "Systems/A", str(line), "--kind", "reread", "--reason", "照留理由"],
+                   capture_output=True, text=True, cwd=str(root), timeout=60)
+    except sp.TimeoutExpired:
+        return -9, "逾時"
+    return r.returncode, r.stdout + r.stderr
+
+
+def t_reread_wt_records_guarded():
+    """工作目錄紀錄的讀取守門(_note_reread_wt_verdicts,_note_reread_uncommitted 與 drift ack --kind reread 共用):檔名合規、
+    但檔是符號連結、FIFO、超過 256 KB、形狀壞(不是物件、rows 不是清單)、巢狀太深(json 遞迴爆掉),或整個資料夾是符號連結 →
+    prepare 不崩、不算「只差提交」(照產項目檔、不叫人提交);drift ack 照原本的規則略過那份(講沒有判定點出、rc2)。
+    對照組:同一份內容放成一般檔 → prepare 算只差提交、列那份的檔名;ack 照收。代碼審發現:這幾道守門原本沒有測試守,
+    巢狀太深還讓 prepare 崩出堆疊。
+
+    翻紅釘:拿掉符號連結判斷 → 符號連結那組紅;拿掉一般檔判斷 → FIFO 那組卡住逾時、紅;拿掉大小上限 → 太大那組紅;
+    拿掉資料夾符號連結判斷 → 資料夾那組紅;uncommitted 不驗形狀 → 形狀壞那兩組紅;解析不接 RecursionError → 巢狀太深那組紅(這台
+    13 萬層真的會爆;另有行程內替身讓 json 丟 RecursionError,不看機器)。"""
+    print("t_reread_wt_records_guarded")
+    import json as _j, os as _os, shutil
+    if not hasattr(_os, "mkfifo"):
+        raise _SrcOnly("這個平台沒有 FIFO(非失敗)")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-rrwt-"))
+    root, base = _rrb_repo(_RRB_RULE)
+    rng = f"{base}..HEAD"
+    l_rule = _rrb_line(root, "推送前一定要先跑全套測試")
+    name, _fp = _rrb_judge(root, rng, [{"line": l_rule, "quote": "推送前一定要先跑全套測試", "why": "w"}], tmp)
+    d = root / "governance" / "reread-verdicts"
+    good = _j.loads((d / name).read_text(encoding="utf-8")) if name else {}
+    if not (name and good.get("provenance_ok") is True and good.get("note") == _rr_note("A")):
+        check("前置:記下一份來源核對過、點出那條規則的紀錄", False, str(good)[:300])
+        return
+    (tmp / "good.json").write_text(_j.dumps(good, ensure_ascii=False), encoding="utf-8")
+    (tmp / "gooddir").mkdir()
+    shutil.copy(tmp / "good.json", tmp / "gooddir" / name)
+    deep = "[" * 130000 + "]" * 130000
+
+    def reset(kind):
+        _rrwt_reset(root, tmp, name, good, deep, kind)
+    for kind, label in (("link", "檔是符號連結(指到一份來源核對過的紀錄)"), ("fifo", "檔是 FIFO"),
+                        ("big", "超過 256 KB(內容是來源核對過的紀錄)"), ("not-object", "形狀壞:不是物件"),
+                        ("rows-not-list", "形狀壞:rows 不是清單"), ("deep", "巢狀太深(13 萬層陣列,不到 256 KB)"),
+                        ("dir-link", "整個紀錄資料夾是符號連結(指到放著那份紀錄的資料夾)")):
+        reset(kind)
+        rc, out, files = _rr_prepare(root, rng, timeout=60)
+        check(f"①{label}:prepare 不崩、不算只差提交 → 照產 A 的項目檔、不叫人提交",
+              rc == 0 and "Traceback" not in out and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")]
+              and "還沒提交" not in out, f"rc={rc}\n{out[-600:]}")
+        rc, out = _rrwt_ack(root, l_rule)
+        check(f"②{label}:drift ack --kind reread 照原本規則略過那份 → rc2、講沒有判定點出、不寫表態",
+              rc == 2 and "沒有判定" in out and "Traceback" not in out and not (root / "governance" / "drift-acks.jsonl").is_file(),
+              f"rc={rc}\n{out[-600:]}")
+    m = _load_lumos_inproc()
+    reset("good")
+
+    class _Deep:       # 函式裡的 import json 拿 sys.modules 那一份:換成 loads 一律丟 RecursionError 的替身
+        def loads(self, *a, **k):
+            raise RecursionError("測試造的遞迴爆掉")
+    real_json = sys.modules["json"]
+    sys.modules["json"] = _Deep()
+    try:
+        try:
+            got = (m._note_reread_uncommitted(root, _na_head(root)), m._drift_ack_reread_verdicts(root, _rr_note("A"), "", l_rule))
+        except RecursionError as ex:
+            got = ex
+    finally:
+        sys.modules["json"] = real_json
+    check("③行程內替身讓 json 解析丟 RecursionError:uncommitted 與 drift ack 的讀法都不穿出例外、那份不算", got == ({}, []), repr(got))
+    reset("good")
+    rc, out, files = _rr_prepare(root, rng)
+    check("④對照組:同一份內容放成一般檔 → prepare 算只差提交、不產 A 的項目檔、提交指令列那份的檔名(不是整個資料夾)",
+          rc == 0 and files == [] and "其中 1 篇紀錄還沒提交" in out and f"git add governance/reread-verdicts/{name} && git commit" in out
+          and "git add governance/reread-verdicts &&" not in out, out[-600:])
+    rc, out = _rrwt_ack(root, l_rule)
+    check("④對照組:drift ack 照收", rc == 0 and "表態記下了" in out, out[-400:])
+
+
 def t_reread_record_refuses_unreadable_size():
     """寫端保證讀端讀得了(代碼審發現):判定點出一條 30 萬字的長行,紀錄的 text 記整行、序列化後超過讀端單份上限 256 KB——
     原本照寫,提交後推送前的檢查讀不了、block 下每次推送都擋,出口只有 git rm 加重判。現在 record 量過大小、超過就不寫、回 2、講哪一行太長。
+    訊息印位元組(原本兩個數字都取整成 KB,上限加 1 到 1023 位元組時印「256 KB,超過上限 256 KB」);處置提示講點出幾行、原文合計
+    與最長那行(總量是行數乘行長,原本只怪最長那行),給的處置是把長行寫短或把筆記拆成幾篇。
 
-    翻紅釘:拿掉 record 傳給落盤函式的大小上限 → 紀錄照寫、rc0 → 紅。"""
+    翻紅釘:拿掉 record 傳給落盤函式的大小上限 → 紀錄照寫、rc0 → ①紅;大小訊息改回取整的 KB → ③紅;提示只講最長那行 → ②④紅。"""
     print("t_reread_record_refuses_unreadable_size")
     tmp = Path(tempfile.mkdtemp(prefix="gctl-rrb6-"))
     long_line = "很長的一行貼上資料:" + "x" * 300000
@@ -65876,45 +65995,103 @@ def t_reread_record_refuses_unreadable_size():
     item = next(f for f in files if _rr_meta(f)["筆記路徑"] == _rr_note("A"))
     rc, o, e = _rr(root, "reread-record", "--prepared", str(item),
                    "--report", str(_rr_report(tmp / "long.md", item, [{"line": l_long, "quote": "很長的一行貼上資料", "why": "w"}])))
-    check("點出超長行、紀錄會超過讀端單份上限 → rc2、擋下講上限與是哪一行、不寫紀錄",
-          rc == 2 and "擋下:" in e and "256 KB" in e and f"第 {l_long} 行" in e and _rr_records(root) == [],
+    check("①點出超長行、紀錄會超過讀端單份上限 → rc2、擋下講上限與是哪一行、不寫紀錄",
+          rc == 2 and "擋下:" in e and "上限 262144 位元組(256 KB)" in e and f"第 {l_long} 行" in e and _rr_records(root) == [],
           f"rc={rc}\n{o[-400:]}\n{e[-600:]}\n{[p.name for p in _rr_records(root)]}")
+    check("②提示講點出幾行、原文合計、最長那行,處置是寫短或拆篇", "點出 1 行" in e and "最長的是第" in e and "拆成幾篇" in e, e[-600:])
     rc, o, e = _rr(root, "reread-record", "--prepared", str(item),
                    "--report", str(_rr_report(tmp / "short.md", item, [{"line": 1, "quote": "x", "why": "w"}])))
     check("對照組:點出一般長度的行 → 照寫(上限只擋讀不了的)", rc == 0 and len(_rr_records(root)) == 1, f"rc={rc}\n{o}\n{e}")
+    # 上限加 1 位元組:印的兩個數字不能一樣(原本都取整成 256 KB);剛好等於上限照寫
+    m = _load_lumos_inproc()
+    doc = {"rows": [], "pad": ""}
+    base_len = len((__import__("json").dumps(doc, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
+    for extra, want in ((1, None), (0, "寫")):
+        doc["pad"] = "a" * (262144 - base_len + extra)
+        name, why = m._note_audit_write_verdict(root, doc, dirname="governance/size-probe", max_bytes=262144)
+        if want is None:
+            check("③上限加 1 位元組 → 不寫,訊息印實際位元組與上限位元組,兩個數字不一樣",
+                  name is None and "這份紀錄有 262145 位元組" in why and "上限 262144 位元組" in why, str(why))
+        else:
+            check("③對照組:剛好等於上限 → 照寫", name is not None and why is None, str(why))
+    # 多列超限:100 列 × 3300 字,提示講點出 100 行(總量由列數乘行長決定)
+    lines = [f"第{i:03d}列" + "y" * 3300 for i in range(100)]
+    r2, b2 = _rrb_repo("KEY:x", body="\n".join(lines))
+    _rc, _out, files = _rr_prepare(r2, f"{b2}..HEAD", "--all")
+    item2 = next(f for f in files if _rr_meta(f)["筆記路徑"] == _rr_note("A"))
+    rows = [{"line": _rrb_line(r2, f"第{i:03d}列"), "quote": f"第{i:03d}列", "why": "w"} for i in range(100)]
+    rc, o, e = _rr(r2, "reread-record", "--prepared", str(item2), "--report", str(_rr_report(tmp / "many.md", item2, rows)))
+    check("④點出 100 列、每列 3300 字 → rc2、不寫,提示講點出 100 行與原文合計,不只怪最長那行",
+          rc == 2 and "點出 100 行" in e and "原文合計" in e and "拆成幾篇" in e and _rr_records(r2) == [], f"rc={rc}\n{e[-600:]}")
 
 
 def t_reread_block_ledger_fits_4k():
-    """回頭重讀「有東西」那一筆帳跟鄰居(舊句檢查、筆記形狀擋的放寬帳)一樣走 _gate_event_fit:整行超過 4096 位元組時從尾端丟 rows、
-    記 rows_truncated,nodes 多時截到 20;筆數欄照記全數。原本直接寫、不量不截(代碼審發現)。
+    """回頭重讀「有東西」那一筆帳跟鄰居(舊句檢查、筆記形狀擋的放寬帳)一樣走 _gate_event_fit:整行超過 4096 位元組時先從尾端丟 rows、
+    再丟 layer1_fps,各記自己的 _truncated,nodes 多時截到 20;筆數欄照記全數。原本直接寫、不量不截(代碼審發現)。
+    ★量的跟寫的是同一行★:量與寫都帶被推頂端當 head_sha(代碼審發現:量時沒帶,寫時才補 commit 與 head_sha 兩欄,條目長度 ×1 時
+    寫出 4120 位元組;席位掃 123 組有 20 組超過);「路徑=指紋」清單不放 note(note 會再寫一份到 detail、截不到,
+    30 篇沒對照時 rows 丟光仍 5886 位元組)。掃條目數 × 條目長度 × 沒對照篇數,每一組整行都要 ≤ 4096;
+    路徑長到 nodes 截到 20 還超過的那組照 _gate_event_fit 的約定照寫(清單丟光、nodes 恰好 20、記旗標)。
 
-    翻紅釘:_note_reread_ledger_found 不走 _gate_event_fit → 整行超過 4096、沒有 rows_truncated → 紅。"""
+    翻紅釘:_note_reread_ledger_found 不走 _gate_event_fit → ①紅;量時不帶 head_sha → ②紅(掃描裡有落在縫裡的組);
+    清單放回 note → ③紅;帳的 head_sha 改回 HEAD → ④紅。"""
     print("t_reread_block_ledger_fits_4k")
     import json as _j
     m = _load_lumos_inproc()
     root, _b = _rr_repo()
-    must = [{"kind": "reread", "path": f"Systems/R{i:02d}.md", "line": 3,
-             "text": "RULE:" + "很長的規則句子" * 20, "verdicts": {"a" * 16}} for i in range(30)]
-    res = {"fps": {"Systems/A.md": "b" * 16}, "left": [], "layer2": {"must": must}, "scan": {"vault_rel": _NA_VAULT},
-           "tip": "c" * 40}
-    m._note_reread_ledger_found(root, res, True)
     led = root / "docs" / ".governance-log.jsonl"
-    lines = [ln for ln in led.read_text(encoding="utf-8").splitlines() if '"note-reread"' in ln] if led.is_file() else []
-    e = _j.loads(lines[-1]) if lines else {}
-    check("三十條長規則類條目:整行不超過 4096 位元組、從尾端丟 rows、記 rows_truncated、要處理條數照記 30",
-          lines and len((lines[-1] + "\n").encode("utf-8")) <= 4096 and e.get("rows_truncated") is True
+    tip = "c" * 40
+
+    def write(n_rows, mult, n_left, vault=_NA_VAULT, left_name="Systems/L{:02d}.md"):
+        must = [{"kind": "reread", "path": f"Systems/R{i:02d}.md", "line": 3,
+                 "text": "RULE:" + "很長的規則句子" * mult, "verdicts": {"a" * 16}} for i in range(n_rows)]
+        left = [left_name.format(i) for i in range(n_left)]
+        fps = dict({r: f"{i:016x}" for i, r in enumerate(left)}, **{"Systems/A.md": "b" * 16})
+        res = {"fps": fps, "left": left, "layer2": {"must": must}, "scan": {"vault_rel": vault}, "tip": tip}
+        m._note_reread_ledger_found(root, res, True)
+        last = [ln for ln in led.read_text(encoding="utf-8").splitlines() if '"note-reread"' in ln][-1]
+        return len((last + "\n").encode("utf-8")), _j.loads(last)
+    size, e = write(30, 20, 0)
+    check("①三十條長規則類條目:整行不超過 4096 位元組、從尾端丟 rows、記 rows_truncated、要處理條數照記 30",
+          size <= 4096 and e.get("rows_truncated") is True
           and e.get("layer2_rows") == 30 and 0 < len(e.get("rows", [])) < 30
           and [r["line"] for r in e.get("rows", [])] == [3] * len(e.get("rows", []))
           and e["rows"][0]["path"].endswith("Systems/R00.md"),
-          (len((lines[-1] + "\n").encode("utf-8")) if lines else None, {k: v for k, v in e.items() if k not in ("rows", "nodes")}))
+          (size, {k: v for k, v in e.items() if k not in ("rows", "nodes")}))
+    over = []
+    for n_rows in (1, 5, 20, 30, 45, 60):
+        for mult in (1, 3, 8, 20):
+            for n_left in (0, 1, 15, 30, 50):
+                size, e = write(n_rows, mult, n_left)
+                if size > 4096 or e.get("head_sha") != tip:
+                    over.append((n_rows, mult, n_left, size))
+    check("②掃條目數 1 到 60 × 條目長度 ×1 到 ×20 × 沒對照 0 到 50 篇:每一組整行(含 commit 與 head_sha)都不超過 4096", over == [], str(over[:10]))
+    size, e = write(0, 1, 30, vault="docs/lumos-toolchain-knowledge")
+    check("③三十篇沒對照(真實長度的圖譜路徑)、沒有規則類條目:整行不超過 4096、note 不帶「路徑=指紋」清單、篇數照記 30",
+          size <= 4096 and "=" not in e.get("note", "") and e.get("layer1") == 30
+          and e["layer1_fps"][0] == {"path": "docs/lumos-toolchain-knowledge/Systems/L00.md", "fp": "0" * 16},
+          (size, e.get("note"), len(e.get("layer1_fps", []))))
+    size, e = write(0, 1, 50, vault="docs/lumos-toolchain-knowledge")
+    check("③五十篇沒對照:從尾端丟 layer1_fps、記 layer1_fps_truncated、整行不超過 4096",
+          size <= 4096 and e.get("layer1_fps_truncated") is True and 0 < len(e.get("layer1_fps", [])) < 50 and e.get("layer1") == 50,
+          (size, len(e.get("layer1_fps", []))))
+    check("④帳的 head_sha 記被推頂端(不是工作目錄的 HEAD)、commit 是它的前 7 碼", e.get("head_sha") == tip and e.get("commit") == tip[:7],
+          str({k: e.get(k) for k in ("head_sha", "commit")}))
+    size, e = write(5, 3, 50, left_name="Systems/" + "很長的筆記名" * 20 + "{:02d}.md")
+    check("⑤路徑長到 nodes 截到 20 還超過 4096:照 _gate_event_fit 的約定照寫——兩個清單丟光、nodes 恰好 20、記 rows_truncated",
+          size > 4096 and e.get("rows") == [] and e.get("layer1_fps") == [] and len(e.get("nodes", [])) == 20
+          and e.get("rows_truncated") is True and e.get("layer1_fps_truncated") is True and e.get("layer1") == 50,
+          (size, len(e.get("nodes", [])), len(e.get("rows", [])), len(e.get("layer1_fps", []))))
 
 
 def t_hooks_path_dir_shared():
     """core.hooksPath 的值怎麼解成資料夾只有一份(_hooks_path_dir):~ 展開、絕對路徑照用、相對路徑接在 repo 根底下、沒給回 None;
     _hooks_path_is_ours 與 enforcement 讀生效 pre-push 的 _enforcement_prepush_ungated 都用它,不各寫一份(代碼審發現:
     _hooks_path_is_ours 的說明寫「別留第二份實作」,enforcement 那支又寫了一份)。
+    _enforcement_prepush_ungated 另有行為斷言:沒設 core.hooksPath 時讀 <根>/.git/hooks/pre-push(代碼審發現:預設路徑改錯字,
+    原本只有讀原始碼字串的那條守,照綠);設了相對路徑時讀根底下那份。
 
-    翻紅釘:兩支呼叫端任一支改回自己解析 → 紅。"""
+    翻紅釘:兩支呼叫端任一支改回自己解析 → 紅;預設 .git/hooks 改錯字 → ⑤紅;相對路徑不接根 → ⑥紅。"""
     print("t_hooks_path_dir_shared")
     import inspect, os as _os
     m = _load_lumos_inproc()
@@ -65926,22 +66103,38 @@ def t_hooks_path_dir_shared():
     for fn in (m._hooks_path_is_ours, m._enforcement_prepush_ungated):
         src = inspect.getsource(fn)
         check(f"{fn.__name__} 用 _hooks_path_dir、自己不展開 ~", "_hooks_path_dir(" in src and "expanduser" not in src, src[:300])
+    ungated = "#!/bin/sh\npython3 scripts/lumos note-audit reread-check --diff \"$r\"\n"
+    gated = "#!/bin/sh\npython3 scripts/lumos note-audit reread-check --gate --diff \"$r\"\n"
+    for rel, hp, label in ((".git/hooks", "", "⑤沒設 core.hooksPath → 讀 .git/hooks/pre-push"),
+                           ("myhooks", "myhooks", "⑥設了相對路徑 → 讀根底下那份")):
+        hd = root / rel
+        hd.mkdir(parents=True, exist_ok=True)
+        (hd / "pre-push").write_text(ungated, encoding="utf-8")
+        got = m._enforcement_prepush_ungated(root, hp)
+        (hd / "pre-push").write_text(gated, encoding="utf-8")
+        got2 = m._enforcement_prepush_ungated(root, hp)
+        check(f"{label}:那份沒帶 --gate 回它的路徑、帶了回 None", got == str(hd / "pre-push") and got2 is None, f"{got!r} {got2!r}")
 
 
 def t_runner_drops_inherited_skip_env():
-    """測試總檔開跑時清掉外面繼承來的 LUMOS_SKIP_* 單次略過變數(代碼審發現:掛鉤逃生段教人
+    """測試總檔開跑時清掉外面繼承來的整族 LUMOS_SKIP_* 單次略過變數(_isolate_environment 裡,代碼審發現:掛鉤逃生段教人
     `LUMOS_SKIP_REREAD_CHECK=1 git push`,掛鉤跑全套測試會原樣繼承,行程內直接呼叫工具函式的測試就被它改了行為而紅,
-    逃生寫法反而讓推送被「測試有紅」擋下)。子行程帶兩個同族變數、外加 CI 與 GITHUB_ACTIONS,跑回頭重讀判不了那支 → 全綠。
+    逃生寫法反而讓推送被「測試有紅」擋下)。子行程帶三個同族變數、外加 CI 與 GITHUB_ACTIONS,各跑一支會被其中一個改掉行為的測試
+    (回頭重讀判不了、筆記形狀擋的回頭條件、舊句檢查的入口)→ 全綠。三支各看得到一個變數:清除範圍縮成只清其中一個(或寫死名單漏掉)
+    就有一支紅(代碼審發現:原本只跑回頭重讀那支,只清 LUMOS_SKIP_REREAD_CHECK 也照綠)。
 
-    翻紅釘:拿掉 main() 清 LUMOS_SKIP_* 那段 → 紅(行程內呼叫那幾條 rc 變 0)。"""
+    翻紅釘:拿掉清 LUMOS_SKIP_* 那段 → 三支都紅;只清 LUMOS_SKIP_REREAD_CHECK → 筆記形狀擋與舊句檢查那兩支紅。"""
     print("t_runner_drops_inherited_skip_env")
     import os as _os, subprocess as sp
-    env = dict(_os.environ, LUMOS_SKIP_REREAD_CHECK="1", LUMOS_SKIP_DRIFT_CHECK="1", CI="true", GITHUB_ACTIONS="true")
-    r = sp.run([sys.executable, str(Path(__file__).resolve()), "-k", "t_reread_block_undecidable"],
-               capture_output=True, text=True, env=env, timeout=600)
-    tail = (r.stdout + r.stderr)[-1500:]
-    check("子行程帶 LUMOS_SKIP_REREAD_CHECK=1、LUMOS_SKIP_DRIFT_CHECK=1、CI、GITHUB_ACTIONS 跑判不了那支 → 全綠",
-          r.returncode == 0 and " 0 failed" in r.stdout and "t_reread_block_undecidable" in r.stdout, tail)
+    env = dict(_os.environ, LUMOS_SKIP_REREAD_CHECK="1", LUMOS_SKIP_NOTE_SHAPE="1", LUMOS_SKIP_DRIFT_CHECK="1",
+               CI="true", GITHUB_ACTIONS="true")
+    for t, var in (("t_reread_block_undecidable", "LUMOS_SKIP_REREAD_CHECK"),
+                   ("t_note_shape_revisit_needs_date_or_probe", "LUMOS_SKIP_NOTE_SHAPE"),
+                   ("t_drift_m1_review_r2_entry_guard", "LUMOS_SKIP_DRIFT_CHECK")):
+        r = sp.run([sys.executable, str(Path(__file__).resolve()), "-k", t], capture_output=True, text=True, env=env, timeout=600)
+        tail = (r.stdout + r.stderr)[-1500:]
+        check(f"子行程帶三個 LUMOS_SKIP_*、CI、GITHUB_ACTIONS 跑 {t}(看得到 {var})→ 全綠",
+              r.returncode == 0 and " 0 failed" in r.stdout and t in r.stdout, tail)
 
 
 def t_drift_ack_reread_kind():
@@ -66070,7 +66263,7 @@ def t_reread_block_hook_and_ci_wiring():
         check(f"⑨對照組:{label} → 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
         if env:     # 同一支指令判「是不是 CI」只有一個條件:只設 GITHUB_ACTIONS 時帳的來源也記 ci(原本帳只看 CI、提示看兩個)
             got = [x for x in _gov_since(_ns_gov(r2), n0) if x.get("gate") == "note-reread"]
-            check(f"⑨b {label} → 帳的來源記 ci", got and "來源 ci;" in got[-1].get("note", ""), str(got)[:400])
+            check(f"⑨b {label} → 帳的來源記 ci", got and got[-1].get("note", "").endswith("來源 ci"), str(got)[:400])
     rc, o, e = _rr(r2, "reread-check", "--diff", f"{b2}..HEAD")
     check("⑨對照組:沒帶 --push-remote(手動跑)→ 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
     m = _load_lumos_inproc()
