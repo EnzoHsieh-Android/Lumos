@@ -60174,8 +60174,8 @@ def t_drift_check_default_gate_blocks():
     m = _load_lumos_inproc()
     for label, txt in (("沒有設定檔", None), ("空物件", b"{}"), ("只寫別的閘", b'{"note_audit": {"gate": "warn"}}')):
         mode, warns, explicit, osm = m._drift_config(txt)
-        check(f"④{label}:預設 block、不算自己寫了;舊句檢查另一個開關照它自己的預設 warn",
-              mode == "block" and warns == [] and explicit is False and osm == "warn", str((mode, warns, explicit, osm)))
+        check(f"④{label}:預設 block、不算自己寫了;舊句檢查沒寫就照總開關(這裡是 block)",
+              mode == "block" and warns == [] and explicit is False and osm == "block", str((mode, warns, explicit, osm)))
     root = _dr_repo(cfg={"drift_check": {"gate": "warn"}})
     vault = root / _DR_VAULT
     (vault / "Verification" / "G.md").write_text(_dr_guard_text("pending"), encoding="utf-8")
@@ -68378,12 +68378,12 @@ def t_drift_m1_layers_and_mode():
     check("⑦只寫 old_sentence=block → gate 照它的預設 block、old_sentence block", got[0][0] == "block" and got[0][3] == "block", str(got[0]))
     check("⑦gate 寫壞、old_sentence=block → gate 照預設加提醒,old_sentence 照樣 block", got[1][0] == "block"
           and any("blcok" in w for w in got[1][1]) and got[1][3] == "block", str(got[1]))
-    check("⑦old_sentence 寫壞值 → warn 並提醒", got[2][3] == "warn"
-          and any("drift_check.old_sentence 只能是 block/warn/off,你寫的是 'on',照預設 warn" == w for w in got[2][1]), str(got[2]))
-    check("⑦沒設定檔、設定檔壞掉 → warn", got[3][3] == "warn" and got[4][3] == "warn", str(got[3:]))
-    check("⑦設定檔壞掉:gate 照它的預設 block、old_sentence 照它的預設 warn,兩句各講各的", got[4][0] == "block"
+    check("⑦old_sentence 寫壞值 → 照總開關(這裡沒寫 gate 是 block)並提醒", got[2][3] == "block"
+          and any("drift_check.old_sentence 只能是 block/warn/off,你寫的是 'on',照總開關 block" == w for w in got[2][1]), str(got[2]))
+    check("⑦沒設定檔、設定檔壞掉 → block(預設照總開關/照預設)", got[3][3] == "block" and got[4][3] == "block", str(got[3:]))
+    check("⑦設定檔壞掉:gate 與 old_sentence 都照預設 block,兩句各講各的", got[4][0] == "block"
           and any("讀不成 JSON" in w for w in got[4][1])
-          and any("舊句檢查(drift_check.old_sentence)照預設 warn" in w for w in got[4][1]),
+          and any("舊句檢查(drift_check.old_sentence)照預設 block" in w for w in got[4][1]),
           str(got[4]))
     # 代碼審 r1 spec 對照席 F1:同一個提交刪名稱、也把家筆記 about_code 裡那支檔拿掉 → 起點樹還列著,仍是家
     r3 = _nh_repo()
@@ -69109,15 +69109,15 @@ def t_drift_m1_output_text():
 
 
 def t_drift_m1_gate_off_wording():
-    """[S14] gate=off 而 old_sentence 不是 off → 印「c1 到 c5(原文是 en dash)與回頭條件關掉了…舊句檢查另有開關…」,不印「關掉了…跳過」;兩個都 off 照原來那句。
+    """[S14] gate=off 而 old_sentence 明寫不是 off → 印「c1 到 c5(原文是 en dash)與回頭條件關掉了…舊句檢查另有明寫的開關…」,不印「關掉了…跳過」;兩個都 off 照原來那句。
 
     翻紅釘:gate=off 照舊直接回 → ①紅(m1 沒跑、原句還在)。
     """
     print("t_drift_m1_gate_off_wording")
     for osm, want, not_want in (
-            ("warn", "存量漂移檢查:c1\u2013c5 與回頭條件關掉了(drift_check.gate=off);舊句檢查另有開關 drift_check.old_sentence,有改到程式檔時照跑",
+            ("warn", "存量漂移檢查:c1\u2013c5 與回頭條件關掉了(drift_check.gate=off);舊句檢查另有明寫的開關 drift_check.old_sentence,有改到程式檔時照跑",
              "這道檢查關掉了"),
-            ("off", "存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", "舊句檢查另有開關")):
+            ("off", "存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", "舊句檢查另有")):
         root = _nh_repo(cfg={"drift_check": {"gate": "off", "old_sentence": osm}})
         _nh_file(root, "src/a.py", "def gone_name_x():\n    pass\n")
         _m1_note(root, "Systems/A.md", "# A\n呼叫 gone_name_x。")
@@ -69127,6 +69127,106 @@ def t_drift_m1_gate_off_wording():
         rc, out = _m1_run(root, f"{base}..HEAD")
         check(f"①old_sentence={osm}:那一句逐字", rc == 0 and want in out and not_want not in out, out)
         check(f"①old_sentence={osm}:m1 {'照跑' if osm != 'off' else '不跑'}", ("舊句檢查:" in out.replace(want, "")) == (osm != "off"), out)
+
+
+def t_old_sentence_default_follows_gate():
+    """[S1][S2][S3][S4][S26] drift_check.old_sentence 沒寫(含 null、值看不懂)→ 照總開關 drift_check.gate(總開關沒寫是 block;
+    總開關 off 時沒寫的 m1 不跑);設定檔讀不成 JSON、drift_check 不是物件、整份設定不是物件 → block 並各講一句「照預設 block」;
+    明寫的 warn/block/off 照原義、不受總開關影響(舊行為 gate=off 加 old_sentence=block 照跑照擋)。
+    Projects/舊句兩道轉擋_計劃〈設計〉開關。
+
+    翻紅釘:預設改回固定 warn → ①②紅;沒寫時不看總開關(只看 block)→ ③紅;gate=off 仍跑沒寫的 m1 → ⑤紅;
+    明寫值也被總開關蓋掉 → ④⑥紅;壞設定仍照 warn → ⑦紅;掛鉤逃生句還說「改 gate 沒用」→ ⑨紅。
+    """
+    print("t_old_sentence_default_follows_gate")
+    import json as _j
+    m = _load_lumos_inproc()
+
+    def run_case(cfg_text, label):
+        root = _nh_repo()
+        if cfg_text is not None:
+            (root / ".lumos").mkdir(exist_ok=True)
+            (root / ".lumos" / "config.json").write_text(cfg_text, encoding="utf-8")
+        _nh_file(root, "src/a.py", "def gone_name_x():\n    pass\n")
+        _m1_note(root, "Systems/A.md", "# A\n呼叫 gone_name_x。", about=("src/a.py",))
+        base = _m1_commit(root, f"base {label}")
+        _nh_file(root, "src/a.py", "x = 1\n")
+        _m1_commit(root, f"del {label}")
+        return _m1_run(root, f"{base}..HEAD")
+
+    def dc(**kw):
+        return _j.dumps({"drift_check": kw})
+    # S1:什麼都沒寫(沒設定檔、設定檔沒有 drift_check、drift_check 空物件、old_sentence 寫 null)→ 預設 block
+    for label, txt in (("沒設定檔", None), ("設定檔沒 drift_check", '{"other": 1}'), ("drift_check 空物件", dc()),
+                       ("old_sentence null", dc(old_sentence=None)), ("old_sentence 寫壞值 gate 沒寫", dc(old_sentence="on"))):
+        rc, out = run_case(txt, label)
+        check(f"①S1 {label}:rc1 並印舊句清單", rc == 1 and "擋下:舊句檢查" in out and "gone_name_x" in out, out[-700:])
+    # S2:gate=warn、old_sentence 沒寫 → 照 warn:只印清單、rc0
+    for label, txt in (("沒寫", dc(gate="warn")), ("null", dc(gate="warn", old_sentence=None)),
+                       ("壞值", dc(gate="warn", old_sentence="on"))):
+        rc, out = run_case(txt, "gw " + label)
+        check(f"②S2 gate=warn、old_sentence {label}:rc0 只提醒、清單還在", rc == 0 and "提醒:舊句檢查" in out
+              and "擋下:舊句檢查" not in out and "gone_name_x" in out, out[-700:])
+    rc, out = run_case(dc(gate="warn", old_sentence="on"), "gw bad")
+    check("②壞值那句照講,並說照總開關 warn", "drift_check.old_sentence 只能是 block/warn/off,你寫的是 'on',照總開關 warn" in out, out[-700:])
+    # gate 寫 block 明著寫、old_sentence 沒寫 → block
+    rc, out = run_case(dc(gate="block"), "gb")
+    check("③gate=block、old_sentence 沒寫:rc1", rc == 1 and "擋下:舊句檢查" in out, out[-700:])
+    # S3 與明寫不受總開關影響
+    rc, out = run_case(dc(gate="off", old_sentence="block"), "off+block")
+    check("④S3 gate=off、old_sentence=block:rc1", rc == 1 and "擋下:舊句檢查" in out and "gone_name_x" in out, out[-700:])
+    rc, out = run_case(dc(gate="warn", old_sentence="block"), "warn+block")
+    check("④gate=warn、old_sentence=block:rc1(明寫照原義)", rc == 1 and "擋下:舊句檢查" in out, out[-700:])
+    rc, out = run_case(dc(gate="block", old_sentence="warn"), "block+warn")
+    check("⑥gate=block、old_sentence=warn:rc0 只提醒(明寫 warn 不被總開關蓋成擋)", rc == 0 and "提醒:舊句檢查" in out
+          and "擋下:舊句檢查" not in out, out[-700:])
+    rc, out = run_case(dc(gate="block", old_sentence="off"), "block+off")
+    check("⑥gate=block、old_sentence=off:m1 不跑", rc == 0 and "舊句檢查" not in out and "gone_name_x" not in out, out[-700:])
+    # S26:gate=off、old_sentence 沒寫 → m1 不跑
+    for label, txt in (("沒寫", dc(gate="off")), ("null", dc(gate="off", old_sentence=None)), ("壞值", dc(gate="off", old_sentence="on"))):
+        rc, out = run_case(txt, "goff " + label)
+        check(f"⑤S26 gate=off、old_sentence {label}:rc0、m1 沒跑", rc == 0 and "舊句檢查:" not in out and "gone_name_x" not in out
+              and "擋下" not in out, out[-700:])
+    rc, out = run_case(dc(gate="off"), "goff wording")
+    check("⑤gate=off 又沒寫 old_sentence:印的是整道關掉那句,不說舊句檢查照跑",
+          "存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過" in out and "舊句檢查另有" not in out
+          and "照跑" not in out, out[-700:])
+    rc, out = run_case(dc(gate="off", old_sentence="warn"), "goff warn")
+    check("⑤gate=off、old_sentence=warn 明寫:整句改成「明寫的舊句檢查照跑」", rc == 0 and "舊句檢查另有明寫的開關 drift_check.old_sentence" in out
+          and "提醒:舊句檢查" in out, out[-700:])
+    # S4:壞設定 → block 並講一句照預設 block
+    for label, txt, hint in (("讀不成 JSON", "{bad", "讀不成 JSON,舊句檢查(drift_check.old_sentence)照預設 block"),
+                             ("drift_check 是字串", '{"drift_check": "off"}', "drift_check 不是物件,舊句檢查(drift_check.old_sentence)照預設 block"),
+                             ("drift_check 是 null", '{"drift_check": null}', "drift_check 不是物件,舊句檢查(drift_check.old_sentence)照預設 block"),
+                             ("drift_check 是陣列", '{"drift_check": ["warn"]}', "drift_check 不是物件,舊句檢查(drift_check.old_sentence)照預設 block"),
+                             ("整份設定是陣列", '["x"]', "舊句檢查(drift_check.old_sentence)照預設 block"),
+                             ("整份設定是字串", '"x"', "舊句檢查(drift_check.old_sentence)照預設 block")):
+        rc, out = run_case(txt, label)
+        check(f"⑦S4 {label}:rc1、清單、另講一句照預設 block", rc == 1 and "擋下:舊句檢查" in out and "gone_name_x" in out and hint in out,
+              out[-900:])
+    # 解析本體(不經 git):回傳值與提醒
+    f = m._drift_old_sentence_config
+    check("⑧沒寫 → 照 gate(三種)", [f({"drift_check": {}}, False, g)[0] for g in ("block", "warn", "off")] == ["block", "warn", "off"], "")
+    check("⑧null → 照 gate", f({"drift_check": {"old_sentence": None}}, False, "warn") == ("warn", []), "")
+    check("⑧壞值 → 照 gate 並講一句", f({"drift_check": {"old_sentence": "on"}}, False, "off")
+          == ("off", ["drift_check.old_sentence 只能是 block/warn/off,你寫的是 'on',照總開關 off"]), str(f({"drift_check": {"old_sentence": "on"}}, False, "off")))
+    check("⑧明寫三值不看 gate", all(f({"drift_check": {"old_sentence": v}}, False, g)[0] == v
+                                    for v in ("block", "warn", "off") for g in ("block", "warn", "off")), "")
+    check("⑧壞設定一律 block(不管傳進來的 gate)", f(None, True, "off")[0] == "block" and f({"drift_check": 3}, False, "off")[0] == "block"
+          and f([1], False, "off")[0] == "block" and f("x", False, "off")[0] == "block", "")
+    check("⑧壞設定各講一句照預設 block", "照預設 block" in f(None, True)[1][0] and "照預設 block" in f({"drift_check": 3})[1][0]
+          and "照預設 block" in f([1])[1][0], "")
+    check("⑧沒設定檔(cfg 是 None、bad 假)→ 照 gate、不講話", f(None, False, "block") == ("block", []) and f(None, False, "off") == ("off", []), "")
+    got = [m._drift_config(t) for t in (b'{"drift_check": {"gate": "warn"}}', b'{"drift_check": {"gate": "off"}}', None, b"{bad")]
+    check("⑧_drift_config 第四個回傳值照 gate:warn→warn、off→off、沒設定→block、壞掉→block",
+          [g[3] for g in got] == ["warn", "off", "block", "block"], str(got))
+    # 掛鉤逃生句與 --help
+    hook = (Path(__file__).parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    check("⑨掛鉤 drift 那段不再說「改 gate 沒用」", "改 gate 沒用" not in hook and "drift_check.old_sentence" in hook, "")
+    r = subprocess.run([sys.executable, str(GRAPHCTL), "drift", "check", "--help"], capture_output=True, text=True)
+    r2 = subprocess.run([sys.executable, str(GRAPHCTL), "drift", "--help"], capture_output=True, text=True)
+    check("⑨drift check 的 --help 與命令表不再說舊句檢查沒寫是 warn",
+          "沒寫是 warn" not in r.stdout + r2.stdout and "drift_check.old_sentence" in r.stdout, r.stdout[-600:])
 
 
 def t_drift_m1_code_path_scope():
@@ -69734,8 +69834,16 @@ def t_drift_m1_review_r2_doctor_old_sentence():
     blk = lines({"drift_check": {"old_sentence": "block"}})
     wrn = lines({"drift_check": {"old_sentence": "warn"}})
     check("①只寫 old_sentence=off:doctor 自己一行講關掉了", len(off) == 1 and "關掉了(drift_check.old_sentence=off)" in off[0], str(off))
-    check("①寫錯值:講沒讀懂、照預設 warn", len(bad) == 1 and "舊句檢查的設定沒讀懂" in bad[0] and "'Block'" in bad[0], str(bad))
-    check("①寫 block(比預設嚴)與 warn(預設)都不唸(代碼審 r3 起,跟 gate 那行同一個原則)", blk == [] and wrn == [], str((blk, wrn)))
+    check("①寫錯值:講沒讀懂、照總開關(這裡是 block,推送時會擋)", len(bad) == 1 and "舊句檢查的設定沒讀懂" in bad[0]
+          and "'Block'" in bad[0] and "推送時會擋" in bad[0], str(bad))
+    check("①寫 block(等於預設)不唸;明寫 warn 比總開關(預設 block)鬆,要唸(轉擋後跟 RULE 撤除條件那行同一個原則)",
+          blk == [] and len(wrn) == 1 and "舊句檢查是 warn(drift_check.old_sentence)" in wrn[0] and "不會擋" in wrn[0], str((blk, wrn)))
+    gw = lines({"drift_check": {"gate": "warn"}})
+    go = lines({"drift_check": {"gate": "off"}})
+    gwb = lines({"drift_check": {"gate": "warn", "old_sentence": "block"}})
+    check("①沒寫 old_sentence 而 gate=warn/off:只有 gate 那一行,舊句檢查不另唸;gate=warn 明寫 block(比總開關嚴)不唸",
+          len(gw) == 1 and "存量漂移檢查是 warn" in gw[0] and len(go) == 1 and "存量漂移檢查是 off" in go[0]
+          and len(gwb) == 1 and "存量漂移檢查是 warn" in gwb[0], str((gw, go, gwb)))
     g = lines({"drift_check": {"gate": "old_sentence"}})
     check("②gate 寫成 \"old_sentence\":gate 那句照講、不被誤吞", any("存量漂移檢查的設定沒讀懂" in x and "'old_sentence'" in x for x in g),
           str(g))
@@ -69884,8 +69992,8 @@ def t_drift_m1_review_r3_terminal_escapes():
 
 
 def t_drift_m1_review_r3_doctor_parent_and_block():
-    """代碼審 r3 正確性-F5、外家 finder-F3:old_sentence 寫 block(比預設嚴)不唸;drift_check 本身型別錯(字串、null、陣列)時
-    doctor 也講舊句檢查照預設 warn。
+    """代碼審 r3 正確性-F5、外家 finder-F3:old_sentence 寫 block(等於預設)不唸;drift_check 本身型別錯(字串、null、陣列)時
+    doctor 也講舊句檢查照預設 block。
 
     翻紅釘:父層型別錯時不講 → ①紅;block 又唸 → ②紅。
     """
@@ -69902,11 +70010,11 @@ def t_drift_m1_review_r3_doctor_parent_and_block():
     for label, cfg in (("字串", {"drift_check": "off"}), ("null", {"drift_check": None}), ("陣列", {"drift_check": ["block"]})):
         ls = lines(cfg)
         if not (any("drift_check 不是物件" in x and "存量漂移檢查的設定沒讀懂" in x for x in ls)
-                and any(x.startswith("舊句檢查的設定沒讀懂") and "照預設 warn" in x for x in ls)):
+                and any(x.startswith("舊句檢查的設定沒讀懂") and "照預設 block" in x for x in ls)):
             bad[label] = ls
     check("①drift_check 型別錯:gate 那句與舊句檢查那句都講", not bad, str(bad)[:600])
-    check("②old_sentence=block 不唸(比預設嚴)", lines({"drift_check": {"old_sentence": "block"}}) == [], "")
-    check("③_drift_config 也把舊句檢查那句給推送時印", any("舊句檢查(drift_check.old_sentence)照預設 warn" in w
+    check("②old_sentence=block 不唸(等於預設)", lines({"drift_check": {"old_sentence": "block"}}) == [], "")
+    check("③_drift_config 也把舊句檢查那句給推送時印", any("舊句檢查(drift_check.old_sentence)照預設 block" in w
                                                    for w in m._drift_config(b'{"drift_check": "off"}')[1]), "")
 
 
