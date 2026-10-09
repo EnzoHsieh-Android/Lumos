@@ -221,6 +221,12 @@ def _py_resolve():
     return None, tried
 
 
+def _in_ci():
+    """這次是不是在 CI 裡跑(CI 或 GITHUB_ACTIONS 設了)。★判斷 CI 只有這一份★:版本檢查的說明、回頭重讀的提示與帳的來源都用它
+    (代碼審發現:回頭重讀原本提示看兩個變數、帳只看 CI,同一支指令兩套條件)。放在版本檢查前面:開頭那段就會用到。"""
+    return bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"))
+
+
 def _py_floor_message(tried, head="需要 Python 3.14 以上"):
     lines = ["擋下:%s,現在是 %d.%d.%d(%s)。" % (head, *sys.version_info[:3], sys.executable)]
     # 每個候選都列結果(條款 [S2]);不存在的很多,併成一行,免得真正的線索被淹掉(代碼審 r1)
@@ -229,7 +235,7 @@ def _py_floor_message(tried, head="需要 Python 3.14 以上"):
     lines += ["  %s:%s" % (d, w) for d, w in tried if w not in ("不存在", "沒有這個指令")]
     if missing:
         lines.append("  不存在或沒有這個指令:" + "、".join(missing))
-    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+    if _in_ci():
         # CI 回 2 就在這裡講清楚怎麼修:舊版 lumos update 在拉新之前就載進記憶體,印不出新版的升級注意(代碼審 r1)
         lines.append("在 CI 裡:actions/setup-python 的 python-version 設 \"3.14\"(或其他方式裝 3.14 並放進 PATH)。")
     return "\n".join(lines) + "\n" + _PY_INSTALL_HINT
@@ -267,7 +273,7 @@ if __name__ == "__main__":
 # ── python-floor end ──
 
 # ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
-LUMOS_VERSION = "v1.2"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
+LUMOS_VERSION = "v1.3"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
 # ★發布通道的分支名★(2026-09-07 #7 落地;設計出處 [[Projects/版本發布流程_計劃]] S5):
 # main=開發線(可壞),release=對外線(只有 owner 快轉過去)。三個 clone 站一律先試這條,
 # 分支還不存在時退回預設分支並印一行說明——冷啟動不能因此炸掉。
@@ -1571,31 +1577,43 @@ def _ledger_tail_needs_newline(path):
 def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None):
     """整行(照 _ledger_append 的量法,量 _gate_event_build 組出的完整事件)超過 4096 位元組:extra[list_key] 從尾端丟到裝得下,
     丟了就記 extra[list_key + "_truncated"];清單丟光(或本來沒有)仍超過、而且給了 nodes_cap,nodes 多於它就截到 nodes_cap 並記同一個旗標。
-    回傳 nodes(可能被截過),呼叫端拿它寫帳——量的跟寫的是同一行(舊句檢查帳與筆記形狀擋的放寬帳共用;
-    Projects/舊行尾追加不算新寫_計劃〈做法〉5)。留幾筆用二分找(整行長度隨筆數單調),不逐筆丟——逐筆重量是平方時間,
-    兩萬筆要幾十秒(代碼審 r1 四席實量)。"""
+    list_key 也可以給一串鍵:照順序丟,前一個丟光還超過才丟下一個,各鍵記自己的旗標;nodes 截掉時記第一個鍵的旗標
+    (回頭重讀的帳先丟第二層的 rows、再丟第一層的 layer1_fps)。再超過照寫(帳的寫入端沒有硬上限,4096 是讓帳長得慢的政策值)。
+    回傳 nodes(可能被截過),呼叫端拿它寫帳——★量的跟寫的是同一行:head_sha 要傳寫帳時那一個★(不傳時 _gate_event 寫帳才補 HEAD,
+    量的那一行就少了 commit 與 head_sha 兩欄;代碼審發現回頭重讀那一筆沒傳,部分輸入寫出 4156 位元組)。
+    舊句檢查帳、筆記形狀擋的放寬帳、回頭重讀有東西那一筆共用(Projects/舊行尾追加不算新寫_計劃〈做法〉5)。
+    留幾筆用二分找(整行長度隨筆數單調),不逐筆丟——逐筆重量是平方時間,兩萬筆要幾十秒(代碼審 r1 四席實量)。"""
     import json as _j
     nodes = list(nodes or [])
+    keys = (list_key,) if isinstance(list_key, str) else tuple(list_key)
 
     def size():
         ev = _gate_event_build(repo_root, gate, kind, note, hard=hard, head_sha=head_sha, nodes=nodes, extra=extra)
         return len((_j.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8"))
-    rows = extra.get(list_key)
-    if rows and size() > 4096:
-        extra[list_key + "_truncated"] = True              # 旗標先放進去再量(舊寫法逐筆丟時旗標也算在長度裡)
-        full, lo, hi = list(rows), 0, len(rows) - 1          # 找最多能留幾筆:留 lo 筆裝得下(0 筆也算「裝得下」的下界)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            rows[:] = full[:mid]
-            if size() <= 4096:
-                lo = mid
-            else:
-                hi = mid - 1
-        rows[:] = full[:lo]
+    for key in keys:
+        _gate_event_fit_drop(extra, key, size)
     if nodes_cap is not None and len(nodes) > nodes_cap and size() > 4096:
         nodes = nodes[:nodes_cap]
-        extra[list_key + "_truncated"] = True
+        extra[keys[0] + "_truncated"] = True
     return nodes
+
+
+def _gate_event_fit_drop(extra, key, size):
+    """_gate_event_fit 的一個清單:整行超過 4096 就從尾端丟 extra[key],用二分找最多能留幾筆,記 extra[key + "_truncated"]。"""
+    rows = extra.get(key)
+    if not rows or size() <= 4096:
+        return
+    extra[key + "_truncated"] = True                   # 旗標先放進去再量(舊寫法逐筆丟時旗標也算在長度裡)
+    full, lo, hi = list(rows), 0, len(rows) - 1          # 找最多能留幾筆:留 lo 筆裝得下(0 筆也算「裝得下」的下界)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        rows[:] = full[:mid]
+        if size() <= 4096:
+            lo = mid
+        else:
+            hi = mid - 1
+    rows[:] = full[:lo]
+
 
 def _gate_event_or_warn(repo_root, gate, kind, note, **kw):
     """落帳,寫不進去就在 stderr 講一句。★永遠不改變呼叫端的判定★(#19 S7)。"""
@@ -8289,7 +8307,7 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 "note-audit",
                 # 2026-09-28 存量漂移守衛:擋下、提醒、跳過、判不了、表態(Projects/存量漂移防線_計劃)
                 "drift-check",
-                # 2026-10-01 回頭重讀守檔筆記:提醒、沒候選、全對照過、跳過、記錄(Projects/守檔筆記對照改動_計劃;只提醒不擋)
+                # 2026-10-01 回頭重讀守檔筆記:提醒、沒候選、全對照過、跳過、記錄(Projects/守檔筆記對照改動_計劃);2026-10-09 起本機帶 --gate 時擋下記 blocked(Projects/舊句兩道轉擋_計劃)
                 "note-reread",
                 # 2026-10-01 殺傷力配方的原文還對不對得上程式(doctor P2,只提醒不擋;Projects/殺傷力配方失配提醒_計劃)
                 "check-p2",
@@ -21862,6 +21880,16 @@ def _hook_recent_ok(repo_root, hook_name, hook_path):
     return "ok", f"最近一次成功 {latest[0].strftime('%Y-%m-%d %H:%M')}"
 
 
+def _hooks_path_dir(root, val):
+    """core.hooksPath 的值 → 它指的資料夾:`~` 展開、絕對路徑照用、相對路徑接在 root 底下;沒給 → None。
+    ★解析只有這一份★:_hooks_path_is_ours 與 enforcement 讀生效 pre-push 的 _enforcement_prepush_ungated 共用
+    (代碼審發現:後者原本自己又寫了一份)。"""
+    if not val:
+        return None
+    v = os.path.expanduser(val)
+    return Path(v) if Path(v).is_absolute() else (Path(root) / v)
+
+
 def _hooks_path_is_ours(root: Path, val: str) -> bool:
     """core.hooksPath 的值指的是不是本 repo 的 scripts/hooks。
 
@@ -21872,12 +21900,11 @@ def _hooks_path_is_ours(root: Path, val: str) -> bool:
     ★方向是「該說有卻說沒有」★:表面安全,實際後果是那兩列長期紅、真的掉了也沒有訊號價值。
 
     這支是從 _deinit_unbar_gate 抽出來的既有做法(架構對齊席:不要寫第二份),
-    只多補一件它沒處理的:`~` 展開。
+    只多補一件它沒處理的:`~` 展開。路徑解析走共用的 _hooks_path_dir。
     """
-    if not val:
+    vp = _hooks_path_dir(root, val)
+    if vp is None:
         return False
-    v = os.path.expanduser(val)
-    vp = Path(v) if Path(v).is_absolute() else (root / v)
     ours = root / "scripts" / "hooks"
     try:
         return vp.resolve() == ours.resolve()
@@ -25827,8 +25854,8 @@ def enforcement_status(root=None, home=None):
         try:
             f = root / "scripts" / "hooks" / fn
             ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
-            add(layer, "active" if ok else "inactive",
-                f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+            ok, det = _enforcement_prepush_gated(root, hp, fn, ok, f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+            add(layer, "active" if ok else "inactive", det)
         except Exception as e:
             add(layer, "unknown", str(e))
 
@@ -25917,6 +25944,29 @@ def enforcement_status(root=None, home=None):
     add("required-status-check", "unknown", "GitHub required check / branch protection 本機測不到")
 
     return rows
+
+
+def _enforcement_prepush_gated(root, hp, fn, ok, det):
+    """git-pre-push 那一列再看一件事 → (ok, det):接上了的 pre-push,生效的那份裡回頭重讀沒帶 --gate 就改列沒接上、說明講怎麼修。
+    其他列與沒接上的原樣回(分出來是為了不加 enforcement_status 的分支數)。"""
+    ungated = _enforcement_prepush_ungated(root, hp) if (ok and fn == "pre-push") else None
+    if not ungated:
+        return ok, det
+    return False, (det + f";生效的那份 {ungated} 裡回頭重讀(note-audit reread-check)沒帶 --gate,不會擋"
+                   "——更新掛鉤所在的工作目錄(git pull 或 lumos install --force)")
+
+
+def _enforcement_prepush_ungated(root, hp):
+    """實際生效的那份 pre-push(core.hooksPath 指的資料夾;沒設看 .git/hooks)裡,回頭重讀的呼叫行沒帶 --gate → 那份檔的路徑;
+    帶了、沒有這一段、讀不到 → None。舊掛鉤搭新工具不能靜默失效(Projects/舊句兩道轉擋_計劃〈開關〉):這台機器所有工作樹共用
+    主工作目錄的掛鉤,主工作目錄沒更新時新工具不會擋。行尾反斜線的續行先接回一行再看;註解行不算。"""
+    f = _hooks_path_dir(root, hp or str(Path(".git") / "hooks")) / "pre-push"
+    try:
+        txt = f.read_text(encoding="utf-8", errors="replace").replace("\\\n", " ")
+    except OSError:
+        return None
+    calls = [ln for ln in txt.split("\n") if "note-audit reread-check" in ln and not ln.lstrip().startswith("#")]
+    return str(f) if any("--gate" not in ln for ln in calls) else None
 
 
 def enforcement_summary(rows):
@@ -33308,7 +33358,7 @@ def _note_audit_config(text):
         return "block", []
     try:
         cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):      # 巢狀太深丟的是 RecursionError,同「讀不成 JSON」(代碼審發現)
         return "block", [".lumos/config.json 讀不成 JSON,筆記內容審照預設 block"]
     na = cfg.get("note_audit") if isinstance(cfg, dict) else None
     if na is not None and not isinstance(na, dict):
@@ -33741,7 +33791,8 @@ def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=Non
     push=(遠端名, 遠端 ref) 時範圍的起點當成遠端舊值,改由 _push_range_start 算(存量漂移檢查的 --push-remote/--pushed-ref),
     說明一定印一行。
     reasons:給一個空清單時,提早結束的原因寫進清單(每筆 (種類, 說明);種類 none=這次沒有新東西(刪除分支、頂端已在主線)、
-    skipped=查不了(淺層 clone、沒有圖譜、讀不到檔案清單)、error=參數錯(範圍格式、終點找不到)),★自己不印也不寫治理帳★,
+    skipped=查不了(淺層 clone、沒有圖譜)、undecidable=判不了(讀不到頂端檔案清單,git 失敗;Projects/舊句兩道轉擋_計劃——
+    block 時回頭重讀要擋,不能跟環境查不了混在一起)、error=參數錯(範圍格式、終點找不到)),★自己不印也不寫治理帳★,
     起點的說明也不印——回頭重讀用(Projects/守檔筆記對照改動_計劃〈做法〉1:它的提醒只走標準輸出、帳由它自己記一筆,
     這裡再印或再記就是雙記)。不給時行為照舊(既有呼叫端不變)。"""
     quiet = reasons is not None
@@ -33793,7 +33844,7 @@ def _note_audit_resolve(root, diff_range, gate_word, gate="note-audit", mark=Non
     lst = _nodehome_list(root, tip)
     if lst is None:
         if quiet:
-            reasons.append(("skipped", "讀不到頂端提交的檔案清單(git 失敗)"))
+            reasons.append(("undecidable", "讀不到頂端提交的檔案清單(git 失敗)"))
         return None, 0, None
     vaults = sorted({_vault_slug_of(p) for p in lst[1]} - {None})
     if not vaults:
@@ -34054,16 +34105,24 @@ def _note_audit_safe_dir(root, rel):
     return (None, why(bad)) if bad else (d, None)
 
 
-def _note_audit_write_verdict(root, doc, dirname=None, prefix=""):
+def _note_audit_write_verdict(root, doc, dirname=None, prefix="", max_bytes=None, too_big=""):
     """一份報告寫一個判定檔(暫存再原子換名;<prefix><UTC 時間>-<32 位亂數>.json)→ (檔名, None) 或 (None, 原因)。
     dirname 不給是筆記內容審的判定檔資料夾;回頭重讀的對照紀錄給自己的資料夾、prefix 給「<對照指紋>-」(架構對齊席 F1:
-    原本各寫一套)。資料夾過 _note_audit_safe_dir(是符號連結或跑出 repo 就不寫)。"""
+    原本各寫一套)。資料夾過 _note_audit_safe_dir(是符號連結或跑出 repo 就不寫)。
+    ★寫端保證讀端讀得了★:讀端有單份上限的(回頭重讀的 _NOTE_REREAD_VERDICT_MAX)傳 max_bytes,序列化後超過就不寫、回原因
+    (原因後面接 too_big 那句怎麼辦);原本照寫,提交後讀端讀不了、block 下每次推送都擋(代碼審發現)。"""
     import json as _j, uuid as _uuid, datetime as _dt
     d, why = _note_audit_safe_dir(root, dirname or _NOTE_AUDIT_VERDICT_DIR)
     if d is None:
         return None, why
+    body = _j.dumps(doc, ensure_ascii=False, indent=1) + "\n"
+    size = len(body.encode("utf-8"))
+    if max_bytes is not None and size > max_bytes:
+        # 印位元組不印取整的 KB:上限加 1 到 1023 位元組時兩個數字都取整會印成「256 KB,超過上限 256 KB」(代碼審發現)
+        return None, (f"這份紀錄有 {size} 位元組,超過讀端單份上限 {max_bytes} 位元組({max_bytes / 1024:g} KB)"
+                      "——寫了推送前的檢查也讀不了,不寫" + too_big)
     name = prefix + _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + _uuid.uuid4().hex + ".json"
-    _write_lf(d / name, _j.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    _write_lf(d / name, body)
     return name, None
 
 
@@ -34350,8 +34409,9 @@ def cmd_note_audit_skip(repo=None, diff_range=None, note=None):
 # ── 回頭重讀守檔筆記(Projects/守檔筆記對照改動_計劃;家 Systems/筆記內容審)────────────────────────────────
 # 改了程式、同一次也改了管那支程式的筆記,但只在後面追加、前面的舊句沒人回頭看(rtb 稽核 20 處真漂移裡最大的一類)。
 # 推送前把「這次改到的程式檔的家、而且這次也被改過」的每篇筆記,連同這次的程式 diff 交給判定者問「哪幾行被這次改動弄得不成立了」。
-# 工具不呼叫模型(零依賴家規):reread-prepare 出項目檔 → 編排者派判定者 → reread-record 收報告寫紀錄檔 → reread-check 推送前提醒。
-# ★第一版只提醒、不擋、任何情況都回 0★;兩週後抽 30 行量準度,再另案決定要不要擋(計劃 REVISIT)。
+# 工具不呼叫模型(零依賴家規):reread-prepare 出項目檔 → 編排者派判定者 → reread-record 收報告寫紀錄檔 → reread-check 推送前檢查。
+# ★擋只在呼叫端帶 --gate 而且 note_reread.gate 是 block 時生效★(Projects/舊句兩道轉擋_計劃,Enzo 2026-10-09 裁「只在本機擋」):
+# 只有推送前掛鉤帶;CI 與手動跑不帶,不論設定都只印、回 0。擋兩層:候選沒對照這一版程式(第一層)、判定點出的規則類條目還在又沒表態(第二層)。
 _NOTE_REREAD_TEMPLATE = "scripts/templates/note-audit-reread.md"
 _NOTE_REREAD_PROMPT_VERSION = 1      # 範本改一個字就升版,並照計劃 S10 重跑、結果記進計劃;判定者換模型也一樣(S4 在測試裡釘範本雜湊)
 # 推送前掛鉤的上線標記(範圍起點截到這裡);★不含連續字串「note-audit check」★——那是筆記內容審找自己上線點用的
@@ -34360,7 +34420,13 @@ _NOTE_REREAD_VERDICT_DIR = "governance/reread-verdicts"
 # 紀錄檔名:<對照指紋>-<UTC 時間>-<32 位亂數>.json;_write_lf 中斷留下的 .tmp-wlf 殘檔不合、不算已對照
 _NOTE_REREAD_VERDICT_NAME_RE = re.compile(r"^([0-9a-f]{16})-\d{8}T\d{6}Z-[0-9a-f]{32}\.json$")
 _NOTE_REREAD_GATE_VALUES = ("block", "warn", "off")
-_NOTE_REREAD_BUDGET_SEC = 30         # reread-check 的軟上限(同舊句檢查 _DRIFT_M1_BUDGET_SEC 的量級,不吃別道檢查的時間)
+# ★沒寫設定、寫壞時的預設★:Enzo 2026-10-09 裁定轉擋(Projects/舊句兩道轉擋_計劃〈原問題與範圍〉①②③);
+# 照 _DRIFT_DEFAULT_GATE 的先例收成一個常數——RETIRE-IF 成立要退回提醒時只改這一行。
+_NOTE_REREAD_DEFAULT_GATE = "block"
+_NOTE_REREAD_VERDICT_MAX = 256 * 1024         # 第二層讀判定紀錄:單份上限(照歷史每份約 1.6 KB,遠低於這裡)
+_NOTE_REREAD_VERDICTS_TOTAL = 8 * 1024 * 1024  # 第二層讀判定紀錄:全部合計上限(紀錄只增不減;保留與清理另案)
+_NOTE_REREAD_MATCH_MIN = 6                    # 比對字串至少幾個字(少於這個點不出任何行:空白行不會比中整篇)
+_NOTE_REREAD_BUDGET_SEC = 30        # reread-check 的軟上限(同舊句檢查 _DRIFT_M1_BUDGET_SEC 的量級,不吃別道檢查的時間)
 _NOTE_REREAD_DIFF_CAP = 100000       # 給判定者的 diff 字元上限(照實驗)
 _NOTE_REREAD_OTHERS_MAX = 40         # 「另外改到的程式檔」只列前幾支(照實驗)
 _NOTE_REREAD_TEXT_MAX = 500          # 報告裡每項的原句與理由各截到幾個字
@@ -34402,11 +34468,16 @@ def _note_reread_show(path):
 
 
 class _NoteRereadStop(Exception):
-    """回頭重讀這次判不了、停下(git 失敗、逾時、參數錯…);why 是給人看的原因。"""
+    """回頭重讀這次判不了、停下(git 失敗、逾時、判定紀錄讀不懂…);why 是給人看的原因。"""
 
     def __init__(self, why):
         super().__init__(why)
         self.why = why
+
+
+class _NoteRereadArgErr(_NoteRereadStop):
+    """參數錯(推送參數只給一個、範圍格式錯、終點找不到):帶 --gate 時回 2,跟 drift check 對同一件事的處理一樣——
+    跟「判不了」分開,因為判不了在 block 時要擋,參數錯是呼叫端寫錯(掛鉤傳的終點是它剛算出的提交,本機一定有)。"""
 
 
 def _note_reread_fail(deadline, what):
@@ -34663,27 +34734,25 @@ def _note_reread_parse_item(text):
 
 def _note_reread_config(text):
     """被推頂端提交的 .lumos/config.json 內容(bytes 或 None)→ (gate, warnings)。鍵名與值域同 note_audit.gate、drift_check.gate、
-    note_shape.gate(block/warn/off);沒寫照 warn;壞設定四種(讀不成 JSON、note_reread 不是物件、值不合法、null)各給一句、照 warn。
-    這一版寫 block 也照 warn,另給一句「轉擋還沒做」(計劃〈做法〉4)。"""
-    import json as _j
+    note_shape.gate(block/warn/off);沒寫照 _NOTE_REREAD_DEFAULT_GATE;壞設定四種(讀不成 JSON、note_reread 不是物件、值不合法、null)
+    各給一句、照預設。block 照實回 block——但擋不擋還要看呼叫端有沒有帶 --gate(Projects/舊句兩道轉擋_計劃〈開關〉)。"""
+    dflt = _NOTE_REREAD_DEFAULT_GATE
     if text is None:
-        return "warn", []
+        return dflt, []
     try:
-        cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-    except (ValueError, UnicodeDecodeError):
-        return "warn", [".lumos/config.json 讀不成 JSON,回頭重讀提醒照預設 warn"]
+        cfg = _note_reread_json(text)
+    except ValueError:
+        return dflt, [f".lumos/config.json 讀不成 JSON,回頭重讀照預設 {dflt}"]
     nr = cfg.get("note_reread") if isinstance(cfg, dict) else None
     if nr is not None and not isinstance(nr, dict):
-        return "warn", ["設定檔的 note_reread 不是物件(要寫成 {\"note_reread\": {\"gate\": \"off\"}}),回頭重讀提醒照預設 warn"]
+        return dflt, [f"設定檔的 note_reread 不是物件(要寫成 {{\"note_reread\": {{\"gate\": \"warn\"}}}}),回頭重讀照預設 {dflt}"]
     if not isinstance(nr, dict) or "gate" not in nr:
-        return "warn", []
+        return dflt, []
     g = nr.get("gate")
     if g is None:
-        return "warn", ["note_reread.gate 寫成 null,照預設 warn"]
+        return dflt, [f"note_reread.gate 寫成 null,照預設 {dflt}"]
     if g not in _NOTE_REREAD_GATE_VALUES:
-        return "warn", [f"note_reread.gate 只能是 block/warn/off,你寫的是 {g!r},照 warn"]
-    if g == "block":
-        return "warn", ["note_reread.gate 寫了 block:轉擋還沒做,照提醒"]
+        return dflt, [f"note_reread.gate 只能是 block/warn/off,你寫的是 {g!r},照預設 {dflt}"]
     return g, []
 
 
@@ -34731,49 +34800,290 @@ def _note_reread_rows(items, nlines):
     return keep, dropped
 
 
-def _note_reread_committed(root, tip):
-    """被推頂端提交的樹裡已提交的紀錄 → {對照指紋};只列目錄、比檔名,不讀內容(檔數長大也便宜)。
+def _note_reread_tip_names(root, tip):
+    """被推頂端提交的樹裡紀錄資料夾的檔名(只收合正規式的,.tmp-wlf 殘檔與其他雜檔不算)→ set 或 None(git 失敗)。
     ★頂端沒有這個資料夾 = 還沒有任何紀錄★(空集合、不是 git 失敗;設計審 r2 兩席:原稿當 git 失敗,新專案永遠 skipped 自我鎖死)——
-    ls-tree 對不存在的路徑回 0、輸出空,所以回非 0 只會是真的 git 失敗(回 None)。檔名要合正規式,.tmp-wlf 殘檔不算。"""
+    ls-tree 對不存在的路徑回 0、輸出空,所以回非 0 只會是真的 git 失敗。"""
     raw = _ns_git(root, "--literal-pathspecs", "ls-tree", "-z", "--name-only", tip, "--", _NOTE_REREAD_VERDICT_DIR + "/")
     if raw is None:
         return None
-    out = set()
-    for p in _nodehome_split_z(raw):
-        m = _NOTE_REREAD_VERDICT_NAME_RE.match(p.rsplit("/", 1)[-1])
-        if m:
-            out.add(m.group(1))
+    return {n for n in (p.rsplit("/", 1)[-1] for p in _nodehome_split_z(raw)) if _NOTE_REREAD_VERDICT_NAME_RE.match(n)}
+
+
+def _note_reread_verdicts(root, tip, deadline=None):
+    """頂端提交裡檔名合規的所有判定紀錄 → [(檔名, 對照指紋, 內容 dict)],依檔名排序;讀不了或讀不懂丟 _NoteRereadStop
+    (說是哪個檔、怎麼修)。用 _nodehome_cat_blobs_capped 一次讀完(單份與合計各有上限,超過的不讀進記憶體),共用 reread 的截止時間。
+    「已對照」(_note_reread_covered)與第二層都從這一支拿,同一次 check 只讀一次。"""
+    names = _note_reread_tip_names(root, tip)
+    if names is None:
+        raise _NoteRereadStop(_note_reread_fail(deadline, "列不出已提交的對照紀錄"))
+    names = sorted(names)
+    specs = [f"{tip}:{_NOTE_REREAD_VERDICT_DIR}/{n}" for n in names]
+    blobs = (_nodehome_cat_blobs_capped(root, specs, _NOTE_REREAD_VERDICT_MAX, max_total_bytes=_NOTE_REREAD_VERDICTS_TOTAL,
+                                        deadline=deadline) if specs else [])
+    if blobs is None:
+        raise _NoteRereadStop(_note_reread_fail(deadline, "讀不了已提交的判定紀錄"))
+    if any(b is None for b in blobs):
+        raise _NoteRereadStop(_note_reread_unread_why(root, specs, names, blobs))
+    return [_note_reread_verdict_doc(n, b) for n, b in zip(names, blobs)]
+
+
+_NOTE_REREAD_VERDICT_FIX = "——修好,或用 git rm 刪掉那份再提交(刪掉會讓那篇第一層要求重判)"
+
+
+def _note_reread_unread_why(root, specs, names, blobs):
+    """有紀錄沒讀進來時的原因(只在出事時多問一次大小):單份超過上限點名那份;合計超過上限印最大的五份;其他(不是一般檔)點名第一份。"""
+    sizes = _nodehome_cat_sizes(root, specs) or [None] * len(specs)
+    big = [n for n, s in zip(names, sizes) if s is not None and s > _NOTE_REREAD_VERDICT_MAX]
+    if big:
+        more = f"(另有 {len(big) - 1} 份也超過)" if len(big) > 1 else ""
+        return (f"判定紀錄 {_NOTE_REREAD_VERDICT_DIR}/{big[0]} 超過 {_NOTE_REREAD_VERDICT_MAX // 1024} KB 上限{more}"
+                + _NOTE_REREAD_VERDICT_FIX)
+    if sum(s or 0 for s in sizes) > _NOTE_REREAD_VERDICTS_TOTAL:
+        top = sorted(((s or 0, n) for s, n in zip(sizes, names)), reverse=True)[:5]
+        return (f"判定紀錄合計超過 {_NOTE_REREAD_VERDICTS_TOTAL // (1024 * 1024)} MB 上限;最大的五份:"
+                + "、".join(f"{n}({s // 1024} KB)" for s, n in top)
+                + "——用 git rm 清掉不再需要的舊紀錄再提交(刪掉會讓那幾篇第一層要求重判)")
+    bad = next(n for n, b in zip(names, blobs) if b is None)
+    return f"讀不了判定紀錄 {_NOTE_REREAD_VERDICT_DIR}/{bad}(不是一般檔?)" + _NOTE_REREAD_VERDICT_FIX
+
+
+def _note_reread_json(raw):
+    """回頭重讀讀 JSON(設定、判定紀錄、判定者報告的 json 區塊)→ 解出的值。★解析例外的口徑只有這一份★:不是 UTF-8、
+    不是 JSON、巢狀太深(json 的解析器遞迴爆掉丟 RecursionError,不是 ValueError)一律丟 ValueError。代碼審發現:
+    125000 層的陣列不到 256 KB,原本穿過「讀不成 JSON」那一層、reread-prepare 崩出堆疊。raw 給 bytes 或 str。
+    回頭重讀用包裝、兄弟閘(_note_audit_config、_drift_config_text_parts)就地接 RecursionError:這裡有四個呼叫端(設定、判定者報告、
+    已提交紀錄、工作目錄紀錄)要同一份口徑,包一次比四處各接不會漏;兄弟閘各只有一處解析,照專案多處的 except (ValueError, RecursionError)
+    就地寫、不為一處多一層。"""
+    import json as _j
+    try:
+        return _j.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except RecursionError:
+        raise ValueError("巢狀太深") from None
+
+
+def _note_reread_verdict_doc(name, raw):
+    """一份紀錄的內容 → (檔名, 對照指紋, dict);讀不成 JSON(含巢狀太深,_note_reread_json)或形狀不對丟 _NoteRereadStop
+    (點名那份、怎麼修)。"""
+    where = f"判定紀錄 {_NOTE_REREAD_VERDICT_DIR}/{name}"
+    try:
+        doc = _note_reread_json(raw)
+    except ValueError:
+        raise _NoteRereadStop(f"{where} 讀不成 JSON" + _NOTE_REREAD_VERDICT_FIX) from None
+    why = _note_reread_doc_err(doc)
+    if why:
+        raise _NoteRereadStop(f"{where} {why}" + _NOTE_REREAD_VERDICT_FIX)
+    return name, _NOTE_REREAD_VERDICT_NAME_RE.match(name).group(1), doc
+
+
+def _note_reread_doc_err(doc):
+    """紀錄形狀(計劃〈重讀:候選與兩層〉最後一點):不是物件、rows 不是清單、某列不是物件、某列 quote 與 text 都不是字串 → 原因;
+    其中一個不是字串只當空字串(_reread_row_match 管)。"""
+    if not isinstance(doc, dict):
+        return "不是 JSON 物件"
+    rows = doc.get("rows")
+    if not isinstance(rows, list):
+        return "的 rows 不是清單"
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            return f"第 {i} 列不是物件"
+        if not isinstance(r.get("quote"), str) and not isinstance(r.get("text"), str):
+            return f"第 {i} 列的 quote 與 text 都不是字串"
+    return None
+
+
+def _note_reread_covered(root, tip, verdicts=None, deadline=None):
+    """「已對照」的共用口徑(prepare 的略過與 check 的第一層都用這一支)→ {對照指紋}:頂端提交裡檔名合規、★讀內容、
+    只收 provenance_ok 為真的★紀錄(Projects/舊句兩道轉擋_計劃〈重讀:候選與兩層〉;原本只比檔名,來源核對沒過的紀錄也算已對照)。
+    verdicts 給了(check 已讀過)就不再讀;讀不了丟 _NoteRereadStop。"""
+    vs = _note_reread_verdicts(root, tip, deadline) if verdicts is None else verdicts
+    return {fp for _n, fp, d in vs if d.get("provenance_ok") is True}
+
+
+def _note_reread_wt_verdicts(root, skip=()):
+    """★走訪工作目錄的紀錄資料夾只有這一份★(_note_reread_uncommitted 與 drift ack --kind reread 共用;代碼審發現原本各寫一份守門)
+    → [(檔名, 對照指紋, 解出的 JSON 值)],依檔名排序。只收檔名合 _NOTE_REREAD_VERDICT_NAME_RE、不在 skip 裡的;檔是符號連結、
+    不是一般檔、超過單份上限 _NOTE_REREAD_VERDICT_MAX、讀不了、讀不成 JSON(含巢狀太深)的略過。形狀各呼叫端自己驗。
+    資料夾從 repo 根往下任一層(含上層的 governance)是符號連結、某層不是資料夾、或解析後不在 repo 根底下 → 整個不走訪:
+    判斷走共用的 _repo_path_unsafe(dirs=True),跟寫端 _note_audit_safe_dir 同一份(代碼審發現:原本只看最後一層,
+    governance 指到 repo 外時照樣讀外面的紀錄,寫端卻拒寫)。"""
+    d = Path(root) / _NOTE_REREAD_VERDICT_DIR
+    try:
+        ok = _repo_path_unsafe(root, _NOTE_REREAD_VERDICT_DIR, dirs=True) is None and d.is_dir()
+        files = sorted(d.iterdir()) if ok else []
+    except OSError:
+        files = []
+    out = []
+    for f in files:
+        m = _NOTE_REREAD_VERDICT_NAME_RE.match(f.name)
+        if not m or f.name in skip:
+            continue
+        try:
+            if f.is_symlink() or not f.is_file() or f.stat().st_size > _NOTE_REREAD_VERDICT_MAX:
+                continue
+            out.append((f.name, m.group(1), _note_reread_json(f.read_bytes())))
+        except (OSError, ValueError):
+            continue
     return out
 
 
-def _note_reread_uncommitted(root):
-    """工作目錄裡的紀錄 → {對照指紋}(只拿來提醒「還沒提交」;check 只認已提交的)。"""
-    d = Path(root) / _NOTE_REREAD_VERDICT_DIR
-    out = set()
-    try:
-        for f in d.iterdir() if d.is_dir() else ():
-            m = _NOTE_REREAD_VERDICT_NAME_RE.match(f.name)
-            if m and f.is_file():
-                out.add(m.group(1))
-    except OSError:
-        pass
+def _note_reread_uncommitted(root, tip):
+    """工作目錄裡有、★被推頂端的樹裡沒有這個檔名★、★而且只差提交就算已對照★的紀錄 → {對照指紋: [檔名…]}(檔名給「記得提交」
+    那句列具體檔名用)。原本比指紋,已提交但來源核對沒過的紀錄在工作目錄的那一份會被當成還沒提交(計劃〈重讀:候選與兩層〉)。
+    「只差提交」跟「已對照」(_note_reread_covered)同一口徑:讀內容、只算形狀對而且 provenance_ok 為真的;讀不了、讀不懂(含巢狀太深)、
+    太大、符號連結、不是一般檔的都不算(走訪與守門共用 _note_reread_wt_verdicts;代碼審發現:原本只比檔名,record 剛說
+    「這份不算對照,請重派」,prepare 卻用它把那篇排除、說都對照過)。
+    prepare 用它決定略過哪幾篇、兩邊都用它印「記得提交」。頂端列不出時當頂端沒有紀錄。"""
+    out = {}
+    for name, fp, doc in _note_reread_wt_verdicts(root, skip=_note_reread_tip_names(root, tip) or set()):
+        if _note_reread_doc_err(doc) is None and doc.get("provenance_ok") is True:
+            out.setdefault(fp, []).append(name)
+    return out
+
+
+def _note_reread_add_cmd(names):
+    """「把這幾份紀錄提交」的指令:git add 列具體檔名(record、prepare、check 三處共用;整個資料夾會夾帶殘檔與別的會談的紀錄,
+    06 手冊第 5 步)。檔名都合 _NOTE_REREAD_VERDICT_NAME_RE,一般就是十六進位、數字、T、Z、-;照樣過 _sh_quote(\\d 認得
+    非 ASCII 的數字,貼進殼也不會出事;印給人貼的參數只走那一支,代碼審發現原本這裡自己 import shlex)。"""
+    return "git add " + " ".join(_sh_quote(f"{_NOTE_REREAD_VERDICT_DIR}/{n}") for n in sorted(names)) + " && git commit"
+
+
+# ── 第二層:判定點出的規則類條目(Projects/舊句兩道轉擋_計劃〈重讀:候選與兩層〉)──
+
+def _reread_summary_entries(text):
+    """一篇筆記的摘要條目 → ({條目開頭行號: 整條原文}, {實體行號: 所屬條目開頭行號})。第二層與 drift ack --kind reread
+    都只用這一支(計劃:原本 retire 用的 _ns_summary_logical 不認單行 summary,單行條目會被擋卻表態不了)。
+    以 _ns_summary_logical(cont=…)為底(接續行歸回所屬條目;摘要區裡沒前綴也不是接續行的雜行不屬於任何條目),
+    再補 _note_summary_entries 那個單行 summary 的寫法(整個值算一條,行號是 summary: 那一行)。"""
+    cont = {}
+    entries = _ns_summary_logical(text, cont=cont)
+    phys = {i: i for i in entries}
+    phys.update(cont)
+    if not entries:
+        fm, _body = split_frontmatter(text)
+        sm = parse_frontmatter(fm)[0].get("summary") if fm is not None else None
+        if isinstance(sm, str) and "\n" not in sm.strip() and SYMBOL_RE.match(sm.strip()):
+            no = next((i for i, ln in enumerate(fm, 2) if re.match(r"summary\s*:\s*\S", ln)), None)
+            if no is not None:
+                entries[no], phys[no] = sm.strip(), no
+    return entries, phys
+
+
+def _reread_rule_entry(entry):
+    """一條摘要條目算不算規則類(第二層擋、drift ack --kind reread 收的那一類)。標了 [status:superseded] 的一律不算;
+    其餘:以 RULE: 開頭、符合 INVARIANT_RE、或以摘要前綴開頭(SYMBOL_RE,不另寫一份)而且含 TEST_REF_RE 的測試綁定。
+    ★IRREVERSIBLE★、★CHECKPOINT★ 這類其他合約行不另算(人裁的範圍是 RULE、★INVARIANT★、帶測試綁定;它們帶綁定就照第三種算)。
+    放在筆記內容審這一段、存量漂移那邊的 drift ack 來呼叫(照 _path_special_chars 的先例,不各寫一份)。"""
+    s = entry.strip()
+    m = SYMBOL_RE.match(s)
+    if not m or _ns_superseded(s[len(m.group(1)) + 1:]):
+        return False
+    return s.startswith("RULE:") or bool(INVARIANT_RE.match(s)) or bool(TEST_REF_RE.search(s))
+
+
+def _reread_row_match(row):
+    """判定紀錄一列的比對字串 → 字串或 None(點不出任何行)。不是字串的 quote、text 當空字串;quote 去頭尾空白後至少
+    _NOTE_REREAD_MATCH_MIN 個字而且是 text 的子字串就用它,否則用 text 去頭尾空白;最後選定的少於下限 → None
+    (判定者把行號點在空白行時,不會變成比中整篇)。"""
+    q = row.get("quote") if isinstance(row.get("quote"), str) else ""
+    t = row.get("text") if isinstance(row.get("text"), str) else ""
+    q = q.strip()
+    got = q if len(q) >= _NOTE_REREAD_MATCH_MIN and q in t else t.strip()
+    return got if len(got) >= _NOTE_REREAD_MATCH_MIN else None
+
+
+def _reread_note_hits(text, rows):
+    """一篇筆記(頂端版或工作目錄版)對上一份紀錄的各列 → ({被點出的規則類條目開頭行號: 整條}, 一般行數, [沒有可比對原文的列號])。
+    比對字串在筆記裡找不到 = 那一行改掉或刪掉了,算處理過;找得到就找出含它的每個實體行、換成所屬的摘要條目;
+    不在任何條目裡的實體行與非規則類條目都算一般行(只提醒)。"""
+    entries, phys = _reread_summary_entries(text)
+    lines = text.split("\n")
+    rule, general, blank = {}, 0, []
+    for i, row in enumerate(rows, 1):
+        m = _reread_row_match(row)
+        if m is None:
+            blank.append(i)
+            continue
+        for no in (k for k, ln in enumerate(lines, 1) if m in ln):
+            start = phys.get(no)
+            if start is not None and _reread_rule_entry(entries[start]):
+                rule[start] = entries[start]
+            else:
+                general += 1
+    return rule, general, blank
+
+
+def _note_reread_tip_texts(root, scan, rels, deadline):
+    """這幾篇候選在頂端的全文 → {圖譜相對路徑: 文字}(非 UTF-8 換成替代字元,同 reread-record 讀那一行的解法)。"""
+    pre = scan["vault_rel"] + "/"
+    blobs = _nodehome_cat_blobs(root, [scan["oids"][pre + r] for r in rels])
+    if blobs is None or any(b is None for b in blobs):
+        raise _NoteRereadStop(_note_reread_fail(deadline, "讀不到頂端版的筆記"))
+    return {r: b.decode("utf-8", errors="replace") for r, b in zip(rels, blobs)}
+
+
+def _note_reread_layer2(root, tip, scan, verdicts, deadline):
+    """第二層 → {"must": [要處理的發現], "general": 一般行數, "blank": [(紀錄檔名, 列號)]}。每篇候選依筆記路徑(紀錄 note 欄的
+    原始字串;只有顯示才過 _note_reread_show——不同的非 UTF-8 路徑轉換後會撞成同一字串)找頂端所有判定紀錄,★不論 provenance_ok★
+    (較保守;同一篇多份紀錄取聯集,舊紀錄點出、新紀錄沒點出的也擋)。依路徑不依指紋:筆記改名後舊路徑的紀錄不再適用,改名本身會讓
+    第一層要求重判。規則類條目扣掉涵蓋點出它那幾份紀錄指紋的 kind=reread 表態(從頂端提交的樹讀,沒提交的表態不算)後剩下的要處理。"""
+    pre = scan["vault_rel"] + "/"
+    by_note = {}
+    for v in verdicts:
+        note = v[2].get("note")
+        if isinstance(note, str):
+            by_note.setdefault(note, []).append(v)
+    rels = [r for r in scan["cands"] if pre + r in by_note]
+    out = {"must": [], "general": 0, "blank": []}
+    if not rels:
+        return out
+    texts = _note_reread_tip_texts(root, scan, rels, deadline)
+    found = {}
+    for rel in rels:
+        for name, fp, doc in by_note[pre + rel]:
+            rule, general, blank = _reread_note_hits(texts[rel], doc["rows"])
+            out["general"] += general
+            out["blank"] += [(name, i) for i in blank]
+            for start, whole in rule.items():
+                found.setdefault((rel, start), {"kind": "reread", "path": rel, "line": start, "text": whole,
+                                                "verdicts": set()})["verdicts"].add(fp)
+    if found:
+        out["must"] = _drift_reread_split_acked(list(found.values()), _drift_load_acks(root, tip), scan["vault_rel"])[0]
     return out
 
 
 def _note_reread_cmdline(diff_range, push):
-    """印給人照貼的 reread-prepare 指令:原樣帶這次的 --diff、--push-remote、--pushed-ref,--orchestrator 留給人填。"""
-    import shlex
-    parts = ["lumos", "note-audit", "reread-prepare", "--diff", shlex.quote(diff_range)]
+    """印給人照貼的 reread-prepare 指令:原樣帶這次的 --diff、--push-remote、--pushed-ref,--orchestrator 留給人填。
+    參數走 _sh_quote(印給人貼的參數只有那一支)。"""
+    parts = ["lumos", "note-audit", "reread-prepare", "--diff", _sh_quote(diff_range)]
     if push is not None:
-        parts += ["--push-remote", shlex.quote(push[0]), "--pushed-ref", shlex.quote(push[1])]
+        parts += ["--push-remote", _sh_quote(push[0]), "--pushed-ref", _sh_quote(push[1])]
     return " ".join(parts) + " --orchestrator <claude 或 codex>"
+
+
+def _note_reread_prepare_todo(root, tip, scan, done):
+    """prepare 不帶 --all 時要產項目檔的候選:扣掉已對照的(done)與工作目錄裡已有同對照指紋紀錄、還沒提交的(代碼審 r2 正確性席 F1:
+    記完忘了提交就推,check 照列那幾篇、人照它印的指令貼 prepare 會整批重派);略過的講一句,只差提交的另講一句、列那幾份的檔名
+    (_note_reread_add_cmd)。check 照舊只認已提交的。"""
+    fps = _note_reread_fps(scan)
+    wip = {fp: ns for fp, ns in _note_reread_uncommitted(root, tip).items() if fp not in done}
+    todo = [rel for rel in scan["cands"] if fps[rel] not in done and fps[rel] not in wip]
+    wip_fps = {fps[rel] for rel in scan["cands"] if fps[rel] in wip}
+    if len(todo) < len(scan["cands"]):
+        print(f"已對照 {len(scan['cands']) - len(todo)} 篇(紀錄對得上這一版程式),略過;要全部重產加 --all")
+    if wip_fps:
+        n_wip = sum(1 for rel in scan["cands"] if fps[rel] in wip)
+        print(f"  其中 {n_wip} 篇紀錄還沒提交,記得提交(推送前的檢查只認已提交的):"
+              + _note_reread_add_cmd({n for fp in wip_fps for n in wip[fp]}))
+    return todo
 
 
 def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None, push_remote=None, pushed_ref=None, all_=False):
     """lumos note-audit reread-prepare --diff A..B --orchestrator claude|codex [--push-remote R --pushed-ref REF] [--all]
     (Projects/守檔筆記對照改動_計劃〈做法〉1、2):每篇還沒對照過這一版程式的候選一份項目檔,印派工指令;沒有候選不產生檔、rc0;
-    不記治理帳(帳只由 check 記)。★已有同對照指紋的已提交紀錄的那幾篇預設略過★(代碼審 r1 正確性席 F1:照 check 印的指令貼,
-    原本會把已對照的再派一次、白花判定者的錢),口徑跟 check 同一支 _note_reread_fps;--all 才全產。"""
+    不記治理帳(帳只由 check 記)。★已對照的那幾篇預設略過★(代碼審 r1 正確性席 F1:照 check 印的指令貼,
+    原本會把已對照的再派一次、白花判定者的錢),「已對照」跟 check 的第一層同一支 _note_reread_covered(只認來源核對過的紀錄,
+    Projects/舊句兩道轉擋_計劃),指紋同一支 _note_reread_fps;--all 才全產。"""
     root = _note_audit_root(repo)
     if root is None:
         print("回頭重讀:這裡不是 git 專案", file=sys.stderr)
@@ -34788,7 +35098,7 @@ def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None,
     reasons = []
     base, tip, vault_rel = _note_audit_resolve(root, diff_range, "回頭重讀", gate="note-reread",
                                                mark=_NOTE_REREAD_GOLIVE_MARK, push=push, reasons=reasons)
-    if tip is None or isinstance(tip, int):
+    if tip is None or isinstance(tip, int):     # undecidable(讀不到頂端檔案清單)照 skipped 處理:印原因、不產檔、行為不變
         for kind, why in reasons:
             print(("擋下:" if kind == "error" else "回頭重讀:") + why, file=sys.stderr if kind == "error" else sys.stdout)
         return tip if isinstance(tip, int) else 0
@@ -34808,21 +35118,12 @@ def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None,
         return 0
     todo = scan["cands"]
     if not all_:
-        done = _note_reread_committed(root, tip)
-        if done is None:
-            print("回頭重讀:列不出已提交的對照紀錄(git 失敗),這次全部照產", file=sys.stderr)
+        try:
+            done = _note_reread_covered(root, tip)
+        except _NoteRereadStop as e:
+            print(f"回頭重讀:{e.why};這次全部照產", file=sys.stderr)
             done = set()
-        fps = _note_reread_fps(scan)
-        # 工作目錄裡已有同對照指紋紀錄、還沒提交的也略過(代碼審 r2 正確性席 F1:記完忘了提交就推,check 照列那幾篇、
-        # 人照它印的指令貼 prepare 會整批重派);只差提交的另講一句。check 照舊只認已提交的。
-        wip = _note_reread_uncommitted(root) - done
-        todo = [rel for rel in scan["cands"] if fps[rel] not in done and fps[rel] not in wip]
-        n_wip = sum(1 for rel in scan["cands"] if fps[rel] in wip)
-        if len(todo) < len(scan["cands"]):
-            print(f"已對照 {len(scan['cands']) - len(todo)} 篇(紀錄對得上這一版程式),略過;要全部重產加 --all")
-        if n_wip:
-            print(f"  其中 {n_wip} 篇紀錄還沒提交,記得提交(推送前的提醒只認已提交的):"
-                  f"git add {_NOTE_REREAD_VERDICT_DIR} && git commit")
+        todo = _note_reread_prepare_todo(root, tip, scan, done)
         if not todo:
             print(f"這次要對照的 {len(scan['cands'])} 篇守檔筆記都對照過這一版程式了,不產項目檔")
             return 0
@@ -34861,12 +35162,24 @@ def cmd_note_audit_reread_prepare(repo=None, diff_range=None, orchestrator=None,
     return 0
 
 
+def _note_reread_too_big_hint(rows):
+    """紀錄超過讀端上限時接在原因後面的那句:講點出幾行、原文合計多少字、最長的是哪一行——紀錄每一行記全文加引句與理由,
+    大小約是「點出的行數 × 每行長度」,只點最長那行會誤導(代碼審發現:100 行 × 3300 字時提示只怪單行;把一行拆成三行,
+    判定者可能三行都點出,總量不變)。給的兩條處置都真的會降:長行寫短(原文變少)、筆記拆成幾篇(每篇各一份紀錄)。"""
+    if not rows:
+        return ""
+    longest = max(rows, key=lambda r: len(r["text"]))
+    return (f"(點出 {len(rows)} 行,原文合計 {sum(len(r['text']) for r in rows)} 字,最長的是第 {longest['line']} 行 "
+            f"{len(longest['text'])} 字;紀錄每一行都記全文,大小約是行數乘行長)——把那些長行寫短(拆成好幾行不會變小:"
+            "判定者可能照樣全點出),或把筆記拆成幾篇各自對照,再重新 reread-prepare 派判定者")
+
+
 def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
     """lumos note-audit reread-record --prepared <項目檔> --report <報告>(計劃〈做法〉3)。
     整份拒收(rc2):讀不到項目檔或不是項目檔、範本版本跟程式不同、報告讀不成 UTF-8、沒有或解析不了 json 區塊、頂層不是清單。
-    來源錨點不符照收、標 provenance_ok: false(提醒版點出的行全是「要回頭看」的,照筆記內容審「重的照收」的信任方向)。
+    來源錨點不符照收、標 provenance_ok: false(點出的行全是「要回頭看」的,照筆記內容審「重的照收」的信任方向),
+    但這份不算對照:第一層只認來源核對過的(_note_reread_covered),要重派判定者;第二層照樣讀它點出的行(較保守)。
     紀錄資料夾是符號連結或跑出 repo 也整份拒收(資安席 F3;落盤共用筆記內容審的 _note_audit_write_verdict)。"""
-    import json as _j
     root = _note_audit_root(repo)
     if root is None:
         print("回頭重讀:這裡不是 git 專案", file=sys.stderr)
@@ -34890,7 +35203,7 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
         return 2
     block, bad = _note_reread_json_block(text), object()
     try:
-        items = _j.loads(block) if block is not None else bad
+        items = _note_reread_json(block) if block is not None else bad
     except ValueError:
         items = bad
     if items is bad:
@@ -34914,14 +35227,17 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
                and head.get("provider") == meta["編排者"] and head.get("model") == meta["判定者模型"]
                and head.get("prepared") == meta["材料指紋"])
     if not prov_ok:
-        print(f"提醒:報告開頭四行跟項目檔對不上(或缺行)——照收,紀錄標 provenance_ok: false"
+        print(f"提醒:報告開頭四行跟項目檔對不上(或缺行)——紀錄照寫、標 provenance_ok: false,但這份不算對照,請重派判定者"
               f"(provider {_esc_clean(head.get('provider'), 40)}/{meta['編排者']}、model {_esc_clean(head.get('model'), 40)}/"
               f"{meta['判定者模型']}、prepared {_esc_clean(head.get('prepared'), 40)}/{meta['材料指紋']})")
     doc = {"version": 1, "seat": head.get("seat"), "provider": head.get("provider"), "model": head.get("model"),
            "prepared": head.get("prepared"), "model-actual": m_act.group(1) if m_act else None, "provenance_ok": prov_ok,
            "prompt_version": int(meta["範本版本"]), "note": meta["筆記路徑"], "note_blob": meta["筆記 blob"],
            "contrast_fp": meta["對照指紋"], "material_fp": meta["材料指紋"], "tip": meta["範圍終點"], "rows": rows}
-    name, why = _note_audit_write_verdict(root, doc, dirname=_NOTE_REREAD_VERDICT_DIR, prefix=f"{meta['對照指紋']}-")
+    # text 記整行、不截:截成前綴會改變比對(引句落在截掉的那段就退回前綴,可能漏掉引句本來比得中的規則行;改掉截掉的那段也不再算處理過)。
+    # 改成寫之前量大小,讀端讀不了就不寫(_note_audit_write_verdict 的 max_bytes)
+    name, why = _note_audit_write_verdict(root, doc, dirname=_NOTE_REREAD_VERDICT_DIR, prefix=f"{meta['對照指紋']}-",
+                                          max_bytes=_NOTE_REREAD_VERDICT_MAX, too_big=_note_reread_too_big_hint(rows))
     if name is None:
         print(f"擋下:{why}", file=sys.stderr)
         return 2
@@ -34933,105 +35249,298 @@ def cmd_note_audit_reread_record(repo=None, prepared=None, report=None):
     print(f"寫了紀錄 {_NOTE_REREAD_VERDICT_DIR}/{name}:{_note_reread_show(meta['筆記路徑'])} 點出 {len(rows)} 行")
     for r in rows:
         print(f"  {r['line']}: {_esc_clean(r['quote'], 120)}\n      為什麼:{_esc_clean(r['why'], 200)}")
-    print("接下來:改掉那幾行,或確認是誤判就不動——這一版不需要表態;改筆記不用重新對照(對照只看程式那一半)。\n"
-          f"紀錄要提交,推送前的提醒才認得(只認已提交的):\n    git add {_NOTE_REREAD_VERDICT_DIR} && git commit")
+    # 判定點出的規則類條目(RULE:、★INVARIANT★、帶測試綁定的摘要條目)在本機推送前會擋(Projects/舊句兩道轉擋_計劃);
+    # git add 只列這次寫的那一份(整個資料夾會夾帶殘檔與別的會談的紀錄)
+    print("接下來:改掉那幾行;點出的若是規則類條目(RULE:、★INVARIANT★、帶測試綁定的摘要條目),推送時會擋——改掉那句,或確認照留就\n"
+          '    lumos drift ack <節點> <那一條的開頭行號> --kind reread --reason "<為什麼照留>"\n'
+          "表態也要提交;改筆記不用重新對照(對照只看程式那一半)。\n"
+          "紀錄要提交,推送前的檢查才認得(只認已提交的):\n    " + _note_reread_add_cmd([name]))
     return 0
 
 
-def cmd_note_audit_reread_check(repo=None, diff_range=None, push_remote=None, pushed_ref=None):
-    """lumos note-audit reread-check --diff A..B [--push-remote R --pushed-ref REF](計劃〈做法〉4):推送前掛鉤與 CI 呼叫。
-    ★任何情況都回 0、所有輸出都走標準輸出★(掛鉤把標準錯誤丟掉);判不了的一律印「這次沒提醒:<原因>」、記一筆 skipped。
-    最外層只接 Exception、不接 BaseException:Ctrl-C 照常中斷(掛鉤看到 130 才停下整支推送)。"""
+def cmd_note_audit_reread_check(repo=None, diff_range=None, push_remote=None, pushed_ref=None, gate=False):
+    """lumos note-audit reread-check --diff A..B [--push-remote R --pushed-ref REF] [--gate](Projects/舊句兩道轉擋_計劃;
+    原版見 Projects/守檔筆記對照改動_計劃〈做法〉4)。★擋只在帶 --gate 而且 note_reread.gate 是 block 時生效★:只有推送前掛鉤帶;
+    CI 與手動跑不帶,不論設定都照舊只印(標準輸出)、回 0、記既有事件——合併後主線 CI 用整個 PR 的累計範圍重算,候選與指紋跟作者
+    本機最後一次推送看到的不同,設計審前兩輪的 CI 誤擋情境(合併讓指紋變、分次推送、兩條分支各自表態)全出在那一步。
+    本體照 _drift_m1_guarded、_drift_retire_guarded 的先例拆成判定(_note_reread_judge)、兜底(_note_reread_guarded)、
+    印出記帳(_note_reread_report)三段,回傳碼在印出前定好。最外層只接 Exception、不接 BaseException:Ctrl-C 照常中斷。"""
     root = _note_audit_root(repo)
-    if root is None:
+    if root is None or not _note_reread_is_git(root):
         print("回頭重讀提醒:這次沒提醒:這裡不是 git 專案")
         return 0
     if os.environ.get("LUMOS_SKIP_REREAD_CHECK") == "1":        # 只認 1;只管本機(照另外兩道的單次略過慣例)
         print("回頭重讀提醒:LUMOS_SKIP_REREAD_CHECK 設了,這次不跑(已記進治理帳)")
         _gate_event_or_warn(root, "note-reread", "skipped-env", "LUMOS_SKIP_REREAD_CHECK")
         return 0
+    res = _note_reread_guarded(root, diff_range, push_remote, pushed_ref)
+    return _note_reread_report(root, res, gate, push_remote is not None)
+
+
+def _note_reread_is_git(root):
+    """--repo 指到的資料夾是不是 git 專案(不是就跟找不到專案一樣講一句、回 0,不當成「範圍終點找不到」的參數錯)。"""
+    r = _lens_git(root, "rev-parse", "--git-dir")
+    return r is not None and r.returncode == 0
+
+
+def _note_reread_guarded(root, diff_range, push_remote, pushed_ref):
+    """判定那一半的兜底 → res。參數錯記 state=param;其他 _NoteRereadStop 與沒預料到的例外都是判不了(state=undecidable),
+    開關照 res 裡已讀到的——設定讀到之前就出事照預設(終點找不到已歸參數錯,讀設定之前幾乎沒有別的失敗點,不另設讀工作目錄設定的退路)。"""
+    res = {"mode": _NOTE_REREAD_DEFAULT_GATE, "warns": [], "state": None, "why": "", "diff_range": diff_range}
     try:
-        return _note_reread_check(root, diff_range, push_remote, pushed_ref)
+        _note_reread_judge(root, diff_range, push_remote, pushed_ref, res)
+    except _NoteRereadArgErr as e:
+        res.update(state="param", why=e.why)
     except _NoteRereadStop as e:
-        why = e.why
-    except Exception as e:      # 提醒版:沒預料到的錯也不擋推送
-        why = f"沒預料到的錯誤({e.__class__.__name__})"
-    print(f"回頭重讀提醒:這次沒提醒:{why}")
-    _gate_event_or_warn(root, "note-reread", "skipped", why)
-    return 0
+        res.update(state="undecidable", why=e.why)
+    except Exception as e:      # 沒預料到的錯:照「判不了」處理(block 加 --gate 擋,其他放行)
+        res.update(state="undecidable", why=f"沒預料到的錯誤({e.__class__.__name__})")
+    return res
 
 
-def _note_reread_check(root, diff_range, push_remote, pushed_ref):
-    """reread-check 的本體;判不了丟 _NoteRereadStop(外層印、記 skipped、回 0)。"""
+def _note_reread_judge(root, diff_range, push_remote, pushed_ref, res):
+    """reread-check 的判定:結果寫進 res(state:off/none/skipped/judged),不印清單、不記帳。參數錯丟 _NoteRereadArgErr,
+    判不了丟 _NoteRereadStop。兩層都只看已提交的(判定紀錄與表態都從被推頂端提交的樹讀)。"""
     import time as _t
     deadline = _t.monotonic() + _NOTE_REREAD_BUDGET_SEC
+    push = _note_reread_args(root, diff_range, push_remote, pushed_ref, res)
+    if res["mode"] == "off":
+        res["state"] = "off"
+        return
+    base, tip, vault_rel = _note_reread_range(root, diff_range, push, res)
+    if res["state"] is not None:
+        return
+    scan = _note_reread_scan(root, base, tip, vault_rel, deadline=deadline)
+    res.update(scan=scan, tip=tip, push=push)
+    if not scan["cands"]:
+        res.update(state="none", why="沒有候選")
+        return
+    if _t.monotonic() > deadline:
+        raise _NoteRereadStop(f"逾時(超過 {_NOTE_REREAD_BUDGET_SEC} 秒)")
+    vs = _note_reread_verdicts(root, tip, deadline)
+    fps = _note_reread_fps(scan)
+    covered = _note_reread_covered(root, tip, verdicts=vs)
+    left = [rel for rel in scan["cands"] if fps[rel] not in covered]
+    res.update(state="judged", fps=fps, left=left, badprov={fp for _n, fp, d in vs if d.get("provenance_ok") is not True},
+               wip=_note_reread_wip_left(root, tip, {fps[r] for r in left}),
+               layer2=_note_reread_layer2(root, tip, scan, vs, deadline))
+
+
+def _note_reread_wip_left(root, tip, left_fps):
+    """check 第一層沒對照的那幾篇裡,工作目錄有只差提交的紀錄的 → {對照指紋: [檔名…]}(印「記得提交」用);沒有沒對照的不讀工作目錄。"""
+    if not left_fps:
+        return {}
+    return {fp: ns for fp, ns in _note_reread_uncommitted(root, tip).items() if fp in left_fps}
+
+
+def _note_reread_args(root, diff_range, push_remote, pushed_ref, res):
+    """參數檢查與讀開關 → push(None 或 (遠端名, 遠端 ref))。開關從被推頂端提交的版本讀,在算候選之前讀(off 不寫帳);
+    範圍終點是全 0(刪除分支)時沒有頂端可讀,開關留預設。範圍格式與終點先自己驗,不讓範圍解析印「擋下」。"""
     if (push_remote is None) != (pushed_ref is None):
-        raise _NoteRereadStop("--push-remote 與 --pushed-ref 要一起給")
+        raise _NoteRereadArgErr("--push-remote 與 --pushed-ref 要一起給")
     rg = _lens_range_ok(diff_range)
-    if rg is None:          # 範圍格式與終點先自己驗,不讓範圍解析印「擋下」
-        raise _NoteRereadStop("--diff 要給 <起點>..<終點>(恰好兩個點、兩端都要有)")
+    if rg is None:
+        raise _NoteRereadArgErr("--diff 要給 <起點>..<終點>(恰好兩個點、兩端都要有)")
     if not _ZERO_SHA_RE.fullmatch(rg[1]):
         tip0 = _lens_full_sha(root, rg[1])
         if tip0 is None:
-            raise _NoteRereadStop(f"範圍終點 {_esc_clean(rg[1], 80)} 在本機找不到")
-        # 開關從被推頂端提交的版本讀,在算候選之前讀(off 不寫帳)
-        mode, warns = _note_reread_config(_nodehome_reader(root, tip0)(".lumos/config.json"))
-        for w in warns:
-            print(f"回頭重讀提醒:{w}")
-        if mode == "off":
-            print("回頭重讀提醒:這個專案關掉了回頭重讀提醒(note_reread.gate=off)")
-            return 0
-    push = None if push_remote is None else (push_remote, pushed_ref)
+            raise _NoteRereadArgErr(f"範圍終點 {_esc_clean(rg[1], 80)} 在本機找不到")
+        res["mode"], res["warns"] = _note_reread_config(_nodehome_reader(root, tip0)(".lumos/config.json"))
+    return None if push_remote is None else (push_remote, pushed_ref)
+
+
+def _note_reread_range(root, diff_range, push, res):
+    """範圍解析 → (base, tip, vault_rel);提早結束時把 state 寫進 res(none=這次沒有新東西、skipped=環境沒有可判的東西)回三個 None,
+    讀不到頂端檔案清單(undecidable)與起點算不出來丟 _NoteRereadStop。"""
     reasons = []
     base, tip, vault_rel = _note_audit_resolve(root, diff_range, "回頭重讀提醒", gate="note-reread",
                                                mark=_NOTE_REREAD_GOLIVE_MARK, push=push, reasons=reasons)
     if tip is None or isinstance(tip, int):
-        kind, why = reasons[0] if reasons else ("skipped", "範圍解析失敗")
-        if kind != "none":
+        kind, why = reasons[0] if reasons else ("undecidable", "範圍解析失敗")
+        if kind == "error":
+            raise _NoteRereadArgErr(why)
+        if kind == "undecidable":
             raise _NoteRereadStop(why)
-        print(f"回頭重讀提醒:這次沒有新東西:{why}")
-        _gate_event_or_warn(root, "note-reread", "none", why)
-        return 0
+        res.update(state=kind, why=why)
+        return None, None, None
     if isinstance(base, tuple):
         raise _NoteRereadStop(f"推送範圍的起點算不出來({base[1]})")
-    scan = _note_reread_scan(root, base, tip, vault_rel, deadline=deadline)
-    ctrl = _note_reread_ctrl_line(scan)
+    return base, tip, vault_rel
+
+
+def _note_reread_rc(res, gate, hard):
+    """回傳碼(印出與記帳之前就定):不帶 --gate 一律 0;參數錯 2;block 時判不了、或有一層成立 1;其他 0。"""
+    st = res["state"]
+    if not gate:
+        return 0
+    if st == "param":
+        return 2
+    if st == "undecidable":
+        return 1 if hard else 0
+    return 1 if (st == "judged" and hard and (res["left"] or res["layer2"]["must"])) else 0
+
+
+def _note_reread_report(root, res, gate, pushed):
+    """印出與記帳 → rc。rc 先由 _note_reread_rc 定好;印到一半出錯只講一句、照樣記帳,記帳出錯也只講一句——兩步都不改判定
+    (同 _drift_retire_report)。hard = 帶 --gate 而且設定是 block。"""
+    hard = gate and res["mode"] == "block"
+    rc = _note_reread_rc(res, gate, hard)
+    try:
+        _note_reread_print(res, gate, hard, pushed)
+    except Exception as ex:
+        print(f"回頭重讀:清單印到一半出錯({type(ex).__name__}),判定照舊", file=sys.stderr)
+    try:
+        _note_reread_ledger(root, res, hard)
+    except Exception as ex:
+        print(f"回頭重讀:這一筆帳沒寫進去({type(ex).__name__}),判定照舊", file=sys.stderr)
+    return rc
+
+
+def _note_reread_print(res, gate, hard, pushed):
+    """依 state 印:只提醒的內容照舊走標準輸出;擋下原因走標準錯誤、開頭「擋下:」(跟其他會擋的閘一樣)。"""
+    st = res["state"]
+    for w in res["warns"]:
+        print(f"回頭重讀提醒:{w}")
+    if (pushed and not gate and res["mode"] == "block" and st not in ("param", "off")
+            and not _in_ci()):
+        # 舊掛鉤搭新工具:這台機器所有工作樹共用主工作目錄的掛鉤(core.hooksPath 是絕對路徑),主工作目錄沒更新時掛鉤不帶 --gate
+        print("回頭重讀提醒:掛鉤沒帶 --gate,這次不擋;更新掛鉤所在工作目錄(core.hooksPath 指的那份 pre-push)")
+    if st == "off":
+        print("回頭重讀提醒:這個專案關掉了回頭重讀(note_reread.gate=off)")
+    elif st == "param":     # 帶 --gate 的參數錯跟鄰居(drift check、reread-prepare)一樣印「擋下:…」到標準錯誤、回 2
+        print(f"擋下:{res['why']}" if gate else f"回頭重讀提醒:這次沒提醒:{res['why']}", file=sys.stderr if gate else sys.stdout)
+    elif st == "undecidable":
+        _note_reread_print_undecidable(res, hard)
+    elif st == "skipped":
+        print(f"回頭重讀提醒:這次沒提醒:{res['why']}")
+    elif st == "none":
+        _note_reread_print_ctrl(res)
+        print("回頭重讀提醒:這次沒有要對照的家筆記" if res["why"] == "沒有候選" else f"回頭重讀提醒:這次沒有新東西:{res['why']}")
+    else:
+        _note_reread_print_judged(res, hard)
+
+
+def _note_reread_print_ctrl(res):
+    ctrl = _note_reread_ctrl_line(res["scan"]) if res.get("scan") else None
     if ctrl:
         print(f"回頭重讀提醒:{ctrl}")
-    if not scan["cands"]:
-        print("回頭重讀提醒:這次沒有要對照的家筆記")
-        _gate_event_or_warn(root, "note-reread", "none", "沒有候選")
-        return 0
-    if _t.monotonic() > deadline:
-        raise _NoteRereadStop(f"逾時(超過 {_NOTE_REREAD_BUDGET_SEC} 秒)")
-    done = _note_reread_committed(root, tip)
-    if done is None:
-        raise _NoteRereadStop(_note_reread_fail(deadline, "列不出已提交的對照紀錄"))
-    pre = vault_rel + "/"
-    fps = _note_reread_fps(scan)
-    left = [rel for rel in scan["cands"] if fps[rel] not in done]
-    if not left:
-        print(f"回頭重讀提醒:這次要對照的 {len(fps)} 篇守檔筆記都對照過這一版程式了")
-        _gate_event_or_warn(root, "note-reread", "covered", f"{len(fps)} 篇都對照過")
-        return 0
-    src = "ci" if os.environ.get("CI") else "hook"
-    print(f"回頭重讀提醒:這次改到的程式,有 {len(left)} 篇守檔筆記這次也改了、還沒對照過這一版程式"
-          f"(已對照 {len(fps) - len(left)} 篇)——前面的舊句可能被這次改動弄得不成立:")
-    for rel in left[:_NOTE_REREAD_LIST_MAX]:
-        print(f"  {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]})")
-    if len(left) > _NOTE_REREAD_LIST_MAX:
-        print(f"  …另外 {len(left) - _NOTE_REREAD_LIST_MAX} 篇")
-    wip = _note_reread_uncommitted(root) & {fps[r] for r in left}
-    if wip:
-        print(f"  其中 {len(wip)} 篇在工作目錄有對照紀錄、還沒提交:git add {_NOTE_REREAD_VERDICT_DIR} && git commit")
-    print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」;做法見 lumos-project-notes 的代碼審與推送子檔):\n    "
-          + _note_reread_cmdline(diff_range, push))
-    _gate_event_or_warn(root, "note-reread", "reminded",
-                        f"沒對照 {len(left)} 篇、已對照 {len(fps) - len(left)} 篇;範圍終點 {tip};來源 {src};"
-                        + "、".join(f"{_note_reread_show(r)}={fps[r]}" for r in left[:50]),
-                        nodes=[_note_reread_show(pre + r) for r in left][:50])     # 非 UTF-8 檔名寫帳會編碼失敗(邊界席 F1)
-    print(_NOTE_REREAD_TAIL)
-    return 0
+
+
+def _note_reread_print_undecidable(res, hard):
+    """判不了:block 加 --gate 擋(判不了就放行等於一條繞過的路),印原因與單次略過寫法(跟存量漂移共用 _drift_unknown_hint);
+    其他照舊印「這次沒提醒」。"""
+    if hard:
+        print("擋下:回頭重讀這次判不了", file=sys.stderr)
+        print(_drift_unknown_hint(res["why"], "LUMOS_SKIP_REREAD_CHECK"), file=sys.stderr)
+    else:
+        print(f"回頭重讀提醒:這次沒提醒:{res['why']}")
+
+
+def _note_reread_print_judged(res, hard):
+    """判完了:沒對照的(第一層)與要處理的規則類條目(第二層)各一段;兩層都沒有就講都對照過。一般行、沒有可比對原文的列只提醒。"""
+    _note_reread_print_ctrl(res)
+    l2 = res["layer2"]
+    for name, i in l2["blank"][:_NOTE_REREAD_LIST_MAX]:
+        print(f"回頭重讀提醒:判定紀錄 {name} 第 {i} 列沒有可比對的原文(引句與原句都少於 {_NOTE_REREAD_MATCH_MIN} 字),略過")
+    if l2["general"]:
+        print(f"回頭重讀提醒:判定點出 {l2['general']} 行一般行(不是規則類條目,不擋;要不要改自己看)")
+    if not res["left"] and not l2["must"]:
+        print(f"回頭重讀提醒:這次要對照的 {len(res['fps'])} 篇守檔筆記都對照過這一版程式了")
+        return
+    stream = sys.stderr if hard else sys.stdout
+    if res["left"]:
+        _note_reread_print_layer1(res, hard, stream)
+    if l2["must"]:
+        _note_reread_print_layer2(res, hard, stream)
+    if not hard:
+        print(_NOTE_REREAD_TAIL)
+
+
+def _note_reread_print_layer1(res, hard, stream):
+    """第一層:沒對照的篇分「沒有紀錄」與「有紀錄但來源核對沒過」列;講程式改了就要重判;印 prepare 指令(工具印每一層的改法,
+    掛鉤印通用逃生段——照存量漂移的分工)。"""
+    fps, left = res["fps"], res["left"]
+    pre = res["scan"]["vault_rel"] + "/"
+    head = "擋下:回頭重讀:" if hard else "回頭重讀提醒:"
+    print(f"{head}這次改到的程式,有 {len(left)} 篇守檔筆記這次也改了、還沒對照過這一版程式(已對照 {len(fps) - len(left)} 篇)"
+          "——前面的舊句可能被這次改動弄得不成立:", file=stream)
+    bad = [r for r in left if fps[r] in res["badprov"]]
+    for label, rows in (("沒有紀錄", [r for r in left if r not in bad]), ("有紀錄但來源核對沒過(要重派判定者)", bad)):
+        if rows:
+            print(f"  {label} {len(rows)} 篇:", file=stream)
+        for rel in rows[:_NOTE_REREAD_LIST_MAX]:
+            print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]})", file=stream)
+        if len(rows) > _NOTE_REREAD_LIST_MAX:
+            print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
+    if res["wip"]:
+        print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+              + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
+    print("  程式改了就要重判:對照指紋含這篇 about_code 列的程式在頂端的版本——合併主線帶進別人對同一支程式的改動、筆記改名、"
+          "about_code 增減都算;改筆記不用重判。", file=stream)
+    print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
+          "做法見 lumos-project-notes 的代碼審與推送子檔):\n    " + _note_reread_cmdline(res["diff_range"], res["push"]), file=stream)
+
+
+def _note_reread_print_layer2(res, hard, stream):
+    """第二層:每條印路徑、開頭行號、條目原文前 80 字與點出它的紀錄指紋,接照留指令(_drift_fix_hint 的 reread 分支產生);
+    最多列 _NOTE_REREAD_LIST_MAX 條。從判定紀錄與筆記來的字串一律過 _note_reread_show。"""
+    must = res["layer2"]["must"]
+    pre = res["scan"]["vault_rel"] + "/"
+    head = "擋下:回頭重讀:" if hard else "回頭重讀提醒:"
+    print(f"{head}判定點出的規則類條目還在、沒有表態,{len(must)} 條(RULE:、★INVARIANT★、帶測試綁定的摘要條目)"
+          "——改掉那句,或照留表態(表態要提交才算):", file=stream)
+    for f in must[:_NOTE_REREAD_LIST_MAX]:
+        print(f"  {_note_reread_show(pre + f['path'])} 第 {f['line']} 行:{_note_reread_show(f['text'])[:80]}"
+              f"(判定紀錄 {'、'.join(sorted(f['verdicts']))})", file=stream)
+        for h in _drift_fix_hint("reread", f["path"], f["line"]):
+            print(f"    {_esc_clean(h, 4000)}", file=stream)
+    if len(must) > _NOTE_REREAD_LIST_MAX:
+        print(f"  …還有 {len(must) - _NOTE_REREAD_LIST_MAX} 條", file=stream)
+    print("  提醒:改筆記會讓已過的代碼審留痕失效;已過代碼審的推送,優先用照留表態。", file=stream)
+
+
+def _note_reread_ledger(root, res, hard):
+    """記一筆帳:off 不記;參數錯、環境查不了記 skipped;判不了不擋記 skipped、擋下記 blocked(hard),兩筆都帶 state undecidable
+    (跟舊句檢查的帳一樣用 state 字串記;代碼審發現原本只有擋下那筆帶);沒新東西 none;判完兩層都沒有 covered,
+    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
+    跟舊句檢查、筆記形狀擋的帳一樣。"""
+    st, tip = res["state"], res.get("tip")
+    if st == "off":
+        return
+    if st in ("param", "skipped"):
+        _gate_event_or_warn(root, "note-reread", "skipped", res["why"], head_sha=tip)
+    elif st == "undecidable":
+        kind, note = ("blocked", f"判不了:{res['why']}") if hard else ("skipped", res["why"])
+        _gate_event_or_warn(root, "note-reread", kind, note, hard=hard, head_sha=tip, extra={"state": "undecidable"})
+    elif st == "none":
+        _gate_event_or_warn(root, "note-reread", "none", res["why"], head_sha=tip)
+    elif not res["left"] and not res["layer2"]["must"]:
+        _gate_event_or_warn(root, "note-reread", "covered", f"{len(res['fps'])} 篇都對照過", head_sha=tip)
+    else:
+        _note_reread_ledger_found(root, res, hard)
+
+
+def _note_reread_ledger_found(root, res, hard):
+    """有東西的那一筆:note 只記兩層篇數、範圍終點與來源;第一層沒對照的前 50 篇(路徑與對照指紋)記 layer1_fps,第二層要處理的前 50 行
+    (路徑、條目前 80 字、紀錄指紋)記 rows。路徑一律過 _note_reread_show(非 UTF-8 檔名寫帳會編碼失敗,邊界席 F1)。
+    整行超過 4096 位元組時跟舊句檢查、筆記形狀擋的放寬帳一樣走 _gate_event_fit:先從尾端丟 rows、再丟 layer1_fps,各記自己的
+    _truncated,還超過再把 nodes 截到 20(筆數欄照記全數);再超過照寫(_gate_event_fit 的約定)。量與寫都帶被推頂端當 head_sha。
+    ★清單不放 note★:note 會原樣再寫一份到 detail、而且 _gate_event_fit 截不到它——原本「路徑=指紋」清單放在 note,
+    30 篇沒對照時 rows 丟光、nodes 截到 20 整行仍有 5886 位元組(代碼審發現)。"""
+    fps, left, must, tip = res["fps"], res["left"], res["layer2"]["must"], res["tip"]
+    pre = res["scan"]["vault_rel"] + "/"
+    note = (f"沒對照 {len(left)} 篇、已對照 {len(fps) - len(left)} 篇;規則類條目要處理 {len(must)} 條;"
+            f"範圍終點 {tip};來源 {'ci' if _in_ci() else 'hook'}")
+    rows = [{"path": _note_reread_show(pre + f["path"]), "line": f["line"], "quote": _note_reread_show(f["text"])[:80],
+             "verdicts": sorted(f["verdicts"])} for f in must[:50]]
+    extra = {"layer1": len(left), "rejudge": len(left), "layer2_notes": len({f["path"] for f in must}),
+             "layer2_rows": len(must), "rows": rows,
+             "layer1_fps": [{"path": _note_reread_show(pre + r), "fp": fps[r]} for r in left[:50]]}
+    nodes = list(dict.fromkeys([_note_reread_show(pre + r) for r in left] + [r["path"] for r in rows]))[:50]
+    kind = "blocked" if hard else "reminded"
+    nodes = _gate_event_fit(root, "note-reread", kind, note, extra, ("rows", "layer1_fps"), hard=hard, head_sha=tip,
+                            nodes=nodes, nodes_cap=20)
+    _gate_event_or_warn(root, "note-reread", kind, note, hard=hard, head_sha=tip, nodes=nodes, extra=extra)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -35051,15 +35560,18 @@ _DRIFT_SETTLED_MARK_RE = re.compile(r"[(（]已裁定[:：]")
 # c4 的關鍵詞。★清單裡刻意不放「工作樹」★:「釘在某提交的乾淨工作樹」是合法的可重現寫法,本來就不含這三個詞;
 # 同一句裡同時有「未提交」與「工作樹」照樣成立(考卷 E3 就是這樣寫,設計審 r3 接手席)
 _DRIFT_UNCOMMITTED_WORDS = ("未提交", "還沒提交", "uncommitted")
-_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "m1", "retire", "count")
+# reread(Projects/舊句兩道轉擋_計劃〈照留表態〉):回頭重讀第二層點出的規則類條目照留;只在推送時判(reread-check),scan 不列
+_DRIFT_KINDS = ("probe", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "m1", "retire", "count", "reread")
 _DRIFT_KIND_NAMES = {"c1": "轉正了還寫預告", "c2": "計劃收尾了、連著的 Issue 還開著",
                      "c3": "計劃收尾了、驗證紀錄還待定", "c4": "前提寫「還沒提交」",
                      "c5": "轉正做了一半", "c6": "連到已收尾的筆記、同一句還寫待定",
                      "c7": "自己已收尾、摘要還寫待定", "probe": "回頭條件成立了", "m1": "程式改了、筆記還在講舊東西",
-                     "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上"}
+                     "retire": "RULE 的撤除條件成立了", "count": "數量標記對不上",
+                     "reread": "回頭重讀點出的規則類條目"}
 # drift scan 認得的種類:m1(舊句檢查)要一段推送範圍才判得了「消失」,只有一棵樹的 scan、doctor、考試都不跑(照 _DRIFT_FIX_KINDS 的先例)
 # m1 要推送範圍才判得了,scan 不列;retire(RULE 撤除條件)筆記格子第 3 步起列,是推送那次漏掉的兜底
-_DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k != "m1")
+# reread 同 m1:只在推送時由 reread-check 判(要判定紀錄與推送範圍),scan、doctor 都不列
+_DRIFT_SCAN_KINDS = tuple(k for k in _DRIFT_KINDS if k not in ("m1", "reread"))
 _DRIFT_ACKS = "governance/drift-acks.jsonl"
 # 修復帳(drift fix 每改一筆記一行稽核紀錄;存量漂移改法 第 7 節)。★稽核紀錄,不是還原工具★:要退回用 git;
 # 帳也是乾淨檢查認得「工具自己的改動」的依據。進簿記檔名單 _BOOKKEEPING_FILES(那邊寫的是同一個字串)
@@ -37313,7 +37825,9 @@ def _drift_split_acked(findings, acks, vault_rel, as_of=None, note_state=None):
 
 
 def _drift_ack_buckets(acks):
-    """表態分三堆:一般種類的鍵集合、c2/c3/c6(記了 related 而且序號合法的)與 probe/retire 各自 {鍵: [表態]}。"""
+    """表態分三堆:一般種類的鍵集合、c2/c3/c6(記了 related 而且序號合法的)與 probe/retire 各自 {鍵: [表態]}。
+    m1、reread 的表態也會落進一般那一堆,但這兩種不走這條路(各自一支 _drift_m1_split_acked、_drift_reread_split_acked),
+    所以 reread ★不放進 _DRIFT_BOUND_KINDS★(Projects/舊句兩道轉擋_計劃〈照留表態〉)。"""
     keys, bound, expiring = set(), {}, {}
     for a in acks:
         k = _drift_ack_key(a["path"], a.get("text", ""), a["kind"])
@@ -37342,6 +37856,23 @@ def _drift_m1_split_acked(findings, acks, vault_rel):
         got = cover.get(_drift_ack_key(pre + f["path"], f["text"], "m1"), set())
         want = {_drift_m1_name_canon(n) for n in f["names"]}
         (done if f["names"] and None not in want and want <= got else left).append(f)
+    return left, done
+
+
+def _drift_reread_split_acked(findings, acks, vault_rel):
+    """reread 的表態比對(照 m1 的先例自成一支):同路徑、同條目原文(整條,去頭尾空白)、kind reread 的★所有★表態,verdicts 取聯集
+    (不取 seq 最新——兩條分支各自表態、合併後兩筆都還算);一筆發現的 verdicts(點出它的紀錄指紋)是聯集的子集才算已表態。
+    沒有 verdicts 欄或不是清單的不涵蓋任何紀錄。條目之後再被編輯(例如改 [confirmed:] 日期)原文對不上,要重新表態——刻意的。"""
+    cover = {}
+    for a in acks:
+        if a["kind"] == "reread" and isinstance(a.get("verdicts"), list):
+            k = _drift_ack_key(a["path"], a.get("text", ""), "reread")
+            cover.setdefault(k, set()).update(v for v in a["verdicts"] if isinstance(v, str))
+    pre = vault_rel.rstrip("/") + "/"
+    left, done = [], []
+    for f in findings:
+        got = cover.get(_drift_ack_key(pre + f["path"], f["text"], "reread"), set())
+        (done if f["verdicts"] and set(f["verdicts"]) <= got else left).append(f)
     return left, done
 
 
@@ -37479,7 +38010,12 @@ def _drift_ack_heading(lines, line):
 
 
 def _drift_ack_text(text, lines, line, kind):
-    """表態記的原文:retire 記摘要條目接回續行的整條(同 _retire_lines 給判定的原文),其他種類記那一個實體行。"""
+    """表態記的原文:retire 記摘要條目接回續行的整條(同 _retire_lines 給判定的原文);reread 記 _reread_summary_entries
+    認得的整條(含單行 summary,同回頭重讀第二層的口徑);其他種類記那一個實體行。"""
+    if kind == "reread":
+        whole = _reread_summary_entries(text or "")[0].get(line)
+        if whole:
+            return whole
     if kind == "retire":
         whole = _ns_summary_logical(text).get(line)
         if whole:
@@ -37491,6 +38027,8 @@ def _drift_ack_line_err(rel, text, lines, line, kind):
     """表態指到的那一行能不能表態 → 擋下的原因或 None。"""
     if not (1 <= line <= len(lines)) or not lines[line - 1].strip():
         return f"{rel} 沒有第 {line} 行,或那一行是空的"
+    if kind == "reread":
+        return _drift_ack_reread_line_err(rel, text or "", line)
     if kind == "retire" and line not in _ns_summary_logical(text or ""):
         # 判定給的原文是摘要條目接回續行的整條、行號是條目第一行;給續行或摘要區外的行號,記下的表態永遠對不上
         # (撤除條件末輪遺留四項第 1 項:原本照記、回成功,下次推送照擋)
@@ -37503,10 +38041,54 @@ def _drift_ack_line_err(rel, text, lines, line, kind):
     return None
 
 
+def _drift_ack_reread_line_err(rel, text, line):
+    """--kind reread 指到的行(Projects/舊句兩道轉擋_計劃〈照留表態〉):要是 _reread_summary_entries 認得的一條摘要條目的開頭行
+    (單行 summary 就是 summary: 那一行),而且是規則類條目(共用 _reread_rule_entry)→ 擋下原因或 None。
+    「有判定點出這一條」要讀工作目錄的紀錄,在 _drift_ack_reread_verdicts 驗。"""
+    entries, phys = _reread_summary_entries(text)
+    if line not in entries:
+        start = phys.get(line)
+        if start is not None:
+            return (f"{rel} 第 {line} 行不是條目開頭——那一條的開頭在第 {start} 行,--kind reread 要給開頭行號"
+                    "(擋下訊息列的那個)")
+        return f"{rel} 第 {line} 行不是摘要裡的條目——--kind reread 只收摘要條目(單行 summary 就給 summary: 那一行)"
+    if not _reread_rule_entry(entries[line]):
+        return (f"{rel} 第 {line} 行那一條是非規則類條目(不是 RULE:、★INVARIANT★ 或帶測試綁定的摘要條目),"
+                "推送不會為它擋,不需要表態")
+    return None
+
+
+def _drift_ack_reread_verdicts(root, note_full, text, line):
+    """工作目錄 governance/reread-verdicts/ 裡點出這一條的紀錄 → 排序去重的對照指紋清單(取自檔名)。檔名要合正規式、note 欄等於
+    這篇(repo 相對路徑)、某列的比對字串(同第二層的取法)落在這一條;讀不了、太大、符號連結、不是一般檔、讀不成 JSON(含巢狀太深)、
+    形狀不對的那份略過(表態只認點得出的)。走訪與守門共用 _note_reread_wt_verdicts。"""
+    out = set()
+    for _name, fp, doc in _note_reread_wt_verdicts(root):
+        if isinstance(doc, dict) and doc.get("note") == note_full and isinstance(doc.get("rows"), list):
+            if line in _reread_note_hits(text, [r for r in doc["rows"] if isinstance(r, dict)])[0]:
+                out.add(fp)
+    return sorted(out)
+
+
+def _drift_ack_kind_fields(rec, kind, names, root, vault_rel, rel, text, line):
+    """種類自己的證據欄:m1 記名稱清單 names(排序去重);reread 記 verdicts(點出這一條的紀錄指紋)→ 擋下原因或 None。"""
+    if kind == "m1":
+        rec["names"] = sorted(set(names))
+    if kind != "reread":
+        return None
+    fps = _drift_ack_reread_verdicts(root, f"{vault_rel}/{rel}", text or "", line)
+    if not fps:
+        return (f"{rel} 第 {line} 行那一條沒有判定紀錄點出(工作目錄的 {_NOTE_REREAD_VERDICT_DIR}/ 裡沒有點出它的紀錄)"
+                "——沒有判定點出就不能事先表態")
+    rec["verdicts"] = fps
+    return None
+
+
 def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None, tracked_in=None):
     """lumos drift ack <節點> <行號> --kind … --reason "…":表態「這行照留」。
     c2、c3 先確認那一行當下真的是這一種發現,記下當時連著的已收尾計劃(related);每筆都記遞增序號 seq(存量漂移改法 [S8])。
     m1 記名稱清單 names(排序去重);不驗那一行現在真的是 m1(判定要推送範圍,ack 只有一棵樹)。
+    reread 記整條原文與 verdicts(工作目錄裡點出這一條的紀錄指紋),行號要是規則類條目的開頭行(Projects/舊句兩道轉擋_計劃)。
     probe、retire 帶 tracked_in 記綁的那篇(要開著的 Issue 或計劃、不能是同一篇),不帶記 until=今天+30 天
     (Projects/照留表態要有期限或去處_計劃〈做法〉3)。"""
     import datetime, secrets
@@ -37528,8 +38110,10 @@ def cmd_drift_ack(env, node, line, kind, reason, dry_run=False, names=None, trac
     token = "DACK-" + secrets.token_hex(4)
     rec = {"id": token, "path": f"{vault_rel}/{rel}", "text": _drift_ack_text(text, lines, line, kind), "kind": kind,
            "reason": reason.strip(), "date": datetime.date.today().isoformat(), "heading": head, "line": line}
-    if kind == "m1":
-        rec["names"] = sorted(set(names))
+    err = _drift_ack_kind_fields(rec, kind, names, root, vault_rel, rel, text, line)
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
+        return 2
     route, err = _drift_ack_route(env, rel, kind, tracked_in, rec, vault_rel)
     if err:
         print(f"擋下:{err}", file=sys.stderr)
@@ -37687,12 +38271,17 @@ def _drift_m1_special_chars(v):
     return _path_special_chars(v, surrogate=True)
 
 
+_DRIFT_FIX_HINT_TAIL = {"c4": "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)", "c6": ' --settled "<結論>"'}
+
+
 def _drift_fix_hint(kind, path, line, names=None):
     """一筆發現該印的改法指令 → [指令]。★提示的單一產生處★(存量漂移改法 [S10]):drift check 擋下與只列出、drift scan、
     doctor Z 段、計劃收尾的連帶待辦都從這裡拿,不再各自教人手改。
     m1(舊句檢查)帶名稱:每個名稱整段 --name=<名稱> 過 _drift_sh(旗標類名稱以 -- 開頭,--name --restore 會被 argparse
     當成少一個值);<為什麼照留> 是刻意的佔位字,原樣照貼會被 _drift_placeholder_err 擋成 rc 2。"""
     node = _drift_sh(path[:-3] if path.endswith(".md") else path, node=True)
+    if kind == "reread":
+        return [_drift_reread_hint(node, path, line)]
     if kind == "m1" and any(_drift_m1_special_chars(x) for x in [path, *(names or [])]):
         # 路徑或名稱帶控制字元、方向控制與零寬、行段分隔字元或不是 UTF-8:印出來的樣子跟實際字串不同(印之前 _esc_clean 還會把
         # 控制字元換成空白),照貼會找不到那篇、甚至寫到另一篇,不印可照貼的指令(代碼審 r2 資安席、r3 外家否決席、正確性席、邊界席)
@@ -37709,10 +38298,8 @@ def _drift_fix_hint(kind, path, line, names=None):
                 base + ' --keep --reason "<為什麼還沒解決>"']
     if kind == "c3":
         return [base + " --status <" + "/".join(sorted(_DRIFT_C3_STATUSES)) + '> [--reason "…"]']
-    if kind == "c4":
-        return [base + "   # 列證據、範本與預填好的 lumos set 整欄指令(c4 不自己寫檔)"]
-    if kind == "c6":
-        return [base + ' --settled "<結論>"']
+    if kind in _DRIFT_FIX_HINT_TAIL:      # 只在 drift fix 指令後面接一段的種類(c4、c6)
+        return [base + _DRIFT_FIX_HINT_TAIL[kind]]
     if kind == "c7":
         return [f'lumos summary-line {node} "<這一行要換掉的片段>" "<結案後的說法>"(或在這一行補「(已裁定:日期 結論)」)']
     if kind == "probe":
@@ -37725,6 +38312,15 @@ def _drift_fix_hint(kind, path, line, names=None):
                 f'lumos drift ack {node} {line} --kind retire --tracked-in <排進的那篇 Issue 或計劃> --reason "<為什麼照留>"'
                 "(不綁去處就 30 天後重列;這次新寫就已成立的,推送只認綁了去處的照留)"]
     return [base]
+
+
+def _drift_reread_hint(node, path, line):
+    """回頭重讀第二層一條的改法(Projects/舊句兩道轉擋_計劃〈輸出〉);路徑帶特殊字元時照 m1 的做法不印可照貼的指令。"""
+    if _drift_m1_special_chars(path):
+        return (f"改掉那一句;路徑含特殊字元({_esc_clean(_drift_c4_show_name(path), 300)}),這裡不印照貼的表態指令,"
+                "請手動表態(或先把檔名改掉)")
+    return (f'改掉那一句;確定照留就 lumos drift ack {node} {line} --kind reread --reason "<為什麼照留>"'
+            "(表態要提交才算)")
 
 
 def _drift_hint_key(f):
@@ -38522,8 +39118,9 @@ def _drift_config(text):
     """被檢查版本的 .lumos/config.json 內容 → (gate, warnings, explicit, old_sentence)。照 _note_audit_config 的讀法(每道閘各自一支,
     既有慣例);多回一個 explicit=專案有沒有自己寫 drift_check(寫壞了也算寫了)——doctor 的開關提醒要用,
     從同一次解析來,不另開第二支讀同一個鍵(代碼審 r4 架構對齊席)。
-    old_sentence(舊句檢查 m1 的開關,Projects/舊句檢查_計劃〈做法〉3)跟 gate 各自解析、互不牽連:沒寫、寫 null、
-    設定檔壞掉 → warn;寫了 block/warn/off 以外的值 → warn 並多一句提醒。"""
+    old_sentence(舊句檢查 m1 的開關,Projects/舊句檢查_計劃〈做法〉3)明寫的 block/warn/off 照原義、不受 gate 影響;
+    沒寫、寫 null、寫了看不懂的值 → 照 gate(看不懂的多一句提醒;gate 是 off 時沒寫的 m1 也不跑);設定檔壞掉、
+    drift_check 或整份設定不是物件 → block 並多一句(Projects/舊句兩道轉擋_計劃〈設計〉開關)。"""
     p = _drift_config_text_parts(text)
     return p["gate_mode"], p["gate_warns"] + p["os_warns"], p["explicit"], p["old_sentence"]
 
@@ -38531,7 +39128,7 @@ def _drift_config(text):
 def _drift_config_parts(cfg, bad):
     """各開關各自的解析結果(doctor 要分開講,不靠提醒文字拆;代碼審 r2 架構對齊席)。"""
     gate, gw, explicit = _drift_gate_config(cfg, bad)
-    osm, osw = _drift_old_sentence_config(cfg, bad)
+    osm, osw = _drift_old_sentence_config(cfg, bad, gate)
     rtm, rtw = _drift_retire_config(cfg, bad, gate)
     return {"gate_mode": gate, "gate_warns": gw, "explicit": explicit, "old_sentence": osm, "os_warns": osw,
             "retire": rtm, "rt_warns": rtw}
@@ -38562,25 +39159,30 @@ def _drift_config_text_parts(text):
     if text is not None:
         try:
             cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):      # 巢狀太深丟的是 RecursionError,同「讀不成 JSON」(代碼審發現)
             bad = True
     return _drift_config_parts(cfg, bad)
 
 
-def _drift_old_sentence_config(cfg, bad=False):
-    """→ (block|warn|off, [提醒])。預設 warn,跟 drift_check.gate 的預設(block)各管各的;設定檔讀不成 JSON 時也照 warn
-    並另講一句(gate 那句只講 gate 的預設,不另講會讓人以為舊句檢查也跟著擋)。"""
+def _drift_old_sentence_config(cfg, bad=False, gate="block"):
+    """→ (block|warn|off, [提醒])。old_sentence 沒寫、寫 null、值看不懂 → 照總開關 gate(沒寫 gate 是 block;gate 是 off 時
+    沒寫的 m1 也不跑);明寫的 block/warn/off 照原義、不受總開關影響。讀不成 JSON、drift_check 不是物件、整份設定不是物件 →
+    block 並各講一句「照預設 block」。Enzo 2026-10-09 人裁翻案,Projects/舊句兩道轉擋_計劃〈設計〉開關(原本預設固定 warn、
+    不跟 gate 走;RETIRE-IF 退回 warn 就把專案設定 drift_check.gate 或 old_sentence 寫 warn)。寫法照 _drift_retire_config,
+    壞設定另講一句是因為 gate 那句只講 gate 的預設,不另講會讓人以為舊句檢查不一樣。"""
     if bad:
-        return "warn", [".lumos/config.json 讀不成 JSON,舊句檢查(drift_check.old_sentence)照預設 warn"]
+        return _DRIFT_DEFAULT_GATE, [f".lumos/config.json 讀不成 JSON,舊句檢查(drift_check.old_sentence)照預設 {_DRIFT_DEFAULT_GATE}"]
+    if cfg is not None and not isinstance(cfg, dict):
+        return _DRIFT_DEFAULT_GATE, [f".lumos/config.json 不是物件,舊句檢查(drift_check.old_sentence)照預設 {_DRIFT_DEFAULT_GATE}"]
     dc = cfg.get("drift_check") if isinstance(cfg, dict) else None
     if isinstance(cfg, dict) and "drift_check" in cfg and not isinstance(dc, dict):
         # 父層寫壞(字串、null、陣列):gate 那邊講 drift_check 不是物件;這邊也講舊句檢查照預設(代碼審 r3 外家 finder 席)
-        return "warn", ["drift_check 不是物件,舊句檢查(drift_check.old_sentence)照預設 warn"]
+        return _DRIFT_DEFAULT_GATE, [f"drift_check 不是物件,舊句檢查(drift_check.old_sentence)照預設 {_DRIFT_DEFAULT_GATE}"]
     v = dc.get("old_sentence") if isinstance(dc, dict) else None
     if v is None:
-        return "warn", []
+        return gate, []
     if v not in _DRIFT_GATE_VALUES:
-        return "warn", [f"drift_check.old_sentence 只能是 block/warn/off,你寫的是 {v!r},照預設 warn"]
+        return gate, [f"drift_check.old_sentence 只能是 block/warn/off,你寫的是 {v!r},照總開關 {gate}"]
     return v, []
 
 
@@ -38746,7 +39348,8 @@ def _drift_check_c(root, mode, os_mode, base, tip, vault_rel):
     """drift check 的 c1 到 c5 與 probe 那段(原本 cmd_drift_check 的後半)→ rc_core。gate=off 時不跑、回 0。"""
     import time as _t
     if mode == "off":
-        print("存量漂移檢查:c1\u2013c5 與回頭條件關掉了(drift_check.gate=off);舊句檢查另有開關 drift_check.old_sentence,"
+        # gate=off 時沒寫 old_sentence 的 m1 跟著關(os_mode 已是 off);還會跑的一定是明寫了 old_sentence 的專案
+        print("存量漂移檢查:c1\u2013c5 與回頭條件關掉了(drift_check.gate=off);舊句檢查另有明寫的開關 drift_check.old_sentence,"
               "有改到程式檔時照跑" if os_mode != "off" else
               "存量漂移檢查:這個專案把這道檢查關掉了(drift_check.gate=off),跳過", file=sys.stderr)
         return 0
@@ -39409,17 +40012,13 @@ def _drift_m1_line_hits(idx, ln, tick=None):
 _DRIFT_M1_LONG_WHERE_MAX = 5    # 超長行印出、記住前幾個「筆記:行號」
 
 
-def _drift_m1_note_long(run, rel, lno, ln, names):
-    """超過 _DRIFT_M1_LINE_MAX 字的行(不掃)。行內以子字串出現任一候選名稱的,可能藏著舊句 → long_lines(照判不了算);
-    其他跟這次消失的名稱無關 → long_other(只計數、印位置,不擋)。逐一 in 也照截止時間(代碼審 r3 裁定:原本任何超長行都算判不了,
-    圖譜裡一行無關的長資料表就讓 block 的專案每次推送都被擋,跟「沒改到的讀不出只印」的原則相反)。"""
-    t = _drift_m1_ticker(run.check_time)
-    hit = False
-    for n in names:
-        t()
-        if n in ln:
-            hit = True
-            break
+def _drift_m1_note_long(run, rel, lno, ln, idx):
+    """超過 _DRIFT_M1_LINE_MAX 字的行(不掃)。過得了整字先篩(_drift_m1_line_names:名稱每一段 ASCII 詞都是這一行的完整詞、
+    整個名稱是子字串)的,可能藏著舊句 → long_lines(照判不了算);其他跟這次消失的名稱無關 → long_other(只計數、印位置,不擋)。
+    先篩照截止時間、單行成本有上限(代碼審 r3 裁定:原本任何超長行都算判不了,圖譜裡一行無關的長資料表就讓 block 的專案每次推送
+    都被擋,跟「沒改到的讀不出只印」的原則相反)。原本用純子字串,消失的名稱只是較長識別字的一段(get_user 對 get_user_id)也算有關;
+    old_sentence 沒寫照總開關、預設 block 之後這會誤擋沒設定的專案,改用先篩(Issues/舊句檢查超長行判準偏寬與留痕殘行 第一條)。"""
+    hit = bool(_drift_m1_line_names(idx, ln, run.check_time))
     key, where = ("long_lines", "long_where") if hit else ("long_other", "long_other_where")
     run.res[key] += 1
     if len(run.res[where]) < _DRIFT_M1_LONG_WHERE_MAX:
@@ -39441,7 +40040,7 @@ def _drift_m1_scan_note(run, rel, text, idx, gone, homes):
         if regs[i] not in _DRIFT_M1_NOTE_REGIONS or (i + 1) not in vis or ret[i + 1]:
             continue
         if len(ln) > _DRIFT_M1_LINE_MAX:
-            _drift_m1_note_long(run, rel, i + 1, ln, gone)
+            _drift_m1_note_long(run, rel, i + 1, ln, idx)
             continue
         toks = _drift_m1_line_hits(idx, ln, run.check_time)
         if not toks:
@@ -39511,10 +40110,10 @@ def _drift_old_sentence_check(root, base, tip, vault_rel, deadline, now=time.mon
 
 # ── m1 的印出與記帳 ──
 
-def _drift_unknown_hint(u):
-    """判不了那一句(_drift_report_must 與 m1 共用)。"""
+def _drift_unknown_hint(u, skip="LUMOS_SKIP_DRIFT_CHECK"):
+    """判不了那一句(_drift_report_must、m1 與回頭重讀共用;skip=那道閘的單次略過環境變數,回頭重讀傳 LUMOS_SKIP_REREAD_CHECK)。"""
     return (f"  判不了:{_esc_clean(u, 1000)}——判不了就放行等於一條繞過的路,所以算要處理;真的要推就單次略過(會留帳):"
-            "\n    LUMOS_SKIP_DRIFT_CHECK=1 git push")
+            f"\n    {skip}=1 git push")
 
 
 def _drift_m1_long_note(res):
@@ -39699,9 +40298,10 @@ def _drift_m1_report(root, mode, base, tip, vault_rel, res):
     elif mode == "block" and res.get("long_lines"):
         print(_drift_unknown_hint(f"舊句檢查有 {res['long_lines']} 行超過 {_DRIFT_M1_LINE_MAX} 字沒看(把那幾行拆短就能判)"),
               file=sys.stderr)
-    if mode == "block" and busy:     # 代碼審 r2 正確性席:m1 擋下時,改的是 old_sentence,不是 gate
+    if mode == "block" and busy:     # 沒明寫 old_sentence 就照 gate(Projects/舊句兩道轉擋_計劃);明寫的不受 gate 影響
         print("  舊句檢查擋下的:要整個專案先只提醒,是把 .lumos/config.json 的 drift_check.old_sentence 設成 warn"
-              "(改 drift_check.gate 不影響這一項)", file=sys.stderr)
+              "(沒明寫 old_sentence 的專案,drift_check.gate 設 warn 也會讓這一項只提醒,但會連 c1 到 c5 一起;"
+              "明寫了 old_sentence=block 的,改 gate 不影響這一項)", file=sys.stderr)
     _drift_m1_print_extra(res)
     _drift_m1_print_rows(res, handle, listed)
     _drift_m1_ledger(root, mode, base, tip, res, (handle, listed), line)
@@ -39932,12 +40532,19 @@ def _drift_retire_doctor_lines(parts):
 
 def _drift_old_sentence_doctor_lines(parts):
     """舊句檢查開關(drift_check.old_sentence)自己的一行(代碼審 r2 正確性席:原本接在 gate 那行後面,gate 預設 block 不唸時
-    old_sentence 寫了 off 或寫錯值就沒地方講):寫錯值(含設定檔壞掉、drift_check 不是物件)、寫了 off 各一句;預設的 warn 與
-    比預設嚴的 block 不唸(跟 gate 那行同一個原則;代碼審 r3 正確性席)。"""
+    old_sentence 寫了 off 或寫錯值就沒地方講):寫錯值(含設定檔壞掉、drift_check 不是物件)講沒讀懂與實際怎麼處理;
+    沒寫時照總開關,所以只有比總開關鬆的才另唸(明寫 off、或 gate=block 時明寫 warn),跟 RULE 撤除條件那行同一個原則;
+    gate 是 off 時整道都關,gate 那行已經講了,不重複(Projects/舊句兩道轉擋_計劃〈設計〉開關)。"""
+    mode = parts["old_sentence"]
+    what = {"block": "推送時會擋", "warn": "推送時只提醒", "off": "推送時不會提醒"}[mode]
     if parts["os_warns"]:
-        return [f"舊句檢查的設定沒讀懂({parts['os_warns'][0]})——程式刪掉或改名後筆記還在講舊名稱的句子,推送時只提醒"]
-    if parts["old_sentence"] == "off":
+        return [f"舊句檢查的設定沒讀懂({parts['os_warns'][0]})——程式刪掉或改名後筆記還在講舊名稱的句子,{what}"]
+    if parts["gate_mode"] == "off" and mode == "off":
+        return []
+    if mode == "off":
         return ["這個專案把舊句檢查關掉了(drift_check.old_sentence=off)——程式刪掉或改名後筆記還在講舊名稱的句子,推送時不會提醒"]
+    if mode == "warn" and parts["gate_mode"] == "block":
+        return ["這個專案的舊句檢查是 warn(drift_check.old_sentence)——程式刪掉或改名後筆記還在講舊名稱的句子,推送時只提醒、不會擋"]
     return []
 
 
@@ -49816,17 +50423,17 @@ HELP_WHEN = {
     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
-    "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(只提醒)。",
+    "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
     "note-audit prepare": "推送前要審新寫的筆記時:算出這段範圍還沒被判定涵蓋的行,切成清單檔(每份最多 150 行)給判定者。",
     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
-    "note-audit reread-check": "推送前掛鉤與 CI 呼叫的提醒:列出還沒對照過這一版程式的守檔筆記;只提醒、任何情況都回 0。",
+    "note-audit reread-check": "推送前掛鉤與 CI 呼叫:還沒對照過這一版程式的守檔筆記、判定點出又沒處理的規則類條目;帶 --gate(掛鉤)時照 note_reread.gate 擋,不帶(CI、手動)只印、回 0。",
     "drift": "已經寫進去的句子因為別處狀態變了而過期:check 推送時擋、scan 健檢全圖譜、fix 用工具改掉一筆、ack 表態照留、exam 拿考卷考。",
     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出);同一次也跑舊句檢查 m1:"
-                   "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫是 warn 只提醒,block 才擋)。",
+                   "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫就照總開關 drift_check.gate:預設擋,gate 寫 warn 只提醒、寫 off 不跑;明寫的值不受 gate 影響)。",
     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
     "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
@@ -50799,7 +51406,7 @@ def main():
                       help="提交時也查筆記格子(必有的 [鍵:值]);掛鉤帶這個參數才開擋。★這個參數永久保留★:已更新的專案掛鉤可能帶著它,"
                            "程式不認得會讓參數解析失敗、整道檢查靜默放行(Projects/筆記格子寫法與過期檢查_計劃〈回退〉)")
 
-    na_p = sub.add_parser("note-audit", help="筆記內容審:推送前派判定者逐行判新寫的筆記是不是程式碼推得出來;reread-* 是回頭重讀守檔筆記(只提醒,spec=Projects/守檔筆記對照改動_計劃);spec=Projects/筆記內容審_計劃")
+    na_p = sub.add_parser("note-audit", help="筆記內容審:推送前派判定者逐行判新寫的筆記是不是程式碼推得出來;reread-* 是回頭重讀守檔筆記(本機推送前擋,spec=Projects/舊句兩道轉擋_計劃);spec=Projects/筆記內容審_計劃")
     nasub = na_p.add_subparsers(dest="nacmd", required=True)
     nap = nasub.add_parser("prepare", help="算出待審的行、切成清單檔與派工詞(每份不超過 150 行)")
     nap.add_argument("--diff", dest="na_diff", required=True, metavar="A..B")
@@ -50837,15 +51444,18 @@ def main():
     narr.add_argument("--prepared", dest="na_prepared", required=True, metavar="項目檔")
     narr.add_argument("--report", dest="na_report", required=True, metavar="報告")
     narr.add_argument("--repo", dest="na_repo", default=None)
-    narc = nasub.add_parser("reread-check", help="推送前提醒:列出還沒對照過這一版程式的守檔筆記(只提醒、恆回 0)")
+    narc = nasub.add_parser("reread-check", help="推送前檢查:還沒對照過這一版程式的守檔筆記、判定點出又沒處理的規則類條目;"
+                                                  "帶 --gate 而且 note_reread.gate 是 block 才擋(只有推送前掛鉤帶),不帶恆回 0")
     narc.add_argument("--diff", dest="na_diff", required=True, metavar="A..B")
+    narc.add_argument("--gate", dest="na_gate", action="store_true",
+                      help="照設定擋:block 時沒對照、規則類條目沒處理、判不了回 1,參數錯回 2(推送前掛鉤帶;CI 不帶)")
     narc.add_argument("--push-remote", dest="na_push_remote", default=None, metavar="遠端名", help=_push_help[0])
     narc.add_argument("--pushed-ref", dest="na_pushed_ref", default=None, metavar="ref", help=_push_help[1])
     narc.add_argument("--repo", dest="na_repo", default=None)
 
     dr_p = sub.add_parser("drift", help="存量漂移守衛:已經寫進去的句子因為別處狀態變了而過期;spec=Projects/存量漂移防線_計劃")
     drsub = dr_p.add_subparsers(dest="drcmd", required=True)
-    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;沒寫設定就是 block,.lumos/config.json 寫 drift_check.gate=warn 只印)")
+    drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;沒寫設定就是 block,.lumos/config.json 寫 drift_check.gate=warn 只印;舊句檢查 drift_check.old_sentence 沒寫就照這個總開關,明寫 block/warn/off 不受影響)")
     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
     drc.add_argument("--repo", dest="dr_repo", default=None)
     drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",
@@ -51128,7 +51738,7 @@ def main():
             return cmd_note_audit_reread_record(repo=args.na_repo, prepared=args.na_prepared, report=args.na_report)
         if args.nacmd == "reread-check":
             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
-                                               push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref)
+                                               push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref, gate=args.na_gate)
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
     if args.cmd == "push-range":
         return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
