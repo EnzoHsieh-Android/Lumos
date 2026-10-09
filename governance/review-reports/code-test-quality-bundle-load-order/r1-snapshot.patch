@@ -1,0 +1,270 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index 4c96fa72..3777a410 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -57,10 +57,12 @@ PITFALL: 另看 argv 首項會漏掉合法 --vault 全域選項 [出處:code-tes
+ 
+ PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、worker 繼續跑」；worker 繼承 stdout/stderr 時還會讓已退出的 launcher 被誤判逾時。CLI capture 與 handbook model runner 都建立獨立 POSIX 程序群，必須採同一項返回前清理政策 [出處:code-test-quality-r4-repair/r1-architecture-report.md A1 與 r2-boundary-report.md B1] [防回歸:test_failed_capture_stops_stream_detached_worker、test_failed_capture_stops_worker_that_inherits_streams、test_cancelled_capture_stops_child]。可信測試 runner 正常使用 worker 仍屬本程序群責任；子程序主動 setsid 逃逸不在可攜式保證內。CLI capture、選配 Semgrep backend 與 handbook 模型命令三個入口共用本檔同一個 runner，不各自保留清理實作；繼承管線的控制要先證明 worker 確實寫進同一條管線，再斷言它已被清掉。
+ 
+ WHY: 共用 runner 用 CaptureTimeout 與 CaptureInterrupted 兩個 ValueError 子型別回報逾時與 SIGTERM 中斷，呼叫端按型別分類，中斷一律往上傳、不收成單一輸入的錯誤 [出處:code-test-quality-r4-repair/r3-邊界-sonnet.md BND-1、r3-架構對齊-sonnet.md ARC-2] [因:改用訊息字串比對時，Semgrep backend 把 SIGTERM 收成單檔 unavailable 後繼續掃下一檔，多拖一整段 backend 逾時；字串一改，逾時也會悄悄變成 unavailable] [不選:各呼叫端比對例外訊息字串] [代價:直接執行 scanner 收到 SIGTERM 時以 traceback 非零結束，經 lumos 入口才轉成結構化不完整結果] [test:t_test_quality_scan_cli]。控制方法為 test_sigterm_during_semgrep_stops_scan_and_backend；子型別保留原訊息，CLI capture 的 receipt reason 不變；逾時例外帶著已讀到的部分輸出，供 handbook 保存原始事件。
+ 
+ PITFALL: 逾時邊界上 launcher 剛退出時，macOS 對只剩殭屍 leader 的程序群 killpg 回 EPERM，權限錯誤從 finally 蓋掉原本的回傳或逾時 [出處:code-test-quality-r4-repair/r4-邊界資源-sonnet.md BND4-1] [根因:清理只容忍 ProcessLookupError] [防回歸:test_zombie_only_group_permission_error_is_not_fatal]。leader 被 reap 之前 PGID 不會被別人重用，所以 EPERM 一律視為已無可清；控制用注入的 EPERM 驗呼叫仍正常回傳，因為真實競態 300 次只出現十幾次、不能當穩定測試。
+ 
+ WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整性與註冊入口；CLI其他子命令仍各歸原家。來源：第二輪部署低風險計劃與混裝控制。
+ 
+ PITFALL: test-quality 三支 bundle 檔加進隨工具安裝的清單、又新增 test-quality 子指令後，四道同步守衛在分支上一直是紅的，直到推送前跑全套才發現：文件寫的頂層指令數、每個子指令 --help 的「什麼時候用」、指令總目錄字數上限、提交前與提交後掛鉤的豁免清單 [出處:2026-10-09 測試品質分支推送前全套] [根因:分支開發期間只跑相關子集，這幾道守衛不在子集裡] [防回歸:t_precommit_whitelist_drift_guard、t_every_subcommand_has_when、t_docs_command_count、t_command_index_complete]。新增子指令或 vendored 檔時，連同這四處一起改；豁免在來源 repo 本身照樣不生效。
++
++PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器排第一、頂層 import 共用 runner，被依賴者還沒從已驗 bytes 登記，標準 import 就從磁碟另載一份並吃同時間戳同大小的舊 bytecode；指紋檢查回報全部合格，scan --semgrep 卻跑舊判讀 [出處:governance/review-reports/測試品質部署配套校驗/r1-通才-sonnet.md、r1-邊界-sonnet.md、r1-接手-sonnet.md 三席獨立重現] [根因:載入順序沒照依賴、載入後沒核對引用來源] [防回歸:test_semgrep_adapter_uses_verified_runner_not_stale_bytecode、test_fifo_sidecar_does_not_hang_other_commands、test_sidecar_runtime_error_only_blocks_test_quality]。改成依賴順序 `_TEST_QUALITY_LOAD_ORDER` 載入，載入後逐一核對引用的配套物件都是已驗那份；兩道各自擋得住，順序改錯時守衛照樣回部署不完整。只收一般檔案、任何載入例外只讓 test-quality 回不完整。
+diff --git a/scripts/lumos b/scripts/lumos
+index 2eded591..6a0a42ba 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49438,48 +49438,73 @@ def cmd_python_path():
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+ _TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': '97b1f6e950975add3c57029569974d2f981d02d017a3b23a5181e3bb20fad01d'}
+ 
+ 
++# 載入順序=依賴順序:轉接器頂層 import 共用 runner,被依賴者要先從已驗 bytes 登記,
++# 否則標準 import 會從磁碟(含舊 bytecode)另載一份(設計審 測試品質部署配套校驗 r1)。
++_TEST_QUALITY_LOAD_ORDER = ("test_quality.py", "test_quality_semgrep.py", "test_quality_scan.py")
++
++
++def _test_quality_bundle_unverified_refs(modules):
++    """回第一個「引用了配套模組物件、卻不是已驗那份」的位置;都對得上回 None。"""
++    for name, module in modules.items():
++        for attr, value in list(vars(module).items()):
++            owner = getattr(value, "__module__", None)
++            if owner in modules and owner != name:
++                if getattr(modules[owner], getattr(value, "__name__", attr), None) is not value:
++                    return f"{name}.{attr} 不是已驗的 {owner}"
++    return None
++
++
+ def _test_quality_bundle_sources():
++    import stat as _stat
+     folder = Path(__file__).resolve().parent
+     required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+     if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
+         raise ValueError("配套指紋清單未對齊")
+     sources = {}
+-    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
++    for name in sorted(_TEST_QUALITY_BUNDLE_DIGESTS, key=_TEST_QUALITY_LOAD_ORDER.index):
++        expected = _TEST_QUALITY_BUNDLE_DIGESTS[name]
++        if not _stat.S_ISREG((folder / name).stat().st_mode):   # FIFO/裝置檔讀了會卡住每個指令
++            raise ValueError("配套檔不是一般檔案:" + name)
+         with (folder / name).open("rb") as stream:
+             raw = stream.read(10 * 1024 * 1024 + 1)
+         if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
+             raise ValueError("配套版本不一致:" + name)
+         sources[name.removesuffix(".py")] = (folder / name, raw)
+     return sources
+ 
+ 
+ def _test_quality_load_bundle():
+     import importlib.util
+     missing = object()
+     previous = {}
+     try:
+         sources = _test_quality_bundle_sources()
+         previous = {name: sys.modules.get(name, missing) for name in sources}
++        loaded = {}
+         for name, (path, raw) in sources.items():
+             spec = importlib.util.spec_from_file_location(name, path)
+             module = importlib.util.module_from_spec(spec)
+             sys.modules[name] = module
+             exec(compile(raw, str(path), "exec"), module.__dict__)
+-    except (OSError, ValueError, ImportError, SyntaxError) as exc:
++            loaded[name] = module
++        stray = _test_quality_bundle_unverified_refs(loaded)
++        if stray:
++            raise ValueError("配套載入混到未驗來源:" + stray)
++    except Exception as exc:   # 配套任何錯誤都只讓 test-quality 回部署不完整,不拖垮其他指令
+         for name, module in previous.items():
+             if module is missing:
+                 sys.modules.pop(name, None)
+             else:
+                 sys.modules[name] = module
+         return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
+     return None
+ 
+ 
+ def main():
+@@ -49694,21 +49719,21 @@ def main():
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
+     if quality_deployment_error:
+         quality = sub.add_parser("test-quality", add_help=False,
+                                  help="測試品質工具未完整部署，請更新來源與vendor")
+         quality.add_argument("quality_args", nargs=argparse.REMAINDER)
+-        quality.add_argument("--help", action="store_true")
++        quality.add_argument("-h", "--help", action="store_true")
+     else:
+         from test_quality import add_parser as _tq_parser
+         _tq_parser(sub)
+ 
+     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
+     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+@@ -50506,27 +50531,21 @@ def main():
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+     if args.cmd == "prose-lint":
+         return cmd_prose_lint(args.path)
+     if args.cmd == "test-quality":
+         if quality_deployment_error:
+             print(json.dumps({"verdict": "not_assessed", "complete": False,
+                               "reason": quality_deployment_error}, ensure_ascii=False))
+             return 2
+-        try:
+-            from test_quality import dispatch as _tq_dispatch
+-        except ModuleNotFoundError as exc:
+-            if exc.name != "test_quality":
+-                raise
+-            print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
+-            return 2
++        from test_quality import dispatch as _tq_dispatch   # 配套已從驗過的 bytes 登記;缺檔在上面已回結構化錯誤
+         return _tq_dispatch(args)
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+index f7784ab5..3666b7cc 100644
+--- a/scripts/test_test_quality_cli.py
++++ b/scripts/test_test_quality_cli.py
+@@ -1,16 +1,18 @@
+ #!/usr/bin/env python3
+ """Independent evidence validity controls; no implementation formula copied into expected."""
+ 
+ import hashlib
+ import os
++import re
+ import signal
++import stat
+ import time
+ import importlib.util
+ from unittest import mock
+ import json
+ from pathlib import Path
+ import shutil
+ import subprocess
+ import sys
+ import tempfile
+ import unittest
+@@ -804,20 +806,97 @@ class QualityCLI(unittest.TestCase):
+             cwd=self.root,
+             capture_output=True,
+             text=True,
+             timeout=20,
+         )
+         self.assertEqual(run.returncode, 2, run.stdout)
+         report = json.loads(run.stdout)
+         self.assertEqual(report["status"], "invalid")
+         self.assertIn("suite summary inconsistent with testcase rows", report["reason"])
+ 
++    def test_semgrep_adapter_uses_verified_runner_not_stale_bytecode(self):
++        target = self.copied_bundle()
++        from importlib.machinery import SourceFileLoader
++
++        path = target / "test_quality.py"
++        good = path.read_bytes()
++        old = good.replace(b"    import time\n", b"    1/0\n", 1)
++        self.assertLess(len(old), len(good))
++        path.write_bytes(old + b" " * (len(good) - len(old)))
++        loader = SourceFileLoader("quality_old_runner_cache", str(path))
++        module_spec = importlib.util.spec_from_loader(loader.name, loader)
++        loader.exec_module(importlib.util.module_from_spec(module_spec))
++        cache = Path(importlib.util.cache_from_source(str(path)))
++        self.assertTrue(cache.exists(), "stale runner cache must exist before restoration")
++        old_stamp = path.stat()
++        path.write_bytes(good)
++        os.utime(path, ns=(old_stamp.st_atime_ns, old_stamp.st_mtime_ns))
++        self.assertEqual(path.read_bytes(), good, "source actually restored")
++        source = self.root / "Test.swift"
++        source.write_text("func testTotal() { XCTAssertEqual(total(3, 5), 15) }")
++        fake = self.root / "semgrep"
++        fake.write_text(
++            "#!" + sys.executable + "\nimport json,sys\n"
++            "print(json.dumps({'results':[],'errors':[],'paths':{'scanned':[sys.argv[-1]]},'version':'fixture'}))\n"
++        )
++        fake.chmod(0o700)
++        run = subprocess.run(
++            [sys.executable, str(target / "lumos"), "test-quality", "scan", str(source),
++             "--json", "--semgrep", str(fake)],
++            cwd=self.root, capture_output=True, text=True, timeout=20,
++        )
++        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
++        self.assertEqual(json.loads(run.stdout)["inputs"][0]["status"], "scanned")
++
++    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
++    def test_fifo_sidecar_does_not_hang_other_commands(self):
++        target = self.copied_bundle()
++        sidecar = target / "test_quality_scan.py"
++        sidecar.unlink()
++        os.mkfifo(sidecar)
++        self.assertTrue(stat.S_ISFIFO(sidecar.stat().st_mode), "sidecar really replaced by a FIFO")
++        version = subprocess.run([sys.executable, str(target / "lumos"), "--version"],
++                                 capture_output=True, text=True, timeout=10)
++        self.assertEqual(version.returncode, 0, version.stderr)
++        quality = subprocess.run([sys.executable, str(target / "lumos"), "test-quality", "capabilities"],
++                                 capture_output=True, text=True, timeout=10)
++        self.assertEqual(quality.returncode, 2)
++        self.assertFalse(json.loads(quality.stdout)["complete"])
++
++    def test_incomplete_bundle_short_help_is_structured(self):
++        target = self.copied_bundle()
++        (target / "test_quality_semgrep.py").unlink()
++        run = subprocess.run([sys.executable, str(target / "lumos"), "test-quality", "-h"],
++                             capture_output=True, text=True, timeout=10)
++        self.assertEqual(run.returncode, 2, run.stderr)
++        report = json.loads(run.stdout)
++        self.assertFalse(report["complete"])
++        self.assertIn("lumos update", report["reason"])
++
++    def test_sidecar_runtime_error_only_blocks_test_quality(self):
++        target = self.copied_bundle()
++        sidecar = target / "test_quality_scan.py"
++        broken = sidecar.read_bytes() + b"\nraise RuntimeError('sidecar import failure')\n"
++        sidecar.write_bytes(broken)
++        lumos = target / "lumos"
++        text = lumos.read_text(encoding="utf-8")
++        old_digest = re.search(r"'test_quality_scan\.py': '([0-9a-f]{64})'", text).group(1)
++        new_digest = hashlib.sha256(broken.replace(b"\r\n", b"\n")).hexdigest()
++        lumos.write_text(text.replace(old_digest, new_digest), encoding="utf-8")
++        version = subprocess.run([sys.executable, str(lumos), "--version"],
++                                 capture_output=True, text=True, timeout=10)
++        self.assertEqual(version.returncode, 0, version.stderr)
++        quality = subprocess.run([sys.executable, str(lumos), "test-quality", "capabilities"],
++                                 capture_output=True, text=True, timeout=10)
++        self.assertEqual(quality.returncode, 2)
++        self.assertIn("sidecar import failure", json.loads(quality.stdout)["reason"])
++
+     def test_utf16_dtd_is_not_a_valid_receipt(self):
+         xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
+         command = [
+             sys.executable,
+             "-c",
+             "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+         ]
+         rc, report = self.capture("", command=command)
+         self.assertEqual(rc, 2)
+         self.assertEqual(report["status"], "invalid")

@@ -23,6 +23,7 @@ related:
   - "[[Systems/graph-sync-coverage]]"
 verified_by:
   - "[[Verification/2026-07-10_cochange守衛]]"
+  - "[[Verification/測試品質分支第二輪修復驗證]]"
 aliases:
   - 共改漏改守衛
 about_code:
@@ -51,3 +52,7 @@ about_code:
 
 - [[Projects/cochange守衛_計劃]]
 - [[Systems/lumos-cli-lifecycle]]
+
+## 程式分類的接線補齊
+
+PITFALL: 收證附件反例只測 Python，未辨識 PHP 與 Node 模組副檔名 [出處:code-test-quality-native-push/r2-邊界-codex.md] [防回歸:t_code_exts_lists_agree]。既有五份共享分類同步擴充；沒有改共改關聯的計數、門檻或放行語意。

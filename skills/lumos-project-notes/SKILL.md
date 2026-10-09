@@ -6,6 +6,8 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 
 圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
 
+**實作要寫測試、修 bug、重構或接入測試品質工具時**：先讀 `commands/test-quality-standard.md`，依各棧 runner 提供獨立判準來源與相關故障證據；疑似綁死實作的行為測試再做保持行為的重構檢查。
+
 **指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
 
 ## 1. 進場(每個子任務都重來,不是 session 開頭一次)
@@ -25,6 +27,8 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
 
 ## 2. 動手前
+
+- 寫或改測試先讀 `commands/03-寫回圖譜.md`〈實作測試品質〉；先列輸入、預期結果、判準來源與應抓到的錯誤。
 
 - `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
 - `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。

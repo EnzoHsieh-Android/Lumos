@@ -1,0 +1,466 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index b92fde6b..85d51643 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -91,20 +91,21 @@ verified_by:
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_doctor-run事件落地]]"
+   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+   - "[[Verification/2026-08-22_指令索引與情境探針]]"
+   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
+   - "[[Verification/2026-09-04_Codex完全支援S3量測驗收]]"
+   - "[[Verification/2026-10-05_整段代碼審第三輪阻擋驗證]]"
+   - "[[Verification/2026-10-05_事件帳Python段實作]]"
+   - "[[Verification/測試品質分支推送前修復驗證]]"
++  - "[[Verification/測試品質第四輪修補驗證]]"
+ about_code:
+   - get.sh
+   - scripts/lumos
+   - scripts/merge-claude-settings.py
+   - install.sh
+   - get.ps1
+   - scripts/install-hooks.sh
+   - scripts/install-graph-toolchain.sh
+ ---
+ # lumos-cli-lifecycle
+@@ -159,10 +160,11 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
+ 
+ - **裝**:`_sync_global_hooks(src, "claude")` 在合併器之前呼叫一次 `_sync_claude_plugin()`(只留這一個呼叫點;它不讀 settings.json,合併器失敗提前返回也不受影響)。bootstrap 起安裝子行程時把 `LUMOS_HOME` 傳進去,子行程的 `_lumos_src()` 才會指到這次的來源(代碼審 r1 合約席抓到原本沒傳)。來源先解成絕對真實路徑再交給 claude。所以 `lumos install`、`update`、`bootstrap`、`init`、vendor 都會確保外掛在。市集來源一律 `_lumos_src()`,不用執行中這支 lumos 的位置:資料夾型市集是直接讀來源資料夾,登記成會被刪的 worktree 外掛就會失效。同名市集指向別的本機路徑 → 先移除再加(兩邊正規化後比);同名但不是本機資料夾(使用者自己加的)→ 不動、回 failed。add 或 install 回錯時再查一次清單,已經是想要的狀態就算成功(另一支 install 同時跑先做完了);移除舊市集後加新的失敗,訊息教重跑 `lumos install --force`。只算使用者範圍裝的那份(專案範圍那份只在那個專案生效)。claude 的列表輸出不是「物件組成的清單」一律當失敗、不丟例外。
+ - **狀態**:外掛步驟自己回 ok / absent(找不到 claude 或測試開關)/ no-source(來源 repo 沒有市集檔,或市集檔沒列那一支)/ failed,每支各印一行(都走 `_plugin_sync_msg`),回傳取最差的一支,★不併進 `_sync_global_hooks` 的回傳字串★——`cmd_install` 只認 merge-failed、`_sync_global_claude` 用等於 ok 判斷,混進新值會誤判。所以外掛失敗不改 `lumos install` 的回傳碼。那一行會出現在呼叫端印的「全域 hooks 已同步」之前,刻意不為順序改四個呼叫端。
+ - **移除**:`cmd_uninstall` 開頭的探針拒絕之後呼叫 `_teardown_claude_plugin()`;`lumos teardown` 第三步就是 `cmd_uninstall`,兩個指令都會移除、都受探針保護。外掛有列出就移除;市集存在且來源是我們的就以 `--scope user` 移除(外掛沒列出也要);兩者都沒有或找不到 claude 時安靜略過;成功印出移掉了什麼;失敗印還沒做成那幾步的手動指令。teardown 的確認清單有列出外掛與市集。只移除使用者範圍那份(`--scope user`;專案範圍那份不是我們裝的,不帶範圍 uninstall 還會失敗);任一支外掛移除失敗就保留市集(見〈多支外掛〉);`cmd_uninstall(source)` 收 `teardown --source` 傳下來的來源(代碼審 r2)。安裝端 add 或 install 回錯時最多再等三次、每次一秒再查(另一支 install 可能還在寫);來源不是預設位置或有設 `LUMOS_HOME` 時會印出登記的來源路徑;救援訊息依哪一步失敗照實說。★不要掛在 `_teardown_global_claude`★(那是只有測試呼叫的相容包裝)也不要掛在 `_teardown_global_hooks`(設定檔壞掉時會提前返回)——設計審第二輪兩席獨立抓到。
+ - **測試隔離**:測試執行器在建拋棄式家目錄的同一處設 `LUMOS_SKIP_CLAUDE_PLUGIN=1` 並清掉 `CLAUDE_CONFIG_DIR`,既有的 install / uninstall 測試因此不會碰真的 claude;要測外掛的兩支自己取消開關、放一支假的 claude。測試:`t_install_registers_ledger_plugin`、`t_teardown_removes_ledger_plugin`、`t_runner_isolates_claude_plugin`、`t_install_registers_guard_plugin`、`t_lumos_plugin_install_edge_cases`(裝完確認重試、訊息走共用函式、移除時判市集歸屬、市集檔怪內容)。事件帳本身見 [[Systems/lumos事件帳]]。
+ 
+ WHY: 新test-quality sidecar沿精確vendor白名單部署及清理 [出處:[[Projects/測試品質工具接線_計劃]]] [因:來源CLI可用但consumer沒模組會成空殼，精確路徑避免刪除使用者同目錄其他檔案]。執行卷證邊界歸[[Systems/test-quality-cli]]。
+ 
+ PITFALL: 部署缺少遞移sidecar曾漏過core模組的備援攔截 [出處:code-test-quality-native-push/r1-邊界-codex.md b1] [防回歸:test_partial_sidecar_returns_structured_invalid、test_missing_all_sidecars_explains_update、test_missing_quality_sidecar_does_not_break_legacy_help]。精確名單沿安裝白名單取得，維持單一來源；舊命令仍可用，新的不完整命令要求update。
+ 
++PITFALL: test-quality sidecar 內容變更卻漏更 bundle 指紋時，consumer 會把整套工具判為配套版本不一致 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_test_quality_cli.py 全套]。拒收是預期的安全行為；修改白名單內 sidecar 時，來源檔與 `scripts/lumos` 的內嵌指紋必須在同一提交更新。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index 7b39ea2d..d4b0bf27 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -14,20 +14,22 @@ tags:
+   - type/system
+   - status/doing
+   - scope/evals
+ summary: |-
+   WHY: 接入來源掃描與明示執行收證，分開機械核對與業務判準 [出處:2026-10-08 使用者要求功能接線與建立測試專案] [因:單純文件與固定示範無法供消費專案直接使用，報告身份和快照須核對]
+ verified_by:
+   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
+   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
+   - "[[Verification/測試品質分支推送前修復驗證]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
++  - "[[Verification/測試品質分支第三輪審查停點]]"
++  - "[[Verification/測試品質第四輪修補驗證]]"
+ ---
+ # test-quality-cli
+ 
+ ## 判準與收證分工
+ 
+ WHY: 明示執行trusted命令與唯讀核對分開 [出處:[[Projects/測試品質工具接線_計劃]]] [因:暫存來源不隔離外部服務，收證只提供可重放內容，不能讓工具假裝評估業務答案或報告真實性]。呼叫者明示設定、runtime、lock等context；快照不自動證明完整依賴閉包。既有風險放行閘保持原流程。
+ 
+ PITFALL: Node原生無匹配測試仍可退出0，甚至把檔案包裝算作passed [出處:[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]] [根因:runner整體退出碼與實際named-case選取不是同一件事] [防回歸:test_wrapper_success_without_selected_target_invalid及原生zero-selected卷證]。用capture --target與check --target核對實際身份，不能只看測試數或退出0。
+ 
+ REVISIT:[when-file:scripts/test_quality.py][by:2026-11-08] 擴充reporter或框架前先驗其真實身份與assertion歸因，format支援不等同原生framework資格。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+index dee68059..a581c47f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+@@ -16,20 +16,21 @@ tags:
+   - scope/evals
+ summary: |-
+   WHY: 凍結兩臂與題目後才量測手冊效果 [出處:2026-10-07 使用者要求先實驗再決定推送] [因:掃描器考卷通過不能證明模型會讀取或遵循規範]
+ related:
+   - "[[Systems/test-quality-scan]]"
+ verified_by:
+   - "[[Verification/2026-10-07_測試手冊措辭兩臂試行]]"
+   - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
+   - "[[Verification/測試品質分支推送前修復驗證]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
++  - "[[Verification/測試品質第四輪修補驗證]]"
+ ---
+ # test-quality-handbook
+ 
+ ## 判準與限制
+ 
+ WHY: 入口與行為分兩道量測 [出處:[[Projects/測試品質掃描試行_計劃]]] [因:強制載入後的好表現不代表會自動載入]。入口先用技能目錄與 Read 模擬描述選擇，行為則在兩臂提供相應規範。原生 Skill 及真實專案的推論需相應證據。
+ 
+ WHY: 只執行受限的 unittest 題目 [出處:2026-10-07 手冊效果固定試行] [因:生成測試不是可信程式，試行只需固定斷言與函式呼叫]。這是考卷語法限制，不是通用 Python 沙盒；不在允許語法內的測試列無效，不當成品質不良。零測試、錯誤基準與匯入錯誤不算故障被抓到。
+ 
+ WHY: 新措辭組合只比較整體效果 [出處:2026-10-07 使用者三點提醒] [因:正面目標與逐項完成條件同时改動，沒有拆臂就不能歸因單項]。兩次重複僅支援小型試行觀察；舊新版皆滿分的題目記無鑑別力。
+@@ -52,10 +53,12 @@ WHY: 原生描述用最小 project skill 對照 [出處:Claude Code 官方 skill
+ PITFALL: 正常有限迴圈被考卷語法拒絕會使測試效果失去可比性 [出處:[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]] [repro:python3 -m unittest discover -s governance/eval -p test_test_quality_handbook.py -v]。保留原始分數與生成版本，補齊固定字面值迴圈語法後對兩臂全部草稿一致重算，不能把語法不支援算成品質差。
+ 
+ PITFALL: 模型命令逾時只停止claude直屬程序，子工作者仍可能繼續消耗 [出處:code-test-quality-native-push/r1-資源-codex.md r2] [防回歸:test_model_timeout_stops_worker_without_paid_call]。控制使用PATH前置可確認的fake claude，真的生成工作者再逾時、確認停止，不消耗模型額度。模型命令使用獨立POSIX程序群組；本次不延伸Windows資格。語法限制與模型提交計分分開，沿既有固定題grammar，不宣稱一般Python沙盒。
+ 
+ 
+ ## 模型程序清理控制的歸屬
+ 
+ WHY: 模型程序清理控制回到 handbook 自有測試入口 [出處:code-test-quality-native-push/r2-架構-codex.md、r2-defender.md] [因:原先修正關卡經 CLI 控制已守住，但只跑本模組控制的日後維護會漏驗；此為所有權補齊，不宣稱已證 runtime 回歸]。獨立 fake executable 先驗實際 worker 啟動，再觀察逾時後停止；既有 grader 控制同一入口執行，runner 入口為 t_test_quality_handbook_controls。
+ 
+ WHY: `scripts/test_lumos.py` 在此節點只負責 t_test_quality_handbook_controls 的總測試入口，把手冊獨立控制接進推送前既有測試器。來源：第二輪入口驗證。
++
++PITFALL: 只在 launcher 本身仍存活時清理程序群，會漏掉「launcher rc1、關閉管線的 worker 繼續跑」；直接 child 已退出不代表同群 descendants 結束。第四輪改為 `model_command` 返回前一律清理自己建立的 POSIX 程序群，timeout 與一般錯誤各有 fake worker 控制；證據見 [[Verification/測試品質第四輪修補驗證]]。Windows 資格仍不在本輪範圍。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+index 2e5778ba..59635c6b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-multilang.md
+@@ -16,20 +16,21 @@ tags:
+ summary: |-
+   WHY: 選配固定版本的本機語法工具，避免自建多語言 parser [出處:2026-10-07 跨語言測試品質計劃] [因:保持核心零依賴，缺工具或未掃快照時明確回報不完整]
+ related:
+   - "[[Systems/test-quality-scan]]"
+ verified_by:
+   - "[[Verification/2026-10-07_測試品質掃描固定考卷]]"
+   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
+   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
+   - "[[Verification/測試品質分支推送前修復驗證]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
++  - "[[Verification/測試品質第四輪修補驗證]]"
+ ---
+ # test-quality-multilang
+ 
+ ## 選配 backend 的決策
+ 
+ WHY: 本機固定規則掃暫存快照，而不沿用來源專案設定 [出處:2026-10-07 測試品質掃描試行] [因:要讓重跑範圍可確認且不受 ignore 或遠端規則變動影響]。核心與 Python 分析仍只依賴標準庫；選配工具由明確路徑指定、版本從結果留痕。
+ 
+ WHY: 未收到快照已掃描的證據就回報不完整 [出處:固定 backend 反例考卷] [因:零結果也可能是工具缺失、解析錯、逾時或整支檔被略過]。此層只驗來源自比候選，方法身份、算法同源與執行情境仍須其他證據。
+ 
+ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處:Semgrep CE 1.179.0 固定考卷實跑] [根因:該版本不能解析 #expect 的規則語法] [防回歸:test_swift_testing_macro_is_not_claimed_supported]。分開公布 XCTest 與 Swift Testing 的介面能力；後者接入時須新增原始樣本、解析失敗與抓錯案例，不能僅看 Swift 語言名稱就啟用。
+@@ -39,10 +40,12 @@ PITFALL: 同一 Swift 規則混入 #expect 會令 XCTest 掃描也失敗 [出處
+ - `scripts/test_quality_semgrep.py` 的選配依賴、快照隔離與有限介面支援決策歸本篇，候選通用語義歸 [[Systems/test-quality-scan]]。
+ - `governance/eval/test_quality_corpus.py` 的獨立固定標註、未知／未分析結果與跨語言外推限制歸本篇，不把考卷符合率當真實專案品質。
+ 
+ WHY: PHP先沿成熟parser辨識明示斷言自比 [出處:[[Projects/測試品質工具接線_計劃]]] [因:PHPUnit與Pest介面可有限接入，不能從介面匹配推論Laravel框架情境或演算法同源]。原生PHPUnit與框架證據見[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]，Pest執行資格另驗。
+ 
+ ## 推送前結果形狀修復
+ 
+ WHY: 結果映射抽成同責任函式以維持複雜度上限 [出處:code-test-quality-native-push/r1-fix.json] [因:沿固定 backend 結果合約拆分，沒有增加第二個 parser；配對控制與 [[Verification/測試品質分支推送前修復驗證]] 分開記錄來源掃描與原生執行資格]。
+ 
+ PITFALL: check_id 非字串會在 split 拋未收斂例外，失去結構化不完整報告 [出處:code-test-quality-native-push/r2-邊界-codex.md 與 r2-資安-codex.md] [防回歸:test_invalid_semgrep_rule_has_structured_shape_error]。反例走真 CLI 與無害假 backend，驗輸出不完整而非重抄結果映射算法。
++
++PITFALL: Semgrep 每筆 finding 重複 decode/split 同一份來源，finding 增加時會把純呈現成本線性重做；第四輪改成每份來源只解碼一次，並在取 snippet 前驗行號界線 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_semgrep_backend]。這項修補只改固定 backend 的結果轉換，不擴張支援語法或品質裁決範圍。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
+index 7b789067..3b3b4d2c 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-scan.md
+@@ -38,11 +38,10 @@ WHY: 先公布語法範圍再擴充規則 [出處:2026-10-07 跨語言要求] [
+ 
+ ## 本篇的檔案邊界
+ 
+ - `scripts/test_quality_scan.py` 的候選／裁決分界與局部判準取捨歸本篇，跨語言 backend 的特殊限制歸 [[Systems/test-quality-multilang]]。
+ - `scripts/test_test_quality_scan.py` 的獨立 oracle 與合理反例選擇歸本篇，不將測試數量當品質標準。
+ - `governance/eval/test_quality_pilot.py` 的固定故障與安全執行範圍歸本篇，不能擴張為任意命令的通用變異 runner。
+ 
+ WHY: 掃描入口隨consumer更新部署但語義不升級 [出處:[[Projects/測試品質工具接線_計劃]]] [因:方便日後實作時直接掃，不把安裝可用等同業務品質通過]。PHP有限介面自比歸[[Systems/test-quality-multilang]]；可信本機命令收證歸[[Systems/test-quality-cli]]，固定試行不變成通用mutation engine。
+ 
+ WHY: 來源與安裝入口共用掃描參數，選配適配器延後載入 [出處:code-test-quality-native-push/r1-邊界-codex.md b1與r1-架構-codex.md a1/a3] [因:遞移缺檔不應使既有CLI的help失效，測試品質命令則須明確回不完整及更新指引]。保留控制见 [[Systems/test-quality-cli]]；局部bindings、算式模型、檔案解析各有獨立責任，有限語法掃描不裁決獨立業務答案。
+-
+diff --git a/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+new file mode 100644
+index 00000000..2e93cf22
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/測試品質第四輪修補驗證.md
+@@ -0,0 +1,25 @@
++---
++type: verification
++status: pass
++date: 2026-10-08
++valid_under: macOS、Python 3.14、本機 fake launcher 與暫存 repo；只驗第四輪的程序群清理、測試 oracle 與 Semgrep 熱路徑，不包含 Windows
++revalidate_when: 改動 handbook model_command、test-quality 拒收原因、bundle digest 或 Semgrep finding 轉換時
++self_audit: pending-fourth-round-review
++tags:
++  - type/verification
++  - status/pass
++  - scope/evals
++plan_refs:
++  - "[[Projects/測試品質工具接線_計劃]]"
++---
++# 測試品質第四輪修補驗證
++
++## 結論
++
++一般錯誤路徑的程序群缺口已先紅後綠。fake launcher 啟動一個關閉 stdout/stderr 的長跑 worker 後以 rc1 離開；修前 `model_command` 返回後 worker 仍存活，修後會在返回前清理自己建立的程序群。原有 timeout 控制與 handbook 全套 17 項同時通過。本輪只建立 POSIX 資格，Windows 仍排除。
++
++四個測試證據缺口也已收緊：orphan outcome 與 stale bytecode 案例改驗專屬拒收 reason；global `--vault` 案例先建立有效 source，再確認原因點名遺失的 scanner；Git rename fixture 的命令都有 10 秒 timeout，commit 明確停用 signing。五項定向 CLI 控制通過。
++
++Semgrep finding 轉換改為每份來源只 decode/split 一次，並在取 snippet 前驗行號沒有超出來源；更新同源 bundle 指紋後，scanner 21 項控制通過。完整 CLI 曾在指紋尚未更新時整批回「配套版本不一致」，這是本輪中途真紅，不列產品回歸；更新指紋後定向案例與完整 CLI 44 項皆綠。
++
++本篇是修補驗證，不代表第四輪代碼審處置閘通過。提交後仍須由乾淨席以最後快照審查。
+diff --git a/governance/eval/test_quality_handbook.py b/governance/eval/test_quality_handbook.py
+index 3746de6b..6570dc01 100644
+--- a/governance/eval/test_quality_handbook.py
++++ b/governance/eval/test_quality_handbook.py
+@@ -239,26 +239,27 @@ def model_command(cmd, directory, timeout):
+         except subprocess.TimeoutExpired as exc:
+             try:
+                 os.killpg(proc.pid, signal.SIGKILL)
+             except ProcessLookupError:
+                 pass
+             exc.stdout, exc.stderr = proc.communicate()
+             raise
+         return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+     finally:
+         signal.signal(signal.SIGTERM, previous)
+-        if proc is not None and proc.poll() is None:
++        if proc is not None:
+             try:
+                 os.killpg(proc.pid, signal.SIGKILL)
+             except ProcessLookupError:
+                 pass
+-            proc.communicate()
++            if proc.poll() is None:
++                proc.communicate()
+ 
+ 
+ def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
+     tools = 'Read,Write,Bash' if behavior else ('Read,Skill' if native else 'Read')
+     cmd = ['claude', '-p', prompt, '--model', model, '--effort', 'low',
+            '--strict-mcp-config', '--setting-sources', 'project' if native else '', '--no-session-persistence', '--permission-mode', 'dontAsk',
+            '--tools', tools, '--allowedTools', 'Read', '--output-format', 'stream-json', '--verbose', '--system-prompt', system]
+     if native:
+         cmd += ['--settings', json.dumps({'disableAllHooks': True, 'disableBundledSkills': True, 'autoMemoryEnabled': False, 'skillOverrides': {'design': 'off', 'doctor': 'off', 'plugin-authoring': 'off'}}), '--allowedTools', 'Skill(lumos-project-notes)']
+     else:
+diff --git a/governance/eval/test_test_quality_handbook.py b/governance/eval/test_test_quality_handbook.py
+index 28527573..cdf098f2 100644
+--- a/governance/eval/test_test_quality_handbook.py
++++ b/governance/eval/test_test_quality_handbook.py
+@@ -160,14 +160,41 @@ class ModelCommandTests(unittest.TestCase):
+         self.addCleanup(
+             lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+         )
+         self.assertFalse(result["valid"])
+         self.assertIsNone(result["returncode"])
+         deadline = time.monotonic() + 2
+         while self.alive(pid) and time.monotonic() < deadline:
+             time.sleep(0.02)
+         self.assertFalse(self.alive(pid))
+ 
++    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
++    def test_model_error_stops_detached_stream_worker(self):
++        binary = self.root / "bin"
++        binary.mkdir()
++        fake = binary / "claude"
++        pidfile = self.root / "worker-error.pid"
++        fake.write_text(
++            "#!"
++            + sys.executable
++            + "\nimport subprocess,sys\nfrom pathlib import Path\n"
++            + "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
++              "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
++            + "Path(" + repr(str(pidfile)) + ").write_text(str(p.pid))\nsys.exit(1)\n"
++        )
++        fake.chmod(0o755)
++        result = ev.model_command([str(fake)], self.root, 5)
++        self.assertEqual(result.returncode, 1)
++        self.assertTrue(pidfile.exists(), "worker actually launched before launcher error")
++        pid = int(pidfile.read_text())
++        self.addCleanup(
++            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++        )
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
++
+ 
+ 
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/scripts/lumos b/scripts/lumos
+index 4f5031a0..be7af76b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49214,21 +49214,21 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': 'd945c8d9437a61de7942d28b9cefd578c0dd68e4fddf4851d2db1eb3a934d3d1', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '5e5848eb9260f2583386245abff8c8d556efbb398a5df718283da90e23fec708', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
+ 
+ 
+ def _test_quality_bundle_sources():
+     folder = Path(__file__).resolve().parent
+     required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+     if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
+         raise ValueError("配套指紋清單未對齊")
+     sources = {}
+     for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
+         with (folder / name).open("rb") as stream:
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+index 415a0890..1b92d494 100644
+--- a/scripts/test_quality_semgrep.py
++++ b/scripts/test_quality_semgrep.py
+@@ -15,36 +15,37 @@ PATTERNS = {
+     'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
+     'swift': ['XCTAssertEqual($X, $X, ...)'],
+     'csharp': ['Assert.Equal($X, $X)', 'Assert.AreEqual($X, $X, ...)', '$X.Should().Be($X, ...)'],
+     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+     'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+ }
+ 
+ 
+ def backend_findings(result, source, path, raw):
+     findings = []
++    source_lines = raw.decode('utf-8').splitlines()
+     for item in result['results']:
+         if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
+             raise ValueError('invalid finding shape')
+         rule = item.get('check_id')
+         if not isinstance(rule, str):
+             raise ValueError('invalid finding rule')
+         if rule.split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+             raise ValueError('unexpected finding rule or snapshot')
+         line = item['start']['line']
+-        if type(line) is not int or line < 1:
++        if type(line) is not int or line < 1 or line > len(source_lines):
+             raise ValueError('invalid finding location')
+         findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
+                          'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
+                          'reason': '斷言兩側是相同語法表達式',
+                          'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
+-                         'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
++                         'snippet': source_lines[line-1][:1200]})
+     return findings
+ 
+ 
+ def scan(path, language, executable):
+     entry = {'path': str(path), 'language': language, 'adapter': 'semgrep-ce',
+              'supported_rules': ['same-comparison'], 'test_identity': 'unverified', 'interfaces': PATTERNS[language],
+              'limitations': ['只辨識列出的斷言介面自比；未分析判準同源、重抄算法或執行情境。'] + (['Swift Testing #expect 未支援；僅 XCTest。'] if language == 'swift' else [])}
+     findings = []
+     try:
+         with path.open('rb') as stream:
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+index aaae8479..c7887d43 100644
+--- a/scripts/test_test_quality_cli.py
++++ b/scripts/test_test_quality_cli.py
+@@ -550,20 +550,21 @@ class QualityCLI(unittest.TestCase):
+         )
+         self.assertEqual(run.returncode, 2, run.stdout)
+         self.assertEqual(json.loads(run.stdout)["verdict"], "not_assessed")
+         self.assertFalse((self.root / "capture").exists())
+ 
+     def test_orphan_failure_refused(self):
+         rc, report = self.capture(
+             '<testsuite><testcase classname="T" name="x"/><failure type="AssertionError">boom</failure></testsuite>'
+         )
+         self.assertEqual(rc, 2, report)
++        self.assertIn("outcome outside testcase", report["reason"])
+ 
+     def test_php_and_node_variants_kept_in_impact(self):
+         tool = self.lumos_module()
+         for name in ["Test.php", "runner.cjs", "runner.mts", "runner.cts"]:
+             with self.subTest(name=name):
+                 self.assertTrue(
+                     tool._impact_diff_seed_ok(
+                         "governance/eval/results/example/" + name, "100644", None
+                     )
+                 )
+@@ -602,33 +603,34 @@ class QualityCLI(unittest.TestCase):
+     def test_results_rename_preserves_original_role_source(self):
+         tool = self.lumos_module()
+         repository = self.root / "rename"
+         repository.mkdir()
+ 
+         def git(*args):
+             return subprocess.check_output(
+                 ["git", "-C", str(repository), *args],
+                 stderr=subprocess.STDOUT,
+                 text=True,
++                timeout=10,
+             ).strip()
+ 
+         git("init", "-q")
+         git("config", "user.name", "Fixture")
+         git("config", "user.email", "fixture@example.invalid")
+         (repository / "service.py").write_text("def public_api():\n    return 42\n")
+         git("add", "service.py")
+-        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "before")
++        git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "commit", "-qm", "before")
+         before = git("rev-parse", "HEAD")
+         destination = repository / "governance/eval/results/run/report.txt"
+         destination.parent.mkdir(parents=True)
+         git("mv", "service.py", str(destination.relative_to(repository)))
+-        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "after")
++        git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "commit", "-qm", "after")
+         after = git("rev-parse", "HEAD")
+         self.assertTrue(
+             git("diff", "--name-status", "-M", before, after).startswith("R100"),
+             "real rename must be recognized",
+         )
+         self.assertIn(
+             ("service.py", before),
+             tool._review_role_changed_files(repository, before, after),
+         )
+ 
+@@ -708,21 +710,23 @@ class QualityCLI(unittest.TestCase):
+                 sys.executable,
+                 "-c",
+                 "print(" + repr(xml) + ")",
+             ],
+             cwd=self.root,
+             capture_output=True,
+             text=True,
+             timeout=20,
+         )
+         self.assertEqual(run.returncode, 2, run.stdout)
+-        self.assertEqual(json.loads(run.stdout)["status"], "invalid")
++        report = json.loads(run.stdout)
++        self.assertEqual(report["status"], "invalid")
++        self.assertIn("suite summary inconsistent with testcase rows", report["reason"])
+ 
+     def test_utf16_dtd_is_not_a_valid_receipt(self):
+         xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
+         command = [
+             sys.executable,
+             "-c",
+             "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+         ]
+         rc, report = self.capture("", command=command)
+         self.assertEqual(rc, 2)
+@@ -736,34 +740,36 @@ class QualityCLI(unittest.TestCase):
+             "-c",
+             "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+         ]
+         rc, report = self.capture("", command=command)
+         self.assertEqual(rc, 0)
+         self.assertEqual(report["status"], "executed")
+ 
+     def test_global_vault_option_retains_structured_deployment_error(self):
+         target = self.copied_bundle()
+         (target / "test_quality_scan.py").unlink()
++        (self.root / "sample.py").write_text("def value():\n    return 1\n")
+         run = subprocess.run(
+             [
+                 sys.executable,
+                 str(target / "lumos"),
+                 "--vault",
+                 str(self.root / "vault"),
+                 "test-quality",
+                 "scan",
+                 "sample.py",
+                 "--json",
+             ],
+             capture_output=True,
+             text=True,
+             timeout=20,
+         )
+         self.assertEqual(run.returncode, 2, run.stderr)
+         report = json.loads(run.stdout)
+         self.assertFalse(report["complete"])
+         self.assertEqual(report["verdict"], "not_assessed")
++        self.assertIn("test_quality_scan.py", report["reason"])
+         self.assertNotIn("Traceback", run.stderr)
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()

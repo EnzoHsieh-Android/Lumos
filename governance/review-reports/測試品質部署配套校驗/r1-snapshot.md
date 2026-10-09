@@ -1,0 +1,42 @@
+---
+type: project
+plan_risk: high
+status: doing
+created: 2026-10-08
+updated: 2026-10-08
+tags:
+  - type/project
+  - status/doing
+  - scope/guards-gates
+lands_in:
+  - Systems/test-quality-cli
+---
+# 測試品質部署配套校驗_計劃
+
+## 問題與最小解
+
+推送前第二輪已重現：新 CLI 配上舊 sidecar（隨 lumos 一起安裝的三支測試品質輔助檔 test_quality.py、test_quality_scan.py、test_quality_semgrep.py）可把矛盾 JUnit 收成成功；即使來源更新，時間戳與大小相同的舊 bytecode 仍能回到舊判讀。只查檔案存在不足以確認實際執行配套。
+
+PRIOR-ART: 沿既有工具檔指紋函式 `_vendored_digest`（換行統一成 LF 再算 SHA-256），以及 Python 標準模組載入規則；安裝檔內容校驗的成熟先例為 https://packaging.python.org/en/latest/specifications/recording-installed-packages/ 。不新增依賴、不重建安裝器、不宣稱簽章或安全沙盒。
+RETIRE-IF: 安裝入口改用不可變版本配套且執行固定內容，混裝與 stale-bytecode 反例均確認不會假綠時，撤除入口專用配套指紋；由該安裝入口接管相同控制。
+
+## 做法與驗收
+
+CLI 綁定三支 sidecar 的內容指紋；每支先讀最多 10 MiB 的 bytes，全部對上才從同一批 bytes 載入。模組名稱与標準 import 相同，載入失敗回復該次修改的模組登記。這只證版本配套一致，業務 oracle 與報告真實性仍由呼叫者負責。
+
+部署錯誤留在 parser 建立期，不另解析 argv。完整配套註冊既有子命令；不完整配套註冊不 import sidecar 的佔位入口。正式 argparse 解析後只對 test-quality 回結構化錯誤；其他指令照既有流程。
+
+- [S1] 當 test-quality 配套缺檔、混裝或來源不可讀時，CLI 應在執行收證命令前回退出2及 complete:false、not_assessed 的 JSON，提供更新指引。 [manual:缺檔與舊配套反例，確認命令未執行及輸出目錄未建立]
+- [S2] 當來源 bytes 合格而存在同時間戳同大小的舊 bytecode 時，CLI 應執行已驗 bytes 的判讀；完整正常配套的 scan、capture、check、capabilities 行為仍成立。 [manual:實際建立舊快取後還原來源，與正常及五棧既有卷證配對核對]
+- [S3] 當使用合法頂層 --vault 選項時，test-quality 部署錯誤應和直接形式同樣結構化；部署不完整亦不妨礙既有 --help、--version 入口。 [manual:兩種正式 argparse 排列與既有指令控制]
+
+## 回退
+
+回退本次入口校驗與必要控制即可回到上一版；不改動既有 push/CI 判閘及原生歷史卷證。不能把回退後混裝可能假綠的版本冒稱本計劃通過版。
+
+## 實務隱患
+
+已排除:金流:無正式資料或支付服務。
+已排除:對外送出:模組只載入本機已配套的工具來源，反例用 fake 命令。
+已排除:不可逆:不刪檔、不更新安裝來源、不修改歷史卷證。
+已排除:守衛面:不調整 code-loop、CI、風險分級或審查輪數；不把一致性判定升格成測試品質放行。

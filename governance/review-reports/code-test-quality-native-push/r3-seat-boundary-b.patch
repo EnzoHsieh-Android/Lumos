@@ -1,0 +1,693 @@
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:1 — imports/helpers/setup, exact source lines
+#!/usr/bin/env python3
+"""Independent evidence validity controls; no implementation formula copied into expected."""
+
+import hashlib
+import os
+import signal
+import time
+import importlib.util
+from unittest import mock
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOL = Path(__file__).with_name("lumos")
+
+
+class QualityCLI(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def run_cli(self, *args):
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "test-quality", *map(str, args)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return r.returncode, json.loads(r.stdout)
+
+    def receipt(
+        self,
+        phase,
+        outcome="passed",
+        impl="correct",
+        tests="independent",
+        failure_type="AssertionError",
+    ):
+        folder = self.root / phase
+        folder.mkdir()
+        failure = (
+            ""
+            if outcome == "passed"
+            else "<skipped/>"
+            if outcome == "skipped"
+            else f'<{outcome} type="{failure_type}">wrong charge</{outcome}>'
+        )
+        xml = f'<testsuite><testcase classname="PriceTest" name="known_90">{failure}</testcase></testsuite>'.encode()
+        (folder / "report.xml").write_bytes(xml)
+        snaps = []
+        for i, (role, value) in enumerate(
+            [("implementation", impl), ("tests", tests), ("context", "locked")]
+        ):
+            raw = value.encode()
+            artifact = f"snapshot-{i}.txt"
+            (folder / artifact).write_bytes(raw)
+            snaps.append(
+                {
+                    "role": role,
+                    "path": "/isolated/" + role,
+                    "artifact": artifact,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        cases = [
+            {
+                "id": "PriceTest::known_90",
+                "status": outcome,
+                "assertion_failure": outcome == "failure"
+                and failure_type == "AssertionError",
+                "reason": ""
+                if outcome == "passed" or outcome == "skipped"
+                else failure_type + "  wrong charge",
+            }
+        ]
+        r = {
+            "schema_version": 1,
+            "kind": "execution-receipt",
+            "status": "executed",
+            "language": "fixture",
+            "framework": "junit-control",
+            "command": ["trusted-runner"],
+            "cwd": "/isolated",
+            "exit_code": 0 if outcome == "passed" else 1,
+            "report_sha256": hashlib.sha256(xml).hexdigest(),
+            "tests": cases,
+            "snapshots": snaps,
+        }
+        (folder / "receipt.json").write_text(json.dumps(r))
+        return folder
+
+    def check(
+        self,
+        fault="failure",
+        kind="AssertionError",
+        changed_tests=False,
+        restored="correct",
+        **kwargs,
+    ):
+        b = self.receipt("baseline")
+        f = self.receipt(
+            "fault", fault, "wrong", "changed" if changed_tests else "independent", kind
+        )
+        r = self.receipt("restored", impl=restored)
+        return self.run_cli(
+            "check",
+            b,
+            f,
+            r,
+            "--target",
+            "PriceTest::known_90",
+            *kwargs.get("extra", []),
+        )
+
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:128 — test_surviving_fault_is_not_pass
+    def test_surviving_fault_is_not_pass(self):
+        rc, r = self.check("passed")
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["fault_evidence"], "survived")
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:133 — test_non_assertion_failure_is_invalid
+    def test_non_assertion_failure_is_invalid(self):
+        rc, r = self.check(kind="RuntimeException")
+        self.assertEqual(rc, 2)
+        self.assertIn("non-assertion", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:146 — test_restoration_must_match_original
+    def test_restoration_must_match_original(self):
+        self.assertEqual(self.check(restored="not-restored")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:149 — test_non_target_identity_rejected
+    def test_non_target_identity_rejected(self):
+        self.assertEqual(self.check(extra=["--target", "Wrong::identity"])[0], 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:187 — test_xunit_generic_logger_assertion_is_attributed
+    def test_xunit_generic_logger_assertion_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="failure" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:195 — test_runtime_exception_mentioning_xunit_message_not_assertion
+    def test_runtime_exception_mentioning_xunit_message_not_assertion(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="RuntimeException" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:211 — test_runtime_exception_with_assertion_words_is_not_attributed
+    def test_runtime_exception_with_assertion_words_is_not_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="RuntimeException" message="AssertionError ERR_ASSERTION /tmp/Test.swift:5 - XCTAssertEqual failed:"/></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:227 — test_android_runtime_cause_mention_is_not_attributed
+    def test_android_runtime_cause_mention_is_not_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure>java.lang.IllegalStateException: runtime failed\nCaused by java.lang.AssertionError: description\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:248 — test_suite_error_capture_invalid
+    def test_suite_error_capture_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase name="x"/><error type="ImportError"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("suite errors", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:262 — test_entity_declaration_capture_invalid
+    def test_entity_declaration_capture_invalid(self):
+        self.assertEqual(self.capture("<!DOCTYPE testsuite><testsuite/>")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:265 — test_command_not_found_invalid
+    def test_command_not_found_invalid(self):
+        self.assertEqual(self.capture("", command=["/no-such-runtime"])[0], 2)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:268 — test_timeout_not_detection
+    def test_timeout_not_detection(self):
+        rc, r = self.capture(
+            "", command=[sys.executable, "-c", "import time; time.sleep(30)"], timeout=1
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("timeout", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:286 — test_suite_failure_summary_cannot_hide_green_case
+    def test_suite_failure_summary_cannot_hide_green_case(self):
+        rc, result = self.capture(
+            '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(result["status"], "invalid")
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:299 — test_consistent_suite_summary_retains_green_capture
+    def test_consistent_suite_summary_retains_green_capture(self):
+        rc, result = self.capture(
+            '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["status"], "executed")
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:336 — test_missing_all_sidecars_explains_update
+    def test_missing_all_sidecars_explains_update(self):
+        alone = self.root / "lumos"
+        shutil.copy2(TOOL, alone)
+        run = subprocess.run(
+            [sys.executable, str(alone), "test-quality", "scan", "tests.py", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("lumos update", run.stdout + run.stderr)
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:349 — test_output_limit_stops_writer_before_completion
+    def test_output_limit_stops_writer_before_completion(self):
+        marker = self.root / "writer-completed"
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; sys.stdout.buffer.write(b'x'*(30*1024*1024)); sys.stdout.flush(); Path("
+            + repr(str(marker))
+            + ").write_text('completed')",
+        ]
+        rc, result = self.capture("", command=command)
+        self.assertEqual(rc, 2)
+        self.assertIn("output exceeds", result["reason"])
+        self.assertFalse(marker.exists())
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc:375 — test_cancelled_capture_stops_child
+    def test_cancelled_capture_stops_child(self):
+        source = self.root / "source.txt"
+        tests = self.root / "tests.txt"
+        source.write_text("production")
+        tests.write_text("known case")
+        pidfile = self.root / "pid.txt"
+        command = [
+            sys.executable,
+            "-c",
+            "import os,time; from pathlib import Path; Path("
+            + repr(str(pidfile))
+            + ").write_text(str(os.getpid())); time.sleep(60)",
+        ]
+        args = [
+            sys.executable,
+            str(TOOL),
+            "test-quality",
+            "capture",
+            "--out",
+            str(self.root / "capture"),
+            "--source",
+            str(source),
+            "--test-source",
+            str(tests),
+            "--language",
+            "fixture",
+            "--framework",
+            "control",
+            "--junit-stdout",
+            "--",
+            *command,
+        ]
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        deadline = time.monotonic() + 5
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(pidfile.exists(), "child actually entered before cancellation")
+        pid = int(pidfile.read_text())
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=5)
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_mixed_sidecars_refused_before_false_green absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_resolved_cache_escape_preserved absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_mixed_scanner_retains_legacy_help absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_invalid_semgrep_rule_has_structured_shape_error absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_utf16_dtd_is_not_a_valid_receipt absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_plain_utf16_report_retains_valid_capture absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@598e41b23f85285d1f9e4429c5d5314f055fc8bc — test_global_vault_option_retains_structured_deployment_error absent; absence is not product failure
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:1 — imports/helpers/setup, exact source lines
+#!/usr/bin/env python3
+"""Independent evidence validity controls; no implementation formula copied into expected."""
+
+import hashlib
+import os
+import signal
+import time
+import importlib.util
+from unittest import mock
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOL = Path(__file__).with_name("lumos")
+
+
+class QualityCLI(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def run_cli(self, *args):
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "test-quality", *map(str, args)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return r.returncode, json.loads(r.stdout)
+
+    def receipt(
+        self,
+        phase,
+        outcome="passed",
+        impl="correct",
+        tests="independent",
+        failure_type="AssertionError",
+    ):
+        folder = self.root / phase
+        folder.mkdir()
+        failure = (
+            ""
+            if outcome == "passed"
+            else "<skipped/>"
+            if outcome == "skipped"
+            else f'<{outcome} type="{failure_type}">wrong charge</{outcome}>'
+        )
+        xml = f'<testsuite><testcase classname="PriceTest" name="known_90">{failure}</testcase></testsuite>'.encode()
+        (folder / "report.xml").write_bytes(xml)
+        snaps = []
+        for i, (role, value) in enumerate(
+            [("implementation", impl), ("tests", tests), ("context", "locked")]
+        ):
+            raw = value.encode()
+            artifact = f"snapshot-{i}.txt"
+            (folder / artifact).write_bytes(raw)
+            snaps.append(
+                {
+                    "role": role,
+                    "path": "/isolated/" + role,
+                    "artifact": artifact,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        cases = [
+            {
+                "id": "PriceTest::known_90",
+                "status": outcome,
+                "assertion_failure": outcome == "failure"
+                and failure_type == "AssertionError",
+                "reason": ""
+                if outcome == "passed" or outcome == "skipped"
+                else failure_type + "  wrong charge",
+            }
+        ]
+        r = {
+            "schema_version": 1,
+            "kind": "execution-receipt",
+            "status": "executed",
+            "language": "fixture",
+            "framework": "junit-control",
+            "command": ["trusted-runner"],
+            "cwd": "/isolated",
+            "exit_code": 0 if outcome == "passed" else 1,
+            "report_sha256": hashlib.sha256(xml).hexdigest(),
+            "tests": cases,
+            "snapshots": snaps,
+        }
+        (folder / "receipt.json").write_text(json.dumps(r))
+        return folder
+
+    def check(
+        self,
+        fault="failure",
+        kind="AssertionError",
+        changed_tests=False,
+        restored="correct",
+        **kwargs,
+    ):
+        b = self.receipt("baseline")
+        f = self.receipt(
+            "fault", fault, "wrong", "changed" if changed_tests else "independent", kind
+        )
+        r = self.receipt("restored", impl=restored)
+        return self.run_cli(
+            "check",
+            b,
+            f,
+            r,
+            "--target",
+            "PriceTest::known_90",
+            *kwargs.get("extra", []),
+        )
+
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:128 — test_surviving_fault_is_not_pass
+    def test_surviving_fault_is_not_pass(self):
+        rc, r = self.check("passed")
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["fault_evidence"], "survived")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:133 — test_non_assertion_failure_is_invalid
+    def test_non_assertion_failure_is_invalid(self):
+        rc, r = self.check(kind="RuntimeException")
+        self.assertEqual(rc, 2)
+        self.assertIn("non-assertion", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:146 — test_restoration_must_match_original
+    def test_restoration_must_match_original(self):
+        self.assertEqual(self.check(restored="not-restored")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:149 — test_non_target_identity_rejected
+    def test_non_target_identity_rejected(self):
+        self.assertEqual(self.check(extra=["--target", "Wrong::identity"])[0], 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:187 — test_xunit_generic_logger_assertion_is_attributed
+    def test_xunit_generic_logger_assertion_is_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="failure" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>'
+        )
+        self.assertTrue(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:195 — test_runtime_exception_mentioning_xunit_message_not_assertion
+    def test_runtime_exception_mentioning_xunit_message_not_assertion(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="RuntimeException" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:211 — test_runtime_exception_with_assertion_words_is_not_attributed
+    def test_runtime_exception_with_assertion_words_is_not_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="RuntimeException" message="AssertionError ERR_ASSERTION /tmp/Test.swift:5 - XCTAssertEqual failed:"/></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:227 — test_android_runtime_cause_mention_is_not_attributed
+    def test_android_runtime_cause_mention_is_not_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure>java.lang.IllegalStateException: runtime failed\nCaused by java.lang.AssertionError: description\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:248 — test_suite_error_capture_invalid
+    def test_suite_error_capture_invalid(self):
+        rc, r = self.capture(
+            '<testsuite><testcase name="x"/><error type="ImportError"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("suite errors", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:262 — test_entity_declaration_capture_invalid
+    def test_entity_declaration_capture_invalid(self):
+        self.assertEqual(self.capture("<!DOCTYPE testsuite><testsuite/>")[0], 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:265 — test_command_not_found_invalid
+    def test_command_not_found_invalid(self):
+        self.assertEqual(self.capture("", command=["/no-such-runtime"])[0], 2)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:268 — test_timeout_not_detection
+    def test_timeout_not_detection(self):
+        rc, r = self.capture(
+            "", command=[sys.executable, "-c", "import time; time.sleep(30)"], timeout=1
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("timeout", r["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:286 — test_suite_failure_summary_cannot_hide_green_case
+    def test_suite_failure_summary_cannot_hide_green_case(self):
+        rc, result = self.capture(
+            '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(result["status"], "invalid")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:299 — test_consistent_suite_summary_retains_green_capture
+    def test_consistent_suite_summary_retains_green_capture(self):
+        rc, result = self.capture(
+            '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="x"/></testsuite>'
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["status"], "executed")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:336 — test_missing_all_sidecars_explains_update
+    def test_missing_all_sidecars_explains_update(self):
+        alone = self.root / "lumos"
+        shutil.copy2(TOOL, alone)
+        run = subprocess.run(
+            [sys.executable, str(alone), "test-quality", "scan", "tests.py", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("lumos update", run.stdout + run.stderr)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:349 — test_output_limit_stops_writer_before_completion
+    def test_output_limit_stops_writer_before_completion(self):
+        marker = self.root / "writer-completed"
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; sys.stdout.buffer.write(b'x'*(30*1024*1024)); sys.stdout.flush(); Path("
+            + repr(str(marker))
+            + ").write_text('completed')",
+        ]
+        rc, result = self.capture("", command=command)
+        self.assertEqual(rc, 2)
+        self.assertIn("output exceeds", result["reason"])
+        self.assertFalse(marker.exists())
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:375 — test_cancelled_capture_stops_child
+    def test_cancelled_capture_stops_child(self):
+        source = self.root / "source.txt"
+        tests = self.root / "tests.txt"
+        source.write_text("production")
+        tests.write_text("known case")
+        pidfile = self.root / "pid.txt"
+        command = [
+            sys.executable,
+            "-c",
+            "import os,time; from pathlib import Path; Path("
+            + repr(str(pidfile))
+            + ").write_text(str(os.getpid())); time.sleep(60)",
+        ]
+        args = [
+            sys.executable,
+            str(TOOL),
+            "test-quality",
+            "capture",
+            "--out",
+            str(self.root / "capture"),
+            "--source",
+            str(source),
+            "--test-source",
+            str(tests),
+            "--language",
+            "fixture",
+            "--framework",
+            "control",
+            "--junit-stdout",
+            "--",
+            *command,
+        ]
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        deadline = time.monotonic() + 5
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(pidfile.exists(), "child actually entered before cancellation")
+        pid = int(pidfile.read_text())
+        self.addCleanup(
+            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
+        )
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=5)
+        deadline = time.monotonic() + 2
+        while self.alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(self.alive(pid))
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:519 — test_mixed_sidecars_refused_before_false_green
+    def test_mixed_sidecars_refused_before_false_green(self):
+        target = self.copied_bundle(old=True)
+        (self.root / "source.txt").write_text("production")
+        (self.root / "tests.txt").write_text("independent")
+        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "test-quality",
+                "capture",
+                "--out",
+                "capture",
+                "--source",
+                "source.txt",
+                "--test-source",
+                "tests.txt",
+                "--junit-stdout",
+                "--language",
+                "fixture",
+                "--framework",
+                "control",
+                "--",
+                sys.executable,
+                "-c",
+                "print(" + repr(xml) + ")",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 2, run.stdout)
+        self.assertEqual(json.loads(run.stdout)["verdict"], "not_assessed")
+        self.assertFalse((self.root / "capture").exists())
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:588 — test_resolved_cache_escape_preserved
+    def test_resolved_cache_escape_preserved(self):
+        tool = self.lumos_module()
+        target = self.root / "external"
+        target.mkdir()
+        artifact = target / "test_quality.cpython-314.pyc"
+        artifact.write_bytes(b"external")
+        (self.root / "scripts").mkdir()
+        cache = self.root / "scripts/__pycache__"
+        cache.symlink_to(target, target_is_directory=True)
+        self.assertEqual(cache.resolve(), target.resolve())
+        with mock.patch.object(Path, "is_symlink", return_value=False):
+            tool._deinit_remove_vendored(self.root)
+        self.assertEqual(artifact.read_bytes(), b"external")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:635 — test_mixed_scanner_retains_legacy_help
+    def test_mixed_scanner_retains_legacy_help(self):
+        target = self.copied_bundle()
+        (target / "test_quality_scan.py").write_text(
+            "# previous scanner has no shared argument export\n"
+        )
+        run = subprocess.run(
+            [sys.executable, str(target / "lumos"), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:649 — test_invalid_semgrep_rule_has_structured_shape_error
+    def test_invalid_semgrep_rule_has_structured_shape_error(self):
+        source = self.root / "test_sample.php"
+        source.write_text("<?php assert(true);")
+        backend = self.root / "semgrep"
+        backend.write_text(
+            "#!"
+            + sys.executable
+            + "\n"
+            + "import json,sys\n"
+            + "p=sys.argv[-1]\n"
+            + 'print(json.dumps({"results":[{"check_id":None,"path":p,"start":{"line":1}}],"errors":[],"paths":{"scanned":[p]}}))\n'
+        )
+        backend.chmod(0o755)
+        rc, report = self.run_cli("scan", "--json", "--semgrep", backend, source)
+        self.assertEqual(rc, 2)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["verdict"], "not_assessed")
+        self.assertIn("invalid finding rule", report["inputs"][0]["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:720 — test_utf16_dtd_is_not_a_valid_receipt
+    def test_utf16_dtd_is_not_a_valid_receipt(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+        ]
+        rc, report = self.capture("", command=command)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("DTD", report["reason"])
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:732 — test_plain_utf16_report_retains_valid_capture
+    def test_plain_utf16_report_retains_valid_capture(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><testsuite><testcase name="ok"/></testsuite>'
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
+        ]
+        rc, report = self.capture("", command=command)
+        self.assertEqual(rc, 0)
+        self.assertEqual(report["status"], "executed")
+SOURCE scripts/test_test_quality_cli.py@03a46da6b5179cfc5b42ced08e257ee127cc654e:743 — test_global_vault_option_retains_structured_deployment_error
+    def test_global_vault_option_retains_structured_deployment_error(self):
+        target = self.copied_bundle()
+        (target / "test_quality_scan.py").unlink()
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(target / "lumos"),
+                "--vault",
+                str(self.root / "vault"),
+                "test-quality",
+                "scan",
+                "sample.py",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(run.returncode, 2, run.stderr)
+        report = json.loads(run.stdout)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["verdict"], "not_assessed")
+        self.assertNotIn("Traceback", run.stderr)

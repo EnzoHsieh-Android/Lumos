@@ -1,0 +1,18 @@
+import argparse, json, os, subprocess, sys
+from pathlib import Path
+p=argparse.ArgumentParser();p.add_argument('--zero',action='store_true');a=p.parse_args()
+out=Path('.native-results');out.mkdir(exist_ok=True)
+env=os.environ.copy();env['DEVELOPER_DIR']=env.get('LUMOS_LAB_XCODE','/Applications/Xcode.app/Contents/Developer')
+dest=os.environ.get('LUMOS_LAB_IOS_DESTINATION','platform=iOS Simulator,id=8B63215A-8A85-43A0-A874-0092E1ECAE88')
+cmd=['xcodebuild','test','-project','QualityIOS.xcodeproj','-scheme','QualityIOS','-destination',dest,'-derivedDataPath','.derived-data','-resultBundlePath',str(out/'native.xcresult'),'-parallel-testing-enabled','NO','CODE_SIGNING_ALLOWED=NO']
+if a.zero:cmd+=['-only-testing:QualityTests/NoSuchTests/testMissing']
+else:cmd+=['-only-testing:QualityTests/PricingTests','-only-testing:QualityTests/QuotePlatformTests']
+r=subprocess.run(cmd,env=env,capture_output=True,text=True)
+raw=r.stdout+r.stderr;(out/'native.log').write_text(raw)
+formatter=['xcbeautify','--report','junit','--report-path',str(out),'--junit-report-filename','report.xml','--quiet','--is-ci']
+f=subprocess.run(formatter,input=raw,capture_output=True,text=True)
+(out/'native-exit.json').write_text(json.dumps({'argv':cmd,'exit_code':r.returncode,'formatter_argv':formatter,'formatter_exit_code':f.returncode},indent=2))
+print(f.stdout+f.stderr);print('native_exit_code='+str(r.returncode))
+# Preserve the original code above; 65 maps to capture's common nonzero code only.
+# Compilation/environment failure is rejected by report content and exact target identities.
+sys.exit(0 if r.returncode==0 and f.returncode==0 else 1)

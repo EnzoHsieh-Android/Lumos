@@ -1,0 +1,2971 @@
+diff --git a/README.md b/README.md
+index 00149bd8..8b7946b9 100644
+--- a/README.md
++++ b/README.md
+@@ -61,20 +61,43 @@ Lumos 把這些脈絡留在專案裡。它搭配 Claude Code 或 Codex，要求
+ **修好一個問題，也要確認沒有弄壞原本正常的功能。** 修訂輪的工作指引要求固定修前與修後版本，分別驗證「原問題修前會紅、修後會綠」與「既有行為前後都正常」，再讓全新審查席檢查修補副作用。修補混入重構時，保留分段驗證點；特定高風險保留案例還要抽查測試能否抓到退化。`lumos loop fix-check` 會檢查修正紀錄與修後測試，目前只提醒、不取代這些驗證或下一輪審查。審查材料的引用、快照與紀錄也會先核對，避免拿不完整證據當通過依據。詳見 [代碼審工作指引](skills/lumos-code-loop/SKILL.md)。
+ 
+ 審查只是其中一層。風險分級、AI 審查、放行規則、外部規則（linter）和測試各有漏洞，疊在一起，問題就難一路穿過，這就是瑞士起司模型。
+ 
+ <p align="center">
+   <a href="assets/swiss-cheese-zh.svg">
+     <img src="assets/swiss-cheese-zh.svg" alt="五層瑞士起司防線，以及漏網問題回饋成新規則或測試的流程" width="760">
+   </a>
+ </p>
+ 
++## 測試要有用，不能只是把程式碼重寫一次
++
++**測試全綠，不等於功能正確。** 如果測試用和正式程式一樣的算法算出預期值，兩邊犯同一個錯還是會過；如果只檢查原始碼含有某個函式名稱，實際行為壞了也可能照樣綠。
++
++例如需求是「3 件商品，每件 5 元，總價應為 15 元」：
++
++```python
++# 壞例：把實作的算法再寫一次，無法獨立判斷算法是否符合需求
++expected = quantity * unit_price
++assert total_price(quantity, unit_price) == expected
++
++# 好例：用已確認的需求案例，檢查實際結果
++assert total_price(quantity=3, unit_price=5) == 15
++```
++
++這個案例只是起點；折扣、空訂單與錯誤輸入等行為仍要依需求補齊。Lumos 要求開發時先說清楚「輸入、預期結果、判準來源、應抓到的錯誤」，修 bug 與關鍵守衛還要確認故障真的能讓目標斷言翻紅，再還原跑綠。結構與接線檢查可以保留，但不能取代行為驗證。
++
++**能抓到程式被改壞，不等於預期答案正確。** 程式與測試可能一起抄錯需求；先核對獨立答案來源，再看相關故障紅→還原綠。疑似綁死實作的行為測試，另驗保持行為的重構仍綠。各棧的撰寫流程、工具資格考卷與證據邊界見 [測試品質接入標準](skills/lumos-project-notes/commands/test-quality-standard.md)。
++
++完整做法見 [實作測試品質](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質)，開發與審查工作指引共用這份規範。這是開發及審查要求；自動檢查紀錄格式，不能替人判斷測試是否真的有用。
++
++已安裝的 `lumos test-quality scan <測試檔或目錄> --json` 提供唯讀候選掃描；Python 可找四類可疑寫法，其他語言選配本機 Semgrep 辨識特定斷言自比（含 PHP）。`capture` 可明示執行可信本機 runner、保存 JUnit 與來源快照；`check` 核對正常→故障→還原及選配重構證據。**零候選、綠燈或故障檢出，都不能單獨證明測試有獨立答案。** 工具不提供沙盒、不替代需求來源審查；先用 `capabilities` 看範圍，再讀 [操作與能力邊界](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
++
+ ## 人在哪裡介入？
+ 
+ Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責這些判斷：
+ 
+ - 需求、取捨、要不要接受風險，以及不可逆的操作。
+ - 高風險審查到 3 輪仍未通過，就停下交給人，AI 不自行宣布通過。人決定加輪或接受風險後，用 `lumos loop cap-decision` 留下裁定；繼續前用 `lumos loop retro` 記合格回顧，或留下有理由的略過紀錄。已記人裁卻缺少這項紀錄，後續記帳與處置閘會擋下。
+ - 規則還符不符合業務，要人簽核並留紀錄，這是測試證明不了的。
+ - 每輪的審查報告和處理結果都留在 repo，隨時可以抽查。
+ 
+ ## 怎麼防止筆記過期（drift）
+diff --git a/governance/eval/historical_case_corpus.py b/governance/eval/historical_case_corpus.py
+new file mode 100644
+index 00000000..38eff186
+--- /dev/null
++++ b/governance/eval/historical_case_corpus.py
+@@ -0,0 +1,111 @@
++#!/usr/bin/env python3
++"""Freeze three historical weak/strong test controls, without model calls."""
++import argparse
++import json
++from pathlib import Path
++import subprocess
++import tempfile
++
++import historical_test_quality as h
++
++JAVA_BASE = '631d7e3bc93f6f0ce76eb5a25fbaa6360c50a2f9'
++JAVA_FIXED = 'd92e4ae50cfa0f7e1b52e1230fdc72b34148c7b9'
++JAVA_PATCH = 'governance/review-reports/code-java補棧/r1-snapshot.patch'
++JAVA_PATCH_SHA = '5ef6bda8dcd87e9e230b155020a3c73db0478e39d0d23eb9da9456371bed0c09'
++JAVA_BLOBS = {'scripts/lumos': '29cd6837dcab8aff885186b021032b83d2b4e039',
++              'scripts/test_lumos.py': '324c35a186a5e3919cb83986a2205780f8f5592e'}
++CASES = [
++    {'id': 'lock-reentrancy', 'role': 'grader-control', 'shape': 'claimed-scenario-not-established',
++     'method': h.METHOD, 'weak_checks': 4, 'strong_checks': 4, 'failed_indices': [3]},
++    {'id': 'java-discovery', 'role': 'effect-candidate', 'shape': 'missing-counterexamples',
++     'method': 't_java_profile_discovery', 'weak_checks': 8, 'strong_checks': 12, 'failed_indices': [8, 9, 10, 11]},
++    {'id': 'fence-recovery', 'role': 'effect-candidate', 'shape': 'fix-broader-than-covered-inputs',
++     'method': 't_closing_fence_must_not_carry_a_language_tag', 'weak_checks': 5, 'strong_checks': 8, 'failed_indices': [5, 6]},
++]
++
++
++def commit_files(commit):
++    return {file: h.historical_file(commit, file) for file in JAVA_BLOBS}
++
++
++def java_snapshot():
++    patch = h.REPO / JAVA_PATCH
++    if h.sha(patch.read_text()) != JAVA_PATCH_SHA:
++        raise ValueError('historical-patch-sha-mismatch')
++    with tempfile.TemporaryDirectory(prefix='history-java-snapshot-') as directory:
++        work = Path(directory)
++        subprocess.run(['git', 'init', '-q', str(work)], check=True, timeout=10)
++        (work / 'scripts').mkdir()
++        for file, text in commit_files(JAVA_BASE).items():
++            (work / file).write_text(text)
++        (work / 'scripts/lumos').chmod(0o755)
++        subprocess.run(['git', 'apply', '--include=scripts/lumos', '--include=scripts/test_lumos.py', str(patch)],
++                       cwd=work, capture_output=True, check=True, timeout=20)
++        result = {file: (work / file).read_text() for file in JAVA_BLOBS}
++        for file, text in result.items():
++            blob = subprocess.run(['git', 'hash-object', '--stdin'], input=text, capture_output=True,
++                                  text=True, check=True, timeout=10).stdout.strip()
++            if blob != JAVA_BLOBS[file]:
++                raise ValueError('reconstructed-blob-mismatch:' + file)
++        return result
++
++
++def load_materials():
++    faulty, fixed = (commit_files(h.VERSIONS[key]) for key in ('faulty', 'fixed'))
++    java = java_snapshot()
++    return {
++        'lock-reentrancy': {'faulty': faulty, 'fixed': fixed,
++                            'provenance': {'type': 'commits', **h.VERSIONS}},
++        'fence-recovery': {'faulty': faulty, 'fixed': fixed,
++                           'provenance': {'type': 'commits', **h.VERSIONS}},
++        'java-discovery': {'faulty': java, 'fixed': commit_files(JAVA_FIXED),
++                           'provenance': {'type': 'snapshot-and-commit', 'base': JAVA_BASE,
++                                          'snapshot': JAVA_PATCH, 'snapshot_sha256': JAVA_PATCH_SHA,
++                                          'reconstructed_blobs': JAVA_BLOBS, 'fixed': JAVA_FIXED}},
++    }
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--out', type=Path, required=True)
++    args = parser.parse_args()
++    args.out.mkdir(parents=True, exist_ok=False)
++    materials = load_materials()
++    manifest = {'purpose': 'historical-control-qualification-not-model-effect', 'cases': CASES,
++                'runner_sha256': h.sha(Path(__file__).read_text()),
++                'replay_dependency_sha256': h.sha(Path(h.__file__).read_text()),
++                'provenance': {key: value['provenance'] for key, value in materials.items()},
++                'file_sha256': {key: {version: {f: h.sha(text) for f, text in value[version].items()}
++                                     for version in ('faulty', 'fixed')} for key, value in materials.items()}}
++    # Preset cases/counts/targets are saved before any replay; no score-guided selection.
++    (args.out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
++    rows, tests = [], {}
++    for case in CASES:
++        material = materials[case['id']]
++        original = {kind: h.test_function(material[version]['scripts/test_lumos.py'], case['method'])
++                    for kind, version in [('weak', 'faulty'), ('strong', 'fixed')]}
++        tests[case['id']] = {'original': original, 'executed': dict(original)}
++        if case['id'] == 'lock-reentrancy':
++            tests[case['id']]['executed']['strong'] = original['strong'].replace('_sig.alarm(8)', '_sig.alarm(2)', 1)
++        for version in ('faulty', 'fixed'):
++            for kind, code in tests[case['id']]['executed'].items():
++                row = h.replay(material[version]['scripts/lumos'], code, method=case['method'],
++                               require_precondition_label=case['id'] != 'java-discovery')
++                row.update(case=case['id'], version=version, kind=kind, test_sha256=h.sha(code))
++                checks = row.get('checks', [])
++                failed = [i for i, c in enumerate(checks) if not c['passed']]
++                expected = case['failed_indices'] if version == 'faulty' and kind == 'strong' else []
++                row['qualified'] = row['status'] == 'executed' and len(checks) == case[kind + '_checks'] and failed == expected
++                rows.append(row)
++                print(case['id'], version, kind, 'qualified=' + str(row['qualified']), 'failed=' + str(failed), flush=True)
++                (args.out / 'results.json').write_text(json.dumps({'rows': rows}, ensure_ascii=False, indent=2) + '\n')
++    (args.out / 'test-materials.json').write_text(json.dumps(tests, ensure_ascii=False, indent=2) + '\n')
++    passed = all(row['qualified'] for row in rows)
++    (args.out / 'summary.json').write_text(json.dumps({'controls_passed': passed, 'cells': len(rows),
++        'case_count': len(CASES), 'effect_candidates': [c['id'] for c in CASES if c['role'] == 'effect-candidate'],
++        'retired_effect_control': 'lock-reentrancy', 'model_calls': 0}, indent=2) + '\n')
++    return 0 if passed else 2
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/governance/eval/historical_handbook_trial.py b/governance/eval/historical_handbook_trial.py
+new file mode 100644
+index 00000000..39160bf5
+--- /dev/null
++++ b/governance/eval/historical_handbook_trial.py
+@@ -0,0 +1,282 @@
++#!/usr/bin/env python3
++"""Fixed historical lock test-generation trial; no verifier feedback to model."""
++import argparse
++import ast
++import contextlib
++import importlib.util
++import io
++import json
++import os
++from pathlib import Path
++import re
++import signal
++import subprocess
++import sys
++import tempfile
++import unittest
++
++import historical_test_quality as history
++from test_quality_handbook import run_model
++
++MODEL = 'claude-opus-5-5'
++ASSERTS = {'assertTrue', 'assertFalse', 'assertEqual', 'assertGreater'}
++API = '''subject.fixture(mode) 是隔離測試 context manager。mode 只用 "normal" 或 "cache-moved"。
++with fixture(mode) as s: 建立獨立筆記庫、私有測試HOME；cache-moved 模擬使用者將快取目錄搬到另一個磁碟。
++s.lock() 是被測歷史 _vault_write_lock 的 context manager；s.fallback_ready() 回傳主要快取路徑是否不可信；s.held() 回傳筆記庫目前是否確實有鎖；s.external_written() 回傳外部快取目錄是否寫入鎖。
++鎖規格：同一程序重複取同一筆記庫鎖可重入；主要快取目錄不可信時換到筆記庫自身鎖，不能不鎖，不能寫入外部快取目錄；離開最外層後釋放鎖。
++只寫 unittest.TestCase 的 test_ 方法，import unittest、from subject import fixture。
++固定可執行語法：with fixture("normal"或"cache-moved") as s、with s.lock()、pass，以及 self.assertTrue/assertFalse/assertEqual/assertGreater(s.fallback_ready()/s.held()/s.external_written(), 字面值)。可省略斷言第二參數。可巢狀 with，不用迴圈/變數赋值/其他API/import/函式/例外捕捉/檔尾main。
++fixture 的 s.lock() 最多等待2秒，無法進入時記錄具體取鎖失敗並拋 AssertionError；程序15秒上限只是執行器防卡，不算測試檢出。'''
++
++LEAN_API = '''測試介面：from subject import fixture。
++fixture("normal") 或 fixture("cache-moved") 提供隔離的筆記庫與家目錄設定，with fixture(...) as s 使用。
++s.lock() 是鎖的 context manager；s.fallback_ready() 查主要快取路徑是否不可信；s.held() 查鎖是否存在；s.external_written() 查外部快取目錄是否有鎖寫入。
++輸出 unittest.TestCase 的 test_ 方法，只 import unittest 與 from subject import fixture。
++可執行語法：with fixture(...) as s、with s.lock()、pass、self.assertTrue/assertFalse/assertEqual/assertGreater 搭配以上查詢及字面值。with 可依 Python 語法組合。測試用名稱 self 與 s，不使用其他變數、迴圈、額外呼叫或匯入；可含標準 main 尾段。
++fixture 有取鎖等待上限；取鎖失敗回報 AssertionError。程序逾時、語法或環境錯誤列無效。'''
++LEAN_TASK = '''請為笔記修改的鎖加實際有用的測試，自行選擇情境。
++需求：同一程序對同一筆記庫可重入；使用者可以搬移快取目錄，這項設定下仍須保持鎖的行為，鎖只寫在可信位置；使用完應釋放。
++最後只輸出一個 python code fence。implementation.txt 是目前實作的程式投影（去除註解與文件字串）；先讀。沒有執行工具或驗證回饋。'''
++
++
++def validate(code):
++    tree = ast.parse(code)
++    footer = ast.parse('if __name__ == "__main__":\n    unittest.main()\n').body[0]
++    checked = tree
++    if tree.body and ast.dump(tree.body[-1]) == ast.dump(footer):
++        # This exact conventional footer is false under generated_tests module name.
++        # Keep original code for execution/hash; validate the test body separately.
++        checked = ast.Module(body=tree.body[:-1], type_ignores=[])
++    allowed = {ast.Module, ast.Import, ast.ImportFrom, ast.alias, ast.ClassDef,
++               ast.FunctionDef, ast.arguments, ast.arg, ast.With, ast.withitem,
++               ast.Expr, ast.Call, ast.Attribute, ast.Name, ast.Load, ast.Store,
++               ast.Constant, ast.Pass}
++    if len(list(ast.walk(tree))) > 2000:
++        raise ValueError('test-too-large')
++    for node in ast.walk(checked):
++        if type(node) not in allowed:
++            raise ValueError('unsupported-node:' + type(node).__name__)
++        if isinstance(node, ast.Import) and [(a.name, a.asname) for a in node.names] != [('unittest', None)]:
++            raise ValueError('unsupported-import')
++        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or [(a.name, a.asname) for a in node.names] != [('fixture', None)]):
++            raise ValueError('unsupported-import')
++        if isinstance(node, ast.FunctionDef) and (not node.name.startswith('test_') or len(node.args.args) != 1 or node.args.args[0].arg != 'self' or node.decorator_list or node.returns):
++            raise ValueError('unsupported-method')
++        if isinstance(node, ast.ClassDef) and (len(node.bases) != 1 or ast.unparse(node.bases[0]) != 'unittest.TestCase' or node.decorator_list or node.keywords):
++            raise ValueError('unsupported-class')
++        if isinstance(node, ast.Name) and node.id not in {'unittest', 'fixture', 's', 'self'}:
++            raise ValueError('unsupported-name')
++        if isinstance(node, ast.Attribute):
++            attrs = {'self': ASSERTS, 's': {'lock', 'fallback_ready', 'held', 'external_written'}, 'unittest': {'TestCase'}}
++            if not isinstance(node.value, ast.Name) or node.attr not in attrs.get(node.value.id, set()):
++                raise ValueError('unsupported-attribute')
++        if isinstance(node, ast.Call):
++            if node.keywords:
++                raise ValueError('unsupported-keywords')
++            if isinstance(node.func, ast.Name) and (node.func.id != 'fixture' or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.args[0].value not in {'normal', 'cache-moved'}):
++                raise ValueError('unsupported-call')
++            if not isinstance(node.func, (ast.Name, ast.Attribute)):
++                raise ValueError('unsupported-call')
++    return tree
++
++
++def execute(code, source, work):
++    validate(code)
++    path = work / 'historical_lumos.py'
++    path.write_text(source)
++    spec = importlib.util.spec_from_file_location('historical_lumos', path)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    evidence = {'blocked_nested_fallback': False, 'assertions': 0, 'entries': []}
++
++    class Scenario:
++        def __init__(self, home, vault, external):
++            self.home, self.vault, self.external = home, vault, external
++            self.depth = 0
++
++        def fallback_ready(self):
++            return not module._trusted_private_dir(self.home / '.cache/lumos/vault-lock', '.cache', 'lumos', 'vault-lock')
++
++        def held(self):
++            return any(self.vault.glob('*.lock')) or any((self.home / '.cache/lumos/vault-lock').glob('*.lock'))
++
++        def external_written(self):
++            return any(self.external.rglob('*.lock'))
++
++        @contextlib.contextmanager
++        def lock(self):
++            depth, fallback = self.depth, self.fallback_ready()
++            def expired(*unused):
++                raise TimeoutError('lock-enter-incomplete')
++            previous = signal.signal(signal.SIGALRM, expired)
++            signal.alarm(2)
++            cm = module._vault_write_lock(self.vault)
++            try:
++                try:
++                    cm.__enter__()
++                except TimeoutError:
++                    evidence['blocked_nested_fallback'] |= depth > 0 and fallback
++                    evidence['entries'].append({'depth': depth, 'fallback': fallback, 'completed': False})
++                    raise AssertionError('lock-enter-incomplete') from None
++            finally:
++                signal.alarm(0)
++                signal.signal(signal.SIGALRM, previous)
++            evidence['entries'].append({'depth': depth, 'fallback': fallback, 'completed': True})
++            self.depth += 1
++            try:
++                yield
++            finally:
++                self.depth -= 1
++                cm.__exit__(None, None, None)
++
++    @contextlib.contextmanager
++    def fixture(mode):
++        with tempfile.TemporaryDirectory(dir=work) as directory:
++            base = Path(directory)
++            home, vault, external = (base / name for name in ('home', 'vault', 'external'))
++            for p in (home, vault, external, home / '.cache'):
++                p.mkdir()
++            if mode == 'cache-moved':
++                (home / '.cache/lumos').symlink_to(external)
++            else:
++                (home / '.cache/lumos/vault-lock').mkdir(parents=True, mode=0o700)
++            previous = os.environ['HOME']
++            os.environ['HOME'] = str(home)
++            try:
++                yield Scenario(home, vault, external)
++            finally:
++                os.environ['HOME'] = previous
++
++    class Counted(unittest.TestCase):
++        pass
++    for name in ASSERTS:
++        def counted(self, *args, _name=name):
++            evidence['assertions'] += 1
++            return getattr(unittest.TestCase, _name)(self, *args)
++        setattr(Counted, name, counted)
++    proxy = type('UnittestAPI', (), {'TestCase': Counted})
++    def importer(name, *unused):
++        if name == 'unittest':
++            return proxy
++        if name == 'subject':
++            return type('SubjectAPI', (), {'fixture': staticmethod(fixture)})
++        raise ImportError(name)
++    namespace = {'__name__': 'generated_tests', '__builtins__': {'__import__': importer, '__build_class__': __build_class__}}
++    exec(compile(code, '<generated-tests>', 'exec'), namespace)
++    suite = unittest.TestSuite()
++    for value in namespace.values():
++        if isinstance(value, type) and issubclass(value, Counted) and value is not Counted:
++            suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(value))
++    stream = io.StringIO()
++    result = unittest.TextTestRunner(stream=stream).run(suite)
++    return {'status': 'executed', 'tests_run': result.testsRun, 'passed': result.wasSuccessful(),
++            'failures': [text for _, text in result.failures], 'errors': [text for _, text in result.errors],
++            'output': stream.getvalue(), 'evidence': evidence}
++
++
++def grade(code):
++    scores = {}
++    for key, commit in history.VERSIONS.items():
++        source = history.historical_file(commit, 'scripts/lumos')
++        with tempfile.TemporaryDirectory(prefix='history-grade-') as directory:
++            work = Path(directory)
++            (work / 'home').mkdir()
++            try:
++                proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--child'],
++                                      input=json.dumps({'code': code, 'source': source}), capture_output=True,
++                                      text=True, cwd=work, env={'HOME': str(work / 'home'), 'PATH': os.defpath, 'TMPDIR': str(work)}, timeout=15)
++                scores[key] = json.loads(proc.stdout) if proc.returncode == 0 else {'status': 'invalid', 'stderr': proc.stderr}
++            except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
++                scores[key] = {'status': 'invalid', 'reason': type(exc).__name__}
++    baseline, fault = scores['fixed'], scores['faulty']
++    valid = all(s.get('status') == 'executed' and s.get('tests_run', 0) > 0 and s['evidence']['assertions'] > 0 and not s['errors'] for s in scores.values()) and baseline.get('passed', False)
++    detected = valid and bool(fault['failures']) and fault['evidence']['blocked_nested_fallback'] and any('AssertionError: lock-enter-incomplete' in f for f in fault['failures'])
++    return {'status': 'detected' if detected else ('survived' if valid and fault['passed'] else 'invalid'), 'versions': scores, 'test_sha256': history.sha(code)}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--child', action='store_true')
++    parser.add_argument('--controls', action='store_true')
++    parser.add_argument('--run', action='store_true')
++    parser.add_argument('--prompt-profile', choices=['explicit', 'lean'], default='explicit')
++    parser.add_argument('--out', type=Path)
++    args = parser.parse_args()
++    if args.child:
++        try:
++            data = json.load(sys.stdin)
++            result = execute(data['code'], data['source'], Path.cwd())
++        except Exception as exc:
++            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
++        print(json.dumps(result, ensure_ascii=False))
++        return 0
++    if not args.out or not (args.controls or args.run):
++        parser.error('Use --controls or --run with --out NEW_DIRECTORY')
++    args.out.mkdir(parents=True, exist_ok=False)
++    if args.controls:
++        head = 'import unittest\nfrom subject import fixture\nclass LockTests(unittest.TestCase):\n    def test_lock(self):\n        with fixture("cache-moved") as s:\n            self.assertTrue(s.fallback_ready())\n'
++        weak = head + '            with s.lock():\n                self.assertTrue(s.held())\n            with s.lock():\n                self.assertTrue(s.held())\n'
++        strong = head + '            with s.lock():\n                with s.lock():\n                    self.assertTrue(s.held())\n'
++        normal = head.replace('"cache-moved"', '"normal"').replace('assertTrue(s.fallback_ready())', 'assertFalse(s.fallback_ready())') + '            with s.lock():\n                self.assertTrue(s.held())\n            self.assertFalse(s.held())\n'
++        cases = {'weak': weak, 'strong': strong, 'empty': 'import unittest\n', 'bad-baseline': head + '            self.assertFalse(s.fallback_ready())\n', 'unsupported': 'import os\n', 'normal': normal,
++                 'canonical-footer': strong + '\nif __name__ == "__main__":\n    unittest.main()\n',
++                 'noncanonical-footer': strong + '\nif True:\n    unittest.main()\n'}
++        scores = {name: grade(code) for name, code in cases.items()}
++        expected = {'weak': 'survived', 'strong': 'detected', 'empty': 'invalid', 'bad-baseline': 'invalid', 'unsupported': 'invalid', 'normal': 'survived', 'canonical-footer': 'detected', 'noncanonical-footer': 'invalid'}
++        result = {'runner_sha256': history.sha(Path(__file__).read_text()), 'cases': cases, 'scores': scores}
++        (args.out / 'controls.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
++        passed = all(scores[k]['status'] == v for k, v in expected.items())
++        print('controls_passed=' + str(passed))
++        return 0 if passed else 2
++    command_doc = (history.REPO / 'skills/lumos-project-notes/commands/03-寫回圖譜.md').read_text()
++    handbook = command_doc.split('**測試必須有獨立的判準')[1].split('## ')[0]
++    handbook = '**測試必須有獨立的判準' + handbook
++    source = history.historical_file(history.VERSIONS['faulty'], 'scripts/lumos')
++    node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == '_vault_write_lock')
++    visible = ast.get_source_segment(source, node)
++    api = API
++    prompt = API + '\n請為此內部鎖合約補實際有用的測試。最後只輸出一個 python code fence，不要其他文字。\n實作片段在 implementation.txt；先讀。沒有執行工具或驗證回饋。'
++    if args.prompt_profile == 'lean':
++        for function in ast.walk(node):
++            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.body and isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant) and isinstance(function.body[0].value.value, str):
++                function.body = function.body[1:]
++        visible = ast.unparse(node)
++        api = LEAN_API
++        prompt = api + '\n' + LEAN_TASK
++    manifest = {'model': MODEL, 'repeats': 2, 'prompt_profile': args.prompt_profile, 'api': api, 'prompt': prompt, 'handbook': handbook,
++                'visible_source': visible, 'visible_source_sha256': history.sha(visible), 'versions': history.VERSIONS,
++                'runner_sha256': history.sha(Path(__file__).read_text()), 'primary': 'only submission before any verifier feedback'}
++    (args.out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
++    rows = []
++    for repeat in range(2):
++        for arm in (['control', 'handbook'] if repeat == 0 else ['handbook', 'control']):
++            name = str(repeat) + '-' + arm
++            with tempfile.TemporaryDirectory(prefix='history-model-') as directory:
++                work = Path(directory)
++                (work / 'implementation.txt').write_text(visible)
++                system = '你是開發者，為既有功能寫測試。僅讀目前目錄提供的 implementation.txt。'
++                if arm == 'handbook':
++                    system += '\n正式測試手冊：\n' + handbook
++                row, raw = run_model(work, system, prompt, MODEL, 180, False, args.out / (name + '.events.jsonl'))
++                reads = [c for c in row['calls'] if c['name'] == 'Read']
++                row['only_visible_material_read'] = bool(reads) and all(
++                    c['name'] == 'Read' and Path(c['input'].get('file_path', '')).resolve() == (work / 'implementation.txt').resolve()
++                    for c in row['calls'])
++                row['valid'] = row['valid'] and row['only_visible_material_read'] and (work / 'implementation.txt').read_text() == visible
++                row.update(arm=arm, repeat=repeat)
++                matches = re.findall(r'```python\s*\n(.*?)```', row['answer'], re.S)
++                if row['valid'] and len(matches) == 1:
++                    code = matches[0]
++                    row['score'] = grade(code)
++                    (args.out / (name + '.tests.json')).write_text(json.dumps({'code': code, 'sha256': history.sha(code)}, ensure_ascii=False, indent=2) + '\n')
++                else:
++                    row['score'] = {'status': 'invalid', 'reason': 'invalid-session-or-output'}
++                rows.append(row)
++                (args.out / 'results.json').write_text(json.dumps({'rows': rows}, ensure_ascii=False, indent=2) + '\n')
++                print(name, 'session_valid=' + str(row['valid']), 'score=' + row['score']['status'], flush=True)
++    return 0 if all(r['valid'] and r['score']['status'] != 'invalid' for r in rows) else 2
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/governance/eval/historical_test_quality.py b/governance/eval/historical_test_quality.py
+new file mode 100644
+index 00000000..26230f26
+--- /dev/null
++++ b/governance/eval/historical_test_quality.py
+@@ -0,0 +1,119 @@
++#!/usr/bin/env python3
++"""Replay one pinned historical weak-test case, never model-generated code."""
++import argparse
++import ast
++import hashlib
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++
++REPO = Path(__file__).resolve().parents[2]
++VERSIONS = {
++    'faulty': '2b4cb7ce22a49a07f215f2e1762b352c9e54415d',
++    'fixed': '810beb93dbe4329a8ac0c340c5985d38bdff011a',
++}
++METHOD = 't_vault_lock_falls_back_instead_of_giving_up'
++TARGET = '★同一個程序真巢狀拿同一把鎖不會卡死自己★(退路換了位置,可重入的鍵要跟著換)'
++
++
++def sha(value):
++    return hashlib.sha256(value.encode()).hexdigest()
++
++
++def historical_file(commit, path):
++    return subprocess.run(['git', 'show', commit + ':' + path], cwd=REPO,
++                          capture_output=True, text=True, check=True, timeout=20).stdout
++
++
++def test_function(source, method=METHOD):
++    matches = [n for n in ast.parse(source).body
++               if isinstance(n, ast.FunctionDef) and n.name == method]
++    if len(matches) != 1:
++        raise ValueError('historical-test-not-unique')
++    return ast.get_source_segment(source, matches[0]) + '\n'
++
++
++def replay(source, test, method=METHOD, require_precondition_label=True):
++    # Historical test is trusted repository code. These paths are isolated fixtures,
++    # not a sandbox suitable for arbitrary model output.
++    with tempfile.TemporaryDirectory(prefix='lumos-history-') as directory:
++        work = Path(directory)
++        (work / 'lumos.py').write_text(source)
++        (work / 'home').mkdir()
++        harness = '''import importlib.util,json,sys,tempfile
++from pathlib import Path
++spec=importlib.util.spec_from_file_location('historical_lumos','lumos.py')
++m=importlib.util.module_from_spec(spec);sys.modules[spec.name]=m;spec.loader.exec_module(m)
++def _lm(): return m
++def _load_lumos(): return m
++def mkvault(): return Path(tempfile.mkdtemp(prefix='vault-',dir='.'))
++checks=[]
++def check(label,condition,detail):
++    checks.append({'label':label,'passed':bool(condition),'detail':str(detail)})
++'''
++        harness += test + '\n' + method + '()\nprint("RESULT_JSON="+json.dumps(checks,ensure_ascii=False))\n'
++        (work / 'replay.py').write_text(harness)
++        env = {'PATH': os.defpath, 'HOME': str(work / 'home'),
++               'TMPDIR': str(work), 'PYTHONDONTWRITEBYTECODE': '1'}
++        try:
++            result = subprocess.run([sys.executable, 'replay.py'], cwd=work, env=env,
++                                    capture_output=True, text=True, timeout=15)
++        except subprocess.TimeoutExpired:
++            return {'status': 'invalid', 'reason': 'child-timeout'}
++        raw = {'stdout': result.stdout, 'stderr': result.stderr, 'returncode': result.returncode}
++        lines = [line.removeprefix('RESULT_JSON=') for line in result.stdout.splitlines()
++                 if line.startswith('RESULT_JSON=')]
++        if result.returncode or len(lines) != 1:
++            return dict(raw, status='invalid', reason='child-error-or-missing-result')
++        checks = json.loads(lines[0])
++        if not checks or not checks[0]['passed'] or (require_precondition_label and not checks[0]['label'].startswith('★前置★')):
++            return dict(raw, checks=checks, status='invalid', reason='fixture-not-established')
++        return dict(raw, checks=checks, status='executed')
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--out', type=Path, required=True, help='New output directory')
++    args = parser.parse_args()
++    if os.name != 'posix' or not hasattr(__import__('signal'), 'SIGALRM'):
++        parser.error('This historical case requires POSIX symlinks and SIGALRM')
++    args.out.mkdir(parents=True, exist_ok=False)
++    sources = {key: historical_file(commit, 'scripts/lumos') for key, commit in VERSIONS.items()}
++    files = {key: historical_file(commit, 'scripts/test_lumos.py') for key, commit in VERSIONS.items()}
++    original = {key: test_function(value) for key, value in files.items()}
++    assert original['fixed'].count('_sig.alarm(8)') == 1
++    tests = {'weak': original['faulty'], 'strong': original['fixed'].replace('_sig.alarm(8)', '_sig.alarm(2)', 1)}
++    rows = []
++    for version, source in sources.items():
++        for kind, test in tests.items():
++            row = replay(source, test)
++            row.update(version=version, test_kind=kind, source_sha256=sha(source), test_sha256=sha(test))
++            rows.append(row)
++    valid = all(row['status'] == 'executed' for row in rows)
++    for row in rows:
++        failed = [check for check in row.get('checks', []) if not check['passed']]
++        labels = [check['label'] for check in row.get('checks', [])]
++        required_target = TARGET if row['test_kind'] == 'strong' else '同一個程序巢狀拿同一把鎖不會卡死自己'
++        valid = valid and len(labels) == 4 and required_target in labels
++        expected_red = row['version'] == 'faulty' and row['test_kind'] == 'strong'
++        valid = valid and (len(failed) == 1 and failed[0]['label'] == TARGET and
++                          '巢狀拿同一把鎖卡住了' in failed[0]['detail'] if expected_red else not failed)
++    report = {
++        'case': 'fallback-lock-reentrancy', 'preflight_passed': bool(valid),
++        'versions': VERSIONS, 'runner_sha256': sha(Path(__file__).read_text()),
++        'historical_file_sha256': {k: {'scripts/lumos': sha(sources[k]), 'scripts/test_lumos.py': sha(files[k])} for k in VERSIONS},
++        'original_test_sha256': {k: sha(v) for k, v in original.items()},
++        'instrument': 'Only strong test alarm shortened from 8 to 2 seconds; production unchanged; child deadline 15 seconds',
++        'rows': rows,
++    }
++    (args.out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
++    (args.out / 'test-materials.json').write_text(json.dumps({'original': original, 'executed': tests}, ensure_ascii=False, indent=2) + '\n')
++    print(json.dumps({'preflight_passed': bool(valid), 'report': str(args.out / 'report.json')}))
++    return 0 if valid else 2
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/governance/eval/test_quality_corpus.py b/governance/eval/test_quality_corpus.py
+new file mode 100644
+index 00000000..2c85b8a1
+--- /dev/null
++++ b/governance/eval/test_quality_corpus.py
+@@ -0,0 +1,71 @@
++#!/usr/bin/env python3
++"""跨語言固定語法考卷；未支援的規則不算通過。"""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[2]
++EXTS = {'python': '.py', 'kotlin': '.kt', 'java': '.java', 'swift': '.swift',
++        'csharp': '.cs', 'javascript': '.js', 'typescript': '.ts'}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--semgrep', help='選配固定版本的本機 Semgrep CE')
++    args = parser.parse_args()
++    corpus_path = ROOT/'governance/eval/test-quality/corpus-v1.json'
++    corpus = json.loads(corpus_path.read_text())
++    report = {'schema_version': 1, 'kind': 'corpus', 'verdict': 'not_assessed',
++              'corpus_sha256': hashlib.sha256(corpus_path.read_bytes()).hexdigest(),
++              'tool': {'name': 'test-quality-corpus', 'version': '0.1', 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
++              'cases': [], 'complete': False}
++    with tempfile.TemporaryDirectory(prefix='lumos-quality-corpus-') as td:
++        root = Path(td)
++        frozen_scanner = root/'test_quality_scan.py'
++        frozen_scanner.write_bytes((ROOT/'scripts/test_quality_scan.py').read_bytes())
++        (root/'test_quality_semgrep.py').write_bytes((ROOT/'scripts/test_quality_semgrep.py').read_bytes())
++        impl = root/'pricing.py'
++        impl.write_text(corpus['implementation']['source'])
++        for case in corpus['cases']:
++            source = root/('test_'+case['id']+EXTS[case['language']])
++            # 非 Java/C# 樣本為函式片段；這兩種加 class 容器，仍不宣稱可編譯。
++            text = case['source']
++            if case['language'] in {'java', 'csharp'}:
++                text = 'class TestPrice {\n' + text + '\n}'
++            source.write_text(text)
++            command = [sys.executable, str(frozen_scanner), str(source), '--json']
++            if case['language'] == 'python':
++                command += ['--implementation', 'pricing='+str(impl)]
++            elif args.semgrep:
++                command += ['--semgrep', args.semgrep]
++            entry = {'case_id': case['id'], 'language': case['language'], 'status': 'unknown',
++                     'manual_disposition': case['manual_disposition']}
++            report['cases'].append(entry)
++            try:
++                run = subprocess.run(command, capture_output=True, text=True, timeout=50)
++                result = json.loads(run.stdout)
++                entry['evidence'] = result
++                if not result['complete'] or run.returncode != 0:
++                    entry['status'] = 'unavailable'
++                    continue
++                supported = {'same-comparison', 'mirror-expression', 'oracle-reuses-call', 'source-only'} if case['language'] == 'python' else {'same-comparison'}
++                expected = set(case['expected_candidate_rules'])
++                entry['unanalysed_rules'] = sorted(expected - supported)
++                actual = {f['rule_id'] for f in result['findings']}
++                entry['actual_rules'] = sorted(actual)
++                entry['expected_supported_rules'] = sorted(expected & supported)
++                entry['status'] = 'mismatch' if actual != expected & supported else ('unanalysed' if expected - supported else 'verified_for_supported_rules')
++            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, TypeError) as exc:
++                entry.update(status='unavailable', reason=str(exc))
++    report['complete'] = all(c['status'] == 'verified_for_supported_rules' for c in report['cases'])
++    report['supported_checks_match'] = all(c['status'] in {'verified_for_supported_rules', 'unanalysed'} for c in report['cases'])
++    print(json.dumps(report, ensure_ascii=False, indent=2))
++    return 0 if report['complete'] else 2
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/governance/eval/test_quality_evidence.py b/governance/eval/test_quality_evidence.py
+new file mode 100644
+index 00000000..83698646
+--- /dev/null
++++ b/governance/eval/test_quality_evidence.py
+@@ -0,0 +1,156 @@
++#!/usr/bin/env python3
++"""Fixed trusted oracle/fault/refactor experiment. No arbitrary commands or input code."""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import time
++
++VARIANTS = ('correct', 'wrong-policy', 'constant-zero', 'refactor', 'restored')
++PROFILES = ('independent', 'copied-correct', 'copied-wrong', 'structure', 'stability')
++# Human-fixed outcomes, not calculated from the subject's formula.
++EXPECTED = {
++    'independent': [True, False, False, True, True],
++    'copied-correct': [True, False, False, True, True],
++    'copied-wrong': [False, True, False, False, False],
++    'structure': [True, True, False, False, True],
++    'stability': [True, True, True, True, True],
++}
++ORACLE = {'requirement': 'integer amount, ten percent discount; amounts divisible by 100',
++          'examples': [[100, 90], [200, 180], [0, 0]],
++          'provenance': 'human-authored frozen synthetic specification, not SUT-generated',
++          'scope': 'only these fixed examples; not exhaustive business correctness'}
++PY_HARNESS = '''import json, unittest
++results = []
++class Tests(unittest.TestCase):
++    def test_behavior(self):
++BODY
++suite = unittest.defaultTestLoader.loadTestsFromTestCase(Tests)
++r = unittest.TestResult()
++suite.run(r)
++print(json.dumps({'tests_run': r.testsRun, 'assertions': results,
++ 'failures': len(r.failures), 'errors': len(r.errors), 'passed': r.wasSuccessful()}))
++'''
++JS_HARNESS = '''const assert = require('node:assert/strict');
++const results = [];
++let failures = 0;
++function check(id, actual, expected) {
++ try { assert.strictEqual(actual, expected); results.push({id, passed:true}); }
++ catch(e) { if (!(e instanceof assert.AssertionError)) throw e;
++ failures++; results.push({id, passed:false}); }
++}
++BODY
++console.log(JSON.stringify({tests_run:1, assertions:results, failures, errors:0, passed:failures===0}));
++'''
++
++
++def subject(language, variant):
++    mode = 'correct' if variant == 'restored' else variant
++    if language == 'python':
++        bodies = {'correct': '    subtotal = amount\n    return subtotal - subtotal // 10\n',
++                  'wrong-policy': '    subtotal = amount\n    return subtotal - subtotal * 12 // 100\n',
++                  'constant-zero': '    return 0\n',
++                  'refactor': '    return amount * 9 // 10\n'}
++        return 'def price(amount):\n' + bodies[mode]
++    bodies = {'correct': 'const subtotal = amount; return subtotal - Math.floor(subtotal / 10);',
++              'wrong-policy': 'const subtotal = amount; return subtotal - Math.floor(subtotal * 12 / 100);',
++              'constant-zero': 'return 0;', 'refactor': 'return Math.floor(amount * 9 / 10);'}
++    return 'function price(amount) { ' + bodies[mode] + ' }\n'
++
++
++def test_body(language, profile):
++    if profile in {'independent', 'copied-correct', 'copied-wrong'}:
++        pairs = [(100, '90'), (200, '180'), (0, '0')]
++        if profile != 'independent':
++            factor = '10' if profile == 'copied-correct' else '12'
++            pairs = [(n, f'{n} - {n} * {factor} // 100' if language == 'python'
++                      else f'{n} - Math.floor({n} * {factor} / 100)') for n, _ in pairs]
++        expressions = [(f'amount-{n}', f'price({n})', expected) for n, expected in pairs]
++    elif profile == 'structure':
++        expressions = [('source-subtotal', "'subtotal' in SUBJECT" if language == 'python'
++                        else "SUBJECT.includes('subtotal')", 'True' if language == 'python' else 'true')]
++    else:
++        expressions = [('determinism', 'price(100)', 'price(100)')]
++    if language == 'node':
++        return '\n'.join(f'check({json.dumps(cid)}, {actual}, {expected});'
++                         for cid, actual, expected in expressions)
++    # subTest preserves all assertions, including failures, without counting errors as detection.
++    return '\n'.join('        with self.subTest(id=' + repr(cid) + '):\n'
++                     f'            actual, expected = {actual}, {expected}\n'
++                     f'            results.append({{"id": {cid!r}, "passed": actual == expected}})\n'
++                     '            self.assertEqual(actual, expected)'
++                     for cid, actual, expected in expressions)
++
++
++def run_cell(language, executable, folder, profile, variant):
++    source = subject(language, variant)
++    harness = PY_HARNESS if language == 'python' else JS_HARNESS
++    declaration = 'SUBJECT = ' + repr(source) + '\n' if language == 'python' else 'const SUBJECT = ' + json.dumps(source) + ';\n'
++    code = source + declaration + harness.replace('BODY', test_body(language, profile))
++    path = folder / (profile + '--' + variant + ('.py' if language == 'python' else '.cjs'))
++    path.write_text(code, encoding='utf-8')
++    started = time.monotonic()
++    cell = {'profile': profile, 'variant': variant, 'source_sha256': hashlib.sha256(code.encode()).hexdigest(),
++            'subject_sha256': hashlib.sha256(source.encode()).hexdigest(), 'artifact': path.name}
++    try:
++        proc = subprocess.run([executable, str(path)], cwd=folder, capture_output=True, text=True, timeout=10)
++        cell.update(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
++        data = json.loads(proc.stdout)
++        valid = (proc.returncode == 0 and data['tests_run'] == 1 and data['errors'] == 0
++                 and len(data['assertions']) == (3 if profile.startswith(('independent', 'copied')) else 1))
++        cell.update(result=data, status='executed' if valid else 'invalid')
++        cell['matches_frozen_expectation'] = valid and data['passed'] == EXPECTED[profile][VARIANTS.index(variant)]
++    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError) as exc:
++        cell.update(status='invalid', reason=type(exc).__name__, matches_frozen_expectation=False)
++    cell['elapsed_seconds'] = round(time.monotonic() - started, 4)
++    return cell
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--out', required=True, type=Path, help='new output directory; existing paths refused')
++    args = parser.parse_args()
++    args.out.mkdir(parents=True, exist_ok=False)
++    out = args.out.resolve()
++    manifest = {'schema_version': 1, 'oracle': ORACLE, 'expected': EXPECTED,
++                'profiles': PROFILES, 'variants': VARIANTS,
++                'runner_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
++                'claims': 'fixed mechanism experiment, not model-effect or native framework qualification'}
++    (out/'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
++    report = {'languages': {}, 'complete': True, 'model_calls': 0}
++    for language, executable in [('python', sys.executable), ('node', shutil.which('node'))]:
++        if not executable:
++            report['languages'][language] = {'status': 'unavailable', 'cells': []}
++            report['complete'] = False
++            continue
++        folder = out/language
++        folder.mkdir()
++        version = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
++        cells = [run_cell(language, executable, folder, profile, variant)
++                 for profile in PROFILES for variant in VARIANTS]
++        cycle_folder = folder/'wrong-policy-cycle'
++        cycle_folder.mkdir()
++        cycle = []
++        for phase, variant in [('baseline', 'wrong-policy'), ('fault', 'constant-zero'), ('restored', 'wrong-policy')]:
++            phase_folder = cycle_folder/phase
++            phase_folder.mkdir()
++            cell = run_cell(language, executable, phase_folder, 'copied-wrong', variant)
++            cell['phase'] = phase
++            cycle.append(cell)
++        qualified = (version.returncode == 0 and all(c['matches_frozen_expectation'] for c in cells + cycle)
++                     and cycle[0]['source_sha256'] == cycle[2]['source_sha256'])
++        report['languages'][language] = {'status': 'synthetic-harness-verified' if qualified else 'invalid',
++                                        'executable': executable, 'version': version.stdout.strip() or version.stderr.strip(),
++                                        'cells': cells, 'wrong_policy_cycle': cycle}
++        report['complete'] &= qualified
++    (out/'results.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
++    print(json.dumps({'complete': report['complete'], 'languages': {k: {'status': v['status'], 'cells': len(v['cells'])}
++                                                                 for k, v in report['languages'].items()}}))
++    return 0 if report['complete'] else 2
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/governance/eval/test_quality_handbook.py b/governance/eval/test_quality_handbook.py
+new file mode 100644
+index 00000000..e218b2f7
+--- /dev/null
++++ b/governance/eval/test_quality_handbook.py
+@@ -0,0 +1,371 @@
++#!/usr/bin/env python3
++"""Frozen synthetic handbook experiment; Claude calls are opt-in, no push or policy edits.
++
++Only fixed unittest fixtures are executed, with an AST-restricted generated test subset.
++Trigger lane simulates metadata discovery via Read, not the native Skill router.
++"""
++import argparse
++import ast
++import hashlib
++import io
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import time
++import types
++import unittest
++
++ROOT = Path(__file__).resolve().parents[2]
++MATERIAL = ROOT / 'governance/eval/test-quality'
++TASKS = {
++    'pricing': {
++        'brief': '為 total(quantity, unit_price) 補 unittest。兩參數為非負整數；quantity >= 3 時總價乘 95% 並向下取整，其他照原價；任一負數拋 ValueError("negative")。已確認例子：total(3,101)=287，total(2,101)=202，total(0,101)=0。最近修過三件 bug：折扣消失、門檻把 3 排除、錯誤理由回傳其他文字。',
++        'source': 'def total(quantity, unit_price):\n    if quantity < 0 or unit_price < 0:\n        raise ValueError("negative")\n    amount = quantity * unit_price\n    return amount * 95 // 100 if quantity >= 3 else amount\n',
++        'faults': [('no-discount', 'amount * 95 // 100', 'amount'), ('threshold', 'quantity >= 3', 'quantity > 3'), ('reason', '"negative"', '"other"')],
++    },
++    'routing': {
++        'brief': '為 route(user_id, active) 補 unittest。本題 active 只傳入 bool，user_id 只傳入非 bool 的整數或拒絕案例的字串。先驗 user_id 是非負整數（否則 ValueError("invalid-user")），再驗 active 為 True（否則 ValueError("inactive")）；合法用戶 user_id 偶數回 A、奇數回 B。已確認例子 route(2,True)=A、route(3,True)=B。最近修過三件 bug：永遠回 A、漏掉 inactive 拒絕、inactive 的錯誤理由錯。',
++        'source': 'def route(user_id, active):\n    if not isinstance(user_id, int) or user_id < 0:\n        raise ValueError("invalid-user")\n    if not active:\n        raise ValueError("inactive")\n    return "A" if user_id % 2 == 0 else "B"\n',
++        'faults': [('constant', '"A" if user_id % 2 == 0 else "B"', '"A"'), ('skip-guard', 'if not active:', 'if False:'), ('reason', '"inactive"', '"other"')],
++    },
++}
++ALLOWED_ASSERTS = {'assertEqual', 'assertNotEqual', 'assertTrue', 'assertFalse', 'assertRaises', 'assertRaisesRegex', 'assertIn', 'assertIsInstance', 'subTest'}
++ALLOWED_NODES = {ast.Module, ast.Import, ast.ImportFrom, ast.alias, ast.ClassDef, ast.FunctionDef,
++                 ast.arguments, ast.arg, ast.Expr, ast.Constant, ast.Assign, ast.Name, ast.Load,
++                 ast.Store, ast.Attribute, ast.Call, ast.keyword, ast.Assert, ast.Compare, ast.Eq,
++                 ast.NotEq, ast.Gt, ast.GtE, ast.Lt, ast.LtE, ast.BinOp, ast.Add, ast.Sub, ast.Mult,
++                 ast.FloorDiv, ast.Mod, ast.UnaryOp, ast.USub, ast.Not, ast.With, ast.withitem,
++                 ast.For, ast.Pass, ast.Tuple, ast.List, ast.Dict, ast.Subscript}
++
++
++def sha(text):
++    return hashlib.sha256(text.encode()).hexdigest()
++
++
++def bounded_iteration_count(node, bindings=None):
++    bindings = bindings or {}
++    try:
++        if isinstance(node, (ast.Tuple, ast.List)):
++            size = len(ast.literal_eval(node))
++        elif isinstance(node, ast.Name) and isinstance(bindings.get(node.id), (tuple, list, dict)):
++            size = len(bindings[node.id])
++        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'items' and not node.args and not node.keywords and isinstance(node.func.value, ast.Name) and isinstance(bindings.get(node.func.value.id), dict):
++            size = len(bindings[node.func.value.id])
++        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range' and not node.keywords:
++            values = [ast.literal_eval(arg) for arg in node.args]
++            if not 1 <= len(values) <= 3 or any(type(value) is not int for value in values):
++                raise ValueError('nonliteral-range')
++            size = len(range(*values))
++        else:
++            raise ValueError('nonliteral-loop')
++    except (TypeError, SyntaxError, OverflowError) as exc:
++        raise ValueError('unsupported-loop') from exc
++    if size > 1000:
++        raise ValueError('loop-too-large')
++    return max(size, 1)
++
++
++def literal_binding_scopes(tree):
++    scopes = {}
++    functions = [tree] + [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
++    for function in functions:
++        bindings = {}
++        for statement in function.body:
++            if isinstance(statement, ast.Assign):
++                try:
++                    value = ast.literal_eval(statement.value)
++                except (ValueError, TypeError, SyntaxError):
++                    value = None
++                for target in statement.targets:
++                    if isinstance(target, ast.Name):
++                        bindings[target.id] = value
++        for node in ast.walk(function):
++            scopes[id(node)] = bindings
++    return scopes
++
++
++def validate_test(code):
++    """Bounded benchmark grammar, not a general sandbox or Python quality verdict."""
++    tree = ast.parse(code)
++    if len(list(ast.walk(tree))) > 3000:
++        raise ValueError('test-too-large')
++    loop_budget = 1
++    scopes = literal_binding_scopes(tree)
++    for node in ast.walk(tree):
++        if type(node) not in ALLOWED_NODES:
++            raise ValueError('unsupported-test-node:' + type(node).__name__)
++        if isinstance(node, ast.For):
++            loop_budget *= bounded_iteration_count(node.iter, scopes[id(node)])
++            if loop_budget > 10000:
++                raise ValueError('loop-budget-exceeded')
++        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'range':
++            bounded_iteration_count(node)
++        if isinstance(node, ast.Import) and any(a.name != 'unittest' or a.asname for a in node.names):
++            raise ValueError('unsupported-import')
++        if isinstance(node, ast.ImportFrom) and (node.module != 'subject' or node.level or any(a.name not in {'total', 'route'} or a.asname for a in node.names)):
++            raise ValueError('unsupported-import')
++        if isinstance(node, ast.Name) and node.id.startswith('__'):
++            raise ValueError('unsupported-dunder')
++        if isinstance(node, ast.Attribute):
++            permitted = ((isinstance(node.value, ast.Name) and node.value.id == 'self' and node.attr in ALLOWED_ASSERTS)
++                         or (isinstance(node.value, ast.Name) and node.value.id == 'unittest' and node.attr == 'TestCase')
++                         or (isinstance(node.value, ast.Name) and node.value.id == 'subject' and node.attr in {'total', 'route'})
++                         or node.attr == 'exception'
++                         or (node.attr == 'items' and isinstance(node.value, ast.Name) and isinstance(scopes[id(node)].get(node.value.id), dict)))
++            if not permitted:
++                raise ValueError('unsupported-attribute:' + node.attr)
++        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in {'total', 'route', 'str', 'ValueError', 'range'}:
++            raise ValueError('unsupported-call:' + node.func.id)
++    return tree
++
++
++def execute_tests(code, source):
++    """Called only inside a time-limited child, with restricted imports/builtins."""
++    validate_test(code)
++    mod = types.ModuleType('subject')
++    exec(source, mod.__dict__)
++    sys.modules['subject'] = mod
++    def imports(name, *args, **kwargs):
++        if name not in {'subject', 'unittest'}:
++            raise ImportError(name)
++        return mod if name == 'subject' else unittest
++    namespace = {'__name__': 'generated_tests', '__builtins__': {'__import__': imports, '__build_class__': __build_class__,
++                 'str': str, 'ValueError': ValueError, 'range': range, 'True': True, 'False': False}}
++    exec(compile(code, '<generated-tests>', 'exec'), namespace)
++    suite = unittest.TestSuite()
++    for value in namespace.values():
++        if isinstance(value, type) and issubclass(value, unittest.TestCase):
++            suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(value))
++    stream = io.StringIO()
++    result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
++    return {'tests_run': result.testsRun, 'passed': result.wasSuccessful(),
++            'failures': [(t.id(), error) for t, error in result.failures],
++            'errors': [(t.id(), error) for t, error in result.errors], 'output': stream.getvalue()}
++
++
++def run_test(code, source):
++    try:
++        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--child'],
++                              input=json.dumps({'code': code, 'source': source}), text=True,
++                              capture_output=True, timeout=15,
++                              env={'PATH': os.defpath, 'PYTHONDONTWRITEBYTECODE': '1'})
++        result = json.loads(proc.stdout)
++        result['returncode'] = proc.returncode
++        return result
++    except subprocess.TimeoutExpired:
++        return {'status': 'timeout'}
++    except json.JSONDecodeError:
++        return {'status': 'invalid', 'stderr': proc.stderr[-2000:]}
++
++
++def score(task_id, code):
++    task = TASKS[task_id]
++    baseline = run_test(code, task['source'])
++    checks = []
++    for fid, old, new in task['faults']:
++        mutant = run_test(code, task['source'].replace(old, new, 1))
++        restored = run_test(code, task['source'])
++        states = [baseline, mutant, restored]
++        if any(r.get('status') != 'executed' or r.get('tests_run', 0) == 0 for r in states):
++            status = 'invalid'
++        elif not baseline['passed'] or not restored['passed'] or mutant['errors']:
++            status = 'invalid'
++        elif mutant['passed']:
++            status = 'survived'
++        elif mutant['failures']:
++            status = 'detected'
++        else:
++            status = 'unknown'
++        checks.append({'fault_id': fid, 'status': status, 'mutant': mutant, 'restored': restored,
++                       'mutant_source_sha256': sha(task['source'].replace(old, new, 1))})
++    return {'baseline': baseline, 'checks': checks, 'test_sha256': sha(code), 'source_sha256': sha(task['source'])}
++
++
++def events(text):
++    rows = []
++    for line in text.splitlines():
++        try:
++            rows.append(json.loads(line))
++        except json.JSONDecodeError:
++            continue
++    return rows
++
++
++def tool_calls(parsed):
++    calls = []
++    for row in parsed:
++        message = row.get("message")
++        content = message.get("content", []) if isinstance(message, dict) else []
++        if not isinstance(content, list):
++            continue
++        for item in content:
++            if isinstance(item, dict) and item.get("type") == "tool_use":
++                calls.append({"name": item["name"], "input": item.get("input", {})})
++    return calls
++
++
++def draft_before_verify(calls):
++    draft = None
++    for call in calls:
++        data = call.get('input', {})
++        if call['name'] == 'Bash' and data.get('command', '').strip() == 'python3 verify.py':
++            break
++        if call['name'] == 'Write' and Path(data.get('file_path', '')).name == 'tests.py':
++            draft = data.get('content')
++    return draft
++
++
++def run_model(directory, system, prompt, model, timeout, behavior, raw_path, native=False):
++    tools = 'Read,Write,Bash' if behavior else ('Read,Skill' if native else 'Read')
++    cmd = ['claude', '-p', prompt, '--model', model, '--effort', 'low',
++           '--strict-mcp-config', '--setting-sources', 'project' if native else '', '--no-session-persistence', '--permission-mode', 'dontAsk',
++           '--tools', tools, '--allowedTools', 'Read', '--output-format', 'stream-json', '--verbose', '--system-prompt', system]
++    if native:
++        cmd += ['--settings', json.dumps({'disableAllHooks': True, 'disableBundledSkills': True, 'autoMemoryEnabled': False, 'skillOverrides': {'design': 'off', 'doctor': 'off', 'plugin-authoring': 'off'}}), '--allowedTools', 'Skill(lumos-project-notes)']
++    else:
++        cmd += ['--safe-mode', '--restricted']
++    if behavior:
++        cmd += ['--allowedTools', 'Write', 'Bash(python3 verify.py)']
++    start = time.monotonic()
++    try:
++        proc = subprocess.run(cmd, cwd=directory, capture_output=True, text=True, timeout=timeout)
++        raw, stderr, rc = proc.stdout, proc.stderr, proc.returncode
++    except subprocess.TimeoutExpired as exc:
++        raw = exc.stdout or b''
++        raw = raw.decode() if isinstance(raw, bytes) else raw
++        stderr, rc = 'model-timeout', None
++    raw_path.write_text(raw)
++    raw_path.with_suffix(".stderr.txt").write_text(stderr)
++    parsed = events(raw)
++    init = next((r for r in parsed if r.get('subtype') == 'init'), {})
++    result = next((r for r in reversed(parsed) if r.get('type') == 'result'), {})
++    calls = tool_calls(parsed)
++    advertised = init.get('skills', [])
++    valid = (rc == 0 and result.get('subtype') == 'success' and not result.get('is_error')
++             and init.get('model') == model and not result.get('permission_denials')
++             and (not native or advertised == ['lumos-project-notes']))
++    return {'valid': valid, 'advertised_skills': advertised, 'actual_model': init.get('model'), 'elapsed_seconds': round(time.monotonic()-start, 2),
++            'returncode': rc, 'calls': calls, 'answer': result.get('result', ''),
++            'cost_usd': result.get('total_cost_usd'), 'stderr': stderr}, raw
++
++
++def main():
++    global TASKS
++    ap = argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('--child', action='store_true')
++    ap.add_argument('--verify', choices=list(TASKS) + ['shipping', 'calendar'])
++    ap.add_argument('--suite', choices=['wording', 'holdout'], default='wording')
++    ap.add_argument('--run', action='store_true', help='Opt-in paid/usage-consuming fixed model calls')
++    ap.add_argument('--out', type=Path)
++    ap.add_argument('--lane', choices=['all', 'behavior', 'trigger', 'native-trigger'], default='all')
++    ap.add_argument('--timeout', type=int, default=180)
++    args = ap.parse_args()
++    suite_file = MATERIAL / ('handbook-holdout.json' if args.suite == 'holdout' else 'handbook-manifest.json')
++    if args.suite == 'holdout':
++        TASKS = json.loads(suite_file.read_text())['tasks']
++    if args.lane == 'native-trigger' and args.suite != 'holdout':
++        ap.error('--lane native-trigger requires --suite holdout')
++    if args.child:
++        try:
++            data = json.load(sys.stdin)
++            result = execute_tests(data['code'], data['source'])
++            result['status'] = 'executed'
++        except Exception as exc:
++            result = {'status': 'invalid', 'reason': type(exc).__name__ + ':' + str(exc)}
++        print(json.dumps(result))
++        return 0
++    if args.verify:
++        print(json.dumps(score(args.verify, Path('tests.py').read_text()), ensure_ascii=False, indent=2))
++        return 0
++    if not args.run or not args.out:
++        ap.error('Use --run --out NEW_DIRECTORY for the frozen model experiment')
++    args.out.mkdir(parents=True, exist_ok=False)
++    manifest = json.loads(suite_file.read_text())
++    manifest['runner_sha256'] = sha(Path(__file__).read_text())
++    manifest['tasks'] = TASKS
++    docs = {arm: (MATERIAL/manifest.get('handbooks', {}).get(arm, f'handbook-{arm}.md')).read_text() for arm in manifest['arms']}
++    manifest['handbook_sha256'] = {arm: sha(doc) for arm, doc in docs.items()}
++    (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
++    rows = []
++    jobs = [('trigger', q['id'], 0) for q in manifest['trigger_queries']]
++    jobs += [('behavior', task, n) for n in range(manifest['repeats']) for task in TASKS]
++    if args.lane == 'native-trigger':
++        jobs = [('native-trigger', q['id'], 0) for q in manifest['trigger_queries']]
++    else:
++        jobs = [job for job in jobs if args.lane == 'all' or job[0] == args.lane]
++    manifest['selected_lane'] = args.lane
++    (args.out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
++    for index, (lane, case, repeat) in enumerate(jobs):
++        arms = ['baseline', 'candidate'] if index % 2 == 0 else ['candidate', 'baseline']
++        for arm in arms:
++            name = f'{lane}-{case}-{repeat}-{arm}'
++            with tempfile.TemporaryDirectory(prefix='lumos-handbook-') as temp:
++                work = Path(temp)
++                (work/'SKILL.md').write_text('寫或改測試時，讀 handbook.md 再完成任務。\n')
++                (work/'handbook.md').write_text(docs[arm])
++                description_arm = manifest.get('behavior_description_arm', arm) if lane == 'behavior' else arm
++                system = ('你在隔離實驗目錄工作，只處理本題。可用 Read 讀取本目錄文件。\n'
++                          '可用技能：lumos-project-notes，描述：'+manifest['arms'][description_arm]+'\n'
++                          '適用時讀 SKILL.md 載入技能。')
++                if lane == 'native-trigger':
++                    (work/'SKILL.md').unlink()
++                    (work/'handbook.md').unlink()
++                    subprocess.run(['git', 'init', '--quiet'], cwd=work, check=True)
++                    skill = work/'.claude/skills/lumos-project-notes'
++                    skill.mkdir(parents=True)
++                    skill_text = '---\nname: lumos-project-notes\ndescription: '+json.dumps(manifest['arms'][arm],ensure_ascii=False)+'\n---\n寫測試前讀本技能資料夾 handbook.md，依規格設定獨立預期值，完成請說明判準與未驗範圍。\n'
++                    (skill/'SKILL.md').write_text(skill_text)
++                    (skill/'handbook.md').write_text(docs['baseline'])
++                    (work/'subject.py').write_text(manifest['tasks']['shipping']['source'])
++                    (work/'tests.py').write_text('import unittest\nfrom subject import total\nclass Tests(unittest.TestCase):\n    def test_same(self):\n        self.assertEqual(total(2,False),total(2,False))\n')
++                    (work/'README.md').write_text(manifest['tasks']['shipping']['brief'])
++                    query = next(q for q in manifest['trigger_queries'] if q['id'] == case)
++                    prompt = query['query']
++                    system = '你在隔離臨時專案中處理使用者請求，工具僅供唯讀，直接交付可完成的內容與未驗範圍。'
++                    (args.out/(name+'.skill.md')).write_text(skill_text)
++                elif lane == 'trigger':
++                    query = next(q for q in manifest['trigger_queries'] if q['id'] == case)
++                    prompt = query['query']+'\n本題僅做準備：決定需要讀哪些現有文件並實際讀取，然後簡短交代下一步；若任務不需要文件則直接回答。'
++                    system += '\n本題沒有實作檔案，先做準備即可。'
++                else:
++                    task = TASKS[case]
++                    (work/'subject.py').write_text(task['source'])
++                    wrapper = 'import subprocess,sys\nsubprocess.run([sys.executable,'+repr(str(Path(__file__).resolve()))+',"--suite",'+repr(args.suite)+',"--verify",'+repr(case)+'],check=True)\n'
++                    (work/'verify.py').write_text(wrapper)
++                    system += '\n本題測試規範已載入如下：\n'+docs[arm]
++                    prompt = task['brief']+'\n請讀 subject.py，用 Write 工具寫及修訂 tests.py，使用 unittest.TestCase 的 test_ 方法。可用 self.assertEqual／assertNotEqual／assertTrue／assertFalse／assertRaisesRegex；import unittest 及 from subject import 函式即可，檔尾不用 main。可用 python3 verify.py 驗證已寫測試；其他命令不提供。交付測試及簡短驗證報告。'
++                (args.out/(name+'.prompt.json')).write_text(json.dumps({'system':system,'prompt':prompt},ensure_ascii=False,indent=2))
++                row, raw = run_model(work, system, prompt, manifest['model'], args.timeout, lane == 'behavior', args.out/(name+'.events.jsonl'), native=lane == 'native-trigger')
++                row.update({'id':name, 'lane':lane, 'case':case, 'arm':arm, 'repeat':repeat})
++                (args.out/(name+'.events.jsonl')).write_text(raw)
++                if lane in {'trigger', 'native-trigger'}:
++                    row['skill_invoked'] = any(c['name'] == 'Skill' and c['input'].get('skill') == 'lumos-project-notes' for c in row['calls'])
++                    row['positive'] = query['positive']
++                    row['skill_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='SKILL.md' for c in row['calls'])
++                    row['handbook_read'] = any(c['name']=='Read' and Path(c['input'].get('file_path','')).name=='handbook.md' for c in row['calls'])
++                else:
++                    locked = (work/'subject.py').read_text()==task['source'] and (work/'verify.py').read_text()==wrapper
++                    row['locked_material_unchanged'] = locked
++                    row['valid'] = row['valid'] and locked
++                    row['tests_written'] = (work/'tests.py').is_file()
++                    if row['tests_written']:
++                        code = (work/'tests.py').read_text()
++                        (args.out/(name+'.tests.json')).write_text(json.dumps({'code':code,'sha256':sha(code)},ensure_ascii=False,indent=2)+'\n')
++                        row['score'] = score(case,code) if locked else {'status':'modified-fixture'}
++                        draft = draft_before_verify(row['calls'])
++                        if draft is not None and locked:
++                            row['first_draft_score'] = score(case, draft)
++                            (args.out/(name+'.first-draft.json')).write_text(json.dumps({'code':draft,'sha256':sha(draft)},ensure_ascii=False,indent=2)+'\n')
++                        else:
++                            row['first_draft_score'] = {'status':'unavailable'}
++                rows.append(row)
++                (args.out/'results.json').write_text(json.dumps({'manifest_sha256':sha((args.out/'manifest.json').read_text()),'rows':rows},ensure_ascii=False,indent=2)+'\n')
++                print(name, 'valid='+str(row['valid']), flush=True)
++    return 0 if all(row['valid'] for row in rows) else 2
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/governance/eval/test_quality_pilot.py b/governance/eval/test_quality_pilot.py
+new file mode 100644
+index 00000000..93633826
+--- /dev/null
++++ b/governance/eval/test_quality_pilot.py
+@@ -0,0 +1,93 @@
++#!/usr/bin/env python3
++"""固定測試品質考卷的故障驗證；只執行 repo 內已知考卷，不接受任意命令。
++
++不跑外部服務、不修改正式輸入。stdout 是證據 JSON；rc 0=預定結果皆成立，2=未成立。
++"""
++import hashlib
++import os
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[2]
++SCANNER = ROOT / 'scripts/test_quality_scan.py'
++TESTS = ROOT / 'scripts/test_test_quality_scan.py'
++HARNESS = '''import io,json,runpy,sys,unittest
++from pathlib import Path
++ns=runpy.run_path(sys.argv[1])
++cls=ns['ScanTests']
++cls.scan.__globals__['TOOL']=Path(sys.argv[2])
++suite=unittest.TestSuite([cls(sys.argv[3])])
++stream=io.StringIO()
++r=unittest.TextTestRunner(stream=stream,verbosity=2).run(suite)
++print(json.dumps({'tests_run':r.testsRun,'failures':[(t.id(),s) for t,s in r.failures],'errors':[(t.id(),s) for t,s in r.errors],'passed':r.wasSuccessful(),'output':stream.getvalue()}))
++'''
++
++
++def digest(source):
++    return hashlib.sha256(source.encode()).hexdigest()
++
++
++def run(path, test):
++    try:
++        proc = subprocess.run([sys.executable, '-c', HARNESS, str(TESTS), str(path), test],
++                              capture_output=True, text=True, timeout=30,
++                              env={**os.environ, 'PYTHONPATH': str(ROOT/'scripts')})
++    except subprocess.TimeoutExpired:
++        return {'status': 'timeout'}
++    try:
++        result = json.loads(proc.stdout)
++    except json.JSONDecodeError:
++        return {'status': 'unavailable', 'returncode': proc.returncode, 'stderr': proc.stderr[-2000:]}
++    result['status'] = 'executed' if proc.returncode == 0 else 'unavailable'
++    return result
++
++
++def main():
++    original = SCANNER.read_text(encoding='utf-8')
++    report = {'schema_version': 1, 'kind': 'fault', 'complete': False, 'verdict': 'not_assessed',
++              'tool': {'name': 'test-quality-fixed-pilot', 'version': '0.1', 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
++              'test_source_sha256': hashlib.sha256(TESTS.read_bytes()).hexdigest(), 'checks': []}
++    cases = [
++        ('disable-self-comparison', 'if key(left) == key(right):', 'if False:',
++         'test_same_call_comparison_is_candidate_not_verdict'),
++        ('drop-source-only-candidate', 'if seen and all(from_source for _, from_source in seen):', 'if False:',
++         'test_source_only_and_mixed_behavior_are_distinct'),
++    ]
++    with tempfile.TemporaryDirectory(prefix='lumos-test-quality-') as temp:
++        path = Path(temp) / 'scanner.py'
++        (Path(temp)/'test_quality_semgrep.py').write_bytes((ROOT/'scripts/test_quality_semgrep.py').read_bytes())
++        for cid, old, new, test in cases:
++            check = {'case_id': cid, 'test': test, 'status': 'unknown', 'baseline': {}, 'mutant': {}, 'restored': {}}
++            report['checks'].append(check)
++            if original.count(old) != 1:
++                check['status'] = 'invalid-mutant'
++                continue
++            path.write_text(original, encoding='utf-8')
++            check['baseline'] = run(path, test)
++            mutated = original.replace(old, new, 1)
++            check['source_sha256'] = {'baseline': digest(original), 'mutant': digest(mutated), 'restored': digest(original)}
++            path.write_text(mutated, encoding='utf-8')
++            check['mutant'] = run(path, test)
++            path.write_text(original, encoding='utf-8')
++            check['restored'] = run(path, test)
++            results = [check[k] for k in ('baseline', 'mutant', 'restored')]
++            if any(r['status'] == 'timeout' for r in results):
++                check['status'] = 'timeout'
++            elif any(r['status'] != 'executed' or r['tests_run'] != 1 or r['errors'] for r in results):
++                check['status'] = 'unavailable'
++            elif not results[0]['passed'] or not results[2]['passed']:
++                check['status'] = 'unknown'
++            elif results[1]['passed']:
++                check['status'] = 'survived'
++            elif len(results[1]['failures']) == 1 and results[1]['failures'][0][0].endswith('.' + test):
++                check['status'] = 'detected'
++    report['complete'] = all(c['status'] == 'detected' for c in report['checks'])
++    print(json.dumps(report, ensure_ascii=False, indent=2))
++    return 0 if report['complete'] else 2
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/governance/eval/test_test_quality_handbook.py b/governance/eval/test_test_quality_handbook.py
+new file mode 100644
+index 00000000..ee70d314
+--- /dev/null
++++ b/governance/eval/test_test_quality_handbook.py
+@@ -0,0 +1,100 @@
++#!/usr/bin/env python3
++"""Independent controls for the fixed handbook experiment grader."""
++import unittest
++import test_quality_handbook as ev
++
++HEADER = 'import unittest\nfrom subject import total\nclass Tests(unittest.TestCase):\n'
++GOOD = HEADER + '''    def test_boundary(self):
++        self.assertEqual(total(3,101),287)
++    def test_reason(self):
++        with self.assertRaisesRegex(ValueError,"^negative$"):
++            total(-1,101)
++'''
++
++
++class GraderTests(unittest.TestCase):
++    def test_independent_oracles_detect_three_faults(self):
++        result = ev.score('pricing', GOOD)
++        self.assertTrue(result['baseline']['passed'])
++        self.assertEqual(result['baseline']['tests_run'], 2)
++        self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
++        self.assertTrue(all(c['restored']['passed'] for c in result['checks']))
++
++    def test_self_comparison_survives(self):
++        result = ev.score('pricing', HEADER + '    def test_same(self):\n        self.assertEqual(total(3,101),total(3,101))\n')
++        self.assertEqual([c['status'] for c in result['checks']], ['survived'] * 3)
++
++    def test_wrong_baseline_is_not_detection(self):
++        result = ev.score('pricing', GOOD.replace('287', '999'))
++        self.assertEqual([c['status'] for c in result['checks']], ['invalid'] * 3)
++
++    def test_import_error_is_not_detection(self):
++        result = ev.score('pricing', 'from subject import missing\n')
++        self.assertEqual([c['status'] for c in result['checks']], ['invalid'] * 3)
++
++    def test_zero_tests_are_invalid(self):
++        result = ev.score('pricing', 'import unittest\n')
++        self.assertEqual(result['baseline']['tests_run'], 0)
++        self.assertEqual([c['status'] for c in result['checks']], ['invalid'] * 3)
++
++    def test_disallowed_io_is_rejected_before_execution(self):
++        with self.assertRaises(ValueError):
++            ev.validate_test('open("/tmp/not-a-handbook-test", "w")')
++        with self.assertRaises(ValueError):
++            ev.validate_test('import os')
++
++    def test_syntax_error_is_not_detection(self):
++        result = ev.score('pricing', 'def ???')
++        self.assertEqual([c['status'] for c in result['checks']], ['invalid'] * 3)
++
++    def test_event_text_message_is_not_a_tool_call(self):
++        rows = [{"message": "notice"}, {"message": {"content": "text"}}, {"message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "SKILL.md"}}]}}]
++        self.assertEqual(ev.tool_calls(rows), [{"name": "Read", "input": {"file_path": "SKILL.md"}}])
++
++    def test_initial_draft_stops_before_verifier_feedback(self):
++        calls = [{'name': 'Write', 'input': {'file_path': '/tmp/tests.py', 'content': 'initial'}},
++                 {'name': 'Write', 'input': {'file_path': '/tmp/tests.py', 'content': 'complete'}},
++                 {'name': 'Bash', 'input': {'command': 'python3 verify.py'}},
++                 {'name': 'Write', 'input': {'file_path': '/tmp/tests.py', 'content': 'after-feedback'}}]
++        self.assertEqual(ev.draft_before_verify(calls), 'complete')
++        self.assertIsNone(ev.draft_before_verify([]))
++
++    def test_literal_parameterized_loop_preserves_detection(self):
++        code = HEADER + '    def test_examples(self):\n        for quantity, price, expected in ((3,101,287),(4,10,38)):\n            self.assertEqual(total(quantity,price),expected)\n    def test_reason(self):\n        for quantity in (-1,-2):\n            with self.assertRaisesRegex(ValueError,"^negative$"):\n                total(quantity,101)\n'
++        result = ev.score('pricing', code)
++        self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
++
++    def test_literal_range_is_executable(self):
++        code = HEADER + '    def test_zero_price(self):\n        for quantity in range(7):\n            self.assertEqual(total(quantity,0),0)\n'
++        self.assertTrue(ev.run_test(code, ev.TASKS['pricing']['source'])['passed'])
++
++    def test_unbounded_and_dynamic_loops_are_rejected(self):
++        for body in ['for x in range(1000000):\n    pass', 'for x in total(3,101):\n    pass']:
++            with self.assertRaises(ValueError):
++                ev.validate_test(body)
++
++    def test_literal_dict_subtests_preserve_fault_detection(self):
++        code = HEADER + '    def test_cases(self):\n        cases = {(3,101):287,(4,10):38}\n        for pair, expected in cases.items():\n            with self.subTest(case=pair):\n                self.assertEqual(total(pair[0],pair[1]),expected)\n    def test_reason(self):\n        with self.assertRaisesRegex(ValueError,"^negative$"):\n            total(-1,101)\n'
++        result = ev.score('pricing', code)
++        self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
++
++    def test_unknown_dict_loop_is_rejected(self):
++        with self.assertRaises(ValueError):
++            ev.validate_test('for value in unknown.items():\n    pass')
++
++    def test_routing_independent_oracles(self):
++        code = '''import unittest
++from subject import route
++class Tests(unittest.TestCase):
++    def test_odd(self):
++        self.assertEqual(route(3,True),"B")
++    def test_inactive(self):
++        with self.assertRaisesRegex(ValueError,"^inactive$"):
++            route(2,False)
++'''
++        result = ev.score('routing', code)
++        self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/scripts/lumos b/scripts/lumos
+index b3c3e2df..ca39812f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22112,23 +22112,24 @@ def _version_nudge(root: Path) -> "str | None":
+     st = _ver_tuple(src_ver)
+     if ct is not None and st is not None and ct >= st:
+         return None  # CLAUDE 版本 ≥ 來源,不 nudge
+     # CLAUDE 落後(或無法比較)→ 提示
+     return (
+         f"本專案紀律區塊版本 {claude_ver} 落後來源 {src_ver},"
+         f" 可跑 lumos update 刷新"
+     )
+ 
+ 
+-# vendored 工具組白名單(固定 5 檔,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
++# vendored 工具組白名單(精確檔名,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
+ # _vendor_toolchain 安裝端與 cmd_deinit 移除端共用,避免漂移。
+ _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
++                     "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
+                      "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                      "scripts/fetch-notesmd.sh")
+ _VENDORED_TREE_DIRS = ("scripts/hooks", "scripts/templates")   # 安裝時整個目錄照來源複製過去的那兩個
+ # ★工具確實會安裝進消費專案的每一支檔(精確檔名)★——跳過判斷只認這張表,不認目錄前綴。
+ # 2026-09-10 代碼審 r1 四席獨立抓到:原本照目錄前綴跳過,消費專案自己放在 scripts/hooks、
+ # scripts/templates 的程式會被當成工具的檔,推送閘的風險分級被降、逃過代碼審。
+ # 表要跟工具鏈 repo 裡那兩個目錄底下受版控的檔一模一樣:有一支測試逐檔比對,少登記或多登記都會翻紅。
+ _VENDORED_TREE_FILES = (
+     "scripts/hooks/claude/_hookevent.py",
+     "scripts/hooks/claude/check-graph-sync.py",
+@@ -49401,20 +49402,29 @@ def main():
+     cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                     help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
+     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
+                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
++    try:
++        from test_quality import add_parser as _tq_parser
++    except ModuleNotFoundError as exc:
++        if exc.name != "test_quality":
++            raise
++        sub.add_parser("test-quality", help="測試品質工具未完整部署，請更新來源與vendor")
++    else:
++        _tq_parser(sub)
++
+     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
+     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+     ls.add_argument("loop_id")
+     ls.add_argument("--need", type=int, default=None, help="連續乾淨輪數 K(預設 2;--settle 下禁用)")
+     ls.add_argument("--disposal", action="store_true",
+@@ -50203,20 +50213,29 @@ def main():
+                              init=args.auto_init, allow_stale=args.allow_stale)
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+     if args.cmd == "prose-lint":
+         return cmd_prose_lint(args.path)
++    if args.cmd == "test-quality":
++        try:
++            from test_quality import dispatch as _tq_dispatch
++        except ModuleNotFoundError as exc:
++            if exc.name != "test_quality":
++                raise
++            print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
++            return 2
++        return _tq_dispatch(args)
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
+                             disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index 240428b0..2da90380 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -60,20 +60,24 @@
+ 5. **每支檔有家**（2026-09-11，提交前擋新違規）：每支程式檔要有一篇管它的 Systems 節點（about_code 列了它），新開用 `lumos new system <名> --code <檔> --responsibility "<負責什麼、不負責什麼>"`；節點只准用反引號寫自己家的檔，別人的檔寫成那支檔的家的 `[[連結]]`；改了程式要寫說明就寫進改到那支檔的家，而且改到的每支檔都得先有家；計劃寫 `lands_in`（現況落在哪幾篇或新開哪一篇）。舊帳看 `lumos doctor` 的 S8–S10。
+ 
+ 6. **記憶只回答「去哪裡查」，不回答「是什麼」**（兩層模式：圖譜是真相層，記憶是衍生層）：任何敘述式斷言**要嘛指到圖譜節點、要嘛帶一條宣告式檢查（`verify:`，開場唯讀重驗）；兩者都沒有就不得拿來做決定**。記憶留方法與經驗（怎麼做事、踩過什麼坑）；事實與狀態不准留在記憶裡——程式碼答得了的去查程式碼，答不了的（決策、限制、事故）才寫進圖譜——**記憶會自動塞進視野、圖譜要主動查，所以錯的那份先被讀到**（2026-09-14 實測 76 篇裡三篇在說謊）。經驗要升格成規則得進圖譜過閘，不准在記憶裡默默變成政策。
+ 
+ ### 給人看的回報用白話
+ 先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。
+ 
+ ### 設計與排查
+ 設計動筆前先問世界（最小解在哪一層、世界解過沒；預設借用既有設計，真沒輪子才自建，零依賴家規下幾乎不採用新依賴），一行 `PRIOR-ART:` 記進計劃筆記；同時寫一行 `RETIRE-IF:`——**看到什麼就該把這條機制／規則撤掉**（例：連續 N 週零觸發、誤報多過真報、維護成本大於省下的工時）。寫不出撤除條件，就是還沒想清楚該不該建。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+ 
++### 實作測試
++
++測試要能抓到實際錯誤，不能只是把實作重寫一次。寫／改測試及審查時，先讀 **lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉**；完整條款以該節為單一來源。
++
+ ### 提交與推送
+ 一個功能一個提交，說明用白話：
+ - 格式 `<類型>: <一句白話>`（要標範圍就 `<類型>(<範圍>): …`），類型只用 feat / fix / docs / refactor / test / perf / chore；專案的第一個提交固定寫 `chore: 建立專案骨架`。
+ - 標題寫這次改了什麼、使用者看得到的差別；不寫內部代號（第幾輪、幾席、F3、決策編號、提交編號）；內文用白話條列，一條一件事，只寫讀 log 的人需要知道的差別。
+ - 程式、圖譜筆記、審查卷證放同一個提交；做到一半的本機提交，推之前壓成一個（同一個工作目錄有別的會談時只加自己的檔，不用 `git add -A`）。
+ - 過代碼審的功能多一個帳本提交：留痕綁版本，通過後只准再提交帳本（訊息固定 `chore(lumos): 記錄代碼審通過`）；凍結判定併進功能提交，步驟見 lumos-code-loop。
+ 
+ ### 遇到這些情境就調用對應 skill
+ 
+ | 你正在做的事 | 調用 |
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 61581700..e46a9d2e 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -9791,23 +9791,24 @@ def t_link_or_copy_idempotent():
+ 
+ 
+ def t_deinit_vendored_toolkit_constant():
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     spec = importlib.util.spec_from_file_location(
+         "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+     m = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(m)  # __main__ guard → import 不跑 main
+     expected = ("scripts/lumos", "scripts/test_lumos.py",
++                "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
+                 "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                 "scripts/fetch-notesmd.sh")
+-    check("deinit: _VENDORED_TOOLKIT 5 檔且帶 scripts/ 前綴",
++    check("deinit: 品質工具在精確部署與移除清單內且帶 scripts/ 前綴",
+           tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
+ 
+ 
+ def _load_lumos():
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     spec = importlib.util.spec_from_file_location(
+         "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+     m = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(m)
+@@ -75980,12 +75981,33 @@ def t_review_eval_case():
+ 
+ 
+ def t_review_eval_trials():
+     _review_convergence_unit_group("TrialTests")
+ 
+ 
+ def t_review_eval_comparison():
+     _review_convergence_unit_group("ComparisonTests")
+ 
+ 
++def t_test_quality_cli():
++    _need_src("scripts/test_test_quality_cli.py")
++    run = subprocess.run([sys.executable, "scripts/test_test_quality_cli.py"],
++                         cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
++    check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
++          (run.stdout + run.stderr)[-4000:])
++
++
++def t_test_quality_scan_cli():
++    _need_src("scripts/test_quality_scan.py")
++    _need_src("scripts/test_test_quality_scan.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
++                         cwd=root, capture_output=True, text=True, timeout=60)
++    import re
++    output = run.stdout + run.stderr
++    check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
++          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
++          output[-5000:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+new file mode 100644
+index 00000000..df5d6515
+--- /dev/null
++++ b/scripts/test_quality.py
+@@ -0,0 +1,276 @@
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++"""Installed test-quality entry points. Execution receipts are evidence, not semantic verdicts."""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++import signal
++import subprocess
++import tempfile
++import xml.etree.ElementTree as ET
++
++LIMIT = 10 * 1024 * 1024
++
++
++def read(path):
++    if path.is_symlink() or not path.is_file():
++        raise ValueError('not a regular non-symlink file: ' + str(path))
++    with path.open('rb') as stream:
++        raw = stream.read(LIMIT + 1)
++    if len(raw) > LIMIT:
++        raise ValueError('file exceeds 10 MiB: ' + str(path))
++    return raw
++
++
++def sha(raw):
++    return hashlib.sha256(raw).hexdigest()
++
++
++def assertion_failure(node):
++    kind = node.get('type', '')
++    message = node.get('message', '')
++    if re.search(r'(?:^|[.\\])(?:AssertionError|AssertionFailedError|ExpectationFailedException|ComparisonFailure|AssertFailedException)$', kind):
++        return True
++    if kind == 'NUnit.Framework.AssertionException':
++        return True
++    if re.fullmatch(r'Xunit\.Sdk\.(?:Equal|NotEqual|True|False|Null|NotNull|Throws|Contains|Empty|Single|Same)Exception', kind):
++        return True
++    # Measured Node reporter cause; an arbitrary message mentioning assertion
++    # names is not failure attribution.
++    if kind == 'testCodeFailure':
++        return bool(re.search(r'cause: AssertionError \[ERR_ASSERTION\]:', ''.join(node.itertext())))
++    if kind == 'failure':
++        return bool(re.match(r'^Assert\.(?:Equal|NotEqual|True|False|Null|NotNull|Throws|Contains|Empty|Single|Same)\(\) Failure:', message))
++    if not kind:
++        # AGP instrumentation XML omits type/message; the first exception and
++        # its JUnit assertion frame identify the measured failure origin.
++        text = ''.join(node.itertext()).strip()
++        if text.startswith('java.lang.AssertionError:') and re.search(r'\bat org\.junit\.Assert\.(?:fail|assert)\w*\(', text):
++            return True
++        return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
++    return False
++
++
++def junit(raw):
++    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
++        raise ValueError('DTD/entity declarations not accepted')
++    root = ET.fromstring(raw)
++    tag = lambda n: n.tag.split('}')[-1]
++    if tag(root) not in {'testsuites', 'testsuite'}:
++        raise ValueError('expected JUnit testsuite(s)')
++    cases = []
++    for node in root.iter():
++        if tag(node) != 'testcase':
++            continue
++        name = node.get('name')
++        if not name:
++            raise ValueError('testcase missing name')
++        cid = node.get('classname', '') + '::' + name
++        failures = [n for n in node if tag(n) == 'failure']
++        errors = [n for n in node if tag(n) == 'error']
++        skipped = any(tag(n) == 'skipped' for n in node)
++        reason = '\n'.join(n.get('type', '') + ' ' + n.get('message', '') + ' ' + ''.join(n.itertext())
++                           for n in failures + errors)
++        assertion = bool(failures) and all(assertion_failure(n) for n in failures)
++        status = 'error' if errors else 'skipped' if skipped else 'failure' if failures else 'passed'
++        cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
++                      'reason': reason[:4000]})
++    ids = [c['id'] for c in cases]
++    if len(ids) != len(set(ids)):
++        raise ValueError('duplicate test identities')
++    if not cases:
++        raise ValueError('zero testcases')
++    # Suite-level errors must not disappear behind passing testcase rows.
++    if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
++        raise ValueError('runner/suite errors')
++    return cases
++
++
++def add_parser(sub):
++    p = sub.add_parser('test-quality', help='測試品質候選掃描、可信本機測試收證與三階段JUnit證據核對；不裁決業務答案')
++    actions = p.add_subparsers(dest='tqcmd', required=True)
++    scan = actions.add_parser('scan', help='唯讀來源掃描，零候選不是品質通過')
++    scan.add_argument('paths', nargs='+')
++    scan.add_argument('--semgrep')
++    scan.add_argument('--check-helper', action='append', default=[])
++    scan.add_argument('--implementation', action='append', default=[])
++    scan.add_argument('--json', action='store_true')
++    actions.add_parser('capabilities', help='列實際接入範圍與未驗邊界')
++    capture = actions.add_parser('capture', help='明示執行可信本機測試，保存JUnit與不可覆寫快照；不提供沙盒')
++    capture.add_argument('--out', type=Path, required=True)
++    capture.add_argument('--source', action='append', type=Path, required=True)
++    capture.add_argument('--test-source', action='append', type=Path, required=True)
++    capture.add_argument('--context', action='append', type=Path, default=[])
++    capture.add_argument('--report', type=Path, help='命令新產生的JUnit檔案；與--junit-stdout二選一')
++    capture.add_argument('--junit-stdout', action='store_true')
++    capture.add_argument('--target', action='append', default=[], help='預期實際執行的JUnit classname::name；拒絕只跑到檔案包裝案例的假綠')
++    capture.add_argument('--timeout', type=int, default=60)
++    capture.add_argument('--language', required=True)
++    capture.add_argument('--framework', required=True)
++    capture.add_argument('command', nargs=argparse.REMAINDER)
++    check = actions.add_parser('check', help='核對三份capture目錄；報告來源可偽造，不證明業務正確')
++    check.add_argument('baseline', type=Path)
++    check.add_argument('fault', type=Path)
++    check.add_argument('restored', type=Path)
++    check.add_argument('--target', action='append', required=True, help='JUnit classname::name，可重複')
++    check.add_argument('--refactor', type=Path)
++    check.add_argument('--oracle-note', help='獨立需求來源指路；只記declared，不替代人工審查')
++    check.add_argument('--out', type=Path, help='新報告檔，不覆寫')
++
++
++def dump(value, out=None):
++    text = json.dumps(value, ensure_ascii=False, indent=2) + '\n'
++    if out:
++        with out.open('x', encoding='utf-8') as stream:
++            stream.write(text)
++    print(text, end='')
++
++
++def capture(args):
++    command = args.command[1:] if args.command[:1] == ['--'] else args.command
++    if not command or bool(args.report) == args.junit_stdout or not 1 <= args.timeout <= 300:
++        raise ValueError('require command, exactly one JUnit source, timeout 1..300')
++    if args.report and args.report.exists():
++        raise ValueError('report must be new; stale report refused')
++    entries = []
++    for role, paths in [('implementation', args.source), ('tests', args.test_source), ('context', args.context)]:
++        for path in paths:
++            entries.append({'role': role, 'path': str(path.resolve()), 'raw': read(path)})
++    if len({e['path'] for e in entries}) != len(entries):
++        raise ValueError('duplicate tracked paths')
++    args.out.mkdir(parents=True, exist_ok=False)
++    receipt = {'schema_version': 1, 'kind': 'execution-receipt', 'language': args.language,
++               'framework': args.framework, 'command': command, 'cwd': str(Path.cwd()),
++               'status': 'invalid', 'verdict': 'not_assessed', 'snapshots': [],
++               'limitations': ['明示可信本機命令，非沙盒；外部服務隔離由呼叫者負責。', '快照不自動枚舉依賴；context須明示環境/設定/lock。']}
++    for i, entry in enumerate(entries):
++        name = f'snapshot-{i}.txt'
++        (args.out/name).write_bytes(entry['raw'])
++        receipt['snapshots'].append({k: entry[k] for k in ('role', 'path')} | {'artifact': name, 'sha256': sha(entry['raw'])})
++    try:
++        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
++            proc = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
++            try:
++                proc.wait(timeout=args.timeout)
++            except subprocess.TimeoutExpired:
++                os.killpg(proc.pid, signal.SIGKILL)
++                proc.wait()
++                raise ValueError('timeout; never detected')
++            stdout.seek(0); stderr.seek(0)
++            out, err = stdout.read(LIMIT + 1), stderr.read(LIMIT + 1)
++            if max(len(out), len(err)) > LIMIT:
++                raise ValueError('output exceeds 10 MiB')
++        (args.out/'stdout.txt').write_bytes(out)
++        (args.out/'stderr.txt').write_bytes(err)
++        raw = out if args.junit_stdout else read(args.report)
++        (args.out/'report.xml').write_bytes(raw)
++        cases = junit(raw)
++        selected = {c['id']: c for c in cases}
++        if len(set(args.target)) != len(args.target) or any(t not in selected or selected[t]['status'] == 'skipped' for t in args.target):
++            raise ValueError('expected target missing, duplicate or skipped')
++        receipt['expected_targets'] = args.target
++        if any(read(Path(e['path'])) != e['raw'] for e in entries):
++            raise ValueError('tracked sources changed during execution')
++        passed = all(c['status'] == 'passed' for c in cases)
++        if (passed and proc.returncode != 0) or (not passed and proc.returncode != 1):
++            raise ValueError('exit status inconsistent with testcase results')
++        receipt.update(status='executed', exit_code=proc.returncode, report_sha256=sha(raw), tests=cases)
++    except (OSError, ValueError, ET.ParseError) as exc:
++        receipt['reason'] = str(exc)
++    (args.out/'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
++    dump(receipt)
++    return 0 if receipt['status'] == 'executed' else 2
++
++
++def load_receipt(folder):
++    r = json.loads(read(folder/'receipt.json'))
++    if r.get('schema_version') != 1 or r.get('kind') != 'execution-receipt' or r.get('status') != 'executed':
++        raise ValueError('missing or invalid execution receipt')
++    raw = read(folder/'report.xml')
++    if sha(raw) != r.get('report_sha256'):
++        raise ValueError('report hash mismatch')
++    cases = junit(raw)
++    if cases != r.get('tests'):
++        raise ValueError('recorded test outcomes differ from raw report')
++    signatures = {}
++    for item in r['snapshots']:
++        artifact = item['artifact']
++        if Path(artifact).name != artifact:
++            raise ValueError('snapshot artifact must be basename')
++        if sha(read(folder/artifact)) != item['sha256']:
++            raise ValueError('snapshot hash mismatch')
++        key = (item['role'], item['path'])
++        if key in signatures:
++            raise ValueError('duplicate snapshots')
++        signatures[key] = item['sha256']
++    if not all(any(k[0] == role for k in signatures) for role in ('implementation', 'tests')):
++        raise ValueError('missing implementation/test snapshots')
++    return r, signatures, {c['id']: c for c in cases}
++
++
++def check(args):
++    result = {'kind': 'fault-evidence', 'verdict': 'not_assessed', 'fault_evidence': 'invalid',
++              'oracle': {'status': 'declared' if args.oracle_note else 'unknown', 'source': args.oracle_note},
++              'limitations': ['只核對收證內容一致性；報告可偽造，非執行真實性認證。',
++                             '故障檢出不證明獨立判準或業務正確；context覆蓋與重構等價性另審。']}
++    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
++    if args.refactor:
++        phases['refactor'] = load_receipt(args.refactor)
++    base, bs, tests = phases['baseline']
++    targets = set(args.target)
++    if not targets or len(targets) != len(args.target) or not targets <= set(tests):
++        raise ValueError('missing/duplicate target test identity')
++    for name, (r, signatures, cases) in phases.items():
++        if (r['language'], r['framework'], r['command'], r['cwd']) != (base['language'], base['framework'], base['command'], base['cwd']):
++            raise ValueError('runtime selection or command changed across phases')
++        if set(cases) != set(tests) or signatures.keys() != bs.keys():
++            raise ValueError('test identities or tracked files changed')
++        if any(signatures[k] != bs[k] for k in bs if k[0] != 'implementation'):
++            raise ValueError('tests/context changed across phases')
++        if name in {'baseline', 'restored', 'refactor'} and (r['exit_code'] != 0 or any(c['status'] != 'passed' for c in cases.values())):
++            raise ValueError(name + ' not all green')
++        if name == 'restored' and signatures != bs:
++            raise ValueError('restoration snapshot mismatch')
++        if name in {'fault', 'refactor'} and signatures == bs:
++            raise ValueError(name + ' implementation did not change')
++    r, _, cases = phases['fault']
++    failed = {cid for cid, c in cases.items() if c['status'] != 'passed'}
++    if not failed:
++        result['fault_evidence'] = 'survived'
++    elif r['exit_code'] == 1 and failed <= targets and all(cases[t]['assertion_failure'] and cases[t]['status'] == 'failure' for t in failed):
++        result['fault_evidence'] = 'detected'
++    else:
++        raise ValueError('non-target, skipped or non-assertion failure')
++    result['targets'] = sorted(targets)
++    result['failed_targets'] = sorted(failed)
++    result['refactor'] = 'green-reported-equivalence-unreviewed' if args.refactor else 'not-run'
++    dump(result, args.out)
++    return 0 if result['fault_evidence'] == 'detected' else 2
++
++
++def dispatch(args):
++    try:
++        if args.tqcmd == 'scan':
++            from test_quality_scan import main
++            argv = list(args.paths)
++            for flag in ('semgrep', 'check_helper', 'implementation'):
++                value = getattr(args, flag)
++                for item in (value if isinstance(value, list) else [value] if value else []):
++                    argv += ['--' + flag.replace('_', '-'), item]
++            return main(argv + (['--json'] if args.json else []))
++        if args.tqcmd == 'capture':
++            return capture(args)
++        if args.tqcmd == 'check':
++            return check(args)
++        from test_quality_semgrep import PATTERNS
++        dump({'static': {'python': 'stdlib-ast', **{lang: {'backend': 'optional-semgrep', 'interfaces': patterns} for lang, patterns in PATTERNS.items()}},
++              'execution': {'formats': ['JUnit XML'], 'capture': 'explicit trusted command, no sandbox',
++                            'framework_qualification': 'per project; format support does not qualify frameworks'},
++              'verdict': 'not_assessed'})
++        return 0
++    except (OSError, ValueError, TypeError, KeyError, ET.ParseError) as exc:
++        dump({'verdict': 'not_assessed', 'complete': False, 'reason': str(exc)})
++        return 2
+diff --git a/scripts/test_quality_scan.py b/scripts/test_quality_scan.py
+new file mode 100644
+index 00000000..79aa0231
+--- /dev/null
++++ b/scripts/test_quality_scan.py
+@@ -0,0 +1,309 @@
++#!/usr/bin/env python3
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++"""唯讀 Python 測試品質候選掃描。零候選不代表測試有用；不執行輸入。
++
++python3 scripts/test_quality_scan.py <測試檔或目錄> --json
++選填 --implementation MODULE=PATH 比對單一 return 算式。rc 0=掃描完成，2=不完整。
++"""
++import argparse
++import ast
++import copy
++import hashlib
++import io
++import json
++import os
++from pathlib import Path
++import sys
++import tokenize
++import time
++from test_quality_semgrep import scan as semgrep_scan
++
++VERSION = '0.1'
++LANGUAGES = {'.py': 'python', '.kt': 'kotlin', '.java': 'java', '.swift': 'swift',
++             '.cs': 'csharp', '.php': 'php', '.js': 'javascript', '.ts': 'typescript',
++             '.jsx': 'javascript', '.tsx': 'typescript', '.mjs': 'javascript',
++             '.cjs': 'javascript', '.mts': 'typescript', '.cts': 'typescript'}
++EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'build', 'dist', 'vendor', 'storage'}
++LIMIT = 10 * 1024 * 1024
++
++
++def key(node):
++    return ast.dump(node, include_attributes=False)
++
++
++def dotted(node):
++    if isinstance(node, ast.Name):
++        return node.id
++    if isinstance(node, ast.Attribute):
++        base = dotted(node.value)
++        return base + '.' + node.attr if base else ''
++    return ''
++
++
++def parse_file(path):
++    with path.open('rb') as stream:
++        raw = stream.read(LIMIT + 1)
++    if len(raw) > LIMIT:
++        raise ValueError('input exceeds 10 MiB limit')
++    encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
++    source = raw.decode(encoding)
++    return source, ast.parse(source, filename=str(path)), hashlib.sha256(raw).hexdigest()
++
++
++def imports(tree):
++    aliases = {}
++    for node in tree.body:
++        if isinstance(node, ast.Import):
++            for item in node.names:
++                aliases[item.asname or item.name.split('.')[0]] = item.name if item.asname else item.name.split('.')[0]
++        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
++            for item in node.names:
++                aliases[item.asname or item.name] = node.module + '.' + item.name
++    return aliases
++
++
++def qualified(node, aliases):
++    name = dotted(node)
++    first, dot, rest = name.partition('.')
++    return aliases.get(first, first) + (dot + rest if dot else '')
++
++
++class Expand(ast.NodeTransformer):
++    """只展開當前直線區塊的局部代入，不執行或求值。"""
++    def __init__(self, bindings):
++        self.bindings = bindings
++
++    def visit_Name(self, node):
++        return copy.deepcopy(self.bindings.get(node.id, node))
++
++
++def expand(node, bindings):
++    expanded = Expand(bindings).visit(copy.deepcopy(node))
++    if sum(1 for _ in ast.walk(expanded)) > 4000:
++        raise ValueError('local expression expansion exceeds 4000 nodes')
++    return expanded
++
++
++def own_nodes(node):
++    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
++        return
++    yield node
++    for child in ast.iter_child_nodes(node):
++        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
++            yield from own_nodes(child)
++
++
++def assertions(statement, check_helpers=()):
++    for node in own_nodes(statement):
++        if isinstance(node, ast.Assert):
++            yield node, node.test
++        elif isinstance(node, ast.Call) and dotted(node.func) in check_helpers and len(node.args) >= 2:
++            yield node, node.args[1]
++        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr.startswith('assert'):
++            # unittest self.assert*: 外部函式與 arbitrary assert* 不當成已知介面。
++            if isinstance(node.func.value, ast.Name) and node.func.value.id == 'self':
++                yield node, node
++
++
++def pairs(expr):
++    if isinstance(expr, ast.Compare) and len(expr.ops) == 1 and isinstance(expr.ops[0], ast.Eq):
++        return expr.left, expr.comparators[0]
++    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr in {'assertEqual', 'assertAlmostEqual'} and len(expr.args) >= 2:
++        return expr.args[0], expr.args[1]
++    return None
++
++
++def source_based(node, aliases):
++    return any(isinstance(item, ast.Call) and qualified(item.func, aliases) == 'inspect.getsource'
++               for item in ast.walk(node))
++
++
++def mirror(call, expected, models, aliases):
++    if not isinstance(call, ast.Call) or not isinstance(expected, (ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare)):
++        return False
++    model = models.get(qualified(call.func, aliases))
++    if model is None or any(isinstance(arg, ast.Starred) for arg in call.args) or any(k.arg is None for k in call.keywords):
++        return False
++    params, body = model
++    bound = dict(zip(params, call.args))
++    if len(call.args) > len(params):
++        return False
++    for item in call.keywords:
++        if item.arg not in params or item.arg in bound:
++            return False
++        bound[item.arg] = item.value
++    return set(bound) == set(params) and key(expand(body, bound)) == key(expected)
++
++
++def inspect_test(fn, path, aliases, models, lines, check_helpers=()):
++    bindings, findings, seen = {}, [], []
++    for statement in fn.body:
++        for location, expr in assertions(statement, check_helpers):
++            current = expand(expr, bindings)
++            seen.append((location, source_based(current, aliases)))
++            pair = pairs(current)
++            rule = None
++            if pair:
++                left, right = pair
++                if key(left) == key(right):
++                    rule = 'same-comparison'
++                elif isinstance(left, ast.Call) and isinstance(right, ast.Call) and qualified(left.func, aliases) == qualified(right.func, aliases) and qualified(left.func, aliases) not in {'set', 'list', 'tuple', 'dict', 'str', 'int', 'float', 'bool', 'len', 'sorted', 'frozenset'}:
++                    rule = 'oracle-reuses-call'
++                elif mirror(left, right, models, aliases) or mirror(right, left, models, aliases):
++                    rule = 'mirror-expression'
++            if rule:
++                findings.append(finding(rule, fn.name, path, location, lines))
++        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
++            value = statement.value
++            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
++            resolved = expand(value, bindings) if value is not None else None
++            for target in targets:
++                if isinstance(target, ast.Name):
++                    if resolved is not None:
++                        bindings[target.id] = resolved
++                    else:
++                        bindings.pop(target.id, None)
++                elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(resolved, (ast.Tuple, ast.List)) and len(target.elts) == len(resolved.elts):
++                    for name, item in zip(target.elts, resolved.elts):
++                        if isinstance(name, ast.Name):
++                            bindings[name.id] = item
++                else:
++                    bindings.clear()
++        elif not isinstance(statement, (ast.Expr, ast.Assert, ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
++            # 分支／迴圈／with 等不推資料流；清除直線假設，避免用舊 expected。
++            bindings.clear()
++    if seen and all(from_source for _, from_source in seen):
++        findings.append(finding('source-only', fn.name, path, seen[0][0], lines))
++    return findings
++
++
++REASONS = {
++    'same-comparison': ('斷言兩側是相同語法表達式', '確認是否只驗穩定性；另找能區分錯誤輸出的獨立答案。'),
++    'oracle-reuses-call': ('斷言兩側呼叫同一函式，可能共用被測算法', '確認是否為合法關係測試或可信參考；用相關故障驗證抓錯能力。'),
++    'mirror-expression': ('expected 與明確提供的單一 return 算式相同', '改用需求例子或可信獨立參考；同算法不等於業務正確。'),
++    'source-only': ('已辨識的斷言都依賴 inspect.getsource', '確認目的是否只守結構；宣稱功能正確時補可觀察行為。'),
++}
++
++
++def finding(rule, test, path, node, lines):
++    reason, verification = REASONS[rule]
++    return {'rule_id': rule, 'status': 'candidate', 'path': str(path), 'line': node.lineno,
++            'test': test, 'reason': reason, 'verification': verification,
++            'oracle_source': 'unknown', 'snippet': '\n'.join(lines[node.lineno-1:node.end_lineno])[:1200]}
++
++
++def discover(paths, report):
++    files = set()
++    for path in paths:
++        if path.is_symlink():
++            report['inputs'].append({'path': str(path), 'status': 'error', 'reason': 'explicit symlink not scanned'})
++        elif path.is_file():
++            files.add(path)
++        elif path.is_dir():
++            def error(exc):
++                report['inputs'].append({'path': str(exc.filename), 'status': 'error', 'reason': str(exc)})
++            for directory, dirs, names in os.walk(path, followlinks=False, onerror=error):
++                dirs[:] = sorted(d for d in dirs if d not in EXCLUDED and not (Path(directory)/d).is_symlink())
++                for name in sorted(names):
++                    p = Path(directory) / name
++                    if p.suffix in LANGUAGES and 'test' in str(p.relative_to(path)).lower():
++                        if p.is_symlink():
++                            report['inputs'].append({'path': str(p), 'status': 'error', 'reason': 'symlink not scanned'})
++                        else:
++                            files.add(p)
++        else:
++            report['inputs'].append({'path': str(path), 'status': 'error', 'reason': 'missing or not a regular file/directory'})
++    return sorted(files)
++
++
++def main(argv=None):
++    started = time.monotonic()
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('paths', nargs='+', type=Path)
++    parser.add_argument('--check-helper', action='append', default=[], metavar='NAME', help='明示 check(name, condition, detail) 類斷言 helper，可重複')
++    parser.add_argument('--semgrep', metavar='EXECUTABLE', help='選配本機 Semgrep CE；其他語言先只辨識來源自比')
++    parser.add_argument('--json', action='store_true', help='輸出共用 JSON 報告')
++    parser.add_argument('--implementation', action='append', default=[], metavar='MODULE=PATH', help='Python 算式比對來源（只 parse，不 import）')
++    args = parser.parse_args(argv)
++    report = {'schema_version': 1, 'kind': 'static', 'tool': {'name': 'test-quality-scan', 'version': VERSION, 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
++              'complete': True, 'verdict': 'not_assessed', 'inputs': [], 'implementations': [],
++              'findings': [], 'limitations': ['Python assert／unittest self.assert*／明示 check helper；局部直線代入，非跨函式資料流。',
++                  '不能證明業務判準、情境成立或測試抓錯能力；非 Python 適配器只含選配來源自比規則。',
++                  '目錄模式只選路徑含 test 的已知語言檔，排除 ' + ', '.join(sorted(EXCLUDED))]}
++    report['tool']['adapter_source_sha256'] = hashlib.sha256(Path(__file__).with_name('test_quality_semgrep.py').read_bytes()).hexdigest()
++    report['assertion_helpers'] = args.check_helper
++    models = {}
++    errors = (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, MemoryError)
++    for spec in args.implementation:
++        module, sep, name = spec.partition('=')
++        entry = {'module': module, 'path': name}
++        report['implementations'].append(entry)
++        try:
++            if not sep or not module or not name or module in {x['module'] for x in report['implementations'][:-1]}:
++                raise ValueError('expected unique MODULE=PATH')
++            _, tree, digest = parse_file(Path(name))
++            entry.update(status='parsed', sha256=digest)
++            supported = []
++            for node in tree.body:
++                if isinstance(node, ast.FunctionDef) and len(node.body) == 1 and isinstance(node.body[0], ast.Return):
++                    params = [arg.arg for arg in node.args.posonlyargs + node.args.args]
++                    if not (node.args.vararg or node.args.kwarg or node.args.kwonlyargs or node.args.defaults or node.decorator_list):
++                        body = node.body[0].value
++                        if isinstance(body, (ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare)):
++                            models[module + '.' + node.name] = (params, body)
++                            supported.append(node.name)
++            entry['modeled_functions'] = supported
++            entry['unmodeled_functions'] = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name not in supported]
++        except errors as exc:
++            entry.update(status='error', reason=str(exc))
++    files = discover(args.paths, report)
++    for path in files:
++        language = LANGUAGES.get(path.suffix, 'unknown')
++        entry = {'path': str(path), 'language': language}
++        report['inputs'].append(entry)
++        if language != 'python':
++            if args.semgrep and language != 'unknown':
++                backend_entry, found = semgrep_scan(path, language, str(Path(args.semgrep).resolve()) if '/' in args.semgrep else args.semgrep)
++                entry.update(backend_entry)
++                report['findings'].extend(found)
++            else:
++                entry.update(status='unsupported', reason='optional Semgrep adapter not enabled')
++            continue
++        try:
++            source, tree, digest = parse_file(path)
++            tests = []
++            for node in tree.body:
++                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(('test_', 't_')):
++                    tests.append(node)
++                elif isinstance(node, ast.ClassDef):
++                    tests.extend(fn for fn in node.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith('test_'))
++            entry.update(status='scanned' if tests else 'no_tests', sha256=digest, tests_seen=len(tests))
++            aliases, lines = imports(tree), source.splitlines()
++            entry['tests_with_known_assertions'] = sum(any(list(assertions(st, args.check_helper)) for st in fn.body) for fn in tests)
++            for fn in tests:
++                report['findings'].extend(inspect_test(fn, path, aliases, models, lines, args.check_helper))
++        except errors as exc:
++            entry.update(status='error', reason=str(exc))
++    if not report['inputs']:
++        report['inputs'].append({'path': ', '.join(str(p) for p in args.paths), 'status': 'no_tests', 'reason': 'no test candidates discovered'})
++    report['complete'] = bool(report['inputs']) and all(i['status'] == 'scanned' for i in report['inputs']) and all(i['status'] == 'parsed' for i in report['implementations'])
++    report['summary'] = {'files_scanned': sum(i['status'] == 'scanned' for i in report['inputs']),
++                         'tests_seen': sum(i.get('tests_seen', 0) for i in report['inputs']),
++                         'candidates': len(report['findings'])}
++    report['elapsed_seconds'] = round(time.monotonic() - started, 6)
++    if args.json:
++        print(json.dumps(report, ensure_ascii=False, indent=2))
++    else:
++        print('掃描完成' if report['complete'] else '掃描不完整')
++        print('候選不是裁決；零候選不代表測試有用。')
++        for item in report['inputs']:
++            print(f"{item['status']}: {item['path']}")
++        for item in report['findings']:
++            print(f"{item['path']}:{item['line']} {item['test']} [{item['rule_id']}] {item['reason']}")
++            print('  ' + item['verification'])
++    return 0 if report['complete'] else 2
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+new file mode 100644
+index 00000000..4cd7ad2a
+--- /dev/null
++++ b/scripts/test_quality_semgrep.py
+@@ -0,0 +1,81 @@
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++"""選配 Semgrep CE 來源語法適配器；只用本機固定規則掃描快照。"""
++import hashlib
++import json
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++
++PATTERNS = {
++    'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
++            'expect($X)->toBe($X)', 'expect($X)->toEqual($X)'],
++    'kotlin': ['assertEquals($X, $X, ...)'],
++    'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
++    'swift': ['XCTAssertEqual($X, $X, ...)'],
++    'csharp': ['Assert.Equal($X, $X)', 'Assert.AreEqual($X, $X, ...)', '$X.Should().Be($X, ...)'],
++    'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
++    'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
++}
++
++
++def scan(path, language, executable):
++    entry = {'path': str(path), 'language': language, 'adapter': 'semgrep-ce',
++             'supported_rules': ['same-comparison'], 'test_identity': 'unverified', 'interfaces': PATTERNS[language],
++             'limitations': ['只辨識列出的斷言介面自比；未分析判準同源、重抄算法或執行情境。'] + (['Swift Testing #expect 未支援；僅 XCTest。'] if language == 'swift' else [])}
++    findings = []
++    try:
++        with path.open('rb') as stream:
++            raw = stream.read(10 * 1024 * 1024 + 1)
++        if len(raw) > 10 * 1024 * 1024:
++            raise ValueError('input exceeds 10 MiB limit')
++        entry['sha256'] = hashlib.sha256(raw).hexdigest()
++        config = {'rules': [{'id': 'same-comparison', 'languages': [language], 'severity': 'INFO',
++                            'message': 'same assertion operands; review purpose and independent oracle',
++                            'pattern-either': [{'pattern': p} for p in PATTERNS[language]]}]}
++        entry['rules_sha256'] = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
++        # 本機自訂規則與來源快照；不載入來源專案的 config／ignore／登入設定。
++        env = {k: v for k, v in os.environ.items() if not k.startswith('SEMGREP_')}
++        with tempfile.TemporaryDirectory(prefix='lumos-static-') as temp:
++            root = Path(temp)
++            source = root / ('test_snapshot' + path.suffix)
++            source.write_bytes(raw)
++            rules = root / 'rules.json'
++            rules.write_text(json.dumps(config), encoding='utf-8')
++            env.update(SEMGREP_SEND_METRICS='off', SEMGREP_SETTINGS_FILE=str(root/'settings.yml'))
++            proc = subprocess.run([executable, 'scan', '--config', str(rules), '--json', '--quiet',
++                                   '--metrics', 'off', '--disable-version-check', '--no-git-ignore',
++                                   '--oss-only', '--strict', '--timeout', '5', str(source)],
++                                  cwd=root, env=env, capture_output=True, text=True, timeout=40)
++            result = json.loads(proc.stdout)
++            if not isinstance(result, dict) or not isinstance(result.get('results'), list) or not isinstance(result.get('errors'), list):
++                raise ValueError('invalid Semgrep report shape')
++            entry['backend_version'] = result.get('version', 'unknown')
++            entry['backend_errors'] = result['errors']
++            paths = result.get('paths')
++            if not isinstance(paths, dict) or not isinstance(paths.get('scanned'), list):
++                raise ValueError('missing scanned snapshot evidence')
++            scanned = paths['scanned']
++            if proc.returncode != 0 or result['errors'] or str(source) not in scanned:
++                entry.update(status='error', reason='backend errors, nonzero result or snapshot not scanned', returncode=proc.returncode)
++                return entry, findings
++            for item in result['results']:
++                if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
++                    raise ValueError('invalid finding shape')
++                if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
++                    raise ValueError('unexpected finding rule or snapshot')
++                line = item['start']['line']
++                if type(line) is not int or line < 1:
++                    raise ValueError('invalid finding location')
++                findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
++                                 'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
++                                 'reason': '斷言兩側是相同語法表達式',
++                                 'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
++                                 'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
++            entry['status'] = 'scanned'
++    except subprocess.TimeoutExpired:
++        entry.update(status='timeout', reason='backend timed out')
++    except (OSError, UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
++        entry.update(status='unavailable', reason=str(exc))
++    return entry, findings
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+new file mode 100644
+index 00000000..a58bc0fa
+--- /dev/null
++++ b/scripts/test_test_quality_cli.py
+@@ -0,0 +1,162 @@
++#!/usr/bin/env python3
++"""Independent evidence validity controls; no implementation formula copied into expected."""
++import hashlib
++import json
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import tempfile
++import unittest
++
++TOOL = Path(__file__).with_name('lumos')
++
++
++class QualityCLI(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name)
++        self.addCleanup(self.temp.cleanup)
++
++    def run_cli(self, *args):
++        r = subprocess.run([sys.executable, str(TOOL), 'test-quality', *map(str, args)],
++                           cwd=self.root, capture_output=True, text=True, timeout=20)
++        return r.returncode, json.loads(r.stdout)
++
++    def receipt(self, phase, outcome='passed', impl='correct', tests='independent', failure_type='AssertionError'):
++        folder = self.root/phase
++        folder.mkdir()
++        failure = '' if outcome == 'passed' else '<skipped/>' if outcome == 'skipped' else f'<{outcome} type="{failure_type}">wrong charge</{outcome}>'
++        xml = f'<testsuite><testcase classname="PriceTest" name="known_90">{failure}</testcase></testsuite>'.encode()
++        (folder/'report.xml').write_bytes(xml)
++        snaps = []
++        for i, (role, value) in enumerate([('implementation', impl), ('tests', tests), ('context', 'locked')]):
++            raw = value.encode(); artifact = f'snapshot-{i}.txt'
++            (folder/artifact).write_bytes(raw)
++            snaps.append({'role': role, 'path': '/isolated/'+role, 'artifact': artifact, 'sha256': hashlib.sha256(raw).hexdigest()})
++        cases = [{'id': 'PriceTest::known_90', 'status': outcome, 'assertion_failure': outcome == 'failure' and failure_type == 'AssertionError',
++                  'reason': '' if outcome == 'passed' or outcome == 'skipped' else failure_type+'  wrong charge'}]
++        r = {'schema_version': 1, 'kind': 'execution-receipt', 'status': 'executed', 'language': 'fixture',
++             'framework': 'junit-control', 'command': ['trusted-runner'], 'cwd': '/isolated',
++             'exit_code': 0 if outcome == 'passed' else 1, 'report_sha256': hashlib.sha256(xml).hexdigest(),
++             'tests': cases, 'snapshots': snaps}
++        (folder/'receipt.json').write_text(json.dumps(r))
++        return folder
++
++    def check(self, fault='failure', kind='AssertionError', changed_tests=False, restored='correct', **kwargs):
++        b = self.receipt('baseline')
++        f = self.receipt('fault', fault, 'wrong', 'changed' if changed_tests else 'independent', kind)
++        r = self.receipt('restored', impl=restored)
++        return self.run_cli('check', b, f, r, '--target', 'PriceTest::known_90', *kwargs.get('extra', []))
++
++    def test_target_assertion_is_detected_without_semantic_verdict(self):
++        rc, r = self.check()
++        self.assertEqual(rc, 0)
++        self.assertEqual(r['fault_evidence'], 'detected')
++        self.assertEqual(r['verdict'], 'not_assessed')
++        self.assertEqual(r['oracle']['status'], 'unknown')
++
++    def test_surviving_fault_is_not_pass(self):
++        rc, r = self.check('passed')
++        self.assertEqual(rc, 2)
++        self.assertEqual(r['fault_evidence'], 'survived')
++
++    def test_non_assertion_failure_is_invalid(self):
++        rc, r = self.check(kind='RuntimeException')
++        self.assertEqual(rc, 2)
++        self.assertIn('non-assertion', r['reason'])
++
++    def test_skipped_target_not_detection(self):
++        self.assertEqual(self.check('skipped')[0], 2)
++
++    def test_test_edits_not_detection(self):
++        rc, r = self.check(changed_tests=True)
++        self.assertEqual(rc, 2)
++        self.assertIn('tests/context changed', r['reason'])
++
++    def test_restoration_must_match_original(self):
++        self.assertEqual(self.check(restored='not-restored')[0], 2)
++
++    def test_non_target_identity_rejected(self):
++        self.assertEqual(self.check(extra=['--target', 'Wrong::identity'])[0], 2)
++
++    def test_tampered_raw_report_is_invalid(self):
++        b=self.receipt('baseline');f=self.receipt('fault','failure','wrong');r=self.receipt('restored')
++        (f/'report.xml').write_text('<testsuite/>')
++        rc, report=self.run_cli('check',b,f,r,'--target','PriceTest::known_90')
++        self.assertEqual(rc,2);self.assertIn('hash mismatch',report['reason'])
++
++    def capture(self, xml, command=None, **kwargs):
++        (self.root/'source.txt').write_text('production')
++        (self.root/'tests.txt').write_text('known case')
++        args=['capture','--out',self.root/'capture','--source','source.txt','--test-source','tests.txt',
++              '--language','fixture','--framework','control','--junit-stdout','--timeout',kwargs.get('timeout',10)]
++        for target in kwargs.get('targets', []):
++            args += ['--target', target]
++        args += ['--']
++        return self.run_cli(*args, *(command or [sys.executable,'-c','print('+repr(xml)+')']))
++
++    def test_xunit_generic_logger_assertion_is_attributed(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure type="failure" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>')
++        self.assertTrue(rows[0]['assertion_failure'])
++
++    def test_runtime_exception_mentioning_xunit_message_not_assertion(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure type="RuntimeException" message="Assert.Equal() Failure: Values differ"/></testcase></testsuite>')
++        self.assertFalse(rows[0]['assertion_failure'])
++
++    def test_xctest_native_assertion_message_is_attributed(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure message="/tmp/Test.swift:5 - XCTAssertEqual failed: wrong amount"/></testcase></testsuite>')
++        self.assertTrue(rows[0]['assertion_failure'])
++
++    def test_runtime_exception_with_assertion_words_is_not_attributed(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure type="RuntimeException" message="AssertionError ERR_ASSERTION /tmp/Test.swift:5 - XCTAssertEqual failed:"/></testcase></testsuite>')
++        self.assertFalse(rows[0]['assertion_failure'])
++
++    def test_android_native_assertion_without_type_is_attributed(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure>java.lang.AssertionError: expected 90\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>')
++        self.assertTrue(rows[0]['assertion_failure'])
++
++    def test_android_runtime_cause_mention_is_not_attributed(self):
++        from test_quality import junit
++        rows=junit(b'<testsuite><testcase name="x"><failure>java.lang.IllegalStateException: runtime failed\nCaused by java.lang.AssertionError: description\nat org.junit.Assert.assertEquals(Assert.java:1)</failure></testcase></testsuite>')
++        self.assertFalse(rows[0]['assertion_failure'])
++
++    def test_zero_cases_capture_invalid(self):
++        rc,r=self.capture('<testsuite/>')
++        self.assertEqual(rc,2);self.assertIn('zero testcases',r['reason'])
++
++    def test_wrapper_success_without_selected_target_invalid(self):
++        rc,r=self.capture('<testsuite><testcase classname="test" name="file.cjs"/></testsuite>', targets=['test::known_90'])
++        self.assertEqual(rc,2);self.assertIn('expected target missing',r['reason'])
++
++    def test_suite_error_capture_invalid(self):
++        rc,r=self.capture('<testsuite><testcase name="x"/><error type="ImportError"/></testsuite>')
++        self.assertEqual(rc,2);self.assertIn('suite errors',r['reason'])
++
++    def test_duplicate_identity_capture_invalid(self):
++        rc,r=self.capture('<testsuite><testcase name="x"/><testcase name="x"/></testsuite>')
++        self.assertEqual(rc,2);self.assertIn('duplicate',r['reason'])
++
++    def test_entity_declaration_capture_invalid(self):
++        self.assertEqual(self.capture('<!DOCTYPE testsuite><testsuite/>')[0],2)
++
++    def test_command_not_found_invalid(self):
++        self.assertEqual(self.capture('',command=['/no-such-runtime'])[0],2)
++
++    def test_timeout_not_detection(self):
++        rc,r=self.capture('',command=[sys.executable,'-c','import time; time.sleep(30)'],timeout=1)
++        self.assertEqual(rc,2);self.assertIn('timeout',r['reason'])
++
++    def test_missing_quality_sidecar_does_not_break_legacy_help(self):
++        alone=self.root/'lumos';shutil.copy2(TOOL,alone)
++        r=subprocess.run([sys.executable,str(alone),'--help'],capture_output=True,text=True,timeout=10)
++        self.assertEqual(r.returncode,0)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/scripts/test_test_quality_scan.py b/scripts/test_test_quality_scan.py
+new file mode 100644
+index 00000000..24be67a5
+--- /dev/null
++++ b/scripts/test_test_quality_scan.py
+@@ -0,0 +1,188 @@
++"""CLI 行為考卷；預期結果來自人工分類，不呼叫掃描器算 oracle。"""
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++TOOL = Path(__file__).with_name('test_quality_scan.py')
++
++
++class ScanTests(unittest.TestCase):
++    def scan(self, source, implementation=None, suffix='.py', check_helper=None):
++        with tempfile.TemporaryDirectory() as td:
++            root = Path(td)
++            test = root / ('test_example' + suffix)
++            test.write_text(source, encoding='utf-8')
++            before = test.read_bytes()
++            command = [sys.executable, str(TOOL), str(test), '--json']
++            if check_helper:
++                command += ['--check-helper', check_helper]
++            if implementation is not None:
++                impl = root / 'pricing.py'
++                impl.write_text(implementation, encoding='utf-8')
++                command += ['--implementation', 'pricing=' + str(impl)]
++            run = subprocess.run(command, capture_output=True, text=True, timeout=20)
++            self.assertEqual(test.read_bytes(), before, '掃描不可改寫輸入')
++            return run.returncode, json.loads(run.stdout)
++
++    def rules(self, report):
++        return [item['rule_id'] for item in report['findings']]
++
++    def test_custom_check_helper_is_explicit_and_behaves_like_assert(self):
++        source = "def t_split():\n    check('group behavior', split_for('G1') == split_for('G1'), '')\n"
++        _, default = self.scan(source)
++        self.assertEqual(default['findings'], [])
++        self.assertEqual(default['inputs'][0]['tests_with_known_assertions'], 0)
++        _, explicit = self.scan(source, check_helper='check')
++        self.assertEqual(self.rules(explicit), ['same-comparison'])
++        self.assertEqual(explicit['inputs'][0]['tests_with_known_assertions'], 1)
++        self.assertEqual(explicit['assertion_helpers'], ['check'])
++
++    def test_same_call_comparison_is_candidate_not_verdict(self):
++        rc, out = self.scan("def test_split():\n    assert split_for('G1') == split_for('G1')\n")
++        self.assertEqual(rc, 0)
++        self.assertEqual(self.rules(out), ['same-comparison'])
++        self.assertEqual(out['findings'][0]['status'], 'candidate')
++        self.assertEqual(out['verdict'], 'not_assessed')
++        self.assertEqual(out['inputs'][0]['tests_seen'], 1)
++
++    def test_independent_known_value_has_no_candidate(self):
++        rc, out = self.scan('def test_total():\n    assert total(3, 5) == 15\n')
++        self.assertEqual(rc, 0)
++        self.assertEqual(out['findings'], [])
++        self.assertEqual(out['verdict'], 'not_assessed')
++
++    def test_expected_reuses_same_function_with_other_input(self):
++        _, out = self.scan('def test_total():\n    expected = total(3, 5)\n    self.assertEqual(total(5, 3), expected)\n')
++        self.assertEqual(self.rules(out), ['oracle-reuses-call'])
++
++    def test_source_only_and_mixed_behavior_are_distinct(self):
++        source = 'import inspect\ndef test_pid():\n    src = inspect.getsource(save)\n    self.assertIn("getpid", src)\n'
++        _, only = self.scan(source)
++        self.assertEqual(self.rules(only), ['source-only'])
++        _, mixed = self.scan(source + '    assert save_path(101) == "backlog.101.tmp"\n')
++        self.assertNotIn('source-only', self.rules(mixed))
++
++    def test_inspect_alias_and_transformation(self):
++        _, out = self.scan('from inspect import getsource as gs\ndef test_shape():\n    src = gs(save).strip()\n    assert "getpid" in src\n')
++        self.assertEqual(self.rules(out), ['source-only'])
++
++    def test_mirror_expression_requires_explicit_implementation(self):
++        source = 'from pricing import total\ndef test_total():\n    q, p = 3, 5\n    expected = q * p\n    assert total(q, p) == expected\n'
++        _, without = self.scan(source)
++        self.assertNotIn('mirror-expression', self.rules(without))
++        _, with_source = self.scan(source, 'def total(quantity, price):\n    return quantity * price\n')
++        self.assertEqual(self.rules(with_source), ['mirror-expression'])
++
++    def test_literal_expectation_is_not_reclassified_as_mirror(self):
++        _, out = self.scan('from pricing import total\ndef test_total():\n    assert total(3, 5) == 15\n', 'def total(q, p):\n    return q * p\n')
++        self.assertEqual(out['findings'], [])
++
++    def test_reassigned_expected_does_not_use_stale_binding(self):
++        _, out = self.scan('def test_total():\n    expected = total(3, 5)\n    expected = 15\n    assert total(3, 5) == expected\n')
++        self.assertEqual(out['findings'], [])
++
++    def test_nested_helper_assert_is_not_a_test_assertion(self):
++        _, out = self.scan('def test_outer():\n    def helper():\n        assert total(3, 5) == total(3, 5)\n    assert total(3, 5) == 15\n')
++        self.assertEqual(out['findings'], [])
++
++    def test_independent_collection_consistency_is_not_same_oracle(self):
++        _, out = self.scan('def test_wiring():\n    self.assertEqual(set(prompt_ids), set(runner_ids))\n')
++        self.assertEqual(out['findings'], [])
++
++    def test_parse_error_reports_incomplete(self):
++        rc, out = self.scan('def test_broken(:\n')
++        self.assertEqual(rc, 2)
++        self.assertFalse(out['complete'])
++        self.assertEqual(out['inputs'][0]['status'], 'error')
++
++    def test_no_tests_is_not_clean(self):
++        rc, out = self.scan('x = 1\n')
++        self.assertEqual(rc, 2)
++        self.assertFalse(out['complete'])
++        self.assertEqual(out['inputs'][0]['status'], 'no_tests')
++
++    def test_other_language_is_explicitly_unsupported(self):
++        rc, out = self.scan('fun testTotal() = assertEquals(15, total(3, 5))', suffix='.kt')
++        self.assertEqual(rc, 2)
++        self.assertFalse(out['complete'])
++        self.assertEqual(out['inputs'][0]['language'], 'kotlin')
++        self.assertEqual(out['inputs'][0]['status'], 'unsupported')
++
++    def test_untrusted_module_is_not_executed(self):
++        rc, out = self.scan('raise RuntimeError("DO NOT IMPORT")\ndef test_total():\n    assert total(3, 5) == 15\n')
++        self.assertEqual(rc, 0)
++        self.assertEqual(out['findings'], [])
++
++    def test_backend_errors_and_skipped_snapshot_are_not_clean(self):
++        for payload in ({'results': [], 'errors': [{'message': 'parse failed'}], 'paths': {'scanned': []}},
++                        {'results': [], 'errors': [], 'paths': {'scanned': []}}):
++            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as td:
++                source = Path(td) / 'Test.swift'
++                source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
++                fake = Path(td) / 'semgrep'
++                fake.write_text('#!' + sys.executable + '\nprint(' + repr(json.dumps(payload)) + ')\n')
++                fake.chmod(0o700)
++                run = subprocess.run([sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(fake)], capture_output=True, text=True, timeout=20)
++                out = json.loads(run.stdout)
++                self.assertEqual(run.returncode, 2)
++                self.assertEqual(out['inputs'][0]['status'], 'error')
++                self.assertFalse(out['complete'])
++
++    def test_corpus_runner_reports_unavailable_languages(self):
++        runner = TOOL.parent.parent / 'governance/eval/test_quality_corpus.py'
++        run = subprocess.run([sys.executable, str(runner)], capture_output=True, text=True, timeout=30)
++        out = json.loads(run.stdout)
++        self.assertEqual(run.returncode, 2)
++        self.assertFalse(out['complete'])
++        self.assertFalse(out['supported_checks_match'])
++        python_cases = [c for c in out['cases'] if c['language'] == 'python']
++        self.assertEqual(len(python_cases), 4)
++        self.assertEqual({c['status'] for c in python_cases}, {'verified_for_supported_rules'})
++        self.assertEqual({c['status'] for c in out['cases'] if c['language'] != 'python'}, {'unavailable'})
++
++    def test_optional_backend_missing_is_not_clean(self):
++        with tempfile.TemporaryDirectory() as td:
++            source = Path(td) / 'TestTotal.swift'
++            source.write_text('func testTotal() { XCTAssertEqual(total(3, 5), 15) }')
++            run = subprocess.run([sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(Path(td)/'missing-semgrep')], capture_output=True, text=True, timeout=20)
++            out = json.loads(run.stdout)
++            self.assertEqual(run.returncode, 2)
++            self.assertFalse(out['complete'])
++            self.assertEqual(out['inputs'][0]['status'], 'unavailable')
++
++    def test_swift_testing_macro_is_not_claimed_supported(self):
++        with tempfile.TemporaryDirectory() as td:
++            source = Path(td) / 'Test.swift'
++            source.write_text('@Test func price() { #expect(total(3, 5) == 15) }')
++            run = subprocess.run([sys.executable, str(TOOL), str(source), '--json', '--semgrep', str(Path(td)/'missing')], capture_output=True, text=True, timeout=20)
++            out = json.loads(run.stdout)
++            self.assertIn('Swift Testing #expect 未支援；僅 XCTest。', out['inputs'][0]['limitations'])
++            self.assertFalse(out['complete'])
++
++    def test_cross_language_corpus_python_cases_have_fixed_oracles(self):
++        corpus = json.loads((TOOL.parent.parent / 'governance/eval/test-quality/corpus-v1.json').read_text())
++        for case in corpus['cases']:
++            if case['language'] == 'python':
++                with self.subTest(case=case['id']):
++                    rc, out = self.scan(case['source'], corpus['implementation']['source'])
++                    self.assertEqual(rc, 0)
++                    self.assertEqual(self.rules(out), case['expected_candidate_rules'])
++        self.assertEqual({c['language'] for c in corpus['cases']},
++                         {'python', 'kotlin', 'java', 'swift', 'csharp', 'javascript', 'typescript'})
++
++    def test_missing_and_partial_inputs_are_not_clean(self):
++        with tempfile.TemporaryDirectory() as td:
++            good = Path(td) / 'test_good.py'
++            good.write_text('def test_ok():\n    assert total(3, 5) == 15\n')
++            run = subprocess.run([sys.executable, str(TOOL), str(good), str(Path(td)/'missing.py'), '--json'], capture_output=True, text=True, timeout=20)
++            out = json.loads(run.stdout)
++            self.assertEqual(run.returncode, 2)
++            self.assertFalse(out['complete'])
++            self.assertEqual(len(out['inputs']), 2)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 631b586e..d81eca2a 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -35,21 +35,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+    派工單落 `rN-dispatch.json`,頂層加 `"base_commit": "<git rev-parse HEAD 的 40 碼>"`(修正關卡的修正紀錄從這裡帶入 `base`)。
+ 3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先留在對話裡、不寫到硬碟,同輪全部交回才一次寫進卷證(lumos-design-loop templates.md §0)。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。全部到齊、寫進卷證之後,第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
+    - 記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行、或沒正規化(檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算)都 rc2。`lumos report-normalize <席報告>` 不帶 --write 先看差在哪。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。
+    - 可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現,跑得出來才撈回。
+    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:**席位給的「觀察」和「判準」要分開驗**——席位常常量到的現象對、但「怎麼算才算過」講錯;照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(通常是對的),再自己想一遍什麼條件才算過,不把它的判準當結論。
+    - severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。
+    - **外家席預設不派**(2026-09-30 使用者裁,省外家成本;編制表外家席=條件席):high 五個找問題席都用同門(鏡頭5 補原外家 finder 的名額),辯方也用同門;要另一家視角時(同門意見分歧、碰資安或不可逆操作)才加派外家 finder 或辯方。沒派外家時,收斂結論照實寫成「單家族視角下未發現」;問閘偵測到席位異常會自動轉述當輪(異常才印;外家未派只轉述編制對照、不裁決);全史核對用 `loop status --roster`。
+    - diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點,那些綁定測試會被自動真跑:高風險走 `code-loop check`,紅/懸空/方法名不合法就擋;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了印出來、記帳、不擋(擋下去最可能的結果是人改走 `--no-verify`,零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。紅了要修測試:補一筆 `code-loop pass` 修不好一支紅掉的測試。
+-5. **修與釘**:動手修前，按共用範本§3.1第0步，替每個程式根因組先選原問題與既有行為保留候選；修後分開記兩種結果；修補混入重構時也照該節保存可執行的分段驗證點，高風險保留案例的抓錯能力抽查也沿該節辦理，詳細做法單源在該節。真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
++5. **修與釘**:測試判準與抓錯證據遵循 lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉。動手修前，按共用範本§3.1第0步，替每個程式根因組先選原問題與既有行為保留候選；修後分開記兩種結果；修補混入重構時也照該節保存可執行的分段驗證點，高風險保留案例的抓錯能力抽查也沿該節辦理，詳細做法單源在該節。真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+    **修正關卡**(只提醒不擋;[[Projects/代碼審修正關卡第0步_計劃]]):修完先提交,寫修正紀錄 `governance/review-reports/<編號>/rN-fix.json`(骨架:`lumos loop fix-check <編號> --round rN --record-template`;修正動到的檔都列成 `fixed`、每條附守著它的測試),派下一輪全新席之前、或到上限要推之前,跑 `lumos loop fix-check <編號> --round rN`——約 5 分鐘,**在背景跑**(對話裡跑指令預設 2 分鐘上限會砍掉它)。它驗紀錄完整、測試存在、紀錄裡的測試在修正後是綠的、受波及合約測試全綠;同類提醒與根因／修補因果的判讀、prior誠實填法見共用範本§3.1第0步;跟派全新席掃 delta 並列,不取代。`loop next` 會在最新一輪有修正卻沒驗過時提醒。
+ 6. **記帳**:第 2 輪起載體席完成修補因果核對才帶 `--regression-set <id串|none>`(這輪哪些發現是上一輪修補造成的;判過且無回歸才寫 none)。仍有未判定因果時省略此欄，在 intake 留 finding ID、原因與證據，照共用範本 §3.1，不把未知填成 none；建議也帶 `--finding-kind`(文件、流程類的折入就不用寫修正紀錄)。多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,帳本不能撤銷,只能換編號重記。
+    `lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳。`--finding-kind` 一個 id 一個旗標。
+ 7. **問閘**:單席循序與多席一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席照步驟 6 的彙總記帳);code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折;散文設計審不受此限)。架構對齊席與棧別檢核題對同一段給相反意見時,兩邊的發現都留、不挑邊:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折。`--gate --panel` 只供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾不印「審查有沒有用」那行(數字照樣進 `lumos gov --stats`)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:
+    - 先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。
+    - 凍結判定在留痕之前:程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定,產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放。
+    - 再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。
+    - 留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。
+    - 然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index 7a4c5995..bb764e9c 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -146,20 +146,21 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
+    借 Meta 半形式推理的免費半截，把「猜行為」換成「追一個案例」）：
+    · 邊界：空集合／只有一個元素／最大值或溢位／{本案高風險形態，如日期窗口、off-by-one}，這段扛得住嗎？
+    · 資源：連線／鎖／交易，在錯誤路徑和提早 return 上確定釋放了嗎？
+    · 例外與 None：哪個呼叫會丟例外或回 None，這段接了嗎？
+    · 冪等與併發：同一操作重跑、或兩個請求同時進來，會壞嗎？同一次計算讀了兩次、中間被別人改了，結果會不會拼自兩個時間點？對外送出或扣款的重試會不會重複生效、收端怎麼去重？
+    · 新舊互讀：新程式讀舊資料、舊程式讀新資料（新增的紀錄種類、欄位、格式），各會怎樣？
+    · 寫一半：寫到一半被中斷（例外、被 kill、磁碟滿），留下什麼狀態？下次讀認得出、救得回嗎？錯誤訊息教的救法真的救得回嗎？
+    · 衍生資料：它是真相來源還是算出來的（快取、索引、彙總、狀態提示）？同一件事有多筆紀錄（重跑、重試、撤回）時取哪一筆？
+    · 時間：時間戳與日期比大小、判過期時，拿一個具體時刻走一遍（例如台北凌晨 1 點＝UTC 的前一天）；時鐘倒退、兩台機器時間不一致呢？
+    · 不可逆：刪除、覆寫、截斷、搬移資料，會不會連帶動到不該動的？
++   · 測試：讀 lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉，檢查本次測試的獨立判準與實際情境；修 bug／關鍵守衛核對抓錯證據，不能用結構檢查代替行為驗證。
+    每條 finding 講清「**哪個輸入、走到哪一行**會出錯」，不是只點名詞。
+    （風格好壞與架構一致性歸架構對齊席，不在這鏡頭。）
+ 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
+    的讀 question 欄逐條判「真隱患/誤報」（真隱患必答對應提問）；source:"lint:..."
+    的讀 message。manifest 命中位置是注意力導引，不是全部——散文外的 hunk 也要自己看。
+ 3. **圖譜鏡頭——這次改動牽連到的筆記**:
+ LUMOS-IMPACT: {base}..{head 完整提交編號}
+    派工時 hook 會在尾端附上固定席筆記(帶硬合約或出過事故的節點)。
+    逐條判:這份 diff 會不會破壞該節點宣稱的行為或合約?**固定席必答**(可分組摘要,
+    判「不影響」也要寫一句為什麼)。這些筆記記的是「為什麼這樣設計、哪裡不能碰、以前
+@@ -244,21 +245,21 @@ nice-to-have 轉化成的 fix。
+ ```
+ 你是實作者。專案：{repo 根}（{技術棧}）。本任務是「{功能名}」{M} 個任務中的
+ 第 {N} 個：{一句話}。
+ 
+ **先讀需求檔（唯一需求來源，程式碼一字不差照用）**：{task-N-brief.md 路徑}
+ 
+ 前置任務已完成的介面（你可直接用）：{exact 簽名/屬性清單，只列本任務會碰的}
+ {前面任務踩過的坑，一句話傳承：如「種子必須綁店否則 guard 測試假綠」}
+ 
+ 補充脈絡與慣例：
+-1. TDD：先寫測試跑紅 → 實作 → 綠。{測試指令、環境變數、harness 模式指引}
++1. 測試品質先讀 lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉，列輸入／預期結果／判準來源／應抓到的錯誤。TDD：先寫測試跑紅 → 實作 → 綠。{測試指令、環境變數、harness 模式指引}
+ 2. {環境細節：PATH、連線字串來源}
+ 3. **commit 慣例（pre-commit gate 硬擋 code 無圖譜 commit）**：把計劃節點
+    {路徑} 的 Task {N} checkbox 勾成 [x] 同 commit 進。message 照 brief。
+    不要 --no-verify。{branch} 直接 commit。
+ 
+ 完成後完整報告寫 {task-N-report.md 路徑}（測試紅→綠輸出、build、commit hash、
+ {任務特定證據}），回覆只回：狀態（DONE/DONE_WITH_CONCERNS/NEEDS_CONTEXT/BLOCKED）、
+ commit hash、一行測試摘要、concerns。開工前不清楚先問。
+ ```
+ 
+diff --git a/skills/lumos-project-notes/SKILL.md b/skills/lumos-project-notes/SKILL.md
+index 35cf4bfb..7cbf18ea 100644
+--- a/skills/lumos-project-notes/SKILL.md
++++ b/skills/lumos-project-notes/SKILL.md
+@@ -1,38 +1,42 @@
+ ---
+ name: lumos-project-notes
+ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——讀懂程式碼現況後,要補「為什麼這樣、邊界在哪、哪些不能改、會波及什麼」這類程式碼看不出的脈絡時用 lumos 查;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:排查、理解既有系統、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+ ---
+ # lumos 專案知識圖譜——一頁手冊
+ 
+ 圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+ 
++**實作要寫測試、修 bug、重構或接入測試品質工具時**：先讀 `commands/test-quality-standard.md`，依各棧 runner 提供獨立判準來源與相關故障證據；疑似綁死實作的行為測試再做保持行為的重構檢查。
++
+ **指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+ 
+ ## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+ 
+ | 你在想… | 敲 |
+ |---|---|
+ | 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+ | 動這段有什麼不能碰 | `lumos contracts <節點>` |
+ | 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+ | 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+ | 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+ | 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+ 
+ 看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+ **查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+ **分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+ 被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+ 
+ ## 2. 動手前
+ 
++- 寫或改測試先讀 `commands/03-寫回圖譜.md`〈實作測試品質〉；先列輸入、預期結果、判準來源與應抓到的錯誤。
++
+ - `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+ - `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+ - 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+ - 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+ - 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+ 
+ ## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+ 
+ | 要做 | 敲 |
+ |---|---|
+diff --git a/skills/lumos-project-notes/commands/03-寫回圖譜.md b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+index 79dd0583..4c0f685f 100644
+--- a/skills/lumos-project-notes/commands/03-寫回圖譜.md
++++ b/skills/lumos-project-notes/commands/03-寫回圖譜.md
+@@ -18,20 +18,72 @@
+ | 「還沒推上去的決策,某個文字欄要改(例如被筆記內容審判成程式碼推得出來)」 | `lumos decision-amend <節點> <dN> --field <欄名> --text "<新文字>"` | 只改那一欄的文字(一般一行或多行文字);結構欄(id、decided、valid、ended…)與清單欄不准改;會先 fetch 所有遠端,遠端已有這個編號就拒絕(已推或撞號) | 手改 decisions 格式壞;已推的決策被偷偷改掉,別人手上的版本對不上 |
+ | 「舊筆記的決策沒編號」 | `lumos decision-reindex <節點>` 或 `--all` | 補 dN | 無法被引用 |
+ | 「翻案後,鄰居筆記要不要跟著改?」 | `lumos rel-cascade list`;逐篇 `confirm`/`prune` `<鄰居> --cascade-id <id> --from <節點>#dN`;中斷後 `lumos rel-cascade resume <id>` | 帳本記你判過哪些 | doctor 的 E2 會一直提醒 |
+ | 「做完了,要留驗證紀錄並掛回功能」 | `lumos new verification <名> --plan … --systems …`;漏掛的事後 `lumos sync-verified-by --apply`;正文有只是指路、沒驗的功能連結時,開頭欄位寫 `system_refs` 列真的驗了的(`lumos append <紀錄> system_refs "[[Systems/X]]"`,寫了之後正文再補的要自己同步) | doctor 1/4~4/4 不再報孤兒 | 驗證沒人找得到 |
+ | 「某篇功能筆記內容我重新確認過還站得住」 | `lumos self-audit <節點> [--date …]` | 寫 self_audit 戳記 | doctor [S] 一直提醒 |
+ | 「業務方點頭了,要留痕」 | `lumos signoff <節點> --note "<確認了什麼>"` | 寫簽核帳 | — |
+ | 「計劃條款每條綁了測試沒」 | `lumos spec-trace <計劃節點>` | 每條 綁了/靠人/未標/懸空;有未標 rc1(舊制「誰認領」欄照印當對照) | 計劃結案但條款沒綁測試也沒寫怎麼驗 |
+ | 「老驗證紀錄太多,要歸檔」 | `lumos archive [--days N] [--apply]` | 先 dry-run 再 --apply | — |
+ | 「改名/搬檔」 | `scripts/graph-rename.sh <舊> <新>` | 連結一起改寫 | 手搬斷連結 |
+ 
++## 實作測試品質
++
++**測試必須有獨立的判準，並能抓到它宣稱守護的行為被破壞。** 適用於新功能、修 bug 與重構時寫的測試，不限於代碼審的修訂輪。
++
++1. **先說要守什麼。** 寫測試前列出「輸入／預期結果／判準來源／應抓到的錯誤」；來源可以是需求、合約或事故。簡單案例寫在測試名稱或註解即可，不要求每支測試另建筆記。
++2. **預期結果要獨立。** 用規格、人工確認的例子或可信參考實作；不能呼叫被測函式或照抄同一算法來產生 expected。fixture 可用正式程式的 helper，但必須另有獨立確認的案例，避免 helper 與功能一起錯、測試一起綠。
++3. **斷言實際行為。** 觀察輸出、狀態、寫入結果或錯誤理由。原始碼字串、函式名稱、呼叫次數、內部常數相等可以補充，不能單獨當成功能正確的證明。
++4. **讓情境真的成立。** 宣稱測併發、巢狀或寫入失敗，就要建立該情境及前置斷言；宣稱某守衛拒絕，就確認拒絕理由，不能讓另一道更早的守衛代打。
++5. **修 bug 與關鍵守衛要證明抓得到錯。** 恢復原缺陷，或做一個對應故障變體，確認目標行為斷言翻紅、還原後翻綠；匯入失敗、語法錯、環境錯或逾時不算。只挑與本次改動相關的案例，不要求每輪全套 mutation testing。證據記錄版本、案例、故障與紅綠結果；不可執行時明記原因與未驗範圍，不得宣稱已證實。隔離與安全執行沿用 lumos-design-loop 的 `templates.md` §3.1：暫存原始碼不代表外部服務、資料庫也已隔離。
++6. **保留有目的的結構測試。** 靜態規範、接線與一致性檢查仍有用，說清它守的結構；不一律禁止私有函式測試，也不因形式相似就刪除。它們不能取代行為驗證。
++
++例如「數量 3、單價 5，總價應為 15」的預期值來自已確認例子；把正式程式的乘法重寫一次算 expected，只證明兩份寫法一致。分組功能也不能只比 `split_for(group) == split_for(group)`：另用已確認會落入不同組別的例子，才能抓到永遠回傳同一組的退化。
++
++**開發與審查接點：** 實作者先列四項判準，再寫紅→綠測試；審查者檢查 expected 的來源，問「永遠成功、固定回傳、略過關鍵步驟，這條斷言會紅嗎？」。修 bug 與關鍵守衛需核對實際抓錯證據。這是人工工作規範；CLI 的紀錄形狀檢查不能證明判準獨立或測試有用。
++
++參考：[Matt Pocock 的 TDD 測試指引](https://github.com/mattpocock/skills/blob/main/skills/engineering/tdd/tests.md)。
++
++各棧接入測試撰寫、故障證據與工具時，讀 [測試品質接入標準](test-quality-standard.md)。獨立答案需來源核對，故障翻紅不能替代它；對疑似實作耦合的測試，再按標準做保持行為的重構檢查。
++
++## 事後掃描與執行收證（已安裝 CLI）
++
++更新來源與消費專案 vendor 後，可在消費專案直接執行 `lumos test-quality`（或 `python3 scripts/lumos test-quality`）：
++
++```sh
++lumos test-quality scan /path/to/project/tests --json
++lumos test-quality scan scripts/test_lumos.py --check-helper check --json
++lumos test-quality scan /path/to/test_price.py --implementation pricing=/path/to/pricing.py --json
++lumos test-quality scan /path/to/project/tests --semgrep /path/to/semgrep --json
++python3 governance/eval/test_quality_pilot.py
++python3 governance/eval/test_quality_corpus.py --semgrep /path/to/semgrep
++```
++
++入口與三份 sidecar 隨既有 install/init/update 精確白名單部署；舊版消費專案須先更新。自訂 `check(name, condition, detail)` 類斷言必須用 `--check-helper NAME` 明示；預設不猜 helper 語義，報告會保存選項。Python 的內建 AST 辨識自比、同函式產預期值、單一 return 算式重抄（需明確實作來源）、只斷言 inspect.getsource。選配 Semgrep CE 先辨識 Kotlin／Java／Swift／C#／JS／TS／PHP 的特定斷言介面自比；不代表這些語言已完成算法同源或完整框架檢測；Swift 僅 XCTest，Swift Testing 的 #expect 尚未支援。工具不替你安裝 Semgrep；試行鎖版 1.179.0。
++
++rc 0 代表本次選定範圍已掃完，不是品質通過；rc 2 是輸入／解析／工具／支援不完整。`findings` 全是 candidate，`verdict` 固定 not_assessed。報告的 limitations、supported_rules、tests_with_known_assertions 與未支援狀態必須一起讀；零候選不能當「測試有用」的證明。目錄模式只選路徑含 test 的已知語言檔，其他布局請明確指定檔案。固定故障試行只驗掃描器的兩種辨識能力，不替代功能測試或證明手冊改善了 Agent。
++
++
++收證明示執行**可信本機命令**，不提供沙盒，先隔離資料庫、外部服務與副作用。原生 runner 退出0也可能只跑到檔案包裝案例；用 `--target classname::name` 指定真正應執行的案例。輸出目錄與 XML report 必須全新。缺工具、逾時、零案例、未選到目標、來源在執行中改變均為無效。
++
++```sh
++lumos test-quality capabilities
++lumos test-quality capture --out artifacts/baseline --source src/pricing.cjs \
++  --test-source test/independent.test.cjs --context package.json \
++  --language javascript --framework node-test --target test::independent_amount_100 \
++  --junit-stdout -- node --test --test-reporter=junit test/independent.test.cjs
++# 固定測試/設定/命令，另收故障與還原版，再核對
++lumos test-quality check artifacts/baseline artifacts/fault artifacts/restored \
++  --target test::independent_amount_100 --oracle-note REQUIREMENTS.md
++```
++
++命令自行選取既有 runner；PHPUnit 用 `--report 新檔.xml -- php vendor/bin/phpunit --log-junit 新檔.xml …`。快照不自動枚舉依賴，用 `--context` 明示 runtime、lock、設定與需求來源。check 核對原始報告／hash／身份／還原／目標 assertion failure，報告仍為 `not_assessed`，oracle 只到 declared；報告可偽造，一致性不等於執行真實性認證或獨立答案。保持行為的重構用 `--refactor`，等價性另由需求理由判定。
++
+ ## 寫什麼進去(上面是敲什麼,這裡是寫什麼)
+ 
+ **第一個問題永遠是:這句話程式碼推不推得出來。** 推得出來的別抄,抄了就會過期,而且讀的人分不出哪句是脈絡、哪句是過期的現況。
+ 
+ **分類規則不在這裡**:摘要行怎麼分類(`WHY:` / `RULE:` / `PITFALL:` / `FACT:`)、每類同一行還要有什麼,**唯一來源是紀律範本 `scripts/templates/graph-discipline.md` 的〈寫筆記時〉那一節**,它會被注入每個專案的 CLAUDE.md,動筆時本來就在你眼前,直接看那份。
+ 這裡刻意不放複本——複本前面被插一段唱反調的「快速版」、複本被藏進註解、複本標點跟本尊分岔,2026-09-21 一天之內被三種手法各繞過一次;守衛改成「不准有第二份定義」,比「複本要一字不差」穩。
+ 
+ 
+ **寫不出來的時候**(格子的鍵、撤除條件與作廢的寫法細節在 reference.md〈格子的細節〉):
+ - `WHY:` 查不到 `[出處:]` 就先問人,不要憑印象寫。
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 799cddfb..1fc26e02 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -19,27 +19,29 @@
+ | 「設計寫完要進審之前,這份退得回嗎、條款句式對嗎、跑起來紅綠?」 | `lumos spec-gate <計劃節點>` | 先判門:風險高→句式/綁定/回退節擋、紅綠只印、再進審;風險低(四行已排除+沒命中硬訊號)→不派審,沒標 keeps 的條款各自紅才放行並留痕;相依回歸紅就擋 |
+ | 「這個計劃的條款每條綁了測試沒、哪條還沒標?」 | `lumos spec-trace <計劃節點>` | 裁決看條款那一行的 [test:]/[manual:];舊制「驗證筆記回指」欄只當對照 |
+ | 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>` | git status 看得到檔、看不到上一輪在動什麼與人最後說了什麼;逐字稿在本機,指令自己找(排掉自己這個 session)、缺就印「意圖不可得」 |
+ | 「比較審查流程有沒有改善?」 | 開 `commands/06-代碼審與推送.md`〈離線比較審查收斂〉 | 先看修復、保留與新缺陷,再看輪數 |
+ | 「Claude 會談做了什麼?」 | `lumos events` | 讀外掛事件帳;Codex 沒有 |
+ | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
+ | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
+ | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
+ | 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆;直接硬讀 code 會漏承重牆與 why |
+ 
++寫測試或接各技術棧的測試品質工具：先讀 [測試品質接入標準](test-quality-standard.md)，再依專案 runner 保存證據。
++
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+-| 改完東西,要寫回圖譜(含**寫什麼**:四個分類前綴、Issue 四段、決策四欄) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
++| 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots(診斷;啟用看07) / doctor / stale / gov / drift-history / drift exam(工具鏈考卷重放) / drift scan·fix·ack(存量漂移:列出、工具改、照留;推送時的舊句檢查 m1 與 ack --name) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
+ | 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range / 離線收斂評測 |
+ | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼,再查脈絡**(理由、限制、事故)。改 code 前跑 `lumos impact --file <檔>`;不解釋可以,不查不行。筆記與程式衝突怎麼裁,照專案 CLAUDE.md／AGENTS.md 的紀律區塊。
+ 2. 改了會影響行為、決策、驗證的 code,當次寫回圖譜。**先問程式碼推不推得出來**:推得出來的別抄;程式碼答不了的現況同一行帶 `[來源:…]`;理由用 `WHY:`、限制用 `RULE:`(退場條件)、事故用 `PITFALL:`(防回歸)。刪除的測試改 `[test-gone:名稱]`。詳見 `commands/03-寫回圖譜.md`。
+diff --git a/skills/lumos-project-notes/commands/test-quality-standard.md b/skills/lumos-project-notes/commands/test-quality-standard.md
+new file mode 100644
+index 00000000..3bd3ac81
+--- /dev/null
++++ b/skills/lumos-project-notes/commands/test-quality-standard.md
+@@ -0,0 +1,102 @@
++# 各技術棧測試撰寫與工具檢驗接入標準 v1
++
++寫新功能、修 bug、重構、補測試或接入測試品質工具時，先讀這份。共用撰寫規範仍以 [03-寫回圖譜.md](03-寫回圖譜.md)〈實作測試品質〉為準；本文件規定如何提供與核對證據。適用 Python、Node.js／TypeScript、C#、Android Kotlin／Java、iOS Swift、PHP／Laravel。這是接入要求，不是已完成所有平台的支援宣告。
++
++## 開發時：先固定需求答案，再寫測試
++
++對本次改動的每個重要行為交代輸入、預期結果、來源、應抓到的錯誤；簡單情境放測試名或註解即可。expected 用需求例子、人工確認結果或独立可信參考。固定字面值也要有來源：从程式目前輸出貼出的 88 並不因為是字面值就獨立。可信參考應記錄版本、适用範圍與獨立性理由；不同函式名或不同模型生成不等於獨立。
++
++辨識兩條分開的證據：
++
++- **需求判準**：独立案例能否指出程式和測試共同誤解需求？由審查者核對來源與案例，JSON 填了 `oracle_source` 不能當證明。
++- **抓錯能力**：原缺陷或相關故障是否使目標行為斷言紅，還原後綠？它只能證明對所選錯誤敏感，不能證明 expected 正確、所有錯誤均被覆蓋。
++
++修 bug 與關鍵守衛沿共用規範提供實跑紅綠證據。其他測試按風險選取有代表性的故障，不要求每支測試、每輪審查跑全套 mutation。保留真正情境與拒絕原因的前置斷言，避免另一道守衛替目標代打。測試在修復版本來就紅時，先處理基準，不能把故障結果算檢出。
++
++## 審查時：再看重構是否讓測試不必要地壞掉
++
++若測試依赖來源文字、內部呼叫、私有結構或需要隨實作機械重寫，選一次保持被守護行為的代表性重構，確認行為測試仍綠；適配器初次接入必須驗這個反例。一般 PR 只在出現這類脆弱性訊號時實跑，不為每輪制造额外重構提交。重構用暫存副本，驗完清理，無須併入功能。
++
++重構等價性必须另有理由：需求域內的推導、獨立案例或可信參考；不能只因受測測試都綠就宣稱等價。必要結構測試按結構合約裁定，不用這項強迫它們承受破壞結構合約的重構。
++
++合法性質測試、确定性與 snapshot 可提供補充證據，配獨立已知答案或其他足夠約束。例如只驗排序兩次等於一次，永遠回傳空陣列也能過；再驗元素保留、順序與已知例子。snapshot 要交代核對來源，批量接受目前輸出不能當需求正確。靜態命中先核對目的，不因形式相似自動刪除。
++
++## 工具接入：統一證據，按棧接 runner
++
++使用各專案既有 runner，选配成熟 mutation 工具。Lumos 不自建通用多語言解析器或 mutation engine，也不靠記帳欄位宣稱語意正確。所有執行限隔離的本機、可信 fixture；外部服務、資料庫、副作用須另設隔離，暫存原始碼不能代替環境隔離。
++
++| 棧 | 本機測試入口（由專案固定實際命令） | 抓錯工具方向 | 资格需分開驗的範圍 |
++|---|---|---|---|
++| Python | unittest／pytest／既有 runner | 固定原缺陷或選配 mutmut | framework、helper斷言、參數化、真實發現數 |
++| Node.js／TS | node:test／Jest／Vitest | 固定故障或選配 StrykerJS | TS編譯、runner/plugin、reporter，不從JS推論TS |
++| PHP／Laravel | php artisan test／vendor/bin/pest／vendor/bin/phpunit | 固定故障；PHPUnit評估Infection，Pest評估其mutation功能 | PHP/Laravel/framework版本、Unit/Feature、資料庫、queue/fake、coverage與reporter分開資格 |
++| C# | dotnet test + 專案 framework | 固定故障或選配 Stryker.NET | xUnit／NUnit／MSTest、target framework、實際斷言歸因 |
++| Android Kotlin／Java | Gradle unit tests；裝置／模擬器另跑 | 純JVM評估PIT；平台故障用既有runner | Kotlin/Java、JUnit、AGP、Robolectric、裝置分開，JVM不等於Android |
++| iOS Swift | Swift package tests；Xcode target另跑 | 固定原缺陷；通用工具採用前另驗 | XCTest／Swift Testing、Swift/Xcode、模擬器／裝置、UI分開 |
++
++工具版本与候選來源： [StrykerJS](https://stryker-mutator.io/docs/stryker-js/incremental/)、[Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/)、[Gradle PIT 相容限制](https://github.com/szpak/gradle-pitest-plugin)、[Apple 測試入口](https://developer.apple.com/documentation/xcode/testing)。各專案固定版本後跑資格考卷，表格不是指定必裝的新依賴。
++
++### PHP／Laravel 的撰寫與接入補充
++
++沿共用規範驗需求答案與相關故障，框架特性另驗以下範圍。此節是官方文件核對後的接入規格。2026-10-08 獨立消費案例已用 Laravel12.69.3／PHPUnit11.5.57／PHP8.5.10 實跑 Unit、HTTP、記憶體 SQLite、故障／還原／重構／零選中控制；這只是部分原生驗證，未完成下方全部資格考卷。選配 Semgrep1.179.0 已辨識 PHPUnit assertSame/assertEquals、Pest expect 自比介面；Pest 執行、完整算法同源與框架情境分開驗，零候選不放行。
++
++- **Unit／Feature 分開**：Laravel預設Unit測試不啟動應用，適合純業務邏輯；需要路由、middleware、FormRequest、Policy、Eloquent與container時用會啟動應用的Feature測試。對本次守護的結果斷言HTTP內容、拒絕理由、資料狀態或副作用，不只看200/403，也不重抄rules陣列或controller算法當expected。
++- **資料與判準分開**：factory可建立情境，但預期價格、權限或狀態另有已確認來源；不要從同一Model accessor、resource或service讀出expected再與它自己比。檢查資料寫入可使用assertDatabaseHas等行為斷言，依需求檢查應有與不應有的內容，不能只查測試自己剛建立的factory記錄。
++- **fake按宣稱分工**：Queue／Event／Mail／Notification fake可驗對外派送合約；宣稱job或listener的業務效果時另測其實際處理結果。全域Event fake可能停掉factory需要的事件／observer，前置情境要核對，不能把fake造成的繞路當正式行為。
++- **環境先隔離**：核對.env.testing、phpunit.xml、config cache與實際DB連線，隔離資料庫及外部副作用後再跑RefreshDatabase或故障測試。RefreshDatabase提供測試清理，不證明連到的是測試資料庫。SQLite與正式DB的SQL、交易差異需另驗；依賴after-commit或真queue處理的情境不可從交易包裹或fake的成功外推。
++- **故障挑本次需求**：選錯折扣、漏tenant/owner限制、略過FormRequest/Policy、漏寫入或job略過更新等相關變體；先證明情境進場，再核對目標失敗，避免早一層認證或資料驗證代打。這些是選題方向，不是每個PR必跑的固定清單。
++- **runner與抓錯工具鎖版**：用專案已安裝的Pest／PHPUnit，由composer.lock固定Laravel/Pest/PHPUnit等套件版本；另存php --version、實際extensions與coverage driver版本，執行composer check-platform-reqs核對實機平台需求。config.platform可模擬PHP版本，不能代替實際runtime證據。PHPUnit路線評估Infection；Pest官方提供mutation testing，是否可用依已安裝版本與相應工具／coverage需求核對，兩條路線分開驗。不把歷史Pest相容訊息當目前Infection整合保證，也不要求兩套都裝。
++
++資格考卷除下方共用負例外，加入framework bootstrap失敗、fake使前置情境失效、factory與expected同源、拒絕理由代打、測試DB設定錯與漏tenant限制。使用隔離可信fixture驗錯誤設定，不連正式DB。每個PHP/Laravel/Pest或PHPUnit組合分開標記；Dusk/browser、真queue及正式DB相容證據各列範圍。
++
++來源（本次核對Laravel12.x作例子，消費專案須換成自己的版本）：[Laravel testing](https://laravel.com/docs/12.x/testing)、[database testing](https://laravel.com/docs/12.x/database-testing)、[mocking](https://laravel.com/docs/12.x/mocking)、[Event fake 與factory限制](https://laravel.com/docs/12.x/events#testing)、[Pest mutation testing](https://pestphp.com/docs/mutation-testing)、[Infection supported frameworks](https://infection.github.io/guide/supported-test-frameworks.html)、[Composer platform](https://getcomposer.org/doc/06-config.md#platform)。
++
++### C#、Android、iOS 的原生收證接入
++
++沿已安裝 `lumos test-quality capture/check` 保存 JUnit；原生 runner 必須實際執行、report 全新、`--target` 指向真正案例。reporter／橋接腳本、設定、runtime 及 lock 用 `--context` 綁定，原始報告與退出碼一起歸檔。以下是固定消費案例的部分原生資格，完整考卷仍逐項驗，不自動升格整棧 synthetic-verified。
++
++| 棧與本次組合 | 實跑範圍 | 收證與資格邊界 |
++|---|---|---|
++| C# net9.0／SDK9.0.117、xUnit／VSTest、JunitXml.TestLogger4.1.0 | 獨立金額案例、故障／還原／重構、零選中、編譯錯、一般執行例外 | native TRX與JUnit／退出碼並存；部分logger抹掉例外型別時只認已測的assertion訊息簽名；ASP.NET、NUnit、MSTest另验 |
++| Android AGP8.13.2／Gradle8.13／Kotlin2.2.21、JUnit4、API35模擬器 | Local unit與instrumentation分開跑，私有SharedPreferences的寫入／拒絕理由／零副作用 | 保留兩路原始XML及退出碼，匯整不吞錯；JVM全綠不能當装置實跑；Compose／UI／生命週期／其他API另驗 |
++| iOS Xcode26.6／iOS26.5模擬器、XCTest、xcbeautify3.2.1 | 價格與test-only UserDefaults寫入／拒絕理由／零副作用 | 保留xcresult及原始退出碼；JUnit是reporter轉出，不單看Xcode65或共同非零碼；Swift Testing／真機／UI另驗 |
++
++當原生工具失敗時，編譯錯、零選中、逾時與錯誤原因代打均保留 invalid。一般例外的訊息提到 AssertionError／XCTAssert 等字樣也不能當失敗歸因；只接受已確認的reporter型別或訊息結構，新增框架／reporter版本先跑真正正反例，再擴充辨識。
++
++C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴、記錄SDK/JVM/裝置，iOS固定Xcode/runtime/reporter與destination。跨版本、參數化或多destination的身份、skip、crash需要新資格證據，不能直接套本次固定案例。
++
++原生工具參考：[VSTest dotnet test](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-vstest)、[JUnit logger](https://github.com/spekt/junit.testlogger)、[Android命令列測試](https://developer.android.com/studio/test/command-line)、[xcbeautify](https://github.com/cpisciotta/xcbeautify)、[Xcode測試結果](https://developer.apple.com/documentation/xcode/running-tests-and-interpreting-results)。
++
++### 適配器資格考卷
++
++接入的每個語言／framework／runner/report組合都保存這些控制：
++
++1. 獨立答案：正确版綠、錯誤規則版的目標斷言紅。
++2. 重抄算法：展示故障可翻紅但仍沒有獨立來源；不得把 mutation 分數當來源審查。
++3. 合理性質與有目的的結構測試：候選可裁成補充／結構，不自動定罪。
++4. 保持行為的重構：行為測試綠；只綁實作的反例可紅，確認重構等價理由。
++5. 執行負例：零發現、基準失敗、匯入／編譯錯、未知錯誤理由、故障未進場、逾時、缺工具，各自顯示無效或未驗，不能算 detected。
++6. 還原：測試源碼與案例身份不變，原版／還原版 hash 一致且綠。證據綁 implementation、tests、fixture、runner、設定與依賴版本；環境不一致須重驗。
++
++靜態掃描另外跑人工標註的正反例、helper／多步計算漏報與解析失敗，記錄候選裁決、漏報／誤報／未分析。零候選與「掃完」不等於品質通過。
++
++標記 `planned` → `synthetic-verified`（完成上述原生 runner 資格考卷）→ `project-verified`（另保存真專案變更、人工裁決及相關故障證據）。每個標記附語言、framework、runner與版本，不以一個語言、斷言 primitive 或固定示範 harness 替其他範圍升級。本次 Python unittest 與 Node assert 固定 harness 僅證互補機制，不構成任何整棧適配器資格。
++
++### 共用證據格式（接入契約，v1）
++
++各工具輸出可不同，歸檔时保存以下資料。這是內容契約。已安裝 `lumos test-quality capture/check` 實作其中 JUnit 執行、來源快照與故障一致性核對子集；人工判準、完整依賴閉包、報告真實性與各棧全部資格仍須另驗。用法見 [CLI 手冊](03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
++
++- 身份：case_id、language、framework、runner/tool版本、測試身份、實際選取命令与發現數。
++- 来源：需求／合約版本、输入与expected、oracle_source、人工核對者及理由。`declared`、`reviewed-independent`、`unknown` 分列；自述只到 declared。
++- 快照：implementation/tests/fixture/config/dependency指紋、範圍、未驗範圍、原始 runner 報告。
++- 執行：baseline、fault、restored 分別存測試數、斷言／失敗身份、失敗種類與理由、exit code、耗時；故障位置、觸發前置、與需求的相關理由另列。
++- 重構：`verified`／`not-run`／`not-applicable`、等價理由及實跑證據；不適用寫原因，不記成功。
++- 結果：靜態 candidate/dismissed/confirmed 與 runtime detected/survived/invalid/unavailable 分開；timeout、零測試、編譯錯與未歸因失敗歸 invalid。等價變體獨立裁決，未決保留，不用100% mutation當硬目標。
++
++單一 pass 欄位不得吞掉 unknown／not-run。開發者交代過每個改到的重要行為，審查者核對独立來源與所選故障，工具提供可重放的執行證據，才算完成本次驗證；不能從完成直接推論所有測試都已正確。
++
++## 本次結論與後續量測
++
++2026-10-07 固定五種測試×五版本×Python/Node共50格符合事前預期，另6次確認重抄錯誤規則的基準綠→故障紅→還原錯版綠：重抄正确算法与独立已知答案有相同紅綠向量；重抄錯誤規則也可在錯版上綠、固定回傳故障上紅；結構反例因改名重構紅；只有穩定性的測試全綠。據此採取判準來源人工核對、抓錯證據與有條件的重構檢查三者分工，並明示工具边界。
++
++這是合成機制實驗，沒有模型呼叫、沒有真專案適配器资格或收斂輪數改善證據。後續各棧按资格考卷接入，真專案再量測漏放錯誤、誤報、修測試往返與耗時；不把本次50格當50個獨立樣本。

@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Trusted native consumer replay; generated results are fresh and sources restored in finally."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT=Path(__file__).resolve().parent
+CONFIG={
+ 'csharp':{
+  'source':'Pricing.cs','language':'csharp','framework':'xunit-vstest',
+  'tests':['PricingTests.cs'], 'sources':['Pricing.cs'],
+  'context':['csharp.csproj','global.json','packages.lock.json'],
+  'targets':['QualityLab.PricingTests::Amount100','QualityLab.PricingTests::Amount200'],
+  'fault':'namespace QualityLab; public static class Pricing { public static int Price(int amount) => 0; }\n',
+  'refactor':'namespace QualityLab; public static class Pricing { public static int Price(int amount) => amount / 10 * 9; }\n',
+  'runtime':['/opt/homebrew/opt/dotnet@9/bin/dotnet','--info'], 'scan':['PricingTests.cs']},
+ 'android':{
+  'source':'app/src/main/java/lab/quality/Pricing.kt','language':'kotlin','framework':'agp-junit4-instrumentation',
+  'tests':['app/src/test/java/lab/quality/PricingTest.kt','app/src/androidTest/java/lab/quality/QuotePlatformTest.kt'],
+  'sources':['app/src/main/java/lab/quality/Pricing.kt','app/src/main/java/lab/quality/QuoteStore.kt'],
+  'context':['settings.gradle.kts','build.gradle.kts','app/build.gradle.kts','gradle.properties','local.properties','gradlew','gradle/wrapper/gradle-wrapper.jar','gradle/wrapper/gradle-wrapper.properties','app/src/main/AndroidManifest.xml'],
+  'targets':['lab.quality.PricingTest::amount100','lab.quality.PricingTest::amount200','lab.quality.QuotePlatformTest::persistsKnownCharge'],
+  'fault':'package lab.quality\nobject Pricing { fun price(amount: Int): Int = 0 }\n',
+  'refactor':'package lab.quality\nobject Pricing { fun price(amount: Int): Int = amount / 10 * 9 }\n',
+  'runtime':['./gradlew','--version'], 'scan':['app/src/test','app/src/androidTest']},
+ 'ios':{
+  'source':'Sources/Pricing.swift','language':'swift','framework':'xcode-xctest-ios-simulator',
+  'tests':['Tests/PricingTests.swift','Tests/QuotePlatformTests.swift'],
+  'sources':['Sources/Pricing.swift','Sources/QuoteStore.swift'],
+  'context':['project.yml','QualityIOS.xcodeproj/project.pbxproj','QualityIOS.xcodeproj/xcshareddata/xcschemes/QualityIOS.xcscheme'],
+  'targets':['QualityTests.PricingTests::testAmount100','QualityTests.PricingTests::testAmount200','QualityTests.QuotePlatformTests::testPersistsKnownCharge'],
+  'fault':'public enum Pricing { public static func price(_ amount: Int) -> Int { 0 } }\n',
+  'refactor':'public enum Pricing { public static func price(_ amount: Int) -> Int { amount / 10 * 9 } }\n',
+  'runtime':['xcodebuild','-version'], 'scan':['Tests']}
+}
+
+def main():
+ p=argparse.ArgumentParser();p.add_argument('stack',choices=list(CONFIG));p.add_argument('--semgrep');a=p.parse_args()
+ c=CONFIG[a.stack];root=ROOT/a.stack;env=os.environ.copy()
+ if a.stack=='ios':env['DEVELOPER_DIR']=env.get('LUMOS_LAB_XCODE','/Applications/Xcode.app/Contents/Developer')
+ (root/'artifacts').mkdir(exist_ok=True)
+ out=Path(tempfile.mkdtemp(prefix='run-',dir=root/'artifacts'))
+ runtime={'runtime':subprocess.check_output(c['runtime'],cwd=root,env=env,text=True)}
+ if a.stack=='ios':
+  for name in ['xcodegen','xcbeautify']:runtime[name]=subprocess.check_output([name,'--version'],text=True)
+  runtime['destination']=env.get('LUMOS_LAB_IOS_DESTINATION','platform=iOS Simulator,id=8B63215A-8A85-43A0-A874-0092E1ECAE88')
+ elif a.stack=='android':
+  adb=str(Path(env.get('LUMOS_LAB_ANDROID_SDK','/Users/enzo/Library/Android/sdk'))/'platform-tools/adb')
+  serial=env.get('LUMOS_LAB_ANDROID_SERIAL','emulator-5580')
+  runtime['device']=subprocess.check_output([adb,'-s',serial,'shell','getprop','ro.build.fingerprint'],text=True)
+  runtime['serial']=serial
+ (root/'runtime.json').write_text(json.dumps(runtime,ensure_ascii=False,indent=2))
+ source=root/c['source'];original=source.read_bytes();native=root/'.native-results'
+ cli=[sys.executable,str(root/'scripts/lumos'),'test-quality']
+ def run(args,expected=0):
+  r=subprocess.run(cli+args,cwd=root,env=env,capture_output=True,text=True,timeout=330)
+  report=json.loads(r.stdout)
+  if r.returncode!=expected:raise RuntimeError(f'{a.stack}: expected {expected}, got {r.returncode}: {report}')
+  return report
+ def capture(phase,zero=False,expected=0):
+  if native.exists():shutil.rmtree(native)
+  args=['capture','--out',str(out/phase),'--language',c['language'],'--framework',c['framework'],'--timeout','300','--report','.native-results/report.xml']
+  for flag,paths in [('--source',c['sources']),('--test-source',c['tests']),('--context',c['context']+['native_run.py','REQUIREMENTS.md','runtime.json']),('--target',c['targets'])]:
+   for path in paths:args += [flag,path]
+  args+=['--',sys.executable,'native_run.py']+(['--zero'] if zero else [])
+  value=run(args,expected)
+  if native.exists():shutil.copytree(native,out/phase/'native')
+  return value
+ try:
+  capture('baseline')
+  source.write_text(c['fault']);capture('fault')
+  source.write_bytes(original);capture('restored')
+  source.write_text(c['refactor']);capture('refactor')
+  source.write_bytes(original);capture('zero-selected',zero=True,expected=2)
+  source.write_text('this is deliberately invalid source syntax\n');capture('compile-error',expected=2)
+  source.write_bytes(original)
+  args=['check',str(out/'baseline'),str(out/'fault'),str(out/'restored'),'--refactor',str(out/'refactor'),'--oracle-note','REQUIREMENTS.md','--out',str(out/'check.json')]
+  for target in c['targets']:args+=['--target',target]
+  result=run(args)
+  scan=['scan',*c['scan'],'--json']+(['--semgrep',a.semgrep] if a.semgrep else [])
+  (out/'scan.json').write_text(json.dumps(run(scan,expected=0 if a.semgrep else 2),ensure_ascii=False,indent=2))
+  print(json.dumps({'artifacts':str(out),'result':result},ensure_ascii=False,indent=2))
+ finally:source.write_bytes(original)
+
+if __name__=='__main__':main()

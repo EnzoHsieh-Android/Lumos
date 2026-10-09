@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Replay trusted local fixtures; restore implementation even on error. No external services."""
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('stack', choices=['node', 'laravel', 'csharp', 'android', 'ios'])
+    p.add_argument('--semgrep')
+    a = p.parse_args()
+    if a.stack in {'csharp', 'android', 'ios'}:
+        subprocess.run([sys.executable, str(ROOT/'run_platform_experiment.py'), a.stack, *(['--semgrep', a.semgrep] if a.semgrep else [])], check=True)
+        return
+    root = ROOT/a.stack
+    out = Path(tempfile.mkdtemp(prefix='run-', dir=root/'artifacts'))
+    cli = [sys.executable, str(root/'scripts/lumos'), 'test-quality']
+    node = a.stack == 'node'
+    source = root/('src/pricing.cjs' if node else 'app/Services/Pricing.php')
+    original = source.read_bytes()
+    tests = ['test/independent.test.cjs'] if node else ['tests/Unit/PricingTest.php', 'tests/Feature/QuoteTest.php']
+    sources = [str(source.relative_to(root))] if node else ['app/Services/Pricing.php', 'routes/web.php', 'database/migrations/2026_10_08_000000_create_quotes_table.php']
+    contexts = ['REQUIREMENTS.md', 'runtime.json', 'package.json'] if node else ['REQUIREMENTS.md', 'runtime.json', 'composer.lock', 'composer.json', 'phpunit.xml', 'bootstrap/app.php', 'tests/TestCase.php', 'config/database.php']
+    targets = ['test::independent_amount_100', 'test::independent_amount_200'] if node else ['Tests.Unit.PricingTest::test_amount_100', 'Tests.Unit.PricingTest::test_amount_200', 'Tests.Feature.QuoteTest::test_quote_persists_known_charge']
+    runtime = {'runtime': subprocess.check_output(['node','--version'] if node else ['php','--version'], text=True),
+               'framework': 'node:test' if node else subprocess.check_output(['php','artisan','--version'], cwd=root, text=True)}
+    (root/'runtime.json').write_text(json.dumps(runtime, indent=2))
+    def run(args, expected=0):
+        r = subprocess.run(cli+args, cwd=root, capture_output=True, text=True, timeout=90)
+        value = json.loads(r.stdout)
+        if r.returncode != expected:
+            raise RuntimeError(f'expected {expected}, got {r.returncode}: {value}')
+        return value
+    def capture(phase, zero=False, expected=0):
+        folder = out/phase
+        args = ['capture','--out',str(folder),'--language','javascript' if node else 'php','--framework','node-test' if node else 'laravel-phpunit']
+        for flag, paths in [('--source',sources),('--test-source',tests),('--context',contexts),('--target',targets)]:
+            for path in paths: args += [flag,path]
+        if node:
+            args += ['--junit-stdout','--','node','--test','--test-reporter=junit']
+            if zero: args += ['--test-name-pattern=does_not_exist']
+            args += tests
+        else:
+            report = out/'current.xml'
+            report.unlink(missing_ok=True)
+            args += ['--report',str(report),'--','php','vendor/bin/phpunit','--log-junit',str(report),'--filter','does_not_exist' if zero else 'PricingTest|QuoteTest']
+        return run(args, expected)
+    try:
+        capture('baseline')
+        source.write_text("exports.price = function price(amount) { return 0; };\n" if node else "<?php\nnamespace App\\Services;\nfinal class Pricing { public function price(int $amount): int { return 0; } }\n")
+        capture('fault')
+        source.write_bytes(original)
+        capture('restored')
+        source.write_text("exports.price = function price(amount) { return Math.floor(amount * 9 / 10); };\n" if node else "<?php\nnamespace App\\Services;\nfinal class Pricing { public function price(int $amount): int { return intdiv($amount * 9, 10); } }\n")
+        capture('refactor')
+        source.write_bytes(original)
+        capture('zero-selected', zero=True, expected=2)
+        args = ['check',str(out/'baseline'),str(out/'fault'),str(out/'restored'),'--refactor',str(out/'refactor'),'--oracle-note','REQUIREMENTS.md','--out',str(out/'check.json')]
+        for target in targets: args += ['--target',target]
+        result = run(args)
+        scan = ['scan','test' if node else 'tests','--json']
+        if a.semgrep: scan += ['--semgrep',a.semgrep]
+        (out/'scan.json').write_text(json.dumps(run(scan, expected=0 if a.semgrep else 2), ensure_ascii=False, indent=2))
+        print(json.dumps({'artifacts':str(out),'result':result}, ensure_ascii=False, indent=2))
+    finally:
+        source.write_bytes(original)
+
+if __name__ == '__main__': main()
