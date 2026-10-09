@@ -35520,6 +35520,19 @@ def t_enforcement_never_raises_on_missing():
     check("enforcement: 缺目錄不炸、回恰 24 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger)", isinstance(rows, list) and len(rows) == 24, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
+def _drop_inherited_skip_env():
+    """★外面繼承來的 LUMOS_SKIP_* 單次略過變數一律清掉★(2026-10-09 代碼審發現):掛鉤的逃生段教人
+    `LUMOS_SKIP_REREAD_CHECK=1 git push`,掛鉤跑全套測試時原樣繼承,行程內直接呼叫工具函式的測試就被它改了行為而紅——
+    逃生寫法反而讓推送被「測試有紅」擋下。修在唯一進入點(main() 呼叫)、理由同 main() 清 GIT_*:要用的測試一律自己設
+    (env= 或設了再還原),沒有測試靠「從外面繼承」這些變數;LUMOS_SKIP_CLAUDE_PLUGIN 之後由 _isolate_environment 重設成 1。
+    CI、GITHUB_ACTIONS 不清:它們是 CI 平台的變數,第三方工具(npm 這類)也照它決定要不要互動;lumos 裡只影響回頭重讀的
+    一句提示、帳的來源欄與版本檢查的一行說明,用到的測試都自己設或清(t_runner_drops_inherited_skip_env 帶著它們驗過)。
+    抽成函式是為了不加 main() 的分支數。"""
+    import os
+    for k in [k for k in os.environ if k.startswith("LUMOS_SKIP_")]:
+        os.environ.pop(k, None)
+
+
 def _isolate_environment():
     """★把整輪測試關進拋棄式的家目錄與暫存目錄★(2026-09-06 全 repo 審視 #11)。
 
@@ -35636,6 +35649,9 @@ def main():
     for _v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
                "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         _os_env.environ.pop(_v, None)
+
+    # ★外面繼承來的 LUMOS_SKIP_* 單次略過變數一律清掉★(理由見 _drop_inherited_skip_env)
+    _drop_inherited_skip_env()
 
     # ★子程序的錯誤追蹤一律不上色★(2026-10-07,另一個會談推送前全套 6 條假紅):殼裡設了 FORCE_COLOR=3 時,
     # Python 3.14 會把子程序 traceback 上色,`RuntimeError` 被 ANSI 碼切開,比對錯誤名稱的斷言就比不到;CI 沒設這個變數所以綠。
@@ -65502,7 +65518,10 @@ def t_reread_block_layer1():
     一筆 blocked、不印「這只是提醒」;不帶 --gate → rc0、reminded;只有已提交、provenance_ok 為假的紀錄 → 當沒對照、講來源核對沒過,
     prepare 不帶 --all 也為它產項目檔、不印還沒提交;warn 加 --gate → rc0、reminded。
 
-    翻紅釘:_note_reread_covered 不看 provenance_ok(照舊只比檔名)→ ③紅;回傳碼不看 --gate → ②紅。"""
+    工作目錄裡來源核對沒過、還沒提交的紀錄不算「只差提交」:prepare 照產項目檔、check 不叫人提交它(⑦)。
+
+    翻紅釘:_note_reread_covered 不看 provenance_ok(照舊只比檔名)→ ③紅;回傳碼不看 --gate → ②紅;
+    _note_reread_uncommitted 只比檔名 → ⑦紅;擋下訊息只留「改筆記不用重判」→ ①紅。"""
     print("t_reread_block_layer1")
     import json as _j
     root, base = _rr_repo()
@@ -65514,7 +65533,8 @@ def t_reread_block_layer1():
     check("①[S5]沒寫設定、帶 --gate、候選沒對照 → rc1、標準錯誤「擋下:」與 prepare 指令、恰好一筆 blocked、不印「這只是提醒」",
           rc == 1 and "擋下:" in e and "Systems/A.md" in e and f"reread-prepare --diff {rng}" in e and ev == ["blocked"]
           and "這只是提醒" not in o + e, f"rc={rc}\n{o}\n{e}\n{ev}")
-    check("①擋下訊息講程式改了就要重判", "重判" in e, e)
+    # 只斷言「重判」會被同一行後半的「改筆記不用重判」滿足(代碼審發現),要斷言前半那一句
+    check("①擋下訊息講程式改了就要重判", "程式改了就要重判" in e, e)
     blk = [x for x in _ns_gov(root) if x.get("gate") == "note-reread" and x.get("kind") == "blocked"]
     check("①blocked 帶 hard、detail 記第一層篇數與要重判篇數",
           blk and blk[-1].get("hard") is True and blk[-1].get("layer1") == 1 and blk[-1].get("rejudge") == 1, str(blk[-1:])[:600])
@@ -65548,13 +65568,32 @@ def t_reread_block_layer1():
     rc, out, files = _rr_prepare(r2, f"{b2}..HEAD")
     check("⑥[S7]prepare 不帶 --all 也為它產項目檔、不印還沒提交",
           rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")] and "還沒提交" not in out, out[-600:])
+    # 工作目錄裡來源核對沒過、還沒提交的紀錄:「只差提交」跟「已對照」同一口徑(只算 provenance_ok 為真的)——
+    # 原本只比檔名,record 剛說「這份不算對照,請重派」,prepare 卻說都對照過、不產項目檔,check 也叫人提交它
+    r3, b3 = _rr_repo()
+    _rr_touch(r3, "src/a.py")
+    _rr_touch(r3, _rr_note("A"), "A 追加的一行")
+    _nh_commit(r3, "r")
+    name3, _fp3 = _rrb_judge(r3, f"{b3}..HEAD", [], tmp, tag="bad-wip", provider="codex")
+    doc3 = _j.loads((r3 / "governance" / "reread-verdicts" / name3).read_text(encoding="utf-8")) if name3 else {}
+    rc, out, files = _rr_prepare(r3, f"{b3}..HEAD")
+    check("⑦前置:紀錄在工作目錄、還沒提交、provenance_ok 為假",
+          doc3.get("provenance_ok") is False and f"governance/reread-verdicts/{name3}" in _nh_git(r3, "status", "--porcelain", "-uall").stdout,
+          f"{doc3}")
+    check("⑦prepare 不帶 --all:來源核對沒過、還沒提交的紀錄不算只差提交 → 照產項目檔、不叫人提交",
+          rc == 0 and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")] and "還沒提交" not in out, out[-600:])
+    rc, o, e, ev = _rrb_check(r3, "--gate", rng=f"{b3}..HEAD")
+    check("⑦check 帶 --gate:照擋第一層、不叫人提交那份", rc == 1 and "Systems/A.md" in e and "還沒提交" not in o + e,
+          f"rc={rc}\n{o}\n{e}")
 
 
 def t_reread_block_layer2():
     """[S9]–[S15] 第二層(判定點出的規則類條目沒處理):依筆記路徑讀頂端所有判定紀錄、取比對字串、對到摘要條目;
     規則類條目沒有涵蓋那份紀錄指紋的 kind=reread 表態 → 帶 --gate 擋,印那一條與照留指令。
 
-    翻紅釘:比對字串不設 6 字下限 → ⑨紅(空白行比中整篇);表態改取最新一筆不取聯集 → ⑪紅;單行 summary 不補 → ⑫紅。"""
+    翻紅釘:比對字串不設 6 字下限 → ⑨紅(空白行比中整篇);下限改成 5 以下 → ⑨b 紅、7 以上 → ⑨c 紅;表態改讀工作目錄 → ④b 紅;
+    superseded 不排除或不認 ★INVARIANT★ → ⑨d 紅;第二層只收來源核對過的紀錄 → ⑨e 紅;表態改取最新一筆不取聯集 → ⑪紅;
+    單行 summary 不補 → ⑫紅。"""
     print("t_reread_block_layer2")
     import json as _j
     tmp = Path(tempfile.mkdtemp(prefix="gctl-rrb2-"))
@@ -65602,6 +65641,8 @@ def t_reread_block_layer2():
     rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
     check("④[S13]兩份紀錄都點出、表態只涵蓋一份 → 擋", fp1 != fp2 and rc == 1 and "規則類條目" in e, f"{fp1} {fp2} rc={rc}\n{o}\n{e}")
     acks.write_text(ack_row([fp1], 1) + ack_row([fp2], 2), encoding="utf-8")
+    rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
+    check("④b 補上的表態寫了、還沒提交 → 照擋(表態只認被推頂端提交的樹)", rc == 1 and "規則類條目" in e, f"rc={rc}\n{o}\n{e}")
     _nh_commit(root, "ack fp2 too")
     rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
     check("⑤[S13]兩筆表態各綁一份、聯集涵蓋兩份 → 放行", rc == 0 and "規則類條目" not in e, f"rc={rc}\n{o}\n{e}")
@@ -65642,6 +65683,38 @@ def t_reread_block_layer2():
     check("⑨前置:那一列的 text 是空白行、quote 是規則行的字", got and got[0].get("text", "x").strip() == "", str(got))
     check("⑨[S12]最後選定的比對字串少於 6 字(quote 非空、text 是空白行)→ 略過那一列、不擋、印一句沒有可比對的原文",
           rc == 0 and "沒有可比對的原文" in o and "規則類條目" not in e, f"rc={rc}\n{o}\n{e}")
+    # [S12] 下限釘在 6 字:判定列指 WHY 行、quote 是 RULE 行與 WHY 行共有的開頭。5 字 → 不夠下限改用 text(WHY 整行)→ 只點出
+    # 一般行、不擋;6 字 → 用 quote,兩行都比中 → 擋 RULE 行。下限改成 5 以下 ⑨b 紅、改成 7 以上 ⑨c 紅
+    why_line = "WHY:推送前一定要看 git status [出處:討論] [因:速度]"
+    for tag, quote, want in (("⑨b", "推送前一定", 0), ("⑨c", "推送前一定要", 1)):
+        r7, b7 = _rrb_repo("\n".join([_RRB_RULE, why_line]))
+        _rrb_judge(r7, f"{b7}..HEAD", [{"line": _rrb_line(r7, "推送前一定要看"), "quote": quote}], tmp, tag=f"min{len(quote)}")
+        _nh_commit(r7, "verdict")
+        rc, o, e, ev = _rrb_check(r7, "--gate", rng=f"{b7}..HEAD")
+        check(f"{tag}[S12]quote {len(quote)} 字、兩行共有、判定列指 WHY 行 → rc{want}",
+              rc == want and (("推送前一定要先跑全套測試" in e) == bool(want)) and (want or "一般行" in o), f"rc={rc}\n{o}\n{e}")
+    # 規則類判斷的兩個分支:標了 [status:superseded] 的 RULE 不擋;KEY:★INVARIANT★ 摘要條目(不帶測試綁定)要擋
+    old_rule = ("RULE:這條舊規則已經作廢了 [依據:人] [since:2026-09-01] [retire:人裁] [until:2026-12-01] [confirmed:2026-09-01]"
+                " [status:superseded] [被取代:[[Systems/A]]]")
+    inv = "KEY:★INVARIANT★ 這條合約句子不准破壞"
+    r8, b8 = _rrb_repo("\n".join([old_rule, inv]))
+    _rrb_judge(r8, f"{b8}..HEAD", [{"line": _rrb_line(r8, "這條舊規則已經作廢了"), "quote": "這條舊規則已經作廢了"},
+                                   {"line": _rrb_line(r8, "這條合約句子不准破壞"), "quote": "這條合約句子不准破壞"}], tmp, tag="kinds")
+    _nh_commit(r8, "verdict")
+    rc, o, e, ev = _rrb_check(r8, "--gate", rng=f"{b8}..HEAD")
+    check("⑨d 判定點出標了 [status:superseded] 的 RULE 與 KEY:★INVARIANT★ 條目 → 只擋 ★INVARIANT★ 那條",
+          rc == 1 and "這條合約句子不准破壞" in e and "這條舊規則已經作廢了" not in e and "1 條" in e, f"rc={rc}\n{o}\n{e}")
+    # 第二層不論 provenance_ok:來源核對過的紀錄讓第一層已對照,另一份來源核對沒過的紀錄點出規則行 → 照擋
+    r9, b9 = _rrb_repo(summ, body)
+    _rrb_judge(r9, f"{b9}..HEAD", [], tmp, tag="prov-ok")
+    _rrb_judge(r9, f"{b9}..HEAD", [{"line": _rrb_line(r9, "推送前一定要先跑全套測試"), "quote": "推送前一定要先跑全套測試"}],
+               tmp, tag="prov-bad", provider="codex")
+    _nh_commit(r9, "verdicts")
+    provs = sorted(str(_j.loads(p.read_text(encoding="utf-8")).get("provenance_ok")) for p in _rr_records(r9))
+    rc, o, e, ev = _rrb_check(r9, "--gate", rng=f"{b9}..HEAD")
+    check("⑨e 前置:兩份紀錄,一份來源核對過、一份沒過", provs == ["False", "True"], str(provs))
+    check("⑨e 來源核對沒過的紀錄點出的規則行 → 第一層已對照、第二層照擋",
+          rc == 1 and "還沒對照過這一版程式" not in e and "推送前一定要先跑全套測試" in e and ev == ["blocked"], f"rc={rc}\n{o}\n{e}\n{ev}")
     # [S14] 引句在接續行 → 以整條判、照留指令的行號是條目開頭;單行 summary
     cont = "RULE:規則第一段寫在這裡 [依據:人] [since:2026-10-01]\n  接續行裡被判定點出的這一句 [retire:人裁] [until:2026-12-01] [confirmed:2026-10-01]"
     r5, b5 = _rrb_repo(cont)
@@ -65677,7 +65750,8 @@ def t_reread_block_undecidable():
     """[S16]–[S19] 判不了與環境:殘檔不算判不了;帶 --gate、block 時判不了 → rc1、印原因與 LUMOS_SKIP_REREAD_CHECK、記 blocked,
     warn → rc0、skipped;淺層 clone、不是 git 專案、範圍沒新東西 → rc0;參數錯 → rc2;不帶 --gate 全部 rc0;單次略過 → skipped-env。
 
-    翻紅釘:判不了照舊回 0 → ③紅;參數錯不分出來 → ⑧紅。"""
+    翻紅釘:判不了照舊回 0 → ③紅;參數錯不分出來 → ⑧紅;淺層偵測拿掉 → ⑥淺層那條紅(clone 不在主線的分支、範圍起點不在淺層歷史裡);
+    帶 --gate 的參數錯不印「擋下:」→ ⑥紅;判不了的帳不記 state=undecidable → ③紅。"""
     print("t_reread_block_undecidable")
     import contextlib, io, json as _j, subprocess as sp
     m = _load_lumos_inproc()
@@ -65721,6 +65795,10 @@ def t_reread_block_undecidable():
     rc, o, e, ev = _rrb_check(root, "--gate", rng=rng)
     check("③[S17]判定紀錄讀不成 JSON → rc1、印是哪個檔、怎麼修(git rm)、記 blocked",
           rc == 1 and bad in e and "git rm" in e and "LUMOS_SKIP_REREAD_CHECK" in e and ev == ["blocked"], f"rc={rc}\n{o}\n{e}\n{ev}")
+    blk = [x for x in _ns_gov(root) if x.get("gate") == "note-reread" and x.get("kind") == "blocked"]
+    check("③判不了的 blocked 帳跟舊句檢查一樣用 state 字串記(state=undecidable)",
+          blk and blk[-1].get("state") == "undecidable" and "undecidable" not in {k for k, v in blk[-1].items() if v is True},
+          str(blk[-1:])[:400])
     for label, txt in (("rows 不是清單", '{"note": "x", "rows": {}}'), ("某列不是物件", '{"note": "x", "rows": [1]}'),
                        ("某列 quote 與 text 都不是字串", '{"note": "x", "rows": [{"quote": 1, "text": null}]}')):
         _nh_file(root, f"governance/reread-verdicts/{bad}", txt + "\n")
@@ -65748,16 +65826,24 @@ def t_reread_block_undecidable():
     _nh_commit(r2, "r")
     tip2 = _na_head(r2)
     shallow = Path(tempfile.mkdtemp(prefix="gctl-rrb-shallow-")) / "s"
-    sp.run(["git", "clone", "-q", "--depth", "1", f"file://{r2}", str(shallow)], capture_output=True)
+    # 淺層 clone 一條不在主線上的分支(只抓那一條):拿掉淺層偵測時起點找不到、也找不到主線,從空樹算 → 有候選、沒對照 → rc1;
+    # clone 預設分支的話頂端已在 origin/main 上,拿掉偵測照樣「沒有新東西」回 0,測不到偵測
+    _nh_git(r2, "branch", "feature")
+    sp.run(["git", "clone", "-q", "--depth", "1", "--branch", "feature", f"file://{r2}", str(shallow)], capture_output=True)
+    check("⑥前置:淺層 clone 裡沒有起點提交", sp.run(["git", "-C", str(shallow), "cat-file", "-e", f"{b2}^{{commit}}"],
+                                                    capture_output=True).returncode != 0, str(shallow))
     plain = Path(tempfile.mkdtemp(prefix="gctl-rrb-plain-"))
-    cases = (("淺層 clone", shallow, ("--diff", f"{tip2}..{tip2}"), 0),
+    # 淺層 clone 的範圍要是真範圍(起點不在淺層歷史裡):原本給 tip2..tip2 空範圍,拿掉淺層偵測也走到「沒有候選」回 0,測不到偵測
+    cases = (("淺層 clone(起點不在淺層歷史裡)", shallow, ("--diff", f"{b2}..{tip2}"), 0),
              ("範圍沒有新東西(刪除分支)", r2, ("--diff", f"{b2}..{'0' * 40}"), 0),
              ("推送參數只給一個", r2, ("--diff", f"{b2}..{tip2}", "--push-remote", "origin"), 2),
              ("終點找不到", r2, ("--diff", f"{b2}..{'1' * 40}"), 2),
              ("範圍格式錯", r2, ("--diff", "abc"), 2))
     for label, r, args, want in cases:
         rc, o, e = _rr(r, "reread-check", "--gate", *args)
-        check(f"⑥[S18]帶 --gate、{label} → rc{want}", rc == want, f"rc={rc}\n{o}\n{e}")
+        # 參數錯(rc2)帶 --gate 時跟鄰居(drift check、reread-prepare)一樣印「擋下:…」到標準錯誤
+        check(f"⑥[S18]帶 --gate、{label} → rc{want}", rc == want and (r is not shallow or "淺層" in o + e)
+              and (want != 2 or ("擋下:" in e and "這次沒提醒" not in o + e)), f"rc={rc}\n{o}\n{e}")
         rc, o, e = _rr(r, "reread-check", *args)
         check(f"⑥[S18]不帶 --gate、{label} → rc0", rc == 0, f"rc={rc}\n{o}\n{e}")
     import os as _os
@@ -65775,11 +65861,93 @@ def t_reread_block_undecidable():
     check("⑦[S19]LUMOS_SKIP_REREAD_CHECK=1 → rc0、記 skipped-env", rc == 0 and ev == ["skipped-env"], f"rc={rc}\n{o}\n{e}\n{ev}")
 
 
+def t_reread_record_refuses_unreadable_size():
+    """寫端保證讀端讀得了(代碼審發現):判定點出一條 30 萬字的長行,紀錄的 text 記整行、序列化後超過讀端單份上限 256 KB——
+    原本照寫,提交後推送前的檢查讀不了、block 下每次推送都擋,出口只有 git rm 加重判。現在 record 量過大小、超過就不寫、回 2、講哪一行太長。
+
+    翻紅釘:拿掉 record 傳給落盤函式的大小上限 → 紀錄照寫、rc0 → 紅。"""
+    print("t_reread_record_refuses_unreadable_size")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-rrb6-"))
+    long_line = "很長的一行貼上資料:" + "x" * 300000
+    root, base = _rrb_repo("KEY:x", body=f"A 的第一行\n{long_line}\n最後一行")
+    l_long = _rrb_line(root, "很長的一行貼上資料")
+    _rc, _out, files = _rr_prepare(root, f"{base}..HEAD", "--all")
+    item = next(f for f in files if _rr_meta(f)["筆記路徑"] == _rr_note("A"))
+    rc, o, e = _rr(root, "reread-record", "--prepared", str(item),
+                   "--report", str(_rr_report(tmp / "long.md", item, [{"line": l_long, "quote": "很長的一行貼上資料", "why": "w"}])))
+    check("點出超長行、紀錄會超過讀端單份上限 → rc2、擋下講上限與是哪一行、不寫紀錄",
+          rc == 2 and "擋下:" in e and "256 KB" in e and f"第 {l_long} 行" in e and _rr_records(root) == [],
+          f"rc={rc}\n{o[-400:]}\n{e[-600:]}\n{[p.name for p in _rr_records(root)]}")
+    rc, o, e = _rr(root, "reread-record", "--prepared", str(item),
+                   "--report", str(_rr_report(tmp / "short.md", item, [{"line": 1, "quote": "x", "why": "w"}])))
+    check("對照組:點出一般長度的行 → 照寫(上限只擋讀不了的)", rc == 0 and len(_rr_records(root)) == 1, f"rc={rc}\n{o}\n{e}")
+
+
+def t_reread_block_ledger_fits_4k():
+    """回頭重讀「有東西」那一筆帳跟鄰居(舊句檢查、筆記形狀擋的放寬帳)一樣走 _gate_event_fit:整行超過 4096 位元組時從尾端丟 rows、
+    記 rows_truncated,nodes 多時截到 20;筆數欄照記全數。原本直接寫、不量不截(代碼審發現)。
+
+    翻紅釘:_note_reread_ledger_found 不走 _gate_event_fit → 整行超過 4096、沒有 rows_truncated → 紅。"""
+    print("t_reread_block_ledger_fits_4k")
+    import json as _j
+    m = _load_lumos_inproc()
+    root, _b = _rr_repo()
+    must = [{"kind": "reread", "path": f"Systems/R{i:02d}.md", "line": 3,
+             "text": "RULE:" + "很長的規則句子" * 20, "verdicts": {"a" * 16}} for i in range(30)]
+    res = {"fps": {"Systems/A.md": "b" * 16}, "left": [], "layer2": {"must": must}, "scan": {"vault_rel": _NA_VAULT},
+           "tip": "c" * 40}
+    m._note_reread_ledger_found(root, res, True)
+    led = root / "docs" / ".governance-log.jsonl"
+    lines = [ln for ln in led.read_text(encoding="utf-8").splitlines() if '"note-reread"' in ln] if led.is_file() else []
+    e = _j.loads(lines[-1]) if lines else {}
+    check("三十條長規則類條目:整行不超過 4096 位元組、從尾端丟 rows、記 rows_truncated、要處理條數照記 30",
+          lines and len((lines[-1] + "\n").encode("utf-8")) <= 4096 and e.get("rows_truncated") is True
+          and e.get("layer2_rows") == 30 and 0 < len(e.get("rows", [])) < 30
+          and [r["line"] for r in e.get("rows", [])] == [3] * len(e.get("rows", []))
+          and e["rows"][0]["path"].endswith("Systems/R00.md"),
+          (len((lines[-1] + "\n").encode("utf-8")) if lines else None, {k: v for k, v in e.items() if k not in ("rows", "nodes")}))
+
+
+def t_hooks_path_dir_shared():
+    """core.hooksPath 的值怎麼解成資料夾只有一份(_hooks_path_dir):~ 展開、絕對路徑照用、相對路徑接在 repo 根底下、沒給回 None;
+    _hooks_path_is_ours 與 enforcement 讀生效 pre-push 的 _enforcement_prepush_ungated 都用它,不各寫一份(代碼審發現:
+    _hooks_path_is_ours 的說明寫「別留第二份實作」,enforcement 那支又寫了一份)。
+
+    翻紅釘:兩支呼叫端任一支改回自己解析 → 紅。"""
+    print("t_hooks_path_dir_shared")
+    import inspect, os as _os
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-hpd-"))
+    check("相對路徑接在根底下", m._hooks_path_dir(root, "scripts/hooks") == root / "scripts" / "hooks", "")
+    check("絕對路徑照用", m._hooks_path_dir(root, "/x/y") == Path("/x/y"), "")
+    check("~ 展開", m._hooks_path_dir(root, "~/h") == Path(_os.path.expanduser("~/h")), "")
+    check("沒給 → None", m._hooks_path_dir(root, "") is None and m._hooks_path_dir(root, None) is None, "")
+    for fn in (m._hooks_path_is_ours, m._enforcement_prepush_ungated):
+        src = inspect.getsource(fn)
+        check(f"{fn.__name__} 用 _hooks_path_dir、自己不展開 ~", "_hooks_path_dir(" in src and "expanduser" not in src, src[:300])
+
+
+def t_runner_drops_inherited_skip_env():
+    """測試總檔開跑時清掉外面繼承來的 LUMOS_SKIP_* 單次略過變數(代碼審發現:掛鉤逃生段教人
+    `LUMOS_SKIP_REREAD_CHECK=1 git push`,掛鉤跑全套測試會原樣繼承,行程內直接呼叫工具函式的測試就被它改了行為而紅,
+    逃生寫法反而讓推送被「測試有紅」擋下)。子行程帶兩個同族變數、外加 CI 與 GITHUB_ACTIONS,跑回頭重讀判不了那支 → 全綠。
+
+    翻紅釘:拿掉 main() 清 LUMOS_SKIP_* 那段 → 紅(行程內呼叫那幾條 rc 變 0)。"""
+    print("t_runner_drops_inherited_skip_env")
+    import os as _os, subprocess as sp
+    env = dict(_os.environ, LUMOS_SKIP_REREAD_CHECK="1", LUMOS_SKIP_DRIFT_CHECK="1", CI="true", GITHUB_ACTIONS="true")
+    r = sp.run([sys.executable, str(Path(__file__).resolve()), "-k", "t_reread_block_undecidable"],
+               capture_output=True, text=True, env=env, timeout=600)
+    tail = (r.stdout + r.stderr)[-1500:]
+    check("子行程帶 LUMOS_SKIP_REREAD_CHECK=1、LUMOS_SKIP_DRIFT_CHECK=1、CI、GITHUB_ACTIONS 跑判不了那支 → 全綠",
+          r.returncode == 0 and " 0 failed" in r.stdout and "t_reread_block_undecidable" in r.stdout, tail)
+
+
 def t_drift_ack_reread_kind():
     """[S20][S21][S22] drift ack --kind reread:非規則類、沒有判定點出、不是條目開頭 → rc2 不寫帳;
     有判定點出的規則類條目開頭 → 記 kind、path、整條 text、reason、verdicts;drift scan 種類計數不出現 reread。
 
-    翻紅釘:不驗工作目錄有判定點出 → ②紅;text 記實體行不記整條 → ④紅。"""
+    翻紅釘:不驗工作目錄有判定點出 → ②紅;不看紀錄的 note 欄 → ②b 紅;text 記實體行不記整條 → ④紅。"""
     print("t_drift_ack_reread_kind")
     import json as _j, subprocess as sp
     tmp = Path(tempfile.mkdtemp(prefix="gctl-rrb4-"))
@@ -65811,6 +65979,15 @@ def t_drift_ack_reread_kind():
     check("②[S20]沒有任何判定紀錄點出的規則類條目 → rc2、講沒有判定點出、不寫帳",
           r.returncode == 2 and "沒有判定" in r.stdout + r.stderr and not (root2 / "governance" / "drift-acks.jsonl").is_file(),
           r.stdout + r.stderr)
+    # 紀錄的 note 欄要等於這篇:點出同一句原文、但 note 欄是別篇的紀錄,不能拿來表態這篇
+    rec = _rr_records(root2)[0]
+    doc = _j.loads(rec.read_text(encoding="utf-8"))
+    rec.write_text(_j.dumps(dict(doc, note=_rr_note("B")), ensure_ascii=False), encoding="utf-8")
+    r = sp.run([sys.executable, GRAPHCTL, "drift", "ack", "Systems/A", str(_rrb_line(root2, "推送前一定要先跑全套測試")), "--kind",
+                "reread", "--reason", "照留理由寫在這"], capture_output=True, text=True, cwd=str(root2))
+    check("②b[S20]點出這一條的紀錄 note 欄是別篇 → rc2、講沒有判定點出、不寫帳",
+          doc.get("note") == _rr_note("A") and r.returncode == 2 and "沒有判定" in r.stdout + r.stderr
+          and not (root2 / "governance" / "drift-acks.jsonl").is_file(), r.stdout + r.stderr)
     rc, out = ack(l_rule)
     got = rows()
     check("③[S21]有判定點出的規則類條目開頭 → rc0、印成功訊息", rc == 0 and "表態記下了" in out and len(got) == 1, out)
@@ -65886,9 +66063,13 @@ def t_reread_block_hook_and_ci_wiring():
           rc == 0 and "掛鉤沒帶 --gate" in o, o + e)
     for label, env, extra in (("CI 設了", {"CI": "true"}, ()), ("GITHUB_ACTIONS 設了", {"GITHUB_ACTIONS": "true"}, ()),
                               ("帶了 --gate", None, ("--gate",))):
+        n0 = _ns_gov(r2)
         rc, o, e = _rr(r2, "reread-check", *extra, "--diff", f"{b2}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/heads/x",
                        env=env)
         check(f"⑨對照組:{label} → 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
+        if env:     # 同一支指令判「是不是 CI」只有一個條件:只設 GITHUB_ACTIONS 時帳的來源也記 ci(原本帳只看 CI、提示看兩個)
+            got = [x for x in _gov_since(_ns_gov(r2), n0) if x.get("gate") == "note-reread"]
+            check(f"⑨b {label} → 帳的來源記 ci", got and "來源 ci;" in got[-1].get("note", ""), str(got)[:400])
     rc, o, e = _rr(r2, "reread-check", "--diff", f"{b2}..HEAD")
     check("⑨對照組:沒帶 --push-remote(手動跑)→ 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
     m = _load_lumos_inproc()

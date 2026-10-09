@@ -8,14 +8,15 @@
 
 ## v1.3 — 2026-10-09
 
-兩道原本只提醒的「舊句」檢查改成在本機推送前預設擋,推送前掛鉤跟著改,所以升版,讓還沒更新的專案被提示跑 `lumos update`:
+兩道原本只提醒的「舊句」檢查改成預設擋(回頭重讀只在本機推送前擋;名稱消失檢查在本機推送前與 CI 的 `drift check` 那步都擋),推送前掛鉤跟著改,所以升版,讓還沒更新的專案被提示跑 `lumos update`:
 - **回頭重讀守檔筆記在本機推送前擋**:推送前掛鉤的 `lumos note-audit reread-check` 多帶 `--gate`,`.lumos/config.json` 的 `note_reread.gate` 沒寫或寫壞時照 block。擋兩層——這次改程式又改到家筆記、還沒派判定者對照這一版程式的(第一層);判定點出的規則類條目(`RULE:`、`★INVARIANT★`、帶 `[test:]` 的摘要條目)還在、又沒表態的(第二層)。第二層照留用新的 `lumos drift ack <節點> <條目開頭行號> --kind reread --reason "…"`,表態要提交才算。
 - **每次改程式又改到家筆記的推送都要先派判定者**(Claude 或 Codex)、記紀錄、提交;判定要把筆記全文與程式 diff 交給模型。沒有 Claude/Codex 環境、或程式碼不能送外部模型的專案,在 `.lumos/config.json` 寫 `{"note_reread": {"gate": "warn"}}`(只提醒)或 `"off"`(不跑)。單次略過照舊是 `LUMOS_SKIP_REREAD_CHECK=1 git push`(會留帳)。
+- **本機掛鉤擋的時候,這道判不了也擋**:git 失敗、超過 30 秒、判定紀錄讀不懂、推送範圍的起點算不出來時回 1 擋下並印原因;確定是工具的問題就 `LUMOS_SKIP_REREAD_CHECK=1 git push` 單次略過(會留帳)。
 - **已經用過回頭重讀的專案**:舊判定紀錄點出、從沒表態過的規則類條目,升級後第一次碰到那篇的推送會被擋,要逐條改掉或表態。
 - 只有來源核對過的判定紀錄(`provenance_ok: true`)才算已對照;來源核對沒過的那份要重派判定者。
 - 照既有手冊把 `reread-check` 接進自家 CI 的專案不受影響:CI 不帶 `--gate`,照舊只提醒、恆回 0。代價是用 `git push --no-verify` 跳過本機掛鉤時,這一道沒有 CI 兜底。
 - 推送前掛鉤的這一段被訊號砍掉(回傳碼 128 以上)時整支推送停下,不再只認 Ctrl-C(130):這道會擋人之後,被外部砍掉也不該當作放行。舊版工具不認得 `--gate` 時這一段講一句「這次沒檢查」放行;`lumos enforcement` 會把沒帶 `--gate` 的生效掛鉤列為沒接上。
-- **舊句檢查(名稱消失,`drift_check.old_sentence`)沒寫時照總開關 `drift_check.gate`**:總開關沒寫是 block,所以沒寫子開關的專案這一項改成擋;總開關設 warn 的跟著只提醒、設 off 的這一項也不跑(**行為變化**:原本 `gate=off`、`old_sentence` 沒寫的專案這一項照跑只印,現在不跑)。明寫的 `old_sentence` 照原義,不受總開關影響;設定檔讀不成 JSON 照 block。
+- **舊句檢查(名稱消失,`drift_check.old_sentence`)沒寫時照總開關 `drift_check.gate`**:總開關沒寫是 block,所以沒寫子開關的專案這一項改成擋;總開關設 warn 的跟著只提醒、設 off 的這一項也不跑(**行為變化**:原本 `gate=off`、`old_sentence` 沒寫的專案這一項照跑只印,現在不跑)。明寫的 `old_sentence` 照原義,不受總開關影響;設定檔讀不成 JSON 照 block。這一項本機推送前與 CI 的 `lumos drift check` 都照它擋:CI 接了 `drift check` 的專案,升級後有舊句要處理的推送 CI 也會紅(回頭重讀才是 CI 不受影響的那一道)。
 
 ## v1.2 — 2026-10-01
 
