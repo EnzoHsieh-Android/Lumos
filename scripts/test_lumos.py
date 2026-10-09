@@ -65876,16 +65876,30 @@ def t_reread_block_undecidable():
 
 def _rrwt_reset(root, tmp, name, good, deep, kind):
     """t_reread_wt_records_guarded 每一組的現場:紀錄資料夾只放一份叫 name 的檔,照 kind 造成符號連結、FIFO、太大、形狀壞、
-    巢狀太深、正常一般檔,或整個資料夾是符號連結;順手清掉前一組留下的表態檔。"""
+    巢狀太深、正常一般檔,或整個資料夾是符號連結,或上層的 governance 是指到 repo 外的符號連結(底下照樣有那份紀錄);
+    順手清掉前一組留下的表態檔,上一組把 governance 換成連結的換回原本的資料夾。"""
     import json as _j, os as _os, shutil
-    d = root / "governance" / "reread-verdicts"
-    (root / "governance" / "drift-acks.jsonl").unlink(missing_ok=True)     # 前一組改壞讓 ack 寫了表態,不連累下一組
+    g = root / "governance"
+    if g.is_symlink():
+        g.unlink()
+        (tmp / "gov-real").rename(g)
+    d = g / "reread-verdicts"
+    (g / "drift-acks.jsonl").unlink(missing_ok=True)     # 前一組改壞讓 ack 寫了表態,不連累下一組
     if d.is_symlink() or d.is_file():
         d.unlink()
     elif d.is_dir():
         shutil.rmtree(d)
     if kind == "dir-link":
         d.symlink_to(tmp / "gooddir", target_is_directory=True)
+        return
+    if kind == "parent-link":       # repo 外放一份 governance/reread-verdicts/<name>(一般檔、來源核對過),repo 裡的 governance 指過去
+        out = tmp / "govout"
+        shutil.rmtree(out, ignore_errors=True)
+        (out / "reread-verdicts").mkdir(parents=True)
+        shutil.copy(tmp / "good.json", out / "reread-verdicts" / name)
+        g.mkdir(exist_ok=True)
+        g.rename(tmp / "gov-real")
+        g.symlink_to(out, target_is_directory=True)
         return
     d.mkdir(parents=True)
     f = d / name
@@ -65917,9 +65931,14 @@ def t_reread_wt_records_guarded():
     對照組:同一份內容放成一般檔 → prepare 算只差提交、列那份的檔名;ack 照收。代碼審發現:這幾道守門原本沒有測試守,
     巢狀太深還讓 prepare 崩出堆疊。
 
+    上層的 governance 是指到 repo 外的符號連結(底下照樣有 reread-verdicts/ 與那份紀錄)也一樣略過:資料夾判斷走共用的
+    _repo_path_unsafe(逐層擋符號連結、解析後要在 repo 內),跟寫端 _note_audit_safe_dir 同一份(代碼審發現:原本只看最後一層)。
+
     翻紅釘:拿掉符號連結判斷 → 符號連結那組紅;拿掉一般檔判斷 → FIFO 那組卡住逾時、紅;拿掉大小上限 → 太大那組紅;
-    拿掉資料夾符號連結判斷 → 資料夾那組紅;uncommitted 不驗形狀 → 形狀壞那兩組紅;解析不接 RecursionError → 巢狀太深那組紅(這台
-    13 萬層真的會爆;另有行程內替身讓 json 丟 RecursionError,不看機器)。"""
+    拿掉資料夾符號連結判斷 → 資料夾那組紅;資料夾判斷改回只看最後一層 → 上層是連結那組紅;uncommitted 不驗形狀 → 形狀壞那兩組紅;
+    解析不接 RecursionError → 巢狀太深那組紅(這台 13 萬層真的會爆;③另把 json 模組的 loads 換成一律丟 RecursionError 的替身、
+    finally 換回,不看機器的遞迴上限;前置斷言先證明不換替身時兩個讀法都算得到那份——原本 drift ack 那半給空字串當筆記內容,
+    不換替身也回空,只驗到一半)。"""
     print("t_reread_wt_records_guarded")
     import json as _j, os as _os, shutil
     if not hasattr(_os, "mkfifo"):
@@ -65941,35 +65960,47 @@ def t_reread_wt_records_guarded():
 
     def reset(kind):
         _rrwt_reset(root, tmp, name, good, deep, kind)
+    m = _load_lumos_inproc()
+    note_text = (root / _rr_note("A")).read_text(encoding="utf-8")
     for kind, label in (("link", "檔是符號連結(指到一份來源核對過的紀錄)"), ("fifo", "檔是 FIFO"),
                         ("big", "超過 256 KB(內容是來源核對過的紀錄)"), ("not-object", "形狀壞:不是物件"),
                         ("rows-not-list", "形狀壞:rows 不是清單"), ("deep", "巢狀太深(13 萬層陣列,不到 256 KB)"),
-                        ("dir-link", "整個紀錄資料夾是符號連結(指到放著那份紀錄的資料夾)")):
+                        ("dir-link", "整個紀錄資料夾是符號連結(指到放著那份紀錄的資料夾)"),
+                        ("parent-link", "上層的 governance 是指到 repo 外的符號連結(底下照樣有 reread-verdicts/ 與那份紀錄)")):
         reset(kind)
         rc, out, files = _rr_prepare(root, rng, timeout=60)
         check(f"①{label}:prepare 不崩、不算只差提交 → 照產 A 的項目檔、不叫人提交",
               rc == 0 and "Traceback" not in out and [_rr_meta(f)["筆記路徑"] for f in files] == [_rr_note("A")]
               and "還沒提交" not in out, f"rc={rc}\n{out[-600:]}")
         rc, out = _rrwt_ack(root, l_rule)
+        # 上層是連結時表態帳的寫端守衛(_drift_ledger_path_err)先擋、讀端走不到,另用行程內直接問讀端
+        said = ("沒有判定" in out or "governance 是符號連結" in out) if kind == "parent-link" else "沒有判定" in out
         check(f"②{label}:drift ack --kind reread 照原本規則略過那份 → rc2、講沒有判定點出、不寫表態",
-              rc == 2 and "沒有判定" in out and "Traceback" not in out and not (root / "governance" / "drift-acks.jsonl").is_file(),
+              rc == 2 and said and "Traceback" not in out and not (root / "governance" / "drift-acks.jsonl").is_file(),
               f"rc={rc}\n{out[-600:]}")
-    m = _load_lumos_inproc()
+        try:            # 讀端不接例外時記成紅、照跑下一組(不讓整支中斷而跑不到後面的斷言)
+            got = m._drift_ack_reread_verdicts(root, _rr_note("A"), note_text, l_rule)
+        except RecursionError as ex:
+            got = ex
+        check(f"②b{label}:drift ack 的讀端(_drift_ack_reread_verdicts)不算那份", got == [], repr(got)[:300])
     reset("good")
 
-    class _Deep:       # 函式裡的 import json 拿 sys.modules 那一份:換成 loads 一律丟 RecursionError 的替身
-        def loads(self, *a, **k):
-            raise RecursionError("測試造的遞迴爆掉")
-    real_json = sys.modules["json"]
-    sys.modules["json"] = _Deep()
+    check("③前置:一般檔的那份 uncommitted 與 drift ack 的讀法都算得到(下面換掉解析才看得出是被接住而不算)",
+          m._note_reread_uncommitted(root, _na_head(root)) != {} and m._drift_ack_reread_verdicts(root, _rr_note("A"), note_text, l_rule) != [],
+          "")
+
+    def deep_loads(*a, **k):
+        raise RecursionError("測試造的遞迴爆掉")
+    orig = _j.loads          # 專案慣例:換掉模組屬性、finally 換回(json 模組全行程同一份,被測函式怎麼 import 都拿得到)
+    _j.loads = deep_loads
     try:
         try:
-            got = (m._note_reread_uncommitted(root, _na_head(root)), m._drift_ack_reread_verdicts(root, _rr_note("A"), "", l_rule))
+            got = (m._note_reread_uncommitted(root, _na_head(root)), m._drift_ack_reread_verdicts(root, _rr_note("A"), note_text, l_rule))
         except RecursionError as ex:
             got = ex
     finally:
-        sys.modules["json"] = real_json
-    check("③行程內替身讓 json 解析丟 RecursionError:uncommitted 與 drift ack 的讀法都不穿出例外、那份不算", got == ({}, []), repr(got))
+        _j.loads = orig
+    check("③json 的 loads 換成一律丟 RecursionError:uncommitted 與 drift ack 的讀法都不穿出例外、那份不算", got == ({}, []), repr(got))
     reset("good")
     rc, out, files = _rr_prepare(root, rng)
     check("④對照組:同一份內容放成一般檔 → prepare 算只差提交、不產 A 的項目檔、提交指令列那份的檔名(不是整個資料夾)",
@@ -65977,6 +66008,135 @@ def t_reread_wt_records_guarded():
           and "git add governance/reread-verdicts &&" not in out, out[-600:])
     rc, out = _rrwt_ack(root, l_rule)
     check("④對照組:drift ack 照收", rc == 0 and "表態記下了" in out, out[-400:])
+
+
+def _deep_json_text(depth=130000):
+    """合法但巢狀極深的 JSON(陣列套陣列):Python 的 json 解析器遞迴爆掉丟 RecursionError,不是 ValueError;13 萬層不到 256 KB。"""
+    return "[" * depth + "]" * depth
+
+
+def t_reread_deep_json_config_and_report():
+    """回頭重讀讀 JSON 的四個呼叫端都經 _note_reread_json(巢狀太深一律當讀不成 JSON):已提交紀錄與工作目錄紀錄另有測試
+    (t_reread_block_undecidable ③、t_reread_wt_records_guarded),這裡補另外兩個——
+    ①被推頂端的 .lumos/config.json 是 13 萬層陣列:reread-check --gate 印「讀不成 JSON」、照預設,不是「沒預料到的錯誤(RecursionError)」;
+    ②判定者報告的 json 區塊是 13 萬層陣列:reread-record rc2、講找不到解析得了的 json 區塊,沒有堆疊、不寫紀錄。
+
+    翻紅釘:_note_reread_config 改回直接 json.loads → ①紅;reread-record 解析報告改回直接 json.loads → ②紅。"""
+    print("t_reread_deep_json_config_and_report")
+    root, base = _rrb_repo(_RRB_RULE)
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(_deep_json_text(), encoding="utf-8")
+    _nh_commit(root, "deep config")
+    rc, o, e, ev = _rrb_check(root, "--gate", rng=f"{base}..HEAD")
+    check("①設定檔 13 萬層:reread-check --gate 印讀不成 JSON、照預設,不是沒預料到的錯誤、沒有堆疊",
+          ".lumos/config.json 讀不成 JSON,回頭重讀照預設" in o and "沒預料" not in o + e and "RecursionError" not in o + e
+          and "Traceback" not in o + e and ev and "skipped" not in ev, f"rc={rc}\n{o[-600:]}\n{e[-600:]}\n{ev}")
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-rrdeep-"))
+    _rc, _out, files = _rr_prepare(root, f"{base}..HEAD", "--all")
+    item = next(f for f in files if _rr_meta(f)["筆記路徑"] == _rr_note("A"))
+    rep = _rr_report(tmp / "deep.md", item, [])
+    rep.write_text(rep.read_text(encoding="utf-8").replace("```json\n[]\n```", "```json\n" + _deep_json_text() + "\n```"),
+                   encoding="utf-8")
+    rc, o, e = _rr(root, "reread-record", "--prepared", str(item), "--report", str(rep))
+    check("②報告的 json 區塊 13 萬層:reread-record rc2、講找不到解析得了的 json 區塊、沒有堆疊、不寫紀錄",
+          rc == 2 and "解析得了的 ```json 區塊" in e and "Traceback" not in o + e and _rr_records(root) == [],
+          f"rc={rc}\n{o[-400:]}\n{e[-600:]}")
+
+
+def t_note_audit_and_drift_config_deep_nesting():
+    """同一份 .lumos/config.json 的兄弟閘讀設定也接 RecursionError(代碼審發現:筆記內容審 _note_audit_config 與存量漂移
+    _drift_config_text_parts 只接 ValueError、UnicodeDecodeError,13 萬層的設定檔讓它們丟 RecursionError 穿出去):
+    巢狀太深跟「讀不成 JSON」走同一條既有退路——筆記內容審照預設 block 並講一句;存量漂移記成設定壞掉(bad),各開關照預設並各講一句。
+    對照組:正常設定照讀、一般壞 JSON 的訊息不變。
+
+    翻紅釘:任一支拿掉 RecursionError → 那支丟例外、紅。"""
+    print("t_note_audit_and_drift_config_deep_nesting")
+    m = _load_lumos_inproc()
+    deep = _deep_json_text()
+    for label, txt in (("str", deep), ("bytes", deep.encode("utf-8"))):
+        try:
+            got = m._note_audit_config(txt)
+        except RecursionError as ex:
+            got = ex
+        check(f"①筆記內容審設定 13 萬層({label})→ 照預設 block、講讀不成 JSON(跟壞 JSON 同一句)",
+              got == m._note_audit_config(b"{bad"), repr(got)[:300])
+        try:
+            got = m._drift_config_text_parts(txt)
+        except RecursionError as ex:
+            got = ex
+        check(f"②存量漂移設定 13 萬層({label})→ 跟壞 JSON 同一份結果(照預設、各講一句讀不成 JSON)",
+              got == m._drift_config_text_parts(b"{bad") and isinstance(got, dict)
+              and any("讀不成 JSON" in w for w in got["gate_warns"] + got["os_warns"]), repr(got)[:300])
+    check("對照組:正常設定照讀", m._note_audit_config(b'{"note_audit": {"gate": "warn"}}') == ("warn", [])
+          and m._drift_config_text_parts(b'{"drift_check": {"gate": "warn"}}')["gate_mode"] == "warn", "")
+
+
+def t_reread_cmd_quote_shared():
+    """回頭重讀印給人照貼的兩種指令(提交紀錄的 git add、reread-prepare 指令列)每個參數都走既有的 _sh_quote,不各自 import shlex
+    (代碼審發現:_note_reread_add_cmd 與 _note_reread_cmdline 直接 shlex.quote,_sh_quote 一改兩邊就分岔)。
+    ①把 _sh_quote 換成會留記號的替身 → 兩支印出的每個參數都帶記號;②一般檔名、一般範圍印出來跟原本一字不差;
+    含空白的範圍照樣加引號。
+
+    翻紅釘:任一支改回直接 shlex.quote → ①紅。"""
+    print("t_reread_cmd_quote_shared")
+    m = _load_lumos_inproc()
+    name = f"{'a' * 16}-20261009T000000Z-{'b' * 32}.json"
+    g = m._note_reread_add_cmd.__globals__
+    orig = g["_sh_quote"]
+    g["_sh_quote"] = lambda s: f"<{s}>"
+    try:
+        add = m._note_reread_add_cmd([name, "x.json"])
+        line = m._note_reread_cmdline("a..b", ("origin", "refs/heads/f"))
+    finally:
+        g["_sh_quote"] = orig
+    check("①提交指令的每個檔名都走 _sh_quote", add == f"git add <governance/reread-verdicts/{name}> <governance/reread-verdicts/x.json> && git commit",
+          add)
+    check("①prepare 指令列的範圍、遠端、ref 都走 _sh_quote",
+          line == "lumos note-audit reread-prepare --diff <a..b> --push-remote <origin> --pushed-ref <refs/heads/f> --orchestrator <claude 或 codex>",
+          line)
+    check("②一般檔名印出來不變", m._note_reread_add_cmd([name]) == f"git add governance/reread-verdicts/{name} && git commit",
+          m._note_reread_add_cmd([name]))
+    check("②一般範圍印出來不變;含空白的照樣加引號",
+          m._note_reread_cmdline("abc..def", None) == "lumos note-audit reread-prepare --diff abc..def --orchestrator <claude 或 codex>"
+          and m._note_reread_cmdline("a b..c", None) == "lumos note-audit reread-prepare --diff 'a b..c' --orchestrator <claude 或 codex>",
+          m._note_reread_cmdline("a b..c", None))
+
+
+def t_reread_ledger_head_sha_all_kinds():
+    """回頭重讀每一種帳的 head_sha 都記被推頂端(範圍終點),不是工作目錄的 HEAD(代碼審發現:只有「有東西」那筆有測,
+    其他種類拿掉 head_sha 照綠)。造法:範圍終點 c1、HEAD 在更後面的 c2,直接給 _note_reread_ledger 各種 state 的 res:
+    參數錯與環境略過(param、skipped)、判不了(block 下 blocked、warn 下 skipped,兩筆都帶 state=undecidable)、沒有候選(none)、
+    都對照過(covered)→ 每筆 head_sha 都是 c1、commit 是它的前 7 碼。
+    ★param 與環境略過的 skipped 在真實流程造不出範圍終點★:參數錯在算終點之前、環境略過在範圍解析就結束,res 裡沒有 tip,
+    這兩種寫帳時 _gate_event 補 HEAD——這裡直接給 tip 只為釘住「有 tip 就記 tip」那一行;判不了(範圍解析之後才出事的)、none、covered
+    在真實流程都有 tip,另跑一次真的 reread-check(範圍 c1..c1、HEAD 在 c2)看 none 那筆。
+
+    翻紅釘:任一種帳不傳 head_sha → 那一種紅。"""
+    print("t_reread_ledger_head_sha_all_kinds")
+    m = _load_lumos_inproc()
+    root, _base = _rrb_repo("KEY:x")
+    c1 = _na_head(root)
+    _nh_file(root, "README.md", "後來的提交\n")
+    _nh_commit(root, "after")
+    c2 = _na_head(root)
+    cases = (("param", {"state": "param", "why": "參數錯"}, False, "skipped"),
+             ("skipped", {"state": "skipped", "why": "淺層 clone"}, False, "skipped"),
+             ("undecidable(block)", {"state": "undecidable", "why": "讀不了"}, True, "blocked"),
+             ("undecidable(warn)", {"state": "undecidable", "why": "讀不了"}, False, "skipped"),
+             ("none", {"state": "none", "why": "沒有候選"}, False, "none"),
+             ("covered", {"state": "judged", "left": [], "layer2": {"must": []}, "fps": {"a": "b"}}, False, "covered"))
+    for label, res, hard, kind in cases:
+        n0 = _ns_gov(root)
+        m._note_reread_ledger(root, dict(res, tip=c1), hard)
+        ev = [x for x in _gov_since(_ns_gov(root), n0) if x.get("gate") == "note-reread"]
+        check(f"①{label} → 一筆 {kind}、head_sha 是範圍終點 c1(不是 HEAD c2)、commit 是它的前 7 碼",
+              c1 != c2 and len(ev) == 1 and ev[0].get("kind") == kind and ev[0].get("head_sha") == c1 and ev[0].get("commit") == c1[:7],
+              str(ev)[:400])
+    _rc, o, e, kinds = _rrb_check(root, rng=f"{c1}..{c1}")
+    ev = [x for x in _ns_gov(root) if x.get("gate") == "note-reread"][-1:]
+    check("②真的跑 reread-check(範圍 c1..c1 沒有候選、HEAD 在 c2)→ 記 none、head_sha 是 c1",
+          kinds == ["none"] and ev and ev[0].get("head_sha") == c1,
+          f"{kinds} {str(ev)[:300]}\n{o[-300:]}\n{e[-300:]}")
 
 
 def t_reread_record_refuses_unreadable_size():
@@ -66123,9 +66283,23 @@ def t_runner_drops_inherited_skip_env():
     (回頭重讀判不了、筆記形狀擋的回頭條件、舊句檢查的入口)→ 全綠。三支各看得到一個變數:清除範圍縮成只清其中一個(或寫死名單漏掉)
     就有一支紅(代碼審發現:原本只跑回頭重讀那支,只清 LUMOS_SKIP_REREAD_CHECK 也照綠)。
 
-    翻紅釘:拿掉清 LUMOS_SKIP_* 那段 → 三支都紅;只清 LUMOS_SKIP_REREAD_CHECK → 筆記形狀擋與舊句檢查那兩支紅。"""
+    另有一條直接看「整族」:子行程載入測試總檔、跑 _isolate_environment,外面另設一個不在任何名單裡的 LUMOS_SKIP_ 開頭變數
+    → 跑完環境裡除了它自己設回的 LUMOS_SKIP_CLAUDE_PLUGIN 沒有任何 LUMOS_SKIP_*(代碼審發現:三支各看一個變數,清除改成
+    寫死那三個名字照綠)。
+
+    翻紅釘:拿掉清 LUMOS_SKIP_* 那段 → 三支都紅;只清 LUMOS_SKIP_REREAD_CHECK → 筆記形狀擋與舊句檢查那兩支紅;
+    清除改成寫死名單 → 整族那條紅。"""
     print("t_runner_drops_inherited_skip_env")
     import os as _os, subprocess as sp
+    probe = ("import importlib.machinery as M, importlib.util as U, os, sys\n"
+             "ld = M.SourceFileLoader('_tl_probe', sys.argv[1]); mod = U.module_from_spec(U.spec_from_loader('_tl_probe', ld))\n"
+             "ld.exec_module(mod); mod._isolate_environment()\n"
+             "print('SKIPS=' + ','.join(sorted(k for k in os.environ if k.startswith('LUMOS_SKIP_'))))\n")
+    r = sp.run([sys.executable, "-c", probe, str(Path(__file__).resolve())], capture_output=True, text=True, timeout=300,
+               check=False, env=dict(_os.environ, LUMOS_SKIP_ZZ_NOT_IN_ANY_LIST="1", LUMOS_SKIP_REREAD_CHECK="1"))
+    got = next((ln[6:] for ln in r.stdout.splitlines() if ln.startswith("SKIPS=")), None)
+    check("整族:外面設一個不在任何名單裡的 LUMOS_SKIP_ 變數,隔離後只剩 LUMOS_SKIP_CLAUDE_PLUGIN",
+          r.returncode == 0 and got == "LUMOS_SKIP_CLAUDE_PLUGIN", f"rc={r.returncode} {got!r}\n{(r.stdout + r.stderr)[-800:]}")
     env = dict(_os.environ, LUMOS_SKIP_REREAD_CHECK="1", LUMOS_SKIP_NOTE_SHAPE="1", LUMOS_SKIP_DRIFT_CHECK="1",
                CI="true", GITHUB_ACTIONS="true")
     for t, var in (("t_reread_block_undecidable", "LUMOS_SKIP_REREAD_CHECK"),
@@ -66202,7 +66376,7 @@ def t_reread_block_hook_and_ci_wiring():
     """[S23][S24][S25] 掛鉤 reread-check 段帶 --gate、rc1 擋下印逃生段、128 以上交中斷處理、其他非零講一句放行;CI 那步照舊不帶 --gate;
     reread-record 收尾不再說不需要表態、git add 列具體檔名、來源核對沒過講這份不算對照;舊掛鉤搭新工具印一句、enforcement 查得到。
 
-    翻紅釘:掛鉤拿掉 --gate → ①紅;enforcement 不讀生效的 pre-push → ⑨紅。"""
+    翻紅釘:掛鉤拿掉 --gate → ①紅;enforcement 不讀生效的 pre-push → ⑨紅;帳的來源欄寫死 ci 或 hook → ⑨b 紅。"""
     print("t_reread_block_hook_and_ci_wiring")
     import re as _re
     _need_src("scripts/hooks/pre-push", ".github/workflows/ci.yml")
@@ -66261,9 +66435,11 @@ def t_reread_block_hook_and_ci_wiring():
         rc, o, e = _rr(r2, "reread-check", *extra, "--diff", f"{b2}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/heads/x",
                        env=env)
         check(f"⑨對照組:{label} → 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
-        if env:     # 同一支指令判「是不是 CI」只有一個條件:只設 GITHUB_ACTIONS 時帳的來源也記 ci(原本帳只看 CI、提示看兩個)
-            got = [x for x in _gov_since(_ns_gov(r2), n0) if x.get("gate") == "note-reread"]
-            check(f"⑨b {label} → 帳的來源記 ci", got and got[-1].get("note", "").endswith("來源 ci"), str(got)[:400])
+        # 同一支指令判「是不是 CI」只有一個條件:只設 GITHUB_ACTIONS 時帳的來源也記 ci(原本帳只看 CI、提示看兩個);
+        # 兩個都沒設(_rr 會清掉外面的)記 hook——兩邊都驗,來源欄寫死哪一邊都紅
+        got = [x for x in _gov_since(_ns_gov(r2), n0) if x.get("gate") == "note-reread"]
+        src = "ci" if env else "hook"
+        check(f"⑨b {label} → 帳的來源記 {src}", got and got[-1].get("note", "").endswith(f"來源 {src}"), str(got)[:400])
     rc, o, e = _rr(r2, "reread-check", "--diff", f"{b2}..HEAD")
     check("⑨對照組:沒帶 --push-remote(手動跑)→ 不印那一句", "掛鉤沒帶 --gate" not in o + e, o + e)
     m = _load_lumos_inproc()

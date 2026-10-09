@@ -33346,7 +33346,7 @@ def _note_audit_config(text):
         return "block", []
     try:
         cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):      # 巢狀太深丟的是 RecursionError,同「讀不成 JSON」(代碼審發現)
         return "block", [".lumos/config.json 讀不成 JSON,筆記內容審照預設 block"]
     na = cfg.get("note_audit") if isinstance(cfg, dict) else None
     if na is not None and not isinstance(na, dict):
@@ -34839,7 +34839,10 @@ def _note_reread_unread_why(root, specs, names, blobs):
 def _note_reread_json(raw):
     """回頭重讀讀 JSON(設定、判定紀錄、判定者報告的 json 區塊)→ 解出的值。★解析例外的口徑只有這一份★:不是 UTF-8、
     不是 JSON、巢狀太深(json 的解析器遞迴爆掉丟 RecursionError,不是 ValueError)一律丟 ValueError。代碼審發現:
-    125000 層的陣列不到 256 KB,原本穿過「讀不成 JSON」那一層、reread-prepare 崩出堆疊。raw 給 bytes 或 str。"""
+    125000 層的陣列不到 256 KB,原本穿過「讀不成 JSON」那一層、reread-prepare 崩出堆疊。raw 給 bytes 或 str。
+    回頭重讀用包裝、兄弟閘(_note_audit_config、_drift_config_text_parts)就地接 RecursionError:這裡有四個呼叫端(設定、判定者報告、
+    已提交紀錄、工作目錄紀錄)要同一份口徑,包一次比四處各接不會漏;兄弟閘各只有一處解析,照專案多處的 except (ValueError, RecursionError)
+    就地寫、不為一處多一層。"""
     import json as _j
     try:
         return _j.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
@@ -34887,11 +34890,15 @@ def _note_reread_covered(root, tip, verdicts=None, deadline=None):
 
 def _note_reread_wt_verdicts(root, skip=()):
     """★走訪工作目錄的紀錄資料夾只有這一份★(_note_reread_uncommitted 與 drift ack --kind reread 共用;代碼審發現原本各寫一份守門)
-    → [(檔名, 對照指紋, 解出的 JSON 值)],依檔名排序。只收檔名合 _NOTE_REREAD_VERDICT_NAME_RE、不在 skip 裡的;資料夾本身或檔是
-    符號連結、不是一般檔、超過單份上限 _NOTE_REREAD_VERDICT_MAX、讀不了、讀不成 JSON(含巢狀太深)的略過。形狀各呼叫端自己驗。"""
+    → [(檔名, 對照指紋, 解出的 JSON 值)],依檔名排序。只收檔名合 _NOTE_REREAD_VERDICT_NAME_RE、不在 skip 裡的;檔是符號連結、
+    不是一般檔、超過單份上限 _NOTE_REREAD_VERDICT_MAX、讀不了、讀不成 JSON(含巢狀太深)的略過。形狀各呼叫端自己驗。
+    資料夾從 repo 根往下任一層(含上層的 governance)是符號連結、某層不是資料夾、或解析後不在 repo 根底下 → 整個不走訪:
+    判斷走共用的 _repo_path_unsafe(dirs=True),跟寫端 _note_audit_safe_dir 同一份(代碼審發現:原本只看最後一層,
+    governance 指到 repo 外時照樣讀外面的紀錄,寫端卻拒寫)。"""
     d = Path(root) / _NOTE_REREAD_VERDICT_DIR
     try:
-        files = sorted(d.iterdir()) if d.is_dir() and not d.is_symlink() else []
+        ok = _repo_path_unsafe(root, _NOTE_REREAD_VERDICT_DIR, dirs=True) is None and d.is_dir()
+        files = sorted(d.iterdir()) if ok else []
     except OSError:
         files = []
     out = []
@@ -34924,10 +34931,9 @@ def _note_reread_uncommitted(root, tip):
 
 def _note_reread_add_cmd(names):
     """「把這幾份紀錄提交」的指令:git add 列具體檔名(record、prepare、check 三處共用;整個資料夾會夾帶殘檔與別的會談的紀錄,
-    06 手冊第 5 步)。檔名都合 _NOTE_REREAD_VERDICT_NAME_RE,一般就是十六進位、數字、T、Z、-;照樣過 shlex.quote(\\d 認得
-    非 ASCII 的數字,貼進殼也不會出事)。"""
-    import shlex
-    return "git add " + " ".join(shlex.quote(f"{_NOTE_REREAD_VERDICT_DIR}/{n}") for n in sorted(names)) + " && git commit"
+    06 手冊第 5 步)。檔名都合 _NOTE_REREAD_VERDICT_NAME_RE,一般就是十六進位、數字、T、Z、-;照樣過 _sh_quote(\\d 認得
+    非 ASCII 的數字,貼進殼也不會出事;印給人貼的參數只走那一支,代碼審發現原本這裡自己 import shlex)。"""
+    return "git add " + " ".join(_sh_quote(f"{_NOTE_REREAD_VERDICT_DIR}/{n}") for n in sorted(names)) + " && git commit"
 
 
 # ── 第二層:判定點出的規則類條目(Projects/舊句兩道轉擋_計劃〈重讀:候選與兩層〉)──
@@ -35035,11 +35041,11 @@ def _note_reread_layer2(root, tip, scan, verdicts, deadline):
 
 
 def _note_reread_cmdline(diff_range, push):
-    """印給人照貼的 reread-prepare 指令:原樣帶這次的 --diff、--push-remote、--pushed-ref,--orchestrator 留給人填。"""
-    import shlex
-    parts = ["lumos", "note-audit", "reread-prepare", "--diff", shlex.quote(diff_range)]
+    """印給人照貼的 reread-prepare 指令:原樣帶這次的 --diff、--push-remote、--pushed-ref,--orchestrator 留給人填。
+    參數走 _sh_quote(印給人貼的參數只有那一支)。"""
+    parts = ["lumos", "note-audit", "reread-prepare", "--diff", _sh_quote(diff_range)]
     if push is not None:
-        parts += ["--push-remote", shlex.quote(push[0]), "--pushed-ref", shlex.quote(push[1])]
+        parts += ["--push-remote", _sh_quote(push[0]), "--pushed-ref", _sh_quote(push[1])]
     return " ".join(parts) + " --orchestrator <claude 或 codex>"
 
 
@@ -39141,7 +39147,7 @@ def _drift_config_text_parts(text):
     if text is not None:
         try:
             cfg = _j.loads(text.decode("utf-8") if isinstance(text, bytes) else text)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):      # 巢狀太深丟的是 RecursionError,同「讀不成 JSON」(代碼審發現)
             bad = True
     return _drift_config_parts(cfg, bad)
 
