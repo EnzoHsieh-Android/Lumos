@@ -210,3 +210,14 @@ about_code:
 - 回傳碼:沒有事件帳回 0(三段式印可能原因);`--session` 給不存在的編號回 2。`--session` 只收單層名稱(英數開頭,後面英數與 `._-`),空字串、`..`、斜線、絕對路徑、符號連結一律回 2 不讀;`--repo` 不是目錄回 2(沿用 `_anchor_repo_root`,不誤報成沒有事件帳)。只認 `\n` 斷行(JSON 字串裡的 U+2028 不算);版本只認整數 1;tool 缺 `ok` 印 ?、不算失敗;印到終端前消毒(代碼審 r2 改用既有的 `_esc_clean` 加 `_PATH_SPECIAL_CATS`,連雙向覆寫、零寬、孤立代理字元一起處理);`--json` 一律 ASCII 跳脫;解析失敗或巢狀過深都算壞行;塊檔是連結不讀;擋下訊息印到標準錯誤。規矩與綁定測試在 [[Systems/lumos事件帳]]。
 - 讀進來時就把關(代碼審 r3):巢狀太深、單行太長算壞行,塊檔太大略過並計數;事件帳上層是連結時讀也不讀、回 2;`--repo` 給子目錄時當成那個 repo。上限數字與理由在 [[Systems/lumos事件帳]]。
 - `--prune --days N` 例外會刪檔(N 是 1 到 36500 的半形整數,否則回 2 不刪;下限 1 就是最近 24 小時不刪的保護;另驗路徑與 worktree 登記),它的規矩寫在 [[Systems/lumos事件帳]]。測試:`t_events_reader_merges_chunks`、`t_events_reader_no_ledger`、`t_events_reader_from_worktree`、`t_events_prune_only_old_sessions`、`t_events_prune_edge_cases`、`t_events_prune_hardening`、`t_events_r3_hostile_output`、`t_events_r3_path_trust`。
+
+## lumos rejections(2026-10-08,[[Projects/否決提案收齊查重_計劃]])
+
+WHY:舊否決清單只收寫成結構的四種(WHY 行的不選、被翻案的決策、內文寫不做/停案/否決/不採的有效決策、作廢或否決的整篇),整張印給代理讀、由它按概念比對,工具不判新提案撞不撞 [出處:Projects/否決提案收齊查重_計劃] [因:零依賴下工具只能比字串,而概念相同、用詞不同正是設計審開案列近名節點接不住的情形] [不選:收計劃裡的「不做」小節(多半是這一版的範圍刀,約 350 條會淹掉清單)] [不選:另開否決資料夾(圖譜已有不選欄位與決策欄位,另開就是第二本帳)]
+- 被翻案的決策跟 `lumos decisions --superseded` 共用 `_superseded_decisions`;那支的輸出格式由 `t_decisions_superseded_output_unchanged` 釘住。被翻案的決策即使內文寫不做,也只算一次翻案。
+- 整篇只收 project 的 superseded、system 的 superseded/rejected 與 issue 的 wontfix(值都取自 `_STATUS_ENUM`,`t_rejections_retired_statuses_in_enum` 釘住);作廢的驗證紀錄不算否決提案,不收。
+- 摘要的 WHY 走 `_slot_summary_entries`;正文的 WHY 行也走 `SYMBOL_RE`,只多剝列表項記號 `- `;同一篇內容一樣的只留一筆(去重前每欄先轉字串,決策欄位可能是區塊清單)。
+- 有效決策只看前 120 字:全形引號裡的引述先用 `_drift_mask_quotes` 遮掉再切;用 `_NS_NEG_SEG_CUT_RE` 切子句,同一子句推翻/翻案寫在不做之前的不算(那是在推翻舊否決),別句的停案照算。
+- `--json` 頂層是 `{"total", "results"}`,每條的來源欄叫 `node`、帶 .md,同 query、search;被翻案決策的 `context` 是推翻它的決策編號(區塊清單用逗號接),沒寫或空鍵是 null。
+- 測試:`t_rejections_collects_sources`、`t_rejections_json_and_empty`、`t_rejections_retired_statuses_in_enum`。
+
