@@ -21759,7 +21759,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
             print(f"  刪圖譜 vault: {vault}({n} 檔)")
         elif vault is not None:
             print(f"  保留圖譜 vault: {vault}")
-        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
+        print(f"  移除 vendored 工具組(白名單:{len(_VENDORED_TOOLKIT)} 檔 + hooks/templates 兩夾)")
         return 0
     if will_delete_vault and not yes:
         if not sys.stdin.isatty():
@@ -22161,14 +22161,38 @@ def _deinit_strip_claude(root: Path) -> bool:
     return hit
 
 
+def _deinit_remove_bytecode(root: Path) -> list:
+    cache = root / "scripts/__pycache__"
+    if (cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir()
+            or cache.resolve() != root.resolve() / "scripts/__pycache__"):
+        return []
+    names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
+    removed = []
+    patterns = [re.escape(name) + r"[.]cpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc" for name in names]
+    patterns.append(r"lumoscpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc")
+    for path in cache.glob("*.pyc"):
+        if not any(re.fullmatch(pattern, path.name) for pattern in patterns):
+            continue
+        try:
+            path.unlink()
+            removed.append(str(path.relative_to(root)))
+        except OSError as exc:
+            print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
+    try:
+        cache.rmdir()
+    except OSError:
+        pass  # 使用者的 bytecode 仍在時保留目錄。
+    return removed
+
+
 def _deinit_remove_vendored(root: Path, src=None) -> list:
-    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 固定 5 檔;
+    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 的精確檔名;
     ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
     F9 修(2026-07-24,Issues/deinit整夾刪使用者檔):不再整夾 rmtree——只刪 src 有的 lumos 檔、
     保留使用者放這兩夾的自有檔,夾空了才移。fallback(a):src 缺(None 或來源夾不存在)→ 保守留夾
     +warn、不刪(never delete unknown)。scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。
     回傳已移除相對路徑列表。"""
-    removed = []
+    removed = _deinit_remove_bytecode(root)
     for rel in _VENDORED_TOOLKIT:
         p = root / rel
         if p.exists():
@@ -22317,9 +22341,10 @@ def _version_nudge(root: Path) -> "str | None":
     )
 
 
-# vendored 工具組白名單(固定 5 檔,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
+# vendored 工具組白名單(精確檔名,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
 # _vendor_toolchain 安裝端與 cmd_deinit 移除端共用,避免漂移。
 _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
+                     "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
                      "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
                      "scripts/fetch-notesmd.sh")
 _VENDORED_TREE_DIRS = ("scripts/hooks", "scripts/templates")   # 安裝時整個目錄照來源複製過去的那兩個
@@ -26715,7 +26740,7 @@ def _review_role_changed_files(root, base, head, deadline=None):
         return None
     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
     out += [(old, base) for old, new in renamed
-            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
+            if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
     return [(path, ref) for path, ref in out
@@ -28851,7 +28876,7 @@ def _lint_watch_mode(repo_root, as_json):
 # ★為什麼存在★:一篇節點在依賴行用反引號寫別人的檔,改那些檔時推筆記就推它、寫回就落它——兩個消費專案兩天內
 # 長歪兩次、工具全綠。這一段在提交與推送的當下擋「新違規」,舊帳交給健檢提醒(決策 d1)。
 # 單源=計劃節點;每條規則的註解標它對回的條款編號 [SN]。
-_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".sql", ".py", ".kt", ".kts",
+_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php", ".sql", ".py", ".kt", ".kts",
                        ".java", ".swift", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".ps1"}
 # ↑「改程式要動圖譜」那道閘的第五份副本(另外四份在提交前/提交後掛鉤與 Claude 端兩支掛鉤)——
 #   t_code_exts_lists_agree 釘五份一致 [S1]。不借 CODE_EXTS_T:那份是符號查核用的,內容不同。
@@ -44795,6 +44820,8 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
 
 
 _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
+# 僅 impact 的附件分類；不擴大 code-loop 留痕可改動的簿記範圍。
+_IMPACT_RECORD_DIRS = (*_BOOKKEEPING_DIRS, "governance/eval/results/")
 
 
 def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=True):
@@ -44807,7 +44834,7 @@ def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=Tru
     # 固定帳檔仍排除；目錄內的程式例外先成立，不再被文檔副檔名二次排掉。
     if f in _BOOKKEEPING_FILES:
         return False
-    if f.startswith(_BOOKKEEPING_DIRS):
+    if f.startswith(_IMPACT_RECORD_DIRS):
         kind = _nodehome_code_kind(f)
         if file_mode == "100755" or kind == "ext":
             return True
@@ -44842,7 +44869,7 @@ def _impact_diff_raw(repo_root, diff_args, deadline):
 
 def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
     """簿記來源取凍結模式與首行；普通來源不多查 Git。刪檔取舊物件。"""
-    if not any(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS) for f in files):
+    if not any(f in _BOOKKEEPING_FILES or f.startswith(_IMPACT_RECORD_DIRS) for f in files):
         return {}
     import time as _t
     raw = _impact_diff_raw(repo_root, diff_args, deadline)
@@ -44853,7 +44880,7 @@ def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
     for f, (old, new, old_oid, new_oid) in changes.items():
         mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
         out[f] = (mode, None)
-        if (f.startswith(_BOOKKEEPING_DIRS) and mode != "100755"
+        if (f.startswith(_IMPACT_RECORD_DIRS) and mode != "100755"
                 and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
                 and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
             ask.append((f, oid))
@@ -49924,6 +49951,11 @@ HELP_WHEN = {
     "loop rewrite": "人裁判「整份重寫」後收尾:記 rewrite 事件+血緣(prev/successor)進治理帳;連續第二次判重寫會警告強制攤人。",
     "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
     "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
+    "test-quality": "寫或審測試時找假測試:掃可疑寫法、跑可信本機測試收證、核對故障翻紅與還原綠;不裁決業務答案。",
+    "test-quality scan": "想知道測試裡有沒有自己比自己、重抄實作這類可疑寫法;零候選不代表測試有用。",
+    "test-quality capabilities": "接新技術棧前先看目前實際接入了哪些語言與證據格式、哪些範圍還沒驗。",
+    "test-quality capture": "要留下「這組測試真的跑過」的收據:執行可信本機測試命令,保存 JUnit 報告與來源快照。",
+    "test-quality check": "要證明測試抓得到某個錯:核對原版綠、故障版目標斷言紅、還原後綠三份收據。",
 }
 
 
@@ -49953,7 +49985,81 @@ def cmd_python_path():
     return 0
 
 
+_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': '97b1f6e950975add3c57029569974d2f981d02d017a3b23a5181e3bb20fad01d'}
+
+
+# 載入順序=依賴順序:轉接器頂層 import 共用 runner,被依賴者要先從已驗 bytes 登記,
+# 否則標準 import 會從磁碟(含舊 bytecode)另載一份(設計審 測試品質部署配套校驗 r1)。
+_TEST_QUALITY_LOAD_ORDER = ("test_quality.py", "test_quality_semgrep.py", "test_quality_scan.py")
+
+
+def _test_quality_bundle_unverified_refs(modules):
+    """回第一個「引用了配套模組或其物件、卻不是已驗那份」的位置;都對得上回 None。
+    以物件身分比對,不靠名字(包過一層的函式、工廠產物、取別名的實例名字都對不上);
+    數字與字串常數沒有來源資訊,這道核對看不到,靠依賴順序那道擋。"""
+    import types as _types
+    for name, module in modules.items():
+        for attr, value in list(vars(module).items()):
+            if isinstance(value, _types.ModuleType):
+                target = getattr(value, "__name__", None)
+                if target in modules and value is not modules[target]:
+                    return f"{name}.{attr} 不是已驗的 {target}"
+                continue
+            owner = getattr(value, "__module__", None)
+            if owner in modules and owner != name:
+                if not any(v is value for v in vars(modules[owner]).values()):
+                    return f"{name}.{attr} 不是已驗的 {owner}"
+    return None
+
+
+def _test_quality_bundle_sources():
+    folder = Path(__file__).resolve().parent
+    required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
+    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS) or required != set(_TEST_QUALITY_LOAD_ORDER):
+        raise ValueError("配套指紋清單或載入順序未對齊")
+    sources = {}
+    for name in sorted(_TEST_QUALITY_BUNDLE_DIGESTS, key=_TEST_QUALITY_LOAD_ORDER.index):
+        expected = _TEST_QUALITY_BUNDLE_DIGESTS[name]
+        fd = _regular_own_fd(folder / name, os.O_RDONLY, require_owner=False, follow=True)   # 非阻塞開檔後判一般檔:FIFO/裝置檔不會卡住每個指令
+        if fd is None:
+            raise ValueError("配套檔缺少或不是一般檔案:" + name)
+        with os.fdopen(fd, "rb") as stream:
+            raw = stream.read(10 * 1024 * 1024 + 1)
+        if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
+            raise ValueError("配套版本不一致:" + name)
+        sources[name.removesuffix(".py")] = (folder / name, raw)
+    return sources
+
+
+def _test_quality_load_bundle():
+    import importlib.util
+    missing = object()
+    previous = {}
+    try:
+        sources = _test_quality_bundle_sources()
+        previous = {name: sys.modules.get(name, missing) for name in sources}
+        loaded = {}
+        for name, (path, raw) in sources.items():
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            exec(compile(raw, str(path), "exec"), module.__dict__)
+            loaded[name] = module
+        stray = _test_quality_bundle_unverified_refs(loaded)
+        if stray:
+            raise ValueError("配套載入混到未驗來源:" + stray)
+    except Exception as exc:   # 配套任何錯誤都只讓 test-quality 回部署不完整,不拖垮其他指令
+        for name, module in previous.items():
+            if module is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+        return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
+    return None
+
+
 def main():
+    quality_deployment_error = _test_quality_load_bundle()
     class _LumosParser(argparse.ArgumentParser):
         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
 
@@ -50166,6 +50272,15 @@ def main():
                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
     cr.add_argument("--refuted-set", dest="refuted_set",
                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+
+    if quality_deployment_error:
+        quality = sub.add_parser("test-quality", add_help=False,
+                                 help="測試品質工具未完整部署，請更新來源與vendor")
+        quality.add_argument("quality_args", nargs=argparse.REMAINDER)
+        quality.add_argument("-h", "--help", action="store_true")
+    else:
+        from test_quality import add_parser as _tq_parser
+        _tq_parser(sub)
 
     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
@@ -50972,6 +51087,13 @@ def main():
                           yes=args.yes, source=args.source)
     if args.cmd == "prose-lint":
         return cmd_prose_lint(args.path)
+    if args.cmd == "test-quality":
+        if quality_deployment_error:
+            print(json.dumps({"verdict": "not_assessed", "complete": False,
+                              "reason": quality_deployment_error}, ensure_ascii=False))
+            return 2
+        from test_quality import dispatch as _tq_dispatch   # 配套已從驗過的 bytes 登記;缺檔在上面已回結構化錯誤
+        return _tq_dispatch(args)
     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
         return cmd_report_normalize(args.path, write=args.write)
     if args.cmd == "fold-check":

@@ -9815,9 +9815,10 @@ def t_deinit_vendored_toolkit_constant():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)  # __main__ guard → import 不跑 main
     expected = ("scripts/lumos", "scripts/test_lumos.py",
+                "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
                 "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
                 "scripts/fetch-notesmd.sh")
-    check("deinit: _VENDORED_TOOLKIT 5 檔且帶 scripts/ 前綴",
+    check("deinit: 品質工具在精確部署與移除清單內且帶 scripts/ 前綴",
           tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
 
 
@@ -79396,6 +79397,40 @@ def t_review_eval_trials():
 
 def t_review_eval_comparison():
     _review_convergence_unit_group("ComparisonTests")
+
+
+def t_test_quality_cli():
+    _need_src("scripts/test_test_quality_cli.py")
+    run = subprocess.run([sys.executable, "scripts/test_test_quality_cli.py"],
+                         cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
+    check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
+          (run.stdout + run.stderr)[-4000:])
+
+
+def t_test_quality_scan_cli():
+    _need_src("scripts/test_quality_scan.py")
+    _need_src("scripts/test_test_quality_scan.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
+                         cwd=root, capture_output=True, text=True, timeout=60)
+    import re
+    output = run.stdout + run.stderr
+    check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
+          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+          output[-5000:])
+
+
+
+def t_test_quality_handbook_controls():
+    import re
+    _need_src("governance/eval/test_test_quality_handbook.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
+                         cwd=root, capture_output=True, text=True, timeout=60)
+    output = run.stdout + run.stderr
+    check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
+          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+          output[-5000:])
 
 
 if __name__ == "__main__":

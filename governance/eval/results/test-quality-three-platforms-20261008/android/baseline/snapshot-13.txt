@@ -1,0 +1,27 @@
+import argparse, json, os, shutil, subprocess, sys
+from pathlib import Path
+import xml.etree.ElementTree as ET
+p=argparse.ArgumentParser();p.add_argument('--zero',action='store_true');a=p.parse_args()
+out=Path('.native-results');out.mkdir(exist_ok=True)
+env=os.environ.copy();env['ANDROID_HOME']=env.get('LUMOS_LAB_ANDROID_SDK','/Users/enzo/Library/Android/sdk');env['ANDROID_SERIAL']=env.get('LUMOS_LAB_ANDROID_SERIAL','emulator-5580')
+results=[Path('app/build/test-results/testDebugUnitTest'),Path('app/build/outputs/androidTest-results/connected')]
+for folder in results:
+    if folder.exists():shutil.rmtree(folder)
+commands=[['./gradlew',':app:testDebugUnitTest','--tests','lab.quality.NoSuchTest' if a.zero else 'lab.quality.PricingTest','--rerun-tasks','--no-build-cache','--console=plain'],
+          ['./gradlew',':app:connectedDebugAndroidTest','-Pandroid.testInstrumentationRunnerArguments.class='+('lab.quality.NoSuchTest' if a.zero else 'lab.quality.QuotePlatformTest'),'--rerun-tasks','--no-build-cache','--console=plain']]
+records=[]
+for i,cmd in enumerate(commands):
+    r=subprocess.run(cmd,env=env,capture_output=True,text=True)
+    (out/('native-'+str(i)+'.log')).write_text(r.stdout+r.stderr)
+    records.append({'argv':cmd,'exit_code':r.returncode})
+    print(r.stdout+r.stderr);print('native_exit_code='+str(r.returncode))
+(out/'native-exit.json').write_text(json.dumps(records,indent=2))
+merged=ET.Element('testsuites');raw_dir=out/'original-xml';raw_dir.mkdir()
+for i,path in enumerate(sorted(p for folder in results for p in folder.rglob('*.xml'))):
+    shutil.copy2(path,raw_dir/(str(i)+'-'+path.name))
+    root=ET.parse(path).getroot()
+    if root.tag=='testsuite':merged.append(root)
+    elif root.tag=='testsuites':merged.extend(list(root))
+    else:raise ValueError('unexpected native report root')
+ET.ElementTree(merged).write(out/'report.xml',encoding='utf-8',xml_declaration=True)
+sys.exit(0 if all(r['exit_code']==0 for r in records) else 1)

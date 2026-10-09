@@ -153,6 +153,7 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
    · 衍生資料：它是真相來源還是算出來的（快取、索引、彙總、狀態提示）？同一件事有多筆紀錄（重跑、重試、撤回）時取哪一筆？
    · 時間：時間戳與日期比大小、判過期時，拿一個具體時刻走一遍（例如台北凌晨 1 點＝UTC 的前一天）；時鐘倒退、兩台機器時間不一致呢？
    · 不可逆：刪除、覆寫、截斷、搬移資料，會不會連帶動到不該動的？
+   · 測試：讀 lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉，檢查本次測試的獨立判準與實際情境；修 bug／關鍵守衛核對抓錯證據，不能用結構檢查代替行為驗證。
    每條 finding 講清「**哪個輸入、走到哪一行**會出錯」，不是只點名詞。
    （風格好壞與架構一致性歸架構對齊席，不在這鏡頭。）
 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
@@ -251,7 +252,7 @@ nice-to-have 轉化成的 fix。
 {前面任務踩過的坑，一句話傳承：如「種子必須綁店否則 guard 測試假綠」}
 
 補充脈絡與慣例：
-1. TDD：先寫測試跑紅 → 實作 → 綠。{測試指令、環境變數、harness 模式指引}
+1. 測試品質先讀 lumos-project-notes 的 `commands/03-寫回圖譜.md`〈實作測試品質〉，列輸入／預期結果／判準來源／應抓到的錯誤。TDD：先寫測試跑紅 → 實作 → 綠。{測試指令、環境變數、harness 模式指引}
 2. {環境細節：PATH、連線字串來源}
 3. **commit 慣例（pre-commit gate 硬擋 code 無圖譜 commit）**：把計劃節點
    {路徑} 的 Task {N} checkbox 勾成 [x] 同 commit 進。message 照 brief。

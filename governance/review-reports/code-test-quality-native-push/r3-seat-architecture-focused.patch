@@ -1,0 +1,538 @@
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 78d7ccca..02dde78e 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -32,21 +32,21 @@ import os
+ import re
+ import time
+ import shlex
+ import subprocess
+ import sys
+ from pathlib import Path
+ 
+ # === 觸發提醒的原始碼副檔名 ===
+ CODE_EXTS = {
+     ".cs",                                                    # C# / .NET
+-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
++    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
+     ".sql",                                                   # DB migration
+     ".py",                                                    # Python
+     ".kt", ".kts",                                            # Kotlin / Compose
+     ".java",                                                  # Java
+     ".swift",                                                 # Swift
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+     ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;各份清單由 t_code_exts_lists_agree 釘)
+ }
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 76bd0064..c6b0fcac 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -24,21 +24,21 @@ import re
+ import subprocess
+ import sys
+ import tempfile
+ import time
+ from pathlib import Path
+ 
+ # === 觸發的原始碼副檔名 ===
+ # 同源:check-graph-sync.py(20 副檔名版)
+ CODE_EXTS = {
+     ".cs",                                                    # C# / .NET
+-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
++    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
+     ".sql",                                                   # DB migration
+     ".py",                                                    # Python
+     ".kt", ".kts",                                            # Kotlin / Compose
+     ".java",                                                  # Java
+     ".swift",                                                 # Swift
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+     ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;各份清單由 t_code_exts_lists_agree 釘)
+ }
+diff --git a/scripts/hooks/post-commit b/scripts/hooks/post-commit
+index 1407ca26..aa15b0f8 100755
+--- a/scripts/hooks/post-commit
++++ b/scripts/hooks/post-commit
+@@ -40,21 +40,21 @@ fi
+ # merge commit 不適用 bypass 概念 (內容來自既有 commit) → 跳過
+ if [[ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]]; then
+   exit 0
+ fi
+ 
+ # 本次 commit 的檔案清單 (quotePath=off 對齊 pre-commit 的中文路徑處理)
+ CHANGED="$(git -c core.quotePath=off diff-tree --no-commit-id --name-only -r HEAD)"
+ [[ -z "$CHANGED" ]] && exit 0
+ 
+ # code 副檔名與排除規則 (對齊 pre-commit / check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|cjs|mts|cts|php|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
+ 
+ is_shebang_code() {   # 沒副檔名的檔:看 剛 commit 的 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+   local path="$1" base
+   # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
+   if [[ "$path" == \"*\" && ${#path} -ge 2 ]]; then   # 長度守衛:單一個引號的假輸入不做子字串(r3 delta minor,set -u 下會吐錯)
+     path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="$(printf '%b' "$path")"   # \" 手解;\\ \t \ooo(控制字元)交給 printf %b(r3 外家:八進位沒解 → 找不到 → 放行)
+   fi
+   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show "HEAD:$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+   [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;各處同一條規則,由 t_code_exts_lists_agree 釘)
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index ab6e96ce..0a27a6e5 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -225,21 +225,21 @@ fi
+ # Gate NS: 筆記形狀擋(2026-09-27,Projects/筆記形狀擋_計劃):筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP 擋下。
+ # 判定全在 lumos 裡,這裡只呼叫;rc1=擋,其他非零放行(環境壞了不擋人)。
+ # ★下一行的「note-shape --staged」字樣是上線點標記★:lumos 用 git log -S 找這串第一次出現的提交,那之前的筆記算舊帳。
+ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+   ns_rc=0
+   "$CC_PY" "$REPO_ROOT/scripts/lumos" note-shape --staged --repo "$REPO_ROOT" || ns_rc=$?
+   [[ "$ns_rc" -eq 1 ]] && exit 1
+ fi
+ 
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|cjs|mts|cts|php|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
+ 
+ # 排除路徑
+ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+   local path="$1" base
+   # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
+   if [[ "$path" == \"*\" && ${#path} -ge 2 ]]; then   # 長度守衛:單一個引號的假輸入不做子字串(r3 delta minor,set -u 下會吐錯)
+     path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="$(printf '%b' "$path")"   # \" 手解;\\ \t \ooo(控制字元)交給 printf %b(r3 外家:八進位沒解 → 找不到 → 放行)
+   fi
+   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show ":$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+diff --git a/scripts/lumos b/scripts/lumos
+index b3c3e2df..4f5031a0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21563,21 +21563,21 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+         print(f"  root: {root}")
+         print("  拆閘: git config --unset core.hooksPath" if installed
+               else "  拆閘: (core.hooksPath 未設,略)")
+         if has_claude:
+             print("  剝 CLAUDE.md graph-discipline 區塊")
+         if will_delete_vault:
+             n = len([f for f in vault.rglob("*") if f.is_file()])
+             print(f"  刪圖譜 vault: {vault}({n} 檔)")
+         elif vault is not None:
+             print(f"  保留圖譜 vault: {vault}")
+-        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
++        print(f"  移除 vendored 工具組(白名單:{len(_VENDORED_TOOLKIT)} 檔 + hooks/templates 兩夾)")
+         return 0
+     if will_delete_vault and not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不刪圖譜。確定要刪就加 --yes",
+                   file=sys.stderr)
+             return 2
+         files = [f for f in vault.rglob("*") if f.is_file()]
+         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
+                                capture_output=True, text=True, errors="replace").stdout
+         n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+@@ -21956,28 +21956,52 @@ def _deinit_strip_claude(root: Path) -> bool:
+         ei = text.find(end_marker)
+         if si == -1 or ei == -1 or ei < si:
+             continue
+         ei += len(end_marker)
+         new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
+         _write_lf(cm, (new + "\n") if new else "")
+         hit = True
+     return hit
+ 
+ 
++def _deinit_remove_bytecode(root: Path) -> list:
++    cache = root / "scripts/__pycache__"
++    if (cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir()
++            or cache.resolve() != root.resolve() / "scripts/__pycache__"):
++        return []
++    names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
++    removed = []
++    patterns = [re.escape(name) + r"[.]cpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc" for name in names]
++    patterns.append(r"lumoscpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc")
++    for path in cache.glob("*.pyc"):
++        if not any(re.fullmatch(pattern, path.name) for pattern in patterns):
++            continue
++        try:
++            path.unlink()
++            removed.append(str(path.relative_to(root)))
++        except OSError as exc:
++            print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
++    try:
++        cache.rmdir()
++    except OSError:
++        pass  # 使用者的 bytecode 仍在時保留目錄。
++    return removed
++
++
+ def _deinit_remove_vendored(root: Path, src=None) -> list:
+-    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 固定 5 檔;
++    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 的精確檔名;
+     ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
+     F9 修(2026-07-24,Issues/deinit整夾刪使用者檔):不再整夾 rmtree——只刪 src 有的 lumos 檔、
+     保留使用者放這兩夾的自有檔,夾空了才移。fallback(a):src 缺(None 或來源夾不存在)→ 保守留夾
+     +warn、不刪(never delete unknown)。scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。
+     回傳已移除相對路徑列表。"""
+-    removed = []
++    removed = _deinit_remove_bytecode(root)
+     for rel in _VENDORED_TOOLKIT:
+         p = root / rel
+         if p.exists():
+             # ★刪不掉不該炸穿整個流程★(2026-08-01):這裡以前是裸 unlink()。
+             # 走 teardown 時,①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,
+             # 若在這裡拋 PermissionError(Windows 刪執行中的檔、防毒鎖檔),
+             # ③uninstall 根本沒機會跑 → 使用者拿到拆一半又只看到 traceback 的
+             # 狀態。改成印清楚哪一個檔沒刪掉、繼續往下走完;★不靜默★——沒刪掉
+             # 的檔不會被記進 removed,呼叫端印出來的清單仍然誠實。
+             # (Windows 自刪這條主要路徑另有 _selfdelete_risk 在 mutation 前擋。)
+@@ -22112,23 +22136,24 @@ def _version_nudge(root: Path) -> "str | None":
+     st = _ver_tuple(src_ver)
+     if ct is not None and st is not None and ct >= st:
+         return None  # CLAUDE 版本 ≥ 來源,不 nudge
+     # CLAUDE 落後(或無法比較)→ 提示
+     return (
+         f"本專案紀律區塊版本 {claude_ver} 落後來源 {src_ver},"
+         f" 可跑 lumos update 刷新"
+     )
+ 
+ 
+-# vendored 工具組白名單(固定 5 檔,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
++# vendored 工具組白名單(精確檔名,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。
+ # _vendor_toolchain 安裝端與 cmd_deinit 移除端共用,避免漂移。
+ _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
++                     "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
+                      "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                      "scripts/fetch-notesmd.sh")
+ _VENDORED_TREE_DIRS = ("scripts/hooks", "scripts/templates")   # 安裝時整個目錄照來源複製過去的那兩個
+ # ★工具確實會安裝進消費專案的每一支檔(精確檔名)★——跳過判斷只認這張表,不認目錄前綴。
+ # 2026-09-10 代碼審 r1 四席獨立抓到:原本照目錄前綴跳過,消費專案自己放在 scripts/hooks、
+ # scripts/templates 的程式會被當成工具的檔,推送閘的風險分級被降、逃過代碼審。
+ # 表要跟工具鏈 repo 裡那兩個目錄底下受版控的檔一模一樣:有一支測試逐檔比對,少登記或多登記都會翻紅。
+ _VENDORED_TREE_FILES = (
+     "scripts/hooks/claude/_hookevent.py",
+     "scripts/hooks/claude/check-graph-sync.py",
+@@ -26487,21 +26512,21 @@ def _review_role_changed_files(root, base, head, deadline=None):
+             path, ref, i = toks[i + 2], head, i + 3
+         else:
+             path, ref, i = toks[i + 1], (base if st[:1] == "D" else head), i + 2
+         out.append((path, ref))
+     modes = _impact_diff_modes(root, [path for path, _ref in out] + [old for old, _new in renamed],
+                                base, head, deadline=deadline)
+     if modes is None:
+         return None
+     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+     out += [(old, base) for old, new in renamed
+-            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
++            if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
+             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+     return [(path, ref) for path, ref in out
+             if not _PITFALL_DIFF_TEST_PAT.search(path)
+             and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+ def _review_roles(root, base, head, budget=_ROLE_BUDGET):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+@@ -28623,21 +28648,21 @@ def _lint_watch_mode(repo_root, as_json):
+     else:
+         for c in candidates:
+             print(f"{c['name']} {c['current']} → {c['latest']}")
+     return 0
+ 
+ 
+ # ── 每支檔有家:程式檔歸屬與寫回落點的檢查(Projects/每支檔有家_計劃,2026-09-11) ──────────────
+ # ★為什麼存在★:一篇節點在依賴行用反引號寫別人的檔,改那些檔時推筆記就推它、寫回就落它——兩個消費專案兩天內
+ # 長歪兩次、工具全綠。這一段在提交與推送的當下擋「新違規」,舊帳交給健檢提醒(決策 d1)。
+ # 單源=計劃節點;每條規則的註解標它對回的條款編號 [SN]。
+-_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".sql", ".py", ".kt", ".kts",
++_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php", ".sql", ".py", ".kt", ".kts",
+                        ".java", ".swift", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".ps1"}
+ # ↑「改程式要動圖譜」那道閘的第五份副本(另外四份在提交前/提交後掛鉤與 Claude 端兩支掛鉤)——
+ #   t_code_exts_lists_agree 釘五份一致 [S1]。不借 CODE_EXTS_T:那份是符號查核用的,內容不同。
+ _NODEHOME_EXCLUDE_GLOBS = ("docs/*", "*/node_modules/*", "*/bin/*", "*/obj/*", "*/.git/*",
+                            "*/dist/*", "*/build/*", "*/__pycache__/*")
+ # ↑ 跟提交前掛鉤 should_exclude 的目錄排除同一份(t_nodehome_required_files_definition 逐字比對)
+ _NODEHOME_HOME_STATUSES = ("doing", "done", "stale")   # [S2] planned/deferred 還不是現況、rejected/superseded 已不是
+ _NODEHOME_GATE_VALUES = ("on", "warn", "off")          # [S37]
+ _NODEHOME_MAX_FILES_DEFAULT = 3                        # [S18] 跟開新節點提示的「0~3 支」一致
+ _NODEHOME_RESP_MIN_CHARS = 10                          # [S16]
+@@ -44029,33 +44054,35 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+         if all_incidents:
+             print(f"── 相關事故 ({len(all_incidents)}) ──")
+             for x in all_incidents:
+                 contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+                 print(f"  {x['node']}{contract_tag}  (trigger: {x['matched_by']})")
+ 
+     return 0
+ 
+ 
+ _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
++# 僅 impact 的附件分類；不擴大 code-loop 留痕可改動的簿記範圍。
++_IMPACT_RECORD_DIRS = (*_BOOKKEEPING_DIRS, "governance/eval/results/")
+ 
+ 
+ def _impact_diff_seed_ok(f, file_mode=None, shebang=None, *, unknown_is_code=True):
+     """--diff 種子過濾:只收 code 檔。剔除圖譜/凍結快照/帳檔(.jsonl)/文檔(.md)/
+     簿記分類沿用 _BOOKKEEPING_FILES/_BOOKKEEPING_DIRS,卷證不是程式;
+     governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。
+     unknown_is_code 預設保留未知；僅改名補償用 False 判「新側已確認是程式」，不把未知當確認。"""
+     if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP):
+         return False
+     # 固定帳檔仍排除；目錄內的程式例外先成立，不再被文檔副檔名二次排掉。
+     if f in _BOOKKEEPING_FILES:
+         return False
+-    if f.startswith(_BOOKKEEPING_DIRS):
++    if f.startswith(_IMPACT_RECORD_DIRS):
+         kind = _nodehome_code_kind(f)
+         if file_mode == "100755" or kind == "ext":
+             return True
+         if kind == "shebang?":
+             if shebang is None:
+                 return unknown_is_code  # 選種子時保留未知；改名補舊側時未知不是新程式的證明。
+             return shebang is not False
+         return file_mode is None and unknown_is_code
+     if f.endswith((".jsonl", ".md")):
+         return False
+@@ -44076,32 +44103,32 @@ def _impact_diff_raw(repo_root, diff_args, deadline):
+             return b""  # 未知模式，不把它當附件排除。
+         r = _lens_git(repo_root, *args, binary=True, timeout=left)
+         raw = r.stdout if r is not None and r.returncode == 0 else None
+         if raw is None and _t.monotonic() >= deadline:
+             return b""
+     return raw
+ 
+ 
+ def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
+     """簿記來源取凍結模式與首行；普通來源不多查 Git。刪檔取舊物件。"""
+-    if not any(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIRS) for f in files):
++    if not any(f in _BOOKKEEPING_FILES or f.startswith(_IMPACT_RECORD_DIRS) for f in files):
+         return {}
+     import time as _t
+     raw = _impact_diff_raw(repo_root, diff_args, deadline)
+     changes = _codeloop_raw_changes(raw) if raw is not None else None
+     if changes is None:
+         return None
+     out, ask = {}, []
+     for f, (old, new, old_oid, new_oid) in changes.items():
+         mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
+         out[f] = (mode, None)
+-        if (f.startswith(_BOOKKEEPING_DIRS) and mode != "100755"
++        if (f.startswith(_IMPACT_RECORD_DIRS) and mode != "100755"
+                 and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
+                 and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
+             ask.append((f, oid))
+     if ask:
+         left = _disp_git_timeout() if deadline is None else min(_disp_git_timeout(), deadline - _t.monotonic())
+         if left <= 0:
+             return out
+         heads = _nodehome_cat_blobs_capped(repo_root, [oid for _f, oid in ask],
+                                           _CODELOOP_BOOKKEEPING_HEAD_CAP, timeout=left,
+                                           max_total_bytes=_CODELOOP_BOOKKEEPING_HEAD_CAP, deadline=deadline)
+@@ -49187,21 +49214,62 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': 'd945c8d9437a61de7942d28b9cefd578c0dd68e4fddf4851d2db1eb3a934d3d1', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
++
++
++def _test_quality_bundle_sources():
++    folder = Path(__file__).resolve().parent
++    required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
++    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
++        raise ValueError("配套指紋清單未對齊")
++    sources = {}
++    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
++        with (folder / name).open("rb") as stream:
++            raw = stream.read(10 * 1024 * 1024 + 1)
++        if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
++            raise ValueError("配套版本不一致:" + name)
++        sources[name.removesuffix(".py")] = (folder / name, raw)
++    return sources
++
++
++def _test_quality_load_bundle():
++    import importlib.util
++    missing = object()
++    previous = {}
++    try:
++        sources = _test_quality_bundle_sources()
++        previous = {name: sys.modules.get(name, missing) for name in sources}
++        for name, (path, raw) in sources.items():
++            spec = importlib.util.spec_from_file_location(name, path)
++            module = importlib.util.module_from_spec(spec)
++            sys.modules[name] = module
++            exec(compile(raw, str(path), "exec"), module.__dict__)
++    except (OSError, ValueError, ImportError, SyntaxError) as exc:
++        for name, module in previous.items():
++            if module is missing:
++                sys.modules.pop(name, None)
++            else:
++                sys.modules[name] = module
++        return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
++    return None
++
++
+ def main():
++    quality_deployment_error = _test_quality_load_bundle()
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
+         提到模組層會讓人以為別處也該拿它當一般工具用,反而要多寫一段「只給 main 用」的說明。
+@@ -49401,20 +49469,29 @@ def main():
+     cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                     help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
+     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
+                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
++    if quality_deployment_error:
++        quality = sub.add_parser("test-quality", add_help=False,
++                                 help="測試品質工具未完整部署，請更新來源與vendor")
++        quality.add_argument("quality_args", nargs=argparse.REMAINDER)
++        quality.add_argument("--help", action="store_true")
++    else:
++        from test_quality import add_parser as _tq_parser
++        _tq_parser(sub)
++
+     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
+     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+     ls.add_argument("loop_id")
+     ls.add_argument("--need", type=int, default=None, help="連續乾淨輪數 K(預設 2;--settle 下禁用)")
+     ls.add_argument("--disposal", action="store_true",
+@@ -50203,20 +50280,33 @@ def main():
+                              init=args.auto_init, allow_stale=args.allow_stale)
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+     if args.cmd == "prose-lint":
+         return cmd_prose_lint(args.path)
++    if args.cmd == "test-quality":
++        if quality_deployment_error:
++            print(json.dumps({"verdict": "not_assessed", "complete": False,
++                              "reason": quality_deployment_error}, ensure_ascii=False))
++            return 2
++        try:
++            from test_quality import dispatch as _tq_dispatch
++        except ModuleNotFoundError as exc:
++            if exc.name != "test_quality":
++                raise
++            print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
++            return 2
++        return _tq_dispatch(args)
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
+                             disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 61581700..972b49a2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -9791,23 +9791,24 @@ def t_link_or_copy_idempotent():
+ 
+ 
+ def t_deinit_vendored_toolkit_constant():
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     spec = importlib.util.spec_from_file_location(
+         "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+     m = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(m)  # __main__ guard → import 不跑 main
+     expected = ("scripts/lumos", "scripts/test_lumos.py",
++                "scripts/test_quality.py", "scripts/test_quality_scan.py", "scripts/test_quality_semgrep.py",
+                 "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                 "scripts/fetch-notesmd.sh")
+-    check("deinit: _VENDORED_TOOLKIT 5 檔且帶 scripts/ 前綴",
++    check("deinit: 品質工具在精確部署與移除清單內且帶 scripts/ 前綴",
+           tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
+ 
+ 
+ def _load_lumos():
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     spec = importlib.util.spec_from_file_location(
+         "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+     m = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(m)
+@@ -75980,12 +75981,46 @@ def t_review_eval_case():
+ 
+ 
+ def t_review_eval_trials():
+     _review_convergence_unit_group("TrialTests")
+ 
+ 
+ def t_review_eval_comparison():
+     _review_convergence_unit_group("ComparisonTests")
+ 
+ 
++def t_test_quality_cli():
++    _need_src("scripts/test_test_quality_cli.py")
++    run = subprocess.run([sys.executable, "scripts/test_test_quality_cli.py"],
++                         cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
++    check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
++          (run.stdout + run.stderr)[-4000:])
++
++
++def t_test_quality_scan_cli():
++    _need_src("scripts/test_quality_scan.py")
++    _need_src("scripts/test_test_quality_scan.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
++                         cwd=root, capture_output=True, text=True, timeout=60)
++    import re
++    output = run.stdout + run.stderr
++    check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
++          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
++          output[-5000:])
++
++
++
++def t_test_quality_handbook_controls():
++    import re
++    _need_src("governance/eval/test_test_quality_handbook.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
++                         cwd=root, capture_output=True, text=True, timeout=60)
++    output = run.stdout + run.stderr
++    check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
++          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
++          output[-5000:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

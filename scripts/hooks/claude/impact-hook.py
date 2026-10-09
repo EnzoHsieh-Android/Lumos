@@ -31,7 +31,7 @@ from pathlib import Path
 # 同源:check-graph-sync.py(20 副檔名版)
 CODE_EXTS = {
     ".cs",                                                    # C# / .NET
-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
+    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
     ".sql",                                                   # DB migration
     ".py",                                                    # Python
     ".kt", ".kts",                                            # Kotlin / Compose

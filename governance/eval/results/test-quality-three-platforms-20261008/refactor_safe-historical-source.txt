@@ -1,0 +1,23 @@
+"""Targeted additional native run after overflow risk discovered; no prior evidence overwritten."""
+from pathlib import Path
+import json,shutil,subprocess,sys
+from run_platform_experiment import CONFIG
+stack=sys.argv[1];c=CONFIG[stack];root=Path(__file__).resolve().parent/stack
+result=json.loads(Path('/tmp/tq-'+stack+'-result.json').read_text());out=Path(result['artifacts'])
+source=root/c['source'];old=source.read_bytes();native=root/'.native-results'
+try:
+ source.write_text(c['refactor'])
+ if native.exists():shutil.rmtree(native)
+ args=[sys.executable,str(root/'scripts/lumos'),'test-quality','capture','--out',str(out/'refactor-safe'),'--language',c['language'],'--framework',c['framework'],'--timeout','300','--report','.native-results/report.xml']
+ for flag,paths in [('--source',c['sources']),('--test-source',c['tests']),('--context',c['context']+['native_run.py','REQUIREMENTS.md','runtime.json']),('--target',c['targets'])]:
+  for path in paths:args += [flag,path]
+ args += ['--',sys.executable,'native_run.py']
+ r=subprocess.run(args,cwd=root,capture_output=True,text=True,timeout=330)
+ assert r.returncode==0,r.stdout
+ shutil.copytree(native,out/'refactor-safe/native')
+ args=[sys.executable,str(root/'scripts/lumos'),'test-quality','check',str(out/'baseline'),str(out/'fault'),str(out/'restored'),'--refactor',str(out/'refactor-safe'),'--oracle-note','REQUIREMENTS.md','--out',str(out/'check-safe.json')]
+ for target in c['targets']:args += ['--target',target]
+ r=subprocess.run(args,cwd=root,capture_output=True,text=True,timeout=30)
+ assert r.returncode==0,r.stdout
+ print(r.stdout)
+finally:source.write_bytes(old)

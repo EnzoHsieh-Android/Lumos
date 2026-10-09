@@ -1,0 +1,342 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index a462c5e2..4f5031a0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21563,21 +21563,21 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+         print(f"  root: {root}")
+         print("  拆閘: git config --unset core.hooksPath" if installed
+               else "  拆閘: (core.hooksPath 未設,略)")
+         if has_claude:
+             print("  剝 CLAUDE.md graph-discipline 區塊")
+         if will_delete_vault:
+             n = len([f for f in vault.rglob("*") if f.is_file()])
+             print(f"  刪圖譜 vault: {vault}({n} 檔)")
+         elif vault is not None:
+             print(f"  保留圖譜 vault: {vault}")
+-        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
++        print(f"  移除 vendored 工具組(白名單:{len(_VENDORED_TOOLKIT)} 檔 + hooks/templates 兩夾)")
+         return 0
+     if will_delete_vault and not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不刪圖譜。確定要刪就加 --yes",
+                   file=sys.stderr)
+             return 2
+         files = [f for f in vault.rglob("*") if f.is_file()]
+         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
+                                capture_output=True, text=True, errors="replace").stdout
+         n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+@@ -21958,31 +21958,35 @@ def _deinit_strip_claude(root: Path) -> bool:
+             continue
+         ei += len(end_marker)
+         new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
+         _write_lf(cm, (new + "\n") if new else "")
+         hit = True
+     return hit
+ 
+ 
+ def _deinit_remove_bytecode(root: Path) -> list:
+     cache = root / "scripts/__pycache__"
+-    if cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir():
++    if (cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir()
++            or cache.resolve() != root.resolve() / "scripts/__pycache__"):
+         return []
+     names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
+     removed = []
+-    for name in names:
+-        for path in cache.glob(name + ".*.pyc"):
+-            try:
+-                path.unlink()
+-                removed.append(str(path.relative_to(root)))
+-            except OSError as exc:
+-                print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
++    patterns = [re.escape(name) + r"[.]cpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc" for name in names]
++    patterns.append(r"lumoscpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc")
++    for path in cache.glob("*.pyc"):
++        if not any(re.fullmatch(pattern, path.name) for pattern in patterns):
++            continue
++        try:
++            path.unlink()
++            removed.append(str(path.relative_to(root)))
++        except OSError as exc:
++            print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
+     try:
+         cache.rmdir()
+     except OSError:
+         pass  # 使用者的 bytecode 仍在時保留目錄。
+     return removed
+ 
+ 
+ def _deinit_remove_vendored(root: Path, src=None) -> list:
+     """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 的精確檔名;
+     ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
+@@ -26508,21 +26512,21 @@ def _review_role_changed_files(root, base, head, deadline=None):
+             path, ref, i = toks[i + 2], head, i + 3
+         else:
+             path, ref, i = toks[i + 1], (base if st[:1] == "D" else head), i + 2
+         out.append((path, ref))
+     modes = _impact_diff_modes(root, [path for path, _ref in out] + [old for old, _new in renamed],
+                                base, head, deadline=deadline)
+     if modes is None:
+         return None
+     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+     out += [(old, base) for old, new in renamed
+-            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
++            if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
+             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+     return [(path, ref) for path, ref in out
+             if not _PITFALL_DIFF_TEST_PAT.search(path)
+             and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+ def _review_roles(root, base, head, budget=_ROLE_BUDGET):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+@@ -28644,21 +28648,21 @@ def _lint_watch_mode(repo_root, as_json):
+     else:
+         for c in candidates:
+             print(f"{c['name']} {c['current']} → {c['latest']}")
+     return 0
+ 
+ 
+ # ── 每支檔有家:程式檔歸屬與寫回落點的檢查(Projects/每支檔有家_計劃,2026-09-11) ──────────────
+ # ★為什麼存在★:一篇節點在依賴行用反引號寫別人的檔,改那些檔時推筆記就推它、寫回就落它——兩個消費專案兩天內
+ # 長歪兩次、工具全綠。這一段在提交與推送的當下擋「新違規」,舊帳交給健檢提醒(決策 d1)。
+ # 單源=計劃節點;每條規則的註解標它對回的條款編號 [SN]。
+-_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".sql", ".py", ".kt", ".kts",
++_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php", ".sql", ".py", ".kt", ".kts",
+                        ".java", ".swift", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".ps1"}
+ # ↑「改程式要動圖譜」那道閘的第五份副本(另外四份在提交前/提交後掛鉤與 Claude 端兩支掛鉤)——
+ #   t_code_exts_lists_agree 釘五份一致 [S1]。不借 CODE_EXTS_T:那份是符號查核用的,內容不同。
+ _NODEHOME_EXCLUDE_GLOBS = ("docs/*", "*/node_modules/*", "*/bin/*", "*/obj/*", "*/.git/*",
+                            "*/dist/*", "*/build/*", "*/__pycache__/*")
+ # ↑ 跟提交前掛鉤 should_exclude 的目錄排除同一份(t_nodehome_required_files_definition 逐字比對)
+ _NODEHOME_HOME_STATUSES = ("doing", "done", "stale")   # [S2] planned/deferred 還不是現況、rejected/superseded 已不是
+ _NODEHOME_GATE_VALUES = ("on", "warn", "off")          # [S37]
+ _NODEHOME_MAX_FILES_DEFAULT = 3                        # [S18] 跟開新節點提示的「0~3 支」一致
+ _NODEHOME_RESP_MIN_CHARS = 10                          # [S16]
+@@ -49210,37 +49214,62 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-def _test_quality_deployment_ready(argv):
+-    if argv[:1] != ["test-quality"]:
+-        return True
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': 'd945c8d9437a61de7942d28b9cefd578c0dd68e4fddf4851d2db1eb3a934d3d1', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
++
++
++def _test_quality_bundle_sources():
+     folder = Path(__file__).resolve().parent
+-    required = [Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")]
+-    missing = [p for p in required if not (folder / p).is_file()]
+-    if not missing:
+-        return True
+-    import json
+-    print(json.dumps({"verdict": "not_assessed", "complete": False,
+-                      "reason": "測試品質工具未完整部署:缺 " + ", ".join(missing) + "；請 lumos update。"}, ensure_ascii=False))
+-    return False
++    required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
++    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
++        raise ValueError("配套指紋清單未對齊")
++    sources = {}
++    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
++        with (folder / name).open("rb") as stream:
++            raw = stream.read(10 * 1024 * 1024 + 1)
++        if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
++            raise ValueError("配套版本不一致:" + name)
++        sources[name.removesuffix(".py")] = (folder / name, raw)
++    return sources
++
++
++def _test_quality_load_bundle():
++    import importlib.util
++    missing = object()
++    previous = {}
++    try:
++        sources = _test_quality_bundle_sources()
++        previous = {name: sys.modules.get(name, missing) for name in sources}
++        for name, (path, raw) in sources.items():
++            spec = importlib.util.spec_from_file_location(name, path)
++            module = importlib.util.module_from_spec(spec)
++            sys.modules[name] = module
++            exec(compile(raw, str(path), "exec"), module.__dict__)
++    except (OSError, ValueError, ImportError, SyntaxError) as exc:
++        for name, module in previous.items():
++            if module is missing:
++                sys.modules.pop(name, None)
++            else:
++                sys.modules[name] = module
++        return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
++    return None
+ 
+ 
+ def main():
+-    if not _test_quality_deployment_ready(sys.argv[1:]):
+-        return 2
++    quality_deployment_error = _test_quality_load_bundle()
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
+         提到模組層會讓人以為別處也該拿它當一般工具用,反而要多寫一段「只給 main 用」的說明。
+@@ -49440,27 +49469,27 @@ def main():
+     cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                     help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
+     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
+                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
+-    try:
+-        from test_quality import add_parser as _tq_parser
+-    except ModuleNotFoundError as exc:
+-        if exc.name != "test_quality":
+-            raise
+-        sub.add_parser("test-quality", help="測試品質工具未完整部署，請更新來源與vendor")
++    if quality_deployment_error:
++        quality = sub.add_parser("test-quality", add_help=False,
++                                 help="測試品質工具未完整部署，請更新來源與vendor")
++        quality.add_argument("quality_args", nargs=argparse.REMAINDER)
++        quality.add_argument("--help", action="store_true")
+     else:
++        from test_quality import add_parser as _tq_parser
+         _tq_parser(sub)
+ 
+     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
+     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+     ls.add_argument("loop_id")
+@@ -50252,20 +50281,24 @@ def main():
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+     if args.cmd == "prose-lint":
+         return cmd_prose_lint(args.path)
+     if args.cmd == "test-quality":
++        if quality_deployment_error:
++            print(json.dumps({"verdict": "not_assessed", "complete": False,
++                              "reason": quality_deployment_error}, ensure_ascii=False))
++            return 2
+         try:
+             from test_quality import dispatch as _tq_dispatch
+         except ModuleNotFoundError as exc:
+             if exc.name != "test_quality":
+                 raise
+             print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
+             return 2
+         return _tq_dispatch(args)
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index bdf16b47..eb03361b 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -118,24 +118,27 @@ def assertion_failure(node):
+     if not kind:
+         # AGP instrumentation XML omits type/message; the first exception and
+         # its JUnit assertion frame identify the measured failure origin.
+         text = ''.join(node.itertext()).strip()
+         if text.startswith('java.lang.AssertionError:') and re.search(r'\bat org\.junit\.Assert\.(?:fail|assert)\w*\(', text):
+             return True
+         return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
+     return False
+ 
+ 
++class NoDtdTreeBuilder(ET.TreeBuilder):
++    def doctype(self, name, pubid, system):
++        raise ValueError("DTD/entity declarations not accepted")
++
++
+ def junit(raw):
+-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+-        raise ValueError('DTD/entity declarations not accepted')
+-    root = ET.fromstring(raw)
++    root = ET.fromstring(raw, parser=ET.XMLParser(target=NoDtdTreeBuilder()))
+     tag = xml_tag
+     if tag(root) not in {'testsuites', 'testsuite'}:
+         raise ValueError('expected JUnit testsuite(s)')
+     cases = []
+     for node in root.iter():
+         if tag(node) != 'testcase':
+             continue
+         name = node.get('name')
+         if not name:
+             raise ValueError('testcase missing name')
+@@ -150,20 +153,24 @@ def junit(raw):
+         cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
+                       'reason': reason[:4000]})
+     ids = [c['id'] for c in cases]
+     if len(ids) != len(set(ids)):
+         raise ValueError('duplicate test identities')
+     if not cases:
+         raise ValueError('zero testcases')
+     # Suite-level errors must not disappear behind passing testcase rows.
+     if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
+         raise ValueError('runner/suite errors')
++    attached = {id(n) for case in root.iter() if tag(case) == "testcase"
++                for n in case if tag(n) in {"failure", "skipped"}}
++    if any(tag(n) in {"failure", "skipped"} and id(n) not in attached for n in root.iter()):
++        raise ValueError("outcome outside testcase")
+     validate_suite_counts(root)
+     return cases
+ 
+ 
+ def add_parser(sub):
+     p = sub.add_parser('test-quality', help='測試品質候選掃描、可信本機測試收證與三階段JUnit證據核對；不裁決業務答案')
+     actions = p.add_subparsers(dest='tqcmd', required=True)
+     scan = actions.add_parser('scan', help='唯讀來源掃描，零候選不是品質通過')
+     try:
+         from test_quality_scan import add_scan_arguments
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+index e6d4af7f..415a0890 100644
+--- a/scripts/test_quality_semgrep.py
++++ b/scripts/test_quality_semgrep.py
+@@ -18,21 +18,24 @@ PATTERNS = {
+     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+     'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+ }
+ 
+ 
+ def backend_findings(result, source, path, raw):
+     findings = []
+     for item in result['results']:
+         if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
+             raise ValueError('invalid finding shape')
+-        if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
++        rule = item.get('check_id')
++        if not isinstance(rule, str):
++            raise ValueError('invalid finding rule')
++        if rule.split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+             raise ValueError('unexpected finding rule or snapshot')
+         line = item['start']['line']
+         if type(line) is not int or line < 1:
+             raise ValueError('invalid finding location')
+         findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
+                          'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
+                          'reason': '斷言兩側是相同語法表達式',
+                          'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
+                          'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
+     return findings

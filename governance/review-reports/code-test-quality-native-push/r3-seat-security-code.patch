@@ -1,0 +1,1005 @@
+diff --git a/governance/eval/test_test_quality_handbook.py b/governance/eval/test_test_quality_handbook.py
+index ee70d314e2b6af56858a5aa91b23c728c8ec7c05..28527573a486e58c52fdf1a644892ba3d7fa44fa 100644
+--- a/governance/eval/test_test_quality_handbook.py
++++ b/governance/eval/test_test_quality_handbook.py
+@@ -1,13 +1,22 @@
+ #!/usr/bin/env python3
+ """Independent controls for the fixed handbook experiment grader."""
+ import unittest
++import os
++from pathlib import Path
++import shutil
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++from unittest import mock
+ import test_quality_handbook as ev
+ 
+ HEADER = 'import unittest\nfrom subject import total\nclass Tests(unittest.TestCase):\n'
+ GOOD = HEADER + '''    def test_boundary(self):
+         self.assertEqual(total(3,101),287)
+     def test_reason(self):
+         with self.assertRaisesRegex(ValueError,"^negative$"):
+             total(-1,101)
+ '''
+ 
+@@ -89,12 +98,76 @@ class Tests(unittest.TestCase):
+     def test_odd(self):
+         self.assertEqual(route(3,True),"B")
+     def test_inactive(self):
+         with self.assertRaisesRegex(ValueError,"^inactive$"):
+             route(2,False)
+ '''
+         result = ev.score('routing', code)
+         self.assertEqual([c['status'] for c in result['checks']], ['detected'] * 3)
+ 
+ 
++class ModelCommandTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name)
++        self.addCleanup(self.temp.cleanup)
++
++    @staticmethod
++    def alive(pid):
++        run = subprocess.run(
++            ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True
++        )
++        return (
++            run.returncode == 0
++            and bool(run.stdout.strip())
++            and not run.stdout.strip().startswith("Z")
++        )
++
++
++    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
++    def test_model_timeout_stops_worker_without_paid_call(self):
++        module = ev
++        binary = self.root / "bin"
++        binary.mkdir()
++        fake = binary / "claude"
++        pidfile = self.root / "worker.pid"
++        fake.write_text(
++            "#!"
++            + sys.executable
++            + '\nimport subprocess,sys,time\nfrom pathlib import Path\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\nPath('
++            + repr(str(pidfile))
++            + ").write_text(str(p.pid))\ntime.sleep(60)\n"
++        )
++        fake.chmod(0o755)
++        with mock.patch.dict(
++            os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}
++        ):
++            self.assertEqual(
++                shutil.which("claude"),
++                str(fake),
++                "fixture entrypoint, never real provider",
++            )
++            result, _ = module.run_model(
++                self.root,
++                "fixture",
++                "fixture",
++                "fixture-model",
++                1,
++                False,
++                self.root / "raw.jsonl",
++            )
++        self.assertTrue(pidfile.exists(), "worker actually launched before timeout")
++        pid = int(pidfile.read_text())
++        self.addCleanup(
++            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++        )
++        self.assertFalse(result["valid"])
++        self.assertIsNone(result["returncode"])
++        deadline = time.monotonic() + 2
++        while self.alive(pid) and time.monotonic() < deadline:
++            time.sleep(0.02)
++        self.assertFalse(self.alive(pid))
++
++
++
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 78d7ccca5bad4dd6f964f284de4345e046bf1834..02dde78e386d117f74619445f5e4f3d5b83d397b 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -32,21 +32,21 @@ import os
+ import re
+ import time
+ import shlex
+ import subprocess
+ import sys
+ from pathlib import Path
+ 
+ # === 觸發提醒的原始碼副檔名 ===
+ CODE_EXTS = {
+     ".cs",                                                    # C# / .NET
+-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
++    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
+     ".sql",                                                   # DB migration
+     ".py",                                                    # Python
+     ".kt", ".kts",                                            # Kotlin / Compose
+     ".java",                                                  # Java
+     ".swift",                                                 # Swift
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+     ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;各份清單由 t_code_exts_lists_agree 釘)
+ }
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 76bd0064e1152346a83c9611a3ddbbe9b42b98a6..c6b0fcac677a259877e148dd47b6945901176a36 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -24,21 +24,21 @@ import re
+ import subprocess
+ import sys
+ import tempfile
+ import time
+ from pathlib import Path
+ 
+ # === 觸發的原始碼副檔名 ===
+ # 同源:check-graph-sync.py(20 副檔名版)
+ CODE_EXTS = {
+     ".cs",                                                    # C# / .NET
+-    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",             # 前端
++    ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php",             # 前端
+     ".sql",                                                   # DB migration
+     ".py",                                                    # Python
+     ".kt", ".kts",                                            # Kotlin / Compose
+     ".java",                                                  # Java
+     ".swift",                                                 # Swift
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+     ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;各份清單由 t_code_exts_lists_agree 釘)
+ }
+diff --git a/scripts/hooks/post-commit b/scripts/hooks/post-commit
+index 1407ca2668ebbbce30b9fde926e2d6a0180863eb..aa15b0f8fcca33100f004bef9da96d54a71e56d1 100755
+--- a/scripts/hooks/post-commit
++++ b/scripts/hooks/post-commit
+@@ -40,21 +40,21 @@ fi
+ # merge commit 不適用 bypass 概念 (內容來自既有 commit) → 跳過
+ if [[ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]]; then
+   exit 0
+ fi
+ 
+ # 本次 commit 的檔案清單 (quotePath=off 對齊 pre-commit 的中文路徑處理)
+ CHANGED="$(git -c core.quotePath=off diff-tree --no-commit-id --name-only -r HEAD)"
+ [[ -z "$CHANGED" ]] && exit 0
+ 
+ # code 副檔名與排除規則 (對齊 pre-commit / check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|cjs|mts|cts|php|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
+ 
+ is_shebang_code() {   # 沒副檔名的檔:看 剛 commit 的 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+   local path="$1" base
+   # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
+   if [[ "$path" == \"*\" && ${#path} -ge 2 ]]; then   # 長度守衛:單一個引號的假輸入不做子字串(r3 delta minor,set -u 下會吐錯)
+     path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="$(printf '%b' "$path")"   # \" 手解;\\ \t \ooo(控制字元)交給 printf %b(r3 外家:八進位沒解 → 找不到 → 放行)
+   fi
+   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show "HEAD:$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+   [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;各處同一條規則,由 t_code_exts_lists_agree 釘)
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index ab6e96ceaaa114d3e63d0f2a967a65a0d7afa55a..0a27a6e5113080c57f91565bf8e96d9c5fafe2fa 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -225,21 +225,21 @@ fi
+ # Gate NS: 筆記形狀擋(2026-09-27,Projects/筆記形狀擋_計劃):筆記新寫的程式行號引用、沒寫來源的 FACT/FLOW/DEP 擋下。
+ # 判定全在 lumos 裡,這裡只呼叫;rc1=擋,其他非零放行(環境壞了不擋人)。
+ # ★下一行的「note-shape --staged」字樣是上線點標記★:lumos 用 git log -S 找這串第一次出現的提交,那之前的筆記算舊帳。
+ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+   ns_rc=0
+   "$CC_PY" "$REPO_ROOT/scripts/lumos" note-shape --staged --repo "$REPO_ROOT" || ns_rc=$?
+   [[ "$ns_rc" -eq 1 ]] && exit 1
+ fi
+ 
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|cjs|mts|cts|php|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);各份清單由 t_code_exts_lists_agree 釘
+ 
+ # 排除路徑
+ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+   local path="$1" base
+   # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
+   if [[ "$path" == \"*\" && ${#path} -ge 2 ]]; then   # 長度守衛:單一個引號的假輸入不做子字串(r3 delta minor,set -u 下會吐錯)
+     path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="$(printf '%b' "$path")"   # \" 手解;\\ \t \ooo(控制字元)交給 printf %b(r3 外家:八進位沒解 → 找不到 → 放行)
+   fi
+   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show ":$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+diff --git a/scripts/lumos b/scripts/lumos
+index a462c5e2efdf2c490224f165b581dc1b871f1100..4f5031a0ec340c074dcb4c6f708c707fe229c564 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -21563,21 +21563,21 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+         print(f"  root: {root}")
+         print("  拆閘: git config --unset core.hooksPath" if installed
+               else "  拆閘: (core.hooksPath 未設,略)")
+         if has_claude:
+             print("  剝 CLAUDE.md graph-discipline 區塊")
+         if will_delete_vault:
+             n = len([f for f in vault.rglob("*") if f.is_file()])
+             print(f"  刪圖譜 vault: {vault}({n} 檔)")
+         elif vault is not None:
+             print(f"  保留圖譜 vault: {vault}")
+-        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
++        print(f"  移除 vendored 工具組(白名單:{len(_VENDORED_TOOLKIT)} 檔 + hooks/templates 兩夾)")
+         return 0
+     if will_delete_vault and not yes:
+         if not sys.stdin.isatty():
+             print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不刪圖譜。確定要刪就加 --yes",
+                   file=sys.stderr)
+             return 2
+         files = [f for f in vault.rglob("*") if f.is_file()]
+         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
+                                capture_output=True, text=True, errors="replace").stdout
+         n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+@@ -21958,31 +21958,35 @@ def _deinit_strip_claude(root: Path) -> bool:
+             continue
+         ei += len(end_marker)
+         new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
+         _write_lf(cm, (new + "\n") if new else "")
+         hit = True
+     return hit
+ 
+ 
+ def _deinit_remove_bytecode(root: Path) -> list:
+     cache = root / "scripts/__pycache__"
+-    if cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir():
++    if (cache.parent.is_symlink() or cache.is_symlink() or not cache.is_dir()
++            or cache.resolve() != root.resolve() / "scripts/__pycache__"):
+         return []
+     names = {Path(p).stem for p in _VENDORED_TOOLKIT if p.endswith(".py")}
+     removed = []
+-    for name in names:
+-        for path in cache.glob(name + ".*.pyc"):
+-            try:
+-                path.unlink()
+-                removed.append(str(path.relative_to(root)))
+-            except OSError as exc:
+-                print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
++    patterns = [re.escape(name) + r"[.]cpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc" for name in names]
++    patterns.append(r"lumoscpython-[0-9]+(?:[.]opt-[0-9]+)?[.]pyc")
++    for path in cache.glob("*.pyc"):
++        if not any(re.fullmatch(pattern, path.name) for pattern in patterns):
++            continue
++        try:
++            path.unlink()
++            removed.append(str(path.relative_to(root)))
++        except OSError as exc:
++            print(f"  ⚠ 移除 {path} 失敗,跳過: {exc}", file=sys.stderr)
+     try:
+         cache.rmdir()
+     except OSError:
+         pass  # 使用者的 bytecode 仍在時保留目錄。
+     return removed
+ 
+ 
+ def _deinit_remove_vendored(root: Path, src=None) -> list:
+     """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 的精確檔名;
+     ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
+@@ -26508,21 +26512,21 @@ def _review_role_changed_files(root, base, head, deadline=None):
+             path, ref, i = toks[i + 2], head, i + 3
+         else:
+             path, ref, i = toks[i + 1], (base if st[:1] == "D" else head), i + 2
+         out.append((path, ref))
+     modes = _impact_diff_modes(root, [path for path, _ref in out] + [old for old, _new in renamed],
+                                base, head, deadline=deadline)
+     if modes is None:
+         return None
+     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+     out += [(old, base) for old, new in renamed
+-            if (new in _BOOKKEEPING_FILES or new.startswith(_BOOKKEEPING_DIRS))
++            if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
+             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+     return [(path, ref) for path, ref in out
+             if not _PITFALL_DIFF_TEST_PAT.search(path)
+             and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+ def _review_roles(root, base, head, budget=_ROLE_BUDGET):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+@@ -28644,21 +28648,21 @@ def _lint_watch_mode(repo_root, as_json):
+     else:
+         for c in candidates:
+             print(f"{c['name']} {c['current']} → {c['latest']}")
+     return 0
+ 
+ 
+ # ── 每支檔有家:程式檔歸屬與寫回落點的檢查(Projects/每支檔有家_計劃,2026-09-11) ──────────────
+ # ★為什麼存在★:一篇節點在依賴行用反引號寫別人的檔,改那些檔時推筆記就推它、寫回就落它——兩個消費專案兩天內
+ # 長歪兩次、工具全綠。這一段在提交與推送的當下擋「新違規」,舊帳交給健檢提醒(決策 d1)。
+ # 單源=計劃節點;每條規則的註解標它對回的條款編號 [SN]。
+-_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".sql", ".py", ".kt", ".kts",
++_NODEHOME_CODE_EXTS = {".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".php", ".sql", ".py", ".kt", ".kts",
+                        ".java", ".swift", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".ps1"}
+ # ↑「改程式要動圖譜」那道閘的第五份副本(另外四份在提交前/提交後掛鉤與 Claude 端兩支掛鉤)——
+ #   t_code_exts_lists_agree 釘五份一致 [S1]。不借 CODE_EXTS_T:那份是符號查核用的,內容不同。
+ _NODEHOME_EXCLUDE_GLOBS = ("docs/*", "*/node_modules/*", "*/bin/*", "*/obj/*", "*/.git/*",
+                            "*/dist/*", "*/build/*", "*/__pycache__/*")
+ # ↑ 跟提交前掛鉤 should_exclude 的目錄排除同一份(t_nodehome_required_files_definition 逐字比對)
+ _NODEHOME_HOME_STATUSES = ("doing", "done", "stale")   # [S2] planned/deferred 還不是現況、rejected/superseded 已不是
+ _NODEHOME_GATE_VALUES = ("on", "warn", "off")          # [S37]
+ _NODEHOME_MAX_FILES_DEFAULT = 3                        # [S18] 跟開新節點提示的「0~3 支」一致
+ _NODEHOME_RESP_MIN_CHARS = 10                          # [S16]
+@@ -49210,37 +49214,62 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-def _test_quality_deployment_ready(argv):
+-    if argv[:1] != ["test-quality"]:
+-        return True
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': 'd945c8d9437a61de7942d28b9cefd578c0dd68e4fddf4851d2db1eb3a934d3d1', 'test_quality_scan.py': 'bb807bd4e6ae3af75030f414b1a2b85c2f4d3d8e714b2a4ed237804e5cf4305a', 'test_quality.py': '72ec39e1c7c5d679b8bda17f6c8d263d74e41f0eec6e521be20c67ef9a960772'}
++
++
++def _test_quality_bundle_sources():
+     folder = Path(__file__).resolve().parent
+-    required = [Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")]
+-    missing = [p for p in required if not (folder / p).is_file()]
+-    if not missing:
+-        return True
+-    import json
+-    print(json.dumps({"verdict": "not_assessed", "complete": False,
+-                      "reason": "測試品質工具未完整部署:缺 " + ", ".join(missing) + "；請 lumos update。"}, ensure_ascii=False))
+-    return False
++    required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
++    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
++        raise ValueError("配套指紋清單未對齊")
++    sources = {}
++    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
++        with (folder / name).open("rb") as stream:
++            raw = stream.read(10 * 1024 * 1024 + 1)
++        if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
++            raise ValueError("配套版本不一致:" + name)
++        sources[name.removesuffix(".py")] = (folder / name, raw)
++    return sources
++
++
++def _test_quality_load_bundle():
++    import importlib.util
++    missing = object()
++    previous = {}
++    try:
++        sources = _test_quality_bundle_sources()
++        previous = {name: sys.modules.get(name, missing) for name in sources}
++        for name, (path, raw) in sources.items():
++            spec = importlib.util.spec_from_file_location(name, path)
++            module = importlib.util.module_from_spec(spec)
++            sys.modules[name] = module
++            exec(compile(raw, str(path), "exec"), module.__dict__)
++    except (OSError, ValueError, ImportError, SyntaxError) as exc:
++        for name, module in previous.items():
++            if module is missing:
++                sys.modules.pop(name, None)
++            else:
++                sys.modules[name] = module
++        return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
++    return None
+ 
+ 
+ def main():
+-    if not _test_quality_deployment_ready(sys.argv[1:]):
+-        return 2
++    quality_deployment_error = _test_quality_load_bundle()
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
+         提到模組層會讓人以為別處也該拿它當一般工具用,反而要多寫一段「只給 main 用」的說明。
+@@ -49440,27 +49469,27 @@ def main():
+     cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                     help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
+     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
+                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
+-    try:
+-        from test_quality import add_parser as _tq_parser
+-    except ModuleNotFoundError as exc:
+-        if exc.name != "test_quality":
+-            raise
+-        sub.add_parser("test-quality", help="測試品質工具未完整部署，請更新來源與vendor")
++    if quality_deployment_error:
++        quality = sub.add_parser("test-quality", add_help=False,
++                                 help="測試品質工具未完整部署，請更新來源與vendor")
++        quality.add_argument("quality_args", nargs=argparse.REMAINDER)
++        quality.add_argument("--help", action="store_true")
+     else:
++        from test_quality import add_parser as _tq_parser
+         _tq_parser(sub)
+ 
+     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
+     rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+     ls.add_argument("loop_id")
+@@ -50252,20 +50281,24 @@ def main():
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
+     if args.cmd == "prose-lint":
+         return cmd_prose_lint(args.path)
+     if args.cmd == "test-quality":
++        if quality_deployment_error:
++            print(json.dumps({"verdict": "not_assessed", "complete": False,
++                              "reason": quality_deployment_error}, ensure_ascii=False))
++            return 2
+         try:
+             from test_quality import dispatch as _tq_dispatch
+         except ModuleNotFoundError as exc:
+             if exc.name != "test_quality":
+                 raise
+             print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
+             return 2
+         return _tq_dispatch(args)
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e46a9d2e04696d004b00a8426ace52ffbc87a3d3..972b49a26f61f8a68ba44beb4b86d5f1e2a82388 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -76002,12 +76002,25 @@ def t_test_quality_scan_cli():
+     root = Path(GRAPHCTL).resolve().parent.parent
+     run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
+                          cwd=root, capture_output=True, text=True, timeout=60)
+     import re
+     output = run.stdout + run.stderr
+     check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
+           re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+           output[-5000:])
+ 
+ 
++
++def t_test_quality_handbook_controls():
++    import re
++    _need_src("governance/eval/test_test_quality_handbook.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
++                         cwd=root, capture_output=True, text=True, timeout=60)
++    output = run.stdout + run.stderr
++    check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
++          re.search(r"Ran [1-9][0-9]* tests", output) is not None,
++          output[-5000:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index bdf16b47047457115c618bca335606854d55cad6..eb03361b44e0bebfe92ce84d2285aa39d92e4101 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -118,24 +118,27 @@ def assertion_failure(node):
+     if not kind:
+         # AGP instrumentation XML omits type/message; the first exception and
+         # its JUnit assertion frame identify the measured failure origin.
+         text = ''.join(node.itertext()).strip()
+         if text.startswith('java.lang.AssertionError:') and re.search(r'\bat org\.junit\.Assert\.(?:fail|assert)\w*\(', text):
+             return True
+         return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
+     return False
+ 
+ 
++class NoDtdTreeBuilder(ET.TreeBuilder):
++    def doctype(self, name, pubid, system):
++        raise ValueError("DTD/entity declarations not accepted")
++
++
+ def junit(raw):
+-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+-        raise ValueError('DTD/entity declarations not accepted')
+-    root = ET.fromstring(raw)
++    root = ET.fromstring(raw, parser=ET.XMLParser(target=NoDtdTreeBuilder()))
+     tag = xml_tag
+     if tag(root) not in {'testsuites', 'testsuite'}:
+         raise ValueError('expected JUnit testsuite(s)')
+     cases = []
+     for node in root.iter():
+         if tag(node) != 'testcase':
+             continue
+         name = node.get('name')
+         if not name:
+             raise ValueError('testcase missing name')
+@@ -150,20 +153,24 @@ def junit(raw):
+         cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
+                       'reason': reason[:4000]})
+     ids = [c['id'] for c in cases]
+     if len(ids) != len(set(ids)):
+         raise ValueError('duplicate test identities')
+     if not cases:
+         raise ValueError('zero testcases')
+     # Suite-level errors must not disappear behind passing testcase rows.
+     if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
+         raise ValueError('runner/suite errors')
++    attached = {id(n) for case in root.iter() if tag(case) == "testcase"
++                for n in case if tag(n) in {"failure", "skipped"}}
++    if any(tag(n) in {"failure", "skipped"} and id(n) not in attached for n in root.iter()):
++        raise ValueError("outcome outside testcase")
+     validate_suite_counts(root)
+     return cases
+ 
+ 
+ def add_parser(sub):
+     p = sub.add_parser('test-quality', help='測試品質候選掃描、可信本機測試收證與三階段JUnit證據核對；不裁決業務答案')
+     actions = p.add_subparsers(dest='tqcmd', required=True)
+     scan = actions.add_parser('scan', help='唯讀來源掃描，零候選不是品質通過')
+     try:
+         from test_quality_scan import add_scan_arguments
+diff --git a/scripts/test_quality_semgrep.py b/scripts/test_quality_semgrep.py
+index e6d4af7fd06083434e7075b8bcc300ed087fa44d..415a0890888cb9ebda035c42f10910d6b0945584 100644
+--- a/scripts/test_quality_semgrep.py
++++ b/scripts/test_quality_semgrep.py
+@@ -18,21 +18,24 @@ PATTERNS = {
+     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+     'typescript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],
+ }
+ 
+ 
+ def backend_findings(result, source, path, raw):
+     findings = []
+     for item in result['results']:
+         if not isinstance(item, dict) or not isinstance(item.get('start'), dict):
+             raise ValueError('invalid finding shape')
+-        if item.get('check_id', '').split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
++        rule = item.get('check_id')
++        if not isinstance(rule, str):
++            raise ValueError('invalid finding rule')
++        if rule.split('.')[-1] != 'same-comparison' or item.get('path') != str(source):
+             raise ValueError('unexpected finding rule or snapshot')
+         line = item['start']['line']
+         if type(line) is not int or line < 1:
+             raise ValueError('invalid finding location')
+         findings.append({'rule_id': 'same-comparison', 'status': 'candidate', 'path': str(path),
+                          'line': line, 'test': 'unknown', 'oracle_source': 'unknown',
+                          'reason': '斷言兩側是相同語法表達式',
+                          'verification': '確認斷言的測試目的與獨立答案；穩定性測試可能合理。',
+                          'snippet': raw.decode('utf-8').splitlines()[line-1][:1200]})
+     return findings
+diff --git a/scripts/test_test_quality_cli.py b/scripts/test_test_quality_cli.py
+index dcaaf72b2165cde73cc5b02c56d95a74daa4d44a..aaae8479d79ebf78537342ffe2ea61d9f632d9c3 100644
+--- a/scripts/test_test_quality_cli.py
++++ b/scripts/test_test_quality_cli.py
+@@ -417,109 +417,353 @@ class QualityCLI(unittest.TestCase):
+         process.send_signal(signal.SIGTERM)
+         process.communicate(timeout=5)
+         deadline = time.monotonic() + 2
+         while self.alive(pid) and time.monotonic() < deadline:
+             time.sleep(0.02)
+         self.assertFalse(self.alive(pid))
+ 
+     @staticmethod
+     def lumos_module():
+         from importlib.machinery import SourceFileLoader
+-        loader = SourceFileLoader('quality_lumos_control', str(TOOL))
++
++        loader = SourceFileLoader("quality_lumos_control", str(TOOL))
+         spec = importlib.util.spec_from_loader(loader.name, loader)
+         module = importlib.util.module_from_spec(spec)
+         loader.exec_module(module)
+         return module
+ 
+     def test_eval_attachments_keep_actual_code_as_impact_seeds(self):
+         module = self.lumos_module()
+-        prefix = 'governance/eval/results/fixture/'
+-        for suffix in ['txt', 'xml', 'log', 'trx', 'zip']:
+-            self.assertFalse(module._impact_diff_seed_ok(prefix + 'report.' + suffix, '100644', False))
+-        for name, mode, shebang in [('test.py', '100644', None), ('runner.txt', '100755', None), ('runner', '100644', True)]:
++        prefix = "governance/eval/results/fixture/"
++        for suffix in ["txt", "xml", "log", "trx", "zip"]:
++            self.assertFalse(
++                module._impact_diff_seed_ok(
++                    prefix + "report." + suffix, "100644", False
++                )
++            )
++        for name, mode, shebang in [
++            ("test.py", "100644", None),
++            ("runner.txt", "100755", None),
++            ("runner", "100644", True),
++        ]:
+             self.assertTrue(module._impact_diff_seed_ok(prefix + name, mode, shebang))
+-        self.assertTrue(module._impact_diff_seed_ok(prefix + 'unknown.txt'))
+-        self.assertNotIn('governance/eval/results/', module._BOOKKEEPING_DIRS)
++        self.assertTrue(module._impact_diff_seed_ok(prefix + "unknown.txt"))
++        self.assertNotIn("governance/eval/results/", module._BOOKKEEPING_DIRS)
+ 
+     def test_deinit_removes_only_vendored_bytecode(self):
+         module = self.lumos_module()
+-        cache = self.root / 'scripts/__pycache__'
++        cache = self.root / "scripts/__pycache__"
+         cache.mkdir(parents=True)
+-        owned = cache / 'test_quality.cpython-314.pyc'
+-        user = cache / 'user_app.cpython-314.pyc'
+-        owned.write_bytes(b'owned')
+-        user.write_bytes(b'user')
++        owned = cache / "test_quality.cpython-314.pyc"
++        user = cache / "user_app.cpython-314.pyc"
++        owned.write_bytes(b"owned")
++        user.write_bytes(b"user")
+         module._deinit_remove_vendored(self.root)
+         self.assertFalse(owned.exists())
+-        self.assertEqual(user.read_bytes(), b'user')
++        self.assertEqual(user.read_bytes(), b"user")
+         user.unlink()
+         cache.rmdir()
+-        external = self.root / 'external'
++        external = self.root / "external"
+         external.mkdir()
+         target = external / owned.name
+-        target.write_bytes(b'external')
++        target.write_bytes(b"external")
+         cache.symlink_to(external, target_is_directory=True)
+         module._deinit_remove_vendored(self.root)
+-        self.assertEqual(target.read_bytes(), b'external')
++        self.assertEqual(target.read_bytes(), b"external")
+ 
+     def test_scan_entrypoints_share_options_and_results(self):
+-        test_file = self.root / 'test_sample.py'
+-        test_file.write_text('def test_same():\n    assert 1 == 1\n')
+-        cli_rc, cli_result = self.run_cli('scan', '--json', test_file, '--check-helper', 'check')
+-        run = subprocess.run([sys.executable, str(TOOL.with_name('test_quality_scan.py')), '--json', str(test_file), '--check-helper', 'check'], capture_output=True, text=True, timeout=10)
++        test_file = self.root / "test_sample.py"
++        test_file.write_text("def test_same():\n    assert 1 == 1\n")
++        cli_rc, cli_result = self.run_cli(
++            "scan", "--json", test_file, "--check-helper", "check"
++        )
++        run = subprocess.run(
++            [
++                sys.executable,
++                str(TOOL.with_name("test_quality_scan.py")),
++                "--json",
++                str(test_file),
++                "--check-helper",
++                "check",
++            ],
++            capture_output=True,
++            text=True,
++            timeout=10,
++        )
+         standalone = json.loads(run.stdout)
+         self.assertEqual(run.returncode, cli_rc)
+         for report in [cli_result, standalone]:
+-            report.pop('elapsed_seconds')
++            report.pop("elapsed_seconds")
+         self.assertEqual(cli_result, standalone)
+-        self.assertEqual(cli_result['findings'][0]['rule_id'], 'same-comparison')
++        self.assertEqual(cli_result["findings"][0]["rule_id"], "same-comparison")
++
++    def copied_bundle(self, old=False):
++        target = self.root / "scripts"
++        target.mkdir()
++        for name in [
++            "lumos",
++            "test_quality.py",
++            "test_quality_scan.py",
++            "test_quality_semgrep.py",
++        ]:
++            shutil.copy2(TOOL.with_name(name), target / name)
++        if old:
++            core = target / "test_quality.py"
++            current = core.read_bytes()
++            previous = current.replace(b"    validate_suite_counts(root)\n", b"")
++            self.assertNotEqual(
++                previous, current, "old package fixture must omit summary validation"
++            )
++            core.write_bytes(previous)
++        return target
+ 
+-    @unittest.skipUnless(os.name == "posix", "POSIX process group qualification")
+-    def test_model_timeout_stops_worker_without_paid_call(self):
+-        path = TOOL.parent.parent / "governance/eval/test_quality_handbook.py"
+-        spec = importlib.util.spec_from_file_location("test_handbook_worker", path)
+-        module = importlib.util.module_from_spec(spec)
+-        spec.loader.exec_module(module)
+-        binary = self.root / "bin"
+-        binary.mkdir()
+-        fake = binary / "claude"
+-        pidfile = self.root / "worker.pid"
+-        fake.write_text(
++    def test_mixed_sidecars_refused_before_false_green(self):
++        target = self.copied_bundle(old=True)
++        (self.root / "source.txt").write_text("production")
++        (self.root / "tests.txt").write_text("independent")
++        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
++        run = subprocess.run(
++            [
++                sys.executable,
++                str(target / "lumos"),
++                "test-quality",
++                "capture",
++                "--out",
++                "capture",
++                "--source",
++                "source.txt",
++                "--test-source",
++                "tests.txt",
++                "--junit-stdout",
++                "--language",
++                "fixture",
++                "--framework",
++                "control",
++                "--",
++                sys.executable,
++                "-c",
++                "print(" + repr(xml) + ")",
++            ],
++            cwd=self.root,
++            capture_output=True,
++            text=True,
++            timeout=20,
++        )
++        self.assertEqual(run.returncode, 2, run.stdout)
++        self.assertEqual(json.loads(run.stdout)["verdict"], "not_assessed")
++        self.assertFalse((self.root / "capture").exists())
++
++    def test_orphan_failure_refused(self):
++        rc, report = self.capture(
++            '<testsuite><testcase classname="T" name="x"/><failure type="AssertionError">boom</failure></testsuite>'
++        )
++        self.assertEqual(rc, 2, report)
++
++    def test_php_and_node_variants_kept_in_impact(self):
++        tool = self.lumos_module()
++        for name in ["Test.php", "runner.cjs", "runner.mts", "runner.cts"]:
++            with self.subTest(name=name):
++                self.assertTrue(
++                    tool._impact_diff_seed_ok(
++                        "governance/eval/results/example/" + name, "100644", None
++                    )
++                )
++
++    def test_owned_extensionless_cache_removed(self):
++        target = self.copied_bundle()
++        from importlib.machinery import SourceFileLoader
++
++        loader = SourceFileLoader("copied_lumos_cache", str(target / "lumos"))
++        module_spec = importlib.util.spec_from_loader(loader.name, loader)
++        tool = importlib.util.module_from_spec(module_spec)
++        loader.exec_module(tool)
++        cache = target / "__pycache__"
++        owned = list(cache.glob("lumos*.pyc"))
++        self.assertTrue(owned, "SourceFileLoader must actually create bytecode")
++        user = cache / "lumos_user.cpython-314.pyc"
++        user.write_bytes(b"user bytes")
++        tool._deinit_remove_vendored(self.root)
++        self.assertFalse(any(p.exists() for p in owned))
++        self.assertEqual(user.read_bytes(), b"user bytes")
++
++    def test_resolved_cache_escape_preserved(self):
++        tool = self.lumos_module()
++        target = self.root / "external"
++        target.mkdir()
++        artifact = target / "test_quality.cpython-314.pyc"
++        artifact.write_bytes(b"external")
++        (self.root / "scripts").mkdir()
++        cache = self.root / "scripts/__pycache__"
++        cache.symlink_to(target, target_is_directory=True)
++        self.assertEqual(cache.resolve(), target.resolve())
++        with mock.patch.object(Path, "is_symlink", return_value=False):
++            tool._deinit_remove_vendored(self.root)
++        self.assertEqual(artifact.read_bytes(), b"external")
++
++    def test_results_rename_preserves_original_role_source(self):
++        tool = self.lumos_module()
++        repository = self.root / "rename"
++        repository.mkdir()
++
++        def git(*args):
++            return subprocess.check_output(
++                ["git", "-C", str(repository), *args],
++                stderr=subprocess.STDOUT,
++                text=True,
++            ).strip()
++
++        git("init", "-q")
++        git("config", "user.name", "Fixture")
++        git("config", "user.email", "fixture@example.invalid")
++        (repository / "service.py").write_text("def public_api():\n    return 42\n")
++        git("add", "service.py")
++        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "before")
++        before = git("rev-parse", "HEAD")
++        destination = repository / "governance/eval/results/run/report.txt"
++        destination.parent.mkdir(parents=True)
++        git("mv", "service.py", str(destination.relative_to(repository)))
++        git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "after")
++        after = git("rev-parse", "HEAD")
++        self.assertTrue(
++            git("diff", "--name-status", "-M", before, after).startswith("R100"),
++            "real rename must be recognized",
++        )
++        self.assertIn(
++            ("service.py", before),
++            tool._review_role_changed_files(repository, before, after),
++        )
++
++    def test_mixed_scanner_retains_legacy_help(self):
++        target = self.copied_bundle()
++        (target / "test_quality_scan.py").write_text(
++            "# previous scanner has no shared argument export\n"
++        )
++        run = subprocess.run(
++            [sys.executable, str(target / "lumos"), "--help"],
++            capture_output=True,
++            text=True,
++            timeout=20,
++        )
++        self.assertEqual(run.returncode, 0, run.stderr)
++        self.assertNotIn("Traceback", run.stderr)
++
++    def test_invalid_semgrep_rule_has_structured_shape_error(self):
++        source = self.root / "test_sample.php"
++        source.write_text("<?php assert(true);")
++        backend = self.root / "semgrep"
++        backend.write_text(
+             "#!"
+             + sys.executable
+-            + '\nimport subprocess,sys,time\nfrom pathlib import Path\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\nPath('
+-            + repr(str(pidfile))
+-            + ").write_text(str(p.pid))\ntime.sleep(60)\n"
++            + "\n"
++            + "import json,sys\n"
++            + "p=sys.argv[-1]\n"
++            + 'print(json.dumps({"results":[{"check_id":None,"path":p,"start":{"line":1}}],"errors":[],"paths":{"scanned":[p]}}))\n'
+         )
+-        fake.chmod(0o755)
+-        with mock.patch.dict(
+-            os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}
+-        ):
+-            self.assertEqual(
+-                shutil.which("claude"),
+-                str(fake),
+-                "fixture entrypoint, never real provider",
+-            )
+-            result, _ = module.run_model(
+-                self.root,
+-                "fixture",
++        backend.chmod(0o755)
++        rc, report = self.run_cli("scan", "--json", "--semgrep", backend, source)
++        self.assertEqual(rc, 2)
++        self.assertFalse(report["complete"])
++        self.assertEqual(report["verdict"], "not_assessed")
++        self.assertIn("invalid finding rule", report["inputs"][0]["reason"])
++
++    def test_source_bytes_not_stale_bytecode_authorize_capture(self):
++        target = self.copied_bundle()
++        from importlib.machinery import SourceFileLoader
++
++        path = target / "test_quality.py"
++        good = path.read_bytes()
++        old = good.replace(b"    validate_suite_counts(root)\n", b"")
++        self.assertLess(len(old), len(good))
++        path.write_bytes(old + b" " * (len(good) - len(old)))
++        loader = SourceFileLoader("quality_old_cache", str(path))
++        module_spec = importlib.util.spec_from_loader(loader.name, loader)
++        loaded = importlib.util.module_from_spec(module_spec)
++        loader.exec_module(loaded)
++        cache = Path(importlib.util.cache_from_source(str(path)))
++        self.assertTrue(cache.exists(), "stale cache must exist before restoration")
++        old_stamp = path.stat()
++        path.write_bytes(good)
++        os.utime(path, ns=(old_stamp.st_atime_ns, old_stamp.st_mtime_ns))
++        self.assertEqual(path.read_bytes(), good, "source actually restored")
++        (self.root / "source.txt").write_text("production")
++        (self.root / "tests.txt").write_text("independent")
++        xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
++        run = subprocess.run(
++            [
++                sys.executable,
++                str(target / "lumos"),
++                "test-quality",
++                "capture",
++                "--out",
++                "capture",
++                "--source",
++                "source.txt",
++                "--test-source",
++                "tests.txt",
++                "--junit-stdout",
++                "--language",
+                 "fixture",
+-                "fixture-model",
+-                1,
+-                False,
+-                self.root / "raw.jsonl",
+-            )
+-        self.assertTrue(pidfile.exists(), "worker actually launched before timeout")
+-        pid = int(pidfile.read_text())
+-        self.addCleanup(
+-            lambda: os.kill(pid, signal.SIGKILL) if self.alive(pid) else None
++                "--framework",
++                "control",
++                "--",
++                sys.executable,
++                "-c",
++                "print(" + repr(xml) + ")",
++            ],
++            cwd=self.root,
++            capture_output=True,
++            text=True,
++            timeout=20,
+         )
+-        self.assertFalse(result["valid"])
+-        self.assertIsNone(result["returncode"])
+-        deadline = time.monotonic() + 2
+-        while self.alive(pid) and time.monotonic() < deadline:
+-            time.sleep(0.02)
+-        self.assertFalse(self.alive(pid))
++        self.assertEqual(run.returncode, 2, run.stdout)
++        self.assertEqual(json.loads(run.stdout)["status"], "invalid")
++
++    def test_utf16_dtd_is_not_a_valid_receipt(self):
++        xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'
++        command = [
++            sys.executable,
++            "-c",
++            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
++        ]
++        rc, report = self.capture("", command=command)
++        self.assertEqual(rc, 2)
++        self.assertEqual(report["status"], "invalid")
++        self.assertIn("DTD", report["reason"])
++
++    def test_plain_utf16_report_retains_valid_capture(self):
++        xml = '<?xml version="1.0" encoding="UTF-16"?><testsuite><testcase name="ok"/></testsuite>'
++        command = [
++            sys.executable,
++            "-c",
++            "import sys; sys.stdout.buffer.write(" + repr(xml) + '.encode("utf-16"))',
++        ]
++        rc, report = self.capture("", command=command)
++        self.assertEqual(rc, 0)
++        self.assertEqual(report["status"], "executed")
++
++    def test_global_vault_option_retains_structured_deployment_error(self):
++        target = self.copied_bundle()
++        (target / "test_quality_scan.py").unlink()
++        run = subprocess.run(
++            [
++                sys.executable,
++                str(target / "lumos"),
++                "--vault",
++                str(self.root / "vault"),
++                "test-quality",
++                "scan",
++                "sample.py",
++                "--json",
++            ],
++            capture_output=True,
++            text=True,
++            timeout=20,
++        )
++        self.assertEqual(run.returncode, 2, run.stderr)
++        report = json.loads(run.stdout)
++        self.assertFalse(report["complete"])
++        self.assertEqual(report["verdict"], "not_assessed")
++        self.assertNotIn("Traceback", run.stderr)
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()
