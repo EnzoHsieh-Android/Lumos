@@ -100,11 +100,12 @@ lumos drift ack <node> <line> --kind <kind> --reason "…"  # record that a line
 **These only list, they don't block; deal with them when you see them:**
 
 ```bash
-lumos doctor                          # lists sentences pointing to a revisit condition another note no longer has; retirement candidates also cover plans bound only to [manual:] clauses
 lumos set <node> revalidate_when …    # changing when to re-verify: lists sentences in other notes that link here and mention it, with the new list
 lumos set <issue> status <closed>     # lists summary decision lines still undecided and unhandled revisit conditions (only drift fix --kind c2 --close blocks)
-git commit                            # commit-time reminders: split a line binding several tests; tag count sentences; don't point to list items as "item N"
+lumos note-shape --staged             # the check the pre-commit hook runs; also reminds: split a line binding several tests; tag count sentences; don't point to list items as "item N"
 ```
+
+**`lumos doctor` also lists**: sentences pointing to a revisit condition another note no longer has; its retirement candidates also cover plans bound only to `[manual:]` clauses.
 
 **When dispatching reviewers**: when the impact range can't be computed, such as a session opened in another project or commits in the range missing here, Claude's dispatch hook adds a line at the end of the dispatch text; a malformed range is not covered.
 
@@ -148,7 +149,7 @@ Use `lumos ci-wait` rather than `gh run list` — the result has to land in the 
 
 ## Project switches
 
-These live in the project's `.lumos/config.json`. This table collects the switches in one place; when each is used is covered in skill manuals 06 and 07. Commit any change: most checks read the version in the commit being pushed, but `lint_new` and `stack_questions` read the working-tree copy (an uncommitted change applies locally while CI keeps the committed value), and the commit-time `note_lint` also reads the working tree. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
+These live in the project's `.lumos/config.json`. This table collects the switches in one place and is the reference for defaults and values; some switches also have usage notes in the matching skill manual chapters. Commit any change: most checks read the version in the commit being pushed, but `lint_new` and `stack_questions` read the working-tree copy (an uncommitted change applies locally while CI keeps the committed value), and the commit-time `note_lint` also reads the working tree. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
 
 | Switch | Controls | Values | When unset |
 | --- | --- | --- | --- |
@@ -162,7 +163,10 @@ These live in the project's `.lumos/config.json`. This table collects the switch
 | `node_home.gate` | every code file needs a note that owns it (file ownership) | on / warn / off | on |
 | `lint_new.gate` | new linter warnings | block / warn / off | block |
 | `stack_questions.gate` | answering stack performance questions before a push | all / high-only / off | all |
-| `note_shape.negation`, `tag_hints`, `close_summary`, `wording` | commit-time wording reminders: negated status sentences, note prefixes, closing summaries, new sentences (a line binding several tests, count sentences, etc.) | warn / off | warn |
+| `note_shape.negation` | commit-time reminder to turn new negated status sentences into revisit conditions (also governed by `note_shape.gate`; off there turns it off too) | warn / off | warn |
+| `note_shape.tag_hints` | commit-time reminder about summary-line prefixes (same: governed by the master switch) | warn / off | warn |
+| `note_shape.close_summary` | commit-time reminder when a closed note's summary still says pending (same) | warn / off | warn |
+| `note_shape.wording` | commit-time reminder about new sentences: a line binding several tests, count sentences, etc. (same) | warn / off | warn |
 | `note_audit.gate` | note content audit (`note-audit check`; blocks only when the pre-push hook calls that command, which this toolkit's own hook does not) | block / warn / off | block |
 | `note_lint.gate` | new note-field rules (the per-note quick check at commit) | on / warn / off | warn |
 

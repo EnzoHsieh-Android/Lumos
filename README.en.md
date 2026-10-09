@@ -151,7 +151,7 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 - **Review replay**: Reviewed cases store a pass/fail verdict. The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
 - **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
-- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [10/7–10/10 update audit](docs/updates/2026-10-10-readme-audit.md)).
+- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [October 7–10 update audit](docs/updates/2026-10-10-readme-audit.md), in Chinese).
 - **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
 
 <p align="center">
@@ -162,7 +162,7 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 Not every check alerts a person as the illustration's step suggests; the next paragraph says which ones do.
 
-Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches, needs refreezing, cannot be frozen, or errors out on replay, or when a scenario probe fails. A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when one tenth or more of the candidate notes its scoring touches have no label yet (this can happen even when every question has an answer), so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches, needs refreezing, cannot be frozen, or the replay or catch-up freeze run hits an error, or when a scenario probe fails. A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when one tenth or more of the candidate notes its scoring touches have no label yet (this can happen even when every question has an answer), so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
 
 There is also an [offline review convergence evaluator](governance/eval/review_convergence.md). It collects case leads from ordinary and capped reviews and compares two workflows on pinned cases and versions, separating repair, preserved behavior, new defects, rounds, and cost. Missing data remains unknown. It is a read-only local analysis tool, outside the weekly schedule; it does not run models or re-execute acceptance checks. Fingerprints check declaration consistency, not truth, and do not prove that review rounds have decreased.
 

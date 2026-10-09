@@ -56629,14 +56629,19 @@ def t_spec_gate_body_link_in_fence_ignored():
 
 
 def t_spec_gate_help_says_low_risk_blocks():
-    """2026-10-10 README 校正代碼審發現:spec-gate 的說明文字(子命令 help 與總表)原寫「綁的測試真跑一次印紅綠(不擋)」,
-    指令參考照抄;實際風險低時紅綠是放行條件、不符 rc1,只有風險高只印不擋。說明要講到風險低會擋。"""
-    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sghelp")
-    r = run(kg, "spec-gate", "--help")
-    check("① 子命令說明講到風險低時紅綠是放行條件", "風險低時紅綠是放行條件" in r.stdout, r.stdout[-600:])
-    check("② 不再寫「印紅綠(不擋)」", "印紅綠(不擋)" not in r.stdout, r.stdout[-600:])
-    r = run(kg, "--help")
-    check("③ 總表那一行也不寫紅綠一律不擋", "紅/綠/弱證據(不擋)" not in r.stdout and "spec-gate" in r.stdout, r.stdout[-600:])
+    """2026-10-10 README 校正代碼審發現:spec-gate 的說明文字(子命令說明與總表那行)原寫「綁的測試真跑一次印紅綠(不擋)」,
+    指令參考照抄;實際風險低時紅綠是放行條件、不符 rc1,只有風險高只印不擋。兩處說明都要把風險低、風險高分開講。
+    說明文字跟 parser 與 HELP_WHEN 要,不起子行程剖 --help 排版(見 _lumos_parser_tree() 的說明;剖排版會隨終端寬度斷行)。"""
+    import argparse as _ap
+    m = _load_lumos_module()
+    h = m.HELP_WHEN["spec-gate"]
+    check("① 子命令說明講到風險低時紅綠是放行條件、風險高只印不擋", "風險低時紅綠是放行條件(不符就擋)" in h and "風險高只印不擋" in h, h)
+    check("② 子命令說明不再寫「印紅綠(不擋)」", "印紅綠(不擋)" not in h, h)
+    tree = _lumos_parser_tree()
+    line = next((ca.help for a in tree[()]._actions if isinstance(a, _ap._SubParsersAction)
+                 for ca in a._choices_actions if ca.dest == "spec-gate"), "")
+    check("③ 總表那一行也分開講:風險低是放行條件、風險高只印不擋", "風險低是放行條件" in line and "風險高只印不擋" in line
+          and "弱證據(不擋)" not in line, line)
 
 
 def t_plan_risk_legacy_names_still_read():
