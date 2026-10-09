@@ -401,9 +401,9 @@ def evals_scene(en):
     b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
     b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
     desc = (
-        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many questions are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many candidate notes are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
         if en else
-        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在未標答案的題目太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在沒標過的候選筆記太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
     )
     return title, 650, b, desc
 

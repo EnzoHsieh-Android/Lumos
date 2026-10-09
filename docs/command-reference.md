@@ -63,7 +63,7 @@ lumos guard scaffold / bind / audit    # scaffold a test → bind it → indepen
 lumos guard kill <node>          # break it for real in a sandbox and check the test goes red
 lumos signoff <node> --note ".." # a human sign-off, for the half a tool can't answer
 lumos spec-trace <plan node>     # per clause: bound to a test / manual / untagged / dangling (legacy claim column kept for reference)
-lumos spec-gate <plan node>      # run this once a design is written: clause grammar, bindings, rollback section (blocks); runs the bound tests once and prints red/green (does not block)
+lumos spec-gate <plan node>      # run this once a design is written: clause grammar, bindings, rollback section (blocks); runs the bound tests once: for low-risk plans red/green is a pass condition (blocks if unmet), high-risk only prints; red contract tests of dependent features always block
 ```
 
 Test quality (read-only scans and evidence collection; it does not judge business answers):
@@ -99,12 +99,14 @@ lumos drift ack <node> <line> --kind <kind> --reason "…"  # record that a line
 
 **These only list, they don't block; deal with them when you see them:**
 
-- The health check (`doctor`) lists sentences that point to a revisit condition in another note when that note no longer has it.
-- Changing when something must be re-verified with `lumos set <node> revalidate_when …` lists the sentences in other notes that link to it and mention it, with the new list for comparison.
-- When `lumos set` changes an issue to a closed status, it lists summary decision lines still marked undecided and unhandled revisit conditions (only closing with `drift fix --kind c2 --close` blocks).
-- At commit time: a line that binds several tests should be split into one test per line; a new sentence saying a Python list "has N kinds", where N happens to equal its member count, should carry a count tag; a correction in parentheses should not point to list items as "item N".
-- When the health check lists retirement candidates, it also looks at plans whose clauses are bound only to manual acceptance (`[manual:]`).
-- When dispatching reviewers (`lumos dispatch-lens`), if the impact range can't be computed, a line at the end of the dispatch text says so instead of silently attaching nothing.
+```bash
+lumos doctor                          # lists sentences pointing to a revisit condition another note no longer has; retirement candidates also cover plans bound only to [manual:] clauses
+lumos set <node> revalidate_when …    # changing when to re-verify: lists sentences in other notes that link here and mention it, with the new list
+lumos set <issue> status <closed>     # lists summary decision lines still undecided and unhandled revisit conditions (only drift fix --kind c2 --close blocks)
+git commit                            # commit-time reminders: split a line binding several tests; tag count sentences; don't point to list items as "item N"
+```
+
+**When dispatching reviewers**: when the impact range can't be computed, such as a session opened in another project or commits in the range missing here, Claude's dispatch hook adds a line at the end of the dispatch text; a malformed range is not covered.
 
 **The governance ledger**: which gate stopped whom, and who bypassed what, all lands in a **local** ledger — never committed, never uploaded.
 
@@ -146,7 +148,7 @@ Use `lumos ci-wait` rather than `gh run list` — the result has to land in the 
 
 ## Project switches
 
-These live in the project's `.lumos/config.json`. Commit any change: most pre-push checks read the version in the commit being pushed (`stack_questions` and `note_lint` read the working-tree copy). Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
+These live in the project's `.lumos/config.json`. This table collects the switches in one place; when each is used is covered in skill manuals 06 and 07. Commit any change: most checks read the version in the commit being pushed, but `lint_new` and `stack_questions` read the working-tree copy (an uncommitted change applies locally while CI keeps the committed value), and the commit-time `note_lint` also reads the working tree. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
 
 | Switch | Controls | Values | When unset |
 | --- | --- | --- | --- |
@@ -160,6 +162,7 @@ These live in the project's `.lumos/config.json`. Commit any change: most pre-pu
 | `node_home.gate` | every code file needs a note that owns it (file ownership) | on / warn / off | on |
 | `lint_new.gate` | new linter warnings | block / warn / off | block |
 | `stack_questions.gate` | answering stack performance questions before a push | all / high-only / off | all |
+| `note_shape.negation`, `tag_hints`, `close_summary`, `wording` | commit-time wording reminders: negated status sentences, note prefixes, closing summaries, new sentences (a line binding several tests, count sentences, etc.) | warn / off | warn |
 | `note_audit.gate` | note content audit (`note-audit check`; blocks only when the pre-push hook calls that command, which this toolkit's own hook does not) | block / warn / off | block |
 | `note_lint.gate` | new note-field rules (the per-note quick check at commit) | on / warn / off | warn |
 
