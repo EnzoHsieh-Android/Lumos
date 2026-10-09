@@ -12350,6 +12350,60 @@ def _arch_cfg(*items):
     return _j.dumps({"arch_targets": [dict(path=p, node=n) for p, n in items]}, ensure_ascii=False)
 
 
+_DDD_TEMPLATE = "skills/lumos-project-notes/commands/target-arch-ddd-template.md"
+
+
+def _ddd_template_block():
+    """使用說明裡 DDD 目標架構範本的節點區塊:「## 範本」那一節裡的 markdown 圍欄內容(照小節標題切,同其他讀說明檔的測試)。"""
+    _need_src(_DDD_TEMPLATE)
+    text = (Path(GRAPHCTL).resolve().parent.parent / _DDD_TEMPLATE).read_text(encoding="utf-8")
+    section = text.split("\n## 範本\n", 1)[1].split("\n## ", 1)[0] if "\n## 範本\n" in text else ""
+    body = section.split("```markdown\n", 1)[1].split("\n```", 1)[0] if "```markdown\n" in section else ""
+    check("前置:「## 範本」那一節有一個 markdown 圍欄", bool(body), section[:200])
+    return body
+
+
+def _ddd_template_lint(text):
+    v = mkvault()
+    (v / "Systems" / "DDD目標架構.md").write_text(text, encoding="utf-8")
+    return run(v, "lint", "Systems/DDD目標架構")
+
+
+def t_arch_target_ddd_template_valid():
+    """[Projects/DDD目標架構範本_計劃 S1] 範本日期佔位換成實際日期後存成節點:lint 0 問題、目標架構規則讀法讀到九條有效規則。
+    翻紅釘:範本裡任一條 RULE 少了必有鍵、或規則讀法改了寫法而範本沒跟上 → 翻紅。"""
+    import datetime as _dt
+    block = _ddd_template_block()
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()   # 本機日期,同 RULE 生命週期提醒的取法
+    filled = block.replace("<採用日>", today.isoformat()).replace("<回頭日>", (today + _dt.timedelta(days=365)).isoformat())
+    r = _ddd_template_lint(filled)
+    check("S1: 換好日期後 lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-500:])
+    m = _load_lumos_inproc()
+    rules = m._arch_target_note_rules(m._note_from_text("Systems/DDD目標架構.md", filled))
+    check("S1: 讀到九條有效規則、沒有一條算過期", len(rules) == 9 and not any(e for _t, e in rules), str(rules)[:300])
+    print("  ✓ t_arch_target_ddd_template_valid")
+
+
+def t_arch_target_ddd_template_placeholder_warns():
+    """[Projects/DDD目標架構範本_計劃 S2] 沒換日期佔位就照抄時,lint 對佔位的日期欄位印格式警告(筆記格子目前只提醒不擋)。
+    翻紅釘:範本改成寫死實際日期 → 前置斷言翻紅(沒有佔位,採用的人不會被提醒換日期)。"""
+    block = _ddd_template_block()
+    r = _ddd_template_lint(block)
+    check("前置:範本用佔位字而不是寫死日期", "<採用日>" in block and "<回頭日>" in block, block[:200])
+    check("S2: lint 對佔位日期印格式警告",
+          "[since:<採用日>] 日期要寫成 YYYY-MM-DD" in r.stdout and "[until:<回頭日>] 日期要寫成 YYYY-MM-DD" in r.stdout, r.stdout[-500:])
+    print("  ✓ t_arch_target_ddd_template_placeholder_warns")
+
+
+def t_arch_target_ddd_template_linked_from_usage():
+    """[Projects/DDD目標架構範本_計劃 S3] 使用說明 06 的 arch_targets 那一列指到範本檔,找 arch_targets 用法的人看得到範本。"""
+    _need_src("skills/lumos-project-notes/commands/06-代碼審與推送.md")
+    six = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands" / "06-代碼審與推送.md").read_text(encoding="utf-8")
+    rows = [ln for ln in six.split("\n") if ln.startswith("|") and "arch_targets" in ln]
+    check("S3: 06 的 arch_targets 那一列提到範本檔名", any("target-arch-ddd-template.md" in ln for ln in rows), str(rows)[:300])
+    print("  ✓ t_arch_target_ddd_template_linked_from_usage")
+
+
 def t_arch_target_replaces_neighbors():
     """[S1] 起點版宣告命中、資料夾沒有任何鄰居的新檔 → 進 arch_alignment.targets、不進 files;人讀印「目標架構 <節點>」、不印規則內容。
     翻紅釘:拿掉 _arch_alignment_hints 的目標分流 → targets 不存在、沒鄰居的新檔整段被丟。"""
