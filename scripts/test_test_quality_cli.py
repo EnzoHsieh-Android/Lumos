@@ -3,7 +3,9 @@
 
 import hashlib
 import os
+import re
 import signal
+import stat
 import time
 import importlib.util
 from unittest import mock
@@ -757,25 +759,26 @@ class QualityCLI(unittest.TestCase):
         self.assertEqual(report["verdict"], "not_assessed")
         self.assertIn("invalid finding rule", report["inputs"][0]["reason"])
 
-    def test_source_bytes_not_stale_bytecode_authorize_capture(self):
-        target = self.copied_bundle()
+    def plant_stale_bytecode(self, path, needle, replacement):
+        """把 needle 換掉編出舊 bytecode,再還原同大小、同時間戳的正確來源。"""
         from importlib.machinery import SourceFileLoader
 
-        path = target / "test_quality.py"
         good = path.read_bytes()
-        old = good.replace(b"    validate_suite_counts(root)\n", b"")
+        old = good.replace(needle, replacement, 1)
         self.assertLess(len(old), len(good))
         path.write_bytes(old + b" " * (len(good) - len(old)))
-        loader = SourceFileLoader("quality_old_cache", str(path))
-        module_spec = importlib.util.spec_from_loader(loader.name, loader)
-        loaded = importlib.util.module_from_spec(module_spec)
-        loader.exec_module(loaded)
+        loader = SourceFileLoader("quality_old_cache_" + path.stem, str(path))
+        loader.exec_module(importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader)))
         cache = Path(importlib.util.cache_from_source(str(path)))
         self.assertTrue(cache.exists(), "stale cache must exist before restoration")
         old_stamp = path.stat()
         path.write_bytes(good)
         os.utime(path, ns=(old_stamp.st_atime_ns, old_stamp.st_mtime_ns))
         self.assertEqual(path.read_bytes(), good, "source actually restored")
+
+    def test_source_bytes_not_stale_bytecode_authorize_capture(self):
+        target = self.copied_bundle()
+        self.plant_stale_bytecode(target / "test_quality.py", b"    validate_suite_counts(root)\n", b"")
         (self.root / "source.txt").write_text("production")
         (self.root / "tests.txt").write_text("independent")
         xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'
@@ -810,6 +813,115 @@ class QualityCLI(unittest.TestCase):
         report = json.loads(run.stdout)
         self.assertEqual(report["status"], "invalid")
         self.assertIn("suite summary inconsistent with testcase rows", report["reason"])
+
+    def test_semgrep_adapter_uses_verified_runner_not_stale_bytecode(self):
+        target = self.copied_bundle()
+        self.plant_stale_bytecode(target / "test_quality.py", b"    import time\n", b"    1/0\n")
+        source = self.root / "Test.swift"
+        source.write_text("func testTotal() { XCTAssertEqual(total(3, 5), 15) }")
+        fake = self.root / "semgrep"
+        fake.write_text(
+            "#!" + sys.executable + "\nimport json,sys\n"
+            "print(json.dumps({'results':[],'errors':[],'paths':{'scanned':[sys.argv[-1]]},'version':'fixture'}))\n"
+        )
+        fake.chmod(0o700)
+        run = subprocess.run(
+            [sys.executable, str(target / "lumos"), "test-quality", "scan", str(source),
+             "--json", "--semgrep", str(fake)],
+            cwd=self.root, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(run.stdout)["inputs"][0]["status"], "scanned")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
+    def test_fifo_sidecar_does_not_hang_other_commands(self):
+        target = self.copied_bundle()
+        sidecar = target / "test_quality_scan.py"
+        sidecar.unlink()
+        os.mkfifo(sidecar)
+        self.assertTrue(stat.S_ISFIFO(sidecar.stat().st_mode), "sidecar really replaced by a FIFO")
+        version = subprocess.run([sys.executable, str(target / "lumos"), "--version"],
+                                 capture_output=True, text=True, timeout=10)
+        self.assertEqual(version.returncode, 0, version.stderr)
+        quality = subprocess.run([sys.executable, str(target / "lumos"), "test-quality", "capabilities"],
+                                 capture_output=True, text=True, timeout=10)
+        self.assertEqual(quality.returncode, 2)
+        self.assertFalse(json.loads(quality.stdout)["complete"])
+
+    def test_bundle_reference_guard_rejects_wrong_load_order(self):
+        module = self.lumos_module()
+        names = ("test_quality", "test_quality_scan", "test_quality_semgrep")
+        saved = {n: sys.modules.pop(n) for n in names if n in sys.modules}
+        self.addCleanup(lambda: [sys.modules.pop(n, None) for n in names] and sys.modules.update(saved))
+        self.assertIsNone(module._test_quality_load_bundle(), "correct order loads cleanly")
+        for n in names:
+            sys.modules.pop(n, None)
+        wrong = ("test_quality_semgrep.py", "test_quality_scan.py", "test_quality.py")
+        with mock.patch.object(module, "_TEST_QUALITY_LOAD_ORDER", wrong):
+            error = module._test_quality_load_bundle()
+        self.assertIsNotNone(error)
+        self.assertIn("混到未驗來源", error)
+
+    def test_bundle_reference_guard_judges_by_identity(self):
+        import functools
+        import types
+
+        guard = self.lumos_module()._test_quality_bundle_unverified_refs
+        core = types.ModuleType("core")
+
+        def real():
+            return 1
+
+        @functools.wraps(real)
+        def wrapped():
+            return real()
+
+        def make():
+            def inner():
+                return 2
+            return inner
+
+        class Option:
+            pass
+
+        core.real, core.wrapped, core.made, core.DEFAULT = real, wrapped, make(), Option()
+        for obj in (real, wrapped, core.made):
+            obj.__module__ = "core"
+        Option.__module__ = "core"
+        user = types.ModuleType("user")
+        user.rc, user.wrapped, user.main, user.d2, user.core = real, wrapped, core.made, core.DEFAULT, core
+        self.assertIsNone(guard({"core": core, "user": user}), "wrapped, factory and aliased instances are verified")
+        stale = types.ModuleType("core")
+        user.core = stale
+        self.assertIn("user.core", guard({"core": core, "user": user}))
+
+    def test_incomplete_bundle_short_help_is_structured(self):
+        target = self.copied_bundle()
+        (target / "test_quality_semgrep.py").unlink()
+        run = subprocess.run([sys.executable, str(target / "lumos"), "test-quality", "-h"],
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        report = json.loads(run.stdout)
+        self.assertFalse(report["complete"])
+        self.assertIn("lumos update", report["reason"])
+
+    def test_sidecar_runtime_error_only_blocks_test_quality(self):
+        target = self.copied_bundle()
+        sidecar = target / "test_quality_scan.py"
+        broken = sidecar.read_bytes() + b"\nraise RuntimeError('sidecar import failure')\n"
+        sidecar.write_bytes(broken)
+        lumos = target / "lumos"
+        text = lumos.read_text(encoding="utf-8")
+        old_digest = re.search(r"'test_quality_scan\.py': '([0-9a-f]{64})'", text).group(1)
+        new_digest = hashlib.sha256(broken.replace(b"\r\n", b"\n")).hexdigest()
+        lumos.write_text(text.replace(old_digest, new_digest), encoding="utf-8")
+        version = subprocess.run([sys.executable, str(lumos), "--version"],
+                                 capture_output=True, text=True, timeout=10)
+        self.assertEqual(version.returncode, 0, version.stderr)
+        quality = subprocess.run([sys.executable, str(lumos), "test-quality", "capabilities"],
+                                 capture_output=True, text=True, timeout=10)
+        self.assertEqual(quality.returncode, 2)
+        self.assertIn("sidecar import failure", json.loads(quality.stdout)["reason"])
 
     def test_utf16_dtd_is_not_a_valid_receipt(self):
         xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY label "ok">]><testsuite><testcase name="&label;"/></testsuite>'

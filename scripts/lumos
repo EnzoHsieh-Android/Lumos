@@ -49445,14 +49445,42 @@ def cmd_python_path():
 _TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': '97b1f6e950975add3c57029569974d2f981d02d017a3b23a5181e3bb20fad01d'}
 
 
+# 載入順序=依賴順序:轉接器頂層 import 共用 runner,被依賴者要先從已驗 bytes 登記,
+# 否則標準 import 會從磁碟(含舊 bytecode)另載一份(設計審 測試品質部署配套校驗 r1)。
+_TEST_QUALITY_LOAD_ORDER = ("test_quality.py", "test_quality_semgrep.py", "test_quality_scan.py")
+
+
+def _test_quality_bundle_unverified_refs(modules):
+    """回第一個「引用了配套模組或其物件、卻不是已驗那份」的位置;都對得上回 None。
+    以物件身分比對,不靠名字(包過一層的函式、工廠產物、取別名的實例名字都對不上);
+    數字與字串常數沒有來源資訊,這道核對看不到,靠依賴順序那道擋。"""
+    import types as _types
+    for name, module in modules.items():
+        for attr, value in list(vars(module).items()):
+            if isinstance(value, _types.ModuleType):
+                target = getattr(value, "__name__", None)
+                if target in modules and value is not modules[target]:
+                    return f"{name}.{attr} 不是已驗的 {target}"
+                continue
+            owner = getattr(value, "__module__", None)
+            if owner in modules and owner != name:
+                if not any(v is value for v in vars(modules[owner]).values()):
+                    return f"{name}.{attr} 不是已驗的 {owner}"
+    return None
+
+
 def _test_quality_bundle_sources():
     folder = Path(__file__).resolve().parent
     required = {Path(p).name for p in _VENDORED_TOOLKIT if Path(p).name.startswith("test_quality")}
-    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS):
-        raise ValueError("配套指紋清單未對齊")
+    if required != set(_TEST_QUALITY_BUNDLE_DIGESTS) or required != set(_TEST_QUALITY_LOAD_ORDER):
+        raise ValueError("配套指紋清單或載入順序未對齊")
     sources = {}
-    for name, expected in _TEST_QUALITY_BUNDLE_DIGESTS.items():
-        with (folder / name).open("rb") as stream:
+    for name in sorted(_TEST_QUALITY_BUNDLE_DIGESTS, key=_TEST_QUALITY_LOAD_ORDER.index):
+        expected = _TEST_QUALITY_BUNDLE_DIGESTS[name]
+        fd = _regular_own_fd(folder / name, os.O_RDONLY, require_owner=False, follow=True)   # 非阻塞開檔後判一般檔:FIFO/裝置檔不會卡住每個指令
+        if fd is None:
+            raise ValueError("配套檔缺少或不是一般檔案:" + name)
+        with os.fdopen(fd, "rb") as stream:
             raw = stream.read(10 * 1024 * 1024 + 1)
         if len(raw) > 10 * 1024 * 1024 or _vendored_digest(raw) != expected:
             raise ValueError("配套版本不一致:" + name)
@@ -49467,12 +49495,17 @@ def _test_quality_load_bundle():
     try:
         sources = _test_quality_bundle_sources()
         previous = {name: sys.modules.get(name, missing) for name in sources}
+        loaded = {}
         for name, (path, raw) in sources.items():
             spec = importlib.util.spec_from_file_location(name, path)
             module = importlib.util.module_from_spec(spec)
             sys.modules[name] = module
             exec(compile(raw, str(path), "exec"), module.__dict__)
-    except (OSError, ValueError, ImportError, SyntaxError) as exc:
+            loaded[name] = module
+        stray = _test_quality_bundle_unverified_refs(loaded)
+        if stray:
+            raise ValueError("配套載入混到未驗來源:" + stray)
+    except Exception as exc:   # 配套任何錯誤都只讓 test-quality 回部署不完整,不拖垮其他指令
         for name, module in previous.items():
             if module is missing:
                 sys.modules.pop(name, None)
@@ -49701,7 +49734,7 @@ def main():
         quality = sub.add_parser("test-quality", add_help=False,
                                  help="測試品質工具未完整部署，請更新來源與vendor")
         quality.add_argument("quality_args", nargs=argparse.REMAINDER)
-        quality.add_argument("--help", action="store_true")
+        quality.add_argument("-h", "--help", action="store_true")
     else:
         from test_quality import add_parser as _tq_parser
         _tq_parser(sub)
@@ -50513,13 +50546,7 @@ def main():
             print(json.dumps({"verdict": "not_assessed", "complete": False,
                               "reason": quality_deployment_error}, ensure_ascii=False))
             return 2
-        try:
-            from test_quality import dispatch as _tq_dispatch
-        except ModuleNotFoundError as exc:
-            if exc.name != "test_quality":
-                raise
-            print("測試品質工具未完整部署:缺 scripts/test_quality.py，請 lumos update。", file=sys.stderr)
-            return 2
+        from test_quality import dispatch as _tq_dispatch   # 配套已從驗過的 bytes 登記;缺檔在上面已回結構化錯誤
         return _tq_dispatch(args)
     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
         return cmd_report_normalize(args.path, write=args.write)
