@@ -6,9 +6,10 @@
 """dispatch-lens-hook — Claude Code PreToolUse(matcher Agent)薄殼(Projects/派工鏡頭注入_計劃,2026-09-03);
 Codex 側掛 SubagentStart(Projects/Codex完全支援_計劃 d3,2026-09-04):叫 `lumos dispatch-lens --claim` 領一席 → additionalContext。
 
-Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>`(有 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards)
+Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>`(有 `LUMOS-ROLE-CARDS: on` 就多傳 --role-cards;
+有 `LUMOS-ARCH-TARGET: on` 就多傳 --arch-target,`LUMOS-SPEC:` 那條路也傳)
 ②subprocess 叫 `lumos dispatch-lens` ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理);
-lumos 失敗時回傳裡若有角色段(role_text)照附。
+lumos 失敗時回傳裡若有角色段(role_text)或目標架構段(arch_text)照附。
 其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
 永不 deny、永不改 permissionDecision;失敗一律放行。超時、建鎖錯誤與本次背景啟動失敗各附固定說明並記事件；其他失敗仍可在 LUMOS_HOOK_DEBUG=1 看 stderr。
 本檔在 ANCHOR_FILES 內:改它要 `lumos anchor approve --note`。
@@ -27,6 +28,8 @@ SPEC_RE = re.compile(r"^LUMOS-SPEC:\s*(\S+)\s*$")   # 設計審用:給計劃筆�
 # 代碼審角色鏡頭(Projects/代碼審前後端角色鏡頭_計劃):派工詞同時有這行才叫 lumos 附角色卡——
 # 只有正確性席的範本放這行,架構對齊席、資安席不放(不然每席都拿同一份題,差異化被稀釋)。
 ROLE_RE = re.compile(r"^LUMOS-ROLE-CARDS:\s*on\s*$")
+# 目標架構(Projects/架構對齊可宣告目標架構_計劃):只有架構對齊席的範本放這行;代碼審與設計審都認。
+ARCH_RE = re.compile(r"^LUMOS-ARCH-TARGET:\s*on\s*$")
 # ★2026-09-07 改寫(全 repo 審視 #14)★:舊文字教人「派工前先手跑一次暖快取」——
 # 那件事現在機器自己做了(超時不再殺子行程,它會繼續算完寫進快取)。
 # ★刻意不寫「下一席大概率就有」★:那是機率宣稱,而這個專案的規矩是機率宣稱要附
@@ -171,6 +174,10 @@ def wants_role_cards(prompt: str) -> bool:
     return any(ROLE_RE.match(line.strip()) for line in prompt.split("\n"))
 
 
+def wants_arch_target(prompt: str) -> bool:
+    return any(ARCH_RE.match(line.strip()) for line in prompt.split("\n"))
+
+
 # ── ★注入框:把「機器附加的內容」跟系統話明確分開★ ────────────────────────
 # 單源說明在 Systems/hook信任邊界;這段在幾支 hook 與 scripts/lumos 裡是逐字相同的複本,
 # 有守衛盯著不准漂(hook 是獨立檔、複製出去後彼此 import 不到)。
@@ -257,10 +264,11 @@ def _fail_note(r, rng, repo) -> str:
     return FAIL_NOTE.format(what=what, repo=_clean_field(repo), why=why)
 
 
-def _role_text(r) -> str:
-    """lumos 失敗分支(超時、沒有圖譜、base 不在主線)也會印帶 role_text 的 JSON;讀得到就回它,讀不到回空字串。"""
-    t = _last_json(r).get("role_text")
-    return t if isinstance(t, str) else ""
+def _extra_text(r) -> str:
+    """lumos 失敗分支(超時、沒有圖譜、base 不在主線)也會印帶 role_text / arch_text 的 JSON;讀得到就回它們(角色在前),讀不到回空字串。"""
+    d = _last_json(r)
+    parts = [d.get(k) for k in ("role_text", "arch_text")]
+    return "\n\n".join(x for x in parts if isinstance(x, str) and x)
 
 
 def find_spec_marker(prompt: str) -> str | None:
@@ -439,15 +447,18 @@ def main() -> int:
     argv = argv + (["--deadline", f"{_dl:.2f}"] if rng else [])
     if rng and wants_role_cards(prompt):
         argv.append("--role-cards")
+    if wants_arch_target(prompt):
+        argv.append("--arch-target")
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
     except (subprocess.TimeoutExpired, OSError):
         r = None
-    if r is not None and r.returncode == 2 and not (r.stdout or "").strip() and "--role-cards" in argv:
-        # 新掛鉤配舊 lumos:舊版不認 --role-cards 會回 rc2 空輸出,不重叫的話連圖譜段都丟(代碼審 r1 外家 F2)。
-        # 掛鉤是複製進使用者目錄的,兩邊版本錯開是常態;拿掉旗標重叫一次,舊版照附圖譜段。
-        argv = [a for a in argv if a != "--role-cards"]
-        _debug("lumos 不認 --role-cards(rc2、沒輸出),多半是舊版;拿掉旗標重叫一次")
+    _opt_flags = ("--role-cards", "--arch-target")
+    if r is not None and r.returncode == 2 and not (r.stdout or "").strip() and any(f in argv for f in _opt_flags):
+        # 新掛鉤配舊 lumos:舊版不認 --role-cards / --arch-target 會回 rc2 空輸出,不重叫的話連圖譜段都丟(代碼審 r1 外家 F2)。
+        # 掛鉤是複製進使用者目錄的,兩邊版本錯開是常態;拿掉兩個選配旗標重叫一次,舊版照附圖譜段。
+        argv = [a for a in argv if a not in _opt_flags]
+        _debug("lumos 不認選配旗標(rc2、沒輸出),多半是舊版;拿掉 --role-cards/--arch-target 重叫一次")
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
         except (subprocess.TimeoutExpired, OSError):
@@ -462,9 +473,9 @@ def main() -> int:
             pass
     lock_path = _clean_field(lock_status.get("lock_path", ""))
     if lock_status.get("spawn_error") is True:
-        _role = _role_text(r)
+        _extra = _extra_text(r)
         _emit_updated(tool_input, prompt, SPAWN_ERROR_NOTE.format(lock=lock_path)
-                      + ("\n\n" + _role if _role else ""))
+                      + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 本次背景未啟動,已附錯誤說明")
         try:
             import sys as _s2, pathlib as _p2
@@ -475,9 +486,9 @@ def main() -> int:
             pass
         return 0
     if lock_status.get("lock_error") is True:
-        _role = _role_text(r)
+        _extra = _extra_text(r)
         _emit_updated(tool_input, prompt, LOCK_ERROR_NOTE.format(lock=lock_path)
-                      + ("\n\n" + _role if _role else ""))
+                      + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 鎖無法建立,已附錯誤說明")
         try:
             import sys as _s2, pathlib as _p2
@@ -495,8 +506,8 @@ def main() -> int:
                  if lock_status.get("lock_uncertain") is True else
                  TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng else
                  SPEC_TIMEOUT_NOTE.format(what=what))
-        _role = _role_text(r) if r is not None else ""
-        _emit_updated(tool_input, prompt, _note + ("\n\n" + _role if _role else ""))
+        _extra = _extra_text(r) if r is not None else ""
+        _emit_updated(tool_input, prompt, _note + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 超時或鎖狀態未知,已附對應說明行")
         # ★吞掉逾時的地方要自己講一聲★(#19 r1 外家否決席 blocker):
         # 這一條是「捕捉逾時 → 附說明 → 正常 return 0」,而 guard() 只看得到有沒有丟例外,
@@ -512,11 +523,11 @@ def main() -> int:
         return 0
 
     if r.returncode != 0:
-        _role = _role_text(r)
+        _extra = _extra_text(r)
         _note = _fail_note(r, rng, repo)   # 範圍算不出來才有;說明在前、角色卡在後
-        if _note or _role:   # 圖譜那段失敗,角色卡照附(角色不需要圖譜)
-            _emit_updated(tool_input, prompt, "\n\n".join(x for x in (_note, _role) if x))
-        _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},附了 {bool(_note) + bool(_role)} 段(說明/角色卡;0=放行)")
+        if _note or _extra:   # 圖譜那段失敗,角色卡照附(角色不需要圖譜)
+            _emit_updated(tool_input, prompt, "\n\n".join(x for x in (_note, _extra) if x))
+        _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},附了 {bool(_note) + bool(_extra)} 段(說明/角色卡;0=放行)")
         return 0
     try:
         data = json.loads(r.stdout.strip().splitlines()[-1])

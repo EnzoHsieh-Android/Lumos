@@ -171,3 +171,7 @@ PITFALL:同席的期限末注入證明：最後一次輪詢後、期限前快取
 
 
 PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻仍沿該目錄建立暖機鎖，會在外部目標留下無法由背景工作清除的鎖，後續呼叫反覆逾時。整段審查 r2 正確性席已在無 `getuid` 故障注入重現首、次呼叫皆 rc5 且只啟動一次；來源 `governance/review-reports/code-過期鎖收斂修復/r2-single-reviewer.md`。防回歸 `t_lens_untrusted_cache_never_creates_external_lock` 驗拒絕外部路徑與零新背景程序，`t_lens_trusted_cache_still_spawns_warmer` 驗合法私有目錄仍能暖機；兩面要一起守。
+
+## 目標架構標記(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]])
+
+派工掛鉤多認一行 LUMOS-ARCH-TARGET: on(代碼審與設計審兩條路都認),多傳 --arch-target;舊版 lumos 不認回 rc2 空輸出時,把 --role-cards 與 --arch-target 一起拿掉重叫,照附圖譜段。失敗分支照附的附加段從角色段擴成角色段加目標架構段。Codex 編排走 --arm/--claim,目前不附目標架構段(同角色卡)。
