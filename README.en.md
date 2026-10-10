@@ -38,7 +38,7 @@ The outer loop checks the process itself; see "How the toolkit keeps improving (
 
 ## Connecting plans, features, and verification
 
-Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows the sequence: plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests. Important rules become protected (gold rings) only after linking to verification records. If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
+Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows the sequence: plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests. The gold rings are only an illustration of a note that carries a contract and links to verification records; the tool has no “protected” status. What it actually does is record important rules as ★INVARIANT★ contract lines, bind the tests that guard them, have an AI that took no part in the work audit them independently, and optionally break the code on purpose in an isolated copy to confirm the tests turn red (`lumos guard`). If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
 
 <p align="center">
   <a href="assets/graph-demo-en.svg">
@@ -68,12 +68,35 @@ Review is one layer. Risk classification, AI review, approval rules, external ru
   </a>
 </p>
 
+## Tests must be useful, not a rewrite of the code
+
+**All tests passing does not mean the feature is correct.** If a test computes its expected value with the same algorithm as the production code, both can make the same mistake and still pass. If it only checks that the source contains a certain function name, the actual behavior can break while the test stays green.
+
+Say the requirement is "3 items at 5 each should total 15":
+
+```python
+# Bad: rewrites the implementation's algorithm, so it cannot independently judge whether the algorithm meets the requirement
+expected = quantity * unit_price
+assert total_price(quantity, unit_price) == expected
+
+# Good: checks the actual result against a confirmed requirement case
+assert total_price(quantity=3, unit_price=5) == 15
+```
+
+This case is only a starting point; discounts, empty orders, invalid input, and other behavior still need to be covered according to the requirements. Lumos asks developers to state "input, expected result, source of the oracle, and the error it should catch" up front. For bug fixes and key guards, they must also confirm that the fault actually turns the target assertion red, then restore the code and see it go green. Structure and wiring checks can stay, but they cannot replace behavior verification.
+
+**Catching a broken program does not mean the expected answer is right.** The program and the test can copy the same wrong requirement; check an independent source for the answer first, then look at fault-red and restore-green. For behavior tests suspected of being tied to the implementation, also check that a behavior-preserving refactor stays green. Per-stack writing workflows, tool qualification exams, and evidence boundaries are in the [test quality onboarding standard](skills/lumos-project-notes/commands/test-quality-standard.md) (Chinese).
+
+The full practice is in [Implementation test quality](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質) (Chinese), shared by the development and review instructions. These are development and review requirements; automated checks verify record formats and cannot judge for a person whether a test is actually useful.
+
+The installed `lumos test-quality scan <test file or directory> --json` provides a read-only candidate scan: for Python it finds four kinds of suspicious patterns, and for other languages an optional local Semgrep recognizes specific self-comparing assertions (PHP included). `capture` explicitly runs a trusted local runner and saves JUnit output and source snapshots; `check` verifies normal → fault → restored evidence, plus optional refactor evidence. **Zero candidates, a green run, or a detected fault cannot on its own prove that a test has an independent answer.** The tool provides no sandbox and does not replace reviewing the requirement source; check the scope with `capabilities` first, then read [operation and capability limits](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli) (Chinese).
+
 ## Where humans come in
 
 By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
 
 - Requirements, trade-offs, risk acceptance, and irreversible operations.
-- If high-risk review has not passed after 3 rounds, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
+- If a standard- or high-tier review (design or code review alike) has not passed after its 3-round cap, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
 - Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
 - Each round's review reports and outcomes stay in the repo for spot-checking at any time.
 
@@ -85,13 +108,15 @@ Notes that describe old code can mislead AI. When I planted incorrect notes in a
 
 Some sentences go stale easily: “there is no refund page yet” becomes wrong once the page exists, but nobody returns to fix it. When such a sentence is added, the tool suggests a one-line “revisit condition” stating when to check again, such as “when the refund page's file appears.” If the writer follows that advice, the push adding that file is blocked and the check points to the sentence. Update it or give a reason to keep it before pushing. The suggestion itself does not block commits, but a revisit condition must sit on its own line: one buried mid-sentence or in a table blocks the commit. Mark a condition as closed once it no longer needs a look, and it stops reminding.
 
-**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit.
+**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit. The “code changed, notes untouched” check always blocks and projects cannot turn it off; if no note change is really needed, skip it with `git commit --no-verify`; a post-commit hook records every skip.
 
-**Third check: find outdated statements before pushing.** Pushes are blocked if Python functions, classes, module- or class-level variables and constants, or command-line flags were deleted or renamed, or code files deleted or moved, and the old names or paths are still mentioned in the home notes of the code files you changed or in any note's summary (mentions elsewhere are only listed), if a rule's test exists but its note still says “test to be added,” a linked note was deleted, a revisit condition is met, or a rule's own “retire when…” condition has come true. A test name bound in a note that no longer matches a real test only warns by default; projects can make it block. Code changes without note updates and broken note links always block; projects can set other blocking checks to warn instead.
+**Third check: find outdated statements before pushing.** Pushes are blocked if Python functions, classes, module- or class-level variables and constants, or command-line flags were deleted or renamed, or code files deleted or moved, and the old names or paths are still mentioned in the home notes of the code files you changed or in any note's summary (mentions elsewhere are only listed), if a rule's test exists but its note still says “test to be added,” a linked note was deleted, a revisit condition is met, or a rule's own “retire when…” condition has come true. A test name bound in a note that no longer matches a real test only warns by default; projects can make it block. Broken links between notes always block.
 
-One more pre-push check rereads notes. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the change and the whole note go to AI first, which points out the lines that are no longer true. The local push is blocked until that reread is recorded and every rule line it flags is fixed or explicitly kept; CI only warns. Projects that can't send code to an external model can set this check to warn or off.
+One more pre-push check rereads notes. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the change and the whole note go to AI first, which points out the lines that are no longer true. The local push is blocked until that reread is recorded and every rule line it flags is fixed or explicitly kept; CI only warns. To keep a flagged line, record that with `lumos drift ack --kind reread`. Projects that can't send code to an external model can set this check to warn or off.
 
-**Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue through the tool is blocked while its summary still lists an undecided decision or unhandled revisit conditions.
+**Which checks a project can relax.** In `.lumos/config.json`, a project can set these to warn or off: outdated-statement checks, the note reread, note wording rules, file ownership, and new linter warnings (a few less common switches are listed in the [command reference](docs/command-reference.md#project-switches)). These have no switch: code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval, a failing full test suite in Lumos's own repo, and a missing Python 3.14.
+
+**Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue with `lumos drift fix --kind c2 --close` is blocked while its summary still lists an undecided decision or unhandled revisit conditions; changing its status directly with `lumos set` only lists them and does not block.
 
 Closing a note without updating its summary also triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Keeping a met revisit condition requires an expiry or a traceable destination. Use `lumos summary-line` to maintain summaries; preview stale update-date repairs with `lumos updated-sync --stale --dry-run`.
 
@@ -126,22 +151,22 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 - **Review replay**: Reviewed cases store a pass/fail verdict. The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
 - **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
-- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own.
+- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [October 7–10 update audit](docs/updates/2026-10-10-readme-audit.md) (Chinese)).
 - **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
 
 <p align="center">
   <a href="assets/evals-overview-en.svg">
-    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, checks with notification thresholds alert a person, and fixes become rules or tests measured again the next week" width="760">
+    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, a person is alerted when something goes wrong, and fixes become rules or tests measured again the next week" width="760">
   </a>
 </p>
 
-The notification step in the illustration applies to checks with notification thresholds; missed-note checks produce a list and distribution.
+Not every check alerts a person as the illustration's step suggests; the next paragraph says which ones do.
 
-Results are recorded weekly. Checks with notification thresholds alert a person on regressions or failures; missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches, needs refreezing, cannot be frozen, or the replay or catch-up freeze run hits an error, or when a scenario probe fails. A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when one tenth or more of the candidate notes its scoring touches have no label yet (this can happen even when every question has an answer), so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
 
 There is also an [offline review convergence evaluator](governance/eval/review_convergence.md). It collects case leads from ordinary and capped reviews and compares two workflows on pinned cases and versions, separating repair, preserved behavior, new defects, rounds, and cost. Missing data remains unknown. It is a read-only local analysis tool, outside the weekly schedule; it does not run models or re-execute acceptance checks. Fingerprints check declaration consistency, not truth, and do not prove that review rounds have decreased.
 
-These evals run only in Lumos's own repo. They ensure regressions are visible, but do not guarantee that every change is an improvement.
+These evals run mainly in Lumos's own repo; the retrieval exam also covers one other project named in the scheduling script, when that machine has its exam. They ensure regressions are visible, but do not guarantee that every change is an improvement.
 
 ## Install and limits
 
@@ -151,7 +176,7 @@ You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project di
 curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 ```
 
-**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7 update audit](docs/updates/2026-10-07-readme-audit.md) lists commits, documentation changes, and release boundaries.
+**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7](docs/updates/2026-10-07-readme-audit.md) and [October 7–10](docs/updates/2026-10-10-readme-audit.md) update audits (Chinese) list each audit's commits, documentation changes, and release boundaries.
 
 When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to confirm all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese). To upgrade an existing project, run `lumos update --dry-run` first to preview which rule files and tool files would change; it changes nothing.
 

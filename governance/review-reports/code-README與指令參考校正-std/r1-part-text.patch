@@ -1,0 +1,926 @@
+diff --git a/README.en.md b/README.en.md
+index b0ccf7cf..ac0d3664 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -31,21 +31,21 @@ The core toolset consists of a single-file Python CLI using only the standard li
+ 
+ 1. **Read the code, add context**: AI reads the code first. When it edits a file, the tool supplies related notes with reasons the code cannot reveal. For descriptions of code behavior, code takes precedence over conflicting notes. For deployment state, business constraints, and other questions code cannot answer, verify or ask a person.
+ 2. **Assign AI reviewers based on risk**: See "How code review works" below.
+ 3. **Every finding needs an outcome**: Fix it, explain why it will not be fixed, or disprove it with evidence. All findings must be addressed to pass.
+ 4. **Update the notes**: Record trade-offs and verification methods in the note responsible for that file, ready for the next change.
+ 
+ The outer loop checks the process itself; see "How the toolkit keeps improving (evals)" below.
+ 
+ ## Connecting plans, features, and verification
+ 
+-Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows the sequence: plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests. Important rules become protected (gold rings) only after linking to verification records. If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
++Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows the sequence: plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests. The gold rings are only an illustration of a note that carries a contract and links to verification records; the tool has no “protected” status. What it actually does is record important rules as ★INVARIANT★ contract lines, bind the tests that guard them, have an AI that took no part in the work audit them independently, and optionally break the code on purpose in an isolated copy to confirm the tests turn red (`lumos guard`). If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
+ 
+ <p align="center">
+   <a href="assets/graph-demo-en.svg">
+     <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
+   </a>
+ </p>
+ 
+ ## How code review works
+ 
+ <p align="center">
+@@ -61,44 +61,69 @@ Linked notes form a “graph”; each note is a “node” covering a plan, feat
+ **Fixing a defect must also preserve behavior that already worked.** Revision-round instructions pin the before and after versions, check that the original problem fails before and passes after, and separately check that existing behavior passes on both versions. Fresh reviewers then examine repair side effects. Repairs mixed with refactoring retain intermediate verification points; selected high-risk preservation cases also check whether tests detect degradation. `lumos loop fix-check` checks repair records and post-fix tests, but is advisory and does not replace these checks or the next review. Evidence references, snapshots, and records are also checked before accepting them. See the [code review instructions](skills/lumos-code-loop/SKILL.md).
+ 
+ Review is one layer. Risk classification, AI review, approval rules, external rules (linters), and tests each have gaps. Stacking them makes it harder for a problem to pass through them all: the Swiss cheese model.
+ 
+ <p align="center">
+   <a href="assets/swiss-cheese-en.svg">
+     <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
+   </a>
+ </p>
+ 
++## Tests must be useful, not a rewrite of the code
++
++**All tests passing does not mean the feature is correct.** If a test computes its expected value with the same algorithm as the production code, both can make the same mistake and still pass. If it only checks that the source contains a certain function name, the actual behavior can break while the test stays green.
++
++Say the requirement is "3 items at 5 each should total 15":
++
++```python
++# Bad: rewrites the implementation's algorithm, so it cannot independently judge whether the algorithm meets the requirement
++expected = quantity * unit_price
++assert total_price(quantity, unit_price) == expected
++
++# Good: checks the actual result against a confirmed requirement case
++assert total_price(quantity=3, unit_price=5) == 15
++```
++
++This case is only a starting point; discounts, empty orders, invalid input, and other behavior still need to be covered according to the requirements. Lumos asks developers to state "input, expected result, source of the oracle, and the error it should catch" up front. For bug fixes and key guards, they must also confirm that the fault actually turns the target assertion red, then restore the code and see it go green. Structure and wiring checks can stay, but they cannot replace behavior verification.
++
++**Catching a broken program does not mean the expected answer is right.** The program and the test can copy the same wrong requirement; check an independent source for the answer first, then look at fault-red and restore-green. For behavior tests suspected of being tied to the implementation, also check that a behavior-preserving refactor stays green. Per-stack writing workflows, tool qualification exams, and evidence boundaries are in the [test quality onboarding standard](skills/lumos-project-notes/commands/test-quality-standard.md) (Chinese).
++
++The full practice is in [Implementation test quality](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質) (Chinese), shared by the development and review instructions. These are development and review requirements; automated checks verify record formats and cannot judge for a person whether a test is actually useful.
++
++The installed `lumos test-quality scan <test file or directory> --json` provides a read-only candidate scan: for Python it finds four kinds of suspicious patterns, and for other languages an optional local Semgrep recognizes specific self-comparing assertions (PHP included). `capture` explicitly runs a trusted local runner and saves JUnit output and source snapshots; `check` verifies normal → fault → restored evidence, plus optional refactor evidence. **Zero candidates, a green run, or a detected fault cannot on its own prove that a test has an independent answer.** The tool provides no sandbox and does not replace reviewing the requirement source; check the scope with `capabilities` first, then read [operation and capability limits](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli) (Chinese).
++
+ ## Where humans come in
+ 
+ By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
+ 
+ - Requirements, trade-offs, risk acceptance, and irreversible operations.
+-- If high-risk review has not passed after 3 rounds, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
++- If a standard- or high-tier review (design or code review alike) has not passed after its 3-round cap, stop for a human decision; AI cannot declare a pass itself. Record the decision to add a round or accept risk with `lumos loop cap-decision`. Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip. Once a human decision has been recorded, missing retrospective evidence blocks subsequent recording and the disposal gate.
+ - Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
+ - Each round's review reports and outcomes stay in the repo for spot-checking at any time.
+ 
+ ## How notes are kept from going stale (drift)
+ 
+ Notes that describe old code can mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos therefore checks at three points: writing notes, committing, and pushing.
+ 
+ **First check: write only what code cannot reveal.** Fields, defaults, and flows that the code already shows are not copied into notes. The tool blocks only two fixed patterns at commit time: new code line references and current-state descriptions (such as deployment settings) without a source. The rest relies on working rules and review.
+ 
+ Some sentences go stale easily: “there is no refund page yet” becomes wrong once the page exists, but nobody returns to fix it. When such a sentence is added, the tool suggests a one-line “revisit condition” stating when to check again, such as “when the refund page's file appears.” If the writer follows that advice, the push adding that file is blocked and the check points to the sentence. Update it or give a reason to keep it before pushing. The suggestion itself does not block commits, but a revisit condition must sit on its own line: one buried mid-sentence or in a table blocks the commit. Mark a condition as closed once it no longer needs a look, and it stops reminding.
+ 
+-**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit.
++**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit. The “code changed, notes untouched” check always blocks and projects cannot turn it off; if no note change is really needed, skip it with `git commit --no-verify`; a post-commit hook records every skip.
++
++**Third check: find outdated statements before pushing.** Pushes are blocked if Python functions, classes, module- or class-level variables and constants, or command-line flags were deleted or renamed, or code files deleted or moved, and the old names or paths are still mentioned in the home notes of the code files you changed or in any note's summary (mentions elsewhere are only listed), if a rule's test exists but its note still says “test to be added,” a linked note was deleted, a revisit condition is met, or a rule's own “retire when…” condition has come true. A test name bound in a note that no longer matches a real test only warns by default; projects can make it block. Broken links between notes always block.
+ 
+-**Third check: find outdated statements before pushing.** Pushes are blocked if Python functions, classes, module- or class-level variables and constants, or command-line flags were deleted or renamed, or code files deleted or moved, and the old names or paths are still mentioned in the home notes of the code files you changed or in any note's summary (mentions elsewhere are only listed), if a rule's test exists but its note still says “test to be added,” a linked note was deleted, a revisit condition is met, or a rule's own “retire when…” condition has come true. A test name bound in a note that no longer matches a real test only warns by default; projects can make it block. Code changes without note updates and broken note links always block; projects can set other blocking checks to warn instead.
++One more pre-push check rereads notes. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the change and the whole note go to AI first, which points out the lines that are no longer true. The local push is blocked until that reread is recorded and every rule line it flags is fixed or explicitly kept; CI only warns. To keep a flagged line, record that with `lumos drift ack --kind reread`. Projects that can't send code to an external model can set this check to warn or off.
+ 
+-One more pre-push check rereads notes. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the change and the whole note go to AI first, which points out the lines that are no longer true. The local push is blocked until that reread is recorded and every rule line it flags is fixed or explicitly kept; CI only warns. Projects that can't send code to an external model can set this check to warn or off.
++**Which checks a project can relax.** In `.lumos/config.json`, a project can set these to warn or off: outdated-statement checks, the note reread, note wording rules, file ownership, and new linter warnings (a few less common switches are listed in the [command reference](docs/command-reference.md#project-switches)). These have no switch: code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval, a failing full test suite in Lumos's own repo, and a missing Python 3.14.
+ 
+-**Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue through the tool is blocked while its summary still lists an undecided decision or unhandled revisit conditions.
++**Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue with `lumos drift fix --kind c2 --close` is blocked while its summary still lists an undecided decision or unhandled revisit conditions; changing its status directly with `lumos set` only lists them and does not block.
+ 
+ Closing a note without updating its summary also triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Keeping a met revisit condition requires an expiry or a traceable destination. Use `lumos summary-line` to maintain summaries; preview stale update-date repairs with `lumos updated-sync --stale --dry-run`.
+ 
+ When a note says something like “there are N kinds,” it can be tied to the list in the code (Python for now); if the code gains an item and the note doesn't, the health check lists it and one command updates the number.
+ 
+ <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences and a block for revisit conditions buried mid-sentence, note maintenance checked at commit, and outdated references, broken links, revisit and retire conditions that have come true, missing bound tests and sentences still pending on a closed note checked before push, and notes changed with the code must first be reread by AI (blocked on the local push); each check is labelled as a block or warning" width="760"></a></p>
+ 
+ ## What it looks like
+ 
+ Take the commit check as an example. If AI changes the refund logic and commits without writing notes, it receives this message (real output, excerpted and translated from Chinese):
+@@ -119,46 +144,46 @@ Pick one of two paths:
+ ```
+ 
+ The message is for AI: its instructions require it to update the notes and retry. If no update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. You mainly decide business trade-offs and whether to accept a risk.
+ 
+ ## How the toolkit keeps improving (evals)
+ 
+ You cannot rely on gut feeling alone to tell whether a rule change broke something or the AI is following the rules. Lumos runs four evaluations (evals), each once a week:
+ 
+ - **Review replay**: Reviewed cases store a pass/fail verdict. The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
+ - **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
+-- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own.
++- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Every run starts from a fresh copy of the same frozen snapshot, so nothing one run changes carries into the next. An incident (for example, the machine's global skills links being altered, or a copy that cannot be cleaned up) stops the whole batch. Broken runs, such as truncated ones or ones that hit a usage limit, are not scored, and a batch with fewer than half its runs valid draws no conclusion. An optional local usage ledger can also cap model launches within a time window across batches (off by default).
+ - **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
+ 
+ <p align="center">
+   <a href="assets/evals-overview-en.svg">
+-    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, checks with notification thresholds alert a person, and fixes become rules or tests measured again the next week" width="760">
++    <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, a person is alerted when something goes wrong, and fixes become rules or tests measured again the next week" width="760">
+   </a>
+ </p>
+ 
+-The notification step in the illustration applies to checks with notification thresholds; missed-note checks produce a list and distribution.
++Not every check alerts a person as the illustration's step suggests; the next paragraph says which ones do.
+ 
+-Results are recorded weekly. Checks with notification thresholds alert a person on regressions or failures; missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
++Results are recorded weekly. A person is alerted when review replay finds a case whose verdict no longer matches or needs refreezing, or when a scenario probe fails (a review replay that errors out also alerts). A lower retrieval-exam score is only recorded, not alerted; the exam alerts a person only when unlabelled questions reach one tenth or more, so someone can label them. Missed-note checks produce a list and distribution. Fixes become new rules or tests, checked again the next week. Major changes in direction start with a controlled experiment: the principle "read the code first; notes only add context" was adopted only after such an experiment.
+ 
+ There is also an [offline review convergence evaluator](governance/eval/review_convergence.md). It collects case leads from ordinary and capped reviews and compares two workflows on pinned cases and versions, separating repair, preserved behavior, new defects, rounds, and cost. Missing data remains unknown. It is a read-only local analysis tool, outside the weekly schedule; it does not run models or re-execute acceptance checks. Fingerprints check declaration consistency, not truth, and do not prove that review rounds have decreased.
+ 
+-These evals run only in Lumos's own repo. They ensure regressions are visible, but do not guarantee that every change is an improvement.
++These evals run mainly in Lumos's own repo; the retrieval exam also covers one other project named in the scheduling script, when that machine has its exam. They ensure regressions are visible, but do not guarantee that every change is an improvement.
+ 
+ ## Install and limits
+ 
+ You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project directory:
+ 
+ ```bash
+ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ ```
+ 
+-**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7 update audit](docs/updates/2026-10-07-readme-audit.md) lists commits, documentation changes, and release boundaries.
++**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7](docs/updates/2026-10-07-readme-audit.md) and [October 7–10](docs/updates/2026-10-10-readme-audit.md) update audits (Chinese) list each audit's commits, documentation changes, and release boundaries.
+ 
+ When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to confirm all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese). To upgrade an existing project, run `lumos update --dry-run` first to preview which rule files and tool files would change; it changes nothing.
+ 
+ <details>
+ <summary>Projects already on an older Lumos: moving to Python 3.14</summary>
+ 
+ - After updating, commits and pushes are blocked on machines without 3.14, with install instructions (macOS: `brew install python@3.14` or `uv python install 3.14`). If `python3` points to an older version, lumos finds 3.14 and re-runs itself.
+ - Set your CI's `actions/setup-python` to 3.14.
+ - Once 3.14 is installed, run `lumos install` once so the Claude/Codex hooks use it too.
+ - This changes the Codex hook command lines, so Codex may ask you to re-approve them in an interactive session. Codex's trust state cannot be read locally; confirm with `lumos enforcement` plus one real trigger.
+diff --git a/README.md b/README.md
+index e6b2b429..d7069421 100644
+--- a/README.md
++++ b/README.md
+@@ -31,21 +31,21 @@ Lumos 把這些脈絡留在專案裡。它搭配 Claude Code 或 Codex，要求
+ 
+ 1. **讀程式碼，補上脈絡**：AI 先讀程式碼；改檔時，工具會送上相關筆記，補上程式碼看不出的理由。筆記講的程式行為跟程式碼對不上時，以程式碼為準；部署狀態、業務限制這類程式碼答不了的，要查證或問人。
+ 2. **依風險派 AI 審查**：見下面「怎麼做 code review」。
+ 3. **每條意見都要有結果**：修掉、說明不修的理由，或用證據證明不成立；全部處理完才過關。
+ 4. **寫回筆記**：把這次的取捨和驗證方式寫進負責這支檔的筆記，下次改到這裡查得到。
+ 
+ 外圈檢查流程本身，見下方「怎麼持續改進這套工具（evals）」。
+ 
+ ## 從計劃到驗證，讓筆記一步步連起來
+ 
+-互相連結的筆記合稱「圖譜」，每篇是一個「節點」，分成計劃、功能說明、驗證紀錄和事故。下圖以虛構的線上商店為例：先寫結帳與付款串接的計劃，做出功能，再留下端對端測試和重複付款壓力測試的驗證紀錄；重要規則連上驗證紀錄後，才標成受保護（圖上的金環）。發生「取消訂單未退點」時，事故連回結帳流程，接著開修復計劃、修正功能、補上回歸測試。
++互相連結的筆記合稱「圖譜」，每篇是一個「節點」，分成計劃、功能說明、驗證紀錄和事故。下圖以虛構的線上商店為例：先寫結帳與付款串接的計劃，做出功能，再留下端對端測試和重複付款壓力測試的驗證紀錄。圖上的金環只是示意，代表那篇帶合約、也連到了驗證紀錄；工具裡沒有「受保護」這種狀態，實際做的是把重要規則寫成 ★INVARIANT★ 合約行、綁上守它的測試，交給沒參與的 AI 獨立審計，並可在隔離副本裡故意弄壞程式、確認測試會翻紅（`lumos guard`）。發生「取消訂單未退點」時，事故連回結帳流程，接著開修復計劃、修正功能、補上回歸測試。
+ 
+ <p align="center">
+   <a href="assets/graph-demo-zh.svg">
+     <img src="assets/graph-demo-zh.svg" alt="線上商店的示意筆記關聯圖：計劃連到功能與驗證紀錄，事故教訓回到後續計劃" width="760">
+   </a>
+ </p>
+ 
+ ## 怎麼做 code review
+ 
+ <p align="center">
+@@ -89,39 +89,41 @@ assert total_price(quantity=3, unit_price=5) == 15
+ 
+ 完整做法見 [實作測試品質](skills/lumos-project-notes/commands/03-寫回圖譜.md#實作測試品質)，開發與審查工作指引共用這份規範。這是開發及審查要求；自動檢查紀錄格式，不能替人判斷測試是否真的有用。
+ 
+ 已安裝的 `lumos test-quality scan <測試檔或目錄> --json` 提供唯讀候選掃描；Python 可找四類可疑寫法，其他語言選配本機 Semgrep 辨識特定斷言自比（含 PHP）。`capture` 可明示執行可信本機 runner、保存 JUnit 與來源快照；`check` 核對正常→故障→還原及選配重構證據。**零候選、綠燈或故障檢出，都不能單獨證明測試有獨立答案。** 工具不提供沙盒、不替代需求來源審查；先用 `capabilities` 看範圍，再讀 [操作與能力邊界](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
+ 
+ ## 人在哪裡介入？
+ 
+ Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責這些判斷：
+ 
+ - 需求、取捨、要不要接受風險，以及不可逆的操作。
+-- 高風險審查到 3 輪仍未通過，就停下交給人，AI 不自行宣布通過。人決定加輪或接受風險後，用 `lumos loop cap-decision` 留下裁定；繼續前用 `lumos loop retro` 記合格回顧，或留下有理由的略過紀錄。已記人裁卻缺少這項紀錄，後續記帳與處置閘會擋下。
++- standard 或 high 分級的審查（設計審、代碼審都算）跑到 3 輪上限仍未通過，就停下交給人，AI 不自行宣布通過。人決定加輪或接受風險後，用 `lumos loop cap-decision` 留下裁定；繼續前用 `lumos loop retro` 記合格回顧，或留下有理由的略過紀錄。已記人裁卻缺少這項紀錄，後續記帳與處置閘會擋下。
+ - 規則還符不符合業務，要人簽核並留紀錄，這是測試證明不了的。
+ - 每輪的審查報告和處理結果都留在 repo，隨時可以抽查。
+ 
+ ## 怎麼防止筆記過期（drift）
+ 
+ 程式改了、筆記還在講舊的，AI 讀到就會被誤導：我在合成專案裡埋進錯誤筆記，較小的模型 Haiku 4.5 答對率從 20/25 掉到 12/25。Lumos 因此在寫筆記、提交、推送三個時間點各設一道關卡。
+ 
+ **第一道：只寫程式碼看不出的東西。** 程式碼查得到的欄位、預設值和流程不抄進筆記。工具能擋的只有兩種固定寫法：新寫的程式行號，以及沒註明來源的現況描述（例如部署設定），提交時擋下；其餘靠守則和審查。
+ 
+ 還有一種句子特別容易過期：像「目前還沒有退款頁面」，頁面做出來這句就錯了，卻沒人會回來改。新寫這種句子時，工具會提醒把它改成一行「回頭條件」，寫明什麼時候該回頭檢查，例如「退款頁面那支檔出現時」。照做的話，那支檔出現的那次推送會被擋下，要把句子改成現況或寫明理由保留才推得出去。提醒本身不擋提交；但回頭條件要獨立一行，寫在句子中間或表格裡，提交時會擋下。不必再回頭的條件標上「已結案」，就不再提醒。
+ 
+-**第二道：提交時筆記有沒有跟著改。** 改了程式卻沒動任何筆記，或新增的程式檔沒指定負責的筆記，都會擋下。
++**第二道：提交時筆記有沒有跟著改。** 改了程式卻沒動任何筆記，或新增的程式檔沒指定負責的筆記，都會擋下。「改程式沒動筆記」這道一定擋，專案不能關；真的不用改筆記可以用 `git commit --no-verify` 跳過，提交後會自動記一筆跳過紀錄。
+ 
+-**第三道：推送前找舊說法。** Python 的函式、類別、模組層或類別層的變數與常數，或指令旗標刪了、改名了，或程式檔刪了、搬走了，而這次改到的程式檔的家筆記、或任何筆記的摘要還在提舊名稱或路徑（其他地方提到只列出、不擋）；規則的測試已經上線、筆記還寫「之後補測試」，連到的筆記已被刪除、回頭條件成立了，或規則寫的「什麼時候可以撤掉」已經成立，就擋下推送。筆記裡綁的測試名稱找不到真的測試，預設只提醒，專案可以設成擋。「改程式沒動筆記」和「連結斷掉」一定擋，其他會擋的檢查可由專案改成只提醒。
++**第三道：推送前找舊說法。** Python 的函式、類別、模組層或類別層的變數與常數，或指令旗標刪了、改名了，或程式檔刪了、搬走了，而這次改到的程式檔的家筆記、或任何筆記的摘要還在提舊名稱或路徑（其他地方提到只列出、不擋）；規則的測試已經上線、筆記還寫「之後補測試」，連到的筆記已被刪除、回頭條件成立了，或規則寫的「什麼時候可以撤掉」已經成立，就擋下推送。筆記裡綁的測試名稱找不到真的測試，預設只提醒，專案可以設成擋。筆記之間的連結斷掉一定擋。
+ 
+-推送前還有一項回頭重讀：程式和管它的筆記同一次都改了，筆記卻常常只在後面補一段，前面的舊句沒人回頭看，例如程式從三個變數變成四個，筆記還寫三個。字面比對抓不到這種錯，所以要先把這次改動和整篇筆記交給 AI 重讀，指出哪幾行已經不成立；沒重讀，或 AI 點出的規則行沒改掉也沒表態照留，本機推送會被擋下（CI 只提醒）。程式碼不能交給外部模型的專案可以改成只提醒或關掉。
++推送前還有一項回頭重讀：程式和管它的筆記同一次都改了，筆記卻常常只在後面補一段，前面的舊句沒人回頭看，例如程式從三個變數變成四個，筆記還寫三個。字面比對抓不到這種錯，所以要先把這次改動和整篇筆記交給 AI 重讀，指出哪幾行已經不成立；沒重讀，或 AI 點出的規則行沒改掉也沒表態照留，本機推送會被擋下（CI 只提醒）。照留要用 `lumos drift ack --kind reread` 表態。程式碼不能交給外部模型的專案可以改成只提醒或關掉。
+ 
+-**結案時連帶收尾。** 一篇計劃收尾、Issue 結案或決策被翻案之後，別篇還寫「待裁定」「排隊中」並連到它，推送前會列出來，一行指令就能在那句後面補上結論。用工具結 Issue 時，摘要裡的決策還寫待定、或還有沒處理的回頭條件，會先擋下。
++**哪些檢查專案可以調鬆。** 在 `.lumos/config.json` 能改成只提醒或關掉的，是舊說法檢查、回頭重讀、筆記寫法、檔案歸屬，以及新增的 linter 告警這幾類（另有幾個較少用的開關，見[指令參考](docs/指令參考.md#專案開關)）。這些沒有開關可調：改程式沒動筆記、連結斷掉、高風險改動沒有審查紀錄、測試或掛鉤檔被改過卻沒重新核可、Lumos 自己 repo 的全套測試沒過，以及找不到 Python 3.14。
++
++**結案時連帶收尾。** 一篇計劃收尾、Issue 結案或決策被翻案之後，別篇還寫「待裁定」「排隊中」並連到它，推送前會列出來，一行指令就能在那句後面補上結論。用 `lumos drift fix --kind c2 --close` 結 Issue 時，摘要裡的決策還寫待定、或還有沒處理的回頭條件，會先擋下；直接用 `lumos set` 改狀態結案，只會列出來、不擋。
+ 
+ 本篇結案時，摘要沒跟著改也會提醒；已結案筆記摘要仍寫待定，會列入漂移檢查。成立的回頭條件若決定照留，要有重看期限或可追查的去處。維護摘要可用 `lumos summary-line`；`doctor` 列出的更新日期落後，可先用 `lumos updated-sync --stale --dry-run` 預覽修正。
+ 
+ 筆記寫「共 N 種」這類數字時，可以綁到程式裡那份清單（目前支援 Python）；程式多一項、筆記沒跟上，健康檢查會列出來，一行指令改成現值。
+ 
+ <p align="center"><a href="assets/drift-guard-zh.svg"><img src="assets/drift-guard-zh.svg" alt="筆記從寫入到推送的三道關卡：寫入規範在提交時檢查、新寫的「還沒有…」句子只提醒改成回頭條件、回頭條件寫在句中則擋下，提交時確認筆記有維護，推送前檢查舊說法、斷掉的連結、已成立的回頭條件與撤除條件、找不到的測試綁定、連到已收尾筆記卻還寫待定的句子，一起改過的筆記要先交給 AI 重讀（本機推送擋）；各項標明擋下或提醒" width="760"></a></p>
+ 
+ ## 用起來是什麼樣子
+ 
+ 以提交時那道關卡為例：假設 AI 改了退款邏輯，卻沒寫任何筆記就提交，它會收到這段訊息（實機輸出，節錄）：
+@@ -142,46 +144,46 @@ $ git commit -m "feat: 退款前檢查是否已退過"
+ ```
+ 
+ 這段訊息是給 AI 讀的：守則要它補好筆記再提交；真的不需要（例如只改錯字）也能跳過，但會留下紀錄。你主要負責業務取捨，和要不要接受某個風險。
+ 
+ ## 怎麼持續改進這套工具（evals）
+ 
+ 規則有沒有改壞、AI 有沒有照規矩做，不能只靠感覺。Lumos 用以下四種評測（evals）檢查，每週各跑一次：
+ 
+ - **審查回放**：審完的案子會存下「過或不過」的結論。用現在的判定程式重算一次（不重新找 AI 審），結論對不上就會標出來，查是不是改規則時改壞了東西。
+ - **查詢考卷**：用人工標好答案的題目，檢查工具能不能找到該看的筆記。
+-- **情境探針**：用口語出題，讓 AI 在 repo 的隔離副本裡實際操作，看它會不會主動查筆記、用對指令。
++- **情境探針**：用口語出題，讓 AI 在 repo 的隔離副本裡實際操作，看它會不會主動查筆記、用對指令。每場都從同一份凍結的副本重新複製，前一場改的東西帶不到下一場；出事故（例如本機全域 skills 的連結被動到、副本清不乾淨）整批停下；被截斷、撞到用量上限這類壞掉的場次不算分，有效場次不到一半整批不下結論。另可開本機用量帳，跨批次限制一段時間內的模型啟動次數（預設不開）。
+ - **推播漏網**：檢查改檔前送上的筆記，有沒有漏掉該看的。
+ 
+ <p align="center">
+   <a href="assets/evals-overview-zh.svg">
+-    <img src="assets/evals-overview-zh.svg" alt="每週自動檢查這套工具本身：審查回放、查詢考卷、情境探針、推播漏網四種檢查；每週留下紀錄，設有通知門檻的檢查退步或沒過時通知人，修成規則或測試後下週再量一次" width="760">
++    <img src="assets/evals-overview-zh.svg" alt="每週自動檢查這套工具本身：審查回放、查詢考卷、情境探針、推播漏網四種檢查；每週留下紀錄，出問題時通知人，修成規則或測試後下週再量一次" width="760">
+   </a>
+ </p>
+ 
+-圖中的通知步驟適用於設有通知門檻的檢查；推播漏網只留下清單與分布。
++圖中的「通知人」不是每種檢查都有，哪幾種會通知見下一段。
+ 
+-每週留下結果；設有通知門檻的檢查退步或沒過時通知人，推播漏網檢查則留下清單與分布；修正寫成新規則或測試，下週再測。方向上的大調整則先做受控實驗：「先讀程式碼、筆記只補脈絡」這條原則，就是實驗後才定下的。
++每週留下結果。審查回放有案子結論對不上或需要重新凍結、情境探針有題沒過，會通知人（審查回放執行出錯也會通知）；查詢考卷的分數退步只寫進紀錄、不通知，它只在沒標答案的題目達到一成以上時通知人補標；推播漏網只留下清單與分布。修正寫成新規則或測試，下週再測。方向上的大調整則先做受控實驗：「先讀程式碼、筆記只補脈絡」這條原則，就是實驗後才定下的。
+ 
+ 另外有 [審查收斂評測工具](governance/eval/review_convergence.md)：從正常與跑滿輪審查收集案例線索，固定案例、版本與兩組流程後，分開比較原問題修復、既有行為保留、新缺陷、輪數與成本；缺資料保留未知。這是本機唯讀分析入口，尚未接入上述每週排程，不執行模型或重新跑驗收；指紋核對也不證明資料宣告是真的，更不能當作已降低審查輪數的證明。
+ 
+-這些評測只在 Lumos 自己的 repo 跑，確保退步會被看見，但不保證每次改動都會變好。
++這些評測主要在 Lumos 自己的 repo 跑；查詢考卷另外會順帶考排程腳本裡指定的另一個專案（那台機器上有它的考卷時）。它們確保退步會被看見，但不保證每次改動都會變好。
+ 
+ ## 安裝與限制
+ 
+ 需要 Git、Python 3.14 以上，以及 Claude Code 或 Codex。在要導入的專案目錄執行：
+ 
+ ```bash
+ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ ```
+ 
+-**版本範圍：本 README 描述 `main`；上述一鍵安裝預設取得 `release`。** 兩條分支可能不同步，安裝後請核對工具來源與版本，不能假定已包含 main 的全部更新。[10/1–10/7 更新清點](docs/updates/2026-10-07-readme-audit.md) 列出本次盤點的提交、文件補充與發布邊界。
++**版本範圍：本 README 描述 `main`；上述一鍵安裝預設取得 `release`。** 兩條分支可能不同步，安裝後請核對工具來源與版本，不能假定已包含 main 的全部更新。[10/1–10/7](docs/updates/2026-10-07-readme-audit.md) 與 [10/7–10/10](docs/updates/2026-10-10-readme-audit.md) 兩份更新清點，列出各次盤點的提交、文件補充與發布邊界。
+ 
+ 腳本問要不要初始化目前目錄時，確認目錄正確再輸入 `y`。裝完重開一個 AI 對話，執行 `lumos enforcement` 確認檢查都接上了。Windows、離線安裝與移除見[上手細節](ONBOARDING.md)。已經在用的專案要升級時，可以先跑 `lumos update --dry-run`，預覽會改哪些規範檔與工具檔，不會真的動手。
+ 
+ <details>
+ <summary>已經在用舊版的專案：升級到 Python 3.14 要做的事</summary>
+ 
+ - 更新後，沒有 3.14 的機器，提交與推送會被擋下並說明怎麼裝（macOS：`brew install python@3.14` 或 `uv python install 3.14`）。`python3` 指到舊版沒關係，lumos 會自己找 3.14 重跑。
+ - 專案 CI 要把 `actions/setup-python` 設成 3.14。
+ - 裝好之後跑一次 `lumos install`，讓 Claude／Codex 的 hooks 也改用 3.14。
+ - Codex 的 hook 指令因此改變，可能要再開一次互動式 codex 重新核可。本機讀不到 Codex 的信任狀態，請用 `lumos enforcement` 搭配實際觸發一次確認。
+diff --git a/assets/readme-diagrams/generate.py b/assets/readme-diagrams/generate.py
+index 9976c799..34fde15f 100644
+--- a/assets/readme-diagrams/generate.py
++++ b/assets/readme-diagrams/generate.py
+@@ -369,48 +369,48 @@ def writeback_scene(en):
+     b+=chip(378,277,"Reasons" if en else "理由","purple",144)+chip(536,277,"Evidence" if en else "證據","green",151)
+     b+=text(379,348,"Update · recheck · mark stale" if en else "更新、重驗，或標示過時",21,"muted")
+     b+=path("M534 379V406","green",2.5)+arrow(534,413,"down","green")
+     b+=rect(357,414,354,64,"#132d30","#3b7068",14)+text(379,453,"Next session retrieves it" if en else "下一個 session 查回使用",en and 21 or 23,"green",weight=550)
+     b+=path("M357 446H81Q59 446 59 423V388","green",2,"8 7")+arrow(59,379,"up","green")
+     return title,513,b,"A change’s design decisions, review dispositions and verification results are written to relevant notes. A later session retrieves them; records are updated, rechecked or marked stale as needed."
+ 
+ def evals_scene(en):
+     title = "The toolkit itself is checked every week" if en else "每週自動檢查這套工具本身"
+     b = rect(36, 122, 688, 290)
+-    b += text(60, 160, "Scheduled in Lumos's own repo" if en else "在 Lumos 自己的 repo 排程執行", 18, "muted")
++    b += text(60, 160, "Scheduled mainly in Lumos's own repo" if en else "主要在 Lumos 自己的 repo 排程執行", 18, "muted")
+     rows = [
+         (180, "Review replay" if en else "審查回放", "Recompute past verdicts; they should not change" if en else "用現在的判定程式重算舊案，結論應該不變", "purple"),
+         (236, "Retrieval exam" if en else "查詢考卷", "Labelled questions: are the right notes found?" if en else "人工標好的題目：查得到該看的筆記嗎？", "blue"),
+         (292, "Scenario probes" if en else "情境探針", "Plain requests: does the AI check notes itself?" if en else "用口語出題：AI 會不會自己去查筆記？", "green"),
+         (348, "Missed notes" if en else "推播漏網", "Did notes shown before edits miss relevant ones?" if en else "改檔前送上的筆記，有沒有漏掉該看的？", "gold"),
+     ]
+     for y, label, desc, color in rows:
+         b += chip(60, y, label, color, 160 if en else 130)
+         b += text(236 if en else 206, y + 25, desc, 18 if en else 19)
+     b += path("M380 414V446", "coral", 2) + arrow(380, 452, "down", "coral")
+     boxes = [
+         (36, "Record every week" if en else "每週留下紀錄"),
+-        (280, "Alert on regressions" if en else "退步或沒過，通知人"),
++        (280, "Alert on problems" if en else "出問題時通知人"),
+         (524, "Fix rules or add tests" if en else "修規則或補測試"),
+     ]
+     for x, label in boxes:
+         b += rect(x, 460, 200, 64, "#322d3b", "#a67476", 14)
+         b += text(x + 100, 499, label, 17 if en else 20, "coral", "middle", 600)
+     for x in (236, 480):
+         b += path(f"M{x} 492H{x + 36}", "coral", 2) + arrow(x + 43, 492, "right", "coral")
+     b += path("M624 524V566H20V266H28", "coral", 2, "8 7") + arrow(34, 266, "right", "coral")
+     b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
+     b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
+     desc = (
+-        "Four checks run on a schedule in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly, regressions or failures alert a person, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
++        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many questions are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+         if en else
+-        "在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄，退步或沒過就通知人，修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
++        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在未標答案的題目太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+     )
+     return title, 650, b, desc
+ 
+ def swiss_cheese_scene(en):
+     title="Five imperfect layers. Fewer escapes." if en else "五層都有洞，但問題更難一路穿過"
+     b=text(38,126,
+            "Different blind spots reduce the chance of one shared miss." if en else "不同防線有不同盲點；疊起來，漏洞較不容易全部對齊。",
+            en and 19 or 21,"muted")
+     # The coral path sits behind every slice. Masks cut real holes in each
+     # slice, so the path is visible only where one rare route lines up.
+@@ -484,26 +484,26 @@ def drift_scene(en):
+         (703, "Revisit condition met (refund page now exists)" if en else "回頭條件成立了（退款頁面做出來了）", "Block" if en else "擋下", "coral"),
+         (742, "A rule's retire condition is met" if en else "規則寫的撤除條件成立了", "Block" if en else "擋下", "coral"),
+         (781, "Bound test not found (projects can block)" if en else "綁的測試名稱找不到（專案可設成擋）", "Warn only" if en else "只提醒", "gold"),
+         (820, "Links a closed note, still says 'pending'" if en else "連到已收尾的筆記、同一句還寫待定", "Warn only" if en else "只提醒", "gold"),
+         (859, "Code and note changed: AI rereads first (local)" if en else "程式和管它的筆記一起改：先請 AI 重讀（本機擋）", "Block" if en else "擋下", "coral"),
+     ]
+     for y, label, status, color in rows:
+         b += text(114, y, label, 16)
+         b += badge(566 if en else 584, y - 22, status, color, 138 if en else 120)
+ 
+-    b += text(94, 916, "Other blocks can be set to warn by the project." if en else "除了兩項一定擋下的檢查、其餘可由專案改成提醒", 16, "muted")
++    b += text(94, 916, "Only some blocks can be set to warn by the project." if en else "只有部分檢查能由專案改成提醒", 16, "muted")
+     b += text(94, 943, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
+     desc = (
+-        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, while removed names or paths still in notes, outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block; a note changed together with the code it manages must first be reread by AI for lines the change made untrue, and rule lines it flags must be fixed or explicitly kept (blocked on the local push only; CI just warns). Missing note updates and broken links always block. Other blocks can be set to warn. Content accuracy needs review and people."
++        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, while removed names or paths still in notes, outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block; a note changed together with the code it manages must first be reread by AI for lines the change made untrue, and rule lines it flags must be fixed or explicitly kept (blocked on the local push only; CI just warns). Missing note updates and broken links always block; only some checks (old names, the reread, note shape and a few others) can be set to warn. Content accuracy needs review and people."
+         if en else
+-        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒，消失的名稱或路徑還在筆記裡、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下；程式和管它的筆記同一次都改了時，要先交給 AI 重讀整篇找出不成立的舊句，點出的規則行要改掉或表態照留（只在本機推送擋，CI 只提醒）。改程式沒動筆記和連結斷掉一定擋、其餘可改成提醒。內容正確性仍靠審查和人。"
++        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒，消失的名稱或路徑還在筆記裡、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下；程式和管它的筆記同一次都改了時，要先交給 AI 重讀整篇找出不成立的舊句，點出的規則行要改掉或表態照留（只在本機推送擋，CI 只提醒）。改程式沒動筆記和連結斷掉一定擋；能改成提醒的只有舊說法、回頭重讀、筆記寫法等幾類。內容正確性仍靠審查和人。"
+     )
+     return title, 974, b, desc
+ 
+ 
+ SCENES={"map":("00 / THE SYSTEM",map_scene),
+         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
+         "first-change":("START / NATURAL LANGUAGE",first_scene),
+         "graph-demo":("01 / KNOWLEDGE",graph_scene),
+         "case-review":("CASE / REAL REVIEW",case_scene),
+         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
+diff --git a/docs/command-reference.md b/docs/command-reference.md
+index d750bdfe..85d02089 100644
+--- a/docs/command-reference.md
++++ b/docs/command-reference.md
+@@ -5,21 +5,21 @@
+ > **First, one thing: you won't run these day to day.**
+ >
+ > The way you use Lumos is **plain conversation** — you talk to Claude Code or Codex the way you normally would, and it decides when to look something up and when to write it back. Installing injects this routing table into `CLAUDE.md` / `AGENTS.md` and wires up five checks that fire on their own.
+ >
+ > This page exists for two reasons only: **so you can look something up when you want to, and so you can see what the AI is doing behind the scenes.**
+ 
+ <p align="center">
+   <img src="../assets/workflow-en.svg" alt="A session has four stages: arrive and read, work and write back, wrap up and self-check, and a final gate before push" width="900">
+ </p>
+ 
+-A zero-dependency Python command, some seventy top-level subcommands. **`lumos --help` is authoritative**; this page lists the ones you'll actually meet.
++A zero-dependency Python command with more than eighty top-level subcommands. **`lumos --help` is authoritative**; this page lists the ones you'll actually meet.
+ 
+ ---
+ 
+ ## 1. Arrive: read before you touch
+ 
+ ```bash
+ lumos search <words>             # full-text search, ranked by relevance
+ lumos context <node> [--brief]   # this note plus its neighbours, contracts pinned on top
+ lumos contracts [<node>]         # every contract: what must not change, and its bound test
+ lumos impact --file <file>       # which notes this file touches, and what bit people before
+@@ -43,45 +43,76 @@ lumos stale --candidate --match <words>   # which verifications are due for a re
+ 
+ ---
+ 
+ ## 2. Work: write back as you go
+ 
+ ```bash
+ lumos new system|issue|project|verification <name>   # scaffold a new note
+ lumos set <node> <field> <value>                     # single-value fields, like status
+ lumos append <node> related|verified_by|... "[[X]]"  # add a link (one at a time)
+ lumos decision-add <node> "<content>" --decided DATE # record a decision
++lumos summary-line <node> "<old fragment>" "<new fragment>"   # change one summary line without hand-editing the header fields
+ ```
+ 
+ **Every one of these verifies its own write.** Don't hand-edit the structured fields at the top — the classic trap is several links on one line, which grows a "ghost node".
+ 
+ Contracts and verification:
+ 
+ ```bash
+ lumos guard list [--unbound]     # which contracts still have no test bound
+ lumos guard scaffold / bind / audit    # scaffold a test → bind it → independent review
+ lumos guard kill <node>          # break it for real in a sandbox and check the test goes red
+ lumos signoff <node> --note ".." # a human sign-off, for the half a tool can't answer
+ lumos spec-trace <plan node>     # per clause: bound to a test / manual / untagged / dangling (legacy claim column kept for reference)
++lumos spec-gate <plan node>      # run this once a design is written: clause grammar, bindings, rollback section (blocks); runs the bound tests once and prints red/green (does not block)
++```
++
++Test quality (read-only scans and evidence collection; it does not judge business answers):
++
++```bash
++lumos test-quality capabilities                 # which languages and evidence formats are actually supported
++lumos test-quality scan <test file or dir> [--json]   # find suspicious patterns such as self-comparison or re-implementing the code; zero candidates does not mean the tests are useful
++lumos test-quality capture …                    # explicitly run a trusted local test runner and save JUnit plus source snapshots (no sandbox)
++lumos test-quality check <baseline> <fault> <restored> --target <class::test>   # verify three capture receipts: baseline green, target assertion red on the fault, green again after restoring
+ ```
+ 
+ ---
+ 
+ ## 3. Wrap up: check yourself first
+ 
+ ```bash
+ lumos lint <node>                # quick check on one note
+ lumos doctor [--ci]              # health check across every note (--ci blocks)
+ lumos enforcement                # is each layer of protection wired up (wiring, not judgement)
+ lumos gov [<node>]               # local ledger: who got stopped by which gate
++lumos updated-sync --stale [--dry-run]   # when doctor says the updated date lags, set it to today in one go (preview with --dry-run)
++lumos events [--session <id>]    # what recent Claude sessions did (event ledger, read-only)
+ ```
+ 
++Notes out of step with current state (drift):
++
++```bash
++lumos drift scan [--json]        # health-check the whole graph for sentences out of step with current state; produces a to-fix list (no blocking, no ledger)
++lumos drift fix <node> <line> --kind <kind> [--dry-run]   # fix one item from the scan list with the tool (c1–c6, count); commit it together with the fix ledger
++lumos drift fix <issue> <line> --kind c2 --close --status <closed value> --reason "…"   # close an issue; blocked first if the summary still has an undecided decision or unhandled revisit conditions
++lumos drift ack <node> <line> --kind <kind> --reason "…"  # record that a line stays as is (counts once committed); --kind reread for rule lines flagged by the reread
++```
++
++**These only list, they don't block; deal with them when you see them:**
++
++- The health check (`doctor`) lists sentences that point to a revisit condition in another note when that note no longer has it.
++- Changing when something must be re-verified with `lumos set <node> revalidate_when …` lists the sentences in other notes that link to it and mention it, with the new list for comparison.
++- When `lumos set` changes an issue to a closed status, it lists summary decision lines still marked undecided and unhandled revisit conditions (only closing with `drift fix --kind c2 --close` blocks).
++- At commit time: a line that binds several tests should be split into one test per line; a new sentence saying a Python list "has N kinds", where N happens to equal its member count, should carry a count tag; a correction in parentheses should not point to list items as "item N".
++- When the health check lists retirement candidates, it also looks at plans whose clauses are bound only to manual acceptance (`[manual:]`).
++- When dispatching reviewers (`lumos dispatch-lens`), if the impact range can't be computed, a line at the end of the dispatch text says so instead of silently attaching nothing.
++
+ **The governance ledger**: which gate stopped whom, and who bypassed what, all lands in a **local** ledger — never committed, never uploaded.
+ 
+ ```bash
+ lumos gov                # timeline of every gate event
+ lumos gov OrderService   # which gates stopped this node, and whether hard or soft
+ ```
+ 
+ It's for **visibility while you develop** — wherever it keeps going off is where something needs attention. It isn't a compliance artefact.
+ 
+ ---
+@@ -89,29 +120,60 @@ It's for **visibility while you develop** — wherever it keeps going off is whe
+ ## 4. Before you push: the final gate
+ 
+ ```bash
+ lumos pitfalls --diff <range>    # risk tier for this change (standard / high)
+ lumos bound-tests --diff <range> # actually run the tests bound to the contracts you touched
+                                  # red here means fix the test, not add a review record
+ lumos code-loop check|pass|skip  # review record for high-risk changes; check also runs the stack-question disposition gate (checked on push)
+ lumos code-loop dispositions <file> [--branch <name>]  # answer the triggered stack performance questions before pushing (template: lumos pitfalls --diff <range> --dispositions-template --carry)
+ lumos code-loop recall-miss <id> --note "..."  # a reviewer found an issue matching a question the triggers missed
+ lumos loop status <id>           # convergence verdict for a design or code review loop
++lumos loop fix-check <id> --round rN   # after code review fixes, before the next round: check the fix record and post-fix tests (advisory; about 5 minutes, run it in the background)
++lumos loop cap-decision <id> --decision extra-round|accept-risk --note "…"   # cap reached without passing: record the human decision (one more round, or accept the risk)
++lumos loop retro <id> --template --write | --check | --record | --skip --note "…"   # after recording a human decision, write the capped-loop retrospective before continuing
++lumos loop escape <id> --stage … --severity … --desc "…"   # a defect attributable to a passed loop was found downstream: log an escape (--list shows the ledger)
++lumos lint-waive <fingerprint> --note "…"   # the new-warning gate blocked a false positive: allow it with a reason, on record (--list shows what was allowed)
++lumos note-audit reread-prepare --diff A..B --orchestrator claude|codex   # reread: one item file per home note to hand to a judge
++lumos note-audit reread-record --prepared <item file> --report <report>   # record the judge's report as a comparison record (counts once committed)
++lumos note-audit reread-check --diff A..B [--gate]   # the pre-push hook passes --gate and blocks per note_reread.gate; CI and manual runs omit it and only print
+ lumos testmap affected --diff .. # suggests which tests to run for this change
+ lumos anchor verify|approve      # tamper fingerprints for test and check files
+ lumos ci-wait / ci-status        # wait for CI after a push / check the last result
+ ```
+ 
+ Use `lumos ci-wait` rather than `gh run list` — the result has to land in the governance ledger.
+ 
+ ---
+ 
++## Project switches
++
++These live in the project's `.lumos/config.json`. Commit any change: most pre-push checks read the version in the commit being pushed (`stack_questions` and `note_lint` read the working-tree copy). Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
++
++| Switch | Controls | Values | When unset |
++| --- | --- | --- | --- |
++| `drift_check.gate` | pre-push outdated-statement and drift check (`drift check`) | block / warn / off | block |
++| `drift_check.old_sentence` | the part that catches names or paths that vanished but are still mentioned | block / warn / off | follows `drift_check.gate` |
++| `drift_check.retire` | the part that catches a RULE whose retire condition has come true | block / warn / off | follows `drift_check.gate` |
++| `note_reread.gate` | the note reread (only the local pre-push blocks; CI only warns) | block / warn / off | block |
++| `note_shape.gate` | note wording: new code line references, current-state descriptions without a source | block / warn / off | block |
++| `note_shape.test_refs` | tests bound in touched notes must point to real tests | block / warn / off | warn |
++| `note_shape.slots` | required slots on summary-line prefixes (checked only after the project enables `--slots` in its pre-commit hook, see [07 install and maintenance](../skills/lumos-project-notes/commands/07-安裝維運.md); also governed by `note_shape.gate`) | block / warn / off | block (once enabled) |
++| `node_home.gate` | every code file needs a note that owns it (file ownership) | on / warn / off | on |
++| `lint_new.gate` | new linter warnings | block / warn / off | block |
++| `stack_questions.gate` | answering stack performance questions before a push | all / high-only / off | all |
++| `note_audit.gate` | note content audit (`note-audit check`; blocks only when the pre-push hook calls that command, which this toolkit's own hook does not) | block / warn / off | block |
++| `note_lint.gate` | new note-field rules (the per-note quick check at commit) | on / warn / off | warn |
++
++Code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval (`lumos anchor`), and a missing Python 3.14 have no switch.
++
++---
++
+ ## Install and uninstall: one for one
+ 
+ ```bash
+ lumos bootstrap   # install everything     ↔  lumos teardown   # remove everything
+ lumos install     # machine layer only     ↔  lumos uninstall
+ lumos init        # project layer only     ↔  lumos deinit [--keep-graph] [--dry-run]
+ lumos update      # refresh the toolkit inside this project
+ lumos update --dry-run   # preview which rule files and toolkit files would change (no pull, no writes)
+ ```
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+index 2c10e08a..b90ab4a1 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+@@ -33,11 +33,12 @@ summary: |-
+ - 主圖版型、配色、動畫全部沿用,只換字與加箭頭標籤;使用者要求「圖該改就改,但要保持可讀性和美觀、新增的圖樣式要一致」。
+ - 「第一次使用」那張示意圖 README 已不引用(改用實機終端輸出),產生器照舊產出,沒刪。
+ 
+ - 2026-09-30:新增 drift-guard 圖(從寫下筆記到推送程式碼,三道關卡各標擋下或提醒),由 Codex(gpt-6-astra)依事實清單起稿、Claude 核對後把第 1 道的標籤移到真正被擋的那一行。
+ - 2026-09-30:drift-guard 圖第 1 道加「新寫『還沒有退款頁面』這類句子只提醒改成回頭條件」、第 3 道加「回頭條件成立 → 擋下」(用具體例子取代抽象的「還沒有 X」,使用者覺得 X 太抽象),對應提交時的否定現況句提醒([[Projects/否定現況句配回頭條件_計劃]])與推送前的回頭條件檢查;圖高 710 → 787。
+ - 2026-09-30:drift-guard 左側直線原本畫到第 3 個圓圈下方(多出一截),改成停在第 3 個圓圈中心、被圓圈蓋住。README 拿掉「一個真實的例子」一節(使用者裁),case-review 圖不再被 README 引用,產生器與圖檔先留著,要放回時不用重畫。
+ - 2026-10-01:evals-overview 圖重畫成跟 drift-guard 同一套版型:四種每週檢查(審查回放、查詢考卷、情境探針、推播漏網)→ 每週留紀錄 → 退步或沒過通知人 → 修規則或補測試 → 下週再量。四種的排程與「推播漏網只留紀錄不通知」都對過 governance/autonomous-loop.sh 的各個週跑段;README 新增 evals 一章引用它,取代「怎麼運作」裡外圈那段。
+ - 2026-10-01:drift-guard 第 3 道加一列「程式和管它的筆記一起改:請 AI 重讀整篇舊句 → 只提醒」,對應推送前的回頭重讀提醒([[Projects/守檔筆記對照改動_計劃]]);第 3 格高 203 → 242、圖高 787 → 826。這次先手改了兩張 SVG,提交時被「常一起改」的提醒抓到才補產生器,補完重產的結果跟手改的逐位元組相同。(這列 2026-10-09 起改成「先請 AI 重讀(本機擋)」,見下方 2026-10-09 那條。)
+ - 2026-10-05:drift-guard 補上 10/2 之後上線的防線:第 1 道加「回頭條件寫在句中或表格 → 提交時擋下」;第 3 道加「規則的撤除條件成立 → 擋下」「綁的測試名稱找不到 → 只提醒(專案可設成擋)」「連到已收尾的筆記、同一句還寫待定 → 只提醒」。擋或提醒都對過程式預設(筆記形狀擋預設擋、測試綁定預設提醒、c6 推送前只列出)。第 1 格高 200 → 231、第 3 格 242 → 359、圖高 826 → 974。數量標記與結 Issue 前的擋不在這三個時間點,只寫進 README 正文、不上圖。
+ - 2026-10-09:drift-guard 第 3 道兩列改成擋下:「名稱或路徑消失、筆記還在提」(舊句檢查沒寫子開關時照總開關,預設擋)、「程式和管它的筆記一起改:先請 AI 重讀(本機擋)」(回頭重讀在推送前掛鉤帶 `--gate` 擋、CI 只提醒),中英兩版與替代文字一起改,對應 [[Projects/舊句兩道轉擋_計劃]];英文那列縮成「Code and note changed: AI rereads first (local)」免得跟標籤擠在一起。改產生器重產,沒手改 SVG。
++- 2026-10-10:README 照程式改正說法時,兩張圖的字跟著改:drift-guard 底下那行從「除了兩項一定擋下的檢查、其餘可由專案改成提醒」改成「只有部分檢查能由專案改成提醒」(能調的只有舊說法、回頭重讀、筆記寫法等幾類,高風險沒審查紀錄、驗證器被改、全套測試、缺 Python 3.14 都沒有開關);evals-overview 改成「主要在 Lumos 自己的 repo 排程執行」、通知那格改「出問題時通知人」,替代說明講清只有審查回放與情境探針出問題才通知、查詢考卷分數退步只記錄。中英兩版一起改產生器重產,沒手改 SVG;用 qlmanage 轉圖目視確認字沒超出框。
+ - 2026-09-30:case-review 圖改成三格因果圖(整個目錄免查、只認檔名、比對內容),原本的逐輪報告數與條數圖讀者看不懂;由 Codex(gpt-6-astra)起稿,事實對回 governance/review-reports/code-工具自裝檔不算消費專案/ 與事故筆記。
+diff --git a/docs/updates/2026-10-10-readme-audit.md b/docs/updates/2026-10-10-readme-audit.md
+new file mode 100644
+index 00000000..41c08520
+--- /dev/null
++++ b/docs/updates/2026-10-10-readme-audit.md
+@@ -0,0 +1,204 @@
++# Lumos 10/7–10/10 更新與 README 核對
++
++盤點時間：2026-10-10T02:21:40+08:00（Asia/Taipei）。
++固定 main 來源：`8e648f3d536220bf7e0ea3c8cd52deed75816595`。範圍取 `20f41c8e..8e648f3d`：上一份清點（[10/1–10/7](2026-10-07-readme-audit.md)）發布的那個提交 20f41c8e 之後，併進 main 的全部提交。這份用「能不能從 main 追溯」篩，不用提交時間篩——PR #48 有一批 10/3–10/4 在分支上寫、10/9 才合併的提交，照合併進 main 的時點算在這份。合併提交、審查帳本和驗證文件都保留，避免把提交數當成功能數。原工作目錄未提交的改動、未合併分支不列。日期是提交時間，不代表部署或發版時間。
++
++共 170 個提交；分類：chore 54, docs 38, feat 10, fix 37, merge 21, test 10。完整清單見文末。
++
++## 依使用者影響分組
++
++| 更新方向 | 代表提交 | 核對入口 | README 處置 |
++| --- | --- | --- | --- |
++| 測試品質：唯讀掃描可疑測試寫法（Python 四類，其他語言選配本機 Semgrep）、明示執行可信本機測試收證、核對正常→故障→還原證據；各技術棧接入標準（含 PHP／Laravel） | 0d504411、5d8f0ec7、a7ee9fed、25848863、598e41b2、4d17d742、99683f40（#49） | CLI test-quality scan／capabilities／capture／check；skills/lumos-project-notes/commands/test-quality-standard.md | 中文版已有「測試要有用」一節；補英文版對應段落，指令參考補四個子命令 |
++| 架構對齊審查可依目錄宣告目標架構：`.lumos/config.json` 的 `arch_targets` 宣告的範圍內，改動照目標架構筆記的 RULE 行審，不再要求跟舊鄰居一致；宣告一律讀跟主線分叉點那一版，被審的分支不能自己放寬 | 30238fbd（#50） | CLI dispatch-lens --arch-target；pitfalls；doctor；code-loop check | README 審查段只講派幾席，不加；留在本盤點 |
++| 兩道舊句檢查改成本機推送前擋下：名稱消失檢查（`drift_check.old_sentence`）沒寫子開關時照總開關 `drift_check.gate`，預設擋；回頭重讀改由推送前掛鉤帶 `reread-check --gate`，照 `note_reread.gate`（預設 block）擋兩層——改了程式也改了家筆記卻還沒對照這一版程式的、判定點出的規則類條目還在又沒表態的；CI 與手動跑只提醒；照留用 `lumos drift ack --kind reread`；單次略過 `LUMOS_SKIP_REREAD_CHECK=1`（會留帳） | a7d0e0c4、f80352f6、202da1a4、59f8f92b、40f871bf、5ce8115d（#51） | CLI note-audit reread-check／drift ack／drift check；scripts/hooks/pre-push | 防過期一節原本已寫本機推送擋；補 `drift ack --kind reread`、新增「哪些檢查專案可以調鬆」一段；指令參考補回頭重讀三個指令與專案開關表 |
++| 情境探針可靠性：每場從同一份凍結副本重新複製，封住副本的 Git 寫入逸出與工作樹外指；事故（本機全域 skills 連結被動到、副本清不乾淨）整批停下；截斷、撞到用量上限這類壞場次不算分，有效場次不到一半整批不下結論；選配本機用量帳跨批次限制啟動次數；輸出不再卡在沒人讀的管線、不改壞權限 | 2854d961、730b06fe、cfe7a703、8922c3c9、1c91755a、074e91ba、532f5a15、05e87b54、3e149721（#48） | scripts/scenario_probe.py；governance/autonomous-loop.sh 的週跑段 | 評測一節補一句保護說明；用量帳註明預設不開（週跑沒帶 `--max-per-window`） |
++| 只列出、不擋的小提醒：健康檢查列出指向別篇、但那篇已經沒有那條回頭條件的句子；改 `revalidate_when` 時列出別篇引用它的句子；提交時提醒一行綁多支測試要拆開、新寫的數量句要掛標記、更正括號別用位置指清單項目；撤除候選也看只掛 `[manual:]` 的計劃條款；派工鏡頭算不出範圍時在派工詞尾端講一聲 | 68706b1e（#42）、d7a71931（#45）、d85c913e（#41）、07f28120（#39）、2e3d0863（#38）、5cfb4999（#40） | doctor S20／S21；lumos set；note-shape 提交前提醒；dispatch-lens | 指令參考新增「只列出、不擋」一段；README 不逐項寫 |
++| 文件與研究：rtb 第三輪提案逐項現況、正文反引號測試名先不查的紀錄、審查席隔離在真 Claude Code 上的實測 | 96a787b3（#47）、cfd54f3f（#34）、14cde462 | 圖譜筆記；docs/ | 不把研究提案或單次實測當已實作 |
++
++純修 bug、使用者看不出差別的（例如凍結判定的暫存檔與同時重凍、強制彩色害測試假紅、`ci-wait` 收短版 sha、測試逾時預算）只在下方完整清單列出，不寫進 README。
++
++## README 本次另修的說法
++
++對照程式重新核對後，修了六處講得比程式更滿的句子：結 Issue 只有 `drift fix --kind c2 --close` 會擋（`lumos set` 只列出）；查詢考卷分數退步只記紀錄、只在未標題目達一成以上時通知；查詢考卷也會順帶考排程腳本指定的另一個專案；3 輪上限與人裁中等風險也適用；能調鬆的只有幾類、哪些沒有開關；圖上的金環只是示意、工具沒有「受保護」狀態。
++
++## 發布與核對邊界
++
++遠端 `release` 仍指向 `4a42dede`（9/7；2026-10-10 以 `git ls-remote` 核對）；get.sh 預設 LUMOS_BRANCH=release。README 介紹 main 的能力，不能由本盤點推論 release 安裝已含這些更新。
++
++本盤點確認程式與文件入口；不重跑歷史每一項功能的完整驗證，也不量測真實模型的成效。每筆原驗證、審查與來源可沿下方提交追溯。
++
++## 完整提交清單
++
++| 台北提交時間 | 提交 | 類別 | 更新 |
++| --- | --- | --- | --- |
++| 10/03 21:11 | [19c55711](https://github.com/EnzoHsieh-Android/Lumos/commit/19c557110b45985a7b3601776d7b41de3c0861a2) | docs | docs: 試行代碼審修復驗證並記錄回顧條件 |
++| 10/03 22:01 | [1c91755a](https://github.com/EnzoHsieh-Android/Lumos/commit/1c91755a69616bc1db734b77d3d278337da7460b) | fix | fix: 探針統計排除異常場次 |
++| 10/03 22:36 | [9d91cee3](https://github.com/EnzoHsieh-Android/Lumos/commit/9d91cee391ce2f236b97504d7d1d4045bac517a7) | docs | docs: 設計以實際回傳內容驗證探針讀碼 |
++| 10/03 22:50 | [4a60b231](https://github.com/EnzoHsieh-Android/Lumos/commit/4a60b231b2a07c8c21ad017764de70572bf2f5b4) | fix | fix: 以成功工具回傳確認探針讀碼 |
++| 10/03 23:47 | [637989b1](https://github.com/EnzoHsieh-Android/Lumos/commit/637989b1d16df22512601875f5b8d8ad4bb143ee) | docs | docs: 記錄探針修復三輪未收斂與隔離缺口 |
++| 10/04 00:09 | [8922c3c9](https://github.com/EnzoHsieh-Android/Lumos/commit/8922c3c9c11e4234554d94695c31c93973679a99) | fix | fix: 排除不完整讀碼紀錄並封住副本Git寫入逸出 |
++| 10/04 01:37 | [13e077c4](https://github.com/EnzoHsieh-Android/Lumos/commit/13e077c45cada7797cc3442a7748e87b806b087c) | docs | docs: 記錄第四輪審查未通過與圖譜驗證 |
++| 10/04 02:54 | [88752a29](https://github.com/EnzoHsieh-Android/Lumos/commit/88752a2970f9bb54bdce7df929ef0a6e26b0ff0c) | docs | docs: 訂清探針副本隔離與失敗處置 |
++| 10/04 03:21 | [2854d961](https://github.com/EnzoHsieh-Android/Lumos/commit/2854d961675480d44209ff1ad272f560e95b8beb) | fix | fix: 隔離每場探針並在清理失敗時停批 |
++| 10/04 04:02 | [730b06fe](https://github.com/EnzoHsieh-Android/Lumos/commit/730b06fe2eb4b159ae0ae2e109e8b3ffa7daea40) | fix | fix: 補齊探針副本邊界與逐場紀錄 |
++| 10/04 04:28 | [cfe7a703](https://github.com/EnzoHsieh-Android/Lumos/commit/cfe7a703c7e9687f9bf8aa38ac339a6c31a4cb74) | fix | fix: 擋住工作樹外指與真身分滲入探針 |
++| 10/04 04:47 | [87b39887](https://github.com/EnzoHsieh-Android/Lumos/commit/87b398877c21e3e8e9d4294f17936abbb47a231f) | docs | docs: 記錄探針第三輪未收斂與驗證結果 |
++| 10/04 11:59 | [d13b52b8](https://github.com/EnzoHsieh-Android/Lumos/commit/d13b52b83d0290f715f395fff609358ddd39aa8a) | fix | fix: 拒收健康不可判的探針批次 |
++| 10/04 12:01 | [9f8f39d4](https://github.com/EnzoHsieh-Android/Lumos/commit/9f8f39d47b67651046b32fe8d1ed0a2bced902d5) | docs | docs: 記錄第四輪送審前的邊界驗證 |
++| 10/04 12:17 | [1b9d8fe1](https://github.com/EnzoHsieh-Android/Lumos/commit/1b9d8fe15051a2978b4b02a8b5f0cad5fa4abba2) | fix | fix: 舊事故檔與不完整結果都停止探針批次 |
++| 10/04 12:28 | [79d3f371](https://github.com/EnzoHsieh-Android/Lumos/commit/79d3f3714236ef1316155019e3d281f168ef31ce) | fix | fix: 不完整探針結果讓整批維持失效 |
++| 10/04 12:46 | [70e9ff16](https://github.com/EnzoHsieh-Android/Lumos/commit/70e9ff1647853b2fe8d33947e07f35f24a27494b) | docs | docs: 記錄探針第四輪驗證與外部對照 |
++| 10/04 12:48 | [5090d4ff](https://github.com/EnzoHsieh-Android/Lumos/commit/5090d4ff55d150a90b42448aea7a77713d0e9582) | docs | docs: 凍結探針第四輪審查判定 |
++| 10/04 12:49 | [e8801749](https://github.com/EnzoHsieh-Android/Lumos/commit/e8801749d2c7b0742537a812fbaf7896535d9c70) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/04 13:17 | [5fcdf6ce](https://github.com/EnzoHsieh-Android/Lumos/commit/5fcdf6ce9f3e94ce709b546b81fef9bfa0f286e5) | test | test: 釘住探針事故停派與失敗留痕缺口 |
++| 10/04 13:17 | [5ed04382](https://github.com/EnzoHsieh-Android/Lumos/commit/5ed04382897d0cc1579c264cf62ac6e9153011c0) | docs | docs: 凍結探針停派設計審判定 |
++| 10/04 14:05 | [074e91ba](https://github.com/EnzoHsieh-Android/Lumos/commit/074e91ba431c0f986bb47d6fc5cbdee1e51ca188) | fix | fix: 探針事故後停止派工並保留失敗紀錄 |
++| 10/04 14:05 | [454fa427](https://github.com/EnzoHsieh-Android/Lumos/commit/454fa427531de46f21fa14629df6581c776db6ca) | docs | docs: 補記命令列測試假綠案例 |
++| 10/04 14:12 | [86dcb404](https://github.com/EnzoHsieh-Android/Lumos/commit/86dcb4045d7c711d849ec0152595d3b79f8eb939) | docs | docs: 記錄合約檢查與新版表態 |
++| 10/07 12:32 | [14cde462](https://github.com/EnzoHsieh-Android/Lumos/commit/14cde4628ea7a507382d5bc557225931ac2f6442) | docs | docs: 記錄審查席隔離在真的 Claude Code 上的實測結果 |
++| 10/07 12:55 | [fc0332d5](https://github.com/EnzoHsieh-Android/Lumos/commit/fc0332d58c06d6ac67ecb4e53d3f182cad6751ed) | merge | Merge pull request #37 from EnzoHsieh-Android/guard-realtest |
++| 10/07 12:56 | [328d76e9](https://github.com/EnzoHsieh-Android/Lumos/commit/328d76e9e18610b138487bf17a7faffe16b3861a) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 12:56 | [cff5dcca](https://github.com/EnzoHsieh-Android/Lumos/commit/cff5dcca4fb495482ec876cad0cd26baed7f814b) | merge | Merge remote-tracking branch 'origin/main' |
++| 10/07 12:57 | [5fb11add](https://github.com/EnzoHsieh-Android/Lumos/commit/5fb11addbf3c81ba02b4adcac1336d60887eed3d) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 13:03 | [cfd54f3f](https://github.com/EnzoHsieh-Android/Lumos/commit/cfd54f3f23a5340291c9011552782944277e5f24) | docs | docs: 記下正文反引號裡的測試名沒人查(實測誤報多,先不做) |
++| 10/07 13:03 | [23d05227](https://github.com/EnzoHsieh-Android/Lumos/commit/23d05227af9b098ec9b5e244faf804641ac83559) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 13:03 | [ae3936e1](https://github.com/EnzoHsieh-Android/Lumos/commit/ae3936e160f27c899e78d20cb98b921512b63af8) | fix | fix: ci-wait 給短版 sha 時先換成完整的再查 |
++| 10/07 13:03 | [55d3d1fd](https://github.com/EnzoHsieh-Android/Lumos/commit/55d3d1fd6961ab407edf1ed048dd4634eae391c9) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 13:03 | [d4936bb3](https://github.com/EnzoHsieh-Android/Lumos/commit/d4936bb33e89fc9abcdba1b65befb6c40d2e6876) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 14:34 | [53263694](https://github.com/EnzoHsieh-Android/Lumos/commit/53263694cb5061fcf35869318cdd37c142f2db29) | merge | Merge pull request #34 from EnzoHsieh-Android/body-test-names |
++| 10/07 14:35 | [2e3d0863](https://github.com/EnzoHsieh-Android/Lumos/commit/2e3d0863089e46e7d3e71cc884b4c3ae49c8e49c) | feat | feat: 撤除候選也看掛 [manual:] 的計劃條款 |
++| 10/07 14:36 | [563b60e9](https://github.com/EnzoHsieh-Android/Lumos/commit/563b60e9c9af5496711db316ae247598f1ad5949) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 15:27 | [ac7a8444](https://github.com/EnzoHsieh-Android/Lumos/commit/ac7a8444229c024db4e8c1f01f5ffddfcb691657) | merge | Merge pull request #38 from EnzoHsieh-Android/manual-retire-candidates |
++| 10/07 16:41 | [07f28120](https://github.com/EnzoHsieh-Android/Lumos/commit/07f2812098e2f2b01a94f6d076a9ba92efe6279e) | feat | feat: 提交時提醒新寫的數量句掛標記、更正括號別用位置指項目 |
++| 10/07 16:41 | [8923eb78](https://github.com/EnzoHsieh-Android/Lumos/commit/8923eb78ab4a62fa0095f2abd7f44e58b37e6838) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 17:39 | [c7b7eb15](https://github.com/EnzoHsieh-Android/Lumos/commit/c7b7eb15ecb42731dca9298b4f325cf3ae4a7812) | merge | Merge pull request #39 from EnzoHsieh-Android/note-nudge |
++| 10/07 17:44 | [5cfb4999](https://github.com/EnzoHsieh-Android/Lumos/commit/5cfb4999ee8903fbd6a4b37a94e2b99f00f137d3) | fix | fix: 派工鏡頭在會談專案算不出範圍時講一聲,不再靜默放空 |
++| 10/07 17:44 | [beb7c4d5](https://github.com/EnzoHsieh-Android/Lumos/commit/beb7c4d58b44d2eebad1bc937488e8e8b1b09d40) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 18:32 | [95f69031](https://github.com/EnzoHsieh-Android/Lumos/commit/95f690318191f68e32fc6d8afb8c1fbb03b8806c) | merge | Merge pull request #40 from EnzoHsieh-Android/lens-cross-repo |
++| 10/07 20:00 | [68706b1e](https://github.com/EnzoHsieh-Android/Lumos/commit/68706b1eebc079027dfbd05b498cc025dd50bff6) | feat | feat: doctor 列出指向別篇、但那篇已經沒有的回頭條件 |
++| 10/07 20:00 | [ed207b60](https://github.com/EnzoHsieh-Android/Lumos/commit/ed207b60914260bbbf695d3a1585c699d1d9b420) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 20:34 | [0d504411](https://github.com/EnzoHsieh-Android/Lumos/commit/0d504411e0fb2c12dcfba470c097f6f2af3f83e7) | feat | feat: 掃描測試判準並保留跨語言驗證證據 |
++| 10/07 20:57 | [e0642ed0](https://github.com/EnzoHsieh-Android/Lumos/commit/e0642ed0947198aa1fc40d5d6c7619e316c34ef0) | merge | Merge pull request #42 from EnzoHsieh-Android/revisit-ref-dangling |
++| 10/07 21:00 | [2c5ab47b](https://github.com/EnzoHsieh-Android/Lumos/commit/2c5ab47bd02cfd5307f87f71547d560b4bfada1b) | test | test: 比較測試手冊措辭並保留無效場次與覆蓋缺口 |
++| 10/07 21:08 | [d85c913e](https://github.com/EnzoHsieh-Android/Lumos/commit/d85c913ecb33ff530f22376458ad2f44683c4b91) | feat | feat: 提交時提醒一行綁好幾支測試要拆成一支一行 |
++| 10/07 21:08 | [299697cf](https://github.com/EnzoHsieh-Android/Lumos/commit/299697cff147a3faefaae99f332aa308e11f1c2a) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 21:33 | [5d7add9c](https://github.com/EnzoHsieh-Android/Lumos/commit/5d7add9cb21bebe2065e54cb35015af6fec27681) | test | test: 重驗手冊人工推導與原生技能觸發 |
++| 10/07 21:52 | [6adb9bf1](https://github.com/EnzoHsieh-Android/Lumos/commit/6adb9bf13c7fad77be59291eb3f4d39fc987d316) | test | test: 重播修復引入回歸卻被弱測試漏掉的歷史案例 |
++| 10/07 21:59 | [ba3268f1](https://github.com/EnzoHsieh-Android/Lumos/commit/ba3268f16aa5d94556c74448e6269bf456745b36) | merge | Merge pull request #41 from EnzoHsieh-Android/test-reason |
++| 10/07 22:00 | [13bc7227](https://github.com/EnzoHsieh-Android/Lumos/commit/13bc72275a28f4fa7e8d817abd0d948858932b5b) | fix | fix: 殼裡設了強制彩色時測試不再假紅 |
++| 10/07 22:00 | [17019a52](https://github.com/EnzoHsieh-Android/Lumos/commit/17019a5285aa9929dd61571b4cb7527b4ae72065) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 22:11 | [3717917e](https://github.com/EnzoHsieh-Android/Lumos/commit/3717917ec0e868976c358b822b612f6df4f76649) | test | test: 用歷史鎖回歸比較手冊前後的首次測試 |
++| 10/07 22:45 | [b1af81a9](https://github.com/EnzoHsieh-Android/Lumos/commit/b1af81a98ff0f92b8382f659963b92f2d2f19775) | test | test: 減少歷史鎖案例提示並記錄停止條件 |
++| 10/07 22:54 | [0dcc102e](https://github.com/EnzoHsieh-Android/Lumos/commit/0dcc102e753e66e019a24c1ec391e53ff034998f) | merge | Merge pull request #43 from EnzoHsieh-Android/test-no-color |
++| 10/07 22:55 | [0ca72480](https://github.com/EnzoHsieh-Android/Lumos/commit/0ca724805e3a2be156a6ad972067d330e3d3f2c1) | fix | fix: 凍結判定被擋下或寫到一半失敗時不再留下暫存檔 |
++| 10/07 22:55 | [bab01e8a](https://github.com/EnzoHsieh-Android/Lumos/commit/bab01e8ada8a2e10449b67fce289a8c45be70716) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/07 23:09 | [fab5309c](https://github.com/EnzoHsieh-Android/Lumos/commit/fab5309cdde3c14cf0bc821054298205d8b8038a) | test | test: 建立不同失效形態的歷史測試案例集 |
++| 10/08 00:03 | [a7ee9fed](https://github.com/EnzoHsieh-Android/Lumos/commit/a7ee9fedc883b513ebdacecd3d992e7b60e74e98) | test | test: 驗證測試證據並建立各技術棧接入標準 |
++| 10/08 00:04 | [5de06fa7](https://github.com/EnzoHsieh-Android/Lumos/commit/5de06fa77de0ee949f26f67cf7d60257d1898e2b) | merge | Merge pull request #44 from EnzoHsieh-Android/verdict-tmp |
++| 10/08 00:10 | [d7a71931](https://github.com/EnzoHsieh-Android/Lumos/commit/d7a71931288957a2e6e8e3ad311cf0383ad009a4) | feat | feat: 改重驗事件時列出別篇引用它的句子 |
++| 10/08 00:15 | [37bd83ec](https://github.com/EnzoHsieh-Android/Lumos/commit/37bd83eccc4fe484a4b052bb0c47cb687306929b) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/08 00:36 | [25848863](https://github.com/EnzoHsieh-Android/Lumos/commit/2584886347da0f425b3af6e4221538f174ea8d45) | docs | docs: 補上 PHP 與 Laravel 的測試品質接入要求 |
++| 10/08 02:02 | [b960e984](https://github.com/EnzoHsieh-Android/Lumos/commit/b960e984a00f185f12582bee92021d79381ee7f9) | merge | Merge pull request #45 from EnzoHsieh-Android/revalidate-ref-check |
++| 10/08 02:03 | [96a787b3](https://github.com/EnzoHsieh-Android/Lumos/commit/96a787b3fc8585904e763fdc4412f17e13b47e73) | docs | docs: 記下 rtb 第三輪提案逐項現況,回傳第 11–14 項先不做 |
++| 10/08 02:08 | [dff63d00](https://github.com/EnzoHsieh-Android/Lumos/commit/dff63d00ca41cfb4c1e9bbef83a182a8b3544619) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/08 02:59 | [9377d79a](https://github.com/EnzoHsieh-Android/Lumos/commit/9377d79a68c7e073659dab168d3fb0d0a169ef4c) | merge | Merge pull request #47 from EnzoHsieh-Android/rtb-proposal-status |
++| 10/08 10:48 | [7e61a0de](https://github.com/EnzoHsieh-Android/Lumos/commit/7e61a0de7dd91e746472ba31517677c82949e4ad) | fix | fix: 兩個凍結同時跑時,寫入端也擋下沒帶理由的重凍 |
++| 10/08 10:48 | [ff3f556c](https://github.com/EnzoHsieh-Android/Lumos/commit/ff3f556c86e81a8f6aeaba3563e191aac5943aba) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/08 12:55 | [6467401a](https://github.com/EnzoHsieh-Android/Lumos/commit/6467401a7012bb39acb3d5be064bb88758f45818) | merge | Merge pull request #46 from EnzoHsieh-Android/freeze-race |
++| 10/08 12:58 | [5d8f0ec7](https://github.com/EnzoHsieh-Android/Lumos/commit/5d8f0ec7045638dcc9c9f21e7fc9e0aff562eca7) | feat | feat: 接通多技術棧測試品質掃描與故障證據驗證 |
++| 10/08 13:43 | [598e41b2](https://github.com/EnzoHsieh-Android/Lumos/commit/598e41b23f85285d1f9e4429c5d5314f055fc8bc) | fix | fix: 修正測試收證與部署邊界並保留驗證紀錄 |
++| 10/08 14:50 | [4d17d742](https://github.com/EnzoHsieh-Android/Lumos/commit/4d17d74208922e40f7cfd70ca437914a6bfa00bd) | fix | fix: 拒收混裝測試工具並補齊修復回歸控制 |
++| 10/08 14:52 | [03a46da6](https://github.com/EnzoHsieh-Android/Lumos/commit/03a46da6b5179cfc5b42ced08e257ee127cc654e) | docs | docs: 補齊修復重验理由與測試入口責任 |
++| 10/08 16:12 | [532f5a15](https://github.com/EnzoHsieh-Android/Lumos/commit/532f5a15c05ce547c8305e0d30492e5d3c8845a0) | fix | fix: 保留探針失敗證據並限制批次派工 |
++| 10/08 16:23 | [76bb9bad](https://github.com/EnzoHsieh-Android/Lumos/commit/76bb9bad4c14462e0b630c135d1da947cd0cc1fc) | fix | fix: 防止消融結果灌分並補齊事故恢復清單 |
++| 10/08 16:29 | [6c833b6e](https://github.com/EnzoHsieh-Android/Lumos/commit/6c833b6e24cf44e90e3fa400396806379fc4f919) | docs | docs: 保留第三輪審查未通過與分席驗證紀錄 |
++| 10/08 16:39 | [0f3b89a8](https://github.com/EnzoHsieh-Android/Lumos/commit/0f3b89a8179c46686c896609b46421b7d09eb884) | fix | fix: 保留消融來源證據並轉義報表文字 |
++| 10/08 17:08 | [05e87b54](https://github.com/EnzoHsieh-Android/Lumos/commit/05e87b5476cf161a203382a50ef008b374e60a31) | fix | fix: 讓失敗探針與跨日派工共用持久額度 |
++| 10/08 19:40 | [7949784a](https://github.com/EnzoHsieh-Android/Lumos/commit/7949784a20a52d967641f432529bb5b17ea02a58) | docs | docs: 記錄持久用量帳第四輪審查停點 |
++| 10/08 21:01 | [39dc3ee0](https://github.com/EnzoHsieh-Android/Lumos/commit/39dc3ee09d81e5c5705d9680c20a14dee1d9d4bf) | fix | fix: 封住探針輸出與等待邊界 |
++| 10/08 21:10 | [782829d0](https://github.com/EnzoHsieh-Android/Lumos/commit/782829d0a94c56b6e1b458e565e9181faf1410fa) | fix | fix: 補齊測試品質工具的錯誤路徑 |
++| 10/08 21:30 | [10d40f30](https://github.com/EnzoHsieh-Android/Lumos/commit/10d40f3009ba136db53b5a071d552395ba2ccbe1) | fix | fix: 統一測試指令的程序清理 |
++| 10/08 21:44 | [4d765d5c](https://github.com/EnzoHsieh-Android/Lumos/commit/4d765d5c39a0fbd48b333b25ff32f74710cec01c) | fix | fix: 避免TTY確認讓測試程序收到掛斷 |
++| 10/08 22:00 | [c4982cb1](https://github.com/EnzoHsieh-Android/Lumos/commit/c4982cb1bf19f76f162a627d483e0a7ea55f1769) | fix | fix: 收齊測試後端留下的背景程序 |
++| 10/08 22:09 | [7d1975e8](https://github.com/EnzoHsieh-Android/Lumos/commit/7d1975e81e49b8af6eb665f7466c831f23f6cc04) | docs | docs: 補上修補前因說明並備妥下一輪審查材料 |
++| 10/08 22:37 | [b4cf45a2](https://github.com/EnzoHsieh-Android/Lumos/commit/b4cf45a2996d26b83ab3f14353d7e81d8fdefc90) | fix | fix: 探針輸出不再改壞權限並在開跑前檢查寫入位置 |
++| 10/08 22:37 | [483df9fe](https://github.com/EnzoHsieh-Android/Lumos/commit/483df9fe6e363b4078553aea358b8abe4d3ef3e2) | docs | docs: 更正終端確認的防回歸測試說明 |
++| 10/08 22:48 | [a2f30b19](https://github.com/EnzoHsieh-Android/Lumos/commit/a2f30b1999b861f48565e79e982490fd72f081ce) | fix | fix: 模型命令與 Semgrep 後端共用同一套程序清理 |
++| 10/08 22:58 | [388c4459](https://github.com/EnzoHsieh-Android/Lumos/commit/388c4459db11fcb0d92458fd2979ff576690519f) | docs | docs: 記下第三輪跑滿回顧並備妥加開一輪的審查材料 |
++| 10/08 23:34 | [c70b3d6a](https://github.com/EnzoHsieh-Android/Lumos/commit/c70b3d6afc830807d0d61181df448acb3aa1bb81) | fix | fix: 模型輸出過大或清理撞到權限錯誤時不再中止整場評測 |
++| 10/09 00:04 | [3e149721](https://github.com/EnzoHsieh-Android/Lumos/commit/3e149721b66f33346385dec40d1ae690a0763402) | fix | fix: 探針輸出不再卡在沒人讀的管線,寫入前檢查與寫入規則一致 |
++| 10/09 00:20 | [ec3ef4c1](https://github.com/EnzoHsieh-Android/Lumos/commit/ec3ef4c1109bb82b10e381814022742dc4a57385) | docs | docs: 記錄第六輪處置閘、修正關卡與派工鏡頭測試逾時診斷 |
++| 10/09 00:22 | [67b1dea2](https://github.com/EnzoHsieh-Android/Lumos/commit/67b1dea2d1e9dc7ac7a456b862d1ea7e04bc61cf) | merge | chore: 併入遠端主線並解決衝突 |
++| 10/09 00:24 | [9a82fd9a](https://github.com/EnzoHsieh-Android/Lumos/commit/9a82fd9aba410b367858be11288a8692cbe4dfb8) | docs | docs: 記下接受剩餘風險的裁定與四輪審查回顧 |
++| 10/09 00:31 | [f69ad21e](https://github.com/EnzoHsieh-Android/Lumos/commit/f69ad21e1361522c6407936875219025f71302c4) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 00:36 | [1b862462](https://github.com/EnzoHsieh-Android/Lumos/commit/1b86246212ad1467e534049da7cc427b8b32046c) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 00:55 | [da046ddf](https://github.com/EnzoHsieh-Android/Lumos/commit/da046ddf3596e3e4d78ee2efded558c8366b8d19) | fix | fix: 探針寫進終端不再搶走控制終端,報表控制字元改用主程式同一套寫法 |
++| 10/09 00:57 | [e5ce8675](https://github.com/EnzoHsieh-Android/Lumos/commit/e5ce86756ee6b716c40c03e404982f07026b2d9b) | docs | docs: 終端確認的重驗改指向真的抓得到問題的測試 |
++| 10/09 01:29 | [6acb5eeb](https://github.com/EnzoHsieh-Android/Lumos/commit/6acb5eeb0b9418aaf25fd2424396d37ebcc4cbf0) | test | test: 報表控制字元改成直接比對主程式的類別集合,並修正幾處說法 |
++| 10/09 03:31 | [fc341775](https://github.com/EnzoHsieh-Android/Lumos/commit/fc3417752e7f21700c7f39ccfafc35ec89c7835b) | docs | docs: 記錄探針輸出修補的審查處置、凍結判定與最終全套結果 |
++| 10/09 03:32 | [2e2f2efe](https://github.com/EnzoHsieh-Android/Lumos/commit/2e2f2efeb8e91c3fdfc7e87aa92cd00568735d80) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 03:40 | [6de1a0cd](https://github.com/EnzoHsieh-Android/Lumos/commit/6de1a0cd81051d5f4e4dd68a279cad26571fd226) | docs | docs: 記錄探針與消融腳本累積的函式複雜度,附理由放行並開單追蹤拆分 |
++| 10/09 03:40 | [df954c8c](https://github.com/EnzoHsieh-Android/Lumos/commit/df954c8c96dcedbe08deec1cdfc1ca9e84d1d65a) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 03:41 | [e9d539fd](https://github.com/EnzoHsieh-Android/Lumos/commit/e9d539fd578aa434de568cb2cd676e328cfd0bf6) | chore | chore: 登記新增探針邊界測試後的測試檔版本 |
++| 10/09 03:41 | [c3c2b886](https://github.com/EnzoHsieh-Android/Lumos/commit/c3c2b886a82efeb9cdb9a5bb82c76915cd3dc9ef) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 03:43 | [44928727](https://github.com/EnzoHsieh-Android/Lumos/commit/4492872706878ad83a16e9bb1d9f0c7f46cf6fcd) | docs | docs: 消融腳本筆記兩條防回歸改寫成實際測試所在,不再冒充可自動跑的測試綁定 |
++| 10/09 03:43 | [a0020cc7](https://github.com/EnzoHsieh-Android/Lumos/commit/a0020cc76852051ca32f6ff425964ca898768f52) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 03:48 | [fbc170c1](https://github.com/EnzoHsieh-Android/Lumos/commit/fbc170c14905fe7942bdbb26a66d1b8378d9774f) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 03:54 | [ebb34633](https://github.com/EnzoHsieh-Android/Lumos/commit/ebb346336a8e3808511f826a265761bd0289ac9e) | chore | chore: 對改到探針與消融腳本觸發的兩條回頭條件表態照留 |
++| 10/09 04:47 | [f605fecb](https://github.com/EnzoHsieh-Android/Lumos/commit/f605fecb60595f111164c744d4a04f9e7e7513ee) | merge | Merge pull request #48 from EnzoHsieh-Android/EnzoHsieh-Android/fix-code-review-convergence-main-sync |
++| 10/09 05:00 | [348accc5](https://github.com/EnzoHsieh-Android/Lumos/commit/348accc526911a6acf8b7a3fe433b1fcc2af1222) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 05:01 | [98e92aad](https://github.com/EnzoHsieh-Android/Lumos/commit/98e92aad96bb5d03653d04fb6755a735a0a5ac28) | merge | chore: 併入主線最新改動 |
++| 10/09 05:09 | [94e2bb4d](https://github.com/EnzoHsieh-Android/Lumos/commit/94e2bb4d3a8a7d009bb6809d02a4b6a5ab80a071) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 07:23 | [534a73fc](https://github.com/EnzoHsieh-Android/Lumos/commit/534a73fc35aa8555a9750c5877da70cd3a514301) | fix | fix: 讓測試品質指令跟指令說明、文件與掛鉤清單對齊 |
++| 10/09 07:26 | [8c60962e](https://github.com/EnzoHsieh-Android/Lumos/commit/8c60962e8fc17bb52a0eedd1dafced48fd6eac11) | docs | docs: 指令全覽與總目錄的測試品質條目跟鄰居寫法一致 |
++| 10/09 07:26 | [9ddeec85](https://github.com/EnzoHsieh-Android/Lumos/commit/9ddeec85f01c64e9771235b0699b238a44466f9c) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 08:50 | [1ddc7d4c](https://github.com/EnzoHsieh-Android/Lumos/commit/1ddc7d4c7c4a70444ec3f8ef8e48a17d83d8e290) | docs | docs: 舊句兩道轉擋計劃初稿(設計審前) |
++| 10/09 09:07 | [75bfa634](https://github.com/EnzoHsieh-Android/Lumos/commit/75bfa6343e7b14cbb01915d83cff8aede77af674) | docs | docs: 舊句兩道轉擋計劃折入第一輪設計審 |
++| 10/09 09:07 | [966ce9c8](https://github.com/EnzoHsieh-Android/Lumos/commit/966ce9c8b04df8a366eddb58c38668a201f57385) | chore | chore: 記錄舊句兩道轉擋第一輪設計審帳 |
++| 10/09 09:51 | [9fffa5d5](https://github.com/EnzoHsieh-Android/Lumos/commit/9fffa5d58f007a76d8398f2ed37f8c33dfbabf1c) | test | test: 放寬三支逾時測試的時間預算，避免全套並行時偶發紅 |
++| 10/09 09:51 | [125baee1](https://github.com/EnzoHsieh-Android/Lumos/commit/125baee1527b2177eaaa0769a6c2bca2264a0990) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 09:58 | [3993ca76](https://github.com/EnzoHsieh-Android/Lumos/commit/3993ca76c682da1dbf6ce4fbbe5d010247b965cd) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 10:01 | [be4ee23d](https://github.com/EnzoHsieh-Android/Lumos/commit/be4ee23dd94d478f999db6e872c7c35dedbd923d) | docs | docs: 舊句兩道轉擋計劃折入第二輪設計審與人裁 |
++| 10/09 10:01 | [b51fef6c](https://github.com/EnzoHsieh-Android/Lumos/commit/b51fef6c7572d7d1eb35d8cb6b5fdcffc7d91c1a) | chore | chore: 記錄舊句兩道轉擋第二輪設計審帳 |
++| 10/09 10:16 | [dc3b5e6c](https://github.com/EnzoHsieh-Android/Lumos/commit/dc3b5e6c6f343ab14ddb75587302ab25d6a8113d) | docs | docs: 部署配套校驗計劃改走設計審 |
++| 10/09 10:19 | [569257a9](https://github.com/EnzoHsieh-Android/Lumos/commit/569257a9de5e44f38aadf8c35d0ed5d23b311b79) | docs | docs: 舊句兩道轉擋計劃折入第三輪設計審 |
++| 10/09 10:19 | [6b30da03](https://github.com/EnzoHsieh-Android/Lumos/commit/6b30da0384a637f93d74fa9666e721ab4ace831b) | chore | chore: 記錄舊句兩道轉擋第三輪設計審帳 |
++| 10/09 10:19 | [742c1fc9](https://github.com/EnzoHsieh-Android/Lumos/commit/742c1fc9849e085000cf14b1e8d870623d4a81a9) | docs | docs: 凍結舊句兩道轉擋設計審判定 |
++| 10/09 10:52 | [a7d0e0c4](https://github.com/EnzoHsieh-Android/Lumos/commit/a7d0e0c44497727b919b16ab9e23e4941619c785) | feat | feat: 舊句檢查沒寫開關時照總開關,預設擋下 |
++| 10/09 10:56 | [99683f40](https://github.com/EnzoHsieh-Android/Lumos/commit/99683f4065ee89eaca589c1c0b6a39dd939645fd) | fix | fix: 測試品質輔助檔一律從驗過的內容載入，不再吃到舊快取 |
++| 10/09 10:56 | [60083648](https://github.com/EnzoHsieh-Android/Lumos/commit/600836482707ffbd968488105f599a62d5f23b34) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 11:09 | [16720222](https://github.com/EnzoHsieh-Android/Lumos/commit/16720222452e947941a57f997a7b6c4355dd55fa) | docs | docs: 處理推送時成立的五條回頭條件 |
++| 10/09 11:16 | [0f7f8733](https://github.com/EnzoHsieh-Android/Lumos/commit/0f7f8733b86dbc1219d34bd6cfa6510039e9968b) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 11:28 | [fade5a91](https://github.com/EnzoHsieh-Android/Lumos/commit/fade5a9141b06db9a108d74cb66eead8daf3393b) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 11:52 | [f80352f6](https://github.com/EnzoHsieh-Android/Lumos/commit/f80352f6edde4b99057fc930be367616b689aa3f) | feat | feat: 回頭重讀在本機推送前預設擋下,判定點出的規則行要改掉或表態 |
++| 10/09 15:18 | [202da1a4](https://github.com/EnzoHsieh-Android/Lumos/commit/202da1a427fb81b42114f5884d2d44d39b3e1225) | fix | fix: 回頭重讀寫得出讀不了的紀錄、測試被單次略過變數弄紅等代碼審發現 |
++| 10/09 15:19 | [69ac44b2](https://github.com/EnzoHsieh-Android/Lumos/commit/69ac44b20d6fcd13929203ef0c7e5d567bf777e6) | merge | Merge pull request #49 from EnzoHsieh-Android/audit/implementation-test-quality-oct07 |
++| 10/09 15:28 | [5ce8115d](https://github.com/EnzoHsieh-Android/Lumos/commit/5ce8115d46bb84fdc0847bfa513716ed3672f74b) | fix | fix: 舊句檢查的超長行只在名稱整字出現時才算判不了 |
++| 10/09 15:30 | [cd1e366b](https://github.com/EnzoHsieh-Android/Lumos/commit/cd1e366b182f55431ecc811b38e2ce02a1debcdd) | chore | chore: 記錄舊句兩道轉擋代碼審第一輪卷證與帳 |
++| 10/09 15:31 | [d4fa4c94](https://github.com/EnzoHsieh-Android/Lumos/commit/d4fa4c94f766a4bbbb10649237866f279c9a5174) | chore | chore: 記錄舊句兩道轉擋代碼審第一輪修正紀錄 |
++| 10/09 15:31 | [0ddf6583](https://github.com/EnzoHsieh-Android/Lumos/commit/0ddf6583fbe30bf5219035cfa6fa38b1afbc1528) | chore | chore: 補舊句兩道轉擋第一輪修正紀錄的分組說明 |
++| 10/09 15:39 | [429d912d](https://github.com/EnzoHsieh-Android/Lumos/commit/429d912d391d0a06bb72073ca13050652769dc0e) | chore | chore: 記錄舊句兩道轉擋實作與代碼審期間的治理帳 |
++| 10/09 15:39 | [88322e46](https://github.com/EnzoHsieh-Android/Lumos/commit/88322e464a55b777d78a713a1ff736ad42b5681e) | merge | Merge remote-tracking branch 'Lumos/main' into EnzoHsieh-Android/reread-block |
++| 10/09 18:10 | [59f8f92b](https://github.com/EnzoHsieh-Android/Lumos/commit/59f8f92b1446fe7db9e63aa0459027b58800175f) | fix | fix: 回頭重讀的帳真正壓在 4 KB 內、壞紀錄不再讓 prepare 崩潰、提交提示改列具體檔名 |
++| 10/09 18:24 | [a4d42fea](https://github.com/EnzoHsieh-Android/Lumos/commit/a4d42feabfae022c5c4cec0f751a4b1364bab665) | chore | chore: 補舊句兩道轉擋修補後的審查卷證與帳 |
++| 10/09 20:01 | [40f871bf](https://github.com/EnzoHsieh-Android/Lumos/commit/40f871bfe497fad5d19925cc8b68c5cf41fc78b9) | fix | fix: 回頭重讀不再讀 repo 外的紀錄、深層巢狀設定檔不再讓推送前閘崩潰 |
++| 10/09 20:13 | [2b4095aa](https://github.com/EnzoHsieh-Android/Lumos/commit/2b4095aa4def83caff66b4a88ff2ef50295a7e05) | chore | chore: 補舊句兩道轉擋上限輪的審查卷證與帳 |
++| 10/09 20:26 | [a36b9633](https://github.com/EnzoHsieh-Android/Lumos/commit/a36b9633a1675052a5eedcc1505c830366802736) | chore | chore: 記錄舊句兩道轉擋代碼審跑滿上限的人裁與回顧 |
++| 10/09 20:53 | [fefe4b39](https://github.com/EnzoHsieh-Android/Lumos/commit/fefe4b3914fdcf0df72f5c6497367c0fd53921be) | chore | chore: 補舊句兩道轉擋加開一輪的審查卷證,登記改過的測試檔與掛鉤版本 |
++| 10/09 20:54 | [bdfb8f14](https://github.com/EnzoHsieh-Android/Lumos/commit/bdfb8f14f5cc2410420a620e6e41880145b0684b) | chore | chore: 凍結舊句兩道轉擋代碼審的判定 |
++| 10/09 20:58 | [30238fbd](https://github.com/EnzoHsieh-Android/Lumos/commit/30238fbd9d98b803285d6d6f7c3f7fd9f25f3744) | feat | feat: 架構對齊審查可依目錄宣告目標架構當基準 |
++| 10/09 20:58 | [f4d512ea](https://github.com/EnzoHsieh-Android/Lumos/commit/f4d512ea290bc6c23ea7a1f0efd441a787f21825) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 21:02 | [8c3300b1](https://github.com/EnzoHsieh-Android/Lumos/commit/8c3300b120277419512d66ffbb2a806debee5392) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 21:39 | [56868a24](https://github.com/EnzoHsieh-Android/Lumos/commit/56868a24eade774b030e998042dd36c9070eff08) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 21:39 | [322a6155](https://github.com/EnzoHsieh-Android/Lumos/commit/322a6155959768099ab20dc697806b4f7555cd0c) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 21:41 | [a2c10461](https://github.com/EnzoHsieh-Android/Lumos/commit/a2c104616cf497ed6ccbb9e4e3f1eef6bcef63c0) | docs | docs: 超長行那篇問題筆記的留痕殘行改寫成重現指令,不再留測試待補的佔位字 |
++| 10/09 21:50 | [d78e15eb](https://github.com/EnzoHsieh-Android/Lumos/commit/d78e15ebcf6f5a670bc91f22c177c3182ec394a8) | docs | docs: 回頭重讀六篇守檔筆記,改掉被這次改動弄得不成立的舊句 |
++| 10/09 21:50 | [22a92c2f](https://github.com/EnzoHsieh-Android/Lumos/commit/22a92c2fec2190279343788f332378573a55ff00) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/09 21:56 | [32875a62](https://github.com/EnzoHsieh-Android/Lumos/commit/32875a6244d5600f71a736bea9f8fb1f3411dd90) | merge | Merge pull request #50 from EnzoHsieh-Android/target-arch-lens |
++| 10/09 23:27 | [225d1db8](https://github.com/EnzoHsieh-Android/Lumos/commit/225d1db8a63b88fed9466344ce810bd7cb250d1f) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/10 00:11 | [a779752a](https://github.com/EnzoHsieh-Android/Lumos/commit/a779752a7e51ebe0426b7512b00fbb7c659e7a88) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/10 00:31 | [9850df1c](https://github.com/EnzoHsieh-Android/Lumos/commit/9850df1cfaa973a53118057f5b89ca0beebddf3f) | merge | Merge remote-tracking branch 'Lumos/main' into EnzoHsieh-Android/reread-block |
++| 10/10 00:33 | [2396619f](https://github.com/EnzoHsieh-Android/Lumos/commit/2396619f0d584403f68e84e4bc4464ded30d32d0) | chore | chore: 合併主線後回頭重讀五篇守檔筆記,判定都沒有要改的句子 |
++| 10/10 00:33 | [41c7c1ae](https://github.com/EnzoHsieh-Android/Lumos/commit/41c7c1ae982596347efd37540eb95076f15f6f13) | chore | chore(lumos): 記錄代碼審通過 |
++| 10/10 01:33 | [8e648f3d](https://github.com/EnzoHsieh-Android/Lumos/commit/8e648f3d536220bf7e0ea3c8cd52deed75816595) | merge | Merge pull request #51 from EnzoHsieh-Android/EnzoHsieh-Android/reread-block |
+diff --git a/docs/指令參考.md b/docs/指令參考.md
+index a967490b..b6071382 100644
+--- a/docs/指令參考.md
++++ b/docs/指令參考.md
+@@ -5,21 +5,21 @@
+ > **先講一件事：這些指令你日常不用敲。**
+ >
+ > Lumos 的用法是**自然對話**——你照平常的方式跟 Claude Code 或 Codex 講話，它會自己決定什麼時候該查、什麼時候該寫回。安裝時已經把這張路由表注入 `CLAUDE.md` / `AGENTS.md`，另外掛了五個自動觸發的檢查。
+ >
+ > 這份文件的用途只有兩個：**你想自己查的時候查得到；你想知道 AI 在背後做了什麼。**
+ 
+ <p align="center">
+   <img src="../assets/workflow-zh.svg" alt="一次工作分四段:進場先讀、動工寫回、收工自己先驗、推送前終審" width="900">
+ </p>
+ 
+-零依賴的 python 指令，七十來個頂層命令。**權威清單以 `lumos --help` 為準**，這裡只列日常會碰到的。
++零依賴的 python 指令，八十多個頂層命令。**權威清單以 `lumos --help` 為準**，這裡只列日常會碰到的。
+ 
+ ---
+ 
+ ## ① 進場：動手前先讀
+ 
+ ```bash
+ lumos search <關鍵字>             # 全文搜尋,相關性排序
+ lumos context <節點> [--brief]    # 這篇＋鄰居的壓縮視圖,合約放最上面
+ lumos contracts [<節點>]          # 合約總表:哪些不能改、綁了什麼測試
+ lumos impact --file <檔>          # 改這個檔會波及哪些筆記、踩過什麼雷
+@@ -43,45 +43,76 @@ lumos stale --candidate --match <關鍵字>   # 哪些驗證該重驗了
+ 
+ ---
+ 
+ ## ② 動工：邊做邊寫回
+ 
+ ```bash
+ lumos new system|issue|project|verification <名稱>   # 建新筆記骨架
+ lumos set <節點> <欄位> <值>                          # 改狀態等單值欄位
+ lumos append <節點> related|verified_by|... "[[X]]"   # 加連結(一次一項)
+ lumos decision-add <節點> "<內容>" --decided 日期      # 記決策
++lumos summary-line <節點> "<舊片段>" "<新片段>"        # 改摘要裡的一行,不用手改開頭欄位
+ ```
+ 
+ **每一支寫完都會自己檢查一遍。** 別手改開頭的結構化欄位——最常見的坑是多個連結擠在同一行，會長出「幽靈節點」。
+ 
+ 合約與驗證那組：
+ 
+ ```bash
+ lumos guard list [--unbound]     # 哪些合約還沒綁測試
+ lumos guard scaffold / bind / audit    # 產測試骨架 → 綁定 → 獨立審計
+ lumos guard kill <節點>          # 殺傷力驗證:沙盒裡真的弄壞它,看測試會不會翻紅
+ lumos signoff <節點> --note ".." # 業務簽核留下紀錄(工具答不了的那一半)
+ lumos spec-trace <計劃節點>       # 計劃裡的條款,每條綁了測試沒(綁了/靠人/未標/懸空;舊制認領欄照印)
++lumos spec-gate <計劃節點>        # 設計寫完先過:條款句式、綁定、回退節(擋);綁的測試真跑一次印紅綠(不擋)
++```
++
++測試品質那組(唯讀掃描與收證,不裁決業務答案):
++
++```bash
++lumos test-quality capabilities                 # 先看實際接入了哪些語言與證據格式
++lumos test-quality scan <測試檔或目錄> [--json]  # 找自己比自己、重抄實作這類可疑寫法;零候選不代表測試有用
++lumos test-quality capture …                    # 明示執行可信本機測試,保存 JUnit 與來源快照(不提供沙盒)
++lumos test-quality check <原版> <故障版> <還原版> --target <類別::測試名>   # 核對三份 capture 收據:原版綠、故障版目標斷言紅、還原後綠
+ ```
+ 
+ ---
+ 
+ ## ③ 收工：自己先驗一遍
+ 
+ ```bash
+ lumos lint <節點>                # 單篇快檢
+ lumos doctor [--ci]              # 整疊筆記健檢(--ci 會擋)
+ lumos enforcement                # 每一層防護有沒有接上(查接線,不判對錯)
+ lumos gov [<節點>]               # 本機流水帳:誰被哪道關卡攔過
++lumos updated-sync --stale [--dry-run]   # doctor 說開頭 updated 落後時,一次改成今天(先 --dry-run 看)
++lumos events [--session <編號>]          # 這幾場 Claude 會談做了什麼(事件帳,唯讀)
+ ```
+ 
++筆記跟狀態對不上(漂移)那組:
++
++```bash
++lumos drift scan [--json]        # 健檢整份圖譜跟狀態對不上的地方,產待修清單(不擋、不寫帳)
++lumos drift fix <節點> <行號> --kind <種類> [--dry-run]    # 照 scan 清單用工具改掉一筆(c1–c6、count);改完跟修復帳一起提交
++lumos drift fix <Issue> <行號> --kind c2 --close --status <結案值> --reason "…"   # 結 Issue;摘要還有待定決策或沒處理的回頭條件會先擋
++lumos drift ack <節點> <行號> --kind <種類> --reason "…"   # 確定照留就表態(要提交才算);--kind reread 給回頭重讀點出的規則行
++```
++
++**這幾個只列出、不擋，看到時順手處理：**
++
++- 健康檢查（`doctor`）列出指向別篇、但那篇已經沒有那條回頭條件的句子。
++- `lumos set <節點> revalidate_when …` 改了什麼時候要重驗，會列出別篇連到這篇、講到它的句子，附上改完的清單讓你對照。
++- `lumos set` 把 Issue 改成結案值時，列出摘要裡還寫待定的決策行和還沒處理的回頭條件（用 `drift fix --kind c2 --close` 結案才會擋）。
++- 提交時提醒：一行綁了好幾支測試，要拆成一支一行；新寫的句子講某個 Python 清單「有 N 種」、數字剛好等於成員數卻沒掛數量標記，要掛上；更正括號裡別用「第 N 項」指清單項目。
++- 健康檢查列撤除候選時，只掛人工驗收（`[manual:]`）條款的計劃也會看。
++- 派審查員時（`lumos dispatch-lens`），影響範圍算不出來會在派工詞尾端講一聲，不再靜默什麼都不附。
++
+ **治理事件帳**：每道關卡攔了誰、誰繞過了什麼，都落在**本機**的流水帳裡——不進 git、不上傳。
+ 
+ ```bash
+ lumos gov                # 全部關卡事件的時間軸
+ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提醒
+ ```
+ 
+ 用途是**開發時的可見性**（哪裡一直在響＝哪裡該處理），不是稽核合規文件。
+ 
+ ---
+@@ -89,29 +120,60 @@ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提
+ ## ④ 推送前：終審與留下紀錄
+ 
+ ```bash
+ lumos pitfalls --diff <範圍>     # 算這批改動的風險級(standard / high)
+ lumos bound-tests --diff <範圍>  # 這次碰到的硬合約,把它們綁的測試真跑一次
+                                  # 紅了是要修測試,不是補審查留下紀錄
+ lumos code-loop check|pass|skip  # 高風險改動的代碼審留下紀錄;check 同時跑表態閘(push 前會查)
+ lumos code-loop dispositions <檔> [--branch <名>]  # 推送前對觸發到的棧別效能檢核題逐題表態(樣板:lumos pitfalls --diff <範圍> --dispositions-template --carry)
+ lumos code-loop recall-miss <id> --note "…"  # 審查席抓到「對得上某未觸發題」的問題時登記一筆
+ lumos loop status <編號>         # 設計/代碼審迴圈的收斂判定
++lumos loop fix-check <編號> --round rN   # 代碼審修完、派下一輪前:驗修正紀錄與修後測試(只提醒;約 5 分鐘,背景跑)
++lumos loop cap-decision <編號> --decision extra-round|accept-risk --note "…"   # 跑滿上限沒過:記人裁(破例再開一輪或接受風險)
++lumos loop retro <編號> --template --write | --check | --record | --skip --note "…"   # 記了人裁、繼續之前寫跑滿回顧
++lumos loop escape <編號> --stage … --severity … --desc "…"   # 放行後下游抓到可歸因的缺陷,記一筆逃逸帳(--list 看全帳)
++lumos lint-waive <指紋> --note "…"   # 新增告警閘擋下的是誤報:附理由放行、留痕(--list 看放行過什麼)
++lumos note-audit reread-prepare --diff A..B --orchestrator claude|codex   # 回頭重讀:每篇要重讀的守檔筆記出一份給判定者的項目檔
++lumos note-audit reread-record --prepared <項目檔> --report <報告>        # 判定者交回後記成對照紀錄(要提交才算)
++lumos note-audit reread-check --diff A..B [--gate]   # 推送前掛鉤帶 --gate 照 note_reread.gate 擋;CI 與手動不帶,只印
+ lumos testmap affected --diff .. # 依改動推薦該跑哪些測試(建議性質)
+ lumos anchor verify|approve      # 測試/檢查檔的防篡改指紋
+ lumos ci-wait / ci-status        # push 後等 CI 結果 / 查上次結果
+ ```
+ 
+ CI 狀態用 `lumos ci-wait`，不要用 `gh run list`——結果要進治理帳。
+ 
+ ---
+ 
++## 專案開關
++
++寫在專案的 `.lumos/config.json`。改了記得提交：多數推送前檢查讀的是被推那個提交裡的版本（`stack_questions` 與 `note_lint` 讀工作目錄那份）。沒寫就用下表的預設；寫壞了（讀不成 JSON、值看不懂）會講一句，多半退回預設，`note_lint.gate` 看不懂時改用 on。
++
++| 開關 | 管什麼 | 值 | 沒寫時 |
++| --- | --- | --- | --- |
++| `drift_check.gate` | 推送前的舊說法與漂移檢查（`drift check`） | block / warn / off | block |
++| `drift_check.old_sentence` | 其中「名稱或路徑消失了、筆記還在提」那項 | block / warn / off | 照 `drift_check.gate` |
++| `drift_check.retire` | 其中「RULE 的撤除條件成立了」那項 | block / warn / off | 照 `drift_check.gate` |
++| `note_reread.gate` | 回頭重讀（只有本機推送前會擋，CI 只提醒） | block / warn / off | block |
++| `note_shape.gate` | 筆記寫法：新寫的程式行號、沒寫來源的現況描述 | block / warn / off | block |
++| `note_shape.test_refs` | 碰到的筆記綁的測試要指得到真測試 | block / warn / off | warn |
++| `note_shape.slots` | 摘要行前綴的必有格子（要專案先在提交掛鉤啟用 `--slots` 才檢查，見 [07 安裝維運](../skills/lumos-project-notes/commands/07-安裝維運.md)；也受 `note_shape.gate` 管） | block / warn / off | block（啟用後） |
++| `node_home.gate` | 每支程式檔要有管它的筆記（檔案歸屬） | on / warn / off | on |
++| `lint_new.gate` | 新增的 linter 告警 | block / warn / off | block |
++| `stack_questions.gate` | 推送前對技術棧效能題逐題表態 | all / high-only / off | all |
++| `note_audit.gate` | 筆記內容審（`note-audit check`；推送前掛鉤要接上這個指令才會擋，本工具鏈自己的掛鉤沒接） | block / warn / off | block |
++| `note_lint.gate` | 筆記欄位的新規則（提交時的單篇快檢） | on / warn / off | warn |
++
++改程式沒動筆記、連結斷掉、高風險改動沒有審查紀錄、測試或掛鉤檔被改過卻沒重新核可（`lumos anchor`）、找不到 Python 3.14，這些沒有開關。
++
++---
++
+ ## 裝與卸：一一對稱
+ 
+ ```bash
+ lumos bootstrap   # 一鍵全裝        ↔  lumos teardown   # 一鍵全拆
+ lumos install     # 只裝機器層      ↔  lumos uninstall
+ lumos init        # 只建專案層      ↔  lumos deinit [--keep-graph] [--dry-run]
+ lumos update      # 刷新本專案內的工具組
+ lumos update --dry-run   # 先預覽會改哪些規範檔與工具檔(不拉來源、不改動)
+ ```
+ 
