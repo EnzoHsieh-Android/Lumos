@@ -7299,6 +7299,16 @@ def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, cou
         return False
 
 
+def _spec_gate_print_rejections(env):
+    """舊否決提醒(Projects/否決提案收齊查重_計劃 S4):只印不擋。收集碼出任何錯都只印略過原因——提醒壞掉不准改判定或回傳碼。"""
+    try:
+        n = len(_rejections_collect(env))
+    except Exception as e:   # 刻意收全部:這行是附帶提醒,收集碼的新 bug 不該變成規格閘的崩潰;原因照印,直接跑 lumos rejections 會看到原錯
+        print(f"[spec-gate] 舊否決: —(收集失敗:{e};略過)")
+        return
+    print(f"[spec-gate] 舊否決: 圖譜寫下的有 {n} 筆;動手前跑 lumos rejections 讀完、按概念比對,撞到先問人")
+
+
 def _spec_gate_print_door(judged):
     if judged["door"] == "low":
         print("[spec-gate] 計劃風險: 低(硬訊號都沒命中;四類已排除:" + "、".join(f"{k}={v[:12]}" for k, v in judged["exclusions"].items()) + ")")
@@ -7717,6 +7727,7 @@ def _spec_gate_front(env, node, no_run):
     rr = _vault_repo_root(env)
     judged = _door_judge(env, env.notes.get(rel), text)
     _spec_gate_print_door(judged)
+    _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
     door = judged["door"]
     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
     if rc is not None:
@@ -18152,14 +18163,20 @@ def fmt_decision(d):
     return line
 
 
+def _superseded_decisions(env):
+    """全庫被推翻的決策(valid: false)→ [(rel, 決策)]。decisions --superseded 與舊否決清單共用這一支。"""
+    out = []
+    for r, n in sorted(env.notes.items()):
+        for d in parse_decisions(n.fm_lines):
+            if str(d.get("valid", "true")).lower() == "false":
+                out.append((r, d))
+    return out
+
+
 def cmd_decisions(env, rel=None, superseded=False):
     if superseded:
-        found = []
-        for r, n in sorted(env.notes.items()):
-            for d in parse_decisions(n.fm_lines):
-                if str(d.get("valid", "true")).lower() == "false":
-                    found.append(f"{n.stem}: {first_line(d.get('content', ''), 80)}"
-                                 f" → {d.get('superseded_by', '?')}")
+        found = [f"{env.notes[r].stem}: {first_line(d.get('content', ''), 80)}"
+                 f" → {d.get('superseded_by', '?')}" for r, d in _superseded_decisions(env)]
         print("\n".join(found) if found else "無被推翻的決策")
         return 0
     ds = parse_decisions(env.notes[rel].fm_lines)
@@ -18168,6 +18185,109 @@ def cmd_decisions(env, rel=None, superseded=False):
         return 0
     for d in ds:
         print(fmt_decision(d))
+    return 0
+
+
+# ── 舊否決清單(Projects/否決提案收齊查重_計劃)────────────────────────────────
+# 只收圖譜裡寫成結構的否決,收齊成一張清單給代理讀、按概念比對;工具不判新提案撞不撞(零依賴下只能比字串)。
+# 計劃裡的「不做」小節不收:多半是這一版的範圍刀,不是否決提案。
+_REJ_NOGO_RE = re.compile(r"不做|停案|否決|不採")
+_REJ_REVERSAL_RE = re.compile(r"推翻|翻案")   # 同一子句先講推翻/翻案、才講不做的,是在推翻舊否決,結論是「做」(代碼審 r1、r2)
+# 值都取自 _STATUS_ENUM(t_rejections_retired_statuses_in_enum 釘住);project 沒有 rejected 這個值
+_REJ_RETIRED = {"project": ("superseded",), "system": ("superseded", "rejected"), "issue": ("wontfix",)}
+_REJ_KIND_TITLE = (("rejected-alt", "WHY 行裡放棄的方案"), ("superseded-decision", "被翻案的決策"),
+                   ("no-go-decision", "內文寫著不做的有效決策(關鍵字判,可能誤收)"), ("retired-node", "作廢或否決的整篇"))
+
+
+def _rejections_why_alts(rel, sp):
+    """一行 WHY 的 slot_parse 結果 → 每個不選值一條。"""
+    return [{"node": rel, "kind": "rejected-alt", "content": first_line(v, 160),
+             "context": first_line(sp["core"], 40)} for v in _slot_vals(sp, "不選")]
+
+
+def _rejections_is_nogo(d):
+    """有效決策的前 120 字講的是不做:全形引號裡的引述先遮掉(遮完再切,引號跨界線也遮得到);
+    逐子句看,有一句講不做、而且同一句沒有先講推翻/翻案,就算(推翻舊否決的那句不算,別句的停案照算)。"""
+    if str(d.get("valid", "true")).lower() == "false":
+        return False
+    c = _drift_mask_quotes(str(d.get("content", "")))[:120]
+    for cl in _NS_NEG_SEG_CUT_RE.split(c):
+        nogo, rev = _REJ_NOGO_RE.search(cl), _REJ_REVERSAL_RE.search(cl)
+        if nogo and not (rev and rev.start() < nogo.start()):
+            return True
+    return False
+
+
+def _rejections_of_note(env, rel):
+    """一篇筆記正文的不選(圍欄裡的不算)、內文寫不做的有效決策、作廢或否決的整篇。摘要的不選在 _rejections_collect 收。"""
+    n = env.notes[rel]
+    out = []
+    for _no, ln in _visible_lines(split_frontmatter(env_text(env, rel) or "")[1].split("\n")):
+        t = ln.strip()
+        if t[:2] in ("- ", "* "):   # 正文的 WHY 跟摘要同一個認法(SYMBOL_RE),只多剝列表項記號(真圖譜有 `- WHY:` 寫法)
+            t = t[2:].lstrip()
+        m = SYMBOL_RE.match(t)
+        if m and m.group(1) == "WHY":
+            out += _rejections_why_alts(rel, slot_parse(t[m.end():]))
+    for d in parse_decisions(n.fm_lines):
+        if _rejections_is_nogo(d):
+            out.append({"node": rel, "kind": "no-go-decision", "content": first_line(str(d.get("content", "")), 160),
+                        "context": str(d.get("id") or "")})
+    typ = str(n.fields.get("type") or "").strip().lower()
+    st = str(n.fields.get("status") or "").strip().lower()
+    if st in _REJ_RETIRED.get(typ, ()):
+        out.append({"node": rel, "kind": "retired-node", "content": _gist(env, rel), "context": st})
+    return out
+
+
+def _rejections_collect(env):
+    """全庫舊否決 → [{"node": 路徑(帶 .md,同其他指令的 JSON), "kind", "content", "context"}],照種類、來源篇排序。
+    每欄都是字串(翻案沒寫推翻者時 context 是 None):決策欄位可能被寫成區塊清單,要先正規化才能當去重鍵(代碼審 r2)。
+    同一篇裡內容與脈絡都一樣的只留一筆(摘要和正文常寫同一行 WHY)。"""
+    items = [x for rel, _no, _pf, _rest, sp in _slot_summary_entries(env, ("WHY",)) for x in _rejections_why_alts(rel, sp)]
+    for rel in sorted(env.notes):
+        items += _rejections_of_note(env, rel)
+    for rel, d in _superseded_decisions(env):
+        by = d.get("superseded_by")
+        by = ",".join(str(x) for x in by) if isinstance(by, list) else str(by or "").strip()
+        items.append({"node": rel, "kind": "superseded-decision",
+                      "content": first_line(str(d.get("content", "")), 160), "context": by or None})
+    seen, uniq = set(), []
+    for x in items:
+        key = (x["node"], x["kind"], x["content"], x["context"])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(x)
+    order = {k: i for i, (k, _t) in enumerate(_REJ_KIND_TITLE)}
+    uniq.sort(key=lambda x: (order[x["kind"]], x["node"]))
+    return uniq
+
+
+def cmd_rejections(env, as_json=False):
+    import json
+    items = _rejections_collect(env)
+    if as_json:
+        print(json.dumps({"total": len(items), "results": items}, ensure_ascii=False, indent=2))
+        return 0
+    if not items:
+        print("無舊否決(共 0 筆)")
+        return 0
+    print("舊否決清單(圖譜裡寫成結構的否決;只寫在正文散文裡的收不到)")
+    for kind, title in _REJ_KIND_TITLE:
+        rows = [x for x in items if x["kind"] == kind]
+        if not rows:
+            continue
+        print(f"── {title}:{len(rows)} 條 ──")
+        for x in rows:
+            if kind == "rejected-alt":
+                print(f"  {x['node']}: {x['content']}  ← 那行的決定:{x['context']}")
+            elif kind == "superseded-decision":
+                print(f"  {x['node']}: {x['content']} → {x['context'] or '?'}")
+            elif kind == "no-go-decision":
+                print(f"  {x['node']}" + (f"#{x['context']}" if x["context"] else "") + f": {x['content']}")
+            else:
+                print(f"  {x['node']} [{x['context']}]" + (f" — {x['content']}" if x["content"] else ""))
+    print(f"共 {len(items)} 筆。按概念比對你的提案,不是比字面;撞到就先問人:上次因為這個理由否決,現在還這麼想嗎?")
     return 0
 
 
@@ -50359,6 +50479,7 @@ HELP_WHEN = {
     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by(紀錄寫了 system_refs 就只看它列的)。預設 dry-run,--apply 才寫。",
     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+    "rejections": "設計前先看以前否決過什麼:收齊圖譜裡的不選欄位、被翻案與寫著不做的決策、作廢的整篇,按概念比對你的提案。",
     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
@@ -51033,6 +51154,9 @@ def main():
     p = sub.add_parser("decisions", help="讀取 ADR 決策")
     p.add_argument("note", nargs="?")
     p.add_argument("--superseded", action="store_true", help="全 vault 掃被推翻的決策")
+
+    p = sub.add_parser("rejections", help="舊否決清單:收齊圖譜裡寫下的否決,設計前按概念比對")
+    p.add_argument("--json", dest="rej_json", action="store_true", help="輸出 JSON")
 
     p = sub.add_parser("stale", help="stale 驗證 / 條件命中掃描 / --candidate 列待覆查清單")
     p.add_argument("--match", help="掃 valid_under/revalidate_when 含此字串的驗證")
@@ -51999,6 +52123,8 @@ def main():
 
     if args.cmd == "decisions":
         return cmd_decisions(env, superseded=True)
+    if args.cmd == "rejections":
+        return cmd_rejections(env, as_json=args.rej_json)
     if args.cmd == "stale":
         return cmd_stale(env, match=args.match, candidate=args.candidate, legacy=args.stale_legacy)
     if args.cmd == "query":
