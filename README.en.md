@@ -151,7 +151,7 @@ You cannot rely on gut feeling alone to tell whether a rule change broke somethi
 
 - **Review replay**: Reviewed cases store a pass/fail verdict. The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
 - **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
-- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [October 7–10 update audit](docs/updates/2026-10-10-readme-audit.md), in Chinese).
+- **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [October 7–10 update audit](docs/updates/2026-10-10-readme-audit.md) (Chinese)).
 - **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
 
 <p align="center">
