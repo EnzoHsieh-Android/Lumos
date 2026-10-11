@@ -174,3 +174,93 @@ tool_calls_from_stream(...) =>
 探針確實保存該 Bash 指令，但預登記規則不會判成先寫程式。
 
 - 建議：每場模型結束、清除沙盒前，以凍結基線比較 `git status --porcelain`／檔案樹差異；任何非文件程式檔新增或修改都算。工具呼叫只作輔助證據。
+
+### 8. major — 18 場不足以支持「不增」；15 點只是效果門檻，不是可靠證據
+
+- 檔案：[preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:60)
+- 問題：實際獨立設計單位更接近六個固定情境，不是 18 個；每題的三次是巢狀重跑。最壞情況下，18 個獨立有界場次之組差標準誤約 16.7 點，已大於 15 點門檻。對稀有副作用，即使乙組 0/18，單側 95% 上界仍約 15.3%，不能宣稱「不增」。
+- 驗證：
+
+```text
+worst-case SE(diff of 18 independent run means) = 0.16666666666666666
+0/18 one-sided 95% upper = 0.1533175539572782
+```
+
+- 建議：仍可保持簡單：
+  1. 先算六個情境各自的三次平均差；
+  2. 要求總平均差 ≥15 點；
+  3. 對六個情境差做精確 paired sign-flip/permutation test，單側 `p≤.05`；
+  4. guardrail 只表述為「本樣本未觀察到增加」。若要證明非劣，必須預先定可接受增幅並擴大樣本。
+
+### 9. major — 固定批次順序、缺場與「會重試」的文字互相不一致
+
+- 檔案：
+  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:46)
+  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:70)
+  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1163)
+- 問題：
+  - 題序固定 P1→P6，每題三次連跑；
+  - 甲乙是兩個獨立批次，未預登記隨機或交錯順序；
+  - 文件稱用量上限會重試，但所列命令未帶 `--wait-on-limit`，預設是 0 秒、不重試；
+  - 允許每組只剩 15 場，卻直接平均，可能甲缺 P6、乙缺 P1，組成不再相同。
+- 驗證：
+
+```text
+1163: ap.add_argument("--wait-on-limit", type=int, default=0,
+1164:   "預設 0=不等,照記成儀器例外")
+```
+
+- 建議：預先產生固定亂序表，以 `(題目, run)` 為單位交錯 A/B；只分析完整配對。每題至少保留同數有效重跑，否則整個 pair 排除；明列等待與最大嘗試次數。
+
+### 10. major — 乙組 commit history 直接暴露「arm B guidance」
+
+- 位置：兩份受測 repo 的 Git 歷史。
+- 問題：乙組不只多一段文字，還多一個標題為 `arm B guidance` 的提交。受測 agent 若依既有規矩查看 git log，會立刻知道自己是實驗組，產生 demand characteristic；甲組則沒有對應提交。
+- 驗證：
+
+```text
+order-svc-a HEAD: 91d0435 lumos init
+order-svc-b HEAD: 3b6f6d2 arm B guidance
+```
+
+- 建議：兩組都從各自乾淨建置產生相同形狀的歷史，提交數及中性訊息一致，例如都 squash 成 `chore: initialize evaluation fixture`。不要讓分組名稱出現在 repo 可見內容。
+
+### 11. minor — 兩組沙盒的目錄拓樸仍不同
+
+- 位置：兩份受測 repo 的 `docs/order-svc-knowledge/`。
+- 問題：B 由 Git clone 產生，Git 不保存空目錄；因此 A 有五個額外空資料夾，B 只有 `MOC`。`make_sandbox()` 使用 `rsync -a`，會保留這個差異。模型若列目錄或決定把「待決問題」放哪裡，可能看到不同環境。預登記的「只差 20 行」並不完全成立。
+- 驗證：
+
+```text
+A dirs: Projects Verification Sessions Systems Issues MOC
+B dirs: MOC
+```
+
+- 建議：用相同產生程序建兩個 fixture，或在 A 移除未追蹤空目錄；開跑前比較完整目錄樹、追蹤檔內容與經正規化後的 Git 設定。
+
+### 12. major — 人工複核不足以攔住上述判準錯誤
+
+- 檔案：[preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:76)
+- 問題：
+  - 固定抽每題第 1 次，不是隨機抽樣；
+  - 編排者知道組別，也知道門檻結果；
+  - 「全部判定」分母不清楚是否包含 must-surface、should-not-ask、每條 regex 或每行；
+  - 容許最高 25% 誤判仍接線，但主要效果門檻只有 15 點，誤判容許量反而更大。
+- 驗證：文件逐字規定「每組每題抽第 1 次」與「超過 25%」；沒有盲化、抽樣種子、分母公式或分歧仲裁規則。
+- 建議：至少隱去 arm 與 run，對 36 場全部做雙人獨立標註；先寫清判定單位與分歧處理。若只抽樣，固定亂數種子並將任何足以改變 15 點結論的誤判判為無定論，而不是等到 25%。
+
+## 已核對、目前沒發現問題的部分
+
+- 三份指紋前綴都與實際 SHA-256 相符。
+- 乙組的 `CLAUDE.md` 與 `AGENTS.md` 都逐字附上完整 guidance；甲組兩檔都沒有：
+
+```text
+order-svc-a CLAUDE.md False
+order-svc-a AGENTS.md False
+order-svc-b CLAUDE.md True
+order-svc-b AGENTS.md True
+```
+
+因此 Claude/Codex 各自的 repo 指示檔確實都帶到了乙組內容；但本次預登記只執行 Claude Sonnet，不能把結果外推成 Codex 效果。
+
+總結：blocker 3 條，major 8 條。
