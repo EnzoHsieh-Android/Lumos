@@ -112,7 +112,7 @@ aliases:
 
 ## code-loop 差異(2026-07-09 交叉查文獻;code-loop 不全盤沿用 design-loop)
 程式碼有散文沒有的東西(可執行+可靜態分析),文獻證 code review 最佳解是**異質 ensemble** 非純 LLM panel:
-- **異質 panel**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Info Theory arxiv 2511.16708,submodularity 證異質分析器各加獨立資訊):確定性驗證器(`.lumos/lint.json` SARIF linter / 測試套件 / type checker / mutation 冒煙)當**一等 panel 成員**與 LLM reviewer 並列。錯誤剖面與 LLM 正交=**真獨立票**,直擊「9 judge 2 票」(純 LLM 即使多樣仍相關)。
+- **異質 panel**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Info Theory arxiv 2511.16708,submodularity 證異質分析器各加獨立資訊):確定性驗證器(`.lumos/lint.json` SARIF linter / 測試套件 / type checker / mutation 冒煙)當**一等 panel 成員**與 LLM reviewer 並列。錯誤剖面與 LLM 正交=**真獨立票**,直擊「9 judge 2 票」(純 LLM 即使多樣仍相關)。(更正 2026-10-12:那個數學證明要先假設各代理條件獨立,作者自承沒驗;論文的代理都是靜態分析模組、沒有 LLM,而且四個全上反而輸給最佳兩個。「摻確定性工具才買到真獨立票」是本篇的推論,不是這篇論文的結論)
 - **辯方可執行 falsification**(borrow:Greptile TREX / CodeRabbit sandbox「grep 沒東西≠證明 bug,先跑再信」):code-loop 辯方跑測試/repro/mutation 確認-或-殺 finding,可執行反證 > 論證反證。
 - **capture-recapture 跨異質 finder**:LLM ∪ linter ∪ 測試失敗的重疊(且 capture-recapture 本生於軟體檢驗,回娘家)。
 - 繼承 panel 機制 + capture-recapture 收斂;但 panel 成員換異質、辯方改可執行——非「design-loop 換 canary 名」。落點:`skills/lumos-code-loop/SKILL.md` panel 段(已補)。
