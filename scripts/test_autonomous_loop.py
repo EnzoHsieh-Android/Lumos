@@ -740,6 +740,16 @@ class TestRunLedgerS4(unittest.TestCase):
         self.assertTrue(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
 
 
+class TestLineReportNeutralHeader(unittest.TestCase):
+    """一般通知不套「今天備好 1 個待放行 spec」標頭——2026-10-11 核對:考卷、探針、週報、未收斂警告都共用了它。"""
+    def test_build_report_neutral(self):
+        m = line_notify.build_report("scenario-probe", "週抽 6/8 過")
+        s = json.dumps(m, ensure_ascii=False)
+        self.assertNotIn("待放行", s)
+        self.assertIn("scenario-probe", s)
+        self.assertIn("週抽 6/8 過", s)
+
+
 class TestLineAlertNoFakeHeader(unittest.TestCase):
     """[S3]⑤ 警示不套「備好待放行」模板。"""
     def test_build_alert_plain(self):

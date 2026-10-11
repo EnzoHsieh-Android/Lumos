@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-30
+updated: 2026-10-12
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-08-30/6964ab246141
 responsibility: 負責每天 09:30 自動迴圈的編排:選題、派工、收斂、每週凍結判定回放與預算控制(含 `governance/autonomous_loop/replay_weekly.py` 的抽樣與升級全量門檻);不負責審查迴圈本身的判準、也不負責 gap 的內容品質
@@ -29,7 +29,7 @@ summary: |-
   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
   KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --disposal 機械重驗(★2026-08-27 遷,原 --gate★)③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
-  KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_message('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
+  KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_report('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
@@ -113,6 +113,7 @@ about_code:
   - governance/daily-governance.sh
   - governance/autonomous_loop/replay_weekly.py
   - scripts/test_autonomous_loop.py
+  - governance/autonomous_loop/line_notify.py
 aliases:
   - daily-governance.sh
   - 自動迭代排程
@@ -280,3 +281,7 @@ git 把 `100644` 記進索引,09-08 09:30 的 wrapper 直呼它 → `Permission 
 看門狗喊「autonomous 那步失敗」——**這一則是真警報,而且第一次就被看門狗抓到**。
 測試沒抓到,因為測試都用 `bash <檔>` 跑,不需要執行位。
 處置:補回 +x;守衛 `t_directly_invoked_scripts_keep_exec_bit` 盯「會被直接呼叫的那幾支」在索引裡必須 755。
+
+## 通知標頭(2026-10-11)
+
+- PITFALL:考卷、探針、週報、回放與自主迴圈的未收斂警告,LINE 通知都套著「今天備好 1 個待放行 spec」的好消息標頭,警告被包成好消息 [出處:Projects/世界解重新註解2026-10_九類之外_調研 核對] [根因:發通知只有一個帶固定標頭的組訊息函式,排程腳本 11 處全用它] [修法:另開中性標頭的一般通知函式,只有真的備好 spec 那一處留原標頭] [test:t_only_spec_ready_notice_uses_spec_header]
