@@ -2344,5 +2344,56 @@ class TestProbeSandboxGuard(unittest.TestCase):
             self.assertIn("LUMOS_PROBE", r.stderr, f"{sub} 應印守衛訊息")
 
 
+
+class TestQoAblation(unittest.TestCase):
+    """情境出題對照實驗的執行與計分器(governance/eval/qo-ablation-2026-10/qo_ablation.py)。
+    預先登記寫死的算法:先寫程式判法、盲評包不洩組別、逐題配對的精確符號翻轉檢定。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "qo_ablation", root / "governance" / "eval" / "qo-ablation-2026-10" / "qo_ablation.py")
+        cls.qo = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.qo)
+
+    def test_code_start_detects_shell_writes_and_ignores_docs(self):
+        hit = self.qo.code_start
+        self.assertTrue(hit([("Write", "src/main/kotlin/App.kt")]))
+        self.assertTrue(hit([("Bash", "mkdir -p src/main/kotlin && touch src/main/kotlin/App.kt")]))
+        self.assertTrue(hit([("Bash", 'python3 -c "open(\"build.gradle.kts\",\"w\").write(1)"')]))
+        self.assertTrue(hit([("Bash", "cat > build.gradle.kts <<EOF")]))
+        self.assertTrue(hit([("Bash", "gradle init --type kotlin-application")]))
+        self.assertTrue(hit([("Bash", "touch App.kt")]))                  # 單獨的 touch 也要中
+        self.assertTrue(hit([("Bash", "echo 'fun main(){}' > App.kt")]))     # 重新導向寫檔
+        self.assertFalse(hit([("Bash", "git log --oneline 2> /dev/null")]))  # 丟到 /dev/null 不算
+        self.assertFalse(hit([("Write", "docs/order-svc-knowledge/Projects/訂單_計劃.md")]))
+        self.assertFalse(hit([("Bash", "ls -la && cat README.md")]))
+        self.assertFalse(hit([("Bash", "lumos search 訂單 > /dev/null")]))
+
+    def test_blind_packets_hide_arm_runner_and_run(self):
+        runs = [{"key": f"claude/{arm}/qo-P1-r{k}", "runner": "claude", "arm": arm, "id": "qo-P1", "run": k,
+                 "answer": f"回答{arm}{k}"} for arm in ("a", "b") for k in (1, 2)]
+        packets, mapping = self.qo.blind(runs, seed=7)
+        blob = json.dumps(packets, ensure_ascii=False)
+        for leak in ("claude/", '"arm"', '"runner"', "qo-P1-r"):
+            self.assertNotIn(leak, blob)
+        self.assertEqual(sorted(mapping.values()), sorted(r["key"] for r in runs))
+        self.assertEqual(len(set(mapping)), 4)
+        self.assertEqual(self.qo.blind(runs, seed=7), (packets, mapping))   # 同種子同結果
+
+    def test_sign_flip_p_matches_exact_enumeration(self):
+        # 六題差全正:單側 p = 1/64
+        self.assertAlmostEqual(self.qo.sign_flip_p([0.2, 0.1, 0.3, 0.2, 0.15, 0.25]), 1 / 64)
+        # 全為 0:沒有差異,p = 1
+        self.assertAlmostEqual(self.qo.sign_flip_p([0, 0, 0, 0, 0, 0]), 1.0)
+        # 一正一負等量:翻轉後總和 >= 觀察值的組合 3/4
+        self.assertAlmostEqual(self.qo.sign_flip_p([0.1, -0.1]), 0.75)
+
+    def test_cohen_kappa_known_values(self):
+        self.assertAlmostEqual(self.qo.kappa(["x", "y", "x", "y"], ["x", "y", "x", "y"]), 1.0)
+        self.assertAlmostEqual(self.qo.kappa(["x", "x", "y", "y"], ["x", "y", "x", "y"]), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
