@@ -792,7 +792,8 @@ def _validate_scenario(sc):
         return "題目缺 id"
     if not sc.get("prompt"):
         return f"題目 {sc.get('id')} 缺 prompt"
-    if not sc.get("expect"):
+    # collect_only=true:只收回答、不考指令序列(對照實驗用,回答另由盲評判分);必須明講才放行空 expect
+    if not sc.get("expect") and sc.get("collect_only") is not True:
         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
     if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
         return "source_probe 必須有目標設定且不得混用順序禁令"

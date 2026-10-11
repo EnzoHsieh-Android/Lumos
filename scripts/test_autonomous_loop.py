@@ -2216,6 +2216,12 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
         self.assertFalse(ok, "標記出現兩次要安全回退,不砍錯段")
         self.assertEqual(out, t)
 
+    def test_validate_scenario_collect_only_allows_empty_expect(self):
+        v = self.sp._validate_scenario
+        self.assertIsNone(v({"id": "q", "prompt": "p", "expect": [], "collect_only": True}))
+        self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": []}))            # 沒明講只收回答,照舊擋
+        self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": [], "collect_only": "yes"}))  # 只認布林 true
+
     def test_validate_scenario(self):
         v = self.sp._validate_scenario
         self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))

@@ -183,3 +183,4 @@ PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻
 - 指令序列清單是空的題目,判分時原本會拋例外、整批第一場就中止;現在空清單視同通過,「禁止先做的事」改對全部呼叫檢查。
 - 新增保存上限旗標(預設仍是 1500 字,舊題行為不變),每場另記回答原始長度,讀結果的人分得出有沒有被截。
 - 綁的測試:`test_judge_empty_expect_does_not_crash_and_checks_forbid_over_all_calls`、`test_answer_field_default_cap_and_raised_cap_keep_full_length`、`test_answer_max_flag_parses_and_rejects_nonpositive`;三處修正各自突變過,測試都會紅。
+- 派工前的題目把關照舊擋「缺指令序列」的題(以前畸形題白燒過一場額度);只收回答的題要在題目明寫 `collect_only: true`(只認布林 true)才放行。綁的測試:`test_validate_scenario_collect_only_allows_empty_expect`,放寬成任何真值時會紅。這道把關是正式開跑前的冒煙測試抓到的,判分函式那處修正擋不到它。
