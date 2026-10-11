@@ -1114,6 +1114,33 @@ def t_probe_sandbox_hides_answer_bank():
           (wsc / "commands.jsonl").is_file() and (wsc / "history.jsonl").is_file(), "")
     st = _sp.run(["git", "status", "--porcelain"], cwd=str(work), capture_output=True, text=True).stdout
     check("探針副本④: 遮蔽後快照仍乾淨", st.strip() == "", st)
+def t_only_spec_ready_notice_uses_spec_header():
+    """自主迴圈的 LINE 通知:只有真的備好 spec 那一處用「備好待放行 spec」標頭,其餘用中性標頭。
+    2026-10-11 核對:考卷、探針、週報、未收斂警告共 10 處都套了好消息標頭,警告被包成好消息。"""
+    import importlib.util as _iu
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    sh = (repo / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+    calls = [ln for ln in sh.splitlines() if "line_notify.build_message(" in ln]
+    check("只有一處用備好 spec 的標頭,而且是收斂待看那處", len(calls) == 1 and "待你看" in calls[0], str(calls))
+    spec = _iu.spec_from_file_location("ln_t", repo / "governance" / "autonomous_loop" / "line_notify.py")
+    m = _iu.module_from_spec(spec); spec.loader.exec_module(m)
+    txt = m.build_report("scenario-probe", "⚠ 週抽 5/8")["messages"][0]["text"]
+    check("一般通知不帶待放行字樣、帶檢查名與內容", "待放行" not in txt and "scenario-probe" in txt and "週抽 5/8" in txt, txt)
+
+
+def t_help_when_no_duplicate_keys():
+    """說明對照表不准有重複鍵:Python 字典後寫的會蓋掉先寫的,`lumos loop list --help` 曾印成 guard list 的說明。
+    2026-10-11 世界解重新註解核對抓到;重名的子指令一律用「上層 子指令」當鍵。"""
+    import ast as _ast, collections as _c
+    tree = _ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
+    dup = {}
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.Assign) and any(getattr(t, "id", "") == "HELP_WHEN" for t in n.targets):
+            keys = [k.value for k in n.value.keys if isinstance(k, _ast.Constant)]
+            dup = {k: v for k, v in _c.Counter(keys).items() if v > 1}
+    check("說明表沒有重複鍵", dup == {}, str(dup))
+    r = subprocess.run([sys.executable, GRAPHCTL, "loop", "list", "--help"], capture_output=True, text=True)
+    check("loop list 的說明講審查編號,不是合約綁測試", "審查編號" in r.stdout and "合約綁測試" not in r.stdout, r.stdout[:300])
 
 
 def t_about_code_to_rater_format():

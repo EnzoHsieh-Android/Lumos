@@ -5,6 +5,11 @@ def build_message(title, confidence_summary, pr_link):
     txt += f"\nPR：{pr_link}" if pr_link else "\n(dry-run，未開 PR)"
     return {"messages": [{"type": "text", "text": txt}]}
 
+def build_report(title, text):
+    """一般通知(考卷、探針、週報、回放、未收斂警告…):中性標頭,只寫是哪個檢查與內容。
+    2026-10-11 核對:這些都曾套用 build_message 的「備好 1 個待放行 spec」標頭,警告被包成好消息。"""
+    return {"messages": [{"type": "text", "text": f"\U0001F504 Lumos 自動檢查《{title}》\n\n{text}"}]}
+
 def build_alert(text):
     """警示用素訊息:不套 build_message 的「備好 1 個待放行 spec」好消息標頭——
     連兩天管線死這種警示套上它,比沒通知更容易被當好消息忽略(s1-f6)。"""

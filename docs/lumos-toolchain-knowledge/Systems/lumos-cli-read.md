@@ -221,3 +221,6 @@ WHY:舊否決清單只收寫成結構的四種(WHY 行的不選、被翻案的�
 - `--json` 頂層是 `{"total", "results"}`,每條的來源欄叫 `node`、帶 .md,同 query、search;被翻案決策的 `context` 是推翻它的決策編號(區塊清單用逗號接),沒寫或空鍵是 null。
 - 測試:`t_rejections_collects_sources`、`t_rejections_json_and_empty`、`t_rejections_retired_statuses_in_enum`。
 
+## 指令說明表重名(2026-10-11)
+
+- PITFALL:`lumos loop list --help` 印出 guard list 的說明 [出處:Projects/世界解重新註解2026-10_九類之外_調研 核對] [根因:說明對照表有兩個叫 list 的鍵,Python 字典後寫的蓋掉先寫的] [修法:重名的子指令改用「上層 子指令」當鍵,查表本來就先查這種鍵] [test:t_help_when_no_duplicate_keys](補:光禿的 list 鍵其實也被第三個同名子指令 decision-refs list 拿去當說明,拆鍵時要替每個同名子指令各補一條,`t_every_subcommand_has_when` 會抓漏)
