@@ -42,6 +42,9 @@ _SHELL_WRITE = re.compile(
     r"\bgit\s+apply\b|\bnpm\s+init\b|mkdir\s+-p\s+src\b")
 
 
+_PATH_TOKEN = re.compile(r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+|[\w-]+\.\w{1,8}\b")
+
+
 def _is_doc(path):
     p = path.strip().strip("'\"")
     return p.endswith(".md") or "/docs/" in f"/{p}" or p.startswith("docs/")
@@ -54,7 +57,8 @@ def code_start(calls):
             if any(not _is_doc(x) for x in paths):   # 一次改多檔:任一支不是文件就算
                 return True
         if name in ("Bash", "exec_command", "shell") and _SHELL_WRITE.search(summ or ""):
-            if not re.search(r"\bdocs/|\.md\b", summ or ""):
+            paths = _PATH_TOKEN.findall(summ or "")
+            if not paths or any(not _is_doc(x) for x in paths):   # 看不出路徑就保守算;任一支不是文件就算
                 return True
     return False
 
@@ -88,7 +92,8 @@ def _round_half_up(x):
 
 
 # ── 盲評 ──────────────────────────────────────────────────────────────────────
-_LEAK = re.compile(r"(?i)\bcodex\b|\bclaude\b|AGENTS\.md|CLAUDE\.md|/qo/[ab]/|order-svc-[ab]\b|\barm[\s_-]?[ab]\b|[甲乙]組")
+_LEAK = re.compile(r"(?i)\bcodex\b|\bclaude\b|\bgpt[\w.-]*|\bopenai\b|\bsonnet\b|\bopus\b|\bhaiku\b|\banthropic\b|"
+                   r"AGENTS\.md|CLAUDE\.md|/qo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b|[甲乙]組")
 
 
 def mask_leaks(text):
@@ -345,6 +350,8 @@ def merge(la, lb, adj):
             if x == y:
                 items[gid] = x
             elif (bid, gid) in adj:
+                if adj[(bid, gid)] not in (x, y):
+                    raise ValueError(f"{bid}/{gid} 的仲裁 {adj[(bid, gid)]!r} 不是兩個候選之一")
                 items[gid] = adj[(bid, gid)]
             else:
                 raise ValueError(f"{bid}/{gid} 兩位不一致卻沒有仲裁")
@@ -353,20 +360,27 @@ def merge(la, lb, adj):
             if (bid, "noise") not in adj:
                 raise ValueError(f"{bid} 的亂問數差 >1 卻沒有仲裁")
             noise = adj[(bid, "noise")]
+            if not isinstance(noise, int) or not min(na, nb) <= noise <= max(na, nb):
+                raise ValueError(f"{bid} 的亂問數仲裁 {noise!r} 不在兩位評分員的值之間")
         else:
             noise = _round_half_up((na + nb) / 2)
         out[bid] = {"blind_id": bid, "items": items, "noise": noise}
     return out
 
 
+def _read_adj(path):
+    adj = {}
+    if path:
+        for row in json.loads(Path(path).read_text(encoding="utf-8")):
+            adj[(row["blind_id"], row["gold_id"])] = row["choice"]
+    return adj
+
+
 def cmd_merge(a):
     mapping, gt = _load_ctx(a)
     la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
     check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
-    adj = {}
-    if a.adjudication:
-        for row in json.loads(Path(a.adjudication).read_text(encoding="utf-8")):
-            adj[(row["blind_id"], row["gold_id"])] = row["choice"]
+    adj = _read_adj(a.adjudication)
     merged = merge(la, lb, adj)
     check_labels(merged, mapping, gt)
     Path(a.dest).mkdir(parents=True, exist_ok=True)
@@ -401,6 +415,11 @@ def verdict(s):
     return ("FAIL", why) if why else ("PASS", ["三條門檻都成立"])
 
 
+def final_gate(main, sensitivity):
+    """主判定與兩個單一評分員判定不一致 → 攤給人裁(預先登記〈評分〉自我偏好)。"""
+    return main if all(v == main for v in sensitivity) else "NEEDS_HUMAN"
+
+
 def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
     per, noise, code, truncated = {}, {"a": 0, "b": 0}, {"a": 0, "b": 0}, False
     for row in mech.values():
@@ -432,11 +451,13 @@ def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
 
 def cmd_final(a):
     mapping, gt = _load_ctx(a)
-    merged = _read_labels(a.labels)
+    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
+    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+    merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
     check_labels(merged, mapping, gt)
     agree = json.loads(Path(a.agree).read_text(encoding="utf-8"))
     mech = {r["key"]: r for r in json.loads(Path(a.score).read_text(encoding="utf-8"))["rows"]}
-    sens = {name: _read_labels(p) for name, p in (("rater_a", a.rater_a), ("rater_b", a.rater_b)) if p}
+    sens = {"rater_a": la, "rater_b": lb}
     report = {}
     for runner in sorted({k.split("/")[0] for k in mapping.values()}):
         main_s = _summarize(runner, merged, mapping, mech, a.runs, agree["kappa"])
@@ -444,6 +465,10 @@ def cmd_final(a):
         for name, lab in sens.items():
             s = _summarize(runner, lab, mapping, mech, a.runs, agree["kappa"])
             main_s["sensitivity"][name] = {"verdict": s["verdict"], "mean_diff": s["mean_diff"], "p": s["p"]}
+        gated = final_gate(main_s["verdict"], [v["verdict"] for v in main_s["sensitivity"].values()])
+        if gated != main_s["verdict"]:
+            main_s["reasons"] = main_s["reasons"] + [f"主判定 {main_s['verdict']} 與單一評分員判定不一致"]
+            main_s["verdict"] = gated
         report[runner] = main_s
     Path(a.dest).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=1))
@@ -480,9 +505,9 @@ def main(argv=None):
         if name == "merge":
             q.add_argument("--adjudication", default="")
         if name == "final":
-            q.add_argument("--labels", required=True, help="merge 的輸出目錄")
             q.add_argument("--agree", required=True); q.add_argument("--score", required=True)
-            q.add_argument("--rater-a", default=""); q.add_argument("--rater-b", default="")
+            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
+            q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
             q.add_argument("--runs", type=int, default=3)
     j = sub.add_parser("adj-pack")
     j.add_argument("--agree", required=True); j.add_argument("--packets", required=True)

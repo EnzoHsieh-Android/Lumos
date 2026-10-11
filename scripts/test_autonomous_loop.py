@@ -2463,9 +2463,9 @@ class TestQoAblation(unittest.TestCase):
     def test_merge_uses_adjudication_and_noise_rules(self):
         a = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "absent"}, "noise": 0}}
         b = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "handed"}, "noise": 3}}
-        adj = {("R001", "g2"): "assumed_confirm", ("R001", "noise"): 2}
+        adj = {("R001", "g2"): "handed", ("R001", "noise"): 2}
         m = self.qo.merge(a, b, adj)
-        self.assertEqual(m["R001"]["items"], {"g1": "handed", "g2": "assumed_confirm"})
+        self.assertEqual(m["R001"]["items"], {"g1": "handed", "g2": "handed"})
         self.assertEqual(m["R001"]["noise"], 2)                       # 差 >1 走仲裁
         b["R001"]["noise"] = 1
         self.assertEqual(self.qo.merge(a, b, {("R001", "g2"): "absent"})["R001"]["noise"], 1)  # 0 與 1 平均 0.5 → 四捨五入取 1(round half up)
@@ -2487,6 +2487,32 @@ class TestQoAblation(unittest.TestCase):
         self.assertEqual(V(dict(good, p=0.06))[0], "FAIL")
         self.assertEqual(V(dict(good, noise_b=3))[0], "FAIL")
         self.assertEqual(V(dict(good, code_b=2))[0], "FAIL")
+
+    def test_merge_rejects_adjudication_outside_candidates(self):
+        a = {"R001": {"blind_id": "R001", "items": {"g1": "handed"}, "noise": 0}}
+        b = {"R001": {"blind_id": "R001", "items": {"g1": "absent"}, "noise": 3}}
+        with self.assertRaises(ValueError):
+            self.qo.merge(a, b, {("R001", "g1"): "assumed_confirm", ("R001", "noise"): 1})   # 第三種標籤
+        with self.assertRaises(ValueError):
+            self.qo.merge(a, b, {("R001", "g1"): "handed", ("R001", "noise"): 7})            # 不在兩值之間
+        self.assertEqual(self.qo.merge(a, b, {("R001", "g1"): "absent", ("R001", "noise"): 2})["R001"]["noise"], 2)
+
+    def test_final_gate_needs_human_when_sensitivity_disagrees(self):
+        self.assertEqual(self.qo.final_gate("PASS", ["PASS", "PASS"]), "PASS")
+        self.assertEqual(self.qo.final_gate("FAIL", ["FAIL", "FAIL"]), "FAIL")
+        self.assertEqual(self.qo.final_gate("PASS", ["PASS", "INCONCLUSIVE"]), "NEEDS_HUMAN")
+        self.assertEqual(self.qo.final_gate("PASS", ["FAIL", "PASS"]), "NEEDS_HUMAN")
+
+    def test_code_start_shell_mixed_code_and_doc_paths(self):
+        hit = self.qo.code_start
+        self.assertTrue(hit([("Bash", "sed -i s/a/b/ src/App.kt docs/plan.md")]))
+        self.assertFalse(hit([("Bash", "cat > docs/order-svc-knowledge/Projects/訂單_計劃.md <<'EOF'")]))
+        self.assertTrue(hit([("Bash", "mkdir -p src")]))
+
+    def test_mask_covers_model_family_names(self):
+        t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
+        for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):
+            self.assertNotIn(leak, t)
 
     def test_delivery_rate_uses_fixed_denominator(self):
         self.assertAlmostEqual(self.qo.delivery_rate({"g1": "handed"}, 6), 1 / 6)
