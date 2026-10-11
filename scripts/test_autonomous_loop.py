@@ -1847,6 +1847,35 @@ class TestScenarioProbeAblation(unittest.TestCase):
         cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
         cls.root = root
 
+    def test_judge_empty_expect_does_not_crash_and_checks_forbid_over_all_calls(self):
+        # 只收回答、不考指令序列的題目(expect 空):不得拋例外;禁止清單改對全部呼叫生效
+        self.assertEqual(self.sp.judge([], [], [])[0], True)
+        ok, why, _ = self.sp.judge([("Read", "README.md"), ("Write", "src/App.kt")], [], [r"^Write$"])
+        self.assertFalse(ok)
+        self.assertIn("Write", why)
+        self.assertTrue(self.sp.judge([("Read", "README.md")], [], [r"^Write$"])[0])
+
+    def test_answer_field_default_cap_and_raised_cap_keep_full_length(self):
+        long = "問" * 3000
+        ans, n = self.sp._answer_field(long, None)
+        self.assertEqual((len(ans), n), (1500, 3000))      # 預設上限不變
+        old = self.sp.ANSWER_MAX
+        try:
+            self.sp.ANSWER_MAX = 5000
+            ans, n = self.sp._answer_field(long, None)
+            self.assertEqual((ans, n), (long, 3000))
+        finally:
+            self.sp.ANSWER_MAX = old
+
+    def test_answer_max_flag_parses_and_rejects_nonpositive(self):
+        import subprocess, sys
+        probe = str(self.root / "scripts" / "scenario_probe.py")
+        r = subprocess.run([sys.executable, probe, "--answer-max", "0", "--dry-list"], capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("answer-max", r.stderr)
+        ok = subprocess.run([sys.executable, probe, "--answer-max", "5000", "--dry-list"], capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)   # 合法值要過(防「不認得的參數」造成的假綠)
+
     def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
         import threading
         with tempfile.TemporaryDirectory() as tmp:
