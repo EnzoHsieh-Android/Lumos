@@ -16,19 +16,19 @@ summary: |-
   FACT:PostgreSQL 兩個熱門 MCP 的唯讀模式都已被公開繞過——已封存的官方參考實作可用分號夾 COMMIT 跳出唯讀交易(修正未發版),Postgres MCP Pro 的 restricted 模式可用 pg_read_file 讀伺服器檔案(CVE-2026-85620,≤0.3.0 未修) [來源:外部] [confirmed:2026-10-12] [recheck:30天] [查:Datadog Security Labs 2025-08-21、vulncheck 公告、crystaldba/postgres-mcp issue 178]
   RULE:任何資料庫類 MCP 一律連「資料庫層只有讀權限」的帳號,不靠 MCP 自己的唯讀開關 [依據:外部] [since:2026-10-12] [retire:人裁] [until:2027-04-12] [confirmed:2026-10-12]
   FACT:Redis 官方 mcp-redis 沒有唯讀旗標與工具白名單,唯讀只能靠 Redis ACL(-@write);Confluent mcp-confluent 能連一般 Apache Kafka,有 --allow-tools 白名單,預設回傳使用數據(DO_NOT_TRACK=true 關) [來源:外部] [confirmed:2026-10-12] [recheck:30天]
-  FACT:Grafana 官方有 mcp-k6(本機可跑、不需 Grafana Cloud、自稱實驗階段、run_script 會真的壓測且無唯讀旗標)與 mcp-grafana(--disable-write 唯讀、可透過 Prometheus 資料源下 PromQL);Prometheus 沒有官方 MCP [來源:外部] [confirmed:2026-10-12] [recheck:30天]
+  FACT:Grafana 官方有 mcp-k6(本機可跑、不需 Grafana Cloud、自稱實驗階段、run_script 會真的壓測、6 個工具全部自標具破壞性、授權 AGPL-3.0)與 mcp-grafana(--disable-write 唯讀、可透過 Prometheus 資料源下 PromQL);Prometheus 沒有官方 MCP [來源:外部] [confirmed:2026-10-12] [recheck:30天]
 ---
 # 後端MCP能力矩陣_調研
 
 > 白話:[[Projects/後端工程提問與證據擴充_計劃]] 第 2 階段的產出。任務書列了一串候選 MCP(資料庫、快取、訊息、壓測、監控、GitHub、Docker),這篇逐一查證:誰在維護、還活不活、實際有哪些工具、怎麼限制只讀、能不能在本機示範用、有沒有更簡單的替代。
 >
-> **查證範圍**:2026-10-12 由三個代理分頭網搜,每項說法附實際打開過的網址;工具清單從 README 或原始碼抄,不從部落格抄;查不到的標「未驗」。**全部沒有實裝**——本機當時沒有 Docker,工具清單是「文件與原始碼層面已確認」,不是「裝起來列出來的」。
+> **查證範圍**:2026-10-12 由三個代理分頭網搜,每項說法附實際打開過的網址;工具清單從 README 或原始碼抄,不從部落格抄;查不到的標「未驗」。同日稍晚在本機實裝了 PostgreSQL(Toolbox)、k6、Grafana 三個並核對工具清單與唯讀防線,見〈實裝核對〉;其餘候選只到文件層。
 
-REVISIT:2026-10-26 第 4 階段在本機裝好 Docker 後,把下面「建議採用」的每個 MCP 實際裝起來、用 Claude Code 列出真實工具清單,跟本篇的清單逐一比對,不一致的改本篇並記差異
+REVISIT:2026-10-26 第 4 階段在本機裝好 Docker 後,把下面「建議採用」的每個 MCP 實際裝起來、用 Claude Code 列出真實工具清單,跟本篇的清單逐一比對,不一致的改本篇並記差異 [closed:2026-10-12 已實裝 PostgreSQL(Toolbox)、k6、Grafana 三個並核對,見〈實裝核對〉;Redis、Kafka、MongoDB 沒裝,要用時另照〈實裝核對〉的做法補]
 
 ## 結論
 
-- **第一個真實 MCP:PostgreSQL 用 Google 的 MCP Toolbox for Databases**,只載入資料查詢那一組工具,連一個只有讀權限的資料庫帳號。
+- **第一個真實 MCP:PostgreSQL 用 Google 的 MCP Toolbox for Databases**,連一個只有讀權限的資料庫帳號。實裝後確認它的命令列沒有「只載入某一組工具」與唯讀旗標,29 個工具會全部載入(見〈實裝核對〉),唯讀完全靠帳號。
   - 理由:大廠官方、維護活躍(2026-10-08 剛發版)、直接連本機 Docker 的 Postgres、工具清單可從原始碼確認、沒有在唯讀上出包的紀錄。
   - 次選:Bytebase 的 DBHub(Claude Code 官方文件拿它當範例,但唯讀要寫設定檔,實作方式未驗)。
 - **示範的最小組合**:PostgreSQL(Toolbox)+ k6(mcp-k6)+ Grafana(mcp-grafana,唯讀)。Redis、Kafka 要等示範流程判斷需要才加;加了就用官方版並收窄權限。
@@ -52,7 +52,7 @@ REVISIT:2026-10-26 第 4 階段在本機裝好 Docker 後,把下面「建議採�
 | Neon MCP | — | 未驗 | 未驗 | 未驗 | 未驗 |
 | MongoDB 官方 mongodb-mcp-server | 官方,活躍 | v3.0.5(2026-10-01) | `--readOnly`、`--disabledTools`;查詢結果預設包提示注入警告 | 適合(關掉 Atlas 類工具) | 要設定 |
 
-- Toolbox 的 postgres 預設設定有 29 個工具(例如 `execute_sql`、`list_tables`、`get_query_plan`、`list_locks`),分 data、monitor、health、view-config、replication 五組;出處是它 repo 裡 postgres 的預設工具設定檔。`execute_sql` 照常能寫,所以唯讀只能靠帳號。
+- Toolbox 的 postgres 預設設定有 29 個工具(例如 `execute_sql`、`list_tables`、`get_query_plan`、`list_locks`);文件寫五組,實裝時日誌印六組(多一個 default)。`execute_sql` 照常能寫,所以唯讀只能靠帳號。
 - 舊參考實作只有一個 `query` 工具;Postgres MCP Pro 有 `execute_sql`、`explain_query`、`analyze_db_health` 等 9 個。
 - 不裝 MCP 的替代:`docker exec … psql -c`、`mongosh --eval`;零依賴,但沒有工具層保護,唯讀一樣靠帳號。
 
@@ -93,11 +93,24 @@ REVISIT:2026-10-26 第 4 階段在本機裝好 Docker 後,把下面「建議採�
 
 REVISIT:2026-11-12 查 Codex 對 MCP 工具的核准設定怎麼寫(設定檔位置、能不能逐工具設詢問),補進上面「Codex 這一側」
 
+## 實裝核對(2026-10-12)
+
+- **做法**:在本機 Docker 起一個測試用 PostgreSQL 17(另建只有查詢權限的帳號)與 Grafana;用一支照 MCP 協定握手的小程式(初始化、宣告已初始化、列工具,必要時呼叫工具)直接跟每個 MCP 伺服器對話,不經過、也不改 Claude Code 的設定。原始輸出存在 governance/eval/mcp-lab-2026-10-12/(工具清單 JSON、呼叫紀錄、測試環境設定;密碼已換成佔位字)。握手小程式是一次性的,沒有提交。
+- **PostgreSQL / MCP Toolbox 1.14.0**(npx 執行 `@toolbox-sdk/server`):回報 29 個工具,與文件一致。
+  - 命令列沒有「只載入某一組」也沒有唯讀旗標(`--help` 全列過);啟動時預設上網查新版,`--disable-version-check` 可關;HTTP 模式預設允許任何來源與主機(啟動日誌自己警告),走 stdio 不受影響。
+  - 用唯讀帳號實際呼叫 `execute_sql`:查詢成功;改庫存被資料庫以「沒有權限」拒絕;「分號夾 COMMIT 再刪表」被擋(它一次只收一條指令);讀伺服器檔案被拒(帳號沒有那個權限)。事後用管理員帳號確認資料原封不動。
+- **k6 / mcp-k6 0.7.0**(GitHub 發布的 Apple 晶片執行檔,雜湊與官方核對過;Homebrew 版要從原始碼編譯,本機命令列工具太舊而放棄):回報 6 個工具——文件列的 `validate_script`、`run_script`、`list_sections`、`get_documentation` 之外,還有 `info` 與 `search_terraform`。
+  - 6 個工具全部自我標示為「具破壞性、非唯讀」,連查文件的也是,所以不能靠標示判斷哪些安全。
+  - 授權檔是 AGPL-3.0(README 寫的 MIT 不對)。
+- **Grafana / mcp-grafana 2.0.2**(uvx 執行;服務帳號只給 Viewer):預設 79 個工具,`--disable-write` 後 62 個。
+  - 唯讀模式下仍留著通用的 `grafana_api_request`,它的參數只允許 GET;實際送 POST,伺服器端回「唯讀模式只允許 GET」,真的有擋。
+  - 不開唯讀、但服務帳號只有 Viewer 時,呼叫 `create_folder` 被 Grafana 以 403 擋下。兩層各自擋得住。
+- **註冊到 Claude Code**:這次沒做。核對清單不需要它;測試容器用完就拆了。第 4 階段在示範 repo 的專案設定裡註冊(不含密碼,密碼從環境變數讀)。
+
 ## 未驗與疑點
 
-- 全部候選都沒有實裝連過本機容器(見開頭 REVISIT)。
-- Toolbox 有沒有唯讀旗標;DBHub 的唯讀是關鍵字檢查還是資料庫層唯讀交易。
-- mcp-k6 的授權(GitHub 側欄寫 AGPL-3.0、README 寫 MIT,沒打開授權檔核對)。
+- Redis、Kafka、MongoDB 三類沒有實裝。
+- DBHub 的唯讀是關鍵字檢查還是資料庫層唯讀交易。
 - mcp-grafana 的告警與註記工具名稱沒逐一列;它沒有官方的 `claude mcp add` 範例。
 - Redis 官方版的 `claude mcp add` 寫法 README 沒寫;它的 Python 版本需求 README 與 PyPI 說法不一致。
 - mcp-confluent 的 `get-partition-offsets` 能不能用在本機連線。
