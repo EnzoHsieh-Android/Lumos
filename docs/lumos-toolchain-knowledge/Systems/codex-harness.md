@@ -183,3 +183,11 @@ PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻
 ## 目標架構標記(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]])
 
 派工掛鉤多認一行 LUMOS-ARCH-TARGET: on(代碼審與設計審兩條路都認),多傳 --arch-target;舊版 lumos 不認回 rc2 空輸出時,把 --role-cards 與 --arch-target 一起拿掉重叫,照附圖譜段。失敗分支照附的附加段從角色段擴成角色段加目標架構段。Codex 編排走 --arm/--claim,目前不附目標架構段(同角色卡)。
+
+## 探針收完整回答與空指令序列題(2026-10-12,[[Projects/後端工程提問與證據擴充_計劃]])
+
+情境探針原本只為「有沒有先敲 lumos」這類題目設計:每題一定有要命中的指令序列、回答只留前 1500 字。情境出題對照實驗(預先登記在 governance/eval/qo-ablation-2026-10/)要的是「只收回答、不考指令序列」,而且要完整回答才能盲評,Codex 外家審查實測指出兩個擋路的洞,這次一起補:
+
+- 指令序列清單是空的題目,判分時原本會拋例外、整批第一場就中止;現在空清單視同通過,「禁止先做的事」改對全部呼叫檢查。
+- 新增保存上限旗標(預設仍是 1500 字,舊題行為不變),每場另記回答原始長度,讀結果的人分得出有沒有被截。
+- 綁的測試:`test_judge_empty_expect_does_not_crash_and_checks_forbid_over_all_calls`、`test_answer_field_default_cap_and_raised_cap_keep_full_length`、`test_answer_max_flag_parses_and_rejects_nonpositive`;三處修正各自突變過,測試都會紅。

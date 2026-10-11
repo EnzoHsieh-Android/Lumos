@@ -413,6 +413,15 @@ def env_fp_counts(results):
     return counts
 
 
+ANSWER_MAX = 1500   # 結果檔保存的回答字數上限;--answer-max 可調高(對照實驗要完整回答才能判分)
+
+
+def _answer_field(final, source_token):
+    """回 (存檔用回答, 原始回答長度)。原始長度另存,讀結果的人才分得出有沒有被截。"""
+    text = _redact_source_token(final or "", source_token)
+    return text[:ANSWER_MAX], len(text)
+
+
 def judge(calls, expect, forbid_before):
     """回 (passed, reason, first_hit_index)。
     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
@@ -426,7 +435,8 @@ def judge(calls, expect, forbid_before):
     missing = [e for e in expect if e not in exp_idx]
     if missing:
         return False, f"沒敲到期望指令: {missing}", None
-    first = min(exp_idx.values())
+    # expect 空=只收回答、不考指令序列的題目:禁止清單改對全部呼叫生效(之前 min() 對空集合拋例外,整批中止)
+    first = min(exp_idx.values()) if exp_idx else len(calls)
     for i, (name, summ) in enumerate(calls[:first]):
         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
@@ -1077,7 +1087,7 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": _redact_source_token(final or "", source_token)[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "answer": _answer_field(final, source_token)[0], "answer_len": _answer_field(final, source_token)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "source_evidence": evidence,
             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
             "result_subtype": "codex", "harness": "codex",
@@ -1174,7 +1184,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": _redact_source_token(final or "", source_token)[:1500],
+            "answer": _answer_field(final, source_token)[0], "answer_len": _answer_field(final, source_token)[1],
             "source_evidence": evidence,
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
@@ -1251,6 +1261,8 @@ def main():
     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
     ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
     ap.add_argument("--timeout", type=int, default=240)
+    ap.add_argument("--answer-max", type=int, default=1500,
+                    help="結果檔每場保存的回答字數上限(預設 1500);另存原始長度 answer_len,可看出有沒有被截")
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
@@ -1280,6 +1292,10 @@ def main():
     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
     a = ap.parse_args()
+    if a.answer_max < 1:
+        ap.error("--answer-max 必須是正整數")
+    global ANSWER_MAX
+    ANSWER_MAX = a.answer_max
     if a.runs < 1:
         print("✗ --runs 至少 1", file=sys.stderr); return 2
     if a.max_per_window < 0:
