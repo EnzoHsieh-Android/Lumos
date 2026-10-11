@@ -32,7 +32,7 @@ NOISE_SCENARIOS = {"qo-P1", "qo-P2", "qo-P3", "qo-P6"}
 
 # ── 先寫程式(預先登記〈指標〉第 3 條)──────────────────────────────────────────
 _CODE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "file_change"}
-_SHELL_WRITE = re.compile(
+_SHELL_WRITE_V1 = re.compile(
     r"(?:^|[;&|]\s*)(?:touch|tee|cp|mv|install)\s|"
     r"(?<![0-9&])>>?\s*(?!/dev/null)[\w./-]+|"
     r"<<\s*['\"]?\w+|"
@@ -40,6 +40,16 @@ _SHELL_WRITE = re.compile(
     r"\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|"
     r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|spring\s+init|start\.spring\.io|"
     r"\bgit\s+apply\b|\bnpm\s+init\b|mkdir\s+-p\s+src\b")
+# 第 2 版(2026-10-12 實跑後):建置工具只在指令位置(行首、; && || | 之後)才算執行;
+# 第 1 版把 grep 搜尋字串裡的 gradle 也算進去(Claude 乙組 P3 第 3 次誤判)。兩版並列報告。
+_SHELL_WRITE = re.compile(_SHELL_WRITE_V1.pattern.replace(r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|", ""))
+_BUILD_CMD = re.compile(r"(?:^|[;&|]\s*)(?:\./)?(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)")
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def _shell_writes_v2(cmd):
+    """第 2 版:建置工具要在去掉引號字串後、出現在指令位置才算。"""
+    return bool(_SHELL_WRITE.search(cmd) or _BUILD_CMD.search(_QUOTED.sub("''", cmd)))
 
 
 _PATH_TOKEN = re.compile(r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+|[\w-]+\.\w{1,8}\b")
@@ -50,13 +60,14 @@ def _is_doc(path):
     return p.endswith(".md") or "/docs/" in f"/{p}" or p.startswith("docs/")
 
 
-def code_start(calls):
+def code_start(calls, shell_re=None):
+    match = (lambda c: bool(shell_re.search(c))) if shell_re else _shell_writes_v2
     for name, summ in calls:
         if name in _CODE_TOOLS:
             paths = [x for x in re.split(r"[\s,]+", summ or "") if x]
             if any(not _is_doc(x) for x in paths):   # 一次改多檔:任一支不是文件就算
                 return True
-        if name in ("Bash", "exec_command", "shell") and _SHELL_WRITE.search(summ or ""):
+        if name in ("Bash", "exec_command", "shell") and match(summ or ""):
             paths = _PATH_TOKEN.findall(summ or "")
             if not paths or any(not _is_doc(x) for x in paths):   # 看不出路徑就保守算;任一支不是文件就算
                 return True
@@ -225,6 +236,7 @@ def _regex_row(run, gold):
                 if re.search(it["regex"], line, re.I))
     return {"key": run["key"], "valid": run["valid"], "regex_cover": len(hits) / len(g["must_surface"]),
             "regex_hits": hits, "regex_noise": noise, "code_start": code_start(run["calls"]),
+            "code_start_v1": code_start(run["calls"], _SHELL_WRITE_V1),
             "truncated": not run["valid"] and (run["answer_len"] or 0) > len(run["answer"])}
 
 
