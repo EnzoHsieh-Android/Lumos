@@ -54781,6 +54781,40 @@ def t_lint_waive():
     check("S7 兩筆放行都留著", set(cur2) == {"abc123", "def456"}, str(sorted(cur2)))
 
 
+def t_lint_waive_cli_records_rule_and_file():
+    """[S7] 放行帳要記得是哪條規則、哪支檔——走真正的命令列入口。
+    2026-10-11 世界解重新註解核對:命令列一律寫空字串,本 repo 283 筆全空,按規則統計放行無從算起;
+    原本的測試只呼叫內部函式,所以沒抓到。"""
+    import json as _json
+    import shlex as _shlex
+    m = _lng_module()
+    root, _git = _lng_repo()
+
+    def _waive(*a):
+        return subprocess.run([sys.executable, GRAPHCTL, "lint-waive", *a, "--repo", str(root)],
+                              capture_output=True, text=True, cwd=str(root))
+
+    r = _waive("k1", "--note", "誤報", "--rule", "B101", "--file", "src/a.py")
+    cur = _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]
+    got = {w["key"]: w for w in cur}
+    check("S7 命令列帶規則與檔名就照實記下",
+          r.returncode == 0 and got.get("k1", {}).get("rule") == "B101" and got.get("k1", {}).get("file") == "src/a.py",
+          r.stdout + r.stderr + str(cur))
+    r2 = _waive("k2", "--note", "誤報")
+    cur2 = {w["key"]: w for w in _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]}
+    check("S7 沒帶規則照樣放行,但要提醒統計不到", r2.returncode == 0 and "k2" in cur2 and "規則" in r2.stderr,
+          r2.stdout + r2.stderr)
+    # 閘門印給人照抄的那行:規則或檔名帶空白、引號也要能直接貼上執行
+    c = {"key": "k3", "rule": "no 'quote'", "file": "src/my file.py"}
+    line = m._lint_waive_cmd(c)
+    argv = _shlex.split(line)
+    check("S7 擋下訊息的放行指令可照抄",
+          argv[:3] == ["lumos", "lint-waive", "k3"] and argv[argv.index("--rule") + 1] == "no 'quote'"
+          and argv[argv.index("--file") + 1] == "src/my file.py" and "--note" in argv, line)
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    check("S7 閘門擋下時逐條印出可照抄的放行指令", "_lint_waive_cmd(_c)" in src, "")
+
+
 def t_lint_new_gate():
     """[S6] 這道閘接在代碼審那一關,而且不看風險分級(低風險照樣擋)。"""
     m = _lng_module()

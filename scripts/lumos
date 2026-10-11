@@ -27336,32 +27336,49 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     return 1
 
 
-def cmd_lint_waive(key=None, note=None, repo=None, as_json=False, show=False):
+def _lint_waive_cmd(c):
+    """擋下訊息裡給人照抄的放行指令:指紋、規則、檔名都先填好(規則或檔名帶空白、引號也能直接貼上)。
+    2026-10-11 核對:命令列原本只收指紋、放行帳的規則與檔名一律空白,按規則統計放行無從算起。"""
+    import shlex
+    parts = ["lumos", "lint-waive", shlex.quote(str(c.get("key") or "<指紋>"))]
+    if c.get("rule"):
+        parts += ["--rule", shlex.quote(str(c["rule"]))]
+    if c.get("file"):
+        parts += ["--file", shlex.quote(str(c["file"]))]
+    return " ".join(parts) + ' --note "<為什麼放行>"'
+
+
+def _lint_waive_show(repo_root, as_json):
+    """`lumos lint-waive --list`:列出這個專案已經放行的條目。"""
+    import json
+    cur, err = _lint_waivers_load(repo_root)
+    if err:
+        print(f"✗ lint-waive: {err}", file=sys.stderr)
+        return 2
+    if as_json:
+        print(json.dumps({"waivers": list(cur.values())}, ensure_ascii=False))
+        return 0
+    if not cur:
+        print("這個專案還沒有放行過任何告警")
+        return 0
+    print(f"這個專案放行了 {len(cur)} 條告警(放行是合法的,但會被統計):")
+    for k, it in cur.items():
+        print(f"  {k}  {it.get('file', '')} [{it.get('rule', '')}] — {it.get('reason', '')}")
+    return 0
+
+
+def cmd_lint_waive(key=None, note=None, repo=None, as_json=False, show=False, rule=None, file_rel=None):
     """把某一條告警的指紋標成已放行(新增告警閘的逃生門)。
     ★誤報一定會發生★——首次真跑社群規則庫,唯一命中就是誤報(對刻意設 0700 的目錄建議改成 0644)。
     沒有正式出口的話,結局是有人繞過整道檢查、零留痕;所以這條路第一天就要開好,而且會被數。
     放行綁指紋不綁版本:綁版本的話每次提交都要重新放行,吵到沒人會用。"""
-    import json
     import os
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
         print("✗ lint-waive: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)
         return 2
     if show:
-        cur, err = _lint_waivers_load(repo_root)
-        if err:
-            print(f"✗ lint-waive: {err}", file=sys.stderr)
-            return 2
-        if as_json:
-            print(json.dumps({"waivers": list(cur.values())}, ensure_ascii=False))
-            return 0
-        if not cur:
-            print("這個專案還沒有放行過任何告警")
-            return 0
-        print(f"這個專案放行了 {len(cur)} 條告警(放行是合法的,但會被統計):")
-        for k, it in cur.items():
-            print(f"  {k}  {it.get('file', '')} [{it.get('rule', '')}] — {it.get('reason', '')}")
-        return 0
+        return _lint_waive_show(repo_root, as_json)
     if not key:
         print("擋下:要放行哪一條?把擋下訊息裡那串指紋帶進來", file=sys.stderr)
         print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
@@ -27370,12 +27387,15 @@ def cmd_lint_waive(key=None, note=None, repo=None, as_json=False, show=False):
         print("擋下:放行要寫理由(--note)——不寫理由的放行,三個月後沒人知道當初為什麼", file=sys.stderr)
         return 2
     who = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
-    ok, err = _lint_waivers_add(repo_root, key, "", "", note.strip(), who)
+    ok, err = _lint_waivers_add(repo_root, key, (rule or "").strip(), (file_rel or "").strip(), note.strip(), who)
     if not ok:
         print(f"✗ lint-waive: {err}", file=sys.stderr)
         return 1
     _gate_event_or_warn(repo_root, _LINT_NEW_GATE_NAME, "waived", note.strip()[:120], hard=False)
     print(f"✓ lint-waive: 指紋 {key} 已放行,理由記下來了——{note.strip()}")
+    if not (rule or "").strip():
+        print("  提醒:這筆沒帶規則代號(--rule),健檢按規則統計放行時會算不到它;擋下訊息印的放行指令已經填好,照抄那行就好",
+              file=sys.stderr)
     print(f"  紀錄寫進 {_LINT_NEW_WAIVERS_REL}(這個檔要一起提交,只留在本機的話換台機器會整批復活擋人)")
     print("  放行是合法的,但健檢會數這個專案放行了幾條。")
     return 0
@@ -49911,10 +49931,11 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                     if _u.get("kind") != "env":
                         print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
                 print("在意的原因:這道閘只擋你這次帶進來的問題,舊的一概不管;放著不處理,下一個人就分不出哪些是新欠的。", file=sys.stderr)
-                print("接下來(確認是誤報就放行,會留下紀錄並被統計):", file=sys.stderr)
-                print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
-                if _lv.get("new"):
-                    print(f"    (第一條的指紋是 {_lv['new'][0].get('key')})", file=sys.stderr)
+                print("接下來(確認是誤報就放行,會留下紀錄並被統計;指紋、規則、檔名都填好了,補上理由照抄):", file=sys.stderr)
+                for _c in (_lv.get("new") or [])[:8]:
+                    print(f"    {_lint_waive_cmd(_c)}", file=sys.stderr)
+                if not _lv.get("new"):
+                    print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
             elif blocked:
                 print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
                       file=sys.stderr)
@@ -51432,6 +51453,8 @@ def main():
     p = sub.add_parser("lint-waive", help="把某條新增告警的指紋標成已放行(新增告警閘的逃生門;要寫理由、會被統計)")
     p.add_argument("waive_key", nargs="?", help="擋下訊息裡印的那串指紋")
     p.add_argument("--note", dest="waive_note", help="為什麼放行(必填)")
+    p.add_argument("--rule", dest="waive_rule", help="這條告警的規則代號(擋下訊息印的放行指令已填好;不帶就統計不到是哪條規則)")
+    p.add_argument("--file", dest="waive_file", help="這條告警在哪支檔(擋下訊息印的放行指令已填好)")
     p.add_argument("--repo", dest="waive_repo", help="repo root(預設 cwd 向上找 .git)")
     p.add_argument("--list", dest="waive_list", action="store_true", help="列出這個專案已經放行的條目")
     p.add_argument("--json", dest="waive_json", action="store_true", help="JSON 輸出")
@@ -51745,7 +51768,8 @@ def main():
         return cmd_rule_gap(repo=args.rg_repo, as_json=args.rg_json)
     if args.cmd == "lint-waive":
         return cmd_lint_waive(key=args.waive_key, note=args.waive_note, repo=args.waive_repo,
-                              as_json=args.waive_json, show=args.waive_list)
+                              as_json=args.waive_json, show=args.waive_list,
+                              rule=args.waive_rule, file_rel=args.waive_file)
     if args.cmd == "dispatch-lens":
         _modes = [n for n, v in (("--arm", args.lens_arm), ("--claim", args.lens_claim), ("--disarm", args.lens_disarm), ("--status", args.lens_status), ("--spec", bool(args.lens_spec))) if v]
         if len(_modes) > 1:
