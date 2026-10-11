@@ -2509,6 +2509,15 @@ class TestQoAblation(unittest.TestCase):
         self.assertFalse(hit([("Bash", "cat > docs/order-svc-knowledge/Projects/訂單_計劃.md <<'EOF'")]))
         self.assertTrue(hit([("Bash", "mkdir -p src")]))
 
+    def test_code_start_build_tool_only_when_invoked(self):
+        hit = self.qo.code_start
+        # 2026-10-12 實跑誤判:只讀的 grep 指令裡出現 gradle 字樣
+        self.assertFalse(hit([("Bash", "git ls-files | grep -Ei 'pom|gradle|package.json' | grep -v scripts/")]))
+        self.assertFalse(hit([("Bash", "ls; cat build.gradle.kts | head -5")]))
+        self.assertTrue(hit([("Bash", "./gradlew build")]))
+        self.assertTrue(hit([("Bash", "cd app && gradle init --type kotlin-application")]))
+        self.assertTrue(hit([("Bash", "mvn -q package")]))
+
     def test_mask_covers_model_family_names(self):
         t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
         for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):

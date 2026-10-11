@@ -1,0 +1,62 @@
+{
+ "results": [
+  {
+   "id": "qo-P1",
+   "cat": "qo-ablation",
+   "passed": true,
+   "reason": "ok",
+   "first_tool": [
+    "Skill",
+    "superpowers:brainstorming"
+   ],
+   "n_calls": 4,
+   "calls": [
+    [
+     "Skill",
+     "superpowers:brainstorming"
+    ],
+    [
+     "Bash",
+     "git status --short && ls -la && ls docs 2>/dev/null && ls docs/order-svc-knowledge 2>/dev/null | head -50"
+    ],
+    [
+     "Bash",
+     "cat README.md && ls scripts docs/order-svc-knowledge docs/order-svc-knowledge/MOC governance .lumos && git log --oneline | head"
+    ],
+    [
+     "Bash",
+     "python3 scripts/lumos search \"訂單 庫存 超賣\" 2>&1 | head -30; python3 scripts/lumos search \"技術棧 資料庫 佇列\" 2>&1 | head -30"
+    ]
+   ],
+   "secs": 32.4,
+   "stderr": "",
+   "answer": "**分類:架構級。** repo 裡只有一份說明文件,沒有任何程式,也沒有舊決策可以參考。我走完整流程,規格和計劃都過了你這關才會寫程式。\n\n## 我讀到的現況\n\n- **技術棧已定。** README 寫了 Kotlin + Spring Boot + PostgreSQL。\n- **尖峰每秒 300 筆下單請求。** 這個量 PostgreSQL 單庫能扛,不一定要引入 Redis 或 Kafka。\n- **本期不含付款,訂單建立成功就算完成。** 所以不需要「先保留庫存、付款失敗再釋放」的流程。\n- **單一區域部署。** 不用處理跨區同步。\n- **知識圖譜查不到訂單、庫存的相關筆記。** 我換了兩組詞,命中都是 0。沒有舊決策會跟新設計打架。\n\n## 我的理解(請糾正)\n\n- **目標:** 使用者下單買商品,庫存絕不能賣超過實際數量,尖峰 300 筆/秒也要撐住。\n- **訂單建立:** 同步完成,成功後回應。\n- **後續處理:** 訂單建立後非同步處理,也就是請求回應之後,另一條流程再接手做事。\n- **我先假設的範圍:** 只做「建立訂單」和「查訂單」。商品管理、使用者登入、付款都不在本期。\n\n## 三個要你決定的問題\n\n這三題會決定架構,我都附了建議答案。你回「好」就代表接受。\n\n1. **「非同步處理」具體要做什麼?**\n   - 它會決定要不要引入訊息佇列,也決定失敗重試怎麼設計。\n   - **我的建議:** 本期先做「訂單狀態從已建立推進到處理完成」,例如寄通知、通知出貨系統這類動作先用佔位實作。\n   - **機制:** 用資料庫裡的「待處理事件表」搭配背景工作者(outbox 模式),不引入 Kafka。\n   - **為什麼:** 訂單和事件在同一個資料庫交易裡寫入,不會出現「訂單成功但事件掉了」。這個量不需要額外的訊息系統,少一個元件就少一個出事點。\n   - **代價:** 以後流量大到單庫撐不住,才需要換成真正的訊息佇列。\n\n2. **熱門商品被搶光時,怎麼回應?**\n   - **我的建議:** 庫存不足就直接回「庫存不足」並拒絕,不排隊、不候補。\n   - **防超賣做法:** 在資料庫用一條條件式扣減,也就是「庫存夠才扣,不夠就更新 0 列」。\n   - **為什麼:** 資料庫自己保證原子性,不需要應用程式加鎖,多台服務同時下單也安全。\n   - **要先講的風險:** 同一個熱門商品的所有請求會排隊搶同一列資料。300 筆/秒集中在單一商品時,這一列會成為瓶頸。我還沒壓測,所以不敢說撐得住,規格裡會寫一個壓測驗收條件。\n\n3. **使用者重複送出同一筆訂單(連點、網路重試)要怎麼處理?**\n   - **我的建議:** 要求呼叫端帶一個冪等鍵(idempotency key,同一筆請求每次送都帶同一個值)。\n   - **行為:** 同一個鍵重送,回傳第一次的結果,不會重複扣庫存。\n   - **為什麼:** 大量使用者加上網路重試,重複請求幾乎一定會發生。不處理的話,使用者會被重複扣庫存。\n\n## 下一步\n\n- 你回覆這三題(「好」或你想改的地方)後,我會提 2 到 3 種做法比較並給建議,再分段呈現設計。\n- 設計過了才寫成規格檔。依專案規定,規格會附 `PRIOR-ART:` 與 `RETIRE-IF:` 兩行,也會標出各風險面的待決問題。\n- 這個目錄的防護掛鉤顯示有 4 層沒生效(提交、推送、CI 的檢查)。這不影響設計階段。進實作前我會建議先修好,免得之後推送被擋。",
+   "answer_len": 1490,
+   "source_evidence": null,
+   "arm": "with",
+   "ever_lumos": true,
+   "first_lumos_idx": 3,
+   "answer_content_ok": null,
+   "limit_hit": false,
+   "truncated": false,
+   "result_subtype": "success",
+   "harness": "claude",
+   "sandbox_secs": 0.35,
+   "model_secs": 32.359,
+   "run": 1
+  }
+ ],
+ "passed": 1,
+ "total": 1,
+ "arm": "with",
+ "runs": 1,
+ "grader": "2026-10-03-source-results",
+ "excluded": [],
+ "valid_total": 1,
+ "inconclusive": false,
+ "fatal": false,
+ "sandbox_version": "2026-10-04-frozen-copy-config-reset",
+ "sandbox_secs": 0.711,
+ "model_secs": 32.359,
+ "skills_health_bad": []
+}

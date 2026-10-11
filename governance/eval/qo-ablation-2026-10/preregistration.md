@@ -122,8 +122,35 @@ README 對 6 題都一樣:「訂單服務(尚未實作)。技術:Kotlin + Spring
   - 兩份受測 repo 重建成紀錄形狀與目錄樹一致、名稱相同,不洩組別(major 10、minor 11)。
   - 加入 Codex 作為第二種受測者與第二位評分員(使用者 2026-10-12 指示)。
 
+## 第 4 版修訂(2026-10-12,實跑中途;本節優先於上面各節)
+
+**發生了什麼**
+
+- Claude 受測者(有外掛)36 場跑完,全部有效。
+- Codex 受測者第 1 場(甲組 P1)沒有先問,照 Lumos 規矩開了計劃筆記後直接實作,600 秒逾時被判無效;Codex 半隨即暫停。
+- 使用者問「Codex 為什麼寫、Claude 有沒有寫」,編排者因此**提前機械查了「先寫程式」**:Claude 甲組 0 場、乙組 1 場,Codex 甲組 1 場。查了那 1 場 Claude 乙組,是判法誤判(只讀的 grep 指令裡有 gradle 字樣)。編排者**沒有讀任何回答內容**,也沒有看交付率。
+- 查到原因:使用者全域裝了 superpowers 外掛,它的「腦力激盪」技能規定動手前先釐清需求;Claude 每場都載入它(P6 有一場第一個動作就是叫它),Codex 讀不到。所以 Claude 有外掛那輪的甲組本來就有「先問」的指示。
+
+**使用者的裁定(2026-10-12)與據此的改動**
+
+- 不跑 Codex 受測者;Codex 只當評分員。那 1 場移到 results-aborted/,不計分。
+- 「先寫程式」判法改成第 2 版:建置工具要在去掉引號字串後、出現在指令位置才算;第 1 版結果並列報告。門檻用第 2 版。
+- 關掉 superpowers 再跑一輪 Claude:兩份受測 repo 各放一份 `.claude/settings.json`,只把 superpowers 設成停用(實測停用後外掛清單與腦力激盪技能都不再出現,其他外掛照常)。
+- 乙組說明拿掉「一次最多問三題」,改成「會擋住後面工作的、做了回不去的題目有幾題就一次問完,其他排在後面」(arm-b-guidance.md;舊版存為 arm-b-guidance-v1.md)。
+
+**新的設計(取代上面〈受測者與分組〉〈門檻〉裡跟受測者有關的部分)**
+
+- 兩輪,都是 Claude(`claude-sonnet-5-5`):
+  - 「有外掛」輪:已跑完的 36 場,乙組用舊版說明(有三題上限),結果在 results/claude-plugin/。**補充報告**。
+  - 「無外掛」輪:新跑 36 場,兩組都停用 superpowers,乙組用新版說明,結果在 results/claude-noplugin/。**主判定**。
+- 兩輪的 72 場一起混進盲評包,由 Claude(opus)與 Codex 兩位評分員判,流程照原定(完整性檢查、仲裁、合併、敏感度)。
+- **接線決定**:看「無外掛」輪。PASS → A 塊接線;若「有外掛」輪 FAIL,在結論註明「已裝 superpowers 的環境裡增量有限」。「無外掛」輪 FAIL 或 INCONCLUSIVE → 不接線或攤人裁,照原定。
+- 兩輪之間同時改了外掛與三題上限兩件事,兩輪的結果不互相比較,只各自比甲乙。
+- 跑完若「無外掛」輪的平均差卡在門檻附近(0.10 到 0.20 之間),再由使用者決定要不要補一組「同長度無關指示」的丙組或加場次;補跑的結果另行報告,不改這次的判定。
+
 ## 結果
 
 (跑完才填;只追加,不改上面任何一節)
 
 - 開跑前指紋(2026-10-12 02:49):gold.json 5b92396e321f4b9b;gold-topics.json 91cb88cf16ca8210;arm-b-guidance.md 720effd7a5b926aa;scenarios.jsonl bc260301d194864f;rater-instructions.md 8e0fb1e4bd56e4c9;qo_ablation.py b50283b701cea448; 甲組 HEAD fe564c1;乙組 HEAD c929c40;探針 500d0579ae181164
+- 第 4 版「無外掛」輪開跑前指紋(2026-10-12 03:30):gold.json 5b92396e321f4b9b;gold-topics.json 91cb88cf16ca8210;arm-b-guidance.md 337f410e75faeb8e;arm-b-guidance-v1.md 720effd7a5b926aa;scenarios.jsonl bc260301d194864f;rater-instructions.md 8e0fb1e4bd56e4c9;qo_ablation.py 2adfafb11238f400; 甲組 HEAD 35952d9;乙組 HEAD 817c16d
