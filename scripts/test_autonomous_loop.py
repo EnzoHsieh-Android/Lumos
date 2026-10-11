@@ -2386,6 +2386,102 @@ class TestQoAblation(unittest.TestCase):
         # 一正一負等量:翻轉後總和 >= 觀察值的組合 3/4
         self.assertAlmostEqual(self.qo.sign_flip_p([0.1, -0.1]), 0.75)
 
+    def _write_result(self, path, **kw):
+        r = {"id": "qo-P1", "answer": "ok", "answer_len": 2, "calls": [], "reason": "ok"}
+        r.update(kw)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"results": [r]}, ensure_ascii=False), encoding="utf-8")
+
+    def test_valid_rejects_truncated_timeout_and_instrument_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "x.json"
+            self._write_result(p); self.assertTrue(self.qo._valid(p))
+            for bad in ({"answer_len": 99999}, {"answer_len": None}, {"truncated": True},
+                        {"reason": "儀器例外: codex exec 超時"}, {"fatal": True}, {"limit_hit": True}):
+                self._write_result(p, **bad)
+                self.assertFalse(self.qo._valid(p), bad)
+
+    def test_meta_mismatch_blocks_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "r.json"
+            meta = {"runner": "claude", "model": "sonnet", "cli": "2.1.300"}
+            self.qo._write_meta(out, meta)
+            self.assertTrue(self.qo._meta_ok(out, meta))
+            self.assertFalse(self.qo._meta_ok(out, dict(meta, cli="2.1.301")))
+            self.assertFalse(self.qo._meta_ok(Path(tmp) / "none.json", meta))
+
+    def test_code_start_multi_path_and_inplace_edit(self):
+        hit = self.qo.code_start
+        self.assertTrue(hit([("Edit", "src/main/kotlin/App.kt docs/plan.md")]))
+        self.assertTrue(hit([("Bash", "sed -i s/a/b/ src/main/kotlin/App.kt")]))
+        self.assertTrue(hit([("Bash", "perl -pi -e 's/a/b/' build.gradle.kts")]))
+        self.assertFalse(hit([("Edit", "docs/a.md docs/b.md")]))
+
+    def test_blind_masks_self_identification_and_arm_paths(self):
+        runs = [{"key": "codex/b/qo-P1-r1", "runner": "codex", "arm": "b", "id": "qo-P1", "run": 1,
+                 "answer": "我是 Codex;我依 AGENTS.md 回答。路徑 /scratchpad/qo/b/order-svc。Claude 與 CLAUDE.md 也遮。"}]
+        packets, _ = self.qo.blind(runs, seed=1)
+        text = packets[0]["answer"]
+        for leak in ("Codex", "AGENTS.md", "/qo/b/", "Claude", "CLAUDE.md"):
+            self.assertNotIn(leak, text)
+
+    def _gold_topics(self):
+        return {"qo-P1": [{"gold_id": f"g{i}", "topic": "t"} for i in range(1, 7)]}
+
+    def _labels(self, bids, label="handed", drop=None):
+        rows = []
+        for b in bids:
+            items = {f"g{i}": label for i in range(1, 7)}
+            if drop:
+                items.pop(drop)
+            rows.append({"blind_id": b, "items": items, "noise": 0})
+        return rows
+
+    def test_check_labels_strict_completeness(self):
+        mapping = {"R001": "claude/a/qo-P1-r1", "R002": "claude/b/qo-P1-r1"}
+        gt = self._gold_topics()
+        ok = {r["blind_id"]: r for r in self._labels(["R001", "R002"])}
+        self.qo.check_labels(ok, mapping, gt)
+        with self.assertRaises(ValueError):
+            self.qo.check_labels({k: v for k, v in ok.items() if k == "R001"}, mapping, gt)   # 漏評整場
+        with self.assertRaises(ValueError):
+            self.qo.check_labels({r["blind_id"]: r for r in self._labels(["R001", "R002"], drop="g6")}, mapping, gt)
+        bad = {r["blind_id"]: r for r in self._labels(["R001", "R002"], label="maybe")}
+        with self.assertRaises(ValueError):
+            self.qo.check_labels(bad, mapping, gt)
+
+    def test_merge_uses_adjudication_and_noise_rules(self):
+        a = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "absent"}, "noise": 0}}
+        b = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "handed"}, "noise": 3}}
+        adj = {("R001", "g2"): "assumed_confirm", ("R001", "noise"): 2}
+        m = self.qo.merge(a, b, adj)
+        self.assertEqual(m["R001"]["items"], {"g1": "handed", "g2": "assumed_confirm"})
+        self.assertEqual(m["R001"]["noise"], 2)                       # 差 >1 走仲裁
+        b["R001"]["noise"] = 1
+        self.assertEqual(self.qo.merge(a, b, {("R001", "g2"): "absent"})["R001"]["noise"], 1)  # 0 與 1 平均 0.5 → 四捨五入取 1(round half up)
+        with self.assertRaises(ValueError):
+            self.qo.merge(a, dict(b, R001=dict(b["R001"], noise=3)), {("R001", "g2"): "absent"})  # 該仲裁沒仲裁
+        with self.assertRaises(ValueError):
+            self.qo.merge(a, dict(b, R001=dict(b["R001"], noise=2)), {("R001", "g2"): "absent"})  # 差剛好 2 也要仲裁
+
+    def test_verdict_applies_invalid_conditions(self):
+        V = self.qo.verdict
+        good = {"kappa": 0.8, "truncated_any": False, "complete": 6, "all_zero": False,
+                "mean_diff": 0.2, "p": 1 / 64, "noise_a": 2, "noise_b": 1, "code_a": 1, "code_b": 0}
+        self.assertEqual(V(good)[0], "PASS")
+        self.assertEqual(V(dict(good, truncated_any=True))[0], "INCONCLUSIVE")
+        self.assertEqual(V(dict(good, kappa=0.59))[0], "INCONCLUSIVE")
+        self.assertEqual(V(dict(good, complete=4))[0], "INCONCLUSIVE")
+        self.assertEqual(V(dict(good, all_zero=True))[0], "INCONCLUSIVE")
+        self.assertEqual(V(dict(good, mean_diff=0.14))[0], "FAIL")
+        self.assertEqual(V(dict(good, p=0.06))[0], "FAIL")
+        self.assertEqual(V(dict(good, noise_b=3))[0], "FAIL")
+        self.assertEqual(V(dict(good, code_b=2))[0], "FAIL")
+
+    def test_delivery_rate_uses_fixed_denominator(self):
+        self.assertAlmostEqual(self.qo.delivery_rate({"g1": "handed"}, 6), 1 / 6)
+        self.assertAlmostEqual(self.qo.delivery_rate({f"g{i}": "assumed_confirm" for i in range(1, 7)}, 6), 1.0)
+
     def test_cohen_kappa_known_values(self):
         self.assertAlmostEqual(self.qo.kappa(["x", "y", "x", "y"], ["x", "y", "x", "y"]), 1.0)
         self.assertAlmostEqual(self.qo.kappa(["x", "x", "y", "y"], ["x", "y", "x", "y"]), 0.0)
