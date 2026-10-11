@@ -125,3 +125,5 @@ README 對 6 題都一樣:「訂單服務(尚未實作)。技術:Kotlin + Spring
 ## 結果
 
 (跑完才填;只追加,不改上面任何一節)
+
+- 開跑前指紋(2026-10-12 02:49):gold.json 5b92396e321f4b9b;gold-topics.json 91cb88cf16ca8210;arm-b-guidance.md 720effd7a5b926aa;scenarios.jsonl bc260301d194864f;rater-instructions.md 8e0fb1e4bd56e4c9;qo_ablation.py b50283b701cea448; 甲組 HEAD fe564c1;乙組 HEAD c929c40;探針 500d0579ae181164
