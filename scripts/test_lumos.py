@@ -47673,6 +47673,26 @@ def _disp_run(args, cwd=None):
     return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, cwd=cwd)
 
 
+def t_stack_questions_kotlin_spring_triggers():
+    """[後端工程提問與證據擴充 S4] Kotlin 寫 Spring 後端時,交易/資料存取與外呼的寫法要觸發 kt 的後端題;
+    只出現 Android 寫法(Room 的 @Entity/@Query("SELECT…")、Retrofit、Compose)不觸發新加的兩題。翻紅釘:拿掉這兩題 → ①② 翻紅。"""
+    m = _load_lumos_inproc()
+    def hits(lines):
+        app, meta = m._stack_applicability({"kt": lines}, 300)
+        return {x["id"] for x in meta.get("kt", []) if x["applicable"]}
+    spring_data = ['@Transactional', 'fun place(cmd: PlaceOrder) {', 'interface OrderRepo : JpaRepository<Order, Long>',
+                   'jdbcTemplate.update("update stock set qty = qty - 1 where id = ?", id)']
+    check("① Spring 交易與資料存取寫法觸發 kt-springdata", "kt-springdata" in hits(spring_data), str(hits(spring_data)))
+    spring_ext = ['val body = webClient.get().uri("/stock").retrieve()', 'private val rest = RestTemplate()']
+    check("② Spring 外呼寫法觸發 kt-springhttp", "kt-springhttp" in hits(spring_ext), str(hits(spring_ext)))
+    android = ['@Entity(tableName = "orders")', '@Query("SELECT * FROM orders")', 'val api = Retrofit.Builder().build()',
+               '@Composable fun Screen() {}']
+    h = hits(android)
+    check("③ Android 寫法不觸發新加的兩題", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
+    big = hits(["val x = 1"] * 400)
+    check("④ 超過行數門檻也不因門檻而亮(shape_only)", "kt-springdata" not in big and "kt-springhttp" not in big and "kt-coroutines" in big, str(big))
+
+
 def t_stack_question_triggers():
     """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
     比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
@@ -47683,6 +47703,7 @@ def t_stack_question_triggers():
     check("①每題 id 唯一且 when 非空(regex 已在載入時編譯)", len(ids) == len(set(ids)) and all(s["when"] for v in m._STACK_QUESTION_SPECS.values() for s in v), str(ids))
     check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
           set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
+                       "kt-springdata", "kt-springhttp",   # 2026-10-12 Kotlin 寫 Spring 後端(後端工程提問與證據擴充 S4)
                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
@@ -47770,8 +47791,8 @@ def t_stack_question_triggers():
         _disp_repo(d)
         r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
         data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
-        check("⑤stack_questions 語意不變(kt 整組 7 題)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
-        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 8, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+extcode
+        check("⑤stack_questions 語意不變(kt 整組 7 題;Spring 後端兩題是 shape_only 不進整組清單)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
+        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 10, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+Spring 後端兩題+extcode
         # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
         P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
         import subprocess as _sp
