@@ -6841,7 +6841,18 @@ def _lint_new_rules(env, rel):
     """這次新增、擋不擋看開關的欄位規則(筆記欄位關卡補齊_計劃 S6 到 S10):回問題清單(每條講怎麼修)。每條規則一支小函式。"""
     n = env.notes[rel]
     return (_nl_rule_status(n) + _nl_rule_dates(n) + _nl_rule_decisions(n)
-            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n))
+            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n) + _nl_rule_pending_questions(env, rel, n))
+
+
+def _nl_rule_pending_questions(env, rel, n):
+    """計劃筆記〈待決問題〉一節的文法與必附(情境出題 S2);沒有這一節不檢查。"""
+    if n.fields.get("type") != "project":
+        return []
+    text = _env_note_text(env, rel)
+    qs = parse_pending_questions(text)
+    if not qs:
+        return []
+    return ["〈待決問題〉" + e for e in pending_question_problems(qs, _pq_decision_state(env, rel), _pq_clause_tests(text))]
 
 
 def _nl_rule_status(n):
@@ -6895,6 +6906,141 @@ def _nl_rule_lands_in(rel, n):
         return ["計劃沒寫 lands_in(現況要寫進哪幾篇 Systems)——用 lumos append <計劃> lands_in Systems/<名稱> 補上,還沒開的篇也可以先寫"]
     bad = _lands_in_bad(vals)
     return [f"lands_in 這幾項不是 Systems/<名稱> 的純字串:{bad}(不帶 .md、不寫 [[連結]])"] if bad else []
+
+
+# ── 待決問題(情境出題,[[Projects/後端工程提問與證據擴充_計劃]] A 塊)────────────────────────────
+# 計劃筆記一節「## 待決問題」,一題一行:- [Q<n>] <問題> [類:..][階段:..][狀態:..] 可接 [阻塞] [不可逆]、→ 連結、出處:、理由:、測試:
+# 規格閘、lint、pitfalls --stage 三處共用 parse_pending_questions(只吃文字、不讀圖譜);要查決策或測試的檢查只放規格閘與 lint。
+PQ_STATUSES = ("待查", "自答", "待人", "延後", "已決", "已驗")
+PQ_STAGES = ("需求", "架構", "實作", "驗證", "效能", "交付")
+PQ_OPEN = ("待查", "待人")
+_PQ_HEAD_RE = re.compile(r"^##\s+待決問題\s*$")
+_PQ_LINE_RE = re.compile(r"^\s*[-*]\s+\[Q(\d+)\]\s*(.*)$")
+_PQ_TAG_RE = re.compile(r"\[(類|階段|狀態):([^\]\n]*)\]|\[(阻塞|不可逆)\]")
+_PQ_FIELD_RE = re.compile(r"(出處|理由|測試):\s*(.*?)(?=\s+(?:出處|理由|測試):|$)")
+_PQ_LINK_RE = re.compile(r"→\s*(\[\[[^\]]+\]\]#d\d+|#d\d+)")
+
+
+def parse_pending_questions(text):
+    """回〈待決問題〉一節的題目清單;計劃沒有這一節回 None。每題:id、行號、類、階段、狀態、阻塞、不可逆、連結、出處、理由、測試。"""
+    lines = (text or "").splitlines()
+    start = next((i for i, ln in enumerate(lines) if _PQ_HEAD_RE.match(ln)), None)
+    if start is None:
+        return None
+    out = []
+    for k in range(start + 1, len(lines)):
+        ln = lines[k]
+        if re.match(r"^#{1,2}\s", ln):
+            break
+        m = _PQ_LINE_RE.match(ln)
+        if not m:
+            continue
+        rest, tags, flags = m.group(2), {}, set()
+        for t in _PQ_TAG_RE.finditer(rest):
+            if t.group(1):
+                tags[t.group(1)] = t.group(2).strip()
+            else:
+                flags.add(t.group(3))
+        tail = _PQ_TAG_RE.sub(" ", rest)
+        fields = {f.group(1): f.group(2).strip() for f in _PQ_FIELD_RE.finditer(tail)}
+        link = _PQ_LINK_RE.search(tail)
+        out.append({"id": f"Q{m.group(1)}", "num": int(m.group(1)), "line": k + 1,
+                    "cls": tags.get("類"), "stage": tags.get("階段"), "status": tags.get("狀態"),
+                    "blocking": "阻塞" in flags, "irreversible": "不可逆" in flags,
+                    "link": link.group(1) if link else None,
+                    "source": fields.get("出處", ""), "reason": fields.get("理由", ""),
+                    "test": (fields.get("測試") or "").split()[0] if fields.get("測試") else None,
+                    "text": re.split(r"\s*(?:→|出處:|理由:|測試:)", tail)[0].strip()})
+    return out
+
+
+def pending_question_problems(qs, decision_state, clause_tests):
+    """形狀與必附的問題清單(每條以題號開頭)。decision_state(link) → "ok"/"missing"/"superseded";clause_tests=本篇條款綁的測試名。"""
+    errs, seen = [], {}
+    for q in qs:
+        qid, st = q["id"], q["status"]
+        if qid in seen:
+            errs.append(f"{qid} 編號重複(第 {seen[qid]} 行與第 {q['line']} 行)")
+        else:
+            seen[qid] = q["line"]
+        if st not in PQ_STATUSES:
+            errs.append(f"{qid} 的狀態要是 {'/'.join(PQ_STATUSES)} 之一,寫的是 {st!r}")
+            continue
+        if q["stage"] not in PQ_STAGES:
+            errs.append(f"{qid} 的階段要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {q['stage']!r}")
+        if not q["cls"]:
+            errs.append(f"{qid} 沒寫 [類:…]")
+        if st in ("已決", "已驗"):
+            if not q["link"]:
+                errs.append(f"{qid} 是{st}卻沒有「→ #dN」指到決策")
+            else:
+                ds = decision_state(q["link"])
+                if ds == "missing":
+                    errs.append(f"{qid} 指到的決策 {q['link']} 不存在")
+                elif ds == "superseded":
+                    errs.append(f"{qid} 指到的決策 {q['link']} 已作廢,改指到取代它的那條")
+        if st == "已驗":
+            if not q["test"]:
+                errs.append(f"{qid} 是已驗卻沒寫「測試:<測試名>」")
+            elif q["test"] not in clause_tests:
+                errs.append(f"{qid} 的測試 {q['test']} 不在本篇任何一條驗收條款的 [test:] 裡")
+        if st == "自答" and len(q["source"]) < 4:
+            errs.append(f"{qid} 是自答卻沒附出處(出處: 至少 4 字)")
+        if st == "延後" and len(q["reason"]) < 4:
+            errs.append(f"{qid} 是延後卻沒附理由(理由: 至少 4 字)")
+        if q["irreversible"] and st == "自答":
+            errs.append(f"{qid} 標了不可逆,不得自答——做了回不去的決定要人裁")
+        if q["blocking"] and st == "延後":
+            errs.append(f"{qid} 標了阻塞卻是延後——延後代表它不阻塞,兩者矛盾")
+    return errs
+
+
+def pending_questions_blocking_gate(qs):
+    """規格閘要擋的題:標阻塞、階段是需求或架構、狀態是待查或待人。"""
+    return [q for q in (qs or []) if q["blocking"] and q["stage"] in ("需求", "架構") and q["status"] in PQ_OPEN]
+
+
+def pending_questions_for_stage(qs, stage):
+    """pitfalls --stage:那一階段還沒結的題,依阻塞、不可逆、其餘排序,同級照編號;不設題數上限(計劃決策 d8)。"""
+    rows = [q for q in (qs or []) if q["stage"] == stage and q["status"] in PQ_OPEN]
+    return sorted(rows, key=lambda q: (0 if q["blocking"] else 1 if q["irreversible"] else 2, q["num"]))
+
+
+def _env_note_text(env, rel):
+    if getattr(env, "_texts", None) is not None:
+        return env._texts.get(rel)
+    try:
+        return (Path(env.vault) / rel).read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+
+
+def _pq_decision_state(env, rel):
+    def state(link):
+        m = re.match(r"(?:\[\[([^\]|#]+)(?:\|[^\]]*)?\]\])?#d(\d+)$", link)
+        if not m:
+            return "missing"
+        target = env.resolve(m.group(1)) if m.group(1) else rel
+        n = env.notes.get(target) if target else None
+        if n is None:
+            return "missing"
+        for d in parse_decisions(n.fm_lines or []):
+            if str(d.get("id")) == f"d{m.group(2)}":
+                return "superseded" if str(d.get("valid", "true")).strip().lower() == "false" else "ok"
+        return "missing"
+    return state
+
+
+def _pq_clause_tests(text):
+    names = set()
+    for line in (text or "").splitlines():
+        if SPEC_CLAUSE_RE.search(line):
+            for m in TEST_REF_RE.finditer(line):
+                for part in m.group(1).split(","):
+                    name = part.strip().split(":")[-1].strip()
+                    if name:
+                        names.add(name)
+    return names
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
@@ -7728,6 +7874,13 @@ def _spec_gate_front(env, node, no_run):
     judged = _door_judge(env, env.notes.get(rel), text)
     _spec_gate_print_door(judged)
     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
+    held = pending_questions_blocking_gate(parse_pending_questions(text))
+    if held:   # 情境出題 S1:放在「沒有條款就提早結束」與 --no-run 之前,風險高低都擋
+        print(f"[spec-gate] 待決問題: ✗ — {len(held)} 題標阻塞、在需求或架構階段、還沒決定:")
+        for q in held:
+            print(f"    • [{q['id']}] {q['text']}(第 {q['line']} 行,狀態 {q['status']})")
+        print("    先問人或自己查清楚,把狀態改成已決(→ #dN 指到決策)再過閘;不阻塞的題就拿掉 [阻塞]")
+        return 1
     door = judged["door"]
     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
     if rc is not None:
@@ -26532,6 +26685,24 @@ _PITFALL_GENERAL = [
     # 自我分類——分類是語意判斷,不該 regex 猜。★三處同步:此處+templates.md:31+design-loop skill★
     "列出此功能碰到的風險類(不限既有金流/寄送/不可逆/守衛面:認證/並發/快取/遷移/PII/限流/狀態同步…),逐類答隱患;無則寫『無+為什麼』。",
 ]
+# 需求風險面(情境出題;內容源與挑選理由在 [[Systems/情境出題]]):鍵沿用 _STACK_QUESTION_SPECS 的 id/q/when,多一個 stage。
+# 每一項是「什麼情況下要釐清什麼」,AI 依當下需求寫成具體問題;不是固定題目,也不是規格閘的風險類。when 比對計劃筆記文字。
+_REQUIREMENT_FACETS = [
+    {"id": "req-success", "stage": "需求", "q": "「成功」「完成」的定義是什麼?驗收條件能不能量?", "when": [r"."]},
+    {"id": "req-scope", "stage": "需求", "q": "本期範圍到哪裡?哪些明確不做?", "when": [r"."]},
+    {"id": "req-duplicate", "stage": "需求", "q": "同一個請求重送、重按、重試時要怎麼處理?", "when": [r"API|送出|提交|下單|兌換|預約|付款|扣|建立|寫入"]},
+    {"id": "arch-necessity", "stage": "架構", "q": "要引入的新元件解決什麼問題?有沒有更簡單的做法?誰維運?", "when": [r"(?i)redis|kafka|佇列|queue|快取|cache|微服務|拆成|新服務|訊息"]},
+    {"id": "arch-consistency", "stage": "架構", "q": "同一份資料在哪幾個地方各有一份?誰是準?可以晚多久同步?", "when": [r"拆|服務|快取|同步|一致|副本|非同步|事件"]},
+    {"id": "arch-irreversible", "stage": "架構", "q": "哪些決定做了回不去(資料格式、對外介面、刪除)?要誰點頭?", "when": [r"."]},
+    {"id": "impl-concurrency", "stage": "實作", "q": "同一份資源被同時改會怎樣?要怎麼防?", "when": [r"庫存|餘額|點數|名額|預約|搶|併發|同時|高併發|扣"]},
+    {"id": "impl-failure", "stage": "實作", "q": "中途失敗、外部系統沒回應、逾時的時候,資料會停在什麼狀態?怎麼補?", "when": [r"寄|通知|外部|第三方|非同步|呼叫|事件|訊息|物流"]},
+    {"id": "verify-evidence", "stage": "驗證", "q": "要用什麼證據證明做對了?哪幾條要能自動重跑?", "when": [r"."]},
+    {"id": "perf-target", "stage": "效能", "q": "流量與延遲目標是多少?在什麼負載下、用什麼口徑量?", "when": [r"(?i)高併發|大量|流量|延遲|毫秒|\bms\b|rps|qps|效能|壓測"]},
+    {"id": "deliver-ops", "stage": "交付", "q": "出事時怎麼知道、怎麼排查、怎麼回復?", "when": [r"."]},
+    {"id": "deliver-security", "stage": "交付", "q": "誰能做這件事?有哪些敏感資料?邊界在哪?", "when": [r"會員|使用者|帳號|權限|個資|付款|登入|管理員"]},
+]
+
+
 _PITFALL_QUESTIONS = {
     "payment": "冪等鍵怎麼設計?重複扣款如何防?部分失敗怎麼補償/對帳?",
     "external-send": "重試會不會風暴?收端如何去重?超時與速率上限?",
@@ -42906,11 +43077,46 @@ def cmd_dart_sarif(out=None):
     return 0
 
 
-def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None):
+def _pitfalls_stage(md, stage, as_json):
+    """pitfalls --stage:只列那一階段的需求風險面,與計劃〈待決問題〉裡那一階段還沒結的題(情境出題 S3)。"""
+    import json
+    try:
+        text = Path(md).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"讀不到 {md}:{e}", file=sys.stderr)
+        return 2
+    facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and any(re.search(w, text) for w in f["when"])]
+    qs = pending_questions_for_stage(parse_pending_questions(text), stage)
+    if as_json:
+        print(json.dumps({"stage": stage, "facets": facets, "questions": qs}, ensure_ascii=False, indent=2))
+        return 0
+    print(f"[pitfalls] 階段:{stage}")
+    print(f"  需求風險面({len(facets)} 項;每一項寫成這份需求的具體問題,先自己查、只把要人決定的交給人):")
+    for f in facets:
+        print(f"    - [{f['id']}] {f['q']}")
+    print(f"  這一階段還沒結的待決問題({len(qs)} 題;標阻塞或不可逆的全部一次問,其餘排在後面):")
+    for q in qs:
+        tag = "阻塞" if q["blocking"] else "不可逆" if q["irreversible"] else ""
+        print(f"    - [{q['id']}] {q['text']}" + (f"({tag})" if tag else "") + f"  狀態 {q['status']}")
+    return 0
+
+
+def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None, stage=None):
     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
     spec 模式印通用 4 問(含風險類反問)+ 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
     --no-lint:--diff 只跑 regex 層(快,給 pre-push advisory)。"""
     import json
+    if stage is not None:
+        if diff is not None:
+            print("擋下:--stage 只用在計劃模式(給計劃筆記路徑),不能和 --diff 一起用", file=sys.stderr)
+            return 2
+        if stage not in PQ_STAGES:
+            print(f"擋下:--stage 要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {stage!r}", file=sys.stderr)
+            return 2
+        if not md:
+            print("擋下:--stage 要給計劃筆記路徑", file=sys.stderr)
+            return 2
+        return _pitfalls_stage(md, stage, as_json)
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
         return 2
@@ -51630,6 +51836,8 @@ def main():
                    help="配 --dispositions-template:把這個分支最後一筆表態裡 id 相同且仍適用的舊答案帶過來(改碼後只答新題)")
     p.add_argument("--branch", dest="pf_branch", default=None,
                    help="配 --carry:從哪個分支名下的表態記錄帶(預設 checkout 分支;合進主線後推主線可帶原分支名)")
+    p.add_argument("--stage", dest="pf_stage", default=None,
+                   help="計劃模式:只列這一階段(需求/架構/實作/驗證/效能/交付)的需求風險面與還沒結的待決問題")
 
     cw = sub.add_parser("ci-wait", help="[CI回流閉環] push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1;需 .lumos/config.json 宣告 ci 區塊才啟用)")
     cw.add_argument("--timeout", dest="cw_timeout", type=float, default=1800.0)   # 600 撐不過 ~15min CI(2026-08-27),→1800 並順帶治 ci-status 過期(ci-wait 跑完才寫 ci-log)
@@ -51973,7 +52181,7 @@ def main():
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
                             disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
-                            branch=getattr(args, "pf_branch", None))
+                            branch=getattr(args, "pf_branch", None), stage=getattr(args, "pf_stage", None))
     if args.cmd == "testmap":
         if args.tmcmd == "build":
             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
