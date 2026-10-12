@@ -43,6 +43,8 @@ README 對 6 題都一樣:「訂單服務(尚未實作)。技術:Kotlin + Spring
 
 ## 執行(qo_ablation.py run)
 
+> 2026-10-12 補註(代碼審):實驗跑完後 `run` 子命令已拿掉,這一節是當時的執行紀錄,不是現行步驟;要重跑對照實驗,擴充 governance/eval/ablation_lumos_first.py 那套。下面的算法與參數不改。
+
 - 每種受測者:6 題 × 3 次 × 2 組 = 36 場,合計 72 場。
 - 交錯:每個(題目, 第幾次)甲乙各跑一場,兩場的先後由種子 `qo-2026-10` 決定;題目照 P1→P6 順序。
 - 探針參數:`--runs 1 --max-turns 30 --timeout 600 --answer-max 20000 --wait-on-limit 1800`,每場一個結果檔(`--out`)。結果檔存在 results/ 底下。

@@ -6,8 +6,8 @@
 ### 1. blocker — 六題都會在判分時拋例外，整批第一場即中止
 
 - 檔案：
-  - [scenarios.jsonl](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/scenarios.jsonl:1)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:331)
+  - [scenarios.jsonl](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/scenarios.jsonl:1)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:331)
 - 問題：六題的 `expect` 都是空陣列；`judge()` 卻無條件執行 `min(exp_idx.values())`。`run_one()` 呼叫 `grade()` 後，例外會被外層記成 fatal 儀器例外，然後停止整批。拿不到預計的 36 場。
 - 驗證：
 
@@ -23,9 +23,9 @@ ValueError: min() iterable argument is empty
 ### 2. blocker — 預登記的命令不保存回答，且 repo 內沒有 gold 計分器
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:46)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1143)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1419)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:46)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1143)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1419)
 - 問題：登記的執行命令沒有 `--out`；其預設值是空字串，因此每場的 `answer`、`calls` 等資料不會落檔。探針也完全不讀 `gold.json`，覆蓋率、亂問數、先寫程式數與截斷率都沒有已凍結的實作。跑完後才另寫計分程式會留下大量研究者自由度。
 - 驗證：
 
@@ -55,10 +55,10 @@ gold refs 0 must_surface refs 0 should_not_ask refs 0
 ### 3. blocker — 主指標不能回答「有沒有找出要人決定的事」
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:7)
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:51)
-  - [arm-b-guidance.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/arm-b-guidance.md:15)
-  - [後端工程提問與證據擴充_計劃.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/docs/lumos-toolchain-knowledge/Projects/後端工程提問與證據擴充_計劃.md:151)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:7)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:51)
+  - [arm-b-guidance.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/arm-b-guidance.md:15)
+  - [後端工程提問與證據擴充_計劃.md](~/orca/workspaces/lumos-toolchain/Backend_improve/docs/lumos-toolchain-knowledge/Projects/後端工程提問與證據擴充_計劃.md:151)
 - 問題：主指標在整份回答中搜尋關鍵詞，不要求它是問題、標成「待人」、尚未由證據回答，甚至不要求語意為肯定。這與圖譜計劃的「該被問到的人決定」不同。
 
   乙組又被要求列「待查／自答／待人／延後／已決」、記錄所有題目並附建議。因此只要把某項列成「自答」「不適用」或「延後」，照樣拿 must-surface 分；較長的固定格式也增加碰到正規式的機會。反過來，「一次最多問三題」卻要對六個 gold 項目算 recall，也可能懲罰真正照規則優先排序的乙組。
@@ -93,7 +93,7 @@ P4 p4_idempotency '重試、重複'
 
 ### 4. major — gold 正規式有大量合理漏判與明顯誤中
 
-- 檔案：[gold.json](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/gold.json:1)
+- 檔案：[gold.json](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/gold.json:1)
 - 問題：正規式多半只辨識名詞，不辨識意圖與極性；另一方面又把合理同義說法限制得很窄。實驗差距門檻只有 15 個百分點，這種誤差足以改變結論。
 - 驗證，合理語意卻漏判：
 
@@ -124,9 +124,9 @@ P6 consistency_scope:
 ### 5. major — 「亂問」規則正好漏掉乙組被要求產生的格式
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:55)
-  - [arm-b-guidance.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/arm-b-guidance.md:17)
-  - [gold.json](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/gold.json:1)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:55)
+  - [arm-b-guidance.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/arm-b-guidance.md:17)
+  - [gold.json](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/gold.json:1)
 - 問題：只有整行以問號結尾才算亂問；但乙組被要求標狀態、附建議答案。自然輸出會在問號後接「建議」「待人」等文字，因此同一個亂問，甲組較容易被抓、乙組較容易漏掉。另 P6 同樣是訂單題，卻完全沒有 `should_not_ask`，可重問 README 的 300 RPS、無付款、單區域而不受罰。
 - 驗證：
 
@@ -142,9 +142,9 @@ P6 consistency_scope:
 ### 6. major — 允許的截斷量本身就足以翻轉 15 點門檻
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:53)
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:70)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1066)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:53)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:70)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1066)
 - 問題：每組 3/18 場被切到 1500 字時，截斷率只有 16.7%，仍可判定；但三場各有六個 gold 項目，最多可丟掉 18/108＝16.7 個百分點，已大於通過門檻。乙組被要求留下完整紀錄，尤其容易更長，形成差別性截尾。
 - 驗證：
 
@@ -158,8 +158,8 @@ P6 consistency_scope:
 ### 7. major — 「先寫程式」會漏掉最常見的 shell 寫檔方式
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:57)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:184)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:57)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:184)
 - 問題：Bash 只找 `gradle init`、`spring init`、`start.spring.io`。模型可用 `touch`、重新導向、`tee`、Python、`git apply`、`cp` 等直接建立程式而完全不計。這不是邊角案例，是 agent 常見寫檔路徑。
 - 驗證：
 
@@ -177,7 +177,7 @@ tool_calls_from_stream(...) =>
 
 ### 8. major — 18 場不足以支持「不增」；15 點只是效果門檻，不是可靠證據
 
-- 檔案：[preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:60)
+- 檔案：[preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:60)
 - 問題：實際獨立設計單位更接近六個固定情境，不是 18 個；每題的三次是巢狀重跑。最壞情況下，18 個獨立有界場次之組差標準誤約 16.7 點，已大於 15 點門檻。對稀有副作用，即使乙組 0/18，單側 95% 上界仍約 15.3%，不能宣稱「不增」。
 - 驗證：
 
@@ -195,9 +195,9 @@ worst-case SE(diff of 18 independent run means) = 0.16666666666666666
 ### 9. major — 固定批次順序、缺場與「會重試」的文字互相不一致
 
 - 檔案：
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:46)
-  - [preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:70)
-  - [scenario_probe.py](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1163)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:46)
+  - [preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:70)
+  - [scenario_probe.py](~/orca/workspaces/lumos-toolchain/Backend_improve/scripts/scenario_probe.py:1163)
 - 問題：
   - 題序固定 P1→P6，每題三次連跑；
   - 甲乙是兩個獨立批次，未預登記隨機或交錯順序；
@@ -240,7 +240,7 @@ B dirs: MOC
 
 ### 12. major — 人工複核不足以攔住上述判準錯誤
 
-- 檔案：[preregistration.md](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:76)
+- 檔案：[preregistration.md](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/preregistration.md:76)
 - 問題：
   - 固定抽每題第 1 次，不是隨機抽樣；
   - 編排者知道組別，也知道門檻結果；

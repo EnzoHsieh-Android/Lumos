@@ -1869,13 +1869,8 @@ class TestScenarioProbeAblation(unittest.TestCase):
         long = "問" * 3000
         ans, n = self.sp._answer_field(long, None)
         self.assertEqual((len(ans), n), (1500, 3000))      # 預設上限不變
-        old = self.sp.ANSWER_MAX
-        try:
-            self.sp.ANSWER_MAX = 5000
-            ans, n = self.sp._answer_field(long, None)
-            self.assertEqual((ans, n), (long, 3000))
-        finally:
-            self.sp.ANSWER_MAX = old
+        ans, n = self.sp._answer_field(long, None, 5000)   # 上限照參數給
+        self.assertEqual((ans, n), (long, 3000))
 
     def test_answer_max_flag_parses_and_rejects_nonpositive(self):
         import subprocess, sys
@@ -1886,6 +1881,40 @@ class TestScenarioProbeAblation(unittest.TestCase):
         ok = subprocess.run([sys.executable, probe, "--answer-max", "5000", "--dry-list"], capture_output=True, text=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)   # 合法值要過(防「不認得的參數」造成的假綠)
 
+    def test_answer_max_reaches_codex_runner_and_cli_wiring(self):
+        # 代碼審 r2 併發席、通才席:Codex 路徑漏傳上限、或命令列接線濾掉上限,原本的測試全綠
+        import subprocess as _sp
+        long = "問" * 3000
+        sc = {"id": "q", "prompt": "p", "collect_only": True}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(self.sp.subprocess, "run", return_value=_sp.CompletedProcess([], 0, "", "")), \
+             mock.patch.object(self.sp, "tool_calls_from_codex_json", return_value=([], long)), \
+             mock.patch.object(self.sp, "_codex_hook_trace", return_value=None):
+            row = self.sp.run_one_codex(sc, Path(tmp), 5, "", answer_max=2000)
+        self.assertEqual((len(row["answer"]), row["answer_len"]), (2000, 3000))
+        for runner, target in (("codex", "run_one_codex"), ("claude", "run_one")):
+            a = mock.Mock(answer_max=4321, max_per_window=0, attempt_ledger="", runner=runner, timeout=5, model="",
+                          arm="with", stop_block="on", codex_bypass_hook_trust=False, max_turns=3)
+            with mock.patch.object(self.sp, target, return_value={"ok": 1}) as fn:
+                self.sp._run_scenario(a, sc, Path("."), None)
+            self.assertEqual(fn.call_args.kwargs.get("answer_max"), 4321, runner)
+
+    def test_answer_max_flows_as_argument_not_global(self):
+        # 代碼審 r1 正確性席(刪掉設上限那行測試照綠)與架構席(main 改寫模組全域值是這檔原本沒有的做法):
+        # 上限改成參數一路傳到執行場次,模組常數只當預設
+        import subprocess as _sp
+        long = "問" * 3000
+        out = json.dumps({"type": "result", "subtype": "success", "result": long})
+        sc = {"id": "q", "prompt": "p", "collect_only": True}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(self.sp.subprocess, "run", return_value=_sp.CompletedProcess([], 0, out, "")):
+            row = self.sp.run_one(sc, Path(tmp), 1, 5, "", answer_max=2000)
+            dflt = self.sp.run_one(sc, Path(tmp), 1, 5, "")
+        self.assertEqual((len(row["answer"]), row["answer_len"]), (2000, 3000))
+        self.assertEqual(len(dflt["answer"]), 1500)                         # 沒給就用預設,不受別處改寫影響
+        a = mock.Mock(answer_max=4321, max_per_window=0, attempt_ledger="")
+        self.assertEqual(self.sp._run_kwargs(a, None)["answer_max"], 4321)  # 命令列旗標真的傳下去
+        self.assertEqual(self.sp.ANSWER_MAX, 1500)
     def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
         import threading
         with tempfile.TemporaryDirectory() as tmp:
@@ -2232,6 +2261,13 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
         self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": []}))            # 沒明講只收回答,照舊擋
         self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": [], "collect_only": "yes"}))  # 只認布林 true
 
+    def test_collect_only_without_expect_key_grades_without_crash(self):
+        # 代碼審 r1 外家席:collect_only 省略 expect 欄位時,派工前放行、跑完才在評分時 KeyError(額度白燒、整批中止)
+        sc = {"id": "q", "prompt": "p", "collect_only": True}
+        self.assertIsNone(self.sp._validate_scenario(sc))
+        ok, why, _ = self.sp.grade(sc, [("Read", "README.md")], "回答")
+        self.assertTrue(ok, why)
+
     def test_validate_scenario(self):
         v = self.sp._validate_scenario
         self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))
@@ -2411,15 +2447,6 @@ class TestQoAblation(unittest.TestCase):
                 self._write_result(p, **bad)
                 self.assertFalse(self.qo._valid(p), bad)
 
-    def test_meta_mismatch_blocks_resume(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "r.json"
-            meta = {"runner": "claude", "model": "sonnet", "cli": "2.1.300"}
-            self.qo._write_meta(out, meta)
-            self.assertTrue(self.qo._meta_ok(out, meta))
-            self.assertFalse(self.qo._meta_ok(out, dict(meta, cli="2.1.301")))
-            self.assertFalse(self.qo._meta_ok(Path(tmp) / "none.json", meta))
-
     def test_code_start_multi_path_and_inplace_edit(self):
         hit = self.qo.code_start
         self.assertTrue(hit([("Edit", "src/main/kotlin/App.kt docs/plan.md")]))
@@ -2518,13 +2545,6 @@ class TestQoAblation(unittest.TestCase):
         self.assertTrue(hit([("Bash", "cd app && gradle init --type kotlin-application")]))
         self.assertTrue(hit([("Bash", "mvn -q package")]))
 
-    def test_job_order_respects_arm_subset(self):
-        scen = [{"id": "qo-P1"}, {"id": "qo-P2"}]
-        both = self.qo.job_order(scen, 2, "seed", ("a", "b"))
-        only_b = self.qo.job_order(scen, 2, "seed", ("b",))
-        self.assertEqual(len(both), 8)
-        self.assertEqual(only_b, [j for j in both if j[2] == "b"])   # 子集與全集的先後一致
-
     def test_mask_covers_model_family_names(self):
         t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
         for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):
@@ -2537,6 +2557,190 @@ class TestQoAblation(unittest.TestCase):
     def test_cohen_kappa_known_values(self):
         self.assertAlmostEqual(self.qo.kappa(["x", "y", "x", "y"], ["x", "y", "x", "y"]), 1.0)
         self.assertAlmostEqual(self.qo.kappa(["x", "x", "y", "y"], ["x", "y", "x", "y"]), 0.0)
+        # 非退化案例(代碼審 r1 通才席:換成 2*po-1 照綠):po=0.8、pe=0.8*0.6+0.2*0.4=0.56 → (0.8-0.56)/0.44
+        self.assertAlmostEqual(self.qo.kappa(list("xxxxy"), list("xxxyy")), 0.24 / 0.44)
+
+    def test_delivery_rate_excludes_absent(self):
+        self.assertAlmostEqual(self.qo.delivery_rate({"g1": "absent", "g2": "handed", "g3": "absent"}, 6), 1 / 6)
+
+    def test_blind_order_is_shuffled_not_sorted(self):
+        runs = [{"key": f"claude/{arm}/qo-P{i}-r1", "runner": "claude", "arm": arm, "id": f"qo-P{i}", "run": 1,
+                 "answer": "x"} for arm in ("a", "b") for i in range(1, 7)]
+        _, m1 = self.qo.blind(runs, seed=20261012)
+        _, m2 = self.qo.blind(runs, seed=1)
+        order1 = [m1[b] for b in sorted(m1)]
+        self.assertNotEqual(order1, sorted(r["key"] for r in runs))   # 不照 key 排(甲組會全擠在前半)
+        self.assertNotEqual(order1, [m2[b] for b in sorted(m2)])       # 種子真的有作用
+
+    def test_mask_covers_arm_paths_and_group_words(self):
+        t, _ = self.qo.mask_leaks("在 order-svc-b 裡跑;這是 arm b,也就是乙組")
+        for leak in ("order-svc-b", "arm b", "乙組"):
+            self.assertNotIn(leak, t)
+
+    def test_mask_edge_shapes(self):
+        # 代碼審 r1 邊界席:底線相連的身分字、不帶斜線的組別資料夾名要遮;英文 arm a、中文「組合/組織」、GPT 後的句號不能誤傷
+        t, _ = self.qo.mask_leaks("CLAUDE_CODE 與 codex_home;cd qo-a 之後")
+        for leak in ("CLAUDE", "codex", "qo-a"):
+            self.assertNotIn(leak, t)
+        for keep in ("claudette", "armor"):
+            self.assertEqual(self.qo.mask_leaks(keep)[0], keep)
+        # 代碼審 r2 通才席:盲評寧可多遮——組別字樣的各種寫法都要遮,誤遮「組合」或英文 arm a 的代價小於漏遮
+        for leak in ("甲組成員同意", "乙組員", "in arm b is better", "arm_a path", "arm-b worktree"):
+            t2 = self.qo.mask_leaks(leak)[0]
+            self.assertIn("⟨遮罩⟩", t2, leak)
+            for w in ("甲組", "乙組", "arm b", "arm_a", "arm-b"):
+                self.assertNotIn(w, t2, leak)
+        self.assertTrue(self.qo.mask_leaks("我是 GPT. 下一句")[0].endswith(". 下一句"))
+
+    def _final_fixture(self, tmp, b_label="handed", noise_b=0, code_a=False, rb_flip=0):
+        """六題各跑一次、甲乙兩組;甲組全 absent,乙組全 b_label。rb_flip:評分員乙在前幾場全部翻成相反標籤。"""
+        tmp = Path(tmp)
+        sids = [f"qo-P{i}" for i in range(1, 7)]
+        gt = {sid: [{"gold_id": f"{sid}-g{j}", "topic": "t"} for j in range(1, 7)] for sid in sids}
+        mapping, rows, la, lb, i = {}, [], [], [], 0
+        for sid in sids:
+            for arm in ("a", "b"):
+                i += 1
+                bid, key = f"R{i:03d}", f"claude/{arm}/{sid}-r1"
+                mapping[bid] = key
+                lab = "absent" if arm == "a" else b_label
+                noise = noise_b if (arm == "b" and sid == "qo-P1") else 0
+                la.append({"blind_id": bid, "items": {g["gold_id"]: lab for g in gt[sid]}, "noise": noise})
+                flip = {"absent": "handed", "handed": "absent", "assumed_confirm": "absent"}
+                lb.append({"blind_id": bid, "items": {g["gold_id"]: (flip[lab] if i <= rb_flip else lab) for g in gt[sid]},
+                           "noise": noise})
+                rows.append({"key": key, "truncated": False, "code_start": code_a and arm == "a" and sid == "qo-P2"})
+        (tmp / "ra").mkdir(); (tmp / "rb").mkdir()
+        (tmp / "ra" / "l.json").write_text(json.dumps(la), encoding="utf-8")
+        (tmp / "rb" / "l.json").write_text(json.dumps(lb), encoding="utf-8")
+        (tmp / "m.json").write_text(json.dumps({"mapping": mapping}), encoding="utf-8")
+        (tmp / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
+        (tmp / "score.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+        adj = [{"blind_id": f"R{k:03d}", "gold_id": f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}",
+                "choice": la[k - 1]["items"][f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}"]}
+               for k in range(1, rb_flip + 1) for j in range(1, 7)]
+        (tmp / "adj.json").write_text(json.dumps(adj), encoding="utf-8")
+        return ["--mapping", str(tmp / "m.json"), "--gold-topics", str(tmp / "gt.json"), "--score", str(tmp / "score.json"),
+                "--rater-a", str(tmp / "ra"), "--rater-b", str(tmp / "rb"), "--adjudication", str(tmp / "adj.json"),
+                "--runs", "1", "--dest", str(tmp / "final.json")]
+
+    def _final(self, args):
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.qo.main(["final"] + args), 0)
+        return json.loads(Path(args[args.index("--dest") + 1]).read_text(encoding="utf-8"))["claude"]
+
+    def test_final_direction_and_arm_attribution(self):
+        # 代碼審 r1 通才席:配對差方向寫反、亂問或先寫程式記錯組,原本的測試照綠
+        with tempfile.TemporaryDirectory() as tmp:
+            s = self._final(self._final_fixture(tmp, b_label="handed", noise_b=2, code_a=True))
+        self.assertAlmostEqual(s["mean_diff"], 1.0)                    # 乙減甲,乙組全交付 → +1
+        self.assertEqual((s["noise_a"], s["noise_b"]), (0, 2))
+        self.assertEqual((s["code_a"], s["code_b"]), (1, 0))
+        self.assertEqual(s["complete"], 6)
+        self.assertEqual(s["verdict"], "FAIL")                         # 乙組亂問比甲組多
+        with tempfile.TemporaryDirectory() as tmp:
+            s = self._final(self._final_fixture(tmp, b_label="absent"))
+        self.assertEqual(s["verdict"], "INCONCLUSIVE")                 # 兩組全 0
+
+    def test_final_recomputes_kappa_and_ignores_stale_agree(self):
+        # 代碼審 r1 外家席:final 原本直接收 --agree 檔的 kappa,舊檔可讓 kappa<0.6 的結果判 PASS
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self._final_fixture(tmp, rb_flip=8)
+            s = self._final(args)
+            xs, ys = [], []
+            la = json.loads((Path(tmp) / "ra" / "l.json").read_text()); lb = json.loads((Path(tmp) / "rb" / "l.json").read_text())
+            for x, y in zip(la, lb):
+                for g in sorted(x["items"]):
+                    xs.append(x["items"][g]); ys.append(y["items"][g])
+            self.assertAlmostEqual(s["kappa"], self.qo.kappa(xs, ys))
+            self.assertLess(s["kappa"], 0.6)
+            self.assertEqual(s["verdict"], "INCONCLUSIVE")
+            with self.assertRaises(SystemExit):                          # 不再收外部給的 kappa
+                self.qo.main(["final", "--agree", str(Path(tmp) / "x.json")] + args)
+
+    def test_check_labels_noise_must_be_zero_outside_noise_scenarios(self):
+        # 代碼審 r1 正確性席:非亂問題填非零,merge 會要一筆 adj-pack 永遠不產的仲裁
+        mapping = {"R001": "claude/a/qo-P4-r1"}
+        gt = {"qo-P4": [{"gold_id": f"g{j}"} for j in range(1, 7)]}
+        row = {"blind_id": "R001", "items": {f"g{j}": "absent" for j in range(1, 7)}, "noise": 0}
+        self.qo.check_labels({"R001": row}, mapping, gt)
+        with self.assertRaises(ValueError):
+            self.qo.check_labels({"R001": dict(row, noise=2)}, mapping, gt)
+
+    def test_load_runs_survives_wrong_shape_json(self):
+        # 代碼審 r2 併發席:語法合法、結構錯的結果檔(null、[]、results 裡不是物件、calls 是 null)也要列成無效場
+        for body in ("null", "[]", '{"results":[1]}', '{"results":[{"answer":"a","answer_len":1,"calls":null}]}'):
+            with tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp) / "claude" / "a"; d.mkdir(parents=True)
+                (d / "qo-P1-r1.json").write_text(body, encoding="utf-8")
+                self.assertFalse(self.qo._valid(d / "qo-P1-r1.json"), body)
+                runs = self.qo._load_runs(tmp, valid_only=False)
+                self.assertEqual([(r["key"], r["valid"]) for r in runs], [("claude/a/qo-P1-r1", False)], body)
+                self.assertEqual(self.qo._load_runs(tmp), [], body)
+
+    def test_packets_rerun_clears_stale_packets(self):
+        # 代碼審 r2 併發席:重產時批數變少,舊的 packet-03.json 等不能留著混進評分與仲裁
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for k in range(1, 6):
+                d = tmp / "out" / "claude" / "a"; d.mkdir(parents=True, exist_ok=True)
+                (d / f"qo-P1-r{k}.json").write_text(json.dumps({"results": [{"answer": "x", "answer_len": 1, "calls": []}]}), encoding="utf-8")
+            args = ["packets", "--out-dir", str(tmp / "out"), "--dest", str(tmp / "pk"), "--mapping", str(tmp / "m.json")]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.qo.main(args + ["--batch", "1"]), 0)
+                self.assertEqual(len(list((tmp / "pk").glob("packet-*.json"))), 5)
+                (tmp / "pk" / "說明.txt").write_text("別的檔", encoding="utf-8")
+                self.assertEqual(self.qo.main(args + ["--batch", "8"]), 0)
+            self.assertEqual(sorted(x.name for x in (tmp / "pk").iterdir()), ["packet-01.json", "說明.txt"])   # 只清自己產的包
+
+    def test_packets_bad_batch_keeps_old_packets(self):
+        # 代碼審 r3 併發席:--batch 0 或負數時,原本先刪光舊包、新包卻沒寫出來
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            d = tmp / "out" / "claude" / "a"; d.mkdir(parents=True)
+            (d / "qo-P1-r1.json").write_text(json.dumps({"results": [{"answer": "x", "answer_len": 1, "calls": []}]}), encoding="utf-8")
+            (tmp / "pk").mkdir(); (tmp / "pk" / "packet-01.json").write_text("[舊]", encoding="utf-8")
+            for bad in ("0", "-1"):
+                args = ["packets", "--out-dir", str(tmp / "out"), "--dest", str(tmp / "pk"), "--mapping", str(tmp / "m.json"), "--batch", bad]
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.qo.main(args), 2, bad)
+                self.assertEqual((tmp / "pk" / "packet-01.json").read_text(encoding="utf-8"), "[舊]", bad)
+
+    def test_score_survives_wrong_field_types(self):
+        # 代碼審 r3 合約圖譜席:answer 是 null 或數字、answer_len 是字串時,score 原本 TypeError
+        import contextlib, io
+        for row in ({"answer": None, "answer_len": 3, "calls": []}, {"answer": "abc", "answer_len": "3", "calls": []},
+                    {"answer": 5, "answer_len": 1, "calls": []}):
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                d = tmp / "out" / "claude" / "a"; d.mkdir(parents=True)
+                (d / "qo-P1-r1.json").write_text(json.dumps({"results": [row]}), encoding="utf-8")
+                gold = {"P1": {"must_surface": [{"id": "g1", "regex": "a"}], "should_not_ask": []}}
+                (tmp / "gold.json").write_text(json.dumps(gold), encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.qo.main(["score", "--out-dir", str(tmp / "out"), "--gold", str(tmp / "gold.json"),
+                                                   "--dest", str(tmp / "s.json")]), 0, row)
+                out = json.loads((tmp / "s.json").read_text(encoding="utf-8"))["rows"]
+                self.assertEqual([r["valid"] for r in out], [False], row)
+
+    def test_run_subcommand_is_gone(self):
+        # 代碼審 r1 架構席:第二套逐場執行器拿掉;連帶的跳過信任旗標、無逾時外呼、不含題庫的版本紀錄一起消失
+        import contextlib, io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.qo.main(["run", "--arm-a", "a", "--arm-b", "b", "--runner", "claude", "--out-dir", "o"])
+        self.assertFalse(hasattr(self.qo, "cmd_run"))
+        self.assertNotIn("subprocess", vars(self.qo))
+
+    def test_load_runs_skips_malformed_result_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "claude" / "a"; d.mkdir(parents=True)
+            (d / "qo-P1-r1.json").write_text('{"results": []}', encoding="utf-8")
+            (d / "qo-P1-r2.json").write_text("{壞", encoding="utf-8")
+            runs = self.qo._load_runs(tmp, valid_only=False)
+        self.assertEqual([(r["key"], r["valid"]) for r in runs], [("claude/a/qo-P1-r1", False), ("claude/a/qo-P1-r2", False)])
 
 
 if __name__ == "__main__":
