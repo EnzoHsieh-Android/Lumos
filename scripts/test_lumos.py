@@ -55882,6 +55882,99 @@ def t_spec_gate_ears_shapes():
     check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
 
 
+def _qo_plan(kg, name, questions, clauses=None, decisions=""):
+    """帶〈待決問題〉一節的計劃;decisions 是開頭欄位的 decisions 區塊原文。"""
+    p = kg / "Projects" / f"{name}_計劃.md"
+    body = "\n".join(clauses or [])
+    p.write_text("---\ntype: project\nstatus: doing\n" + decisions + "---\n# " + name + "\n\n" + body
+                 + "\n\n## 待決問題\n\n" + "\n".join(questions) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+    return p
+
+
+_QO_DEC = "decisions:\n  - content: 採用甲方案\n    id: d1\n    decided: 2026-10-12\n    valid: true\n  - content: 舊方案\n    id: d2\n    decided: 2026-10-01\n    valid: false\n"
+
+
+def t_backend_qo_blocking_question_holds_spec_gate():
+    """[後端工程提問與證據擴充 S1] 需求/架構階段標阻塞、狀態待查或待人的題 → 規格閘回 1(不論風險、--no-run、有無條款);
+    已決並指到有效決策就不擋;實作以後階段的阻塞題不擋;沒有〈待決問題〉的計劃行為不變。翻紅釘:拿掉前段檢查 → ①②③ 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo1")
+    q_block = "- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:待人][阻塞]"
+    _qo_plan(kg, "qa", [q_block], decisions=_QO_DEC)
+    r = run(kg, "spec-gate", "Projects/qa_計劃")
+    check("① 只有待決問題、沒有條款 → rc1 並列出 Q1", r.returncode == 1 and "Q1" in r.stdout and "待決問題" in r.stdout, r.stdout[-600:])
+    r2 = run(kg, "spec-gate", "Projects/qa_計劃", "--no-run")
+    check("② 帶 --no-run 也擋", r2.returncode == 1 and "Q1" in r2.stdout, r2.stdout[-600:])
+    _qo_plan(kg, "qb", [q_block], clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
+    r3 = run(kg, "spec-gate", "Projects/qb_計劃")
+    check("③ 有條款的計劃也擋", r3.returncode == 1 and "Q1" in r3.stdout, r3.stdout[-600:])
+    _qo_plan(kg, "qc", ["- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:已決][阻塞] → #d1"], decisions=_QO_DEC)
+    r4 = run(kg, "spec-gate", "Projects/qc_計劃")
+    check("④ 已決並指到有效決策 → 不因它擋", "Q1" not in r4.stdout or r4.returncode == 0, r4.stdout[-600:])
+    _qo_plan(kg, "qd", ["- [Q1] 壓測門檻要多少 [類:驗證][階段:效能][狀態:待人][阻塞]"], decisions=_QO_DEC)
+    r5 = run(kg, "spec-gate", "Projects/qd_計劃")
+    check("⑤ 效能階段的阻塞題不擋規格閘", r5.returncode == 0, r5.stdout[-600:])
+    _sg_plan(kg, "qe", ["純散文,沒有條款。"])
+    base = run(kg, "spec-gate", "Projects/qe_計劃")
+    check("⑥ 沒有〈待決問題〉的計劃不印這一節、rc0", base.returncode == 0 and "待決問題" not in base.stdout, base.stdout[-400:])
+
+
+def t_backend_qo_question_line_shape():
+    """[後端工程提問與證據擴充 S2] lint 逐條抓:已決指到不存在或已作廢的決策、自答沒出處、延後沒理由、不可逆卻自答、
+    阻塞卻延後、已驗的測試名不在本篇條款、編號重複;合乎文法與方括號順序不同的行不報。翻紅釘:拿掉 lint 規則 → 全部翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo2")
+    good = ["- [Q1] 一 [類:需求][階段:需求][狀態:已決] → #d1",
+            "- [Q2] 二 [狀態:自答][階段:架構][類:架構] 出處:README 第一段寫了技術選型",
+            "- [Q3] 三 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_green",
+            "- [Q4] 四 [類:失敗][階段:實作][狀態:延後] 理由:等示範跑完再定"]
+    _qo_plan(kg, "lg", good, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
+    r = run(kg, "lint", "Projects/lg_計劃")
+    check("① 合乎文法(含方括號順序不同)的四行不報待決問題的錯", "待決問題" not in r.stdout, r.stdout[-800:])
+    bad = ["- [Q1] 甲 [類:需求][階段:需求][狀態:已決] → #d9",
+           "- [Q2] 乙 [類:需求][階段:需求][狀態:已決] → #d2",
+           "- [Q3] 丙 [類:需求][階段:需求][狀態:自答]",
+           "- [Q4] 丁 [類:需求][階段:需求][狀態:延後]",
+           "- [Q5] 戊 [類:需求][階段:需求][狀態:自答][不可逆] 出處:我自己判斷就好",
+           "- [Q6] 己 [類:需求][階段:需求][狀態:延後][阻塞] 理由:之後再說吧",
+           "- [Q7] 庚 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_missing",
+           "- [Q7] 辛 [類:需求][階段:需求][狀態:待人]"]
+    _qo_plan(kg, "lb", bad, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
+    out = run(kg, "lint", "Projects/lb_計劃").stdout
+    for q, why in (("Q1", "不存在"), ("Q2", "作廢"), ("Q3", "出處"), ("Q4", "理由"), ("Q5", "不可逆"), ("Q6", "阻塞"),
+                   ("Q7", "t_missing"), ("Q7", "重複")):
+        check(f"② {q} 因「{why}」被報", any(q in ln and why in ln for ln in out.splitlines()), out[-1500:])
+
+
+def t_backend_qo_stage_order_and_cap():
+    """[後端工程提問與證據擴充 S3] pitfalls --stage:依阻塞、不可逆、其餘排序,阻塞或不可逆的全部列出不截斷;
+    不帶 --stage 輸出逐位元不變;--stage 錯值或與 --diff 並用回 2。翻紅釘:排序改成照編號 → ② 翻紅。"""
+    root = Path(tempfile.mkdtemp(prefix="gctl-qo3-"))
+    (root / ".git").mkdir()
+    qs = ["- [Q1] 一般題 [類:需求][階段:需求][狀態:待人]",
+          "- [Q2] 不可逆題 [類:需求][階段:需求][狀態:待人][不可逆]",
+          "- [Q3] 阻塞題甲 [類:需求][階段:需求][狀態:待人][阻塞]",
+          "- [Q4] 阻塞題乙 [類:需求][階段:需求][狀態:待人][阻塞]",
+          "- [Q5] 阻塞題丙 [類:需求][階段:需求][狀態:待人][阻塞]",
+          "- [Q6] 阻塞題丁 [類:需求][階段:需求][狀態:待人][阻塞]",
+          "- [Q7] 已決題 [類:需求][階段:需求][狀態:已決] → #d1",
+          "- [Q8] 別階段 [類:驗證][階段:驗證][狀態:待人]"]
+    md = root / "plan.md"
+    md.write_text("# 訂單系統\n\n需求:做一個訂單 API。\n\n## 待決問題\n\n" + "\n".join(qs) + "\n", encoding="utf-8")
+    plain_before = run(root, "pitfalls", str(md), "--repo", str(root))
+    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
+    out = r.stdout
+    check("① rc0", r.returncode == 0, out[-600:])
+    pos = {q: out.find(f"[{q}]") for q in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6")}
+    check("② 阻塞四題都在不可逆之前、不可逆在一般題之前", all(-1 < pos[x] < pos["Q2"] for x in ("Q3", "Q4", "Q5", "Q6")) and pos["Q2"] < pos["Q1"], out[-800:])
+    check("③ 阻塞與不可逆共 5 題全列,不因題數截斷", all(pos[q] > -1 for q in ("Q2", "Q3", "Q4", "Q5", "Q6")), out[-800:])
+    check("④ 已決題與別階段的題不列", "[Q7]" not in out and "[Q8]" not in out, out[-800:])
+    plain_after = run(root, "pitfalls", str(md), "--repo", str(root))
+    check("⑤ 不帶 --stage 時輸出不變(不出現待決問題清單)", plain_before.stdout == plain_after.stdout and "[Q3]" not in plain_after.stdout, plain_after.stdout[-400:])
+    bad = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "上線")
+    check("⑥ 不認得的階段回 2", bad.returncode == 2, bad.stdout + bad.stderr)
+    both = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--stage", "需求")
+    check("⑦ 跟 --diff 並用回 2", both.returncode == 2, both.stdout + both.stderr)
+
+
 def t_spec_gate_stopwords():
     """[規格落成可驗收條件 S2] 句首是停用詞(當然/在此…)→ 當無條件型,不是格式看不懂。翻紅釘:停用詞表清空 → ① 翻紅。"""
     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg2")
