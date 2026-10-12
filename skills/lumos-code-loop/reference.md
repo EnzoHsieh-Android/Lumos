@@ -363,7 +363,7 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
    - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異(2026-08-14 起已無):兩套帳的 capture-recapture 均 **advisory 不進合取**(無-cluster 帳 2026-08-14 降級對齊 cluster 帳);裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
    - (c) 需跑真碼的(測試套件/type checker)沿 mutation 冒煙的**隔離 worktree** 模式。
    - 具體 finder:專案 `.lumos/lint.json` 宣告的社群 linter(SARIF)/測試套件/type checker/mutation 冒煙(步驟 7)。
-   - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立資訊),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立訊號。
+   - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立資訊;本手冊的推論、沒量過,原引論文撐不起來,見 Systems/heterogeneous-finder-ensemble〈引用更正〉),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立訊號。
 2. **辯方可執行 falsification**(borrow:Greptile TREX / CodeRabbit sandbox「grep 沒東西≠證明有 bug,先跑再信」):design-loop 辯方用 grep/Read 論證;**code-loop 辯方應能跑測試/repro/mutation 確認-或-殺一條 finding**——可執行反證 > 論證反證。lumos 已有種子:mutation 冒煙 + pre-push 測試 gate。
 3. **capture-recapture 跨異質 finder**:LLM findings ∪ linter findings ∪ 測試失敗的**重疊**——LLM 與工具都指同一洞 = 更強收斂信號(且 capture-recapture 本就生於軟體檢驗,回娘家)。
 4. **canary 型別、defect 分類本就不同**(已做:bug 四型 vs a/b/c/d)——文獻(PBR/defect-type mapping)證 reading technique 該隨 artifact 調;但實證 PBR 增益不穩,**重點在異質驗證器 mix 而非 LLM 鏡頭數**。
@@ -375,7 +375,7 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
 **出處**:抑噪兩句 borrow PR-Agent;mutation 算子 borrow Offutt E-selective / PItest / Kurtz FSE2016;Survived/NoCoverage borrow Stryker;異質 ensemble borrow AutoSafeCoder(arxiv 2409.10737)、Greptile TREX / CodeRabbit(2511.16708 只當旁證,見上方第 1 條)。派工模板見 `../lumos-design-loop/templates.md` §3-4/§7.5。設計全文 `docs/design/2026-07-04-pitfalls-code-loop.md`。
 
 **code-loop ≠ design-loop 換名字**(2026-07-09 文獻;設計見 `[[loop三輪壓縮_計劃]]`):代碼可執行+可靜態分析,最佳解是**異質 ensemble** 非「多個多樣 LLM」——
-- 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 reviewer 席、不進輪有效**(2026-07-18 codestage;原因原為「跑真碼樹看不到餌」——植入雖停用,不佔席照舊:它們的產出走機械通道,不是席報告);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交,才買到真獨立訊號、破「9 judge 2 票」。
+- 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 reviewer 席、不進輪有效**(2026-07-18 codestage;原因原為「跑真碼樹看不到餌」——植入雖停用,不佔席照舊:它們的產出走機械通道,不是席報告);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交(推論、沒量過),才買到真獨立訊號、破「9 judge 2 票」。
 - 辯方用**可執行 falsification**(跑測試/repro/mutation 確認或殺一條 finding)> 論證反證。
 
 ## 歷史與停用(舊頭版全文;只供回放舊帳判讀,不是現行規則)

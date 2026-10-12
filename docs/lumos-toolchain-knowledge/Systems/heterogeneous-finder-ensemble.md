@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-09
-updated: 2026-10-12
+updated: 2026-10-13
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/acace41cfceb
 verified_by:
@@ -22,7 +22,7 @@ tags:
 summary: |-
   FLOW:code-loop 一輪 panel → 各 finder 產 finding-key(LLM reviewer 手動 --finder｜pitfalls --diff SARIF linter/regex 自動 --from-pitfalls｜測試失敗/mutation 存活)→ `lumos loop capture-counts` 跨 finder 正規化+數重疊 → capture_counts → `canary record --capture-counts` → `loop status --gate --panel` 印殘餘 advisory 觀測★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;canary-stats 重疊分布段同源消費
   KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)(更正 2026-10-12：2511.16708 的四個代理都是不用 LLM 的靜態分析模組,沒有比較純 LLM 組和混合組;它自己的消融是四個全上 72.4%,輸給最佳兩個的 79.3%,也輸給最強單一模組的 75.9%;「條件獨立」這個前提作者沒驗。這篇撐不起「最佳解是異質組合」)
-  KEY:異質 = 買真獨立票——確定性驗證器(SARIF linter/測試/type/mutation)錯誤剖面與 LLM 正交,直擊「9 judge 2 票」相關性天花板(純 LLM panel 即使多樣仍相關);重疊(同洞多 finder 中)= 更強收斂信號
+  KEY:異質 = 買真獨立票——確定性驗證器(SARIF linter/測試/type/mutation)錯誤剖面與 LLM 正交(更正 2026-10-13：「正交」是本篇推論、沒量過,原引的論文撐不起來,見正文〈引用更正〉),直擊「9 judge 2 票」相關性天花板(純 LLM panel 即使多樣仍相關);重疊(同洞多 finder 中)= 更強收斂信號
   KEY:capture_counts 語意=各 distinct finding-key「被幾個 finder 找到」的次數列表;跨 finder 正規化(casefold+strip)、finder 內去重;降序回傳決定性。餵 _estimate_remaining_defects(Chao1)算殘餘
   KEY:--from-pitfalls <range> 按 `source` 分組——每個 linter driver / pitfalls 內建各一個確定性 finder(免手貼);共用 _pitfall_diff_collect(純計算不印,與 _pitfall_diff_mode 印分離);capture-counts 是 vault-free 純機械原語
   KEY:誠實邊界——重疊計數機械化只買「算術正確」不買「finding 正確」;capture-recapture 小樣本出極端值當一個信號非 oracle;辯方可執行 falsification(跑測試/repro 殺假陽)是 code-loop 另一半、非本節點
