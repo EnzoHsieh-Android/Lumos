@@ -2,7 +2,7 @@
 type: system
 status: planned
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-10-12
 self_audit: sonnet/2026-06-26
 about_code_stamp: batch-2026-08-23/2026-08-23/d4be2d220d17
 tags:
@@ -15,7 +15,7 @@ verified_by:
 summary: |-
   FLOW:orchestrator(層0 全工具)→[canary 植入 Edit]→spawn auditor/judge 改 Bash 子程序 `claude -p --allowedTools "Read,Grep,Glob" --permission-mode dontAsk`(層1 唯讀,cwd=repo root)→每次 spawn 前 append delegation-log 一行→canary record/cross_audit(不變)
   KEY:autonomous-loop 的 auditor/judge 由「Agent 工具 spawn(繼承父全權)」改為「claude -p 子程序帶 --allowedTools 唯讀」——機械強制點在 harness 層工具集宣告,非 prompt 自律
-  KEY:Claude Code 的 Agent 工具不支援 allowedTools,子 agent 完整繼承父 session 工具集——這是 confused deputy 漏洞根因(被下毒節點可誘導唯讀審計員去 Edit/Bash/開 PR)
+  KEY:Claude Code 的 Agent 工具不支援 allowedTools,子 agent 完整繼承父 session 工具集(更正 2026-10-12:依 Claude Code 官方文件(2026-10-11 讀取),這只對沒有子代理定義檔的一般子代理成立;定義檔可設工具白名單與禁用清單,依定義檔收窄是原生功能,只是逐次派工不能另指工具)——這是 confused deputy 漏洞根因(被下毒節點可誘導唯讀審計員去 Edit/Bash/開 PR)
   KEY:append-only 收窄——每巢狀一層權限只能更窄(層0 Read,Edit,Bash,Grep,Glob,Agent → 層1 Read,Grep,Glob);委派範圍寫 delegation-log JSONL 留痕(本機稽核,不進 CI/可信度報告)
   KEY:保護層唯一——父 `claude -p` 的 --allowedTools 是 per-session 旗標,不傳播到子程序;唯一機械強制點是 orchestrator 實際帶上 --allowedTools 的那條 Bash 命令(若被注入省略則退回全工具,prompt-orchestrated 固有殘留)
   KEY:auditor/judge prompt 與 auditor 報告寫 temp file 經 `claude -p "$(cat $TMP)"` 傳遞,不拼接進 shell 字面量(防 spec 草稿含引號序列注入 shell 命令);`--input-file` 旗標不存在
@@ -59,7 +59,7 @@ autonomous-loop 的 design-loop 子 agent(auditor / judge)權限範圍收窄 —
 > **狀態 = planned**:設計稿已收斂入庫(commit `19ced27`,2026-06-24),但 `orchestrator-prompt.md` **尚未實作**——現況仍用 Agent 工具 spawn(grep 確認 4 處「Agent 工具」、0 處 `claude -p`/`allowedTools`/`delegation-log`)。本節點描述設計目標態。
 
 ## 解決什麼(confused deputy)
-- **現況漏洞**:`autonomous-loop.sh:L43` 給 orchestrator `--allowedTools "Read,Edit,Bash,Grep,Glob,Agent"`;orchestrator 用 **Agent 工具** spawn auditor/judge。Claude Code 的 Agent 工具**不支援 allowedTools**,子 agent 完整繼承父 session 工具集。
+- **現況漏洞**:`autonomous-loop.sh:L43` 給 orchestrator `--allowedTools "Read,Edit,Bash,Grep,Glob,Agent"`;orchestrator 用 **Agent 工具** spawn auditor/judge。Claude Code 的 Agent 工具**不支援 allowedTools**,子 agent 完整繼承父 session 工具集。(更正 2026-10-12:依 Claude Code 官方文件(2026-10-11 讀取),完整繼承只對沒有子代理定義檔的一般子代理成立;定義檔可設工具白名單、禁用清單與只對它生效的掛鉤,依定義檔收窄是原生功能,只是逐次派工不能另指工具)
 - **攻擊路徑**:spec 草稿若含被下毒節(惡意注入),受誘導的 auditor 子 agent 可合法呼叫 `Edit`/`Bash` 寫圖譜、改 spec、開 PR——父 session 與 harness 層皆不攔。
 - **源起**:日報 2026-06-21 backlog gap「自主 loop 巢狀 spawn 子 agent,卻沒有範圍受限身分,子 agent 繼承全權(confused deputy 風險)」(同報 inspiration「append-only 收窄」、2026-06-12 多 agent confused deputy 三層防護研究亦為脈絡)。autonomous-loop 自選此 gap → 自動 brainstorm → 5 輪 design-loop 收斂 → 跨家族複審。
 
