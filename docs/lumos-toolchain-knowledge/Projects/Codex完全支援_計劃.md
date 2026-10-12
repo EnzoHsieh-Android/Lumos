@@ -184,7 +184,7 @@ S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包
 - 「install/teardown 對稱」:Codex 三處在 teardown 後必為空;既有非我方目錄與使用者自寫 hooks 項目必原樣保留。
 - 「bypass 旗標只在隔離測試」:repo 內任何非測試碼不得出現 `--dangerously-bypass-hook-trust`。
 
-REVISIT:2026-09-25 互動模式(TUI 對話中)改檔/派子代理看 hook 行為;信任冒煙 09-05 已做。
+REVISIT:2026-09-25 互動模式(TUI 對話中)改檔/派子代理看 hook 行為;信任冒煙 09-05 已做。 [closed:2026-10-12 互動模式逐字稿證實改檔前推播有觸發,收工擋停沒驗]
 REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用(0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先);同日抽看 armed token 有沒有被無關子代理搶走(通才 r2 F1 界線)。
 
 ## 實作紀錄 S0(2026-09-04,r2 過閘、四條裁定記入後同日動工)
@@ -241,7 +241,7 @@ f01/f02 兩個功能實驗跑完後的精修另開 [[Projects/Codex行為精修_
 - 誠實界線補:TOML 的 sandbox_mode 實測不擋寫檔,唯讀規則不變;新版 codex 是否已修在別的版本沒逐版驗(只驗 0.144.1 與 0.153.2 兩點)。
 - **代碼審 r1(code-codex-d6,standard:單reviewer+架構+外家 Codex,2026-09-05)**:15 條(3+6+6,1 條重疊)全折——agents 路徑是檔案不炸(`skipped-not-dir`)、測試 tomllib 精確比、「0.153+」全改「0.153.2 實測、0.144.1 忽略」、enforcement 加 `codex-agent` 列(每樣裝的東西都有一列)、skill 三處統一「框架單源=TOML 的 developer_instructions,派工詞給審材與鏡頭」並引 d6、三態改 created/unchanged/skipped-*、docstring/步驟註解補④⑤、第三種標記機制加註解、merge-failed 時不寫 TOML 為刻意(補註解)、測試刪 PATH 誤導行。卷證 `governance/review-reports/code-codex-d6/`。
 
-REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
+REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。 [closed:2026-10-12 互動模式下有48份子代理帶領席標頭,領席照常]
 
 ## 審計修正紀錄(lumos-design-loop)
 

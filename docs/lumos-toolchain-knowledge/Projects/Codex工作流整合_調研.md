@@ -79,4 +79,4 @@ summary: |-
 
 **實驗 4/5(2026-09-04,scratchpad codexfull/;接本篇「沒查/沒測」第二條)**:未信任 repo 裡 `codex exec --sandbox workspace-write -c hooks.*` ——①AGENTS.md 哨兵字與 repo 層 `.agents/skills/` 哨兵字都回到最終回覆(兩者未信任也載入,skill 且被隱式選用)②PreToolUse 攔到 `apply_patch`,`tool_input={"command":"*** Begin Patch\n*** Add File: beta.txt…"}`,沒有 file_path ③攔到 `collaborationspawn_agent`,`tool_input={"task_name","fork_turns":"all","message":"gAAAA…"}`——message 是加密字串,回 updatedInput 改它子代理沒收到(哨兵沒出現)④`matcher="Agent"` 的 PreToolUse 沒攔到 spawn(0 筆)⑤SubagentStart 回 `additionalContext` 的哨兵字被子代理原文回報→這是 Codex 側餵子代理脈絡的可用通道。後續設計見 [[Projects/Codex完全支援_計劃]]。
 
-REVISIT:2026-09-18 若要動候選 1–3 任一項,先補「沒查/沒測」四條裡對應那條,不憑本篇下手。
+REVISIT:2026-09-18 若要動候選 1–3 任一項,先補「沒查/沒測」四條裡對應那條,不憑本篇下手。 [closed:2026-10-12 候選3到7已由Codex完全支援計劃落地,候選1和2動手時再補查]
