@@ -770,6 +770,7 @@ def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
         cm.write_text(new, encoding="utf-8")
     if source_probe is not None:
         _prepare_source_probe(work, *source_probe)
+    _hide_answer_bank(work)
     # 標記必須在快照中，否則收工hook會把儀器註解當成模型改碼。
     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
     subprocess.run(["git", "add", "-A"], cwd=str(work), env=genv, check=True)
@@ -782,6 +783,26 @@ def _populate_sandbox(src, work, tmp, arm, genv, source_probe):
                            capture_output=True, text=True, check=True)
     if clean.stdout.strip():
         raise RuntimeError("副本快照不乾淨，不啟動模型")
+
+
+_ANSWER_BANK_REL = Path("governance") / "scenarios"
+_ANSWER_BANK_STUB = '{"_hidden": "探針副本:題庫判準與歷次結果已移除,真本在來源 repo"}\n'
+
+
+def _hide_answer_bank(work):
+    """副本裡不留答案:題庫與歷史換成佔位內容(檔名保留,有題目的考點就是改名題庫檔),歷次結果檔刪掉。
+    2026-10-11 核對:原樣複製時,掃 132 場工具呼叫至少 4 場直接打開歷次結果,通過率可能偏高。
+    只遮工作樹;副本帶著完整 git 歷史,刻意翻舊版本仍看得到(見 scenario-probe 那篇的回頭條件)。"""
+    bank = Path(work) / _ANSWER_BANK_REL
+    if not bank.is_dir():
+        return
+    for p in sorted(bank.rglob("*")):
+        if p.is_symlink() or not p.is_file():
+            continue
+        if p.suffix == ".json":
+            p.unlink()
+        else:
+            p.write_text(_ANSWER_BANK_STUB, encoding="utf-8")
 
 
 def _validate_scenario(sc):

@@ -1083,6 +1083,66 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_probe_sandbox_hides_answer_bank():
+    """★探針副本不能帶著答案★:受測 AI 看得到題庫判準與歷次結果,通過率就會偏高。
+
+    2026-10-11 世界解重新註解核對:副本原樣複製題庫資料夾,掃 132 場工具呼叫至少 4 場直接打開歷次結果。
+    修法:副本裡題庫與歷史換成佔位內容(檔名保留——有題目的考點就是「改名題庫檔」),歷次結果檔刪掉。
+    翻紅釘:把 _populate_sandbox 裡呼叫遮蔽的那一行拿掉 → 前兩條翻紅。"""
+    import importlib.util, subprocess as _sp, tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("probe_hide", repo / "scripts" / "scenario_probe.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    src = _P(_tf.mkdtemp(prefix="probe-src-")) / "repo"
+    sc = src / "governance" / "scenarios"
+    sc.mkdir(parents=True)
+    secret = "SECRET-GRADER-REGEX-lumos impact"
+    (sc / "commands.jsonl").write_text('{"id": "s01", "expect": "' + secret + '"}\n', encoding="utf-8")
+    (sc / "history.jsonl").write_text('{"ts": "x", "passed": 7, "note": "' + secret + '"}\n', encoding="utf-8")
+    (sc / "run-2026-10-01-weekly.json").write_text('{"results": "' + secret + '"}', encoding="utf-8")
+    (src / "a.txt").write_text("x\n", encoding="utf-8")
+    _sp.run(["git", "init", "-q", str(src)], check=True)
+    _sp.run(["git", "add", "-A"], cwd=str(src), check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], cwd=str(src), check=True)
+    work = m.make_sandbox(src)
+    wsc = work / "governance" / "scenarios"
+    leaked = [p.name for p in wsc.rglob("*") if p.is_file() and secret in p.read_text(encoding="utf-8")]
+    check("探針副本①: 題庫與歷史的判準文字不在副本工作樹裡", leaked == [], str(leaked))
+    check("探針副本②: 歷次結果檔不帶進副本", not (wsc / "run-2026-10-01-weekly.json").exists(), "")
+    check("探針副本③: 題庫檔名保留(改名題的考點要在)",
+          (wsc / "commands.jsonl").is_file() and (wsc / "history.jsonl").is_file(), "")
+    st = _sp.run(["git", "status", "--porcelain"], cwd=str(work), capture_output=True, text=True).stdout
+    check("探針副本④: 遮蔽後快照仍乾淨", st.strip() == "", st)
+def t_only_spec_ready_notice_uses_spec_header():
+    """自主迴圈的 LINE 通知:只有真的備好 spec 那一處用「備好待放行 spec」標頭,其餘用中性標頭。
+    2026-10-11 核對:考卷、探針、週報、未收斂警告共 10 處都套了好消息標頭,警告被包成好消息。"""
+    import importlib.util as _iu
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    sh = (repo / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+    calls = [ln for ln in sh.splitlines() if "line_notify.build_message(" in ln]
+    check("只有一處用備好 spec 的標頭,而且是收斂待看那處", len(calls) == 1 and "待你看" in calls[0], str(calls))
+    spec = _iu.spec_from_file_location("ln_t", repo / "governance" / "autonomous_loop" / "line_notify.py")
+    m = _iu.module_from_spec(spec); spec.loader.exec_module(m)
+    txt = m.build_report("scenario-probe", "⚠ 週抽 5/8")["messages"][0]["text"]
+    check("一般通知不帶待放行字樣、帶檢查名與內容", "待放行" not in txt and "scenario-probe" in txt and "週抽 5/8" in txt, txt)
+
+
+def t_help_when_no_duplicate_keys():
+    """說明對照表不准有重複鍵:Python 字典後寫的會蓋掉先寫的,`lumos loop list --help` 曾印成 guard list 的說明。
+    2026-10-11 世界解重新註解核對抓到;重名的子指令一律用「上層 子指令」當鍵。"""
+    import ast as _ast, collections as _c
+    tree = _ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
+    dup = {}
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.Assign) and any(getattr(t, "id", "") == "HELP_WHEN" for t in n.targets):
+            keys = [k.value for k in n.value.keys if isinstance(k, _ast.Constant)]
+            dup = {k: v for k, v in _c.Counter(keys).items() if v > 1}
+    check("說明表沒有重複鍵", dup == {}, str(dup))
+    r = subprocess.run([sys.executable, GRAPHCTL, "loop", "list", "--help"], capture_output=True, text=True)
+    check("loop list 的說明講審查編號,不是合約綁測試", "審查編號" in r.stdout and "合約綁測試" not in r.stdout, r.stdout[:300])
+
+
 def t_about_code_to_rater_format():
     """★about_code 預標 → refresh_labels merge 吃的格式★(工具清單 #8)。
 
@@ -54800,6 +54860,40 @@ def t_lint_waive():
     m._lint_waivers_add(root, "def456", "R2", "b.py", "第二筆", "tester")
     cur2, _ = m._lint_waivers_load(root)
     check("S7 兩筆放行都留著", set(cur2) == {"abc123", "def456"}, str(sorted(cur2)))
+
+
+def t_lint_waive_cli_records_rule_and_file():
+    """[S7] 放行帳要記得是哪條規則、哪支檔——走真正的命令列入口。
+    2026-10-11 世界解重新註解核對:命令列一律寫空字串,本 repo 283 筆全空,按規則統計放行無從算起;
+    原本的測試只呼叫內部函式,所以沒抓到。"""
+    import json as _json
+    import shlex as _shlex
+    m = _lng_module()
+    root, _git = _lng_repo()
+
+    def _waive(*a):
+        return subprocess.run([sys.executable, GRAPHCTL, "lint-waive", *a, "--repo", str(root)],
+                              capture_output=True, text=True, cwd=str(root))
+
+    r = _waive("k1", "--note", "誤報", "--rule", "B101", "--file", "src/a.py")
+    cur = _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]
+    got = {w["key"]: w for w in cur}
+    check("S7 命令列帶規則與檔名就照實記下",
+          r.returncode == 0 and got.get("k1", {}).get("rule") == "B101" and got.get("k1", {}).get("file") == "src/a.py",
+          r.stdout + r.stderr + str(cur))
+    r2 = _waive("k2", "--note", "誤報")
+    cur2 = {w["key"]: w for w in _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]}
+    check("S7 沒帶規則照樣放行,但要提醒統計不到", r2.returncode == 0 and "k2" in cur2 and "規則" in r2.stderr,
+          r2.stdout + r2.stderr)
+    # 閘門印給人照抄的那行:規則或檔名帶空白、引號也要能直接貼上執行
+    c = {"key": "k3", "rule": "no 'quote'", "file": "src/my file.py"}
+    line = m._lint_waive_cmd(c)
+    argv = _shlex.split(line)
+    check("S7 擋下訊息的放行指令可照抄",
+          argv[:3] == ["lumos", "lint-waive", "k3"] and argv[argv.index("--rule") + 1] == "no 'quote'"
+          and argv[argv.index("--file") + 1] == "src/my file.py" and "--note" in argv, line)
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    check("S7 閘門擋下時逐條印出可照抄的放行指令", "_lint_waive_cmd(_c)" in src, "")
 
 
 def t_lint_new_gate():

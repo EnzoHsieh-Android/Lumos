@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-10-07
+updated: 2026-10-12
 self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -46,7 +46,7 @@ summary: |-
   KEY:[2026-08-05]missed 席 findings 改★機械 repro triage★(取代直接丟)——canary 硬閘不動(該席判決仍作廢),但 findings 逐條試真碼/真跑證實;證實走通道 a 折入(note 記「機械證實非席信用」)、repro 不出才丟。實證=T8 r1 missed 席兩條真 major 靠 repro 撈回,原「撈」是編排者裁量現為硬步驟(結構性誤殺的機制化補丁;與 design-loop d4 分流不變:代碼有真 oracle 故走 repro 不走「不作廢」)
   KEY:[2026-08-05]席報告留痕慣例+收貨 quote-check(advisory)——報告落 governance/review-reports/<loop-id>/(原躺 scratchpad 蒸發,帳上 note 指空;T8 實錄);record 帶 --report/--snapshot 讓 sha 落帳(不帶 findings_set 不觸 T6 定錨);逐席 quote-check 對工作副本驗引句(§3 錨定紀律的機械收貨端;不進 gate,panel 判準一字不動)
   KEY:[2026-08-04]pass/skip 留痕的簿記白名單豁免([[Issues/code-loop-pass自失效追尾]])——留痕 sha 之後的 commit 只動簿記檔(治理帳/usage-log/anchor-baseline/code-loop 留痕)且留痕 sha 為目標祖先 → 留痕仍有效;其他檔一動照樣失效、改寫史拒認。「HEAD 移動→作廢」原意=pass 不得蓋到新代碼,此為精化非放寬(原嚴格等值下 pass 自己 append 的治理帳行被 commit 即自失效→追尾) [test:t_codeloop_pass_survives_bookkeeping_commits]
-  KEY:[2026-07-18]codestage S1/S5 落地(設計[[Projects/code階段強化_計劃]],4輪審計30條折入+實質收斂人裁)——S1 真跑優先(綁約合約 pass 前必真跑綁定測試,解析三順位不得靜默跳過;紀律層)+確定性驗證器三通道參與(不佔canary席;M2帳下capture advisory裁決歸機械證實通道)/S5 辯方預設Codex+tier-high雙Codex角色(帶餌finder佔W+無餌否決席外掛,落閘=M2記disputed-major)+家族否決保護+fail分級(high外家缺席不得收斂攤人)
+  KEY:[2026-07-18]codestage S1/S5 落地(設計[[Projects/code階段強化_計劃]],4輪審計30條折入+實質收斂人裁)——S1 真跑優先(綁約合約 pass 前必真跑綁定測試,解析三順位不得靜默跳過;紀律層)+確定性驗證器三通道參與(不佔canary席;M2帳下capture advisory裁決歸機械證實通道)/S5 辯方預設Codex+tier-high雙Codex角色(帶餌finder佔W+無餌否決席外掛,落閘=M2記disputed-major)+家族否決保護+fail分級(high外家缺席不得收斂攤人)(更正 2026-10-12：辯方預設 Codex 與 high 雙外家席已在 2026-09-30 改成辯方預設同門、外家席條件派,見 [[Systems/design-loop]] d11)
   KEY:[2026-07-10]panel 追加 spec-conformance slot(tier=high 且有收斂 spec→對答案審查員,四類:已實作/縮水/多做/未實作;templates §7.5)
   FLOW:pitfalls spec 模式(剝除對齊 assess_spec+防呆→掃 PITFALL_CLASSES 四類→印通用 4 問(3 固定+1 風險類反問,2026-08-08 追加;★原記 3(2026-08-21 程式碼實證)★)+命中類追問)｜--check(命中類且無「## 實務隱患」節→rc1)｜--diff(掃新增行 Check H 骨架+代碼形態 pattern→manifest(★(2026-08-21 程式碼實證)欄位依來源而異:內建 regex 類={file,line,class,pattern,question};lint 來源={file,line,source,rule,message}★)+stack_questions(命中 kt/cs/vue/sql 附該棧效能問,源=[[效能檢核目錄]])+尾行 tier;line 由 @@ 推導;rc 恆0)→ 尾行 tier 分流:trivial 跳(commit 註明)/standard 走單 reviewer 終審/high 觸發 lumos-code-loop 終審對抗審(bug canary 四型+辯方+K-streak∧G2 收斂,loop status --gate 無 --spec G1 skip);★2026-09-09 起另一條不看 tier 的分支:stack_questions_applicable(增刪行觸發到的棧題)有題 → 推送前每題表態(code-loop dispositions),check 擋;見[[Systems/棧別提問表態閘]]★
   KEY:兩層隱患兩錨點——設計決策級(冪等鍵/重試策略)錨 spec 層 pitfalls --check;代碼級(N+1/race/資源洩漏)錨終審 --diff+code-loop。補審計火力頭重腳輕(spec 有整套對抗機器、代碼原只兩道普通眼)

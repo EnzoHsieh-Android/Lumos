@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-09
-updated: 2026-08-14
+updated: 2026-10-12
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/acace41cfceb
 verified_by:
@@ -21,7 +21,7 @@ tags:
   - scope/agent-dag
 summary: |-
   FLOW:code-loop 一輪 panel → 各 finder 產 finding-key(LLM reviewer 手動 --finder｜pitfalls --diff SARIF linter/regex 自動 --from-pitfalls｜測試失敗/mutation 存活)→ `lumos loop capture-counts` 跨 finder 正規化+數重疊 → capture_counts → `canary record --capture-counts` → `loop status --gate --panel` 印殘餘 advisory 觀測★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;canary-stats 重疊分布段同源消費
-  KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)
+  KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)(更正 2026-10-12：2511.16708 的四個代理都是不用 LLM 的靜態分析模組,沒有比較純 LLM 組和混合組;它自己的消融是四個全上 72.4%,輸給最佳兩個的 79.3%,也輸給最強單一模組的 75.9%;「條件獨立」這個前提作者沒驗。這篇撐不起「最佳解是異質組合」)
   KEY:異質 = 買真獨立票——確定性驗證器(SARIF linter/測試/type/mutation)錯誤剖面與 LLM 正交,直擊「9 judge 2 票」相關性天花板(純 LLM panel 即使多樣仍相關);重疊(同洞多 finder 中)= 更強收斂信號
   KEY:capture_counts 語意=各 distinct finding-key「被幾個 finder 找到」的次數列表;跨 finder 正規化(casefold+strip)、finder 內去重;降序回傳決定性。餵 _estimate_remaining_defects(Chao1)算殘餘
   KEY:--from-pitfalls <range> 按 `source` 分組——每個 linter driver / pitfalls 內建各一個確定性 finder(免手貼);共用 _pitfall_diff_collect(純計算不印,與 _pitfall_diff_mode 印分離);capture-counts 是 vault-free 純機械原語
@@ -60,7 +60,7 @@ code-loop 三輪壓縮 panel 的**異質 finder ensemble** 接線——把「程
 ## 為什麼 code review 要和 spec review 不一樣
 design-loop 審 spec(散文),只有 LLM 審計員這一種 finder;完整性理論上不可判定(散文無限可細化)。code-loop 審 diff(程式碼),多了**確定性驗證器**:SARIF linter、測試、type checker、mutation。這些的錯誤剖面**與 LLM 正交**——LLM 漏的 off-by-one,linter 的 rule 可能剛好抓;linter 抓不到的業務語意錯,LLM 抓。
 
-純 LLM panel 就算派多樣 reviewer,錯誤仍相關(同模型家族、同盲點)——這是「9 judge 2 票」天花板。摻確定性工具才買到**真獨立票**。文獻用 submodularity 數學證明異質分析器各加獨立資訊([Multi-Agent Code Verification via Info Theory](https://arxiv.org/html/2511.16708);[AutoSafeCoder](https://arxiv.org/pdf/2409.10737) = Coding + Static-Analyzer + Fuzzing 三種不同 agent;Greptile TREX / CodeRabbit sandbox 則證「先跑再信」的可執行反證)。
+純 LLM panel 就算派多樣 reviewer,錯誤仍相關(同模型家族、同盲點)——這是「9 judge 2 票」天花板。摻確定性工具才買到**真獨立票**。文獻用 submodularity 數學證明異質分析器各加獨立資訊([Multi-Agent Code Verification via Info Theory](https://arxiv.org/html/2511.16708);[AutoSafeCoder](https://arxiv.org/pdf/2409.10737) = Coding + Static-Analyzer + Fuzzing 三種不同 agent;Greptile TREX / CodeRabbit sandbox 則證「先跑再信」的可執行反證)。(更正 2026-10-12:那個數學證明要先假設各代理條件獨立,作者自承沒驗;論文的代理都是靜態分析模組、沒有 LLM,而且四個全上反而輸給最佳兩個。「摻確定性工具才買到真獨立票」是本篇的推論,不是這篇論文的結論)
 
 ## 機械件
 - **`_capture_counts_from_finders(finders)`**:跨 finder 正規化(casefold+strip)、finder 內去重、數每個 distinct key 被幾個 finder 找到、降序回傳。純函式。
@@ -78,3 +78,6 @@ design-loop 審 spec(散文),只有 LLM 審計員這一種 finder;完整性理�
 - 機械化只買「重疊算術正確」,不買「finding 本身正確」——finding 真偽仍靠 reviewer + 辯方可執行反證。
 - capture-recapture 小樣本會出極端值,當一個收斂信號、非 oracle。
 - 端到端無人跑(自動派 reviewer + linter + 判收斂)屬自主 orchestrator,暫停中(2026-07-07);目前是**手動路徑一鍵化**。
+
+## 引用更正(2026-10-12)
+- 決策 d1 的選擇理由寫「文獻(submodularity)證異質分析器各加獨立資訊;確定性工具與 LLM 錯誤剖面正交=真獨立票」,這句引用有誤。所引論文(arXiv 2511.16708,Multi-Agent Code Verification via Information Theory)的四個代理都是不用 LLM 的靜態分析模組,沒有比較純 LLM 組和混合組;它自己的消融只有 29 筆,四個全上 72.4%,輸給最佳兩個的 79.3%,也輸給最強單一模組的 75.9%;數學證明要先假設各代理條件獨立,作者自承沒驗。所以它不能當「各加獨立資訊」或「與 LLM 正交」的證據,「與 LLM 正交」是本篇自己的推論、沒量過。同一句後半「lumos 已有 SARIF linter、測試閘、mutation,大半是接線既有件」的理由不受影響。依據:論文表 5 與第 3 節定理前提(arxiv.org/abs/2511.16708 v3);AutoSafeCoder 是另一篇,arXiv 2409.10737。決策本身已推上,不改原文,在這裡更正。

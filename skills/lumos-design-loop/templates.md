@@ -68,7 +68,7 @@ inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材�
 > **light 檔用法(單席通才,M0 2026-07-21;M1包 機械化)**:light 路徑用本 §1 模板派**單一**審計員——{輪次語境}省略、審查鏡頭改「**無鏡頭通才**:全份逐節挑洞」。收斂=`loop status <id> --light --gate --spec ..`(**K=1 機械謂詞,不再人裁**;FAIL 分因 retryable/ratchet)見 SKILL〈light 檔〉。
 > **記帳模板預設帶雙 hash(M1包)**:`canary record ... --spec <計劃節點.md> --reviewed <派工時 sha256sum 快照> [--tier <t>]`——帶 --spec 問 gate 即聲明要驗,偷懶要主動刪旗標;下一動作/輪數/型別問 `lumos loop next`(settle loop 例外:認不得 settle,直接問 gate)。
 
-## 2. Design-loop 辯方（**預設 Codex** `codex exec --sandbox read-only`，不可用退 opus 並於留痕註記偏離——判決單點最怕同門盲點，2026-07-18 S5；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
+## 2. Design-loop 辯方（**2026-09-30 起預設同門**：另開 opus 對話；要另一家視角時才派 Codex `codex exec --sandbox read-only`——取代 2026-07-18 S5 的「預設 Codex」；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
 
 ```
 LUMOS-SEAT: {loop}/{rN}/{席名}
@@ -233,7 +233,7 @@ LUMOS-ROLE-CARDS: on
 
 收貨沿用既有格式與證據閘，歸因文字不改 severity、finding-kind 或處置欄位。編排者在 intake 對每條歸因留兩版證據與未判定原因；`--regression-set` 只列已支持由上一輪修補造成的 finding ID。只有本輪已報 findings 全數完成歸因，且沒有 finding 有證據屬修復回歸時才填 `none`；`none` 不表示未發現區域沒有回歸；存在未判定時保留其 ID 與原因、可不填此選填欄，不能把缺欄統計成零。三問中的未判定行為另外保留在intake，不因finding歸因填了none就抹掉。誤報仍由原有重現與辯方流程判讀，沒有兩版證據不等於誤報。流程文件與測試的修補也可審，但不可硬套產品執行結果作因果證明。
 
-## 4. Code-loop 辯方（**預設 Codex**，不可用退 opus 註記；2026-07-18 S5）
+## 4. Code-loop 辯方（**2026-09-30 起預設同門**，要另一家視角時才派 Codex；取代 2026-07-18 S5）
 
 同模板 2（含路由制：低共識才開庭），把「設計 spec 的審計 finding」換成「代碼分支的審計 finding」、
 查證工具加 `git log/git show`（commit 考古常是決定性反證：發版狀態、先例、時序）。

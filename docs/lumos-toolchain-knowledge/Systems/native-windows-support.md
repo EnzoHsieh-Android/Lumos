@@ -38,6 +38,12 @@ decisions:
     why_chosen: shebang #!/usr/bin/env python3 Windows 不認;只 resolve 直譯器不夠,還要 resolve home 且正斜線化(Git Bash 才認);按 hook 檔名去重才能升級時取代舊 entry、不雙觸發
     decided: 2026-06-26
     valid: true
+  - content: 原生 Windows 不再投入:不修、不測、不擴充;已知風險(可信 lumos 權限判斷在 Windows 可能全判不合格,使改檔前推播等掛鉤靜默跳過)記在 Projects/世界解重新註解2026-10_平台分發_調研,有人實際在 Windows 上用時再重開
+    id: d4
+    context: "2026-10-11 世界解重新註解讀碼發現 Windows 權限判斷可能讓掛鉤靜默失效,需實機確認;10-05 已裁先不管 Windows"
+    why_chosen: Enzo 2026-10-11 裁定不做;目前沒有 Windows 使用者,實機驗證與修補的成本換不到效益
+    decided: 2026-10-11
+    valid: true
 aliases:
   - 原生 Windows 支援
 ---

@@ -358,7 +358,7 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
 
 ### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)
 程式碼有散文沒有的東西——**可執行 + 可靜態分析**。文獻(見 [[loop三輪壓縮_計劃]] 的 code-loop 差異節)證 code review 最佳解是**異質 ensemble**,非「多個多樣 LLM」:
-1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊)。**確定性驗證器的參與方式=三通道,不佔 canary 席、不進「輪有效」判定**(它們跑真碼樹,看不到文字 diff 副本裡的誘餌,記席必然 missed;canary 票只驗 LLM 席注意力;2026-07-18 codestage 收斂裁定):
+1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder arxiv 2409.10737;Multi-Agent Code Verification via Information Theory arxiv 2511.16708 只當旁證——它的四個代理是無 LLM 的靜態分析模組,四個全上 72.4% 輸給最佳兩個的 79.3%,不證「異質各加獨立資訊」)。**確定性驗證器的參與方式=三通道,不佔 canary 席、不進「輪有效」判定**(它們跑真碼樹,看不到文字 diff 副本裡的誘餌,記席必然 missed;canary 票只驗 LLM 席注意力;2026-07-18 codestage 收斂裁定):
    - (a) 其 findings 憑執行證據依辯方路由「機械證實」直接折入;
    - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異(2026-08-14 起已無):兩套帳的 capture-recapture 均 **advisory 不進合取**(無-cluster 帳 2026-08-14 降級對齊 cluster 帳);裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
    - (c) 需跑真碼的(測試套件/type checker)沿 mutation 冒煙的**隔離 worktree** 模式。
@@ -372,7 +372,7 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
 
 ## 參考(需要才讀)
 
-**出處**:抑噪兩句 borrow PR-Agent;mutation 算子 borrow Offutt E-selective / PItest / Kurtz FSE2016;Survived/NoCoverage borrow Stryker;異質 ensemble borrow AutoSafeCoder(arxiv 2511.16708)、Greptile TREX / CodeRabbit。派工模板見 `../lumos-design-loop/templates.md` §3-4/§7.5。設計全文 `docs/design/2026-07-04-pitfalls-code-loop.md`。
+**出處**:抑噪兩句 borrow PR-Agent;mutation 算子 borrow Offutt E-selective / PItest / Kurtz FSE2016;Survived/NoCoverage borrow Stryker;異質 ensemble borrow AutoSafeCoder(arxiv 2409.10737)、Greptile TREX / CodeRabbit(2511.16708 只當旁證,見上方第 1 條)。派工模板見 `../lumos-design-loop/templates.md` §3-4/§7.5。設計全文 `docs/design/2026-07-04-pitfalls-code-loop.md`。
 
 **code-loop ≠ design-loop 換名字**(2026-07-09 文獻;設計見 `[[loop三輪壓縮_計劃]]`):代碼可執行+可靜態分析,最佳解是**異質 ensemble** 非「多個多樣 LLM」——
 - 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 reviewer 席、不進輪有效**(2026-07-18 codestage;原因原為「跑真碼樹看不到餌」——植入雖停用,不佔席照舊:它們的產出走機械通道,不是席報告);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交,才買到真獨立訊號、破「9 judge 2 票」。
@@ -444,7 +444,7 @@ caught = reviewer 清楚且正確點出那個植入 bug 的「性質」(如「�
 剝「審計員誤判」要克制:只有能指出該 finding 客觀錯在哪(被真 diff 的 file:line 反證)才剝;判不準就保留(寧可高估),剝除理由記入審計紀錄。
 
 **③ 辯方 refute(對 ② 標為 ≥major 的每條 finding)**
-派 1 個獨立 Codex 辯方(`codex exec --sandbox read-only`,乾淨脈絡、不傳 reviewer 報告結論;2026-07-18 S5,不可用退 opus 註記偏離。詳見下方「辯方(對每條 ≥major)」),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
+派 1 個獨立辯方(2026-09-30 起預設同門:另開 opus 對話,乾淨脈絡、不傳 reviewer 報告結論;要另一家視角時才派 Codex `codex exec --sandbox read-only`。詳見下方「辯方(對每條 ≥major)」),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
 - **辯方工具加 `git log`/`git show`**——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4(2026-07-07 Landmark 實戰)。
 - **辯方順產 fix(實戰調參)**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)——別浪費辯方查證時看到的低垂果實。
 

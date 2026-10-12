@@ -345,7 +345,7 @@ print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
 import sys, os; sys.path.insert(0,'$REPO/governance')  # \$REPO(工具鏈本體)刻意非 \$repo:line_notify 模組只存在於本體
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('labeling-refresh', os.environ['MSG']), t) if t else 'no-token')" || true
         else
           log "⚠ 考卷($tag)未標率超線但 delta 表產製失敗(rc=$delta_rc),不通報假成功;詳 $LOGDIR/exam-$tag-$TODAY.log"
         fi
@@ -395,7 +395,7 @@ run_probe(){
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('scenario-probe', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('scenario-probe', os.environ['MSG']), t) if t else 'no-token')" || true
   fi
 }
 
@@ -413,7 +413,7 @@ run_nags(){ local repo="$1" tag="$2"
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('gov-nags', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('gov-nags', os.environ['MSG']), t) if t else 'no-token')" || true
   fi
 }
 
@@ -442,7 +442,7 @@ run_replay(){
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('regime-replay', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('regime-replay', os.environ['MSG']), t) if t else 'no-token')" || true
   fi
 }
 
@@ -513,7 +513,7 @@ if [ -z "$GAP_JSON" ]; then
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('autonomous-loop', os.environ['MSG']), t) if t else 'no-token')" || true
   else
     log "無可展開 gap(backlog 空或 N=1 閘),結束"
   fi
@@ -532,7 +532,7 @@ if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('anchor-integrity', os.environ['MSG'], None), t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('anchor-integrity', os.environ['MSG']), t) if t else 'no-token')" || true
   exit 1
 fi
 
@@ -681,7 +681,7 @@ if [ "$CONVERGED" != "True" ]; then
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('$TOPIC', os.environ['MSG']),t) if t else 'no-token')" || true
   # 副作用 A:未收斂 gap 回 backlog 降分 + 累計 unconverged;達 3 次 → covered(放棄自動、留人),不立即消失
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
@@ -704,7 +704,7 @@ if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('$TOPIC', os.environ['MSG']),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import gap_select
@@ -734,7 +734,7 @@ if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TO
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('$TOPIC', os.environ['MSG']),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import gap_select
@@ -752,7 +752,7 @@ if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t=os.environ.get('LINE_TOKEN','')
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_report('$TOPIC', os.environ['MSG']),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import gap_select
