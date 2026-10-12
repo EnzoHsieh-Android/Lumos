@@ -14,11 +14,11 @@ related:
   - "[[Systems/design-loop]]"
 summary: |-
   KEY:code 階段三腿補強(呼應 design-loop d4 定位裁定:正確性歸下游,下游要配得上)——正確性/品質兩腿尚可,性能腿近空(pitfalls 只有 regex 提示,從未真量);2026 業界共識=審查從「用讀的」轉「用跑的」(agentic testing/execution-based verification)
-  KEY:[S1]真跑優先(紀律層規則,r1 折入後誠實降級)——(a)diff 經 `lumos impact --diff` 命中綁 [test:] 的星標合約節點時,放行前**只跑該綁定測試**(非全套)且須綠;此為紀律層規則非機械閘(家規同款);[test:]名→指令解析紀律=圖譜記載→棧慣例組指令→歧義退檔/模組/全套並留痕,不得靜默跳過;機械化=動 gate code 記 v2 另立計劃 (b)確定性驗證器(真跑測試/type checker/mutation)**不佔 canary 席不進輪有效**;參與方式=findings 依機械證實路由折入+以異質 finder 進 capture-recapture 帳(既有 `loop capture-counts` 原語);跑真碼樹沿 mutation 隔離 worktree 模式
+  KEY:[S1]真跑優先(紀律層規則,r1 折入後誠實降級)——(a)diff 經 `lumos impact --diff` 命中綁 `[test:]` 的星標合約節點時,放行前**只跑該綁定測試**(非全套)且須綠;此為紀律層規則非機械閘(家規同款);`[test:]`名→指令解析紀律=圖譜記載→棧慣例組指令→歧義退檔/模組/全套並留痕,不得靜默跳過;機械化=動 gate code 記 v2 另立計劃 (b)確定性驗證器(真跑測試/type checker/mutation)**不佔 canary 席不進輪有效**;參與方式=findings 依機械證實路由折入+以異質 finder 進 capture-recapture 帳(既有 `loop capture-counts` 原語);跑真碼樹沿 mutation 隔離 worktree 模式
   KEY:[S2]查詢數斷言(消費端樣式)——「操作 X 最多 N 條查詢」寫成整合測試斷言,N+1 即紅;**落點=LandmarkMember 自己的圖譜節點**(框架特定歸專案圖譜,csharp-idioms 明文不裁框架、不落 Dapper 代碼;r1 blocker 折入),框架無關原則於落地時記入 pitfalls-code-loop summary(不進 linter精選目錄,r4 折入)
   KEY:[S3]性質測試席(選配,r1/r2 修)——開席=兩機械錨(tier=high ∧ impact 命中星標合約節點)+人工核純函式+具推導源(docstring/型別/圖譜合約;缺源不開席防自證 oracle),預設關+開席理由留痕;產出:反例可重現性免爭,**性質合法性必過辯方**(辯方專問「這條性質真是該函式的業務合約嗎」,對文件/圖譜合約/呼叫端查證;高分=進辯方資格非免審,低分丟);金流級另掛 signoff 既有慣例
   KEY:[S4]持續基準測試=不做(non-goal)——拒收理由立足工程成本(穩定硬體壓噪音);誠實缺口:CPU-bound/記憶體退化在 code 階段零覆蓋,S2 只接查詢數這一種訊號(第一根拐杖非補齊);線上分桶告警=消費端建議待辦**非既存安全網**(r1 折入:原文誤植為已存在)
-  KEY:[S5]跨家族比重提升(使用者指示,r2 大修)——①辯方預設 Codex(兩 loop,成本中性替換=d4 合規)②雙 Codex 角色**僅 code-loop tier=high**(帶餌 finder 佔 W+無餌否決席外掛不佔 W;否決席 findings 同池進辯方/存活 max/重疊帳,防紙上角色);design-loop 一席不加(d4 前置加重一律拒)③≥3-run 至少 1 run Codex+家族否決保護(外家 blocker 不得僅被同門多數推翻,須執行反證或第二外家)④fail 分級(r3 嚴格版):standard fail-open/high fail-closed=外家軸缺席一律不得收斂攤人裁(人可明示豁免留痕),不分金流⑤真加軸=第三家族輪替,記方向
+  KEY:[S5]跨家族比重提升(使用者指示,r2 大修;更正 2026-10-13:①③的「預設 Codex」已由 [[Systems/design-loop]] d11、d13 取代,外家在辯方、找問題席、多數決都改成條件派)——①辯方預設 Codex(兩 loop,成本中性替換=d4 合規)②雙 Codex 角色**僅 code-loop tier=high**(帶餌 finder 佔 W+無餌否決席外掛不佔 W;否決席 findings 同池進辯方/存活 max/重疊帳,防紙上角色);design-loop 一席不加(d4 前置加重一律拒)③≥3-run 至少 1 run Codex+家族否決保護(外家 blocker 不得僅被同門多數推翻,須執行反證或第二外家)④fail 分級(r3 嚴格版):standard fail-open/high fail-closed=外家軸缺席一律不得收斂攤人裁(人可明示豁免留痕),不分金流⑤真加軸=第三家族輪替,記方向
   KEY:範圍刀——S1 改兩份 skill 文字(紀律層);S2 樣式歸消費端圖譜;S3/S5 是編排規格;零新 lumos 原語;全部加在 code/驗證階段,spec 階段零加重(d4 合規)
   DEP:[[Systems/pitfalls-code-loop]]
   DECISION:[2026-07-18]S4 拒收記理由防重提;S3 觸發改開席四要件(兩機械錨+一人工核+推導源查核,r1-r3 逐輪收窄);S3 免辯方路由撤除(r1 三方共指:自評分=自報級信號不得做免辯方級動作)

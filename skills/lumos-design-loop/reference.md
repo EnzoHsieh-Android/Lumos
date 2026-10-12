@@ -201,7 +201,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 
 ★誠實限定★：同 judge 同輸入跨 run α 最好僅 **0.563**（低於 0.8 可靠線）——多數決**只壓 stochastic 變異，不壓 correlated 系統性盲點**；後者靠異家族 panel，兩者不互替。
 
-跨家族 slot：≥3 run 中**至少 1 run 用 Codex CLI**（qwen 次選）；皆不可用才退異型號同門，並於 note 註記偏離。
+跨家族 slot：**預設不派**（2026-10-13 使用者裁：Codex 預設不加入外家、省成本，[[Systems/design-loop]] d13）——≥3 run 預設全用同門；要另一家視角時才讓其中 1 run 用 Codex CLI（qwen 次選）。沒派外家時在 note 註明「單家族多數決：只壓隨機變異、不壓同門共同盲點」。
 
 **B4 · 家族否決保護（2026-07-18）。** 任一家族 run 提出 blocker，**不得僅以他家族的同門多數推翻**——降級須具備可執行反證（真跑）或第二外家族確認；拿不出則 blocker 維持。
 
@@ -517,7 +517,7 @@ golden 語料是 **auditor 校準的時間資產**：累到 10+ 份即可做 rep
    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
    - 三道之外(非取代):編排者對「佐證通道」與錨不到引句做**機械重現**,留痕 `rN-intake.md`(命令+輸出+HIT/MISS;判準與 MISS 處置見 templates.md〈編排者判讀規則〉——此步是人工判讀+機械留痕,不是全機械)。
 5. **判讀**:★**席位給的「觀察」和「判準」要分開驗**★(2026-09-07 code-loop 實際踩到,設計審同理):席位常常「量到的現象對、但該怎麼算才算過講錯」。照錯的判準硬改,會做出更複雜而且沒解決真問題的東西。先自己重現它量到的現象(那通常對),再自己想一遍「什麼條件才算過」,不要把它的判準當結論。
-   severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。**兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
+   severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。**兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★2026-09-30 起預設同門(另開 opus 對話);要另一家視角時才派 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
 6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。若這輪是「被圖譜舊裁定擋下/縮案/停案」,裁定文字裡寫 `★圖譜攔截★站:開案前|首輪|第N輪;源:<節點名>`(飛輪攔截帳,週報 grep 用)。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。審計修正紀錄寫法(2026-08-25 d4 瘦身,新案適用、舊案不回溯):每輪固定兩行——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;兩行裡的 blocking 數帳上無對應欄位(canary-log 只有席級 severity),來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。`git commit`(本機提交;推之前跟實作壓成同一個功能提交,說明照紀律區塊〈提交與推送〉——2026-09-10 [[Projects/提交推送規範_計劃]])。
 7. **記帳**(折完才記,指紋要是折入後的版本。★carrier 選席 SOP:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)★★記帳型態(2026-08-25 d5):散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記(實撞過);「每席各帶一筆 severity 帳」的 panel 型態僅舊迴圈帳面重放存在,新迴圈一律處置帳★):
    ```
