@@ -172,6 +172,17 @@ def _cli_version(runner):
     return (r.stdout or r.stderr).strip()
 
 
+def job_order(scen, runs, seed, arms=("a", "b")):
+    """每個(題目, 第幾次)甲乙先後由種子決定;只跑子集時保留全集裡的相對順序。"""
+    jobs = []
+    for sc in scen:
+        for k in range(1, runs + 1):
+            pair = ["a", "b"]
+            random.Random(f"{seed}:{sc['id']}:{k}").shuffle(pair)
+            jobs += [(sc["id"], k, arm) for arm in pair if arm in arms]
+    return jobs
+
+
 def cmd_run(a):
     if not a.model:
         print("✗ --model 必須明寫(不讓本機設定決定受測模型)", file=sys.stderr)
@@ -180,13 +191,7 @@ def cmd_run(a):
     if a.runner == "codex":   # 推理強度等寫在本機設定檔,設定一改就不准混用
         cfg = Path.home() / ".codex" / "config.toml"
         meta["codex_config_sha256"] = _sha(cfg) if cfg.exists() else None
-    scen = _scenarios(a.scenarios)
-    jobs = []
-    for sc in scen:
-        for k in range(1, a.runs + 1):
-            pair = ["a", "b"]
-            random.Random(f"{a.order_seed}:{sc['id']}:{k}").shuffle(pair)
-            jobs += [(sc["id"], k, arm) for arm in pair]
+    jobs = job_order(_scenarios(a.scenarios), a.runs, a.order_seed, tuple(a.arms.split(",")))
     repo = {"a": a.arm_a, "b": a.arm_b}
     for sid, k, arm in jobs:
         out = _out_path(a.out_dir, a.runner, arm, sid, k)
@@ -497,6 +502,7 @@ def main(argv=None):
     r.add_argument("--model", default="", help="必填:受測模型 id")
     r.add_argument("--runs", type=int, default=3)
     r.add_argument("--order-seed", default="qo-2026-10")
+    r.add_argument("--arms", default="a,b", help="只跑其中幾組,逗號分隔(小實驗只重跑乙組時用)")
     r.add_argument("--timeout", type=int, default=600)
     r.add_argument("--wait-on-limit", type=int, default=1800)
     r.add_argument("--out-dir", required=True)

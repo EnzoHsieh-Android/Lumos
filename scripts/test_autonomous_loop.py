@@ -2518,6 +2518,13 @@ class TestQoAblation(unittest.TestCase):
         self.assertTrue(hit([("Bash", "cd app && gradle init --type kotlin-application")]))
         self.assertTrue(hit([("Bash", "mvn -q package")]))
 
+    def test_job_order_respects_arm_subset(self):
+        scen = [{"id": "qo-P1"}, {"id": "qo-P2"}]
+        both = self.qo.job_order(scen, 2, "seed", ("a", "b"))
+        only_b = self.qo.job_order(scen, 2, "seed", ("b",))
+        self.assertEqual(len(both), 8)
+        self.assertEqual(only_b, [j for j in both if j[2] == "b"])   # 子集與全集的先後一致
+
     def test_mask_covers_model_family_names(self):
         t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
         for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):
