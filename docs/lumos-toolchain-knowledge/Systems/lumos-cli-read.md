@@ -224,3 +224,7 @@ WHY:舊否決清單只收寫成結構的四種(WHY 行的不選、被翻案的�
 ## 指令說明表重名(2026-10-11)
 
 - PITFALL:`lumos loop list --help` 印出 guard list 的說明 [出處:Projects/世界解重新註解2026-10_九類之外_調研 核對] [根因:說明對照表有兩個叫 list 的鍵,Python 字典後寫的蓋掉先寫的] [修法:重名的子指令改用「上層 子指令」當鍵,查表本來就先查這種鍵] [test:t_help_when_no_duplicate_keys](補:光禿的 list 鍵其實也被第三個同名子指令 decision-refs list 拿去當說明,拆鍵時要替每個同名子指令各補一條,`t_every_subcommand_has_when` 會抓漏)
+
+## 防護狀態在附加工作樹裡不再誤報(2026-10-13)
+
+WHY:`lumos enforcement` 在附加工作樹裡認得「core.hooksPath 指向同一個 repo 另一個工作目錄的 scripts/hooks」:生效的那份在、可執行就算 active,說明寫出生效的是哪一份;本工作目錄的同名 hook 跟生效那份內容不同就列 degraded(推送時跑的不是這份),本工作目錄沒有同名 hook 照樣 active(推送本來就跑生效那份),讀不到本工作目錄那份列 degraded 並講讀不到;「另一個工作目錄」要是那個工作目錄的根(--show-toplevel),指向 repo 內子資料夾的 scripts/hooks 不算;git 呼叫走 _lens_git、每次 3 秒,同進場時的預算 [出處:2026-10-13 世界解重新註解待實機確認的一條,實機確認後修] [因:core.hooksPath 存在所有工作樹共用的設定裡,原本只認「指向自己」,每個附加工作樹都把每次推送都在跑的兩道 git 閘印成 inactive,真掉了也沒訊號] [不選:直接放寬 _hooks_path_is_ours——拆除(deinit/teardown)共用它,放寬會讓工作樹裡的拆除去動主工作目錄的設定] [test:t_hooks_path_sibling_worktree]

@@ -1,0 +1,169 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
+index 73f886ca..49359965 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-read.md
+@@ -220,11 +220,11 @@ WHY:舊否決清單只收寫成結構的四種(WHY 行的不選、被翻案的
+ - 有效決策只看前 120 字:全形引號裡的引述先用 `_drift_mask_quotes` 遮掉再切;用 `_NS_NEG_SEG_CUT_RE` 切子句,同一子句推翻/翻案寫在不做之前的不算(那是在推翻舊否決),別句的停案照算。
+ - `--json` 頂層是 `{"total", "results"}`,每條的來源欄叫 `node`、帶 .md,同 query、search;被翻案決策的 `context` 是推翻它的決策編號(區塊清單用逗號接),沒寫或空鍵是 null。
+ - 測試:`t_rejections_collects_sources`、`t_rejections_json_and_empty`、`t_rejections_retired_statuses_in_enum`。
+ 
+ ## 指令說明表重名(2026-10-11)
+ 
+ - PITFALL:`lumos loop list --help` 印出 guard list 的說明 [出處:Projects/世界解重新註解2026-10_九類之外_調研 核對] [根因:說明對照表有兩個叫 list 的鍵,Python 字典後寫的蓋掉先寫的] [修法:重名的子指令改用「上層 子指令」當鍵,查表本來就先查這種鍵] [test:t_help_when_no_duplicate_keys](補:光禿的 list 鍵其實也被第三個同名子指令 decision-refs list 拿去當說明,拆鍵時要替每個同名子指令各補一條,`t_every_subcommand_has_when` 會抓漏)
+ 
+ ## 防護狀態在附加工作樹裡不再誤報(2026-10-13)
+ 
+-WHY:`lumos enforcement` 在附加工作樹裡認得「core.hooksPath 指向同一個 repo 另一個工作目錄的 scripts/hooks」:生效的那份在、可執行就算 active,說明寫出生效的是哪一份;本工作目錄的同名 hook 跟生效那份內容不同就列 degraded(推送時跑的不是這份) [出處:2026-10-13 世界解重新註解待實機確認的一條,實機確認後修] [因:core.hooksPath 存在所有工作樹共用的設定裡,原本只認「指向自己」,每個附加工作樹都把每次推送都在跑的兩道 git 閘印成 inactive,真掉了也沒訊號] [不選:直接放寬 _hooks_path_is_ours——拆除(deinit/teardown)共用它,放寬會讓工作樹裡的拆除去動主工作目錄的設定] [test:t_hooks_path_sibling_worktree]
++WHY:`lumos enforcement` 在附加工作樹裡認得「core.hooksPath 指向同一個 repo 另一個工作目錄的 scripts/hooks」:生效的那份在、可執行就算 active,說明寫出生效的是哪一份;本工作目錄的同名 hook 跟生效那份內容不同就列 degraded(推送時跑的不是這份),本工作目錄沒有同名 hook 照樣 active(推送本來就跑生效那份);「另一個工作目錄」要是那個工作目錄的根(--show-toplevel),指向 repo 內子資料夾的 scripts/hooks 不算;git 呼叫走 _lens_git、每次 3 秒,同進場時的預算 [出處:2026-10-13 世界解重新註解待實機確認的一條,實機確認後修] [因:core.hooksPath 存在所有工作樹共用的設定裡,原本只認「指向自己」,每個附加工作樹都把每次推送都在跑的兩道 git 閘印成 inactive,真掉了也沒訊號] [不選:直接放寬 _hooks_path_is_ours——拆除(deinit/teardown)共用它,放寬會讓工作樹裡的拆除去動主工作目錄的設定] [test:t_hooks_path_sibling_worktree]
+diff --git a/scripts/lumos b/scripts/lumos
+index fcf53834..aeef1a65 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22034,51 +22034,45 @@ def _hooks_path_is_ours(root: Path, val: str) -> bool:
+     vp = _hooks_path_dir(root, val)
+     if vp is None:
+         return False
+     ours = root / "scripts" / "hooks"
+     try:
+         return vp.resolve() == ours.resolve()
+     except Exception:
+         return str(vp) == str(ours)
+ 
+ 
+-def _hooks_path_sibling_worktree(root, val):
+-    """core.hooksPath 指的是同一個 repo 另一個工作目錄的 scripts/hooks → 那個資料夾;不是 → None。
++def _hooks_path_sibling_worktree(root: Path, val: str) -> "Path | None":
++    """core.hooksPath 指的是同一個 repo 另一個工作目錄根下的 scripts/hooks → 那個資料夾;不是 → None。
+     core.hooksPath 存在所有工作樹共用的 .git/config,附加工作樹裡它指的是主工作目錄那份。
+-    「同一個 repo」用兩邊 git --git-common-dir 解出的絕對路徑相等判;只給 enforcement 用,
+-    _hooks_path_is_ours 維持只認自己(拆除時不准動別的工作目錄的設定)。"""
++    「同一個 repo」用兩邊 --git-common-dir 解出的絕對路徑相等判;「工作目錄根」用 --show-toplevel 等於
++    scripts 的上一層判(指向 repo 內某個子資料夾的 scripts/hooks 不算,跟「指向 repo 內別的資料夾不算自家」同一條)。
++    git 呼叫走 _lens_git、每次 3 秒(enforcement 每次開場都跑,同 _events_root 的預算)。
++    只給 enforcement 用,_hooks_path_is_ours 維持只認自己(拆除時不准動別的工作目錄的設定)。"""
+     vp = _hooks_path_dir(root, val)
+     if vp is None or vp.name != "hooks" or vp.parent.name != "scripts" or not vp.is_dir():
+         return None
+ 
+-    def _common(p):
+-        try:
+-            r = subprocess.run(["git", "-C", str(p), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+-                               capture_output=True, text=True, errors="replace", timeout=10)
+-        except Exception:
+-            return None
+-        return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
++    def _rev(p, *flags):
++        r = _lens_git(p, "rev-parse", "--path-format=absolute", *flags, timeout=3)
++        out = r.stdout.strip() if r is not None and r.returncode == 0 else ""
++        return Path(out).resolve() if out else None
+ 
+     other = vp.parent.parent
+-    mine, theirs = _common(root), _common(other)
++    mine, theirs = _rev(root, "--git-common-dir"), _rev(other, "--git-common-dir")
+     if mine is None or theirs is None or mine != theirs:
+         return None
++    if _rev(other, "--show-toplevel") != other.resolve():
++        return None
+     return vp
+ 
+ 
+-def _same_bytes(a, b):
+-    try:
+-        return Path(a).read_bytes() == Path(b).read_bytes()
+-    except OSError:
+-        return False
+-
+-
+ def _deinit_unbar_gate(root: Path) -> int:
+     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
+     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
+     (真正保險是 step 4 會刪掉 scripts/hooks/ 的 lumos hook 檔,缺 hook 檔 git 自會放行)。
+     守衛(std F8,teardown一鍵拆機_計劃):只在 core.hooksPath 指向本 repo scripts/hooks 時才 unset;
+     指向使用者自設(如 .githooks)則保留不動——別誤殺使用者的 git hooks(deinit/teardown 共用此安全)。"""
+     import subprocess
+     cur = subprocess.run(["git", "-C", str(root), "config", "--get", "core.hooksPath"],
+                          capture_output=True, text=True, errors="replace")
+     val = cur.stdout.strip()
+@@ -26003,34 +25997,35 @@ def enforcement_status(root=None, home=None):
+                 add("agents-md", "active", f"{aname} 版本戳 {av}" + ("(override 檔:同層 AGENTS.md 會被 Codex 忽略)" if aname.endswith("override.md") else ""))
+     except Exception as e:
+         add("agents-md", "unknown", str(e))
+ 
+     # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
+     try:
+         hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                             capture_output=True, text=True, errors="replace", timeout=10).stdout.strip()
+     except Exception:
+         hp = ""
++    import filecmp
+     sib = None if _hooks_path_is_ours(root, hp) else _hooks_path_sibling_worktree(root, hp)
+     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
+         try:
+             f = root / "scripts" / "hooks" / fn
+             if sib is not None:   # 附加工作樹:core.hooksPath 共用,生效的是主工作目錄那份
+                 eff = sib / fn
+                 ok = eff.is_file() and os.access(str(eff), os.X_OK)
+                 det = f"core.hooksPath={hp};生效的是同 repo 另一個工作目錄那份 {eff}" + ("" if eff.is_file() else "(缺)")
+                 ok, det = _enforcement_prepush_gated(root, hp, fn, ok, det)
+-                same = ok and f.is_file() and _same_bytes(f, eff)
+-                if ok and not same:
++                if ok and f.is_file() and not filecmp.cmp(f, eff, shallow=False):
+                     add(layer, "degraded", det + f";本工作目錄的 {fn} 跟它不同,推送時跑的不是這份")
+-                else:
+-                    add(layer, "active" if ok else "inactive", det)
++                else:   # 本工作目錄沒有這支也不算壞:推送時本來就跑生效那份
++                    add(layer, "active" if ok else "inactive",
++                        det + ("" if f.is_file() or not ok else f";本工作目錄沒有 {fn}"))
+                 continue
+             ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
+             ok, det = _enforcement_prepush_gated(root, hp, fn, ok, f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+             add(layer, "active" if ok else "inactive", det)
+         except Exception as e:
+             add(layer, "unknown", str(e))
+ 
+     # ⑥ python:跑 lumos 的這支,加上 Claude/Codex 設定裡註冊的直譯器(Projects/最低Python版本改3.14_計劃 [S10])
+     try:
+         _seen, _probs = _hook_python_problems(home)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 88932e34..463ecc12 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -46566,20 +46566,38 @@ def t_hooks_path_sibling_worktree():
+                   " active" in ln and "inactive" not in ln, ln)
+             check("★說明要講跑的是主工作目錄那份(%s)★" % layer, str(mh.resolve()) in ln or str(mh) in ln, ln)
+ 
+         # 工作樹裡改了 pre-push:推送時跑的不是這份 → degraded,不是 active 也不是 inactive
+         (wt / "scripts" / "hooks" / "pre-push").write_text("#!/bin/sh\necho changed\nexit 0\n", encoding="utf-8")
+         ln = _line("git-pre-push")
+         check("★工作樹的 hook 跟生效那份不同 → degraded★", "degraded" in ln, ln)
+         ln = _line("git-pre-commit")
+         check("★沒改的那支照樣 active★", " active" in ln and "inactive" not in ln, ln)
+ 
++        # 工作樹裡根本沒有這支 hook:推送時本來就跑生效那份,不准說成「內容不同」而判 degraded(代碼審 r1 通才席)
++        (wt / "scripts" / "hooks" / "pre-commit").unlink()
++        ln = _line("git-pre-commit")
++        check("★工作樹沒有同名 hook → 照樣 active,不是 degraded★", " active" in ln and "degraded" not in ln, ln)
++        check("★而且說明講的是沒有,不是不同★", "不同" not in ln, ln)
++
++        # 指向同 repo 裡某個子資料夾的 scripts/hooks:不是另一個工作目錄的根,不准當成工作樹那份(代碼審 r1 通才席)
++        sub = main / "sub" / "scripts" / "hooks"
++        sub.mkdir(parents=True)
++        for fn in ("pre-commit", "pre-push"):
++            f = sub / fn
++            f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
++            _os.chmod(f, 0o755)
++        _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(sub)], check=True, capture_output=True)
++        ln = _line("git-pre-push")
++        check("★指向 repo 內子資料夾的 scripts/hooks 不算另一個工作目錄★",
++              "inactive" in ln and "另一個工作目錄" not in ln, ln)
++
+         # 反向對照①:指向無關 repo 的 scripts/hooks → 不是自家
+         oh = _repo(base / "other")
+         _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(oh)], check=True, capture_output=True)
+         ln = _line("git-pre-commit")
+         check("★指向無關 repo 的 scripts/hooks 不准當自家★", "inactive" in ln, ln)
+ 
+         # 反向對照②:指回主工作目錄,但那份 pre-commit 不在 → inactive
+         _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(mh)], check=True, capture_output=True)
+         (mh / "pre-commit").unlink()
+         ln = _line("git-pre-commit")
