@@ -90,6 +90,8 @@ Enzo 同日帶來另一份查證，說 2.6.1 版沒有原生截圖比對，得�
 
     maestro --device <UDID> test -e UPDATE_BASELINE=true checkout_screen_visual.yaml
 
+**2.10.0 起要多搬一步**（2026-09-10 晚用 2.10.0 重驗）：`takeScreenshot` 不再寫在 flow 檔旁，改寫進該次執行的產物目錄（`<產物目錄>/<時間戳>/<flow>/takeScreenshot/<path>`）。所以上面那次更新拍完，要自己把圖搬到 `./baseline/` 再進 repo；`assertScreenshot` 找圖時先找該次產物目錄、再找 flow 相對路徑。diff 圖路徑與「檔頭 env 蓋掉 -e」兩件在 2.10.0 仍如本篇所記。實際的錄基準腳本已處理這一步，見 [[Projects/截圖基準驗收流程_計劃]]。
+
 之後每次改動跑同一支不帶旗標；失敗就看 diff 圖決定是回歸還是預期改版。跑之前把狀態列釘死：
 
     xcrun simctl status_bar <UDID> override --time 9:41 --batteryLevel 100 --batteryState charged
