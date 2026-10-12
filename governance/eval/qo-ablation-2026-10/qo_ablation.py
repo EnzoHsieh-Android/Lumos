@@ -279,7 +279,8 @@ def item_pairs(la, lb, mapping):
     for bid in sorted(mapping):
         for gid in sorted(la[bid]["items"]):
             x, y = la[bid]["items"][gid], lb[bid]["items"][gid]
-            xs.append(x); ys.append(y)
+            xs.append(x)
+            ys.append(y)
             if x != y:
                 dis.append({"blind_id": bid, "gold_id": gid, "labels": sorted([x, y])})
         if _scenario_of(mapping[bid]) in NOISE_SCENARIOS and abs(la[bid]["noise"] - lb[bid]["noise"]) > 1:
@@ -290,7 +291,8 @@ def item_pairs(la, lb, mapping):
 def cmd_agree(a):
     mapping, gt = _load_ctx(a)
     la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
-    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+    check_labels(la, mapping, gt)
+    check_labels(lb, mapping, gt)
     xs, ys, dis = item_pairs(la, lb, mapping)
     k = kappa(xs, ys)
     Path(a.dest).write_text(json.dumps({"n_runs": len(mapping), "n_items": len(xs), "kappa": k,
@@ -312,7 +314,8 @@ def cmd_adj_pack(a):
     rnd = random.Random(a.seed)
     out = []
     for d in agree["disagreements"]:
-        cands = list(d["labels"]); rnd.shuffle(cands)
+        cands = list(d["labels"])
+        rnd.shuffle(cands)
         topic = ("把 README 已寫的事當問題問人的主題數" if d["gold_id"] == "noise" else
                  next(g["topic"] for g in gt[_scenario_of(mapping[d["blind_id"]])] if g["gold_id"] == d["gold_id"]))
         out.append({"blind_id": d["blind_id"], "gold_id": d["gold_id"], "topic": topic, "candidates": cands,
@@ -361,7 +364,8 @@ def _read_adj(path):
 def cmd_merge(a):
     mapping, gt = _load_ctx(a)
     la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
-    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+    check_labels(la, mapping, gt)
+    check_labels(lb, mapping, gt)
     adj = _read_adj(a.adjudication)
     merged = merge(la, lb, adj)
     check_labels(merged, mapping, gt)
@@ -421,7 +425,8 @@ def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
     for sid in sids:
         xa, xb = per.get((sid, "a"), []), per.get((sid, "b"), [])
         if len(xa) == len(xb) == runs_per_cell:
-            diffs.append(sum(xb) / len(xb) - sum(xa) / len(xa)); complete.append(sid)
+            diffs.append(sum(xb) / len(xb) - sum(xa) / len(xa))
+            complete.append(sid)
     allv = [v for vs in per.values() for v in vs]
     s = {"kappa": kap, "truncated_any": truncated, "complete": len(complete), "complete_scenarios": complete,
          "all_zero": bool(allv) and all(v == 0 for v in allv), "diffs": diffs,
@@ -434,7 +439,8 @@ def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
 def cmd_final(a):
     mapping, gt = _load_ctx(a)
     la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
-    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+    check_labels(la, mapping, gt)
+    check_labels(lb, mapping, gt)
     merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
     check_labels(merged, mapping, gt)
     kap = kappa(*item_pairs(la, lb, mapping)[:2])   # 當場重算,不收外部給的 kappa(代碼審 r1 外家席)
@@ -461,30 +467,39 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("score")
-    s.add_argument("--out-dir", required=True); s.add_argument("--gold", default=str(HERE / "gold.json"))
+    s.add_argument("--out-dir", required=True)
+    s.add_argument("--gold", default=str(HERE / "gold.json"))
     s.add_argument("--dest", required=True)
     p = sub.add_parser("packets")
-    p.add_argument("--out-dir", required=True); p.add_argument("--seed", type=int, default=20261012)
-    p.add_argument("--batch", type=int, default=8); p.add_argument("--expect-runs", type=int, default=0)
-    p.add_argument("--dest", required=True); p.add_argument("--mapping", required=True)
+    p.add_argument("--out-dir", required=True)
+    p.add_argument("--seed", type=int, default=20261012)
+    p.add_argument("--batch", type=int, default=8)
+    p.add_argument("--expect-runs", type=int, default=0)
+    p.add_argument("--dest", required=True)
+    p.add_argument("--mapping", required=True)
     for name in ("agree", "merge", "final"):
         q = sub.add_parser(name)
         q.add_argument("--mapping", required=True)
         q.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
         q.add_argument("--dest", required=True)
         if name in ("agree", "merge"):
-            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
+            q.add_argument("--rater-a", required=True)
+            q.add_argument("--rater-b", required=True)
         if name == "merge":
             q.add_argument("--adjudication", default="")
         if name == "final":
             q.add_argument("--score", required=True)
-            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
+            q.add_argument("--rater-a", required=True)
+            q.add_argument("--rater-b", required=True)
             q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
             q.add_argument("--runs", type=int, default=3)
     j = sub.add_parser("adj-pack")
-    j.add_argument("--agree", required=True); j.add_argument("--packets", required=True)
-    j.add_argument("--mapping", required=True); j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
-    j.add_argument("--seed", type=int, default=20261013); j.add_argument("--dest", required=True)
+    j.add_argument("--agree", required=True)
+    j.add_argument("--packets", required=True)
+    j.add_argument("--mapping", required=True)
+    j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
+    j.add_argument("--seed", type=int, default=20261013)
+    j.add_argument("--dest", required=True)
     a = ap.parse_args(argv)
     return {"score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
             "merge": cmd_merge, "final": cmd_final}[a.cmd](a)
