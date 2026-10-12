@@ -22041,6 +22041,31 @@ def _hooks_path_is_ours(root: Path, val: str) -> bool:
         return str(vp) == str(ours)
 
 
+def _hooks_path_sibling_worktree(root: Path, val: str) -> "Path | None":
+    """core.hooksPath 指的是同一個 repo 另一個工作目錄根下的 scripts/hooks → 那個資料夾;不是 → None。
+    core.hooksPath 存在所有工作樹共用的 .git/config,附加工作樹裡它指的是主工作目錄那份。
+    「同一個 repo」用兩邊 --git-common-dir 解出的絕對路徑相等判;「工作目錄根」用 --show-toplevel 等於
+    scripts 的上一層判(指向 repo 內某個子資料夾的 scripts/hooks 不算,跟「指向 repo 內別的資料夾不算自家」同一條)。
+    git 呼叫走 _lens_git、每次 3 秒(enforcement 每次開場都跑,同 _events_root 的預算)。
+    只給 enforcement 用,_hooks_path_is_ours 維持只認自己(拆除時不准動別的工作目錄的設定)。"""
+    vp = _hooks_path_dir(root, val)
+    if vp is None or vp.name != "hooks" or vp.parent.name != "scripts" or not vp.is_dir():
+        return None
+
+    def _rev(p, *flags):
+        r = _lens_git(p, "rev-parse", "--path-format=absolute", *flags, timeout=3)
+        out = r.stdout.strip() if r is not None and r.returncode == 0 else ""
+        return Path(out).resolve() if out else None
+
+    other = vp.parent.parent
+    mine, theirs = _rev(root, "--git-common-dir"), _rev(other, "--git-common-dir")
+    if mine is None or theirs is None or mine != theirs:
+        return None
+    if _rev(other, "--show-toplevel") != other.resolve():
+        return None
+    return vp
+
+
 def _deinit_unbar_gate(root: Path) -> int:
     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
@@ -25809,6 +25834,7 @@ def enforcement_status(root=None, home=None):
     純唯讀、每層各自 try 包住(一層測不出來不拖垮整份;fail-open 本身要能被觀測)。
     status: active | inactive | degraded | unknown | registered-trust-unknown(只有 Codex hook 列會出:
     已註冊、檔在,但要人在互動 codex 審過才跑、本機讀不到——不進 summary 分母)。root=repo 根、home=~/(測試可注入)。"""
+    import filecmp
     import json as _json
     if root:
         root = Path(root)
@@ -25979,9 +26005,26 @@ def enforcement_status(root=None, home=None):
                             capture_output=True, text=True, errors="replace", timeout=10).stdout.strip()
     except Exception:
         hp = ""
+    sib = None if _hooks_path_is_ours(root, hp) else _hooks_path_sibling_worktree(root, hp)
     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
         try:
             f = root / "scripts" / "hooks" / fn
+            if sib is not None:   # 附加工作樹:core.hooksPath 共用,生效的是主工作目錄那份
+                eff = sib / fn
+                ok = eff.is_file() and os.access(str(eff), os.X_OK)
+                det = f"core.hooksPath={hp};生效的是同 repo 另一個工作目錄那份 {eff}" + ("" if eff.is_file() else "(缺)")
+                ok, det = _enforcement_prepush_gated(root, hp, fn, ok, det)
+                try:
+                    differs = ok and f.is_file() and not filecmp.cmp(f, eff, shallow=False)
+                except OSError:   # 讀不到本工作目錄那份:生效那份照跑,但對不上內容要講出來,不掉成只剩錯誤碼的 unknown
+                    add(layer, "degraded", det + f";讀不到本工作目錄的 {fn},對不出跟生效那份是否相同")
+                    continue
+                if differs:
+                    add(layer, "degraded", det + f";本工作目錄的 {fn} 跟它不同,推送時跑的不是這份")
+                else:   # 本工作目錄沒有這支也不算壞:推送時本來就跑生效那份
+                    add(layer, "active" if ok else "inactive",
+                        det + ("" if f.is_file() or not ok else f";本工作目錄沒有 {fn}"))
+                continue
             ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
             ok, det = _enforcement_prepush_gated(root, hp, fn, ok, f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
             add(layer, "active" if ok else "inactive", det)
