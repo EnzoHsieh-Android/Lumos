@@ -168,7 +168,7 @@ def _valid(path):
 
 def _cli_version(runner):
     exe = "claude" if runner == "claude" else "codex"
-    r = subprocess.run([exe, "--version"], capture_output=True, text=True)
+    r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60)   # 外呼一律帶逾時
     return (r.stdout or r.stderr).strip()
 
 
