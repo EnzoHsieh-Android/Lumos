@@ -141,7 +141,7 @@ PITFALL: 第二輪代碼審在凍結版 730b06fe 證出主 Git 資料的 `worktr
 PITFALL: 第三輪證明健康檢查「回 fatal」仍可能假安全：runner 在模型後拋錯會跳過當場檢查、先跑下一題；最終檢查拋錯時 JSON 整批標不可判，但消融消費端仍按逐場 `reason=ok` 合併，`needed=0`。出處 [[Verification/2026-10-04_探針隔離與清理收斂]]、[[Issues/探針健康檢查不可判資料仍被重用]] 與 `probe-boundary-remediation/r3-reproduction.json`；第三輪 FAIL 保留。使用者已例外授權 r4，新增 `t_probe_boundary_review4_runner_error_checks_health` 與 `t_probe_boundary_review4_fatal_batch_not_reused` 在舊碼翻紅、修後轉綠，仍須以新席與處置閘判定，不以254項綠測試代替審查。
 
 - REVISIT:2026-10-16 ★等 Enzo 裁,2026-09-16 確認仍未裁★:代碼審最後一輪之後補的那 3 行修法(父層是符號連結時的同類傷害)沒有席位審過,要不要補一輪只審這段差異的審查——或接受「同類修法第三次、而且測試反向驗證會翻紅」當作已經夠。
-- REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。
+- REVISIT:2026-09-25 互動模式(codex TUI)下的擋停與 SubagentStart 領席;抽 5 場真實 Codex 對話看擋停後的說明合不合理。 [closed:2026-10-13 已立案,見逾期回頭條件立案清單2026-10計劃]
 - REVISIT:2026-10-04 有沒有人真的用 Codex 開 lumos 專案(0 筆=S2/S3 備而不用);armed 席被無關子代理搶走的頻率。
 
 PITFALL: 消融外層要保證「一工作一題」時，不能沿用探針互動用的 `--only`：它允許逗號清單與前綴，空值等於不篩選。正式審查的空題號反例可一次選中整份題庫；因此新增精確單題入口，缺題或重複題要在建沙盒前拒絕。出處 [[Verification/2026-10-04_消融派工正式審查修正]]、`r1-formal-security.md`；防回歸 `t_probe_boundary_formal_input_validation`。如果將來調整選題語意，先證明外層單題派工不會擴題。

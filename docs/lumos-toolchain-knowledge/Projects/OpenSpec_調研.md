@@ -371,4 +371,4 @@ scripts/lumos enforcement | tail -3
 
 - **「OpenSpec 沒有 X」的清單**(決策翻案、測試綁定、漂移偵測、搜尋排序、impact、驗證歷史、多席審查、hook)是派乾淨 agent 拿原始問題對過原始碼的,不是我的印象——見「原始碼複核」節逐條證據。
 
-REVISIT:2026-10-10 看 OpenSpec 有沒有把 verify 從建議報告變成閘、#880(code 對 spec 驗)有沒有從 future-roadmap 落成開源 CLI、Cloud Agent 有沒有公開定價(它週更,一個月可能翻掉本篇「零強制」那一節);同時看候選 1–5 Enzo 裁了沒,裁了的開 _計劃、沒裁的留著。
+REVISIT:2026-10-10 看 OpenSpec 有沒有把 verify 從建議報告變成閘、#880(code 對 spec 驗)有沒有從 future-roadmap 落成開源 CLI、Cloud Agent 有沒有公開定價(它週更,一個月可能翻掉本篇「零強制」那一節);同時看候選 1–5 Enzo 裁了沒,裁了的開 _計劃、沒裁的留著。 [closed:2026-10-13 併入世界解重新註解總覽的跨類優先清單]

@@ -104,7 +104,7 @@ PRIOR-ART: ① 最小解層級——Stop hook 的 `decision:block` 是 Codex 官
 2. f02 實驗表(前後各兩次)進 Verification。
 3. 全套綠、代碼審、doctor。
 
-REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若 <50% 再考慮 UserPromptSubmit。
+REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若 <50% 再考慮 UserPromptSubmit。 [closed:2026-10-13 已立案,見逾期回頭條件立案清單2026-10計劃]
 
 ## 實作紀錄(2026-09-05,r1 處置閘 PASS 後同日動工)
 
