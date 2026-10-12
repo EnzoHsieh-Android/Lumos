@@ -142,3 +142,7 @@ about_code:
 - 鐵則總綱:`CLAUDE.md`(純量/list/decisions 一律走 lumos,別手改 frontmatter)。
 - 實作落點:`scripts/lumos` `cmd_set`/`cmd_append`/`cmd_self_audit`/`cmd_decision_add`/`cmd_decision_supersede`/`cmd_new`/`cmd_archive` + `atomic_write_verify`/`load_raw_for_edit`/`_write_lf`。
 - 回歸測試:`scripts/test_lumos.py` `t_set_*`/`t_append_*`/`t_remove_*`/`t_decision_*`/`t_archive_*`/`t_new_*`。
+
+## 建檔骨架對齊紀律(2026-10-12)
+
+- PITFALL:`lumos new` 產的骨架是舊前綴(機制筆記 FLOW/KEY/DEP/TEST、事故 FLAG/DECISION/KEY,事故沒有四段),跟紀律範本〈寫筆記時〉打架,照骨架寫的人會寫出舊格式 [出處:Projects/世界解重新註解2026-10_節點內容_調研 核對] [根因:紀律改版時只改了範本與 lint 訊息,骨架與釘住骨架的測試沒跟著改] [修法:機制筆記骨架改 WHY/RULE/PITFALL/SEE,事故骨架改 FLAG/PITFALL 並預留症狀、根因、現在怎麼繞、什麼條件算修好四段,建檔提示一併改] [test:t_new_teaches_tags]
