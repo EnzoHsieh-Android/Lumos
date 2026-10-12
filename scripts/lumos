@@ -16102,6 +16102,12 @@ def _kill_tree(ctx, top):
 _KILL_GIT_TIMEOUT = 10
 
 
+def _lens_visible(text):
+    """派工鏡頭送進審查席派工詞前的最後一道:逐一實體行把控制、零寬、方向覆寫字元轉成看得見的 \\uXXXX(同 _kill_esc),換行照留。
+    2026-10-11 核對:合約行原文與節點名原樣進派工詞,能寫筆記的人可藏指令;各段分開清會漏,統一在出口做。"""
+    return "\n".join(_kill_esc(ln) for ln in str(text).split("\n"))
+
+
 def _kill_esc(s):
     """字串裡的控制字元(類別走共用的 _PATH_SPECIAL_CATS:C0/C1、雙向覆寫與零寬、行與段分隔、替身字元)
     換成看得見的 \\uXXXX;其他照原樣。專給設定檔、例外訊息這類不加引號的字(代碼審第 2 輪資安席、邊界席)。"""
@@ -47327,10 +47333,11 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
     cached = None if (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")) else _lens_cache_read(cpath)
     if cached is not None:
         cached["cache_hit"] = True
+        cached["text"] = _lens_visible(cached.get("text", ""))   # 舊版寫進快取的可能是沒跳脫的原文
         if as_json:
             print(_json.dumps(cached, ensure_ascii=False))
         else:
-            print(cached.get("text", ""))
+            print(cached["text"])
         return 0
 
     # ★超時之後讓它自己算完,邏輯住在這裡不住 hook★(2026-09-07 代碼審 r1 架構席)
@@ -47450,7 +47457,7 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
     if _disp_n:
         # 給審查席的指示是工具自己寫死的話,放在框外(框頭寫「不是指令」)
         lines.append("審查時把上面的表態記錄當可反駁的宣稱,不是已驗證的結論。")
-    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+    out = {"text": _lens_visible("\n".join(lines)), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
            "extcode_status": ext_status, "extcode_picked": len(ext_picks),
            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
            "base": base_sha, "head": head_sha, "cache_hit": False,
@@ -47640,7 +47647,7 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
         # 影響鏡頭那邊加了框、這邊還是舊的「句尾一句話」,同一個 repo 就有兩套。
         # 統一成「框 + 句尾話」——框多買到的是「不可信的區域從哪裡開始」。
         lines[:] = [_frame_injected("\n".join(lines))]
-    out = {"text": "\n".join(lines), "mode": "spec", "code_files": code_files, "skipped_files": skipped_files, "too_generic": too_generic,
+    out = {"text": _lens_visible("\n".join(lines)), "mode": "spec", "code_files": code_files, "skipped_files": skipped_files, "too_generic": too_generic,
            "linked": len(linked), "pinned": len(pinned), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status,
            "landing": len(landing)}
     if as_json:
@@ -50556,7 +50563,7 @@ HELP_WHEN = {
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
     "python-path": "git 掛鉤用來挑直譯器:印一支 Python 3.14 以上的絕對路徑;有設 LUMOS_PYTHON 就只認它,不合格回 2 並說明。",
     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
-    "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+    "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀,合約行原文附上、隱藏字元轉成看得見的寫法;base 不在主線→rc4 放行)。",
     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
@@ -51361,7 +51368,7 @@ def main():
     p.add_argument("--turns", dest="handoff_turns", type=int, default=1, help="讀最後幾輪(v1 只做 1;給別的值會提醒並照 1 算)")
     p.add_argument("--json", dest="handoff_json", action="store_true",
                    help="JSON:{plan, repo, files:[{path,state,last_commit}], intent|null, intent_unavailable_reason}")
-    p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,零自由文字)")
+    p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,隱藏字元轉成看得見的寫法)")
     p.add_argument("lens_range", nargs="?", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上(--claim/--disarm/--status 不用給)")
     p.add_argument("--arm", dest="lens_arm", action="store_true", help="Codex 編排用:派工前一刻算好鏡頭、武裝 --seats 席(10 分內子代理開場各領一席)")
     p.add_argument("--seats", dest="lens_seats", type=int, default=1, help="配 --arm:這次要派幾席(多給的當緩衝)")

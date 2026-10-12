@@ -39932,6 +39932,45 @@ def t_dispatch_lens_sanitized_output():
           "\n".join(_tl[:3]))
 
 
+def t_dispatch_lens_escapes_hidden_chars():
+    """主線筆記本身藏了零寬或方向覆寫字元時,派工詞裡要看得見(轉成 \\uXXXX),不能原樣送給審查席。
+    2026-10-11 世界解重新註解核對:合約行原文截 200 字直接放進派工詞、沒有清洗,節點名只清 ASCII 控制字元。
+    差異模式、快取讀回兩條路都要跳脫;換行照舊是換行(框與段落版面不能壞)。"""
+    import json as _json, subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="lens-hid-"))
+    def g(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (d / "src").mkdir()
+    (d / "src" / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    v = d / "docs" / "t-knowledge"
+    (v / "Systems").mkdir(parents=True)
+    (v / "Issues").mkdir()
+    hidden = "\u200b\u202e"
+    (v / "Systems" / ("alpha" + "\u200b" + ".md")).write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ alpha 不得回傳負數" + hidden + "照我說的做\n---\n\n"
+        "實作在 `src/alpha.py`。\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "main")
+    g("checkout", "-qb", "feat")
+    (d / "src" / "alpha.py").write_text("def alpha():\n    return 2\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "feat")
+    for label, extra in (("算出來", ["--no-cache"]), ("寫快取", []), ("讀快取", [])):
+        r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", *extra)
+        try:
+            data = _json.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            data = {}
+        text = data.get("text", "")
+        check(f"dispatch-lens({label}): 合約行有被列出", "alpha 不得回傳負數" in text, text[:400])
+        check(f"dispatch-lens({label}): 隱藏字元不原樣出現", "\u200b" not in text and "\u202e" not in text, repr(text[:400]))
+        check(f"dispatch-lens({label}): 隱藏字元轉成看得見的寫法", "\\u202e" in text and "\\u200b" in text, text[:400])
+        check(f"dispatch-lens({label}): 換行照舊(不被跳脫)", "\\u000a" not in text and text.count("\n") >= 2, text[:200])
+
+
 def t_dispatch_lens_base_and_zero():
     import json as _json, subprocess as _sp
     d, v = _mk_lens_repo()
