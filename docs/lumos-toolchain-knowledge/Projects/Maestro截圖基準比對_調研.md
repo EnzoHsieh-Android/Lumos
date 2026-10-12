@@ -57,7 +57,7 @@ Enzo 同日帶來另一份查證，說 2.6.1 版沒有原生截圖比對，得�
 2. **基準圖要自己先拍**。缺檔就是失敗，不會自動建。更新基準圖也沒有旗標，要在 flow 裡用環境變數切兩條路。
 3. **flow 檔頭的 `env:` 預設值會蓋掉命令列的 `-e`**。所以檔頭不要放預設；變數沒定義時 `== 'true'` 就是 false，行為正好是「預設驗收、加旗標才更新」。
 4. **2.6.1 的 diff 圖路徑會多一層資料夾**（`baseline/baseline/xxx_diff.png`）。2.8.0 修了。
-   REVISIT:2026-10-10 Maestro 升到 2.8.0 以上後，重驗 diff 圖路徑與「檔頭 env 蓋掉 -e」是否仍如本篇所記，不是就改 KEY 行
+   REVISIT:2026-10-10 Maestro 升到 2.8.0 以上後，重驗 diff 圖路徑與「檔頭 env 蓋掉 -e」是否仍如本篇所記，不是就改 KEY 行 [closed:2026-10-12 09-10已在截圖基準驗收流程計劃用2.10.0重驗過]
 5. **狀態列的時鐘可以釘死**：Apple 的 `simctl status_bar override` 實測可用，比 cropOn 省事。
 6. **cheat sheet 比安裝的 CLI 新**：MCP 的 cheat sheet 列了 `setDarkMode`，2.6.1 的 CLI 拒收。寫 flow 前看 `maestro --version`。
 
