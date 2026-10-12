@@ -121,4 +121,4 @@ PRIOR-ART:①最小解在「量」這一層,不在機制層——Spotify 自己�
 - Spotify 的 benchmark 我沒重跑,數字抄自 README。shunt 的 hook 用 `{"decision":"block","reason":…}` + exit 0;現行官方 hooks 文件寫的擋法是 `hookSpecificOutput.permissionDecision:"deny"` + **exit 2**(文件明講 exit 2 才是權威、reason 會顯示給模型)——舊格式在目前版本還認不認沒實測,真要抄就照現行文件寫。
 - 儀器只認 `isCompactSummary` 當壓縮點;若逐字稿格式改了,C 段駐留數字會偏。
 
-REVISIT:2026-10-09 用 `python3 scripts/usage_scan.py --days 30` 重量本 repo 與一個消費端專案(Basic,用 --project-dir 指過去);大檔讀取佔工具輸出 ≥5%、或單筆 >20K 字元的讀取兩週內 >10 次 → 開擋檔 hook 案(照卷證形狀抄,含逃生口);≥400K 桶仍 >70% 且壓縮門檻可調 → 開壓縮時機案;C1 改了範本就對比 Agent 輸出 p99。
+REVISIT:2026-10-09 用 `python3 scripts/usage_scan.py --days 30` 重量本 repo 與一個消費端專案(Basic,用 --project-dir 指過去);大檔讀取佔工具輸出 ≥5%、或單筆 >20K 字元的讀取兩週內 >10 次 → 開擋檔 hook 案(照卷證形狀抄,含逃生口);≥400K 桶仍 >70% 且壓縮門檻可調 → 開壓縮時機案;C1 改了範本就對比 Agent 輸出 p99。 [closed:2026-10-13 已立案,見逾期回頭條件立案清單2026-10計劃]

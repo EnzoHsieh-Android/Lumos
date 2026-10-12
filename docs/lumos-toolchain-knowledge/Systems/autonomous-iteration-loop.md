@@ -106,6 +106,12 @@ decisions:
     why_chosen: pid 會被作業系統回收、名字會因啟動方式而變,但「同一個 pid 而且啟動時刻一模一樣」只可能是同一個行程。ps -o lstart= 實測穩定(同一行程重複問值相同)、跨使用者可讀、pid 不存在時回空字串,零依賴。
     decided: 2026-09-07
     valid: true
+  - content: 自主迴圈的每日派工正式退場:不再自動選題派工,週期評測等排程照舊
+    id: d12
+    context: 派工自 9 月初預設暫停、37 天無人重開、10-05 回頭點過期
+    why_chosen: 使用者 2026-10-13 照建議裁定退場
+    decided: 2026-10-13
+    valid: true
 about_code:
   - governance/autonomous-loop.sh
   - governance/autonomous_loop/cross_audit.py
