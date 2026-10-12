@@ -11,9 +11,9 @@ B1–B8 驗收：
 
 會使結論失真的 blocker：
 
-1. [qo_ablation.py:362](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:362) 未驗證仲裁選項：第三標籤或任意 noise 數值可直接進入主指標。
-2. [qo_ablation.py:433](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:433) 不驗證 `--labels` 是仲裁後產物；誤傳單一評分員資料也可能正式產出 PASS。
-3. [qo_ablation.py:443](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:443) 只展示敏感度、不在三種判定不一致時改成人裁，違反預登記並可能直接接線。
-4. [qo_ablation.py:56](/Users/enzo/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:56) 的文件豁免以整段 shell 字串判定，混合修改會漏算「先寫程式」，可能錯判必要門檻。
+1. [qo_ablation.py:362](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:362) 未驗證仲裁選項：第三標籤或任意 noise 數值可直接進入主指標。
+2. [qo_ablation.py:433](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:433) 不驗證 `--labels` 是仲裁後產物；誤傳單一評分員資料也可能正式產出 PASS。
+3. [qo_ablation.py:443](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:443) 只展示敏感度、不在三種判定不一致時改成人裁，違反預登記並可能直接接線。
+4. [qo_ablation.py:56](~/orca/workspaces/lumos-toolchain/Backend_improve/governance/eval/qo-ablation-2026-10/qo_ablation.py:56) 的文件豁免以整段 shell 字串判定，混合修改會漏算「先寫程式」，可能錯判必要門檻。
 
 blocker 4 條

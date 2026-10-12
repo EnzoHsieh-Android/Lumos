@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""情境出題對照實驗的執行與計分器(預先登記:同目錄 preregistration.md)。
+"""情境出題對照實驗的計分器(預先登記:同目錄 preregistration.md)。
+
+實驗已在 2026-10-12 跑完;這支只用來重算這次的結果,不再負責執行。
+原本的 run 子命令(第二套逐場執行器)在代碼審 r1 拿掉:要再跑對照實驗,擴充 governance/eval/ablation_lumos_first.py
+那套(共用用量帳、單一執行器),不要把 run 加回來。
+
+先寫程式的判法(code_start 第 1、2 版)是預先登記的算法,事後不改;已知會誤判的形狀(代碼審 r1 邊界席實測):
+  多算:heredoc 或引號內文裡的路徑字樣、sed 的 s/a/b、字串裡的 >、tee 讀入、cp 到 /tmp;
+  漏算:FOO=1 / time / sudo / env 開頭的建置指令、curl -o、patch、git checkout --、docs/ 套件裡的程式檔、.MD 以外的文件副檔名。
+這次 54 場(正式輪 36、小實驗重跑的乙組 18)實際一場寫檔都沒有(逐場核對見 Verification/2026-10-12_情境出題對照實驗結果),所以結論不受影響;
+要拿去判別的實驗,先換成「看寫入目標」的判法並寫進新的預先登記。
 
 子命令(照順序跑):
-  run       交錯執行:每個(題目, 第幾次)甲乙各跑一場,先後由固定種子決定;已有有效結果且版本相符的場次跳過
   score     機械計分:先寫程式、截斷、gold 正規式輔助指標
   packets   盲評包:隱去受測者、組別、場次並打亂,遮掉回答裡自報的身分與組別路徑;對照表另存
   agree     兩位評分員:嚴格檢查完整性後算 kappa,列出要仲裁的分歧
@@ -18,14 +27,11 @@ import itertools
 import json
 import random
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent.parent
-PROBE = REPO / "scripts" / "scenario_probe.py"
-ANSWER_MAX = 20000
 LABELS = ("handed", "assumed_confirm", "absent")   # 交給人決定 / 自己假設但請人確認 / 沒提或自己定了
 N_GOLD = 6
 NOISE_SCENARIOS = {"qo-P1", "qo-P2", "qo-P3", "qo-P6"}
@@ -103,8 +109,11 @@ def _round_half_up(x):
 
 
 # ── 盲評 ──────────────────────────────────────────────────────────────────────
-_LEAK = re.compile(r"(?i)\bcodex\b|\bclaude\b|\bgpt[\w.-]*|\bopenai\b|\bsonnet\b|\bopus\b|\bhaiku\b|\banthropic\b|"
-                   r"AGENTS\.md|CLAUDE\.md|/qo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b|[甲乙]組")
+# 身分字前後只看英文字母(底線、數字相連照遮:CLAUDE_CODE,代碼審 r1 邊界席)。組別字樣寧可多遮:英文 arm a、中文「組合」也遮,
+# 誤遮只少看幾個字,漏遮會讓盲評失效(代碼審 r2 通才席:r1 為了不誤遮加的兩個例外,反而漏了「甲組成員」「arm-b」)。
+# 盲評包已在 2026-10-12 產完,這裡改的只影響之後重產;兩輪實發的包掃過 0 處漏遮。
+_LEAK = re.compile(r"(?i)(?<![a-z])(?:codex|claude|openai|sonnet|opus|haiku|anthropic)(?![a-z])|(?<![a-z])gpt(?:[\w-]|\.\d)*|"
+                   r"AGENTS\.md|CLAUDE\.md|\bqo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b|[甲乙]組")
 
 
 def mask_leaks(text):
@@ -129,34 +138,22 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _scenarios(path):
-    return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
-def _out_path(out_dir, runner, arm, sid, k):
-    return Path(out_dir) / runner / arm / f"{sid}-r{k}.json"
-
-
-def _meta_path(out):
-    return Path(str(out) + ".meta.json")
-
-
-def _write_meta(out, meta):
-    _meta_path(out).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-
-
-def _meta_ok(out, meta):
+def _result_row(path):
+    """結果檔的第一列;讀不動、寫一半、或結構不對(不是物件、results 不是清單、第一列不是物件)都回 None。
+    _valid 與 _load_runs 共用,壞檔一律列成無效場(代碼審 r1、r2 併發席)。"""
     try:
-        return json.loads(_meta_path(out).read_text(encoding="utf-8")) == meta
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
+        return None
+    rows = doc.get("results") if isinstance(doc, dict) else None
+    r = rows[0] if isinstance(rows, list) and rows else None
+    return r if isinstance(r, dict) else None
 
 
 def _valid(path):
-    """有效結果:沒有致命、撞上限、儀器例外,也沒被截斷(原始長度要等於保存長度)。"""
-    try:
-        r = json.loads(Path(path).read_text(encoding="utf-8"))["results"][0]
-    except (OSError, ValueError, KeyError, IndexError):
+    """有效結果:沒有致命、撞上限、儀器例外,也沒被截斷(原始長度要等於保存長度);calls 要是清單。"""
+    r = _result_row(path)
+    if r is None or not isinstance(r.get("calls", []), list):
         return False
     if r.get("fatal") or r.get("limit_hit") or r.get("truncated"):
         return False
@@ -164,53 +161,6 @@ def _valid(path):
         return False
     ans, n = r.get("answer"), r.get("answer_len")
     return isinstance(ans, str) and isinstance(n, int) and n == len(ans)
-
-
-def _cli_version(runner):
-    exe = "claude" if runner == "claude" else "codex"
-    r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60)   # 外呼一律帶逾時
-    return (r.stdout or r.stderr).strip()
-
-
-def job_order(scen, runs, seed, arms=("a", "b")):
-    """每個(題目, 第幾次)甲乙先後由種子決定;只跑子集時保留全集裡的相對順序。"""
-    jobs = []
-    for sc in scen:
-        for k in range(1, runs + 1):
-            pair = ["a", "b"]
-            random.Random(f"{seed}:{sc['id']}:{k}").shuffle(pair)
-            jobs += [(sc["id"], k, arm) for arm in pair if arm in arms]
-    return jobs
-
-
-def cmd_run(a):
-    if not a.model:
-        print("✗ --model 必須明寫(不讓本機設定決定受測模型)", file=sys.stderr)
-        return 2
-    meta = {"runner": a.runner, "model": a.model, "cli": _cli_version(a.runner), "answer_max": ANSWER_MAX}
-    if a.runner == "codex":   # 推理強度等寫在本機設定檔,設定一改就不准混用
-        cfg = Path.home() / ".codex" / "config.toml"
-        meta["codex_config_sha256"] = _sha(cfg) if cfg.exists() else None
-    jobs = job_order(_scenarios(a.scenarios), a.runs, a.order_seed, tuple(a.arms.split(",")))
-    repo = {"a": a.arm_a, "b": a.arm_b}
-    for sid, k, arm in jobs:
-        out = _out_path(a.out_dir, a.runner, arm, sid, k)
-        if out.exists() and not _meta_ok(out, meta):
-            print(f"✗ {out} 的版本紀錄跟這次不同(或沒有),不混用;要重跑請先移走舊結果", file=sys.stderr)
-            return 2
-        if _valid(out):
-            continue
-        out.parent.mkdir(parents=True, exist_ok=True)
-        _write_meta(out, meta)
-        cmd = [sys.executable, str(PROBE), "--repo", repo[arm], "--scenarios", a.scenarios,
-               "--exact-id", sid, "--runs", "1", "--runner", a.runner, "--answer-max", str(ANSWER_MAX),
-               "--max-turns", "30", "--timeout", str(a.timeout), "--wait-on-limit", str(a.wait_on_limit),
-               "--model", a.model, "--out", str(out)]
-        if a.runner == "codex":
-            cmd += ["--codex-bypass-hook-trust"]
-        print(f"[{a.runner}] {sid} r{k} 組{arm}", flush=True)
-        subprocess.run(cmd, cwd=str(REPO))
-    return 0
 
 
 def _load_runs(out_dir, valid_only=True):
@@ -222,10 +172,12 @@ def _load_runs(out_dir, valid_only=True):
         m = re.match(r"(.+)-r(\d+)$", p.stem)
         if not m or (valid_only and not _valid(p)):
             continue
-        r = json.loads(p.read_text(encoding="utf-8"))["results"][0]
+        r = _result_row(p) or {}   # 壞檔照列成無效場,不讓整批算不出來
+        calls = r.get("calls") if isinstance(r.get("calls"), list) else []
         runs.append({"key": f"{runner}/{arm}/{p.stem}", "runner": runner, "arm": arm, "id": m.group(1),
-                     "run": int(m.group(2)), "answer": r.get("answer", ""), "answer_len": r.get("answer_len"),
-                     "calls": [tuple(c) for c in r.get("calls", [])], "valid": _valid(p)})
+                     "run": int(m.group(2)), "answer": r.get("answer") if isinstance(r.get("answer"), str) else "",
+                     "answer_len": r.get("answer_len") if isinstance(r.get("answer_len"), int) else None,   # 型別錯照列成無效場,計分不崩(代碼審 r3)
+                     "calls": [tuple(c) for c in calls if isinstance(c, (list, tuple))], "valid": _valid(p)})
     return runs
 
 
@@ -255,6 +207,9 @@ def cmd_score(a):
 
 
 def cmd_packets(a):
+    if a.batch < 1:   # 先驗參數再動檔:壞參數不能先清掉舊包(代碼審 r3 併發席)
+        print(f"✗ --batch 要是正整數,給的是 {a.batch}", file=sys.stderr)
+        return 2
     dest, mapping_path = Path(a.dest).resolve(), Path(a.mapping).resolve()
     if dest in mapping_path.parents:
         print("✗ 對照表不得放在評分包目錄裡", file=sys.stderr)
@@ -266,6 +221,8 @@ def cmd_packets(a):
     packets, mapping = blind(runs, a.seed)
     masked = {r["key"]: mask_leaks(r["answer"])[1] for r in runs}
     dest.mkdir(parents=True, exist_ok=True)
+    for old in dest.glob("packet-*.json"):   # 重產時批數變少,舊包不能留著混進評分與仲裁(代碼審 r2 併發席);只清自己產的包
+        old.unlink()
     for i in range(0, len(packets), a.batch):
         (dest / f"packet-{i // a.batch + 1:02d}.json").write_text(
             json.dumps(packets[i:i + a.batch], ensure_ascii=False, indent=1), encoding="utf-8")
@@ -306,6 +263,8 @@ def check_labels(labels, mapping, gold_topics):
             raise ValueError(f"{bid} 有不合法標籤 {bad}")
         if not isinstance(row.get("noise"), int) or row["noise"] < 0:
             raise ValueError(f"{bid} 的 noise 要是非負整數")
+        if _scenario_of(key) not in NOISE_SCENARIOS and row["noise"] != 0:   # 評分準則:P4、P5 一律填 0;不然 merge 會要一筆沒人產的仲裁
+            raise ValueError(f"{bid} 不判亂問的題 noise 要填 0,填的是 {row['noise']}")
 
 
 def _load_ctx(a):
@@ -314,10 +273,8 @@ def _load_ctx(a):
     return m, gt
 
 
-def cmd_agree(a):
-    mapping, gt = _load_ctx(a)
-    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
-    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+def item_pairs(la, lb, mapping):
+    """兩位評分員逐場 × 逐 gold 項目的標籤對與分歧清單;agree 與 final 共用(final 當場重算 kappa,不收外部檔)。"""
     xs, ys, dis = [], [], []
     for bid in sorted(mapping):
         for gid in sorted(la[bid]["items"]):
@@ -327,6 +284,14 @@ def cmd_agree(a):
                 dis.append({"blind_id": bid, "gold_id": gid, "labels": sorted([x, y])})
         if _scenario_of(mapping[bid]) in NOISE_SCENARIOS and abs(la[bid]["noise"] - lb[bid]["noise"]) > 1:
             dis.append({"blind_id": bid, "gold_id": "noise", "labels": sorted([la[bid]["noise"], lb[bid]["noise"]])})
+    return xs, ys, dis
+
+
+def cmd_agree(a):
+    mapping, gt = _load_ctx(a)
+    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
+    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+    xs, ys, dis = item_pairs(la, lb, mapping)
     k = kappa(xs, ys)
     Path(a.dest).write_text(json.dumps({"n_runs": len(mapping), "n_items": len(xs), "kappa": k,
                                         "agreement": sum(x == y for x, y in zip(xs, ys)) / len(xs),
@@ -472,15 +437,15 @@ def cmd_final(a):
     check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
     merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
     check_labels(merged, mapping, gt)
-    agree = json.loads(Path(a.agree).read_text(encoding="utf-8"))
+    kap = kappa(*item_pairs(la, lb, mapping)[:2])   # 當場重算,不收外部給的 kappa(代碼審 r1 外家席)
     mech = {r["key"]: r for r in json.loads(Path(a.score).read_text(encoding="utf-8"))["rows"]}
     sens = {"rater_a": la, "rater_b": lb}
     report = {}
     for runner in sorted({k.split("/")[0] for k in mapping.values()}):
-        main_s = _summarize(runner, merged, mapping, mech, a.runs, agree["kappa"])
+        main_s = _summarize(runner, merged, mapping, mech, a.runs, kap)
         main_s["sensitivity"] = {}
         for name, lab in sens.items():
-            s = _summarize(runner, lab, mapping, mech, a.runs, agree["kappa"])
+            s = _summarize(runner, lab, mapping, mech, a.runs, kap)
             main_s["sensitivity"][name] = {"verdict": s["verdict"], "mean_diff": s["mean_diff"], "p": s["p"]}
         gated = final_gate(main_s["verdict"], [v["verdict"] for v in main_s["sensitivity"].values()])
         if gated != main_s["verdict"]:
@@ -495,17 +460,6 @@ def cmd_final(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run")
-    r.add_argument("--arm-a", required=True); r.add_argument("--arm-b", required=True)
-    r.add_argument("--scenarios", default=str(HERE / "scenarios.jsonl"))
-    r.add_argument("--runner", choices=["claude", "codex"], required=True)
-    r.add_argument("--model", default="", help="必填:受測模型 id")
-    r.add_argument("--runs", type=int, default=3)
-    r.add_argument("--order-seed", default="qo-2026-10")
-    r.add_argument("--arms", default="a,b", help="只跑其中幾組,逗號分隔(小實驗只重跑乙組時用)")
-    r.add_argument("--timeout", type=int, default=600)
-    r.add_argument("--wait-on-limit", type=int, default=1800)
-    r.add_argument("--out-dir", required=True)
     s = sub.add_parser("score")
     s.add_argument("--out-dir", required=True); s.add_argument("--gold", default=str(HERE / "gold.json"))
     s.add_argument("--dest", required=True)
@@ -523,7 +477,7 @@ def main(argv=None):
         if name == "merge":
             q.add_argument("--adjudication", default="")
         if name == "final":
-            q.add_argument("--agree", required=True); q.add_argument("--score", required=True)
+            q.add_argument("--score", required=True)
             q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
             q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
             q.add_argument("--runs", type=int, default=3)
@@ -532,7 +486,7 @@ def main(argv=None):
     j.add_argument("--mapping", required=True); j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
     j.add_argument("--seed", type=int, default=20261013); j.add_argument("--dest", required=True)
     a = ap.parse_args(argv)
-    return {"run": cmd_run, "score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
+    return {"score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
             "merge": cmd_merge, "final": cmd_final}[a.cmd](a)
 
 

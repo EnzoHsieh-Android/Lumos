@@ -48055,6 +48055,33 @@ def t_stack_questions_kotlin_spring_triggers():
     check("③ Android 寫法不觸發新加的兩題", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
     big = hits(["val x = 1"] * 400)
     check("④ 超過行數門檻也不因門檻而亮(shape_only)", "kt-springdata" not in big and "kt-springhttp" not in big and "kt-coroutines" in big, str(big))
+    # 代碼審 r1 邊界席、通才席:Android 自訂類名與通用字誤觸發、Spring 的其他寫法漏觸發
+    for line in ('class AppWebClient : WebViewClient() {', 'class RestClient(private val api: Api) {', 'val c = MyRestClient()',
+                 'val webClient = MyWebViewClient()', 'val c: DatabaseClient = get()', '@Lock("x") fun f() {}'):
+        h = hits([line])
+        check(f"⑤ Android 自訂寫法不觸發:{line}", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
+    for line, qid in (('@get:Transactional', "kt-springdata"), ('val rows = jdbcClient.sql("select 1").query()', "kt-springdata"),
+                      ('private val jdbc: JdbcClient', "kt-springdata"), ('private val mongo: MongoTemplate', "kt-springdata"),
+                      ('@Lock(LockModeType.PESSIMISTIC_WRITE)', "kt-springdata"), ('val db = DatabaseClient.create(factory)', "kt-springdata"),
+                      ('val client = RestClient.builder().build()', "kt-springhttp"), ('@HttpExchange("/stock")', "kt-springhttp"),
+                      ('private val webClient: WebClient', "kt-springhttp"), ('import org.springframework.web.client.RestClient', "kt-springhttp")):
+        check(f"⑥ Spring 寫法要觸發 {qid}:{line}", qid in hits([line]), str(hits([line])))
+    # 代碼審 r2 邊界席、正確性席:diff 常常只改呼叫行、宣告不在 diff 裡;小寫變數的 Spring 用戶端呼叫要亮(② 原本靠同一份裡的 RestTemplate() 才綠)
+    for line, qid in (('val body = webClient.get().uri("/stock").retrieve()', "kt-springhttp"),
+                      ('val r = restTemplate.exchange(url, HttpMethod.POST, entity, String::class.java)', "kt-springhttp"),
+                      ('val res = restClient.get().uri("/x").retrieve().body<String>()', "kt-springhttp"),
+                      ('restTemplate.getForObject(url, String::class.java)', "kt-springhttp"),
+                      ('val rows = databaseClient.sql("select * from t").fetch().all()', "kt-springdata"),
+                      # 代碼審 r3 通才席:變數名帶前綴、this. 開頭、安全呼叫、清單外的方法
+                      ('val r = paymentWebClient.get().uri("/x").retrieve()', "kt-springhttp"),
+                      ('stockRestTemplate.exchange(url, HttpMethod.GET, null, String::class.java)', "kt-springhttp"),
+                      ('this.restTemplate.postForLocation(url, body)', "kt-springhttp"),
+                      ('restTemplate?.exchange(url, HttpMethod.GET, null, String::class.java)', "kt-springhttp"),
+                      ('orderDatabaseClient.sql("select 1").fetch().all()', "kt-springdata")):
+        check(f"⑦ 只有呼叫行也要觸發 {qid}:{line}", qid in hits([line]), str(hits([line])))
+    for line in ('webView.webViewClient = MyWebViewClient()', 'webClient.onPageFinished(view, url)', 'val webClient = AppWebClient()'):
+        h = hits([line])
+        check(f"⑧ Android WebView 寫法不觸發:{line}", "kt-springhttp" not in h, str(h))
 
 
 def t_stack_question_triggers():
@@ -56766,6 +56793,49 @@ def t_spec_gate_ears_shapes():
     check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
 
 
+def t_backend_qo_question_section_not_parsed():
+    """[後端工程提問與證據擴充] 〈待決問題〉的正文解析撤出(代碼審 code-後端情境出題 三輪都在同一處換形狀,改存開頭欄位另案,
+    [[Projects/待決問題改存開頭欄位_計劃]]):規格閘與 lint 不讀這一節,有標阻塞的題也不擋不報,跟沒有這一節的計劃一樣。
+    新做法上線時換掉這支。翻紅釘:規格閘或 lint 又去讀正文這一節 → ①② 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo7")
+    _qo_plan(kg, "na", ["- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:待人][阻塞]",
+                        "- [Q2] 甲 [類:需求][階段:需求][狀態:已決] → #d9"])
+    r = run(kg, "spec-gate", "Projects/na_計劃")
+    check("① 規格閘不因正文〈待決問題〉擋、不印這一節", r.returncode == 0 and "待決問題" not in r.stdout, r.stdout[-600:])
+    out = run(kg, "lint", "Projects/na_計劃").stdout
+    check("② lint 不報〈待決問題〉的寫法", "待決問題" not in out, out[-600:])
+
+
+def t_backend_qo_stage_facets_only():
+    """[後端工程提問與證據擴充 S3] pitfalls --stage 只列那一階段的需求風險面;有〈待決問題〉一節也不列題(正文解析已撤出);
+    不帶 --stage 時有沒有這一節輸出一字不差;錯的階段、與 --diff 並用、讀不動的檔都回 2。翻紅釘:又列出題目 → ② 翻紅。"""
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-qo8-"))
+    (root / ".git").mkdir()
+    md = root / "plan.md"
+    md.write_text("# 訂單系統\n\n需求:做一個訂單 API,使用者可以下單。\n\n## 待決問題\n\n- [Q1] 阻塞題 [類:需求][階段:需求][狀態:待人][阻塞]\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
+    check("① rc0,列出需求階段的風險面(一律適用的 req-success 與提到下單的 req-duplicate)",
+          r.returncode == 0 and "[req-success]" in r.stdout and "[req-duplicate]" in r.stdout and "[arch-necessity]" not in r.stdout, r.stdout[-600:])
+    check("② 不列〈待決問題〉的題", "[Q1]" not in r.stdout and "待決問題" not in r.stdout, r.stdout[-600:])
+    j = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求", "--json")
+    check("③ JSON 只有階段與風險面", j.returncode == 0 and set(_j.loads(j.stdout)) == {"stage", "facets"}, j.stdout[-400:])
+    plain = run(root, "pitfalls", str(md), "--repo", str(root))
+    other = root / "plan2.md"
+    other.write_text(md.read_text(encoding="utf-8").replace("## 待決問題", "## 其他筆記"), encoding="utf-8")
+    plain2 = run(root, "pitfalls", str(other), "--repo", str(root))
+    check("④ 不帶 --stage 時,有沒有〈待決問題〉一節輸出一字不差", plain.stdout.replace(str(md), "X") == plain2.stdout.replace(str(other), "X")
+          and plain.returncode == plain2.returncode, plain.stdout[-400:])
+    bad = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "上線")
+    check("⑤ 不認得的階段回 2", bad.returncode == 2, bad.stdout + bad.stderr)
+    both = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--stage", "需求")
+    check("⑥ 跟 --diff 並用回 2", both.returncode == 2, both.stdout + both.stderr)
+    badenc = root / "bad.md"
+    badenc.write_bytes(b"\xff\xfe## \x00x\n")
+    be = run(root, "pitfalls", str(badenc), "--repo", str(root), "--stage", "需求")
+    check("⑦ 讀不動的計劃(非 UTF-8)回 2、訊息帶「擋下:」、不吐 Python 追蹤", be.returncode == 2 and "擋下:" in be.stderr and "Traceback" not in be.stderr, be.stderr[-400:])
+
+
 def _qo_plan(kg, name, questions, clauses=None, decisions=""):
     """帶〈待決問題〉一節的計劃;decisions 是開頭欄位的 decisions 區塊原文。"""
     p = kg / "Projects" / f"{name}_計劃.md"
@@ -56776,87 +56846,6 @@ def _qo_plan(kg, name, questions, clauses=None, decisions=""):
 
 
 _QO_DEC = "decisions:\n  - content: 採用甲方案\n    id: d1\n    decided: 2026-10-12\n    valid: true\n  - content: 舊方案\n    id: d2\n    decided: 2026-10-01\n    valid: false\n"
-
-
-def t_backend_qo_blocking_question_holds_spec_gate():
-    """[後端工程提問與證據擴充 S1] 需求/架構階段標阻塞、狀態待查或待人的題 → 規格閘回 1(不論風險、--no-run、有無條款);
-    已決並指到有效決策就不擋;實作以後階段的阻塞題不擋;沒有〈待決問題〉的計劃行為不變。翻紅釘:拿掉前段檢查 → ①②③ 翻紅。"""
-    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo1")
-    q_block = "- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:待人][阻塞]"
-    _qo_plan(kg, "qa", [q_block], decisions=_QO_DEC)
-    r = run(kg, "spec-gate", "Projects/qa_計劃")
-    check("① 只有待決問題、沒有條款 → rc1 並列出 Q1", r.returncode == 1 and "Q1" in r.stdout and "待決問題" in r.stdout, r.stdout[-600:])
-    r2 = run(kg, "spec-gate", "Projects/qa_計劃", "--no-run")
-    check("② 帶 --no-run 也擋", r2.returncode == 1 and "Q1" in r2.stdout, r2.stdout[-600:])
-    _qo_plan(kg, "qb", [q_block], clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
-    r3 = run(kg, "spec-gate", "Projects/qb_計劃")
-    check("③ 有條款的計劃也擋", r3.returncode == 1 and "Q1" in r3.stdout, r3.stdout[-600:])
-    _qo_plan(kg, "qc", ["- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:已決][阻塞] → #d1"], decisions=_QO_DEC)
-    r4 = run(kg, "spec-gate", "Projects/qc_計劃")
-    check("④ 已決並指到有效決策 → 不因它擋", "Q1" not in r4.stdout or r4.returncode == 0, r4.stdout[-600:])
-    _qo_plan(kg, "qd", ["- [Q1] 壓測門檻要多少 [類:驗證][階段:效能][狀態:待人][阻塞]"], decisions=_QO_DEC)
-    r5 = run(kg, "spec-gate", "Projects/qd_計劃")
-    check("⑤ 效能階段的阻塞題不擋規格閘", r5.returncode == 0, r5.stdout[-600:])
-    _sg_plan(kg, "qe", ["純散文,沒有條款。"])
-    base = run(kg, "spec-gate", "Projects/qe_計劃")
-    check("⑥ 沒有〈待決問題〉的計劃不印這一節、rc0", base.returncode == 0 and "待決問題" not in base.stdout, base.stdout[-400:])
-
-
-def t_backend_qo_question_line_shape():
-    """[後端工程提問與證據擴充 S2] lint 逐條抓:已決指到不存在或已作廢的決策、自答沒出處、延後沒理由、不可逆卻自答、
-    阻塞卻延後、已驗的測試名不在本篇條款、編號重複;合乎文法與方括號順序不同的行不報。翻紅釘:拿掉 lint 規則 → 全部翻紅。"""
-    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo2")
-    good = ["- [Q1] 一 [類:需求][階段:需求][狀態:已決] → #d1",
-            "- [Q2] 二 [狀態:自答][階段:架構][類:架構] 出處:README 第一段寫了技術選型",
-            "- [Q3] 三 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_green",
-            "- [Q4] 四 [類:失敗][階段:實作][狀態:延後] 理由:等示範跑完再定"]
-    _qo_plan(kg, "lg", good, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
-    r = run(kg, "lint", "Projects/lg_計劃")
-    check("① 合乎文法(含方括號順序不同)的四行不報待決問題的錯", "待決問題" not in r.stdout, r.stdout[-800:])
-    bad = ["- [Q1] 甲 [類:需求][階段:需求][狀態:已決] → #d9",
-           "- [Q2] 乙 [類:需求][階段:需求][狀態:已決] → #d2",
-           "- [Q3] 丙 [類:需求][階段:需求][狀態:自答]",
-           "- [Q4] 丁 [類:需求][階段:需求][狀態:延後]",
-           "- [Q5] 戊 [類:需求][階段:需求][狀態:自答][不可逆] 出處:我自己判斷就好",
-           "- [Q6] 己 [類:需求][階段:需求][狀態:延後][阻塞] 理由:之後再說吧",
-           "- [Q7] 庚 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_missing",
-           "- [Q7] 辛 [類:需求][階段:需求][狀態:待人]"]
-    _qo_plan(kg, "lb", bad, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
-    out = run(kg, "lint", "Projects/lb_計劃").stdout
-    for q, why in (("Q1", "不存在"), ("Q2", "作廢"), ("Q3", "出處"), ("Q4", "理由"), ("Q5", "不可逆"), ("Q6", "阻塞"),
-                   ("Q7", "t_missing"), ("Q7", "重複")):
-        check(f"② {q} 因「{why}」被報", any(q in ln and why in ln for ln in out.splitlines()), out[-1500:])
-
-
-def t_backend_qo_stage_order_and_cap():
-    """[後端工程提問與證據擴充 S3] pitfalls --stage:依阻塞、不可逆、其餘排序,阻塞或不可逆的全部列出不截斷;
-    不帶 --stage 輸出逐位元不變;--stage 錯值或與 --diff 並用回 2。翻紅釘:排序改成照編號 → ② 翻紅。"""
-    root = Path(tempfile.mkdtemp(prefix="gctl-qo3-"))
-    (root / ".git").mkdir()
-    qs = ["- [Q1] 一般題 [類:需求][階段:需求][狀態:待人]",
-          "- [Q2] 不可逆題 [類:需求][階段:需求][狀態:待人][不可逆]",
-          "- [Q3] 阻塞題甲 [類:需求][階段:需求][狀態:待人][阻塞]",
-          "- [Q4] 阻塞題乙 [類:需求][階段:需求][狀態:待人][阻塞]",
-          "- [Q5] 阻塞題丙 [類:需求][階段:需求][狀態:待人][阻塞]",
-          "- [Q6] 阻塞題丁 [類:需求][階段:需求][狀態:待人][阻塞]",
-          "- [Q7] 已決題 [類:需求][階段:需求][狀態:已決] → #d1",
-          "- [Q8] 別階段 [類:驗證][階段:驗證][狀態:待人]"]
-    md = root / "plan.md"
-    md.write_text("# 訂單系統\n\n需求:做一個訂單 API。\n\n## 待決問題\n\n" + "\n".join(qs) + "\n", encoding="utf-8")
-    plain_before = run(root, "pitfalls", str(md), "--repo", str(root))
-    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
-    out = r.stdout
-    check("① rc0", r.returncode == 0, out[-600:])
-    pos = {q: out.find(f"[{q}]") for q in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6")}
-    check("② 阻塞四題都在不可逆之前、不可逆在一般題之前", all(-1 < pos[x] < pos["Q2"] for x in ("Q3", "Q4", "Q5", "Q6")) and pos["Q2"] < pos["Q1"], out[-800:])
-    check("③ 阻塞與不可逆共 5 題全列,不因題數截斷", all(pos[q] > -1 for q in ("Q2", "Q3", "Q4", "Q5", "Q6")), out[-800:])
-    check("④ 已決題與別階段的題不列", "[Q7]" not in out and "[Q8]" not in out, out[-800:])
-    plain_after = run(root, "pitfalls", str(md), "--repo", str(root))
-    check("⑤ 不帶 --stage 時輸出不變(不出現待決問題清單)", plain_before.stdout == plain_after.stdout and "[Q3]" not in plain_after.stdout, plain_after.stdout[-400:])
-    bad = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "上線")
-    check("⑥ 不認得的階段回 2", bad.returncode == 2, bad.stdout + bad.stderr)
-    both = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--stage", "需求")
-    check("⑦ 跟 --diff 並用回 2", both.returncode == 2, both.stdout + both.stderr)
 
 
 def t_spec_gate_stopwords():
@@ -81487,6 +81476,31 @@ def t_test_quality_cli():
                          cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
     check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
           (run.stdout + run.stderr)[-4000:])
+
+
+def t_qo_ablation_scorer_suite():
+    """情境出題對照實驗計分器的整組單元測試(自主迴圈測試檔的 TestQoAblation),包成主測試檔的入口,
+    讓修正紀錄與條款能綁(代碼審 code-後端情境出題 r1:最後統計方向、一致率重算、遮罩、壞檔)。"""
+    _need_src("governance/eval/qo-ablation-2026-10/qo_ablation.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", "TestQoAblation"],
+                         cwd=root, capture_output=True, text=True, timeout=120)
+    import re
+    output = run.stdout + run.stderr
+    check("計分器整組測試全綠", run.returncode == 0 and re.search(r"Ran [1-9][0-9]* tests", output) is not None, output[-4000:])
+
+
+def t_scenario_probe_collect_only_and_answer_cap():
+    """情境探針:只收回答的題省略判準欄位不崩、回答上限照參數傳到每一場(代碼審 code-後端情境出題 r1 外家席、正確性席、架構席)。"""
+    root = Path(GRAPHCTL).resolve().parent.parent
+    names = ["TestScenarioProbeAblation.test_collect_only_without_expect_key_grades_without_crash",
+             "TestScenarioProbeAblation.test_answer_max_flows_as_argument_not_global",
+             "TestScenarioProbeAblation.test_validate_scenario_collect_only_allows_empty_expect",
+             "TestScenarioProbeAblation.test_answer_max_reaches_codex_runner_and_cli_wiring"]
+    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", *names],
+                         cwd=root, capture_output=True, text=True, timeout=120)
+    output = run.stdout + run.stderr
+    check("探針四支相關測試全綠", run.returncode == 0 and f"Ran {len(names)} tests" in output, output[-4000:])
 
 
 def t_test_quality_scan_cli():
