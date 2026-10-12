@@ -2,7 +2,7 @@
 type: project
 status: doing
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-10-12
 aliases:
   - OpenSpec
   - 外部對照-OpenSpec
@@ -28,15 +28,15 @@ summary: |-
   FLAG:ORIGIN
   KEY:調研對象=Fission-AI/OpenSpec(2026-09-10 讀 docs+原始碼+社群證言;67.8k★、MIT、TypeScript、v1.13.0 於 2026-09-09 出、週更):給 30+ 家 AI 編程助手用的「先寫 spec 再寫 code」薄層——openspec/specs/ 是「系統現在行為」的真相源,每件工作是一個 changes/<名>/ 資料夾(proposal/design/tasks/delta specs),歸檔時 delta 合併進主 spec
   KEY:★兩者答的不是同一題★——OpenSpec 答「寫 code 之前,人跟 AI 先在紙上對齊要做什麼」(事前對齊層);lumos 答「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」(決策當下的第一手脈絡+合約+驗證+閘)。重疊區只有「變更單位」那一塊:change 資料夾≈計劃節點,delta spec 的 Requirement+Scenario≈[SN] 條款,design.md 的 Decisions≈決策四欄,tasks.md 勾選框≈T1..Tn
-  KEY:★最深的一刀=強制力模型★——OpenSpec 自陳「Everything below is convention, not enforcement」「OpenSpec only checks that artifacts exist, so enforce the gate with your own CI or hook」:validate 只讀 markdown(原始碼證實 import 零 src/ 路徑)、verify 是 174 行 prompt 叫 AI 用關鍵字搜 code 寫建議報告(輸出無程式讀、不擋 archive)、init 不裝任何 git hook、artifact「做完」=檔案存在;lumos 的 16 層防護(pre-commit 擋「改 code 沒動圖譜」、pre-push 擋錨點不符/doctor 紅/高風險未過代碼審、合約→[test:]→[audit:]→[kill:] 鏈、22 道 doctor 檢查)全部在打同一個敵人=漂移
+  KEY:★最深的一刀=強制力模型★——OpenSpec 自陳「Everything below is convention, not enforcement」「OpenSpec only checks that artifacts exist, so enforce the gate with your own CI or hook」:validate 只讀 markdown(原始碼證實 import 零 src/ 路徑)、verify 是 174 行 prompt 叫 AI 用關鍵字搜 code 寫建議報告(輸出無程式讀、不擋 archive)、init 不裝任何 git hook、artifact「做完」=檔案存在;lumos 的 16 層防護(pre-commit 擋「改 code 沒動圖譜」、pre-push 擋錨點不符/doctor 紅/高風險未過代碼審、合約→`[test:]`→[audit:]→[kill:] 鏈、22 道 doctor 檢查)全部在打同一個敵人=漂移
   KEY:★社群最大宗抱怨正是漂移,而官方解法是收費的★——HN alasano(用五個月以上、在 OpenSpec 上蓋商業 orchestrator 的人,2026-05):"keeps drifting and drifting until you have duplication and contradictions across specs";作者 2025-10 自承 drift "has to be manual unfortunately";#880「拿 code 對主 spec 驗」2026-03 掛到現在 future-roadmap;2026-08-28 出 OpenSpec Cloud Agent(付費,PR 時雲端 LLM 對 spec、引出不一致的行)。lumos 的 impact --diff + --sync-check + Stop hook 做同一件事:本機、機械、免費、擋得住 commit
   KEY:GitHub issues 的失效型態跟 lumos 記過的同款——archive「validate 說 OK、回 0、東西沒改」一週四張(#1799/1801/1803/1805,2026-09-06)=假綠;verify「42 [x]·17 [~] 回報 ✓ Complete」(#1761)、「skip checks when evidence unavailable then report All checks passed」(PR #1732)=席位通知宣稱沒發生的事;--no-validate 一繞關掉全部守衛(#1697)=--no-verify 全跳;團隊用半年後換掉的理由「spec never saves the user's original intent … never keeps the conversation」=provenance
   KEY:社群自己長出了 lumos 那層——第三方 schema anvil:「test-plan maps every spec scenario to a named test」+「fresh-context, read-only reviewer (a second model) emits a VERDICT: line」;OpenSpec 核心回應「enforce the gate with your own CI or hook」;HN 上重度使用者都把 OpenSpec 當前段(產 context+任務清單)、後段自己接 ralph loop
   KEY:規模與背景(2026-09-10)——Fission AI=YC W26、創辦人 Tabish Bidiwale 單人全職;repo 2025-08-05 建、v1.0.0 2026-01-26;星數 27k(03-06)→56k(06-26)→67.8k(09-10)已走平(09-05 那週 +0);TS 45,075 行、3,194 測試案例、10 個 runtime 依賴;Thoughtworks Radar Vol.34 Assess
   KEY:真相語意相反——OpenSpec 的 specs 是「描述性紀錄」:code 跟 spec 不一致時,文件教你「往真的那一邊改」、歸檔時 spec 跟著 code 走;lumos 圖譜是「意圖權威」:行為事實跟圖譜衝突不自動判誰對、立事故筆記(Codex 外審 2026-07-29 修正過的認識論)
   KEY:OpenSpec 真優勢(誠實記)——①事前對齊的儀式便宜且有效(「改一段 proposal 免費,改 400 行 code 不是」)②delta 讓 brownfield 不用先文件化整個系統(跟 lumos 節點還原的惰性生長同宗)③schema 可自訂 artifact 圖(lumos 的 skill 是散文)④分發:npm、30+ 家工具、每週出版、36 篇自食 spec+83 個歸檔 change⑤explore 模式與 onboard 教學⑥stores「No sync, ever — by design」的跨 repo 指針哲學跟 core_refs 同宗
-  KEY:lumos 領先處(機械數,2026-09-10)——決策時效(289 條決策/20 條翻案、181 篇驗證 174 篇帶前提與重驗條件、144 行 REVISIT)、合約鏈(登記簿 35 條合約+9 條技術債、綁測試 36 行)、動手前注入(PreToolUse hook 把合約/事故推到眼前;OpenSpec 要 agent 自己敲 CLI)、code diff 反推波及節點(impact --diff;OpenSpec 沒有)、對抗式多席審查迴圈、[SN] 條款不綁 [test:] 不得過處置閘(39/172 篇計劃已用)
-  KEY:回看 2026-07-07 的兩條裁定——借的「AC-n 編號驗收+核銷」已演化成 [SN]+[test:]+處置閘第五步,比 OpenSpec 的「每條 requirement 至少一個 scenario」強一階(綁到真測試、閘會擋);跳的「delta-spec=第二真相源」被社群漂移證言印證,但真因不是兩份真相、是「沒有東西逼 spec 跟現實」(OpenSpec 自己 docs 原話:"nothing forces them to track reality")
+  KEY:lumos 領先處(機械數,2026-09-10)——決策時效(289 條決策/20 條翻案、181 篇驗證 174 篇帶前提與重驗條件、144 行 REVISIT)、合約鏈(登記簿 35 條合約+9 條技術債、綁測試 36 行)、動手前注入(PreToolUse hook 把合約/事故推到眼前;OpenSpec 要 agent 自己敲 CLI)、code diff 反推波及節點(impact --diff;OpenSpec 沒有)、對抗式多席審查迴圈、[SN] 條款不綁 `[test:]` 不得過處置閘(39/172 篇計劃已用)
+  KEY:回看 2026-07-07 的兩條裁定——借的「AC-n 編號驗收+核銷」已演化成 [SN]+`[test:]`+處置閘第五步,比 OpenSpec 的「每條 requirement 至少一個 scenario」強一階(綁到真測試、閘會擋);跳的「delta-spec=第二真相源」被社群漂移證言印證,但真因不是兩份真相、是「沒有東西逼 spec 跟現實」(OpenSpec 自己 docs 原話:"nothing forces them to track reality")
   KEY:★本篇只到調研,可借候選列出不裁★;待 Enzo 裁完才開 _計劃
   PRIOR-ART:①最小解層級=本篇是 PRIOR-ART 留痕,不動任何機制;②世界解過=OpenSpec/Spec Kit/Kiro 三家 SDD 都在「事前對齊」層,沒有一家做「決策時效+合約閘」;③零依賴家規下不採用(npm/Node ≥20.19),只借形狀
   DEP:[[Projects/先問世界_存量掃描裁定]]｜[[Systems/外部對照-code衍生wiki]]｜[[Projects/條款綁測試算進度_計劃]]｜卷證 governance/review-reports/openspec-research-2026-09-10/(兩份乾淨 agent 回報全文)
@@ -290,6 +290,8 @@ FAQ 33 題裡沒有:AI 不照 spec 做怎麼辦、spec 過期怎麼辦、有沒�
 | **brownfield** | 惰性:只寫你要改的那片,明說別回填 | 惰性:[[Systems/節點還原]] 七步,每句 why 標 `[src:]/[git:]/推測/佚失`,Check J 擋編造 |
 | **跨 repo** | stores:planning repo + 唯讀 references,「No sync, ever」 | core-knowledge:`core_refs` 指針 + core-invariant-baseline hash 守合約欄位 |
 | **分發** | npm、Node ≥20.19、30+ 家工具、週更、67.8k★ | python3 零依賴單檔(2.47 萬行、744 支測試)、Claude Code + Codex、單作者 |
+
+(更正 2026-10-12:上表「跨 repo」那列 lumos 格把「core-invariant-baseline hash 守合約欄位」寫成已有;那個守衛的節點 [[Systems/core-invariant-baseline]] 狀態是設計完成、擱置實作,主程式沒有 baseline 子指令,健檢也沒有對應的檢查段。現有的只有 core_refs 指針那半)
 
 ## 最深的一刀:強制力模型
 

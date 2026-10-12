@@ -11,7 +11,7 @@ autonomous loop 的 auditor / judge 子 agent 改以 **Bash 子程序(`claude -p
 
 ## 前提與既驗事實
 
-- **現況**:autonomous-loop.sh:L43 給 orchestrator `--allowedTools "Read,Edit,Bash,Grep,Glob,Agent"`;orchestrator 再用 `Agent` 工具 spawn auditor / judge——Claude Code 的 `Agent` 工具**不支援 allowedTools 參數**,子 agent 完整繼承父 session 的工具集。
+- **現況**:autonomous-loop.sh:L43 給 orchestrator `--allowedTools "Read,Edit,Bash,Grep,Glob,Agent"`;orchestrator 再用 `Agent` 工具 spawn auditor / judge——Claude Code 的 `Agent` 工具**不支援 allowedTools 參數**,子 agent 完整繼承父 session 的工具集。(更正 2026-10-12:依 Claude Code 官方文件(2026-10-11 讀取),完整繼承只對沒有子代理定義檔的一般子代理成立;定義檔可設工具白名單與禁用清單,依定義檔收窄是原生功能,只是逐次派工不能另指工具)
 - **confused deputy 路徑**:spec 草稿中若有「被下毒」節(惡意注入指令),auditor 子 agent 被誘導時可合法呼叫 `Edit`/`Bash`,寫入圖譜、改 spec、甚至開 PR——父 session 和 harness 層皆不攔截。
 - **機械防護可達點**:`claude -p --allowedTools "Read,Grep,Glob"` 在 harness 層強制 auditor/judge 無 Edit/Bash/Agent,子程序無論被如何誘導都無法呼叫受限工具(harness 層比 prompt 層可靠)。
 - **orchestrator Bash 工具已驗**:orchestrator-prompt 要求跑 `python3 scripts/lumos ...` + `python3 -c "...cross_audit..."`,已用 Bash 工具;再加一條 `claude -p` Bash 子程序同層次、無新依賴。
