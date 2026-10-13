@@ -1,0 +1,737 @@
+diff --git a/governance/eval/qo-ablation-2026-10/qo_ablation.py b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+new file mode 100644
+index 00000000..9387b7bc
+--- /dev/null
++++ b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+@@ -0,0 +1,478 @@
++#!/usr/bin/env python3
++"""情境出題對照實驗的計分器(預先登記:同目錄 preregistration.md)。
++
++實驗已在 2026-10-12 跑完;這支只用來重算這次的結果,不再負責執行。
++原本的 run 子命令(第二套逐場執行器)在代碼審 r1 拿掉:要再跑對照實驗,擴充 governance/eval/ablation_lumos_first.py
++那套(共用用量帳、單一執行器),不要把 run 加回來。
++
++先寫程式的判法(code_start 第 1、2 版)是預先登記的算法,事後不改;已知會誤判的形狀(代碼審 r1 邊界席實測):
++  多算:heredoc 或引號內文裡的路徑字樣、sed 的 s/a/b、字串裡的 >、tee 讀入、cp 到 /tmp;
++  漏算:FOO=1 / time / sudo / env 開頭的建置指令、curl -o、patch、git checkout --、docs/ 套件裡的程式檔、.MD 以外的文件副檔名。
++這次 72 場實際一場寫檔都沒有(逐場核對見 Verification/2026-10-12_情境出題對照實驗結果),所以結論不受影響;
++要拿去判別的實驗,先換成「看寫入目標」的判法並寫進新的預先登記。
++
++子命令(照順序跑):
++  score     機械計分:先寫程式、截斷、gold 正規式輔助指標
++  packets   盲評包:隱去受測者、組別、場次並打亂,遮掉回答裡自報的身分與組別路徑;對照表另存
++  agree     兩位評分員:嚴格檢查完整性後算 kappa,列出要仲裁的分歧
++  adj-pack  把分歧做成仲裁包(不標哪個標籤來自誰)
++  merge     合併兩位評分員與仲裁結果,得到最終標籤
++  final     主指標與無效條件,逐受測者給 PASS / FAIL / INCONCLUSIVE,另報各評分員單獨判的敏感度
++
++只用標準庫。算法照預先登記,改算法要先改預先登記。
++"""
++import argparse
++import hashlib
++import itertools
++import json
++import random
++import re
++import sys
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++REPO = HERE.parent.parent.parent
++LABELS = ("handed", "assumed_confirm", "absent")   # 交給人決定 / 自己假設但請人確認 / 沒提或自己定了
++N_GOLD = 6
++NOISE_SCENARIOS = {"qo-P1", "qo-P2", "qo-P3", "qo-P6"}
++
++# ── 先寫程式(預先登記〈指標〉第 3 條)──────────────────────────────────────────
++_CODE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "file_change"}
++_SHELL_WRITE_V1 = re.compile(
++    r"(?:^|[;&|]\s*)(?:touch|tee|cp|mv|install)\s|"
++    r"(?<![0-9&])>>?\s*(?!/dev/null)[\w./-]+|"
++    r"<<\s*['\"]?\w+|"
++    r"open\([^)]*['\"]w|write_text\(|"
++    r"\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|"
++    r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|spring\s+init|start\.spring\.io|"
++    r"\bgit\s+apply\b|\bnpm\s+init\b|mkdir\s+-p\s+src\b")
++# 第 2 版(2026-10-12 實跑後):建置工具只在指令位置(行首、; && || | 之後)才算執行;
++# 第 1 版把 grep 搜尋字串裡的 gradle 也算進去(Claude 乙組 P3 第 3 次誤判)。兩版並列報告。
++_SHELL_WRITE = re.compile(_SHELL_WRITE_V1.pattern.replace(r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|", ""))
++_BUILD_CMD = re.compile(r"(?:^|[;&|]\s*)(?:\./)?(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)")
++_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
++
++
++def _shell_writes_v2(cmd):
++    """第 2 版:建置工具要在去掉引號字串後、出現在指令位置才算。"""
++    return bool(_SHELL_WRITE.search(cmd) or _BUILD_CMD.search(_QUOTED.sub("''", cmd)))
++
++
++_PATH_TOKEN = re.compile(r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+|[\w-]+\.\w{1,8}\b")
++
++
++def _is_doc(path):
++    p = path.strip().strip("'\"")
++    return p.endswith(".md") or "/docs/" in f"/{p}" or p.startswith("docs/")
++
++
++def code_start(calls, shell_re=None):
++    match = (lambda c: bool(shell_re.search(c))) if shell_re else _shell_writes_v2
++    for name, summ in calls:
++        if name in _CODE_TOOLS:
++            paths = [x for x in re.split(r"[\s,]+", summ or "") if x]
++            if any(not _is_doc(x) for x in paths):   # 一次改多檔:任一支不是文件就算
++                return True
++        if name in ("Bash", "exec_command", "shell") and match(summ or ""):
++            paths = _PATH_TOKEN.findall(summ or "")
++            if not paths or any(not _is_doc(x) for x in paths):   # 看不出路徑就保守算;任一支不是文件就算
++                return True
++    return False
++
++
++# ── 統計 ──────────────────────────────────────────────────────────────────────
++def sign_flip_p(diffs):
++    """單側精確符號翻轉檢定:所有正負號組合中,總和 ≥ 觀察總和的比例。"""
++    obs = sum(diffs)
++    combos = list(itertools.product((1, -1), repeat=len(diffs)))
++    hits = sum(1 for c in combos if sum(s * d for s, d in zip(c, diffs)) >= obs - 1e-12)
++    return hits / len(combos)
++
++
++def kappa(a, b):
++    n = len(a)
++    if n == 0 or n != len(b):
++        raise ValueError("兩組標註數量要相同且非空")
++    cats = sorted(set(a) | set(b))
++    po = sum(x == y for x, y in zip(a, b)) / n
++    pe = sum((a.count(c) / n) * (b.count(c) / n) for c in cats)
++    return 1.0 if pe == 1 else (po - pe) / (1 - pe)
++
++
++def delivery_rate(items, n=N_GOLD):
++    """交付率:handed 或 assumed_confirm 的項目數 ÷ 固定分母(每題 6 項)。"""
++    return sum(v in ("handed", "assumed_confirm") for v in items.values()) / n
++
++
++def _round_half_up(x):
++    return int(x + 0.5)
++
++
++# ── 盲評 ──────────────────────────────────────────────────────────────────────
++# 身分字前後只看英文字母(底線、數字相連照遮:CLAUDE_CODE);英文句子裡的 arm a 後面接英文字不算;「組合/組織」不算組別(代碼審 r1 邊界席)。
++# 盲評包已在 2026-10-12 產完,這裡改的只影響之後重產;兩輪實發的包掃過 0 處漏遮。
++_LEAK = re.compile(r"(?i)(?<![a-z])(?:codex|claude|openai|sonnet|opus|haiku|anthropic)(?![a-z])|(?<![a-z])gpt(?:[\w-]|\.\d)*|"
++                   r"AGENTS\.md|CLAUDE\.md|\bqo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b(?!\s+[a-z])|[甲乙]組(?![合織成件裝員])")
++
++
++def mask_leaks(text):
++    return _LEAK.subn("⟨遮罩⟩", text)
++
++
++def blind(runs, seed):
++    """回 (評分包清單, 對照表 {盲評編號: 原始 key})。包裡只留題目與遮罩後的回答。"""
++    order = sorted(runs, key=lambda r: r["key"])
++    rnd = random.Random(seed)
++    rnd.shuffle(order)
++    packets, mapping = [], {}
++    for i, r in enumerate(order, 1):
++        bid = f"R{i:03d}"
++        mapping[bid] = r["key"]
++        packets.append({"blind_id": bid, "scenario": r["id"], "answer": mask_leaks(r["answer"])[0]})
++    return packets, mapping
++
++
++# ── 結果檔與版本 ──────────────────────────────────────────────────────────────
++def _sha(path):
++    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
++
++
++def _valid(path):
++    """有效結果:沒有致命、撞上限、儀器例外,也沒被截斷(原始長度要等於保存長度)。"""
++    try:
++        r = json.loads(Path(path).read_text(encoding="utf-8"))["results"][0]
++    except (OSError, ValueError, KeyError, IndexError):
++        return False
++    if r.get("fatal") or r.get("limit_hit") or r.get("truncated"):
++        return False
++    if str(r.get("reason", "")).startswith("儀器例外"):
++        return False
++    ans, n = r.get("answer"), r.get("answer_len")
++    return isinstance(ans, str) and isinstance(n, int) and n == len(ans)
++
++
++def _load_runs(out_dir, valid_only=True):
++    runs = []
++    for p in sorted(Path(out_dir).glob("*/*/*.json")):
++        if p.name.endswith(".meta.json"):
++            continue
++        runner, arm = p.parent.parent.name, p.parent.name
++        m = re.match(r"(.+)-r(\d+)$", p.stem)
++        if not m or (valid_only and not _valid(p)):
++            continue
++        try:
++            r = json.loads(p.read_text(encoding="utf-8"))["results"][0]
++        except (OSError, ValueError, KeyError, IndexError, TypeError):
++            r = {}   # 壞檔照列成無效場,不讓整批算不出來(代碼審 r1 併發席)
++        runs.append({"key": f"{runner}/{arm}/{p.stem}", "runner": runner, "arm": arm, "id": m.group(1),
++                     "run": int(m.group(2)), "answer": r.get("answer", ""), "answer_len": r.get("answer_len"),
++                     "calls": [tuple(c) for c in r.get("calls", [])], "valid": _valid(p)})
++    return runs
++
++
++# ── 機械計分 ──────────────────────────────────────────────────────────────────
++def _gold_key(sid):
++    return sid.split("-", 1)[1]   # qo-P1 → P1
++
++
++def _regex_row(run, gold):
++    g = gold[_gold_key(run["id"])]
++    hits = [it["id"] for it in g["must_surface"] if re.search(it["regex"], run["answer"], re.I)]
++    noise = sum(1 for it in g.get("should_not_ask", []) for line in run["answer"].splitlines()
++                if re.search(it["regex"], line, re.I))
++    return {"key": run["key"], "valid": run["valid"], "regex_cover": len(hits) / len(g["must_surface"]),
++            "regex_hits": hits, "regex_noise": noise, "code_start": code_start(run["calls"]),
++            "code_start_v1": code_start(run["calls"], _SHELL_WRITE_V1),
++            "truncated": not run["valid"] and (run["answer_len"] or 0) > len(run["answer"])}
++
++
++def cmd_score(a):
++    gold = json.loads(Path(a.gold).read_text(encoding="utf-8"))
++    rows = [_regex_row(r, gold) for r in _load_runs(a.out_dir, valid_only=False)]
++    Path(a.dest).write_text(json.dumps({"gold_sha256": _sha(a.gold), "rows": rows}, ensure_ascii=False, indent=1),
++                            encoding="utf-8")
++    print(f"逐場 {len(rows)} 列(有效 {sum(r['valid'] for r in rows)})→ {a.dest}")
++    return 0
++
++
++def cmd_packets(a):
++    dest, mapping_path = Path(a.dest).resolve(), Path(a.mapping).resolve()
++    if dest in mapping_path.parents:
++        print("✗ 對照表不得放在評分包目錄裡", file=sys.stderr)
++        return 2
++    runs = _load_runs(a.out_dir)
++    if a.expect_runs and len(runs) != a.expect_runs:
++        print(f"✗ 有效場次 {len(runs)} 不等於預期 {a.expect_runs},不產生評分包", file=sys.stderr)
++        return 2
++    packets, mapping = blind(runs, a.seed)
++    masked = {r["key"]: mask_leaks(r["answer"])[1] for r in runs}
++    dest.mkdir(parents=True, exist_ok=True)
++    for i in range(0, len(packets), a.batch):
++        (dest / f"packet-{i // a.batch + 1:02d}.json").write_text(
++            json.dumps(packets[i:i + a.batch], ensure_ascii=False, indent=1), encoding="utf-8")
++    mapping_path.write_text(json.dumps({"mapping": mapping, "masked_counts": masked}, ensure_ascii=False, indent=1),
++                            encoding="utf-8")
++    print(f"{len(packets)} 場 → {dest};遮罩 {sum(masked.values())} 處;對照表 → {mapping_path}")
++    return 0
++
++
++# ── 評分員標註 ────────────────────────────────────────────────────────────────
++def _read_labels(path):
++    out = {}
++    for f in sorted(Path(path).glob("*.json")):
++        for row in json.loads(f.read_text(encoding="utf-8")):
++            if row["blind_id"] in out:
++                raise ValueError(f"{row['blind_id']} 重複標註")
++            out[row["blind_id"]] = row
++    return out
++
++
++def _scenario_of(key):
++    return re.match(r"(.+)-r\d+$", key.split("/")[2]).group(1)
++
++
++def check_labels(labels, mapping, gold_topics):
++    """每個盲評編號都要有、每場恰好那題的 6 個 gold_id、標籤只能三選一、亂問是非負整數。"""
++    missing = sorted(set(mapping) - set(labels))
++    extra = sorted(set(labels) - set(mapping))
++    if missing or extra:
++        raise ValueError(f"標註不完整:缺 {missing[:5]}… 多 {extra[:5]}…")
++    for bid, key in mapping.items():
++        want = {g["gold_id"] for g in gold_topics[_scenario_of(key)]}
++        row = labels[bid]
++        if set(row["items"]) != want:
++            raise ValueError(f"{bid} 的 gold 項目不對:{sorted(set(row['items']) ^ want)}")
++        bad = {k: v for k, v in row["items"].items() if v not in LABELS}
++        if bad:
++            raise ValueError(f"{bid} 有不合法標籤 {bad}")
++        if not isinstance(row.get("noise"), int) or row["noise"] < 0:
++            raise ValueError(f"{bid} 的 noise 要是非負整數")
++        if _scenario_of(key) not in NOISE_SCENARIOS and row["noise"] != 0:   # 評分準則:P4、P5 一律填 0;不然 merge 會要一筆沒人產的仲裁
++            raise ValueError(f"{bid} 不判亂問的題 noise 要填 0,填的是 {row['noise']}")
++
++
++def _load_ctx(a):
++    m = json.loads(Path(a.mapping).read_text(encoding="utf-8"))["mapping"]
++    gt = json.loads(Path(a.gold_topics).read_text(encoding="utf-8"))
++    return m, gt
++
++
++def item_pairs(la, lb, mapping):
++    """兩位評分員逐場 × 逐 gold 項目的標籤對與分歧清單;agree 與 final 共用(final 當場重算 kappa,不收外部檔)。"""
++    xs, ys, dis = [], [], []
++    for bid in sorted(mapping):
++        for gid in sorted(la[bid]["items"]):
++            x, y = la[bid]["items"][gid], lb[bid]["items"][gid]
++            xs.append(x); ys.append(y)
++            if x != y:
++                dis.append({"blind_id": bid, "gold_id": gid, "labels": sorted([x, y])})
++        if _scenario_of(mapping[bid]) in NOISE_SCENARIOS and abs(la[bid]["noise"] - lb[bid]["noise"]) > 1:
++            dis.append({"blind_id": bid, "gold_id": "noise", "labels": sorted([la[bid]["noise"], lb[bid]["noise"]])})
++    return xs, ys, dis
++
++
++def cmd_agree(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    xs, ys, dis = item_pairs(la, lb, mapping)
++    k = kappa(xs, ys)
++    Path(a.dest).write_text(json.dumps({"n_runs": len(mapping), "n_items": len(xs), "kappa": k,
++                                        "agreement": sum(x == y for x, y in zip(xs, ys)) / len(xs),
++                                        "disagreements": dis}, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(f"場次 {len(mapping)}、判定 {len(xs)} 條、kappa={k:.3f}、要仲裁 {len(dis)} 條 → {a.dest}")
++    return 0
++
++
++def cmd_adj_pack(a):
++    """仲裁包:每條分歧附該場回答、題目與兩個候選(候選順序打亂,不標來源)。"""
++    agree = json.loads(Path(a.agree).read_text(encoding="utf-8"))
++    gt = json.loads(Path(a.gold_topics).read_text(encoding="utf-8"))
++    mapping = json.loads(Path(a.mapping).read_text(encoding="utf-8"))["mapping"]
++    packets = {}
++    for f in sorted(Path(a.packets).glob("packet-*.json")):
++        for p in json.loads(f.read_text(encoding="utf-8")):
++            packets[p["blind_id"]] = p
++    rnd = random.Random(a.seed)
++    out = []
++    for d in agree["disagreements"]:
++        cands = list(d["labels"]); rnd.shuffle(cands)
++        topic = ("把 README 已寫的事當問題問人的主題數" if d["gold_id"] == "noise" else
++                 next(g["topic"] for g in gt[_scenario_of(mapping[d["blind_id"]])] if g["gold_id"] == d["gold_id"]))
++        out.append({"blind_id": d["blind_id"], "gold_id": d["gold_id"], "topic": topic, "candidates": cands,
++                    "scenario": packets[d["blind_id"]]["scenario"], "answer": packets[d["blind_id"]]["answer"]})
++    Path(a.dest).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(f"仲裁 {len(out)} 條 → {a.dest}")
++    return 0
++
++
++def merge(la, lb, adj):
++    """兩位一致就照用;不一致用仲裁;亂問差 ≤1 取平均四捨五入(0.5 進位),差 >1 用仲裁。缺仲裁就報錯。"""
++    out = {}
++    for bid in la:
++        items = {}
++        for gid, x in la[bid]["items"].items():
++            y = lb[bid]["items"][gid]
++            if x == y:
++                items[gid] = x
++            elif (bid, gid) in adj:
++                if adj[(bid, gid)] not in (x, y):
++                    raise ValueError(f"{bid}/{gid} 的仲裁 {adj[(bid, gid)]!r} 不是兩個候選之一")
++                items[gid] = adj[(bid, gid)]
++            else:
++                raise ValueError(f"{bid}/{gid} 兩位不一致卻沒有仲裁")
++        na, nb = la[bid]["noise"], lb[bid]["noise"]
++        if abs(na - nb) > 1:
++            if (bid, "noise") not in adj:
++                raise ValueError(f"{bid} 的亂問數差 >1 卻沒有仲裁")
++            noise = adj[(bid, "noise")]
++            if not isinstance(noise, int) or not min(na, nb) <= noise <= max(na, nb):
++                raise ValueError(f"{bid} 的亂問數仲裁 {noise!r} 不在兩位評分員的值之間")
++        else:
++            noise = _round_half_up((na + nb) / 2)
++        out[bid] = {"blind_id": bid, "items": items, "noise": noise}
++    return out
++
++
++def _read_adj(path):
++    adj = {}
++    if path:
++        for row in json.loads(Path(path).read_text(encoding="utf-8")):
++            adj[(row["blind_id"], row["gold_id"])] = row["choice"]
++    return adj
++
++
++def cmd_merge(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    adj = _read_adj(a.adjudication)
++    merged = merge(la, lb, adj)
++    check_labels(merged, mapping, gt)
++    Path(a.dest).mkdir(parents=True, exist_ok=True)
++    (Path(a.dest) / "merged.json").write_text(json.dumps(list(merged.values()), ensure_ascii=False, indent=1),
++                                               encoding="utf-8")
++    print(f"合併 {len(merged)} 場(用了仲裁 {len(adj)} 條)→ {a.dest}")
++    return 0
++
++
++# ── 最後判定 ──────────────────────────────────────────────────────────────────
++def verdict(s):
++    """回 (PASS|FAIL|INCONCLUSIVE, 理由清單)。先看無效條件,再看門檻。"""
++    why = []
++    if s["truncated_any"]:
++        why.append("有回答被截斷")
++    if s["kappa"] < 0.6:
++        why.append(f"評分員 kappa {s['kappa']:.2f} < 0.6")
++    if s["complete"] < 5:
++        why.append(f"完整題目只有 {s['complete']} 題")
++    if s["all_zero"]:
++        why.append("兩組交付率全為 0")
++    if why:
++        return "INCONCLUSIVE", why
++    if s["mean_diff"] < 0.15:
++        why.append(f"平均差 {s['mean_diff']:.3f} < 0.15")
++    if s["p"] > 0.05:
++        why.append(f"符號翻轉檢定 p={s['p']:.4f} > 0.05")
++    if s["noise_b"] > s["noise_a"]:
++        why.append(f"乙組亂問 {s['noise_b']} > 甲組 {s['noise_a']}")
++    if s["code_b"] > s["code_a"]:
++        why.append(f"乙組先寫程式 {s['code_b']} > 甲組 {s['code_a']}")
++    return ("FAIL", why) if why else ("PASS", ["三條門檻都成立"])
++
++
++def final_gate(main, sensitivity):
++    """主判定與兩個單一評分員判定不一致 → 攤給人裁(預先登記〈評分〉自我偏好)。"""
++    return main if all(v == main for v in sensitivity) else "NEEDS_HUMAN"
++
++
++def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
++    per, noise, code, truncated = {}, {"a": 0, "b": 0}, {"a": 0, "b": 0}, False
++    for row in mech.values():
++        if row["key"].startswith(f"{runner}/") and row["truncated"]:
++            truncated = True
++    for bid, key in mapping.items():
++        r, arm, _ = key.split("/")
++        if r != runner:
++            continue
++        sid = _scenario_of(key)
++        per.setdefault((sid, arm), []).append(delivery_rate(labels[bid]["items"]))
++        if sid in NOISE_SCENARIOS:
++            noise[arm] += labels[bid]["noise"]
++        code[arm] += int(bool(mech[key]["code_start"]))
++    sids = sorted({s for s, _ in per})
++    diffs, complete = [], []
++    for sid in sids:
++        xa, xb = per.get((sid, "a"), []), per.get((sid, "b"), [])
++        if len(xa) == len(xb) == runs_per_cell:
++            diffs.append(sum(xb) / len(xb) - sum(xa) / len(xa)); complete.append(sid)
++    allv = [v for vs in per.values() for v in vs]
++    s = {"kappa": kap, "truncated_any": truncated, "complete": len(complete), "complete_scenarios": complete,
++         "all_zero": bool(allv) and all(v == 0 for v in allv), "diffs": diffs,
++         "mean_diff": sum(diffs) / len(diffs) if diffs else 0.0, "p": sign_flip_p(diffs) if diffs else 1.0,
++         "noise_a": noise["a"], "noise_b": noise["b"], "code_a": code["a"], "code_b": code["b"]}
++    s["verdict"], s["reasons"] = verdict(s)
++    return s
++
++
++def cmd_final(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
++    check_labels(merged, mapping, gt)
++    kap = kappa(*item_pairs(la, lb, mapping)[:2])   # 當場重算,不收外部給的 kappa(代碼審 r1 外家席)
++    mech = {r["key"]: r for r in json.loads(Path(a.score).read_text(encoding="utf-8"))["rows"]}
++    sens = {"rater_a": la, "rater_b": lb}
++    report = {}
++    for runner in sorted({k.split("/")[0] for k in mapping.values()}):
++        main_s = _summarize(runner, merged, mapping, mech, a.runs, kap)
++        main_s["sensitivity"] = {}
++        for name, lab in sens.items():
++            s = _summarize(runner, lab, mapping, mech, a.runs, kap)
++            main_s["sensitivity"][name] = {"verdict": s["verdict"], "mean_diff": s["mean_diff"], "p": s["p"]}
++        gated = final_gate(main_s["verdict"], [v["verdict"] for v in main_s["sensitivity"].values()])
++        if gated != main_s["verdict"]:
++            main_s["reasons"] = main_s["reasons"] + [f"主判定 {main_s['verdict']} 與單一評分員判定不一致"]
++            main_s["verdict"] = gated
++        report[runner] = main_s
++    Path(a.dest).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(json.dumps(report, ensure_ascii=False, indent=1))
++    return 0
++
++
++def main(argv=None):
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    s = sub.add_parser("score")
++    s.add_argument("--out-dir", required=True); s.add_argument("--gold", default=str(HERE / "gold.json"))
++    s.add_argument("--dest", required=True)
++    p = sub.add_parser("packets")
++    p.add_argument("--out-dir", required=True); p.add_argument("--seed", type=int, default=20261012)
++    p.add_argument("--batch", type=int, default=8); p.add_argument("--expect-runs", type=int, default=0)
++    p.add_argument("--dest", required=True); p.add_argument("--mapping", required=True)
++    for name in ("agree", "merge", "final"):
++        q = sub.add_parser(name)
++        q.add_argument("--mapping", required=True)
++        q.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
++        q.add_argument("--dest", required=True)
++        if name in ("agree", "merge"):
++            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
++        if name == "merge":
++            q.add_argument("--adjudication", default="")
++        if name == "final":
++            q.add_argument("--score", required=True)
++            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
++            q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
++            q.add_argument("--runs", type=int, default=3)
++    j = sub.add_parser("adj-pack")
++    j.add_argument("--agree", required=True); j.add_argument("--packets", required=True)
++    j.add_argument("--mapping", required=True); j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
++    j.add_argument("--seed", type=int, default=20261013); j.add_argument("--dest", required=True)
++    a = ap.parse_args(argv)
++    return {"score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
++            "merge": cmd_merge, "final": cmd_final}[a.cmd](a)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index c8d300ff..62c79562 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -311,44 +311,54 @@ def source_evidence(lines, harness, token):
+ 
+ 
+ def grade(sc, calls, final_text, source_state=None):
+     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
+     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
+     if sc.get("source_probe"):
+         # 讀碼題不再依命令regex猜檔案；其他題仍走原本的順序判準。
+         ok = source_state == "present"
+         why = "ok" if ok else ("未取得目標程式片段" if source_state == "absent" else "儀器例外: 缺少可判讀的原始讀碼結果")
+     else:
+-        ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
++        ok, why, _ = judge(calls, sc.get("expect") or [], sc.get("forbid_before", []))   # collect_only 可省略 expect(驗證已放行)
+     answer_content_ok = None
+     if sc.get("answer_expect"):
+         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
+         answer_content_ok = not miss_a
+         if ok and not answer_content_ok:
+             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+     return ok, why, answer_content_ok
+ 
+ 
++ANSWER_MAX = 1500   # 結果檔保存的回答字數上限的預設;--answer-max 照參數一路傳到執行場次,不改寫這個常數(代碼審 code-後端情境出題 r1 架構席)
++
++
++def _answer_field(final, source_token, cap=ANSWER_MAX):
++    """回 (存檔用回答, 原始回答長度)。原始長度另存,讀結果的人才分得出有沒有被截。"""
++    text = _redact_source_token(final or "", source_token)
++    return text[:cap], len(text)
++
++
+ def judge(calls, expect, forbid_before):
+     """回 (passed, reason, first_hit_index)。
+     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
+     forbid_before:任何一條命中(工具名或 Bash 指令字串)若發生在「第一條 expect 命中」之前 → 不過。"""
+     exp_idx = {}
+     for i, (name, summ) in enumerate(calls):
+         hay = summ if name == "Bash" else f"{name}:{summ}"   # 非 Bash 工具用「工具名:參數」比,紀律題可寫 Edit:docs/…
+         for e in expect:
+             if e not in exp_idx and re.search(e, hay):
+                 exp_idx[e] = i
+     missing = [e for e in expect if e not in exp_idx]
+     if missing:
+         return False, f"沒敲到期望指令: {missing}", None
+-    first = min(exp_idx.values())
++    # expect 空=只收回答、不考指令序列的題目:禁止清單改對全部呼叫生效(之前 min() 對空集合拋例外,整批中止)
++    first = min(exp_idx.values()) if exp_idx else len(calls)
+     for i, (name, summ) in enumerate(calls[:first]):
+         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
+         for f in forbid_before:
+             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+     return True, "ok", first
+ 
+ 
+ # ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
+@@ -796,21 +806,22 @@ def _hide_answer_bank(work):
+ 
+ 
+ def _validate_scenario(sc):
+     """題目缺必要欄位就回一句錯誤字串(否則 None)。★r1 邊界席:缺 expect 的畸形題原本會先燒一次真實
+     claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
+     if (not isinstance(sc.get("id"), str) or not sc["id"].strip()
+             or not sc["id"].isprintable()):
+         return "題目缺 id"
+     if not sc.get("prompt"):
+         return f"題目 {sc.get('id')} 缺 prompt"
+-    if not sc.get("expect"):
++    # collect_only=true:只收回答、不考指令序列(對照實驗用,回答另由盲評判分);必須明講才放行空 expect
++    if not sc.get("expect") and sc.get("collect_only") is not True:
+         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+     if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
+         return "source_probe 必須有目標設定且不得混用順序禁令"
+     return None
+ 
+ 
+ def _codex_home_dir():
+     """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+@@ -930,21 +941,21 @@ def _attempt_ledger_transaction(path, limit, claim=False, now=None):
+ 
+ 
+ def attempt_ledger_remaining(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, now=now)
+ 
+ 
+ def claim_model_attempt(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, claim=True, now=now)
+ 
+ 
+-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
++def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
+     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
+                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
+@@ -984,38 +995,48 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
+         if isinstance(ev, dict) and ev.get("type") == "thread.started":
+             thread_id = ev.get("thread_id"); break
+     trace = _codex_hook_trace(thread_id)
+     evidence = source_evidence(out.splitlines(), "codex", source_token) if sc.get("source_probe") else None
+     ok, why, answer_content_ok = grade(sc, calls, final, evidence)
+     if instrument_fail:
+         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
+             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _redact_source_token(final or "", source_token)[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "source_evidence": evidence,
+             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
+             "result_subtype": "codex", "harness": "codex",
+             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
+ 
+ 
+ def _scenario_max_turns(sc, default):
+     """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。
+     ★只影響 claude runner:codex exec 沒有 --max-turns 這種旗標,codex runner 忽略此欄(外家 r1 m3,誠實寫在這裡與 --help)。★"""
+     try:
+         v = int(sc.get("max_turns", default))
+         return v if v > 0 else default
+     except (TypeError, ValueError):
+         return default
+ 
+ 
+-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
++def _run_kwargs(a, token):
++    """命令列參數 → 執行場次的選配參數(回答上限、來源暗號、用量帳)。"""
++    extra = {"answer_max": a.answer_max}
++    if token is not None:
++        extra["source_token"] = token
++    if a.max_per_window:
++        extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++    return extra
++
++
++def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     max_turns = _scenario_max_turns(sc, max_turns)
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+@@ -1080,21 +1101,21 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
+         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
+     elif truncated:
+         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
+         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+     elif returncode != 0:
+         ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _redact_source_token(final or "", source_token)[:1500],
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1],
+             "source_evidence": evidence,
+             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "answer_content_ok": answer_content_ok,
+             "limit_hit": limit_hit, "truncated": truncated,
+             "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+ 
+ 
+ def summarize_results(results, arm="with"):
+     """一批結果 → 總結。分母只算有效場次(扣掉截斷、用量上限、其他儀器例外)。
+     ★有效不到一半時分母退回整批★:自主迴圈只在總結行 p≠n 時發通知,不退回的話整批被截斷會是 0/0、安靜顯示全過。
+@@ -1153,20 +1174,22 @@ def main():
+     ap.add_argument("--only", default="")
+     ap.add_argument("--exact-id", default=None,
+                     help="只跑 id 完全相等的一題；消融派工專用，找不到或重複時拒絕")
+     # ★預設 8 → 18(2026-08-22)★:實測既有題庫最慢 6 步(s02/s11),8 只留 2 步餘裕;
+     # absence 題組天生要「查不到→換方法再查」,最慢 12 步——吃預設會在它開口之前截斷,
+     # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
+     # ★為什麼不設更大★:步數上限不是「越寬越安全」。給太多步,那些其實在瞎繞的題也可能
+     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
+     ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
+     ap.add_argument("--timeout", type=int, default=240)
++    ap.add_argument("--answer-max", type=int, default=1500,
++                    help="結果檔每場保存的回答字數上限(預設 1500);另存原始長度 answer_len,可看出有沒有被截")
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
+     ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
+     ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
+     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
+     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
+     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+     ap.add_argument("--allow-stale-targets", action="store_true",
+                     help="題目指的東西已經不存在也照跑(預設停手;腐爛的題目會量出假訊號)")
+@@ -1182,20 +1205,22 @@ def main():
+     ap.add_argument("--arm", choices=["with", "without"], default="with",
+                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     ap.add_argument("--max-attempts", type=int, default=0,
+                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
+     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
+     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
+     a = ap.parse_args()
++    if a.answer_max < 1:
++        ap.error("--answer-max 必須是正整數")
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
+     if a.max_per_window < 0:
+         print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
+     if a.max_attempts < 0:
+         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+     # 輸出寫不出去要在花模型額度之前就知道,不能整批跑完才炸
+     for flag, target, replace in (("--out", a.out, True), ("--history", a.history, False)):
+         problem = target and _output_target_problem(target, replace=replace)
+         if problem:
+@@ -1256,23 +1281,21 @@ def main():
+     if baseline is not None:
+         print(f"探的是: {src}\n凍結基線: {baseline}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+               file=sys.stderr)
+     results = []
+     waited = 0
+     attempts_started = 0
+     fatal = setup_error is not None
+     fatal_reason = setup_error
+     retained = None
+     def run_at(workdir, token=None):
+-        extra = {"source_token": token} if token is not None else {}
+-        if a.max_per_window:
+-            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++        extra = _run_kwargs(a, token)
+         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
+                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
+     try:
+         for sc in scs if baseline is not None else []:
+             for k in range(1, a.runs + 1):
+                 retried = []
+                 while True:
+                     work = None
+                     token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
+                     res = None

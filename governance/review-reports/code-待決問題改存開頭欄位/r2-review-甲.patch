@@ -1,0 +1,960 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index e09c0b54..4c0c93f9 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -6420,20 +6420,21 @@ def cmd_drift_history(env, every=60, limit=0, as_json=False):
+ 
+ 
+ _KNOWN_FRONTMATTER_KEYS = (
+     "type", "status", "tags", "summary", "created", "updated", "related", "aliases",
+     "valid_under", "revalidate_when", "plan_refs", "date", "decisions", "verified_by",
+     "about_code", "about_code_stamp", "self_audit", "feature", "commit",
+     "decision_refs", "decision_refs_ai", "pitfall_when", "pitfall_ask", "pitfall_source",
+     "signed_off", "kill_recipes", "core_refs", "regen",
+     "responsibility", "lands_in",   # 2026-09-11 每支檔有家:Systems 的負責範圍、計劃的落點
+     "guards", "due", "owner", "phases",   # 2026-09-22 預告合約:守衛節點的四個欄位(不登記的話這機制產的每篇節點都被唸欄位名打錯)
++    "pending_questions",   # 2026-10-12 計劃的待決問題(待決問題改存開頭欄位_計劃)
+     "plan_risk", "door",   # 2026-09-17 計劃風險(作者只能往嚴標 high);door 是舊寫法,讀得懂但提醒改
+ )
+ # ↑ 2026-09-06 全 repo 審視 #16。★代碼審 r1 訂正★:初版清單來源是「掃本 vault 428 篇出現過的鍵」,
+ #   結果漏掉 core_refs(跨專案升格參照,doctor Check C 與 impact 跨 repo 展開都在讀)與 regen(重建溯源在讀)
+ #   ——這兩個欄位工具確實會讀,只是本 vault 目前沒節點寫,於是掃不到、被誤報成「不認得」。
+ #   正解是問工具認得哪些,不是問這個 vault 長怎樣:下面 cmd_lint 另在執行期併入 LIST_KEYS/LINK_KEYS,
+ #   那兩份常數再新增欄位時這裡不必跟著改。
+ #   ★這是軟提醒不是白名單硬擋★——別的 vault 有自己的欄位(consumer 專案、core-knowledge 的
+ #   project/implements/domain 等),所以留 .lumos/config.json 的 extra_frontmatter_keys 可擴充。
+ 
+@@ -6834,21 +6835,21 @@ def _note_date_problem(label, present, v, why):
+         return f"{label} 寫了卻是空的——填年-月-日(例:2026-09-25),不需要就整行拿掉"
+     if not _note_date_ok(str(v)):
+         return f"{label} 要寫成年-月-日(例:2026-09-25),而且是真的日期;你寫的是 {str(v)!r}——{why}"
+     return None
+ 
+ 
+ def _lint_new_rules(env, rel):
+     """這次新增、擋不擋看開關的欄位規則(筆記欄位關卡補齊_計劃 S6 到 S10):回問題清單(每條講怎麼修)。每條規則一支小函式。"""
+     n = env.notes[rel]
+     return (_nl_rule_status(n) + _nl_rule_dates(n) + _nl_rule_decisions(n)
+-            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n))
++            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n) + _nl_rule_pending_questions(env, rel, n))
+ 
+ 
+ def _nl_rule_status(n):
+     t = n.fields.get("type")
+     st = n.fields.get("status")
+     if t not in _NOTE_STATUS_REQUIRED_TYPES or (isinstance(st, str) and st.strip()):
+         return []
+     allowed = {"system": "doing/done/planned/deferred/rejected/superseded/stale", "project": "todo/doing/done/superseded",
+                "issue": "open/doing/resolved/done/wontfix", "verification": "pass/stale/superseded/pending/abandoned"}[t]
+     return [f"沒填 status(寫成空白也算),篩選與健檢各段都靠它判狀態——用 lumos set <節點> status <值> 補上,{t} 允許:{allowed}"]
+@@ -6890,23 +6891,325 @@ def _nl_rule_lands_in(rel, n):
+             and (created >= _NOTE_LINT_PLAN_SINCE or not _note_date_ok(created))):
+         return []
+     li = n.fields.get("lands_in")
+     vals = [x for x in (as_list(li) if li is not None else []) if str(x).strip()]
+     if not vals:
+         return ["計劃沒寫 lands_in(現況要寫進哪幾篇 Systems)——用 lumos append <計劃> lands_in Systems/<名稱> 補上,還沒開的篇也可以先寫"]
+     bad = _lands_in_bad(vals)
+     return [f"lands_in 這幾項不是 Systems/<名稱> 的純字串:{bad}(不帶 .md、不寫 [[連結]])"] if bad else []
+ 
+ 
+-# pitfalls --stage 的六個階段(需求風險面表 _REQUIREMENT_FACETS 用同一組)。〈待決問題〉的正文解析已撤出,改存開頭欄位另案:
+-# [[Projects/待決問題改存開頭欄位_計劃]](代碼審 code-後端情境出題 三輪都在同一處換形狀)。
++# 六個階段:pitfalls --stage、需求風險面表 _REQUIREMENT_FACETS、開頭欄位 pending_questions 的 stage 共用這一組。
++# 〈待決問題〉不再讀正文,改存開頭欄位([[Projects/待決問題改存開頭欄位_計劃]];正文解析三輪代碼審都在同一處換形狀)。
+ PQ_STAGES = ("需求", "架構", "實作", "驗證", "效能", "交付")
++# 公開的(不帶底線):別處或測試會用的——階段、狀態、讀法入口 pq_parse(同 parse_decisions 的慣例);其餘是這一區內部用的。
++PQ_STATUSES = ("待查", "自答", "待人", "延後", "已決", "已驗")
++_PQ_KEYS = ("id", "text", "class", "stage", "status", "blocking", "irreversible", "decision", "source", "reason", "tests")
++_PQ_REQUIRED = ("id", "text", "class", "stage", "status")
++_PQ_BOOL_KEYS = ("blocking", "irreversible")
++_PQ_ID_RE = re.compile(r"Q[1-9][0-9]{0,5}")   # 只收 ASCII 數字、最多 6 位(\d 會吃全形與阿拉伯數字;位數不設限 int() 會丟例外,代碼審 r1 邊界席)
++_PQ_ID_MAX = 999999
++_PQ_ITEM_RE = re.compile(r"^  - (.*)$")
++_PQ_SUB_RE = re.compile(r"^    ([A-Za-z][A-Za-z_]*):(?: (.*))?$")   # 鍵名不准底線開頭:內部用的 _line 寫不進來(代碼審 r1 通才席)
++
++
++def _pq_bad_char(v):
++    """值裡第一個不准出現的字元:控制字元(含 \x0b \x0c \x85 ESC)與 U+2028/U+2029。讀寫兩端共用這一條——
++    這些字元在別的讀法(str.splitlines)裡是換行,寫進去會讓同一篇的條款行號錯位;ESC 印到終端能改畫面(代碼審 r1 邊界、資安席)。"""
++    return next((c for c in v if unicodedata.category(c) in ("Cc", "Zl", "Zp")), None)
++
++
++def _pq_top_key(s):
++    """頂格一行的鍵名(去引號、冒號前空白);不是「鍵: 值」的形狀回 None。只用 partition,沒有會回溯的正規式。"""
++    if s[:1] in "-<=>" or ":" not in s:
++        return None
++    name = s.partition(":")[0].strip().strip("\"'")
++    return name or None
++
++
++def _strict_scalar(raw):
++    """嚴格讀法的一個值:回 (值, 錯誤)。只收三種寫法——不加引號且 _yaml_plain_ok 認可的、
++    整個包在雙引號裡且內部沒有雙引號與反斜線的、整個包在單引號裡且內部沒有單引號的(就是 _yaml_quote 寫得出的兩種)。"""
++    v = raw.strip()
++    if v == "":
++        return None, "值是空的"
++    bad = _pq_bad_char(v)
++    if bad is not None:
++        return None, f"值裡有控制字元或換行類字元(U+{ord(bad):04X});題目欄位只收單行可印的文字"
++    if v[0] in "|>[{":
++        return None, f"值用 {v[0]} 開頭(多行或清單寫法),這個欄位只收單行文字"
++    for q in ('"', "'"):
++        if v[0] == q:
++            inner = v[1:-1]
++            if len(v) < 2 or v[-1] != q or q in inner or (q == '"' and "\\" in inner):
++                return None, f"引號寫法讀不懂({v[:40]}):整個值包在一對引號裡,裡面不要再有同一種引號" + ("或反斜線" if q == '"' else "")
++            if not inner.strip():
++                return None, "值是空的(引號裡只有空白)"
++            return inner, None
++    if not _yaml_plain_ok(v):
++        return None, f"值 {v[:40]!r} 不加引號時標準 YAML 會讀成別的東西(布林、數字、日期,或「空白加 #」被當註解),要加雙引號"
++    return v, None
++
++
++def _pq_scan(fm_lines, key, line0):
++    """pending_questions 專用的嚴格掃描:只認 2 格的 `- id:` 起頭、4 格的 `鍵: 值`,看不懂就回報、不略過。
++    ★不掛在 parse_decisions 底下★(代碼審 r1 架構席):決策那份清單收多行值與子清單、縮排從第一個 dash 推,
++    這份只收單行值、縮排寫死——兩邊的文法本來就不同,硬掛成同一支的參數只是名義上共用。寫入端定位項目照樣用 decisions_items。
++    回 (有沒有這個欄位, [每一項 {鍵: (原值, 檔案行號)} 加 _line], [(檔案行號, 原因)])。"""
++    errs, items, heads = [], [], []
++    for i, ln in enumerate(fm_lines):
++        s = ln.rstrip()
++        if not s or s[0] in " \t#":
++            continue
++        if s.startswith(key + ":"):
++            heads.append(i)
++            continue
++        name = _pq_top_key(s)
++        if name and name.lower().replace("-", "_").replace(" ", "_").startswith(key[:-1]):
++            errs.append((i + line0, f"頂格的鍵 {s[:40]!r} 像是 {key} 寫錯(拼字、大小寫、連字號、引號或冒號前的空白);改成恰好 `{key}:`"))
++    if not heads:
++        return bool(errs), items, errs
++    if len(heads) > 1:
++        errs.append((heads[1] + line0, f"開頭欄位裡 {key}: 寫了兩次;合成一個"))
++    h = heads[0]
++    tail = fm_lines[h].rstrip()[len(key) + 1:].strip()
++    if tail not in ("", "[]"):
++        errs.append((h + line0, f"{key}: 後面直接接了值 {tail[:30]!r};只能空著(下面一行一題)或寫 []"))
++    cur = None
++    for i in range(h + 1, len(fm_lines)):
++        raw = fm_lines[i].rstrip()
++        no = i + line0
++        if not raw.strip() or raw.lstrip(" ").startswith("#"):
++            continue
++        if raw[0] not in " \t":
++            name = _pq_top_key(raw)
++            if name in _PQ_KEYS:
++                errs.append((no, f"{name} 是題目的鍵,卻寫在頂格(縮排掉了);縮 4 格放回它那一題底下"))
++                continue
++            if name:
++                break
++            errs.append((no, f"這行頂格寫了 {raw[:40]!r},不是鍵也不是題目;題目要縮 2 格寫成 `  - id: Q<n>`"))
++            continue
++        if "\t" in raw[:len(raw) - len(raw.lstrip())]:
++            errs.append((no, "縮排用了 tab;改成空白(題目 2 格、鍵 4 格)"))
++            continue
++        if tail == "[]":
++            errs.append((no, f"{key}: [] 是空清單,後面卻又接了題目;拿掉 [] 再寫題"))
++            continue
++        mi, ms = _PQ_ITEM_RE.match(raw), _PQ_SUB_RE.match(raw)
++        if mi:
++            m2 = re.fullmatch(r"id:(?: (.*))?", mi.group(1).rstrip())
++            if not m2:
++                errs.append((no, "一題的第一個鍵必須是 id(寫成 `  - id: Q<n>`)"))
++                cur = None
++                continue
++            cur = {"_line": no, "id": ((m2.group(1) or "").strip(), no)}
++            items.append(cur)
++        elif ms and cur is not None:
++            k = ms.group(1)
++            if k in cur:
++                errs.append((no, f"{cur['id'][0]} 的 {k} 寫了兩次;只留一個"))
++            cur[k] = ((ms.group(2) or "").strip(), no)
++        else:
++            errs.append((no, f"讀不懂這行 {raw.strip()[:40]!r}:題目縮 2 格寫 `  - id: Q<n>`,這一題的鍵縮 4 格寫 `鍵: 值`"))
++    return True, items, errs
++
++
++def pq_parse(fm_lines, line0=2):
++    """開頭欄位 pending_questions 的嚴格讀法(Projects/待決問題改存開頭欄位_計劃):只要有一處讀不懂,整份當無法判定。
++    回 (有沒有這個欄位, 題目清單 [{鍵: 值, _line}], [(檔案行號, 原因)]);錯誤非空時題目清單不可用。
++    line0 = fm_lines[0] 在檔案裡是第幾行(開頭的 --- 是第 1 行)。"""
++    present, raw_items, errs = _pq_scan(fm_lines or [], "pending_questions", line0)
++    qs, seen = [], {}
++    for it in raw_items:
++        q, ln = {"_line": it["_line"]}, it["_line"]
++        qid = it["id"][0]
++        if not _PQ_ID_RE.fullmatch(qid):
++            errs.append((ln, f"題號 {qid!r} 格式不對;寫成 Q 加不帶前導零的正整數(Q1、Q12)"))
++        elif qid in seen:
++            errs.append((ln, f"題號 {qid} 重複(第 {seen[qid]} 行也有)"))
++        seen.setdefault(qid, ln)
++        q["id"] = qid
++        for k, vn in it.items():
++            if k in ("_line", "id"):
++                continue
++            v, no = vn
++            if k not in _PQ_KEYS:
++                errs.append((no, f"{qid} 有不認得的鍵 {k};只收 {'、'.join(_PQ_KEYS)}"))
++                continue
++            if k in _PQ_BOOL_KEYS:
++                if v not in ("true", "false"):
++                    errs.append((no, f"{qid} 的 {k} 只收不加引號的 true 或 false,寫的是 {v!r}"))
++                q[k] = v == "true"
++                continue
++            val, why = _strict_scalar(v)
++            if why:
++                errs.append((no, f"{qid} 的 {k}:{why}"))
++                continue
++            q[k] = val
++        for k in _PQ_REQUIRED:
++            if k not in it:
++                errs.append((ln, f"{qid} 缺必有的鍵 {k}"))
++        if q.get("stage") is not None and q["stage"] not in PQ_STAGES:
++            errs.append((ln, f"{qid} 的 stage 要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {q['stage']!r}"))
++        if q.get("status") is not None and q["status"] not in PQ_STATUSES:
++            errs.append((ln, f"{qid} 的 status 要是 {'/'.join(PQ_STATUSES)} 之一,寫的是 {q['status']!r}"))
++        if "tests" in q:
++            ts = [t.strip() for t in q["tests"].split(",")]
++            if any(not t for t in ts) or len(set(ts)) != len(ts):
++                errs.append((ln, f"{qid} 的 tests 有空的一段或重複的名字(半形逗號分隔,測試名不能含逗號)"))
++            q["tests"] = [t for t in ts if t]
++        q.setdefault("blocking", False)
++        q.setdefault("irreversible", False)
++        qs.append(q)
++    return present, qs, sorted(errs)
++
++
++def _pq_fm_of_text(text):
++    """全文 → (開頭欄位行, 第一行在檔案的行號)。BOM 去掉、CRLF 交給嚴格讀法逐行 rstrip。"""
++    fm, _ = split_frontmatter((text or "").lstrip("﻿"))
++    return fm or [], 2
++
++
++def _pq_decision_state(env, rel, ref, self_fm=None, cache=None):
++    """決策連結 → ok / missing / superseded / bad。格式沿用決策紀錄的全域編號 <節點>#dN(解析 _dref_parse);本篇可簡寫 #dN。
++    self_fm:寫入指令在鎖內組好的開頭欄位——給了它,本篇用它、別篇從磁碟重讀(不信鎖外載入的舊內容,代碼審 r1 併發席)。
++    帶路徑的寫法要整條對得上;只寫短名而同名不只一篇,當格式不合(env.resolve 會退回比短名、撞名取第一篇,代碼審 r1 邊界席)。
++    cache:同一次判定裡每篇的決策只解析一次(代碼審 r1:原本每題重解析,題數乘決策數)。"""
++    ref = str(ref).strip()
++    if "[[" in ref or "]]" in ref:
++        return "bad"
++    if re.fullmatch(r"#d\d+", ref):
++        node, did = rel, ref[1:]
++    else:
++        pr = _dref_parse(ref)
++        if not pr or not pr[0]:
++            return "bad"
++        lit = pr[0][:-3] if pr[0].lower().endswith(".md") else pr[0]
++        if "/" in lit:
++            node = lit + ".md" if (lit + ".md") in env.notes else None
++        else:
++            hits = [r for r in env.notes if Path(r).stem == lit]
++            if len(hits) > 1:
++                return "bad"
++            node = hits[0] if hits else None
++        did = pr[1]
++        if not node:
++            return "missing"
++    cache = {} if cache is None else cache
++    if node not in cache:
++        if node == rel and self_fm is not None:
++            cache[node] = parse_decisions(self_fm)
++        elif self_fm is not None:
++            try:
++                fm, _b = split_frontmatter((env.vault / node).read_text(encoding="utf-8-sig"))
++            except (OSError, UnicodeDecodeError):
++                fm = None
++            cache[node] = parse_decisions(fm) if fm is not None else None
++        else:
++            cache[node] = _node_decisions(env, node) if node in env.notes else None
++    ds = cache[node]
++    if ds is None:
++        return "missing"
++    for d in ds:
++        if str(d.get("id", "")).strip() == did:
++            return "superseded" if str(d.get("valid", "true")).strip().lower() == "false" else "ok"
++    return "missing"
++
++
++def _pq_settled(env, rel, q, self_fm=None, cache=None):
++    """「結了」:狀態是已決或已驗,而且決策連結指到存在、沒作廢的決策。規格閘、lint、兩支指令共用這一條。"""
++    return (q.get("status") in ("已決", "已驗") and bool(q.get("decision"))
++            and _pq_decision_state(env, rel, q["decision"], self_fm, cache) == "ok")
++
++
++def _pq_rule_problems(env, rel, q, self_fm=None, cache=None):
++    """一題寫成這樣之後違反哪幾條(寫入規則=lint 的必附與「結了」那幾條);回原因清單。"""
++    out, st = [], q.get("status")
++    need = {"已決": ("decision",), "已驗": ("decision", "tests"), "自答": ("source",), "延後": ("reason",)}.get(st, ())
++    for k in need:
++        if not q.get(k):
++            out.append(f"狀態是{st}卻沒有 {k}")
++    if q.get("blocking") and st == "延後":
++        out.append("標了阻塞的題不能延後(阻塞就是不能往下做,要嘛決定、要嘛拿掉阻塞)")
++    if q.get("irreversible") and st == "自答":
++        out.append("標了不可逆的題不能自答,要人決定")
++    if q.get("decision"):
++        ds = _pq_decision_state(env, rel, q["decision"], self_fm, cache)
++        if ds == "bad":
++            out.append(f"決策連結 {q['decision']!r} 格式不合或短名撞名;寫成 <節點路徑>#dN(decision-add 印的全域編號),本篇可寫 #dN")
++        elif ds == "missing":
++            out.append(f"決策連結 {q['decision']!r} 指到不存在的決策")
++        elif ds == "superseded":
++            out.append(f"決策連結 {q['decision']!r} 指到已作廢的決策")
++    return out
++
++
++def _pq_blocking_open(env, rel, qs, self_fm=None):
++    """擋進實作的題:標阻塞、階段是需求或架構、還沒結。"""
++    cache = {}
++    return [q for q in qs if q.get("blocking") and q.get("stage") in ("需求", "架構") and not _pq_settled(env, rel, q, self_fm, cache)]
++
++
++def _pq_platforms(env):
++    """條款綁定那一套平台前綴規則的設定:(platforms 或 {}, 預設平台)。讀不到設定就當單一平台。"""
++    try:
++        pl = load_platforms(_vault_repo_root(env))
++    except (ValueError, OSError):
++        return {}, None
++    return (pl["platforms"] if pl.get("multiplatform") else {}), pl.get("default_platform")
++
++
++def _pq_clause_tests(text, platforms, default):
++    """本篇驗收條款定義行上的 [test:],照條款綁定同一套平台前綴規則解成 (平台, 名字)(圍欄、反引號裡的不算;不建測試索引)。"""
++    out = set()
++    for _no, raw in _visible_lines((text or "").split("\n"), keep_fenced=False):
++        line, _t = _strip_inline_markup(raw)
++        if _CLAUSE_LEAD_RE.match(line):
++            try:
++                out.update(resolve_test_refs(line, platforms, default))
++            except ValueError:
++                continue   # 平台前綴寫錯的條款由規格閘的條款綁定報,這裡不重報
++    return out
++
++
++def _nl_rule_pending_questions(env, rel, n):
++    """lint:pending_questions 讀不懂逐處報行號;讀得懂時查必附、「結了」、已驗的測試名在本篇條款裡。"""
++    present, qs, errs = pq_parse(n.fm_lines or [])
++    if not present:
++        return []
++    if errs:
++        return [f"待決問題清單無法判定:第 {no} 行 {why}" for no, why in errs]
++    out, cache = [], {}
++    ctests = None
++    for q in qs:
++        for why in _pq_rule_problems(env, rel, q, cache=cache):
++            out.append(f"待決問題 {q['id']}(第 {q['_line']} 行):{why}——用 lumos question-set 改")
++        if q.get("status") == "已驗" and q.get("tests"):
++            plats, default = _pq_platforms(env)
++            if ctests is None:
++                ctests = _pq_clause_tests(env_text(env, rel), plats, default)
++            miss = []
++            for t in q["tests"]:
++                try:
++                    keys = resolve_test_refs(f"[test:{t}]", plats, default)
++                except ValueError:
++                    keys = []
++                if not keys or not set(keys) <= ctests:
++                    miss.append(t)
++            if miss:
++                out.append(f"待決問題 {q['id']}(第 {q['_line']} 行):已驗的測試 {', '.join(miss)} 不在本篇驗收條款的 [test:] 裡")
++    return out
++
++
++def _pq_stage_sort_key(q):
++    return (not q.get("blocking"), not q.get("irreversible"), int(q["id"][1:]))
+ 
+ 
+ SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
+ _CLAUSE_ENUM = r"(?:(?:[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)?"   # a. / aa. / 一、/ 十一、/ 甲) / ① ㈠ ⅰ 這種短編號也是清單;★1–2 個字母/中文數字且必帶分隔符★——cf./vs. 也算編號(被當定義→沒標就擋,方向安全);三個字母以上才是詞
+ _CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.、|+•—·)]*" + _CLAUSE_ENUM + r"(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1) a. 一、/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
+ _CLAUSE_LISTLIKE_RE = re.compile(r"^\s*(?:[^\w\s]+\s*|(?:\d{1,3}|[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有符號或帶分隔符的短編號——用來判該擋還是當純引用;前面是詞或詞+冒號(規格 [S1]、注:[S1]、cf. [S1])才算散文(-b r2 兩席:冒號與任意短詞曾誤擋)
+ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
+                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
+                     "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])",
+                     "shadowed": "定義過,又出現在認不得的清單行(第二次寫法看不懂)"}
+@@ -7717,29 +8020,131 @@ def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_r
+                 lk = rmap.get((rid, plat, method), "?")
+                 if v == "green":
+                     ok += 1
+                 elif v == "red":
+                     fails.append(f"{rid} {lk}/{method}:紅({str(detail)[:80]})——既有行為回歸,或環境壞")
+                 else:
+                     fails.append(f"{rid} {lk}/{method}:{why}——驗不了≠過")
+     return fails, ok, len({x[0] for x in rb})
+ 
+ 
++def _spec_gate_pending(env, rel, text):
++    """規格閘的待決問題那一道(進實作前,風險高低都一樣):清單讀不懂、或有阻塞的需求/架構題沒結 → 回 1;沒事回 None。"""
++    present, qs, errs = pq_parse(*_pq_fm_of_text(text))
++    if not present:
++        return None
++    if errs:
++        print(f"[spec-gate] 待決問題: ✗ — 開頭欄位 pending_questions 清單無法判定({len(errs)} 處讀不懂;第一處 第 {errs[0][0]} 行:{errs[0][1]})")
++        print("    逐處看哪裡讀不懂:")
++        print(f"    lumos lint {rel}")
++        return 1
++    bad = _pq_blocking_open(env, rel, qs)
++    if not bad:
++        if qs:
++            print(f"[spec-gate] 待決問題: ✓ — {len(qs)} 題,沒有擋進實作的")
++        return None
++    print(f"[spec-gate] 待決問題: ✗ — {len(bad)} 題標阻塞、在需求或架構階段、還沒結(結了=已決或已驗,並指到存在且有效的決策),不能進實作:")
++    for q in bad:
++        print(f"    • {q['id']} [{q['stage']}/{q['status']}] {q['text']}")
++    print("    決定之後:")
++    print(f"    lumos question-set {rel} Q<n> status=已決 decision=<節點>#dN")
++    return 1
++
++
++def _pq_git_read_many(rr, specs):
++    """一次讀多個 <版本>:<路徑>(git cat-file --batch,一個程序、有逾時):回 {spec: 文字,不存在=None};git 跑不起來回 None。"""
++    if not specs:
++        return {}
++    try:
++        r = subprocess.run(["git", "-C", str(rr), "cat-file", "--batch"], input=("\n".join(specs) + "\n").encode("utf-8"),
++                           capture_output=True, timeout=60)
++    except (OSError, subprocess.TimeoutExpired):
++        return None
++    if r.returncode != 0:
++        return None
++    out, buf, pos = {}, r.stdout, 0
++    for sp in specs:
++        nl = buf.find(b"\n", pos)
++        if nl < 0:
++            return None
++        head = buf[pos:nl].decode("utf-8", "replace")
++        pos = nl + 1
++        if head.endswith(" missing") or head.endswith(" ambiguous"):
++            out[sp] = None
++            continue
++        parts = head.split()
++        size = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else -1
++        if size < 0:
++            return None
++        out[sp] = buf[pos:pos + size].decode("utf-8", "replace")
++        pos += size + 1
++    return out
++
++
++def _pq_push_remind(env, rr, vrel, touched, git_range):
++    """推送前:這次改到的計劃有阻塞沒結的題、題號不見了、題目文字變了 → 各印一行提醒;不擋、不改回傳碼。
++    比對的兩版:兩點範圍 a..b 是 a 與 b;三點範圍 a...b 是 a、b 的合併基準與 b。整份計劃被刪掉的不比(不是刪題)。"""
++    P = "[spec-gate 推送前]"
++    m = re.fullmatch(r"(.+?)(\.\.\.?)(.*)", git_range)
++    if not m:
++        print(f"{P} 提醒:範圍 {git_range} 不是 a..b 或 a...b,待決問題的提醒跳過")
++        return
++    base, head = m.group(1), (m.group(3) or "HEAD")
++    if m.group(2) == "...":
++        mb = subprocess.run(["git", "-C", str(rr), "merge-base", base, head], capture_output=True, text=True)
++        if mb.returncode != 0:
++            print(f"{P} 提醒:算不出 {base} 與 {head} 的合併基準,待決問題的提醒跳過")
++            return
++        base = mb.stdout.strip()
++    paths = [p for p in touched if p.startswith(vrel + "/") and p.endswith("_計劃.md")]
++    got = _pq_git_read_many(rr, [f"{rev}:{p}" for p in paths for rev in (head, base)])
++    if got is None:
++        print(f"{P} 提醒:讀不到這次推送的計劃內容(git cat-file 失敗),待決問題的提醒跳過")
++        return
++    for path in paths:
++        rel = path[len(vrel) + 1:]
++        new = got.get(f"{head}:{path}")
++        if new is None:   # 整份被刪或改名走:不是刪題
++            continue
++        nfm, l0 = _pq_fm_of_text(new)
++        _present, nq, ne = pq_parse(nfm, l0)
++        if ne:
++            print(f"{P} 提醒:{rel} 的待決問題清單無法判定(第 {ne[0][0]} 行:{ne[0][1]});進實作前 lumos spec-gate 會擋")
++            continue
++        for q in _pq_blocking_open(env, rel, nq, self_fm=nfm):
++            print(f"{P} 提醒:{rel} {q['id']} 標阻塞、還沒結:{q['text']}(進實作前 lumos spec-gate 會擋)")
++        old = got.get(f"{base}:{path}")
++        if old is None:
++            continue
++        _p, oq, oe = pq_parse(*_pq_fm_of_text(old))
++        if oe:
++            continue
++        now = {q["id"]: q for q in nq}
++        for q in oq:
++            if q["id"] not in now:
++                print(f"{P} 提醒:{rel} {q['id']} 在 {base[:12]} 那一版有、這一版不見了(題目不刪,改成延後或已決;真的要刪就在提交說明寫為什麼)")
++            elif now[q["id"]].get("text") != q.get("text"):
++                print(f"{P} 提醒:{rel} {q['id']} 的題目文字變了(同一個題號換題會讓引用它的地方指錯;新題用 question-add 另開)")
++
++
+ def _spec_gate_front(env, node, no_run):
+     """規格閘前半(⓪門 ①句式 ②綁定 + 風險低靜態條件 + 平台索引):有結論回 rc(int),要繼續跑回一組材料。"""
+     p, text, rel = _spec_gate_load(env, node)
+     if p is None:   # 找不到/讀不動:_spec_gate_load 自己已印原因
+         return 2
+     rr = _vault_repo_root(env)
+     judged = _door_judge(env, env.notes.get(rel), text)
+     _spec_gate_print_door(judged)
+     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
++    pq_rc = _spec_gate_pending(env, rel, text)   # 待決問題:判門之後、條款與 --no-run 之前(待決問題改存開頭欄位_計劃 S1)
++    if pq_rc is not None:
++        return pq_rc
+     door = judged["door"]
+     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
+     if rc is not None:
+         return rc
+     clauses = [b for b in rows_b if b["state"] != "undefined"]
+     prep = _spec_gate_prepare(rr, text, clauses)
+     if prep is None:
+         return 1 if door == "low" else 0
+     keeps = _spec_gate_twoway_gate(p, rr, text, clauses, prep[4]) if door == "low" else set()
+     if keeps is None:
+@@ -8146,20 +8551,21 @@ def _spec_gate_push_check(env, git_range, repo=None):
+         return 0
+     if r.returncode != 0:
+         print(f"{P} 範圍 {git_range} 算不出來,放行")
+         return 0
+     try:
+         vrel = str(env.vault.resolve().relative_to(rr)).replace(os.sep, "/")
+     except ValueError:
+         print(f"{P} 圖譜不在這個 repo 底下,放行")
+         return 0
+     touched = [nfc(ln.strip()) for ln in r.stdout.splitlines() if ln.strip()]
++    _pq_push_remind(env, rr, vrel, touched, git_range)   # 只提醒、不改回傳碼(待決問題改存開頭欄位_計劃 S1)
+     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
+     if not plans:
+         return 0
+     bad, oks = _spec_gate_push_scan(env, rr, plans, git_range)
+     if bad is None:
+         return 0
+     if not bad and oks and all(mo for _p, mo in oks):   # 計劃風險低+全靠人驗+小改動閘過 → 改動風險分級 light(2026-09-18 Enzo 裁;pitfalls/code-loop 都是 vault-free,只有這裡有圖譜)
+         print(f"{P} 改動風險分級:light(計劃風險低且全靠人驗,小改動閘通過:{'、'.join(Path(p).stem for p, _m in oks)})——代碼審只派架構對齊席;lumos loop next <編號> --tier light")
+     if bad:
+         print(f"{P} ✗ — {len(bad)} 份風險低計劃沒過(風險低不派審,推送閘是它唯一的閘):")
+@@ -19405,27 +19811,27 @@ def edit_fm_remove(fm_lines, key, value):
+         del fm[j]
+     # 清完是否還有存活項?沒有就把 key 行也拿掉(空 list 不留裸鍵)
+     struct2 = {k: (a, b, c) for k, a, b, c in fm_structure(fm)}
+     if key in struct2:
+         s2, e2, _ = struct2[key]
+         if not any(fm[j].strip().startswith("-") for j in range(s2 + 1, e2 + 1)):
+             del fm[s2:e2 + 1]
+     return fm, len(hits)
+ 
+ 
+-def decisions_items(fm_lines):
+-    """surgical 定位 decisions[] 的每個項目行範圍(不重序列化,延伸 T1 到巢狀)。
++def decisions_items(fm_lines, key="decisions"):
++    """surgical 定位 decisions[](或 key 指定的清單,如 pending_questions)的每個項目行範圍(不重序列化,延伸 T1 到巢狀)。
+     回傳 (block_start, block_end, [(item_start, item_end)], item_indent, sub_indent)
+     或 None(無 decisions)。item_end 含,已去尾部空行。處理項目內含 nested 子清單。"""
+     block = None
+     for k, s, e, kind in fm_structure(fm_lines):
+-        if k == "decisions" and kind == "list":
++        if k == key and kind == "list":
+             block = (s, e)
+             break
+     if block is None:
+         return None
+     s, e = block
+     item_indent = None
+     starts = []
+     for i in range(s + 1, e + 1):
+         ln = fm_lines[i]
+         if not ln.strip():
+@@ -19467,22 +19873,22 @@ def load_raw_for_edit(path: Path):
+             break
+     if fm_end is None:
+         raise ValueError("開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),先補上")
+     return lines, 1, fm_end
+ 
+ 
+ def _write_lf(path: Path, text: str):
+     """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
+     用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.9。
+     [2026-08-05 單席快審 F2] tmp→os.replace 原子替換:防半寫毀檔(CLAUDE.md reinject 等
+-    整檔覆寫消費者)。read-modify-write 的併發:set/append/remove 由呼叫端上鎖(_vault_write_lock),
+-    其他寫入指令仍是 last-write-wins(單機 CLI,accepted)。
++    整檔覆寫消費者)。read-modify-write 的併發:set/append/remove、decision-add/supersede/reindex、
++    question-add/set 由呼叫端上鎖(_vault_write_lock);其他寫入指令仍是 last-write-wins(單機 CLI,accepted)。
+     ★暫存檔名每次都不一樣★(2026-09-10 代碼審 r3 併發資源席:原本同一篇筆記大家用同一個固定暫存檔名,
+     兩個程序同時寫就互搶,實測六個同時跑六個都噴 FileNotFoundError)——跟 mkstemp 同一種做法(獨佔建一個唯一名),
+     但權限給 0o666、讓它跟一般建檔一樣受 umask 管;原檔在就照原檔的權限(例如 +x)。
+     ★不用 mkstemp 再改權限★(第四輪併發資源席):mkstemp 建成 0600,要調回一般樣子只能先讀整個程序的 umask
+     (設成 0 再設回來),那一瞬間別的執行緒建的檔會拿到錯的權限。"""
+     import os as _os, shutil as _sh, uuid as _uuid
+     tmp = str(path.with_name(f"{path.name}.{_os.getpid()}-{_uuid.uuid4().hex[:8]}.tmp-wlf"))
+     fd = _os.open(tmp, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o666)   # 權限照一般建檔
+     try:
+         with _os.fdopen(fd, "wb") as fh:
+@@ -20476,20 +20882,181 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
+         # [M1] ID 精確驗證:新 id 那條存在且 content 相符(取代純 content 子字串——重疊時驗錯項)
+         return any(str(d.get("id", "")).strip() == new_id
+                    and needle in nfc(str(d.get("content", "")))
+                    for d in parse_decisions(_fm_of(new_lines)))
+     atomic_write_verify(path, new_lines, "decisions", _check)
+     # 全域編號也印出來(筆記格子 [被取代:] 要寫 節點路徑#dN,只印 d3 會讓人抄到裸編號;Projects/筆記格子寫法與過期檢查_計劃)
+     print(f"✓ decision-add {rel}: 記下一條決策「{content[:30]}」(編號 {new_id},全域編號 {rel}#{new_id},目前有效)")
+     return 0, f"{rel}#{new_id}"
+ 
+ 
++_PQ_LABEL = {"text": "題目文字", "class": "類", "source": "出處", "reason": "理由", "decision": "決策連結", "tests": "測試名"}
++
++
++def _pq_fmt(k, v):
++    """一個鍵寫進檔案的樣子:布林照字面寫(格式化函式會把 true 加成 "true");其餘經 _yaml_plain_ok/_yaml_quote。"""
++    if k in _PQ_BOOL_KEYS:
++        return "true" if v else "false"
++    v = str(v)
++    bad = _pq_bad_char(v)
++    if bad is not None:
++        raise ValueError(f"{_PQ_LABEL.get(k, k)}不能換行、含 tab 或控制字元(U+{ord(bad):04X}),檔案沒動")
++    v = v.strip()
++    if not v:
++        raise ValueError(f"{_PQ_LABEL.get(k, k)}是空的,檔案沒動")
++    return v if _yaml_plain_ok(v) else _yaml_quote(v, _PQ_LABEL.get(k, k))
++
++
++def _pq_load_for_write(env, rel):
++    path = env.vault / rel
++    lines, _s, e_fm = load_raw_for_edit(path)
++    fm = lines[1:e_fm]
++    present, qs, errs = pq_parse(fm)
++    if errs:
++        raise ValueError(f"這篇的待決問題清單本身讀不懂(第 {errs[0][0]} 行:{errs[0][1]}),先修好再寫;逐處看 lumos lint {rel}")
++    return path, lines, e_fm, fm, present, qs
++
++
++def _pq_check_values(q):
++    if q.get("stage") not in PQ_STAGES:
++        raise ValueError(f"stage 要是 {'/'.join(PQ_STAGES)} 之一,給的是 {q.get('stage')!r}")
++    if q.get("status") not in PQ_STATUSES:
++        raise ValueError(f"status 要是 {'/'.join(PQ_STATUSES)} 之一,給的是 {q.get('status')!r}")
++
++
++def _pq_commit(env, rel, path, lines, e_fm, new_fm, want):
++    """寫入規則在寫前驗(ValueError);「這一題跟要寫的一致」交給 atomic_write_verify 的讀回檢查,跟鄰居同一個掛法。"""
++    present, qs, errs = pq_parse(new_fm)
++    if errs:
++        raise ValueError(f"寫完會讀不懂(第 {errs[0][0]} 行:{errs[0][1]}),檔案沒動")
++    got = next((q for q in qs if q["id"] == want["id"]), None)
++    if got is not None:
++        probs = _pq_rule_problems(env, rel, got, self_fm=new_fm)
++        if probs:
++            raise ValueError(f"{want['id']}:" + ";".join(probs) + ",檔案沒動")
++    exp = dict(want)
++    if isinstance(exp.get("tests"), str):
++        exp["tests"] = [t.strip() for t in exp["tests"].split(",") if t.strip()]
++    exp.setdefault("blocking", False)
++    exp.setdefault("irreversible", False)
++    exp = {k: (v.strip() if isinstance(v, str) else v) for k, v in exp.items()}
++
++    def _check(_fields):
++        _p, qs2, e2 = pq_parse(new_fm)
++        g = next((q for q in qs2 if q["id"] == want["id"]), None)
++        return not e2 and g is not None and {k: v for k, v in g.items() if k != "_line"} == exp
++    atomic_write_verify(path, lines[:1] + new_fm + lines[e_fm:], "pending_questions", _check)
++
++
++def cmd_question_add(env, rel, text, cls, stage, status="待查", blocking=False, irreversible=False,
++                     decision=None, tests=None, source=None, reason=None):
++    """新增一題待決問題到開頭欄位 pending_questions(待決問題改存開頭欄位_計劃)。讀—改—寫整段上鎖;
++    編號 = 現有題號數字的最大值加 1;回 (rc, 全域編號 <rel>#Q<n>)。"""
++    with _vault_write_lock(env.vault):
++        path, lines, e_fm, fm, present, qs = _pq_load_for_write(env, rel)
++        top = max((int(q['id'][1:]) for q in qs), default=0)
++        if top >= _PQ_ID_MAX:
++            raise ValueError(f"題號已經到上限 Q{_PQ_ID_MAX},加不了新題;檔案沒動")
++        nid = f"Q{top + 1}"
++        want = {"id": nid, "text": text, "class": cls, "stage": stage, "status": status or "待查"}
++        if blocking:
++            want["blocking"] = True
++        if irreversible:
++            want["irreversible"] = True
++        for k, v in (("decision", decision), ("source", source), ("reason", reason), ("tests", tests)):
++            if v is not None:
++                want[k] = v
++        _pq_check_values(want)
++        block = [f"  - id: {nid}"] + [f"    {k}: {_pq_fmt(k, v)}" for k, v in want.items() if k != "id"]
++        new_fm = list(fm)
++        if not present:
++            new_fm += ["pending_questions:"] + block
++        else:
++            h = next(i for i, ln in enumerate(new_fm) if re.fullmatch(r"pending_questions:\s*(\[\])?", ln.rstrip()))
++            if new_fm[h].rstrip().endswith("[]"):   # decision-add 在 decisions: [] 上會寫壞,這裡先把空清單那行改成區塊起頭
++                new_fm[h] = "pending_questions:"
++                at = h + 1
++            else:
++                loc = decisions_items(new_fm, "pending_questions")
++                at = (loc[2][-1][1] + 1) if (loc and loc[2]) else h + 1
++            new_fm[at:at] = block
++        _pq_commit(env, rel, path, lines, e_fm, new_fm, want)
++    gid = f"{rel}#{nid}"
++    print(f"✓ question-add {rel}: 記下一題待決問題「{text[:30]}」(編號 {nid},全域編號 {gid})")
++    return 0, gid
++
++
++def _pq_parse_pairs(pairs):
++    out = {}
++    for p in pairs:
++        if "=" not in p:
++            raise ValueError(f"參數 {p!r} 沒有等號;寫成 鍵=值(例:status=已決)")
++        k, v = p.split("=", 1)
++        k = k.strip()
++        if k == "id":
++            raise ValueError("題號不能改;要換題就用 question-add 另開一題")
++        if k not in _PQ_KEYS:
++            raise ValueError(f"不認得的鍵 {k};只收 {'、'.join(x for x in _PQ_KEYS if x != 'id')}")
++        if k in out:
++            raise ValueError(f"{k} 在這次指令裡給了兩次")
++        if k in _PQ_BOOL_KEYS and v not in ("true", "false", ""):
++            raise ValueError(f"{k} 只收 true 或 false,給的是 {v!r}")
++        out[k] = v
++    if not out:
++        raise ValueError("沒有要改的鍵;寫成 鍵=值")
++    return out
++
++
++def cmd_question_set(env, rel, qid, pairs):
++    """改一題待決問題的幾個鍵(一次改完才驗,讓「已決要附決策」這類跨鍵規則一次過);改哪行動哪行。"""
++    ch = _pq_parse_pairs(pairs)
++    with _vault_write_lock(env.vault):
++        path, lines, e_fm, fm, present, qs = _pq_load_for_write(env, rel)
++        q = next((x for x in qs if x["id"] == qid), None)
++        if q is None:
++            raise ValueError(f"這篇沒有 {qid} 這一題")
++        _p, raw_items, _e = _pq_scan(fm, "pending_questions", 0)
++        raw = next(it for it in raw_items if it["id"][0] == qid)
++        want = {k: v for k, v in q.items() if k != "_line"}
++        if isinstance(want.get("tests"), list):
++            want["tests"] = ", ".join(want["tests"])
++        for k, v in ch.items():
++            if v == "":
++                if k in _PQ_REQUIRED:
++                    raise ValueError(f"{k} 是必有的鍵,不能清空")
++                want.pop(k, None)
++            else:
++                want[k] = (v == "true") if k in _PQ_BOOL_KEYS else v
++        _pq_check_values(want)
++        new_fm = list(fm)
++        last = max(vn[1] for k, vn in raw.items() if k != "_line")
++        ins, dels = [], []
++        for k, v in ch.items():
++            at = raw[k][1] if k in raw else None
++            if v == "" or (k in _PQ_BOOL_KEYS and not want.get(k)):
++                if at is not None:
++                    dels.append(at)
++            elif at is not None:
++                new_fm[at] = f"    {k}: {_pq_fmt(k, want[k])}"
++            else:
++                ins.append(f"    {k}: {_pq_fmt(k, want[k])}")
++        new_fm[last + 1:last + 1] = ins
++        for at in sorted(dels, reverse=True):
++            del new_fm[at]
++        for k in _PQ_BOOL_KEYS:
++            if not want.get(k):
++                want.pop(k, None)
++        _pq_commit(env, rel, path, lines, e_fm, new_fm, want)
++    print(f"✓ question-set {rel}: {qid} 改了 {'、'.join(ch)}")
++    return 0
++
++
+ def cmd_decision_reindex(env, rel=None, all_mode=False):
+     """[M1/P2] 回填遷移:對既有無 id 決策依文件順序、從既有最大 id+1 接續編號(不重排既有、
+     不回收缺號——混合狀態絕不撞既有 id);冪等(已有 id 跳過)。單節點一次一篇;--all 批次套用
+     到所有有 decisions 的節點(decision_refs 自動養成前置 P;顯式指令、非隱式改)。
+     解析不到的決策項明確拒絕(同 supersede 0-indent/tab 語意),不靜默跳過造成缺洞。"""
+     if all_mode:
+         targets = sorted(r for r, n in env.notes.items() if decisions_items(n.fm_lines) is not None)
+         done = errs = 0
+         for r in targets:
+             try:
+@@ -42899,27 +43466,43 @@ def _pitfalls_stage(md, stage, as_json, diff=None):
+         return 2
+     if not md:
+         print("擋下:--stage 要給計劃筆記路徑", file=sys.stderr)
+         return 2
+     try:
+         text = Path(md).read_text(encoding="utf-8-sig")
+     except (OSError, UnicodeDecodeError) as e:
+         print(f"擋下:讀不到 {md}:{e}", file=sys.stderr)
+         return 2
+     facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and any(re.search(w, text) for w in f["when"])]
++    _present, qs, errs = pq_parse(*_pq_fm_of_text(text))   # 開頭欄位的待決問題;不需要筆記庫
++    err = f"待決問題清單無法判定(第 {errs[0][0]} 行:{errs[0][1]});逐處看 lumos lint <計劃>" if errs else None
++    open_qs = [] if errs else sorted((q for q in qs if q["stage"] == stage and q["status"] in ("待查", "待人")), key=_pq_stage_sort_key)
+     if as_json:
+-        print(json.dumps({"stage": stage, "facets": facets}, ensure_ascii=False, indent=2))
+-        return 0
++        out = {"stage": stage, "facets": facets}
++        if qs and not errs:
++            out["questions"] = [{k: q.get(k) for k in ("id", "text", "stage", "status", "blocking", "irreversible")} for q in open_qs]
++        if err:
++            out["questions_error"] = err
++        print(json.dumps(out, ensure_ascii=False, indent=2))
++        return 2 if err else 0
+     print(f"[pitfalls] 階段:{stage}")
+     print(f"  需求風險面({len(facets)} 項;每一項寫成這份需求的具體問題,先自己查、只把要人決定的交給人):")
+     for f in facets:
+         print(f"    - [{f['id']}] {f['q']}")
++    if open_qs:
++        print(f"  待決問題({len(open_qs)} 題還沒結;阻塞在前、不可逆其次):")
++        for q in open_qs:
++            tag = ("[阻塞]" if q["blocking"] else "") + ("[不可逆]" if q["irreversible"] else "")
++            print(f"    - [{q['id']}] {q['text']} {tag}({q['status']})".replace("  (", " ("))
++    if err:
++        print(f"擋下:{err}", file=sys.stderr)
++        return 2
+     return 0
+ 
+ 
+ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None, stage=None):
+     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
+     spec 模式印通用 4 問(含風險類反問)+ 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
+     --no-lint:--diff 只跑 regex 層(快,給 pre-push advisory)。"""
+     import json
+     if stage is not None:
+         return _pitfalls_stage(md, stage, as_json, diff)
+@@ -50583,20 +51166,22 @@ HELP_WHEN = {
+     "about-code": "語意「關於」欄位 about_code 的操作:revert 整批撤、restamp 核過後重標、migrate-stamp 一次性補雜湊。",
+     "about-code revert": "預標標錯一整批時,按批次日期整批撤掉(stamp 第一段 batch-<日期>);人工修正過或 restamp 過的不動。先 --dry-run 看會撤哪些。",
+     "about-code restamp": "doctor 說某篇 about_code 可能過期、你看過標籤對現在的正文仍然對 → 用這個重標(三段全換);標籤不對就先 set/append/remove 修完再 restamp。",
+     "about-code migrate-stamp": "只跑一次:把批次預標的兩段式 stamp 補上第三段(用標註當時那個 commit 的正文算),之後 doctor 才量得出哪些標完又改過。",
+     "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
+     "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
+     "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
+     "decision-reindex": "舊筆記的決策沒編號,補上 dN。--all 全部。",
+     "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
+     "decision-add": "在某篇記一條決策,回編號。",
++    "question-add": "計劃有還沒決定的問題時,記進開頭欄位的待決問題清單,回題號;標阻塞的需求或架構題沒結,規格閘不放進實作。",
++    "question-set": "待決問題有了答案或要改狀態時,一次改那一題的幾個鍵(鍵=值);寫入前先驗必附與阻塞規則。",
+     "decision-amend": "改一條還沒推上去的決策的某個文字欄(已推上去的要用 decision-supersede 翻案)。",
+     "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
+     "uninstall": "移除全域 lumos 指令。",
+     "archive": "把老的驗證紀錄歸檔。先 dry-run 再 --apply。",
+     "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊);先看會改什麼加 --dry-run。",
+     "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
+     "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
+     "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+     "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+     "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
+@@ -51344,20 +51929,39 @@ def main():
+ 
+     p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
+     p.add_argument("verb", choices=["confirm", "prune", "list", "resume", "visited"])
+     p.add_argument("arg", nargs="?", help="confirm/prune=<鄰居節點>;resume=<cascade-id>;list 不吃")
+     p.add_argument("--cascade-id", dest="rc_cid", help="confirm/prune 必填(帳本由 supersede 觸發端建立)")
+     p.add_argument("--from", dest="rc_from", help="root 全域決策 id <節點rel>#d<N>(裸 dN 拒收;v1 全鏈同源)")
+     p.add_argument("--edge", dest="rc_edge", choices=["verified_by", "plan_refs"], help="邊型(方向語意明確者)")
+     p.add_argument("--by", dest="rc_by", choices=["ai", "human"], help="誰判的(ai 判的可抽查/翻案)")
+     p.add_argument("--stale", dest="rc_stale", type=int, help="list:只列最後事件早於 N 天的 cascade(活動齡)")
+ 
++    p = sub.add_parser("question-add", help="新增一題待決問題到計劃開頭欄位 pending_questions(回題號)")
++    p.add_argument("note")
++    p.add_argument("text", help="問題本身(單行)")
++    p.add_argument("--class", dest="q_class", required=True, help="自由分類(非空單行),例:需求、資料、權限")
++    p.add_argument("--stage", dest="q_stage", required=True, help="需求/架構/實作/驗證/效能/交付")
++    p.add_argument("--status", dest="q_status", default="待查", help="待查/自答/待人/延後/已決/已驗(預設待查)")
++    p.add_argument("--blocking", dest="q_blocking", action="store_true", help="阻塞:需求或架構階段沒結,規格閘不放進實作")
++    p.add_argument("--irreversible", dest="q_irrev", action="store_true", help="不可逆:不能自答,要人決定")
++    p.add_argument("--decision", dest="q_decision", help='決策連結,寫成 "<節點>#dN"(decision-add 印的全域編號);本篇可寫 "#dN"——要加引號,shell 會把單獨的 #… 當註解')
++    p.add_argument("--tests", dest="q_tests", help="已驗時的測試名,半形逗號分隔(要在本篇驗收條款的 [test:] 裡)")
++    p.add_argument("--source", dest="q_source", help="自答時的出處")
++    p.add_argument("--reason", dest="q_reason", help="延後時的理由")
++
++    p = sub.add_parser("question-set", help="改一題待決問題的幾個鍵:lumos question-set <計劃> Q<n> 鍵=值 [鍵=值 …]")
++    p.add_argument("note")
++    p.add_argument("qid", metavar="Q<n>")
++    p.add_argument("pairs", nargs="+", metavar="鍵=值", help="只切第一個 =;鍵= (空值)拿掉選填鍵;id 不能改。"
++                   "用「鍵=值」而不是 set 那種「鍵 值」:已決要附決策這類跨鍵規則得一次改完才驗得過,而單獨一個 #d3 參數會被 shell 當註解吃掉")
++
+     p = sub.add_parser("decision-add", help="T3 巢狀:新增一條 ADR 決策")
+     p.add_argument("note")
+     p.add_argument("content")
+     p.add_argument("--decided", required=True, help="決策日期 YYYY-MM-DD")
+     p.add_argument("--context", help="背景/痛點")
+     p.add_argument("--why", help="why_chosen 為何選這個")
+ 
+     # decision_refs 自動養成 T3 六原語(dref-v4;巢狀 add_subparsers,arch-f7)
+     dr = sub.add_parser("decision-refs", help="[T3 養成] decision_refs 六原語:backlog/candidates/add-ai/list/prune/promote(雙欄不對稱信任)")
+     drsub = dr.add_subparsers(dest="dref_cmd", required=True)
+@@ -52367,28 +52971,51 @@ def main():
+ 
+     if args.cmd == "decision-amend":
+         rel = env.find(args.note)
+         if rel is None:
+             return _node_not_found(env, args.note)
+         try:
+             return cmd_decision_amend(env, rel, args.did, args.field, args.text)
+         except ValueError as e:
+             print(f"擋下:{e}", file=sys.stderr)
+             return 2
++    if args.cmd in ("question-add", "question-set"):
++        rel = env.find(args.note)
++        if rel is None:
++            return _node_not_found(env, args.note)
++        try:
++            if args.cmd == "question-set":
++                return cmd_question_set(env, rel, args.qid, args.pairs)
++            return cmd_question_add(env, rel, args.text, args.q_class, args.q_stage, status=args.q_status,
++                                    blocking=args.q_blocking, irreversible=args.q_irrev, decision=args.q_decision,
++                                    tests=args.q_tests, source=args.q_source, reason=args.q_reason)[0]
++        except (ValueError, RuntimeError, OSError) as e:
++            print(f"擋下:{e}", file=sys.stderr)
++            return 2
+     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
+         if args.cmd == "decision-reindex" and not args.note:
+             print("擋下:decision-reindex 要給一篇筆記,或用 --all 全部重編", file=sys.stderr)
+             return 2
+         rel = env.find(args.note)
+         if rel is None:
+             return _node_not_found(env, args.note)
+-        try:
++        return _decision_cmd_locked(env, rel, args)
++    if args.cmd == "archive":
++        import datetime
++        return cmd_archive(env, args.days, args.apply, datetime.date.today().isoformat())
++    return 2
++
++
++def _decision_cmd_locked(env, rel, args):
++    """decision-supersede/add/reindex 單節點那一段:整段在寫入鎖裡;拿鎖逾時也走「擋下:」rc2。"""
++    try:
++        with _vault_write_lock(env.vault):   # 跟 set/append/question-* 同一把鎖:決策與待決問題寫在同一份開頭欄位,沒鎖會互相蓋掉(代碼審 r1 併發席)
+             # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
+             #   (M4 [S1] 觸發端將在此用 decision_id 呼 cascade_surface——屆時包獨立 try/except)
+             if args.cmd == "decision-reindex":
+                 return cmd_decision_reindex(env, rel)
+             if args.cmd == "decision-supersede":
+                 rc, _decision_id = cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
+                 # [M4/S1] 觸發:supersede 成功→②建檔+③surfacing。②③同包獨立 try(不放上層
+                 #   atomic try 內——否則例外被 except 吞成 rc=2 違反 rc=0 合約,R8/T6)。
+                 #   輸出協議:supersede stdout 首行已印且逐字不變;cascade 面全走 stderr;
+                 #   失敗 fail-open(stderr 記 CASCADE-ERROR、rc 仍 0、補網 E2 兜底)。
+@@ -52411,23 +53038,19 @@ def main():
+                             print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
+                     except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾
+                         print(f"CASCADE-ERROR {_e}", file=sys.stderr)
+                     _drift_print_backrefs(env.vault, rel)
+                 return rc
+             rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
+                                                 context=args.context, why=args.why)
+             if rc == 0:
+                 _drift_print_backrefs(env.vault, rel)
+             return rc
+-        except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
+-            # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
+-            # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
+-            print(f"擋下:{e}", file=sys.stderr)
+-            return 2
+-    if args.cmd == "archive":
+-        import datetime
+-        return cmd_archive(env, args.days, args.apply, datetime.date.today().isoformat())
+-    return 2
++    except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
++        # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
++        # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
++        print(f"擋下:{e}", file=sys.stderr)
++        return 2
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
