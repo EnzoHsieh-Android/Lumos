@@ -49914,6 +49914,326 @@ def t_bound_tests_multiplatform_missing_cmd():
     _sh.rmtree(d, ignore_errors=True)
 
 
+def _bt_parallel_fixture(d, parallel=None, extra_cfg=None, wait=2.0):
+    """合約測試閘並行執行的假專案:run.py 依方法名決定行為。判「有沒有同時跑」不靠計時重疊:
+    每支開工時在 running/ 放一個標記,最多等 wait 秒看有沒有別支的標記同時在,把看到與否寫進 log/<方法>,收工時拿掉標記
+    (循序時永遠看不到別支;同時跑時兩支幾乎同時開工,很快就看得到)。每支開工就把自己的 pid 寫進 pids/,收尾照它殺。
+    t_g*=綠、t_red*=紅、t_noev*=回成功但不印跑過證據、t_slow*=睡 12 秒(配逾時 6 秒)。"""
+    import json as _j
+    d = Path(d)
+    for sub in ("log", "running", "pids"):
+        (d / sub).mkdir(parents=True, exist_ok=True)
+    (d / "run.py").write_text(
+        "import sys, time, os\n"
+        "m = sys.argv[1]\n"
+        "here = os.path.dirname(os.path.abspath(__file__))\n"
+        "open(os.path.join(here, 'pids', str(os.getpid())), 'w').close()\n"
+        "mk = os.path.join(here, 'running', m)\n"
+        "open(mk, 'w').close()\n"
+        "saw, end = 0, time.time() + %r\n"
+        "while time.time() < end:\n"
+        "    if [x for x in os.listdir(os.path.join(here, 'running')) if x != m]:\n"
+        "        saw = 1\n        break\n"
+        "    time.sleep(0.05)\n"
+        "open(os.path.join(here, 'log', m), 'w').write(str(saw))\n"
+        "if m.startswith('t_slow'):\n    time.sleep(12)\n"
+        "else:\n    time.sleep(0.3)\n"
+        "os.remove(mk)\n"
+        "print('ran', m)\n"
+        "if m.startswith('t_noev'):\n    sys.exit(0)\n"
+        "print('1 passed in 0.01s')\n"
+        "sys.exit(1 if m.startswith('t_red') else 0)\n" % float(wait), encoding="utf-8")
+    (d / ".lumos").mkdir(exist_ok=True)
+    cfg = {"test_profile": "python", "test": {"run_cmd": "{python} run.py {method}"}}
+    if parallel is not None:
+        cfg["bound_tests"] = {"parallel": parallel}
+    cfg.update(extra_cfg or {})
+    (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+
+
+def _bt_alive_pids(d):
+    """假測試寫下的 pid 裡,還活著的那些(不靠 pgrep:命令列不含暫存目錄,pgrep -f 對不到)。"""
+    import os as _os
+    alive = []
+    pdir = Path(d) / "pids"
+    for f in (pdir.iterdir() if pdir.is_dir() else []):
+        try:
+            _os.kill(int(f.name), 0)
+            alive.append(int(f.name))
+        except (OSError, ValueError):
+            pass
+    return alive
+
+
+def _bt_kill_pids(d):
+    import os as _os, signal as _sig
+    for pid in _bt_alive_pids(d):
+        try:
+            _os.kill(pid, _sig.SIGKILL)
+        except OSError:
+            pass
+
+
+def _bt_saw_other(logdir):
+    """每支有沒有看到別支同時在跑 → {方法: True/False}。"""
+    return {f.name: f.read_text().strip() == "1" for f in Path(logdir).iterdir()}
+
+
+def t_bound_tests_parallel_matches_sequential():
+    """[合約測試閘並行執行 S1]同一組綁定項目 N=1 與 N=3 跑,結果(去掉秒數)與 tails 逐項相同、順序相同;
+    紅、綠、跑過證據不足、逾時各至少一例,另有兩篇筆記綁同一支(去重後仍要分回兩筆)。"""
+    import os as _os, shutil as _sh
+    m = _load_lumos_inproc()
+    items = [("A", "python", "t_g1", "real"), ("A", "python", "t_red1", "real"), ("B", "python", "t_g2", "real"),
+             ("B", "python", "t_noev1", "real"), ("C", "python", "t_slow1", "real"), ("C", "python", "t_g1", "real"),
+             ("D", "python", "t_g3", "real"), ("D", "python", "t_ghost", "dangling")]
+    out = {}
+    old = _os.environ.get("LUMOS_TEST_TIMEOUT")
+    _os.environ["LUMOS_TEST_TIMEOUT"] = "6"
+    try:
+        for n in (None, 3):
+            d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+            try:
+                _bt_parallel_fixture(d, n)
+                tails = {}
+                res, err = m._run_bound_tests(d, items, tails)
+                out[n] = ([r[:5] for r in res] if res else res, err, {k: ("ran " + k[2]) in v for k, v in tails.items()})
+            finally:
+                _sh.rmtree(d, ignore_errors=True)
+    finally:
+        if old is None:
+            _os.environ.pop("LUMOS_TEST_TIMEOUT", None)
+        else:
+            _os.environ["LUMOS_TEST_TIMEOUT"] = old
+    seq, par = out[None], out[3]
+    check("並行 S1:循序那次四種判定都有(綠、紅、跑過證據不足、逾時紅、懸空紅)",
+          seq[0] and {r[3] for r in seq[0]} >= {"green", "red", "unproven"}
+          and any("超時" in r[4] for r in seq[0]) and any("懸空" in r[4] for r in seq[0]), seq)
+    check("並行 S1:N=3 的結果清單(去掉秒數)與循序逐項相同、順序相同", par[0] == seq[0], (seq[0], par[0]))
+    check("並行 S1:tails 對應相同,沒逾時的每筆都是自己那支的輸出(逾時那支在印之前就被砍)",
+          par[2] == seq[2] and seq[2] and all(v for k, v in seq[2].items() if k[2] != "t_slow1"), (seq[2], par[2]))
+    check("並行 S1:同一支被兩篇綁,兩筆都在、判定相同",
+          [r for r in par[0] if r[2] == "t_g1"] and len([r for r in par[0] if r[2] == "t_g1"]) == 2, par[0])
+    print("  ✓ t_bound_tests_parallel_matches_sequential")
+
+
+def t_bound_tests_parallel_config_values():
+    """[合約測試閘並行執行 S2]N=3 時至少兩支同時在跑;沒寫、1、0、負數、布林、小數、字串、大於 16 一律循序。"""
+    import shutil as _sh
+    m = _load_lumos_inproc()
+    import contextlib as _cl, io as _io
+    for val, want_par, want_warn in ((3, True, False), (None, False, False), (1, False, False), (0, False, True),
+                                     (-2, False, True), (True, False, True), (2.5, False, True), (1.0, False, True),
+                                     ("4", False, True), (17, False, True), ("block-not-object", False, True)):
+        items = [("A", "python", "t_g%d" % i, "real") for i in range(3 if want_par else 2)]
+        d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+        try:
+            wait = 2.0 if want_par else 0.8   # 循序案例只要證「沒看到別支」,窗口短一點;同時跑案例留足餘裕
+            if val == "block-not-object":
+                _bt_parallel_fixture(d, None, {"bound_tests": 4}, wait=wait)
+            else:
+                _bt_parallel_fixture(d, val, wait=wait)
+            err_buf = _io.StringIO()
+            with _cl.redirect_stderr(err_buf):
+                res, err = m._run_bound_tests(d, items)
+            saw = _bt_saw_other(d / "log")
+            ok = any(saw.values()) if want_par else (len(saw) == len(items) and not any(saw.values()))
+            check("並行 S2:parallel=%r → %s(各支有沒有看到別支同時在跑:%s)" % (val, "同時跑" if want_par else "循序", saw),
+                  ok and res and all(r[3] == "green" for r in res), (saw, res, err))
+            if want_warn:   # 同一個專案、同一個值,同一個程序裡第二次呼叫不再重複提醒(高風險代碼審 r1 架構對齊席)
+                err2 = _io.StringIO()
+                with _cl.redirect_stderr(err2):
+                    m._run_bound_tests(d, items[:1])
+                check("並行 S2:parallel=%r 第二次呼叫不再重複提醒" % (val,), "bound_tests" not in err2.getvalue(), err2.getvalue())
+            warned = "bound_tests" in err_buf.getvalue()
+            check("並行 S2:parallel=%r → %s" % (val, "有寫但不合法要出聲講用了 1" if want_warn else "不出聲"),
+                  warned == want_warn, err_buf.getvalue()[-300:])
+        finally:
+            _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_config_values")
+
+
+def t_bound_tests_parallel_repo_config_valid():
+    """[合約測試閘並行執行 S3]本 repo 的 bound_tests.parallel 有寫就要是程式認得的值(1 或 2 到 16 的整數),程式讀到的也是它。
+    ★不釘「一定要打開」★(高風險代碼審 r1 回滾席、接手的人席):釘死的話,照〈回退〉把設定改成 1 停用會讓全套轉紅、推送閘擋下停用本身。"""
+    import json as _j
+    _need_src("scripts/lumos")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    cfg = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+    bt = cfg.get("bound_tests")
+    pv = bt.get("parallel") if isinstance(bt, dict) else None
+    ok = bt is None or (isinstance(bt, dict) and (pv is None or (isinstance(pv, int) and not isinstance(pv, bool) and 1 <= pv <= 16)))
+    check("並行 S3:本 repo 的 bound_tests.parallel 沒寫、或是 1 到 16 的整數", ok, bt)
+    want = pv if isinstance(pv, int) and not isinstance(pv, bool) and 2 <= pv <= 16 else 1
+    check("並行 S3:程式讀到的就是這個值", _load_lumos_inproc()._bound_tests_parallel(root) == want, (pv, want))
+    print("  ✓ t_bound_tests_parallel_repo_config_valid")
+
+
+def t_bound_tests_parallel_error_stops_fast():
+    """[合約測試閘並行執行 S5]同時跑時有一支開程序就丟例外(平台 root 不存在),不論它排第一或跟慢測試同時開跑,
+    例外都要馬上往外丟、整個程式馬上結束,而且同批已開跑的慢測試要被收掉,不留孤兒(高風險代碼審 r2 併發席、邊界席)。
+    用子程序量整個程式的牆上時間;慢測試的 pid 由假測試自己寫進 pids/。"""
+    import subprocess as _sp, shutil as _sh, time as _time, json as _j
+    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+    try:
+        cmd = "{python} run.py {method}"
+        _bt_parallel_fixture(d, 2, {"default_platform": "good", "platforms": {
+            "good": {"profile": "python", "root": ".", "run_cmd": cmd},
+            "bad": {"profile": "python", "root": "no-such-dir", "run_cmd": cmd}}})
+        bad = ["A", "bad", "t_g0", "real"]
+        slows = [["A", "good", "t_slow%d" % i, "real"] for i in range(3)]
+        probe = ("import sys, importlib.machinery, importlib.util, json\n"
+                 "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
+                 "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
+                 "from pathlib import Path\n"
+                 "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
+                 "    print('NO-RAISE')\n"
+                 "except OSError as e:\n    print('RAISED', type(e).__name__)\n")
+        # 兩條工作執行緒:出錯那支排第一,或排第二(跟第一支慢測試同時開跑)
+        for name, items in (("出錯那支排第一", [bad] + slows), ("出錯那支排在慢測試後面、同時開跑", [slows[0], bad] + slows[1:])):
+            for f in (d / "pids").iterdir():
+                f.unlink()
+            t0 = _time.time()
+            r = _sp.run([sys.executable, "-c", probe, str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items)],
+                        capture_output=True, text=True, timeout=60)
+            took = _time.time() - t0
+            check("並行 S5(%s):例外照樣往外丟" % name, "RAISED" in r.stdout, r.stdout[-300:] + r.stderr[-300:])
+            check("並行 S5(%s):整個程式 5 秒內結束,不等慢測試(實際 %.1f 秒;慢測試要 12 秒)" % (name, took), took < 5, took)
+            deadline = _time.time() + 2
+            while _bt_alive_pids(d) and _time.time() < deadline:
+                _time.sleep(0.1)
+            check("並行 S5(%s):同批已開跑的慢測試被收掉,不留孤兒" % name, not _bt_alive_pids(d), _bt_alive_pids(d))
+            _bt_kill_pids(d)
+    finally:
+        _bt_kill_pids(d)
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_error_stops_fast")
+
+
+def t_bound_tests_parallel_wait_is_quiet():
+    """[合約測試閘並行執行 S6]同時跑時主流程等待不空轉:第一條工作執行緒先收工、另一支還在跑時,
+    主流程不能變成滿速迴圈吃滿一顆核心(高風險代碼審 r1 四席獨立重現)。量整個程序的 CPU 時間。"""
+    import shutil as _sh, time as _time
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+    try:
+        _bt_parallel_fixture(d, 2)
+        (d / "run.py").write_text("import sys, time\nm = sys.argv[1]\ntime.sleep(4 if m == 't_g1' else 0)\n"
+                                  "print('1 passed in 0.01s')\n", encoding="utf-8")
+        c0, w0 = _time.process_time(), _time.time()
+        res, err = m._run_bound_tests(d, [("A", "python", "t_g0", "real"), ("A", "python", "t_g1", "real")])
+        cpu, wall = _time.process_time() - c0, _time.time() - w0
+        check("並行 S6 前置:兩支都綠、牆上時間約 4 秒", res and all(r[3] == "green" for r in res) and wall >= 3.5, (res, wall))
+        check("並行 S6:等待期間主程序 CPU 時間遠小於牆上時間(實際 CPU %.2f 秒/牆上 %.1f 秒)" % (cpu, wall), cpu < 1.0, cpu)
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_wait_is_quiet")
+
+
+def t_bound_tests_parallel_interrupt_stops_dispatch():
+    """[合約測試閘並行執行 S7]同時跑時主流程被中斷(Ctrl-C)後,工作執行緒不再派新的測試(高風險代碼審 r1 正確性席)。
+    子程序裡跑閘,等到確實有測試開跑(不是固定等幾秒——冷快取時載入主程式就要兩秒,r2 邊界席、正確性席)才送 SIGINT;
+    中斷後再等 5 秒才結束,數總共開跑了幾支:兩條工作執行緒,應是 1 到 2 支。"""
+    import subprocess as _sp, shutil as _sh, time as _time, json as _j, signal as _sig
+    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+    pr = None
+    try:
+        _bt_parallel_fixture(d, 2)
+        (d / "started").mkdir()
+        (d / "run.py").write_text("import sys, time, os\nm = sys.argv[1]\n"
+                                  "here = os.path.dirname(os.path.abspath(__file__))\n"
+                                  "open(os.path.join(here, 'pids', str(os.getpid())), 'w').close()\n"
+                                  "open(os.path.join(here, 'started', m), 'w').close()\n"
+                                  "time.sleep(1.5)\nprint('1 passed in 0.01s')\n", encoding="utf-8")
+        items = [["A", "python", "t_g%d" % i, "real"] for i in range(8)]
+        # 先把 SIGINT 裝回預設處理:推送前掛鉤在背景開分片,非互動 shell 的背景程序會繼承「忽略 SIGINT」,
+        # Python 啟動時看到已忽略就不裝 KeyboardInterrupt,中斷整個被吞(2026-10-13 推送閘實測紅)
+        probe = ("import signal; signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+                 "import sys, time, importlib.machinery, importlib.util, json\n"
+                 "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
+                 "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
+                 "from pathlib import Path\n"
+                 "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
+                 "    print('NO-INTERRUPT')\n"
+                 "except KeyboardInterrupt:\n    print('INTERRUPTED', flush=True)\n    time.sleep(5)\n")
+        pr = _sp.Popen([sys.executable, "-c", probe, str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items)],
+                       stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        deadline = _time.time() + 30
+        while not any((d / "started").iterdir()) and _time.time() < deadline and pr.poll() is None:
+            _time.sleep(0.05)
+        pr.send_signal(_sig.SIGINT)
+        out, err = pr.communicate(timeout=60)
+        started = sorted(x.name for x in (d / "started").iterdir())
+        check("並行 S7 前置:中斷有送到、閘照樣往外丟", "INTERRUPTED" in out, out[-300:] + err[-300:])
+        check("並行 S7:中斷前確實有測試開跑,中斷後不再派新的,總共開跑 1 到 2 支(實際 %d 支:%s)" % (len(started), started),
+              1 <= len(started) <= 2, started)
+    finally:
+        if pr is not None and pr.poll() is None:
+            pr.kill()
+        _bt_kill_pids(d)
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_interrupt_stops_dispatch")
+
+
+def t_bound_tests_secs_monotonic():
+    """[合約測試閘並行執行 S4 補]量牆上時間用單調時鐘:跑測試那段期間系統時鐘被往回調,secs 也不能變負數(高風險代碼審 r1 正確性席)。"""
+    import os as _os, shutil as _sh, time as _time
+    from unittest import mock as _mock
+    m = _load_lumos_inproc()
+    d = Path(_mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmono-")))
+    try:
+        real = _time.time
+        calls = {"n": 0}
+
+        def back_in_time():
+            calls["n"] += 1
+            return real() - 3600 * calls["n"]   # 每次呼叫都比上一次早一小時
+        old = _os.environ.pop("LUMOS_SKIP_BOUND_TESTS", None)
+        try:
+            with _mock.patch("time.time", back_in_time):
+                v = m._bound_tests_check(d, "HEAD~1..HEAD")
+        finally:
+            if old is not None:
+                _os.environ["LUMOS_SKIP_BOUND_TESTS"] = old
+        check("S4 補 前置:閘有跑到測試", v.get("status") == "green", v)
+        check("S4 補:時鐘往回調,secs 仍不是負數", isinstance(v.get("secs"), (int, float)) and v["secs"] >= 0, v.get("secs"))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_secs_monotonic")
+
+
+def t_bound_tests_secs_is_wall_time():
+    """[合約測試閘並行執行 S4]閘回報與記帳的 secs 是跑測試那段的牆上時間:兩篇筆記綁同一支約 2 秒的測試,
+    去重後只跑一次,secs 要約 2 秒;原本把每個綁定項目的秒數相加(同一支算兩次),會報 4 秒以上。"""
+    import subprocess as _sp, json as _j, os as _os, shutil as _sh
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    d = Path(_mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btwall-")))
+    try:
+        rp = d / "tests" / "run.py"
+        rp.write_text(rp.read_text(encoding="utf-8").replace("import sys, os\n", "import sys, os, time\ntime.sleep(2.0)\n", 1),
+                      encoding="utf-8")
+        kg = d / "docs" / "x-knowledge" / "Systems"
+        (kg / "Pay2.md").write_text((kg / "Pay.md").read_text(encoding="utf-8").replace("# Pay", "# Pay2"), encoding="utf-8")
+        e = dict(_os.environ)
+        e.pop("LUMOS_SKIP_BOUND_TESTS", None)
+        r = _sp.run([sys.executable, lumos_real, "bound-tests", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(d)],
+                    capture_output=True, text=True, env=e)
+        try:
+            v = _j.loads(r.stdout)
+        except ValueError:
+            v = {}
+        check("S4 前置:兩篇都綁到、去重後綠", v.get("status") == "green" and v.get("ran") == 2, r.stdout[-600:] + r.stderr[-300:])
+        check("S4:secs 是牆上時間(約 2 秒),不是兩個項目相加(約 4 秒)",
+              isinstance(v.get("secs"), (int, float)) and 1.8 <= v["secs"] < 3.5, v.get("secs"))
+        recs = [_j.loads(x) for x in (d / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines()
+                if '"bound-tests"' in x]
+        check("S4:記帳那筆標明 secs 是牆上時間(secs_kind=wall),跟舊帳的逐項相加分得開",
+              bool(recs) and recs[-1].get("secs_kind") == "wall", recs[-1:] )
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_secs_is_wall_time")
+
+
 def t_bound_tests_no_config_message_not_doubled():
     """代碼審 r3(編排者自找):沒設測試指令時,提醒原本是「受波及合約測試沒有跑——這個專案沒設測試指令…,
     受波及合約的測試沒有跑…」同一件事講兩遍。改成「提醒:」直接接原因。翻紅釘:把固定前綴加回去 → 翻紅。"""

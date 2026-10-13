@@ -1,0 +1,488 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/合約測試閘並行執行_計劃.md b/docs/lumos-toolchain-knowledge/Projects/合約測試閘並行執行_計劃.md
+index 7f97bc10..065072e5 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/合約測試閘並行執行_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/合約測試閘並行執行_計劃.md
+@@ -12,56 +12,61 @@ related:
+   - "[[Projects/合約測試閘什麼時候跑_計劃]]"
+ lands_in:
+   - Systems/bound-tests-gate
+ ---
+ # 合約測試閘並行執行_計劃
+ 
+ > 白話:推送前那道「改到硬合約就真跑它綁的測試」的閘,現在一支一支循序跑。本 repo 一次推送要跑約 51 支、三分鐘上下。這篇讓專案可以在設定檔打開「同時跑 N 支」,預設不變;本 repo 打開成 4。來源是立案清單第 2 項「合約測試閘變慢:先查原因」。
+ 
+ PRIOR-ART: pytest-xdist、本 repo 全套測試的 `--shard` 切片同時跑——都是「每支測試各自隔離、外層開多個工作者」;這裡照搬外層多工作者,每支仍走既有的單支執行函式(各自的程序群組與暫存輸出),不新增依賴。
+ RETIRE-IF: 打開後連續 8 週合約測試閘耗時中位數沒有比打開前低三成以上,或出現一次因同時跑造成的假紅(單獨重跑就綠),就把本 repo 的設定改回 1 並重新評估。
+-REVISIT:2026-12-15 看上線後 8 週治理帳 bound-tests 那一欄 secs(已改成牆上時間)的中位數,跟上面的循序實測 176.5 秒對照;舊帳的 secs 是逐項相加,不拿來比,對照 RETIRE-IF
++REVISIT:2026-12-15 看上線後 8 週治理帳 bound-tests 那一欄 secs 的中位數(只取帶 secs_kind=wall 的列;`lumos gov` 不帶 bound-tests 的 secs,直接讀帳:`python3 -c "import json,statistics;r=[json.loads(l) for l in open('docs/.governance-log.jsonl')];s=[x['secs'] for x in r if x.get('gate')=='bound-tests' and x.get('secs_kind')=='wall'];print(len(s),statistics.median(s) if s else None)"`),跟上面的循序實測 176.5 秒對照,對照 RETIRE-IF
+ 
+ ## 量測(2026-10-13)
+ 
+ - 一次推送範圍(本 repo 一條改到 `scripts/lumos` 與測試總檔的分支)波及 12 篇帶硬合約的筆記,綁定項目 59 個;執行函式已經用「解析後完整指令」去重,實際跑 51 支。
+ - 逐支量(機器負載約 9,絕對秒數偏高,只看相對):51 支合計約 171 秒。最慢三支合計 82 秒(處置閘條款測試約 41 秒、合約測試閘自己的測試約 23 秒、guard kill 優先序約 18.5 秒);其餘多在 1 秒上下,其中約 0.85 秒是每支重開程序載入測試總檔的固定成本。
+ - 排除過的猜想:①測試名被 `-k` 當子字串比對、連帶多跑別的測試——逐一算過,每個綁定名都只比對到自己;②同一支測試被多篇筆記綁而重跑——執行函式早就去重。
+ - 結論:時間花在循序執行本身,同時跑能把牆上時間壓到接近最慢那一支加排隊。實測同一批 59 項(51 支)接連跑三次:同時 4 支 55.8 秒、循序 176.5 秒、同時 4 支 56.0 秒,三次都 59/59 綠。
+ - ★閘回報與記帳的 secs 原本是每個綁定項目秒數相加,不是牆上時間★:同一支被幾篇綁就加幾次,同時跑時各支時間重疊又會被加總放大(實測同時跑時 CLI 報 215 秒、實際約 60 秒)。所以立案清單引的「中位數 65→223 秒」量的是這個加總,含重複計算,不等於實際等待時間,跟改後的牆上時間不能直接比。
+ 
+ ## 範圍
+ 
+ - 只改「怎麼排程這些已去重的執行」:每支要不要跑、怎麼判紅綠、逾時、跑過證據、輸出尾巴,全部照舊。
+ - 不做:縮小綁定範圍(只跑直接相依那層)、本 repo 推送時因為之後會跑全套就跳過這道閘——前者改的是「該守什麼」,後者改的是閘的判定語意,都另案。
+ - 不改去重鍵、不改結果的順序與形狀。
+ - 順手修 secs:改記跑測試那段的牆上時間(逐項的秒數照舊留在每一項裡)。
+ 
+ ## 做法
+ 
+ - 新設定 `.lumos/config.json` 的 `bound_tests.parallel`:整數 2–16 才算數;沒寫、1、布林、小數、字串、超出範圍一律當 1(循序,跟現在一樣);有寫但不合法、或 `bound_tests` 整個區塊不是物件時,印一句提醒(跟其他設定看不懂時出聲同一個慣例)。放在自己的區塊,不塞進 `test`(多平台模式下 `test` 不生效)。
+-- `_run_bound_tests` 先照原順序走過所有項目,把需要真跑的「去重鍵」依第一次出現的順序收集起來;N≥2 時用執行緒池同時跑這些鍵(每支仍呼叫既有的 `_kill_run`,它各自開程序群組與暫存輸出檔,本來就沒有共用狀態),N=1 時照現在一支接一支;全部跑完後再照原項目順序組出結果與 `tails`。
++- `_run_bound_tests` 先照原順序走過所有項目,把需要真跑的「去重鍵」依第一次出現的順序收集起來;N≥2 時用自建的 daemon 工作執行緒同時跑這些鍵(不用標準執行緒池,原因見實務隱患;每支仍呼叫既有的 `_kill_run`,它各自開程序群組與暫存輸出檔,本來就沒有共用狀態),主流程逐條等、每次最多 0.1 秒,N=1 時照現在一支接一支;全部跑完後再照原項目順序組出結果與 `tails`。
+ - 本 repo 的設定打開成 4(全套測試推送時也是切 4 片同時跑,這邊的測試已證可並行)。消費專案不動;各專案的測試工具能不能同時跑(例如會互搶建置目錄的工具)由專案自己判斷要不要打開。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當同一組綁定項目分別以 N=1 與 N=3 跑時,兩次的結果清單(去掉秒數)與 tails 對應 應 逐項相同、順序相同,紅、綠、跑過證據不足、逾時各至少一例 [test:t_bound_tests_parallel_matches_sequential]
+ - [S2] 當 N=3 時,執行期間 應 觀察到至少兩支同時在跑;當設定沒寫、為 1、0、負數、布林、小數、字串或大於 16 時,任一時刻 應 只有一支在跑 [test:t_bound_tests_parallel_config_values]
+-- [S3] 本 repo 的 `.lumos/config.json` 應 有 `bound_tests.parallel` 且為 2–16 的整數,程式讀到的也是這個值 [test:t_bound_tests_parallel_repo_config_on]
+-- [S4] 當兩篇筆記綁同一支約 1 秒的測試時,閘回報的 secs 應 是跑測試那段的牆上時間(約 1 秒),不是兩個綁定項目相加;記帳那筆 應 帶 `secs_kind: wall` 跟舊帳分得開 [test:t_bound_tests_secs_is_wall_time]
++- [S3] 本 repo 的 `.lumos/config.json` 的 `bound_tests.parallel` 有寫時 應 是程式認得的值(1 或 2–16 的整數),程式讀到的 應 是它;不釘「一定要打開」,照〈回退〉改成 1 不會讓測試轉紅 [test:t_bound_tests_parallel_repo_config_valid]
++- [S4] 當兩篇筆記綁同一支約 2 秒的測試時,閘回報的 secs 應 是跑測試那段的牆上時間(約 2 秒),不是兩個綁定項目相加(約 4 秒);記帳那筆 應 帶 `secs_kind: wall` 跟舊帳分得開 [test:t_bound_tests_secs_is_wall_time]
+ - [S5] 當同時跑時有一支開程序就丟例外(例如平台 root 不存在),不論它排第一或跟慢測試同時開跑,例外 應 馬上往外丟、不再派新的,整個程式 應 能馬上結束,不等其他已開跑的測試跑完 [test:t_bound_tests_parallel_error_stops_fast]
++- [S6] 當同時跑、第一條工作執行緒先收工而別支還在跑時,主流程等待期間的 CPU 時間 應 遠小於牆上時間,不空轉 [test:t_bound_tests_parallel_wait_is_quiet]
++- [S7] 當同時跑時主流程被中斷(Ctrl-C),工作執行緒 應 不再派新的測試 [test:t_bound_tests_parallel_interrupt_stops_dispatch]
++- [S8] 當跑測試那段期間系統時鐘被往回調時,secs 應 不是負數 [test:t_bound_tests_secs_monotonic]
+ 
+ ## 回退
+ 
+-- 單一提交還原即可。只想關掉不還原程式時,把本 repo 設定的 `bound_tests.parallel` 拿掉或改成 1,行為就回到循序(設定檔不在簿記清單,改它要照常走推送閘)。
++- 單一提交還原即可。只想關掉不還原程式時,把本 repo 設定的 `bound_tests.parallel` 拿掉或改成 1,行為就回到循序;S3 的測試只驗「有寫就要合法」,改成 1 不會轉紅。設定檔不在簿記清單,改它要照常走推送閘(只改設定檔時風險分級是 light)。
++- 回退後帳上 secs 會混著兩種值:還原程式後新寫的帳沒有 `secs_kind`(逐項相加),只改設定的話照舊帶 `secs_kind: wall`。統計一律只取帶 `secs_kind: wall` 的列。
+ - 舊版程式讀到這個新鍵會直接忽略,新舊混用不影響判定。
+ 
+ ## 實務隱患
+ 
+ - 同時跑時機器負載變高,單支測試耗時會拉長,逼近逾時上限的測試可能轉紅;逾時判定照舊每支各自計時,真碰到時先看那支是不是本來就慢(最慢那支約 41 秒,離 180 秒上限仍有餘裕)。
+-- 同時跑時一支出錯或按 Ctrl-C:不再派新的、馬上往外丟,程式也馬上結束(工作執行緒是 daemon,不用標準執行緒池——它結束時會等工作者收尾);已開跑的子程序在自己的程序群組裡跑到自己的逾時為止(最長 180 秒,整套跑 600 秒),跟原本循序時按 Ctrl-C 一樣成為孤兒。
+-- 規格閘與修正關卡判綁定測試也走同一支執行函式,設定打開後它們也同時跑;設定警告每次呼叫印一次,同一次操作可能印好幾次。
++- 同時跑時一支出錯或按 Ctrl-C:不再派新的、馬上往外丟,程式也馬上結束(工作執行緒是 daemon,不用標準執行緒池——它結束時會等工作者收尾,map 依提交順序取結果也讓排在後面的例外晚浮上來);主流程逐條等每次 0.1 秒,不盯單一條(那條先收工後會空轉);已開跑的子程序在自己的程序群組裡跑到自己的逾時為止(最長 180 秒,整套跑 600 秒),跟原本循序時按 Ctrl-C 一樣成為孤兒。
++- 陌生 repo 自己的 `.lumos/config.json` 可以把同時跑拉到上限 16 支;能改這份設定的人本來就能寫 run_cmd 讓推送閘執行任意指令,所以這不是新的攻擊面,但打開陌生專案前要知道推送閘會照它的設定開多個程序。
++- 規格閘與修正關卡判綁定測試也走同一支執行函式,設定打開後它們也同時跑;同一個專案的同一個不合法值,一個程序裡只提醒一次。
+ - 終端輸出若有逐支印進度,同時跑時順序會亂;目前這段只在全部跑完後組結果,沒有逐支印,所以不受影響。
+ - 已排除:金流:不碰任何金流或扣款相關程式
+ - 已排除:對外送出:只在本機跑測試,不送任何東西到外部服務
+ - 已排除:不可逆:只改排程,不寫入、刪除或搬移任何資料,還原提交就回到循序
+ - 已排除:守衛面:判紅綠、逾時、跑過證據與去重都不動,只改同時跑幾支;最壞是負載高造成假紅(偏嚴),不會假綠
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index 9a576054..ecdbbbf9 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -67,48 +67,48 @@ about_code:
+   ——而 pre-push 自己在別的地方就把那條當第三選項在教,那條零留痕。
+ 
+ ★而且波及計算一次推送只算一次★:pre-push 算一份寫進暫存檔給這道閘(`bound-tests --from-json`)讀。
+ 以前同步點名(`impact --sync-only --from-json`)也讀這一份;2026-09-11 起推送前的點名改由 [[Systems/每支檔有家]] 照家算,不再讀它。
+ 算不出來時這道閘記 `range-unavailable` 放行,不拖垮別的檢查。
+ 
+ 1. `impact --diff <range>` 取固定席(合約/事故/直接相依)裡帶合約的節點。
+    ★新分支首推★:起點是空樹時改用主線 tip(`_mainline_ref`),不是放棄計算、也不是跑滿全部;
+    連主線都問不到才記 `range-unavailable`。
+ 2. 每個節點的 ★INVARIANT★ 行 `[test:…]` 用 `resolve_test_refs` 解平台前綴,再用 Check T 同一套平台真測試索引判存在(real/dangling/fake)。
+-3. real 的逐支用 `.lumos/config.json` 的 run_cmd 真跑(`_kill_run`,同 kill);去重鍵=完整指令。超時:單支 `LUMOS_TEST_TIMEOUT`(預設 180s,同測試 runner),整套(run_cmd 無 {method})600s。
++3. real 的逐支用 `.lumos/config.json` 的 run_cmd 真跑(`_kill_run`,同 kill);去重鍵=完整指令。超時:單支 `LUMOS_TEST_TIMEOUT`(預設 180s,同測試 runner),整套(run_cmd 無 {method})600s。(2026-10-13 補:設了 `bound_tests.parallel` 就同時跑,見本篇〈同時跑幾支與 secs 的意思〉)
+ 4. 任一紅 → check 回 BLOCKED(rc1),訊息列合約、測試、尾段輸出,並給 `--skip-bound-tests --note` 範本。
+ 
+ ## 帳的類別(2026-09-07 拆細,不擋的都寫帳讓零觸發看得見)
+ 
+ `green` / `red-advisory`(低風險,只提醒) / `red-blocked`(高風險,擋) /
+ `skipped-flag`(人給了理由) / `skipped-env`(CI 環境變數) /
+ `no-config`(沒 run_cmd) / `no-pins`(沒固定席) / `no-bound`(固定席沒綁測試) /
+ `range-unavailable`(範圍算不出,含首推連主線都問不到) /
+ `whole-suite-deferred`(測試指令不可過濾、而且這次是低風險 → 不跑)。
+ 
+ ★為什麼要拆這麼細★:紅了擋跟紅了只提醒,後果完全不同;人給理由跳過跟 CI 常態跳過,
+ 意義也完全不同。混成同一個 kind 就回答不了人裁時掛的那條回頭條件(「只提醒到底夠不夠」)。
+-★耗時也拆成兩個獨立欄位★(`secs` 跑測試、`calc_secs` 算波及):
++★耗時也拆成兩個獨立欄位★(`secs` 跑測試、`calc_secs` 算波及)(2026-10-13 補:secs 自此是牆上時間並帶 `secs_kind: wall`,沒帶的舊帳是逐項相加):
+ 以前塞在自由文字的備註裡,回頭條件量不到。
+ 
+ `gov --stats` 看 bound-tests 那列就知道這道閘在這個專案有沒有真的開。
+ 
+ ## 設計迴圈紀錄
+ `bound-tests-gate-c` r1 四席(通才/正確性邊界/可執行性成本/架構對齊)20 條:19 折 1 放行(hermetic:run_cmd 是專案自宣告指令,與 CI 同信任邊界)。我自己記帳走歪兩次(處置帳一輪只能一筆;每席都要留痕)才過閘,編號 -b/-c 是這樣來的。
+ 
+ ## 回頭看條件
+ - 30 天後 `gov --stats` 若 bound-tests 只有 no-config/no-pins、零 green/red → 入口 hook 加「本專案沒設 run_cmd,合約測試閘沒開」提醒;再 30 天仍零 → 列入只退場不痛的機制檢討。
+-- 三次 check 超過 3 分鐘 → 加只跑 direct 相依的縮圈選項。
++- 三次 check 超過 3 分鐘 → 加只跑 direct 相依的縮圈選項。(2026-10-13 補:只算帶 `secs_kind: wall` 的帳;本 repo 打開同時跑後實測約 1 分鐘)
+ - gov --stats 出現 red 且原因是外部資源 → 加單支白名單跳過。
+ 
+ ## 鏡頭側呈現(2026-09-03 v1.1)
+ 
+ `lumos dispatch-lens` 對每條 ★INVARIANT★ 合約行用同一個 `_classify_one` 標「綁定測試:有/懸空/偽證據」或「★裸合約★」,並在段尾固定寫「有=方法存在,不代表跑過或有殺傷力(閘只看 rc)」。鏡頭是參考、本閘是判決:鏡頭讀 base 版合約行、閘讀工作樹版節點,分支改了合約行時兩邊可能不同。單源 [[Projects/派工鏡頭注入_計劃]] v1.1 節。
+ 
+ ## 推送前掛鉤的回頭重讀那一段(2026-10-01 接上,2026-10-09 轉擋)
+ 
+ drift check 那段之後、test-layers 之前,多一段 `note-audit reread-check`(回頭重讀守檔筆記,[[Projects/守檔筆記對照改動_計劃]]〈做法〉4;判定歸 [[Systems/筆記內容審]],呼叫那段歸 [[Systems/存量漂移守衛]])。2026-10-01 接上時只提醒:工具恆回 0,掛鉤只在 130(Ctrl-C)停、其他非零照推。2026-10-09 起([[Projects/舊句兩道轉擋_計劃]]〈掛鉤與 CI〉)掛鉤那段帶 `--gate`,改成跟上面「rc1 擋、其他非零放行」的幾道同一種形狀:回 1 擋下並印通用逃生段,128 以上原樣交給 pp_stop_if_signaled(刻意推翻「只有 130 停」——這道會擋人之後,被外部砍掉也不該當作放行),其他非零(含舊版工具不認得 `--gate` 回 2)講一句放行;標準錯誤不再丟。掛鉤裡 pp_stop_if_signaled 仍是 8 行(`t_prepush_gates_stop_on_signal` 數行數、六道逐一驗被殺掉會停)。★CI 那步不帶 `--gate`、照舊 continue-on-error 並吞掉回傳碼★,跟上面「CI 是最後一道後盾、工具出錯寧可紅」的慣例刻意不同:合併後主線 CI 用整個 PR 的累計範圍重算,候選與指紋跟作者本機看到的不同,擋在 CI 會誤擋;代價是 `--no-verify` 跳過本機掛鉤時這一道沒有兜底(人裁接受)。
+ 
+ ## 同時跑幾支與 secs 的意思(2026-10-13)
+ 
+-WHY:`.lumos/config.json` 的 `bound_tests.parallel`(2–16 的整數)打開後,`_run_bound_tests` 先照原順序收集去重後要跑的指令,再用執行緒池同時跑、最後照原順序組結果;沒寫或不合法一律循序。本 repo 設 4 [出處:[[Projects/合約測試閘並行執行_計劃]]] [因:同一批 51 支循序 176.5 秒、同時 4 支約 56 秒,時間花在循序本身] [不選:預設就同時跑——消費專案的測試工具可能互搶建置目錄;縮小綁定範圍或因後面跑全套而跳過這道閘——改的是該守什麼或判定語意] [test:t_bound_tests_parallel_matches_sequential] [test:t_bound_tests_parallel_config_values]
++WHY:`.lumos/config.json` 的 `bound_tests.parallel`(2–16 的整數)打開後,`_run_bound_tests` 先照原順序收集去重後要跑的指令,再用自建的 daemon 工作執行緒同時跑、最後照原順序組結果;沒寫或不合法一律循序。本 repo 設 4 [出處:[[Projects/合約測試閘並行執行_計劃]]] [因:同一批 51 支循序 176.5 秒、同時 4 支約 56 秒,時間花在循序本身] [不選:預設就同時跑——消費專案的測試工具可能互搶建置目錄;縮小綁定範圍或因後面跑全套而跳過這道閘——改的是該守什麼或判定語意;ThreadPoolExecutor——工作者不是 daemon,程式結束與 Ctrl-C 都要等已開跑的測試跑完,map 依提交順序取結果讓排在後面的例外晚浮上來;主流程只 join 第一條執行緒——它先收工後變滿速空轉] [test:t_bound_tests_parallel_matches_sequential] [test:t_bound_tests_parallel_config_values]
+ PITFALL:閘回報與記帳的 secs 原本是每個綁定項目秒數相加,同一支被幾篇綁就加幾次,同時跑時又被重疊放大 [出處:2026-10-13 實測同時跑 CLI 報 215 秒、實際約 60 秒] [根因:sum(每項秒數) 不是牆上時間] [修法:改量跑測試那段的牆上時間,記帳多帶 secs_kind=wall;沒帶這欄的舊帳 secs 是相加值,不跟之後比] [test:t_bound_tests_secs_is_wall_time]
+diff --git a/scripts/lumos b/scripts/lumos
+index 0f842600..465aa4c6 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -47886,20 +47886,22 @@ _BOUND_TESTS_WHOLE_SUITE_TIMEOUT = 600.0   # 同 kill baseline 的下限
+ 
+ def _bound_tests_log(repo_root, kind, nodes, note, secs=None, calc_secs=None):
+     """治理帳 gate=bound-tests(獨立 gate,kind 裸結果詞;fail-open,寫不進不影響判定)。
+ 
+     ★secs / calc_secs 要當獨立欄位寫進帳★(2026-09-07 設計 [S6]):
+     以前只塞在自由文字的 note 裡(「46 綠 41.8s」),回頭條件量不到——
+     而這一案掛的兩條回頭條件都要問「近 30 天最大耗時多少」。
+     ★第一版我只把它們放進回傳的 dict,帳上還是自由文字★——那等於沒做,
+     因為回傳值不落盤,週跑回頭看的是帳。
+     secs=跑測試那段;calc_secs=算波及那段。兩段成本的成因不同,不能加在一起。
++    secs_kind:有 secs 就寫 "wall"——2026-10-13 起 secs 是跑測試那段的牆上時間;沒帶這欄的舊帳 secs 是逐項相加
++    (同一支被幾篇綁就加幾次),統計只取帶 secs_kind 的列([[Projects/合約測試閘並行執行_計劃]])。
+     """
+     try:
+         vault = _vault_in(repo_root)
+         if vault is not None:
+             # ★hard 要跟著 kind 改名一起改★(代碼審 r1 外家否決席判 major,查證屬實):
+             # kind 從 red 拆成 red-advisory / red-blocked 之後,這裡還在比對舊的 "red"
+             # ——於是★高風險真的擋下去的那一筆會被記成 hard:false★,
+             # 舊的呈現端依 hard 分「硬擋/軟」,會把真硬擋報成軟事件。
+             _rec = {"gate": "bound-tests", "kind": kind,
+                     "hard": kind == "red-blocked",
+@@ -48211,22 +48213,29 @@ def _run_bound_tests(repo_root, items, tails=None):
+                 except BaseException as e:   # 開不了程序之類;交給主流程往外丟
+                     with lock:
+                         errs.append(e)
+                     return
+                 with lock:
+                     seen[key] = res
+ 
+         threads = [_threading.Thread(target=_worker, daemon=True) for _ in range(min(workers, len(jobs)))]
+         for th in threads:
+             th.start()
+-        while any(th.is_alive() for th in threads) and not errs:
+-            threads[0].join(0.1)
++        try:
++            # 逐條等、每次最多 0.1 秒:已結束的執行緒 join 會立刻返回,只盯第一條會在它先收工後變成滿速空轉(代碼審高風險 r1)
++            for th in threads:
++                while th.is_alive() and not errs:
++                    th.join(0.1)
++        except BaseException as e:   # Ctrl-C 只會丟在主流程:先讓工作執行緒停止派新的,再往外丟
++            with lock:
++                errs.append(e)
++            raise
+         if errs:
+             raise errs[0]
+     else:
+         seen.update(_one(k) for k in jobs)
+ 
+     results = []
+     for node, plat, method, how in plan:
+         if len(how) == 2:
+             results.append((node, plat, method, how[0], how[1], 0.0))
+             continue
+@@ -48249,38 +48258,50 @@ def _run_bound_tests(repo_root, items, tails=None):
+             ran, fix = _ran_evidence_check(pentry.get("profile_name"), tail)
+             if ran is False:
+                 results.append((node, plat, method, "unproven", fix, secs))
+             else:
+                 results.append((node, plat, method, "green", "whole-suite" if whole else "", secs))
+     if results and all(r[3] == "no-cmd" for r in results):
+         return None, _no_run_cmd_reason(repo_root, pdata.get("multiplatform"), {r[1] for r in results})
+     return results, None
+ 
+ 
++_BT_PARALLEL_WARNED = set()   # (專案根, 設定值的 repr):同一個程序裡規格閘會多次呼叫,同一句提醒只印一次
++
++
++def _bt_parallel_warn(repo_root, shown, msg):
++    key = (str(Path(repo_root).resolve()), shown)
++    if key not in _BT_PARALLEL_WARNED:
++        _BT_PARALLEL_WARNED.add(key)
++        print(msg, file=sys.stderr)
++
++
+ def _bound_tests_parallel(repo_root):
+     """`.lumos/config.json` 的 bound_tests.parallel:2 到 16 的整數才算數,其他(沒寫、1、布林、小數、字串、超出範圍、設定讀不了)一律 1。
+     有寫但不合法時講一句用了 1(跟 note_lint、note_shape 看不懂時出聲同一個慣例),免得寫成 "4" 以為已經同時跑。"""
+     try:
+         cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
+         bt = cfg.get("bound_tests") if isinstance(cfg, dict) else None
+     except Exception:
+         return 1
+     if bt is not None and not isinstance(bt, dict):
+-        print(f"提醒:.lumos/config.json 的 bound_tests 要是一個物件(例如 {{\"parallel\": 4}}),現在是 {bt!r},這次一支一支跑", file=sys.stderr)
++        _bt_parallel_warn(repo_root, "block:" + repr(bt),
++                          f"提醒:.lumos/config.json 的 bound_tests 要是一個物件(例如 {{\"parallel\": 4}}),現在是 {bt!r},這次一支一支跑")
+         return 1
+     if not isinstance(bt, dict) or "parallel" not in bt or bt["parallel"] is None:
+         return 1
+     v = bt["parallel"]
+     if isinstance(v, int) and not isinstance(v, bool) and 2 <= v <= 16:
+         return v
+     if v != 1 or isinstance(v, bool):
+-        print(f"提醒:.lumos/config.json 的 bound_tests.parallel 是 {v!r},只認 2 到 16 的整數,這次一支一支跑(當成 1)", file=sys.stderr)
++        _bt_parallel_warn(repo_root, "value:" + repr(v),
++                          f"提醒:.lumos/config.json 的 bound_tests.parallel 是 {v!r},只認 2 到 16 的整數,這次一支一支跑(當成 1)")
+     return 1
+ 
+ 
+ def _config_has_top_run_cmd(repo_root):
+     """設定檔最上層有沒有 test.run_cmd(多平台模式下它不生效,要講給人聽)。讀不到當沒有。"""
+     try:
+         cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
+     except Exception:
+         return False
+     return isinstance(cfg, dict) and isinstance(cfg.get("test"), dict) and bool(cfg["test"].get("run_cmd"))
+@@ -48390,23 +48411,23 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
+     if advisory:
+         _keep, _defer = _bound_tests_split_by_filterable(repo_root, items)
+         if _defer:
+             _bound_tests_log(repo_root, "whole-suite-deferred", sorted({i[0] for i in _defer}),
+                              "測試指令不可過濾(沒有 {method}),低風險這次不跑這幾支")
+         if not _keep:
+             return {"status": "whole-suite-deferred", "ran": 0, "red": [], "secs": 0.0,
+                     "calc_secs": _calc, "advisory": advisory,
+                     "reason": "你的測試指令不能只跑一支,所以這次跳過;把指令改成可過濾的(帶 {method}),這道閘才會每次推送都保護你"}
+         items = _keep
+-    _t_run = _time.time()
++    _t_run = _time.monotonic()   # 單調時鐘:跑測試期間系統校時往回調也不會量出負數
+     results, err = _run_bound_tests(repo_root, items)
+-    _wall = round(_time.time() - _t_run, 1)
++    _wall = round(_time.monotonic() - _t_run, 1)
+     if results is None:
+         _bound_tests_log(repo_root, "no-config", sorted({i[0] for i in items}), err)
+         return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "calc_secs": _calc,
+                 "reason": err, "advisory": advisory}
+     red = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "red"]
+     unproven = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "unproven"]
+     _nocmd = [(n, p, m) for n, p, m, v, d, _ in results if v == "no-cmd"]
+     _not_run = [f"{n} [{p}:{m}]" for n, p, m in _nocmd]
+     _nc_note = _nr_reason = ""
+     if _nocmd:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a4a70e8e..2f89673d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -50008,38 +50008,47 @@ def t_bound_tests_parallel_config_values():
+                 _bt_parallel_fixture(d, None, {"bound_tests": 4})
+             else:
+                 _bt_parallel_fixture(d, val)
+             err_buf = _io.StringIO()
+             with _cl.redirect_stderr(err_buf):
+                 res, err = m._run_bound_tests(d, items)
+             saw = _bt_saw_other(d / "log")
+             ok = any(saw.values()) if want_par else (len(saw) == len(items) and not any(saw.values()))
+             check("並行 S2:parallel=%r → %s(各支有沒有看到別支同時在跑:%s)" % (val, "同時跑" if want_par else "循序", saw),
+                   ok and res and all(r[3] == "green" for r in res), (saw, res, err))
++            if want_warn:   # 同一個專案、同一個值,同一個程序裡第二次呼叫不再重複提醒(高風險代碼審 r1 架構對齊席)
++                err2 = _io.StringIO()
++                with _cl.redirect_stderr(err2):
++                    m._run_bound_tests(d, items[:1])
++                check("並行 S2:parallel=%r 第二次呼叫不再重複提醒" % (val,), "bound_tests" not in err2.getvalue(), err2.getvalue())
+             warned = "bound_tests" in err_buf.getvalue()
+             check("並行 S2:parallel=%r → %s" % (val, "有寫但不合法要出聲講用了 1" if want_warn else "不出聲"),
+                   warned == want_warn, err_buf.getvalue()[-300:])
+         finally:
+             _sh.rmtree(d, ignore_errors=True)
+     print("  ✓ t_bound_tests_parallel_config_values")
+ 
+ 
+-def t_bound_tests_parallel_repo_config_on():
+-    """[合約測試閘並行執行 S3]本 repo 自己的設定打開同時跑(2 到 16 的整數),而且程式讀得到同一個值。"""
++def t_bound_tests_parallel_repo_config_valid():
++    """[合約測試閘並行執行 S3]本 repo 的 bound_tests.parallel 有寫就要是程式認得的值(1 或 2 到 16 的整數),程式讀到的也是它。
++    ★不釘「一定要打開」★(高風險代碼審 r1 回滾席、接手的人席):釘死的話,照〈回退〉把設定改成 1 停用會讓全套轉紅、推送閘擋下停用本身。"""
+     import json as _j
+     _need_src("scripts/lumos")
+     root = Path(GRAPHCTL).resolve().parent.parent
+     cfg = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+-    pv = (cfg.get("bound_tests") or {}).get("parallel")
+-    check("並行 S3:本 repo 設定打開成 2 到 16 的整數", isinstance(pv, int) and not isinstance(pv, bool) and 2 <= pv <= 16, pv)
+-    check("並行 S3:程式讀到的就是這個值", _load_lumos_inproc()._bound_tests_parallel(root) == pv, pv)
+-    print("  ✓ t_bound_tests_parallel_repo_config_on")
++    bt = cfg.get("bound_tests")
++    pv = bt.get("parallel") if isinstance(bt, dict) else None
++    ok = bt is None or (isinstance(bt, dict) and (pv is None or (isinstance(pv, int) and not isinstance(pv, bool) and 1 <= pv <= 16)))
++    check("並行 S3:本 repo 的 bound_tests.parallel 沒寫、或是 1 到 16 的整數", ok, bt)
++    want = pv if isinstance(pv, int) and not isinstance(pv, bool) and 2 <= pv <= 16 else 1
++    check("並行 S3:程式讀到的就是這個值", _load_lumos_inproc()._bound_tests_parallel(root) == want, (pv, want))
++    print("  ✓ t_bound_tests_parallel_repo_config_valid")
+ 
+ 
+ def t_bound_tests_parallel_error_stops_fast():
+     """[合約測試閘並行執行 S5]同時跑時有一支開程序就丟例外(平台 root 不存在),不論它排第幾,例外都要馬上往外丟,
+     而且整個程式要能馬上結束——不等其他已開跑的測試跑完(代碼審 r2:原本只在出錯那支排第一時成立,
+     程式結束時還會等執行緒池的工作者收尾)。用子程序量整個程式的牆上時間,收尾時殺掉留下的慢測試。"""
+     import subprocess as _sp, shutil as _sh, time as _time, json as _j, signal as _sig, os as _os
+     d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+     try:
+         cmd = "{python} run.py {method}"
+@@ -50067,20 +50076,104 @@ def t_bound_tests_parallel_error_stops_fast():
+         out = _sp.run(["pgrep", "-f", str(d)], capture_output=True, text=True).stdout.split()
+         for pid in out:
+             try:
+                 _os.kill(int(pid), _sig.SIGKILL)
+             except (OSError, ValueError):
+                 pass
+         _sh.rmtree(d, ignore_errors=True)
+     print("  ✓ t_bound_tests_parallel_error_stops_fast")
+ 
+ 
++def t_bound_tests_parallel_wait_is_quiet():
++    """[合約測試閘並行執行 S6]同時跑時主流程等待不空轉:第一條工作執行緒先收工、另一支還在跑時,
++    主流程不能變成滿速迴圈吃滿一顆核心(高風險代碼審 r1 四席獨立重現)。量整個程序的 CPU 時間。"""
++    import shutil as _sh, time as _time
++    m = _load_lumos_inproc()
++    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
++    try:
++        _bt_parallel_fixture(d, 2)
++        (d / "run.py").write_text("import sys, time\nm = sys.argv[1]\ntime.sleep(4 if m == 't_g1' else 0)\n"
++                                  "print('1 passed in 0.01s')\n", encoding="utf-8")
++        c0, w0 = _time.process_time(), _time.time()
++        res, err = m._run_bound_tests(d, [("A", "python", "t_g0", "real"), ("A", "python", "t_g1", "real")])
++        cpu, wall = _time.process_time() - c0, _time.time() - w0
++        check("並行 S6 前置:兩支都綠、牆上時間約 4 秒", res and all(r[3] == "green" for r in res) and wall >= 3.5, (res, wall))
++        check("並行 S6:等待期間主程序 CPU 時間遠小於牆上時間(實際 CPU %.2f 秒/牆上 %.1f 秒)" % (cpu, wall), cpu < 1.0, cpu)
++    finally:
++        _sh.rmtree(d, ignore_errors=True)
++    print("  ✓ t_bound_tests_parallel_wait_is_quiet")
++
++
++def t_bound_tests_parallel_interrupt_stops_dispatch():
++    """[合約測試閘並行執行 S7]同時跑時主流程被中斷(Ctrl-C)後,工作執行緒不再派新的測試(高風險代碼審 r1 正確性席)。
++    子程序裡跑閘,0.6 秒時送 SIGINT;中斷後再等 5 秒才結束,數總共開跑了幾支——兩條工作執行緒,最多只該開跑 2 支。"""
++    import subprocess as _sp, shutil as _sh, time as _time, json as _j, signal as _sig, os as _os
++    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
++    try:
++        _bt_parallel_fixture(d, 2)
++        (d / "started").mkdir()
++        (d / "run.py").write_text("import sys, time, os\nm = sys.argv[1]\n"
++                                  "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'started', m), 'w').close()\n"
++                                  "time.sleep(1.5)\nprint('1 passed in 0.01s')\n", encoding="utf-8")
++        items = [["A", "python", "t_g%d" % i, "real"] for i in range(8)]
++        probe = ("import sys, time, importlib.machinery, importlib.util, json\n"
++                 "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
++                 "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
++                 "from pathlib import Path\n"
++                 "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
++                 "    print('NO-INTERRUPT')\n"
++                 "except KeyboardInterrupt:\n    print('INTERRUPTED', flush=True)\n    time.sleep(5)\n")
++        pr = _sp.Popen([sys.executable, "-c", probe, str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items)],
++                       stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
++        _time.sleep(0.6)
++        pr.send_signal(_sig.SIGINT)
++        out, err = pr.communicate(timeout=60)
++        started = sorted(x.name for x in (d / "started").iterdir())
++        check("並行 S7 前置:中斷有送到、閘照樣往外丟", "INTERRUPTED" in out, out[-300:] + err[-300:])
++        check("並行 S7:中斷後不再派新的,總共只開跑 2 支(實際 %d 支:%s)" % (len(started), started), len(started) <= 2, started)
++    finally:
++        for pid in _sp.run(["pgrep", "-f", str(d)], capture_output=True, text=True).stdout.split():
++            try:
++                _os.kill(int(pid), _sig.SIGKILL)
++            except (OSError, ValueError):
++                pass
++        _sh.rmtree(d, ignore_errors=True)
++    print("  ✓ t_bound_tests_parallel_interrupt_stops_dispatch")
++
++
++def t_bound_tests_secs_monotonic():
++    """[合約測試閘並行執行 S4 補]量牆上時間用單調時鐘:跑測試那段期間系統時鐘被往回調,secs 也不能變負數(高風險代碼審 r1 正確性席)。"""
++    import os as _os, shutil as _sh, time as _time
++    from unittest import mock as _mock
++    m = _load_lumos_inproc()
++    d = Path(_mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmono-")))
++    try:
++        real = _time.time
++        calls = {"n": 0}
++
++        def back_in_time():
++            calls["n"] += 1
++            return real() - 3600 * calls["n"]   # 每次呼叫都比上一次早一小時
++        old = _os.environ.pop("LUMOS_SKIP_BOUND_TESTS", None)
++        try:
++            with _mock.patch("time.time", back_in_time):
++                v = m._bound_tests_check(d, "HEAD~1..HEAD")
++        finally:
++            if old is not None:
++                _os.environ["LUMOS_SKIP_BOUND_TESTS"] = old
++        check("S4 補 前置:閘有跑到測試", v.get("status") == "green", v)
++        check("S4 補:時鐘往回調,secs 仍不是負數", isinstance(v.get("secs"), (int, float)) and v["secs"] >= 0, v.get("secs"))
++    finally:
++        _sh.rmtree(d, ignore_errors=True)
++    print("  ✓ t_bound_tests_secs_monotonic")
++
++
+ def t_bound_tests_secs_is_wall_time():
+     """[合約測試閘並行執行 S4]閘回報與記帳的 secs 是跑測試那段的牆上時間:兩篇筆記綁同一支約 1 秒的測試,
+     去重後只跑一次,secs 要約 1 秒;原本把每個綁定項目的秒數相加(同一支算兩次),會報 2 秒以上。"""
+     import subprocess as _sp, json as _j, os as _os, shutil as _sh
+     lumos_real = str(Path(__file__).resolve().parent / "lumos")
+     d = Path(_mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btwall-")))
+     try:
+         rp = d / "tests" / "run.py"
+         rp.write_text(rp.read_text(encoding="utf-8").replace("import sys, os\n", "import sys, os, time\ntime.sleep(2.0)\n", 1),
+                       encoding="utf-8")
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 88445f9f..c956871a 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -3,21 +3,21 @@
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「這批改動風險多高?要不要過審?」 | `lumos pitfalls --diff <merge-base>..HEAD` | `tier: high` → 要過對抗代碼審(`lumos-code-loop` skill),其中必派一席資安席(templates.md §7.8,問閘會擋);standard 走循序審、light 只派架構對齊席(單源 `lumos-code-loop/SKILL.md`),但**同一份輸出列出的「觸發到的效能檢核題」不看 tier,推送前每題要表態**(下一列)。輸出末段「[架構對齊]」列每支改動檔同層最像的既有檔當對照,逐問三件事(分層依賴 / 命名錯誤處理 / 有沒有第二種做法)——派審查員時一併附上 | pre-push 自己會算,high 沒留痕就擋 |
+ | 「這次改動觸發了幾題效能檢核,要先交代」 | `lumos pitfalls --diff <範圍> --dispositions-template --carry > /tmp/disp.json`(填 status 留空的題:satisfied 附 evidence `path:line`/`test:<名>`、na 附 reason、todo 附 issue+reason、tension 附 chosen/existing/hazard/suggestion——這題的做法跟鄰居不同、兩席相反時用,不擋、check 印 ⚠ 交人裁;樣板帶 `hint` 的題就是候選)→ `lumos code-loop dispositions /tmp/disp.json [--branch <推送目的分支>]` | 未觸發的題工具已自動記「未觸發」;寫入綁當下版本,改碼後重跑樣板加 `--carry` 只答新題;審查席抓到未觸發題的問題 → `lumos code-loop recall-miss <id> --note` | `code-loop check` 擋(缺表態≠缺審查,訊息分開);`.lumos/config.json` 的 `stack_questions.gate` 可設 all/high-only/off |
+ | 「審完了/決定不審,要留痕才能推」 | `lumos code-loop pass --note "<審了什麼>"` 或 `lumos code-loop skip --note "<為什麼不審>"` | 留痕綁當下版本;之後再改 code(簿記檔除外)就失效,要重跑。合併請求合進主線時,主線的檢查也認合進來那一側的留痕——條件是分支合併前先跟上主線(合過主線、重記留痕)、合併提交本身不手改;不然主線那邊照擋,要補審或補記 | pre-push 與 CI 都擋 |
+ | 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因,四個獨立判定序列早退:受波及合約綁的測試紅(高風險擋;低風險 pre-push 帶 `--bound-tests-advisory` 只提醒)→ 有適用效能檢核題表態不完整(不看 tier)→ 這次改動帶進新的告警(不看 tier)→ high 無審查留痕 | pre-push 對每個分支 ref 都呼叫它(2026-09-09 起無條件) |
+ | 「推送被『碰到的筆記裡有指不到真測試的綁定』擋下」 | 照它印的改法修那篇筆記(改成真的測試名;測試已刪寫 `[test-gone:名稱]`;作廢的條目把綁定移走)再推;擋不擋看 `.lumos/config.json` 的 `note_shape.test_refs`(沒設是 warn 只提醒、設 block 才擋),只關這組設 warn;誤擋單次 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳) | 碰到的筆記整篇都要乾淨,舊行上的也算;簽出的不是推送終點、或測試檔與設定有沒提交的改動時只提醒、交給 CI | 指不到的 `[test:]` 是假的守衛,讀的人會以為有測試守著 |
+ | 「新增告警閘擋下來,那條是誤報」 | `lumos lint-waive <指紋> --note "<為什麼放行>"`;看放行過什麼 `--list` | 放行綁指紋不綁版本,寫進 `.lumos/lint-waivers.json`(要一起提交)並記一筆治理帳 | 不放行就推不上去;健檢會數這個專案放行了幾條 |
+ | 「把一個坑固化成每次提交都會跑的規則」 | 規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`,登記進 `index.json`,再 `lumos rule-check` | 每條規則都要有一支真的翻紅的樣本;沒樣本或樣本不翻紅 rc1 | 沒有會翻紅的樣本的規則可能是死的,跟沒有規則一樣 |
+ | 「漏網的問題本來哪條規則該抓」 | 記逃逸帳時帶 `--rule <規則id\|none>`;看待辦 `lumos rule-gap` | 列出「標了該抓、但規則還沒寫」的,附漏過幾次 | 逃逸帳只記漏掉了,不標規則就不會長出新守衛 |
+-| 「這次改動有沒有打破哪條硬合約?」 | `lumos bound-tests --diff <範圍> [--advisory]` | green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕** | ★2026-09-07 起低風險推送也跑★,紅了印出來記帳但不擋;高風險照舊擋 |
++| 「這次改動有沒有打破哪條硬合約?」 | `lumos bound-tests --diff <範圍> [--advisory]` | green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕** | ★2026-09-07 起低風險推送也跑★,紅了印出來記帳但不擋;高風險照舊擋。預設一支一支跑;要同時跑見安裝維運的 `bound_tests.parallel` |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"` 或 `lumos bound-tests --skip --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計(旗標記 `skipped-flag`、環境變數記 `skipped-env`,分開數) | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+diff --git a/skills/lumos-project-notes/commands/07-安裝維運.md b/skills/lumos-project-notes/commands/07-安裝維運.md
+index d098d62c..ab4e7f3e 100644
+--- a/skills/lumos-project-notes/commands/07-安裝維運.md
++++ b/skills/lumos-project-notes/commands/07-安裝維運.md
+@@ -10,10 +10,25 @@
+ | 專案不用了 | `lumos deinit`(只拆專案層) / `lumos teardown`(連機器全域一起拆,圖譜保留) | 非互動要加 --yes |
+ | 把 sqlfluff / stylelint / dart analyze 輸出接進 lint 適配器 | `sqlfluff … --format json \| lumos sqlfluff-sarif`;`stylelint … --formatter json \| lumos stylelint-sarif`;`dart analyze --format=json … \| lumos dart-sarif`(讀不懂 rc2、不吐空結果) | 轉 SARIF |
+ 
+ ## 筆記格子檢查的啟用與回退（Claude／Codex 共用）
+ 
+ 看到 doctor 提示「掛鉤沒帶 --slots」時，先區分未啟用與工具故障；目前來源掛鉤不預設開這項，不因更新就宣稱已開。需要診斷時，先暫存自己的筆記，再跑 `lumos note-shape --staged --slots`，依缺鍵提示修正。
+ 
+ 只有專案已決定正式啟用時，才在版本管理的 pre-commit 掛鉤把既有呼叫改成 `note-shape --staged --slots`，保留前面的直譯器、CLI 路徑和後面的 repo／錯誤處理參數，與設定一起提交。這個精確字串必須在真正呼叫行；不要把它寫進掛鉤註解充當上線。推送與 CI 從掛鉤歷史找該記號，找不到就不跑格子檢查，避免把全部舊帳當新違規。用 `lumos doctor` 核對接線，再用有缺格子的暫存筆記確認提交檢查確實抓到；未實測不能寫通過。
+ 
+ 只想提醒或要退回時，在既有 `.lumos/config.json` 合併 `note_shape.slots` 為 `warn` 或 `off`；不要覆蓋其他設定。啟用後未設定此鍵預設 `block`，但仍受 `note_shape.gate` 總開關限制：總開關 `off` 不跑、`warn` 只提醒；要正式擋下需總開關也為 `block`。這個鍵只管格子，不關掉來源、行號或測試引用的其他檢查。`--slots` 保留為相容選項，不從 CLI 移除；來源或掛鉤更新後重新核對，不能只看先前那次通過。
++
++## 合約測試閘同時跑幾支(`bound_tests.parallel`)
++
++推送前的合約測試閘預設一支一支跑。測試多、彼此不互搶資源時,可在 `.lumos/config.json` 合併:
++
++```json
++{"bound_tests": {"parallel": 4}}
++```
++
++- 只認 2 到 16 的整數;沒寫或寫 1 就是一支一支跑。寫錯(字串 `"4"`、小數、布林、超出範圍,或 `bound_tests` 不是物件)會印一句提醒並當成 1。
++- **不該開的情況**:測試工具同時跑會互搶同一個建置目錄或鎖檔(例如同一個 Gradle、Xcode DerivedData)、共用同一個資料庫或固定埠、或測試會改專案裡的共用檔。拿不準就先維持預設。
++- 打開後規格閘與修正關卡判綁定測試也會同時跑。治理帳 bound-tests 的 `secs` 是牆上時間(帶 `secs_kind: wall`);沒帶這欄的舊帳是逐項相加,不能拿來比。
++- 要關掉就把這個鍵拿掉或改成 1。
++- 這個值跟著專案的設定檔走:打開陌生專案時,它的設定可以把推送閘同時開的測試程序拉到 16 支(能改這份設定的人本來也能寫測試指令,不是新的權限)。
++

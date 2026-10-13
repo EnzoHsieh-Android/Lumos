@@ -74,7 +74,7 @@ about_code:
    ★新分支首推★:起點是空樹時改用主線 tip(`_mainline_ref`),不是放棄計算、也不是跑滿全部;
    連主線都問不到才記 `range-unavailable`。
 2. 每個節點的 ★INVARIANT★ 行 `[test:…]` 用 `resolve_test_refs` 解平台前綴,再用 Check T 同一套平台真測試索引判存在(real/dangling/fake)。
-3. real 的逐支用 `.lumos/config.json` 的 run_cmd 真跑(`_kill_run`,同 kill);去重鍵=完整指令。超時:單支 `LUMOS_TEST_TIMEOUT`(預設 180s,同測試 runner),整套(run_cmd 無 {method})600s。
+3. real 的逐支用 `.lumos/config.json` 的 run_cmd 真跑(`_kill_run`,同 kill);去重鍵=完整指令。超時:單支 `LUMOS_TEST_TIMEOUT`(預設 180s,同測試 runner),整套(run_cmd 無 {method})600s。(2026-10-13 補:設了 `bound_tests.parallel` 就同時跑,見本篇〈同時跑幾支與 secs 的意思〉)
 4. 任一紅 → check 回 BLOCKED(rc1),訊息列合約、測試、尾段輸出,並給 `--skip-bound-tests --note` 範本。
 
 ## 帳的類別(2026-09-07 拆細,不擋的都寫帳讓零觸發看得見)
@@ -87,7 +87,7 @@ about_code:
 
 ★為什麼要拆這麼細★:紅了擋跟紅了只提醒,後果完全不同;人給理由跳過跟 CI 常態跳過,
 意義也完全不同。混成同一個 kind 就回答不了人裁時掛的那條回頭條件(「只提醒到底夠不夠」)。
-★耗時也拆成兩個獨立欄位★(`secs` 跑測試、`calc_secs` 算波及):
+★耗時也拆成兩個獨立欄位★(`secs` 跑測試、`calc_secs` 算波及)(2026-10-13 補:secs 自此是牆上時間並帶 `secs_kind: wall`,沒帶的舊帳是逐項相加):
 以前塞在自由文字的備註裡,回頭條件量不到。
 
 `gov --stats` 看 bound-tests 那列就知道這道閘在這個專案有沒有真的開。
@@ -97,7 +97,7 @@ about_code:
 
 ## 回頭看條件
 - 30 天後 `gov --stats` 若 bound-tests 只有 no-config/no-pins、零 green/red → 入口 hook 加「本專案沒設 run_cmd,合約測試閘沒開」提醒;再 30 天仍零 → 列入只退場不痛的機制檢討。
-- 三次 check 超過 3 分鐘 → 加只跑 direct 相依的縮圈選項。
+- 三次 check 超過 3 分鐘 → 加只跑 direct 相依的縮圈選項。(2026-10-13 補:只算帶 `secs_kind: wall` 的帳;本 repo 打開同時跑後實測約 1 分鐘)
 - gov --stats 出現 red 且原因是外部資源 → 加單支白名單跳過。
 
 ## 鏡頭側呈現(2026-09-03 v1.1)
@@ -107,3 +107,9 @@ about_code:
 ## 推送前掛鉤的回頭重讀那一段(2026-10-01 接上,2026-10-09 轉擋)
 
 drift check 那段之後、test-layers 之前,多一段 `note-audit reread-check`(回頭重讀守檔筆記,[[Projects/守檔筆記對照改動_計劃]]〈做法〉4;判定歸 [[Systems/筆記內容審]],呼叫那段歸 [[Systems/存量漂移守衛]])。2026-10-01 接上時只提醒:工具恆回 0,掛鉤只在 130(Ctrl-C)停、其他非零照推。2026-10-09 起([[Projects/舊句兩道轉擋_計劃]]〈掛鉤與 CI〉)掛鉤那段帶 `--gate`,改成跟上面「rc1 擋、其他非零放行」的幾道同一種形狀:回 1 擋下並印通用逃生段,128 以上原樣交給 pp_stop_if_signaled(刻意推翻「只有 130 停」——這道會擋人之後,被外部砍掉也不該當作放行),其他非零(含舊版工具不認得 `--gate` 回 2)講一句放行;標準錯誤不再丟。掛鉤裡 pp_stop_if_signaled 仍是 8 行(`t_prepush_gates_stop_on_signal` 數行數、六道逐一驗被殺掉會停)。★CI 那步不帶 `--gate`、照舊 continue-on-error 並吞掉回傳碼★,跟上面「CI 是最後一道後盾、工具出錯寧可紅」的慣例刻意不同:合併後主線 CI 用整個 PR 的累計範圍重算,候選與指紋跟作者本機看到的不同,擋在 CI 會誤擋;代價是 `--no-verify` 跳過本機掛鉤時這一道沒有兜底(人裁接受)。
+
+## 同時跑幾支與 secs 的意思(2026-10-13)
+
+WHY:`.lumos/config.json` 的 `bound_tests.parallel`(2–16 的整數)打開後,`_run_bound_tests` 先照原順序收集去重後要跑的指令,再用自建的 daemon 工作執行緒同時跑、最後照原順序組結果;一支出錯或被中斷就不再派新的,同批已開跑的子程序整個程序群組收掉;沒寫或不合法一律循序。本 repo 設 4 [出處:[[Projects/合約測試閘並行執行_計劃]]] [因:同一批 51 支循序 176.5 秒、同時 4 支約 56 秒,時間花在循序本身] [不選:預設就同時跑——消費專案的測試工具可能互搶建置目錄;縮小綁定範圍或因後面跑全套而跳過這道閘——改的是該守什麼或判定語意;ThreadPoolExecutor——工作者不是 daemon,程式結束與 Ctrl-C 都要等已開跑的測試跑完,map 依提交順序取結果讓排在後面的例外晚浮上來;主流程只 join 第一條執行緒——它先收工後變滿速空轉] [test:t_bound_tests_parallel_matches_sequential] [test:t_bound_tests_parallel_config_values]
+PITFALL:閘回報與記帳的 secs 原本是每個綁定項目秒數相加,同一支被幾篇綁就加幾次,同時跑時又被重疊放大 [出處:2026-10-13 實測同時跑 CLI 報 215 秒、實際約 60 秒] [根因:sum(每項秒數) 不是牆上時間] [修法:改量跑測試那段的牆上時間,記帳多帶 secs_kind=wall;沒帶這欄的舊帳 secs 是相加值,不跟之後比] [test:t_bound_tests_secs_is_wall_time]
+PITFALL:測同時跑被中斷的測試,在推送前掛鉤裡永遠收不到中斷、8 支照跑完 [出處:2026-10-13 推送閘實測紅] [根因:掛鉤在背景開測試分片,非互動 shell 的背景程序繼承「忽略 SIGINT」,Python 看到已忽略就不裝 KeyboardInterrupt] [修法:送中斷的子程序開頭先把 SIGINT 裝回預設處理] [test:t_bound_tests_parallel_interrupt_stops_dispatch]
