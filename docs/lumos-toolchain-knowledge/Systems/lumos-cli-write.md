@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-07
+updated: 2026-10-13
 self_audit: claude-fable/2026-08-24
 tags:
   - type/system
@@ -111,14 +111,17 @@ about_code:
 | `new <type> <name>` | 建檔 | 依 `TEMPLATES`(system/verification/issue/project)建檔 + 印「寫入當下教學」(符號行/合約鏈) |
 | `archive [--days N] [--apply]` | 移檔 | 滾動歸檔老 Verification(days 是選填旗標預設 180,非位置參數;另見 `cmd_archive` 的「活守衛護欄」邏輯) |
 
-`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;其餘六個(set/append/remove/self-audit/decision-add/decision-supersede)走 `atomic_write_verify`。
+`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;其餘(set/append/remove/self-audit/decision-add/decision-supersede,2026-10-12 加 question-add/question-set)走 `atomic_write_verify`。寫入鎖 `_vault_write_lock`:2026-10-12 起所有呼叫 `atomic_write_verify` 的入口都拿同一把(set/append/remove、決策四支含 reindex --all 與 amend、決策引用、守衛綁定與審計、question-add/set),`atomic_write_verify` 沒拿鎖就不寫。
 
 ## T1 寫後自驗 atomic(核心不變式)
+
+2026-10-13 起，寫入原語自己的拒絕統一丟 `WriteBlocked`，訊息在建立時就清洗(誰接都印不出控制字元)；各分派照既有寫法接成 `擋下:` 與 rc2，沒被接到的由命令列入口 `_cli()` 接(分派函式維持叫 `main`,精簡版產生器靠這個形狀)；非此信號的程式錯誤不吞。`load_raw_for_edit` 只負責讀取/BOM/CRLF/解碼拒絕；符號連結、不是一般檔、硬連結(`nlink>1`)由 `_write_refusal_reason` 以 lstat 一次判,只用在寫入原語、簽核帳與 drift fix 載入(drift fix 連 `--dry-run` 也拒),讓其他唯讀與 no-op 路徑照舊。`signoff` 拿鎖後才讀原稿，筆記先寫、帳以 append-only 開啟並記原長度；帳用 `os.open`(O_NOFOLLOW、不帶緩衝)追加，任一步失敗以 `os.ftruncate` 截回原長度(新建的帳刪掉)，再於鎖內還原筆記，逐邊照實回報；追加途中被 Ctrl-C 這類程序內中斷,帳一樣截回、筆記還原,再把中斷往外丟;帳的那一行把 U+2028、U+2029、U+0085 跳脫,備註切不出第二行。`summary-line` 寫成後才印成功差異。[test:t_qfm_r6_writeblocked_inventory_and_edges,t_qfm_r6_signoff_rolls_back_both_sides,t_qfm_r8_signoff_and_write_refusal,t_summary_line_verify]
 所有 frontmatter mutation 都經 `atomic_write_verify(path, new_lines, key, expected_check)`:
+0. 先確認這個程序拿著 path 所在筆記庫的寫入鎖(`_vault_lock_held_for`),沒拿就丟 `WriteBlocked`、不寫(2026-10-12 起;入口照「`cmd_*` 拿鎖再叫 `_*_locked`」的寫法)。[test:t_qfm_frontmatter_writers_take_lock]
 1. `load_raw_for_edit` 讀 raw bytes,**拒 BOM、拒 CRLF**(vault 慣例 LF/no-BOM,異常不靜默正規化,報錯指路 `.gitattributes`/`dos2unix`)。
 2. 改完後 re-parse 新 frontmatter,跑 `expected_check(fields)` 斷言**該 key 真的寫成目標值**(decision 類會 `parse_decisions` 重解確認 valid/superseded_by)。
 3. 比對 lint 指紋:`set(new_lint) - orig_lint` 必須為空——**不准引入新的 frontmatter 指紋**。
-4. 上述全過才 `_write_lf` 寫 `.lumos-tmp` → `os.replace` 原子換入;任一步丟 `RuntimeError`,tmp 丟棄、**原檔零變動**。
+4. 上述全過才 `_write_lf` 寫 `.lumos-tmp` → `os.replace` 原子換入;任一步丟 `WriteBlocked`,tmp 丟棄、**原檔零變動**。
 
 `_write_lf` 是 vault 唯一寫入原語:`write_bytes` 強制 UTF-8/LF/no-BOM,平台無關(不靠 text mode、不需 Python 3.10 的 `newline=`)。
 
@@ -146,3 +149,13 @@ about_code:
 ## 建檔骨架對齊紀律(2026-10-12)
 
 - PITFALL:`lumos new` 產的骨架是舊前綴(機制筆記 FLOW/KEY/DEP/TEST、事故 FLAG/DECISION/KEY,事故沒有四段),跟紀律範本〈寫筆記時〉打架,照骨架寫的人會寫出舊格式 [出處:Projects/世界解重新註解2026-10_節點內容_調研 核對] [根因:紀律改版時只改了範本與 lint 訊息,骨架與釘住骨架的測試沒跟著改] [修法:機制筆記骨架改 WHY/RULE/PITFALL/SEE,事故骨架改 FLAG/PITFALL 並預留症狀、根因、現在怎麼繞、什麼條件算修好四段,建檔提示一併改] [test:t_new_teaches_tags]
+
+## 待決問題的兩支寫入指令(2026-10-12,[[Projects/待決問題改存開頭欄位_計劃]])
+
+- `question-add <計劃> "<問題>" --class --stage [--status][--blocking][--irreversible][--decision][--tests][--source][--reason]` 加一題到開頭欄位 `pending_questions`,`question-set <計劃> Q<n> 鍵=值 …` 改一題的幾個鍵;兩支都走 `atomic_write_verify`,寫前先用嚴格讀法 `pq_parse` 驗整份清單、驗這一題跟要寫的一致、驗寫入規則(必附、阻塞不得延後、不可逆不得自答、決策要存在且有效),沒過不寫、回 2。[test:t_qfm_commands_write_and_verify]
+- WHY:兩支指令整段讀—改—寫都包 `_vault_write_lock`(decision-add 當時沒鎖;2026-10-12 起所有讀改寫開頭欄位的入口都先拿同一把寫入鎖,見下一行) [出處:設計審 待決問題改存開頭欄位 r1 四席] [因:decision-add 同時起跑 8 個實測只留下 6 條;題號是「最大號加 1」,沒鎖會重號,重號在嚴格讀法下整份讀不懂、規格閘整份擋] [不選:照抄 decision-add] [test:t_qfm_commands_write_and_verify]
+- WHY:讀改寫開頭欄位的入口一律先拿寫入鎖(照鄰居「`cmd_*` 拿鎖再叫 `_*_locked`」的寫法;r2 曾用裝飾器,r3 架構席指出是第二種寫法而改回),`atomic_write_verify` 沒拿這個筆記庫的鎖就不寫 [出處:代碼審 code-待決問題改存開頭欄位 r1、r2 併發、正確性、合約圖譜、通才四席] [因:第一輪只補決策三支,第二輪又漏了 reindex --all、amend、決策引用、守衛綁定,逐支補會一直漏;改成寫入函式本身檢查,漏包的在測試裡就紅] [不選:逐支加鎖、保留後寫蓋先寫] [代價:鎖殘留時這些指令會等 60 秒才回「擋下」rc2(守衛子指令在分派層統一接,讀寫失敗也一併回擋下 rc2,只有解碼錯誤照舊 rc1);decision-amend 只鎖讀改寫那段,git fetch 與遠端比對在鎖外;讀取符號連結照常，直到真正寫入才由共用原語拒絕符號連結與硬連結(原子換名會把連結換成一般檔,一篇悄悄分成兩份;代碼審 r5、r7 G1/C6),判在不在庫裡只解析它所在的資料夾] [test:t_qfm_frontmatter_writers_take_lock,t_qfm_r8_signoff_and_write_refusal]
+- WHY:`blocking`/`irreversible` 照字面寫 true/false,不經 `_yaml_plain_ok`/`_yaml_quote` [出處:設計審 r1 正確性與整合兩席] [因:格式化函式會把 true 加成 "true",嚴格讀法只收不加引號的布林,自己寫的會自己擋] [不選:讀法放寬收 "true"(標準 YAML 讀成字串)] [test:t_qfm_commands_write_and_verify]
+- WHY:`question-set` 用位置參數 `鍵=值`,不用 `--field/--text` 或一次一鍵 [出處:設計審 r1 架構對齊席] [因:「改成已決要附決策」這類跨鍵規則要一次改完才驗得過;`decision=#d3` 的 # 在字中間,shell 不會當註解] [不選:一次一鍵(中間態必附不齊會被擋)] [test:t_qfm_commands_write_and_verify]
+- 兩支指令跟其他寫入原語一樣拒寫 CRLF/BOM 的檔(`load_raw_for_edit`);讀法照樣讀得懂那種檔,所以規格閘看得到、指令寫不進去,訊息會講怎麼轉。
+- 在 `pending_questions: []` 上加題會先把那行改成區塊起頭(decision-add 在 `decisions: []` 上會寫壞而被擋,沒照抄);定位項目沿用 `decisions_items`(加了欄位名參數);嚴格讀法是這個欄位專用的 `_pq_scan`(決策清單收多行值與子清單,文法不同,不硬掛在 `parse_decisions` 底下)。

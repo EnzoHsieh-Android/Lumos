@@ -54,6 +54,7 @@
   - 連結解析: 路徑優先,fallback basename,大小寫不敏感,NFC 正規化
 """
 import argparse
+import bisect
 import os
 import re
 import uuid
@@ -427,6 +428,9 @@ LIST_ITEM_RE = re.compile(r"^\s+-\s+(.*)$")
 QUOTED_DATE_RE = re.compile(
     r'^\s*(?:-\s+)?(?:date|created|updated|decided|ended):\s*"\d{4}-\d{2}-\d{2}"')
 RULE3_RE = re.compile(r"^\s+-\s+\w+: [^\"'|>\s][^\"']*: \S")  # 未引號值含 ": "
+# 這四種是本專案三支既有 frontmatter 讀法共同接受的 block scalar；待決問題掃描
+# 共用同一份，避免再長出語意較寬的第四份判斷(代碼審 r7 架構席 A6)。
+BLOCK_SCALAR_HEADERS = ("|", "|-", ">", ">-")
 
 
 def nfc(s):
@@ -539,7 +543,7 @@ def parse_frontmatter(fm_lines):
         if key in seen:
             lint.append(f"同一層欄位名重複,工具不知道該信哪個: {key}")
         seen.add(key)
-        if val in ("|", "|-", ">", ">-"):
+        if val in BLOCK_SCALAR_HEADERS:
             block = []
             i += 1
             while i < n and (fm_lines[i].startswith("  ") or not fm_lines[i].strip()):
@@ -6427,6 +6431,7 @@ _KNOWN_FRONTMATTER_KEYS = (
     "signed_off", "kill_recipes", "core_refs", "regen",
     "responsibility", "lands_in",   # 2026-09-11 每支檔有家:Systems 的負責範圍、計劃的落點
     "guards", "due", "owner", "phases",   # 2026-09-22 預告合約:守衛節點的四個欄位(不登記的話這機制產的每篇節點都被唸欄位名打錯)
+    "pending_questions",   # 2026-10-12 計劃的待決問題(待決問題改存開頭欄位_計劃)
     "plan_risk", "door",   # 2026-09-17 計劃風險(作者只能往嚴標 high);door 是舊寫法,讀得懂但提醒改
 )
 # ↑ 2026-09-06 全 repo 審視 #16。★代碼審 r1 訂正★:初版清單來源是「掃本 vault 428 篇出現過的鍵」,
@@ -6841,7 +6846,7 @@ def _lint_new_rules(env, rel):
     """這次新增、擋不擋看開關的欄位規則(筆記欄位關卡補齊_計劃 S6 到 S10):回問題清單(每條講怎麼修)。每條規則一支小函式。"""
     n = env.notes[rel]
     return (_nl_rule_status(n) + _nl_rule_dates(n) + _nl_rule_decisions(n)
-            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n))
+            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n) + _nl_rule_pending_questions(env, rel, n))
 
 
 def _nl_rule_status(n):
@@ -6897,9 +6902,849 @@ def _nl_rule_lands_in(rel, n):
     return [f"lands_in 這幾項不是 Systems/<名稱> 的純字串:{bad}(不帶 .md、不寫 [[連結]])"] if bad else []
 
 
-# pitfalls --stage 的六個階段(需求風險面表 _REQUIREMENT_FACETS 用同一組)。〈待決問題〉的正文解析已撤出,改存開頭欄位另案:
-# [[Projects/待決問題改存開頭欄位_計劃]](代碼審 code-後端情境出題 三輪都在同一處換形狀)。
+# 六個階段:pitfalls --stage、需求風險面表 _REQUIREMENT_FACETS、開頭欄位 pending_questions 的 stage 共用這一組。
+# 〈待決問題〉不再讀正文,改存開頭欄位([[Projects/待決問題改存開頭欄位_計劃]];正文解析三輪代碼審都在同一處換形狀)。
 PQ_STAGES = ("需求", "架構", "實作", "驗證", "效能", "交付")
+# 公開的(不帶底線):別處或測試會用的——階段、狀態、讀法入口 pq_parse(同 parse_decisions 的慣例);其餘是這一區內部用的。
+PQ_STATUSES = ("待查", "自答", "待人", "延後", "已決", "已驗")
+_PQ_KEYS = ("id", "text", "class", "stage", "status", "blocking", "irreversible", "decision", "source", "reason", "tests")
+_PQ_REQUIRED = ("id", "text", "class", "stage", "status")
+_PQ_BOOL_KEYS = ("blocking", "irreversible")
+_PQ_ID_RE = re.compile(r"Q[1-9][0-9]{0,5}")   # 只收 ASCII 數字、最多 6 位(\d 會吃全形與阿拉伯數字;位數不設限 int() 會丟例外,代碼審 r1 邊界席)
+_PQ_ID_MAX = 999999
+_PQ_ITEM_RE = re.compile(r"^  - (.*)$")
+_PQ_SUB_RE = re.compile(r"^    ([A-Za-z][A-Za-z_]*):(?: (.*))?$")   # 鍵名不准底線開頭:內部用的 _line 寫不進來(代碼審 r1 通才席)
+
+# Unicode 16.0.0 DerivedCoreProperties.txt 的 Default_Ignorable_Code_Point 全表；版本要跟
+# unicodedata.unidata_version 相同。代碼審 r6 資安席：只列 Cf 會漏掉 Mn/Lo/Cn，改用官方衍生屬性。
+_PQ_DICP_UNICODE_VERSION = "16.0.0"
+_PQ_DICP_RANGES = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_PQ_DICP_STARTS = tuple(a for a, _b in _PQ_DICP_RANGES)
+# 三個不是 DICP、畫面仍像空白的字：Braille Pattern Blank、Object Replacement Character、
+# Musical Symbol Null Notehead。代碼審 r6 資安席：都能在肉眼看不見的值裡承載位置資訊。
+_PQ_BLANK_LOOKALIKES = frozenset(("\u2800", "\ufffc", "\U0001d159"))
+_PQ_ALLOWED_FLAGS = frozenset(("gbeng", "gbsct", "gbwls"))
+# 只有待決問題才有的鍵；status 也是題目鍵，但頂格 status 是筆記自己的欄位，逐行掃描時另行豁免。
+_PQ_QUESTION_ONLY_KEYS = frozenset(("text", "class", "stage", "status", "blocking", "irreversible"))
+# Unicode Join_Control 的使用不是「任何字母都可」：只收實際需要連字控制的文字系統碼位，
+# 避免拉丁、希臘、西里爾、漢字等字間形成隱形通道(代碼審 r7 邊界席 E3/E4、資安甲 S2)。
+# 範圍來源：Unicode 16 Scripts/Blocks 對 Arabic、Syriac、N'Ko、Indic、Tibetan、Myanmar、Khmer、Mongolian 的碼位區段；
+# 這裡再要求 Unicode 類別是 Letter/Mark，區段內標點與數字不會因此取得豁免。
+_PQ_JOIN_CONTROL_SCRIPT_RANGES = (
+    (0x0600, 0x06FF), (0x0700, 0x074F), (0x0750, 0x077F), (0x07C0, 0x07FF),
+    (0x0870, 0x08FF), (0x0900, 0x0DFF), (0x0F00, 0x0FFF), (0x1000, 0x109F),
+    (0x1780, 0x17FF), (0x1800, 0x18AF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF),
+)
+# 一個值裡仍需保留合法語文選擇，但不能讓每個字縫都變成位元通道：非 emoji 的看不見選擇不得超過可見字數的四分之一
+# (最少給 2 個)。r7 原本另設固定上限 8,r8 三席用真實樣本量到 120 字含 10 個 ZWNJ 的波斯文、99 字含 12 個 ZWJ 的
+# 僧伽羅文被誤擋,照圖譜 REVISIT「依樣本調整」拿掉固定上限;拉丁、漢字等字縫本來就整個不放行,剩下的額度只在需要連字控制的文字裡。
+_PQ_INVISIBLE_MIN = 2
+_PQ_INVISIBLE_VISIBLE_DIVISOR = 4
+# 比例額度另有固定天花板,不然文字越長能藏越多(代碼審 r8 後 Codex 反方:4001 字夾 1000 個軟連字號照過);
+# 32 是真實樣本最多 12 個(僧伽羅文 99 字)的兩倍以上,單行題目寫不到這麼長的連字控制
+_PQ_INVISIBLE_MAX = 32
+# emoji 用的連接符與異體選擇符同樣看不見:不計入上面的語文額度,但整份值的可忽略字元合計另有上限 max(16, 可見字數)
+# (代碼審 r8 編排者:30 個 emoji 疊 ZWJ 能藏 30 位元;r8 正確性、邊界席:17 個 ❤️ 這種真實寫法不該擋)。
+_PQ_DICP_TOTAL_MIN = 16
+_PQ_DICP_TOTAL_MAX = 64
+# 「emoji」近似 Unicode 16 emoji-data.txt 的 Extended_Pictographic:BMP 逐段抄錄,補充平面取 1F000-1FAFF 整段(含方框字母、
+# 區域指示符這些不是 Extended_Pictographic 的碼位,容量仍受上面兩道上限)與膚色修飾;
+# 不用 Unicode 類別 So 代替——So 含框線、度數這類一般符號,字縫會變成藏字通道(代碼審 r8 編排者實測 ─‍─‍─)
+_PQ_EMOJI_RANGES = (
+    (0x00A9, 0x00A9), (0x00AE, 0x00AE), (0x203C, 0x203C), (0x2049, 0x2049), (0x2122, 0x2122), (0x2139, 0x2139),
+    (0x2194, 0x2199), (0x21A9, 0x21AA), (0x231A, 0x231B), (0x2328, 0x2328), (0x2388, 0x2388), (0x23CF, 0x23CF),
+    (0x23E9, 0x23F3), (0x23F8, 0x23FA), (0x24C2, 0x24C2), (0x25AA, 0x25AB), (0x25B6, 0x25B6), (0x25C0, 0x25C0),
+    (0x25FB, 0x25FE), (0x2600, 0x2605), (0x2607, 0x2612), (0x2614, 0x2685), (0x2690, 0x2705), (0x2708, 0x2712),
+    (0x2714, 0x2714), (0x2716, 0x2716), (0x271D, 0x271D), (0x2721, 0x2721), (0x2728, 0x2728), (0x2733, 0x2734),
+    (0x2744, 0x2744), (0x2747, 0x2747), (0x274C, 0x274C), (0x274E, 0x274E), (0x2753, 0x2755), (0x2757, 0x2757),
+    (0x2763, 0x2767), (0x2795, 0x2797), (0x27A1, 0x27A1), (0x27B0, 0x27B0), (0x27BF, 0x27BF), (0x2934, 0x2935),
+    (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55), (0x3030, 0x3030), (0x303D, 0x303D),
+    (0x3297, 0x3297), (0x3299, 0x3299), (0x1F000, 0x1FAFF),
+)
+
+
+def _pq_is_default_ignorable(c):
+    cp = ord(c)
+    i = bisect.bisect_right(_PQ_DICP_STARTS, cp) - 1
+    return i >= 0 and cp <= _PQ_DICP_RANGES[i][1]
+
+
+def _pq_is_letterish(c):
+    return unicodedata.category(c)[:1] in ("L", "M")
+
+
+def _pq_in_join_control_script(c):
+    cp = ord(c)
+    return _pq_is_letterish(c) and any(a <= cp <= b for a, b in _PQ_JOIN_CONTROL_SCRIPT_RANGES)
+
+
+_PQ_EAST_ASIAN_RANGES = ((0x1100, 0x11FF), (0x2E80, 0x9FFF), (0xA960, 0xA97F), (0xAC00, 0xD7FF), (0xF900, 0xFAFF),
+                         (0xFF00, 0xFFEF), (0x20000, 0x3FFFF))
+
+
+def _pq_is_east_asian(c):
+    cp = ord(c)
+    return any(a <= cp <= b for a, b in _PQ_EAST_ASIAN_RANGES)
+
+
+def _pq_is_emoji(c):
+    cp = ord(c)
+    return any(a <= cp <= b for a, b in _PQ_EMOJI_RANGES)
+
+
+def _pq_is_emoji_neighbor(v, i):
+    """ZWJ 一側是不是 emoji；FE0F 本身算前一個 emoji 基底的尾巴。"""
+    if not (0 <= i < len(v)):
+        return False
+    c = v[i]
+    if _pq_is_emoji(c):
+        return True
+    return c == "\ufe0f" and i > 0 and _pq_is_emoji(v[i - 1])
+
+
+def _pq_vs_ok(v, i):
+    if v[i] not in "\ufe0e\ufe0f" or i == 0:
+        return False
+    prev = v[i - 1]
+    if _pq_is_emoji(prev):
+        return True
+    return prev in "0123456789#*" and i + 1 < len(v) and v[i + 1] == "\u20e3"
+
+
+def _pq_tag_run_end(v, i):
+    k = i
+    while k < len(v) and 0xE0020 <= ord(v[k]) <= 0xE007F:
+        k += 1
+    return k
+
+
+def _pq_flag_run_ok(v, i, k):
+    """標籤字只放行 Unicode 明定的英格蘭、蘇格蘭、威爾斯旗完整序列。"""
+    if i == 0 or v[i - 1] != "\U0001f3f4" or k - i != 6 or v[k - 1] != "\U000e007f":
+        return False
+    name = "".join(chr(ord(c) - 0xE0000) for c in v[i:k - 1])
+    return name in _PQ_ALLOWED_FLAGS and not (k < len(v) and v[k] == "\U0001f3f4")
+
+
+_PQ_EMOJI_ZWJ_CHAIN_MAX = 3   # Unicode 標準 emoji ZWJ 序列最長三個連接符(四人家庭、親吻);再長只剩藏位元的用途(代碼審 r8 編排者)
+
+
+def _pq_emoji_zwj_chain(v, i):
+    """v[i] 是 emoji 之間的 ZWJ 時,往回數同一串裡(含自己)有幾個 ZWJ;數到超過上限就停,每個 ZWJ 最多往回走固定步數。"""
+    count, j = 1, i - 1
+    while count <= _PQ_EMOJI_ZWJ_CHAIN_MAX:
+        while j >= 0 and (v[j] == "\ufe0f" or 0x1F3FB <= ord(v[j]) <= 0x1F3FF):
+            j -= 1
+        if j < 1 or not _pq_is_emoji(v[j]) or v[j - 1] != "\u200d":
+            break
+        count, j = count + 1, j - 2
+    return count
+
+
+def _pq_zwj_ok(v, i):
+    left_emoji = _pq_is_emoji_neighbor(v, i - 1)
+    right_emoji = _pq_is_emoji_neighbor(v, i + 1)
+    return ((left_emoji and right_emoji and _pq_emoji_zwj_chain(v, i) <= _PQ_EMOJI_ZWJ_CHAIN_MAX)
+            or (_pq_in_join_control_script(v[i - 1])
+                and not _pq_is_default_ignorable(v[i + 1])))
+
+
+def _pq_dicp_kind_ok(v, i):
+    c = v[i]
+    if c == "\u200d":
+        return _pq_zwj_ok(v, i)
+    if c == "\u200c":
+        return (_pq_in_join_control_script(v[i - 1])
+                and not _pq_is_default_ignorable(v[i + 1]))
+    if c == "\u00ad":
+        # 軟連字號是給會斷字的字母文字用;漢字、假名、韓文之間沒有斷字用途(代碼審 r8 通才席)
+        return all(unicodedata.category(x).startswith("L") and not _pq_is_east_asian(x) for x in (v[i - 1], v[i + 1]))
+    if c in "\ufe0e\ufe0f":
+        return _pq_vs_ok(v, i)
+    if c in "\u180b\u180c\u180d\u180f":
+        return 0x1820 <= ord(v[i - 1]) <= 0x18AF
+    return False
+
+
+def _pq_adjacent_dicp_ok(v, i):
+    """一般相鄰 DICP 都擋；只放行 emoji 基底後的 FE0F+ZWJ+emoji。"""
+    return (v[i] == "\u200d" and v[i - 1] == "\ufe0f" and _pq_vs_ok(v, i - 1)
+            and i + 1 < len(v) and _pq_is_emoji_neighbor(v, i - 1)
+            and _pq_is_emoji_neighbor(v, i + 1))
+
+
+def _pq_dicp_position_ok(v, i):
+    c, n = v[i], len(v)
+    if i == 0:
+        return False
+    final_ok = ((c in "\ufe0e\ufe0f" and _pq_vs_ok(v, i))
+                or (c in "\u180b\u180c\u180d\u180f" and _pq_dicp_kind_ok(v, i)))
+    if i == n - 1 and not final_ok:
+        return False
+    if _pq_is_default_ignorable(v[i - 1]) and not _pq_adjacent_dicp_ok(v, i):
+        return False
+    return _pq_dicp_kind_ok(v, i)
+
+
+def _pq_invisible_over_limit(v):
+    """合法位置仍可能重複選擇；限制非 emoji 的零寬／軟連字／蒙古變體與特殊 Zs 總量。"""
+    hidden = visible = 0
+    for i, c in enumerate(v):
+        if c in "\u200c\u200d":
+            if c != "\u200d" or not (_pq_is_emoji_neighbor(v, i - 1) and _pq_is_emoji_neighbor(v, i + 1)):
+                hidden += 1
+        elif c == "\u00ad" or c in "\u180b\u180c\u180d\u180f":
+            hidden += 1
+        elif unicodedata.category(c) == "Zs" and c not in ("\u0020", "\u3000"):
+            hidden += 1
+        elif not _pq_is_default_ignorable(c) and unicodedata.category(c) != "Zs":
+            visible += 1
+    limit = min(_PQ_INVISIBLE_MAX, max(_PQ_INVISIBLE_MIN, visible // _PQ_INVISIBLE_VISIBLE_DIVISOR))
+    total = sum(1 for c in v if _pq_is_default_ignorable(c))
+    return hidden > limit or total > min(_PQ_DICP_TOTAL_MAX, max(_PQ_DICP_TOTAL_MIN, visible))
+
+
+def _pq_bad_char(v):
+    """值裡第一個不准出現的字元；DICP 預設全擋，只放行規格列出的合法位置。"""
+    if unicodedata.normalize("NFC", v) != v:
+        return next((c for c in v if not unicodedata.is_normalized("NFC", c) or unicodedata.combining(c)),
+                    v[0] if v else "\u0000")
+    i, n = 0, len(v)
+    while i < n:
+        c = v[i]
+        if c in _PQ_BLANK_LOOKALIKES:
+            return c
+        if _pq_is_tag(c):
+            k = _pq_tag_run_end(v, i)
+            if not _pq_flag_run_ok(v, i, k):
+                return c
+            i = k
+            continue
+        if _pq_is_default_ignorable(c):
+            if not _pq_dicp_position_ok(v, i):
+                return c
+        elif unicodedata.category(c) in _PATH_SPECIAL_CATS or unicodedata.category(c) in ("Co", "Cn"):
+            # 私用區與未指派碼位(含非字元)多數字型畫成空白或方框,每字可帶十幾位元,而且不受上面任何額度管(代碼審 r8 三席)
+            return c
+        i += 1
+    return None
+
+
+def _pq_is_tag(c):
+    return 0xE0020 <= ord(c) <= 0xE007F
+
+
+def _pq_blank(v):
+    """去掉空白、DICP、補充空白字與 Mn/Me/Sk 修飾類後沒有可見基底就算空值。"""
+    return not any(not (ch.isspace() or _pq_is_default_ignorable(ch) or ch in _PQ_BLANK_LOOKALIKES
+                        or unicodedata.category(ch) in ("Mn", "Me", "Sk")) for ch in v)
+
+
+def _pq_unquoted_value(raw):
+    v = raw.strip()
+    if not v or v[:1] in "\"'":
+        return v
+    if v.startswith("#"):
+        return ""
+    return v.split(" #", 1)[0].rstrip()
+
+
+def _pq_key_norm(key):
+    """比對鍵名用:NFKC(全形轉半形)、去引號與空白、大小寫不分。只拿來認出題目的鍵,不拿來接受非標準寫法。"""
+    return unicodedata.normalize("NFKC", str(key)).strip().strip("\"'").strip().casefold()
+
+
+def _pq_leading_problem(raw):
+    if not raw:
+        return None
+    c = raw[0]
+    if c == "\t":
+        return "縮排用了 tab;結構縮排只收 ASCII 空白"
+    if c == " " or 0x21 <= ord(c) <= 0x7E:
+        return None
+    if c.isspace() or _pq_is_default_ignorable(c) or c in _PQ_BLANK_LOOKALIKES:
+        return f"行首用了 U+{ord(c):04X};結構縮排只收 ASCII 空白"
+    return None
+
+
+_PQ_YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r",
+                    "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029"}
+
+
+def _pq_yaml_unescape(raw):
+    """雙引號鍵的 YAML 跳脫解碼(`\\x78`、`\\u0078`、`\\U00000078` 與單字跳脫);只拿來認鍵名,看不懂的跳脫照原樣留。"""
+    out, i, n = [], 0, len(raw)
+    while i < n:
+        c = raw[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        e = raw[i + 1]
+        width = {"x": 2, "u": 4, "U": 8}.get(e)
+        if width and re.fullmatch(r"[0-9A-Fa-f]{%d}" % width, raw[i + 2:i + 2 + width]):
+            cp = int(raw[i + 2:i + 2 + width], 16)
+            out.append(chr(cp) if cp <= 0x10FFFF else "�")
+            i += 2 + width
+        elif e in _PQ_YAML_ESCAPES:
+            out.append(_PQ_YAML_ESCAPES[e])
+            i += 2
+        else:
+            out.append(raw[i:i + 2])
+            i += 2
+    return "".join(out)
+
+
+def _pq_skip_markers(text, i=0):
+    """從 i 往後跳過結構前綴:清單 `- `/`-<tab>`、複雜鍵 `? `、anchor `&名`、tag `!名`,可重複、可夾空白。
+    ★用索引往前走、不切片★(代碼審 r8 四席:每剝一個 `- ` 就複製整行,連串 `- ` 變平方級)。
+    回 (位置, 清單層數, 有沒有 `? `, 第一個 anchor/tag 記號或 None)。"""
+    n, items, complex_key, marker = len(text), 0, False, None
+    while True:
+        while i < n and text[i] in " \t":
+            i += 1
+        if i < n and text[i] in "-?" and (i + 1 == n or text[i + 1] in " \t"):   # 行尾的 `?`/`-` 也是記號(代碼審 r9 邊界席)
+            items += text[i] == "-"
+            complex_key = complex_key or text[i] == "?"
+            i += 2
+            continue
+        if i < n and text[i] in "&!":
+            j = i
+            while j < n and text[j] not in " \t":
+                j += 1
+            marker = marker or text[i:j]
+            i = j
+            continue
+        return i, items, complex_key, marker
+
+
+def _pq_quoted_key_at(text, i):
+    """text[i] 是引號:讀到成對的收尾引號(單引號 '' 是一個 ',雙引號 \\ 跳脫),後面可夾空白再接冒號才算鍵。"""
+    n, q = len(text), text[i]
+    j, buf = i + 1, []
+    while j < n:
+        c = text[j]
+        if q == "'" and c == "'":
+            if text[j + 1:j + 2] != "'":
+                break
+            buf.append("'")
+            j += 2
+        elif q == '"' and c == "\\" and j + 1 < n:
+            buf.append(text[j:j + 2])
+            j += 2
+        elif q == '"' and c == '"':
+            break
+        else:
+            buf.append(c)
+            j += 1
+    if j >= n:
+        return None
+    k = j + 1
+    while k < n and text[k] in " \t":
+        k += 1
+    if k >= n or text[k] != ":":
+        return None
+    key = "".join(buf)
+    return (_pq_yaml_unescape(key) if q == '"' else key), k + 1
+
+
+def _pq_key_at(text, i):
+    """text[i:] 開頭若是 mapping 的鍵 → 回 (鍵, 值的起點);否則 None。認法照 YAML:引號鍵可單/雙引號(雙引號解跳脫、
+    單引號 '' 是一個 '),引號與冒號之間可有空白,冒號後可直接接值(JSON 風格);不加引號的鍵要冒號後接空白或行尾,
+    碰到「空白加 #」就是註解(代碼審 r8 正確性、邊界、資安甲:原本只收「緊貼冒號加空白」一種引號寫法)。"""
+    n = len(text)
+    if i >= n:
+        return None
+    q = text[i]
+    if q in "\"'":
+        return _pq_quoted_key_at(text, i)
+    if q in "[]{},#&*!|>%@`":
+        return None   # YAML 純量不能用這些指示字元開頭:`{id: Q2}` 是 flow,不是叫 `{id` 的鍵
+    j = i
+    while j < n:
+        c = text[j]
+        if c == "#" and j > i and text[j - 1] in " \t":
+            return None
+        if c == ":" and (j + 1 == n or text[j + 1] in " \t"):
+            key = text[i:j].rstrip(" \t")
+            return (key, j + 1) if key else None
+        j += 1
+    return None
+
+
+def _pq_question_key_name(key, val):
+    """鍵是題目才有的鍵、或是值不是 d 加數字的 id → 回標準化後的鍵名;否則 None。
+    ★認題目靠鍵名、不靠題號長相★(代碼審 r7 編排者:r3-r6 用值的長相猜題目,每輪換一種寫歪就漏);鍵名先做 NFKC、大小寫不分。"""
+    k = _pq_key_norm(key)
+    if k in _PQ_QUESTION_ONLY_KEYS:
+        return k
+    if k == "id":
+        v = unicodedata.normalize("NFKC", strip_quotes(_pq_unquoted_value(val))).strip()
+        return None if re.fullmatch(r"d[0-9]+", v) else k
+    return None
+
+
+def _pq_questionish_key(text):
+    """這段文字(跳過結構前綴後)若是題目的鍵 → 回標準化後的鍵名;否則 None。`? 鍵` 複雜鍵整段就是鍵。"""
+    i, _items, complex_key, _marker = _pq_skip_markers(text)
+    if complex_key:
+        # `? ` 複雜鍵可以跨行(雙引號續行),一行一行看認不出鍵名;含待決問題時整個不收(代碼審 r8 後 Codex 反方)
+        return "?"
+    hit = _pq_key_at(text, i)
+    if hit is not None:
+        return _pq_question_key_name(hit[0], text[hit[1]:])
+    return None
+
+
+def _pq_line_mapping(raw):
+    """一行的 (鍵, 值, 鍵所在欄位);不是 mapping 回 None。只跳過結構前綴,不替任何擁有者解析文法。"""
+    i, _items, _complex, _marker = _pq_skip_markers(raw)
+    hit = _pq_key_at(raw, i)
+    return (hit[0], raw[hit[1]:].lstrip(" \t"), i) if hit is not None else None
+
+
+def _pq_flow_questionish(raw):
+    """flow 值／清單項(`{`、`[` 開頭)逐段找題目鍵;逐段線性掃,每段一樣先跳結構前綴(`{&a text: x}`、`{!!str id: Q2}`)。"""
+    m = _pq_line_mapping(raw)
+    i = _pq_skip_markers(raw)[0] if m is None else _pq_skip_markers(m[1])[0]
+    candidate = raw[i:] if m is None else m[1][i:]
+    if candidate[:1] not in ("{", "["):
+        return None
+    start = 0
+    for j, c in enumerate(candidate + ","):
+        if c not in ",{}[]":
+            continue
+        qk = _pq_questionish_key(candidate[start:j])
+        if qk:
+            return qk
+        start = j + 1
+    return None
+
+
+def _pq_flow_unclosed(raw):
+    """這行的 flow 值/清單項(`{`、`[` 開頭)在行尾還沒閉合;引號裡的括號不算。"""
+    m = _pq_line_mapping(raw)
+    i = _pq_skip_markers(raw)[0] if m is None else _pq_skip_markers(m[1])[0]
+    text = raw[i:] if m is None else m[1][i:]
+    if text[:1] not in ("{", "["):
+        return False
+    depth, q = 0, None
+    for j, c in enumerate(text):
+        if q:
+            if c == q and not (q == '"' and text[j - 1] == "\\"):
+                q = None
+        elif c in "\"'":
+            q = c
+        elif c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+    return depth > 0
+
+
+def _pq_mentions_head(raw, key, m):
+    """不是頂格 `key:` 的結構行裡,用別的 YAML 寫法提到清單頭:縮排或清單項裡的 `key:`、`? key` 複雜鍵、
+    flow 裡的 `key:`、`<<:` 合併鍵的值。這些寫法標準 YAML 讀得出清單,工具讀不到(代碼審 r9 正確性席)。"""
+    if m is not None and _pq_key_norm(m[0]) == key:
+        return True
+    i, _items, complex_key, _marker = _pq_skip_markers(raw)
+    rest = raw[i:]
+    if complex_key and key in _pq_key_norm(rest):
+        return True
+    if m is not None and m[0] == "<<" and key in _pq_key_norm(m[1]):
+        return True
+    return rest[:1] in ("{", "[") and key in _pq_key_norm(rest)
+
+
+def _pq_structure_marker_problem(raw):
+    """含待決問題時,結構位置(行首與 mapping 值開頭)的 anchor/alias/tag 拒讀;一份判斷,共用前綴走訪。"""
+    m = _pq_line_mapping(raw)
+    for text in ((raw,) if m is None else (raw, m[1])):
+        i, _items, _complex, marker = _pq_skip_markers(text)
+        if marker is None and text[i:i + 1] == "*":
+            marker = text[i:].split()[0]
+        if marker:
+            kind = {"&": "anchor", "*": "alias", "!": "tag"}[marker[0]]
+            return f"{kind} {marker[:40]!a} 不在待決問題開頭欄位使用"
+    return None
+
+
+def _pq_block_key_col(raw):
+    m = _pq_line_mapping(raw)
+    return m[2] if m is not None and _pq_unquoted_value(m[1]) in BLOCK_SCALAR_HEADERS else None
+
+
+def _pq_outside_line_problem(raw):
+    """清單外所有行只套同一條鍵名規則；不再替 decisions、純量清單或頂格鍵各寫文法。"""
+    lead = _pq_leading_problem(raw)
+    if lead:
+        return lead
+    qk = _pq_questionish_key(raw)
+    m = _pq_line_mapping(raw)
+    key_col = m[2] if m is not None else len(raw) - len(raw.lstrip(" "))
+    if qk == "?" or _pq_flow_questionish(raw) == "?":
+        return "清單範圍外用了 `? ` 複雜鍵;含待決問題的開頭欄位不收(多行的鍵可以把題目藏起來),改成一般的 `鍵: 值`"
+    if qk and not (qk == "status" and key_col == 0):   # 豁免看鍵所在欄位:欄位底下頂格的 `- status:` 不算(代碼審 r9 邊界、通才席)
+        return f"清單範圍外出現題目的鍵 {qk!r};是待決問題就移到 pending_questions 底下"
+    flow_key = _pq_flow_questionish(raw)
+    if flow_key:
+        return f"清單範圍外的流式寫法含題目的鍵 {flow_key!r};是待決問題就移到 pending_questions 底下"
+    if _pq_flow_unclosed(raw):
+        # 跨行的 flow 續行不以 `{`/`[` 開頭,一行一行看認不出裡面的鍵(代碼審 r9 合約、通才席)
+        return "清單範圍外的流式寫法跨行;含待決問題的開頭欄位裡,`{}`/`[]` 要在同一行寫完"
+    return _pq_structure_marker_problem(raw)
+
+
+def _pq_scalar_char_problem(v):
+    """把 Unicode 位置、正規形與總量收在同一個字元邊界，避免值文法再長一套判斷。"""
+    bad = _pq_bad_char(v)
+    if unicodedata.normalize("NFC", v) != v:
+        return f"值不是 NFC Unicode 正規形(U+{ord(bad):04X});先正規化這個字再寫"
+    if bad is not None and unicodedata.category(bad) in ("Co", "Cn"):
+        return (f"U+{ord(bad):04X} 是私用區或這版 Unicode({unicodedata.unidata_version})還沒指派的碼位;"
+                "較新的 emoji 要等 Python 的 Unicode 資料更新才收")
+    if bad is not None:
+        return f"看不見的字元(U+{ord(bad):04X})不在允許的位置;題目欄位只收單行可印的文字"
+    if _pq_invisible_over_limit(v):
+        return "值裡看不見的字元太多;請保留語文必要的最少數量"
+    return None
+
+
+def _strict_scalar(raw):
+    """嚴格讀法的一個值:回 (值, 錯誤)。只收三種寫法——不加引號且 _yaml_plain_ok 認可的、
+    整個包在雙引號裡且內部沒有雙引號與反斜線的、整個包在單引號裡且內部沒有單引號的(就是 _yaml_quote 寫得出的兩種)。"""
+    v = raw.strip()
+    if v == "" or _pq_blank(v):
+        return None, "值是空的(或只有看不見的字元)"
+    char_problem = _pq_scalar_char_problem(v)
+    if char_problem:
+        return None, char_problem
+    if v[0] in "|>[{":
+        return None, f"值用 {v[0]} 開頭(多行或清單寫法),這個欄位只收單行文字"
+    for q in ('"', "'"):
+        if v[0] == q:
+            inner = v[1:-1]
+            if len(v) < 2 or v[-1] != q or q in inner or (q == '"' and "\\" in inner):
+                return None, f"引號寫法讀不懂({v[:40]}):整個值包在一對引號裡,裡面不要再有同一種引號" + ("或反斜線" if q == '"' else "")
+            if _pq_blank(inner):
+                return None, "值是空的(引號裡只有空白或看不見的字元)"
+            return inner, None
+    if not _yaml_plain_ok(v):
+        return None, f"值 {v[:40]!r} 不加引號時標準 YAML 會讀成別的東西(布林、數字、日期,或「空白加 #」被當註解),要加雙引號"
+    return v, None
+
+
+def _pq_scan(fm_lines, key, line0):
+    """含 pending_questions 時，清單外每行只套鍵名規則；題目本身仍只收既有 2/4 格。"""
+    errs, items, heads, bounds = [], [], [], []
+    block_col = None
+    for i, ln in enumerate(fm_lines):
+        raw = ln.rstrip()
+        # 頂格註解不是鍵、不結束清單(代碼審 r8 通才席:`# 備註: 下一題` 被當成頂格鍵,把清單切斷)
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        # block scalar 內文是文字,不是結構(代碼審 r9 合約席:摘要裡寫到 pending_questions 被誤擋)
+        if block_col is not None and len(raw) - len(raw.lstrip(" ")) > block_col:
+            continue
+        block_col = _pq_block_key_col(raw)
+        m = _pq_line_mapping(raw)
+        top_key = raw[0] not in " \t-?{[" and m is not None
+        if (not top_key or m[0] == "<<") and _pq_mentions_head(raw, key, m):   # 頂格拼錯交給下面的「寫錯」判斷
+            # 縮排、清單項、`?` 複雜鍵、flow、`<<:` 寫出的清單頭,題目會整份不見(代碼審 r8、r9 正確性席)
+            errs.append((i + line0, f"{key}: 要頂格寫成 `{key}:`;縮排、清單項、`?` 複雜鍵、流式或合併鍵寫法會被讀成別的東西"))
+            continue
+        if not top_key:
+            continue
+        raw_name, val = m[0], m[1]
+        name = _pq_key_norm(raw_name)
+        bounds.append((i, raw_name, val))
+        if raw.startswith(key + ":") and raw_name == key:
+            heads.append(i)
+        elif name.replace("-", "_").replace(" ", "_").startswith(key[:-1]):
+            errs.append((i + line0, f"頂格的鍵 {raw[:40]!a} 像是 {key} 寫錯(拼字、大小寫、連字號、引號或冒號前的空白);改成恰好 `{key}:`"))
+    if not heads:
+        return bool(errs), items, errs
+    if len(heads) > 1:
+        errs.append((heads[1] + line0, f"開頭欄位裡 {key}: 寫了兩次;合成一個"))
+
+    h = heads[0]
+    hi = next(i for i, b in enumerate(bounds) if b[0] == h)
+    end = bounds[hi + 1][0] if hi + 1 < len(bounds) else len(fm_lines)
+    tail = _pq_unquoted_value(bounds[hi][2])
+    if tail not in ("", "[]"):
+        errs.append((h + line0, f"{key}: 後面直接接了值 {tail[:30]!a};只能空著(下面一行一題)或寫 []"))
+
+    # 代碼審 r7 A6/A7、E1/E2/E5/E6：清單外不解析各擁有者，只逐行套同一條鍵名／flow 規則；
+    # 唯一跳過的是四種既有 block scalar，內容連續到縮排不再深於「鍵」所在欄位。
+    block_col = None
+    for i, ln in enumerate(fm_lines):
+        if h <= i < end:
+            block_col = None
+            continue
+        raw, no = ln.rstrip(), i + line0
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if block_col is not None and indent > block_col:
+            continue
+        block_col = None
+        if raw.lstrip(" ").startswith("#"):
+            continue
+        problem = _pq_outside_line_problem(raw)
+        if problem:
+            errs.append((no, f"第 {no} 行{problem}"))
+        block_col = _pq_block_key_col(raw)
+
+    cur = None
+    for i in range(h + 1, end):
+        raw = fm_lines[i].rstrip()
+        no = i + line0
+        if not raw.strip() or raw.lstrip(" ").startswith("#"):
+            continue
+        lead_pb = _pq_leading_problem(raw)
+        if lead_pb:
+            errs.append((no, lead_pb + ";題目縮 2 格、鍵縮 4 格"))
+            continue
+        if tail == "[]":
+            errs.append((no, f"{key}: [] 是空清單,後面卻又接了題目;拿掉 [] 再寫題"))
+            continue
+        mi, ms = _PQ_ITEM_RE.match(raw), _PQ_SUB_RE.match(raw)
+        if mi:
+            m2 = re.fullmatch(r"id:(?: (.*))?", mi.group(1).rstrip())
+            if not m2:
+                errs.append((no, "一題的第一個鍵必須是 id(寫成 `  - id: Q<n>`)"))
+                cur = None
+                continue
+            cur = {"_line": no, "id": ((m2.group(1) or "").strip(), no)}
+            items.append(cur)
+        elif ms and cur is not None:
+            k = ms.group(1)
+            if k in cur:
+                qd = cur['id'][0] if _PQ_ID_RE.fullmatch(cur['id'][0]) else ascii(cur['id'][0])
+                errs.append((no, f"{qd} 的 {k} 寫了兩次;只留一個"))
+            cur[k] = ((ms.group(2) or "").strip(), no)
+        else:
+            errs.append((no, f"讀不懂這行 {raw.strip()[:40]!a}:題目縮 2 格寫 `  - id: Q<n>`,這一題的鍵縮 4 格寫 `鍵: 值`"))
+    return True, items, errs
+
+
+def pq_parse(fm_lines, line0=2):
+    """開頭欄位 pending_questions 的嚴格讀法(Projects/待決問題改存開頭欄位_計劃):只要有一處讀不懂,整份當無法判定。
+    回 (有沒有這個欄位, 題目清單 [{鍵: 值, _line}], [(檔案行號, 原因)]);錯誤非空時題目清單不可用。
+    line0 = fm_lines[0] 在檔案裡是第幾行(開頭的 --- 是第 1 行)。"""
+    # 代碼審 r6 正確性席：讀檔與直接餵文字必須同口徑；CRLF/裸 CR 都先轉 LF，只移除檔首一個 BOM。
+    raw = "\n".join(fm_lines or []).replace("\r\n", "\n").replace("\r", "\n")
+    if raw.startswith("\ufeff"):
+        raw = raw[1:]
+    fm_lines = raw.split("\n")
+    present, raw_items, errs = _pq_scan(fm_lines, "pending_questions", line0)
+    qs, seen = [], {}
+    for it in raw_items:
+        q, ln = {"_line": it["_line"]}, it["_line"]
+        qid = it["id"][0]
+        if not _PQ_ID_RE.fullmatch(qid):
+            errs.append((ln, f"題號 {qid!r} 格式不對;寫成 Q 加不帶前導零的正整數(Q1、Q12)"))
+            qid = ascii(qid)   # 後面的訊息會帶題號:格式不對的一律用跳脫後的寫法,控制字元不進終端(代碼審 r2 資安席)
+        elif qid in seen:
+            errs.append((ln, f"題號 {qid} 重複(第 {seen[qid]} 行也有)"))
+        seen.setdefault(qid, ln)
+        q["id"] = qid
+        for k, vn in it.items():
+            if k in ("_line", "id"):
+                continue
+            v, no = vn
+            if k not in _PQ_KEYS:
+                errs.append((no, f"{qid} 有不認得的鍵 {k};只收 {'、'.join(_PQ_KEYS)}"))
+                continue
+            if k in _PQ_BOOL_KEYS:
+                if v not in ("true", "false"):
+                    errs.append((no, f"{qid} 的 {k} 只收不加引號的 true 或 false,寫的是 {v!r}"))
+                q[k] = v == "true"
+                continue
+            val, why = _strict_scalar(v)
+            if why:
+                errs.append((no, f"{qid} 的 {k}:{why}"))
+                continue
+            q[k] = val
+        for k in _PQ_REQUIRED:
+            if k not in it:
+                errs.append((ln, f"{qid} 缺必有的鍵 {k}"))
+        if q.get("stage") is not None and q["stage"] not in PQ_STAGES:
+            errs.append((ln, f"{qid} 的 stage 要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {q['stage']!r}"))
+        if q.get("status") is not None and q["status"] not in PQ_STATUSES:
+            errs.append((ln, f"{qid} 的 status 要是 {'/'.join(PQ_STATUSES)} 之一,寫的是 {q['status']!r}"))
+        if "tests" in q:
+            ts = [t.strip() for t in q["tests"].split(",")]
+            if any(not t for t in ts) or len(set(ts)) != len(ts) or any(c in t for t in ts for c in "[]"):
+                errs.append((ln, f"{qid} 的 tests 有空的一段、重複的名字或中括號(半形逗號分隔,測試名不能含逗號與中括號)"))
+            q["tests"] = [t for t in ts if t]
+        q.setdefault("blocking", False)
+        q.setdefault("irreversible", False)
+        qs.append(q)
+    return present, qs, sorted(errs)
+
+
+def _pq_fm_of_text(text):
+    """全文 → (開頭欄位行, 第一行在檔案的行號)；CRLF/裸 CR 同轉 LF，只去檔首一個 BOM。"""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    fm, _ = split_frontmatter(text)
+    return fm or [], 2
+
+
+def _pq_decision_state(env, rel, ref, self_fm=None, cache=None):
+    """決策連結 → ok / missing / superseded / bad。格式沿用決策紀錄的全域編號 <節點>#dN(解析 _dref_parse);本篇可簡寫 #dN。
+    self_fm:寫入指令在鎖內組好的開頭欄位——給了它,本篇用它、別篇從磁碟重讀(不信鎖外載入的舊內容,代碼審 r1 併發席)。
+    帶路徑的寫法要整條對得上;只寫短名而同名不只一篇,當格式不合(env.resolve 會退回比短名、撞名取第一篇,代碼審 r1 邊界席)。
+    cache:同一次判定裡每篇的決策只解析一次(代碼審 r1:原本每題重解析,題數乘決策數)。"""
+    ref = str(ref).strip()
+    if "[[" in ref or "]]" in ref:
+        return "bad"
+    if re.fullmatch(r"#d\d+", ref):
+        node, did = rel, ref[1:]
+    else:
+        pr = _dref_parse(ref)
+        if not pr or not pr[0]:
+            return "bad"
+        lit = nfc(pr[0][:-3] if pr[0].lower().endswith(".md") else pr[0])
+        cache = {} if cache is None else cache
+        if "/" in lit:   # 帶路徑:整條對上,不像 env.resolve 對不上就退回比短名
+            if (lit + ".md") in env.notes:   # 完全相符優先(只差大小寫的兩篇並存時不判撞名,代碼審 r3 邊界席)
+                hits = [lit + ".md"]
+            else:
+                if cache.get("paths") is None:   # 不分大小寫的路徑索引,同一次判定只建一次(代碼審 r2 後的效能檢查)
+                    idx = {}
+                    for r in env.notes:
+                        idx.setdefault(r[:-3].lower(), []).append(r)
+                    cache["paths"] = idx
+                hits = list(cache["paths"].get(lit.lower(), []))
+        else:            # 只寫短名:用共用的短名索引 by_stem(不分大小寫);撞名不像 env.resolve 取第一篇,當格式不合
+            hits = list(env.by_stem.get(lit.lower(), []))
+        if len(hits) > 1:
+            return "bad"
+        node = hits[0] if hits else None
+        did = pr[1]
+        if not node:
+            return "missing"
+    cache = {} if cache is None else cache
+    nodes = cache.setdefault("nodes", {})   # 同一次判定:每篇的決策(nodes)與路徑索引(paths)各放一格,不混在同一層
+    if node not in nodes:
+        if node == rel and self_fm is not None:
+            nodes[node] = parse_decisions(self_fm)
+        elif self_fm is not None:
+            try:
+                fm, _b = split_frontmatter((env.vault / node).read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeDecodeError):
+                fm = None
+            nodes[node] = parse_decisions(fm) if fm is not None else None
+        else:
+            nodes[node] = _node_decisions(env, node) if node in env.notes else None
+    ds = nodes[node]
+    if ds is None:
+        return "missing"
+    for d in ds:
+        if str(d.get("id", "")).strip() == did:
+            return "superseded" if str(d.get("valid", "true")).strip().lower() == "false" else "ok"
+    return "missing"
+
+
+def _pq_settled(env, rel, q, self_fm=None, cache=None):
+    """「結了」:狀態是已決或已驗,而且決策連結指到存在、沒作廢的決策。規格閘、lint、兩支指令共用這一條。"""
+    return (q.get("status") in ("已決", "已驗") and bool(q.get("decision"))
+            and _pq_decision_state(env, rel, q["decision"], self_fm, cache) == "ok")
+
+
+def _pq_rule_problems(env, rel, q, self_fm=None, cache=None):
+    """一題寫成這樣之後違反哪幾條(寫入規則=lint 的必附與「結了」那幾條);回原因清單。"""
+    out, st = [], q.get("status")
+    need = {"已決": ("decision",), "已驗": ("decision", "tests"), "自答": ("source",), "延後": ("reason",)}.get(st, ())
+    for k in need:
+        if not q.get(k):
+            out.append(f"狀態是{st}卻沒有 {k}")
+    if q.get("blocking") and st == "延後":
+        out.append("標了阻塞的題不能延後(阻塞就是不能往下做,要嘛決定、要嘛拿掉阻塞)")
+    if q.get("irreversible") and st == "自答":
+        out.append("標了不可逆的題不能自答,要人決定")
+    if q.get("decision"):
+        ds = _pq_decision_state(env, rel, q["decision"], self_fm, cache)
+        if ds == "bad":
+            out.append(f"決策連結 {q['decision']!r} 格式不合或短名撞名;寫成 <節點路徑>#dN(decision-add 印的全域編號),本篇可寫 #dN")
+        elif ds == "missing":
+            out.append(f"決策連結 {q['decision']!r} 指到不存在的決策")
+        elif ds == "superseded":
+            out.append(f"決策連結 {q['decision']!r} 指到已作廢的決策")
+    return out
+
+
+def _pq_blocking_open(env, rel, qs, self_fm=None):
+    """擋進實作的題:標阻塞、階段是需求或架構、還沒結。"""
+    cache = {}
+    return [q for q in qs if q.get("blocking") and q.get("stage") in ("需求", "架構") and not _pq_settled(env, rel, q, self_fm, cache)]
+
+
+def _pq_platforms(env):
+    """條款綁定那一套平台前綴規則的設定:(platforms 或 {}, 預設平台, 讀不動的原因或 None)。讀不動時照單一平台比,原因交給呼叫端講。"""
+    try:
+        pl = load_platforms(_vault_repo_root(env))
+    except (ValueError, OSError) as e:
+        return {}, None, str(e)
+    return (pl["platforms"] if pl.get("multiplatform") else {}), pl.get("default_platform"), None
+
+
+def _pq_clause_tests(text, platforms, default):
+    """本篇驗收條款定義行上的 [test:],照條款綁定同一套平台前綴規則解成 (平台, 名字)(圍欄、反引號裡的不算;不建測試索引)。"""
+    out = set()
+    for _no, raw in _visible_lines((text or "").split("\n"), keep_fenced=False):
+        line, _t = _strip_inline_markup(raw)
+        if _CLAUSE_LEAD_RE.match(line):
+            try:
+                out.update(resolve_test_refs(line, platforms, default))
+            except ValueError:
+                continue   # 平台前綴寫錯的條款由規格閘的條款綁定報,這裡不重報
+    return out
+
+
+def _nl_rule_pending_questions(env, rel, n):
+    """lint:pending_questions 讀不懂逐處報行號;讀得懂時查必附、「結了」、已驗的測試名在本篇條款裡。"""
+    present, qs, errs = pq_parse(n.fm_lines or [])
+    if not present:
+        return []
+    if errs:
+        return [f"待決問題清單無法判定:第 {no} 行 {why}" for no, why in errs]
+    out, cache = [], {}
+    ctests, plats, default = None, None, None
+    if any(q.get("status") == "已驗" and q.get("tests") for q in qs):
+        plats, default, perr = _pq_platforms(env)   # 一篇讀一次設定,不在迴圈裡重讀
+        if perr:
+            out.append(f"待決問題:平台設定讀不動({perr}),已驗的測試名先照單一平台比")
+    for q in qs:
+        for why in _pq_rule_problems(env, rel, q, cache=cache):
+            out.append(f"待決問題 {q['id']}(第 {q['_line']} 行):{why}——用 lumos question-set 改")
+        if q.get("status") == "已驗" and q.get("tests"):
+            if ctests is None:
+                ctests = _pq_clause_tests(env_text(env, rel), plats, default)
+            miss = []
+            for t in q["tests"]:
+                try:
+                    keys = resolve_test_refs(f"[test:{t}]", plats, default)
+                except ValueError:
+                    keys = []
+                if not keys or not set(keys) <= ctests:
+                    miss.append(t)
+            if miss:
+                out.append(f"待決問題 {q['id']}(第 {q['_line']} 行):已驗的測試 {', '.join(miss)} 不在本篇驗收條款的 [test:] 裡")
+    return out
+
+
+def _pq_stage_sort_key(q):
+    return (not q.get("blocking"), not q.get("irreversible"), int(q["id"][1:]))
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
@@ -7724,6 +8569,87 @@ def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_r
     return fails, ok, len({x[0] for x in rb})
 
 
+def _spec_gate_pending(env, rel, text):
+    """規格閘的待決問題那一道(進實作前,風險高低都一樣):清單讀不懂、或有阻塞的需求/架構題沒結 → 回 1;沒事回 None。"""
+    present, qs, errs = pq_parse(*_pq_fm_of_text(text))
+    if not present:
+        return None
+    if errs:
+        print(f"[spec-gate] 待決問題: ✗ — 開頭欄位 pending_questions 清單無法判定({len(errs)} 處讀不懂;第一處 第 {errs[0][0]} 行:{errs[0][1]})")
+        print("    逐處看哪裡讀不懂:")
+        print(f"    lumos lint {rel}")
+        return 1
+    bad = _pq_blocking_open(env, rel, qs)
+    if not bad:
+        if qs:
+            print(f"[spec-gate] 待決問題: ✓ — {len(qs)} 題,沒有擋進實作的")
+        return None
+    print(f"[spec-gate] 待決問題: ✗ — {len(bad)} 題標阻塞、在需求或架構階段、還沒結(結了=已決或已驗,並指到存在且有效的決策),不能進實作:")
+    for q in bad:
+        print(f"    • {q['id']} [{q['stage']}/{q['status']}] {q['text']}")
+    print("    決定之後:")
+    print(f"    lumos question-set {rel} Q<n> status=已決 decision=<節點>#dN")
+    return 1
+
+
+def _pq_renames(rr, base, head):
+    """這段範圍裡改名的檔:{新路徑: 舊路徑};用 -z 輸出與共用的 _nodehome_name_status 解析(路徑含 tab、換行也不切錯;
+    代碼審 r3 架構席);算不出來回空的(就當沒改名)。兩端已由呼叫端驗過是 git 認得的版本、不以 - 開頭。"""
+    raw = _nodehome_git(rr, "diff", "-z", "-M", "--name-status", "--diff-filter=R", "--end-of-options", base, head, "--")
+    return _nodehome_name_status(raw)[1] if raw is not None else {}
+
+
+def _pq_push_remind(env, rr, vrel, touched, git_range):
+    """推送前:這次改到的計劃有阻塞沒結的題、題號不見了、題目文字變了 → 各印一行提醒;不擋、不改回傳碼。
+    比對的兩版:兩點範圍 a..b 是 a 與 b;三點範圍 a...b 是 a、b 的合併基準與 b。整份計劃被刪掉的不比(不是刪題)。"""
+    P = "[spec-gate 推送前]"
+    if git_range.startswith(".."):   # 左端空著照 git 的意思是 HEAD(代碼審 r2 邊界席)
+        git_range = "HEAD" + git_range
+    base = _range_base(rr, git_range)   # 共用的範圍起點:a..b 是 a、a...b 是合併基準(代碼審 r2 架構席)
+    head = (git_range.split("..", 1)[1].lstrip(".") if ".." in git_range else "") or "HEAD"
+    if not base:
+        print(f"{P} 提醒:範圍 {git_range!r} 算不出起點(要 a..b 或 a...b),待決問題的提醒跳過")
+        return
+    if _lens_full_sha(rr, base) is None or _lens_full_sha(rr, head) is None:   # 兩端都要是 git 認得的提交;共用函式帶 --end-of-options(r3、r4 架構席)
+        print(f"{P} 提醒:範圍 {git_range!r} 的版本 git 認不得,待決問題的提醒跳過")
+        return
+    paths = [p for p in touched if p.startswith(vrel + "/") and p.endswith("_計劃.md")]
+    renamed = _pq_renames(rr, base, head)
+    specs = [f"{rev}:{p}" for p in paths for rev in (head, base)] + [f"{base}:{renamed[p]}" for p in paths if p in renamed]
+    blobs = _nodehome_cat_blobs(rr, specs)   # 共用的批次讀取:一個 git 行程、有逾時、路徑含換行整批判不了
+    if blobs is None:
+        print(f"{P} 提醒:讀不到這次推送的計劃內容(git cat-file 失敗、逾時或路徑含換行),待決問題的提醒跳過")
+        return
+    got = {sp: (b.decode("utf-8", "replace") if b is not None else None) for sp, b in zip(specs, blobs)}
+    for path in paths:
+        rel = path[len(vrel) + 1:]
+        shown = _esc_clean(rel)   # 印的那份:git 會原樣列出雙向覆寫字元,印到終端能把檔名倒著顯示(代碼審 r5 資安-甲)
+        new = got.get(f"{head}:{path}")
+        if new is None:   # 整份被刪或改名走:不是刪題
+            continue
+        nfm, l0 = _pq_fm_of_text(new)
+        _present, nq, ne = pq_parse(nfm, l0)
+        if ne:
+            print(f"{P} 提醒:{shown} 的待決問題清單無法判定(第 {ne[0][0]} 行:{ne[0][1]});進實作前 lumos spec-gate 會擋")
+            continue
+        for q in _pq_blocking_open(env, rel, nq, self_fm=nfm):
+            print(f"{P} 提醒:{shown} {q['id']} 標阻塞、還沒結:{q['text']}(進實作前 lumos spec-gate 會擋)")
+        old = got.get(f"{base}:{path}")
+        if old is None and path in renamed:   # 改名過來的:跟舊路徑那一版比(代碼審 r2 邊界席)
+            old = got.get(f"{base}:{renamed[path]}")
+        if old is None:
+            continue
+        _p, oq, oe = pq_parse(*_pq_fm_of_text(old))
+        if oe:
+            continue
+        now = {q["id"]: q for q in nq}
+        for q in oq:
+            if q["id"] not in now:
+                print(f"{P} 提醒:{shown} {q['id']} 在 {base[:12]} 那一版有、這一版不見了(題目不刪,改成延後或已決;真的要刪就在提交說明寫為什麼)")
+            elif now[q["id"]].get("text") != q.get("text"):
+                print(f"{P} 提醒:{shown} {q['id']} 的題目文字變了(同一個題號換題會讓引用它的地方指錯;新題用 question-add 另開)")
+
+
 def _spec_gate_front(env, node, no_run):
     """規格閘前半(⓪門 ①句式 ②綁定 + 風險低靜態條件 + 平台索引):有結論回 rc(int),要繼續跑回一組材料。"""
     p, text, rel = _spec_gate_load(env, node)
@@ -7733,6 +8659,9 @@ def _spec_gate_front(env, node, no_run):
     judged = _door_judge(env, env.notes.get(rel), text)
     _spec_gate_print_door(judged)
     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
+    pq_rc = _spec_gate_pending(env, rel, text)   # 待決問題:判門之後、條款與 --no-run 之前(待決問題改存開頭欄位_計劃 S1)
+    if pq_rc is not None:
+        return pq_rc
     door = judged["door"]
     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
     if rc is not None:
@@ -8138,6 +9067,9 @@ def _spec_gate_push_check(env, git_range, repo=None):
     rc1 擋、0 過;算不出範圍/索引 fail-open 印一句回 0(擋不了≠沒事,但推送閘不能因為工具壞而擋所有人)。"""
     P = "[spec-gate 推送前]"
     rr = Path(repo).resolve() if repo else _vault_repo_root(env)
+    if git_range.startswith("-"):   # 範圍原樣進 git:以 - 開頭會被當成選項(例:--output= 寫任意檔;代碼審 待決問題改存開頭欄位 r3 資安、邊界席)
+        print(f"{P} 範圍 {git_range!r} 以 - 開頭,不是版本範圍,放行")
+        return 0
     try:
         r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "diff", "--name-only", git_range, "--"],
                            capture_output=True, text=True, errors="replace")
@@ -8153,6 +9085,7 @@ def _spec_gate_push_check(env, git_range, repo=None):
         print(f"{P} 圖譜不在這個 repo 底下,放行")
         return 0
     touched = [nfc(ln.strip()) for ln in r.stdout.splitlines() if ln.strip()]
+    _pq_push_remind(env, rr, vrel, touched, git_range)   # 只提醒、不改回傳碼(待決問題改存開頭欄位_計劃 S1)
     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
     if not plans:
         return 0
@@ -8252,12 +9185,113 @@ def cmd_spec_trace(env, node, as_json=False):
     return 1 if untagged else 0
 
 
+def _signoff_read_original(path):
+    try:
+        if not path.exists():
+            raise WriteBlocked("這篇筆記不存在,檔案沒動")
+        if not path.is_file():
+            raise WriteBlocked("這篇筆記不是一般檔案,檔案沒動")
+        return path.read_bytes()
+    except OSError as exc:
+        raise WriteBlocked(f"簽核前讀不到這篇筆記:{exc};檔案沒動") from exc
+
+
+def _signoff_short_commit(repo):
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, errors="replace").stdout.strip()
+    except OSError:
+        return ""
+
+
+def _signoff_restore_note(path, original):
+    try:
+        _write_lf(path, original.decode("utf-8"))
+    except (OSError, UnicodeError) as exc:
+        return f"筆記還原失敗:{exc};筆記可能仍帶 signed_off"
+    return "筆記已還原原狀"
+
+
+def _signoff_append_rollback(log, fd, pos, existed):
+    """截回追加前的長度,這次新建的帳整個刪掉;回 (說明, 還要不要關的 fd)。"""
+    try:
+        if not existed and pos == 0:
+            os.close(fd)
+            os.unlink(log)
+            return "這次新建的簽核帳已刪掉", None
+        os.ftruncate(fd, pos)
+        os.fsync(fd)
+        return f"簽核帳已截回原長度 {pos}", fd
+    except OSError as rollback_exc:
+        return f"簽核帳還原失敗:{rollback_exc};帳可能留有半行", fd
+
+
+def _signoff_append(log, row):
+    """簽核帳只追加一行;任一步失敗就截回追加前的長度(第一次建的帳整個刪掉),回 (成功與否, 帳的狀態說明)。
+    ★不帶緩衝、不跟符號連結★(代碼審 r8 正確性、併發、邊界席:帶緩衝的檔案物件 truncate 前會先 flush,寫滿時再失敗一次,
+    截回根本沒做、帳留半行;檢查與 open 之間換成符號連結會寫穿)。用 os.open 加 O_NOFOLLOW 拿原始描述子,os.write 寫、
+    os.ftruncate 截;O_APPEND 下另一個不拿鎖的程序同時追加會一起被截掉,但簽核帳的寫入都在筆記庫寫入鎖內。"""
+    existed = os.path.lexists(log)
+    fd, pos = None, None
+    try:
+        why = _write_refusal_reason(log)
+        if why:
+            raise OSError(why)
+        fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
+        pos = os.fstat(fd).st_size
+        view = memoryview(row)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError("簽核記錄只寫入一部分")
+            view = view[n:]
+        os.fsync(fd)
+        return True, ""
+    except (OSError, UnicodeError, WriteBlocked) as exc:
+        if fd is None:
+            return False, f"{exc};簽核帳未開啟、沒有追加"
+        state, fd = _signoff_append_rollback(log, fd, pos, existed)
+        return False, f"{exc};{state}"
+    except BaseException:
+        # Ctrl-C 落在整行已寫、fsync 之中:帳也要截回,不然留下一行沒有戳記的簽核,guard abandon 會當成授權(代碼審 r9 四席)
+        if fd is not None:
+            _state, fd = _signoff_append_rollback(log, fd, pos, existed)
+        raise
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _signoff_write_locked(env, rel, path, original, log, row, today):
+    import contextlib
+    import io
+    set_out = io.StringIO()
+    with contextlib.redirect_stdout(set_out):
+        rc = _cmd_set_locked(env, rel, "signed_off", today)
+    if rc != 0:
+        return rc, ""
+    try:
+        ok, log_state = _signoff_append(log, row)
+    except BaseException:
+        # Ctrl-C 這類程序內中斷落在筆記已寫、帳還沒寫完之間:先還原筆記再往外丟(代碼審 r8 後 Codex 反方);
+        # 被強制殺掉或斷電仍不是跨檔交易,見圖譜的回頭條件
+        _signoff_restore_note(path, original)
+        raise
+    if not ok:
+        note_state = _signoff_restore_note(path, original)
+        raise WriteBlocked(f"簽核記錄寫不進去:{log_state};{note_state}")
+    return 0, set_out.getvalue()
+
+
 def cmd_signoff(env, node, note, by=None, ref=None):
     """業務簽核留痕(validation 那半):人對業務正確性點頭 → ledger+frontmatter 戳記。
     工具只記留痕,不證明確認真的發生(同 audit/self-audit 的誠實前提)。"""
     import json
     import datetime
-    import subprocess
     if not (note or "").strip():
         print("擋下:簽核一定要帶 --note 寫你確認了什麼,給以後的人看", file=sys.stderr)
         return 2
@@ -8265,30 +9299,27 @@ def cmd_signoff(env, node, note, by=None, ref=None):
     if rel is None:
         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
+    path = env.vault / rel
     today = datetime.date.today().isoformat()
-    commit = ""
-    try:
-        commit = subprocess.run(["git", "-C", str(env.vault.parent), "rev-parse", "--short", "HEAD"],
-                                capture_output=True, text=True, errors="replace").stdout.strip()
-    except OSError:
-        pass
+    commit = _signoff_short_commit(env.vault.parent)
     log = env.vault.parent / ".signoff-log.jsonl"
-    try:
-        with open(log, "a", encoding="utf-8") as fh:
-            _rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
-                    "node": rel, "by": by or "", "note": note, "commit": commit}
-            # ★可選的 ref★(必要合約清單_計劃):讓閘能機械比對「這次簽的是哪一個東西」,
-            # 不必去自由文字裡撈 id(撈文字最容易寫錯也最容易漏)。沒帶就不寫,既有紀錄與用法不受影響。
-            if (ref or "").strip():
-                _rec["ref"] = ref.strip()
-            fh.write(json.dumps(_rec, ensure_ascii=False) + "\n")
-    except OSError as ex:
-        print(f"擋下:簽核記錄寫不進去: {ex}", file=sys.stderr)
-        return 2
-    rc = cmd_set(env, rel, "signed_off", today)
-    if rc != 0:
-        print("⚠ ledger 已記但 frontmatter 戳記失敗(見上)", file=sys.stderr)
-        return rc
+    _rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "node": rel, "by": by or "", "note": note, "commit": commit}
+    # ★可選的 ref★(必要合約清單_計劃):讓閘能機械比對「這次簽的是哪一個東西」,
+    # 不必去自由文字裡撈 id(撈文字最容易寫錯也最容易漏)。沒帶就不寫,既有紀錄與用法不受影響。
+    if (ref or "").strip():
+        _rec["ref"] = ref.strip()
+    # U+2028/U+2029/U+0085 json.dumps 不跳脫,讀帳的 splitlines 卻會切成兩行,備註能偽造一行簽核(代碼審 r9 資安甲席)
+    row = (json.dumps(_rec, ensure_ascii=False).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+           .replace("\x85", "\\u0085") + "\n").encode("utf-8")
+    with _vault_write_lock(env.vault):
+        # 原稿一定在拿鎖後才讀；帳失敗時還原的就是鎖內看到的版本，不會蓋掉先拿到鎖的別人
+        # 已成功改動(代碼審 r7 併發席 N1/G3)。
+        original = _signoff_read_original(path)
+        rc, set_output = _signoff_write_locked(env, rel, path, original, log, row, today)
+        if rc != 0:
+            return rc
+    print(set_output, end="")
     print(f"✓ signoff {rel} — {today}{('(' + by + ')') if by else ''}: {note[:60]}")
     return 0
 
@@ -15879,6 +16910,12 @@ def cmd_guard_required(env, as_json=False):
 
 
 def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
+    """拿這個筆記庫的寫入鎖再做 _cmd_guard_bind_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_guard_bind_locked(env, node, invariant_substr, method, platform=platform)
+
+
+def _cmd_guard_bind_locked(env, node, invariant_substr, method, platform=None):
     if not IDENT_RE.match(method):
         print(f"擋下:method『{method}』不是合法的方法名(只能用字母/數字/底線,不能數字開頭)", file=sys.stderr)
         return 2
@@ -15946,11 +16983,16 @@ _KILL_METHOD_OK_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$|^[\w .]+$")  # IDENT 
 
 
 def _kill_read_recipes(path):
-    """讀節點的 kill_recipes frontmatter(block scalar 單行 compact JSON array)。回 (list, err)。"""
+    """唯讀 kill_recipes；刻意不走編輯用讀檔，非 UTF-8 仍由 guard kill 按既約回 rc1。"""
     import json
     try:
-        lines, _, e = load_raw_for_edit(path)
-        fields, _bk, _lint = parse_frontmatter(lines[1:e])
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("\ufeff"):
+            return None, "這個檔開頭帶 BOM 標記,先存成不帶 BOM 的 UTF-8"
+        fm, _body = split_frontmatter(text)
+        if fm is None:
+            return None, "frontmatter 解析失敗: 開頭沒有欄位區塊"
+        fields, _bk, _lint = parse_frontmatter(fm)
     except Exception as ex:
         return None, f"frontmatter 解析失敗: {ex}"
     raw = fields.get("kill_recipes")
@@ -17655,6 +18697,12 @@ def _guard_kill_pick(rel, recipes, prefixes, ctx):
 
 
 def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
+    """拿這個筆記庫的寫入鎖再做 _cmd_guard_audit_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_guard_audit_locked(env, node, invariant_substr, model=model, date=date)
+
+
+def _cmd_guard_audit_locked(env, node, invariant_substr, model="sonnet", date=None):
     """把 [audit:模型/日期] 留痕寫回 ★INVARIANT★ KEY 行(寫後自驗)。
     語意:這條鐵則的「合法性」(是不是真鐵則 / 綁的測試夠不夠格)已由一個
     *無對話脈絡的獨立 agent* 判過並通過。工具只記留痕,不證明審計真的乾淨——
@@ -18151,7 +19199,7 @@ def parse_decisions(fm_lines):
         else:
             i += 1
             continue
-        if val in ("|", "|-", ">", ">-"):
+        if val in BLOCK_SCALAR_HEADERS:
             # block scalar 終止 = 首個縮排 <= key_col 的非空行(否則會把兄弟欄位吸進 content,Bug1)
             block = []
             i += 1
@@ -19177,7 +20225,7 @@ _SET_COND_SLOT_HINT = {"<整項新內容>": "換成那一項改寫後的整句",
 COND_KEYS = ("valid_under", "revalidate_when")   # 驗收前提/回頭條件:set 整欄換掉(一個值=單行、多個=清單);spec=Projects/驗收前提欄位可改_計劃
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")   # 只收 ASCII 數字(\d 會收全形與阿拉伯數字;代碼審 r9 邊界、合約席)
 
 
 def fm_structure(fm_lines):
@@ -19192,7 +20240,7 @@ def fm_structure(fm_lines):
             continue
         key, val = m.group(1), m.group(2).strip()
         start = i
-        if val in ("|", "|-", ">", ">-"):
+        if val in BLOCK_SCALAR_HEADERS:
             i += 1
             while i < n and (fm_lines[i].startswith("  ") or not fm_lines[i].strip()):
                 i += 1
@@ -19427,13 +20475,13 @@ def edit_fm_remove(fm_lines, key, value):
     return fm, len(hits)
 
 
-def decisions_items(fm_lines):
-    """surgical 定位 decisions[] 的每個項目行範圍(不重序列化,延伸 T1 到巢狀)。
+def decisions_items(fm_lines, key="decisions"):
+    """surgical 定位 decisions[](或 key 指定的清單,如 pending_questions)的每個項目行範圍(不重序列化,延伸 T1 到巢狀)。
     回傳 (block_start, block_end, [(item_start, item_end)], item_indent, sub_indent)
     或 None(無 decisions)。item_end 含,已去尾部空行。處理項目內含 nested 子清單。"""
     block = None
     for k, s, e, kind in fm_structure(fm_lines):
-        if k == "decisions" and kind == "list":
+        if k == key and kind == "list":
             block = (s, e)
             break
     if block is None:
@@ -19462,26 +20510,65 @@ def decisions_items(fm_lines):
     return s, e, items, (item_indent or 2), sub_indent
 
 
+class WriteBlocked(ValueError, RuntimeError):
+    """寫入被拒的唯一信號；雙重繼承保留既有 ValueError/RuntimeError 呼叫端的分工(各分派照原本寫法接、印「擋下」)。
+    ★訊息在建立時就清洗★(代碼審 r8 合約、通才、架構席:清洗放在接住處,接住的地方有二十幾處,guard 子指令就印出了
+    檔名裡的原始 ESC);所以不論誰接、怎麼印,控制字元都進不了終端。"""
+
+    def __init__(self, msg=""):
+        super().__init__(_esc_clean(str(msg), 4000))
+
+
+def _write_refusal_reason(path):
+    """筆記與簽核帳的換檔／追加寫入共用(其他帳檔各有自己的守衛,不在此列):符號連結、不是一般檔、多重硬連結都不寫,
+    避免目標分岔或寫穿。用 lstat 一次判完,不跟著連結走(代碼審 r8 通才席:目錄的 nlink 本來就大於 1,原本誤報成硬連結)。"""
+    import stat as _stat
+    name = _esc_clean(path.name, 160)
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise WriteBlocked(f"檢查寫入目標 {name} 的連結狀態失敗:{exc};檔案沒動") from exc
+    if _stat.S_ISLNK(st.st_mode):
+        try:
+            dest = _esc_clean(os.readlink(path), 160)
+        except OSError:
+            dest = "讀不到目標"
+        return f"寫入目標 {name} 是符號連結(指到 {dest});這次不寫"
+    if not _stat.S_ISREG(st.st_mode):
+        return f"寫入目標 {name} 不是一般檔案;這次不寫"
+    if st.st_nlink > 1:
+        return f"寫入目標 {name} 有多個硬連結(nlink>1);換檔或追加會讓內容分岔,這次不寫"
+    return None
+
+
 def load_raw_for_edit(path: Path):
     """讀 raw,拒 BOM/CRLF(本 vault 慣例 LF/no-BOM,異常不靜默正規化)。
     回傳 (all_lines, fm_start, fm_end_exclusive)。fm = all_lines[1:fm_end]。"""
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise WriteBlocked(f"這篇筆記讀不到:{exc};檔案沒動") from exc
     if raw.startswith(b"\xef\xbb\xbf"):
-        raise ValueError("這個檔開頭帶 BOM 標記,工具不寫這種檔;先把檔案存成不帶 BOM 的 UTF-8")
+        raise WriteBlocked("這個檔開頭帶 BOM 標記,工具不寫這種檔;先把檔案存成不帶 BOM 的 UTF-8")
     if b"\r\n" in raw:
-        raise ValueError("這個檔的換行是 Windows 式(CRLF),工具只寫 Unix 式(LF)。Windows 上常是 git autocrlf 造成的;"
-                         "修法:確認 .gitattributes 有套用(圖譜目錄標 eol=lf)再跑 git add --renormalize .,"
-                         "或單檔跑 dos2unix。工具不會偷偷幫你改行尾。")
-    lines = raw.decode("utf-8").split("\n")
+        raise WriteBlocked("這個檔的換行是 Windows 式(CRLF),工具只寫 Unix 式(LF)。Windows 上常是 git autocrlf 造成的;"
+                    "修法:確認 .gitattributes 有套用(圖譜目錄標 eol=lf)再跑 git add --renormalize .。"
+                           "或單檔跑 dos2unix。工具不會偷偷幫你改行尾。")
+    try:
+        lines = raw.decode("utf-8").split("\n")
+    except UnicodeError as exc:
+        raise WriteBlocked(f"這篇筆記不是可讀的 UTF-8:{exc};檔案沒動") from exc
     if not lines or lines[0].strip() != "---":
-        raise ValueError("這篇筆記開頭沒有欄位區塊(---),沒辦法改欄位")
+        raise WriteBlocked("這篇筆記開頭沒有欄位區塊(---),沒辦法改欄位")
     fm_end = None
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
             fm_end = i
             break
     if fm_end is None:
-        raise ValueError("開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),先補上")
+        raise WriteBlocked("開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),先補上")
     return lines, 1, fm_end
 
 
@@ -19489,8 +20576,8 @@ def _write_lf(path: Path, text: str):
     """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
     用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.9。
     [2026-08-05 單席快審 F2] tmp→os.replace 原子替換:防半寫毀檔(CLAUDE.md reinject 等
-    整檔覆寫消費者)。read-modify-write 的併發:set/append/remove 由呼叫端上鎖(_vault_write_lock),
-    其他寫入指令仍是 last-write-wins(單機 CLI,accepted)。
+    整檔覆寫消費者)。read-modify-write 的併發:所有走 atomic_write_verify 的寫入都由呼叫端拿這個筆記庫的寫入鎖
+    (_vault_write_lock;atomic_write_verify 沒拿鎖就不寫);不經 atomic_write_verify 直接呼叫本函式的寫入(帳檔、快取)不在此限。
     ★暫存檔名每次都不一樣★(2026-09-10 代碼審 r3 併發資源席:原本同一篇筆記大家用同一個固定暫存檔名,
     兩個程序同時寫就互搶,實測六個同時跑六個都噴 FileNotFoundError)——跟 mkstemp 同一種做法(獨佔建一個唯一名),
     但權限給 0o666、讓它跟一般建檔一樣受 umask 管;原檔在就照原檔的權限(例如 +x)。
@@ -19514,7 +20601,15 @@ def _write_lf(path: Path, text: str):
 
 
 def atomic_write_verify(path: Path, new_lines, key, expected_check):
-    """寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename。任一步敗:tmp 丟棄,原檔不動。"""
+    """寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename。任一步敗:tmp 丟棄,原檔不動。
+    ★呼叫端要拿著這個筆記庫的寫入鎖★(_vault_write_lock):讀改寫開頭欄位不上鎖,同時跑的另一支會被蓋掉;沒拿就不寫。
+    ★真正寫入前共用拒絕符號連結與多重硬連結★(代碼審 r5、r7 邊界/通才/資安席):原子換名會把符號連結換成一般檔，
+    多重硬連結則只換掉其中一個名字；兩者都會讓原本同一篇悄悄分岔。唯讀與 no-op 不在這裡擋。"""
+    why = _write_refusal_reason(path)
+    if why:
+        raise WriteBlocked(why)
+    if not _vault_lock_held_for(path):
+        raise WriteBlocked("寫開頭欄位前沒拿這個筆記庫的寫入鎖(讀—改—寫要包 _vault_write_lock),這次不寫;這是工具本身的漏洞,請回報")
     orig_fm = load_raw_for_edit(path)
     orig_lint = set(parse_frontmatter(orig_fm[0][1:orig_fm[2]])[2])
     text = "\n".join(new_lines)
@@ -19525,15 +20620,26 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
             break
     fields, _, new_lint = parse_frontmatter(new_fm_lines)
     if not expected_check(fields):
-        raise RuntimeError(f"寫完讀回來檢查,{key} 的值跟要寫的不一樣,這次寫入不算成功")
+        raise WriteBlocked(f"寫完讀回來檢查,{key} 的值跟要寫的不一樣,這次寫入不算成功")
     introduced = set(new_lint) - orig_lint
     if introduced:
-        raise RuntimeError("寫完讀回來檢查,發現欄位區塊多了會讀錯的寫法,這次寫入不算成功:" + "; ".join(sorted(introduced)))
-    _write_lf(path, text)   # 本身就是「寫暫存檔→原子換名」;原本外面再包一層固定檔名的暫存檔,兩層固定名互搶(r3)
+        raise WriteBlocked("寫完讀回來檢查,發現欄位區塊多了會讀錯的寫法,這次寫入不算成功:" + "; ".join(sorted(introduced)))
+    try:
+        _write_lf(path, text)   # 本身就是「寫暫存檔→原子換名」;原本外面再包一層固定檔名的暫存檔,兩層固定名互搶(r3)
+    except (OSError, UnicodeError) as exc:
+        raise WriteBlocked(f"這篇筆記寫不進去:{exc};檔案沒動") from exc
 
 
 _VAULT_LOCK_STALE_SEC = 30   # 舊介面參數;過期也不自動偷鎖(鎖內 PID 不是跨呼叫端的存活證明)
 _VAULT_LOCK_HELD = {}         # 這個程序已經拿著的寫入鎖 → 巢狀呼叫直接過(可重入),不自己卡自己
+_VAULT_LOCK_VAULTS = {}       # 那把鎖鎖的是哪個筆記庫(realpath);給 _vault_lock_held_for 判「寫的檔在不在拿著鎖的筆記庫裡」
+
+
+def _vault_lock_held_for(path):
+    """這個程序現在拿著的寫入鎖裡,有沒有一把是鎖住 path 所在的筆記庫(代碼審 r3:原本只看「有沒有任何一把」,
+    拿著 A 的鎖寫 B 也放行;也不讓寫入原語直接讀鎖層的內部狀態)。"""
+    p = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(str(path)))), os.path.basename(str(path)))   # 只解析資料夾(r4 正確性、通才席);筆記本身是符號連結的,atomic_write_verify 在這之前就擋下、講明原因(r5)
+    return any(v and (p == v or p.startswith(v.rstrip(os.sep) + os.sep)) for k, v in _VAULT_LOCK_VAULTS.items() if _VAULT_LOCK_HELD.get(k))
 
 
 _VAULT_LOCK_WARNED = {}        # 鎖的位置換過一次就別再唸(同一個程序內)
@@ -19619,18 +20725,20 @@ def _vault_write_lock(vault):
             try:
                 acquired = _excl_lock_try(lock, _VAULT_LOCK_STALE_SEC)
             except OSError as exc:
-                raise RuntimeError(f"寫入鎖無法建立({lock}):{exc};請檢查鎖位置與檔案權限,檔案沒動") from exc
+                raise WriteBlocked(f"寫入鎖無法建立({lock}):{exc};請檢查鎖位置與檔案權限,檔案沒動") from exc
             if acquired:
                 break
             if _t.monotonic() > deadline:
-                raise RuntimeError(f"等了 60 秒還輪不到寫入;鎖檔在 {lock}。可能有程序正在寫,"
+                raise WriteBlocked(f"等了 60 秒還輪不到寫入;鎖檔在 {lock}。可能有程序正在寫,"
                                    "也可能是殘留鎖。請先確認相關程序都已停止,才可人工清鎖;檔案沒動")
             _t.sleep(0.05)
         _VAULT_LOCK_HELD[k] = 1
+        _VAULT_LOCK_VAULTS[k] = os.path.realpath(str(vault))
         try:
             yield
         finally:
             _VAULT_LOCK_HELD.pop(k, None)
+            _VAULT_LOCK_VAULTS.pop(k, None)
             try:   # 只刪自己的鎖(若檔名已被別的程序換入,不可刪它)
                 if lock.read_text(encoding="utf-8").split("\n", 1)[0] == str(os.getpid()):
                     lock.unlink()
@@ -19772,11 +20880,7 @@ def _summary_line_rebuild(lines, i, new_line, e, today):
 def _summary_line_locked(env, rel, old, new, nth, dry_run):
     import datetime as _dt
     path = env.vault / rel
-    try:
-        lines, _s, e = load_raw_for_edit(path)
-    except (ValueError, RuntimeError) as ex:
-        print(f"擋下:{ex}", file=sys.stderr)
-        return 2
+    lines, _s, e = load_raw_for_edit(path)
     text = "\n".join(lines)
     regs = _notelines_regions(text)
     hits = _summary_line_hits(lines, regs, old)
@@ -19799,10 +20903,10 @@ def _summary_line_locked(env, rel, old, new, nth, dry_run):
         return 2
     today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 本機日期
     new_lines = _summary_line_rebuild(lines, i, None if delete else new_line, e, today)
-    print(f"改前:{_esc_clean(old_line.strip(), 300)}")
-    print("改後:" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
     if dry_run:
-        print("(--dry-run:只印,沒寫)")
+        print(f"改前(預覽):{_esc_clean(old_line.strip(), 300)}")
+        print("改後(預覽):" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
+        print("(--dry-run:預覽,沒寫)")
         return 0
     target = old_line.strip() if delete else new_line.strip()
     before_n = sum(1 for ln in lines[1:e] if ln.strip() == target)
@@ -19815,11 +20919,9 @@ def _summary_line_locked(env, rel, old, new, nth, dry_run):
         n = sum(1 for ln in summ.split("\n") if ln.strip() == target)
         return n == before_n - 1 if delete else n == before_n + 1
 
-    try:
-        atomic_write_verify(path, new_lines, "summary", check)
-    except (ValueError, RuntimeError) as ex:
-        print(f"擋下:{ex}", file=sys.stderr)
-        return 2
+    atomic_write_verify(path, new_lines, "summary", check)
+    print(f"改前:{_esc_clean(old_line.strip(), 300)}")
+    print("改後:" + ("(整行拿掉)" if delete else _esc_clean(new_line.strip(), 300)))
     print(f"✓ 改好了 {rel}(updated 改成 {today});接著跑 lumos lint {rel[:-3]} 看這一篇")
     return 0
 
@@ -20347,16 +21449,29 @@ def _fm_of(all_lines):
 def _fmt_decision_value(v):
     """decision 子欄位值格式化:跟 fmt_scalar 共用同一套白名單與加引號規則(2026-09-26 代碼審 r2 架構席:
     原本是第三套手刻判準,結尾裸冒號讓標準 YAML 報錯、含「: 」又有雙引號的寫不進去)。"""
+    if len((str(v) + "x").splitlines()) > 1:
+        # 換行類字元認法同 summary-line(splitlines 認得的全部,含 \x1c-\x1e);decision-add 的 context/why 以前能把一個 CLI 參數拆成 frontmatter 新行，命令卻回成功；
+        # 所有會走決策欄位的自由文字在唯一格式化入口一起拒絕(代碼審 r7 邊界席 E7)。
+        raise ValueError("決策開頭欄位的自由文字不能含換行類字元,檔案沒動")
+    if any(unicodedata.category(c) == "Cc" for c in str(v)):
+        # ESC、tab 這類控制字元會原樣寫進筆記並在成功訊息裡印到終端(代碼審 r8 合約席)
+        raise ValueError("決策開頭欄位的自由文字不能含控制字元(ESC、tab 等),檔案沒動")
     v = v.strip()
     return v if _yaml_plain_ok(v) else _yaml_quote(v, "決策內容")
 
 
 def cmd_decision_supersede(env, rel, match, by, ended=None):
+    """拿這個筆記庫的寫入鎖再做 _cmd_decision_supersede_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_decision_supersede_locked(env, rel, match, by, ended=ended)
+
+
+def _cmd_decision_supersede_locked(env, rel, match, by, ended=None):
     """T3 巢狀手術:把 decisions[] 中 content 含 match 的決策標 valid:false + 補
     superseded_by/ended。surgical line-based(不重序列化,最小 diff;優於 ruamel reflow)。
     [P1]:ended 缺則自動補今日 + 同步 bump 頂層 updated(單次 atomic,供 E2 時序法)。"""
     import datetime
-    if ended and not DATE_RE.match(ended):
+    if ended and not DATE_RE.fullmatch(ended):
         raise ValueError(f"--ended 要寫成 年-月-日(例如 2026-08-22),你給的是 {ended}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
@@ -20452,10 +21567,16 @@ def _max_decision_id(fm_lines):
 
 
 def cmd_decision_add(env, rel, content, decided, context=None, why=None):
+    """拿這個筆記庫的寫入鎖再做 _cmd_decision_add_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_decision_add_locked(env, rel, content, decided, context=context, why=why)
+
+
+def _cmd_decision_add_locked(env, rel, content, decided, context=None, why=None):
     """T3 巢狀手術:append 一條新 ADR 決策到 decisions[](無則建)。surgical line-based。
     [M1/P2]:指派穩定 id d<max+1> 並回傳 (rc, 全域決策id <rel>#d<N>);dispatcher 解包後
     CLI 對外仍只回整數 rc。"""
-    if not DATE_RE.match(decided):
+    if not DATE_RE.fullmatch(decided):   # fullmatch:`$` 會放過尾端換行,寫進一個空行(代碼審 r8 通才席)
         raise ValueError(f"擋下:--decided 要寫成 年-月-日(例如 2026-08-22),你給的是 {decided}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
@@ -20498,7 +21619,179 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
     return 0, f"{rel}#{new_id}"
 
 
+_PQ_LABEL = {"text": "題目文字", "class": "類", "source": "出處", "reason": "理由", "decision": "決策連結", "tests": "測試名"}
+
+
+def _pq_fmt(k, v):
+    """一個鍵寫進檔案的樣子:布林照字面寫(格式化函式會把 true 加成 "true");其餘經 _yaml_plain_ok/_yaml_quote。"""
+    if k in _PQ_BOOL_KEYS:
+        return "true" if v else "false"
+    v = unicodedata.normalize("NFC", str(v))
+    bad = _pq_bad_char(v)
+    if bad is not None:
+        raise ValueError(f"{_PQ_LABEL.get(k, k)}的看不見的字元(U+{ord(bad):04X})不在允許的位置,檔案沒動")
+    if _pq_invisible_over_limit(v):
+        raise ValueError(f"{_PQ_LABEL.get(k, k)}裡看不見的字元太多,檔案沒動")
+    v = v.strip()
+    if _pq_blank(v):
+        raise ValueError(f"{_PQ_LABEL.get(k, k)}是空的(或只有看不見的字元),檔案沒動")
+    return v if _yaml_plain_ok(v) else _yaml_quote(v, _PQ_LABEL.get(k, k))
+
+
+def _pq_load_for_write(env, rel):
+    path = env.vault / rel
+    lines, _s, e_fm = load_raw_for_edit(path)
+    fm = lines[1:e_fm]
+    present, qs, errs = pq_parse(fm)
+    if errs:
+        raise ValueError(f"這篇的待決問題清單本身讀不懂(第 {errs[0][0]} 行:{errs[0][1]}),先修好再寫;逐處看 lumos lint {rel}")
+    return path, lines, e_fm, fm, present, qs
+
+
+def _pq_check_values(q):
+    if q.get("stage") not in PQ_STAGES:
+        raise ValueError(f"stage 要是 {'/'.join(PQ_STAGES)} 之一,給的是 {q.get('stage')!r}")
+    if q.get("status") not in PQ_STATUSES:
+        raise ValueError(f"status 要是 {'/'.join(PQ_STATUSES)} 之一,給的是 {q.get('status')!r}")
+
+
+def _pq_commit(env, rel, path, lines, e_fm, new_fm, want):
+    """寫入規則在寫前驗(ValueError);「這一題跟要寫的一致」交給 atomic_write_verify 的讀回檢查,跟鄰居同一個掛法。"""
+    _present, qs, errs = pq_parse(new_fm)
+    if errs:
+        raise ValueError(f"寫完會讀不懂(第 {errs[0][0]} 行:{errs[0][1]}),檔案沒動")
+    got = next((q for q in qs if q["id"] == want["id"]), None)
+    if got is not None:
+        probs = _pq_rule_problems(env, rel, got, self_fm=new_fm)
+        if probs:
+            raise ValueError(f"{want['id']}:" + ";".join(probs) + ",檔案沒動")
+    exp = dict(want)
+    if isinstance(exp.get("tests"), str):
+        exp["tests"] = [t.strip() for t in exp["tests"].split(",") if t.strip()]
+    exp.setdefault("blocking", False)
+    exp.setdefault("irreversible", False)
+    exp = {k: (unicodedata.normalize("NFC", v).strip() if isinstance(v, str) else v)
+           for k, v in exp.items()}
+
+    new_lines = lines[:1] + new_fm + lines[e_fm:]
+
+    def _check(_fields):   # 跟 decision-add 一樣:對要寫出的整份文字重新切行、重解析,不是拿組裝用的那份清單再判一次
+        _p, qs2, e2 = pq_parse(_fm_of("\n".join(new_lines).split("\n")))
+        g = next((q for q in qs2 if q["id"] == want["id"]), None)
+        return not e2 and g is not None and {k: v for k, v in g.items() if k != "_line"} == exp
+    atomic_write_verify(path, new_lines, "pending_questions", _check)
+
+
+def cmd_question_add(env, rel, text, cls, stage, status="待查", blocking=False, irreversible=False,
+                     decision=None, tests=None, source=None, reason=None):
+    """新增一題待決問題到開頭欄位 pending_questions(待決問題改存開頭欄位_計劃)。讀—改—寫整段上鎖;
+    編號 = 現有題號數字的最大值加 1;回 (rc, 全域編號 <rel>#Q<n>)。"""
+    with _vault_write_lock(env.vault):
+        path, lines, e_fm, fm, present, qs = _pq_load_for_write(env, rel)
+        top = max((int(q['id'][1:]) for q in qs), default=0)
+        if top >= _PQ_ID_MAX:
+            raise ValueError(f"題號已經到上限 Q{_PQ_ID_MAX},加不了新題;檔案沒動")
+        nid = f"Q{top + 1}"
+        want = {"id": nid, "text": text, "class": cls, "stage": stage, "status": status or "待查"}
+        if blocking:
+            want["blocking"] = True
+        if irreversible:
+            want["irreversible"] = True
+        for k, v in (("decision", decision), ("source", source), ("reason", reason), ("tests", tests)):
+            if v is not None:
+                want[k] = v
+        _pq_check_values(want)
+        block = [f"  - id: {nid}"] + [f"    {k}: {_pq_fmt(k, v)}" for k, v in want.items() if k != "id"]
+        new_fm = list(fm)
+        if not present:
+            new_fm += ["pending_questions:", *block]
+        else:
+            h = next(i for i, ln in enumerate(new_fm) if re.fullmatch(r"pending_questions:\s*(\[\])?", ln.rstrip()))
+            if new_fm[h].rstrip().endswith("[]"):   # decision-add 在 decisions: [] 上會寫壞,這裡先把空清單那行改成區塊起頭
+                new_fm[h] = "pending_questions:"
+                at = h + 1
+            else:
+                loc = decisions_items(new_fm, "pending_questions")
+                at = (loc[2][-1][1] + 1) if (loc and loc[2]) else h + 1
+            new_fm[at:at] = block
+        _pq_commit(env, rel, path, lines, e_fm, new_fm, want)
+    gid = f"{rel}#{nid}"
+    print(f"✓ question-add {rel}: 記下一題待決問題「{text[:30]}」(編號 {nid},全域編號 {gid})")
+    return 0, gid
+
+
+def _pq_parse_pairs(pairs):
+    out = {}
+    for p in pairs:
+        if "=" not in p:
+            raise ValueError(f"參數 {p!r} 沒有等號;寫成 鍵=值(例:status=已決)")
+        k, v = p.split("=", 1)
+        k = k.strip()
+        if k == "id":
+            raise ValueError("題號不能改;要換題就用 question-add 另開一題")
+        if k not in _PQ_KEYS:
+            raise ValueError(f"不認得的鍵 {k};只收 {'、'.join(x for x in _PQ_KEYS if x != 'id')}")
+        if k in out:
+            raise ValueError(f"{k} 在這次指令裡給了兩次")
+        if k in _PQ_BOOL_KEYS and v not in ("true", "false", ""):
+            raise ValueError(f"{k} 只收 true 或 false,給的是 {v!r}")
+        out[k] = v
+    if not out:
+        raise ValueError("沒有要改的鍵;寫成 鍵=值")
+    return out
+
+
+def cmd_question_set(env, rel, qid, pairs):
+    """改一題待決問題的幾個鍵(一次改完才驗,讓「已決要附決策」這類跨鍵規則一次過);改哪行動哪行。"""
+    ch = _pq_parse_pairs(pairs)
+    with _vault_write_lock(env.vault):
+        path, lines, e_fm, fm, _present, qs = _pq_load_for_write(env, rel)
+        q = next((x for x in qs if x["id"] == qid), None)
+        if q is None:
+            raise ValueError(f"這篇沒有 {qid} 這一題")
+        _p, raw_items, _e = _pq_scan(fm, "pending_questions", 0)
+        raw = next(it for it in raw_items if it["id"][0] == qid)
+        want = {k: v for k, v in q.items() if k != "_line"}
+        if isinstance(want.get("tests"), list):
+            want["tests"] = ", ".join(want["tests"])
+        for k, v in ch.items():
+            if v == "":
+                if k in _PQ_REQUIRED:
+                    raise ValueError(f"{k} 是必有的鍵,不能清空")
+                want.pop(k, None)
+            else:
+                want[k] = (v == "true") if k in _PQ_BOOL_KEYS else v
+        _pq_check_values(want)
+        new_fm = list(fm)
+        last = max(vn[1] for k, vn in raw.items() if k != "_line")
+        ins, dels = [], []
+        for k, v in ch.items():
+            at = raw[k][1] if k in raw else None
+            if v == "" or (k in _PQ_BOOL_KEYS and not want.get(k)):
+                if at is not None:
+                    dels.append(at)
+            elif at is not None:
+                new_fm[at] = f"    {k}: {_pq_fmt(k, want[k])}"
+            else:
+                ins.append(f"    {k}: {_pq_fmt(k, want[k])}")
+        new_fm[last + 1:last + 1] = ins
+        for at in sorted(dels, reverse=True):
+            del new_fm[at]
+        for k in _PQ_BOOL_KEYS:
+            if not want.get(k):
+                want.pop(k, None)
+        _pq_commit(env, rel, path, lines, e_fm, new_fm, want)
+    print(f"✓ question-set {rel}: {qid} 改了 {'、'.join(ch)}")
+    return 0
+
+
 def cmd_decision_reindex(env, rel=None, all_mode=False):
+    """拿這個筆記庫的寫入鎖再做 _cmd_decision_reindex_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_decision_reindex_locked(env, rel=rel, all_mode=all_mode)
+
+
+def _cmd_decision_reindex_locked(env, rel=None, all_mode=False):
     """[M1/P2] 回填遷移:對既有無 id 決策依文件順序、從既有最大 id+1 接續編號(不重排既有、
     不回收缺號——混合狀態絕不撞既有 id);冪等(已有 id 跳過)。單節點一次一篇;--all 批次套用
     到所有有 decisions 的節點(decision_refs 自動養成前置 P;顯式指令、非隱式改)。
@@ -20702,6 +21995,12 @@ def _fm_list_insert(fm, field, quoted):
 
 
 def _append_decision_ref(env, rel, field, ref):
+    """拿這個筆記庫的寫入鎖再做 _append_decision_ref_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _append_decision_ref_locked(env, rel, field, ref)
+
+
+def _append_decision_ref_locked(env, rel, field, ref):
     """[decision_refs 自動養成 T1] 把精確 decision_ref(<rel>#dN)append 到 field
     (decision_refs=human/cascade-confirmed | decision_refs_ai=AI 填)。**exact-string dedup**
     ——不用 link_target(它 split('#') 會把 #dN 剝掉,導致同節點不同決策誤 dedup 成一條)。
@@ -20940,6 +22239,12 @@ def cmd_dref_prune(env, rel_in, ref, by=None):
 
 
 def _dref_remove_ref(env, rel, field, exact_val):
+    """拿這個筆記庫的寫入鎖再做 _dref_remove_ref_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _dref_remove_ref_locked(env, rel, field, exact_val)
+
+
+def _dref_remove_ref_locked(env, rel, field, exact_val):
     """從 field 移除一筆逐字等於 exact_val 的 list 項(atomic_write_verify)。回 True=移除。"""
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
@@ -20999,6 +22304,12 @@ def _dref_coverage_scan(env, rel, tidx):
 
 
 def cmd_dref_promote(env, rel_in, ref):
+    """拿這個筆記庫的寫入鎖再做 _cmd_dref_promote_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+    with _vault_write_lock(env.vault):
+        return _cmd_dref_promote_locked(env, rel_in, ref)
+
+
+def _cmd_dref_promote_locked(env, rel_in, ref):
     """[V6] _ai→decision_refs 抽查蓋章(升級可抑制 E2)。正規化全操作+dangling 拒+覆蓋提醒+雙欄原子。"""
     rel = env.find(rel_in)
     if rel is None:
@@ -38733,9 +40044,9 @@ def _drift_fix_load(env, rel, line, kind, o):
     root, vault_rel = _drift_vault_of(env)
     path = _phys_path(env.vault, rel)
     try:
-        if path.is_symlink() or path.stat().st_nlink != 1:
-            return None, (f"{rel} 是符號連結或還有別的硬連結——工具用換檔的方式寫入,會把連結換成一般檔、或讓兩邊內容分岔"
-                          "(代碼審 r1 邊界席);手動改")
+        why = _write_refusal_reason(path)
+        if why:
+            return None, f"{rel} 拒寫:{why};手動改"
         lines, _s, fe = load_raw_for_edit(path)
     except (ValueError, OSError, UnicodeDecodeError) as ex:
         return None, f"{rel} 打不開:{ex}"
@@ -41130,6 +42441,13 @@ def cmd_decision_amend(env, rel, did, field, text):
                     raise ValueError(f"遠端 {ref} 上的 {q} 在工作目錄不見了,而它有一條跟這條一模一樣的決策 {did}:多半是這篇"
                                      "改名前的樣子、已經推上去了——請用 lumos decision-supersede 翻案;如果不是,先 git add "
                                      "新舊兩邊(或用 git mv)讓 git 認出改名")
+    with _vault_write_lock(env.vault):   # 只鎖讀改寫那段:上面的 git fetch 與遠端比對不寫筆記庫,放鎖外(代碼審 r3 併發、通才席)
+        return _decision_amend_locked(env, rel, path, did, field, text)
+
+
+def _decision_amend_locked(env, rel, path, did, field, text):
+    """decision-amend 的讀改寫那段(呼叫端已拿寫入鎖)。env 目前用不到,留著是為了跟其他 _*_locked(env, …) 同一個簽名
+    (代碼審 r4 架構席要求對齊、r5 正確性席指出沒用到;兩者取簽名一致)。"""
     lines, _s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
     loc = decisions_items(fm)
@@ -41167,7 +42485,7 @@ def cmd_decision_amend(env, rel, did, field, text):
     if not head_val or head_val.startswith(("[", "{")):
         raise ValueError(f"決策 {did} 的「{field}」是清單、巢狀或空的欄位,decision-amend 只改一段文字的欄位")
     lead = fm[k0][:fm[k0].index(field)]
-    newtxt = text.replace("\n", " ").strip()
+    newtxt = " ".join(str(text).splitlines()).strip()   # 換行類一律壓成空白(認法同 splitlines;代碼審 r8 邊界席:原本只壓 \n、\r 卻被拒)
     new_fm = [*fm[:k0], f"{lead}{field}: {_fmt_decision_value(newtxt)}", *fm[k1 + 1:]]
     new_lines = lines[:1] + new_fm + lines[e_fm:]
 
@@ -42963,13 +44281,29 @@ def _pitfalls_stage(md, stage, as_json, diff=None):
         print(f"擋下:讀不到 {md}:{e}", file=sys.stderr)
         return 2
     facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and any(re.search(w, text) for w in f["when"])]
+    _present, qs, errs = pq_parse(*_pq_fm_of_text(text))   # 開頭欄位的待決問題;不需要筆記庫
+    err = f"待決問題清單無法判定(第 {errs[0][0]} 行:{errs[0][1]});逐處看 lumos lint <計劃>" if errs else None
+    open_qs = [] if errs else sorted((q for q in qs if q["stage"] == stage and q["status"] in ("待查", "待人")), key=_pq_stage_sort_key)
     if as_json:
-        print(json.dumps({"stage": stage, "facets": facets}, ensure_ascii=False, indent=2))
-        return 0
+        out = {"stage": stage, "facets": facets}
+        if qs and not errs:
+            out["questions"] = [{k: q.get(k) for k in ("id", "text", "stage", "status", "blocking", "irreversible")} for q in open_qs]
+        if err:
+            out["questions_error"] = err
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 2 if err else 0
     print(f"[pitfalls] 階段:{stage}")
     print(f"  需求風險面({len(facets)} 項;每一項寫成這份需求的具體問題,先自己查、只把要人決定的交給人):")
     for f in facets:
         print(f"    - [{f['id']}] {f['q']}")
+    if open_qs:
+        print(f"  待決問題({len(open_qs)} 題還沒結;阻塞在前、不可逆其次):")
+        for q in open_qs:
+            tag = ("[阻塞]" if q["blocking"] else "") + ("[不可逆]" if q["irreversible"] else "")
+            print(f"    - [{q['id']}] {q['text']} {tag}({q['status']})".replace("  (", " ("))
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -50810,6 +52144,8 @@ HELP_WHEN = {
     "decision-reindex": "舊筆記的決策沒編號,補上 dN。--all 全部。",
     "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
     "decision-add": "在某篇記一條決策,回編號。",
+    "question-add": "計劃有還沒決定的問題時,記進開頭欄位的待決問題清單,回題號;標阻塞的需求或架構題沒結,規格閘不放進實作。",
+    "question-set": "待決問題有了答案或要改狀態時,一次改那一題的幾個鍵(鍵=值);寫入前先驗必附與阻塞規則。",
     "decision-amend": "改一條還沒推上去的決策的某個文字欄(已推上去的要用 decision-supersede 翻案)。",
     "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
     "uninstall": "移除全域 lumos 指令。",
@@ -51570,6 +52906,25 @@ def main():
     p.add_argument("--edge", dest="rc_edge", choices=["verified_by", "plan_refs"], help="邊型(方向語意明確者)")
     p.add_argument("--by", dest="rc_by", choices=["ai", "human"], help="誰判的(ai 判的可抽查/翻案)")
     p.add_argument("--stale", dest="rc_stale", type=int, help="list:只列最後事件早於 N 天的 cascade(活動齡)")
+
+    p = sub.add_parser("question-add", help="新增一題待決問題到計劃開頭欄位 pending_questions(回題號)")
+    p.add_argument("note")
+    p.add_argument("text", help="問題本身(單行)")
+    p.add_argument("--class", dest="q_class", required=True, help="自由分類(非空單行),例:需求、資料、權限")
+    p.add_argument("--stage", dest="q_stage", required=True, help="需求/架構/實作/驗證/效能/交付")
+    p.add_argument("--status", dest="q_status", default="待查", help="待查/自答/待人/延後/已決/已驗(預設待查)")
+    p.add_argument("--blocking", dest="q_blocking", action="store_true", help="阻塞:需求或架構階段沒結,規格閘不放進實作")
+    p.add_argument("--irreversible", dest="q_irrev", action="store_true", help="不可逆:不能自答,要人決定")
+    p.add_argument("--decision", dest="q_decision", help='決策連結,寫成 "<節點>#dN"(decision-add 印的全域編號);本篇可寫 "#dN"——要加引號,shell 會把單獨的 #… 當註解')
+    p.add_argument("--tests", dest="q_tests", help="已驗時的測試名,半形逗號分隔(要在本篇驗收條款的 [test:] 裡)")
+    p.add_argument("--source", dest="q_source", help="自答時的出處")
+    p.add_argument("--reason", dest="q_reason", help="延後時的理由")
+
+    p = sub.add_parser("question-set", help="改一題待決問題的幾個鍵:lumos question-set <計劃> Q<n> 鍵=值 [鍵=值 …]")
+    p.add_argument("note")
+    p.add_argument("qid", metavar="Q<n>")
+    p.add_argument("pairs", nargs="+", metavar="鍵=值", help="只切第一個 =;鍵= (空值)拿掉選填鍵;id 不能改。"
+                   "用「鍵=值」而不是 set 那種「鍵 值」:已決要附決策這類跨鍵規則得一次改完才驗得過,而單獨一個 #d3 參數會被 shell 當註解吃掉")
 
     p = sub.add_parser("decision-add", help="T3 巢狀:新增一條 ADR 決策")
     p.add_argument("note")
@@ -52398,42 +53753,11 @@ def main():
         # capture-counts 已在 vault-free 段提前處理(見上)
 
     if args.cmd == "guard":
-        if args.gcmd == "list":
-            return cmd_guard_list(env, unbound_only=args.unbound)
-        if args.gcmd == "scaffold":
-            return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
-                                      args.type, args.claim, out_dir=args.out,
-                                      template=args.template, klass=args.klass,
-                                      platform=args.platform)
-        if args.gcmd == "plan":
-            return cmd_guard_plan(env, args.node, args.claim, args.gp_plan, args.gp_phase,
-                                  args.gp_due, args.gp_why, args.gp_owner, args.gp_name)
-        if args.gcmd == "settle":
-            return cmd_guard_settle(env, args.ref, args.gs_test, date=args.gs_date)
-        if args.gcmd == "abandon":
-            return cmd_guard_abandon(env, args.ref, args.ga_why)
-        if args.gcmd == "required":
-            return cmd_guard_required(env)
-        if args.gcmd == "bind":
-            return cmd_guard_bind(env, args.node, args.invariant, args.method,
-                                  platform=args.platform)
-        if args.gcmd == "audit":
-            return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
-        if args.gcmd == "kill-add":
-            return cmd_guard_kill_add(env, args.node, args.invariant, file=args.file,
-                                      old=args.old, new=args.new, test=args.test,
-                                      platform=args.gk_platform, note=args.note, covers=args.covers,
-                                      try_run=args.gk_try)
-        if args.gcmd == "kill-rm":
-            return cmd_guard_kill_rm(env, args.node, args.gkr_id)
-        if args.gcmd == "kill":
-            return cmd_guard_kill(env, args.node, invariant_substr=args.invariant,
-                                  platform_override=args.gk_platform,
-                                  as_json=args.gk_json, keep_worktree=args.keep_worktree,
-                                  id_prefixes=args.gk_id)
-        if args.gcmd == "trace":
-            return cmd_guard_trace(env, args.node)
-
+        try:   # 守衛既有邊界保留:WriteBlocked 是 RuntimeError 子類；其他既有 OSError 也仍回「擋下」rc2(代碼審 r6 合約席)
+            return _guard_dispatch(env, args)
+        except (RuntimeError, OSError) as e:   # ★不接 ValueError★:guard kill 讀到非 UTF-8 檔丟 UnicodeDecodeError、rc1 是既有約定(t_kill_recipe_check_matches_guard_kill 釘住),鄰居三種都接的寫法在這裡會改掉它
+            print(f"擋下:{e}", file=sys.stderr)
+            return 2
     if args.cmd == "sync-verified-by":
         return cmd_sync_verified_by(env, apply=args.apply)
 
@@ -52591,7 +53915,20 @@ def main():
             return _node_not_found(env, args.note)
         try:
             return cmd_decision_amend(env, rel, args.did, args.field, args.text)
-        except ValueError as e:
+        except (ValueError, RuntimeError, OSError) as e:   # 拿鎖逾時也走「擋下」(代碼審 r3)
+            print(f"擋下:{e}", file=sys.stderr)
+            return 2
+    if args.cmd in ("question-add", "question-set"):
+        rel = env.find(args.note)
+        if rel is None:
+            return _node_not_found(env, args.note)
+        try:
+            if args.cmd == "question-set":
+                return cmd_question_set(env, rel, args.qid, args.pairs)
+            return cmd_question_add(env, rel, args.text, args.q_class, args.q_stage, status=args.q_status,
+                                    blocking=args.q_blocking, irreversible=args.q_irrev, decision=args.q_decision,
+                                    tests=args.q_tests, source=args.q_source, reason=args.q_reason)[0]
+        except (ValueError, RuntimeError, OSError) as e:
             print(f"擋下:{e}", file=sys.stderr)
             return 2
     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
@@ -52649,5 +53986,59 @@ def main():
     return 2
 
 
+def _guard_dispatch(env, args):
+    """lumos guard 的各子指令(呼叫端統一接住拿鎖逾時與讀寫失敗)。
+    ★為什麼只有 guard 搬成獨立一支★(代碼審 待決問題改存開頭欄位 r5 架構席):guard 十幾個子指令要共用同一組接法(接拿鎖逾時與
+    讀寫失敗、刻意不接 ValueError),搬成一支就只在呼叫處包一個 try,不用每個 return 各包一次;其他子指令群分支少、各自已有 try,
+    照舊留在 main() 裡內聯,沒有要全部改成這個形狀。
+    guard kill 的配方讀取是唯讀路徑，不走 load_raw_for_edit；非 UTF-8 仍由既有 guard 分派回 rc1，
+    不會被 WriteBlocked 的寫入拒絕語意改成 rc2(代碼審 r6 合約席)。"""
+    if args.gcmd == "list":
+        return cmd_guard_list(env, unbound_only=args.unbound)
+    if args.gcmd == "scaffold":
+        return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+                                  args.type, args.claim, out_dir=args.out,
+                                  template=args.template, klass=args.klass,
+                                  platform=args.platform)
+    if args.gcmd == "plan":
+        return cmd_guard_plan(env, args.node, args.claim, args.gp_plan, args.gp_phase,
+                              args.gp_due, args.gp_why, args.gp_owner, args.gp_name)
+    if args.gcmd == "settle":
+        return cmd_guard_settle(env, args.ref, args.gs_test, date=args.gs_date)
+    if args.gcmd == "abandon":
+        return cmd_guard_abandon(env, args.ref, args.ga_why)
+    if args.gcmd == "required":
+        return cmd_guard_required(env)
+    if args.gcmd == "bind":
+        return cmd_guard_bind(env, args.node, args.invariant, args.method, platform=args.platform)
+    if args.gcmd == "audit":
+        return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
+    if args.gcmd == "kill-add":
+        return cmd_guard_kill_add(env, args.node, args.invariant, file=args.file,
+                                  old=args.old, new=args.new, test=args.test,
+                                  platform=args.gk_platform, note=args.note, covers=args.covers,
+                                  try_run=args.gk_try)
+    if args.gcmd == "kill-rm":
+        return cmd_guard_kill_rm(env, args.node, args.gkr_id)
+    if args.gcmd == "kill":
+        return cmd_guard_kill(env, args.node, invariant_substr=args.invariant,
+                              platform_override=args.gk_platform,
+                              as_json=args.gk_json, keep_worktree=args.keep_worktree,
+                              id_prefixes=args.gk_id)
+    if args.gcmd == "trace":
+        return cmd_guard_trace(env, args.node)
+    return 2
+
+
+def _cli():
+    """命令列入口:寫入被拒的信號若沒有被分派段接住,在這裡印「擋下」回 2,不讓它變成 traceback。
+    不用裝飾器、也不讓各分派重新拋出(代碼審 r8 架構席:那是第二、三種接法);分派函式維持叫 main,精簡版產生器靠這個形狀刪指令。"""
+    try:
+        return main()
+    except WriteBlocked as exc:
+        print(f"擋下:{exc}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cli())
