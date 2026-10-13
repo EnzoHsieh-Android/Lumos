@@ -1,0 +1,163 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index d3f8d91d..7d110df4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -22676,24 +22676,20 @@ NEW_HINT = {
+ }
+ 
+ 
+ def cmd_new(env, ntype, name, today, plan=None, systems=None, code=None, responsibility=None):
+     if ntype not in TEMPLATES:
+         print(f"擋下:這個筆記類型工具不認得,沒建檔。可用的類型:{sorted(TEMPLATES)}", file=sys.stderr)
+         return 2
+     if "/" in name or "\\" in name or ".." in name or name.startswith("."):
+         print(f"擋下:名稱不能有斜線、「..」或以點開頭,不然檔案可能跑到圖譜外面: {name}", file=sys.stderr)
+         return 2
+-    # 計劃筆記的慣例是 Projects/<主題>_計劃(調研筆記是 _調研);照直覺只打主題時補上,免得建出不合慣例的檔名(示範回饋小修 S1)
+-    if ntype == "project" and not name.endswith(("_計劃", "_調研")):
+-        print(f"名稱補成 {name}_計劃(計劃筆記的慣例;要建調研筆記就用 {name}_調研)")
+-        name = f"{name}_計劃"
+     # 一鍵雙向(2026-08-05 收尾優化):verification 建檔當下填 plan_refs+對面 verified_by——
+     # 把「事後 sync-verified-by 撿漏」變「寫入時就對」。僅 verification 收這兩旗標。
+     if (plan or systems) and ntype != "verification":
+         print("擋下:--plan/--systems 只有建驗證紀錄(verification)時才能用,其他類型請拿掉", file=sys.stderr)
+         return 2
+     def _norm_rel(x):
+         x = x.strip().removesuffix(".md")
+         return x + ".md"
+     # 每支檔有家(2026-09-11,[S19]):建檔當下就講清楚它管哪幾支檔、負責什麼——出生時就要切對。
+     # ★全部先驗完才建檔★:建了一半才發現路徑錯,會留下一篇沒家的空殼。
+@@ -22794,20 +22790,26 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None, code=None, respons
+     except Exception:
+         pass
+     # [S13] 開了 Systems 節點卻沒說它管哪幾支檔:家從此是推筆記的入口,不管檔的節點永遠推不出來。
+     # 不擋——真的有「主題篇」這種東西;但它該在負責範圍裡講明為什麼。
+     if ntype == "system" and not code_rels:
+         print("  提醒:這篇沒說它管哪幾支檔(about_code 是空的)。不管任何程式檔的節點通常是「主題」不是「模組」"
+               "——改那些檔的時候,工具推不出這篇。")
+         print("    lumos append <節點> about_code <檔>")
+         print("  真的是主題篇,就在負責範圍裡講明它為什麼不管檔:")
+         print("    lumos set <節點> responsibility \"<為什麼不管檔、它負責什麼>\"")
++    # [示範回饋小修 S1] 計劃筆記的慣例是 Projects/<主題>_計劃;名稱完全沒有底線後綴時(照直覺只打主題)建好再提醒,
++    # 不擋、不改名——既有的 _調研、_草案 等寫法照用,改名會讓接著用原名下指令的人找不到這篇(代碼審 r1 架構對齊、通才席)
++    if ntype == "project" and "_" not in name:
++        print(f"  提醒:計劃筆記的慣例是 Projects/<主題>_計劃(調研筆記用 <主題>_調研),這篇名稱沒有後綴。要照慣例就刪掉這篇重建:")
++        print(f"    rm {path}")
++        print(f"    lumos new project {name}_計劃")
+     for line in NEW_HINT.get(ntype, []):
+         print(f"  {line}")
+     print(f"  內容填完先檢查這一篇,再跑全圖健檢:\n    lumos lint {name}\n    lumos doctor\n  (寫法規範在 lumos-project-notes skill)")
+     return 0
+ 
+ 
+ # ═══════════════════════ 階段三: archive(lumos 自做,單遍) ═══════════════════════
+ 
+ ARCHIVABLE = {"pass", "done", "superseded"}
+ 
+@@ -27863,25 +27865,25 @@ _PITFALL_GENERAL = [
+     "資源——連線/檔案/鎖有沒有確定釋放?",
+     # 風險類廣度反問(已知坑機械前置 S0,2026-08-08):寫死 4 類太少,改反問在場 LLM
+     # 自我分類——分類是語意判斷,不該 regex 猜。★三處同步:此處+templates.md:31+design-loop skill★
+     "列出此功能碰到的風險類(不限既有金流/寄送/不可逆/守衛面:認證/並發/快取/遷移/PII/限流/狀態同步…),逐類答隱患;無則寫『無+為什麼』。",
+ ]
+ # 需求風險面(情境出題;內容源與挑選理由在 [[Systems/情境出題]]):鍵沿用 _STACK_QUESTION_SPECS 的 id/q/when,多一個 stage。
+ # 每一項是「什麼情況下要釐清什麼」,AI 依當下需求寫成具體問題;不是固定題目,也不是規格閘的風險類。when 比對計劃筆記文字。
+ _REQUIREMENT_FACETS = [
+     {"id": "req-success", "stage": "需求", "q": "「成功」「完成」的定義是什麼?驗收條件能不能量?", "when": [r"."]},
+     {"id": "req-scope", "stage": "需求", "q": "本期範圍到哪裡?哪些明確不做?", "when": [r"."]},
+-    {"id": "req-scale", "stage": "需求", "q": "量級多大?峰值每秒幾筆、資料量多少、熱點集中在少數幾筆還是分散?這會決定架構,要在定架構之前問。", "when": [r"大量|高併發|同時|搶|秒殺|活動|尖峰|流量"]},
++    {"id": "req-scale", "stage": "需求", "q": "量級多大?峰值每秒幾筆、資料量多少、熱點集中在少數幾筆還是分散?這會決定架構,要在定架構之前問。", "when": [r"大量|高併發|搶購|搶票|秒殺|尖峰|流量"]},
+     {"id": "req-duplicate", "stage": "需求", "q": "同一個請求重送、重按、重試時要怎麼處理?", "when": [r"API|送出|提交|下單|兌換|預約|付款|扣|建立|寫入"]},
+     {"id": "arch-necessity", "stage": "架構", "q": "要引入的新元件解決什麼問題?有沒有更簡單的做法?誰維運?", "when": [r"(?i)redis|kafka|佇列|queue|快取|cache|微服務|拆成|新服務|訊息"]},
+     {"id": "arch-consistency", "stage": "架構", "q": "同一份資料在哪幾個地方各有一份?誰是準?可以晚多久同步?", "when": [r"拆|服務|快取|同步|一致|副本|非同步|事件"]},
+-    {"id": "arch-sync", "stage": "架構", "q": "結果要當場回,還是先收下、之後再通知(會牽涉要不要上佇列、客戶端怎麼查結果)?", "when": [r"大量|高併發|同時|搶|秒殺|活動|尖峰|流量|排隊|非同步"]},
++    {"id": "arch-sync", "stage": "架構", "q": "結果要當場回,還是先收下、之後再通知(會牽涉要不要上佇列、客戶端怎麼查結果)?", "when": [r"大量|高併發|搶購|搶票|秒殺|尖峰|流量|排隊|非同步"]},
+     {"id": "arch-irreversible", "stage": "架構", "q": "哪些決定做了回不去(資料格式、對外介面、刪除)?要誰點頭?", "when": [r"."]},
+     {"id": "impl-concurrency", "stage": "實作", "q": "同一份資源被同時改會怎樣?要怎麼防?", "when": [r"庫存|餘額|點數|名額|預約|搶|併發|同時|高併發|扣"]},
+     {"id": "impl-failure", "stage": "實作", "q": "中途失敗、外部系統沒回應、逾時的時候,資料會停在什麼狀態?怎麼補?", "when": [r"寄|通知|外部|第三方|非同步|呼叫|事件|訊息|物流"]},
+     {"id": "verify-evidence", "stage": "驗證", "q": "要用什麼證據證明做對了?哪幾條要能自動重跑?", "when": [r"."]},
+     {"id": "perf-target", "stage": "效能", "q": "流量與延遲目標是多少?在什麼負載下、用什麼口徑量?", "when": [r"(?i)高併發|大量|流量|延遲|毫秒|\bms\b|rps|qps|效能|壓測"]},
+     {"id": "deliver-ops", "stage": "交付", "q": "出事時怎麼知道、怎麼排查、怎麼回復?", "when": [r"."]},
+     {"id": "deliver-security", "stage": "交付", "q": "誰能做這件事?有哪些敏感資料?邊界在哪?", "when": [r"會員|使用者|帳號|權限|個資|付款|登入|管理員"]},
+ ]
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0feb701a..8c21267d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -1872,55 +1872,59 @@ def t_check3_prefix_no_false_pass():
+ 
+ 
+ # ── BUG-6: cmd_new 路徑逃脫 ──
+ def t_new_path_traversal():
+     v = mkvault()
+     r = run(v, "new", "system", "../../../tmp/injected")
+     check("BUG-6 new 路徑逃脫被拒(exit 2)", r.returncode == 2, r.stderr)
+     check("BUG-6 未在 vault 外建檔", not (v.parent.parent.parent / "tmp" / "injected.md").exists())
+ 
+ 
+-def t_new_project_appends_plan_suffix():
+-    """[示範回饋小修 S1] new project 的名稱沒有「_計劃」「_調研」結尾就補成「_計劃」並說一聲;已有結尾原樣;其他類型不補。
+-    判準來源:圖譜紀律「計劃一律寫成 Projects/<主題>_計劃」(後端示範時照直覺打「訂單下單」建出不合慣例的檔名)。"""
++def t_new_project_warns_missing_plan_suffix():
++    """[示範回饋小修 S1] new project 的名稱完全沒有底線後綴時,照名稱建檔、建好後提醒慣例與重建指令;有後綴(_計劃、_調研、_草案)不提醒、不改名。
++    判準來源:圖譜紀律「計劃一律寫成 Projects/<主題>_計劃」;後端示範時照直覺打「訂單下單」建出不合慣例的檔名。
++    不改名的理由:專案既有 _調研、_草案 等寫法,改名會讓接著用原名下指令的人找不到(代碼審 r1)。"""
+     v = mkvault()
+     r = run(v, "new", "project", "訂單下單")
+-    check("① 沒結尾:建成 訂單下單_計劃.md", r.returncode == 0 and (v / "Projects" / "訂單下單_計劃.md").exists()
+-          and not (v / "Projects" / "訂單下單.md").exists(), r.stdout + r.stderr)
+-    check("① 輸出提到補了後綴", "訂單下單_計劃" in r.stdout and "補" in r.stdout, r.stdout)
+-    r2 = run(v, "new", "project", "已有結尾_計劃")
+-    check("② 已是 _計劃:原樣,不疊成 _計劃_計劃", r2.returncode == 0 and (v / "Projects" / "已有結尾_計劃.md").exists()
+-          and not (v / "Projects" / "已有結尾_計劃_計劃.md").exists(), r2.stdout + r2.stderr)
+-    r3 = run(v, "new", "project", "某題_調研")
+-    check("③ _調研 結尾:原樣", r3.returncode == 0 and (v / "Projects" / "某題_調研.md").exists()
+-          and not (v / "Projects" / "某題_調研_計劃.md").exists(), r3.stdout + r3.stderr)
++    check("① 沒後綴:照原名建檔(不改名)", r.returncode == 0 and (v / "Projects" / "訂單下單.md").exists()
++          and not (v / "Projects" / "訂單下單_計劃.md").exists(), r.stdout + r.stderr)
++    check("① 建好後提醒慣例,並給重建指令", "提醒:計劃筆記的慣例" in r.stdout and "lumos new project 訂單下單_計劃" in r.stdout
++          and r.stdout.index("骨架建好了") < r.stdout.index("提醒:計劃筆記的慣例"), r.stdout)
++    for named in ("已有結尾_計劃", "某題_調研", "規劃_草案"):
++        rr = run(v, "new", "project", named)
++        check(f"② {named}:原樣建檔、不提醒", rr.returncode == 0 and (v / "Projects" / f"{named}.md").exists()
++              and not (v / "Projects" / f"{named}_計劃.md").exists() and "提醒:計劃筆記的慣例" not in rr.stdout, rr.stdout + rr.stderr)
+     r4 = run(v, "new", "system", "下單入口")
+-    check("④ system 不補", r4.returncode == 0 and (v / "Systems" / "下單入口.md").exists(), r4.stdout + r4.stderr)
+-    r5 = run(v, "new", "project", "訂單下單")
+-    check("⑤ 補完後撞到既有的同名計劃:照樣擋下、不重建", r5.returncode == 2 and "已經有了" in r5.stderr, r5.stdout + r5.stderr)
++    check("③ system 沒底線也不出計劃的提醒", r4.returncode == 0 and "提醒:計劃筆記的慣例" not in r4.stdout, r4.stdout)
+ 
+ 
+ def t_stage_facets_scale_and_sync():
+     """[示範回饋小修 S2] 需求提到大量同時操作時,需求階段要問量級(req-scale)、架構階段要問同步或排隊(arch-sync);
+     沒提量級的需求兩者都不出。判準來源:後端示範時「量級多大」「同步還是排隊」是決定架構的兩題,原表把量級只放在效能階段。"""
+     root = Path(tempfile.mkdtemp(prefix="gctl-facet-"))
+     (root / ".git").mkdir()
+     rush = root / "rush.md"
+     rush.write_text("# 搶購\n\n需求:做一個搶購下單的 API,活動開始時大量使用者同時下單,不能賣超過庫存。\n", encoding="utf-8")
+     calm = root / "calm.md"
+     calm.write_text("# 會員\n\n需求:做一個會員資料修改頁,使用者可以改暱稱。\n", encoding="utf-8")
++    # 一般句子裡常見的「同時」「活動」不算量級訊號(代碼審 r1 通才席:改密碼的需求被誤判成要問量級)
++    busy_words = root / "busy_words.md"
++    busy_words.write_text("# 設定頁\n\n需求:使用者修改密碼時,同時更新暱稱與信箱,並在活動紀錄顯示。\n", encoding="utf-8")
+     def stage(md, st):
+         return run(root, "pitfalls", str(md), "--repo", str(root), "--stage", st).stdout
+     check("① 搶購需求:需求階段列 req-scale", "[req-scale]" in stage(rush, "需求"), stage(rush, "需求")[-500:])
+     check("② 搶購需求:架構階段列 arch-sync", "[arch-sync]" in stage(rush, "架構"), stage(rush, "架構")[-500:])
+     check("③ 搶購需求:req-scale 不出現在架構階段、arch-sync 不出現在需求階段",
+           "[req-scale]" not in stage(rush, "架構") and "[arch-sync]" not in stage(rush, "需求"), "")
++    check("⑤ 只有「同時」「活動」這類一般詞:兩者都不出現",
++          "[req-scale]" not in stage(busy_words, "需求") and "[arch-sync]" not in stage(busy_words, "架構"),
++          stage(busy_words, "需求")[-300:] + stage(busy_words, "架構")[-300:])
+     check("④ 會員資料頁:兩者都不出現", "[req-scale]" not in stage(calm, "需求") and "[arch-sync]" not in stage(calm, "架構"),
+           stage(calm, "需求")[-300:] + stage(calm, "架構")[-300:])
+ 
+ 
+ def t_new_teaches_tags():
+     # new 在執行當下教標籤規則:stdout 含合約鏈提示,檔案骨架含完整符號行
+     v = mkvault()
+     r = run(v, "new", "system", "AcctSvc", expect_rc=0)
+     check("new system: stdout 教 ★INVARIANT★ + [test:] 合約鏈",
+           "★INVARIANT★" in r.stdout and "[test:" in r.stdout, r.stdout)

@@ -43,7 +43,7 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
    - 折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。
    - 審計修正紀錄每輪固定兩行(新案適用、舊案不回溯)——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;blocking 數帳上無對應欄位,來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。
    - `git commit`(本機提交;推之前跟實作壓成同一個功能提交,說明照紀律區塊〈提交與推送〉,[[Projects/提交推送規範_計劃]])。
-7. **記帳**(折完才記,指紋要是折入後的版本;記帳途中不動被審文件)。記帳型態:散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記;「每席各帶一筆 severity 帳」的 panel 型態只存在於舊迴圈帳面。carrier 選席:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)。
+7. **記帳**(折完才記,指紋要是折入後的版本;記帳途中不動被審文件)。記帳型態:散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記;「每席各帶一筆 severity 帳」的 panel 型態只存在於舊迴圈帳面。carrier 選席:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)。**carrier 那筆的 `--findings` 填它自己報告的存活條數(不能多於它報告裡的條數),全輪所有發現的 id 放在 `--findings-set`**——照「彙整全輪」字面把全輪條數填進 `--findings` 會被擋(2026-10-13 後端示範碰到)。
    ```
    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
      --findings-set <id串> --folded-set <id串> --accepted-set <id串> --accept-reason <id=理由> \

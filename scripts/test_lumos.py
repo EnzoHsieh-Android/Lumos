@@ -1879,6 +1879,70 @@ def t_new_path_traversal():
     check("BUG-6 未在 vault 外建檔", not (v.parent.parent.parent / "tmp" / "injected.md").exists())
 
 
+def t_new_project_warns_missing_plan_suffix():
+    """[示範回饋小修 S1] new project 的名稱完全沒有底線後綴時,照名稱建檔、建好後提醒慣例與重建指令;有後綴(_計劃、_調研、_草案)不提醒、不改名。
+    判準來源:圖譜紀律「計劃一律寫成 Projects/<主題>_計劃」;後端示範時照直覺打「訂單下單」建出不合慣例的檔名。
+    不改名的理由:專案既有 _調研、_草案 等寫法,改名會讓接著用原名下指令的人找不到(代碼審 r1)。"""
+    v = mkvault()
+    r = run(v, "new", "project", "訂單下單")
+    check("① 沒後綴:照原名建檔(不改名)", r.returncode == 0 and (v / "Projects" / "訂單下單.md").exists()
+          and not (v / "Projects" / "訂單下單_計劃.md").exists(), r.stdout + r.stderr)
+    import shlex as _shlex
+    _rebuild = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("lumos new project ")]
+    check("① 建好後提醒慣例,並給重建指令(照貼切出的名稱是 訂單下單_計劃)", "提醒:計劃筆記的慣例" in r.stdout
+          and len(_rebuild) == 1 and _shlex.split(_rebuild[0])[3:] == ["訂單下單_計劃"]
+          and r.stdout.index("骨架建好了") < r.stdout.index("提醒:計劃筆記的慣例"), r.stdout)
+    for named in ("已有結尾_計劃", "某題_調研", "規劃_草案"):
+        rr = run(v, "new", "project", named)
+        check(f"② {named}:原樣建檔、不提醒", rr.returncode == 0 and (v / "Projects" / f"{named}.md").exists()
+              and not (v / "Projects" / f"{named}_計劃.md").exists() and "提醒:計劃筆記的慣例" not in rr.stdout, rr.stdout + rr.stderr)
+    r4 = run(v, "new", "system", "下單入口")
+    check("③ system 沒底線也不出計劃的提醒", r4.returncode == 0 and "提醒:計劃筆記的慣例" not in r4.stdout, r4.stdout)
+    # 提醒的指令要能照貼:名稱帶空白、$、單引號時,shell 切出來的參數要剛好是那個檔(代碼審 r2:沒加引號會刪到別的檔)
+    for odd in ("y docs", "a$b", "O'Brien"):
+        ro = run(v, "new", "project", odd)
+        lines = [l.strip() for l in ro.stdout.splitlines()]
+        rm_line = next((l for l in lines if l.startswith("rm ")), "")
+        re_line = next((l for l in lines if l.startswith("lumos new project ")), "")
+        check(f"④ {odd!r}:rm 那行照貼只刪這一篇", _shlex.split(rm_line)[1:] == [str(v / "Projects" / f"{odd}.md")], rm_line)
+        check(f"④ {odd!r}:重建那行照貼名稱正確", _shlex.split(re_line)[3:] == [f"{odd}_計劃"], re_line)
+
+
+def t_stage_facets_scale_and_sync():
+    """[示範回饋小修 S2] 需求提到大量同時操作時,需求階段要問量級(req-scale)、架構階段要問同步或排隊(arch-sync);
+    沒提量級的需求兩者都不出。判準來源:後端示範時「量級多大」「同步還是排隊」是決定架構的兩題,原表把量級只放在效能階段。"""
+    root = Path(tempfile.mkdtemp(prefix="gctl-facet-"))
+    (root / ".git").mkdir()
+    rush = root / "rush.md"
+    rush.write_text("# 搶購\n\n需求:做一個搶購下單的 API,活動開始時大量使用者同時下單,不能賣超過庫存。\n", encoding="utf-8")
+    calm = root / "calm.md"
+    calm.write_text("# 會員\n\n需求:做一個會員資料修改頁,使用者可以改暱稱。\n", encoding="utf-8")
+    # 一般句子裡常見的「同時」「活動」不算量級訊號(代碼審 r1 通才席:改密碼的需求被誤判成要問量級)
+    busy_words = root / "busy_words.md"
+    busy_words.write_text("# 設定頁\n\n需求:使用者修改密碼時,同時更新暱稱與信箱,並在活動紀錄顯示。\n", encoding="utf-8")
+    # 不含「大量」的搶量寫法也要觸發(代碼審 r2:原本只有 rush 一句,而它含「大量」,新觸發詞沒人守)
+    rush_others = {}
+    for key, text in (("seckill", "秒殺活動當天開賣"), ("tickets", "演唱會搶票"), ("crowd", "上萬人同時搶限量球鞋"),
+                      ("season", "雙十一檔期預期千人同時結帳"), ("many", "熱門商品開賣很多人一起下單")):
+        f = root / f"{key}.md"
+        f.write_text(f"# {key}\n\n需求:{text}。\n", encoding="utf-8")
+        rush_others[key] = f
+    def stage(md, st):
+        return run(root, "pitfalls", str(md), "--repo", str(root), "--stage", st).stdout
+    check("① 搶購需求:需求階段列 req-scale", "[req-scale]" in stage(rush, "需求"), stage(rush, "需求")[-500:])
+    check("② 搶購需求:架構階段列 arch-sync", "[arch-sync]" in stage(rush, "架構"), stage(rush, "架構")[-500:])
+    for key, f in rush_others.items():
+        check(f"①b {key}:需求階段列 req-scale、架構階段列 arch-sync",
+              "[req-scale]" in stage(f, "需求") and "[arch-sync]" in stage(f, "架構"), stage(f, "需求")[-300:])
+    check("③ 搶購需求:req-scale 不出現在架構階段、arch-sync 不出現在需求階段",
+          "[req-scale]" not in stage(rush, "架構") and "[arch-sync]" not in stage(rush, "需求"), "")
+    check("⑤ 只有「同時」「活動」這類一般詞:兩者都不出現",
+          "[req-scale]" not in stage(busy_words, "需求") and "[arch-sync]" not in stage(busy_words, "架構"),
+          stage(busy_words, "需求")[-300:] + stage(busy_words, "架構")[-300:])
+    check("④ 會員資料頁:兩者都不出現", "[req-scale]" not in stage(calm, "需求") and "[arch-sync]" not in stage(calm, "架構"),
+          stage(calm, "需求")[-300:] + stage(calm, "架構")[-300:])
+
+
 def t_new_teaches_tags():
     # new 在執行當下教標籤規則:stdout 含合約鏈提示,檔案骨架含完整符號行
     v = mkvault()
