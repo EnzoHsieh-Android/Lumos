@@ -906,15 +906,26 @@ def _validate_scenario(sc):
     return None
 
 
+_LUMOS_MOD = []   # 載過的 scripts/lumos 模組(一次程序只載一次)
+
+
+def _load_lumos():
+    """載入 scripts/lumos 當模組,借它的單源函式(CODEX_HOME、Wilson 區間);載不進就丟例外,由呼叫端決定怎麼退。"""
+    if not _LUMOS_MOD:
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        path = str(ROOT / "scripts" / "lumos")
+        spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _LUMOS_MOD.append(mod)
+    return _LUMOS_MOD[0]
+
+
 def _codex_home_dir():
     """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
-    path = str(ROOT / "scripts" / "lumos")
     try:
-        spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
-        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-        return mod._codex_home()
+        return _load_lumos()._codex_home()
     except Exception as e:   # r2 delta #4:載不進(改到一半的語法錯)不能把整場判成儀器例外,退回同語意的預設
         print(f"  (hook_trace:載入 scripts/lumos 失敗,CODEX_HOME 退用預設:{type(e).__name__})", file=sys.stderr)
         env = os.environ.get("CODEX_HOME")
@@ -1243,7 +1254,111 @@ def summarize_results(results, arm="with"):
     return {"passed": p, "scored": n, "total": total, "valid_total": len(valid),
             "inconclusive": inconclusive, "mostly_truncated": mostly,
             "failed": [r.get("id") for r in valid if not r.get("passed")],
-            "excluded": [r.get("id") for r in excl], "line": line, "env_fps": env_fp_counts(valid)}
+            "excluded": [r.get("id") for r in excl], "line": line, "env_fps": env_fp_counts(valid),
+            "ids": [r.get("id") for r in valid]}
+
+
+# ★週評通知★(Projects/週評通知改看重複失敗與顯著下降_計劃):題目輪流抽、同一題隔幾週才再出現,單次沒過多半是雜訊;
+# 以前一題沒過就發 LINE,歷史 7 週響 5 週。改成只在「同一題最近兩次出現都沒過」或「本週通過率顯著低於同判準歷史」時通知;
+# 同判準歷史不到 _ALERT_MIN_WEEKS 週時照舊有題沒過就通知,原因寫明基準不足。
+_WEEK_SEED_RE = re.compile(r"^\d{4}-W\d{2}$")
+_ALERT_MIN_WEEKS = 3
+
+
+def _is_weekly_row(r):
+    return (isinstance(r, dict) and bool(_WEEK_SEED_RE.match(str(r.get("seed", ""))))
+            and isinstance(r.get("passed"), int) and isinstance(r.get("total"), int)
+            and r.get("arm", "with") == "with" and r.get("runs", 1) == 1)
+
+
+def _baseline_weeks(wk, this):
+    """同判準、帶題號、不是本週的過去週;同一週有多列(重跑)只留最後一列——不然同一次失敗會被算成連續兩次、基準週數也被灌水。
+    沒有題號的列(2026-10-03 起到本計劃之前)不算:算了就走過基準不足,重複失敗卻永遠判不出(代碼審 r1 正確性席)。"""
+    g = this.get("grader")
+    seen, out = set(), []
+    for r in reversed(wk[:-1]):
+        s = r.get("seed")
+        if (not g or r.get("grader") != g or s == this.get("seed") or s in seen or not r.get("ids")
+                or r.get("inconclusive") or r.get("fatal")):
+            continue
+        seen.add(s)
+        out.append(r)
+    return out[::-1]
+
+
+def _wilson():
+    """借 scripts/lumos 的 _wilson_interval(單源);載不進回 None。"""
+    try:
+        return _load_lumos()._wilson_interval
+    except Exception:
+        return None
+
+
+def _repeated_failures(failed, same):
+    """本週沒過的題裡,最近一次「題號清單含它」的同判準過去週也沒過的那些。"""
+    out = []
+    for q in failed:
+        prev = next((r for r in reversed(same) if q in (r.get("ids") or [])), None)
+        if prev is not None and q in (prev.get("failed") or []):
+            out.append(q)
+    return out
+
+
+def weekly_alert(rows):
+    """週抽歷史各列(最後一筆週抽列是本週)→ {"notify": 要不要發 LINE, "reason": 一句原因}。"""
+    wk = [r for r in rows if _is_weekly_row(r)]
+    if not wk:
+        return {"notify": False, "reason": "沒有週抽紀錄"}
+    this = wk[-1]
+    failed = list(this.get("failed") or [])
+    if this.get("inconclusive") or this.get("fatal"):
+        return {"notify": True, "reason": "本週無法下結論或有儀器事故"}
+    same = _baseline_weeks(wk, this)
+    if len(same) < _ALERT_MIN_WEEKS:
+        return {"notify": bool(failed), "reason": f"同判準歷史只有 {len(same)} 週,基準不足,照舊有題沒過就通知"
+                + (":" + "、".join(failed) if failed else "")}
+    rep = _repeated_failures(failed, same)
+    if rep:
+        return {"notify": True, "reason": "同一題連續兩次出現都沒過:" + "、".join(rep)}
+    w = _wilson()
+    if w is None:
+        return {"notify": bool(failed), "reason": "載不進 Wilson 區間,照舊有題沒過就通知"}
+    k, n = sum(r["passed"] for r in same), sum(r["total"] for r in same)
+    cur, base = w(this["passed"], this["total"]), w(k, n)
+    if cur and base and cur[1] < base[0]:
+        return {"notify": True, "reason": f"本週 {this['passed']}/{this['total']} 顯著低於同判準過去 {len(same)} 週合計 {k}/{n}"
+                f"(本週區間上緣 {cur[1]:.2f} < 過去區間下緣 {base[0]:.2f})"}
+    return {"notify": False, "reason": ("單次沒過,下次抽到再看:" + "、".join(failed)) if failed else "全過"}
+
+
+def weekly_alert_line(history_path, seed):
+    """週抽才印一行「週評通知:是|否 — 原因」給自主迴圈解析;不是週抽、讀不了歷史、剛寫進去的最後一列不是這次的預設週抽
+    (跑多次、別的組別——不然判定講的是上一週),或計算出任何意外 → None(自主迴圈退回舊規則)。"""
+    if not _WEEK_SEED_RE.match(str(seed or "")):
+        return None
+    try:
+        raw = Path(history_path).read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError):   # 讀不到或編碼壞掉(UnicodeDecodeError 是 ValueError)都交回舊規則
+        return None
+    rows = []
+    for ln in raw:
+        try:
+            rows.append(json.loads(ln))
+        except ValueError:
+            continue
+    if not rows or not _is_weekly_row(rows[-1]) or rows[-1].get("seed") != seed:
+        return None
+    try:
+        v = weekly_alert(rows)
+    except Exception:   # 只影響要不要發 LINE;算不出就交回自主迴圈的舊規則,不讓探針帶著例外退出
+        return None
+    return f"週評通知:{'是' if v['notify'] else '否'} — {v['reason']}"
+
+
+def weekly_alert_message(summary_line, alert):
+    """要通知時給自主迴圈的整句 LINE 訊息(python 組好、shell 只抽 MSG: 前綴,同 run_replay 的慣例)。"""
+    return (f"情境探針本週要看:{summary_line};{alert}"
+            "(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)")
 
 
 def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, model_secs=0.0, fatal=False):
@@ -1256,6 +1371,8 @@ def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, mode
            "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3)}
     if arm != "with" or runs > 1:
         rec.update({"arm": arm, "runs": runs})
+    if "ids" in summary:   # 這週有效場次抽了哪些題:週評要靠它算「這題上次出現時有沒有過」
+        rec["ids"] = summary["ids"]
     if summary.get("env_fps"):
         rec["env_fps"] = summary["env_fps"]
         if len([k for k in summary["env_fps"] if k != "null"]) > 1:   # 取不到的場次不算一種環境(r2 正確性席)
@@ -1570,6 +1687,11 @@ def main():
             with os.fdopen(_open_history(a.history), "a", encoding="utf-8") as hf:
                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
+            alert = weekly_alert_line(a.history, a.seed)
+            if alert:
+                print(alert)
+                if alert.startswith("週評通知:是"):
+                    print("MSG:" + weekly_alert_message(summ["line"].splitlines()[0], alert))
         if retained is not None:
             print(f"保留最後副本: {retained}", file=sys.stderr)
     if bad or fatal:
