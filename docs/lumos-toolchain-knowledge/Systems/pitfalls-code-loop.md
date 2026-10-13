@@ -212,3 +212,9 @@ WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存�
 計劃模式多一個 `--stage <階段>`:先列那一階段的需求風險面(表在 [[Systems/情境出題]]),再列開頭欄位 `pending_questions` 那一階段還沒結(待查、待人)的題,阻塞在前、不可逆其次、同級照題號數字;清單讀不懂照印風險面再回 2;`--json` 有題才多 `questions` 鍵、讀不懂多 `questions_error`。讀法只吃檔案文字、不需要筆記庫(做法見 [[Projects/待決問題改存開頭欄位_計劃]])。[test:t_qfm_stage_lists_open_questions]
 REVISIT:2027-01-31 `--stage` 目前不列待決問題:開頭欄位版上線後把題目清單接回 `--stage`,還沒做就決定續做或撤案 [closed:2026-10-12 開頭欄位版上線:規格閘讀 pending_questions 擋阻塞沒結的需求與架構題,--stage 接回題目清單,見 [[Projects/待決問題改存開頭欄位_計劃]]]
 不帶 `--stage` 時輸出不變;階段寫錯、或跟 `--diff` 一起用回 2(`--diff` 只收改動範圍、不接計劃)。綁的測試 `t_backend_qo_stage_facets_only`。`--stage` 的參數檢查(階段值、不能和 `--diff` 並用、要給計劃路徑)放在 `--stage` 自己的函式裡,讓主指令只多一個分支(推送前新增告警閘:主指令在合併基準時複雜度就已超標,這次只多 1)。
+
+## 手動 code-loop check 的預設起點取最近的主線(2026-10-13)
+
+WHY:手動 `code-loop check` 不帶範圍時,起點改成「主線候選合起來跟 HEAD 的最近共同祖先」:候選沿用推送閘的 `_push_mainlines`(遠端取這條分支上游所在的遠端,沒有就用 origin),只多加本機 main/master(手動檢查在推送前跑,本機主線可能有還沒推的提交);不再照「先本機 main、再 master」的固定順序取第一個 [出處:2026-10-13 本會談實測:本機 main 落後遠端 52 個提交,範圍把別人已合併的高風險改動算進來、印出 tier=high] [因:推送閘的起點早就因同一個理由改成全部候選一起算,候選清單與挑法(`_push_pick_base`)都重用,不另立第三套主線判法(代碼審 r1 架構對齊席)] [不選:掃全部遠端(過期 fork 的 main 若含 HEAD,整條分支會被當成沒有改動而少擋,r1 單審席)、改成優先遠端 main(遠端可能落後本機未推的主線提交,一樣是固定順序)] [test:t_codeloop_default_base_prefers_newest_mainline]
+
+REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_codeloop_default_base`,相同就刪這行(代碼審 r2 架構對齊席)

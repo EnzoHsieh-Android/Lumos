@@ -15377,6 +15377,19 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt)
     if seq:
         width = 1   # 單 reviewer;cap 沿 _TIER_PARAMS["standard"][1]=3(分量本就正確,不另覆寫)
+    # ★人數以應派名冊為準★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解):佔人數的必派席有幾個就是幾人審。
+    # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
+    # ★人數以應派名冊為準,但已退役 panel 閘的舊迴圈除外★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解)。
+    # 新迴圈(首筆帳在 panel 閘退役日之後)代問的是處置閘,處置閘不收最少人數,印名冊的人數不會改到任何判定;
+    # 舊 panel 迴圈代問的是 panel 閘,它拿這個數字當每輪最少人數,印的跟閘要的都維持 _TIER_PARAMS 原值——
+    # 第一版只改印的數字,代碼審 r2 單審席實跑出「印 1 人、閘要 3 人」;再前一版連閘一起改,r1 單審席抓到會放寬舊迴圈的閘。
+    # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
+    gate_width = width
+    old_panel = panel_fmt and not light and not _panel_retired_for(rounds)
+    _roster0, _rnote0 = _roster_next_payload(loop_id, eff_tier)
+    if not old_panel and _roster0 and _roster0.get("seats"):
+        width = sum(1 for _s in _roster0["seats"] if _s.get("occupies_w") and _s.get("requirement") != "conditional") or width
+        gate_width = width
     # ── tier↔格式一致性(code-loop r1 折入:格式推導可被繞——high 漏帶 --round 會走鬆的 legacy 閘;
     #    2026-08-18 放寬單一象限:code∧standard∧無round=循序設計行為,不再誤擋——歷史三個循序 loop
     #    因此被迫落 legacy cap6,見 Issues/loop-next吐不可宣告的tier) ──
@@ -15393,8 +15406,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
 
     def emit(phase, extra=None):
         out = {"phase": phase, "tier": eff_tier, "orchestrator": eff_orch, "round": n_next, "width": width,
-               "min_seats": width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
-        _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
+               "min_seats": gate_width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
+        _roster, _rnote = _roster0, _rnote0
         # JSON 消費者也要拿到相對家族(code-codex-s2 r1 單reviewer F2):不改 family 欄(_TIER_ROSTER 契約),加 relative_family 與 orchestrator;複製一份別動共用表
         if _roster is None:
             out["roster"] = None
@@ -15683,7 +15696,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         else:
             rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
                                  spec=spec, repo=repo, panel=(panel_fmt and not light),
-                                 light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+                                 light=light, min_seats=gate_width)   # 恆傳(light/legacy=1;code-loop r1 折入)
     if rc == 2:
         sys.stderr.write(buf.getvalue())
         return 2
@@ -47225,7 +47238,7 @@ def _push_mainlines(repo_root, remote, pushed_ref):
     ★跳過「就是這次被推的那條」★:候選指到的 refs/remotes/<遠端>/<分支> 跟 refs/remotes/<--push-remote>/<被推分支>
     完全相同才跳過——遠端與分支都要比(r3 正確性席:只比分支短名時,推 fork 的 main 會把正本的 main 也跳過)。
     跟 _mainline_ref(筆記形狀擋、每支檔有家、筆記內容審用的主線判法,只認 main/master 的 upstream)並存,理由與收斂路見
-    Issues/推送前其他閘的範圍在合過主線時會多算。"""
+    Issues/推送前其他閘的範圍在合過主線時會多算。手動 code-loop check 的預設起點(_codeloop_default_base)也用這份候選,只多加本機 main/master。"""
     pushed = pushed_ref[len("refs/heads/"):] if (pushed_ref or "").startswith("refs/heads/") else None
     target = f"refs/remotes/{remote}/{pushed}" if (remote and pushed) else None
     cands = ([f"refs/remotes/{remote}/HEAD"] if remote else []) + ["main@{upstream}", "master@{upstream}"] \
@@ -47388,7 +47401,7 @@ def _mainline_ref(repo_root, remote_only=False):
     回 (ref 名, sha) 或 None。remote_only=True 只認 upstream(筆記形狀擋:推主線時本地 main 就是要推的頂端,
     拿它當「已在主線上」會把整批都排除掉)。
     存量漂移檢查的推送起點另用 _push_mainlines(遠端 HEAD、遠端 main/master 也算候選、跳過被推的那條、全部候選一起算分岔點);
-    兩套並存的理由與收斂路見 _lens_push_base 的說明。"""
+    兩套並存的理由與收斂路見 _lens_push_base 的說明。手動 code-loop check 的預設起點(_codeloop_default_base)走 _push_mainlines 那套。"""
     for cand in (("main@{upstream}", "master@{upstream}") if remote_only else ("main@{upstream}", "master@{upstream}", "main", "master")):
         sha = _lens_full_sha(repo_root, cand)
         if sha:
@@ -50933,6 +50946,43 @@ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
     return tpl
 
 
+def _codeloop_default_base(repo_root):
+    """手動 code-loop check 不帶範圍時的起點 → sha 或 None。
+    主線候選沿用推送閘的 _push_mainlines(遠端 HEAD、main/master 的 upstream、遠端 main/master),只多加本機 main/master——
+    手動檢查在推送之前跑,本機主線可能有還沒推上去的提交;遠端取這條分支在 git 設定登記的上游遠端(要真的存在;上游是本機分支不算),沒有就用 origin,再沒有而只有一個遠端就用它(不掃全部遠端:
+    過期的 fork 遠端若剛好含 HEAD,整條分支會被當成沒有改動而少擋,代碼審 r1 單審席)。
+    找得到的候選一起交給 `git merge-base --all HEAD <候選…>` 算最近的共同祖先,多個時照 _push_pick_base 取歷史最長的。
+    ★不照固定順序取第一個★:原本先試本機 main,本機 main 落後遠端時會把別人已合併的改動算進範圍、印錯分級(2026-10-13 落後
+    52 個提交、誤判 tier=high);推送閘的起點早就因同一個理由改成全部候選一起算(_push_range_start 的說明)。"""
+    rl = _lens_git(repo_root, "remote")
+    remotes = rl.stdout.split() if rl is not None and rl.returncode == 0 else []
+    remote = None
+    br = _lens_git(repo_root, "symbolic-ref", "-q", "--short", "HEAD")
+    if br is not None and br.returncode == 0 and br.stdout.strip():
+        rc = _lens_git(repo_root, "config", "--get", f"branch.{br.stdout.strip()}.remote")
+        name = rc.stdout.strip() if rc is not None and rc.returncode == 0 else ""
+        if name in remotes:          # 上游是本機分支時 remote 是「.」,不算(r2 單審席:拿 @{upstream} 切斜線會把 feature/base 切成 feature)
+            remote = name
+    if remote is None:
+        remote = "origin" if "origin" in remotes else (remotes[0] if len(remotes) == 1 else None)
+    mls, err = _push_mainlines(repo_root, remote, None)
+    if err:
+        return None
+    shas = [sha for _n, sha in mls]
+    for local in ("refs/heads/main", "refs/heads/master"):
+        sha = _lens_full_sha(repo_root, local)
+        if sha:
+            shas.append(sha)
+    shas = list(dict.fromkeys(shas))
+    if not shas:
+        return None
+    r = _lens_git(repo_root, "merge-base", "--all", "HEAD", *shas)
+    bases = [x for x in (r.stdout.split() if r is not None and r.returncode == 0 else []) if _LENS_SHA_RE.match(x)]
+    if not bases:
+        return None
+    return _push_pick_base(repo_root, bases, None, "主線", "")[0]
+
+
 def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
@@ -50961,15 +51011,9 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     if diff_range is None:
         # 現行為:merge-base..HEAD 推導(向後相容)
         head_sha = _codeloop_git_head(repo_root)
-        mb = None
-        for base_branch in ("main", "master"):
-            r = _sp.run(["git", "merge-base", "HEAD", base_branch],
-                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
-            if r.returncode == 0 and r.stdout.strip():
-                mb = r.stdout.strip()
-                if mb == head_sha:
-                    return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
-                break
+        mb = _codeloop_default_base(repo_root)
+        if mb and mb == head_sha:
+            return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
         if not mb:
             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}

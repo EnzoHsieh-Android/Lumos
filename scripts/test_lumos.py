@@ -37164,6 +37164,89 @@ def t_loop_next_roster():
           and len(d5["roster"]["seats"]) == 1, r5.stdout[:300])
 
 
+def t_loop_next_width_matches_roster():
+    """loop next 印的「這輪要 N 人審」要等於應派名冊裡佔人數的必派席數——名冊是編制數字的單一來源;
+    但已退役 panel 閘的舊迴圈除外——它代問 panel 閘、拿這個數字當每輪最少人數,印的跟閘要的都維持分級原值(改收斂判準要走設計審)。
+    2026-10-13 實際踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),人數印 3,名冊卻只列一位審查員;
+    第一版修法連閘的最少人數一起改成 1(r1 單審席:放寬舊迴圈的閘),第二版只改印的數字(r2 單審席:印 1 人、閘要 3 人)。
+    新迴圈代問處置閘、不收最少人數,所以照名冊;預期值寫死,不從名冊重算。"""
+    import json as _j
+    vault, repo, spec, rec, disp = _mk_roster_fixture()
+
+    def check_one(loop, width, min_seats, *extra):
+        r = run(vault, "loop", "next", loop, "--orchestrator", "claude", "--json", *extra)
+        d = _j.loads(r.stdout.strip())
+        check("next 人數(%s %s):印 %s 人、閘最少 %s 人" % (loop, " ".join(extra), width, min_seats),
+              d.get("width") == width and d.get("min_seats") == min_seats, (d.get("width"), d.get("min_seats")))
+    for loop, tier, width, ms in (("dz-w1", "standard", 3, 3), ("dz-w2", "high", 5, 5), ("dz-w3", "light", 1, 1),
+                                  ("code-w1", "standard", 1, 1), ("code-w2", "high", 5, 5), ("code-w3", "light", 1, 1)):
+        check_one(loop, width, ms, "--tier", tier)
+    rec("code-w4", "r1", "正確性-sonnet")     # 一般分級代碼審、帳帶輪次(多人審格式);夾具帳日期 2026-08-18 在 panel 閘退役日前
+    check_one("code-w4", 3, 3)                 # 舊 panel 迴圈:代問 panel 閘,印的跟閘要的都是 3
+    import os as _os
+    _old = _os.environ.get("LUMOS_PANEL_RETIRE_CUTOFF")
+    _os.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = "2026-01-01"   # 把同一份帳當成退役日後的新迴圈 → 代問處置閘
+    try:
+        check_one("code-w4", 1, 1)
+        rh = run(vault, "loop", "next", "code-w4", "--orchestrator", "claude")
+        check("next 人數:新迴圈的一般分級代碼審帶輪次,人讀輸出寫 1 人審(跟名冊的單一審查員一致)", "這輪要 1 人審" in rh.stdout, rh.stdout[:200])
+    finally:
+        if _old is None:
+            _os.environ.pop("LUMOS_PANEL_RETIRE_CUTOFF", None)
+        else:
+            _os.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = _old
+
+def t_codeloop_default_base_prefers_newest_mainline():
+    """手動跑 code-loop check(不帶範圍)時,起點要取離 HEAD 最近的主線共同祖先:本機 main 落後、遠端追蹤的
+    main 已往前時,不能拿落後的本機 main 算範圍(2026-10-13 踩到:本機 main 落後 52 個提交,把別人已合併的
+    高風險改動算進這次範圍,印出錯的 tier=high)。另釘:不掃上游以外的遠端(過期 fork 含 HEAD 會少擋)、
+    HEAD 就在主線上時呼叫端照舊早退、沒有共同祖先回 None。"""
+    import subprocess as _sp, tempfile as _tf, shutil as _sh
+    m = _load_lumos_inproc()
+    root = Path(_tf.mkdtemp(prefix="gctl-cldb-"))
+    try:
+        def g(*a):
+            return _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True, check=True).stdout.strip()
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@t"); g("config", "user.name", "t")
+        g("remote", "add", "origin", str(root / "nowhere"))
+        (root / "a.txt").write_text("1\n", encoding="utf-8"); g("add", "."); g("commit", "-qm", "c1")
+        old = g("rev-parse", "HEAD")
+        (root / "a.txt").write_text("2\n", encoding="utf-8"); g("commit", "-qam", "c2 主線往前")
+        new = g("rev-parse", "HEAD")
+        g("update-ref", "refs/remotes/origin/main", new)
+        g("update-ref", "refs/heads/main", old)            # 本機 main 落後
+        g("checkout", "-q", "-b", "feat", new)
+        (root / "b.txt").write_text("x\n", encoding="utf-8"); g("add", "."); g("commit", "-qm", "feat")
+        feat = g("rev-parse", "HEAD")
+        check("code-loop 預設起點:取遠端追蹤 main(最近的共同祖先),不取落後的本機 main", m._codeloop_default_base(root) == new, "")
+        g("remote", "add", "fork", str(root / "nowhere2"))
+        g("update-ref", "refs/remotes/fork/main", feat)    # 過期 fork 的 main 剛好含 HEAD
+        check("code-loop 預設起點:上游以外的遠端不算候選(fork 含 HEAD 不會讓整條分支變成沒有改動)",
+              m._codeloop_default_base(root) == new, "")
+        v = m._codeloop_guard_verdict(root)
+        check("code-loop check 呼叫端:有改動時不走「merge-base == HEAD」早退", "merge-base == HEAD" not in str(v.get("reason")), v)
+        g("checkout", "-q", "--detach", new)
+        v2 = m._codeloop_guard_verdict(root)
+        check("code-loop check 呼叫端:HEAD 就在主線上 → 照舊早退(無 branch diff)", "merge-base == HEAD" in str(v2.get("reason")), v2)
+        g("checkout", "-q", "feat")
+        g("config", "branch.feat.remote", "fork"); g("update-ref", "-d", "refs/remotes/origin/main")
+        g("update-ref", "refs/remotes/fork/main", new)
+        check("code-loop 預設起點:分支上游登記在 fork → 用 fork 的 main", m._codeloop_default_base(root) == new, "")
+        g("config", "branch.feat.remote", "."); g("config", "branch.feat.merge", "refs/heads/main")
+        g("update-ref", "refs/remotes/origin/main", new); g("update-ref", "-d", "refs/remotes/fork/main")
+        check("code-loop 預設起點:上游是本機分支(remote=.)→ 不把分支名當遠端,退到 origin", m._codeloop_default_base(root) == new, "")
+        g("config", "--unset", "branch.feat.remote"); g("config", "--unset", "branch.feat.merge")
+        g("remote", "rename", "origin", "github"); g("remote", "remove", "fork")
+        check("code-loop 預設起點:只有一個遠端而且不叫 origin → 用它", m._codeloop_default_base(root) == new, "")
+        g("update-ref", "-d", "refs/remotes/github/main")
+        check("code-loop 預設起點:沒有遠端追蹤時照舊用本機 main", m._codeloop_default_base(root) == old, "")
+        g("checkout", "-q", "--orphan", "lone"); g("commit", "-qm", "孤兒")
+        check("code-loop 預設起點:跟主線沒有共同祖先 → None", m._codeloop_default_base(root) is None, "")
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_codeloop_default_base_prefers_newest_mainline")
+
 def t_loop_status_roster_check():
     """S3:--roster 觀測對帳(分桶/兼任/unknown 降級/conditional/三形狀/rc 不變/四模式落點)。"""
     import json as _j
