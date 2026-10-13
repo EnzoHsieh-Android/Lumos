@@ -1,0 +1,168 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index a27f6ec0..81934a28 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -106,21 +106,21 @@ related:
+ ## 探針修復的歷史脈絡（2026-10-03）
+ 
+ PITFALL: 首次修復穩定性試行重審 2db51cc4 時，讀 README 會冒充讀碼、Claude 非零退出混入有效樣本、逐題與整體分母不一致；前者來自判準放寬，退出碼缺口原已存在，分母矛盾在新增排除規則後暴露。出處 [[Verification/2026-10-03_修復穩定性試行第1案]]；後兩項防回歸測試 t_probe_repair_nonzero_exit、t_probe_repair_per_question_cli；讀碼問題尚未修好，重現與重啟條件見 [[Issues/探針讀碼證據不足]]。
+ 
+ WHY: 本次曾試把讀碼正則收窄到目標程式檔，但第二輪證明仍把搜尋路徑文字當讀碼，且誤傷先切目錄再讀檔；因此撤回這一候選，不把 shell 解析或工具結果關聯塞進同一修復。出處為該案 r2-correctness 與 r2-classification.json；下次處理讀碼判準，先依 [[Issues/探針讀碼證據不足]] 重估資料來源再實作。
+ 
+ ## 探針副本不帶答案(2026-10-11)
+ 
+ - PITFALL:情境探針的受測副本原樣複製題庫資料夾,受測 AI 打得開題庫判準與歷次結果,週評與消融的通過率可能偏高 [出處:Projects/世界解重新註解2026-10_評測_調研 核對:掃 132 場工具呼叫至少 4 場直接打開歷次結果] [根因:建副本只排除 node_modules 與 .venv,題庫判準、週抽歷史、歷次結果檔都跟著進副本] [修法:副本裡題庫與歷史換成佔位內容、檔名保留(有題目的考點是改名題庫檔),歷次結果檔刪掉] [test:t_probe_sandbox_hides_answer_bank]
+ - 只遮工作樹:副本帶著完整 git 歷史,刻意用 git 翻舊版本仍看得到題庫;要堵這條得改成不帶歷史的快照,會影響需要讀歷史的題目,另行裁定。
+-- WHY:Claude 執行器每場探針從 stream-json 的 system/init 與 SessionStart 的 hook_started 取穩定欄位(版本、模型、輸出風格、外掛@版本、skill、MCP、代理、斜線指令、工具、SessionStart 掛鉤名)算 12 碼指紋記進結果的 `env_fp`,週抽歷史記 `env_fps` 與兩種以上時的 `env_mixed`;Codex 執行器記 null 與原因 [出處:[[Projects/探針設定指紋_計劃]]] [因:受測會談載入跑探針那台機器的全部使用者層設定,2026-10-13 實測帶著 12 個外掛、67 個 skill 與使用者的輸出風格,換機器或多裝外掛通過率就可能變卻沒有紀錄] [不選:讀設定檔算指紋——寫了不代表真的載入;隔離使用者層——會改到探針量的東西本身,要先有這把尺] [test:t_probe_env_fingerprint_stable_fields] [test:t_probe_history_records_env_fps]
++- WHY:Claude 執行器每場探針從 stream-json 的 system/init 與 SessionStart 的 hook_started 取穩定欄位(版本、模型、輸出風格、外掛@版本、skill、MCP、代理、斜線指令、工具、SessionStart 掛鉤名)算 12 碼指紋記進結果的 `env_fp`,週抽歷史記 `env_fps` 與兩種以上時的 `env_mixed`;Codex 執行器記 null 與原因;SessionStart 掛鉤只算 init 之前、去重(會談中途壓縮再觸發的不算),取指紋任何意外都退成 null 不丟例外(那時模型已跑完,丟例外整場會被記成儀器例外) [出處:[[Projects/探針設定指紋_計劃]]] [因:受測會談載入跑探針那台機器的全部使用者層設定,2026-10-13 實測帶著 12 個外掛、67 個 skill 與使用者的輸出風格,換機器或多裝外掛通過率就可能變卻沒有紀錄] [不選:讀設定檔算指紋——寫了不代表真的載入;隔離使用者層——會改到探針量的東西本身,要先有這把尺] [test:t_probe_env_fingerprint_stable_fields] [test:t_probe_history_records_env_fps]
+ 
+ REVISIT:2026-11-11 裁定探針副本要不要改成不帶 git 歷史的快照(堵住用 git 翻舊題庫這條路)
+ 
+ ## 回頭條件
+ 
+ WHY: 第1案續辦改從成功工具回傳辨識目標片段，避免繼續解析shell字串；標記若加在既有快照後會被收工hook當作模型改碼，所以此題每次嘗試建立含標記的獨立乾淨副本，結束刪除。代價是多一次複製；只限此題，正式探針首次部署與runner格式升級時重驗耗時及截斷。出處 [[Projects/探針讀碼結果證據_計劃]] 的設計審M1及 [[Verification/2026-10-03_修復穩定性試行第1案續辦]]；第三輪仍未收斂，候選未放行，後續先交使用者裁決。
+ 
+ PITFALL: 設計審B1重現建立副本後Git定位環境變數被runner重新繼承，cwd不保證隔離；沿用既有清洗函式延伸到runner與清理。防回歸 t_probe_source_probe_git_env 在兩個暫存repo驗證外側內容不變；清理失敗停批由 t_probe_source_probe_main 驗證。來源同續辦驗證，不把未跑真模型的fixture當生產觀測。
+ 
+ PITFALL: 第三輪證明上項測試只覆蓋兩種定位環境，不能保證 Git 設定注入與 absolute gitfile 的隔離；出處及可重現步驟見 [[Issues/探針Git隔離的設定與絕對路徑缺口]]。讀碼證據仍有缺 ID 事件計分的反例，見 [[Issues/探針讀碼證據不足]]；兩項 Issue 都是下次重啟的必讀入口，現有綠測試不構成放行證據。
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 59878977..ba154539 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -327,55 +327,66 @@ def grade(sc, calls, final_text, source_state=None):
+             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+     return ok, why, answer_content_ok
+ 
+ 
+ # ★探針設定指紋★(Projects/探針設定指紋_計劃):受測會談載入跑探針那台機器的全部使用者層設定(外掛、skill、MCP、
+ # 輸出風格、SessionStart 掛鉤),換機器或多裝一個外掛通過率就可能變;每場記下實際載入了什麼,週抽歷史才分得出
+ # 「規矩變了」還是「環境變了」。來源是 stream-json 的 system/init 與 SessionStart 的 hook_started(設定檔寫了不代表真的載入)。
+ _ENV_MISSING_INIT = "輸出裡沒有 system/init 事件(逾時前沒輸出,或執行器不提供)"
+ 
+ 
++def _env_list(v):
++    """init 欄位該是清單;不是清單(版本改格式、壞輸出)就當空的,不讓取指紋丟例外。"""
++    return v if isinstance(v, list) else []
++
++
+ def _env_names(items):
+     """清單 → 排序過的名字;元素是 dict 就取 name(MCP 伺服器),其餘轉字串。"""
+-    out = []
+-    for x in items or []:
+-        out.append(str(x.get("name", "")) if isinstance(x, dict) else str(x))
+-    return sorted(out)
++    return sorted(str(x.get("name", "")) if isinstance(x, dict) else str(x) for x in _env_list(items))
+ 
+ 
+ def _env_scan(lines):
+-    """stream-json 各行 → (第一筆 system/init, SessionStart 掛鉤名清單)。"""
+-    init, hooks = None, []
++    """stream-json 各行 → (第一筆 system/init, 去重的 SessionStart 掛鉤名)。只算 init 之前的掛鉤:
++    會談中途再觸發的 SessionStart(例:壓縮後)不是啟動時載入的設定,算進來同一個環境的指紋會變。"""
++    init, hooks = None, set()
+     for ln in lines:
+         ln = ln.strip()
+         if not ln.startswith("{"):
+             continue
+         try:
+             ev = json.loads(ln)
+         except ValueError:
+             continue
+         if not isinstance(ev, dict) or ev.get("type") != "system":
+             continue
+         if ev.get("subtype") == "init" and init is None:
+             init = ev
+-        elif ev.get("subtype") == "hook_started" and ev.get("hook_event") == "SessionStart":
+-            hooks.append(str(ev.get("hook_name", "")))
++        elif ev.get("subtype") == "hook_started" and ev.get("hook_event") == "SessionStart" and init is None:
++            hooks.add(str(ev.get("hook_name", "")))
+     return init, hooks
+ 
+ 
+ def env_fingerprint(lines):
+     """stream-json 各行 → {"env_fp": 12 碼指紋, "env": 摘要};取不到 → {"env_fp": None, "env_missing": 原因}。
+-    只用穩定欄位;session_id、uuid、cwd、memory_paths、socket 每場都變,不進指紋。"""
++    只用穩定欄位;session_id、uuid、cwd、memory_paths、socket 每場都變,不進指紋。
++    ★不丟例外★:呼叫時模型已經跑完,這裡一丟例外整場就被記成儀器例外、判分結果丟掉(代碼審 r1 正確性席)。"""
++    try:
++        return _env_fingerprint(lines)
++    except Exception as e:   # 只記錄的欄位,任何意外都退成「取不到」
++        return {"env_fp": None, "env_missing": f"取指紋失敗:{type(e).__name__}"}
++
++
++def _env_fingerprint(lines):
+     init, hooks = _env_scan(lines)
+     if init is None:
+         return {"env_fp": None, "env_missing": _ENV_MISSING_INIT}
+-    plugins = sorted(f"{p.get('name')}@{p.get('version')}" for p in init.get("plugins") or [] if isinstance(p, dict))
++    plugins = sorted(f"{p.get('name')}@{p.get('version')}" for p in _env_list(init.get("plugins")) if isinstance(p, dict))
+     stable = {"claude_code_version": init.get("claude_code_version"), "model": init.get("model"),
+               "permissionMode": init.get("permissionMode"), "output_style": init.get("output_style"),
+               "plugins": plugins, "skills": _env_names(init.get("skills")),
+               "mcp_servers": _env_names(init.get("mcp_servers")), "agents": _env_names(init.get("agents")),
+               "slash_commands": _env_names(init.get("slash_commands")), "tools": _env_names(init.get("tools")),
+               "session_start_hooks": sorted(hooks)}
+     fp = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+     lists = ("skills", "mcp_servers", "agents", "slash_commands", "tools", "session_start_hooks")
+     env = {k: stable[k] for k in ("claude_code_version", "model", "output_style", "plugins")}
+     env["counts"] = {k: len(stable[k]) for k in lists}
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 53539113..76681853 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -42260,35 +42260,55 @@ def t_probe_env_fingerprint_stable_fields():
+     same = mod.env_fingerprint(_probe_init_lines(session_id="s2", uuid="u2", cwd="/tmp/b",
+                                                  memory_paths={"auto": "/m2"}, messaging_socket_path="/tmp/s2.sock"))
+     check("指紋 前置:取得到指紋與摘要", base.get("env_fp") and base.get("env", {}).get("claude_code_version") == "2.1.296", base)
+     check("指紋:每場會變的欄位換掉,指紋不變", base["env_fp"] == same["env_fp"], (base["env_fp"], same["env_fp"]))
+     variants = {
+         "多一個外掛": dict(plugins=[{"name": "superpowers", "version": "6.4.1"}, {"name": "context7", "version": "1.0"}]),
+         "外掛換版本": dict(plugins=[{"name": "superpowers", "version": "6.4.2"}]),
+         "輸出風格不同": dict(output_style="Colleague plain"),
+         "skill 不同": dict(skills=["lumos-code-loop", "x"]),
+         "SessionStart 掛鉤不同": dict(_hooks=[]),
++        "MCP 伺服器不同": dict(mcp_servers=[{"name": "context7", "status": "connected"}, {"name": "x"}]),
++        "模型不同": dict(model="claude-sonnet-5-5"),
++        "Claude Code 版本不同": dict(claude_code_version="2.1.297"),
++        "工具不同": dict(tools=["Bash"]),
+     }
+     for name, ov in variants.items():
+         fp = mod.env_fingerprint(_probe_init_lines(**ov))["env_fp"]
+         check("指紋:%s → 指紋要變" % name, fp and fp != base["env_fp"], (name, fp))
++    # 會談中途再觸發的 SessionStart(例:壓縮後)與重複的同一筆,不能讓同一個環境的指紋變(收尾修正代碼審 r1 正確性席)
++    import json as _j
++    hook = {"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup", "hook_event": "SessionStart"}
++    later = [_j.dumps({**hook, "hook_name": "SessionStart:compact"}), _j.dumps(hook)]
++    fp_later = mod.env_fingerprint([*_probe_init_lines(), *later])["env_fp"]
++    fp_dup = mod.env_fingerprint([_j.dumps(hook), *_probe_init_lines()])["env_fp"]
++    check("指紋:init 之後才出現的 SessionStart 掛鉤不算進指紋", fp_later == base["env_fp"], (fp_later, base["env_fp"]))
++    check("指紋:同一個 SessionStart 掛鉤重複出現,指紋不變", fp_dup == base["env_fp"], (fp_dup, base["env_fp"]))
+     print("  ✓ t_probe_env_fingerprint_stable_fields")
+ 
+ 
+ def t_probe_env_fingerprint_missing_init():
+     """[探針設定指紋 S2]沒有 system/init(逾時前什麼都沒印、Codex 執行器):env_fp 是 null 並帶原因,不丟例外。"""
+     import json as _j, subprocess as _sp
+     mod = _load_probe_module("sp_envnone")
+     r = mod.env_fingerprint([])
+     r2 = mod.env_fingerprint(["not json", _j.dumps({"type": "assistant"})])
+     check("指紋:空輸出 → null 並帶原因", r.get("env_fp") is None and r.get("env_missing"), r)
+     check("指紋:有輸出但沒有 init → null 並帶原因", r2.get("env_fp") is None and r2.get("env_missing"), r2)
++    # init 欄位型別不對(版本改格式、壞輸出)不能丟例外:那時模型已經跑完,一丟例外整場就被記成儀器例外(r1 正確性席)
++    for bad in ({"plugins": 5}, {"skills": True}, {"mcp_servers": 3.5}, {"plugins": ["x", None]}, {"tools": "Bash"}):
++        try:
++            got = mod.env_fingerprint(_probe_init_lines(**bad))
++            ok = "env_fp" in got
++        except Exception as e:
++            got, ok = repr(e), False
++        check("指紋:init 欄位型別不對 %s → 不丟例外" % bad, ok, got)
+     sc = {"id": "x1", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+ 
+     def raise_to(cmd, **kw):
+         raise _sp.TimeoutExpired(cmd, 10, output="")
+     real = mod.subprocess.run
+     try:
+         mod.subprocess.run = raise_to
+         to = mod.run_one(sc, Path("."), 18, 10, "")
+         cx = mod.run_one_codex(sc, Path("."), 10, "")
+     finally:

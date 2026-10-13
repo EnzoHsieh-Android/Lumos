@@ -18,7 +18,7 @@
   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
 """
-import argparse, ast, errno, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+import argparse, ast, errno, hashlib, json, os, re, secrets, shutil, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -326,6 +326,91 @@ def grade(sc, calls, final_text, source_state=None):
         if ok and not answer_content_ok:
             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
     return ok, why, answer_content_ok
+
+
+# ★探針設定指紋★(Projects/探針設定指紋_計劃):受測會談載入跑探針那台機器的全部使用者層設定(外掛、skill、MCP、
+# 輸出風格、SessionStart 掛鉤),換機器或多裝一個外掛通過率就可能變;每場記下實際載入了什麼,週抽歷史才分得出
+# 「規矩變了」還是「環境變了」。來源是 stream-json 的 system/init 與 SessionStart 的 hook_started(設定檔寫了不代表真的載入)。
+_ENV_MISSING_INIT = "輸出裡沒有 system/init 事件(逾時前沒輸出,或執行器不提供)"
+
+
+def _env_list(init, key, bad):
+    """init 欄位該是清單;沒寫當空的,寫了卻不是清單(版本改格式、壞輸出)也當空的,欄位名記進 bad,不靜默。"""
+    v = init.get(key)
+    if isinstance(v, list):
+        return v
+    if v is not None:
+        bad.append(key)
+    return []
+
+
+def _env_names(init, key, bad):
+    """清單欄位 → 排序過的名字;元素是 dict 就取 name(MCP 伺服器),其餘轉字串。"""
+    return sorted(str(x.get("name", "")) if isinstance(x, dict) else str(x) for x in _env_list(init, key, bad))
+
+
+def _env_scan(lines):
+    """stream-json 各行 → (第一筆 system/init, 去重的 SessionStart 掛鉤名)。只算 init 之前的掛鉤:
+    會談中途再觸發的 SessionStart(例:壓縮後)不是啟動時載入的設定,算進來同一個環境的指紋會變。"""
+    init, hooks = None, set()
+    for ln in lines:
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            ev = json.loads(ln)
+        except Exception:   # 深層巢狀會丟 RecursionError 而不是 ValueError;一行解析不了不能拖垮整場指紋
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "system":
+            continue
+        if ev.get("subtype") == "init" and init is None:
+            init = ev
+        elif ev.get("subtype") == "hook_started" and ev.get("hook_event") == "SessionStart" and init is None:
+            hooks.add(str(ev.get("hook_name", "")))
+    return init, hooks
+
+
+def env_fingerprint(lines):
+    """stream-json 各行 → {"env_fp": 12 碼指紋, "env": 摘要};取不到 → {"env_fp": None, "env_missing": 原因}。
+    只用穩定欄位;session_id、uuid、cwd、memory_paths、socket 每場都變,不進指紋。
+    ★不丟例外★:呼叫時模型已經跑完,這裡一丟例外整場就被記成儀器例外、判分結果丟掉(代碼審 r1 正確性席)。"""
+    try:
+        return _env_fingerprint(lines)
+    except Exception as e:   # 只記錄的欄位,任何意外都退成「取不到」
+        return {"env_fp": None, "env_missing": f"取指紋失敗:{type(e).__name__}"}
+
+
+def _env_fingerprint(lines):
+    init, hooks = _env_scan(lines)
+    if init is None:
+        return {"env_fp": None, "env_missing": _ENV_MISSING_INIT}
+    bad = []
+    plugins = sorted(f"{p.get('name')}@{p.get('version')}" for p in _env_list(init, "plugins", bad) if isinstance(p, dict))
+    # 工具清單不進指紋:題目標 allow_agent 會多開 Agent,同一週就有兩種工具清單;MCP 帶來的工具由 mcp_servers 涵蓋
+    stable = {"claude_code_version": init.get("claude_code_version"), "model": init.get("model"),
+              "permissionMode": init.get("permissionMode"), "output_style": init.get("output_style"),
+              "plugins": plugins, "skills": _env_names(init, "skills", bad),
+              "mcp_servers": _env_names(init, "mcp_servers", bad), "agents": _env_names(init, "agents", bad),
+              "slash_commands": _env_names(init, "slash_commands", bad),
+              "session_start_hooks": sorted(hooks)}
+    fp = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    lists = ("skills", "mcp_servers", "agents", "slash_commands", "session_start_hooks")
+    env = {k: stable[k] for k in ("claude_code_version", "model", "output_style", "plugins")}
+    env["counts"] = {k: len(stable[k]) for k in lists}
+    if bad:
+        env["bad_fields"] = sorted(bad)
+    return {"env_fp": fp, "env": env}
+
+
+def env_fp_counts(results):
+    """一批有效場次 → {指紋: 場數};取不到指紋的記在 "null"。沒有任何結果帶 env_fp 欄位(舊呼叫者)→ None。"""
+    if not any("env_fp" in r for r in results):
+        return None
+    counts = {}
+    for r in results:
+        k = r.get("env_fp") or "null"
+        counts[k] = counts.get(k, 0) + 1
+    return counts
 
 
 def judge(calls, expect, forbid_before):
@@ -946,7 +1031,8 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
     if bad:
         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
-                "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+                "limit_hit": False, "result_subtype": "codex", "harness": "codex",
+                "env_fp": None, "env_missing": "沒有啟動模型"}
     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
     cmd = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workdir)]
     if bypass_trust:
@@ -995,7 +1081,8 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
             "source_evidence": evidence,
             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
             "result_subtype": "codex", "harness": "codex",
-            "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
+            "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace,
+            "env_fp": None, "env_missing": "Codex 執行器不提供初始化事件"}
 
 
 def _scenario_max_turns(sc, default):
@@ -1015,7 +1102,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
-                "limit_hit": False, "result_subtype": None}
+                "limit_hit": False, "result_subtype": None, "env_fp": None, "env_missing": "沒有啟動模型"}
     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
     # 題目標 allow_agent:true 才放行,其餘照舊禁。
@@ -1092,7 +1179,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
             "limit_hit": limit_hit, "truncated": truncated,
-            "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+            "result_subtype": result_ev.get("subtype"), "harness": "claude", **env_fingerprint(out.splitlines())}
 
 
 def summarize_results(results, arm="with"):
@@ -1127,7 +1214,7 @@ def summarize_results(results, arm="with"):
     return {"passed": p, "scored": n, "total": total, "valid_total": len(valid),
             "inconclusive": inconclusive, "mostly_truncated": mostly,
             "failed": [r.get("id") for r in valid if not r.get("passed")],
-            "excluded": [r.get("id") for r in excl], "line": line}
+            "excluded": [r.get("id") for r in excl], "line": line, "env_fps": env_fp_counts(valid)}
 
 
 def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, model_secs=0.0, fatal=False):
@@ -1140,6 +1227,10 @@ def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, mode
            "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3)}
     if arm != "with" or runs > 1:
         rec.update({"arm": arm, "runs": runs})
+    if summary.get("env_fps"):
+        rec["env_fps"] = summary["env_fps"]
+        if len([k for k in summary["env_fps"] if k != "null"]) > 1:   # 取不到的場次不算一種環境(r2 正確性席)
+            rec["env_mixed"] = True
     return rec
 
 
@@ -1216,7 +1307,6 @@ def main():
         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
     if a.sample and a.sample < len(scs):
         # 決定性輪轉:同一種子永遠抽同一組;種子換(每週)就換一組,幾週下來全部輪過
-        import hashlib
         h = int(hashlib.sha256(a.seed.encode("utf-8")).hexdigest(), 16)
         start = h % len(scs)
         scs = [scs[(start + i * 3) % len(scs)] for i in range(a.sample)]
