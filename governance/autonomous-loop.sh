@@ -386,11 +386,22 @@ run_probe(){
       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
   # ★|| true 必要★:probe 沒產出結果行時 grep rc1+pipefail+set -e=整支腳本死在這、
   # 連 gap 都還沒選(潛伏生產 bug,2026-08-26 沙箱測試觸發抓到)
-  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
+  # 總結行錨在行首:要通知時的 MSG 行也含總結行文字,不錨會抓到它(週評通知 r3 正確性席)
+  local line; line="$(grep -E '^[0-9]+/[0-9]+ 個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
   log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
   local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
-  if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
-    MSG="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)" \
+  # ★週評通知照探針的判定★(Projects/週評通知改看重複失敗與顯著下降_計劃):只在同一題連續兩次沒過或顯著下降時叫;
+  # 探針沒印判定行(舊版、或中途壞掉)才退回「p≠n 就通知」。
+  # 新版探針印判定行,要通知時另印 MSG:整句訊息(python 組好、shell 只抽前綴,同 run_replay 的慣例):有判定行就只認 MSG 行
+  local verdict msg=""; verdict="$(grep -E '^週評通知:' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
+  if [ -n "$verdict" ]; then
+    log "情境探針$verdict"
+    msg="$(sed -n 's/^MSG://p' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
+  elif [ -n "$line" ] && [ "$pp" != "$tt" ]; then
+    msg="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)"
+  fi
+  if [ -n "$msg" ]; then
+    MSG="$msg" \
     LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify

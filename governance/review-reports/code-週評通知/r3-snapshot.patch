@@ -1,0 +1,633 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/週評通知改看重複失敗與顯著下降_計劃.md b/docs/lumos-toolchain-knowledge/Projects/週評通知改看重複失敗與顯著下降_計劃.md
+new file mode 100644
+index 00000000..8b2408eb
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/週評通知改看重複失敗與顯著下降_計劃.md
+@@ -0,0 +1,70 @@
++---
++type: project
++status: doing
++created: 2026-10-13
++updated: 2026-10-13
++tags:
++  - type/project
++  - status/doing
++  - scope/evals
++related:
++  - "[[Projects/世界解重新註解2026-10_總覽_調研]]"
++  - "[[Projects/世界解重新註解2026-10_評測_調研]]"
++  - "[[Projects/探針設定指紋_計劃]]"
++lands_in:
++  - Systems/codex-harness
++---
++# 週評通知改看重複失敗與顯著下降_計劃
++
++> 白話:自主迴圈每週抽 8 題情境探針(在凍結副本開會談,看 AI 有沒有照規矩用 lumos),現在只要一題沒過就發 LINE。題目是輪流抽的,同一題要隔幾週才再出現,單次沒過多半是雜訊;歷史 7 週裡 5 週會響,響久了就沒人看。這篇改成只在兩種情況通知:同一題最近兩次出現都沒過(規矩真的守不住),或本週通過率顯著低於同判準的歷史(Wilson 區間不重疊)。同判準的歷史不夠時照舊「有題沒過就通知」並寫明基準不足。來源是世界解總覽〈跨類優先順序〉第 2 名。
++
++PRIOR-ART: 評測界對小樣本比例用 Wilson 區間而不是點估計(本 repo `scripts/lumos` 的 `_wilson_interval` 已用在逃逸帳統計,這裡直接借用,不另寫);「同一題連續失敗才告警」是監控常見的連續 N 次才發(Prometheus 告警規則的 `for:` 期間、SRE 的「別為單點抖動叫人」)。世界解總覽另提的哨兵題 pass^k 本篇不做:題庫沒有指定哨兵題,要先決定哪幾題當哨兵。
++RETIRE-IF: 上線後連續 12 週的週抽,新規則沒通知的週裡,事後有人發現規矩其實已經退化(回頭看那週的失敗題確實是真退化)達 2 次以上,就改回「有題沒過就通知」或收緊條件;或同判準歷史始終累積不到 3 週(判準一直在改),新規則永遠走基準不足那條路,等於沒做。
++
++REVISIT:2026-12-31 回頭數上線後各週的通知與否,對照事後確認的真退化,看 RETIRE-IF 的兩條有沒有成立
++
++## 實測(2026-10-13)
++
++- `governance/scenarios/history.jsonl` 有 7 週週抽(2026-W34 到 W40),5 週有題沒過、照現行規則會響(71%)。
++- 現有歷史只記沒過的題,不記這週抽了哪些題,所以算不出「這題上次出現時有沒有過」;這 7 週也都沒有判準版本欄位(判準 2026-10-03 才開始記版本),跟現行判準不能比。也就是說新規則上線後會先走「基準不足」那條路,要累積 3 週同判準、帶題號的歷史才真的生效。
++- 如果只看沒過的題名,W39 與 W40 都有「上一次沒過的題又沒過」(d01 在 W35、W39;d04 在 W39、W40);沒有題號無法確認中間有沒有出現又過。
++
++## 範圍
++
++- 只改「要不要發 LINE」的判斷,不改探針怎麼抽題、怎麼判分;總結行格式不動(自主迴圈靠它解析)。
++- 週抽歷史多記這週有效場次的題號(`ids`),之後才算得出觸發 A。
++- 不做哨兵題 pass^k、不做逐題跨週通過率報表(之後有需要另案)。
++
++## 做法
++
++- 探針腳本新增純函式:輸入週抽歷史各列(最後一列是本週),回「要不要通知、原因」。
++  - 只看週抽列(seed 是 `YYYY-Www`、預設組別、跑一次);本週這批無法下結論或有儀器事故 → 通知。
++  - 同判準(`grader` 欄位相同、帶題號、非無法下結論、非事故、不是本週;同一週重跑只留最後一列)的過去週不到 3 週 → 照舊有題沒過就通知,原因寫明「同判準歷史只有 N 週,基準不足」。
++  - 觸發 A:本週沒過的某題,在最近一次「題號清單含它」的同判準過去週裡也沒過 → 通知。
++  - 觸發 B:本週通過率 Wilson 區間上緣 < 同判準過去週合計通過率 Wilson 區間下緣 → 通知。
++  - 都沒有 → 不通知,原因列出本週單次沒過的題,寫明「下次抽到再看」。
++- 探針主程式寫完週抽歷史後印一行 `週評通知:是 — <原因>` 或 `週評通知:否 — <原因>`;剛寫進去的最後一列不是這次的預設週抽、或判斷出意外就不印。
++- 要通知時探針主程式另印一行 `MSG:<整句訊息>`(總結行加判定原因,python 組好)。自主迴圈的 `run_probe` 同 `run_replay` 的慣例:有判定行就只認 `MSG:` 行、原樣轉交 LINE 通知,不在 shell 拆字串或組訊息;沒有判定行(舊版探針、或探針中途壞掉)才退回現行「p≠n 就通知」。
++
++## 驗收條款
++
++- [S1] 當同判準的過去週不到 3 週時,有題沒過 應 通知、全過 應 不通知,原因 應 寫明基準不足與週數;剛寫進歷史的最後一列不是這次的預設週抽(跑多次、別的組別)時,判定行 應 不印,讓自主迴圈退回舊規則;判斷出任何意外、或歷史檔讀不到或編碼壞掉時 應 不印;本週無法下結論或有儀器事故時 應 一定通知(不論基準夠不夠) [test:t_weekly_alert_fallback_when_thin_history]
++- [S2] 當同判準過去週夠時,本週沒過的題在它上一次出現時也沒過 應 通知並在原因點名那題;上一次出現時有過 應 不通知;過去週題號清單不含它的不算它出現過;同一週重跑的多列 應 只算一週,而且不算本週的「上一次出現」;有儀器事故或無法下結論的過去週 應 不算它出現過 [test:t_weekly_alert_repeated_failure]
++- [S3] 當同判準過去週合計 24/24、本週 3/8 時,週評 應 通知(顯著下降);本週 6/8 而且沒有重複失敗時 應 不通知;判準版本不同、或同判準但沒有題號的過去週 應 不算進基準;借不到 Wilson 區間時 應 退回有題沒過就通知並寫明原因 [test:t_weekly_alert_significant_drop]
++- [S4] 週抽歷史那一列 應 帶本週有效場次的題號 `ids`,被排除的場次(截斷、用量上限)不在裡面 [test:t_probe_history_records_ids]
++- [S5] 自主迴圈的探針段:探針輸出判定行而沒有 `MSG:` 行時 應 不送 LINE;有 `MSG:` 行時 應 照它原樣轉交 LINE 通知;沒有判定行而總結行 p≠n 時 應 照舊送 LINE [test:t_autoloop_probe_alert_follows_verdict]
++
++## 回退
++
++- 單一提交還原即可。週抽歷史多出的 `ids` 欄位舊版程式不讀;還原後自主迴圈回到「有題沒過就通知」。
++- 只想暫時回到舊行為不還原:沒有開關——新規則在基準不足時本來就等於舊行為;真要停就還原提交。
++
++## 實務隱患
++
++- 新規則會讓「單次沒過」不再通知:真的退化但只在某題出現一次時,要等它下次被抽到(依題庫大小約數週)才會叫。這是刻意的取捨,用 RETIRE-IF 回頭量。
++- 判準版本一改,同判準歷史歸零,又回到基準不足三週:改判準的人要知道週評會暫時變回吵的那一版。
++- 載入 Wilson 區間要載入整支 `scripts/lumos`(約一兩秒),每週一次,可接受;載不進就退回「有題沒過就通知」並寫明原因。
++- 已排除:金流:不碰任何金流或扣款相關程式
++- 已排除:對外送出:LINE 通知本來就會送,這篇只改什麼時候送,送的對象與內容格式不變
++- 已排除:不可逆:只改判斷與多記一個欄位,還原提交就回到原狀;既有歷史不改寫
++- 已排除:守衛面:不碰任何推送閘或判分;只影響每週一次的提醒
+diff --git a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+index bc2c6425..99a36984 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+@@ -29,20 +29,21 @@ summary: |-
+   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
+   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
+   KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --disposal 機械重驗(★2026-08-27 遷,原 --gate★)③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+   KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_report('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
+   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
+   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
+   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
+   KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 `main "$@"; exit`——bash 邊讀邊跑,跑到一半改檔會從舊 byte 位置續讀(當天實發生 syntax error 後段全沒跑;沒 exit 更會整支重跑一遍)。守衛 [test:t_daily_governance_wrapper_is_function_wrapped](前奏白名單/五步名冊/結尾 exit/bash -n);之後再有長跑 wrapper 沿用這個寫法,不要各自發明(代碼審 r1 架構對齊席)。實驗 [[Verification/2026-09-05_wrapper邊跑邊改實驗]]
+   KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了——而三處筆記寫著「便宜的日常段照跑」,落地當下那句就是假的。★監看的東西和被監看的東西同命★,回訪到期的升級鏈因此沒有出口,那正是同期「五件逾期沒人管」的上游原因。修法照 feature toggle 只包最小單元:開關搬進 autonomous-loop.sh、放在選 gap 之前,wrapper 無條件呼叫 [test:t_autoloop_pause_only_stops_dispatch]
+   KEY:[2026-09-21]回放週跑的「夠快就全量跑」門檻改成常數 `FULL_SWEEP_SECONDS=180`(原本寫死 60 秒):存量長到 134 包、實測全量 58 秒、平均 0.45 秒一包,估 60.3 秒剛好卡在舊門檻外,於是每週只抽 5 包、跑完一圈要半年(游標實況 done 110/134)。180 秒仍在 300 秒總預算內,存量約 400 包才會退回抽樣;測試 t_full_sweep_threshold_covers_real_stock 用 134 包 × 0.45 秒釘住,門檻改回 60 就翻紅
++  SEE:[[Projects/週評通知改看重複失敗與顯著下降_計劃]]、[[Systems/codex-harness]]
+   DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger,replay_weekly}.py(replay_weekly=每週凍結判定回放:新凍必跑+輪替抽 5,實測夠便宜才升級全量) + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
+   TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(入口現=daily-governance 09:30;測試數 2026-08-30 為 106 條)
+   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
+ decisions:
+   - content: 定調為「自動備料 + 自審 + 停在放行閘等人」,而非「無人迭代」;放行(merge PR)永遠人手動,自動只到「備好待放行 spec」,絕不自動實作 / 自動 merge
+     id: d1
+     context: user 願景是「永遠在迭代的 lumos」;但全自動判收斂仍是沒閉合的迴歸(judge/cross-family 也是 AI、也會錯),且自動 brainstorm 沒人回澄清、AI 自選 gap 有自我強化偏誤
+     why_chosen: 放大放行帶寬不等於消滅放行;末端人 review PR 是全鏈唯一外部錨點、最後真兜底,對齊「AI 全工人只驗證撐不起、人只在最高槓桿放行點」
+     decided: 2026-06-20
+     valid: true
+diff --git a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+index 82d90e27..9c390c47 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
++++ b/docs/lumos-toolchain-knowledge/Systems/codex-harness.md
+@@ -107,20 +107,21 @@ related:
+ 
+ PITFALL: 首次修復穩定性試行重審 2db51cc4 時，讀 README 會冒充讀碼、Claude 非零退出混入有效樣本、逐題與整體分母不一致；前者來自判準放寬，退出碼缺口原已存在，分母矛盾在新增排除規則後暴露。出處 [[Verification/2026-10-03_修復穩定性試行第1案]]；後兩項防回歸測試 t_probe_repair_nonzero_exit、t_probe_repair_per_question_cli；讀碼問題尚未修好，重現與重啟條件見 [[Issues/探針讀碼證據不足]]。
+ 
+ WHY: 本次曾試把讀碼正則收窄到目標程式檔，但第二輪證明仍把搜尋路徑文字當讀碼，且誤傷先切目錄再讀檔；因此撤回這一候選，不把 shell 解析或工具結果關聯塞進同一修復。出處為該案 r2-correctness 與 r2-classification.json；下次處理讀碼判準，先依 [[Issues/探針讀碼證據不足]] 重估資料來源再實作。
+ 
+ ## 探針副本不帶答案(2026-10-11)
+ 
+ - PITFALL:情境探針的受測副本原樣複製題庫資料夾,受測 AI 打得開題庫判準與歷次結果,週評與消融的通過率可能偏高 [出處:Projects/世界解重新註解2026-10_評測_調研 核對:掃 132 場工具呼叫至少 4 場直接打開歷次結果] [根因:建副本只排除 node_modules 與 .venv,題庫判準、週抽歷史、歷次結果檔都跟著進副本] [修法:副本裡題庫與歷史換成佔位內容、檔名保留(有題目的考點是改名題庫檔),歷次結果檔刪掉] [test:t_probe_sandbox_hides_answer_bank]
+ - 只遮工作樹:副本帶著完整 git 歷史,刻意用 git 翻舊版本仍看得到題庫;要堵這條得改成不帶歷史的快照,會影響需要讀歷史的題目,另行裁定。
+ - WHY:Claude 執行器每場探針從 stream-json 的 system/init 與 SessionStart 的 hook_started 取穩定欄位(版本、模型、輸出風格、外掛@版本、skill、MCP、代理、斜線指令、SessionStart 掛鉤名;工具清單不算——逐題開關 Agent 會讓同一週有兩種)算 12 碼指紋記進結果的 `env_fp`,週抽歷史記 `env_fps` 與兩種以上真指紋時的 `env_mixed`(取不到的不算一種);Codex 執行器記 null 與原因;SessionStart 掛鉤只算 init 之前、去重(會談中途壓縮再觸發的不算),取指紋任何意外都退成 null 不丟例外(那時模型已跑完,丟例外整場會被記成儀器例外) [出處:[[Projects/探針設定指紋_計劃]]] [因:受測會談載入跑探針那台機器的全部使用者層設定,2026-10-13 實測帶著 12 個外掛、67 個 skill 與使用者的輸出風格,換機器或多裝外掛通過率就可能變卻沒有紀錄] [不選:讀設定檔算指紋——寫了不代表真的載入;隔離使用者層——會改到探針量的東西本身,要先有這把尺] [test:t_probe_env_fingerprint_stable_fields] [test:t_probe_history_records_env_fps]
++- WHY:情境探針週抽只在「同一題最近兩次出現都沒過」或「本週通過率 Wilson 區間上緣低於同判準過去週合計的下緣」時發 LINE;同判準(grader 相同、帶題號、不是本週,同一週重跑只留最後一列)過去週不到 3 週照舊有題沒過就通知並寫明基準不足;探針寫完週抽歷史(多記有效場次題號 ids)後印一行「週評通知:是|否 — 原因」,要通知時另印 MSG:整句訊息;自主迴圈的 run_probe 同 run_replay 的慣例只認 MSG 行,沒有判定行才退回 p≠n [出處:[[Projects/週評通知改看重複失敗與顯著下降_計劃]]] [因:題目輪流抽、同一題隔幾週才再出現,單次沒過多半是雜訊;舊規則歷史 7 週響 5 週] [不選:哨兵題 pass^k——題庫沒指定哨兵;單看本週點估計——8 題的比例太粗] [test:t_weekly_alert_repeated_failure] [test:t_autoloop_probe_alert_follows_verdict]
+ 
+ REVISIT:2026-11-11 裁定探針副本要不要改成不帶 git 歷史的快照(堵住用 git 翻舊題庫這條路)
+ 
+ ## 回頭條件
+ 
+ WHY: 第1案續辦改從成功工具回傳辨識目標片段，避免繼續解析shell字串；標記若加在既有快照後會被收工hook當作模型改碼，所以此題每次嘗試建立含標記的獨立乾淨副本，結束刪除。代價是多一次複製；只限此題，正式探針首次部署與runner格式升級時重驗耗時及截斷。出處 [[Projects/探針讀碼結果證據_計劃]] 的設計審M1及 [[Verification/2026-10-03_修復穩定性試行第1案續辦]]；第三輪仍未收斂，候選未放行，後續先交使用者裁決。
+ 
+ PITFALL: 設計審B1重現建立副本後Git定位環境變數被runner重新繼承，cwd不保證隔離；沿用既有清洗函式延伸到runner與清理。防回歸 t_probe_source_probe_git_env 在兩個暫存repo驗證外側內容不變；清理失敗停批由 t_probe_source_probe_main 驗證。來源同續辦驗證，不把未跑真模型的fixture當生產觀測。
+ 
+ PITFALL: 第三輪證明上項測試只覆蓋兩種定位環境，不能保證 Git 設定注入與 absolute gitfile 的隔離；出處及可重現步驟見 [[Issues/探針Git隔離的設定與絕對路徑缺口]]。讀碼證據仍有缺 ID 事件計分的反例，見 [[Issues/探針讀碼證據不足]]；兩項 Issue 都是下次重啟的必讀入口，現有綠測試不構成放行證據。
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 8dc296f4..1308eec7 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -382,22 +382,31 @@ run_probe(){
+   log "情境探針:本週($week)抽 8 題開跑"
+   (cd "$REPO" && python3 scripts/scenario_probe.py \
+       --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl,governance/scenarios/absence.jsonl \
+       --sample 8 --seed "$week" --timeout 600 --max-turns 18 --ts "$TODAY" --history "$hist" \
+       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
+   # ★|| true 必要★:probe 沒產出結果行時 grep rc1+pipefail+set -e=整支腳本死在這、
+   # 連 gap 都還沒選(潛伏生產 bug,2026-08-26 沙箱測試觸發抓到)
+   local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
+   log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
+   local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
+-  if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
+-    MSG="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)" \
++  # ★週評通知照探針的判定★(Projects/週評通知改看重複失敗與顯著下降_計劃):只在同一題連續兩次沒過或顯著下降時叫;
++  # 探針沒印判定行(舊版、或中途壞掉)才退回「p≠n 就通知」。
++  # 新版探針印判定行,要通知時另印 MSG:整句訊息(python 組好、shell 只抽前綴,同 run_replay 的慣例):有判定行就只認 MSG 行
++  local verdict msg; verdict="$(grep -E '^週評通知:' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
++  msg="$(sed -n 's/^MSG://p' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
++  [ -n "$verdict" ] && log "情境探針$verdict"
++  if [ -z "$verdict" ] && [ -n "$line" ] && [ "$pp" != "$tt" ]; then
++    msg="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)"
++  fi
++  if [ -n "$msg" ]; then
++    MSG="$msg" \
+     LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_report('scenario-probe', os.environ['MSG']), t) if t else 'no-token')" || true
+   fi
+ }
+ 
+ # ── 機制空轉週報(Issues/自足性審計提醒空轉四十六天 的出口,2026-08-22):同一道閘對同一篇連喊 ≥14 天
+ # 還沒人理,就是「機制有跑、沒人看」——每週跑一次 gov --nags,有就 LINE,不再靠順手 grep 發現。
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 79d102b1..94d26331 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -888,29 +888,40 @@ def _validate_scenario(sc):
+         return "題目缺 id"
+     if not sc.get("prompt"):
+         return f"題目 {sc.get('id')} 缺 prompt"
+     if not sc.get("expect"):
+         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+     if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
+         return "source_probe 必須有目標設定且不得混用順序禁令"
+     return None
+ 
+ 
++_LUMOS_MOD = []   # 載過的 scripts/lumos 模組(一次程序只載一次)
++
++
++def _load_lumos():
++    """載入 scripts/lumos 當模組,借它的單源函式(CODEX_HOME、Wilson 區間);載不進就丟例外,由呼叫端決定怎麼退。"""
++    if not _LUMOS_MOD:
++        import importlib.util
++        from importlib.machinery import SourceFileLoader
++        path = str(ROOT / "scripts" / "lumos")
++        spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
++        mod = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(mod)
++        _LUMOS_MOD.append(mod)
++    return _LUMOS_MOD[0]
++
++
+ def _codex_home_dir():
+     """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
+-    import importlib.util
+-    from importlib.machinery import SourceFileLoader
+-    path = str(ROOT / "scripts" / "lumos")
+     try:
+-        spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
+-        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+-        return mod._codex_home()
++        return _load_lumos()._codex_home()
+     except Exception as e:   # r2 delta #4:載不進(改到一半的語法錯)不能把整場判成儀器例外,退回同語意的預設
+         print(f"  (hook_trace:載入 scripts/lumos 失敗,CODEX_HOME 退用預設:{type(e).__name__})", file=sys.stderr)
+         env = os.environ.get("CODEX_HOME")
+         return Path(env).expanduser() if env else Path.home() / ".codex"
+ 
+ 
+ # lumos 各 hook 注入 Codex 時的首行標頭(入口 hook / impact 鏡頭 / 派工鏡頭 / 收工擋停);Stop 的續做提示另帶 hook_run_id=
+ _LUMOS_HOOK_HEADS = ("本專案用 lumos 知識圖譜", "必看——", "LUMOS-LENS", "LUMOS-STOP")
+ 
+ 
+@@ -1207,33 +1218,139 @@ def summarize_results(results, arm="with"):
+     parts = [f"{name} {k}" for name, k in (("截斷", n_trunc), ("用量上限", n_limit), ("其他儀器例外", n_other)) if k]
+     if parts:
+         line += ";不算分:" + "、".join(parts)
+     if inconclusive:
+         line += f";★有效場次 {len(valid)}/{total} 不到一半,這批不能下結論(分母退回整批)★"
+     if mostly:
+         line += "\n截斷過半的題(題目或步數上限要檢查,不是 AI 沒照規矩): " + ", ".join(mostly)
+     return {"passed": p, "scored": n, "total": total, "valid_total": len(valid),
+             "inconclusive": inconclusive, "mostly_truncated": mostly,
+             "failed": [r.get("id") for r in valid if not r.get("passed")],
+-            "excluded": [r.get("id") for r in excl], "line": line, "env_fps": env_fp_counts(valid)}
++            "excluded": [r.get("id") for r in excl], "line": line, "env_fps": env_fp_counts(valid),
++            "ids": [r.get("id") for r in valid]}
++
++
++# ★週評通知★(Projects/週評通知改看重複失敗與顯著下降_計劃):題目輪流抽、同一題隔幾週才再出現,單次沒過多半是雜訊;
++# 以前一題沒過就發 LINE,歷史 7 週響 5 週。改成只在「同一題最近兩次出現都沒過」或「本週通過率顯著低於同判準歷史」時通知;
++# 同判準歷史不到 _ALERT_MIN_WEEKS 週時照舊有題沒過就通知,原因寫明基準不足。
++_WEEK_SEED_RE = re.compile(r"^\d{4}-W\d{2}$")
++_ALERT_MIN_WEEKS = 3
++
++
++def _is_weekly_row(r):
++    return (isinstance(r, dict) and bool(_WEEK_SEED_RE.match(str(r.get("seed", ""))))
++            and isinstance(r.get("passed"), int) and isinstance(r.get("total"), int)
++            and r.get("arm", "with") == "with" and r.get("runs", 1) == 1)
++
++
++def _baseline_weeks(wk, this):
++    """同判準、帶題號、不是本週的過去週;同一週有多列(重跑)只留最後一列——不然同一次失敗會被算成連續兩次、基準週數也被灌水。
++    沒有題號的列(2026-10-03 起到本計劃之前)不算:算了就走過基準不足,重複失敗卻永遠判不出(代碼審 r1 正確性席)。"""
++    g = this.get("grader")
++    seen, out = set(), []
++    for r in reversed(wk[:-1]):
++        s = r.get("seed")
++        if (not g or r.get("grader") != g or s == this.get("seed") or s in seen or not r.get("ids")
++                or r.get("inconclusive") or r.get("fatal")):
++            continue
++        seen.add(s)
++        out.append(r)
++    return out[::-1]
++
++
++def _wilson():
++    """借 scripts/lumos 的 _wilson_interval(單源);載不進回 None。"""
++    try:
++        return _load_lumos()._wilson_interval
++    except Exception:
++        return None
++
++
++def _repeated_failures(failed, same):
++    """本週沒過的題裡,最近一次「題號清單含它」的同判準過去週也沒過的那些。"""
++    out = []
++    for q in failed:
++        prev = next((r for r in reversed(same) if q in (r.get("ids") or [])), None)
++        if prev is not None and q in (prev.get("failed") or []):
++            out.append(q)
++    return out
++
++
++def weekly_alert(rows):
++    """週抽歷史各列(最後一筆週抽列是本週)→ {"notify": 要不要發 LINE, "reason": 一句原因}。"""
++    wk = [r for r in rows if _is_weekly_row(r)]
++    if not wk:
++        return {"notify": False, "reason": "沒有週抽紀錄"}
++    this = wk[-1]
++    failed = list(this.get("failed") or [])
++    if this.get("inconclusive") or this.get("fatal"):
++        return {"notify": True, "reason": "本週無法下結論或有儀器事故"}
++    same = _baseline_weeks(wk, this)
++    if len(same) < _ALERT_MIN_WEEKS:
++        return {"notify": bool(failed), "reason": f"同判準歷史只有 {len(same)} 週,基準不足,照舊有題沒過就通知"
++                + (":" + "、".join(failed) if failed else "")}
++    rep = _repeated_failures(failed, same)
++    if rep:
++        return {"notify": True, "reason": "同一題連續兩次出現都沒過:" + "、".join(rep)}
++    w = _wilson()
++    if w is None:
++        return {"notify": bool(failed), "reason": "載不進 Wilson 區間,照舊有題沒過就通知"}
++    k, n = sum(r["passed"] for r in same), sum(r["total"] for r in same)
++    cur, base = w(this["passed"], this["total"]), w(k, n)
++    if cur and base and cur[1] < base[0]:
++        return {"notify": True, "reason": f"本週 {this['passed']}/{this['total']} 顯著低於同判準過去 {len(same)} 週合計 {k}/{n}"
++                f"(本週區間上緣 {cur[1]:.2f} < 過去區間下緣 {base[0]:.2f})"}
++    return {"notify": False, "reason": ("單次沒過,下次抽到再看:" + "、".join(failed)) if failed else "全過"}
++
++
++def weekly_alert_line(history_path, seed):
++    """週抽才印一行「週評通知:是|否 — 原因」給自主迴圈解析;不是週抽、讀不了歷史、剛寫進去的最後一列不是這次的預設週抽
++    (跑多次、別的組別——不然判定講的是上一週),或計算出任何意外 → None(自主迴圈退回舊規則)。"""
++    if not _WEEK_SEED_RE.match(str(seed or "")):
++        return None
++    try:
++        raw = Path(history_path).read_text(encoding="utf-8").splitlines()
++    except (OSError, ValueError):   # 讀不到或編碼壞掉(UnicodeDecodeError 是 ValueError)都交回舊規則
++        return None
++    rows = []
++    for ln in raw:
++        try:
++            rows.append(json.loads(ln))
++        except ValueError:
++            continue
++    if not rows or not _is_weekly_row(rows[-1]) or rows[-1].get("seed") != seed:
++        return None
++    try:
++        v = weekly_alert(rows)
++    except Exception:   # 只影響要不要發 LINE;算不出就交回自主迴圈的舊規則,不讓探針帶著例外退出
++        return None
++    return f"週評通知:{'是' if v['notify'] else '否'} — {v['reason']}"
++
++
++def weekly_alert_message(summary_line, alert):
++    """要通知時給自主迴圈的整句 LINE 訊息(python 組好、shell 只抽 MSG: 前綴,同 run_replay 的慣例)。"""
++    return (f"情境探針本週要看:{summary_line};{alert}"
++            "(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)")
+ 
+ 
+ def history_record(ts, seed, summary, arm="with", runs=1, sandbox_secs=0.0, model_secs=0.0, fatal=False):
+     """週抽歷史一列:failed 只含有效場次沒過的題;被排除的另記;帶判準版本(換過判準的紀錄不可直接比)。"""
+     rec = {"ts": ts, "seed": seed, "passed": summary["passed"], "total": summary["scored"],
+            "valid_total": summary.get("valid_total", summary["scored"]),
+            "failed": summary["failed"], "excluded": summary["excluded"],
+            "inconclusive": summary.get("inconclusive", False), "fatal": fatal,
+            "grader": GRADER_VERSION, "sandbox_version": SANDBOX_VERSION,
+            "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3)}
+     if arm != "with" or runs > 1:
+         rec.update({"arm": arm, "runs": runs})
++    if "ids" in summary:   # 這週有效場次抽了哪些題:週評要靠它算「這題上次出現時有沒有過」
++        rec["ids"] = summary["ids"]
+     if summary.get("env_fps"):
+         rec["env_fps"] = summary["env_fps"]
+         if len([k for k in summary["env_fps"] if k != "null"]) > 1:   # 取不到的場次不算一種環境(r2 正確性席)
+             rec["env_mixed"] = True
+     return rec
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--repo", default=str(ROOT),
+@@ -1534,19 +1651,24 @@ def main():
+                                                        "arm": a.arm, "runs": a.runs, "grader": GRADER_VERSION,
+                                                        "excluded": summ["excluded"], "valid_total": summ["valid_total"],
+                                                        "inconclusive": summ["inconclusive"], "fatal": fatal or bool(bad),
+                                                        "sandbox_version": SANDBOX_VERSION,
+                                                        "sandbox_secs": round(sandbox_secs, 3), "model_secs": round(model_secs, 3),
+                                                        "skills_health_bad": bad}, ensure_ascii=False, indent=1))
+         if a.history:
+             with os.fdopen(_open_history(a.history), "a", encoding="utf-8") as hf:
+                 hf.write(json.dumps(history_record(a.ts, a.seed, summ, a.arm, a.runs,
+                                                    sandbox_secs, model_secs, fatal or bool(bad)), ensure_ascii=False) + "\n")
++            alert = weekly_alert_line(a.history, a.seed)
++            if alert:
++                print(alert)
++                if alert.startswith("週評通知:是"):
++                    print("MSG:" + weekly_alert_message(summ["line"].splitlines()[0], alert))
+         if retained is not None:
+             print(f"保留最後副本: {retained}", file=sys.stderr)
+     if bad or fatal:
+         return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+     return 0 if p == n else 1
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 4b3087c4..ee26d87f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -42376,20 +42376,245 @@ def t_probe_run_one_records_env_fp():
+         mod.subprocess.run = real
+     want = mod.env_fingerprint(lines)
+     check("run_one 指紋 前置:這場照常判過", r["passed"] is True, r["reason"])
+     check("run_one 指紋:結果帶 env_fp,跟直接算的一樣", r.get("env_fp") and r.get("env_fp") == want["env_fp"], (r.get("env_fp"), want))
+     check("run_one 指紋:結果帶 env 摘要(版本、輸出風格、外掛)",
+           r.get("env", {}).get("claude_code_version") == "2.1.296" and r["env"].get("output_style") == "default"
+           and r["env"].get("plugins") == ["superpowers@6.4.1"], r.get("env"))
+     print("  ✓ t_probe_run_one_records_env_fp")
+ 
+ 
++def _wk(seed, passed, total, failed=(), ids=None, grader="G1", **kw):
++    """一列週抽歷史(週評通知測試用)。ids 沒給就用 failed 加補位題湊滿 total。"""
++    failed = list(failed)
++    if ids is None:
++        ids = failed + ["ok%d" % i for i in range(total - len(failed))]
++    row = {"ts": "2026-10-01", "seed": seed, "passed": passed, "total": total, "failed": failed,
++           "excluded": [], "inconclusive": False, "fatal": False, "grader": grader, "ids": list(ids)}
++    row.update(kw)
++    return row
++
++
++def t_weekly_alert_fallback_when_thin_history():
++    """[週評通知 S1]同判準的過去週不到 3 週:照舊有題沒過就通知、全過不通知,原因寫明基準不足與週數。"""
++    mod = _load_probe_module("sp_wa1")
++    past = [_wk("2026-W40", 8, 8), _wk("2026-W41", 7, 8, ["a"])]
++    v = mod.weekly_alert([*past, _wk("2026-W42", 7, 8, ["b"])])
++    check("週評 S1:基準不足 + 有題沒過 → 通知,原因寫明基準不足與 2 週",
++          v["notify"] is True and "基準不足" in v["reason"] and "2 週" in v["reason"], v)
++    v2 = mod.weekly_alert([*past, _wk("2026-W42", 8, 8)])
++    check("週評 S1:基準不足 + 全過 → 不通知", v2["notify"] is False, v2)
++    # 整批被排除(無法下結論)或儀器事故:沒過清單是空的,沒有這一支就會整週靜默(代碼審 r2 正確性席)
++    for flag in ("inconclusive", "fatal"):
++        bad = mod.weekly_alert([*past, _wk("2026-W42", 0, 8, [], ids=[], **{flag: True})])
++        check("週評 S1:本週 %s → 一定通知" % flag, bad["notify"] is True and "無法下結論" in bad["reason"], bad)
++    # 判準不同的過去週不算進「同判準」:三週舊判準 + 一週同判準 → 仍是基準不足
++    v3 = mod.weekly_alert([_wk("2026-W38", 8, 8, grader="OLD"), _wk("2026-W39", 8, 8, grader="OLD"),
++                           _wk("2026-W40", 8, 8, grader="OLD"), _wk("2026-W41", 8, 8),
++                           _wk("2026-W42", 7, 8, ["b"])])
++    check("週評 S1:舊判準的週不算 → 同判準只有 1 週、基準不足", v3["notify"] is True and "1 週" in v3["reason"], v3)
++    # 探針主程式印給自主迴圈的那一行:週抽才印、讀歷史檔、壞行跳過;不是週抽(手動跑)不印,自主迴圈退回舊規則
++    import json as _j, tempfile as _tf
++    hp = Path(_tf.mkdtemp(prefix="gctl-weekly-")) / "history.jsonl"
++    try:
++        hp.write_text("\n".join([_j.dumps(r) for r in past] + ["壞行", _j.dumps(_wk("2026-W42", 7, 8, ["b"]))]) + "\n", encoding="utf-8")
++        ln = mod.weekly_alert_line(str(hp), "2026-W42")
++        check("週評 S1:週抽印「週評通知:是 — 原因」(壞行跳過)", ln is not None and ln.startswith("週評通知:是 — ") and "基準不足" in ln, ln)
++        check("週評 S1:不是週抽的種子不印", mod.weekly_alert_line(str(hp), "manual-1") is None, "")
++        check("週評 S1:歷史檔讀不了不印", mod.weekly_alert_line(str(hp) + ".nope", "2026-W42") is None, "")
++        # 歷史檔夾了編碼壞掉的位元組 → 不印,不丟例外(r2 正確性席)
++        enc = hp.parent / "bad-enc.jsonl"
++        enc.write_bytes(b"\xe5\x82 broken\n" + _j.dumps(_wk("2026-W42", 7, 8, ["b"])).encode("utf-8") + b"\n")
++        try:
++            got_enc = mod.weekly_alert_line(str(enc), "2026-W42")
++        except Exception as e:
++            got_enc = repr(e)
++        check("週評 S1:歷史檔編碼壞掉 → 不印、不丟例外", got_enc is None, got_enc)
++        # 最後一列是預設週抽但不是這次的種子 → 不印
++        hp.write_text("\n".join(_j.dumps(r) for r in [*past]) + "\n", encoding="utf-8")
++        check("週評 S1:最後一列的種子不是這次的 → 不印", mod.weekly_alert_line(str(hp), "2026-W42") is None, "")
++        # 剛寫進去的那列不是預設週抽(跑多次、別的組別)→ 不印,免得判定行講的是上一週(代碼審 r1 正確性席)
++        hp.write_text("\n".join(_j.dumps(r) for r in [_wk("2026-W41", 7, 8, ["x"]), _wk("2026-W42", 8, 8, runs=3)]) + "\n", encoding="utf-8")
++        check("週評 S1:最後一列不是預設週抽 → 不印", mod.weekly_alert_line(str(hp), "2026-W42") is None, mod.weekly_alert_line(str(hp), "2026-W42"))
++        # 歷史列缺欄位(有 passed 沒 total)不能讓主程式丟例外
++        good3 = [_wk("2026-W%d" % w, 8, 8) for w in (38, 39, 40)]   # 基準夠,計算一定走到合計通過率那一步
++        hp.write_text("\n".join(_j.dumps(r) for r in [*good3, {"seed": "2026-W41", "passed": 8, "grader": "G1", "ids": ["z"]},
++                                                      _wk("2026-W42", 7, 8, ["b"])]) + "\n", encoding="utf-8")
++        try:
++            got = mod.weekly_alert_line(str(hp), "2026-W42")
++        except Exception as e:
++            got = repr(e)
++        check("週評 S1:歷史列缺 total → 那列當不是週抽跳過,判定照印", str(got).startswith("週評通知:"), got)
++        # 判斷本身出任何意外 → 不印(交回自主迴圈的舊規則),不讓探針帶著例外退出
++        from unittest.mock import patch as _patch
++        with _patch.object(mod, "weekly_alert", side_effect=RuntimeError("boom")):
++            check("週評 S1:判斷丟例外 → 不印", mod.weekly_alert_line(str(hp), "2026-W42") is None, "")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(hp.parent, ignore_errors=True)
++    print("  ✓ t_weekly_alert_fallback_when_thin_history")
++
++
++def t_weekly_alert_repeated_failure():
++    """[週評通知 S2]同一題最近一次出現也沒過才叫;上次出現有過的單次沒過不叫;題號清單不含它的週不算它出現過。"""
++    mod = _load_probe_module("sp_wa2")
++    base = [_wk("2026-W38", 8, 8, ids=["b"] + ["p%d" % i for i in range(7)]),
++            _wk("2026-W39", 8, 8, ids=["c"] + ["q%d" % i for i in range(7)])]
++    rep = mod.weekly_alert([_wk("2026-W37", 7, 8, ["a"]), *base, _wk("2026-W40", 7, 8, ["a"])])
++    check("週評 S2:a 在最近一次出現(W37,中間兩週沒抽到)也沒過 → 通知並點名 a",
++          rep["notify"] is True and "a" in rep["reason"] and "連續" in rep["reason"], rep)
++    passed_last = mod.weekly_alert([_wk("2026-W36", 7, 8, ["a"]), _wk("2026-W37", 8, 8, ids=["a", *("r%d" % i for i in range(7))]),
++                                    *base, _wk("2026-W40", 7, 8, ["a"])])
++    check("週評 S2:a 上一次出現(W37)有過 → 單次沒過,不通知", passed_last["notify"] is False and "a" in passed_last["reason"], passed_last)
++    never = mod.weekly_alert([_wk("2026-W37", 8, 8), *base, _wk("2026-W40", 7, 8, ["z"])])
++    check("週評 S2:z 以前沒出現過 → 不通知", never["notify"] is False, never)
++    # 同一週重跑的列不算「過去週」:同一次失敗不能被算成連續兩次,也不能把基準週數灌水(r1 正確性席)
++    w42 = _wk("2026-W42", 7, 8, ["a"], ids=["a", "d"])
++    rerun = mod.weekly_alert([_wk("2026-W39", 8, 8, ids=["a"]), _wk("2026-W40", 8, 8, ids=["b"]), _wk("2026-W41", 8, 8, ids=["c"]), w42, dict(w42)])
++    check("週評 S2:同一週重跑兩列 → 不算連續兩次(上一次出現是 W39 有過)", rerun["notify"] is False, rerun)
++    pad = mod.weekly_alert([_wk("2026-W41", 8, 8, ids=["z"]), _wk("2026-W41", 8, 8, ids=["z"]), _wk("2026-W41", 8, 8, ids=["z"]),
++                            _wk("2026-W42", 7, 8, ["q"])])
++    check("週評 S2:同一週三列只算一週 → 基準不足、照舊通知", pad["notify"] is True and "1 週" in pad["reason"], pad)
++    # 有儀器事故或無法下結論的過去週不算「上一次出現」:那週的題號只含部分題目(r2 正確性席)
++    for flag in ("fatal", "inconclusive"):
++        acc = mod.weekly_alert([_wk("2026-W36", 8, 8, ids=["a"]), _wk("2026-W37", 7, 8, ["a"], **{flag: True}), *base,
++                                _wk("2026-W40", 8, 8, ids=["e"]), _wk("2026-W41", 7, 8, ["a"])])
++        check("週評 S2:上一次出現那週是 %s → 不算,往前找到有過的那次 → 不通知" % flag, acc["notify"] is False, acc)
++    print("  ✓ t_weekly_alert_repeated_failure")
++
++
++def t_weekly_alert_significant_drop():
++    """[週評通知 S3]本週通過率的 Wilson 上緣低於同判準過去週合計的 Wilson 下緣才算顯著下降;6/8 不算;舊判準的週不進基準。"""
++    mod = _load_probe_module("sp_wa3")
++    past = [_wk("2026-W%d" % w, 8, 8) for w in (37, 38, 39)]
++    drop = mod.weekly_alert([*past, _wk("2026-W40", 3, 8, ["x1", "x2", "x3", "x4", "x5"])])
++    check("週評 S3:過去 24/24、本週 3/8 → 通知(顯著下降)", drop["notify"] is True and "顯著" in drop["reason"], drop)
++    mild = mod.weekly_alert([*past, _wk("2026-W40", 6, 8, ["x1", "x2"])])
++    check("週評 S3:本週 6/8、沒有重複失敗 → 不通知", mild["notify"] is False, mild)
++    old = [_wk("2026-W%d" % w, 0, 8, ["x1"], ids=["x1"] + ["o%d" % i for i in range(7)], grader="OLD") for w in (34, 35, 36)]
++    mixed = mod.weekly_alert([*old, *past, _wk("2026-W40", 6, 8, ["x1", "x2"])])
++    check("週評 S3:舊判準的週不進基準(x1 在舊判準連敗也不算重複失敗)", mixed["notify"] is False, mixed)
++    # Wilson 借不到(scripts/lumos 載不進)→ 退回有題沒過就通知,原因寫明
++    from unittest.mock import patch as _patch
++    with _patch.object(mod, "_wilson", return_value=None):
++        nw = mod.weekly_alert([*past, _wk("2026-W40", 7, 8, ["x1"])])
++        nw2 = mod.weekly_alert([*past, _wk("2026-W40", 8, 8)])
++    check("週評 S3:載不進 Wilson + 有題沒過 → 通知並寫明", nw["notify"] is True and "Wilson" in nw["reason"], nw)
++    check("週評 S3:載不進 Wilson + 全過 → 不通知", nw2["notify"] is False, nw2)
++    # 同判準但沒有題號的舊列(2026-10-03 起到本計劃之前)不算基準:算了就走過基準不足、重複失敗卻永遠判不出(r1 正確性席)
++    noids = [_wk("2026-W%d" % w, 7 if w == 37 else 8, 8, ["a"] if w == 37 else [], ids=[]) for w in (37, 38, 39, 40)]
++    for r in noids:
++        r.pop("ids")
++    v = mod.weekly_alert([*noids, _wk("2026-W41", 7, 8, ["a"], ids=["a", "b"])])
++    check("週評 S3:同判準但沒題號的週不算 → 基準不足、照舊通知", v["notify"] is True and "基準不足" in v["reason"], v)
++    print("  ✓ t_weekly_alert_significant_drop")
++
++
++def t_probe_history_records_ids():
++    """[週評通知 S4]週抽歷史帶本週有效場次的題號;被排除的(截斷、用量上限)不在裡面。"""
++    mod = _load_probe_module("sp_wa4")
++    rs = [_probe_res("a", True), _probe_res("b", False, "沒敲到期望指令"),
++          _probe_res("c", False, "儀器例外: 撞到回合上限", truncated=True)]
++    h = mod.history_record("2026-10-13", "2026-W42", mod.summarize_results(rs))
++    check("週評 S4:歷史列帶有效場次題號、不含被排除的", h.get("ids") == ["a", "b"], h)
++    # 整支跑主程式(模型換成假的):寫週抽歷史時帶題號,並且真的印出給自主迴圈的「週評通知」行
++    import tempfile, json, contextlib, io
++    from unittest.mock import patch
++    with tempfile.TemporaryDirectory(prefix="gctl-weekly-main-") as td:
++        root = Path(td)
++        sc = _source_probe_fixture(root / "src")
++        q = root / "q.jsonl"
++        q.write_text(json.dumps(sc) + "\n")
++        hist = root / "history.jsonl"
++        hist.write_text("", encoding="utf-8")
++
++        def model(*args, **kwargs):
++            r = _probe_res(sc["id"], False, "沒敲到期望指令")
++            r.update(first_tool=None, secs=0, source_evidence="absent")
++            return r
++        buf = io.StringIO()
++        with patch.object(mod.sys, "argv", ["probe", "--repo", str(root / "src"), "--scenarios", str(q), "--seed", "2026-W42",
++                                            "--ts", "2026-10-13", "--history", str(hist), "--out", str(root / "out.json")]), \
++             patch.object(mod, "check_scenario_targets", return_value=[]), patch.object(mod, "global_skills_health", return_value=[]), \
++             patch.object(mod, "run_one", side_effect=model), contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
++            mod.main()
++        rows = [json.loads(ln) for ln in hist.read_text(encoding="utf-8").splitlines() if ln.strip()]
++        check("週評 S4:主程式寫的歷史列帶題號", rows and rows[-1].get("ids") == [sc["id"]], rows)
++        check("週評 S4:主程式印出「週評通知:是 — 基準不足…」", any(ln.startswith("週評通知:是 — ") and "基準不足" in ln for ln in buf.getvalue().splitlines()),
++              buf.getvalue()[-300:])
++        msg = [ln for ln in buf.getvalue().splitlines() if ln.startswith("MSG:")]
++        check("週評 S4:要通知時主程式另印一行 MSG:整句訊息(含總結行與判定原因)",
++              len(msg) == 1 and "個情境 Claude 自己敲對了" in msg[0] and "基準不足" in msg[0], msg)
++    print("  ✓ t_probe_history_records_ids")
++
++
++def t_autoloop_probe_alert_follows_verdict():
++    """[週評通知 S5]自主迴圈探針段照探針印的「週評通知」行決定送不送 LINE、訊息帶原因;沒有那一行時退回 p≠n 就送。
++    把 run_probe 整段抽出來,在沙盒用假的探針腳本(只印指定輸出)與假的 LINE 模組(把訊息寫進檔)跑,不碰真的 claude 與 LINE。"""
++    import os as _os, subprocess as _sp, shutil as _sh, tempfile as _tf, re as _re
++    root = Path(GRAPHCTL).resolve().parent.parent
++    src = (root / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
++    m = _re.search(r"^run_probe\(\)\{.*?^\}\n", src, _re.S | _re.M)
++    check("週評 S5 前置:抽得到 run_probe 函式", m is not None, "")
++    if m is None:
++        return
++    sand = Path(_tf.mkdtemp(prefix="gctl-weekly-"))
++    try:
++        (sand / "governance" / "scenarios").mkdir(parents=True)
++        (sand / "governance" / "autonomous_loop").mkdir(parents=True)
++        (sand / "governance" / "autonomous_loop" / "__init__.py").write_text("", encoding="utf-8")
++        (sand / "governance" / "autonomous_loop" / "line_notify.py").write_text(
++            "import os\ndef build_report(t, x):\n    return t + '|' + x\n"
++            "def send(msg, tok):\n    open(os.environ['FAKE_LINE_OUT'], 'a', encoding='utf-8').write(msg + '\\n')\n    return 'sent'\n",
++            encoding="utf-8")
++        (sand / "scripts").mkdir()
++        (sand / "scripts" / "scenario_probe.py").write_text(
++            "import os\nprint(open(os.environ['FAKE_PROBE_OUT'], encoding='utf-8').read())\n", encoding="utf-8")
++        hist = sand / "governance" / "scenarios" / "history.jsonl"
++        bindir = sand / "bin"
++        bindir.mkdir()
++        (bindir / "claude").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
++        (bindir / "claude").chmod(0o755)
++        home = sand / "home"
++        (home / ".config" / "ai-daily").mkdir(parents=True)
++        (home / ".config" / "ai-daily" / "line_token").write_text("tok", encoding="utf-8")
++        script = sand / "t.sh"
++        script.write_text("set -euo pipefail\nlog(){ echo \"LOG $*\"; }\n" + m.group(0) + "run_probe\n", encoding="utf-8")
++
++        def run(probe_out):
++            hist.write_text('{"seed": "2000-W01"}\n', encoding="utf-8")   # 非空、且不是本週:會抽
++            (sand / "probe.txt").write_text(probe_out, encoding="utf-8")
++            out = sand / "line.txt"
++            if out.exists():
++                out.unlink()
++            env = dict(_os.environ, REPO=str(sand), LOGDIR=str(sand), TODAY="2026-10-13", HOME=str(home),
++                       PATH=str(bindir) + ":" + _os.environ.get("PATH", ""),
++                       FAKE_PROBE_OUT=str(sand / "probe.txt"), FAKE_LINE_OUT=str(out))
++            r = _sp.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=60)
++            return r, (out.read_text(encoding="utf-8") if out.exists() else "")
++        r1, l1 = run("6/8 個情境 Claude 自己敲對了 lumos 指令\n週評通知:否 — 單次沒過,下次抽到再看:x1、x2\n")
++        check("週評 S5:探針判不通知 → 不送 LINE(即使 6/8)", r1.returncode == 0 and l1 == "", (r1.returncode, l1, r1.stderr[-300:]))
++        r2, l2 = run("6/8 個情境 Claude 自己敲對了 lumos 指令\n週評通知:是 — x1 連續兩次出現都沒過\n"
++                     "MSG:情境探針本週要看:6/8;週評通知:是 — x1 連續兩次出現都沒過\n")
++        check("週評 S5:探針判要通知 → 照 MSG 行原樣送 LINE(訊息由 python 組好,同 run_replay)",
++              "情境探針本週要看:6/8;週評通知:是 — x1 連續兩次出現都沒過" in l2, (l2, r2.stderr[-300:]))
++        r5, l5 = run("6/8 個情境 Claude 自己敲對了 lumos 指令\n週評通知:是 — x1 連續兩次出現都沒過\n")
++        check("週評 S5:有判定行但沒有 MSG 行 → 不送(只認 MSG 行,不在 shell 自己組)", l5 == "", (l5, r5.stderr[-300:]))
++        r3, l3 = run("6/8 個情境 Claude 自己敲對了 lumos 指令\n")
++        check("週評 S5:沒有週評通知行 → 退回 p≠n 照舊送 LINE", "6/8" in l3, (l3, r3.stderr[-300:]))
++        _r4, l4 = run("8/8 個情境 Claude 自己敲對了 lumos 指令\n")
++        check("週評 S5:沒有週評通知行而且全過 → 不送", l4 == "", l4)
++    finally:
++        _sh.rmtree(sand, ignore_errors=True)
++    print("  ✓ t_autoloop_probe_alert_follows_verdict")
++
++
+ def t_probe_flags_truncation_heavy_batches():
+     """探針判準對齊程式碼為主 [S3]:同題截斷過半要點名;有效不到一半 → 分母退回整批、寫明不能下結論(自主迴圈靠 p≠n 發通知,不退回會 0/0 安靜全過)。"""
+     mod = _load_probe_module("sp_heavy")
+     rs = [_probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("q", False, "儀器例外: 撞到回合上限", truncated=True),
+           _probe_res("q", True), _probe_res("r", False, "儀器例外: 撞到回合上限", truncated=True), _probe_res("r", True), _probe_res("s", True)]
+     s = mod.summarize_results(rs)
+     check("探針總結: q 三場截斷兩場 → 點名;r 兩場截斷一場(剛好一半)→ 不點名", s["mostly_truncated"] == ["q"] and "q" in s["line"], (s["mostly_truncated"], s["line"]))
+     check("探針總結: 有效 3/6 剛好一半 → 還算可下結論", not s["inconclusive"] and (s["passed"], s["scored"]) == (3, 3), s["line"])
+     all_t = [_probe_res(f"z{i}", False, "儀器例外: 撞到回合上限", truncated=True) for i in range(7)] + [_probe_res("ok", True)]
+     s2 = mod.summarize_results(all_t)
