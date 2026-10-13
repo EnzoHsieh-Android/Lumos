@@ -26,6 +26,7 @@ verified_by:
   - "[[Verification/2026-08-27_decision_refs養成T3v4落地]]"
   - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
   - "[[Verification/2026-09-09_審查有沒有用記帳落地]]"
+  - "[[Verification/2026-10-13_引句判準第一階段推送前驗證]]"
 summary: |-
   WHY:loop next 帶 --spec 代問的閘依編號新舊分流:退役日(_panel_retired_for)之後的新編號問處置閘,之前的舊編號照舊問 panel 閘回放 [出處:[[Issues/loop-next帶spec誤走退役panel閘]]] [因:panel 閘 2026-08-25 退役後新編號問它只會拒判 rc2,手冊第 1 步的寫法照做必擋] [不選:loop next 一律問處置閘(舊 panel 帳沒有處置清單,會全判不過)] [test:t_loop_next_spec_uses_disposal_gate_for_new_loops]
   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]loop next 對代碼審迴圈多一段修正關卡提醒(最新一輪有要修正紀錄的折入、沒有有效通過紀錄就印;只附加、不改 phase 與回傳碼,--json 多 fix_check 欄);代碼審第 2 輪起處置記帳範本多帶 --regression-set,而且 gate-pending 也給範本(第 2 輪起多半停在那裡) [test:t_loop_next_fix_check_reminder]
@@ -184,3 +185,12 @@ REVISIT:2026-12-08 查治理帳與回報有沒有「同一個編號的判定檔�
 ## loop next 的人數以應派名冊為準(2026-10-13)
 
 WHY:loop next 印的「這輪要 N 人審」與 --json 的 width/min_seats,新迴圈從應派名冊數(佔人數的必派席;名冊為空才退回 _TIER_PARAMS);首筆帳在 panel 閘退役日前的舊 panel 迴圈維持 _TIER_PARAMS 原值 [出處:2026-10-13 一般分級代碼審記帳帶了 --round,人數印 3、名冊只列一位審查員;第一版連 panel 閘的最少人數一起改(r1 單審席:放寬舊迴圈的閘),第二版只改印的數字(r2 單審席實跑出印 1 人、閘要 3 人)] [因:新迴圈代問處置閘,處置閘不收最少人數,照名冊不會改到判定;舊迴圈代問 panel 閘,這個數字就是每輪最少人數,改它等於改收斂判準,要走設計審] [不選:只修一般分級代碼審那個組合——其他組合目前剛好一致,但同一個病根] [test:t_loop_next_width_matches_roster]
+
+## 引句判準蓋在帳上(2026-10-13,[[Projects/引句錨定整段比對_計劃]] 第一階段)
+
+WHY:載體列寫入時蓋 `quote_rule=<判準版本>`,處置閘與回放照帳上的章選判準(沒有章=legacy,章值不認得=判失敗);寫側用哪一版由程式常數 `_QUOTE_WRITE_RULE` 決定,第一階段是 `legacy`(行為不變) [出處:Projects/引句錨定整段比對_計劃 d1 與設計審 r1–r4] [因:判準跟著程式走時,換判準要嘛推進回放引擎版本(全部黃金抽查跳過重算),要嘛用時間切換(合入當天與時區兩個坑);章在帳上,回放的決定性由章保證] [不選:推進 _REPLAY_ENGINE_REV、時間切換、寫側判準放設定檔(寫壞就悄悄退版,帳只進不出)] [test:t_quote_full_span_rule_stamped_on_ledger] [test:t_quote_full_span_replay_follows_stamp]
+RULE:蓋過章的判準不再改它的判定,要改就新增版本值與分支、舊分支原樣留著;只修丟例外不改判定的錯不算 [依據:審計] [since:2026-10-13] [retire:when-symbol:scripts/lumos::_quote_rows_full_span_v1] [confirmed:2026-10-13] [test:t_quote_full_span_v1_pinned]
+WHY:處置閘遇到判準本身丟例外時判失敗、不 traceback,回放因此算出跟凍結時不同的判定、週跑報邏輯漂移(紅燈);寫側主檢查丟例外照原政策往外傳 [出處:引句錨定整段比對設計審 r4 邊界、回滾兩席] [因:原本只接住讀檔錯誤,判準一壞就整支 traceback,週跑把它歸成一般錯誤不當紅燈] [test:t_quote_full_span_rule_stamped_on_ledger]
+WHY:寫側用引句判準擋下載體(含零引句)時記一筆 canary blocked 事件,note 以 `quote-rule:` 開頭,帶另一版判準算出的 kind、出問題引句的前 60 字與報告指紋;`gov --stats` 的寫側擋下多一格「引句判準」,先判 note 開頭再分其餘三格 [出處:引句錨定整段比對設計審 r4 接手的人席] [因:擋下那一刻是唯一確定讀得到報告原文的時候,事後報告常被退回重寫覆蓋;第二條 REVISIT 要靠這筆判真抓或誤傷] [test:t_quote_full_span_block_event_and_stats]
+WHY:引句判準遇到記憶體不足(`MemoryError`)在處置閘與寫側求 kind 兩處一律照常往外丟,不當成判準丟例外 [出處:代碼審 code-引句錨定整段比對 r1–r3 資源、架構對齊席] [因:暫時性資源不足若被當成判準失敗,會被凍成判失敗的標準答案] [test:t_quote_full_span_rule_stamped_on_ledger] [test:t_quote_full_span_block_event_and_stats]
+REVISIT:[when-status:Projects/引句錨定整段比對_計劃=done][by:2026-12-31] 第二階段合入時把本節與〈載體席的引句要全錨〉那節補上「只保證引號裡面那段」並改寫成現況(第一階段寫側仍是舊判準,不能先寫)

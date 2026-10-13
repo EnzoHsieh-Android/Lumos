@@ -26895,6 +26895,381 @@ def t_quote_check_field_test_gaps():
     check("編造引句照樣 rc1", run(v, "quote-check", str(bad), "--spec", str(snap)).returncode == 1, "")
 
 
+_QFS_SNAP = ("# 審材\n合法前綴文字至少十個字,後面接的是別的東西。\n規則「甲」其實存在,規則乙也在。\n第一行內容在這裡\n第二行內容接著寫\n"
+             "範本寫:引句:「原文要逐字抄十個字以上」,不要改字。\n")
+_QFS_V1, _QFS_OLD = "full-span-v1", "legacy"
+
+
+def _qfs_rows(m, report, rule):
+    return m._quote_rows(report, _QFS_SNAP, rule=rule)
+
+
+def t_quote_full_span_blocks_fabricated_suffix():
+    """[引句錨定整段比對 S1]前綴照抄、接閉引號、再接編造文字與另一個閉引號(同行、換行後才補、另一型收尾引號、
+    中間插一個後面不是開引號的「引句:」字樣、前文有沒閉合的開引號——r4 兩席實測全域堆疊會把收尾引號配給它):
+    新判準判格式不合 kind=stray;舊判準照舊判錨定。"""
+    m = _load_lumos_inproc()
+    for label, fab in (("同行", "引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n"),
+                       ("換行後才補", "引句:「合法前綴文字至少十個字」\n編造後半根本不在審材裡」\n"),
+                       ("另一型收尾引號", "引句:「合法前綴文字至少十個字」編造後半根本不在審材裡』\n"),
+                       ("中間插非標籤字樣", "引句:「合法前綴文字至少十個字」這是引句:編造後半」\n"),
+                       ("前文有沒閉合的開引號", "他提到「某規則 還沒結束\n引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n")):
+        old = _qfs_rows(m, fab, _QFS_OLD)
+        new = _qfs_rows(m, fab, _QFS_V1)
+        check("引句整段 S1 前置(%s):舊判準判錨定(漏洞存在)" % label, old and all(r["ok"] for r in old), old)
+        check("引句整段 S1(%s):新判準判格式不合 kind=stray" % label,
+              new and len(new) == 1 and not new[0]["ok"] and new[0].get("malformed") and new[0].get("kind") == "stray", new)
+    real = "引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n"
+    check("引句整段 S1:原文整句照抄 → 新判準判錨定", all(r["ok"] for r in _qfs_rows(m, real, _QFS_V1)), "")
+    print("  ✓ t_quote_full_span_blocks_fabricated_suffix")
+
+
+def t_quote_full_span_nested_and_multiline():
+    """[引句錨定整段比對 S2]同型巢狀、或引句內含另一個完整「引句:「…」」:抽整段、只產生一條結果;跨行照舊。"""
+    m = _load_lumos_inproc()
+    r1 = _qfs_rows(m, "引句:「規則「甲」其實存在,規則乙也在。」\n", _QFS_V1)
+    check("引句整段 S2:同型巢狀抽整段(含內層引號)並判錨定",
+          len(r1) == 1 and r1[0]["quote"] == "規則「甲」其實存在,規則乙也在。" and r1[0]["ok"], r1)
+    r1o = _qfs_rows(m, "引句:「規則「甲」其實存在,規則乙也在。」\n", _QFS_OLD)
+    check("引句整段 S2 前置:舊判準把同一句截在內層、判錨不到", r1o and not r1o[0]["ok"], r1o)
+    r2 = _qfs_rows(m, "引句:「規則「甲」其實存在,但這半句是編的」\n", _QFS_V1)
+    check("引句整段 S2:巢狀後半不在快照 → 錨不到", len(r2) == 1 and not r2[0]["ok"] and not r2[0].get("malformed"), r2)
+    inner = _qfs_rows(m, "引句:「範本寫:引句:「原文要逐字抄十個字以上」,不要改字。」\n", _QFS_V1)
+    check("引句整段 S2:引句內含完整「引句:「…」」→ 外層整段一條結果並錨定,不多出幽靈條目", len(inner) == 1 and inner[0]["ok"], inner)
+    r3 = _qfs_rows(m, "引句:「第一行內容在這裡\n第二行內容接著寫」\n", _QFS_V1)
+    check("引句整段 S2:跨行引句抽整段並判錨定(保留既有行為)", r3 and r3[0]["ok"] and "第二行" in r3[0]["quote"], r3)
+    print("  ✓ t_quote_full_span_nested_and_multiline")
+
+
+def t_quote_full_span_unclosed_and_trailing_note():
+    """[引句錨定整段比對 S3]沒有配對閉引號只讓那一條判 kind=unclosed,後面的標籤照常;忘了閉合又被後面的落單收尾引號
+    補閉合 → 整段錨不到(仍擋)、被包進去的標籤不另成一條;落單收尾引號只算給前面最近那一條;引句後接註記照常;
+    兩型引號各自配對;5000 個未閉合標籤 1 秒內抽完(逐標籤往後掃的寫法是二次方,r3 實測)。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    rpt = "引句:「規則「甲」其實存在,規則乙也在。\n說明\n引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n"
+    r1 = _qfs_rows(m, rpt, _QFS_V1)
+    check("引句整段 S3:第一條沒有配對閉引號 → kind=unclosed;第二條照常抽出並錨定",
+          len(r1) == 2 and r1[0].get("kind") == "unclosed" and not r1[0]["ok"] and r1[1]["ok"], r1)
+    check("引句整段 S3:unclosed 列的 quote 是開引號之後到那一行結尾", r1 and r1[0]["quote"] == "規則「甲」其實存在,規則乙也在。", r1[:1])
+    cap = "引句:「忘了閉合的前半句\n引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n」\n"
+    rc = _qfs_rows(m, cap, _QFS_V1)
+    check("引句整段 S3:忘了閉合的引句被後面落單收尾引號補閉合 → 只有一條、整段錨不到、不是格式不合",
+          len(rc) == 1 and not rc[0]["ok"] and not rc[0].get("malformed") and "合法前綴" in rc[0]["quote"], rc)
+    near = "引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n引句:「第一行內容在這裡第二行」多一個」\n"
+    rn = _qfs_rows(m, near, _QFS_V1)
+    check("引句整段 S3:落單收尾引號只算給前面最近那一條,前一條照常錨定",
+          len(rn) == 2 and rn[0]["ok"] and not rn[0].get("malformed") and rn[1].get("kind") == "stray", rn)
+    r2 = _qfs_rows(m, "引句:「合法前綴文字至少十個字,後面接的是別的東西。」(第 2 行,這段是註記)\n", _QFS_V1)
+    check("引句整段 S3:引句後接註記、沒有落單收尾引號 → 照常比對並判錨定", len(r2) == 1 and r2[0]["ok"], r2)
+    r3 = _qfs_rows(m, "引句:「合法前綴文字至少十個字,後面接的是別的東西。」另見「說明『甲』」\n", _QFS_V1)
+    check("引句整段 S3:尾段兩型引號都成對 → 不判落單", len(r3) == 1 and r3[0]["ok"], r3)
+    r4 = _qfs_rows(m, "引句:「合法前綴文字至少十個字,後面接的是別的東西。」另見『甲」\n", _QFS_V1)
+    check("引句整段 S3:尾段『未閉合又多一個落單」→ 兩型各自配對,判 stray", len(r4) == 1 and r4[0].get("kind") == "stray", r4)
+    big = "引句:「甲甲甲甲甲甲甲甲甲甲\n" + "引句:「\n" * 5000
+    t0 = _t.perf_counter()
+    rb = _qfs_rows(m, big, _QFS_V1)
+    dt = _t.perf_counter() - t0
+    check("引句整段 S3:5000 個未閉合標籤 1 秒內抽完,每條 kind=unclosed",
+          dt < 1.0 and len(rb) == 5001 and all(r.get("kind") == "unclosed" for r in rb), (round(dt, 3), len(rb)))
+    print("  ✓ t_quote_full_span_unclosed_and_trailing_note")
+
+
+def t_quote_full_span_no_masking():
+    """[引句錨定整段比對 S4]反引號與圍欄裡的引句照舊抽取比對(r1 三席:遮蔽會讓包起來的造假整條消失);
+    格式不合列帶 malformed 與 kind 且 quote 欄最多 200 字;錨定與錨不到的列保留完整 quote(seat-check 拿全文比材料)。"""
+    m = _load_lumos_inproc()
+    rpt = ("說明:`引句:「這句話快照裡根本沒有喔喔喔」`\n```\n引句:「圍欄裡也是編的不在快照裡」\n```\n"
+           "引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n")
+    new = _qfs_rows(m, rpt, _QFS_V1)
+    check("引句整段 S4:反引號與圍欄裡的引句照常抽出(3 個標籤 3 條結果),造假的判錨不到",
+          len(new) == 3 and [r["ok"] for r in new] == [False, False, True], new)
+    long = _qfs_rows(m, "引句:「" + "長" * 500 + "\n", _QFS_V1)
+    check("引句整段 S4:格式不合列帶 malformed 與 kind,quote 欄最多 200 字加截斷標記",
+          len(long) == 1 and long[0].get("malformed") and long[0].get("kind") == "unclosed"
+          and len(long[0]["quote"]) <= 210 and "截斷" in long[0]["quote"], [len(long[0]["quote"])] if long else long)
+    miss = _qfs_rows(m, "引句:「" + "編" * 300 + "」\n", _QFS_V1)
+    check("引句整段 S4:錨不到的列保留完整 quote(300 字不截)",
+          len(miss) == 1 and not miss[0]["ok"] and not miss[0].get("malformed") and miss[0]["quote"] == "編" * 300,
+          [len(miss[0]["quote"])] if miss else miss)
+    print("  ✓ t_quote_full_span_no_masking")
+
+
+def _qfs_project(prefix):
+    """專案根 + docs 帳 + git(治理帳落 root/docs);三份席報告:整句照抄、後半編造、同型巢狀。"""
+    import subprocess as _sp
+    root, v = _stats_fixture(prefix, [])
+    _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    d = root / "docs"
+    spec = d / "spec.md"
+    spec.write_text(_QFS_SNAP, encoding="utf-8")
+    snap = d / "snap.md"
+    snap.write_text(_QFS_SNAP, encoding="utf-8")
+    head = "severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n"
+    files = {}
+    for name, q in (("good", "引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n"),
+                    ("fab", "引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n"),
+                    ("nest", "引句:「規則「甲」其實存在,規則乙也在。」\n")):
+        f = d / ("%s.md" % name)
+        f.write_text(head + q, encoding="utf-8")
+        files[name] = f
+    return root, v, d, spec, snap, files
+
+
+def _qfs_lumos(v, *args, rule=None, broken=None, exc="RuntimeError", consts=None):
+    """在同一程序裡跑 lumos:rule 給了就把寫側常數 _QUOTE_WRITE_RULE 換成它;broken 給了就讓 _quote_rows 對那一版丟例外
+    (產品碼不留切換判準的開關,subprocess 也注不進例外)。"""
+    import subprocess as _sp, sys as _sys
+    argv = ["lumos", "--vault", str(v), *args]
+    code = ("import sys, importlib.machinery, importlib.util\n"
+            "ld = importlib.machinery.SourceFileLoader('lm', %r)\n"
+            "sp = importlib.util.spec_from_loader('lm', ld); m = importlib.util.module_from_spec(sp); ld.exec_module(m)\n"
+            "rule, broken, exc, consts = %r, %r, %r, %r\n"
+            "for _k, _v in (consts or {}).items(): setattr(m, _k, _v)\n"
+            "if rule is not None: m._QUOTE_WRITE_RULE = rule\n"
+            "if broken is not None:\n"
+            "    orig = m._quote_rows\n"
+            "    def _b(*a, **k):\n"
+            "        if k.get('rule') == broken: raise __import__('builtins').__dict__[exc]('壞掉的判準')\n"
+            "        return orig(*a, **k)\n"
+            "    m._quote_rows = _b\n"
+            "sys.argv = %r\n"
+            "sys.exit(m._cli())\n") % (GRAPHCTL, rule, broken, exc, consts, argv)
+    return _sp.run([_sys.executable, "-c", code], capture_output=True, text=True)
+
+
+def _qfs_record(v, lid, rpt, snap, spec, auditor="正確性-sonnet", carrier=True, rule=_QFS_V1, broken=None, exc="RuntimeError"):
+    args = ["canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", auditor, "--severity", "minor",
+            "--findings", "1", "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", _sha256_of(spec)]
+    if carrier:
+        args += ["--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
+    return _qfs_lumos(v, *args, rule=rule, broken=broken, exc=exc)
+
+
+def _qfs_rows_of(d, lid):
+    import json as _j
+    led = d / ".canary-log.jsonl"
+    return [_j.loads(ln) for ln in (led.read_text(encoding="utf-8").splitlines() if led.exists() else []) if '"%s"' % lid in ln]
+
+
+def _qfs_set_row(d, lid, row):
+    """把該迴圈的載體列換成 row(其餘列不動);指紋照實重算由呼叫端負責。"""
+    import json as _j
+    led = d / ".canary-log.jsonl"
+    lines = led.read_text(encoding="utf-8").splitlines()
+    idx = [i for i, ln in enumerate(lines) if '"%s"' % lid in ln and '"findings_set"' in ln][-1]
+    lines[idx] = _j.dumps(row, ensure_ascii=False)
+    led.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def t_quote_full_span_rule_stamped_on_ledger():
+    """[引句錨定整段比對 S5]寫側常數 full-span-v1:通過蓋章、被擋不寫帳;處置閘照載體列的章選判準(載體列之後另有無章
+    非載體列也不影響)、無章用 legacy、章值不認得判失敗不 traceback;常數 legacy 時新帳蓋 legacy、舊 v1 帳照新判準;
+    第一階段常數是 legacy;處置閘遇到判準丟例外判失敗、印型別、不 traceback;手動 quote-check 第一行印判準、--rule 覆蓋、--json 帶 rule。"""
+    import json as _j, shutil as _sh
+    m = _load_lumos_inproc()
+    check("引句整段 S5:第一階段寫側常數是 legacy", m._QUOTE_WRITE_RULE == "legacy", m._QUOTE_WRITE_RULE)
+    check("引句整段 S5:診斷指令的參數經 _drift_sh(node=True):開頭是 - 補成 ./、含空白加引號、一般路徑原樣",
+          m._drift_sh("-x.md", node=True) == "./-x.md" and m._drift_sh("a b.md", node=True) == "'a b.md'"
+          and m._drift_sh("docs/a.md", node=True) == "docs/a.md",
+          (m._drift_sh("-x.md", node=True), m._drift_sh("a b.md", node=True)))
+    root, v, d, spec, snap, f = _qfs_project("gctl-qrs-")
+    try:
+        r = _qfs_lumos(v, "quote-check", str(f["fab"]), "--spec", str(snap), rule=_QFS_V1)
+        first = r.stdout.splitlines()[0] if r.stdout.strip() else ""
+        check("引句整段 S5:手動 quote-check 預設跟寫側常數(新判準),後半編造 rc1,第一行印判準,人讀輸出標出格式不合與 kind",
+              r.returncode == 1 and first == "引句判準:%s" % _QFS_V1 and "(格式不合:stray)" in r.stdout, (r.returncode, r.stdout[:300]))
+        r2 = _qfs_lumos(v, "quote-check", str(f["fab"]), "--spec", str(snap), "--rule", "legacy", "--json", rule=_QFS_V1)
+        js = _j.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+        check("引句整段 S5:--rule legacy 覆蓋常數、照舊判準判錨定,--json 物件帶 rule 欄", r2.returncode == 0 and js.get("rule") == "legacy", r2.stdout[:200])
+        lid = "qrs-%s" % _M1U
+        rw = _qfs_record(v, lid, f["fab"], snap, spec)
+        check("引句整段 S5:寫側用新判準擋下後半編造的載體,而且不寫帳", rw.returncode == 2 and not _qfs_rows_of(d, lid), (rw.returncode, rw.stderr[-200:]))
+        ok = _qfs_record(v, lid, f["good"], snap, spec)
+        _qfs_record(v, lid, f["good"], snap, spec, auditor="邊界-sonnet", carrier=False)
+        rows = _qfs_rows_of(d, lid)
+        car = [x for x in rows if "findings_set" in x]
+        check("引句整段 S5:寫側通過的載體列蓋 quote_rule=full-span-v1(非載體列不蓋)",
+              ok.returncode == 0 and car and car[-1].get("quote_rule") == _QFS_V1 and all("quote_rule" not in x for x in rows if "findings_set" not in x),
+              [x.get("quote_rule") for x in rows])
+
+        def gate(**kw):
+            return _qfs_lumos(v, "loop", "status", lid, "--disposal", "--spec", str(snap), "--repo", str(root), **kw)
+        base = car[-1]
+        fab_row = dict(base, report_path=base["report_path"].replace("good.md", "fab.md"), report_sha256=_sha256_of(f["fab"]))
+        _qfs_set_row(d, lid, fab_row)
+        g1 = gate()
+        check("引句整段 S5:載體列章 v1 + 報告後半編造 → 處置閘判不過並印判準(載體列之後的無章非載體列不影響)",
+              g1.returncode == 1 and ("引句判準:%s" % _QFS_V1) in g1.stdout, g1.stdout[-300:])
+        check("引句整段 S5:判不過時印診斷指令,帶處置閘共用的前綴與帳上的章",
+              "[disposal]     診斷:lumos quote-check " in g1.stdout and "--rule %s" % _QFS_V1 in g1.stdout, g1.stdout[-300:])
+        gm = gate(broken=_QFS_V1, exc="MemoryError")
+        check("引句整段 S5:判準遇到記憶體不足 → 照常往外丟(非 0、stderr 有 MemoryError),不當成判準丟例外",
+              gm.returncode != 0 and "MemoryError" in gm.stderr and "丟例外" not in gm.stdout, (gm.returncode, gm.stdout[-200:], gm.stderr[-200:]))
+        gx = gate(broken=_QFS_V1)
+        check("引句整段 S5:處置閘遇到判準丟例外 → 判失敗、印「丟例外」與型別、不 traceback",
+              gx.returncode == 1 and "丟例外" in gx.stdout and "RuntimeError" in gx.stdout and "Traceback" not in gx.stderr, (gx.returncode, gx.stdout[-300:], gx.stderr[-200:]))
+        _qfs_set_row(d, lid, {k: x for k, x in fab_row.items() if k != "quote_rule"})
+        g0 = gate()
+        check("引句整段 S5:載體列無章 → 照舊判準判過,並印「帳上無章」", g0.returncode == 0 and "帳上無章" in g0.stdout, g0.stdout[-300:])
+        for bad in ("", None, 5, ["full-span-v1"], "future-v9"):
+            _qfs_set_row(d, lid, dict(base, quote_rule=bad))
+            gb = gate()
+            check("引句整段 S5:章值 %r → 判失敗、印「引句判準欄不認得」、不 traceback" % (bad,),
+                  gb.returncode == 1 and "引句判準欄不認得" in gb.stdout and "Traceback" not in gb.stderr, (gb.returncode, gb.stdout[-200:], gb.stderr[-200:]))
+        zq = d / "零 引句.md"
+        zq.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n沒有引句\n", encoding="utf-8")
+        _qfs_set_row(d, lid, dict(base, report_path=base["report_path"].replace("good.md", "零 引句.md"), report_sha256=_sha256_of(zq)))
+        gz = gate()
+        check("引句整段 S5:零引句判失敗也印診斷指令,路徑照 --repo 解成實際路徑、含空白加了引號",
+              gz.returncode == 1 and "零引句" in gz.stdout and ("診斷:lumos quote-check '%s" % Path(root).resolve()) in gz.stdout,
+              [ln for ln in gz.stdout.splitlines() if "診斷" in ln or "零引句" in ln])
+        tq = d / "tab\tname.md"
+        tq.write_text(f["fab"].read_text(encoding="utf-8"), encoding="utf-8")
+        _qfs_set_row(d, lid, dict(fab_row, report_path=str(tq), report_sha256=_sha256_of(tq)))
+        gt = gate()
+        check("引句整段 S5:報告路徑含控制字元 → 診斷行改印說明、不印可照貼的指令",
+              gt.returncode == 1 and "不印可照貼的指令" in gt.stdout and "tab\tname" not in gt.stdout,
+              (gt.returncode, [ln for ln in gt.stdout.splitlines() if "\t" in ln or "診斷" in ln or "quote" in ln]))
+        _qfs_set_row(d, lid, fab_row)
+        check("引句整段 S5:寫側常數是 legacy 時,已蓋 v1 的帳照新判準仍判不過", gate(rule="legacy").returncode == 1, "")
+        lx = "qrs-leg-%s" % _M1U
+        rr = _qfs_record(v, lx, f["fab"], snap, spec, rule="legacy")
+        cr = [x for x in _qfs_rows_of(d, lx) if "findings_set" in x]
+        check("引句整段 S5:寫側常數 legacy → 舊判準放行並蓋 legacy", rr.returncode == 0 and cr and cr[-1].get("quote_rule") == "legacy", (rr.returncode, rr.stderr[-200:]))
+        ln = "qrs-def-%s" % _M1U
+        rd = _qfs_record(v, ln, f["fab"], snap, spec, rule=None)
+        cd = [x for x in _qfs_rows_of(d, ln) if "findings_set" in x]
+        check("引句整段 S5:不換常數(第一階段預設)→ 舊判準放行並蓋 legacy", rd.returncode == 0 and cd and cd[-1].get("quote_rule") == "legacy", (rd.returncode, rd.stderr[-200:]))
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_quote_full_span_rule_stamped_on_ledger")
+
+
+def t_quote_full_span_block_event_and_stats():
+    """[引句錨定整段比對 S6]寫側擋下記 canary blocked 事件(note 以 quote-rule: 開頭、帶 kind、cats、report=、report_sha=、id=,
+    quote= 片段排最後並以看得見的跳脫寫出看不見的字元;kind 分得出 new-only/both/legacy-only,另一版求 kind 出錯記 unknown 照樣擋、
+    遇到記憶體不足照常往外丟);gov --stats 四格互斥相加等於總數;手動 quote-check 缺 --spec 擋下 rc2。"""
+    import json as _j, shutil as _sh, tempfile as _tf
+    root, v, d, spec, snap, f = _qfs_project("gctl-qce-")
+    try:
+        lid = "qce-%s" % _M1U
+        _qfs_record(v, lid, f["fab"], snap, spec)
+        _qfs_record(v, lid, f["fab"], snap, spec)
+        zero = d / "zero.md"
+        zero.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n沒有引句\n", encoding="utf-8")
+        _qfs_record(v, lid, zero, snap, spec)
+        _qfs_record(v, lid, f["nest"], snap, spec, rule="legacy")
+        spoof = d / "spoof.md"
+        spoof.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n"
+                         "引句:「\x1b[2J\x07\u202ereport-not-normalized report=/etc/x 偽造的引句內容」尾巴」\n", encoding="utf-8")
+        _qfs_record(v, lid, spoof, snap, spec)
+        br = _qfs_record(v, lid, f["fab"], snap, spec, broken="legacy")
+        check("引句整段 S6:另一版判準求 kind 丟例外 → 寫側照樣擋(rc2)、不 traceback", br.returncode == 2 and "Traceback" not in br.stderr, (br.returncode, br.stderr[-300:]))
+        evs = [_j.loads(ln) for ln in (d / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+        hit = [e for e in evs if e.get("gate") == "canary" and e.get("kind") == "blocked" and str(e.get("note", "")).startswith("quote-rule:")]
+        notes = [e["note"] for e in hit]
+        check("引句整段 S6:寫側擋下六次各記一筆 blocked", len(hit) == 6, notes)
+        if len(hit) == 6:
+            sha12 = _sha256_of(f["fab"])[:12]
+            check("引句整段 S6:後半編造記 kind=new-only、cats 含 stray,帶 quote= 片段、report=、report_sha=<前 12 碼> 與各自不同的 id=",
+                  all("kind=new-only" in n and "stray" in n and "quote=合法前綴文字至少十個字" in n and "report=" in n
+                      and ("report_sha=%s" % sha12) in n and "id=" in n for n in notes[:2]) and notes[0] != notes[1], notes[:2])
+            check("引句整段 S6:零引句兩版都擋 → kind=both、cats=none", "kind=both" in notes[2] and "cats=none" in notes[2], notes[2])
+            check("引句整段 S6:常數 legacy 擋下巢狀(新判準會放)→ kind=legacy-only、quote= 是被截的前半",
+                  notes[3].startswith("quote-rule:legacy") and "kind=legacy-only" in notes[3] and "quote=規則「甲" in notes[3], notes[3])
+            sp_note = notes[4]
+            check("引句整段 S6:引句片段濾掉控制字元、排在 note 最後,第一個 report= 是真的報告路徑(片段裡偽造的欄位騙不到)",
+                  "\x1b" not in sp_note and "\x07" not in sp_note and "\u202e" not in sp_note and "\\u202e" in sp_note and sp_note.index("quote=") > sp_note.index("id=")
+                  and sp_note.split("report=", 1)[1].startswith(str(spoof)), sp_note)
+            check("引句整段 S6:求 kind 出錯記 kind=unknown", "kind=unknown" in notes[5], notes[5])
+        bm = _qfs_record(v, "qce-mem-%s" % _M1U, f["fab"], snap, spec, broken="legacy", exc="MemoryError")
+        check("引句整段 S6:寫側求 kind 遇到記憶體不足 → 照常往外丟(非 0、stderr 有 MemoryError),不吞成 kind=unknown",
+              bm.returncode != 0 and "MemoryError" in bm.stderr, (bm.returncode, bm.stderr[-200:]))
+        m = _load_lumos_inproc()
+        n_tag = m._quote_block_note("legacy", [{"quote": "甲\U000E0041\u200e\u061c\u200b\ufeff\x1b乙", "ok": False}], "x", "x", str(f["good"]), "l", "a")
+        tail = n_tag.split("quote=", 1)[1]
+        check("引句整段 S6:片段裡看不見的字元(標籤字元、方向標記、零寬、BOM、ESC)原字元不進 note,換成看得見的 \\uXXXX",
+              not any(c in tail for c in "\U000E0041\u200e\u061c\u200b\ufeff\x1b") and "\\u200e" in tail and "\\u001b" in tail
+              and tail.startswith("甲") and tail.endswith("乙"), tail)
+        from unittest import mock as _mock
+        seen = []
+        _orig_kill = m._kill_esc
+        with _mock.patch.object(m, "_kill_esc", lambda v: seen.append(len(v)) or _orig_kill(v)):
+            m._quote_block_note("legacy", [{"quote": "長" * 100000, "ok": False}], "x", "x", str(f["good"]), "l", "a")
+        check("引句整段 S6:超長引句先截 60 字再跳脫(不對整條十萬字逐字元處理)", seen and max(seen) <= 60, seen[:3])
+        n_empty = m._quote_block_note("legacy", [{"quote": "   ", "ok": False}], "x", "x", str(f["good"]), "l", "a")
+        check("引句整段 S6:引句是空白時記 quote=-(跟沒有引句同一個佔位)", n_empty.endswith("quote=-"), n_empty)
+        n_leg = m._quote_block_note("legacy", [{"quote": "(引號未閉合/開閉型態不符,無法抽取)", "ok": False, "malformed": True}],
+                                    "x", "x", str(f["good"]), "l", "a")
+        check("引句整段 S6:舊判準的格式不合列(沒有 kind)記 cats=unclosed,不記成 miss", "cats=unclosed" in n_leg, n_leg)
+        st = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("引句整段 S6:gov --stats 四格互斥、相加等於總數(片段裡含 report-not-normalized 字樣的那筆只算引句判準)",
+              "記帳被寫側擋下 6 次(報告沒正規化 0 / 缺 refuted-set 0 / findings 多於 reported 0 / 引句判準 6)" in st, st[-600:])
+        b = run(v, "quote-check", str(f["good"]))
+        check("引句整段 S6:一般模式缺 --spec → rc2 擋下", b.returncode == 2 and "擋下" in b.stderr, (b.returncode, b.stderr[-200:]))
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_quote_full_span_block_event_and_stats")
+
+
+def t_quote_full_span_replay_follows_stamp():
+    """[引句錨定整段比對 S7]蓋 v1 章的迴圈凍結後回放判定不變(verdict rc0、fails 空);改章回放報帳被動;
+    帳不動、只有程式的 v1 分支丟例外時回放報邏輯漂移(週跑才會當紅燈,不落進一般錯誤)。"""
+    import json as _j, shutil as _sh
+    root, v, d, spec, snap, f = _qfs_project("gctl-qrp-")
+    try:
+        lid = "qrp-%s" % _M1U
+        _qfs_record(v, lid, f["nest"], snap, spec)
+        car = [x for x in _qfs_rows_of(d, lid) if "findings_set" in x]
+        check("引句整段 S7 前置:巢狀引句的載體用新判準記帳並蓋 v1", car and car[-1].get("quote_rule") == _QFS_V1, car)
+        import subprocess as _sp
+        for a in (["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "卷證"]):
+            _sp.run(["git", "-C", str(root), *a], capture_output=True)     # 凍結要求卷證已進版控
+        fr = run(v, "loop", "replay", lid, "--freeze", "--spec", str(snap), "--repo", str(root))
+        golden = root / "governance" / "replay" / lid / "verdict.json"
+        check("引句整段 S7 前置:凍結成功", fr.returncode == 0 and golden.exists(), fr.stdout[-300:] + fr.stderr[-200:])
+        vd = _j.loads(golden.read_text(encoding="utf-8")).get("verdict", {}) if golden.exists() else {}
+        check("引句整段 S7:凍結的判定是過(rc 0、fails 空)——巢狀照章用新判準", vd.get("rc") == 0 and vd.get("fails") == [], vd)
+        rp = run(v, "loop", "replay", lid, "--golden", str(golden), "--spec", str(snap), "--repo", str(root))
+        check("引句整段 S7:回放判定與凍結時相同", rp.returncode == 0, rp.stdout[-300:])
+        rb = _qfs_lumos(v, "loop", "replay", lid, "--golden", str(golden), "--spec", str(snap), "--repo", str(root), broken=_QFS_V1)
+        check("引句整段 S7:帳不動、程式的 v1 分支丟例外 → 回放報邏輯漂移", rb.returncode != 0 and "邏輯漂移" in rb.stdout, (rb.returncode, rb.stdout[-300:], rb.stderr[-200:]))
+        for tag, row in (("刪章", {k: x for k, x in car[-1].items() if k != "quote_rule"}), ("換成 legacy", dict(car[-1], quote_rule="legacy"))):
+            _qfs_set_row(d, lid, row)
+            rp2 = run(v, "loop", "replay", lid, "--golden", str(golden), "--spec", str(snap), "--repo", str(root))
+            check("引句整段 S7:%s後回放報帳被動" % tag, rp2.returncode != 0 and "帳被動" in rp2.stdout, rp2.stdout[-300:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_quote_full_span_replay_follows_stamp")
+
+
+def t_quote_full_span_v1_pinned():
+    """[引句錨定整段比對 S8]full-span-v1 的判定釘版:一組固定輸入的每條 (ok, malformed, kind) 必須跟下表完全相同。
+    ★這支紅了代表改了已蓋章判準的判定★——帳上蓋過 full-span-v1 的迴圈回放會跟凍結時對不上。該做的是新增一個版本值
+    (例如 full-span-v2)與對應分支,舊分支原樣留著;不是改這張表。只修丟例外、不改任何判定的錯,這支不該紅。"""
+    m = _load_lumos_inproc()
+    cases = (
+        ("引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n", [(True, False, None)]),
+        ("引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n", [(False, True, "stray")]),
+        ("他提到「某規則 還沒結束\n引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n", [(False, True, "stray")]),
+        ("引句:「合法前綴文字至少十個字」另一型收尾』\n", [(False, True, "stray")]),
+        ("引句:「規則「甲」其實存在,規則乙也在。」\n", [(True, False, None)]),
+        ("引句:「規則「甲」其實存在,但這半句是編的」\n", [(False, False, None)]),
+        ("引句:「範本寫:引句:「原文要逐字抄十個字以上」,不要改字。」\n", [(True, False, None)]),
+        ("引句:「沒閉合的一句\n引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n", [(False, True, "unclosed"), (True, False, None)]),
+        ("引句:「忘了閉合的前半句\n引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n」\n", [(False, False, None)]),
+        ("引句:「合法前綴文字至少十個字,後面接的是別的東西。」(第 2 行註記)\n", [(True, False, None)]),
+        ("引句:「短」\n", [(False, False, None)]),
+        ("引句:「這句話快照裡根本沒有喔喔喔」\n", [(False, False, None)]),
+        ("沒有任何標籤\n", []),
+    )
+    for text, want in cases:
+        got = [(r["ok"], bool(r.get("malformed")), r.get("kind")) for r in (_qfs_rows(m, text, _QFS_V1) or [])]
+        check("引句整段 S8:v1 判定釘版 %r" % text[:24], got == want, (got, want))
+    print("  ✓ t_quote_full_span_v1_pinned")
+
+
 def t_quote_check_nested_quotes_and_min_length():
     """[T8 終審 r1 findings 修復](loop code-dloop-redesign r1;s1-F2+否決席-F1 機械證實)
 
@@ -27135,7 +27510,7 @@ def t_canary_carrier_invalid_snapshot_encoding():
             if quote_fault:
                 shim = ("import runpy, sys\n"
                         f"sys.argv = {args!r}\nnamespace = runpy.run_path({GRAPHCTL!r})\n"
-                        f"def quote_rows(*args):\n    raise {quote_fault if isinstance(quote_fault, str) else 'RuntimeError'}('snapshot-quote-parser-fault')\n"
+                        f"def quote_rows(*args, **kwargs):\n    raise {quote_fault if isinstance(quote_fault, str) else 'RuntimeError'}('snapshot-quote-parser-fault')\n"
                         "namespace['cmd_canary'].__globals__['_quote_rows'] = quote_rows\n"
                         "sys.exit(namespace['main']())\n")
                 return subprocess.run([*prefix, "-c", shim], capture_output=True, text=True)
@@ -36876,7 +37251,7 @@ def t_s1_seat_check_preflight_order():
                 observed_reads.append(path)
                 return original_read(path, *args, **kwargs)
             env = {"Path": Path, "sys": sys, "os": _os_mod, "_quote_norm": lambda text: text,
-                   "_quote_rows": lambda *_: []}
+                   "_quote_rows": lambda *_, **__: [], "_QUOTE_WRITE_RULE": "legacy"}
             exec(compile(_ast.Module(body=[fn], type_ignores=[]), GRAPHCTL, "exec", optimize=optimized), env)
             stderr, stdout = _io.StringIO(), _io.StringIO()
             with patch.object(Path, "read_text", observed_read), redirect_stderr(stderr), redirect_stdout(stdout):
@@ -37957,7 +38332,7 @@ def t_canary_reported_normalized():
         _rej = [l for l in gov.splitlines() if '"blocked"' in l and "report-not-normalized" in l]
         check("reported:被擋三次都留 blocked 事件(report-not-normalized),三筆各自獨立", len(_rej) == 3, gov[-300:])
         _st = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
-        check("reported:gov --stats 算到擋下 3 次(連撞多半在同一秒,靠事件隨機碼分開;r1 f5/codex f3)", "記帳被寫側擋下 3 次(報告沒正規化 3 / 缺 refuted-set 0 / findings 多於 reported 0)" in _st, _st[-600:])
+        check("reported:gov --stats 算到擋下 3 次(連撞多半在同一秒,靠事件隨機碼分開;r1 f5/codex f3)", "記帳被寫側擋下 3 次(報告沒正規化 3 / 缺 refuted-set 0 / findings 多於 reported 0 / 引句判準 0)" in _st, _st[-600:])
         check("reported:被擋沒落 canary 帳", not (d / ".canary-log.jsonl").exists() or "rptn" not in (d / ".canary-log.jsonl").read_text(encoding="utf-8"), "")
         rep.write_text("severity: major\n<!-- 來源:席位 -->\n## F1\nseverity: major\n## F2\nseverity: minor\n## F3\nseverity: clean\n"
                        "引句:「severity: blocker 原文」\n> severity: blocker\n```\nseverity: blocker\n```\n最嚴重 severity: major\n", encoding="utf-8")
@@ -38088,7 +38463,7 @@ def t_gov_stats_review_yield():
         check("stats-yield:Σ 五數", "Σ席位報 3 → Σ存活 4 / Σ編排者重現不到 1 → Σ折 4 / Σ放行 0;存活多於席位報的輪 2(共 Σ2 條)" in out, out[-900:])
         check("stats-yield:回頭條件兩個數(有載體 2 輪/記了 refuted-set 2 輪/非 0 的 1 輪;S>0 的輪 2)", "有載體的 2 輪裡記了 refuted-set 的 2 輪、其中非 0 的 1 輪;S>0 的輪 2" in out, out[-900:])
         check("stats-yield:K<5 → 樣本太少", "樣本太少,別下結論(K=2" in out, out[-900:])
-        check("stats-yield:寫側擋下 2 次分三類", "記帳被寫側擋下 2 次(報告沒正規化 1 / 缺 refuted-set 1 / findings 多於 reported 0)" in out, out[-900:])
+        check("stats-yield:寫側擋下 2 次分四類(第四類引句判準 0)", "記帳被寫側擋下 2 次(報告沒正規化 1 / 缺 refuted-set 1 / findings 多於 reported 0 / 引句判準 0)" in out, out[-900:])
         check("stats-yield:逃逸帳 1 筆最重 major", "逃逸帳 1 筆" in out and "最重 major" in out, out[-900:])
         check("stats-yield:段內不印比率", "審查有用率" not in out.split("審查有沒有用", 1)[1].split("\n\n", 1)[0].replace("別自己算 Σ折/Σ報 當『審查有用率』", ""), "")
         # r1 f2:只有「被擋」、一輪都沒記成、沒逃逸 → 段落照印(擋下次數正是要給人看的)
