@@ -159,3 +159,7 @@ about_code:
 - WHY:`question-set` 用位置參數 `鍵=值`,不用 `--field/--text` 或一次一鍵 [出處:設計審 r1 架構對齊席] [因:「改成已決要附決策」這類跨鍵規則要一次改完才驗得過;`decision=#d3` 的 # 在字中間,shell 不會當註解] [不選:一次一鍵(中間態必附不齊會被擋)] [test:t_qfm_commands_write_and_verify]
 - 兩支指令跟其他寫入原語一樣拒寫 CRLF/BOM 的檔(`load_raw_for_edit`);讀法照樣讀得懂那種檔,所以規格閘看得到、指令寫不進去,訊息會講怎麼轉。
 - 在 `pending_questions: []` 上加題會先把那行改成區塊起頭(decision-add 在 `decisions: []` 上會寫壞而被擋,沒照抄);定位項目沿用 `decisions_items`(加了欄位名參數);嚴格讀法是這個欄位專用的 `_pq_scan`(決策清單收多行值與子清單,文法不同,不硬掛在 `parse_decisions` 底下)。
+
+## 建計劃筆記沒有後綴時提醒(2026-10-13)
+
+- WHY:`lumos new project <名>` 的名稱完全沒有底線後綴時照原名建檔,建好後提醒慣例與重建指令,不擋、不改名 [出處:[[Projects/示範回饋小修_計劃]] 代碼審 r1] [因:後端示範時照直覺只打主題,建出不合慣例的檔名;既有計劃筆記另有 _調研、_草案 等後綴] [不選:自動補「_計劃」(會改壞既有寫法,而且接著用原名下指令的人找不到這篇;建檔指令從沒改過使用者給的名字)] [test:t_new_project_warns_missing_plan_suffix]
