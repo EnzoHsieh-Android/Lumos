@@ -42235,6 +42235,154 @@ def t_probe_summary_excludes_instrument_runs():
           and h.get("grader") == mod.GRADER_VERSION and mod.GRADER_VERSION, str(h))
 
 
+def _probe_init_lines(**over):
+    """假的 stream-json 開頭:一筆 SessionStart hook_started + 一筆 system/init(欄位照 Claude Code 2.1.296 實測)。"""
+    import json as _j
+    init = {"type": "system", "subtype": "init", "cwd": "/tmp/a", "session_id": "s1", "uuid": "u1",
+            "tools": ["Bash", "Read"], "mcp_servers": [{"name": "context7", "status": "connected", "source": "plugin"}],
+            "model": "claude-haiku-5-5", "permissionMode": "acceptEdits", "slash_commands": ["lumos-code-loop"],
+            "apiKeySource": "none", "claude_code_version": "2.1.296", "output_style": "default",
+            "agents": ["general-purpose"], "skills": ["lumos-code-loop"],
+            "plugins": [{"name": "superpowers", "path": "/p", "source": "superpowers@x", "version": "6.4.1"}],
+            "memory_paths": {"auto": "/m1"}, "messaging_socket_path": "/tmp/s1.sock"}
+    hook = {"type": "system", "subtype": "hook_started", "hook_id": "h1", "hook_name": "SessionStart:startup",
+            "hook_event": "SessionStart", "uuid": "u0", "session_id": "s1"}
+    hooks = over.pop("_hooks", [hook])
+    init.update(over)
+    return [*(_j.dumps(h) for h in hooks), _j.dumps(init)]
+
+
+def t_probe_env_fingerprint_stable_fields():
+    """[探針設定指紋 S1]指紋只看穩定欄位:session_id、uuid、cwd、memory_paths、socket 換掉不變;
+    多一個外掛、外掛換版本、輸出風格不同、SessionStart 掛鉤不同都要變。"""
+    mod = _load_probe_module("sp_envfp")
+    base = mod.env_fingerprint(_probe_init_lines())
+    same = mod.env_fingerprint(_probe_init_lines(session_id="s2", uuid="u2", cwd="/tmp/b",
+                                                 memory_paths={"auto": "/m2"}, messaging_socket_path="/tmp/s2.sock"))
+    check("指紋 前置:取得到指紋與摘要", base.get("env_fp") and base.get("env", {}).get("claude_code_version") == "2.1.296", base)
+    check("指紋:每場會變的欄位換掉,指紋不變", base["env_fp"] == same["env_fp"], (base["env_fp"], same["env_fp"]))
+    variants = {
+        "多一個外掛": dict(plugins=[{"name": "superpowers", "version": "6.4.1"}, {"name": "context7", "version": "1.0"}]),
+        "外掛換版本": dict(plugins=[{"name": "superpowers", "version": "6.4.2"}]),
+        "輸出風格不同": dict(output_style="Colleague plain"),
+        "skill 不同": dict(skills=["lumos-code-loop", "x"]),
+        "SessionStart 掛鉤不同": dict(_hooks=[]),
+        "MCP 伺服器不同": dict(mcp_servers=[{"name": "context7", "status": "connected"}, {"name": "x"}]),
+        "模型不同": dict(model="claude-sonnet-5-5"),
+        "Claude Code 版本不同": dict(claude_code_version="2.1.297"),
+    }
+    for name, ov in variants.items():
+        fp = mod.env_fingerprint(_probe_init_lines(**ov))["env_fp"]
+        check("指紋:%s → 指紋要變" % name, fp and fp != base["env_fp"], (name, fp))
+    # 工具清單不進指紋:有題目標 allow_agent 會多開 Agent,同一週會出現兩種工具清單(代碼審 r2 正確性席)
+    fp_tools = mod.env_fingerprint(_probe_init_lines(tools=["Bash", "Read", "Task"]))["env_fp"]
+    check("指紋:只差工具清單(逐題開關 Agent)→ 指紋不變", fp_tools == base["env_fp"], (fp_tools, base["env_fp"]))
+    # 會談中途再觸發的 SessionStart(例:壓縮後)與重複的同一筆,不能讓同一個環境的指紋變(收尾修正代碼審 r1 正確性席)
+    import json as _j
+    hook = {"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup", "hook_event": "SessionStart"}
+    later = [_j.dumps({**hook, "hook_name": "SessionStart:compact"}), _j.dumps(hook)]
+    fp_later = mod.env_fingerprint([*_probe_init_lines(), *later])["env_fp"]
+    fp_dup = mod.env_fingerprint([_j.dumps(hook), *_probe_init_lines()])["env_fp"]
+    check("指紋:init 之後才出現的 SessionStart 掛鉤不算進指紋", fp_later == base["env_fp"], (fp_later, base["env_fp"]))
+    check("指紋:同一個 SessionStart 掛鉤重複出現,指紋不變", fp_dup == base["env_fp"], (fp_dup, base["env_fp"]))
+    print("  ✓ t_probe_env_fingerprint_stable_fields")
+
+
+def t_probe_env_fingerprint_missing_init():
+    """[探針設定指紋 S2]沒有 system/init(逾時前什麼都沒印、Codex 執行器):env_fp 是 null 並帶原因,不丟例外。"""
+    import json as _j, subprocess as _sp
+    mod = _load_probe_module("sp_envnone")
+    r = mod.env_fingerprint([])
+    r2 = mod.env_fingerprint(["not json", _j.dumps({"type": "assistant"})])
+    check("指紋:空輸出 → null 並帶原因", r.get("env_fp") is None and r.get("env_missing"), r)
+    check("指紋:有輸出但沒有 init → null 並帶原因", r2.get("env_fp") is None and r2.get("env_missing"), r2)
+    # init 欄位型別不對(版本改格式、壞輸出)不能丟例外:那時模型已經跑完,一丟例外整場就被記成儀器例外(r1 正確性席)
+    # 欄位不是清單 → 那個欄位當空的、指紋照算,並記在摘要的 bad_fields;不能整個退成 null(r2 正確性席:只斷言有鍵是假綠)
+    for field, val in (("plugins", 5), ("skills", True), ("mcp_servers", 3.5), ("slash_commands", {"a": 1})):
+        try:
+            got = mod.env_fingerprint(_probe_init_lines(**{field: val}))
+        except Exception as e:
+            got = {"exc": repr(e)}
+        want = mod.env_fingerprint(_probe_init_lines(**{field: []}))
+        check("指紋:init 欄位 %s 型別不對 → 當空的照算指紋並記下" % field,
+              got.get("env_fp") and got["env_fp"] == want["env_fp"] and field in got.get("env", {}).get("bad_fields", []), got)
+    # 外層保護:編碼不了的字元(單獨的代理字元)讓雜湊丟 UnicodeEncodeError → 退成 null 並寫明原因,不丟例外
+    try:
+        lone = mod.env_fingerprint(_probe_init_lines(skills=["\ud800"]))
+    except Exception as e:
+        lone = {"exc": repr(e)}
+    check("指紋:算雜湊丟例外 → env_fp null、原因寫例外種類", lone.get("env_fp") is None and "UnicodeEncodeError" in str(lone.get("env_missing")), lone)
+    # 一行無關的深層巢狀 JSON 不能拖垮整場指紋
+    deep = '{"a":' + "[" * 200000 + "]" * 200000 + "}"
+    try:
+        got = mod.env_fingerprint([*_probe_init_lines(), deep])
+    except Exception as e:
+        got = {"exc": repr(e)}
+    check("指紋:夾一行解析不了的深層巢狀 JSON → 指紋照算", got.get("env_fp") == mod.env_fingerprint(_probe_init_lines())["env_fp"], got)
+    sc = {"id": "x1", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+
+    def raise_to(cmd, **kw):
+        raise _sp.TimeoutExpired(cmd, 10, output="")
+    real = mod.subprocess.run
+    try:
+        mod.subprocess.run = raise_to
+        to = mod.run_one(sc, Path("."), 18, 10, "")
+        cx = mod.run_one_codex(sc, Path("."), 10, "")
+    finally:
+        mod.subprocess.run = real
+    check("指紋:Claude 執行器逾時前沒輸出 → 結果 env_fp 為 null、照常判分", "env_fp" in to and to["env_fp"] is None and to.get("env_missing"), to)
+    check("指紋:Codex 執行器 → env_fp 為 null、標取不到", "env_fp" in cx and cx["env_fp"] is None and cx.get("env_missing"), cx)
+    print("  ✓ t_probe_env_fingerprint_missing_init")
+
+
+def t_probe_history_records_env_fps():
+    """[探針設定指紋 S3]週抽歷史記這批有效場次的指紋與場數;兩種以上加 env_mixed;被排除的場次不算。"""
+    mod = _load_probe_module("sp_envhist")
+
+    def res(q, fp, reason="ok", truncated=False):
+        d = _probe_res(q, True, reason, truncated)
+        d["env_fp"] = fp
+        return d
+    one = mod.summarize_results([res("a", "aaa"), res("b", "aaa"), res("c", "bbb", "儀器例外: 撞到回合上限", True)])
+    h1 = mod.history_record("2026-10-13", "W", one)
+    check("歷史指紋:只有一種(被排除的那場不算)→ env_fps 只一種、不帶 env_mixed",
+          h1.get("env_fps") == {"aaa": 2} and "env_mixed" not in h1, h1)
+    two = mod.summarize_results([res("a", "aaa"), res("b", "bbb"), res("c", None)])
+    h2 = mod.history_record("2026-10-13", "W", two)
+    check("歷史指紋:兩種 → 各記場數並標 env_mixed;取不到的記成 null 那一格",
+          h2.get("env_fps") == {"aaa": 1, "bbb": 1, "null": 1} and h2.get("env_mixed") is True, h2)
+    # 只有一種真指紋加幾場取不到:環境沒變,不算混用(r2 正確性席)
+    h3 = mod.history_record("2026-10-13", "W", mod.summarize_results([res("a", "aaa"), res("b", None)]))
+    check("歷史指紋:一種指紋加取不到的場次 → 照記 null 但不標 env_mixed",
+          h3.get("env_fps") == {"aaa": 1, "null": 1} and "env_mixed" not in h3, h3)
+    print("  ✓ t_probe_history_records_env_fps")
+
+
+def t_probe_run_one_records_env_fp():
+    """[探針設定指紋 S4]run_one 用假的 claude 輸出跑一場,結果帶 env_fp 與 env 摘要,而且跟直接算的一樣。"""
+    import json as _j
+    mod = _load_probe_module("sp_envrun")
+    sc = {"id": "x1", "prompt": "p", "expect": ["lumos search"], "forbid_before": []}
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "scripts/lumos search foo"}}]}}
+    lines = [*_probe_init_lines(), _j.dumps(tool), _j.dumps({"type": "result", "subtype": "success", "result": "ok"})]
+
+    class R:
+        def __init__(self, out): self.stdout, self.stderr, self.returncode = out, "", 0
+    real = mod.subprocess.run
+    try:
+        mod.subprocess.run = lambda cmd, **kw: R("\n".join(lines))
+        r = mod.run_one(sc, Path("."), 18, 10, "")
+    finally:
+        mod.subprocess.run = real
+    want = mod.env_fingerprint(lines)
+    check("run_one 指紋 前置:這場照常判過", r["passed"] is True, r["reason"])
+    check("run_one 指紋:結果帶 env_fp,跟直接算的一樣", r.get("env_fp") and r.get("env_fp") == want["env_fp"], (r.get("env_fp"), want))
+    check("run_one 指紋:結果帶 env 摘要(版本、輸出風格、外掛)",
+          r.get("env", {}).get("claude_code_version") == "2.1.296" and r["env"].get("output_style") == "default"
+          and r["env"].get("plugins") == ["superpowers@6.4.1"], r.get("env"))
+    print("  ✓ t_probe_run_one_records_env_fp")
+
+
 def t_probe_flags_truncation_heavy_batches():
     """探針判準對齊程式碼為主 [S3]:同題截斷過半要點名;有效不到一半 → 分母退回整批、寫明不能下結論(自主迴圈靠 p≠n 發通知,不退回會 0/0 安靜全過)。"""
     mod = _load_probe_module("sp_heavy")
