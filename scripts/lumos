@@ -17172,11 +17172,12 @@ def _isolated_worktree_sweep(repo, prefix):
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
 
 
-def _kill_run(cmd, cwd, timeout, keep_re=None):
+def _kill_run(cmd, cwd, timeout, keep_re=None, started=None):
     """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。
 
     keep_re 直接轉給 _kill_cap:輸出超過上限而要截斷時,符合這個樣式的行不得被砍掉
-    (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。"""
+    (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。
+    started 給一個 list 就把開出來的 Popen 放進去(合約測試閘同時跑時,一支出錯要收掉同批還在跑的;不給不影響)。"""
     import os
     import signal
     import subprocess
@@ -17186,6 +17187,8 @@ def _kill_run(cmd, cwd, timeout, keep_re=None):
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as buf:
         proc = subprocess.Popen(cmd, shell=True, cwd=str(cwd), start_new_session=True,
                                 stdout=buf, stderr=subprocess.STDOUT)
+        if started is not None:
+            started.append(proc)
         try:
             proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -47936,6 +47939,8 @@ def _bound_tests_log(repo_root, kind, nodes, note, secs=None, calc_secs=None):
     ★第一版我只把它們放進回傳的 dict,帳上還是自由文字★——那等於沒做,
     因為回傳值不落盤,週跑回頭看的是帳。
     secs=跑測試那段;calc_secs=算波及那段。兩段成本的成因不同,不能加在一起。
+    secs_kind:有 secs 就寫 "wall"——2026-10-13 起 secs 是跑測試那段的牆上時間;沒帶這欄的舊帳 secs 是逐項相加
+    (同一支被幾篇綁就加幾次),統計只取帶 secs_kind 的列([[Projects/合約測試閘並行執行_計劃]])。
     """
     try:
         vault = _vault_in(repo_root)
@@ -47949,6 +47954,8 @@ def _bound_tests_log(repo_root, kind, nodes, note, secs=None, calc_secs=None):
                     "nodes": list(nodes), "note": note}
             if secs is not None:
                 _rec["secs"] = secs
+                # 2026-10-13 起 secs 是牆上時間;之前的帳是逐項相加(同一支被幾篇綁就加幾次),帶這欄的才是牆上時間
+                _rec["secs_kind"] = "wall"
             if calc_secs is not None:
                 _rec["calc_secs"] = calc_secs
             _append_governance_log(vault, [_rec])
@@ -48200,31 +48207,111 @@ def _run_bound_tests(repo_root, items, tails=None):
         return None, f"config platforms 壞: {e}"
     plats = pdata["platforms"]
     per_test = float(_os.environ.get("LUMOS_TEST_TIMEOUT", "180") or 0) or None   # 同 runner 變數;0=不限
-    results, seen = [], {}
+    # 先照原順序排出要真跑的「去重鍵」,再跑(設定打開時同時跑幾支),最後照原項目順序組結果
+    # ——同時跑只改排程,判紅綠、逾時、跑過證據與去重全部照舊([[Projects/合約測試閘並行執行_計劃]])。
+    plan, jobs = [], {}
     for node, plat, method, status in items:
         if status != "real":
-            results.append((node, plat, method, "red", {"dangling": "綁的測試在程式碼裡找不到(懸空)",
-                                                       "fake": "綁的名字不是真的測試方法(偽證據)",
-                                                       "bad-name": "測試名不合法或平台前綴未定義"}[status], 0.0))
+            plan.append((node, plat, method, ("red", {"dangling": "綁的測試在程式碼裡找不到(懸空)",
+                                                    "fake": "綁的名字不是真的測試方法(偽證據)",
+                                                    "bad-name": "測試名不合法或平台前綴未定義"}[status])))
             continue
         pentry = plats.get(plat) or {}
         run_cmd = pentry.get("run_cmd")
         if not run_cmd:
             # ★記成「沒跑」、繼續跑別的平台★(Issues/多平台設定下測試指令被默默略過,2026-09-11):
             # 原本碰到第一支沒指令的就整批 return no-config——其他平台有指令的也不跑,連前面已判的懸空紅也被吞掉。
-            results.append((node, plat, method, "no-cmd", f"平台 {plat} 沒設測試指令", 0.0))
+            plan.append((node, plat, method, ("no-cmd", f"平台 {plat} 沒設測試指令")))
             continue
         whole = "{method}" not in run_cmd
         cmd = _run_cmd_expand(run_cmd, None if whole else method)
         root = str(pentry.get("root") or repo_root)
         key = (root, cmd)
-        if key in seen:
-            rc, tail, secs, to = seen[key]
-        else:
+        if key not in jobs:
             timeout = max(_BOUND_TESTS_WHOLE_SUITE_TIMEOUT, per_test or 0) if whole else per_test
-            rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6,
-                                           keep_re=_ran_evidence_re(pentry.get("profile_name")))
-            seen[key] = (rc, tail, secs, to)
+            jobs[key] = (timeout, _ran_evidence_re(pentry.get("profile_name")))
+        plan.append((node, plat, method, (key, whole, pentry)))
+
+    procs = _BtProcs()   # 同時跑時開出來的子程序;出錯或中斷時收掉還在跑的,不留孤兒(高風險代碼審 r2 併發席)
+
+    def _one(key):
+        timeout, keep = jobs[key]
+        return key, _kill_run(key[1], key[0], timeout if timeout else 10 ** 6, keep_re=keep, started=procs)
+
+    seen, workers = {}, _bound_tests_parallel(repo_root)
+    if workers > 1 and len(jobs) > 1:
+        # ★不用 ThreadPoolExecutor★(代碼審 r2):它的工作者不是 daemon,程式結束時會 join,出錯或 Ctrl-C 也得等
+        # 已開跑的測試跑完;而 map 依提交順序取結果,出錯那支排在後面時例外要等前面的跑完才浮上來。
+        # 這裡用 daemon 執行緒自己取工作:任一支丟例外就停止派新的,主流程每 0.1 秒看一次、看到就往外丟;
+        # 已開跑的子程序在自己的程序群組裡跑到自己的逾時為止(跟循序時按 Ctrl-C 一樣成為孤兒),不卡住前景。
+        import queue as _queue
+        import threading as _threading
+        import time as _time_mod
+        todo, errs, lock = _queue.Queue(), [], _threading.Lock()
+        for k in jobs:
+            todo.put(k)
+
+        tally = {"taken": 0, "failed": 0}   # 領走幾個工作、幾個在開程序前就失敗:收尾時等每個領走的都有著落
+
+        def _worker():
+            while True:
+                with lock:
+                    if errs:
+                        return
+                    try:
+                        k = todo.get_nowait()
+                    except _queue.Empty:
+                        return
+                    tally["taken"] += 1
+                try:
+                    key, res = _one(k)
+                except BaseException as e:   # 開不了程序之類;交給主流程往外丟
+                    with lock:
+                        errs.append(e)
+                        tally["failed"] += 1
+                    return
+                with lock:
+                    seen[key] = res
+
+        def _settle_and_reap():
+            # 先立收尾標記並收掉已登記的;再等每個已領走的工作都登記了程序或確定失敗(最多 2 秒),
+            # 之後才登記進來的由 _BtProcs 當場收掉——不等的話,主流程一丟例外程式就結束,
+            # 正卡在「程序開了、還沒登記」那一瞬間的工作執行緒會跟著消失,留下沒人收的子程序(高風險代碼審 r2)
+            procs.reap()
+            deadline = _time_mod.monotonic() + 2
+            while _time_mod.monotonic() < deadline:
+                with lock:
+                    if len(procs) + tally["failed"] >= tally["taken"]:
+                        return
+                _time_mod.sleep(0.02)
+
+        threads = [_threading.Thread(target=_worker, daemon=True) for _ in range(min(workers, len(jobs)))]
+        for th in threads:
+            th.start()
+        try:
+            # 逐條等、每次最多 0.1 秒:已結束的執行緒 join 會立刻返回,只盯第一條會在它先收工後變成滿速空轉(代碼審高風險 r1)
+            for th in threads:
+                while th.is_alive() and not errs:
+                    th.join(0.1)
+        except BaseException as e:   # Ctrl-C 只會丟在主流程:先讓工作執行緒停止派新的,再往外丟
+            with lock:
+                errs.append(e)
+            _settle_and_reap()
+            raise
+        if errs:
+            _settle_and_reap()
+            raise errs[0]
+    else:
+        seen.update(_one(k) for k in jobs)
+
+    results = []
+    for node, plat, method, how in plan:
+        if len(how) == 2:
+            results.append((node, plat, method, how[0], how[1], 0.0))
+            continue
+        key, whole, pentry = how
+        timeout = jobs[key][0]
+        rc, tail, secs, to = seen[key]
         if tails is not None:
             tails[(node, plat, method)] = tail
         if to:
@@ -48246,6 +48333,79 @@ def _run_bound_tests(repo_root, items, tails=None):
     if results and all(r[3] == "no-cmd" for r in results):
         return None, _no_run_cmd_reason(repo_root, pdata.get("multiplatform"), {r[1] for r in results})
     return results, None
+
+
+def _bt_kill_proc(proc):
+    """收掉一支測試子程序(整個程序群組;Windows 沒有 killpg 就殺直接子程序)。盡力而為,收不到不擋。"""
+    import signal as _signal
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+    except (ProcessLookupError, OSError, AttributeError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+class _BtProcs(list):
+    """同時跑時登記開出來的子程序。reap() 立「收尾中」標記後收掉全部;標記立了之後才登記進來的(工作執行緒
+    在出錯前一刻領到工作、出錯後才開出程序),登記當下就收掉——不然會撲空、留下孤兒(高風險代碼審 r2)。"""
+
+    def __init__(self):
+        super().__init__()
+        import threading as _threading
+        self._lock, self._stop = _threading.Lock(), False
+
+    def append(self, proc):
+        with self._lock:
+            super().append(proc)
+            stop = self._stop
+        if stop:
+            _bt_kill_proc(proc)
+
+    def reap(self):
+        with self._lock:
+            self._stop = True
+            todo = list(self)
+        for proc in todo:
+            _bt_kill_proc(proc)
+
+
+_BT_PARALLEL_WARNED = set()   # (專案根, 設定值的 repr):同一個程序裡規格閘會多次呼叫,同一句提醒只印一次
+
+
+def _bt_parallel_warn(repo_root, shown, msg):
+    key = (str(Path(repo_root).resolve()), shown)
+    if key not in _BT_PARALLEL_WARNED:
+        _BT_PARALLEL_WARNED.add(key)
+        print(msg, file=sys.stderr)
+
+
+def _bound_tests_parallel(repo_root):
+    """`.lumos/config.json` 的 bound_tests.parallel:2 到 16 的整數才算數,其他(沒寫、1、布林、小數、字串、超出範圍、設定讀不了)一律 1。
+    有寫但不合法時講一句用了 1,免得寫成 "4" 以為已經同時跑;直接印到 stderr 跟 load_platforms 讀不了設定時同一種做法
+    (note_lint、note_shape 是收進 warnings 交給呼叫端印,這裡沒有可交的呼叫端)。設定檔讀不了不在這裡出聲,
+    同一次呼叫裡 load_platforms 會先講。"""
+    try:
+        cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
+        bt = cfg.get("bound_tests") if isinstance(cfg, dict) else None
+    except Exception:
+        return 1
+    if bt is not None and not isinstance(bt, dict):
+        _bt_parallel_warn(repo_root, "block:" + repr(bt),
+                          f"提醒:.lumos/config.json 的 bound_tests 要是一個物件(例如 {{\"parallel\": 4}}),現在是 {bt!r},這次一支一支跑")
+        return 1
+    if not isinstance(bt, dict) or "parallel" not in bt or bt["parallel"] is None:
+        return 1
+    v = bt["parallel"]
+    if isinstance(v, int) and not isinstance(v, bool) and 2 <= v <= 16:
+        return v
+    if not (type(v) is int and v == 1):   # 只有整數 1 不出聲;1.0、True 都算寫錯
+        _bt_parallel_warn(repo_root, "value:" + repr(v),
+                          f"提醒:.lumos/config.json 的 bound_tests.parallel 是 {v!r},只認 2 到 16 的整數,這次一支一支跑(當成 1)")
+    return 1
 
 
 def _config_has_top_run_cmd(repo_root):
@@ -48368,7 +48528,9 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
                     "calc_secs": _calc, "advisory": advisory,
                     "reason": "你的測試指令不能只跑一支,所以這次跳過;把指令改成可過濾的(帶 {method}),這道閘才會每次推送都保護你"}
         items = _keep
+    _t_run = _time.monotonic()   # 單調時鐘:跑測試期間系統校時往回調也不會量出負數
     results, err = _run_bound_tests(repo_root, items)
+    _wall = round(_time.monotonic() - _t_run, 1)
     if results is None:
         _bound_tests_log(repo_root, "no-config", sorted({i[0] for i in items}), err)
         return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "calc_secs": _calc,
@@ -48387,7 +48549,8 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
         # 但紅燈時 reason 前段是失敗測試輸出的尾巴,那裡也可能有「——」,就切錯段
         _nr_reason = _no_run_cmd_reason(repo_root, _mp, {p for _n, p, _m in _nocmd})
         _nc_note = f";另有 {len(_nocmd)} 支沒跑——" + _nr_reason
-    secs = round(sum(r[5] for r in results), 1)
+    # 牆上時間,不是逐項相加:同一支被幾篇綁只跑一次,同時跑時各支時間又會重疊([[Projects/合約測試閘並行執行_計劃]] S4)
+    secs = _wall
     ran = sum(1 for r in results if r[3] == "green")
     if red:
         # ★advisory 與擋要分帳★(設計 [S6]):兩者的後果完全不同,混成一個 kind
